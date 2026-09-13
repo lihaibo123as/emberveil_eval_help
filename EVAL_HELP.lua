@@ -1,4 +1,4 @@
--- EVAL_HELP 1.21.6 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EVAL_HELP 1.21.7 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --
 -- 参考 OneJudge 开发流程的关键约定：
 --   1) 目录规则：Interface/AddOns/EVAL_HELP/EVAL_HELP.toc（文件夹名 == toc 基名）
@@ -22,7 +22,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.21.6"
+local VERSION = "1.21.7"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -748,7 +748,7 @@ function EVAL_GO(profSel)
   end
   if not wscanned then EVAL_GO_RESCAN(true) end
 
-  -- Shift+按宏 = 切换下一个方案（不施法）；也可点战斗信息UI的方案按钮或 /eh war next
+  -- Shift+按宏 = 切换下一个方案（不施法）；也可点战斗信息UI的方案按钮或 /eh go next
   if IsShiftKeyDown and IsShiftKeyDown() then
     EVAL_WAR_ENSURE_PROFILES(w)
     if w.profiles and table.getn(w.profiles) > 1 then
@@ -767,21 +767,22 @@ function EVAL_GO(profSel)
   local battle   = (st.formIndex == 1) -- 战斗姿态
 
   -- 1) 目标检查：无目标/死亡/不可攻击 → 选最近敌人（st.canAttack）
+  -- 1.21.7：选不到敌人【不再硬返回】——自身 buff 类技能（战斗怒吼/血性狂暴等）不需要目标，
+  -- 是否该放由方案规则的条件自行判定（攻击类技能用「可攻击/可用」条件兜底）。
   local hostile = st.canAttack
   if not hostile then
     TargetNearestEnemy()
     EVAL_HELP_UPDATE_STATE() -- 换目标后重刷
     hostile = st.canAttack
     wlog("无有效目标 → TargetNearestEnemy；结果=" .. tostring(hostile))
-    if not hostile then return end
   end
 
   local thscale  = st.tHpPct / 100
   local ttype    = st.tCreatureType
   local canBleed = st.canBleed -- Cat 的 MPTargetBleed（类型排除+黑白名单，见状态模块）
 
-  -- 2) 非战斗：先切战斗姿态，已在战斗姿态就冲锋
-  if not inCombat then
+  -- 2) 非战斗且有目标：先切战斗姿态，已在战斗姿态就冲锋（无目标时跳过，1.21.7）
+  if not inCombat and hostile then
     if not battle then
       if wuse("战斗姿态", "非战斗切姿态") then return end
     else
@@ -815,9 +816,11 @@ function EVAL_GO(profSel)
       end
     end
     if not prof then
-      if GetTime() - wLastHint >= 5 then
+      if GetTime() - wLastHint >= 2 then
         wLastHint = GetTime()
-        say("方案不存在: " .. tostring(profSel) .. "（/eh war list 查看方案名）")
+        local names = {}
+        for _, p in ipairs(w.profiles) do table.insert(names, "[" .. tostring(p.name) .. "]") end
+        say("方案不存在: 「" .. tostring(profSel) .. "」现有方案: " .. table.concat(names, " ") .. "（注意全半角引号/名称一致；/eh go list 查看）")
       end
       return
     end
