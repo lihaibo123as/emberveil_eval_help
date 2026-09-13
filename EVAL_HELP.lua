@@ -1,4 +1,4 @@
--- EVAL_HELP 1.21.4 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EVAL_HELP 1.21.5 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --
 -- 参考 OneJudge 开发流程的关键约定：
 --   1) 目录规则：Interface/AddOns/EVAL_HELP/EVAL_HELP.toc（文件夹名 == toc 基名）
@@ -22,7 +22,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.21.4"
+local VERSION = "1.21.5"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -1603,21 +1603,40 @@ local function cfgBuild()
     end, G))
 
   cfgHeader(root, RX, -56, "帮助", G)
+  -- 分组排版（1.21.5）：金色小标题 + 缩进条目 + 组间留白；命令行用亮米色区分
   local helpLines = {
-    "一键宏：新建宏正文 /run EVAL_GO() 拖上按键连按",
-    "前置：技能拖上动作条后 /eh war rescan 识别槽位",
-    "猛击需按住 Alt 再按宏键；/eh wdebug 看决策原因",
-    "战斗信息UI：/eh ui 状态信息UI：/eh st，标题栏均可拖动",
-    "本窗口：/eh cfg 或小地图旁 EH 图标，均可拖动",
-    "日志文件：%LOCALAPPDATA%\\Azeroth\\Saved\\Logs",
+    { "快速上手", h = true },
+    { "技能拖上动作条 → /eh go rescan 识别槽位" },
+    { "新建宏：正文 /run EVAL_GO() → 拖上按键连按" },
+    { "执行指定方案（不同方案可各绑一个按键）", h = true },
+    { "/run EVAL_GO()         跑当前激活方案", cmd = true },
+    { "/run EVAL_GO(2)        只跑 2 号方案（不切激活）", cmd = true },
+    { "/run EVAL_GO(\"测试\")   只跑名为「测试」的方案", cmd = true },
+    { "/run EVAL_GO1()~GO4()  快捷写法 = EVAL_GO(1~4)", cmd = true },
+    { "其他", h = true },
+    { "猛击需按住 Alt 再按宏键；/eh debug 看每次按键的决策原因" },
+    { "战斗信息UI /eh ui · 状态信息UI /eh st · 标题栏均可拖动" },
+    { "本窗口 /eh cfg 或小地图旁 EH 图标；异常先 /reload" },
+    { "日志文件：%LOCALAPPDATA%\\Azeroth\\Saved\\Logs" },
   }
   local hy = -74
-  for _, line in ipairs(helpLines) do
-    local ht = uiText(root, 9, 0.65, 0.65, 0.65)
-    ht:SetPoint("TOPLEFT", root, "TOPLEFT", RX, hy)
-    ht:SetText(line)
+  for _, e in ipairs(helpLines) do
+    local ht
+    if e.h then
+      ht = uiText(root, 10, 0.95, 0.82, 0.35)         -- 组标题：金色，上方留白
+      ht:SetPoint("TOPLEFT", root, "TOPLEFT", RX, hy - 4)
+      hy = hy - 21
+    elseif e.cmd then
+      ht = uiText(root, 9, 0.88, 0.82, 0.58)         -- 命令示例：亮米色
+      ht:SetPoint("TOPLEFT", root, "TOPLEFT", RX + 12, hy)
+      hy = hy - 14
+    else
+      ht = uiText(root, 9, 0.65, 0.65, 0.65)         -- 普通条目：灰色
+      ht:SetPoint("TOPLEFT", root, "TOPLEFT", RX + 12, hy)
+      hy = hy - 14
+    end
+    ht:SetText(e[1])
     table.insert(G, ht)
-    hy = hy - 15
   end
 
   -- ===== Tab 2「一键宏设置」：多方案 + 技能规则列表（可视化编辑器，全职业通用） =====
