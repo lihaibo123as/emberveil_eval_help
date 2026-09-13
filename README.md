@@ -41,8 +41,8 @@ EmberVeil（1.12.1 / Lua 5.1）职业操作辅助插件：
 
 ```
 Interface/AddOns/
-└── EVAL_HELP/
-    ├── EVAL_HELP.toc    ← 目录规则：Folder/Folder.toc
+└── EvalHelp/
+    ├── EvalHelp.toc     ← 目录规则：Folder/Folder.toc
     ├── EVAL_HELP.lua
     └── README.md
 ```

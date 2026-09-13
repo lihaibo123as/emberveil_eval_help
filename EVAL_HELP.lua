@@ -1,7 +1,7 @@
 -- EVAL_HELP 1.24.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --
 -- 参考 OneJudge 开发流程的关键约定：
---   1) 目录规则：Interface/AddOns/EVAL_HELP/EVAL_HELP.toc（文件夹名 == toc 基名）
+--   1) 目录规则：Interface/AddOns/EvalHelp/EvalHelp.toc（文件夹名 == toc 基名）
 --   2) 插件暴露全局函数，一键宏正文就一行：/run EVAL_HELP()
 --   3) 本客户端判断函数返回 true/false/nil（不是老 1.12 的 1/nil），必须宽松真值判断，
 --      旧写法 UnitAffectingCombat("player") == 1 在 true 面前永远判假！
