@@ -1,4 +1,4 @@
-# EVAL_HELP 插件项目记忆（EmberVeil 职业操作工具）
+# EVAL_HELP 插件项目记忆（EmberVeil 全职业施法工具）
 
 ## 项目位置与现状
 - 插件目录：`G:\game\u5wow\Azeroth\Binaries\Win64\Games\Emberveil\live\Azeroth\Interface\AddOns\EVAL_HELP\`

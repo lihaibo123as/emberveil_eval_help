@@ -1,4 +1,4 @@
--- EVAL_HELP 1.21.1 —— 职业操作工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EVAL_HELP 1.21.2 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --
 -- 参考 OneJudge 开发流程的关键约定：
 --   1) 目录规则：Interface/AddOns/EVAL_HELP/EVAL_HELP.toc（文件夹名 == toc 基名）
@@ -22,7 +22,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.21.1"
+local VERSION = "1.21.2"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -1550,7 +1550,7 @@ local function cfgBuild()
   end)
   local title = uiText(titleBar, 12, 0.95, 0.82, 0.35)
   title:SetPoint("CENTER", titleBar, "CENTER", 0, 0)
-  title:SetText("职业操作工具 · 设置（一键宏）")
+  title:SetText("全职业施法工具 · 设置（一键宏）")
 
   local refreshes = {}
 
@@ -2180,7 +2180,7 @@ do
     if GameTooltip and GameTooltip.SetOwner then
       pcall(GameTooltip.SetOwner, GameTooltip, mb, "ANCHOR_LEFT")
       if GameTooltip.AddLine then
-        pcall(GameTooltip.AddLine, GameTooltip, "职业操作工具 · 设置")
+        pcall(GameTooltip.AddLine, GameTooltip, "全职业施法工具 · 设置")
         pcall(GameTooltip.AddLine, GameTooltip, "点击打开配置窗口，按住可拖动", 0.7, 0.7, 0.7)
       end
       pcall(GameTooltip.Show, GameTooltip)
@@ -3287,7 +3287,7 @@ if type(SlashCmdList) == "table" then
       cfg.wdebug = not cfg.wdebug
       say("调试日志: " .. (cfg.wdebug and "|cff00ff00开|r" or "|cffff0000关|r"))
     elseif msg == "help" then
-      say("—— EVAL_HELP 职业操作工具（通用一键宏） ——")
+      say("—— EVAL_HELP 全职业施法工具（通用一键宏） ——")
       say("|cffffff00快速上手:|r ① 技能拖上动作条 ② /eh go rescan ③ 新建宏正文 /run EVAL_GO() 拖上按键连按")
       say("|cffffff00命令:|r /eh 输出状态 | /eh log 写日志开关 | /eh auto 进出战斗自动输出")
       say("/eh ui 战斗信息UI | /eh st 状态信息UI | /eh cfg 设置窗口（小地图旁 EH 图标同效）")
@@ -3370,6 +3370,6 @@ init:SetScript("OnEvent", function(a, b)
         EVAL_HELP_UPDATE_STATE()
       end
     end)
-    say("职业操作工具 " .. VERSION .. "（通用一键宏） — 一键宏 /run EVAL_GO() | /eh cfg 配置 | /eh help 帮助")
+    say("全职业施法工具 " .. VERSION .. "（通用一键宏） — 一键宏 /run EVAL_GO() | /eh cfg 配置 | /eh help 帮助")
   end
 end)
