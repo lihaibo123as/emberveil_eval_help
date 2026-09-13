@@ -1,4 +1,4 @@
--- EVAL_HELP 1.21.7 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EVAL_HELP 1.22.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --
 -- 参考 OneJudge 开发流程的关键约定：
 --   1) 目录规则：Interface/AddOns/EVAL_HELP/EVAL_HELP.toc（文件夹名 == toc 基名）
@@ -22,7 +22,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.21.7"
+local VERSION = "1.22.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -705,11 +705,15 @@ function EVAL_GROUP_STR(groups)
   return table.concat(parts, " | ")
 end
 
--- 方案数据：缺省时从 cfg.war 阈值生成默认方案（= 原硬编码循环的完全等价物）
+-- 方案数据：缺省时从 cfg.war 阈值生成默认方案（1.22.0 起含 姿态/冲锋 开怪规则——原硬编码前置已全部规则化）
 function EVAL_WAR_ENSURE_PROFILES(w)
   if not w then return end
   if type(w.profiles) ~= "table" or table.getn(w.profiles) == 0 then
     w.profiles = { { name = "默认", skills = {
+      { skill = "战斗姿态", enabled = true, why = "非战斗切姿态",
+        groups = { { { k = "combat", v = false }, { k = "formNot", n = 1 }, { k = "canAttack", v = true } } } },
+      { skill = "冲锋", enabled = true, why = "非战斗冲锋",
+        groups = { { { k = "combat", v = false }, { k = "form", n = 1 }, { k = "canAttack", v = true }, { k = "ready" } } } },
       { skill = "压制", enabled = true, why = "压制可用",
         groups = { { { k = "power", op = ">", n = w.ovRage or 5 }, { k = "usable" }, { k = "ready" } } } },
       { skill = "战斗怒吼", enabled = true, why = "怒吼缺失",
@@ -781,14 +785,8 @@ function EVAL_GO(profSel)
   local ttype    = st.tCreatureType
   local canBleed = st.canBleed -- Cat 的 MPTargetBleed（类型排除+黑白名单，见状态模块）
 
-  -- 2) 非战斗且有目标：先切战斗姿态，已在战斗姿态就冲锋（无目标时跳过，1.21.7）
-  if not inCombat and hostile then
-    if not battle then
-      if wuse("战斗姿态", "非战斗切姿态") then return end
-    else
-      if wuse("冲锋", "非战斗冲锋") then return end
-    end
-  end
+  -- 2)（1.22.0 移除硬编码「非战斗切姿态/冲锋」前置：它无视方案内容强制出手，是旧战士宏残留。
+  --    需要该行为请在方案里加规则：战斗姿态 | 非战斗 & 非姿态1 & 可攻击；冲锋 | 非战斗 & 姿态1 & 可攻击 & 就绪）
 
   -- 3) 自动普攻（AttackTarget 是切换语义，必须用 IsCurrentAction 守卫，连按安全）
   local atk = wslots["攻击"]
