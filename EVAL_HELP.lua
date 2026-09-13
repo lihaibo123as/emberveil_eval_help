@@ -1,4 +1,4 @@
--- EVAL_HELP 1.21.5 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EVAL_HELP 1.21.6 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --
 -- 参考 OneJudge 开发流程的关键约定：
 --   1) 目录规则：Interface/AddOns/EVAL_HELP/EVAL_HELP.toc（文件夹名 == toc 基名）
@@ -22,7 +22,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.21.5"
+local VERSION = "1.21.6"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -1749,28 +1749,7 @@ local function cfgBuild()
   end)
   mkSmall(RX2 + 356, -56, 68, "导入导出", function() EVAL_HELP_IO_TOGGLE() end)
 
-  -- 激活方案选择（1.19.0：真下拉列表；与左侧方案按钮/战斗信息UI方案行/Shift+按宏 全部联动）
-  local profLbl = uiText(root, 10, 0.92, 0.88, 0.80)
-  profLbl:SetPoint("TOPLEFT", root, "TOPLEFT", LX, swY - 96)
-  profLbl:SetText("激活方案:")
-  table.insert(Wp, profLbl)
-  -- 注意：local 的作用域从声明语句【之后】才开始——RHS 里的闭包捕获不到 profBtn 自己（1.21.4 修复），
-  -- 所以 OnClick 必须在赋值完成后单独 SetScript 挂上。
-  local profBtn = mkSmall(LX + 66, swY - 94, 112, "", function() end)
-  profBtn:SetScript("OnClick", function()
-    local w2 = warCfg()
-    local names = {}
-    for _, p in ipairs(w2.profiles) do table.insert(names, tostring(p.name)) end
-    if table.getn(names) < 1 then return end
-    EVAL_DD_OPEN(profBtn, names, function(ni)
-      w2.activeProfile = ni
-      say("切换到方案: " .. tostring(w2.profiles[ni].name))
-      EVAL_WAR_TAB_REFRESH()
-    end)
-  end)
-  local profName = uiText(profBtn, 10, 1, 0.9, 0.5)
-  profName:SetPoint("CENTER", profBtn, "CENTER", 0, 0)
-  warUI.profSelName = profName
+  -- （1.21.6 起移除底部「激活方案」下拉：与左侧方案栏/战斗信息UI方案行/Shift+按宏//eh go prof N 功能重复）
 
   for ri = 1, ROWS do
     local y = -74 - (ri - 1) * 24
@@ -2076,10 +2055,6 @@ function EVAL_WAR_TAB_REFRESH()
         pb.del:Hide()
       end
     end
-  end
-  if warUI.profSelName then
-    local cur = w2.profiles[w2.activeProfile or 1]
-    warUI.profSelName:SetText(cur and tostring(cur.name) or "-")
   end
   local p = w2.profiles[w2.activeProfile or 1]
   for ri, row in ipairs(warUI.rows) do
