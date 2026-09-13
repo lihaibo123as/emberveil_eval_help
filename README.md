@@ -172,7 +172,7 @@ Interface/AddOns/
 
 ## 参与开发（欢迎加入！）
 
-- 仓库：<https://gitee.com/xeval/emberveil_eval_help.git>（`git clone` 后把 `EVAL_HELP/` 软链或复制到 `Interface/AddOns/` 即可开发调试）；
+- 仓库：<https://gitee.com/xeval/emberveil_eval_help.git>（`git clone` 后把 `EvalHelp/` 软链或复制到 `Interface/AddOns/` 即可开发调试）；
 - **开发指南**：见 `DEVELOPMENT.md`（架构地图 / 本客户端实测 UI 配方 / 规则引擎与方案数据结构 / 提交前必跑的语法检查）；
 - **AI 协作记忆**：`CLAUDE.md` 是本项目的 AI 开发记忆体（DeepSeek Harness / Claude Code 等 AI 助手读它即可快速进入上下文）；
 - 开发流程约定：每次改动递增版本号（lua 头注释 + `local VERSION` + toc 三处同步），改完跑 `node luacheck.js` 全量语法解析；
