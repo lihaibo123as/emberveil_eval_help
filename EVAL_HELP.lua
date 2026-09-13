@@ -1,4 +1,4 @@
--- EVAL_HELP 1.21.0 —— 职业操作工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EVAL_HELP 1.21.1 —— 职业操作工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --
 -- 参考 OneJudge 开发流程的关键约定：
 --   1) 目录规则：Interface/AddOns/EVAL_HELP/EVAL_HELP.toc（文件夹名 == toc 基名）
@@ -22,7 +22,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.21.0"
+local VERSION = "1.21.1"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -3190,6 +3190,7 @@ if type(SlashCmdList) == "table" then
   SLASH_EVALHELP2 = "/evalhelp"
   SlashCmdList["EVALHELP"] = function(msg)
     msg = string.lower(tostring(msg or ""))
+    msg = string.gsub(msg, "^war", "go") -- /eh war 旧命令组兼容 → 通用 /eh go（1.21.1 改名）
     if msg == "log" then
       cfg.log = not cfg.log
       say("写日志文件: " .. (cfg.log and "|cff00ff00开|r" or "|cffff0000关|r"))
@@ -3202,9 +3203,9 @@ if type(SlashCmdList) == "table" then
       EVAL_HELP_CFG_TOGGLE()
     elseif msg == "st" or msg == "state" or msg == "info" then
       EVAL_HELP_ST_TOGGLE()
-    elseif string.find(msg, "^war add ") then
-      -- 兜底添加: /eh war add 技能名 条件串（如 /eh war add 压制 可用 & 就绪）
-      local sn, conds = string.match(string.sub(msg, 9), "^(%S+)%s*(.*)$")
+    elseif string.find(msg, "^go add ") then
+      -- 兜底添加: /eh go add 技能名 条件串（如 /eh go add 压制 可用 & 就绪）
+      local sn, conds = string.match(string.sub(msg, 8), "^(%S+)%s*(.*)$")
       if sn then
         local w2 = warCfg()
         local p = w2.profiles[w2.activeProfile or 1]
@@ -3216,8 +3217,8 @@ if type(SlashCmdList) == "table" then
           say("方案已满（最多 8 个技能）")
         end
       end
-    elseif string.find(msg, "^war del ") then
-      local n = tonumber(string.sub(msg, 9))
+    elseif string.find(msg, "^go del ") then
+      local n = tonumber(string.sub(msg, 8))
       local w2 = warCfg()
       local p = w2.profiles[w2.activeProfile or 1]
       if p and n and p.skills[n] then
@@ -3225,8 +3226,8 @@ if type(SlashCmdList) == "table" then
         table.remove(p.skills, n)
         pcall(EVAL_WAR_TAB_REFRESH)
       end
-    elseif string.find(msg, "^war newprof") then
-      local nm = string.match(msg, "^war newprof%s*(.*)$")
+    elseif string.find(msg, "^go newprof") then
+      local nm = string.match(msg, "^go newprof%s*(.*)$")
       local w2 = warCfg()
       if table.getn(w2.profiles) < 4 then
         table.insert(w2.profiles, { name = (nm and nm ~= "") and nm or ("方案" .. tostring(table.getn(w2.profiles) + 1)), skills = {} })
@@ -3236,20 +3237,20 @@ if type(SlashCmdList) == "table" then
       else
         say("最多 4 个方案")
       end
-    elseif string.find(msg, "^war prof ") then
-      local n = tonumber(string.sub(msg, 10))
+    elseif string.find(msg, "^go prof ") then
+      local n = tonumber(string.sub(msg, 9))
       local w2 = warCfg()
       if n and w2.profiles[n] then
         w2.activeProfile = n
         say("切换到方案: " .. tostring(w2.profiles[n].name))
         pcall(EVAL_WAR_TAB_REFRESH)
       end
-    elseif string.find(msg, "^war delprof") then
-      local n = tonumber(string.match(msg, "^war delprof%s*(%d*)$"))
+    elseif string.find(msg, "^go delprof") then
+      local n = tonumber(string.match(msg, "^go delprof%s*(%d*)$"))
       local w2 = warCfg()
       EVAL_WAR_DEL_PROFILE(n or (w2.activeProfile or 1))
-    elseif string.find(msg, "^war rename ") or string.find(msg, "^war name ") then
-      local nm = string.match(msg, "^war %S+%s+(.+)$")
+    elseif string.find(msg, "^go rename ") or string.find(msg, "^go name ") then
+      local nm = string.match(msg, "^go %S+%s+(.+)$")
       local w2 = warCfg()
       local p = w2.profiles[w2.activeProfile or 1]
       if p and nm and nm ~= "" then
@@ -3257,7 +3258,7 @@ if type(SlashCmdList) == "table" then
         say("方案已改名: " .. nm)
         pcall(EVAL_WAR_TAB_REFRESH)
       end
-    elseif msg == "war next" then
+    elseif msg == "go next" then
       local w2 = warCfg()
       if table.getn(w2.profiles) > 1 then
         w2.activeProfile = (w2.activeProfile or 1) % table.getn(w2.profiles) + 1
@@ -3266,9 +3267,9 @@ if type(SlashCmdList) == "table" then
       else
         say("只有一个方案（配置窗口 一键宏设置页 [+] 新建）")
       end
-    elseif msg == "war io" or msg == "war export" or msg == "war import" then
+    elseif msg == "go io" or msg == "go export" or msg == "go import" then
       EVAL_HELP_IO_TOGGLE()
-    elseif msg == "war list" then
+    elseif msg == "go list" then
       local w2 = warCfg()
       local p = w2.profiles[w2.activeProfile or 1]
       say("— 方案[" .. tostring(p and p.name) .. "] —")
@@ -3278,25 +3279,25 @@ if type(SlashCmdList) == "table" then
             (r.enabled ~= false) and "|cff00ff00开|r" or "|cffff0000关|r", EVAL_GROUP_STR(r.groups)))
         end
       end
-    elseif msg == "war" then
+    elseif msg == "go" then
       EVAL_GO_STATUS()
-    elseif msg == "war rescan" then
+    elseif msg == "go rescan" then
       EVAL_GO_RESCAN(false)
     elseif msg == "wdebug" or msg == "debug" then
       cfg.wdebug = not cfg.wdebug
       say("调试日志: " .. (cfg.wdebug and "|cff00ff00开|r" or "|cffff0000关|r"))
     elseif msg == "help" then
       say("—— EVAL_HELP 职业操作工具（通用一键宏） ——")
-      say("|cffffff00快速上手:|r ① 技能拖上动作条 ② /eh war rescan ③ 新建宏正文 /run EVAL_GO() 拖上按键连按")
+      say("|cffffff00快速上手:|r ① 技能拖上动作条 ② /eh go rescan ③ 新建宏正文 /run EVAL_GO() 拖上按键连按")
       say("|cffffff00命令:|r /eh 输出状态 | /eh log 写日志开关 | /eh auto 进出战斗自动输出")
       say("/eh ui 战斗信息UI | /eh st 状态信息UI | /eh cfg 设置窗口（小地图旁 EH 图标同效）")
-      say("/eh war 一键宏状态 | /eh war rescan 重扫动作条 | /eh wdebug(debug) 调试日志")
-      say("方案命令：/eh war list 查看 | war add 技能 条件 | war del N | war newprof 名 | war prof N | war rename 新名 | war delprof N")
-      say("方案导入导出（md 文本复制粘贴）：/eh war io，示例文件 example/zs_wq.md")
-      say("方案切换：Shift+按一键宏 | /eh war next | 战斗信息UI 方案按钮")
+      say("/eh go 一键宏状态 | /eh go rescan 重扫动作条 | /eh debug 调试日志（/eh war 旧命令仍兼容）")
+      say("方案命令：/eh go list 查看 | go add 技能 条件 | go del N | go newprof 名 | go prof N | go rename 新名 | go delprof N")
+      say("方案导入导出（md 文本复制粘贴）：/eh go io，示例文件 example/zs_wq.md")
+      say("方案切换：Shift+按一键宏 | /eh go next | 战斗信息UI 方案按钮")
       say("方案绑按键：/run EVAL_GO(0)=激活方案 · EVAL_GO(1~4) 或 EVAL_GO1~4() = 直触方案N（不切激活）")
       say("|cffffff00提示:|r 猛击需按住 Alt 按宏键；宏入口 /run EVAL_HELP() 输出状态日志")
-      say("|cffffff00异常自救:|r 技能不识别/界面异常/刚更新过插件 → 先 /reload 重载（配置已存盘不会丢）；重扫动作条 /eh war rescan")
+      say("|cffffff00异常自救:|r 技能不识别/界面异常/刚更新过插件 → 先 /reload 重载（配置已存盘不会丢）；重扫动作条 /eh go rescan")
       say("|cffffff00问题反馈:|r https://gitee.com/xeval/emberveil_eval_help.git —— 插件持续优化中，欢迎测试并留下宝贵意见")
       say("日志文件: %LOCALAPPDATA%\\Azeroth\\Saved\\Logs")
     else
