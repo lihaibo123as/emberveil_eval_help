@@ -1,4 +1,4 @@
--- EVAL_HELP 1.23.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EVAL_HELP 1.24.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --
 -- 参考 OneJudge 开发流程的关键约定：
 --   1) 目录规则：Interface/AddOns/EVAL_HELP/EVAL_HELP.toc（文件夹名 == toc 基名）
@@ -22,7 +22,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.23.0"
+local VERSION = "1.24.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -347,26 +347,28 @@ local function wactionName(slot)
   return name
 end
 
--- 扫描动作条，定位每个技能所在格子并记录图标
+-- 扫描动作条，定位技能所在格子并记录图标
+-- 1.24.0 泛化：不再限 WAR_SKILLS 白名单——动作条上所有非宏技能全部记录。
+-- 收益：① 有/无buff、有/无debuff 条件支持任意已上条技能（图标比对需要纹理）；
+--       ② 方案规则可直接写任意已上条技能释放（冷却/可用/排队判定都是通用 API）→ 真·全职业。
 function EVAL_GO_RESCAN(quiet)
   wslots = {}
   for slot = 1, WAR_MAX_SLOT do
     if HasAction(slot) and not GetActionText(slot) then -- GetActionText 非空 = 宏格子，跳过
       local name = wactionName(slot)
-      if name then
-        for _, want in ipairs(WAR_SKILLS) do
-          if name == want and not wslots[want] then
-            local tex
-            local okt, t = pcall(GetActionTexture, slot)
-            if okt then tex = t end
-            wslots[want] = { slot = slot, tex = tex }
-          end
-        end
+      if name and not wslots[name] then
+        local tex
+        local okt, t = pcall(GetActionTexture, slot)
+        if okt then tex = t end
+        wslots[name] = { slot = slot, tex = tex }
       end
     end
   end
   wscanned = true
   if not quiet then
+    local total = 0
+    for _ in pairs(wslots) do total = total + 1 end
+    say(string.format("动作条共识别 |cff00ff00%d|r 个技能（均可用于方案/条件；核心技能核对↓）", total))
     for _, n in ipairs(WAR_SKILLS) do
       local s = wslots[n]
       say(string.format("%s → %s", n, s and ("格子 " .. s.slot) or "|cffff0000未找到|r（拖上动作条后 /eh war rescan）"))
@@ -850,6 +852,23 @@ function EVAL_GO(profSel)
     battle and " 战斗姿态" or "",
     ttype and (" " .. ttype) or "",
     st.isBoss and " Boss" or (st.isElite and " 精英" or "")))
+end
+
+-- 技能选择清单（1.24.0）：WAR_SKILLS 白名单在前 + 动作条扫描到的其他技能（去重），编辑窗下拉用
+function EVAL_GO_SKILL_CHOICES()
+  local list, seen = {}, {}
+  for _, n in ipairs(WAR_SKILLS) do
+    if not seen[n] then seen[n] = true table.insert(list, n) end
+  end
+  if wscanned and wslots then
+    local extra = {}
+    for n in pairs(wslots) do
+      if not seen[n] then table.insert(extra, n) end
+    end
+    table.sort(extra)
+    for _, n in ipairs(extra) do table.insert(list, n) end
+  end
+  return list
 end
 
 -- 方案直触便捷函数：宏正文 /run EVAL_GO2() 即可把方案2 绑到独立按键
@@ -2703,8 +2722,9 @@ local function SE_BUILD()
   -- 注意：seBtn 返回包裹表 { btn, bg, text }，不是按钮本体——锚点/加文字一律用 .btn（1.21.4 修复）
   local skW = seBtn(root, 72, -24, 124, 16, "", function()
     if not seUI.ed then return end
-    EVAL_DD_OPEN(seUI.skillBtn, WAR_SKILLS, function(pi)
-      seUI.ed.skill = WAR_SKILLS[pi]
+    local items = EVAL_GO_SKILL_CHOICES() -- 白名单 + 动作条扫描技能（1.24.0）
+    EVAL_DD_OPEN(seUI.skillBtn, items, function(pi)
+      seUI.ed.skill = items[pi]
       EVAL_HELP_SE_REFRESH()
     end)
   end)
@@ -2833,8 +2853,9 @@ local function SE_BUILD()
     row.sDrop = seBtn(root, 246, y, 16, 15, "v", function()
       local it = seUI.ed and seUI.ed.conds[i]
       if not it then return end
-      EVAL_DD_OPEN(row.sDrop.btn, WAR_SKILLS, function(pi)
-        it.cd.s = WAR_SKILLS[pi]
+      local items = EVAL_GO_SKILL_CHOICES() -- 白名单 + 动作条扫描技能（1.24.0）
+      EVAL_DD_OPEN(row.sDrop.btn, items, function(pi)
+        it.cd.s = items[pi]
         EVAL_HELP_SE_REFRESH()
       end)
     end)
