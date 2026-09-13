@@ -1,4 +1,4 @@
--- EVAL_HELP 1.21.3 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EVAL_HELP 1.21.4 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --
 -- 参考 OneJudge 开发流程的关键约定：
 --   1) 目录规则：Interface/AddOns/EVAL_HELP/EVAL_HELP.toc（文件夹名 == toc 基名）
@@ -22,7 +22,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.21.3"
+local VERSION = "1.21.4"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -1735,7 +1735,10 @@ local function cfgBuild()
   profLbl:SetPoint("TOPLEFT", root, "TOPLEFT", LX, swY - 96)
   profLbl:SetText("激活方案:")
   table.insert(Wp, profLbl)
-  local profBtn = mkSmall(LX + 66, swY - 94, 112, "", function()
+  -- 注意：local 的作用域从声明语句【之后】才开始——RHS 里的闭包捕获不到 profBtn 自己（1.21.4 修复），
+  -- 所以 OnClick 必须在赋值完成后单独 SetScript 挂上。
+  local profBtn = mkSmall(LX + 66, swY - 94, 112, "", function() end)
+  profBtn:SetScript("OnClick", function()
     local w2 = warCfg()
     local names = {}
     for _, p in ipairs(w2.profiles) do table.insert(names, tostring(p.name)) end
@@ -2682,13 +2685,15 @@ local function SE_BUILD()
   icon:SetWidth(15) icon:SetHeight(15)
   seUI.skillIcon = icon
   -- 技能名下拉按钮（1.19.0：替代 [<][>] 循环，点按展开动作条技能全列表）
-  local skBtn = seBtn(root, 72, -24, 124, 16, "", function()
+  -- 注意：seBtn 返回包裹表 { btn, bg, text }，不是按钮本体——锚点/加文字一律用 .btn（1.21.4 修复）
+  local skW = seBtn(root, 72, -24, 124, 16, "", function()
     if not seUI.ed then return end
     EVAL_DD_OPEN(seUI.skillBtn, WAR_SKILLS, function(pi)
       seUI.ed.skill = WAR_SKILLS[pi]
       EVAL_HELP_SE_REFRESH()
     end)
   end)
+  local skBtn = skW.btn
   seUI.skillBtn = skBtn
   local skName = uiText(skBtn, 10, 1, 0.9, 0.5)
   skName:SetPoint("CENTER", skBtn, "CENTER", 0, 0)
