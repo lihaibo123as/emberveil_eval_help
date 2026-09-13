@@ -1,4 +1,4 @@
--- EVAL_HELP 1.22.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EVAL_HELP 1.23.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --
 -- 参考 OneJudge 开发流程的关键约定：
 --   1) 目录规则：Interface/AddOns/EVAL_HELP/EVAL_HELP.toc（文件夹名 == toc 基名）
@@ -22,7 +22,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.22.0"
+local VERSION = "1.23.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -271,11 +271,18 @@ function EVAL_HELP_UPDATE_STATE()
     st.isBoss = (st.tClassification == "worldboss") and true or false
     st.isElite = (st.tClassification == "elite" or st.tClassification == "rareelite"
       or st.tClassification == "rare") and true or false
+    -- 目标友善度（1.23.0）：UnitReaction ≤3敌对 / 4中立 / ≥5友善；API 缺失或无目标 = 全 false
+    local okr, react = pcall(UnitReaction, "target", "player")
+    st.tReaction = (okr and type(react) == "number") and react or nil
+    st.tHostile  = (st.tReaction ~= nil and st.tReaction <= 3) and true or false
+    st.tNeutral  = (st.tReaction == 4) and true or false
+    st.tFriendly = (st.tReaction ~= nil and st.tReaction >= 5) and true or false
   else
     st.targetName, st.tLevel, st.tHp, st.tHpMax, st.tHpPct = nil, 0, 0, 0, 0
     st.tDead, st.canAttack, st.tInCombat = false, false, false
     st.tCreatureType, st.canBleed = nil, false
     st.tClassification, st.isBoss, st.isElite = nil, false, false
+    st.tReaction, st.tHostile, st.tNeutral, st.tFriendly = nil, false, false, false
   end
   return st
 end
@@ -520,6 +527,9 @@ local function condOne(cd, skill)
   elseif k == "isBoss" then return (st.isBoss == cd.v), "Boss"
   elseif k == "isElite" then return (st.isElite == cd.v), "精英"
   elseif k == "tInCombat" then return (st.tInCombat == cd.v), "目标战斗"
+  elseif k == "tFriendly" then return (st.tFriendly == cd.v), "友善"
+  elseif k == "tHostile" then return (st.tHostile == cd.v), "敌对"
+  elseif k == "tNeutral" then return (st.tNeutral == cd.v), "中立"
   elseif k == "form" then return (st.formIndex == cd.n), "姿态"
   elseif k == "formNot" then return (st.formIndex ~= cd.n), "姿态"
   elseif k == "alt" then return (st.alt == cd.v), "Alt"
@@ -616,6 +626,9 @@ local COND_BOOL = {
   ["精英"] = { "isElite", true }, ["isElite"] = { "isElite", true },
   ["Boss"] = { "isBoss", true }, ["首领"] = { "isBoss", true }, ["isBoss"] = { "isBoss", true },
   ["目标战斗中"] = { "tInCombat", true }, ["tInCombat"] = { "tInCombat", true },
+  ["目标友善"] = { "tFriendly", true }, ["友善"] = { "tFriendly", true }, ["tFriendly"] = { "tFriendly", true },
+  ["目标敌对"] = { "tHostile", true }, ["敌对"] = { "tHostile", true }, ["tHostile"] = { "tHostile", true },
+  ["目标中立"] = { "tNeutral", true }, ["中立"] = { "tNeutral", true }, ["tNeutral"] = { "tNeutral", true },
   ["Alt"] = { "alt", true }, ["alt"] = { "alt", true },
   ["Shift"] = { "shift", true }, ["shift"] = { "shift", true },
   ["Ctrl"] = { "ctrl", true }, ["ctrl"] = { "ctrl", true },
@@ -681,6 +694,9 @@ function EVAL_COND_STR(cd)
   if k == "isElite" then return cd.v and "精英" or "非精英" end
   if k == "isBoss" then return cd.v and "Boss" or "非Boss" end
   if k == "tInCombat" then return cd.v and "目标战斗中" or "目标非战斗" end
+  if k == "tFriendly" then return cd.v and "友善" or "非友善" end
+  if k == "tHostile" then return cd.v and "敌对" or "非敌对" end
+  if k == "tNeutral" then return cd.v and "中立" or "非中立" end
   if k == "alt" then return (cd.v and "" or "!") .. "Alt" end
   if k == "shift" then return (cd.v and "" or "!") .. "Shift" end
   if k == "ctrl" then return (cd.v and "" or "!") .. "Ctrl" end
@@ -2333,8 +2349,9 @@ function EVAL_HELP_ST_TICK()
       tostring(st.targetName), st.tLevel or 0,
       st.isBoss and " |cffff4040Boss|r" or "",
       (not st.isBoss and st.isElite) and " |cffff9040精英|r" or ""))
-    table.insert(lines, string.format("目标血 %.0f%% · 可攻击:%s · 可流血:%s",
-      st.tHpPct, stYesNo(st.canAttack), stYesNo(st.canBleed)))
+    table.insert(lines, string.format("目标血 %.0f%% · 可攻击:%s · 可流血:%s · 关系:%s",
+      st.tHpPct, stYesNo(st.canAttack), stYesNo(st.canBleed),
+      st.tFriendly and "友善" or (st.tNeutral and "中立" or (st.tHostile and "敌对" or "?"))))
     table.insert(lines, string.format("类型:%s 分级:%s%s",
       st.tCreatureType or "?", st.tClassification or "?",
       st.tInCombat and " · 目标战斗中" or ""))
@@ -2389,6 +2406,9 @@ local SE_TYPES = {
   { id = "combat",     name = "战斗状态",    kind = "bool" },
   { id = "canAttack",  name = "目标可攻击",  kind = "bool" },
   { id = "canBleed",   name = "目标可流血",  kind = "bool" },
+  { id = "tFriendly",  name = "目标友善",    kind = "bool" },
+  { id = "tHostile",   name = "目标敌对",    kind = "bool" },
+  { id = "tNeutral",   name = "目标中立",    kind = "bool" },
   { id = "isElite",    name = "目标精英",    kind = "bool" },
   { id = "isBoss",     name = "目标Boss",    kind = "bool" },
   { id = "tInCombat",  name = "目标战斗中",  kind = "bool" },
