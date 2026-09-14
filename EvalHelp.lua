@@ -1,4 +1,4 @@
--- EvalHelp 1.38.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.38.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.38.0"
+local VERSION = "1.38.1"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -1707,6 +1707,11 @@ function EVAL_HELP_UI_BUILD()
 
   -- 状态行：战斗状态 · 姿态 · 普攻
   local status = uiText(root, math.max(8, math.floor(10 * z)), 0.75, 0.75, 0.75)
+  -- 施法读条（1.38.1）：目标条下方细条，仅读条中显示（进度=剩余/总时长，反向填充=正在消耗的时间）
+  local castBar, castFill, castText, castW = uiMakeBar(root, barW, math.max(6, math.floor(8 * z)))
+  castBar:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
+  y = y + math.max(6, math.floor(8 * z)) + gap
+  ui.castBar, ui.castFill, ui.castText, ui.castW = castBar, castFill, castText, castW
   status:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
   y = y + math.floor(13 * z) + gap
 
@@ -1906,6 +1911,17 @@ function EVAL_HELP_UI_TICK()
 
   -- 目标条
   if ui.tgRange then ui.tgRange:SetText(st.tRange or "") end -- 1.37.0 目标条右侧距离
+  -- 1.38.1 施法读条：读条中=蓝底反向消耗进度+技能名+剩余秒；无读条=空条
+  if ui.castBar then
+    if st.castName then
+      local total = (st.castStart and st.castUntil) and (st.castUntil - st.castStart) or 0
+      local frac = (total > 0) and math.max(0, math.min(1, (st.castUntil - GetTime()) / total)) or 1
+      uiSetBar(ui.castFill, ui.castText, ui.castW, frac, 0.25, 0.45, 0.85,
+        tostring(st.castName) .. (st.castUntil and string.format(" %.1fs", math.max(0, st.castUntil - GetTime())) or ""))
+    else
+      uiSetBar(ui.castFill, ui.castText, ui.castW, 0, 0.1, 0.1, 0.1, "")
+    end
+  end
   if st.hasTarget then
     local tfrac = st.tHpPct / 100
     uiSetBar(ui.tgFill, ui.tgText, ui.tgW, tfrac, 0.80, 0.20, 0.20,
@@ -4728,6 +4744,7 @@ init:SetScript("OnEvent", function(a, b)
         local nm = (type(a1) == "string" and a1) or (type(a2) == "string" and a2) or nil
         local dur = (type(a1) == "number" and a1) or (type(a2) == "number" and a2) or 0
         st.castName = nm or "?"
+        st.castStart = GetTime() -- 1.38.1 读条起点（进度=剩余/总时长）
         st.castUntil = (dur > 0) and (GetTime() + dur / 1000) or nil
       elseif en == "SPELLCAST_STOP" or en == "SPELLCAST_FAILED" or en == "SPELLCAST_INTERRUPTED" or en == "SPELLCAST_CHANNEL_STOP" then
         st.castName, st.castUntil = nil, nil
