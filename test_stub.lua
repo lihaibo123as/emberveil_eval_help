@@ -68,9 +68,9 @@ UnitExists = function(u) return u == "target" and TEST.hasTarget or false end
 UnitIsDeadOrGhost = function() return false end
 UnitCanAttack = function() return true end
 UnitCreatureType = function() return "人型生物" end
-UnitClassification = function() return "normal" end
+IsActionInRange = function(slot) return TEST.inRange and TEST.inRange[slot] end -- 1.37.0：true=内 / 0=外 / nil=不测
 UnitReaction = function() return 2 end
-HasAction = function(slot) return slot <= 2 end
+HasAction = function(slot) return slot <= 3 end -- 1.37.0 放开到 3（断筋近战参照槽）
 GetActionText = function() return nil end
 GetActionTexture = function(slot) return "tex" .. slot end
 GetActionCooldown = function() return 0, 0 end

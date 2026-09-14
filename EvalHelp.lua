@@ -1,4 +1,4 @@
--- EvalHelp 1.36.4 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.37.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.36.4"
+local VERSION = "1.37.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -375,6 +375,7 @@ function EVAL_HELP_UPDATE_STATE()
     st.tReaction, st.tHostile, st.tNeutral, st.tFriendly = nil, false, false, false
     st.tClassName, st.tClass = nil, nil
   end
+  st.tRange = EVAL_T_RANGE() -- 1.37.0 目标距离分档（在 if/else 之后、return 之前；误插 else 分支内恒 nil 已修）
   return st
 end
 
@@ -468,7 +469,55 @@ function EVAL_GO_RESCAN(quiet)
   return wslots
 end
 
+-- 目标距离分档（1.37.0）：本客户端无精确距离 API（CheckInteractDistance 实测不分档、无目标坐标入口）——
+-- 用已知射程参照技能 + IsActionInRange 分档：近战(≤5码)/冲锋距(8-25码)/远程外；无参照技能=nil（不显示）
+function EVAL_T_RANGE()
+  if not (st.hasTarget and not st.tDead) then return nil end
+  if type(IsActionInRange) ~= "function" then return nil end
+  local function inRange(name)
+    local s = wslots[name]
+    if not s then return nil end
+    local okr, r = pcall(IsActionInRange, s.slot)
+    if not okr or r == nil or r == 1 then return nil end -- 1=自动攻击类不测距
+    return r == true
+  end
+  local melee
+  for _, n in ipairs({ "断筋", "压制", "撕裂", "英勇打击", "猛击", "斩杀" }) do
+    melee = inRange(n)
+    if melee ~= nil then break end
+  end
+  if melee == true then return "近战" end
+  local charge = inRange("冲锋")
+  if charge == true then return "冲锋距" end
+  if melee == false or charge == false then return "远程外" end
+  return nil
+end
+
 local function wtex(name) local s = wslots[name]; return s and s.tex end
+
+-- 目标距离分档（1.37.0）：本客户端无精确距离 API（CheckInteractDistance 实测不分档、无目标坐标入口）——
+-- 用已知射程参照技能 + IsActionInRange 分档：近战(≤5码)/冲锋距(8-25码)/远程外；无参照技能=nil（不显示）
+function EVAL_T_RANGE()
+  if not (st.hasTarget and not st.tDead) then return nil end
+  if type(IsActionInRange) ~= "function" then return nil end
+  local function inRange(name)
+    local s = wslots[name]
+    if not s then return nil end
+    local okr, r = pcall(IsActionInRange, s.slot)
+    if not okr or r == nil or r == 1 then return nil end -- 1=自动攻击类不测距
+    return r == true
+  end
+  local melee
+  for _, n in ipairs({ "断筋", "压制", "撕裂", "英勇打击", "猛击", "斩杀" }) do
+    melee = inRange(n)
+    if melee ~= nil then break end
+  end
+  if melee == true then return "近战" end
+  local charge = inRange("冲锋")
+  if charge == true then return "冲锋距" end
+  if melee == false or charge == false then return "远程外" end
+  return nil
+end
 
 -- ===== 宠物指令（1.30.0 特殊技能：rule.skill="宠物:攻击"，不占动作条，出手直接调 Pet API） =====
 -- 收录战斗行为类全量：攻击/跟随/停留/停止攻击 + 三种姿态（被动/防御/主动）+ 解散。
@@ -979,6 +1028,15 @@ local function condOne(cd, skill, dry)
     local pass = not (okq and q)
     if cd.inv then pass = not pass end
     return pass, "已排队"
+  elseif k == "inRange" then
+    -- 施法范围内（1.37.0）：IsActionInRange(该技能槽位)==true 才算；0=超出 / 1=自动攻击不测距 / nil=无目标
+    local s2 = wslots[cd.s or ""]
+    local pass = false
+    if s2 and type(IsActionInRange) == "function" then
+      local okr, r = pcall(IsActionInRange, s2.slot)
+      pass = (okr and r == true) and true or false
+    end
+    return (pass == (cd.v ~= false)), "范围内:" .. tostring(cd.s)
   elseif k == "immune" then
     -- 目标是否已免疫指定技能（1.36.1：读免疫学习表 immune[技能@当前目标]；v=false 即「未免疫」）
     local w2 = EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war
@@ -1165,6 +1223,10 @@ function EVAL_PARSE_ONE(token)
   if imt then return { k = "immune", s = condTrim(imt), v = not neg } end
   local imn = string.match(token, "^未免疫[:：](.+)$") or string.match(token, "^notimmune[:=](.+)$")
   if imn then return { k = "immune", s = condTrim(imn), v = false } end
+  local irg = string.match(token, "^范围内[:：](.+)$") or string.match(token, "^inrange[:=](.+)$") or string.match(token, "^range[:=](.+)$") -- 1.37.0 射程条件
+  if irg then return { k = "inRange", s = condTrim(irg), v = not neg } end
+  local irn = string.match(token, "^范围外[:：](.+)$") or string.match(token, "^notinrange[:=](.+)$")
+  if irn then return { k = "inRange", s = condTrim(irn), v = false } end
   local tg = string.match(token, "^选取目标[:：](.+)$") or string.match(token, "^target[:=](.+)$")
   if tg then
     -- 指定名称:嗜血者 / byName=嗜血者（1.29.0：名称存 cd.nm）
@@ -1226,7 +1288,8 @@ function EVAL_COND_STR(cd)
     if cd.s == "byName" then return "选取目标:指定名称:" .. tostring(cd.nm or "?") end
     return "选取目标:" .. tostring(TARGET_SEL_NAME[cd.s] or cd.s)
   end
-  if k == "immune" then return (cd.v == false and "未免疫:" or "免疫:") .. tostring(cd.s) end -- 1.36.1
+    if k == "inRange" then return (cd.v == false and "范围外:" or "范围内:") .. tostring(cd.s) end -- 1.37.0
+if k == "immune" then return (cd.v == false and "未免疫:" or "免疫:") .. tostring(cd.s) end -- 1.36.1
   if k == "tClass" then
     local ns = {}
     for _, c in ipairs(CLASS_LIST) do if cd.cs and cd.cs[c.id] then table.insert(ns, c.name) end end
@@ -1785,6 +1848,11 @@ function EVAL_HELP_UI_BUILD()
   ui.hpFill, ui.hpText, ui.hpW = hpFill, hpText, hpW
   ui.pwFill, ui.pwText, ui.pwW = pwFill, pwText, pwW
   ui.tgBar, ui.tgFill, ui.tgText, ui.tgW = tgBar, tgFill, tgText, tgW
+  -- 目标距离文本（1.37.0）：目标条右缘（近战/冲锋距/远程外，EVAL_T_RANGE 分档）
+  local tgRange = uiText(tgBar, math.max(8, math.floor(9 * z)), 1, 0.85, 0.4)
+  tgRange:SetPoint("RIGHT", tgBar, "RIGHT", -4, 0)
+  pcall(tgRange.SetJustifyH, tgRange, "RIGHT")
+  ui.tgRange = tgRange
   ui.status, ui.cells = status, cells
   ui.profBtns, ui.profCells = profBtns, profCells
 
@@ -1826,6 +1894,7 @@ function EVAL_HELP_UI_TICK()
     string.format("%s %d/%d", powerLabel(), st.power, st.powerMax))
 
   -- 目标条
+  if ui.tgRange then ui.tgRange:SetText(st.tRange or "") end -- 1.37.0 目标条右侧距离
   if st.hasTarget then
     local tfrac = st.tHpPct / 100
     uiSetBar(ui.tgFill, ui.tgText, ui.tgW, tfrac, 0.80, 0.20, 0.20,
@@ -3201,8 +3270,8 @@ function EVAL_HELP_ST_TICK()
       tostring(st.targetName), st.tLevel or 0,
       st.isBoss and " |cffff4040Boss|r" or "",
       (not st.isBoss and st.isElite) and " |cffff9040精英|r" or ""))
-    table.insert(lines, string.format("目标血 %.0f%% · 可攻击:%s · 可流血:%s · 关系:%s",
-      st.tHpPct, stYesNo(st.canAttack), stYesNo(st.canBleed),
+    table.insert(lines, string.format("目标血 %.0f%% · 距离:%s · 可攻击:%s · 可流血:%s · 关系:%s",
+      st.tHpPct, st.tRange or "—", stYesNo(st.canAttack), stYesNo(st.canBleed),
       st.tFriendly and "友善" or (st.tNeutral and "中立" or (st.tHostile and "敌对" or "?"))))
     table.insert(lines, string.format("类型:%s 分级:%s%s · 职业:%s",
       st.tCreatureType or "?", st.tClassification or "?",
@@ -3282,6 +3351,7 @@ local SE_TYPES = {
   { id = "target",     name = "选取目标",    kind = "target", s = "nearEnemy", hidden = true }, -- 1.32.0 提为技能级（技能下拉「目标选取」），新增条件下拉不再提供；存量条件仍渲染/求值
   { id = "tClass",     name = "目标职业",    kind = "class" },
   { id = "immune",    name = "目标免疫技能", kind = "skill", s = "撕裂" }, -- 1.36.1 免疫学习表判定
+  { id = "inRange",   name = "施法范围内",  kind = "skill", s = "冲锋" }, -- 1.37.0 IsActionInRange
 }
 local SE_BY_K = {}
 for i, td in ipairs(SE_TYPES) do SE_BY_K[td.id] = i end
@@ -3293,7 +3363,7 @@ local SE_TYPE_GROUPS = {
   { label = "CTG_1", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "combat", "autoAttack", "alt", "shift", "ctrl", "form" } },
   { label = "CTG_2", ids = { "tHpPct", "hasTarget", "canAttack", "canBleed", "tFriendly", "tHostile", "tNeutral", "isElite", "isBoss", "tInCombat", "tClass", "immune" } },
   { label = "CTG_3", ids = { "hasBuff", "noBuff", "hasDebuff", "noDebuff" } },
-  { label = "CTG_4", ids = { "ready", "usable", "notQueued" } },
+  { label = "CTG_4", ids = { "ready", "usable", "notQueued", "inRange" } },
 }
 
 local seUI = { root = nil, ed = nil, rows = {} }
@@ -3546,8 +3616,12 @@ function EVAL_HELP_SE_REFRESH()
         pcall(row.formN.btn.Show, row.formN.btn)
       elseif td.kind == "skill" then
         local disp = tostring(cd.s or "?")
-        if cd.k == "immune" then -- 1.36.3 免疫/未免疫 切换按钮
-          row.immBtn.text:SetText((cd.v == false) and L("IMM_N") or L("IMM_Y"))
+        if cd.k == "immune" or cd.k == "inRange" then -- 1.36.3/1.37.0 免疫·射程 开关（射程显示 是/否）
+          if cd.k == "inRange" then
+            row.immBtn.text:SetText((cd.v == false) and L("SE_NO") or L("SE_YES"))
+          else
+            row.immBtn.text:SetText((cd.v == false) and L("IMM_N") or L("IMM_Y"))
+          end
           pcall(row.immBtn.btn.Show, row.immBtn.btn)
         end
         local isDebuff = (cd.k == "hasDebuff" or cd.k == "noDebuff")

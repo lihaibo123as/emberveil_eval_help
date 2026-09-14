@@ -276,4 +276,24 @@ eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = gIm } }), true,
 eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("未免疫:撕裂") } }), false, "not-immune cond false when learned")
 EVAL_HELP_CONFIG.war.immune = {}
 
+-- 21) 射程条件 + 距离分档（1.37.0）
+TEST.slotNames[3] = "断筋"
+EVAL_GO_RESCAN(true)
+local gRg = EVAL_PARSE_CONDS("范围内:冲锋")
+eq(gRg[1][1].k, "inRange", "inRange parse k")
+eq(EVAL_GROUP_STR(gRg), "范围内:冲锋", "inRange roundtrip")
+eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("范围外:冲锋")), "范围外:冲锋", "not-inrange roundtrip")
+TEST.inRange = { [2] = true }
+EVAL_HELP_UPDATE_STATE()
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = gRg } }), true, "in range passes")
+eq(EVAL_HELP_STATE.tRange, "冲锋距", "charge band")
+TEST.inRange = { [2] = 0 }
+EVAL_HELP_UPDATE_STATE()
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = gRg } }), false, "out of range blocks")
+eq(EVAL_HELP_STATE.tRange, "远程外", "out band")
+TEST.inRange = { [3] = true }
+EVAL_HELP_UPDATE_STATE()
+eq(EVAL_HELP_STATE.tRange, "近战", "melee band")
+TEST.inRange = nil TEST.slotNames[3] = nil EVAL_GO_RESCAN(true) EVAL_HELP_UPDATE_STATE()
+
 print("ALL TESTS PASS")

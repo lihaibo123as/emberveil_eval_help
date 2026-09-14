@@ -81,6 +81,7 @@ EVAL_LOCALES["zhCN"] = {
   CT_NODEBUFF = "目标无debuff", CT_READY = "冷却就绪", CT_USABLE = "技能可用", CT_NOTQUEUED = "未排队",
   CT_TARGET = "选取目标", CT_TCLASS = "目标职业",
   CT_IMMUNE = "目标免疫技能",
+  CT_INRANGE = "施法范围内",
   IMM_Y = "免疫",
   IMM_N = "未免疫",
   IO_TITLE = "方案 导入 / 导出（md 文本，Ctrl+C / Ctrl+V）",
