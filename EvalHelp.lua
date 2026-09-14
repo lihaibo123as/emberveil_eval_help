@@ -1,4 +1,4 @@
--- EvalHelp 1.35.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.35.2 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.35.1"
+local VERSION = "1.35.2"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -3514,18 +3514,18 @@ function EVAL_HELP_SE_REFRESH()
           pcall(row.stk.btn.Show, row.stk.btn)
         end
         row.skillText:SetText(disp)
-        pcall(row.sDrop.btn.Show, row.sDrop.btn)
+        pcall(row.sHit.Show, row.sHit)
         pcall(row.skillText.Show, row.skillText)
       elseif td.kind == "target" then
         local disp = (cd.s == "byName") and ("指定:" .. tostring(cd.nm or "未设")) or (TARGET_SEL_NAME[cd.s] or tostring(cd.s or "?"))
         row.skillText:SetText(disp)
-        pcall(row.sDrop.btn.Show, row.sDrop.btn)
+        pcall(row.sHit.Show, row.sHit)
         pcall(row.skillText.Show, row.skillText)
       elseif td.kind == "class" then
         local ns = {}
         for _, c in ipairs(CLASS_LIST) do if cd.cs and cd.cs[c.id] then table.insert(ns, c.name) end end
         row.skillText:SetText(table.getn(ns) > 0 and table.concat(ns, "/") or "未选择（永不满足）")
-        pcall(row.sDrop.btn.Show, row.sDrop.btn)
+        pcall(row.sHit.Show, row.sHit)
         pcall(row.skillText.Show, row.skillText)
       end
       row.preview:SetText(EVAL_COND_STR(cd))
@@ -3796,7 +3796,17 @@ local function SE_BUILD()
     st2:SetPoint("TOPLEFT", root, "TOPLEFT", 142, y - 3)
     row.skillText = st2
     reg(st2)
-    -- [v] 下拉：buff/debuff 技能名全列表
+    -- 1.35.2 布局优化：[v] 箭头按钮取消——文字本身就是触发区（透明热区覆盖，悬停高亮提示可点）
+    local sHit = CreateFrame("Button", nil, root)
+    sHit:SetWidth(120) sHit:SetHeight(15)
+    sHit:SetPoint("TOPLEFT", root, "TOPLEFT", 140, y)
+    pcall(sHit.EnableMouse, sHit, true)
+    pcall(sHit.RegisterForClicks, sHit, "LeftButtonUp")
+    sHit:SetScript("OnEnter", function() pcall(st2.SetTextColor, st2, 1, 1, 0.85) end)
+    sHit:SetScript("OnLeave", function() pcall(st2.SetTextColor, st2, 1, 0.9, 0.5) end)
+    row.sHit = sHit
+    reg(sHit)
+    -- [v] 下拉：buff/debuff 技能名全列表（1.35.2 起按钮本体常驻隐藏，仅作处理器宿主）
     row.sDrop = seBtn(root, 246, y, 16, 15, "v", function()
       local it = seUI.ed and seUI.ed.conds[i]
       if not it then return end
@@ -3809,7 +3819,7 @@ local function SE_BUILD()
           table.insert(items, c.name)
           if it.cd.cs[c.id] then sel[ci] = true end
         end
-        EVAL_DD_OPEN(row.sDrop.btn, items, function(pi, on)
+        EVAL_DD_OPEN(row.sHit, items, function(pi, on)
           it.cd.cs[CLASS_LIST[pi].id] = on or nil
           EVAL_HELP_SE_REFRESH()
         end, { multi = true, selected = sel })
@@ -3822,7 +3832,7 @@ local function SE_BUILD()
           for _, n in ipairs(EVAL_NEARBY_ENEMY_NAMES(5)) do table.insert(items, n) end
           table.insert(items, "✎ 自定义名称…")
           local customIdx = table.getn(items)
-          EVAL_DD_OPEN(row.sDrop.btn, items, function(pi)
+          EVAL_DD_OPEN(row.sHit, items, function(pi)
             if pi >= customIdx then
               EVAL_TN_OPEN("指定目标名称（盲打看金色回声行）", it.cd.nm or "", function(nm)
                 it.cd.nm = nm
@@ -3840,7 +3850,7 @@ local function SE_BUILD()
           -- 选取目标：下拉官方 Targetting 函数种类（1.25.0 七种 + 1.29.0 目标的目标/指定名称）
           local items = {}
           for _, t in ipairs(TARGET_SEL) do table.insert(items, t.name) end
-          EVAL_DD_OPEN(row.sDrop.btn, items, function(pi)
+          EVAL_DD_OPEN(row.sHit, items, function(pi)
             it.cd.s = TARGET_SEL[pi].id
             EVAL_HELP_SE_REFRESH()
             if it.cd.s == "byName" then openNameDrop() end -- 选完种类立即选名称
@@ -3880,13 +3890,14 @@ local function SE_BUILD()
         local t = auraTexOf(nm)
         if t then icons[i2] = t anyIcon = true end
       end
-      EVAL_DD_OPEN(row.sDrop.btn, items, function(pi)
+      EVAL_DD_OPEN(row.sHit, items, function(pi)
         it.cd.s = names[pi]
         EVAL_HELP_SE_REFRESH()
       end, { icons = anyIcon and icons or nil })
     end)
+    row.sDrop.btn:Hide() -- 1.35.2 v 按钮常驻隐藏
+    sHit:SetScript("OnClick", function() local c = row.sDrop.btn:GetScript("OnClick") if c then c() end end)
     reg(row.sDrop.btn)
-    -- debuff 层数下拉（1.31.0）：仅 目标有/无debuff 条件显示；不限/2-5层
     row.stk = seBtn(root, 266, y, 20, 15, L("SE_STK"), function()
       local it = seUI.ed and seUI.ed.conds[i]
       if not it then return end
