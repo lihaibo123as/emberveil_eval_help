@@ -1,4 +1,4 @@
--- EvalHelp 1.32.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.32.2 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.32.1"
+local VERSION = "1.32.2"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -2192,7 +2192,7 @@ local function cfgBuild()
   local RX2 = 128
   cfgHeader(root, RX2, -56, "技能列表（顺序=优先级；勾选=启用）", Wp)
   local ROWS = 8
-  local function mkSmall(x, y, w, label, fn)
+  local function mkSmall(x, y, w, label, fn, list) -- 1.32.2 加 list 参数：默认 Wp（Tab2），传 G 可挂全局 Tab
     local b = CreateFrame("Button", nil, root)
     b:SetWidth(w) b:SetHeight(15)
     b:SetPoint("TOPLEFT", root, "TOPLEFT", x, y)
@@ -2206,7 +2206,8 @@ local function cfgBuild()
     bt:SetPoint("CENTER", b, "CENTER", 0, 0)
     bt:SetText(label)
     b:SetScript("OnClick", fn)
-    table.insert(Wp, b)
+    table.insert(list or Wp, b)
+    if list then table.insert(list, bt) end -- 文本属按钮子件随动，但 G 列表契约要求显式登记
     return b, bt
   end
   -- 方案导入/导出窗口入口（md 文本互转）
@@ -2215,6 +2216,14 @@ local function cfgBuild()
     EVAL_HELP_SE_OPEN(warCfg().activeProfile or 1)
   end)
   mkSmall(RX2 + 356, -56, 68, "导入导出", function() EVAL_HELP_IO_TOGGLE() end)
+
+  -- 全局 Tab「一键宏」组（1.32.2）：重扫动作条按钮，等同 /eh go rescan——拖动过技能后点一下即可
+  cfgHeader(root, LX, -212, "一键宏", G)
+  local rsB, rsT = mkSmall(LX, -232, 130, "重扫动作条", function() EVAL_GO_RESCAN() end, G)
+  local rsTip = uiText(root, 8, 0.6, 0.6, 0.6)
+  rsTip:SetPoint("TOPLEFT", root, "TOPLEFT", LX, -252)
+  rsTip:SetText("改动动作条后点此识别技能槽位（= /eh go rescan）")
+  table.insert(G, rsTip)
 
   -- （1.21.6 起移除底部「激活方案」下拉：与左侧方案栏/战斗信息UI方案行/Shift+按宏//eh go prof N 功能重复）
 
