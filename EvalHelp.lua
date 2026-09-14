@@ -1,4 +1,4 @@
--- EvalHelp 1.33.2 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.33.3 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.33.2"
+local VERSION = "1.33.3"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -2771,10 +2771,11 @@ function EVAL_WAR_TAB_REFRESH()
   local p = w2.profiles[w2.activeProfile or 1]
   -- 1.33.0 滚动：offset 收敛到合法范围；滚动按钮仅在超高时显示
   local cnt = (p and p.skills) and table.getn(p.skills) or 0
-  local maxOff = math.max(0, cnt - ROWS)
+  local rowsN = table.getn(warUI.rows) -- 1.33.3 修：ROWS 是 cfgBuild 内 local，本函数拿不到（nil 算术报错）
+  local maxOff = math.max(0, cnt - rowsN)
   warUI.offset = math.max(0, math.min(warUI.offset or 0, maxOff))
   if warUI.scrollUp then
-    if cnt > ROWS then
+    if cnt > rowsN then
       pcall(warUI.scrollUp.Show, warUI.scrollUp) pcall(warUI.scrollDn.Show, warUI.scrollDn)
     else
       pcall(warUI.scrollUp.Hide, warUI.scrollUp) pcall(warUI.scrollDn.Hide, warUI.scrollDn)
