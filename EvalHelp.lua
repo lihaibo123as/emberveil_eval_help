@@ -1,4 +1,4 @@
--- EvalHelp 1.35.5 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.36.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.35.5"
+local VERSION = "1.36.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -1017,12 +1017,40 @@ local function groupsOK(rule, dry)
 end
 
 -- 按顺序执行规则表；第一条条件全过且启用的技能出手。返回 true=本次按键已动作
+-- ===== 免疫学习器（1.36.0，探针实测驱动） =====
+-- 事件 CHAT_MSG_SPELL_SELF_DAMAGE，文本 "你的{技能}施放失败。{怪名}对此免疫。"（英文端 "Your X fails. Y is immune."）
+-- 学习持久化 EVAL_HELP_CONFIG.war.immune["技能@怪名"]=true；RULE_RUN 对同名怪自动跳过该技能（可流血黑名单的自动学习版）
+function EVAL_IMMUNE_LEARN(msg)
+  if type(msg) ~= "string" then return false end
+  local skill, mob = string.match(msg, "你的(.-)施放失败。(.-)对此免疫。")
+  if not skill then skill, mob = string.match(msg, "Your (.-) fails%. (.-) is immune%.") end
+  if not (skill and mob and skill ~= "" and mob ~= "") then return false end
+  local w2 = EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war
+  if not w2 then return false end
+  if not w2.immune then w2.immune = {} end
+  local key = skill .. "@" .. mob
+  if not w2.immune[key] then
+    w2.immune[key] = true
+    say("|cffff9040已学习免疫: " .. skill .. " @ " .. mob .. "（该目标不再尝试此技能）|r")
+  end
+  return true
+end
+
+-- 当前目标是否已记录免疫该技能
+local function wImmuneTo(skill)
+  local w2 = EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war
+  local im = w2 and w2.immune
+  return (im and st.hasTarget and st.targetName) and im[skill .. "@" .. tostring(st.targetName)] and true or false
+end
+
 function EVAL_RULE_RUN(rules)
   for _, r in ipairs(rules) do
     if r.enabled == false then
       -- 技能配置开关关掉的：静默跳过
     elseif not wslots[r.skill] and not petCmdOf(r.skill) and not targetSelOf(r.skill) and not itemOf(r.skill) then
       wlog(r.skill .. "跳过: 不在动作条")
+    elseif wImmuneTo(r.skill) then
+      wlog(r.skill .. "跳过: 目标已免疫（学习记录 " .. tostring(st.targetName) .. "）")
     else
       local ok, why, trace
       if r.groups then ok, why, trace = groupsOK(r) else ok, why = condOK(r.when or {}, r.skill) end
@@ -1210,6 +1238,7 @@ end
 function EVAL_WAR_ENSURE_PROFILES(w)
   if not w then return end
   if not w.debuffTex then w.debuffTex = {} end -- 1.32.0 审计修复：光环名→纹理学习表从未创建，学习跨会话丢失（1.27.0 遗留）
+  if not w.immune then w.immune = {} end -- 1.36.0 免疫学习表（技能@怪名，EVAL_IMMUNE_LEARN 写入）
   if type(w.profiles) ~= "table" or table.getn(w.profiles) == 0 then
     w.profiles = { { name = "默认", skills = {
       { skill = "战斗姿态", enabled = true, why = "非战斗切姿态",
@@ -4440,6 +4469,16 @@ if type(SlashCmdList) == "table" then
         say(n .. " × " .. pe[n] .. "  样本: " .. tostring(pe[n .. "_s"]))
       end
       if table.getn(pl) == 0 and table.getn(names) == 0 then say("（全空——先 /eh go probe immune 并在 30 秒内对免疫怪放技能；若反复全空说明事件系统不可用）") end
+    elseif msg == "go immune" then
+      local im = (EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war and EVAL_HELP_CONFIG.war.immune) or {}
+      local n, keys = 0, {}
+      for k in pairs(im) do n = n + 1 table.insert(keys, k) end
+      table.sort(keys)
+      say("免疫学习记录 " .. n .. " 条（/eh go immune clear 清空）:")
+      for _, k in ipairs(keys) do say("  " .. k) end
+    elseif msg == "go immune clear" then
+      if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war then EVAL_HELP_CONFIG.war.immune = {} end
+      say("免疫学习记录已清空")
     elseif msg == "go probe" then
       -- buff 探针（1.33.1）：两条枚举+tooltip 读名路径原始值打印，诊断药品类 buff 不进下拉
       say("— buff 探针（结果同时写日志文件） —")
@@ -4545,6 +4584,7 @@ init:SetScript("OnEvent", function(a, b)
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_REGEN_DISABLED")
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_REGEN_ENABLED")
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_TARGET_CHANGED") -- Cat：目标切换时刷新可流血等状态
+    pcall(autoFrame.RegisterEvent, autoFrame, "CHAT_MSG_SPELL_SELF_DAMAGE") -- 1.36.0 免疫学习器（探针实测事件名）
     autoFrame:SetScript("OnEvent", function(ea, eb)
       local en
       if type(ea) == "string" then en = ea
@@ -4558,6 +4598,10 @@ init:SetScript("OnEvent", function(a, b)
         onCombatEvent(false)
       elseif en == "PLAYER_TARGET_CHANGED" then
         EVAL_HELP_UPDATE_STATE()
+      elseif en == "CHAT_MSG_SPELL_SELF_DAMAGE" then
+        -- 消息文本取全局 arg1；ea/eb 若承载事件名则不当消息用（三态兼容）
+        local msgT = (type(arg1) == "string" and arg1) or ((type(ea) == "string" and ea ~= en) and ea) or (type(eb) == "string" and eb)
+        if msgT then EVAL_IMMUNE_LEARN(msgT) end
       end
     end)
     say("全职业施法工具 " .. VERSION .. "（通用一键宏） — 一键宏 /run EVAL_GO() | /eh cfg 配置 | /eh help 帮助")
