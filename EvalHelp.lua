@@ -1,4 +1,4 @@
--- EvalHelp 1.33.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.33.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.33.0"
+local VERSION = "1.33.1"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -4266,6 +4266,37 @@ if type(SlashCmdList) == "table" then
       EVAL_GO_STATUS()
     elseif msg == "go rescan" then
       EVAL_GO_RESCAN(false)
+    elseif msg == "go probe" then
+      -- buff 探针（1.33.1）：两条枚举+tooltip 读名路径原始值打印，诊断药品类 buff 不进下拉
+      say("— buff 探针（结果同时写日志文件） —")
+      local function pr(s) say(s) logLine(s) end
+      pr("GetPlayerBuff=" .. tostring(type(GetPlayerBuff)) .. " UnitBuff=" .. tostring(type(UnitBuff)) .. " SetPlayerBuff=" .. tostring(type(GameTooltip.SetPlayerBuff)) .. " SetUnitBuff=" .. tostring(type(GameTooltip.SetUnitBuff)))
+      pr("BuffButton0=" .. tostring(getglobal("BuffButton0") ~= nil) .. " BuffFrame=" .. tostring(getglobal("BuffFrame") ~= nil))
+      for i = 0, 3 do
+        local okb, bi = pcall(GetPlayerBuff, i, "HELPFUL")
+        pr(string.format("GPB(%d) ok=%s bi=%s(%s)", i, tostring(okb), tostring(bi), type(bi)))
+        if okb and type(bi) == "number" and bi >= 0 then
+          local okt, tex = pcall(GetPlayerBuffTexture, bi)
+          pcall(function() GameTooltip:SetOwner(UIParent, "ANCHOR_NONE") end)
+          pcall(function() GameTooltip:ClearLines() end)
+          local oks, built = pcall(GameTooltip.SetPlayerBuff, GameTooltip, bi)
+          local nm = GameTooltipTextLeft1 and GameTooltipTextLeft1.GetText and GameTooltipTextLeft1:GetText()
+          pr("  tex=" .. tostring(okt and tex) .. " | SetPlayerBuff ok=" .. tostring(oks) .. " built=" .. tostring(built) .. " name=" .. tostring(nm))
+          pcall(function() GameTooltip:Hide() end)
+        end
+      end
+      for i = 1, 4 do
+        local oku, tex, apps = pcall(UnitBuff, "player", i)
+        pr(string.format("UnitBuff(%d) ok=%s tex=%s apps=%s", i, tostring(oku), tostring(tex), tostring(apps)))
+        if oku and tex then
+          pcall(function() GameTooltip:SetOwner(UIParent, "ANCHOR_NONE") end)
+          pcall(function() GameTooltip:ClearLines() end)
+          local oks, built = pcall(GameTooltip.SetUnitBuff, GameTooltip, "player", i)
+          local nm = GameTooltipTextLeft1 and GameTooltipTextLeft1.GetText and GameTooltipTextLeft1:GetText()
+          pr("  SetUnitBuff ok=" .. tostring(oks) .. " built=" .. tostring(built) .. " name=" .. tostring(nm))
+          pcall(function() GameTooltip:Hide() end)
+        end
+      end
     elseif msg == "wdebug" or msg == "debug" then
       cfg.wdebug = not cfg.wdebug
       say("调试日志: " .. (cfg.wdebug and "|cff00ff00开|r" or "|cffff0000关|r"))
