@@ -1,4 +1,5 @@
--- EVAL_HELP 1.24.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EVAL_HELP 1.25.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+--   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --
 -- 参考 OneJudge 开发流程的关键约定：
 --   1) 目录规则：Interface/AddOns/EvalHelp/EvalHelp.toc（文件夹名 == toc 基名）
@@ -22,7 +23,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.24.1"
+local VERSION = "1.25.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -506,6 +507,26 @@ local function condOK(when, skill)
   return true
 end
 
+-- ===== 选取目标条件（1.25.0）：规则求值时切换当前目标（副作用条件，求值通过恒 true） =====
+-- 官方文档 emberveil.org/wiki/lua/globals/Targetting；下列均为无参函数，重复调用会在邻近单位间循环（死人跳过）。
+-- TargetByName/AssistByName/AssistUnit/TargetUnit 需要名称/UnitID 参数，暂不纳入下拉。
+local TARGET_SEL = {
+  { id = "nearEnemy",  name = "最近敌人", fn = "TargetNearestEnemy" },
+  { id = "nearFriend", name = "最近友方", fn = "TargetNearestFriend" },
+  { id = "nearParty",  name = "最近队友", fn = "TargetNearestPartyMember" },
+  { id = "nearRaid",   name = "最近团员", fn = "TargetNearestRaidMember" },
+  { id = "lastEnemy",  name = "上一敌人", fn = "TargetLastEnemy" },
+  { id = "lastTarget", name = "上一目标", fn = "TargetLastTarget" },
+  { id = "clear",      name = "清除目标", fn = "ClearTarget" },
+}
+local TARGET_SEL_NAME, TARGET_SEL_ID, TARGET_SEL_FN = {}, {}, {}
+for _, t in ipairs(TARGET_SEL) do
+  TARGET_SEL_NAME[t.id] = t.name
+  TARGET_SEL_ID[t.name] = t.id
+  TARGET_SEL_ID[t.id] = t.id
+  TARGET_SEL_FN[t.id] = t.fn
+end
+
 -- ===== 条件组格式（方案/技能配置 UI 用）：rule.groups = { {cond,...}, ... }，组内条件为 & 关系，组间为 | 关系 =====
 -- 单条件 cond = { k=类型, op/n=数值比较, v=布尔, s=技能名, inv=取反 }
 --   数值: {k="power",op=">",n=30}  tHpPct/hpPct/powerPct/combatTime 同
@@ -513,9 +534,10 @@ end
 --   姿态: {k="form",n=1} / {k="formNot",n=1}
 --   光环: {k="noBuff",s="战斗怒吼"}  hasBuff/noDebuff/hasDebuff
 --   技能侧: {k="ready"} {k="usable"} {k="notQueued"}（inv=true 取反）
+--   选取目标: {k="target",s="nearEnemy"}（1.25.0 副作用条件，恒过；dry 预览不执行）
 
--- 单个条件求值；返回 true 或 false+原因
-local function condOne(cd, skill)
+-- 单个条件求值；返回 true 或 false+原因。dry=true 为预览求值（UI 亮金），副作用条件（选取目标）只验函数存在不执行
+local function condOne(cd, skill, dry)
   local k = cd.k
   local function texOf(n) return wslots[n] and wslots[n].tex end
   if k == "combat" then return (st.inCombat == cd.v), "战斗状态"
@@ -558,19 +580,26 @@ local function condOne(cd, skill)
     local pass = not (okq and q)
     if cd.inv then pass = not pass end
     return pass, "已排队"
+  elseif k == "target" then
+    -- 副作用条件：切换当前目标（战斗信息UI 亮金预览 dry 时不执行，防止刷新误切目标）
+    local gfn = TARGET_SEL_FN[cd.s]
+    local fn = gfn and getglobal(gfn)
+    if type(fn) ~= "function" then return false, "无选取函数:" .. tostring(cd.s) end
+    if not dry then pcall(fn) end
+    return true, "选取目标:" .. tostring(TARGET_SEL_NAME[cd.s] or cd.s)
   end
   return false, "未知条件:" .. tostring(k)
 end
 
 -- 条件组求值：任一组全过即过（组间 | ），组内全过才算过（组内 & ）
 -- 命中时返回第三个值 trace = 该组每个条件的逐项判定明细（释放日志用）
-local function groupsOK(rule)
+local function groupsOK(rule, dry)
   local lastWhy = "条件不满足"
   for _, g in ipairs(rule.groups or {}) do
     local allOK = true
     local trace = {}
     for _, cd in ipairs(g) do
-      local ok, why = condOne(cd, rule.skill)
+      local ok, why = condOne(cd, rule.skill, dry)
       table.insert(trace, EVAL_COND_STR(cd) .. (ok and "√" or "×"))
       if not ok then allOK = false lastWhy = why break end
     end
@@ -663,6 +692,12 @@ function EVAL_PARSE_ONE(token)
   if bs then return { k = "noDebuff", s = condTrim(bs) } end
   bs = string.match(token, "^有debuff[:：](.+)$") or string.match(token, "^hasDebuff[:=](.+)$")
   if bs then return { k = "hasDebuff", s = condTrim(bs) } end
+  local tg = string.match(token, "^选取目标[:：](.+)$") or string.match(token, "^target[:=](.+)$")
+  if tg then
+    local id = TARGET_SEL_ID[condTrim(tg)]
+    if id then return { k = "target", s = id } end
+    return nil
+  end
   local b = COND_BOOL[token]
   if b then return { k = b[1], v = neg and (not b[2]) or b[2] } end
   local fl = COND_FLAG[token]
@@ -710,6 +745,7 @@ function EVAL_COND_STR(cd)
   if k == "ready" then return cd.inv and "未就绪" or "就绪" end
   if k == "usable" then return cd.inv and "不可用" or "可用" end
   if k == "notQueued" then return cd.inv and "已排队" or "未排队" end
+  if k == "target" then return "选取目标:" .. tostring(TARGET_SEL_NAME[cd.s] or cd.s) end
   return tostring(k)
 end
 
@@ -1336,7 +1372,7 @@ function EVAL_HELP_UI_TICK()
         local enabled = r.enabled ~= false
         local pass = false
         if enabled and s and r.groups then
-          local okp = groupsOK(r)
+          local okp = groupsOK(r, true) -- dry: 亮金预览不触发选取目标等副作用
           pass = okp and true or false
         end
         if not enabled then
@@ -2443,6 +2479,7 @@ local SE_TYPES = {
   { id = "ready",      name = "冷却就绪",    kind = "flag" },
   { id = "usable",     name = "技能可用",    kind = "flag" },
   { id = "notQueued",  name = "未排队",      kind = "flag" },
+  { id = "target",     name = "选取目标",    kind = "target", s = "nearEnemy" },
 }
 local SE_BY_K = {}
 for i, td in ipairs(SE_TYPES) do SE_BY_K[td.id] = i end
@@ -2457,6 +2494,7 @@ local function seDefaultCond(ti)
   elseif td.kind == "bool" then return { k = td.id, v = true }
   elseif td.kind == "form" then return { k = "form", n = 1 }
   elseif td.kind == "skill" then return { k = td.id, s = td.s }
+  elseif td.kind == "target" then return { k = td.id, s = td.s }
   else return { k = td.id } end
 end
 
@@ -2643,6 +2681,10 @@ function EVAL_HELP_SE_REFRESH()
         row.skillText:SetText(tostring(cd.s or "?"))
         pcall(row.sDrop.btn.Show, row.sDrop.btn)
         pcall(row.skillText.Show, row.skillText)
+      elseif td.kind == "target" then
+        row.skillText:SetText(TARGET_SEL_NAME[cd.s] or tostring(cd.s or "?"))
+        pcall(row.sDrop.btn.Show, row.sDrop.btn)
+        pcall(row.skillText.Show, row.skillText)
       end
       row.preview:SetText(EVAL_COND_STR(cd))
       pcall(row.preview.Show, row.preview)
@@ -2780,7 +2822,7 @@ local function SE_BUILD()
     end)
     reg(row.conn.btn)
     row.typeBtn = seBtn(root, 46, y, 92, 15, "条件类型", function()
-      -- 点开下拉列表：全部 23 种条件类型可见可选（1.14.0：替代盲循环）
+      -- 点开下拉列表：全部 24 种条件类型可见可选（1.14.0：替代盲循环；1.25.0 新增选取目标）
       local ed = seUI.ed
       local it = ed and ed.conds[i]
       if not it then return end
@@ -2789,7 +2831,8 @@ local function SE_BUILD()
       EVAL_DD_OPEN(row.typeBtn.btn, items, function(ti)
         local old, new = it.cd, seDefaultCond(ti)
         if old.op and new.op then new.op, new.n = old.op, old.n end -- 同族参数保留
-        if old.s and new.s then new.s = old.s end
+        local oldTd = SE_TYPES[SE_BY_K[old.k] or 1]
+        if old.s and new.s and oldTd and oldTd.kind == SE_TYPES[ti].kind then new.s = old.s end -- s 仅同族保留
         it.cd = new
         EVAL_HELP_SE_REFRESH()
       end)
@@ -2853,6 +2896,17 @@ local function SE_BUILD()
     row.sDrop = seBtn(root, 246, y, 16, 15, "v", function()
       local it = seUI.ed and seUI.ed.conds[i]
       if not it then return end
+      local tdi = SE_TYPES[SE_BY_K[it.cd.k] or 1]
+      if tdi and tdi.kind == "target" then
+        -- 选取目标：下拉官方 Targetting 无参函数种类（1.25.0）
+        local items = {}
+        for _, t in ipairs(TARGET_SEL) do table.insert(items, t.name) end
+        EVAL_DD_OPEN(row.sDrop.btn, items, function(pi)
+          it.cd.s = TARGET_SEL[pi].id
+          EVAL_HELP_SE_REFRESH()
+        end)
+        return
+      end
       local items = EVAL_GO_SKILL_CHOICES() -- 白名单 + 动作条扫描技能（1.24.0）
       EVAL_DD_OPEN(row.sDrop.btn, items, function(pi)
         it.cd.s = items[pi]

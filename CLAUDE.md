@@ -2,7 +2,7 @@
 
 ## 项目位置与现状
 - 插件目录：`G:\game\u5wow\Azeroth\Binaries\Win64\Games\Emberveil\live\Azeroth\Interface\AddOns\EvalHelp\`（1.21 后用户改名 EVAL_HELP→**EvalHelp**；toc 已同步 EvalHelp.toc——目录名==toc基名才加载；改名时游戏必须关闭否则 Access denied）
-- 当前版本：**1.24.1**（toc Title 前缀改 EvalHelp——插件列表显示名同步目录名）（重扫泛化：动作条全部非宏技能入 wslots，不限 WAR_SKILLS——buff/debuff 条件与方案规则支持任意上条技能；EVAL_GO_SKILL_CHOICES() 合并清单供编辑窗下拉）（每次改动递增版本号：lua 头注释 + `local VERSION` + toc `## Version` 三处同步）
+- 当前版本：**1.25.0**（新增条件类型「选取目标」：TargetNearestEnemy/nearFriend/nearParty/nearRaid/lastEnemy/lastTarget/clear 七种下拉——副作用条件恒 true，condOne/groupsOK 加 dry 参数，战斗信息UI 亮金预览 groupsOK(r,true) 不执行切换；文本格式 `选取目标:最近敌人`/`target:nearEnemy`；编辑窗 24 种类型）（重扫泛化：动作条全部非宏技能入 wslots，不限 WAR_SKILLS——buff/debuff 条件与方案规则支持任意上条技能；EVAL_GO_SKILL_CHOICES() 合并清单供编辑窗下拉）（每次改动递增版本号：lua 头注释 + `local VERSION` + toc `## Version` 三处同步）
 - 文件：`EVAL_HELP.lua`（主文件 ~2900 行，单文件架构）、`EvalHelp.toc`、`README.md`、`example\zs_wq.md`（武器战初始方案）
 - 游戏：EmberVeil（1.12.1 客户端 UE 版，Lua 5.1）；插件名 EVAL_HELP，战士一键宏函数 **`EVAL_GO()`**（1.16.0 由 EVAL_ZS_WQ 改名；参数 0/不传=激活方案，1-4 或方案名=直触），斜杠 `/eh`
 
@@ -33,7 +33,8 @@
 - 受保护函数（CastSpellByName 等）插件**不能调**，施法一律 UseAction(slot) + pcall；谓词返回 true/false/nil，绝不 ==1
 - **1.22.0 硬编码前置清零**：EVAL_GO 里「非战斗切姿态/冲锋」旧战士宏残留已删（用户实测：测试方案只有怒吼却被迫冲锋）；规则化写法 战斗姿态|非战斗 & 非姿态1 & 可攻击；冲锋|非战斗 & 姿态1 & 可攻击 & 就绪
 - **EVAL_GO 目标门槛教训（1.21.7）**：规则引擎化后不能有「无可攻击目标就 return」的全局前置——是否需目标交给每条规则的条件；否则纯自身buff方案（如只有战斗怒吼）永远执行不到
-- 本客户端无 UnitCastingInfo（打断条件做不了）、无 SuperWoW（距离/挥击计时做不了）
+- 本客户端无 UnitCastingInfo（打断条件做不了）、无 SuperWoW（无精确距离数值/挥击计时）
+- **射程检测已有官方 API（排查 emberveil.org/wiki/lua 确认）**：IsActionInRange(slot) 已实现——返回 true=在射程内 / 0=超出射程 / 1=自动攻击(不测距) / nil=无目标或技能解析失败；ActionHasRange(slot) 返回技能是否有射程；CheckInteractDistance(unit,idx) 已实现但客户端不分档码数（idx<4 统一交互距离，4 恒 false）——可做规则引擎「在射程内」条件，技能本来就在动作条上直接传 slot
 - **seBtn 返回包裹表 {btn,bg,text} 不是按钮本体**：锚下拉/加 FontString 必须用 .btn（mkSmall 相反：直接返回 b,bt）——1.21.4 修复 SE 技能名按钮把包裹表当按钮用（uiText 炸 CreateFontString、SE_BUILD 半成品窗口）
 - **Lua local 作用域从声明语句【之后】开始**：RHS 里的闭包捕获不到正在声明的 local 自己 → local b = mk(..., function() ...引用b... end) 的 b 是全局 nil！OnClick 要赋值完后单独 SetScript 挂——1.21.4 修复激活方案下拉（DD_OPEN anchorBtn nil）
 - **EditBox 疑似不渲染**（1.15.1 用户报告 IO 窗口空白：pcall 全"成功"但什么都不可见）→ IO 窗加 FontString 保底预览区（EVAL_HELP_IO_REFRESH）；EditBox 字体链先试 SetFontObject(GameFontHighlightSmall/ChatFontNormal/GameFontNormal)；文本类 UI 一律给 FontString 保底；单行输入弹窗用**回声行**保底（OnTextChanged 镜像到 FontString，1.17.0 重命名弹窗 EVAL_HELP_RP_* 范式）
@@ -60,6 +61,13 @@
 - 库内含：README.md（开源门面+preview/ 界面图）、DEVELOPMENT.md（开发者指南）、CLAUDE.md（AI 记忆体副本，改主记忆后同步过去）、luacheck.js、example/zs_wq.md
 - **preview/ 图片只用用户提供的**（当前 main.png=全局页/cfg.png=一键宏设置页/skill_cfg.png=技能编辑窗/info.png=战斗信息UI+状态信息UI）；我加的截图已被用户要求删除——别再自行往里放图
 - 帮助输出含：异常自救 /reload 提示 + gitee 反馈地址
+
+## 官方 API 文档（用户提供 2026）
+- **Lua API 清单：https://emberveil.org/wiki/lua**（1370 条目，页面内嵌全量 JSON 索引可脚本解析；分类页如 /wiki/lua/globals/Action 有签名+返回值文档）
+- 自定义分类：Azeroth（20 条，含 GetUECVar/SetUECVar、语音、IsPlayerMoving 等）；无坐标类 API（GetPlayerMapPosition 在 Mapping 分类但目标坐标无入口）
+- 文档列出 Slider 控件（与「无原生 Slider」实测记录矛盾——以实测为准，用前先在游戏内验证）
+- 工作区排查工具：parse_api.js（关键词检索）/ dump_cat.js（按分类转储）+ api_*.html 缓存页
+- 工作流说明：当前开发主机是临时的，G: 盘游戏目录在另一台主机；本机改码→检查→推送 gitee→另一台拉取实测
 
 ## 参考代码
 - UnrealQuest：`...\AddOns\UnrealQuest\Compatibility\ClientAPI.lua`（本客户端实测配方库）
