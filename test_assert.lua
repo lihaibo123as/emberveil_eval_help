@@ -307,4 +307,31 @@ eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_COND
 EVAL_HELP_STATE.castName = nil
 eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = gCast } }), false, "not casting blocks")
 
+-- 23) 目标施法条件（1.40.0）：解析回环 + 事件状态 + 读条秒数 + 时长学习
+local gTC = EVAL_PARSE_CONDS("目标施法中")
+eq(gTC[1][1].k, "tCasting", "tCasting parse k")
+eq(gTC[1][1].s, nil, "empty = any cast")
+eq(EVAL_GROUP_STR(gTC), "目标施法中", "tCasting roundtrip")
+eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("目标施法中:寒冰箭")), "目标施法中:寒冰箭", "named roundtrip")
+eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("读条>2")), "读条>2", "elapsed roundtrip")
+-- 事件驱动状态：目标名不匹配不记，匹配记
+TEST.curTargetName = "测试怪" EVAL_HELP_UPDATE_STATE()
+EVAL_TCAST_EVENT("暗眼骷髅法师开始施放寒冰箭。")
+eq(EVAL_HELP_STATE.tCastName, nil, "other caster not tracked")
+TEST.curTargetName = "暗眼骷髅法师" EVAL_HELP_UPDATE_STATE()
+EVAL_TCAST_EVENT("暗眼骷髅法师开始施放寒冰箭。")
+eq(EVAL_HELP_STATE.tCastName, "寒冰箭", "target cast tracked")
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("目标施法中") } }), true, "tCasting any passes")
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("目标施法中:寒冰箭") } }), true, "named passes")
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("目标施法中:火球术") } }), false, "other spell blocks")
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("目标未施法") } }), false, "notcasting inverse")
+-- 结束命中 → 学习总时长（先让时间前进 1.5s——桩 GetTime 恒定 1000，0 时长会被 0.2s 下限拒）
+local oldGetTime = GetTime
+GetTime = function() return 1001.5 end
+EVAL_TCAST_EVENT("寒冰箭击中你造成20点伤害。")
+GetTime = oldGetTime
+eq(EVAL_HELP_STATE.tCastName, nil, "cast ends on hit")
+eq(type(EVAL_HELP_CONFIG.war.castTime and EVAL_HELP_CONFIG.war.castTime["寒冰箭"]), "number", "duration learned")
+TEST.curTargetName = nil EVAL_HELP_UPDATE_STATE()
+
 print("ALL TESTS PASS")

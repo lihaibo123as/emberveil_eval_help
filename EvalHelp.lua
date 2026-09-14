@@ -1,4 +1,4 @@
--- EvalHelp 1.39.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.40.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.39.0"
+local VERSION = "1.40.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -1884,6 +1884,9 @@ local SE_TYPES = {
   { id = "immune",    name = "目标免疫技能", kind = "skill", s = "撕裂" }, -- 1.36.1 免疫学习表判定
   { id = "inRange",   name = "施法范围内",  kind = "skill", s = "冲锋" }, -- 1.37.0 IsActionInRange
   { id = "casting",   name = "施法中",      kind = "skill", s = "猛击" }, -- 1.38.0 SPELLCAST_* 事件驱动
+  { id = "tCasting",  name = "目标施法中",  kind = "skill", s = "" }, -- 1.40.0 空参数=任意施法
+  { id = "tCastEl",   name = "读条已进行",  kind = "num", n = 1 },
+  { id = "tCastLeft", name = "读条剩余",    kind = "num", n = 1 },
 }
 local SE_BY_K = {}
 for i, td in ipairs(SE_TYPES) do SE_BY_K[td.id] = i end
@@ -1893,7 +1896,7 @@ local SE_OPS = { ">", ">=", "<", "<=", "==", "~=" }
 -- 条件类型分组（1.32.5 下拉美化）：金色组标题行不可选；SE_TYPES 本体顺序不动，仅展示层分组
 local SE_TYPE_GROUPS = {
   { label = "CTG_1", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "combat", "autoAttack", "alt", "shift", "ctrl", "form" } },
-  { label = "CTG_2", ids = { "tHpPct", "hasTarget", "canAttack", "canBleed", "tFriendly", "tHostile", "tNeutral", "isElite", "isBoss", "tInCombat", "tClass", "immune" } },
+  { label = "CTG_2", ids = { "tHpPct", "hasTarget", "canAttack", "canBleed", "tFriendly", "tHostile", "tNeutral", "isElite", "isBoss", "tInCombat", "tClass", "immune", "tCasting", "tCastEl", "tCastLeft" } },
   { label = "CTG_3", ids = { "hasBuff", "noBuff", "hasDebuff", "noDebuff" } },
   { label = "CTG_4", ids = { "ready", "usable", "notQueued", "inRange", "casting" } },
 }
@@ -2148,8 +2151,9 @@ function EVAL_HELP_SE_REFRESH()
         pcall(row.formN.btn.Show, row.formN.btn)
       elseif td.kind == "skill" then
         local disp = tostring(cd.s or "?")
-        if cd.k == "immune" or cd.k == "inRange" or cd.k == "casting" then -- 1.36.3~1.38.0 免疫·射程·施法中 开关（射程/施法中显示 是/否）
-          if cd.k == "inRange" or cd.k == "casting" then
+        if cd.k == "tCasting" and (cd.s == nil or cd.s == "") then disp = L("TCAST_ANY") end -- 1.40.0 空参数=任意施法
+        if cd.k == "immune" or cd.k == "inRange" or cd.k == "casting" or cd.k == "tCasting" then -- 1.36.3~1.40.0 免疫·射程·施法·目标施法 开关（后三显示 是/否）
+          if cd.k == "inRange" or cd.k == "casting" or cd.k == "tCasting" then
             row.immBtn.text:SetText((cd.v == false) and L("SE_NO") or L("SE_YES"))
           else
             row.immBtn.text:SetText((cd.v == false) and L("IMM_N") or L("IMM_Y"))
@@ -3221,6 +3225,10 @@ init:SetScript("OnEvent", function(a, b)
     for _, ev2 in ipairs({ "SPELLCAST_START", "SPELLCAST_STOP", "SPELLCAST_FAILED", "SPELLCAST_INTERRUPTED", "SPELLCAST_DELAYED", "SPELLCAST_CHANNEL_START", "SPELLCAST_CHANNEL_STOP" }) do
       pcall(autoFrame.RegisterEvent, autoFrame, ev2)
     end
+    -- 1.40.0 目标施法跟踪（探针实测事件）：生物施法文字走 CHAT_MSG_SPELL_CREATURE_VS_* 频道
+    pcall(autoFrame.RegisterEvent, autoFrame, "CHAT_MSG_SPELL_CREATURE_VS_SELF_DAMAGE")
+    pcall(autoFrame.RegisterEvent, autoFrame, "CHAT_MSG_SPELL_CREATURE_VS_CREATURE_DAMAGE")
+    pcall(autoFrame.RegisterEvent, autoFrame, "CHAT_MSG_SPELL_CREATURE_VS_SELF_BUFF")
     autoFrame:SetScript("OnEvent", function(ea, eb)
       local en
       if type(ea) == "string" then en = ea
@@ -3251,6 +3259,10 @@ init:SetScript("OnEvent", function(a, b)
       elseif en == "SPELLCAST_DELAYED" then
         local d = (type(arg1) == "number" and arg1) or 0
         if st.castName and st.castUntil then st.castUntil = st.castUntil + d / 1000 end
+      -- 1.40.0 目标施法：「X开始施放Y。」开始（X=当前目标才记）/「Y击中你/对你造成」结束并学习总时长
+      elseif en == "CHAT_MSG_SPELL_CREATURE_VS_SELF_DAMAGE" or en == "CHAT_MSG_SPELL_CREATURE_VS_CREATURE_DAMAGE" or en == "CHAT_MSG_SPELL_CREATURE_VS_SELF_BUFF" then
+        local msgT = (type(arg1) == "string" and arg1) or ((type(ea) == "string" and ea ~= en) and ea) or (type(eb) == "string" and eb)
+        if msgT then EVAL_TCAST_EVENT(msgT) end
       end
     end)
     say("全职业施法工具 " .. VERSION .. "（通用一键宏） — 一键宏 /run EVAL_GO() | /eh cfg 配置 | /eh help 帮助")

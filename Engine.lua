@@ -631,6 +631,20 @@ local function condOne(cd, skill, dry)
     local pass = not (okq and q)
     if cd.inv then pass = not pass end
     return pass, "已排队"
+  elseif k == "tCasting" then
+    -- 目标施法中（1.40.0）：CHAT_MSG_SPELL_CREATURE_VS_* 文本事件驱动 st.tCastName；s 空=任意施法
+    local pass = (st.tCastName ~= nil) and ((cd.s == nil or cd.s == "") or st.tCastName == cd.s)
+    return (pass and true or false) == (cd.v ~= false), "目标施法中"
+  elseif k == "tCastEl" then
+    -- 读条已进行秒数：无目标读条=0
+    local el = (st.tCastName and st.tCastStart) and (GetTime() - st.tCastStart) or 0
+    return condCmp({ cd.op, cd.n }, el), "读条进行"
+  elseif k == "tCastLeft" then
+    -- 读条剩余秒数：需已学习该技能总时长（castTime 学习表）；未学习=不过
+    local w2 = EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war
+    local total = (w2 and w2.castTime and st.tCastName) and w2.castTime[st.tCastName] or nil
+    local left = (total and st.tCastStart) and (st.tCastStart + total - GetTime()) or nil
+    return (left ~= nil and condCmp({ cd.op, cd.n }, math.max(0, left))), "读条剩余"
   elseif k == "casting" then
     -- 施法中（1.38.0）：SPELLCAST_* 事件驱动 st.castName（1.12 无 UnitCastingInfo，只能走事件）
     local pass = (st.castName ~= nil and st.castName == cd.s) and true or false
@@ -714,6 +728,32 @@ local function wImmuneTo(skill)
   return (im and st.hasTarget and st.targetName) and im[skill .. "@" .. tostring(st.targetName)] and true or false
 end
 
+-- ===== 目标施法跟踪（1.40.0）：CHAT_MSG_SPELL_CREATURE_VS_* 文本驱动 =====
+-- 开始：「X开始施放Y。」X=当前目标名 → st.tCastName/tCastStart；结束：「Y击中你/对你造成」→ 学习总时长进 war.castTime（任意施法者都学）
+function EVAL_TCAST_EVENT(msg)
+  if type(msg) ~= "string" then return end
+  local caster, spell = string.match(msg, "(.-)开始施放(.+)。")
+  if not caster then caster, spell = string.match(msg, "(.-) begins to cast (.+)%.") end
+  if not caster then caster, spell = string.match(msg, "(.-) begins casting (.+)%.") end
+  if caster and spell and spell ~= "" then
+    if st.hasTarget and st.targetName == caster then
+      st.tCastName = spell
+      st.tCastStart = GetTime()
+    end
+    return
+  end
+  local sp2 = string.match(msg, "(.-)击中你造成") or string.match(msg, "(.-)对你造成") or string.match(msg, "(.-) hits you")
+  if sp2 and st.tCastName == sp2 and st.tCastStart then
+    local w2 = EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war
+    if w2 then
+      if not w2.castTime then w2.castTime = {} end
+      local dur = GetTime() - st.tCastStart
+      if dur > 0.2 and dur < 30 then w2.castTime[sp2] = math.floor(dur * 100 + 0.5) / 100 end
+    end
+    st.tCastName, st.tCastStart = nil, nil
+  end
+end
+
 function EVAL_RULE_RUN(rules)
   for _, r in ipairs(rules) do
     if r.enabled == false then
@@ -756,6 +796,7 @@ local COND_NUM = {
   ["自身血"] = "hpPct", ["hpPct"] = "hpPct",
   ["能量%"] = "powerPct", ["powerPct"] = "powerPct",
   ["进战"] = "combatTime", ["combatTime"] = "combatTime",
+  ["读条"] = "tCastEl", ["tCastEl"] = "tCastEl", ["读条剩"] = "tCastLeft", ["tCastLeft"] = "tCastLeft", -- 1.40.0 目标读条秒数
   ["连击"] = "combo", ["连击点"] = "combo", ["combo"] = "combo",
 }
 local COND_BOOL = {
@@ -826,6 +867,10 @@ function EVAL_PARSE_ONE(token)
     if any then return { k = "tClass", cs = cs } end
     return nil
   end
+  -- 1.40.0 目标施法中：空前缀=任意施法，带名=指定技能；未施法=取反
+  if string.find(token, "^目标未施法") or string.find(token, "^tnotcasting") then return { k = "tCasting", s = nil, v = false } end
+  local tct = string.match(token, "^目标施法中[:：]?(.-)$") or string.match(token, "^tcasting[:=]?(.-)$")
+  if tct ~= nil then return { k = "tCasting", s = (tct ~= "" and condTrim(tct)) or nil, v = not neg } end
   local imt = string.match(token, "^免疫[:：](.+)$") or string.match(token, "^immune[:=](.+)$") -- 1.36.1 免疫条件
   if imt then return { k = "immune", s = condTrim(imt), v = not neg } end
   local imn = string.match(token, "^未免疫[:：](.+)$") or string.match(token, "^notimmune[:=](.+)$")
@@ -868,7 +913,7 @@ function EVAL_PARSE_CONDS(str)
 end
 
 -- 条件组 → 显示字符串（列表摘要 / 编辑回显）
-local COND_NUMNAME = { power = "怒气", tHpPct = "目标血", hpPct = "自身血", powerPct = "能量%", combatTime = "进战", combo = "连击" }
+local COND_NUMNAME = { power = "怒气", tHpPct = "目标血", hpPct = "自身血", powerPct = "能量%", combatTime = "进战", tCastEl = "读条", tCastLeft = "读条剩", combo = "连击" }
 function EVAL_COND_STR(cd)
   local k = cd.k
   if COND_NUMNAME[k] then return COND_NUMNAME[k] .. (cd.op or ">") .. tostring(cd.n) end
@@ -881,6 +926,7 @@ function EVAL_COND_STR(cd)
   if k == "isElite" then return cd.v and "精英" or "非精英" end
   if k == "isBoss" then return cd.v and "Boss" or "非Boss" end
   if k == "tInCombat" then return cd.v and "目标战斗中" or "目标非战斗" end
+  if k == "tCasting" then return (cd.v == false and "目标未施法" or "目标施法中") .. ((cd.s and cd.s ~= "") and (":" .. cd.s) or "") end -- 1.40.0
   if k == "tFriendly" then return cd.v and "友善" or "非友善" end
   if k == "tHostile" then return cd.v and "敌对" or "非敌对" end
   if k == "tNeutral" then return cd.v and "中立" or "非中立" end
@@ -925,6 +971,7 @@ function EVAL_WAR_ENSURE_PROFILES(w)
   if not w then return end
   if not w.debuffTex then w.debuffTex = {} end -- 1.32.0 审计修复：光环名→纹理学习表从未创建，学习跨会话丢失（1.27.0 遗留）
   if not w.immune then w.immune = {} end -- 1.36.0 免疫学习表（技能@怪名，EVAL_IMMUNE_LEARN 写入）
+  if not w.castTime then w.castTime = {} end -- 1.40.0 目标读条总时长学习表（技能名→秒）
   if type(w.profiles) ~= "table" or table.getn(w.profiles) == 0 then
     w.profiles = { { name = "默认", skills = {
       { skill = "战斗姿态", enabled = true, why = "非战斗切姿态",

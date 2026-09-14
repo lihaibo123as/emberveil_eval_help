@@ -376,9 +376,12 @@ function EVAL_HELP_UPDATE_STATE()
     st.tClassification, st.isBoss, st.isElite = nil, false, false
     st.tReaction, st.tHostile, st.tNeutral, st.tFriendly = nil, false, false, false
     st.tClassName, st.tClass = nil, nil
+    st.tCastName, st.tCastStart = nil, nil -- 1.40.0 无目标即清施法状态
   end
   st.tRange = EVAL_T_RANGE() -- 1.37.0 目标距离分档（在 if/else 之后、return 之前；误插 else 分支内恒 nil 已修）
   -- 1.38.0 施法中跟踪过期清理（事件丢 STOP 时兜底；castUntil nil=无限期读条）
+  -- 1.40.0 目标施法状态：超时兜底（事件丢结束时 12s 自清；无目标在 else 分支已清名）
+  if st.tCastStart and GetTime() - st.tCastStart > 12 then st.tCastName, st.tCastStart = nil, nil end
   if st.castName and st.castUntil and GetTime() > st.castUntil then st.castName, st.castUntil = nil, nil end
   return st
 end
