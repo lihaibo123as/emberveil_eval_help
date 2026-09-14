@@ -1,4 +1,4 @@
--- EvalHelp 1.35.4 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.35.5 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.35.4"
+local VERSION = "1.35.5"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -4384,13 +4384,24 @@ if type(SlashCmdList) == "table" then
     elseif msg == "go probe immune" then
       -- 免疫事件探针（1.35.1，免疫学习器前置验证）：30 秒全事件抓取——CHAT_MSG_* 或参数含「免疫/immune」
       -- 的写 UELog；对免疫怪放技能后翻日志拿真实事件名+文本格式，再写解析器（事件 wiki 无文档页）
-      say("免疫探针启动：30 秒内对免疫怪放技能（如撕裂）→ 日志文件看 PROBE 行")
+      say("免疫探针启动：30 秒内对免疫怪放技能（如撕裂）→ /eh go probe dump 看结果")
       local pf = CreateFrame("Frame")
       local t0 = GetTime()
+      -- 1.35.5：0 条说明全事件抓取可能没收到——加全事件计数（判定 RegisterAllEvents 是否有效）
+      -- + 显式注册候选事件名对照（计数键带 [R] 前缀区分通道）
+      cfg.probeLog = {}
+      cfg.probeEvents = {}
+      local CAND = { "CHAT_MSG_SPELL_SELF_DAMAGE", "CHAT_MSG_SPELL_FAILED_LOCALPLAYER", "CHAT_MSG_COMBAT_SELF_MISSES", "CHAT_MSG_SPELL_SELF_BUFF" }
       pf:SetScript("OnEvent", function()
         local a1, a2 = arg1, arg2
         local ev = (type(event) == "string") and event or nil
         local name = ev or (type(a1) == "string" and a1) or ""
+        if name ~= "" then
+          local pe = cfg.probeEvents
+          pe[name] = (pe[name] or 0) + 1
+          local sk = name .. "_s"
+          if not pe[sk] then pe[sk] = tostring(a1) .. " | " .. tostring(a2) end
+        end
         local hit = (string.find(name, "^CHAT_MSG") ~= nil)
         if not hit then
           for _, v in ipairs({ a1, a2 }) do
@@ -4398,15 +4409,13 @@ if type(SlashCmdList) == "table" then
           end
         end
         if hit then
-          local line = "PROBE " .. tostring(ev) .. " | a1=" .. tostring(a1) .. " | a2=" .. tostring(a2)
-          logLine(line)
-          -- 1.35.4：本客户端 UELog 不落盘（Saved\Logs 恒空）——改写 SavedVariables 持久，/eh go probe dump 查看
-          cfg.probeLog = cfg.probeLog or {}
-          table.insert(cfg.probeLog, line)
+          table.insert(cfg.probeLog, "PROBE " .. tostring(name) .. " | a1=" .. tostring(a1) .. " | a2=" .. tostring(a2))
           while table.getn(cfg.probeLog) > 120 do table.remove(cfg.probeLog, 1) end
         end
       end)
-      pcall(pf.RegisterAllEvents, pf)
+      local okAll = pcall(pf.RegisterAllEvents, pf)
+      for _, en in ipairs(CAND) do pcall(pf.RegisterEvent, pf, "[R]" .. en) end -- 显式注册走同一帧（事件名前缀[R]区分）
+      say("RegisterAllEvents pcall=" .. tostring(okAll) .. "；显式候选 " .. table.getn(CAND) .. " 个")
       pf:SetScript("OnUpdate", function()
         if GetTime() - t0 > 30 then
           pcall(pf.UnregisterAllEvents, pf)
@@ -4420,7 +4429,17 @@ if type(SlashCmdList) == "table" then
       local pl = cfg.probeLog or {}
       say("— 探针记录 " .. table.getn(pl) .. " 条 —")
       for i, line in ipairs(pl) do say(i .. ". " .. line) end
-      if table.getn(pl) == 0 then say("（空——先 /eh go probe immune 并在 30 秒内对免疫怪放技能）") end
+      -- 1.35.5 全事件计数总览（判断事件系统是否工作）：按次数降序打前 25 个 + 首样本
+      local pe = cfg.probeEvents or {}
+      local names = {}
+      for n, c2 in pairs(pe) do if type(c2) == "number" then table.insert(names, n) end end
+      table.sort(names, function(a, b) return pe[a] > pe[b] end)
+      say("— 事件计数（共 " .. table.getn(names) .. " 种）—")
+      for i = 1, math.min(25, table.getn(names)) do
+        local n = names[i]
+        say(n .. " × " .. pe[n] .. "  样本: " .. tostring(pe[n .. "_s"]))
+      end
+      if table.getn(pl) == 0 and table.getn(names) == 0 then say("（全空——先 /eh go probe immune 并在 30 秒内对免疫怪放技能；若反复全空说明事件系统不可用）") end
     elseif msg == "go probe" then
       -- buff 探针（1.33.1）：两条枚举+tooltip 读名路径原始值打印，诊断药品类 buff 不进下拉
       say("— buff 探针（结果同时写日志文件） —")
