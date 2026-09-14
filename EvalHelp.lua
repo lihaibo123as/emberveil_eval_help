@@ -1,4 +1,4 @@
--- EvalHelp 1.33.4 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.34.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.33.4"
+local VERSION = "1.34.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -50,6 +50,69 @@ local function logLine(msg)
     pcall(UELog, "[EVAL_HELP] " .. tostring(msg))
   end
 end
+
+-- ============ 国际化（1.34.0 P0，UnrealQuest 同款扁平键值 + 基准回退） ============
+-- 契约：① Locales/*.lua 在 toc 里先于主文件加载，各自注册 EVAL_LOCALES[code]；
+--       ② L() 只在运行期调用（构建 UI/打印消息时），绝不在文件作用域——加载时语言未解析；
+--       ③ 只翻展示层：条件词表/技能名/方案文本/SavedVariables 键永不翻译（数据兼容）；
+--       ④ 翻译文本禁用 string.len/sub 裁剪（多字节字符会切成半个）。
+local EH_LANG = "zhCN"
+local EH_LANG_OK = { zhCN = true, enUS = true, ruRU = true }
+local EH_LANG_LABEL = { zhCN = "简体中文", enUS = "English", ruRU = "Русский" }
+
+-- EVAL_L("KEY") / EVAL_L("KEY", a, b)：查当前语言包 → 回退 zhCN → 再缺显示 KEY 本身（可发现性）；
+-- 带参数时 pcall 包裹 string.format（翻译文件丢了 %s 也不能炸界面）
+function EVAL_L(key, ...)
+  local all = EVAL_LOCALES
+  local t = all and all[EH_LANG]
+  local s = (t and t[key]) or (all and all.zhCN and all.zhCN[key]) or key
+  if select("#", ...) == 0 then return s end
+  local ok, f = pcall(string.format, s, ...)
+  return (ok and type(f) == "string") and f or s
+end
+local L = EVAL_L
+
+function EVAL_GET_LANG() return EH_LANG end
+
+-- 国旗行透明度刷新（选中=1/未选=0.3）；走全局桥 EVAL_HELP_CFGWIN——cfgWin 是 1900+ 行文件 local，
+-- 本函数定义在其声明之前看不到它（local 作用域从声明后开始，1.34.0 实测再踩）
+function EVAL_HELP_LANG_REFRESH()
+  local cw = EVAL_HELP_CFGWIN
+  if not (cw and cw.langBtns) then return end
+  for _, fb in ipairs(cw.langBtns) do
+    pcall(fb.SetAlpha, fb, (fb.langCode == EH_LANG) and 1 or 0.3)
+  end
+end
+
+-- 切语言：存 cfg.lang（白名单校验），聊条用新语言提示 /reload（标签构建期一次成型）
+function EVAL_SET_LANG(code)
+  if not EH_LANG_OK[code] then return false end
+  EH_LANG = code
+  if cfg then cfg.lang = code end
+  say(L("LANG_RELOAD", EH_LANG_LABEL[code] or code))
+  return true
+end
+
+-- 语言解析（VARIABLES_LOADED 后调用）：存配置优先 → GetLocale 四码 → GetClientLocale UE 风格 → zhCN
+local function ehResolveLang()
+  local saved = cfg and cfg.lang
+  if type(saved) == "string" and EH_LANG_OK[saved] then EH_LANG = saved return end
+  if type(GetLocale) == "function" then
+    local ok, loc = pcall(GetLocale)
+    if ok and EH_LANG_OK[loc] then EH_LANG = loc return end
+  end
+  if type(GetClientLocale) == "function" then
+    local ok, cl = pcall(GetClientLocale)
+    if ok and type(cl) == "string" then
+      if string.find(cl, "^ru") then EH_LANG = "ruRU"
+      elseif string.find(cl, "^en") then EH_LANG = "enUS"
+      else EH_LANG = "zhCN" end
+      return
+    end
+  end
+  EH_LANG = "zhCN"
+end
+
 
 local function output(msg)
   say(msg)
@@ -2070,14 +2133,53 @@ local function cfgBuild()
   end)
   local title = uiText(titleBar, 12, 0.95, 0.82, 0.35)
   title:SetPoint("CENTER", titleBar, "CENTER", 0, 0)
-  title:SetText("全职业施法工具 · 设置（一键宏）")
+  title:SetText(L("CFG_TITLE"))
+
+  -- 语言选择（1.34.0 i18n P0）：标题栏右上角国旗行 [CN][EN][RU]——国旗纹理盖住 ASCII 徽标，
+  -- 纹理加载失败徽标仍在（任何语言都能找到回家的路）；选中=不透明/未选=30%透/悬停=95%；
+  -- 不入 G/Wp 页清单——常驻标题栏两个 Tab 都可见；切换存 cfg.lang + 新语言提示 /reload
+  local EH_FLAGS = {
+    { code = "zhCN", badge = "CN", flag = "cn" },
+    { code = "enUS", badge = "EN", flag = "en" },
+    { code = "ruRU", badge = "RU", flag = "ru" },
+  }
+  cfgWin.langBtns = {}
+  EVAL_HELP_CFGWIN = cfgWin -- 全局桥：供 EVAL_HELP_LANG_REFRESH（定义在本 local 声明之前）使用
+  for i, lg in ipairs(EH_FLAGS) do
+    local fb = CreateFrame("Button", nil, root)
+    fb:SetWidth(18) fb:SetHeight(14)
+    fb:SetPoint("TOPRIGHT", root, "TOPRIGHT", -8 - (table.getn(EH_FLAGS) - i) * 21, -3)
+    pcall(fb.EnableMouse, fb, true)
+    pcall(fb.RegisterForClicks, fb, "LeftButtonUp")
+    local okLF, tLvl = pcall(titleBar.GetFrameLevel, titleBar)
+    if okLF and type(tLvl) == "number" then pcall(fb.SetFrameLevel, fb, tLvl + 5) end -- 高过拖动柄
+    local fbg = fb:CreateTexture(nil, "BACKGROUND")
+    uiSolid(fbg, 0.10, 0.09, 0.06, 1)
+    fbg:SetPoint("TOPLEFT", fb, "TOPLEFT", 0, 0)
+    fbg:SetPoint("BOTTOMRIGHT", fb, "BOTTOMRIGHT", 0, 0)
+    local badge = uiText(fb, 9, 0.92, 0.92, 0.92)
+    badge:SetPoint("CENTER", fb, "CENTER", 0, 0)
+    badge:SetText(lg.badge)
+    local ft = fb:CreateTexture(nil, "ARTWORK")
+    ft:SetPoint("TOPLEFT", fb, "TOPLEFT", 0, 0)
+    ft:SetPoint("BOTTOMRIGHT", fb, "BOTTOMRIGHT", 0, 0)
+    pcall(ft.SetTexture, ft, "Interface\\AddOns\\EvalHelp\\media\\Flags\\" .. lg.flag .. ".tga")
+    fb.langCode = lg.code
+    fb:SetScript("OnClick", function()
+      if EVAL_SET_LANG(lg.code) then EVAL_HELP_LANG_REFRESH() end
+    end)
+    fb:SetScript("OnEnter", function() if EH_LANG ~= lg.code then pcall(fb.SetAlpha, fb, 0.95) end end)
+    fb:SetScript("OnLeave", function() EVAL_HELP_LANG_REFRESH() end)
+    cfgWin.langBtns[i] = fb
+  end
+  EVAL_HELP_LANG_REFRESH()
 
   local refreshes = {}
 
   -- Tab 按钮行（全局 / 一键宏设置；选中=金底亮字，未选=暗底灰字——参考 UnrealQuest 标签页风格）
   local pages = {}
   cfgWin.pages = pages
-  local tabNames = { "全局", "一键宏设置" }
+  local tabNames = { L("TAB_GLOBAL"), L("TAB_MACRO") }
   for i, name in ipairs(tabNames) do
     local tb = CreateFrame("Button", nil, root)
     tb:SetWidth(90) tb:SetHeight(18)
@@ -2100,21 +2202,21 @@ local function cfgBuild()
 
   -- ===== Tab 1「全局」：日志 / 界面 / 帮助（非职业相关） =====
   local G = pages[1].widgets
-  cfgHeader(root, LX, -56, "日志", G)
-  table.insert(refreshes, cfgCheck(root, LX, -74, "写日志文件（UELog）",
+  cfgHeader(root, LX, -56, L("G_LOG_H"), G)
+  table.insert(refreshes, cfgCheck(root, LX, -74, L("G_LOG_FILE"),
     function() return c().log end, function(v) c().log = v end, G))
-  table.insert(refreshes, cfgCheck(root, LX, -98, "进出战斗自动输出",
+  table.insert(refreshes, cfgCheck(root, LX, -98, L("G_LOG_AUTO"),
     function() return c().auto end, function(v) c().auto = v end, G))
 
-  cfgHeader(root, LX, -138, "界面", G)
-  table.insert(refreshes, cfgCheck(root, LX, -156, "战斗信息UI（/eh ui）",
+  cfgHeader(root, LX, -138, L("G_UI_H"), G)
+  table.insert(refreshes, cfgCheck(root, LX, -156, L("G_UI_COMBAT"),
     function() local u = c(); return u.ui and u.ui.enabled end,
     function(v)
       local u = c()
       if not u.ui then u.ui = { enabled = false, x = 0, y = -180, scale = 1 } end
       if v ~= (u.ui.enabled and true or false) then EVAL_HELP_UI_TOGGLE() end
     end, G))
-  table.insert(refreshes, cfgCheck(root, LX, -180, "状态信息UI（/eh st）",
+  table.insert(refreshes, cfgCheck(root, LX, -180, L("G_UI_STATE"),
     function() local u = c(); return u.st and u.st.enabled end,
     function(v)
       local u = c()
@@ -2122,26 +2224,26 @@ local function cfgBuild()
       if v ~= (u.st.enabled and true or false) then EVAL_HELP_ST_TOGGLE() end
     end, G))
 
-  cfgHeader(root, RX, -56, "帮助", G)
+  cfgHeader(root, RX, -56, L("G_HELP_H"), G)
   -- 分组排版（1.21.5）：金色小标题 + 缩进条目 + 组间留白；命令行用亮米色区分
   -- 1.32.7 重整：清掉战士残留（猛击 Alt），补五分类/Shift切方案/重扫按钮/导入导出
-  local helpLines = {
-    { "快速上手", h = true },
-    { "技能拖上动作条 → 点本页 [重扫动作条] 识别槽位" },
-    { "新建宏：正文 /run EVAL_GO() → 拖上按键连按" },
-    { "技能编辑：方案列表点 [编]；技能=行为/技能/宠物/选目标/物品" },
-    { "执行指定方案（不同方案可各绑一个按键）", h = true },
-    { "/run EVAL_GO()         跑当前激活方案", cmd = true },
-    { "/run EVAL_GO(2)        只跑 2 号方案（不切激活）", cmd = true },
-    { "/run EVAL_GO(\"测试\")   只跑名为「测试」的方案", cmd = true },
-    { "/run EVAL_GO1()~GO4()  快捷写法 = EVAL_GO(1~4)", cmd = true },
-    { "进阶", h = true },
-    { "Shift+按宏 = 切换激活方案（条件里请用 Alt/Ctrl）" },
-    { "/eh debug 看每次按键的决策原因 · /eh go io 方案导入导出" },
-    { "战斗信息UI /eh ui · 状态信息UI /eh st · 标题栏均可拖动" },
-    { "其他", h = true },
-    { "本窗口 /eh cfg 或小地图旁 EH 图标；异常先 /reload" },
-    { "日志文件：%LOCALAPPDATA%\\Azeroth\\Saved\\Logs" },
+  local helpLines = { -- 1.34.0 i18n：全部走语言包键
+    { L("HELP_QS_H"), h = true },
+    { L("HELP_QS_1") },
+    { L("HELP_QS_2") },
+    { L("HELP_QS_3") },
+    { L("HELP_PROF_H"), h = true },
+    { L("HELP_PROF_1"), cmd = true },
+    { L("HELP_PROF_2"), cmd = true },
+    { L("HELP_PROF_3"), cmd = true },
+    { L("HELP_PROF_4"), cmd = true },
+    { L("HELP_ADV_H"), h = true },
+    { L("HELP_ADV_1") },
+    { L("HELP_ADV_2") },
+    { L("HELP_ADV_3") },
+    { L("HELP_MISC_H"), h = true },
+    { L("HELP_MISC_1") },
+    { L("HELP_MISC_2") },
   }
   local hy = -74
   for _, e in ipairs(helpLines) do
@@ -2170,7 +2272,7 @@ local function cfgBuild()
   local MAXPROF = 4
 
   -- 左栏：方案列表（多方案 Tab；最后一个 [+] 新建方案）
-  cfgHeader(root, LX, -56, "激活方案", Wp)
+  cfgHeader(root, LX, -56, L("W_PROF_H"), Wp)
   for i = 1, MAXPROF + 1 do
     local pb = CreateFrame("Button", nil, root)
     pb:SetWidth(90) pb:SetHeight(17)
@@ -2235,19 +2337,19 @@ local function cfgBuild()
 
   -- 左栏下方：全局开关
   local swY = -74 - (MAXPROF + 1) * 21 - 18
-  cfgHeader(root, LX, swY, "开关", Wp)
-  table.insert(refreshes, cfgCheck(root, LX, swY - 18, "启用一键宏",
+  cfgHeader(root, LX, swY, L("W_SWITCH_H"), Wp)
+  table.insert(refreshes, cfgCheck(root, LX, swY - 18, L("W_ENABLE"),
     function() return warCfg().enabled ~= false end,
     function(v) warCfg().enabled = v end, Wp))
-  table.insert(refreshes, cfgCheck(root, LX, swY - 42, "自动普攻接管",
+  table.insert(refreshes, cfgCheck(root, LX, swY - 42, L("W_AUTOATK"),
     function() return warCfg().attack ~= false end,
     function(v) warCfg().attack = v end, Wp))
-  table.insert(refreshes, cfgCheck(root, LX, swY - 66, "调试日志",
+  table.insert(refreshes, cfgCheck(root, LX, swY - 66, L("W_DEBUG"),
     function() return c().wdebug end, function(v) c().wdebug = v end, Wp))
 
   -- 右侧：技能规则列表（顺序=优先级；勾选=技能配置开关）
   local RX2 = 128
-  cfgHeader(root, RX2, -56, "技能列表（顺序=优先级；勾选=启用）", Wp)
+  cfgHeader(root, RX2, -56, L("W_LIST_H"), Wp)
   local ROWS = 8
   local function mkSmall(x, y, w, label, fn, list) -- 1.32.2 加 list 参数：默认 Wp（Tab2），传 G 可挂全局 Tab
     local b = CreateFrame("Button", nil, root)
@@ -2269,17 +2371,17 @@ local function cfgBuild()
   end
   -- 方案导入/导出窗口入口（md 文本互转）
   -- [添加技能]：直接打开技能编辑窗新增（技能下拉 + 条件逐行配置 + 保存即入列表）
-  mkSmall(RX2 + 268, -56, 80, "添加技能", function()
+  mkSmall(RX2 + 268, -56, 80, L("W_ADD"), function()
     EVAL_HELP_SE_OPEN(warCfg().activeProfile or 1)
   end)
-  mkSmall(RX2 + 356, -56, 68, "导入导出", function() EVAL_HELP_IO_TOGGLE() end)
+  mkSmall(RX2 + 356, -56, 68, L("W_IO"), function() EVAL_HELP_IO_TOGGLE() end)
 
   -- 全局 Tab「一键宏」组（1.32.2）：重扫动作条按钮，等同 /eh go rescan——拖动过技能后点一下即可
-  cfgHeader(root, LX, -212, "一键宏", G)
-  local rsB, rsT = mkSmall(LX, -232, 130, "重扫动作条", function() EVAL_GO_RESCAN() end, G)
+  cfgHeader(root, LX, -212, L("G_MACRO_H"), G)
+  local rsB, rsT = mkSmall(LX, -232, 130, L("G_RESCAN"), function() EVAL_GO_RESCAN() end, G)
   local rsTip = uiText(root, 8, 0.6, 0.6, 0.6)
   rsTip:SetPoint("TOPLEFT", root, "TOPLEFT", LX, -252)
-  rsTip:SetText("改动动作条后点此识别技能槽位（= /eh go rescan）")
+  rsTip:SetText(L("G_RESCAN_TIP"))
   table.insert(G, rsTip)
 
   -- （1.21.6 起移除底部「激活方案」下拉：与左侧方案栏/战斗信息UI方案行/Shift+按宏//eh go prof N 功能重复）
@@ -2389,7 +2491,7 @@ local function cfgBuild()
   cbg:SetPoint("BOTTOMRIGHT", close, "BOTTOMRIGHT", 0, 0)
   local ct = uiText(close, 11, 0.95, 0.82, 0.35)
   ct:SetPoint("CENTER", close, "CENTER", 0, 0)
-  ct:SetText("关闭")
+  ct:SetText(L("CLOSE"))
   close:SetScript("OnClick", function() root:Hide() end)
 
   cfgWin.root = root
@@ -4334,6 +4436,7 @@ init:SetScript("OnEvent", function(a, b)
   if eventName == "VARIABLES_LOADED" then
     cfg = EVAL_HELP_CONFIG or {}
     EVAL_HELP_CONFIG = cfg
+    ehResolveLang() -- 1.34.0 语言解析：cfg.lang 优先 → 客户端语言自动检测
     if cfg.log  == nil then cfg.log  = true  end -- 默认写日志文件
     if cfg.auto == nil then cfg.auto = false end -- 默认不自动输出
     if cfg.wdebug == nil then cfg.wdebug = false end

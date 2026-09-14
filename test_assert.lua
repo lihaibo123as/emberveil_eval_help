@@ -235,4 +235,15 @@ EVAL_HELP_UPDATE_STATE()
 eq(EVAL_HELP_STATE.playerBuffs["texRegen"], true, "UnitBuff texture merged into playerBuffs")
 TEST.unitBuffs = nil EVAL_HELP_UPDATE_STATE()
 
+-- 18) i18n 核心（1.34.0）：EVAL_L 查找/回退/格式化；EVAL_SET_LANG 切换与校验
+EVAL_LOCALES = { zhCN = { T_HELLO = "你好", T_FMT = "数量%d" }, enUS = { T_HELLO = "Hello" } }
+eq(EVAL_L("T_HELLO"), "你好", "default zhCN")
+eq(EVAL_L("T_FMT", 5), "数量5", "format arg")
+EVAL_SET_LANG("enUS")
+eq(EVAL_L("T_HELLO"), "Hello", "switched enUS")
+eq(EVAL_L("T_FMT", 7), "数量7", "missing key falls back zhCN, formatted")
+EVAL_SET_LANG("zhCN")
+eq(EVAL_L("NO_SUCH_KEY"), "NO_SUCH_KEY", "unknown key shows itself")
+eq(EVAL_SET_LANG("xxXX"), false, "invalid code rejected")
+
 print("ALL TESTS PASS")
