@@ -1,4 +1,4 @@
--- EvalHelp 1.32.10 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.33.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.32.10"
+local VERSION = "1.33.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -2242,7 +2242,7 @@ local function cfgBuild()
   table.insert(refreshes, cfgCheck(root, LX, swY - 42, "自动普攻接管",
     function() return warCfg().attack ~= false end,
     function(v) warCfg().attack = v end, Wp))
-  table.insert(refreshes, cfgCheck(root, LX, swY - 66, "调试日志（/eh wdebug 或 /eh debug）",
+  table.insert(refreshes, cfgCheck(root, LX, swY - 66, "调试日志",
     function() return c().wdebug end, function(v) c().wdebug = v end, Wp))
 
   -- 右侧：技能规则列表（顺序=优先级；勾选=技能配置开关）
@@ -2306,7 +2306,7 @@ local function cfgBuild()
     cMark:SetPoint("BOTTOMRIGHT", chk, "BOTTOMRIGHT", -3, 3)
     chk:SetScript("OnClick", function()
       local p = warCfg().profiles[warCfg().activeProfile or 1]
-      local r = p and p.skills[ri]
+      local r = p and p.skills[ri + (warUI.offset or 0)]
       if r then
         r.enabled = (r.enabled == false) and true or false
         EVAL_WAR_TAB_REFRESH()
@@ -2325,33 +2325,56 @@ local function cfgBuild()
     table.insert(Wp, nm)
     local cds = uiText(root, 9, 0.70, 0.70, 0.70)
     cds:SetPoint("TOPLEFT", root, "TOPLEFT", RX2 + 102, y - 3)
-    pcall(cds.SetWidth, cds, 250)
+    pcall(cds.SetWidth, cds, 236) -- 1.33.0 收窄 14px 让位右侧滚动条
     pcall(cds.SetJustifyH, cds, "LEFT")
     row.conds = cds
     table.insert(Wp, cds)
-    row.up = mkSmall(RX2 + 356, y, 16, "上", function()
+    row.up = mkSmall(RX2 + 342, y, 16, "上", function()
       local p = warCfg().profiles[warCfg().activeProfile or 1]
-      if p and ri > 1 and p.skills[ri] and p.skills[ri - 1] then
-        p.skills[ri], p.skills[ri - 1] = p.skills[ri - 1], p.skills[ri]
+      local idx = ri + (warUI.offset or 0)
+      if p and idx > 1 and p.skills[idx] and p.skills[idx - 1] then
+        p.skills[idx], p.skills[idx - 1] = p.skills[idx - 1], p.skills[idx]
         EVAL_WAR_TAB_REFRESH()
       end
     end)
-    row.edit = mkSmall(RX2 + 374, y, 24, "编", function()
+    row.edit = mkSmall(RX2 + 360, y, 24, "编", function()
       -- 打开技能编辑窗（独立条件属性行 + & / | 关系调整）
       local w2 = warCfg()
       local p = w2.profiles[w2.activeProfile or 1]
-      if p and p.skills[ri] then
-        EVAL_HELP_SE_OPEN(w2.activeProfile or 1, ri)
+      local idx = ri + (warUI.offset or 0)
+      if p and p.skills[idx] then
+        EVAL_HELP_SE_OPEN(w2.activeProfile or 1, idx)
       end
     end)
-    row.del = mkSmall(RX2 + 400, y, 24, "删", function()
+    row.del = mkSmall(RX2 + 386, y, 24, "删", function()
       local p = warCfg().profiles[warCfg().activeProfile or 1]
-      if p and p.skills[ri] then
-        table.remove(p.skills, ri)
+      local idx = ri + (warUI.offset or 0)
+      if p and p.skills[idx] then
+        table.remove(p.skills, idx)
         EVAL_WAR_TAB_REFRESH()
       end
     end)
     warUI.rows[ri] = row
+  end
+
+  -- 滚动条（1.33.0：技能数取消上限后的超高滚动）：^ 上翻 / v 下翻 + 滚轮；仅超出可见行数时显示
+  warUI.offset = warUI.offset or 0
+  warUI.scrollUp = mkSmall(RX2 + 412, -74, 14, "^", function()
+    warUI.offset = math.max(0, (warUI.offset or 0) - 1)
+    EVAL_WAR_TAB_REFRESH()
+  end)
+  warUI.scrollDn = mkSmall(RX2 + 412, -242, 14, "v", function()
+    warUI.offset = (warUI.offset or 0) + 1
+    EVAL_WAR_TAB_REFRESH() -- 上限在刷新里收敛
+  end)
+  local okWheel = pcall(root.EnableMouseWheel, root, true)
+  if okWheel then
+    root:SetScript("OnMouseWheel", function()
+      local d = arg1 -- 1.12 风格：滚轮方向在全局 arg1（上=+1）
+      if type(d) ~= "number" then return end
+      warUI.offset = math.max(0, (warUI.offset or 0) - d)
+      EVAL_WAR_TAB_REFRESH()
+    end)
   end
 
   -- 底部关闭按钮（截图同款右下「关闭」）
@@ -2746,8 +2769,19 @@ function EVAL_WAR_TAB_REFRESH()
     end
   end
   local p = w2.profiles[w2.activeProfile or 1]
+  -- 1.33.0 滚动：offset 收敛到合法范围；滚动按钮仅在超高时显示
+  local cnt = (p and p.skills) and table.getn(p.skills) or 0
+  local maxOff = math.max(0, cnt - ROWS)
+  warUI.offset = math.max(0, math.min(warUI.offset or 0, maxOff))
+  if warUI.scrollUp then
+    if cnt > ROWS then
+      pcall(warUI.scrollUp.Show, warUI.scrollUp) pcall(warUI.scrollDn.Show, warUI.scrollDn)
+    else
+      pcall(warUI.scrollUp.Hide, warUI.scrollUp) pcall(warUI.scrollDn.Hide, warUI.scrollDn)
+    end
+  end
   for ri, row in ipairs(warUI.rows) do
-    local r = p and p.skills[ri]
+    local r = p and p.skills[ri + warUI.offset]
     local widgets = { row.chk, row.icon, row.name, row.conds, row.up, row.edit, row.del }
     for _, wgt in ipairs(widgets) do
       if r then pcall(wgt.Show, wgt) else pcall(wgt.Hide, wgt) end
@@ -3822,11 +3856,7 @@ function EVAL_HELP_SE_SAVE()
     r.groups = groups
     say("已保存技能: " .. tostring(ed.skill) .. " → " .. EVAL_GROUP_STR(groups))
   else
-    if table.getn(p.skills) >= 8 then
-      say("一个方案最多 8 个技能")
-      if seUI.root then seUI.root:Hide() end
-      return
-    end
+    -- 1.33.0 取消 8 技能上限（配置窗列表支持滚动）
     table.insert(p.skills, { skill = ed.skill, enabled = ed.enabled, groups = groups, why = ed.skill })
     say("已添加技能: " .. tostring(ed.skill) .. " → " .. EVAL_GROUP_STR(groups))
   end
@@ -3916,8 +3946,7 @@ function EVAL_PROFILE_FROM_TEXT(text)
     end
   end
   if table.getn(skills) == 0 then return nil, "没解析到技能行（格式: - 技能名 | 条件）" end
-  if table.getn(skills) > 8 then return nil, "技能行超过 8 个" end
-  return { name = name or "导入方案", skills = skills }
+  return { name = name or "导入方案", skills = skills } -- 1.33.0 取消 8 技能上限
 end
 
 function EVAL_HELP_IO_BUILD()
