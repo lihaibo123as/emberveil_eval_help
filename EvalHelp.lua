@@ -1,4 +1,4 @@
--- EvalHelp 1.32.5 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.32.6 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.32.5"
+local VERSION = "1.32.6"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -402,17 +402,46 @@ local function wtex(name) local s = wslots[name]; return s and s.tex end
 -- 收录战斗行为类全量：攻击/跟随/停留/停止攻击 + 三种姿态（被动/防御/主动）+ 解散。
 -- 刻意不含：PetAbandon 永久放弃（太危险）、PetRename、兽栏系（非战斗行为）、CastPetAction（格子随宠物变不可靠）。
 local PET_CMD = {
-  { id = "attack",     name = "攻击",     fn = "PetAttack" },
-  { id = "follow",     name = "跟随",     fn = "PetFollow" },
-  { id = "wait",       name = "停留",     fn = "PetWait" },
-  { id = "stopAttack", name = "停止攻击", fn = "PetStopAttack" },
-  { id = "passive",    name = "被动姿态", fn = "PetPassiveMode" },
-  { id = "defensive",  name = "防御姿态", fn = "PetDefensiveMode" },
-  { id = "aggressive", name = "主动姿态", fn = "PetAggressiveMode" },
-  { id = "dismiss",    name = "解散",     fn = "PetDismiss" },
+  { id = "attack",     name = "攻击",     fn = "PetAttack",        token = "PET_ACTION_ATTACK" },
+  { id = "follow",     name = "跟随",     fn = "PetFollow",        token = "PET_ACTION_FOLLOW" },
+  { id = "wait",       name = "停留",     fn = "PetWait",          token = "PET_ACTION_WAIT" },
+  { id = "stopAttack", name = "停止攻击", fn = "PetStopAttack" },  -- 不上宠物动作条，无 token
+  { id = "passive",    name = "被动姿态", fn = "PetPassiveMode",   token = "PET_MODE_PASSIVE" },
+  { id = "defensive",  name = "防御姿态", fn = "PetDefensiveMode", token = "PET_MODE_DEFENSIVE" },
+  { id = "aggressive", name = "主动姿态", fn = "PetAggressiveMode", token = "PET_MODE_AGGRESSIVE" },
+  { id = "dismiss",    name = "解散",     fn = "PetDismiss",       token = "PET_ACTION_DISMISS" },
 }
 local PET_CMD_FN = {} -- 中文名 → 函数名
 for _, p in ipairs(PET_CMD) do PET_CMD_FN[p.name] = p.fn end
+
+-- 宠物指令图标（1.32.6）：有宠物时从宠物动作条 GetPetActionInfo(1..10) 学习 名称/token→图标，
+-- 持久化 cfg.war.petIcons（跨会话）；未学到回退宠物家族图标 GetPetIcon → 问号。
+-- 直接走 EVAL_HELP_CONFIG 全局（此处 local cfg 尚未声明，同 uiWarCfg 模式）
+local function petIconOf(cmdName)
+  local w2 = EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war
+  if w2 and not w2.petIcons then w2.petIcons = {} end
+  local store = w2 and w2.petIcons
+  if type(GetPetActionInfo) == "function" and type(HasPetUI) == "function" then
+    local okh, hasPet = pcall(HasPetUI)
+    if okh and hasPet and store then
+      for slot = 1, 10 do
+        local oki, aname, asub, atex = pcall(GetPetActionInfo, slot)
+        if oki and aname and atex then store[aname] = atex end -- 命令槽返回 token（PET_ACTION_ATTACK 等），法术槽返回中文名
+      end
+    end
+  end
+  if store then
+    if store[cmdName] then return store[cmdName] end
+    for _, p in ipairs(PET_CMD) do
+      if p.name == cmdName and p.token and store[p.token] then return store[p.token] end
+    end
+  end
+  if type(GetPetIcon) == "function" then
+    local ok, t = pcall(GetPetIcon)
+    if ok and t then return t end
+  end
+  return "Interface\\Icons\\INV_Misc_QuestionMark"
+end
 
 -- 宠物指令解析："宠物:攻击" → "攻击"（非宠物指令返回 nil）
 local function petCmdOf(skill)
@@ -483,13 +512,8 @@ end
 local function wicon(name)
   local s = wslots[name]
   if s and s.tex then return s.tex end
-  if petCmdOf(name) then
-    if type(GetPetIcon) == "function" then
-      local ok, t = pcall(GetPetIcon)
-      if ok and t then return t end
-    end
-    return "Interface\\Icons\\INV_Misc_QuestionMark"
-  end
+  local pc2 = petCmdOf(name)
+  if pc2 then return petIconOf(pc2) end -- 1.32.6 宠物指令专属图标（动作条学习）
   if targetSelOf(name) then return "Interface\\Icons\\INV_Misc_QuestionMark" end -- 1.32.0 选取目标无专属图标
   local iname = itemOf(name) -- 1.32.0 物品：背包图标 → GetItemInfo 缓存 → 问号
   if iname then

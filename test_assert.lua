@@ -222,4 +222,11 @@ eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_COND
 TEST.hasTarget = true EVAL_HELP_UPDATE_STATE()
 eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = gHT } }), true, "target present passes")
 
+-- 16) 宠物指令图标学习数据通路（1.32.6）：GetPetActionInfo 返回 token 与图标
+TEST.hasPet = true
+local pn, _, ptex = GetPetActionInfo(1)
+eq(pn, "PET_ACTION_ATTACK", "pet action token")
+eq(ptex, "texPetAttack", "pet action icon tex")
+TEST.hasPet = nil
+
 print("ALL TESTS PASS")

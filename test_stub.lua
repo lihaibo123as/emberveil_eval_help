@@ -43,6 +43,10 @@ GetComboPoints = function() return TEST.combo or 0 end
 -- 宠物指令桩（1.30.0）：记录调用
 HasPetUI = function() return TEST.hasPet ~= false, true end
 GetPetIcon = function() return "Interface\\Icons\\PetIcon" end
+GetPetActionInfo = function(slot) -- 1.32.6 宠物指令图标学习桩：slot1=攻击命令 token
+  if slot == 1 then return "PET_ACTION_ATTACK", nil, "texPetAttack" end
+  return nil
+end
 PetAttack = function() TEST.petCmd = "PetAttack" end
 PetFollow = function() TEST.petCmd = "PetFollow" end
 PetWait = function() TEST.petCmd = "PetWait" end
