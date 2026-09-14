@@ -1,4 +1,4 @@
--- EvalHelp 1.35.3 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.35.4 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.35.3"
+local VERSION = "1.35.4"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -4397,7 +4397,14 @@ if type(SlashCmdList) == "table" then
             if type(v) == "string" and (string.find(v, "免疫") or string.find(v, "immune")) then hit = true break end
           end
         end
-        if hit then logLine("PROBE " .. tostring(ev) .. " | a1=" .. tostring(a1) .. " | a2=" .. tostring(a2)) end
+        if hit then
+          local line = "PROBE " .. tostring(ev) .. " | a1=" .. tostring(a1) .. " | a2=" .. tostring(a2)
+          logLine(line)
+          -- 1.35.4：本客户端 UELog 不落盘（Saved\Logs 恒空）——改写 SavedVariables 持久，/eh go probe dump 查看
+          cfg.probeLog = cfg.probeLog or {}
+          table.insert(cfg.probeLog, line)
+          while table.getn(cfg.probeLog) > 120 do table.remove(cfg.probeLog, 1) end
+        end
       end)
       pcall(pf.RegisterAllEvents, pf)
       pf:SetScript("OnUpdate", function()
@@ -4405,9 +4412,15 @@ if type(SlashCmdList) == "table" then
           pcall(pf.UnregisterAllEvents, pf)
           pf:SetScript("OnUpdate", nil)
           pf:SetScript("OnEvent", nil)
-          say("免疫探针结束（30s），日志：%LOCALAPPDATA%\\Azeroth\\Saved\\Logs")
+          say("免疫探针结束（30s），已记录 " .. table.getn(cfg.probeLog or {}) .. " 条 → /eh go probe dump 查看")
         end
       end)
+    elseif msg == "go probe dump" then
+      -- 打印探针持久记录（1.35.4：UELog 不落盘的替代查看通道；打完免疫技能后用这个看）
+      local pl = cfg.probeLog or {}
+      say("— 探针记录 " .. table.getn(pl) .. " 条 —")
+      for i, line in ipairs(pl) do say(i .. ". " .. line) end
+      if table.getn(pl) == 0 then say("（空——先 /eh go probe immune 并在 30 秒内对免疫怪放技能）") end
     elseif msg == "go probe" then
       -- buff 探针（1.33.1）：两条枚举+tooltip 读名路径原始值打印，诊断药品类 buff 不进下拉
       say("— buff 探针（结果同时写日志文件） —")
