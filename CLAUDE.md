@@ -57,7 +57,7 @@
 - **命令组 1.21.1 改名 /eh war → /eh go**（handler 入口 string.gsub(msg,"^war","go") 兼容旧命令；sub 偏移量随 war→go 长度差 -1 已同步）
 
 ## 开源仓库（1.21.0 起）
-- 远程：**git@gitee.com:xeval/emberveil_eval_help.git**（master 已推送；本地仓库 = 插件目录本身）
+- 远程：origin=**git@gitee.com:xeval/emberveil_eval_help.git**；github=**git@github.com:lihaibo123as/emberveil_eval_help.git**（1.29.0 起双远程同步，每次推送两端都推：`git push origin master && git push github master`；本地仓库 = 插件目录本身）
 - 推送用默认密钥 ~/.ssh/id_rsa（gitee_id_rsa 未被授权，别用 -i 指定它）
 - 库内含：README.md（开源门面+preview/ 界面图）、CHANGELOG.md（更新日志详情）、DEVELOPMENT.md（开发者指南）、CLAUDE.md（AI 记忆体副本，改主记忆后同步过去）、luacheck.js、test_engine.js/test_stub.lua/test_assert.lua（冒烟测试）、example/zs_wq.md
 - **更新日志维护规则（1.28.0 起，用户定）**：发新版本时——① 详情写 `CHANGELOG.md`（## 🎯 vX.Y.Z — 主题 小节：要点/典型用法/设计亮点，配一个 emoji）；② README 顶部「更新日志」速览表加一行（| **X.Y.Z** | emoji 主题 | 一句话亮点 |，最新在上）；③ README 不再放版本详情（保持精简，详情只进 CHANGELOG）
