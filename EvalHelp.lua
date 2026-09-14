@@ -1,4 +1,4 @@
--- EvalHelp 1.32.7 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.32.8 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.32.7"
+local VERSION = "1.32.8"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -3944,8 +3944,24 @@ function EVAL_HELP_IO_BUILD()
     pcall(eb.SetMultiLine, eb, true)
     pcall(eb.SetAutoFocus, eb, false)
     pcall(eb.EnableMouse, eb, true)
-    eb:SetWidth(W - 40) eb:SetHeight(128)
-    eb:SetPoint("TOPLEFT", root, "TOPLEFT", 20, -44)
+    -- 1.32.8 编辑区尺寸修正：EditBox 装进 ScrollFrame 精确裁剪到可视框（ebBg 内缩），
+    -- 不再溢出盖住说明行/预览区；超高文本自动滚到底部。ScrollFrame 不可用时回退旧直挂布局。
+    local okSF, sf = pcall(CreateFrame, "ScrollFrame", "EVAL_HELP_IO_SF", root)
+    if okSF and sf and pcall(sf.SetScrollChild, sf, eb) then
+      sf:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -40)
+      sf:SetWidth(W - 32) sf:SetHeight(136)
+      eb:SetPoint("TOPLEFT", sf, "TOPLEFT", 4, -2)
+      eb:SetWidth(W - 48) eb:SetHeight(132)
+      eb:SetScript("OnTextChanged", function()
+        pcall(sf.UpdateScrollChildRect, sf)
+        local okr, range = pcall(sf.GetVerticalScrollRange, sf)
+        if okr and type(range) == "number" then pcall(sf.SetVerticalScroll, sf, range) end
+      end)
+      ioUI.sf = sf
+    else
+      eb:SetWidth(W - 40) eb:SetHeight(128)
+      eb:SetPoint("TOPLEFT", root, "TOPLEFT", 20, -44)
+    end
     local setF = false
     for _, fo in ipairs({ "GameFontHighlightSmall", "ChatFontNormal", "GameFontNormal" }) do
       if pcall(eb.SetFontObject, eb, fo) then setF = true break end
