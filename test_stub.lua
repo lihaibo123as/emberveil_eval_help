@@ -55,7 +55,7 @@ UnitAffectingCombat = function() return TEST.inCombat or false end
 GetShapeshiftFormInfo = function() return nil end
 GetPlayerBuff = function(i) return TEST.buffs[i + 1] and i or -1 end
 GetPlayerBuffTexture = function(bi) return TEST.buffs[bi + 1] and TEST.buffs[bi + 1].tex or nil end
-UnitDebuff = function(_, i) return TEST.debuffs[i] and TEST.debuffs[i].tex or nil end
+UnitDebuff = function(_, i) local d = TEST.debuffs[i] if not d then return nil end return d.tex, d.apps or 0 end
 IsAltKeyDown = function() return false end
 IsShiftKeyDown = function() return false end
 IsControlKeyDown = function() return false end

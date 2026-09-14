@@ -133,4 +133,24 @@ local foundPet = false
 for _, n in ipairs(ch) do if n == "宠物:攻击" then foundPet = true end end
 eq(foundPet, true, "skill choices include pet cmds")
 
+-- 10) 目标debuff层数（1.31.0）
+TEST.debuffs = { { name = "破甲攻击", tex = "texSA", apps = 3 } }
+EVAL_TARGET_DEBUFF_LIST() -- 学习 破甲攻击→texSA
+EVAL_HELP_UPDATE_STATE()
+local gs3 = EVAL_PARSE_CONDS("有debuff:破甲攻击>=3")
+eq(gs3[1][1].k, "hasDebuff", "stack parse k")
+eq(gs3[1][1].s, "破甲攻击", "stack parse name")
+eq(gs3[1][1].n, 3, "stack parse n")
+eq(EVAL_GROUP_STR(gs3), "有debuff:破甲攻击>=3", "stack str roundtrip")
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = gs3 } }), true, "3 stacks hits >=3")
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("有debuff:破甲攻击>=4") } }), false, "3 stacks misses >=4")
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("无debuff:破甲攻击<4") } }), true, "3 stacks <4 true")
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("无debuff:破甲攻击<3") } }), false, "3 stacks not <3")
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("无debuff:破甲攻击") } }), false, "present fails plain noDebuff")
+-- >N 等价 >=N+1
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("有debuff:破甲攻击>2") } }), true, ">2 equals >=3")
+TEST.debuffs = { { name = "破甲攻击", tex = "texSA", apps = 0 } } EVAL_HELP_UPDATE_STATE()
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = gs3 } }), false, "non-stack apps=0 normalizes to 1, misses >=3")
+TEST.debuffs = {} EVAL_HELP_UPDATE_STATE()
+
 print("ALL TESTS PASS")

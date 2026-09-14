@@ -1,6 +1,8 @@
 -- EVAL_HELP 1.25.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
+--   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
+--           有debuff:名>=N / 无debuff:名<N；编辑窗 debuff 条件行加「层」下拉 不限/2-5层）
 --   1.30.0: 特殊技能「宠物指令」（rule.skill=宠物:攻击 等 8 种，不占动作条直调 Pet API；EVAL_RULE_RUN/wuse 豁免动作条检查；
 --           图标 wicon 兜底 GetPetIcon/问号；战斗信息UI亮金放行；技能下拉追加宠物段；刻意不含放弃/改名/兽栏系）
 --   1.29.0: 选取目标扩展「目标的目标」(TargetUnit targettarget) 与「指定名称」(TargetByName，cd.nm 存名)；
@@ -31,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.30.0"
+local VERSION = "1.31.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -243,12 +245,12 @@ function EVAL_HELP_UPDATE_STATE()
       if okt and tex then st.playerBuffs[tex] = true end
     end
   end
-  st.targetDebuffs = {}
+  st.targetDebuffs = {} -- 1.31.0 起存层数（数字）：UnitDebuff 第二返回值；非堆叠 debuff 返回 0 → 归一化为 1
   if UnitExists("target") and type(UnitDebuff) == "function" then
     for i = 1, 16 do
-      local okd, tex = pcall(UnitDebuff, "target", i)
+      local okd, tex, apps = pcall(UnitDebuff, "target", i)
       if not okd or not tex then break end
-      st.targetDebuffs[tex] = true
+      st.targetDebuffs[tex] = (type(apps) == "number" and apps > 0) and apps or 1
     end
   end
 
@@ -744,8 +746,21 @@ local function condOne(cd, skill, dry)
   elseif k == "autoAttack" then return ((st.autoAttack and true or false) == cd.v), "普攻"
   elseif k == "hasBuff" then return (st.playerBuffs[texOf(cd.s) or ""] and true or false), "缺buff:" .. tostring(cd.s)
   elseif k == "noBuff" then return (not st.playerBuffs[texOf(cd.s) or ""]), "已有buff:" .. tostring(cd.s)
-  elseif k == "hasDebuff" then return (st.targetDebuffs[texOf(cd.s) or ""] and true or false), "目标缺debuff:" .. tostring(cd.s)
-  elseif k == "noDebuff" then return (not st.targetDebuffs[texOf(cd.s) or ""]), "目标已有debuff:" .. tostring(cd.s)
+  elseif k == "hasDebuff" then
+    -- 层数门槛（1.31.0）：cd.n=需要的最小层数（nil/1=只要有）
+    local cnt = st.targetDebuffs[texOf(cd.s) or ""]
+    cnt = (cnt == true) and 1 or (cnt or 0) -- 兼容旧布尔
+    local need = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
+    if cnt <= 0 then return false, "目标缺debuff:" .. tostring(cd.s) end
+    if cnt < need then return false, "debuff层数不足:" .. tostring(cd.s) .. " " .. cnt .. "/" .. need end
+    return true, "debuff层数:" .. cnt
+  elseif k == "noDebuff" then
+    -- 层数门槛（1.31.0）：cd.n=视为"无"的上限（nil/1=完全没有；N=不足N层才算无）
+    local cnt = st.targetDebuffs[texOf(cd.s) or ""]
+    cnt = (cnt == true) and 1 or (cnt or 0)
+    local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
+    if cnt >= lim then return false, "目标已有debuff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "层") or "") end
+    return true, "debuff层数不足:" .. cnt .. "/" .. lim
   elseif k == "ready" then
     local rd, why = wready(skill)
     if cd.inv then rd = not rd end
@@ -880,10 +895,18 @@ function EVAL_PARSE_ONE(token)
   if bs then return { k = "noBuff", s = condTrim(bs) } end
   bs = string.match(token, "^有buff[:：](.+)$") or string.match(token, "^hasBuff[:=](.+)$")
   if bs then return { k = "hasBuff", s = condTrim(bs) } end
+  -- debuff 层数后缀（1.31.0）：有debuff:破甲>=3（至少3层）/ 无debuff:破甲<3（不足3层）；无后缀=只要有/没有
+  local function auraStack(body)
+    local nm, op, n = string.match(body, "^(.-)([><]=?=?)(%d+)$")
+    if not nm then return condTrim(body), nil end
+    n = tonumber(n)
+    if op == ">" then n = n + 1 elseif op == "<=" then n = n + 1 end -- >N 即 >=N+1；<=N 即 <N+1
+    return condTrim(nm), n
+  end
   bs = string.match(token, "^无debuff[:：](.+)$") or string.match(token, "^noDebuff[:=](.+)$")
-  if bs then return { k = "noDebuff", s = condTrim(bs) } end
+  if bs then local nm, n = auraStack(bs) return { k = "noDebuff", s = nm, n = n } end
   bs = string.match(token, "^有debuff[:：](.+)$") or string.match(token, "^hasDebuff[:=](.+)$")
-  if bs then return { k = "hasDebuff", s = condTrim(bs) } end
+  if bs then local nm, n = auraStack(bs) return { k = "hasDebuff", s = nm, n = n } end
   local tc = string.match(token, "^目标职业[:：](.+)$") or string.match(token, "^tClass[:=](.+)$")
   if tc then
     -- 分隔统一成 / 再切：顿号/中文逗号是多字节，直接进字符类会按字节误切汉字（如"猎"含 ，的字节）
@@ -948,8 +971,8 @@ function EVAL_COND_STR(cd)
   if k == "autoAttack" then return cd.v and "普攻" or "未普攻" end
   if k == "hasBuff" then return "有buff:" .. tostring(cd.s) end
   if k == "noBuff" then return "无buff:" .. tostring(cd.s) end
-  if k == "hasDebuff" then return "有debuff:" .. tostring(cd.s) end
-  if k == "noDebuff" then return "无debuff:" .. tostring(cd.s) end
+  if k == "hasDebuff" then return "有debuff:" .. tostring(cd.s) .. ((type(cd.n) == "number" and cd.n > 1) and (">=" .. cd.n) or "") end
+  if k == "noDebuff" then return "无debuff:" .. tostring(cd.s) .. ((type(cd.n) == "number" and cd.n > 1) and ("<" .. cd.n) or "") end
   if k == "ready" then return cd.inv and "未就绪" or "就绪" end
   if k == "usable" then return cd.inv and "不可用" or "可用" end
   if k == "notQueued" then return cd.inv and "已排队" or "未排队" end
@@ -3083,7 +3106,16 @@ function EVAL_HELP_SE_REFRESH()
         pcall(row.valBtn.btn.Show, row.valBtn.btn)
         pcall(row.formN.btn.Show, row.formN.btn)
       elseif td.kind == "skill" then
-        row.skillText:SetText(tostring(cd.s or "?"))
+        local disp = tostring(cd.s or "?")
+        local isDebuff = (cd.k == "hasDebuff" or cd.k == "noDebuff")
+        if isDebuff then
+          if type(cd.n) == "number" and cd.n > 1 then
+            disp = disp .. (cd.k == "hasDebuff" and (" ≥" .. cd.n) or (" <" .. cd.n))
+          end
+          row.stk.text:SetText(type(cd.n) == "number" and cd.n > 1 and ("层" .. cd.n) or "层")
+          pcall(row.stk.btn.Show, row.stk.btn)
+        end
+        row.skillText:SetText(disp)
         pcall(row.sDrop.btn.Show, row.sDrop.btn)
         pcall(row.skillText.Show, row.skillText)
       elseif td.kind == "target" then
@@ -3379,6 +3411,16 @@ local function SE_BUILD()
       end)
     end)
     reg(row.sDrop.btn)
+    -- debuff 层数下拉（1.31.0）：仅 目标有/无debuff 条件显示；不限/2-5层
+    row.stk = seBtn(root, 266, y, 20, 15, "层", function()
+      local it = seUI.ed and seUI.ed.conds[i]
+      if not it then return end
+      EVAL_DD_OPEN(row.stk.btn, { "不限层数", ">=2层", ">=3层", ">=4层", ">=5层" }, function(pi)
+        it.cd.n = (pi > 1) and pi or nil -- 序号2-5即层数2-5
+        EVAL_HELP_SE_REFRESH()
+      end)
+    end)
+    reg(row.stk.btn)
     -- 结果预览 + 删除
     local pv = uiText(root, 9, 0.55, 0.75, 0.55)
     pv:SetPoint("TOPLEFT", root, "TOPLEFT", 288, y - 3)
