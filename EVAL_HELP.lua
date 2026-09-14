@@ -1,5 +1,6 @@
 -- EVAL_HELP 1.25.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
+--   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --
 -- 参考 OneJudge 开发流程的关键约定：
 --   1) 目录规则：Interface/AddOns/EvalHelp/EvalHelp.toc（文件夹名 == toc 基名）
@@ -23,7 +24,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.25.0"
+local VERSION = "1.26.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -272,6 +273,10 @@ function EVAL_HELP_UPDATE_STATE()
     st.isBoss = (st.tClassification == "worldboss") and true or false
     st.isElite = (st.tClassification == "elite" or st.tClassification == "rareelite"
       or st.tClassification == "rare") and true or false
+    -- 目标职业（1.26.0）：UnitClass 返回 本地化名, 英文token(WARRIOR 等), 职业id；条件比对用英文 token（跨语言稳定）
+    local okc2, tclsLoc, tclsEng = pcall(UnitClass, "target")
+    st.tClassName = (okc2 and tclsLoc) or nil
+    st.tClass = (okc2 and tclsEng) or nil
     -- 目标友善度（1.23.0）：UnitReaction ≤3敌对 / 4中立 / ≥5友善；API 缺失或无目标 = 全 false
     local okr, react = pcall(UnitReaction, "target", "player")
     st.tReaction = (okr and type(react) == "number") and react or nil
@@ -284,6 +289,7 @@ function EVAL_HELP_UPDATE_STATE()
     st.tCreatureType, st.canBleed = nil, false
     st.tClassification, st.isBoss, st.isElite = nil, false, false
     st.tReaction, st.tHostile, st.tNeutral, st.tFriendly = nil, false, false, false
+    st.tClassName, st.tClass = nil, nil
   end
   return st
 end
@@ -527,6 +533,24 @@ for _, t in ipairs(TARGET_SEL) do
   TARGET_SEL_FN[t.id] = t.fn
 end
 
+-- ===== 目标职业条件（1.26.0）：UnitClass 第二返回值（英文 token）比对；多选 = 或关系 =====
+local CLASS_LIST = {
+  { id = "HUNTER",  name = "猎人" },
+  { id = "PRIEST",  name = "牧师" },
+  { id = "MAGE",    name = "法师" },
+  { id = "WARLOCK", name = "术士" },
+  { id = "SHAMAN",  name = "萨满" },
+  { id = "ROGUE",   name = "盗贼" },
+  { id = "WARRIOR", name = "战士" },
+  { id = "DRUID",   name = "德鲁伊" },
+}
+local CLASS_NAME_BY_ID, CLASS_ID = {}, {} -- CLASS_ID 同时收中文名/英文 token（导入文本两种都认）
+for _, c in ipairs(CLASS_LIST) do
+  CLASS_NAME_BY_ID[c.id] = c.name
+  CLASS_ID[c.name] = c.id
+  CLASS_ID[c.id] = c.id
+end
+
 -- ===== 条件组格式（方案/技能配置 UI 用）：rule.groups = { {cond,...}, ... }，组内条件为 & 关系，组间为 | 关系 =====
 -- 单条件 cond = { k=类型, op/n=数值比较, v=布尔, s=技能名, inv=取反 }
 --   数值: {k="power",op=">",n=30}  tHpPct/hpPct/powerPct/combatTime 同
@@ -535,6 +559,7 @@ end
 --   光环: {k="noBuff",s="战斗怒吼"}  hasBuff/noDebuff/hasDebuff
 --   技能侧: {k="ready"} {k="usable"} {k="notQueued"}（inv=true 取反）
 --   选取目标: {k="target",s="nearEnemy"}（1.25.0 副作用条件，恒过；dry 预览不执行）
+--   目标职业: {k="tClass",cs={WARRIOR=true,...}}（1.26.0 多选或关系，比对 UnitClass 英文 token）
 
 -- 单个条件求值；返回 true 或 false+原因。dry=true 为预览求值（UI 亮金），副作用条件（选取目标）只验函数存在不执行
 local function condOne(cd, skill, dry)
@@ -580,6 +605,10 @@ local function condOne(cd, skill, dry)
     local pass = not (okq and q)
     if cd.inv then pass = not pass end
     return pass, "已排队"
+  elseif k == "tClass" then
+    -- 目标职业：cd.cs = { WARRIOR=true, ... } 多选或关系；无目标/无职业信息 = 不过
+    local pass = (st.tClass and cd.cs and cd.cs[st.tClass]) and true or false
+    return pass, "目标职业:" .. tostring(st.tClassName or st.tClass or "?")
   elseif k == "target" then
     -- 副作用条件：切换当前目标（战斗信息UI 亮金预览 dry 时不执行，防止刷新误切目标）
     local gfn = TARGET_SEL_FN[cd.s]
@@ -692,6 +721,19 @@ function EVAL_PARSE_ONE(token)
   if bs then return { k = "noDebuff", s = condTrim(bs) } end
   bs = string.match(token, "^有debuff[:：](.+)$") or string.match(token, "^hasDebuff[:=](.+)$")
   if bs then return { k = "hasDebuff", s = condTrim(bs) } end
+  local tc = string.match(token, "^目标职业[:：](.+)$") or string.match(token, "^tClass[:=](.+)$")
+  if tc then
+    -- 分隔统一成 / 再切：顿号/中文逗号是多字节，直接进字符类会按字节误切汉字（如"猎"含 ，的字节）
+    tc = string.gsub(tc, "、", "/")
+    tc = string.gsub(tc, "，", "/")
+    local cs, any = {}, false
+    for nm in string.gmatch(tc, "[^/,]+") do
+      local id = CLASS_ID[condTrim(nm)]
+      if id then cs[id] = true any = true end
+    end
+    if any then return { k = "tClass", cs = cs } end
+    return nil
+  end
   local tg = string.match(token, "^选取目标[:：](.+)$") or string.match(token, "^target[:=](.+)$")
   if tg then
     local id = TARGET_SEL_ID[condTrim(tg)]
@@ -746,6 +788,11 @@ function EVAL_COND_STR(cd)
   if k == "usable" then return cd.inv and "不可用" or "可用" end
   if k == "notQueued" then return cd.inv and "已排队" or "未排队" end
   if k == "target" then return "选取目标:" .. tostring(TARGET_SEL_NAME[cd.s] or cd.s) end
+  if k == "tClass" then
+    local ns = {}
+    for _, c in ipairs(CLASS_LIST) do if cd.cs and cd.cs[c.id] then table.insert(ns, c.name) end end
+    return "目标职业:" .. (table.getn(ns) > 0 and table.concat(ns, "/") or "未选")
+  end
   return tostring(k)
 end
 
@@ -2407,9 +2454,10 @@ function EVAL_HELP_ST_TICK()
     table.insert(lines, string.format("目标血 %.0f%% · 可攻击:%s · 可流血:%s · 关系:%s",
       st.tHpPct, stYesNo(st.canAttack), stYesNo(st.canBleed),
       st.tFriendly and "友善" or (st.tNeutral and "中立" or (st.tHostile and "敌对" or "?"))))
-    table.insert(lines, string.format("类型:%s 分级:%s%s",
+    table.insert(lines, string.format("类型:%s 分级:%s%s · 职业:%s",
       st.tCreatureType or "?", st.tClassification or "?",
-      st.tInCombat and " · 目标战斗中" or ""))
+      st.tInCombat and " · 目标战斗中" or "",
+      tostring(st.tClassName or st.tClass or "?")))
   else
     table.insert(lines, "目标: |cff808080无|r")
   end
@@ -2480,6 +2528,7 @@ local SE_TYPES = {
   { id = "usable",     name = "技能可用",    kind = "flag" },
   { id = "notQueued",  name = "未排队",      kind = "flag" },
   { id = "target",     name = "选取目标",    kind = "target", s = "nearEnemy" },
+  { id = "tClass",     name = "目标职业",    kind = "class" },
 }
 local SE_BY_K = {}
 for i, td in ipairs(SE_TYPES) do SE_BY_K[td.id] = i end
@@ -2495,6 +2544,7 @@ local function seDefaultCond(ti)
   elseif td.kind == "form" then return { k = "form", n = 1 }
   elseif td.kind == "skill" then return { k = td.id, s = td.s }
   elseif td.kind == "target" then return { k = td.id, s = td.s }
+  elseif td.kind == "class" then return { k = td.id, cs = { WARRIOR = true } }
   else return { k = td.id } end
 end
 
@@ -2507,7 +2557,15 @@ local function seGroupsToLinear(groups)
       if gi > 1 and ci == 1 then conn = "|"
       elseif ci > 1 then conn = "&" end
       local cp = {}
-      for k, v in pairs(cd) do cp[k] = v end
+      for k, v in pairs(cd) do
+        if type(v) == "table" then -- cs 等表字段拷一层，避免编辑期污染已存数据
+          local c2 = {}
+          for k2, v2 in pairs(v) do c2[k2] = v2 end
+          cp[k] = c2
+        else
+          cp[k] = v
+        end
+      end
       table.insert(list, { conn = conn, cd = cp })
     end
   end
@@ -2596,17 +2654,35 @@ end
 function EVAL_DD_HIDE() if ddUI.root then ddUI.root:Hide() end end
 
 -- anchorBtn 下方展开 items 列表；onPick(序号) 回调
-function EVAL_DD_OPEN(anchorBtn, items, onPick)
+-- opts.multi=true 多选模式（1.26.0）：点按切换选中（√ 金标）不关面板，onPick(序号, 是否选中) 逐项回调；
+-- opts.selected = { [序号]=true } 初始选中集（面板重开时重建传入）。收起走 EVAL_DD_HIDE()/宿主窗 OnHide。
+function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
   DD_BUILD()
   local dd = ddUI.root
   if not dd then return end
+  ddUI.multi = (opts and opts.multi) and true or false
+  ddUI.sel = (ddUI.multi and opts.selected) or nil
   local n = table.getn(items)
   local cols = math.ceil(n / DD_COLS)
   for i, row in ipairs(ddUI.rows) do
     if i <= n then
-      row.text:SetText(tostring(items[i]))
       local pi = i
-      row.btn:SetScript("OnClick", function() dd:Hide() onPick(pi) end)
+      if ddUI.multi then
+        local function paint()
+          local on = ddUI.sel and ddUI.sel[pi] and true or false
+          row.text:SetText((on and "|cffffd100√|r " or "") .. tostring(items[pi]))
+        end
+        paint()
+        row.btn:SetScript("OnClick", function()
+          local nowOn = not (ddUI.sel[pi] and true or false)
+          ddUI.sel[pi] = nowOn or nil
+          paint()
+          onPick(pi, nowOn)
+        end)
+      else
+        row.text:SetText(tostring(items[i]))
+        row.btn:SetScript("OnClick", function() dd:Hide() onPick(pi) end)
+      end
       local col = math.floor((i - 1) / DD_COLS)
       local ri = math.mod(i - 1, DD_COLS)
       row.btn:ClearAllPoints()
@@ -2683,6 +2759,12 @@ function EVAL_HELP_SE_REFRESH()
         pcall(row.skillText.Show, row.skillText)
       elseif td.kind == "target" then
         row.skillText:SetText(TARGET_SEL_NAME[cd.s] or tostring(cd.s or "?"))
+        pcall(row.sDrop.btn.Show, row.sDrop.btn)
+        pcall(row.skillText.Show, row.skillText)
+      elseif td.kind == "class" then
+        local ns = {}
+        for _, c in ipairs(CLASS_LIST) do if cd.cs and cd.cs[c.id] then table.insert(ns, c.name) end end
+        row.skillText:SetText(table.getn(ns) > 0 and table.concat(ns, "/") or "未选择（永不满足）")
         pcall(row.sDrop.btn.Show, row.sDrop.btn)
         pcall(row.skillText.Show, row.skillText)
       end
@@ -2822,7 +2904,7 @@ local function SE_BUILD()
     end)
     reg(row.conn.btn)
     row.typeBtn = seBtn(root, 46, y, 92, 15, "条件类型", function()
-      -- 点开下拉列表：全部 24 种条件类型可见可选（1.14.0：替代盲循环；1.25.0 新增选取目标）
+      -- 点开下拉列表：全部 25 种条件类型可见可选（1.14.0：替代盲循环；1.25.0 选取目标；1.26.0 目标职业）
       local ed = seUI.ed
       local it = ed and ed.conds[i]
       if not it then return end
@@ -2897,6 +2979,20 @@ local function SE_BUILD()
       local it = seUI.ed and seUI.ed.conds[i]
       if not it then return end
       local tdi = SE_TYPES[SE_BY_K[it.cd.k] or 1]
+      if tdi and tdi.kind == "class" then
+        -- 目标职业：多选下拉（或关系），点按切换 √ 不关面板（1.26.0）
+        it.cd.cs = it.cd.cs or {}
+        local items, sel = {}, {}
+        for ci, c in ipairs(CLASS_LIST) do
+          table.insert(items, c.name)
+          if it.cd.cs[c.id] then sel[ci] = true end
+        end
+        EVAL_DD_OPEN(row.sDrop.btn, items, function(pi, on)
+          it.cd.cs[CLASS_LIST[pi].id] = on or nil
+          EVAL_HELP_SE_REFRESH()
+        end, { multi = true, selected = sel })
+        return
+      end
       if tdi and tdi.kind == "target" then
         -- 选取目标：下拉官方 Targetting 无参函数种类（1.25.0）
         local items = {}
