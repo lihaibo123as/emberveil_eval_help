@@ -7,4 +7,4 @@
 ## X-Category: Class Tools
 ## SavedVariables: EVAL_HELP_CONFIG
 
-EVAL_HELP.lua
+EvalHelp.lua

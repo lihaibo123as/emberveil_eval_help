@@ -66,7 +66,7 @@ https://gitee.com/xeval/emberveil_eval_help/releases/download/v1.24.1/EvalHelp-v
 Interface/AddOns/
 └── EvalHelp/
     ├── EvalHelp.toc     ← 目录规则：Folder/Folder.toc
-    ├── EVAL_HELP.lua
+    ├── EvalHelp.lua
     └── README.md
 ```
 
