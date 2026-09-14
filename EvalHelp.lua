@@ -1,4 +1,4 @@
--- EvalHelp 1.36.2 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.36.3 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.36.2"
+local VERSION = "1.36.3"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -3546,6 +3546,10 @@ function EVAL_HELP_SE_REFRESH()
         pcall(row.formN.btn.Show, row.formN.btn)
       elseif td.kind == "skill" then
         local disp = tostring(cd.s or "?")
+        if cd.k == "immune" then -- 1.36.3 免疫/未免疫 切换按钮
+          row.immBtn.text:SetText((cd.v == false) and L("IMM_N") or L("IMM_Y"))
+          pcall(row.immBtn.btn.Show, row.immBtn.btn)
+        end
         local isDebuff = (cd.k == "hasDebuff" or cd.k == "noDebuff")
         if isDebuff then
           if type(cd.n) == "number" and cd.n > 1 then
@@ -3849,6 +3853,14 @@ local function SE_BUILD()
     reg(sHit)
     -- [v] 下拉：buff/debuff 技能名全列表（1.35.2 起按钮本体常驻隐藏，仅作处理器宿主）
     row.sDrop = seBtn(root, 246, y, 16, 15, "v", function()
+    -- 免疫条件的 免疫/未免疫 切换（1.36.3：kind=skill 共用参数区，仅 immune 类型显示）
+    row.immBtn = seBtn(root, 250, y, 52, 15, "", function()
+      local it = seUI.ed and seUI.ed.conds[i]
+      if not it then return end
+      it.cd.v = (it.cd.v == false) and true or false
+      EVAL_HELP_SE_REFRESH()
+    end)
+    reg(row.immBtn.btn)
       local it = seUI.ed and seUI.ed.conds[i]
       if not it then return end
       local tdi = SE_TYPES[SE_BY_K[it.cd.k] or 1]

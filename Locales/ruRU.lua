@@ -81,6 +81,8 @@ EVAL_LOCALES["ruRU"] = {
   CT_NODEBUFF = "Нет дебаффа", CT_READY = "Готово", CT_USABLE = "Доступно", CT_NOTQUEUED = "Не в очер.",
   CT_TARGET = "Выбор цели", CT_TCLASS = "Класс цели",
   CT_IMMUNE = "Иммун. к навыку",
+  IMM_Y = "Иммун.",
+  IMM_N = "Нет иммун.",
   IO_TITLE = "Импорт / Экспорт профиля (md, Ctrl+C / Ctrl+V)",
   IO_TIP = "Импорт: вставьте текст → [Импорт]; Экспорт: [Экспорт] затем Ctrl+C",
   IO_NOEB = "(Поле недоступно: /eh go add по одной; экспорт — превью ниже или example/zs_wq.md)",

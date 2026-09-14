@@ -81,6 +81,8 @@ EVAL_LOCALES["zhCN"] = {
   CT_NODEBUFF = "目标无debuff", CT_READY = "冷却就绪", CT_USABLE = "技能可用", CT_NOTQUEUED = "未排队",
   CT_TARGET = "选取目标", CT_TCLASS = "目标职业",
   CT_IMMUNE = "目标免疫技能",
+  IMM_Y = "免疫",
+  IMM_N = "未免疫",
   IO_TITLE = "方案 导入 / 导出（md 文本，Ctrl+C / Ctrl+V）",
   IO_TIP = "导入：下方粘贴方案文本 → [导入为新方案]；导出：[导出当前方案] 后 Ctrl+C 复制",
   IO_NOEB = "（输入框不可用：导入改用 /eh go add 逐条添加；导出看下方预览区或 example/zs_wq.md）",

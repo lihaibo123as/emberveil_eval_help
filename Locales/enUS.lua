@@ -81,6 +81,8 @@ EVAL_LOCALES["enUS"] = {
   CT_NODEBUFF = "T:No Debuff", CT_READY = "Ready", CT_USABLE = "Usable", CT_NOTQUEUED = "Not Queued",
   CT_TARGET = "Target Select", CT_TCLASS = "Target Class",
   CT_IMMUNE = "T:Immune Skill",
+  IMM_Y = "Immune",
+  IMM_N = "Not immune",
   IO_TITLE = "Profile Import / Export (md text, Ctrl+C / Ctrl+V)",
   IO_TIP = "Import: paste text below then [Import]; Export: [Export] then Ctrl+C",
   IO_NOEB = "(Input unavailable: add via /eh go add; export via preview below or example/zs_wq.md)",
