@@ -12,6 +12,7 @@
 
 ```
 node luacheck.js     # fengari 全量 Lua 解析；SYNTAX OK 才算完（报错带行号）
+node test_engine.js  # 逻辑冒烟测试：打桩 WoW API 加载整个插件，跑 test_assert.lua 断言；ALL TESTS PASS 才算完
 ```
 
 **Lua 整文件编译**：一处语法错误 = 整个插件静默不载入，游戏日志看不到。曾有两处 `end)` 多括号导致三个版本白发。
