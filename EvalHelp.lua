@@ -1,4 +1,4 @@
--- EvalHelp 1.32.6 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.32.7 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.32.6"
+local VERSION = "1.32.7"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -2095,18 +2095,22 @@ local function cfgBuild()
 
   cfgHeader(root, RX, -56, "帮助", G)
   -- 分组排版（1.21.5）：金色小标题 + 缩进条目 + 组间留白；命令行用亮米色区分
+  -- 1.32.7 重整：清掉战士残留（猛击 Alt），补五分类/Shift切方案/重扫按钮/导入导出
   local helpLines = {
     { "快速上手", h = true },
-    { "技能拖上动作条 → /eh go rescan 识别槽位" },
+    { "技能拖上动作条 → 点本页 [重扫动作条] 识别槽位" },
     { "新建宏：正文 /run EVAL_GO() → 拖上按键连按" },
+    { "技能编辑：方案列表点 [编]；技能=行为/技能/宠物/选目标/物品" },
     { "执行指定方案（不同方案可各绑一个按键）", h = true },
     { "/run EVAL_GO()         跑当前激活方案", cmd = true },
     { "/run EVAL_GO(2)        只跑 2 号方案（不切激活）", cmd = true },
     { "/run EVAL_GO(\"测试\")   只跑名为「测试」的方案", cmd = true },
     { "/run EVAL_GO1()~GO4()  快捷写法 = EVAL_GO(1~4)", cmd = true },
-    { "其他", h = true },
-    { "猛击需按住 Alt 再按宏键；/eh debug 看每次按键的决策原因" },
+    { "进阶", h = true },
+    { "Shift+按宏 = 切换激活方案（条件里请用 Alt/Ctrl）" },
+    { "/eh debug 看每次按键的决策原因 · /eh go io 方案导入导出" },
     { "战斗信息UI /eh ui · 状态信息UI /eh st · 标题栏均可拖动" },
+    { "其他", h = true },
     { "本窗口 /eh cfg 或小地图旁 EH 图标；异常先 /reload" },
     { "日志文件：%LOCALAPPDATA%\\Azeroth\\Saved\\Logs" },
   }

@@ -3,7 +3,7 @@
 ## Notes: 全职业施法工具：通用一键宏（/run EVAL_GO() 条件规则引擎）、战斗信息UI、配置面板、方案分享。
 ## Notes-zhCN: 全职业施法工具：通用一键宏（/run EVAL_GO() 条件规则引擎）、战斗信息UI、配置面板、方案分享。
 ## Author: DSH
-## Version: 1.32.6
+## Version: 1.32.7
 ## X-Category: Class Tools
 ## SavedVariables: EVAL_HELP_CONFIG
 
