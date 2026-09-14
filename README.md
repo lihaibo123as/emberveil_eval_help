@@ -73,7 +73,7 @@
 
 ![技能编辑窗](preview/skill_cfg.png)
 
-![技能二级下拉（分类+具体项）](preview/skill_list.png)
+![技能二级下拉（分类+具体项）](preview/skill_peason.png)
 
 ![宠物行为指令图标](preview/skill_pet.png)
 
