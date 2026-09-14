@@ -1,4 +1,4 @@
--- EvalHelp 1.33.3 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.33.4 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.33.3"
+local VERSION = "1.33.4"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -4193,12 +4193,10 @@ if type(SlashCmdList) == "table" then
       if sn then
         local w2 = warCfg()
         local p = w2.profiles[w2.activeProfile or 1]
-        if p and table.getn(p.skills) < 8 then
+        if p then -- 1.33.4 取消 8 上限残留（1.33.0 漏改的 /eh go add 路径）
           table.insert(p.skills, { skill = sn, enabled = true, groups = EVAL_PARSE_CONDS(conds), why = sn })
           say("已添加: " .. sn .. " → " .. ((conds ~= "") and conds or "无条件"))
           pcall(EVAL_WAR_TAB_REFRESH)
-        else
-          say("方案已满（最多 8 个技能）")
         end
       end
     elseif string.find(msg, "^go del ") then
