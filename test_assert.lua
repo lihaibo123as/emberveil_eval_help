@@ -65,4 +65,17 @@ eq(bl[1].name, "战斗怒吼", "buff list name")
 eq(EVAL_DEBUFF_TEX_LEARN["战斗怒吼"], "texB1", "learned buff tex")
 TEST.debuffs = {} TEST.buffs = {} EVAL_HELP_UPDATE_STATE()
 
+-- 7) 连击点数条件（数值比较型）
+local gc = EVAL_PARSE_CONDS("连击>=3")
+eq(gc[1][1].k, "combo", "combo parse k")
+eq(gc[1][1].op, ">=", "combo parse op")
+eq(gc[1][1].n, 3, "combo parse n")
+eq(EVAL_GROUP_STR(gc), "连击>=3", "combo str roundtrip")
+TEST.combo = 5 EVAL_HELP_UPDATE_STATE()
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = gc } }), true, "combo 5 hits >=3")
+TEST.combo = 2 EVAL_HELP_UPDATE_STATE()
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = gc } }), false, "combo 2 misses >=3")
+TEST.combo = nil EVAL_HELP_UPDATE_STATE()
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("连击>0") } }), false, "non-combo class 0 fails >0")
+
 print("ALL TESTS PASS")

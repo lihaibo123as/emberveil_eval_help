@@ -39,6 +39,7 @@ UnitHealthMax = function() return 100 end
 UnitMana = function() return 50 end
 UnitManaMax = function() return 100 end
 UnitPowerType = function() return 1 end
+GetComboPoints = function() return TEST.combo or 0 end
 UnitAffectingCombat = function() return false end
 GetShapeshiftFormInfo = function() return nil end
 GetPlayerBuff = function(i) return TEST.buffs[i + 1] and i or -1 end

@@ -1,6 +1,7 @@
 -- EVAL_HELP 1.25.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
+--   1.28.0: 新增条件类型「连击点数」（GetComboPoints，盗贼/德鲁伊专用，数值比较型；文本格式 连击>=3）
 --   1.27.0: 光环类条件下拉追加实时项（◆当前目标debuff/○当前自身buff，GameTooltip SetUnitDebuff/SetPlayerBuff 读名）；
 --           名称→纹理即时学习持久化 cfg.war.debuffTex，texOf 学习表回退——非动作条光环也能做 有/无debuff/buff 比对
 --
@@ -26,7 +27,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.27.0"
+local VERSION = "1.28.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -203,6 +204,9 @@ function EVAL_HELP_UPDATE_STATE()
     local okp, pt = pcall(UnitPowerType, "player")
     if okp then st.powerType = pt end -- 0法力 1怒气 2集中值 3能量
   end
+
+  -- 连击点（1.28.0）：仅盗贼/德鲁伊有；当前目标非连击目标或非连击职业时 API 返回 0
+  st.combo = (type(GetComboPoints) == "function") and GetComboPoints() or 0
 
   -- 战斗状态 + 进战时间（Cat: MPInCombat / MPInCombatTime）
   st.inCombat = UnitAffectingCombat("player") and true or false
@@ -546,6 +550,7 @@ local function condOK(when, skill)
   local function texOf(n) return auraTexOf(n) end -- 动作条 + 学习表回退（1.27.0）
   if when.combat ~= nil and st.inCombat ~= when.combat then return false, "战斗状态不符" end
   if when.combatTime and not condCmp(when.combatTime, st.combatTime) then return false, "进战时间不符" end
+  if when.combo and not condCmp(when.combo, st.combo or 0) then return false, "连击点不符" end
   if when.hpPct and not condCmp(when.hpPct, st.hpPct) then return false, "自身血%不符" end
   if when.power and not condCmp(when.power, st.power) then return false, "能量不符" end
   if when.powerPct and not condCmp(when.powerPct, st.powerPct) then return false, "能量%不符" end
@@ -626,7 +631,7 @@ end
 
 -- ===== 条件组格式（方案/技能配置 UI 用）：rule.groups = { {cond,...}, ... }，组内条件为 & 关系，组间为 | 关系 =====
 -- 单条件 cond = { k=类型, op/n=数值比较, v=布尔, s=技能名, inv=取反 }
---   数值: {k="power",op=">",n=30}  tHpPct/hpPct/powerPct/combatTime 同
+--   数值: {k="power",op=">",n=30}  tHpPct/hpPct/powerPct/combatTime/combo(连击点 1.28.0) 同
 --   布尔: {k="combat",v=true}  canAttack/canBleed/isBoss/isElite/tInCombat/alt/shift/ctrl/autoAttack
 --   姿态: {k="form",n=1} / {k="formNot",n=1}
 --   光环: {k="noBuff",s="战斗怒吼"}  hasBuff/noDebuff/hasDebuff
@@ -640,6 +645,7 @@ local function condOne(cd, skill, dry)
   local function texOf(n) return auraTexOf(n) end -- 动作条 + 学习表回退（1.27.0）
   if k == "combat" then return (st.inCombat == cd.v), "战斗状态"
   elseif k == "combatTime" then return condCmp({ cd.op, cd.n }, st.combatTime), "进战时间"
+  elseif k == "combo" then return condCmp({ cd.op, cd.n }, st.combo or 0), "连击点"
   elseif k == "hpPct" then return condCmp({ cd.op, cd.n }, st.hpPct), "自身血%"
   elseif k == "power" then return condCmp({ cd.op, cd.n }, st.power), "能量"
   elseif k == "powerPct" then return condCmp({ cd.op, cd.n }, st.powerPct), "能量%"
@@ -751,6 +757,7 @@ local COND_NUM = {
   ["自身血"] = "hpPct", ["hpPct"] = "hpPct",
   ["能量%"] = "powerPct", ["powerPct"] = "powerPct",
   ["进战"] = "combatTime", ["combatTime"] = "combatTime",
+  ["连击"] = "combo", ["连击点"] = "combo", ["combo"] = "combo",
 }
 local COND_BOOL = {
   ["战斗中"] = { "combat", true }, ["非战斗"] = { "combat", false }, ["combat"] = { "combat", true },
@@ -834,7 +841,7 @@ function EVAL_PARSE_CONDS(str)
 end
 
 -- 条件组 → 显示字符串（列表摘要 / 编辑回显）
-local COND_NUMNAME = { power = "怒气", tHpPct = "目标血", hpPct = "自身血", powerPct = "能量%", combatTime = "进战" }
+local COND_NUMNAME = { power = "怒气", tHpPct = "目标血", hpPct = "自身血", powerPct = "能量%", combatTime = "进战", combo = "连击" }
 function EVAL_COND_STR(cd)
   local k = cd.k
   if COND_NUMNAME[k] then return COND_NUMNAME[k] .. (cd.op or ">") .. tostring(cd.n) end
@@ -2512,7 +2519,8 @@ function EVAL_HELP_ST_TICK()
     st.playerName or "?", st.level or 0, st.classLoc or "",
     st.raceLoc and (" · " .. st.raceLoc) or ""))
   table.insert(lines, string.format("血 %d/%d (%.0f%%)", st.hp, st.hpMax, st.hpPct))
-  table.insert(lines, string.format("%s %d/%d (%.0f%%)", powerLabel(), st.power, st.powerMax, st.powerPct))
+  table.insert(lines, string.format("%s %d/%d (%.0f%%)%s", powerLabel(), st.power, st.powerMax, st.powerPct,
+    (st.class == "ROGUE" or st.class == "DRUID") and string.format(" · 连击 %d", st.combo or 0) or ""))
   table.insert(lines, string.format("%s%s · %s",
     st.inCombat and "|cffff5040战斗中|r" or "|cff80ff80非战斗|r",
     st.inCombat and string.format(" %.1fs", st.combatTime) or "",
@@ -2579,6 +2587,7 @@ local SE_TYPES = {
   { id = "hpPct",      name = "自身血%",     kind = "num",   n = 50 },
   { id = "powerPct",   name = "能量%",       kind = "num",   n = 10 },
   { id = "combatTime", name = "进战秒数",    kind = "num",   n = 3 },
+  { id = "combo",      name = "连击点数",    kind = "num",   n = 3 },
   { id = "combat",     name = "战斗状态",    kind = "bool" },
   { id = "canAttack",  name = "目标可攻击",  kind = "bool" },
   { id = "canBleed",   name = "目标可流血",  kind = "bool" },
@@ -2977,7 +2986,7 @@ local function SE_BUILD()
     end)
     reg(row.conn.btn)
     row.typeBtn = seBtn(root, 46, y, 92, 15, "条件类型", function()
-      -- 点开下拉列表：全部 25 种条件类型可见可选（1.14.0：替代盲循环；1.25.0 选取目标；1.26.0 目标职业）
+      -- 点开下拉列表：全部 26 种条件类型可见可选（1.14.0：替代盲循环；1.25.0 选取目标；1.26.0 目标职业；1.28.0 连击点数）
       local ed = seUI.ed
       local it = ed and ed.conds[i]
       if not it then return end
