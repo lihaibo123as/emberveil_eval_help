@@ -40,7 +40,18 @@ UnitMana = function() return 50 end
 UnitManaMax = function() return 100 end
 UnitPowerType = function() return 1 end
 GetComboPoints = function() return TEST.combo or 0 end
-UnitAffectingCombat = function() return false end
+-- 宠物指令桩（1.30.0）：记录调用
+HasPetUI = function() return TEST.hasPet ~= false, true end
+GetPetIcon = function() return "Interface\\Icons\\PetIcon" end
+PetAttack = function() TEST.petCmd = "PetAttack" end
+PetFollow = function() TEST.petCmd = "PetFollow" end
+PetWait = function() TEST.petCmd = "PetWait" end
+PetStopAttack = function() TEST.petCmd = "PetStopAttack" end
+PetPassiveMode = function() TEST.petCmd = "PetPassiveMode" end
+PetDefensiveMode = function() TEST.petCmd = "PetDefensiveMode" end
+PetAggressiveMode = function() TEST.petCmd = "PetAggressiveMode" end
+PetDismiss = function() TEST.petCmd = "PetDismiss" end
+UnitAffectingCombat = function() return TEST.inCombat or false end
 GetShapeshiftFormInfo = function() return nil end
 GetPlayerBuff = function(i) return TEST.buffs[i + 1] and i or -1 end
 GetPlayerBuffTexture = function(bi) return TEST.buffs[bi + 1] and TEST.buffs[bi + 1].tex or nil end

@@ -109,4 +109,28 @@ eq(nb[5], "鱼人E", "nearby fifth; repeat A means cycle done")
 eq(TEST.curTargetName, "原目标", "nearby restores orig target")
 TEST.nearby = nil TEST.curTargetName = nil
 
+-- 9) 宠物指令特殊技能（1.30.0）：不占动作条，直调 Pet API
+TEST.used = {} TEST.petCmd = nil
+eq(EVAL_RULE_RUN({ { skill = "宠物:攻击", why = "x", groups = EVAL_PARSE_CONDS("可攻击") } }), true, "pet cmd rule fires without action slot")
+eq(TEST.petCmd, "PetAttack", "pet cmd calls PetAttack")
+eq(table.getn(TEST.used), 0, "pet cmd does not UseAction")
+TEST.inCombat = true EVAL_HELP_UPDATE_STATE()
+TEST.petCmd = nil
+eq(EVAL_RULE_RUN({ { skill = "宠物:被动姿态", why = "x", groups = EVAL_PARSE_CONDS("非战斗") } }), false, "pet cmd respects conditions")
+eq(TEST.petCmd, nil, "pet cmd not called when cond fails")
+EVAL_RULE_RUN({ { skill = "宠物:解散", why = "x", groups = EVAL_PARSE_CONDS("战斗中") } })
+eq(TEST.petCmd, "PetDismiss", "pet dismiss calls PetDismiss")
+-- 无宠物时跳过
+TEST.hasPet = false TEST.petCmd = nil
+eq(EVAL_RULE_RUN({ { skill = "宠物:攻击", why = "x", groups = EVAL_PARSE_CONDS("可攻击") } }), false, "no pet skips")
+eq(TEST.petCmd, nil, "no pet no call")
+TEST.hasPet = nil
+-- 未知名称不豁免（不在动作条正常跳过）
+eq(EVAL_RULE_RUN({ { skill = "宠物:放弃", why = "x", groups = EVAL_PARSE_CONDS("可攻击") } }), false, "unknown pet cmd not bypassed")
+-- 技能下拉清单含宠物段
+local ch = EVAL_GO_SKILL_CHOICES()
+local foundPet = false
+for _, n in ipairs(ch) do if n == "宠物:攻击" then foundPet = true end end
+eq(foundPet, true, "skill choices include pet cmds")
+
 print("ALL TESTS PASS")

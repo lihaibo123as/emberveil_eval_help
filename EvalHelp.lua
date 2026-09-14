@@ -1,6 +1,8 @@
 -- EVAL_HELP 1.25.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
+--   1.30.0: 特殊技能「宠物指令」（rule.skill=宠物:攻击 等 8 种，不占动作条直调 Pet API；EVAL_RULE_RUN/wuse 豁免动作条检查；
+--           图标 wicon 兜底 GetPetIcon/问号；战斗信息UI亮金放行；技能下拉追加宠物段；刻意不含放弃/改名/兽栏系）
 --   1.29.0: 选取目标扩展「目标的目标」(TargetUnit targettarget) 与「指定名称」(TargetByName，cd.nm 存名)；
 --           编辑窗名称下拉=最近5敌名(循环枚举EVAL_NEARBY_ENEMY_NAMES)+自定义输入弹窗EVAL_TN_OPEN；文本 选取目标:指定名称:名
 --   1.28.0: 新增条件类型「连击点数」（GetComboPoints，盗贼/德鲁伊专用，数值比较型；文本格式 连击>=3）
@@ -29,7 +31,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.29.0"
+local VERSION = "1.30.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -394,6 +396,43 @@ end
 
 local function wtex(name) local s = wslots[name]; return s and s.tex end
 
+-- ===== 宠物指令（1.30.0 特殊技能：rule.skill="宠物:攻击"，不占动作条，出手直接调 Pet API） =====
+-- 收录战斗行为类全量：攻击/跟随/停留/停止攻击 + 三种姿态（被动/防御/主动）+ 解散。
+-- 刻意不含：PetAbandon 永久放弃（太危险）、PetRename、兽栏系（非战斗行为）、CastPetAction（格子随宠物变不可靠）。
+local PET_CMD = {
+  { id = "attack",     name = "攻击",     fn = "PetAttack" },
+  { id = "follow",     name = "跟随",     fn = "PetFollow" },
+  { id = "wait",       name = "停留",     fn = "PetWait" },
+  { id = "stopAttack", name = "停止攻击", fn = "PetStopAttack" },
+  { id = "passive",    name = "被动姿态", fn = "PetPassiveMode" },
+  { id = "defensive",  name = "防御姿态", fn = "PetDefensiveMode" },
+  { id = "aggressive", name = "主动姿态", fn = "PetAggressiveMode" },
+  { id = "dismiss",    name = "解散",     fn = "PetDismiss" },
+}
+local PET_CMD_FN = {} -- 中文名 → 函数名
+for _, p in ipairs(PET_CMD) do PET_CMD_FN[p.name] = p.fn end
+
+-- 宠物指令解析："宠物:攻击" → "攻击"（非宠物指令返回 nil）
+local function petCmdOf(skill)
+  local n = string.match(skill or "", "^宠物[:：](.+)$")
+  if n and PET_CMD_FN[n] then return n end
+  return nil
+end
+
+-- 技能图标统一入口（1.30.0）：动作条纹理 → 宠物指令回退（宠物头像/问号）
+local function wicon(name)
+  local s = wslots[name]
+  if s and s.tex then return s.tex end
+  if petCmdOf(name) then
+    if type(GetPetIcon) == "function" then
+      local ok, t = pcall(GetPetIcon)
+      if ok and t then return t end
+    end
+    return "Interface\\Icons\\INV_Misc_QuestionMark"
+  end
+  return nil
+end
+
 -- 玩家自身 buff 检查（图标比对；0 起始索引）
 local function wPlayerHasBuff(tex)
   if not tex then return false end
@@ -504,6 +543,21 @@ end
 
 -- 出手一个技能：写动作日志（文件必写；wdebug 时同步聊天框）
 local function wuse(name, reason)
+  local pc = petCmdOf(name)
+  if pc then
+    -- 宠物指令（1.30.0）：不占动作条，直接调 Pet API；无宠物时静默跳过
+    if type(HasPetUI) == "function" then
+      local okh, hasPet = pcall(HasPetUI)
+      if okh and not hasPet then wlog(name .. "跳过: 无宠物") return false end
+    end
+    local fn = getglobal(PET_CMD_FN[pc])
+    if type(fn) ~= "function" then wlog(name .. ": 无宠物指令函数") return false end
+    pcall(fn)
+    local pline = string.format("→ %s (%s)", name, reason)
+    logLine(pline)
+    if cfg and cfg.wdebug then say("|cff7fff7f" .. pline .. "|r") end
+    return true
+  end
   local s = wslots[name]
   if not s then wlog(string.format("%s: %s，但技能不在动作条", name, reason)) return false end
   UseAction(s.slot)
@@ -750,7 +804,7 @@ function EVAL_RULE_RUN(rules)
   for _, r in ipairs(rules) do
     if r.enabled == false then
       -- 技能配置开关关掉的：静默跳过
-    elseif not wslots[r.skill] then
+    elseif not wslots[r.skill] and not petCmdOf(r.skill) then
       wlog(r.skill .. "跳过: 不在动作条")
     else
       local ok, why, trace
@@ -1066,6 +1120,7 @@ function EVAL_GO_SKILL_CHOICES()
     table.sort(extra)
     for _, n in ipairs(extra) do table.insert(list, n) end
   end
+  for _, p in ipairs(PET_CMD) do table.insert(list, "宠物:" .. p.name) end -- 1.30.0 特殊技能段
   return list
 end
 
@@ -1468,7 +1523,8 @@ function EVAL_HELP_UI_TICK()
       pcall(c.icon.SetVertexColor, c.icon, 0.25, 0.25, 0.25)
       c.text:SetText("?")
     else
-      if s.tex then pcall(c.icon.SetTexture, c.icon, s.tex) end
+      local t0 = wicon(c.name)
+      if t0 then pcall(c.icon.SetTexture, c.icon, t0) end
       local lit = false
       if c.name == "攻击" then
         lit = atkOn
@@ -1530,17 +1586,18 @@ function EVAL_HELP_UI_TICK()
       else
         pc.btn:Show()
         local s = wslots[r.skill]
-        if s and s.tex then pcall(pc.icon.SetTexture, pc.icon, s.tex) end
+        local t0 = wicon(r.skill)
+        if t0 then pcall(pc.icon.SetTexture, pc.icon, t0) end
         local enabled = r.enabled ~= false
         local pass = false
-        if enabled and s and r.groups then
+        if enabled and (s or petCmdOf(r.skill)) and r.groups then -- 宠物指令不占动作条也参与亮金（1.30.0）
           local okp = groupsOK(r, true) -- dry: 亮金预览不触发选取目标等副作用
           pass = okp and true or false
         end
         if not enabled then
           pcall(pc.icon.SetVertexColor, pc.icon, 0.25, 0.25, 0.25)
           pc.text:SetText("停")
-        elseif not s then
+        elseif not s and not petCmdOf(r.skill) then -- 宠物指令不占动作条不算缺失（1.30.0）
           pcall(pc.icon.SetVertexColor, pc.icon, 0.35, 0.35, 0.35)
           pc.text:SetText("?")
         elseif pass then
@@ -2454,9 +2511,9 @@ function EVAL_WAR_TAB_REFRESH()
     end
     if r then
       if r.enabled ~= false then row.mark:Show() else row.mark:Hide() end
-      local s = wslots[r.skill]
-      if s and s.tex then
-        pcall(row.icon.SetTexture, row.icon, s.tex)
+      local t0 = wicon(r.skill)
+      if t0 then
+        pcall(row.icon.SetTexture, row.icon, t0)
         pcall(row.icon.SetVertexColor, row.icon, 1, 1, 1)
       else
         uiSolid(row.icon, 0.25, 0.25, 0.25, 1)
@@ -2986,9 +3043,9 @@ function EVAL_HELP_SE_REFRESH()
   local ed = seUI.ed
   if not ed or not seUI.root then return end
   -- 技能选择器
-  local s = wslots[ed.skill]
-  if s and s.tex then
-    pcall(seUI.skillIcon.SetTexture, seUI.skillIcon, s.tex)
+  local t0 = wicon(ed.skill)
+  if t0 then
+    pcall(seUI.skillIcon.SetTexture, seUI.skillIcon, t0)
     pcall(seUI.skillIcon.SetVertexColor, seUI.skillIcon, 1, 1, 1)
   else
     uiSolid(seUI.skillIcon, 0.25, 0.25, 0.25, 1)
