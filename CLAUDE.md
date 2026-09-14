@@ -71,6 +71,13 @@
 - 工作区排查工具：parse_api.js（关键词检索）/ dump_cat.js（按分类转储）+ api_*.html 缓存页
 - 工作流说明：当前开发主机是临时的，G: 盘游戏目录在另一台主机；本机改码→检查→推送 gitee→另一台拉取实测
 
+## 待开发计划（搁置项）
+- **免疫学习器**（用户拍板搁置，需真实主机环境才能开发调试——本机无游戏）：
+  - 结论已排查：无 CombatLog API、无免疫查询函数、wiki 无事件文档页（/wiki/lua/events 404）；但 Frame:RegisterEvent/RegisterAllEvents 可用
+  - 设计方向：订阅 CHAT_MSG_* 战斗文字事件，从消息串解析「免疫」→ cfg.war.immune["技能@怪名"] 持久化 → EVAL_RULE_RUN 对同名怪自动跳过该技能（可流血黑白名单 EVAL_BLEED_BLACKLIST 的自动化升级版）
+  - 前置步骤：先做探针 /eh go probe（30s 事件抓取写 UELog）拿真实事件名+免疫文本格式，再写解析器；复用 autoFrame OnEvent 三态兼容范式（事件名在 1参/2参/全局 event）
+  - 相关基建：st.canBleed 判定链（白名单>黑名单>生物类型排除）
+
 ## 参考代码
 - UnrealQuest：`...\AddOns\UnrealQuest\Compatibility\ClientAPI.lua`（本客户端实测配方库）
 - Cat（TurtleWoW）：`D:\game\TurtleWoW\Interface\AddOns\Cat`（状态变量设计：宏只读缓存全局）
