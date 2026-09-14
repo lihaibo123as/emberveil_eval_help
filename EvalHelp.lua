@@ -1,4 +1,4 @@
--- EvalHelp 1.40.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.41.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.40.0"
+local VERSION = "1.41.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -44,6 +44,7 @@ local uiOffscreen = EVAL_UIOFFSCREEN
 local powerLabel, currentForm = EVAL_POWERLABEL, EVAL_CURRENTFORM
 local formatStats, collectStats = EVAL_FORMAT_STATS, EVAL_COLLECT_STATS
 local autoFrame, onCombatEvent = EVAL_AUTOFRAME, EVAL_ON_COMBAT
+local ehResolveLang = EVAL_RESOLVE_LANG
 local wslots = EVAL_WSLOTS
 local wicon = EVAL_WICON
 local groupsOK = EVAL_GROUPS_OK
@@ -1883,7 +1884,7 @@ local SE_TYPES = {
   { id = "tClass",     name = "目标职业",    kind = "class" },
   { id = "immune",    name = "目标免疫技能", kind = "skill", s = "撕裂" }, -- 1.36.1 免疫学习表判定
   { id = "inRange",   name = "施法范围内",  kind = "skill", s = "冲锋" }, -- 1.37.0 IsActionInRange
-  { id = "casting",   name = "施法中",      kind = "skill", s = "猛击" }, -- 1.38.0 SPELLCAST_* 事件驱动
+  { id = "casting",   name = "施法中",      kind = "skill", s = "" }, -- 1.38.0 SPELLCAST_* 事件驱动 -- 1.41.0 默认空=任意施法
   { id = "tCasting",  name = "目标施法中",  kind = "skill", s = "" }, -- 1.40.0 空参数=任意施法
   { id = "tCastEl",   name = "读条已进行",  kind = "num", n = 1 },
   { id = "tCastLeft", name = "读条剩余",    kind = "num", n = 1 },

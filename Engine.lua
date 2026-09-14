@@ -631,24 +631,32 @@ local function condOne(cd, skill, dry)
     local pass = not (okq and q)
     if cd.inv then pass = not pass end
     return pass, "已排队"
+  elseif k == "casting" then
+    -- 施法中（1.38.0/1.41.0 扩：s 空=任意施法）：SPELLCAST_* 事件驱动 st.castName（1.12 无 UnitCastingInfo，只能走事件）
+    local pass = (st.castName ~= nil) and ((cd.s == nil or cd.s == "") or st.castName == cd.s)
+    return (pass and true or false) == (cd.v ~= false), "施法中"
+  elseif k == "castEl" then
+    -- 自身读条已进行秒数（1.41.0）：无读条=0
+    local el = (st.castName and st.castStart) and (GetTime() - st.castStart) or 0
+    return condCmp({ cd.op, cd.n }, el), "读条进行"
+  elseif k == "castLeft" then
+    -- 自身读条剩余秒数（1.41.0）：事件自带精确总时长，无需学习；无读条/无时长=不过
+    local left = (st.castName and st.castUntil) and (st.castUntil - GetTime()) or nil
+    return (left ~= nil and condCmp({ cd.op, cd.n }, math.max(0, left))), "读条剩余"
+  elseif k == "tCastEl" then
+    -- 目标读条已进行秒数（1.40.0）：无读条=0
+    local tel = (st.tCastName and st.tCastStart) and (GetTime() - st.tCastStart) or 0
+    return condCmp({ cd.op, cd.n }, tel), "读条进行"
   elseif k == "tCasting" then
-    -- 目标施法中（1.40.0）：CHAT_MSG_SPELL_CREATURE_VS_* 文本事件驱动 st.tCastName；s 空=任意施法
+    -- 目标施法中（1.40.0；1.41.0 补回：分支在施法扩展编辑中被误吃，缺分支恒 false）
     local pass = (st.tCastName ~= nil) and ((cd.s == nil or cd.s == "") or st.tCastName == cd.s)
     return (pass and true or false) == (cd.v ~= false), "目标施法中"
-  elseif k == "tCastEl" then
-    -- 读条已进行秒数：无目标读条=0
-    local el = (st.tCastName and st.tCastStart) and (GetTime() - st.tCastStart) or 0
-    return condCmp({ cd.op, cd.n }, el), "读条进行"
   elseif k == "tCastLeft" then
-    -- 读条剩余秒数：需已学习该技能总时长（castTime 学习表）；未学习=不过
+    -- 目标读条剩余秒数（1.40.0）：需已学习该技能总时长（castTime 学习表）；未学习=不过
     local w2 = EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war
     local total = (w2 and w2.castTime and st.tCastName) and w2.castTime[st.tCastName] or nil
-    local left = (total and st.tCastStart) and (st.tCastStart + total - GetTime()) or nil
-    return (left ~= nil and condCmp({ cd.op, cd.n }, math.max(0, left))), "读条剩余"
-  elseif k == "casting" then
-    -- 施法中（1.38.0）：SPELLCAST_* 事件驱动 st.castName（1.12 无 UnitCastingInfo，只能走事件）
-    local pass = (st.castName ~= nil and st.castName == cd.s) and true or false
-    return (pass == (cd.v ~= false)), "施法中:" .. tostring(cd.s)
+    local tleft = (total and st.tCastStart) and (st.tCastStart + total - GetTime()) or nil
+    return (tleft ~= nil and condCmp({ cd.op, cd.n }, math.max(0, tleft))), "读条剩余"
   elseif k == "inRange" then
     -- 施法范围内（1.37.0）：IsActionInRange(该技能槽位)==true 才算；0=超出 / 1=自动攻击不测距 / nil=无目标
     local s2 = wslots[cd.s or ""]
@@ -797,6 +805,7 @@ local COND_NUM = {
   ["能量%"] = "powerPct", ["powerPct"] = "powerPct",
   ["进战"] = "combatTime", ["combatTime"] = "combatTime",
   ["读条"] = "tCastEl", ["tCastEl"] = "tCastEl", ["读条剩"] = "tCastLeft", ["tCastLeft"] = "tCastLeft", -- 1.40.0 目标读条秒数
+  ["自身读条"] = "castEl", ["castEl"] = "castEl", ["自身读条剩"] = "castLeft", ["castLeft"] = "castLeft", -- 1.41.0 自身读条秒数
   ["连击"] = "combo", ["连击点"] = "combo", ["combo"] = "combo",
 }
 local COND_BOOL = {
@@ -884,6 +893,8 @@ function EVAL_PARSE_ONE(token)
   if cst then return { k = "casting", s = condTrim(cst), v = not neg } end
   local csn = string.match(token, "^未施法[:：](.+)$") or string.match(token, "^notcasting[:=](.+)$")
   if csn then return { k = "casting", s = condTrim(csn), v = false } end
+  if token == "施法中" or token == "casting" then return { k = "casting", s = nil, v = not neg } end -- 1.41.0 裸形式=任意施法
+  if token == "未施法" or token == "notcasting" then return { k = "casting", s = nil, v = false } end
   if tg then
     -- 指定名称:嗜血者 / byName=嗜血者（1.29.0：名称存 cd.nm）
     local nm = string.match(tg, "^指定名称[:：](.+)$") or string.match(tg, "^byName[:=](.+)$")

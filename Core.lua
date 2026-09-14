@@ -418,3 +418,4 @@ EVAL_AUTOFRAME = autoFrame
 EVAL_ON_COMBAT = onCombatEvent
 EVAL_FORMAT_STATS = formatStats
 EVAL_COLLECT_STATS = collectStats
+EVAL_RESOLVE_LANG = ehResolveLang
