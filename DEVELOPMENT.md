@@ -5,7 +5,7 @@
 ## 项目概况
 
 - EmberVeil 私服客户端（1.12.1 规则 / UE 引擎 / **Lua 5.1**）的 FrameXML 插件；
-- 单文件架构：`EvalHelp.lua`（约 3000 行，段落下行分区注释导航）+ `EvalHelp.toc`（目录名 == toc 基名）；
+- 多文件架构（1.39.0 起，toc 顺序 Locales→**Core**→**Engine**→**EvalHelp**）：`Core.lua`（输出/i18n/状态采集+UPDATE_STATE/UI 越界助手）· `Engine.lua`（一键宏引擎：扫描/五分类/规则引擎/解析/免疫/光环/距离）· `EvalHelp.lua`（全部 UI 窗口+斜杠+初始化）；跨文件共享走全局桥：Core 导出 EVAL_SAY/EVAL_LOGLINE/EVAL_UIOFFSCREEN 等，Engine 导出 EVAL_WSLOTS/EVAL_WICON/EVAL_GROUPS_OK 等，UI 层文件顶部别名块本地化；**改动后务必 luacheck 三个 .lua + test_engine 全跑**
 -  SavedVariables：`EVAL_HELP_CONFIG`（落盘于 `%LOCALAPPDATA%\Azeroth\Saved\Account\<账号>\SavedVariables\EVAL_HELP.lua`，小退/重载时写入）。
 
 ## ⚠️ 提交前必做
