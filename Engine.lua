@@ -1017,7 +1017,7 @@ function EVAL_GO(profSel)
   if profSel == 0 then profSel = nil end -- 0 = 当前激活方案
   EVAL_HELP_CONFIG = EVAL_HELP_CONFIG or {}
   -- 配置阈值（/eh cfg 或小地图 EH 图标可调；缺省值与原宏一致）
-  local w = cfg.war or {}
+  local w = (EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war) or {} -- 1.41.1 热修：拆分后 Engine 无 cfg local（EVAL_GO 裸引用崩全局）
   if w.enabled == false then
     if GetTime() - wLastHint >= 5 then
       wLastHint = GetTime()
