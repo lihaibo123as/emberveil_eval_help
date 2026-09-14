@@ -73,6 +73,10 @@
 
 ![技能编辑窗](preview/skill_cfg.png)
 
+![技能二级下拉（分类+具体项）](preview/skill_list.png)
+
+![宠物行为指令图标](preview/skill_pet.png)
+
 **战斗信息UI + 状态信息UI**（`/eh ui` / `/eh st`）：血/能量/目标条 + 方案切换行 + 技能图标行（悬停 tooltip 看触发条件，亮金=条件当前满足，点击图标直开编辑窗）；状态信息窗实时显示全部状态变量 + 最近释放日志（每次出手的技能/目标/条件逐项判定 √×）
 
 ![战斗信息UI与状态信息UI](preview/info.png)
