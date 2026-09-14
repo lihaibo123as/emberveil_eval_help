@@ -1196,6 +1196,8 @@ function EVAL_GO2() EVAL_GO(2) end
 function EVAL_GO3() EVAL_GO(3) end
 function EVAL_GO4() EVAL_GO(4) end
 
+-- 1.42.0 方案上限 12：EVAL_GO5~GO12 批量生成（5.1 循环闭包每轮新 local j 捕获）
+for i = 5, 12 do local j = i _G["EVAL_GO" .. j] = function() EVAL_GO(j) end end
 -- /eh war 的状态总览
 function EVAL_GO_STATUS()
   if not wscanned then EVAL_GO_RESCAN(true) end

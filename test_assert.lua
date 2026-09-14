@@ -334,4 +334,8 @@ eq(EVAL_HELP_STATE.tCastName, nil, "cast ends on hit")
 eq(type(EVAL_HELP_CONFIG.war.castTime and EVAL_HELP_CONFIG.war.castTime["寒冰箭"]), "number", "duration learned")
 TEST.curTargetName = nil EVAL_HELP_UPDATE_STATE()
 
+-- 24) 方案上限 12（1.42.0）：EVAL_GO5~GO12 存在且可调
+eq(type(EVAL_GO12), "function", "EVAL_GO12 exists")
+eq(type(EVAL_GO5), "function", "EVAL_GO5 exists")
+
 print("ALL TESTS PASS")

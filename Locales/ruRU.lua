@@ -33,7 +33,7 @@ EVAL_LOCALES["ruRU"] = {
   HELP_PROF_1 = "/run EVAL_GO()         Запуск активного профиля",
   HELP_PROF_2 = "/run EVAL_GO(2)        Запуск профиля 2 (без активации)",
   HELP_PROF_3 = "/run EVAL_GO(\"Тест\")   Запуск профиля 'Тест'",
-  HELP_PROF_4 = "/run EVAL_GO1()~GO4()  Краткая форма = EVAL_GO(1~4)",
+  HELP_PROF_4 = "/run EVAL_GO1()~GO12()  Краткая форма = EVAL_GO(1~12)",
   HELP_ADV_H = "Продвинутое",
   HELP_ADV_1 = "Shift+клавиша = смена профиля (в условиях Alt/Ctrl)",
   HELP_ADV_2 = "/eh debug причины решений · /eh go io импорт/экспорт",

@@ -33,7 +33,7 @@ EVAL_LOCALES["zhCN"] = {
   HELP_PROF_1 = "/run EVAL_GO()         跑当前激活方案",
   HELP_PROF_2 = "/run EVAL_GO(2)        只跑 2 号方案（不切激活）",
   HELP_PROF_3 = "/run EVAL_GO(\"测试\")   只跑名为「测试」的方案",
-  HELP_PROF_4 = "/run EVAL_GO1()~GO4()  快捷写法 = EVAL_GO(1~4)",
+  HELP_PROF_4 = "/run EVAL_GO1()~GO12()  快捷写法 = EVAL_GO(1~12)",
   HELP_ADV_H = "进阶",
   HELP_ADV_1 = "Shift+按宏 = 切换激活方案（条件里请用 Alt/Ctrl）",
   HELP_ADV_2 = "/eh debug 看每次按键的决策原因 · /eh go io 方案导入导出",

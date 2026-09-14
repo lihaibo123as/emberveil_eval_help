@@ -1,4 +1,4 @@
--- EvalHelp 1.41.2 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.42.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.41.2"
+local VERSION = "1.42.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -233,8 +233,8 @@ function EVAL_HELP_UI_BUILD()
   local plabel = uiText(root, math.max(8, math.floor(9 * z)), 0.95, 0.82, 0.35)
   plabel:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -(y + math.floor(3 * z)))
   plabel:SetText("方案")
-  local pbw = math.floor((W - pad * 2 - math.floor(28 * z)) / 4)
-  for i = 1, 4 do
+  local pbw = math.floor((W - pad * 2 - math.floor(28 * z)) / 12) -- 1.42.0 方案上限 12：切换行 12 窄格
+  for i = 1, 12 do
     local pb = CreateFrame("Button", nil, root)
     pb:SetWidth(pbw) pb:SetHeight(math.floor(15 * z))
     pb:SetPoint("TOPLEFT", root, "TOPLEFT", pad + math.floor(28 * z) + (i - 1) * pbw, -y)
@@ -907,14 +907,14 @@ local W, H = WIDE and 700 or 560, 420
   local Wp = pages[2].widgets
   local warUI = { rows = {}, profBtns = {}, picker = {}, editing = nil, pickSkill = nil }
   cfgWin.warUI = warUI
-  local MAXPROF = 4
+  local MAXPROF = 12 -- 1.42.0 方案上限 4→12（间距 21→19 紧凑排列装下）
 
   -- 左栏：方案列表（多方案 Tab；最后一个 [+] 新建方案）
   cfgHeader(root, LX, -56, L("W_PROF_H"), Wp)
   for i = 1, MAXPROF + 1 do
     local pb = CreateFrame("Button", nil, root)
     pb:SetWidth(90) pb:SetHeight(17)
-    pb:SetPoint("TOPLEFT", root, "TOPLEFT", LX, -74 - (i - 1) * 21)
+    pb:SetPoint("TOPLEFT", root, "TOPLEFT", LX, -74 - (i - 1) * 19)
     pcall(pb.EnableMouse, pb, true)
     pcall(pb.RegisterForClicks, pb, "LeftButtonUp")
     local pbg = pb:CreateTexture(nil, "BACKGROUND")
@@ -974,7 +974,7 @@ local W, H = WIDE and 700 or 560, 420
   end
 
   -- 左栏下方：全局开关
-  local swY = -74 - (MAXPROF + 1) * 21 - 18
+  local swY = -74 - (MAXPROF + 1) * 19 - 18
   cfgHeader(root, LX, swY, L("W_SWITCH_H"), Wp)
   table.insert(refreshes, cfgCheck(root, LX, swY - 18, L("W_ENABLE"),
     function() return warCfg().enabled ~= false end,

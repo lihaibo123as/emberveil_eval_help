@@ -33,7 +33,7 @@ EVAL_LOCALES["enUS"] = {
   HELP_PROF_1 = "/run EVAL_GO()         Run the active profile",
   HELP_PROF_2 = "/run EVAL_GO(2)        Run profile 2 (no activation change)",
   HELP_PROF_3 = "/run EVAL_GO(\"Test\")   Run the profile named 'Test'",
-  HELP_PROF_4 = "/run EVAL_GO1()~GO4()  Shortcut = EVAL_GO(1~4)",
+  HELP_PROF_4 = "/run EVAL_GO1()~GO12()  Shortcut = EVAL_GO(1~12)",
   HELP_ADV_H = "Advanced",
   HELP_ADV_1 = "Shift+macro key = cycle active profile (use Alt/Ctrl in conditions)",
   HELP_ADV_2 = "/eh debug shows per-press decisions · /eh go io share profiles",
