@@ -1,4 +1,4 @@
--- EvalHelp 1.32.4 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.32.5 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.32.4"
+local VERSION = "1.32.5"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -3050,6 +3050,14 @@ for i, td in ipairs(SE_TYPES) do SE_BY_K[td.id] = i end
 SE_BY_K["formNot"] = SE_BY_K["form"]
 local SE_OPS = { ">", ">=", "<", "<=", "==", "~=" }
 
+-- 条件类型分组（1.32.5 下拉美化）：金色组标题行不可选；SE_TYPES 本体顺序不动，仅展示层分组
+local SE_TYPE_GROUPS = {
+  { label = "自身状态", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "combat", "autoAttack", "alt", "shift", "ctrl", "form" } },
+  { label = "目标状态", ids = { "tHpPct", "hasTarget", "canAttack", "canBleed", "tFriendly", "tHostile", "tNeutral", "isElite", "isBoss", "tInCombat", "tClass" } },
+  { label = "光环效果", ids = { "hasBuff", "noBuff", "hasDebuff", "noDebuff" } },
+  { label = "技能状态", ids = { "ready", "usable", "notQueued" } },
+}
+
 local seUI = { root = nil, ed = nil, rows = {} }
 
 local function seDefaultCond(ti)
@@ -3170,7 +3178,7 @@ local function DD_BUILD()
   ddUI.root = dd
 end
 
-function EVAL_DD_HIDE() if ddUI.root then ddUI.root:Hide() end end
+function EVAL_DD_HIDE() if ddUI.root then ddUI.root:Hide() end ddUI.anchor = nil end
 
 -- anchorBtn 下方展开 items 列表；onPick(序号) 回调
 -- opts.multi=true 多选模式（1.26.0）：点按切换选中（√ 金标）不关面板，onPick(序号, 是否选中) 逐项回调；
@@ -3179,6 +3187,10 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
   DD_BUILD()
   local dd = ddUI.root
   if not dd then return end
+  -- 1.32.5 重复点击同一触发按钮 = 收起下拉（toggle）
+  local okS, shown = pcall(dd.IsShown, dd)
+  if okS and shown and ddUI.anchor == anchorBtn then EVAL_DD_HIDE() return end
+  ddUI.anchor = anchorBtn
   ddUI.multi = (opts and opts.multi) and true or false
   ddUI.sel = (ddUI.multi and (opts.selected or {})) or nil -- 1.32.0 审计修复：multi 未传 selected 时索引 nil 隐患
   local n = table.getn(items)
@@ -3511,13 +3523,19 @@ local function SE_BUILD()
       local ed = seUI.ed
       local it = ed and ed.conds[i]
       if not it then return end
-      local items, idxMap = {}, {} -- 1.32.0 hidden 类型（选取目标）不进新增下拉，idxMap 保持 SE_TYPES 索引
-      for ti2, td in ipairs(SE_TYPES) do
-        if not td.hidden then table.insert(items, td.name) table.insert(idxMap, ti2) end
+      -- 1.32.5 分组美化：金色组标题（idxMap=0 不可选）+ 四类分组；hidden 类型（选取目标）不进下拉
+      local items, idxMap = {}, {}
+      for _, grp in ipairs(SE_TYPE_GROUPS) do
+        table.insert(items, "|cffffd100· " .. grp.label .. " ·|r")
+        table.insert(idxMap, 0)
+        for _, id in ipairs(grp.ids) do
+          local ti2 = SE_BY_K[id]
+          if ti2 and not SE_TYPES[ti2].hidden then table.insert(items, SE_TYPES[ti2].name) table.insert(idxMap, ti2) end
+        end
       end
       EVAL_DD_OPEN(row.typeBtn.btn, items, function(ti0)
         local ti = idxMap[ti0]
-        if not ti then return end
+        if not ti or ti == 0 then return end
         local old, new = it.cd, seDefaultCond(ti)
         if old.op and new.op then new.op, new.n = old.op, old.n end -- 同族参数保留
         local oldTd = SE_TYPES[SE_BY_K[old.k] or 1]
