@@ -1,4 +1,4 @@
--- EvalHelp 1.35.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.35.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.35.0"
+local VERSION = "1.35.1"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -4370,6 +4370,33 @@ if type(SlashCmdList) == "table" then
       EVAL_GO_STATUS()
     elseif msg == "go rescan" then
       EVAL_GO_RESCAN(false)
+    elseif msg == "go probe immune" then
+      -- 免疫事件探针（1.35.1，免疫学习器前置验证）：30 秒全事件抓取——CHAT_MSG_* 或参数含「免疫/immune」
+      -- 的写 UELog；对免疫怪放技能后翻日志拿真实事件名+文本格式，再写解析器（事件 wiki 无文档页）
+      say("免疫探针启动：30 秒内对免疫怪放技能（如撕裂）→ 日志文件看 PROBE 行")
+      local pf = CreateFrame("Frame")
+      local t0 = GetTime()
+      pf:SetScript("OnEvent", function()
+        local a1, a2 = arg1, arg2
+        local ev = (type(event) == "string") and event or nil
+        local name = ev or (type(a1) == "string" and a1) or ""
+        local hit = (string.find(name, "^CHAT_MSG") ~= nil)
+        if not hit then
+          for _, v in ipairs({ a1, a2 }) do
+            if type(v) == "string" and (string.find(v, "免疫") or string.find(v, "immune")) then hit = true break end
+          end
+        end
+        if hit then logLine("PROBE " .. tostring(ev) .. " | a1=" .. tostring(a1) .. " | a2=" .. tostring(a2)) end
+      end)
+      pcall(pf.RegisterAllEvents, pf)
+      pf:SetScript("OnUpdate", function()
+        if GetTime() - t0 > 30 then
+          pcall(pf.UnregisterAllEvents, pf)
+          pf:SetScript("OnUpdate", nil)
+          pf:SetScript("OnEvent", nil)
+          say("免疫探针结束（30s），日志：%LOCALAPPDATA%" + BS + BS + "Azeroth" + BS + BS + "Saved" + BS + BS + "Logs")
+        end
+      end)
     elseif msg == "go probe" then
       -- buff 探针（1.33.1）：两条枚举+tooltip 读名路径原始值打印，诊断药品类 buff 不进下拉
       say("— buff 探针（结果同时写日志文件） —")
