@@ -1,4 +1,4 @@
--- EvalHelp 1.32.2 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.32.3 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.32.2"
+local VERSION = "1.32.3"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -3237,6 +3237,15 @@ function EVAL_HELP_SE_REFRESH()
     uiSolid(seUI.skillIcon, 0.25, 0.25, 0.25, 1)
   end
   seUI.skillName:SetText(tostring(ed.skill))
+  if seUI.catName then -- 分类按钮文字 = 当前技能所属类（1.32.3）
+    local cl = { "角色行为", "角色技能", "宠物行为", "目标选取", "物品使用" }
+    local ci = 2
+    if ed.skill == "攻击" then ci = 1
+    elseif petCmdOf(ed.skill) then ci = 3
+    elseif targetSelOf(ed.skill) then ci = 4
+    elseif itemOf(ed.skill) then ci = 5 end
+    seUI.catName:SetText(cl[ci])
+  end
   if ed.enabled then seUI.enMark:Show() else seUI.enMark:Hide() end
   -- 条件行
   for i, row in ipairs(seUI.rows) do
@@ -3359,50 +3368,71 @@ local function SE_BUILD()
   end)
   titleBar:SetScript("OnDragStop", function() pcall(root.StopMovingOrSizing, root) end)
 
-  -- 技能选择行：[图标] [技能名(点按弹下拉)]　启用
-  local skLabel = uiText(root, 10, 0.92, 0.88, 0.80)
-  skLabel:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -26)
-  skLabel:SetText("技能:")
-  local icon = root:CreateTexture(nil, "ARTWORK")
-  icon:SetPoint("TOPLEFT", root, "TOPLEFT", 52, -24)
-  icon:SetWidth(15) icon:SetHeight(15)
-  seUI.skillIcon = icon
-  -- 技能名下拉按钮（1.19.0：替代 [<][>] 循环，点按展开动作条技能全列表）
-  -- 注意：seBtn 返回包裹表 { btn, bg, text }，不是按钮本体——锚点/加文字一律用 .btn（1.21.4 修复）
-  local skW = seBtn(root, 72, -24, 124, 16, "", function()
+  -- 技能选择行（1.32.3 二级下拉 UI）：[分类▾] [图标] [具体项▾]　启用
+  -- 分类按钮在左（替代旧"技能:"标签位），项按钮在右——点哪个弹哪级，所见即两级
+  local function seCatOfSkill(skill) -- 技能名 → 分类序号（EVAL_GO_SKILL_CATEGORIES 顺序）
+    if skill == "攻击" then return 1 end
+    if petCmdOf(skill) then return 3 end
+    if targetSelOf(skill) then return 4 end
+    if itemOf(skill) then return 5 end
+    return 2
+  end
+  -- 项选中落值（两个下拉共用）：特殊项弹输入框，物品项剥 ×数量 展示后缀
+  local function seApplySkillPick(v)
+    if not v then return end
+    if v == "✎ 输入物品名…" then
+      EVAL_TN_OPEN("输入物品名称（背包内精确名）", "", function(nm)
+        if nm and nm ~= "" then seUI.ed.skill = "物品:" .. nm EVAL_HELP_SE_REFRESH() end
+      end)
+      return
+    end
+    if v == "选取目标:指定名称…" then
+      EVAL_TN_OPEN("输入目标名称（精确匹配）", "", function(nm)
+        if nm and nm ~= "" then seUI.ed.skill = "选取目标:指定名称:" .. nm EVAL_HELP_SE_REFRESH() end
+      end)
+      return
+    end
+    seUI.ed.skill = string.match(v, "^(物品[:：].-)×%d+$") or v
+    EVAL_HELP_SE_REFRESH()
+  end
+  -- 分类下拉（一级）
+  local catW = seBtn(root, 16, -24, 72, 16, "", function()
     if not seUI.ed then return end
-    -- 1.32.0 二级下拉：第一级选分类，第二级选具体项（物品/指定名称支持自定义输入）
     local cats = EVAL_GO_SKILL_CATEGORIES()
     local labels = {}
     for _, c in ipairs(cats) do table.insert(labels, c.label) end
-    EVAL_DD_OPEN(seUI.skillBtn, labels, function(ci)
+    EVAL_DD_OPEN(seUI.catBtn, labels, function(ci)
       local cat = cats[ci]
       if not cat then return end
-      local items = cat.items()
-      EVAL_DD_OPEN(seUI.skillBtn, items, function(pi)
-        local v = items[pi]
-        if v == "✎ 输入物品名…" then
-          EVAL_TN_OPEN("输入物品名称（背包内精确名）", "", function(nm)
-            if nm and nm ~= "" then seUI.ed.skill = "物品:" .. nm EVAL_HELP_SE_REFRESH() end
-          end)
-          return
-        end
-        if v == "选取目标:指定名称…" then
-          EVAL_TN_OPEN("输入目标名称（精确匹配）", "", function(nm)
-            if nm and nm ~= "" then seUI.ed.skill = "选取目标:指定名称:" .. nm EVAL_HELP_SE_REFRESH() end
-          end)
-          return
-        end
-        v = string.match(v, "^(物品[:：].-)×%d+$") or v -- 物品项去掉 ×数量 展示后缀
-        seUI.ed.skill = v
-        EVAL_HELP_SE_REFRESH()
+      -- 选完分类立即续弹该类的项列表（沿用 byName 续弹范式）
+      EVAL_DD_OPEN(seUI.skillBtn, cat.items(), function(pi)
+        seApplySkillPick(cat.items()[pi])
       end)
+    end)
+  end)
+  seUI.catBtn = catW.btn
+  seUI.catName = catW.text
+  local icon = root:CreateTexture(nil, "ARTWORK")
+  icon:SetPoint("TOPLEFT", root, "TOPLEFT", 94, -24)
+  icon:SetWidth(15) icon:SetHeight(15)
+  seUI.skillIcon = icon
+  -- 具体项下拉（二级）：直接弹当前分类的项列表
+  -- 注意：seBtn 返回包裹表 { btn, bg, text }，不是按钮本体——锚点/加文字一律用 .btn（1.21.4 修复）
+  local skW = seBtn(root, 114, -24, 100, 16, "", function()
+    if not seUI.ed then return end
+    local cats = EVAL_GO_SKILL_CATEGORIES()
+    local cat = cats[seCatOfSkill(seUI.ed.skill)]
+    if not cat then return end
+    EVAL_DD_OPEN(seUI.skillBtn, cat.items(), function(pi)
+      seApplySkillPick(cat.items()[pi])
     end)
   end)
   local skBtn = skW.btn
   seUI.skillBtn = skBtn
   local skName = uiText(skBtn, 10, 1, 0.9, 0.5)
   skName:SetPoint("CENTER", skBtn, "CENTER", 0, 0)
+  pcall(skName.SetWidth, skName, 96) -- 长名（物品:xxx）裁剪防溢出到启用框
+  pcall(skName.SetNonSpaceWrap, skName, false)
   seUI.skillName = skName
   local enChk = CreateFrame("Button", nil, root)
   enChk:SetWidth(14) enChk:SetHeight(14)
@@ -3428,9 +3458,6 @@ local function SE_BUILD()
   local enLabel = uiText(root, 9, 0.75, 0.75, 0.75)
   enLabel:SetPoint("TOPLEFT", root, "TOPLEFT", 234, -27)
   enLabel:SetText("启用此技能")
-  local skHint = uiText(root, 8, 0.55, 0.55, 0.55)
-  skHint:SetPoint("TOPLEFT", root, "TOPLEFT", 310, -28)
-  skHint:SetText("（[<][>] 在动作条技能间切换）")
 
   -- 条件表头
   local hd = uiText(root, 9, 0.60, 0.55, 0.40)
