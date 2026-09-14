@@ -45,4 +45,24 @@ TEST.targetSel = nil
 EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("选取目标:最近敌人 & 目标职业:战士") } })
 eq(TEST.targetSel, "nearEnemy", "target select side effect")
 
+-- 5) 实时 debuff 清单 + 名称→纹理学习（撕裂/断筋不在动作条）
+TEST.debuffs = { { name = "撕裂", tex = "texD1" }, { name = "断筋", tex = "texD2" } }
+EVAL_HELP_UPDATE_STATE()
+local dl = EVAL_TARGET_DEBUFF_LIST()
+eq(table.getn(dl), 2, "debuff list count")
+eq(dl[1].name, "撕裂", "debuff list name")
+eq(EVAL_DEBUFF_TEX_LEARN["撕裂"], "texD1", "learned tex")
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("有debuff:撕裂") } }), true, "hasDebuff learned hit")
+TEST.debuffs = { { name = "断筋", tex = "texD2" } } EVAL_HELP_UPDATE_STATE()
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("有debuff:撕裂") } }), false, "hasDebuff miss after gone")
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("无debuff:撕裂") } }), true, "noDebuff hit after gone")
+
+-- 6) 实时自身 buff 清单
+TEST.buffs = { { name = "战斗怒吼", tex = "texB1" } }
+local bl = EVAL_PLAYER_BUFF_LIST()
+eq(table.getn(bl), 1, "buff list count")
+eq(bl[1].name, "战斗怒吼", "buff list name")
+eq(EVAL_DEBUFF_TEX_LEARN["战斗怒吼"], "texB1", "learned buff tex")
+TEST.debuffs = {} TEST.buffs = {} EVAL_HELP_UPDATE_STATE()
+
 print("ALL TESTS PASS")

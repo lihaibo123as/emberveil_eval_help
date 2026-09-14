@@ -3,7 +3,7 @@ table.getn = table.getn or function(t) return #t end
 math.mod = math.mod or math.fmod
 getglobal = getglobal or function(n) return _G[n] end
 
-TEST = { used = {}, targetClass = "WARRIOR", hasTarget = true, slotNames = { [1] = "致死打击", [2] = "冲锋" } }
+TEST = { used = {}, targetClass = "WARRIOR", hasTarget = true, slotNames = { [1] = "致死打击", [2] = "冲锋" }, debuffs = {}, buffs = {} }
 
 local function newMock()
   local m = {}
@@ -16,10 +16,17 @@ end
 function CreateFrame() return newMock() end
 UIParent = newMock()
 Minimap = newMock()
-GameTooltipTextLeft1 = { GetText = function() return TEST.slotNames[TEST.curSlot or 0] end }
+GameTooltipTextLeft1 = { GetText = function()
+  if TEST.curBuff then return TEST.buffs[TEST.curBuff + 1] and TEST.buffs[TEST.curBuff + 1].name end
+  if TEST.curDebuff then return TEST.debuffs[TEST.curDebuff] and TEST.debuffs[TEST.curDebuff].name end
+  return TEST.slotNames[TEST.curSlot or 0]
+end }
 GameTooltip = {
-  SetOwner = function() end, ClearLines = function() end, Hide = function() end,
+  SetOwner = function() end, Hide = function() end,
+  ClearLines = function() TEST.curSlot = nil TEST.curDebuff = nil TEST.curBuff = nil end,
   SetAction = function(_, slot) TEST.curSlot = slot return true end,
+  SetUnitDebuff = function(_, _, i) TEST.curDebuff = i return TEST.debuffs[i] ~= nil end,
+  SetPlayerBuff = function(_, bi) TEST.curBuff = bi return TEST.buffs[bi + 1] ~= nil end,
 }
 DEFAULT_CHAT_FRAME = { AddMessage = function(_, msg) TEST.chat = (TEST.chat or "") .. tostring(msg) .. "\n" end }
 
@@ -34,9 +41,9 @@ UnitManaMax = function() return 100 end
 UnitPowerType = function() return 1 end
 UnitAffectingCombat = function() return false end
 GetShapeshiftFormInfo = function() return nil end
-GetPlayerBuff = function() return -1 end
-GetPlayerBuffTexture = function() return nil end
-UnitDebuff = function() return nil end
+GetPlayerBuff = function(i) return TEST.buffs[i + 1] and i or -1 end
+GetPlayerBuffTexture = function(bi) return TEST.buffs[bi + 1] and TEST.buffs[bi + 1].tex or nil end
+UnitDebuff = function(_, i) return TEST.debuffs[i] and TEST.debuffs[i].tex or nil end
 IsAltKeyDown = function() return false end
 IsShiftKeyDown = function() return false end
 IsControlKeyDown = function() return false end

@@ -1,6 +1,8 @@
 -- EVAL_HELP 1.25.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
+--   1.27.0: 光环类条件下拉追加实时项（◆当前目标debuff/○当前自身buff，GameTooltip SetUnitDebuff/SetPlayerBuff 读名）；
+--           名称→纹理即时学习持久化 cfg.war.debuffTex，texOf 学习表回退——非动作条光环也能做 有/无debuff/buff 比对
 --
 -- 参考 OneJudge 开发流程的关键约定：
 --   1) 目录规则：Interface/AddOns/EvalHelp/EvalHelp.toc（文件夹名 == toc 基名）
@@ -24,7 +26,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.26.0"
+local VERSION = "1.27.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -412,6 +414,77 @@ local function wTargetHasDebuff(tex)
   return false
 end
 
+-- ===== 实时光环清单（1.27.0）：编辑窗 debuff/buff 条件下拉列出「当前目标 debuff / 当前自身 buff」 =====
+-- 名称读取走 GameTooltip:SetUnitDebuff/SetPlayerBuff 填 tooltip 再读 GameTooltipTextLeft1（同 wactionName 法）；
+-- 名称→纹理即时学习（cfg.war.debuffTex 持久化，cfg 未加载时落 EVAL_DEBUFF_TEX_LEARN 运行时兜底）：
+-- 学到后，怪给的非动作条 debuff 也能做 有/无debuff 图标比对（texOf 回退查学习表）。
+EVAL_DEBUFF_TEX_LEARN = EVAL_DEBUFF_TEX_LEARN or {}
+
+local function learnAuraTex(name, tex)
+  if not (name and tex and name ~= "") then return end
+  local store = (cfg and cfg.war and cfg.war.debuffTex) or EVAL_DEBUFF_TEX_LEARN
+  store[name] = tex
+end
+
+-- 光环名 → 纹理：动作条优先，学习表回退（1.27.0 前只有动作条一条路径）
+local function auraTexOf(n)
+  local s = wslots[n]
+  if s and s.tex then return s.tex end
+  if cfg and cfg.war and cfg.war.debuffTex and cfg.war.debuffTex[n] then return cfg.war.debuffTex[n] end
+  return EVAL_DEBUFF_TEX_LEARN[n]
+end
+
+-- 当前目标 debuff 实时清单：[{name,tex},...]（每次调用现场扫描 + 学习）
+function EVAL_TARGET_DEBUFF_LIST()
+  local list = {}
+  if not (UnitExists("target") and type(UnitDebuff) == "function") then return list end
+  if not (WTT and WTT.SetUnitDebuff) then return list end
+  pcall(function() WTT:SetOwner(UIParent, "ANCHOR_NONE") end)
+  for i = 1, 16 do
+    local okd, tex = pcall(UnitDebuff, "target", i)
+    if not okd or not tex then break end
+    local name
+    pcall(function() WTT:ClearLines() end)
+    local oks, built = pcall(WTT.SetUnitDebuff, WTT, "target", i)
+    if oks and built then
+      local fs = getglobal("GameTooltipTextLeft1")
+      if fs and fs.GetText then name = fs:GetText() end
+    end
+    if name and name ~= "" then
+      table.insert(list, { name = name, tex = tex })
+      learnAuraTex(name, tex)
+    end
+  end
+  pcall(function() WTT:Hide() end)
+  return list
+end
+
+-- 当前自身 buff 实时清单（GetPlayerBuff 0 起始索引 + SetPlayerBuff 读名）
+function EVAL_PLAYER_BUFF_LIST()
+  local list = {}
+  if type(GetPlayerBuff) ~= "function" then return list end
+  if not (WTT and WTT.SetPlayerBuff) then return list end
+  pcall(function() WTT:SetOwner(UIParent, "ANCHOR_NONE") end)
+  for i = 0, 31 do
+    local okb, bi = pcall(GetPlayerBuff, i, "HELPFUL")
+    if not okb or type(bi) ~= "number" or bi < 0 then break end
+    local okt, tex = pcall(GetPlayerBuffTexture, bi)
+    local name
+    pcall(function() WTT:ClearLines() end)
+    local oks, built = pcall(WTT.SetPlayerBuff, WTT, bi)
+    if oks and built then
+      local fs = getglobal("GameTooltipTextLeft1")
+      if fs and fs.GetText then name = fs:GetText() end
+    end
+    if name and name ~= "" and okt and tex then
+      table.insert(list, { name = name, tex = tex })
+      learnAuraTex(name, tex)
+    end
+  end
+  pcall(function() WTT:Hide() end)
+  return list
+end
+
 -- 技能冷却是否就绪；不就绪时返回剩余秒数说明
 local function wready(name)
   local s = wslots[name]
@@ -470,7 +543,7 @@ end
 
 -- 逐条评估 when；返回 true 或 false+第一个不满足的原因（供 wdebug 日志）
 local function condOK(when, skill)
-  local function texOf(n) return wslots[n] and wslots[n].tex end
+  local function texOf(n) return auraTexOf(n) end -- 动作条 + 学习表回退（1.27.0）
   if when.combat ~= nil and st.inCombat ~= when.combat then return false, "战斗状态不符" end
   if when.combatTime and not condCmp(when.combatTime, st.combatTime) then return false, "进战时间不符" end
   if when.hpPct and not condCmp(when.hpPct, st.hpPct) then return false, "自身血%不符" end
@@ -564,7 +637,7 @@ end
 -- 单个条件求值；返回 true 或 false+原因。dry=true 为预览求值（UI 亮金），副作用条件（选取目标）只验函数存在不执行
 local function condOne(cd, skill, dry)
   local k = cd.k
-  local function texOf(n) return wslots[n] and wslots[n].tex end
+  local function texOf(n) return auraTexOf(n) end -- 动作条 + 学习表回退（1.27.0）
   if k == "combat" then return (st.inCombat == cd.v), "战斗状态"
   elseif k == "combatTime" then return condCmp({ cd.op, cd.n }, st.combatTime), "进战时间"
   elseif k == "hpPct" then return condCmp({ cd.op, cd.n }, st.hpPct), "自身血%"
@@ -2632,7 +2705,7 @@ local function DD_BUILD()
     t:SetWidth(1)
   end
   ddUI.rows = {}
-  for i = 1, 24 do
+  for i = 1, 48 do -- 1.27.0 加倍：技能清单+实时debuff/buff 追加项可能超 24
     local rb = CreateFrame("Button", nil, dd)
     rb:SetWidth(104) rb:SetHeight(14)
     pcall(rb.EnableMouse, rb, true)
@@ -3004,8 +3077,24 @@ local function SE_BUILD()
         return
       end
       local items = EVAL_GO_SKILL_CHOICES() -- 白名单 + 动作条扫描技能（1.24.0）
+      -- 1.27.0：光环类条件追加实时项——当前目标debuff / 当前自身buff（选中即已学习名称→纹理，
+      -- 怪给的非动作条 debuff 也能匹配）；用序号边界区分，不做字符串标记解析（多字节前缀有字节误切风险）
+      local k0 = it.cd.k
+      local liveNames = nil
+      if k0 == "hasDebuff" or k0 == "noDebuff" then
+        liveNames = {}
+        for _, d in ipairs(EVAL_TARGET_DEBUFF_LIST()) do table.insert(items, "◆" .. d.name) table.insert(liveNames, d.name) end
+      elseif k0 == "hasBuff" or k0 == "noBuff" then
+        liveNames = {}
+        for _, d in ipairs(EVAL_PLAYER_BUFF_LIST()) do table.insert(items, "○" .. d.name) table.insert(liveNames, d.name) end
+      end
+      local liveStart = liveNames and (table.getn(items) - table.getn(liveNames) + 1) or 0
       EVAL_DD_OPEN(row.sDrop.btn, items, function(pi)
-        it.cd.s = items[pi]
+        if liveNames and pi >= liveStart then
+          it.cd.s = liveNames[pi - liveStart + 1]
+        else
+          it.cd.s = items[pi]
+        end
         EVAL_HELP_SE_REFRESH()
       end)
     end)
