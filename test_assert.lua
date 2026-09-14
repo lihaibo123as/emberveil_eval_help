@@ -210,4 +210,16 @@ TEST.debuffs = { { name = "破甲攻击", tex = "texSA", apps = 3 } } EVAL_HELP_
 eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = gRev } }), true, "reversed op behaves as plain hasDebuff")
 TEST.debuffs = {} EVAL_HELP_UPDATE_STATE()
 
+-- 15) 目标存在条件（1.32.1）
+local gHT = EVAL_PARSE_CONDS("目标存在")
+eq(gHT[1][1].k, "hasTarget", "hasTarget parse k")
+eq(gHT[1][1].v, true, "hasTarget parse v")
+eq(EVAL_GROUP_STR(gHT), "目标存在", "hasTarget str roundtrip")
+eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("无目标")), "无目标", "no-target str roundtrip")
+TEST.hasTarget = false EVAL_HELP_UPDATE_STATE()
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = gHT } }), false, "no target blocks")
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("无目标") } }), true, "no-target cond passes without target")
+TEST.hasTarget = true EVAL_HELP_UPDATE_STATE()
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = gHT } }), true, "target present passes")
+
 print("ALL TESTS PASS")

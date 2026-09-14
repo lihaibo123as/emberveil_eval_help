@@ -1,4 +1,4 @@
--- EvalHelp 1.32.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.32.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.32.0"
+local VERSION = "1.32.1"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -815,6 +815,7 @@ local function condOne(cd, skill, dry)
   elseif k == "power" then return condCmp({ cd.op, cd.n }, st.power), "能量"
   elseif k == "powerPct" then return condCmp({ cd.op, cd.n }, st.powerPct), "能量%"
   elseif k == "tHpPct" then return condCmp({ cd.op, cd.n }, st.tHpPct), "目标血%"
+  elseif k == "hasTarget" then return ((st.hasTarget and true or false) == cd.v), "目标存在" -- 1.32.1
   elseif k == "canAttack" then return (st.canAttack == cd.v), "可攻击"
   elseif k == "canBleed" then return (st.canBleed == cd.v), "可流血"
   elseif k == "isBoss" then return (st.isBoss == cd.v), "Boss"
@@ -944,6 +945,7 @@ local COND_NUM = {
 }
 local COND_BOOL = {
   ["战斗中"] = { "combat", true }, ["非战斗"] = { "combat", false }, ["combat"] = { "combat", true },
+  ["目标存在"] = { "hasTarget", true }, ["有目标"] = { "hasTarget", true }, ["无目标"] = { "hasTarget", false }, ["hasTarget"] = { "hasTarget", true },
   ["可攻击"] = { "canAttack", true }, ["canAttack"] = { "canAttack", true },
   ["可流血"] = { "canBleed", true }, ["canBleed"] = { "canBleed", true },
   ["精英"] = { "isElite", true }, ["isElite"] = { "isElite", true },
@@ -1046,6 +1048,7 @@ function EVAL_COND_STR(cd)
   if k == "combat" then return cd.v and "战斗中" or "非战斗" end
   if k == "form" then return "姿态" .. tostring(cd.n) end
   if k == "formNot" then return "非姿态" .. tostring(cd.n) end
+  if k == "hasTarget" then return cd.v and "目标存在" or "无目标" end
   if k == "canAttack" then return cd.v and "可攻击" or "不可攻击" end
   if k == "canBleed" then return cd.v and "可流血" or "不可流血" end
   if k == "isElite" then return cd.v and "精英" or "非精英" end
@@ -3009,6 +3012,7 @@ local SE_TYPES = {
   { id = "combatTime", name = "进战秒数",    kind = "num",   n = 3 },
   { id = "combo",      name = "连击点数",    kind = "num",   n = 3 },
   { id = "combat",     name = "战斗状态",    kind = "bool" },
+  { id = "hasTarget",  name = "目标存在",    kind = "bool" },
   { id = "canAttack",  name = "目标可攻击",  kind = "bool" },
   { id = "canBleed",   name = "目标可流血",  kind = "bool" },
   { id = "tFriendly",  name = "目标友善",    kind = "bool" },
