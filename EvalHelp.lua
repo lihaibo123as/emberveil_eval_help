@@ -1,4 +1,4 @@
--- EvalHelp 1.32.3 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.32.4 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.32.3"
+local VERSION = "1.32.4"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -3158,9 +3158,13 @@ local function DD_BUILD()
     rbg:SetPoint("BOTTOMRIGHT", rb, "BOTTOMRIGHT", 0, 0)
     local rt = uiText(rb, 9, 0.85, 0.85, 0.85)
     rt:SetPoint("LEFT", rb, "LEFT", 4, 0)
+    local ri = rb:CreateTexture(nil, "ARTWORK") -- 1.32.4 可选图标列（opts.icons）
+    ri:SetWidth(12) ri:SetHeight(12)
+    ri:SetPoint("LEFT", rb, "LEFT", 2, 0)
+    ri:Hide()
     rb:SetScript("OnEnter", function() pcall(rbg.SetVertexColor, rbg, 0.38, 0.30, 0.10, 1) end)
     rb:SetScript("OnLeave", function() pcall(rbg.SetVertexColor, rbg, 0.10, 0.09, 0.06, 1) end)
-    ddUI.rows[i] = { btn = rb, bg = rbg, text = rt }
+    ddUI.rows[i] = { btn = rb, bg = rbg, text = rt, icon = ri }
   end
   dd:Hide()
   ddUI.root = dd
@@ -3179,9 +3183,22 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
   ddUI.sel = (ddUI.multi and (opts.selected or {})) or nil -- 1.32.0 审计修复：multi 未传 selected 时索引 nil 隐患
   local n = table.getn(items)
   local cols = math.ceil(n / DD_COLS)
+  local icons = opts and opts.icons -- 1.32.4 可选图标列：与 items 同序的纹理表
+  local colW = icons and 124 or 108
   for i, row in ipairs(ddUI.rows) do
     if i <= n then
       local pi = i
+      local ic = icons and icons[i]
+      if ic then
+        pcall(row.icon.SetTexture, row.icon, ic)
+        row.icon:Show()
+        row.text:ClearAllPoints()
+        row.text:SetPoint("LEFT", row.btn, "LEFT", 18, 0)
+      else
+        row.icon:Hide()
+        row.text:ClearAllPoints()
+        row.text:SetPoint("LEFT", row.btn, "LEFT", 4, 0)
+      end
       if ddUI.multi then
         local function paint()
           local on = ddUI.sel and ddUI.sel[pi] and true or false
@@ -3201,14 +3218,14 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
       local col = math.floor((i - 1) / DD_COLS)
       local ri = math.mod(i - 1, DD_COLS)
       row.btn:ClearAllPoints()
-      row.btn:SetPoint("TOPLEFT", dd, "TOPLEFT", 4 + col * 108, -4 - ri * 15)
+      row.btn:SetPoint("TOPLEFT", dd, "TOPLEFT", 4 + col * colW, -4 - ri * 15)
       row.btn:Show()
     else
       row.btn:Hide()
     end
   end
   local rows = math.min(n, DD_COLS)
-  dd:SetWidth(8 + cols * 108)
+  dd:SetWidth(8 + cols * colW)
   dd:SetHeight(8 + rows * 15)
   dd:ClearAllPoints()
   dd:SetPoint("TOPLEFT", anchorBtn, "BOTTOMLEFT", 0, -2)
@@ -3377,6 +3394,16 @@ local function SE_BUILD()
     if itemOf(skill) then return 5 end
     return 2
   end
+  -- 项列表 → 图标表（1.32.4：下拉行左侧显示技能/物品图标；wicon 统一入口含宠物/选取/物品兜底）
+  local function seItemIcons(items)
+    local icons, any = {}, false
+    for i, v in ipairs(items) do
+      local nm = string.match(v, "^(物品[:：].-)×%d+$") or v
+      local t = wicon(nm)
+      if t then icons[i] = t any = true end
+    end
+    return any and icons or nil
+  end
   -- 项选中落值（两个下拉共用）：特殊项弹输入框，物品项剥 ×数量 展示后缀
   local function seApplySkillPick(v)
     if not v then return end
@@ -3405,9 +3432,10 @@ local function SE_BUILD()
       local cat = cats[ci]
       if not cat then return end
       -- 选完分类立即续弹该类的项列表（沿用 byName 续弹范式）
-      EVAL_DD_OPEN(seUI.skillBtn, cat.items(), function(pi)
-        seApplySkillPick(cat.items()[pi])
-      end)
+      local items = cat.items()
+      EVAL_DD_OPEN(seUI.skillBtn, items, function(pi)
+        seApplySkillPick(items[pi])
+      end, { icons = seItemIcons(items) })
     end)
   end)
   seUI.catBtn = catW.btn
@@ -3423,9 +3451,10 @@ local function SE_BUILD()
     local cats = EVAL_GO_SKILL_CATEGORIES()
     local cat = cats[seCatOfSkill(seUI.ed.skill)]
     if not cat then return end
-    EVAL_DD_OPEN(seUI.skillBtn, cat.items(), function(pi)
-      seApplySkillPick(cat.items()[pi])
-    end)
+    local items = cat.items()
+    EVAL_DD_OPEN(seUI.skillBtn, items, function(pi)
+      seApplySkillPick(items[pi])
+    end, { icons = seItemIcons(items) })
   end)
   local skBtn = skW.btn
   seUI.skillBtn = skBtn
