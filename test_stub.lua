@@ -31,7 +31,7 @@ GameTooltip = {
 DEFAULT_CHAT_FRAME = { AddMessage = function(_, msg) TEST.chat = (TEST.chat or "") .. tostring(msg) .. "\n" end }
 
 GetTime = function() return 1000 end
-UnitName = function(u) return u == "player" and "测试玩家" or "测试怪" end
+UnitName = function(u) return u == "player" and "测试玩家" or (TEST.curTargetName or "测试怪") end
 UnitLevel = function() return 60 end
 UnitClass = function(u) if u == "target" then return "战士", TEST.targetClass, 1 end return "战士", "WARRIOR", 1 end
 UnitHealth = function() return 80 end
@@ -61,7 +61,19 @@ GetActionCooldown = function() return 0, 0 end
 IsUsableAction = function() return true end
 IsCurrentAction = function() return false end
 UseAction = function(slot) table.insert(TEST.used, slot) end
-TargetNearestEnemy = function() TEST.targetSel = "nearEnemy" end
+TargetNearestEnemy = function()
+  TEST.targetSel = "nearEnemy"
+  if TEST.nearby then -- 附近敌人循环模拟：依次选下一个名字
+    TEST.nearIdx = (TEST.nearIdx or 0) + 1
+    TEST.curTargetName = TEST.nearby[TEST.nearIdx]
+  end
+end
+TargetUnit = function(u) TEST.targetSel = "unit:" .. tostring(u) end
+TargetByName = function(n)
+  TEST.targetSel = "name:" .. tostring(n)
+  TEST.byNameArg = n
+  if TEST.nearby then TEST.curTargetName = n end -- 还原目标模拟
+end
 TargetNearestFriend = function() TEST.targetSel = "nearFriend" end
 TargetNearestPartyMember = function() TEST.targetSel = "nearParty" end
 TargetNearestRaidMember = function() TEST.targetSel = "nearRaid" end

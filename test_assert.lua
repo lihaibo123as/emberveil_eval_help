@@ -78,4 +78,35 @@ eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = gc } }), false,
 TEST.combo = nil EVAL_HELP_UPDATE_STATE()
 eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("连击>0") } }), false, "non-combo class 0 fails >0")
 
+-- 8) 选取目标扩展：目标的目标 / 指定名称（1.29.0）
+local gt = EVAL_PARSE_CONDS("选取目标:目标的目标")
+eq(gt[1][1].s, "targetTarget", "parse targetTarget")
+local gn = EVAL_PARSE_CONDS("选取目标:指定名称:嗜血者")
+eq(gn[1][1].s, "byName", "parse byName")
+eq(gn[1][1].nm, "嗜血者", "parse byName nm")
+eq(EVAL_GROUP_STR(gn), "选取目标:指定名称:嗜血者", "byName str roundtrip")
+eq(EVAL_GROUP_STR(gt), "选取目标:目标的目标", "targetTarget str roundtrip")
+-- 未设名称：规则不过
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("目标职业:战士") } }), true, "setup cast ok")
+TEST.used = {}
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = { { { k = "target", s = "byName" }, { k = "tClass", cs = { WARRIOR = true } } } } } }), false, "byName without nm fails")
+-- 设了名称：TargetByName 带名调用
+TEST.targetSel = nil
+EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = gn } })
+eq(TEST.targetSel, "name:嗜血者", "byName calls TargetByName")
+-- 目标的目标：TargetUnit("targettarget")
+TEST.targetSel = nil
+EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = gt } })
+eq(TEST.targetSel, "unit:targettarget", "targetTarget calls TargetUnit")
+-- 附近敌人枚举：收 5 个唯一名并还原原目标
+TEST.nearby = { "豺狼人A", "豺狼人B", "鱼人C", "鱼人D", "鱼人E", "豺狼人A", "鱼人F" } -- 循环一轮后回到 A
+TEST.nearIdx = nil TEST.curTargetName = "原目标"
+local nb = EVAL_NEARBY_ENEMY_NAMES(5)
+eq(table.getn(nb), 5, "nearby caps 5")
+eq(nb[1], "豺狼人A", "nearby first")
+eq(nb[4], "鱼人D", "nearby fourth")
+eq(nb[5], "鱼人E", "nearby fifth; repeat A means cycle done")
+eq(TEST.curTargetName, "原目标", "nearby restores orig target")
+TEST.nearby = nil TEST.curTargetName = nil
+
 print("ALL TESTS PASS")

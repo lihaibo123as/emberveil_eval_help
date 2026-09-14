@@ -1,6 +1,8 @@
 -- EVAL_HELP 1.25.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
+--   1.29.0: 选取目标扩展「目标的目标」(TargetUnit targettarget) 与「指定名称」(TargetByName，cd.nm 存名)；
+--           编辑窗名称下拉=最近5敌名(循环枚举EVAL_NEARBY_ENEMY_NAMES)+自定义输入弹窗EVAL_TN_OPEN；文本 选取目标:指定名称:名
 --   1.28.0: 新增条件类型「连击点数」（GetComboPoints，盗贼/德鲁伊专用，数值比较型；文本格式 连击>=3）
 --   1.27.0: 光环类条件下拉追加实时项（◆当前目标debuff/○当前自身buff，GameTooltip SetUnitDebuff/SetPlayerBuff 读名）；
 --           名称→纹理即时学习持久化 cfg.war.debuffTex，texOf 学习表回退——非动作条光环也能做 有/无debuff/buff 比对
@@ -27,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.28.0"
+local VERSION = "1.29.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -594,21 +596,43 @@ end
 -- ===== 选取目标条件（1.25.0）：规则求值时切换当前目标（副作用条件，求值通过恒 true） =====
 -- 官方文档 emberveil.org/wiki/lua/globals/Targetting；下列均为无参函数，重复调用会在邻近单位间循环（死人跳过）。
 -- TargetByName/AssistByName/AssistUnit/TargetUnit 需要名称/UnitID 参数，暂不纳入下拉。
+-- 1.29.0 扩展：targetTarget=目标的目标（TargetUnit 带 UnitID 参数，不解析时无动作——比 AssistUnit 安全）；
+-- byName=指定名称（TargetByName 带名称参数，cd.nm 存名字；编辑窗下拉给最近 5 敌名 + 自定义输入弹窗）。
 local TARGET_SEL = {
-  { id = "nearEnemy",  name = "最近敌人", fn = "TargetNearestEnemy" },
-  { id = "nearFriend", name = "最近友方", fn = "TargetNearestFriend" },
-  { id = "nearParty",  name = "最近队友", fn = "TargetNearestPartyMember" },
-  { id = "nearRaid",   name = "最近团员", fn = "TargetNearestRaidMember" },
-  { id = "lastEnemy",  name = "上一敌人", fn = "TargetLastEnemy" },
-  { id = "lastTarget", name = "上一目标", fn = "TargetLastTarget" },
-  { id = "clear",      name = "清除目标", fn = "ClearTarget" },
+  { id = "nearEnemy",    name = "最近敌人",   fn = "TargetNearestEnemy" },
+  { id = "nearFriend",   name = "最近友方",   fn = "TargetNearestFriend" },
+  { id = "nearParty",    name = "最近队友",   fn = "TargetNearestPartyMember" },
+  { id = "nearRaid",     name = "最近团员",   fn = "TargetNearestRaidMember" },
+  { id = "lastEnemy",    name = "上一敌人",   fn = "TargetLastEnemy" },
+  { id = "lastTarget",   name = "上一目标",   fn = "TargetLastTarget" },
+  { id = "targetTarget", name = "目标的目标", fn = "TargetUnit", arg = "targettarget" },
+  { id = "byName",       name = "指定名称",   fn = "TargetByName", needsName = true },
+  { id = "clear",        name = "清除目标",   fn = "ClearTarget" },
 }
-local TARGET_SEL_NAME, TARGET_SEL_ID, TARGET_SEL_FN = {}, {}, {}
+local TARGET_SEL_NAME, TARGET_SEL_ID, TARGET_SEL_FN, TARGET_SEL_ARG = {}, {}, {}, {}
 for _, t in ipairs(TARGET_SEL) do
   TARGET_SEL_NAME[t.id] = t.name
   TARGET_SEL_ID[t.name] = t.id
   TARGET_SEL_ID[t.id] = t.id
   TARGET_SEL_FN[t.id] = t.fn
+  TARGET_SEL_ARG[t.id] = t.arg
+end
+
+-- 附近敌人名称枚举（1.29.0，编辑窗「指定名称」下拉用）：客户端无附近单位枚举 API，
+-- 用 TargetNearestEnemy 循环选取特性边切边收集，完事恢复原目标（无原目标则清除）。
+-- 代价：调用瞬间目标快速切换一轮；同名怪多时 TargetByName 还原的可能不是同一只（可接受）。
+function EVAL_NEARBY_ENEMY_NAMES(maxN)
+  local names, seen = {}, {}
+  local orig = UnitName("target")
+  for _ = 1, (maxN or 5) do
+    pcall(TargetNearestEnemy)
+    local n = UnitName("target")
+    if not n or seen[n] then break end
+    seen[n] = true
+    table.insert(names, n)
+  end
+  if orig then pcall(TargetByName, orig) else pcall(ClearTarget) end
+  return names
 end
 
 -- ===== 目标职业条件（1.26.0）：UnitClass 第二返回值（英文 token）比对；多选 = 或关系 =====
@@ -693,7 +717,12 @@ local function condOne(cd, skill, dry)
     local gfn = TARGET_SEL_FN[cd.s]
     local fn = gfn and getglobal(gfn)
     if type(fn) ~= "function" then return false, "无选取函数:" .. tostring(cd.s) end
-    if not dry then pcall(fn) end
+    if cd.s == "byName" and not (cd.nm and cd.nm ~= "") then return false, "未设目标名称" end
+    if not dry then
+      if cd.s == "byName" then pcall(fn, cd.nm)
+      elseif TARGET_SEL_ARG[cd.s] then pcall(fn, TARGET_SEL_ARG[cd.s])
+      else pcall(fn) end
+    end
     return true, "选取目标:" .. tostring(TARGET_SEL_NAME[cd.s] or cd.s)
   end
   return false, "未知条件:" .. tostring(k)
@@ -816,6 +845,9 @@ function EVAL_PARSE_ONE(token)
   end
   local tg = string.match(token, "^选取目标[:：](.+)$") or string.match(token, "^target[:=](.+)$")
   if tg then
+    -- 指定名称:嗜血者 / byName=嗜血者（1.29.0：名称存 cd.nm）
+    local nm = string.match(tg, "^指定名称[:：](.+)$") or string.match(tg, "^byName[:=](.+)$")
+    if nm then nm = condTrim(nm) if nm ~= "" then return { k = "target", s = "byName", nm = nm } end return nil end
     local id = TARGET_SEL_ID[condTrim(tg)]
     if id then return { k = "target", s = id } end
     return nil
@@ -867,7 +899,10 @@ function EVAL_COND_STR(cd)
   if k == "ready" then return cd.inv and "未就绪" or "就绪" end
   if k == "usable" then return cd.inv and "不可用" or "可用" end
   if k == "notQueued" then return cd.inv and "已排队" or "未排队" end
-  if k == "target" then return "选取目标:" .. tostring(TARGET_SEL_NAME[cd.s] or cd.s) end
+  if k == "target" then
+    if cd.s == "byName" then return "选取目标:指定名称:" .. tostring(cd.nm or "?") end
+    return "选取目标:" .. tostring(TARGET_SEL_NAME[cd.s] or cd.s)
+  end
   if k == "tClass" then
     local ns = {}
     for _, c in ipairs(CLASS_LIST) do if cd.cs and cd.cs[c.id] then table.insert(ns, c.name) end end
@@ -2209,6 +2244,161 @@ function EVAL_HELP_RP_OPEN(idx)
   rpUI.root:Show()
 end
 
+
+-- ===== 通用名称输入弹窗（1.29.0：仿 1.17.0 重命名弹窗回声行范式——EditBox 可能不渲染 → 金色回声行保底） =====
+-- EVAL_TN_OPEN(标题, 当前值, onOk(名称))；确定/回车回调，取消/Esc 直接关。
+local tnUI = {}
+
+function EVAL_TN_BUILD()
+  if tnUI.root then return end
+  local W, H = 300, 150
+  local root = CreateFrame("Frame", "EVAL_HELP_TN", UIParent)
+  root:SetWidth(W) root:SetHeight(H)
+  root:SetPoint("CENTER", UIParent, "CENTER", 0, 130)
+  pcall(root.SetFrameStrata, root, "DIALOG")
+  pcall(root.SetFrameLevel, root, 130) -- 高于技能编辑窗(100)
+  pcall(root.SetMovable, root, true)
+  pcall(root.EnableMouse, root, true)
+  if uiOffscreen(root) then
+    root:ClearAllPoints()
+    root:SetPoint("CENTER", UIParent, "CENTER", 0, 100)
+  end
+  local bg = root:CreateTexture(nil, "BACKGROUND")
+  uiSolid(bg, 0.06, 0.05, 0.04, 0.98)
+  bg:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
+  bg:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", 0, 0)
+  for _, e in ipairs({ "TOP", "BOTTOM" }) do
+    local t = root:CreateTexture(nil, "BORDER")
+    uiSolid(t, 0.85, 0.70, 0.20, 1)
+    t:SetPoint(e .. "LEFT", root, e .. "LEFT", 0, 0)
+    t:SetPoint(e .. "RIGHT", root, e .. "RIGHT", 0, 0)
+    t:SetHeight(1)
+  end
+  for _, side in ipairs({ "LEFT", "RIGHT" }) do
+    local t = root:CreateTexture(nil, "BORDER")
+    uiSolid(t, 0.85, 0.70, 0.20, 1)
+    t:SetPoint("TOP" .. side, root, "TOP" .. side, 0, 0)
+    t:SetPoint("BOTTOM" .. side, root, "BOTTOM" .. side, 0, 0)
+    t:SetWidth(1)
+  end
+  local titleBar = CreateFrame("Button", nil, root)
+  titleBar:SetWidth(W - 4) titleBar:SetHeight(22)
+  titleBar:SetPoint("TOP", root, "TOP", 0, -2)
+  pcall(titleBar.SetFrameLevel, titleBar, 131)
+  pcall(titleBar.EnableMouse, titleBar, true)
+  pcall(titleBar.RegisterForClicks, titleBar, "LeftButtonUp")
+  pcall(titleBar.RegisterForDrag, titleBar, "LeftButton")
+  local tbBg = titleBar:CreateTexture(nil, "BACKGROUND")
+  uiSolid(tbBg, 0.14, 0.11, 0.06, 1)
+  tbBg:SetPoint("TOPLEFT", titleBar, "TOPLEFT", 0, 0)
+  tbBg:SetPoint("BOTTOMRIGHT", titleBar, "BOTTOMRIGHT", 0, 0)
+  local title = uiText(titleBar, 10, 0.95, 0.82, 0.35)
+  title:SetPoint("CENTER", titleBar, "CENTER", 0, 0)
+  tnUI.titleText = title
+  titleBar:SetScript("OnDragStart", function()
+    pcall(root.SetMovable, root, true)
+    pcall(root.StartMoving, root)
+    pcall(root.StopMovingOrSizing, root)
+    pcall(root.StartMoving, root)
+  end)
+  titleBar:SetScript("OnDragStop", function() pcall(root.StopMovingOrSizing, root) end)
+
+  local lab = uiText(root, 10, 0.85, 0.85, 0.85)
+  lab:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -36)
+  lab:SetText("目标名称：")
+
+  local okEb, eb = pcall(CreateFrame, "EditBox", "EVAL_HELP_TN_EB", root)
+  if okEb and eb then
+    pcall(eb.SetAutoFocus, eb, false)
+    pcall(eb.EnableMouse, eb, true)
+    eb:SetWidth(220) eb:SetHeight(18)
+    eb:SetPoint("TOPLEFT", root, "TOPLEFT", 20, -54)
+    local setF = false
+    for _, fo in ipairs({ "GameFontHighlightSmall", "ChatFontNormal", "GameFontNormal" }) do
+      if pcall(eb.SetFontObject, eb, fo) then setF = true break end
+    end
+    if not setF then
+      for _, fp in ipairs({ "Fonts\\FZLBJW.TTF", "Fonts\\FRIZQT__.TTF", "Fonts\\ARIALN.TTF" }) do
+        local okF, ok2 = pcall(eb.SetFont, eb, fp, 11, "")
+        if okF and ok2 then setF = true break end
+      end
+    end
+    if not setF then pcall(eb.SetTextHeight, eb, 11) end
+    pcall(eb.SetTextColor, eb, 1, 1, 1)
+    local ebBg = root:CreateTexture(nil, "BACKGROUND")
+    uiSolid(ebBg, 0.10, 0.09, 0.06, 1)
+    ebBg:SetPoint("TOPLEFT", root, "TOPLEFT", 14, -48)
+    ebBg:SetWidth(W - 28) ebBg:SetHeight(24)
+    tnUI.eb = eb
+  else
+    local noEb = uiText(root, 9, 0.7, 0.5, 0.5)
+    noEb:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -54)
+    noEb:SetText("（输入框不可用：改用文本格式 选取目标:指定名称:名字 导入）")
+  end
+
+  -- 回声行：实时镜像输入内容（盲打保底可见）
+  local echo = uiText(root, 11, 1, 0.9, 0.4)
+  echo:SetPoint("TOPLEFT", root, "TOPLEFT", 20, -80)
+  pcall(echo.SetWidth, echo, W - 40)
+  pcall(echo.SetJustifyH, echo, "LEFT")
+  tnUI.echo = echo
+  if tnUI.eb then
+    tnUI.eb:SetScript("OnTextChanged", function()
+      local ok, t = pcall(tnUI.eb.GetText, tnUI.eb)
+      if ok and type(t) == "string" then echo:SetText(t) end
+    end)
+  end
+
+  local function apply()
+    local nm = ""
+    if tnUI.eb then
+      local ok, t = pcall(tnUI.eb.GetText, tnUI.eb)
+      if ok and type(t) == "string" then nm = t end
+    end
+    nm = string.gsub(nm, "^%s*(.-)%s*$", "%1")
+    if nm ~= "" and tnUI.onOk then tnUI.onOk(nm) end
+    root:Hide()
+  end
+  if tnUI.eb then
+    tnUI.eb:SetScript("OnEnterPressed", function() apply() end)
+    tnUI.eb:SetScript("OnEscapePressed", function() root:Hide() end)
+  end
+
+  local function bBtn(x, label, fn)
+    local b = CreateFrame("Button", nil, root)
+    b:SetWidth(80) b:SetHeight(22)
+    b:SetPoint("BOTTOMLEFT", root, "BOTTOMLEFT", x, 12)
+    pcall(b.EnableMouse, b, true)
+    pcall(b.RegisterForClicks, b, "LeftButtonUp")
+    local bb = b:CreateTexture(nil, "BACKGROUND")
+    uiSolid(bb, 0.22, 0.18, 0.10, 1)
+    bb:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+    bb:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+    local bt = uiText(b, 10, 0.95, 0.82, 0.35)
+    bt:SetPoint("CENTER", b, "CENTER", 0, 0)
+    bt:SetText(label)
+    b:SetScript("OnClick", fn)
+  end
+  bBtn(70, "确定", function() apply() end)
+  bBtn(160, "取消", function() root:Hide() end)
+
+  root:Hide()
+  root:SetScript("OnHide", function() tnUI.onOk = nil end)
+  tnUI.root = root
+end
+
+function EVAL_TN_OPEN(title, cur, onOk)
+  EVAL_TN_BUILD()
+  tnUI.onOk = onOk
+  if tnUI.titleText then tnUI.titleText:SetText(title or "输入名称") end
+  if tnUI.eb then
+    pcall(tnUI.eb.SetText, tnUI.eb, cur or "")
+    pcall(tnUI.eb.SetFocus, tnUI.eb)
+  end
+  if tnUI.echo then tnUI.echo:SetText(cur or "") end
+  tnUI.root:Show()
+end
+
 -- 删除方案（至少保留一个；activeProfile 随删除左移/收敛）
 function EVAL_WAR_DEL_PROFILE(idx)
   local w2 = warCfg()
@@ -2840,7 +3030,8 @@ function EVAL_HELP_SE_REFRESH()
         pcall(row.sDrop.btn.Show, row.sDrop.btn)
         pcall(row.skillText.Show, row.skillText)
       elseif td.kind == "target" then
-        row.skillText:SetText(TARGET_SEL_NAME[cd.s] or tostring(cd.s or "?"))
+        local disp = (cd.s == "byName") and ("指定:" .. tostring(cd.nm or "未设")) or (TARGET_SEL_NAME[cd.s] or tostring(cd.s or "?"))
+        row.skillText:SetText(disp)
         pcall(row.sDrop.btn.Show, row.sDrop.btn)
         pcall(row.skillText.Show, row.skillText)
       elseif td.kind == "class" then
@@ -3076,13 +3267,36 @@ local function SE_BUILD()
         return
       end
       if tdi and tdi.kind == "target" then
-        -- 选取目标：下拉官方 Targetting 无参函数种类（1.25.0）
-        local items = {}
-        for _, t in ipairs(TARGET_SEL) do table.insert(items, t.name) end
-        EVAL_DD_OPEN(row.sDrop.btn, items, function(pi)
-          it.cd.s = TARGET_SEL[pi].id
-          EVAL_HELP_SE_REFRESH()
-        end)
+        -- 指定名称的名称下拉（1.29.0）：最近 5 敌名（循环枚举法）+ 自定义输入弹窗
+        local function openNameDrop()
+          local items = {}
+          for _, n in ipairs(EVAL_NEARBY_ENEMY_NAMES(5)) do table.insert(items, n) end
+          table.insert(items, "✎ 自定义名称…")
+          local customIdx = table.getn(items)
+          EVAL_DD_OPEN(row.sDrop.btn, items, function(pi)
+            if pi >= customIdx then
+              EVAL_TN_OPEN("指定目标名称（盲打看金色回声行）", it.cd.nm or "", function(nm)
+                it.cd.nm = nm
+                EVAL_HELP_SE_REFRESH()
+              end)
+            else
+              it.cd.nm = items[pi]
+              EVAL_HELP_SE_REFRESH()
+            end
+          end)
+        end
+        if it.cd.s == "byName" then
+          openNameDrop() -- 已是指定名称：本下拉=选名称（换种类重选条件类型即可）
+        else
+          -- 选取目标：下拉官方 Targetting 函数种类（1.25.0 七种 + 1.29.0 目标的目标/指定名称）
+          local items = {}
+          for _, t in ipairs(TARGET_SEL) do table.insert(items, t.name) end
+          EVAL_DD_OPEN(row.sDrop.btn, items, function(pi)
+            it.cd.s = TARGET_SEL[pi].id
+            EVAL_HELP_SE_REFRESH()
+            if it.cd.s == "byName" then openNameDrop() end -- 选完种类立即选名称
+          end)
+        end
         return
       end
       local items = EVAL_GO_SKILL_CHOICES() -- 白名单 + 动作条扫描技能（1.24.0）
