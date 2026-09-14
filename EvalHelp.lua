@@ -1,4 +1,4 @@
--- EvalHelp 1.41.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.41.2 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.41.1"
+local VERSION = "1.41.2"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -445,7 +445,7 @@ function EVAL_HELP_UI_TICK()
     form, atkOn and "|cff00ff00开|r" or "|cff909090关|r"))
 
   -- 技能图标行（依赖一键模块的 wslots；未扫描先静默扫一次）
-  if not wscanned then EVAL_GO_RESCAN(true) end
+  if not EVAL_IS_SCANNED() then EVAL_GO_RESCAN(true) end
   for _, c in ipairs(ui.cells) do
     local s = wslots[c.name]
     if not s then
@@ -458,9 +458,9 @@ function EVAL_HELP_UI_TICK()
       if c.name == "攻击" then
         lit = atkOn
       elseif c.name == "战斗怒吼" or c.name == "血性狂暴" then
-        lit = wPlayerHasBuff(s.tex)
+        lit = EVAL_P_HASBUFF(s.tex)
       elseif c.name == "断筋" or c.name == "撕裂" then
-        lit = wTargetHasDebuff(s.tex)
+        lit = EVAL_T_HASDEBUFF(s.tex)
       elseif c.name == "压制" then
         local oku, usable = pcall(IsUsableAction, s.slot)
         lit = oku and usable and true or false
@@ -566,7 +566,7 @@ end
 -- 窗口按 UnrealQuest 的实测构件法：纯色纹理(WHITE8X8)+金边、自绘勾选框/滑条，不依赖任何客户端贴图/模板/Slider 控件。
 
 local cfgWin = { root = nil, refresh = nil }
-local wLastHint = 0
+local EVAL_WLASTHINT = 0
 
 local function c()
   if not cfg then cfg = EVAL_HELP_CONFIG or {}; EVAL_HELP_CONFIG = cfg end
@@ -699,7 +699,7 @@ end
 -- 构建配置窗口（只建一次；开关 = Show/Hide）
 local function cfgBuild()
   if cfgWin.root then return cfgWin.root end
-  local WIDE = (EH_LANG ~= "zhCN") -- 1.34.1 i18n：西文（英/俄）比中文宽 ~1.5 倍，窗口与右列自适应加宽
+  local WIDE = (EVAL_GET_LANG() ~= "zhCN") -- 1.34.1 i18n：西文（英/俄）比中文宽 ~1.5 倍，窗口与右列自适应加宽
 local W, H = WIDE and 700 or 560, 420
   local root = CreateFrame("Frame", "EVAL_HELP_CFG", UIParent)
   pcall(root.SetFrameStrata, root, "DIALOG")
@@ -806,7 +806,7 @@ local W, H = WIDE and 700 or 560, 420
     fb:SetScript("OnClick", function()
       if EVAL_SET_LANG(lg.code) then EVAL_HELP_LANG_REFRESH() end
     end)
-    fb:SetScript("OnEnter", function() if EH_LANG ~= lg.code then pcall(fb.SetAlpha, fb, 0.95) end end)
+    fb:SetScript("OnEnter", function() if EVAL_GET_LANG() ~= lg.code then pcall(fb.SetAlpha, fb, 0.95) end end)
     fb:SetScript("OnLeave", function() EVAL_HELP_LANG_REFRESH() end)
     cfgWin.langBtns[i] = fb
   end
@@ -1480,7 +1480,7 @@ end
 
 -- 一键宏 Tab 列表刷新（方案按钮选中态 / 技能行内容 / 图标选择器高亮）
 function EVAL_WAR_TAB_REFRESH()
-  if not wscanned then EVAL_GO_RESCAN(true) end -- 1.32.9 自愈：初始化重扫若早于动作条就绪，这里补扫（否则技能行图标全灰）
+  if not EVAL_IS_SCANNED() then EVAL_GO_RESCAN(true) end -- 1.32.9 自愈：初始化重扫若早于动作条就绪，这里补扫（否则技能行图标全灰）
   local warUI = cfgWin.warUI
   if not warUI then return end
   local w2 = warCfg()
@@ -2710,10 +2710,10 @@ function EVAL_PROFILE_FROM_TEXT(text)
   text = string.gsub(text, "\r", "\n")
   local name, skills = nil, {}
   for line in string.gmatch(text .. "\n", "(.-)\n") do
-    local l = condTrim(line)
+    local l = EVAL_COND_TRIM(line)
     local nm = string.match(l, "^#%s*方案[:：]%s*(.+)$") or string.match(l, "^#%s*(.+)$")
     if nm then
-      name = condTrim(nm)
+      name = EVAL_COND_TRIM(nm)
     elseif string.sub(l, 1, 1) ~= ">" and string.sub(l, 1, 1) ~= "<" and l ~= "" then
       local body = string.match(l, "^[-*]%s*(.+)$") or l
       local sn, conds = string.match(body, "^([^|]+)|(.*)$")

@@ -3,6 +3,7 @@
 
 local st = EVAL_HELP_STATE
 local L = EVAL_L
+local formatStats, collectStats = EVAL_FORMAT_STATS, EVAL_COLLECT_STATS -- 1.41.2 拆分漏桥补
 
 -- ============ 一键输出引擎（规则引擎驱动；移植自 战士_武器.lua，内置战士技能白名单，其他职业同构扩展） ============
 -- 宏入口：/run EVAL_GO() —— 每次按键只做一个动作（同键多行动作会互抢 GCD）。
@@ -1019,8 +1020,8 @@ function EVAL_GO(profSel)
   -- 配置阈值（/eh cfg 或小地图 EH 图标可调；缺省值与原宏一致）
   local w = (EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war) or {} -- 1.41.1 热修：拆分后 Engine 无 cfg local（EVAL_GO 裸引用崩全局）
   if w.enabled == false then
-    if GetTime() - wLastHint >= 5 then
-      wLastHint = GetTime()
+    if GetTime() - EVAL_WLASTHINT >= 5 then
+      EVAL_WLASTHINT = GetTime()
       EVAL_SAY("一键宏已禁用（/eh cfg 或小地图 EH 图标里开启）")
     end
     return
@@ -1089,8 +1090,8 @@ function EVAL_GO(profSel)
       end
     end
     if not prof then
-      if GetTime() - wLastHint >= 2 then
-        wLastHint = GetTime()
+      if GetTime() - EVAL_WLASTHINT >= 2 then
+        EVAL_WLASTHINT = GetTime()
         local names = {}
         for _, p in ipairs(w.profiles) do table.insert(names, "[" .. tostring(p.name) .. "]") end
         EVAL_SAY("方案不存在: 「" .. tostring(profSel) .. "」现有方案: " .. table.concat(names, " ") .. "（注意全半角引号/名称一致；/eh go list 查看）")
@@ -1223,3 +1224,7 @@ EVAL_TARGET_SEL = TARGET_SEL
 EVAL_TSEL_NAME = TARGET_SEL_NAME
 EVAL_CLASS_LIST = CLASS_LIST
 EVAL_WAR_SKILLS = WAR_SKILLS
+EVAL_COND_TRIM = condTrim
+EVAL_P_HASBUFF = wPlayerHasBuff
+EVAL_T_HASDEBUFF = wTargetHasDebuff
+EVAL_IS_SCANNED = function() return wscanned end
