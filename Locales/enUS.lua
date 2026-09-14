@@ -82,6 +82,7 @@ EVAL_LOCALES["enUS"] = {
   CT_TARGET = "Target Select", CT_TCLASS = "Target Class",
   CT_IMMUNE = "T:Immune Skill",
   CT_INRANGE = "In Range (skill)",
+  CT_CASTING = "Casting (skill)",
   IMM_Y = "Immune",
   IMM_N = "Not immune",
   IO_TITLE = "Profile Import / Export (md text, Ctrl+C / Ctrl+V)",

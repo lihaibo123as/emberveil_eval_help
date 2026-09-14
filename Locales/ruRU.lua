@@ -82,6 +82,7 @@ EVAL_LOCALES["ruRU"] = {
   CT_TARGET = "Выбор цели", CT_TCLASS = "Класс цели",
   CT_IMMUNE = "Иммун. к навыку",
   CT_INRANGE = "В радиусе",
+  CT_CASTING = "Кастуется",
   IMM_Y = "Иммун.",
   IMM_N = "Нет иммун.",
   IO_TITLE = "Импорт / Экспорт профиля (md, Ctrl+C / Ctrl+V)",

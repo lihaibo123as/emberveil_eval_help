@@ -1,4 +1,4 @@
--- EvalHelp 1.37.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.38.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.37.0"
+local VERSION = "1.38.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -376,6 +376,8 @@ function EVAL_HELP_UPDATE_STATE()
     st.tClassName, st.tClass = nil, nil
   end
   st.tRange = EVAL_T_RANGE() -- 1.37.0 目标距离分档（在 if/else 之后、return 之前；误插 else 分支内恒 nil 已修）
+  -- 1.38.0 施法中跟踪过期清理（事件丢 STOP 时兜底；castUntil nil=无限期读条）
+  if st.castName and st.castUntil and GetTime() > st.castUntil then st.castName, st.castUntil = nil, nil end
   return st
 end
 
@@ -1028,6 +1030,10 @@ local function condOne(cd, skill, dry)
     local pass = not (okq and q)
     if cd.inv then pass = not pass end
     return pass, "已排队"
+  elseif k == "casting" then
+    -- 施法中（1.38.0）：SPELLCAST_* 事件驱动 st.castName（1.12 无 UnitCastingInfo，只能走事件）
+    local pass = (st.castName ~= nil and st.castName == cd.s) and true or false
+    return (pass == (cd.v ~= false)), "施法中:" .. tostring(cd.s)
   elseif k == "inRange" then
     -- 施法范围内（1.37.0）：IsActionInRange(该技能槽位)==true 才算；0=超出 / 1=自动攻击不测距 / nil=无目标
     local s2 = wslots[cd.s or ""]
@@ -1228,6 +1234,10 @@ function EVAL_PARSE_ONE(token)
   local irn = string.match(token, "^范围外[:：](.+)$") or string.match(token, "^notinrange[:=](.+)$")
   if irn then return { k = "inRange", s = condTrim(irn), v = false } end
   local tg = string.match(token, "^选取目标[:：](.+)$") or string.match(token, "^target[:=](.+)$")
+  local cst = string.match(token, "^施法中[:：](.+)$") or string.match(token, "^casting[:=](.+)$") -- 1.38.0 施法中条件
+  if cst then return { k = "casting", s = condTrim(cst), v = not neg } end
+  local csn = string.match(token, "^未施法[:：](.+)$") or string.match(token, "^notcasting[:=](.+)$")
+  if csn then return { k = "casting", s = condTrim(csn), v = false } end
   if tg then
     -- 指定名称:嗜血者 / byName=嗜血者（1.29.0：名称存 cd.nm）
     local nm = string.match(tg, "^指定名称[:：](.+)$") or string.match(tg, "^byName[:=](.+)$")
@@ -1288,7 +1298,8 @@ function EVAL_COND_STR(cd)
     if cd.s == "byName" then return "选取目标:指定名称:" .. tostring(cd.nm or "?") end
     return "选取目标:" .. tostring(TARGET_SEL_NAME[cd.s] or cd.s)
   end
-    if k == "inRange" then return (cd.v == false and "范围外:" or "范围内:") .. tostring(cd.s) end -- 1.37.0
+      if k == "casting" then return (cd.v == false and "未施法:" or "施法中:") .. tostring(cd.s) end -- 1.38.0
+if k == "inRange" then return (cd.v == false and "范围外:" or "范围内:") .. tostring(cd.s) end -- 1.37.0
 if k == "immune" then return (cd.v == false and "未免疫:" or "免疫:") .. tostring(cd.s) end -- 1.36.1
   if k == "tClass" then
     local ns = {}
@@ -3265,6 +3276,10 @@ function EVAL_HELP_ST_TICK()
     st.form or "无姿态"))
   table.insert(lines, string.format("Alt:%s Shift:%s Ctrl:%s 普攻:%s",
     stYesNo(st.alt), stYesNo(st.shift), stYesNo(st.ctrl), stYesNo(st.autoAttack)))
+  if st.castName then -- 1.38.0 施法中实时显示（含读条剩余秒数）
+    table.insert(lines, string.format("施法中: %s%s", tostring(st.castName),
+      st.castUntil and string.format(" 剩%.1fs", math.max(0, st.castUntil - GetTime())) or ""))
+  end
   if st.hasTarget then
     table.insert(lines, string.format("目标: %s  Lv%d%s%s",
       tostring(st.targetName), st.tLevel or 0,
@@ -3352,6 +3367,7 @@ local SE_TYPES = {
   { id = "tClass",     name = "目标职业",    kind = "class" },
   { id = "immune",    name = "目标免疫技能", kind = "skill", s = "撕裂" }, -- 1.36.1 免疫学习表判定
   { id = "inRange",   name = "施法范围内",  kind = "skill", s = "冲锋" }, -- 1.37.0 IsActionInRange
+  { id = "casting",   name = "施法中",      kind = "skill", s = "猛击" }, -- 1.38.0 SPELLCAST_* 事件驱动
 }
 local SE_BY_K = {}
 for i, td in ipairs(SE_TYPES) do SE_BY_K[td.id] = i end
@@ -3363,7 +3379,7 @@ local SE_TYPE_GROUPS = {
   { label = "CTG_1", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "combat", "autoAttack", "alt", "shift", "ctrl", "form" } },
   { label = "CTG_2", ids = { "tHpPct", "hasTarget", "canAttack", "canBleed", "tFriendly", "tHostile", "tNeutral", "isElite", "isBoss", "tInCombat", "tClass", "immune" } },
   { label = "CTG_3", ids = { "hasBuff", "noBuff", "hasDebuff", "noDebuff" } },
-  { label = "CTG_4", ids = { "ready", "usable", "notQueued", "inRange" } },
+  { label = "CTG_4", ids = { "ready", "usable", "notQueued", "inRange", "casting" } },
 }
 
 local seUI = { root = nil, ed = nil, rows = {} }
@@ -3616,8 +3632,8 @@ function EVAL_HELP_SE_REFRESH()
         pcall(row.formN.btn.Show, row.formN.btn)
       elseif td.kind == "skill" then
         local disp = tostring(cd.s or "?")
-        if cd.k == "immune" or cd.k == "inRange" then -- 1.36.3/1.37.0 免疫·射程 开关（射程显示 是/否）
-          if cd.k == "inRange" then
+        if cd.k == "immune" or cd.k == "inRange" or cd.k == "casting" then -- 1.36.3~1.38.0 免疫·射程·施法中 开关（射程/施法中显示 是/否）
+          if cd.k == "inRange" or cd.k == "casting" then
             row.immBtn.text:SetText((cd.v == false) and L("SE_NO") or L("SE_YES"))
           else
             row.immBtn.text:SetText((cd.v == false) and L("IMM_N") or L("IMM_Y"))
@@ -4685,6 +4701,10 @@ init:SetScript("OnEvent", function(a, b)
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_REGEN_ENABLED")
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_TARGET_CHANGED") -- Cat：目标切换时刷新可流血等状态
     pcall(autoFrame.RegisterEvent, autoFrame, "CHAT_MSG_SPELL_SELF_DAMAGE") -- 1.36.0 免疫学习器（探针实测事件名）
+    -- 1.38.0 施法中跟踪（1.12 无 UnitCastingInfo，只能走 SPELLCAST_* 事件；不存在则静默无效）
+    for _, ev2 in ipairs({ "SPELLCAST_START", "SPELLCAST_STOP", "SPELLCAST_FAILED", "SPELLCAST_INTERRUPTED", "SPELLCAST_DELAYED", "SPELLCAST_CHANNEL_START", "SPELLCAST_CHANNEL_STOP" }) do
+      pcall(autoFrame.RegisterEvent, autoFrame, ev2)
+    end
     autoFrame:SetScript("OnEvent", function(ea, eb)
       local en
       if type(ea) == "string" then en = ea
@@ -4702,6 +4722,18 @@ init:SetScript("OnEvent", function(a, b)
         -- 消息文本取全局 arg1；ea/eb 若承载事件名则不当消息用（三态兼容）
         local msgT = (type(arg1) == "string" and arg1) or ((type(ea) == "string" and ea ~= en) and ea) or (type(eb) == "string" and eb)
         if msgT then EVAL_IMMUNE_LEARN(msgT) end
+      -- 1.38.0 施法中跟踪：参数顺序做启发式——字符串=技能名、数字=时长ms（CHANNEL_START 的顺序与 START 相反）
+      elseif en == "SPELLCAST_START" or en == "SPELLCAST_CHANNEL_START" then
+        local a1, a2 = arg1, arg2
+        local nm = (type(a1) == "string" and a1) or (type(a2) == "string" and a2) or nil
+        local dur = (type(a1) == "number" and a1) or (type(a2) == "number" and a2) or 0
+        st.castName = nm or "?"
+        st.castUntil = (dur > 0) and (GetTime() + dur / 1000) or nil
+      elseif en == "SPELLCAST_STOP" or en == "SPELLCAST_FAILED" or en == "SPELLCAST_INTERRUPTED" or en == "SPELLCAST_CHANNEL_STOP" then
+        st.castName, st.castUntil = nil, nil
+      elseif en == "SPELLCAST_DELAYED" then
+        local d = (type(arg1) == "number" and arg1) or 0
+        if st.castName and st.castUntil then st.castUntil = st.castUntil + d / 1000 end
       end
     end)
     say("全职业施法工具 " .. VERSION .. "（通用一键宏） — 一键宏 /run EVAL_GO() | /eh cfg 配置 | /eh help 帮助")

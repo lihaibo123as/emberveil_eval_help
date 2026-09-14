@@ -296,4 +296,15 @@ EVAL_HELP_UPDATE_STATE()
 eq(EVAL_HELP_STATE.tRange, "近战", "melee band")
 TEST.inRange = nil TEST.slotNames[3] = nil EVAL_GO_RESCAN(true) EVAL_HELP_UPDATE_STATE()
 
+-- 22) 施法中条件（1.38.0）：解析回环 + castName 判定
+local gCast = EVAL_PARSE_CONDS("施法中:猛击")
+eq(gCast[1][1].k, "casting", "casting parse k")
+eq(EVAL_GROUP_STR(gCast), "施法中:猛击", "casting roundtrip")
+eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("未施法:猛击")), "未施法:猛击", "notcasting roundtrip")
+EVAL_HELP_STATE.castName = "猛击" EVAL_HELP_STATE.castUntil = nil
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = gCast } }), true, "casting matches")
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("未施法:猛击") } }), false, "notcasting inverse")
+EVAL_HELP_STATE.castName = nil
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = gCast } }), false, "not casting blocks")
+
 print("ALL TESTS PASS")
