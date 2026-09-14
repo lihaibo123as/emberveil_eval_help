@@ -1,4 +1,4 @@
--- EvalHelp 1.32.8 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.32.9 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.32.8"
+local VERSION = "1.32.9"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -2687,6 +2687,7 @@ end
 
 -- 一键宏 Tab 列表刷新（方案按钮选中态 / 技能行内容 / 图标选择器高亮）
 function EVAL_WAR_TAB_REFRESH()
+  if not wscanned then EVAL_GO_RESCAN(true) end -- 1.32.9 自愈：初始化重扫若早于动作条就绪，这里补扫（否则技能行图标全灰）
   local warUI = cfgWin.warUI
   if not warUI then return end
   local w2 = warCfg()
@@ -3679,27 +3680,42 @@ local function SE_BUILD()
         end
         return
       end
-      local items = EVAL_GO_SKILL_CHOICES() -- 白名单 + 动作条扫描技能（1.24.0）
-      -- 1.27.0：光环类条件追加实时项——当前目标debuff / 当前自身buff（选中即已学习名称→纹理，
-      -- 怪给的非动作条 debuff 也能匹配）；用序号边界区分，不做字符串标记解析（多字节前缀有字节误切风险）
-      local k0 = it.cd.k
-      local liveNames = nil
-      if k0 == "hasDebuff" or k0 == "noDebuff" then
-        liveNames = {}
-        for _, d in ipairs(EVAL_TARGET_DEBUFF_LIST()) do table.insert(items, "◆" .. d.name) table.insert(liveNames, d.name) end
-      elseif k0 == "hasBuff" or k0 == "noBuff" then
-        liveNames = {}
-        for _, d in ipairs(EVAL_PLAYER_BUFF_LIST()) do table.insert(items, "○" .. d.name) table.insert(liveNames, d.name) end
+      -- 1.32.9 重构：并行 names 表（显示前缀不入值，不做字符串解析）；排除伪技能（宠物/选取/物品——没有光环概念，1.32.9 修混入）；
+      -- 实时项 ◆目标debuff/○自身buff（1.27.0）+ 已学习名 ◇（跨会话持久，buff 消失也能选——修「药水 buff 不及时显示」）；图标经 auraTexOf
+      local items, names = {}, {}
+      local function push(disp, nm) table.insert(items, disp) table.insert(names, nm) end
+      for _, n in ipairs(EVAL_GO_SKILL_CHOICES()) do
+        if not petCmdOf(n) and not targetSelOf(n) and not itemOf(n) then push(n, n) end
       end
-      local liveStart = liveNames and (table.getn(items) - table.getn(liveNames) + 1) or 0
-      EVAL_DD_OPEN(row.sDrop.btn, items, function(pi)
-        if liveNames and pi >= liveStart then
-          it.cd.s = liveNames[pi - liveStart + 1]
-        else
-          it.cd.s = items[pi]
+      local k0 = it.cd.k
+      local isAura = (k0 == "hasDebuff" or k0 == "noDebuff" or k0 == "hasBuff" or k0 == "noBuff")
+      if k0 == "hasDebuff" or k0 == "noDebuff" then
+        for _, d in ipairs(EVAL_TARGET_DEBUFF_LIST()) do push("◆" .. d.name, d.name) end
+      elseif k0 == "hasBuff" or k0 == "noBuff" then
+        for _, d in ipairs(EVAL_PLAYER_BUFF_LIST()) do push("○" .. d.name, d.name) end
+      end
+      if isAura then
+        local seen = {}
+        for _, n in ipairs(names) do seen[n] = true end
+        local w2c = EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war
+        local lt = w2c and w2c.debuffTex
+        if lt then
+          local ln = {}
+          for n in pairs(lt) do table.insert(ln, n) end
+          table.sort(ln)
+          for _, n in ipairs(ln) do if not seen[n] then push("◇" .. n, n) end end
         end
+      end
+      local icons = {}
+      local anyIcon = false
+      for i2, nm in ipairs(names) do
+        local t = auraTexOf(nm)
+        if t then icons[i2] = t anyIcon = true end
+      end
+      EVAL_DD_OPEN(row.sDrop.btn, items, function(pi)
+        it.cd.s = names[pi]
         EVAL_HELP_SE_REFRESH()
-      end)
+      end, { icons = anyIcon and icons or nil })
     end)
     reg(row.sDrop.btn)
     -- debuff 层数下拉（1.31.0）：仅 目标有/无debuff 条件显示；不限/2-5层
