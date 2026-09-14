@@ -1885,6 +1885,8 @@ local SE_TYPES = {
   { id = "immune",    name = "目标免疫技能", kind = "skill", s = "撕裂" }, -- 1.36.1 免疫学习表判定
   { id = "inRange",   name = "施法范围内",  kind = "skill", s = "冲锋" }, -- 1.37.0 IsActionInRange
   { id = "casting",   name = "施法中",      kind = "skill", s = "" }, -- 1.38.0 SPELLCAST_* 事件驱动 -- 1.41.0 默认空=任意施法
+  { id = "castEl",    name = "自身读条进行", kind = "num", n = 1 }, -- 1.41.0 自身读条秒数
+  { id = "castLeft",  name = "自身读条剩余", kind = "num", n = 1 },
   { id = "tCasting",  name = "目标施法中",  kind = "skill", s = "" }, -- 1.40.0 空参数=任意施法
   { id = "tCastEl",   name = "读条已进行",  kind = "num", n = 1 },
   { id = "tCastLeft", name = "读条剩余",    kind = "num", n = 1 },
@@ -1896,7 +1898,7 @@ local SE_OPS = { ">", ">=", "<", "<=", "==", "~=" }
 
 -- 条件类型分组（1.32.5 下拉美化）：金色组标题行不可选；SE_TYPES 本体顺序不动，仅展示层分组
 local SE_TYPE_GROUPS = {
-  { label = "CTG_1", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "combat", "autoAttack", "alt", "shift", "ctrl", "form" } },
+  { label = "CTG_1", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "combat", "autoAttack", "alt", "shift", "ctrl", "form", "castEl", "castLeft" } },
   { label = "CTG_2", ids = { "tHpPct", "hasTarget", "canAttack", "canBleed", "tFriendly", "tHostile", "tNeutral", "isElite", "isBoss", "tInCombat", "tClass", "immune", "tCasting", "tCastEl", "tCastLeft" } },
   { label = "CTG_3", ids = { "hasBuff", "noBuff", "hasDebuff", "noDebuff" } },
   { label = "CTG_4", ids = { "ready", "usable", "notQueued", "inRange", "casting" } },
@@ -2153,6 +2155,7 @@ function EVAL_HELP_SE_REFRESH()
       elseif td.kind == "skill" then
         local disp = tostring(cd.s or "?")
         if cd.k == "tCasting" and (cd.s == nil or cd.s == "") then disp = L("TCAST_ANY") end -- 1.40.0 空参数=任意施法
+        if cd.k == "casting" and (cd.s == nil or cd.s == "") then disp = L("TCAST_ANY") end -- 1.41.0 自身施法同规
         if cd.k == "immune" or cd.k == "inRange" or cd.k == "casting" or cd.k == "tCasting" then -- 1.36.3~1.40.0 免疫·射程·施法·目标施法 开关（后三显示 是/否）
           if cd.k == "inRange" or cd.k == "casting" or cd.k == "tCasting" then
             row.immBtn.text:SetText((cd.v == false) and L("SE_NO") or L("SE_YES"))
