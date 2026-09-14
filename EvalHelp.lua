@@ -1,4 +1,4 @@
--- EvalHelp 1.36.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.36.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.36.0"
+local VERSION = "1.36.1"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -979,6 +979,12 @@ local function condOne(cd, skill, dry)
     local pass = not (okq and q)
     if cd.inv then pass = not pass end
     return pass, "已排队"
+  elseif k == "immune" then
+    -- 目标是否已免疫指定技能（1.36.1：读免疫学习表 immune[技能@当前目标]；v=false 即「未免疫」）
+    local w2 = EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war
+    local im = w2 and w2.immune
+    local rec = (im and st.targetName) and im[(cd.s or "") .. "@" .. tostring(st.targetName)] and true or false
+    return (rec == (cd.v ~= false)), "免疫:" .. tostring(cd.s)
   elseif k == "tClass" then
     -- 目标职业：cd.cs = { WARRIOR=true, ... } 多选或关系；无目标/无职业信息 = 不过
     local pass = (st.tClass and cd.cs and cd.cs[st.tClass]) and true or false
@@ -1155,6 +1161,10 @@ function EVAL_PARSE_ONE(token)
     if any then return { k = "tClass", cs = cs } end
     return nil
   end
+  local imt = string.match(token, "^免疫[:：](.+)$") or string.match(token, "^immune[:=](.+)$") -- 1.36.1 免疫条件
+  if imt then return { k = "immune", s = condTrim(imt), v = not neg } end
+  local imn = string.match(token, "^未免疫[:：](.+)$") or string.match(token, "^notimmune[:=](.+)$")
+  if imn then return { k = "immune", s = condTrim(imn), v = false } end
   local tg = string.match(token, "^选取目标[:：](.+)$") or string.match(token, "^target[:=](.+)$")
   if tg then
     -- 指定名称:嗜血者 / byName=嗜血者（1.29.0：名称存 cd.nm）
@@ -1216,6 +1226,7 @@ function EVAL_COND_STR(cd)
     if cd.s == "byName" then return "选取目标:指定名称:" .. tostring(cd.nm or "?") end
     return "选取目标:" .. tostring(TARGET_SEL_NAME[cd.s] or cd.s)
   end
+  if k == "immune" then return (cd.v == false and "未免疫:" or "免疫:") .. tostring(cd.s) end -- 1.36.1
   if k == "tClass" then
     local ns = {}
     for _, c in ipairs(CLASS_LIST) do if cd.cs and cd.cs[c.id] then table.insert(ns, c.name) end end
@@ -3270,6 +3281,7 @@ local SE_TYPES = {
   { id = "notQueued",  name = "未排队",      kind = "flag" },
   { id = "target",     name = "选取目标",    kind = "target", s = "nearEnemy", hidden = true }, -- 1.32.0 提为技能级（技能下拉「目标选取」），新增条件下拉不再提供；存量条件仍渲染/求值
   { id = "tClass",     name = "目标职业",    kind = "class" },
+  { id = "immune",    name = "目标免疫技能", kind = "skill", s = "撕裂" }, -- 1.36.1 免疫学习表判定
 }
 local SE_BY_K = {}
 for i, td in ipairs(SE_TYPES) do SE_BY_K[td.id] = i end
@@ -3279,7 +3291,7 @@ local SE_OPS = { ">", ">=", "<", "<=", "==", "~=" }
 -- 条件类型分组（1.32.5 下拉美化）：金色组标题行不可选；SE_TYPES 本体顺序不动，仅展示层分组
 local SE_TYPE_GROUPS = {
   { label = "CTG_1", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "combat", "autoAttack", "alt", "shift", "ctrl", "form" } },
-  { label = "CTG_2", ids = { "tHpPct", "hasTarget", "canAttack", "canBleed", "tFriendly", "tHostile", "tNeutral", "isElite", "isBoss", "tInCombat", "tClass" } },
+  { label = "CTG_2", ids = { "tHpPct", "hasTarget", "canAttack", "canBleed", "tFriendly", "tHostile", "tNeutral", "isElite", "isBoss", "tInCombat", "tClass", "immune" } },
   { label = "CTG_3", ids = { "hasBuff", "noBuff", "hasDebuff", "noDebuff" } },
   { label = "CTG_4", ids = { "ready", "usable", "notQueued" } },
 }

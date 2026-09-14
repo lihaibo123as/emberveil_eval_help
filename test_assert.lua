@@ -263,4 +263,17 @@ EVAL_HELP_CONFIG.war.immune = {}
 eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("可攻击") } }), true, "fires after clear")
 EVAL_HELP_CONFIG.war.immune = nil
 
+-- 20) 免疫条件类型（1.36.1）：免疫:技能 / 未免疫:技能 解析回环 + 学习表判定
+EVAL_HELP_CONFIG.war = EVAL_HELP_CONFIG.war or {}
+EVAL_HELP_CONFIG.war.immune = { ["撕裂@测试怪"] = true }
+EVAL_HELP_UPDATE_STATE()
+local gIm = EVAL_PARSE_CONDS("免疫:撕裂")
+eq(gIm[1][1].k, "immune", "immune parse k")
+eq(gIm[1][1].s, "撕裂", "immune parse s")
+eq(EVAL_GROUP_STR(gIm), "免疫:撕裂", "immune str roundtrip")
+eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("未免疫:撕裂")), "未免疫:撕裂", "not-immune roundtrip")
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = gIm } }), true, "immune cond true when learned")
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("未免疫:撕裂") } }), false, "not-immune cond false when learned")
+EVAL_HELP_CONFIG.war.immune = {}
+
 print("ALL TESTS PASS")
