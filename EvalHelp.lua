@@ -1,4 +1,4 @@
--- EvalHelp 1.34.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.34.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.34.0"
+local VERSION = "1.34.1"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -2062,7 +2062,8 @@ end
 -- 构建配置窗口（只建一次；开关 = Show/Hide）
 local function cfgBuild()
   if cfgWin.root then return cfgWin.root end
-  local W, H = 560, 420
+  local WIDE = (EH_LANG ~= "zhCN") -- 1.34.1 i18n：西文（英/俄）比中文宽 ~1.5 倍，窗口与右列自适应加宽
+local W, H = WIDE and 700 or 560, 420
   local root = CreateFrame("Frame", "EVAL_HELP_CFG", UIParent)
   pcall(root.SetFrameStrata, root, "DIALOG")
   pcall(root.EnableMouse, root, true)
@@ -2198,7 +2199,7 @@ local function cfgBuild()
     pages[i] = { btn = tb, bg = tbg, text = tt, widgets = {} }
   end
 
-  local LX, RX, RW = 18, 250, 160
+  local LX, RX, RW = 18, WIDE and 330 or 250, 160 -- RX 右列随语言加宽
 
   -- ===== Tab 1「全局」：日志 / 界面 / 帮助（非职业相关） =====
   local G = pages[1].widgets
@@ -2351,10 +2352,11 @@ local function cfgBuild()
   local RX2 = 128
   cfgHeader(root, RX2, -56, L("W_LIST_H"), Wp)
   local ROWS = 8
-  local function mkSmall(x, y, w, label, fn, list) -- 1.32.2 加 list 参数：默认 Wp（Tab2），传 G 可挂全局 Tab
+  local function mkSmall(x, y, w, label, fn, list, rightAnch) -- 1.32.2 list：传 G 挂全局页；1.34.1 rightAnch：右缘锚定（i18n 宽窗自适应）
     local b = CreateFrame("Button", nil, root)
     b:SetWidth(w) b:SetHeight(15)
-    b:SetPoint("TOPLEFT", root, "TOPLEFT", x, y)
+    if rightAnch then b:SetPoint("TOPRIGHT", root, "TOPRIGHT", -x, y)
+    else b:SetPoint("TOPLEFT", root, "TOPLEFT", x, y) end
     pcall(b.EnableMouse, b, true)
     pcall(b.RegisterForClicks, b, "LeftButtonUp")
     local bb = b:CreateTexture(nil, "BACKGROUND")
@@ -2371,10 +2373,10 @@ local function cfgBuild()
   end
   -- 方案导入/导出窗口入口（md 文本互转）
   -- [添加技能]：直接打开技能编辑窗新增（技能下拉 + 条件逐行配置 + 保存即入列表）
-  mkSmall(RX2 + 268, -56, 80, L("W_ADD"), function()
+  mkSmall(WIDE and 122 or 92, -56, WIDE and 112 or 80, L("W_ADD"), function()
     EVAL_HELP_SE_OPEN(warCfg().activeProfile or 1)
-  end)
-  mkSmall(RX2 + 356, -56, 68, L("W_IO"), function() EVAL_HELP_IO_TOGGLE() end)
+  end, nil, true)
+  mkSmall(16, -56, WIDE and 98 or 68, L("W_IO"), function() EVAL_HELP_IO_TOGGLE() end, nil, true)
 
   -- 全局 Tab「一键宏」组（1.32.2）：重扫动作条按钮，等同 /eh go rescan——拖动过技能后点一下即可
   cfgHeader(root, LX, -212, L("G_MACRO_H"), G)
@@ -2427,19 +2429,19 @@ local function cfgBuild()
     table.insert(Wp, nm)
     local cds = uiText(root, 9, 0.70, 0.70, 0.70)
     cds:SetPoint("TOPLEFT", root, "TOPLEFT", RX2 + 102, y - 3)
-    pcall(cds.SetWidth, cds, 236) -- 1.33.0 收窄 14px 让位右侧滚动条
+    pcall(cds.SetWidth, cds, WIDE and 356 or 236) -- 1.33.0 让位滚动条；1.34.1 宽语言再加宽
     pcall(cds.SetJustifyH, cds, "LEFT")
     row.conds = cds
     table.insert(Wp, cds)
-    row.up = mkSmall(RX2 + 342, y, 16, "上", function()
+    row.up = mkSmall(72, y, 16, "上", function()
       local p = warCfg().profiles[warCfg().activeProfile or 1]
       local idx = ri + (warUI.offset or 0)
       if p and idx > 1 and p.skills[idx] and p.skills[idx - 1] then
         p.skills[idx], p.skills[idx - 1] = p.skills[idx - 1], p.skills[idx]
         EVAL_WAR_TAB_REFRESH()
       end
-    end)
-    row.edit = mkSmall(RX2 + 360, y, 24, "编", function()
+    end, nil, true)
+    row.edit = mkSmall(44, y, 24, L("W_EDIT"), function()
       -- 打开技能编辑窗（独立条件属性行 + & / | 关系调整）
       local w2 = warCfg()
       local p = w2.profiles[w2.activeProfile or 1]
@@ -2447,28 +2449,28 @@ local function cfgBuild()
       if p and p.skills[idx] then
         EVAL_HELP_SE_OPEN(w2.activeProfile or 1, idx)
       end
-    end)
-    row.del = mkSmall(RX2 + 386, y, 24, "删", function()
+    end, nil, true)
+    row.del = mkSmall(16, y, 24, L("W_DEL"), function()
       local p = warCfg().profiles[warCfg().activeProfile or 1]
       local idx = ri + (warUI.offset or 0)
       if p and p.skills[idx] then
         table.remove(p.skills, idx)
         EVAL_WAR_TAB_REFRESH()
       end
-    end)
+    end, nil, true)
     warUI.rows[ri] = row
   end
 
   -- 滚动条（1.33.0：技能数取消上限后的超高滚动）：^ 上翻 / v 下翻 + 滚轮；仅超出可见行数时显示
   warUI.offset = warUI.offset or 0
-  warUI.scrollUp = mkSmall(RX2 + 412, -74, 14, "^", function()
+  warUI.scrollUp = mkSmall(94, -74, 14, "^", function()
     warUI.offset = math.max(0, (warUI.offset or 0) - 1)
     EVAL_WAR_TAB_REFRESH()
-  end)
-  warUI.scrollDn = mkSmall(RX2 + 412, -242, 14, "v", function()
+  end, nil, true)
+  warUI.scrollDn = mkSmall(94, -242, 14, "v", function()
     warUI.offset = (warUI.offset or 0) + 1
     EVAL_WAR_TAB_REFRESH() -- 上限在刷新里收敛
-  end)
+  end, nil, true)
   local okWheel = pcall(root.EnableMouseWheel, root, true)
   if okWheel then
     root:SetScript("OnMouseWheel", function()
