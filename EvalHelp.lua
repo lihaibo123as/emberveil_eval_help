@@ -1,4 +1,4 @@
--- EvalHelp 1.34.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.35.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.34.1"
+local VERSION = "1.35.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -1361,8 +1361,8 @@ end
 -- items 为函数：点开时才取数（背包/动作条是动态的）
 function EVAL_GO_SKILL_CATEGORIES()
   local cats = {}
-  table.insert(cats, { label = "角色行为", items = function() return { "攻击" } end })
-  table.insert(cats, { label = "角色技能", items = function()
+  table.insert(cats, { label = L("SK_CAT_1"), items = function() return { "攻击" } end })
+  table.insert(cats, { label = L("SK_CAT_2"), items = function()
     local list, seen = {}, {}
     for _, n in ipairs(WAR_SKILLS) do
       if n ~= "攻击" and not seen[n] then seen[n] = true table.insert(list, n) end
@@ -1377,20 +1377,20 @@ function EVAL_GO_SKILL_CATEGORIES()
     end
     return list
   end })
-  table.insert(cats, { label = "宠物行为", items = function()
+  table.insert(cats, { label = L("SK_CAT_3"), items = function()
     local l = {}
     for _, p in ipairs(PET_CMD) do table.insert(l, "宠物:" .. p.name) end
     return l
   end })
-  table.insert(cats, { label = "目标选取", items = function()
+  table.insert(cats, { label = L("SK_CAT_4"), items = function()
     local l = {}
     for _, t in ipairs(TARGET_SEL) do
-      if t.needsName then table.insert(l, "选取目标:指定名称…")
+      if t.needsName then table.insert(l, L("SE_PICK_TGT"))
       else table.insert(l, "选取目标:" .. t.name) end
     end
     return l
   end })
-  table.insert(cats, { label = "物品使用", items = function()
+  table.insert(cats, { label = L("SK_CAT_5"), items = function()
     local l, seen = {}, {}
     if type(GetContainerNumSlots) == "function" then
       for bag = 0, 4 do
@@ -1410,7 +1410,7 @@ function EVAL_GO_SKILL_CATEGORIES()
       table.sort(l)
       while table.getn(l) > 46 do table.remove(l) end -- DD 行池上限 48（首行留给自定义）
     end
-    table.insert(l, 1, "✎ 输入物品名…")
+    table.insert(l, 1, L("SE_PICK_ITEM"))
     return l
   end })
   return cats
@@ -1665,8 +1665,8 @@ function EVAL_HELP_UI_BUILD()
       if not r then return end
       GameTooltip:SetOwner(cb, "ANCHOR_RIGHT")
       GameTooltip:AddLine(tostring(r.skill), 1, 0.82, 0.3)
-      GameTooltip:AddLine((r.enabled ~= false) and "|cff00ff00已启用|r" or "|cffff0000已停用|r")
-      GameTooltip:AddLine("触发条件（组内全过 · 组间任一）:", 0.62, 0.55, 0.40)
+      GameTooltip:AddLine((r.enabled ~= false) and ("|cff00ff00" .. L("TIP_ON") .. "|r") or ("|cffff0000" .. L("TIP_OFF") .. "|r"))
+      GameTooltip:AddLine(L("TIP_COND_H"), 0.62, 0.55, 0.40)
       local gcount = 0
       for gi, g in ipairs(r.groups or {}) do
         gcount = gi
@@ -1675,9 +1675,9 @@ function EVAL_HELP_UI_BUILD()
         GameTooltip:AddLine(string.format("%d. %s", gi, table.concat(cs, " & ")), 0.85, 0.85, 0.85)
       end
       if gcount == 0 then
-        GameTooltip:AddLine("（无条件 = 永远不会自动放）", 0.6, 0.6, 0.6)
+        GameTooltip:AddLine(L("TIP_NOCOND"), 0.6, 0.6, 0.6)
       end
-      GameTooltip:AddLine("点击图标 = 打开编辑窗", 0.5, 0.5, 0.5)
+      GameTooltip:AddLine(L("TIP_CLICK"), 0.5, 0.5, 0.5)
       GameTooltip:Show()
     end)
     cb:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -2552,7 +2552,7 @@ function EVAL_HELP_RP_BUILD()
   tbBg:SetPoint("BOTTOMRIGHT", titleBar, "BOTTOMRIGHT", 0, 0)
   local title = uiText(titleBar, 10, 0.95, 0.82, 0.35)
   title:SetPoint("CENTER", titleBar, "CENTER", 0, 0)
-  title:SetText("重命名方案（输入框不显示就看金色回声行）")
+  title:SetText(L("RP_TITLE"))
   titleBar:SetScript("OnDragStart", function()
     pcall(root.SetMovable, root, true)
     pcall(root.StartMoving, root)
@@ -2596,7 +2596,7 @@ function EVAL_HELP_RP_BUILD()
   else
     local noEb = uiText(root, 9, 0.7, 0.5, 0.5)
     noEb:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -54)
-    noEb:SetText("（输入框不可用：改用 /eh war rename 新名字）")
+    noEb:SetText(L("RP_NOEB"))
   end
 
   -- 回声行：实时镜像输入内容（EditBox 不渲染时的保底可见性）
@@ -2649,8 +2649,8 @@ function EVAL_HELP_RP_BUILD()
     bt:SetText(label)
     b:SetScript("OnClick", fn)
   end
-  bBtn(70, "确定", function() apply() end)
-  bBtn(160, "取消", function() root:Hide() end)
+  bBtn(70, L("BTN_OK"), function() apply() end)
+  bBtn(160, L("BTN_CANCEL"), function() root:Hide() end)
 
   root:Hide()
   rpUI.root = root
@@ -2759,7 +2759,7 @@ function EVAL_TN_BUILD()
   else
     local noEb = uiText(root, 9, 0.7, 0.5, 0.5)
     noEb:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -54)
-    noEb:SetText("（输入框不可用：改用文本格式 选取目标:指定名称:名字 导入）")
+    noEb:SetText(L("TN_NOEB"))
   end
 
   -- 回声行：实时镜像输入内容（盲打保底可见）
@@ -2805,8 +2805,8 @@ function EVAL_TN_BUILD()
     bt:SetText(label)
     b:SetScript("OnClick", fn)
   end
-  bBtn(70, "确定", function() apply() end)
-  bBtn(160, "取消", function() root:Hide() end)
+  bBtn(70, L("BTN_OK"), function() apply() end)
+  bBtn(160, L("BTN_CANCEL"), function() root:Hide() end)
 
   root:Hide()
   root:SetScript("OnHide", function() tnUI.onOk = nil end)
@@ -3249,10 +3249,10 @@ local SE_OPS = { ">", ">=", "<", "<=", "==", "~=" }
 
 -- 条件类型分组（1.32.5 下拉美化）：金色组标题行不可选；SE_TYPES 本体顺序不动，仅展示层分组
 local SE_TYPE_GROUPS = {
-  { label = "自身状态", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "combat", "autoAttack", "alt", "shift", "ctrl", "form" } },
-  { label = "目标状态", ids = { "tHpPct", "hasTarget", "canAttack", "canBleed", "tFriendly", "tHostile", "tNeutral", "isElite", "isBoss", "tInCombat", "tClass" } },
-  { label = "光环效果", ids = { "hasBuff", "noBuff", "hasDebuff", "noDebuff" } },
-  { label = "技能状态", ids = { "ready", "usable", "notQueued" } },
+  { label = "CTG_1", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "combat", "autoAttack", "alt", "shift", "ctrl", "form" } },
+  { label = "CTG_2", ids = { "tHpPct", "hasTarget", "canAttack", "canBleed", "tFriendly", "tHostile", "tNeutral", "isElite", "isBoss", "tInCombat", "tClass" } },
+  { label = "CTG_3", ids = { "hasBuff", "noBuff", "hasDebuff", "noDebuff" } },
+  { label = "CTG_4", ids = { "ready", "usable", "notQueued" } },
 }
 
 local seUI = { root = nil, ed = nil, rows = {} }
@@ -3464,7 +3464,7 @@ function EVAL_HELP_SE_REFRESH()
   end
   seUI.skillName:SetText(tostring(ed.skill))
   if seUI.catName then -- 分类按钮文字 = 当前技能所属类（1.32.3）
-    local cl = { "角色行为", "角色技能", "宠物行为", "目标选取", "物品使用" }
+    local cl = { L("SK_CAT_1"), L("SK_CAT_2"), L("SK_CAT_3"), L("SK_CAT_4"), L("SK_CAT_5") }
     local ci = 2
     if ed.skill == "攻击" then ci = 1
     elseif petCmdOf(ed.skill) then ci = 3
@@ -3483,7 +3483,7 @@ function EVAL_HELP_SE_REFRESH()
       pcall(row.conn.btn.Show, row.conn.btn)
       local ti = SE_BY_K[cd.k] or 1
       local td = SE_TYPES[ti]
-      row.typeBtn.text:SetText(td.name)
+      row.typeBtn.text:SetText(L("CT_" .. string.upper(td.id)))
       pcall(row.typeBtn.btn.Show, row.typeBtn.btn)
       if td.kind == "num" then
         row.opBtn.text:SetText(cd.op or ">")
@@ -3585,7 +3585,7 @@ local function SE_BUILD()
   pcall(titleBar.RegisterForDrag, titleBar, "LeftButton")
   local title = uiText(titleBar, 10, 0.95, 0.82, 0.35)
   title:SetPoint("CENTER", titleBar, "CENTER", 0, 0)
-  title:SetText("技能编辑（点名称/参数按钮弹下拉选择）")
+  title:SetText(L("SE_TITLE"))
   titleBar:SetScript("OnDragStart", function()
     pcall(root.SetMovable, root, true)
     pcall(root.StartMoving, root)
@@ -3616,14 +3616,14 @@ local function SE_BUILD()
   -- 项选中落值（两个下拉共用）：特殊项弹输入框，物品项剥 ×数量 展示后缀
   local function seApplySkillPick(v)
     if not v then return end
-    if v == "✎ 输入物品名…" then
-      EVAL_TN_OPEN("输入物品名称（背包内精确名）", "", function(nm)
+    if v == L("SE_PICK_ITEM") then
+      EVAL_TN_OPEN(L("SE_TN_ITEM"), "", function(nm)
         if nm and nm ~= "" then seUI.ed.skill = "物品:" .. nm EVAL_HELP_SE_REFRESH() end
       end)
       return
     end
-    if v == "选取目标:指定名称…" then
-      EVAL_TN_OPEN("输入目标名称（精确匹配）", "", function(nm)
+    if v == L("SE_PICK_TGT") then
+      EVAL_TN_OPEN(L("SE_TN_TARGET"), "", function(nm)
         if nm and nm ~= "" then seUI.ed.skill = "选取目标:指定名称:" .. nm EVAL_HELP_SE_REFRESH() end
       end)
       return
@@ -3695,19 +3695,19 @@ local function SE_BUILD()
   seUI.enMark = enMark
   local enLabel = uiText(root, 9, 0.75, 0.75, 0.75)
   enLabel:SetPoint("TOPLEFT", root, "TOPLEFT", 234, -27)
-  enLabel:SetText("启用此技能")
+  enLabel:SetText(L("SE_ENABLE"))
 
   -- 条件表头
   local hd = uiText(root, 9, 0.60, 0.55, 0.40)
   hd:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -48)
-  hd:SetText("关系    条件类型          参数设置                                    结果")
+  hd:SetText(L("SE_HEADER"))
 
   -- 8 行条件池
   for i = 1, 8 do
     local y = -64 - (i - 1) * 20
     local row = { all = {} }
     local function reg(w) table.insert(row.all, w) return w end
-    row.conn = seBtn(root, 16, y, 26, 15, "当", function()
+    row.conn = seBtn(root, 16, y, 26, 15, L("SE_WHEN"), function()
       local ed = seUI.ed
       if ed and i > 1 and ed.conds[i] then
         ed.conds[i].conn = (ed.conds[i].conn == "|") and "&" or "|"
@@ -3715,7 +3715,7 @@ local function SE_BUILD()
       end
     end)
     reg(row.conn.btn)
-    row.typeBtn = seBtn(root, 46, y, 92, 15, "条件类型", function()
+    row.typeBtn = seBtn(root, 46, y, 92, 15, L("SE_TYPE_PH"), function()
       -- 点开下拉列表：全部 26 种条件类型可见可选（1.14.0：替代盲循环；1.25.0 选取目标；1.26.0 目标职业；1.28.0 连击点数）
       local ed = seUI.ed
       local it = ed and ed.conds[i]
@@ -3723,11 +3723,11 @@ local function SE_BUILD()
       -- 1.32.5 分组美化：金色组标题（idxMap=0 不可选）+ 四类分组；hidden 类型（选取目标）不进下拉
       local items, idxMap = {}, {}
       for _, grp in ipairs(SE_TYPE_GROUPS) do
-        table.insert(items, "|cffffd100· " .. grp.label .. " ·|r")
+        table.insert(items, "|cffffd100· " .. L(grp.label) .. " ·|r")
         table.insert(idxMap, 0)
         for _, id in ipairs(grp.ids) do
           local ti2 = SE_BY_K[id]
-          if ti2 and not SE_TYPES[ti2].hidden then table.insert(items, SE_TYPES[ti2].name) table.insert(idxMap, ti2) end
+          if ti2 and not SE_TYPES[ti2].hidden then table.insert(items, L("CT_" .. string.upper(SE_TYPES[ti2].id))) table.insert(idxMap, ti2) end
         end
       end
       EVAL_DD_OPEN(row.typeBtn.btn, items, function(ti0)
@@ -3768,7 +3768,7 @@ local function SE_BUILD()
     end)
     reg(row.plus.btn)
     -- 布尔/标志/姿态：是/否循环
-    row.valBtn = seBtn(root, 142, y, 44, 15, "是", function()
+    row.valBtn = seBtn(root, 142, y, 44, 15, L("SE_YES"), function()
       local it = seUI.ed and seUI.ed.conds[i]
       if it then
         local cd = it.cd
@@ -3887,10 +3887,11 @@ local function SE_BUILD()
     end)
     reg(row.sDrop.btn)
     -- debuff 层数下拉（1.31.0）：仅 目标有/无debuff 条件显示；不限/2-5层
-    row.stk = seBtn(root, 266, y, 20, 15, "层", function()
+    row.stk = seBtn(root, 266, y, 20, 15, L("SE_STK"), function()
       local it = seUI.ed and seUI.ed.conds[i]
       if not it then return end
-      EVAL_DD_OPEN(row.stk.btn, { "不限层数", ">=2层", ">=3层", ">=4层", ">=5层" }, function(pi)
+      local stkItems = { L("SE_STK_UNLIM") } for si = 2, 5 do table.insert(stkItems, L("SE_STK_FMT", si)) end
+      EVAL_DD_OPEN(row.stk.btn, stkItems, function(pi)
         it.cd.n = (pi > 1) and pi or nil -- 序号2-5即层数2-5
         EVAL_HELP_SE_REFRESH()
       end)
@@ -3901,7 +3902,7 @@ local function SE_BUILD()
     pv:SetPoint("TOPLEFT", root, "TOPLEFT", 288, y - 3)
     row.preview = pv
     reg(pv)
-    row.del = seBtn(root, 420, y, 28, 15, "删", function()
+    row.del = seBtn(root, 420, y, 28, 15, L("W_DEL"), function()
       local ed = seUI.ed
       if ed and ed.conds[i] then table.remove(ed.conds, i) EVAL_HELP_SE_REFRESH() end
     end)
@@ -3910,7 +3911,7 @@ local function SE_BUILD()
   end
 
   -- 添加条件 + 预览 + 保存/取消
-  seBtn(root, 16, -64 - 8 * 20 - 6, 96, 16, "+ 添加条件", function()
+  seBtn(root, 16, -64 - 8 * 20 - 6, 96, 16, L("SE_ADD"), function()
     local ed = seUI.ed
     if ed and table.getn(ed.conds) < 8 then
       table.insert(ed.conds, { conn = (table.getn(ed.conds) > 0) and "&" or nil, cd = seDefaultCond(1) })
@@ -3919,7 +3920,7 @@ local function SE_BUILD()
   end)
   local pvLabel = uiText(root, 9, 0.60, 0.55, 0.40)
   pvLabel:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -64 - 8 * 20 - 30)
-  pvLabel:SetText("预览:")
+  pvLabel:SetText(L("SE_PREVIEW"))
   local pv = uiText(root, 9, 0.95, 0.82, 0.35)
   pv:SetPoint("TOPLEFT", root, "TOPLEFT", 52, -64 - 8 * 20 - 30)
   pcall(pv.SetWidth, pv, 400)
@@ -3940,8 +3941,8 @@ local function SE_BUILD()
     bt:SetText(label)
     b:SetScript("OnClick", fn)
   end
-  bBtn(150, 80, "保存", function() EVAL_HELP_SE_SAVE() end)
-  bBtn(240, 80, "取消", function() root:Hide() end)
+  bBtn(150, 80, L("SE_SAVE"), function() EVAL_HELP_SE_SAVE() end)
+  bBtn(240, 80, L("BTN_CANCEL"), function() root:Hide() end)
   root:Hide()
   root:SetScript("OnHide", function() EVAL_DD_HIDE() end)
   seUI.root = root
@@ -4103,7 +4104,7 @@ function EVAL_HELP_IO_BUILD()
   pcall(titleBar.RegisterForDrag, titleBar, "LeftButton")
   local title = uiText(titleBar, 10, 0.95, 0.82, 0.35)
   title:SetPoint("CENTER", titleBar, "CENTER", 0, 0)
-  title:SetText("方案 导入 / 导出（md 文本，Ctrl+C / Ctrl+V）")
+  title:SetText(L("IO_TITLE"))
   titleBar:SetScript("OnDragStart", function()
     pcall(root.SetMovable, root, true)
     pcall(root.StartMoving, root)
@@ -4115,7 +4116,7 @@ function EVAL_HELP_IO_BUILD()
   -- 操作说明
   local tip = uiText(root, 9, 0.75, 0.75, 0.75)
   tip:SetPoint("TOPLEFT", root, "TOPLEFT", 14, -26)
-  tip:SetText("导入：下方粘贴方案文本 → [导入为新方案]；导出：[导出当前方案] 后 Ctrl+C 复制")
+  tip:SetText(L("IO_TIP"))
 
   -- 多行输入框（1.15.1：字体对象优先；本客户端 EditBox 可能不渲染，下方有保底预览区）
   local okEb, eb = pcall(CreateFrame, "EditBox", "EVAL_HELP_IO_EB", root)
@@ -4172,7 +4173,7 @@ function EVAL_HELP_IO_BUILD()
   -- 保底预览区：当前方案文本以 FontString 渲染（EditBox 不显示时也始终可见）
   local pvLabel = uiText(root, 9, 0.95, 0.82, 0.35)
   pvLabel:SetPoint("TOPLEFT", root, "TOPLEFT", 14, -184)
-  pvLabel:SetText("当前方案预览（始终可见）：")
+  pvLabel:SetText(L("IO_PV"))
   ioUI.pvLines = {}
   for i = 1, 8 do
     local ln = uiText(root, 9, 0.82, 0.82, 0.82)
@@ -4187,7 +4188,7 @@ function EVAL_HELP_IO_BUILD()
   pathTip:SetPoint("TOPLEFT", root, "TOPLEFT", 14, -288)
   pcall(pathTip.SetWidth, pathTip, W - 28)
   pcall(pathTip.SetJustifyH, pathTip, "LEFT")
-  pathTip:SetText("无法复制时：方案已自动存盘（小退/重载后文件即最新），用记事本打开配置文件复制：")
+  pathTip:SetText(L("IO_PATH1"))
   local pathTip2 = uiText(root, 8, 0.68, 0.62, 0.30)
   pathTip2:SetPoint("TOPLEFT", root, "TOPLEFT", 14, -300)
   pcall(pathTip2.SetWidth, pathTip2, W - 28)
@@ -4211,7 +4212,7 @@ function EVAL_HELP_IO_BUILD()
     b:SetScript("OnClick", fn)
     return b
   end
-  ioBtn(14, 108, "导入为新方案", function()
+  ioBtn(14, 108, L("IO_IMPORT"), function()
     local text = ""
     if ioUI.eb then
       local ok, t = pcall(ioUI.eb.GetText, ioUI.eb)
@@ -4231,7 +4232,7 @@ function EVAL_HELP_IO_BUILD()
     pcall(EVAL_WAR_TAB_REFRESH)
     ioUI.root:Hide()
   end)
-  ioBtn(128, 108, "导出当前方案", function()
+  ioBtn(128, 108, L("IO_EXPORT"), function()
     if ioUI.eb then
       pcall(ioUI.eb.SetText, ioUI.eb, EVAL_PROFILE_TO_TEXT())
       pcall(ioUI.eb.SetFocus, ioUI.eb)
@@ -4240,11 +4241,11 @@ function EVAL_HELP_IO_BUILD()
     EVAL_HELP_IO_REFRESH()
     say("已导出到输入框并全选：Ctrl+C 复制，存成 .md 即可分享（输入框不显示就看下方预览区）")
   end)
-  ioBtn(242, 108, "武器战示例", function()
+  ioBtn(242, 108, L("IO_SAMPLE"), function()
     if ioUI.eb then pcall(ioUI.eb.SetText, ioUI.eb, ZS_WQ_EXAMPLE) end
     say("已填入武器战示例（与 example/zs_wq.md 相同），可改后点导入")
   end)
-  ioBtn(392, 64, "关闭", function() ioUI.root:Hide() end)
+  ioBtn(392, 64, L("CLOSE"), function() ioUI.root:Hide() end)
 
   root:Hide()
   ioUI.root = root

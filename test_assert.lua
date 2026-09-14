@@ -187,17 +187,17 @@ eq(EVAL_RULE_RUN({ { skill = "物品:超效治疗药水", why = "x", groups = EV
 
 -- 13) 技能二级分类（1.32.0）
 local cats = EVAL_GO_SKILL_CATEGORIES()
-eq(cats[1].label, "角色行为", "cat1 label")
+eq(cats[1].label, EVAL_L("SK_CAT_1"), "cat1 label")
 eq(cats[1].items()[1], "攻击", "cat1 has attack")
-eq(cats[3].label, "宠物行为", "cat3 label")
+eq(cats[3].label, EVAL_L("SK_CAT_3"), "cat3 label")
 local foundPetCmd = false
 for _, n in ipairs(cats[3].items()) do if n == "宠物:攻击" then foundPetCmd = true end end
 eq(foundPetCmd, true, "cat3 has pet cmds")
-eq(cats[4].label, "目标选取", "cat4 label")
+eq(cats[4].label, EVAL_L("SK_CAT_4"), "cat4 label")
 local foundTsel = false
 for _, n in ipairs(cats[4].items()) do if n == "选取目标:最近敌人" then foundTsel = true end end
 eq(foundTsel, true, "cat4 has target-sel skills")
-eq(cats[5].label, "物品使用", "cat5 label")
+eq(cats[5].label, EVAL_L("SK_CAT_5"), "cat5 label")
 local foundItem = false
 for _, n in ipairs(cats[5].items()) do if string.find(n, "超效治疗药水") then foundItem = true end end
 eq(foundItem, true, "cat5 lists bag items")
