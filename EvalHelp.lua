@@ -1,4 +1,4 @@
--- EVAL_HELP 1.25.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.32.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.31.0"
+local VERSION = "1.32.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -421,6 +421,64 @@ local function petCmdOf(skill)
   return nil
 end
 
+-- ===== 目标选取（1.25.0 条件级 / 1.32.0 起同时为技能级）：副作用=切换当前目标 =====
+-- 表位置上移到 wuse 之前：技能级执行（wuse 分支）需要 TARGET_SEL_FN/ARG
+local TARGET_SEL = {
+  { id = "nearEnemy",    name = "最近敌人",   fn = "TargetNearestEnemy" },
+  { id = "nearFriend",   name = "最近友方",   fn = "TargetNearestFriend" },
+  { id = "nearParty",    name = "最近队友",   fn = "TargetNearestPartyMember" },
+  { id = "nearRaid",     name = "最近团员",   fn = "TargetNearestRaidMember" },
+  { id = "lastEnemy",    name = "上一敌人",   fn = "TargetLastEnemy" },
+  { id = "lastTarget",   name = "上一目标",   fn = "TargetLastTarget" },
+  { id = "targetTarget", name = "目标的目标", fn = "TargetUnit", arg = "targettarget" },
+  { id = "byName",       name = "指定名称",   fn = "TargetByName", needsName = true },
+  { id = "clear",        name = "清除目标",   fn = "ClearTarget" },
+}
+local TARGET_SEL_NAME, TARGET_SEL_ID, TARGET_SEL_FN, TARGET_SEL_ARG = {}, {}, {}, {}
+for _, t in ipairs(TARGET_SEL) do
+  TARGET_SEL_NAME[t.id] = t.name
+  TARGET_SEL_ID[t.name] = t.id
+  TARGET_SEL_ID[t.id] = t.id
+  TARGET_SEL_FN[t.id] = t.fn
+  TARGET_SEL_ARG[t.id] = t.arg
+end
+
+-- 选取目标技能级解析（1.32.0）："选取目标:最近敌人" → id；"选取目标:指定名称:嗜血者" → "byName","嗜血者"
+local function targetSelOf(skill)
+  local tg = string.match(skill or "", "^选取目标[:：](.+)$")
+  if not tg then return nil end
+  local nm = string.match(tg, "^指定名称[:：](.+)$")
+  if nm then return "byName", nm end
+  local id = TARGET_SEL_ID[tg]
+  if id then return id end
+  return nil
+end
+
+-- 物品使用（1.32.0）：rule.skill="物品:名称"——背包扫描定位 + UseContainerItem（消耗品直接用/装备自动穿上，官方文档明确不受保护）
+local function itemOf(skill)
+  return string.match(skill or "", "^物品[:：](.+)$")
+end
+-- 背包查找：→ bag, slot, tex, count（未找到返回 nil）
+local function wFindBagItem(name)
+  if type(GetContainerNumSlots) ~= "function" then return nil end
+  for bag = 0, 4 do
+    local okn, slots = pcall(GetContainerNumSlots, bag)
+    if okn and slots and slots > 0 then
+      for slot = 1, slots do
+        local okl, link = pcall(GetContainerItemLink, bag, slot)
+        if okl and link then
+          local iname = string.match(link, "%[(.-)%]")
+          if iname == name then
+            local oki, tex, count = pcall(GetContainerItemInfo, bag, slot)
+            return bag, slot, (oki and tex) or nil, (oki and count) or 1
+          end
+        end
+      end
+    end
+  end
+  return nil
+end
+
 -- 技能图标统一入口（1.30.0）：动作条纹理 → 宠物指令回退（宠物头像/问号）
 local function wicon(name)
   local s = wslots[name]
@@ -429,6 +487,17 @@ local function wicon(name)
     if type(GetPetIcon) == "function" then
       local ok, t = pcall(GetPetIcon)
       if ok and t then return t end
+    end
+    return "Interface\\Icons\\INV_Misc_QuestionMark"
+  end
+  if targetSelOf(name) then return "Interface\\Icons\\INV_Misc_QuestionMark" end -- 1.32.0 选取目标无专属图标
+  local iname = itemOf(name) -- 1.32.0 物品：背包图标 → GetItemInfo 缓存 → 问号
+  if iname then
+    local _, _, tex = wFindBagItem(iname)
+    if tex then return tex end
+    if type(GetItemInfo) == "function" then
+      local ok, _1, _2, _3, _4, _5, _6, _7, itex = pcall(GetItemInfo, iname)
+      if ok and itex then return itex end -- 1.12 GetItemInfo 第9返回值=纹理
     end
     return "Interface\\Icons\\INV_Misc_QuestionMark"
   end
@@ -534,6 +603,16 @@ end
 
 -- 技能冷却是否就绪；不就绪时返回剩余秒数说明
 local function wready(name)
+  local iname = itemOf(name) -- 1.32.0 物品冷却走背包 API
+  if iname then
+    local bag, slot = wFindBagItem(iname)
+    if not bag then return false, "背包未找到" end
+    local okc, start, dur = pcall(GetContainerItemCooldown, bag, slot)
+    if not okc then return false, "冷却查询失败" end
+    if (start or 0) == 0 and (dur or 0) == 0 then return true end
+    local left = (start or 0) + (dur or 0) - GetTime()
+    return false, string.format("冷却剩 %.1fs", left > 0 and left or 0)
+  end
   local s = wslots[name]
   if not s then return false, "不在动作条" end
   local ok, start, dur = pcall(GetActionCooldown, s.slot)
@@ -558,6 +637,30 @@ local function wuse(name, reason)
     local pline = string.format("→ %s (%s)", name, reason)
     logLine(pline)
     if cfg and cfg.wdebug then say("|cff7fff7f" .. pline .. "|r") end
+    return true
+  end
+  local ts, tsnm = targetSelOf(name)
+  if ts then
+    -- 选取目标技能级（1.32.0）：执行切换即算出手；日志记切换后的目标名
+    local fn = getglobal(TARGET_SEL_FN[ts])
+    if type(fn) ~= "function" then wlog(name .. ": 无选取函数") return false end
+    if ts == "byName" then pcall(fn, tsnm)
+    elseif TARGET_SEL_ARG[ts] then pcall(fn, TARGET_SEL_ARG[ts])
+    else pcall(fn) end
+    local tline = string.format("→ %s (%s) | 当前目标:%s", name, reason, UnitName("target") or "无")
+    logLine(tline)
+    if cfg and cfg.wdebug then say("|cff7fff7f" .. tline .. "|r") end
+    return true
+  end
+  local iname = itemOf(name)
+  if iname then
+    -- 物品使用（1.32.0）：UseContainerItem——消耗品直接使用，装备自动穿上；背包未找到静默跳过
+    local bag, slot = wFindBagItem(iname)
+    if not bag then wlog(name .. "跳过: 背包未找到") return false end
+    pcall(UseContainerItem, bag, slot)
+    local iline = string.format("→ %s (%s)", name, reason)
+    logLine(iline)
+    if cfg and cfg.wdebug then say("|cff7fff7f" .. iline .. "|r") end
     return true
   end
   local s = wslots[name]
@@ -654,25 +757,7 @@ end
 -- TargetByName/AssistByName/AssistUnit/TargetUnit 需要名称/UnitID 参数，暂不纳入下拉。
 -- 1.29.0 扩展：targetTarget=目标的目标（TargetUnit 带 UnitID 参数，不解析时无动作——比 AssistUnit 安全）；
 -- byName=指定名称（TargetByName 带名称参数，cd.nm 存名字；编辑窗下拉给最近 5 敌名 + 自定义输入弹窗）。
-local TARGET_SEL = {
-  { id = "nearEnemy",    name = "最近敌人",   fn = "TargetNearestEnemy" },
-  { id = "nearFriend",   name = "最近友方",   fn = "TargetNearestFriend" },
-  { id = "nearParty",    name = "最近队友",   fn = "TargetNearestPartyMember" },
-  { id = "nearRaid",     name = "最近团员",   fn = "TargetNearestRaidMember" },
-  { id = "lastEnemy",    name = "上一敌人",   fn = "TargetLastEnemy" },
-  { id = "lastTarget",   name = "上一目标",   fn = "TargetLastTarget" },
-  { id = "targetTarget", name = "目标的目标", fn = "TargetUnit", arg = "targettarget" },
-  { id = "byName",       name = "指定名称",   fn = "TargetByName", needsName = true },
-  { id = "clear",        name = "清除目标",   fn = "ClearTarget" },
-}
-local TARGET_SEL_NAME, TARGET_SEL_ID, TARGET_SEL_FN, TARGET_SEL_ARG = {}, {}, {}, {}
-for _, t in ipairs(TARGET_SEL) do
-  TARGET_SEL_NAME[t.id] = t.name
-  TARGET_SEL_ID[t.name] = t.id
-  TARGET_SEL_ID[t.id] = t.id
-  TARGET_SEL_FN[t.id] = t.fn
-  TARGET_SEL_ARG[t.id] = t.arg
-end
+-- （TARGET_SEL 表 1.32.0 起上移到 wuse 之前，与 PET_CMD 并列——技能级执行需要）
 
 -- 附近敌人名称枚举（1.29.0，编辑窗「指定名称」下拉用）：客户端无附近单位枚举 API，
 -- 用 TargetNearestEnemy 循环选取特性边切边收集，完事恢复原目标（无原目标则清除）。
@@ -819,7 +904,7 @@ function EVAL_RULE_RUN(rules)
   for _, r in ipairs(rules) do
     if r.enabled == false then
       -- 技能配置开关关掉的：静默跳过
-    elseif not wslots[r.skill] and not petCmdOf(r.skill) then
+    elseif not wslots[r.skill] and not petCmdOf(r.skill) and not targetSelOf(r.skill) and not itemOf(r.skill) then
       wlog(r.skill .. "跳过: 不在动作条")
     else
       local ok, why, trace
@@ -896,17 +981,21 @@ function EVAL_PARSE_ONE(token)
   bs = string.match(token, "^有buff[:：](.+)$") or string.match(token, "^hasBuff[:=](.+)$")
   if bs then return { k = "hasBuff", s = condTrim(bs) } end
   -- debuff 层数后缀（1.31.0）：有debuff:破甲>=3（至少3层）/ 无debuff:破甲<3（不足3层）；无后缀=只要有/没有
-  local function auraStack(body)
+  -- want: "min"=有debuff(至少N层，只收 >/>=)；"max"=无debuff(不足N层，只收 </<=)。
+  -- 1.32.0 审计修复：反向 op（如 有debuff:x<3）语义会反转成 cnt>=3 的静默逻辑坑——降级为无层数限制
+  local function auraStack(body, want)
     local nm, op, n = string.match(body, "^(.-)([><]=?=?)(%d+)$")
     if not nm then return condTrim(body), nil end
+    if want == "min" and op ~= ">" and op ~= ">=" then return condTrim(nm), nil end
+    if want == "max" and op ~= "<" and op ~= "<=" then return condTrim(nm), nil end
     n = tonumber(n)
     if op == ">" then n = n + 1 elseif op == "<=" then n = n + 1 end -- >N 即 >=N+1；<=N 即 <N+1
     return condTrim(nm), n
   end
   bs = string.match(token, "^无debuff[:：](.+)$") or string.match(token, "^noDebuff[:=](.+)$")
-  if bs then local nm, n = auraStack(bs) return { k = "noDebuff", s = nm, n = n } end
+  if bs then local nm, n = auraStack(bs, "max") return { k = "noDebuff", s = nm, n = n } end
   bs = string.match(token, "^有debuff[:：](.+)$") or string.match(token, "^hasDebuff[:=](.+)$")
-  if bs then local nm, n = auraStack(bs) return { k = "hasDebuff", s = nm, n = n } end
+  if bs then local nm, n = auraStack(bs, "min") return { k = "hasDebuff", s = nm, n = n } end
   local tc = string.match(token, "^目标职业[:：](.+)$") or string.match(token, "^tClass[:=](.+)$")
   if tc then
     -- 分隔统一成 / 再切：顿号/中文逗号是多字节，直接进字符类会按字节误切汉字（如"猎"含 ，的字节）
@@ -1001,6 +1090,7 @@ end
 -- 方案数据：缺省时从 cfg.war 阈值生成默认方案（1.22.0 起含 姿态/冲锋 开怪规则——原硬编码前置已全部规则化）
 function EVAL_WAR_ENSURE_PROFILES(w)
   if not w then return end
+  if not w.debuffTex then w.debuffTex = {} end -- 1.32.0 审计修复：光环名→纹理学习表从未创建，学习跨会话丢失（1.27.0 遗留）
   if type(w.profiles) ~= "table" or table.getn(w.profiles) == 0 then
     w.profiles = { { name = "默认", skills = {
       { skill = "战斗姿态", enabled = true, why = "非战斗切姿态",
@@ -1145,6 +1235,66 @@ function EVAL_GO_SKILL_CHOICES()
   end
   for _, p in ipairs(PET_CMD) do table.insert(list, "宠物:" .. p.name) end -- 1.30.0 特殊技能段
   return list
+end
+
+-- 技能二级分类（1.32.0）：编辑窗技能名下拉先选类再选项。
+-- 五类：角色行为(攻击) / 角色技能(白名单+动作条扫描) / 宠物行为 / 目标选取 / 物品使用(背包实时扫描+自定义名)
+-- items 为函数：点开时才取数（背包/动作条是动态的）
+function EVAL_GO_SKILL_CATEGORIES()
+  local cats = {}
+  table.insert(cats, { label = "角色行为", items = function() return { "攻击" } end })
+  table.insert(cats, { label = "角色技能", items = function()
+    local list, seen = {}, {}
+    for _, n in ipairs(WAR_SKILLS) do
+      if n ~= "攻击" and not seen[n] then seen[n] = true table.insert(list, n) end
+    end
+    if wscanned and wslots then
+      local extra = {}
+      for n in pairs(wslots) do
+        if not seen[n] and n ~= "攻击" then table.insert(extra, n) end
+      end
+      table.sort(extra)
+      for _, n in ipairs(extra) do table.insert(list, n) end
+    end
+    return list
+  end })
+  table.insert(cats, { label = "宠物行为", items = function()
+    local l = {}
+    for _, p in ipairs(PET_CMD) do table.insert(l, "宠物:" .. p.name) end
+    return l
+  end })
+  table.insert(cats, { label = "目标选取", items = function()
+    local l = {}
+    for _, t in ipairs(TARGET_SEL) do
+      if t.needsName then table.insert(l, "选取目标:指定名称…")
+      else table.insert(l, "选取目标:" .. t.name) end
+    end
+    return l
+  end })
+  table.insert(cats, { label = "物品使用", items = function()
+    local l, seen = {}, {}
+    if type(GetContainerNumSlots) == "function" then
+      for bag = 0, 4 do
+        local okn, slots = pcall(GetContainerNumSlots, bag)
+        if okn and slots and slots > 0 then
+          for slot = 1, slots do
+            local okl, link = pcall(GetContainerItemLink, bag, slot)
+            local nm = okl and link and string.match(link, "%[(.-)%]")
+            if nm and not seen[nm] then
+              seen[nm] = true
+              local oki, tex, cnt = pcall(GetContainerItemInfo, bag, slot)
+              table.insert(l, "物品:" .. nm .. ((oki and cnt and cnt > 1) and ("×" .. cnt) or ""))
+            end
+          end
+        end
+      end
+      table.sort(l)
+      while table.getn(l) > 46 do table.remove(l) end -- DD 行池上限 48（首行留给自定义）
+    end
+    table.insert(l, 1, "✎ 输入物品名…")
+    return l
+  end })
+  return cats
 end
 
 -- 方案直触便捷函数：宏正文 /run EVAL_GO2() 即可把方案2 绑到独立按键
@@ -1613,14 +1763,14 @@ function EVAL_HELP_UI_TICK()
         if t0 then pcall(pc.icon.SetTexture, pc.icon, t0) end
         local enabled = r.enabled ~= false
         local pass = false
-        if enabled and (s or petCmdOf(r.skill)) and r.groups then -- 宠物指令不占动作条也参与亮金（1.30.0）
+        if enabled and (s or petCmdOf(r.skill) or targetSelOf(r.skill) or itemOf(r.skill)) and r.groups then -- 宠物/选取目标/物品不占动作条也参与亮金（1.30.0/1.32.0）
           local okp = groupsOK(r, true) -- dry: 亮金预览不触发选取目标等副作用
           pass = okp and true or false
         end
         if not enabled then
           pcall(pc.icon.SetVertexColor, pc.icon, 0.25, 0.25, 0.25)
           pc.text:SetText("停")
-        elseif not s and not petCmdOf(r.skill) then -- 宠物指令不占动作条不算缺失（1.30.0）
+        elseif not s and not petCmdOf(r.skill) and not targetSelOf(r.skill) and not itemOf(r.skill) then -- 宠物/选取目标/物品不占动作条不算缺失（1.30.0/1.32.0）
           pcall(pc.icon.SetVertexColor, pc.icon, 0.35, 0.35, 0.35)
           pc.text:SetText("?")
         elseif pass then
@@ -2879,7 +3029,7 @@ local SE_TYPES = {
   { id = "ready",      name = "冷却就绪",    kind = "flag" },
   { id = "usable",     name = "技能可用",    kind = "flag" },
   { id = "notQueued",  name = "未排队",      kind = "flag" },
-  { id = "target",     name = "选取目标",    kind = "target", s = "nearEnemy" },
+  { id = "target",     name = "选取目标",    kind = "target", s = "nearEnemy", hidden = true }, -- 1.32.0 提为技能级（技能下拉「目标选取」），新增条件下拉不再提供；存量条件仍渲染/求值
   { id = "tClass",     name = "目标职业",    kind = "class" },
 }
 local SE_BY_K = {}
@@ -3013,7 +3163,7 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
   local dd = ddUI.root
   if not dd then return end
   ddUI.multi = (opts and opts.multi) and true or false
-  ddUI.sel = (ddUI.multi and opts.selected) or nil
+  ddUI.sel = (ddUI.multi and (opts.selected or {})) or nil -- 1.32.0 审计修复：multi 未传 selected 时索引 nil 隐患
   local n = table.getn(items)
   local cols = math.ceil(n / DD_COLS)
   for i, row in ipairs(ddUI.rows) do
@@ -3208,10 +3358,32 @@ local function SE_BUILD()
   -- 注意：seBtn 返回包裹表 { btn, bg, text }，不是按钮本体——锚点/加文字一律用 .btn（1.21.4 修复）
   local skW = seBtn(root, 72, -24, 124, 16, "", function()
     if not seUI.ed then return end
-    local items = EVAL_GO_SKILL_CHOICES() -- 白名单 + 动作条扫描技能（1.24.0）
-    EVAL_DD_OPEN(seUI.skillBtn, items, function(pi)
-      seUI.ed.skill = items[pi]
-      EVAL_HELP_SE_REFRESH()
+    -- 1.32.0 二级下拉：第一级选分类，第二级选具体项（物品/指定名称支持自定义输入）
+    local cats = EVAL_GO_SKILL_CATEGORIES()
+    local labels = {}
+    for _, c in ipairs(cats) do table.insert(labels, c.label) end
+    EVAL_DD_OPEN(seUI.skillBtn, labels, function(ci)
+      local cat = cats[ci]
+      if not cat then return end
+      local items = cat.items()
+      EVAL_DD_OPEN(seUI.skillBtn, items, function(pi)
+        local v = items[pi]
+        if v == "✎ 输入物品名…" then
+          EVAL_TN_OPEN("输入物品名称（背包内精确名）", "", function(nm)
+            if nm and nm ~= "" then seUI.ed.skill = "物品:" .. nm EVAL_HELP_SE_REFRESH() end
+          end)
+          return
+        end
+        if v == "选取目标:指定名称…" then
+          EVAL_TN_OPEN("输入目标名称（精确匹配）", "", function(nm)
+            if nm and nm ~= "" then seUI.ed.skill = "选取目标:指定名称:" .. nm EVAL_HELP_SE_REFRESH() end
+          end)
+          return
+        end
+        v = string.match(v, "^(物品[:：].-)×%d+$") or v -- 物品项去掉 ×数量 展示后缀
+        seUI.ed.skill = v
+        EVAL_HELP_SE_REFRESH()
+      end)
     end)
   end)
   local skBtn = skW.btn
@@ -3270,9 +3442,13 @@ local function SE_BUILD()
       local ed = seUI.ed
       local it = ed and ed.conds[i]
       if not it then return end
-      local items = {}
-      for _, td in ipairs(SE_TYPES) do table.insert(items, td.name) end
-      EVAL_DD_OPEN(row.typeBtn.btn, items, function(ti)
+      local items, idxMap = {}, {} -- 1.32.0 hidden 类型（选取目标）不进新增下拉，idxMap 保持 SE_TYPES 索引
+      for ti2, td in ipairs(SE_TYPES) do
+        if not td.hidden then table.insert(items, td.name) table.insert(idxMap, ti2) end
+      end
+      EVAL_DD_OPEN(row.typeBtn.btn, items, function(ti0)
+        local ti = idxMap[ti0]
+        if not ti then return end
         local old, new = it.cd, seDefaultCond(ti)
         if old.op and new.op then new.op, new.n = old.op, old.n end -- 同族参数保留
         local oldTd = SE_TYPES[SE_BY_K[old.k] or 1]

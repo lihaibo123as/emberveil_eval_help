@@ -91,3 +91,10 @@ TargetNearestRaidMember = function() TEST.targetSel = "nearRaid" end
 TargetLastEnemy = function() TEST.targetSel = "lastEnemy" end
 TargetLastTarget = function() TEST.targetSel = "lastTarget" end
 ClearTarget = function() TEST.targetSel = "clear" end
+-- 物品使用桩（1.32.0）：TEST.bags = { [bag*100+slot] = { name=, tex=, count=, cd= } }
+GetContainerNumSlots = function(bag) return (bag >= 0 and bag <= 4) and 2 or 0 end
+GetContainerItemLink = function(bag, slot) local it = TEST.bags and TEST.bags[bag * 100 + slot] return it and ("|Hitem:1|h[" .. it.name .. "]|h") or nil end
+GetContainerItemInfo = function(bag, slot) local it = TEST.bags and TEST.bags[bag * 100 + slot] if not it then return nil end return it.tex, it.count or 1, false, 1, false end
+GetContainerItemCooldown = function(bag, slot) local it = TEST.bags and TEST.bags[bag * 100 + slot] if it and it.cd then return 900, 60, 1 end return 0, 0, 1 end
+UseContainerItem = function(bag, slot) TEST.usedItem = bag * 100 + slot end
+GetItemInfo = function() return nil end

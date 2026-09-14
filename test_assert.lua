@@ -153,4 +153,61 @@ TEST.debuffs = { { name = "破甲攻击", tex = "texSA", apps = 0 } } EVAL_HELP_
 eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = gs3 } }), false, "non-stack apps=0 normalizes to 1, misses >=3")
 TEST.debuffs = {} EVAL_HELP_UPDATE_STATE()
 
+-- 11) 选取目标技能级（1.32.0）：rule.skill="选取目标:xxx" 不占动作条直接切目标
+TEST.targetSel = nil TEST.used = {}
+eq(EVAL_RULE_RUN({ { skill = "选取目标:最近敌人", why = "x", groups = EVAL_PARSE_CONDS("可攻击") } }), true, "target-sel skill fires")
+eq(TEST.targetSel, "nearEnemy", "target-sel skill calls TargetNearestEnemy")
+eq(table.getn(TEST.used), 0, "target-sel skill does not UseAction")
+TEST.targetSel = nil
+eq(EVAL_RULE_RUN({ { skill = "选取目标:指定名称:嗜血者", why = "x", groups = EVAL_PARSE_CONDS("可攻击") } }), true, "byName skill fires")
+eq(TEST.byNameArg, "嗜血者", "byName skill passes name arg")
+TEST.targetSel = nil TEST.inCombat = false EVAL_HELP_UPDATE_STATE()
+eq(EVAL_RULE_RUN({ { skill = "选取目标:清除目标", why = "x", groups = EVAL_PARSE_CONDS("非战斗") } }), true, "clear skill fires")
+eq(TEST.targetSel, "clear", "clear skill calls ClearTarget")
+TEST.inCombat = true EVAL_HELP_UPDATE_STATE()
+eq(EVAL_RULE_RUN({ { skill = "选取目标:清除目标", why = "x", groups = EVAL_PARSE_CONDS("非战斗") } }), false, "target-sel skill respects conditions")
+
+-- 12) 物品使用技能级（1.32.0）：rule.skill="物品:名称" 背包扫描 + UseContainerItem
+TEST.bags = { [1] = { name = "超效治疗药水", tex = "texPotion", count = 3 }, [2] = { name = "夜幕", tex = "texSword", count = 1 } }
+TEST.usedItem = nil TEST.used = {}
+eq(EVAL_RULE_RUN({ { skill = "物品:超效治疗药水", why = "x", groups = EVAL_PARSE_CONDS("可攻击") } }), true, "item skill fires")
+eq(TEST.usedItem, 1, "item skill uses bag0 slot1")
+eq(table.getn(TEST.used), 0, "item skill does not UseAction")
+TEST.usedItem = nil
+eq(EVAL_RULE_RUN({ { skill = "物品:不存在的物品", why = "x", groups = EVAL_PARSE_CONDS("可攻击") } }), false, "missing item skipped")
+eq(TEST.usedItem, nil, "missing item not used")
+-- 装备类物品也走同一接口（UseContainerItem 对装备=自动穿上）
+eq(EVAL_RULE_RUN({ { skill = "物品:夜幕", why = "x", groups = EVAL_PARSE_CONDS("可攻击") } }), true, "equip item fires")
+eq(TEST.usedItem, 2, "equip item uses its bag slot")
+-- 就绪条件走背包冷却
+TEST.bags[1].cd = true
+eq(EVAL_RULE_RUN({ { skill = "物品:超效治疗药水", why = "x", groups = EVAL_PARSE_CONDS("可攻击 & 就绪") } }), false, "item on cooldown blocked by ready")
+TEST.bags[1].cd = nil
+eq(EVAL_RULE_RUN({ { skill = "物品:超效治疗药水", why = "x", groups = EVAL_PARSE_CONDS("可攻击 & 就绪") } }), true, "item off cooldown passes ready")
+
+-- 13) 技能二级分类（1.32.0）
+local cats = EVAL_GO_SKILL_CATEGORIES()
+eq(cats[1].label, "角色行为", "cat1 label")
+eq(cats[1].items()[1], "攻击", "cat1 has attack")
+eq(cats[3].label, "宠物行为", "cat3 label")
+local foundPetCmd = false
+for _, n in ipairs(cats[3].items()) do if n == "宠物:攻击" then foundPetCmd = true end end
+eq(foundPetCmd, true, "cat3 has pet cmds")
+eq(cats[4].label, "目标选取", "cat4 label")
+local foundTsel = false
+for _, n in ipairs(cats[4].items()) do if n == "选取目标:最近敌人" then foundTsel = true end end
+eq(foundTsel, true, "cat4 has target-sel skills")
+eq(cats[5].label, "物品使用", "cat5 label")
+local foundItem = false
+for _, n in ipairs(cats[5].items()) do if string.find(n, "超效治疗药水") then foundItem = true end end
+eq(foundItem, true, "cat5 lists bag items")
+
+-- 14) 1.32.0 审计修复：debuff 层数反向 op 降级（有debuff:x<3 不再语义反转）
+local gRev = EVAL_PARSE_CONDS("有debuff:破甲攻击<3")
+eq(gRev[1][1].n, nil, "reversed op downgraded to plain hasDebuff")
+eq(gRev[1][1].s, "破甲攻击", "reversed op keeps aura name")
+TEST.debuffs = { { name = "破甲攻击", tex = "texSA", apps = 3 } } EVAL_HELP_UPDATE_STATE()
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = gRev } }), true, "reversed op behaves as plain hasDebuff")
+TEST.debuffs = {} EVAL_HELP_UPDATE_STATE()
+
 print("ALL TESTS PASS")
