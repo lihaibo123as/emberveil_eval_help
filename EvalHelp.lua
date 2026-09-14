@@ -1,4 +1,4 @@
--- EvalHelp 1.32.9 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.32.10 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.32.9"
+local VERSION = "1.32.10"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ============ 输出：聊天 + 日志文件 ============
@@ -243,6 +243,15 @@ function EVAL_HELP_UPDATE_STATE()
       if not okb or type(bi) ~= "number" or bi < 0 then break end
       local okt, tex = pcall(GetPlayerBuffTexture, bi)
       if okt and tex then st.playerBuffs[tex] = true end
+    end
+  end
+  -- 1.32.10 兜底：UnitBuff("player",i) 1 基索引枚举（与目标 debuff 的 UnitDebuff 同族，已验证可用）——
+  -- 药品/食物类 buff 若被 GetPlayerBuff 过滤列表漏掉，这里补进纹理集合（条件匹配才找得到）
+  if type(UnitBuff) == "function" then
+    for i = 1, 32 do
+      local oku, tex = pcall(UnitBuff, "player", i)
+      if not oku or not tex then break end
+      st.playerBuffs[tex] = true
     end
   end
   st.targetDebuffs = {} -- 1.31.0 起存层数（数字）：UnitDebuff 第二返回值；非堆叠 debuff 返回 0 → 归一化为 1
@@ -602,26 +611,46 @@ end
 -- 当前自身 buff 实时清单（GetPlayerBuff 0 起始索引 + SetPlayerBuff 读名）
 function EVAL_PLAYER_BUFF_LIST()
   local list = {}
-  if type(GetPlayerBuff) ~= "function" then return list end
-  if not (WTT and WTT.SetPlayerBuff) then return list end
-  pcall(function() WTT:SetOwner(UIParent, "ANCHOR_NONE") end)
-  for i = 0, 31 do
-    local okb, bi = pcall(GetPlayerBuff, i, "HELPFUL")
-    if not okb or type(bi) ~= "number" or bi < 0 then break end
-    local okt, tex = pcall(GetPlayerBuffTexture, bi)
-    local name
-    pcall(function() WTT:ClearLines() end)
-    local oks, built = pcall(WTT.SetPlayerBuff, WTT, bi)
-    if oks and built then
-      local fs = getglobal("GameTooltipTextLeft1")
-      if fs and fs.GetText then name = fs:GetText() end
-    end
-    if name and name ~= "" and okt and tex then
-      table.insert(list, { name = name, tex = tex })
-      learnAuraTex(name, tex)
-    end
+  local function tooltipName() -- 读 tooltip 第一行（WTT=GameTooltip）
+    local fs = getglobal("GameTooltipTextLeft1")
+    if fs and fs.GetText then return fs:GetText() end
+    return nil
   end
-  pcall(function() WTT:Hide() end)
+  if type(GetPlayerBuff) == "function" and WTT and WTT.SetPlayerBuff then
+    pcall(function() WTT:SetOwner(UIParent, "ANCHOR_NONE") end)
+    for i = 0, 31 do
+      local okb, bi = pcall(GetPlayerBuff, i, "HELPFUL")
+      if not okb or type(bi) ~= "number" or bi < 0 then break end
+      local okt, tex = pcall(GetPlayerBuffTexture, bi)
+      local name
+      pcall(function() WTT:ClearLines() end)
+      local oks, built = pcall(WTT.SetPlayerBuff, WTT, bi)
+      if oks and built then name = tooltipName() end
+      if name and name ~= "" and okt and tex then
+        table.insert(list, { name = name, tex = tex })
+        learnAuraTex(name, tex)
+      end
+    end
+    pcall(function() WTT:Hide() end)
+  end
+  -- 1.32.10 兜底：一个名字都没读到时换 UnitBuff+SetUnitBuff 路径（本客户端 SetPlayerBuff
+  -- 读名可能失败——药品类 buff 不进下拉的病根；SetUnitBuff 与已验证的 SetUnitDebuff 同族）
+  if table.getn(list) == 0 and type(UnitBuff) == "function" and WTT and WTT.SetUnitBuff then
+    pcall(function() WTT:SetOwner(UIParent, "ANCHOR_NONE") end)
+    for i = 1, 32 do
+      local oku, tex = pcall(UnitBuff, "player", i)
+      if not oku or not tex then break end
+      local name
+      pcall(function() WTT:ClearLines() end)
+      local oks, built = pcall(WTT.SetUnitBuff, WTT, "player", i)
+      if oks and built then name = tooltipName() end
+      if name and name ~= "" then
+        table.insert(list, { name = name, tex = tex })
+        learnAuraTex(name, tex)
+      end
+    end
+    pcall(function() WTT:Hide() end)
+  end
   return list
 end
 

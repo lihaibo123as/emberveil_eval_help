@@ -229,4 +229,10 @@ eq(pn, "PET_ACTION_ATTACK", "pet action token")
 eq(ptex, "texPetAttack", "pet action icon tex")
 TEST.hasPet = nil
 
+-- 17) UnitBuff 兜底枚举并入 playerBuffs（1.32.10：药品类 buff 被 GetPlayerBuff 漏掉也能匹配）
+TEST.unitBuffs = { { tex = "texRegen" } } -- 再生（药品 buff）
+EVAL_HELP_UPDATE_STATE()
+eq(EVAL_HELP_STATE.playerBuffs["texRegen"], true, "UnitBuff texture merged into playerBuffs")
+TEST.unitBuffs = nil EVAL_HELP_UPDATE_STATE()
+
 print("ALL TESTS PASS")
