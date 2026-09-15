@@ -678,6 +678,16 @@ local function condOne(cd, skill, dry)
   elseif k == "shift" then return (st.shift == cd.v), "Shift"
   elseif k == "ctrl" then return (st.ctrl == cd.v), "Ctrl"
   elseif k == "autoAttack" then return ((st.autoAttack and true or false) == cd.v), "普攻"
+  -- 1.51.0 自动射击/魔杖射击 激活状态（直查 IsCurrentAction，同 usable 惯例；未上条=未激活）
+  elseif k == "autoShot" or k == "wandShoot" then
+    local sn = (k == "autoShot") and "自动射击" or "射击"
+    local s = wslots[sn]
+    local cur = false
+    if s and type(IsCurrentAction) == "function" then
+      local okc, c2 = pcall(IsCurrentAction, s.slot)
+      cur = okc and c2 and true or false
+    end
+    return (cur == (cd.v ~= false)), sn
   elseif k == "hasBuff" then return (st.playerBuffs[texOf(cd.s) or ""] and true or false), "缺buff:" .. tostring(cd.s)
   elseif k == "noBuff" then return (not st.playerBuffs[texOf(cd.s) or ""]), "已有buff:" .. tostring(cd.s)
   elseif k == "hasDebuff" then
@@ -906,6 +916,11 @@ local COND_BOOL = {
   ["Shift"] = { "shift", true }, ["shift"] = { "shift", true },
   ["Ctrl"] = { "ctrl", true }, ["ctrl"] = { "ctrl", true },
   ["普攻"] = { "autoAttack", true }, ["autoAttack"] = { "autoAttack", true },
+  ["自动射击"] = { "autoShot", true }, ["autoShot"] = { "autoShot", true }, -- 1.51.0（取反写 !自动射击 或 未自动射击）
+  ["未自动射击"] = { "autoShot", false },
+  ["魔杖射击"] = { "wandShoot", true }, ["wandShoot"] = { "wandShoot", true },
+  ["未魔杖射击"] = { "wandShoot", false },
+  ["未普攻"] = { "autoAttack", false }, -- 1.51.0 补旧缺口：显示层早有 未普攻，解析层一直不会
 }
 local COND_FLAG = {
   ["就绪"] = "ready", ["ready"] = "ready",
@@ -987,7 +1002,8 @@ function EVAL_PARSE_ONE(token)
     return nil
   end
   local b = COND_BOOL[token]
-  if b then return { k = b[1], v = neg and (not b[2]) or b[2] } end
+  -- 1.51.0 修复取反优先级：旧式 neg and (not b[2]) or b[2] 在 b[2]=true（全部条目）时 ! 恒失效
+  if b then local vv = b[2] if neg then vv = not vv end return { k = b[1], v = vv } end
   local fl = COND_FLAG[token]
   if fl then return { k = fl, inv = neg } end
   return nil
@@ -1029,6 +1045,8 @@ function EVAL_COND_STR(cd)
   if k == "shift" then return (cd.v and "" or "!") .. "Shift" end
   if k == "ctrl" then return (cd.v and "" or "!") .. "Ctrl" end
   if k == "autoAttack" then return cd.v and "普攻" or "未普攻" end
+  if k == "autoShot" then return cd.v and "自动射击" or "未自动射击" end -- 1.51.0
+  if k == "wandShoot" then return cd.v and "魔杖射击" or "未魔杖射击" end
   if k == "hasBuff" then return "有buff:" .. tostring(cd.s) end
   if k == "noBuff" then return "无buff:" .. tostring(cd.s) end
   if k == "hasDebuff" then return "有debuff:" .. tostring(cd.s) .. ((type(cd.n) == "number" and cd.n > 1) and (">=" .. cd.n) or "") end

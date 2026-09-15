@@ -77,7 +77,7 @@ EVAL_LOCALES["zhCN"] = {
   CT_COMBATTIME = "进战秒数", CT_COMBO = "连击点数", CT_COMBAT = "战斗状态", CT_HASTARGET = "目标存在",
   CT_CANATTACK = "目标可攻击", CT_CANBLEED = "目标可流血", CT_TFRIENDLY = "目标友善", CT_THOSTILE = "目标敌对",
   CT_TNEUTRAL = "目标中立", CT_ISELITE = "目标精英", CT_ISBOSS = "目标Boss", CT_TINCOMBAT = "目标战斗中",
-  CT_AUTOATTACK = "普攻已开", CT_ALT = "Alt按住", CT_SHIFT = "Shift按住", CT_CTRL = "Ctrl按住",
+  CT_AUTOATTACK = "普攻已开", CT_AUTOSHOT = "自动射击已开", CT_WANDSHOOT = "魔杖射击已开", CT_ALT = "Alt按住", CT_SHIFT = "Shift按住", CT_CTRL = "Ctrl按住",
   CT_FORM = "当前姿态", CT_HASBUFF = "自身有buff", CT_NOBUFF = "自身无buff", CT_HASDEBUFF = "目标有debuff",
   CT_NODEBUFF = "目标无debuff", CT_READY = "冷却就绪", CT_USABLE = "技能可用", CT_NOTQUEUED = "未排队",
   CT_TARGET = "选取目标", CT_TCLASS = "目标职业",
