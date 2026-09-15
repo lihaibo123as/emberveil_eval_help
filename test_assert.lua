@@ -485,4 +485,23 @@ eq(TEST.attackTried, nil, "no melee fallback when autoshot in range")
 GetTime = oldGetTime32
 TEST.inRange = nil TEST.used = {} EVAL_HELP_CONFIG.war.attack = nil TEST.slotNames[1] = nil TEST.slotNames[2] = nil EVAL_GO_RESCAN(true)
 
+-- 33) 选取目标不消耗按键（1.52.1）：切换成功后继续评估后续规则
+TEST.slotNames[1] = "致死打击" EVAL_GO_RESCAN(true)
+TEST.targetSel = nil TEST.used = {}
+eq(EVAL_RULE_RUN({
+  { skill = "选取目标:最近敌人", why = "x", groups = EVAL_PARSE_CONDS("非战斗") },
+  { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("非战斗") },
+}), true, "target-sel then cast both fire")
+eq(TEST.targetSel, "nearEnemy", "target switched")
+eq(table.getn(TEST.used), 1, "follow-up skill cast after target switch")
+-- 单发选取目标（最后一条）也计为已动作
+TEST.targetSel = nil
+eq(EVAL_RULE_RUN({ { skill = "选取目标:最近敌人", why = "x", groups = EVAL_PARSE_CONDS("非战斗") } }), true, "lone target-sel still counts as action")
+-- 条件不满足时照旧不动作
+eq(EVAL_RULE_RUN({
+  { skill = "选取目标:最近敌人", why = "x", groups = EVAL_PARSE_CONDS("战斗中") },
+  { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("战斗中") },
+}), false, "conditions still gate both")
+TEST.slotNames[1] = nil EVAL_GO_RESCAN(true)
+
 print("ALL TESTS PASS")

@@ -856,6 +856,7 @@ function EVAL_TCAST_EVENT(msg)
 end
 
 function EVAL_RULE_RUN(rules)
+  local acted = false -- 1.52.1：选取目标出手也算本次按键有动作（但继续评估后续规则）
   for _, r in ipairs(rules) do
     if r.enabled == false then
       -- 技能配置开关关掉的：静默跳过
@@ -879,14 +880,21 @@ function EVAL_RULE_RUN(rules)
           })
           while table.getn(st.castLog) > 5 do table.remove(st.castLog) end
           if trace then wlog(r.skill .. "触发: " .. trace) end
-          return true
+          -- 1.52.1 选取目标不消耗按键：切目标是瞬发无 GCD 动作——切换成功→刷新状态→继续评估后续规则。
+          -- 旧行为：「选取目标:最近友方 | 目标非战斗」这类恒过规则把按键用完，后面的 buff/治疗技能永远轮不到
+          if targetSelOf(r.skill) then
+            acted = true
+            EVAL_HELP_UPDATE_STATE() -- 目标已变，后续条件（可攻击/目标职业/debuff 等）按新目标判定
+          else
+            return true
+          end
         end
       else
         wlog(r.skill .. "跳过: " .. tostring(why))
       end
     end
   end
-  return false
+  return acted
 end
 
 -- ===== 条件串解析（UI 输入框 / /eh war add 用）："怒气>30 & 战斗中 | 非战斗" =====
