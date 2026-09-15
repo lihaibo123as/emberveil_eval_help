@@ -1125,16 +1125,10 @@ function EVAL_GO(profSel)
   local inCombat = st.inCombat
   local battle   = (st.formIndex == 1) -- 战斗姿态
 
-  -- 1) 目标检查：无目标/死亡/不可攻击 → 选最近敌人（st.canAttack）
-  -- 1.21.7：选不到敌人【不再硬返回】——自身 buff 类技能（战斗怒吼/血性狂暴等）不需要目标，
-  -- 是否该放由方案规则的条件自行判定（攻击类技能用「可攻击/可用」条件兜底）。
-  local hostile = st.canAttack
-  if not hostile then
-    TargetNearestEnemy()
-    EVAL_HELP_UPDATE_STATE() -- 换目标后重刷
-    hostile = st.canAttack
-    wlog("无有效目标 → TargetNearestEnemy；结果=" .. tostring(hostile))
-  end
+  -- 1)（1.49.0 移除硬编码「无有效目标 → TargetNearestEnemy」前置：它在规则评估之前抢跑选敌，
+  --    与「选取目标:最近友方」类规则方向相反、互相抢目标（用户实测日志先选敌再选友）。
+  --    选目标行为全部交给规则：需要自动选敌写规则 选取目标:最近敌人 | 无目标（或非战斗 & 无目标 等组合）。
+  --    1.21.7 起本函数已不再因无目标硬返回——攻击类技能用「可攻击/可用」条件兜底。）
 
   local thscale  = st.tHpPct / 100
   local ttype    = st.tCreatureType
