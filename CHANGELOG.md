@@ -2,6 +2,7 @@
 
 | 版本 | 主题 | 一句话亮点 |
 | :-- | :-- | :-- |
+| **1.64.1** | 🩹 难度色垫片 | FrameXML/TargetFrame 调用 GetDifficultyColor 但客户端缺失→全局垫片（vanilla 五档难度色），目标框报错消除 |
 | **1.64.0** | 🐛 多返回截断根治 | ★s and pcall 只取第一返回——可用性恒 false 的真凶（1.62.0 结论修正）；可用性只信 noMana 资源信号 |
 | **1.63.0** | 🩸 可流血免疫驱动 | 可流血默认 true；免疫体系命中流血技能（撕裂/割裂/绞袭/斜掠/撕扯）→ false；生物类型硬排除删除 |
 | **1.62.0** | 🎯 冲锋疑案真凶 | 接管动作后移到规则评估之后——AttackTarget 先开弓进战，冲锋类脱战限定技能可用性瞬间翻 false |
@@ -29,6 +30,12 @@
 | **1.52.0** | 📏 自动攻击距离检测 | 自动射击/魔杖超程（IsActionInRange=0）自动降档近战普攻，贴脸猎人不再空挥弓 |
 
 ---
+
+## 🩹 v1.64.1 — GetDifficultyColor 兼容垫片
+
+- 用户报红框：`FrameXML/TargetFrame.lua:130: attempt to call global 'GetDifficultyColor' (a nil value)`——客户端 FrameXML 引用该全局函数但未提供（UnrealQuest ClientAPI 注释确认 absent）
+- TargetFrame 在本客户端懒加载（首次选目标才加载，晚于插件）→ **插件全局垫片可到达**：按 vanilla 语义返回 {r,g,b,font} 难度色表（红/橙/黄/绿/灰五档，绿区取 GetQuestGreenRange 兜底 10），已有真函数则不覆盖
+- 顺带说明自动攻击接管时序（用户排查）：接管动作 1.62.0 起在【规则都没出手】时才补——法师方案火球/寒冰箭恒就绪恒出手，魔杖自然只在空闲按键上启动，「有时触发有时不触发」是设计行为
 
 ## 🐛 v1.64.0 — 可用性真凶根治：Lua 多返回截断
 

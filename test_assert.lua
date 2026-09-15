@@ -666,5 +666,9 @@ eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_COND
 TEST.usableRet = { u = false, noMana = false }
 eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("可用") } }), true, "cached false without noMana passes")
 TEST.usableRet = nil TEST.slotNames[1] = nil EVAL_GO_RESCAN(true)
+-- GetDifficultyColor 兼容垫片（1.64.1）：全局函数存在且返回 {r,g,b} 色表
+eq(type(GetDifficultyColor), "function", "difficulty color shim exists")
+local dc = GetDifficultyColor(6)
+eq(type(dc) == "table" and type(dc.r) == "number" and type(dc.g) == "number" and type(dc.b) == "number", true, "shim returns color table")
 
 print("ALL TESTS PASS")

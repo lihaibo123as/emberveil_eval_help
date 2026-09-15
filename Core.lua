@@ -262,6 +262,29 @@ local st = EVAL_HELP_STATE
 -- 可流血名单（Cat 的 MPmonsterList / 白名单机制）：
 --   /run EVAL_BLEED_BLACKLIST["怪名"]=true  → 该怪强制不可流血
 --   /run EVAL_BLEED_WHITELIST["怪名"]=true  → 元素/机械里的例外，强制可流血
+-- 1.64.1 兼容垫片：本客户端 FrameXML/TargetFrame.lua 引用全局 GetDifficultyColor 但客户端未提供
+-- （UnrealQuest ClientAPI 已确认 absent；TargetFrame 懒加载晚于插件 → 全局垫片可到达）。
+-- 按 vanilla 语义返回 {r,g,b,font} 难度色表：等级差分档，绿区取 GetQuestGreenRange（兜底 10）。
+if type(GetDifficultyColor) ~= "function" then
+  function GetDifficultyColor(level)
+    local lv = (type(UnitLevel) == "function" and UnitLevel("player")) or 1
+    local diff = (tonumber(level) or lv) - lv
+    local green = 10
+    if type(GetQuestGreenRange) == "function" then
+      local okq, g = pcall(GetQuestGreenRange)
+      if okq and type(g) == "number" and g > 0 then green = g end
+    end
+    local c
+    if diff >= 5 then c = { r = 1.00, g = 0.10, b = 0.10 }         -- 红（远高于你）
+    elseif diff >= 3 then c = { r = 1.00, g = 0.50, b = 0.25 }     -- 橙
+    elseif diff >= -2 then c = { r = 1.00, g = 1.00, b = 0.00 }    -- 黄
+    elseif -diff <= green then c = { r = 0.25, g = 0.75, b = 0.25 } -- 绿
+    else c = { r = 0.50, g = 0.50, b = 0.50 } end                   -- 灰（无经验）
+    c.font = "QuestDifficulty_Standard"
+    return c
+  end
+end
+
 EVAL_BLEED_BLACKLIST = EVAL_BLEED_BLACKLIST or {}
 EVAL_BLEED_WHITELIST = EVAL_BLEED_WHITELIST or {}
 -- 流血技能清单（1.63.0 免疫体系驱动可流血）：战士撕裂 / 贼割裂·绞袭 / 德斜掠·撕扯（含英文兜底）
