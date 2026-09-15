@@ -56,7 +56,10 @@ PetDefensiveMode = function() TEST.petCmd = "PetDefensiveMode" end
 PetAggressiveMode = function() TEST.petCmd = "PetAggressiveMode" end
 PetDismiss = function() TEST.petCmd = "PetDismiss" end
 UnitAffectingCombat = function() return TEST.inCombat or false end
-GetShapeshiftFormInfo = function() return nil end
+GetNumShapeshiftForms = function() return TEST.stances and table.getn(TEST.stances) or 0 end
+GetShapeshiftFormInfo = function(i) local f = TEST.stances and TEST.stances[i] if not f then return nil end return f.icon, f.name, f.active, f.castable end
+GetShapeshiftFormCooldown = function() return 0, 0, 1 end
+CastShapeshiftForm = function(i) TEST.stanceCast = i local f = TEST.stances and TEST.stances[i] if f then f.active = 1 end end
 GetPlayerBuff = function(i) return TEST.buffs[i + 1] and i or -1 end
 GetPlayerBuffTexture = function(bi) return TEST.buffs[bi + 1] and TEST.buffs[bi + 1].tex or nil end
 UnitDebuff = function(_, i) local d = TEST.debuffs[i] if not d then return nil end return d.tex, d.apps or 0 end

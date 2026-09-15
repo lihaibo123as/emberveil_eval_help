@@ -233,6 +233,23 @@ local function wFindBagItem(name)
   return nil
 end
 
+-- 姿态切换（1.43.0）：rule.skill="姿态:战斗姿态"——走姿态栏 CastShapeshiftForm（官方文档明确 Not protected，插件可直调），
+-- 不占动作条。战士姿态不可取消（重复按 no-op）；德鲁伊等可切换形态重复按会取消 aura → 执行前 active 守门。
+local function stanceOf(skill)
+  return string.match(skill or "", "^姿态[:：](.+)$")
+end
+-- 姿态名 → 姿态栏 1 基索引, 图标, 当前激活(1/nil), 可用(1/nil)；未找到/无姿态栏返回 nil
+local function wFindStance(name)
+  if type(GetNumShapeshiftForms) ~= "function" then return nil end
+  local okn, n = pcall(GetNumShapeshiftForms)
+  if not (okn and n and n > 0) then return nil end
+  for i = 1, n do
+    local oki, icon, nm, active, castable = pcall(GetShapeshiftFormInfo, i)
+    if oki and nm and nm == name then return i, icon, active, castable end
+  end
+  return nil
+end
+
 -- 技能图标统一入口（1.30.0）：动作条纹理 → 宠物指令回退（宠物头像/问号）
 local function wicon(name)
   local s = wslots[name]
@@ -240,6 +257,12 @@ local function wicon(name)
   local pc2 = petCmdOf(name)
   if pc2 then return petIconOf(pc2) end -- 1.32.6 宠物指令专属图标（动作条学习）
   if targetSelOf(name) then return "Interface\\Icons\\INV_Misc_QuestionMark" end -- 1.32.0 选取目标无专属图标
+  local stname = stanceOf(name) -- 1.43.0 姿态：GetShapeshiftFormInfo 图标（激活态自动亮纹）
+  if stname then
+    local _si, stex = wFindStance(stname)
+    if stex then return stex end
+    return "Interface\\Icons\\INV_Misc_QuestionMark"
+  end
   local iname = itemOf(name) -- 1.32.0 物品：背包图标 → GetItemInfo 缓存 → 问号
   if iname then
     local _, _, tex = wFindBagItem(iname)
@@ -382,6 +405,21 @@ local function wready(name)
     local left = (start or 0) + (dur or 0) - GetTime()
     return false, string.format("冷却剩 %.1fs", left > 0 and left or 0)
   end
+  local stname2 = stanceOf(name) -- 1.43.0 姿态冷却走姿态栏 API；已在该姿态=不就绪（防止德鲁伊形态被再按取消）
+  if stname2 then
+    local si, _t, active, castable = wFindStance(stname2)
+    if not si then return false, "无该姿态栏位" end
+    if active then return false, "已在该姿态" end
+    if not castable then return false, "不可用" end
+    if type(GetShapeshiftFormCooldown) == "function" then
+      local okc, start, dur = pcall(GetShapeshiftFormCooldown, si)
+      if okc and (start or 0) > 0 and (dur or 0) > 0 then
+        local left = start + dur - GetTime()
+        if left > 0 then return false, string.format("冷却剩 %.1fs", left) end
+      end
+    end
+    return true
+  end
   local s = wslots[name]
   if not s then return false, "不在动作条" end
   local ok, start, dur = pcall(GetActionCooldown, s.slot)
@@ -430,6 +468,19 @@ local function wuse(name, reason)
     local iline = string.format("→ %s (%s)", name, reason)
     EVAL_LOGLINE(iline)
     if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cff7fff7f" .. iline .. "|r") end
+    return true
+  end
+  local stname3 = stanceOf(name)
+  if stname3 then
+    -- 姿态切换（1.43.0）：CastShapeshiftForm 不受保护；已在该姿态时跳过（战士姿态 no-op，德鲁伊形态会被取消——必须守门）
+    local si, _t, active = wFindStance(stname3)
+    if not si then wlog(name .. "跳过: 无该姿态栏位") return false end
+    if active then wlog(name .. "跳过: 已在该姿态") return false end
+    if type(CastShapeshiftForm) ~= "function" then wlog(name .. ": 无姿态切换函数") return false end
+    pcall(CastShapeshiftForm, si)
+    local sline = string.format("→ %s (%s)", name, reason)
+    EVAL_LOGLINE(sline)
+    if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cff7fff7f" .. sline .. "|r") end
     return true
   end
   local s = wslots[name]
@@ -767,7 +818,7 @@ function EVAL_RULE_RUN(rules)
   for _, r in ipairs(rules) do
     if r.enabled == false then
       -- 技能配置开关关掉的：静默跳过
-    elseif not wslots[r.skill] and not petCmdOf(r.skill) and not targetSelOf(r.skill) and not itemOf(r.skill) then
+    elseif not wslots[r.skill] and not petCmdOf(r.skill) and not targetSelOf(r.skill) and not itemOf(r.skill) and not stanceOf(r.skill) then
       wlog(r.skill .. "跳过: 不在动作条")
     elseif wImmuneTo(r.skill) then
       wlog(r.skill .. "跳过: 目标已免疫（学习记录 " .. tostring(st.targetName) .. "）")
@@ -1135,7 +1186,19 @@ end
 -- items 为函数：点开时才取数（背包/动作条是动态的）
 function EVAL_GO_SKILL_CATEGORIES()
   local cats = {}
-  table.insert(cats, { label = L("SK_CAT_1"), items = function() return { "攻击" } end })
+  table.insert(cats, { label = L("SK_CAT_1"), items = function() -- 1.43.0 追加姿态切换（姿态栏实时枚举，不占动作条）
+    local l = { "攻击" }
+    if type(GetNumShapeshiftForms) == "function" then
+      local okn, n = pcall(GetNumShapeshiftForms)
+      if okn and n and n > 0 then
+        for i = 1, n do
+          local oki, _ic, nm = pcall(GetShapeshiftFormInfo, i)
+          if oki and nm then table.insert(l, "姿态:" .. nm) end
+        end
+      end
+    end
+    return l
+  end })
   table.insert(cats, { label = L("SK_CAT_2"), items = function()
     local list, seen = {}, {}
     for _, n in ipairs(WAR_SKILLS) do
@@ -1222,6 +1285,7 @@ EVAL_AURA_TEX = auraTexOf
 EVAL_PET_OF = petCmdOf
 EVAL_TGT_OF = targetSelOf
 EVAL_ITEM_OF = itemOf
+EVAL_STANCE_OF = stanceOf
 EVAL_TARGET_SEL = TARGET_SEL
 EVAL_TSEL_NAME = TARGET_SEL_NAME
 EVAL_CLASS_LIST = CLASS_LIST

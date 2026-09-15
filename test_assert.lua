@@ -338,4 +338,24 @@ TEST.curTargetName = nil EVAL_HELP_UPDATE_STATE()
 eq(type(EVAL_GO12), "function", "EVAL_GO12 exists")
 eq(type(EVAL_GO5), "function", "EVAL_GO5 exists")
 
+-- 25) 姿态切换技能（1.43.0）：rule.skill="姿态:名称" 走姿态栏 CastShapeshiftForm，不占动作条
+TEST.inCombat = false EVAL_HELP_UPDATE_STATE()
+TEST.stances = {
+  { icon = "texSt1", name = "战斗姿态", castable = 1 },
+  { icon = "texSt2", name = "防御姿态", active = 1, castable = 1 },
+}
+eq(EVAL_STANCE_OF("姿态:战斗姿态"), "战斗姿态", "stanceOf parses")
+eq(EVAL_STANCE_OF("战斗姿态"), nil, "plain skill not stance")
+local catsS = EVAL_GO_SKILL_CATEGORIES()
+local foundSt = false
+for _, n in ipairs(catsS[1].items()) do if n == "姿态:战斗姿态" then foundSt = true end end
+eq(foundSt, true, "cat1 lists stances")
+eq(EVAL_WICON("姿态:战斗姿态"), "texSt1", "stance icon")
+TEST.stanceCast = nil
+eq(EVAL_RULE_RUN({ { skill = "姿态:战斗姿态", why = "x", groups = EVAL_PARSE_CONDS("非战斗") } }), true, "stance switch fires without action slot")
+eq(TEST.stanceCast, 1, "CastShapeshiftForm(1) called")
+eq(EVAL_RULE_RUN({ { skill = "姿态:防御姿态", why = "x", groups = EVAL_PARSE_CONDS("非战斗") } }), false, "already-active stance skipped")
+eq(EVAL_RULE_RUN({ { skill = "姿态:狂暴姿态", why = "x", groups = EVAL_PARSE_CONDS("非战斗") } }), false, "unknown stance skipped")
+TEST.stances = nil
+
 print("ALL TESTS PASS")
