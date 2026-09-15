@@ -1,4 +1,4 @@
--- EvalHelp 1.67.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.67.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.67.0"
+local VERSION = "1.67.1"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -804,7 +804,7 @@ local W, H = WIDE and 700 or 560, 420
   end)
   local title = uiText(titleBar, 12, 0.95, 0.82, 0.35)
   title:SetPoint("CENTER", titleBar, "CENTER", 0, 0)
-  title:SetText(L("CFG_TITLE"))
+  title:SetText(L("CFG_TITLE") .. "  |cff8a7a5av" .. VERSION .. "|r") -- 1.67.1 标题栏显示版本号（暗金弱化色）
 
   -- 语言选择（1.34.0 i18n P0）：标题栏右上角国旗行 [CN][EN][RU]——国旗纹理盖住 ASCII 徽标，
   -- 纹理加载失败徽标仍在（任何语言都能找到回家的路）；选中=不透明/未选=30%透/悬停=95%；
