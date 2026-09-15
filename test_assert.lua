@@ -432,6 +432,9 @@ EVAL_GO_LAST = 0 EVAL_GO()
 eq(EVAL_HELP_STATE.autoAttack, true, "autoAttack state accurate with takeover off")
 TEST.currentAction = nil EVAL_HELP_CONFIG.war.attack = nil TEST.slotNames[2] = nil EVAL_GO_RESCAN(true)
 -- 接管泛化（1.49.2）：无「攻击」时回退「自动射击」（UseAction 通道）
+-- 1.62.0 起接管动作在无规则出手时才执行 → 空方案驱动
+local oldProf29 = EVAL_HELP_CONFIG.war.profiles
+EVAL_HELP_CONFIG.war.profiles = { { name = "接管", skills = {} } } EVAL_HELP_CONFIG.war.activeProfile = 1
 TEST.slotNames[3] = "自动射击" EVAL_GO_RESCAN(true)
 TEST.used = {} EVAL_HELP_CONFIG.war.attack = true
 TEST.curTargetName = nil EVAL_HELP_UPDATE_STATE()
@@ -448,6 +451,7 @@ for _, u in ipairs(TEST.used) do if u == 1 then usedSlot1 = true end end
 eq(usedSlot3 and not usedSlot1, true, "autoshot wins over melee attack")
 eq(TEST.attackTried, nil, "AttackTarget not called when autoshot available")
 TEST.used = {} EVAL_HELP_CONFIG.war.attack = nil TEST.slotNames[1] = nil TEST.slotNames[3] = nil EVAL_GO_RESCAN(true)
+EVAL_HELP_CONFIG.war.profiles = oldProf29 EVAL_HELP_CONFIG.war.activeProfile = 1
 
 -- 30) 空条件=直接执行（1.49.1）：编辑窗不配条件/导入 "- 技能 |" 产出空 groups 也必须触发
 TEST.slotNames[1] = "致死打击" EVAL_GO_RESCAN(true)
@@ -473,6 +477,9 @@ eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_COND
 TEST.slotNames[1] = nil EVAL_GO_RESCAN(true)
 
 -- 32) 自动攻击距离检测（1.52.0）：自动射击超程降档近战 / 在程优先远程
+-- 1.62.0 起接管动作后移到规则评估之后、无出手才补 → 用空方案驱动（混合方案里 宠物:攻击 会抢先出手）
+local oldProf32 = EVAL_HELP_CONFIG.war.profiles
+EVAL_HELP_CONFIG.war.profiles = { { name = "接管", skills = {} } } EVAL_HELP_CONFIG.war.activeProfile = 1
 TEST.slotNames[1] = "攻击" TEST.slotNames[2] = "自动射击" EVAL_GO_RESCAN(true)
 EVAL_HELP_CONFIG.war.attack = true
 -- 接管有 2s 节流（wLastAttackTry 是 Engine local 测试无法直清）：桩 GetTime 恒定 1000，前移 3s 绕过
@@ -495,6 +502,7 @@ eq(usedSlot2, true, "in-range autoshot picked")
 eq(TEST.attackTried, nil, "no melee fallback when autoshot in range")
 GetTime = oldGetTime32
 TEST.inRange = nil TEST.used = {} EVAL_HELP_CONFIG.war.attack = nil TEST.slotNames[1] = nil TEST.slotNames[2] = nil EVAL_GO_RESCAN(true)
+EVAL_HELP_CONFIG.war.profiles = oldProf32 EVAL_HELP_CONFIG.war.activeProfile = 1
 
 -- 33) 选取目标不消耗按键（1.52.1）：切换成功后继续评估后续规则
 TEST.slotNames[1] = "致死打击" EVAL_GO_RESCAN(true)

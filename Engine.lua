@@ -1267,13 +1267,10 @@ function EVAL_GO(profSel)
   if atkSlot and type(IsCurrentAction) == "function" then
     local okc, cur = pcall(IsCurrentAction, atkSlot)
     if okc and cur then st.autoAttack = true end
-    if w.attack ~= false and okc and not cur and GetTime() - wLastAttackTry >= 2 then
-      wLastAttackTry = GetTime()
-      atkUse()
-      EVAL_LOGLINE("→ 开启自动攻击（" .. atkName .. "）")
-      wlog("开启自动攻击（" .. atkName .. "）")
-    end
   end
+  -- 1.62.0 接管动作【后移】到规则评估之后（本块只留状态采集）：旧顺序 AttackTarget 先于规则——
+  -- 自动攻击一开弓/进战，冲锋类【脱战限定】技能的 IsUsableAction 缓存瞬间翻 false（用户实锤三连：
+  -- 条件跳过:可用性 / 探针 usable=true / 手动可放；存档条件与探针调用逐字节一致后，唯一差异=时序）。
 
   -- 4~10) 输出循环 = 指定方案（profSel 参数）或当前激活方案的技能规则表
   EVAL_WAR_ENSURE_PROFILES(w)
@@ -1299,6 +1296,14 @@ function EVAL_GO(profSel)
     prof = w.profiles[w.activeProfile or 1]
   end
   if prof and EVAL_RULE_RUN(prof.skills) then return end
+
+  -- 1.62.0 接管动作后移至此：规则都没出手才补自动攻击（规则评估时世界状态=按键瞬间，不被自家副作用污染）
+  if w.attack ~= false and atkSlot and not st.autoAttack and GetTime() - wLastAttackTry >= 2 then
+    wLastAttackTry = GetTime()
+    atkUse()
+    EVAL_LOGLINE("→ 开启自动攻击（" .. atkName .. "）")
+    wlog("开启自动攻击（" .. atkName .. "）")
+  end
 
   -- 本次按键无动作：打一条状态行，方便对照调阈值
   wlog(string.format("无动作 | %s%d 目标血%.0f%% %s%s%s%s", -- 1.49.2 怒气/战斗姿态硬编码→动态
