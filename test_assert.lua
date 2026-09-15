@@ -358,4 +358,15 @@ eq(EVAL_RULE_RUN({ { skill = "姿态:防御姿态", why = "x", groups = EVAL_PAR
 eq(EVAL_RULE_RUN({ { skill = "姿态:狂暴姿态", why = "x", groups = EVAL_PARSE_CONDS("非战斗") } }), false, "unknown stance skipped")
 TEST.stances = nil
 
+-- 26) 案例模版库（1.44.0）：按职业分组 + 模版文本可被导入解析
+eq(type(EVAL_IO_TEMPLATES), "table", "templates table exists")
+eq(EVAL_IO_TEMPLATES[1].cls, "战士", "warrior class group")
+local tpl = EVAL_IO_TEMPLATES[1].list[1]
+eq(tpl.name, "武器战", "weapon warrior template")
+local prof26, err26 = EVAL_PROFILE_FROM_TEXT(tpl.text)
+eq(prof26 ~= nil, true, "template parses: " .. tostring(err26))
+eq(prof26.name, "武器战", "template profile name")
+eq(prof26.skills[1].skill, "姿态:战斗姿态", "template uses stance skill")
+eq(table.getn(prof26.skills), 8, "template skill count")
+
 print("ALL TESTS PASS")

@@ -1,4 +1,4 @@
--- EvalHelp 1.43.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.44.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.43.0"
+local VERSION = "1.44.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -51,6 +51,7 @@ local groupsOK = EVAL_GROUPS_OK
 local auraTexOf = EVAL_AURA_TEX
 local petCmdOf, targetSelOf, itemOf = EVAL_PET_OF, EVAL_TGT_OF, EVAL_ITEM_OF
 local stanceOf = EVAL_STANCE_OF -- 1.43.0 姿态切换（姿态:名称）
+local condTrim = EVAL_COND_TRIM -- 1.44.0 拆分漏桥补：EVAL_PROFILE_FROM_TEXT 用裸 condTrim（旧例一直缺别名，游戏内点导入必炸）
 local TARGET_SEL, TARGET_SEL_NAME = EVAL_TARGET_SEL, EVAL_TSEL_NAME
 local CLASS_LIST = EVAL_CLASS_LIST
 local WAR_SKILLS = EVAL_WAR_SKILLS
@@ -2681,16 +2682,37 @@ end
 -- 解析容忍 markdown 杂物：# 开头 = 方案名，> 或 < 开头/超长行忽略，无 | 的行忽略。
 
 local ioUI = { root = nil, eb = nil }
+local tplUI = { root = nil } -- 1.44.0 案例模版选单
 
--- 内置武器战示例（与 example/zs_wq.md 同步，游戏里也能直接看到格式）
-local ZS_WQ_EXAMPLE = "# 方案: 武器战\n\n" ..
-  "- 压制 | 怒气>5 & 可用 & 就绪\n" ..
-  "- 战斗怒吼 | 怒气>9 & 无buff:战斗怒吼\n" ..
-  "- 断筋 | 目标血<30 & 怒气>9 & 无debuff:断筋\n" ..
-  "- 撕裂 | 可流血 & 目标血>10 & 怒气>9 & 无debuff:撕裂\n" ..
-  "- 血性狂暴 | 战斗中 & 无buff:血性狂暴 & 就绪\n" ..
-  "- 猛击 | Alt & 怒气>20\n" ..
-  "- 英勇打击 | 怒气>30 & 未排队"
+-- 案例模版库（1.44.0）：按职业分组，导入弹窗内 [案例模版] 打开选单直接导入。
+-- text 与导入导出同 md 格式（EVAL_PROFILE_FROM_TEXT 解析）；原「武器战示例」按钮已并入此处。
+EVAL_IO_TEMPLATES = {
+  { cls = "战士", list = {
+    { name = "武器战", desc = "姿态开怪/压制优先/怒吼保持/断筋撕裂/猛击Alt", text = "# 方案: 武器战\n\n" ..
+      "- 姿态:战斗姿态 | 非战斗 & 非姿态1 & 可攻击\n" ..
+      "- 压制 | 怒气>5 & 可用 & 就绪\n" ..
+      "- 战斗怒吼 | 怒气>9 & 无buff:战斗怒吼\n" ..
+      "- 断筋 | 目标血<30 & 怒气>9 & 无debuff:断筋\n" ..
+      "- 撕裂 | 可流血 & 目标血>10 & 怒气>9 & 无debuff:撕裂\n" ..
+      "- 血性狂暴 | 战斗中 & 无buff:血性狂暴 & 就绪\n" ..
+      "- 猛击 | Alt & 怒气>20\n" ..
+      "- 英勇打击 | 怒气>30 & 未排队" },
+  }},
+}
+
+-- 文本导入共用入口（1.44.0 抽出）：导入按钮与案例模版同走；成功返回 true+提示
+local function ioImportText(text)
+  local prof, err = EVAL_PROFILE_FROM_TEXT(text)
+  if not prof then return false, "导入失败: " .. tostring(err) end
+  local w2 = warCfg()
+  if table.getn(w2.profiles) < 12 then -- 1.44.0 修正：方案上限 1.42.0 已 4→12，此处残留旧值
+    table.insert(w2.profiles, prof)
+    w2.activeProfile = table.getn(w2.profiles)
+    return true, "已导入为新方案: " .. tostring(prof.name) .. "（" .. table.getn(prof.skills) .. " 个技能）"
+  end
+  w2.profiles[w2.activeProfile or 1] = prof
+  return true, "方案已满 12 个，已替换当前方案: " .. tostring(prof.name)
+end
 
 -- 方案 → md 文本（导出）
 function EVAL_PROFILE_TO_TEXT(idx)
@@ -2848,7 +2870,7 @@ function EVAL_HELP_IO_BUILD()
   else
     local noEb = uiText(root, 9, 0.7, 0.5, 0.5)
     noEb:SetPoint("TOPLEFT", root, "TOPLEFT", 14, -44)
-    noEb:SetText("（输入框不可用：导入改用 /eh war add 逐条添加；导出看下方预览区或 example/zs_wq.md）")
+    noEb:SetText(L("IO_NOEB"))
   end
 
   -- 保底预览区：当前方案文本以 FontString 渲染（EditBox 不显示时也始终可见）
@@ -2899,19 +2921,9 @@ function EVAL_HELP_IO_BUILD()
       local ok, t = pcall(ioUI.eb.GetText, ioUI.eb)
       if ok and type(t) == "string" then text = t end
     end
-    local prof, err = EVAL_PROFILE_FROM_TEXT(text)
-    if not prof then say("导入失败: " .. tostring(err)) return end
-    local w2 = warCfg()
-    if table.getn(w2.profiles) < 4 then
-      table.insert(w2.profiles, prof)
-      w2.activeProfile = table.getn(w2.profiles)
-      say("已导入为新方案: " .. tostring(prof.name) .. "（" .. table.getn(prof.skills) .. " 个技能）")
-    else
-      w2.profiles[w2.activeProfile or 1] = prof
-      say("方案已满 4 个，已替换当前方案: " .. tostring(prof.name))
-    end
-    pcall(EVAL_WAR_TAB_REFRESH)
-    ioUI.root:Hide()
+    local ok, msg = ioImportText(text) -- 1.44.0 共用导入（含方案上限 12 修正）
+    say(msg)
+    if ok then pcall(EVAL_WAR_TAB_REFRESH) ioUI.root:Hide() end
   end)
   ioBtn(128, 108, L("IO_EXPORT"), function()
     if ioUI.eb then
@@ -2922,14 +2934,133 @@ function EVAL_HELP_IO_BUILD()
     EVAL_HELP_IO_REFRESH()
     say("已导出到输入框并全选：Ctrl+C 复制，存成 .md 即可分享（输入框不显示就看下方预览区）")
   end)
-  ioBtn(242, 108, L("IO_SAMPLE"), function()
-    if ioUI.eb then pcall(ioUI.eb.SetText, ioUI.eb, ZS_WQ_EXAMPLE) end
-    say("已填入武器战示例（与 example/zs_wq.md 相同），可改后点导入")
-  end)
+  ioBtn(242, 108, L("IO_TPL"), function() EVAL_HELP_TPL_TOGGLE() end) -- 1.44.0 案例模版（按职业）
   ioBtn(392, 64, L("CLOSE"), function() ioUI.root:Hide() end)
 
+  -- 1.44.0 IO 窗关闭时模版选单联动关闭
+  root:SetScript("OnHide", function() if tplUI.root then tplUI.root:Hide() end end)
   root:Hide()
   ioUI.root = root
+end
+
+-- ============ 案例模版选单（1.44.0）：按职业分组，点击方案行直接导入 ============
+function EVAL_HELP_TPL_BUILD()
+  if tplUI.root then return end
+  local W = 330
+  local rows = 0
+  for _, c in ipairs(EVAL_IO_TEMPLATES) do rows = rows + 1 + table.getn(c.list) end
+  local H = 34 + rows * 20 + 34
+  local root = CreateFrame("Frame", "EVAL_HELP_TPL", UIParent)
+  root:SetWidth(W) root:SetHeight(H)
+  root:SetPoint("CENTER", UIParent, "CENTER", 0, 80)
+  pcall(root.SetFrameStrata, root, "DIALOG")
+  pcall(root.SetFrameLevel, root, 95) -- 高于 IO 窗（90）
+  pcall(root.SetMovable, root, true)
+  pcall(root.EnableMouse, root, true)
+  if uiOffscreen(root) then
+    root:ClearAllPoints()
+    root:SetPoint("CENTER", UIParent, "CENTER", 0, 40)
+  end
+  local bg = root:CreateTexture(nil, "BACKGROUND")
+  uiSolid(bg, 0.06, 0.05, 0.04, 0.97)
+  bg:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
+  bg:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", 0, 0)
+  for _, e in ipairs({ "TOP", "BOTTOM" }) do
+    local t = root:CreateTexture(nil, "BORDER")
+    uiSolid(t, 0.85, 0.70, 0.20, 1)
+    t:SetPoint(e .. "LEFT", root, e .. "LEFT", 0, 0)
+    t:SetPoint(e .. "RIGHT", root, e .. "RIGHT", 0, 0)
+    t:SetHeight(1)
+  end
+  for _, side in ipairs({ "LEFT", "RIGHT" }) do
+    local t = root:CreateTexture(nil, "BORDER")
+    uiSolid(t, 0.85, 0.70, 0.20, 1)
+    t:SetPoint("TOP" .. side, root, "TOP" .. side, 0, 0)
+    t:SetPoint("BOTTOM" .. side, root, "BOTTOM" .. side, 0, 0)
+    t:SetWidth(1)
+  end
+  -- 标题栏拖动（Button 配方）
+  local titleBar = CreateFrame("Button", nil, root)
+  titleBar:SetPoint("TOPLEFT", root, "TOPLEFT", 1, -1)
+  titleBar:SetPoint("TOPRIGHT", root, "TOPRIGHT", -1, -1)
+  titleBar:SetHeight(16)
+  local okLvl, rootLvl = pcall(root.GetFrameLevel, root)
+  if okLvl and type(rootLvl) == "number" then pcall(titleBar.SetFrameLevel, titleBar, rootLvl + 10) end
+  local tbBg = titleBar:CreateTexture(nil, "BACKGROUND")
+  uiSolid(tbBg, 0.16, 0.13, 0.08, 1)
+  tbBg:SetPoint("TOPLEFT", titleBar, "TOPLEFT", 0, 0)
+  tbBg:SetPoint("BOTTOMRIGHT", titleBar, "BOTTOMRIGHT", 0, 0)
+  pcall(titleBar.EnableMouse, titleBar, true)
+  pcall(titleBar.RegisterForClicks, titleBar, "LeftButtonUp")
+  pcall(titleBar.RegisterForDrag, titleBar, "LeftButton")
+  local title = uiText(titleBar, 10, 0.95, 0.82, 0.35)
+  title:SetPoint("CENTER", titleBar, "CENTER", 0, 0)
+  title:SetText(L("TPL_TITLE"))
+  titleBar:SetScript("OnDragStart", function()
+    pcall(root.SetMovable, root, true)
+    pcall(root.StartMoving, root)
+    pcall(root.StopMovingOrSizing, root)
+    pcall(root.StartMoving, root)
+  end)
+  titleBar:SetScript("OnDragStop", function() pcall(root.StopMovingOrSizing, root) end)
+
+  -- 职业组标题（金色不可点）+ 方案行（点击即导入）
+  local y = -26
+  for _, c in ipairs(EVAL_IO_TEMPLATES) do
+    local hd = uiText(root, 10, 0.95, 0.82, 0.35)
+    hd:SetPoint("TOPLEFT", root, "TOPLEFT", 14, y)
+    hd:SetText("【" .. tostring(c.cls) .. "】")
+    y = y - 20
+    for _, p in ipairs(c.list) do
+      local b = CreateFrame("Button", nil, root)
+      b:SetPoint("TOPLEFT", root, "TOPLEFT", 22, y)
+      b:SetWidth(W - 36) b:SetHeight(18)
+      pcall(b.EnableMouse, b, true)
+      pcall(b.RegisterForClicks, b, "LeftButtonUp")
+      local bb = b:CreateTexture(nil, "BACKGROUND")
+      uiSolid(bb, 0.12, 0.10, 0.06, 1)
+      bb:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+      bb:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+      local bt = uiText(b, 9, 0.88, 0.88, 0.88)
+      bt:SetPoint("LEFT", b, "LEFT", 6, 0)
+      bt:SetText(tostring(p.name) .. "  |cff777777" .. tostring(p.desc or "") .. "|r")
+      b:SetScript("OnEnter", function() pcall(bb.SetVertexColor, bb, 0.30, 0.25, 0.12, 1) end)
+      b:SetScript("OnLeave", function() pcall(bb.SetVertexColor, bb, 0.12, 0.10, 0.06, 1) end)
+      b:SetScript("OnClick", function()
+        local ok, msg = ioImportText(p.text)
+        say(msg)
+        if ok then
+          pcall(EVAL_WAR_TAB_REFRESH)
+          EVAL_HELP_IO_REFRESH()
+          root:Hide()
+        end
+      end)
+      y = y - 20
+    end
+  end
+
+  local cb = CreateFrame("Button", nil, root)
+  cb:SetWidth(64) cb:SetHeight(20)
+  cb:SetPoint("BOTTOM", root, "BOTTOM", 0, 7)
+  pcall(cb.EnableMouse, cb, true)
+  pcall(cb.RegisterForClicks, cb, "LeftButtonUp")
+  local cbb = cb:CreateTexture(nil, "BACKGROUND")
+  uiSolid(cbb, 0.22, 0.18, 0.10, 1)
+  cbb:SetPoint("TOPLEFT", cb, "TOPLEFT", 0, 0)
+  cbb:SetPoint("BOTTOMRIGHT", cb, "BOTTOMRIGHT", 0, 0)
+  local cbt = uiText(cb, 10, 0.95, 0.82, 0.35)
+  cbt:SetPoint("CENTER", cb, "CENTER", 0, 0)
+  cbt:SetText(L("CLOSE"))
+  cb:SetScript("OnClick", function() root:Hide() end)
+
+  root:Hide()
+  tplUI.root = root
+end
+
+function EVAL_HELP_TPL_TOGGLE()
+  if tplUI.root and tplUI.root:IsVisible() then tplUI.root:Hide() return end
+  EVAL_HELP_TPL_BUILD()
+  if tplUI.root then tplUI.root:Show() end
 end
 
 -- 预览区刷新：当前方案文本逐行填进保底 FontString（跳过空行；EditBox 不渲染时靠它看内容）
@@ -3161,7 +3292,7 @@ if type(SlashCmdList) == "table" then
       say("/eh ui 战斗信息UI | /eh st 状态信息UI | /eh cfg 设置窗口（小地图旁 EH 图标同效）")
       say("/eh go 一键宏状态 | /eh go rescan 重扫动作条 | /eh debug 调试日志（/eh war 旧命令仍兼容）")
       say("方案命令：/eh go list 查看 | go add 技能 条件 | go del N | go newprof 名 | go prof N | go rename 新名 | go delprof N")
-      say("方案导入导出（md 文本复制粘贴）：/eh go io，示例文件 example/zs_wq.md")
+      say("方案导入导出（md 文本复制粘贴）：/eh go io，内置案例模版按职业直接导入")
       say("方案切换：Shift+按一键宏 | /eh go next | 战斗信息UI 方案按钮")
       say("|cffffff00执行指定方案:|r 新建宏正文 /run EVAL_GO(参数) —— 不传或0=当前激活方案；方案号1~4 或 \"方案名\" = 只跑该方案（不切激活）")
       say("　例：/run EVAL_GO(2) 跑2号方案 | /run EVAL_GO(\"测试\") 跑名为测试的方案 | /run EVAL_GO1()~GO4() 同效快捷写法；不同方案各绑一个按键即可多套输出")
