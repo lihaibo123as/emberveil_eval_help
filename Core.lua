@@ -1,7 +1,7 @@
 -- EvalHelp · Core.lua —— 输出/i18n/状态采集(EVAL_HELP_STATE)/角色状态模块/UI 越界助手
 -- 加载顺序见 EvalHelp.toc：Locales → Core → Engine → EvalHelp
 
--- EvalHelp 1.45.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.45.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.45.0: 战斗UI技能图标行/重扫核对报告/go状态总览 全部以激活方案技能为准——旧版固定战士白名单（UI_ICONS/WAR_SKILLS 核对）废弃
 --   1.44.0: IO 弹窗加「案例模版」选单（EVAL_IO_TEMPLATES 按职业分组，点击直接导入）；原武器战示例按钮并入；修导入上限残留 4→12
 --   1.43.0: 角色行为新增「姿态:名称」——姿态栏直切（CastShapeshiftForm 不受保护），不占动作条，已激活守门
