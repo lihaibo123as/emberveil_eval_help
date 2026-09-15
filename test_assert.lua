@@ -369,4 +369,17 @@ eq(prof26.name, "武器战", "template profile name")
 eq(prof26.skills[1].skill, "姿态:战斗姿态", "template uses stance skill")
 eq(table.getn(prof26.skills), 8, "template skill count")
 
+-- 27) 重扫报告/状态总览以激活方案为准（1.45.0）：混合技能方案下非静默调用不报错
+EVAL_HELP_CONFIG.war.profiles = { { name = "混合", skills = {
+  { skill = "致死打击", enabled = true, groups = {} },
+  { skill = "宠物:攻击", enabled = true, groups = {} },
+  { skill = "姿态:战斗姿态", enabled = true, groups = {} },
+  { skill = "物品:超效治疗药水", enabled = true, groups = {} },
+  { skill = "不存在的技能", enabled = true, groups = {} },
+} } }
+EVAL_HELP_CONFIG.war.activeProfile = 1
+EVAL_GO_RESCAN(false) -- 非静默：走方案核对报告路径
+EVAL_GO_STATUS()
+eq(true, true, "profile-driven rescan report no error")
+
 print("ALL TESTS PASS")

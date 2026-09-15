@@ -1,4 +1,4 @@
--- EvalHelp 1.44.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.45.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.44.1"
+local VERSION = "1.45.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -130,8 +130,7 @@ local function uiMakeCell(parent, size)
   return { frame = cell, bg = bg, icon = icon, text = text }
 end
 
--- 图标行监控的技能（按显示顺序）
-local UI_ICONS = { "攻击", "冲锋", "压制", "战斗怒吼", "断筋", "撕裂", "血性狂暴" }
+-- 技能图标行（1.45.0 起）：内容以【激活方案的技能】为准，旧版固定战士清单（UI_ICONS）已废弃
 
 -- 方案配置访问（配置段的 warCfg 在本段之后定义，这里直接走全局 SavedVariables + 迁移函数）
 local function uiWarCfg()
@@ -218,17 +217,18 @@ function EVAL_HELP_UI_BUILD()
   status:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
   y = y + math.floor(13 * z) + gap
 
-  -- 技能图标行
+  -- 技能图标行（1.45.0：8 格动态填充激活方案技能，构建期不定内容）
   local cells = {}
   local x = pad
-  for _, name in ipairs(UI_ICONS) do
-    local c = uiMakeCell(root, cell)
+  local cellN = 8
+  local cellSz = math.floor(24 * z) -- 8 格刚好排下：(W-2pad)=224z ≥ 8*24z+7*3z
+  for ci0 = 1, cellN do
+    local c = uiMakeCell(root, cellSz)
     c.frame:SetPoint("TOPLEFT", root, "TOPLEFT", x, -y)
-    c.name = name
     table.insert(cells, c)
-    x = x + cell + gap
+    x = x + cellSz + math.floor(3 * z)
   end
-  y = y + cell + gap
+  y = y + cellSz + gap
 
   -- 方案切换行：点击按钮换激活方案（一键宏立即换套路；Shift+按宏 / /eh war next 也可切）
   local profBtns = {}
@@ -446,46 +446,54 @@ function EVAL_HELP_UI_TICK()
     inCombat and "|cffff5040战斗中|r" or "|cff80ff80非战斗|r",
     form, atkOn and "|cff00ff00开|r" or "|cff909090关|r"))
 
-  -- 技能图标行（依赖一键模块的 wslots；未扫描先静默扫一次）
+  -- 技能图标行（1.45.0：以激活方案技能为准——图标走 wicon 统一入口含宠物/物品/姿态；
+  -- 亮金=条件当前满足（dry 预览不触发副作用）；冷却数字仅动作条技能；空位整格隐藏）
   if not EVAL_IS_SCANNED() then EVAL_GO_RESCAN(true) end
-  for _, c in ipairs(ui.cells) do
-    local s = wslots[c.name]
-    if not s then
-      pcall(c.icon.SetVertexColor, c.icon, 0.25, 0.25, 0.25)
-      c.text:SetText("?")
+  local w2ui = uiWarCfg()
+  local actP = w2ui.profiles and w2ui.profiles[w2ui.activeProfile or 1]
+  for i, c in ipairs(ui.cells) do
+    local r = actP and actP.skills and actP.skills[i]
+    if not r then
+      pcall(c.frame.Hide, c.frame)
     else
-      local t0 = wicon(c.name)
+      pcall(c.frame.Show, c.frame)
+      c.name = r.skill
+      local t0 = wicon(r.skill)
       if t0 then pcall(c.icon.SetTexture, c.icon, t0) end
-      local lit = false
-      if c.name == "攻击" then
-        lit = atkOn
-      elseif c.name == "战斗怒吼" or c.name == "血性狂暴" then
-        lit = EVAL_P_HASBUFF(s.tex)
-      elseif c.name == "断筋" or c.name == "撕裂" then
-        lit = EVAL_T_HASDEBUFF(s.tex)
-      elseif c.name == "压制" then
-        local oku, usable = pcall(IsUsableAction, s.slot)
-        lit = oku and usable and true or false
-      elseif c.name == "冲锋" then
-        lit = not inCombat
-      end
-      -- 冷却数字
-      local left = 0
-      local okc, st, dur = pcall(GetActionCooldown, c.name == "攻击" and -1 or s.slot)
-      if okc and type(st) == "number" and type(dur) == "number" and st > 0 and dur > 0 then
-        left = st + dur - GetTime()
-      end
-      if left > 0 then
-        c.text:SetText(left >= 10 and string.format("%d", math.floor(left + 0.5)) or string.format("%.1f", left))
-        pcall(c.icon.SetVertexColor, c.icon, 0.4, 0.4, 0.4)
+      local s = wslots[r.skill]
+      if r.enabled == false then
+        pcall(c.icon.SetVertexColor, c.icon, 0.25, 0.25, 0.25)
+        pcall(c.bg.SetVertexColor, c.bg, 0.12, 0.12, 0.12, 1)
+        c.text:SetText("停")
+      elseif not t0 then
+        pcall(c.icon.SetVertexColor, c.icon, 0.35, 0.35, 0.35)
+        pcall(c.bg.SetVertexColor, c.bg, 0.12, 0.12, 0.12, 1)
+        c.text:SetText("?")
       else
-        c.text:SetText("")
-        if lit then
-          pcall(c.icon.SetVertexColor, c.icon, 1, 1, 1)
-          pcall(c.bg.SetVertexColor, c.bg, 0.9, 0.75, 0.1, 1) -- 激活：金边
-        else
-          pcall(c.icon.SetVertexColor, c.icon, 0.45, 0.45, 0.45)
+        local pass = false
+        if r.groups and (s or petCmdOf(r.skill) or targetSelOf(r.skill) or itemOf(r.skill) or stanceOf(r.skill)) then
+          pass = groupsOK(r, true) and true or false
+        end
+        local left = 0
+        if s then
+          local okc, cst, dur = pcall(GetActionCooldown, s.slot)
+          if okc and type(cst) == "number" and type(dur) == "number" and cst > 0 and dur > 0 then
+            left = cst + dur - GetTime()
+          end
+        end
+        if left > 0 then
+          c.text:SetText(left >= 10 and string.format("%d", math.floor(left + 0.5)) or string.format("%.1f", left))
+          pcall(c.icon.SetVertexColor, c.icon, 0.4, 0.4, 0.4)
           pcall(c.bg.SetVertexColor, c.bg, 0.12, 0.12, 0.12, 1)
+        else
+          c.text:SetText("")
+          if pass then
+            pcall(c.icon.SetVertexColor, c.icon, 1, 1, 1)
+            pcall(c.bg.SetVertexColor, c.bg, 0.9, 0.75, 0.1, 1) -- 条件满足：金边高亮
+          else
+            pcall(c.icon.SetVertexColor, c.icon, 0.45, 0.45, 0.45)
+            pcall(c.bg.SetVertexColor, c.bg, 0.12, 0.12, 0.12, 1)
+          end
         end
       end
     end

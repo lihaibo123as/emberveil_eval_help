@@ -64,10 +64,25 @@ function EVAL_GO_RESCAN(quiet)
   if not quiet then
     local total = 0
     for _ in pairs(wslots) do total = total + 1 end
-    EVAL_SAY(string.format("动作条共识别 |cff00ff00%d|r 个技能（均可用于方案/条件；核心技能核对↓）", total))
-    for _, n in ipairs(WAR_SKILLS) do
-      local s = wslots[n]
-      EVAL_SAY(string.format("%s → %s", n, s and ("格子 " .. s.slot) or "|cffff0000未找到|r（拖上动作条后 /eh war rescan）"))
+    EVAL_SAY(string.format("动作条共识别 |cff00ff00%d|r 个技能（均可用于方案/条件）", total))
+    -- 1.45.0 核对清单以激活方案技能为准（旧版固定战士白名单核对已废弃；
+    -- petCmdOf 等 local 声明在本函数之后 → 走全局导出，调用期取值）
+    local w2 = EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war
+    local p = w2 and w2.profiles and w2.profiles[w2.activeProfile or 1]
+    if p and p.skills and table.getn(p.skills) > 0 then
+      EVAL_SAY("激活方案「" .. tostring(p.name) .. "」技能核对↓")
+      for _, r in ipairs(p.skills) do
+        local n = r.skill
+        local special = (EVAL_PET_OF and EVAL_PET_OF(n)) or (EVAL_TGT_OF and EVAL_TGT_OF(n)) or (EVAL_STANCE_OF and EVAL_STANCE_OF(n)) or (EVAL_ITEM_OF and EVAL_ITEM_OF(n))
+        if special then
+          EVAL_SAY(n .. " → |cff80ff80特殊技能（不占动作条）|r")
+        else
+          local s = wslots[n]
+          EVAL_SAY(string.format("%s → %s", n, s and ("格子 " .. s.slot) or "|cffff0000未找到|r（拖上动作条后重扫）"))
+        end
+      end
+    else
+      EVAL_SAY("（激活方案暂无技能：/eh cfg → 一键宏设置 → 添加技能）")
     end
   end
   return wslots
@@ -1265,14 +1280,30 @@ for i = 5, 12 do local j = i _G["EVAL_GO" .. j] = function() EVAL_GO(j) end end
 function EVAL_GO_STATUS()
   if not wscanned then EVAL_GO_RESCAN(true) end
   EVAL_SAY("— 一键宏状态 —")
-  for _, n in ipairs(WAR_SKILLS) do
-    local s = wslots[n]
-    if s then
-      local ready, why = wready(n)
-      EVAL_SAY(string.format("%s: 格子%d %s", n, s.slot, ready and "|cff00ff00就绪|r" or ("|cffff9040" .. tostring(why) .. "|r")))
-    else
-      EVAL_SAY(n .. ": |cffff0000未上动作条|r")
+  -- 1.45.0 以激活方案技能为准（旧版固定战士白名单已废弃）
+  local w2 = EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war
+  local p = w2 and w2.profiles and w2.profiles[w2.activeProfile or 1]
+  if p and p.skills and table.getn(p.skills) > 0 then
+    EVAL_SAY("激活方案「" .. tostring(p.name) .. "」：")
+    for _, r in ipairs(p.skills) do
+      local n = r.skill
+      if petCmdOf(n) or targetSelOf(n) or stanceOf(n) then
+        EVAL_SAY(n .. ": |cff80ff80特殊技能（不占动作条）|r")
+      elseif itemOf(n) then
+        local bag = wFindBagItem(itemOf(n))
+        EVAL_SAY(n .. ": " .. (bag and "|cff00ff00背包已找到|r" or "|cffff0000背包未找到|r"))
+      else
+        local s = wslots[n]
+        if s then
+          local ready, why = wready(n)
+          EVAL_SAY(string.format("%s: 格子%d %s", n, s.slot, ready and "|cff00ff00就绪|r" or ("|cffff9040" .. tostring(why) .. "|r")))
+        else
+          EVAL_SAY(n .. ": |cffff0000未上动作条|r")
+        end
+      end
     end
+  else
+    EVAL_SAY("（激活方案暂无技能）")
   end
   EVAL_SAY("当前: " .. formatStats(collectStats()))
 end
