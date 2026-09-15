@@ -428,7 +428,15 @@ EVAL_GO()
 local usedSlot3 = false
 for _, u in ipairs(TEST.used) do if u == 3 then usedSlot3 = true end end
 eq(usedSlot3, true, "autoshot takeover fires UseAction")
-TEST.used = {} EVAL_HELP_CONFIG.war.attack = nil TEST.slotNames[3] = nil EVAL_GO_RESCAN(true)
+-- 自动攻击优先级（1.50.0）：攻击+自动射击 同时在条 → 优先自动射击，不碰近战 AttackTarget
+TEST.slotNames[1] = "攻击" EVAL_GO_RESCAN(true)
+TEST.used = {} TEST.attackTried = nil
+EVAL_GO()
+local usedSlot1 = false
+for _, u in ipairs(TEST.used) do if u == 1 then usedSlot1 = true end end
+eq(usedSlot3 and not usedSlot1, true, "autoshot wins over melee attack")
+eq(TEST.attackTried, nil, "AttackTarget not called when autoshot available")
+TEST.used = {} EVAL_HELP_CONFIG.war.attack = nil TEST.slotNames[1] = nil TEST.slotNames[3] = nil EVAL_GO_RESCAN(true)
 
 -- 30) 空条件=直接执行（1.49.1）：编辑窗不配条件/导入 "- 技能 |" 产出空 groups 也必须触发
 TEST.slotNames[1] = "致死打击" EVAL_GO_RESCAN(true)

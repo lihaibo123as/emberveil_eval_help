@@ -1,4 +1,4 @@
--- EvalHelp 1.49.3 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.50.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.49.3"
+local VERSION = "1.50.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -526,7 +526,7 @@ local function warCfg()
 end
 
 -- 金框勾选框（参考截图的方形金框 checkbox）：Button + 外金框 + 内暗底 + 打勾金色块
-local function cfgCheck(parent, x, y, label, get, set, list)
+local function cfgCheck(parent, x, y, label, get, set, list, tip) -- 1.50.0 可选 tip=悬停提示
   local b = CreateFrame("Button", nil, parent)
   b:SetWidth(16) b:SetHeight(16)
   b:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
@@ -556,6 +556,19 @@ local function cfgCheck(parent, x, y, label, get, set, list)
     set(not get())
     refresh()
   end)
+  if tip then -- 悬停提示（勾选框与文字共用）
+    local function showTip()
+      GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
+      GameTooltip:AddLine(tostring(label), 1, 0.82, 0.3)
+      GameTooltip:AddLine(tip, 0.85, 0.85, 0.85, 1)
+      GameTooltip:Show()
+    end
+    b:SetScript("OnEnter", showTip)
+    b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    pcall(text.EnableMouse, text, true)
+    text:SetScript("OnEnter", showTip)
+    text:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  end
   refresh()
   return refresh
 end
@@ -925,7 +938,7 @@ local W, H = WIDE and 700 or 560, 420
     function(v) warCfg().enabled = v end, Wp))
   table.insert(refreshes, cfgCheck(root, LX, swY - 42, L("W_AUTOATK"),
     function() return warCfg().attack ~= false end,
-    function(v) warCfg().attack = v end, Wp))
+    function(v) warCfg().attack = v end, Wp, L("W_AUTOATK_TIP")))
   table.insert(refreshes, cfgCheck(root, LX, swY - 66, L("W_DEBUG"),
     function() return c().wdebug end, function(v) c().wdebug = v end, Wp))
 

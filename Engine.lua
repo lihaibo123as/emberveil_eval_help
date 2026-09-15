@@ -1126,10 +1126,23 @@ function EVAL_GO(profSel)
   -- 3) 自动普攻（AttackTarget 是切换语义，必须用 IsCurrentAction 守卫，连按安全）
   -- 1.47.0 解耦：st.autoAttack 状态采集【不受接管开关影响】（否则开关关掉时 普攻/未普攻 条件恒读 false，
   -- 规则里放「攻击」不带 未普攻 条件会每按一次开/关翻转）；开关只控制「自动开启」这个动作。
-  -- 1.49.2 泛化：近战=攻击（AttackTarget）、远程=自动射击（UseAction 兜底）——旧版只认「攻击」，猎人接管无效
-  local atkSlot, atkUse = nil, nil
-  if wslots["攻击"] then atkSlot = wslots["攻击"].slot atkUse = function() AttackTarget() end
-  elseif wslots["自动射击"] then atkSlot = wslots["自动射击"].slot atkUse = function() UseAction(wslots["自动射击"].slot) end end
+  -- 1.50.0 自动攻击（改名自 自动普攻接管）：优先级 自动射击(猎人) > 射击(魔杖) > 攻击(近战普攻)；
+  -- 上条且【可用】才入选（IsUsableAction——无远程武器/无魔杖自动降档）；近战「攻击」为无条件兜底。
+  local atkSlot, atkUse, atkName = nil, nil, nil
+  local function pickAtk(name, useFn, needUsable)
+    local s = wslots[name]
+    if not s then return false end
+    if needUsable and type(IsUsableAction) == "function" then
+      local oku, usable = pcall(IsUsableAction, s.slot)
+      if not (oku and usable) then return false end
+    end
+    atkSlot, atkUse, atkName = s.slot, useFn, name
+    return true
+  end
+  if not pickAtk("自动射击", function() UseAction(wslots["自动射击"].slot) end, true)
+     and not pickAtk("射击", function() UseAction(wslots["射击"].slot) end, true) then
+    pickAtk("攻击", function() AttackTarget() end) -- 近战兜底（不查可用，自动攻击恒可开）
+  end
   st.autoAttack = false
   if atkSlot and type(IsCurrentAction) == "function" then
     local okc, cur = pcall(IsCurrentAction, atkSlot)
@@ -1137,8 +1150,8 @@ function EVAL_GO(profSel)
     if w.attack ~= false and okc and not cur and GetTime() - wLastAttackTry >= 2 then
       wLastAttackTry = GetTime()
       atkUse()
-      EVAL_LOGLINE("→ 开启自动普攻")
-      wlog("开启自动普攻")
+      EVAL_LOGLINE("→ 开启自动攻击（" .. atkName .. "）")
+      wlog("开启自动攻击（" .. atkName .. "）")
     end
   end
 
