@@ -1,4 +1,4 @@
--- EvalHelp 1.54.2 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.54.3 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.54.2"
+local VERSION = "1.54.3"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -2401,7 +2401,11 @@ local function SE_BUILD()
     reg(row.opBtn.btn)
     row.minus = seBtn(root, 180, y, 20, 15, "-", function()
       local it = seUI.ed and seUI.ed.conds[i]
-      if it and it.cd.n then it.cd.n = math.max(0, it.cd.n - 5) EVAL_HELP_SE_REFRESH() end
+      if it and it.cd.n then
+        if it.cd.k == "combo" then it.cd.n = math.max(1, it.cd.n - 1) -- 1.54.3 连击点数域 1-5（GetComboPoints 上限 5）
+        else it.cd.n = math.max(0, it.cd.n - 5) end
+        EVAL_HELP_SE_REFRESH()
+      end
     end)
     reg(row.minus.btn)
     local vt = uiText(root, 9, 1, 0.9, 0.5)
@@ -2410,7 +2414,11 @@ local function SE_BUILD()
     reg(vt)
     row.plus = seBtn(root, 230, y, 20, 15, "+", function()
       local it = seUI.ed and seUI.ed.conds[i]
-      if it and it.cd.n then it.cd.n = math.min(300, it.cd.n + 5) EVAL_HELP_SE_REFRESH() end
+      if it and it.cd.n then
+        if it.cd.k == "combo" then it.cd.n = math.min(5, it.cd.n + 1) -- 1.54.3 连击点数域 1-5
+        else it.cd.n = math.min(300, it.cd.n + 5) end
+        EVAL_HELP_SE_REFRESH()
+      end
     end)
     reg(row.plus.btn)
     -- 布尔/标志/姿态：是/否循环
