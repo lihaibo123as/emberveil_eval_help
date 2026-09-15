@@ -79,7 +79,7 @@ HasAction = function(slot) return slot <= 3 end -- 1.37.0 放开到 3（断筋�
 GetActionText = function() return nil end
 GetActionTexture = function(slot) return "tex" .. slot end
 GetActionCooldown = function() return 0, 0 end
-IsUsableAction = function() return true end
+IsUsableAction = function() if TEST.usableRet then return TEST.usableRet.u, TEST.usableRet.noMana end return true end
 IsCurrentAction = function(slot) return TEST.currentAction == slot end
 SpellStopCasting = function() TEST.castStopped = true end
 RunScript = function(code) TEST.runScript = code if code == "SpellStopCasting()" then TEST.castStopped = true end end

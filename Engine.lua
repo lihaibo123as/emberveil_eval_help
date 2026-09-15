@@ -618,13 +618,17 @@ local function condOK(when, skill)
   end
   if when.usable then
     local s = wslots[skill]
-    local oku, usable, noMana = s and pcall(IsUsableAction, s.slot)
-    if not (oku and usable) then return false, noMana and "不可用:资源不足" or "不可用" end -- 1.61.4 原因细分（探针实证：noMana=true=资源不足）
+    if not s then return false, "不可用" end
+    -- 1.64.0 修多返回截断：s and pcall(...) 是逻辑表达式，只取 pcall 第一返回值——usable/noMana 恒 nil
+    local oku, usable, noMana = pcall(IsUsableAction, s.slot)
+    if not (oku and (usable or not noMana)) then return false, noMana and "不可用:资源不足" or "不可用" end -- 1.64.0 只信资源信号
   end
   if when.notQueued then
     local s = wslots[skill]
-    local okq, q = s and pcall(IsCurrentAction, s.slot)
-    if okq and q then return false, "已排队" end
+    if s then
+      local okq, q = pcall(IsCurrentAction, s.slot) -- 1.64.0 修多返回截断（q 恒 nil）
+      if okq and q then return false, "已排队" end
+    end
   end
   return true
 end
@@ -751,13 +755,19 @@ local function condOne(cd, skill, dry)
     return rd, tostring(why or "就绪")
   elseif k == "usable" then
     local s = wslots[skill]
-    local oku, u, noMana = s and pcall(IsUsableAction, s.slot)
-    local pass = (oku and u) and true or false
+    if not s then return false, "可用性" end
+    -- 1.64.0 修多返回截断：旧写法 s and pcall(...) 是逻辑表达式，只取 pcall 第一返回值——
+    -- u/noMana 恒 nil，可用性条件自引入起恒 false（测试只覆盖显示路径没覆盖执行路径才漏网）。
+    -- 另：本客户端 usable 第一返回走缓存态误报率高（冲锋/撕裂实际可放仍 false），
+    -- 只信第二返回 noMana=「资源不足」（用户 0 怒气验证）；其余交给客户端自拒（1.59.0 模型）。
+    local oku, u, noMana = pcall(IsUsableAction, s.slot)
+    local pass = (oku and (u or not noMana)) and true or false
     if cd.inv then pass = not pass end
-    return pass, noMana and "可用性:资源不足" or "可用性" -- 1.61.4 原因细分
+    return pass, noMana and "可用性:资源不足" or "可用性"
   elseif k == "notQueued" then
     local s = wslots[skill]
-    local okq, q = s and pcall(IsCurrentAction, s.slot)
+    local okq, q
+    if s then okq, q = pcall(IsCurrentAction, s.slot) end -- 1.64.0 修多返回截断（q 恒 nil，已排队检测失效）
     local pass = not (okq and q)
     if cd.inv then pass = not pass end
     return pass, "已排队"
@@ -1246,8 +1256,8 @@ function EVAL_GO(profSel)
     if not s then return false end
     if needUsable then
       if type(IsUsableAction) == "function" then
-        local oku, usable = pcall(IsUsableAction, s.slot)
-        if not (oku and usable) then return false end
+        local oku, usable, noMana = pcall(IsUsableAction, s.slot)
+        if not (oku and (usable or not noMana)) then return false end -- 1.64.0 只信资源信号（缓存 false 不误降档）
       end
       -- 1.52.0 距离检测：IsUsableAction 不含射程判定（自动射击 8-35 码贴脸也"可用"但放不出）——
       -- IsActionInRange 明确返回 0=超程时降档；nil=无目标/无法判定时放行（交给客户端自己拒）

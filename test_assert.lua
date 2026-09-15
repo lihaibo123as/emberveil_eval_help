@@ -659,4 +659,12 @@ EVAL_BLEED_BLACKLIST["黑暗犬"] = nil EVAL_HELP_UPDATE_STATE()
 eq(EVAL_HELP_STATE.canBleed, true, "clean state restores true")
 TEST.curTargetName = nil EVAL_HELP_UPDATE_STATE()
 
+-- 40) 可用性只信资源信号（1.64.0）：缓存 false+noMana → 挡；缓存 false 无 noMana → 放行（缓存态不可信）
+TEST.slotNames[1] = "致死打击" EVAL_GO_RESCAN(true)
+TEST.usableRet = { u = false, noMana = true }
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("可用") } }), false, "insufficient power blocks")
+TEST.usableRet = { u = false, noMana = false }
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("可用") } }), true, "cached false without noMana passes")
+TEST.usableRet = nil TEST.slotNames[1] = nil EVAL_GO_RESCAN(true)
+
 print("ALL TESTS PASS")
