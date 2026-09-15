@@ -1,4 +1,4 @@
--- EvalHelp 1.55.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.56.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.55.0"
+local VERSION = "1.56.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -206,15 +206,39 @@ function EVAL_HELP_UI_BUILD()
   y = y + math.floor(13 * z) + gap
 
   -- 方案切换行：点击按钮换激活方案（一键宏立即换套路；Shift+按宏 / /eh war next 也可切）
+  -- 1.56.0 自适应布局：行宽与上方状态条对齐（右缘一致）；方案多时自动换行——
+  -- 第 1 行（带「方案」标签）与后续行各自按可用宽装满，每行按钮拉伸填满整行
   local profBtns = {}
+  local w20 = uiWarCfg()
+  local nProf = (w20.profiles and table.getn(w20.profiles)) or 1
+  local labelW = math.floor(28 * z)
+  local btnH = math.floor(15 * z)
+  local barAvailW = W - pad * 2
+  local minBW = math.floor(34 * z) -- 单按钮最小宽（名字可读）
   local plabel = uiText(root, math.max(8, math.floor(9 * z)), 0.95, 0.82, 0.35)
   plabel:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -(y + math.floor(3 * z)))
   plabel:SetText("方案")
-  local pbw = math.floor((W - pad * 2 - math.floor(28 * z)) / 12) -- 1.42.0 方案上限 12：切换行 12 窄格
+  local perRow0 = math.max(1, math.floor((barAvailW - labelW + 2) / (minBW + 2))) -- 首行容量（扣标签）
+  local perRowN = math.max(1, math.floor((barAvailW + 2) / (minBW + 2)))           -- 后续行容量
+  local remP = math.max(0, nProf - perRow0)
+  local rows = 1 + ((remP > 0) and math.ceil(remP / perRowN) or 0)
+  local k0 = math.max(1, math.min(nProf, perRow0))
+  local bw0 = math.floor((barAvailW - labelW - (k0 - 1) * 2) / k0) -- 首行按钮宽（填满）
+  local kN = math.max(1, math.min(math.max(1, remP), perRowN))
+  local bwN = math.floor((barAvailW - (kN - 1) * 2) / kN)           -- 后续行按钮宽（填满）
   for i = 1, 12 do
+    local row0, col0, x0, bw0i
+    if i <= perRow0 then
+      row0, col0, x0, bw0i = 0, i - 1, pad + labelW + (i - 1) * (bw0 + 2), bw0
+    else
+      local j = i - perRow0
+      row0 = 1 + math.floor((j - 1) / perRowN)
+      col0 = (j - 1) - (row0 - 1) * perRowN
+      x0, bw0i = pad + col0 * (bwN + 2), bwN
+    end
     local pb = CreateFrame("Button", nil, root)
-    pb:SetWidth(pbw) pb:SetHeight(math.floor(15 * z))
-    pb:SetPoint("TOPLEFT", root, "TOPLEFT", pad + math.floor(28 * z) + (i - 1) * pbw, -y)
+    pb:SetWidth(bw0i) pb:SetHeight(btnH)
+    pb:SetPoint("TOPLEFT", root, "TOPLEFT", x0, -(y + row0 * (btnH + 2)))
     pcall(pb.EnableMouse, pb, true)
     pcall(pb.RegisterForClicks, pb, "LeftButtonUp")
     local pbg = pb:CreateTexture(nil, "BACKGROUND")
@@ -233,7 +257,7 @@ function EVAL_HELP_UI_BUILD()
     end)
     profBtns[i] = { btn = pb, bg = pbg, text = pt }
   end
-  y = y + math.floor(16 * z) + gap
+  y = y + rows * (btnH + 2) + gap -- 1.56.0 多行高度
 
   -- 技能图标带（1.46.0 两行合一：内容=激活方案技能，8 格/行超过自动换第二行，最多 16 格；
   -- 悬停 tooltip 看触发条件；点击开编辑窗；亮金=条件当前满足；动作条技能带冷却倒数）
