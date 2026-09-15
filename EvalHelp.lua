@@ -1,4 +1,4 @@
--- EvalHelp 1.56.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.56.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.56.0"
+local VERSION = "1.56.1"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -2741,6 +2741,18 @@ EVAL_IO_TEMPLATES = {
       "- 猛击 | Alt & 怒气>20\n" ..
       "- 英勇打击 | 怒气>30 & 未排队" },
   }},
+  -- 1.56.1 法师案例×2（用户实配收录）：法师一键输出 + 通用法系周围补buff
+  { cls = "法师", list = {
+    { name = "法师一键", desc = "选敌开怪/寒冰箭射程内/火球补刀/霜甲智慧保持", text = "# 方案: 法师一键\n\n" ..
+      "- 选取目标:最近敌人 | 非战斗 & 无目标\n" ..
+      "- 寒冰箭 | 范围内:寒冰箭 & 就绪 & 可攻击\n" ..
+      "- 火球术 | 可攻击 & 就绪\n" ..
+      "- 霜甲术 | 能量%>30 & 无buff:霜甲术\n" ..
+      "- 奥术智慧 | 无buff:奥术智慧" },
+    { name = "周围补buff", desc = "通用法系：切最近友方挨个补奥术智慧（切+补一键完成）", text = "# 方案: 周围补buff\n\n" ..
+      "- 选取目标:最近友方 | 目标非战斗\n" ..
+      "- 奥术智慧 | 无目标buff:奥术智慧" },
+  }},
 }
 
 -- 文本导入共用入口（1.44.0 抽出）：导入按钮与案例模版同走；成功返回 true+提示
@@ -2790,8 +2802,9 @@ function EVAL_PROFILE_FROM_TEXT(text)
         sn = condTrim(sn)
         local enabled = true
         if string.sub(sn, 1, 1) == "!" then enabled = false sn = condTrim(string.sub(sn, 2)) end
-        -- 技能名合理性守卫：超过 8 个汉字的行视为说明文字
-        if sn ~= "" and string.len(sn) <= 24 then
+        -- 技能名合理性守卫：超长按说明文字处理。1.56.1 上限 24→48 字节（16 汉字）——
+        -- 带前缀技能名更长：选取目标:指定名称:嗜血者=39B、物品:弱效巨魔之血药水=36B，旧 24B 上限会把它们静默丢行
+        if sn ~= "" and string.len(sn) <= 48 then
           table.insert(skills, { skill = sn, enabled = enabled, groups = EVAL_PARSE_CONDS(conds or ""), why = sn })
         end
       end

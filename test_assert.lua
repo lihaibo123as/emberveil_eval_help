@@ -368,6 +368,17 @@ eq(prof26 ~= nil, true, "template parses: " .. tostring(err26))
 eq(prof26.name, "武器战", "template profile name")
 eq(prof26.skills[1].skill, "姿态:战斗姿态", "template uses stance skill")
 eq(table.getn(prof26.skills), 8, "template skill count")
+-- 1.56.1 法师案例×2：分组存在 + 全部可解析 + 新条件类型可用
+eq(EVAL_IO_TEMPLATES[2].cls, "法师", "mage class group")
+eq(table.getn(EVAL_IO_TEMPLATES[2].list), 2, "mage has two templates")
+local pM1, eM1 = EVAL_PROFILE_FROM_TEXT(EVAL_IO_TEMPLATES[2].list[1].text)
+eq(pM1 ~= nil, true, "mage dps template parses: " .. tostring(eM1))
+eq(pM1.skills[1].skill, "选取目标:最近敌人", "mage dps opens with target sel")
+eq(table.getn(pM1.skills), 5, "mage dps skill count")
+local pM2, eM2 = EVAL_PROFILE_FROM_TEXT(EVAL_IO_TEMPLATES[2].list[2].text)
+eq(pM2 ~= nil, true, "mage buff template parses: " .. tostring(eM2))
+eq(pM2.skills[2].groups[1][1].k, "tBuff", "buff template uses tBuff cond")
+eq(pM2.skills[2].groups[1][1].v, false, "buff template checks missing target buff")
 
 -- 27) 重扫报告/状态总览以激活方案为准（1.45.0）：混合技能方案下非静默调用不报错
 EVAL_HELP_CONFIG.war.profiles = { { name = "混合", skills = {
