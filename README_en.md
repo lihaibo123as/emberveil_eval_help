@@ -105,7 +105,7 @@
 
 **Skill editor** (opened via [Edit] or by clicking a skill icon): per-row independent condition editing — condition type / params all chosen from dropdowns (28 condition types, grouped as self / target / aura / skill), relation column toggles & (all-in-group) / | (any-group), live preview
 
-![Skill editor](preview/skill_cfg.png)
+![Skill editor](preview/skill_doif.png)
 
 **Skill two-level dropdown**: skill row = [Category▾][Item▾] side-by-side double dropdown, options with icons — character skills (action-bar scan of all skills on your bars):
 
@@ -123,9 +123,7 @@
 
 ![Item use](preview/skill_item.png)
 
-**Potion buff full chain**: potion/food buffs (e.g. 「再生」) can be displayed (○ live items), picked, and matched — the condition `无buff:再生` drives one-key potion drinking:
-
-![Potion buff condition matching](preview/skill_status.png)
+**Aura checks (4 types)**: self buff / target debuff / target buff / self debuff (yes/no toggle, live items ◆○●▲) — `无buff:再生` drives one-key potion drinking, `无目标buff:奥术智慧` drives buff rounds:
 
 **Combat info UI + Status info UI** (`/eh ui` / `/eh st`): HP / power / target bars + profile switcher row + skill icon row (hover tooltip shows trigger conditions, lit gold = conditions currently met, click an icon to open its editor); the status window shows all state variables live + the recent-cast log (per-cast skill / target / per-condition √/× verdicts)
 
