@@ -1,7 +1,7 @@
 -- EvalHelp · Core.lua —— 输出/i18n/状态采集(EVAL_HELP_STATE)/角色状态模块/UI 越界助手
 -- 加载顺序见 EvalHelp.toc：Locales → Core → Engine → EvalHelp
 
--- EvalHelp 1.44.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.44.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.44.0: IO 弹窗加「案例模版」选单（EVAL_IO_TEMPLATES 按职业分组，点击直接导入）；原武器战示例按钮并入；修导入上限残留 4→12
 --   1.43.0: 角色行为新增「姿态:名称」——姿态栏直切（CastShapeshiftForm 不受保护），不占动作条，已激活守门
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
@@ -421,3 +421,10 @@ EVAL_ON_COMBAT = onCombatEvent
 EVAL_FORMAT_STATS = formatStats
 EVAL_COLLECT_STATS = collectStats
 EVAL_RESOLVE_LANG = ehResolveLang
+
+-- 宏入口兜底（1.44.1）：Engine.lua 若未成功加载（改码中途 /reload 读到半成品、角色插件列表未启用等），
+-- /run EVAL_GO() 不再弹「nil value」红框，改聊天框给出可操作的排查指引。
+-- 正常加载时 Engine.lua 末尾的正式 EVAL_GO 会覆盖本兜底；EVAL_ENGINE_OK 是加载哨兵。
+function EVAL_GO()
+  EVAL_SAY("|cffff0000EvalHelp 引擎未加载完整|r（宏走了兜底）：请 /reload 一次；反复出现 → 检查角色选择界面的插件列表是否对当前角色启用了 EvalHelp")
+end
