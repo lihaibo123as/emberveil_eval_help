@@ -63,7 +63,7 @@ CastShapeshiftForm = function(i) TEST.stanceCast = i local f = TEST.stances and 
 GetPlayerBuff = function(i) return TEST.buffs[i + 1] and i or -1 end
 GetPlayerBuffTexture = function(bi) return TEST.buffs[bi + 1] and TEST.buffs[bi + 1].tex or nil end
 UnitDebuff = function(_, i) local d = TEST.debuffs[i] if not d then return nil end return d.tex, d.apps or 0 end
-UnitBuff = function(_, i) local b = TEST.unitBuffs and TEST.unitBuffs[i] return b and b.tex or nil end -- 1.32.10 兜底枚举桩
+UnitBuff = function(u, i) local t = (u == "target") and TEST.tgtBuffs or TEST.unitBuffs local b = t and t[i] return b and b.tex or nil end -- 1.32.10 兜底枚举桩；1.54.0 target 分表
 IsAltKeyDown = function() return false end
 IsShiftKeyDown = function() return false end
 IsControlKeyDown = function() return false end

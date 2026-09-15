@@ -1,4 +1,4 @@
--- EvalHelp 1.53.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.54.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.53.0"
+local VERSION = "1.54.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -1832,10 +1832,10 @@ local SE_TYPES = {
   { id = "shift",      name = "Shift按住",   kind = "bool" },
   { id = "ctrl",       name = "Ctrl按住",    kind = "bool" },
   { id = "form",       name = "当前姿态",    kind = "form" },
-  { id = "hasBuff",    name = "自身有buff",  kind = "skill", s = "战斗怒吼" },
-  { id = "noBuff",     name = "自身无buff",  kind = "skill", s = "战斗怒吼" },
-  { id = "hasDebuff",  name = "目标有debuff", kind = "skill", s = "断筋" },
-  { id = "noDebuff",   name = "目标无debuff", kind = "skill", s = "断筋" },
+  { id = "hasBuff",    name = "自身buff检查",   kind = "skill", s = "战斗怒吼" }, -- 1.54.0 合并（是/否切换）
+  { id = "pDebuff",    name = "自身debuff检查", kind = "skill", s = "" },          -- 1.54.0 新增
+  { id = "hasDebuff",  name = "目标debuff检查", kind = "skill", s = "断筋" },      -- 1.54.0 合并（是/否切换）
+  { id = "tBuff",      name = "目标buff检查",   kind = "skill", s = "" },          -- 1.54.0 新增
   { id = "ready",      name = "冷却就绪",    kind = "flag" },
   { id = "usable",     name = "技能可用",    kind = "flag" },
   { id = "notQueued",  name = "未排队",      kind = "flag" },
@@ -1853,13 +1853,15 @@ local SE_TYPES = {
 local SE_BY_K = {}
 for i, td in ipairs(SE_TYPES) do SE_BY_K[td.id] = i end
 SE_BY_K["formNot"] = SE_BY_K["form"]
+SE_BY_K["noBuff"] = SE_BY_K["hasBuff"] -- 1.54.0 存量数据归并显示
+SE_BY_K["noDebuff"] = SE_BY_K["hasDebuff"]
 local SE_OPS = { ">", ">=", "<", "<=", "==", "~=" }
 
 -- 条件类型分组（1.32.5 下拉美化）：金色组标题行不可选；SE_TYPES 本体顺序不动，仅展示层分组
 local SE_TYPE_GROUPS = {
   { label = "CTG_1", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "combat", "autoAttack", "autoShot", "wandShoot", "alt", "shift", "ctrl", "form", "castEl", "castLeft" } },
   { label = "CTG_2", ids = { "tHpPct", "hasTarget", "canAttack", "canBleed", "tFriendly", "tHostile", "tNeutral", "isElite", "isBoss", "tInCombat", "tClass", "immune", "tCasting", "tCastEl", "tCastLeft" } },
-  { label = "CTG_3", ids = { "hasBuff", "noBuff", "hasDebuff", "noDebuff" } },
+  { label = "CTG_3", ids = { "hasBuff", "pDebuff", "hasDebuff", "tBuff" } }, -- 1.54.0 光环检查四型
   { label = "CTG_4", ids = { "ready", "usable", "notQueued", "inRange", "casting" } },
 }
 
@@ -1870,7 +1872,10 @@ local function seDefaultCond(ti)
   if td.kind == "num" then return { k = td.id, op = ">", n = td.n }
   elseif td.kind == "bool" then return { k = td.id, v = true }
   elseif td.kind == "form" then return { k = "form", n = 1 }
-  elseif td.kind == "skill" then return { k = td.id, s = td.s }
+  elseif td.kind == "skill" then
+    local cd0 = { k = td.id, s = td.s }
+    if td.id == "hasBuff" or td.id == "hasDebuff" or td.id == "tBuff" or td.id == "pDebuff" then cd0.v = true end -- 1.54.0 光环检查型默认「是」
+    return cd0
   elseif td.kind == "target" then return { k = td.id, s = td.s }
   elseif td.kind == "class" then return { k = td.id, cs = { WARRIOR = true } }
   else return { k = td.id } end
@@ -1894,6 +1899,9 @@ local function seGroupsToLinear(groups)
           cp[k] = v
         end
       end
+      -- 1.54.0 存量归一：noBuff/noDebuff → hasBuff/hasDebuff + v=false（编辑保存后即新格式）
+      if cp.k == "noBuff" then cp.k = "hasBuff" cp.v = false
+      elseif cp.k == "noDebuff" then cp.k = "hasDebuff" cp.v = false end
       table.insert(list, { conn = conn, cd = cp })
     end
   end
@@ -2115,8 +2123,9 @@ function EVAL_HELP_SE_REFRESH()
         local disp = tostring(cd.s or "?")
         if cd.k == "tCasting" and (cd.s == nil or cd.s == "") then disp = L("TCAST_ANY") end -- 1.40.0 空参数=任意施法
         if cd.k == "casting" and (cd.s == nil or cd.s == "") then disp = L("TCAST_ANY") end -- 1.41.0 自身施法同规
-        if cd.k == "immune" or cd.k == "inRange" or cd.k == "casting" or cd.k == "tCasting" then -- 1.36.3~1.40.0 免疫·射程·施法·目标施法 开关（后三显示 是/否）
-          if cd.k == "inRange" or cd.k == "casting" or cd.k == "tCasting" then
+        local auraChk = (cd.k == "hasBuff" or cd.k == "hasDebuff" or cd.k == "tBuff" or cd.k == "pDebuff") -- 1.54.0 光环检查型 是/否
+        if cd.k == "immune" or cd.k == "inRange" or cd.k == "casting" or cd.k == "tCasting" or auraChk then
+          if cd.k == "inRange" or cd.k == "casting" or cd.k == "tCasting" or auraChk then
             row.immBtn.text:SetText((cd.v == false) and L("SE_NO") or L("SE_YES"))
           else
             row.immBtn.text:SetText((cd.v == false) and L("IMM_N") or L("IMM_Y"))
@@ -2126,7 +2135,7 @@ function EVAL_HELP_SE_REFRESH()
         local isDebuff = (cd.k == "hasDebuff" or cd.k == "noDebuff")
         if isDebuff then
           if type(cd.n) == "number" and cd.n > 1 then
-            disp = disp .. (cd.k == "hasDebuff" and (" ≥" .. cd.n) or (" <" .. cd.n))
+            disp = disp .. (((cd.k == "noDebuff" or cd.v == false) and " <" or " ≥") .. cd.n) -- 1.54.0 合并后看 v 方向
           end
           row.stk.text:SetText(type(cd.n) == "number" and cd.n > 1 and ("层" .. cd.n) or "层")
           pcall(row.stk.btn.Show, row.stk.btn)
@@ -2484,11 +2493,15 @@ local function SE_BUILD()
         if not petCmdOf(n) and not targetSelOf(n) and not itemOf(n) and not stanceOf(n) and not cancelCastOf(n) then push(n, n) end
       end
       local k0 = it.cd.k
-      local isAura = (k0 == "hasDebuff" or k0 == "noDebuff" or k0 == "hasBuff" or k0 == "noBuff")
+      local isAura = (k0 == "hasDebuff" or k0 == "noDebuff" or k0 == "hasBuff" or k0 == "noBuff" or k0 == "tBuff" or k0 == "pDebuff")
       if k0 == "hasDebuff" or k0 == "noDebuff" then
         for _, d in ipairs(EVAL_TARGET_DEBUFF_LIST()) do push("◆" .. d.name, d.name) end
       elseif k0 == "hasBuff" or k0 == "noBuff" then
         for _, d in ipairs(EVAL_PLAYER_BUFF_LIST()) do push("○" .. d.name, d.name) end
+      elseif k0 == "tBuff" then -- 1.54.0 ●目标buff 实时项
+        for _, d in ipairs(EVAL_TARGET_BUFF_LIST()) do push("●" .. d.name, d.name) end
+      elseif k0 == "pDebuff" then -- 1.54.0 ▲自身debuff 实时项
+        for _, d in ipairs(EVAL_PLAYER_DEBUFF_LIST()) do push("▲" .. d.name, d.name) end
       end
       if isAura then
         local seen = {}

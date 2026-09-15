@@ -529,4 +529,38 @@ eq(EVAL_RULE_RUN({
 eq(TEST.petCmd, nil, "nothing after gcd skill")
 TEST.hasPet = nil TEST.stances = nil TEST.used = {} TEST.slotNames[1] = nil TEST.slotNames[2] = nil EVAL_GO_RESCAN(true)
 
+-- 35) 光环检查合并 + 目标buff/自身debuff（1.54.0）
+TEST.slotNames[1] = "致死打击" EVAL_GO_RESCAN(true)
+-- 解析回环：旧文本 → 新结构 → 文本不变
+local g35a = EVAL_PARSE_CONDS("无buff:战斗怒吼")
+eq(g35a[1][1].k, "hasBuff", "noBuff text merges to hasBuff")
+eq(g35a[1][1].v, false, "merged v=false")
+eq(EVAL_GROUP_STR(g35a), "无buff:战斗怒吼", "noBuff text roundtrip")
+local g35b = EVAL_PARSE_CONDS("无debuff:破甲攻击<3")
+eq(g35b[1][1].k, "hasDebuff", "noDebuff text merges")
+eq(g35b[1][1].v, false, "noDebuff v=false")
+eq(EVAL_GROUP_STR(g35b), "无debuff:破甲攻击<3", "noDebuff stack roundtrip")
+eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("目标buff:嗜血")), "目标buff:嗜血", "tBuff roundtrip")
+eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("无目标buff:嗜血")), "无目标buff:嗜血", "not tBuff roundtrip")
+eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("自身debuff:减速")), "自身debuff:减速", "pDebuff roundtrip")
+-- 引擎判定：目标 buff（TEST.tgtBuffs → st.targetBuffs）
+TEST.tgtBuffs = { { tex = "texBloodlust" } }
+EVAL_HELP_CONFIG.war.debuffTex = { ["嗜血"] = "texBloodlust", ["减速"] = "texSlow" }
+EVAL_HELP_UPDATE_STATE()
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("目标buff:嗜血") } }), true, "target buff present passes")
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("无目标buff:嗜血") } }), false, "not-target-buff inverse")
+TEST.tgtBuffs = nil EVAL_HELP_UPDATE_STATE()
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("无目标buff:嗜血") } }), true, "missing target buff passes negated")
+-- 引擎判定：自身 debuff（UnitDebuff player 走 TEST.debuffs 桩）
+TEST.debuffs = { { name = "减速", tex = "texSlow", apps = 0 } }
+EVAL_HELP_UPDATE_STATE()
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("自身debuff:减速") } }), true, "self debuff present passes")
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("无自身debuff:减速") } }), false, "self debuff inverse")
+TEST.debuffs = {} EVAL_HELP_UPDATE_STATE()
+-- 合并 hasBuff v=false 判定
+TEST.buffs = { { tex = "texBS" } } EVAL_HELP_UPDATE_STATE()
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("无buff:战斗怒吼") } }), true, "merged noBuff passes when missing")
+TEST.buffs = {} EVAL_HELP_UPDATE_STATE()
+TEST.slotNames[1] = nil EVAL_GO_RESCAN(true)
+
 print("ALL TESTS PASS")

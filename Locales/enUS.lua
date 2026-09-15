@@ -78,7 +78,7 @@ EVAL_LOCALES["enUS"] = {
   CT_CANATTACK = "Attackable", CT_CANBLEED = "Bleedable", CT_TFRIENDLY = "T:Friendly", CT_THOSTILE = "T:Hostile",
   CT_TNEUTRAL = "T:Neutral", CT_ISELITE = "T:Elite", CT_ISBOSS = "T:Boss", CT_TINCOMBAT = "T:In Combat",
   CT_AUTOATTACK = "Auto-attack On", CT_AUTOSHOT = "Auto Shot On", CT_WANDSHOOT = "Wand Shoot On", CT_ALT = "Alt Held", CT_SHIFT = "Shift Held", CT_CTRL = "Ctrl Held",
-  CT_FORM = "Current Stance", CT_HASBUFF = "Have Buff", CT_NOBUFF = "Missing Buff", CT_HASDEBUFF = "T:Has Debuff",
+  CT_FORM = "Current Stance", CT_HASBUFF = "Self Buff", CT_NOBUFF = "Missing Buff", CT_HASDEBUFF = "Target Debuff", CT_TBUFF = "Target Buff", CT_PDEBUFF = "Self Debuff",
   CT_NODEBUFF = "T:No Debuff", CT_READY = "Ready", CT_USABLE = "Usable", CT_NOTQUEUED = "Not Queued",
   CT_TARGET = "Target Select", CT_TCLASS = "Target Class",
   CT_IMMUNE = "T:Immune Skill",

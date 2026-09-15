@@ -354,6 +354,35 @@ function EVAL_TARGET_DEBUFF_LIST()
   return list
 end
 
+-- 通用光环实时清单（1.54.0）：unit="target"/"player"，harmful=true=debuff / false=buff
+local function wScanAuras(unit, harmful)
+  local list = {}
+  if not UnitExists(unit) then return list end
+  local api = harmful and UnitDebuff or UnitBuff
+  local ttm = WTT and (harmful and WTT.SetUnitDebuff or WTT.SetUnitBuff)
+  if type(api) ~= "function" or not ttm then return list end
+  pcall(function() WTT:SetOwner(UIParent, "ANCHOR_NONE") end)
+  for i = 1, 16 do
+    local okd, tex = pcall(api, unit, i)
+    if not okd or not tex then break end
+    local name
+    pcall(function() WTT:ClearLines() end)
+    local oks = pcall(ttm, WTT, unit, i) -- 1.33.2 探针实测：返回值恒 nil 但 tooltip 已填充
+    if oks then
+      local fs = getglobal("GameTooltipTextLeft1")
+      if fs and fs.GetText then name = fs:GetText() end
+    end
+    if name and name ~= "" then
+      table.insert(list, { name = name, tex = tex })
+      learnAuraTex(name, tex)
+    end
+  end
+  pcall(function() WTT:Hide() end)
+  return list
+end
+function EVAL_TARGET_BUFF_LIST() return wScanAuras("target", false) end -- 目标 buff（1.54.0）
+function EVAL_PLAYER_DEBUFF_LIST() return wScanAuras("player", true) end -- 自身 debuff（1.54.0）
+
 -- 当前自身 buff 实时清单（GetPlayerBuff 0 起始索引 + SetPlayerBuff 读名）
 function EVAL_PLAYER_BUFF_LIST()
   local list = {}
@@ -688,16 +717,23 @@ local function condOne(cd, skill, dry)
       cur = okc and c2 and true or false
     end
     return (cur == (cd.v ~= false)), sn
-  elseif k == "hasBuff" then return (st.playerBuffs[texOf(cd.s) or ""] and true or false), "缺buff:" .. tostring(cd.s)
+  elseif k == "hasBuff" then -- 1.54.0 合并：v=false=无buff（旧 k=noBuff 仅兼容存量数据）
+    local has = st.playerBuffs[texOf(cd.s) or ""] and true or false
+    return (has == (cd.v ~= false)), "自身buff:" .. tostring(cd.s)
   elseif k == "noBuff" then return (not st.playerBuffs[texOf(cd.s) or ""]), "已有buff:" .. tostring(cd.s)
+  elseif k == "tBuff" then -- 1.54.0 目标 buff 检查（v=false=无目标buff）
+    local has = st.targetBuffs and st.targetBuffs[texOf(cd.s) or ""] and true or false
+    return (has == (cd.v ~= false)), "目标buff:" .. tostring(cd.s)
+  elseif k == "pDebuff" then -- 1.54.0 自身 debuff 检查（v=false=无自身debuff）
+    local has = st.playerDebuffs and st.playerDebuffs[texOf(cd.s) or ""] and true or false
+    return (has == (cd.v ~= false)), "自身debuff:" .. tostring(cd.s)
   elseif k == "hasDebuff" then
-    -- 层数门槛（1.31.0）：cd.n=需要的最小层数（nil/1=只要有）
+    -- 1.54.0 合并：v=false=无debuff（不足 lim 层才算无，与旧 noDebuff 同语义）；层数门槛 cd.n（1.31.0）
     local cnt = st.targetDebuffs[texOf(cd.s) or ""]
     cnt = (cnt == true) and 1 or (cnt or 0) -- 兼容旧布尔
-    local need = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
-    if cnt <= 0 then return false, "目标缺debuff:" .. tostring(cd.s) end
-    if cnt < need then return false, "debuff层数不足:" .. tostring(cd.s) .. " " .. cnt .. "/" .. need end
-    return true, "debuff层数:" .. cnt
+    local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
+    local has = cnt >= lim
+    return (has == (cd.v ~= false)), "目标debuff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "/" .. lim) or "")
   elseif k == "noDebuff" then
     -- 层数门槛（1.31.0）：cd.n=视为"无"的上限（nil/1=完全没有；N=不足N层才算无）
     local cnt = st.targetDebuffs[texOf(cd.s) or ""]
@@ -950,7 +986,15 @@ function EVAL_PARSE_ONE(token)
   fn = string.match(token, "^非姿态(%d)$")
   if fn then return { k = "formNot", n = tonumber(fn) } end
   local bs = string.match(token, "^无buff[:：](.+)$") or string.match(token, "^noBuff[:=](.+)$")
-  if bs then return { k = "noBuff", s = condTrim(bs) } end
+  if bs then return { k = "hasBuff", s = condTrim(bs), v = false } end -- 1.54.0 合并为 hasBuff+v（旧 noBuff 词条仍认）
+  local tb = string.match(token, "^目标buff[:：](.+)$") or string.match(token, "^tBuff[:=](.+)$") -- 1.54.0
+  if tb then return { k = "tBuff", s = condTrim(tb), v = not neg } end
+  local tbn = string.match(token, "^无目标buff[:：](.+)$") or string.match(token, "^目标无buff[:：](.+)$")
+  if tbn then return { k = "tBuff", s = condTrim(tbn), v = false } end
+  local pd = string.match(token, "^自身debuff[:：](.+)$") or string.match(token, "^pDebuff[:=](.+)$")
+  if pd then return { k = "pDebuff", s = condTrim(pd), v = not neg } end
+  local pdn = string.match(token, "^无自身debuff[:：](.+)$") or string.match(token, "^自身无debuff[:：](.+)$")
+  if pdn then return { k = "pDebuff", s = condTrim(pdn), v = false } end
   bs = string.match(token, "^有buff[:：](.+)$") or string.match(token, "^hasBuff[:=](.+)$")
   if bs then return { k = "hasBuff", s = condTrim(bs) } end
   -- debuff 层数后缀（1.31.0）：有debuff:破甲>=3（至少3层）/ 无debuff:破甲<3（不足3层）；无后缀=只要有/没有
@@ -966,7 +1010,7 @@ function EVAL_PARSE_ONE(token)
     return condTrim(nm), n
   end
   bs = string.match(token, "^无debuff[:：](.+)$") or string.match(token, "^noDebuff[:=](.+)$")
-  if bs then local nm, n = auraStack(bs, "max") return { k = "noDebuff", s = nm, n = n } end
+  if bs then local nm, n = auraStack(bs, "max") return { k = "hasDebuff", s = nm, n = n, v = false } end -- 1.54.0 合并
   bs = string.match(token, "^有debuff[:：](.+)$") or string.match(token, "^hasDebuff[:=](.+)$")
   if bs then local nm, n = auraStack(bs, "min") return { k = "hasDebuff", s = nm, n = n } end
   local tc = string.match(token, "^目标职业[:：](.+)$") or string.match(token, "^tClass[:=](.+)$")
@@ -1055,9 +1099,11 @@ function EVAL_COND_STR(cd)
   if k == "autoAttack" then return cd.v and "普攻" or "未普攻" end
   if k == "autoShot" then return cd.v and "自动射击" or "未自动射击" end -- 1.51.0
   if k == "wandShoot" then return cd.v and "魔杖射击" or "未魔杖射击" end
-  if k == "hasBuff" then return "有buff:" .. tostring(cd.s) end
+  if k == "hasBuff" then return ((cd.v == false) and "无buff:" or "有buff:") .. tostring(cd.s) end -- 1.54.0 合并（旧 k=noBuff 走下一行兼容）
   if k == "noBuff" then return "无buff:" .. tostring(cd.s) end
-  if k == "hasDebuff" then return "有debuff:" .. tostring(cd.s) .. ((type(cd.n) == "number" and cd.n > 1) and (">=" .. cd.n) or "") end
+  if k == "tBuff" then return ((cd.v == false) and "无目标buff:" or "目标buff:") .. tostring(cd.s) end -- 1.54.0
+  if k == "pDebuff" then return ((cd.v == false) and "无自身debuff:" or "自身debuff:") .. tostring(cd.s) end -- 1.54.0
+  if k == "hasDebuff" then return ((cd.v == false) and "无debuff:" or "有debuff:") .. tostring(cd.s) .. ((type(cd.n) == "number" and cd.n > 1) and ((cd.v == false and "<" or ">=") .. cd.n) or "") end
   if k == "noDebuff" then return "无debuff:" .. tostring(cd.s) .. ((type(cd.n) == "number" and cd.n > 1) and ("<" .. cd.n) or "") end
   if k == "ready" then return cd.inv and "未就绪" or "就绪" end
   if k == "usable" then return cd.inv and "不可用" or "可用" end
