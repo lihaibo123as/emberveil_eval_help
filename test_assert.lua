@@ -379,6 +379,12 @@ local pM2, eM2 = EVAL_PROFILE_FROM_TEXT(EVAL_IO_TEMPLATES[2].list[2].text)
 eq(pM2 ~= nil, true, "mage buff template parses: " .. tostring(eM2))
 eq(pM2.skills[2].groups[1][1].k, "tBuff", "buff template uses tBuff cond")
 eq(pM2.skills[2].groups[1][1].v, false, "buff template checks missing target buff")
+-- 1.67.2 盗贼模版：分组存在 + 可解析 + 连击条件
+eq(EVAL_IO_TEMPLATES[3].cls, "盗贼", "rogue class group")
+local pR1, eR1 = EVAL_PROFILE_FROM_TEXT(EVAL_IO_TEMPLATES[3].list[1].text)
+eq(pR1 ~= nil, true, "rogue template parses: " .. tostring(eR1))
+eq(table.getn(pR1.skills), 3, "rogue skill count")
+eq(pR1.skills[3].groups[1][2].k, "combo", "rogue finisher uses combo cond")
 
 -- 27) 重扫报告/状态总览以激活方案为准（1.45.0）：混合技能方案下非静默调用不报错
 EVAL_HELP_CONFIG.war.profiles = { { name = "混合", skills = {
