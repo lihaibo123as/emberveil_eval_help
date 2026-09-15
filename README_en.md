@@ -21,41 +21,6 @@
 | Version | Theme | One-line highlight |
 | :-- | :-- | :-- |
 | **1.52.0** | 📏 Auto-attack range check | Auto Shot / wand out of range (IsActionInRange=0) now auto-falls back to melee auto-attack — point-blank hunters no longer swing their bow at thin air |
-| **1.51.0** | 🎯 Shooting-state conditions | New conditions `自动射击` / `魔杖射击` (yes/no toggle); also fixed the old bug where `!` negation silently failed for all boolean conditions |
-| **1.50.0** | 🏹 Auto attack | "Auto auto-attack takeover" renamed to "Auto Attack" + priority: Auto Shot > Shoot (wand) > melee auto-attack, auto-downgrades when unavailable, with hover tooltip |
-| **1.49.3** | 🚑 Cancel-casting fix | SpellStopCasting is Protected in this client (direct addon calls do nothing) → rerouted through a RunScript chat script on the same path |
-| **1.49.2** | 🔍 Leftover audit | Takeover generalized (hunter Auto Shot now works) + rage/stance logging made dynamic + duplicate T_RANGE definition removed + leftover file cleanup |
-| **1.49.1** | ▶️ Empty conditions fire directly | A skill with no conditions now executes unconditionally (old behavior: empty-condition skills never fired) |
-| **1.49.0** | 🎯 Enemy pre-selection removed | Pressing the macro no longer grabs the nearest enemy first — it fought with rules like `选取目标:最近友方`; enemy selection is fully handed to rules |
-| **1.48.0** | 🧹 Whitelist cleared | Skill/param dropdowns are now pure action-bar scans — mages no longer see warrior skills; fresh-install default profile is empty (start from a case template) |
-| **1.47.0** | 🏹 Character actions expanded | Added Cancel Casting / Auto Shot / Shoot; stances accept an index (`姿态:2`); fixed the coupling between auto-attack state and the takeover toggle |
-| **1.46.0** | 🧩 Icon rows merged | Combat UI's two icon rows merged into one strip below the profile row (8 per row, wraps up to 16); fixed the all-? icon table-reference bug after rescan |
-| **1.45.1** | 🔧 Checkbox alignment | Config checkboxes and labels now share a centerline anchor (the old boxes sat visibly too low) |
-| **1.45.0** | 🎯 Profile-driven display | Combat UI skill icon row / rescan report / status overview all follow the active profile — the old fixed warrior skill list is retired, truly all-class |
-| **1.44.1** | 🛟 Macro entry fallback | EVAL_GO no longer pops a nil red error when the engine isn't fully loaded; it now prints /reload and addon-enable troubleshooting tips in chat |
-| **1.44.0** | 📋 Case templates | Import popup gains a "Case Templates" menu grouped by class — click to import directly (Arms-warrior template first); fixed the leftover import cap + missing condTrim bridge |
-| **1.43.0** | ⚔️ Stance-swap skill | New character action `姿态:X` — switches the stance bar directly without occupying an action slot (CastShapeshiftForm is not protected), guarded when already active |
-| **1.42.0** | 📚 12-profile cap | Profiles 4→12: compact config layout + 12 narrow switcher cells in the combat UI + the full EVAL_GO1~12 direct-trigger set |
-| **1.41.2** | 🌉 Missing-bridge final review | Static analyzer split_audit.js caught 6 missing bridges from the split, all patched — audit CLEAN |
-| **1.41.1** | 🚑 EVAL_GO hotfix | A bare cfg reference in Engine (a missed direct-access form) crashed macro presses; switched to global reads |
-| **1.41.0** | 🎬 Three self-casting conditions | Casting supports any cast (empty param) + self cast-bar elapsed / remaining seconds; fixed the 1.39.0 split missing bridge |
-| **1.40.0** | 🔮 Target casting state | Conditions "target casting / cast-bar elapsed / cast-bar remaining" — driven by chat text events + self-learned cast durations |
-| **1.39.0** | 🧱 Modular refactor | The 4758-line single file split into Core / Engine / UI three modules, with cross-module global bridge exports |
-| **1.38.1** | 📊 Cast-bar progress | Combat info UI gains a cast bar under the target bar (progress + remaining seconds; the status UI already had the casting row) |
-| **1.38.0** | 🎬 "Casting" condition | SPELLCAST_* event-driven cast tracking; `施法中:X` prevents clipping your own cast |
-| **1.37.0** | 📏 Range tiers + in-range condition | Target distance tier display (melee / charge range / beyond ranged) + condition `范围内:X` via IsActionInRange |
-| **1.36.4** | 🚑 Immunity-toggle hotfix | immBtn was mis-nested inside the sDrop call causing a nil error on refresh; put back in place (i18n branch) |
-| **1.36.3** | 🔘 Immunity toggle | The "target immune to skill" param area gains an `免疫`/`未免疫` toggle button (i18n branch) |
-| **1.36.2** | 📏 Preview repositioned | Editor preview moved to the same row right of "+ Add Condition", no longer overlapping Save/Cancel (i18n branch) |
-| **1.36.1** | 🧬 Immunity condition type | Conditions `免疫:技能` / `未免疫:技能` read the learned table — immune behavior becomes programmable (i18n branch) |
-| **1.36.0** | 🛡️ Immunity learner | Auto-learns from immunity text events (skill@mob name); same-named mobs are no longer attempted with that skill (i18n branch) |
-| **1.35.2** | 🧹 Editor slimming | Condition param [v] arrows all removed — the param text itself is the button (i18n branch) |
-| **1.35.1** | 🛡️ Immunity probe | /eh go probe immune captures the immunity event prototype (i18n branch) |
-| **1.35.0** | 🌐 i18n P1 | Editor / import-export / popups / hints fully translated, 28 condition names in the language pack, trilingual README (i18n branch) |
-| **1.34.1** | 📐 Wide-language adaptation | EN/RU windows widened 560→700, right button column right-anchored, long text no longer overlaps (i18n branch) |
-| **1.34.0** | 🌍 i18n P0 | zh/en/ru trilingual skeleton + flag picker in the config window; UI text via language packs (i18n branch) |
-| **1.33.4** | 🧽 Cap leftover cleanup | The missed 8-skill cap in /eh go add removed; README intro and scenarios fully refreshed |
-| **1.33.3** | 🚑 Scrolling hotfix | Hotfix for the 1.33.0 ROWS scope error (now uses the live row-pool length) |
 
 > 📜 Detailed per-version notes live in **[CHANGELOG.md](CHANGELOG.md)**; earlier history is in the git commit log.
 
