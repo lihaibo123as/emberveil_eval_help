@@ -420,4 +420,12 @@ EVAL_GO()
 eq(EVAL_HELP_STATE.autoAttack, true, "autoAttack state accurate with takeover off")
 TEST.currentAction = nil EVAL_HELP_CONFIG.war.attack = nil TEST.slotNames[2] = nil EVAL_GO_RESCAN(true)
 
+-- 30) 空条件=直接执行（1.49.1）：编辑窗不配条件/导入 "- 技能 |" 产出空 groups 也必须触发
+TEST.slotNames[1] = "致死打击" EVAL_GO_RESCAN(true)
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = {} } }), true, "empty groups table fires")
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("") } }), true, "parse empty string fires")
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS(" ") } }), true, "parse blank fires")
+eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("")), "", "empty str roundtrip")
+TEST.slotNames[1] = nil EVAL_GO_RESCAN(true)
+
 print("ALL TESTS PASS")

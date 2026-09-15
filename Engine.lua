@@ -791,7 +791,10 @@ end
 
 -- 条件组求值：任一组全过即过（组间 | ），组内全过才算过（组内 & ）
 -- 命中时返回第三个值 trace = 该组每个条件的逐项判定明细（释放日志用）
+-- 1.49.1：条件为空 = 无条件直接执行（旧行为：空 groups 表一组都不进 → 恒 false 永远不触发，
+-- 编辑窗不配条件保存 / 导入文本 "- 技能 | " 都会产出空表——技能变死条目）
 local function groupsOK(rule, dry)
+  if not rule.groups or table.getn(rule.groups) == 0 then return true, nil, "无条件" end
   local lastWhy = "条件不满足"
   for _, g in ipairs(rule.groups or {}) do
     local allOK = true
