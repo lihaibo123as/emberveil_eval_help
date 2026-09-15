@@ -942,12 +942,9 @@ function EVAL_RULE_RUN(rules)
           })
           while table.getn(st.castLog) > 5 do table.remove(st.castLog) end
           if trace then wlog(r.skill .. "触发: " .. trace) end
-          -- 1.53.0 并行执行模型（用户定义）：只有【角色技能】（动作条法术）占公共CD、出手即结束本次按键；
-          -- 角色行为（攻击/自动射击/射击/取消施法/姿态切换）、宠物行为、选取目标、物品使用全部可并行——
-          -- 出手后刷新状态继续评估后续规则（1.52.1 起只有选取目标续行，现推广到全部非 GCD 类型）。
-          -- 一次按键示例：切目标 + 宠物攻击 + 喝药 + 致死打击（仍只有最后一个法术吃 GCD）。
-          local gcdSkill = wslots[r.skill] and r.skill ~= "攻击" and r.skill ~= "自动射击" and r.skill ~= "射击"
-          if gcdSkill then return true end
+          -- 1.59.0 去除公共CD终止机制（用户定义）：按顺序把符合的规则全部执行一遍——
+          -- 能不能放交给游戏内置判定（GCD 中 UseAction 静默失败，不产生副作用）；
+          -- 1.53.0 的 gcdSkill 终止删除，所有类型统一：出手后刷新状态、继续评估后续规则。
           acted = true
           EVAL_HELP_UPDATE_STATE() -- 目标/状态可能已变，后续条件按新状态判定
         end

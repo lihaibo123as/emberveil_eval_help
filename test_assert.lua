@@ -531,13 +531,13 @@ eq(TEST.petCmd, "PetAttack", "pet cmd fired in chain")
 eq(TEST.stanceCast, 1, "stance switched in chain")
 eq(TEST.used[1], 2, "attack toggle fired in chain")
 eq(TEST.used[2], 1, "gcd skill fired last in chain")
--- 角色技能在前 = 终止，后面不执行
+-- 1.59.0 去除公共CD终止：角色技能在前，后面的规则【继续执行】（能不能放交给游戏内置）
 TEST.used = {} TEST.petCmd = nil
 eq(EVAL_RULE_RUN({
   { skill = "致死打击", why = "x", groups = {} },
   { skill = "宠物:攻击", why = "x", groups = {} },
-}), true, "gcd skill terminates")
-eq(TEST.petCmd, nil, "nothing after gcd skill")
+}), true, "rules after gcd skill still evaluated")
+eq(TEST.petCmd, "PetAttack", "pet cmd fires after gcd skill (no termination)")
 TEST.hasPet = nil TEST.stances = nil TEST.used = {} TEST.slotNames[1] = nil TEST.slotNames[2] = nil EVAL_GO_RESCAN(true)
 
 -- 35) 光环检查合并 + 目标buff/自身debuff（1.54.0）

@@ -1,4 +1,4 @@
--- EvalHelp 1.58.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.59.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.58.1"
+local VERSION = "1.59.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -2489,11 +2489,23 @@ local function SE_BUILD()
     end)
     reg(row.valBtn.btn)
     -- 姿态号下拉（1.19.0：替代 1/2/3 循环）
+    -- 1.59.0 按角色实际姿态栏动态生成（GetNumShapeshiftForms + 名称；旧版硬编码 1/2/3，无姿态职业/德鲁伊对不上）
     row.formN = seBtn(root, 190, y, 30, 15, "1", function()
       local it = seUI.ed and seUI.ed.conds[i]
       if not (it and it.cd.n) then return end
-      EVAL_DD_OPEN(row.formN.btn, { "1", "2", "3" }, function(ni)
-        it.cd.n = ni
+      local items = {}
+      if type(GetNumShapeshiftForms) == "function" then
+        local okn, n = pcall(GetNumShapeshiftForms)
+        if okn and n and n > 0 then
+          for si = 1, n do
+            local oki, _ic, nm = pcall(GetShapeshiftFormInfo, si)
+            table.insert(items, tostring(si) .. ((oki and nm) and (" " .. nm) or ""))
+          end
+        end
+      end
+      if table.getn(items) == 0 then items = { "1" } end -- 无姿态栏职业兜底
+      EVAL_DD_OPEN(row.formN.btn, items, function(ni)
+        it.cd.n = ni -- onPick 传回序号=姿态栏索引
         EVAL_HELP_SE_REFRESH()
       end)
     end)
