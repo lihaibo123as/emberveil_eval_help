@@ -461,4 +461,28 @@ TEST.slotNames[2] = nil TEST.slotNames[3] = nil EVAL_GO_RESCAN(true)
 eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("!自动射击") } }), true, "not-on-bar counts as inactive")
 TEST.slotNames[1] = nil EVAL_GO_RESCAN(true)
 
+-- 32) 自动攻击距离检测（1.52.0）：自动射击超程降档近战 / 在程优先远程
+TEST.slotNames[1] = "攻击" TEST.slotNames[2] = "自动射击" EVAL_GO_RESCAN(true)
+EVAL_HELP_CONFIG.war.attack = true
+-- 接管有 2s 节流（wLastAttackTry 是 Engine local 测试无法直清）：桩 GetTime 恒定 1000，前移 3s 绕过
+local oldGetTime32 = GetTime
+GetTime = function() return 1003 end
+TEST.inRange = { [2] = 0 } -- 自动射击超程（贴脸）
+TEST.used = {} TEST.attackTried = nil
+EVAL_GO()
+local usedSlot2 = false
+for _, u in ipairs(TEST.used) do if u == 2 then usedSlot2 = true end end
+eq(usedSlot2, false, "out-of-range autoshot downgraded")
+eq(TEST.attackTried, true, "melee attack fallback when autoshot out of range")
+GetTime = function() return 1006 end -- 再过节流
+TEST.inRange = { [2] = true } -- 在射程内
+TEST.used = {} TEST.attackTried = nil
+EVAL_GO()
+usedSlot2 = false
+for _, u in ipairs(TEST.used) do if u == 2 then usedSlot2 = true end end
+eq(usedSlot2, true, "in-range autoshot picked")
+eq(TEST.attackTried, nil, "no melee fallback when autoshot in range")
+GetTime = oldGetTime32
+TEST.inRange = nil TEST.used = {} EVAL_HELP_CONFIG.war.attack = nil TEST.slotNames[1] = nil TEST.slotNames[2] = nil EVAL_GO_RESCAN(true)
+
 print("ALL TESTS PASS")

@@ -1150,9 +1150,17 @@ function EVAL_GO(profSel)
   local function pickAtk(name, useFn, needUsable)
     local s = wslots[name]
     if not s then return false end
-    if needUsable and type(IsUsableAction) == "function" then
-      local oku, usable = pcall(IsUsableAction, s.slot)
-      if not (oku and usable) then return false end
+    if needUsable then
+      if type(IsUsableAction) == "function" then
+        local oku, usable = pcall(IsUsableAction, s.slot)
+        if not (oku and usable) then return false end
+      end
+      -- 1.52.0 距离检测：IsUsableAction 不含射程判定（自动射击 8-35 码贴脸也"可用"但放不出）——
+      -- IsActionInRange 明确返回 0=超程时降档；nil=无目标/无法判定时放行（交给客户端自己拒）
+      if type(IsActionInRange) == "function" then
+        local okr, inRg = pcall(IsActionInRange, s.slot)
+        if okr and inRg == 0 then return false end
+      end
     end
     atkSlot, atkUse, atkName = s.slot, useFn, name
     return true
