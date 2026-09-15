@@ -1,7 +1,7 @@
 -- EvalHelp · Core.lua —— 输出/i18n/状态采集(EVAL_HELP_STATE)/角色状态模块/UI 越界助手
 -- 加载顺序见 EvalHelp.toc：Locales → Core → Engine → EvalHelp
 
--- EvalHelp 1.58.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.58.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.57.0: 新条件「距下次攻击」（swingLeft 数值比较，复用 1.55.0 挥击计时；无计时数据=不满足）
 --   1.55.0: 挥击计时（施法学习同机制）：CHAT_MSG_COMBAT_SELF_HITS 锚定 lastSwing + UnitAttackSpeed 攻速 → 距下次攻击；战斗UI 金色细条+状态UI 攻速行
 --   1.54.0: 光环检查四型——自身buff/目标debuff 合并为是/否检查型；新增 目标buff/自身debuff 检查（实时下拉 ●▲）；状态表补 targetBuffs/playerDebuffs

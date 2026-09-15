@@ -1,4 +1,4 @@
--- EvalHelp 1.58.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.58.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.58.0"
+local VERSION = "1.58.1"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -224,8 +224,8 @@ function EVAL_HELP_UI_BUILD()
   local rows = 1 + ((remP > 0) and math.ceil(remP / perRowN) or 0)
   local k0 = math.max(1, math.min(nProf, perRow0))
   local bw0 = math.floor((barAvailW - labelW - (k0 - 1) * 2) / k0) -- 首行按钮宽（填满）
-  local kN = math.max(1, math.min(math.max(1, remP), perRowN))
-  local bwN = math.floor((barAvailW - (kN - 1) * 2) / kN)           -- 后续行按钮宽（填满）
+  -- 1.58.1 修第二排宽度异常：后续行按钮宽按【整行容量】计算——不满的行保持同宽左对齐，不再按剩余数拉伸
+  local bwN = math.floor((barAvailW - (perRowN - 1) * 2) / perRowN)
   for i = 1, 12 do
     local row0, col0, x0, bw0i
     if i <= perRow0 then
@@ -942,7 +942,7 @@ local W, H = WIDE and 700 or 560, 420
     -- [删] 按钮（二次确认：5 秒内再点一次才删，防误删）
     local delB = CreateFrame("Button", nil, root)
     delB:SetWidth(15) delB:SetHeight(17)
-    delB:SetPoint("TOPLEFT", root, "TOPLEFT", LX + 92, -74 - (i - 1) * 21)
+    delB:SetPoint("TOPLEFT", root, "TOPLEFT", LX + 92, -74 - (i - 1) * 19) -- 1.58.1 修偏移：与方案按钮同 19 间距（旧 21 逐行下沉，越往后越错位）
     pcall(delB.EnableMouse, delB, true)
     pcall(delB.RegisterForClicks, delB, "LeftButtonUp")
     local delBg = delB:CreateTexture(nil, "BACKGROUND")
