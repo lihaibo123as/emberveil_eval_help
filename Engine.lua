@@ -856,7 +856,7 @@ function EVAL_TCAST_EVENT(msg)
 end
 
 function EVAL_RULE_RUN(rules)
-  local acted = false -- 1.52.1：选取目标出手也算本次按键有动作（但继续评估后续规则）
+  local acted = false -- 1.53.0：非 GCD 类型出手也算有动作（但继续评估后续规则）
   for _, r in ipairs(rules) do
     if r.enabled == false then
       -- 技能配置开关关掉的：静默跳过
@@ -880,14 +880,14 @@ function EVAL_RULE_RUN(rules)
           })
           while table.getn(st.castLog) > 5 do table.remove(st.castLog) end
           if trace then wlog(r.skill .. "触发: " .. trace) end
-          -- 1.52.1 选取目标不消耗按键：切目标是瞬发无 GCD 动作——切换成功→刷新状态→继续评估后续规则。
-          -- 旧行为：「选取目标:最近友方 | 目标非战斗」这类恒过规则把按键用完，后面的 buff/治疗技能永远轮不到
-          if targetSelOf(r.skill) then
-            acted = true
-            EVAL_HELP_UPDATE_STATE() -- 目标已变，后续条件（可攻击/目标职业/debuff 等）按新目标判定
-          else
-            return true
-          end
+          -- 1.53.0 并行执行模型（用户定义）：只有【角色技能】（动作条法术）占公共CD、出手即结束本次按键；
+          -- 角色行为（攻击/自动射击/射击/取消施法/姿态切换）、宠物行为、选取目标、物品使用全部可并行——
+          -- 出手后刷新状态继续评估后续规则（1.52.1 起只有选取目标续行，现推广到全部非 GCD 类型）。
+          -- 一次按键示例：切目标 + 宠物攻击 + 喝药 + 致死打击（仍只有最后一个法术吃 GCD）。
+          local gcdSkill = wslots[r.skill] and r.skill ~= "攻击" and r.skill ~= "自动射击" and r.skill ~= "射击"
+          if gcdSkill then return true end
+          acted = true
+          EVAL_HELP_UPDATE_STATE() -- 目标/状态可能已变，后续条件按新状态判定
         end
       else
         wlog(r.skill .. "跳过: " .. tostring(why))

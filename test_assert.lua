@@ -504,4 +504,29 @@ eq(EVAL_RULE_RUN({
 }), false, "conditions still gate both")
 TEST.slotNames[1] = nil EVAL_GO_RESCAN(true)
 
+-- 34) 并行执行模型（1.53.0）：非 GCD 类型全部续行，仅角色技能终止
+TEST.slotNames[1] = "致死打击" TEST.slotNames[2] = "攻击" EVAL_GO_RESCAN(true)
+TEST.hasPet = true TEST.petCmd = nil TEST.stanceCast = nil TEST.used = {} TEST.targetSel = nil
+TEST.stances = { { icon = "i", name = "战斗姿态", castable = 1 } }
+eq(EVAL_RULE_RUN({
+  { skill = "选取目标:最近敌人", why = "x", groups = {} },
+  { skill = "宠物:攻击", why = "x", groups = {} },
+  { skill = "姿态:战斗姿态", why = "x", groups = {} },
+  { skill = "攻击", why = "x", groups = {} },
+  { skill = "致死打击", why = "x", groups = {} },
+}), true, "full parallel chain fires")
+eq(TEST.targetSel, "nearEnemy", "target switched in chain")
+eq(TEST.petCmd, "PetAttack", "pet cmd fired in chain")
+eq(TEST.stanceCast, 1, "stance switched in chain")
+eq(TEST.used[1], 2, "attack toggle fired in chain")
+eq(TEST.used[2], 1, "gcd skill fired last in chain")
+-- 角色技能在前 = 终止，后面不执行
+TEST.used = {} TEST.petCmd = nil
+eq(EVAL_RULE_RUN({
+  { skill = "致死打击", why = "x", groups = {} },
+  { skill = "宠物:攻击", why = "x", groups = {} },
+}), true, "gcd skill terminates")
+eq(TEST.petCmd, nil, "nothing after gcd skill")
+TEST.hasPet = nil TEST.stances = nil TEST.used = {} TEST.slotNames[1] = nil TEST.slotNames[2] = nil EVAL_GO_RESCAN(true)
+
 print("ALL TESTS PASS")
