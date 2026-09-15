@@ -618,8 +618,8 @@ local function condOK(when, skill)
   end
   if when.usable then
     local s = wslots[skill]
-    local oku, usable = s and pcall(IsUsableAction, s.slot)
-    if not (oku and usable) then return false, "不可用(IsUsableAction)" end
+    local oku, usable, noMana = s and pcall(IsUsableAction, s.slot)
+    if not (oku and usable) then return false, noMana and "不可用:资源不足" or "不可用" end -- 1.61.4 原因细分（探针实证：noMana=true=资源不足）
   end
   if when.notQueued then
     local s = wslots[skill]
@@ -751,10 +751,10 @@ local function condOne(cd, skill, dry)
     return rd, tostring(why or "就绪")
   elseif k == "usable" then
     local s = wslots[skill]
-    local oku, u = s and pcall(IsUsableAction, s.slot)
+    local oku, u, noMana = s and pcall(IsUsableAction, s.slot)
     local pass = (oku and u) and true or false
     if cd.inv then pass = not pass end
-    return pass, "可用性"
+    return pass, noMana and "可用性:资源不足" or "可用性" -- 1.61.4 原因细分
   elseif k == "notQueued" then
     local s = wslots[skill]
     local okq, q = s and pcall(IsCurrentAction, s.slot)
