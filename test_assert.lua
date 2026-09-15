@@ -563,7 +563,8 @@ eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_COND
 TEST.buffs = {} EVAL_HELP_UPDATE_STATE()
 TEST.slotNames[1] = nil EVAL_GO_RESCAN(true)
 
--- 36) 执行去抖（1.54.1）：0.2s 内重复 EVAL_GO 调用直接丢弃（RunScript 队列冲刷的过期调用失效）
+-- 36) 执行去抖（1.54.1/1.54.2）：窗口内重复调用丢弃；窗口可配（cfg.goDebounce）
+EVAL_HELP_CONFIG.goDebounce = 0.2
 local oldProf36 = EVAL_HELP_CONFIG.war.profiles
 EVAL_HELP_CONFIG.war.profiles = { { name = "去抖", skills = { { skill = "选取目标:最近敌人", enabled = true, groups = {} } } } }
 EVAL_HELP_CONFIG.war.activeProfile = 1
@@ -577,8 +578,12 @@ eq(table.getn(EVAL_HELP_STATE.castLog), 1, "debounced call dropped")
 GetTime = function() return 2000.21 end -- 过 0.2s 窗口 → 放行
 EVAL_GO()
 eq(table.getn(EVAL_HELP_STATE.castLog), 2, "call after window executes")
+GetTime = function() return 2000.27 end -- 窗口缩到 0.05 → 0.06 间隔放行（浮点余量：2000.26-2000.21 在二进制下 <0.05）
+EVAL_HELP_CONFIG.goDebounce = 0.05
+EVAL_GO()
+eq(table.getn(EVAL_HELP_STATE.castLog), 3, "custom smaller window respected")
 GetTime = oldGT36
-EVAL_GO_LAST = 0 EVAL_HELP_STATE.castLog = nil
+EVAL_GO_LAST = 0 EVAL_HELP_STATE.castLog = nil EVAL_HELP_CONFIG.goDebounce = nil
 EVAL_HELP_CONFIG.war.profiles = oldProf36 EVAL_HELP_CONFIG.war.activeProfile = 1
 
 print("ALL TESTS PASS")

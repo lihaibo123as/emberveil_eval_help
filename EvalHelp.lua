@@ -1,4 +1,4 @@
--- EvalHelp 1.54.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.54.2 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.54.1"
+local VERSION = "1.54.2"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -979,6 +979,25 @@ local W, H = WIDE and 700 or 560, 420
   rsTip:SetPoint("TOPLEFT", root, "TOPLEFT", LX, -252)
   rsTip:SetText(L("G_RESCAN_TIP"))
   table.insert(G, rsTip)
+  -- 执行去抖窗口（1.54.2）：EVAL_GO 最小执行间隔秒数，默认 0.30（[-][+] 步进 0.05，0=关闭去抖）
+  local dbLabel = uiText(root, 9, 0.75, 0.75, 0.75)
+  dbLabel:SetPoint("TOPLEFT", root, "TOPLEFT", LX, -272)
+  dbLabel:SetText(L("G_DEBOUNCE"))
+  table.insert(G, dbLabel)
+  local dbVal = uiText(root, 9, 1, 0.85, 0.35)
+  dbVal:SetPoint("TOPLEFT", root, "TOPLEFT", LX + 124, -272)
+  table.insert(G, dbVal)
+  local function dbGet() return tonumber(c().goDebounce) or 0.3 end
+  local function dbShow() dbVal:SetText(string.format("%.2fs", dbGet())) end
+  local function dbStep(dv)
+    local v = math.floor((dbGet() + dv) * 100 + 0.5) / 100
+    if v < 0 then v = 0 elseif v > 1 then v = 1 end
+    c().goDebounce = v
+    dbShow()
+  end
+  mkSmall(LX + 100, -270, 20, "-", function() dbStep(-0.05) end, G)
+  mkSmall(LX + 164, -270, 20, "+", function() dbStep(0.05) end, G)
+  table.insert(refreshes, dbShow)
 
   -- （1.21.6 起移除底部「激活方案」下拉：与左侧方案栏/战斗信息UI方案行/Shift+按宏//eh go prof N 功能重复）
 
@@ -3152,6 +3171,19 @@ if type(SlashCmdList) == "table" then
       EVAL_GO_STATUS()
     elseif msg == "go rescan" then
       EVAL_GO_RESCAN(false)
+    elseif msg == "go trace" then
+      -- 执行追踪（1.54.2）：最近 12 次 EVAL_GO 调用时间戳+去抖标记——偶发「按一下执行两次」定位用
+      local tr = EVAL_GO_TRACE
+      if not tr or table.getn(tr) == 0 then
+        say("执行追踪：暂无记录（先按几次宏再查）")
+      else
+        say("— EVAL_GO 执行追踪（新→旧，间隔=与前一次相差毫秒）—")
+        for i, e in ipairs(tr) do
+          local gap = (i > 1) and math.floor((tr[i - 1].t - e.t) * 1000 + 0.5) or 0
+          say(string.format("%2d. t=%.3f  +%dms  %s", i, e.t, gap,
+            e.skip and "|cffff5040×去抖丢弃|r" or "|cff00ff00√执行|r"))
+        end
+      end
     elseif msg == "go probe immune" then
       -- 免疫事件探针（1.35.1，免疫学习器前置验证）：30 秒全事件抓取——CHAT_MSG_* 或参数含「免疫/immune」
       -- 的写 UELog；对免疫怪放技能后翻日志拿真实事件名+文本格式，再写解析器（事件 wiki 无文档页）

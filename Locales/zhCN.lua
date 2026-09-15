@@ -14,6 +14,7 @@ EVAL_LOCALES["zhCN"] = {
   G_MACRO_H = "一键宏",
   G_RESCAN = "重扫动作条",
   G_RESCAN_TIP = "改动动作条后点此识别技能槽位（= /eh go rescan）",
+   G_DEBOUNCE = "执行去抖：",
   G_HELP_H = "帮助",
   W_PROF_H = "激活方案",
   W_SWITCH_H = "开关",

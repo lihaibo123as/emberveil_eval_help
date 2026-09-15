@@ -1156,9 +1156,16 @@ function EVAL_GO(profSel)
   if profSel == 0 then profSel = nil end -- 0 = 当前激活方案
   -- 1.54.1 执行去抖：/run 宏在本客户端走 RunScript pending 队列（wiki 原文： queued, runs when flushed）——
   -- 连按时按键在队列里堆积，松手后陈旧调用还在逐个冲刷（用户实测：停手后目标狂切/技能滞后放）。
-  -- 0.2s 内重复调用直接丢弃：公共CD 1.5s 下节流无感，但堆积的过期调用几乎全部失效 → 松手即停。
+  -- 窗口内重复调用直接丢弃：公共CD 1.5s 下节流无感，但堆积的过期调用几乎全部失效 → 松手即停。
+  -- 1.54.2 窗口可配：cfg.goDebounce 秒（默认 0.3，配置窗全局 Tab [一键宏] 组 [-][+] 步进 0.05）；
+  --          + 执行追踪 EVAL_GO_TRACE（/eh go trace 看最近 12 次调用时间戳，定位偶发重复执行）。
   local goNow = GetTime()
-  if goNow - (EVAL_GO_LAST or 0) < 0.2 then
+  local goWin = tonumber(EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.goDebounce) or 0.3
+  local goSkip = (goWin > 0) and (goNow - (EVAL_GO_LAST or 0) < goWin) or false
+  EVAL_GO_TRACE = EVAL_GO_TRACE or {}
+  table.insert(EVAL_GO_TRACE, 1, { t = goNow, skip = goSkip })
+  while table.getn(EVAL_GO_TRACE) > 12 do table.remove(EVAL_GO_TRACE) end
+  if goSkip then
     if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cffff9040war:|r 去抖：忽略过快调用（队列冲刷）") end
     return
   end

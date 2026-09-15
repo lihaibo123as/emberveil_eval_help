@@ -14,6 +14,7 @@ EVAL_LOCALES["ruRU"] = {
   G_MACRO_H = "Макрос",
   G_RESCAN = "Сканировать панели",
   G_RESCAN_TIP = "Нажмите после смены панелей (= /eh go rescan)",
+   G_DEBOUNCE = "Антидребезг:",
   G_HELP_H = "Помощь",
   W_PROF_H = "Активный профиль",
   W_SWITCH_H = "Переключатели",

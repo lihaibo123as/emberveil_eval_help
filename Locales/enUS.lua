@@ -14,6 +14,7 @@ EVAL_LOCALES["enUS"] = {
   G_MACRO_H = "One-Key Macro",
   G_RESCAN = "Rescan Action Bars",
   G_RESCAN_TIP = "Click after changing action bars (= /eh go rescan)",
+   G_DEBOUNCE = "Debounce:",
   G_HELP_H = "Help",
   W_PROF_H = "Active Profile",
   W_SWITCH_H = "Toggles",
