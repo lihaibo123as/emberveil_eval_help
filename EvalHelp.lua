@@ -1,4 +1,4 @@
--- EvalHelp 1.60.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.61.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.60.1"
+local VERSION = "1.61.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -1088,11 +1088,20 @@ local W, H = WIDE and 700 or 560, 420
     pcall(cds.SetJustifyH, cds, "LEFT")
     row.conds = cds
     table.insert(Wp, cds)
-    row.up = mkSmall(72, y, 16, "上", function()
+    -- 1.61.0 调序按钮改为 ^/v 箭头 + 新增下移（文本「上」→ ^，新增 v）
+    row.up = mkSmall(88, y, 16, "^", function()
       local p = warCfg().profiles[warCfg().activeProfile or 1]
       local idx = ri + (warUI.offset or 0)
       if p and idx > 1 and p.skills[idx] and p.skills[idx - 1] then
         p.skills[idx], p.skills[idx - 1] = p.skills[idx - 1], p.skills[idx]
+        EVAL_WAR_TAB_REFRESH()
+      end
+    end, nil, true)
+    row.dn = mkSmall(72, y, 16, "v", function()
+      local p = warCfg().profiles[warCfg().activeProfile or 1]
+      local idx = ri + (warUI.offset or 0)
+      if p and p.skills[idx] and p.skills[idx + 1] then
+        p.skills[idx], p.skills[idx + 1] = p.skills[idx + 1], p.skills[idx]
         EVAL_WAR_TAB_REFRESH()
       end
     end, nil, true)
@@ -1542,7 +1551,7 @@ function EVAL_WAR_TAB_REFRESH()
   end
   for ri, row in ipairs(warUI.rows) do
     local r = p and p.skills[ri + warUI.offset]
-    local widgets = { row.chk, row.icon, row.name, row.conds, row.up, row.edit, row.del }
+    local widgets = { row.chk, row.icon, row.name, row.conds, row.up, row.dn, row.edit, row.del }
     for _, wgt in ipairs(widgets) do
       if r then pcall(wgt.Show, wgt) else pcall(wgt.Hide, wgt) end
     end
