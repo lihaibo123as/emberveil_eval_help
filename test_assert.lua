@@ -383,8 +383,9 @@ eq(pM2.skills[2].groups[1][1].v, false, "buff template checks missing target buf
 eq(EVAL_IO_TEMPLATES[3].cls, "盗贼", "rogue class group")
 local pR1, eR1 = EVAL_PROFILE_FROM_TEXT(EVAL_IO_TEMPLATES[3].list[1].text)
 eq(pR1 ~= nil, true, "rogue template parses: " .. tostring(eR1))
-eq(table.getn(pR1.skills), 3, "rogue skill count")
-eq(pR1.skills[3].groups[1][2].k, "combo", "rogue finisher uses combo cond")
+eq(table.getn(pR1.skills), 4, "rogue skill count")
+eq(pR1.skills[1].skill, "选取目标:最近敌人", "rogue opens with target sel")
+eq(pR1.skills[4].groups[1][2].k, "combo", "rogue finisher uses combo cond")
 
 -- 27) 重扫报告/状态总览以激活方案为准（1.45.0）：混合技能方案下非静默调用不报错
 EVAL_HELP_CONFIG.war.profiles = { { name = "混合", skills = {
