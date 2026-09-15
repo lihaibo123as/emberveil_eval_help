@@ -417,21 +417,21 @@ eq(hasAS and hasShoot and hasCancel, true, "cat1 has autoshot/shoot/cancelcast")
 TEST.slotNames[2] = "攻击" EVAL_GO_RESCAN(true)
 TEST.currentAction = EVAL_WSLOTS["攻击"].slot
 EVAL_HELP_CONFIG.war.attack = false -- 接管关
-EVAL_GO()
+EVAL_GO_LAST = 0 EVAL_GO()
 eq(EVAL_HELP_STATE.autoAttack, true, "autoAttack state accurate with takeover off")
 TEST.currentAction = nil EVAL_HELP_CONFIG.war.attack = nil TEST.slotNames[2] = nil EVAL_GO_RESCAN(true)
 -- 接管泛化（1.49.2）：无「攻击」时回退「自动射击」（UseAction 通道）
 TEST.slotNames[3] = "自动射击" EVAL_GO_RESCAN(true)
 TEST.used = {} EVAL_HELP_CONFIG.war.attack = true
 TEST.curTargetName = nil EVAL_HELP_UPDATE_STATE()
-EVAL_GO()
+EVAL_GO_LAST = 0 EVAL_GO()
 local usedSlot3 = false
 for _, u in ipairs(TEST.used) do if u == 3 then usedSlot3 = true end end
 eq(usedSlot3, true, "autoshot takeover fires UseAction")
 -- 自动攻击优先级（1.50.0）：攻击+自动射击 同时在条 → 优先自动射击，不碰近战 AttackTarget
 TEST.slotNames[1] = "攻击" EVAL_GO_RESCAN(true)
 TEST.used = {} TEST.attackTried = nil
-EVAL_GO()
+EVAL_GO_LAST = 0 EVAL_GO()
 local usedSlot1 = false
 for _, u in ipairs(TEST.used) do if u == 1 then usedSlot1 = true end end
 eq(usedSlot3 and not usedSlot1, true, "autoshot wins over melee attack")
@@ -469,7 +469,7 @@ local oldGetTime32 = GetTime
 GetTime = function() return 1003 end
 TEST.inRange = { [2] = 0 } -- 自动射击超程（贴脸）
 TEST.used = {} TEST.attackTried = nil
-EVAL_GO()
+EVAL_GO_LAST = 0 EVAL_GO()
 local usedSlot2 = false
 for _, u in ipairs(TEST.used) do if u == 2 then usedSlot2 = true end end
 eq(usedSlot2, false, "out-of-range autoshot downgraded")
@@ -477,7 +477,7 @@ eq(TEST.attackTried, true, "melee attack fallback when autoshot out of range")
 GetTime = function() return 1006 end -- 再过节流
 TEST.inRange = { [2] = true } -- 在射程内
 TEST.used = {} TEST.attackTried = nil
-EVAL_GO()
+EVAL_GO_LAST = 0 EVAL_GO()
 usedSlot2 = false
 for _, u in ipairs(TEST.used) do if u == 2 then usedSlot2 = true end end
 eq(usedSlot2, true, "in-range autoshot picked")
@@ -562,5 +562,23 @@ TEST.buffs = { { tex = "texBS" } } EVAL_HELP_UPDATE_STATE()
 eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("无buff:战斗怒吼") } }), true, "merged noBuff passes when missing")
 TEST.buffs = {} EVAL_HELP_UPDATE_STATE()
 TEST.slotNames[1] = nil EVAL_GO_RESCAN(true)
+
+-- 36) 执行去抖（1.54.1）：0.2s 内重复 EVAL_GO 调用直接丢弃（RunScript 队列冲刷的过期调用失效）
+local oldProf36 = EVAL_HELP_CONFIG.war.profiles
+EVAL_HELP_CONFIG.war.profiles = { { name = "去抖", skills = { { skill = "选取目标:最近敌人", enabled = true, groups = {} } } } }
+EVAL_HELP_CONFIG.war.activeProfile = 1
+local oldGT36 = GetTime
+GetTime = function() return 2000 end
+EVAL_GO_LAST = 0 EVAL_HELP_STATE.castLog = {}
+EVAL_GO()
+eq(table.getn(EVAL_HELP_STATE.castLog), 1, "first call executes")
+EVAL_GO() -- 同一时刻（0s 间隔）→ 去抖
+eq(table.getn(EVAL_HELP_STATE.castLog), 1, "debounced call dropped")
+GetTime = function() return 2000.21 end -- 过 0.2s 窗口 → 放行
+EVAL_GO()
+eq(table.getn(EVAL_HELP_STATE.castLog), 2, "call after window executes")
+GetTime = oldGT36
+EVAL_GO_LAST = 0 EVAL_HELP_STATE.castLog = nil
+EVAL_HELP_CONFIG.war.profiles = oldProf36 EVAL_HELP_CONFIG.war.activeProfile = 1
 
 print("ALL TESTS PASS")

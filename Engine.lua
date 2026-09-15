@@ -1154,6 +1154,15 @@ end
 -- 直触不改变激活方案。绑定多按键：宏1 /run EVAL_GO(1)（或 EVAL_GO1()）、宏2 /run EVAL_GO(2)……
 function EVAL_GO(profSel)
   if profSel == 0 then profSel = nil end -- 0 = 当前激活方案
+  -- 1.54.1 执行去抖：/run 宏在本客户端走 RunScript pending 队列（wiki 原文： queued, runs when flushed）——
+  -- 连按时按键在队列里堆积，松手后陈旧调用还在逐个冲刷（用户实测：停手后目标狂切/技能滞后放）。
+  -- 0.2s 内重复调用直接丢弃：公共CD 1.5s 下节流无感，但堆积的过期调用几乎全部失效 → 松手即停。
+  local goNow = GetTime()
+  if goNow - (EVAL_GO_LAST or 0) < 0.2 then
+    if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cffff9040war:|r 去抖：忽略过快调用（队列冲刷）") end
+    return
+  end
+  EVAL_GO_LAST = goNow
   EVAL_HELP_CONFIG = EVAL_HELP_CONFIG or {}
   -- 配置阈值（/eh cfg 或小地图 EH 图标可调；缺省值与原宏一致）
   local w = (EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war) or {} -- 1.41.1 热修：拆分后 Engine 无 cfg local（EVAL_GO 裸引用崩全局）
