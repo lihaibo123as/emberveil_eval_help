@@ -1,4 +1,4 @@
--- EvalHelp 1.66.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.67.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.66.0"
+local VERSION = "1.67.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -190,6 +190,26 @@ function EVAL_HELP_UI_BUILD()
   local pwBar, pwFill, pwText, pwW = uiMakeBar(root, barW, barH)
   pwBar:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
   y = y + barH + gap
+  -- 连击点条（1.67.0，贼/德专属）：能量条下方一行 5 等宽小块——激活高亮金填充、未激活浅灰
+  local comboSegs = nil
+  do
+    local okc, _cl, clsTok = pcall(UnitClass, "player")
+    if clsTok == "ROGUE" or clsTok == "DRUID" then
+      comboSegs = {}
+      local segGap = 2
+      local segW = math.floor((barW - segGap * 4) / 5)
+      local segH = math.max(5, math.floor(7 * z))
+      for ci = 1, 5 do
+        local seg = root:CreateTexture(nil, "ARTWORK")
+        uiSolid(seg, 0.25, 0.25, 0.25, 1)
+        seg:SetWidth(segW) seg:SetHeight(segH)
+        seg:SetPoint("TOPLEFT", root, "TOPLEFT", pad + (ci - 1) * (segW + segGap), -y)
+        comboSegs[ci] = seg
+      end
+      y = y + segH + gap
+    end
+  end
+  ui.comboSegs = comboSegs
   local tgBar, tgFill, tgText, tgW = uiMakeBar(root, barW, barH)
   tgBar:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
   y = y + barH + gap
@@ -416,6 +436,15 @@ function EVAL_HELP_UI_TICK()
   elseif st.powerType == 3 then pr, pg, pb = 1.00, 1.00, 0.40 end
   uiSetBar(ui.pwFill, ui.pwText, ui.pwW, pfrac, pr, pg, pb,
     string.format("%s %d/%d", powerLabel(), st.power, st.powerMax))
+
+  -- 连击点段刷新（1.67.0）：激活段高亮金、未激活段浅灰
+  if ui.comboSegs then
+    local cp = st.combo or 0
+    for ci = 1, 5 do
+      if cp >= ci then uiSolid(ui.comboSegs[ci], 0.95, 0.80, 0.25, 1)
+      else uiSolid(ui.comboSegs[ci], 0.25, 0.25, 0.25, 1) end
+    end
+  end
 
   -- 目标条
   if ui.tgRange then ui.tgRange:SetText(st.tRange or "") end -- 1.37.0 目标条右侧距离
