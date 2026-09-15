@@ -382,4 +382,11 @@ EVAL_GO_RESCAN(false) -- 非静默：走方案核对报告路径
 EVAL_GO_STATUS()
 eq(true, true, "profile-driven rescan report no error")
 
+-- 28) wslots 表引用稳定（1.46.0）：RESCAN 原地清空，EVAL_WSLOTS 导出不因重扫失效
+TEST.slotNames[1] = "致死打击"
+EVAL_GO_RESCAN(true)
+eq(EVAL_WSLOTS["致死打击"] ~= nil, true, "EVAL_WSLOTS live after rescan")
+eq(EVAL_WSLOTS["致死打击"].slot, 1, "slot recorded")
+TEST.slotNames[1] = nil
+
 print("ALL TESTS PASS")

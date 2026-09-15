@@ -48,7 +48,9 @@ end
 -- 收益：① 有/无buff、有/无debuff 条件支持任意已上条技能（图标比对需要纹理）；
 --       ② 方案规则可直接写任意已上条技能释放（冷却/可用/排队判定都是通用 API）→ 真·全职业。
 function EVAL_GO_RESCAN(quiet)
-  wslots = {}
+  -- 1.46.0 修复：原地清空而不是重新赋值——EVAL_WSLOTS 导出的是表引用（EvalHelp.lua 顶部别名持有），
+  -- 重新赋值会让外部引用指向旧空表（重扫后 UI 读 wslots 全 nil、图标行全 ?）
+  if wslots then for k in pairs(wslots) do wslots[k] = nil end else wslots = {} end
   for slot = 1, WAR_MAX_SLOT do
     if HasAction(slot) and not GetActionText(slot) then -- GetActionText 非空 = 宏格子，跳过
       local name = wactionName(slot)

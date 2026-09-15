@@ -1,4 +1,4 @@
--- EvalHelp 1.45.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.46.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.45.1"
+local VERSION = "1.46.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -111,23 +111,6 @@ local function uiMakeBar(parent, w, h)
   local text = uiText(bar, math.max(8, h - 6), 1, 1, 1)
   text:SetPoint("CENTER", bar, "CENTER", 0, 0)
   return bar, fill, text, w - 2
-end
-
--- 技能格：图标 + 冷却数字（亮=就绪/激活，暗=不可用；OneJudge 窗格简化版）
-local function uiMakeCell(parent, size)
-  local cell = CreateFrame("Frame", nil, parent)
-  cell:SetWidth(size) cell:SetHeight(size)
-  local bg = cell:CreateTexture(nil, "BACKGROUND")
-  uiSolid(bg, 0.12, 0.12, 0.12, 1)
-  bg:SetPoint("TOPLEFT", cell, "TOPLEFT", 0, 0)
-  bg:SetPoint("BOTTOMRIGHT", cell, "BOTTOMRIGHT", 0, 0)
-  local icon = cell:CreateTexture(nil, "ARTWORK")
-  icon:SetPoint("TOPLEFT", cell, "TOPLEFT", 1, -1)
-  icon:SetPoint("BOTTOMRIGHT", cell, "BOTTOMRIGHT", -1, 1)
-  uiSolid(icon, 0.2, 0.2, 0.2, 1)
-  local text = uiText(cell, math.max(8, math.floor(size * 0.45)), 1, 1, 0.4)
-  text:SetPoint("CENTER", cell, "CENTER", 0, 0)
-  return { frame = cell, bg = bg, icon = icon, text = text }
 end
 
 -- 技能图标行（1.45.0 起）：内容以【激活方案的技能】为准，旧版固定战士清单（UI_ICONS）已废弃
@@ -217,19 +200,6 @@ function EVAL_HELP_UI_BUILD()
   status:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
   y = y + math.floor(13 * z) + gap
 
-  -- 技能图标行（1.45.0：8 格动态填充激活方案技能，构建期不定内容）
-  local cells = {}
-  local x = pad
-  local cellN = 8
-  local cellSz = math.floor(24 * z) -- 8 格刚好排下：(W-2pad)=224z ≥ 8*24z+7*3z
-  for ci0 = 1, cellN do
-    local c = uiMakeCell(root, cellSz)
-    c.frame:SetPoint("TOPLEFT", root, "TOPLEFT", x, -y)
-    table.insert(cells, c)
-    x = x + cellSz + math.floor(3 * z)
-  end
-  y = y + cellSz + gap
-
   -- 方案切换行：点击按钮换激活方案（一键宏立即换套路；Shift+按宏 / /eh war next 也可切）
   local profBtns = {}
   local plabel = uiText(root, math.max(8, math.floor(9 * z)), 0.95, 0.82, 0.35)
@@ -260,15 +230,18 @@ function EVAL_HELP_UI_BUILD()
   end
   y = y + math.floor(16 * z) + gap
 
-  -- 方案技能列表行：当前方案的技能图标（悬停 tooltip 看触发条件；点击开编辑窗；亮=条件当前满足）
+  -- 技能图标带（1.46.0 两行合一：内容=激活方案技能，8 格/行超过自动换第二行，最多 16 格；
+  -- 悬停 tooltip 看触发条件；点击开编辑窗；亮金=条件当前满足；动作条技能带冷却倒数）
   local profCells = {}
   local pcell = math.floor(24 * z)
   local pgap2 = math.floor(3 * z)
-  local px = pad
-  for i = 1, 8 do
+  for i = 1, 16 do
+    local row0 = math.floor((i - 1) / 8)
+    local col0 = (i - 1) - row0 * 8
+    local px = pad + col0 * (pcell + pgap2)
     local cb = CreateFrame("Button", nil, root)
     cb:SetWidth(pcell) cb:SetHeight(pcell)
-    cb:SetPoint("TOPLEFT", root, "TOPLEFT", px, -y)
+    cb:SetPoint("TOPLEFT", root, "TOPLEFT", px, -(y + row0 * (pcell + pgap2)))
     pcall(cb.EnableMouse, cb, true)
     pcall(cb.RegisterForClicks, cb, "LeftButtonUp")
     local cbg = cb:CreateTexture(nil, "BACKGROUND")
@@ -309,9 +282,8 @@ function EVAL_HELP_UI_BUILD()
       if p and p.skills[ci] then EVAL_HELP_SE_OPEN(w2.activeProfile or 1, ci) end
     end)
     profCells[i] = { btn = cb, bg = cbg, icon = cicon, text = ctext }
-    px = px + pcell + pgap2
   end
-  y = y + pcell + pad
+  y = y + 2 * (pcell + pgap2) + pad -- 固定预留两行高度（空位刷新时整格隐藏，窗口尺寸稳定）
 
   root:SetWidth(W)
   root:SetHeight(y)
@@ -372,8 +344,8 @@ function EVAL_HELP_UI_BUILD()
   tgRange:SetPoint("RIGHT", tgBar, "RIGHT", -4, 0)
   pcall(tgRange.SetJustifyH, tgRange, "RIGHT")
   ui.tgRange = tgRange
-  ui.status, ui.cells = status, cells
-  ui.profBtns, ui.profCells = profBtns, profCells
+  ui.status = status
+  ui.profBtns, ui.profCells = profBtns, profCells -- 1.46.0 技能带=profCells（两行合一，ui.cells 已废）
 
   root:SetScript("OnUpdate", function()
     local now = GetTime()
@@ -446,59 +418,6 @@ function EVAL_HELP_UI_TICK()
     inCombat and "|cffff5040战斗中|r" or "|cff80ff80非战斗|r",
     form, atkOn and "|cff00ff00开|r" or "|cff909090关|r"))
 
-  -- 技能图标行（1.45.0：以激活方案技能为准——图标走 wicon 统一入口含宠物/物品/姿态；
-  -- 亮金=条件当前满足（dry 预览不触发副作用）；冷却数字仅动作条技能；空位整格隐藏）
-  if not EVAL_IS_SCANNED() then EVAL_GO_RESCAN(true) end
-  local w2ui = uiWarCfg()
-  local actP = w2ui.profiles and w2ui.profiles[w2ui.activeProfile or 1]
-  for i, c in ipairs(ui.cells) do
-    local r = actP and actP.skills and actP.skills[i]
-    if not r then
-      pcall(c.frame.Hide, c.frame)
-    else
-      pcall(c.frame.Show, c.frame)
-      c.name = r.skill
-      local t0 = wicon(r.skill)
-      if t0 then pcall(c.icon.SetTexture, c.icon, t0) end
-      local s = wslots[r.skill]
-      if r.enabled == false then
-        pcall(c.icon.SetVertexColor, c.icon, 0.25, 0.25, 0.25)
-        pcall(c.bg.SetVertexColor, c.bg, 0.12, 0.12, 0.12, 1)
-        c.text:SetText("停")
-      elseif not t0 then
-        pcall(c.icon.SetVertexColor, c.icon, 0.35, 0.35, 0.35)
-        pcall(c.bg.SetVertexColor, c.bg, 0.12, 0.12, 0.12, 1)
-        c.text:SetText("?")
-      else
-        local pass = false
-        if r.groups and (s or petCmdOf(r.skill) or targetSelOf(r.skill) or itemOf(r.skill) or stanceOf(r.skill)) then
-          pass = groupsOK(r, true) and true or false
-        end
-        local left = 0
-        if s then
-          local okc, cst, dur = pcall(GetActionCooldown, s.slot)
-          if okc and type(cst) == "number" and type(dur) == "number" and cst > 0 and dur > 0 then
-            left = cst + dur - GetTime()
-          end
-        end
-        if left > 0 then
-          c.text:SetText(left >= 10 and string.format("%d", math.floor(left + 0.5)) or string.format("%.1f", left))
-          pcall(c.icon.SetVertexColor, c.icon, 0.4, 0.4, 0.4)
-          pcall(c.bg.SetVertexColor, c.bg, 0.12, 0.12, 0.12, 1)
-        else
-          c.text:SetText("")
-          if pass then
-            pcall(c.icon.SetVertexColor, c.icon, 1, 1, 1)
-            pcall(c.bg.SetVertexColor, c.bg, 0.9, 0.75, 0.1, 1) -- 条件满足：金边高亮
-          else
-            pcall(c.icon.SetVertexColor, c.icon, 0.45, 0.45, 0.45)
-            pcall(c.bg.SetVertexColor, c.bg, 0.12, 0.12, 0.12, 1)
-          end
-        end
-      end
-    end
-  end
-
   -- 方案切换行：当前激活金色高亮，不存在的方案位隐藏
   if ui.profBtns then
     local w2 = uiWarCfg()
@@ -516,7 +435,8 @@ function EVAL_HELP_UI_TICK()
     end
   end
 
-  -- 方案技能列表：亮金=条件当前满足（实时反馈），半暗=条件不满足，灰+停=已停用
+  -- 技能图标带（1.46.0 两行合一）：亮金=条件当前满足，半暗=不满足，灰+停=已停用；动作条技能带冷却倒数
+  if not EVAL_IS_SCANNED() then EVAL_GO_RESCAN(true) end
   if ui.profCells then
     for i, pc in ipairs(ui.profCells) do
       local r = uiWarActiveRule(i)
@@ -539,12 +459,25 @@ function EVAL_HELP_UI_TICK()
         elseif not s and not petCmdOf(r.skill) and not targetSelOf(r.skill) and not itemOf(r.skill) and not stanceOf(r.skill) then -- 宠物/选取目标/物品/姿态不占动作条不算缺失（1.30.0/1.32.0/1.43.0）
           pcall(pc.icon.SetVertexColor, pc.icon, 0.35, 0.35, 0.35)
           pc.text:SetText("?")
-        elseif pass then
-          pcall(pc.icon.SetVertexColor, pc.icon, 1, 1, 1)
-          pc.text:SetText("")
         else
-          pcall(pc.icon.SetVertexColor, pc.icon, 0.55, 0.55, 0.55)
-          pc.text:SetText("")
+          -- 冷却倒数（仅动作条技能；1.46.0 自旧图标行并入）
+          local left = 0
+          if s then
+            local okc, cst, dur = pcall(GetActionCooldown, s.slot)
+            if okc and type(cst) == "number" and type(dur) == "number" and cst > 0 and dur > 0 then
+              left = cst + dur - GetTime()
+            end
+          end
+          if left > 0 then
+            pc.text:SetText(left >= 10 and string.format("%d", math.floor(left + 0.5)) or string.format("%.1f", left))
+            pcall(pc.icon.SetVertexColor, pc.icon, 0.4, 0.4, 0.4)
+          elseif pass then
+            pcall(pc.icon.SetVertexColor, pc.icon, 1, 1, 1)
+            pc.text:SetText("")
+          else
+            pcall(pc.icon.SetVertexColor, pc.icon, 0.55, 0.55, 0.55)
+            pc.text:SetText("")
+          end
         end
         if pass and enabled then
           pcall(pc.bg.SetVertexColor, pc.bg, 1, 0.85, 0.3, 1) -- 条件满足：亮金描边
