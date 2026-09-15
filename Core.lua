@@ -3,6 +3,7 @@
 
 -- EvalHelp 1.62.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.62.0: ★接管动作后移到规则评估之后——AttackTarget 先于规则开弓/进战，冲锋类脱战限定技能可用性瞬间翻 false（探针+存档+手动三连实锤）
+--   1.63.0: 可流血改免疫体系驱动——默认 true；目标免疫表命中流血技能（撕裂/割裂/绞袭/斜掠/撕扯）→ false；生物类型硬排除删除（本客户端 UnitCreatureType 不可靠）
 --   1.59.0: 姿态下拉按角色姿态栏动态生成（带名称）；去除公共CD终止——符合的规则全部顺序执行，能不能放交给游戏内置
 --   1.57.0: 新条件「距下次攻击」（swingLeft 数值比较，复用 1.55.0 挥击计时；无计时数据=不满足）
 --   1.55.0: 挥击计时（施法学习同机制）：CHAT_MSG_COMBAT_SELF_HITS 锚定 lastSwing + UnitAttackSpeed 攻速 → 距下次攻击；战斗UI 金色细条+状态UI 攻速行
@@ -262,7 +263,8 @@ local st = EVAL_HELP_STATE
 --   /run EVAL_BLEED_WHITELIST["怪名"]=true  → 元素/机械里的例外，强制可流血
 EVAL_BLEED_BLACKLIST = EVAL_BLEED_BLACKLIST or {}
 EVAL_BLEED_WHITELIST = EVAL_BLEED_WHITELIST or {}
-local BLEED_BAD_TYPES = { ["元素生物"] = true, ["机械"] = true, ["Elemental"] = true, ["Mechanical"] = true }
+-- 流血技能清单（1.63.0 免疫体系驱动可流血）：战士撕裂 / 贼割裂·绞袭 / 德斜掠·撕扯（含英文兜底）
+local BLEED_SKILLS = { "撕裂", "割裂", "绞袭", "斜掠", "撕扯", "Rend", "Rupture", "Garrote", "Rake", "Rip" }
 
 -- 刷新全部角色状态；返回状态表本身
 function EVAL_HELP_UPDATE_STATE()
@@ -382,15 +384,21 @@ function EVAL_HELP_UPDATE_STATE()
     st.canAttack = (not st.tDead) and UnitCanAttack("player", "target") and true or false
     st.tInCombat = UnitAffectingCombat("target") and true or false
     st.tCreatureType = UnitCreatureType("target")
-    -- 可流血：白名单 > 黑名单 > 生物类型排除（元素/机械）
+    -- 可流血（1.63.0 用户定新机制）：白名单 > 黑名单 > 【默认 true】；
+    -- 目标在免疫体系内、且免疫的是【流血技能】（撕裂/割裂/绞袭/斜掠/撕扯…）→ false。
+    -- 旧版按生物类型硬排除（元素/机械）已删——本客户端 UnitCreatureType 返回值不可靠（用户实测黑暗犬被误判不可流血）。
+    local war2 = EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war
     if EVAL_BLEED_WHITELIST[st.targetName or ""] then
       st.canBleed = true
     elseif EVAL_BLEED_BLACKLIST[st.targetName or ""] then
       st.canBleed = false
-    elseif st.tCreatureType and BLEED_BAD_TYPES[st.tCreatureType] then
-      st.canBleed = false
     else
       st.canBleed = true
+      if st.targetName and war2 and war2.immune then
+        for _, bs in ipairs(BLEED_SKILLS) do
+          if war2.immune[bs .. "@" .. st.targetName] then st.canBleed = false break end
+        end
+      end
     end
     -- 精英 / Boss
     st.tClassification = (type(UnitClassification) == "function") and UnitClassification("target") or nil

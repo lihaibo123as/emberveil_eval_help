@@ -643,4 +643,20 @@ GetTime = oldGT38
 EVAL_HELP_STATE.lastSwing = nil TEST.atkSpd = nil EVAL_HELP_UPDATE_STATE()
 TEST.slotNames[1] = nil EVAL_GO_RESCAN(true)
 
+-- 39) 可流血免疫驱动（1.63.0）：默认 true / 流血技能免疫 → false / 非流血免疫不影响 / 黑名单仍生效
+EVAL_HELP_CONFIG.war.immune = EVAL_HELP_CONFIG.war.immune or {}
+TEST.curTargetName = "黑暗犬" EVAL_HELP_UPDATE_STATE()
+eq(EVAL_HELP_STATE.canBleed, true, "canBleed default true (no type exclusion)")
+EVAL_HELP_CONFIG.war.immune["撕裂@黑暗犬"] = true EVAL_HELP_UPDATE_STATE()
+eq(EVAL_HELP_STATE.canBleed, false, "bleed skill immunity blocks")
+EVAL_HELP_CONFIG.war.immune["撕裂@黑暗犬"] = nil
+EVAL_HELP_CONFIG.war.immune["火球术@黑暗犬"] = true EVAL_HELP_UPDATE_STATE()
+eq(EVAL_HELP_STATE.canBleed, true, "non-bleed immunity ignored")
+EVAL_HELP_CONFIG.war.immune["火球术@黑暗犬"] = nil
+EVAL_BLEED_BLACKLIST["黑暗犬"] = true EVAL_HELP_UPDATE_STATE()
+eq(EVAL_HELP_STATE.canBleed, false, "manual blacklist still wins")
+EVAL_BLEED_BLACKLIST["黑暗犬"] = nil EVAL_HELP_UPDATE_STATE()
+eq(EVAL_HELP_STATE.canBleed, true, "clean state restores true")
+TEST.curTargetName = nil EVAL_HELP_UPDATE_STATE()
+
 print("ALL TESTS PASS")
