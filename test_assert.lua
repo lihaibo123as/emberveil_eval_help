@@ -396,6 +396,7 @@ TEST.castStopped = nil
 EVAL_HELP_STATE.castName = "寒冰箭"
 eq(EVAL_RULE_RUN({ { skill = "取消施法", why = "x", groups = EVAL_PARSE_CONDS("施法中") } }), true, "cancel cast fires while casting")
 eq(TEST.castStopped, true, "SpellStopCasting called")
+eq(TEST.runScript, "SpellStopCasting()", "cancel cast goes through RunScript (1.49.3 protected bypass)")
 EVAL_HELP_STATE.castName = nil EVAL_HELP_STATE.castUntil = nil
 eq(EVAL_RULE_RUN({ { skill = "取消施法", why = "x", groups = EVAL_PARSE_CONDS("目标存在") } }), false, "cancel cast skipped when not casting")
 TEST.stances = { { icon = "texSt1", name = "战斗姿态", castable = 1 }, { icon = "texSt2", name = "防御姿态", castable = 1 } }

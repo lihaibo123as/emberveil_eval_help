@@ -495,10 +495,17 @@ local function wuse(name, reason)
     return true
   end
   if cancelCastOf(name) then
-    -- 取消施法（1.47.0）：SpellStopCasting 打断自身读条；未在读条时静默跳过（条件里建议配 施法中:X）
+    -- 取消施法（1.47.0）：未在读条时静默跳过（条件里建议配 施法中:X）。
+    -- 1.49.3 修复：SpellStopCasting 本客户端【Protected】（wiki 原文：addons cannot call this），插件直调静默无效
+    -- → 改走 RunScript("SpellStopCasting()")：排队为 pending script，与聊天框 /run 同执行路径（wiki 明确无 Protected 标注）
     if not (st.castName or (st.castUntil and st.castUntil > GetTime())) then wlog(name .. "跳过: 未在施法") return false end
-    if type(SpellStopCasting) ~= "function" then wlog(name .. ": 无取消施法函数") return false end
-    pcall(SpellStopCasting)
+    if type(RunScript) == "function" then
+      pcall(RunScript, "SpellStopCasting()")
+    elseif type(SpellStopCasting) == "function" then
+      pcall(SpellStopCasting) -- 兜底：无 RunScript 的老环境直调
+    else
+      wlog(name .. ": 无取消施法通道") return false
+    end
     local cline = string.format("→ %s (%s)", name, reason)
     EVAL_LOGLINE(cline)
     if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cff7fff7f" .. cline .. "|r") end

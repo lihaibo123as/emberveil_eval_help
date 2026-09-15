@@ -1,7 +1,7 @@
 -- EvalHelp · Core.lua —— 输出/i18n/状态采集(EVAL_HELP_STATE)/角色状态模块/UI 越界助手
 -- 加载顺序见 EvalHelp.toc：Locales → Core → Engine → EvalHelp
 
--- EvalHelp 1.49.2 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.49.3 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.49.0: 删 EVAL_GO「无有效目标→TargetNearestEnemy」硬编码前置——与 选取目标:最近友方 类规则抢目标；选敌走规则（选取目标:最近敌人 | 无目标）
 --   1.48.0: 战士白名单清零——WAR_SKILLS 定义/引用全删，技能清单纯动作条扫描；新装默认方案去战士化（空方案+案例模版引导）；war 阈值缺省键清理
 --   1.47.0: 角色行为扩充——取消施法（SpellStopCasting 特殊行为）/自动射击/射击入 cat1；姿态支持序号（姿态:2）；★修 st.autoAttack 采集与接管开关耦合（开关关时 普攻 条件恒 false）
