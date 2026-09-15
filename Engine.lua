@@ -75,7 +75,7 @@ function EVAL_GO_RESCAN(quiet)
       EVAL_SAY("激活方案「" .. tostring(p.name) .. "」技能核对↓")
       for _, r in ipairs(p.skills) do
         local n = r.skill
-        local special = (EVAL_PET_OF and EVAL_PET_OF(n)) or (EVAL_TGT_OF and EVAL_TGT_OF(n)) or (EVAL_STANCE_OF and EVAL_STANCE_OF(n)) or (EVAL_ITEM_OF and EVAL_ITEM_OF(n))
+        local special = (EVAL_PET_OF and EVAL_PET_OF(n)) or (EVAL_TGT_OF and EVAL_TGT_OF(n)) or (EVAL_STANCE_OF and EVAL_STANCE_OF(n)) or (EVAL_ITEM_OF and EVAL_ITEM_OF(n)) or n == "取消施法"
         if special then
           EVAL_SAY(n .. " → |cff80ff80特殊技能（不占动作条）|r")
         else
@@ -255,15 +255,28 @@ end
 local function stanceOf(skill)
   return string.match(skill or "", "^姿态[:：](.+)$")
 end
--- 姿态名 → 姿态栏 1 基索引, 图标, 当前激活(1/nil), 可用(1/nil)；未找到/无姿态栏返回 nil
+-- 姿态名或序号（"姿态:2" 1.47.0 起兼容）→ 姿态栏 1 基索引, 图标, 当前激活(1/nil), 可用(1/nil)；未找到/无姿态栏返回 nil
 local function wFindStance(name)
   if type(GetNumShapeshiftForms) ~= "function" then return nil end
   local okn, n = pcall(GetNumShapeshiftForms)
   if not (okn and n and n > 0) then return nil end
+  local idx = tonumber(name) -- 序号直取（"姿态:2"=姿态栏第 2 格）
+  if idx and idx >= 1 and idx <= n then
+    local oki, icon, nm, active, castable = pcall(GetShapeshiftFormInfo, idx)
+    if oki and nm then return idx, icon, active, castable end
+    return nil
+  end
   for i = 1, n do
     local oki, icon, nm, active, castable = pcall(GetShapeshiftFormInfo, i)
     if oki and nm and nm == name then return i, icon, active, castable end
   end
+  return nil
+end
+
+-- 取消施法（1.47.0 特殊行为）：rule.skill="取消施法"——SpellStopCasting 打断自己当前读条（wiki Spell 分类），
+-- 不占动作条；典型用途：读条被打/需要立刻转身逃跑时配条件触发。
+local function cancelCastOf(skill)
+  if skill == "取消施法" then return true end
   return nil
 end
 
@@ -274,6 +287,7 @@ local function wicon(name)
   local pc2 = petCmdOf(name)
   if pc2 then return petIconOf(pc2) end -- 1.32.6 宠物指令专属图标（动作条学习）
   if targetSelOf(name) then return "Interface\\Icons\\INV_Misc_QuestionMark" end -- 1.32.0 选取目标无专属图标
+  if cancelCastOf(name) then return "Interface\\Icons\\INV_Misc_QuestionMark" end -- 1.47.0 取消施法无专属图标
   local stname = stanceOf(name) -- 1.43.0 姿态：GetShapeshiftFormInfo 图标（激活态自动亮纹）
   if stname then
     local _si, stex = wFindStance(stname)
@@ -437,6 +451,10 @@ local function wready(name)
     end
     return true
   end
+  if cancelCastOf(name) then -- 1.47.0 取消施法：仅在读条/引导中有意义
+    if st.castName or (st.castUntil and st.castUntil > GetTime()) then return true end
+    return false, "未在施法"
+  end
   local s = wslots[name]
   if not s then return false, "不在动作条" end
   local ok, start, dur = pcall(GetActionCooldown, s.slot)
@@ -498,6 +516,16 @@ local function wuse(name, reason)
     local sline = string.format("→ %s (%s)", name, reason)
     EVAL_LOGLINE(sline)
     if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cff7fff7f" .. sline .. "|r") end
+    return true
+  end
+  if cancelCastOf(name) then
+    -- 取消施法（1.47.0）：SpellStopCasting 打断自身读条；未在读条时静默跳过（条件里建议配 施法中:X）
+    if not (st.castName or (st.castUntil and st.castUntil > GetTime())) then wlog(name .. "跳过: 未在施法") return false end
+    if type(SpellStopCasting) ~= "function" then wlog(name .. ": 无取消施法函数") return false end
+    pcall(SpellStopCasting)
+    local cline = string.format("→ %s (%s)", name, reason)
+    EVAL_LOGLINE(cline)
+    if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cff7fff7f" .. cline .. "|r") end
     return true
   end
   local s = wslots[name]
@@ -835,7 +863,7 @@ function EVAL_RULE_RUN(rules)
   for _, r in ipairs(rules) do
     if r.enabled == false then
       -- 技能配置开关关掉的：静默跳过
-    elseif not wslots[r.skill] and not petCmdOf(r.skill) and not targetSelOf(r.skill) and not itemOf(r.skill) and not stanceOf(r.skill) then
+    elseif not wslots[r.skill] and not petCmdOf(r.skill) and not targetSelOf(r.skill) and not itemOf(r.skill) and not stanceOf(r.skill) and not cancelCastOf(r.skill) then
       wlog(r.skill .. "跳过: 不在动作条")
     elseif wImmuneTo(r.skill) then
       wlog(r.skill .. "跳过: 目标已免疫（学习记录 " .. tostring(st.targetName) .. "）")
@@ -1133,12 +1161,14 @@ function EVAL_GO(profSel)
   --    需要该行为请在方案里加规则：战斗姿态 | 非战斗 & 非姿态1 & 可攻击；冲锋 | 非战斗 & 姿态1 & 可攻击 & 就绪）
 
   -- 3) 自动普攻（AttackTarget 是切换语义，必须用 IsCurrentAction 守卫，连按安全）
+  -- 1.47.0 解耦：st.autoAttack 状态采集【不受接管开关影响】（否则开关关掉时 普攻/未普攻 条件恒读 false，
+  -- 规则里放「攻击」不带 未普攻 条件会每按一次开/关翻转）；开关只控制「自动开启」这个动作。
   local atk = wslots["攻击"]
   st.autoAttack = false
-  if w.attack ~= false and atk and type(IsCurrentAction) == "function" then
+  if atk and type(IsCurrentAction) == "function" then
     local okc, cur = pcall(IsCurrentAction, atk.slot)
     if okc and cur then st.autoAttack = true end
-    if okc and not cur and GetTime() - wLastAttackTry >= 2 then
+    if w.attack ~= false and okc and not cur and GetTime() - wLastAttackTry >= 2 then
       wLastAttackTry = GetTime()
       AttackTarget()
       EVAL_LOGLINE("→ 开启自动普攻")
@@ -1204,7 +1234,8 @@ end
 function EVAL_GO_SKILL_CATEGORIES()
   local cats = {}
   table.insert(cats, { label = L("SK_CAT_1"), items = function() -- 1.43.0 追加姿态切换（姿态栏实时枚举，不占动作条）
-    local l = { "攻击" }
+    -- 1.47.0 扩充：自动射击（猎人）/射击（法系魔杖）走动作条通道同「攻击」；取消施法=SpellStopCasting 特殊行为
+    local l = { "攻击", "自动射击", "射击", "取消施法" }
     if type(GetNumShapeshiftForms) == "function" then
       local okn, n = pcall(GetNumShapeshiftForms)
       if okn and n and n > 0 then
@@ -1219,12 +1250,12 @@ function EVAL_GO_SKILL_CATEGORIES()
   table.insert(cats, { label = L("SK_CAT_2"), items = function()
     local list, seen = {}, {}
     for _, n in ipairs(WAR_SKILLS) do
-      if n ~= "攻击" and not seen[n] then seen[n] = true table.insert(list, n) end
+      if n ~= "攻击" and n ~= "自动射击" and n ~= "射击" and n ~= "取消施法" and not seen[n] then seen[n] = true table.insert(list, n) end -- 1.47.0 行为类归 cat1
     end
     if wscanned and wslots then
       local extra = {}
       for n in pairs(wslots) do
-        if not seen[n] and n ~= "攻击" then table.insert(extra, n) end
+        if not seen[n] and n ~= "攻击" and n ~= "自动射击" and n ~= "射击" and n ~= "取消施法" then table.insert(extra, n) end
       end
       table.sort(extra)
       for _, n in ipairs(extra) do table.insert(list, n) end
@@ -1289,7 +1320,7 @@ function EVAL_GO_STATUS()
     EVAL_SAY("激活方案「" .. tostring(p.name) .. "」：")
     for _, r in ipairs(p.skills) do
       local n = r.skill
-      if petCmdOf(n) or targetSelOf(n) or stanceOf(n) then
+      if petCmdOf(n) or targetSelOf(n) or stanceOf(n) or cancelCastOf(n) then
         EVAL_SAY(n .. ": |cff80ff80特殊技能（不占动作条）|r")
       elseif itemOf(n) then
         local bag = wFindBagItem(itemOf(n))
@@ -1319,6 +1350,7 @@ EVAL_PET_OF = petCmdOf
 EVAL_TGT_OF = targetSelOf
 EVAL_ITEM_OF = itemOf
 EVAL_STANCE_OF = stanceOf
+EVAL_CANCELCAST_OF = cancelCastOf
 EVAL_TARGET_SEL = TARGET_SEL
 EVAL_TSEL_NAME = TARGET_SEL_NAME
 EVAL_CLASS_LIST = CLASS_LIST

@@ -1,4 +1,4 @@
--- EvalHelp 1.46.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.47.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.46.0"
+local VERSION = "1.47.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -52,6 +52,7 @@ local auraTexOf = EVAL_AURA_TEX
 local petCmdOf, targetSelOf, itemOf = EVAL_PET_OF, EVAL_TGT_OF, EVAL_ITEM_OF
 local stanceOf = EVAL_STANCE_OF -- 1.43.0 姿态切换（姿态:名称）
 local condTrim = EVAL_COND_TRIM -- 1.44.0 拆分漏桥补：EVAL_PROFILE_FROM_TEXT 用裸 condTrim（旧例一直缺别名，游戏内点导入必炸）
+local cancelCastOf = EVAL_CANCELCAST_OF -- 1.47.0 取消施法特殊行为
 local TARGET_SEL, TARGET_SEL_NAME = EVAL_TARGET_SEL, EVAL_TSEL_NAME
 local CLASS_LIST = EVAL_CLASS_LIST
 local WAR_SKILLS = EVAL_WAR_SKILLS
@@ -449,14 +450,14 @@ function EVAL_HELP_UI_TICK()
         if t0 then pcall(pc.icon.SetTexture, pc.icon, t0) end
         local enabled = r.enabled ~= false
         local pass = false
-        if enabled and (s or petCmdOf(r.skill) or targetSelOf(r.skill) or itemOf(r.skill) or stanceOf(r.skill)) and r.groups then -- 宠物/选取目标/物品/姿态不占动作条也参与亮金（1.30.0/1.32.0/1.43.0）
+        if enabled and (s or petCmdOf(r.skill) or targetSelOf(r.skill) or itemOf(r.skill) or stanceOf(r.skill) or cancelCastOf(r.skill)) and r.groups then -- 宠物/选取目标/物品/姿态/取消施法不占动作条也参与亮金（1.30.0~1.47.0）
           local okp = groupsOK(r, true) -- dry: 亮金预览不触发选取目标等副作用
           pass = okp and true or false
         end
         if not enabled then
           pcall(pc.icon.SetVertexColor, pc.icon, 0.25, 0.25, 0.25)
           pc.text:SetText("停")
-        elseif not s and not petCmdOf(r.skill) and not targetSelOf(r.skill) and not itemOf(r.skill) and not stanceOf(r.skill) then -- 宠物/选取目标/物品/姿态不占动作条不算缺失（1.30.0/1.32.0/1.43.0）
+        elseif not s and not petCmdOf(r.skill) and not targetSelOf(r.skill) and not itemOf(r.skill) and not stanceOf(r.skill) and not cancelCastOf(r.skill) then -- 特殊技能不占动作条不算缺失（1.30.0~1.47.0）
           pcall(pc.icon.SetVertexColor, pc.icon, 0.35, 0.35, 0.35)
           pc.text:SetText("?")
         else
@@ -2059,7 +2060,7 @@ function EVAL_HELP_SE_REFRESH()
   if seUI.catName then -- 分类按钮文字 = 当前技能所属类（1.32.3）
     local cl = { L("SK_CAT_1"), L("SK_CAT_2"), L("SK_CAT_3"), L("SK_CAT_4"), L("SK_CAT_5") }
     local ci = 2
-    if ed.skill == "攻击" or stanceOf(ed.skill) then ci = 1
+    if ed.skill == "攻击" or ed.skill == "自动射击" or ed.skill == "射击" or cancelCastOf(ed.skill) or stanceOf(ed.skill) then ci = 1
     elseif petCmdOf(ed.skill) then ci = 3
     elseif targetSelOf(ed.skill) then ci = 4
     elseif itemOf(ed.skill) then ci = 5 end
@@ -2200,7 +2201,7 @@ local function SE_BUILD()
   -- 技能选择行（1.32.3 二级下拉 UI）：[分类▾] [图标] [具体项▾]　启用
   -- 分类按钮在左（替代旧"技能:"标签位），项按钮在右——点哪个弹哪级，所见即两级
   local function seCatOfSkill(skill) -- 技能名 → 分类序号（EVAL_GO_SKILL_CATEGORIES 顺序）
-    if skill == "攻击" or stanceOf(skill) then return 1 end
+    if skill == "攻击" or skill == "自动射击" or skill == "射击" or cancelCastOf(skill) or stanceOf(skill) then return 1 end
     if petCmdOf(skill) then return 3 end
     if targetSelOf(skill) then return 4 end
     if itemOf(skill) then return 5 end
@@ -2466,7 +2467,7 @@ local function SE_BUILD()
       local items, names = {}, {}
       local function push(disp, nm) table.insert(items, disp) table.insert(names, nm) end
       for _, n in ipairs(EVAL_GO_SKILL_CHOICES()) do
-        if not petCmdOf(n) and not targetSelOf(n) and not itemOf(n) and not stanceOf(n) then push(n, n) end
+        if not petCmdOf(n) and not targetSelOf(n) and not itemOf(n) and not stanceOf(n) and not cancelCastOf(n) then push(n, n) end
       end
       local k0 = it.cd.k
       local isAura = (k0 == "hasDebuff" or k0 == "noDebuff" or k0 == "hasBuff" or k0 == "noBuff")

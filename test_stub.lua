@@ -79,7 +79,9 @@ GetActionText = function() return nil end
 GetActionTexture = function(slot) return "tex" .. slot end
 GetActionCooldown = function() return 0, 0 end
 IsUsableAction = function() return true end
-IsCurrentAction = function() return false end
+IsCurrentAction = function(slot) return TEST.currentAction == slot end
+SpellStopCasting = function() TEST.castStopped = true end
+AttackTarget = function() TEST.attackTried = true end
 UseAction = function(slot) table.insert(TEST.used, slot) end
 TargetNearestEnemy = function()
   TEST.targetSel = "nearEnemy"

@@ -389,4 +389,35 @@ eq(EVAL_WSLOTS["致死打击"] ~= nil, true, "EVAL_WSLOTS live after rescan")
 eq(EVAL_WSLOTS["致死打击"].slot, 1, "slot recorded")
 TEST.slotNames[1] = nil
 
+-- 29) 角色行为扩充（1.47.0）：取消施法 + 姿态序号 + 自动射击/射击入 cat1 + 普攻状态与接管开关解耦
+eq(EVAL_CANCELCAST_OF("取消施法"), true, "cancelCastOf parses")
+eq(EVAL_CANCELCAST_OF("攻击"), nil, "attack not cancel-cast")
+TEST.castStopped = nil
+EVAL_HELP_STATE.castName = "寒冰箭"
+eq(EVAL_RULE_RUN({ { skill = "取消施法", why = "x", groups = EVAL_PARSE_CONDS("施法中") } }), true, "cancel cast fires while casting")
+eq(TEST.castStopped, true, "SpellStopCasting called")
+EVAL_HELP_STATE.castName = nil EVAL_HELP_STATE.castUntil = nil
+eq(EVAL_RULE_RUN({ { skill = "取消施法", why = "x", groups = EVAL_PARSE_CONDS("目标存在") } }), false, "cancel cast skipped when not casting")
+TEST.stances = { { icon = "texSt1", name = "战斗姿态", castable = 1 }, { icon = "texSt2", name = "防御姿态", castable = 1 } }
+TEST.stanceCast = nil
+eq(EVAL_RULE_RUN({ { skill = "姿态:2", why = "x", groups = EVAL_PARSE_CONDS("非战斗") } }), true, "stance by index fires")
+eq(TEST.stanceCast, 2, "CastShapeshiftForm(2) via index")
+TEST.stances = nil
+local catsB = EVAL_GO_SKILL_CATEGORIES()
+local b1 = catsB[1].items()
+local hasAS, hasShoot, hasCancel = false, false, false
+for _, n in ipairs(b1) do
+  if n == "自动射击" then hasAS = true end
+  if n == "射击" then hasShoot = true end
+  if n == "取消施法" then hasCancel = true end
+end
+eq(hasAS and hasShoot and hasCancel, true, "cat1 has autoshot/shoot/cancelcast")
+-- 普攻状态采集不受接管开关影响：开关关掉也要如实写 st.autoAttack
+TEST.slotNames[2] = "攻击" EVAL_GO_RESCAN(true)
+TEST.currentAction = EVAL_WSLOTS["攻击"].slot
+EVAL_HELP_CONFIG.war.attack = false -- 接管关
+EVAL_GO()
+eq(EVAL_HELP_STATE.autoAttack, true, "autoAttack state accurate with takeover off")
+TEST.currentAction = nil EVAL_HELP_CONFIG.war.attack = nil TEST.slotNames[2] = nil EVAL_GO_RESCAN(true)
+
 print("ALL TESTS PASS")
