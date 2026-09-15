@@ -1,4 +1,4 @@
--- EvalHelp 1.59.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.60.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.59.0"
+local VERSION = "1.60.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -985,7 +985,9 @@ local W, H = WIDE and 700 or 560, 420
   -- 右侧：技能规则列表（顺序=优先级；勾选=技能配置开关）
   local RX2 = 128
   cfgHeader(root, RX2, -56, L("W_LIST_H"), Wp)
-  local ROWS = 8
+  -- 1.60.0 列表高度衍生到底部：行数按窗口高度动态算（旧固定 8 行，底部大片空置）——
+  -- 起始 y=-74、行距 24，底部给关闭按钮留 120px
+  local ROWS = math.floor((H - 120) / 24)
   local function mkSmall(x, y, w, label, fn, list, rightAnch) -- 1.32.2 list：传 G 挂全局页；1.34.1 rightAnch：右缘锚定（i18n 宽窗自适应）
     local b = CreateFrame("Button", nil, root)
     b:SetWidth(w) b:SetHeight(15)
@@ -1120,7 +1122,7 @@ local W, H = WIDE and 700 or 560, 420
     warUI.offset = math.max(0, (warUI.offset or 0) - 1)
     EVAL_WAR_TAB_REFRESH()
   end, nil, true)
-  warUI.scrollDn = mkSmall(94, -242, 14, "v", function()
+  warUI.scrollDn = mkSmall(94, -74 - (ROWS - 1) * 24, 14, "v", function() -- 1.60.0 跟随动态行数（旧硬编码 -242）
     warUI.offset = (warUI.offset or 0) + 1
     EVAL_WAR_TAB_REFRESH() -- 上限在刷新里收敛
   end, nil, true)
