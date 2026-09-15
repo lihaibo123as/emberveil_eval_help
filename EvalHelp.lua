@@ -1,4 +1,4 @@
--- EvalHelp 1.61.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.61.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.61.0"
+local VERSION = "1.61.1"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -82,6 +82,9 @@ local function uiSolid(t, r, g, b, a)
 end
 
 -- 字体字符串：中文字体优先（FZLBJW=方正隶变），失败逐级回退
+-- 1.61.1 显示转义：| 在 FontString/聊天框里是颜色转义符，单个 | 会被吞——显示层一律 || 转义（数据层不受影响）
+local function uiEsc(s) return (string.gsub(tostring(s or ""), "|", "||")) end
+
 local function uiText(parent, size, r, g, b)
   local fs = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   local set = false
@@ -1565,7 +1568,7 @@ function EVAL_WAR_TAB_REFRESH()
         uiSolid(row.icon, 0.25, 0.25, 0.25, 1)
       end
       row.name:SetText(tostring(r.skill))
-      row.conds:SetText(EVAL_GROUP_STR(r.groups))
+      row.conds:SetText(uiEsc(EVAL_GROUP_STR(r.groups))) -- 1.61.1 | 显示转义
     end
   end
 end
@@ -2172,7 +2175,7 @@ function EVAL_HELP_SE_REFRESH()
     for _, wgt in ipairs(row.all) do pcall(wgt.Hide, wgt) end
     if it then
       local cd = it.cd
-      row.conn.text:SetText(i == 1 and "当" or (it.conn or "&"))
+      row.conn.text:SetText(i == 1 and "当" or ((it.conn == "|") and "||" or (it.conn or "&"))) -- 1.61.1 | 需转义显示
       pcall(row.conn.btn.Show, row.conn.btn)
       local ti = SE_BY_K[cd.k] or 1
       local td = SE_TYPES[ti]
@@ -2240,7 +2243,7 @@ function EVAL_HELP_SE_REFRESH()
     end
   end
   -- 底部实时预览（整串条件）
-  seUI.preview:SetText(EVAL_GROUP_STR(seLinearToGroups(ed.conds)))
+  seUI.preview:SetText(uiEsc(EVAL_GROUP_STR(seLinearToGroups(ed.conds)))) -- 1.61.1 | 显示转义
 end
 
 local function SE_BUILD()
@@ -2715,11 +2718,11 @@ function EVAL_HELP_SE_SAVE()
     r.skill = ed.skill
     r.enabled = ed.enabled
     r.groups = groups
-    say("已保存技能: " .. tostring(ed.skill) .. " → " .. EVAL_GROUP_STR(groups))
+    say("已保存技能: " .. tostring(ed.skill) .. " → " .. uiEsc(EVAL_GROUP_STR(groups)))
   else
     -- 1.33.0 取消 8 技能上限（配置窗列表支持滚动）
     table.insert(p.skills, { skill = ed.skill, enabled = ed.enabled, groups = groups, why = ed.skill })
-    say("已添加技能: " .. tostring(ed.skill) .. " → " .. EVAL_GROUP_STR(groups))
+    say("已添加技能: " .. tostring(ed.skill) .. " → " .. uiEsc(EVAL_GROUP_STR(groups)))
   end
   pcall(EVAL_WAR_TAB_REFRESH)
   if seUI.root then seUI.root:Hide() end
@@ -3157,7 +3160,7 @@ function EVAL_HELP_IO_REFRESH()
     if line ~= "" then table.insert(lines, line) end
   end
   for i, ln in ipairs(ioUI.pvLines) do
-    ln:SetText(lines[i] or "")
+    ln:SetText(uiEsc(lines[i] or "")) -- 1.61.1 | 显示转义（编辑框原文不受影响）
   end
 end
 
@@ -3261,7 +3264,7 @@ if type(SlashCmdList) == "table" then
       if p then
         for i, r in ipairs(p.skills) do
           say(string.format("%d. %s %s | %s", i, tostring(r.skill),
-            (r.enabled ~= false) and "|cff00ff00开|r" or "|cffff0000关|r", EVAL_GROUP_STR(r.groups)))
+            (r.enabled ~= false) and "|cff00ff00开|r" or "|cffff0000关|r", uiEsc(EVAL_GROUP_STR(r.groups))))
         end
       end
     elseif msg == "go" then
