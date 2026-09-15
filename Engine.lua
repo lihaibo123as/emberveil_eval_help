@@ -5,15 +5,11 @@ local st = EVAL_HELP_STATE
 local L = EVAL_L
 local formatStats, collectStats = EVAL_FORMAT_STATS, EVAL_COLLECT_STATS -- 1.41.2 拆分漏桥补
 
--- ============ 一键输出引擎（规则引擎驱动；移植自 战士_武器.lua，内置战士技能白名单，其他职业同构扩展） ============
+-- ============ 一键输出引擎（规则引擎驱动，全职业通用） ============
 -- 宏入口：/run EVAL_GO() —— 每次按键只做一个动作（同键多行动作会互抢 GCD）。
--- 需要把技能拖上动作条（缺哪个就跳过哪个逻辑）：
---   攻击 / 战斗姿态 / 冲锋 / 压制 / 断筋 / 撕裂 / 战斗怒吼 / 血性狂暴 / 猛击 / 英勇打击
+-- 技能清单一切以动作条扫描为准（1.48.0 战士白名单已清零）：把技能拖上动作条 → /eh go rescan 或配置窗[重扫]。
 -- 技能识别走 tooltip 技能名（不依赖图标名拼写）；buff/debuff 用「动作条图标 == 光环图标」比对。
--- 原宏两个插件依赖的处理：
---   MPGetMainHandLeft（挥击计时）→ 本客户端无此 API，猛击改为【按住 Alt 才放】；
---   MPTargetBleed（可否流血）→ 用 UnitCreatureType 排除元素/机械。
--- 调试：/eh war 看识别结果和当前状态；/eh war rescan 重扫；/eh wdebug 开关详细日志。
+-- 调试：/eh go 看识别结果和当前状态；/eh go rescan 重扫；/eh debug 开关详细日志。
 -- 所有出手动作都会写入日志文件（UELog），连按不刷屏也能事后复盘。
 
 local WAR_MAX_SLOT = 119
@@ -102,44 +98,24 @@ function EVAL_T_RANGE()
     if not okr or r == nil or r == 1 then return nil end -- 1=自动攻击类不测距
     return r == true
   end
+  -- 1.49.2 参照技能多职业化（旧版纯战士：断筋/冲锋）：近战技=战/贼/猎/骑/德常见近战；突进技=冲锋/拦截/野性冲锋
   local melee
-  for _, n in ipairs({ "断筋", "压制", "撕裂", "英勇打击", "猛击", "斩杀" }) do
+  for _, n in ipairs({ "断筋", "压制", "撕裂", "英勇打击", "猛击", "斩杀", "背刺", "脚踢", "猛禽一击", "审判", "撕碎" }) do
     melee = inRange(n)
     if melee ~= nil then break end
   end
   if melee == true then return "近战" end
-  local charge = inRange("冲锋")
+  local charge
+  for _, n in ipairs({ "冲锋", "拦截", "野性冲锋" }) do
+    charge = inRange(n)
+    if charge ~= nil then break end
+  end
   if charge == true then return "冲锋距" end
   if melee == false or charge == false then return "远程外" end
   return nil
 end
 
 local function wtex(name) local s = wslots[name]; return s and s.tex end
-
--- 目标距离分档（1.37.0）：本客户端无精确距离 API（CheckInteractDistance 实测不分档、无目标坐标入口）——
--- 用已知射程参照技能 + IsActionInRange 分档：近战(≤5码)/冲锋距(8-25码)/远程外；无参照技能=nil（不显示）
-function EVAL_T_RANGE()
-  if not (st.hasTarget and not st.tDead) then return nil end
-  if type(IsActionInRange) ~= "function" then return nil end
-  local function inRange(name)
-    local s = wslots[name]
-    if not s then return nil end
-    local okr, r = pcall(IsActionInRange, s.slot)
-    if not okr or r == nil or r == 1 then return nil end -- 1=自动攻击类不测距
-    return r == true
-  end
-  local melee
-  for _, n in ipairs({ "断筋", "压制", "撕裂", "英勇打击", "猛击", "斩杀" }) do
-    melee = inRange(n)
-    if melee ~= nil then break end
-  end
-  if melee == true then return "近战" end
-  local charge = inRange("冲锋")
-  if charge == true then return "冲锋距" end
-  if melee == false or charge == false then return "远程外" end
-  return nil
-end
-
 -- ===== 宠物指令（1.30.0 特殊技能：rule.skill="宠物:攻击"，不占动作条，出手直接调 Pet API） =====
 -- 收录战斗行为类全量：攻击/跟随/停留/停止攻击 + 三种姿态（被动/防御/主动）+ 解散。
 -- 刻意不含：PetAbandon 永久放弃（太危险）、PetRename、兽栏系（非战斗行为）、CastPetAction（格子随宠物变不可靠）。
@@ -531,7 +507,7 @@ local function wuse(name, reason)
   local s = wslots[name]
   if not s then wlog(string.format("%s: %s，但技能不在动作条", name, reason)) return false end
   UseAction(s.slot)
-  local line = string.format("→ %s (%s) | 怒气%d", name, reason, UnitMana("player"))
+  local line = string.format("→ %s (%s) | %s%d", name, reason, (EVAL_POWERLABEL and EVAL_POWERLABEL() or "能量"), UnitMana("player")) -- 1.49.2 怒气硬编码→动态（法力/怒气/集中值）
   EVAL_LOGLINE(line)
   if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cff7fff7f" .. line .. "|r") end
   return true
@@ -1024,7 +1000,8 @@ function EVAL_PARSE_CONDS(str)
 end
 
 -- 条件组 → 显示字符串（列表摘要 / 编辑回显）
-local COND_NUMNAME = { power = "怒气", tHpPct = "目标血", hpPct = "自身血", powerPct = "能量%", combatTime = "进战", tCastEl = "读条", tCastLeft = "读条剩", combo = "连击" }
+-- 1.49.2 power 显示名动态化（UnitPowerType：法力/怒气/集中值/能量——旧版硬编码「怒气」，法师看着别扭）
+local COND_NUMNAME = { power = (EVAL_POWERLABEL and EVAL_POWERLABEL() or "能量"), tHpPct = "目标血", hpPct = "自身血", powerPct = "能量%", combatTime = "进战", tCastEl = "读条", tCastLeft = "读条剩", combo = "连击" }
 function EVAL_COND_STR(cd)
   local k = cd.k
   if COND_NUMNAME[k] then return COND_NUMNAME[k] .. (cd.op or ">") .. tostring(cd.n) end
@@ -1077,7 +1054,7 @@ function EVAL_GROUP_STR(groups)
   return table.concat(parts, " | ")
 end
 
--- 方案数据：缺省时从 cfg.war 阈值生成默认方案（1.22.0 起含 姿态/冲锋 开怪规则——原硬编码前置已全部规则化）
+-- 方案数据：缺省时给空「默认」方案（1.48.0 起；旧版生成一整套战士规则已删——起手走案例模版/编辑窗）
 function EVAL_WAR_ENSURE_PROFILES(w)
   if not w then return end
   if not w.debuffTex then w.debuffTex = {} end -- 1.32.0 审计修复：光环名→纹理学习表从未创建，学习跨会话丢失（1.27.0 遗留）
@@ -1126,7 +1103,6 @@ function EVAL_GO(profSel)
   EVAL_HELP_UPDATE_STATE()
   local rage     = st.power
   local inCombat = st.inCombat
-  local battle   = (st.formIndex == 1) -- 战斗姿态
 
   -- 1)（1.49.0 移除硬编码「无有效目标 → TargetNearestEnemy」前置：它在规则评估之前抢跑选敌，
   --    与「选取目标:最近友方」类规则方向相反、互相抢目标（用户实测日志先选敌再选友）。
@@ -1143,14 +1119,17 @@ function EVAL_GO(profSel)
   -- 3) 自动普攻（AttackTarget 是切换语义，必须用 IsCurrentAction 守卫，连按安全）
   -- 1.47.0 解耦：st.autoAttack 状态采集【不受接管开关影响】（否则开关关掉时 普攻/未普攻 条件恒读 false，
   -- 规则里放「攻击」不带 未普攻 条件会每按一次开/关翻转）；开关只控制「自动开启」这个动作。
-  local atk = wslots["攻击"]
+  -- 1.49.2 泛化：近战=攻击（AttackTarget）、远程=自动射击（UseAction 兜底）——旧版只认「攻击」，猎人接管无效
+  local atkSlot, atkUse = nil, nil
+  if wslots["攻击"] then atkSlot = wslots["攻击"].slot atkUse = function() AttackTarget() end
+  elseif wslots["自动射击"] then atkSlot = wslots["自动射击"].slot atkUse = function() UseAction(wslots["自动射击"].slot) end end
   st.autoAttack = false
-  if atk and type(IsCurrentAction) == "function" then
-    local okc, cur = pcall(IsCurrentAction, atk.slot)
+  if atkSlot and type(IsCurrentAction) == "function" then
+    local okc, cur = pcall(IsCurrentAction, atkSlot)
     if okc and cur then st.autoAttack = true end
     if w.attack ~= false and okc and not cur and GetTime() - wLastAttackTry >= 2 then
       wLastAttackTry = GetTime()
-      AttackTarget()
+      atkUse()
       EVAL_LOGLINE("→ 开启自动普攻")
       wlog("开启自动普攻")
     end
@@ -1182,10 +1161,10 @@ function EVAL_GO(profSel)
   if prof and EVAL_RULE_RUN(prof.skills) then return end
 
   -- 本次按键无动作：打一条状态行，方便对照调阈值
-  wlog(string.format("无动作 | 怒气%d 目标血%.0f%% %s%s%s%s",
-    rage, thscale * 100,
+  wlog(string.format("无动作 | %s%d 目标血%.0f%% %s%s%s%s", -- 1.49.2 怒气/战斗姿态硬编码→动态
+    (EVAL_POWERLABEL and EVAL_POWERLABEL() or "能量"), rage, thscale * 100,
     inCombat and "战斗中" or "非战斗",
-    battle and " 战斗姿态" or "",
+    (st.form and (" " .. st.form) or ""),
     ttype and (" " .. ttype) or "",
     st.isBoss and " Boss" or (st.isElite and " 精英" or "")))
 end

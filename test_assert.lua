@@ -419,6 +419,15 @@ EVAL_HELP_CONFIG.war.attack = false -- 接管关
 EVAL_GO()
 eq(EVAL_HELP_STATE.autoAttack, true, "autoAttack state accurate with takeover off")
 TEST.currentAction = nil EVAL_HELP_CONFIG.war.attack = nil TEST.slotNames[2] = nil EVAL_GO_RESCAN(true)
+-- 接管泛化（1.49.2）：无「攻击」时回退「自动射击」（UseAction 通道）
+TEST.slotNames[3] = "自动射击" EVAL_GO_RESCAN(true)
+TEST.used = {} EVAL_HELP_CONFIG.war.attack = true
+TEST.curTargetName = nil EVAL_HELP_UPDATE_STATE()
+EVAL_GO()
+local usedSlot3 = false
+for _, u in ipairs(TEST.used) do if u == 3 then usedSlot3 = true end end
+eq(usedSlot3, true, "autoshot takeover fires UseAction")
+TEST.used = {} EVAL_HELP_CONFIG.war.attack = nil TEST.slotNames[3] = nil EVAL_GO_RESCAN(true)
 
 -- 30) 空条件=直接执行（1.49.1）：编辑窗不配条件/导入 "- 技能 |" 产出空 groups 也必须触发
 TEST.slotNames[1] = "致死打击" EVAL_GO_RESCAN(true)
