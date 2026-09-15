@@ -75,7 +75,7 @@ EVAL_LOCALES["enUS"] = {
   CTG_3 = "Auras",
   CTG_4 = "Skill State",
   CT_POWER = "Rage/Energy", CT_THPPCT = "Target HP%", CT_HPPCT = "Self HP%", CT_POWERPCT = "Power%",
-  CT_COMBATTIME = "Combat Time", CT_COMBO = "Combo Points", CT_COMBAT = "In Combat", CT_HASTARGET = "Target Exists",
+  CT_COMBATTIME = "Combat Time", CT_COMBO = "Combo Points", CT_SWINGLEFT = "Next Swing In", CT_COMBAT = "In Combat", CT_HASTARGET = "Target Exists",
   CT_CANATTACK = "Attackable", CT_CANBLEED = "Bleedable", CT_TFRIENDLY = "T:Friendly", CT_THOSTILE = "T:Hostile",
   CT_TNEUTRAL = "T:Neutral", CT_ISELITE = "T:Elite", CT_ISBOSS = "T:Boss", CT_TINCOMBAT = "T:In Combat",
   CT_AUTOATTACK = "Auto-attack On", CT_AUTOSHOT = "Auto Shot On", CT_WANDSHOOT = "Wand Shoot On", CT_ALT = "Alt Held", CT_SHIFT = "Shift Held", CT_CTRL = "Ctrl Held",

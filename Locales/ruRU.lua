@@ -75,7 +75,7 @@ EVAL_LOCALES["ruRU"] = {
   CTG_3 = "Ауры",
   CTG_4 = "Навык",
   CT_POWER = "Ярость/Энергия", CT_THPPCT = "HP цели%", CT_HPPCT = "Свое HP%", CT_POWERPCT = "Энергия%",
-  CT_COMBATTIME = "Время в бою", CT_COMBO = "Комбо-очки", CT_COMBAT = "В бою", CT_HASTARGET = "Цель есть",
+  CT_COMBATTIME = "Время в бою", CT_COMBO = "Комбо-очки", CT_SWINGLEFT = "До атаки", CT_COMBAT = "В бою", CT_HASTARGET = "Цель есть",
   CT_CANATTACK = "Можно бить", CT_CANBLEED = "Кровоточит", CT_TFRIENDLY = "Дружелюбная", CT_THOSTILE = "Враждебная",
   CT_TNEUTRAL = "Нейтральная", CT_ISELITE = "Элита", CT_ISBOSS = "Босс", CT_TINCOMBAT = "Цель в бою",
   CT_AUTOATTACK = "Автоатака", CT_AUTOSHOT = "Автовыстрел", CT_WANDSHOOT = "Выстрел жезлом", CT_ALT = "Alt", CT_SHIFT = "Shift", CT_CTRL = "Ctrl",

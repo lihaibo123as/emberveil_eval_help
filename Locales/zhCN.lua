@@ -75,7 +75,7 @@ EVAL_LOCALES["zhCN"] = {
   CTG_3 = "光环效果",
   CTG_4 = "技能状态",
   CT_POWER = "怒气/能量", CT_THPPCT = "目标血%", CT_HPPCT = "自身血%", CT_POWERPCT = "能量%",
-  CT_COMBATTIME = "进战秒数", CT_COMBO = "连击点数", CT_COMBAT = "战斗状态", CT_HASTARGET = "目标存在",
+  CT_COMBATTIME = "进战秒数", CT_COMBO = "连击点数", CT_SWINGLEFT = "距下次攻击", CT_COMBAT = "战斗状态", CT_HASTARGET = "目标存在",
   CT_CANATTACK = "目标可攻击", CT_CANBLEED = "目标可流血", CT_TFRIENDLY = "目标友善", CT_THOSTILE = "目标敌对",
   CT_TNEUTRAL = "目标中立", CT_ISELITE = "目标精英", CT_ISBOSS = "目标Boss", CT_TINCOMBAT = "目标战斗中",
   CT_AUTOATTACK = "普攻已开", CT_AUTOSHOT = "自动射击已开", CT_WANDSHOOT = "魔杖射击已开", CT_ALT = "Alt按住", CT_SHIFT = "Shift按住", CT_CTRL = "Ctrl按住",

@@ -618,4 +618,21 @@ EVAL_HELP_STATE.lastSwing = nil EVAL_HELP_STATE.castUntil = nil
 eq(EVAL_SWING_REMAIN(), nil, "no anchor = nil")
 TEST.atkSpd = nil EVAL_HELP_UPDATE_STATE()
 
+-- 38) 条件 距下次攻击（1.57.0）：解析回环 + 数值比较 + 无数据=不满足
+TEST.slotNames[1] = "致死打击" EVAL_GO_RESCAN(true)
+eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("距攻击<1")), "距攻击<1", "swingLeft roundtrip")
+eq(EVAL_PARSE_CONDS("距攻击>2")[1][1].k, "swingLeft", "swingLeft parse k")
+-- 无计时数据 → 不满足
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("距攻击<1") } }), false, "no swing data blocks")
+-- 有数据：攻速 2.0、0.5s 前挥过 → 剩 1.5s
+TEST.atkSpd = 2.0 EVAL_HELP_UPDATE_STATE()
+EVAL_SWING_EVENT("你击中测试怪造成10点伤害。")
+local oldGT38 = GetTime
+GetTime = function() return EVAL_HELP_STATE.lastSwing + 0.5 end
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("距攻击>1") } }), true, "remain 1.5 > 1 passes")
+eq(EVAL_RULE_RUN({ { skill = "致死打击", why = "x", groups = EVAL_PARSE_CONDS("距攻击<1") } }), false, "remain 1.5 < 1 blocks")
+GetTime = oldGT38
+EVAL_HELP_STATE.lastSwing = nil TEST.atkSpd = nil EVAL_HELP_UPDATE_STATE()
+TEST.slotNames[1] = nil EVAL_GO_RESCAN(true)
+
 print("ALL TESTS PASS")

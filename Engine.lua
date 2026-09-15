@@ -692,6 +692,10 @@ local function condOne(cd, skill, dry)
   elseif k == "power" then return condCmp({ cd.op, cd.n }, st.power), "能量"
   elseif k == "powerPct" then return condCmp({ cd.op, cd.n }, st.powerPct), "能量%"
   elseif k == "tHpPct" then return condCmp({ cd.op, cd.n }, st.tHpPct), "目标血%"
+  elseif k == "swingLeft" then -- 1.57.0 距下次攻击秒数（挥击计时；无数据=不满足）
+    local rem = EVAL_SWING_REMAIN()
+    if rem == nil then return false, "无攻击计时数据" end
+    return condCmp({ cd.op, cd.n }, rem), "距攻击"
   elseif k == "hasTarget" then return ((st.hasTarget and true or false) == cd.v), "目标存在" -- 1.32.1
   elseif k == "canAttack" then return (st.canAttack == cd.v), "可攻击"
   elseif k == "canBleed" then return (st.canBleed == cd.v), "可流血"
@@ -966,6 +970,7 @@ local COND_NUM = {
   ["读条"] = "tCastEl", ["tCastEl"] = "tCastEl", ["读条剩"] = "tCastLeft", ["tCastLeft"] = "tCastLeft", -- 1.40.0 目标读条秒数
   ["自身读条"] = "castEl", ["castEl"] = "castEl", ["自身读条剩"] = "castLeft", ["castLeft"] = "castLeft", -- 1.41.0 自身读条秒数
   ["连击"] = "combo", ["连击点"] = "combo", ["combo"] = "combo",
+  ["距攻击"] = "swingLeft", ["swingLeft"] = "swingLeft", -- 1.57.0 距下次攻击秒数
 }
 local COND_BOOL = {
   ["战斗中"] = { "combat", true }, ["非战斗"] = { "combat", false }, ["combat"] = { "combat", true },
@@ -1098,7 +1103,7 @@ end
 
 -- 条件组 → 显示字符串（列表摘要 / 编辑回显）
 -- 1.49.2 power 显示名动态化（UnitPowerType：法力/怒气/集中值/能量——旧版硬编码「怒气」，法师看着别扭）
-local COND_NUMNAME = { power = (EVAL_POWERLABEL and EVAL_POWERLABEL() or "能量"), tHpPct = "目标血", hpPct = "自身血", powerPct = "能量%", combatTime = "进战", tCastEl = "读条", tCastLeft = "读条剩", combo = "连击" }
+local COND_NUMNAME = { power = (EVAL_POWERLABEL and EVAL_POWERLABEL() or "能量"), tHpPct = "目标血", hpPct = "自身血", swingLeft = "距攻击", powerPct = "能量%", combatTime = "进战", tCastEl = "读条", tCastLeft = "读条剩", combo = "连击" }
 function EVAL_COND_STR(cd)
   local k = cd.k
   if COND_NUMNAME[k] then return COND_NUMNAME[k] .. (cd.op or ">") .. tostring(cd.n) end
