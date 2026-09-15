@@ -386,6 +386,7 @@ eq(pR1 ~= nil, true, "rogue template parses: " .. tostring(eR1))
 eq(table.getn(pR1.skills), 4, "rogue skill count")
 eq(pR1.skills[1].skill, "选取目标:最近敌人", "rogue opens with target sel")
 eq(pR1.skills[4].groups[1][2].k, "combo", "rogue finisher uses combo cond")
+eq(pR1.skills[3].groups[1][2].op .. tostring(pR1.skills[3].groups[1][2].n), ">=4", "rogue execute threshold >=4")
 
 -- 27) 重扫报告/状态总览以激活方案为准（1.45.0）：混合技能方案下非静默调用不报错
 EVAL_HELP_CONFIG.war.profiles = { { name = "混合", skills = {
