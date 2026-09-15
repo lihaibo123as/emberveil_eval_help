@@ -891,6 +891,28 @@ function EVAL_TCAST_EVENT(msg)
   end
 end
 
+-- ===== 挥击计时（1.55.0，与施法学习同机制） =====
+-- 事件 CHAT_MSG_COMBAT_SELF_HITS：「你击中X造成Y点伤害。」「你爆击X…」（英文 "You hit/crit X for Y"）
+-- ——每次平砍命中锚定 st.lastSwing；攻速 UPDATE_STATE 采集（st.atkSpd）；施法会推迟挥击：锚点取 max(lastSwing, castUntil)
+function EVAL_SWING_EVENT(msg)
+  if type(msg) ~= "string" then return false end
+  local hit = string.find(msg, "^你击中") or string.find(msg, "^你爆击") or string.find(msg, "^You hit") or string.find(msg, "^You crit")
+  if not hit then return false end
+  st.lastSwing = GetTime()
+  return true
+end
+
+-- 距下次挥击秒数；无攻速/无锚点数据返回 nil（UI 显示「—」）
+function EVAL_SWING_REMAIN()
+  local spd = st.atkSpd
+  if not (spd and spd > 0) then return nil end
+  local anchor = st.lastSwing
+  if st.castUntil and st.castUntil > (anchor or 0) then anchor = st.castUntil end -- 施法推迟挥击
+  if not anchor then return nil end
+  local r = anchor + spd - GetTime()
+  return (r > 0) and r or 0
+end
+
 function EVAL_RULE_RUN(rules)
   local acted = false -- 1.53.0：非 GCD 类型出手也算有动作（但继续评估后续规则）
   for _, r in ipairs(rules) do

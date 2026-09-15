@@ -1,4 +1,4 @@
--- EvalHelp 1.54.4 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.55.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.54.4"
+local VERSION = "1.55.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -197,6 +197,11 @@ function EVAL_HELP_UI_BUILD()
   castBar:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
   y = y + math.max(6, math.floor(8 * z)) + gap
   ui.castBar, ui.castFill, ui.castText, ui.castW = castBar, castFill, castText, castW
+  -- 挥击计时条（1.55.0）：读条下方细条——进度=距下次挥击（自学习锚点+攻速），金色
+  local swBar, swFill, swText, swW = uiMakeBar(root, barW, math.max(6, math.floor(8 * z)))
+  swBar:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
+  y = y + math.max(6, math.floor(8 * z)) + gap
+  ui.swingBar, ui.swingFill, ui.swingText, ui.swingW = swBar, swFill, swText, swW
   status:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
   y = y + math.floor(13 * z) + gap
 
@@ -395,6 +400,17 @@ function EVAL_HELP_UI_TICK()
         tostring(st.castName) .. (st.castUntil and string.format(" %.1fs", math.max(0, st.castUntil - GetTime())) or ""))
     else
       uiSetBar(ui.castFill, ui.castText, ui.castW, 0, 0.1, 0.1, 0.1, "")
+    end
+  end
+  -- 1.55.0 挥击计时条：有攻速+锚点数据时显示（进度=已过/攻速，文本=距下次攻击秒数/就绪）
+  if ui.swingBar then
+    local rem = EVAL_SWING_REMAIN and EVAL_SWING_REMAIN()
+    if rem and st.atkSpd and st.atkSpd > 0 then
+      local frac = math.max(0, math.min(1, 1 - rem / st.atkSpd))
+      uiSetBar(ui.swingFill, ui.swingText, ui.swingW, frac, 0.85, 0.70, 0.25,
+        rem > 0.05 and string.format("下次攻击 %.1fs", rem) or "攻击就绪")
+    else
+      uiSetBar(ui.swingFill, ui.swingText, ui.swingW, 0, 0.1, 0.1, 0.1, "")
     end
   end
   if st.hasTarget then
@@ -1769,6 +1785,12 @@ function EVAL_HELP_ST_TICK()
     st.form or "无姿态"))
   table.insert(lines, string.format("Alt:%s Shift:%s Ctrl:%s 普攻:%s",
     stYesNo(st.alt), stYesNo(st.shift), stYesNo(st.ctrl), stYesNo(st.autoAttack)))
+  if st.atkSpd then -- 1.55.0 挥击计时行：攻速 + 距下次攻击（无锚点数据=—）
+    local rem = EVAL_SWING_REMAIN and EVAL_SWING_REMAIN()
+    table.insert(lines, string.format("攻速 %.1fs · 距下次攻击 %s%s", st.atkSpd,
+      rem and string.format("%.1fs", rem) or "—",
+      st.atkSpdOff and string.format("（副手 %.1fs）", st.atkSpdOff) or ""))
+  end
   if st.castName then -- 1.38.0 施法中实时显示（含读条剩余秒数）
     table.insert(lines, string.format("施法中: %s%s", tostring(st.castName),
       st.castUntil and string.format(" 剩%.1fs", math.max(0, st.castUntil - GetTime())) or ""))
@@ -3367,6 +3389,7 @@ init:SetScript("OnEvent", function(a, b)
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_REGEN_ENABLED")
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_TARGET_CHANGED") -- Cat：目标切换时刷新可流血等状态
     pcall(autoFrame.RegisterEvent, autoFrame, "CHAT_MSG_SPELL_SELF_DAMAGE") -- 1.36.0 免疫学习器（探针实测事件名）
+    pcall(autoFrame.RegisterEvent, autoFrame, "CHAT_MSG_COMBAT_SELF_HITS") -- 1.55.0 挥击计时锚点（事件名不存在则静默无效）
     -- 1.38.0 施法中跟踪（1.12 无 UnitCastingInfo，只能走 SPELLCAST_* 事件；不存在则静默无效）
     for _, ev2 in ipairs({ "SPELLCAST_START", "SPELLCAST_STOP", "SPELLCAST_FAILED", "SPELLCAST_INTERRUPTED", "SPELLCAST_DELAYED", "SPELLCAST_CHANNEL_START", "SPELLCAST_CHANNEL_STOP" }) do
       pcall(autoFrame.RegisterEvent, autoFrame, ev2)
@@ -3392,6 +3415,10 @@ init:SetScript("OnEvent", function(a, b)
         -- 消息文本取全局 arg1；ea/eb 若承载事件名则不当消息用（三态兼容）
         local msgT = (type(arg1) == "string" and arg1) or ((type(ea) == "string" and ea ~= en) and ea) or (type(eb) == "string" and eb)
         if msgT then EVAL_IMMUNE_LEARN(msgT) end
+      elseif en == "CHAT_MSG_COMBAT_SELF_HITS" then
+        -- 1.55.0 挥击计时：平砍命中锚定 lastSwing（三态兼容取消息文本）
+        local msgS = (type(arg1) == "string" and arg1) or ((type(ea) == "string" and ea ~= en) and ea) or (type(eb) == "string" and eb ~= en and eb) or nil
+        if msgS then EVAL_SWING_EVENT(msgS) end
       -- 1.38.0 施法中跟踪：参数顺序做启发式——字符串=技能名、数字=时长ms（CHANNEL_START 的顺序与 START 相反）
       elseif en == "SPELLCAST_START" or en == "SPELLCAST_CHANNEL_START" then
         local a1, a2 = arg1, arg2

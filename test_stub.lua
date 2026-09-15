@@ -70,6 +70,7 @@ IsControlKeyDown = function() return false end
 UnitExists = function(u) return u == "target" and TEST.hasTarget or false end
 UnitIsDeadOrGhost = function() return false end
 UnitIsDead = function() return false end
+UnitAttackSpeed = function() return TEST.atkSpd or 0, TEST.atkSpdOff end
 UnitCanAttack = function() return true end
 UnitCreatureType = function() return "人型生物" end
 IsActionInRange = function(slot) return TEST.inRange and TEST.inRange[slot] end -- 1.37.0：true=内 / 0=外 / nil=不测

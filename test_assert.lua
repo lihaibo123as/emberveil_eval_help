@@ -586,4 +586,25 @@ GetTime = oldGT36
 EVAL_GO_LAST = 0 EVAL_HELP_STATE.castLog = nil EVAL_HELP_CONFIG.goDebounce = nil
 EVAL_HELP_CONFIG.war.profiles = oldProf36 EVAL_HELP_CONFIG.war.activeProfile = 1
 
+-- 37) 挥击计时（1.55.0）：事件锚点 + 攻速采集 + 施法推迟 + 剩余计算
+TEST.atkSpd = 2.0 EVAL_HELP_UPDATE_STATE()
+eq(EVAL_HELP_STATE.atkSpd, 2.0, "attack speed collected")
+eq(EVAL_SWING_EVENT("你击中蓬毛幼狼造成18点伤害。"), true, "CN melee hit anchors")
+eq(EVAL_HELP_STATE.lastSwing ~= nil, true, "lastSwing recorded")
+eq(EVAL_SWING_EVENT("You hit Wolf for 18."), true, "EN melee hit anchors")
+eq(EVAL_SWING_EVENT("你的火球术击中蓬毛幼狼造成18点火焰伤害。"), false, "spell hit not a swing")
+eq(EVAL_SWING_EVENT("你杀死了蓬毛幼狼！"), false, "kill message not a swing")
+local oldGT37 = GetTime
+GetTime = function() return EVAL_HELP_STATE.lastSwing + 0.5 end
+local rem37 = EVAL_SWING_REMAIN()
+eq(rem37 and math.abs(rem37 - 1.5) < 0.01, true, "remain = speed - elapsed")
+EVAL_HELP_STATE.castUntil = EVAL_HELP_STATE.lastSwing + 1.2 -- 施法结束时刻晚于上次挥击 → 推迟
+GetTime = function() return EVAL_HELP_STATE.castUntil + 0.3 end
+local rem37b = EVAL_SWING_REMAIN()
+eq(rem37b and math.abs(rem37b - 1.7) < 0.01, true, "cast delays next swing")
+GetTime = oldGT37
+EVAL_HELP_STATE.lastSwing = nil EVAL_HELP_STATE.castUntil = nil
+eq(EVAL_SWING_REMAIN(), nil, "no anchor = nil")
+TEST.atkSpd = nil EVAL_HELP_UPDATE_STATE()
+
 print("ALL TESTS PASS")
