@@ -1,4 +1,4 @@
--- EvalHelp 1.61.1 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.61.2 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.61.1"
+local VERSION = "1.61.2"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -82,8 +82,9 @@ local function uiSolid(t, r, g, b, a)
 end
 
 -- 字体字符串：中文字体优先（FZLBJW=方正隶变），失败逐级回退
--- 1.61.1 显示转义：| 在 FontString/聊天框里是颜色转义符，单个 | 会被吞——显示层一律 || 转义（数据层不受影响）
-local function uiEsc(s) return (string.gsub(tostring(s or ""), "|", "||")) end
+-- 1.61.2 显示转义：| 在 FontString/聊天框里是颜色转义符，单个 | 会被吞；|| 转义在本客户端渲染异常（小方块）——
+-- 改用全角竖线 ｜（U+FF5C，FZLBJW 中文字体自带全角字符，视觉与 | 一致）。数据层不受影响
+local function uiEsc(s) return (string.gsub(tostring(s or ""), "|", "｜")) end
 
 local function uiText(parent, size, r, g, b)
   local fs = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
