@@ -1,4 +1,4 @@
--- EvalHelp 1.57.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.58.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.57.0"
+local VERSION = "1.58.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -1880,7 +1880,7 @@ local SE_TYPES = {
   { id = "powerPct",   name = "能量%",       kind = "num",   n = 10 },
   { id = "combatTime", name = "进战秒数",    kind = "num",   n = 3 },
   { id = "combo",      name = "连击点数",    kind = "num",   n = 1 }, -- 1.54.4 初始值 1（域 1-5）
-  { id = "swingLeft",  name = "距下次攻击",  kind = "num",   n = 1 }, -- 1.57.0 挥击计时（秒）
+  { id = "swingLeft",  name = "距下次攻击",  kind = "num",   n = 0.1 }, -- 1.57.0 挥击计时（秒）；1.58.0 时间型初始 0.1
   { id = "combat",     name = "战斗状态",    kind = "bool" },
   { id = "hasTarget",  name = "目标存在",    kind = "bool" },
   { id = "canAttack",  name = "目标可攻击",  kind = "bool" },
@@ -1910,11 +1910,11 @@ local SE_TYPES = {
   { id = "immune",    name = "目标免疫技能", kind = "skill", s = "撕裂" }, -- 1.36.1 免疫学习表判定
   { id = "inRange",   name = "施法范围内",  kind = "skill", s = "冲锋" }, -- 1.37.0 IsActionInRange
   { id = "casting",   name = "施法中",      kind = "skill", s = "" }, -- 1.38.0 SPELLCAST_* 事件驱动 -- 1.41.0 默认空=任意施法
-  { id = "castEl",    name = "自身读条进行", kind = "num", n = 1 }, -- 1.41.0 自身读条秒数
-  { id = "castLeft",  name = "自身读条剩余", kind = "num", n = 1 },
+  { id = "castEl",    name = "自身读条进行", kind = "num", n = 0.1 }, -- 1.58.0 时间型：初始 0.1（步进 0.1 区间 0-10）
+  { id = "castLeft",  name = "自身读条剩余", kind = "num", n = 0.1 },
   { id = "tCasting",  name = "目标施法中",  kind = "skill", s = "" }, -- 1.40.0 空参数=任意施法
-  { id = "tCastEl",   name = "读条已进行",  kind = "num", n = 1 },
-  { id = "tCastLeft", name = "读条剩余",    kind = "num", n = 1 },
+  { id = "tCastEl",   name = "读条已进行",  kind = "num", n = 0.1 }, -- 1.58.0 时间型：初始 0.1
+  { id = "tCastLeft", name = "读条剩余",    kind = "num", n = 0.1 },
 }
 local SE_BY_K = {}
 for i, td in ipairs(SE_TYPES) do SE_BY_K[td.id] = i end
@@ -2169,7 +2169,9 @@ function EVAL_HELP_SE_REFRESH()
       pcall(row.typeBtn.btn.Show, row.typeBtn.btn)
       if td.kind == "num" then
         row.opBtn.text:SetText(cd.op or ">")
-        row.valText:SetText(tostring(cd.n or 0))
+        -- 1.58.0 时间型一位小数显示（步进 0.1；防 0.30000000004 浮点噪音）
+        local isTime = (cd.k == "swingLeft" or cd.k == "castEl" or cd.k == "castLeft" or cd.k == "tCastEl" or cd.k == "tCastLeft")
+        row.valText:SetText(isTime and string.format("%.1f", cd.n or 0) or tostring(cd.n or 0))
         pcall(row.opBtn.btn.Show, row.opBtn.btn)
         pcall(row.minus.btn.Show, row.minus.btn)
         pcall(row.plus.btn.Show, row.plus.btn)
@@ -2446,10 +2448,13 @@ local function SE_BUILD()
       end)
     end)
     reg(row.opBtn.btn)
+    -- 1.58.0 时间类型（秒）：步进 0.1、区间 0.0-10.0
+    local SE_TIME_K = { swingLeft = true, castEl = true, castLeft = true, tCastEl = true, tCastLeft = true }
     row.minus = seBtn(root, 180, y, 20, 15, "-", function()
       local it = seUI.ed and seUI.ed.conds[i]
       if it and it.cd.n then
         if it.cd.k == "combo" then it.cd.n = math.max(1, it.cd.n - 1) -- 1.54.3 连击点数域 1-5（GetComboPoints 上限 5）
+        elseif SE_TIME_K[it.cd.k] then it.cd.n = math.max(0, math.floor((it.cd.n - 0.1) * 10 + 0.5) / 10) -- 时间型 0.1 步进
         else it.cd.n = math.max(0, it.cd.n - 5) end
         EVAL_HELP_SE_REFRESH()
       end
@@ -2463,6 +2468,7 @@ local function SE_BUILD()
       local it = seUI.ed and seUI.ed.conds[i]
       if it and it.cd.n then
         if it.cd.k == "combo" then it.cd.n = math.min(5, it.cd.n + 1) -- 1.54.3 连击点数域 1-5
+        elseif SE_TIME_K[it.cd.k] then it.cd.n = math.min(10, math.floor((it.cd.n + 0.1) * 10 + 0.5) / 10) -- 时间型 0.1 步进 上限 10.0
         else it.cd.n = math.min(300, it.cd.n + 5) end
         EVAL_HELP_SE_REFRESH()
       end
