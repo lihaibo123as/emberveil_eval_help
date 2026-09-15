@@ -1,4 +1,4 @@
--- EvalHelp 1.47.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
+-- EvalHelp 1.48.0 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
 --   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
 --   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
 --   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.47.0"
+local VERSION = "1.48.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -55,7 +55,6 @@ local condTrim = EVAL_COND_TRIM -- 1.44.0 拆分漏桥补：EVAL_PROFILE_FROM_TE
 local cancelCastOf = EVAL_CANCELCAST_OF -- 1.47.0 取消施法特殊行为
 local TARGET_SEL, TARGET_SEL_NAME = EVAL_TARGET_SEL, EVAL_TSEL_NAME
 local CLASS_LIST = EVAL_CLASS_LIST
-local WAR_SKILLS = EVAL_WAR_SKILLS
 -- ============ 状态 UI（参考 Cat 的 CatUI-Melee 布局，构件法用 OneJudge HUD 的已验证写法） ============
 -- /eh ui 开关窗口；按住顶部标题栏拖动换位置（自动记忆）；悬停滚轮缩放（0.5~1.6，自动重建）。
 -- 内容：血条 / 能量条（怒气红·法力蓝·能量黄）/ 目标条 / 状态行 / 技能图标行。
@@ -520,7 +519,7 @@ end
 local function warCfg()
   local cc = c()
   if not cc.war then
-    cc.war = { enabled = true, attack = true, hsRage = 30, slamRage = 20, hamHp = 30, rendHp = 10, ovRage = 5, bsRage = 9 }
+    cc.war = { enabled = true, attack = true } -- 1.48.0 战士阈值缺省已随默认方案一起清理
   end
   EVAL_WAR_ENSURE_PROFILES(cc.war) -- 方案数据迁移（缺省生成默认方案）
   return cc.war
@@ -2608,7 +2607,7 @@ function EVAL_HELP_SE_OPEN(profIdx, skillIdx, presetSkill)
     ed.enabled = r.enabled ~= false
     ed.conds = seGroupsToLinear(r.groups)
   else
-    ed.skill = presetSkill or WAR_SKILLS[1]
+    ed.skill = presetSkill or "攻击" -- 1.48.0 白名单已删，兜底用「攻击」
     ed.enabled = true
     ed.conds = {}
   end
@@ -3268,7 +3267,7 @@ init:SetScript("OnEvent", function(a, b)
     if cfg.auto == nil then cfg.auto = false end -- 默认不自动输出
     if cfg.wdebug == nil then cfg.wdebug = false end
     if not cfg.war then
-      cfg.war = { enabled = true, attack = true, hsRage = 30, slamRage = 20, hamHp = 30, rendHp = 10, ovRage = 5, bsRage = 9 }
+      cfg.war = { enabled = true, attack = true } -- 1.48.0 同上
     end
     -- 小地图按钮：恢复拖到的位置（越界则清掉记忆，回到默认锚点）
     if cfg.mbPos and minimapBtn then

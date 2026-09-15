@@ -17,7 +17,7 @@ local formatStats, collectStats = EVAL_FORMAT_STATS, EVAL_COLLECT_STATS -- 1.41.
 -- 所有出手动作都会写入日志文件（UELog），连按不刷屏也能事后复盘。
 
 local WAR_MAX_SLOT = 119
-local WAR_SKILLS = { "攻击", "战斗姿态", "冲锋", "压制", "断筋", "撕裂", "战斗怒吼", "血性狂暴", "猛击", "英勇打击" }
+-- 1.48.0 清理：WAR_SKILLS 战士白名单已删除——技能清单一切以动作条扫描（wslots）为准，真·全职业
 local WTT = GameTooltip -- 识别动作条技能用
 local wslots = {}       -- 技能名 -> { slot, tex }
 local wscanned = false
@@ -1081,26 +1081,9 @@ function EVAL_WAR_ENSURE_PROFILES(w)
   if not w.immune then w.immune = {} end -- 1.36.0 免疫学习表（技能@怪名，EVAL_IMMUNE_LEARN 写入）
   if not w.castTime then w.castTime = {} end -- 1.40.0 目标读条总时长学习表（技能名→秒）
   if type(w.profiles) ~= "table" or table.getn(w.profiles) == 0 then
-    w.profiles = { { name = "默认", skills = {
-      { skill = "战斗姿态", enabled = true, why = "非战斗切姿态",
-        groups = { { { k = "combat", v = false }, { k = "formNot", n = 1 }, { k = "canAttack", v = true } } } },
-      { skill = "冲锋", enabled = true, why = "非战斗冲锋",
-        groups = { { { k = "combat", v = false }, { k = "form", n = 1 }, { k = "canAttack", v = true }, { k = "ready" } } } },
-      { skill = "压制", enabled = true, why = "压制可用",
-        groups = { { { k = "power", op = ">", n = w.ovRage or 5 }, { k = "usable" }, { k = "ready" } } } },
-      { skill = "战斗怒吼", enabled = true, why = "怒吼缺失",
-        groups = { { { k = "power", op = ">", n = w.bsRage or 9 }, { k = "noBuff", s = "战斗怒吼" } } } },
-      { skill = "断筋", enabled = true, why = "挂断筋",
-        groups = { { { k = "tHpPct", op = "<", n = w.hamHp or 30 }, { k = "power", op = ">", n = 9 }, { k = "noDebuff", s = "断筋" } } } },
-      { skill = "撕裂", enabled = true, why = "挂撕裂",
-        groups = { { { k = "canBleed", v = true }, { k = "tHpPct", op = ">", n = w.rendHp or 10 }, { k = "power", op = ">", n = 9 }, { k = "noDebuff", s = "撕裂" } } } },
-      { skill = "血性狂暴", enabled = true, why = "补怒气",
-        groups = { { { k = "combat", v = true }, { k = "noBuff", s = "血性狂暴" }, { k = "ready" } } } },
-      { skill = "猛击", enabled = true, why = "Alt猛击",
-        groups = { { { k = "alt", v = true }, { k = "power", op = ">", n = w.slamRage or 20 } } } },
-      { skill = "英勇打击", enabled = true, why = "泄怒",
-        groups = { { { k = "power", op = ">", n = w.hsRage or 30 }, { k = "notQueued" } } } },
-    } } }
+    -- 1.48.0 去战士化：新装插件默认给空方案（旧版生成 战斗姿态/冲锋/压制… 一整套战士规则，其他职业全是垃圾条目）；
+    -- 起手请用 配置窗→导入导出→[案例模版]（武器战模版首发）或编辑窗自行添加。
+    w.profiles = { { name = "默认", skills = {} } }
   end
   if not w.activeProfile then w.activeProfile = 1 end
 end
@@ -1210,12 +1193,10 @@ function EVAL_GO(profSel)
     st.isBoss and " Boss" or (st.isElite and " 精英" or "")))
 end
 
--- 技能选择清单（1.24.0）：WAR_SKILLS 白名单在前 + 动作条扫描到的其他技能（去重），编辑窗下拉用
+-- 技能选择清单（1.48.0 起纯扫描）：动作条扫到的全部技能（去重排序）+ 宠物指令段，编辑窗下拉用。
+-- 旧版 WAR_SKILLS 战士白名单置顶已删——法师不再看到 冲锋/压制 这些战士技能。
 function EVAL_GO_SKILL_CHOICES()
   local list, seen = {}, {}
-  for _, n in ipairs(WAR_SKILLS) do
-    if not seen[n] then seen[n] = true table.insert(list, n) end
-  end
   if wscanned and wslots then
     local extra = {}
     for n in pairs(wslots) do
@@ -1247,11 +1228,8 @@ function EVAL_GO_SKILL_CATEGORIES()
     end
     return l
   end })
-  table.insert(cats, { label = L("SK_CAT_2"), items = function()
+  table.insert(cats, { label = L("SK_CAT_2"), items = function() -- 1.48.0 纯动作条扫描（白名单已删）
     local list, seen = {}, {}
-    for _, n in ipairs(WAR_SKILLS) do
-      if n ~= "攻击" and n ~= "自动射击" and n ~= "射击" and n ~= "取消施法" and not seen[n] then seen[n] = true table.insert(list, n) end -- 1.47.0 行为类归 cat1
-    end
     if wscanned and wslots then
       local extra = {}
       for n in pairs(wslots) do
@@ -1354,7 +1332,6 @@ EVAL_CANCELCAST_OF = cancelCastOf
 EVAL_TARGET_SEL = TARGET_SEL
 EVAL_TSEL_NAME = TARGET_SEL_NAME
 EVAL_CLASS_LIST = CLASS_LIST
-EVAL_WAR_SKILLS = WAR_SKILLS
 EVAL_COND_TRIM = condTrim
 EVAL_P_HASBUFF = wPlayerHasBuff
 EVAL_T_HASDEBUFF = wTargetHasDebuff
