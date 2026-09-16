@@ -32,6 +32,7 @@ EVAL_LOCALES["ruRU"] = {
   TB_DISCARD_ASK = "Добавить выброс (имя предмета)",
   TB_REPAIRED = "Починено, стоимость %s",
   TB_SOLD = "Продано серых: %d",
+  TB_SOLD_ITEM = "Продано: %s x%d (%s)",
   TB_BOUGHT = "Куплено: %s x%d",
   TB_SELL_FAIL = "Не продано: %s (заблокировано)",
   TB_SOLD_FAILS = " (не продано: %d)",

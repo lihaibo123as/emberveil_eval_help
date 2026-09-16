@@ -32,6 +32,7 @@ EVAL_LOCALES["enUS"] = {
   TB_DISCARD_ASK = "Add discard item (item name)",
   TB_REPAIRED = "Auto repaired, cost %s",
   TB_SOLD = "Auto sold %d gray item(s)",
+  TB_SOLD_ITEM = "Sold: %s x%d (%s)",
   TB_BOUGHT = "Auto bought: %s x%d",
   TB_SELL_FAIL = "Could not sell: %s (locked or unsellable)",
   TB_SOLD_FAILS = " (%d unsold)",

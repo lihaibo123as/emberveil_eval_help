@@ -688,6 +688,7 @@ EVAL_HELP_CONFIG.tb = { repair = true, sell = true, ready = true, quest = true, 
 TEST.repairCost = 500
 TEST.merchant = { { name = "晨露酒" }, { name = "肉干" } }
 TEST.bags = { [1] = { name = "灰色破剑", q = 0, count = 1 }, [2] = { name = "晨露酒", q = 1, count = 2 }, [101] = { name = "破布", q = 0, count = 1 }, [102] = { name = "蓝装护甲", q = 2, count = 1 } }
+TEST.itemInfo = { ["灰色破剑"] = { t = "武器", st = "单手剑" } } -- 1.69.1 明细桩：破布故意无缓存 → 种类兜底 ?
 TEST.usedItem = nil TEST.repaired = nil TEST.bought = nil TEST.sellCalls = 0 TEST.chat = nil
 TEST.time = 3000 TEST.consumeOnUse = true
 local function tbPump(n, t0)
@@ -701,6 +702,8 @@ eq(TEST.sellCalls, 2, "tb queued sells both grays in order")
 eq(TEST.usedItem, 101, "tb sell order bag0 first then bag1")
 eq(TEST.bought, "晨露酒x3;", "tb queued buy after sells")
 eq(TEST.chat and TEST.chat:find("自动售出灰色物品 2 件") ~= nil, true, "tb sell summary on drain")
+eq(TEST.chat and TEST.chat:find("售出：灰色破剑 x1（武器/单手剑）", 1, true) ~= nil, true, "tb sell detail log with type (1.69.1)")
+eq(TEST.chat and TEST.chat:find("售出：破布 x1（?）", 1, true) ~= nil, true, "tb sell detail log uncached fallback (1.69.1)")
 TEST.picked = nil TEST.deleted = nil
 TEST.bags = { [101] = { name = "破布", q = 0, count = 1 }, [102] = { name = "蓝装护甲", q = 2, count = 1 } }
 TEST.time = 3100 EVAL_TB_ONEVENT("BAG_UPDATE")

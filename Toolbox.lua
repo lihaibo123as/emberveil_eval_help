@@ -91,6 +91,15 @@ local function tbItemName(b, s)
   return link and string.match(link, "%[(.-)%]") or nil
 end
 
+-- 1.69.1 售卖明细：物品种类（GetItemInfo 只读本地缓存，wiki 确认本客户端仅 9 返回值无售价；未缓存 → nil 兜底显示 ?）
+local function tbItemType(name)
+  if type(GetItemInfo) ~= "function" or not name then return nil end
+  local ok, _1, _2, _3, _4, itype, isub = pcall(GetItemInfo, name) -- 注意：pcall 不可用 and/or 包裹（1.64.0 多返回截断教训）
+  if not ok or not itype then return nil end
+  if isub and isub ~= itype then return itype .. "/" .. isub end
+  return itype
+end
+
 -- ===== 动作队列（1.68.2：商人/背包 API 限频 + 出售逐笔成功验证，防服务器反滥用踢线） =====
 -- 教训背景：一帧内连续 24 次 UseContainerItem 会被服务器判定异常。所有写动作进队列，
 -- OnUpdate 按 TB_RATE 间隔滴出；出售逐笔验证（下一拍核对槽位物品已消失，超时 2s 记失败）；
@@ -98,7 +107,7 @@ end
 local TB_RATE = 0.3
 local tbQ = {}
 local tbQLast = 0
-local tbPending = nil -- {bag,slot,name,t} 待验证的出售
+local tbPending = nil -- {bag,slot,name,cnt,t} 待验证的出售
 local tbSellStat = nil -- {ok,fail} 本次扫描统计（队列清空时汇报）
 
 local function tbQPush(q) table.insert(tbQ, q) end
@@ -110,6 +119,7 @@ local function tbVerifyPending()
   if tbItemName(p.bag, p.slot) ~= p.name then -- 槽位物品已消失/变更 → 卖出成功
     tbPending = nil
     if tbSellStat then tbSellStat.ok = tbSellStat.ok + 1 end
+    say(string.format(L("TB_SOLD_ITEM"), p.name, p.cnt or 1, tbItemType(p.name) or "?")) -- 1.69.1 售卖明细日志（成交验证后输出，不虚报）
     return
   end
   if now - p.t > 2 then -- 超时仍在 → 失败（锁定/不可售/服务器拒绝）
@@ -145,7 +155,7 @@ local function tbQPump()
     local ok, tex, cnt, locked, qual = pcall(GetContainerItemInfo, q.bag, q.slot)
     if ok and (tex or cnt) and qual == 0 and tbItemName(q.bag, q.slot) == q.name then
       pcall(UseContainerItem, q.bag, q.slot)
-      tbPending = { bag = q.bag, slot = q.slot, name = q.name, t = now }
+      tbPending = { bag = q.bag, slot = q.slot, name = q.name, cnt = cnt or q.cnt or 1, t = now }
     elseif tbSellStat then
       tbSellStat.fail = tbSellStat.fail + 1 -- 执行前校验失败（物品已被移动/品质变化）
     end
@@ -197,7 +207,7 @@ local function tbMerchant()
       local ok, tex, cnt, locked, q = pcall(GetContainerItemInfo, b, s)
       if ok and (tex or cnt) and q == 0 then
         local nm = tbItemName(b, s)
-        if nm then tbQPush({ kind = "sell", bag = b, slot = s, name = nm }) n = n + 1 end
+        if nm then tbQPush({ kind = "sell", bag = b, slot = s, name = nm, cnt = cnt or 1 }) n = n + 1 end
       end
     end)
     if n == 0 then tbSellStat = nil end

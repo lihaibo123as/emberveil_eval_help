@@ -32,6 +32,7 @@ EVAL_LOCALES["zhCN"] = {
   TB_DISCARD_ASK = "添加丢弃物品（输入物品名称）",
   TB_REPAIRED = "自动修理完成，花费 %s",
   TB_SOLD = "自动售出灰色物品 %d 件",
+  TB_SOLD_ITEM = "售出：%s x%d（%s）",
   TB_BOUGHT = "自动购买：%s ×%d",
   TB_SELL_FAIL = "未能售出：%s（物品被锁定或不可出售）",
   TB_SOLD_FAILS = "（%d 件未售出）",

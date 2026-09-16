@@ -114,7 +114,11 @@ UseContainerItem = function(bag, slot)
   TEST.sellCalls = (TEST.sellCalls or 0) + 1
   if TEST.consumeOnUse and not TEST.noSell and TEST.bags then TEST.bags[bag * 100 + slot] = nil end -- 1.68.2 仅工具箱段模拟成交消失
 end
-GetItemInfo = function() return nil end
+GetItemInfo = function(x) -- 1.69.1 售卖明细桩：TEST.itemInfo[名称] = { t=种类, st=子类 }（无条目=未缓存）
+  local it = TEST.itemInfo and TEST.itemInfo[x]
+  if not it then return nil end
+  return it.name or x, "|Hitem:1|h[" .. tostring(x) .. "]|h", it.q or 0, 1, it.t, it.st, 1, "", "tex"
+end
 -- 工具箱桩（1.68.0）
 GetMoney = function() return 1000000 end
 CanMerchantRepair = function() return true end
