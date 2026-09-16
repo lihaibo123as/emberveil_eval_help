@@ -37,8 +37,7 @@
 --   3) 本客户端判断函数返回 true/false/nil（不是老 1.12 的 1/nil），必须宽松真值判断，
 --      旧写法 UnitAffectingCombat("player") == 1 在 true 面前永远判假！
 --   4) 配置用 SavedVariables（EVAL_HELP_CONFIG），要等 VARIABLES_LOADED 事件后才读。
---   5) 聊天输出用 DEFAULT_CHAT_FRAME:AddMessage；写日志文件用 Azeroth 专有 UELog()
---      （日志在 %LOCALAPPDATA%\Azeroth\Saved\Logs 下，不刷聊天框）。
+--   5) 聊天输出用 DEFAULT_CHAT_FRAME:AddMessage；日志走 SavedVariables 环形缓冲（见下）。
 --   6) 本客户端没有 /startattack、/castsequence；插件不能调 Protected 函数
 --      （CastSpellByName 等），施法走 UseAction(动作条格子)。
 --
@@ -51,11 +50,11 @@
 --   战斗信息UI：/eh ui —— 血/能量/目标条 + 技能图标行，按住标题栏拖动，滚轮缩放
 --   状态信息UI：/eh st —— Cat 式角色状态变量总览（EVAL_HELP_STATE 实时值）
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
---   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
+--   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
 local VERSION = "1.38.1"
 
--- ============ 输出：聊天 + 日志文件 ============
+-- ============ 输出：聊天 + 调试日志 ============
 
 local function say(msg)
   if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
@@ -63,11 +62,62 @@ local function say(msg)
   end
 end
 
--- 写日志文件（Azeroth 专有 API；不存在就静默跳过）
+-- ============ 日志通道（1.70.12 重做）============
+-- ★为什么不用 UELog：实测该客户端 UELog 调用成功但什么都不落盘——它是「写 Lua log category」，
+--   而本客户端以 Shipped 构建运行（命令行无 -log）且 %LOCALAPPDATA%\Azeroth\Saved\Logs 为空目录，
+--   日志进了内存/输出窗口就没了。RLog 更差（仅 debug 构建，Shipping 下是 no-op）。
+--   结论：落盘通道在这个客户端上都是死的（wiki Helpers 页确认签名）。
+-- ★现方案（A+B）：① 主通道 = 写 EVAL_HELP_CONFIG.log 环形缓冲，随 SavedVariables 落盘，
+--   开发侧直接读 %LOCALAPPDATA%\Azeroth\Saved\Account\<账号>\SavedVariables\EvalHelp.lua；
+--   ② 兜底 = 聊天框输出（/eh logdump 打印）。
+--   落盘时机：/reload、小退、退出（SavedVariables 固有语义，无法更早）。
+local EH_LOG_MAX = 300
+-- 是否记录：默认开；显式关过就尊重用户选择。用 rawget 读，避免被测试桩的元表干扰。
+-- 兼容三种历史形态：nil（默认开）/ false 布尔（旧 UELog 开关关）/ 表（新缓冲，看 .on）
+local function logEnabled()
+  local c = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(c) ~= "table" then return true end
+  local lg = c.log
+  if lg == false then return false end
+  if type(lg) == "table" then return lg.on ~= false end
+  return true
+end
+-- 追加一行（带相对时间戳，便于把「我切了图」和日志对上时间轴）
 local function logLine(msg)
-  if type(UELog) == "function" then
-    pcall(UELog, "[EVAL_HELP] " .. tostring(msg))
+  local c = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(c) ~= "table" then return end
+  if not logEnabled() then return end
+  if type(c.log) ~= "table" then c.log = {} end -- 兼容旧布尔值：首次写入时替换成环形表
+  local buf = c.log
+  local t = (type(GetTime) == "function") and GetTime() or 0
+  table.insert(buf, string.format("%.3f %s", t, tostring(msg)))
+  while table.getn(buf) > EH_LOG_MAX do table.remove(buf, 1) end
+end
+-- 打印缓冲（/eh logdump）：环形缓冲按「新→旧」倒序看更顺手
+function EVAL_LOG_DUMP(n)
+  local c = rawget(_G, "EVAL_HELP_CONFIG")
+  local buf = (type(c) == "table" and type(c.log) == "table") and c.log or {}
+  local total = table.getn(buf)
+  if total == 0 then return 0 end
+  n = tonumber(n) or total
+  local from = total - n + 1
+  if from < 1 then from = 1 end
+  for i = from, total do
+    if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
+      DEFAULT_CHAT_FRAME:AddMessage("|cff66ccff[日志]|r " .. tostring(buf[i]))
+    end
   end
+  return total
+end
+function EVAL_LOG_CLEAR()
+  local c = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(c) == "table" then c.log = {} end
+  return true
+end
+function EVAL_LOG_COUNT()
+  local c = rawget(_G, "EVAL_HELP_CONFIG")
+  local buf = (type(c) == "table" and type(c.log) == "table") and c.log or {}
+  return table.getn(buf)
 end
 
 -- ============ 国际化（1.34.0 P0，UnrealQuest 同款扁平键值 + 基准回退） ============
@@ -362,9 +412,9 @@ function EVAL_HELP_UPDATE_STATE()
   -- 药品/食物类 buff 若被 GetPlayerBuff 过滤列表漏掉，这里补进纹理集合（条件匹配才找得到）
   if type(UnitBuff) == "function" then
     for i = 1, 32 do
-      local oku, tex = pcall(UnitBuff, "player", i)
+      local oku, tex, apps = pcall(UnitBuff, "player", i) -- 1.70.1 起存层数（第二返回值；非堆叠归一 1）
       if not oku or not tex then break end
-      st.playerBuffs[tex] = true
+      st.playerBuffs[tex] = (type(apps) == "number" and apps > 0) and apps or 1
     end
   end
   st.targetDebuffs = {} -- 1.31.0 起存层数（数字）：UnitDebuff 第二返回值；非堆叠 debuff 返回 0 → 归一化为 1
@@ -375,20 +425,20 @@ function EVAL_HELP_UPDATE_STATE()
       st.targetDebuffs[tex] = (type(apps) == "number" and apps > 0) and apps or 1
     end
   end
-  st.targetBuffs = {} -- 1.54.0 目标 buff 纹理集合（UnitBuff 1 基索引）
+  st.targetBuffs = {} -- 1.54.0 目标 buff 纹理集合（UnitBuff 1 基索引）；1.70.1 起存层数
   if UnitExists("target") and type(UnitBuff) == "function" then
     for i = 1, 16 do
-      local okb, tex = pcall(UnitBuff, "target", i)
+      local okb, tex, apps = pcall(UnitBuff, "target", i)
       if not okb or not tex then break end
-      st.targetBuffs[tex] = true
+      st.targetBuffs[tex] = (type(apps) == "number" and apps > 0) and apps or 1
     end
   end
-  st.playerDebuffs = {} -- 1.54.0 自身 debuff 纹理集合
+  st.playerDebuffs = {} -- 1.54.0 自身 debuff 纹理集合；1.70.1 起存层数
   if type(UnitDebuff) == "function" then
     for i = 1, 16 do
-      local okd, tex = pcall(UnitDebuff, "player", i)
+      local okd, tex, apps = pcall(UnitDebuff, "player", i)
       if not okd or not tex then break end
-      st.playerDebuffs[tex] = true
+      st.playerDebuffs[tex] = (type(apps) == "number" and apps > 0) and apps or 1
     end
   end
 

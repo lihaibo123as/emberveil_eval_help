@@ -17,7 +17,7 @@
 --   3) 本客户端判断函数返回 true/false/nil（不是老 1.12 的 1/nil），必须宽松真值判断，
 --      旧写法 UnitAffectingCombat("player") == 1 在 true 面前永远判假！
 --   4) 配置用 SavedVariables（EVAL_HELP_CONFIG），要等 VARIABLES_LOADED 事件后才读。
---   5) 聊天输出用 DEFAULT_CHAT_FRAME:AddMessage；写日志文件用 Azeroth 专有 UELog()
+--   5) 聊天输出用 DEFAULT_CHAT_FRAME:AddMessage；调试日志走 SavedVariables 环形缓冲（Core.lua）
 --      （日志在 %LOCALAPPDATA%\Azeroth\Saved\Logs 下，不刷聊天框）。
 --   6) 本客户端没有 /startattack、/castsequence；插件不能调 Protected 函数
 --      （CastSpellByName 等），施法走 UseAction(动作条格子)。
@@ -31,7 +31,7 @@
 --   战斗信息UI：/eh ui —— 血/能量/目标条 + 技能图标行，按住标题栏拖动，滚轮缩放
 --   状态信息UI：/eh st —— Cat 式角色状态变量总览（EVAL_HELP_STATE 实时值）
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
---   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
+--   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
 local VERSION = "1.69.2"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
@@ -850,7 +850,7 @@ local W, H = WIDE and 700 or 560, 420
   -- Tab 按钮行（全局 / 一键宏设置；选中=金底亮字，未选=暗底灰字——参考 UnrealQuest 标签页风格）
   local pages = {}
   cfgWin.pages = pages
-  local tabNames = { L("TAB_GLOBAL"), L("TAB_MACRO"), L("TAB_TOOLBOX") }
+  local tabNames = { L("TAB_GLOBAL"), L("TAB_MACRO"), L("TAB_TOOLBOX"), L("TAB_DS") }
   for i, name in ipairs(tabNames) do
     local tb = CreateFrame("Button", nil, root)
     tb:SetWidth(90) tb:SetHeight(18)
@@ -874,8 +874,13 @@ local W, H = WIDE and 700 or 560, 420
   -- ===== Tab 1「全局」：日志 / 界面 / 帮助（非职业相关） =====
   local G = pages[1].widgets
   cfgHeader(root, LX, -56, L("G_LOG_H"), G)
+  -- 1.70.12：勾选框读写 cfg.log.on（cfg.log 本体是日志环形缓冲表，不能再整体当布尔用）
   table.insert(refreshes, cfgCheck(root, LX, -74, L("G_LOG_FILE"),
-    function() return c().log end, function(v) c().log = v end, G))
+    function() local lg = c().log return not (type(lg) == "table" and lg.on == false) end,
+    function(v)
+      if type(c().log) ~= "table" then c().log = {} end
+      c().log.on = v and true or false
+    end, G))
   table.insert(refreshes, cfgCheck(root, LX, -98, L("G_LOG_AUTO"),
     function() return c().auto end, function(v) c().auto = v end, G))
 
@@ -1200,6 +1205,7 @@ local W, H = WIDE and 700 or 560, 420
   root:SetScript("OnHide", function() EVAL_DD_HIDE() end) -- 关窗收起下拉（1.19.0）
   cfgWin.refresh = function() for _, r in ipairs(refreshes) do pcall(r) end end
   if type(EVAL_TB_BUILD) == "function" then EVAL_TB_BUILD(root, pages[3], refreshes) end -- 工具箱 Tab（1.68.0 Toolbox.lua 独立载入）
+  if type(EVAL_DS_BUILD) == "function" then EVAL_DS_BUILD(root, pages[4], refreshes) end -- 数据检索 Tab（DataSearch.lua 独立载入，基于 UnrealQuest 数据库）
   EVAL_HELP_CFG_SETTAB(c().cfgTab or 1)
   return root
 end
@@ -1627,6 +1633,7 @@ function EVAL_HELP_CFG_SETTAB(idx)
   end
   if idx == 2 then pcall(EVAL_WAR_TAB_REFRESH) end
   if idx == 3 and type(EVAL_TB_REFRESH) == "function" then pcall(EVAL_TB_REFRESH) end -- 工具箱
+  if idx == 4 and type(EVAL_DS_REFRESH) == "function" then pcall(EVAL_DS_REFRESH) end -- 数据检索
 end
 
 function EVAL_HELP_CFG_TOGGLE()
@@ -1947,17 +1954,21 @@ local SE_TYPES = {
   { id = "shift",      name = "Shift按住",   kind = "bool" },
   { id = "ctrl",       name = "Ctrl按住",    kind = "bool" },
   { id = "form",       name = "当前姿态",    kind = "form" },
-  { id = "hasBuff",    name = "自身buff检查",   kind = "skill", s = "战斗怒吼" }, -- 1.54.0 合并（是/否切换）
+  { id = "hasBuff",    name = "自身buff检查",   kind = "skill", s = "" }, -- 1.54.0 合并（是/否切换）；1.70.0 去战士化：默认空需用户选（旧默认 战斗怒吼）
   { id = "pDebuff",    name = "自身debuff检查", kind = "skill", s = "" },          -- 1.54.0 新增
-  { id = "hasDebuff",  name = "目标debuff检查", kind = "skill", s = "断筋" },      -- 1.54.0 合并（是/否切换）
+  { id = "hasDebuff",  name = "目标debuff检查", kind = "skill", s = "" },      -- 1.54.0 合并（是/否切换）；1.70.0 去战士化：默认空（旧默认 断筋）
   { id = "tBuff",      name = "目标buff检查",   kind = "skill", s = "" },          -- 1.54.0 新增
   { id = "ready",      name = "冷却就绪",    kind = "flag" },
   { id = "usable",     name = "技能可用",    kind = "flag" },
   { id = "notQueued",  name = "未排队",      kind = "flag" },
   { id = "target",     name = "选取目标",    kind = "target", s = "nearEnemy", hidden = true }, -- 1.32.0 提为技能级（技能下拉「目标选取」），新增条件下拉不再提供；存量条件仍渲染/求值
   { id = "tClass",     name = "目标职业",    kind = "class" },
-  { id = "immune",    name = "目标免疫技能", kind = "skill", s = "撕裂" }, -- 1.36.1 免疫学习表判定
-  { id = "inRange",   name = "施法范围内",  kind = "skill", s = "冲锋" }, -- 1.37.0 IsActionInRange
+  -- ★1.70.28 新增「目标类型」（野兽/元素/亡灵…）：用户要求「条件类型 添加: 目标类型: 野兽,元素 这种,
+  --   支持下拉 支持 是/否」。kind="creature"：多选下拉（或关系，同 tClass）+ 是/否。
+  --   取值来自 UnitCreatureType("target")，返回**本地化名**，故匹配同时比对本地化名与英文 token。
+  { id = "tCreature",  name = "目标类型",    kind = "creature" },
+  { id = "immune",    name = "目标免疫技能", kind = "skill", s = "" }, -- 1.36.1 免疫学习表判定；1.70.0 去战士化：默认空（旧默认 撕裂）
+  { id = "inRange",   name = "施法范围内",  kind = "skill", s = "" }, -- 1.37.0 IsActionInRange；1.70.0 去战士化：默认空（旧默认 冲锋）
   { id = "casting",   name = "施法中",      kind = "skill", s = "" }, -- 1.38.0 SPELLCAST_* 事件驱动 -- 1.41.0 默认空=任意施法
   { id = "castEl",    name = "自身读条进行", kind = "num", n = 0.1 }, -- 1.58.0 时间型：初始 0.1（步进 0.1 区间 0-10）
   { id = "castLeft",  name = "自身读条剩余", kind = "num", n = 0.1 },
@@ -1972,10 +1983,30 @@ SE_BY_K["noBuff"] = SE_BY_K["hasBuff"] -- 1.54.0 存量数据归并显示
 SE_BY_K["noDebuff"] = SE_BY_K["hasDebuff"]
 local SE_OPS = { ">", ">=", "<", "<=", "==", "~=" }
 
+-- ★目标类型表（1.70.28）：id 稳定（存进条件里），loc=中文显示名，tok=英文 token。
+--   本客户端 UnitCreatureType 返回**本地化字符串**，故求值时两种写法都要认（enUS 客户端回英文）。
+--   最后一项 "other" 用于兜住未列出的返回值——**绝不静默丢弃**，否则用户会遇到「明明是这个类型却不匹配」。
+local CREATURE_TYPES = {
+  { id = "beast",        loc = "野兽",   tok = "Beast" },
+  { id = "dragonkin",    loc = "龙类",   tok = "Dragonkin" },
+  { id = "demon",        loc = "恶魔",   tok = "Demon" },
+  { id = "elemental",    loc = "元素",   tok = "Elemental" },
+  { id = "giant",        loc = "巨人",   tok = "Giant" },
+  { id = "undead",       loc = "亡灵",   tok = "Undead" },
+  { id = "humanoid",     loc = "人型",   tok = "Humanoid" },
+  { id = "critter",      loc = "小动物", tok = "Critter" },
+  { id = "mechanical",   loc = "机械",   tok = "Mechanical" },
+  { id = "notpecified",  loc = "未指定", tok = "Not specified" },
+  { id = "totem",        loc = "图腾",   tok = "Totem" },
+  { id = "other",        loc = "其他",   tok = "Other" },
+}
+local CREATURE_BY_ID = {}
+for _, c in ipairs(CREATURE_TYPES) do CREATURE_BY_ID[c.id] = c end
+
 -- 条件类型分组（1.32.5 下拉美化）：金色组标题行不可选；SE_TYPES 本体顺序不动，仅展示层分组
 local SE_TYPE_GROUPS = {
   { label = "CTG_1", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "swingLeft", "combat", "autoAttack", "autoShot", "wandShoot", "alt", "shift", "ctrl", "form", "castEl", "castLeft" } },
-  { label = "CTG_2", ids = { "tHpPct", "hasTarget", "canAttack", "canBleed", "tFriendly", "tHostile", "tNeutral", "isElite", "isBoss", "tInCombat", "tClass", "immune", "tCasting", "tCastEl", "tCastLeft" } },
+  { label = "CTG_2", ids = { "tHpPct", "hasTarget", "canAttack", "canBleed", "tFriendly", "tHostile", "tNeutral", "isElite", "isBoss", "tInCombat", "tClass", "tCreature", "immune", "tCasting", "tCastEl", "tCastLeft" } },
   { label = "CTG_3", ids = { "hasBuff", "pDebuff", "hasDebuff", "tBuff" } }, -- 1.54.0 光环检查四型
   { label = "CTG_4", ids = { "ready", "usable", "notQueued", "inRange", "casting" } },
 }
@@ -1992,7 +2023,8 @@ local function seDefaultCond(ti)
     if td.id == "hasBuff" or td.id == "hasDebuff" or td.id == "tBuff" or td.id == "pDebuff" then cd0.v = true end -- 1.54.0 光环检查型默认「是」
     return cd0
   elseif td.kind == "target" then return { k = td.id, s = td.s }
-  elseif td.kind == "class" then return { k = td.id, cs = { WARRIOR = true } }
+  elseif td.kind == "class" then return { k = td.id, cs = {} } -- 1.70.0 去战士化：旧默认预选 WARRIOR（非战士职业新建即错）
+  elseif td.kind == "creature" then return { k = td.id, cs = {}, v = true } -- 1.70.28 目标类型：默认「是」+ 空选择（空=永不满足，需用户点选）
   else return { k = td.id } end
 end
 
@@ -2056,6 +2088,7 @@ end
 -- ===== 全局模拟下拉列表面板（1.19.0 由 SE 专用泛化：任意窗口可调用） =====
 -- EVAL_DD_OPEN(锚点按钮, 选项表, 回调)；多列 12 行/列，贴屏底自动上翻；EVAL_DD_HIDE() 收起。
 local DD_COLS = 12
+local SEARCH_H = 20 -- 1.70.29 搜索框占用的额外高度（0=不显示搜索框时的高度基准不变）
 local ddUI = {}
 
 local function DD_BUILD()
@@ -2082,6 +2115,38 @@ local function DD_BUILD()
     t:SetPoint("BOTTOM" .. side, dd, "BOTTOM" .. side, 0, 0)
     t:SetWidth(1)
   end
+  -- ★1.70.29 可选搜索框（opts.search）：光环/技能名单很长，用户要能输入关键字过滤，
+  --   并且在「列表里没有我要的名字」时可以直接提交自己输入的名称。
+  --   放在面板顶部，行区整体下移（高度由 EVAL_DD_OPEN 按 SEARCH_H 计入）。
+  local sb = CreateFrame("EditBox", nil, dd)
+  sb:SetWidth(160) sb:SetHeight(16)
+  sb:SetPoint("TOPLEFT", dd, "TOPLEFT", 4, -3)
+  sb:SetAutoFocus(false)
+  pcall(sb.EnableMouse, sb, true)
+  -- 本客户端 EditBox 默认文字居中偏右，必须显式压左并清内缩（1.70.3 实测）
+  pcall(sb.SetJustifyH, sb, "LEFT")
+  pcall(sb.SetJustifyV, sb, "MIDDLE")
+  pcall(sb.SetTextInsets, sb, 3, 0, 0, 0)
+  for _, f in ipairs({ "GameFontHighlightSmall", "ChatFontNormal", "GameFontNormal" }) do
+    if pcall(sb.SetFontObject, sb, f) then break end
+  end
+  local sbBg = dd:CreateTexture(nil, "BACKGROUND")
+  uiSolid(sbBg, 0.10, 0.09, 0.06, 1)
+  -- (定位在 EVAL_DD_OPEN 里按面板宽度重设，这里只给初值)
+  ddUI.searchBg = sbBg
+  ddUI.search = sb
+  ddUI.searchText = ""
+  sb:Hide()
+  sbBg:Hide()
+  sb:SetScript("OnTextChanged", function()
+    -- 输入即过滤（无服务器写动作，无需限频；但只在面板开启时生效）
+    local t = ""
+    pcall(function() t = sb:GetText() or "" end)
+    ddUI.searchText = t
+    if ddUI.refilter then pcall(ddUI.refilter) end
+  end)
+  sb:SetScript("OnEscapePressed", function() EVAL_DD_HIDE() end)
+
   ddUI.rows = {}
   for i = 1, 48 do -- 1.27.0 加倍：技能清单+实时debuff/buff 追加项可能超 24
     local rb = CreateFrame("Button", nil, dd)
@@ -2108,6 +2173,252 @@ end
 
 function EVAL_DD_HIDE() if ddUI.root then ddUI.root:Hide() end ddUI.anchor = nil end
 
+-- ★1.70.29 搜索过滤（纯函数，UI 与测试共用）：
+--   输入 items/locked/关键字 -> 返回「按显示顺序排列的原始下标列表」。
+--   · 关键字为空 = 不过滤（返回全部）
+--   · 分组标题行（locked）**永不被过滤掉**：否则分组结构消失，用户看不懂列表
+--   · 当关键字非空、启用自由文本、且表中没有与关键字完全同名的项时，
+--     在末尾追加哨兵 -1（渲染为「✎ 使用输入的名称」）——满足「没有检索信息时让用户自己输入名称」
+function DD_FILTER(items, locked, kw, allowFree)
+  local out = {}
+  local key = (kw ~= nil) and string.lower(tostring(kw)) or ""
+  for i = 1, table.getn(items) do
+    local keep = true
+    if key ~= "" and not (locked and locked[i]) then
+      keep = (string.find(string.lower(tostring(items[i])), key, 1, true) ~= nil)
+    end
+    if keep then table.insert(out, i) end
+  end
+  if allowFree and key ~= "" then
+    local exact = false
+    for i = 1, table.getn(items) do
+      if not (locked and locked[i]) then
+        if string.lower(tostring(items[i])) == key then exact = true break end
+      end
+    end
+    if not exact then table.insert(out, -1) end
+  end
+  return out
+end
+-- 1.70.25：批量改选后按新的选中集重绘所有行（供「全部开启/全部关闭」这类宿主批量动作调用）。
+-- 若不调用，被批量改动的行会保持旧方框，直到面板重开——表现为「勾选项与数据不一致」。
+-- ★1.70.28 光环条件下拉菜单（文件作用域，UI 与测试共用）：
+--   顺序 = ① 实时光环（目标/自身身上此刻真实存在的）→ ② 已记录过的光环名（跨会话持久）
+--          → ③ 其余技能名（垫底，仍可选）。三组之间用不可点分组标题分隔。
+--   ★为什么必须共用：先前测试自己复刻了一遍这个顺序，于是「删掉实时分组标题」这类变异
+--   在测试里完全不可见（测试测的是副本）。抽到这里之后，UI 与断言看的是同一份代码。
+function SE_AURA_MENU(k0)
+  local items, names, locked = {}, {}, {}
+  local function push(disp, nm)
+    local i = table.getn(items) + 1
+    items[i] = disp names[i] = nm
+    return i
+  end
+  local function header(txt) -- 不可点分组标题（经 EVAL_DD_OPEN 的 opts.locked）
+    local i = table.getn(items) + 1
+    items[i] = "|cffaaaaaa" .. txt .. "|r"
+    names[i] = nil
+    locked[i] = true
+  end
+  local isAura = (k0 == "hasDebuff" or k0 == "noDebuff" or k0 == "hasBuff" or k0 == "noBuff" or k0 == "tBuff" or k0 == "pDebuff")
+  -- ★1.70.29 若用户已输入关键字且表中无同名项，追加一行「使用输入的名称」——
+  --   光环名可能不在任何名单里（自制/未记录/跨版本），没有这条用户就无路可走。
+  --   注意：这里只登记候选，真正的过滤在 EVAL_DD_OPEN 里做（单一实现）。
+  local kwNow = nil
+  if type(ddUI) == "table" and ddUI.useSearch then
+    kwNow = tostring(ddUI.searchText or "")
+  end
+  -- ① 实时光环（本条件对应单位身上「此刻真实存在」的光环）——**必须置顶**
+  local liveN = 0
+  if isAura then
+    local live, mark = {}, "◆"
+    if k0 == "hasDebuff" or k0 == "noDebuff" then
+      live, mark = EVAL_TARGET_DEBUFF_LIST(), "◆"
+    elseif k0 == "hasBuff" or k0 == "noBuff" then
+      live, mark = EVAL_PLAYER_BUFF_LIST(), "○"
+    elseif k0 == "tBuff" then
+      live, mark = EVAL_TARGET_BUFF_LIST(), "●"
+    elseif k0 == "pDebuff" then
+      live, mark = EVAL_PLAYER_DEBUFF_LIST(), "▲"
+    end
+    liveN = table.getn(live)
+    if liveN > 0 then
+      header(L("SE_LIVE_AURA"))
+      for _, d in ipairs(live) do push(mark .. d.name, d.name) end
+    end
+  end
+  -- ② 已记录过的光环名（跨会话持久：光环此刻不在也能选——修「药水 buff 不及时显示」）
+  if isAura then
+    local seen = {}
+    for _, n in ipairs(names) do seen[n] = true end
+    local w2c = EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war
+    local lt = w2c and w2c.debuffTex
+    local learned = {}
+    if lt then for n in pairs(lt) do if not seen[n] and n ~= "" then table.insert(learned, n) end end end
+    table.sort(learned)
+    if table.getn(learned) > 0 then header(L("SE_LEARNED_AURA")) end
+    for _, n in ipairs(learned) do push("◇" .. n, n) end
+  end
+  -- ③ 其余技能名（垫底；光环条件下它们大多不是光环，但保留以便手工指定）
+  local rest = {}
+  for _, n in ipairs(EVAL_GO_SKILL_CHOICES()) do
+    if not petCmdOf(n) and not targetSelOf(n) and not itemOf(n) and not stanceOf(n) and not cancelCastOf(n) then
+      table.insert(rest, n)
+    end
+  end
+  if table.getn(rest) > 0 then
+    if isAura then header(L("SE_ALL_SKILLS")) end
+    for _, n in ipairs(rest) do push(n, n) end
+  end
+  return { items = items, names = names, locked = locked, liveN = liveN }
+end
+-- 测试直调（1.70.28）：报告光环下拉的构建顺序——**直接观察 SE_AURA_MENU 的真实输出**，
+-- 而不是在测试里复刻一遍顺序（那会让「删掉实时分组标题」之类的变异完全不可见）。
+function EVAL_TEST_AURA_DROPDOWN_ORDER(kindId)
+  -- 直接看 SE_AURA_MENU（UI 用的那一份）的真实输出
+  local m = SE_AURA_MENU(kindId)
+  local items, locked = m.items, m.locked
+  local firstLive, firstSkill, firstLearned = nil, nil, nil
+  for i = 1, table.getn(items) do
+    local it2 = items[i]
+    if string.find(it2, "◆", 1, true) or string.find(it2, "○", 1, true)
+      or string.find(it2, "●", 1, true) or string.find(it2, "▲", 1, true) then
+      firstLive = firstLive or i
+    elseif string.find(it2, "◇", 1, true) then
+      firstLearned = firstLearned or i
+    elseif not locked[i] and firstSkill == nil and it2 ~= "" then
+      firstSkill = i
+    end
+  end
+  local lockedN = 0
+  for i = 1, table.getn(items) do if locked[i] then lockedN = lockedN + 1 end end
+  return {
+    n = table.getn(items),
+    firstLive = firstLive, firstSkill = firstSkill,
+    liveN = m.liveN,
+    -- ★实时分组标题是否真的存在且排在第一位（只数 locked 行不够——菜单里还有其他分组标题，
+    --   删掉实时这一条时 hasHeader 仍然为真，断言会假通过，本用例首版正是这样漏掉的）
+    firstIsHeader = (locked[1] == true),
+    firstItem = items[1],
+    liveFirst = (firstLive ~= nil and firstSkill ~= nil and firstLive < firstSkill),
+    hasHeader = (lockedN > 0),
+    lockedHeaders = lockedN,
+    skillsLast = (m.liveN > 0 and firstSkill ~= nil and firstSkill > m.liveN),
+  }
+end
+
+-- 1.70.25 测试直调：确认下拉件的多选/锁定能力【真的生效】，而不是只看标志位。
+-- 背景：宿主（DataSearch 地图标注下拉）曾漏传 opts.multi，于是面板走非多选分支——
+--   ① OnClick 里 dd:Hide() → 点一项就关（用户报「每次点击一个下拉窗不要关闭」）；
+--   ② 勾选标记与面板自绘方框两套状态并存（用户报「选草药却把矿脉也勾上」）。
+-- 因此断言必须覆盖「面板不因点选而隐藏」与「锁定行不产生勾」这两条可观察行为。
+function EVAL_DD_TEST_OPEN_MULTI(items, onPick, opts)
+  EVAL_DD_HIDE()
+  if not ddUI.testAnchor then -- 惰性建一个测试用锚点（EVAL_DD_OPEN 必须拿到真实按钮来定位）
+    local a = CreateFrame("Button", nil, UIParent)
+    a:SetWidth(100) a:SetHeight(16)
+    a:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 20, -20)
+    a:Show()
+    ddUI.testAnchor = a
+  end
+  opts = opts or {}
+  opts.multi = true
+  ddUI.anchor = nil -- 清掉上一轮的 toggle 判据，保证本次一定是「打开」而非「收起」
+  EVAL_DD_OPEN(ddUI.testAnchor, items, onPick, opts)
+  local shown = ddUI.root and ddUI.root:IsShown() and true or false
+  return ddUI.multi and true or false, shown
+end
+
+-- 模拟点第 pi 行（走真实 OnClick 脚本，而非直接改状态），返回点击后面板是否仍显示
+function EVAL_DD_TEST_CLICK(pi)
+  local row = ddUI.rows and ddUI.rows[pi]
+  if not (row and row.btn) then return nil end
+  local fn = row.btn:GetScript("OnClick")
+  if fn then fn() end
+  return ddUI.root and ddUI.root:IsShown() and true or false, row
+end
+
+function EVAL_DD_TEST_MULTI() return ddUI.multi and true or false end
+-- 1.70.29 搜索框行为（打开/输入/重入）测试直调
+function EVAL_DD_TEST_OPEN_SEARCH(items, onPick, locked)
+  EVAL_DD_HIDE()
+  if not ddUI.testAnchor then
+    local a = CreateFrame("Button", nil, UIParent)
+    a:SetWidth(100) a:SetHeight(16)
+    a:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 20, -20)
+    a:Show()
+    ddUI.testAnchor = a
+  end
+  ddUI.anchor = nil
+  ddUI.searchText = ""
+  EVAL_DD_OPEN(ddUI.testAnchor, items, onPick, { search = true, locked = locked, onFreeText = function() end })
+  return true
+end
+function EVAL_DD_TEST_SEARCH_VISIBLE()
+  return (ddUI.search and ddUI.search:IsShown()) and true or false
+end
+function EVAL_DD_TEST_SEARCH_TEXT() return tostring(ddUI.searchText or "") end
+function EVAL_DD_TEST_TYPE_SEARCH(txt)
+  -- 模拟用户逐字输入：先写进 EditBox，再触发 OnTextChanged（与真实路径一致）
+  if ddUI.search then
+    pcall(ddUI.search.SetText, ddUI.search, txt)
+    local h = ddUI.search:GetScript("OnTextChanged")
+    if h then h() end
+  end
+end
+function EVAL_DD_TEST_FILTERED_COUNT()
+  local n = 0
+  for _, row in ipairs(ddUI.rows) do
+    if row.btn and row.btn:IsShown() then n = n + 1 end
+  end
+  return n
+end
+function EVAL_DD_TEST_VISIBLE_TEXTS()
+  local t = {}
+  for _, row in ipairs(ddUI.rows) do
+    if row.btn and row.btn:IsShown() and row.text then
+      t[table.getn(t) + 1] = tostring(row.text:GetText())
+    end
+  end
+  return t
+end
+function EVAL_DD_TEST_HAS_FREE_ROW()
+  for _, row in ipairs(ddUI.rows) do
+    if row.btn and row.btn:IsShown() and row.text then
+      local t = row.text:GetText() or ""
+      if string.find(t, "✎", 1, true) then return true end
+    end
+  end
+  return false
+end
+function EVAL_DD_TEST_SHOWN() return (ddUI.root and ddUI.root:IsShown()) and true or false end
+function EVAL_DD_TEST_RESET_ANCHOR() ddUI.anchor = nil end -- 让下一次 OPEN 一定是「打开」而非 toggle 收起
+function EVAL_DD_TEST_ROW(i) return ddUI.rows and ddUI.rows[i] end
+function EVAL_DD_TEST_SELAT(i) return ddUI.sel and ddUI.sel[i] end
+function EVAL_DD_TEST_LOCKED_SUPPORTED()
+  -- 能力探测：开一个含锁定行的多选面板，锁定行必须【没有 OnClick】且【文本无方框】。
+  local got = {}
+  EVAL_DD_TEST_OPEN_MULTI({ "标题行", "可选项" }, function(p) got[#got + 1] = p end,
+    { selected = {}, locked = { [1] = true } })
+  local lockedRow = ddUI.rows and ddUI.rows[1]
+  local okRow = ddUI.rows and ddUI.rows[2]
+  if not (lockedRow and okRow) then return false end
+  if lockedRow.btn:GetScript("OnClick") ~= nil then return false end -- 锁定行仍可点 → 不支持
+  local t = lockedRow.text:GetText() or ""
+  if string.find(t, "■", 1, true) or string.find(t, "□", 1, true) then return false end
+  if okRow.btn:GetScript("OnClick") == nil then return false end -- 普通行必须可点
+  EVAL_DD_HIDE()
+  return true
+end
+
+function EVAL_DD_SYNC(sel)
+  if not (ddUI.multi and ddUI.root) then return end
+  ddUI.sel = sel or {}
+  for _, row in ipairs(ddUI.rows) do
+    if row._ddPaint and row.btn and row.btn:IsShown() then pcall(row._ddPaint) end
+  end
+end
+
 -- anchorBtn 下方展开 items 列表；onPick(序号) 回调
 -- opts.multi=true 多选模式（1.26.0）：点按切换选中（√ 金标）不关面板，onPick(序号, 是否选中) 逐项回调；
 -- opts.selected = { [序号]=true } 初始选中集（面板重开时重建传入）。收起走 EVAL_DD_HIDE()/宿主窗 OnHide。
@@ -2116,18 +2427,66 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
   local dd = ddUI.root
   if not dd then return end
   -- 1.32.5 重复点击同一触发按钮 = 收起下拉（toggle）
+  -- ★1.70.29：搜索框的「输入即过滤」会重入本函数（ddUI.reentrant=true），
+  --   此时**绝不能走 toggle 分支**——否则用户每打一个字，下拉就被当成「再次点击锚点」而关闭。
+  --   （这是实现搜索框时踩到的真 bug：过滤逻辑本身没错，错在重入被 toggle 吃掉。）
   local okS, shown = pcall(dd.IsShown, dd)
-  if okS and shown and ddUI.anchor == anchorBtn then EVAL_DD_HIDE() return end
+  if (not ddUI.reentrant) and okS and shown and ddUI.anchor == anchorBtn then EVAL_DD_HIDE() return end
   ddUI.anchor = anchorBtn
+  -- ★1.70.29 输入即过滤：OnTextChanged 里重新走一遍本函数（参数与上次相同），
+  --   保证过滤逻辑只有一份实现——若在别处复刻一份过滤，两处迟早会不一致。
+  ddUI.refilter = function()
+    if ddUI.anchor ~= anchorBtn then return end -- 面板已换宿主/已关闭：不要重开
+    local okShown, sh = pcall(dd.IsShown, dd)
+    if not (okShown and sh) then return end
+    ddUI.reentrant = true
+    EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
+    ddUI.reentrant = nil
+  end
   ddUI.multi = (opts and opts.multi) and true or false
   ddUI.sel = (ddUI.multi and (opts.selected or {})) or nil -- 1.32.0 审计修复：multi 未传 selected 时索引 nil 隐患
-  local n = table.getn(items)
+  -- ★1.70.29：locked 不再以 multi 为前提。原先写成 (ddUI.multi and opts.locked) or nil，
+  --   于是**非多选**的下拉（如光环条件菜单）拿不到 locked —— 一旦启用搜索，分组标题行会被
+  --   关键字过滤掉（用户正在输入时分组结构整个消失）。locked 的语义是「该行不可选」，
+  --   与「是否多选」无关，故独立存储。
+  ddUI.locked = (opts and opts.locked) or nil
+  -- ★1.70.29 搜索过滤：opts.search=true 时开启顶部输入框。
+  --   filter 把「显示顺序」与「原始序号」分开——pi 始终是 items 里的原始下标，
+  --   这样 onPick(pi) / ddUI.sel[pi] / opts.icons[pi] 全部语义不变，过滤只是「少显示几行」。
+  local useSearch = (opts and opts.search) and true or false
+  ddUI.useSearch = useSearch
+  -- 过滤与「自由文本行」的判定抽成纯函数 DD_FILTER（见下）——UI 与测试共用同一份实现，
+  -- 否则测试只能复刻逻辑，变异将不可见（本项目已三次踩到这个坑）。
+  local shownList = DD_FILTER(items, ddUI.locked, useSearch and ddUI.searchText or nil,
+    useSearch and (opts.onFreeText ~= nil) or false)
+  local nAll = table.getn(items)
+  local n = table.getn(shownList)
   local cols = math.ceil(n / DD_COLS)
+  if cols < 1 then cols = 1 end
   local icons = opts and opts.icons -- 1.32.4 可选图标列：与 items 同序的纹理表
   local colW = icons and 124 or 108
-  for i, row in ipairs(ddUI.rows) do
-    if i <= n then
-      local pi = i
+  for slot, row in ipairs(ddUI.rows) do
+    if slot <= n then
+      local i = shownList[slot]   -- 显示位置 -> 原始下标（负数 = 自由文本哨兵行）
+      local pi = i                -- pi 保持「原始下标」语义（onPick/sel/icons 都按它索引）
+      -- ★自由文本行：渲染成「✎ 使用 "关键字"」，点击回调 onPick(-1, 关键字)
+      if i == -1 then
+        row.icon:Hide()
+        row.text:ClearAllPoints()
+        row.text:SetPoint("LEFT", row.btn, "LEFT", 4, 0)
+        row.text:SetText("|cff40ff40✎|r " .. L("DD_USE_TYPED") .. " \"" .. tostring(ddUI.searchText) .. "\"")
+        row.btn:SetScript("OnClick", function()
+          local txt = ddUI.searchText
+          EVAL_DD_HIDE()
+          opts.onFreeText(txt)
+        end)
+        local col0 = math.floor((slot - 1) / DD_COLS)
+        local ri0 = math.mod(slot - 1, DD_COLS)
+        row.btn:ClearAllPoints()
+        row.btn:SetPoint("TOPLEFT", dd, "TOPLEFT", 4 + col0 * colW, -(4 + SEARCH_H) - ri0 * 15)
+        row._ddPaint = nil
+        row.btn:Show()
+      else
       local ic = icons and icons[i]
       if ic then
         pcall(row.icon.SetTexture, row.icon, ic)
@@ -2140,33 +2499,49 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
         row.text:SetPoint("LEFT", row.btn, "LEFT", 4, 0)
       end
       if ddUI.multi then
+        -- 多选标记统一为「方框」样式，与配置窗自绘勾选框（cfgCheck）观感一致：
+        -- 选中=|cffffd100■|r、未选=|cff6a6a6□|r（用户要求「支持第二张图的方式多选」）
+        -- ★1.70.25：分组标题等「不可选行」用 opts.locked[序号]=true 声明——多选模式下它们
+        --   仍会画出方框并接收点击，若不特殊处理，点标题行会凭空多出一个勾（本客户端用户实测
+        --   「我选的是草药，矿脉也被勾上了」的诱因之一：行状态与数据源不一致时极易被读错）。
+        --   locked 行改为渲染纯文本、不画方框、点击不切换也不回调。
+        local locked = ddUI.locked and ddUI.locked[pi] and true or false
         local function paint()
+          if locked then row.text:SetText(tostring(items[pi])) return end
           local on = ddUI.sel and ddUI.sel[pi] and true or false
-          row.text:SetText((on and "|cffffd100√|r " or "") .. tostring(items[pi]))
+          row.text:SetText((on and "|cffffd100■|r " or "|cff6a6a6a□|r ") .. tostring(items[pi]))
         end
         paint()
-        row.btn:SetScript("OnClick", function()
-          local nowOn = not (ddUI.sel[pi] and true or false)
-          ddUI.sel[pi] = nowOn or nil
-          paint()
-          onPick(pi, nowOn)
-        end)
+        row._ddPaint = locked and nil or paint -- 供 EVAL_DD_SYNC 批量重绘（全开/全关后刷新所有行）
+        if locked then
+          row.btn:SetScript("OnClick", nil)
+        else
+          row.btn:SetScript("OnClick", function()
+            local nowOn = not (ddUI.sel[pi] and true or false)
+            ddUI.sel[pi] = nowOn or nil
+            paint()
+            onPick(pi, nowOn)
+          end)
+        end
       else
         row.text:SetText(tostring(items[i]))
         row.btn:SetScript("OnClick", function() dd:Hide() onPick(pi) end)
+      end -- 自由文本哨兵行
       end
-      local col = math.floor((i - 1) / DD_COLS)
-      local ri = math.mod(i - 1, DD_COLS)
+      -- 布局按【显示位置 slot】，不是原始下标 i（过滤后两者不同）
+      local col = math.floor((slot - 1) / DD_COLS)
+      local ri = math.mod(slot - 1, DD_COLS)
       row.btn:ClearAllPoints()
-      row.btn:SetPoint("TOPLEFT", dd, "TOPLEFT", 4 + col * colW, -4 - ri * 15)
+      row.btn:SetPoint("TOPLEFT", dd, "TOPLEFT", 4 + col * colW, -(4 + SEARCH_H) - ri * 15)
       row.btn:Show()
     else
       row.btn:Hide()
     end
   end
   local rows = math.min(n, DD_COLS)
-  dd:SetWidth(8 + cols * colW)
-  dd:SetHeight(8 + rows * 15)
+  local totalH = 8 + SEARCH_H + rows * 15
+  dd:SetWidth(math.max(8 + cols * colW, useSearch and 200 or 0))
+  dd:SetHeight(totalH)
   dd:ClearAllPoints()
   dd:SetPoint("TOPLEFT", anchorBtn, "BOTTOMLEFT", 0, -2)
   -- 贴屏底时改为向上展开
@@ -2174,9 +2549,34 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
   if okb and type(ab) == "number" then
     local oke, es = pcall(dd.GetEffectiveScale, dd)
     local k = (oke and type(es) == "number" and es > 0) and es or 1
-    if ab < (8 + rows * 15) * k + 20 then
+    if ab < totalH * k + 20 then
       dd:ClearAllPoints()
       dd:SetPoint("BOTTOMLEFT", anchorBtn, "TOPLEFT", 0, 2)
+    end
+  end
+  -- 搜索框显隐与尺寸（放在行区上方）
+  if ddUI.search then
+    if useSearch then
+      -- GetWidth 在测试桩里可能返回 nil：用 pcall + 兜底宽度，避免整条打开流程炸掉
+      local ddW = 200
+      local okw, wv = pcall(dd.GetWidth, dd)
+      if okw and type(wv) == "number" and wv > 0 then ddW = wv end
+      local w = math.max(60, ddW - 8)
+      pcall(ddUI.search.SetWidth, ddUI.search, w - 4)
+      ddUI.searchBg:ClearAllPoints()
+      ddUI.searchBg:SetPoint("TOPLEFT", dd, "TOPLEFT", 4, -3)
+      ddUI.searchBg:SetWidth(w) ddUI.searchBg:SetHeight(16)
+      ddUI.search:Show() ddUI.searchBg:Show()
+      -- 每次【用户重新打开】才清空；过滤引发的重入必须保留关键字，
+      -- 否则打字一个字就被自己清掉（本特性最容易踩的坑）。
+      if not ddUI.reentrant then
+        pcall(ddUI.search.SetText, ddUI.search, "")
+        ddUI.searchText = ""
+        pcall(ddUI.search.SetFocus, ddUI.search)
+      end
+    else
+      ddUI.search:Hide() ddUI.searchBg:Hide()
+      ddUI.searchText = ""
     end
   end
   dd:Show()
@@ -2240,6 +2640,8 @@ function EVAL_HELP_SE_REFRESH()
         local disp = tostring(cd.s or "?")
         if cd.k == "tCasting" and (cd.s == nil or cd.s == "") then disp = L("TCAST_ANY") end -- 1.40.0 空参数=任意施法
         if cd.k == "casting" and (cd.s == nil or cd.s == "") then disp = L("TCAST_ANY") end -- 1.41.0 自身施法同规
+        -- 1.70.0：空技能名（光环检查/免疫/范围）提示待选，避免旧职业化默认造成「条件恒不满足却不自知」
+        if (cd.s == nil or cd.s == "") and cd.k ~= "casting" and cd.k ~= "tCasting" then disp = "未选择（点此选择）" end
         local auraChk = (cd.k == "hasBuff" or cd.k == "hasDebuff" or cd.k == "tBuff" or cd.k == "pDebuff") -- 1.54.0 光环检查型 是/否
         if cd.k == "immune" or cd.k == "inRange" or cd.k == "casting" or cd.k == "tCasting" or auraChk then
           if cd.k == "inRange" or cd.k == "casting" or cd.k == "tCasting" or auraChk then
@@ -2249,10 +2651,11 @@ function EVAL_HELP_SE_REFRESH()
           end
           pcall(row.immBtn.btn.Show, row.immBtn.btn)
         end
-        local isDebuff = (cd.k == "hasDebuff" or cd.k == "noDebuff")
-        if isDebuff then
+        -- 1.70.1：层数门槛对【四类光环检查】全部开放（buff/debuff 都可能堆叠）；旧版只给 目标debuff 显示「层」，
+        -- 且层按钮与是/否按钮坐标重叠→表现为「目标debuff 缺 是/否」（用户实测截图）
+        if auraChk or cd.k == "noDebuff" or cd.k == "noBuff" then
           if type(cd.n) == "number" and cd.n > 1 then
-            disp = disp .. (((cd.k == "noDebuff" or cd.v == false) and " <" or " ≥") .. cd.n) -- 1.54.0 合并后看 v 方向
+            disp = disp .. (((cd.v == false) and " <" or " ≥") .. cd.n) -- 看 v 方向：是=至少N层 / 否=不足N层
           end
           row.stk.text:SetText(type(cd.n) == "number" and cd.n > 1 and ("层" .. cd.n) or "层")
           pcall(row.stk.btn.Show, row.stk.btn)
@@ -2271,6 +2674,16 @@ function EVAL_HELP_SE_REFRESH()
         row.skillText:SetText(table.getn(ns) > 0 and table.concat(ns, "/") or "未选择（永不满足）")
         pcall(row.sHit.Show, row.sHit)
         pcall(row.skillText.Show, row.skillText)
+      elseif td.kind == "creature" then
+        -- 1.70.28 目标类型：选中项 / 是-否；并附上「此刻客户端实际报告的类型」便于核对
+        local ns = {}
+        for _, c in ipairs(CREATURE_TYPES) do if cd.cs and cd.cs[c.id] then table.insert(ns, L("CRE_" .. string.upper(c.id))) end end
+        local disp = table.getn(ns) > 0 and table.concat(ns, "/") or L("CRE_UNSELECTED")
+        row.skillText:SetText(disp)
+        pcall(row.sHit.Show, row.sHit)
+        pcall(row.skillText.Show, row.skillText)
+        row.immBtn.text:SetText((cd.v == false) and L("SE_NO") or L("SE_YES"))
+        pcall(row.immBtn.btn.Show, row.immBtn.btn)
       end
       row.preview:SetText(EVAL_COND_STR(cd))
       pcall(row.preview.Show, row.preview)
@@ -2562,11 +2975,12 @@ local function SE_BUILD()
     -- buff/debuff 技能名：显示 + [v] 下拉（1.19.0 移除 [<][>] 循环）
     local st2 = uiText(root, 9, 1, 0.9, 0.5)
     st2:SetPoint("TOPLEFT", root, "TOPLEFT", 142, y - 3)
+    pcall(st2.SetWidth, st2, 100) -- 1.70.1 收窄：给右侧 是/否+层 让位
     row.skillText = st2
     reg(st2)
     -- 1.35.2 布局优化：[v] 箭头按钮取消——文字本身就是触发区（透明热区覆盖，悬停高亮提示可点）
     local sHit = CreateFrame("Button", nil, root)
-    sHit:SetWidth(120) sHit:SetHeight(15)
+    sHit:SetWidth(100) sHit:SetHeight(15)
     sHit:SetPoint("TOPLEFT", root, "TOPLEFT", 140, y)
     pcall(sHit.EnableMouse, sHit, true)
     pcall(sHit.RegisterForClicks, sHit, "LeftButtonUp")
@@ -2591,6 +3005,34 @@ local function SE_BUILD()
           it.cd.cs[CLASS_LIST[pi].id] = on or nil
           EVAL_HELP_SE_REFRESH()
         end, { multi = true, selected = sel })
+        return
+      end
+      if tdi and tdi.kind == "creature" then
+        -- 目标类型：多选（或关系），点按切换不关面板；首行显示客户端**此刻实际报告**的类型，
+        -- 便于用户确认本客户端 UnitCreatureType 到底返回什么（该 API 曾被记为不可靠）
+        it.cd.cs = it.cd.cs or {}
+        local live = nil
+        if type(UnitCreatureType) == "function" then
+          local okc, tv = pcall(UnitCreatureType, "target")
+          if okc and type(tv) == "string" and tv ~= "" then live = tv end
+        end
+        local items, sel, ids, lock = {}, {}, {}, {}
+        if live then
+          table.insert(items, "当前目标: " .. live) lock[1] = true
+        end
+        for _, c in ipairs(CREATURE_TYPES) do
+          local i = table.getn(items) + 1
+          table.insert(items, L("CRE_" .. string.upper(c.id)))
+          table.insert(ids, c.id)
+          if it.cd.cs[c.id] then sel[i] = true end
+        end
+        EVAL_DD_OPEN(row.sHit, items, function(pi, on)
+          if lock[pi] then return end
+          local id = ids[pi - (live and 1 or 0)]
+          if not id then return end
+          it.cd.cs[id] = on or nil
+          EVAL_HELP_SE_REFRESH()
+        end, { multi = true, selected = sel, locked = lock })
         return
       end
       if tdi and tdi.kind == "target" then
@@ -2626,36 +3068,17 @@ local function SE_BUILD()
         end
         return
       end
-      -- 1.32.9 重构：并行 names 表（显示前缀不入值，不做字符串解析）；排除伪技能（宠物/选取/物品——没有光环概念，1.32.9 修混入）；
-      -- 实时项 ◆目标debuff/○自身buff（1.27.0）+ 已学习名 ◇（跨会话持久，buff 消失也能选——修「药水 buff 不及时显示」）；图标经 auraTexOf
-      local items, names = {}, {}
-      local function push(disp, nm) table.insert(items, disp) table.insert(names, nm) end
-      for _, n in ipairs(EVAL_GO_SKILL_CHOICES()) do
-        if not petCmdOf(n) and not targetSelOf(n) and not itemOf(n) and not stanceOf(n) and not cancelCastOf(n) then push(n, n) end
-      end
-      local k0 = it.cd.k
-      local isAura = (k0 == "hasDebuff" or k0 == "noDebuff" or k0 == "hasBuff" or k0 == "noBuff" or k0 == "tBuff" or k0 == "pDebuff")
-      if k0 == "hasDebuff" or k0 == "noDebuff" then
-        for _, d in ipairs(EVAL_TARGET_DEBUFF_LIST()) do push("◆" .. d.name, d.name) end
-      elseif k0 == "hasBuff" or k0 == "noBuff" then
-        for _, d in ipairs(EVAL_PLAYER_BUFF_LIST()) do push("○" .. d.name, d.name) end
-      elseif k0 == "tBuff" then -- 1.54.0 ●目标buff 实时项
-        for _, d in ipairs(EVAL_TARGET_BUFF_LIST()) do push("●" .. d.name, d.name) end
-      elseif k0 == "pDebuff" then -- 1.54.0 ▲自身debuff 实时项
-        for _, d in ipairs(EVAL_PLAYER_DEBUFF_LIST()) do push("▲" .. d.name, d.name) end
-      end
-      if isAura then
-        local seen = {}
-        for _, n in ipairs(names) do seen[n] = true end
-        local w2c = EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war
-        local lt = w2c and w2c.debuffTex
-        if lt then
-          local ln = {}
-          for n in pairs(lt) do table.insert(ln, n) end
-          table.sort(ln)
-          for _, n in ipairs(ln) do if not seen[n] then push("◇" .. n, n) end end
-        end
-      end
+      -- ★1.70.28（用户要求「目标debuff 下拉信息优化，优先显示目标身上实时监测出来的debuff」）：
+      --   顺序大改为 **实时光环在前、技能名在后**。旧实现把 EVAL_GO_SKILL_CHOICES()（动作条全部
+      --   技能名）先 push，实时项再追加——下拉第一屏全是技能名，用户看到的正是「全是技能名称，
+      --   不是 debuff 效果」，实时 debuff 被挤到下面翻不到。
+      --   现在：① 实时项（◆/○/●/▲）置顶；② 已学习名 ◇ 次之；③ 其余技能名垫底（仍可选，
+      --   但不再抢占视线）。三组之间插入不可点分隔行，让分类一眼可见。
+      -- ★1.70.28 菜单结构抽到文件作用域 SE_AURA_MENU()：UI 与测试**共用同一份实现**。
+      --   起因：我先前把顺序断言写成「测试里重新实现一遍顺序」，于是变异体（例如删掉实时分组标题）
+      --   **测不出来**——测试看的是自己的副本，而不是真代码。抽成共用函数后变异立刻可见。
+      local menu = SE_AURA_MENU(it.cd.k)
+      local items, names, locked = menu.items, menu.names, menu.locked
       local icons = {}
       local anyIcon = false
       for i2, nm in ipairs(names) do
@@ -2663,23 +3086,34 @@ local function SE_BUILD()
         if t then icons[i2] = t anyIcon = true end
       end
       EVAL_DD_OPEN(row.sHit, items, function(pi)
+        if locked[pi] then return end -- 分组标题行：不可选
         it.cd.s = names[pi]
         EVAL_HELP_SE_REFRESH()
-      end, { icons = anyIcon and icons or nil })
+      end, {
+        icons = anyIcon and icons or nil, locked = locked,
+        -- ★1.70.29 用户要求：光环条件下拉支持输入检索；列表里没有想要的名称时，
+        --   允许直接把用户输入的名称作为条件值（自制/未记录的光环也能用）。
+        search = true,
+        onFreeText = function(txt)
+          if txt == nil or txt == "" then return end
+          it.cd.s = txt
+          EVAL_HELP_SE_REFRESH()
+        end,
+      })
     end)
     row.sDrop.btn:Hide() -- 1.35.2 v 按钮常驻隐藏
     sHit:SetScript("OnClick", function() local c = row.sDrop.btn:GetScript("OnClick") if c then c() end end)
     reg(row.sDrop.btn)
     -- 免疫条件的 免疫/未免疫 切换（1.36.3：kind=skill 共用参数区，仅 immune 类型显示）
     -- 1.36.4 修：此块 1.36.3 误嵌进 sDrop 调用中间，导致只在点击时才赋值（刷新时 immBtn nil 报错）
-    row.immBtn = seBtn(root, 250, y, 52, 15, "", function()
+    row.immBtn = seBtn(root, 246, y, 40, 15, "", function() -- 1.70.1 布局：与「层」并排不重叠（旧 250 宽52 与 266 起宽20 的层按钮完全叠在一起→层覆盖是/否）
       local it = seUI.ed and seUI.ed.conds[i]
       if not it then return end
       it.cd.v = (it.cd.v == false) and true or false
       EVAL_HELP_SE_REFRESH()
     end)
     reg(row.immBtn.btn)
-    row.stk = seBtn(root, 266, y, 20, 15, L("SE_STK"), function()
+    row.stk = seBtn(root, 290, y, 54, 15, L("SE_STK"), function()
       local it = seUI.ed and seUI.ed.conds[i]
       if not it then return end
       local stkItems = { L("SE_STK_UNLIM") } for si = 2, 5 do table.insert(stkItems, L("SE_STK_FMT", si)) end
@@ -2691,7 +3125,7 @@ local function SE_BUILD()
     reg(row.stk.btn)
     -- 结果预览 + 删除
     local pv = uiText(root, 9, 0.55, 0.75, 0.55)
-    pv:SetPoint("TOPLEFT", root, "TOPLEFT", 288, y - 3)
+    pv:SetPoint("TOPLEFT", root, "TOPLEFT", 348, y - 3)
     row.preview = pv
     reg(pv)
     row.del = seBtn(root, 420, y, 28, 15, L("W_DEL"), function()
@@ -3242,8 +3676,18 @@ if type(SlashCmdList) == "table" then
     msg = string.lower(tostring(msg or ""))
     msg = string.gsub(msg, "^war", "go") -- /eh war 旧命令组兼容 → 通用 /eh go（1.21.1 改名）
     if msg == "log" then
-      cfg.log = not cfg.log
-      say("写日志文件: " .. (cfg.log and "|cff00ff00开|r" or "|cffff0000关|r"))
+      -- 1.70.12：日志改 SavedVariables 环形缓冲（UELog 在本客户端不落盘，已弃用）
+      local on = not (type(cfg.log) == "table" and cfg.log.on == false)
+      cfg.log = type(cfg.log) == "table" and cfg.log or {}
+      cfg.log.on = not on
+      say("日志记录: " .. ((not cfg.log.on) and "|cff00ff00开|r" or "|cffff0000关|r")
+        .. "（缓冲 " .. EVAL_LOG_COUNT() .. " 条；/eh logdump 查看 /eh logclear 清空）")
+    elseif msg == "logdump" or string.find(msg, "^logdump%s") then
+      local n = EVAL_LOG_DUMP(tonumber(string.sub(msg, 9)))
+      if n == 0 then say("日志缓冲为空") else say("已打印 " .. n .. " 条日志（最新的在最后）") end
+    elseif msg == "logclear" then
+      EVAL_LOG_CLEAR()
+      say("日志缓冲已清空")
     elseif msg == "auto" then
       cfg.auto = not cfg.auto
       say("进出战斗自动输出: " .. (cfg.auto and "|cff00ff00开|r" or "|cffff0000关|r"))
@@ -3253,6 +3697,88 @@ if type(SlashCmdList) == "table" then
       EVAL_HELP_CFG_TOGGLE()
     elseif msg == "st" or msg == "state" or msg == "info" then
       EVAL_HELP_ST_TOGGLE()
+    elseif msg == "ds" then -- 数据检索诊断：采集点标注层的当前状态（切换区域不生效时用它取证）
+      if type(EVAL_DS_NODE_DIAG) == "function" then
+        say(EVAL_DS_NODE_DIAG())
+      else
+        say("数据检索模块未载入")
+      end
+    elseif msg == "ds trace" then -- 开/关采集点标注层的轨迹日志（默认关；取证时开，别长期开）
+      if type(EVAL_DS_TRACE) == "function" then
+        local on = EVAL_DS_TRACE()
+        say("数据检索轨迹日志: " .. (on and "|cff00ff00开|r（切换地图后 /eh logdump 查看）" or "|cffff0000关|r"))
+      else
+        say("数据检索模块未载入")
+      end
+    elseif msg == "ds clear" or msg == "ds clean" then -- 清理地图标注（按钮已删除，命令保留作快捷方式）
+      if type(EVAL_DS_ANN_CLEAR) == "function" then
+        EVAL_DS_ANN_CLEAR()
+        say("地图标注已清理（类别全关 = 图层关闭；用 /eh ds cat <类别> on 重新显示）")
+      else
+        say("数据检索模块未载入")
+      end
+    elseif msg == "ds on" then
+      if type(EVAL_DS_TOGGLE_NODES) == "function" then
+        EVAL_DS_TOGGLE_NODES(true)
+        say("地图标注层: |cff00ff00开|r（随地图切换自动更新；与类别勾选联动）")
+      else
+        say("数据检索模块未载入")
+      end
+    elseif msg == "ds off" then
+      if type(EVAL_DS_TOGGLE_NODES) == "function" then
+        EVAL_DS_TOGGLE_NODES(false)
+        say("地图标注层: |cffff0000关|r")
+      else
+        say("数据检索模块未载入")
+      end
+    elseif string.find(msg, "^ds cat ") then -- /eh ds cat herbs on|off
+      local k, v = string.match(msg, "^ds cat%s+(%S+)%s*(%S*)$")
+      if type(EVAL_DS_SET_CAT) == "function" and k then
+        local want = (v ~= "off" and v ~= "0" and v ~= "false")
+        if EVAL_DS_SET_CAT(k, want) then
+          say(string.format("类别 %s: %s", k, want and "|cff00ff00开|r" or "|cffff0000关|r"))
+        else
+          say("未知类别: " .. tostring(k) .. "（可用：herbs mines chests fish rares flight innkeeper mailbox banker auctioneer vendor repair stablemaster spirithealer meetingstone battlemaster）")
+        end
+      else
+        say("数据检索模块未载入")
+      end
+    elseif msg == "ds hud" then
+      -- ★1.70.38 地图诊断浮层（用户建议）：把诊断信息直接画在世界地图上。
+      -- 排查时一张截图即可给出「客户端报什么 / 我们画什么」的决定性证据。
+      if type(EVAL_DS_HUD) == "function" then
+        local on = EVAL_DS_HUD()
+        say("地图诊断浮层: " .. (on and "|cff00ff00开|r（开图后左上角显示诊断文本）" or "|cffff0000关|r"))
+      else
+        say("数据检索模块未载入")
+      end
+    elseif msg == "ds rnd" then
+      -- ★1.70.35 随机点测试（用户建议）：验证「地图打开之后还能不能继续画」。
+      -- 开图后每 2 秒往随机位置放 8 个随机色钉子，并统计 PositionWorldMapPin 的真实成败。
+      if type(EVAL_DS_RND) == "function" then
+        local on = EVAL_DS_RND()
+        say("随机点测试: " .. (on and "|cff00ff00开|r（每2秒8点，随机位置；看地图上有没有随机彩点）" or "|cffff0000关|r"))
+      else
+        say("数据检索模块未载入")
+      end
+    elseif msg == "ds rndstat" then
+      if type(EVAL_DS_RND_DIAG) == "function" then say(EVAL_DS_RND_DIAG()) else say("数据检索模块未载入") end
+    elseif msg == "ds snap" then
+      -- ★1.70.34 一键快照：请在「看到错误标注的那一刻」执行，然后立刻 /reload 落盘。
+      -- 它同时记录「客户端报告的区域」「画布实际贴图路径」「我们画的区域与钉子样本」，
+      -- 用于判定是投影基准错位还是数据本身不对（多轮日志排查的瓶颈正在于此）。
+      if type(EVAL_DS_SNAP) == "function" then
+        say(EVAL_DS_SNAP())
+        if type(EVAL_LOGLINE) == "function" then EVAL_LOGLINE("[DS][SNAP] " .. EVAL_DS_SNAP()) end
+      else
+        say("数据检索模块未载入")
+      end
+    elseif msg == "ds probe" then
+      if type(EVAL_DS_PROBE) == "function" then
+        for _, s in ipairs({ EVAL_DS_PROBE() }) do say(s) end
+      else
+        say("数据检索模块未载入")
+      end
     elseif string.find(msg, "^go add ") then
       -- 兜底添加: /eh go add 技能名 条件串（如 /eh go add 压制 可用 & 就绪）
       local sn, conds = string.match(string.sub(msg, 8), "^(%S+)%s*(.*)$")
@@ -3346,7 +3872,7 @@ if type(SlashCmdList) == "table" then
       end
     elseif msg == "go probe immune" then
       -- 免疫事件探针（1.35.1，免疫学习器前置验证）：30 秒全事件抓取——CHAT_MSG_* 或参数含「免疫/immune」
-      -- 的写 UELog；对免疫怪放技能后翻日志拿真实事件名+文本格式，再写解析器（事件 wiki 无文档页）
+      -- 的写调试日志；对免疫怪放技能后翻日志拿真实事件名+文本格式，再写解析器（事件 wiki 无文档页）
       say("免疫探针启动：30 秒内对免疫怪放技能（如撕裂）→ /eh go probe dump 看结果")
       local pf = CreateFrame("Frame")
       local t0 = GetTime()
@@ -3414,7 +3940,7 @@ if type(SlashCmdList) == "table" then
         if not any then say("（当前方案无动作条技能；可带参数：/eh go probe usable 冲锋）") end
       end
     elseif msg == "go probe dump" then
-      -- 打印探针持久记录（1.35.4：UELog 不落盘的替代查看通道；打完免疫技能后用这个看）
+      -- 打印探针持久记录（1.35.4：探针结果的持久查看通道；打完免疫技能后用这个看）
       local pl = cfg.probeLog or {}
       say("— 探针记录 " .. table.getn(pl) .. " 条 —")
       for i, line in ipairs(pl) do say(i .. ". " .. line) end
@@ -3441,7 +3967,7 @@ if type(SlashCmdList) == "table" then
       say("免疫学习记录已清空")
     elseif msg == "go probe" then
       -- buff 探针（1.33.1）：两条枚举+tooltip 读名路径原始值打印，诊断药品类 buff 不进下拉
-      say("— buff 探针（结果同时写日志文件） —")
+      say("— buff 探针（结果同时写调试日志） —")
       local function pr(s) say(s) logLine(s) end
       pr("GetPlayerBuff=" .. tostring(type(GetPlayerBuff)) .. " UnitBuff=" .. tostring(type(UnitBuff)) .. " SetPlayerBuff=" .. tostring(type(GameTooltip.SetPlayerBuff)) .. " SetUnitBuff=" .. tostring(type(GameTooltip.SetUnitBuff)))
       pr("BuffButton0=" .. tostring(getglobal("BuffButton0") ~= nil) .. " BuffFrame=" .. tostring(getglobal("BuffFrame") ~= nil))
@@ -3487,7 +4013,9 @@ if type(SlashCmdList) == "table" then
       say("|cffffff00提示:|r 猛击需按住 Alt 按宏键；宏入口 /run EVAL_HELP() 输出状态日志")
       say("|cffffff00异常自救:|r 技能不识别/界面异常/刚更新过插件 → 先 /reload 重载（配置已存盘不会丢）；重扫动作条 /eh go rescan")
       say("|cffffff00问题反馈:|r https://gitee.com/xeval/emberveil_eval_help.git —— 插件持续优化中，欢迎测试并留下宝贵意见")
-      say("日志文件: %LOCALAPPDATA%\\Azeroth\\Saved\\Logs")
+      say("调试日志: /eh logdump 查看（存 SavedVariables，随 /reload 落盘）| /eh log 开关 | /eh logclear 清空")
+      say("数据检索诊断: /eh ds | /eh ds hud 地图诊断浮层(推荐) | /eh ds snap 一键快照 | /eh ds rnd 随机点测试 + rndstat 统计 | /eh ds trace 轨迹日志 | /eh ds probe 详情行几何")
+      say("地图标注: 一个「地图标注(N)」按钮即可——点开勾选类别（=开关）；/eh ds cat <类别> on|off 命令行等价 | /eh ds clear 清空")
     else
       EVAL_HELP()
     end
@@ -3509,7 +4037,12 @@ init:SetScript("OnEvent", function(a, b)
     cfg = EVAL_HELP_CONFIG or {}
     EVAL_HELP_CONFIG = cfg
     ehResolveLang() -- 1.34.0 语言解析：cfg.lang 优先 → 客户端语言自动检测
-    if cfg.log  == nil then cfg.log  = true  end -- 默认写日志文件
+    if cfg.log  == nil then cfg.log  = {} end -- 1.70.12 日志缓冲（旧存档里的 true/false 会在首次写入时自动转成表）
+    -- 1.70.16：数据检索的取证开关恢复。必须在 VARIABLES_LOADED 再确认一次——
+    -- DataSearch.lua 的载入期 SavedVariables 通常已还原，但首装/边缘时序下可能还没有；
+    -- 而 tab tick 在 OnUpdate 上独立运行，不能依赖「用户打开过 Tab4」（踩过：恢复写在 BUILD 里，
+    -- 用户停在 Tab1 → 永不恢复 → trace 静默失效）。
+    if type(EVAL_DS_RESTORE) == "function" then pcall(EVAL_DS_RESTORE) end
     if cfg.auto == nil then cfg.auto = false end -- 默认不自动输出
     if cfg.wdebug == nil then cfg.wdebug = false end
     if not cfg.war then

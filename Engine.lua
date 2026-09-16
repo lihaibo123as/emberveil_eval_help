@@ -10,7 +10,7 @@ local formatStats, collectStats = EVAL_FORMAT_STATS, EVAL_COLLECT_STATS -- 1.41.
 -- 技能清单一切以动作条扫描为准（1.48.0 战士白名单已清零）：把技能拖上动作条 → /eh go rescan 或配置窗[重扫]。
 -- 技能识别走 tooltip 技能名（不依赖图标名拼写）；buff/debuff 用「动作条图标 == 光环图标」比对。
 -- 调试：/eh go 看识别结果和当前状态；/eh go rescan 重扫；/eh debug 开关详细日志。
--- 所有出手动作都会写入日志文件（UELog），连按不刷屏也能事后复盘。
+-- 所有出手动作都会写入调试日志（SavedVariables 环形缓冲，/eh logdump 查看），连按不刷屏也能事后复盘。
 
 local WAR_MAX_SLOT = 119
 -- 1.48.0 清理：WAR_SKILLS 战士白名单已删除——技能清单一切以动作条扫描（wslots）为准，真·全职业
@@ -19,7 +19,7 @@ local wslots = {}       -- 技能名 -> { slot, tex }
 local wscanned = false
 local wLastAttackTry = 0
 
--- 详细日志：/eh wdebug 开启后刷聊天框，同时总是可写日志文件
+-- 详细日志：/eh wdebug 开启后刷聊天框，同时总是写调试日志缓冲
 local function wlog(msg)
   if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cffff9040war:|r " .. tostring(msg)) end
 end
@@ -675,6 +675,64 @@ for _, c in ipairs(CLASS_LIST) do
   CLASS_ID[c.id] = c.id
 end
 
+-- ===== 目标类型条件（1.70.28）：UnitCreatureType 比对 =====
+-- 该 API 在**本客户端曾被记为不可靠**（旧版拿它推断「不能流血」导致黑暗犬误判）。
+-- 但那条结论针对的是「类型→可否流血」的**推断**，不等于返回值本身是垃圾；
+-- 且此前它只用于调试串，从未参与判定，所以一直没有可信的实测数据。
+-- 因此这里的设计原则是「**假设可能不准，但绝不静默失败**」：
+--   · id 稳定存进条件；loc=中文显示名；tok=英文 token（enUS 客户端返回英文）
+--   · 匹配时**同时**比对本地化名与英文 token（大小写不敏感），两种语言都认
+--   · 另外接受 "other" 兜底项，用户可显式匹配「未列出的类型」
+--   · 编辑器顶部会显示客户端**此刻真实报告**的类型，让不准的地方立刻可见
+local CREATURE_TYPES = {
+  { id = "beast",       loc = "野兽",   tok = "Beast" },
+  { id = "dragonkin",   loc = "龙类",   tok = "Dragonkin" },
+  { id = "demon",       loc = "恶魔",   tok = "Demon" },
+  { id = "elemental",   loc = "元素",   tok = "Elemental" },
+  { id = "giant",       loc = "巨人",   tok = "Giant" },
+  { id = "undead",      loc = "亡灵",   tok = "Undead" },
+  { id = "humanoid",    loc = "人型",   tok = "Humanoid" },
+  { id = "critter",     loc = "小动物", tok = "Critter" },
+  { id = "mechanical",  loc = "机械",   tok = "Mechanical" },
+  { id = "notpecified", loc = "未指定", tok = "Not specified" },
+  { id = "totem",       loc = "图腾",   tok = "Totem" },
+  { id = "other",       loc = "其他",   tok = "Other" },
+}
+-- 归一化：把客户端返回的字符串映射到 id。
+-- ★1.70.28 关键：本客户端返回的本地化名**可能带后缀**——测试桩里记录的是「人型生物」，
+--   而 1.12 的标准名是「人型」。若只按标准名比对，「人型」永远匹配不上而**静默失效**。
+--   故这里同时比对「原串」与「去掉 生物/类/型/系 词尾后的核心」，并保留英文 token 通路。
+local function creatureKey(s)
+  if type(s) ~= "string" then return nil end
+  return string.lower(string.gsub(s, "%s+", ""))
+end
+-- 去词尾「生物」用于宽松匹配。
+-- ★只剥离「生物」这一个词尾，**绝不能把「型/类/系」也当后缀**——
+--   它们是名字本身的组成部分（「人型」「龙类」「机械」这类名字被剥掉尾字就变成了「人」「龙」），
+--   会导致「人型」→「人」而「人型生物」→「人型」，两边永远对不上（本功能的核心静默失效点）。
+local CREATURE_SUFFIX = "生物"
+local function creatureCore(s)
+  local k = creatureKey(s)
+  if not k then return nil end
+  local n = string.len(CREATURE_SUFFIX)
+  if string.len(k) > n and string.sub(k, -n) == CREATURE_SUFFIX then
+    k = string.sub(k, 1, string.len(k) - n)
+  end
+  return k
+end
+local function creatureTypeId(raw)
+  local key = creatureKey(raw)
+  if not key or key == "" then return nil end
+  local core = creatureCore(raw)
+  for _, c in ipairs(CREATURE_TYPES) do
+    -- 精确匹配：本地化全名 / 英文 token
+    if creatureKey(c.loc) == key or creatureKey(c.tok) == key then return c.id end
+    -- 宽松匹配：去词尾后的核心（「人型生物」↔「人型」；「元素生物」↔「元素」）
+    if core and (creatureCore(c.loc) == core or creatureCore(c.tok) == core) then return c.id end
+  end
+  return nil -- 未列出：由调用方决定是否算 "other"
+end
+
 -- ===== 条件组格式（方案/技能配置 UI 用）：rule.groups = { {cond,...}, ... }，组内条件为 & 关系，组间为 | 关系 =====
 -- 单条件 cond = { k=类型, op/n=数值比较, v=布尔, s=技能名, inv=取反 }
 --   数值: {k="power",op=">",n=30}  tHpPct/hpPct/powerPct/combatTime/combo(连击点 1.28.0) 同
@@ -725,20 +783,29 @@ local function condOne(cd, skill, dry)
       cur = okc and c2 and true or false
     end
     return (cur == (cd.v ~= false)), sn
-  elseif k == "hasBuff" then -- 1.54.0 合并：v=false=无buff（旧 k=noBuff 仅兼容存量数据）
-    local has = st.playerBuffs[texOf(cd.s) or ""] and true or false
-    return (has == (cd.v ~= false)), "自身buff:" .. tostring(cd.s)
+  elseif k == "hasBuff" then -- 1.54.0 合并：v=false=无buff（旧 k=noBuff 仅兼容存量数据）；1.70.1 层数门槛 cd.n
+    local cnt = st.playerBuffs[texOf(cd.s) or ""]
+    cnt = (cnt == true) and 1 or (tonumber(cnt) or 0) -- 兼容旧布尔/新层数
+    local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
+    local has = cnt >= lim
+    return (has == (cd.v ~= false)), "自身buff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "/" .. lim) or "")
   elseif k == "noBuff" then return (not st.playerBuffs[texOf(cd.s) or ""]), "已有buff:" .. tostring(cd.s)
-  elseif k == "tBuff" then -- 1.54.0 目标 buff 检查（v=false=无目标buff）
-    local has = st.targetBuffs and st.targetBuffs[texOf(cd.s) or ""] and true or false
-    return (has == (cd.v ~= false)), "目标buff:" .. tostring(cd.s)
-  elseif k == "pDebuff" then -- 1.54.0 自身 debuff 检查（v=false=无自身debuff）
-    local has = st.playerDebuffs and st.playerDebuffs[texOf(cd.s) or ""] and true or false
-    return (has == (cd.v ~= false)), "自身debuff:" .. tostring(cd.s)
+  elseif k == "tBuff" then -- 1.54.0 目标 buff 检查（v=false=无目标buff）；1.70.1 层数门槛
+    local cnt = st.targetBuffs and st.targetBuffs[texOf(cd.s) or ""]
+    cnt = (cnt == true) and 1 or (tonumber(cnt) or 0)
+    local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
+    local has = cnt >= lim
+    return (has == (cd.v ~= false)), "目标buff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "/" .. lim) or "")
+  elseif k == "pDebuff" then -- 1.54.0 自身 debuff 检查（v=false=无自身debuff）；1.70.1 层数门槛
+    local cnt = st.playerDebuffs and st.playerDebuffs[texOf(cd.s) or ""]
+    cnt = (cnt == true) and 1 or (tonumber(cnt) or 0)
+    local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
+    local has = cnt >= lim
+    return (has == (cd.v ~= false)), "自身debuff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "/" .. lim) or "")
   elseif k == "hasDebuff" then
     -- 1.54.0 合并：v=false=无debuff（不足 lim 层才算无，与旧 noDebuff 同语义）；层数门槛 cd.n（1.31.0）
     local cnt = st.targetDebuffs[texOf(cd.s) or ""]
-    cnt = (cnt == true) and 1 or (cnt or 0) -- 兼容旧布尔
+    cnt = (cnt == true) and 1 or (tonumber(cnt) or 0) -- 兼容旧布尔/新层数
     local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
     local has = cnt >= lim
     return (has == (cd.v ~= false)), "目标debuff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "/" .. lim) or "")
@@ -816,6 +883,15 @@ local function condOne(cd, skill, dry)
     -- 目标职业：cd.cs = { WARRIOR=true, ... } 多选或关系；无目标/无职业信息 = 不过
     local pass = (st.tClass and cd.cs and cd.cs[st.tClass]) and true or false
     return pass, "目标职业:" .. tostring(st.tClassName or st.tClass or "?")
+  elseif k == "tCreature" then
+    -- 目标类型（1.70.28）：cd.cs = { beast=true, elemental=true } 多选或关系 + 是/否
+    -- 读不到类型 → id=nil → 匹配不到任何选中项（「否」方向则相反，见下）
+    local raw = st.tCreatureType
+    local id = creatureTypeId(raw)
+    if id == nil and raw ~= nil and raw ~= "" then id = "other" end -- 未列出的返回值归入「其他」
+    local hit = (id ~= nil and cd.cs and cd.cs[id]) and true or false
+    local pass = (hit == (cd.v ~= false))
+    return pass, "目标类型:" .. tostring(raw or "?") .. (cd.v == false and "(否)" or "")
   elseif k == "target" then
     -- 副作用条件：切换当前目标（战斗信息UI 亮金预览 dry 时不执行，防止刷新误切目标）
     local gfn = TARGET_SEL_FN[cd.s]
@@ -1019,21 +1095,10 @@ function EVAL_PARSE_ONE(token)
   if fn then return { k = "form", n = tonumber(fn) } end
   fn = string.match(token, "^非姿态(%d)$")
   if fn then return { k = "formNot", n = tonumber(fn) } end
-  local bs = string.match(token, "^无buff[:：](.+)$") or string.match(token, "^noBuff[:=](.+)$")
-  if bs then return { k = "hasBuff", s = condTrim(bs), v = false } end -- 1.54.0 合并为 hasBuff+v（旧 noBuff 词条仍认）
-  local tb = string.match(token, "^目标buff[:：](.+)$") or string.match(token, "^tBuff[:=](.+)$") -- 1.54.0
-  if tb then return { k = "tBuff", s = condTrim(tb), v = not neg } end
-  local tbn = string.match(token, "^无目标buff[:：](.+)$") or string.match(token, "^目标无buff[:：](.+)$")
-  if tbn then return { k = "tBuff", s = condTrim(tbn), v = false } end
-  local pd = string.match(token, "^自身debuff[:：](.+)$") or string.match(token, "^pDebuff[:=](.+)$")
-  if pd then return { k = "pDebuff", s = condTrim(pd), v = not neg } end
-  local pdn = string.match(token, "^无自身debuff[:：](.+)$") or string.match(token, "^自身无debuff[:：](.+)$")
-  if pdn then return { k = "pDebuff", s = condTrim(pdn), v = false } end
-  bs = string.match(token, "^有buff[:：](.+)$") or string.match(token, "^hasBuff[:=](.+)$")
-  if bs then return { k = "hasBuff", s = condTrim(bs) } end
-  -- debuff 层数后缀（1.31.0）：有debuff:破甲>=3（至少3层）/ 无debuff:破甲<3（不足3层）；无后缀=只要有/没有
-  -- want: "min"=有debuff(至少N层，只收 >/>=)；"max"=无debuff(不足N层，只收 </<=)。
+  -- 光环层数后缀（1.31.0 debuff 起；1.70.1 扩到四类光环）：名>=3（至少3层）/ 名<3（不足3层）；无后缀=只要有/没有
+  -- want: "min"=有(至少N层，只收 >/>=)；"max"=无(不足N层，只收 </<=)。
   -- 1.32.0 审计修复：反向 op（如 有debuff:x<3）语义会反转成 cnt>=3 的静默逻辑坑——降级为无层数限制
+  -- 注：本函数必须定义在下方各光环解析分支【之前】（Lua local 作用域从声明后开始）
   local function auraStack(body, want)
     local nm, op, n = string.match(body, "^(.-)([><]=?=?)(%d+)$")
     if not nm then return condTrim(body), nil end
@@ -1043,10 +1108,45 @@ function EVAL_PARSE_ONE(token)
     if op == ">" then n = n + 1 elseif op == "<=" then n = n + 1 end -- >N 即 >=N+1；<=N 即 <N+1
     return condTrim(nm), n
   end
+  local bs = string.match(token, "^无buff[:：](.+)$") or string.match(token, "^noBuff[:=](.+)$")
+  if bs then local nm, n = auraStack(bs, "max") return { k = "hasBuff", s = nm, n = n, v = false } end -- 1.54.0 合并为 hasBuff+v（旧 noBuff 词条仍认）；1.70.1 层数
+  local tb = string.match(token, "^目标buff[:：](.+)$") or string.match(token, "^tBuff[:=](.+)$") -- 1.54.0；1.70.1 层数
+  if tb then local nm, n = auraStack(tb, "min") return { k = "tBuff", s = nm, n = n, v = not neg } end
+  local tbn = string.match(token, "^无目标buff[:：](.+)$") or string.match(token, "^目标无buff[:：](.+)$")
+  if tbn then local nm, n = auraStack(tbn, "max") return { k = "tBuff", s = nm, n = n, v = false } end
+  local pd = string.match(token, "^自身debuff[:：](.+)$") or string.match(token, "^pDebuff[:=](.+)$")
+  if pd then local nm, n = auraStack(pd, "min") return { k = "pDebuff", s = nm, n = n, v = not neg } end
+  local pdn = string.match(token, "^无自身debuff[:：](.+)$") or string.match(token, "^自身无debuff[:：](.+)$")
+  if pdn then local nm, n = auraStack(pdn, "max") return { k = "pDebuff", s = nm, n = n, v = false } end
+  bs = string.match(token, "^有buff[:：](.+)$") or string.match(token, "^hasBuff[:=](.+)$")
+  if bs then local nm, n = auraStack(bs, "min") return { k = "hasBuff", s = nm, n = n } end
   bs = string.match(token, "^无debuff[:：](.+)$") or string.match(token, "^noDebuff[:=](.+)$")
   if bs then local nm, n = auraStack(bs, "max") return { k = "hasDebuff", s = nm, n = n, v = false } end -- 1.54.0 合并
   bs = string.match(token, "^有debuff[:：](.+)$") or string.match(token, "^hasDebuff[:=](.+)$")
   if bs then local nm, n = auraStack(bs, "min") return { k = "hasDebuff", s = nm, n = n } end
+  -- 1.70.28 目标类型（导入）：支持 目标类型:野兽/元素、目标类型非:元素、tCreature=beast
+  local tcr = string.match(token, "^目标类型非[:：](.+)$") or string.match(token, "^notcreature[:=](.+)$")
+  if tcr then
+    tcr = string.gsub(tcr, "、", "/") tcr = string.gsub(tcr, "，", "/")
+    local cs, any = {}, false
+    for nm in string.gmatch(tcr, "[^/,]+") do
+      local id = creatureTypeId(condTrim(nm))
+      if id then cs[id] = true any = true end
+    end
+    if any then return { k = "tCreature", cs = cs, v = false } end
+    return nil
+  end
+  local tcp = string.match(token, "^目标类型[:：](.+)$") or string.match(token, "^tCreature[:=](.+)$")
+  if tcp then
+    tcp = string.gsub(tcp, "、", "/") tcp = string.gsub(tcp, "，", "/")
+    local cs, any = {}, false
+    for nm in string.gmatch(tcp, "[^/,]+") do
+      local id = creatureTypeId(condTrim(nm))
+      if id then cs[id] = true any = true end
+    end
+    if any then return { k = "tCreature", cs = cs } end
+    return nil
+  end
   local tc = string.match(token, "^目标职业[:：](.+)$") or string.match(token, "^tClass[:=](.+)$")
   if tc then
     -- 分隔统一成 / 再切：顿号/中文逗号是多字节，直接进字符类会按字节误切汉字（如"猎"含 ，的字节）
@@ -1095,6 +1195,9 @@ function EVAL_PARSE_ONE(token)
   return nil
 end
 
+-- 测试直调：单条件求值（EVAL_RULE_RUN 会跳过「不在动作条」的技能，无法用于纯粹的条件断言）
+function EVAL_COND_EVAL(cd) return condOne(cd, nil, true) end
+
 function EVAL_PARSE_CONDS(str)
   local groups = {}
   for orPart in string.gmatch(str or "", "([^|]+)") do
@@ -1133,10 +1236,15 @@ function EVAL_COND_STR(cd)
   if k == "autoAttack" then return cd.v and "普攻" or "未普攻" end
   if k == "autoShot" then return cd.v and "自动射击" or "未自动射击" end -- 1.51.0
   if k == "wandShoot" then return cd.v and "魔杖射击" or "未魔杖射击" end
-  if k == "hasBuff" then return ((cd.v == false) and "无buff:" or "有buff:") .. tostring(cd.s) end -- 1.54.0 合并（旧 k=noBuff 走下一行兼容）
+  -- 1.70.1：四类光环检查统一附层数门槛（>=N / <N），与 hasDebuff 同语法
+  local function stkSuffix()
+    if type(cd.n) == "number" and cd.n > 1 then return ((cd.v == false) and "<" or ">=") .. cd.n end
+    return ""
+  end
+  if k == "hasBuff" then return ((cd.v == false) and "无buff:" or "有buff:") .. tostring(cd.s) .. stkSuffix() end -- 1.54.0 合并（旧 k=noBuff 走下一行兼容）
   if k == "noBuff" then return "无buff:" .. tostring(cd.s) end
-  if k == "tBuff" then return ((cd.v == false) and "无目标buff:" or "目标buff:") .. tostring(cd.s) end -- 1.54.0
-  if k == "pDebuff" then return ((cd.v == false) and "无自身debuff:" or "自身debuff:") .. tostring(cd.s) end -- 1.54.0
+  if k == "tBuff" then return ((cd.v == false) and "无目标buff:" or "目标buff:") .. tostring(cd.s) .. stkSuffix() end -- 1.54.0
+  if k == "pDebuff" then return ((cd.v == false) and "无自身debuff:" or "自身debuff:") .. tostring(cd.s) .. stkSuffix() end -- 1.54.0
   if k == "hasDebuff" then return ((cd.v == false) and "无debuff:" or "有debuff:") .. tostring(cd.s) .. ((type(cd.n) == "number" and cd.n > 1) and ((cd.v == false and "<" or ">=") .. cd.n) or "") end
   if k == "noDebuff" then return "无debuff:" .. tostring(cd.s) .. ((type(cd.n) == "number" and cd.n > 1) and ("<" .. cd.n) or "") end
   if k == "ready" then return cd.inv and "未就绪" or "就绪" end
@@ -1153,6 +1261,12 @@ if k == "immune" then return (cd.v == false and "未免疫:" or "免疫:") .. to
     local ns = {}
     for _, c in ipairs(CLASS_LIST) do if cd.cs and cd.cs[c.id] then table.insert(ns, c.name) end end
     return "目标职业:" .. (table.getn(ns) > 0 and table.concat(ns, "/") or "未选")
+  end
+  if k == "tCreature" then -- 1.70.28 目标类型（多选或关系 + 是/否）
+    local ns = {}
+    for _, c in ipairs(CREATURE_TYPES) do if cd.cs and cd.cs[c.id] then table.insert(ns, c.loc) end end
+    local body = (table.getn(ns) > 0 and table.concat(ns, "/") or "未选")
+    return ((cd.v == false) and "目标类型非:" or "目标类型:") .. body
   end
   return tostring(k)
 end
