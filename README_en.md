@@ -94,11 +94,21 @@
 
 ![Combat info UI and status info UI](preview/info.png)
 
-**Data search (Tab4)**: four search kinds — quest / item / mob·NPC / object; type to search (top 10 matches) → click a row for details (drop sources + rates, containers, vendors, related quests, the NPC that gives or ends a quest, item description), with unlimited drill-down; hover an item row for the in-game item tooltip
+**Toolbox (Tab3)**: merchant assistant (auto-repair equipment / auto-sell grey items / auto-buy and auto-discard specified items) + party & social (auto-confirm role check / hide guild member login notifications) + auto quest accept & turn-in + quest notification channel (off / self / say / party)
 
-![Data search](preview/dataset.png)
+![Toolbox](preview/tools.png)
 
-**Data search · map pinning and map annotations**: click the map icon at the end of a row to open the world map on that zone and pin the entity's spawn points (one entity, one colour); the "Map annotations (N)" control toggles 16 annotation categories (gathering nodes / town services) drawn live as the map changes
+**Data search (Tab4)**: four search kinds — quest / item / mob·NPC / object; type to search (top 10 matches); unlimited drill-down, and hovering an item row shows the in-game item tooltip
+
+**Data search · details and drill-down**: quest / item / mob details — objectives and description, start / end NPC, required items; every link can be clicked to drill further, and rows with coordinates carry a map icon at the end
+
+![Data search · quest details](preview/dataset_search.png)
+
+**Data search · map annotations**: the "Map annotations (N)" control = master toggle + category multi-select (16 categories: 5 gathering nodes + 11 town services, with all-on / all-off shortcuts); checked categories are drawn live as the map changes
+
+![Data search · map annotation categories](preview/dataset.png)
+
+**Data search · map pinning**: click the map icon at the end of a row to open the world map on that zone; hover a pin to see what it holds (e.g. a vein's container drop table)
 
 ![Data search · map pinning](preview/dataset_map.png)
 
