@@ -783,6 +783,17 @@ function EVAL_DS_TEST_STATE(k)
 end
 function EVAL_DS_PIN_TOOLTIP_LINES(info) return dsPinTooltipLines(info) end -- 测试直调（定义必须在本 local 之后——Lua local 作用域从声明后开始）
 
+-- 覆盖层的可诊断摘要（日志 / HUD / /eh ds 共用）。
+-- ★1.70.42 起因：用户实测「点定位后地图空白」，而这条链路上任何一个环节静默失败
+--   （loc 无效 / ShowAreas 切不过去 / 覆盖层 areaId 与当前视图不符 / 放置全失败）都无迹可查。
+local function dsOverlayStr()
+  local ov = dsAnnOverlay
+  if type(ov) ~= "table" then return "覆盖=无" end
+  local n = type(ov.pts) == "table" and table.getn(ov.pts) or 0
+  return "覆盖=" .. tostring(ov.name) .. "(areaId=" .. tostring(ov.areaId)
+    .. " " .. tostring(ov.kind) .. "#" .. tostring(ov.id) .. " " .. n .. "点)"
+end
+
 -- 搜索结果定位：不再自建钉子，改为记入「覆盖层」交给统一标注层绘制（1.70.19）。
 -- 旧实现有自己的 12 枚池 + 60s 自熄，表现为「切图不隐藏、只能等一分钟」——与用户要求的
 -- 「所有标注都和地图绑定」冲突。现在它只是统一层的一份额外数据：
@@ -802,6 +813,25 @@ local function dsSetOverlay(loc)
   return true
 end
 
+-- ===== 日志基础件（1.70.42 上移到这里）=====
+-- ★必须定义在 EVAL_DS_SHOWMAP（下方）**之前**：本项目已 11 次踩「Lua local 从声明语句之后
+--   才可见」的坑——1.70.42 首版把 dsLog 调用加进 SHOWMAP 而 dsLog 定义在 900 行之后，
+--   运行时读到全局 nil 直接 attempt to call a nil value（测试当场抓到）。
+-- ★dsLog 与 dsLogAlways 的分工（频率防护总则同样适用于日志）：
+--   · dsLog      = trace 门控：tick/心跳这类**高频或常态**路径，只在 /eh ds trace 期间记录。
+--   · dsLogAlways = 不门控：**用户点击驱动**（定位）或**异常才触发**（自愈/失败）的路径，
+--     天然低频，诊断价值高，不该要求用户「先开 trace 才能取证」。
+local dsTrace = false           -- 轨迹日志开关（/eh ds trace）
+local DS_TRACE_TTL = 600        -- trace 自动过期（秒）
+local dsTraceUntil = 0
+local function dsLog(msg)
+  if not dsTrace then return end
+  if type(EVAL_LOGLINE) == "function" then EVAL_LOGLINE("[DS] " .. tostring(msg)) end
+end
+local function dsLogAlways(msg)
+  if type(EVAL_LOGLINE) == "function" then EVAL_LOGLINE("[DS] " .. tostring(msg)) end
+end
+
 -- 打开世界地图并定位到 {x,y,zid} 并在地图上标注。
 -- 1.70.9 硬依赖简化：只走 UnrealQuest 的成熟链路（QuestClicks:RevealOnMap 同款），不再维护自实现副本——
 -- 本 Tab 的数据本就来自 UnrealQuestData，没有对方时整页只显示引导提示，故无需平行实现。
@@ -812,18 +842,37 @@ end
 --   3) MapContext:ParkView(areaId)      标记「有意移动」——否则冷启动 primer（登录后 zoneIndex 0 歧义态）会把视图拉回玩家所在地
 --   4) dsSetOverlay：把定位点记入标注层覆盖数据（绘制由统一标注层负责，见下方）
 function EVAL_DS_SHOWMAP(loc)
-  if type(loc) ~= "table" or type(loc.zid) ~= "number" then return false end
+  if type(loc) ~= "table" or type(loc.zid) ~= "number" then
+    dsLogAlways("定位失败：loc 无效 type=" .. type(loc) .. " zid=" .. tostring(type(loc) == "table" and loc.zid or nil))
+    return false
+  end
+  -- ★1.70.42 全链路日志（用户实测「点定位后地图空白」，逐段留痕）：本条链路是**用户点击驱动**，
+  --   频率天然受限（人一秒点不了几次），不适用 tick 类日志的频率防护降频。
+  dsLogAlways("定位开始：" .. tostring(loc.name) .. " kind=" .. tostring(loc.kind) .. " id=" .. tostring(loc.id)
+    .. " zid=" .. tostring(loc.zid) .. " x=" .. tostring(loc.x) .. " y=" .. tostring(loc.y)
+    .. " pts=" .. tostring(type(loc.pts) == "table" and table.getn(loc.pts) or 0))
   local client = dsUQClient()
   local mc = dsUQModule("MapContext")
-  if not client or not mc or type(mc.ShowAreas) ~= "function" then return false end
+  if not client or not mc or type(mc.ShowAreas) ~= "function" then
+    dsLogAlways("定位失败：UnrealQuest 的 Client/MapContext 不可用")
+    return false
+  end
   if type(client.OpenWorldMap) == "function" then pcall(client.OpenWorldMap) end
   local ok, shown, how = pcall(mc.ShowAreas, mc, { loc.zid })
-  if not ok or shown == nil then return false end -- 该区域这张图上列不出来（对方也切不过去）
+  dsLogAlways("ShowAreas(zid=" .. tostring(loc.zid) .. ") → ok=" .. tostring(ok) .. " shown=" .. tostring(shown) .. " how=" .. tostring(how))
+  if not ok or shown == nil then
+    dsLogAlways("定位失败：该区域在这张图上列不出来（对方也切不过去），未记覆盖层")
+    return false
+  end
   if how == "switched" and type(mc.ParkView) == "function" then
     pcall(mc.ParkView, mc, shown) -- 顺序同 QuestClicks：必须在重绘前 park
+    dsLogAlways("ParkView → " .. tostring(shown))
   end
   dsSetOverlay(loc)   -- 记入覆盖层，由统一标注层负责绘制（含地图绑定）
-  EVAL_DS_ANN_REFRESH()
+  dsLogAlways(dsOverlayStr())
+  local n = EVAL_DS_ANN_REFRESH()
+  dsLogAlways("定位后重绘 共 " .. tostring(n) .. " 点（失败 " .. tostring(dsAnnLastFail) .. "）"
+    .. (dsAnnPlaceLog and (" " .. dsAnnPlaceLog) or ""))
   return true
 end
 
@@ -883,14 +932,7 @@ end
 --   · 每次重绘都是「清空整层 → 按当前地图重建」，天然满足「切走隐藏、切回重建」。
 --   · 跨地图条目：定位时用条目自己的 areaId 打开对应地图（方案 A，与 UnrealQuest 一致）。
 
--- ===== 共享基础件（必须定义在标注层之前：Lua local 从声明语句之后才可见）=====
-local dsTrace = false           -- 轨迹日志开关（/eh ds trace）
-local DS_TRACE_TTL = 600        -- trace 自动过期（秒）
-local dsTraceUntil = 0
-local function dsLog(msg)
-  if not dsTrace then return end
-  if type(EVAL_LOGLINE) == "function" then EVAL_LOGLINE("[DS] " .. tostring(msg)) end
-end
+-- ===== 共享基础件（日志件已上移到 EVAL_DS_SHOWMAP 之前，1.70.42）=====
 
 -- WorldMapFrame:IsShown() 在本客户端【两个方向都不可靠】，禁止用它做逻辑判断（1.70.17 定案）：
 --   ClientAPI.lua:8664「do not reliably reflect this client's fullscreen presentation」
@@ -916,6 +958,18 @@ local DS_ANN_MAX = 500        -- 单区域上限（用户实测反馈：200 太�
 local dsAnnTick, dsAnnHb, dsAnnSameT = 0, 0, 0
 -- ★ 1.70.40：dsAnnForcedT / dsAnnSlowT / dsAnnCandSig / dsAnnCandT 已随三件套一起删除。
 --   重绘时机现在只由「签名是否变化」决定，不再有额外的计时状态。
+-- ★1.70.42 自愈机制的两个状态（用户实测「点定位后地图空白」）：
+--   dsAnnLastDrawn = 上次绘制**打算**放几个点（含放置失败的）；dsAnnHealT = 上次自愈时刻。
+--   语义与已删除的三件套不同：它**先校验再修复**——只有「上次该画出点、此刻却一个都
+--   不可见」才重画一次（2s 节流），正常情况（该画 0 点 / 钉子都在）完全不出手。
+local dsAnnLastDrawn = 0
+local dsAnnHealT = 0
+local dsAnnLastFail = 0    -- 上次绘制中放置失败的点数（诚实放置 1.70.35：失败即 Hide）
+local dsAnnPlaceLog = nil  -- 上次绘制中首个失败点的信息（诊断用，最多记一条）
+-- ★1.70.42 绘制次数计数器：断言「到底有没有重建」时，不能拿「有没有查库」当代理——
+--   空结果场景下即使重建也不会查库，于是变异体（去掉 lastDrawn 门控）会静默存活。
+--   要保的性质是「重建发生了吗」，就必须直接数重建。
+local dsAnnDrawCount = 0
 local dsAnnTruncated = false   -- 本次绘制是否触顶（用于诊断/提示，避免静默截断）
 local dsTestEmptyResults = nil -- 测试专用：令分类层查询返回空集，用于构造「0 点重绘」
 
@@ -977,6 +1031,7 @@ end
 local function dsAnnHideAll()
   dsAnnHidePins()
   dsAnnSig = nil
+  dsAnnLastDrawn = 0 -- 层已收：自愈机制不得再拿旧的「打算画 N 点」去救一个已清空的层
   dsAnnShown = {}
 end
 
@@ -1144,12 +1199,14 @@ end
 
 -- 重绘整层：清空 → 取当前地图数据 → 按开启的类别铺点 → 叠加搜索结果定位
 local function dsAnnDraw(areaId)
+  dsAnnDrawCount = dsAnnDrawCount + 1
   local client = dsUQClient()
   local dbMod = dsUQModule("Database")
   dsAnnHidePins() -- 只清钉子，不动签名（调用方已设好）
-  if not (client and dbMod) then return 0 end
+  dsAnnLastFail = 0 dsAnnPlaceLog = nil -- 本次绘制的失败计数从零起算
+  if not (client and dbMod) then dsAnnLastDrawn = 0 return 0 end
   if type(client.CreateWorldMapPin) ~= "function" or type(client.PositionWorldMapPin) ~= "function" then
-    return 0
+    dsAnnLastDrawn = 0 return 0
   end
 
   local idx = 0
@@ -1174,6 +1231,11 @@ local function dsAnnDraw(areaId)
           -- 分类层：有专属图标就用图标（含草药/矿脉的单物件美术），没有才退回圆点+类别色
           if dsAnnPlace(client, idx, info, col[1], col[2], col[3], dsAnnIconFor(l)) then
             counts[l.category] = (counts[l.category] or 0) + 1
+          else
+            dsAnnLastFail = dsAnnLastFail + 1
+            if not dsAnnPlaceLog then
+              dsAnnPlaceLog = "放置失败 例:" .. tostring(l.name) .. " (" .. tostring(l.x) .. "," .. tostring(l.y) .. ")"
+            end
           end
         end
       end
@@ -1198,7 +1260,12 @@ local function dsAnnDraw(areaId)
         --   颜色由实体 id 派生（dsEntityColor）→ 同一只怪恒定同色、不同怪颜色不同，
         --   重绘/切图回来都不会变色（若每次现摇随机，颜色会不停跳，反而没法靠颜色认怪）。
         local cr, cg, cb = dsEntityColor(ov.id)
-        dsAnnPlace(client, idx, info, cr, cg, cb, nil)
+        if not dsAnnPlace(client, idx, info, cr, cg, cb, nil) then
+          dsAnnLastFail = dsAnnLastFail + 1
+          if not dsAnnPlaceLog then
+            dsAnnPlaceLog = "覆盖层放置失败 例:" .. tostring(ov.name) .. " (" .. tostring(p.x) .. "," .. tostring(p.y) .. ")"
+          end
+        end
       end
     end
   end
@@ -1213,6 +1280,7 @@ local function dsAnnDraw(areaId)
   else
     dsAnnTruncated = false
   end
+  dsAnnLastDrawn = idx -- 本次**打算**放的点数（含放置失败）——自愈机制靠它区分「该画没画」与「本来就 0 点」
   return idx
 end
 
@@ -1434,6 +1502,21 @@ local function dsAnnTickFn()
   --   一句话：它们的成立前提都在 1.70.39 修好 tick 父级之后失效了，而闸门反而成了
   --   「切图不更新」的主因（连续切图时每一次都判「未稳定」→ 一次都不重绘）。
   if sig == dsAnnSig then
+    -- ★★★1.70.42 自愈（用户实测「点定位后地图空白」）：上次绘制**打算**画出点
+    --   （dsAnnLastDrawn>0），但此刻一个都不可见 → 绘制发生在「画布尚未就绪」的瞬间
+    --   （点击定位刚开图时最常见），诚实放置（1.70.35）把钉子全部 Hide，而签名没变
+    --   → 永远不会再画 → 空地图。这与 1.70.40 删掉的三件套**本质不同**：
+    --     · 它是「先校验再修复」（打算画 >0 且可见 =0 才出手），不校验的机制才会空转；
+    --     · 2s 节流 + 每次出手都留日志（触发即证据，不触发则零开销零噪音）。
+    --   ★反过来也成立：该区域本来就 0 点（lastDrawn=0）时绝不出手，不会每 2s 白查一次库。
+    if dsAnnLastDrawn > 0 and dsAnnShownCount() == 0 and now - dsAnnHealT >= 2 then
+      dsAnnHealT = now
+      local nh = dsAnnDraw(areaId)
+      dsLogAlways("自愈重绘 map=" .. tostring(areaId) .. " 打算 " .. tostring(dsAnnLastDrawn) .. " 点全部不可见 → 重画 "
+        .. tostring(nh) .. " 点（失败 " .. tostring(dsAnnLastFail) .. "）"
+        .. (dsAnnPlaceLog and (" " .. dsAnnPlaceLog) or ""))
+      return
+    end
     -- 视图没变：什么都不做（每 tick 一次比较，成本可忽略）。
     -- 「未变」是常态，按频率防护降频记录，避免刷爆 300 条环形缓冲。
     if now - dsAnnSameT >= 10 then
@@ -1449,9 +1532,7 @@ local function dsAnnTickFn()
   --   用户明确选择 A：每张图都画，中间态闪一下可接受。
   dsLog("视图变化 map=" .. tostring(dsAnnSig) .. " → " .. tostring(sig))
   dsAnnSig = sig -- 先记签名再画：避免绘制中途出错时每 tick 反复重建
-  local n = dsAnnDraw(areaId)
-  dsAnnSig = sig -- 先记签名再画：避免绘制中途出错时每 tick 反复重建
-  local n = dsAnnDraw(areaId)
+  local n = dsAnnDraw(areaId) -- ★1.70.42 删掉 1.70.40 补丁残留的重复一对（原来每次切图画两遍）
   -- ★1.70.36 先观测、不拦截：把「画布贴图」和「它与上报区域是否一致」记进日志。
   --   等看到真实取值后，再决定是否用它作为「拒绝重绘」的依据。
   --   直接拦截的风险：若该客户端根本不暴露可用的贴图路径，守卫会拒绝一切重绘 → 功能全废。
@@ -1465,7 +1546,8 @@ local function dsAnnTickFn()
     local ag = dsCanvasAgrees(rep and rep.mapFile)
     agreeTxt = (ag == nil) and "无法判定" or (ag and "一致" or "★不一致")
   end
-  dsLog("重绘 map=" .. tostring(areaId) .. " 共 " .. n .. " 点：" .. dsAnnSummary()
+  dsLog("重绘 map=" .. tostring(areaId) .. " 打算 " .. n .. " 点，可见 " .. tostring(dsAnnShownCount())
+    .. "，失败 " .. tostring(dsAnnLastFail) .. "：" .. dsAnnSummary() .. " " .. dsOverlayStr()
     .. dsViewReportStr(mc) .. " 画布贴图=" .. tostring(dsCanvasTex()) .. " 校验=" .. agreeTxt
     .. " GetMapInfo=" .. dsMapSizeStr())
 end
@@ -1529,13 +1611,26 @@ function EVAL_DS_ANN_STATS() return dsAnnShown, table.getn(dsAnnPins), dsAnnSig 
 function EVAL_DS_ANN_REFRESH()
   if not dsAnnOn then
     dsAnnHideAll()
-    if type(dsAnnOverlay) ~= "table" then return 0 end
+    if type(dsAnnOverlay) ~= "table" then
+      dsLogAlways("强制重绘：层已关且无覆盖层 → 收起") -- 1.70.42 诊断留痕
+      return 0
+    end
   end
   local mc = dsUQModule("MapContext")
   local sig, areaId = dsViewSig(mc)
-  if not areaId then dsAnnHideAll() return 0 end
+  if not areaId then
+    dsAnnHideAll()
+    dsLogAlways("强制重绘：当前无视图（GetViewedZone 返回 nil）→ 收起") -- 1.70.42：开图瞬间客户端状态可能还没跟上
+    return 0
+  end
   dsAnnSig = sig -- 存的是「视图签名」而不是裸 areaId（关图再开同图必须能触发重绘）
-  return dsAnnDraw(areaId)
+  local n = dsAnnDraw(areaId)
+  -- ★1.70.42 留痕：含「打算画/实际可见/失败」三元组——「信号都说健康、屏幕却是空的」
+  --   的唯一区分办法就是这三个数并排打出来（1.70.35 教训的延续）。
+  dsLogAlways("强制重绘 map=" .. tostring(areaId) .. " 打算 " .. tostring(n) .. " 点，可见 "
+    .. tostring(dsAnnShownCount()) .. "，失败 " .. tostring(dsAnnLastFail)
+    .. "：" .. dsAnnSummary() .. " " .. dsOverlayStr() .. dsViewReportStr(mc))
+  return n
 end
 
 -- 清除「搜索结果定位」覆盖层（1.70.23：原「清理标注」按钮按用户要求删除，能力收进下拉）。
@@ -1681,7 +1776,8 @@ dsHudTick = function(areaId, sig)
     "GetMapInfo=" .. dsMapSizeStr(),
     "已画签名=" .. fv(dsAnnSig) .. "  池=" .. table.getn(dsAnnPins) .. " 可见=" .. dsAnnShownCount(),
     "本次显示=" .. dsAnnSummary(),
-    "本次区域=" .. fv(areaId) .. "  已画=" .. tostring(dsAnnSig ~= nil),
+    "打算画=" .. tostring(dsAnnLastDrawn) .. " 失败=" .. tostring(dsAnnLastFail) .. " 已画=" .. tostring(dsAnnSig ~= nil),
+    dsOverlayStr(),
     "图层=" .. tostring(dsAnnOn) .. " 随机点=" .. tostring(dsRndOn),
   }
   local text = table.concat(lines, "\n")
@@ -1798,7 +1894,10 @@ function EVAL_DS_SNAP()
   add("=== DS SNAP ===")
   add("图层=" .. tostring(dsAnnOn) .. " trace=" .. tostring(dsTrace)
     .. " 已绘签名=" .. tostring(dsAnnSig))
-  add("钉子池=" .. tostring(table.getn(dsAnnPins)) .. " 可见=" .. tostring(dsAnnShownCount()))
+  add("钉子池=" .. tostring(table.getn(dsAnnPins)) .. " 可见=" .. tostring(dsAnnShownCount())
+    .. " 打算画=" .. tostring(dsAnnLastDrawn) .. " 失败=" .. tostring(dsAnnLastFail))
+  add(dsOverlayStr()) -- 1.70.42：覆盖层是「点定位后地图空白」排障的第一现场
+  if dsAnnPlaceLog then add("放置失败详情: " .. dsAnnPlaceLog) end
   -- 客户端报告的视图
   if mc and type(mc.GetViewedZone) == "function" then
     local ok, a, rep, how = pcall(mc.GetViewedZone, mc)
@@ -2152,10 +2251,13 @@ function EVAL_DS_TEST_RESET_PINS()
   dsAnnPins = {}
   dsAnnSig = nil
   dsAnnShown = {}
+  dsAnnLastDrawn = 0 dsAnnHealT = 0 dsAnnLastFail = 0 dsAnnPlaceLog = nil -- 1.70.42 自愈状态同样是模块级残留
+  dsAnnDrawCount = 0 -- 绘制计数器同样是模块级残留
   -- ★稳定期闸门的候选状态也必须重置：它同样是模块级状态，会跨用例残留。
   --   若不清，新用例的签名可能恰好等于上个用例留下的候选 → 闸门被误判为「已稳定」，
   --   用例就会以误导的方式失败（与钉子池残留同一个坑，见 1.70.32/1.70.37）。
 end
+function EVAL_DS_TEST_DRAW_COUNT() return dsAnnDrawCount end -- 直读「重建发生了几次」
 function EVAL_DS_TEST_ALL_PINS_HIDDEN() -- 池内钉子是否全部处于隐藏态（用户可见契约）
   for _, f in ipairs(dsAnnPins) do
     if type(f.IsShown) == "function" and f:IsShown() then return false end

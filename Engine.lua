@@ -1059,13 +1059,28 @@ local COND_BOOL = {
   ["战斗中"] = { "combat", true }, ["非战斗"] = { "combat", false }, ["combat"] = { "combat", true },
   ["目标存在"] = { "hasTarget", true }, ["有目标"] = { "hasTarget", true }, ["无目标"] = { "hasTarget", false }, ["hasTarget"] = { "hasTarget", true },
   ["可攻击"] = { "canAttack", true }, ["canAttack"] = { "canAttack", true },
+  -- ★★★1.70.43 往返一致性的核心修复：以下 8 条「取反写法」**导出侧一直在写、解析侧一直没有**
+  --   （EVAL_COND_STR 第 1224~1232 行会输出 不可攻击/不可流血/非精英/非Boss/目标非战斗/非友善/非敌对/非中立），
+  --   而 EVAL_PARSE_ONE 只认 COND_BOOL 里已有的键 + 感叹号前缀 → 这些写法解析为 nil
+  --   → EVAL_PARSE_CONDS 只 push 非 nil → **条件被静默丢弃**（用户看不到任何报错）。
+  --   影响：任何用到这些条件的方案，一旦「导出→导入」或经案例模版导入，条件就消失。
+  --   ★教训：序列化器的输出域必须用一条「导出→导入」往返断言锁死（见 test 组 59），
+  --     否则两侧各自演化，缺口只会在用户数据里静默出现。
+  ["不可攻击"] = { "canAttack", false },
   ["可流血"] = { "canBleed", true }, ["canBleed"] = { "canBleed", true },
+  ["不可流血"] = { "canBleed", false },
   ["精英"] = { "isElite", true }, ["isElite"] = { "isElite", true },
+  ["非精英"] = { "isElite", false },
   ["Boss"] = { "isBoss", true }, ["首领"] = { "isBoss", true }, ["isBoss"] = { "isBoss", true },
+  ["非Boss"] = { "isBoss", false }, ["非首领"] = { "isBoss", false },
   ["目标战斗中"] = { "tInCombat", true }, ["tInCombat"] = { "tInCombat", true },
+  ["目标非战斗"] = { "tInCombat", false },
   ["目标友善"] = { "tFriendly", true }, ["友善"] = { "tFriendly", true }, ["tFriendly"] = { "tFriendly", true },
+  ["非友善"] = { "tFriendly", false },
   ["目标敌对"] = { "tHostile", true }, ["敌对"] = { "tHostile", true }, ["tHostile"] = { "tHostile", true },
+  ["非敌对"] = { "tHostile", false },
   ["目标中立"] = { "tNeutral", true }, ["中立"] = { "tNeutral", true }, ["tNeutral"] = { "tNeutral", true },
+  ["非中立"] = { "tNeutral", false },
   ["Alt"] = { "alt", true }, ["alt"] = { "alt", true },
   ["Shift"] = { "shift", true }, ["shift"] = { "shift", true },
   ["Ctrl"] = { "ctrl", true }, ["ctrl"] = { "ctrl", true },
@@ -1080,6 +1095,14 @@ local COND_FLAG = {
   ["就绪"] = "ready", ["ready"] = "ready",
   ["可用"] = "usable", ["usable"] = "usable",
   ["未排队"] = "notQueued", ["notQueued"] = "notQueued",
+}
+-- ★1.70.43 反向 flag 单独一张表：COND_FLAG 的值只是「键名」，表达不了 inv 语义。
+--   导出侧（EVAL_COND_STR 第 1250~1252 行）会写 未就绪 / 不可用 / 已排队，
+--   而这三个此前不在任何表里 → 导入同样被静默丢弃。与上面 8 条是同一个缺口的两半。
+local COND_FLAG_INV = {
+  ["未就绪"] = "ready", ["notready"] = "ready",
+  ["不可用"] = "usable", ["notusable"] = "usable",
+  ["已排队"] = "notQueued", ["queued"] = "notQueued",
 }
 
 function EVAL_PARSE_ONE(token)
@@ -1192,6 +1215,9 @@ function EVAL_PARSE_ONE(token)
   if b then local vv = b[2] if neg then vv = not vv end return { k = b[1], v = vv } end
   local fl = COND_FLAG[token]
   if fl then return { k = fl, inv = neg } end
+  -- ★1.70.43 反向 flag（未就绪/不可用/已排队）：inv 恒为 true；「!未就绪」= 双重取反 = 就绪
+  local fli = COND_FLAG_INV[token]
+  if fli then return { k = fli, inv = not neg } end
   return nil
 end
 

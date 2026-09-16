@@ -2307,4 +2307,197 @@ do
   UnrealQuest = savedUQ11
 end
 
+
+-- 58) ★★★ 1.70.42 自愈：上次绘制「打算画 N 点」但一个都不可见 → 必须重画（用户实测「点定位后地图空白」）
+-- 根因候选：点击定位 → OpenWorldMap → 立即 REFRESH，画布尚未就绪 → 诚实放置把钉子全部 Hide
+--   → 签名没变 → tick 认为「画过了」→ 永远不再画 → 空地图。
+-- 与已删除的三件套的区别：先校验再修复（lastDrawn>0 且 shown==0 才出手）+ 2s 节流 + 出手必留日志。
+do
+  local savedUQ12 = UnrealQuest
+  local queried = {}
+  UnrealQuest = {
+    Client = {
+      CreateWorldMapPin = function() local f={_s=false}
+        f.Show=function(t) t._s=true end f.Hide=function(t) t._s=false end
+        f.IsShown=function(t) return t._s end return f end,
+      PositionWorldMapPin = function() return true end,
+      SetWorldMapPinSize = function() end, SetWorldMapPinTexture = function() end,
+      SetWorldMapPinColor = function() end, SetWorldMapPinHandlers = function() end,
+    },
+    GetModule = function(_, name)
+      if name == "Database" then
+        return { GetAreaServiceLocations = function(_, areaId)
+          table.insert(queried, areaId)
+          return { { category = "herbs", x = 40, y = 50, areaId = areaId, sourceType = "object", sourceId = 1618, name = "宁神花" } }
+        end }
+      end
+      if name == "MapContext" then
+        return { GetViewedZone = function()
+          if TEST.viewArea == false then return nil, nil, "continentView" end
+          return TEST.viewArea or 14, TEST.viewReport
+        end }
+      end
+      return nil
+    end,
+  }
+  local cats58 = {}
+  for _, d in ipairs(EVAL_DS_ANN_CAT_LIST()) do cats58[d.k] = false end
+  cats58.herbs = true
+  EVAL_HELP_CONFIG.ds = { cats = cats58, trace = false }
+  EVAL_DS_RESTORE()
+  EVAL_DS_TEST_RESET_PINS()
+  EVAL_HELP_CONFIG.cfgTab = 4
+  EVAL_DS_BUILD_FOR_TEST()
+  TEST.viewArea = 14
+  TEST.viewReport = { mapFile = "Durotar", continent = 1, zoneIndex = 1 }
+  -- 58a) 正常绘制 → 有钉子可见
+  EVAL_DS_NODE_TICK_FOR_TEST()
+  eq(EVAL_DS_TEST_SHOWN_COUNT() > 0, true, "precondition: pins drawn and visible")
+  -- 58b) ★模拟「钉子被清掉但签名未变」（画布未就绪的后果）→ 下一次 tick 必须自愈重画
+  EVAL_DS_TEST_WIPE_PINS()
+  eq(EVAL_DS_TEST_SHOWN_COUNT(), 0, "precondition: pins wiped, nothing visible")
+  TEST.time = (TEST.time or 0) + 3
+  queried = {}
+  local drawsBefore = EVAL_DS_TEST_DRAW_COUNT()
+  EVAL_DS_NODE_TICK_FOR_TEST()
+  eq(EVAL_DS_TEST_DRAW_COUNT() > drawsBefore, true, "★★★an invisible-but-intended layer IS rebuilt by the self-heal")
+  eq(table.getn(queried) >= 1, true, "★★★an invisible-but-intended layer is re-drawn by the self-heal")
+  eq(EVAL_DS_TEST_SHOWN_COUNT() > 0, true, "★pins are back on screen after the heal")
+  -- 58b2) ★★★ 节流：自愈刚出手过，再次被清也不能立刻又出手（否则每 tick 重建 = 频率防护回归）
+  EVAL_DS_TEST_WIPE_PINS()
+  queried = {}
+  local drawsT = EVAL_DS_TEST_DRAW_COUNT()
+  EVAL_DS_NODE_TICK_FOR_TEST() -- 时钟未推进（<2s）→ 不得重建
+  eq(EVAL_DS_TEST_DRAW_COUNT() == drawsT, true, "★★★the heal is throttled: NO rebuild within the 2s window")
+  eq(table.getn(queried), 0, "★★★the heal is throttled (no rebuild within the 2s window)")
+  -- 推进时钟后才允许再出手
+  TEST.time = (TEST.time or 0) + 3
+  queried = {}
+  EVAL_DS_NODE_TICK_FOR_TEST()
+  eq(table.getn(queried) >= 1, true, "★and it heals again once the window has passed")
+
+  -- 58c) ★反向门控：该区域本来就 0 点（lastDrawn=0）→ 绝不出手（频率防护）
+  EVAL_DS_TEST_SET_EMPTY_RESULTS(true)
+  EVAL_DS_TEST_RESET_PINS()
+  TEST.viewArea = 17
+  TEST.viewReport = { mapFile = "Barrens", continent = 1, zoneIndex = 3 }
+  EVAL_DS_NODE_TICK_FOR_TEST() -- 签名变了 → 重绘，但查询为空 → lastDrawn=0
+  EVAL_DS_TEST_WIPE_PINS() -- 池里本就没东西，等于无操作
+  TEST.time = (TEST.time or 0) + 3
+  queried = {}
+  local drawsE = EVAL_DS_TEST_DRAW_COUNT()
+  EVAL_DS_NODE_TICK_FOR_TEST()
+  eq(EVAL_DS_TEST_DRAW_COUNT() == drawsE, true, "★★★an intentionally-empty layer is NEVER rebuilt (no 2s churn)")
+  eq(table.getn(queried), 0, "★★★an intentionally-empty layer is NEVER healed (no 2s churn)")
+  EVAL_DS_TEST_SET_EMPTY_RESULTS(false)
+  TEST.viewArea = 14
+  TEST.viewReport = { mapFile = "Durotar", continent = 1, zoneIndex = 1 }
+  UnrealQuest = savedUQ12
+  EVAL_HELP_CONFIG.ds = nil
+  for _, d in ipairs(EVAL_DS_ANN_CAT_LIST()) do EVAL_DS_SET_CAT(d.k, false) end
+end
+
+
+-- 59) ★★★ 导出/导入往返一致性：EVAL_COND_STR 写出的每一种写法，
+--   EVAL_PARSE_ONE 都必须能读回来。
+-- ★为什么：导入解析器对认不出的条件是**静默丢弃**（EVAL_PARSE_CONDS 只 push 非 nil 的），
+--   所以「导出→导入」一轮就会吞掉条件，而用户看不到任何报错。
+--   本组用「遍历全部条件类型」的方式自动列出所有不对称，而不是我手写几个病例。
+do
+  local cases = {
+    { k = "combat", v = true }, { k = "combat", v = false },
+    { k = "hasTarget", v = true }, { k = "hasTarget", v = false },
+    { k = "canAttack", v = true }, { k = "canAttack", v = false },
+    { k = "canBleed", v = true }, { k = "canBleed", v = false },
+    { k = "isElite", v = true }, { k = "isElite", v = false },
+    { k = "isBoss", v = true }, { k = "isBoss", v = false },
+    { k = "tInCombat", v = true }, { k = "tInCombat", v = false },
+    { k = "tFriendly", v = true }, { k = "tFriendly", v = false },
+    { k = "tHostile", v = true }, { k = "tHostile", v = false },
+    { k = "tNeutral", v = true }, { k = "tNeutral", v = false },
+    { k = "autoAttack", v = true }, { k = "autoAttack", v = false },
+    { k = "autoShot", v = true }, { k = "autoShot", v = false },
+    { k = "wandShoot", v = true }, { k = "wandShoot", v = false },
+    { k = "alt", v = true }, { k = "alt", v = false },
+    { k = "shift", v = true }, { k = "shift", v = false },
+    { k = "ctrl", v = true }, { k = "ctrl", v = false },
+    { k = "ready", inv = false }, { k = "ready", inv = true },
+    { k = "usable", inv = false }, { k = "usable", inv = true },
+    { k = "notQueued", inv = false }, { k = "notQueued", inv = true },
+  }
+  local bad = {}
+  for _, cd in ipairs(cases) do
+    local s = EVAL_COND_STR(cd)
+    local back = EVAL_PARSE_ONE(s)
+    local ok = (back ~= nil) and (back.k == cd.k)
+    if ok and cd.v ~= nil then ok = (back.v == cd.v) end
+    if ok and cd.inv ~= nil then ok = (back.inv == cd.inv) end
+    if not ok then
+      table.insert(bad, s .. " -> " .. (back and (tostring(back.k) .. " v=" .. tostring(back.v)) or "nil(被静默丢弃)"))
+    end
+  end
+  if table.getn(bad) > 0 then
+    for _, b in ipairs(bad) do print("  往返不对称: " .. b) end
+  end
+  eq(table.getn(bad), 0, "★★★every exported condition string parses back (no silent drops), broken=" .. table.getn(bad))
+end
+
+
+-- 60) ★★★ 模版库健康检查：每一个模版的 text 都必须能被导入器解析。
+-- ★为什么需要：模版文本在**加载期不会被解析**，所以写错（拼接写成未定义变量/条件写法不合法）
+--   不会在 luacheck 或启动时报错，只会在用户点「导入」那一刻才失败——而且条件丢失是静默的。
+do
+  eq(type(EVAL_IO_TEMPLATES) == "table", true, "the template library exists")
+  local groups, total, bad = 0, 0, {}
+  for _, g in ipairs(EVAL_IO_TEMPLATES) do
+    groups = groups + 1
+    for _, tpl in ipairs(g.list or {}) do
+      total = total + 1
+      local prof, err = EVAL_PROFILE_FROM_TEXT(tpl.text or "")
+      if not prof then
+        table.insert(bad, tostring(g.cls) .. "/" .. tostring(tpl.name) .. ": " .. tostring(err))
+      elseif table.getn(prof.skills) == 0 then
+        table.insert(bad, tostring(g.cls) .. "/" .. tostring(tpl.name) .. ": 解析出 0 个技能")
+      end
+    end
+  end
+  if table.getn(bad) > 0 then for _, b in ipairs(bad) do print("  模版解析失败: " .. b) end end
+  eq(table.getn(bad), 0, "★★★every template parses through the importer, broken=" .. table.getn(bad))
+  eq(total >= 5, true, "★the library has all groups (" .. groups .. " groups / " .. total .. " templates)")
+
+  -- ★猎人组（1.70.43 用户要求新增）：逐条验证内容，而不只是「能解析」
+  local hunter = nil
+  for _, g in ipairs(EVAL_IO_TEMPLATES) do if g.cls == "猎人" then hunter = g break end end
+  eq(hunter ~= nil, true, "★★★a 猎人 (hunter) template group exists")
+  -- ★★★ 独立钉住「无条件技能行不得被静默丢弃」（不依赖上面那个模版是否写了竖线）
+  do
+    local prof = EVAL_PROFILE_FROM_TEXT("- 宠物:攻击")
+    eq(prof ~= nil, true, "★a bare skill line still parses")
+    if prof then
+      eq(table.getn(prof.skills), 1, "★★★a skill line WITHOUT a pipe is kept (was silently dropped)")
+      eq(prof.skills[1].skill, "宠物:攻击", "★and the skill name is intact")
+      eq(table.getn(prof.skills[1].groups), 0, "★with an empty condition list")
+    end
+  end
+  if hunter then
+    local prof = EVAL_PROFILE_FROM_TEXT(hunter.list[1].text)
+    eq(prof ~= nil, true, "★the hunter template parses")
+    if prof then
+      eq(table.getn(prof.skills), 6, "★猎人模版有 6 条技能（照拄用户截图）")
+      local s1 = prof.skills[1]
+      eq(s1.skill, "选取目标:最近敌人", "★first rule picks the nearest enemy")
+      eq(table.getn(s1.groups), 2, "★★★the OR pair survived: 2 groups")
+      eq(s1.groups[1][1].k, "canAttack", "★group1 is the canAttack condition")
+      eq(s1.groups[1][1].v, false, "★★★and it is the NEGATED form - not silently dropped")
+      eq(s1.groups[2][1].k, "tFriendly", "★group2 is the friendly condition")
+      eq(s1.groups[2][1].v, true, "★and it is the positive form")
+      eq(prof.skills[4].skill, "宠物:攻击", "★the pet-attack row is present as a bare skill")
+      eq(table.getn(prof.skills[4].groups), 0, "★and it carries no conditions")
+      eq(prof.skills[3].skill, "毒蛇钉刺", "★the serpent sting row is present")
+      eq(table.getn(prof.skills[3].groups), 1, "★it has a single AND group")
+      eq(table.getn(prof.skills[3].groups[1]), 3, "★★★with all 3 conditions kept (no silent drops)")
+    end
+  end
+end
+
 print("ALL TESTS PASS")
