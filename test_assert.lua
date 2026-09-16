@@ -692,7 +692,7 @@ TEST.itemInfo = { ["灰色破剑"] = { t = "武器", st = "单手剑" } } -- 1.6
 TEST.usedItem = nil TEST.repaired = nil TEST.bought = nil TEST.sellCalls = 0 TEST.chat = nil
 TEST.time = 3000 TEST.consumeOnUse = true
 local function tbPump(n, t0)
-  for i = 1, n do TEST.time = t0 + i * 0.4 EVAL_TB_PUMP() end
+  for i = 1, n do TEST.time = t0 + i * 0.4 EVAL_TB_TICK() end -- 1.69.2 走真实 OnUpdate 本体（含任务延迟扫描）
 end
 EVAL_TB_ONEVENT("MERCHANT_SHOW")
 eq(TEST.repaired, true, "tb auto repair")
@@ -763,6 +763,8 @@ EVAL_HELP_CONFIG.tb = { qchan = "party" }
 TEST.runScripts = nil
 TEST.questLog = { { title = "收集狼皮", objs = { { txt = "森林狼皮: 0/5", d = 0, m = 5 } } } }
 TEST.time = 6000 EVAL_TB_ONEVENT("QUEST_LOG_UPDATE") -- 首次建档不刷屏
+eq(TEST.runScripts, nil, "event only schedules, no sync scan (1.69.2)")
+tbPump(1, 6000) -- 到点（+0.3s 延迟）才扫描建档
 eq(TEST.runScripts, nil, "first scan initializes silently")
 TEST.questLog[1].objs[1].d = 1 TEST.questLog[1].objs[1].txt = "森林狼皮: 1/5"
 TEST.time = 6001 EVAL_TB_ONEVENT("QUEST_LOG_UPDATE")
@@ -778,6 +780,7 @@ EVAL_HELP_CONFIG.tb.qchan = "off" -- 关闭=零通知
 TEST.runScripts = nil
 TEST.questLog[1].objs[1].d = 2
 TEST.time = 6003 EVAL_TB_ONEVENT("QUEST_LOG_UPDATE")
+tbPump(1, 6003) -- 到点扫描：频道关=零通知
 eq(TEST.runScripts, nil, "off channel silent")
 TEST.questLog = nil EVAL_HELP_CONFIG.tb = nil
 

@@ -268,6 +268,8 @@ end
 
 -- ===== 任务通知（1.69.0）：进度/接取/完成 → 可选频道（关/仅自己/说/队伍） =====
 -- 频道发言：SendChatMessage 是 Protected（wiki 原文）→ RunScript 队列绕行；进限频队列防刷屏踢线
+-- 1.69.2 滞后修复：QUEST_LOG_UPDATE 事件先于日志数据落地——事件里同步扫描读到的是【上一状态】，通知滞后一个状态
+-- （UnrealQuest QuestState.lua 同结论：不信任事件时序，轮询重建+事件仅作唤醒）→ 事件只排期 tbQScanDue，OnUpdate 延迟 0.3s 再扫
 local tbQScanLast = 0
 local tbQPrev = nil          -- 上次扫描快照；nil=未初始化（登录/reload 首次建档不刷屏）
 local tbLastCompleteName = nil -- 最近一个 isComplete==1 的任务名（交接日志/完成通知用）
@@ -310,10 +312,7 @@ end
 local function tbQuestDiff()
   local tb = tbCfg()
   if not (tb and tb.qchan and tb.qchan ~= "off") then return end
-  local now = (type(GetTime) == "function") and GetTime() or 0
-  if now - tbQScanLast < 0.5 then return end -- QUEST_LOG_UPDATE 高频，0.5s 节流
-  tbQScanLast = now
-  local cur = tbQuestScan()
+  local cur = tbQuestScan() -- 0.5s 节流在调度器 tbQuestTick（顺延制不丢最终状态），此处只负责扫+差分
   if not tbQPrev then tbQPrev = cur return end
   for name, q in pairs(cur) do
     local old = tbQPrev[name]
@@ -330,6 +329,20 @@ local function tbQuestDiff()
   end
   tbQPrev = cur
 end
+
+-- 1.69.2 延迟扫描调度：事件只排期，到点扫描；节流中顺延（不丢弃，保证最终状态一定被扫到）
+local TB_QSCAN_DELAY = 0.3
+local tbQScanDue = 0
+local function tbQuestTick()
+  if tbQScanDue <= 0 then return end
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  if now < tbQScanDue then return end
+  if now - tbQScanLast < 0.5 then tbQScanDue = tbQScanLast + 0.5 return end
+  tbQScanDue = 0
+  tbQScanLast = now
+  tbQuestDiff()
+end
+function EVAL_TB_TICK() tbQuestTick() tbQPump() end -- 测试直调（= qf OnUpdate 本体）
 
 -- 事件统一入口（测试可直调）
 function EVAL_TB_ONEVENT(e)
@@ -375,8 +388,8 @@ function EVAL_TB_ONEVENT(e)
         tbNotify(string.format(L("TB_QN_DONE"), nm)) -- 完成通知
       end
     end
-  elseif e == "QUEST_LOG_UPDATE" then -- 1.69.0 进度/接取差分通知
-    tbQuestDiff()
+  elseif e == "QUEST_LOG_UPDATE" then -- 1.69.2 只排期不同步扫（事件先于数据落地，同步扫=滞后一个状态）
+    tbQScanDue = ((type(GetTime) == "function") and GetTime() or 0) + TB_QSCAN_DELAY
   end
 end
 
@@ -400,7 +413,7 @@ end)
 
 -- 队列滴出帧：每帧检查一次（队空时仅一次表索引+一次 GetTime 比较，开销可忽略）
 local qf = CreateFrame("Frame", "EVAL_TOOLBOX_QUEUE", UIParent)
-qf:SetScript("OnUpdate", function() tbQPump() end)
+qf:SetScript("OnUpdate", function() tbQuestTick() tbQPump() end) -- 1.69.2 任务延迟扫描 + 队列滴出
 
 -- ===== Tab 内容模型（分组归类；列表行动态展开） =====
 local function tbModel()
