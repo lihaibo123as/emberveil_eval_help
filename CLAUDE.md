@@ -13,6 +13,15 @@
 - **1.26.0 起有逻辑冒烟测试**：`node test_engine.js`（test_stub.lua 打桩 WoW API/UI mock + 5.1 垫片，加载整个 EvalHelp.lua 后跑 test_assert.lua 断言：条件解析/显示回环/规则执行/副作用；改引擎必跑两条命令）
 - fengari 已装在工作区 node_modules（npm 走代理 127.0.0.1:10809）
 
+## ⚠️ 频率防护总则（高频 API 调用场景）
+- **原则**：凡是可能高频触发的 API 调用流程，设计阶段就必须考虑频率防护——不要等被踢线/刷屏/翻倍后再补
+- **判定方法**：设想最坏情况「一帧/一秒内会被触发多少次」；服务器写动作超过 ~1-2 次/s 的一律限频，客户端事件先假设会连发
+- **三类范式**（已有实现直接复用）：
+  1. **服务器写动作 → 限频队列**：tbQ + OnUpdate 滴出 TB_RATE=0.3s（1.68.2：一帧 24 次 UseContainerItem 被服务器反滥用踢线；1.69.0 交接 API/任务通知同入队）。配套：逐笔验证状态机 tbPending（槽位物品消失=成功/超时 2s=失败）、执行前二次校验防槽位变动、MERCHANT_HIDE 清待办防「卖变用」
+  2. **事件驱动 → 去抖窗口/节流**：MERCHANT_SHOW 本客户端连发两次（1.68.1 加 1.5s 去重窗 tbMerchantLast）；BAG_UPDATE 0.5s 节流（1.68.0）。教训：事件驱动功能上线后一律假设事件连发，高频事件必去抖
+  3. **执行入口 → 去抖窗口**：EVAL_GO 入口 0.2s 窗口（1.54.1：/run 宏走 RunScript pending 队列，连按堆积松手后陈旧调用冲刷=目标狂切）；窗口可配 cfg.goDebounce 0~1.0（1.54.2），附 EVAL_GO_TRACE 追踪器取证
+- **Protected 函数**（SendChatMessage/SpellStopCasting 等）绕行=RunScript 聊天脚本（pending script 队列）——注意 RunScript 本身也是队列，连发聊天同样会被反滥用踢线，通知类输出也要入限频队列
+
 ## 本客户端已实测的 UI 配方（UnrealQuest ClientAPI.lua 验证）
 1. **拖动柄必须用 Button**（Frame 的 OnDragStart 不触发）；SetFrameLevel(父+10) 抬高（用 strata 抬高是记录在案的失败做法）；EnableMouse + RegisterForClicks("LeftButtonUp") + RegisterForDrag("LeftButton")；StartMoving 前 warm-up 两步（StartMoving→StopMovingOrSizing→StartMoving）
 8. **strata 层级陷阱**：配置窗是 DIALOG；其上方弹窗（技能编辑窗/导入导出窗）必须同 DIALOG + SetFrameLevel(90~100)，MEDIUM/HIGH 都会被 DIALOG 盖住（1.11.2 实测修复）；弹窗也要 uiOffscreen 越界回归
