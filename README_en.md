@@ -94,6 +94,14 @@
 
 ![Combat info UI and status info UI](preview/info.png)
 
+**Data search (Tab4)**: four search kinds — quest / item / mob·NPC / object; type to search (top 10 matches) → click a row for details (drop sources + rates, containers, vendors, related quests, the NPC that gives or ends a quest, item description), with unlimited drill-down; hover an item row for the in-game item tooltip
+
+![Data search](preview/dataset.png)
+
+**Data search · map pinning and map annotations**: click the map icon at the end of a row to open the world map on that zone and pin the entity's spawn points (one entity, one colour); the "Map annotations (N)" control toggles 16 annotation categories (gathering nodes / town services) drawn live as the map changes
+
+![Data search · map pinning](preview/dataset_map.png)
+
 ## Quick Start
 
 1. Drag the skills you want onto your action bars (any class — the plugin recognizes whatever is on your bars).
