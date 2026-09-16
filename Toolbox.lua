@@ -91,6 +91,79 @@ local function tbItemName(b, s)
   return link and string.match(link, "%[(.-)%]") or nil
 end
 
+-- ===== 动作队列（1.68.2：商人/背包 API 限频 + 出售逐笔成功验证，防服务器反滥用踢线） =====
+-- 教训背景：一帧内连续 24 次 UseContainerItem 会被服务器判定异常。所有写动作进队列，
+-- OnUpdate 按 TB_RATE 间隔滴出；出售逐笔验证（下一拍核对槽位物品已消失，超时 2s 记失败）；
+-- 执行前二次校验（槽位物品可能被玩家移动）；MERCHANT_HIDE 清空待售/待购（防「卖」变「用」）。
+local TB_RATE = 0.3
+local tbQ = {}
+local tbQLast = 0
+local tbPending = nil -- {bag,slot,name,t} 待验证的出售
+local tbSellStat = nil -- {ok,fail} 本次扫描统计（队列清空时汇报）
+
+local function tbQPush(q) table.insert(tbQ, q) end
+
+local function tbVerifyPending()
+  if not tbPending then return end
+  local p = tbPending
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  if tbItemName(p.bag, p.slot) ~= p.name then -- 槽位物品已消失/变更 → 卖出成功
+    tbPending = nil
+    if tbSellStat then tbSellStat.ok = tbSellStat.ok + 1 end
+    return
+  end
+  if now - p.t > 2 then -- 超时仍在 → 失败（锁定/不可售/服务器拒绝）
+    tbPending = nil
+    if tbSellStat then tbSellStat.fail = tbSellStat.fail + 1 end
+    say(string.format(L("TB_SELL_FAIL"), p.name))
+  end
+end
+
+local function tbQPump()
+  tbVerifyPending()
+  local q = tbQ[1]
+  if not q then
+    if tbSellStat and (tbSellStat.ok > 0 or tbSellStat.fail > 0) then
+      local msg = string.format(L("TB_SOLD"), tbSellStat.ok)
+      if tbSellStat.fail > 0 then msg = msg .. string.format(L("TB_SOLD_FAILS"), tbSellStat.fail) end
+      say(msg)
+      tbSellStat = nil
+    end
+    return
+  end
+  -- 商人相关动作必须开着商人窗口（关了直接丢弃，防止 UseContainerItem 变成「使用物品」）
+  if (q.kind == "sell" or q.kind == "buy") and not TB.merchantOpen then
+    table.remove(tbQ, 1)
+    return
+  end
+  if q.kind == "sell" and tbPending then return end -- 上一笔未确认：有序等待，保证逐笔可验证
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  if now - tbQLast < TB_RATE then return end
+  table.remove(tbQ, 1)
+  tbQLast = now
+  if q.kind == "sell" then
+    local ok, tex, cnt, locked, qual = pcall(GetContainerItemInfo, q.bag, q.slot)
+    if ok and (tex or cnt) and qual == 0 and tbItemName(q.bag, q.slot) == q.name then
+      pcall(UseContainerItem, q.bag, q.slot)
+      tbPending = { bag = q.bag, slot = q.slot, name = q.name, t = now }
+    elseif tbSellStat then
+      tbSellStat.fail = tbSellStat.fail + 1 -- 执行前校验失败（物品已被移动/品质变化）
+    end
+  elseif q.kind == "buy" then
+    pcall(BuyMerchantItem, q.idx, q.n)
+  elseif q.kind == "discard" then
+    if tbItemName(q.bag, q.slot) == q.name then
+      local ok, tex, cnt, locked, qual = pcall(GetContainerItemInfo, q.bag, q.slot)
+      if ok and (tex or cnt) and type(qual) == "number" and qual <= 1 then
+        pcall(PickupContainerItem, q.bag, q.slot)
+        pcall(DeleteCursorItem)
+      end
+    end
+  end
+end
+
+function EVAL_TB_PUMP() tbQPump() end -- 测试/调试直调用
+
 -- 商人开启：修理 / 卖灰 / 购买
 -- 1.68.1 实测修复：本客户端 MERCHANT_SHOW 连发两次（卖出提示打印两遍）——第二次触发时
 -- 物品尚未从背包移除，会重复计数/重复提示/重复尝试出售（同槽位二次 UseContainerItem 为无害空操作，但统计失真）。
@@ -111,15 +184,17 @@ local function tbMerchant()
     end
   end
   if tb.sell and type(UseContainerItem) == "function" and type(GetContainerItemInfo) == "function" then
+    -- 1.68.2：不直接卖——灰色槽位快照入队，队列按 TB_RATE 逐笔出售并验证成功
     local n = 0
+    tbSellStat = { ok = 0, fail = 0 }
     tbBagScan(function(b, s)
       local ok, tex, cnt, locked, q = pcall(GetContainerItemInfo, b, s)
-      if ok and (tex or cnt) and q == 0 then -- 有物即售（不强依赖纹理字段）
-        pcall(UseContainerItem, b, s) -- 商人开启时=卖出
-        n = n + 1
+      if ok and (tex or cnt) and q == 0 then
+        local nm = tbItemName(b, s)
+        if nm then tbQPush({ kind = "sell", bag = b, slot = s, name = nm }) n = n + 1 end
       end
     end)
-    if n > 0 then say(string.format(L("TB_SOLD"), n)) end
+    if n == 0 then tbSellStat = nil end
   end
   if tb.buyOn and type(tb.buy) == "table" and table.getn(tb.buy) > 0 and type(GetMerchantNumItems) == "function" then
     for _, w in ipairs(tb.buy) do
@@ -138,7 +213,7 @@ local function tbMerchant()
           if ok and nm == w.name then
             if type(avail) == "number" and avail >= 0 and avail < need then need = avail end
             if need > 0 then
-              pcall(BuyMerchantItem, i, need)
+              tbQPush({ kind = "buy", idx = i, n = need }) -- 1.68.2 限频队列
               say(string.format(L("TB_BOUGHT"), w.name, need))
             end
             break
@@ -167,8 +242,7 @@ local function tbDiscardSweep()
     if nm and set[nm] then
       local ok, tex, cnt, locked, q = pcall(GetContainerItemInfo, b, s)
       if ok and (tex or cnt) and type(q) == "number" and q <= 1 then
-        pcall(PickupContainerItem, b, s)
-        pcall(DeleteCursorItem)
+        tbQPush({ kind = "discard", bag = b, slot = s, name = nm }) -- 1.68.2 限频队列+执行前二次校验
         n = n + 1
       end
     end
@@ -179,7 +253,17 @@ end
 -- 事件统一入口（测试可直调）
 function EVAL_TB_ONEVENT(e)
   if e == "MERCHANT_SHOW" then
+    TB.merchantOpen = true
     tbMerchant()
+  elseif e == "MERCHANT_HIDE" then
+    -- 关窗即清场：待售/待购全部丢弃（防 UseContainerItem 在无商人时变成使用物品），待验证出售作废
+    TB.merchantOpen = false
+    tbPending = nil
+    local kept = {}
+    for _, q in ipairs(tbQ) do
+      if q.kind ~= "sell" and q.kind ~= "buy" then table.insert(kept, q) end
+    end
+    tbQ = kept
   elseif e == "BAG_UPDATE" then
     tbDiscardSweep()
   elseif e == "READY_CHECK" then
@@ -206,6 +290,7 @@ end
 -- 事件帧（三态兼容：事件名在 1参/2参/全局 event）
 local evf = CreateFrame("Frame", "EVAL_TOOLBOX_EVENTS", UIParent)
 evf:RegisterEvent("MERCHANT_SHOW")
+evf:RegisterEvent("MERCHANT_HIDE")
 evf:RegisterEvent("BAG_UPDATE")
 evf:RegisterEvent("READY_CHECK")
 evf:RegisterEvent("QUEST_DETAIL")
@@ -218,6 +303,10 @@ evf:SetScript("OnEvent", function()
   if not e and type(arg2) == "string" then e = arg2 end
   if e then EVAL_TB_ONEVENT(e) end
 end)
+
+-- 队列滴出帧：每帧检查一次（队空时仅一次表索引+一次 GetTime 比较，开销可忽略）
+local qf = CreateFrame("Frame", "EVAL_TOOLBOX_QUEUE", UIParent)
+qf:SetScript("OnUpdate", function() tbQPump() end)
 
 -- ===== Tab 内容模型（分组归类；列表行动态展开） =====
 local function tbModel()

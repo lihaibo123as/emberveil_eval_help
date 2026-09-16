@@ -236,6 +236,7 @@ eq(EVAL_HELP_STATE.playerBuffs["texRegen"], true, "UnitBuff texture merged into 
 TEST.unitBuffs = nil EVAL_HELP_UPDATE_STATE()
 
 -- 18) i18n 核心（1.34.0）：EVAL_L 查找/回退/格式化；EVAL_SET_LANG 切换与校验
+local SAVED_LOCALES = EVAL_LOCALES -- 1.68.2 修复泄漏：测试后必须恢复真语言包（曾污染工具箱分组的 L() 解析）
 EVAL_LOCALES = { zhCN = { T_HELLO = "你好", T_FMT = "数量%d" }, enUS = { T_HELLO = "Hello" } }
 eq(EVAL_L("T_HELLO"), "你好", "default zhCN")
 eq(EVAL_L("T_FMT", 5), "数量5", "format arg")
@@ -245,6 +246,7 @@ eq(EVAL_L("T_FMT", 7), "数量7", "missing key falls back zhCN, formatted")
 EVAL_SET_LANG("zhCN")
 eq(EVAL_L("NO_SUCH_KEY"), "NO_SUCH_KEY", "unknown key shows itself")
 eq(EVAL_SET_LANG("xxXX"), false, "invalid code rejected")
+EVAL_LOCALES = SAVED_LOCALES
 
 -- 19) 免疫学习器（1.36.0）：探针实测文本格式解析 + 引擎跳过 + 清空恢复
 EVAL_HELP_CONFIG = EVAL_HELP_CONFIG or {} EVAL_HELP_CONFIG.war = EVAL_HELP_CONFIG.war or {}
@@ -686,14 +688,24 @@ EVAL_HELP_CONFIG.tb = { repair = true, sell = true, ready = true, quest = true, 
 TEST.repairCost = 500
 TEST.merchant = { { name = "晨露酒" }, { name = "肉干" } }
 TEST.bags = { [1] = { name = "灰色破剑", q = 0, count = 1 }, [2] = { name = "晨露酒", q = 1, count = 2 }, [101] = { name = "破布", q = 0, count = 1 }, [102] = { name = "蓝装护甲", q = 2, count = 1 } }
-TEST.usedItem = nil TEST.repaired = nil TEST.bought = nil
+TEST.usedItem = nil TEST.repaired = nil TEST.bought = nil TEST.sellCalls = 0 TEST.chat = nil
+TEST.time = 3000 TEST.consumeOnUse = true
+local function tbPump(n, t0)
+  for i = 1, n do TEST.time = t0 + i * 0.4 EVAL_TB_PUMP() end
+end
 EVAL_TB_ONEVENT("MERCHANT_SHOW")
 eq(TEST.repaired, true, "tb auto repair")
-eq(TEST.usedItem, 101, "tb sell gray sweeps all grays (破剑@1 and 破布@101, blue spared)")
-eq(TEST.bought, "晨露酒x3;", "tb buy tops up to 5 (have 2)")
+eq(TEST.sellCalls, 0, "tb sell queued not burst (1.68.2)")
+tbPump(8, 3000) -- 0.4s/拍：卖1→验证→卖2→买→汇报
+eq(TEST.sellCalls, 2, "tb queued sells both grays in order")
+eq(TEST.usedItem, 101, "tb sell order bag0 first then bag1")
+eq(TEST.bought, "晨露酒x3;", "tb queued buy after sells")
+eq(TEST.chat and TEST.chat:find("自动售出灰色物品 2 件") ~= nil, true, "tb sell summary on drain")
 TEST.picked = nil TEST.deleted = nil
-EVAL_TB_ONEVENT("BAG_UPDATE")
-eq(TEST.deleted, 101, "tb discard gray/white only (blue spared)")
+TEST.bags = { [101] = { name = "破布", q = 0, count = 1 }, [102] = { name = "蓝装护甲", q = 2, count = 1 } }
+TEST.time = 3100 EVAL_TB_ONEVENT("BAG_UPDATE")
+tbPump(4, 3100)
+eq(TEST.deleted, 101, "tb discard queued gray/white only (blue spared)")
 EVAL_TB_ONEVENT("READY_CHECK")
 eq(TEST.readyChecked, true, "tb ready check")
 EVAL_TB_ONEVENT("QUEST_DETAIL")
@@ -704,23 +716,43 @@ TEST.questChoices = 1 EVAL_TB_ONEVENT("QUEST_COMPLETE")
 eq(TEST.questReward, 1, "tb quest reward single choice")
 TEST.questChoices = 2 TEST.questReward = nil EVAL_TB_ONEVENT("QUEST_COMPLETE")
 eq(TEST.questReward, nil, "tb quest multi choice waits manual")
--- 1.68.1 去重窗口：MERCHANT_SHOW 连发只处理一次
+-- 1.68.1 去重窗口 + 1.68.2 队列：MERCHANT_SHOW 连发只处理一次
 EVAL_HELP_CONFIG.tb = { sell = true }
 TEST.bags = { [1] = { name = "灰色破剑", q = 0, count = 1 } }
-TEST.time = 2000 TEST.sellCalls = 0
+TEST.time = 4000 TEST.sellCalls = 0
 EVAL_TB_ONEVENT("MERCHANT_SHOW")
+tbPump(3, 4000)
 eq(TEST.sellCalls, 1, "tb merchant first fire sells")
 EVAL_TB_ONEVENT("MERCHANT_SHOW") -- 窗口内第二发（本客户端实测连发）
+tbPump(3, 4001)
 eq(TEST.sellCalls, 1, "tb merchant dedupe window blocks refire")
-TEST.time = 2002 -- 窗口外重开商人正常
-EVAL_TB_ONEVENT("MERCHANT_SHOW")
+TEST.bags = { [1] = { name = "灰色破剑", q = 0, count = 1 } }
+TEST.time = 4003 EVAL_TB_ONEVENT("MERCHANT_SHOW") -- 窗口外重开商人正常
+tbPump(3, 4003)
 eq(TEST.sellCalls, 2, "tb merchant reopen after window works")
+-- 出售失败检测：服务器拒收（物品不消失）→ 超时记失败+汇报
+TEST.bags = { [1] = { name = "锁定的灰物", q = 0, count = 1 } }
+TEST.noSell = true TEST.chat = nil TEST.sellCalls = 0 TEST.time = 5000
+EVAL_TB_ONEVENT("MERCHANT_SHOW")
+tbPump(2, 5000) -- 执行出售（stub 不删物品=拒收）
+TEST.time = 5002.6 EVAL_TB_PUMP() -- 超时 2s 验证 → 失败
+eq(TEST.sellCalls, 1, "tb sell attempted once")
+eq(TEST.chat and TEST.chat:find("未能售出") ~= nil, true, "tb sell failure reported")
+eq(TEST.chat and TEST.chat:find("1 件未售出") ~= nil, true, "tb sell summary fail suffix")
+TEST.noSell = nil
+-- 关窗清场：待售队列丢弃，防「卖」变「用」
+TEST.bags = { [1] = { name = "灰色破剑", q = 0 }, [2] = { name = "灰色破甲", q = 0 } }
+TEST.sellCalls = 0 TEST.time = 6000
+EVAL_TB_ONEVENT("MERCHANT_SHOW")
+EVAL_TB_ONEVENT("MERCHANT_HIDE")
+tbPump(5, 6000)
+eq(TEST.sellCalls, 0, "tb merchant hide purges pending sells")
 -- 开关全关：零动作
 EVAL_HELP_CONFIG.tb = {}
-TEST.repaired = nil TEST.readyChecked = nil
+TEST.repaired = nil TEST.readyChecked = nil TEST.time = 7000
 EVAL_TB_ONEVENT("MERCHANT_SHOW") EVAL_TB_ONEVENT("READY_CHECK")
 eq(TEST.repaired, nil, "tb disabled merchant no-op")
 eq(TEST.readyChecked, nil, "tb disabled ready no-op")
-EVAL_HELP_CONFIG.tb = nil
+EVAL_HELP_CONFIG.tb = nil TEST.consumeOnUse = nil
 
 print("ALL TESTS PASS")

@@ -109,7 +109,11 @@ GetContainerNumSlots = function(bag) return (bag >= 0 and bag <= 4) and 2 or 0 e
 GetContainerItemLink = function(bag, slot) local it = TEST.bags and TEST.bags[bag * 100 + slot] return it and ("|Hitem:1|h[" .. it.name .. "]|h") or nil end
 GetContainerItemInfo = function(bag, slot) local it = TEST.bags and TEST.bags[bag * 100 + slot] if not it then return nil end return it.tex, it.count or 1, false, it.q or 1, false end
 GetContainerItemCooldown = function(bag, slot) local it = TEST.bags and TEST.bags[bag * 100 + slot] if it and it.cd then return 900, 60, 1 end return 0, 0, 1 end
-UseContainerItem = function(bag, slot) TEST.usedItem = bag * 100 + slot TEST.sellCalls = (TEST.sellCalls or 0) + 1 end
+UseContainerItem = function(bag, slot)
+  TEST.usedItem = bag * 100 + slot
+  TEST.sellCalls = (TEST.sellCalls or 0) + 1
+  if TEST.consumeOnUse and not TEST.noSell and TEST.bags then TEST.bags[bag * 100 + slot] = nil end -- 1.68.2 仅工具箱段模拟成交消失
+end
 GetItemInfo = function() return nil end
 -- 工具箱桩（1.68.0）
 GetMoney = function() return 1000000 end
