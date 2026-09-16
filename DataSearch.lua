@@ -1034,6 +1034,66 @@ local function dsAnnIconFor(l)
   return d.icon
 end
 
+-- ★★★1.70.41 搜索结果定位的「随机彩色」小圆点（用户要求：每只怪一个随机颜色，便于区分）。
+--
+-- ★关键设计：颜色必须**由实体 id 派生**（确定性哈希），不能每次绘制都现摇一个随机数。
+--   否则每 0.25s 一次重绘（甚至只是切图回来）颜色就会全变——用户根本无法「靠颜色记住哪只是哪只」，
+--   随机色反而变成纯粹的视觉噪音。要求是「看起来随机」，不是「随时间随机」。
+--
+-- 用整数哈希（FNV-1a 变体）而不是 math.random：math.random 在本客户端各版本行为不一致，
+-- 且无法保证「同一 id 恒定同色」；哈希是纯函数，跨会话也稳定。
+-- 色相均匀取样（黄金角 0.618 步进）+ XML 式亮度/饱和度，避免出现灰/黑等看不清的颜色。
+local function dsEntityColor(id)
+  local n = tonumber(id) or 0
+  if n < 0 then n = -n end
+  -- 32 位整数混合（乘法取模用 double 精度内可接受的小乘数，避免 Lua 5.1 number 溢出误差累积）
+  local h = n
+  h = (h * 2654435761) % 4294967296
+  h = (h * 2246822519) % 4294967296
+  h = (h * 3266489917) % 4294967296
+  -- 色相：黄金角步进，均匀铺满色轮且相邻 id 差异明显
+  local hue = (h % 1000) / 1000
+  -- 饱和度/亮度：各自再取一段哈希位，限制在「鲜艳但不刺眼」的区间
+  local sat = 0.55 + ((math.floor(h / 1000) % 100) / 100) * 0.40   -- 0.55 ~ 0.95
+  local val = 0.75 + ((math.floor(h / 100000) % 100) / 100) * 0.25 -- 0.75 ~ 1.00
+  -- HSV → RGB
+  local i = math.floor(hue * 6)
+  local f = hue * 6 - i
+  local p = val * (1 - sat)
+  local q = val * (1 - f * sat)
+  local t = val * (1 - (1 - f) * sat)
+  local r, g, b
+  local m = i % 6
+  if m == 0 then r, g, b = val, t, p
+  elseif m == 1 then r, g, b = q, val, p
+  elseif m == 2 then r, g, b = p, val, t
+  elseif m == 3 then r, g, b = p, q, val
+  elseif m == 4 then r, g, b = t, p, val
+  else r, g, b = val, p, q end
+  return r, g, b
+end
+-- 测试直调：验证「同一 id 恒定同色」与「不同 id 尽量不同色」两条不变量。
+function EVAL_DS_ENTITY_COLOR(id) return dsEntityColor(id) end
+
+-- ★1.70.41 测试直调：控制行「所有控件都真实构建且几何同源」的可观测契约。
+-- 背景：filterBtn 曾用 DSL_ROW_BTN_Y 定位，而该 local 在 35 行之后才声明 → 读到全局 nil
+-- → SetPoint("TOPLEFT", parent, "TOPLEFT", x, nil) → 本客户端对 nil 锚点不做定位、也不报错
+-- → 按钮落在未定义位置（用户截图「应该有个按钮没了」）。这是第 10 次 local 作用域坑。
+-- ★为什么用「构建期登记 + 运行期读取」而非解析源码行号：Lua 运行期拿不到行号，
+--   而桩不校验 SetPoint 的坐标参数——把与 SetPoint **同源**的常量登记下来，
+--   断言才能发现「某个控件根本没被构建 / 构建时几何是 nil」。行号级的源码校验
+--   另放在 test_engine.js 的 LAYOUT CHECK（那边能读文件、能做真正的顺序检查）。
+function EVAL_DS_TEST_CONTROL_ROW_WIDGETS()
+  -- 返回 { {name=, built=, center=}, ... }：center 为 nil 即「该控件用了未声明的局部量」
+  local out = {}
+  local row = DS.controlRow
+  if type(row) ~= "table" or type(row.buttons) ~= "table" then return out end
+  for _, b in ipairs(row.buttons) do
+    table.insert(out, { name = b.name, center = b.center, declared = (b.center ~= nil) })
+  end
+  return out
+end
+
 -- 把一条标注摆上地图。
 -- ★素材与颜色**每次都要重设**：池子按序号复用，同一枚钉子这次可能是草药（小图标）、
 --   下次是灵魂医者（大图标），不重设就会素材残留（与颜色残留同一个坑，1.70.11 已踩过一次）。
@@ -1133,8 +1193,12 @@ local function dsAnnDraw(areaId)
           overlay = true,
         }
         -- ★搜索结果定位 = 用户所说的「自定义检索的数据（npc/无掉落等）」→
-        --   显式传 icon=nil，一律**小圆点**（金色，与分类层的图标区分）。
-        dsAnnPlace(client, idx, info, 1.00, 0.85, 0.25, nil)
+        --   显式传 icon=nil，一律**小圆点**（与分类层的图标区分）。
+        -- ★1.70.41 用户要求「每只怪一个随机颜色，便于区分」：
+        --   颜色由实体 id 派生（dsEntityColor）→ 同一只怪恒定同色、不同怪颜色不同，
+        --   重绘/切图回来都不会变色（若每次现摇随机，颜色会不停跳，反而没法靠颜色认怪）。
+        local cr, cg, cb = dsEntityColor(ov.id)
+        dsAnnPlace(client, idx, info, cr, cg, cb, nil)
       end
     end
   end
@@ -2132,7 +2196,13 @@ function EVAL_DS_TEST_CAPTURE_DRAW(areaId)
   local client = dsUQClient()
   if not client then return captured end
   dsAnnPlace = function(c, idx, info, r, g, b, icon)
-    captured[table.getn(captured) + 1] = { icon = icon, small = info and info.small, cat = info and info.category }
+    -- ★1.70.41 也记颜色：用户要求搜索定位小圆点「每只怪一个随机颜色」。只断言
+    --   dsEntityColor()（解析函数）会漏掉「调用点写死一个常量色」的变异——
+    --   这正是 1.70.26 记过的「断言解析函数 ≠ 断言调用点」。必须记**调用点实际传的**值。
+    captured[table.getn(captured) + 1] = {
+      icon = icon, small = info and info.small, cat = info and info.category,
+      r = r, g = g, b = b, kind = info and info.kind, id = info and info.id,
+    }
     return false -- 不真的建钉子，只记参数
   end
   pcall(dsAnnDraw, areaId)
@@ -2156,7 +2226,12 @@ function EVAL_DS_TEST_CAPTURE_OVERLAY(areaId)
     end
   end
   dsAnnOverlay = nil
-  return { hasOverlay = hasOverlay, allDots = allDots, n = table.getn(cap) }
+  -- ★1.70.41 把覆盖层实际用的颜色也带出来（用于断言「颜色确实来自 dsEntityColor 派生」）
+  local ovcol = nil
+  for _, c in ipairs(cap) do
+    if c.cat == nil then ovcol = { r = c.r, g = c.g, b = c.b } break end
+  end
+  return { hasOverlay = hasOverlay, allDots = allDots, n = table.getn(cap), color = ovcol }
 end
 function EVAL_DS_TEST_ICON_NOT_TINTED()
   local tinted = nil
@@ -2217,6 +2292,26 @@ function EVAL_DS_BUILD(root, page, refreshes)
   local LX = 18
   local RW = (root.GetWidth and root:GetWidth() or 560) - 18
 
+  -- ★★★1.70.41 控制行几何常量**必须先于任何使用点声明**（本项目第 10 次踩 local 作用域）。
+  --   症状：用户截图「应该有个按钮没了」——「类型: 全部」过滤钮整颗不显示。
+  --   根因：filterBtn（下方几行）用 DSL_ROW_BTN_Y 定位，而该 local 在 **35 行之后**才声明，
+  --   于是那里读到的是**全局 nil** → SetPoint("TOPLEFT", parent, "TOPLEFT", x, nil)
+  --   → 该客户端对 nil 锚点不做任何定位（不报错）→ 按钮落在未定义位置 = 看不见。
+  --   ★这是「不报错的空操作」的又一实例：Lua 不报错、pcall 全成功、断言也查不到，
+  --   因为测试桩根本不校验 SetPoint 的坐标参数（见下方断言只用构建期同源常量）。
+  --   ★教训重申：函数体内所有互相引用的局部量，声明顺序必须按「被依赖者在前」排列；
+  --   把一组布局常量集中放在**函数开头**，一次性消除这类顺序陷阱。
+  local DSL_ROW_CY = -64      -- 整行中线
+  local DSL_BTN_H  = 16       -- 按钮高
+  local DSL_BOX_H  = 20       -- 输入框高
+  -- ★坐标系提醒：TOPLEFT 锚点的 y 是「顶边」，且 y 越往下越负。
+  --   所以 顶边 = 中线 + 高度/2（因为中线在顶边【下方】，即更负），推导见下：
+  --     顶边 = 中线 + 高度/2  →  -56 = -64 + 8  ✔（顶边在上，数值更大）
+  --   （我第一版写成「中线 = 顶边 + 高度/2 = -48」是错的，测试当场抓到——见断言。
+  --     正确：中线 = 顶边 - 高度/2 = -56 - 8 = -64）
+  local DSL_ROW_BTN_Y = DSL_ROW_CY + DSL_BTN_H / 2   -- 按钮顶边 = -56
+  local DSL_ROW_BOX_Y = DSL_ROW_CY + DSL_BOX_H / 2   -- 输入框顶边 = -54
+
   -- 类型过滤钮（下拉）
   DS.filterBtn = dsBtn(root, LX, DSL_ROW_BTN_Y, 96, "", function()
     if type(EVAL_DD_OPEN) ~= "function" then return end
@@ -2245,17 +2340,7 @@ function EVAL_DS_BUILD(root, page, refreshes)
   --   两者基准不同 → 提示比输入框文字低约 3.5px（用户截图里的红线段）。
   --   教训：同一行里混用「顶边对齐」与「中线对齐」必然错位；统一到中线最稳，
   --   且字体行高变化（enUS/ruRU 字体链不同）时也不会再漂。
-  local DSL_ROW_CY = -64      -- 整行中线
-  local DSL_BTN_H  = 16       -- 按钮高
-  local DSL_BOX_H  = 20       -- 输入框高
-  -- ★坐标系提醒：TOPLEFT 锚点的 y 是「顶边」，且 y 越往下越负。
-  --   所以 顶边 = 中线 + 高度/2（因为中线在顶边【下方】，即更负），推导见下：
-  --     顶边 = 中线 + 高度/2  →  -56 = -64 + 8  ✔（顶边在上，数值更大）
-  --   （我第一版写成「中线 = 顶边 + 高度/2 = -48」是错的，测试当场抓到——见断言。
-  --     正确：中线 = 顶边 - 高度/2 = -56 - 8 = -64）
-  local DSL_ROW_BTN_Y = DSL_ROW_CY + DSL_BTN_H / 2   -- 按钮顶边 = -56
-  local DSL_ROW_BOX_Y = DSL_ROW_CY + DSL_BOX_H / 2   -- 输入框顶边 = -54
-  -- 与输入框同一行且纵向居中（输入框 y=-54 高 20 → 中心 -64；按钮高 16 → 顶边 -56）
+  -- （布局常量已在函数开头声明——见 DSL_ROW_* 处的说明，勿在此重复声明）
   DS.catBtn = dsBtn(root, LX + 310, DSL_ROW_BTN_Y, 214, "", function()
     if type(EVAL_DD_OPEN) ~= "function" then return end
     local m = dsCatMenu() -- 菜单结构提到文件作用域，便于测试直接断言（不再藏在闭包里）
@@ -2344,6 +2429,8 @@ function EVAL_DS_BUILD(root, page, refreshes)
     phAnchorV = "CENTER",
     buttons = {
       -- 中线 = 顶边 - 高度/2（顶边数值更大、中线更负）
+      -- ★1.70.41：filterBtn 必须在此登记。它曾因 DSL_ROW_BTN_Y 声明顺序错误而被
+      --   以 nil 定位（按钮不显示）；登记后 center 一旦为 nil 断言立刻变红。
       { name = "类型", center = DSL_ROW_BTN_Y - DSL_BTN_H / 2 },
       { name = "地图标注", center = DSL_ROW_BTN_Y - DSL_BTN_H / 2 },
     },

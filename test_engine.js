@@ -13,6 +13,76 @@ function checkIconAssets() {
   if (!fs.existsSync(dsPath)) return null;
   const ds = fs.readFileSync(dsPath, 'utf8');
   const rootMatch = ds.match(/DS_ANN_ICON_ROOT\s*=\s*"([^"]+)"/);
+// ===== LAYOUT CHECK: a local must be declared before the code that reads it =====
+// ★1.70.41 用户截图「应该有个按钮没了」——「类型: 全部」过滤钮不显示。
+//   根因：filterBtn 用 DSL_ROW_BTN_Y 定位，而该 local 在 35 行之后才声明 →
+//   那里读到全局 nil → SetPoint("TOPLEFT", parent, "TOPLEFT", x, nil) →
+//   本客户端对 nil 锚点不做任何定位、也不报错 → 按钮落在未定义位置。
+//   这是本项目第 10 次 local 作用域坑，也是「不报错的空操作」的又一实例。
+//   桩不校验 SetPoint 的坐标参数，行为层测不到，所以在能读文件的一侧做源码检查。
+(function () {
+  const src = fs.readFileSync(path.join(__dirname, "DataSearch.lua"), "utf8");
+  const lines = src.split(String.fromCharCode(10));
+  const LOCAL_RE = new RegExp("^" + "[ ]*" + "local" + "[ ]+" + "([A-Za-z_][A-Za-z0-9_]*)" + "[ ]*=");
+  const END_RE = new RegExp("^" + "end" + "[ ]*$");
+  let start = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].indexOf("function EVAL_DS_BUILD") === 0) { start = i; break; }
+  }
+  if (start < 0) { console.log("LAYOUT CHECK: skipped (EVAL_DS_BUILD not found)"); return; }
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (END_RE.test(lines[i])) { end = i; break; }
+  }
+  const decls = {};
+  for (let i = start; i < end; i++) {
+    const m = lines[i].match(LOCAL_RE);
+    if (m && decls[m[1]] === undefined) decls[m[1]] = i + 1;
+  }
+  const names = ["DSL_ROW_CY", "DSL_BTN_H", "DSL_BOX_H", "DSL_ROW_BTN_Y", "DSL_ROW_BOX_Y"];
+  let bad = 0;
+  for (const n of names) {
+    const d = decls[n];
+    if (d === undefined) { console.log("LAYOUT CHECK: FAIL - local " + n + " is never declared in EVAL_DS_BUILD"); bad++; continue; }
+    const USE_RE = new RegExp("(^|[^A-Za-z0-9_])" + n + "([^A-Za-z0-9_]|$)");
+    let first = -1;
+    for (let i = start; i < end; i++) {
+      if (i + 1 === d) continue;
+      // ★必须跳过注释行：解释这个 bug 的注释里就写着这些变量名，
+      //   不排除的话会把注释当成「使用」而误报（首版即如此）。
+      const t = lines[i].replace(/^[ ]+/, "");
+      if (t.indexOf("--") === 0) continue;
+      if (USE_RE.test(lines[i])) { first = i + 1; break; }
+    }
+    if (first >= 0 && first < d) {
+      console.log("LAYOUT CHECK: FAIL - " + n + " used at line " + first + " but declared at line " + d + " (reads global nil)");
+      bad++;
+    }
+  }
+  if (bad > 0) { process.exitCode = 1; return; }
+  console.log("LAYOUT CHECK: " + names.length + " row constants declared before first use");
+})();
+
+// ===== VERSION CHECK: the source constant and the .toc must agree =====
+// ★1.70.40 教训：发版时我只改了 EvalHelp.toc 的 ## Version，忘了源码里的
+//   local VERSION —— 标题栏显示的是 VERSION 常量，于是实测截图里版本号还是旧值。
+//   版本号有两份就必须有一条断言盯着它们相等。
+(function () {
+  const toc = fs.readFileSync(path.join(__dirname, "EvalHelp.toc"), "utf8");
+  const m = toc.match(/##\s*Version:\s*([0-9.]+)/);
+  if (!m) { console.log("VERSION CHECK: skipped (no ## Version in toc)"); return; }
+  const tocVer = m[1];
+  const src = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
+  const sm = src.match(/local VERSION\s*=\s*"([0-9.]+)"/);
+  if (!sm) { console.log("VERSION CHECK: FAIL - could not find local VERSION in EvalHelp.lua"); process.exitCode = 1; return; }
+  if (sm[1] !== tocVer) {
+    console.log("VERSION CHECK: FAIL - EvalHelp.lua VERSION=" + sm[1] + " but EvalHelp.toc Version=" + tocVer);
+    process.exitCode = 1;
+    return;
+  }
+  console.log("VERSION CHECK: " + tocVer + " (source and toc agree)");
+})();
+
   if (!rootMatch) { console.log('ICON CHECK: no DS_ANN_ICON_ROOT found'); process.exit(1); }
   const rootWin = rootMatch[1];
   // Texture paths are game-relative and start with Interface\AddOns\<addon>\...

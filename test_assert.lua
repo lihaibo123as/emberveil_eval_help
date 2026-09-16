@@ -2184,4 +2184,127 @@ do
     TEST.uiHidden = false
   end
 end
+
+-- 56) ★★★ 1.70.41 控制行布局常量必须先于使用点声明（用户截图「应该有个按钮没了」）
+-- 症状：「类型: 全部」过滤钮整颗不显示。
+-- 根因：filterBtn 用 DSL_ROW_BTN_Y 定位，而该 local 在 35 行之后才声明
+--   → 那里读到全局 nil → SetPoint(..., nil) → 本客户端对 nil 锚点不做任何定位且不报错 → 按钮落在未定义位置。
+-- ★这是本项目第 10 次同类 local 作用域坑，也是「不报错的空操作」的又一实例。
+do
+  -- ① 源码层面：确保 DSL_ROW_BTN_Y 的声明位置严格早于第一个使用它的 dsBtn 调用点。
+  --   （读源码文本是本例最直接的手段：桩不校验 SetPoint 参数，行为层面测不到。）
+  -- ★① 行为层：控制行的每个按钮都必须真的被构建，且几何不为 nil。
+  --   filterBtn 当年就是「构建了但用 nil 锚点」——帧在、属性在，就是不显示。
+  EVAL_HELP_CONFIG.cfgTab = 4
+  EVAL_DS_BUILD_FOR_TEST() -- 确保控制行已构建
+  local ws = EVAL_DS_TEST_CONTROL_ROW_WIDGETS()
+  eq(table.getn(ws) >= 2, true, "★the control row reports its buttons")
+  for _, w in ipairs(ws) do
+    eq(w.declared, true, "★★★control-row button [" .. tostring(w.name) .. "] has a real (non-nil) centre")
+    eq(type(w.center) == "number", true, "★and that centre is a number, not a global-nil fallback")
+  end
+  -- ★② 源码层（真正的声明顺序校验，放在能读文件的 node 侧：LayoutRules 自描）
+end
+
+-- 57) ★★★ 1.70.41 搜索定位小圆点的「随机彩色」必须由实体 id 派生（恒定），不能每次现摇
+-- 用户要求「每只怪一个随机颜色，便于区分」。
+-- ★核心不变量：同一 id 恒定同色（否则每 0.25s 重绘就换色，用户无法靠颜色认怪）。
+do
+  local r1, g1, b1 = EVAL_DS_ENTITY_COLOR(119)
+  local r2, g2, b2 = EVAL_DS_ENTITY_COLOR(119)
+  eq(r1 == r2 and g1 == g2 and b1 == b2, true,
+     "★★★the same entity id always yields the SAME colour (stable across redraws)")
+  -- ② 不同 id 应当给出不同颜色（否则「便于区分」无从谈起）
+  local seen = {}
+  local distinct = 0
+  for id = 1, 20 do
+    local r, g, b = EVAL_DS_ENTITY_COLOR(id)
+    local key = string.format("%.2f_%.2f_%.2f", r, g, b)
+    if not seen[key] then seen[key] = true distinct = distinct + 1 end
+  end
+  eq(distinct >= 18, true, "★different entity ids get (mostly) different colours, got " .. distinct .. "/20 distinct")
+  -- ★★★ 上面那条只能证明「三元组不同」，不能证明「色相散开」——若 hue 被写死成常量、
+  --   只靠饱和度/亮度变化，三元组依然两两不同而且 distinct 达标（实测：该变异体能存活）。
+  --   用户要的是「看起来随机、便于区分」，所以必须直接钉**色相的取值范围与分布**。
+  -- 把 RGB 转回色相：红最大→0.0 区间、绿最大→1/3、蓝有最大→2/3。
+  local hues = {}
+  for id = 1, 30 do
+    local r, g, b = EVAL_DS_ENTITY_COLOR(id)
+    local mx = math.max(r, g, b)
+    local mn = math.min(r, g, b)
+    local d = mx - mn
+    local hh
+    if d < 1e-9 then hh = -1 -- 灰色：无色相，不计入
+    elseif mx == r then hh = ((g - b) / d) % 6
+    elseif mx == g then hh = (b - r) / d + 2
+    else hh = (r - g) / d + 4 end
+    if hh >= 0 then table.insert(hues, hh / 6) end
+  end
+  eq(table.getn(hues) >= 28, true, "★almost every id yields a chromatic (non-grey) colour, got " .. table.getn(hues) .. "/30")
+  -- 色相必须分布在至少 3 个不同的十分位（hue 写死成常量时这里会只剩 1 个）
+  local bucket = {}
+  local nb = 0
+  for _, hh in ipairs(hues) do
+    local k = math.floor(hh * 10)
+    if not bucket[k] then bucket[k] = true nb = nb + 1 end
+  end
+  eq(nb >= 3, true, "★★★hue actually varies across ids (a constant hue would collapse this to 1), got " .. nb .. " deciles")
+  -- ③ 颜色必须在可见区间：不能出现全黑/全白/灰色（看不清）
+  local bad = 0
+  for id = 1, 200 do
+    local r, g, b = EVAL_DS_ENTITY_COLOR(id)
+    if type(r) ~= "number" or type(g) ~= "number" or type(b) ~= "number" then bad = bad + 1
+    elseif r < 0 or r > 1 or g < 0 or g > 1 or b < 0 or b > 1 then bad = bad + 1
+    elseif (r + g + b) < 0.45 then bad = bad + 1 end -- 太暗看不清
+  end
+  eq(bad, 0, "★every derived colour is a visible RGB triple (no black/dark output), bad=" .. bad)
+end
+
+-- ★④ ★★★ 接线层：重绘时小圆点**实际传的颜色**必须来自 dsEntityColor。
+--   只断言解析函数是不够的：调用点写死一个常量色 / 现摇随机色，
+--   解析函数的断言依然全绿（本项目 1.70.26 踩过同一个坑）。
+do
+  local savedUQ11 = UnrealQuest
+  UnrealQuest = {
+    Client = {
+      CreateWorldMapPin = function() local f={_s=false}
+        f.Show=function(t) t._s=true end f.Hide=function(t) t._s=false end
+        f.IsShown=function(t) return t._s end return f end,
+      PositionWorldMapPin = function() return true end,
+      SetWorldMapPinSize = function() end, SetWorldMapPinTexture = function() end,
+      SetWorldMapPinColor = function() end, SetWorldMapPinHandlers = function() end,
+    },
+    GetModule = function(_, name)
+      if name == "Database" then
+        return { GetAreaServiceLocations = function() return {} end }
+      end
+      if name == "MapContext" then
+        return { GetViewedZone = function() return 14, { mapFile = "Durotar", zoneIndex = 1 } end }
+      end
+      return nil
+    end,
+  }
+  EVAL_DS_TEST_RESET_PINS()
+  local cap = EVAL_DS_TEST_CAPTURE_OVERLAY(14)
+  eq(cap.hasOverlay, true, "★the search-result overlay actually reaches the draw pass")
+  eq(type(cap.color) == "table", true, "★the overlay draw passes a colour to dsAnnPlace")
+  if type(cap.color) == "table" then
+    -- ★对照组：该颜色必须等于 dsEntityColor(id)。
+    --   若调用点改成现摇随机或写死常量，这里就不再相等。
+    local er, eg, eb = EVAL_DS_ENTITY_COLOR(1) -- 覆盖层用的 id 是 1
+    eq(math.abs(cap.color.r - er) < 0.0001 and math.abs(cap.color.g - eg) < 0.0001
+       and math.abs(cap.color.b - eb) < 0.0001, true,
+       "★★★the drawn colour IS the id-derived colour (not re-randomised / not a constant)")
+    -- 且不能是「每次都不一样」的现摇值：再重绘一次必须得到同色
+    EVAL_DS_TEST_RESET_PINS()
+    local cap2 = EVAL_DS_TEST_CAPTURE_OVERLAY(14)
+    if type(cap2.color) == "table" then
+      eq(cap2.color.r == cap.color.r and cap2.color.g == cap.color.g
+         and cap2.color.b == cap.color.b, true,
+         "★★★re-drawing yields the SAME colour (stable, not re-randomised per draw)")
+    end
+  end
+  UnrealQuest = savedUQ11
+end
+
 print("ALL TESTS PASS")
