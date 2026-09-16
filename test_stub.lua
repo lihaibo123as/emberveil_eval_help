@@ -107,7 +107,25 @@ ClearTarget = function() TEST.targetSel = "clear" end
 -- 物品使用桩（1.32.0）：TEST.bags = { [bag*100+slot] = { name=, tex=, count=, cd= } }
 GetContainerNumSlots = function(bag) return (bag >= 0 and bag <= 4) and 2 or 0 end
 GetContainerItemLink = function(bag, slot) local it = TEST.bags and TEST.bags[bag * 100 + slot] return it and ("|Hitem:1|h[" .. it.name .. "]|h") or nil end
-GetContainerItemInfo = function(bag, slot) local it = TEST.bags and TEST.bags[bag * 100 + slot] if not it then return nil end return it.tex, it.count or 1, false, 1, false end
+GetContainerItemInfo = function(bag, slot) local it = TEST.bags and TEST.bags[bag * 100 + slot] if not it then return nil end return it.tex, it.count or 1, false, it.q or 1, false end
 GetContainerItemCooldown = function(bag, slot) local it = TEST.bags and TEST.bags[bag * 100 + slot] if it and it.cd then return 900, 60, 1 end return 0, 0, 1 end
 UseContainerItem = function(bag, slot) TEST.usedItem = bag * 100 + slot end
 GetItemInfo = function() return nil end
+-- 工具箱桩（1.68.0）
+GetMoney = function() return 1000000 end
+CanMerchantRepair = function() return true end
+GetRepairAllCost = function() return TEST.repairCost or 0 end
+RepairAllItems = function() TEST.repaired = true end
+GetMerchantNumItems = function() return TEST.merchant and table.getn(TEST.merchant) or 0 end
+GetMerchantItemInfo = function(i) local m = TEST.merchant and TEST.merchant[i] if not m then return nil end return m.name, "tex", m.price or 1, 1, m.avail or -1, true end
+BuyMerchantItem = function(i, n) local m = TEST.merchant and TEST.merchant[i] TEST.bought = (TEST.bought or "") .. tostring(m and m.name) .. "x" .. tostring(n) .. ";" end
+PickupContainerItem = function(b, s) TEST.picked = b * 100 + s end
+DeleteCursorItem = function() if TEST.picked then TEST.deleted = TEST.picked TEST.picked = nil end end
+ConfirmReadyCheck = function() TEST.readyChecked = true end
+AcceptQuest = function() TEST.questAccepted = true end
+CompleteQuest = function() TEST.questCompleted = true end
+IsQuestCompletable = function() return TEST.questCompletable or false end
+GetNumQuestChoices = function() return TEST.questChoices or 0 end
+GetQuestReward = function(c) TEST.questReward = c or 0 end
+SetCVar = function(k, v) TEST.cvars = TEST.cvars or {} TEST.cvars[k] = tostring(v) end
+GetCVar = function(k) return (TEST.cvars and TEST.cvars[k]) or "0" end

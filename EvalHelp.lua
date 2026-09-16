@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   日志文件：%LOCALAPPDATA%\Azeroth\Saved\Logs（/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.67.6"
+local VERSION = "1.68.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -850,7 +850,7 @@ local W, H = WIDE and 700 or 560, 420
   -- Tab 按钮行（全局 / 一键宏设置；选中=金底亮字，未选=暗底灰字——参考 UnrealQuest 标签页风格）
   local pages = {}
   cfgWin.pages = pages
-  local tabNames = { L("TAB_GLOBAL"), L("TAB_MACRO") }
+  local tabNames = { L("TAB_GLOBAL"), L("TAB_MACRO"), L("TAB_TOOLBOX") }
   for i, name in ipairs(tabNames) do
     local tb = CreateFrame("Button", nil, root)
     tb:SetWidth(90) tb:SetHeight(18)
@@ -1199,6 +1199,7 @@ local W, H = WIDE and 700 or 560, 420
   cfgWin.root = root
   root:SetScript("OnHide", function() EVAL_DD_HIDE() end) -- 关窗收起下拉（1.19.0）
   cfgWin.refresh = function() for _, r in ipairs(refreshes) do pcall(r) end end
+  if type(EVAL_TB_BUILD) == "function" then EVAL_TB_BUILD(root, pages[3], refreshes) end -- 工具箱 Tab（1.68.0 Toolbox.lua 独立载入）
   EVAL_HELP_CFG_SETTAB(c().cfgTab or 1)
   return root
 end
@@ -1625,6 +1626,7 @@ function EVAL_HELP_CFG_SETTAB(idx)
     end
   end
   if idx == 2 then pcall(EVAL_WAR_TAB_REFRESH) end
+  if idx == 3 and type(EVAL_TB_REFRESH) == "function" then pcall(EVAL_TB_REFRESH) end -- 工具箱
 end
 
 function EVAL_HELP_CFG_TOGGLE()

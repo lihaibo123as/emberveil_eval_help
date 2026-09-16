@@ -681,4 +681,35 @@ eq(type(GetDifficultyColor), "function", "difficulty color shim exists")
 local dc = GetDifficultyColor(6)
 eq(type(dc) == "table" and type(dc.r) == "number" and type(dc.g) == "number" and type(dc.b) == "number", true, "shim returns color table")
 
+-- 11) 工具箱（1.68.0）：商人/就位/任务/丢弃
+EVAL_HELP_CONFIG.tb = { repair = true, sell = true, ready = true, quest = true, buyOn = true, buy = { { name = "晨露酒", n = 5 } }, discardOn = true, discard = { "破布" } }
+TEST.repairCost = 500
+TEST.merchant = { { name = "晨露酒" }, { name = "肉干" } }
+TEST.bags = { [1] = { name = "灰色破剑", q = 0, count = 1 }, [2] = { name = "晨露酒", q = 1, count = 2 }, [101] = { name = "破布", q = 0, count = 1 }, [102] = { name = "蓝装护甲", q = 2, count = 1 } }
+TEST.usedItem = nil TEST.repaired = nil TEST.bought = nil
+EVAL_TB_ONEVENT("MERCHANT_SHOW")
+eq(TEST.repaired, true, "tb auto repair")
+eq(TEST.usedItem, 101, "tb sell gray sweeps all grays (破剑@1 and 破布@101, blue spared)")
+eq(TEST.bought, "晨露酒x3;", "tb buy tops up to 5 (have 2)")
+TEST.picked = nil TEST.deleted = nil
+EVAL_TB_ONEVENT("BAG_UPDATE")
+eq(TEST.deleted, 101, "tb discard gray/white only (blue spared)")
+EVAL_TB_ONEVENT("READY_CHECK")
+eq(TEST.readyChecked, true, "tb ready check")
+EVAL_TB_ONEVENT("QUEST_DETAIL")
+eq(TEST.questAccepted, true, "tb quest accept")
+TEST.questCompletable = true EVAL_TB_ONEVENT("QUEST_PROGRESS")
+eq(TEST.questCompleted, true, "tb quest progress complete")
+TEST.questChoices = 1 EVAL_TB_ONEVENT("QUEST_COMPLETE")
+eq(TEST.questReward, 1, "tb quest reward single choice")
+TEST.questChoices = 2 TEST.questReward = nil EVAL_TB_ONEVENT("QUEST_COMPLETE")
+eq(TEST.questReward, nil, "tb quest multi choice waits manual")
+-- 开关全关：零动作
+EVAL_HELP_CONFIG.tb = {}
+TEST.repaired = nil TEST.readyChecked = nil
+EVAL_TB_ONEVENT("MERCHANT_SHOW") EVAL_TB_ONEVENT("READY_CHECK")
+eq(TEST.repaired, nil, "tb disabled merchant no-op")
+eq(TEST.readyChecked, nil, "tb disabled ready no-op")
+EVAL_HELP_CONFIG.tb = nil
+
 print("ALL TESTS PASS")
