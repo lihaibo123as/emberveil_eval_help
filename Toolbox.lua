@@ -92,9 +92,16 @@ local function tbItemName(b, s)
 end
 
 -- 商人开启：修理 / 卖灰 / 购买
+-- 1.68.1 实测修复：本客户端 MERCHANT_SHOW 连发两次（卖出提示打印两遍）——第二次触发时
+-- 物品尚未从背包移除，会重复计数/重复提示/重复尝试出售（同槽位二次 UseContainerItem 为无害空操作，但统计失真）。
+-- 去重窗口 1.5s：窗口内重复触发直接跳过。
+local tbMerchantLast = 0
 local function tbMerchant()
   local tb = tbCfg()
   if not tb then return end
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  if now - tbMerchantLast < 1.5 then return end
+  tbMerchantLast = now
   if tb.repair and type(CanMerchantRepair) == "function" and CanMerchantRepair() and type(RepairAllItems) == "function" then
     local cost = (type(GetRepairAllCost) == "function") and (GetRepairAllCost() or 0) or 0
     local money = (type(GetMoney) == "function") and (GetMoney() or 0) or cost

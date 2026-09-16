@@ -704,6 +704,17 @@ TEST.questChoices = 1 EVAL_TB_ONEVENT("QUEST_COMPLETE")
 eq(TEST.questReward, 1, "tb quest reward single choice")
 TEST.questChoices = 2 TEST.questReward = nil EVAL_TB_ONEVENT("QUEST_COMPLETE")
 eq(TEST.questReward, nil, "tb quest multi choice waits manual")
+-- 1.68.1 去重窗口：MERCHANT_SHOW 连发只处理一次
+EVAL_HELP_CONFIG.tb = { sell = true }
+TEST.bags = { [1] = { name = "灰色破剑", q = 0, count = 1 } }
+TEST.time = 2000 TEST.sellCalls = 0
+EVAL_TB_ONEVENT("MERCHANT_SHOW")
+eq(TEST.sellCalls, 1, "tb merchant first fire sells")
+EVAL_TB_ONEVENT("MERCHANT_SHOW") -- 窗口内第二发（本客户端实测连发）
+eq(TEST.sellCalls, 1, "tb merchant dedupe window blocks refire")
+TEST.time = 2002 -- 窗口外重开商人正常
+EVAL_TB_ONEVENT("MERCHANT_SHOW")
+eq(TEST.sellCalls, 2, "tb merchant reopen after window works")
 -- 开关全关：零动作
 EVAL_HELP_CONFIG.tb = {}
 TEST.repaired = nil TEST.readyChecked = nil

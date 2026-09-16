@@ -30,7 +30,7 @@ GameTooltip = {
 }
 DEFAULT_CHAT_FRAME = { AddMessage = function(_, msg) TEST.chat = (TEST.chat or "") .. tostring(msg) .. "\n" end }
 
-GetTime = function() return 1000 end
+GetTime = function() return TEST.time or 1000 end
 UnitName = function(u) return u == "player" and "测试玩家" or (TEST.curTargetName or "测试怪") end
 UnitLevel = function() return 60 end
 UnitClass = function(u) if u == "target" then return "战士", TEST.targetClass, 1 end return "战士", "WARRIOR", 1 end
@@ -109,7 +109,7 @@ GetContainerNumSlots = function(bag) return (bag >= 0 and bag <= 4) and 2 or 0 e
 GetContainerItemLink = function(bag, slot) local it = TEST.bags and TEST.bags[bag * 100 + slot] return it and ("|Hitem:1|h[" .. it.name .. "]|h") or nil end
 GetContainerItemInfo = function(bag, slot) local it = TEST.bags and TEST.bags[bag * 100 + slot] if not it then return nil end return it.tex, it.count or 1, false, it.q or 1, false end
 GetContainerItemCooldown = function(bag, slot) local it = TEST.bags and TEST.bags[bag * 100 + slot] if it and it.cd then return 900, 60, 1 end return 0, 0, 1 end
-UseContainerItem = function(bag, slot) TEST.usedItem = bag * 100 + slot end
+UseContainerItem = function(bag, slot) TEST.usedItem = bag * 100 + slot TEST.sellCalls = (TEST.sellCalls or 0) + 1 end
 GetItemInfo = function() return nil end
 -- 工具箱桩（1.68.0）
 GetMoney = function() return 1000000 end
