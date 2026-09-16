@@ -13,6 +13,47 @@ function checkIconAssets() {
   if (!fs.existsSync(dsPath)) return null;
   const ds = fs.readFileSync(dsPath, 'utf8');
   const rootMatch = ds.match(/DS_ANN_ICON_ROOT\s*=\s*"([^"]+)"/);
+// ===== DECL ORDER CHECK: every top-level local must be declared before its first use =====
+// ★★1.70.44 用户实测定案：「点定位后地图空白」的真凶是一个变量被两批函数分别绑到了两个位置：
+//   dsOverlayStr/dsSetOverlay 定义在 local dsAnnOverlay 之前 → 绑全局（写入成功）；
+//   dsAnnDraw/REFRESH 定义在其后 → 读局部（恒 nil）。
+//   Lua 不报错、pcall 全成功，只是行为错——而日志里两个读者会给出相反的答案。
+// 本检查把「声明必须早于首次引用」做成系统性规则，不再靠人肉眼（同类坑已累计 12 次）。
+(function () {
+  const src = fs.readFileSync(path.join(__dirname, "DataSearch.lua"), "utf8");
+  const lines = src.split(String.fromCharCode(10));
+  const strip = (l) => { const i = l.indexOf("--"); return i >= 0 ? l.slice(0, i) : l; };
+  // 收集顶层 local 声明（含多名字与 local function）
+  const decls = {};
+  for (let i = 0; i < lines.length; i++) {
+    const code = strip(lines[i]);
+    let m = code.match(new RegExp("^local" + "[ ]+" + "function" + "[ ]+" + "([A-Za-z_][A-Za-z0-9_]*)"));
+    if (m) { if (decls[m[1]] === undefined) decls[m[1]] = i + 1; continue; }
+    m = code.match(new RegExp("^local" + "[ ]+(.+?)="));
+    if (m) {
+      const names = m[1].split(",");
+      for (const raw of names) {
+        const nm = raw.trim();
+        if (new RegExp("^[A-Za-z_][A-Za-z0-9_]*$").test(nm) && decls[nm] === undefined) decls[nm] = i + 1;
+      }
+    }
+  }
+  const bad = [];
+  for (const nm of Object.keys(decls)) {
+    const d = decls[nm];
+    const re = new RegExp("(^|[^A-Za-z0-9_])" + nm + "([^A-Za-z0-9_]|$)");
+    for (let i = 0; i < d - 1; i++) {
+      if (re.test(strip(lines[i]))) { bad.push(nm + " used at " + (i + 1) + " but declared at " + d); break; }
+    }
+  }
+  if (bad.length) {
+    for (const b of bad) console.log("DECL ORDER CHECK: FAIL - " + b);
+    process.exitCode = 1;
+    return;
+  }
+  console.log("DECL ORDER CHECK: " + Object.keys(decls).length + " top-level locals declare before use");
+})();
+
 // ===== LAYOUT CHECK: a local must be declared before the code that reads it =====
 // ★1.70.41 用户截图「应该有个按钮没了」——「类型: 全部」过滤钮不显示。
 //   根因：filterBtn 用 DSL_ROW_BTN_Y 定位，而该 local 在 35 行之后才声明 →

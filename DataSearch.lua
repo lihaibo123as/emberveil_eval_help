@@ -265,6 +265,12 @@ local function dsSortedRates(map) -- {id=rate} → 按掉率降序数组
   return arr
 end
 
+-- ★1.70.44 一次定位最多取几个刷新点（GetEntityLocations 的 limit）。
+--   ★位置教训：它原先声明在 669 行，而 dsRecLoc 在 285 行就用它 → 读到全局 nil
+--   → limit=nil → **查询上限静默失效**（可能拉回该实体的全部刷新点）。
+--   由 test_engine.js 的 DECL ORDER CHECK 自动发现（不是人眼）。
+local DS_MAX_PINS = 12
+
 -- 记录坐标 → 定位数据 {x,y,zid,name,pts}。
 -- 1.70.8：坐标筛选/归一改走 UnrealQuest 的 Database:GetEntityLocations(sourceType, id, areaId, limit)
 -- （它内部就是「coords[i][3]==areaId 且 x/y 为数字」的同一条判断，且带 limit）；
@@ -664,9 +670,9 @@ function EVAL_DS_MAP_ICON_PATH() return DS_MAP_ICON end -- 测试直调（行尾
 function EVAL_DS_MAP_PIN_PATH() return DS_MAP_PIN_ICON end -- 测试直调（世界地图上的图钉素材）
 
 -- 统一标注层的钉子池定义在下方「统一地图标注层」段（dsAnnPins）。
--- DS_MAX_PINS 仍保留：它是「一次定位最多取几个刷新点」的查询上限（GetEntityLocations limit），
--- 与钉子池容量是两件事。
-local DS_MAX_PINS = 12
+-- DS_MAX_PINS 已上移到共享状态块（★1.70.44）：它被上方 dsRecLoc 读作
+-- GetEntityLocations 的 limit，原先声明在此处 → dsRecLoc 读到的是全局 nil
+-- → limit=nil → **查询上限静默失效**（一次定位可能拉回该实体的全部刷新点）。
 
 -- 标注点 tooltip 内容（数据来源=该点指向的实体，与详情页同一套模型）：
 -- 表头（青色名称）→ 属性行（等级/阵营/区域）→ 关联块（掉落物品 / 提供任务 / 来源怪 …），
@@ -782,6 +788,43 @@ function EVAL_DS_TEST_STATE(k)
   return nil
 end
 function EVAL_DS_PIN_TOOLTIP_LINES(info) return dsPinTooltipLines(info) end -- 测试直调（定义必须在本 local 之后——Lua local 作用域从声明后开始）
+
+-- ★★★标注层的全部共享状态：**必须声明在任何一个使用它的函数之前**。
+--   本文件因「Lua local 从声明语句之后才可见」已多次踩坑，每一次都是同一形态——
+--   「某个函数读到了全局 nil：不报错、pcall 全成功、但行为是错的」：
+--     · dsPersist 读 dsAnnOn（开关持久化静默失效）
+--     · dsTick 读它自己（引擎停摆，1.70.39）
+--     · DSL_ROW_BTN_Y 被 filterBtn 读（按钮整颗消失，1.70.41）
+--     · ★dsAnnOverlay / dsAnnLastFail / dsAnnPlaceLog（1.70.44 实测定案）：
+--       dsOverlayStr/dsSetOverlay 定义在声明之前 → 绑定到**全局**（写入成功）；
+--       dsAnnDraw/REFRESH 定义在声明之后 → 读的是**局部**（恒 nil）。
+--       症状：同一帧日志里「覆盖=草刺野猪(21点)」与「强制重绘：层已关且**无覆盖层**」并存，
+--       结果定位圆点永远画不出来 —— **一个变量被两批函数分别绑到了两个位置**。
+--   ★因此位置不能再按「只需在 dsPersist 之前」来挑：要在**整个文件里最早的使用点之前**。
+--     test_engine.js 的 DECL ORDER CHECK 会系统性地守住这条（不再靠人肉眼）。
+local dsAnnPins = {}          -- 唯一钉子池
+local dsAnnSig = nil          -- 当前已绘制的地图签名（areaId）
+local dsAnnOn = false         -- 分类标注层总开关
+local dsAnnShown = {}         -- 本次绘制实际显示的类别（用于计数/诊断）
+local dsAnnOverlay = nil      -- 搜索结果定位覆盖（{areaId=, pts={...}}），与分类层共存于同一池
+local DS_ANN_MAX = 500        -- 单区域上限（用户实测反馈：200 太少，杜隆塔尔实际 466 个采集点）
+local dsAnnTick, dsAnnHb, dsAnnSameT = 0, 0, 0
+-- ★ 1.70.40：dsAnnForcedT / dsAnnSlowT / dsAnnCandSig / dsAnnCandT 已随三件套一起删除。
+--   重绘时机现在只由「签名是否变化」决定，不再有额外的计时状态。
+-- ★1.70.42 自愈机制的两个状态（用户实测「点定位后地图空白」）：
+--   dsAnnLastDrawn = 上次绘制**打算**放几个点（含放置失败的）；dsAnnHealT = 上次自愈时刻。
+--   语义与已删除的三件套不同：它**先校验再修复**——只有「上次该画出点、此刻却一个都
+--   不可见」才重画一次（2s 节流），正常情况（该画 0 点 / 钉子都在）完全不出手。
+local dsAnnLastDrawn = 0
+local dsAnnHealT = 0
+local dsAnnLastFail = 0    -- 上次绘制中放置失败的点数（诚实放置 1.70.35：失败即 Hide）
+local dsAnnPlaceLog = nil  -- 上次绘制中首个失败点的信息（诊断用，最多记一条）
+-- ★1.70.42 绘制次数计数器：断言「到底有没有重建」时，不能拿「有没有查库」当代理——
+--   空结果场景下即使重建也不会查库，于是变异体（去掉 lastDrawn 门控）会静默存活。
+--   要保的性质是「重建发生了吗」，就必须直接数重建。
+local dsAnnDrawCount = 0
+local dsAnnTruncated = false   -- 本次绘制是否触顶（用于诊断/提示，避免静默截断）
+local dsTestEmptyResults = nil -- 测试专用：令分类层查询返回空集，用于构造「0 点重绘」
 
 -- 覆盖层的可诊断摘要（日志 / HUD / /eh ds 共用）。
 -- ★1.70.42 起因：用户实测「点定位后地图空白」，而这条链路上任何一个环节静默失败
@@ -946,32 +989,6 @@ local function dsMapShown()
   return s and true or false
 end
 
--- ★标注层的状态变量（必须声明在 dsPersist 之前——dsPersist 读它们。
---   本文件因「Lua local 从声明语句之后才可见」已踩坑 6 次，此处是第 6 次：dsPersist 写 c.ds.nodes=dsAnnOn
---   时 dsAnnOn 尚未声明，读到的是全局 nil，表现为「开关持久化失效但代码不报错」。）
-local dsAnnPins = {}          -- 唯一钉子池
-local dsAnnSig = nil          -- 当前已绘制的地图签名（areaId）
-local dsAnnOn = false         -- 分类标注层总开关
-local dsAnnShown = {}         -- 本次绘制实际显示的类别（用于计数/诊断）
-local dsAnnOverlay = nil      -- 搜索结果定位覆盖（{areaId=, pts={...}}），与分类层共存于同一池
-local DS_ANN_MAX = 500        -- 单区域上限（用户实测反馈：200 太少，杜隆塔尔实际 466 个采集点）
-local dsAnnTick, dsAnnHb, dsAnnSameT = 0, 0, 0
--- ★ 1.70.40：dsAnnForcedT / dsAnnSlowT / dsAnnCandSig / dsAnnCandT 已随三件套一起删除。
---   重绘时机现在只由「签名是否变化」决定，不再有额外的计时状态。
--- ★1.70.42 自愈机制的两个状态（用户实测「点定位后地图空白」）：
---   dsAnnLastDrawn = 上次绘制**打算**放几个点（含放置失败的）；dsAnnHealT = 上次自愈时刻。
---   语义与已删除的三件套不同：它**先校验再修复**——只有「上次该画出点、此刻却一个都
---   不可见」才重画一次（2s 节流），正常情况（该画 0 点 / 钉子都在）完全不出手。
-local dsAnnLastDrawn = 0
-local dsAnnHealT = 0
-local dsAnnLastFail = 0    -- 上次绘制中放置失败的点数（诚实放置 1.70.35：失败即 Hide）
-local dsAnnPlaceLog = nil  -- 上次绘制中首个失败点的信息（诊断用，最多记一条）
--- ★1.70.42 绘制次数计数器：断言「到底有没有重建」时，不能拿「有没有查库」当代理——
---   空结果场景下即使重建也不会查库，于是变异体（去掉 lastDrawn 门控）会静默存活。
---   要保的性质是「重建发生了吗」，就必须直接数重建。
-local dsAnnDrawCount = 0
-local dsAnnTruncated = false   -- 本次绘制是否触顶（用于诊断/提示，避免静默截断）
-local dsTestEmptyResults = nil -- 测试专用：令分类层查询返回空集，用于构造「0 点重绘」
 
 -- 持久化（图层开关 + trace；类别开关由 EVAL_DS_SET_CAT 直接写 cfg.ds.cats）
 local function dsPersist()
@@ -1721,6 +1738,8 @@ end
 -- ★状态变量必须声明在**使用它们的函数之前**（Lua local 从声明语句之后才可见）。
 --   本轮我先把 EVAL_DS_HUD* 写在前面、状态写在后面 → 函数读到的是全局 nil，
 --   EVAL_DS_HUD_STATE() 恒返回 nil（测试当场抓到 got=nil）。这是本项目第 8 次踩同一坑。
+-- ★1.70.44 随机点测试的状态：HUD 文本（下方 dsHudTick）读 dsRndOn，故必须先声明。
+local dsRndOn, dsRndT, dsRndStats = false, 0, { ok = 0, fail = 0, rounds = 0 }
 local dsHudOn, dsHudFrame, dsHudText = false, nil, nil
 local dsHudLastText = nil -- HUD 最后组装的诊断文本（供测试直读）
 
@@ -1802,7 +1821,8 @@ end
 -- 用 /eh ds rnd 开关。默认 2 秒放 8 个点，颜色随机、位置随机（0..100%），与真实数据无关。
 local DS_RND_INTERVAL = 2
 local DS_RND_COUNT = 8
-local dsRndOn, dsRndT, dsRndStats = false, 0, { ok = 0, fail = 0, rounds = 0 }
+-- ★1.70.44 dsRndOn 已上移到 HUD 之前（浮层文本读它，DECL ORDER CHECK 发现
+--   「用在 1795 行、声明在 1819 行」→ 浮层里「随机点」恒显示 nil）。
 -- 1.70.38 地图诊断浮层状态
 function EVAL_DS_RND(on)
   dsRndOn = (on == nil) and not dsRndOn or (on and true or false)
@@ -2258,6 +2278,13 @@ function EVAL_DS_TEST_RESET_PINS()
   --   用例就会以误导的方式失败（与钉子池残留同一个坑，见 1.70.32/1.70.37）。
 end
 function EVAL_DS_TEST_DRAW_COUNT() return dsAnnDrawCount end -- 直读「重建发生了几次」
+-- ★1.70.44 测试直调：走**生产用的** dsSetOverlay（而不是在测试里另写一份赋值）。
+--   这正是本轮 bug 逃过测试的原因：原 capture 辅助「直接构造覆盖层」= 自己写了一个
+--   与生产无关的赋值，于是「setter 绑到全局 / draw 读到局部」的分歧在测试里完全不可见。
+--   ★教训（第 4 次同型）：测试必须调用被测代码的真实入口，自己复刻一份就等于没测。
+function EVAL_DS_TEST_CALL_SET_OVERLAY(loc) return dsSetOverlay(loc) end
+-- 另一个读者：诊断串也读同一个变量。断言「setter 写完之后，两个读者都看得见」。
+function EVAL_DS_TEST_OVERLAY_STR() return dsOverlayStr() end
 function EVAL_DS_TEST_ALL_PINS_HIDDEN() -- 池内钉子是否全部处于隐藏态（用户可见契约）
   for _, f in ipairs(dsAnnPins) do
     if type(f.IsShown) == "function" and f:IsShown() then return false end
@@ -2313,11 +2340,15 @@ function EVAL_DS_TEST_CAPTURE_DRAW(areaId)
 end
 -- 专测搜索结果覆盖层的摆放参数：设置一个覆盖层，真实重绘，看看它有没有被塞图标。
 function EVAL_DS_TEST_CAPTURE_OVERLAY(areaId)
-  -- 直接构造覆盖层（不经过 dsSetOverlay——它要求 loc.zid，且语义是「打开地图并定位」）
-  dsAnnOverlay = {
-    areaId = areaId, name = "测试条目", kind = "unit", id = 1,
-    pts = { { x = 50, y = 50 } },
-  }
+  -- ★★★1.70.44 改走**生产用的 setter**（dsSetOverlay），不再自己构造一份赋值。
+  --   原实现在这里直接写 dsAnnOverlay —— 那恰好绕开了生产路径，于是
+  --   「setter 绑到全局 / draw 读到局部」这条分歧在测试里完全不可见（测试全绿、功能全废）。
+  --   ★这是「测试里复刻逻辑 ⇒ 被测代码的变异不可见」的第 4 次发作（见 1.70.25/26/28）。
+  --   现在：如果 setter 写错了变量，下面 dsAnnDraw 就看不到覆盖层 → hasOverlay=false → 断言变红。
+  local okSet = EVAL_DS_TEST_CALL_SET_OVERLAY({
+    zid = areaId, name = "测试条目", kind = "unit", id = 1, x = 50, y = 50,
+  })
+  local strBefore = EVAL_DS_TEST_OVERLAY_STR() -- 另一个读者：诊断串
   local cap = EVAL_DS_TEST_CAPTURE_DRAW(areaId)
   local hasOverlay, allDots = false, true
   for _, c in ipairs(cap) do
@@ -2333,7 +2364,10 @@ function EVAL_DS_TEST_CAPTURE_OVERLAY(areaId)
   for _, c in ipairs(cap) do
     if c.cat == nil then ovcol = { r = c.r, g = c.g, b = c.b } break end
   end
-  return { hasOverlay = hasOverlay, allDots = allDots, n = table.getn(cap), color = ovcol }
+  -- ★把两个读者看到的结果一并返回：断言「setter 之后两个读者都看得见」，
+  --   这正是本轮 bug 的直接反例（一个看得见、一个看不见）。
+  return { hasOverlay = hasOverlay, allDots = allDots, n = table.getn(cap), color = ovcol,
+    setOk = okSet and true or false, str = strBefore }
 end
 function EVAL_DS_TEST_ICON_NOT_TINTED()
   local tinted = nil

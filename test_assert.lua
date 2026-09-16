@@ -1613,6 +1613,11 @@ do
     EVAL_DS_ANN_CLEAR_OVERLAY()
     local capOv = EVAL_DS_TEST_CAPTURE_OVERLAY(14)
     eq(capOv.hasOverlay, true, "overlay draw path is exercised")
+    -- ★★★1.70.44 两个读者必须一致：设置走生产 setter（dsSetOverlay），
+    --   诊断串与绘制路径都应看得见覆盖层。本轮 bug 的直接反例就是「一个看得见、一个看不见」
+    --   （dsOverlayStr 绑全局 → 有；dsAnnDraw 读局部 → 无）。
+    eq(capOv.setOk, true, "★★★the production setter accepted the loc")
+    eq(capOv.str ~= "覆盖=无", true, "★★★the diagnostic reader sees the overlay too (both readers agree)")
     eq(capOv.allDots, true, "★search-result pins are placed with NO icon (round dot, per user request)")
     for _, d in ipairs(EVAL_DS_ANN_CAT_LIST()) do EVAL_DS_SET_CAT(d.k, false) end
     UnrealQuest = savedUQ5
@@ -2287,6 +2292,9 @@ do
   EVAL_DS_TEST_RESET_PINS()
   local cap = EVAL_DS_TEST_CAPTURE_OVERLAY(14)
   eq(cap.hasOverlay, true, "★the search-result overlay actually reaches the draw pass")
+  -- ★★★1.70.44 同上：断言「生产 setter 写完之后，两个读者都看得见」
+  eq(cap.setOk, true, "★★★the production setter (dsSetOverlay) accepted the loc")
+  eq(cap.str ~= "覆盖=无", true, "★★★the diagnostic reader agrees with the draw path")
   eq(type(cap.color) == "table", true, "★the overlay draw passes a colour to dsAnnPlace")
   if type(cap.color) == "table" then
     -- ★对照组：该颜色必须等于 dsEntityColor(id)。
