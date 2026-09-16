@@ -153,7 +153,7 @@
 **方式一：下载发布包（推荐）** —— [Releases 页面](https://gitee.com/xeval/emberveil_eval_help/releases) 下载最新 `EvalHelp-vX.Y.Z.zip`，解压到 `Interface/AddOns/`（解压后应为 `AddOns/EvalHelp/EvalHelp.toc`）：
 
 ```
-https://gitee.com/xeval/emberveil_eval_help/releases/download/v1.24.1/EvalHelp-v1.24.1.zip
+https://gitee.com/xeval/emberveil_eval_help/releases
 ```
 
 **方式二：克隆源码** —— `git clone git@gitee.com:xeval/emberveil_eval_help.git`，把整个目录放到 `Interface/AddOns/` 并确保目录名为 `EvalHelp`。
