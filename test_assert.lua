@@ -708,12 +708,12 @@ tbPump(4, 3100)
 eq(TEST.deleted, 101, "tb discard queued gray/white only (blue spared)")
 EVAL_TB_ONEVENT("READY_CHECK")
 eq(TEST.readyChecked, true, "tb ready check")
-EVAL_TB_ONEVENT("QUEST_DETAIL")
-eq(TEST.questAccepted, true, "tb quest accept")
-TEST.questCompletable = true EVAL_TB_ONEVENT("QUEST_PROGRESS")
-eq(TEST.questCompleted, true, "tb quest progress complete")
-TEST.questChoices = 1 EVAL_TB_ONEVENT("QUEST_COMPLETE")
-eq(TEST.questReward, 1, "tb quest reward single choice")
+TEST.time = 3950 EVAL_TB_ONEVENT("QUEST_DETAIL") tbPump(2, 3950) -- 1.69.0 交接进限频队列：先泵再断言（时间单调递增，tbQLast 不倒流）
+eq(TEST.questAccepted, true, "tb quest accept (queued 1.69.0)")
+TEST.questCompletable = true TEST.time = 3960 EVAL_TB_ONEVENT("QUEST_PROGRESS") tbPump(2, 3960)
+eq(TEST.questCompleted, true, "tb quest progress complete (queued)")
+TEST.questChoices = 1 TEST.time = 3970 EVAL_TB_ONEVENT("QUEST_COMPLETE") tbPump(2, 3970)
+eq(TEST.questReward, 1, "tb quest reward single choice (queued)")
 TEST.questChoices = 2 TEST.questReward = nil EVAL_TB_ONEVENT("QUEST_COMPLETE")
 eq(TEST.questReward, nil, "tb quest multi choice waits manual")
 -- 1.68.1 去重窗口 + 1.68.2 队列：MERCHANT_SHOW 连发只处理一次
@@ -754,5 +754,28 @@ EVAL_TB_ONEVENT("MERCHANT_SHOW") EVAL_TB_ONEVENT("READY_CHECK")
 eq(TEST.repaired, nil, "tb disabled merchant no-op")
 eq(TEST.readyChecked, nil, "tb disabled ready no-op")
 EVAL_HELP_CONFIG.tb = nil TEST.consumeOnUse = nil
+
+-- 41) 任务通知（1.69.0）：接取/进度差分 → 频道 RunScript 限频队列；关=零通知
+EVAL_HELP_CONFIG.tb = { qchan = "party" }
+TEST.runScripts = nil
+TEST.questLog = { { title = "收集狼皮", objs = { { txt = "森林狼皮: 0/5", d = 0, m = 5 } } } }
+TEST.time = 6000 EVAL_TB_ONEVENT("QUEST_LOG_UPDATE") -- 首次建档不刷屏
+eq(TEST.runScripts, nil, "first scan initializes silently")
+TEST.questLog[1].objs[1].d = 1 TEST.questLog[1].objs[1].txt = "森林狼皮: 1/5"
+TEST.time = 6001 EVAL_TB_ONEVENT("QUEST_LOG_UPDATE")
+tbPump(2, 6001)
+eq(TEST.runScripts and table.getn(TEST.runScripts), 1, "progress notice queued and sent")
+eq(TEST.runScripts[1]:find("PARTY") ~= nil, true, "notice goes to PARTY channel")
+eq(TEST.runScripts[1]:find("收集狼皮") ~= nil, true, "notice carries quest name")
+TEST.questLog[2] = { title = "清理矿洞", objs = {} } -- 新任务出现 = 接取通知
+TEST.time = 6002 EVAL_TB_ONEVENT("QUEST_LOG_UPDATE")
+tbPump(3, 6002)
+eq(TEST.runScripts and TEST.runScripts[2] and TEST.runScripts[2]:find("清理矿洞") ~= nil, true, "accept notice for new quest")
+EVAL_HELP_CONFIG.tb.qchan = "off" -- 关闭=零通知
+TEST.runScripts = nil
+TEST.questLog[1].objs[1].d = 2
+TEST.time = 6003 EVAL_TB_ONEVENT("QUEST_LOG_UPDATE")
+eq(TEST.runScripts, nil, "off channel silent")
+TEST.questLog = nil EVAL_HELP_CONFIG.tb = nil
 
 print("ALL TESTS PASS")

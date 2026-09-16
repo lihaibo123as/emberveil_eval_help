@@ -159,6 +159,12 @@ local function tbQPump()
         pcall(DeleteCursorItem)
       end
     end
+  elseif q.kind == "quest" then -- 1.69.0 任务交接 API 限频（对话窗口 0.3s 内保持打开，滴出执行安全）
+    if type(q.fn) == "function" then pcall(q.fn) end
+  elseif q.kind == "chat" then -- 1.69.0 频道通知：SendChatMessage Protected（wiki 原文）→ RunScript 绕行（1.49.3 范式）
+    if type(RunScript) == "function" then
+      pcall(RunScript, string.format("SendChatMessage(%q, %q)", q.text, q.ctype))
+    end
   end
 end
 
@@ -250,6 +256,71 @@ local function tbDiscardSweep()
   if n > 0 then say(string.format(L("TB_DISCARDED"), n)) end
 end
 
+-- ===== 任务通知（1.69.0）：进度/接取/完成 → 可选频道（关/仅自己/说/队伍） =====
+-- 频道发言：SendChatMessage 是 Protected（wiki 原文）→ RunScript 队列绕行；进限频队列防刷屏踢线
+local tbQScanLast = 0
+local tbQPrev = nil          -- 上次扫描快照；nil=未初始化（登录/reload 首次建档不刷屏）
+local tbLastCompleteName = nil -- 最近一个 isComplete==1 的任务名（交接日志/完成通知用）
+
+local function tbQuestScan()
+  -- pcall 直调，不套 and/or（1.64.0 教训：逻辑表达式截断多返回）
+  local cur = {}
+  if type(GetNumQuestLogEntries) ~= "function" or type(GetQuestLogTitle) ~= "function" then return cur end
+  local okn, n = pcall(GetNumQuestLogEntries)
+  if not (okn and type(n) == "number") then return cur end
+  for i = 1, n do
+    local okt, title, _lvl, _tag, isHeader, _col, isComplete = pcall(GetQuestLogTitle, i)
+    if okt and title and not isHeader then
+      local objs = {}
+      if type(GetQuestLogLeaderBoard) == "function" then
+        for oi = 1, 4 do
+          local oko, txt, _typ = pcall(GetQuestLogLeaderBoard, oi, i)
+          if oko and txt then
+            local d2, m2 = string.match(txt, "(%d+)%s*/%s*(%d+)")
+            objs[oi] = { txt = txt, d = tonumber(d2) or 0, m = tonumber(m2) or 0 }
+          end
+        end
+      end
+      cur[title] = { objs = objs, complete = (isComplete == 1) }
+      if isComplete == 1 then tbLastCompleteName = title end
+    end
+  end
+  return cur
+end
+
+local TB_CHAN_ORDER = { "off", "self", "say", "party" }
+local function tbNotify(msg)
+  local tb = tbCfg()
+  local ch = (tb and tb.qchan) or "off"
+  if ch == "off" then return end
+  if ch == "self" then say(msg) return end
+  tbQPush({ kind = "chat", text = msg, ctype = (ch == "party") and "PARTY" or "SAY" })
+end
+
+local function tbQuestDiff()
+  local tb = tbCfg()
+  if not (tb and tb.qchan and tb.qchan ~= "off") then return end
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  if now - tbQScanLast < 0.5 then return end -- QUEST_LOG_UPDATE 高频，0.5s 节流
+  tbQScanLast = now
+  local cur = tbQuestScan()
+  if not tbQPrev then tbQPrev = cur return end
+  for name, q in pairs(cur) do
+    local old = tbQPrev[name]
+    if not old then
+      tbNotify(string.format(L("TB_QN_ACCEPT"), name)) -- 新出现的任务 = 接取
+    else
+      for oi, o in ipairs(q.objs) do
+        local oo = old.objs[oi]
+        if oo and o.d > oo.d then
+          tbNotify(string.format(L("TB_QN_PROG"), name, o.txt or "")) -- 目标计数增加 = 进度
+        end
+      end
+    end
+  end
+  tbQPrev = cur
+end
+
 -- 事件统一入口（测试可直调）
 function EVAL_TB_ONEVENT(e)
   if e == "MERCHANT_SHOW" then
@@ -271,19 +342,31 @@ function EVAL_TB_ONEVENT(e)
     if tb and tb.ready and type(ConfirmReadyCheck) == "function" then pcall(ConfirmReadyCheck) end
   elseif e == "QUEST_DETAIL" then
     local tb = tbCfg()
-    if tb and tb.quest and type(AcceptQuest) == "function" then pcall(AcceptQuest) end
+    if tb and tb.quest and type(AcceptQuest) == "function" then
+      tbQPush({ kind = "quest", fn = function() pcall(AcceptQuest) end }) -- 1.69.0 限频队列
+      say(L("TB_Q_ACCEPT"))
+    end
   elseif e == "QUEST_PROGRESS" then
     local tb = tbCfg()
     if tb and tb.quest and type(IsQuestCompletable) == "function" and IsQuestCompletable() and type(CompleteQuest) == "function" then
-      pcall(CompleteQuest)
+      local cur = tbQuestScan() -- 1.69.0 记录待交任务名（交接日志/完成通知用）
+      for nm, q in pairs(cur) do if q.complete then tbLastCompleteName = nm end end
+      tbQPush({ kind = "quest", fn = function() pcall(CompleteQuest) end }) -- 限频队列
+      say(string.format(L("TB_Q_PROGRESS"), tbLastCompleteName or "…"))
     end
   elseif e == "QUEST_COMPLETE" then
     local tb = tbCfg()
     if tb and tb.quest and type(GetNumQuestChoices) == "function" and type(GetQuestReward) == "function" then
       local nc = GetNumQuestChoices() or 0
-      if nc == 0 then pcall(GetQuestReward)
-      elseif nc == 1 then pcall(GetQuestReward, 1) end -- 多奖励（>1）留给玩家手选
+      local nm = tbLastCompleteName or "…"
+      if nc <= 1 then -- 多奖励（>1）留给玩家手选
+        tbQPush({ kind = "quest", fn = function() pcall(GetQuestReward, nc == 1 and 1 or nil) end }) -- 1.69.0 限频队列
+        say(string.format(L("TB_Q_TURNIN"), nm))
+        tbNotify(string.format(L("TB_QN_DONE"), nm)) -- 完成通知
+      end
     end
+  elseif e == "QUEST_LOG_UPDATE" then -- 1.69.0 进度/接取差分通知
+    tbQuestDiff()
   end
 end
 
@@ -296,6 +379,7 @@ evf:RegisterEvent("READY_CHECK")
 evf:RegisterEvent("QUEST_DETAIL")
 evf:RegisterEvent("QUEST_PROGRESS")
 evf:RegisterEvent("QUEST_COMPLETE")
+evf:RegisterEvent("QUEST_LOG_UPDATE") -- 1.69.0 任务进度通知（日志扫描差分）
 evf:SetScript("OnEvent", function()
   local e = nil
   if type(event) == "string" then e = event end
@@ -319,8 +403,10 @@ local function tbModel()
     { t = "h", label = L("TB_H_SOCIAL") },
     { t = "c", key = "ready", label = L("TB_READY"), tip = L("TB_READY_TIP") },
     { t = "g", label = L("TB_GUILDNOTIFY"), tip = L("TB_GUILDNOTIFY_TIP") },
-    { t = "h", label = L("TB_H_QUEST") },
+    { t = "h", label = L("TB_H_QAUTO") }, -- 1.69.0 任务组拆分：自动交接 / 任务通知
     { t = "c", key = "quest", label = L("TB_QUEST"), tip = L("TB_QUEST_TIP") },
+    { t = "h", label = L("TB_H_QNOTIFY") },
+    { t = "ch", key = "qchan", label = L("TB_QCHAN"), tip = L("TB_QCHAN_TIP") }, -- 频道选择行
   }
 end
 
@@ -369,7 +455,7 @@ function EVAL_TB_REFRESH()
   for i = 1, TB.ROWS do
     local r = TB.rows[i]
     local it = m[TB.off + i]
-    r.chk:Hide() r.text:Hide() r.hdr:Hide() r.extra:Hide() r.add.btn:Hide() r.clr.btn:Hide()
+    r.chk:Hide() r.text:Hide() r.hdr:Hide() r.extra:Hide() r.add.btn:Hide() r.clr.btn:Hide() r.chv.btn:Hide()
     r.get, r.set = nil, nil
     if it then
       if it.t == "h" then
@@ -400,6 +486,23 @@ function EVAL_TB_REFRESH()
             local tb = tbCfg()
             if tb then tb[it.key] = {} end
             EVAL_TB_REFRESH()
+          end)
+        end
+        if it.t == "ch" then -- 1.69.0 频道选择行：勾选=启用（仅自己），值按钮弹频道下拉
+          local key = it.key
+          r.get = function() local tb = tbCfg() return tb and tb[key] ~= nil and tb[key] ~= "off" and true or false end
+          r.set = function(v) local tb = tbCfg() if tb then tb[key] = v and "self" or "off" end end
+          local cur = (function() local tb = tbCfg() return (tb and tb[key]) or "off" end)()
+          r.chv.text:SetText(L("TB_CH_" .. string.upper(cur)) or cur)
+          r.chv.btn:Show()
+          r.chv.btn:SetScript("OnClick", function()
+            if type(EVAL_DD_OPEN) == "function" then
+              EVAL_DD_OPEN(r.chv.btn, { L("TB_CH_OFF"), L("TB_CH_SELF"), L("TB_CH_SAY"), L("TB_CH_PARTY") }, function(pi)
+                local tb = tbCfg()
+                if tb then tb[key] = TB_CHAN_ORDER[pi] or "off" end
+                EVAL_TB_REFRESH()
+              end)
+            end
           end)
         end
         if r.get and r.get() then r.mark:Show() else r.mark:Hide() end
@@ -484,6 +587,7 @@ function EVAL_TB_BUILD(root, page, refreshes)
     table.insert(widgets, extra)
     row.add = tbBtn(root, RW - 96, y, 44, L("TB_ADD"), function() end, widgets)
     row.clr = tbBtn(root, RW - 48, y, 40, L("TB_CLEAR"), function() end, widgets)
+    row.chv = tbBtn(root, RW - 96, y, 88, "", function() end, widgets) -- 1.69.0 频道值按钮（ch 行）
     TB.rows[i] = row
   end
 

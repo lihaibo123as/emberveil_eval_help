@@ -82,7 +82,7 @@ GetActionCooldown = function() return 0, 0 end
 IsUsableAction = function() if TEST.usableRet then return TEST.usableRet.u, TEST.usableRet.noMana end return true end
 IsCurrentAction = function(slot) return TEST.currentAction == slot end
 SpellStopCasting = function() TEST.castStopped = true end
-RunScript = function(code) TEST.runScript = code if code == "SpellStopCasting()" then TEST.castStopped = true end end
+RunScript = function(code) TEST.runScript = code TEST.runScripts = TEST.runScripts or {} table.insert(TEST.runScripts, code) if code == "SpellStopCasting()" then TEST.castStopped = true end end -- 1.69.0 收集多条
 AttackTarget = function() TEST.attackTried = true end
 UseAction = function(slot) table.insert(TEST.used, slot) end
 TargetNearestEnemy = function()
@@ -126,6 +126,17 @@ BuyMerchantItem = function(i, n) local m = TEST.merchant and TEST.merchant[i] TE
 PickupContainerItem = function(b, s) TEST.picked = b * 100 + s end
 DeleteCursorItem = function() if TEST.picked then TEST.deleted = TEST.picked TEST.picked = nil end end
 ConfirmReadyCheck = function() TEST.readyChecked = true end
+-- 1.69.0 任务日志扫描桩（TEST.questLog = { {title=, complete=, objs={{txt=,d=,m=}}} }）
+GetNumQuestLogEntries = function() return table.getn(TEST.questLog or {}) end
+GetQuestLogTitle = function(i)
+  local q = TEST.questLog and TEST.questLog[i]
+  if q then return q.title, q.lvl or 1, nil, nil, nil, q.complete and 1 or nil end
+end
+GetQuestLogLeaderBoard = function(oi, qi)
+  local q = TEST.questLog and TEST.questLog[qi]
+  local o = q and q.objs and q.objs[oi]
+  if o then return o.txt, "monster", o.d, o.m end
+end
 AcceptQuest = function() TEST.questAccepted = true end
 CompleteQuest = function() TEST.questCompleted = true end
 IsQuestCompletable = function() return TEST.questCompletable or false end
