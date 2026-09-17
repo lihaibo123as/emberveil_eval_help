@@ -401,7 +401,7 @@ function EVAL_IB_BUILD(root, page, refreshes)
     b:SetWidth(IB_CELL - 4) b:SetHeight(IB_CELL - 4)
     b:SetPoint("TOPLEFT", root, "TOPLEFT", IB_PADX + col * IB_CELL, IB_Y_GRID - row * IB_CELL)
     pcall(b.EnableMouse, b, true)
-    pcall(b.RegisterForClicks, b, "LeftButtonUp")
+    pcall(b.RegisterForClicks, b, "LeftButtonUp", "RightButtonUp") -- 1.71.15 右键 = 设为小地图按钮图标
     local bg = b:CreateTexture(nil, "BACKGROUND")
     ibSolid(bg, 0.10, 0.09, 0.06, 1)
     bg:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
@@ -412,8 +412,18 @@ function EVAL_IB_BUILD(root, page, refreshes)
     local cell = { btn = b, bg = bg, tex = tex, item = nil }
     -- ★脚本只在建池时设一次；数据靠 cell.item 现读 —— 避免每页重设脚本
     --   （本客户端 SetScript 是单槽位，反复重设容易把别的处理漏掉）
-    b:SetScript("OnClick", function()
-      if cell.item then say(string.format(L("IB_PICK"), cell.item.path)) end
+    b:SetScript("OnClick", function(a, b2)
+      local mbtn = (type(a) == "string" and a) or (type(b2) == "string" and b2) or (type(arg1) == "string" and arg1) or "LeftButton"
+      if not cell.item then return end
+      -- ★1.71.15 用户：「图标调整的不对」——小地图按钮的图标不该由插件代挑，该由她自己挑：
+      --   图标库里**右键**任意一枚 = 设为小地图按钮图标（存配置，重登不丢）；左键仍是原来的打印路径。
+      if mbtn == "RightButton" then
+        if type(EVAL_HELP_MB_SETCUSTOM) == "function" and EVAL_HELP_MB_SETCUSTOM(cell.item.path) then
+          say(string.format(L("IB_SET_MB"), cell.item.path))
+        end
+        return
+      end
+      say(string.format(L("IB_PICK"), cell.item.path))
     end)
     b:SetScript("OnEnter", function()
       pcall(bg.SetVertexColor, bg, 0.38, 0.30, 0.10, 1)
@@ -428,6 +438,7 @@ function EVAL_IB_BUILD(root, page, refreshes)
         pcall(GameTooltip.AddLine, GameTooltip, L("IB_TIP_LOCAL"))
       end
       pcall(GameTooltip.AddLine, GameTooltip, it.path)
+      pcall(GameTooltip.AddLine, GameTooltip, L("IB_TIP_SETMB"), 0.55, 0.85, 0.45) -- 1.71.15 右键换小地图按钮图标
       pcall(GameTooltip.Show, GameTooltip)
     end)
     b:SetScript("OnLeave", function()
@@ -505,12 +516,12 @@ function EVAL_IB_TEST_GROUP_BTN() return IB.groupBtn and IB.groupBtn.btn end
 function EVAL_IB_TEST_BTN(which) return IB.btns and IB.btns[which] or nil end
 function EVAL_IB_TEST_W() return IB.W end
 function EVAL_IB_TEST_REFRESH_COUNT() return IB.refreshes or 0 end
-function EVAL_IB_TEST_CLICK_CELL(i)
+function EVAL_IB_TEST_CLICK_CELL(i, mbtn) -- 1.71.15 可传 "RightButton"（默认左键，老用例不变）
   local c = IB.cells[i]
   if not (c and c.btn and type(c.btn.GetScript) == "function") then return false end
   local ok, fn = pcall(c.btn.GetScript, c.btn, "OnClick")
   if not (ok and type(fn) == "function") then return false end
-  fn()
+  fn(mbtn)
   return true
 end
 function EVAL_IB_TEST_HOVER_CELL(i)

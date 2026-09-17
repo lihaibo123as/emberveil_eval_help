@@ -6895,4 +6895,45 @@ do
   print(string.format("  一键宏组：头 %d / 重扫 %d / 去抖 %d（下缘 %d，底部行上缘 %d）",
     hTop or 0, rTop or 0, dTop or 0, (dTop or 0) - (mu.rowH or 15), lay.navY or 0))
 end
+
+-- 97) ★★★1.71.15 用户：「图标调整的不对」——小地图按钮的图标不该由插件代挑，该由她自己挑：
+--   图标库里**右键**任意一枚 = 设为小地图按钮图标（存配置、重登不丢）；亲自挑的永远优先于自动挑。
+do
+  local savedMI97 = TEST.macroIcons
+  eq(EVAL_HELP_MB_SETCUSTOM("Interface\\Icons\\Spell_Holy_BlessingOfStrength_TEX"), true, "①真实 SETCUSTOM 接受合法路径")
+  eq(EVAL_HELP_CONFIG.mbIcon, "Interface\\Icons\\Spell_Holy_BlessingOfStrength_TEX", "①★写进了配置真值")
+  eq(EVAL_TEST_MB_VISUAL().icon, "Interface\\Icons\\Spell_Holy_BlessingOfStrength_TEX", "①★真控件当场贴上它")
+  eq(EVAL_HELP_MB_SETCUSTOM(""), false, "①空串 → 如实拒（不许把按钮贴成空白）")
+  TEST.macroIcons = { "INV_Misc_Wrench_01" }
+  EVAL_HELP_MB_SETICON()
+  eq(EVAL_TEST_MB_VISUAL().icon, "Interface\\Icons\\Spell_Holy_BlessingOfStrength_TEX",
+    "②★★亲自挑的图标优先于自动挑（宏图标表里有扳手也不换）")
+  EVAL_HELP_CONFIG.mbIcon = nil
+  EVAL_HELP_MB_SETICON()
+  eq(EVAL_TEST_MB_VISUAL().icon, "Interface\\Icons\\INV_Misc_Wrench_01", "②清掉自定义 → 回到自动挑")
+  -- ③ 真实右键：在图标库的格子上点右键 → 走真实 OnClick → 配置与按钮都换
+  TEST.macroIcons = { "Spell_Fire_Fireball", "Spell_Holy_BlessingOfStrength_TEX" }
+  EVAL_IB_TEST_RESET()
+  EVAL_IB_SCAN(true)
+  EVAL_IB_SET_GROUP("all")
+  local holy97 = nil
+  for i = 1, EVAL_IB_TEST_CELL_COUNT() do
+    local c97 = EVAL_IB_TEST_CELL(i)
+    if c97 and c97.item and string.find(tostring(c97.item.path), "BlessingOfStrength", 1, true) then holy97 = i break end
+  end
+  eq(holy97 ~= nil, true, "③前置：网格里找得到神圣力量图标")
+  EVAL_HELP_CONFIG.mbIcon = nil
+  eq(EVAL_IB_TEST_CLICK_CELL(holy97, "RightButton"), true, "③★右键走了真实 OnClick")
+  eq(EVAL_HELP_CONFIG.mbIcon ~= nil and string.find(tostring(EVAL_HELP_CONFIG.mbIcon), "BlessingOfStrength", 1, true) ~= nil, true,
+    "③★★右键真的把图标写进配置: " .. tostring(EVAL_HELP_CONFIG.mbIcon))
+  eq(EVAL_TEST_MB_VISUAL().icon ~= nil and string.find(tostring(EVAL_TEST_MB_VISUAL().icon), "BlessingOfStrength", 1, true) ~= nil, true,
+    "③★★按钮当场换成它（读真控件）")
+  EVAL_HELP_CONFIG.mbIcon = nil
+  eq(EVAL_IB_TEST_CLICK_CELL(holy97, "LeftButton"), true, "④左键走了真实 OnClick")
+  eq(EVAL_HELP_CONFIG.mbIcon, nil, "④★左键不写配置（只有右键才换图标，不被右键吃掉）")
+  EVAL_HELP_CONFIG.mbIcon = nil
+  TEST.macroIcons = savedMI97
+  EVAL_HELP_MB_SETICON()
+  print("  图标库右键 → 小地图按钮图标：亲自挑的优先 / 左键不动配置 / 清自定义回自动挑")
+end
 print("ALL TESTS PASS")

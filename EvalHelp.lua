@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.71.14"
+local VERSION = "1.71.15"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -2400,11 +2400,34 @@ do
   minimapBtn = mb
 end
 
+-- ★贴图 + 状态同步只此一份（SETICON 自动挑 / SETCUSTOM 用户右键挑 共用）；
+--   ★贴上图标时要把兜底留下的「EH」字**清空**（OVERLAY 层会压在图标上；「先清空再隐藏」的既有配方）。
+local function mbApplyIcon(path)
+  pcall(mbIconTex.SetTexture, mbIconTex, path)
+  pcall(mbIconTex.SetVertexColor, mbIconTex, 1, 1, 1)
+  mbIconPath = path
+  if mbText then pcall(mbText.SetText, mbText, "") end
+end
+
+-- ★1.71.15 用户：「图标调整的不对」——她的图标让她自己挑：
+--   图标库里**右键**任意一枚 → 存进 cfg.mbIcon 并立刻贴上（重登不丢；亲自挑的永远优先于自动挑）。
+function EVAL_HELP_MB_SETCUSTOM(path)
+  if type(path) ~= "string" or path == "" then return false end
+  c().mbIcon = path
+  if minimapBtn and mbIconTex then mbApplyIcon(path) end
+  return true
+end
+
 -- ★1.71.13 给按钮贴图标：从宏图标表按名字挑一枚「工具」图标（挑选逻辑 = 上面的纯函数，可注桩直测）。
---   ★挑不到就建旧的「金框 + 暗底 + EH」兜底样式 —— **不许留空白按钮**（接口缺席时入口不能消失）；
---   ★后来才贴上图标时要把兜底留下的「EH」字**清空**（OVERLAY 层会压在图标上；「先清空再隐藏」的既有配方）。
+--   ★挑不到就建旧的「金框 + 暗底 + EH」兜底样式 —— **不许留空白按钮**（接口缺席时入口不能消失）。
 function EVAL_HELP_MB_SETICON()
   if not minimapBtn or not mbIconTex then return false end
+  -- ★1.71.15 她在图标库里右键挑过的图标**优先**（亲自挑的 > 自动挑的）
+  local cu = c().mbIcon
+  if type(cu) == "string" and cu ~= "" then
+    mbApplyIcon(cu)
+    return true
+  end
   local path = nil
   if type(GetNumMacroIcons) == "function" and type(GetMacroIconInfo) == "function" then
     local okn, n = pcall(GetNumMacroIcons)
@@ -2413,10 +2436,7 @@ function EVAL_HELP_MB_SETICON()
     end
   end
   if path then
-    pcall(mbIconTex.SetTexture, mbIconTex, path)
-    pcall(mbIconTex.SetVertexColor, mbIconTex, 1, 1, 1)
-    mbIconPath = path
-    if mbText then pcall(mbText.SetText, mbText, "") end -- 兜底字压在图标上会穿帮 → 清空
+    mbApplyIcon(path)
     return true
   end
   if not mbRing then -- 兜底只建一次
@@ -6058,6 +6078,16 @@ if type(SlashCmdList) == "table" then
           say(string.format("%2d. t=%.3f  +%dms  %s", i, e.t, gap,
             e.skip and "|cffff5040×去抖丢弃|r" or "|cff00ff00√执行|r"))
         end
+      end
+    elseif msg == "go mbicon" or msg == "go mbicon reset" then
+      -- ★1.71.15 小地图按钮图标：查当前 / 清掉自定义（清掉后回到自动挑；换图标走图标库右键，不必敲命令）
+      if msg == "go mbicon reset" then
+        c().mbIcon = nil
+        EVAL_HELP_MB_SETICON()
+        say("小地图按钮图标：已清掉自定义，回到自动挑选")
+      else
+        local cur = c().mbIcon
+        say("小地图按钮图标：" .. (type(cur) == "string" and cur or "（自动挑选）") .. "（图标库里右键任意一枚可换；/eh go mbicon reset 清掉自定义）")
       end
     elseif msg == "go bind" then
       -- ★快捷键可行性探针（1.71.12 用户要求「先验证」：方案右键弹窗设快捷键这条路能不能走）。
