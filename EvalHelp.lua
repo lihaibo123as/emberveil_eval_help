@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.71.5"
+local VERSION = "1.71.6"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -5128,49 +5128,49 @@ function EVAL_TEST_IO_SHOWN()
 end
 
 -- ============ 案例模版选单（1.44.0）：按职业分组，点击方案行直接导入 ============
+-- ★★★1.71.5 案例模版窗的**版式计算**（纯函数：不建控件、不碰 UI）：
+--   规则 = 从左往右排、放不下就换行回左边界；★组标题要求「标题 + 该组第一个按钮」能一起放下
+--   （不许孤零零留在行尾——那样看着像丢了内容）。
+--   ★★为什么抽成纯函数：布局的核心（**换行**）原先埋在 BUILD 里，只能用真实模版数据测——
+--     而真实内容下「去掉换行」恰好是**等价**的（每个组的按钮串都刚好放得下，只有跨组才换行），
+--     变异测不出来。抽出来之后能用**合成数据**（一条超长列表）逼它反复换行，判据才真的会响。
+local function tplFlowPlan(W, groups, measure, margin, gap, rowH)
+  local maxX = W - margin
+  local plan, px, py = {}, margin, -26
+  for _, c in ipairs(groups) do
+    local label = "【" .. tostring(c.cls) .. "】"
+    local firstW = 0
+    if table.getn(c.list) > 0 then firstW = measure(tostring(c.list[1].name)) + 16 end
+    if px + measure(label) + (firstW > 0 and (gap + firstW) or 0) > maxX then px = margin py = py - rowH end
+    table.insert(plan, { kind = "header", cls = c.cls, x = px, y = py, w = measure(label) })
+    px = px + measure(label) + gap
+    for _, p in ipairs(c.list) do
+      local bw = measure(tostring(p.name)) + 16
+      if bw > (maxX - margin) then bw = maxX - margin end
+      if px + bw > maxX then px = margin py = py - rowH end
+      table.insert(plan, { kind = "item", cls = c.cls, tpl = p, x = px, y = py, w = bw })
+      px = px + bw + gap
+    end
+  end
+  return plan, py, -26
+end
+
 function EVAL_HELP_TPL_BUILD()
   if tplUI.root then return end
   -- ★★★1.71.3 用户要求「窗口大一点、分两列」：案例多了以后单列会长出屏幕（本客户端 UI 空间高 768）。
   --   ★宽度跟配置窗**同一来源**（cfWinWidth：中文 660 / 西文 800）——不再各写一份宽度（本项目老坑）。
   local W = cfWinWidth()
-  local margin, gap = 14, 12
-  local colW = math.floor((W - margin * 2 - gap) / 2)
-  -- ① 每组占几行（组标题 1 行 + 方案行）
-  local heights, totalRows = {}, 0
-  for i, c in ipairs(EVAL_IO_TEMPLATES) do
-    heights[i] = 1 + table.getn(c.list)
-    totalRows = totalRows + heights[i]
-  end
-  -- ② 选**最平衡的那个切点**把「组」切成左右两列：★以组为单位（绝不把一组拆到两列——拆开看着像少了一组），
-  --   ★切点 = 使两列行数差最小的那个。
-  --   （别用「塞到过半就停」的贪心：本轮加两条模版后它就偏成 22/16 —— 贪心在一行两行上看着没问题，
-  --     一加内容就露馅；而「遍历所有切点取最小差」是**稳定**的，增删模版后自动重新平衡。）
-  local nGroups = table.getn(EVAL_IO_TEMPLATES)
-  local bestCut, bestDiff, prefix = nGroups, nil, 0
-  for cut = 0, nGroups do
-    local d = math.abs(prefix - (totalRows - prefix))
-    if bestDiff == nil or d < bestDiff then bestDiff, bestCut = d, cut end
-    if cut < nGroups then prefix = prefix + heights[cut + 1] end
-  end
-  local leftCol, rightCol, leftRows, rightRows = {}, {}, 0, 0
-  for i = 1, bestCut do
-    leftRows = leftRows + heights[i]
-    table.insert(leftCol, i)
-  end
-  for i = bestCut + 1, nGroups do
-    rightRows = rightRows + heights[i]
-    table.insert(rightCol, i)
-  end
-  local rows = (leftRows > rightRows) and leftRows or rightRows
-  local H = 34 + rows * 20 + 34
-  -- 供断言读**真实布局值**（不在测试里写死常量——本项目「断言里写死布局常量 = 测自己」的老坑）
+  local MARGIN, GAP, ROW_H = 14, 6, 20
+  -- ★★★1.71.5 版式：**流式（自动换行）布局**（用户要求：「模版不用一列，可以同行，自动换行布局」）。
+  --   · 组标题与方案按钮**一起**从左往右排，放不下就换行（回到左边界）——不再「每行一个 / 每列一组」。
+  --   · 每个按钮宽度 = FontString:GetStringWidth() **实测** + 内边距（拿不到就按「字符数 × 9px」近似）。
+  --   · 版式先算成一张 plan 表（位置**单一来源**），再照它建控件；断言读的仍是**真实控件几何**。
+  local H = 0 -- 高度由 plan 算出来（量完标签再 SetHeight）
   tplUI.rowBtns = {}
-  tplUI.margin, tplUI.gap, tplUI.colW = margin, gap, colW
-  tplUI.leftCol, tplUI.rightCol = leftCol, rightCol
-  tplUI.leftRows, tplUI.rightRows, tplUI.maxRows = leftRows, rightRows, rows
-  tplUI.splitDiff = (leftRows > rightRows) and (leftRows - rightRows) or (rightRows - leftRows)
+  tplUI.headerFs = {}
+  tplUI.margin, tplUI.gap, tplUI.rowH = MARGIN, GAP, ROW_H
   local root = CreateFrame("Frame", "EVAL_HELP_TPL", UIParent)
-  root:SetWidth(W) root:SetHeight(H)
+  root:SetWidth(W) -- ★高度见下方「算完版式再 SetHeight」（本窗高度由内容决定）
   root:SetPoint("CENTER", UIParent, "CENTER", 0, 80)
   pcall(root.SetFrameStrata, root, "DIALOG")
   pcall(root.SetFrameLevel, root, 95) -- 高于 IO 窗（90）
@@ -5247,65 +5247,84 @@ function EVAL_HELP_TPL_BUILD()
   tplUI.tipBtn = tipBtn
   tplUI.tipText = tipTxt
 
-  -- 职业组标题（金色不可点）+ 方案行（点击即导入）
-  -- ★★★1.71.3 用户要求「窗口大一点、分两列」：案例变多后单列会长得超出屏幕（本客户端 UI 高 768）
-  --   ★列分配**以「组」为单位**（一个职业组绝不被拆到两列），再按「行数尽量对半」分左右 ——
-  --     既不会在组中间断开（看着像丢了一组），两列又大致等高（右上角不会留一大片空白）。
-  local function tplColumn(idxs, x)
-    local yy = -26
-    for _, gi in ipairs(idxs) do
-      local c = EVAL_IO_TEMPLATES[gi]
+  -- ★★★1.71.5 **流式（自动换行）布局**（用户要求：「模版不用一列，可以同行，自动换行布局」）：
+  --   ① 先算 plan（位置单一来源）：组标题与按钮**同一行里依次往右排**，放不下就换行回左边界；
+  --      ★标题不许「孤零零留在行尾」——要求「标题 + 该组第一个按钮」能一起放下，否则先换行。
+  --   ② 再照 plan 建控件（渲染只读 plan，位置不会两处各算一遍而漂移）。
+  local ruler = uiText(root, 9, 0.88, 0.88, 0.88)
+  pcall(ruler.SetPoint, ruler, "TOPLEFT", root, "TOPLEFT", -2000, 0) -- 量宽用的「尺」：挪出可视区（本客户端 Hide 过的控件仍可能被绘出）
+  local function measure(label)
+    local w = 0
+    pcall(ruler.SetText, ruler, label)
+    if type(ruler.GetStringWidth) == "function" then
+      local okv, v = pcall(ruler.GetStringWidth, ruler)
+      if okv and type(v) == "number" and v > 0 then w = v end
+    end
+    if w <= 0 then w = math.floor(string.len(label) / 3 + 0.5) * 9 end -- 近似：中文一字约 9px
+    return w
+  end
+  local maxX = W - MARGIN
+  -- 版式交给**纯函数**算（见 tplFlowPlan 上方注释：换行逻辑必须能被合成数据逼出来）
+  local plan, lastY, firstY = tplFlowPlan(W, EVAL_IO_TEMPLATES, measure, MARGIN, GAP, ROW_H)
+  maxX = maxX -- （保留：下面渲染不再用它；纯函数内部自带边界判断）
+  H = 34 + math.abs(lastY) + ROW_H + 20 -- 34 标题栏 + 内容 + 底部关闭按钮
+  root:SetHeight(H)
+  tplUI.plan = plan
+  -- 用掉的行数：首行 y=-26，之后每换一行减 ROW_H（用「首行 − 末行」算，别用 abs(py) —— 那会多算一行）
+  tplUI.firstY = firstY
+  tplUI.lines = math.floor((firstY - lastY) / ROW_H) + 1
+  for _, e in ipairs(plan) do
+    if e.kind == "header" then
       local hd = uiText(root, 10, 0.95, 0.82, 0.35)
-      hd:SetPoint("TOPLEFT", root, "TOPLEFT", x, yy)
-      hd:SetText("【" .. tostring(c.cls) .. "】")
-      yy = yy - 20
-      for _, p in ipairs(c.list) do
-        local b = CreateFrame("Button", nil, root)
-        b:SetPoint("TOPLEFT", root, "TOPLEFT", x + 8, yy)
-        b:SetWidth(colW - 16) b:SetHeight(18)
-        pcall(b.EnableMouse, b, true)
-        pcall(b.RegisterForClicks, b, "LeftButtonUp")
-        local bb = b:CreateTexture(nil, "BACKGROUND")
-        uiSolid(bb, 0.12, 0.10, 0.06, 1)
-        bb:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
-        bb:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
-        local bt = uiText(b, 9, 0.88, 0.88, 0.88)
-        bt:SetPoint("LEFT", b, "LEFT", 6, 0)
-        pcall(bt.SetWidth, bt, colW - 30) -- 窄列下长名字不越出格子（超出部分裁掉，description 里能看到全名）
-        pcall(bt.SetNonSpaceWrap, bt, false)
-        bt:SetText(tostring(p.name)) -- 1.67.6 行内只留模版名；描述+方案内容移入 tooltip（模版多了不溢出）
-        table.insert(tplUI.rowBtns, { name = tostring(p.name), cls = tostring(c.cls), btn = b })
-        b:SetScript("OnEnter", function()
-          pcall(bb.SetVertexColor, bb, 0.30, 0.25, 0.12, 1)
-          pcall(function()
-            GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
-            GameTooltip:AddLine(tostring(p.name), 1, 0.85, 0.3)
-            if p.desc then GameTooltip:AddLine(tostring(p.desc), 0.85, 0.85, 0.85, true) end
-            for ln in string.gmatch(tostring(p.text or ""), "([^\n]+)") do
-              if string.sub(ln, 1, 1) == "-" then GameTooltip:AddLine(ln, 0.65, 0.65, 0.65, true) end -- 技能行预览
-            end
-            GameTooltip:Show()
-          end)
-        end)
-        b:SetScript("OnLeave", function()
-          pcall(bb.SetVertexColor, bb, 0.12, 0.10, 0.06, 1)
-          pcall(GameTooltip.Hide, GameTooltip)
-        end)
-        b:SetScript("OnClick", function()
-          local ok, msg = ioImportText(p.text)
-          say(msg)
-          if ok then
-            pcall(EVAL_WAR_TAB_REFRESH)
-            EVAL_HELP_IO_REFRESH()
-            root:Hide()
+      hd:SetPoint("TOPLEFT", root, "TOPLEFT", e.x, e.y)
+      hd:SetText("【" .. tostring(e.cls) .. "】")
+      table.insert(tplUI.headerFs, { cls = tostring(e.cls), fs = hd })
+    else
+      local p = e.tpl
+      local b = CreateFrame("Button", nil, root)
+      b:SetPoint("TOPLEFT", root, "TOPLEFT", e.x, e.y)
+      b:SetWidth(e.w) b:SetHeight(18)
+      pcall(b.EnableMouse, b, true)
+      pcall(b.RegisterForClicks, b, "LeftButtonUp")
+      local bb = b:CreateTexture(nil, "BACKGROUND")
+      uiSolid(bb, 0.12, 0.10, 0.06, 1)
+      bb:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+      bb:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+      local bt = uiText(b, 9, 0.88, 0.88, 0.88)
+      bt:SetPoint("CENTER", b, "CENTER", 0, 0)
+      pcall(bt.SetWidth, bt, e.w - 8) -- 实测宽度留的内边距足够；超长名仍裁掉（tooltip 里有全名）
+      pcall(bt.SetNonSpaceWrap, bt, false)
+      bt:SetText(tostring(p.name)) -- 1.67.6 行内只留模版名；描述+方案内容移入 tooltip
+      table.insert(tplUI.rowBtns, { name = tostring(p.name), cls = tostring(e.cls), btn = b })
+      b:SetScript("OnEnter", function()
+        pcall(bb.SetVertexColor, bb, 0.30, 0.25, 0.12, 1)
+        pcall(function()
+          GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
+          GameTooltip:AddLine(tostring(p.name), 1, 0.85, 0.3)
+          if p.desc then GameTooltip:AddLine(tostring(p.desc), 0.85, 0.85, 0.85, true) end
+          for ln2 in string.gmatch(tostring(p.text or ""), "([^\n]+)") do
+            if string.sub(ln2, 1, 1) == "-" then GameTooltip:AddLine(ln2, 0.65, 0.65, 0.65, true) end -- 技能行预览
           end
+          GameTooltip:Show()
         end)
-        yy = yy - 20
-      end
+      end)
+      b:SetScript("OnLeave", function()
+        pcall(bb.SetVertexColor, bb, 0.12, 0.10, 0.06, 1)
+        pcall(GameTooltip.Hide, GameTooltip)
+      end)
+      b:SetScript("OnClick", function()
+        local ok, msg = ioImportText(p.text)
+        say(msg)
+        if ok then
+          pcall(EVAL_WAR_TAB_REFRESH)
+          EVAL_HELP_IO_REFRESH()
+          root:Hide()
+        end
+      end)
     end
   end
-  tplColumn(tplUI.leftCol, tplUI.margin)
-  tplColumn(tplUI.rightCol, tplUI.margin + tplUI.colW + tplUI.gap)
+
+  -- 关闭按钮（居中底部）
   local cb = CreateFrame("Button", nil, root)
   cb:SetWidth(64) cb:SetHeight(20)
   cb:SetPoint("BOTTOM", root, "BOTTOM", 0, 7)
@@ -5334,8 +5353,8 @@ function EVAL_TEST_TPL_LAYOUT()
   local okh, h = pcall(r.GetHeight, r)
   return {
     w = okw and w or nil, h = okh and h or nil,
-    colW = tplUI.colW, margin = tplUI.margin, gap = tplUI.gap,
-    leftRows = tplUI.leftRows, rightRows = tplUI.rightRows, maxRows = tplUI.maxRows, splitDiff = tplUI.splitDiff,
+    margin = tplUI.margin, gap = tplUI.gap, rowH = tplUI.rowH,
+    lines = tplUI.lines or 0, plan = table.getn(tplUI.plan or {}),
     rowCount = table.getn(tplUI.rowBtns or {}),
     groups = table.getn(EVAL_IO_TEMPLATES or {}),
   }
@@ -5350,6 +5369,59 @@ function EVAL_TEST_TPL_ROWS()
     out[i] = { name = e.name, cls = e.cls, x = okx and x or nil, y = oky and y or nil, w = okw and w2 or nil }
   end
   return out
+end
+function EVAL_TEST_TPL_HEADERS()
+  EVAL_HELP_TPL_BUILD()
+  local out = {}
+  for i, e in ipairs(tplUI.headerFs or {}) do
+    local okx, x = pcall(e.fs.GetLeft, e.fs)
+    local oky, y = pcall(e.fs.GetTop, e.fs)
+    out[i] = { cls = e.cls, x = okx and x or nil, y = oky and y or nil }
+  end
+  return out
+end
+-- ★★1.71.5 断言入口：用**合成数据**逼版式函数的「换行」路径（真实内容下那条路走不到 —— 见 tplFlowPlan 注释）。
+--   量宽用纯函数（不依赖 UI）：中文一字约 9px。返回 { items, rows, maxPerRow, over, gapBad, headerAlone }。
+function EVAL_TEST_TPL_PLAN_FAKE(w, n, chars)
+  local FAKE_CLS = string.char(0xe5, 0x81, 0x87) .. string.char(0xe7, 0xbb, 0x84) -- 合成组名（不写字面量：它会被当模版数据哨兵）
+  local groups = { { cls = FAKE_CLS, list = {} } }
+  for i = 1, n do
+    table.insert(groups[1].list, { name = string.rep("字", chars) .. tostring(i) })
+  end
+  local measure = function(s) return string.len(s) / 3 * 9 end
+  local plan = tplFlowPlan(w, groups, measure, 14, 6, 20)
+  local byRow = {}
+  for _, e in ipairs(plan) do
+    byRow[e.y] = byRow[e.y] or {}
+    table.insert(byRow[e.y], e)
+  end
+  local rows, maxPerRow, over, gapBad = 0, 0, 0, 0
+  for _, list in pairs(byRow) do
+    rows = rows + 1
+    table.sort(list, function(a, b) return a.x < b.x end)
+    local cnt = 0
+    for i = 1, table.getn(list) do
+      local e = list[i]
+      if e.kind == "item" then cnt = cnt + 1 end
+      if e.x + e.w > w - 14 + 1 then over = over + 1 end
+      if i > 1 then
+        local prev = list[i - 1]
+        if e.x < prev.x + prev.w + 6 - 0.5 then gapBad = gapBad + 1 end
+      end
+    end
+    if cnt > maxPerRow then maxPerRow = cnt end
+  end
+  local headerAlone = 0
+  for _, e in ipairs(plan) do
+    if e.kind == "header" then
+      local same = 0
+      for _, e2 in ipairs(plan) do
+        if e2.kind == "item" and e2.cls == e.cls and e2.y == e.y then same = same + 1 end
+      end
+      if same == 0 then headerAlone = headerAlone + 1 end
+    end
+  end
+  return { items = table.getn(plan), rows = rows, maxPerRow = maxPerRow, over = over, gapBad = gapBad, headerAlone = headerAlone }
 end
 function EVAL_TEST_TPL_TIP() EVAL_HELP_TPL_BUILD() return tplUI.tipBtn end
 function EVAL_TEST_TPL_TIP_TEXT()

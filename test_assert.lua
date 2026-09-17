@@ -6238,41 +6238,76 @@ end
 --     ③ **内容质量**（每条模版：名字非空、同组不重名、首行「# 方案: X」== 模版名、至少 1 条技能行；
 --        以及用户点名的几条确实在、职业过滤真的写进条件里）。
 do
+  -- ★★★1.71.5 版式改成**流式（自动换行）**（用户要求「模版不用一列，可以同行，自动换行布局」）：
+  --   判据从「两列的几何」换成「流式的不变量」：同一行可以放多个、每个都在窗内、同行相邻不重叠、
+  --   换行回到左边界、整窗高度由内容算出且不出屏。★读的仍是**真实控件几何**，不写死布局常量。
   local lay = EVAL_TEST_TPL_LAYOUT()
   eq(type(lay) == "table", true, "前置：模版窗建好了")
   eq(lay.w, EVAL_TEST_WIN_W(), "★★★窗口宽度 = 单一来源 cfWinWidth()（不再各写一份宽度）")
-  eq(lay.rowCount >= 20, true, "★模版行数 ≥20（案例已扩充）: " .. tostring(lay.rowCount))
-  eq(lay.leftRows + lay.rightRows, lay.groups + lay.rowCount, "★★两列行数相加 = 组标题 + 方案行 —— 一行都没丢")
-  eq(math.abs(lay.leftRows - lay.rightRows) <= 4, true, "★★两列行数大致对半（不留一大片空白）: " .. lay.leftRows .. "/" .. lay.rightRows)
-  eq(math.abs(lay.leftRows - lay.rightRows), lay.splitDiff, "★★★选的就是**最平衡的那个切点**（不是「塞到过半就停」的贪心）: 差 " .. tostring(lay.splitDiff))
+  eq(lay.rowCount >= 20, true, "★模版按钮数 ≥20（案例已扩充）: " .. tostring(lay.rowCount))
+  eq(lay.plan, lay.rowCount + lay.groups, "★★版式表 = 组标题 + 方案按钮（一个不漏）")
   eq(lay.h <= 700, true, "★★窗口高度不出屏（本客户端 UI 空间高 768）: " .. tostring(lay.h))
+  eq(lay.lines >= 4, true, "★★内容确实排了多行（会自动换行）: " .. tostring(lay.lines) .. " 行")
   local rows91 = EVAL_TEST_TPL_ROWS()
-  eq(table.getn(rows91), lay.rowCount, "★行表与布局自报的行数一致")
-  local colX1, colX2, maxRight = nil, nil, 0
+  eq(table.getn(rows91), lay.rowCount, "★行表与布局自报的按钮数一致")
+  -- 按 y 分行，逐行检查「自动换行」的不变量
+  local byRow, bad = {}, ""
   for i = 1, table.getn(rows91) do
     local r = rows91[i]
-    eq(type(r.x) == "number" and type(r.y) == "number", true, "★第 " .. i .. " 行有真实坐标")
-    if type(r.x) == "number" then
-      if colX1 == nil or r.x < colX1 then colX1 = r.x end
-      if colX2 == nil or r.x > colX2 then colX2 = r.x end
-      local right = r.x + (r.w or 0)
-      if right > maxRight then maxRight = right end
+    eq(type(r.x) == "number" and type(r.y) == "number", true, "★第 " .. i .. " 个按钮有真实坐标")
+    if type(r.x) == "number" and type(r.y) == "number" then
+      byRow[r.y] = byRow[r.y] or {}
+      table.insert(byRow[r.y], r)
     end
   end
-  eq(colX1 ~= colX2, true, "★★真的分成两列（行起点两个值: " .. tostring(colX1) .. " / " .. tostring(colX2) .. "）")
-  eq((colX2 or 0) - (colX1 or 0) > lay.colW, true, "★★第二列起点在第一列宽度之外（两列不叠在一起）")
-  eq(maxRight <= lay.w + 1, true, "★所有行都在窗内: " .. maxRight .. " <= " .. tostring(lay.w))
-  -- ★★★按组分行：同一个职业组的方案行必须落在同一列（拆开看着像少了一组）
-  local byCls, split91 = {}, ""
-  for i = 1, table.getn(rows91) do
-    local c = rows91[i].cls
-    byCls[c] = byCls[c] or {}
-    table.insert(byCls[c], rows91[i].x)
+  local multiRow, rowCount91 = 0, 0
+  for _, list in pairs(byRow) do
+    rowCount91 = rowCount91 + 1
+    table.sort(list, function(a, b) return a.x < b.x end)
+    if table.getn(list) >= 2 then multiRow = multiRow + 1 end
+    for i = 1, table.getn(list) do
+      local r = list[i]
+      if r.x < lay.margin - 0.5 then bad = bad .. "左越界:" .. tostring(r.name) .. " " end
+      if (r.w or 0) < 30 then bad = bad .. "按钮过窄:" .. tostring(r.name) .. "=" .. tostring(r.w) .. " " end
+      if r.x + (r.w or 0) > lay.w - lay.margin + 1 then bad = bad .. "右越界:" .. tostring(r.name) .. " " end
+      -- ★同行相邻要**留出 GAP**（不只是「不重叠」：贴在一起也算不合规——「不重叠」是弱代理）
+      if i > 1 then
+        local prev = list[i - 1]
+        if r.x < prev.x + (prev.w or 0) + lay.gap - 0.5 then
+          bad = bad .. "间距不足:" .. tostring(prev.name) .. "/" .. tostring(r.name) .. " "
+        end
+      end
+      -- ★底边不得压到「关闭」按钮那条带（34 是标题栏 + 底部留白）
+      if (r.y - 18) < -(lay.h - 34) then bad = bad .. "压到底部:" .. tostring(r.name) .. " " end
+    end
   end
-  for c, xs in pairs(byCls) do
-    for i = 2, table.getn(xs) do if xs[i] ~= xs[1] then split91 = split91 .. tostring(c) .. " " end end
+  eq(multiRow >= 4, true, "★★★同一行放了多个模版（这就是「可以同行」）: 有 " .. multiRow .. " 行是多按钮")
+  eq(rowCount91 <= lay.lines, true, "★按钮占的行数不超过版式行数（版式行数还含「只有标题」的行）: " .. rowCount91 .. " <= " .. lay.lines)
+  print(string.format("  案例模版窗版式：%d 个按钮 / %d 组 / %d 行 / 窗口 %dx%d", lay.rowCount, lay.groups, lay.lines, lay.w, lay.h))
+  eq(bad, "", "★★★流式不变量：每个按钮都在窗内、同行相邻不重叠: " .. bad)
+  -- ★★★用**合成数据**逼出「换行」路径：真实内容下每组的按钮串刚好放得下，「不换行」的实现在真实数据上照样全绿
+  --   （这是本项目的老家族：只在当前数据上看着对 = 测不出算法退化）→ 直接拿纯函数 planner 喂一条长列表。
+  local fake91 = EVAL_TEST_TPL_PLAN_FAKE(660, 60, 6)
+  eq(fake91.items, 61, "★★★合成数据：60 个按钮 + 1 个组标题都进了版式表")
+  eq(fake91.rows >= 6, true, "★★★60 个宽按钮必须换很多行（真的在换行）: " .. tostring(fake91.rows) .. " 行")
+  eq(fake91.maxPerRow >= 2, true, "★换行前同一行确实塞了多个（不是一行一个）: 最多 " .. tostring(fake91.maxPerRow) .. " 个/行")
+  eq(fake91.over, 0, "★★★换行后没有任何元素越过右边界（「不换行」的变异踩的就是这一条）")
+  eq(fake91.gapBad, 0, "★★同行相邻之间留足了 GAP（「贴着」也算不合规）")
+  eq(fake91.headerAlone, 0, "★★组标题没有被孤零零扔在行尾（标题后必须排得下本组按钮）")
+  print(string.format("  合成数据版式：%d 行 / 每行最多 %d 个（用来逼出换行路径）", fake91.rows, fake91.maxPerRow))
+  -- 真实渲染的标题几何：每个标题所在行必须至少有一个**本组**按钮（否则标题会孤悬在行尾）
+  local hdrs91 = EVAL_TEST_TPL_HEADERS()
+  eq(table.getn(hdrs91), lay.groups, "★★★真实渲染出来的组标题数 = 组数（每个组都有标题）")
+  local alone91 = ""
+  for i = 1, table.getn(hdrs91) do
+    local h = hdrs91[i]
+    local same = 0
+    for j = 1, table.getn(rows91) do
+      if rows91[j].cls == h.cls and rows91[j].y == h.y then same = same + 1 end
+    end
+    if same == 0 then alone91 = alone91 .. tostring(h.cls) .. " " end
   end
-  eq(split91, "", "★★★同一职业组的方案行不许被拆到两列: " .. split91)
+  eq(alone91, "", "★★真实数据里也没有「标题行上找不到本组按钮」的情况: " .. alone91)
   -- ② 标题感叹号 + 悬停说明
   eq(EVAL_TEST_TPL_TIP_TEXT(), "!", "★★标题上有金色文字感叹号（不用我们那两枚有固定含义的 mark 图标）")
   local tip91 = EVAL_TEST_TPL_TIP()
