@@ -596,6 +596,53 @@ function checkIconAssets() {
   console.log("STOP ATTACK WIRING CHECK: stopAllOf + followOf wired alongside cancelCastOf at all " + sites.length + " sites");
 })();
 
+// ===== README TABLE CHECK（1.72.0）：版本行必须落在「更新日志」表里，不能落进「模块」表 =====
+// ★背景（1.72.0 实事故）：发版时用脚本往 README 插版本行，脚本按「第一张表的表头分隔行」定位，
+//   把 1.72.0 / 1.71.24 / 1.71.23 / 1.71.22 **四行插进了开头的「模块」功能表**里，
+//   而真正的「更新日志」表在 20 多行之下 —— 用户在 GitHub 首页一眼看到功能表里混着版本号。
+//   ★这是典型的「脚本按结构定位、但结构假设错了」：**不报错、只是位置不对**，行为断言照不到，
+//     所以必须落成源码级检查（本项目铁律：审计/排查必须变成可执行闸门）。
+// 判据：① 每个 README 的版本行**全部出现在「更新日志」标题之后**（出现在之前 = 落错表）
+//       ② 每个 README 的版本行**恰好 10 行**（发布规则：README 只保留最近 10 个）
+//       ③ CHANGELOG.md 自己的版本表**保留完整历史**（>= 20 行）——它不受「10 行」规则约束
+(function () {
+  const READMES = [
+    ["README.md", /^##\s*更新日志/],
+    ["README_en.md", /^##\s*Changelog/],
+    ["README_ru.md", /^##\s*Журнал обновлений/],
+  ];
+  const VER_ROW = /^\|\s*\*\*\d/;
+  const bad = [];
+  for (const [f, h2re] of READMES) {
+    const p = path.join(__dirname, f);
+    if (!fs.existsSync(p)) { bad.push(f + " missing"); continue; }
+    const lines = fs.readFileSync(p, "utf8").split(/\r?\n/);
+    let h2 = -1;
+    for (let i = 0; i < lines.length; i++) if (h2re.test(lines[i])) { h2 = i; break; }
+    if (h2 < 0) { bad.push(f + " has no changelog heading"); continue; }
+    let rows = 0, misplaced = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (!VER_ROW.test(lines[i])) continue;
+      rows++;
+      if (i < h2) misplaced++;   // ★出现在「更新日志」标题之前 = 插错表了
+    }
+    if (misplaced > 0) bad.push(f + " has " + misplaced + " version row(s) ABOVE the changelog table (wrong table)");
+    if (rows !== 10) bad.push(f + " has " + rows + " version rows (expected exactly 10)");
+  }
+  // ③ CHANGELOG 保留完整历史
+  const cp = path.join(__dirname, "CHANGELOG.md");
+  if (fs.existsSync(cp)) {
+    const rows = fs.readFileSync(cp, "utf8").split(/\r?\n/).filter((l) => VER_ROW.test(l)).length;
+    if (rows < 20) bad.push("CHANGELOG.md has only " + rows + " version rows (should keep full history, >=20)");
+  }
+  if (bad.length) {
+    console.log("README TABLE CHECK: FAIL - " + bad.join(" | "));
+    process.exitCode = 1;
+    return;
+  }
+  console.log("README TABLE CHECK: 3 READMEs x 10 version rows, all inside the changelog table");
+})();
+
 checkIconAssets();
 
 const L=lauxlib.luaL_newstate();
