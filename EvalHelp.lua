@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.71.15"
+local VERSION = "1.71.16"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -386,7 +386,7 @@ function EVAL_HELP_UI_BUILD()
       pb:SetWidth(g0.w) pb:SetHeight(btnH)
       pb:SetPoint("TOPLEFT", root, "TOPLEFT", g0.x, g0.y)
       pcall(pb.EnableMouse, pb, true)
-      pcall(pb.RegisterForClicks, pb, "LeftButtonUp")
+      pcall(pb.RegisterForClicks, pb, "LeftButtonUp", "RightButtonUp") -- 1.71.16 右键 = 绑定快捷键
       local pbg = pb:CreateTexture(nil, "BACKGROUND")
       uiSolid(pbg, 0.16, 0.13, 0.08, 1)
       pbg:SetPoint("TOPLEFT", pb, "TOPLEFT", 0, 0)
@@ -396,7 +396,13 @@ function EVAL_HELP_UI_BUILD()
       pcall(pt.SetWidth, pt, g0.w - 4) -- ★限宽：极长名在自己的按钮里裁掉，不压邻居
       pcall(pt.SetNonSpaceWrap, pt, false)
       local pidx = i
-      pb:SetScript("OnClick", function()
+      pb:SetScript("OnClick", function(a, b)
+        local mbtn = (type(a) == "string" and a) or (type(b) == "string" and b) or (type(arg1) == "string" and arg1) or "LeftButton"
+        -- ★1.71.16 用户：「战斗UI->方案单元->右键绑定任务」——右键 = 弹窗绑定该方案的快捷键（左键仍是切换）
+        if mbtn == "RightButton" then
+          EVAL_BIND_OPEN(pidx)
+          return
+        end
         local w2 = uiWarCfg()
         if w2.profiles and w2.profiles[pidx] then
           w2.activeProfile = pidx
@@ -2485,6 +2491,285 @@ function EVAL_TEST_MB_ANCHOR_CURRENT()
   if not ok then return nil end
   return { point = point, relPoint = relPoint, x = x, y = y }
 end
+
+-- ============ 方案快捷键绑定（1.71.16，用户：「方案 右键能否弹窗设置 绑定快捷键」→ 先验证后实装） ============
+-- ★可行性（/eh go bind 实测）：SetBinding 接受插件自定义命令名、无需 Bindings.xml 登记（T1/T2 全过）；
+--   ★但那只证明「命令名能存进绑定表」——「按下键真的触发」走 **CLICK 派发**（vanilla 经典招：
+--   SetBinding(key, "CLICK <命名按钮>:LeftButton")，按下键 = 客户端替我们点那个隐藏按钮 → OnClick → EVAL_GO(i)）。
+--   配套实弹探针 /eh go bind2：现场复核 CLICK 派发与裸命令名派发哪种真的触发（10 秒倒计时如实报告）。
+-- ★持久化：绑定后 SaveBindings(GetCurrentBindingSet())——不存就随重登消失（实测当前 set = 1）。
+
+-- 派发命令名（纯函数，测试直测）：方案 i 的按键 = 点隐藏命名按钮 EVAL_GO_KEY_i
+function EVAL_BIND_CMD(i)
+  return "CLICK EVAL_GO_KEY_" .. tostring(i) .. ":LeftButton"
+end
+
+-- 每个方案一个隐藏命名按钮（按下绑定的键 → 客户端点它 → 执行并激活该方案）
+for i = 1, 12 do
+  local b = CreateFrame("Button", "EVAL_GO_KEY_" .. i, UIParent)
+  local pi = i
+  b:SetScript("OnClick", function() EVAL_GO(pi) end)
+end
+
+-- 按键清单（纯函数：下拉内容 = 分类标题 + 键名；locked 是「分类标题行」的下标集合——DD 的不可选行语义）。
+--   ★键名必须是 SetBinding 认的写法（F1 / BUTTON3 / MOUSEWHEELUP / SHIFT-2…，wiki KeyBinding 页核对过）。
+function EVAL_BIND_KEYLIST()
+  local cats = {
+    { label = L("BIND_CAT_F"),      keys = { "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12" } },
+    { label = L("BIND_CAT_NUM"),    keys = { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0" } },
+    { label = L("BIND_CAT_LETTER"), keys = { "Q", "E", "R", "T", "F", "G", "Z", "X", "C", "V", "B" } },
+    { label = L("BIND_CAT_MOUSE"),  keys = { "BUTTON3", "BUTTON4", "BUTTON5", "MOUSEWHEELUP", "MOUSEWHEELDOWN" } },
+    { label = L("BIND_CAT_MOD"),    keys = { "SHIFT-1", "SHIFT-2", "SHIFT-3", "SHIFT-4", "CTRL-1", "CTRL-2", "CTRL-3", "CTRL-4", "ALT-1", "ALT-2", "ALT-3", "ALT-4", "SHIFT-Q", "SHIFT-E", "SHIFT-R" } },
+  }
+  local rows, items, locked = {}, {}, {}
+  for _, cat in ipairs(cats) do
+    local hi = table.getn(items) + 1
+    items[hi] = "|cffaaaaaa" .. cat.label .. "|r"
+    locked[hi] = true
+    rows[hi] = { header = true }
+    for _, k in ipairs(cat.keys) do
+      local i = table.getn(items) + 1
+      items[i] = "  " .. k
+      rows[i] = { key = k }
+    end
+  end
+  return rows, items, locked
+end
+
+-- 下拉选中回调（命名导出 = 测试能直调，不依赖真的点开下拉）：标题行不选、键名行进状态
+function EVAL_BIND_DD_PICK(rows, pi)
+  local row = rows and rows[pi]
+  if row and row.key then EVAL_BIND_PICK(row.key) end
+end
+
+-- 逻辑层（UI 与测试共用一份实现）：绑定 / 清除。★换键时把旧键解绑；绑定后立刻 SaveBindings 持久化。
+function EVAL_BIND_DO(pidx, key)
+  if type(key) ~= "string" or key == "" then return false, "nokey" end
+  local w2 = warCfg()
+  if not (w2.profiles and w2.profiles[pidx]) then return false, "noprof" end
+  local ok, r = pcall(SetBinding, key, EVAL_BIND_CMD(pidx))
+  if not (ok and r) then return false, "reject" end
+  w2.bindKeys = w2.bindKeys or {}
+  local old = w2.bindKeys[pidx]
+  if type(old) == "string" and old ~= "" and old ~= key then pcall(SetBinding, old) end -- 换键：解掉旧键
+  w2.bindKeys[pidx] = key
+  if type(SaveBindings) == "function" then
+    pcall(SaveBindings, (type(GetCurrentBindingSet) == "function" and GetCurrentBindingSet()) or 1)
+  end
+  return true, key
+end
+
+function EVAL_BIND_CLEAR(pidx)
+  local w2 = warCfg()
+  local old = w2.bindKeys and w2.bindKeys[pidx]
+  if type(old) == "string" and old ~= "" then pcall(SetBinding, old) end
+  if w2.bindKeys then w2.bindKeys[pidx] = nil end
+  if type(SaveBindings) == "function" then
+    pcall(SaveBindings, (type(GetCurrentBindingSet) == "function" and GetCurrentBindingSet()) or 1)
+  end
+  return true
+end
+
+-- ===== 绑定弹窗（美化版：金边深底 + 标题栏拖动 + 分类下拉 + 冲突/空闲提示） =====
+local bindUI = { root = nil, pidx = nil, selKey = nil }
+
+local function bindRefresh()
+  local w2 = warCfg()
+  local p = bindUI.pidx and w2.profiles and w2.profiles[bindUI.pidx]
+  bindUI.title:SetText(L("BIND_TITLE") .. "：" .. (p and tostring(p.name) or "?"))
+  local cur = w2.bindKeys and w2.bindKeys[bindUI.pidx]
+  bindUI.curText:SetText(string.format(L("BIND_CUR"), (type(cur) == "string" and cur ~= "") and cur or L("BIND_NONE")))
+  bindUI.keyText:SetText(bindUI.selKey or L("BIND_PICK"))
+  -- 冲突提示：选中键已被占用时如实橙色警告（绑定后替换）；空闲 = 绿
+  local info, ir, ig, ib = "", 0.65, 0.65, 0.65
+  if bindUI.selKey then
+    local okA, act = pcall(GetBindingAction, bindUI.selKey)
+    act = (okA and type(act) == "string") and act or ""
+    if act == "" or act == EVAL_BIND_CMD(bindUI.pidx) then
+      info, ir, ig, ib = L("BIND_FREE"), 0.55, 0.85, 0.45
+    else
+      info, ir, ig, ib = string.format(L("BIND_CONFLICT"), act), 1.00, 0.65, 0.30
+    end
+  end
+  bindUI.infoText:SetText(info)
+  pcall(bindUI.infoText.SetTextColor, bindUI.infoText, ir, ig, ib)
+end
+
+function EVAL_BIND_PICK(key)
+  bindUI.selKey = key
+  bindRefresh()
+end
+
+function EVAL_BIND_BUILD()
+  if bindUI.root then return end
+  local W, H = 300, 190
+  local root = CreateFrame("Frame", "EVAL_HELP_BIND", UIParent)
+  root:SetWidth(W) root:SetHeight(H)
+  root:SetPoint("CENTER", UIParent, "CENTER", 0, 120)
+  pcall(root.SetFrameStrata, root, "DIALOG")
+  pcall(root.SetFrameLevel, root, 120)
+  pcall(root.SetMovable, root, true)
+  pcall(root.EnableMouse, root, true)
+  if uiOffscreen(root) then
+    root:ClearAllPoints()
+    root:SetPoint("CENTER", UIParent, "CENTER", 0, 100)
+  end
+  local bg = root:CreateTexture(nil, "BACKGROUND")
+  uiSolid(bg, 0.06, 0.05, 0.04, 0.98)
+  bg:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
+  bg:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", 0, 0)
+  for _, e in ipairs({ "TOP", "BOTTOM" }) do
+    local t = root:CreateTexture(nil, "BORDER")
+    uiSolid(t, 0.85, 0.70, 0.20, 1)
+    t:SetPoint(e .. "LEFT", root, e .. "LEFT", 0, 0)
+    t:SetPoint(e .. "RIGHT", root, e .. "RIGHT", 0, 0)
+    t:SetHeight(1)
+  end
+  for _, side in ipairs({ "LEFT", "RIGHT" }) do
+    local t = root:CreateTexture(nil, "BORDER")
+    uiSolid(t, 0.85, 0.70, 0.20, 1)
+    t:SetPoint("TOP" .. side, root, "TOP" .. side, 0, 0)
+    t:SetPoint("BOTTOM" .. side, root, "BOTTOM" .. side, 0, 0)
+    t:SetWidth(1)
+  end
+  local titleBar = CreateFrame("Button", nil, root)
+  titleBar:SetWidth(W - 4) titleBar:SetHeight(22)
+  titleBar:SetPoint("TOP", root, "TOP", 0, -2)
+  pcall(titleBar.SetFrameLevel, titleBar, 121)
+  pcall(titleBar.EnableMouse, titleBar, true)
+  pcall(titleBar.RegisterForClicks, titleBar, "LeftButtonUp")
+  pcall(titleBar.RegisterForDrag, titleBar, "LeftButton")
+  local tbBg = titleBar:CreateTexture(nil, "BACKGROUND")
+  uiSolid(tbBg, 0.14, 0.11, 0.06, 1)
+  tbBg:SetPoint("TOPLEFT", titleBar, "TOPLEFT", 0, 0)
+  tbBg:SetPoint("BOTTOMRIGHT", titleBar, "BOTTOMRIGHT", 0, 0)
+  local title = uiText(titleBar, 10, 0.95, 0.82, 0.35)
+  title:SetPoint("CENTER", titleBar, "CENTER", 0, 0)
+  bindUI.title = title
+  titleBar:SetScript("OnDragStart", function()
+    pcall(root.SetMovable, root, true)
+    pcall(root.StartMoving, root)
+    pcall(root.StopMovingOrSizing, root)
+    pcall(root.StartMoving, root)
+  end)
+  titleBar:SetScript("OnDragStop", function() pcall(root.StopMovingOrSizing, root) end)
+
+  local curText = uiText(root, 10, 0.92, 0.88, 0.80)
+  curText:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -36)
+  bindUI.curText = curText
+
+  -- 选择按键（下拉：分类标题 + 键名；locked 行不可点）
+  local keyBtn = CreateFrame("Button", nil, root)
+  keyBtn:SetWidth(W - 32) keyBtn:SetHeight(20)
+  keyBtn:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -60)
+  pcall(keyBtn.EnableMouse, keyBtn, true)
+  pcall(keyBtn.RegisterForClicks, keyBtn, "LeftButtonUp")
+  local kbBg = keyBtn:CreateTexture(nil, "BACKGROUND")
+  uiSolid(kbBg, 0.16, 0.13, 0.08, 1)
+  kbBg:SetPoint("TOPLEFT", keyBtn, "TOPLEFT", 0, 0)
+  kbBg:SetPoint("BOTTOMRIGHT", keyBtn, "BOTTOMRIGHT", 0, 0)
+  local keyText = uiText(keyBtn, 10, 0.95, 0.82, 0.35)
+  keyText:SetPoint("CENTER", keyBtn, "CENTER", 0, 0)
+  bindUI.keyBtn, bindUI.keyText = keyBtn, keyText
+  keyBtn:SetScript("OnClick", function()
+    local rows, items, locked = EVAL_BIND_KEYLIST()
+    EVAL_DD_OPEN(keyBtn, items, function(pi) EVAL_BIND_DD_PICK(rows, pi) end, { locked = locked })
+  end)
+
+  local infoText = uiText(root, 9, 0.65, 0.65, 0.65)
+  infoText:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -86)
+  bindUI.infoText = infoText
+  local hint = uiText(root, 8, 0.55, 0.55, 0.55)
+  hint:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -104)
+  hint:SetText(L("BIND_HINT"))
+
+  local function bBtn(x, label, fn)
+    local b = CreateFrame("Button", nil, root)
+    b:SetWidth(80) b:SetHeight(22)
+    b:SetPoint("BOTTOMLEFT", root, "BOTTOMLEFT", x, 12)
+    pcall(b.EnableMouse, b, true)
+    pcall(b.RegisterForClicks, b, "LeftButtonUp")
+    local bb = b:CreateTexture(nil, "BACKGROUND")
+    uiSolid(bb, 0.22, 0.18, 0.10, 1)
+    bb:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+    bb:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+    local bt = uiText(b, 10, 0.95, 0.82, 0.35)
+    bt:SetPoint("CENTER", b, "CENTER", 0, 0)
+    bt:SetText(label)
+    b:SetScript("OnClick", fn)
+    return b
+  end
+  bindUI.doBtn = bBtn(20, L("BIND_DO"), function()
+    if not bindUI.selKey then
+      bindUI.infoText:SetText(L("BIND_NOKEY"))
+      pcall(bindUI.infoText.SetTextColor, bindUI.infoText, 1.00, 0.65, 0.30)
+      return
+    end
+    local ok2, err = EVAL_BIND_DO(bindUI.pidx, bindUI.selKey)
+    local p = warCfg().profiles and warCfg().profiles[bindUI.pidx]
+    if ok2 then
+      say(string.format(L("BIND_DONE"), bindUI.selKey, tostring(p and p.name)))
+      bindUI.selKey = nil
+      bindRefresh()
+    else
+      say(string.format(L("BIND_FAIL"), tostring(err)))
+    end
+  end)
+  bindUI.clearBtn = bBtn(110, L("BIND_CLEAR"), function()
+    EVAL_BIND_CLEAR(bindUI.pidx)
+    local p = warCfg().profiles and warCfg().profiles[bindUI.pidx]
+    say(string.format(L("BIND_CLEARED"), tostring(p and p.name)))
+    bindUI.selKey = nil
+    bindRefresh()
+  end)
+  bBtn(200, L("BTN_CANCEL"), function()
+    if type(EVAL_DD_HIDE) == "function" then pcall(EVAL_DD_HIDE) end
+    root:Hide()
+  end)
+
+  root:SetScript("OnHide", function()
+    if type(EVAL_DD_HIDE) == "function" then pcall(EVAL_DD_HIDE) end -- 下拉贴 UIParent，宿主关了要一起收
+  end)
+  root:Hide()
+  bindUI.root = root
+end
+
+function EVAL_BIND_OPEN(pidx)
+  EVAL_BIND_BUILD()
+  local w2 = warCfg()
+  if not (w2.profiles and w2.profiles[pidx]) then return false end
+  bindUI.pidx = pidx
+  bindUI.selKey = nil
+  bindRefresh()
+  bindUI.root:Show()
+  return true
+end
+
+-- ★断言钩子：弹窗与逻辑层的真实状态（读真控件/真数据，不读常量）
+function EVAL_TEST_BIND_UI()
+  local out = { built = (bindUI.root ~= nil) and true or false, pidx = bindUI.pidx, selKey = bindUI.selKey,
+    shown = false, title = nil, cur = nil, info = nil }
+  if bindUI.root then
+    local ok, v = pcall(bindUI.root.IsVisible, bindUI.root)
+    out.shown = (ok and v) and true or false
+  end
+  if bindUI.title then
+    local ok, t = pcall(bindUI.title.GetText, bindUI.title)
+    out.title = ok and tostring(t or "") or nil
+  end
+  if bindUI.curText then
+    local ok, t = pcall(bindUI.curText.GetText, bindUI.curText)
+    out.cur = ok and tostring(t or "") or nil
+  end
+  if bindUI.infoText then
+    local ok, t = pcall(bindUI.infoText.GetText, bindUI.infoText)
+    out.info = ok and tostring(t or "") or nil
+  end
+  return out
+end
+function EVAL_TEST_BIND_DO_BTN() return bindUI.doBtn end
+function EVAL_TEST_BIND_CLOSE() if bindUI.root then bindUI.root:Hide() end end
+
 
 -- ============ 状态信息 UI（展示 Cat 式角色状态表 EVAL_HELP_STATE 的实时值） ============
 -- /eh st 开关；标题栏拖动（位置记忆+越界回归）；每 0.15s 刷新一次 EVAL_HELP_UPDATE_STATE()。
@@ -5453,6 +5738,7 @@ function EVAL_TEST_UI_PROF()
     local okT, txt = pcall(pb.text.GetText, pb.text)
     local oks, sh = pcall(pb.btn.IsShown, pb.btn)
     out.btns[i] = {
+      btn = pb.btn, -- 1.71.16 交出真实控件（右键绑定的断言要真的点它）
       name = (okT and tostring(txt or "")) or "",
       shown = (oks and sh) and true or false,
       x = num(pb.btn.GetLeft, pb.btn), y = num(pb.btn.GetTop, pb.btn),
@@ -6088,6 +6374,41 @@ if type(SlashCmdList) == "table" then
       else
         local cur = c().mbIcon
         say("小地图按钮图标：" .. (type(cur) == "string" and cur or "（自动挑选）") .. "（图标库里右键任意一枚可换；/eh go mbicon reset 清掉自定义）")
+      end
+    elseif msg == "go bind2" then
+      -- ★派发实弹探针（1.71.16）：T2 只证明了「命令名能存进绑定表」——「按下键真的触发」要实弹验证。
+      --   T3 = CLICK 派发（vanilla 经典招：CLICK <命名按钮>:LeftButton → 按键 = 客户端替我们点隐藏按钮）；
+      --   T4 = 裸命令名派发（EVAL_TEST_KEYFIRE 全局函数 —— 客户端会不会把命令名解析成全局函数直接调）。
+      --   两个空闲键各绑一种，10 秒内请各按一次；倒计时结束如实报告，然后解绑还原（不 SaveBindings）。
+      if not EVAL_TEST_CLICKBTN then
+        local tb = CreateFrame("Button", "EVAL_TEST_CLICKBTN", UIParent)
+        tb:SetScript("OnClick", function() EVAL_TEST_CLICKFIRED = GetTime() end)
+      end
+      EVAL_TEST_CLICKFIRED, EVAL_TEST_KEYFIRE_T = nil, nil
+      EVAL_TEST_KEYFIRE = function() EVAL_TEST_KEYFIRE_T = GetTime() end
+      local free2 = {}
+      for _, k in ipairs({ "F11", "F12", "F10", "F9", "8", "9", "CTRL-8", "CTRL-9", "ALT-8", "ALT-9", "BUTTON4", "BUTTON5" }) do
+        local okv, v = pcall(GetBindingAction, k)
+        if okv and v == "" then table.insert(free2, k) if table.getn(free2) >= 2 then break end end
+      end
+      if table.getn(free2) < 2 then
+        say("找不到两个空闲键——先 /eh go bind 看哪些键空着，告诉我两个我来改探针")
+      else
+        local k1, k2 = free2[1], free2[2]
+        pcall(SetBinding, k1, "CLICK EVAL_TEST_CLICKBTN:LeftButton")
+        pcall(SetBinding, k2, "EVAL_TEST_KEYFIRE")
+        say("— 派发实弹探针：10 秒内请按一次 " .. k1 .. "（CLICK 派发）和一次 " .. k2 .. "（裸命令名）—")
+        local pf = CreateFrame("Frame")
+        local t0 = GetTime()
+        pf:SetScript("OnUpdate", function()
+          if GetTime() - t0 < 10 then return end
+          pf:SetScript("OnUpdate", nil)
+          say("T3 CLICK 派发 " .. k1 .. "：" .. (EVAL_TEST_CLICKFIRED and "|cff00ff00★真的触发了|r（隐藏按钮 OnClick 收到）" or "|cffff5040×没触发|r"))
+          say("T4 裸命令名 " .. k2 .. "：" .. (EVAL_TEST_KEYFIRE_T and "|cff00ff00★真的触发了|r（全局函数被调）" or "|cffff5040×没触发|r"))
+          pcall(SetBinding, k1)
+          pcall(SetBinding, k2)
+          say("探针结束：两键已解绑还原（未 SaveBindings，改动随重登消失）")
+        end)
       end
     elseif msg == "go bind" then
       -- ★快捷键可行性探针（1.71.12 用户要求「先验证」：方案右键弹窗设快捷键这条路能不能走）。

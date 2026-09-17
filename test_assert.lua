@@ -6936,4 +6936,76 @@ do
   EVAL_HELP_MB_SETICON()
   print("  图标库右键 → 小地图按钮图标：亲自挑的优先 / 左键不动配置 / 清自定义回自动挑")
 end
+
+-- 98) ★★★1.71.16 方案快捷键绑定（用户：「战斗UI->方案单元->右键绑定任务，绑定按键下拉:键盘,鼠标等」）
+--   ★可行性由 /eh go bind 实测（SetBinding 接受自定义命令名）；派发走 CLICK 隐藏按钮；本组全程真控件。
+do
+  local savedP98, savedA98 = EVAL_HELP_CONFIG.war.profiles, EVAL_HELP_CONFIG.war.activeProfile
+  EVAL_HELP_CONFIG.war.profiles = { { name = "甲", skills = {} }, { name = "乙", skills = {} } }
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  eq(EVAL_BIND_CMD(3), "CLICK EVAL_GO_KEY_3:LeftButton", "①派发 = CLICK 命名隐藏按钮（vanilla 经典招）")
+  local rows98, items98, locked98 = EVAL_BIND_KEYLIST()
+  eq(table.getn(rows98), table.getn(items98), "②清单行数对齐")
+  local badKey98, nKey98, hasMouse98, hasF198, lockOK98 = "", 0, false, false, true
+  for i, r in ipairs(rows98) do
+    if r.header then
+      if not locked98[i] then lockOK98 = false end
+    elseif type(r.key) == "string" then
+      nKey98 = nKey98 + 1
+      if locked98[i] then lockOK98 = false end
+      if not string.find(r.key, "^[A-Z0-9][A-Z0-9%-]*$") then badKey98 = badKey98 .. r.key .. " " end
+      if r.key == "BUTTON3" then hasMouse98 = true end
+      if r.key == "F1" then hasF198 = true end
+    end
+  end
+  eq(lockOK98, true, "②★分类标题行全 locked（不可点）、键名行全可点")
+  eq(badKey98, "", "②★键名全是 SetBinding 认的写法: " .. badKey98)
+  eq(hasMouse98 and hasF198 and nKey98 >= 40, true, "②键盘/鼠标都在（用户要「键盘,鼠标等」）: " .. nKey98 .. " 个键")
+  TEST.bindings = nil
+  TEST.saveBindingsCalls = 0
+  EVAL_HELP_CONFIG.war.bindKeys = nil
+  eq(EVAL_BIND_DO(2, "F10"), true, "③绑定成功")
+  eq(TEST.bindings.F10, "CLICK EVAL_GO_KEY_2:LeftButton", "③★绑定表写的就是方案 2 的 CLICK 派发")
+  eq(EVAL_HELP_CONFIG.war.bindKeys[2], "F10", "③配置记下当前键")
+  eq(TEST.saveBindingsCalls >= 1, true, "③★绑定后真的 SaveBindings（不存就随重登消失）")
+  EVAL_BIND_DO(2, "F11")
+  eq(GetBindingAction("F10"), "", "③★★换键时旧键 F10 被解绑（不留一键两命令的烂摊子）")
+  eq(TEST.bindings.F11, "CLICK EVAL_GO_KEY_2:LeftButton", "③新键 F11 就位")
+  EVAL_BIND_CLEAR(2)
+  eq(GetBindingAction("F11"), "", "③★清除真的解绑")
+  eq(EVAL_HELP_CONFIG.war.bindKeys[2], nil, "③配置清掉")
+  eq(EVAL_BIND_DO(2, ""), false, "③空键如实拒")
+  -- ④ 弹窗真实流程：右键方案 → 弹窗 → 下拉回调选键 → 点[绑定]
+  local wasShown98 = EVAL_TEST_UI_SHOWN()
+  if not wasShown98 then EVAL_HELP_UI_TOGGLE() end
+  EVAL_WAR_TAB_REFRESH()
+  EVAL_HELP_UI_TICK()
+  local up98 = EVAL_TEST_UI_PROF()
+  eq(up98.btns[1] and up98.btns[1].btn ~= nil, true, "④前置：拿到方案按钮的真实控件")
+  up98.btns[1].btn:GetScript("OnClick")("RightButton")
+  local bu98 = EVAL_TEST_BIND_UI()
+  eq(bu98.shown, true, "④★★右键方案 → 绑定弹窗真的开了")
+  eq(bu98.pidx, 1, "④★弹窗绑的是被点的那个方案（第 1 个）")
+  local pickIdx98 = nil
+  for i, r in ipairs(rows98) do if r.key == "F9" then pickIdx98 = i break end end
+  EVAL_BIND_DD_PICK(rows98, pickIdx98)
+  eq(EVAL_TEST_BIND_UI().selKey, "F9", "④下拉回调选键进状态")
+  eq(string.find(tostring(EVAL_TEST_BIND_UI().info), "%S") ~= nil, true, "④提示行有内容（空闲=绿）")
+  EVAL_TEST_BIND_DO_BTN():GetScript("OnClick")()
+  eq(TEST.bindings.F9, "CLICK EVAL_GO_KEY_1:LeftButton", "④★★点[绑定] → 绑定表写入方案 1 的派发")
+  eq(EVAL_HELP_CONFIG.war.bindKeys[1], "F9", "④配置记下 F9")
+  EVAL_TEST_BIND_CLOSE()
+  -- ⑤ 左键不被右键吃掉：仍是切换方案
+  up98.btns[2].btn:GetScript("OnClick")("LeftButton")
+  eq(EVAL_HELP_CONFIG.war.activeProfile, 2, "⑤★左键仍是切换方案（右键没把左键吃掉）")
+  eq(EVAL_TEST_BIND_UI().shown, false, "⑤左键不开弹窗")
+  -- 还原
+  EVAL_HELP_CONFIG.war.profiles = savedP98
+  EVAL_HELP_CONFIG.war.activeProfile = savedA98
+  EVAL_HELP_CONFIG.war.bindKeys = nil
+  TEST.bindings = nil
+  EVAL_HELP_UI_BUILD()
+  if not wasShown98 and EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end
+  print("  方案绑定：右键开弹窗 → 下拉选键 → [绑定] = CLICK 派发 + SaveBindings；换键解旧键；左键仍切换")
+end
 print("ALL TESTS PASS")

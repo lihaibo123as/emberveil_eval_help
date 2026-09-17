@@ -377,6 +377,31 @@ GetMacroIconInfo = function(i)
   if type(name) ~= "string" then return nil end -- ★非字符串 = 取失败（用于测「失败要记账」）
   return "Interface\\Icons\\" .. name
 end
+-- ★1.71.16 KeyBinding 桩（方案快捷键绑定弹窗 + /eh go bind 探针）：TEST.bindings = { [键] = 命令 }。
+--   ★桩必须记住被测代码读写的每一个状态：绑定表本身 + SaveBindings 调用次数（不存档 = 绑定随重登丢）。
+TEST.bindings = nil
+SetBinding = function(k, cmd)
+  if type(k) ~= "string" or k == "" then return false end
+  TEST.bindings = TEST.bindings or {}
+  if cmd == nil then TEST.bindings[k] = nil else TEST.bindings[k] = tostring(cmd) end
+  return true
+end
+GetBindingAction = function(k)
+  return (TEST.bindings and TEST.bindings[k]) or ""
+end
+GetBindingKey = function(cmd)
+  if not TEST.bindings then return nil end
+  local out = nil
+  for k, c in pairs(TEST.bindings) do
+    if c == cmd then out = (out and (out .. ",") or "") .. k end
+  end
+  return out
+end
+SaveBindings = function(_which)
+  TEST.saveBindingsCalls = (TEST.saveBindingsCalls or 0) + 1
+  return true
+end
+GetCurrentBindingSet = function() return 1 end
 -- ★★★合并冲突留下的**重复定义**（1.71.1 修）：v1.71.0 的方案分享补了这两行简版桩，
 --   而队友/团员扫描在文件上方另有一份**支持 TEST.team/TEST.raid 列表**的桩。
 --   Lua 里**后赋值者静默获胜** → 简版把我那份整个盖掉 → 队伍扫描只扫到自己，
