@@ -28,6 +28,11 @@
    ★★**必须是附注标签（`-a`），不是轻量标签** —— 轻量标签只是个 commit 指针、**没有说明**，
    而 Release 页要用它的说明当正文（1.72.0 踩过：先打了轻量标签，只能 `git tag -a ... -f` 重打再强推）。
    说明内容 = 该版本的「头条 + 里程碑 + 安装方式 + 质量声明」，与 CHANGELOG 的详情小节同源。
+   ★★**写标签说明文件绝不能用 PowerShell 的 `>` 重定向** —— `>` 默认写 **UTF-16LE**，
+   `git tag -F` 按原始字节读进去 → 标签说明**整段乱码**（1.72.0 实踩：
+   `git cat-file -p v1.72.0` 出来是 "E v a l H e l p" 这种夹 null 字节的样子）。
+   正解：用 `write` 工具写 UTF-8 文件（无 BOM），或 PowerShell 下 `Out-File -Encoding utf8`；
+   ★打完后**必须回读复核**：`git cat-file -p vX.Y.Z | Select-Object -Skip 5 -First 3` 应正常显示中文。
 8. **推送（三个都推）**：`git push origin master && git push github master`，然后**标签也要推**
    `git push origin --tags && git push github --tags`（★只推分支不推标签 = Release 页找不到 tag）。
 9. **出发布包 + 建 Release 页**：
