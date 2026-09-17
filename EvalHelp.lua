@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.71.8"
+local VERSION = "1.71.9"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -1378,8 +1378,9 @@ local function cfgBuild()
     pcall(cds.SetJustifyH, cds, "LEFT")
     row.conds = cds
     table.insert(Wp, cds)
-    -- 1.61.0 调序按钮改为 ^/v 箭头 + 新增下移（文本「上」→ ^，新增 v）
-    row.up = mkSmall(88, y, 16, "^", function()
+    -- 1.61.0 调序按钮改为箭头 + 新增下移；★1.71.9 用户截图反馈：「^ 看着像一条横线、v 是字母」
+    --   → 换成真正的三角 **▲/▼**（与本插件「工具箱」「数据检索」的滚动按钮同一套字形，已验证能显示）。
+    row.up, row.upText = mkSmall(88, y, 16, "▲", function()
       local p = warCfg().profiles[warCfg().activeProfile or 1]
       local idx = ri + (warUI.offset or 0)
       if p and idx > 1 and p.skills[idx] and p.skills[idx - 1] then
@@ -1387,7 +1388,7 @@ local function cfgBuild()
         EVAL_WAR_TAB_REFRESH()
       end
     end, nil, true)
-    row.dn = mkSmall(72, y, 16, "v", function()
+    row.dn, row.dnText = mkSmall(72, y, 16, "▼", function()
       local p = warCfg().profiles[warCfg().activeProfile or 1]
       local idx = ri + (warUI.offset or 0)
       if p and p.skills[idx] and p.skills[idx + 1] then
@@ -1415,13 +1416,14 @@ local function cfgBuild()
     warUI.rows[ri] = row
   end
 
-  -- 滚动条（1.33.0：技能数取消上限后的超高滚动）：^ 上翻 / v 下翻 + 滚轮；仅超出可见行数时显示
+  -- 滚动条（1.33.0：技能数取消上限后的超高滚动）：▲ 上翻 / ▼ 下翻 + 滚轮；仅超出可见行数时显示
+  --   ★1.71.9 与调序按钮一起换成三角（原先的 ^ 像横线、v 是字母）。
   warUI.offset = warUI.offset or 0
-  warUI.scrollUp = mkSmall(94, -74, 14, "^", function()
+  warUI.scrollUp, warUI.scrollUpText = mkSmall(94, -74, 14, "▲", function()
     warUI.offset = math.max(0, (warUI.offset or 0) - 1)
     EVAL_WAR_TAB_REFRESH()
   end, nil, true)
-  warUI.scrollDn = mkSmall(94, -74 - (ROWS - 1) * 24, 14, "v", function() -- 1.60.0 跟随动态行数（旧硬编码 -242）
+  warUI.scrollDn, warUI.scrollDnText = mkSmall(94, -74 - (ROWS - 1) * 24, 14, "▼", function() -- 1.60.0 跟随动态行数（旧硬编码 -242）
     warUI.offset = (warUI.offset or 0) + 1
     EVAL_WAR_TAB_REFRESH() -- 上限在刷新里收敛
   end, nil, true)
@@ -1838,6 +1840,23 @@ end
 --   ★必须声明在本函数**之前**（词法作用域）——放到后面会被 DECL ORDER CHECK 当场抓出。
 local warRefreshCount = 0
 local function warRefreshTick() warRefreshCount = warRefreshCount + 1 end
+-- ★1.71.9 断言入口：技能列表「调序 ▲▼」与「滚动 ▲▼」四个按钮的**真实文本**。
+--   ★为什么必须读控件：用户看到的是控件上的字，生产代码里的那份常量只是副本 ——
+--     读常量 = 测自己（本项目「断言里写死布局常量」的老坑）。
+function EVAL_TEST_WAR_ARROWS()
+  local function txt(fs)
+    if not fs then return nil end
+    local ok, v = pcall(fs.GetText, fs)
+    return ok and v or nil
+  end
+  -- ★读 cfgWin.warUI（文件级表，cfgBuild 建好后一直有效）——本函数定义在 cfgBuild 内部，
+  --   直接引用那个局部名会解析成全局 nil（实测踩到：attempt to index a nil value (global 'warUI')）。
+  local w = cfgWin.warUI or {}
+  local out = { rowUp = nil, rowDn = nil, scrollUp = txt(w.scrollUpText), scrollDn = txt(w.scrollDnText) }
+  local r1 = w.rows and w.rows[1]
+  if r1 then out.rowUp = txt(r1.upText) out.rowDn = txt(r1.dnText) end
+  return out
+end
 function EVAL_TEST_WAR_REFRESH_COUNT() return warRefreshCount end
 
 function EVAL_WAR_TAB_REFRESH()

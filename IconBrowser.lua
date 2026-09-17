@@ -15,7 +15,14 @@
 
 local IB = { built = false, page = 1, group = "all", cells = {}, items = {}, status = nil }
 local IB_TAB = 5 -- 配置窗第 5 个 Tab（与 EvalHelp.lua 的 tabNames 顺序一一对应）
-local IB_CELL, IB_ICON, IB_ROWS, IB_PADX = 34, 26, 6, 20
+-- ★★★1.71.9 用户要求「图标容器高度可以再增加」→ 一页行数 6 → **9**（先把可用空间算清楚再定行数）：
+--   · 网格顶边 IB_Y_GRID = -100；配置窗高 H=460，底部两条（开关横排 / [案例模版][分享][关闭]）的中线
+--     = CLOSE_MIDY = -(H - 10 - 11) = **-439** → 内容可用下沿取 **-420**（留 19px 不贴脸）；
+--   · 每行 IB_CELL = 34 → 最多 floor((420 - 100) / 34) = **9 行**（9×34=306 → 末行下缘 -402，余量 18px）；
+--   · ★照字面「再加 250px」会直接把最后几行画到窗口外——而本客户端的越界是**静默的**（不报错、只是看不见），
+--     所以这一条必须先算后放（本项目「布局类需求先算可用空间」的铁律）。
+--   · 每页枚数 = 列数 × 行数（中文窗 660 → floor((660-40)/34)=18 列 → **162 枚/页**，原 108 枚）。
+local IB_CELL, IB_ICON, IB_ROWS, IB_PADX = 34, 26, 9, 20
 local IB_Y_STATUS, IB_Y_GROUP, IB_Y_GRID = -56, -76, -100
 
 -- ===== 自绘基础件（与 Toolbox/DataSearch 同风格：WHITE8X8 纯色 + 字体链兜底） =====
@@ -466,6 +473,23 @@ end
 function EVAL_IB_TEST_PAGE() return IB.page, IB.pages, IB.total end
 function EVAL_IB_TEST_GROUP() return IB.group end
 function EVAL_IB_TEST_CELL(i) return IB.cells[i] end
+-- ★1.71.9 断言入口：网格的**真实几何**（首/末格的 Top/Left/Bottom/Right + 池子枚数）——
+--   判据是「末格下缘仍在底部按钮行之上、右缘不越窗」，不是读常量（本项目「读常量 = 测自己」的老坑）。
+function EVAL_IB_TEST_GRID_BOX()
+  local n = table.getn(IB.cells)
+  if n < 1 then return nil end
+  local first, last = IB.cells[1].btn, IB.cells[n].btn
+  local function num(f, o)
+    local ok, v = pcall(f, o)
+    return (ok and type(v) == "number") and v or nil
+  end
+  return {
+    count = n,
+    firstTop = num(first.GetTop, first), firstLeft = num(first.GetLeft, first),
+    lastTop = num(last.GetTop, last), lastBottom = num(last.GetBottom, last),
+    lastRight = num(last.GetRight, last),
+  }
+end
 function EVAL_IB_TEST_CELL_COUNT() return table.getn(IB.cells) end
 function EVAL_IB_TEST_STATUS_TEXT()
   if not IB.statusFS then return nil end

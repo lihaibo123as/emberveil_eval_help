@@ -5374,7 +5374,8 @@ do
   -- ⑦ 翻页：[下页] 真实按钮 + 滚轮（链式接管，只在第 5 个 Tab 时消费）
   --   ★每页枚数由**真实窗口宽度**决定（列×行）——12 枚根本不够翻页，所以这里先把图标补到好几页。
   local big84 = {}
-  for i = 1, 150 do big84[i] = "Spell_Fire_Big" .. i end
+  -- ★1.71.9：每页枚数从 108 涨到 162（图标区 6→9 行）→ 原先 150 枚已不足两页，补到 400 枚
+  for i = 1, 400 do big84[i] = "Spell_Fire_Big" .. i end
   TEST.macroIcons = big84
   EVAL_IB_TEST_RESET()
   EVAL_IB_SCAN(true)
@@ -6613,5 +6614,33 @@ do
   EVAL_HELP_CONFIG.war.activeProfile = savedAct91
   EVAL_TEST_SE_CLEAR()
   TEST.tipLines = nil
+end
+
+-- 92) ★1.71.9 用户两条（截图）反馈：
+--   ① 技能列表的调序/滚动按钮：^ / v → **▲ / ▼**（原 `^` 在客户端字体里看着像一条横线、`v` 就是字母）；
+--   ② 图标库一页行数 6 → **9**（填满面板空档；★先算清可用空间再定行数，照字面「+250px」会把末行画到窗口外）。
+do
+  -- ① 读**真实控件**上的文本（读生产常量 = 测自己，本项目老坑）
+  local ar = EVAL_TEST_WAR_ARROWS()
+  eq(type(ar) == "table", true, "①前置：拿到四个箭头按钮的文本")
+  eq(ar.rowUp, "▲", "①调序「上」按钮的真实文本 = ▲")
+  eq(ar.rowDn, "▼", "①调序「下」按钮的真实文本 = ▼")
+  eq(ar.scrollUp, "▲", "①技能列表「上翻」按钮 = ▲")
+  eq(ar.scrollDn, "▼", "①技能列表「下翻」按钮 = ▼")
+  eq(ar.rowUp ~= "^" and ar.rowDn ~= "v" and ar.scrollUp ~= "^" and ar.scrollDn ~= "v", true,
+    "①反向哨兵：不再用 ^ / v（用户截图里一个像横线、一个是字母）")
+  -- ② 图标库：一页行数 + 网格的真实几何（末格不许压到底部按钮行、不许越出窗口右缘）
+  local cols92, rows92, per92 = EVAL_IB_LAYOUT(EVAL_TEST_WIN_W())
+  eq(rows92, 9, "②图标库一页 9 行（原 6 行 = 图标区 +102px）")
+  eq(per92, cols92 * rows92, "②每页枚数 = 列数 × 行数（" .. cols92 .. " × " .. rows92 .. " = " .. per92 .. "，原 108）")
+  local box92 = EVAL_IB_TEST_GRID_BOX()
+  eq(box92 ~= nil and box92.count, per92, "②真实格子池的枚数 = 每页枚数")
+  local lay92 = EVAL_TEST_CFG_LAYOUT()
+  eq(box92 ~= nil and type(box92.lastBottom) == "number" and box92.lastBottom > lay92.closeMidY + 12, true,
+    "②★末格下缘仍在底部按钮行之上（不重叠）：" .. tostring(box92 and box92.lastBottom) .. " > " .. tostring(lay92.closeMidY + 12))
+  eq(box92 ~= nil and type(box92.lastRight) == "number" and box92.lastRight < EVAL_TEST_WIN_W() - 10, true,
+    "②★网格不越出窗口右缘：" .. tostring(box92 and box92.lastRight))
+  print(string.format("  图标库版式：%d 列 × %d 行 = %d 枚/页；网格末行下缘 %.0f，底部按钮行中线 %.0f",
+    cols92, rows92, per92, box92 and box92.lastBottom or 0, lay92.closeMidY))
 end
 print("ALL TESTS PASS")
