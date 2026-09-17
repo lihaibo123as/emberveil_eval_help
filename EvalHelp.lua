@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.71.9"
+local VERSION = "1.71.10"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -251,9 +251,18 @@ function EVAL_HELP_UI_BUILD()
   status:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
   y = y + math.floor(13 * z) + gap
 
-  -- 方案切换行：点击按钮换激活方案（一键宏立即换套路；Shift+按宏 / /eh war next 也可切）
-  -- 1.56.0 自适应布局：行宽与上方状态条对齐（右缘一致）；方案多时自动换行——
-  -- 第 1 行（带「方案」标签）与后续行各自按可用宽装满，每行按钮拉伸填满整行
+  -- 方案切换行：点击按钮换激活方案（一键宏立即换套路；Shift+按宏 / /eh go next 也可切）
+  -- 1.56.0 自适应布局：行宽与上方状态条对齐（右缘一致）；方案多时自动换行。
+  -- ★★★1.71.10 用户实测「有些方案会溢出宽度」——根因是**按钮宽度按行均分**（同一行所有按钮一样宽）：
+  --   长名字（如「一键团队驱散」）撑破自己的按钮、压在邻居上。现改为**按名字实测宽度**分配：
+  --     · 每格宽 = 量宽(名字) + 内边距，夹在 [minBW, 整行可用宽] 之间；
+  --     · 按可用宽**贪心换行**（首行扣掉「方案」标签宽）；
+  --     · 每行剩余空间**均摊**回该行按钮 —— 保住 1.56.0 的「每行填满」观感；
+  --     · 文字格显式限宽 + 禁折行（名字极长时在自己的按钮里裁掉，不再压邻居）。
+  --   ★量宽走 ruler FontString（挪出可视区量：本客户端 Hide 过的控件仍可能被绘出）；
+  --     拿不到 GetStringWidth 时退化为「中文一字约 9px」的近似（本机 API 表里没有它）。
+  --   ★方案名/数量变了要重排：由 EVAL_WAR_TAB_REFRESH 比对签名后**整体重建**
+  --     （重建会重算行数 → 帧高与下方技能带一起挪）；每 0.15s 的 tick 里**不量宽**（频率防护）。
   local profBtns = {}
   local w20 = uiWarCfg()
   local nProf = (w20.profiles and table.getn(w20.profiles)) or 1
@@ -261,30 +270,74 @@ function EVAL_HELP_UI_BUILD()
   local btnH = math.floor(15 * z)
   local barAvailW = W - pad * 2
   local minBW = math.floor(34 * z) -- 单按钮最小宽（名字可读）
+  local PGAP = 2
   local plabel = uiText(root, math.max(8, math.floor(9 * z)), 0.95, 0.82, 0.35)
   plabel:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -(y + math.floor(3 * z)))
   plabel:SetText("方案")
-  local perRow0 = math.max(1, math.floor((barAvailW - labelW + 2) / (minBW + 2))) -- 首行容量（扣标签）
-  local perRowN = math.max(1, math.floor((barAvailW + 2) / (minBW + 2)))           -- 后续行容量
-  local remP = math.max(0, nProf - perRow0)
-  local rows = 1 + ((remP > 0) and math.ceil(remP / perRowN) or 0)
-  local k0 = math.max(1, math.min(nProf, perRow0))
-  local bw0 = math.floor((barAvailW - labelW - (k0 - 1) * 2) / k0) -- 首行按钮宽（填满）
-  -- 1.58.1 修第二排宽度异常：后续行按钮宽按【整行容量】计算——不满的行保持同宽左对齐，不再按剩余数拉伸
-  local bwN = math.floor((barAvailW - (perRowN - 1) * 2) / perRowN)
-  for i = 1, 12 do
-    local row0, col0, x0, bw0i
-    if i <= perRow0 then
-      row0, col0, x0, bw0i = 0, i - 1, pad + labelW + (i - 1) * (bw0 + 2), bw0
-    else
-      local j = i - perRow0
-      row0 = 1 + math.floor((j - 1) / perRowN)
-      col0 = (j - 1) - (row0 - 1) * perRowN
-      x0, bw0i = pad + col0 * (bwN + 2), bwN
+  -- 量宽尺（与方案按钮同字号；挪出可视区，不参与显示）
+  local uiRuler = uiText(root, math.max(7, math.floor(9 * z)), 0.85, 0.80, 0.70)
+  pcall(uiRuler.SetPoint, uiRuler, "TOPLEFT", root, "TOPLEFT", -2000, 0)
+  local function uiMeasure(s)
+    s = tostring(s or "")
+    local w0 = 0
+    pcall(uiRuler.SetText, uiRuler, s)
+    if type(uiRuler.GetStringWidth) == "function" then
+      local okv, v = pcall(uiRuler.GetStringWidth, uiRuler)
+      if okv and type(v) == "number" and v > 0 then w0 = v end
     end
+    if w0 <= 0 then w0 = math.floor(string.len(s) / 3 + 0.5) * 9 end -- 近似：中文字一字约 9px
+    return w0
+  end
+  local function profNeed(name) -- 一格需要多宽（实测 + 内边距；夹在 [minBW, 整行宽]）
+    local w0 = uiMeasure(name) + math.floor(10 * z)
+    if w0 < minBW then w0 = minBW end
+    if w0 > barAvailW then w0 = barAvailW end
+    return w0
+  end
+  local needW = {}
+  for i = 1, 12 do
+    local prof = w20.profiles and w20.profiles[i]
+    needW[i] = profNeed(prof and prof.name or ("方案" .. tostring(i)))
+  end
+  -- 贪心换行 + 每行剩余均摊（余数给前几格）→ geo[i] = { x, y, w }
+  local geo, rowIdx, x = {}, 0, pad + labelW
+  local rowItems, rowAvail = {}, barAvailW - labelW
+  local function flushRow()
+    local k = table.getn(rowItems)
+    if k == 0 then return end
+    local sumW = 0
+    for _, idx in ipairs(rowItems) do sumW = sumW + needW[idx] end
+    local leftover = rowAvail - (k - 1) * PGAP - sumW
+    if leftover < 0 then leftover = 0 end
+    local add = math.floor(leftover / k)
+    local extra = leftover - add * k
+    local xx = (rowIdx == 0) and (pad + labelW) or pad
+    for n, idx in ipairs(rowItems) do
+      local wI = needW[idx] + add + ((n <= extra) and 1 or 0)
+      geo[idx] = { x = xx, y = -(y + rowIdx * (btnH + PGAP)), w = wI }
+      xx = xx + wI + PGAP
+    end
+    rowItems = {}
+  end
+  for i = 1, math.max(1, math.min(12, nProf)) do
+    local wI = needW[i]
+    if table.getn(rowItems) > 0 and x + wI > pad + barAvailW + 0.5 then
+      flushRow()
+      rowIdx = rowIdx + 1
+      rowAvail = barAvailW
+      x = pad
+    end
+    table.insert(rowItems, i)
+    x = x + wI + PGAP
+  end
+  flushRow()
+  local rows = rowIdx + 1
+  local geoFallback = { x = pad, y = -(y + rows * (btnH + PGAP)), w = needW[nProf] or minBW }
+  for i = 1, 12 do
+    local g0 = geo[i] or geo[nProf] or geoFallback
     local pb = CreateFrame("Button", nil, root)
-    pb:SetWidth(bw0i) pb:SetHeight(btnH)
-    pb:SetPoint("TOPLEFT", root, "TOPLEFT", x0, -(y + row0 * (btnH + 2)))
+    pb:SetWidth(g0.w) pb:SetHeight(btnH)
+    pb:SetPoint("TOPLEFT", root, "TOPLEFT", g0.x, g0.y)
     pcall(pb.EnableMouse, pb, true)
     pcall(pb.RegisterForClicks, pb, "LeftButtonUp")
     local pbg = pb:CreateTexture(nil, "BACKGROUND")
@@ -293,6 +346,8 @@ function EVAL_HELP_UI_BUILD()
     pbg:SetPoint("BOTTOMRIGHT", pb, "BOTTOMRIGHT", 0, 0)
     local pt = uiText(pb, math.max(7, math.floor(9 * z)), 0.85, 0.80, 0.70)
     pt:SetPoint("CENTER", pb, "CENTER", 0, 0)
+    pcall(pt.SetWidth, pt, g0.w - 4) -- ★限宽：极长名在自己的按钮里裁掉，不压邻居
+    pcall(pt.SetNonSpaceWrap, pt, false)
     local pidx = i
     pb:SetScript("OnClick", function()
       local w2 = uiWarCfg()
@@ -303,7 +358,15 @@ function EVAL_HELP_UI_BUILD()
     end)
     profBtns[i] = { btn = pb, bg = pbg, text = pt }
   end
-  y = y + rows * (btnH + 2) + gap -- 1.56.0 多行高度
+  ui.profRows, ui.profNeed, ui.profAvail, ui.profPad = rows, needW, barAvailW, pad -- ★1.71.10 供断言读生产真值
+  -- ★1.71.10 版式签名（方案名序列）：EVAL_WAR_TAB_REFRESH 比它决定「要不要重建战斗信息UI」
+  --   （方案名/数量变了 → 按钮宽度与行数都得重算，帧高与下方技能带也要随之挪 → 整体重建最省心）
+  local sig0 = ""
+  for i = 1, table.getn((w20 and w20.profiles) or {}) do
+    sig0 = sig0 .. tostring(((w20.profiles[i]) or {}).name or "") .. "|"
+  end
+  ui.profSig = sig0
+  y = y + rows * (btnH + PGAP) + gap -- 1.56.0 多行高度（行数按名字实宽算，行数变了帧高随之变）
 
   -- 技能图标带（1.46.0 两行合一：内容=激活方案技能，8 格/行超过自动换第二行，最多 16 格；
   -- 悬停 tooltip 看触发条件；点击开编辑窗；亮金=条件当前满足；动作条技能带冷却倒数）
@@ -1922,6 +1985,21 @@ function EVAL_WAR_TAB_REFRESH()
       row.conds:SetText(uiEsc(EVAL_GROUP_STR(r.groups))) -- 1.61.1 | 显示转义
     end
   end
+  -- ★★★1.71.10 方案名 / 数量变了 → 战斗信息UI 的「方案切换行」必须重排（按钮宽度按名字实测算、
+  --   行数变了帧高与下方技能带也要跟着挪）→ **整体重建**。
+  --   ★这里是用户改方案名的**唯一入口**（配置窗改名/增删、导入分享都最终走它），不是每帧路径；
+  --     每 0.15s 的 tick 里**一次都不量宽**（频率防护）。
+  local sigNow = ""
+  for i = 1, table.getn(w2.profiles or {}) do
+    sigNow = sigNow .. tostring((w2.profiles[i] or {}).name or "") .. "|"
+  end
+  if ui and ui.root and ui.profSig ~= nil and ui.profSig ~= sigNow then
+    local wasShown = false
+    pcall(function() wasShown = ui.root:IsVisible() and true or false end)
+    EVAL_HELP_UI_BUILD()
+    if ui.root and wasShown then pcall(ui.root.Show, ui.root) end
+  end
+  if ui then ui.profSig = sigNow end
 end
 
 -- Tab 切换：按控件列表显式 Show/Hide（本客户端可见性契约：走控件列表，不靠父框架传播）
@@ -5140,6 +5218,40 @@ function EVAL_TEST_IO_SHOWN()
   if not ioUI.root then return false end
   local ok, v = pcall(ioUI.root.IsVisible, ioUI.root)
   return (ok and v) and true or false
+end
+
+-- ★★★1.71.10 断言入口：战斗信息UI「方案切换行」的**真实几何**（每格的位置/宽度 + 生产算出的「需要宽度」）。
+--   要验的性质：① 每格宽 ≥ 它自己需要的宽（用户报的「方案溢出宽度」就是这个）；
+--   ② 同行相邻不重叠、整行不越出可用宽；③ 长名字的格子真的比短名字宽（不是均分）；
+--   ④ 方案块整体在帧内（行数变了帧高要跟着变）。
+function EVAL_TEST_UI_SHOWN() 
+  if not ui or not ui.root then return false end
+  local ok, v = pcall(ui.root.IsVisible, ui.root)
+  return (ok and v) and true or false
+end
+function EVAL_TEST_UI_PROF()
+  if not ui or not ui.profBtns then return nil end
+  local function num(f, o)
+    local ok, v = pcall(f, o)
+    return (ok and type(v) == "number") and v or nil
+  end
+  local okw, ww = pcall(ui.root.GetWidth, ui.root)
+  local okh, hh = pcall(ui.root.GetHeight, ui.root)
+  local out = { rows = ui.profRows or 0, avail = ui.profAvail or 0, pad = ui.profPad or 0,
+    need = ui.profNeed, rootW = (okw and ww) or nil, rootH = (okh and hh) or nil, btns = {} }
+  for i, pb in ipairs(ui.profBtns) do
+    local okT, txt = pcall(pb.text.GetText, pb.text)
+    local oks, sh = pcall(pb.btn.IsShown, pb.btn)
+    out.btns[i] = {
+      name = (okT and tostring(txt or "")) or "",
+      shown = (oks and sh) and true or false,
+      x = num(pb.btn.GetLeft, pb.btn), y = num(pb.btn.GetTop, pb.btn),
+      w = num(pb.btn.GetWidth, pb.btn), h = num(pb.btn.GetHeight, pb.btn),
+      textW = num(pb.text.GetWidth, pb.text), -- 文字格自身的宽（限宽后应 ≤ 按钮宽）
+      need = ui.profNeed and ui.profNeed[i] or nil,
+    }
+  end
+  return out
 end
 
 -- ============ 案例模版选单（1.44.0）：按职业分组，点击方案行直接导入 ============

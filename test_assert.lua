@@ -6643,4 +6643,88 @@ do
   print(string.format("  图标库版式：%d 列 × %d 行 = %d 枚/页；网格末行下缘 %.0f，底部按钮行中线 %.0f",
     cols92, rows92, per92, box92 and box92.lastBottom or 0, lay92.closeMidY))
 end
+
+-- 93) ★★★1.71.10 用户实测「有些方案会溢出宽度. 能动态自适应吗?」：
+--   战斗信息UI 的「方案切换行」原先**按行均分**按钮宽度（同一行所有按钮一样宽）→ 长名字撑破自己的格子、压邻居。
+--   现改为：按名字**实测宽**分配 + 贪心换行 + 每行剩余均摊填满。★本组直接验需求本身（长短悬殊的假方案名）。
+do
+  local savedP93, savedA93 = EVAL_HELP_CONFIG.war.profiles, EVAL_HELP_CONFIG.war.activeProfile
+  EVAL_HELP_CONFIG.war.profiles = {
+    { name = "短", skills = {} },
+    { name = "一键团队驱散", skills = {} },
+    { name = "中等名字", skills = {} },
+    { name = "一键队伍治疗链", skills = {} },
+    { name = "A", skills = {} },
+    { name = "周围补BUFF", skills = {} },
+  }
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  local wasShown93 = EVAL_TEST_UI_SHOWN()
+  if not wasShown93 then EVAL_HELP_UI_TOGGLE() end -- 首次会 BUILD + Show（tick 只在可见时刷新）
+  EVAL_HELP_UI_TICK() -- ★方案行的**文本**由 tick 落上去（BUILD 只建空壳）
+  local up = EVAL_TEST_UI_PROF()
+  eq(type(up) == "table", true, "前置：拿到方案切换行的真实几何")
+  eq(up.rows >= 2, true, "★6 个方案（含长名）要排成多行: " .. tostring(up.rows) .. " 行")
+  local bad93, ov93, over93, out93 = "", "", "", ""
+  local longW, shortW, byRow = nil, nil, {}
+  for i = 1, table.getn(up.btns) do
+    local b = up.btns[i]
+    if b.shown then
+      byRow[b.y] = byRow[b.y] or {}
+      table.insert(byRow[b.y], b)
+      if b.need and b.w and b.w < b.need - 0.5 then
+        bad93 = bad93 .. b.name .. "(宽" .. tostring(b.w) .. "<需" .. tostring(b.need) .. ") "
+      end
+      -- ★文字格必须**显式限宽**（本项目「FontString 一律显式 SetWidth」的配方）——
+      --   桩的 FontString 没被 SetWidth 时 GetWidth 返回 nil（M3 实测：不加这条就漏过「去掉限宽」的变异）
+      if not b.textW then
+        bad93 = bad93 .. b.name .. "(文字格没限宽) "
+      elseif b.w and b.textW > b.w - 2 then
+        bad93 = bad93 .. b.name .. "(文字" .. tostring(b.textW) .. ">格" .. tostring(b.w) .. ") "
+      end
+      if b.name == "一键团队驱散" then longW = b.w end
+      if b.name == "短" then shortW = b.w end
+    end
+  end
+  eq(bad93, "", "★★★每个方案格宽度 ≥ 它自己需要的宽度（用户报的「溢出」正是这条）: " .. bad93)
+  eq(longW ~= nil and shortW ~= nil and longW > shortW, true,
+    "★★★长名字的格子真的比短名字宽（不是均分）: 一键团队驱散=" .. tostring(longW) .. " 短=" .. tostring(shortW))
+  for _, list in pairs(byRow) do
+    table.sort(list, function(a, b) return a.x < b.x end)
+    for i = 1, table.getn(list) do
+      local b = list[i]
+      if i > 1 then
+        local pv = list[i - 1]
+        if b.x < pv.x + pv.w - 0.5 then ov93 = ov93 .. pv.name .. "/" .. b.name .. " " end
+      end
+      if b.x + b.w > up.pad + up.avail + 1 then over93 = over93 .. b.name .. " " end
+      if b.y - b.h < -up.rootH then out93 = out93 .. b.name .. " " end
+    end
+  end
+  eq(ov93, "", "★★同行相邻不重叠（原均分布局会在这里露出来）: " .. ov93)
+  eq(over93, "", "★★整行不越出可用宽: " .. over93)
+  eq(out93, "", "★★方案块整体在帧内（行数变了帧高要跟着变）: " .. out93)
+  print(string.format("  方案切换行：%d 行 / 「一键团队驱散」%dpx vs 「短」%dpx（按名字实测宽，不再均分）",
+    up.rows, longW or -1, shortW or -1))
+  -- ② 改方案名之后，走**真实刷新入口**版式必须自动跟着变（签名比对 → 整体重建）；长名变多要自动换行
+  EVAL_HELP_CONFIG.war.profiles = { { name = "短", skills = {} }, { name = "一键团队驱散", skills = {} } }
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  EVAL_WAR_TAB_REFRESH()
+  EVAL_HELP_UI_TICK()
+  local up2 = EVAL_TEST_UI_PROF()
+  eq(up2.rows, 1, "②两个方案一行放得下: " .. tostring(up2.rows) .. " 行")
+  eq(up2.btns[2] and up2.btns[1] and up2.btns[2].w > up2.btns[1].w, true,
+    "★★改方案名后宽度自动跟着变（一键团队驱散=" .. tostring(up2.btns[2].w) .. " > 短=" .. tostring(up2.btns[1].w) .. "）")
+  EVAL_HELP_CONFIG.war.profiles = {
+    { name = "一键团队驱散", skills = {} }, { name = "一键队伍治疗链", skills = {} },
+    { name = "一键队伍驱散", skills = {} }, { name = "一键队伍BUFF", skills = {} } }
+  EVAL_WAR_TAB_REFRESH()
+  EVAL_HELP_UI_TICK()
+  local up3 = EVAL_TEST_UI_PROF()
+  eq(up3.rows >= 2, true, "★★长名变多后自动换行: " .. tostring(up3.rows) .. " 行")
+  eq(longW ~= nil, true, "②前置：改名前的长名宽度已量到")
+  EVAL_HELP_CONFIG.war.profiles = savedP93
+  EVAL_HELP_CONFIG.war.activeProfile = savedA93
+  EVAL_HELP_UI_BUILD()
+  if not wasShown93 and EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end -- 恢复原可见状态
+end
 print("ALL TESTS PASS")
