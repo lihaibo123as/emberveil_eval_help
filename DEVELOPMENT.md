@@ -5,7 +5,16 @@
 ## 项目概况
 
 - EmberVeil 私服客户端（1.12.1 规则 / UE 引擎 / **Lua 5.1**）的 FrameXML 插件；
-- 多文件架构（1.39.0 起，toc 顺序 Locales→**Core**→**Engine**→**EvalHelp**）：`Core.lua`（输出/i18n/状态采集+UPDATE_STATE/UI 越界助手）· `Engine.lua`（一键宏引擎：扫描/五分类/规则引擎/解析/免疫/光环/距离）· `EvalHelp.lua`（全部 UI 窗口+斜杠+初始化）；跨文件共享走全局桥：Core 导出 EVAL_SAY/EVAL_LOGLINE/EVAL_UIOFFSCREEN 等，Engine 导出 EVAL_WSLOTS/EVAL_WICON/EVAL_GROUPS_OK 等，UI 层文件顶部别名块本地化；**改动后务必 luacheck 三个 .lua + test_engine 全跑**
+- **多文件架构**（1.39.0 起模块化；**真实载入顺序 = `EvalHelp.toc` 的顺序，以 .toc 为唯一真值**）：
+  `Locales/{zhCN,enUS,ruRU}` → `Core.lua`（输出/i18n/状态采集+UPDATE_STATE/UI 越界助手）→ `Engine.lua`（一键宏引擎：扫描/五分类/规则引擎/解析/免疫/光环/距离/队伍扫描）
+  → `EvalHelp.lua`（全部 UI 窗口+斜杠+初始化）→ `examples/*.lua`（11 个案例模版数据文件）→ `Toolbox.lua`（Tab3 工具箱）
+  → `DataSearch.lua`（Tab4 数据检索）→ `Share.lua`（方案分享）→ `IconBrowser.lua`（Tab5 图标库）。
+  跨文件共享走全局桥：Core 导出 EVAL_SAY/EVAL_LOGLINE/EVAL_UIOFFSCREEN 等，Engine 导出 EVAL_WSLOTS/EVAL_WICON/EVAL_GROUPS_OK 等，
+  UI 层文件顶部别名块本地化；
+  ★**新增 .lua 模块要同时改三处**：`EvalHelp.toc`、`test_engine.js` 的装载数组、`DECL ORDER CHECK` 的文件清单；
+  ★**新增 `examples/*.lua` 只需两处**：`EvalHelp.toc` + `test_engine.js` 装载数组（它们没有顶层 local）。
+  ★**改动后两个命令全跑**：`node luacheck.js`（只做 EvalHelp.lua 的整文件语法编译）+ `node test_engine.js`
+  （打桩加载**整棵树**并跑断言 —— 其它文件的语法错误也在这一步暴露）。
 -  SavedVariables：`EVAL_HELP_CONFIG`（落盘于 `%LOCALAPPDATA%\Azeroth\Saved\Account\<账号>\SavedVariables\EVAL_HELP.lua`，小退/重载时写入）。
 
 ## ⚠️ 提交前必做
@@ -16,7 +25,22 @@ node test_engine.js  # 逻辑冒烟测试：打桩 WoW API 加载整个插件，
 ```
 
 **Lua 整文件编译**：一处语法错误 = 整个插件静默不载入，游戏日志看不到。曾有两处 `end)` 多括号导致三个版本白发。
-版本号三处同步：lua 头注释 + `local VERSION` + toc `## Version`。
+**版本号只有两处**：`EvalHelp.lua` 的 `local VERSION` + `EvalHelp.toc` 的 `## Version`（`VERSION CHECK` 守着两侧一致）。
+★文件头**不再写版本号**：旧写法（`-- EvalHelp 1.70.44`）实际漂移了十几个版本都没人发现，因为源码检查只比对那两处。
+
+## 🚀 发布流程（用户定，6 步；每次发版必做）
+
+1. **统计里程碑**：从「上一次 release 版本」到最新，逐版本列里程碑（发布了什么、跨了哪些版本）；
+2. **项目说明更新**：`README.md` / `README_en.md` / `README_ru.md` —— ★版本记录**只保留最近 10 个**；
+3. **扫描旧版信息**：全仓库排查版本号、文件结构、功能清单、过时描述（新窗口 / 新 Tab / 新条件要补上），逐一清理；
+4. **更新对应板块**：按「上次 release → 最新」的信息更新 README 的功能·用法板块、DEVELOPMENT 的架构板块等；
+5. **版本记录**：`CHANGELOG.md` 写 `## 🎯 vX.Y.Z — 主题` 详情小节（**完整记录，不删旧条目**）；
+   `EvalHelp.lua` 的 `local VERSION` 与 `EvalHelp.toc` 的 `## Version` 同步；提交 `release: vX.Y.Z <主题>` + 注解 tag；
+6. **审计记忆体**：`CLAUDE.md` —— 版本要点**汇总统计后放到文档末尾**；★头部只保留**比较新的记忆注意事项（最多 20 个版本）**，
+   ★不许再把一堆版本记录堆到记忆体头部（那会让整份记忆体超预算、被截断掉文末的项目现状）。
+
+> ★发布前必跑：`node luacheck.js` + `node test_engine.js` 双绿；提交用 `git add <明确路径>`（**不要** `git add -A`）。
+> ★推送：分支 `master`；远端 `origin`=gitee、`github`=github（用默认密钥 `~/.ssh/id_rsa`，别指定 `gitee_id_rsa`）。
 
 ## 架构地图（`EvalHelp.lua` 段落顺序）
 
@@ -32,6 +56,11 @@ node test_engine.js  # 逻辑冒烟测试：打桩 WoW API 加载整个插件，
 | 技能编辑窗 | `EVAL_HELP_SE_*`：条件逐行配置（seGroupsToLinear/seLinearToGroups 线性↔分组） |
 | 通用 UI 件 | `EVAL_DD_OPEN` 下拉面板 / `EVAL_HELP_RP_*` 输入弹窗（回声行范式） / `uiSolid/uiText/cfgCheck/cfgSlider` |
 | IO | `EVAL_PROFILE_TO_TEXT/FROM_TEXT` md 文本互转；`EVAL_HELP_IO_*` 窗口（FontString 保底预览区） |
+| 案例模版窗 | `EVAL_HELP_TPL_*`：读 `examples/*.lua` 的数据渲染成**分组分两列 + 组内同行自动换行**（版式由纯函数 `tplTwoColPlan` 算），点击即导入 |
+| 工具箱 Tab3 | `Toolbox.lua`：`EVAL_TB_BUILD(root, page, refreshes)`；商人 / 队伍社交 / 任务三组，动作全部走限频队列（0.3s/笔 + 逐笔核对） |
+| 数据检索 Tab4 | `DataSearch.lua`：`EVAL_DS_BUILD`；逻辑层 `EVAL_DS_SEARCH/DETAIL/SHOWMAP` 与 UI 分离、可 node 直测；地图标注层硬依赖 UnrealQuest |
+| 方案分享 | `Share.lua`：公会 / 队伍 / 说 三频道分片直发直收（`SH_CHANS` 白名单是唯一真值）+ 接收规则（只留最新一笔 + 四道上限） |
+| 图标库 Tab5 | `IconBrowser.lua`：读客户端内置宏图标表，按前缀分组 / tooltip 显示路径 / **先过滤再分页** |
 
 ## 本客户端实测配方（踩坑沉淀，新增 UI 必守）
 

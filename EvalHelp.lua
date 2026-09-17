@@ -1,19 +1,15 @@
--- EvalHelp 1.70.44 —— 全职业施法工具：通用一键宏（条件规则引擎） + 状态日志 + 战斗信息UI + 配置窗口
---   1.25.0: 新增条件类型「选取目标」（TargetNearestEnemy 等 7 种，官方 Targetting API）；编辑窗类型下拉 24 种
---   1.26.0: 新增条件类型「目标职业」（UnitClass 英文 token 比对，编辑窗多选下拉=或关系；文本格式 目标职业:战士/法师）
---   1.31.0: 目标debuff层数条件（UnitDebuff 第二返回值入 st.targetDebuffs[tex]=层数，非堆叠归一1；
---           有debuff:名>=N / 无debuff:名<N；编辑窗 debuff 条件行加「层」下拉 不限/2-5层）
---   1.30.0: 特殊技能「宠物指令」（rule.skill=宠物:攻击 等 8 种，不占动作条直调 Pet API；EVAL_RULE_RUN/wuse 豁免动作条检查；
---           图标 wicon 兜底 GetPetIcon/问号；战斗信息UI亮金放行；技能下拉追加宠物段；刻意不含放弃/改名/兽栏系）
---   1.29.0: 选取目标扩展「目标的目标」(TargetUnit targettarget) 与「指定名称」(TargetByName，cd.nm 存名)；
---           编辑窗名称下拉=最近5敌名(循环枚举EVAL_NEARBY_ENEMY_NAMES)+自定义输入弹窗EVAL_TN_OPEN；文本 选取目标:指定名称:名
---   1.28.0: 新增条件类型「连击点数」（GetComboPoints，盗贼/德鲁伊专用，数值比较型；文本格式 连击>=3）
---   1.27.0: 光环类条件下拉追加实时项（◆当前目标debuff/○当前自身buff，GameTooltip SetUnitDebuff/SetPlayerBuff 读名）；
---           名称→纹理即时学习持久化 cfg.war.debuffTex，texOf 学习表回退——非动作条光环也能做 有/无debuff/buff 比对
+-- EvalHelp —— EmberVeil（1.12.1 / Lua 5.1）全职业施法工具
+--   通用一键宏（条件规则引擎）+ 案例模版 + 方案分享 + 状态日志 + 战斗信息UI + 配置窗口
+--   （配置窗内嵌 工具箱 / 数据检索 / 图标库 三个 Tab）。
+--   ★版本号只有**两处**：本文件的 local VERSION 与 EvalHelp.toc 的 ## Version ——
+--     由 test_engine.js 的 VERSION CHECK 守着（两侧必须一致）。
+--     ★文件头**不再写版本号**：旧写法（「-- EvalHelp 1.70.44」）实际漂移了十几个版本都没人发现，
+--       因为源码检查只比对 local VERSION 与 toc —— 同一件事写三遍必然漂移。
+--   ★逐版本变更**不写在这里**：完整记录见 CHANGELOG.md 与 git log；设计与判据见 CLAUDE.md（记忆体）。
 --
 -- 参考 OneJudge 开发流程的关键约定：
 --   1) 目录规则：Interface/AddOns/EvalHelp/EvalHelp.toc（文件夹名 == toc 基名）
---   2) 插件暴露全局函数，一键宏正文就一行：/run EVAL_HELP()
+--   2) 插件暴露全局函数，一键宏正文就一行：/run EVAL_GO()
 --   3) 本客户端判断函数返回 true/false/nil（不是老 1.12 的 1/nil），必须宽松真值判断，
 --      旧写法 UnitAffectingCombat("player") == 1 在 true 面前永远判假！
 --   4) 配置用 SavedVariables（EVAL_HELP_CONFIG），要等 VARIABLES_LOADED 事件后才读。
@@ -25,7 +21,7 @@
 -- 用法（/eh help 随时查看）：
 --   一键宏：游戏内新建宏，正文一行  /run EVAL_GO()   拖到按键上连按（全职业通用框架）
 --     前置：把 攻击/战斗姿态/冲锋/压制/断筋/撕裂/战斗怒吼/血性狂暴/猛击/英勇打击 拖上动作条，
---           然后 /eh war rescan 让插件识别槽位（/eh war 查看识别结果）
+--           然后 /eh go rescan 让插件识别槽位（/eh go 查看识别结果）
 --     猛击需按住 Alt 再按宏键（本客户端无挥击计时 API，用 Alt 代替出手时机）
 --   配置：小地图左侧金色 EH 图标 或 /eh cfg —— 日志开关、一键开关、怒气/血量阈值滑条
 --   战斗信息UI：/eh ui —— 血/能量/目标条 + 技能图标行，按住标题栏拖动，滚轮缩放
