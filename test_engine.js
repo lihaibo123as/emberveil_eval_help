@@ -154,7 +154,7 @@ checkIconAssets();
 
 const L=lauxlib.luaL_newstate();
 lualib.luaL_openlibs(L);
-for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','Toolbox.lua','DataSearch.lua','test_assert.lua']){
+for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','Toolbox.lua','DataSearch.lua','Share.lua','test_assert.lua']){
   const src=fs.readFileSync(f);
   const st=lauxlib.luaL_loadbuffer(L,src,src.length,to_luastring(f));
   if(st!==lua.LUA_OK){ console.log('LOAD ERROR ['+f+']:',lua.lua_tojsstring(L,-1)); process.exit(1); }

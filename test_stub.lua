@@ -149,6 +149,9 @@ IsUsableAction = function() if TEST.usableRet then return TEST.usableRet.u, TEST
 IsCurrentAction = function(slot) return TEST.currentAction == slot end
 SpellStopCasting = function() TEST.castStopped = true end
 RunScript = function(code) TEST.runScript = code TEST.runScripts = TEST.runScripts or {} table.insert(TEST.runScripts, code) if code == "SpellStopCasting()" then TEST.castStopped = true end end -- 1.69.0 收集多条
+IsInGuild = function() return TEST.inGuild or false end
+GetNumPartyMembers = function() return TEST.partyN or 0 end
+GetNumRaidMembers = function() return TEST.raidN or 0 end
 AttackTarget = function() TEST.attackTried = true end
 UseAction = function(slot) table.insert(TEST.used, slot) end
 TargetNearestEnemy = function()
