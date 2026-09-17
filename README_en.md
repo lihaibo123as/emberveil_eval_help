@@ -71,7 +71,7 @@
 
 **Config window · One-key macro tab**: left profile bar (multiple profiles ≤12, click to switch / right-click to rename) + skill list (order = priority, checkbox = enabled, conditions visible at a glance) + [Add Skill] / [Import-Export]; bottom row = three feature toggles + [Templates] / [Share] / [Close]
 
-![Config window · One-key macro tab](preview/cfg1.png)
+![Config window · One-key macro tab](preview/cfg.png)
 
 **Skill editor** (opened via [Edit] or by clicking a skill icon): per-row independent condition editing — condition type / params all chosen from dropdowns (49 condition types, grouped as self / target / aura / skill), relation column toggles & (all-in-group) / | (any-group), live preview
 
