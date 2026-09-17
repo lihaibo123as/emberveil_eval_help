@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.71.17"
+local VERSION = "1.71.18"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -2495,22 +2495,17 @@ function EVAL_TEST_MB_ANCHOR_CURRENT()
 end
 
 -- ============ 方案快捷键绑定（1.71.16，用户：「方案 右键能否弹窗设置 绑定快捷键」→ 先验证后实装） ============
--- ★可行性（/eh go bind 实测）：SetBinding 接受插件自定义命令名、无需 Bindings.xml 登记（T1/T2 全过）；
---   ★但那只证明「命令名能存进绑定表」——「按下键真的触发」走 **CLICK 派发**（vanilla 经典招：
---   SetBinding(key, "CLICK <命名按钮>:LeftButton")，按下键 = 客户端替我们点那个隐藏按钮 → OnClick → EVAL_GO(i)）。
---   配套实弹探针 /eh go bind2：现场复核 CLICK 派发与裸命令名派发哪种真的触发（10 秒倒计时如实报告）。
+-- ★可行性（/eh go bind 实测）：SetBinding 接受插件自定义命令名、无需 Bindings.xml 登记（T1/T2 全过）。
+-- ★★★派发定案（1.71.18，用户实测）：第一版用 CLICK 隐藏按钮派发（vanilla 经典招），结果这个客户端把
+--   「CLICK <按钮>:LeftButton」解析岔了——**触发被挂到鼠标左右键**、原始转屏被顶掉（用户报「左右键点击
+--   原始的屏幕转动效果没了，但是会触发插件」）。按键 → 插件代码这条链路是通的，错的是命令串形态。
+--   → 改用**裸命令名** `EVAL_GO<i>`：T0 探针里的客户端内建命令就是 MoveForward/Jump 这种驼峰全局函数名，
+--   T2 也证明 `EVAL_GO2` 这名字绑定表直接接受——而 EVAL_GO1~12 全局函数**本来就存在**（Engine.lua 批量生成）。
 -- ★持久化：绑定后 SaveBindings(GetCurrentBindingSet())——不存就随重登消失（实测当前 set = 1）。
 
--- 派发命令名（纯函数，测试直测）：方案 i 的按键 = 点隐藏命名按钮 EVAL_GO_KEY_i
+-- 派发命令名（纯函数，测试直测）：方案 i = 已存在的全局函数 EVAL_GO<i>（裸命令名，零新增函数）
 function EVAL_BIND_CMD(i)
-  return "CLICK EVAL_GO_KEY_" .. tostring(i) .. ":LeftButton"
-end
-
--- 每个方案一个隐藏命名按钮（按下绑定的键 → 客户端点它 → 执行并激活该方案）
-for i = 1, 12 do
-  local b = CreateFrame("Button", "EVAL_GO_KEY_" .. i, UIParent)
-  local pi = i
-  b:SetScript("OnClick", function() EVAL_GO(pi) end)
+  return "EVAL_GO" .. tostring(i)
 end
 
 -- 按键清单（纯函数：下拉内容 = 分类标题 + 键名；locked 是「分类标题行」的下标集合——DD 的不可选行语义）。

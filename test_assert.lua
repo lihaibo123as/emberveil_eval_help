@@ -6946,7 +6946,11 @@ do
   local savedP98, savedA98 = EVAL_HELP_CONFIG.war.profiles, EVAL_HELP_CONFIG.war.activeProfile
   EVAL_HELP_CONFIG.war.profiles = { { name = "甲", skills = {} }, { name = "乙", skills = {} } }
   EVAL_HELP_CONFIG.war.activeProfile = 1
-  eq(EVAL_BIND_CMD(3), "CLICK EVAL_GO_KEY_3:LeftButton", "①派发 = CLICK 命名隐藏按钮（vanilla 经典招）")
+  eq(EVAL_BIND_CMD(3), "EVAL_GO3", "①派发 = 裸命令名 EVAL_GO<i>（CLICK 派发实测会劫持鼠标左右键，已弃用）")
+  -- ★1.71.18 反向哨兵：绑出去的每个命令名都必须**真的有一个同名全局函数**（否则客户端派发时无的放矢）
+  local missCmd = ""
+  for i = 1, 12 do if type(_G[EVAL_BIND_CMD(i)]) ~= "function" then missCmd = missCmd .. i .. " " end end
+  eq(missCmd, "", "①★★EVAL_BIND_CMD(1~12) 每一个都解析到真实全局函数: " .. missCmd)
   local rows98, items98, locked98 = EVAL_BIND_KEYLIST()
   eq(table.getn(rows98), table.getn(items98), "②清单行数对齐")
   local badKey98, nKey98, hasMouse98, hasF198, lockOK98 = "", 0, false, false, true
@@ -6968,12 +6972,12 @@ do
   TEST.saveBindingsCalls = 0
   EVAL_HELP_CONFIG.war.bindKeys = nil
   eq(EVAL_BIND_DO(2, "F10"), true, "③绑定成功")
-  eq(TEST.bindings.F10, "CLICK EVAL_GO_KEY_2:LeftButton", "③★绑定表写的就是方案 2 的 CLICK 派发")
+  eq(TEST.bindings.F10, "EVAL_GO2", "③★绑定表写的就是方案 2 的派发命令名")
   eq(EVAL_HELP_CONFIG.war.bindKeys[2], "F10", "③配置记下当前键")
   eq(TEST.saveBindingsCalls >= 1, true, "③★绑定后真的 SaveBindings（不存就随重登消失）")
   EVAL_BIND_DO(2, "F11")
   eq(GetBindingAction("F10"), "", "③★★换键时旧键 F10 被解绑（不留一键两命令的烂摊子）")
-  eq(TEST.bindings.F11, "CLICK EVAL_GO_KEY_2:LeftButton", "③新键 F11 就位")
+  eq(TEST.bindings.F11, "EVAL_GO2", "③新键 F11 就位")
   EVAL_BIND_CLEAR(2)
   eq(GetBindingAction("F11"), "", "③★清除真的解绑")
   eq(EVAL_HELP_CONFIG.war.bindKeys[2], nil, "③配置清掉")
@@ -6995,7 +6999,7 @@ do
   eq(EVAL_TEST_BIND_UI().selKey, "F9", "④下拉回调选键进状态")
   eq(string.find(tostring(EVAL_TEST_BIND_UI().info), "%S") ~= nil, true, "④提示行有内容（空闲=绿）")
   EVAL_TEST_BIND_DO_BTN():GetScript("OnClick")()
-  eq(TEST.bindings.F9, "CLICK EVAL_GO_KEY_1:LeftButton", "④★★点[绑定] → 绑定表写入方案 1 的派发")
+  eq(TEST.bindings.F9, "EVAL_GO1", "④★★点[绑定] → 绑定表写入方案 1 的派发")
   eq(EVAL_HELP_CONFIG.war.bindKeys[1], "F9", "④配置记下 F9")
   EVAL_TEST_BIND_CLOSE()
   -- ⑤ 左键不被右键吃掉：仍是切换方案
