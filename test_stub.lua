@@ -248,6 +248,14 @@ IsUsableAction = function() if TEST.usableRet then return TEST.usableRet.u, TEST
 IsCurrentAction = function(slot) return TEST.currentAction == slot end
 SpellStopCasting = function() TEST.castStopped = true end
 RunScript = function(code) TEST.runScript = code TEST.runScripts = TEST.runScripts or {} table.insert(TEST.runScripts, code) if code == "SpellStopCasting()" then TEST.castStopped = true end end -- 1.69.0 收集多条
+IsInGuild = function() return TEST.inGuild or false end
+-- ★★★合并冲突留下的**重复定义**（1.71.1 修）：v1.71.0 的方案分享补了这两行简版桩，
+--   而队友/团员扫描在文件上方另有一份**支持 TEST.team/TEST.raid 列表**的桩。
+--   Lua 里**后赋值者静默获胜** → 简版把我那份整个盖掉 → 队伍扫描只扫到自己，
+--   组 66 第一条断言当场炸（got=1 want=3），而**语法检查、luacheck、单个文件都看不出问题**。
+--   ★教训：Lua 合并冲突不会像 C 那样报「重定义」——**同一个全局被赋两次是合法的**，
+--     谁在后面谁生效。改完必须跑测试，不能只看语法。（详见 CLAUDE.md 的 F3/教训节）
+--   （两份桩已合并：上方那份保留 TEST.partyN/TEST.team 两种数据源）
 AttackTarget = function() TEST.attackTried = true end
 UseAction = function(slot) table.insert(TEST.used, slot) end
 TargetNearestEnemy = function()

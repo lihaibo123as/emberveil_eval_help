@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.70.44"
+local VERSION = "1.71.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -3600,6 +3600,8 @@ local function ioImportText(text)
   return true, "方案已满 12 个，已替换当前方案: " .. tostring(prof.name)
 end
 
+EVAL_IMPORT_TEXT = ioImportText -- 1.69.0 桥：Share.lua 方案分享弹窗的 [导入] 走这里
+
 -- 方案 → md 文本（导出）
 function EVAL_PROFILE_TO_TEXT(idx)
   local w2 = warCfg()
@@ -3829,6 +3831,21 @@ function EVAL_HELP_IO_BUILD()
   end)
   ioBtn(242, 108, L("IO_TPL"), function() EVAL_HELP_TPL_TOGGLE() end) -- 1.44.0 案例模版（按职业）
   ioBtn(392, 64, L("CLOSE"), function() ioUI.root:Hide() end)
+
+  -- 1.69.0 方案分享第二排按钮（Share.lua 独立载入；local 作用域陷阱——OnClick 赋值后单独挂）
+  if type(EVAL_SHARE_SEND_UI) == "function" then
+    local sbtn = ioBtn(14, 108, L("SH_SHARE"), function() end)
+    sbtn:ClearAllPoints() sbtn:SetPoint("BOTTOMLEFT", root, "BOTTOMLEFT", 14, 42)
+    sbtn:SetScript("OnClick", function() EVAL_SHARE_SEND_UI(sbtn) end)
+    local rbtn = ioBtn(128, 130, "", function() end)
+    rbtn:ClearAllPoints() rbtn:SetPoint("BOTTOMLEFT", root, "BOTTOMLEFT", 128, 42)
+    rbtn:SetScript("OnClick", function()
+      EVAL_SHARE_RECV_TOGGLE()
+      EVAL_SHARE_RECV_LABEL(rbtn)
+    end)
+    ioUI.shareRecvBtn = rbtn
+    EVAL_SHARE_RECV_LABEL(rbtn)
+  end
 
   -- 1.44.0 IO 窗关闭时模版选单联动关闭
   root:SetScript("OnHide", function() if tplUI.root then tplUI.root:Hide() end end)

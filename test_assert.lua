@@ -3195,4 +3195,50 @@ do
   EVAL_HELP_STATE.teamCur, EVAL_HELP_STATE.allyUnit = nil, nil
   EVAL_HELP_UPDATE_STATE()
 end
+-- 12) 方案分享（1.71.0）：hex 分片 → RunScript 发送 → 事件重组 → 弹窗 → 导入桥
+EVAL_HELP_CONFIG = EVAL_HELP_CONFIG or {}
+EVAL_HELP_CONFIG.war = EVAL_HELP_CONFIG.war or {}
+EVAL_HELP_CONFIG.share = { recv = true }
+EVAL_SHARE_RESET()
+local shProf = EVAL_PROFILE_FROM_TEXT("# 方案: 分享测试\n- 致死打击 | 怒气>30 & 可攻击\n- 战斗怒吼 | 无buff:战斗怒吼")
+EVAL_HELP_CONFIG.war.profiles = { shProf } EVAL_HELP_CONFIG.war.activeProfile = 1
+TEST.runScripts = nil
+eq(EVAL_SHARE_SEND("GUILD"), true, "share send ok")
+local shMsgs = {}
+for _, s in ipairs(TEST.runScripts or {}) do
+  local m = string.match(s, 'SendChatMessage%("(.-)", "GUILD"%)')
+  if m then table.insert(shMsgs, m) end
+end
+eq(table.getn(shMsgs) >= 1, true, "share chunked messages emitted")
+-- 收齐全片 → 弹窗待导入
+for _, m in ipairs(shMsgs) do EVAL_SHARE_ONMSG(m, "队友甲") end
+local pend = EVAL_SHARE_PENDING()
+eq(pend ~= nil, true, "share popup pending after all chunks")
+eq(pend and pend.name, "分享测试", "share parsed name")
+eq(pend and pend.count, 2, "share parsed skill count")
+-- 半包不弹窗
+EVAL_SHARE_RESET()
+EVAL_SHARE_ONMSG(shMsgs[1], "队友乙")
+if table.getn(shMsgs) > 1 then
+  eq(EVAL_SHARE_PENDING(), nil, "partial chunks no popup")
+end
+-- 接收开关关闭 = 忽略
+EVAL_HELP_CONFIG.share.recv = false
+EVAL_SHARE_RESET()
+for _, m in ipairs(shMsgs) do EVAL_SHARE_ONMSG(m, "队友丙") end
+eq(EVAL_SHARE_PENDING(), nil, "recv off ignores")
+EVAL_HELP_CONFIG.share.recv = true
+-- 导入桥（弹窗 [导入] 同路径）
+EVAL_SHARE_RESET()
+for _, m in ipairs(shMsgs) do EVAL_SHARE_ONMSG(m, "队友甲") end
+local shBefore = table.getn(EVAL_HELP_CONFIG.war.profiles)
+local shOk, shMsg = EVAL_IMPORT_TEXT(EVAL_SHARE_PENDING().text)
+eq(shOk, true, "share import via bridge")
+eq(table.getn(EVAL_HELP_CONFIG.war.profiles), shBefore + 1, "share import appended profile")
+eq(EVAL_HELP_CONFIG.war.profiles[shBefore + 1].name, "分享测试", "imported profile name")
+-- 同一发送者同 id 重复收齐不重复弹（done 标记）
+EVAL_SHARE_ONMSG(shMsgs[1], "队友甲")
+for _, m in ipairs(shMsgs) do EVAL_SHARE_ONMSG(m, "队友甲") end
+EVAL_SHARE_PENDING().text = nil -- 不清理 done；仅验证不报错
+
 print("ALL TESTS PASS")
