@@ -6233,14 +6233,15 @@ end
 
 -- 91) ★1.71.3 案例模版窗重做（用户要求：「窗口大一点，分两列，标题增加感叹号 tooltip 提示…」）
 --   + 案例扩充（通用法系 队伍/团队刷buff、队伍/团队一键治疗与buff、骑士按职业区分祝福、其它职业常用一键宏）。
---   ★三层判据：① 布局（真实几何：两列不叠、不出窗、**同一职业组不被拆到两列**、两列行数大致对半）；
+--   ★三层判据：① 布局（真实几何：**分组分两列**、组内同行自动换行、不出窗、**同一职业组不被拆到两列**、两列行数平衡）；
 --     ② 标题感叹号的悬停文案（走真实 OnEnter → GameTooltip，按语言包取）；
 --     ③ **内容质量**（每条模版：名字非空、同组不重名、首行「# 方案: X」== 模版名、至少 1 条技能行；
 --        以及用户点名的几条确实在、职业过滤真的写进条件里）。
 do
-  -- ★★★1.71.5 版式改成**流式（自动换行）**（用户要求「模版不用一列，可以同行，自动换行布局」）：
-  --   判据从「两列的几何」换成「流式的不变量」：同一行可以放多个、每个都在窗内、同行相邻不重叠、
-  --   换行回到左边界、整窗高度由内容算出且不出屏。★读的仍是**真实控件几何**，不写死布局常量。
+  -- ★★★1.71.8 版式：**分组分两列 + 组内同行自动换行**
+  --   （用户要求「案例模版 分组 分两列,分组内的方案 同行 自动换行.」）。
+  --   判据仍是**真实控件几何**（不写死常量）：每个按钮在**本列**列宽之内、同行相邻留足 GAP、
+  --   一个组只出现在一列（不拆组）、两列都有内容、两列行数尽量平衡、高度由内容算出且不出屏。
   local lay = EVAL_TEST_TPL_LAYOUT()
   eq(type(lay) == "table", true, "前置：模版窗建好了")
   eq(lay.w, EVAL_TEST_WIN_W(), "★★★窗口宽度 = 单一来源 cfWinWidth()（不再各写一份宽度）")
@@ -6248,16 +6249,29 @@ do
   eq(lay.plan, lay.rowCount + lay.groups, "★★版式表 = 组标题 + 方案按钮（一个不漏）")
   eq(lay.h <= 700, true, "★★窗口高度不出屏（本客户端 UI 空间高 768）: " .. tostring(lay.h))
   eq(lay.lines >= 4, true, "★★内容确实排了多行（会自动换行）: " .. tostring(lay.lines) .. " 行")
+  -- ★★★分两列：列宽与右列起点由版式算出（列宽 = (窗宽 − 2×边距 − 列间距) / 2）
+  eq(lay.colW ~= nil and lay.colW > 100, true, "★★★分组分两列：列宽 " .. tostring(lay.colW) .. "（>100 才排得下按钮）")
+  eq(lay.colX2, lay.margin + lay.colW + lay.colGap, "★★右列起点 = 左列右边界 + 列间距（两列之间真有间隔，不是贴着/重叠）")
+  eq(lay.colX2 + lay.colW <= lay.w - lay.margin + 1, true, "★★右列不越出窗口右边界")
+  eq(lay.rowsL > 0 and lay.rowsR > 0, true, "★★★两列都有内容（没有全挤在一列）: " .. tostring(lay.rowsL) .. "+" .. tostring(lay.rowsR))
+  eq(math.abs(lay.rowsL - lay.rowsR) <= 2, true, "★★两列行数平衡（最优切点，不搞「塞到过半就停」）: " .. tostring(lay.rowsL) .. "/" .. tostring(lay.rowsR))
   local rows91 = EVAL_TEST_TPL_ROWS()
   eq(table.getn(rows91), lay.rowCount, "★行表与布局自报的按钮数一致")
-  -- 按 y 分行，逐行检查「自动换行」的不变量
-  local byRow, bad = {}, ""
+  -- 按「y + 列」分行，逐行检查不变量（★同一 y 上的两列各自成行，绝不能混在一起比间距）
+  local function colOf91(x) return (x >= lay.colX2 - 0.5) and 2 or 1 end
+  local colX91 = { lay.margin, lay.colX2 }
+  local byRow, bad, clsCol91 = {}, "", {}
   for i = 1, table.getn(rows91) do
     local r = rows91[i]
     eq(type(r.x) == "number" and type(r.y) == "number", true, "★第 " .. i .. " 个按钮有真实坐标")
     if type(r.x) == "number" and type(r.y) == "number" then
-      byRow[r.y] = byRow[r.y] or {}
-      table.insert(byRow[r.y], r)
+      local key = tostring(r.y) .. "#" .. tostring(colOf91(r.x))
+      byRow[key] = byRow[key] or {}
+      table.insert(byRow[key], r)
+      -- ★组不许跨列：同一个组的按钮必须都在同一列（拆开看着像少了一组）
+      local c0 = clsCol91[r.cls]
+      if c0 == nil then clsCol91[r.cls] = colOf91(r.x)
+      elseif c0 ~= colOf91(r.x) then bad = bad .. "组跨列:" .. tostring(r.cls) .. " " end
     end
   end
   local multiRow, rowCount91 = 0, 0
@@ -6266,48 +6280,63 @@ do
     table.sort(list, function(a, b) return a.x < b.x end)
     if table.getn(list) >= 2 then multiRow = multiRow + 1 end
     for i = 1, table.getn(list) do
-      local r = list[i]
-      if r.x < lay.margin - 0.5 then bad = bad .. "左越界:" .. tostring(r.name) .. " " end
-      if (r.w or 0) < 30 then bad = bad .. "按钮过窄:" .. tostring(r.name) .. "=" .. tostring(r.w) .. " " end
-      if r.x + (r.w or 0) > lay.w - lay.margin + 1 then bad = bad .. "右越界:" .. tostring(r.name) .. " " end
-      -- ★同行相邻要**留出 GAP**（不只是「不重叠」：贴在一起也算不合规——「不重叠」是弱代理）
+      local rr = list[i]
+      local ci = colOf91(rr.x)
+      if rr.x < colX91[ci] - 0.5 then bad = bad .. "左越界:" .. tostring(rr.name) .. " " end
+      if (rr.w or 0) < 30 then bad = bad .. "按钮过窄:" .. tostring(rr.name) .. "=" .. tostring(rr.w) .. " " end
+      if rr.x + (rr.w or 0) > colX91[ci] + lay.colW + 1 then bad = bad .. "越出本列右边界:" .. tostring(rr.name) .. " " end
+      -- ★同行相邻（**同一列**）要留出 GAP（不只是「不重叠」：贴在一起也算不合规——「不重叠」是弱代理）
       if i > 1 then
         local prev = list[i - 1]
-        if r.x < prev.x + (prev.w or 0) + lay.gap - 0.5 then
-          bad = bad .. "间距不足:" .. tostring(prev.name) .. "/" .. tostring(r.name) .. " "
+        if colOf91(prev.x) == ci and rr.x < prev.x + (prev.w or 0) + lay.gap - 0.5 then
+          bad = bad .. "间距不足:" .. tostring(prev.name) .. "/" .. tostring(rr.name) .. " "
         end
       end
       -- ★底边不得压到「关闭」按钮那条带（34 是标题栏 + 底部留白）
-      if (r.y - 18) < -(lay.h - 34) then bad = bad .. "压到底部:" .. tostring(r.name) .. " " end
+      if (rr.y - 18) < -(lay.h - 34) then bad = bad .. "压到底部:" .. tostring(rr.name) .. " " end
     end
   end
   eq(multiRow >= 4, true, "★★★同一行放了多个模版（这就是「可以同行」）: 有 " .. multiRow .. " 行是多按钮")
-  eq(rowCount91 <= lay.lines, true, "★按钮占的行数不超过版式行数（版式行数还含「只有标题」的行）: " .. rowCount91 .. " <= " .. lay.lines)
-  print(string.format("  案例模版窗版式：%d 个按钮 / %d 组 / %d 行 / 窗口 %dx%d", lay.rowCount, lay.groups, lay.lines, lay.w, lay.h))
-  eq(bad, "", "★★★流式不变量：每个按钮都在窗内、同行相邻不重叠: " .. bad)
-  -- ★★★用**合成数据**逼出「换行」路径：真实内容下每组的按钮串刚好放得下，「不换行」的实现在真实数据上照样全绿
-  --   （这是本项目的老家族：只在当前数据上看着对 = 测不出算法退化）→ 直接拿纯函数 planner 喂一条长列表。
-  local fake91 = EVAL_TEST_TPL_PLAN_FAKE(660, 60, 6)
-  eq(fake91.items, 61, "★★★合成数据：60 个按钮 + 1 个组标题都进了版式表")
-  eq(fake91.rows >= 6, true, "★★★60 个宽按钮必须换很多行（真的在换行）: " .. tostring(fake91.rows) .. " 行")
-  eq(fake91.maxPerRow >= 2, true, "★换行前同一行确实塞了多个（不是一行一个）: 最多 " .. tostring(fake91.maxPerRow) .. " 个/行")
-  eq(fake91.over, 0, "★★★换行后没有任何元素越过右边界（「不换行」的变异踩的就是这一条）")
-  eq(fake91.gapBad, 0, "★★同行相邻之间留足了 GAP（「贴着」也算不合规）")
-  eq(fake91.headerAlone, 0, "★★组标题没有被孤零零扔在行尾（标题后必须排得下本组按钮）")
-  print(string.format("  合成数据版式：%d 行 / 每行最多 %d 个（用来逼出换行路径）", fake91.rows, fake91.maxPerRow))
-  -- 真实渲染的标题几何：每个标题所在行必须至少有一个**本组**按钮（否则标题会孤悬在行尾）
+  eq(rowCount91 <= lay.lines * 2, true, "★(列×行) 不超过 2×版式行数: " .. rowCount91 .. " <= " .. (lay.lines * 2))
+  print(string.format("  案例模版窗版式：%d 个按钮 / %d 组 / 两列 %d+%d 行 / 列宽 %d / 窗口 %dx%d",
+    lay.rowCount, lay.groups, lay.rowsL, lay.rowsR, lay.colW, lay.w, lay.h))
+  eq(bad, "", "★★★分列+流式不变量：按钮在本列内、同行相邻不重叠、组不跨列: " .. bad)
+  -- 分列结果打印出来（回归时一眼看出「哪几组进了哪一列」）
+  local colTxt91 = { "", "" }
+  for i = 1, table.getn(EVAL_IO_TEMPLATES) do
+    local nm91 = tostring(EVAL_IO_TEMPLATES[i].cls)
+    local ci91 = clsCol91[nm91]
+    if ci91 then colTxt91[ci91] = colTxt91[ci91] .. nm91 .. " " end
+  end
+  print("  分列：左[" .. colTxt91[1] .. "] 右[" .. colTxt91[2] .. "]")
+  -- ★★★用**合成数据**逼出「组内换行 + 分两列」两条路（真实内容下这两条路可能是等价的）
+  local fake91 = EVAL_TEST_TPL_PLAN_FAKE(660, 8, 9, 6) -- 8 组 × 每组 9 个「6 字 + 序号」按钮
+  eq(fake91.items, 72, "★★★合成数据：8 组 × 9 个按钮都进了版式表")
+  eq(fake91.rows >= 10, true, "★★★每组都要换好几行（真的在换行）: " .. tostring(fake91.rows) .. " 行(列×行)")
+  eq(fake91.colGroups[1] > 0 and fake91.colGroups[2] > 0, true, "★★★合成数据也分了**两列**: " .. tostring(fake91.colGroups[1]) .. "+" .. tostring(fake91.colGroups[2]) .. " 组")
+  eq(fake91.splitBad, 0, "★★★没有组被拆到两列（组是不拆的最小单位）")
+  eq(fake91.over, 0, "★★★没有任何元素越出**本列**右边界（「不换行 / 只排一列」的变异踩这一条）")
+  eq(fake91.gapBad, 0, "★★同行相邻留足了 GAP")
+  eq(fake91.colStartBad, 0, "★★每个组标题都落在本列的行首")
+  eq(fake91.perCol[1] > 0 and fake91.perCol[2] > 0, true, "★★两列都有按钮: " .. tostring(fake91.perCol[1]) .. "/" .. tostring(fake91.perCol[2]))
+  print(string.format("  合成数据版式：%d 组 / 两列 %d+%d 行 / 按钮 %d+%d（逼出换行+分列两条路）",
+    fake91.groups, fake91.rowsL, fake91.rowsR, fake91.perCol[1], fake91.perCol[2]))
+  -- 真实渲染的标题几何：标题必须落在**本列行首**，且所在行至少有一个**本组**按钮
   local hdrs91 = EVAL_TEST_TPL_HEADERS()
   eq(table.getn(hdrs91), lay.groups, "★★★真实渲染出来的组标题数 = 组数（每个组都有标题）")
-  local alone91 = ""
+  local alone91, hdBad91 = "", ""
   for i = 1, table.getn(hdrs91) do
     local h = hdrs91[i]
+    local ci = colOf91(h.x)
+    if math.abs(h.x - colX91[ci]) > 0.5 then hdBad91 = hdBad91 .. tostring(h.cls) .. "(不在列首) " end
     local same = 0
     for j = 1, table.getn(rows91) do
       if rows91[j].cls == h.cls and rows91[j].y == h.y then same = same + 1 end
     end
     if same == 0 then alone91 = alone91 .. tostring(h.cls) .. " " end
   end
-  eq(alone91, "", "★★真实数据里也没有「标题行上找不到本组按钮」的情况: " .. alone91)
+  eq(hdBad91, "", "★★组标题都在**本列行首**（每个组从新的一行开始）: " .. hdBad91)
+  eq(alone91, "", "★★每个标题所在行都有本组至少一个按钮: " .. alone91)
   -- ② 标题感叹号 + 悬停说明
   eq(EVAL_TEST_TPL_TIP_TEXT(), "!", "★★标题上有金色文字感叹号（不用我们那两枚有固定含义的 mark 图标）")
   local tip91 = EVAL_TEST_TPL_TIP()

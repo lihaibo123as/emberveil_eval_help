@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.71.7"
+local VERSION = "1.71.8"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -5128,31 +5128,75 @@ function EVAL_TEST_IO_SHOWN()
 end
 
 -- ============ 案例模版选单（1.44.0）：按职业分组，点击方案行直接导入 ============
--- ★★★1.71.5 案例模版窗的**版式计算**（纯函数：不建控件、不碰 UI）：
---   规则 = 从左往右排、放不下就换行回左边界；★组标题要求「标题 + 该组第一个按钮」能一起放下
---   （不许孤零零留在行尾——那样看着像丢了内容）。
---   ★★为什么抽成纯函数：布局的核心（**换行**）原先埋在 BUILD 里，只能用真实模版数据测——
---     而真实内容下「去掉换行」恰好是**等价**的（每个组的按钮串都刚好放得下，只有跨组才换行），
---     变异测不出来。抽出来之后能用**合成数据**（一条超长列表）逼它反复换行，判据才真的会响。
-local function tplFlowPlan(W, groups, measure, margin, gap, rowH)
-  local maxX = W - margin
-  local plan, px, py = {}, margin, -26
-  for _, c in ipairs(groups) do
-    local label = "【" .. tostring(c.cls) .. "】"
-    local firstW = 0
-    if table.getn(c.list) > 0 then firstW = measure(tostring(c.list[1].name)) + 16 end
-    if px + measure(label) + (firstW > 0 and (gap + firstW) or 0) > maxX then px = margin py = py - rowH end
-    table.insert(plan, { kind = "header", cls = c.cls, x = px, y = py, w = measure(label) })
-    px = px + measure(label) + gap
+-- ★★★1.71.8 案例模版窗的**版式计算**（纯函数：不建控件、不碰 UI）——用户要求：
+--   「案例模版 分组 分两列, 分组内的方案 同行 自动换行.」
+--   ① 窗口按列宽一分为二：colW = (W - 2*margin - colGap) / 2（窄到放不下两列时退化单列，不硬撑）；
+--   ② **组是不拆的最小单位**：按顺序切成「左段 / 右段」，一个组绝不会跨到另一列（拆开看着像少了一组）；
+--   ③ **组内流式**：标题后跟本组按钮，同一行依次往右排、放不下就换行回**本列**左边界；
+--      每个组从新的一行开始（否则两组会挤在同一行，看着像一组）；
+--   ④ 切点 = **两列行数差最小**（遍历所有切点）——★别用「塞到过半就停」的贪心：
+--      它在当前数据上看着对，内容一改就失衡（1.71.5 的教训）。
+--   ★★为什么是纯函数：布局的核心（分列 + 换行）埋在 BUILD 里就只能用真实模版数据测，
+--     而真实内容下「不换行 / 只排一列」都可能是**等价**的 → 必须能用**合成数据**逼它换行、逼它分列。
+--   返回 plan, 最末一行 y, 左列行数, 右列行数, 列宽, 右列左边界 x
+local function tplTwoColPlan(W, groups, measure, margin, gap, rowH, colGap)
+  local colW = math.floor((W - margin * 2 - colGap) / 2)
+  if colW < 60 then colW = W - margin * 2 end -- 窗口太窄：退化成单列（硬分两列会把按钮压成一条）
+  local colX = { margin, margin + colW + colGap }
+  local colMax = { colX[1] + colW, colX[2] + colW }
+  local n = table.getn(groups)
+  -- ① 一个组在**本列列宽**下要占几行（组内同行 + 自动换行）
+  local function rowsOf(c)
+    local lw = measure("【" .. tostring(c.cls) .. "】")
+    local px, rows = colX[1] + lw + gap, 1
     for _, p in ipairs(c.list) do
       local bw = measure(tostring(p.name)) + 16
-      if bw > (maxX - margin) then bw = maxX - margin end
-      if px + bw > maxX then px = margin py = py - rowH end
-      table.insert(plan, { kind = "item", cls = c.cls, tpl = p, x = px, y = py, w = bw })
+      if bw > colW then bw = colW end
+      if px + bw > colMax[1] + 0.5 then rows = rows + 1 px = colX[1] end
       px = px + bw + gap
     end
+    return rows
   end
-  return plan, py, -26
+  -- ② 最优切点（两列行数差最小；组不拆）
+  local rows, total = {}, 0
+  for i = 1, n do rows[i] = rowsOf(groups[i]) total = total + rows[i] end
+  local cut = n
+  if n >= 2 then
+    local best = nil
+    for k = 1, n - 1 do
+      local a = 0
+      for i = 1, k do a = a + rows[i] end
+      local diff = math.abs(a - (total - a))
+      if best == nil or diff < best then best, cut = diff, k end
+    end
+  end
+  -- ③ 照切点摆两列：每组从新行开始，标题在**本列行首**，组内同行自动换行
+  local plan, minY = {}, -26
+  local used = { 0, 0 }
+  for ci = 1, 2 do
+    local py, first = -26, true
+    for i = 1, n do
+      if (ci == 1 and i <= cut) or (ci == 2 and i > cut) then
+        local c = groups[i]
+        local x0, mx = colX[ci], colMax[ci]
+        if not first then py = py - rowH end
+        first = false
+        used[ci] = used[ci] + rows[i]
+        local lw = measure("【" .. tostring(c.cls) .. "】")
+        table.insert(plan, { kind = "header", cls = c.cls, x = x0, y = py, w = lw })
+        local px = x0 + lw + gap
+        for _, p in ipairs(c.list) do
+          local bw = measure(tostring(p.name)) + 16
+          if bw > colW then bw = colW end
+          if px + bw > mx + 0.5 then px = x0 py = py - rowH end
+          table.insert(plan, { kind = "item", cls = c.cls, tpl = p, x = px, y = py, w = bw })
+          px = px + bw + gap
+        end
+        if py < minY then minY = py end
+      end
+    end
+  end
+  return plan, minY, used[1], used[2], colW, colX[2]
 end
 
 function EVAL_HELP_TPL_BUILD()
@@ -5160,7 +5204,7 @@ function EVAL_HELP_TPL_BUILD()
   -- ★★★1.71.3 用户要求「窗口大一点、分两列」：案例多了以后单列会长出屏幕（本客户端 UI 空间高 768）。
   --   ★宽度跟配置窗**同一来源**（cfWinWidth：中文 660 / 西文 800）——不再各写一份宽度（本项目老坑）。
   local W = cfWinWidth()
-  local MARGIN, GAP, ROW_H = 14, 6, 20
+  local MARGIN, GAP, ROW_H, COL_GAP = 14, 6, 20, 12 -- COL_GAP = 两列之间的间隔（1.71.8 分两列）
   -- ★★★1.71.5 版式：**流式（自动换行）布局**（用户要求：「模版不用一列，可以同行，自动换行布局」）。
   --   · 组标题与方案按钮**一起**从左往右排，放不下就换行（回到左边界）——不再「每行一个 / 每列一组」。
   --   · 每个按钮宽度 = FontString:GetStringWidth() **实测** + 内边距（拿不到就按「字符数 × 9px」近似）。
@@ -5168,7 +5212,7 @@ function EVAL_HELP_TPL_BUILD()
   local H = 0 -- 高度由 plan 算出来（量完标签再 SetHeight）
   tplUI.rowBtns = {}
   tplUI.headerFs = {}
-  tplUI.margin, tplUI.gap, tplUI.rowH = MARGIN, GAP, ROW_H
+  tplUI.margin, tplUI.gap, tplUI.rowH, tplUI.colGap = MARGIN, GAP, ROW_H, COL_GAP
   local root = CreateFrame("Frame", "EVAL_HELP_TPL", UIParent)
   root:SetWidth(W) -- ★高度见下方「算完版式再 SetHeight」（本窗高度由内容决定）
   root:SetPoint("CENTER", UIParent, "CENTER", 0, 80)
@@ -5263,16 +5307,15 @@ function EVAL_HELP_TPL_BUILD()
     if w <= 0 then w = math.floor(string.len(label) / 3 + 0.5) * 9 end -- 近似：中文一字约 9px
     return w
   end
-  local maxX = W - MARGIN
-  -- 版式交给**纯函数**算（见 tplFlowPlan 上方注释：换行逻辑必须能被合成数据逼出来）
-  local plan, lastY, firstY = tplFlowPlan(W, EVAL_IO_TEMPLATES, measure, MARGIN, GAP, ROW_H)
-  maxX = maxX -- （保留：下面渲染不再用它；纯函数内部自带边界判断）
+  -- 版式交给**纯函数**算（见 tplTwoColPlan 上方注释：分列与换行两条路都要能被合成数据逼出来）
+  local plan, lastY, rowsL, rowsR, colW, colX2 = tplTwoColPlan(W, EVAL_IO_TEMPLATES, measure, MARGIN, GAP, ROW_H, COL_GAP)
   H = 34 + math.abs(lastY) + ROW_H + 20 -- 34 标题栏 + 内容 + 底部关闭按钮
   root:SetHeight(H)
   tplUI.plan = plan
-  -- 用掉的行数：首行 y=-26，之后每换一行减 ROW_H（用「首行 − 末行」算，别用 abs(py) —— 那会多算一行）
-  tplUI.firstY = firstY
-  tplUI.lines = math.floor((firstY - lastY) / ROW_H) + 1
+  -- 两列的几何与行数（渲染不再重复算；断言读的也是这一份）
+  tplUI.colW, tplUI.colX2 = colW, colX2
+  tplUI.rowsL, tplUI.rowsR = rowsL, rowsR
+  tplUI.lines = (rowsL > rowsR) and rowsL or rowsR
   for _, e in ipairs(plan) do
     if e.kind == "header" then
       local hd = uiText(root, 10, 0.95, 0.82, 0.35)
@@ -5353,7 +5396,9 @@ function EVAL_TEST_TPL_LAYOUT()
   local okh, h = pcall(r.GetHeight, r)
   return {
     w = okw and w or nil, h = okh and h or nil,
-    margin = tplUI.margin, gap = tplUI.gap, rowH = tplUI.rowH,
+    margin = tplUI.margin, gap = tplUI.gap, rowH = tplUI.rowH, colGap = tplUI.colGap,
+    colW = tplUI.colW, colX2 = tplUI.colX2,
+    rowsL = tplUI.rowsL or 0, rowsR = tplUI.rowsR or 0,
     lines = tplUI.lines or 0, plan = table.getn(tplUI.plan or {}),
     rowCount = table.getn(tplUI.rowBtns or {}),
     groups = table.getn(EVAL_IO_TEMPLATES or {}),
@@ -5380,48 +5425,60 @@ function EVAL_TEST_TPL_HEADERS()
   end
   return out
 end
--- ★★1.71.5 断言入口：用**合成数据**逼版式函数的「换行」路径（真实内容下那条路走不到 —— 见 tplFlowPlan 注释）。
---   量宽用纯函数（不依赖 UI）：中文一字约 9px。返回 { items, rows, maxPerRow, over, gapBad, headerAlone }。
-function EVAL_TEST_TPL_PLAN_FAKE(w, n, chars)
+-- ★★★1.71.8 断言入口：用**合成数据**逼版式函数的「组内换行」与「分两列」两条路
+--   （真实内容下这两条路可能是等价的 —— 见 tplTwoColPlan 注释）。
+--   参数：w 窗宽 / gn 组数 / per 每组按钮数 / chars 每个按钮名的字数；量宽用纯函数（中文一字约 9px）。
+--   返回 { items, groups, rows, perCol, colGroups, over, gapBad, colStartBad, splitBad, balance, colW, colX2 }
+function EVAL_TEST_TPL_PLAN_FAKE(w, gn, per, chars)
   local FAKE_CLS = string.char(0xe5, 0x81, 0x87) .. string.char(0xe7, 0xbb, 0x84) -- 合成组名（不写字面量：它会被当模版数据哨兵）
-  local groups = { { cls = FAKE_CLS, list = {} } }
-  for i = 1, n do
-    table.insert(groups[1].list, { name = string.rep("字", chars) .. tostring(i) })
+  local groups = {}
+  for i = 1, gn do
+    local list = {}
+    for j = 1, per do
+      table.insert(list, { name = string.rep("字", chars) .. tostring(i) .. "-" .. tostring(j) })
+    end
+    table.insert(groups, { cls = FAKE_CLS .. tostring(i), list = list })
   end
   local measure = function(s) return string.len(s) / 3 * 9 end
-  local plan = tplFlowPlan(w, groups, measure, 14, 6, 20)
+  local plan, _lastY, rowsL, rowsR, colW, colX2 = tplTwoColPlan(w, groups, measure, 14, 6, 20, 12)
+  local colMax = { 14 + colW, colX2 + colW }
+  local function colOf(x) return (x >= colX2 - 0.5) and 2 or 1 end
   local byRow = {}
   for _, e in ipairs(plan) do
-    byRow[e.y] = byRow[e.y] or {}
-    table.insert(byRow[e.y], e)
+    local key = tostring(e.y) .. "#" .. tostring(colOf(e.x))
+    byRow[key] = byRow[key] or {}
+    table.insert(byRow[key], e)
   end
-  local rows, maxPerRow, over, gapBad = 0, 0, 0, 0
+  local items, rows, over, gapBad, colStartBad = 0, 0, 0, 0, 0
+  local perCol, colGroups = { 0, 0 }, { {}, {} }
   for _, list in pairs(byRow) do
     rows = rows + 1
     table.sort(list, function(a, b) return a.x < b.x end)
-    local cnt = 0
     for i = 1, table.getn(list) do
       local e = list[i]
-      if e.kind == "item" then cnt = cnt + 1 end
-      if e.x + e.w > w - 14 + 1 then over = over + 1 end
+      local ci = colOf(e.x)
+      if e.kind == "item" then items = items + 1 perCol[ci] = perCol[ci] + 1 end
+      colGroups[ci][tostring(e.cls)] = true
+      if e.x + e.w > colMax[ci] + 1 then over = over + 1 end -- 越出**本列**右边界
+      local x0 = (ci == 1) and 14 or colX2
+      if e.kind == "header" and math.abs(e.x - x0) > 0.5 then colStartBad = colStartBad + 1 end
       if i > 1 then
         local prev = list[i - 1]
-        if e.x < prev.x + prev.w + 6 - 0.5 then gapBad = gapBad + 1 end
+        if colOf(prev.x) == ci and e.x < prev.x + prev.w + 6 - 0.5 then gapBad = gapBad + 1 end
       end
     end
-    if cnt > maxPerRow then maxPerRow = cnt end
   end
-  local headerAlone = 0
-  for _, e in ipairs(plan) do
-    if e.kind == "header" then
-      local same = 0
-      for _, e2 in ipairs(plan) do
-        if e2.kind == "item" and e2.cls == e.cls and e2.y == e.y then same = same + 1 end
-      end
-      if same == 0 then headerAlone = headerAlone + 1 end
-    end
+  local splitBad, g1, g2 = 0, 0, 0
+  for _, c in ipairs(groups) do
+    local seen = 0
+    for ci = 1, 2 do if colGroups[ci][tostring(c.cls)] then seen = seen + 1 end end
+    if seen ~= 1 then splitBad = splitBad + 1 end -- 一个组只许出现在一列
   end
-  return { items = table.getn(plan), rows = rows, maxPerRow = maxPerRow, over = over, gapBad = gapBad, headerAlone = headerAlone }
+  for _ in pairs(colGroups[1]) do g1 = g1 + 1 end
+  for _ in pairs(colGroups[2]) do g2 = g2 + 1 end
+  return { items = items, groups = gn, rows = rows, perCol = perCol, colGroups = { g1, g2 },
+    over = over, gapBad = gapBad, colStartBad = colStartBad, splitBad = splitBad,
+    balance = math.abs(rowsL - rowsR), rowsL = rowsL, rowsR = rowsR, colW = colW, colX2 = colX2 }
 end
 function EVAL_TEST_TPL_TIP() EVAL_HELP_TPL_BUILD() return tplUI.tipBtn end
 function EVAL_TEST_TPL_TIP_TEXT()
