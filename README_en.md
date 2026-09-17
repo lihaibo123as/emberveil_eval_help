@@ -20,6 +20,8 @@
 
 | Version | Theme | One-line highlight |
 | :-- | :-- | :-- |
+| **1.71.1** | 🩺 Party/Raid scan | One key scans your party/raid and picks by condition (lowest HP/mana, has magic debuff, missing a buff) → switches target → the spell lands on them |
+| **1.71.0** | 📡 Profile sharing | Send a profile to a chat channel; teammates get a popup and click Import |
 | **1.52.0** | 📏 Auto-attack range check | Auto Shot / wand out of range (IsActionInRange=0) now auto-falls back to melee auto-attack — point-blank hunters no longer swing their bow at thin air |
 
 > 📜 Detailed per-version notes live in **[CHANGELOG.md](CHANGELOG.md)**; earlier history is in the git commit log.
