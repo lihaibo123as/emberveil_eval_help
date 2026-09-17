@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.71.19"
+local VERSION = "1.71.20"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -331,6 +331,7 @@ function EVAL_HELP_UI_BUILD()
         pcall(GameTooltip.AddLine, GameTooltip, L("BIND_L_TIP_1"), 0.92, 0.88, 0.80)
         pcall(GameTooltip.AddLine, GameTooltip, L("BIND_L_TIP_2"), 0.92, 0.88, 0.80)
         pcall(GameTooltip.AddLine, GameTooltip, L("BIND_L_TIP_3"), 1.00, 0.65, 0.30)
+        pcall(GameTooltip.AddLine, GameTooltip, L("BIND_L_TIP_4"), 0.55, 0.85, 0.45) -- 1.71.20 左键 = 打印绑定情况
         pcall(GameTooltip.Show, GameTooltip)
       end
     end)
@@ -342,8 +343,9 @@ function EVAL_HELP_UI_BUILD()
       if mbtn == "RightButton" then
         local n = EVAL_BIND_CLEAR_ALL()
         say(string.format(L("BIND_ALL_CLEARED"), n))
+      else
+        EVAL_BIND_STATUS() -- ★1.71.20 左键点「方案」= 打印当前绑定情况（只打印，不动绑定）
       end
-      -- 左键点「方案」二字：什么都不做（左键是方案按钮的事，文案在 tooltip 里讲清楚了）
     end)
     -- 量宽尺（与方案按钮同字号；挪出可视区，不参与显示）
     local uiRuler = uiText(root, math.max(7, math.floor(9 * z)), 0.85, 0.80, 0.70)
@@ -2525,17 +2527,18 @@ function EVAL_TEST_MB_ANCHOR_CURRENT()
 end
 
 -- ============ 方案快捷键绑定（1.71.16，用户：「方案 右键能否弹窗设置 绑定快捷键」→ 先验证后实装） ============
--- ★可行性（/eh go bind 实测）：SetBinding 接受插件自定义命令名、无需 Bindings.xml 登记（T1/T2 全过）。
--- ★★★派发定案（1.71.18，用户实测）：第一版用 CLICK 隐藏按钮派发（vanilla 经典招），结果这个客户端把
---   「CLICK <按钮>:LeftButton」解析岔了——**触发被挂到鼠标左右键**、原始转屏被顶掉（用户报「左右键点击
---   原始的屏幕转动效果没了，但是会触发插件」）。按键 → 插件代码这条链路是通的，错的是命令串形态。
---   → 改用**裸命令名** `EVAL_GO<i>`：T0 探针里的客户端内建命令就是 MoveForward/Jump 这种驼峰全局函数名，
---   T2 也证明 `EVAL_GO2` 这名字绑定表直接接受——而 EVAL_GO1~12 全局函数**本来就存在**（Engine.lua 批量生成）。
+-- ★派发定案（1.71.20，两轮用户实测）：
+--   ① CLICK 隐藏按钮派发（vanilla 经典招）——客户端把「CLICK <按钮>:LeftButton」解析岔了，
+--     **触发被挂到鼠标左右键**、原始转屏被顶掉（但插件确实被触发 = 链路是通的，命令串形态错）；
+--   ② 裸命令名 `EVAL_GO<i>` —— **绑定表接受但不派发**（用户实测：绑定成功、按键不触发）——
+--     本客户端只派发「启动时命令表里有名字」的命令（MoveForward/JUMP 那种）；
+--   ③ 定案 = **Bindings.xml 登记**：`EVAL_GO_PROF_1~12` 启动时进客户端命令表（vanilla 正规做法，
+--     客户端启动时自动加载，**不列 .toc**），之后 SetBinding(key, "EVAL_GO_PROF_<i>") 走客户端自己的派发。
 -- ★持久化：绑定后 SaveBindings(GetCurrentBindingSet())——不存就随重登消失（实测当前 set = 1）。
 
--- 派发命令名（纯函数，测试直测）：方案 i = 已存在的全局函数 EVAL_GO<i>（裸命令名，零新增函数）
+-- 派发命令名（纯函数，测试直测）：必须与 Bindings.xml 逐个一致（BIND XML CHECK 守着两侧）
 function EVAL_BIND_CMD(i)
-  return "EVAL_GO" .. tostring(i)
+  return "EVAL_GO_PROF_" .. tostring(i)
 end
 
 -- 按键清单（纯函数：下拉内容 = 分类标题 + 键名；locked 是「分类标题行」的下标集合——DD 的不可选行语义）。
@@ -2584,6 +2587,25 @@ function EVAL_BIND_DO(pidx, key)
     pcall(SaveBindings, (type(GetCurrentBindingSet) == "function" and GetCurrentBindingSet()) or 1)
   end
   return true, key
+end
+
+-- ★1.71.20 左键点「方案」标签：把当前绑定情况打到聊天框（用户：「左键点击<标题方案>.日志打印方案绑定情况.」）。
+--   ★只打印、不动任何绑定；没有绑定时**如实说没有**（不是静默什么都不出）。
+function EVAL_BIND_STATUS()
+  local w2 = warCfg()
+  local n = 0
+  say("— " .. L("BIND_L_TIP_T") .. " —")
+  if w2.bindKeys then
+    for i = 1, table.getn(w2.profiles or {}) do
+      local key = w2.bindKeys[i]
+      if type(key) == "string" and key ~= "" then
+        n = n + 1
+        say(string.format(L("BIND_ST_ROW"), i, tostring(w2.profiles[i].name or i), key))
+      end
+    end
+  end
+  if n == 0 then say(L("BIND_ST_NONE")) end
+  return n
 end
 
 -- ★1.71.19 一键清除**全部**自定义绑定（右键点「方案」标签）：逐键解绑 + 清表 + 存档；返回清掉的个数。
@@ -6452,6 +6474,46 @@ if type(SlashCmdList) == "table" then
           pcall(SetBinding, k1)
           pcall(SetBinding, k2)
           say("探针结束：两键已解绑还原（未 SaveBindings，改动随重登消失）")
+        end)
+      end
+    elseif msg == "go bind3" then
+      -- ★最后一发实弹（1.71.19 用户定边界：「在游戏运行状态无法生效的方案不要考虑」——Bindings.xml 出局）。
+      --   已知：裸名不派发；带 :LeftButton 尾巴的 CLICK 会触发但鼠标被劫持。
+      --   ★最大嫌疑 = 那 12 个隐藏按钮创建时**没显式 EnableMouse(false)、没设 0 尺寸**
+      --     （若客户端给 Button 默认尺寸+默认收鼠标 = 屏幕上的隐形毯子，正好解释「左右键都失效」）。
+      --   本探针验证**不带尾巴的** "CLICK <按钮>"：按钮显式 EnableMouse(false)+1x1 挪出可视区。
+      --   10 秒内按一下它报的键 → 触发 = CLICK 无尾形态可用（功能活）；不触发 = 如实宣判绑定功能做不到。
+      if not EVAL_TEST_BTN3 then
+        local tb = CreateFrame("Button", "EVAL_TEST_BTN3", UIParent)
+        tb:SetWidth(1) tb:SetHeight(1)
+        pcall(tb.SetPoint, tb, "TOPLEFT", UIParent, "TOPLEFT", -4000, 0) -- 挪出可视区（隐形≠吃掉鼠标的关键）
+        pcall(tb.EnableMouse, tb, false)
+        tb:SetScript("OnClick", function() EVAL_TEST_BTN3_T = GetTime() end)
+      end
+      EVAL_TEST_BTN3_T = nil
+      local freeK = nil
+      for _, k in ipairs({ "F11", "F12", "F10", "F9", "8", "9", "CTRL-8", "CTRL-9", "ALT-8", "BUTTON4", "BUTTON5" }) do
+        local okv, v = pcall(GetBindingAction, k)
+        if okv and v == "" then freeK = k break end
+      end
+      if not freeK then
+        say("找不到空闲键——/eh go bind 先看哪些键空着")
+      else
+        pcall(SetBinding, freeK, "CLICK EVAL_TEST_BTN3")
+        say("— 无尾 CLICK 实弹：" .. freeK .. " → CLICK EVAL_TEST_BTN3（按钮 1x1 挪出屏幕、EnableMouse(false)）—")
+        say("请在 10 秒内按一次 " .. freeK .. "（顺便留意鼠标左右键是否正常）")
+        local pf = CreateFrame("Frame")
+        local t0 = GetTime()
+        pf:SetScript("OnUpdate", function()
+          if GetTime() - t0 < 10 then return end
+          pf:SetScript("OnUpdate", nil)
+          if EVAL_TEST_BTN3_T then
+            say("|cff00ff00★触发了！|r 无尾 CLICK 形态可用——方案绑定功能照此实装")
+          else
+            say("|cffff5040×没触发|r——本客户端按键绑定派发到插件这条路如实宣判做不到（功能将如实标注/摘除）")
+          end
+          pcall(SetBinding, freeK)
+          say("探针结束：已解绑还原（未 SaveBindings），改动随重登消失")
         end)
       end
     elseif msg == "go bind" then
