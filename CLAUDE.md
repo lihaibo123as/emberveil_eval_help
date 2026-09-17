@@ -1,12 +1,15 @@
 # EVAL_HELP 插件项目记忆（EmberVeil 全职业施法工具）
 
 > 本文件只记**铁律 / 判据 / 关键注意项**：逐版本细节在 `CHANGELOG.md` 与 git 提交历史，不进这里。
-> **发布流程见第 2 节**（每次发版必做 6 步）；**项目位置 / 当前版本 / 在途状态见第八节**「项目位置与现状」。
+> **发布流程见第 2 节**（每次发版必做 **9 步**：文档 6 步 + 提交打附注标签 + 推送 + 出包建 Release）；**项目位置 / 当前版本 / 在途状态见第八节**「项目位置与现状」。
 > **完整版本要点汇总在文档最末尾（第九节）**——超预算时**最先被截断的就是它**，属预期，不影响前面的铁律与判据。
 > ★写入纪律：**先查有没有同类条目——宁可合并改写，不要追加流水账**；★头部只保留比较新的记忆（最多 20 个版本）。
 > ★要查「某个功能/某个坑现在怎么写」→ 先看第五、六节的判据，再看 `DEVELOPMENT.md` 与源码。
 
-## ★★★发布 release 流程（用户定；每次发版必做 6 步）
+## ★★★发布 release 流程（用户定；每次发版必做 **9 步**）
+
+> ★★**「release / 发布版本」= 下面 9 步全做完**，不是只 git push（用户 1.72.0 明确：
+> 「release 要做的事也包含以上」——指推送 + 打附注标签 + 出 zip 发布包 + 建 Release 页）。
 
 1. **统计里程碑**：根据上一次 release 版本至最新，统计**跨越了哪些版本、每个版本的里程碑是什么**。
 2. **项目说明更新信息**：`README.md` / `README_en.md` / `README_ru.md`；★项目说明里的**版本记录只保留最近 10 个**。
@@ -15,9 +18,46 @@
 5. **更新文件内的版本记录**：`CHANGELOG.md` 保留**完整**版本记录；`EvalHelp.lua` 的 `local VERSION` 与 `EvalHelp.toc` 的 `## Version` **同步**（`VERSION` 源码检查守着）。
 6. **审计记忆体（本文件 `CLAUDE.md`）**：版本要点**汇总统计后放到文档末尾**；★**头部只保留比较新的记忆注意事项（最多 20 个版本）**
    —— ★**不要再把一堆逐版本记录堆到记忆体头部**（那是异常，会让文件超预算被截断，且把铁律挤出视野）。
+7. **提交 + 打「附注」标签**：`git commit` → `git tag -a vX.Y.Z -F <说明文件>`。
+   ★★**必须是附注标签（`-a`），不是轻量标签** —— 轻量标签只是个 commit 指针、**没有说明**，
+   而 Release 页要用它的说明当正文（1.72.0 踩过：先打了轻量标签，只能 `git tag -a ... -f` 重打再强推）。
+   说明内容 = 该版本的「头条 + 里程碑 + 安装方式 + 质量声明」，与 CHANGELOG 的详情小节同源。
+8. **推送（三个都推）**：`git push origin master && git push github master`，然后**标签也要推**
+   `git push origin --tags && git push github --tags`（★只推分支不推标签 = Release 页找不到 tag）。
+9. **出发布包 + 建 Release 页**：
+   - **发布包** `EvalHelp-vX.Y.Z.zip`（放在 `Interface/AddOns/` 下，与仓库同级——**不要放进仓库**）：
+     顶层一个 `EvalHelp\` 文件夹，内容 = `.toc` 实际清单（**必须按 toc 逐个核对**：
+     1.72.0 发现随包的 `EvalHelp-v1.71.2.zip` **只有 25 个文件、缺 `IconBrowser.lua` + 5 个 examples** →
+     用户装那个包会**直接报错**；正确包是 **60 个文件**）。打包脚本见下方「发布包怎么打」。
+   - **Release 页**：★**这一步我（AI）做不到，需要用户手动操作** ——
+     建 Release 要走 **GitHub/Gitee API + token**，而本机 `gh` CLI **未安装**、环境变量与凭据文件里
+     **都没有任何 token**（实测 `POST /repos/.../releases` 返回 **401 Unauthorized**）。
+     ★按会话规则**不申请权限提升**，所以**如实告知用户去网页建**，并把 URL 与要填的标题/说明/附件给全。
+     GitHub: `https://github.com/lihaibo123as/emberveil_eval_help/releases/new`（选已存在的 tag → 标题 →
+     说明可从 `git tag -n99 vX.Y.Z` 取 → 附件拖 zip → Publish）；
+     Gitee: `https://gitee.com/xeval/emberveil_eval_help/releases/new`（同样选 tag + 上传同一个 zip）。
 
 **更新日志维护规则（1.28.0 起，用户定）**：① 详情写 `CHANGELOG.md` 的 `## 🎯 vX.Y.Z — 主题` 小节（要点 / 典型用法 / 设计亮点，配一个 emoji）；
 ② `README.md` 顶部「更新日志」速览表加一行（`| **X.Y.Z** | emoji 主题 | 一句话亮点 |`，**最新在上**）；③ **README 不再放版本详情**（保持精简，详情只进 CHANGELOG）。
+
+**发布包怎么打（第 9 步的脚本，实测可用）**：★在 `Interface/AddOns/` 下执行（**不是插件目录**），产物与仓库同级。
+```powershell
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$src = "$PWD\EvalHelp"; $out = "$PWD\EvalHelp-vX.Y.Z.zip"
+$staging = "$env:TEMP\eh_pkg"
+if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
+New-Item -ItemType Directory -Path "$staging\EvalHelp" | Out-Null
+# ★只装运行必需：.toc + 7 个 .lua 模块 + Locales + examples + media + 三语言 README/CHANGELOG/DEVELOPMENT
+Copy-Item "$src\EvalHelp.toc","$src\Core.lua","$src\Engine.lua","$src\EvalHelp.lua","$src\Toolbox.lua","$src\DataSearch.lua","$src\Share.lua","$src\IconBrowser.lua" "$staging\EvalHelp\"
+Copy-Item "$src\README.md","$src\README_en.md","$src\README_ru.md","$src\CHANGELOG.md","$src\DEVELOPMENT.md" "$staging\EvalHelp\"
+Copy-Item "$src\Locales","$src\examples","$src\media" "$staging\EvalHelp\" -Recurse
+Remove-Item "$staging\EvalHelp\media\Textures" -Recurse -Force -ErrorAction SilentlyContinue  # 主题素材不进包
+[System.IO.Compression.ZipFile]::CreateFromDirectory($staging, $out)
+Remove-Item $staging -Recurse -Force
+```
+★**装完必须核对条目数**（1.72.0 基准 = **60 个**）：少一个就是缺文件，用户装了会**直接报错**。
+★**不装**：`luacheck.js`/`test_*.lua`/`test_engine.js`（测试）、`preview/`（截图）、`node_modules/`、
+`api_*.html`、`.git/`、`bindings/`、`_icons_scan/`、`pay/`。
 
 **推送信息**：分支 `master`；远端 `origin`=gitee（`git@gitee.com:xeval/emberveil_eval_help.git`）、`github`=`git@github.com:lihaibo123as/emberveil_eval_help.git`（1.29.0 起双远程，每次**两端都推**：`git push origin master && git push github master`；本地仓库 = 插件目录本身）；★推送用**默认密钥 `~/.ssh/id_rsa`**（`gitee_id_rsa` 未被授权，别用 `-i` 指定它）。
 
