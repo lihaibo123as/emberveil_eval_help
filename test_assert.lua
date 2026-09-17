@@ -7015,4 +7015,51 @@ do
   if not wasShown98 and EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end
   print("  方案绑定：右键开弹窗 → 下拉选键 → [绑定] = CLICK 派发 + SaveBindings；换键解旧键；左键仍切换")
 end
+
+-- 99) ★★★1.71.19 用户：「方案文字 添加 tooltip 提示：右键取消所有自定绑定，左键点方案激活，右键绑定按键，美化说明」
+do
+  local savedP99, savedA99 = EVAL_HELP_CONFIG.war.profiles, EVAL_HELP_CONFIG.war.activeProfile
+  EVAL_HELP_CONFIG.war.profiles = { { name = "甲", skills = {} }, { name = "乙", skills = {} } }
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  local wasShown99 = EVAL_TEST_UI_SHOWN()
+  if not wasShown99 then EVAL_HELP_UI_TOGGLE() end
+  EVAL_WAR_TAB_REFRESH()
+  EVAL_HELP_UI_TICK()
+  local up99 = EVAL_TEST_UI_PROF()
+  local lb99 = up99 and up99.labelBtn
+  eq(lb99 ~= nil, true, "前置：「方案」标签是真实可点控件")
+  TEST.bindings = nil
+  TEST.saveBindingsCalls = 0
+  EVAL_HELP_CONFIG.war.bindKeys = nil
+  EVAL_BIND_DO(1, "F9")
+  EVAL_BIND_DO(2, "F10")
+  eq(GetBindingAction("F9") ~= "" and GetBindingAction("F10") ~= "", true, "①前置：两个自定义绑定就位")
+  lb99:GetScript("OnClick")("LeftButton")
+  eq(GetBindingAction("F9") ~= "", true, "②★左键点「方案」不动绑定（左键是方案按钮的事）")
+  lb99:GetScript("OnClick")("RightButton")
+  eq(GetBindingAction("F9"), "", "③★★右键点「方案」→ F9 被解绑")
+  eq(GetBindingAction("F10"), "", "③★★F10 也被解绑（全部清除，一个不剩）")
+  eq(EVAL_HELP_CONFIG.war.bindKeys, nil, "③★配置表清掉")
+  eq(TEST.saveBindingsCalls >= 3, true, "③★清除后也真的 SaveBindings（2 次绑定 + 1 次清除）")
+  eq(EVAL_BIND_CLEAR_ALL(), 0, "④空表返回 0（幂等，连点不炸）")
+  EVAL_BIND_DO(1, "F11")
+  eq(EVAL_BIND_CLEAR_ALL(), 1, "④★如实返回清掉的个数 = 1")
+  TEST.tipLines = nil
+  lb99:GetScript("OnEnter")()
+  eq(type(TEST.tipLines) == "table" and table.getn(TEST.tipLines) >= 4, true,
+    "⑤★悬停出了 tooltip（标题 + 三行说明）: " .. tostring(TEST.tipLines and table.getn(TEST.tipLines)))
+  local tipAll99 = ""
+  for _, ln in ipairs(TEST.tipLines or {}) do tipAll99 = tipAll99 .. "|" .. tostring(ln.text) end
+  eq(string.find(tipAll99, EVAL_L("BIND_L_TIP_1"), 1, true) ~= nil
+     and string.find(tipAll99, EVAL_L("BIND_L_TIP_2"), 1, true) ~= nil
+     and string.find(tipAll99, EVAL_L("BIND_L_TIP_3"), 1, true) ~= nil, true,
+    "⑤★★三行说明都在（左键激活 / 右键绑定 / 右键标签全清）")
+  EVAL_HELP_CONFIG.war.profiles = savedP99
+  EVAL_HELP_CONFIG.war.activeProfile = savedA99
+  EVAL_HELP_CONFIG.war.bindKeys = nil
+  TEST.bindings = nil
+  EVAL_HELP_UI_BUILD()
+  if not wasShown99 and EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end
+  print("  「方案」标签：右键全清绑定（逐键解绑+存档+计数）/ tooltip 三行说明 / 左键不动绑定")
+end
 print("ALL TESTS PASS")

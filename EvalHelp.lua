@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.71.18"
+local VERSION = "1.71.19"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -312,9 +312,39 @@ function EVAL_HELP_UI_BUILD()
     local barAvailW = W - pad * 2
     local minBW = math.floor(34 * z) -- 单按钮最小宽（名字可读）
     local PGAP = 2
-    local plabel = uiText(root, math.max(8, math.floor(9 * z)), 0.95, 0.82, 0.35)
-    plabel:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -(y + math.floor(3 * z)))
+    -- ★1.71.19 用户要求：「方案文字 添加 tooltip 提示：右键取消所有自定绑定，左键点击具体的方案激活方案，
+    --   右键绑定方案按键，美化说明下」——「方案」二字本身做成可点标签：
+    --   悬停出三行操作说明；**右键点它 = 清除全部自定义绑定**（EVAL_BIND_CLEAR_ALL）。
+    local plb = CreateFrame("Button", nil, root)
+    plb:SetWidth(labelW) plb:SetHeight(btnH)
+    plb:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -(y + math.floor(3 * z)))
+    pcall(plb.EnableMouse, plb, true)
+    pcall(plb.RegisterForClicks, plb, "LeftButtonUp", "RightButtonUp")
+    local plabel = uiText(plb, math.max(8, math.floor(9 * z)), 0.95, 0.82, 0.35)
+    plabel:SetPoint("LEFT", plb, "LEFT", 0, 0)
     plabel:SetText("方案")
+    ui.profLabelBtn = plb -- 供断言点真控件
+    plb:SetScript("OnEnter", function()
+      if GameTooltip and GameTooltip.SetOwner then
+        pcall(GameTooltip.SetOwner, GameTooltip, plb, "ANCHOR_RIGHT")
+        pcall(GameTooltip.AddLine, GameTooltip, L("BIND_L_TIP_T"), 1, 0.85, 0.35)
+        pcall(GameTooltip.AddLine, GameTooltip, L("BIND_L_TIP_1"), 0.92, 0.88, 0.80)
+        pcall(GameTooltip.AddLine, GameTooltip, L("BIND_L_TIP_2"), 0.92, 0.88, 0.80)
+        pcall(GameTooltip.AddLine, GameTooltip, L("BIND_L_TIP_3"), 1.00, 0.65, 0.30)
+        pcall(GameTooltip.Show, GameTooltip)
+      end
+    end)
+    plb:SetScript("OnLeave", function()
+      if GameTooltip and GameTooltip.Hide then pcall(GameTooltip.Hide, GameTooltip) end
+    end)
+    plb:SetScript("OnClick", function(a, b)
+      local mbtn = (type(a) == "string" and a) or (type(b) == "string" and b) or (type(arg1) == "string" and arg1) or "LeftButton"
+      if mbtn == "RightButton" then
+        local n = EVAL_BIND_CLEAR_ALL()
+        say(string.format(L("BIND_ALL_CLEARED"), n))
+      end
+      -- 左键点「方案」二字：什么都不做（左键是方案按钮的事，文案在 tooltip 里讲清楚了）
+    end)
     -- 量宽尺（与方案按钮同字号；挪出可视区，不参与显示）
     local uiRuler = uiText(root, math.max(7, math.floor(9 * z)), 0.85, 0.80, 0.70)
     pcall(uiRuler.SetPoint, uiRuler, "TOPLEFT", root, "TOPLEFT", -2000, 0)
@@ -2554,6 +2584,22 @@ function EVAL_BIND_DO(pidx, key)
     pcall(SaveBindings, (type(GetCurrentBindingSet) == "function" and GetCurrentBindingSet()) or 1)
   end
   return true, key
+end
+
+-- ★1.71.19 一键清除**全部**自定义绑定（右键点「方案」标签）：逐键解绑 + 清表 + 存档；返回清掉的个数。
+function EVAL_BIND_CLEAR_ALL()
+  local w2 = warCfg()
+  local n = 0
+  if w2.bindKeys then
+    for _, key in pairs(w2.bindKeys) do
+      if type(key) == "string" and key ~= "" then pcall(SetBinding, key) n = n + 1 end
+    end
+    w2.bindKeys = nil
+  end
+  if type(SaveBindings) == "function" then
+    pcall(SaveBindings, (type(GetCurrentBindingSet) == "function" and GetCurrentBindingSet()) or 1)
+  end
+  return n
 end
 
 function EVAL_BIND_CLEAR(pidx)
@@ -5729,7 +5775,8 @@ function EVAL_TEST_UI_PROF()
   end
   local okw, ww = pcall(ui.root.GetWidth, ui.root)
   local okh, hh = pcall(ui.root.GetHeight, ui.root)
-  local out = { rows = ui.profRows or 0, avail = ui.profAvail or 0, pad = ui.profPad or 0, cap = ui.profCap or 0,
+  -- 1.71.19 交出「方案」标签按钮（右键全清的断言要真点它）
+  local out = { labelBtn = ui.profLabelBtn, rows = ui.profRows or 0, avail = ui.profAvail or 0, pad = ui.profPad or 0, cap = ui.profCap or 0,
     need = ui.profNeed, rootW = (okw and ww) or nil, rootH = (okh and hh) or nil, btns = {} }
   for i, pb in ipairs(ui.profBtns) do
     local okT, txt = pcall(pb.text.GetText, pb.text)
