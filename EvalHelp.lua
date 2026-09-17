@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.71.22"
+local VERSION = "1.71.23"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -6615,89 +6615,14 @@ if type(SlashCmdList) == "table" then
         local cur = c().mbIcon
         say("小地图按钮图标：" .. (type(cur) == "string" and cur or "（自动挑选）") .. "（图标库里右键任意一枚可换；/eh go mbicon reset 清掉自定义）")
       end
-    elseif msg == "go bind2" then
-      -- ★派发实弹探针（1.71.16）：T2 只证明了「命令名能存进绑定表」——「按下键真的触发」要实弹验证。
-      --   T3 = CLICK 派发（vanilla 经典招：CLICK <命名按钮>:LeftButton → 按键 = 客户端替我们点隐藏按钮）；
-      --   T4 = 裸命令名派发（EVAL_TEST_KEYFIRE 全局函数 —— 客户端会不会把命令名解析成全局函数直接调）。
-      --   两个空闲键各绑一种，10 秒内请各按一次；倒计时结束如实报告，然后解绑还原（不 SaveBindings）。
-      if not EVAL_TEST_CLICKBTN then
-        local tb = CreateFrame("Button", "EVAL_TEST_CLICKBTN", UIParent)
-        tb:SetScript("OnClick", function() EVAL_TEST_CLICKFIRED = GetTime() end)
-      end
-      EVAL_TEST_CLICKFIRED, EVAL_TEST_KEYFIRE_T = nil, nil
-      EVAL_TEST_KEYFIRE = function() EVAL_TEST_KEYFIRE_T = GetTime() end
-      local free2 = {}
-      for _, k in ipairs({ "F11", "F12", "F10", "F9", "8", "9", "CTRL-8", "CTRL-9", "ALT-8", "ALT-9", "BUTTON4", "BUTTON5" }) do
-        local okv, v = pcall(GetBindingAction, k)
-        if okv and v == "" then table.insert(free2, k) if table.getn(free2) >= 2 then break end end
-      end
-      if table.getn(free2) < 2 then
-        say("找不到两个空闲键——先 /eh go bind 看哪些键空着，告诉我两个我来改探针")
-      else
-        local k1, k2 = free2[1], free2[2]
-        pcall(SetBinding, k1, "CLICK EVAL_TEST_CLICKBTN:LeftButton")
-        pcall(SetBinding, k2, "EVAL_TEST_KEYFIRE")
-        say("— 派发实弹探针：10 秒内请按一次 " .. k1 .. "（CLICK 派发）和一次 " .. k2 .. "（裸命令名）—")
-        local pf = CreateFrame("Frame")
-        local t0 = GetTime()
-        pf:SetScript("OnUpdate", function()
-          if GetTime() - t0 < 10 then return end
-          pf:SetScript("OnUpdate", nil)
-          say("T3 CLICK 派发 " .. k1 .. "：" .. (EVAL_TEST_CLICKFIRED and "|cff00ff00★真的触发了|r（隐藏按钮 OnClick 收到）" or "|cffff5040×没触发|r"))
-          say("T4 裸命令名 " .. k2 .. "：" .. (EVAL_TEST_KEYFIRE_T and "|cff00ff00★真的触发了|r（全局函数被调）" or "|cffff5040×没触发|r"))
-          pcall(SetBinding, k1)
-          pcall(SetBinding, k2)
-          say("探针结束：两键已解绑还原（未 SaveBindings，改动随重登消失）")
-        end)
-      end
-    elseif msg == "go bind3" then
-      -- ★最后一发实弹（1.71.19 用户定边界：「在游戏运行状态无法生效的方案不要考虑」——Bindings.xml 出局）。
-      --   已知：裸名不派发；带 :LeftButton 尾巴的 CLICK 会触发但鼠标被劫持。
-      --   ★最大嫌疑 = 那 12 个隐藏按钮创建时**没显式 EnableMouse(false)、没设 0 尺寸**
-      --     （若客户端给 Button 默认尺寸+默认收鼠标 = 屏幕上的隐形毯子，正好解释「左右键都失效」）。
-      --   本探针验证**不带尾巴的** "CLICK <按钮>"：按钮显式 EnableMouse(false)+1x1 挪出可视区。
-      --   10 秒内按一下它报的键 → 触发 = CLICK 无尾形态可用（功能活）；不触发 = 如实宣判绑定功能做不到。
-      if not EVAL_TEST_BTN3 then
-        local tb = CreateFrame("Button", "EVAL_TEST_BTN3", UIParent)
-        tb:SetWidth(1) tb:SetHeight(1)
-        pcall(tb.SetPoint, tb, "TOPLEFT", UIParent, "TOPLEFT", -4000, 0) -- 挪出可视区（隐形≠吃掉鼠标的关键）
-        pcall(tb.EnableMouse, tb, false)
-        tb:SetScript("OnClick", function() EVAL_TEST_BTN3_T = GetTime() end)
-      end
-      EVAL_TEST_BTN3_T = nil
-      local freeK = nil
-      for _, k in ipairs({ "F11", "F12", "F10", "F9", "8", "9", "CTRL-8", "CTRL-9", "ALT-8", "BUTTON4", "BUTTON5" }) do
-        local okv, v = pcall(GetBindingAction, k)
-        if okv and v == "" then freeK = k break end
-      end
-      if not freeK then
-        say("找不到空闲键——/eh go bind 先看哪些键空着")
-      else
-        pcall(SetBinding, freeK, "CLICK EVAL_TEST_BTN3")
-        say("— 无尾 CLICK 实弹：" .. freeK .. " → CLICK EVAL_TEST_BTN3（按钮 1x1 挪出屏幕、EnableMouse(false)）—")
-        say("请在 10 秒内按一次 " .. freeK .. "（顺便留意鼠标左右键是否正常）")
-        local pf = CreateFrame("Frame")
-        local t0 = GetTime()
-        pf:SetScript("OnUpdate", function()
-          if GetTime() - t0 < 10 then return end
-          pf:SetScript("OnUpdate", nil)
-          if EVAL_TEST_BTN3_T then
-            say("|cff00ff00★触发了！|r 无尾 CLICK 形态可用——方案绑定功能照此实装")
-          else
-            say("|cffff5040×没触发|r——本客户端按键绑定派发到插件这条路如实宣判做不到（功能将如实标注/摘除）")
-          end
-          pcall(SetBinding, freeK)
-          say("探针结束：已解绑还原（未 SaveBindings），改动随重登消失")
-        end)
-      end
     elseif msg == "go diag" then
-      -- ★1.71.22 一键取证：把「绑定链路的每一环」的现场证据**写进 SavedVariables**（聊天框刷得快、/reload 就没了）。
-      --   读数分五环：① 命令表里有没有我们的命令（= Bindings.xml 是否被客户端加载）
-      --             ② 动作条命令（= 客户端自己会派发的按键家族）
-      --             ③ 宏 API + 名额
-      --             ④ 动作条空格子
-      --             ⑤ 当前 E 键绑在谁身上
-      --   ★全部只读；跑完请 /reload（把结果落盘），然后我直接读文件。
+      -- ★1.71.22 绑定链路一键取证（诊断工具，保留）：把每一环的现场证据**写进 SavedVariables**
+      --   （聊天框刷得快、/reload 就没了，所以走盘）。
+      --   读数：① 命令表里有没有我们的命令 / ArchiTotem 目击（Bindings.xml 路线是否成立，**已判死**，
+      --           留着便于下次复核）② 客户端自带的 ACTIONBUTTON 家族（我们的派发前提）
+      --         ③ 宏 API + 名额  ④ 动作条空格子  ⑤ 键位现状  ⑥ 转发全局是否存在
+      --         ⑦ 命令表全表逐行  ⑧ 当前绑定集
+      --   ★全部只读；跑完 /reload（把结果落盘），然后直接读文件。
       local out = {}
       local function add(s) out[table.getn(out) + 1] = s end
       -- ① 命令表
@@ -6802,136 +6727,33 @@ if type(SlashCmdList) == "table" then
       EVAL_HELP_CONFIG.bindDiag = out
       for _, s in ipairs(out) do say("DIAG " .. s) end
       say("★已写入 SavedVariables —— 请 /reload，然后我直接读文件（聊天框内容已存底）")
-    elseif msg == "go actbar" then
-      -- ★1.71.22 动作条/宏链路取证探针（用户需求：「模拟创建动作条 → 创建宏 → 把宏放到动作条 → 绑定该动作条按键」）。
-      --   ★先验证再动手：这里只**读**客户端现状（是否支持宏、有没有空格子、命令表里有哪些动作条命令），
-      --     不做任何写入 —— 写入段（CreateMacro/PlaceAction/SetBinding）等这一步的读数回传后再开。
-      --   读数三问：① 宏 API 在不在、宏名额还剩几个；② 动作条 1~120 格子哪些空着；③ 命令表里有没有 ACTIONBUTTON 家族（有 = 客户端会派发它）。
-      say("— 动作条 / 宏链路取证（只读，不改任何东西）—")
-      -- ① 宏 API
-      local hasC, hasD, hasP = type(CreateMacro) == "function", type(DeleteMacro) == "function", type(PickupMacro) == "function"
-      say("① 宏 API：CreateMacro=" .. tostring(hasC) .. " PickupMacro=" .. tostring(hasP) .. " DeleteMacro=" .. tostring(hasD)
-        .. " EditMacro=" .. tostring(type(EditMacro) == "function"))
-      if type(GetNumMacros) == "function" then
-        local okm, g, c = pcall(GetNumMacros)
-        say("   宏名额：" .. tostring(okm and g or "?") .. " 通用 / " .. tostring(okm and c or "?") .. " 本角色")
-      end
-      if type(GetMacroInfo) == "function" then
-        for i = 1, 3 do
-          local oki, nm, ic, bd = pcall(GetMacroInfo, i)
-          say("   宏 " .. i .. "：" .. tostring(oki and nm or "?") .. " / " .. tostring(oki and ic or "?") .. " / " .. tostring(oki and bd or "?"))
-        end
-      end
-      -- ② 动作条空格子（客户端按 1~120 查；只报前 120，找到 3 个空位就停）
-      if type(HasAction) ~= "function" then
-        say("② HasAction 不可用 —— 动作条链路读不到")
-      else
-        local free, occupied = {}, 0
-        for s = 1, 120 do
-          local okh, has = pcall(HasAction, s)
-          if okh and has then
-            occupied = occupied + 1
-          elseif okh and not has and table.getn(free) < 6 then
-            free[table.getn(free) + 1] = s
-          end
-        end
-        local txt = ""
-        for _, s in ipairs(free) do txt = txt .. s .. " " end
-        say("② 动作条已占格子 = " .. occupied .. "（1~120 内）；前几个空位：" .. (txt ~= "" and txt or "（没有空位）"))
-      end
-      -- ③ 命令表里的动作条命令（有 = 客户端**会**派发它 → 绑定这条路成立）
-      local okN, nB = pcall(GetNumBindings)
-      if not (okN and type(nB) == "number") then
-        say("③ GetNumBindings 不可用 —— 判死")
-      else
-        local abs, abn, other = 0, 0, 0
-        local sample = ""
-        for i = 1, math.min(nB, 600) do
-          local okG, cmd = pcall(GetBinding, i)
-          if okG and type(cmd) == "string" then
-            if string.find(cmd, "^ACTIONBUTTON%d+$") then
-              abs = abs + 1
-              if abn == 0 then sample = cmd end
-              abn = abn + 1
-            elseif string.find(cmd, "BUTTON%d+$") then
-              other = other + 1
-              if other <= 3 then sample = sample .. " " .. cmd end
-            end
-          end
-        end
-        say("③ 命令表 " .. nB .. " 行：ACTIONBUTTON1~N 有 " .. abs .. " 条（如 " .. tostring(sample) .. "）；其它 *BUTTONn 共 " .. other .. " 条")
-        say("   → 有 ACTIONBUTTON 家族 = 动作条格子按键**由客户端派发**（绑定宏到动作条这条路可行）")
-      end
-      say("★请把以上读数回传（T0 命令表行数 / 动作条空位 / 宏名额），据此开写入段探针")
     elseif msg == "go bind" then
-      -- ★快捷键可行性探针（1.71.12 用户要求「先验证」：方案右键弹窗设快捷键这条路能不能走）。
-      --   ★安全边界：全程**不 SaveBindings**（内存改动换角色/重登自动消失），且每个试验键位用完立刻解绑还原。
-      --   T0 = 枚举客户端命令表（GetNumBindings/GetBinding）——看命令名长什么样、有没有插件可挂的口子；
-      --   T1 = 空闲键位绑 JUMP（已知合法命令）→ 期望 true 且读得回 → 证明 SetBinding/GetBindingAction 本身可用；
-      --   T2 = 同键位绑 "EVAL_GO2"（插件自定义命令名）→ ★true = 不用 Bindings.xml 也能绑（右键弹窗直接可行）；
-      --        false = 命令名必须先在 Bindings.xml 里登记（要客户端重启才生效）。
-      say("— 快捷键可行性探针（不存档、不动现有绑定）—")
+      -- ★1.71.22 现状检查（**诊断用，不再做写入试验**）：派发链路现在是
+      --   SetBinding(键, "ACTIONBUTTON<格>") + 接管 ActionButtonUp，所以这里只报「这条链路各环的现状」。
+      --   旧的 T1/T2 写入型试验已删除（它们验的是已被判死的 Bindings.xml 路线，留着只会误导）。
+      say("— 方案快捷键现状（只读）—")
       local function gba(k)
         local ok, v = pcall(GetBindingAction, k)
         return (ok and type(v) == "string") and v or nil
       end
-      -- T0：命令表概览
-      local okN, nB = pcall(GetNumBindings)
-      if okN and type(nB) == "number" then
-        say("T0 命令表共 " .. nB .. " 行（前 12 行）：")
-        local evalHits = 0
-        for i = 1, math.min(nB, 300) do
-          local okG, cmd, cat, k1, k2 = pcall(GetBinding, i)
-          if okG and type(cmd) == "string" and string.sub(cmd, 1, 5) == "EVAL_" then evalHits = evalHits + 1 end
-          if okG and i <= 12 then
-            say("  " .. i .. ". " .. tostring(cmd) .. " | " .. tostring(cat) .. " | " .. tostring(k1) .. " | " .. tostring(k2))
-          end
+      -- ① 派发前提：客户端自带的 ACTIONBUTTON1~12 在不在命令表里
+      say("① 派发前提：命令表里 ACTIONBUTTON1~12 共 " .. tostring(EVAL_BIND_XML_STATUS()) .. " 条（12 = 前提成立）")
+      -- ② 接管状态：两个转发全局是否已被我们替换
+      say("② 接管状态：ActionButtonUp=" .. type(ActionButtonUp) .. " 已接管=" .. tostring(EVAL_BIND_ORIG_UP ~= nil))
+      -- ③ 逐方案报绑定与占用格
+      local w2 = warCfg()
+      local n = 0
+      for i = 1, table.getn(w2.profiles or {}) do
+        local key = w2.bindKeys and w2.bindKeys[i]
+        if type(key) == "string" and key ~= "" then
+          n = n + 1
+          local slot = w2.bindSlots and w2.bindSlots[i]
+          say(string.format(L("BIND_ST_ROW"), i, tostring(w2.profiles[i].name or i), key)
+            .. "  → ACTIONBUTTON" .. tostring(slot) .. "（读回 " .. tostring(gba(key)) .. "）")
         end
-        say("T0 以 EVAL_ 开头的命令行数 = " .. evalHits .. "（0 = 客户端没有给我们预留命令名）")
-        -- ★1.71.21 目击证人（ArchiTotem 实证）：它的 Bindings.xml 里的 CAST_EARTH_TOTEM 若在表里，
-        --   就证明「客户端启动时自动加载插件 Bindings.xml」在这台机器上成立 —— 我们的 EVAL_GO_PROF_* 同理。
-        local wit = 0
-        for i = 1, math.min(nB, 400) do
-          local okG, cmd = pcall(GetBinding, i)
-          if okG and cmd == "CAST_EARTH_TOTEM" then wit = i break end
-        end
-        if wit > 0 then
-          say("T0 目击证人：CAST_EARTH_TOTEM 在命令表第 " .. wit .. " 行 —— 插件 Bindings.xml 的自动加载**现场成立**（ArchiTotem 实证）")
-        else
-          say("T0 目击证人：没找到 CAST_EARTH_TOTEM（ArchiTotem 未启用？那我们的 EVAL_GO_PROF_* 要等重启后再看）")
-        end
-      else
-        say("T0 GetNumBindings 不可用（" .. tostring(nB) .. "）——整条路判死")
       end
-      -- 找一个空闲键位（GetBindingAction == "" 才算空；nil = API 不可用）
-      local CAND94 = { "F10", "F11", "F12", "6", "7", "8", "9", "0", "SHIFT-2", "SHIFT-3", "CTRL-2", "ALT-2", "BUTTON3" }
-      local freeKey = nil
-      for _, k in ipairs(CAND94) do
-        local v = gba(k)
-        if v == "" then freeKey = k break end
-      end
-      if not freeKey then
-        say("候选键位全被占用或 GetBindingAction 不可用 → 换一个再试（可自己挑个确定空闲的键告诉我）")
-      else
-        say("空闲键位 = " .. freeKey .. "（当前 GetBindingAction = 空串）")
-        -- T1：绑已知合法命令 JUMP
-        local ok1, r1 = pcall(SetBinding, freeKey, "JUMP")
-        local back1 = gba(freeKey)
-        say("T1 SetBinding(" .. freeKey .. ", JUMP) → " .. tostring(ok1 and r1) .. "，读回 = " .. tostring(back1))
-        pcall(SetBinding, freeKey) -- 立刻解绑还原
-        say("T1 已解绑，读回 = " .. tostring(gba(freeKey)) .. "（期望空串）")
-        -- T2：绑插件自定义命令名（本探针的核心问题）
-        local ok2, r2 = pcall(SetBinding, freeKey, "EVAL_GO2")
-        local back2 = gba(freeKey)
-        say("T2 SetBinding(" .. freeKey .. ", EVAL_GO2) → " .. tostring(ok2 and r2) .. "，读回 = " .. tostring(back2))
-        if ok2 and r2 and back2 == "EVAL_GO2" then
-          say("T2 ★可行：命令名不用登记——「方案右键弹窗设快捷键」可以直接用 SetBinding 做")
-        else
-          say("T2 ★被拒：命令名要先在 Bindings.xml 登记（<Binding name=\"EVAL_GO2\">）才接受——需要加文件 + 客户端重启")
-        end
-        pcall(SetBinding, freeKey) -- 收尾再清一次
-      end
-      say("探针结束：全程未 SaveBindings（GetCurrentBindingSet = " .. tostring(GetCurrentBindingSet and GetCurrentBindingSet() or "?") .. "），改动随重登消失")
+      if n == 0 then say(L("BIND_ST_NONE")) end
+      say("绑法：战斗信息UI 方案行**右键**开弹窗；清空：右键「方案」标签；诊断：/eh go diag（写盘，需 /reload）")
     elseif msg == "go probe immune" then
       -- 免疫事件探针（1.35.1，免疫学习器前置验证）：30 秒全事件抓取——CHAT_MSG_* 或参数含「免疫/immune」
       -- 的写调试日志；对免疫怪放技能后翻日志拿真实事件名+文本格式，再写解析器（事件 wiki 无文档页）
