@@ -4,14 +4,16 @@
 
 > 🗣️ Note: rule text (skill names / condition keywords / import-export snippets) stays in the client language (Chinese) — the rule data layer is never translated.
 
-> EmberVeil (1.12.1 / Lua 5.1) **all-class casting helper addon**: a one-line macro body `/run EVAL_GO()`, driven by a rule engine — **five skill categories** (character actions / character skills / pet commands / target selection / item use) × **49 condition types** (grouped dropdowns) × multiple key-bound profiles, all configured visually, for any class. Two more built-in pages: a **Toolbox** (merchant / social / quest automation) and **Data search** (quests / items / mobs·NPC + a world-map annotation layer, requires UnrealQuest).
+> EmberVeil (1.12.1 / Lua 5.1) **all-class casting helper addon**: a one-line macro body `/run EVAL_GO()`, driven by a rule engine — **five skill categories** (character actions / character skills / pet commands / target selection / item use) × **49 condition types** (grouped dropdowns; the member-picker row additionally offers 4 "candidate" conditions) × multiple key-bound profiles, all configured visually, for any class. Three more built-in pages: a **Toolbox** (merchant / social / quest automation), **Data search** (quests / items / mobs·NPC + a world-map annotation layer, requires UnrealQuest) and an **Icon library** (the client-built-in macro icons: grouped, hover shows the path, searchable and pageable).
 
 | Module | Entry | At a glance |
 | :-- | :-- | :-- |
 | 🗡️ **Universal one-key macro** | macro `/run EVAL_GO()` | Five skill categories: character actions (Attack / Auto Shot / Shoot / Cancel Casting / Stance swap) / skills / pet commands / target selection / item use; unlimited skills per profile (scrollable list); up to ≤12 profiles, each bindable to its own key for direct triggering |
 | ⚙️ **Config window** | minimap EH icon · `/eh cfg` | Fully visual editing of profiles / skills / conditions, plus text import/export for sharing |
-| 🧰 **Toolbox** | config window, tab 3 | Merchant assistant (auto-repair / auto-sell grey / buy and discard by name) + party & social (auto-confirm role check / hide guild login notices) + auto quest accept & turn-in (hold Shift to pause temporarily) + quest notification channel |
+| 🧩 **Case templates** | config window, one-key macro tab, bottom `[Case Templates]` | **11 groups / 27 entries** ready-made profiles (grouped by class) → **grouped two columns + wrapping within a group**; one click to import, hover to see what's inside |
+| 🧰 **Toolbox** | config window, tab 3 | Merchant assistant (auto-repair / auto-sell grey / buy and discard by name) + party & social (auto-confirm role check / hide guild login notices / **hide "joined·left channel" notices**) + auto quest accept & turn-in (hold Shift to pause temporarily) + quest notification channel |
 | 🗺️ **Data search** | config window, tab 4 | Quest / item / mob·NPC / object search with instant results and unlimited drill-down; a **world-map annotation layer** (16 categories redrawn live as the map changes) and one-click pinning from any row with coordinates (requires UnrealQuest) |
+| 🖼️ **Icon library** | config window, tab 5 | The client's built-in macro icons grouped by prefix, hover shows the path, searchable and pageable; plus a "used by this addon" group (listing the icons this addon uses) |
 | 📊 **Combat info UI** | `/eh ui` | HP / power / target bars + profile switcher row + skill icon row (lit gold = conditions met, click to edit) |
 | 🔍 **Status info UI** | `/eh st` | Live overview of all state variables + per-condition √/× verdicts for the most recent casts |
 | 📝 **Status log** | `/eh` | Written to both the chat frame and the log file |
@@ -22,10 +24,16 @@
 
 | Version | Theme | One-line highlight |
 | :-- | :-- | :-- |
+| **1.71.8** | 🧩 Case-template window: grouped two columns + wrap within a group | Group titles and profile buttons **run to the right on the same line and wrap back to this column when they no longer fit**; **a group is the smallest indivisible unit** (split into two columns in order, the split point being the one that **minimises the difference in row count** — no greedy fill); every group starts on a new line; with the Chinese window the column width is 310, the 11 groups lay out as 8+7 rows, and the window is 660×240 |
+| **1.71.7** | 🧑‍🤝‍🧑 Party/raid case-template audit (designated skill + party/raid-member conditions) | 17 party/raid templates went from "target-selection row + candidate conditions" (two rows working together) to "**designated skill + party/raid-member condition**" (one self-sufficient row: the condition scans members and switches target itself); ★member conditions must come first on a row; the shaman Healing Wave threshold corrected along the way; the audit landed as **4 automatic gates + an end-to-end run** (executing the template text for real) |
+| **1.71.6** | 🧩 Case-template window moved to a flow (auto-wrapping) layout | Group titles and buttons **run to the right on the same line and wrap back to the left edge when they no longer fit**; button widths measured with `GetStringWidth()`; the window height is computed from the content (660×180); ★real data never produced a wrap → a **synthetic-data** assertion entry point was added to force the wrapping path |
+| **1.71.5** | 🧹 Case templates: "one-key party dispel / one-key raid dispel" added | Covers both the **magic + disease** chains (priest = Dispel Magic + Cure Disease; paladin switches to Cleanse; druid/mage/shaman switch to poison/curse); ★the two-column split went from the greedy "fill until past halfway" to **walking every split point and taking the smallest row-count difference** |
+| **1.71.4** | 🧩 Case-template window reworked to two columns + 📚 templates expanded to 11 groups / 25 entries | The window is widened to share its source with the config window and split into two columns (**split by class group**, a group is never broken apart); a golden "!" tooltip added to the title; four new groups (priest / druid / warlock / shaman) plus a party/raid utility group; ★the "class filter" now also supports **candidate conditions** (parsing / export / editor all opened up together) |
+| **1.71.3** | 🛑 Stop attack + 🤝 Follow + 📤 share/receive rework + 🔇 channel mute + 🛍 auto-buy rework + 🖼 icon-library tab + 🧑‍🤝‍🧑 candidate conditions | One click stops [casting + Auto Shot + wand auto-repeat + melee auto-attack] (≈ pressing ESC); `FollowByName` follow (including a fix for the **full-width colon** silently breaking things); share drops the "raid" channel, the receiver keeps only the newest transfer + four caps + rate-limited notices; mutes "joined/entered/left channel" notices; auto-buy reworked to **buy in batches + verify each purchase + four-way clamping** ("buy amount" = an absolute target); a 5th tab "Icon library" added; dedicated icons for the "target selection:" family + honest logging for party-member selection; **candidate conditions + picking people by comparator**; "class multi-select / subgroup multi-select" added to party/raid-member conditions |
 | **1.71.2** | 🧙 Condition regroup + config-window cleanup + 📂 templates out of the script | Casting-family conditions renamed and consolidated into the **Skill state** group (Casting / Cast time / Cast remaining ‖ T:Casting / T:Cast time / T:Cast remaining); the duplicate **[Receive]** button removed, the "Toggles" heading hidden, **[Share]** got a step-by-step tooltip; the example-template library moved to per-class files under `examples/`; ★a batch of **silent-failure** bugs fixed (an unresolvable aura is now reported instead of treated as "absent", exported conditions are no longer dropped, the 1px bar shadow, the test stub sharing one position) |
 | **1.71.1** | 🩺 Party/Raid scan | One key scans your party/raid and picks by condition (lowest HP/mana, has magic debuff, missing a buff) → switches target → the spell lands on them |
 | **1.71.0** | 📡 Profile sharing | Send a profile to a chat channel; teammates get a popup and click Import |
-| **1.52.0** | 📏 Auto-attack range check | Auto Shot / wand out of range (IsActionInRange=0) now auto-falls back to melee auto-attack — point-blank hunters no longer swing their bow at thin air |
+| **1.70.44** | 🎯 Locator-dot blank — root cause pinned | ★In-game testing settled it: `dsSetOverlay` was written **before** its declaration → bound to a global, while `dsAnnDraw` (defined later) read a local → one variable bound in two places → the locator dot could never be drawn. State block moved above all users; new `DECL ORDER CHECK` guards it (and immediately caught two more of the same kind). |
 
 > 📜 Detailed per-version notes live in **[CHANGELOG.md](CHANGELOG.md)**; earlier history is in the git commit log.
 
@@ -73,7 +81,11 @@
 
 ![Config window · One-key macro tab](preview/cfg.png)
 
-**Skill editor** (opened via [Edit] or by clicking a skill icon): per-row independent condition editing — condition type / params all chosen from dropdowns (49 condition types, grouped as self / target / aura / skill), relation column toggles & (all-in-group) / | (any-group), live preview
+**Case-template window** (bottom of the one-key macro tab, `[Case Templates]`): 11 groups / 27 ready-made profiles grouped by class, laid out as **two columns of groups with wrapping inside each group** — one click imports a profile, hover shows its contents
+
+![Case-template window](preview/skill_tpl.png)
+
+**Skill editor** (opened via [Edit] or by clicking a skill icon): per-row independent condition editing — condition type / params all chosen from dropdowns (49 condition types, plus 4 "candidate" conditions reserved for member-picker rows; grouped as self / target / aura / party·raid member / skill), relation column toggles & (all-in-group) / | (any-group), live preview
 
 ![Skill editor](preview/skill_doif.png)
 
@@ -90,7 +102,7 @@
 
 ![Combat info UI and status info UI](preview/info.png)
 
-**Toolbox (Tab3)**: merchant assistant (auto-repair equipment / auto-sell grey items / auto-buy and auto-discard specified items) + party & social (auto-confirm role check / hide guild member login notifications) + auto quest accept & turn-in + quest notification channel (off / self / say / party)
+**Toolbox (Tab3)**: merchant assistant (auto-repair equipment / auto-sell grey items / auto-buy and auto-discard specified items) + party & social (auto-confirm role check / hide guild member login notifications / **hide "joined·left channel" notices**) + auto quest accept & turn-in (optionally paused while holding Shift) + quest notification channel (off / self / say / party)
 
 ![Toolbox](preview/tools.png)
 
