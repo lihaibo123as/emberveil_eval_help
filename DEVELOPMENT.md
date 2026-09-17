@@ -54,7 +54,7 @@ node test_engine.js  # 逻辑冒烟测试：打桩 WoW API 加载整个插件，
 | 状态信息UI | `EVAL_HELP_ST_*`：状态变量总览+最近释放明细 |
 | 配置窗 | `cfgBuild`：Tab{全局, 一键宏设置}；方案栏/技能列表/[添加技能]/[导入导出] |
 | 技能编辑窗 | `EVAL_HELP_SE_*`：条件逐行配置（seGroupsToLinear/seLinearToGroups 线性↔分组） |
-| 通用 UI 件 | `EVAL_DD_OPEN` 下拉面板 / `EVAL_HELP_RP_*` 输入弹窗（回声行范式） / `uiSolid/uiText/cfgCheck/cfgSlider` |
+| 通用 UI 件 | `EVAL_DD_OPEN` 下拉面板 / `EVAL_HELP_RP_*` 输入弹窗（回声行范式） / `uiSolid/uiText/cfgCheck/cfgSlider` / `EVAL_HELP_MB_*` 小地图图标钮（1.71.13：按钮=宏图标本身 26×26 无边框，`EVAL_HELP_MB_PICKICON` 纯函数按名字优先级挑图标，挑不到退回「金框 + EH」兜底） |
 | IO | `EVAL_PROFILE_TO_TEXT/FROM_TEXT` md 文本互转；`EVAL_HELP_IO_*` 窗口（FontString 保底预览区） |
 | 案例模版窗 | `EVAL_HELP_TPL_*`：读 `examples/*.lua` 的数据渲染成**分组分两列 + 组内同行自动换行**（版式由纯函数 `tplTwoColPlan` 算），点击即导入 |
 | 工具箱 Tab3 | `Toolbox.lua`：`EVAL_TB_BUILD(root, page, refreshes)`；商人 / 队伍社交 / 任务三组，动作全部走限频队列（0.3s/笔 + 逐笔核对） |

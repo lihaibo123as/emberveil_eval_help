@@ -6825,4 +6825,42 @@ do
   eq(EVAL_TEST_UI_SECTIONS().rootH, hOn, "②还原配置后帧高 = 原始值")
   if not wasShown94 and EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end -- 恢复原可见状态
 end
+
+-- 95) ★★★1.71.13 用户要求（小地图配置按钮三连）：「配置按钮 换图标，尺寸和图标尺寸保持一致，
+--   不用设置外边框。tooltip：全职业一键宏，常用工具箱，世界数据库检索，描述美化下。」
+--   ★本组：① 挑选逻辑是纯函数（注桩直测优先级）；② 真按钮的几何读真控件；③ 真 SETICON 贴真纹理。
+do
+  -- ① 挑选纯函数：候选**优先级**必须压过表序（扳手排在齿轮后面也要挑扳手）
+  local function enumOf95(t) return function(i) return t[i] end end
+  eq(EVAL_HELP_MB_PICKICON(3, enumOf95({ "Interface\\Icons\\Spell_Fire_Fireball", "Interface\\Icons\\INV_Misc_Gear_01", "Interface\\Icons\\INV_Misc_Wrench_01" })),
+    "Interface\\Icons\\INV_Misc_Wrench_01", "①★扳手优先于齿轮（候选优先级 > 宏图标表的表序）")
+  eq(EVAL_HELP_MB_PICKICON(2, enumOf95({ "Interface\\Icons\\INV_Misc_Gear_01", "Interface\\Icons\\Spell_Fire_Fireball" })),
+    "Interface\\Icons\\INV_Misc_Gear_01", "①没有扳手时退到齿轮")
+  eq(EVAL_HELP_MB_PICKICON(1, enumOf95({ "Interface\\Icons\\Spell_Fire_Fireball" })), nil,
+    "①一个候选都不沾 → 如实 nil（绝不硬贴一个不相干的图标）")
+  eq(EVAL_HELP_MB_PICKICON(0, enumOf95({})), nil, "①空表 → nil")
+  eq(EVAL_HELP_MB_PICKICON(1, enumOf95({ "/Game/Interface/Icons/Trade_Engineering_TEX" })),
+    "/Game/Interface/Icons/Trade_Engineering_TEX", "①★本客户端的真实形态（/Game/..._TEX）也认得")
+  -- ② 真按钮几何：正方形、边长与图标库单格一致（26；★读真控件，不写死常量当判据）
+  local mv95 = EVAL_TEST_MB_VISUAL()
+  eq(type(mv95) == "table", true, "②前置：拿到小地图按钮的真实状态")
+  eq(mv95.w == 26 and mv95.h == 26, true,
+    "②★按钮 = 26×26 的正方形（按钮就是图标，没有边框占位）: " .. tostring(mv95.w) .. "x" .. tostring(mv95.h))
+  -- ③ 真实贴图：宏图标表塞进扳手 → 走**真实** EVAL_HELP_MB_SETICON → 真控件贴上了它
+  local savedMI95 = TEST.macroIcons
+  TEST.macroIcons = nil -- 先模拟「接口在但表为空」→ 兜底样式（不许留空白按钮）
+  local fb95 = EVAL_HELP_MB_SETICON()
+  local mv95b = EVAL_TEST_MB_VISUAL()
+  eq(fb95, false, "③拿不到图标 → 如实返回 false（不假装贴上）")
+  eq(mv95b.hasFallback, true, "③★拿不到图标时兜底样式真的建出来了（金框 + EH，不留空白按钮）")
+  TEST.macroIcons = { "Spell_Fire_Fireball", "INV_Misc_Gear_01", "INV_Misc_Wrench_01" }
+  local ok95 = EVAL_HELP_MB_SETICON()
+  local mv95c = EVAL_TEST_MB_VISUAL()
+  eq(ok95, true, "③★真实 SETICON 成功贴上图标")
+  eq(mv95c.icon, "Interface\\Icons\\INV_Misc_Wrench_01",
+    "③★★真控件贴的是扳手（路径来自宏图标表，不是写死的）: " .. tostring(mv95c.icon))
+  eq(mv95c.ehText, "", "③★贴上图标后兜底的「EH」字被清空（否则会压在图标上穿帮）")
+  TEST.macroIcons = savedMI95
+  print("  小地图按钮：26x26 图标钮（扳手），兜底样式与 EH 清空路径都验过")
+end
 print("ALL TESTS PASS")

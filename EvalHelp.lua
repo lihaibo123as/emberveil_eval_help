@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.71.12"
+local VERSION = "1.71.13"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -2278,33 +2278,62 @@ function EVAL_TEST_RECT_HITS_CIRCLE(rl, rt, rr, rb, ml, mt, mr2, mb2)
   return (dx * dx + dy * dy) < (rad + 2) * (rad + 2)
 end
 EVAL_TEST_RECT_HITS_CIRCLE_G = EVAL_TEST_RECT_HITS_CIRCLE -- 全局导出桥（测试用）
--- 小地图图标：挂在**小地图外侧**的金色 EH 按钮。
+-- 小地图图标：挂在**小地图外侧**的按钮。
 -- UnrealQuest 实测要点：parent 用 UIParent（不是 Minimap——它是地图外的 chrome）；
 -- 锚链 Minimap → MinimapCluster → UIParent 右上角；RegisterForClicks 注册点击；
--- 悬停用 OnEnter/OnLeave 改边框色 + GameTooltip 提示（不用 SetHighlightTexture）。
+-- 悬停用 OnEnter/OnLeave + GameTooltip 提示（不用 SetHighlightTexture）。
 -- 按钮本身支持拖拽换位（Button 手柄配方），位置存 cfg.mbPos，重登恢复；
 -- 拖动松手会跟着触发一次 OnClick，用 mbDragMoved 标记抑制这次误触。
+-- ★1.71.13 用户要求：「配置按钮 换图标，尺寸和图标尺寸保持一致，不用设置外边框。」
+--   → 按钮 = 一枚宏图标本身：图标**占满整个按钮**（无边框、无「EH」字），边长 26（与图标库单格一致）。
+--   ★图标在 VARIABLES_LOADED 后从宏图标表**按名字**挑（载入期接口未必就绪，索引也不保证稳定）；
+--     挑不到（接口缺席 / 没有匹配项）→ 退回旧的「金框 + 暗底 + EH」样式 ——
+--     **不许留空白按钮**（图标拿不到时，打开配置窗的入口不能跟着消失）。
 local minimapBtn = nil
 local mbDragMoved = false
+local mbIconTex = nil             -- 唯一的常驻视觉件：图标纹理（占满按钮）
+local mbIconPath = nil            -- 已贴上的图标路径（nil = 还没贴上）
+local mbRing, mbText = nil, nil   -- 兜底样式（仅图标拿不到时才建；悬停变色与「清空 EH 字」要引用）
+
+-- ★图标挑选抽成**纯函数**（脱离游戏可测）：按候选前缀的**优先级**挑（不是宏图标表的表序）；
+--   enumFn(i) → 路径或 nil（本客户端 GetMacroIconInfo 的形态，与 IconBrowser.lua 同源）。
+function EVAL_HELP_MB_PICKICON(n, enumFn)
+  if type(n) ~= "number" or n < 1 or type(enumFn) ~= "function" then return nil end
+  -- 「工具箱」气质优先：扳手 > 工程学 > 齿轮 > 小装置 > 书（★大写化后做前缀匹配，名尾的 _TEX 不妨碍）
+  local CANDS = { "^INV_MISC_WRENCH", "^TRADE_ENGINEERING", "^INV_MISC_GEAR", "^INV_GIZMO", "^INV_MISC_BOOK" }
+  local names = {}
+  for i = 1, n do
+    local ok, p = pcall(enumFn, i)
+    if ok and type(p) == "string" and p ~= "" then
+      local seg = string.match(p, "[^\\/]+$") or p
+      seg = string.match(seg, "^(.-)%.[%a]+$") or seg
+      names[table.getn(names) + 1] = { path = p, up = string.upper(seg) }
+    end
+  end
+  for _, pat in ipairs(CANDS) do
+    for i = 1, table.getn(names) do
+      if string.find(names[i].up, pat) then return names[i].path end
+    end
+  end
+  return nil
+end
+
 do
   local mb = CreateFrame("Button", "EVAL_HELP_MINIMAP", UIParent)
-  mb:SetWidth(24) mb:SetHeight(24)
+  mb:SetWidth(26) mb:SetHeight(26) -- ★1.71.13 边长 26（与图标库单格一致；按钮 = 图标，无内缩）
   pcall(mb.SetFrameStrata, mb, "MEDIUM")
   pcall(mb.EnableMouse, mb, true)
   pcall(mb.RegisterForClicks, mb, "LeftButtonUp")
   pcall(mb.RegisterForDrag, mb, "LeftButton")
   mbAnchorDefault(mb) -- ★1.71.2 默认落在小地图**左侧之外**（旧的 TOPLEFT 锚点会压在圆的左下角）
-  local ring = mb:CreateTexture(nil, "BACKGROUND")
-  uiSolid(ring, 0.85, 0.70, 0.20, 1)
-  ring:SetPoint("TOPLEFT", mb, "TOPLEFT", 0, 0)
-  ring:SetPoint("BOTTOMRIGHT", mb, "BOTTOMRIGHT", 0, 0)
-  local inner = mb:CreateTexture(nil, "ARTWORK")
-  uiSolid(inner, 0.12, 0.10, 0.06, 1)
-  inner:SetPoint("TOPLEFT", mb, "TOPLEFT", 2, -2)
-  inner:SetPoint("BOTTOMRIGHT", mb, "BOTTOMRIGHT", -2, 2)
-  local mt = uiText(mb, 11, 1, 0.85, 0.30)
-  mt:SetPoint("CENTER", mb, "CENTER", 0, 0)
-  mt:SetText("EH")
+  -- ★1.71.13 唯一的常驻视觉件 = 图标纹理（占满整个按钮，无边框）；
+  --   贴图未到位前 = 暗底（与旧内底同色）；旧的「金框 + EH」只在 SETICON 失败时补建（见下）。
+  local iconTex = mb:CreateTexture(nil, "ARTWORK")
+  iconTex:SetPoint("TOPLEFT", mb, "TOPLEFT", 0, 0)
+  iconTex:SetPoint("BOTTOMRIGHT", mb, "BOTTOMRIGHT", 0, 0)
+  pcall(iconTex.SetTexture, iconTex, "Interface\\Buttons\\WHITE8X8")
+  pcall(iconTex.SetVertexColor, iconTex, 0.12, 0.10, 0.06, 1)
+  mbIconTex = iconTex
   mb:SetScript("OnDragStart", function()
     mbDragMoved = false
     pcall(mb.SetMovable, mb, true)
@@ -2333,18 +2362,26 @@ do
     end
   end)
   mb:SetScript("OnEnter", function()
-    pcall(ring.SetVertexColor, ring, 1, 0.88, 0.40, 1)
+    -- 悬停反馈：兜底样式染金框；图标模式给图标染一层金（未贴图前保持暗底不动）
+    if mbRing then pcall(mbRing.SetVertexColor, mbRing, 1, 0.88, 0.40, 1)
+    elseif mbIconPath then pcall(mbIconTex.SetVertexColor, mbIconTex, 1, 0.88, 0.40) end
     if GameTooltip and GameTooltip.SetOwner then
       pcall(GameTooltip.SetOwner, GameTooltip, mb, "ANCHOR_LEFT")
       if GameTooltip.AddLine then
-        pcall(GameTooltip.AddLine, GameTooltip, "全职业施法工具 · 设置")
-        pcall(GameTooltip.AddLine, GameTooltip, "点击打开配置窗口，按住可拖动", 0.7, 0.7, 0.7)
+        -- ★1.71.13 用户要求：tooltip 文案美化（全职业一键宏 / 常用工具箱 / 世界数据库检索），走语言包
+        pcall(GameTooltip.AddLine, GameTooltip, L("MB_TIP_TITLE"), 1, 0.85, 0.35)
+        pcall(GameTooltip.AddLine, GameTooltip, L("MB_TIP_1"), 0.92, 0.88, 0.80)
+        pcall(GameTooltip.AddLine, GameTooltip, L("MB_TIP_2"), 0.92, 0.88, 0.80)
+        pcall(GameTooltip.AddLine, GameTooltip, L("MB_TIP_3"), 0.92, 0.88, 0.80)
+        pcall(GameTooltip.AddLine, GameTooltip, L("MB_TIP_HINT"), 0.6, 0.6, 0.6)
       end
       pcall(GameTooltip.Show, GameTooltip)
     end
   end)
   mb:SetScript("OnLeave", function()
-    pcall(ring.SetVertexColor, ring, 0.85, 0.70, 0.20, 1)
+    if mbRing then pcall(mbRing.SetVertexColor, mbRing, 0.85, 0.70, 0.20, 1)
+    elseif mbIconPath then pcall(mbIconTex.SetVertexColor, mbIconTex, 1, 1, 1)
+    elseif mbIconTex then pcall(mbIconTex.SetVertexColor, mbIconTex, 0.12, 0.10, 0.06, 1) end
     if GameTooltip and GameTooltip.Hide then pcall(GameTooltip.Hide, GameTooltip) end
   end)
   mb:SetScript("OnClick", function()
@@ -2352,6 +2389,38 @@ do
     EVAL_HELP_CFG_TOGGLE()
   end)
   minimapBtn = mb
+end
+
+-- ★1.71.13 给按钮贴图标：从宏图标表按名字挑一枚「工具」图标（挑选逻辑 = 上面的纯函数，可注桩直测）。
+--   ★挑不到就建旧的「金框 + 暗底 + EH」兜底样式 —— **不许留空白按钮**（接口缺席时入口不能消失）；
+--   ★后来才贴上图标时要把兜底留下的「EH」字**清空**（OVERLAY 层会压在图标上；「先清空再隐藏」的既有配方）。
+function EVAL_HELP_MB_SETICON()
+  if not minimapBtn or not mbIconTex then return false end
+  local path = nil
+  if type(GetNumMacroIcons) == "function" and type(GetMacroIconInfo) == "function" then
+    local okn, n = pcall(GetNumMacroIcons)
+    if okn and type(n) == "number" and n > 0 then
+      path = EVAL_HELP_MB_PICKICON(n, GetMacroIconInfo)
+    end
+  end
+  if path then
+    pcall(mbIconTex.SetTexture, mbIconTex, path)
+    pcall(mbIconTex.SetVertexColor, mbIconTex, 1, 1, 1)
+    mbIconPath = path
+    if mbText then pcall(mbText.SetText, mbText, "") end -- 兜底字压在图标上会穿帮 → 清空
+    return true
+  end
+  if not mbRing then -- 兜底只建一次
+    local ring = minimapBtn:CreateTexture(nil, "BACKGROUND")
+    uiSolid(ring, 0.85, 0.70, 0.20, 1)
+    ring:SetPoint("TOPLEFT", minimapBtn, "TOPLEFT", 0, 0)
+    ring:SetPoint("BOTTOMRIGHT", minimapBtn, "BOTTOMRIGHT", 0, 0)
+    local mt = uiText(minimapBtn, 11, 1, 0.85, 0.30)
+    mt:SetPoint("CENTER", minimapBtn, "CENTER", 0, 0)
+    mt:SetText("EH")
+    mbRing, mbText = ring, mt
+  end
+  return false
 end
 
 -- ★1.71.2 测试钩子：小地图按钮的默认锚点与重叠判定（否则只能靠人眼看界面）。
@@ -2366,6 +2435,21 @@ function EVAL_TEST_MB_DEFAULT_ANCHOR()
 end
 function EVAL_TEST_MB_OVERLAPS() return mbOverlapsMinimap(minimapBtn) end
 function EVAL_TEST_MB_BTN() return minimapBtn end
+-- ★1.71.13 断言入口：按钮的**真实几何与贴图状态**（图标模式 / 兜底模式），读真控件不写死常量。
+function EVAL_TEST_MB_VISUAL()
+  local out = { w = nil, h = nil, icon = mbIconPath, hasFallback = (mbRing ~= nil) and true or false, ehText = nil }
+  if minimapBtn then
+    local okw, w = pcall(minimapBtn.GetWidth, minimapBtn)
+    out.w = (okw and type(w) == "number") and w or nil
+    local okh, h = pcall(minimapBtn.GetHeight, minimapBtn)
+    out.h = (okh and type(h) == "number") and h or nil
+  end
+  if mbText then
+    local okt, t = pcall(mbText.GetText, mbText)
+    out.ehText = (okt and tostring(t or "")) or nil
+  end
+  return out
+end
 function EVAL_TEST_MB_ANCHOR_CURRENT()
   if not minimapBtn then return nil end
   local ok, point, _, relPoint, x, y = pcall(minimapBtn.GetPoint, minimapBtn, 1)
@@ -5966,6 +6050,63 @@ if type(SlashCmdList) == "table" then
             e.skip and "|cffff5040×去抖丢弃|r" or "|cff00ff00√执行|r"))
         end
       end
+    elseif msg == "go bind" then
+      -- ★快捷键可行性探针（1.71.12 用户要求「先验证」：方案右键弹窗设快捷键这条路能不能走）。
+      --   ★安全边界：全程**不 SaveBindings**（内存改动换角色/重登自动消失），且每个试验键位用完立刻解绑还原。
+      --   T0 = 枚举客户端命令表（GetNumBindings/GetBinding）——看命令名长什么样、有没有插件可挂的口子；
+      --   T1 = 空闲键位绑 JUMP（已知合法命令）→ 期望 true 且读得回 → 证明 SetBinding/GetBindingAction 本身可用；
+      --   T2 = 同键位绑 "EVAL_GO2"（插件自定义命令名）→ ★true = 不用 Bindings.xml 也能绑（右键弹窗直接可行）；
+      --        false = 命令名必须先在 Bindings.xml 里登记（要客户端重启才生效）。
+      say("— 快捷键可行性探针（不存档、不动现有绑定）—")
+      local function gba(k)
+        local ok, v = pcall(GetBindingAction, k)
+        return (ok and type(v) == "string") and v or nil
+      end
+      -- T0：命令表概览
+      local okN, nB = pcall(GetNumBindings)
+      if okN and type(nB) == "number" then
+        say("T0 命令表共 " .. nB .. " 行（前 12 行）：")
+        local evalHits = 0
+        for i = 1, math.min(nB, 300) do
+          local okG, cmd, cat, k1, k2 = pcall(GetBinding, i)
+          if okG and type(cmd) == "string" and string.sub(cmd, 1, 5) == "EVAL_" then evalHits = evalHits + 1 end
+          if okG and i <= 12 then
+            say("  " .. i .. ". " .. tostring(cmd) .. " | " .. tostring(cat) .. " | " .. tostring(k1) .. " | " .. tostring(k2))
+          end
+        end
+        say("T0 以 EVAL_ 开头的命令行数 = " .. evalHits .. "（0 = 客户端没有给我们预留命令名）")
+      else
+        say("T0 GetNumBindings 不可用（" .. tostring(nB) .. "）——整条路判死")
+      end
+      -- 找一个空闲键位（GetBindingAction == "" 才算空；nil = API 不可用）
+      local CAND94 = { "F10", "F11", "F12", "6", "7", "8", "9", "0", "SHIFT-2", "SHIFT-3", "CTRL-2", "ALT-2", "BUTTON3" }
+      local freeKey = nil
+      for _, k in ipairs(CAND94) do
+        local v = gba(k)
+        if v == "" then freeKey = k break end
+      end
+      if not freeKey then
+        say("候选键位全被占用或 GetBindingAction 不可用 → 换一个再试（可自己挑个确定空闲的键告诉我）")
+      else
+        say("空闲键位 = " .. freeKey .. "（当前 GetBindingAction = 空串）")
+        -- T1：绑已知合法命令 JUMP
+        local ok1, r1 = pcall(SetBinding, freeKey, "JUMP")
+        local back1 = gba(freeKey)
+        say("T1 SetBinding(" .. freeKey .. ", JUMP) → " .. tostring(ok1 and r1) .. "，读回 = " .. tostring(back1))
+        pcall(SetBinding, freeKey) -- 立刻解绑还原
+        say("T1 已解绑，读回 = " .. tostring(gba(freeKey)) .. "（期望空串）")
+        -- T2：绑插件自定义命令名（本探针的核心问题）
+        local ok2, r2 = pcall(SetBinding, freeKey, "EVAL_GO2")
+        local back2 = gba(freeKey)
+        say("T2 SetBinding(" .. freeKey .. ", EVAL_GO2) → " .. tostring(ok2 and r2) .. "，读回 = " .. tostring(back2))
+        if ok2 and r2 and back2 == "EVAL_GO2" then
+          say("T2 ★可行：命令名不用登记——「方案右键弹窗设快捷键」可以直接用 SetBinding 做")
+        else
+          say("T2 ★被拒：命令名要先在 Bindings.xml 登记（<Binding name=\"EVAL_GO2\">）才接受——需要加文件 + 客户端重启")
+        end
+        pcall(SetBinding, freeKey) -- 收尾再清一次
+      end
+      say("探针结束：全程未 SaveBindings（GetCurrentBindingSet = " .. tostring(GetCurrentBindingSet and GetCurrentBindingSet() or "?") .. "），改动随重登消失")
     elseif msg == "go probe immune" then
       -- 免疫事件探针（1.35.1，免疫学习器前置验证）：30 秒全事件抓取——CHAT_MSG_* 或参数含「免疫/immune」
       -- 的写调试日志；对免疫怪放技能后翻日志拿真实事件名+文本格式，再写解析器（事件 wiki 无文档页）
@@ -6245,7 +6386,7 @@ if type(SlashCmdList) == "table" then
       say("|cffffff00命令:|r /eh 输出状态 | /eh log 写日志开关 | /eh auto 进出战斗自动输出")
       say("/eh ui 战斗信息UI | /eh st 状态信息UI | /eh cfg 设置窗口（小地图旁 EH 图标同效）")
       say("/eh go 一键宏状态 | /eh go rescan 重扫动作条 | /eh debug 调试日志（/eh war 旧命令仍兼容）")
-      say("/eh go probe 增益探针（逐条枚举自身 buff） | /eh go 光环 [名字] 光环定向探查")
+      say("/eh go probe 增益探针（逐条枚举自身 buff） | /eh go 光环 [名字] 光环定向探查 | /eh go bind 快捷键可行性探针")
       say("/eh go 停施法 1|2|3 停读法取证（本客户端停读条 API 只有 Protected 的 SpellStopCasting）")
       say("方案命令：/eh go list 查看 | go add 技能 条件 | go del N | go newprof 名 | go prof N | go rename 新名 | go delprof N")
       say("方案导入导出（md 文本复制粘贴）：/eh go io，内置案例模版按职业直接导入")
@@ -6290,6 +6431,9 @@ init:SetScript("OnEvent", function(a, b)
     if not cfg.war then
       cfg.war = { enabled = true, attack = true } -- 1.48.0 同上
     end
+    -- ★1.71.13 小地图按钮贴图标：载入期宏图标接口未必就绪 → 在 VARIABLES_LOADED 后挑；
+    --   挑不到会自动退回旧的「金框 + EH」样式（不许留空白按钮）。
+    if type(EVAL_HELP_MB_SETICON) == "function" then pcall(EVAL_HELP_MB_SETICON) end
     -- 小地图按钮：恢复拖到的位置（越界则清掉记忆，回到默认锚点）
     if cfg.mbPos and minimapBtn then
       pcall(minimapBtn.ClearAllPoints, minimapBtn)
