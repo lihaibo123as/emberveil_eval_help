@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.71.16"
+local VERSION = "1.71.17"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -2314,8 +2314,10 @@ local mbRing, mbText = nil, nil   -- 兜底样式（仅图标拿不到时才建�
 --   enumFn(i) → 路径或 nil（本客户端 GetMacroIconInfo 的形态，与 IconBrowser.lua 同源）。
 function EVAL_HELP_MB_PICKICON(n, enumFn)
   if type(n) ~= "number" or n < 1 or type(enumFn) ~= "function" then return nil end
-  -- 「工具箱」气质优先：扳手 > 工程学 > 齿轮 > 小装置 > 书（★大写化后做前缀匹配，名尾的 _TEX 不妨碍）
-  local CANDS = { "^INV_MISC_WRENCH", "^TRADE_ENGINEERING", "^INV_MISC_GEAR", "^INV_GIZMO", "^INV_MISC_BOOK" }
+  -- ★1.71.17 用户定稿：初始图标 = **力量祝福**（Spell_Holy_BlessingOfStrength，金色拳头，一眼是「增益/强化」）——
+  --   她在图标库亲自挑过这枚当按钮图标（见 1.71.15），并要求初始默认也用同一枚；
+  --   其次才是「工具箱」气质：扳手 > 工程学 > 齿轮 > 小装置 > 书（★大写化后做前缀匹配，名尾的 _TEX 不妨碍）
+  local CANDS = { "^SPELL_HOLY_BLESSINGOFSTRENGTH", "^INV_MISC_WRENCH", "^TRADE_ENGINEERING", "^INV_MISC_GEAR", "^INV_GIZMO", "^INV_MISC_BOOK" }
   local names = {}
   for i = 1, n do
     local ok, p = pcall(enumFn, i)

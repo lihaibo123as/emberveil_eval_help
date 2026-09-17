@@ -6834,6 +6834,9 @@ do
   local function enumOf95(t) return function(i) return t[i] end end
   eq(EVAL_HELP_MB_PICKICON(3, enumOf95({ "Interface\\Icons\\Spell_Fire_Fireball", "Interface\\Icons\\INV_Misc_Gear_01", "Interface\\Icons\\INV_Misc_Wrench_01" })),
     "Interface\\Icons\\INV_Misc_Wrench_01", "①★扳手优先于齿轮（候选优先级 > 宏图标表的表序）")
+  -- ★1.71.17 用户定稿：初始图标 = 力量祝福（她在图标库亲自挑的那枚）→ 候选里排最前，压过扳手
+  eq(EVAL_HELP_MB_PICKICON(3, enumOf95({ "Interface\\Icons\\INV_Misc_Wrench_01", "Interface\\Icons\\Spell_Fire_Fireball", "/Game/Interface/Icons/Spell_Holy_BlessingOfStrength_TEX" })),
+    "/Game/Interface/Icons/Spell_Holy_BlessingOfStrength_TEX", "①★★初始图标 = 力量祝福（用户定稿，压过扳手；本客户端 /Game/..._TEX 形态也认得）")
   eq(EVAL_HELP_MB_PICKICON(2, enumOf95({ "Interface\\Icons\\INV_Misc_Gear_01", "Interface\\Icons\\Spell_Fire_Fireball" })),
     "Interface\\Icons\\INV_Misc_Gear_01", "①没有扳手时退到齿轮")
   eq(EVAL_HELP_MB_PICKICON(1, enumOf95({ "Interface\\Icons\\Spell_Fire_Fireball" })), nil,
