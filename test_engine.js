@@ -28,15 +28,17 @@ function checkIconAssets() {
     process.exitCode = 1;
     return;
   }
-  // 2) 恰好两个构建点调用它（配置窗 + 技能编辑窗）
+  // 2) 恰好三个构建点调用它（配置窗 + 技能编辑窗 + 案例模版窗）—— ★1.71.3 模版窗从固定 330 改成同源宽度后变 3。
+  //    ★这个「数个数」不是宽度正确性的证明，而是**新窗口必须来这里登记**的哨兵（免得多出一处悄悄写死的宽度）。
+  //      真正的判据是上面第 1 条（唯一来源）与下面第 3 条（旧字面量不得残留）。
   // 只数「窗口宽度赋值」这种形态。★不能用 / = cfWinWidth\(\)/ ——
   //   那会把「用窗口宽度做布局换算」的调用也算进来（如 closeLeft = cfWinWidth() - 12 - 64），
   //   而那是**正确的用法**（读同一个来源做布局），不是多出来的构建点（本轮实测误报）。
   //   判据：检查要盯「宽度**被赋值**」这个语义，而不是「文本里出现了这个调用」。
   const calls = (src.match(/(local\s+[\w, ]*?W[\w, ]*?)\s*=\s*cfWinWidth\(\)/g) || []).length +
                 (src.match(/WIDE and cfWinWidth\(\)|cfWinWidth\(\)/g) || []).length * 0;
-  if (calls !== 2) {
-    console.log("WIN WIDTH CHECK: FAIL - expected exactly 2 build sites calling cfWinWidth(), found " + calls);
+  if (calls !== 3) {
+    console.log("WIN WIDTH CHECK: FAIL - expected exactly 3 build sites calling cfWinWidth() (config / skill editor / template), found " + calls);
     process.exitCode = 1;
     return;
   }
@@ -48,7 +50,7 @@ function checkIconAssets() {
     process.exitCode = 1;
     return;
   }
-  console.log("WIN WIDTH CHECK: single source, 2 build sites, 800/660");
+  console.log("WIN WIDTH CHECK: single source, " + calls + " build sites, 800/660");
 })();
 
 // ===== DECL ORDER CHECK: every top-level local must be declared before its first use =====
@@ -529,7 +531,8 @@ function checkIconAssets() {
     console.log("EXAMPLES TOC CHECK: FAIL - disk/toc mismatch; not-listed=[" + missing.join(",") + "] not-on-disk=[" + ghost.join(",") + "]");
     process.exit(1);
   }
-  const expect = ["战士", "法师", "通用法系", "盗贼", "猎人", "骑士"];
+  // ★1.71.3 新增 4 个职业组（牧师/德鲁伊/术士/萨满）+ 1 个功能组（队伍/团队）。
+  const expect = ["战士", "法师", "通用法系", "盗贼", "猎人", "骑士", "牧师", "德鲁伊", "术士", "萨满", "队伍/团队"];
   const got = listed.map(f => { const m = fs.readFileSync(path.join(dir, f), "utf8").match(/cls\s*=\s*"([^"]+)"/); return m ? m[1] : "?"; });
   if (got.join(",") !== expect.join(",")) {
     console.log("EXAMPLES TOC CHECK: FAIL - toc order gives [" + got.join("/") + "], expected [" + expect.join("/") + "]");
@@ -597,7 +600,7 @@ checkIconAssets();
 
 const L=lauxlib.luaL_newstate();
 lualib.luaL_openlibs(L);
-for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','Toolbox.lua','DataSearch.lua','Share.lua','IconBrowser.lua','test_assert.lua']){
+for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','examples/priest.lua','examples/druid.lua','examples/warlock.lua','examples/shaman.lua','examples/group.lua','Toolbox.lua','DataSearch.lua','Share.lua','IconBrowser.lua','test_assert.lua']){
   const src=fs.readFileSync(f);
   const st=lauxlib.luaL_loadbuffer(L,src,src.length,to_luastring(f));
   if(st!==lua.LUA_OK){ console.log('LOAD ERROR ['+f+']:',lua.lua_tojsstring(L,-1)); process.exit(1); }

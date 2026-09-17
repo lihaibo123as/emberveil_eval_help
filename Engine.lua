@@ -2414,7 +2414,13 @@ function EVAL_PARSE_ONE(token)
   if not cd then return nil end
   if csF or gsF then
     -- ★只有队伍/团员条件支持这两个过滤；别的类型写它 = 写法错误 → **如实丢弃**（不静默留一个无意义字段）
-    if cd.k ~= "teamHp" and cd.k ~= "teamMana" and cd.k ~= "teamBuff" and cd.k ~= "teamDebuff" then return nil end
+    -- ★★★1.71.3 允许的**成员类**条件：8 项队伍/团员 + 4 项候选者（后者就是选取器行的过滤条件，
+    --   「只给法师补智力」这类模版全靠它）；别的类型写这个后缀 = 写法错误 → 如实丢弃。
+    local kmem = cd.k
+    if kmem ~= "teamHp" and kmem ~= "teamMana" and kmem ~= "teamBuff" and kmem ~= "teamDebuff"
+       and kmem ~= "candHp" and kmem ~= "candPower" and kmem ~= "candBuff" and kmem ~= "candDebuff" then
+      return nil
+    end
     cd.cs, cd.gs = csF, gsF
   end
   if not stripped then return cd end
@@ -2491,8 +2497,8 @@ function EVAL_COND_STR(cd)
   if k == "teamHp" then return tscope .. "血" .. (cd.op or ">") .. tostring(cd.n) .. teamFilterSuffix(cd) end
   if k == "teamMana" then return tscope .. "蓝" .. (cd.op or ">") .. tostring(cd.n) .. teamFilterSuffix(cd) end
   -- ★1.71.3 候选者条件（选取器行专用）：独立拼写，与新类型一一对应
-  if k == "candHp" then return "候选者血" .. (cd.op or ">") .. tostring(cd.n) end
-  if k == "candPower" then return "候选者能量" .. (cd.op or ">") .. tostring(cd.n) end
+  if k == "candHp" then return "候选者血" .. (cd.op or ">") .. tostring(cd.n) .. teamFilterSuffix(cd) end
+  if k == "candPower" then return "候选者能量" .. (cd.op or ">") .. tostring(cd.n) .. teamFilterSuffix(cd) end
   -- ★候选者光环型的导出行放在**stkSuffix 定义之后**（见下面 hasBuff 那一段）——Lua 词法作用域，
   --   放上面会绑到全局 nil（本轮实测报 attempt to call a nil value (global 'stkSuffix')）。
   if COND_NUMNAME[k] then return COND_NUMNAME[k] .. (cd.op or ">") .. tostring(cd.n) end
@@ -2528,8 +2534,8 @@ function EVAL_COND_STR(cd)
     return ""
   end
   -- ★1.71.3 候选者光环型（必须放在 stkSuffix/secSuffix 声明之后，否则引用到全局 nil）
-  if k == "candBuff" then return ((cd.v == false) and "候选者缺buff:" or "候选者buff:") .. tostring(cd.s) .. stkSuffix() .. secSuffix() end
-  if k == "candDebuff" then return ((cd.v == false) and "候选者无debuff:" or "候选者debuff:") .. tostring(cd.s) .. stkSuffix() .. secSuffix() end
+  if k == "candBuff" then return ((cd.v == false) and "候选者缺buff:" or "候选者buff:") .. tostring(cd.s) .. stkSuffix() .. secSuffix() .. teamFilterSuffix(cd) end
+  if k == "candDebuff" then return ((cd.v == false) and "候选者无debuff:" or "候选者debuff:") .. tostring(cd.s) .. stkSuffix() .. secSuffix() .. teamFilterSuffix(cd) end
   if k == "hasBuff" then return ((cd.v == false) and "无buff:" or "有buff:") .. tostring(cd.s) .. stkSuffix() .. secSuffix() end -- 1.54.0 合并（旧 k=noBuff 走下一行兼容）
   if k == "noBuff" then return "无buff:" .. tostring(cd.s) end
   if k == "tBuff" then return ((cd.v == false) and "无目标buff:" or "目标buff:") .. tostring(cd.s) .. stkSuffix() .. secSuffix() end -- 1.54.0

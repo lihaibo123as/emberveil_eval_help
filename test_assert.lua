@@ -2793,7 +2793,7 @@ do
     end
   end
   -- ★★★骑士组（1.71.2 第二十二轮，用户要求收录其实配方案）：不只「能解析」，还逐条验内容 + 整串往返
-  eq(table.getn(EVAL_IO_TEMPLATES), 6, "★six class groups (toc order guarded by EXAMPLES TOC CHECK)")
+  eq(table.getn(EVAL_IO_TEMPLATES), 11, "★11 组（6 原有 + 牧师/德鲁伊/术士/萨满/队伍·团队；顺序由 EXAMPLES TOC CHECK 守）")
   local pal = nil
   for _, g in ipairs(EVAL_IO_TEMPLATES) do if g.cls == "骑士" then pal = g break end end
   eq(pal ~= nil, true, "★★★a paladin template group exists")
@@ -6229,5 +6229,138 @@ do
   EVAL_DD_HIDE()
   EVAL_TEST_SE_CLEAR()
   EVAL_HELP_UPDATE_STATE()
+end
+
+-- 91) ★1.71.3 案例模版窗重做（用户要求：「窗口大一点，分两列，标题增加感叹号 tooltip 提示…」）
+--   + 案例扩充（通用法系 队伍/团队刷buff、队伍/团队一键治疗与buff、骑士按职业区分祝福、其它职业常用一键宏）。
+--   ★三层判据：① 布局（真实几何：两列不叠、不出窗、**同一职业组不被拆到两列**、两列行数大致对半）；
+--     ② 标题感叹号的悬停文案（走真实 OnEnter → GameTooltip，按语言包取）；
+--     ③ **内容质量**（每条模版：名字非空、同组不重名、首行「# 方案: X」== 模版名、至少 1 条技能行；
+--        以及用户点名的几条确实在、职业过滤真的写进条件里）。
+do
+  local lay = EVAL_TEST_TPL_LAYOUT()
+  eq(type(lay) == "table", true, "前置：模版窗建好了")
+  eq(lay.w, EVAL_TEST_WIN_W(), "★★★窗口宽度 = 单一来源 cfWinWidth()（不再各写一份宽度）")
+  eq(lay.rowCount >= 20, true, "★模版行数 ≥20（案例已扩充）: " .. tostring(lay.rowCount))
+  eq(lay.leftRows + lay.rightRows, lay.groups + lay.rowCount, "★★两列行数相加 = 组标题 + 方案行 —— 一行都没丢")
+  eq(math.abs(lay.leftRows - lay.rightRows) <= 3, true, "★★两列行数大致对半（不留一大片空白）: " .. lay.leftRows .. "/" .. lay.rightRows)
+  eq(lay.h <= 700, true, "★★窗口高度不出屏（本客户端 UI 空间高 768）: " .. tostring(lay.h))
+  local rows91 = EVAL_TEST_TPL_ROWS()
+  eq(table.getn(rows91), lay.rowCount, "★行表与布局自报的行数一致")
+  local colX1, colX2, maxRight = nil, nil, 0
+  for i = 1, table.getn(rows91) do
+    local r = rows91[i]
+    eq(type(r.x) == "number" and type(r.y) == "number", true, "★第 " .. i .. " 行有真实坐标")
+    if type(r.x) == "number" then
+      if colX1 == nil or r.x < colX1 then colX1 = r.x end
+      if colX2 == nil or r.x > colX2 then colX2 = r.x end
+      local right = r.x + (r.w or 0)
+      if right > maxRight then maxRight = right end
+    end
+  end
+  eq(colX1 ~= colX2, true, "★★真的分成两列（行起点两个值: " .. tostring(colX1) .. " / " .. tostring(colX2) .. "）")
+  eq((colX2 or 0) - (colX1 or 0) > lay.colW, true, "★★第二列起点在第一列宽度之外（两列不叠在一起）")
+  eq(maxRight <= lay.w + 1, true, "★所有行都在窗内: " .. maxRight .. " <= " .. tostring(lay.w))
+  -- ★★★按组分行：同一个职业组的方案行必须落在同一列（拆开看着像少了一组）
+  local byCls, split91 = {}, ""
+  for i = 1, table.getn(rows91) do
+    local c = rows91[i].cls
+    byCls[c] = byCls[c] or {}
+    table.insert(byCls[c], rows91[i].x)
+  end
+  for c, xs in pairs(byCls) do
+    for i = 2, table.getn(xs) do if xs[i] ~= xs[1] then split91 = split91 .. tostring(c) .. " " end end
+  end
+  eq(split91, "", "★★★同一职业组的方案行不许被拆到两列: " .. split91)
+  -- ② 标题感叹号 + 悬停说明
+  eq(EVAL_TEST_TPL_TIP_TEXT(), "!", "★★标题上有金色文字感叹号（不用我们那两枚有固定含义的 mark 图标）")
+  local tip91 = EVAL_TEST_TPL_TIP()
+  local fn91 = tip91 and tip91.GetScript and tip91:GetScript("OnEnter")
+  eq(type(fn91) == "function", true, "★感叹号有真实 OnEnter")
+  TEST.tipLines = nil
+  if type(fn91) == "function" then fn91() end
+  local txt91 = ""
+  for _, ln in ipairs(TEST.tipLines or {}) do txt91 = txt91 .. tostring(ln.text or "") .. "\n" end
+  eq(string.find(txt91, EVAL_L("TPL_SHARE_TIP"), 1, true) ~= nil, true, "★★★悬停真的弹出「有好方案欢迎分享」（按语言包实取，不硬编码）")
+  eq(type(EVAL_L("TPL_SHARE_TIP")) == "string" and EVAL_L("TPL_SHARE_TIP") ~= "", true, "★语言包里确实有这条文案")
+  -- ③ 内容质量：逐条模版体检
+  local badName, dupName, badHead, badSkill = "", "", "", ""
+  local seen91 = {}
+  for gi, g in ipairs(EVAL_IO_TEMPLATES) do
+    for ti, t in ipairs(g.list or {}) do
+      local nm = tostring(t.name or "")
+      if nm == "" then badName = badName .. tostring(gi) .. "/" .. tostring(ti) .. " " end
+      local key = tostring(g.cls) .. "/" .. nm
+      if seen91[key] then dupName = dupName .. key .. " " end
+      seen91[key] = true
+      local prof = EVAL_PROFILE_FROM_TEXT(t.text or "")
+      if not (prof and prof.name == nm) then badHead = badHead .. key .. "(=" .. tostring(prof and prof.name) .. ") " end
+      if not (prof and table.getn(prof.skills) >= 1) then badSkill = badSkill .. key .. " " end
+    end
+  end
+  eq(badName, "", "★★模版名不许为空: " .. badName)
+  eq(dupName, "", "★★同一组内不许重名（重名会让人点错）: " .. dupName)
+  eq(badHead, "", "★★★每条模版首行「# 方案: X」必须等于模版名（否则导入后列表名与菜单对不上）: " .. badHead)
+  eq(badSkill, "", "★★★每条模版至少 1 条技能行: " .. badSkill)
+  -- ③b 用户点名的案例确实在
+  local function findTpl91(cls, name)
+    for _, g in ipairs(EVAL_IO_TEMPLATES) do
+      if g.cls == cls then
+        for _, t in ipairs(g.list or {}) do if t.name == name then return t end end
+      end
+    end
+    return nil
+  end
+  eq(findTpl91("通用法系", "队伍补智力") ~= nil, true, "★用户要求：通用法系 → 队伍补智力")
+  eq(findTpl91("通用法系", "团队补智力") ~= nil, true, "★用户要求：通用法系 → 团队补智力")
+  eq(findTpl91("通用法系", "队伍补耐力") ~= nil, true, "★用户要求：通用法系 → 队伍补耐力")
+  eq(findTpl91("通用法系", "团队补耐力") ~= nil, true, "★用户要求：通用法系 → 团队补耐力")
+  eq(findTpl91("队伍/团队", "一键队伍治疗") ~= nil, true, "★用户要求：队伍/团队 → 一键队伍治疗")
+  eq(findTpl91("队伍/团队", "一键团队治疗") ~= nil, true, "★用户要求：队伍/团队 → 一键团队治疗")
+  eq(findTpl91("队伍/团队", "一键队伍buff") ~= nil, true, "★用户要求：队伍/团队 → 一键队伍buff")
+  eq(findTpl91("队伍/团队", "一键团队buff") ~= nil, true, "★用户要求：队伍/团队 → 一键团队buff")
+  eq(findTpl91("骑士", "力量祝福（物理职业）") ~= nil, true, "★用户要求：骑士 → 力量祝福（物理职业）")
+  eq(findTpl91("骑士", "智慧祝福（法系职业）") ~= nil, true, "★用户要求：骑士 → 智慧祝福（法系职业）")
+  for _, cls91 in ipairs({ "牧师", "德鲁伊", "术士", "萨满" }) do
+    local g91 = nil
+    for _, g in ipairs(EVAL_IO_TEMPLATES) do if g.cls == cls91 then g91 = g end end
+    eq(g91 ~= nil and table.getn(g91.list) >= 2, true, "★其它职业常用一键宏：" .. cls91 .. " 至少 2 条")
+  end
+  -- ③c 职业过滤**真的写进了条件**（不是只写在 desc 里）
+  local t91 = findTpl91("通用法系", "队伍补智力")
+  local p91 = t91 and EVAL_PROFILE_FROM_TEXT(t91.text)
+  eq(p91 and p91.skills[1] and p91.skills[1].skill, "选取目标:队伍成员", "★智力模版第一行是队伍选取器")
+  local cd91 = p91 and p91.skills[1].groups and p91.skills[1].groups[1] and p91.skills[1].groups[1][1]
+  eq(cd91 and cd91.k, "candBuff", "★★选取器行用的是「候选者缺buff」条件")
+  eq(cd91 and cd91.cs and cd91.cs.MAGE, true, "★★★职业过滤解析进条件：法师在内")
+  eq(cd91 and cd91.cs and cd91.cs.WARRIOR, nil, "★★★反向：战士不在（没蓝条的职业不该被补智力）")
+  eq(p91 and p91.skills[2] and p91.skills[2].skill, "奥术智慧", "★第二行才是真正施放的那个 buff")
+  local t92 = findTpl91("骑士", "力量祝福（物理职业）")
+  local p92 = t92 and EVAL_PROFILE_FROM_TEXT(t92.text)
+  local cd92 = p92 and p92.skills[1].groups and p92.skills[1].groups[1] and p92.skills[1].groups[1][1]
+  eq(cd92 and cd92.cs and cd92.cs.WARRIOR, true, "★★骑士力量祝福 → 物理职业（战士在内）")
+  eq(cd92 and cd92.cs and cd92.cs.MAGE, nil, "★★反向：法师不在力量祝福名单里")
+  local t93 = findTpl91("骑士", "智慧祝福（法系职业）")
+  local p93 = t93 and EVAL_PROFILE_FROM_TEXT(t93.text)
+  local cd93 = p93 and p93.skills[1].groups and p93.skills[1].groups[1] and p93.skills[1].groups[1][1]
+  eq(cd93 and cd93.cs and cd93.cs.MAGE, true, "★★骑士智慧祝福 → 法系职业（法师在内）")
+  -- ③d 候选者条件也能带职业过滤（模版靠它），且**文本往返不丢**
+  local cdRound = EVAL_PARSE_ONE("候选者缺buff:奥术智慧[职业:法师]")
+  eq(cdRound and cdRound.k, "candBuff", "★候选者条件能带职业过滤（解析）")
+  eq(cdRound and cdRound.cs and cdRound.cs.MAGE, true, "★★过滤进条件")
+  eq(EVAL_COND_STR(cdRound), "候选者缺buff:奥术智慧[职业:法师]", "★★★导出回环不丢过滤（否则导入一次就少一条约束）")
+  eq(EVAL_PARSE_ONE("候选者血<60[职业:战士]").cs.WARRIOR, true, "★候选者血% 同样支持")
+  -- ③e 编辑器：候选者行也要显示「职业过滤」格（选取器行的条件就是靠它筛人）
+  local savedProf91 = EVAL_HELP_CONFIG.war.profiles
+  local savedAct91 = EVAL_HELP_CONFIG.war.activeProfile
+  EVAL_HELP_CONFIG.war.profiles = { { name = "t91", skills = { { skill = "选取目标:队伍成员", why = "t91", groups = { { { k = "candBuff", s = "奥术智慧", v = false } } } } } } }
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  EVAL_HELP_SE_OPEN(1, 1)
+  eq(select(1, EVAL_TEST_SE_ROW_CLS(1)), true, "★★★候选者条件行也显示「职业过滤」格（只给法师补智力就靠它）")
+  eq(select(1, EVAL_TEST_SE_ROW_GRP(1)), false, "★★反向：候选者行不显示小队格（小队过滤属于团员条件）")
+  EVAL_HELP_CONFIG.war.profiles = savedProf91
+  EVAL_HELP_CONFIG.war.activeProfile = savedAct91
+  EVAL_TEST_SE_CLEAR()
+  TEST.tipLines = nil
 end
 print("ALL TESTS PASS")

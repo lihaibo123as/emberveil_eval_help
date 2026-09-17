@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.71.3"
+local VERSION = "1.71.4"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -3578,8 +3578,11 @@ function EVAL_HELP_SE_REFRESH()
       end
       -- ★1.71.3 队伍/团员条件的「职业多选 / 小队多选」：
       --   ★显示串按语言包取，窄格最多列 3 项（多了用 …，格宽只有 56px）
-      local isTeamKind = ((td.base or td.id) == "teamHp") or ((td.base or td.id) == "teamMana")
-                         or ((td.base or td.id) == "teamBuff") or ((td.base or td.id) == "teamDebuff")
+      -- ★1.71.3 「成员类」条件 = 8 项队伍/团员 + 4 项候选者：这两族都能带「职业过滤」
+      --   （候选者那 4 项是选取器行的过滤条件——「只给法师补智力」就是这么配的）；小队格仍只给团员条件。
+      local mkid = td.base or td.id
+      local isTeamKind = (mkid == "teamHp") or (mkid == "teamMana") or (mkid == "teamBuff") or (mkid == "teamDebuff")
+                         or (mkid == "candHp") or (mkid == "candPower") or (mkid == "candBuff") or (mkid == "candDebuff")
       if isTeamKind then
         local ns = {}
         for _, c in ipairs(CLASS_LIST) do if cd.cs and cd.cs[c.id] then table.insert(ns, c.name) end end
@@ -5127,10 +5130,37 @@ end
 -- ============ 案例模版选单（1.44.0）：按职业分组，点击方案行直接导入 ============
 function EVAL_HELP_TPL_BUILD()
   if tplUI.root then return end
-  local W = 330
-  local rows = 0
-  for _, c in ipairs(EVAL_IO_TEMPLATES) do rows = rows + 1 + table.getn(c.list) end
+  -- ★★★1.71.3 用户要求「窗口大一点、分两列」：案例多了以后单列会长出屏幕（本客户端 UI 空间高 768）。
+  --   ★宽度跟配置窗**同一来源**（cfWinWidth：中文 660 / 西文 800）——不再各写一份宽度（本项目老坑）。
+  local W = cfWinWidth()
+  local margin, gap = 14, 12
+  local colW = math.floor((W - margin * 2 - gap) / 2)
+  -- ① 每组占几行（组标题 1 行 + 方案行）
+  local heights, totalRows = {}, 0
+  for i, c in ipairs(EVAL_IO_TEMPLATES) do
+    heights[i] = 1 + table.getn(c.list)
+    totalRows = totalRows + heights[i]
+  end
+  -- ② 贪心分列：按顺序往左列塞，直到左列行数 ≥ 一半 —— ★**以组为单位**，绝不把一组拆到两列
+  --   （组被拆开看着像「少了一组」；两列行数也尽量对半，右上角不留大片空白）
+  local leftCol, rightCol, leftRows, rightRows = {}, {}, 0, 0
+  local half = math.ceil(totalRows / 2)
+  for i = 1, table.getn(EVAL_IO_TEMPLATES) do
+    if leftRows < half then
+      leftRows = leftRows + heights[i]
+      table.insert(leftCol, i)
+    else
+      rightRows = rightRows + heights[i]
+      table.insert(rightCol, i)
+    end
+  end
+  local rows = (leftRows > rightRows) and leftRows or rightRows
   local H = 34 + rows * 20 + 34
+  -- 供断言读**真实布局值**（不在测试里写死常量——本项目「断言里写死布局常量 = 测自己」的老坑）
+  tplUI.rowBtns = {}
+  tplUI.margin, tplUI.gap, tplUI.colW = margin, gap, colW
+  tplUI.leftCol, tplUI.rightCol = leftCol, rightCol
+  tplUI.leftRows, tplUI.rightRows, tplUI.maxRows = leftRows, rightRows, rows
   local root = CreateFrame("Frame", "EVAL_HELP_TPL", UIParent)
   root:SetWidth(W) root:SetHeight(H)
   root:SetPoint("CENTER", UIParent, "CENTER", 0, 80)
@@ -5185,55 +5215,89 @@ function EVAL_HELP_TPL_BUILD()
   end)
   titleBar:SetScript("OnDragStop", function() pcall(root.StopMovingOrSizing, root) end)
 
+  -- ★★★1.71.3 用户要求：标题上加个感叹号，悬停提示「有好方案欢迎分享」。
+  --   ★★用**金色文字感叹号**，不用我们那两枚 mark 图标：那两枚的含义已经固定（白=不可用 / 黄=待测试），
+  --     同一张图再表示「欢迎分享」= 含义叠加，用户会误判（「图标语义单一来源」那条）。
+  local tipBtn = CreateFrame("Button", nil, titleBar)
+  tipBtn:SetWidth(14) tipBtn:SetHeight(14)
+  tipBtn:SetPoint("RIGHT", titleBar, "RIGHT", -4, 0)
+  pcall(tipBtn.EnableMouse, tipBtn, true)
+  local tipTxt = uiText(tipBtn, 12, 0.95, 0.82, 0.35)
+  tipTxt:SetPoint("CENTER", tipBtn, "CENTER", 0, 0)
+  tipTxt:SetText("!")
+  tipBtn:SetScript("OnEnter", function()
+    pcall(tipTxt.SetTextColor, tipTxt, 1, 1, 1)
+    if type(GameTooltip) == "nil" then return end
+    pcall(GameTooltip.SetOwner, GameTooltip, tipBtn, "ANCHOR_LEFT")
+    pcall(GameTooltip.AddLine, GameTooltip, L("TPL_SHARE_TIP"))
+    pcall(GameTooltip.Show, GameTooltip)
+  end)
+  tipBtn:SetScript("OnLeave", function()
+    pcall(tipTxt.SetTextColor, tipTxt, 0.95, 0.82, 0.35)
+    if type(GameTooltip) ~= "nil" then pcall(GameTooltip.Hide, GameTooltip) end
+  end)
+  tplUI.tipBtn = tipBtn
+  tplUI.tipText = tipTxt
+
   -- 职业组标题（金色不可点）+ 方案行（点击即导入）
-  local y = -26
-  for _, c in ipairs(EVAL_IO_TEMPLATES) do
-    local hd = uiText(root, 10, 0.95, 0.82, 0.35)
-    hd:SetPoint("TOPLEFT", root, "TOPLEFT", 14, y)
-    hd:SetText("【" .. tostring(c.cls) .. "】")
-    y = y - 20
-    for _, p in ipairs(c.list) do
-      local b = CreateFrame("Button", nil, root)
-      b:SetPoint("TOPLEFT", root, "TOPLEFT", 22, y)
-      b:SetWidth(W - 36) b:SetHeight(18)
-      pcall(b.EnableMouse, b, true)
-      pcall(b.RegisterForClicks, b, "LeftButtonUp")
-      local bb = b:CreateTexture(nil, "BACKGROUND")
-      uiSolid(bb, 0.12, 0.10, 0.06, 1)
-      bb:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
-      bb:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
-      local bt = uiText(b, 9, 0.88, 0.88, 0.88)
-      bt:SetPoint("LEFT", b, "LEFT", 6, 0)
-      bt:SetText(tostring(p.name)) -- 1.67.6 行内只留模版名；描述+方案内容移入 tooltip（模版多了不溢出）
-      b:SetScript("OnEnter", function()
-        pcall(bb.SetVertexColor, bb, 0.30, 0.25, 0.12, 1)
-        pcall(function()
-          GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
-          GameTooltip:AddLine(tostring(p.name), 1, 0.85, 0.3)
-          if p.desc then GameTooltip:AddLine(tostring(p.desc), 0.85, 0.85, 0.85, true) end
-          for ln in string.gmatch(tostring(p.text or ""), "([^\n]+)") do
-            if string.sub(ln, 1, 1) == "-" then GameTooltip:AddLine(ln, 0.65, 0.65, 0.65, true) end -- 技能行预览
-          end
-          GameTooltip:Show()
+  -- ★★★1.71.3 用户要求「窗口大一点、分两列」：案例变多后单列会长得超出屏幕（本客户端 UI 高 768）
+  --   ★列分配**以「组」为单位**（一个职业组绝不被拆到两列），再按「行数尽量对半」分左右 ——
+  --     既不会在组中间断开（看着像丢了一组），两列又大致等高（右上角不会留一大片空白）。
+  local function tplColumn(idxs, x)
+    local yy = -26
+    for _, gi in ipairs(idxs) do
+      local c = EVAL_IO_TEMPLATES[gi]
+      local hd = uiText(root, 10, 0.95, 0.82, 0.35)
+      hd:SetPoint("TOPLEFT", root, "TOPLEFT", x, yy)
+      hd:SetText("【" .. tostring(c.cls) .. "】")
+      yy = yy - 20
+      for _, p in ipairs(c.list) do
+        local b = CreateFrame("Button", nil, root)
+        b:SetPoint("TOPLEFT", root, "TOPLEFT", x + 8, yy)
+        b:SetWidth(colW - 16) b:SetHeight(18)
+        pcall(b.EnableMouse, b, true)
+        pcall(b.RegisterForClicks, b, "LeftButtonUp")
+        local bb = b:CreateTexture(nil, "BACKGROUND")
+        uiSolid(bb, 0.12, 0.10, 0.06, 1)
+        bb:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+        bb:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+        local bt = uiText(b, 9, 0.88, 0.88, 0.88)
+        bt:SetPoint("LEFT", b, "LEFT", 6, 0)
+        pcall(bt.SetWidth, bt, colW - 30) -- 窄列下长名字不越出格子（超出部分裁掉，description 里能看到全名）
+        pcall(bt.SetNonSpaceWrap, bt, false)
+        bt:SetText(tostring(p.name)) -- 1.67.6 行内只留模版名；描述+方案内容移入 tooltip（模版多了不溢出）
+        table.insert(tplUI.rowBtns, { name = tostring(p.name), cls = tostring(c.cls), btn = b })
+        b:SetScript("OnEnter", function()
+          pcall(bb.SetVertexColor, bb, 0.30, 0.25, 0.12, 1)
+          pcall(function()
+            GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
+            GameTooltip:AddLine(tostring(p.name), 1, 0.85, 0.3)
+            if p.desc then GameTooltip:AddLine(tostring(p.desc), 0.85, 0.85, 0.85, true) end
+            for ln in string.gmatch(tostring(p.text or ""), "([^\n]+)") do
+              if string.sub(ln, 1, 1) == "-" then GameTooltip:AddLine(ln, 0.65, 0.65, 0.65, true) end -- 技能行预览
+            end
+            GameTooltip:Show()
+          end)
         end)
-      end)
-      b:SetScript("OnLeave", function()
-        pcall(bb.SetVertexColor, bb, 0.12, 0.10, 0.06, 1)
-        pcall(GameTooltip.Hide, GameTooltip)
-      end)
-      b:SetScript("OnClick", function()
-        local ok, msg = ioImportText(p.text)
-        say(msg)
-        if ok then
-          pcall(EVAL_WAR_TAB_REFRESH)
-          EVAL_HELP_IO_REFRESH()
-          root:Hide()
-        end
-      end)
-      y = y - 20
+        b:SetScript("OnLeave", function()
+          pcall(bb.SetVertexColor, bb, 0.12, 0.10, 0.06, 1)
+          pcall(GameTooltip.Hide, GameTooltip)
+        end)
+        b:SetScript("OnClick", function()
+          local ok, msg = ioImportText(p.text)
+          say(msg)
+          if ok then
+            pcall(EVAL_WAR_TAB_REFRESH)
+            EVAL_HELP_IO_REFRESH()
+            root:Hide()
+          end
+        end)
+        yy = yy - 20
+      end
     end
   end
-
+  tplColumn(tplUI.leftCol, tplUI.margin)
+  tplColumn(tplUI.rightCol, tplUI.margin + tplUI.colW + tplUI.gap)
   local cb = CreateFrame("Button", nil, root)
   cb:SetWidth(64) cb:SetHeight(20)
   cb:SetPoint("BOTTOM", root, "BOTTOM", 0, 7)
@@ -5252,6 +5316,40 @@ function EVAL_HELP_TPL_BUILD()
   tplUI.root = root
 end
 
+-- ★1.71.3 断言入口：案例模版窗（两列布局 + 标题感叹号）——读**真实控件**的几何与文案，
+--   不在测试里写死布局常量（本项目「断言里写死常量 = 测自己」的老坑）。
+function EVAL_TEST_TPL_LAYOUT()
+  EVAL_HELP_TPL_BUILD()
+  if not tplUI.root then return nil end
+  local r = tplUI.root
+  local okw, w = pcall(r.GetWidth, r)
+  local okh, h = pcall(r.GetHeight, r)
+  return {
+    w = okw and w or nil, h = okh and h or nil,
+    colW = tplUI.colW, margin = tplUI.margin, gap = tplUI.gap,
+    leftRows = tplUI.leftRows, rightRows = tplUI.rightRows, maxRows = tplUI.maxRows,
+    rowCount = table.getn(tplUI.rowBtns or {}),
+    groups = table.getn(EVAL_IO_TEMPLATES or {}),
+  }
+end
+function EVAL_TEST_TPL_ROWS()
+  EVAL_HELP_TPL_BUILD()
+  local out = {}
+  for i, e in ipairs(tplUI.rowBtns or {}) do
+    local okx, x = pcall(e.btn.GetLeft, e.btn)
+    local oky, y = pcall(e.btn.GetTop, e.btn)
+    local okw, w2 = pcall(e.btn.GetWidth, e.btn)
+    out[i] = { name = e.name, cls = e.cls, x = okx and x or nil, y = oky and y or nil, w = okw and w2 or nil }
+  end
+  return out
+end
+function EVAL_TEST_TPL_TIP() EVAL_HELP_TPL_BUILD() return tplUI.tipBtn end
+function EVAL_TEST_TPL_TIP_TEXT()
+  EVAL_HELP_TPL_BUILD()
+  if not tplUI.tipText then return nil end
+  local ok, t = pcall(tplUI.tipText.GetText, tplUI.tipText)
+  return ok and t or nil
+end
 function EVAL_HELP_TPL_TOGGLE()
   if tplUI.root and tplUI.root:IsVisible() then tplUI.root:Hide() return end
   EVAL_HELP_TPL_BUILD()
