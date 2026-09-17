@@ -347,7 +347,12 @@ UnitCanAttack = function() return true end
 UnitCreatureType = function() return TEST.creatureType or "人型生物" end
 IsActionInRange = function(slot) return TEST.inRange and TEST.inRange[slot] end -- 1.37.0：true=内 / 0=外 / nil=不测
 UnitReaction = function() return 2 end
-HasAction = function(slot) return slot <= 3 end -- 1.37.0 放开到 3（断筋近战参照槽）
+HasAction = function(slot)
+  -- ★1.71.22：既保留 1.37.0 的「1~3 号格默认有东西」语义（断筋/参照槽的旧断言靠它），
+  --   又让 TEST.slots 里的真实放置**看得见**（宏链路要靠它判空位）。
+  if TEST.slots and TEST.slots[slot] then return true end
+  return slot <= 3
+end
 GetActionText = function() return nil end
 GetActionTexture = function(slot) return "tex" .. slot end
 GetActionCooldown = function() return 0, 0 end
@@ -412,6 +417,34 @@ GetBinding = function(i)
   if type(row) ~= "table" then return nil end
   return row[1], row[2], row[3]
 end
+-- ★1.71.22 派发桩：ActionButtonDown/Up 全局（**本客户端实测 type=function**，插件可替换）。
+--   ★桩必须**如实模拟真机行为**，否则新链路测不出来：
+--     ① 真机上客户端按下 ACTIONBUTTON<n> 的键 → 调这两个全局 → 我们要能**观测到**它被调用
+--     ② 我们**没接管**的格子必须原样走到原函数（桩要分别记「原函数被调」与「我们的接管被调」）
+--     ③ 真机按**物理键**触发（不认精确组合键）→ 修饰键守卫是**我们自己的代码**，桩只需提供 IsAltKeyDown 等
+--     ④ 真机没 ActionButtonDown 时整条路判死 → 用 TEST.noActionButtonGlobals 模拟（验「装不上要如实说」）
+TEST.abDownCalls = {}
+TEST.abUpCalls = {}
+TEST.abOrigDownCalls = {}
+TEST.abOrigUpCalls = {}
+TEST.noActionButtonGlobals = false
+TEST.altDown, TEST.ctrlDown, TEST.shiftDown = false, false, false
+IsAltKeyDown = function() return TEST.altDown and true or false end
+IsControlKeyDown = function() return TEST.ctrlDown and true or false end
+IsShiftKeyDown = function() return TEST.shiftDown and true or false end
+-- ★两个「原函数」桩：生产代码会把它们存起来再包一层，所以这里必须是**可辨识的独立函数**。
+local function stubOrigDown(index) table.insert(TEST.abOrigDownCalls, index) end
+local function stubOrigUp(index) table.insert(TEST.abOrigUpCalls, index) end
+TEST.stubOrigDown, TEST.stubOrigUp = stubOrigDown, stubOrigUp
+-- ★把桩挂到**真全局**上（生产代码替换的就是这两个名字）；EVAL_TB_TEST_RESET_TIMERS 里可复位。
+function EVAL_TB_TEST_RESET_ACTIONBUTTON_GLOBALS()
+  if TEST.noActionButtonGlobals then
+    ActionButtonDown, ActionButtonUp = nil, nil
+  else
+    ActionButtonDown, ActionButtonUp = stubOrigDown, stubOrigUp
+  end
+end
+EVAL_TB_TEST_RESET_ACTIONBUTTON_GLOBALS()
 -- ★★★合并冲突留下的**重复定义**（1.71.1 修）：v1.71.0 的方案分享补了这两行简版桩，
 --   而队友/团员扫描在文件上方另有一份**支持 TEST.team/TEST.raid 列表**的桩。
 --   Lua 里**后赋值者静默获胜** → 简版把我那份整个盖掉 → 队伍扫描只扫到自己，

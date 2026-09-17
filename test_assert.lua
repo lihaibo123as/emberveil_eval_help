@@ -6941,17 +6941,20 @@ do
 end
 
 -- 98) ★★★1.71.16 方案快捷键绑定（用户：「战斗UI->方案单元->右键绑定任务，绑定按键下拉:键盘,鼠标等」）
---   ★可行性由 /eh go bind 实测（SetBinding 接受自定义命令名）；派发走 CLICK 隐藏按钮；本组全程真控件。
+--   ★派发形态经四次试错定案（1.71.22）：命令名 = 客户端自带的 ACTIONBUTTON<n> + 接管 ActionButtonDown/Up。
+--   本组断言覆盖：命令名形态 / 格映射 / 存档 / 真机派发 / 非占用格透传 / 组合键守卫 / 清除交还 / 真实弹窗流程。
 do
   local savedP98, savedA98 = EVAL_HELP_CONFIG.war.profiles, EVAL_HELP_CONFIG.war.activeProfile
   EVAL_HELP_CONFIG.war.profiles = { { name = "甲", skills = {} }, { name = "乙", skills = {} } }
   EVAL_HELP_CONFIG.war.activeProfile = 1
-  eq(EVAL_BIND_CMD(3), "EVAL_GO_PROF_3", "①派发 = Bindings.xml 登记的命令名（裸名不派发 / CLICK 劫持鼠标，都已实测排除）")
-  -- ★1.71.20 反向哨兵：Bindings.xml 执行体调用的 EVAL_GO<i> 必须**真的存在**（登记的名字由 test_engine 的
-  --   BIND XML CHECK 守着两侧一致；这里守的是「执行体落地的那一头」——名字登记了、函数没有，照样无的放矢）
+  -- ★★1.71.22 派发形态定案（四次试错后的最终形态）：
+  --   Bindings.xml 在本客户端**不生效**（本机对照实验 + unrealUI 源码注释双重确认），
+  --   可行路线 = 命令名用**客户端自带的** ACTIONBUTTON<n> + 接管全局 ActionButtonDown/Up。
   local missCmd = ""
   for i = 1, 12 do if type(_G["EVAL_GO" .. i]) ~= "function" then missCmd = missCmd .. i .. " " end end
-  eq(missCmd, "", "①★★Bindings.xml 执行体要调的 EVAL_GO1~12 全都真实存在: " .. missCmd)
+  eq(missCmd, "", "①★★接管后要调的 EVAL_GO1~12 全都真实存在: " .. missCmd)
+  eq(EVAL_BIND_SLOT_CMD(3), "ACTIONBUTTON3", "①派发命令名 = 客户端**自己会派发**的 ACTIONBUTTON<n>")
+  eq(EVAL_BIND_SLOT_CMD(13), nil, "①★主条只有 12 格：超出如实回 nil（不编造命令名）")
   local rows98, items98, locked98 = EVAL_BIND_KEYLIST()
   eq(table.getn(rows98), table.getn(items98), "②清单行数对齐")
   local badKey98, nKey98, hasMouse98, hasF198, lockOK98 = "", 0, false, false, true
@@ -6969,20 +6972,92 @@ do
   eq(lockOK98, true, "②★分类标题行全 locked（不可点）、键名行全可点")
   eq(badKey98, "", "②★键名全是 SetBinding 认的写法: " .. badKey98)
   eq(hasMouse98 and hasF198 and nKey98 >= 40, true, "②键盘/鼠标都在（用户要「键盘,鼠标等」）: " .. nKey98 .. " 个键")
+  -- ③ 绑定：命令名 + 格映射 + 存档 + 接管
   TEST.bindings = nil
   TEST.saveBindingsCalls = 0
+  TEST.abDownCalls = {} TEST.abUpCalls = {}
+  TEST.abOrigDownCalls = {} TEST.abOrigUpCalls = {}
+  EVAL_BIND_UNINSTALL()
+  EVAL_TB_TEST_RESET_ACTIONBUTTON_GLOBALS()
   EVAL_HELP_CONFIG.war.bindKeys = nil
+  EVAL_HELP_CONFIG.war.bindSlots = nil
   eq(EVAL_BIND_DO(2, "F10"), true, "③绑定成功")
-  eq(TEST.bindings.F10, "EVAL_GO_PROF_2", "③★绑定表写的就是方案 2 的派发命令名")
+  eq(string.find(tostring(TEST.bindings.F10), "^ACTIONBUTTON%d+$") ~= nil, true,
+    "③★★绑定命令名 = ACTIONBUTTON<n>（客户端自己派发的家族，实测 12 条在命令表里）")
+  local slot98 = EVAL_HELP_CONFIG.war.bindSlots[2]
+  eq(type(slot98) == "number", true, "③★记下方案 2 占用的格号: " .. tostring(slot98))
+  eq(TEST.bindings.F10, EVAL_BIND_SLOT_CMD(slot98), "③★绑的就是那格的命令")
   eq(EVAL_HELP_CONFIG.war.bindKeys[2], "F10", "③配置记下当前键")
   eq(TEST.saveBindingsCalls >= 1, true, "③★绑定后真的 SaveBindings（不存就随重登消失）")
+  eq(EVAL_BIND_ORIG_UP ~= nil, true, "③★★绑定同时把 ActionButtonUp 接管装上（运行中立即生效）")
+  -- ③a ★★真机派发验证：模拟客户端按下那格的键 → 调 ActionButtonUp(格号) → **必须真的走 EVAL_GO**
+  --   ★观测点选「EVAL_GO 的追踪器」而不是「activeProfile」：profSel 是**执行指定方案**，
+  --     它**不激活**方案（Engine.lua:2722-2741 明写）——拿 activeProfile 当判据会测到一条不存在的性质。
+  --   ★EVAL_GO 有 0.3s 去抖窗（防 /run 队列冲刷），测试先清掉，否则验的是「去抖生效」不是「派发链路通」。
+  EVAL_GO_LAST = nil
+  EVAL_GO_TRACE = {}
+  local callsBefore98 = table.getn(TEST.abUpCalls)
+  ActionButtonUp(slot98)
+  eq(table.getn(EVAL_GO_TRACE) >= 1, true, "③a★★按下该格 → 真的调到了 EVAL_GO（「按键能触发」的直接证据）")
+  eq(table.getn(TEST.abUpCalls), callsBefore98, "③a★被我们接管的格子**不**透传给原函数")
+  -- ③a2 ★没被我们占的格子必须原样透传（绝不改变客户端行为）
+  --   ★桩分两本账：abUpCalls = 我们的接管被调；abOrigUpCalls = 原函数被调。
+  --     判「透传」必须看**原函数那本账**（只看自己那本会把「吞了」和「没调」混为一谈）。
+  local free98 = 12
+  for s = 1, 12 do if not EVAL_BIND_SLOT_MAP()[s] then free98 = s break end end
+  eq(free98 ~= slot98, true, "③a2 前置：挑到的确实是**另一个**格: " .. tostring(free98))
+  TEST.abOrigUpCalls = {}
+  ActionButtonUp(free98)
+  eq(table.getn(TEST.abOrigUpCalls) == 1 and TEST.abOrigUpCalls[1] == free98, true,
+    "③a2★★没被占的格子原样交给客户端（不吞别人的按键）")
+  -- ③a3 ★组合键守卫：按住修饰键且该组合另有归属时**不触发**（unrealUI 警告的代价，必须补回）
+  --   先给该格绑一个裸键，让守卫有键可查（真机上这格本来就有键，否则我们也不会占它）
+  TEST.bindings["F10"] = EVAL_BIND_SLOT_CMD(slot98)
+  TEST.altDown = true
+  TEST.bindings["ALT-F10"] = "TOGGLECHARACTER0" -- 模拟 Alt-F10 另有归属
+  TEST.abOrigUpCalls = {}
+  ActionButtonUp(slot98)
+  eq(table.getn(TEST.abOrigUpCalls), 1, "③a3★★组合键另有归属时不吞（让给客户端）")
+  TEST.altDown = false
+  TEST.bindings["ALT-F10"] = nil
+  -- ③a4 ★无修饰键时正常触发（守卫不误伤）
+  EVAL_GO_LAST = nil
+  EVAL_GO_TRACE = {}
+  TEST.abOrigUpCalls = {}
+  ActionButtonUp(slot98)
+  eq(table.getn(EVAL_GO_TRACE) >= 1 and table.getn(TEST.abOrigUpCalls) == 0, true,
+    "③a4★★无修饰键冲突时正常触发（守卫不误伤正常按键）")
   EVAL_BIND_DO(2, "F11")
   eq(GetBindingAction("F10"), "", "③★★换键时旧键 F10 被解绑（不留一键两命令的烂摊子）")
-  eq(TEST.bindings.F11, "EVAL_GO_PROF_2", "③新键 F11 就位")
+  eq(TEST.bindings.F11, EVAL_BIND_SLOT_CMD(slot98), "③新键 F11 就位")
+  eq(EVAL_HELP_CONFIG.war.bindSlots[2], slot98, "③★★换键**不换格**（格是方案的身份，换格会串）")
   EVAL_BIND_CLEAR(2)
   eq(GetBindingAction("F11"), "", "③★清除真的解绑")
   eq(EVAL_HELP_CONFIG.war.bindKeys[2], nil, "③配置清掉")
+  eq(EVAL_HELP_CONFIG.war.bindSlots[2], nil, "③★格映射也清掉（不留孤儿）")
+  TEST.abOrigUpCalls = {}
+  ActionButtonUp(slot98)
+  eq(table.getn(TEST.abOrigUpCalls), 1, "③★清除后该格**交还**客户端（不再被我们吞）")
   eq(EVAL_BIND_DO(2, ""), false, "③空键如实拒")
+  -- ③b ★不许抢用户已有的键位（用户追问「动作条前面都有具体站位了」逼出来的规则）
+  TEST.bindings = { T = "ACTIONBUTTON4" } -- 模拟真机：4 号格的键位已被用户占用
+  EVAL_HELP_CONFIG.war.bindSlots = nil EVAL_HELP_CONFIG.war.bindKeys = nil
+  local picked98 = EVAL_BIND_FREE_SLOT(false)
+  eq(picked98 ~= nil, true, "③b★仍能挑到无主格子: " .. tostring(picked98))
+  eq(GetBindingAction("T"), "ACTIONBUTTON4", "③b★用户的 T 键原样不动")
+  TEST.bindings = nil
+  -- ③c ★★客户端若没有 ActionButtonDown/Up 全局 → 装不上要**如实失败**，不许假装成功
+  EVAL_BIND_UNINSTALL() -- ★先卸干净：EVAL_BIND_INSTALL 是幂等的（装过就直接 true），不卸会拿到假绿
+  TEST.noActionButtonGlobals = true
+  EVAL_TB_TEST_RESET_ACTIONBUTTON_GLOBALS()
+  eq(type(ActionButtonUp), "nil", "③c 前置：全局确实被清掉了")
+  eq(EVAL_BIND_INSTALL(), false, "③c★★没有 ActionButtonDown/Up 时接管如实失败（不是静默假成功）")
+  TEST.noActionButtonGlobals = false
+  EVAL_TB_TEST_RESET_ACTIONBUTTON_GLOBALS()
+  eq(EVAL_BIND_INSTALL(), true, "③c★全局在时接管成功")
+  EVAL_BIND_UNINSTALL()
+  eq(EVAL_BIND_ORIG_UP == nil, true, "③c★卸下接管后状态清干净（可重装）")
+  EVAL_TB_TEST_RESET_ACTIONBUTTON_GLOBALS()
   -- ④ 弹窗真实流程：右键方案 → 弹窗 → 下拉回调选键 → 点[绑定]
   local wasShown98 = EVAL_TEST_UI_SHOWN()
   if not wasShown98 then EVAL_HELP_UI_TOGGLE() end
@@ -7000,7 +7075,7 @@ do
   eq(EVAL_TEST_BIND_UI().selKey, "F9", "④下拉回调选键进状态")
   eq(string.find(tostring(EVAL_TEST_BIND_UI().info), "%S") ~= nil, true, "④提示行有内容（空闲=绿）")
   EVAL_TEST_BIND_DO_BTN():GetScript("OnClick")()
-  eq(TEST.bindings.F9, "EVAL_GO_PROF_1", "④★★点[绑定] → 绑定表写入方案 1 的派发")
+  eq(string.find(tostring(TEST.bindings.F9), "^ACTIONBUTTON%d+$") ~= nil, true, "④★★点[绑定] → 写入 ACTIONBUTTON 派发命令")
   eq(EVAL_HELP_CONFIG.war.bindKeys[1], "F9", "④配置记下 F9")
   EVAL_TEST_BIND_CLOSE()
   -- ⑤ 左键不被右键吃掉：仍是切换方案
@@ -7011,10 +7086,11 @@ do
   EVAL_HELP_CONFIG.war.profiles = savedP98
   EVAL_HELP_CONFIG.war.activeProfile = savedA98
   EVAL_HELP_CONFIG.war.bindKeys = nil
+  EVAL_HELP_CONFIG.war.bindSlots = nil
   TEST.bindings = nil
   EVAL_HELP_UI_BUILD()
   if not wasShown98 and EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end
-  print("  方案绑定：右键开弹窗 → 下拉选键 → [绑定] = CLICK 派发 + SaveBindings；换键解旧键；左键仍切换")
+  print("  方案绑定：右键开弹窗 → 下拉选键 → [绑定] = ACTIONBUTTON 命令 + 接管 ActionButtonUp 派发；换键不换格；清除交还格子；左键仍切换")
 end
 
 -- 99) ★★★1.71.19 用户：「方案文字 添加 tooltip 提示：右键取消所有自定绑定，左键点方案激活，右键绑定按键，美化说明」
@@ -7032,9 +7108,12 @@ do
   TEST.bindings = nil
   TEST.saveBindingsCalls = 0
   EVAL_HELP_CONFIG.war.bindKeys = nil
-  EVAL_BIND_DO(1, "F9")
-  EVAL_BIND_DO(2, "F10")
+  EVAL_HELP_CONFIG.war.bindSlots = nil
+  eq(EVAL_BIND_DO(1, "F9"), true, "①前置：方案 1 绑定成功")
+  eq(EVAL_BIND_DO(2, "F10"), true, "①前置：方案 2 绑定成功")
   eq(GetBindingAction("F9") ~= "" and GetBindingAction("F10") ~= "", true, "①前置：两个自定义绑定就位")
+  eq(EVAL_HELP_CONFIG.war.bindSlots[1] ~= EVAL_HELP_CONFIG.war.bindSlots[2], true,
+    "①★★两个方案各占一个**不同**的格（同一格会互相覆盖）")
   lb99:GetScript("OnClick")("LeftButton")
   eq(GetBindingAction("F9") ~= "", true, "②★左键点「方案」不动绑定（左键是方案按钮的事）")
   lb99:GetScript("OnClick")("RightButton")
@@ -7055,9 +7134,11 @@ do
      and string.find(tipAll99, EVAL_L("BIND_L_TIP_2"), 1, true) ~= nil
      and string.find(tipAll99, EVAL_L("BIND_L_TIP_3"), 1, true) ~= nil, true,
     "⑤★★三行说明都在（左键激活 / 右键绑定 / 右键标签全清）")
+  eq(EVAL_HELP_CONFIG.war.bindSlots, nil, "⑥★★右键全清同时清掉格映射（不留孤儿）")
   EVAL_HELP_CONFIG.war.profiles = savedP99
   EVAL_HELP_CONFIG.war.activeProfile = savedA99
   EVAL_HELP_CONFIG.war.bindKeys = nil
+  EVAL_HELP_CONFIG.war.bindSlots = nil
   TEST.bindings = nil
   EVAL_HELP_UI_BUILD()
   if not wasShown99 and EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end
@@ -7078,8 +7159,9 @@ do
   eq(lb100 ~= nil, true, "前置：「方案」标签在")
   TEST.bindings = nil
   EVAL_HELP_CONFIG.war.bindKeys = nil
-  EVAL_BIND_DO(1, "E")
-  EVAL_BIND_DO(2, "F9")
+  EVAL_HELP_CONFIG.war.bindSlots = nil
+  eq(EVAL_BIND_DO(1, "E"), true, "前置：方案 1 绑 E")
+  eq(EVAL_BIND_DO(2, "F9"), true, "前置：方案 2 绑 F9")
   TEST.chat = nil
   lb100:GetScript("OnClick")("LeftButton")
   eq(type(TEST.chat) == "string" and string.find(TEST.chat, "甲 = E", 1, true) ~= nil, true,
@@ -7098,31 +7180,36 @@ do
   eq(string.find(tipAll100, EVAL_L("BIND_L_TIP_4"), 1, true) ~= nil, true, "④★tooltip 第 4 行 = 左键打印绑定情况")
   EVAL_HELP_CONFIG.war.profiles = savedP100
   EVAL_HELP_CONFIG.war.bindKeys = nil
+  EVAL_HELP_CONFIG.war.bindSlots = nil
   TEST.bindings = nil
   EVAL_HELP_UI_BUILD()
   if not wasShown100 and EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end
   print("  左键「方案」= 打印绑定情况（有则逐行 方案=键 / 无则如实说没有 / 不动绑定）")
 end
 
--- 101) ★1.71.21 Bindings.xml 生效自检（用户问：「文件是插件帮忙完成的吗?用户零操作配置文件吗?重启就可以?」
---   → 都是：文件插件自带（零配置）/ 绑定走弹窗（零手动）/ 用户只重启一次。自检数命令表里的 EVAL_GO_PROF_*）。
+-- 101) ★1.71.22 派发前提自检：命令表里必须有 **客户端自带的 ACTIONBUTTON1~12**
+--   （这是整条派发链路的唯一外部前提 —— 它们不在表里，接管 ActionButtonUp 也永远等不到调用）。
+--   ★1.71.21 曾经数的是 EVAL_GO_PROF_*（Bindings.xml 路线），那条路已被对照实验判死 → 判据整体改写。
 do
-  eq(EVAL_BIND_XML_STATUS(), 0, "①没有命令表（桩默认 nil）→ 0 = 还没重启")
+  eq(EVAL_BIND_XML_STATUS(), 0, "①没有命令表（桩默认 nil）→ 0 = 前提不成立")
   TEST.bindingCmds = {
-    { "HEADER_MOVEMENT" },
+    { "HEADER_ACTIONBAR" },
+    { "ACTIONBUTTON1", "1", nil },
     { "MoveForward", "W", "UP" },
-    { "EVAL_GO_PROF_1", "E", nil },
-    { "JUMP", "SPACE", nil },
-    { "EVAL_GO_PROF_7", "F9", nil },
+    { "ACTIONBUTTON2", nil, nil },
+    { "EVAL_GO_PROF_1", "E", nil }, -- ★反例：旧路线的命令名**不该**被算进前提
+    { "ACTIONBUTTON12", nil, nil },
   }
-  eq(EVAL_BIND_XML_STATUS(), 2, "②★只数 EVAL_GO_PROF_*（内建命令与 HEADER 行都不算）: " .. EVAL_BIND_XML_STATUS())
+  eq(EVAL_BIND_XML_STATUS(), 3, "②★只数 ACTIONBUTTON1~12（旧命令名/内建命令/HEADER 行都不算）: " .. EVAL_BIND_XML_STATUS())
   local full101 = {}
-  for i = 1, 12 do full101[i] = { "EVAL_GO_PROF_" .. i, nil, nil } end
+  for i = 1, 12 do full101[i] = { "ACTIONBUTTON" .. i, nil, nil } end
   TEST.bindingCmds = full101
-  eq(EVAL_BIND_XML_STATUS(), 12, "③★12 个全在 = 已生效（重启后绑定可触发）")
-  TEST.bindingCmds = { { "EVAL_GO_PROF_1X", nil, nil } }
-  eq(EVAL_BIND_XML_STATUS(), 0, "④前缀必须精确——EVAL_GO_PROF_1X 不算（防「数到不相干的名字」）")
+  eq(EVAL_BIND_XML_STATUS(), 12, "③★12 个全在 = 派发前提成立")
+  TEST.bindingCmds = { { "ACTIONBUTTON1X", nil, nil } }
+  eq(EVAL_BIND_XML_STATUS(), 0, "④后缀必须精确——ACTIONBUTTON1X 不算（防「数到不相干的名字」）")
+  TEST.bindingCmds = { { "SELFACTIONBUTTON1", nil, nil } }
+  eq(EVAL_BIND_XML_STATUS(), 0, "④★必须以 ACTIONBUTTON 开头——SELFACTIONBUTTON 之类不算")
   TEST.bindingCmds = nil
-  print("  Bindings.xml 生效自检：0=未重启 / 12=已生效 / 前缀精确计数")
+  print("  派发前提自检：客户端自带 ACTIONBUTTON1~12 是否在命令表里（0=前提不成立）")
 end
 print("ALL TESTS PASS")

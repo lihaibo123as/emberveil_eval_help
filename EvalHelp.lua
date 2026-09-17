@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.71.21"
+local VERSION = "1.71.22"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -2527,23 +2527,16 @@ function EVAL_TEST_MB_ANCHOR_CURRENT()
 end
 
 -- ============ 方案快捷键绑定（1.71.16，用户：「方案 右键能否弹窗设置 绑定快捷键」→ 先验证后实装） ============
--- ★派发定案（1.71.20，两轮用户实测）：
+-- ★★派发方案演进（四次试错，用户实测逐条淘汰；**最终定案见下方「方案快捷键派发」大段注释**）：
 --   ① CLICK 隐藏按钮派发（vanilla 经典招）——客户端把「CLICK <按钮>:LeftButton」解析岔了，
---     **触发被挂到鼠标左右键**、原始转屏被顶掉（但插件确实被触发 = 链路是通的，命令串形态错）；
---   ② 裸命令名 `EVAL_GO<i>` —— **绑定表接受但不派发**（用户实测：绑定成功、按键不触发）——
---     本客户端只派发「启动时命令表里有名字」的命令（MoveForward/JUMP 那种）；
---   ③ 定案 = **Bindings.xml 登记**：`EVAL_GO_PROF_1~12` 启动时进客户端命令表（vanilla 正规做法，
---     客户端启动时自动加载，**不列 .toc**），之后 SetBinding(key, "EVAL_GO_PROF_<i>") 走客户端自己的派发。
+--     **触发被挂到鼠标左右键**、原始转屏被顶掉（插件确实被触发 = 链路通、命令串形态错）→ 弃用；
+--   ② 裸命令名 `EVAL_GO<i>` —— **绑定表接受但不派发**（用户实测：绑定成功、按键不触发）；
+--   ③ Bindings.xml 登记 —— **本客户端根本不读插件的 Bindings.xml**（对照实验 + unrealUI 源码双重确认）→ 弃用；
+--   ④ ★最终 = 命令名用**客户端自带的** ACTIONBUTTON<n> + 插件接管 ActionButtonDown/Up 翻译成 EVAL_GO(方案)。
 -- ★持久化：绑定后 SaveBindings(GetCurrentBindingSet())——不存就随重登消失（实测当前 set = 1）。
 
--- 派发命令名（纯函数，测试直测）：必须与 Bindings.xml 逐个一致（BIND XML CHECK 守着两侧）
-function EVAL_BIND_CMD(i)
-  return "EVAL_GO_PROF_" .. tostring(i)
-end
-
--- ★1.71.21 生效自检（用户定边界后定案）：Bindings.xml 是**插件自带**的（用户零配置文件），
---   但命令表只在**客户端启动**时重建 → 登录时数一数命令表里有没有 EVAL_GO_PROF_*：
---   返回 12 = 已生效（绑定可触发）；0 = 还没重启（绑定弹窗照常用，按键要等一次重启）；-1 = 客户端连 GetBinding 都没有。
+-- 派发自检（纯函数语义）：客户端命令表里有没有 ACTIONBUTTON1~12 —— 这是本方案的**唯一外部前提**。
+--   返回 12 = 前提成立（按键会被派发，插件接管后即可触发）；0 = 表里一条都没有（异常，如实报）；-1 = API 缺失。
 function EVAL_BIND_XML_STATUS()
   if type(GetNumBindings) ~= "function" or type(GetBinding) ~= "function" then return -1 end
   local okN, n = pcall(GetNumBindings)
@@ -2551,7 +2544,7 @@ function EVAL_BIND_XML_STATUS()
   local cnt = 0
   for i = 1, math.min(n, 600) do
     local okG, cmd = pcall(GetBinding, i)
-    if okG and type(cmd) == "string" and string.find(cmd, "^EVAL_GO_PROF_%d+$") then cnt = cnt + 1 end -- 精确匹配：EVAL_GO_PROF_1X 之类不算
+    if okG and type(cmd) == "string" and string.find(cmd, "^ACTIONBUTTON%d+$") then cnt = cnt + 1 end
   end
   return cnt
 end
@@ -2588,11 +2581,23 @@ function EVAL_BIND_DD_PICK(rows, pi)
 end
 
 -- 逻辑层（UI 与测试共用一份实现）：绑定 / 清除。★换键时把旧键解绑；绑定后立刻 SaveBindings 持久化。
+--   ★1.71.22 最终形态：命令名 = 客户端**自己认**的 ACTIONBUTTON<n>（实测 12 条在命令表里），
+--     派发由本文件下方的 EVAL_BIND_INSTALL() 接管 ActionButtonUp 完成（不占宏名额、不占动作格）。
 function EVAL_BIND_DO(pidx, key)
   if type(key) ~= "string" or key == "" then return false, "nokey" end
   local w2 = warCfg()
   if not (w2.profiles and w2.profiles[pidx]) then return false, "noprof" end
-  local ok, r = pcall(SetBinding, key, EVAL_BIND_CMD(pidx))
+  -- 已有格就直接复用；没有才挑一个**完全无主**的格（不抢用户已有的键位）
+  w2.bindSlots = w2.bindSlots or {}
+  local slot = w2.bindSlots[pidx]
+  if type(slot) ~= "number" then
+    slot = EVAL_BIND_FREE_SLOT()
+    if not slot then return false, "noslot" end
+    w2.bindSlots[pidx] = slot
+  end
+  local cmd = EVAL_BIND_SLOT_CMD(slot)
+  if not cmd then return false, "noslotcmd" end
+  local ok, r = pcall(SetBinding, key, cmd)
   if not (ok and r) then return false, "reject" end
   w2.bindKeys = w2.bindKeys or {}
   local old = w2.bindKeys[pidx]
@@ -2601,7 +2606,9 @@ function EVAL_BIND_DO(pidx, key)
   if type(SaveBindings) == "function" then
     pcall(SaveBindings, (type(GetCurrentBindingSet) == "function" and GetCurrentBindingSet()) or 1)
   end
-  return true, key
+  -- 保证接管已装上（运行中立即生效；装过就是幂等的 no-op）
+  EVAL_BIND_INSTALL()
+  return true, key, slot
 end
 
 -- ★1.71.20 左键点「方案」标签：把当前绑定情况打到聊天框（用户：「左键点击<标题方案>.日志打印方案绑定情况.」）。
@@ -2633,6 +2640,8 @@ function EVAL_BIND_CLEAR_ALL()
     end
     w2.bindKeys = nil
   end
+  -- 格映射一并清掉（我们只是借用了这个命令行，没动过格子里的东西，无需还原动作格）
+  w2.bindSlots = nil
   if type(SaveBindings) == "function" then
     pcall(SaveBindings, (type(GetCurrentBindingSet) == "function" and GetCurrentBindingSet()) or 1)
   end
@@ -2644,10 +2653,160 @@ function EVAL_BIND_CLEAR(pidx)
   local old = w2.bindKeys and w2.bindKeys[pidx]
   if type(old) == "string" and old ~= "" then pcall(SetBinding, old) end
   if w2.bindKeys then w2.bindKeys[pidx] = nil end
+  if w2.bindSlots then w2.bindSlots[pidx] = nil end
   if type(SaveBindings) == "function" then
     pcall(SaveBindings, (type(GetCurrentBindingSet) == "function" and GetCurrentBindingSet()) or 1)
   end
   return true
+end
+
+-- ============================================================================
+-- ★1.71.22 方案快捷键派发：接管 ActionButtonUp / ActionButtonDown（实测可行路线）
+--
+--   ★为什么不是 Bindings.xml（两条独立证据一致判死）：
+--     ① 本机对照实验（2026-09-18）：把 ArchiTotem **启用**后**完整重启**客户端，
+--        它的 CAST_EARTH_TOTEM 依然不在命令表里（连一条 CAST_* 都没有），表恒为 226 行。
+--     ② 同机同客户端的 unrealUI 插件在源码注释里写明它自己踩过同一个坑（2026-08-19 实测）：
+--        「Bindings.xml declarations -- unrealUI's 60 commands were absent from a
+--          225-entry binding table」→ 它最后也放弃这条路（「nothing here depends on that」）。
+--     ③ 结论：SetBinding 会**照单全收**任何字符串（Keybinds.ini 里真能看到那行），
+--        但客户端的命令表只含它自带的条目 → 按键时查不到执行体 → **静默无反应**。
+--
+--   ★可行路线（实测 type 已核）：客户端把 ACTIONBUTTON<n> 的按键派发到**全局函数**
+--     ActionButtonDown(index) / ActionButtonUp(index) —— 插件**可以替换这两个全局**。
+--       /eh go diag 实测：ActionButtonDown=function ActionButtonUp=function
+--                        MultiActionButtonDown=function MultiActionButtonUp=function
+--                        SetOverrideBindingClick=nil ClearOverrideBindings=nil  （后者确认堵死）
+--
+--   链路：SetBinding(键, "ACTIONBUTTON<格>")  ← 客户端**自己会派发**（12 条命令实测在表里）
+--         + 接管 ActionButtonUp，把「格号 → 方案号」的映射翻译成 EVAL_GO(方案号)。
+--   ★零成本：不占宏名额、不占动作格、不改用户的任何现有按键、游戏运行中立即生效。
+--
+--   ★代价（unrealUI 源码明确警告，必须自己补回）：
+--     本客户端是按**物理键**触发 ActionButtonDown/Up 的，不是按精确组合键 ——
+--     替换掉原函数就丢掉了客户端原有的「组合键保护」，
+--     于是「绑到 ACTIONBUTTONn 的裸键」在按住 Alt/Ctrl/Shift 时也会触发。
+--     这里按 unrealUI 的做法重建守卫：按住修饰键时若该组合键另有归属，就不当作动作条按键。
+-- ============================================================================
+
+-- 动作格命令名（纯函数，测试直测）：客户端**自己认**的只有 ACTIONBUTTON1..12（主条 12 格）。
+function EVAL_BIND_SLOT_CMD(slot)
+  if slot and slot >= 1 and slot <= 12 then return "ACTIONBUTTON" .. tostring(slot) end
+  return nil
+end
+
+-- 原始全局（接管前保存；OnDisable/清理时还回去，绝不把客户端留在被改状态）
+EVAL_BIND_ORIG_DOWN = nil
+EVAL_BIND_ORIG_UP = nil
+
+-- 格号 → 方案号 映射（从配置重建，纯读；返回 table）。★单一真源 = cfg.bindKeys/bindSlots
+function EVAL_BIND_SLOT_MAP()
+  local w2 = warCfg()
+  local map = {}
+  local slots = w2.bindSlots
+  if type(slots) == "table" then
+    for pidx, slot in pairs(slots) do
+      if type(slot) == "number" then map[slot] = pidx end
+    end
+  end
+  return map
+end
+
+-- 组合键守卫：按住修饰键时，若「修饰键+该键」另有归属 → 这次按键不该算作动作条按键。
+--   ★判据严格照抄 unrealUI：拿该格命令的主键，拼出修饰前缀，查 GetBindingAction；
+--     不等于本格命令 = 被别的功能占了 → 不触发（把这一下让给客户端）。
+function EVAL_BIND_MODIFIER_STOLEN(index)
+  local prefix = ""
+  if type(IsAltKeyDown) == "function" and IsAltKeyDown() then prefix = prefix .. "ALT-" end
+  if type(IsControlKeyDown) == "function" and IsControlKeyDown() then prefix = prefix .. "CTRL-" end
+  if type(IsShiftKeyDown) == "function" and IsShiftKeyDown() then prefix = prefix .. "SHIFT-" end
+  if prefix == "" then return false end -- 没按修饰键 = 不可能被偷
+  local cmd = EVAL_BIND_SLOT_CMD(index)
+  if not cmd or type(GetBindingKey) ~= "function" then return false end
+  local okk, k1, k2 = pcall(GetBindingKey, cmd)
+  if not okk then return false end
+  for _, k in ipairs({ k1, k2 }) do
+    if type(k) == "string" and k ~= "" and not string.find(k, "-", 1, true) then
+      -- 裸键 → 拼出组合形态，看它是不是被别的命令占着
+      local chord = prefix .. k
+      local oka, act = pcall(GetBindingAction, chord)
+      if oka and type(act) == "string" and act ~= "" and act ~= cmd then return true end
+    end
+  end
+  return false
+end
+
+-- 文本输入中不该触发动作（聊天框开着时按键是文字）——照抄 unrealUI 的守卫
+function EVAL_BIND_TEXT_BLOCKS()
+  if type(ChatFrame1) == "table" and type(ChatFrame1.IsShown) == "function" then
+    local ok, shown = pcall(ChatFrame1.IsShown, ChatFrame1)
+    if ok and shown then
+      local e = ChatFrame1.editBox
+      if type(e) == "table" and type(e.IsShown) == "function" then
+        local ok2, s2 = pcall(e.IsShown, e)
+        if ok2 and s2 then return true end
+      end
+    end
+  end
+  return false
+end
+
+-- ★接管：把「动作格被按下」翻译成「执行对应方案」。返回 true = 接管成功（可断言）。
+function EVAL_BIND_INSTALL()
+  if EVAL_BIND_ORIG_UP then return true end -- 幂等：装过就不再包一层
+  if type(ActionButtonUp) ~= "function" or type(ActionButtonDown) ~= "function" then return false end
+  EVAL_BIND_ORIG_DOWN = ActionButtonDown
+  EVAL_BIND_ORIG_UP = ActionButtonUp
+  local origDown, origUp = EVAL_BIND_ORIG_DOWN, EVAL_BIND_ORIG_UP
+  ActionButtonDown = function(index)
+    -- 只有我们占的格子才吞；其余原样交给客户端（绝不改变别人的行为）
+    local pidx = EVAL_BIND_SLOT_MAP()[index]
+    if pidx and not EVAL_BIND_TEXT_BLOCKS() and not EVAL_BIND_MODIFIER_STOLEN(index) then return end
+    return origDown(index)
+  end
+  ActionButtonUp = function(index)
+    local map = EVAL_BIND_SLOT_MAP()
+    local pidx = map[index]
+    if pidx and not EVAL_BIND_TEXT_BLOCKS() and not EVAL_BIND_MODIFIER_STOLEN(index) then
+      if type(EVAL_GO) == "function" then pcall(EVAL_GO, pidx) end
+      return
+    end
+    return origUp(index)
+  end
+  return true
+end
+
+-- 卸下接管（还原全局）——重置配置/禁用时用，保证不把客户端留在被改状态
+function EVAL_BIND_UNINSTALL()
+  if EVAL_BIND_ORIG_DOWN then ActionButtonDown = EVAL_BIND_ORIG_DOWN end
+  if EVAL_BIND_ORIG_UP then ActionButtonUp = EVAL_BIND_ORIG_UP end
+  EVAL_BIND_ORIG_DOWN, EVAL_BIND_ORIG_UP = nil, nil
+  return true
+end
+
+-- 找一个空闲的动作格命令：优先「该格没放东西 且 该命令没绑键」的（完全无主，不抢用户键位）。
+--   ★用户 1.71.22 追问「动作条前面都有具体站位了」→ 所以两轮挑；返回 slot 或 nil。
+function EVAL_BIND_FREE_SLOT(allowTaken)
+  local fallback = nil
+  for s = 1, 12 do
+    if not EVAL_BIND_SLOT_MAP()[s] then -- 没被我们占用
+      local cmd = EVAL_BIND_SLOT_CMD(s)
+      local occupied = false
+      if type(HasAction) == "function" then
+        local okh, has = pcall(HasAction, s)
+        occupied = (okh and has) and true or false
+      end
+      local taken = false
+      if cmd and type(GetBindingKey) == "function" then
+        local okk, ks = pcall(GetBindingKey, cmd)
+        taken = (okk and type(ks) == "string" and ks ~= "")
+      end
+      if not occupied and not taken then return s end      -- ① 完全无主：格子空 + 键没人用
+      if not occupied and fallback == nil then fallback = s end -- ② 备选：格子空但键被占
+    end
+  end
+  if allowTaken then return fallback end
+  return fallback
 end
 
 -- ===== 绑定弹窗（美化版：金边深底 + 标题栏拖动 + 分类下拉 + 冲突/空闲提示） =====
@@ -6531,6 +6690,179 @@ if type(SlashCmdList) == "table" then
           say("探针结束：已解绑还原（未 SaveBindings），改动随重登消失")
         end)
       end
+    elseif msg == "go diag" then
+      -- ★1.71.22 一键取证：把「绑定链路的每一环」的现场证据**写进 SavedVariables**（聊天框刷得快、/reload 就没了）。
+      --   读数分五环：① 命令表里有没有我们的命令（= Bindings.xml 是否被客户端加载）
+      --             ② 动作条命令（= 客户端自己会派发的按键家族）
+      --             ③ 宏 API + 名额
+      --             ④ 动作条空格子
+      --             ⑤ 当前 E 键绑在谁身上
+      --   ★全部只读；跑完请 /reload（把结果落盘），然后我直接读文件。
+      local out = {}
+      local function add(s) out[table.getn(out) + 1] = s end
+      -- ① 命令表
+      local okN, nB = pcall(GetNumBindings)
+      local our, witEarth, witName = 0, 0, nil
+      if okN and type(nB) == "number" then
+        for i = 1, math.min(nB, 600) do
+          local okG, cmd = pcall(GetBinding, i)
+          if okG and type(cmd) == "string" then
+            if string.find(cmd, "^EVAL_GO_PROF_%d+$") then our = our + 1 end
+            if cmd == "CAST_EARTH_TOTEM" then witEarth = i end
+            if witName == nil and string.find(cmd, "^CAST_") then witName = cmd end
+          end
+        end
+      end
+      add("1 命令表行数=" .. tostring(okN and nB or "ERR") .. " | 我们的 EVAL_GO_PROF_*=" .. our
+        .. " | ArchiTotem 目击=" .. (witEarth > 0 and ("有(第" .. witEarth .. "行)") or "无") .. " 首个CAST_=" .. tostring(witName))
+      -- ② 动作条命令家族
+      local ab, abN = {}, 0
+      if okN and type(nB) == "number" then
+        for i = 1, math.min(nB, 600) do
+          local okG, cmd = pcall(GetBinding, i)
+          if okG and type(cmd) == "string" then
+            if string.find(cmd, "^ACTIONBUTTON%d+$") then abN = abN + 1 if abN <= 3 then ab[abN] = cmd end end
+          end
+        end
+      end
+      local abTxt = ""
+      for _, c in ipairs(ab) do abTxt = abTxt .. c .. " " end
+      add("2 ACTIONBUTTON 家族=" .. abN .. " 条（如 " .. (abTxt ~= "" and abTxt or "-") .. "）")
+      -- ③ 宏
+      add("3 宏 API：Create=" .. tostring(type(CreateMacro) == "function") .. " Pickup=" .. tostring(type(PickupMacro) == "function")
+        .. " Place=" .. tostring(type(PlaceAction) == "function") .. " Delete=" .. tostring(type(DeleteMacro) == "function")
+        .. " EditMacro=" .. tostring(type(EditMacro) == "function"))
+      if type(GetNumMacros) == "function" then
+        local okm, g, c = pcall(GetNumMacros)
+        add("   宏名额：通用=" .. tostring(okm and g or "?") .. " 本角色=" .. tostring(okm and c or "?"))
+      end
+      -- ④ 动作条空格子
+      if type(HasAction) == "function" then
+        local free, occ = {}, 0
+        for s = 1, 120 do
+          local okh, has = pcall(HasAction, s)
+          if okh and has then occ = occ + 1
+          elseif okh and not has and table.getn(free) < 8 then free[table.getn(free) + 1] = s end
+        end
+        local ft = ""
+        for _, s in ipairs(free) do ft = ft .. s .. " " end
+        add("4 已占=" .. occ .. "/120 空位=" .. (ft ~= "" and ft or "无"))
+      else
+        add("4 HasAction 不可用")
+      end
+      -- ⑤ 键位现状
+      local function gba(k)
+        local ok, v = pcall(GetBindingAction, k)
+        return (ok and type(v) == "string") and v or "ERR"
+      end
+      add("5 E 键 → " .. gba("E") .. " | F1 → " .. gba("F1") .. " | BUTTON1 → " .. gba("BUTTON1"))
+      -- ⑥ ★1.71.22 命令表实样：把前 8 行**原样**打出来 + 末尾 8 行（看表里到底长什么样、EVAL_ 命令在不在别处）
+      if okN and type(nB) == "number" then
+        local head, tail = {}, {}
+        for i = 1, math.min(nB, 600) do
+          local okG, cmd, cat, k1, k2 = pcall(GetBinding, i)
+          if okG then
+            local line = i .. ":" .. tostring(cmd) .. "|" .. tostring(cat) .. "|" .. tostring(k1) .. "|" .. tostring(k2)
+            if i <= 8 then head[table.getn(head) + 1] = line end
+            if i > nB - 8 then tail[table.getn(tail) + 1] = line end
+          end
+        end
+        add("6 表头 " .. table.concat(head, " ; "))
+        add("6 表尾 " .. table.concat(tail, " ; "))
+        -- 把整张表按行存下来（分 10 段，避免单行过长），我读文件时能逐个核对
+        local seg, segN = {}, 0
+        for i = 1, math.min(nB, 600) do
+          local okG, cmd, cat, k1 = pcall(GetBinding, i)
+          if okG then
+            seg[table.getn(seg) + 1] = i .. "=" .. tostring(cmd) .. "@" .. tostring(k1)
+            if table.getn(seg) >= 60 then
+              segN = segN + 1
+              add("7." .. segN .. " " .. table.concat(seg, ","))
+              seg = {}
+            end
+          end
+        end
+        if table.getn(seg) > 0 then
+          segN = segN + 1
+          add("7." .. segN .. " " .. table.concat(seg, ","))
+        end
+      end
+      -- ⑥b ★★1.71.22 unrealUI 实证路线核对：它的注释写明「vanilla 绑定命令走全局
+      --   ActionButtonDown/Up」——若这两个全局在本客户端存在，就能用它们**接管**任意 ACTIONBUTTON<n> 的派发
+      --   （比「宏 + 动作条」更直接：不用占宏名额、不用占动作格）。
+      add("6b ActionButtonDown=" .. type(ActionButtonDown) .. " ActionButtonUp=" .. type(ActionButtonUp)
+        .. " MultiActionButtonDown=" .. type(MultiActionButtonDown) .. " MultiActionButtonUp=" .. type(MultiActionButtonUp)
+        .. " GetBuildInfo=" .. tostring(select(2, GetBuildInfo())))
+      add("6b UseAction=" .. type(UseAction) .. " SetOverrideBindingClick=" .. type(SetOverrideBindingClick)
+        .. " ClearOverrideBindings=" .. type(ClearOverrideBindings))
+      -- ⑦ 绑定集合（GetCurrentBindingSet 与 GetBindingAction 是否看同一张表）
+      add("8 当前绑定集=" .. tostring(type(GetCurrentBindingSet) == "function" and GetCurrentBindingSet() or "?"))
+      -- 落盘（SavedVariables 只在 /reload/退出时写，这里先塞进配置表）
+      EVAL_HELP_CONFIG = EVAL_HELP_CONFIG or {}
+      EVAL_HELP_CONFIG.bindDiag = out
+      for _, s in ipairs(out) do say("DIAG " .. s) end
+      say("★已写入 SavedVariables —— 请 /reload，然后我直接读文件（聊天框内容已存底）")
+    elseif msg == "go actbar" then
+      -- ★1.71.22 动作条/宏链路取证探针（用户需求：「模拟创建动作条 → 创建宏 → 把宏放到动作条 → 绑定该动作条按键」）。
+      --   ★先验证再动手：这里只**读**客户端现状（是否支持宏、有没有空格子、命令表里有哪些动作条命令），
+      --     不做任何写入 —— 写入段（CreateMacro/PlaceAction/SetBinding）等这一步的读数回传后再开。
+      --   读数三问：① 宏 API 在不在、宏名额还剩几个；② 动作条 1~120 格子哪些空着；③ 命令表里有没有 ACTIONBUTTON 家族（有 = 客户端会派发它）。
+      say("— 动作条 / 宏链路取证（只读，不改任何东西）—")
+      -- ① 宏 API
+      local hasC, hasD, hasP = type(CreateMacro) == "function", type(DeleteMacro) == "function", type(PickupMacro) == "function"
+      say("① 宏 API：CreateMacro=" .. tostring(hasC) .. " PickupMacro=" .. tostring(hasP) .. " DeleteMacro=" .. tostring(hasD)
+        .. " EditMacro=" .. tostring(type(EditMacro) == "function"))
+      if type(GetNumMacros) == "function" then
+        local okm, g, c = pcall(GetNumMacros)
+        say("   宏名额：" .. tostring(okm and g or "?") .. " 通用 / " .. tostring(okm and c or "?") .. " 本角色")
+      end
+      if type(GetMacroInfo) == "function" then
+        for i = 1, 3 do
+          local oki, nm, ic, bd = pcall(GetMacroInfo, i)
+          say("   宏 " .. i .. "：" .. tostring(oki and nm or "?") .. " / " .. tostring(oki and ic or "?") .. " / " .. tostring(oki and bd or "?"))
+        end
+      end
+      -- ② 动作条空格子（客户端按 1~120 查；只报前 120，找到 3 个空位就停）
+      if type(HasAction) ~= "function" then
+        say("② HasAction 不可用 —— 动作条链路读不到")
+      else
+        local free, occupied = {}, 0
+        for s = 1, 120 do
+          local okh, has = pcall(HasAction, s)
+          if okh and has then
+            occupied = occupied + 1
+          elseif okh and not has and table.getn(free) < 6 then
+            free[table.getn(free) + 1] = s
+          end
+        end
+        local txt = ""
+        for _, s in ipairs(free) do txt = txt .. s .. " " end
+        say("② 动作条已占格子 = " .. occupied .. "（1~120 内）；前几个空位：" .. (txt ~= "" and txt or "（没有空位）"))
+      end
+      -- ③ 命令表里的动作条命令（有 = 客户端**会**派发它 → 绑定这条路成立）
+      local okN, nB = pcall(GetNumBindings)
+      if not (okN and type(nB) == "number") then
+        say("③ GetNumBindings 不可用 —— 判死")
+      else
+        local abs, abn, other = 0, 0, 0
+        local sample = ""
+        for i = 1, math.min(nB, 600) do
+          local okG, cmd = pcall(GetBinding, i)
+          if okG and type(cmd) == "string" then
+            if string.find(cmd, "^ACTIONBUTTON%d+$") then
+              abs = abs + 1
+              if abn == 0 then sample = cmd end
+              abn = abn + 1
+            elseif string.find(cmd, "BUTTON%d+$") then
+              other = other + 1
+              if other <= 3 then sample = sample .. " " .. cmd end
+            end
+          end
+        end
+        say("③ 命令表 " .. nB .. " 行：ACTIONBUTTON1~N 有 " .. abs .. " 条（如 " .. tostring(sample) .. "）；其它 *BUTTONn 共 " .. other .. " 条")
+        say("   → 有 ACTIONBUTTON 家族 = 动作条格子按键**由客户端派发**（绑定宏到动作条这条路可行）")
+      end
+      say("★请把以上读数回传（T0 命令表行数 / 动作条空位 / 宏名额），据此开写入段探针")
     elseif msg == "go bind" then
       -- ★快捷键可行性探针（1.71.12 用户要求「先验证」：方案右键弹窗设快捷键这条路能不能走）。
       --   ★安全边界：全程**不 SaveBindings**（内存改动换角色/重登自动消失），且每个试验键位用完立刻解绑还原。
@@ -6556,6 +6888,18 @@ if type(SlashCmdList) == "table" then
           end
         end
         say("T0 以 EVAL_ 开头的命令行数 = " .. evalHits .. "（0 = 客户端没有给我们预留命令名）")
+        -- ★1.71.21 目击证人（ArchiTotem 实证）：它的 Bindings.xml 里的 CAST_EARTH_TOTEM 若在表里，
+        --   就证明「客户端启动时自动加载插件 Bindings.xml」在这台机器上成立 —— 我们的 EVAL_GO_PROF_* 同理。
+        local wit = 0
+        for i = 1, math.min(nB, 400) do
+          local okG, cmd = pcall(GetBinding, i)
+          if okG and cmd == "CAST_EARTH_TOTEM" then wit = i break end
+        end
+        if wit > 0 then
+          say("T0 目击证人：CAST_EARTH_TOTEM 在命令表第 " .. wit .. " 行 —— 插件 Bindings.xml 的自动加载**现场成立**（ArchiTotem 实证）")
+        else
+          say("T0 目击证人：没找到 CAST_EARTH_TOTEM（ArchiTotem 未启用？那我们的 EVAL_GO_PROF_* 要等重启后再看）")
+        end
       else
         say("T0 GetNumBindings 不可用（" .. tostring(nB) .. "）——整条路判死")
       end
@@ -6867,7 +7211,7 @@ if type(SlashCmdList) == "table" then
       say("|cffffff00命令:|r /eh 输出状态 | /eh log 写日志开关 | /eh auto 进出战斗自动输出")
       say("/eh ui 战斗信息UI | /eh st 状态信息UI | /eh cfg 设置窗口（小地图旁 EH 图标同效）")
       say("/eh go 一键宏状态 | /eh go rescan 重扫动作条 | /eh debug 调试日志（/eh war 旧命令仍兼容）")
-      say("/eh go probe 增益探针（逐条枚举自身 buff） | /eh go 光环 [名字] 光环定向探查 | /eh go bind 快捷键可行性探针")
+      say("/eh go probe 增益探针（逐条枚举自身 buff） | /eh go 光环 [名字] 光环定向探查 | /eh go diag 绑定链路一键取证（写盘，需 /reload）")
       say("/eh go 停施法 1|2|3 停读法取证（本客户端停读条 API 只有 Protected 的 SpellStopCasting）")
       say("方案命令：/eh go list 查看 | go add 技能 条件 | go del N | go newprof 名 | go prof N | go rename 新名 | go delprof N")
       say("方案导入导出（md 文本复制粘贴）：/eh go io，内置案例模版按职业直接导入")
@@ -6915,10 +7259,12 @@ init:SetScript("OnEvent", function(a, b)
     -- ★1.71.13 小地图按钮贴图标：载入期宏图标接口未必就绪 → 在 VARIABLES_LOADED 后挑；
     --   挑不到会自动退回旧的「金框 + EH」样式（不许留空白按钮）。
     if type(EVAL_HELP_MB_SETICON) == "function" then pcall(EVAL_HELP_MB_SETICON) end
-    -- ★1.71.21 方案快捷键生效自检：命令表还没有 EVAL_GO_PROF_* = 装了带 Bindings.xml 的版本但还没重启。
-    --   如实提醒一次（绑定弹窗照常用、绑定表照常记；重启后那些键才会真的触发）。
-    if type(EVAL_BIND_XML_STATUS) == "function" and EVAL_BIND_XML_STATUS() == 0 then
-      say("方案快捷键：Bindings.xml 已随插件自带，重启客户端一次即生效（生效后右键方案绑的键才会触发；/eh go bind 的 T0 应 = 12）")
+    -- ★1.71.22 方案快捷键派发上线：登录时把 ActionButtonDown/Up 接管装上（运行中立即生效，无需重启）。
+    --   ★装不上要**如实说**（客户端若没这两个全局，按键就永远不会触发 —— 不许假装成功）。
+    if type(EVAL_BIND_INSTALL) == "function" then
+      if not EVAL_BIND_INSTALL() then
+        say("方案快捷键：本客户端没有 ActionButtonDown/Up 全局，按键派发装不上（功能不可用）")
+      end
     end
     -- 小地图按钮：恢复拖到的位置（越界则清掉记忆，回到默认锚点）
     if cfg.mbPos and minimapBtn then
