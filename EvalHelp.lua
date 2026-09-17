@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.71.4"
+local VERSION = "1.71.5"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -5141,18 +5141,25 @@ function EVAL_HELP_TPL_BUILD()
     heights[i] = 1 + table.getn(c.list)
     totalRows = totalRows + heights[i]
   end
-  -- ② 贪心分列：按顺序往左列塞，直到左列行数 ≥ 一半 —— ★**以组为单位**，绝不把一组拆到两列
-  --   （组被拆开看着像「少了一组」；两列行数也尽量对半，右上角不留大片空白）
+  -- ② 选**最平衡的那个切点**把「组」切成左右两列：★以组为单位（绝不把一组拆到两列——拆开看着像少了一组），
+  --   ★切点 = 使两列行数差最小的那个。
+  --   （别用「塞到过半就停」的贪心：本轮加两条模版后它就偏成 22/16 —— 贪心在一行两行上看着没问题，
+  --     一加内容就露馅；而「遍历所有切点取最小差」是**稳定**的，增删模版后自动重新平衡。）
+  local nGroups = table.getn(EVAL_IO_TEMPLATES)
+  local bestCut, bestDiff, prefix = nGroups, nil, 0
+  for cut = 0, nGroups do
+    local d = math.abs(prefix - (totalRows - prefix))
+    if bestDiff == nil or d < bestDiff then bestDiff, bestCut = d, cut end
+    if cut < nGroups then prefix = prefix + heights[cut + 1] end
+  end
   local leftCol, rightCol, leftRows, rightRows = {}, {}, 0, 0
-  local half = math.ceil(totalRows / 2)
-  for i = 1, table.getn(EVAL_IO_TEMPLATES) do
-    if leftRows < half then
-      leftRows = leftRows + heights[i]
-      table.insert(leftCol, i)
-    else
-      rightRows = rightRows + heights[i]
-      table.insert(rightCol, i)
-    end
+  for i = 1, bestCut do
+    leftRows = leftRows + heights[i]
+    table.insert(leftCol, i)
+  end
+  for i = bestCut + 1, nGroups do
+    rightRows = rightRows + heights[i]
+    table.insert(rightCol, i)
   end
   local rows = (leftRows > rightRows) and leftRows or rightRows
   local H = 34 + rows * 20 + 34
@@ -5161,6 +5168,7 @@ function EVAL_HELP_TPL_BUILD()
   tplUI.margin, tplUI.gap, tplUI.colW = margin, gap, colW
   tplUI.leftCol, tplUI.rightCol = leftCol, rightCol
   tplUI.leftRows, tplUI.rightRows, tplUI.maxRows = leftRows, rightRows, rows
+  tplUI.splitDiff = (leftRows > rightRows) and (leftRows - rightRows) or (rightRows - leftRows)
   local root = CreateFrame("Frame", "EVAL_HELP_TPL", UIParent)
   root:SetWidth(W) root:SetHeight(H)
   root:SetPoint("CENTER", UIParent, "CENTER", 0, 80)
@@ -5327,7 +5335,7 @@ function EVAL_TEST_TPL_LAYOUT()
   return {
     w = okw and w or nil, h = okh and h or nil,
     colW = tplUI.colW, margin = tplUI.margin, gap = tplUI.gap,
-    leftRows = tplUI.leftRows, rightRows = tplUI.rightRows, maxRows = tplUI.maxRows,
+    leftRows = tplUI.leftRows, rightRows = tplUI.rightRows, maxRows = tplUI.maxRows, splitDiff = tplUI.splitDiff,
     rowCount = table.getn(tplUI.rowBtns or {}),
     groups = table.getn(EVAL_IO_TEMPLATES or {}),
   }

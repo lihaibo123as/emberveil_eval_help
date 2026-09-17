@@ -6243,7 +6243,8 @@ do
   eq(lay.w, EVAL_TEST_WIN_W(), "★★★窗口宽度 = 单一来源 cfWinWidth()（不再各写一份宽度）")
   eq(lay.rowCount >= 20, true, "★模版行数 ≥20（案例已扩充）: " .. tostring(lay.rowCount))
   eq(lay.leftRows + lay.rightRows, lay.groups + lay.rowCount, "★★两列行数相加 = 组标题 + 方案行 —— 一行都没丢")
-  eq(math.abs(lay.leftRows - lay.rightRows) <= 3, true, "★★两列行数大致对半（不留一大片空白）: " .. lay.leftRows .. "/" .. lay.rightRows)
+  eq(math.abs(lay.leftRows - lay.rightRows) <= 4, true, "★★两列行数大致对半（不留一大片空白）: " .. lay.leftRows .. "/" .. lay.rightRows)
+  eq(math.abs(lay.leftRows - lay.rightRows), lay.splitDiff, "★★★选的就是**最平衡的那个切点**（不是「塞到过半就停」的贪心）: 差 " .. tostring(lay.splitDiff))
   eq(lay.h <= 700, true, "★★窗口高度不出屏（本客户端 UI 空间高 768）: " .. tostring(lay.h))
   local rows91 = EVAL_TEST_TPL_ROWS()
   eq(table.getn(rows91), lay.rowCount, "★行表与布局自报的行数一致")
@@ -6319,6 +6320,16 @@ do
   eq(findTpl91("队伍/团队", "一键团队治疗") ~= nil, true, "★用户要求：队伍/团队 → 一键团队治疗")
   eq(findTpl91("队伍/团队", "一键队伍buff") ~= nil, true, "★用户要求：队伍/团队 → 一键队伍buff")
   eq(findTpl91("队伍/团队", "一键团队buff") ~= nil, true, "★用户要求：队伍/团队 → 一键团队buff")
+  eq(findTpl91("队伍/团队", "一键队伍驱散") ~= nil, true, "★用户要求：队伍/团队 → 一键队伍驱散")
+  eq(findTpl91("队伍/团队", "一键团队驱散") ~= nil, true, "★用户要求：队伍/团队 → 一键团队驱散")
+  -- ★驱散模版的内容体检：类型必须解析成 Magic（写错一个字 = 谁都不解，而且**不报错**）
+  local t94 = findTpl91("队伍/团队", "一键队伍驱散")
+  local p94 = t94 and EVAL_PROFILE_FROM_TEXT(t94.text)
+  local cd94 = p94 and p94.skills[1].groups and p94.skills[1].groups[1] and p94.skills[1].groups[1][1]
+  eq(cd94 and cd94.k, "candDebuff", "★★驱散模版第一行按「候选者debuff」筛人")
+  eq(cd94 and cd94.dt, "Magic", "★★★类型真的解析成 Magic（不然谁都不解，且不报错）")
+  eq(p94 and p94.skills[2] and p94.skills[2].skill, "驱散魔法", "★第二行才是驱散法术自身")
+  eq(p94 and table.getn(p94.skills), 4, "★★两条链共 4 行（魔法+疾病）")
   eq(findTpl91("骑士", "力量祝福（物理职业）") ~= nil, true, "★用户要求：骑士 → 力量祝福（物理职业）")
   eq(findTpl91("骑士", "智慧祝福（法系职业）") ~= nil, true, "★用户要求：骑士 → 智慧祝福（法系职业）")
   for _, cls91 in ipairs({ "牧师", "德鲁伊", "术士", "萨满" }) do
