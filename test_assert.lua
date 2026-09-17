@@ -7103,4 +7103,26 @@ do
   if not wasShown100 and EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end
   print("  左键「方案」= 打印绑定情况（有则逐行 方案=键 / 无则如实说没有 / 不动绑定）")
 end
+
+-- 101) ★1.71.21 Bindings.xml 生效自检（用户问：「文件是插件帮忙完成的吗?用户零操作配置文件吗?重启就可以?」
+--   → 都是：文件插件自带（零配置）/ 绑定走弹窗（零手动）/ 用户只重启一次。自检数命令表里的 EVAL_GO_PROF_*）。
+do
+  eq(EVAL_BIND_XML_STATUS(), 0, "①没有命令表（桩默认 nil）→ 0 = 还没重启")
+  TEST.bindingCmds = {
+    { "HEADER_MOVEMENT" },
+    { "MoveForward", "W", "UP" },
+    { "EVAL_GO_PROF_1", "E", nil },
+    { "JUMP", "SPACE", nil },
+    { "EVAL_GO_PROF_7", "F9", nil },
+  }
+  eq(EVAL_BIND_XML_STATUS(), 2, "②★只数 EVAL_GO_PROF_*（内建命令与 HEADER 行都不算）: " .. EVAL_BIND_XML_STATUS())
+  local full101 = {}
+  for i = 1, 12 do full101[i] = { "EVAL_GO_PROF_" .. i, nil, nil } end
+  TEST.bindingCmds = full101
+  eq(EVAL_BIND_XML_STATUS(), 12, "③★12 个全在 = 已生效（重启后绑定可触发）")
+  TEST.bindingCmds = { { "EVAL_GO_PROF_1X", nil, nil } }
+  eq(EVAL_BIND_XML_STATUS(), 0, "④前缀必须精确——EVAL_GO_PROF_1X 不算（防「数到不相干的名字」）")
+  TEST.bindingCmds = nil
+  print("  Bindings.xml 生效自检：0=未重启 / 12=已生效 / 前缀精确计数")
+end
 print("ALL TESTS PASS")

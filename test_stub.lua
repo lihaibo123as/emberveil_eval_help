@@ -402,6 +402,16 @@ SaveBindings = function(_which)
   return true
 end
 GetCurrentBindingSet = function() return 1 end
+-- ★1.71.21 绑定命令表桩（Bindings.xml 生效自检）：TEST.bindingCmds = { {cmd, k1, k2}, ... }；nil = 空表。
+TEST.bindingCmds = nil
+GetNumBindings = function() return type(TEST.bindingCmds) == "table" and table.getn(TEST.bindingCmds) or 0 end
+GetBinding = function(i)
+  local t = TEST.bindingCmds
+  if type(t) ~= "table" then return nil end
+  local row = t[i]
+  if type(row) ~= "table" then return nil end
+  return row[1], row[2], row[3]
+end
 -- ★★★合并冲突留下的**重复定义**（1.71.1 修）：v1.71.0 的方案分享补了这两行简版桩，
 --   而队友/团员扫描在文件上方另有一份**支持 TEST.team/TEST.raid 列表**的桩。
 --   Lua 里**后赋值者静默获胜** → 简版把我那份整个盖掉 → 队伍扫描只扫到自己，

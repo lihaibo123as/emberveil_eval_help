@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.71.20"
+local VERSION = "1.71.21"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -2539,6 +2539,21 @@ end
 -- 派发命令名（纯函数，测试直测）：必须与 Bindings.xml 逐个一致（BIND XML CHECK 守着两侧）
 function EVAL_BIND_CMD(i)
   return "EVAL_GO_PROF_" .. tostring(i)
+end
+
+-- ★1.71.21 生效自检（用户定边界后定案）：Bindings.xml 是**插件自带**的（用户零配置文件），
+--   但命令表只在**客户端启动**时重建 → 登录时数一数命令表里有没有 EVAL_GO_PROF_*：
+--   返回 12 = 已生效（绑定可触发）；0 = 还没重启（绑定弹窗照常用，按键要等一次重启）；-1 = 客户端连 GetBinding 都没有。
+function EVAL_BIND_XML_STATUS()
+  if type(GetNumBindings) ~= "function" or type(GetBinding) ~= "function" then return -1 end
+  local okN, n = pcall(GetNumBindings)
+  if not (okN and type(n) == "number") then return -1 end
+  local cnt = 0
+  for i = 1, math.min(n, 600) do
+    local okG, cmd = pcall(GetBinding, i)
+    if okG and type(cmd) == "string" and string.find(cmd, "^EVAL_GO_PROF_%d+$") then cnt = cnt + 1 end -- 精确匹配：EVAL_GO_PROF_1X 之类不算
+  end
+  return cnt
 end
 
 -- 按键清单（纯函数：下拉内容 = 分类标题 + 键名；locked 是「分类标题行」的下标集合——DD 的不可选行语义）。
@@ -6900,6 +6915,11 @@ init:SetScript("OnEvent", function(a, b)
     -- ★1.71.13 小地图按钮贴图标：载入期宏图标接口未必就绪 → 在 VARIABLES_LOADED 后挑；
     --   挑不到会自动退回旧的「金框 + EH」样式（不许留空白按钮）。
     if type(EVAL_HELP_MB_SETICON) == "function" then pcall(EVAL_HELP_MB_SETICON) end
+    -- ★1.71.21 方案快捷键生效自检：命令表还没有 EVAL_GO_PROF_* = 装了带 Bindings.xml 的版本但还没重启。
+    --   如实提醒一次（绑定弹窗照常用、绑定表照常记；重启后那些键才会真的触发）。
+    if type(EVAL_BIND_XML_STATUS) == "function" and EVAL_BIND_XML_STATUS() == 0 then
+      say("方案快捷键：Bindings.xml 已随插件自带，重启客户端一次即生效（生效后右键方案绑的键才会触发；/eh go bind 的 T0 应 = 12）")
+    end
     -- 小地图按钮：恢复拖到的位置（越界则清掉记忆，回到默认锚点）
     if cfg.mbPos and minimapBtn then
       pcall(minimapBtn.ClearAllPoints, minimapBtn)
