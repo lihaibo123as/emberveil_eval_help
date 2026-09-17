@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.71.13"
+local VERSION = "1.71.14"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -885,6 +885,7 @@ local function cfgHeader(parent, x, y, label, list)
   t:SetText(label)
   table.insert(cfgHeaderTexts, tostring(label))
   if list then table.insert(list, t) end
+  return t -- 1.71.14 交出真实控件（断言要读它的真实位置，不是 y 常量）
 end
 
 -- ★1.70.45 窗口宽度的**单一来源**：配置窗与技能编辑窗必须同宽（用户要求），
@@ -1465,19 +1466,25 @@ local function cfgBuild()
   mkSmall(16, -56, WIDE and 98 or 68, L("W_IO"), function() EVAL_HELP_IO_TOGGLE() end, nil, true)
 
   -- 全局 Tab「一键宏」组（1.32.2）：重扫动作条按钮，等同 /eh go rescan——拖动过技能后点一下即可
-  cfgHeader(root, LX, -212, L("G_MACRO_H"), G)
-  local rsB, rsT = mkSmall(LX, -232, 130, L("G_RESCAN"), function() EVAL_GO_RESCAN(false, "menu") end, G)
+  -- ★1.71.14 用户截图：「全局配置有重叠，将红色部分底部对齐」——
+  --   1.71.12 给「界面」组加了两行子开关后，本组头部（原 -212）与「状态信息UI」（-222 起、高 16）直接叠上。
+  --   修法 = 整组改**从底部按钮行向上锚**（底部对齐）：去抖行下缘与导航/关闭按钮行上缘留 6px 间距，
+  --   组内行距不变（20px 逐级向上）。★y 一律从 NAV_ROW_Y 推导（底部行 = 布局单一来源），不再写死 -212。
+  local MACRO_DB_Y = NAV_ROW_Y + 6 + 15 -- 去抖 [-]/[+] 顶边（mkSmall 高 15）→ 行下缘 = NAV_ROW_Y + 6
+  local MACRO_ROW = 20                  -- 组内行距（头 → 重扫 → 提示 → 去抖，与原 -212/-232/-252/-272 同距）
+  local mhT = cfgHeader(root, LX, MACRO_DB_Y + MACRO_ROW * 3, L("G_MACRO_H"), G)
+  local rsB, rsT = mkSmall(LX, MACRO_DB_Y + MACRO_ROW * 2, 130, L("G_RESCAN"), function() EVAL_GO_RESCAN(false, "menu") end, G)
   local rsTip = uiText(root, 8, 0.6, 0.6, 0.6)
-  rsTip:SetPoint("TOPLEFT", root, "TOPLEFT", LX, -252)
+  rsTip:SetPoint("TOPLEFT", root, "TOPLEFT", LX, MACRO_DB_Y + MACRO_ROW)
   rsTip:SetText(L("G_RESCAN_TIP"))
   table.insert(G, rsTip)
   -- 执行去抖窗口（1.54.2）：EVAL_GO 最小执行间隔秒数，默认 0.30（[-][+] 步进 0.05，0=关闭去抖）
   local dbLabel = uiText(root, 9, 0.75, 0.75, 0.75)
-  dbLabel:SetPoint("TOPLEFT", root, "TOPLEFT", LX, -272)
+  dbLabel:SetPoint("TOPLEFT", root, "TOPLEFT", LX, MACRO_DB_Y - 2) -- 文本比按钮低 2px（中线对齐的老配方）
   dbLabel:SetText(L("G_DEBOUNCE"))
   table.insert(G, dbLabel)
   local dbVal = uiText(root, 9, 1, 0.85, 0.35)
-  dbVal:SetPoint("TOPLEFT", root, "TOPLEFT", LX + 124, -272)
+  dbVal:SetPoint("TOPLEFT", root, "TOPLEFT", LX + 124, MACRO_DB_Y - 2)
   table.insert(G, dbVal)
   local function dbGet() return tonumber(c().goDebounce) or 0.3 end
   local function dbShow() dbVal:SetText(string.format("%.2fs", dbGet())) end
@@ -1487,9 +1494,11 @@ local function cfgBuild()
     c().goDebounce = v
     dbShow()
   end
-  mkSmall(LX + 100, -270, 20, "-", function() dbStep(-0.05) end, G)
-  mkSmall(LX + 164, -270, 20, "+", function() dbStep(0.05) end, G)
+  local dbmB = mkSmall(LX + 100, MACRO_DB_Y, 20, "-", function() dbStep(-0.05) end, G)
+  mkSmall(LX + 164, MACRO_DB_Y, 20, "+", function() dbStep(0.05) end, G)
   table.insert(refreshes, dbShow)
+  -- ★1.71.14 交出真实控件：底部对齐 / 不重叠的断言要读**真位置**（读常量 = 测自己）
+  cfgWin.macroUI = { header = mhT, rescan = rsB, dbMinus = dbmB, rowH = 15 }
 
   -- （1.21.6 起移除底部「激活方案」下拉：与左侧方案栏/战斗信息UI方案行/Shift+按宏//eh go prof N 功能重复）
 

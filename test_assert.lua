@@ -6863,4 +6863,36 @@ do
   TEST.macroIcons = savedMI95
   print("  小地图按钮：26x26 图标钮（扳手），兜底样式与 EH 清空路径都验过")
 end
+
+-- 96) ★★★1.71.14 用户截图：「全局配置有重叠，将红色部分底部对齐」——
+--   「界面」组加两行子开关后，「一键宏」组（重扫动作条/执行去抖）与「状态信息UI」直接叠上。
+--   修法 = 整组从底部按钮行向上锚（底部对齐）。★本组全部读**真实控件**的位置，不读 y 常量。
+do
+  if not (EVAL_HELP_CFGWIN and EVAL_HELP_CFGWIN.root) then EVAL_HELP_CFG_TOGGLE() end
+  local mu = EVAL_HELP_CFGWIN and EVAL_HELP_CFGWIN.macroUI
+  local stb = EVAL_HELP_CFGWIN and EVAL_HELP_CFGWIN.uiBoxes and EVAL_HELP_CFGWIN.uiBoxes.state and EVAL_HELP_CFGWIN.uiBoxes.state.btn
+  local lay = EVAL_TEST_CFG_LAYOUT()
+  eq(type(mu) == "table" and type(stb) == "table" and type(lay) == "table", true, "前置：拿到一键宏组的真实控件与底部行布局")
+  local function top96(o)
+    if not o then return nil end
+    local ok, v = pcall(o.GetTop, o)
+    return (ok and type(v) == "number") and v or nil
+  end
+  local hTop = top96(mu.header)   -- 组头「一键宏」
+  local rTop = top96(mu.rescan)   -- 重扫动作条按钮
+  local dTop = top96(mu.dbMinus)  -- 去抖 [-] 按钮
+  local sTop = top96(stb)         -- 状态信息UI 勾选框（界面组最后一行，高 16）
+  eq(hTop ~= nil and rTop ~= nil and dTop ~= nil and sTop ~= nil, true, "前置：四个真实控件都有真实位置")
+  eq(sTop - hTop >= 16, true,
+    "①★「一键宏」组头与「状态信息UI」不再叠上（≥ 勾选框高 16）: 间距 " .. tostring(sTop and hTop and (sTop - hTop)) .. "px")
+  eq(dTop - mu.rowH == lay.navY + 6, true,
+    "②★★底部对齐：去抖行下缘 = 底部按钮行上缘 + 6px: " .. tostring(dTop and (dTop - mu.rowH)) .. " vs " .. tostring(lay.navY + 6))
+  eq(hTop - rTop == 20 and rTop - dTop == 40, true,
+    "③组内行距保持 20px（头→重扫 20 / 重扫→去抖 40）: " .. tostring(hTop and rTop and (hTop - rTop)) .. "/" .. tostring(rTop and dTop and (rTop - dTop)))
+  local _, wh96 = EVAL_TEST_CFG_SIZE()
+  eq(type(wh96) == "number" and dTop - mu.rowH > -wh96, true,
+    "④去抖行下缘仍在窗口内: " .. tostring(dTop and (dTop - mu.rowH)) .. " > " .. tostring(-(wh96 or 0)))
+  print(string.format("  一键宏组：头 %d / 重扫 %d / 去抖 %d（下缘 %d，底部行上缘 %d）",
+    hTop or 0, rTop or 0, dTop or 0, (dTop or 0) - (mu.rowH or 15), lay.navY or 0))
+end
 print("ALL TESTS PASS")
