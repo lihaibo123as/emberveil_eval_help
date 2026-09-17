@@ -6664,6 +6664,8 @@ do
   local up = EVAL_TEST_UI_PROF()
   eq(type(up) == "table", true, "前置：拿到方案切换行的真实几何")
   eq(up.rows >= 2, true, "★6 个方案（含长名）要排成多行: " .. tostring(up.rows) .. " 行")
+  eq(type(up.cap) == "number" and up.cap >= 0 and up.cap <= 32, true,
+    "★★★每格的「拉伸上限」必须是个小数字（调大就会把按钮拉成空框）: cap=" .. tostring(up.cap))
   local bad93, ov93, over93, out93 = "", "", "", ""
   local longW, shortW, byRow = nil, nil, {}
   for i = 1, table.getn(up.btns) do
@@ -6673,6 +6675,12 @@ do
       table.insert(byRow[b.y], b)
       if b.need and b.w and b.w < b.need - 0.5 then
         bad93 = bad93 .. b.name .. "(宽" .. tostring(b.w) .. "<需" .. tostring(b.need) .. ") "
+      end
+      -- ★★★1.71.11 反向：也不许把按钮**拉成空框**（用户第二轮报「空的太多了」）。
+      --   ★判据故意**不读**生产的 ui.profCap —— 读了它，把 cap 调大的变异会**连判据一起改**（实测 M6 就这样 SURVIVED）。
+      --   这里用独立上界：一格最多比「文字宽」多 40px（生产上限 24 比它更紧）。
+      if b.need and b.w and b.w > b.need + 40 then
+        bad93 = bad93 .. b.name .. "(空框 宽" .. tostring(b.w) .. ">需" .. tostring(b.need) .. "+40) "
       end
       -- ★文字格必须**显式限宽**（本项目「FontString 一律显式 SetWidth」的配方）——
       --   桩的 FontString 没被 SetWidth 时 GetWidth 返回 nil（M3 实测：不加这条就漏过「去掉限宽」的变异）
@@ -6685,7 +6693,7 @@ do
       if b.name == "短" then shortW = b.w end
     end
   end
-  eq(bad93, "", "★★★每个方案格宽度 ≥ 它自己需要的宽度（用户报的「溢出」正是这条）: " .. bad93)
+  eq(bad93, "", "★★★每格宽在 [需要宽, 需要宽+上限] 之间（「溢出」与「空框」两侧都钉住）: " .. bad93)
   eq(longW ~= nil and shortW ~= nil and longW > shortW, true,
     "★★★长名字的格子真的比短名字宽（不是均分）: 一键团队驱散=" .. tostring(longW) .. " 短=" .. tostring(shortW))
   for _, list in pairs(byRow) do
@@ -6703,8 +6711,8 @@ do
   eq(ov93, "", "★★同行相邻不重叠（原均分布局会在这里露出来）: " .. ov93)
   eq(over93, "", "★★整行不越出可用宽: " .. over93)
   eq(out93, "", "★★方案块整体在帧内（行数变了帧高要跟着变）: " .. out93)
-  print(string.format("  方案切换行：%d 行 / 「一键团队驱散」%dpx vs 「短」%dpx（按名字实测宽，不再均分）",
-    up.rows, longW or -1, shortW or -1))
+  print(string.format("  方案切换行：%d 行 / 「一键团队驱散」%dpx vs 「短」%dpx（按名字实测宽；每格最多 +%dpx，不拉空框）",
+    up.rows, longW or -1, shortW or -1, up.cap or 0))
   -- ② 改方案名之后，走**真实刷新入口**版式必须自动跟着变（签名比对 → 整体重建）；长名变多要自动换行
   EVAL_HELP_CONFIG.war.profiles = { { name = "短", skills = {} }, { name = "一键团队驱散", skills = {} } }
   EVAL_HELP_CONFIG.war.activeProfile = 1

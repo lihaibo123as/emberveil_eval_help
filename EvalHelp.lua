@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.71.10"
+local VERSION = "1.71.11"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -299,7 +299,11 @@ function EVAL_HELP_UI_BUILD()
     local prof = w20.profiles and w20.profiles[i]
     needW[i] = profNeed(prof and prof.name or ("方案" .. tostring(i)))
   end
-  -- 贪心换行 + 每行剩余均摊（余数给前几格）→ geo[i] = { x, y, w }
+  -- 贪心换行 + 每行剩余**限量**均摊（余数给前几格）→ geo[i] = { x, y, w }
+  --   ★★★1.71.11 用户第二轮反馈「空的太多了」：上一版把每行剩余**全部**均摊 → 一行里只有一个短名时，
+  --     那个按钮被拉成一个大空框（截图红圈）。现在给每格**设上限**：最多比「名字需要宽」多 MAX_EXTRA，
+  --     超出的部分**留在行尾**（宁可行尾留白，也不做空框）——★上限值可调：想要「完全按名宽」就把 MAX_EXTRA 设 0。
+  local MAX_EXTRA = math.floor(24 * z)
   local geo, rowIdx, x = {}, 0, pad + labelW
   local rowItems, rowAvail = {}, barAvailW - labelW
   local function flushRow()
@@ -310,7 +314,9 @@ function EVAL_HELP_UI_BUILD()
     local leftover = rowAvail - (k - 1) * PGAP - sumW
     if leftover < 0 then leftover = 0 end
     local add = math.floor(leftover / k)
-    local extra = leftover - add * k
+    local capped = false
+    if add > MAX_EXTRA then add = MAX_EXTRA capped = true end
+    local extra = capped and 0 or (leftover - add * k)
     local xx = (rowIdx == 0) and (pad + labelW) or pad
     for n, idx in ipairs(rowItems) do
       local wI = needW[idx] + add + ((n <= extra) and 1 or 0)
@@ -358,7 +364,7 @@ function EVAL_HELP_UI_BUILD()
     end)
     profBtns[i] = { btn = pb, bg = pbg, text = pt }
   end
-  ui.profRows, ui.profNeed, ui.profAvail, ui.profPad = rows, needW, barAvailW, pad -- ★1.71.10 供断言读生产真值
+  ui.profRows, ui.profNeed, ui.profAvail, ui.profPad, ui.profCap = rows, needW, barAvailW, pad, MAX_EXTRA -- ★1.71.10/1.71.11 供断言读生产真值
   -- ★1.71.10 版式签名（方案名序列）：EVAL_WAR_TAB_REFRESH 比它决定「要不要重建战斗信息UI」
   --   （方案名/数量变了 → 按钮宽度与行数都得重算，帧高与下方技能带也要随之挪 → 整体重建最省心）
   local sig0 = ""
@@ -5237,7 +5243,7 @@ function EVAL_TEST_UI_PROF()
   end
   local okw, ww = pcall(ui.root.GetWidth, ui.root)
   local okh, hh = pcall(ui.root.GetHeight, ui.root)
-  local out = { rows = ui.profRows or 0, avail = ui.profAvail or 0, pad = ui.profPad or 0,
+  local out = { rows = ui.profRows or 0, avail = ui.profAvail or 0, pad = ui.profPad or 0, cap = ui.profCap or 0,
     need = ui.profNeed, rootW = (okw and ww) or nil, rootH = (okh and hh) or nil, btns = {} }
   for i, pb in ipairs(ui.profBtns) do
     local okT, txt = pcall(pb.text.GetText, pb.text)
