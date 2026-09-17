@@ -4,12 +4,14 @@
 
 > 🗣️ Note: rule text (skill names / condition keywords / import-export snippets) stays in the client language (Chinese) — the rule data layer is never translated.
 
-> EmberVeil (1.12.1 / Lua 5.1) **all-class casting helper addon**: a one-line macro body `/run EVAL_GO()`, driven by a rule engine — **five skill categories** (character actions / character skills / pet commands / target selection / item use) × **28 condition types** (grouped dropdowns) × multiple key-bound profiles, all configured visually, for any class.
+> EmberVeil (1.12.1 / Lua 5.1) **all-class casting helper addon**: a one-line macro body `/run EVAL_GO()`, driven by a rule engine — **five skill categories** (character actions / character skills / pet commands / target selection / item use) × **49 condition types** (grouped dropdowns) × multiple key-bound profiles, all configured visually, for any class. Two more built-in pages: a **Toolbox** (merchant / social / quest automation) and **Data search** (quests / items / mobs·NPC + a world-map annotation layer, requires UnrealQuest).
 
 | Module | Entry | At a glance |
 | :-- | :-- | :-- |
 | 🗡️ **Universal one-key macro** | macro `/run EVAL_GO()` | Five skill categories: character actions (Attack / Auto Shot / Shoot / Cancel Casting / Stance swap) / skills / pet commands / target selection / item use; unlimited skills per profile (scrollable list); up to ≤12 profiles, each bindable to its own key for direct triggering |
 | ⚙️ **Config window** | minimap EH icon · `/eh cfg` | Fully visual editing of profiles / skills / conditions, plus text import/export for sharing |
+| 🧰 **Toolbox** | config window, tab 3 | Merchant assistant (auto-repair / auto-sell grey / buy and discard by name) + party & social (auto-confirm role check / hide guild login notices) + auto quest accept & turn-in (hold Shift to pause temporarily) + quest notification channel |
+| 🗺️ **Data search** | config window, tab 4 | Quest / item / mob·NPC / object search with instant results and unlimited drill-down; a **world-map annotation layer** (16 categories redrawn live as the map changes) and one-click pinning from any row with coordinates (requires UnrealQuest) |
 | 📊 **Combat info UI** | `/eh ui` | HP / power / target bars + profile switcher row + skill icon row (lit gold = conditions met, click to edit) |
 | 🔍 **Status info UI** | `/eh st` | Live overview of all state variables + per-condition √/× verdicts for the most recent casts |
 | 📝 **Status log** | `/eh` | Written to both the chat frame and the log file |
@@ -71,7 +73,7 @@
 
 ![Config window · One-key macro tab](preview/cfg1.png)
 
-**Skill editor** (opened via [Edit] or by clicking a skill icon): per-row independent condition editing — condition type / params all chosen from dropdowns (28 condition types, grouped as self / target / aura / skill), relation column toggles & (all-in-group) / | (any-group), live preview
+**Skill editor** (opened via [Edit] or by clicking a skill icon): per-row independent condition editing — condition type / params all chosen from dropdowns (49 condition types, grouped as self / target / aura / skill), relation column toggles & (all-in-group) / | (any-group), live preview
 
 ![Skill editor](preview/skill_doif.png)
 
