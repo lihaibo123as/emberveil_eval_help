@@ -53,6 +53,8 @@ node test_engine.js  # 逻辑冒烟测试：打桩 WoW API 加载整个插件，
 7. **提交 + 打「附注」标签**：`git tag -a vX.Y.Z -F <说明文件>` —— ★**必须 `-a`**（轻量标签没有说明，Release 页要用它当正文）；
    ★说明文件**不能用 PowerShell `>` 重定向写**（那是 UTF-16LE → 标签说明整段乱码），要用 UTF-8 写并**回读复核**；
 8. **推送（分支 + 标签都要推）**：`git push origin master && git push github master`，再 `git push origin --tags && git push github --tags`；
+   ★★**两个库一律走 SSH（`git@xxx`）+ 本机默认密钥**（用户定）：不用 HTTPS/token、不用 `-i` 另指密钥；
+   推送前先 `git remote -v` 确认两个远端都是 `git@` 形式（`origin`=gitee、`github`=github），可用 `ssh -T` 双端验签；
 9. **出发布包 + 建 Release 页**：打包 `EvalHelp-vX.Y.Z.zip`（放 `Interface/AddOns/` 下，顶层一个 `EvalHelp\`，内容 = `.toc` 实际清单，
    ★装完核对条目数）→ 在 gitee / github 网页建 Release（**需要 API token，AI 做不了** → 如实告知用户去建，并给全 URL/标题/说明/附件）。
 
