@@ -656,6 +656,7 @@ function checkIconAssets() {
 //          （守着「发版只更新了 CHANGELOG、忘了改里程碑范围」）
 //       ④ 板块正文（不含标题本身）的**非空行 1..10**（用户定：「10 个点、10 行文字以内」，一条 = 一行；
 //          守着「又想把版本流水账搬回来」——超过 10 行就是要罗列了）
+//       ⑤ 每条必须是 **`- ` 列表项**（守「排版」：连续普通段落行会被 Markdown 合并成一大段 —— 1.72.0 实事故）
 // ★条目判据 = 板块里每行就是一条（三个语种写法一致：**emoji 主题**（版本范围）：做了什么 + 判据）。
 (function () {
   const toc = fs.readFileSync(path.join(__dirname, "EvalHelp.toc"), "utf8");
@@ -692,9 +693,16 @@ function checkIconAssets() {
     if (body.length < 1 || body.length > 10) {
       bad.push(f + " milestone body has " + body.length + " lines (need 1..10: 10 points, 1 line each)");
     }
+    // ★⑤ 每条必须是**列表项**（`- ` 开头）—— 1.72.0 实事故：10 条写成连续**普通段落行**，
+    //   Markdown 把相邻行**合并成一大段**（用户在 GitHub 上看到的就是「排版混乱」一大坨），
+    //   列表项才会各占一行。★这条正是「行为/内容都对、只是渲染不对」的典型，只能靠结构检查守。
+    const notList = body.filter((l) => !/^-\s+/.test(l));
+    if (notList.length) {
+      bad.push(f + " has " + notList.length + " milestone line(s) that are NOT list items (Markdown would merge them into one paragraph)");
+    }
   }
   if (bad.length) { console.log("MILESTONE CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
-  console.log("MILESTONE CHECK: 3 READMEs, milestone above changelog, range ends at " + ver + ", body <=10 lines");
+  console.log("MILESTONE CHECK: 3 READMEs, milestone above changelog, range ends at " + ver + ", body <=10 list items");
 })();
 
 checkIconAssets();

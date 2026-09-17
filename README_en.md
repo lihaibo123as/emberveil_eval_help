@@ -22,16 +22,16 @@
 
 ## 🏁 Milestones (1.52.0 → 1.72.0)
 
-**⌨️ Profile hotkeys actually work** (1.71.16 → 1.72.0): after four dead ends, `ACTIONBUTTON<n>` + hooking `ActionButtonDown/Up` — zero cost: no macro slots, no stolen keys, live while the game runs.
-**🗂 Right-click features merged into one Profile Manager** (1.71.24): profile name + hotkey, one [Save] commits both; ★no aliases for the old entry points (an alias would let a call-site revert pass silently).
-**🖨 🎛 🖼 Interface polish** (1.71.9 → 1.71.20): clickable "Profiles" label (left-click prints bindings / right-click clears them), wrapping profile row + player-name title + sub-toggles, icon library 6→9 rows + right-click sets the minimap icon.
-**🛑 🤝 Stop Attack / Follow** (1.71.3): one click stops casting + auto shot + wand + melee auto-attack; Follow uses `FollowByName` (one of only two non-Protected Movement functions).
-**📤 🔇 Sharing and notifications rewritten** (1.71.3): the "raid" channel dropped (1.12 leader chat uses separate events), four receive caps + a 5s throttle; channel join/leave notices suppressed.
-**🧑‍🤝‍🧑 🧙 Member picker and conditions** (1.70.45 → 1.71.2): 4 "candidate" conditions + picking by comparison operator; aura remaining-time check, casting conditions unified under "skill state".
-**🧰 🗺️ 📡 Three new tabs** (1.68.0 → 1.71.1): Toolbox (queued + verified one by one), Data search (16 map annotation categories), profile sharing (one click to a chat channel).
-**📚 Case templates: 11 groups / 27 entries** (1.67.2 → 1.71.8): grouped by class, one click to import; party / raid ones are always "explicit skill + member condition".
-**🧪 Engineering infrastructure** (1.52.0 → 1.72.0): 17 source-level checks + mutation tests every round; the "silent failure family" cleared out (not-found ≠ absent, export→import round trips).
-**⚡ Execution model and usability** (1.52.1 → 1.64.0): target selection no longer eats the key press, parallel execution, no GCD stop; root cause "Lua multiple-return truncation" — the condition path must be tested.
+- **⌨️ Profile hotkeys actually work** (1.71.16 → 1.72.0): after four dead ends, `ACTIONBUTTON<n>` + hooking `ActionButtonDown/Up` — zero cost: no macro slots, no stolen keys, live while the game runs.
+- **🗂 Right-click features merged into one Profile Manager** (1.71.24): profile name + hotkey, one [Save] commits both; ★no aliases for the old entry points.
+- **🖨 🎛 🖼 Interface polish** (1.71.9 → 1.71.20): clickable "Profiles" label (left-click prints bindings / right-click clears them), wrapping profile row + player-name title, icon library 6→9 rows + right-click sets the minimap icon.
+- **🛑 🤝 Stop Attack / Follow** (1.71.3): one click stops casting + auto shot + wand + melee auto-attack; Follow uses `FollowByName` (one of only two non-Protected Movement functions).
+- **📤 🔇 Sharing and notifications rewritten** (1.71.3): the "raid" channel dropped (1.12 leader chat uses separate events), four receive caps + a 5s throttle; channel join/leave notices suppressed.
+- **🧑‍🤝‍🧑 🧙 Member picker and conditions** (1.70.45 → 1.71.2): 4 "candidate" conditions + picking by comparison operator; aura remaining-time check, casting conditions unified.
+- **🧰 🗺️ 📡 Three new tabs** (1.68.0 → 1.71.1): Toolbox (queued + verified one by one), Data search (16 map annotation categories), profile sharing (one click to a channel).
+- **📚 Case templates: 11 groups / 27 entries** (1.67.2 → 1.71.8): grouped by class, one click to import; party / raid ones are "explicit skill + member condition".
+- **🧪 Engineering infrastructure** (1.52.0 → 1.72.0): 17 source-level checks + mutation tests every round; the "silent failure family" cleared out.
+- **⚡ Execution model and usability** (1.52.1 → 1.64.0): target selection no longer eats the key press, parallel execution, no GCD stop; root cause "Lua multiple-return truncation".
 
 ## Changelog
 
