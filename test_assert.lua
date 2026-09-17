@@ -6357,45 +6357,221 @@ do
   eq(findTpl91("队伍/团队", "一键团队buff") ~= nil, true, "★用户要求：队伍/团队 → 一键团队buff")
   eq(findTpl91("队伍/团队", "一键队伍驱散") ~= nil, true, "★用户要求：队伍/团队 → 一键队伍驱散")
   eq(findTpl91("队伍/团队", "一键团队驱散") ~= nil, true, "★用户要求：队伍/团队 → 一键团队驱散")
-  -- ★驱散模版的内容体检：类型必须解析成 Magic（写错一个字 = 谁都不解，而且**不报错**）
-  local t94 = findTpl91("队伍/团队", "一键队伍驱散")
-  local p94 = t94 and EVAL_PROFILE_FROM_TEXT(t94.text)
-  local cd94 = p94 and p94.skills[1].groups and p94.skills[1].groups[1] and p94.skills[1].groups[1][1]
-  eq(cd94 and cd94.k, "candDebuff", "★★驱散模版第一行按「候选者debuff」筛人")
-  eq(cd94 and cd94.dt, "Magic", "★★★类型真的解析成 Magic（不然谁都不解，且不报错）")
-  eq(p94 and p94.skills[2] and p94.skills[2].skill, "驱散魔法", "★第二行才是驱散法术自身")
-  eq(p94 and table.getn(p94.skills), 4, "★★两条链共 4 行（魔法+疾病）")
-  eq(findTpl91("骑士", "力量祝福（物理职业）") ~= nil, true, "★用户要求：骑士 → 力量祝福（物理职业）")
-  eq(findTpl91("骑士", "智慧祝福（法系职业）") ~= nil, true, "★用户要求：骑士 → 智慧祝福（法系职业）")
-  for _, cls91 in ipairs({ "牧师", "德鲁伊", "术士", "萨满" }) do
-    local g91 = nil
-    for _, g in ipairs(EVAL_IO_TEMPLATES) do if g.cls == cls91 then g91 = g end end
-    eq(g91 ~= nil and table.getn(g91.list) >= 2, true, "★其它职业常用一键宏：" .. cls91 .. " 至少 2 条")
+  -- ★★★把这一大段收进**函数体**： do ... end 不新开函数作用域，这些局部变量会和整份文件的主 chunk
+  --   共用同一个「最多 200 个局部变量」的上限（实测直接报 too many local variables near ...）——
+  --   收进函数体后各自独立预算（Lua 的 200 上限是**每个函数**一条）。
+  local function auditTplContent91()
+    -- ★★★1.71.7 审计（用户要求「审计下之前添加的队伍团队相关的方案技能配置优先采用:
+    --   指定技能搭配 队伍/团员条件类型完成需求」）：模版一律「**指定技能 + 队伍/团员条件**」。
+    --   判据 = 每条成员类模版 ① 行内第一条就是**指定技能**（不是选取器）② 首条件是该技能要用的
+    --   那个成员条件（teamHp/teamMana/teamBuff/teamDebuff）③ 范围（队伍/团队）与语义（方向/类型/阈值）对得上。
+    local function skOf91(cls, name)
+      local t = findTpl91(cls, name)
+      local p = t and EVAL_PROFILE_FROM_TEXT(t.text)
+      return p, (p and p.skills) or {}
+    end
+    local function cdOf91(sk, gi, ci)
+      local g = sk and sk.groups and sk.groups[gi or 1]
+      return g and g[ci or 1]
+    end
+    -- ① 治疗类：指定技能 + 队伍/团队血%
+    local p95, s95 = skOf91("队伍/团队", "一键队伍治疗")
+    eq(s95[1] and s95[1].skill, "快速治疗", "★★★一键队伍治疗：第一行就是**指定技能**「快速治疗」（不再先切目标）")
+    local cd95 = cdOf91(s95[1])
+    eq(cd95 and cd95.k, "teamHp", "★★★队伍治疗用的是「队伍血%」成员条件（它自己扫人+切目标）")
+    eq(cd95 and cd95.name, "队伍", "★★扫描范围 = 队伍")
+    eq(cd95 and cd95.op, "<", "★★比较符 <（取血最少的那个人）")
+    eq(cd95 and cd95.n, 70, "★★阈值 队伍血<70")
+    eq(s95[1] and s95[1].groups[1][2] and s95[1].groups[1][2].k, "powerPct", "★能量守门条件与它同组（AND）")
+    local _, s95b = skOf91("队伍/团队", "一键团队治疗")
+    eq(cdOf91(s95b[1]) and cdOf91(s95b[1]).name, "团队", "★★★一键团队治疗：范围 = 团队（40 人团靠它）")
+    local _, s95c = skOf91("牧师", "一键治疗（队伍）")
+    eq(s95c[1] and s95c[1].skill, "快速治疗", "★★牧师一键治疗：指定技能 + 队伍血%")
+    eq(cdOf91(s95c[1]) and cdOf91(s95c[1]).k, "teamHp", "★★同上（牧师那套也改过来了）")
+    local _, s95d = skOf91("德鲁伊", "奶德一键")
+    eq(s95d[1] and s95d[1].skill, "回春术", "★★奶德：第一行是回春术本身")
+    eq(cdOf91(s95d[1]) and cdOf91(s95d[1]).k, "teamHp", "★★奶德第一行也带队伍血%")
+    eq(s95d[1] and s95d[1].groups[1][2] and s95d[1].groups[1][2].k, "tBuff", "★★★「无目标buff:回春术」排在成员条件**之后**（先切目标再对切过去的人求值）")
+    local _, s95e = skOf91("萨满", "萨满一键治疗")
+    eq(cdOf91(s95e[1]) and cdOf91(s95e[1]).n, 40, "★★萨满：治疗波门槛 队伍血<40（血线低才用大治疗）")
+    eq(cdOf91(s95e[2]) and cdOf91(s95e[2]).n, 70, "★★次级治疗波门槛 队伍血<70")
+    -- ② 驱散类：指定技能 + 有队伍/团队debuff:<类型>（类型必须解析成 Magic/Disease）
+    local p94, s94 = skOf91("队伍/团队", "一键队伍驱散")
+    eq(s94[1] and s94[1].skill, "驱散魔法", "★★★一键队伍驱散：第一行是**指定技能**「驱散魔法」")
+    local cd94 = cdOf91(s94[1])
+    eq(cd94 and cd94.k, "teamDebuff", "★★★成员条件 = 「有队伍debuff」")
+    eq(cd94 and cd94.name, "队伍", "★★扫描范围 = 队伍")
+    eq(cd94 and cd94.v, true, "★★方向 = 「有」（有人中魔法）")
+    eq(cd94 and cd94.dt, "Magic", "★★★类型真的解析成 Magic（不然谁都不解，且不报错）")
+    eq(s94[2] and s94[2].skill, "祛病术", "★★第二行是疾病那条链")
+    local cd94b = cdOf91(s94[2])
+    eq(cd94b and cd94b.k, "teamDebuff", "★★第二行也是队伍 debuff 条件")
+    eq(cd94b and cd94b.dt, "Disease", "★★★第二行类型是 Disease")
+    eq(p94 and table.getn(p94.skills), 2, "★★两条链共 2 行（魔法一行、疾病一行）")
+    local _, s94c = skOf91("队伍/团队", "一键团队驱散")
+    eq(cdOf91(s94c[1]) and cdOf91(s94c[1]).name, "团队", "★★★一键团队驱散：范围 = 团队")
+    local _, s94d = skOf91("牧师", "一键驱散（队伍）")
+    eq(s94d[1] and s94d[1].skill, "驱散魔法", "★★牧师驱散：指定技能 = 驱散魔法")
+    eq(cdOf91(s94d[1]) and cdOf91(s94d[1]).k, "teamDebuff", "★★条件 = 有队伍debuff")
+    -- ③ buff 类：指定技能 + 无队伍/团队buff:<名>（缺 = 补），职业过滤照旧写在条件上
+    local p91, s91 = skOf91("通用法系", "队伍补智力")
+    eq(s91[1] and s91[1].skill, "奥术智慧", "★★★队伍补智力：唯一一行就是**指定技能**「奥术智慧」")
+    local cd91 = cdOf91(s91[1])
+    eq(cd91 and cd91.k, "teamBuff", "★★★条件类型 = 「队伍buff」")
+    eq(cd91 and cd91.v, false, "★★★方向 = 「无」（缺 → 补）")
+    eq(cd91 and cd91.s, "奥术智慧", "★点名的是同一个 buff")
+    eq(cd91 and cd91.name, "队伍", "★★范围 = 队伍")
+    eq(cd91 and cd91.cs and cd91.cs.MAGE, true, "★★★职业过滤解析进条件：法师在内")
+    eq(cd91 and cd91.cs and cd91.cs.WARRIOR, nil, "★★★反向：战士不在（没蓝条的职业不该被补智力）")
+    local _, s91b = skOf91("通用法系", "团队补智力")
+    eq(cdOf91(s91b[1]) and cdOf91(s91b[1]).name, "团队", "★★团队补智力：范围 = 团队")
+    local _, s91c = skOf91("通用法系", "队伍补耐力")
+    eq(cdOf91(s91c[1]) and cdOf91(s91c[1]).s, "真言术:韧", "★★队伍补耐力：点名真言术:韧")
+    eq(cdOf91(s91c[1]) and cdOf91(s91c[1]).cs, nil, "★★耐力人人有用 → 不带职业过滤（空 = 全部职业）")
+    local _, s91d = skOf91("队伍/团队", "一键队伍buff")
+    eq(s91d[1] and s91d[1].skill, "奥术智慧", "★★一键队伍buff：第一行是指定技能")
+    eq(cdOf91(s91d[1]) and cdOf91(s91d[1]).k, "teamBuff", "★★而且带队伍buff 条件")
+    eq(table.getn(s91d), 2, "★★两条链（智力 + 耐力）各一行")
+    local t92 = findTpl91("骑士", "力量祝福（物理职业）")
+    local p92 = t92 and EVAL_PROFILE_FROM_TEXT(t92.text)
+    local cd92 = cdOf91(p92 and p92.skills[1])
+    eq(p92 and p92.skills[1] and p92.skills[1].skill, "力量祝福", "★★骑士力量祝福：指定技能 + 条件")
+    eq(cd92 and cd92.k, "teamBuff", "★★条件 = 无队伍buff:力量祝福")
+    eq(cd92 and cd92.cs and cd92.cs.WARRIOR, true, "★★物理职业（战士在内）")
+    eq(cd92 and cd92.cs and cd92.cs.MAGE, nil, "★★反向：法师不在力量祝福名单里")
+    local t93 = findTpl91("骑士", "智慧祝福（法系职业）")
+    local p93 = t93 and EVAL_PROFILE_FROM_TEXT(t93.text)
+    local cd93 = cdOf91(p93 and p93.skills[1])
+    eq(cd93 and cd93.cs and cd93.cs.MAGE, true, "★★骑士智慧祝福 → 法系职业（法师在内）")
   end
-  -- ③c 职业过滤**真的写进了条件**（不是只写在 desc 里）
-  local t91 = findTpl91("通用法系", "队伍补智力")
-  local p91 = t91 and EVAL_PROFILE_FROM_TEXT(t91.text)
-  eq(p91 and p91.skills[1] and p91.skills[1].skill, "选取目标:队伍成员", "★智力模版第一行是队伍选取器")
-  local cd91 = p91 and p91.skills[1].groups and p91.skills[1].groups[1] and p91.skills[1].groups[1][1]
-  eq(cd91 and cd91.k, "candBuff", "★★选取器行用的是「候选者缺buff」条件")
-  eq(cd91 and cd91.cs and cd91.cs.MAGE, true, "★★★职业过滤解析进条件：法师在内")
-  eq(cd91 and cd91.cs and cd91.cs.WARRIOR, nil, "★★★反向：战士不在（没蓝条的职业不该被补智力）")
-  eq(p91 and p91.skills[2] and p91.skills[2].skill, "奥术智慧", "★第二行才是真正施放的那个 buff")
-  local t92 = findTpl91("骑士", "力量祝福（物理职业）")
-  local p92 = t92 and EVAL_PROFILE_FROM_TEXT(t92.text)
-  local cd92 = p92 and p92.skills[1].groups and p92.skills[1].groups[1] and p92.skills[1].groups[1][1]
-  eq(cd92 and cd92.cs and cd92.cs.WARRIOR, true, "★★骑士力量祝福 → 物理职业（战士在内）")
-  eq(cd92 and cd92.cs and cd92.cs.MAGE, nil, "★★反向：法师不在力量祝福名单里")
-  local t93 = findTpl91("骑士", "智慧祝福（法系职业）")
-  local p93 = t93 and EVAL_PROFILE_FROM_TEXT(t93.text)
-  local cd93 = p93 and p93.skills[1].groups and p93.skills[1].groups[1] and p93.skills[1].groups[1][1]
-  eq(cd93 and cd93.cs and cd93.cs.MAGE, true, "★★骑士智慧祝福 → 法系职业（法师在内）")
-  -- ③d 候选者条件也能带职业过滤（模版靠它），且**文本往返不丢**
+  local function auditTplGate91()
+    -- ③-2 ★★★审计的总闸门（这才是「审计」本体：以后谁把模版改回选取器那套，这里当场变红）
+    local badPick, badOrder, memCnt = "", "", 0
+    for gi, g in ipairs(EVAL_IO_TEMPLATES) do
+      for ti, t in ipairs(g.list or {}) do
+        local prof = EVAL_PROFILE_FROM_TEXT(t.text or "")
+        local key = tostring(g.cls) .. "/" .. tostring(t.name)
+        for si, sk in ipairs((prof and prof.skills) or {}) do
+          local isPicker = (sk.skill == "选取目标:队伍成员" or sk.skill == "选取目标:团队成员")
+          if isPicker then badPick = badPick .. key .. "#" .. si .. " " end
+          for ci, cg in ipairs(sk.groups or {}) do
+            for cj, cd in ipairs(cg) do
+              local k2 = cd.k
+              if k2 == "teamHp" or k2 == "teamMana" or k2 == "teamBuff" or k2 == "teamDebuff" then
+                memCnt = memCnt + 1
+                if isPicker then badPick = badPick .. key .. "(成员条件挂在选取器行) " end
+                if cj ~= 1 then badOrder = badOrder .. key .. "#" .. si .. "." .. ci .. "." .. cj .. " " end
+              end
+            end
+          end
+        end
+      end
+    end
+    eq(badPick, "", "★★★审计：内置模版一律不再用「选取目标:队伍成员/团队成员」: " .. badPick)
+    eq(badOrder, "", "★★★审计：成员类条件必须写在**行的最前面**（它负责切目标，写在后面就是拿旧目标求值）: " .. badOrder)
+    eq(memCnt >= 12, true, "★★★审计：确实有这么多条成员类条件被用上（不是只改了注释）: " .. memCnt)
+    print(string.format("  队伍/团队模版审计：%d 条成员条件，全部挂在「指定技能」行上（0 处选取器行）", memCnt))
+    -- ③-3 ★★★「条件被静默丢弃」的哨兵：文本里写了几条成员条件，解析后就必须**一条不少**地出现
+    --   （本项目最恨的一族：解析不出来时 EVAL_PARSE_CONDS 直接不 push → 那一行变成**无条件施法**，
+    --     不看人、不看血，用户只会觉得「怎么乱放技能」——数据类错误全是静默的）
+    local badDrop, badRow = "", ""
+    for gi, g in ipairs(EVAL_IO_TEMPLATES) do
+      for ti, t in ipairs(g.list or {}) do
+        -- ★先剥掉首行「# 方案: X」——模版名本身可能含「队伍buff」这种关键词（否则会多算一条）
+        local txt = string.gsub(tostring(t.text or ""), "^# [^\n]*\n", "")
+        local exp = 0
+        for _, kw in ipairs({ "队伍血", "团队血", "队伍蓝", "团队蓝", "队伍buff", "团队buff", "队伍debuff", "团队debuff" }) do
+          local _, cnt = string.gsub(txt, kw, "")
+          exp = exp + cnt
+        end
+        if exp > 0 then
+          local prof = EVAL_PROFILE_FROM_TEXT(txt)
+          local got = 0
+          local key91 = tostring(g.cls) .. "/" .. tostring(t.name)
+          for _, sk in ipairs((prof and prof.skills) or {}) do
+            -- 每一条技能行都必须**自己带**成员条件：整行没有 = 那一行会**无条件施法**（不看人、不看血）
+            local rowHas = false
+            for _, cg in ipairs(sk.groups or {}) do
+              for _, cd in ipairs(cg) do
+                local k2 = cd.k
+                if k2 == "teamHp" or k2 == "teamMana" or k2 == "teamBuff" or k2 == "teamDebuff" then
+                  got = got + 1
+                  rowHas = true
+                end
+              end
+            end
+            if not rowHas then badRow = badRow .. key91 .. "#" .. tostring(sk.skill) .. " " end
+          end
+          if got ~= exp then
+            badDrop = badDrop .. key91 .. "(" .. exp .. "→" .. got .. ") "
+          end
+        end
+      end
+    end
+    eq(badDrop, "", "★★★审计：文本里写了几条成员条件、解析后就有几条（0 处静默丢弃）: " .. badDrop)
+    eq(badRow, "", "★★★审计：成员施法模版的**每一行**都得自己带成员条件（否则那一行是无条件施法）: " .. badRow)
+    -- ③-4 ★★★端到端：拿**模版原文**真的跑一遍（只验解析不够 —— 数据类错误全是静默的）
+    local savedSlots91b, savedDeb91b = TEST.slotNames, EVAL_HELP_CONFIG.goDebounce
+    local savedTeam91b, savedRaid91b = TEST.team, TEST.raid
+    local savedUsed91b, savedTgt91b = TEST.used, TEST.targetSel
+    local savedAlly91b = EVAL_HELP_STATE.allyUnit
+    TEST.raid = nil
+    TEST.team = {
+      { unit = "party1", name = "甲", hp = 80, hpMax = 100, mana = 100, manaMax = 100, cls = "WARRIOR", powerType = 0 },
+      { unit = "party2", name = "乙", hp = 10, hpMax = 100, mana = 100, manaMax = 100, cls = "MAGE", powerType = 0,
+        debuffs = { { tex = "Interface\\Icons\\Spell_Shadow_CurseOfSargeras", apps = 1, type = "Magic" } } },
+    }
+    TEST.slotNames = { [1] = "快速治疗", [2] = "奥术智慧", [3] = "驱散魔法" }
+    EVAL_HELP_CONFIG.goDebounce = 0 -- 关掉去抖窗（同一 GetTime 下连续按宏会被跳过）
+    EVAL_GO_LAST = 0
+    EVAL_GO_RESCAN(true)
+    EVAL_HELP_UPDATE_STATE()
+    local function runTpl91(cls, name)
+      local t = findTpl91(cls, name)
+      local prof = t and EVAL_PROFILE_FROM_TEXT(t.text)
+      local rules = {}
+      for _, sk in ipairs((prof and prof.skills) or {}) do
+        table.insert(rules, { skill = sk.skill, why = name, enabled = true, groups = sk.groups })
+      end
+      TEST.used, TEST.targetSel, EVAL_HELP_STATE.allyUnit = {}, nil, nil
+      local acted = EVAL_RULE_RUN(rules)
+      return acted, table.getn(TEST.used), TEST.used[1]
+    end
+    local a1, _n1, u1 = runTpl91("队伍/团队", "一键队伍治疗")
+    eq(a1, true, "★★★端到端：模版「一键队伍治疗」真的出手")
+    eq(u1, 1, "★★★用的是模版里**指定的技能**（槽1 = 快速治疗）")
+    eq(EVAL_HELP_STATE.allyUnit, "party2", "★★★而且打的是**血最少的乙**（模版那条「队伍血<70」真的在扫人）")
+    eq(TEST.targetSel, "unit:party2", "★★★目标也确实切了过去（指定技能 + 成员条件 = 一行自足）")
+    local a2, _n2, u2 = runTpl91("通用法系", "队伍补智力")
+    eq(a2, true, "★★★端到端：模版「队伍补智力」真的出手")
+    eq(u2, 2, "★★★用的是指定的「奥术智慧」")
+    eq(TEST.targetSel, "unit:party2", "★★★切到了「缺这个 buff 的那个人」（无队伍buff 条件在选人）")
+    local a3, _n3, u3 = runTpl91("队伍/团队", "一键队伍驱散")
+    eq(a3, true, "★★★端到端：模版「一键队伍驱散」真的出手")
+    eq(u3, 3, "★★★用的是指定的「驱散魔法」")
+    eq(TEST.targetSel, "unit:party2", "★★★并且切到了「中了魔法的那个人」")
+    TEST.slotNames, EVAL_HELP_CONFIG.goDebounce = savedSlots91b, savedDeb91b
+    TEST.team, TEST.raid = savedTeam91b, savedRaid91b
+    TEST.used, TEST.targetSel = savedUsed91b, savedTgt91b
+    EVAL_HELP_STATE.allyUnit = savedAlly91b
+    EVAL_GO_RESCAN(true)
+  end
+  auditTplContent91()
+  auditTplGate91()
+  -- ③d 过滤后缀的往返：候选者条件与**队伍/团员条件**都要不丢（后者是本轮审计后的主力写法）
   local cdRound = EVAL_PARSE_ONE("候选者缺buff:奥术智慧[职业:法师]")
   eq(cdRound and cdRound.k, "candBuff", "★候选者条件能带职业过滤（解析）")
   eq(cdRound and cdRound.cs and cdRound.cs.MAGE, true, "★★过滤进条件")
   eq(EVAL_COND_STR(cdRound), "候选者缺buff:奥术智慧[职业:法师]", "★★★导出回环不丢过滤（否则导入一次就少一条约束）")
   eq(EVAL_PARSE_ONE("候选者血<60[职业:战士]").cs.WARRIOR, true, "★候选者血% 同样支持")
+  local cdRoundTeam = EVAL_PARSE_ONE("无队伍buff:奥术智慧[职业:法师]")
+  eq(cdRoundTeam and cdRoundTeam.k == "teamBuff" and cdRoundTeam.v, false, "★★队伍条件（缺buff）也带职业过滤")
+  eq(EVAL_COND_STR(cdRoundTeam), "无队伍buff:奥术智慧[职业:法师]", "★★★队伍条件的导出回环逐字不变")
+  local cdRoundRaid = EVAL_PARSE_ONE("有团队debuff:魔法[职业:牧师][队伍:2]")
+  eq(cdRoundRaid and cdRoundRaid.k == "teamDebuff" and cdRoundRaid.dt, "Magic", "★★团队 debuff 条件：类型解析成 Magic")
+  eq(cdRoundRaid and cdRoundRaid.name == "团队" and cdRoundRaid.gs and cdRoundRaid.gs[2], true, "★★而且带着小队过滤（团员条件专属）")
+  local rtRaid = EVAL_PARSE_ONE(EVAL_COND_STR(cdRoundRaid))
+  eq(rtRaid and rtRaid.k == "teamDebuff" and rtRaid.dt == "Magic" and rtRaid.name == "团队" and rtRaid.cs and rtRaid.cs.PRIEST and rtRaid.gs and rtRaid.gs[2], true, "★★★导出→再解析一圈：类型/范围/职业/小队全都还在")
   -- ③e 编辑器：候选者行也要显示「职业过滤」格（选取器行的条件就是靠它筛人）
   local savedProf91 = EVAL_HELP_CONFIG.war.profiles
   local savedAct91 = EVAL_HELP_CONFIG.war.activeProfile
