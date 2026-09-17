@@ -37,6 +37,70 @@
 
 > 📜 Detailed per-version notes live in **[CHANGELOG.md](CHANGELOG.md)**; earlier history is in the git commit log.
 
+## 🏁 Milestones (1.52.0 → 1.72.0)
+
+### 1.71.9 → 1.72.0
+
+**⌨️ Profile hotkeys actually work** (1.71.16 → 1.71.22): four approaches eliminated one by one (CLICK hijacked the mouse / raw command names are not dispatched / this client never reads Bindings.xml) → settled on **`ACTIONBUTTON<n>` + hooking `ActionButtonDown/Up`**; ★zero cost: no macro slots, no stolen keys, live while the game runs.
+
+**🗂 Two right-click windows merged into one Profile Manager** (1.71.24): name + hotkey in two sections, **[Save] commits both**; ★no aliases for the old entry points — an alias would let a call-site revert pass silently.
+
+**🖨 The "Profiles" label became clickable** (1.71.19 → 1.71.20): left-click prints the current bindings (read-only), right-click clears every custom binding.
+
+**🎛 Combat HUD polish** (1.71.10 → 1.71.15): the profile row measures names and wraps, the title shows the player name, new Combat / Profiles sub-toggles, global tab bottom-aligned.
+
+**🖼 Three icon improvements** (1.71.9 + 1.71.13 + 1.71.15 + 1.71.17): real ▲/▼ reorder triangles, icon library 6→9 rows per page, minimap button as a 26×26 icon, right-click in the library sets the icon (★a hand pick always wins).
+
+**🧹 Dead probes from the four attempts removed** (1.71.23): deleted `go bind2` / `go bind3` / `go actbar`, turned `go bind` into a read-only status check; 205 lines gone.
+
+**🧪 Engineering infrastructure**: added `README TABLE CHECK` (version rows must live in the changelog table, exactly 10 rows); every mutation in this batch was caught.
+
+### 1.71.2 → 1.71.8
+
+**🛑 Stop Attack / 🤝 Follow** (1.71.3): one click stops casting + auto shot + wand + melee auto-attack; Follow uses `FollowByName` (one of only two non-Protected Movement functions); also fixed the full-width colon that silently broke all condition parsing.
+
+**📤 Share and receive rewritten** (1.71.3): the "raid" channel was dropped on the sending side (1.12 leader chat uses separate events, so it was never received); the receiving side keeps only the newest copy + four caps + a 5s notification throttle (★what is throttled is saying it, not blocking it).
+
+**🔇 Channel join/leave suppression + 🛍 auto-buy rewritten** (1.71.3): the test is a channel word **and** a join/leave word (so real chat is not caught); auto-buy is one purchase per tick + verified one by one + disabled after 3 consecutive failures.
+
+**🎨 Icon system + 🖼 icon library tab** (1.71.3): icons in the category dropdown; new 5th tab "Icon library" (filter, then paginate); 11 dedicated "Select target:" icons.
+
+**🧑‍🤝‍🧑 Member picker** (1.71.3): 4 new "candidate" conditions; the pick is the row's first comparison condition (`<` min / `>` max / `=` closest); party conditions gained class / subgroup multi-select (★empty set = no filtering).
+
+**📚 Case templates grew** (1.71.4 → 1.71.8): 6 groups → **11 groups / 27 entries**; party / raid templates are always "explicit skill + member condition".
+
+### 1.65.0 → 1.71.2
+
+**🧰 Toolbox (Tab3)** (1.68.0 → 1.69.2): sell / buy / discard all queued + verified one by one (against the anti-abuse disconnect); optional quest notification channel.
+
+**🗺️ Data search (Tab4) + map annotations** (1.70.37 → 1.70.44): four search kinds with unlimited drill-down; 16 annotation categories redrawn with the map; ★two "can't see it" bugs each became an automated check (tick frame moved to `WorldFrame`, DECL ORDER CHECK added).
+
+**📡 Profile sharing** (1.71.0): one click posts to guild / party / raid / say and teammates import from a popup; the receiver needs the "receive profiles" toggle (documented in the [Share] tooltip).
+
+**🩺 Party / raid member scan** (1.71.1): scans everyone by condition and picks a person (lowest HP / mana / magic debuff / missing buff) → switches target → the skill lands on them.
+
+**🧙 Condition system** (1.70.45 → 1.71.2): auras gained a remaining-time check; the casting conditions were unified under "skill state".
+
+**🖥️ Config window experience** (1.70.45 → 1.71.2): same width as the skill editor (single source), profile buttons repositioned, toggles in a row, the duplicate [Receive] button removed.
+
+**📚 Case template library** (1.67.2 → 1.71.2): rogue / mage / generic caster / hunter / paladin; data split into `examples/` and loaded from the `.toc`.
+
+**🧪 Engineering infrastructure**: 13 source-level checks + mutation tests every round; a batch of "silent failure family" defects fixed centrally.
+
+#### Earlier (1.52.0 → 1.64.0)
+
+**⚡ Execution model, three jumps** (1.52.1 → 1.59.0): target selection stops eating the key press → parallel execution → the global-cooldown stop removed.
+
+**🐛 The usability battle** (1.60.1 → 1.64.0): the root cause was Lua's multiple-return truncation (`s and pcall(...)` keeps only the first return); iron rule = the condition execution path must be tested.
+
+**🩸 Immunity closed loop** (1.63.0): "can bleed" is driven by the immunity system and shares one learning table.
+
+**⏲️ Timing system** (1.55.0 → 1.58.0): a swing timer + the "time to next attack" condition (`距攻击<0.5`).
+
+**✨ Condition system** (1.54.0): four aura-check types (self buff / target debuff / target buff / self debuff).
+
+**🖥️ UI / templates / debuggability** (1.54.2 → 1.61.3): configurable execution debounce + `go trace`; mage templates; skill list 8→12 rows.
+
 ## 🧩 Case Templates (11 groups, 27 ready-made profiles)
 
 > No need to build from scratch. Config window → "One-key macro" tab → **`[Case Templates]`** at the bottom → pick one by class, **click to import**.
