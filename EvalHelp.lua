@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.71.23"
+local VERSION = "1.71.24"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -329,7 +329,7 @@ function EVAL_HELP_UI_BUILD()
         pcall(GameTooltip.SetOwner, GameTooltip, plb, "ANCHOR_RIGHT")
         pcall(GameTooltip.AddLine, GameTooltip, L("BIND_L_TIP_T"), 1, 0.85, 0.35)
         pcall(GameTooltip.AddLine, GameTooltip, L("BIND_L_TIP_1"), 0.92, 0.88, 0.80)
-        pcall(GameTooltip.AddLine, GameTooltip, L("BIND_L_TIP_2"), 0.92, 0.88, 0.80)
+        pcall(GameTooltip.AddLine, GameTooltip, L("BIND_L_TIP_2"), 0.92, 0.88, 0.80) -- 1.71.24：右键开的是「方案管理」窗（改名 + 绑键）
         pcall(GameTooltip.AddLine, GameTooltip, L("BIND_L_TIP_3"), 1.00, 0.65, 0.30)
         pcall(GameTooltip.AddLine, GameTooltip, L("BIND_L_TIP_4"), 0.55, 0.85, 0.45) -- 1.71.20 左键 = 打印绑定情况
         pcall(GameTooltip.Show, GameTooltip)
@@ -430,9 +430,9 @@ function EVAL_HELP_UI_BUILD()
       local pidx = i
       pb:SetScript("OnClick", function(a, b)
         local mbtn = (type(a) == "string" and a) or (type(b) == "string" and b) or (type(arg1) == "string" and arg1) or "LeftButton"
-        -- ★1.71.16 用户：「战斗UI->方案单元->右键绑定任务」——右键 = 弹窗绑定该方案的快捷键（左键仍是切换）
+        -- ★1.71.24 右键 = **方案管理弹窗**（与配置窗同一个窗：改名 + 快捷键；左键仍是切换）
         if mbtn == "RightButton" then
-          EVAL_BIND_OPEN(pidx)
+          EVAL_PM_OPEN(pidx)
           return
         end
         local w2 = uiWarCfg()
@@ -1233,13 +1233,15 @@ local function cfgBuild()
     local pt = uiText(pb, 10, 0.92, 0.88, 0.80)
     pt:SetPoint("CENTER", pb, "CENTER", 0, 0)
     local pidx = i
+    cfgWin.profBtns = cfgWin.profBtns or {}
+    cfgWin.profBtns[i] = pb -- ★测试钩子：交出真实控件（右键合并的断言要真的点它）
     pcall(pb.RegisterForClicks, pb, "LeftButtonUp", "RightButtonUp")
     pb:SetScript("OnClick", function(a, b)
       local w2 = warCfg()
       local mbtn = (type(a) == "string" and a) or (type(b) == "string" and b) or (type(arg1) == "string" and arg1) or "LeftButton"
-      -- 右键 = 重命名弹窗（1.17.0：替代底部输入框流程，EditBox 不渲染也有回声行）
+      -- ★1.71.24 右键 = **方案管理弹窗**（改名 + 快捷键合并到一起；用户：「将这两个功能合并成一个弹窗管理」）
       if mbtn == "RightButton" and pidx <= table.getn(w2.profiles) then
-        EVAL_HELP_RP_OPEN(pidx)
+        EVAL_PM_OPEN(pidx)
         return
       end
       if pidx <= table.getn(w2.profiles) then
@@ -1681,16 +1683,20 @@ local function cfgBuild()
   return root
 end
 
--- ===== 方案重命名弹窗（1.17.0：替代底部输入框改名流程） =====
--- EditBox 在本客户端可能不渲染 → 加回声行（OnTextChanged 实时镜像输入内容，盲打也可见）
-local rpUI = {}
+-- ===== 方案管理弹窗（1.71.24：把「重命名」与「快捷键绑定」两个右键功能合并成一个窗） =====
+-- ★用户需求：「将这两个功能合并成一个弹窗管理，都是右键触发」——
+--   此前：配置窗方案按钮右键 = 重命名弹窗；战斗信息UI 方案按钮右键 = 绑定弹窗（两个窗、两套 chrome）。
+--   现在：**任一处右键方案按钮都开本窗**，窗内分两段：① 方案名称 ② 快捷键。
+--   ★左键语义不变（仍是激活方案）——只合并「右键」这一路。
+-- ★EditBox 在本客户端可能不渲染 → 保留回声行（OnTextChanged 实时镜像，盲打也可见）的保底范式。
+local pmUI = {}
 
-function EVAL_HELP_RP_BUILD()
-  if rpUI.root then return end
-  local W, H = 300, 150
-  local root = CreateFrame("Frame", "EVAL_HELP_RP", UIParent)
+function EVAL_PM_BUILD()
+  if pmUI.root then return end
+  local W, H = 320, 232
+  local root = CreateFrame("Frame", "EVAL_HELP_PM", UIParent)
   root:SetWidth(W) root:SetHeight(H)
-  root:SetPoint("CENTER", UIParent, "CENTER", 0, 130)
+  root:SetPoint("CENTER", UIParent, "CENTER", 0, 120)
   pcall(root.SetFrameStrata, root, "DIALOG")
   pcall(root.SetFrameLevel, root, 120)
   pcall(root.SetMovable, root, true)
@@ -1730,7 +1736,7 @@ function EVAL_HELP_RP_BUILD()
   tbBg:SetPoint("BOTTOMRIGHT", titleBar, "BOTTOMRIGHT", 0, 0)
   local title = uiText(titleBar, 10, 0.95, 0.82, 0.35)
   title:SetPoint("CENTER", titleBar, "CENTER", 0, 0)
-  title:SetText(L("RP_TITLE"))
+  pmUI.title = title
   titleBar:SetScript("OnDragStart", function()
     pcall(root.SetMovable, root, true)
     pcall(root.StartMoving, root)
@@ -1739,17 +1745,17 @@ function EVAL_HELP_RP_BUILD()
   end)
   titleBar:SetScript("OnDragStop", function() pcall(root.StopMovingOrSizing, root) end)
 
-  local lab = uiText(root, 10, 0.85, 0.85, 0.85)
-  lab:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -36)
-  lab:SetText("新方案名：")
-
-  -- 输入框（单行）
-  local okEb, eb = pcall(CreateFrame, "EditBox", "EVAL_HELP_RP_EB", root)
+  -- ===== ① 方案名称 =====
+  local secName = uiText(root, 10, 0.85, 0.70, 0.20)
+  secName:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -32)
+  secName:SetText(L("PM_SEC_NAME"))
+  pmUI.secName = secName
+  local okEb, eb = pcall(CreateFrame, "EditBox", "EVAL_HELP_PM_EB", root)
   if okEb and eb then
     pcall(eb.SetAutoFocus, eb, false)
     pcall(eb.EnableMouse, eb, true)
-    eb:SetWidth(220) eb:SetHeight(18)
-    eb:SetPoint("TOPLEFT", root, "TOPLEFT", 20, -54)
+    eb:SetWidth(240) eb:SetHeight(18)
+    eb:SetPoint("TOPLEFT", root, "TOPLEFT", 24, -70)
     local setF = false
     for _, fo in ipairs({ "GameFontHighlightSmall", "ChatFontNormal", "GameFontNormal" }) do
       if pcall(eb.SetFontObject, eb, fo) then setF = true break end
@@ -1764,57 +1770,64 @@ function EVAL_HELP_RP_BUILD()
     pcall(eb.SetTextColor, eb, 1, 1, 1)
     local ebBg = root:CreateTexture(nil, "BACKGROUND")
     uiSolid(ebBg, 0.10, 0.09, 0.06, 1)
-    ebBg:SetPoint("TOPLEFT", root, "TOPLEFT", 14, -48)
-    ebBg:SetWidth(W - 28) ebBg:SetHeight(24)
+    ebBg:SetPoint("TOPLEFT", root, "TOPLEFT", 18, -64)
+    ebBg:SetWidth(W - 36) ebBg:SetHeight(24)
     local ebEdge = root:CreateTexture(nil, "BORDER")
     uiSolid(ebEdge, 0.85, 0.70, 0.20, 0.8)
-    ebEdge:SetPoint("TOPLEFT", root, "TOPLEFT", 14, -48)
-    ebEdge:SetWidth(W - 28) ebEdge:SetHeight(1)
-    rpUI.eb = eb
+    ebEdge:SetPoint("TOPLEFT", root, "TOPLEFT", 18, -64)
+    ebEdge:SetWidth(W - 36) ebEdge:SetHeight(1)
+    pmUI.eb = eb
   else
     local noEb = uiText(root, 9, 0.7, 0.5, 0.5)
-    noEb:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -54)
+    noEb:SetPoint("TOPLEFT", root, "TOPLEFT", 20, -70)
     noEb:SetText(L("RP_NOEB"))
   end
-
-  -- 回声行：实时镜像输入内容（EditBox 不渲染时的保底可见性）
+  -- 回声行：EditBox 不渲染时的保底可见性
   local echo = uiText(root, 11, 1, 0.9, 0.4)
-  echo:SetPoint("TOPLEFT", root, "TOPLEFT", 20, -80)
-  pcall(echo.SetWidth, echo, W - 40)
+  echo:SetPoint("TOPLEFT", root, "TOPLEFT", 24, -94)
+  pcall(echo.SetWidth, echo, W - 48)
   pcall(echo.SetJustifyH, echo, "LEFT")
-  rpUI.echo = echo
-  if rpUI.eb then
-    rpUI.eb:SetScript("OnTextChanged", function()
-      local ok, t = pcall(rpUI.eb.GetText, rpUI.eb)
+  pmUI.echo = echo
+  if pmUI.eb then
+    pmUI.eb:SetScript("OnTextChanged", function()
+      local ok, t = pcall(pmUI.eb.GetText, pmUI.eb)
       if ok and type(t) == "string" then echo:SetText(t) end
     end)
   end
 
-  local function apply()
-    local nm = ""
-    if rpUI.eb then
-      local ok, t = pcall(rpUI.eb.GetText, rpUI.eb)
-      if ok and type(t) == "string" then nm = t end
-    end
-    nm = string.gsub(nm, "^%s*(.-)%s*$", "%1")
-    local w2 = warCfg()
-    local p = rpUI.target and w2.profiles[rpUI.target]
-    if p and nm ~= "" then
-      p.name = nm
-      say("方案已改名: " .. nm)
-    end
-    rpUI.target = nil
-    root:Hide()
-    EVAL_WAR_TAB_REFRESH()
-  end
-  if rpUI.eb then
-    rpUI.eb:SetScript("OnEnterPressed", function() apply() end)
-    rpUI.eb:SetScript("OnEscapePressed", function() root:Hide() end)
-  end
+  -- ===== ② 快捷键 =====
+  local secKey = uiText(root, 10, 0.85, 0.70, 0.20)
+  secKey:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -116)
+  secKey:SetText(L("PM_SEC_KEY"))
+  pmUI.secKey = secKey
+  local curText = uiText(root, 10, 0.92, 0.88, 0.80)
+  curText:SetPoint("TOPLEFT", root, "TOPLEFT", 20, -134)
+  pmUI.curText = curText
+  local keyBtn = CreateFrame("Button", nil, root)
+  keyBtn:SetWidth(W - 36) keyBtn:SetHeight(20)
+  keyBtn:SetPoint("TOPLEFT", root, "TOPLEFT", 18, -152)
+  pcall(keyBtn.EnableMouse, keyBtn, true)
+  pcall(keyBtn.RegisterForClicks, keyBtn, "LeftButtonUp")
+  local kbBg = keyBtn:CreateTexture(nil, "BACKGROUND")
+  uiSolid(kbBg, 0.16, 0.13, 0.08, 1)
+  kbBg:SetPoint("TOPLEFT", keyBtn, "TOPLEFT", 0, 0)
+  kbBg:SetPoint("BOTTOMRIGHT", keyBtn, "BOTTOMRIGHT", 0, 0)
+  local keyText = uiText(keyBtn, 10, 0.95, 0.82, 0.35)
+  keyText:SetPoint("CENTER", keyBtn, "CENTER", 0, 0)
+  pmUI.keyBtn, pmUI.keyText = keyBtn, keyText
+  keyBtn:SetScript("OnClick", function()
+    local rows, items, locked = EVAL_BIND_KEYLIST()
+    EVAL_DD_OPEN(keyBtn, items, function(pi) EVAL_BIND_DD_PICK(rows, pi) end, { locked = locked })
+  end)
+  local infoText = uiText(root, 9, 0.65, 0.65, 0.65)
+  infoText:SetPoint("TOPLEFT", root, "TOPLEFT", 18, -176)
+  pcall(infoText.SetWidth, infoText, W - 36)
+  pmUI.infoText = infoText
 
+  -- ===== 按钮行 =====
   local function bBtn(x, label, fn)
     local b = CreateFrame("Button", nil, root)
-    b:SetWidth(80) b:SetHeight(22)
+    b:SetWidth(84) b:SetHeight(22)
     b:SetPoint("BOTTOMLEFT", root, "BOTTOMLEFT", x, 12)
     pcall(b.EnableMouse, b, true)
     pcall(b.RegisterForClicks, b, "LeftButtonUp")
@@ -1826,27 +1839,121 @@ function EVAL_HELP_RP_BUILD()
     bt:SetPoint("CENTER", b, "CENTER", 0, 0)
     bt:SetText(label)
     b:SetScript("OnClick", fn)
+    return b
   end
-  bBtn(70, L("BTN_OK"), function() apply() end)
-  bBtn(160, L("BTN_CANCEL"), function() root:Hide() end)
+  -- ★「保存」= 一次把两段都提交（改名 + 绑键），符合「合并成一个弹窗管理」的语义
+  pmUI.saveBtn = bBtn(12, L("BTN_OK"), function() EVAL_PM_SAVE() end)
+  pmUI.clearBtn = bBtn(108, L("BIND_CLEAR"), function()
+    local p = warCfg().profiles and warCfg().profiles[pmUI.pidx]
+    EVAL_BIND_CLEAR(pmUI.pidx)
+    say(string.format(L("BIND_CLEARED"), tostring(p and p.name)))
+    pmUI.selKey = nil
+    pmRefresh()
+  end)
+  bBtn(204, L("BTN_CANCEL"), function()
+    if type(EVAL_DD_HIDE) == "function" then pcall(EVAL_DD_HIDE) end
+    root:Hide()
+  end)
 
+  root:SetScript("OnHide", function()
+    if type(EVAL_DD_HIDE) == "function" then pcall(EVAL_DD_HIDE) end -- 下拉贴 UIParent，宿主关了要一起收
+  end)
   root:Hide()
-  rpUI.root = root
+  pmUI.root = root
 end
 
-function EVAL_HELP_RP_OPEN(idx)
-  EVAL_HELP_RP_BUILD()
+-- 刷新显示（标题 / 当前键 / 名字回填 / 冲突提示）——单一刷新点，改名与绑键都走它
+function pmRefresh()
   local w2 = warCfg()
-  if not w2.profiles[idx] then return end
-  rpUI.target = idx
-  local nm = tostring(w2.profiles[idx].name or "")
-  if rpUI.eb then
-    pcall(rpUI.eb.SetText, rpUI.eb, nm)
-    pcall(rpUI.eb.SetFocus, rpUI.eb)
+  local p = pmUI.pidx and w2.profiles and w2.profiles[pmUI.pidx]
+  pmUI.title:SetText(L("PM_TITLE") .. "：" .. (p and tostring(p.name) or "?"))
+  local cur = w2.bindKeys and w2.bindKeys[pmUI.pidx]
+  pmUI.curText:SetText(string.format(L("BIND_CUR"), (type(cur) == "string" and cur ~= "") and cur or L("BIND_NONE")))
+  pmUI.keyText:SetText(pmUI.selKey or L("BIND_PICK"))
+  local info, ir, ig, ib = L("PM_HINT"), 0.65, 0.65, 0.65
+  if pmUI.selKey then
+    local okA, act = pcall(GetBindingAction, pmUI.selKey)
+    act = (okA and type(act) == "string") and act or ""
+    local cmd = (pmUI.pidx and w2.bindSlots and w2.bindSlots[pmUI.pidx]) and EVAL_BIND_SLOT_CMD(w2.bindSlots[pmUI.pidx]) or ""
+    if act == "" or (cmd ~= "" and act == cmd) then
+      info, ir, ig, ib = L("BIND_FREE"), 0.55, 0.85, 0.45
+    else
+      info, ir, ig, ib = string.format(L("BIND_CONFLICT"), act), 1.00, 0.65, 0.30
+    end
   end
-  if rpUI.echo then rpUI.echo:SetText(nm) end
-  rpUI.root:Show()
+  pmUI.infoText:SetText(info)
+  pcall(pmUI.infoText.SetTextColor, pmUI.infoText, ir, ig, ib)
 end
+
+function EVAL_PM_PICK(key)
+  pmUI.selKey = key
+  pmRefresh()
+end
+
+-- ① 改名（从输入框取值；空名如实拒绝、不改动）
+function EVAL_PM_APPLY_NAME()
+  local nm = ""
+  if pmUI.eb then
+    local ok, t = pcall(pmUI.eb.GetText, pmUI.eb)
+    if ok and type(t) == "string" then nm = t end
+  end
+  nm = string.gsub(nm, "^%s*(.-)%s*$", "%1")
+  if nm == "" then return false end
+  local w2 = warCfg()
+  local p = pmUI.pidx and w2.profiles and w2.profiles[pmUI.pidx]
+  if not p then return false end
+  p.name = nm
+  return true
+end
+
+-- ★保存 = 改名 +（选了键就）绑键，一次提交；两条都失败才报「什么都没做」
+function EVAL_PM_SAVE()
+  local w2 = warCfg()
+  local p = pmUI.pidx and w2.profiles and w2.profiles[pmUI.pidx]
+  if not p then return false, "noprof" end
+  local did = false
+  if EVAL_PM_APPLY_NAME() then
+    did = true
+    say(string.format(L("PM_RENAMED"), tostring(p.name)))
+  end
+  if pmUI.selKey then
+    local ok2, err = EVAL_BIND_DO(pmUI.pidx, pmUI.selKey)
+    if ok2 then
+      did = true
+      say(string.format(L("BIND_DONE"), pmUI.selKey, tostring(p.name)))
+      pmUI.selKey = nil
+    else
+      say(string.format(L("BIND_FAIL"), tostring(err)))
+    end
+  end
+  if not did then say(L("PM_NAME_EMPTY")) end
+  pmRefresh()
+  EVAL_WAR_TAB_REFRESH() -- ★数据变了 → 界面同步刷新（1.71.1 教训：刷新放写入点）
+  return did
+end
+
+-- 打开（两处右键共用这一个入口）——名字回填 + 焦点 + 刷新
+function EVAL_PM_OPEN(idx)
+  EVAL_PM_BUILD()
+  local w2 = warCfg()
+  if not (w2.profiles and w2.profiles[idx]) then return false end
+  pmUI.pidx = idx
+  pmUI.selKey = nil
+  local nm = tostring(w2.profiles[idx].name or "")
+  if pmUI.eb then
+    pcall(pmUI.eb.SetText, pmUI.eb, nm)
+    pcall(pmUI.eb.SetFocus, pmUI.eb)
+  end
+  if pmUI.echo then pmUI.echo:SetText(nm) end
+  pmRefresh()
+  pmUI.root:Show()
+  return true
+end
+
+-- ★★1.71.24 关键决定：**不为旧入口留别名**。
+--   留别名会让「调用点改回旧名字」这种回归**悄悄通过**（旧名照样开同一个窗 → 行为断言全绿），
+--   实测变异 M1/M2 正是这样 SURVIVED 的 → 删掉旧名，任何回退都会当场变成「调用 nil」而炸响。
+--   （旧名 EVAL_HELP_RP_OPEN / EVAL_BIND_OPEN 的调用点已全部改指 EVAL_PM_OPEN。）
 
 
 -- ===== 通用名称输入弹窗（1.29.0：仿 1.17.0 重命名弹窗回声行范式——EditBox 可能不渲染 → 金色回声行保底） =====
@@ -2200,6 +2307,46 @@ function EVAL_HELP_SE_WARN_ICON() return SE_WARN_ICON end
 -- ★1.71.3 读值口：**整套**状态标记（白=不可用 / 黄=待测试）。
 --   ★同样给 IconBrowser 用（两枚都要进「本插件在用」；只报白的会漏掉黄的那枚）。
 function EVAL_HELP_SE_MARK_ICONS() return { unavail = SE_MARK_UNAVAIL, test = SE_MARK_TEST } end
+
+-- ★1.71.24 管理窗几何（供「两段都在窗内、有序排开」的断言读**生产真值**，不写死常量）
+function EVAL_TEST_PM_GEO()
+  if not (pmUI and pmUI.root) then return nil end
+  -- ★GetPoint 返回 (point, relTo, relPoint, x, y) 五个值——取第 5 个 y
+  local function yOf(f)
+    if not f then return nil end
+    local ok, _p, _r, _rp, _x, y = pcall(f.GetPoint, f, 1)
+    return (ok and type(y) == "number") and y or nil
+  end
+  local okh, hh = pcall(pmUI.root.GetHeight, pmUI.root)
+  return {
+    h = (okh and hh) or nil,
+    secNameY = yOf(pmUI.secName), secKeyY = yOf(pmUI.secKey),
+    keyBtnY = yOf(pmUI.keyBtn), infoY = yOf(pmUI.infoText), btnY = yOf(pmUI.saveBtn),
+  }
+end
+
+-- ★1.71.24 全插件还剩几个「方案管理类」弹窗（合并的**结构判据**）：
+--   ★行为断言抓不到「调用点改回旧名字」——因为旧名字是别名、开出来还是同一个窗
+--     （变异 M1/M2 就是这么 SURVIVED 的）→ 必须直接**数窗**：只剩 pmUI 一个才算合并成功。
+function EVAL_HELP_PM_WINDOW_COUNT()
+  local n = 0
+  if pmUI and pmUI.root then n = n + 1 end
+  if type(rpUI) == "table" and rpUI.root then n = n + 1 end
+  if type(bindUI) == "table" and bindUI.root then n = n + 1 end
+  return n
+end
+
+-- ★1.71.24 配置窗是否可见（EVAL_HELP_CFG_TOGGLE 是**切换**语义，断言前必须先确认真开着）
+function EVAL_TEST_CFG_VISIBLE()
+  if not (cfgWin and cfgWin.root) then return false end
+  local ok, v = pcall(cfgWin.root.IsVisible, cfgWin.root)
+  return (ok and v) and true or false
+end
+
+-- ★1.71.24 交出配置窗的方案按钮真实控件（供「两处右键开同一个窗」的断言真的点它）
+function EVAL_TEST_CFG_PROF()
+  return cfgWin and cfgWin.profBtns and { btns = cfgWin.profBtns } or nil
+end
 
 function EVAL_TEST_CFG_NAV()
   local out = {}
@@ -2574,10 +2721,17 @@ function EVAL_BIND_KEYLIST()
   return rows, items, locked
 end
 
--- 下拉选中回调（命名导出 = 测试能直调，不依赖真的点开下拉）：标题行不选、键名行进状态
+-- 下拉选中回调（命名导出 = 测试能直调，不依赖真的点开下拉）：标题行不选、键名行进状态。
+-- ★1.71.24 合并后进的是「方案管理窗」的状态（EVAL_PM_PICK）——旧名 EVAL_BIND_PICK 保留为别名。
+--   ★这里引用的是**全局** EVAL_PM_PICK（定义在文件下方）；绝不能用 `local EVAL_PM_PICK` 前置声明，
+--     否则会把下方那个全局定义整个遮住（Lua 词法作用域 —— 声明之后的名字都解析成 local，而实现写在声明之前）。
 function EVAL_BIND_DD_PICK(rows, pi)
   local row = rows and rows[pi]
-  if row and row.key then EVAL_BIND_PICK(row.key) end
+  if row and row.key and type(EVAL_PM_PICK) == "function" then EVAL_PM_PICK(row.key) end
+end
+
+function EVAL_BIND_PICK(key)
+  if type(EVAL_PM_PICK) == "function" then return EVAL_PM_PICK(key) end
 end
 
 -- 逻辑层（UI 与测试共用一份实现）：绑定 / 清除。★换键时把旧键解绑；绑定后立刻 SaveBindings 持久化。
@@ -2809,205 +2963,44 @@ function EVAL_BIND_FREE_SLOT(allowTaken)
   return fallback
 end
 
--- ===== 绑定弹窗（美化版：金边深底 + 标题栏拖动 + 分类下拉 + 冲突/空闲提示） =====
-local bindUI = { root = nil, pidx = nil, selKey = nil }
-
-local function bindRefresh()
-  local w2 = warCfg()
-  local p = bindUI.pidx and w2.profiles and w2.profiles[bindUI.pidx]
-  bindUI.title:SetText(L("BIND_TITLE") .. "：" .. (p and tostring(p.name) or "?"))
-  local cur = w2.bindKeys and w2.bindKeys[bindUI.pidx]
-  bindUI.curText:SetText(string.format(L("BIND_CUR"), (type(cur) == "string" and cur ~= "") and cur or L("BIND_NONE")))
-  bindUI.keyText:SetText(bindUI.selKey or L("BIND_PICK"))
-  -- 冲突提示：选中键已被占用时如实橙色警告（绑定后替换）；空闲 = 绿
-  local info, ir, ig, ib = "", 0.65, 0.65, 0.65
-  if bindUI.selKey then
-    local okA, act = pcall(GetBindingAction, bindUI.selKey)
-    act = (okA and type(act) == "string") and act or ""
-    if act == "" or act == EVAL_BIND_CMD(bindUI.pidx) then
-      info, ir, ig, ib = L("BIND_FREE"), 0.55, 0.85, 0.45
-    else
-      info, ir, ig, ib = string.format(L("BIND_CONFLICT"), act), 1.00, 0.65, 0.30
-    end
-  end
-  bindUI.infoText:SetText(info)
-  pcall(bindUI.infoText.SetTextColor, bindUI.infoText, ir, ig, ib)
-end
-
-function EVAL_BIND_PICK(key)
-  bindUI.selKey = key
-  bindRefresh()
-end
-
-function EVAL_BIND_BUILD()
-  if bindUI.root then return end
-  local W, H = 300, 190
-  local root = CreateFrame("Frame", "EVAL_HELP_BIND", UIParent)
-  root:SetWidth(W) root:SetHeight(H)
-  root:SetPoint("CENTER", UIParent, "CENTER", 0, 120)
-  pcall(root.SetFrameStrata, root, "DIALOG")
-  pcall(root.SetFrameLevel, root, 120)
-  pcall(root.SetMovable, root, true)
-  pcall(root.EnableMouse, root, true)
-  if uiOffscreen(root) then
-    root:ClearAllPoints()
-    root:SetPoint("CENTER", UIParent, "CENTER", 0, 100)
-  end
-  local bg = root:CreateTexture(nil, "BACKGROUND")
-  uiSolid(bg, 0.06, 0.05, 0.04, 0.98)
-  bg:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
-  bg:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", 0, 0)
-  for _, e in ipairs({ "TOP", "BOTTOM" }) do
-    local t = root:CreateTexture(nil, "BORDER")
-    uiSolid(t, 0.85, 0.70, 0.20, 1)
-    t:SetPoint(e .. "LEFT", root, e .. "LEFT", 0, 0)
-    t:SetPoint(e .. "RIGHT", root, e .. "RIGHT", 0, 0)
-    t:SetHeight(1)
-  end
-  for _, side in ipairs({ "LEFT", "RIGHT" }) do
-    local t = root:CreateTexture(nil, "BORDER")
-    uiSolid(t, 0.85, 0.70, 0.20, 1)
-    t:SetPoint("TOP" .. side, root, "TOP" .. side, 0, 0)
-    t:SetPoint("BOTTOM" .. side, root, "BOTTOM" .. side, 0, 0)
-    t:SetWidth(1)
-  end
-  local titleBar = CreateFrame("Button", nil, root)
-  titleBar:SetWidth(W - 4) titleBar:SetHeight(22)
-  titleBar:SetPoint("TOP", root, "TOP", 0, -2)
-  pcall(titleBar.SetFrameLevel, titleBar, 121)
-  pcall(titleBar.EnableMouse, titleBar, true)
-  pcall(titleBar.RegisterForClicks, titleBar, "LeftButtonUp")
-  pcall(titleBar.RegisterForDrag, titleBar, "LeftButton")
-  local tbBg = titleBar:CreateTexture(nil, "BACKGROUND")
-  uiSolid(tbBg, 0.14, 0.11, 0.06, 1)
-  tbBg:SetPoint("TOPLEFT", titleBar, "TOPLEFT", 0, 0)
-  tbBg:SetPoint("BOTTOMRIGHT", titleBar, "BOTTOMRIGHT", 0, 0)
-  local title = uiText(titleBar, 10, 0.95, 0.82, 0.35)
-  title:SetPoint("CENTER", titleBar, "CENTER", 0, 0)
-  bindUI.title = title
-  titleBar:SetScript("OnDragStart", function()
-    pcall(root.SetMovable, root, true)
-    pcall(root.StartMoving, root)
-    pcall(root.StopMovingOrSizing, root)
-    pcall(root.StartMoving, root)
-  end)
-  titleBar:SetScript("OnDragStop", function() pcall(root.StopMovingOrSizing, root) end)
-
-  local curText = uiText(root, 10, 0.92, 0.88, 0.80)
-  curText:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -36)
-  bindUI.curText = curText
-
-  -- 选择按键（下拉：分类标题 + 键名；locked 行不可点）
-  local keyBtn = CreateFrame("Button", nil, root)
-  keyBtn:SetWidth(W - 32) keyBtn:SetHeight(20)
-  keyBtn:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -60)
-  pcall(keyBtn.EnableMouse, keyBtn, true)
-  pcall(keyBtn.RegisterForClicks, keyBtn, "LeftButtonUp")
-  local kbBg = keyBtn:CreateTexture(nil, "BACKGROUND")
-  uiSolid(kbBg, 0.16, 0.13, 0.08, 1)
-  kbBg:SetPoint("TOPLEFT", keyBtn, "TOPLEFT", 0, 0)
-  kbBg:SetPoint("BOTTOMRIGHT", keyBtn, "BOTTOMRIGHT", 0, 0)
-  local keyText = uiText(keyBtn, 10, 0.95, 0.82, 0.35)
-  keyText:SetPoint("CENTER", keyBtn, "CENTER", 0, 0)
-  bindUI.keyBtn, bindUI.keyText = keyBtn, keyText
-  keyBtn:SetScript("OnClick", function()
-    local rows, items, locked = EVAL_BIND_KEYLIST()
-    EVAL_DD_OPEN(keyBtn, items, function(pi) EVAL_BIND_DD_PICK(rows, pi) end, { locked = locked })
-  end)
-
-  local infoText = uiText(root, 9, 0.65, 0.65, 0.65)
-  infoText:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -86)
-  bindUI.infoText = infoText
-  local hint = uiText(root, 8, 0.55, 0.55, 0.55)
-  hint:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -104)
-  hint:SetText(L("BIND_HINT"))
-
-  local function bBtn(x, label, fn)
-    local b = CreateFrame("Button", nil, root)
-    b:SetWidth(80) b:SetHeight(22)
-    b:SetPoint("BOTTOMLEFT", root, "BOTTOMLEFT", x, 12)
-    pcall(b.EnableMouse, b, true)
-    pcall(b.RegisterForClicks, b, "LeftButtonUp")
-    local bb = b:CreateTexture(nil, "BACKGROUND")
-    uiSolid(bb, 0.22, 0.18, 0.10, 1)
-    bb:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
-    bb:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
-    local bt = uiText(b, 10, 0.95, 0.82, 0.35)
-    bt:SetPoint("CENTER", b, "CENTER", 0, 0)
-    bt:SetText(label)
-    b:SetScript("OnClick", fn)
-    return b
-  end
-  bindUI.doBtn = bBtn(20, L("BIND_DO"), function()
-    if not bindUI.selKey then
-      bindUI.infoText:SetText(L("BIND_NOKEY"))
-      pcall(bindUI.infoText.SetTextColor, bindUI.infoText, 1.00, 0.65, 0.30)
-      return
-    end
-    local ok2, err = EVAL_BIND_DO(bindUI.pidx, bindUI.selKey)
-    local p = warCfg().profiles and warCfg().profiles[bindUI.pidx]
-    if ok2 then
-      say(string.format(L("BIND_DONE"), bindUI.selKey, tostring(p and p.name)))
-      bindUI.selKey = nil
-      bindRefresh()
-    else
-      say(string.format(L("BIND_FAIL"), tostring(err)))
-    end
-  end)
-  bindUI.clearBtn = bBtn(110, L("BIND_CLEAR"), function()
-    EVAL_BIND_CLEAR(bindUI.pidx)
-    local p = warCfg().profiles and warCfg().profiles[bindUI.pidx]
-    say(string.format(L("BIND_CLEARED"), tostring(p and p.name)))
-    bindUI.selKey = nil
-    bindRefresh()
-  end)
-  bBtn(200, L("BTN_CANCEL"), function()
-    if type(EVAL_DD_HIDE) == "function" then pcall(EVAL_DD_HIDE) end
-    root:Hide()
-  end)
-
-  root:SetScript("OnHide", function()
-    if type(EVAL_DD_HIDE) == "function" then pcall(EVAL_DD_HIDE) end -- 下拉贴 UIParent，宿主关了要一起收
-  end)
-  root:Hide()
-  bindUI.root = root
-end
-
-function EVAL_BIND_OPEN(pidx)
-  EVAL_BIND_BUILD()
-  local w2 = warCfg()
-  if not (w2.profiles and w2.profiles[pidx]) then return false end
-  bindUI.pidx = pidx
-  bindUI.selKey = nil
-  bindRefresh()
-  bindUI.root:Show()
-  return true
-end
-
--- ★断言钩子：弹窗与逻辑层的真实状态（读真控件/真数据，不读常量）
+-- ===== 方案管理弹窗断言钩子（1.71.24：重命名 + 快捷键合并后的单一弹窗） =====
+-- ★名字保留 EVAL_TEST_BIND_*（既有断言组 98/99/100 都在用）——语义已扩为「方案管理窗」。
+-- ★读真控件/真数据，不读常量。
 function EVAL_TEST_BIND_UI()
-  local out = { built = (bindUI.root ~= nil) and true or false, pidx = bindUI.pidx, selKey = bindUI.selKey,
-    shown = false, title = nil, cur = nil, info = nil }
-  if bindUI.root then
-    local ok, v = pcall(bindUI.root.IsVisible, bindUI.root)
+  local out = { built = (pmUI.root ~= nil) and true or false, pidx = pmUI.pidx, selKey = pmUI.selKey,
+    shown = false, title = nil, cur = nil, info = nil, echo = nil }
+  if pmUI.root then
+    local ok, v = pcall(pmUI.root.IsVisible, pmUI.root)
     out.shown = (ok and v) and true or false
   end
-  if bindUI.title then
-    local ok, t = pcall(bindUI.title.GetText, bindUI.title)
+  if pmUI.title then
+    local ok, t = pcall(pmUI.title.GetText, pmUI.title)
     out.title = ok and tostring(t or "") or nil
   end
-  if bindUI.curText then
-    local ok, t = pcall(bindUI.curText.GetText, bindUI.curText)
+  if pmUI.curText then
+    local ok, t = pcall(pmUI.curText.GetText, pmUI.curText)
     out.cur = ok and tostring(t or "") or nil
   end
-  if bindUI.infoText then
-    local ok, t = pcall(bindUI.infoText.GetText, bindUI.infoText)
+  if pmUI.infoText then
+    local ok, t = pcall(pmUI.infoText.GetText, pmUI.infoText)
     out.info = ok and tostring(t or "") or nil
+  end
+  if pmUI.echo then
+    local ok, t = pcall(pmUI.echo.GetText, pmUI.echo)
+    out.echo = ok and tostring(t or "") or nil
   end
   return out
 end
-function EVAL_TEST_BIND_DO_BTN() return bindUI.doBtn end
-function EVAL_TEST_BIND_CLOSE() if bindUI.root then bindUI.root:Hide() end end
+-- ★改名后弹窗要真的开：合并窗的「保存」按钮（改名 + 绑键一次提交）
+function EVAL_TEST_BIND_DO_BTN() return pmUI.saveBtn end
+function EVAL_TEST_BIND_CLOSE() if pmUI.root then pmUI.root:Hide() end end
+-- ★合并窗专有：直接驱动输入框（EditBox 不渲染也能测逻辑），返回是否成功
+function EVAL_TEST_PM_SETNAME(nm)
+  if not pmUI.eb then return false end
+  local ok = pcall(pmUI.eb.SetText, pmUI.eb, tostring(nm or ""))
+  if ok and pmUI.echo then pcall(pmUI.echo.SetText, pmUI.echo, tostring(nm or "")) end
+  return ok
+end
 
 
 -- ============ 状态信息 UI（展示 Cat 式角色状态表 EVAL_HELP_STATE 的实时值） ============

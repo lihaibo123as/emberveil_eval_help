@@ -7212,4 +7212,116 @@ do
   TEST.bindingCmds = nil
   print("  派发前提自检：客户端自带 ACTIONBUTTON1~12 是否在命令表里（0=前提不成立）")
 end
+
+-- 102) ★★★1.71.24 用户：「将这两个功能合并成一个弹窗管理.都是右键触发.」
+--   = 把「配置窗方案按钮右键→重命名」与「战斗信息UI 方案按钮右键→快捷键绑定」两个弹窗合并成一个
+--     **方案管理窗**（窗内两段：① 方案名称 ② 快捷键），并且**两处右键都开同一个窗**。
+--   ★本组守四条性质：① 两处右键都进同一个窗（不是各开各的）② 窗内**两段都在**（能改名 + 能绑键，缺一不可）
+--                    ③ 「保存」一次提交两段（改名 + 绑键）④ 左键语义不变（仍是激活方案）
+do
+  local savedP102, savedA102 = EVAL_HELP_CONFIG.war.profiles, EVAL_HELP_CONFIG.war.activeProfile
+  EVAL_HELP_CONFIG.war.profiles = { { name = "甲", skills = {} }, { name = "乙", skills = {} } }
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  TEST.bindings = nil
+  TEST.saveBindingsCalls = 0
+  TEST.chat = nil
+  EVAL_HELP_CONFIG.war.bindKeys = nil
+  EVAL_HELP_CONFIG.war.bindSlots = nil
+  EVAL_TEST_BIND_CLOSE()
+  -- ① 战斗信息UI 方案按钮右键 → 开窗
+  local wasShown102 = EVAL_TEST_UI_SHOWN()
+  if not wasShown102 then EVAL_HELP_UI_TOGGLE() end
+  EVAL_WAR_TAB_REFRESH()
+  EVAL_HELP_UI_TICK()
+  local up102 = EVAL_TEST_UI_PROF()
+  eq(up102.btns[1] and up102.btns[1].btn ~= nil, true, "①前置：拿到战斗信息UI 方案按钮真实控件")
+  up102.btns[1].btn:GetScript("OnClick")("RightButton")
+  local bu102 = EVAL_TEST_BIND_UI()
+  eq(bu102.shown, true, "①★★战斗信息UI 右键方案 → 弹窗真的开了")
+  eq(bu102.pidx, 1, "①★开的是被点的那个方案（第 1 个）")
+  eq(string.find(tostring(bu102.title), EVAL_L("PM_TITLE"), 1, true) ~= nil, true,
+    "①★★窗标题 = 「方案管理」（合并后的新标题，不再是「绑定快捷键」）: " .. tostring(bu102.title))
+  -- ② 两段都在：名字段（回声行可写）+ 快捷键段（当前绑定行 + 无绑定如实说「无」）
+  eq(type(EVAL_TEST_PM_SETNAME) == "function" and EVAL_TEST_PM_SETNAME("甲改名") == true, true,
+    "②★窗内**名字段**真的可输入（改写输入框 + 回声行）")
+  eq(EVAL_TEST_BIND_UI().echo, "甲改名", "②★回声行镜像了输入内容（EditBox 不渲染也看得见）")
+  eq(bu102.cur ~= nil and string.find(tostring(bu102.cur), EVAL_L("BIND_NONE"), 1, true) ~= nil, true,
+    "②★★窗内**快捷键段**也在（当前绑定行如实显示「无」）: " .. tostring(bu102.cur))
+  -- ③ 「保存」一次提交两段：改名 + 绑键
+  local rows102 = EVAL_BIND_KEYLIST()
+  local pickI102 = nil
+  for i, r102 in ipairs(rows102) do if r102.key == "F9" then pickI102 = i break end end
+  EVAL_BIND_DD_PICK(rows102, pickI102)
+  eq(EVAL_TEST_BIND_UI().selKey, "F9", "③前置：下拉选中 F9")
+  TEST.chat = nil
+  EVAL_TEST_BIND_DO_BTN():GetScript("OnClick")()
+  eq(EVAL_HELP_CONFIG.war.profiles[1].name, "甲改名", "③★★点[保存] → **名字真的改了**（第一段生效）")
+  eq(string.find(tostring(TEST.bindings.F9), "^ACTIONBUTTON%d+$") ~= nil, true,
+    "③★★同一次[保存] → **快捷键也真的绑上了**（第二段生效）——这才是「一个弹窗管理」")
+  eq(EVAL_HELP_CONFIG.war.bindKeys[1], "F9", "③★配置记下 F9")
+  -- ③b 名字留空 → 如实拒绝改名、但**绑键照常**（两段互不牵连）
+  TEST.bindings = nil
+  EVAL_HELP_CONFIG.war.bindKeys = nil EVAL_HELP_CONFIG.war.bindSlots = nil
+  EVAL_TEST_PM_SETNAME("   ")
+  EVAL_BIND_DD_PICK(rows102, pickI102)
+  TEST.chat = nil
+  EVAL_TEST_BIND_DO_BTN():GetScript("OnClick")()
+  eq(EVAL_HELP_CONFIG.war.profiles[1].name, "甲改名", "③b★空名字**不改名**（保留原名，不写空串）")
+  eq(string.find(tostring(TEST.bindings.F9), "^ACTIONBUTTON%d+$") ~= nil, true, "③b★空名字不影响绑键那一段")
+  EVAL_TEST_BIND_CLOSE()
+  -- ③c ★★合并的**结构判据**（两条，缺一就有盲区）：
+  --   ① 全插件只剩**一个**管理弹窗（旧的重命名窗/绑定窗对象都已不在）
+  --   ② 旧入口名**彻底删除**（不是留等价别名）
+  --   ★为什么必须这样判：留别名时「调用点改回旧名字」的回归会**悄悄通过**
+  --     （旧名照样开同一个窗 → 行为断言全绿）。实测变异 M1/M2 正是这样 SURVIVED 的。
+  --     删掉旧名之后，任何回退都变成「调用 nil」当场炸响。
+  eq(EVAL_HELP_PM_WINDOW_COUNT(), 1, "③c★★全插件只剩**一个**管理弹窗（旧的重命名窗/绑定窗都已合并掉）")
+  -- ③d ★窗内两段都**真的画在了窗内**（需求：「一个弹窗管理」——两段挤不下就等于没合并）
+  local pmGeo = EVAL_TEST_PM_GEO()
+  eq(pmGeo ~= nil, true, "③d前置：拿到管理窗的真实几何")
+  -- ★y 是**向下递减**的（TOPLEFT 锚点 + 负值）：越往下值越小
+  eq(pmGeo.secKeyY < pmGeo.secNameY and pmGeo.keyBtnY < pmGeo.secKeyY and pmGeo.infoY < pmGeo.keyBtnY, true,
+    "③d★两段落从上到下**有序排开**（名称 → 快捷键 → 提示行）: "
+    .. table.concat({ tostring(pmGeo.secNameY), tostring(pmGeo.secKeyY), tostring(pmGeo.keyBtnY), tostring(pmGeo.infoY) }, " > "))
+  eq(pmGeo.infoY < pmGeo.btnY, true, "③d★提示行在按钮行**之上**（不压按钮）")
+  -- ★窗内 = |y| 不超过窗高（按钮行用 BOTTOMLEFT 锚点，所以是正值）
+  eq(math.abs(pmGeo.infoY) < pmGeo.h and pmGeo.btnY >= 0, true,
+    "③d★★全部内容都在窗内（没有越界）: H=" .. tostring(pmGeo.h) .. " info=" .. tostring(pmGeo.infoY) .. " btn=" .. tostring(pmGeo.btnY))
+  eq(type(EVAL_HELP_RP_OPEN), "nil", "③c★★旧重命名入口 EVAL_HELP_RP_OPEN 已**删除**（不是留别名）")
+  eq(type(EVAL_BIND_OPEN), "nil", "③c★★旧绑定入口 EVAL_BIND_OPEN 已**删除**")
+  -- ④ 配置窗方案按钮右键 → 开的是**同一个**窗（合并的核心判据）
+  EVAL_HELP_CONFIG.war.bindKeys = nil EVAL_HELP_CONFIG.war.bindSlots = nil
+  TEST.bindings = nil
+  -- ★配置窗可能已经开着（EVAL_HELP_CFG_TOGGLE 是切换语义）→ 先确认它真的可见
+  local wasCfg102 = EVAL_TEST_CFG_SIZE() ~= nil
+  EVAL_HELP_CFG_TOGGLE()
+  if not EVAL_TEST_CFG_VISIBLE() then EVAL_HELP_CFG_TOGGLE() end
+  EVAL_HELP_CFG_SETTAB(2)
+  local cfg102 = EVAL_TEST_CFG_PROF()
+  -- ★钩子返回 { btns = <真实控件数组> }，所以 btns[1] **本身**就是按钮（不是 {btn=} 包裹表）
+  eq(cfg102 ~= nil and cfg102.btns ~= nil and cfg102.btns[1] ~= nil and cfg102.btns[1].GetScript ~= nil, true,
+    "④前置：拿到配置窗方案按钮真实控件")
+  cfg102.btns[1]:GetScript("OnClick")("RightButton")
+  local bu102b = EVAL_TEST_BIND_UI()
+  eq(bu102b.shown, true, "④★★配置窗右键方案 → 也开了弹窗")
+  eq(string.find(tostring(bu102b.title), EVAL_L("PM_TITLE"), 1, true) ~= nil, true,
+    "④★★开的是**同一个方案管理窗**（标题一致 = 两处右键合并成功）: " .. tostring(bu102b.title))
+  eq(bu102b.pidx, 1, "④★绑的是被点的方案")
+  EVAL_TEST_BIND_CLOSE()
+  EVAL_HELP_CFG_TOGGLE()
+  -- ⑤ 左键语义不变：仍是激活方案（没被右键合并吃掉）
+  up102.btns[2].btn:GetScript("OnClick")("LeftButton")
+  eq(EVAL_HELP_CONFIG.war.activeProfile, 2, "⑤★★左键仍是激活方案（右键合并没动左键语义）")
+  eq(EVAL_TEST_BIND_UI().shown, false, "⑤左键不开窗")
+  -- 还原
+  EVAL_HELP_CONFIG.war.profiles = savedP102
+  EVAL_HELP_CONFIG.war.activeProfile = savedA102
+  EVAL_HELP_CONFIG.war.bindKeys = nil
+  EVAL_HELP_CONFIG.war.bindSlots = nil
+  TEST.bindings = nil
+  EVAL_HELP_UI_BUILD()
+  if not wasShown102 and EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end
+  print("  方案管理窗：两处右键（战斗信息UI / 配置窗）都开同一个窗；窗内改名 + 绑键两段；[保存]一次提交两段；左键仍激活")
+end
+
 print("ALL TESTS PASS")
