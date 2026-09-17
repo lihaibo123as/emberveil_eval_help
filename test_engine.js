@@ -643,49 +643,58 @@ function checkIconAssets() {
   console.log("README TABLE CHECK: 3 READMEs x 10 version rows, all inside the changelog table");
 })();
 
-// ===== MILESTONE CHECK（1.72.0）：里程碑是「归纳」不是「罗列」，每个小节 <=10 条 =====
+// ===== MILESTONE CHECK（1.72.0）：里程碑「在上、归纳为主、每节 <=10 条」 =====
 // ★背景（用户 1.72.0 明确）：「里程碑是要你总结上个里程碑到最新版本的信息归纳，而不是把版本信息全部罗列，
 //   不然内容太多了 —— 每次里程碑归纳内容最终控制在 10 条以内。」
-//   → 这条规则光写进记忆体（CLAUDE.md）挡不住：记忆体是给人/AI 读的提醒，不是闸门。
-//     本项目铁律：**审计/排查必须落成可执行闸门**，所以这里钉死三件事。
+//   ＋「项目文件内的更新日志在里程碑下面」——即 README 的板块顺序是
+//   **## 🏁 里程碑 在上、## 更新日志 在下**（1.72.0 起把里程碑整块移到更新日志之前）。
+//   → 这两条规则光写进记忆体（CLAUDE.md）挡不住：记忆体是给人/AI 读的提醒，不是闸门。
+//     本项目铁律：**审计/排查必须落成可执行闸门**，所以这里钉死四件事。
 // 判据：① 3 个 README 都有「里程碑」板块（## 🏁 …）
-//       ② 板块标题的版本范围末端 == 当前 VERSION，且**最新那个小节**的范围末端也 == 当前 VERSION
+//       ② 里程碑板块位于「更新日志」板块**之前**（顺序反了 = 更新日志跑到里程碑上面，用户定的版式）
+//       ③ 板块标题的版本范围末端 == 当前 VERSION，且**最新那个小节**的范围末端也 == 当前 VERSION
 //          （守着「发版只更新了 CHANGELOG、忘了改里程碑范围」）
-//       ③ 每个小节（### / ####）的条目数 1..10（守着「又写成版本流水账」）
-// ★条目判据 = 行首为 ** 的段落（三个语种写法一致：**emoji 主题**（版本范围）：…）。
+//       ④ 板块正文（不含标题本身）的**非空行 1..10**（用户定：「10 个点、10 行文字以内」，一条 = 一行；
+//          守着「又想把版本流水账搬回来」——超过 10 行就是要罗列了）
+// ★条目判据 = 板块里每行就是一条（三个语种写法一致：**emoji 主题**（版本范围）：做了什么 + 判据）。
 (function () {
   const toc = fs.readFileSync(path.join(__dirname, "EvalHelp.toc"), "utf8");
   const vm = toc.match(/##\s*Version:\s*([0-9.]+)/);
   if (!vm) { console.log("MILESTONE CHECK: skipped (no ## Version in toc)"); return; }
   const ver = vm[1];
   const bad = [];
-  for (const f of ["README.md", "README_en.md", "README_ru.md"]) {
+  const READMES = [
+    ["README.md", /^##\s*更新日志/],
+    ["README_en.md", /^##\s*Changelog/],
+    ["README_ru.md", /^##\s*Журнал обновлений/],
+  ];
+  for (const [f, chgRe] of READMES) {
     const p = path.join(__dirname, f);
     if (!fs.existsSync(p)) { bad.push(f + " missing"); continue; }
     const lines = fs.readFileSync(p, "utf8").split(/\r?\n/);
     const h = lines.findIndex((l) => /^##\s*🏁/.test(l));
     if (h < 0) { bad.push(f + " has no milestone section"); continue; }
+    // ★2：里程碑必须在「更新日志」之上（用户定：更新日志在里程碑下面）
+    const chg = lines.findIndex((l) => chgRe.test(l));
+    if (chg < 0) bad.push(f + " has no changelog heading");
+    else if (h > chg) bad.push(f + " puts the milestone section BELOW the changelog (must be above)");
     let e = lines.length;
     for (let i = h + 1; i < lines.length; i++) { if (/^##\s/.test(lines[i])) { e = i; break; } }
     const headVer = (lines[h].match(/[0-9]+\.[0-9]+\.[0-9]+/g) || []);
     if (!headVer.length || headVer[headVer.length - 1] !== ver) {
       bad.push(f + " milestone heading range does not end at " + ver);
     }
-    let cur = null, n = 0, first = null;
-    const flush = () => { if (cur !== null && (n < 1 || n > 10)) bad.push(f + " '" + cur + "' has " + n + " entries (need 1..10)"); };
-    for (let i = h + 1; i < e; i++) {
-      const m = lines[i].match(/^#{3,4}\s+(.*)$/);
-      if (m) { flush(); cur = m[1].trim(); n = 0; if (first === null) first = cur; continue; }
-      if (/^\*\*/.test(lines[i])) n++;
-    }
-    flush();
-    if (first !== null) {
-      const fv = first.match(/[0-9]+\.[0-9]+\.[0-9]+/g) || [];
-      if (!fv.length || fv[fv.length - 1] !== ver) bad.push(f + " newest milestone subsection does not end at " + ver);
+    // ★④ 板块正文（不含标题本身）的**非空行**必须 1..10 —— 用户 1.72.0 定：
+    //   「里程碑控制在 10 个点、10 行文字以内」；★**一条 = 一行**（写成一段四五行的细节就算超），
+    //   这就是「归纳不罗列」的可执行形态：超过 10 行说明又想把版本流水账搬回来了。
+    const body = [];
+    for (let i = h + 1; i < e; i++) { if (lines[i].trim() !== "") body.push(lines[i]); }
+    if (body.length < 1 || body.length > 10) {
+      bad.push(f + " milestone body has " + body.length + " lines (need 1..10: 10 points, 1 line each)");
     }
   }
   if (bad.length) { console.log("MILESTONE CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
-  console.log("MILESTONE CHECK: 3 READMEs, range ends at " + ver + ", every subsection has 1..10 entries");
+  console.log("MILESTONE CHECK: 3 READMEs, milestone above changelog, range ends at " + ver + ", body <=10 lines");
 })();
 
 checkIconAssets();
