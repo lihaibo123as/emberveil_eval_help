@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.71.2"
+local VERSION = "1.71.3"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -51,8 +51,27 @@ local groupsOK = EVAL_GROUPS_OK
 local auraTexOf = EVAL_AURA_TEX
 local petCmdOf, targetSelOf, itemOf = EVAL_PET_OF, EVAL_TGT_OF, EVAL_ITEM_OF
 local stanceOf = EVAL_STANCE_OF -- 1.43.0 姿态切换（姿态:名称）
-local condTrim = EVAL_COND_TRIM -- 1.44.0 拆分漏桥补：EVAL_PROFILE_FROM_TEXT 用裸 condTrim（旧例一直缺别名，游戏内点导入必炸）
+local condTrim = EVAL_COND_TRIM -- 1.44.0 拆分漏桥补
+local colonNorm = EVAL_COLON_NORM -- ★1.71.3 全角冒号归一（导入文本里用户可能打全角）：EVAL_PROFILE_FROM_TEXT 用裸 condTrim（旧例一直缺别名，游戏内点导入必炸）
 local cancelCastOf = EVAL_CANCELCAST_OF -- 1.47.0 取消施法特殊行为
+local stopAllOf = EVAL_STOPALL_OF -- 1.71.3 停止攻击特殊行为
+local followOf = EVAL_FOLLOW_OF -- ★1.71.3 跟随特殊行为（同样不占动作条：亮金/分类/候选列表都要按它处理）
+local tselTeam = EVAL_TSEL_TEAMSEL -- ★1.71.3 条件类型下拉要按「这一行是不是成员选取器」过滤
+-- ★★★1.71.3 状态标记（全插件共用的**单一来源**）：白感叹号 = 不可用、黄感叹号 = 待测试。
+--   用户要求：「右边换成**插件图标内的白色感叹号**」＋「启用此技能 右侧添加几个图标 寓意 tooltip：
+--   白色感叹号 不可用 / 黄色感叹号 待测试」。
+--   ★「取消施法」为什么是**不可用**：官方 API 里停止读条**只有 SpellStopCasting 一个**且标注为
+--     【Protected: yes】——插件调用只清本地读条条、**服务端读条照旧**（详见 CLAUDE.md 1.71.3 该条）。
+--   ★为什么是这两张图：它们本来就在本插件的 media\icons\ 里（UnrealQuest 那套任务标记，MIT）：
+--     白色=低等级、黄色=普通，正是现成的「! 形标记」美术——不必再画、也不引入外部依赖。
+--   ★★为什么另存两个**正方形**文件（mark-unavail / mark-test）：原图是 27x64 / 19x32 的细长条，
+--     直接塞进 12x12 方格里会被**横向压扁**（本项目「宽高比」那一族事故）→ 转成方图后，
+--     任何方格槽位直接 SetTexture 就是正确比例，代码里不用再算 SetTexCoord。
+local SE_MEDIA_ROOT = "Interface\\AddOns\\EvalHelp\\media\\icons\\"
+local SE_MARK_UNAVAIL = SE_MEDIA_ROOT .. "mark-unavail" -- 白感叹号：不可用
+local SE_MARK_TEST = SE_MEDIA_ROOT .. "mark-test"       -- 黄感叹号：待测试
+-- ★「取消施法」的异常标记用它（用户要求：把行右侧那个问号换成白感叹号）。
+local SE_WARN_ICON = SE_MARK_UNAVAIL
 local TARGET_SEL, TARGET_SEL_NAME = EVAL_TARGET_SEL, EVAL_TSEL_NAME
 local CLASS_LIST = EVAL_CLASS_LIST
 -- ============ 状态 UI（参考 Cat 的 CatUI-Melee 布局，构件法用 OneJudge HUD 的已验证写法） ============
@@ -532,14 +551,14 @@ function EVAL_HELP_UI_TICK()
         elseif t0 then pcall(pc.icon.SetTexture, pc.icon, t0) end
         local enabled = r.enabled ~= false
         local pass = false
-        if enabled and (s or petCmdOf(r.skill) or targetSelOf(r.skill) or itemOf(r.skill) or stanceOf(r.skill) or cancelCastOf(r.skill)) and r.groups then -- 宠物/选取目标/物品/姿态/取消施法不占动作条也参与亮金（1.30.0~1.47.0）
+        if enabled and (s or petCmdOf(r.skill) or targetSelOf(r.skill) or itemOf(r.skill) or stanceOf(r.skill) or cancelCastOf(r.skill) or stopAllOf(r.skill) or followOf(r.skill)) and r.groups then -- 宠物/选取目标/物品/姿态/取消施法/停止攻击/跟随 不占动作条也参与亮金（1.30.0~1.71.3）
           local okp = groupsOK(r, true) -- dry: 亮金预览不触发选取目标等副作用
           pass = okp and true or false
         end
         if not enabled then
           pcall(pc.icon.SetVertexColor, pc.icon, 0.25, 0.25, 0.25)
           pc.text:SetText("停")
-        elseif not s and not petCmdOf(r.skill) and not targetSelOf(r.skill) and not itemOf(r.skill) and not stanceOf(r.skill) and not cancelCastOf(r.skill) then -- 特殊技能不占动作条不算缺失（1.30.0~1.47.0）
+        elseif not s and not petCmdOf(r.skill) and not targetSelOf(r.skill) and not itemOf(r.skill) and not stanceOf(r.skill) and not cancelCastOf(r.skill) and not stopAllOf(r.skill) and not followOf(r.skill) then -- 特殊技能不占动作条不算缺失（1.30.0~1.71.3）
           pcall(pc.icon.SetVertexColor, pc.icon, 0.35, 0.35, 0.35)
           pc.text:SetText("?")
         else
@@ -874,7 +893,7 @@ local function cfgBuild()
   -- Tab 按钮行（全局 / 一键宏设置；选中=金底亮字，未选=暗底灰字——参考 UnrealQuest 标签页风格）
   local pages = {}
   cfgWin.pages = pages
-  local tabNames = { L("TAB_GLOBAL"), L("TAB_MACRO"), L("TAB_TOOLBOX"), L("TAB_DS") }
+  local tabNames = { L("TAB_GLOBAL"), L("TAB_MACRO"), L("TAB_TOOLBOX"), L("TAB_DS"), L("TAB_ICONS") } -- ★1.71.3 第 5 个 Tab：图标库（IconBrowser.lua 独立载入）
   for i, name in ipairs(tabNames) do
     local tb = CreateFrame("Button", nil, root)
     tb:SetWidth(90) tb:SetHeight(18)
@@ -1452,6 +1471,7 @@ local function cfgBuild()
   cfgWin.refresh = function() for _, r in ipairs(refreshes) do pcall(r) end end
   if type(EVAL_TB_BUILD) == "function" then EVAL_TB_BUILD(root, pages[3], refreshes) end -- 工具箱 Tab（1.68.0 Toolbox.lua 独立载入）
   if type(EVAL_DS_BUILD) == "function" then EVAL_DS_BUILD(root, pages[4], refreshes) end -- 数据检索 Tab（DataSearch.lua 独立载入，基于 UnrealQuest 数据库）
+  if type(EVAL_IB_BUILD) == "function" then EVAL_IB_BUILD(root, pages[5], refreshes) end -- 图标库 Tab（IconBrowser.lua 独立载入）
   EVAL_HELP_CFG_SETTAB(c().cfgTab or 1)
   return root
 end
@@ -1777,6 +1797,26 @@ function EVAL_TN_OPEN(title, cur, onOk)
   if tnUI.echo then tnUI.echo:SetText(cur or "") end
   tnUI.root:Show()
 end
+-- ★1.71.3 断言入口：通用名称输入弹窗（跟随 / 物品 / 指定目标 都走它）。
+--   ★为什么要它：这些「点了弹框输入」的入口以前**没有任何观测口**——「点了没反应」在测试里完全看不见，
+--     而本轮「跟随:指定名字…」正是靠它落值（判据同「要验点了会弹，就必须点一下看结果」）。
+function EVAL_TEST_TN_SHOWN()
+  return (tnUI.root and tnUI.root:IsShown()) and true or false
+end
+function EVAL_TEST_TN_TITLE()
+  if not tnUI.titleText then return nil end
+  local ok, t = pcall(tnUI.titleText.GetText, tnUI.titleText)
+  return ok and t or nil
+end
+-- 走**真实输入框 + 真实回车处理器**（等价于玩家打完字按回车），不是直接调回调
+function EVAL_TEST_TN_COMMIT(txt)
+  if not (tnUI.root and tnUI.eb) then return false end
+  pcall(tnUI.eb.SetText, tnUI.eb, tostring(txt or ""))
+  local ok, fn = pcall(tnUI.eb.GetScript, tnUI.eb, "OnEnterPressed")
+  if not (ok and type(fn) == "function") then return false end
+  fn()
+  return true
+end
 
 -- 删除方案（至少保留一个；activeProfile 随删除左移/收敛）
 function EVAL_WAR_DEL_PROFILE(idx)
@@ -1890,11 +1930,40 @@ function EVAL_HELP_CFG_SETTAB(idx)
   if idx == 2 then pcall(EVAL_WAR_TAB_REFRESH) end
   if idx == 3 and type(EVAL_TB_REFRESH) == "function" then pcall(EVAL_TB_REFRESH) end -- 工具箱
   if idx == 4 and type(EVAL_DS_REFRESH) == "function" then pcall(EVAL_DS_REFRESH) end -- 数据检索
+  if idx == 5 and type(EVAL_IB_REFRESH) == "function" then pcall(EVAL_IB_REFRESH) end -- 图标库
 end
 
 -- ★1.71.2 测试钩子：配置窗底部导航按钮（模版/分享/接收）的几何。
 --   用途：验「它们在关闭按钮左侧、同一行、不重叠、不越界」——
 --   否则这类布局问题只能靠人眼看截图（正是本轮改动的起因）。
+-- ★1.71.3 读值口：当前激活的 Tab 序号。供**独立载入**的页面文件判断「本 Tab 是否激活」
+--   （例如 IconBrowser 的滚轮翻页）——它们看不到 cfgWin（那是本文件的 local）。
+function EVAL_HELP_CFG_TAB() return cfgWin.tab end
+-- ★1.71.3 读值口：配置窗的滚轮脚本。多个页面（工具箱/数据检索/图标库）**链式接管**同一个 OnMouseWheel，
+--   断言要验「谁消费了滚轮、谁转发出去」就必须拿到**装上去的那个真脚本**（不是在测试里复刻一份）。
+-- ★1.71.3 读值口：配置窗各 Tab 的**标签文本**（读真实按钮，不读构建时的那份局部表）。
+--   用途：新增 Tab 时「名单加了、按钮没加」或「语言键漏了」都会被断言当场抓住。
+function EVAL_TEST_CFG_TAB_NAMES()
+  local out = {}
+  for i = 1, table.getn(cfgWin.pages or {}) do
+    local p = cfgWin.pages[i]
+    local ok, t = pcall(p.text.GetText, p.text)
+    out[i] = ok and t or nil
+  end
+  return out
+end
+function EVAL_CFG_WHEEL_SCRIPT()
+  if not cfgWin.root then return nil end
+  local ok, fn = pcall(cfgWin.root.GetScript, cfgWin.root, "OnMouseWheel")
+  return ok and fn or nil
+end
+-- ★1.71.3 读值口：技能编辑窗「异常标记」用的标记图标路径（现在是白感叹号）。
+--   ★IconBrowser 的「本插件在用」分组要列出它，但**不能在那里另抄一份路径**——两份名单迟早漂移。
+function EVAL_HELP_SE_WARN_ICON() return SE_WARN_ICON end
+-- ★1.71.3 读值口：**整套**状态标记（白=不可用 / 黄=待测试）。
+--   ★同样给 IconBrowser 用（两枚都要进「本插件在用」；只报白的会漏掉黄的那枚）。
+function EVAL_HELP_SE_MARK_ICONS() return { unavail = SE_MARK_UNAVAIL, test = SE_MARK_TEST } end
+
 function EVAL_TEST_CFG_NAV()
   local out = {}
   for i, e in ipairs(cfgWin.nav or {}) do
@@ -2373,6 +2442,13 @@ local SE_TYPES = {
   { id = "teamRaidMana",  name = "团员蓝量%",  kind = "num",   n = 20, name2 = "团队", base = "teamMana" },
   { id = "teamRaidBuff",  name = "团员缺buff", kind = "skill", s = "",  name2 = "团队", base = "teamBuff" },
   { id = "teamRaidDebuff",name = "团员debuff", kind = "skill", s = "",  name2 = "团队", base = "teamDebuff" },
+  -- ★★★1.71.3 候选者条件（用户要求：**原 8 项一字不动**，另外独立加这 4 项）——
+  --   语义 = 「循环检索到的那个成员」（含自己；范围由「选取目标:队伍成员/团队成员」那一行决定）。
+  --   ★只在**选取器行**的下拉里出现（见 typeBtn 的过滤）；配在别的行上求值时如实失败、不假装通过。
+  { id = "candHp",     name = "候选者血%",   kind = "num",   n = 60 },
+  { id = "candPower",  name = "候选者能量%", kind = "num",   n = 20 },
+  { id = "candBuff",   name = "候选者缺buff",kind = "skill", s = "" },
+  { id = "candDebuff", name = "候选者debuff",kind = "skill", s = "" },
 }
 local SE_BY_K = {}
 for i, td in ipairs(SE_TYPES) do SE_BY_K[td.id] = i end
@@ -2425,6 +2501,8 @@ local SE_TYPE_GROUPS = {
   -- ★1.70.47 队伍/团队条件单列一组：**队伍与团队各列一份**（用户要求：
   --   「条件类型: 队伍debuff / 队伍buff / 团队debuff / 团队buff」——直接作为可选类型出现，不用范围下拉）
   { label = "CTG_5", ids = { "teamHp", "teamMana", "teamBuff", "teamDebuff", "teamRaidHp", "teamRaidMana", "teamRaidBuff", "teamRaidDebuff" } },
+  -- ★1.71.3 候选者条件组：**只在成员选取器那一行**的下拉里显示（见 typeBtn 的过滤），普通行不出现
+  { label = "CTG_6", ids = { "candHp", "candPower", "candBuff", "candDebuff" } },
   -- ★★★1.71.2（第十五轮）施法族归并（用户要求）：「自身施法相关 + 目标施法相关」全部并进本组。
   --   顺序 = 用户选定的 A 方案：**技能本身的状态 → 我的施法 → 目标的施法**（两段名字互为镜像：
   --   施法中/施法时间/施法剩余时间 ↔ 目标施法中/目标施法时间/目标施法剩余时间）。
@@ -2442,6 +2520,8 @@ local function seDefaultCond(ti)
   local ck = td.base or td.id
   if td.kind == "num" then
     if td.name2 then return { k = ck, op = "<", n = td.n, name = td.name2 } end
+    -- ★候选者血%/能量%：默认「<」= 取最小（最该治/最缺蓝的那个），与新规则配套
+    if ck == "candHp" or ck == "candPower" then return { k = ck, op = "<", n = td.n } end
     return { k = ck, op = ">", n = td.n }
   elseif td.kind == "bool" then return { k = td.id, v = true }
   elseif td.kind == "form" then return { k = "form", n = 1 }
@@ -2456,11 +2536,55 @@ local function seDefaultCond(ti)
       cd0.name = td.name2
       cd0.v = (ck ~= "teamBuff")
     end
+    -- ★候选者光环型：缺buff 默认「缺」（v=false），debuff 默认「有」（与队友那套同一语义）
+    if td.id == "candBuff" then cd0.v = false end
+    if td.id == "candDebuff" then cd0.v = true end
     return cd0
   elseif td.kind == "target" then return { k = td.id, s = td.s }
   elseif td.kind == "class" then return { k = td.id, cs = {} } -- 1.70.0 去战士化：旧默认预选 WARRIOR（非战士职业新建即错）
   elseif td.kind == "creature" then return { k = td.id, cs = {}, v = true } -- 1.70.28 目标类型：默认「是」+ 空选择（空=永不满足，需用户点选）
   else return { k = td.id } end
+end
+
+-- ★★★1.71.3 条件类型的**悬停说明**（用户要求：「支持规则的条件类型」分别加 tooltip，并美化文案）。
+--   ★只给**参与「挑谁」规则**的类型提示：4 个候选者类型 + 兼容写法（自身血%/能量%、目标血%）
+--     + 老数值型（队伍/团员 血量·蓝量）；其它类型（技能就绪、姿态、按键…）**不给提示**——
+--     ★判据：提示要报在有用的地方，每个条目都挂一段字等于没有提示。
+local SE_TIP_RULE_KINDS = {
+  candHp = true, candPower = true, candBuff = true, candDebuff = true,
+  hpPct = true, powerPct = true, power = true, tHpPct = true,
+  teamHp = true, teamMana = true, teamRaidHp = true, teamRaidMana = true,
+}
+local SE_TIP_SEM = {
+  candHp = "SE_TIP_CAND_HP", candPower = "SE_TIP_CAND_POWER",
+  candBuff = "SE_TIP_CAND_BUFF", candDebuff = "SE_TIP_CAND_DEBUFF",
+}
+-- ★★★1.71.3 「尚未在游戏里实测确认」的条件类型（用户要求：撤掉名字前面的「!」文字前缀，
+--   改成**下拉里右侧一枚黄感叹号** + 悬停说明「待测试」）。
+--   ★为什么要撤掉文字前缀：那个「!」会**跟着条件名到处跑**（条件行 / 菜单 / 日志里都是「!队友血量%」），
+--     看着像乱码；而标记只需在**挑选的那一刻**提示一次。
+--   ★这张表是「待测试」的**单一真值**：下拉的标记与悬停说明都从它取，不另写第二份名单。
+--   ★★两枚标记不许混用：**黄**=待测试（本表）、**白**=不可用（cancelCastOf 那一族）。
+local SE_TODO_KINDS = {
+  teamHp = true, teamMana = true, teamBuff = true, teamDebuff = true,
+  teamRaidHp = true, teamRaidMana = true, teamRaidBuff = true, teamRaidDebuff = true,
+  candHp = true, candPower = true, candBuff = true, candDebuff = true,
+}
+-- 返回 tooltip 行表（逐行 AddLine）或 nil
+local function seTypeTip(id)
+  if id == nil then return nil end
+  local isTodo = SE_TODO_KINDS[id] and true or false
+  if not SE_TIP_RULE_KINDS[id] and not isTodo then return nil end
+  local lines = { "|cffffd100" .. L("CT_" .. string.upper(id)) .. "|r" }
+  if SE_TIP_SEM[id] then table.insert(lines, L(SE_TIP_SEM[id])) end
+  if SE_TIP_RULE_KINDS[id] then table.insert(lines, "|cff9fe0ff" .. L("SE_TIP_RULE") .. "|r") end
+  if SE_TIP_SEM[id] then table.insert(lines, "|cffa0a0a0" .. L("SE_TIP_CAND_ONLY") .. "|r") end
+  if isTodo then
+    -- ★文案复用「启用此技能」右侧那两枚标记的键（同一含义只有一套说法，不另写一份）
+    table.insert(lines, "|cffffd100" .. L("SE_MARK_TEST_T") .. "|r")
+    table.insert(lines, "|cffa0a0a0" .. L("SE_MARK_TEST_D") .. "|r")
+  end
+  return lines
 end
 
 -- groups → 线性编辑列表（复制条件，避免保存前污染已存数据）
@@ -2638,9 +2762,32 @@ local function DD_BUILD()
     ri:SetWidth(12) ri:SetHeight(12)
     ri:SetPoint("LEFT", rb, "LEFT", 2, 0)
     ri:Hide()
-    rb:SetScript("OnEnter", function() pcall(rbg.SetVertexColor, rbg, 0.38, 0.30, 0.10, 1) end)
-    rb:SetScript("OnLeave", function() pcall(rbg.SetVertexColor, rbg, 0.10, 0.09, 0.06, 1) end)
-    ddUI.rows[i] = { btn = rb, bg = rbg, text = rt, icon = ri }
+    -- ★1.71.3 可选「异常标记」列（opts.warns[i] = 图标路径，opts.warnTip = 悬停说明）。
+    --   用户要求：把「取消施法」这类**当前无法真正生效**的动作在行右端标个问号，悬停给出原因。
+    --   ★标记与提示**每次重绘都要重设**（清空分支见渲染循环）：行池是复用的，
+    --     不清就会把上一个菜单的标记/提示漏到下一个（本项目「状态残留」的老家族）。
+    local rw = rb:CreateTexture(nil, "OVERLAY")
+    rw:SetWidth(12) rw:SetHeight(12)
+    rw:SetPoint("RIGHT", rb, "RIGHT", -2, 0)
+    rw:Hide()
+    local rec = { btn = rb, bg = rbg, text = rt, icon = ri, warn = rw, tip = nil }
+    ddUI.rows[i] = rec
+    rb:SetScript("OnEnter", function()
+      pcall(rbg.SetVertexColor, rbg, 0.38, 0.30, 0.10, 1)
+      if rec.tip and type(GameTooltip) ~= "nil" then
+        pcall(GameTooltip.SetOwner, GameTooltip, rb, "ANCHOR_RIGHT")
+        if type(rec.tip) == "table" then
+          for ti = 1, table.getn(rec.tip) do pcall(GameTooltip.AddLine, GameTooltip, rec.tip[ti]) end
+        else
+          pcall(GameTooltip.SetText, GameTooltip, rec.tip)
+        end
+        pcall(GameTooltip.Show, GameTooltip)
+      end
+    end)
+    rb:SetScript("OnLeave", function()
+      pcall(rbg.SetVertexColor, rbg, 0.10, 0.09, 0.06, 1)
+      if rec.tip and type(GameTooltip) ~= "nil" then pcall(GameTooltip.Hide, GameTooltip) end
+    end)
   end
   dd:Hide()
   ddUI.root = dd
@@ -2772,7 +2919,7 @@ function SE_AURA_MENU(k0)
   -- ③ 其余技能名（垫底；光环条件下它们大多不是光环，但保留以便手工指定）
   local rest = {}
   for _, n in ipairs(EVAL_GO_SKILL_CHOICES()) do
-    if not petCmdOf(n) and not targetSelOf(n) and not itemOf(n) and not stanceOf(n) and not cancelCastOf(n) then
+    if not petCmdOf(n) and not targetSelOf(n) and not itemOf(n) and not stanceOf(n) and not cancelCastOf(n) and not stopAllOf(n) and not followOf(n) then
       table.insert(rest, n)
     end
   end
@@ -3007,6 +3154,29 @@ end
 function EVAL_DD_TEST_SHOWN() return (ddUI.root and ddUI.root:IsShown()) and true or false end
 function EVAL_DD_TEST_RESET_ANCHOR() ddUI.anchor = nil end -- 让下一次 OPEN 一定是「打开」而非 toggle 收起
 function EVAL_DD_TEST_ROW(i) return ddUI.rows and ddUI.rows[i] end
+-- ★1.71.3 读**控件上实际设的纹理**（不是读 opts 传参——否则测的是「传了什么」而不是「画成了什么」）
+function EVAL_DD_TEST_ROW_TEX(i)
+  local row = ddUI.rows and ddUI.rows[i]
+  if not (row and row.icon) then return nil end
+  local ok, t = pcall(row.icon.GetTexture, row.icon)
+  return ok and t or nil
+end
+function EVAL_DD_TEST_ROW_WARN(i)
+  local row = ddUI.rows and ddUI.rows[i]
+  if not (row and row.warn) then return nil end
+  local ok, t = pcall(row.warn.GetTexture, row.warn)
+  return ok and t or nil
+end
+function EVAL_DD_TEST_ROW_WARN_SHOWN(i)
+  local row = ddUI.rows and ddUI.rows[i]
+  if not (row and row.warn) then return false end
+  local ok, s = pcall(row.warn.IsShown, row.warn)
+  return (ok and s) and true or false
+end
+function EVAL_DD_TEST_ROW_TIP(i)
+  local row = ddUI.rows and ddUI.rows[i]
+  return row and row.tip or nil
+end
 function EVAL_DD_TEST_SELAT(i) return ddUI.sel and ddUI.sel[i] end
 function EVAL_DD_TEST_LOCKED_SUPPORTED()
   -- 能力探测：开一个含锁定行的多选面板，锁定行必须【没有 OnClick】且【文本无方框】。
@@ -3089,7 +3259,9 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
   local cols = math.ceil(nDraw / DD_COLS)
   if cols < 1 then cols = 1 end
   local icons = opts and opts.icons -- 1.32.4 可选图标列：与 items 同序的纹理表
-  local colW = icons and 124 or 108
+  local warns = opts and opts.warns -- ★1.71.3 可选异常标记列：与 items 同序（值为纹理路径）
+  local tips = opts and opts.tips   -- ★1.71.3 可选悬停说明：与 items 同序（字符串或 {行1,行2,…}）
+  local colW = (icons or warns) and 124 or 108
   for slot, row in ipairs(ddUI.rows) do
     if slot <= nDraw then
       local i = shownList[slot]   -- 显示位置 -> 原始下标（负数 = 自由文本哨兵行）
@@ -3097,6 +3269,8 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
       if truncated > 0 and slot == nDraw then
         -- ★截断提示行（不可点）
         row.icon:Hide()
+        row.warn:Hide() -- ★1.71.3 截断提示行不许带异常标记/悬停（残留防护）
+        row.tip = nil
         row.text:ClearAllPoints()
         row.text:SetPoint("LEFT", row.btn, "LEFT", 4, 0)
         row.text:SetText("|cffff8080" .. string.format(L("DD_MORE_FMT"), truncated) .. "|r")
@@ -3109,6 +3283,8 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
         row.btn:Show()
       elseif i == -1 then
         row.icon:Hide()
+        row.warn:Hide() -- ★1.71.3 自由文本行不许带异常标记/悬停（残留防护）
+        row.tip = nil
         row.text:ClearAllPoints()
         row.text:SetPoint("LEFT", row.btn, "LEFT", 4, 0)
         row.text:SetText("|cff40ff40✎|r " .. L("DD_USE_TYPED") .. " \"" .. tostring(ddUI.searchText) .. "\"")
@@ -3135,6 +3311,17 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
         row.text:ClearAllPoints()
         row.text:SetPoint("LEFT", row.btn, "LEFT", 4, 0)
       end
+      -- ★1.71.3 异常标记：有就显示并记下悬停说明，没有就**必须清掉**（行池复用，残留就是 bug）
+      local wi = warns and warns[i]
+      if wi then
+        pcall(row.warn.SetTexture, row.warn, wi)
+        row.warn:Show()
+      else
+        row.warn:Hide()
+      end
+      -- ★1.71.3 悬停说明：**逐项** tips 优先（用户要求：把「支持选取规则的条件类型」分别加 tooltip），
+      --   没有逐项说明时才退回「异常标记」那句 warnTip。★每次重绘都要重设（行池复用，残留就是 bug）。
+      row.tip = (tips and tips[i]) or (wi and opts.warnTip) or nil
       if ddUI.multi then
         -- 多选标记统一为「方框」样式，与配置窗自绘勾选框（cfgCheck）观感一致：
         -- 选中=|cffffd100■|r、未选=|cff6a6a6□|r（用户要求「支持第二张图的方式多选」）
@@ -3271,7 +3458,7 @@ function EVAL_HELP_SE_REFRESH()
   if seUI.catName then -- 分类按钮文字 = 当前技能所属类（1.32.3）
     local cl = { L("SK_CAT_1"), L("SK_CAT_2"), L("SK_CAT_3"), L("SK_CAT_4"), L("SK_CAT_5") }
     local ci = 2
-    if ed.skill == "攻击" or ed.skill == "自动射击" or ed.skill == "射击" or cancelCastOf(ed.skill) or stanceOf(ed.skill) then ci = 1
+    if ed.skill == "攻击" or ed.skill == "自动射击" or ed.skill == "射击" or cancelCastOf(ed.skill) or stopAllOf(ed.skill) or followOf(ed.skill) or stanceOf(ed.skill) then ci = 1
     elseif petCmdOf(ed.skill) then ci = 3
     elseif targetSelOf(ed.skill) then ci = 4
     elseif itemOf(ed.skill) then ci = 5 end
@@ -3317,10 +3504,10 @@ function EVAL_HELP_SE_REFRESH()
         -- 1.70.0：空技能名（光环检查/免疫/范围）提示待选，避免旧职业化默认造成「条件恒不满足却不自知」
         if (cd.s == nil or cd.s == "") and cd.k ~= "casting" and cd.k ~= "tCasting" then disp = "未选择（点此选择）" end
         -- ★1.70.47 队伍debuff 的名称是**可选**的（不填 = 只看「有没有任意该类型的负面效果」）
-        if cd.k == "teamDebuff" and (cd.s == nil or cd.s == "") then disp = L("DS_T_ANY") end
+        if (cd.k == "teamDebuff" or cd.k == "candDebuff") and (cd.s == nil or cd.s == "") then disp = L("DS_T_ANY") end
         local auraChk = (cd.k == "hasBuff" or cd.k == "hasDebuff" or cd.k == "tBuff" or cd.k == "pDebuff") -- 1.54.0 光环检查型 是/否
         -- ★1.70.47 队伍/团队光环型也要 是/否（「队伍有魔法」「团队无buff」都得能切）
-        local teamAura = (cd.k == "teamBuff" or cd.k == "teamDebuff")
+        local teamAura = (cd.k == "teamBuff" or cd.k == "teamDebuff" or cd.k == "candBuff" or cd.k == "candDebuff") -- ★1.71.3 候选者光环型同样有 是/否
         if cd.k == "immune" or cd.k == "inRange" or cd.k == "casting" or cd.k == "tCasting" or auraChk or teamAura then
           if cd.k == "inRange" or cd.k == "casting" or cd.k == "tCasting" or auraChk or teamAura then
             row.immBtn.text:SetText((cd.v == false) and L("SE_NO") or L("SE_YES"))
@@ -3381,7 +3568,7 @@ function EVAL_HELP_SE_REFRESH()
       --   ★判据用「解析出来的类型」（td），不用原始 cd.k——队伍行与团队行的 cd.k 都是 teamDebuff，
       --     但类型下拉对**两行**都要出现；只认 cd.k 时团队行会漏掉这个控件。
       --     同时这里也是断言能真正走到的位置：EVAL_TEST_SE_ROW_DT 问的就是这个控件。
-      if (td.base or td.id) == "teamDebuff" then
+      if (td.base or td.id) == "teamDebuff" or td.id == "candDebuff" then -- ★1.71.3 候选者debuff 也要类型下拉
         local lbl = L("DS_T_ANY")
         if cd.dt and cd.dt ~= "" and cd.dt ~= "any" then
           lbl = L("DS_T_" .. string.upper(tostring(cd.dt)))
@@ -3389,8 +3576,26 @@ function EVAL_HELP_SE_REFRESH()
         row.dtBtn.text:SetText(lbl)
         pcall(row.dtBtn.btn.Show, row.dtBtn.btn)
       end
+      -- ★1.71.3 队伍/团员条件的「职业多选 / 小队多选」：
+      --   ★显示串按语言包取，窄格最多列 3 项（多了用 …，格宽只有 56px）
+      local isTeamKind = ((td.base or td.id) == "teamHp") or ((td.base or td.id) == "teamMana")
+                         or ((td.base or td.id) == "teamBuff") or ((td.base or td.id) == "teamDebuff")
+      if isTeamKind then
+        local ns = {}
+        for _, c in ipairs(CLASS_LIST) do if cd.cs and cd.cs[c.id] then table.insert(ns, c.name) end end
+        if table.getn(ns) > 3 then ns = { ns[1], ns[2], ns[3], "…" } end
+        row.clsBtn.text:SetText(table.getn(ns) > 0 and table.concat(ns, "/") or L("SE_CLS_ALL"))
+        pcall(row.clsBtn.btn.Show, row.clsBtn.btn)
+        if cd.name == "团队" then -- ★小队多选**只对团员条件**有意义（队伍里人人都是 1 队）
+          local gs2 = {}
+          for gi = 1, 8 do if cd.gs and cd.gs[gi] then table.insert(gs2, tostring(gi)) end end
+          row.grpBtn.text:SetText(table.getn(gs2) > 0 and table.concat(gs2, "/") or L("SE_GRP_ALL"))
+          pcall(row.grpBtn.btn.Show, row.grpBtn.btn)
+        end
+      end
       row.preview:SetText(EVAL_COND_STR(cd))
-      pcall(row.preview.Show, row.preview)
+      -- ★让位：这两格占的正是行内预览的位置 → 队伍/团员那 8 行不显示行内预览（底部整串预览照旧）
+      if isTeamKind then pcall(row.preview.Hide, row.preview) else pcall(row.preview.Show, row.preview) end
       pcall(row.del.btn.Show, row.del.btn)
     end
   end
@@ -3464,7 +3669,7 @@ local function SE_BUILD()
   -- 技能选择行（1.32.3 二级下拉 UI）：[分类▾] [图标] [具体项▾]　启用
   -- 分类按钮在左（替代旧"技能:"标签位），项按钮在右——点哪个弹哪级，所见即两级
   local function seCatOfSkill(skill) -- 技能名 → 分类序号（EVAL_GO_SKILL_CATEGORIES 顺序）
-    if skill == "攻击" or skill == "自动射击" or skill == "射击" or cancelCastOf(skill) or stanceOf(skill) then return 1 end
+    if skill == "攻击" or skill == "自动射击" or skill == "射击" or cancelCastOf(skill) or stopAllOf(skill) or followOf(skill) or stanceOf(skill) then return 1 end
     if petCmdOf(skill) then return 3 end
     if targetSelOf(skill) then return 4 end
     if itemOf(skill) then return 5 end
@@ -3479,6 +3684,52 @@ local function SE_BUILD()
       if t then icons[i] = t any = true end
     end
     return any and icons or nil
+  end
+  -- ★1.71.3 项列表 → 「异常标记」表（与 opts.icons 同序；nil = 该行不标）。
+  --   ★为什么与 icons 分开而不是塞进同一条：图标回答「这是什么」，标记回答「它有问题」——
+  --     两件事挤在一个字段里，会让「图标设了但标记没出来」这类 bug 永远测不出来。
+  local function seItemWarns(items)
+    local warns, any = {}, false
+    for i, v in ipairs(items) do
+      local nm = string.match(v, "^(物品[:：].-)×%d+$") or v
+      if cancelCastOf(nm) then warns[i] = SE_WARN_ICON any = true end
+    end
+    return any and warns or nil
+  end
+  -- 悬停说明：两行（标题 + 原因）。★文案走语言包，三语言齐全（LANG KEY CHECK 守住字面量）。
+  local function seWarnTip() return { L("SE_WARN_T"), L("SE_WARN_CANCELCAST") } end
+  -- ★★★1.71.3 悬停说明（用户要求「分辨加入」）：**类型格**给出该类型的规则说明；**比较符格**给出
+  --   「比较符 → 挑谁」的对照。★只在「参与规则的类型」上出现（其它类型不弹，免得满屏提示）。
+  --   ★★本轮从行池循环里**提出来**（单一实现）：「启用此技能」右侧的图例悬停要用同一套写法，
+  --     再写一份就是两处各写一遍（本项目「同一判据写两遍迟早漂移」的老坑）。
+  local function seHoverTip(btn, tipFn)
+    if type(btn) ~= "table" or type(btn.SetScript) ~= "function" then return end
+    -- ★seBtn 不装 OnEnter/OnLeave（见其定义）→ 这里直接设即可；仍写成"只设一次"以免重复包装
+    btn:SetScript("OnEnter", function()
+      local tip = tipFn()
+      if not (tip and type(GameTooltip) ~= "nil") then return end
+      pcall(GameTooltip.SetOwner, GameTooltip, btn, "ANCHOR_RIGHT")
+      for ti = 1, table.getn(tip) do pcall(GameTooltip.AddLine, GameTooltip, tip[ti]) end
+      pcall(GameTooltip.Show, GameTooltip)
+    end)
+    btn:SetScript("OnLeave", function()
+      if type(GameTooltip) ~= "nil" then pcall(GameTooltip.Hide, GameTooltip) end
+    end)
+  end
+  -- ★1.71.3「这一行是不是成员选取器」= **单一判据**（类型下拉过滤 + 新增条件的初始类型都用它）
+  local function seIsPickerRow(skill)
+    return (type(tselTeam) == "table") and (tselTeam[targetSelOf(skill)] ~= nil)
+  end
+  -- ★★★1.71.3 新增条件的**初始类型**从这一行的下拉过滤表里选（用户要求「添加初始值从过滤条件内选」）：
+  --   成员选取器行 → 第一个候选者条件（候选者血%，就是下拉里排第一的那项）；
+  --   其它行 → 仍是 SE_TYPES 第 1 项（**原行为一字不动**）。
+  --   ★原先恒用第 1 项 → 在选取器行上会加出一条**下拉里根本没有**的条件（用户看到的正是这个）。
+  local function seRowFirstType(skill)
+    if seIsPickerRow(skill) then
+      local tp = SE_BY_K["candHp"]
+      if tp then return tp end
+    end
+    return 1
   end
   -- 项选中落值（两个下拉共用）：特殊项弹输入框，物品项剥 ×数量 展示后缀
   local function seApplySkillPick(v)
@@ -3495,6 +3746,13 @@ local function SE_BUILD()
       end)
       return
     end
+    -- ★1.71.3 跟随：同样弹名字输入（空名不接受——客户端把「空名字」当「跟当前目标」）
+    if v == L("SE_PICK_FOLLOW") then
+      EVAL_TN_OPEN(L("SE_TN_FOLLOW"), "", function(nm)
+        if nm and nm ~= "" then seUI.ed.skill = "跟随:" .. nm EVAL_HELP_SE_REFRESH() end
+      end)
+      return
+    end
     seUI.ed.skill = string.match(v, "^(物品[:：].-)×%d+$") or v
     EVAL_HELP_SE_REFRESH()
   end
@@ -3502,8 +3760,16 @@ local function SE_BUILD()
   local catW = seBtn(root, 16, -24, 72, 16, "", function()
     if not seUI.ed then return end
     local cats = EVAL_GO_SKILL_CATEGORIES()
-    local labels = {}
-    for _, c in ipairs(cats) do table.insert(labels, c.label) end
+    local labels, catIcons, anyIcon = {}, {}, false
+    for i = 1, table.getn(cats) do
+      local c = cats[i]
+      labels[i] = c.label
+      catIcons[i] = c.icon
+      if c.icon then anyIcon = true end
+    end
+    -- ★1.71.3 用户要求「角色行为下拉添加图标美化」：类别行也带图标。
+    --   ★图标来自 EVAL_GO_SKILL_CATEGORIES 的 icon 字段（**单一来源**，UI 层不另写一份映射）；
+    --   ★用下标赋值而不是 table.insert：insert 遇到 nil 会**不插入**，整表错位。
     EVAL_DD_OPEN(seUI.catBtn, labels, function(ci)
       local cat = cats[ci]
       if not cat then return end
@@ -3511,8 +3777,8 @@ local function SE_BUILD()
       local items = cat.items()
       EVAL_DD_OPEN(seUI.skillBtn, items, function(pi)
         seApplySkillPick(items[pi])
-      end, { icons = seItemIcons(items) })
-    end)
+      end, { icons = seItemIcons(items), warns = seItemWarns(items), warnTip = seWarnTip() })
+    end, { icons = anyIcon and catIcons or nil })
   end)
   seUI.catBtn = catW.btn
   seUI.catName = catW.text
@@ -3530,7 +3796,7 @@ local function SE_BUILD()
     local items = cat.items()
     EVAL_DD_OPEN(seUI.skillBtn, items, function(pi)
       seApplySkillPick(items[pi])
-    end, { icons = seItemIcons(items) })
+    end, { icons = seItemIcons(items), warns = seItemWarns(items), warnTip = seWarnTip() })
   end)
   local skBtn = skW.btn
   seUI.skillBtn = skBtn
@@ -3563,6 +3829,38 @@ local function SE_BUILD()
   local enLabel = uiText(root, 9, 0.75, 0.75, 0.75)
   enLabel:SetPoint("TOPLEFT", root, "TOPLEFT", 234, -27)
   enLabel:SetText(L("SE_ENABLE"))
+  -- ★★★1.71.3 图例（用户要求「启用此技能 右侧添加几个图标 寓意 tooltip」）：
+  --   白感叹号 = 不可用 / 黄感叹号 = 待测试；**意义只在悬停里**（用户要的就是这个）。
+  --   ★★位置按「启用」标签的**实测宽度**推，不硬编码 x：英/俄语言包下窗口 800 宽、文案长得多，
+  --     写死 x 会正好压在文字上（本项目「布局先用真实宽度算」的老教训；GetStringWidth 是 1.71.2 已在用的口径）。
+  --     拿不到 GetStringWidth 时退化为「字符数 × 9px」（近似：中文一字约 9px）。
+  local enW = 0
+  if type(enLabel.GetStringWidth) == "function" then
+    local okw, wv = pcall(enLabel.GetStringWidth, enLabel)
+    if okw and type(wv) == "number" and wv > 0 then enW = wv end
+  end
+  if enW <= 0 then enW = math.floor(string.len(L("SE_ENABLE")) / 3 + 0.5) * 9 end
+  local SE_MARK_X = 234 + enW + 14
+  seUI.marks = {}
+  -- ★文案写成**字面量** L("SE_MARK_...")（而不是 tkey="..." 运行时拼）：
+  --   静态 LANG KEY CHECK 才扫得到这三语言 4 个键（运行时拼的键正是它扫不到的盲区）。
+  local SE_MARK_DEFS = {
+    { tex = SE_MARK_UNAVAIL, tip = function() return { L("SE_MARK_UNAVAIL_T"), L("SE_MARK_UNAVAIL_D") } end },
+    { tex = SE_MARK_TEST,    tip = function() return { L("SE_MARK_TEST_T"),    L("SE_MARK_TEST_D") }    end },
+  }
+  for mi = 1, table.getn(SE_MARK_DEFS) do
+    local md = SE_MARK_DEFS[mi]
+    local mb = CreateFrame("Button", nil, root)
+    mb:SetWidth(16) mb:SetHeight(16)
+    mb:SetPoint("TOPLEFT", root, "TOPLEFT", SE_MARK_X + (mi - 1) * 20, -24)
+    pcall(mb.EnableMouse, mb, true)
+    local mt = mb:CreateTexture(nil, "ARTWORK")
+    mt:SetWidth(12) mt:SetHeight(12)
+    mt:SetPoint("CENTER", mb, "CENTER", 0, 0)
+    pcall(mt.SetTexture, mt, md.tex)
+    seHoverTip(mb, md.tip)
+    seUI.marks[mi] = { btn = mb, tex = mt }
+  end
 
   -- 条件表头
   local hd = uiText(root, 9, 0.60, 0.55, 0.40)
@@ -3588,13 +3886,39 @@ local function SE_BUILD()
       local it = ed and ed.conds[i]
       if not it then return end
       -- 1.32.5 分组美化：金色组标题（idxMap=0 不可选）+ 四类分组；hidden 类型（选取目标）不进下拉
-      local items, idxMap = {}, {}
-      for _, grp in ipairs(SE_TYPE_GROUPS) do
-        table.insert(items, "|cffffd100· " .. L(grp.label) .. " ·|r")
+      local items, idxMap, tips, warns = {}, {}, {}, {}
+      local anyWarn = false -- ★1.71.3 「待测试」类型 → 行右端挂**黄**感叹号
+      -- ★★★1.71.3 条件类型**按技能行过滤**（用户要求）：这一行是成员选取器时，只提供「候选者状态」4 项——
+      --   其余类型描述的是你自己/当前目标/技能本身，对「挑哪个队友」没有意义（选错就白配）。
+      --   ★每次打开**现算**（换技能立刻跟着变）；已配好的旧行照旧显示、照旧能跑，只是下拉里不再提供。
+      local pickerRow = seIsPickerRow(ed.skill) -- ★1.71.3 单一判据（与「添加条件」的初始类型同一份）
+      if pickerRow then
+        table.insert(items, "|cffff8080" .. L("SE_PICK_HINT") .. "|r")
         table.insert(idxMap, 0)
-        for _, id in ipairs(grp.ids) do
-          local ti2 = SE_BY_K[id]
-          if ti2 and not SE_TYPES[ti2].hidden then table.insert(items, L("CT_" .. string.upper(SE_TYPES[ti2].id))) table.insert(idxMap, ti2) end
+        -- ★提示行本身也带悬停说明（美化后的规则说明）
+        -- ★★用**下标赋值**而不是 table.insert：insert(t, nil) 是 **no-op**，
+        --   一旦某行不给提示就会让整张 tips 表错位（本轮实测踩到，与 1.71.3 类别图标那次同族）。
+        tips[table.getn(items)] = { "|cffffd100" .. L("CTG_6") .. "|r", L("SE_TIP_PICK_HINT"),
+                                    "|cff9fe0ff" .. L("SE_TIP_RULE") .. "|r" }
+      end
+      for _, grp in ipairs(SE_TYPE_GROUPS) do
+        local isPickGrp = (grp.label == "CTG_6")
+        if (pickerRow and isPickGrp) or ((not pickerRow) and (not isPickGrp)) then
+          table.insert(items, "|cffffd100· " .. L(grp.label) .. " ·|r")
+          table.insert(idxMap, 0)
+          tips[table.getn(items)] = nil -- 组标题不给提示（显式赋值：insert(nil) 是 no-op，会错位）
+          for _, id in ipairs(grp.ids) do
+            local ti2 = SE_BY_K[id]
+            if ti2 and not SE_TYPES[ti2].hidden then
+              table.insert(items, L("CT_" .. string.upper(SE_TYPES[ti2].id)))
+              table.insert(idxMap, ti2)
+              tips[table.getn(items)] = seTypeTip(SE_TYPES[ti2].id)
+              if SE_TODO_KINDS[SE_TYPES[ti2].id] then
+                warns[table.getn(items)] = SE_MARK_TEST -- 黄=待测试（白那枚是「不可用」，不许混）
+                anyWarn = true
+              end
+            end
+          end
         end
       end
       EVAL_DD_OPEN(row.typeBtn.btn, items, function(ti0)
@@ -3606,7 +3930,7 @@ local function SE_BUILD()
         if old.s and new.s and oldTd and oldTd.kind == SE_TYPES[ti].kind then new.s = old.s end -- s 仅同族保留
         it.cd = new
         EVAL_HELP_SE_REFRESH()
-      end)
+      end, { tips = tips, warns = anyWarn and warns or nil })
     end)
     reg(row.typeBtn.btn)
     -- 数值参数：[比较符] [-] 值 [+]
@@ -3620,6 +3944,16 @@ local function SE_BUILD()
       end)
     end)
     reg(row.opBtn.btn)
+    -- ★1.71.3 悬停说明：seHoverTip 已提到上面（与「启用」右侧图例共用同一份实现，见该处说明）。
+    seHoverTip(row.typeBtn.btn, function()
+      local it2 = seUI.ed and seUI.ed.conds[i]
+      return (it2 and it2.cd) and seTypeTip(it2.cd.k) or nil
+    end)
+    seHoverTip(row.opBtn.btn, function()
+      local it2 = seUI.ed and seUI.ed.conds[i]
+      if not (it2 and it2.cd and SE_TIP_RULE_KINDS[it2.cd.k]) then return nil end
+      return { "|cffffd100" .. L("SE_TIP_RULE_T") .. "|r", L("SE_TIP_RULE") }
+    end)
     -- 1.58.0 时间类型（秒）：步进 0.1、区间 0.0-10.0
     local SE_TIME_K = { swingLeft = true, castEl = true, castLeft = true, tCastEl = true, tCastLeft = true }
     row.minus = seBtn(root, 180, y, 20, 15, "-", function()
@@ -3916,6 +4250,43 @@ local function SE_BUILD()
       end
     end)
     reg(row.secPlus.btn)
+    -- ★★★1.71.3 队伍/团员条件的两个过滤格（用户要求）：
+    --   ① 职业多选（8 项队伍/团员条件都有）；② 小队多选（只对**团员**条件，用户要求「先验证可行性」）。
+    --   ★★语义与「目标职业」**正好相反**：空 = **不过滤**（用户原话「默认空不过滤职业.也就是全部」）。
+    --   ★放在 484/544：这两格占的正是**行内预览**的位置 → 那 8 行改为不显示行内预览（让位），
+    --     整行的完整条件在窗口底部的「预览:」里照旧能看到（那里才是唯一权威的整串显示）。
+    row.clsBtn = seBtn(root, 484, y, 56, 15, L("SE_CLS_ALL"), function()
+      local it = seUI.ed and seUI.ed.conds[i]
+      if not it then return end
+      it.cd.cs = it.cd.cs or {}
+      local items, sel = {}, {}
+      for ci, c in ipairs(CLASS_LIST) do
+        table.insert(items, c.name)
+        if it.cd.cs[c.id] then sel[ci] = true end
+      end
+      EVAL_DD_OPEN(row.clsBtn.btn, items, function(pi, on)
+        it.cd.cs[CLASS_LIST[pi].id] = on or nil
+        EVAL_HELP_SE_REFRESH()
+      end, { multi = true, selected = sel })
+    end)
+    reg(row.clsBtn.btn)
+    row.grpBtn = seBtn(root, 544, y, 56, 15, L("SE_GRP_ALL"), function()
+      local it = seUI.ed and seUI.ed.conds[i]
+      if not it then return end
+      it.cd.gs = it.cd.gs or {}
+      local items, sel = {}, {}
+      for gi = 1, 8 do
+        table.insert(items, string.format(L("SE_GRP_FMT"), gi))
+        if it.cd.gs[gi] then sel[gi] = true end
+      end
+      EVAL_DD_OPEN(row.grpBtn.btn, items, function(pi, on)
+        it.cd.gs[pi] = on or nil
+        EVAL_HELP_SE_REFRESH()
+      end, { multi = true, selected = sel })
+    end)
+    reg(row.grpBtn.btn)
+    seHoverTip(row.clsBtn.btn, function() return { "|cffffd100" .. L("SE_TIP_MEMCLS_T") .. "|r", L("SE_TIP_MEMCLS_D") } end)
+    seHoverTip(row.grpBtn.btn, function() return { "|cffffd100" .. L("SE_TIP_MEMGRP_T") .. "|r", L("SE_TIP_MEMGRP_D") } end)
     -- 结果预览 + 删除
     local pv = uiText(root, 9, 0.55, 0.75, 0.55)
     pv:SetPoint("TOPLEFT", root, "TOPLEFT", 484, y - 3) -- 1.70.45 右移给「剩余时间」让位（原 348）
@@ -3930,13 +4301,15 @@ local function SE_BUILD()
   end
 
   -- 添加条件 + 预览 + 保存/取消
-  seBtn(root, 16, -64 - 8 * 20 - 6, 96, 16, L("SE_ADD"), function()
+  local addW = seBtn(root, 16, -64 - 8 * 20 - 6, 96, 16, L("SE_ADD"), function()
     local ed = seUI.ed
     if ed and table.getn(ed.conds) < 8 then
-      table.insert(ed.conds, { conn = (table.getn(ed.conds) > 0) and "&" or nil, cd = seDefaultCond(1) })
+      -- ★1.71.3 初始类型按**这一行的过滤表**选（用户要求「添加初始值从过滤条件内选」）
+      table.insert(ed.conds, { conn = (table.getn(ed.conds) > 0) and "&" or nil, cd = seDefaultCond(seRowFirstType(ed.skill)) })
       EVAL_HELP_SE_REFRESH()
     end
   end)
+  seUI.addBtn = addW.btn -- ★1.71.3 断言要能点**真实按钮**（走它自己的 OnClick 闭包）
   -- 1.36.2 预览挪到 [+添加条件] 右侧同行（原在底部与 保存/取消 按钮重叠）
   local pvLabel = uiText(root, 9, 0.60, 0.55, 0.40)
   pvLabel:SetPoint("TOPLEFT", root, "TOPLEFT", 122, -64 - 8 * 20 - 9)
@@ -4004,6 +4377,35 @@ function EVAL_TEST_SE_ROW_DT(i)
   local okT, t = pcall(row.dtBtn.text.GetText, row.dtBtn.text)
   return (okS and s) and true or false, okT and t or nil
 end
+-- ★1.71.3 断言入口：队伍/团员条件的两个过滤格（职业 / 小队）——可见性 + 显示文案（问真实控件）
+function EVAL_TEST_SE_ROW_CLS(i)
+  local row = seUI.rows and seUI.rows[i]
+  if not (row and row.clsBtn) then return nil, nil end
+  local okS, s = pcall(row.clsBtn.btn.IsShown, row.clsBtn.btn)
+  local okT, t = pcall(row.clsBtn.text.GetText, row.clsBtn.text)
+  return (okS and s) and true or false, okT and t or nil
+end
+function EVAL_TEST_SE_ROW_GRP(i)
+  local row = seUI.rows and seUI.rows[i]
+  if not (row and row.grpBtn) then return nil, nil end
+  local okS, s = pcall(row.grpBtn.btn.IsShown, row.grpBtn.btn)
+  local okT, t = pcall(row.grpBtn.text.GetText, row.grpBtn.text)
+  return (okS and s) and true or false, okT and t or nil
+end
+function EVAL_TEST_SE_ROW_PREVIEW(i)
+  local row = seUI.rows and seUI.rows[i]
+  if not (row and row.preview) then return false end
+  local okS, s = pcall(row.preview.IsShown, row.preview)
+  return (okS and s) and true or false
+end
+function EVAL_TEST_SE_ROW_CLS_BTN(i)
+  local row = seUI.rows and seUI.rows[i]
+  return (row and row.clsBtn and row.clsBtn.btn) or nil
+end
+function EVAL_TEST_SE_ROW_GRP_BTN(i)
+  local row = seUI.rows and seUI.rows[i]
+  return (row and row.grpBtn and row.grpBtn.btn) or nil
+end
 -- 行内「剩余时间」控件的可见性与文案（问真实控件，不问常量）
 -- ★★★1.71.2（第八轮还原）**行内输入框已删**，输入回到面板内。
 --   所以原来那批「行内输入框」钩子（ROW_BOX / BOX_TEXT / BOX_FOCUSED / TYPE_AURA / PRESS_ENTER / KW）
@@ -4025,6 +4427,20 @@ function EVAL_TEST_SE_AURA_NAME(i)
   local it = ed and ed.conds and ed.conds[i]
   return it and it.cd and it.cd.s or nil
 end
+-- ★1.71.3 断言入口：读该行条件的**数据侧**类型 id（与显示侧的 ROW_TYPE 各钉一半——
+--   「数据对了但没显示出来」与「显示了但数据不对」是两回事，本项目两边都栽过）
+function EVAL_TEST_SE_COND_K(i)
+  local ed = seUI and seUI.ed
+  local it = ed and ed.conds and ed.conds[i]
+  return it and it.cd and it.cd.k or nil
+end
+function EVAL_TEST_SE_SKILL() -- ★1.71.3 编辑器当前技能名（验「名字落值」用）
+  return (seUI and seUI.ed and seUI.ed.skill) or nil
+end
+function EVAL_TEST_SE_COND_COUNT()
+  local ed = seUI and seUI.ed
+  return (ed and ed.conds and table.getn(ed.conds)) or 0
+end
 -- ★点**面板内的自由文本行**（✎ 开头）—— 验「列表里没有就用自己输入的名字」这条能力。
 --   ★为什么要走真实 OnClick：直接调 onFreeText 会绕过「面板真的渲染出了这一行」，
 --     而那正是用户能不能用这个功能的前提。
@@ -4045,6 +4461,70 @@ end
 -- ★1.71.2（第十三轮）点**真实的条件类型按钮**（走它自己的 OnClick 闭包）→ 打开类型下拉。
 --   为什么必须走真实 OnClick：行池上限这类 bug **只在真实构建路径上**才暴露，
 --   测试自己拼一份 items 是测不出来的（本项目多次栽在「只测函数不测调用点」）。
+-- ★1.71.3 点**真实的分类下拉按钮**（走它自己的 OnClick 闭包）→ 打开类别下拉。
+--   为什么必须走真实按钮：本轮的图标/标记都是「调用点接线」，测试自己拼 opts 测不出来（老教训）。
+function EVAL_TEST_SE_CLICK_CAT()
+  if not (seUI and seUI.catBtn) then return false end
+  local ok, fn = pcall(seUI.catBtn.GetScript, seUI.catBtn, "OnClick")
+  if not (ok and type(fn) == "function") then return false end
+  fn()
+  return true
+end
+-- ★1.71.3 类别图标：读**生产代码**给的字段（不在测试里另写一份映射）
+function EVAL_TEST_SE_CAT_ICONS()
+  local cats = EVAL_GO_SKILL_CATEGORIES()
+  local out = {}
+  for i = 1, table.getn(cats) do out[i] = cats[i].icon end
+  return out
+end
+-- ★1.71.3 悬停说明的断言入口：类型格 / 比较符格的**真实按钮**（要验接线就必须走它们的 OnEnter）
+function EVAL_TEST_SE_TYPE_BTN(i)
+  local r = seUI and seUI.rows and seUI.rows[i]
+  return (r and r.typeBtn and r.typeBtn.btn) or nil
+end
+function EVAL_TEST_SE_OP_BTN(i)
+  local r = seUI and seUI.rows and seUI.rows[i]
+  return (r and r.opBtn and r.opBtn.btn) or nil
+end
+-- ★1.71.3 断言入口：「添加条件」的**真实按钮**（要验初始类型就必须走真实 OnClick——本项目老判据）
+function EVAL_TEST_SE_CLICK_ADD()
+  local b = seUI and seUI.addBtn
+  if not (b and type(b.GetScript) == "function") then return false end
+  local ok, fn = pcall(b.GetScript, b, "OnClick")
+  if not (ok and type(fn) == "function") then return false end
+  fn()
+  return true
+end
+-- ★1.71.3 断言入口：状态标记图例 —— 读**真实控件**上的贴图与位置（不是 opts 传参：
+--   读传参只证明「传了什么」，证明不了「画成了什么」，本项目 UI ICON 那条的老判据）
+function EVAL_TEST_SE_MARK_ICONS()
+  local out = {}
+  local ms = seUI and seUI.marks
+  if type(ms) ~= "table" then return out end
+  for i = 1, table.getn(ms) do
+    local m = ms[i]
+    local rec = { tex = nil, x = nil, y = nil, w = nil }
+    if m and m.tex then
+      local okt, t = pcall(m.tex.GetTexture, m.tex)
+      rec.tex = okt and t or nil
+      local okw, wv = pcall(m.tex.GetWidth, m.tex)
+      rec.w = okw and wv or nil
+    end
+    if m and m.btn then
+      local okx, xv = pcall(m.btn.GetLeft, m.btn)
+      rec.x = okx and xv or nil
+      local oky, yv = pcall(m.btn.GetTop, m.btn)
+      rec.y = oky and yv or nil
+    end
+    out[i] = rec
+  end
+  return out
+end
+-- ★1.71.3 断言入口：图例按钮本体（悬停断言必须走**真实 OnEnter**）
+function EVAL_TEST_SE_MARK_BTN(i)
+  local m = seUI and seUI.marks and seUI.marks[i]
+  return (m and m.btn) or nil
+end
 function EVAL_TEST_SE_CLICK_TYPE(i)
   local r = seUI and seUI.rows and seUI.rows[i]
   if not (r and r.typeBtn and r.typeBtn.btn) then return false end
@@ -4322,7 +4802,7 @@ function EVAL_PROFILE_FROM_TEXT(text)
   local name, skills = nil, {}
   for line in string.gmatch(text .. "\n", "(.-)\n") do
     local l = EVAL_COND_TRIM(line)
-    local nm = string.match(l, "^#%s*方案[:：]%s*(.+)$") or string.match(l, "^#%s*(.+)$")
+    local nm = string.match(colonNorm(l), "^#%s*方案[:：]%s*(.+)$") or string.match(l, "^#%s*(.+)$") -- ★1.71.3 归一后才认全角冒号
     if nm then
       name = EVAL_COND_TRIM(nm)
     elseif string.sub(l, 1, 1) ~= ">" and string.sub(l, 1, 1) ~= "<" and l ~= "" then
@@ -5087,6 +5567,50 @@ if type(SlashCmdList) == "table" then
         say(n .. " × " .. pe[n] .. "  样本: " .. tostring(pe[n .. "_s"]))
       end
       if table.getn(pl) == 0 and table.getn(names) == 0 then say("（全空——先 /eh go probe immune 并在 30 秒内对免疫怪放技能；若反复全空说明事件系统不可用）") end
+    elseif msg == "go 频道" or string.find(msg or "", "^go 频道") == 1 then
+      -- ★1.71.3 取证：屏蔽「频道进出信息」到底生效没有；以及有没有更干净的官方入口。
+      --   本机 API 全表（1370 条）里**没有聊天过滤器**（ChatFrame_AddMessageEventFilter 之类不存在），
+      --   现用的是「挂 DEFAULT_CHAT_FRAME:AddMessage」这一层。
+      --   ★若这里显示「已过滤 0 条」而确实有人进出频道 → 说明客户端不走 Lua 打印，需要换方案（把结论发我）。
+      local sarg = string.match(msg or "", "^go 频道%s*(.-)%s*$") or ""
+      if string.find(sarg, "^装") == 1 then
+        -- ★手动立刻重试挂载（自动重试已由 事件 / 每帧 / 诊断 三处驱动，这里是救急入口）
+        local okd = (type(EVAL_TB_CHAN_INSTALL) == "function") and EVAL_TB_CHAN_INSTALL() and true or false
+        say("立刻重试挂载：" .. (okd and "成功" or "失败（DEFAULT_CHAT_FRAME 现在不可用？）"))
+      elseif string.find(sarg, "^试") == 1 then
+        local sample = string.match(sarg, "^试%s*(.*)$") or ""
+        if sample == "" then sample = "[4. 世界防务] 离开频道。" end
+        say("样本：" .. sample)
+        local hit = (type(EVAL_TB_CHAN_BLOCK) == "function") and EVAL_TB_CHAN_BLOCK(sample)
+        say("判据：" .. (hit and "命中（会被吞掉）" or "不命中（会正常显示）"))
+      else
+        local on, hooked, cnt, samples, live, seenAll, tries = EVAL_TEST_TB_CHAN_STATE()
+        say("— 频道进出信息 屏蔽 诊断 —")
+        say("开关：屏蔽=" .. (on and "开" or "关") .. "（默认开；配置窗 → 工具箱 → 队伍/社交）")
+        say("入口：DEFAULT_CHAT_FRAME=" .. ((DEFAULT_CHAT_FRAME and "有") or "无")
+          .. " 已挂载=" .. tostring(hooked) .. " 我们的包装在位=" .. tostring(live) .. "（尝试 " .. tostring(tries) .. " 次）")
+        say("经过入口的聊天消息：" .. tostring(seenAll) .. " 条；其中被吞：" .. tostring(cnt) .. " 条")
+        if type(samples) == "table" and table.getn(samples) > 0 then
+          for _, m in ipairs(samples) do say("  样本：" .. tostring(m)) end
+        else
+          say("  （暂无被吞样本）")
+        end
+        -- ★★1.71.3 判读：把「挂载没成功」与「客户端不走 Lua 打印」区分开——现象一样、修法完全不同
+        if not live then
+          say("|cffff8080判读：我们的包装没在位 → 挂载没成功（本版已自动重试；可用 /eh go 频道 装 立刻再试一次）|r")
+        elseif seenAll == 0 then
+          say("|cffff8080判读：入口在位，但一条聊天消息都没经过它 → 客户端不走 Lua 打印，需要换方案（把这屏发我）|r")
+        else
+          say("判读：入口在位且真的在转发；等一条「XX 进入/离开频道」再看「被吞」是否 +1")
+        end
+        if type(GetChatWindowMessages) == "function" then
+          local okg, g1 = pcall(GetChatWindowMessages, 1)
+          say("聊天窗口1 消息组：" .. ((okg and type(g1) == "string" and g1 ~= "") and g1 or "（读不到）"))
+        else
+          say("聊天窗口1 消息组：本客户端没有 GetChatWindowMessages 接口")
+        end
+        say("用法：/eh go 频道 试 [文本] = 试判据；/eh go 频道 装 = 立刻重试挂载")
+      end
     elseif msg == "go immune" then
       local im = (EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war and EVAL_HELP_CONFIG.war.immune) or {}
       local n, keys = 0, {}
@@ -5095,8 +5619,35 @@ if type(SlashCmdList) == "table" then
       say("免疫学习记录 " .. n .. " 条（/eh go immune clear 清空）:")
       for _, k in ipairs(keys) do say("  " .. k) end
     elseif msg == "go immune clear" then
-      if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war then EVAL_HELP_CONFIG.war.immune = {} end
-      say("免疫学习记录已清空")
+    elseif msg == "go 停施法" or string.find(msg or "", "^go 停施法") == 1 then
+      -- ★1.71.3 结论（用户两轮实测）：插件调 SpellStopCasting 在本客户端**只清本地进度条**、
+      --   服务端读条照旧；「移动脉冲」实测同样无效（已删）。★用户判断这可能是**客户端 bug** →
+      --   **功能先留着**（代码不删，客户端修好即生效）。本命令保留三档，方便日后复测。
+      local sarg = string.match(msg or "", "^go 停施法%s*(.-)%s*$") or ""
+      local function hasApi(n)
+        if type(_G[n]) == "function" then return "有" end
+        return "无"
+      end
+      say("— 停读法诊断（现状：插件只能清本地进度条，真中断做不到）—")
+      say("接口检测：SpellStopCasting=" .. hasApi("SpellStopCasting") .. " RunScript=" .. hasApi("RunScript")
+        .. " MoveForwardStart=" .. hasApi("MoveForwardStart") .. " MoveForwardStop=" .. hasApi("MoveForwardStop"))
+      if sarg == "" then
+        say("1 = 只调 SpellStopCasting（＝生产通道：会清本地进度条）")
+        say("2 = 完整生产通道 EVAL_STOP_CAST()")
+        say("3 = Jump（万一哪天客户端认这个）")
+      elseif sarg == "1" then
+        if type(RunScript) == "function" then pcall(RunScript, "SpellStopCasting()") end
+        say("已发 SpellStopCasting（RunScript 排队）")
+      elseif sarg == "2" then
+        if type(EVAL_STOP_CAST) == "function" then
+          local okc, howc = EVAL_STOP_CAST()
+          say("已发：ok=" .. tostring(okc) .. " 明细=" .. tostring(howc))
+        else say("EVAL_STOP_CAST 不存在（引擎没载入？）") end
+      elseif sarg == "3" then
+        if type(Jump) == "function" then pcall(Jump) say("已调 Jump()") else say("本客户端没有 Jump 接口") end
+      else
+        say("参数：1 / 2 / 3")
+      end
     elseif msg == "go probe" or msg == "go 光环" or string.find(msg or "", "^go 光环 ") == 1 then
       -- buff 探针（1.33.1）：两条枚举+tooltip 读名路径原始值打印，诊断药品类 buff 不进下拉
       say("— buff 探针（结果同时写调试日志） —")
@@ -5211,6 +5762,7 @@ if type(SlashCmdList) == "table" then
       say("/eh ui 战斗信息UI | /eh st 状态信息UI | /eh cfg 设置窗口（小地图旁 EH 图标同效）")
       say("/eh go 一键宏状态 | /eh go rescan 重扫动作条 | /eh debug 调试日志（/eh war 旧命令仍兼容）")
       say("/eh go probe 增益探针（逐条枚举自身 buff） | /eh go 光环 [名字] 光环定向探查")
+      say("/eh go 停施法 1|2|3 停读法取证（本客户端停读条 API 只有 Protected 的 SpellStopCasting）")
       say("方案命令：/eh go list 查看 | go add 技能 条件 | go del N | go newprof 名 | go prof N | go rename 新名 | go delprof N")
       say("方案导入导出（md 文本复制粘贴）：/eh go io，内置案例模版按职业直接导入")
       say("方案切换：Shift+按一键宏 | /eh go next | 战斗信息UI 方案按钮")

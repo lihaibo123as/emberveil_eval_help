@@ -759,7 +759,7 @@ eq(TEST.sellCalls, 0, "tb sell queued not burst (1.68.2)")
 tbPump(8, 3000) -- 0.4s/拍：卖1→验证→卖2→买→汇报
 eq(TEST.sellCalls, 2, "tb queued sells both grays in order")
 eq(TEST.usedItem, 101, "tb sell order bag0 first then bag1")
-eq(TEST.bought, "晨露酒x3;", "tb queued buy after sells")
+eq(TEST.bought, "晨露酒x1;晨露酒x1;晨露酒x1;", "★1.71.3 自动购买改为**分批**：需 3 件 → 3 笔 x1（每次购买数量默认 1）")
 eq(TEST.chat and TEST.chat:find("自动售出灰色物品 2 件") ~= nil, true, "tb sell summary on drain")
 eq(TEST.chat and TEST.chat:find("售出：灰色破剑 x1（武器/单手剑）", 1, true) ~= nil, true, "tb sell detail log with type (1.69.1)")
 eq(TEST.chat and TEST.chat:find("售出：破布 x1（?）", 1, true) ~= nil, true, "tb sell detail log uncached fallback (1.69.1)")
@@ -3500,7 +3500,8 @@ do
   eq(table.getn(kinds) >= 10, true, "★the editor exposes many condition kinds (got " .. table.getn(kinds) .. ")")
   local failed = {}
   for _, k in ipairs(kinds) do
-    if not pcall(EVAL_TEST_SE_PUSH_COND, k, "测试", "<", 5) then table.insert(failed, k) end
+    local okk, errk = pcall(EVAL_TEST_SE_PUSH_COND, k, "测试", "<", 5)
+    if not okk then table.insert(failed, k .. "{" .. tostring(errk) .. "}") end
   end
   eq(table.concat(failed, ","), "", "★★★every condition kind refreshes through the real UI path without error"
     .. (table.getn(failed) > 0 and (" (failed: " .. table.concat(failed, ",") .. ")") or ""))
@@ -3664,8 +3665,19 @@ do
   eq(EVAL_HELP_STATE.allyUnit, "party2", "★★★队友血量 命中后记下 unitID")
   eq(TEST.targetSel, "unit:party2", "★★★并且真的切了过去（后续 UseAction 才打对人）")
   clearAlly()
-  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "teamHp", op = ">", n = 60 }, nil), false, "★反向比较如实为假")
+  -- ★★★1.71.3 统一规则（用户定案）：`>` 取**最大** →「队伍血>60」= 全队（含自己）里血**最高**的那个 >60 才命中。
+  --   ★旧语义是「先取血最少的人再拿他比较」（那样 10%>60 恒假）——两套语义的差别正好钉在这里。
+  local savedHp66, savedHpMax66 = TEST.hp, TEST.hpMax
+  TEST.hp, TEST.hpMax = 80, 100
+  EVAL_HELP_UPDATE_STATE()
+  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "teamHp", op = ">", n = 60 }, nil), true, "★★统一规则：> 取最大 → 自己 80% > 60 命中")
+  eq(EVAL_HELP_STATE.allyUnit, "player", "★★★记下的正是「血最高的那个人」（自己）")
+  eq(TEST.targetSel, "unit:player", "★★★并切过去（扫描集含自己）")
+  clearAlly()
+  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "teamHp", op = ">", n = 95 }, nil), false, "★反向比较如实为假（最高 80% 也够不到 95）")
   eq(EVAL_HELP_STATE.allyUnit, nil, "★未命中就不该记人（别把上一轮的人留下）")
+  TEST.hp, TEST.hpMax = savedHp66, savedHpMax66
+  EVAL_HELP_UPDATE_STATE()
   clearAlly()
   eq(EVAL_TEST_COND_EVAL_LIVE({ k = "teamMana", op = "<", n = 20 }, nil), true, "★★队友蓝量<20 命中(乙 8%)")
   eq(EVAL_HELP_STATE.allyUnit, "party2", "★★队友蓝量 命中后也记人")
@@ -3981,6 +3993,186 @@ do
   -- 行数上限：不能无限增高（最多 SH_DETAIL_MAX 行 + 标题行）
   eq(table.getn(texts) <= 7, true, "★detail display is capped (no unbounded popup growth): " .. tostring(table.getn(texts)) .. " lines")
 end
+-- 12b) ★1.71.3 用户实测决定：**团队频道从分享里下线**（原话「不要团队模式发送了」）。
+--   ★判据必须落在**真实下拉的内容**上（EVAL_SHARE_SEND_UI 实际传给 EVAL_DD_OPEN 的选项表 + 每个选项点下去
+--     真的发到哪个频道），而不是只查源码里那张表——本项目「只测函数不测调用点」的老坑。
+do
+  local GONEW = { zhCN = { "团队" }, enUS = { "Raid", "raid" }, ruRU = { "Рейд", "рейд" } }
+  local oldDDW = EVAL_DD_OPEN
+  local capItems, capCb = nil, nil
+  EVAL_DD_OPEN = function(anchor, items, cb) capItems, capCb = items, cb end
+  EVAL_SHARE_SEND_UI(nil)
+  EVAL_DD_OPEN = oldDDW
+  eq(type(capItems) == "table", true, "★分享按钮真的弹出了频道下拉（已截获选项表）")
+  eq(table.getn(capItems or {}), 3, "★★分享频道只剩 3 个（公会/队伍/说），团队已下线: got " .. tostring(table.getn(capItems or {})))
+  local LcurW = EVAL_LOCALES[EVAL_GET_LANG()]
+  local gw = GONEW[EVAL_GET_LANG()] or { "团队" }
+  local leakedW = ""
+  for _, s in ipairs(capItems or {}) do
+    for _, w in ipairs(gw) do if string.find(s, w, 1, true) ~= nil then leakedW = leakedW .. " " .. s end end
+  end
+  eq(leakedW, "", "★★★下拉里不许再出现已下线的频道名（反向哨兵，泄漏:" .. leakedW .. "）")
+  eq(capItems and capItems[1] == LcurW["SH_CH_GUILD"] and capItems[2] == LcurW["SH_CH_PARTY"] and capItems[3] == LcurW["SH_CH_SAY"], true,
+     "★剩下三个频道就是 公会/队伍/说（顺序一致）")
+  -- 三个选项逐个点下去：这一轮真的发出的频道必须只有 GUILD/PARTY/SAY，绝不许出现 RAID
+  --   （负载是纯大写十六进制+头部，频道名是唯一的大写单词 → 直接找词即可，不受引号转义困扰）
+  local oldInGuild, oldPartyN = TEST.inGuild, TEST.partyN
+  TEST.inGuild = true TEST.partyN = 1
+  local function sentW(pi)
+    TEST.runScripts = {}
+    pcall(capCb, pi)
+    return table.concat(TEST.runScripts or {}, " ~~ ")
+  end
+  local sGuild, sParty, sSay = sentW(1), sentW(2), sentW(3)
+  TEST.inGuild, TEST.partyN = oldInGuild, oldPartyN
+  eq(string.find(sGuild, "GUILD", 1, true) ~= nil, true, "★公会选项真的发到 GUILD")
+  eq(string.find(sParty, "PARTY", 1, true) ~= nil, true, "★队伍选项真的发到 PARTY")
+  eq(string.find(sSay, "SAY", 1, true) ~= nil, true, "★说频道选项真的发到 SAY")
+  eq(string.find(sGuild .. sParty .. sSay, "RAID", 1, true) == nil, true, "★★★三个选项都不会发出团队消息")
+  -- 白名单是**单一真值**：直接调 EVAL_SHARE_SEND 也必须被拒（界面藏起来 ≠ 代码发不出去）
+  TEST.runScripts = {}
+  eq(EVAL_SHARE_SEND("RAID"), false, "★★★直接调 EVAL_SHARE_SEND(RAID) 也被拒")
+  eq(table.getn(TEST.runScripts or {}), 0, "★被拒时一个聊天分片都没发出去")
+  eq(EVAL_SHARE_SEND("GUILD"), true, "★白名单没误伤：公会频道照常能发")
+  -- 指引/提示文案三语言同步：不许再出现那个已下线的频道名
+  for _, lg in ipairs({ "zhCN", "enUS", "ruRU" }) do
+    local pack = EVAL_LOCALES[lg]
+    local bad = ""
+    for _, k in ipairs({ "SH_TIP_S1", "SH_TIP_S2", "SH_TIP_S3", "SH_TIP_R3", "SH_CH_NO", "SH_CH_OFF" }) do
+      local v = pack[k]
+      if type(v) == "string" then
+        for _, w in ipairs(GONEW[lg] or {}) do if string.find(v, w, 1, true) ~= nil then bad = bad .. " " .. k end end
+      end
+    end
+    eq(bad, "", "★★" .. lg .. " 的分享指引/频道提示里不再出现已下线的频道名（泄漏:" .. bad .. "）")
+  end
+  -- ★反向哨兵：证明上面那条判据**真的会响**（拿旧文案试一次必须被抓出来）
+  do
+    local probe = "2. 选一个频道：公会 / 队伍 / 团队 / 说"
+    local hit = false
+    for _, w in ipairs(GONEW.zhCN) do if string.find(probe, w, 1, true) ~= nil then hit = true end end
+    eq(hit, true, "★sanity: 旧文案（含团队）确实会被这条判据抓住")
+  end
+end
+
+-- 12c) ★1.71.3 接收规则优化（用户要求：「优化接收端的接收数据规则. 在多个分享同时出现的时候只显示最新的数据,
+--   防止有些人滥发,或者多人发送接收异常.」）
+--   ★判据落点：①「只剩最新那一份」要**数据侧 + 当前显示行 + 原始详情行**三处都验
+--     （本客户端 Hide 后仍可能被绘出 → 只看 IsShown 会漏掉「Hide 了但文本还留着」的残留）；
+--     ② 所有上限值**从生产代码读**（EVAL_TEST_SHARE_LIMITS），不在断言里写死常量。
+do
+  local LIMC = EVAL_TEST_SHARE_LIMITS()
+  local LzC = EVAL_LOCALES[EVAL_GET_LANG()]
+  local function headC(k) -- 提示文案里 %d 之前那一段（用来在聊天记录里找这条提示，不硬编码整句）
+    local s = LzC[k] or ""
+    -- ★用 plain=true 找**单个** "%"：写成 "%%" 时 plain 模式下它是**两个字面字符**，永远找不到
+    --   → headC 返回整句（含 %d），与聊天里带数字的那条提示永远对不上（本轮实测踩到）。
+    local p = string.find(s, "%", 1, true)
+    return p and string.sub(s, 1, p - 1) or s
+  end
+  -- ★★帧里的 id 只能是**十六进制字符**（接收侧模式是 %x+）：写成 "g1"/"q1" 这种根本不是合法帧，
+  --   会被**静默忽略**（连「拒收提示」都没有）→ 断言看到的是「什么都没发生」，很容易误判成实现有问题。
+  --   ★本轮实测踩到：④⑥ 用 g1/q1 构造异常包，结果两条断言都拿不到提示，查了半天。
+  local function hexC(s) return (string.gsub(s, ".", function(c) return string.format("%02x", string.byte(c)) end)) end
+  local function chunkC(id, text, i, total)
+    local h = hexC(text)
+    return "[EHPF#" .. id .. " " .. i .. "/" .. total .. "]" .. string.sub(h, (i - 1) * 220 + 1, i * 220)
+  end
+  local function sendC(id, text, who)
+    local total = math.ceil(string.len(hexC(text)) / 220)
+    for i = 1, total do EVAL_SHARE_ONMSG(chunkC(id, text, i, total), who) end
+  end
+  local TXT_A = "# 方案: 甲号方案\n- 致死打击 | 怒气>30\n- 冲锋 | 非战斗\n"
+  local TXT_B = "# 方案: 乙号方案\n- 盾墙 | 自身血<50\n"
+  local TXT_C = "# 方案: 丙号方案\n- 断筋 | 连击>=2\n"
+  EVAL_SHARE_RESET()
+  EVAL_TEST_SHARE_RESET_WARN()
+  -- ① 最新优先：数据侧 + 显示侧 + 原始详情行
+  sendC("a1", TXT_A, "甲")
+  eq(EVAL_SHARE_PENDING() ~= nil and EVAL_SHARE_PENDING().sender == "甲", true, "★第一份分享照常弹出（前置）")
+  sendC("b1", TXT_B, "乙")
+  local pC = EVAL_SHARE_PENDING()
+  eq(pC ~= nil and pC.sender == "乙", true, "★★★多人同时发：只保留最新那一份（乙）")
+  eq(pC and pC.name, "乙号方案", "★留下来的内容也是最新那份")
+  local shownC = table.concat(EVAL_TEST_SHARE_POPUP_TEXTS(), "\n")
+  eq(string.find(shownC, "乙", 1, true) ~= nil, true, "★★★弹窗**当前显示**的就是最新那份")
+  eq(string.find(shownC, "甲", 1, true) == nil, true, "★★★旧那份的内容不许还显示着")
+  -- ★★「原始详情行」这条必须盯**旧文本里独有的行**（TXT_A 第 3 行是「- 冲锋 | 非战斗」）：
+  --   我第一版拿标题里的「甲」去找 —— 而残留的那一行是第 3 行、**根本不含「甲」** →
+  --   把「不清空只 Hide」的变异体放过去了（弱代理，本轮实测 M27 SURVIVED 才补）。
+  local rawC = table.concat(EVAL_TEST_SHARE_DETAIL_RAW(), "\n")
+  eq(string.find(rawC, "甲", 1, true) == nil, true, "★★★原始详情行里不许留旧那份的残留（标题行）")
+  eq(string.find(rawC, "冲锋", 1, true) == nil, true,
+     "★★★原始详情行里不许留旧那份的残留（旧文本独有、且被 Hide 的那一行也要清空）")
+  -- ② 同一发送者开新的一笔 → 旧笔作废（连点分享）；★绝不跨发送者作废
+  EVAL_SHARE_RESET()
+  sendC("c1", TXT_A, "丙")
+  eq(EVAL_SHARE_PENDING() ~= nil and EVAL_SHARE_PENDING().name, "甲号方案", "前置：丙 的第一份已弹出")
+  EVAL_SHARE_ONMSG(chunkC("d1", TXT_C, 1, 3), "丙")
+  EVAL_SHARE_ONMSG(chunkC("d1", TXT_C, 2, 3), "丙")
+  eq(EVAL_TEST_SHARE_BUF_COUNT(), 1, "★旧笔在途（收了 2/3 片）")
+  sendC("e1", TXT_B, "丙")
+  eq(EVAL_TEST_SHARE_BUF_COUNT(), 0, "★★同发送者开新的一笔后，旧那笔立刻作废（在途 0 笔）")
+  eq(EVAL_SHARE_PENDING() and EVAL_SHARE_PENDING().name, "乙号方案", "★新那笔收齐 → 替换成最新")
+  EVAL_SHARE_ONMSG(chunkC("d1", TXT_C, 3, 3), "丙")
+  eq(EVAL_SHARE_PENDING() and EVAL_SHARE_PENDING().name, "乙号方案",
+     "★★★已作废那笔补齐后**不许**顶掉最新的那份（否则就是「旧的盖掉新的」接收异常）")
+  -- ③ 在途笔数上限（多人同时发 / 滥发兜底）；不同发送者之间不互相作废
+  EVAL_SHARE_RESET()
+  EVAL_TEST_SHARE_RESET_WARN()
+  TEST.chat = nil
+  for s = 1, LIMC.buf + 3 do EVAL_SHARE_ONMSG(chunkC("f" .. s, TXT_A, 1, 2), "发" .. s) end
+  eq(EVAL_TEST_SHARE_BUF_COUNT(), LIMC.buf, "★★在途笔数被压到上限（上限读自生产代码）: got " .. tostring(EVAL_TEST_SHARE_BUF_COUNT()))
+  eq(string.find(tostring(TEST.chat or ""), headC("SH_DROP_MANY"), 1, true) ~= nil, true, "★淘汰有如实提示")
+  -- ④ 单笔分片数上限：整笔拒收
+  EVAL_SHARE_RESET()
+  EVAL_TEST_SHARE_RESET_WARN()
+  TEST.chat = nil
+  EVAL_SHARE_ONMSG("[EHPF#ab 1/" .. (LIMC.chunks + 1) .. "]" .. hexC(TXT_A), "灌水甲")
+  eq(EVAL_TEST_SHARE_BUF_COUNT(), 0, "★★分片数超上限 → 整笔拒收（不留缓冲）")
+  eq(string.find(tostring(TEST.chat or ""), headC("SH_DROP_BIG"), 1, true) ~= nil, true, "★拒收有如实提示")
+  -- ⑤ 单笔解码上限：整笔拒收
+  EVAL_SHARE_RESET()
+  EVAL_TEST_SHARE_RESET_WARN()
+  TEST.chat = nil
+  EVAL_SHARE_ONMSG("[EHPF#cd 1/1]" .. string.rep("41", LIMC.text + 64), "灌水乙")
+  eq(EVAL_SHARE_PENDING(), nil, "★★内容超上限 → 整笔拒收（不弹窗）")
+  eq(string.find(tostring(TEST.chat or ""), headC("SH_DROP_BIGTEXT"), 1, true) ~= nil, true, "★拒收有如实提示")
+  -- ⑥ 接收侧提示限频：窗口内只报一条 + 如实说出省略了几条；过了窗口恢复
+  EVAL_SHARE_RESET()
+  TEST.time = 7000
+  EVAL_TEST_SHARE_RESET_WARN()
+  TEST.chat = nil
+  for k = 1, 3 do EVAL_SHARE_ONMSG("[EHPF#e" .. k .. " 1/" .. (LIMC.chunks + 1) .. "]" .. hexC(TXT_A), "刷子") end
+  local chat1 = tostring(TEST.chat or "")
+  local nHits, pos = 0, 1
+  while true do
+    local f = string.find(chat1, headC("SH_DROP_BIG"), pos, true)
+    if not f then break end
+    nHits = nHits + 1
+    pos = f + 1
+  end
+  eq(nHits, 1, "★★同一窗口内 3 笔异常只报 1 条（防我们自己的提示被刷屏）: got " .. tostring(nHits))
+  eq(string.find(chat1, headC("SH_WARN_MORE"), 1, true) == nil, true,
+     "★第一个窗口内还没到结算点，不该凭空冒出「另有 N 条」（反向哨兵）")
+  TEST.chat = nil
+  TEST.time = 7000 + LIMC.gap + 1
+  EVAL_SHARE_ONMSG("[EHPF#e9 1/" .. (LIMC.chunks + 1) .. "]" .. hexC(TXT_A), "刷子")
+  local chat2 = tostring(TEST.chat or "")
+  eq(string.find(chat2, headC("SH_DROP_BIG"), 1, true) ~= nil, true, "★过了限频窗口恢复提示（不是永久静默）")
+  eq(string.find(chat2, headC("SH_WARN_MORE"), 1, true) ~= nil, true,
+     "★★被限频压下的那几条要**如实结算**出来（不静默丢弃）")
+  TEST.time = nil
+  -- ⑦ 去重表上限：防无限增长
+  EVAL_SHARE_RESET()
+  for k = 1, LIMC.done + 3 do
+    EVAL_SHARE_ONMSG("[EHPF#" .. string.format("%02x", k) .. " 1/1]" .. hexC(TXT_A), "刷屏机")
+  end
+  eq(EVAL_TEST_SHARE_DONE_COUNT(), LIMC.done, "★★去重表压在上限内（防无限增长）: got " .. tostring(EVAL_TEST_SHARE_DONE_COUNT()))
+  EVAL_SHARE_RESET()
+  EVAL_TEST_SHARE_RESET_WARN()
+end
+
 -- 同一发送者同 id 重复收齐不重复弹（done 标记）
 EVAL_SHARE_ONMSG(shMsgs[1], "队友甲")
 for _, m in ipairs(shMsgs) do EVAL_SHARE_ONMSG(m, "队友甲") end
@@ -4414,40 +4606,1628 @@ do
   -- ★反向哨兵：证明判据真的会响——旧实现的 1px 内缩确实不满足「偏移 = 0」
   eq((1 == 0), false, "★sanity: 旧实现的 1px 内缩确实不满足「偏移 = 0」")
 end
--- 77) ★★★1.71.2（第二十一轮）「队友/团员」这批条件在条件类型里**前面带感叹号**（用户要求）
---   用户原话：「条件类型,队友团队这一批条件前面添加个感叹号. 代码未测试功能.」
---   ★含义：这批条件（1.71.1 新增的队友/团员扫描）**还没在实机验证过**，用「!」标出来，
---     免得用户把它当成和别的条件一样可靠。★所以标记必须**只加在这一批**上。
---   ★加在**语言包的值**上（不是只改下拉的显示层）：这样条件行、规则列表里同样能看到这个标记——
---     「哪些条件还没验证」是要跟着条件走的，不是只在挑选的那一刻提示。
+-- 77) ★★★1.71.3（用户要求改版）「队友/团员」8 项 + 「候选者」4 项**尚未在游戏里实测确认**：
+--   ★上一版（1.71.2）是把「!」加在**名字前面**；用户实测后要求撤掉，原话：
+--     「第二张的八个条件名称前面的感叹号去除. 在右侧添加黄色感叹号. tooltip 提示待测试, 第一张也是相同操作.」
+--   ★为什么文字前缀该撤：它**跟着条件名到处跑**（条件行 / 菜单 / 日志里全是「!队友血量%」），看着像乱码；
+--     而标记只需在**挑选的那一刻**提示一次 → 改成下拉里**行右端一枚黄感叹号** + 悬停说明「待测试」。
+--   ★判据分三层（缺一层就会出现「名字改了但没标记」或「标记挂到了所有类型上」）：
+--     ① 语言包里**不再有**任何条件名以「!」开头；② 这 12 项在下拉里**真的有**黄标记（读真实控件上的贴图）；
+--     ③ 反向哨兵：非「待测试」的类型**没有**标记，而且标记必须是**黄**的那枚（白=不可用，不许混用）。
 do
   local TEAM_KEYS = { "CT_TEAMHP", "CT_TEAMMANA", "CT_TEAMBUFF", "CT_TEAMDEBUFF",
                       "CT_TEAMRAIDHP", "CT_TEAMRAIDMANA", "CT_TEAMRAIDBUFF", "CT_TEAMRAIDDEBUFF" }
+  local CAND_KEYS = { "CT_CANDHP", "CT_CANDPOWER", "CT_CANDBUFF", "CT_CANDDEBUFF" }
+  -- ① 文字前缀必须已经撤掉（三语言 × 全部条件类型，一个都不许留）
   for _, lang in ipairs({ "zhCN", "enUS", "ruRU" }) do
     local t = EVAL_LOCALES[lang]
-    for _, k in ipairs(TEAM_KEYS) do
-      local v = t[k]
-      eq(type(v) == "string" and string.sub(v, 1, 1) == "!", true,
-         "★★★" .. lang .. " " .. k .. " 以感叹号开头（该批条件尚未实机验证）: got=" .. tostring(v))
+    local bad = ""
+    for _, key in ipairs(EVAL_TEST_SE_TYPE_LABEL_KEYS()) do
+      local v = t[key]
+      if type(v) == "string" and string.sub(v, 1, 1) == "!" then bad = bad .. "<" .. key .. "=" .. v .. ">" end
     end
+    eq(bad, "", "★★★" .. lang .. " 条件名不再有「!」前缀（标记改由下拉里的黄感叹号承担）: " .. bad)
   end
-  -- ★反向哨兵：**别的**条件类型不许带这个标记（否则「全加一遍」也能通过）
-  local zh = EVAL_LOCALES["zhCN"]
-  local leaked = ""
-  for _, key in ipairs(EVAL_TEST_SE_TYPE_LABEL_KEYS()) do
-    local isTeam = false
-    for _, k in ipairs(TEAM_KEYS) do if k == key then isTeam = true end end
-    if not isTeam then
-      local v = zh[key]
-      if type(v) == "string" and string.sub(v, 1, 1) == "!" then leaked = leaked .. key .. " " end
-    end
-  end
-  eq(leaked, "", "★★★只有队友/团员那批带感叹号，其余条件类型不受影响（泄漏: " .. leaked .. "）")
-  -- ★标记必须**真的进了条件类型菜单**（只写在语言包里 ≠ 下拉里看得到）
-  local menu = EVAL_TEST_SE_TYPE_MENU()
   local Lz = EVAL_LOCALES[EVAL_GET_LANG()]
+  local menu = EVAL_TEST_SE_TYPE_MENU()
   local found = false
   for _, s in ipairs(menu) do if s == Lz["CT_TEAMHP"] then found = true end end
-  eq(found, true, "★★条件类型菜单里显示的就是带感叹号的那个名字: " .. tostring(Lz["CT_TEAMHP"]))
+  eq(found, true, "★★条件类型菜单里显示的就是这个名字（前缀已撤）: " .. tostring(Lz["CT_TEAMHP"]))
+  -- ②③ 真实下拉里的标记（普通行 → 8 项队友/团员；选取器行 → 4 项候选者）
+  local savedProf77 = EVAL_HELP_CONFIG.war.profiles
+  local savedAct77 = EVAL_HELP_CONFIG.war.activeProfile
+  local function openTypeMenu77(skill, cd)
+    EVAL_HELP_CONFIG.war.profiles = { { name = "t77", skills = { { skill = skill, why = "t77", groups = { { cd } } } } } }
+    EVAL_HELP_CONFIG.war.activeProfile = 1
+    EVAL_HELP_SE_OPEN(1, 1)
+    EVAL_DD_HIDE()
+    EVAL_DD_TEST_RESET_ANCHOR()
+    return EVAL_TEST_SE_CLICK_TYPE(1)
+  end
+  local function idxOfText77(txt)
+    local vis = EVAL_DD_TEST_VISIBLE_TEXTS()
+    for i = 1, table.getn(vis) do if tostring(vis[i]) == txt then return i end end
+    return nil
+  end
+  local yellow77 = EVAL_HELP_SE_MARK_ICONS().test
+  local white77 = EVAL_HELP_SE_MARK_ICONS().unavail
+  eq(openTypeMenu77("攻击", { k = "combat", v = true }), true, "前置：普通行点得开条件类型下拉")
+  for _, key in ipairs(TEAM_KEYS) do
+    local i = idxOfText77(Lz[key])
+    eq(i ~= nil, true, "前置：菜单里有 " .. key .. " = " .. tostring(Lz[key]))
+    if i then
+      eq(EVAL_DD_TEST_ROW_WARN(i), yellow77, "★★★" .. key .. " 行右端挂的是**黄**感叹号（读控件上的贴图）")
+      eq(EVAL_DD_TEST_ROW_WARN_SHOWN(i), true, "★★标记真的显示出来（不是设了贴图却藏着）")
+      local tip = EVAL_DD_TEST_ROW_TIP(i)
+      eq(type(tip) == "table", true, "★★" .. key .. " 行有悬停说明")
+      local txt = table.concat(tip or {}, "\n")
+      eq(string.find(txt, Lz["SE_MARK_TEST_T"], 1, true) ~= nil, true, "★★★悬停里写明「待测试」")
+      eq(string.find(txt, Lz["SE_MARK_TEST_D"], 1, true) ~= nil, true, "★★并给出说明")
+      eq(EVAL_DD_TEST_ROW_WARN(i) ~= white77, true, "★★反向：用的不是白那枚（白=不可用，两枚不许混）")
+    end
+  end
+  -- ★反向哨兵：非「待测试」的类型**不许**挂标记（否则「给所有行都挂上」也能通过）
+  local iCombat77 = idxOfText77(Lz["CT_COMBAT"])
+  eq(iCombat77 ~= nil, true, "前置：菜单里有 战斗中")
+  if iCombat77 then
+    eq(EVAL_DD_TEST_ROW_WARN_SHOWN(iCombat77), false, "★★★反向：非「待测试」类型不挂标记")
+    eq(EVAL_DD_TEST_ROW_TIP(iCombat77), nil, "★★也不给悬停说明")
+  end
+  -- 选取器行：4 项候选者同样带黄标记
+  eq(openTypeMenu77("选取目标:队伍成员", { k = "candHp", op = "<", n = 60 }), true, "前置：选取器行点得开条件类型下拉")
+  for _, key in ipairs(CAND_KEYS) do
+    local i = idxOfText77(Lz[key])
+    eq(i ~= nil, true, "前置：菜单里有 " .. key)
+    if i then
+      eq(EVAL_DD_TEST_ROW_WARN(i), yellow77, "★★★" .. key .. " 行右端也是黄感叹号")
+      eq(EVAL_DD_TEST_ROW_WARN_SHOWN(i), true, "★★标记真的显示出来")
+      local txt = table.concat(EVAL_DD_TEST_ROW_TIP(i) or {}, "\n")
+      eq(string.find(txt, Lz["SE_MARK_TEST_T"], 1, true) ~= nil, true, "★★★悬停里写明「待测试」")
+    end
+  end
+  -- 收尾
+  EVAL_HELP_CONFIG.war.profiles = savedProf77
+  EVAL_HELP_CONFIG.war.activeProfile = savedAct77
+  EVAL_DD_HIDE()
+  EVAL_TEST_SE_CLEAR()
+end
+-- 78) 停止攻击（1.71.3，用户要求「类似按 ESC」）：一个动作 = 停读条 + 停自动射击/魔杖 + 停近战普攻。
+--     ★官方依据（本机 api_spell/api_targetting 原文）：SpellStopCasting「Cancels auto-shot / auto-repeat first,
+--       otherwise interrupts the in-progress cast」且【Protected: yes】→ 走 RunScript（与取消施法同一条通道）；
+--       AttackTarget 原文是「Toggles auto-attack on the current target」=【切换】语义 → 必须守卫，否则会打起来。
+do
+  eq(EVAL_STOPALL_OF("停止攻击"), true, "stopAllOf parses")
+  eq(EVAL_STOPALL_OF("取消施法"), nil, "★取消施法与停止攻击是两个动作（不许合并成一个）")
+  eq(EVAL_STOPALL_OF("攻击"), nil, "plain attack is not stop-attack")
+  -- 角色行为组里能选到它；动作条扫描组不重复列出它（特殊行为不占动作条）
+  TEST.slotNames = { [1] = "停止攻击" } EVAL_GO_RESCAN(true)
+  local cats78 = EVAL_GO_SKILL_CATEGORIES()
+  local list178, list278 = cats78[1].items(), cats78[2].items()
+  local in178, in278 = false, false
+  for _, n in ipairs(list178) do if n == "停止攻击" then in178 = true end end
+  for _, n in ipairs(list278) do if n == "停止攻击" then in278 = true end end
+  eq(in178, true, "★角色行为组里有「停止攻击」可选项")
+  eq(in278, false, "★动作条扫描组不重复列出「停止攻击」")
+  TEST.slotNames = { [1] = "攻击", [2] = "自动射击" } EVAL_GO_RESCAN(true)
+  local sAtk78 = EVAL_WSLOTS["攻击"].slot
+  local sAS78 = EVAL_WSLOTS["自动射击"].slot
+  local oldSay78 = EVAL_SAY
+  local cap78 = {}
+  EVAL_SAY = function(m) table.insert(cap78, tostring(m)) end
+  EVAL_HELP_CONFIG.wdebug = true
+  local function stop78(conds) return EVAL_RULE_RUN({ { skill = "停止攻击", why = "w", groups = EVAL_PARSE_CONDS(conds) } }) end
+  local function log78() return table.concat(cap78, "\n") end
+  -- (a) 正在读条 + 自动射击在自动重复 + 近战挥击中 → 三条通道全开
+  EVAL_HELP_STATE.castName = "寒冰箭"
+  TEST.currentAction = sAtk78
+  TEST.autoRepeat = sAS78
+  TEST.runScripts = {} TEST.castStopped = nil TEST.castStoppedDirect = nil TEST.attackTried = nil
+  TEST.time = 4000 -- ★停读条通道有 1 秒频率防护：每个用例都要推进时钟，否则后几拍会被「限频」挡掉
+  eq(stop78("目标存在"), true, "停止攻击出手")
+  eq(TEST.castStopped, true, "★SpellStopCasting 走 RunScript（Protected 绕过，与取消施法同通道）")
+  eq(TEST.castStoppedDirect, nil, "★★直调通道必须【没被走到】（文档 Protected: yes → 真机直调静默无效）")
+  eq(TEST.attackTried, true, "★确认在挥击时才按 AttackTarget（停近战普攻）")
+  eq(string.find(log78(), "停止: ", 1, true) ~= nil, true, "★日志写出停止明细")
+  eq(string.find(log78(), "读条", 1, true) ~= nil, true, "…明细含读条")
+  eq(string.find(log78(), "自动射击", 1, true) ~= nil, true, "…明细含自动射击（IsAutoRepeatAction 判定）")
+  eq(string.find(log78(), "普攻", 1, true) ~= nil, true, "…明细含普攻")
+  -- (b) 什么都没进行 → 仍发 SpellStopCasting（文档：没在施法/自动重复时是空操作、返回 nil），
+  --     但**绝不许**碰 AttackTarget（切换语义会把没在打的人打起来，与「停止」正相反）
+  EVAL_HELP_STATE.castName = nil TEST.currentAction = nil TEST.autoRepeat = nil
+  TEST.runScripts = {} TEST.castStopped = nil TEST.attackTried = nil cap78 = {}
+  TEST.time = 4100
+  eq(stop78("目标存在"), true, "空闲时也出手（它是个动作，不是状态）")
+  -- ★1.71.3 起：没东西在放时**一条通道都不发**（旧版白发 SpellStopCasting；新设计还带移动脉冲 → 更不能乱动角色）
+  eq(TEST.castStopped, nil, "★★空闲时不再白发 SpellStopCasting（既无读条也无自动重复）")
+  eq(TEST.attackTried, nil, "★★★没在挥击 → 绝不按 AttackTarget")
+  eq(string.find(log78(), "无可停止的动作", 1, true) ~= nil, true, "★空闲时日志如实写「无可停止的动作」")
+  -- (c) 动作条上没有「攻击」→ 判不出是否在挥击：不碰 AttackTarget，并在日志里如实声明未判定
+  TEST.slotNames = { [1] = "自动射击" } EVAL_GO_RESCAN(true)
+  TEST.runScripts = {} TEST.castStopped = nil TEST.attackTried = nil cap78 = {}
+  TEST.time = 4200
+  eq(stop78("目标存在"), true, "★没有攻击格也照样出手（不占动作条，不许被「不在动作条」拦掉）")
+  eq(TEST.attackTried, nil, "无攻击格时不碰 AttackTarget")
+  eq(string.find(log78(), "普攻未判定", 1, true) ~= nil, true, "★日志如实声明「普攻未判定」，不假装做到")
+  -- (d) 「就绪」条件也认它（wready 分支：无冷却、不占动作条 → 恒就绪）
+  TEST.runScripts = {} TEST.castStopped = nil cap78 = {}
+  TEST.time = 4300
+  EVAL_HELP_STATE.castName = "寒冰箭"
+  eq(stop78("就绪"), true, "★带就绪条件放行（wready 没把它判成「不在动作条」）")
+  eq(TEST.castStopped, true, "带就绪条件真的执行了停止")
+  -- 还原（模块级状态必须复位，否则污染后续用例）
+  EVAL_SAY = oldSay78
+  EVAL_HELP_CONFIG.wdebug = nil
+  TEST.slotNames = {}
+  TEST.currentAction = nil TEST.autoRepeat = nil
+  EVAL_HELP_STATE.castName = nil
+  EVAL_GO_RESCAN(true)
+  TEST.time = nil -- ★时钟必须复位：后面的用例默认走 GetTime()=1000
+end
+
+-- 78b) ★1.71.3 用户实测后定案：**保留原始 SpellStopCasting 方式**（用户判断可能是客户端 bug →「功能先留着」），
+--   同时**删除移动脉冲**（实测同样无效，还会把角色往前挪 = 纯副作用）。
+--   ★判据：① 通道只做「本地清条」；② ★★★**绝不移动玩家角色**；③ 1 秒限频仍在；
+--     ④ 没有 RunScript 的老环境退回直调；⑤ 两个都没有时如实返回「无通道」（不假装做到）。
+do
+  TEST.time = 5000
+  TEST.moveStart, TEST.moveStop = nil, nil
+  TEST.runScripts = {} TEST.castStopped, TEST.castStoppedDirect = nil, nil
+  local okC, howC = EVAL_STOP_CAST()
+  eq(okC, true, "★停读条通道出手")
+  eq(howC, "本地条", "★通道明细就是「本地条」")
+  eq(TEST.castStopped, true, "★本地清条确实发出去了（RunScript 排队）")
+  eq(TEST.castStoppedDirect, nil, "★走的仍是 RunScript 通道（不是直调）")
+  eq(TEST.moveStart, nil, "★★★绝不移动玩家角色（移动脉冲已确认无效并删除）")
+  eq(TEST.moveStop, nil, "★★★也不会去 Stop 移动")
+  TEST.time = 5000.5
+  local okR, howR = EVAL_STOP_CAST()
+  eq(okR, false, "★★1 秒内第二次被限频挡下")
+  eq(howR, "限频", "★限频原因如实返回")
+  TEST.time = 5200
+  local savedRS = RunScript
+  RunScript = nil
+  TEST.castStopped, TEST.castStoppedDirect = nil, nil
+  local okD, howD = EVAL_STOP_CAST()
+  RunScript = savedRS
+  eq(okD, true, "★没有 RunScript 的老环境：退回直调")
+  eq(TEST.castStoppedDirect, true, "★直调真的被调用（桩如实记录）")
+  eq(TEST.moveStart, nil, "★直调路径同样不动角色")
+  TEST.time = 5300
+  local savedRS2, savedSC2 = RunScript, SpellStopCasting
+  RunScript, SpellStopCasting = nil, nil
+  local okN, howN = EVAL_STOP_CAST()
+  RunScript, SpellStopCasting = savedRS2, savedSC2
+  eq(okN, false, "★★没有任何通道时如实返回 false")
+  eq(howN, "无通道", "★原因如实写「无通道」")
+  TEST.time = nil
+  TEST.moveStart, TEST.moveStop = nil, nil
+  TEST.castStopped, TEST.castStoppedDirect = nil, nil
+end
+
+-- 79) ★1.71.3 频道进出信息屏蔽（工具箱 → 队伍/社交，默认开）
+--   用户截图原文：「[4. 世界防务] 离开频道。」「[5. 寻求组队] 离开频道。」
+--   ★API 结论：本机全表**没有聊天过滤器**（ChatFrame_AddMessageEventFilter 不存在）→
+--     实现是「挂 DEFAULT_CHAT_FRAME:AddMessage」这一层（有文档的控件方法）。
+do
+  -- ① 行模型：在「队伍/社交」组里、是复选框、带提示
+  local rows79 = EVAL_TEST_TB_ROWS()
+  local grp79, idxJoin = nil, nil
+  for i, r in ipairs(rows79) do
+    if r.t == "h" and r.label == EVAL_L("TB_H_SOCIAL") then grp79 = i end
+    if r.key == "chanJoin" then idxJoin = i end
+  end
+  eq(grp79 ~= nil, true, "前置：找得到「队伍/社交」分组标题")
+  eq(idxJoin ~= nil, true, "★「屏蔽频道进出信息」这一行存在")
+  eq(idxJoin ~= nil and grp79 ~= nil and idxJoin > grp79, true, "★★它挂在该组之内（不是别处）")
+  local rowJ = idxJoin and rows79[idxJoin]
+  eq(rowJ ~= nil and rowJ.t == "c", true, "★是复选框（与其它开关一致）")
+  eq(type(rowJ and rowJ.tip) == "string" and rowJ.tip ~= "", true, "★带悬停提示")
+  -- ② 默认开（用户要求「默认打开」）
+  eq(EVAL_TB_CHAN_ON(), true, "★★默认开启")
+  -- ③ 判据：命中真实文案；反向：不误伤真人聊天 / 自家输出
+  eq(EVAL_TB_CHAN_BLOCK("[4. 世界防务] 离开频道。"), true, "★命中截图里的真实文案")
+  eq(EVAL_TB_CHAN_BLOCK("[5. 寻求组队] 加入频道。"), true, "★命中「加入频道」")
+  eq(EVAL_TB_CHAN_BLOCK("Rainbow has joined channel 4."), true, "★命中英文")
+  eq(EVAL_TB_CHAN_BLOCK("守夜人：寄了"), false, "★★不误伤普通聊天")
+  eq(EVAL_TB_CHAN_BLOCK("我去加入他们的队伍了"), false, "★★★含「加入」但无频道词 → 不吞（真人消息最重要）")
+  eq(EVAL_TB_CHAN_BLOCK("这频道人真多"), false, "★★★含「频道」但无进出词 → 不吞")
+  eq(EVAL_TB_CHAN_BLOCK("|cff66ccffEVAL_HELP:|r 已开启"), false, "★★自家输出不吞")
+  eq(EVAL_TB_CHAN_BLOCK(nil), false, "★nil 不崩")
+  -- ④ 挂载：吞通知、放行其它，且**幂等**（不重复包装）
+  local f79 = DEFAULT_CHAT_FRAME
+  -- ★★干净底层：Toolbox.lua **载入时已经挂过一层**（这正是生产行为）——若直接把它当 saved79，
+  --   后面每调一次都会经过「我们自己的两层」，计数就跳 +2（本轮实测踩到）。
+  --   这里刻意从底层重来（行为与 test_stub 的原始实现一致），末尾再还原。
+  local saved79 = function(_, m) TEST.chat = (TEST.chat or "") .. tostring(m) .. "\n" end
+  local passed79 = 0
+  f79.AddMessage = function(self, m, ...) passed79 = passed79 + 1 return saved79(self, m, ...) end
+  EVAL_TEST_TB_CHAN_RESET()
+  eq(EVAL_TB_CHAN_INSTALL(), true, "★挂载成功")
+  local hookedFn79 = f79.AddMessage
+  eq(EVAL_TB_CHAN_INSTALL(), true, "★再挂一次仍返回 true（幂等）")
+  eq(f79.AddMessage == hookedFn79, true, "★★★幂等：第二次**没有**再替换入口（不重复包装）")
+  f79:AddMessage("[4. 世界防务] 离开频道。")
+  eq(select(3, EVAL_TEST_TB_CHAN_STATE()), 1, "★★通知被吞掉并计数")
+  eq(passed79, 0, "★★★吞掉时**不调用底层打印**（消息真的不会出现）")
+  f79:AddMessage("守夜人：寄了")
+  eq(passed79, 1, "★正常消息照旧打印")
+  -- ⑤ 开关关掉 → 立即放行（开关是**调用时**读的）
+  EVAL_HELP_CONFIG.tb = EVAL_HELP_CONFIG.tb or {}
+  EVAL_HELP_CONFIG.tb.chanJoin = false
+  eq(EVAL_TB_CHAN_ON(), false, "★开关关掉后判据读到的就是关")
+  f79:AddMessage("[4. 世界防务] 离开频道。")
+  eq(passed79, 2, "★★★关掉开关后同一条通知就放行了（不需要 /reload）")
+  eq(select(3, EVAL_TEST_TB_CHAN_STATE()), 1, "★关掉后计数不再增长")
+  EVAL_HELP_CONFIG.tb.chanJoin = true
+  -- ⑥ 没有挂载点时：如实返回 false、不崩
+  local savedFrame79 = DEFAULT_CHAT_FRAME
+  DEFAULT_CHAT_FRAME = nil
+  EVAL_TEST_TB_CHAN_RESET()
+  eq(EVAL_TB_CHAN_INSTALL(), false, "★没有聊天框入口时如实返回 false（不假称挂上了）")
+  DEFAULT_CHAT_FRAME = savedFrame79
+  -- ⑦ ★★★1.71.3 新增（用户实测「屏蔽频道进出信息未能正确工作」）：**载入太早导致的静默失效 + 自动重试**
+  --   现象：Toolbox.lua 载入时 DEFAULT_CHAT_FRAME 往往还没建好 → INSTALL 失败 → 旧版**再没人重试**
+  --   （开关看着是开的、实际一层都没挂上）。现在由 事件 / 每帧 / 诊断命令 三处驱动重试。
+  DEFAULT_CHAT_FRAME = nil
+  EVAL_TEST_TB_CHAN_RESET()
+  eq(EVAL_TB_CHAN_INSTALL(), false, "★★前置：聊天框还没建好时挂载失败（如实返回 false）")
+  eq(EVAL_TB_CHAN_RETRY(), false, "★★重试也拿不到入口 → 仍如实 false（不假装）")
+  DEFAULT_CHAT_FRAME = savedFrame79
+  EVAL_HELP_CONFIG.log = {}
+  EVAL_TEST_TB_CHAN_RESET()
+  eq(EVAL_TB_CHAN_RETRY(), true, "★★★入口就绪后**重试真的挂上了**（这就是用户那条的根因修复）")
+  eq(select(2, EVAL_TEST_TB_CHAN_STATE()), true, "★状态：已挂载")
+  eq(select(5, EVAL_TEST_TB_CHAN_STATE()), true, "★★★「我们的包装在位」= true（不是只看状态位——被别人顶掉也能查出来）")
+  f79:AddMessage("[4. 世界防务] 进入频道。")
+  eq(select(3, EVAL_TEST_TB_CHAN_STATE()), 1, "★★★重试挂上后，截图里那条「进入频道」真的被吞掉了")
+  local logs79 = table.concat(EVAL_HELP_CONFIG.log or {}, "\n")
+  eq(string.find(logs79, "挂载成功", 1, true) ~= nil, true, "★★挂载成功如实写进调试日志（/eh logdump 可查）")
+  -- ⑧ 文案表：**照着客户端真实文案抄**（旧表缺「进入」= 半个功能失效）
+  eq(EVAL_TB_CHAN_BLOCK("[4. 世界防务] 进入频道。"), true, "★★★命中用户截图里的「进入频道」")
+  eq(EVAL_TB_CHAN_BLOCK("[4. 世界防务] 退出频道。"), true, "★命中「退出频道」")
+  eq(EVAL_TB_CHAN_BLOCK("[4. 世界防务] 離開頻道。"), true, "★繁中也能命中")
+  eq(EVAL_TB_CHAN_BLOCK("我去进入他们的队伍了"), false, "★★★反向：含「进入」但无频道词 → 不吞")
+  -- ⑦b ★★★入口**不是 table** 时也要能挂（本客户端帧未必是 table —— 旧版 `type(f) ~= "table"` 会一次都挂不上）
+  --   用「函数 + 元表」造一个非 table 的入口（真客户端就是这种形态）。
+  do
+    local store79 = { AddMessage = function() end }
+    local nonTab79 = function() end
+    -- ★setmetatable 只吃 table（Lua 5.1 语义）→ 要给「函数」设元表必须用 debug.setmetatable
+    local mt79 = { __index = function(_, k) return store79[k] end,
+                   __newindex = function(_, k, v) store79[k] = v end }
+    local okSet = false
+    if type(debug) == "table" and type(debug.setmetatable) == "function" then
+      okSet = pcall(debug.setmetatable, nonTab79, mt79)
+    end
+    if okSet and type(nonTab79) ~= "table" and type(nonTab79.AddMessage) == "function" then
+      DEFAULT_CHAT_FRAME = nonTab79
+      EVAL_TEST_TB_CHAN_RESET()
+      eq(EVAL_TB_CHAN_INSTALL(), true, "★★★入口不是 table 也能挂上（旧版 type(f)~=\"table\" 在真机上可能一次都挂不上）")
+      eq(type(store79.AddMessage), "function", "★包装真的写进了该入口")
+    else
+      -- ★桩/环境不支持给非 table 设元表 → **如实跳过**（不假称测过；这条在真机上靠代码审查 + 不打 table 闸门保证）
+      eq(true, true, "（跳过：本测试环境无法构造非 table 的入口——已如实记录，不假称覆盖）")
+    end
+  end
+  DEFAULT_CHAT_FRAME = savedFrame79
+  -- ★⑦b 把包装挂到了「非 table 入口」上（TB.chanWrapper 也跟着指过去）→ 这里必须先回到**干净底层**再重挂，
+  --   否则会在旧包装之上再加一层（同一条消息被数两次——本轮实测踩过）。
+  f79.AddMessage = saved79
+  EVAL_TEST_TB_CHAN_RESET()
+  EVAL_TB_CHAN_RETRY()
+  -- ⑨ 经过入口的消息计数（诊断用它区分「没挂上」与「客户端不走 Lua 打印」）
+  local seen0 = select(6, EVAL_TEST_TB_CHAN_STATE())
+  f79:AddMessage("守夜人：寄了")
+  eq(select(6, EVAL_TEST_TB_CHAN_STATE()) == seen0 + 1, true, "★★经过入口的消息计数 +1（诊断判读的关键）")
+  -- 还原：恢复原来的入口 + 让生产包装重新装上（并清零计数），避免污染后续用例
+  f79.AddMessage = saved79
+  EVAL_TEST_TB_CHAN_RESET()
+  EVAL_TB_CHAN_INSTALL()
+end
+-- 80) ★1.71.3 自动购买重做：分批 + 每次数量 + 安全闸门 + 设置窗（用户要求）
+--   用户要点：「购买频率限制下防止瞬间购买」「支持购买数量多个」「每次购买数量:默认1」
+--   「购买行为要做好安全界限,异常终止等检测,比如背包满了」「防止进入重复购买操作」
+do
+  -- ① 老配置迁移：只补字段、不丢条目
+  local oldCfg = EVAL_HELP_CONFIG.tb
+  EVAL_HELP_CONFIG.tb = { buy = { { name = "老条目", n = 5 } } }
+  local tb80 = EVAL_TEST_TB_CFG() -- ★走真的 tbCfg（迁移在里面跑；直接读配置表是不会触发迁移的）
+  eq(tb80.buy[1].per, 1, "★老条目补上「每次购买数量」默认 1")
+  eq(tb80.buy[1].on, true, "★老条目补上「启用」默认开")
+  eq(tb80.buy[1].n, 5, "★原有字段不动（n 还是 5）")
+  -- ② 纯判据 EVAL_TB_BUY_DECIDE：所有安全闸门都在这里（可脱离游戏直接测）
+  local e = { name = "面包", n = 5, per = 2, on = true }
+  eq(select(2, EVAL_TB_BUY_DECIDE({ name = "x", n = 1, per = 1, on = false }, nil, { idx = 1 })), "off", "★★停用的条目不下单")
+  eq(select(2, EVAL_TB_BUY_DECIDE(e, { have0 = 0, fails = 0 }, { idx = nil })), "nomatch", "★商人没卖这个 → 不下单")
+  eq(select(2, EVAL_TB_BUY_DECIDE(e, { have0 = 0, fails = 0 }, { idx = 1, free = 0 })), "bagfull", "★★★背包满 → 不下单（防买到一半卡死）")
+  eq(select(2, EVAL_TB_BUY_DECIDE(e, { have0 = 0, fails = 0 }, { idx = 1, free = 3, have = 5 })), "done", "★已经买够 → 不下单")
+  eq(EVAL_TB_BUY_DECIDE({ name = "x", n = 9, per = 5, on = true }, { have0 = 0, fails = 0 }, { idx = 1, free = 3, have = 0, cap = 2 }), 2,
+     "★★每次数量受「商人一次上限」夹取（per=5, cap=2 → 买 2）")
+  eq(EVAL_TB_BUY_DECIDE({ name = "x", n = 3, per = 5, on = true }, { have0 = 0, fails = 0 }, { idx = 1, free = 3, have = 0, cap = 9 }), 3,
+     "★★每次数量受「还差多少」夹取（只差 3 → 买 3，不超买）")
+  eq(EVAL_TB_BUY_DECIDE({ name = "x", n = 9, per = 5, on = true }, { have0 = 0, fails = 0 }, { idx = 1, free = 3, have = 0, cap = 9, avail = 2 }), 2,
+     "★★每次数量受「商人库存」夹取（只剩 2）")
+  eq(select(2, EVAL_TB_BUY_DECIDE(e, { have0 = 0, fails = 0 }, { idx = 1, free = 3, have = 0, avail = 0 })), "avail", "★库存卖光 → 停（不再刷单）")
+  local stF = { have0 = 0, fails = 0, expect = 2 }
+  eq(select(2, EVAL_TB_BUY_DECIDE(e, stF, { idx = 1, free = 3, have = 0 })), "ok",
+     "★先按「上一笔没涨」记一次失败，但还没到上限 → 仍可下单")
+  eq(stF.fails, 1, "★★核对：说好买 2 件而背包没涨 → 记一次失败")
+  stF.fails = 3
+  eq(select(2, EVAL_TB_BUY_DECIDE(e, stF, { idx = 1, free = 3, have = 0 })), "fails", "★★★连失败达上限 → 停止该条目")
+  local stOK = { have0 = 0, fails = 0 }
+  eq(EVAL_TB_BUY_DECIDE(e, stOK, { idx = 1, free = 3, have = 0, cap = 9 }), 2, "★正常：按「每次购买数量」下单")
+  eq(stOK.expect, 2, "★下单后记下「期望背包数量」→ 下一拍据此核对")
+  -- ★★★用户实测报回：目标数必须是**绝对值**（对照背包现有量），否则每次对话都会重复购买
+  eq(EVAL_TB_BUY_DECIDE({ name = "x", n = 5, per = 2, on = true }, { fails = 0 }, { idx = 1, free = 3, have = 3, cap = 9 }), 2,
+     "★★★背包已有 3 件、目标 5 → 只再买 2 件（不是买 5）")
+  eq(select(2, EVAL_TB_BUY_DECIDE({ name = "x", n = 5, per = 2, on = true }, { fails = 0 }, { idx = 1, free = 3, have = 5 }) ), "done",
+     "★★★背包已有 5 件（够了）→ 一件都不买（防每次对话重复购买）")
+  eq(select(2, EVAL_TB_BUY_DECIDE({ name = "x", n = 5, per = 2, on = true }, { fails = 0 }, { idx = 1, free = 3, have = 9 }) ), "done",
+     "★背包比目标还多 → 同样不买")
+  -- ③ 设置窗：列表显示「启用 | 名称 | 总数 | 每次」，且能改
+  EVAL_BUY_UI_OPEN()
+  eq(EVAL_TEST_BUY_UI_SHOWN(), true, "★设置窗能打开")
+  local t80 = EVAL_TEST_BUY_UI_TEXTS()
+  eq(table.getn(t80) >= 1, true, "★列表里画出了条目（可见行数 " .. tostring(table.getn(t80)) .. "）")
+  eq(t80[1] and t80[1].name, "老条目", "★★列表显示的是配置里的名字")
+  eq(t80[1] and t80[1].n, "5", "★★列表显示「总数」列")
+  eq(t80[1] and t80[1].per, "1", "★★列表显示「每次」列（默认 1）")
+  eq(t80[1] and t80[1].on, true, "★★列表显示「启用」勾选状态")
+  local savedTN80 = EVAL_TN_OPEN
+  local tnCalls80 = 0
+  EVAL_TN_CB80 = nil
+  EVAL_TN_OPEN = function(title, cur, cb) tnCalls80 = tnCalls80 + 1 EVAL_TN_CB80 = cb end
+  local chk80 = EVAL_TEST_BUY_UI_CELL(1, "chk")
+  local chkFn = chk80 and chk80.GetScript and chk80:GetScript("OnClick")
+  eq(type(chkFn) == "function", true, "★勾选框有真实 OnClick")
+  if type(chkFn) == "function" then chkFn() end
+  eq(tb80.buy[1].on, false, "★★★点一下勾选框 → 该条目被停用（写的是配置真值）")
+  eq(EVAL_TEST_BUY_UI_TEXTS()[1].on, false, "★★列表状态同步刷新")
+  if type(chkFn) == "function" then chkFn() end
+  eq(tb80.buy[1].on, true, "★再点一下 → 恢复启用")
+  local nBtn80 = EVAL_TEST_BUY_UI_CELL(1, "n")
+  local nFn = nBtn80 and nBtn80.GetScript and nBtn80:GetScript("OnClick")
+  eq(type(nFn) == "function", true, "★数量格有真实 OnClick")
+  if type(nFn) == "function" then nFn() end
+  eq(tnCalls80, 1, "★★点数量格真的弹了输入框（EVAL_TN_OPEN）")
+  if type(EVAL_TN_CB80) == "function" then EVAL_TN_CB80("20") end
+  eq(tb80.buy[1].n, 20, "★★★输入 20 后写回配置（走真实回调）")
+  eq(EVAL_TEST_BUY_UI_TEXTS()[1].n, "20", "★列表上显示也变成 20")
+  local pBtn80 = EVAL_TEST_BUY_UI_CELL(1, "per")
+  local pFn = pBtn80 and pBtn80.GetScript and pBtn80:GetScript("OnClick")
+  if type(pFn) == "function" then pFn() end
+  if type(EVAL_TN_CB80) == "function" then EVAL_TN_CB80("3") end
+  eq(tb80.buy[1].per, 3, "★★每次购买数量可改为 3")
+  eq(EVAL_TEST_BUY_UI_TEXTS()[1].per, "3", "★列表显示同步")
+  eq(EVAL_TB_BUY_DECIDE(tb80.buy[1], { have0 = 0, fails = 0 }, { idx = 1, free = 3, have = 0, cap = 9 }), 3,
+     "★★★改完「每次 3」后判据真的按 3 下单（UI → 行为闭环）")
+  local dBtn80 = EVAL_TEST_BUY_UI_CELL(1, "del")
+  local dFn = dBtn80 and dBtn80.GetScript and dBtn80:GetScript("OnClick")
+  if type(dFn) == "function" then dFn() end
+  eq(table.getn(tb80.buy), 0, "★★[删除] 真的把条目删了")
+  eq(table.getn(EVAL_TEST_BUY_UI_TEXTS()), 0, "★删空后列表不再画行")
+  -- ④ 工具箱「自动购买」行的 [添加]：现在开的是设置窗，不再弹输入框
+  EVAL_TB_REFRESH()
+  local addBtn80 = EVAL_TEST_TB_ADD_BTN_FOR("buy")
+  eq(addBtn80 ~= nil, true, "前置：找得到「自动购买」行的 [添加] 按钮")
+  local af = addBtn80 and addBtn80.GetScript and addBtn80:GetScript("OnClick")
+  eq(type(af) == "function", true, "★[添加] 有真实 OnClick")
+  tnCalls80 = 0
+  EVAL_BUY_UI_CLOSE()
+  if type(af) == "function" then af() end
+  eq(EVAL_TEST_BUY_UI_SHOWN(), true, "★★★工具箱[添加] 真的打开了设置窗（真实 OnClick 闭包）")
+  eq(tnCalls80, 0, "★★它不再弹旧的文本输入框（自动购买改走设置窗）")
+  EVAL_TN_OPEN = savedTN80
+  EVAL_HELP_CONFIG.tb = oldCfg
+  EVAL_BUY_UI_CLOSE()
+end
+-- 81) ★1.71.3 分享来源频道标注（用户问：「方案分享来源能否辨别是否是公会来源？」）
+--   ★判据 = **触发的事件名**（按频道注册的事件本来就是分开的），比拿文本猜可靠；
+--     ★队长/团长走 *_LEADER 事件，一并归类；认不出来就**不标**（不瞎猜来源）。
+do
+  local L81 = EVAL_LOCALES[EVAL_GET_LANG()]
+  eq(EVAL_SHARE_CHAN_LABEL("CHAT_MSG_GUILD"), L81["SH_CH_GUILD"], "★公会来源标成「公会」")
+  eq(EVAL_SHARE_CHAN_LABEL("CHAT_MSG_PARTY"), L81["SH_CH_PARTY"], "★队伍")
+  eq(EVAL_SHARE_CHAN_LABEL("CHAT_MSG_PARTY_LEADER"), L81["SH_CH_PARTY"], "★★队长发言也算队伍（不能当野人）")
+  eq(EVAL_SHARE_CHAN_LABEL("CHAT_MSG_RAID"), L81["SH_CH_RAID"], "★团队")
+  eq(EVAL_SHARE_CHAN_LABEL("CHAT_MSG_RAID_LEADER"), L81["SH_CH_RAID"], "★团长发言也算团队")
+  eq(EVAL_SHARE_CHAN_LABEL("CHAT_MSG_SAY"), L81["SH_CH_SAY"], "★说")
+  eq(EVAL_SHARE_CHAN_LABEL("CHAT_MSG_WHISPER"), L81["SH_CH_WHISPER"], "★密语")
+  eq(EVAL_SHARE_CHAN_LABEL(nil), nil, "★没有事件信息 → 不标（不瞎猜）")
+  eq(EVAL_SHARE_CHAN_LABEL("CHAT_MSG_SOMETHING_ELSE"), nil, "★未知事件 → 不标")
+  local e1, m1, s1 = EVAL_SHARE_DISPATCH("CHAT_MSG_GUILD", "MSG", "Rainbow", nil, nil)
+  eq(e1 == "CHAT_MSG_GUILD" and m1 == "MSG" and s1 == "Rainbow", true, "★分派：事件名在 1 参（常态）")
+  local e2, m2, s2 = EVAL_SHARE_DISPATCH(nil, "CHAT_MSG_GUILD", "MSG", "Rainbow", nil)
+  eq(e2 == "CHAT_MSG_GUILD" and m2 == "MSG" and s2 == "Rainbow", true, "★分派：事件名在 2 参（兼容态）")
+  local e3, m3, s3 = EVAL_SHARE_DISPATCH(nil, nil, nil, "MSG", "Rainbow")
+  eq(e3 == nil and m3 == "MSG" and s3 == "Rainbow", true, "★分派：无事件名时仍取到消息（老环境）")
+  -- 真实收信路径：带来源收齐 → pending 记来源 + 弹窗真的显示出来
+  EVAL_SHARE_RESET()
+  local prof81 = EVAL_PROFILE_FROM_TEXT("# 方案: 来源测试\n- 致死打击 | 怒气>30")
+  EVAL_HELP_CONFIG.war.profiles = { prof81 } EVAL_HELP_CONFIG.war.activeProfile = 1
+  TEST.runScripts = nil
+  EVAL_SHARE_SEND("GUILD")
+  local msgs81 = {}
+  for _, s in ipairs(TEST.runScripts or {}) do
+    local m = string.match(s, 'SendChatMessage%("(.-)", "GUILD"%)')
+    if m then table.insert(msgs81, m) end
+  end
+  eq(table.getn(msgs81) >= 1, true, "前置：造出一条分享分片")
+  -- ★1.71.3：新规则会忽略「非说来源 + 内容就是自己的方案」的回声 → 本组验的是「来源标注」，
+  --   所以这里把配置换成一个**别人的方案**，否则收到的分片会被判成自己的回声而根本不弹窗。
+  EVAL_HELP_CONFIG.war.profiles = { EVAL_PROFILE_FROM_TEXT("# 方案: 别人的方案\n- 冲锋 | 非战斗") }
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  for _, m in ipairs(msgs81) do EVAL_SHARE_ONMSG(m, "彩虹", "CHAT_MSG_GUILD") end
+  local p81 = EVAL_SHARE_PENDING()
+  eq(p81 ~= nil and p81.chan, L81["SH_CH_GUILD"], "★★★收到的分享记下了来源=公会")
+  local shown81 = table.concat(EVAL_TEST_SHARE_POPUP_TEXTS(), "\n")
+  eq(string.find(shown81, L81["SH_CH_GUILD"], 1, true) ~= nil, true, "★★★弹窗里真的显示出来源频道")
+  eq(string.find(shown81, "彩虹", 1, true) ~= nil, true, "★发送者名字仍在")
+  -- ★反向哨兵：不带事件（老路径/测试直调）不许凭空造出来源
+  EVAL_SHARE_RESET()
+  for _, m in ipairs(msgs81) do EVAL_SHARE_ONMSG(m, "彩虹") end
+  local p82 = EVAL_SHARE_PENDING()
+  eq(p82 ~= nil and p82.chan, nil, "★★没有事件信息时不标来源（不瞎猜）")
+  eq(string.find(table.concat(EVAL_TEST_SHARE_POPUP_TEXTS(), "\n"), L81["SH_CH_GUILD"], 1, true) == nil, true,
+     "★弹窗里也不会凭空多出公会来源")
+  EVAL_SHARE_RESET()
+  EVAL_HELP_CONFIG.war.profiles = { prof81 } -- 还原本组开头改掉的配置（别把状态漏给后面的用例）
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+end
+
+-- 82) ★1.71.3 「自己方案的回声」自动忽略 + 公会来源的玩梗句（用户要求）
+--   ① 非「说」来源 且内容就是**我自己的方案** → 直接忽略（自己往公会/队伍发分享，客户端会把分片回声给自己）；
+--   ② 公会来源点 [忽略]/[导入] → 在**公会频道**各玩一句（只在真的公会里、只走 RunScript 排队）。
+do
+  local L82 = EVAL_LOCALES[EVAL_GET_LANG()]
+  local MY82 = "# 方案: 我的甲\n- 致死打击 | 怒气>30"
+  local OTHER82 = "# 方案: 别人的甲\n- 冲锋 | 非战斗"
+  -- 造分片：临时把「要发的方案」装进配置，发完还原（发送侧真实产物，不是手搓十六进制）
+  local function chunksOf82(text)
+    local keep = EVAL_HELP_CONFIG.war.profiles
+    EVAL_HELP_CONFIG.war.profiles = { EVAL_PROFILE_FROM_TEXT(text) }
+    EVAL_HELP_CONFIG.war.activeProfile = 1
+    TEST.runScripts = nil
+    EVAL_SHARE_SEND("GUILD")
+    local out = {}
+    for _, s in ipairs(TEST.runScripts or {}) do
+      local m = string.match(s, 'SendChatMessage%("(.-)", "GUILD"%)')
+      if m then table.insert(out, m) end
+    end
+    EVAL_HELP_CONFIG.war.profiles = keep
+    EVAL_HELP_CONFIG.war.activeProfile = 1
+    return out
+  end
+  local msgs82 = chunksOf82(MY82)
+  local other82 = chunksOf82(OTHER82)
+  eq(table.getn(msgs82) >= 1 and table.getn(other82) >= 1, true, "前置：两份分享都造出了分片")
+
+  -- 把「我的方案」装回配置：IS_MINE 比对的就是它
+  EVAL_HELP_CONFIG.war.profiles = { EVAL_PROFILE_FROM_TEXT(MY82) }
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  eq(EVAL_SHARE_IS_MINE(EVAL_PROFILE_TO_TEXT(1)), true, "★判据：这串文本就是「我自己的方案」")
+  eq(EVAL_SHARE_IS_MINE("# 方案: 我的甲\n- 致死打击 | 怒气>999"), false,
+     "★★同名但内容不同 → 不算我的（只比名字会误伤同名的人）")
+  eq(EVAL_SHARE_IS_MINE(OTHER82), false, "★别人的方案不算我的")
+  eq(EVAL_SHARE_IS_MINE(""), false, "★空串不算我的")
+  eq(EVAL_SHARE_IS_MINE(nil), false, "★nil 不算我的")
+
+  -- ① 公会来源 + 自己的方案 → 忽略（不弹窗、且在观测口上如实 +1）
+  EVAL_SHARE_RESET()
+  local base82 = EVAL_TEST_SHARE_SELF_SKIPPED()
+  for _, m in ipairs(msgs82) do EVAL_SHARE_ONMSG(m, "彩虹", "CHAT_MSG_GUILD") end
+  eq(EVAL_SHARE_PENDING() == nil, true, "★★★公会来源的自我回声被忽略（自己不再弹自己的窗）")
+  eq(EVAL_TEST_SHARE_SELF_SKIPPED() == base82 + 1, true, "★★忽略次数如实 +1（可观测，不是静默丢弃）")
+
+  -- ② 「说」来源 + 自己的方案 → 照旧弹（用户明确要求：除了说类型的分享）
+  EVAL_SHARE_RESET()
+  for _, m in ipairs(msgs82) do EVAL_SHARE_ONMSG(m, "彩虹", "CHAT_MSG_SAY") end
+  eq(EVAL_SHARE_PENDING() ~= nil, true, "★★★「说」来源的自己方案照旧弹出（自己测试分享的唯一方式，不能顺手吞掉）")
+  eq(EVAL_TEST_SHARE_SELF_SKIPPED() == base82 + 1, true, "★②没有再记一次忽略（说来源不受影响）")
+
+  -- ③ 队伍来源 + 自己的方案 → 同样忽略（规则是「非说来源」，不是只盯公会）
+  EVAL_SHARE_RESET()
+  for _, m in ipairs(msgs82) do EVAL_SHARE_ONMSG(m, "彩虹", "CHAT_MSG_PARTY") end
+  eq(EVAL_SHARE_PENDING() == nil, true, "★★队伍来源的自我回声同样忽略")
+  eq(EVAL_TEST_SHARE_SELF_SKIPPED() == base82 + 2, true, "★忽略计数又 +1")
+
+  -- ④ 公会来源 + 别人的方案 → 点 [忽略] 在公会频道玩一句
+  EVAL_SHARE_RESET()
+  TEST.inGuild = true
+  for _, m in ipairs(other82) do EVAL_SHARE_ONMSG(m, "彩虹", "CHAT_MSG_GUILD") end
+  local p82 = EVAL_SHARE_PENDING()
+  eq(p82 ~= nil, true, "前置：别人的公会分享正常弹出")
+  TEST.runScripts = nil
+  eq(EVAL_TEST_SHARE_CLICK_IGNORE(), true, "★点到了真实的 [忽略] 按钮（走它自己的 OnClick 闭包）")
+  local wantIgn = string.format(L82["SH_FUN_IGNORE"], "彩虹", tostring(p82.name))
+  local gotIgn = nil
+  for _, s in ipairs(TEST.runScripts or {}) do
+    if string.find(s, wantIgn, 1, true) then gotIgn = s end
+  end
+  eq(gotIgn ~= nil, true, "★★★[忽略] 在公会频道玩了梗句（RunScript 排队 + 文案按语言包实取）")
+  eq(gotIgn ~= nil and string.find(gotIgn, '"GUILD"', 1, true) ~= nil, true, "★★真的发到公会频道")
+  eq(EVAL_SHARE_PENDING() == nil, true, "★忽略后待导入清空")
+
+  -- ⑤ 公会来源 + 别人的方案 → 点 [导入] 玩另一句，并且**照旧真的导入**
+  EVAL_SHARE_RESET()
+  for _, m in ipairs(other82) do EVAL_SHARE_ONMSG(m, "彩虹", "CHAT_MSG_GUILD") end
+  local p82b = EVAL_SHARE_PENDING()
+  eq(p82b ~= nil, true, "前置：再来一份公会分享")
+  local before82 = table.getn(EVAL_HELP_CONFIG.war.profiles)
+  TEST.runScripts = nil
+  eq(EVAL_TEST_SHARE_CLICK_IMPORT(), true, "★点到了真实的 [导入] 按钮")
+  local wantImp = string.format(L82["SH_FUN_IMPORT"], "彩虹", tostring(p82b.name))
+  local gotImp = nil
+  for _, s in ipairs(TEST.runScripts or {}) do
+    if string.find(s, wantImp, 1, true) then gotImp = s end
+  end
+  eq(gotImp ~= nil, true, "★★★[导入] 在公会频道玩了另一句梗")
+  eq(gotImp ~= nil and string.find(gotImp, '"GUILD"', 1, true) ~= nil, true, "★★也是发到公会频道")
+  eq(table.getn(EVAL_HELP_CONFIG.war.profiles) > before82, true, "★★玩梗句不替代导入：方案真的进列表了")
+
+  -- ⑥ 不在公会里 → 一句都不发（不假装发了）
+  --   ★⑤真的把「别人的甲」导进来了，此刻它已经变成「我的方案」→ 必须先把配置还原成只有我自己的那份
+  EVAL_HELP_CONFIG.war.profiles = { EVAL_PROFILE_FROM_TEXT(MY82) }
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  EVAL_SHARE_RESET()
+  TEST.inGuild = false
+  for _, m in ipairs(other82) do EVAL_SHARE_ONMSG(m, "彩虹", "CHAT_MSG_GUILD") end
+  eq(EVAL_SHARE_PENDING() ~= nil, true, "前置：不在公会也照样收得到分享")
+  TEST.runScripts = nil
+  EVAL_TEST_SHARE_CLICK_IGNORE()
+  eq(table.getn(TEST.runScripts or {}), 0, "★★不在公会里 → 一条都不发（不假装做到）")
+
+  -- ⑦ 队伍来源 → 不去公会频道发（玩梗句是公会来源专属）
+  EVAL_SHARE_RESET()
+  TEST.inGuild = true
+  for _, m in ipairs(other82) do EVAL_SHARE_ONMSG(m, "彩虹", "CHAT_MSG_PARTY") end
+  eq(EVAL_SHARE_PENDING() ~= nil, true, "前置：队伍来源正常弹窗")
+  TEST.runScripts = nil
+  EVAL_TEST_SHARE_CLICK_IGNORE()
+  eq(table.getn(TEST.runScripts or {}), 0, "★★队伍来源不发公会玩梗句（只认公会来源）")
+
+  TEST.inGuild = false
+  EVAL_SHARE_RESET()
+end
+-- 83) ★1.71.3 图标美化（用户要求）+ 「取消施法」异常标记（问号图标 + 悬停说明）
+--   ① 五个技能类别各带图标，且都指向**本插件自己**的 media\icons（自包含，不依赖对方目录）；
+--   ② 走**真实分类下拉按钮**：打开后每行真的画上了图标；
+--   ③ 走**真实项列表**：只有「取消施法」带异常标记，悬停弹出语言包里的原因；
+--   ④ 分享弹窗：两个按钮整组以窗口中线对齐 + 标题图标是本次拷进来的那张。
+do
+  local L83 = EVAL_LOCALES[EVAL_GET_LANG()]
+  -- ① 类别图标：前缀从**生产代码**（分享弹窗标题图标）反推，测试里不写死目录字符串
+  local full83 = EVAL_TEST_SHARE_TITLE_ICON()
+  eq(type(full83) == "string" and string.len(full83) > 0, true, "前置：拿到分享弹窗标题图标路径（生产值）")
+  eq(string.find(full83, "AddOns", 1, true) ~= nil and string.find(full83, "media", 1, true) ~= nil, true,
+     "★★标题图标指向插件自己的 media（自包含）")
+  local root83 = string.sub(full83, 1, string.len(full83) - string.len("trainers-icon"))
+  local catIcons83 = EVAL_TEST_SE_CAT_ICONS()
+  eq(table.getn(catIcons83), 5, "★五个类别都拿到了图标")
+  local seen83 = {}
+  for i = 1, 5 do
+    local ic = catIcons83[i]
+    eq(type(ic) == "string" and ic ~= "", true, "★类别 " .. i .. " 有图标路径")
+    eq(string.sub(ic, 1, string.len(root83)) == root83, true, "★★类别图标与标题图标同根（本插件 media，自包含）")
+    eq(seen83[ic], nil, "★五个类别图标互不相同：" .. tostring(ic))
+    seen83[ic] = true
+  end
+  -- ② 真实分类下拉按钮 → 每行画出的图标 = 生产代码给的那个
+  EVAL_HELP_SE_OPEN(1)
+  EVAL_DD_HIDE()
+  EVAL_DD_TEST_RESET_ANCHOR()
+  eq(EVAL_TEST_SE_CLICK_CAT(), true, "★点到了真实的分类下拉按钮（走它自己的 OnClick）")
+  eq(EVAL_DD_TEST_SHOWN(), true, "★类别下拉打开了")
+  eq(EVAL_DD_TEST_ROW_TEX(1), catIcons83[1], "★★★第一行**画出来的**图标 == 生产代码给的那个")
+  eq(EVAL_DD_TEST_ROW_TEX(5), catIcons83[5], "★第五行同理（下标不错位）")
+  -- ③ 点第一类（角色行为）→ 真实回调续弹项列表
+  local row83 = EVAL_DD_TEST_ROW(1)
+  local fn83 = row83 and row83.btn and row83.btn.GetScript and row83.btn:GetScript("OnClick")
+  eq(type(fn83) == "function", true, "前置：类别行有真实 OnClick（点它续弹项列表）")
+  if type(fn83) == "function" then fn83() end
+  local items83 = EVAL_GO_SKILL_CATEGORIES()[1].items()
+  local idxCancel, idxOther = nil, nil
+  for i, v in ipairs(items83) do
+    if v == "取消施法" then idxCancel = i elseif v == "攻击" then idxOther = i end
+  end
+  eq(idxCancel ~= nil and idxOther ~= nil, true, "前置：角色行为列表里有 取消施法 与 攻击")
+  eq(EVAL_DD_TEST_ROW_TEX(idxCancel) ~= nil, true, "★项行也画上了技能图标")
+  -- ★1.71.3 用户要求：把行右端那个**问号**换成**插件图标内的白感叹号** → 断言改读**生产值**
+  --   （不写死路径：写死就等于在测试里另抄一份名单，本项目老坑）
+  local warnIcon83 = EVAL_HELP_SE_WARN_ICON()
+  eq(type(warnIcon83) == "string" and string.find(warnIcon83, "mark-unavail", 1, true) ~= nil, true,
+     "★标记图标 = 本插件的白感叹号（mark-unavail）")
+  eq(EVAL_DD_TEST_ROW_WARN(idxCancel), warnIcon83, "★★★取消施法行右端画的就是它（读真实控件上的贴图）")
+  eq(string.find(tostring(EVAL_DD_TEST_ROW_WARN(idxCancel)), "INV_Misc_QuestionMark", 1, true) == nil, true,
+     "★★反向哨兵：不再是暴雪那个红问号")
+  eq(EVAL_DD_TEST_ROW_WARN_SHOWN(idxCancel), true, "★★标记真的显示出来（不是设了贴图却藏着）")
+  eq(EVAL_DD_TEST_ROW_WARN_SHOWN(idxOther), false, "★★反向哨兵：攻击行**没有**异常标记")
+  -- ④ 悬停：走真实 OnEnter → tooltip 必须出现语言包里的原因文案
+  local rb83 = EVAL_DD_TEST_ROW(idxCancel)
+  local enter83 = rb83 and rb83.btn and rb83.btn.GetScript and rb83.btn:GetScript("OnEnter")
+  eq(type(enter83) == "function", true, "★标记行有 OnEnter")
+  TEST.tipLines = nil
+  if type(enter83) == "function" then enter83() end
+  local tip83 = ""
+  for _, ln in ipairs(TEST.tipLines or {}) do tip83 = tip83 .. tostring(ln.text or "") .. " \n" end
+  eq(string.find(tip83, L83["SE_WARN_CANCELCAST"], 1, true) ~= nil, true,
+     "★★★悬停真的弹出原因（按语言包实取，不硬编码文案）")
+  -- ★反向哨兵：没有标记的行悬停**不该**弹这个原因（否则等于给所有行都装了提示）
+  TEST.tipLines = nil
+  local rbOther = EVAL_DD_TEST_ROW(idxOther)
+  local enterOther = rbOther and rbOther.btn and rbOther.btn.GetScript and rbOther.btn:GetScript("OnEnter")
+  if type(enterOther) == "function" then enterOther() end
+  local tipOther = ""
+  for _, ln in ipairs(TEST.tipLines or {}) do tipOther = tipOther .. tostring(ln.text or "") .. " \n" end
+  eq(string.find(tipOther, L83["SE_WARN_CANCELCAST"], 1, true) == nil, true, "★★攻击行悬停不弹这个原因")
+  EVAL_DD_HIDE()
+  -- ⑤ 行池复用：换一个菜单（类别下拉）后，原来带标记的那一行**不许**把标记/提示带过去。
+  --   ★类别菜单第 4 行（目标选取）与项菜单第 4 行（取消施法）**同一个行池槽位**，这正是残留会现形的地方。
+  EVAL_DD_TEST_RESET_ANCHOR()
+  EVAL_TEST_SE_CLICK_CAT()
+  eq(EVAL_DD_TEST_SHOWN(), true, "前置：类别下拉重新打开")
+  eq(EVAL_DD_TEST_ROW_WARN_SHOWN(4), false, "★★★行池复用不许残留上一次的异常标记")
+  eq(EVAL_DD_TEST_ROW_TIP(4), nil, "★★也不许残留上一次的悬停说明")
+  EVAL_DD_HIDE()
+  -- ⑤ 分享弹窗几何：按钮整组以窗口中线对齐（用**真实控件**的几何，不写死常量）
+  EVAL_SH_POPUP("测试", "# 方案: 图标测试", nil)
+  local pos83 = EVAL_TEST_SHARE_BTN_POS()
+  eq(pos83.W > 0 and pos83.w > 0 and pos83.x1 ~= nil and pos83.x2 ~= nil, true,
+     "前置：拿到弹窗与两个按钮的真实几何（W=" .. tostring(pos83.W) .. "）")
+  local mid83 = (pos83.x1 + pos83.x2 + pos83.w) / 2
+  eq(mid83 == pos83.W / 2, true,
+     "★★★两个按钮整组以窗口中线对齐（mid=" .. tostring(mid83) .. " 中线=" .. tostring(pos83.W / 2) .. "）")
+  eq(pos83.x1 == 56 or pos83.x2 == 160, false, "★反向哨兵：不再是旧的左偏位置 56/160")
+  eq(EVAL_TEST_SHARE_TITLE_ICON(), full83, "★标题图标仍是同一张（自包含路径）")
+  EVAL_SHARE_RESET()
+end
+-- 84) ★1.71.3 新 Tab「图标库」（用户要求：独立脚本 + 分组归类 + tooltip 名称 + 滚动翻页）
+--   ① 纯函数：名称（取路径末段、去扩展名）/ 分组（按文件名前缀，认不出来归「其他」）；
+--   ② 分页**先过滤再切页** + 页码越界夹取；
+--   ③ 状态机如实：接口缺失 = noapi、接口在但空 = empty，两种情况都不假装有图标；
+--   ④ 走**真实 UI**：状态行、翻页按钮、滚轮、分组下拉、图标格子的纹理与悬停/点击。
+do
+  local L84 = EVAL_LOCALES[EVAL_GET_LANG()]
+  -- ① 名称 / 分组（纯函数）
+  eq(EVAL_IB_NAME_OF("Interface\\Icons\\Spell_Fire_Fireball"), "Spell_Fire_Fireball", "★名称=路径最后一段")
+  eq(EVAL_IB_NAME_OF("Interface\\AddOns\\EvalHelp\\media\\icons\\trainer.tga"), "trainer", "★顺手去掉扩展名")
+  eq(EVAL_IB_NAME_OF(nil), nil, "★nil 安全（不炸）")
+  eq(EVAL_IB_GROUP_OF("Interface\\Icons\\Spell_Frost_Nova"), "frost", "★冰霜按前缀归类")
+  eq(EVAL_IB_GROUP_OF("Interface\\Icons\\Spell_Fire_Fireball"), "fire", "★火焰")
+  eq(EVAL_IB_GROUP_OF("Interface\\Icons\\INV_Misc_QuestionMark"), "inv", "★物品杂项")
+  eq(EVAL_IB_GROUP_OF("Interface\\Icons\\Ability_Warrior_Charge"), "ability", "★技能")
+  eq(EVAL_IB_GROUP_OF("Interface\\Icons\\Whatever_Thing"), "other", "★★认不出来归「其他」（不瞎猜）")
+  -- ② 分页：先过滤再切页（顺序错了会漏项）+ 越界夹取
+  local items84 = {}
+  for i = 1, 25 do
+    items84[i] = { path = "P" .. i, name = "N" .. i, group = (i <= 10 and "fire" or "inv") }
+  end
+  local pg1, page1, pages1, total1 = EVAL_IB_PAGE_ITEMS(items84, "fire", 1, 8)
+  eq(total1, 10, "★★过滤后总数=10（不是 25）")
+  eq(table.getn(pg1), 8, "★第一页 8 枚")
+  eq(pages1, 2, "★两页")
+  local pg2, page2 = EVAL_IB_PAGE_ITEMS(items84, "fire", 2, 8)
+  eq(table.getn(pg2), 2, "★★第二页剩 2 枚（先切页后过滤会在这里漏掉）")
+  eq(page2, 2, "★第二页页码")
+  local pg9, page9 = EVAL_IB_PAGE_ITEMS(items84, "fire", 99, 8)
+  eq(page9, 2, "★★页码越界夹到最后一页")
+  eq(table.getn(pg9), 2, "★越界后仍拿到最后一页的内容（不是空页）")
+  eq(table.getn(EVAL_IB_PAGE_ITEMS(items84, "all", 1, 8)), 8, "★「全部」也是先过滤再切页")
+  -- ③ 真实 UI（打开配置窗 → 第 5 个 Tab 的页面真的被构建）
+  EVAL_HELP_CFG_TOGGLE()
+  eq(EVAL_IB_TEST_BUILT(), true, "★★★配置窗构建时真的调用了 EVAL_IB_BUILD（第 5 个 Tab 接上了）")
+  EVAL_HELP_CFG_SETTAB(5)
+  eq(EVAL_HELP_CFG_TAB(), 5, "★新读值口：当前 Tab = 5")
+  local cols84, rows84, per84 = EVAL_IB_LAYOUT(EVAL_TEST_WIN_W())
+  eq(EVAL_IB_TEST_CELL_COUNT(), per84, "★图标池按「列×行=每页枚数」建（不多不少）")
+  -- ④ 正常枚举：6 枚宏图标 + 本插件在用的那几枚
+  local savedNum, savedInfo = GetNumMacroIcons, GetMacroIconInfo
+  TEST.macroIcons = { "Spell_Fire_Fireball", "Spell_Frost_Nova", "INV_Misc_Bag_01",
+                      "Ability_Warrior_Charge", "Whatever_Thing", "Temp_X" }
+  EVAL_IB_TEST_RESET()
+  local st84 = EVAL_IB_SCAN(true)
+  eq(st84.state, "ok", "★正常枚举 state=ok")
+  eq(st84.macro, 6, "★拿到 6 枚宏图标")
+  eq(st84.failed, 0, "★没有取失败的")
+  EVAL_IB_SET_GROUP("all")
+  local _, _, tot84 = EVAL_IB_TEST_PAGE()
+  eq(tot84, 6 + EVAL_IB_TEST_COUNTS().local_, "★「全部」= 宏图标 + 本插件在用的图标")
+  -- ★同路径只算一次：宏图标表里**也有本插件那枚**（同一条路径）→ 不去重「全部」就会重复计数。
+  --   ★1.71.3 改法说明：旧写法用桩名 "INV_Misc_QuestionMark" 之所以能撞上，是因为**那时**本插件的
+  --     「异常标记」正好就是暴雪那个问号；本轮换成自包含的白感叹号（AddOns 路径）之后，
+  --     「Interface\Icons\*」永远撞不上「AddOns\...」→ 改为**直接让宏图标表返回本插件那枚的路径**。
+  --     这样测的仍是**去重规则本身**（按路径去重），而不是「某两个具体字符串恰好相等」。
+  local savedNum2 = GetNumMacroIcons
+  GetMacroIconInfo = function(i) if i == 1 then return EVAL_HELP_SE_WARN_ICON() end return nil end
+  GetNumMacroIcons = function() return 1 end
+  EVAL_IB_TEST_RESET()
+  EVAL_IB_SCAN(true)
+  EVAL_IB_SET_GROUP("all")
+  local _, _, totDup = EVAL_IB_TEST_PAGE()
+  eq(totDup, EVAL_IB_TEST_COUNTS().local_, "★★★同路径去重（本插件那枚 == 宏图标表里那枚时只算一次）")
+  GetNumMacroIcons, GetMacroIconInfo = savedNum2, savedInfo -- ★立刻还原（后面几步还要用真桩）
+  TEST.macroIcons = { "Spell_Fire_Fireball", "Spell_Frost_Nova", "INV_Misc_Bag_01",
+                      "Ability_Warrior_Charge", "Whatever_Thing", "Temp_X" }
+  EVAL_IB_TEST_RESET()
+  EVAL_IB_SCAN(true)
+  EVAL_IB_SET_GROUP("all")
+  local firstItem = EVAL_IB_TEST_CELL(1).item
+  eq(firstItem ~= nil, true, "前置：第一格有图标")
+  eq(EVAL_IB_TEST_CELL(1).tex:GetTexture(), firstItem.path, "★★★格子真的画上了该图标的纹理（读控件）")
+  eq(string.find(tostring(EVAL_IB_TEST_STATUS_TEXT()), tostring(tot84), 1, true) ~= nil, true,
+     "★状态行里有真实总数（不是写死的文案）")
+  -- ⑤ 悬停：tooltip 必须给名称 / 分组 / 完整路径
+  TEST.tipLines = nil
+  eq(EVAL_IB_TEST_HOVER_CELL(1), true, "★悬停走了真实 OnEnter")
+  local tip84 = ""
+  for _, ln in ipairs(TEST.tipLines or {}) do tip84 = tip84 .. tostring(ln.text or "") .. " \n" end
+  eq(string.find(tip84, firstItem.name, 1, true) ~= nil, true, "★★tooltip 里有图标名称")
+  eq(string.find(tip84, firstItem.path, 1, true) ~= nil, true, "★★tooltip 里有完整路径（方便直接调用）")
+  eq(string.find(tip84, EVAL_IB_GROUP_LABEL(firstItem.group), 1, true) ~= nil, true, "★tooltip 里有分组名")
+  -- ⑥ 点击：把路径打到聊天框（用户要的「方便调用」）
+  local savedSay = EVAL_SAY
+  local said84 = nil
+  EVAL_SAY = function(t) said84 = tostring(t) end
+  eq(EVAL_IB_TEST_CLICK_CELL(1), true, "★点击走了真实 OnClick")
+  eq(said84 ~= nil and string.find(said84, firstItem.path, 1, true) ~= nil, true, "★★点击真的输出了该图标路径")
+  EVAL_SAY = savedSay
+  -- ⑦ 翻页：[下页] 真实按钮 + 滚轮（链式接管，只在第 5 个 Tab 时消费）
+  --   ★每页枚数由**真实窗口宽度**决定（列×行）——12 枚根本不够翻页，所以这里先把图标补到好几页。
+  local big84 = {}
+  for i = 1, 150 do big84[i] = "Spell_Fire_Big" .. i end
+  TEST.macroIcons = big84
+  EVAL_IB_TEST_RESET()
+  EVAL_IB_SCAN(true)
+  EVAL_IB_SET_GROUP("all")
+  local _, bigPages = EVAL_IB_TEST_PAGE()
+  eq(bigPages >= 2, true, "前置：图标数超过一页（每页 " .. tostring(EVAL_IB_PER_PAGE(EVAL_IB_TEST_W())) .. " 枚，共 " .. tostring(bigPages) .. " 页）")
+  local pageBefore = select(1, EVAL_IB_TEST_PAGE())
+  local nextBtn = nil
+  -- 用真实按钮：从格子池之外找 —— 直接点「下页」的脚本（读生产按钮）
+  local btnNext = EVAL_IB_TEST_BTN("next")
+  eq(btnNext ~= nil, true, "前置：拿到「下页」按钮")
+  if btnNext then
+    local fn84 = btnNext:GetScript("OnClick")
+    eq(type(fn84) == "function", true, "★「下页」有真实 OnClick")
+    if type(fn84) == "function" then fn84() end
+  end
+  eq(select(1, EVAL_IB_TEST_PAGE()) == pageBefore + 1, true, "★★点「下页」真的翻了一页")
+  local wheel84 = EVAL_CFG_WHEEL_SCRIPT()
+  eq(type(wheel84) == "function", true, "★拿到配置窗的滚轮脚本（链式接管）")
+  if type(wheel84) == "function" then wheel84(nil, -1) end
+  eq(select(1, EVAL_IB_TEST_PAGE()) == pageBefore, true, "★★滚轮向上真的翻回上一页（第 5 个 Tab 时消费滚轮）")
+  -- ★正向证据：用 +3（足以往前翻页）——若被消费，页码必然变；只测 -1 会被「页码夹取到 1」掩盖
+  --   （本轮变异实测：写 -1 时「无条件消费滚轮」的变异体**存活**，就是被夹取骗过去了）。
+  EVAL_HELP_CFG_SETTAB(1)
+  local pageOnOther = select(1, EVAL_IB_TEST_PAGE())
+  if type(wheel84) == "function" then wheel84(nil, 3) end
+  eq(select(1, EVAL_IB_TEST_PAGE()) == pageOnOther, true, "★★不在本 Tab 时不消费滚轮（+3 若被消费页码必变）")
+  EVAL_HELP_CFG_SETTAB(5)
+  -- ⑧ 分组下拉：走真实按钮 + 真实行回调（先换回小列表，便于断言「过滤后只剩 1 枚」）
+  TEST.macroIcons = { "Spell_Fire_Fireball", "Spell_Frost_Nova", "INV_Misc_Bag_01",
+                      "Ability_Warrior_Charge", "Whatever_Thing", "Temp_X" }
+  EVAL_IB_TEST_RESET()
+  EVAL_IB_SCAN(true)
+  EVAL_IB_SET_GROUP("all")
+  local gBtn84 = EVAL_IB_TEST_GROUP_BTN()
+  eq(gBtn84 ~= nil, true, "前置：拿到分组按钮")
+  EVAL_DD_HIDE()
+  EVAL_DD_TEST_RESET_ANCHOR()
+  local gFn = gBtn84 and gBtn84:GetScript("OnClick")
+  eq(type(gFn) == "function", true, "★分组按钮有真实 OnClick")
+  if type(gFn) == "function" then gFn() end
+  eq(EVAL_DD_TEST_SHOWN(), true, "★分组下拉打开了")
+  local opts84 = EVAL_IB_GROUP_OPTIONS(EVAL_IB_ITEMS())
+  local fireIdx = nil
+  for i = 1, table.getn(opts84) do if opts84[i].id == "fire" then fireIdx = i end end
+  eq(fireIdx ~= nil, true, "前置：下拉里有「火焰」这一组（有图才列）")
+  local row84 = EVAL_DD_TEST_ROW(fireIdx)
+  local rowFn = row84 and row84.btn and row84.btn:GetScript("OnClick")
+  eq(type(rowFn) == "function", true, "★分组行有真实 OnClick")
+  if type(rowFn) == "function" then rowFn() end
+  eq(EVAL_IB_TEST_GROUP(), "fire", "★★★点分组行真的切到该分组")
+  local _, _, totFire = EVAL_IB_TEST_PAGE()
+  eq(totFire, 1, "★★过滤后只剩 1 枚（火焰）")
+  eq(EVAL_IB_TEST_CELL(1).item ~= nil and EVAL_IB_TEST_CELL(1).item.group == "fire", true, "★第一格就是该分组的图标")
+  eq(EVAL_IB_TEST_CELL(2).btn:IsShown(), false, "★★只过滤出 1 枚时，第二格必须隐藏（不残留上一页的图）")
+  EVAL_IB_SET_GROUP("all")
+  -- ⑨ 状态机如实：接口缺失 / 接口在但空
+  GetNumMacroIcons = nil GetMacroIconInfo = nil
+  EVAL_IB_TEST_RESET()
+  local stNo = EVAL_IB_SCAN(true)
+  eq(stNo.state, "noapi", "★★★接口缺失 → noapi（如实，不假装）")
+  EVAL_IB_REFRESH()
+  eq(EVAL_IB_TEST_STATUS_TEXT(), L84["IB_NOAPI"], "★★状态行就是那句「本客户端没有宏图标接口」")
+  eq(EVAL_IB_TOTAL() >= 1, true, "★★接口缺失时仍列出「本插件在用」的图标（不是空页）")
+  GetNumMacroIcons = savedNum GetMacroIconInfo = savedInfo
+  TEST.macroIcons = nil
+  EVAL_IB_TEST_RESET()
+  local stEm = EVAL_IB_SCAN(true)
+  eq(stEm.state, "empty", "★★接口在但一枚都没有 → empty")
+  EVAL_IB_REFRESH()
+  eq(EVAL_IB_TEST_STATUS_TEXT(), L84["IB_EMPTY"], "★★状态行如实说明「接口在但没取到」")
+  -- ★Tab 名单：必须真的有 5 个，且第 5 个的标签就是语言包里的「图标库」（读真实按钮文本）
+  local names84 = EVAL_TEST_CFG_TAB_NAMES()
+  eq(table.getn(names84), 5, "★★配置窗现在有 5 个 Tab")
+  eq(names84[5], L84["TAB_ICONS"], "★★第 5 个 Tab 的标签 = 语言包 TAB_ICONS")
+  -- ★「取失败」要如实记账（不是静默当 0）：第 2 项给个非字符串 → 桩按取失败处理
+  TEST.macroIcons = { "Spell_Fire_One", false, "Spell_Fire_Three" }
+  EVAL_IB_TEST_RESET()
+  local stFail = EVAL_IB_SCAN(true)
+  eq(stFail.macro, 2, "★取到 2 枚")
+  eq(stFail.failed, 1, "★★1 枚取失败 —— 如实数出来（本项目「绝不静默」）")
+  EVAL_IB_SET_GROUP("all")
+  eq(string.find(tostring(EVAL_IB_TEST_STATUS_TEXT()), string.format(L84["IB_STATUS_FAIL"], 1), 1, true) ~= nil, true,
+     "★★状态行如实写出「其中 1 枚取失败」")
+  -- ★切 Tab 真的会刷新图标库（SETTAB 接线）：用刷新计数钉住，不看「数据对不对」
+  local rc84 = EVAL_IB_TEST_REFRESH_COUNT()
+  EVAL_HELP_CFG_SETTAB(1)
+  EVAL_HELP_CFG_SETTAB(5)
+  eq(EVAL_IB_TEST_REFRESH_COUNT() > rc84, true, "★★★切回第 5 个 Tab 会真的刷新（SETTAB 已接线）")
+  -- 收尾：把桩状态还原（跨用例状态残留是本项目的老坑）
+  TEST.macroIcons = nil
+  EVAL_IB_TEST_RESET()
+  EVAL_IB_SCAN(true)
+  EVAL_HELP_CFG_SETTAB(1)
+end
+-- 85) ★1.71.3 「选取目标:」族图标 + 队伍成员选取的**如实日志**（用户实测报回两件事）
+--   ① 用户原话：「目标选取子菜单,换一些好看点的图标」——原来整族都回退成红问号，根本分不清；
+--   ② 用户原话：「角色行为->选取目标:队伍成员 日志明确输入匹配到的目标名称,达成的条件,
+--      比如是血量筛选,的显示血量N% 符合,现在无法正常工作」——旧版无论选没选到人都写「已出手」，
+--      看不到名字/条件，目标没换也查不出原因。
+do
+  -- ① 图标：11 项各不相同、都来自本插件 media、都不再是问号
+  local sel85 = EVAL_TARGET_SEL
+  local n85 = table.getn(sel85 or {})
+  eq(n85 >= 11, true, "前置：选取目标条目 ≥ 11（实际 " .. tostring(n85) .. "）")
+  local seen85, hitMedia85 = {}, 0
+  for i = 1, n85 do
+    local nm85 = "选取目标:" .. tostring(sel85[i].name)
+    local ic85 = EVAL_WICON(nm85)
+    eq(type(ic85) == "string" and ic85 ~= "", true, "★有图标：" .. nm85)
+    eq(ic85 ~= "Interface\\Icons\\INV_Misc_QuestionMark", true, "★★不再是问号兜底：" .. nm85)
+    eq(string.find(ic85, "media", 1, true) ~= nil, true, "★图标来自本插件 media：" .. tostring(ic85))
+    eq(seen85[ic85], nil, "★★11 项图标互不相同：" .. tostring(ic85))
+    seen85[ic85] = true
+    if string.find(ic85, "media", 1, true) then hitMedia85 = hitMedia85 + 1 end
+  end
+  eq(hitMedia85, n85, "★★全部走本插件自包含图标（不依赖别的插件）")
+  -- 带参数的「指定名称:xxx」也要认出 byName 那枚
+  eq(EVAL_WICON("选取目标:指定名称:某怪") ~= nil and EVAL_WICON("选取目标:指定名称:某怪") ~= "Interface\\Icons\\INV_Misc_QuestionMark", true,
+     "★「指定名称:xxx」也有专属图标（按 id=byName 命中）")
+  -- ★反向哨兵：非选取目标的未知条目仍然是 nil（本次改动没波及别的分支）
+  eq(EVAL_WICON("这不是一个技能"), nil, "★反向哨兵：未知条目仍回退（不瞎给图标）")
+  -- ② 队伍成员选取：日志必须写出「谁 + 血量% + 满足的条件」
+  local savedTeam85, savedRaid85 = TEST.team, TEST.raid
+  TEST.team = {
+    { unit = "party1", name = "甲", hp = 50, hpMax = 100, mana = 50, manaMax = 100, powerType = 0, buffs = {}, debuffs = {} },
+    { unit = "party2", name = "乙", hp = 10, hpMax = 100, mana = 8, manaMax = 100, powerType = 0, buffs = {}, debuffs = {} },
+  }
+  TEST.raid, TEST.raidN = nil, nil
+  TEST.targetSel = nil
+  EVAL_HELP_UPDATE_STATE()
+  EVAL_HELP_CONFIG.log = {}
+  local ok85 = EVAL_RULE_RUN({ { skill = "选取目标:队伍成员", why = "奶", groups = { { { k = "tHpPct", op = "<", n = 40 } } } } })
+  eq(ok85, true, "★过滤命中 → 算出出手")
+  local logs85 = table.concat(EVAL_HELP_CONFIG.log or {}, "\n")
+  eq(string.find(logs85, "乙", 1, true) ~= nil, true, "★★日志写出**选中的成员名**")
+  eq(string.find(logs85, "血量 10%", 1, true) ~= nil, true, "★★★日志写出**血量 10%**（用户要求「显示血量N% 符合」）")
+  eq(string.find(logs85, "条件:", 1, true) ~= nil, true, "★★日志写出**达成的条件**明细")
+  -- ★条件明细必须是**生产代码**的条件串（EVAL_COND_STR），不是测试自己拼的文案
+  local cond85 = EVAL_COND_STR({ k = "tHpPct", op = "<", n = 40 })
+  eq(string.find(logs85, cond85, 1, true) ~= nil, true, "★★条件明细用生产条件串：" .. tostring(cond85))
+  -- ③ 一个都没选到：明说 + 候选清单 + **不算出手**（旧版无论结果都返回 true）
+  TEST.targetSel = nil
+  EVAL_HELP_CONFIG.log = {}
+  local okMiss85 = EVAL_RULE_RUN({ { skill = "选取目标:队伍成员", why = "奶", groups = { { { k = "tHpPct", op = "<", n = 1 } } } } })
+  eq(okMiss85, false, "★★★无人满足 → **不算出手**（旧版假装成功）")
+  local logsMiss85 = table.concat(EVAL_HELP_CONFIG.log or {}, "\n")
+  eq(string.find(logsMiss85, "未选中成员", 1, true) ~= nil, true, "★★日志明说「未选中成员」")
+  eq(string.find(logsMiss85, "甲 50%", 1, true) ~= nil, true, "★★候选清单带名字与血量%（用户才知道扫了谁）")
+  -- ④ ★★★1.71.3（本轮修正）：「自身*」在选取器行上**按候选者读**（用户定案）→ 它真的能筛队友；
+  --   只有整行**没有任何候选可比条件**时，才提示「会退化为血量最低者」。
+  TEST.hp, TEST.hpMax = 80, 100
+  EVAL_HELP_UPDATE_STATE()
+  TEST.targetSel = nil
+  EVAL_HELP_CONFIG.log = {}
+  local okSelf85 = EVAL_RULE_RUN({ { skill = "选取目标:队伍成员", why = "奶", groups = { { { k = "hpPct", op = "<", n = 50 } } } } })
+  eq(okSelf85, true, "★★★「自身血%<50」在选取器行上按**候选者**读 → 乙 10% 命中（不再恒灭）")
+  eq(TEST.targetSel, "unit:party2", "★★★选中的是血最少的乙，不是玩家自己")
+  -- 整行都是「玩家/技能」类条件（组合点）→ 没人通过时给出「退化为血量最低」的提示
+  TEST.targetSel = nil
+  EVAL_HELP_CONFIG.log = {}
+  local okHint85 = EVAL_RULE_RUN({ { skill = "选取目标:队伍成员", why = "奶", groups = { { { k = "combo", op = ">=", n = 99 } } } } })
+  eq(okHint85, false, "★整行没有候选可比条件 + 没人通过 → 不算出手")
+  local logsHint85 = table.concat(EVAL_HELP_CONFIG.log or {}, "\n")
+  eq(string.find(logsHint85, "没有能筛候选者的条件", 1, true) ~= nil, true, "★★提示改为「本行没有能筛候选者的条件 → 退化为血量最低者」")
+  -- ⑤ 非成员选取器（如「最近敌人」）仍走旧的日志形态（改动不外溢）
+  EVAL_HELP_CONFIG.log = {}
+  EVAL_RULE_RUN({ { skill = "选取目标:最近敌人", why = "t" } })
+  local logsOther85 = table.concat(EVAL_HELP_CONFIG.log or {}, "\n")
+  eq(string.find(logsOther85, "最近敌人", 1, true) ~= nil, true, "★普通选取仍记日志")
+  eq(string.find(logsOther85, "未选中成员", 1, true) == nil, true, "★普通选取不走「成员扫描」日志")
+  -- 收尾：还原桩状态（跨用例残留是老坑）
+  TEST.team, TEST.raid = savedTeam85, savedRaid85
+  TEST.targetSel = nil
+  TEST.hp, TEST.hpMax = nil, nil
+  EVAL_HELP_CONFIG.log = {}
+  EVAL_HELP_UPDATE_STATE()
+end
+-- 86) ★★★1.71.3 成员选取器：候选者条件 + 按比较符选人（用户定案；含老 8 项数值型统一）
+--   ① 「在通过的人里挑谁」由**行内第一个比较型条件**决定：< 取最小 / > 取最大 / = 取最接近；
+--   ② 新增 4 类「候选者*」条件（原 8 项一字不动）；老数值型（队伍血/蓝、团员血/蓝）也统一到同一规则；
+--   ③ 条件类型下拉**按技能行过滤**：选取器行只出这 4 项 + 一行提示。
+do
+  -- ① 依据推导（纯函数）
+  local function order86(cds) return EVAL_TEAM_PICK_ORDER({ groups = { cds } }) end
+  local o86a = order86({ { k = "candHp", op = "<", n = 60 } })
+  eq(o86a ~= nil and o86a.key == "hp" and o86a.mode == "min" and o86a.n == 60, true, "★候选者血<60 → 血量取最小")
+  local o86b = order86({ { k = "candHp", op = ">", n = 60 } })
+  eq(o86b ~= nil and o86b.mode == "max", true, "★候选者血>60 → 取最大")
+  local o86c = order86({ { k = "candPower", op = "=", n = 50 } })
+  eq(o86c ~= nil and o86c.key == "power" and o86c.mode == "near", true, "★★候选者能量=50 → 按键值取最接近")
+  eq(select(2, pcall(function() return order86({ { k = "hpPct", op = ">", n = 60 } }).mode end)) == "max", true, "★兼容：自身血% 也参与方向（选取器行上按候选者读）")
+  eq(order86({ { k = "candHp", op = "~=", n = 60 } }), nil, "★无方向（~=）→ 回退")
+  eq(order86({ { k = "candBuff", s = "回春术" } }), nil, "★存在性条件不给方向 → 回退")
+  local o86d = order86({ { k = "candPower", op = ">", n = 30 }, { k = "candHp", op = "<", n = 60 } })
+  eq(o86d ~= nil and o86d.key == "power", true, "★★多个比较条件 → **行内第一个**（能量）决定键")
+  -- ② 真实执行：三个队友，血量/蓝量刻意错开（用来分辨「按哪个键排序」）
+  local savedTeam86, savedRaid86, savedRaidN86 = TEST.team, TEST.raid, TEST.raidN
+  local savedHp86, savedHpMax86 = TEST.hp, TEST.hpMax
+  local savedTex86 = EVAL_HELP_CONFIG.war.debuffTex
+  EVAL_HELP_CONFIG.war.debuffTex = { ["回春术"] = "texRejuv", ["痛苦诅咒"] = "texCurse", ["魔法"] = "texCurse" }
+  TEST.team = {
+    { unit = "party1", name = "甲", hp = 45, hpMax = 100, mana = 90, manaMax = 100, powerType = 0,
+      buffs = { { tex = "texRejuv", apps = 1 } }, debuffs = {} },
+    { unit = "party2", name = "乙", hp = 70, hpMax = 100, mana = 20, manaMax = 100, powerType = 0,
+      buffs = {}, debuffs = { { tex = "texCurse", apps = 1, type = "Magic" } } },
+    { unit = "party3", name = "丙", hp = 20, hpMax = 100, mana = 50, manaMax = 100, powerType = 0,
+      buffs = {}, debuffs = {} },
+  }
+  TEST.raid, TEST.raidN = nil, nil
+  TEST.hp, TEST.hpMax = 80, 100 -- 自己 80%（也在扫描集里 → 会参与「取最大」的竞争）
+  EVAL_HELP_UPDATE_STATE()
+  local function pick86(cd)
+    TEST.targetSel = nil
+    EVAL_HELP_STATE.allyUnit = nil
+    local ok86 = EVAL_RULE_RUN({ { skill = "选取目标:队伍成员", why = "t", groups = { { cd } } } })
+    return ok86, TEST.targetSel
+  end
+  local okP, selP = pick86({ k = "candHp", op = "<", n = 50 })
+  eq(okP, true, "★候选者血<50 命中")
+  eq(selP, "unit:party3", "★★ < 取最小 → 丙 20%（不是排序里的第一个甲）")
+  local okQ, selQ = pick86({ k = "candHp", op = ">", n = 50 })
+  eq(okQ, true, "★候选者血>50 命中")
+  eq(selQ, "unit:player", "★★★ > 取最大 → **自己 80%**（扫描集含自己，用户定案：一视同仁）")
+  -- 把自己降到 30% → 队员里血最高的那个应当胜出（证明不是在按别的键排序）
+  TEST.hp, TEST.hpMax = 30, 100
+  EVAL_HELP_UPDATE_STATE()
+  local okQ2, selQ2 = pick86({ k = "candHp", op = ">", n = 50 })
+  eq(okQ2, true, "★（自己 30% 不满足）候选者血>50 仍命中")
+  eq(selQ2, "unit:party2", "★★★ > 取最大 → 乙 70%（旧版会给「刚好>50 的最小者」= 甲 45）")
+  TEST.hp, TEST.hpMax = 80, 100
+  EVAL_HELP_UPDATE_STATE()
+  local okR, selR = pick86({ k = "candHp", op = "=", n = 50 })
+  eq(okR, true, "★★候选者血=50 命中（该条件不再要求精确相等）")
+  eq(selR, "unit:party1", "★★★ = 取最接近 → 甲 45（距 50 最近；精确比较会一个都选不出）")
+  local okS, selS = pick86({ k = "candPower", op = ">", n = 30 })
+  eq(okS, true, "★候选者能量>30 命中")
+  eq(selS, "unit:party1", "★★★排序键真的是**能量**（甲 90% 最高；若仍按血量排会选到乙/甲按血量）")
+  local okT, selT = pick86({ k = "hpPct", op = "<", n = 50 })
+  eq(okT, true, "★兼容：选取器行上的「自身血%」照旧可用")
+  eq(selT, "unit:party3", "★★★而且读的是**候选者**的血（丙 20%），不是玩家自己的 80%")
+  local okU, selU = pick86({ k = "candBuff", s = "回春术", v = false })
+  eq(okU, true, "★候选者缺buff:回春术 命中")
+  eq(selU, "unit:party3", "★无方向条件 → 回退到「血量最低」（丙 20%）")
+  local okV, selV = pick86({ k = "candDebuff", s = "痛苦诅咒", dt = "Magic" })
+  eq(okV, true, "★候选者debuff(魔法) 命中")
+  eq(selV, "unit:party2", "★选中「中魔法的那个人」（乙）")
+  -- ③ 候选者条件脱离选取器行 = 如实失败（不假装通过）
+  local okW, whyW = EVAL_TEST_COND_EVAL_LIVE({ k = "candHp", op = "<", n = 99 }, nil)
+  eq(okW, false, "★★候选者条件配在普通行上 → 如实失败")
+  eq(type(whyW) == "string" and string.find(whyW, "选取目标", 1, true) ~= nil, true, "★★失败原因点名「只能配在选取目标那一行」")
+  -- ④ 日志写出「依据」（用户要求：说清楚为什么是他）
+  EVAL_HELP_CONFIG.log = {}
+  pick86({ k = "candHp", op = ">", n = 50 })
+  local logs86 = table.concat(EVAL_HELP_CONFIG.log or {}, "\n")
+  eq(string.find(logs86, "依据:", 1, true) ~= nil, true, "★★日志带「依据」栏")
+  eq(string.find(logs86, "取最大", 1, true) ~= nil, true, "★★依据写明「取最大」")
+  eq(string.find(logs86, EVAL_COND_STR({ k = "candHp", op = ">", n = 50 }), 1, true) ~= nil, true, "★★依据里带条件原文")
+  -- ⑤ 文本往返（新拼写）+ 老拼写不受影响
+  eq(EVAL_COND_STR({ k = "candHp", op = "<", n = 60 }), "候选者血<60", "★导出：候选者血<60")
+  eq(EVAL_COND_STR({ k = "candPower", op = "=", n = 50 }), "候选者能量=50", "★导出：候选者能量=50")
+  eq(EVAL_COND_STR({ k = "teamHp", name = "团队", op = "<", n = 50 }), "团队血<50", "★★老 8 项拼写一字不动")
+  local function rt86(s)
+    local gs = EVAL_PARSE_CONDS(s)
+    local g1 = gs and gs[1]
+    return g1 and g1[1] or nil
+  end
+  local p86a = rt86("候选者血<60")
+  eq(p86a ~= nil and p86a.k == "candHp" and p86a.op == "<" and p86a.n == 60, true, "★★解析：候选者血<60")
+  local p86b = rt86("候选者能量=50")
+  eq(p86b ~= nil and p86b.k == "candPower" and p86b.op == "=", true, "★★解析：候选者能量=50（支持 = 取最接近）")
+  local p86c = rt86("候选者缺buff:回春术")
+  eq(p86c ~= nil and p86c.k == "candBuff" and p86c.v == false, true, "★★解析：候选者缺buff（默认「缺」方向）")
+  local p86d = rt86("候选者debuff:痛苦诅咒(魔法)")
+  eq(p86d ~= nil and p86d.k == "candDebuff" and p86d.s == "痛苦诅咒", true, "★★解析：候选者debuff(类型)")
+  eq(EVAL_TSEL_TEAMSEL ~= nil and EVAL_TSEL_TEAMSEL.teamParty ~= nil, true, "★导出 teamsel（UI 过滤要用）")
+  -- 默认值也钉住：候选者血/能量默认「<」（取最小 = 最该治的那个），缺buff 默认「缺」
+  local d86h = EVAL_TEST_SE_DEFAULT_COND("candHp")
+  eq(d86h ~= nil and d86h.k == "candHp" and d86h.op == "<" and d86h.n == 60, true, "★★新类型默认：候选者血% < 60（取最小）")
+  local d86p = EVAL_TEST_SE_DEFAULT_COND("candPower")
+  eq(d86p ~= nil and d86p.op == "<", true, "★★新类型默认：候选者能量% 也是 <")
+  local d86b = EVAL_TEST_SE_DEFAULT_COND("candBuff")
+  eq(d86b ~= nil and d86b.k == "candBuff" and d86b.v == false, true, "★★候选者缺buff 默认「缺」方向")
+  local d86d = EVAL_TEST_SE_DEFAULT_COND("candDebuff")
+  eq(d86d ~= nil and d86d.k == "candDebuff" and d86d.v == true, true, "★★候选者debuff 默认「有」方向")
+  -- ⑥ UI：选取器行只看得到这 4 项；普通行看不到候选者组
+  local savedProf86 = EVAL_HELP_CONFIG.war.profiles
+  local savedAct86 = EVAL_HELP_CONFIG.war.activeProfile
+  EVAL_HELP_CONFIG.war.profiles = { {
+    name = "方向测试",
+    -- ★必须带一条条件，否则编辑窗里根本没有行可点（EVAL_TEST_SE_CLICK_TYPE 会因为 it==nil 直接 return）
+    skills = { { skill = "选取目标:队伍成员", why = "t", groups = { { { k = "candHp", op = "<", n = 60 } } } } },
+  } }
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  EVAL_HELP_SE_OPEN(1, 1)
+  EVAL_DD_HIDE()
+  EVAL_DD_TEST_RESET_ANCHOR()
+  eq(EVAL_TEST_SE_CLICK_TYPE(1), true, "★点开真实的条件类型下拉")
+  local vis86 = table.concat(EVAL_DD_TEST_VISIBLE_TEXTS(), "\n")
+    for _, id in ipairs({ "CANDHP", "CANDPOWER", "CANDBUFF", "CANDDEBUFF" }) do
+    eq(string.find(vis86, EVAL_L("CT_" .. id), 1, true) ~= nil, true, "★★选取器行提供「候选者」项：" .. id)
+  end
+  eq(string.find(vis86, EVAL_L("CTG_6"), 1, true) ~= nil, true, "★★组名是「候选者状态」")
+  eq(string.find(vis86, EVAL_L("SE_PICK_HINT"), 1, true) ~= nil, true, "★★顶部有提示行")
+  for _, id in ipairs({ "HPPCT", "THPPCT", "TEAMHP", "TEAMRAIDHP", "READY" }) do
+    eq(string.find(vis86, EVAL_L("CT_" .. id), 1, true) == nil, true, "★★选取器行**不再**提供：" .. id)
+  end
+  EVAL_DD_HIDE()
+  -- 普通行：反过来（没有候选者组，且老 8 项还在）
+  EVAL_HELP_CONFIG.war.profiles = { { name = "普通", skills = { { skill = "攻击", why = "t", groups = { { { k = "hpPct", op = "<", n = 50 } } } } } } }
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  EVAL_HELP_SE_OPEN(1, 1)
+  EVAL_DD_HIDE()
+  EVAL_DD_TEST_RESET_ANCHOR()
+  eq(EVAL_TEST_SE_CLICK_TYPE(1), true, "★普通行也能点开下拉")
+  local vis2_86 = table.concat(EVAL_DD_TEST_VISIBLE_TEXTS(), "\n")
+  eq(string.find(vis2_86, EVAL_L("CT_CANDHP"), 1, true) == nil, true, "★★普通行**不**提供候选者项")
+  eq(string.find(vis2_86, EVAL_L("CT_TEAMHP"), 1, true) ~= nil, true, "★★老 8 项照旧提供（一字不动）")
+  eq(string.find(vis2_86, EVAL_L("CT_HPPCT"), 1, true) ~= nil, true, "★普通行其它类型照旧")
+  EVAL_DD_HIDE()
+  -- ⑦ 三语言：新组与 4 个类型名齐全（这些键是**运行时拼**的，静态检查看不见）
+  for _, lang in ipairs({ "zhCN", "enUS", "ruRU" }) do
+    local pack = EVAL_LOCALES[lang]
+    local bad = ""
+    for _, k in ipairs({ "CT_CANDHP", "CT_CANDPOWER", "CT_CANDBUFF", "CT_CANDDEBUFF", "CTG_6", "SE_PICK_HINT" }) do
+      if type(pack[k]) ~= "string" or pack[k] == "" then bad = bad .. "<" .. k .. ">" end
+    end
+    eq(bad, "", "★★" .. lang .. " 新键齐全（缺: " .. bad .. "）")
+  end
+  -- 收尾：还原
+  EVAL_HELP_CONFIG.war.profiles = savedProf86
+  EVAL_HELP_CONFIG.war.activeProfile = savedAct86
+  TEST.team, TEST.raid, TEST.raidN = savedTeam86, savedRaid86, savedRaidN86
+  TEST.hp, TEST.hpMax = savedHp86, savedHpMax86
+  EVAL_HELP_CONFIG.war.debuffTex = savedTex86
+  TEST.targetSel = nil
+  EVAL_HELP_STATE.allyUnit = nil
+  EVAL_HELP_CONFIG.log = {}
+  EVAL_HELP_UPDATE_STATE()
+  EVAL_TEST_SE_CLEAR()
+end
+-- 87) ★1.71.3 「支持选取规则的条件类型」的**悬停说明**（用户要求：分辨加入 tooltip + 美化说明）
+--   ① 条件类型下拉里：**参与规则**的类型逐项带说明（语义 + 规则 + 仅限选取器行）；提示行带完整说明；
+--   ② 类型格 / 比较符格悬停也弹同样说明（不参与规则的类型**不弹**——免得满屏提示）；
+--   ③ 文案走语言包（8 个新键；其中 4 个是运行时拼的键，静态 LANG KEY CHECK 扫不到，故这里逐语言钉）。
+do
+  local savedProf87 = EVAL_HELP_CONFIG.war.profiles
+  local savedAct87 = EVAL_HELP_CONFIG.war.activeProfile
+  local function openRow87(skill, cd)
+    EVAL_HELP_CONFIG.war.profiles = { { name = "tip", skills = { { skill = skill, why = "t", groups = { { cd } } } } } }
+    EVAL_HELP_CONFIG.war.activeProfile = 1
+    EVAL_HELP_SE_OPEN(1, 1)
+  end
+  local function tipText87(t)
+    return table.concat(t or {}, "\n")
+  end
+  local function hoverText87(btn)
+    if not (btn and btn.GetScript) then return "" end
+    local fn = btn:GetScript("OnEnter")
+    if type(fn) ~= "function" then return "" end
+    TEST.tipLines = nil
+    fn()
+    local out = ""
+    for _, ln in ipairs(TEST.tipLines or {}) do out = out .. tostring(ln.text or "") .. "\n" end
+    return out
+  end
+  -- ① 选取器行：下拉里的候选者条件三段说明（语义 + 规则 + 仅限本行）
+  openRow87("选取目标:队伍成员", { k = "candHp", op = "<", n = 60 })
+  EVAL_DD_HIDE()
+  EVAL_DD_TEST_RESET_ANCHOR()
+  eq(EVAL_TEST_SE_CLICK_TYPE(1), true, "★点开真实的条件类型下拉")
+  -- 菜单顺序：提示行(1) → 组标题(2) → 候选者血%(3)/能量%(4)/缺buff(5)/debuff(6)
+  local tipHint87 = EVAL_DD_TEST_ROW_TIP(1)
+  eq(type(tipHint87) == "table", true, "★★提示行本身带悬停说明")
+  eq(string.find(tipText87(tipHint87), EVAL_L("SE_TIP_PICK_HINT"), 1, true) ~= nil, true, "★★提示行说明「为什么只列候选者条件」")
+    local tipHp87 = EVAL_DD_TEST_ROW_TIP(3)
+  eq(type(tipHp87) == "table", true, "★★候选者血% 带悬停说明")
+  local hpTxt87 = tipText87(tipHp87)
+  eq(string.find(hpTxt87, EVAL_L("SE_TIP_CAND_HP"), 1, true) ~= nil, true, "★★含该类型语义（挑出血最少的）")
+  eq(string.find(hpTxt87, EVAL_L("SE_TIP_RULE"), 1, true) ~= nil, true, "★★★含「选取规则」（< 取最小 · > 取最大 · = 取最接近）")
+  eq(string.find(hpTxt87, EVAL_L("SE_TIP_CAND_ONLY"), 1, true) ~= nil, true, "★★含「只能配在选取目标那一行」")
+  eq(EVAL_DD_TEST_ROW_TIP(2), nil, "★组标题不给提示（不打扰）")
+  -- ② 走真实 OnEnter：tooltip 真的弹出来了（不是只把数据填进字段）
+  local rowHp87 = EVAL_DD_TEST_ROW(3)
+  eq(string.find(hoverText87(rowHp87 and rowHp87.btn), EVAL_L("SE_TIP_RULE"), 1, true) ~= nil, true, "★★★下拉行悬停真的弹出规则说明")
+  EVAL_DD_HIDE()
+  -- ③ 普通行：不参与规则的类型不弹；参与规则的（自身血%）仍弹（兼容写法）
+  openRow87("攻击", { k = "combat", v = true })
+  EVAL_DD_HIDE()
+  EVAL_DD_TEST_RESET_ANCHOR()
+  eq(EVAL_TEST_SE_CLICK_TYPE(1), true, "★普通行也点得开")
+  local vis87 = EVAL_DD_TEST_VISIBLE_TEXTS()
+  local idxCombat87, idxHpPct87 = nil, nil
+  for i = 1, table.getn(vis87) do
+    if vis87[i] == EVAL_L("CT_COMBAT") then idxCombat87 = i end
+    if vis87[i] == EVAL_L("CT_HPPCT") then idxHpPct87 = i end
+  end
+  eq(idxCombat87 ~= nil and idxHpPct87 ~= nil, true, "前置：普通行菜单里找得到 战斗中 与 自身血%")
+  eq(EVAL_DD_TEST_ROW_TIP(idxCombat87), nil, "★★不参与规则的类型**不给**提示")
+  eq(string.find(tipText87(EVAL_DD_TEST_ROW_TIP(idxHpPct87)), EVAL_L("SE_TIP_RULE"), 1, true) ~= nil, true, "★★★普通行上的自身血% 也写明规则")
+  EVAL_DD_HIDE()
+  -- ④ 类型格 / 比较符格悬停（走真实 OnEnter）
+  openRow87("选取目标:队伍成员", { k = "candHp", op = "<", n = 60 })
+  local tb87 = EVAL_TEST_SE_TYPE_BTN(1)
+  local ob87 = EVAL_TEST_SE_OP_BTN(1)
+  eq(type(tb87) == "table" and type(ob87) == "table", true, "前置：拿到类型格 / 比较符格按钮")
+  eq(string.find(hoverText87(tb87), EVAL_L("SE_TIP_RULE"), 1, true) ~= nil, true, "★★★类型格悬停含规则说明")
+  local oTxt87 = hoverText87(ob87)
+  eq(string.find(oTxt87, EVAL_L("SE_TIP_RULE_T"), 1, true) ~= nil, true, "★★★比较符格悬停含「比较符与选取规则」标题")
+  eq(string.find(oTxt87, EVAL_L("SE_TIP_RULE"), 1, true) ~= nil, true, "★★并给出对照")
+  -- ★反向哨兵：不参与规则的类型（战斗中）→ 两个格子都不该弹我们的说明
+  openRow87("攻击", { k = "combat", v = true })
+  eq(string.find(hoverText87(EVAL_TEST_SE_TYPE_BTN(1)), EVAL_L("SE_TIP_RULE"), 1, true) == nil, true, "★★反向：战斗中 类型格不弹规则说明")
+  eq(string.find(hoverText87(EVAL_TEST_SE_OP_BTN(1)), EVAL_L("SE_TIP_RULE"), 1, true) == nil, true, "★★反向：非数值类型不给比较符说明")
+  -- ⑤ 三语言：8 个新键齐全（4 个是运行时拼的，静态检查看不到）
+  for _, lang in ipairs({ "zhCN", "enUS", "ruRU" }) do
+    local pack = EVAL_LOCALES[lang]
+    local bad = ""
+    for _, k in ipairs({ "SE_TIP_RULE", "SE_TIP_RULE_T", "SE_TIP_CAND_ONLY", "SE_TIP_CAND_HP",
+                         "SE_TIP_CAND_POWER", "SE_TIP_CAND_BUFF", "SE_TIP_CAND_DEBUFF", "SE_TIP_PICK_HINT" }) do
+      if type(pack[k]) ~= "string" or pack[k] == "" then bad = bad .. "<" .. k .. ">" end
+    end
+    eq(bad, "", "★★" .. lang .. " 悬停说明 8 键齐全（缺: " .. bad .. "）")
+  end
+  -- 收尾
+  EVAL_HELP_CONFIG.war.profiles = savedProf87
+  EVAL_HELP_CONFIG.war.activeProfile = savedAct87
+  TEST.tipLines = nil
+  EVAL_DD_HIDE()
+  EVAL_TEST_SE_CLEAR()
+end
+-- 88) ★1.71.3 用户四条（含截图）：
+--   ① 「选取目标:指定名称…」那一行**一个图标都没有** → 修（查表前剥掉省略号，仍走同一份 TARGET_SEL 表）；
+--   ② 取消施法行：左图标改从**客户端宏图标表**里挑一张（用户要求「你从宏图标内自己选一个」），
+--      右端的异常标记从暴雪那个红问号换成**插件自带的白色感叹号**；
+--   ③ [添加条件] 的**初始类型**从这一行的过滤表里选（成员选取器行 → 候选者血%）——
+--      原先恒用 SE_TYPES 第 1 项，在那个行上会加出一条**下拉里根本没有**的条件；
+--   ④ [启用此技能] 右侧加两个图例（白=不可用 / 黄=待测试）+ 悬停说明。
+do
+  local savedProf88 = EVAL_HELP_CONFIG.war.profiles
+  local savedAct88 = EVAL_HELP_CONFIG.war.activeProfile
+  local savedMacro88 = TEST.macroIcons
+  local function hover88(btn)
+    if not (btn and btn.GetScript) then return "" end
+    local fn = btn:GetScript("OnEnter")
+    if type(fn) ~= "function" then return "" end
+    TEST.tipLines = nil
+    fn()
+    local out = ""
+    for _, ln in ipairs(TEST.tipLines or {}) do out = out .. tostring(ln.text or "") .. "\n" end
+    return out
+  end
+  local function openRow88(skill, cd)
+    local groups = { { cd or { k = "combat", v = true } } }
+    EVAL_HELP_CONFIG.war.profiles = { { name = "t88", skills = { { skill = skill, why = "t88", groups = groups } } } }
+    EVAL_HELP_CONFIG.war.activeProfile = 1
+    EVAL_HELP_SE_OPEN(1, 1)
+  end
+  -- 「这一行的条件类型下拉里**第一个可选条目**」的标签（提示行与组标题都是带色串 → 用 "|c" 跳过）
+  local function firstType88(skill, cd)
+    openRow88(skill, cd)
+    EVAL_DD_HIDE()
+    EVAL_DD_TEST_RESET_ANCHOR()
+    if not EVAL_TEST_SE_CLICK_TYPE(1) then return nil end
+    local vis = EVAL_DD_TEST_VISIBLE_TEXTS()
+    EVAL_DD_HIDE()
+    for i = 1, table.getn(vis) do
+      local t = tostring(vis[i] or "")
+      if t ~= "" and string.find(t, "|c", 1, true) == nil then return t end
+    end
+    return nil
+  end
+  -- ① 「选取目标:指定名称…」的图标
+  openRow88("攻击")
+  EVAL_DD_HIDE()
+  EVAL_DD_TEST_RESET_ANCHOR()
+  eq(EVAL_TEST_SE_CLICK_CAT(), true, "①前置：点开真实的类别下拉")
+  local byName88 = EVAL_L("SE_PICK_TGT")
+  eq(type(byName88) == "string" and byName88 ~= "", true, "①前置：拿到「指定名称…」的本地化文案")
+  local items88 = EVAL_GO_SKILL_CATEGORIES()[4].items()
+  local idxName88 = nil
+  for i = 1, table.getn(items88) do if items88[i] == byName88 then idxName88 = i end end
+  eq(idxName88 ~= nil, true, "①前置：目标选取类别里有这一项")
+  local catRow88 = EVAL_DD_TEST_ROW(4)
+  local catFn88 = catRow88 and catRow88.btn and catRow88.btn:GetScript("OnClick")
+  eq(type(catFn88) == "function", true, "①前置：类别行有真实 OnClick（点它续弹项列表）")
+  if type(catFn88) == "function" then catFn88() end
+  eq(EVAL_DD_TEST_ROW_TEX(idxName88) ~= nil, true, "①★★★「指定名称…」这一行现在**真的有图标**（原先整行空白）")
+  eq(EVAL_DD_TEST_ROW_TEX(idxName88), EVAL_TARGET_SEL_ICON("byName"), "①★★图标 = 生产表里 byName 那枚（同一份真值）")
+  eq(EVAL_DD_TEST_ROW_TEX(9) ~= EVAL_TARGET_SEL_ICON("byName"), true, "①反向：清除目标那行仍是它自己那枚（没有整列串成同一张图）")
+  eq(EVAL_WICON("选取目标:指定名称..."), EVAL_TARGET_SEL_ICON("byName"), "①★省略号写成三个点也认得（两种写法都归一）")
+  EVAL_DD_HIDE()
+  -- ② 取消施法：左图标取客户端宏图标表；取不到**如实**退回问号
+  EVAL_TEST_MACRO_ICON_RESET()
+  TEST.macroIcons = { "Spell_Fire_Fireball", "Ability_Kick", "Temp_X" }
+  eq(EVAL_WICON("取消施法"), "Interface\\Icons\\Ability_Kick",
+     "②★★★左图标 = 宏图标表里挑出来的那张（按关键字挑，不是随手拿第一枚）")
+  EVAL_TEST_MACRO_ICON_RESET()
+  TEST.macroIcons = { "Spell_Fire_Fireball", "Temp_X" }
+  eq(EVAL_WICON("取消施法"), "Interface\\Icons\\INV_Misc_QuestionMark", "②★★反向：表里没有可用的一张 → 如实退回问号")
+  EVAL_TEST_MACRO_ICON_RESET()
+  TEST.macroIcons = nil
+  eq(EVAL_WICON("取消施法"), "Interface\\Icons\\INV_Misc_QuestionMark", "②★★反向：拿不到宏图标表 → 退回问号（与改动前一致）")
+  TEST.macroIcons = savedMacro88
+  EVAL_TEST_MACRO_ICON_RESET()
+  local warn88 = EVAL_HELP_SE_WARN_ICON()
+  eq(type(warn88) == "string" and string.find(warn88, "mark-unavail", 1, true) ~= nil, true, "②★★标记图标 = 那枚白感叹号")
+  eq(string.find(tostring(warn88), "INV_Misc_QuestionMark", 1, true) == nil, true, "②★★反向：不再是暴雪问号")
+  -- ③ [添加条件] 的初始类型 = 这一行下拉里的**第一个可选条目**
+  local firstPick88 = firstType88("选取目标:队伍成员", nil)
+  eq(type(firstPick88) == "string" and firstPick88 ~= "", true, "③前置：拿到选取器行下拉里的第一个可选条目")
+  eq(firstPick88, EVAL_L("CT_CANDHP"), "③前置：它就是「候选者血%」（下面断言初始值等于它）")
+  EVAL_HELP_SE_OPEN(1, nil, "选取目标:队伍成员") -- 新增技能 → 条件列表为空
+  eq(EVAL_TEST_SE_COND_COUNT(), 0, "③前置：新开的一页还没有条件")
+  eq(EVAL_TEST_SE_CLICK_ADD(), true, "③★★点的是**真实**的[+添加条件]按钮（走它自己的 OnClick）")
+  eq(EVAL_TEST_SE_COND_COUNT(), 1, "③★真的加了一条")
+  eq(EVAL_TEST_SE_ROW_TYPE(1), firstPick88, "③★★★初始类型 = 下拉第一项（显示侧）")
+  eq(EVAL_TEST_SE_COND_K(1), "candHp", "③★★★初始类型 = 候选者血%（数据侧）")
+  local firstNormal88 = firstType88("攻击", nil)
+  eq(type(firstNormal88) == "string" and firstNormal88 ~= EVAL_L("CT_CANDHP"), true, "③前置：普通行下拉里根本没有候选者条件")
+  EVAL_HELP_SE_OPEN(1, nil, "攻击")
+  eq(EVAL_TEST_SE_CLICK_ADD(), true, "③反向：普通行也点得开")
+  eq(EVAL_TEST_SE_ROW_TYPE(1), firstNormal88, "③★★★普通行初始类型 = 它自己下拉的第一项（原行为一字不动）")
+  eq(EVAL_TEST_SE_COND_K(1) ~= "candHp", true, "③★★反向：普通行不会被塞进「下拉里根本没有」的候选者条件")
+  -- ④ [启用此技能] 右侧的两个图例
+  local marks88 = EVAL_TEST_SE_MARK_ICONS()
+  eq(table.getn(marks88), 2, "④★两个图例都建出来了")
+  local mk88 = EVAL_HELP_SE_MARK_ICONS()
+  eq(marks88[1].tex, mk88.unavail, "④★★第一个图例画的是白感叹号（读生产值，不写死路径）")
+  eq(marks88[2].tex, mk88.test, "④★★第二个图例画的是黄感叹号")
+  eq(type(marks88[1].x) == "number" and type(marks88[2].x) == "number", true, "④★图例有真实位置")
+  eq(marks88[1].y == marks88[2].y, true, "④★两个图例在同一行")
+  eq(marks88[2].x - marks88[1].x >= 16, true, "④★两个图例不重叠")
+  local seW88 = EVAL_TEST_SE_SIZE() -- ★第一个返回值就是宽度（1.70.46 起的口径：问帧要真实尺寸）
+  eq(marks88[2].x + 16 <= seW88 - 8, true, "④★整组不越出窗口右边界")
+  eq(marks88[1].x > 234, true, "④★在「启用此技能」标签的右侧")
+  local t1_88 = hover88(EVAL_TEST_SE_MARK_BTN(1))
+  local t2_88 = hover88(EVAL_TEST_SE_MARK_BTN(2))
+  eq(string.find(t1_88, EVAL_L("SE_MARK_UNAVAIL_T"), 1, true) ~= nil, true, "④★★★白感叹号悬停给出「不可用」")
+  eq(string.find(t1_88, EVAL_L("SE_MARK_UNAVAIL_D"), 1, true) ~= nil, true, "④★★并给出原因说明")
+  eq(string.find(t2_88, EVAL_L("SE_MARK_TEST_T"), 1, true) ~= nil, true, "④★★★黄感叹号悬停给出「待测试」")
+  eq(string.find(t2_88, EVAL_L("SE_MARK_TEST_D"), 1, true) ~= nil, true, "④★★并给出说明")
+  eq(string.find(t1_88, EVAL_L("SE_MARK_TEST_T"), 1, true) == nil, true, "④★★反向：两枚图例的说明不串台")
+  for _, lang in ipairs({ "zhCN", "enUS", "ruRU" }) do
+    local pack = EVAL_LOCALES[lang]
+    local bad = ""
+    for _, k in ipairs({ "SE_MARK_UNAVAIL_T", "SE_MARK_UNAVAIL_D", "SE_MARK_TEST_T", "SE_MARK_TEST_D" }) do
+      if type(pack[k]) ~= "string" or pack[k] == "" then bad = bad .. "<" .. k .. ">" end
+    end
+    eq(bad, "", "④★★" .. lang .. " 图例 4 键齐全（缺: " .. bad .. "）")
+  end
+  -- ④ 图标库「本插件在用」必须含这两枚（否则插件自己用的标记图在图标库里根本看不到）
+  local loc88 = EVAL_IB_FILTER(EVAL_IB_ITEMS(), "local")
+  local hasWhite88, hasYellow88 = false, false
+  for i = 1, table.getn(loc88) do
+    if loc88[i].path == mk88.unavail then hasWhite88 = true end
+    if loc88[i].path == mk88.test then hasYellow88 = true end
+  end
+  eq(hasWhite88, true, "④★★图标库「本插件在用」列出白感叹号")
+  eq(hasYellow88, true, "④★★图标库「本插件在用」列出黄感叹号（漏了那枚 = 图标库少一张）")
+  -- 收尾
+  EVAL_HELP_CONFIG.war.profiles = savedProf88
+  EVAL_HELP_CONFIG.war.activeProfile = savedAct88
+  TEST.macroIcons = savedMacro88
+  EVAL_TEST_MACRO_ICON_RESET()
+  TEST.tipLines = nil
+  EVAL_DD_HIDE()
+  EVAL_TEST_SE_CLEAR()
+end
+-- 89) ★1.71.3 「角色行为」新增 `跟随`（用户原话：「角色行为 添加: 跟随:名字输入, 查看API是否跟随.跟随目标.验证可行性」）
+--   ★★★取证结论（本机 api_*.html 的函数索引 + emberveil 文档 Movement 分类原文，本轮现场核对）：
+--     · `FollowByName(name)` —— **not protected**：「Starts autofollow on a nearby player by name, or on the
+--       current target if name is omitted or empty」；名字匹配**不区分大小写**、只搜**它已知的玩家对象**；
+--       找不到 → **客户端自己显示一条错误并返回**（不抛异常）；**无返回值**。
+--     · `FollowUnit(unit)` —— 也是 not protected，但要的是**单位 id**（player/target/…），且缺参会**抛 Lua 错误**。
+--     · ★Movement 页**其余函数全是 Protected**（MoveForwardStart/Stop、TurnLeftStart…）→ 上一轮「移动脉冲」
+--       实测无效**至此有了定论**：插件根本调不动它们。
+--   本组钉：① 解析；② 真的执行（直调 FollowByName、参数正确——真接口无返回值，参数是唯一可断言的东西）；
+--   ③ 两条文档硬规则先在本地挡（不能跟自己 / 没名字且没目标）；④ 不占动作条（角色行为分类 + 有专属图标）；
+--   ⑤ 编辑器里能选到它，且「跟随:指定名字…」真的弹输入框、回车后落成 跟随:名字。
+do
+  local savedLog89 = EVAL_HELP_CONFIG.log
+  local savedTarget89 = TEST.hasTarget
+  -- ① 解析
+  local ok1_89, nm1_89 = EVAL_FOLLOW_OF("跟随")
+  eq(ok1_89, true, "①「跟随」= 特殊行为")
+  eq(nm1_89, "", "①★省略名字 = 空名（文档：空名/省略 = 跟当前目标）")
+  local ok2_89, nm2_89 = EVAL_FOLLOW_OF("跟随:甲")
+  eq(ok2_89, true, "①「跟随:甲」认得出")
+  eq(nm2_89, "甲", "①★名字取出来")
+  local ok3_89, nm3_89 = EVAL_FOLLOW_OF("跟随：甲")
+  eq(ok3_89, true, "①全角冒号也认")
+  eq(nm3_89, "甲", "①全角写法同样取到名字")
+  eq(EVAL_FOLLOW_OF("停止攻击"), nil, "①反向：停止攻击不是跟随（两个动作别混）")
+  eq(EVAL_FOLLOW_OF("攻击"), nil, "①反向：普通技能不是跟随")
+  eq(EVAL_FOLLOW_OF("选取目标:最近敌人"), nil, "①反向：选取目标不是跟随")
+  -- ② 真的执行（走真实规则路径 EVAL_RULE_RUN → wuse）
+  TEST.followed, TEST.followCalls, TEST.runScripts = nil, nil, nil
+  eq(EVAL_RULE_RUN({ { skill = "跟随:甲", why = "t89", groups = {} } }), true, "②★★真的出手了")
+  eq(TEST.followCalls, 1, "②★FollowByName 被调用一次")
+  eq(TEST.followed, "甲", "②★★★跟随的名字正确（参数就是用户输入的名字）")
+  eq(TEST.runScripts, nil, "②★★非 Protected → **直调**，没绕 RunScript（RunScript 是给 Protected 用的，停读条那条才是）")
+  -- ② 日志如实：接口没有返回值 → 必须写明「能否跟上由客户端判定」，不许假装成功
+  EVAL_HELP_CONFIG.log = {}
+  TEST.followed, TEST.followCalls = nil, nil
+  EVAL_RULE_RUN({ { skill = "跟随:乙", why = "t89", groups = {} } })
+  local logs89 = table.concat(EVAL_HELP_CONFIG.log or {}, "\n")
+  eq(string.find(logs89, "跟随", 1, true) ~= nil, true, "②★日志里写明是跟随")
+  eq(string.find(logs89, "乙", 1, true) ~= nil, true, "②★日志里带上跟的是谁")
+  eq(string.find(logs89, "无返回值", 1, true) ~= nil, true, "②★★如实声明「本接口无返回值」（不假装知道跟上没跟上）")
+  -- ②b 省略名字 = 不传参数
+  TEST.hasTarget = true EVAL_HELP_UPDATE_STATE()
+  TEST.followed, TEST.followCalls = nil, nil
+  eq(EVAL_RULE_RUN({ { skill = "跟随", why = "t89", groups = {} } }), true, "②b「跟随」也出手")
+  eq(TEST.followCalls, 1, "②b 调用一次")
+  eq(TEST.followed, nil, "②b★★省略名字 = 不传参数（客户端按文档跟当前目标）")
+  -- ③ 两条文档硬规则：先在本地挡掉（不是等客户端弹错误）
+  local me89 = UnitName("player")
+  TEST.followed, TEST.followCalls = nil, nil
+  eq(EVAL_RULE_RUN({ { skill = "跟随:" .. me89, why = "t89", groups = {} } }), false, "③不能跟随自己 → 不出手")
+  eq(TEST.followCalls, nil, "③★★根本没调 FollowByName（本地就挡住了）")
+  EVAL_HELP_CONFIG.log = {}
+  EVAL_RULE_RUN({ { skill = "跟随:" .. me89, why = "t89", groups = {} } })
+  eq(string.find(table.concat(EVAL_HELP_CONFIG.log or {}, "\n"), "不能跟随自己", 1, true) ~= nil, true, "③★日志说明原因（文档原文 You cannot follow yourself）")
+  -- ③b 没名字且当前没目标
+  TEST.hasTarget = false EVAL_HELP_UPDATE_STATE()
+  TEST.followed, TEST.followCalls = nil, nil
+  eq(EVAL_RULE_RUN({ { skill = "跟随", why = "t89", groups = {} } }), false, "③b 没给名字且没有目标 → 不出手")
+  eq(TEST.followCalls, nil, "③b★★也没有白调一次")
+  TEST.hasTarget = true EVAL_HELP_UPDATE_STATE()
+  -- ④ 不占动作条：分类 = 角色行为；有专属自包含图标
+  local cats89 = EVAL_GO_SKILL_CATEGORIES()
+  local hasFollow89, hasName89 = false, false
+  for _, v in ipairs(cats89[1].items()) do
+    if v == "跟随" then hasFollow89 = true end
+    if v == EVAL_L("SE_PICK_FOLLOW") then hasName89 = true end
+  end
+  eq(hasFollow89, true, "④★★「角色行为」里能选到「跟随」")
+  eq(hasName89, true, "④★★也有「跟随:指定名字…」入口（用户要的名字输入）")
+  eq(EVAL_WICON("跟随:甲") ~= nil, true, "④★跟随有图标（不是一条空白）")
+  eq(EVAL_WICON("跟随:甲") ~= "Interface\\Icons\\INV_Misc_QuestionMark", true, "④★★有专属图标，不是问号兜底")
+  eq(type(EVAL_FOLLOW_ICON) == "string" and string.find(EVAL_FOLLOW_ICON, "AddOns", 1, true) ~= nil, true, "④★图标是插件自带（自包含）")
+  -- ⑤ 编辑器：点「跟随:指定名字…」→ 真的弹输入框；回车后落成 跟随:名字
+  EVAL_HELP_SE_OPEN(1, nil, "攻击")
+  EVAL_DD_HIDE()
+  EVAL_DD_TEST_RESET_ANCHOR()
+  eq(EVAL_TEST_SE_CLICK_CAT(), true, "⑤前置：点开类别下拉")
+  local rowCat89 = EVAL_DD_TEST_ROW(1) -- 第 1 类 = 角色行为
+  local fnCat89 = rowCat89 and rowCat89.btn and rowCat89.btn:GetScript("OnClick")
+  eq(type(fnCat89) == "function", true, "⑤前置：类别行有真实 OnClick")
+  if type(fnCat89) == "function" then fnCat89() end
+  local function idxOfText89(txt)
+    local vis = EVAL_DD_TEST_VISIBLE_TEXTS()
+    for i = 1, table.getn(vis) do if tostring(vis[i]) == txt then return i end end
+    return nil
+  end
+  local idxName89 = idxOfText89(EVAL_L("SE_PICK_FOLLOW"))
+  eq(idxName89 ~= nil, true, "⑤前置：项列表里有「跟随:指定名字…」")
+  local rowN89 = EVAL_DD_TEST_ROW(idxName89)
+  local fnN89 = rowN89 and rowN89.btn and rowN89.btn:GetScript("OnClick")
+  eq(type(fnN89) == "function", true, "⑤前置：那一行有真实 OnClick")
+  if type(fnN89) == "function" then fnN89() end
+  eq(EVAL_TEST_TN_SHOWN(), true, "⑤★★点它**真的弹出名字输入框**（不是静默什么都不做）")
+  eq(EVAL_TEST_TN_TITLE(), EVAL_L("SE_TN_FOLLOW"), "⑤★弹窗标题就是这个用途（按语言包取）")
+  eq(EVAL_TEST_TN_COMMIT("某人"), true, "⑤★走真实输入框 + 真实回车处理器")
+  eq(EVAL_TEST_SE_SKILL(), "跟随:某人", "⑤★★★落值 = 跟随:某人")
+  eq(EVAL_FOLLOW_OF(EVAL_TEST_SE_SKILL()) ~= nil, true, "⑤★★而且引擎认得它（生成的名字能直接跑）")
+  -- ⑤b 反向哨兵：**空白名字不落值**（空名 = 跟当前目标，会让人以为配了名字却其实没配）
+  EVAL_HELP_SE_OPEN(1, nil, "攻击")
+  EVAL_DD_HIDE()
+  EVAL_DD_TEST_RESET_ANCHOR()
+  EVAL_TEST_SE_CLICK_CAT()
+  local rowCat89b = EVAL_DD_TEST_ROW(1)
+  local fnCat89b = rowCat89b and rowCat89b.btn and rowCat89b.btn:GetScript("OnClick")
+  if type(fnCat89b) == "function" then fnCat89b() end
+  local idxName89b = idxOfText89(EVAL_L("SE_PICK_FOLLOW"))
+  local rowN89b = idxName89b and EVAL_DD_TEST_ROW(idxName89b)
+  local fnN89b = rowN89b and rowN89b.btn and rowN89b.btn:GetScript("OnClick")
+  if type(fnN89b) == "function" then fnN89b() end
+  eq(EVAL_TEST_TN_COMMIT("   "), true, "⑤b 空白名字也走一遍真实提交")
+  eq(EVAL_TEST_SE_SKILL(), "攻击", "⑤b★★空白名字**不落值**（技能仍是原来的 攻击，不会变成 跟随:）")
+  -- ⑥ ★1.71.3 顺带修掉的老 bug：**全角冒号**（中文输入法默认打出来的那个「：」）
+  --   ★根因：`[:：]` 里的「：」是**多字节**字符，而 **Lua 的字符集按字节匹配** → 只吃掉它的第一个字节，
+  --     捕获到的名字前面会多出两个乱码字节 → 下游查表全查不到 → **静默不生效**（本项目最恨的那族）。
+  --   ★修法：在**解析入口**统一把「：」归一成 ":"（不动那 30 处既有模式 → 零回归面、零遗漏）。
+  eq(EVAL_COLON_NORM("跟随：甲"), "跟随:甲", "⑥归一函数本身（EvalHelp 的导入解析也用它）")
+  eq(EVAL_TGT_OF("选取目标：最近敌人"), "nearEnemy", "⑥★全角冒号：选取目标认得出")
+  eq(EVAL_ITEM_OF("物品：测试药剂"), "测试药剂", "⑥★全角冒号：物品认得出")
+  eq(EVAL_PET_OF("宠物：攻击"), "攻击", "⑥★全角冒号：宠物指令认得出")
+  eq(EVAL_STANCE_OF("姿态：2"), "2", "⑥★全角冒号：姿态认得出")
+  local g69 = EVAL_PARSE_CONDS("目标buff：回春术")
+  eq(type(g69) == "table" and type(g69[1]) == "table", true, "⑥全角冒号：条件解析给出结构")
+  eq(g69[1] and g69[1][1] and g69[1][1].s, "回春术", "⑥★★全角冒号：光环名**干净**（不带乱码字节）")
+  local g69b = EVAL_PARSE_CONDS("目标buff:回春术")
+  eq(g69b[1] and g69b[1][1] and g69b[1][1].s, "回春术", "⑥反向：半角照旧（原行为不动）")
+  local prof69 = EVAL_PROFILE_FROM_TEXT("# 方案：测试\n- 攻击 | 战斗中")
+  eq(prof69 and prof69.name, "测试", "⑥★★导入文本的「# 方案：」表头也认全角冒号（认不出会退化成整个表头当方案名）")
+  -- 收尾
+  EVAL_HELP_CONFIG.log = savedLog89
+  TEST.hasTarget = savedTarget89
+  TEST.followed, TEST.followCalls = nil, nil
+  EVAL_DD_HIDE()
+  EVAL_TEST_SE_CLEAR()
+  EVAL_HELP_UPDATE_STATE()
+end
+
+-- 90) ★1.71.3 队伍/团员条件的两个**成员过滤**（用户要求）：
+--   ① 「队伍团员状态」8 个条件类型都加 **职业多选**；**默认空 = 不过滤职业**（原话「默认空不过滤职业.也就是全部」）。
+--   ② 「团员」级别的 4 个条件额外加 **小队多选**；**默认空 = 全部小队**（用户要求「先验证可行性」）。
+--   ★★★可行性取证（本机 api_*.html 索引 + emberveil wiki Raid 页原文，本轮现场核对）：`GetRaidRosterInfo(index)`
+--     返回**九个值**：name, rank, **subgroup(1–8；未知按 1)**, level, classLoc, **classFile(WARRIOR/MAGE/…)**, zone,
+--     online, isDead；★非团队或下标越界时**只返回一个 nil** → 小队号拿得到，**可行性 = 可行**。
+--   ★★语义与「目标职业」条件**正好相反**（那条空 = 永不满足）——这里空 = 不过滤；两边各有专属断言钉住。
+--   ★选取器行（「选取目标:队伍成员」）：行内条件的过滤取**并集**，限制的是**候选集合**（见 ⑤）。
+do
+  local savedTeam90, savedRaid90 = TEST.team, TEST.raid
+  local savedHp90, savedHpMax90 = TEST.hp, TEST.hpMax
+  local savedProf90 = EVAL_HELP_CONFIG.war.profiles
+  local savedAct90 = EVAL_HELP_CONFIG.war.activeProfile
+  local savedTgt90 = TEST.targetUnit
+  local function live90(cd) return EVAL_TEST_COND_EVAL_LIVE(cd) end
+  -- ① 文本往返（职业/小队后缀）
+  local p90 = EVAL_PARSE_ONE("队伍血<50[职业:战士/法师]")
+  eq(type(p90) == "table" and p90.k, "teamHp", "①解析出队伍血条件")
+  eq(p90.cs and p90.cs.WARRIOR, true, "①★职业后缀：战士进来了")
+  eq(p90.cs and p90.cs.MAGE, true, "①★职业后缀：法师也进来了")
+  eq(p90.cs and p90.cs.PRIEST, nil, "①反向：没写的职业不在集合里")
+  eq(p90.gs, nil, "①没写小队后缀 → gs 为空")
+  eq(EVAL_COND_STR(p90), "队伍血<50[职业:法师/战士]", "①★★导出回环（按 CLASS_LIST 顺序：法师在战士前）")
+  local p90b = EVAL_PARSE_ONE("团队蓝>20[队伍:1/3]") -- ★数值型的团队拼写是「团队蓝」（「团员」那套是 buff/debuff 型）
+  eq(p90b.k, "teamMana", "①解析出团员蓝条件")
+  eq(p90b.name, "团队", "①★范围 = 团队")
+  eq(p90b.gs and p90b.gs[1], true, "①★小队后缀：1 队")
+  eq(p90b.gs and p90b.gs[3], true, "①★小队后缀：3 队")
+  eq(p90b.gs and p90b.gs[2], nil, "①反向：没写的小队不在集合里")
+  eq(EVAL_COND_STR(p90b), "团队蓝>20[队伍:1/3]", "①★★导出回环")
+  local p90c = EVAL_PARSE_ONE("有团队debuff:痛苦诅咒(魔法)[职业:术士][队伍:2]")
+  eq(type(p90c) == "table" and p90c.k, "teamDebuff", "①解析出团员debuff条件")
+  eq(p90c.cs and p90c.cs.WARLOCK, true, "①★两个后缀可同时写（职业）")
+  eq(p90c.gs and p90c.gs[2], true, "①★两个后缀可同时写（小队）")
+  eq(p90c.dt ~= nil, true, "①★★原有的 debuff 类型参数没被吃掉（dt=" .. tostring(p90c.dt) .. "）")
+  local str90c = EVAL_COND_STR(p90c)
+  eq(string.find(str90c, "[职业:术士][队伍:2]", 1, true) ~= nil, true, "①★★导出串带上两个过滤后缀")
+  local p90c2 = EVAL_PARSE_ONE(str90c)
+  eq(p90c2 and p90c2.cs and p90c2.cs.WARLOCK, true, "①★★再解析回来：职业不丢")
+  eq(p90c2 and p90c2.gs and p90c2.gs[2], true, "①★★再解析回来：小队不丢")
+  eq(p90c2 and p90c2.dt, p90c.dt, "①★★再解析回来：debuff 类型也不丢（三段后缀共存）")
+  eq(EVAL_PARSE_ONE("怒气>30[职业:战士]"), nil, "①★★反向：**非**队伍/团员条件带这个后缀 = 写法错误 → 如实丢弃")
+  local p90d = EVAL_PARSE_ONE("队伍血<50[职业:不存在的职业]")
+  eq(p90d and p90d.cs, nil, "①★反向：一个职业名都不认 → 等于没写过滤（**不留下空集**，否则导出会写出 [职业:]）")
+  eq(EVAL_COND_STR(p90d), "队伍血<50", "①★反向：同上，导出串也保持干净")
+  eq(EVAL_COND_STR(EVAL_PARSE_ONE("队伍血<50")), "队伍血<50", "①反向：不带过滤时导出**逐字不变**（老配置不受影响）")
+  -- ② 职业过滤：空 = 不过滤（队伍范围）
+  TEST.raid = nil
+  TEST.team = {
+    { unit = "party1", name = "甲", hp = 80, hpMax = 100, mana = 100, manaMax = 100, cls = "WARRIOR", powerType = 0 },
+    { unit = "party2", name = "乙", hp = 10, hpMax = 100, mana = 100, manaMax = 100, cls = "MAGE", powerType = 0 },
+  }
+  TEST.hp, TEST.hpMax = 100, 100
+  EVAL_HELP_UPDATE_STATE()
+  eq(live90({ k = "teamHp", op = "<", n = 50, name = "队伍" }), true, "②★★★★没有职业过滤 → 全部成员都算（法师 10% 让条件成立）")
+  eq(live90({ k = "teamHp", op = "<", n = 50, name = "队伍", cs = { MAGE = true } }), true, "②★★职业=法师 → 只看法师（10% → 成立）")
+  eq(live90({ k = "teamHp", op = "<", n = 50, name = "队伍", cs = { WARRIOR = true } }), false, "②★★★★职业=战士 → 只看战士（80% → 不成立）——证明过滤**真的改变了成员集合**")
+  eq(live90({ k = "teamHp", op = "<", n = 50, name = "队伍", cs = { PRIEST = true } }), false, "②★反向：过滤后没人 → 如实 false（不去拿别人顶替）")
+  -- ③ 小队过滤（团队范围）
+  TEST.team = nil
+  TEST.raid = {
+    { unit = "raid1", name = "团甲", hp = 10, hpMax = 100, mana = 100, manaMax = 100, cls = "WARRIOR", grp = 1, powerType = 0 },
+    { unit = "raid2", name = "团乙", hp = 90, hpMax = 100, mana = 100, manaMax = 100, cls = "MAGE", grp = 3, powerType = 0 },
+  }
+  EVAL_HELP_UPDATE_STATE()
+  eq(live90({ k = "teamHp", op = "<", n = 50, name = "团队" }), true, "③★没有小队过滤 → 全团都算（10% → 成立）")
+  eq(live90({ k = "teamHp", op = "<", n = 50, name = "团队", gs = { [1] = true } }), true, "③★★小队=1 队 → 只看 1 队（10% → 成立）")
+  eq(live90({ k = "teamHp", op = "<", n = 50, name = "团队", gs = { [3] = true } }), false, "③★★★小队=3 队 → 只看 3 队（90% → 不成立）")
+  eq(live90({ k = "teamHp", op = "<", n = 50, name = "团队", gs = { [7] = true } }), false, "③★★反向：过滤后没人 → 如实 false")
+  eq(live90({ k = "teamHp", op = "<", n = 50, name = "团队", cs = { MAGE = true }, gs = { [1] = true } }), false, "④★职业+小队同时写 = 两个都要满足（法师不在 1 队 → 没人 → false）")
+  -- ★数据侧：扫描记录真的带上了职业/小队（别只信条件结果）
+  local scan90 = EVAL_HELP_TEAM_ENSURE("raid")
+  eq(scan90[1] and scan90[1].cls, "WARRIOR", "③★扫描记录带职业（来自 GetRaidRosterInfo）")
+  eq(scan90[2] and scan90[2].grp, 3, "③★扫描记录带小队号（GetRaidRosterInfo 的 subgroup）")
+  -- ⑤ 选取器行：过滤限制的是**候选集合**
+  TEST.raid = nil
+  TEST.team = {
+    { unit = "party1", name = "甲", hp = 10, hpMax = 100, mana = 100, manaMax = 100, cls = "WARRIOR", powerType = 0 },
+    { unit = "party2", name = "乙", hp = 80, hpMax = 100, mana = 100, manaMax = 100, cls = "MAGE", powerType = 0 },
+  }
+  TEST.hp, TEST.hpMax = 100, 100
+  TEST.targetUnit = nil
+  EVAL_HELP_UPDATE_STATE()
+  local rule90 = { skill = "选取目标:队伍成员", why = "t90", groups = { { { k = "teamHp", op = "<", n = 90, name = "队伍", cs = { MAGE = true } } } } } -- ★单条规则（EVAL_TEAM_PICK 读 rule.groups）
+  eq(EVAL_TEST_TEAM_PICK_AUTO(rule90, "teamParty"), "party2", "⑤★★★职业过滤限制**候选集合**：战士血更低也不选，选到法师")
+  local rule90b = { skill = "选取目标:队伍成员", why = "t90", groups = { { { k = "teamHp", op = "<", n = 90, name = "队伍" } } } }
+  eq(EVAL_TEST_TEAM_PICK_AUTO(rule90b, "teamParty"), "party1", "⑤★★反向：不过滤时选血最低的战士（证明上一条不是「总选 party2」）")
+  -- ⑥ 编辑器里的两个过滤格
+  local function openRow90(skill, cd)
+    EVAL_HELP_CONFIG.war.profiles = { { name = "t90", skills = { { skill = skill, why = "t90", groups = { { cd } } } } } }
+    EVAL_HELP_CONFIG.war.activeProfile = 1
+    EVAL_HELP_SE_OPEN(1, 1)
+  end
+  openRow90("攻击", { k = "teamHp", op = "<", n = 60, name = "队伍" })
+  local clsShown90, clsText90 = EVAL_TEST_SE_ROW_CLS(1)
+  eq(clsShown90, true, "⑥★★队伍条件有「职业过滤」格")
+  eq(clsText90, EVAL_L("SE_CLS_ALL"), "⑥★★默认显示「全部职业」（空 = 不过滤）")
+  eq(EVAL_TEST_SE_ROW_GRP(1), false, "⑥★★★反向：**队伍**条件没有小队格（小队只对团员条件有意义）")
+  eq(EVAL_TEST_SE_ROW_PREVIEW(1), false, "⑥★这行让位：行内预览不显示（底部整串预览照旧）")
+  openRow90("攻击", { k = "teamHp", op = "<", n = 60, name = "团队" })
+  eq(EVAL_TEST_SE_ROW_GRP(1), true, "⑥★★团员条件有「小队过滤」格")
+  eq(select(2, EVAL_TEST_SE_ROW_GRP(1)), EVAL_L("SE_GRP_ALL"), "⑥★★默认显示「全部队伍」")
+  openRow90("攻击", { k = "combat", v = true })
+  eq(EVAL_TEST_SE_ROW_CLS(1), false, "⑥★★反向：普通条件没有职业过滤格")
+  eq(EVAL_TEST_SE_ROW_GRP(1), false, "⑥★★反向：普通条件没有小队格")
+  eq(EVAL_TEST_SE_ROW_PREVIEW(1), true, "⑥★★反向：普通条件的行内预览照旧显示")
+  -- 点**真实控件** → 多选下拉；选中后写进 cd 并由刷新显示出来
+  openRow90("攻击", { k = "teamHp", op = "<", n = 60, name = "队伍" })
+  local cb90 = EVAL_TEST_SE_ROW_CLS_BTN(1)
+  eq(type(cb90) == "table", true, "⑥前置：拿到职业格按钮")
+  EVAL_DD_HIDE()
+  EVAL_DD_TEST_RESET_ANCHOR()
+  local fn90 = cb90 and cb90.GetScript and cb90:GetScript("OnClick")
+  eq(type(fn90) == "function", true, "⑥前置：职业格有真实 OnClick")
+  if type(fn90) == "function" then fn90() end
+  eq(EVAL_DD_TEST_SHOWN(), true, "⑥★★点它真的弹面板")
+  eq(EVAL_DD_TEST_MULTI(), true, "⑥★★是多选（不是单选）")
+  local idxMage90 = nil
+  for ci90, c90 in ipairs(EVAL_CLASS_LIST) do if c90.id == "MAGE" then idxMage90 = ci90 end end
+  eq(idxMage90 ~= nil, true, "⑥前置：CLASS_LIST 里有法师")
+  if idxMage90 then EVAL_DD_TEST_CLICK(idxMage90) end
+  eq(EVAL_DD_TEST_SELAT(idxMage90), true, "⑥★★点一下真的勾上了（多选状态）")
+  EVAL_DD_HIDE()
+  local _, clsText90b = EVAL_TEST_SE_ROW_CLS(1)
+  local mageName90 = nil
+  for _, c90b in ipairs(EVAL_CLASS_LIST) do if c90b.id == "MAGE" then mageName90 = c90b.name end end
+  eq(clsText90b, mageName90, "⑥★★★格子上显示出所选职业（写进 cd.cs 并刷新）")
+  -- 小队格同理（团员行）
+  openRow90("攻击", { k = "teamHp", op = "<", n = 60, name = "团队" })
+  local gb90 = EVAL_TEST_SE_ROW_GRP_BTN(1)
+  local fng90 = gb90 and gb90.GetScript and gb90:GetScript("OnClick")
+  eq(type(fng90) == "function", true, "⑥前置：小队格有真实 OnClick")
+  EVAL_DD_HIDE()
+  EVAL_DD_TEST_RESET_ANCHOR()
+  if type(fng90) == "function" then fng90() end
+  eq(EVAL_DD_TEST_MULTI(), true, "⑥★★小队格也是多选")
+  EVAL_DD_TEST_CLICK(3)
+  EVAL_DD_HIDE()
+  eq(select(2, EVAL_TEST_SE_ROW_GRP(1)), "3", "⑥★★★小队格显示所选小队号")
+  -- 收尾
+  EVAL_HELP_CONFIG.war.profiles = savedProf90
+  EVAL_HELP_CONFIG.war.activeProfile = savedAct90
+  TEST.team, TEST.raid = savedTeam90, savedRaid90
+  TEST.hp, TEST.hpMax = savedHp90, savedHpMax90
+  TEST.targetUnit = savedTgt90
+  EVAL_DD_HIDE()
+  EVAL_TEST_SE_CLEAR()
+  EVAL_HELP_UPDATE_STATE()
 end
 print("ALL TESTS PASS")

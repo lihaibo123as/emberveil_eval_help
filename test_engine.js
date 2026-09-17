@@ -66,7 +66,7 @@ function checkIconAssets() {
 //   ② 跳过「同名还有函数内 local 声明」的短名（W / H / x / y 这类）：它们在文件里是**多个不同的变量**，
 //      按名字比对必然误报（首版就误报了 EvalHelp.lua:153 的 local W —— 那是另一个函数里的 W）。
 (function () {
-  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua"];
+  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconBrowser.lua"];
   const bad = [];
   let totalLocals = 0;
   const isName = (s) => new RegExp("^[A-Za-z_][A-Za-z0-9_]*$").test(s);
@@ -224,7 +224,9 @@ function checkIconAssets() {
     packs[lg] = set;
   }
   const used = new Set();
-  for (const f of ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua"]) {
+  // ★1.71.3 补上 Share.lua：它此前**不在扫描名单里**（与 DECL ORDER 的已知盲区同源）——
+  //   于是「Share 用了某个键、只改了两种语言」永远是盲区（本轮 SH_CH_OFF 正好落在这里）。
+  for (const f of ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconBrowser.lua"]) {
     const p = path.join(__dirname, f);
     if (!fs.existsSync(p)) continue;
     const src = fs.readFileSync(p, "utf8");
@@ -311,7 +313,7 @@ function checkIconAssets() {
 //   ★注释里提到 `SomeCall()` 属于正常（本仓库有大量 API 说明注释），故必须要求「方法调用」
 //   （带 `:` / `.`）而不是裸调用，否则误报成片（实测：裸调用规则会命中 test_assert.lua:240）。
 (function () {
-  const files = ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua",
+  const files = ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconBrowser.lua",
                  "Locales/zhCN.lua", "Locales/enUS.lua", "Locales/ruRU.lua", "test_assert.lua", "test_stub.lua"];
   const bad = [];
   for (const f of files) {
@@ -430,6 +432,86 @@ function checkIconAssets() {
   }
   return names.length;
 }
+
+// ===== CHAN RETRY WIRING CHECK（1.71.3）：频道屏蔽的「挂载失败重试」必须在多处接线 =====
+// 背景：用户实测「屏蔽频道进出信息未能正确工作」的根因就是**只挂一次、失败后没人重试**
+//   （Toolbox.lua 载入时 DEFAULT_CHAT_FRAME 往往还没建好）——这是**静默失效**：
+//   行为断言只在测试里跑，照不到「生产里到底有没有接线」。
+// 判据：Toolbox.lua 里 tbChanRetry() 至少 3 处（定义 + 每帧兜底 + 事件驱动），
+//   并且诊断命令里有手动重试入口（/eh go 频道 装）。
+(function () {
+  const tb = fs.readFileSync(path.join(__dirname, 'Toolbox.lua'), 'utf8');
+  const eh = fs.readFileSync(path.join(__dirname, 'EvalHelp.lua'), 'utf8');
+  const sites = (tb.match(/tbChanRetry\(\)/g) || []).length;
+  const bad = [];
+  if (sites < 3) bad.push('tbChanRetry() 只有 ' + sites + " 处（要 ≥3：定义 + 每帧 + 事件）");
+  if (!/EVAL_TB_CHAN_RETRY = tbChanRetry/.test(tb)) bad.push("没有导出 EVAL_TB_CHAN_RETRY");
+  if (!/EVAL_TB_CHAN_INSTALL\(\) and true or false/.test(eh)) bad.push("诊断命令里没有手动重试入口（/eh go 频道 装）");
+  if (bad.length) {
+    console.log('CHAN RETRY WIRING CHECK: FAIL - ' + bad.join('; '));
+    process.exit(1);
+  }
+  console.log('CHAN RETRY WIRING CHECK: retry wired at ' + sites + ' sites + manual command');
+})();
+
+// ===== UI ICON CHECK（1.71.3）：新 UI 用的**自包含**图标必须真的在磁盘上 =====
+// 背景：本客户端纹理路径写错时**什么都不画**（不报错、不崩，只是空白）——而本轮新增的
+//   「类别图标 / 弹窗标题图标」都是刚从 UnrealQuest 拷进本插件的 .tga：漏拷一个、
+//   或文件名写成单数/复数不一致，游戏里就是一条空白，而行为断言照样全绿。
+// 判据：把生产代码里引用的每个文件名解析到 EvalHelp/media/icons/，逐个核对文件存在 + 类别图标不许重复。
+(function () {
+  const BS = String.fromCharCode(92);
+  const eng = fs.readFileSync(path.join(__dirname, 'Engine.lua'), 'utf8');
+  const shr = fs.readFileSync(path.join(__dirname, 'Share.lua'), 'utf8');
+  const names = [];
+  let m;
+  const reCat = /CAT_ICON_ROOT\s*\.\.\s*"([^"]+)"/g;
+  while ((m = reCat.exec(eng)) !== null) names.push({ file: m[1], from: 'Engine.lua 类别图标' });
+  // ★1.71.3 「选取目标:」族的 11 张图标也在同一张自包含表里（用户反馈一排红问号 → 换成可辨认的图）
+  const reTse = /TSE_ICON_ROOT\s*\.\.\s*"([^"]+)"/g;
+  // ★1.71.3 「跟随」那张（角色行为里非动作条动作的图标）走**另一个根名** ACT_ICON_ROOT：
+  //   同根会被下面的「按组查撞图」当成选取目标那族去查重（该文件与「上一目标」共用 boots 是有意的），
+  //   所以另立根名 + 在这里单独收一遍，保证它同样「必须在磁盘上存在」。
+  const reAct = /ACT_ICON_ROOT\s*\.\.\s*"([^"]+)"/g;
+  while ((m = reAct.exec(eng)) !== null) names.push({ file: m[1], from: "Engine.lua 行为图标" });
+  // ★1.71.3 状态标记（白=不可用 / 黄=待测试）也在同一张自包含表里（EvalHelp.lua 的 SE_MEDIA_ROOT）。
+  //   理由同类别图标：本客户端**纹理路径写错时什么都不画**，而这两枚是新加的图标文件，
+  //   漏拷/写错名在行为断言里完全看不见（DD 行只断言「有贴图」，不断言那张图在磁盘上）。
+  const eh = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
+  const reMark = /SE_MEDIA_ROOT\s*\.\.\s*"([^"]+)"/g;
+  while ((m = reMark.exec(eh)) !== null) names.push({ file: m[1], from: "EvalHelp.lua 状态标记" });
+  while ((m = reTse.exec(eng)) !== null) names.push({ file: m[1], from: 'Engine.lua 选取目标图标' });
+  const pLine = shr.split(/\r?\n/).find(l => l.indexOf('local SH_POP_ICON') >= 0) || '';
+  const pVal = (pLine.match(/"([^"]+)"/) || [])[1] || '';
+  if (pVal) names.push({ file: pVal.split(BS).pop(), from: 'Share.lua 弹窗标题图标' });
+  const inner = 'EvalHelp' + BS + BS + 'media' + BS + BS + 'icons' + BS + BS;
+  if (!pVal || pVal.indexOf(inner) < 0) {
+    console.log('UI ICON CHECK: FAIL - popup icon is not our own self-contained media path: ' + pVal);
+    process.exit(1);
+  }
+  if (names.length < 20) {
+    console.log('UI ICON CHECK: FAIL - expected >= 20 icon refs (5 categories + 1 popup + 11 target-select + 2 status marks + 1 follow), got ' + names.length);
+    process.exit(1);
+  }
+  const dir = path.join(__dirname, 'media', 'icons');
+  const missing = names.filter(n => !fs.existsSync(path.join(dir, n.file + '.tga')));
+  console.log('UI ICON CHECK: ' + names.length + ' self-contained icons, ' + missing.length + ' missing');
+  if (missing.length) {
+    console.log('  MISSING: ' + missing.map(n => n.file + ' (' + n.from + ')').join(', '));
+    console.log('  (this client draws NOTHING for a wrong path -- fix before shipping)');
+    process.exit(1);
+  }
+  // ★只查**类别**图标之间不许重复：弹窗标题图标与某个类别共用同一张图是允许的（同一套风格）
+  const seen = {};
+  const dup = [];
+  // ★每组内部不许撞图（跨组允许：例如「目标选取」类别图标与 byName 都用 database 属同一族风格）
+  for (const grp of ['类别', '选取目标']) {
+    const seen2 = {}, dup2 = [];
+    names.filter(n => n.from.indexOf(grp) >= 0).forEach(n => { if (seen2[n.file]) dup2.push(n.file); seen2[n.file] = true; });
+    if (dup2.length) { console.log('UI ICON CHECK: FAIL - duplicate ' + grp + ' icons (must differ): ' + dup2.join(', ')); process.exit(1); }
+  }
+
+})();
 // ===== EXAMPLES TOC CHECK（1.71.2）：模版数据文件必须都在 .toc 里，且顺序 = 选单顺序 =====
 // 背景：模版数据从 EvalHelp.lua 拆到 examples/*.lua，靠 EvalHelp.toc 载入（本客户端没有文件读取 API）。
 //   → 「新增一个职业模版」现在要动两处：磁盘上的文件 + .toc 里的一行。
@@ -455,7 +537,7 @@ function checkIconAssets() {
   }
   // ① 模版数据只能住在 examples/：别的生产文件里再出现 cls = " 就是「又搬回去了 / 多了一份」
   //   （同一个东西两份真值，正是本项目反复踩的坑：改一处漏一处、后写的静默获胜）。
-  const prodFiles = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua"];
+  const prodFiles = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconBrowser.lua"];
   const leaked = prodFiles.filter(f => { const p = path.join(__dirname, f); return fs.existsSync(p) && /cls\s*=\s*"/.test(fs.readFileSync(p, "utf8")); });
   if (leaked.length) { console.log("EXAMPLES TOC CHECK: FAIL - template data leaked back into " + leaked.join(",")); process.exit(1); }
   // ② 载入顺序：examples 必须排在 EvalHelp.lua 之后（引擎里的初始化先跑）。
@@ -470,11 +552,52 @@ function checkIconAssets() {
   console.log("EXAMPLES TOC CHECK: " + listed.length + " example data files, order = " + got.join(" / "));
 })();
 
+// ===== STOP ATTACK WIRING CHECK（1.71.3）：新增「特殊行为」时它的判定必须与「取消施法」逐处同列 =====
+// ★背景：1.71.3 新增「停止攻击」（与 取消施法 同族：不占动作条的特殊行为）。这类行为要在 7 处接线：
+//   引擎 2 处（规则预判 / /eh war 状态总览）+ UI 5 处（亮金 / 缺技能问号 / 光环候选 / 分类标签 ×2）。
+//   ★本项目最典型的失败模式就是「改一处漏一处」，而这些接线点**行为上互不牵连**：
+//   漏掉 UI 那几处不报错、只是显示不对，行为断言照不到（除非为每一处都写一套 UI 用例）。
+// 判据：凡是「cancelCastOf 与 petCmdOf/targetSelOf 同列」或「cancelCastOf 与 stanceOf 同列」的那行，
+//   必须同时出现 stopAllOf —— 这两条模式正好命中全部 7 个接线点；
+//   而定义处 / wicon / wready / wuse 分支 / 导出处都不含这些邻居函数名，天然不会误伤。
+(function () {
+  const files = ["Engine.lua", "EvalHelp.lua"];
+  const sites = [];
+  const bad = [];
+  for (const f of files) {
+    const p = path.join(__dirname, f);
+    if (!fs.existsSync(p)) continue;
+    const lines = fs.readFileSync(p, "utf8").split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const code = lines[i].split("--")[0];
+      if (!/cancelCastOf\s*\(/.test(code)) continue;
+      const family = /(petCmdOf|targetSelOf)\s*\(/.test(code) || /stanceOf\s*\(/.test(code);
+      if (!family) continue;
+      sites.push(f + ":" + (i + 1));
+      if (!/stopAllOf\s*\(/.test(code)) bad.push(f + ":" + (i + 1) + " 缺 stopAllOf");
+      // ★1.71.3 同类新增：「跟随」也是不占动作条的特殊行为，同样要在**这 7 处**接线
+      //   （漏接不报错、只是亮金/缺技能问号/分类标签显示不对，行为断言照不到）。
+      if (!/followOf\s*\(/.test(code)) bad.push(f + ":" + (i + 1) + " 缺 followOf");
+    }
+  }
+  if (sites.length < 7) {
+    console.log("STOP ATTACK WIRING CHECK: FAIL - expected >=7 wiring sites, found " + sites.length + " (" + sites.join(", ") + ")");
+    process.exitCode = 1;
+    return;
+  }
+  if (bad.length) {
+    console.log("STOP ATTACK WIRING CHECK: FAIL - special-behaviour wiring missing next to cancelCastOf at: " + bad.join(", "));
+    process.exitCode = 1;
+    return;
+  }
+  console.log("STOP ATTACK WIRING CHECK: stopAllOf + followOf wired alongside cancelCastOf at all " + sites.length + " sites");
+})();
+
 checkIconAssets();
 
 const L=lauxlib.luaL_newstate();
 lualib.luaL_openlibs(L);
-for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','Toolbox.lua','DataSearch.lua','Share.lua','test_assert.lua']){
+for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','Toolbox.lua','DataSearch.lua','Share.lua','IconBrowser.lua','test_assert.lua']){
   const src=fs.readFileSync(f);
   const st=lauxlib.luaL_loadbuffer(L,src,src.length,to_luastring(f));
   if(st!==lua.LUA_OK){ console.log('LOAD ERROR ['+f+']:',lua.lua_tojsstring(L,-1)); process.exit(1); }

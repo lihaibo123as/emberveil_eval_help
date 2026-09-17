@@ -1,0 +1,92 @@
+EVAL_HELP 自包含图标：复制清单（源 = UnrealQuest，MIT 许可）
+源根 SRC = Interface\AddOns\UnrealQuest\media\
+目标根 DST = Interface\AddOns\EvalHelp\media\
+
+=== ① 必须拷（28 个文件，约 160 KB）—— 代码里是写死的文件名，不依赖对方运行时 ===
+[SRC] icons\  ->  [DST] icons\     (27 个)
+    QuestIcon-lowlvl.tga   6956
+    auctioneer.tga   2545
+    banker.tga   2590
+    battlemaster.tga   1901
+    boss-mobs.tga   16402
+    chests.tga   3474
+    database.tga   2351
+    dungeon-entrance.tga   16428
+    elite-mobs.tga   16402
+    fish.tga   3670
+    flight.tga   2800
+    herbs.tga   4022
+    innkeeper.tga   2427
+    mailbox.tga   2404
+    meetingstone.tga   2961
+    mines.tga   3692
+    quest-marker.tga   12588
+    questIcon.tga   2476
+    raid-entrance.tga   16428
+    rare-mobs.tga   16402
+    rares.tga   1846
+    repair.tga   2433
+    spirithealer.tga   3784
+    stablemaster.tga   2385
+    trainer.tga   4140
+    trainers-icon.tga   4140
+    vendor.tga   2482
+[SRC] QuestDot.tga  ->  [DST] QuestDot.tga   (4140 B)  ← 地图图钉圆点，DataSearch.lua:700 DS_MAP_ICON
+
+=== ② 可选（39 个文件，约 152 KB）—— ★单拷图没用，先看理由 ===
+  理由：这两组是「物件专属美术」，用哪张图由对方的运行时表 UnrealQuest.nodeIcons[类别][物件id] 指定；
+        对方不在 → 表就没了，我们不知道哪个 id 配哪张；对方在 → 它自己的文件本来就在。
+        要让这套艺术真正自包含：连 UnrealQuest\Data\NodeIcons.lua（111 行纯映射表，5142 B）一起搬来并改名挂到 EvalHelp 下。
+[SRC] icons\herbs\  ->  [DST] icons\herbs\   (28 个)
+    ArthasTears.tga
+    BlackLotus.tga
+    Blindweed.tga
+    Briarthorn.tga
+    Bruiseweed.tga
+    Dreamfoil.tga
+    Earthroot.tga
+    Fadeleaf.tga
+    Firebloom.tga
+    GhostMushroom.tga
+    GoldenSansam.tga
+    Goldthorn.tga
+    GraveMoss.tga
+    Gromsblood.tga
+    Icecap.tga
+    KhadgarsWhisker.tga
+    Kingsblood.tga
+    Liferoot.tga
+    Mageroyal.tga
+    MountainSilversage.tga
+    Peacebloom.tga
+    Plaguebloom.tga
+    PurpleLotus.tga
+    Silverleaf.tga
+    Stranglekelp.tga
+    Sungrass.tga
+    WildSteelbloom.tga
+    Wintersbite.tga
+[SRC] icons\mines\  ->  [DST] icons\mines\   (11 个)
+    Copper.tga
+    DarkIron.tga
+    Gold.tga
+    Iron.tga
+    LesserBloodstone.tga
+    Mithril.tga
+    RichThorium.tga
+    Silver.tga
+    Thorium.tga
+    Tin.tga
+    TrueSilver.tga
+
+=== ③ 不要拷 ===
+  media\QuestLog\EQL3_*.tga      ← 羊皮纸边框美术，README 单独保留 Daniel Rehn 2006 版权
+  media\NavigationArrowFrames*.tga / NavigationArc.tga / followed-quest.tga / following-arrow.tga  ← 导航箭头，EvalHelp 用不到
+
+=== ④ 拷完要改的代码（3 处 + 2 条断言）===
+  DataSearch.lua:683  DS_ICON_ROOT     = "Interface\\AddOns\\EvalHelp\\media\\icons\\"
+  DataSearch.lua:708  DS_ANN_ICON_ROOT = 同上
+  DataSearch.lua:700  DS_MAP_ICON      = "Interface\\AddOns\\EvalHelp\\media\\QuestDot"
+  test_assert.lua:1462/1463  两条断言里写死的旧根路径也要跟着改（否则测试变红）
+  ★路径保持「不带扩展名」的现有写法；文件夹名按实际大小写 EvalHelp。
+  ★.toc 不用动：纹理靠路径取，.toc 只管 .lua/.xml（UnrealQuest 的 .toc 里 0 个 media 文件，照样显示）。

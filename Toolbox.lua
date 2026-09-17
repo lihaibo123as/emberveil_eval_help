@@ -67,6 +67,20 @@ end
 --   ★迁移条件写成「两个新键都还没有 且 旧键存在」→ **只搬一次**；搬完把旧键**置 nil**。
 --    为什么不保留旧键：一个状态留两份真值就是本项目反复踩的「派生值当缓存」陷阱
 --    （1.70.23/1.70.27 两轮都栽在这）——**只留一份真值**。
+-- ★1.71.3 自动购买的数据迁移：老格式 {name,n} → 补 per(每次购买数量，默认 1) / on(启用，默认 true)。
+--   ★字段缺失 = 用默认值（而不是拒绝读取）：旧配置不能因为多了两个字段就失效。
+--   ★这里**不写 got/会话状态**：那些进 TB.buySess（不落盘）——配置里只存“想买什么”。
+local function tbMigrateBuy(t)
+  if type(t) ~= "table" or type(t.buy) ~= "table" then return end
+  for _, w in ipairs(t.buy) do
+    if type(w) == "table" then
+      if type(w.n) ~= "number" or w.n < 1 then w.n = 1 end
+      if type(w.per) ~= "number" or w.per < 1 then w.per = 1 end
+      if w.on == nil then w.on = true end
+    end
+  end
+end
+
 local function tbMigrateQuest(t)
   if type(t) ~= "table" then return end
   if t.questAccept == nil and t.questTurnIn == nil and t.quest ~= nil then
@@ -80,7 +94,125 @@ local function tbCfg()
   if type(c) ~= "table" then return nil end
   if type(c.tb) ~= "table" then c.tb = {} end
   tbMigrateQuest(c.tb)
+  -- ★1.71.3 频道进出信息屏蔽：**默认开**（用户要求）。nil 也视为开（见 EVAL_TB_CHAN_ON）。
+  if c.tb.chanJoin == nil then c.tb.chanJoin = true end
+  tbMigrateBuy(c.tb) -- ★1.71.3 自动购买：老条目补 每次数量/启用 字段
   return c.tb
+end
+-- ===== 频道进出信息屏蔽（1.71.3 用户要求：工具箱 → 队伍/社交 → 默认开启）=====
+-- ★API 核查（本机 api_*.html 全表 1370 条）：**没有任何「聊天过滤器」API**
+--   （`ChatFrame_AddMessageEventFilter` 之类不存在；ChatWindow 分类只有 增删消息组 / 颜色 / 日志）。
+--   两条候选路，本实现走第 ② 条：
+--     ① `RemoveChatWindowMessages(窗口, 消息组)`（文档在册）——但**消息组名单本机查不到**，
+--        盲猜组名等于赌（铁律：用前必查）→ 先用 `/eh go 频道` 把真实消息组打出来，
+--        确认存在「频道进出」这一类之后再考虑换用它；
+--     ② **挂聊天打印入口**：`DEFAULT_CHAT_FRAME:AddMessage` 是有文档的控件方法（ScrollingMessageFrame），
+--        客户端聊天框靠它打印 → 包一层，命中「频道进出通知」就吞掉。
+--        · 只吞通知、**不动频道聊天本身**；· 开关**在调用时读**（改开关立即生效，不用 /reload）；
+--        · 挂不上（或客户端不走 Lua 打印）→ 什么都不做，`/eh go 频道` 里如实说明「已过滤 0 条」。
+local TB_CHAN_WORDS = { "频道", "頻道", "channel", "канал" } -- ★1.71.3 加繁中「頻道」（与 moves 里的繁中进出词配套）
+-- ★判据 = 「频道词」**且**「进出词」同时出现 —— 只匹配「加入/离开」会把玩家聊天里
+--   一句 “has left” 也吞掉（误伤真人的消息比不屏蔽更糟）；多要一个频道词，误伤面降到几乎为零。
+local TB_CHAN_MOVES = {
+  -- ★★1.71.3 补「进入」：用户实测截图里的真实文案是「[4. 世界防务] **进入**频道。」
+  --   而旧表只有「加入」→ **进入那一半根本没匹配上**（「离开」那半是命中的）。
+  --   ★教训：判据表要**照着客户端真实文案抄**，差一个字就是半个功能失效。
+  "加入", "进入", "离开", "退出",               -- zhCN
+  "加入", "進入", "離開", "退出",               -- 繁中
+  "joined", "left", "entered", "you have joined", "you have left", -- enUS
+  "joined", "left", "you have joined", "you have left", -- enUS
+  "присоединил", "покинул",                             -- ruRU（尽力而为，靠 /eh go 频道 的样本再校准）
+}
+
+-- 纯函数：这条聊天文本是不是「频道进出通知」（UI、断言、诊断命令共用同一份判据）
+function EVAL_TB_CHAN_BLOCK(msg)
+  if type(msg) ~= "string" or msg == "" then return false end
+  local lo = string.lower(msg)
+  local hasChan = false
+  for _, w in ipairs(TB_CHAN_WORDS) do
+    if string.find(lo, w, 1, true) ~= nil then hasChan = true break end
+  end
+  if not hasChan then return false end
+  for _, w in ipairs(TB_CHAN_MOVES) do
+    if string.find(lo, w, 1, true) ~= nil then return true end
+  end
+  return false
+end
+
+-- 开关：**nil 视为开**（用户要求默认打开；老配置里没这个键时同样是开）
+function EVAL_TB_CHAN_ON()
+  local tb = tbCfg()
+  if not tb then return true end
+  return tb.chanJoin ~= false
+end
+
+-- 挂聊天打印入口（幂等：已挂过直接返回 true，**绝不重复包装**）
+function EVAL_TB_CHAN_INSTALL()
+  if TB.chanHooked then return true end
+  local f = DEFAULT_CHAT_FRAME
+  -- ★不再要求是 table（本客户端帧未必是 table，只看有没有 AddMessage）
+  if f == nil then return false end
+  local okr, cur = pcall(function() return f.AddMessage end)
+  if not (okr and type(cur) == "function") then return false end
+  -- ★只要当前入口**就是我们挂的那个**，就算已挂（防「状态说挂了、其实被别人顶掉」）
+  if TB.chanWrapper and cur == TB.chanWrapper then TB.chanHooked = true return true end
+  local orig = cur
+  local function wrapper(self, msg, ...)
+    TB.chanSeenAll = (TB.chanSeenAll or 0) + 1 -- ★诊断用：经过本入口的聊天消息总数
+    if EVAL_TB_CHAN_ON() and EVAL_TB_CHAN_BLOCK(msg) then
+      TB.chanFiltered = (TB.chanFiltered or 0) + 1
+      TB.chanSamples = TB.chanSamples or {}
+      table.insert(TB.chanSamples, tostring(msg))
+      while table.getn(TB.chanSamples) > 8 do table.remove(TB.chanSamples, 1) end
+      return -- 吞掉：不进聊天框
+    end
+    return orig(self, msg, ...)
+  end
+  local okw = pcall(function() f.AddMessage = wrapper end)
+  if not okw then return false end -- ★挂不上就如实返回 false（不假称挂上了）
+  TB.chanWrapper = wrapper
+  TB.chanHooked = true
+  return true
+end
+
+-- ★★★1.71.3 **静默失效的根治**（用户实测「屏蔽频道进出信息未能正确工作」）：
+--   载入那一刻 DEFAULT_CHAT_FRAME 往往**还没建好**（FrameXML 聊天框晚于插件载入）→ 旧版只试一次，
+--   失败后**再没人重试**：开关看着是开的、实际一层都没挂上。
+--   现在：限频重试（1 秒至多一次 / 最多 60 次）+ 事件驱动（VARIABLES_LOADED、PLAYER_ENTERING_WORLD）
+--   + 每帧队列帧兜底 + `/eh go 频道` 可手动立刻重试。
+--   ★判据：**「尝试过」≠「挂上了」**——失败必须重试，成功/放弃都要如实写日志。
+local function tbChanRetry()
+  if TB.chanHooked then return true end
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  if now - (TB.chanTryAt or -99) < 1 then return false end
+  TB.chanTryAt = now
+  TB.chanTries = (TB.chanTries or 0) + 1
+  local ok = EVAL_TB_CHAN_INSTALL()
+  if ok then
+    EVAL_LOGLINE("[频道屏蔽] 挂载成功（第 " .. tostring(TB.chanTries) .. " 次尝试）")
+  elseif TB.chanTries >= 60 then
+    EVAL_LOGLINE("[频道屏蔽] 挂载失败：" .. tostring(TB.chanTries) .. " 次尝试后放弃（DEFAULT_CHAT_FRAME 始终不可用）")
+  end
+  return ok
+end
+EVAL_TB_CHAN_RETRY = tbChanRetry -- 供诊断命令 / 断言直调
+
+TB.chanHooked = EVAL_TB_CHAN_INSTALL() and true or false
+EVAL_LOGLINE("[频道屏蔽] 载入时挂载：" .. (TB.chanHooked and "成功" or "聊天框尚未就绪（将由事件/每帧重试）"))
+
+function EVAL_TEST_TB_CHAN_STATE()
+  return EVAL_TB_CHAN_ON(), TB.chanHooked and true or false, (TB.chanFiltered or 0), TB.chanSamples,
+         (TB.chanWrapper ~= nil and DEFAULT_CHAT_FRAME ~= nil and DEFAULT_CHAT_FRAME.AddMessage == TB.chanWrapper) and true or false,
+         (TB.chanSeenAll or 0), (TB.chanTries or 0)
+end
+
+function EVAL_TEST_TB_CHAN_RESET() -- 测试用：清计数并允许重新挂载（不还原已包装的入口）
+  TB.chanHooked = false
+  TB.chanFiltered = 0
+  TB.chanSamples = {}
+  TB.chanSeenAll = 0
+  TB.chanTryAt = nil
+  TB.chanTries = 0
 end
 
 -- ★1.71.2 用户要求：「工具箱 → 自动交接任务 按键停止功能，比如按住 shift 临时停止」
@@ -180,6 +312,7 @@ local function tbVerifyPending()
   end
 end
 
+local tbBuyArm -- ★1.71.3 前置声明（pump 里调用，定义在后面；本文件有 DECL ORDER CHECK 守着）
 local function tbQPump()
   tbVerifyPending()
   -- ★1.71.2 「按住修饰键临时停止自动交接」：keydown 那一刻把**还没滴出**的交接动作撤掉。
@@ -199,6 +332,7 @@ local function tbQPump()
       say(string.format(L("TB_HOLD_STOP"), dropped)) -- 如实告知撤了几笔，否则用户以为按了没反应
     end
   end
+  tbBuyArm() -- ★先 arm：队列空时也要能把下一笔排进来（一拍只下一笔）
   local q = tbQ[1]
   if not q then
     if tbSellStat and (tbSellStat.ok > 0 or tbSellStat.fail > 0) then
@@ -229,6 +363,8 @@ local function tbQPump()
     end
   elseif q.kind == "buy" then
     pcall(BuyMerchantItem, q.idx, q.n)
+    -- ★一笔在飞：执行完立刻放行，下一拍 arm 会先核对背包再算下一批（逐笔可验证）
+    TB.buyInflight = nil
   elseif q.kind == "discard" then
     if tbItemName(q.bag, q.slot) == q.name then
       local ok, tex, cnt, locked, qual = pcall(GetContainerItemInfo, q.bag, q.slot)
@@ -247,6 +383,129 @@ local function tbQPump()
 end
 
 function EVAL_TB_PUMP() tbQPump() end -- 测试/调试直调用
+-- ===== 自动购买（1.71.3 重做：分批买 + 逐笔核对 + 多重安全闸门）=====
+-- 用户要求：「购买频率限制下防止瞬间购买；支持购买数量多个；每次购买数量默认 1；
+--   购买行为要做好安全界限、异常终止等检测，比如背包满了；防止进入重复购买操作」。
+-- ★设计要点：
+--   ① **一拍只下一笔**（TB.buyInflight），全部走既有限频队列（TB_RATE=0.3s）逐笔滴出
+--      → 天然限频，绝不会「瞬间买光」；
+--   ② **每次购买数量** per（默认 1），受三个上界夹住：per / 商人一次上限 / 库存 / 还差多少；
+--   ③ **逐笔核对**：下一批前先数背包，上一笔没涨 = 失败 → 连失败 TB_BUY_MAX_FAILS 次自动停用该项；
+--   ④ **安全闸门**（任一命中即停并如实 say 一句）：商人窗口关了 / 背包满 / 连续失败 / 本轮总量上限；
+--   ⑤ 会话状态存在 TB.buySess（**不写进配置**，不污染 SavedVariables）。
+local TB_BUY_MAX_FAILS = 3
+local TB_BUY_MAX_SESSION = 200
+local TB_BUY_ARM_GAP = 0.35
+
+-- 背包剩余空位（0 = 满）：判据与背包扫描同源（GetContainerNumSlots + GetContainerItemInfo）
+local function tbFreeSlots()
+  local free = 0
+  tbBagScan(function(b, s)
+    local ok, tex, cnt = pcall(GetContainerItemInfo, b, s)
+    if ok and not (tex or cnt) then free = free + 1 end
+  end)
+  return free
+end
+
+-- 背包里某物品的总数量（按名称比对，同卖出/丢弃的判据）
+local function tbCountItem(name)
+  local have = 0
+  tbBagScan(function(b, s)
+    if tbItemName(b, s) == name then
+      local ok, tex, cnt = pcall(GetContainerItemInfo, b, s)
+      if ok and type(cnt) == "number" then have = have + cnt end
+    end
+  end)
+  return have
+end
+
+-- ★纯函数：本拍该不该下单、下几件（输入全部显式传入 → 脱离游戏也能测）
+--   entry = { name=, n=目标总数, per=每次数量, on=启用 }
+--   st    = 该物品的**会话状态** { have0=开局数量, expect=上一笔期望达到的数量, fails=连失败数 }
+--   info  = { have=背包现有, free=背包空位, avail=商人库存(-1/负=无限), idx=商人序号(nil=不卖), cap=一次上限 }
+--   返回：n（本次下单数量；0/nil = 不下单）, 原因（off/done/bagfull/nomatch/avail/fails/ok）
+function EVAL_TB_BUY_DECIDE(entry, st, info)
+  if type(entry) ~= "table" then return 0, "off" end
+  if entry.on == false then return 0, "off" end
+  if type(info) ~= "table" or not info.idx then return 0, "nomatch" end
+  if type(info.free) == "number" and info.free <= 0 then return 0, "bagfull" end
+  local have = info.have or 0
+  if st then
+    -- 核对上一笔：说好买了 n 件，结果背包没涨 → 记一次失败（本轮最多 TB_BUY_MAX_FAILS 次）
+    if type(st.expect) == "number" and have < st.expect then st.fails = (st.fails or 0) + 1 end
+    if (st.fails or 0) >= TB_BUY_MAX_FAILS then return 0, "fails" end
+  end
+  -- ★1.71.3 用户要求：「购买数量」是**对着背包里现有数量**算的（绝对值目标）——
+  --   背包已经够 target 件就**一件都不买**（否则每次跟商人对话都会再买一遍）。
+  --   ★不要拿「本次会话开始时有多少」当基准：我第一版就是那样，等于把 n 解释成「这次**再**买 n 件」，
+  --     于是背包里明明够了、每次对话仍然重复购买（用户实测报回来的正是这个）。
+  local remain = (entry.n or 1) - have
+  if remain <= 0 then return 0, "done" end
+  local cap = (info.cap and info.cap >= 1) and info.cap or 1
+  local per = (entry.per and entry.per >= 1) and entry.per or 1
+  local n = per
+  if n > cap then n = cap end
+  if type(info.avail) == "number" and info.avail >= 0 and n > info.avail then n = info.avail end
+  if n > remain then n = remain end
+  if n <= 0 then return 0, "avail" end
+  if st then st.expect = have + n end
+  return n, "ok"
+end
+
+local tbBuyArmLast = 0
+function tbBuyArm()
+  local tb = tbCfg()
+  if not (tb and tb.buyOn) then return end
+  if not TB.merchantOpen then return end
+  if TB.buyInflight then return end -- ★一笔在飞：绝不并发下单（防重复购买）
+  if type(tb.buy) ~= "table" or table.getn(tb.buy) == 0 then return end
+  if type(GetMerchantNumItems) ~= "function" then return end
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  if now - tbBuyArmLast < TB_BUY_ARM_GAP then return end -- 频率防护（本函数每帧被调）
+  tbBuyArmLast = now
+  local stat = TB.buyStat
+  if type(stat) ~= "table" then return end
+  local sess = TB.buySess
+  if type(sess) ~= "table" then return end
+  local free = tbFreeSlots()
+  if free <= 0 then
+    if not stat.bagfull then stat.bagfull = true say(L("TB_BUY_BAGFULL")) end
+    return
+  end
+  local mn = GetMerchantNumItems() or 0
+  for _, w in ipairs(tb.buy) do
+    local s = sess[w.name]
+    if not s then s = { fails = 0 } sess[w.name] = s end -- 只记失败数/期望值；目标数按背包现有量算（绝对值）
+    -- 找商人序号 / 库存 / 一次上限
+    local idx, avail, cap = nil, nil, 1
+    for i = 1, mn do
+      local ok, nm, _tex, _price, _quant, av = pcall(GetMerchantItemInfo, i)
+      if ok and nm == w.name then
+        idx = i
+        if type(av) == "number" then avail = av end
+        break
+      end
+    end
+    if idx and type(GetMerchantItemMaxStack) == "function" then
+      local okc, ms = pcall(GetMerchantItemMaxStack, idx)
+      if okc and type(ms) == "number" and ms >= 1 then cap = ms end
+    end
+    local have = tbCountItem(w.name)
+    local n, why = EVAL_TB_BUY_DECIDE(w, s, { have = have, free = free, avail = avail, idx = idx, cap = cap })
+    if type(n) == "number" and n > 0 then
+      if stat.bought + n > TB_BUY_MAX_SESSION then
+        if not stat.capped then stat.capped = true say(string.format(L("TB_BUY_CAP"), TB_BUY_MAX_SESSION)) end
+        return
+      end
+      TB.buyInflight = { name = w.name, n = n }
+      tbQPush({ kind = "buy", idx = idx, n = n, name = w.name })
+      return -- ★一拍只下一笔：队列按 0.3s 滴出 → 限频、不瞬间买光
+    elseif why == "fails" then
+      say(string.format(L("TB_BUY_FAILS"), tostring(w.name)))
+      w.on = false -- 连续失败 → 自动停用该项（如实告知，避免反复重试）
+    end
+  end
+end
 
 -- 商人开启：修理 / 卖灰 / 购买
 -- 1.68.1 实测修复：本客户端 MERCHANT_SHOW 连发两次（卖出提示打印两遍）——第二次触发时
@@ -271,6 +530,10 @@ local function tbMerchant()
     -- 1.68.2：不直接卖——灰色槽位快照入队，队列按 TB_RATE 逐笔出售并验证成功
     local n = 0
     tbSellStat = { ok = 0, fail = 0 }
+  -- ★1.71.3 自动购买：每次开商人窗口都重置会话状态（上一次的进度/失败数不带过来）
+  TB.buySess = {}
+  TB.buyStat = { bought = 0, fails = 0 }
+  TB.buyInflight = nil
     tbBagScan(function(b, s)
       local ok, tex, cnt, locked, q = pcall(GetContainerItemInfo, b, s)
       if ok and (tex or cnt) and q == 0 then
@@ -280,32 +543,9 @@ local function tbMerchant()
     end)
     if n == 0 then tbSellStat = nil end
   end
-  if tb.buyOn and type(tb.buy) == "table" and table.getn(tb.buy) > 0 and type(GetMerchantNumItems) == "function" then
-    for _, w in ipairs(tb.buy) do
-      local have = 0
-      tbBagScan(function(b, s)
-        if tbItemName(b, s) == w.name then
-          local ok, tex, cnt = pcall(GetContainerItemInfo, b, s)
-          if ok and type(cnt) == "number" then have = have + cnt end
-        end
-      end)
-      local need = (w.n or 1) - have
-      if need > 0 then
-        local mn = GetMerchantNumItems() or 0
-        for i = 1, mn do
-          local ok, nm, tex, price, quant, avail = pcall(GetMerchantItemInfo, i)
-          if ok and nm == w.name then
-            if type(avail) == "number" and avail >= 0 and avail < need then need = avail end
-            if need > 0 then
-              tbQPush({ kind = "buy", idx = i, n = need }) -- 1.68.2 限频队列
-              say(string.format(L("TB_BOUGHT"), w.name, need))
-            end
-            break
-          end
-        end
-      end
-    end
-  end
+  -- ★1.71.3：旧的「一次买够 need」整块已删除 —— 自动购买改由下方 tbBuyArm() 统一负责：
+  --   一拍只下一笔、按「每次购买数量」分批、逐笔核对、并带背包满/连续失败/总量上限等安全闸门。
+  --   ★一处真值：购买逻辑只此一份（旧路径留着就会出现「一次买 3 件」与「3 次各买 1 件」两套行为）。
 end
 
 -- 背包变动：丢弃列表（仅灰/白品质，防误删）
@@ -538,17 +778,23 @@ evf:RegisterEvent("QUEST_DETAIL")
 evf:RegisterEvent("QUEST_PROGRESS")
 evf:RegisterEvent("QUEST_COMPLETE")
 evf:RegisterEvent("QUEST_LOG_UPDATE") -- 1.69.0 任务进度通知（日志扫描差分）
+evf:RegisterEvent("VARIABLES_LOADED")      -- ★1.71.3 频道屏蔽：载入时聊天框常还没建好，这里再试一次
+evf:RegisterEvent("PLAYER_ENTERING_WORLD") -- ★进入世界后再试一次（最可靠的时机）
 evf:SetScript("OnEvent", function()
   local e = nil
   if type(event) == "string" then e = event end
   if not e and type(arg1) == "string" then e = arg1 end
   if not e and type(arg2) == "string" then e = arg2 end
+  tbChanRetry() -- ★1.71.3 每次事件顺手重试一次频道屏蔽挂载（幂等；成功后立即短路）
   if e then EVAL_TB_ONEVENT(e) end
 end)
 
 -- 队列滴出帧：每帧检查一次（队空时仅一次表索引+一次 GetTime 比较，开销可忽略）
 local qf = CreateFrame("Frame", "EVAL_TOOLBOX_QUEUE", UIParent)
-qf:SetScript("OnUpdate", function() tbQuestTick() tbQPump() end) -- 1.69.2 任务延迟扫描 + 队列滴出
+qf:SetScript("OnUpdate", function()
+  tbChanRetry() -- ★1.71.3 频道屏蔽挂载的兜底重试（限频 1s；挂上后只做一次布尔判断，开销可忽略）
+  tbQuestTick() tbQPump() -- 1.69.2 任务延迟扫描 + 队列滴出
+end)
 
 -- ===== Tab 内容模型（分组归类；列表行动态展开） =====
 -- 标签里带上当前按键名（如「按住[Shift]临时停止」）——用户一眼看到现在挂的是哪个键。
@@ -570,6 +816,8 @@ local function tbModel()
     { t = "l", key = "discard", flag = "discardOn", label = L("TB_DISCARD"), tip = L("TB_DISCARD_TIP"), ask = L("TB_DISCARD_ASK") },
     { t = "h", label = L("TB_H_SOCIAL") },
     { t = "c", key = "ready", label = L("TB_READY"), tip = L("TB_READY_TIP") },
+    -- ★1.71.3 用户要求：屏蔽「XX 加入/离开频道」这类通知（默认开）
+    { t = "c", key = "chanJoin", label = L("TB_CHANJOIN"), tip = L("TB_CHANJOIN_TIP") },
     { t = "g", label = L("TB_GUILDNOTIFY"), tip = L("TB_GUILDNOTIFY_TIP") },
     { t = "h", label = L("TB_H_QAUTO") }, -- 1.69.0 任务组拆分：自动交接 / 任务通知
     -- ★1.71.2 用户要求：自动接取 / 交付任务 **分成两个开关**（原来共用一个 quest 键，想只接取不交付做不到）
@@ -585,6 +833,18 @@ end
 -- ★测试钩子（1.71.2）：把「行模型」与「迁移」暴露给冒烟测试，
 --   否则「UI 真的有两行独立复选框」只能靠人眼看界面（本项目 1.70.46 的教训：只测解析不测调用点）
 function EVAL_TEST_TB_ROWS() return tbModel() end
+-- ★1.71.3 测试钩子：走**真的 tbCfg()**（迁移也在里面跑）——直接读 EVAL_HELP_CONFIG.tb 不会触发迁移。
+function EVAL_TEST_TB_CFG() return tbCfg() end
+-- ★1.71.3 测试钩子：取某个 key 对应行的 [添加] 按钮（走真实控件，断言才能点真实 OnClick）
+function EVAL_TEST_TB_ADD_BTN_FOR(key)
+  if not TB.built then return nil end
+  local m = tbModel()
+  for i = 1, TB.ROWS do
+    local it = m[TB.off + i]
+    if it and it.key == key and TB.rows[i] and TB.rows[i].add then return TB.rows[i].add.btn end
+  end
+  return nil
+end
 function EVAL_TEST_TB_MIGRATE(t) tbMigrateQuest(t) return t end
 function EVAL_TEST_TB_HOLD_KEYS() return TB_HOLD_KEYS, TB_HOLD_LABEL end
 
@@ -598,9 +858,9 @@ local function tbAddItem(key, txt)
     tb.buy = tb.buy or {}
     if nm then
       nm = string.gsub(nm, "^%s*(.-)%s*$", "%1")
-      table.insert(tb.buy, { name = nm, n = tonumber(n) or 1 })
+      table.insert(tb.buy, { name = nm, n = tonumber(n) or 1, per = 1, on = true })
     else
-      table.insert(tb.buy, { name = txt, n = 1 })
+      table.insert(tb.buy, { name = txt, n = 1, per = 1, on = true })
     end
   else
     tb.discard = tb.discard or {}
@@ -613,7 +873,12 @@ local function tbListSummary(key)
   if not tb then return "" end
   local parts = {}
   if key == "buy" and type(tb.buy) == "table" then
-    for _, w in ipairs(tb.buy) do table.insert(parts, tostring(w.name) .. "×" .. tostring(w.n or 1)) end
+    for _, w in ipairs(tb.buy) do
+      local s = tostring(w.name) .. "×" .. tostring(w.n or 1)
+      if (w.per or 1) > 1 then s = s .. string.format(L("TB_BUY_SUM_PER"), w.per) end
+      if w.on == false then s = s .. L("TB_BUY_SUM_OFF") end
+      table.insert(parts, s)
+    end
   elseif key == "discard" and type(tb.discard) == "table" then
     for _, nm in ipairs(tb.discard) do table.insert(parts, tostring(nm)) end
   end
@@ -656,6 +921,8 @@ function EVAL_TB_REFRESH()
           r.add.btn:Show()
           r.clr.btn:Show()
           r.add.btn:SetScript("OnClick", function()
+            -- ★1.71.3：自动购买改开**专用设置窗**（启用/名称/总数/每次 四列可编辑）；其他列表行仍走原来的输入弹窗。
+            if it.key == "buy" and type(EVAL_BUY_UI_OPEN) == "function" then EVAL_BUY_UI_OPEN() return end
             if type(EVAL_TN_OPEN) == "function" then
               EVAL_TN_OPEN(it.ask, "", function(txt) tbAddItem(it.key, txt) EVAL_TB_REFRESH() end)
             end
@@ -663,6 +930,7 @@ function EVAL_TB_REFRESH()
           r.clr.btn:SetScript("OnClick", function()
             local tb = tbCfg()
             if tb then tb[it.key] = {} end
+            if type(EVAL_BUY_UI_REFRESH) == "function" then EVAL_BUY_UI_REFRESH() end
             EVAL_TB_REFRESH()
           end)
         end
@@ -819,6 +1087,244 @@ function EVAL_TB_BUILD(root, page, refreshes)
   TB.built = true
   EVAL_TB_REFRESH()
 end
+
+-- ===== 自动购买设置窗（1.71.3：列表「启用 | 名称 | 总数 | 每次」+ 安全提示）=====
+-- ★为什么单独开窗：工具箱那一行只能放「摘要 + 添加/清空」，而 启用/总数/每次 三个字段都要能改，
+--   挤在摘要行里根本没法编辑 → 独立列表窗最清楚（列头 + 每行可点格子）。
+-- ★交互沿用既有范式：勾选框 = 启用；点格子 → EVAL_TN_OPEN 输入；[删] = 单条删除；[清空] = 全清。
+local TB_BUY_UI_ROWS = 8
+local buyUI = { off = 0 }
+
+local function buyUIList()
+  local tb = tbCfg()
+  if not tb then return nil end
+  if type(tb.buy) ~= "table" then tb.buy = {} end
+  return tb.buy
+end
+
+local function buyUIRefresh()
+  if not buyUI.root then return end
+  local list = buyUIList() or {}
+  local n = table.getn(list)
+  local maxOff = math.max(0, n - TB_BUY_UI_ROWS)
+  if buyUI.off > maxOff then buyUI.off = maxOff end
+  if buyUI.empty then if n == 0 then buyUI.empty:Show() else buyUI.empty:Hide() end end
+  for i = 1, TB_BUY_UI_ROWS do
+    local r = buyUI.rows[i]
+    local e = list[buyUI.off + i]
+    if e then
+      if i % 2 == 0 then r.stripe:Hide() else r.stripe:Show() end
+      r.chk:Show() r.name:Show() r.nt:Show() r.pt:Show() r.del:Show()
+      r.nameBtn:Show() r.nBtn:Show() r.pBtn:Show()
+      if e.on ~= false then r.mark:Show() else r.mark:Hide() end
+      r.name:SetText(tostring(e.name or "?"))
+      r.nt:SetText(tostring(e.n or 1))
+      r.pt:SetText(tostring(e.per or 1))
+      r.chk:SetScript("OnClick", function()
+        if e.on == false then e.on = true else e.on = false end -- nil/true 都算启用（老配置兼容）
+        buyUIRefresh() EVAL_TB_REFRESH()
+      end)
+      r.nameBtn:SetScript("OnClick", function()
+        if type(EVAL_TN_OPEN) ~= "function" then return end
+        EVAL_TN_OPEN(L("TB_BUY_ASK_NAME"), tostring(e.name or ""), function(txt)
+          txt = string.gsub(txt or "", "^%s*(.-)%s*$", "%1")
+          if txt ~= "" then e.name = txt buyUIRefresh() EVAL_TB_REFRESH() end
+        end)
+      end)
+      r.nBtn:SetScript("OnClick", function()
+        if type(EVAL_TN_OPEN) ~= "function" then return end
+        EVAL_TN_OPEN(L("TB_BUY_ASK_N"), tostring(e.n or 1), function(txt)
+          local v = tonumber(txt)
+          if v and v >= 1 then e.n = math.floor(v) buyUIRefresh() EVAL_TB_REFRESH() end
+        end)
+      end)
+      r.pBtn:SetScript("OnClick", function()
+        if type(EVAL_TN_OPEN) ~= "function" then return end
+        EVAL_TN_OPEN(L("TB_BUY_ASK_PER"), tostring(e.per or 1), function(txt)
+          local v = tonumber(txt)
+          if v and v >= 1 then e.per = math.floor(v) buyUIRefresh() EVAL_TB_REFRESH() end
+        end)
+      end)
+      r.del:SetScript("OnClick", function()
+        local l2 = buyUIList() or {}
+        for k, w in ipairs(l2) do if w == e then table.remove(l2, k) break end end -- 按身份删（不受刷新位移影响）
+        buyUIRefresh() EVAL_TB_REFRESH()
+      end)
+    else
+      r.stripe:Hide() r.chk:Hide() r.name:Hide() r.nt:Hide() r.pt:Hide() r.del:Hide()
+      r.nameBtn:Hide() r.nBtn:Hide() r.pBtn:Hide()
+    end
+  end
+  if buyUI.ind then
+    local pages = math.max(1, math.ceil(n / TB_BUY_UI_ROWS))
+    buyUI.ind:SetText(string.format("%d/%d  (%d)", buyUI.off / TB_BUY_UI_ROWS + 1, pages, n))
+  end
+end
+
+local function buyUIBuild()
+  if buyUI.root then return end
+  local W, H = 360, 268
+  local root = CreateFrame("Frame", "EVAL_BUY_UI", UIParent)
+  root:SetWidth(W) root:SetHeight(H)
+  root:SetPoint("CENTER", UIParent, "CENTER", 60, 40)
+  pcall(root.SetFrameStrata, root, "DIALOG")
+  local bg = root:CreateTexture(nil, "BACKGROUND")
+  tbSolid(bg, 0.05, 0.05, 0.07, 0.96)
+  bg:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
+  bg:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", 0, 0)
+  local bar = root:CreateTexture(nil, "BORDER")
+  tbSolid(bar, 0.20, 0.16, 0.08, 1)
+  bar:SetPoint("TOPLEFT", root, "TOPLEFT", 1, -1)
+  bar:SetPoint("TOPRIGHT", root, "TOPRIGHT", -1, -1)
+  bar:SetHeight(22)
+  local function edge(ax, ay, w2, h2)
+    local t = root:CreateTexture(nil, "BORDER")
+    tbSolid(t, 0.45, 0.38, 0.18, 0.9)
+    t:SetPoint("TOPLEFT", root, "TOPLEFT", ax, ay)
+    t:SetWidth(w2) t:SetHeight(h2)
+  end
+  edge(0, 0, W, 1) edge(0, -(H - 1), W, 1) edge(0, 0, 1, H) edge(W - 1, 0, 1, H)
+  local title = tbText(root, 12, 0.95, 0.80, 0.30)
+  title:SetPoint("TOPLEFT", root, "TOPLEFT", 10, -6)
+  title:SetText(L("TB_BUY_UI_TITLE"))
+  local tipLine = tbText(root, 9, 0.62, 0.60, 0.52)
+  tipLine:SetPoint("TOPLEFT", root, "TOPLEFT", 120, -9)
+  tipLine:SetText(L("TB_BUY_UI_TIP"))
+  local closeB = tbBtn(root, W - 26, -3, 18, "X", function() root:Hide() end)
+  -- 列头
+  local function head(x, txt, right)
+    local h = tbText(root, 10, 0.80, 0.72, 0.45)
+    if right then h:SetPoint("TOPRIGHT", root, "TOPRIGHT", -x, -30)
+    else h:SetPoint("TOPLEFT", root, "TOPLEFT", x, -30) end
+    h:SetText(txt)
+  end
+  head(14, L("TB_BUY_COL_ON")) head(46, L("TB_BUY_COL_NAME"))
+  head(244, L("TB_BUY_COL_N"), true) head(302, L("TB_BUY_COL_PER"), true)
+  head(W - 12, L("TB_BUY_COL_DEL"), true)
+  local rows = {}
+  buyUI.rows = rows
+  for i = 1, TB_BUY_UI_ROWS do
+    local y = -44 - (i - 1) * 18
+    local r = {}
+    r.stripe = root:CreateTexture(nil, "BACKGROUND")
+    tbSolid(r.stripe, 0.14, 0.13, 0.11, 0.55)
+    r.stripe:SetPoint("TOPLEFT", root, "TOPLEFT", 8, y + 2)
+    r.stripe:SetWidth(W - 16)
+    r.stripe:SetHeight(16)
+    local chk = CreateFrame("Button", nil, root)
+    chk:SetWidth(14) chk:SetHeight(14)
+    chk:SetPoint("TOPLEFT", root, "TOPLEFT", 14, y)
+    pcall(chk.EnableMouse, chk, true)
+    pcall(chk.RegisterForClicks, chk, "LeftButtonUp")
+    local cb = chk:CreateTexture(nil, "BACKGROUND")
+    tbSolid(cb, 0.30, 0.28, 0.22, 1)
+    cb:SetPoint("TOPLEFT", chk, "TOPLEFT", 0, 0)
+    cb:SetPoint("BOTTOMRIGHT", chk, "BOTTOMRIGHT", 0, 0)
+    local cm = chk:CreateTexture(nil, "ARTWORK")
+    tbSolid(cm, 0.95, 0.82, 0.35, 1)
+    cm:SetPoint("TOPLEFT", chk, "TOPLEFT", 3, -3)
+    cm:SetPoint("BOTTOMRIGHT", chk, "BOTTOMRIGHT", -3, 3)
+    r.chk = chk r.mark = cm
+    local function cell(x, w, right)
+      local b = CreateFrame("Button", nil, root)
+      b:SetWidth(w) b:SetHeight(14)
+      b:SetPoint("TOPLEFT", root, "TOPLEFT", x, y)
+      pcall(b.EnableMouse, b, true)
+      pcall(b.RegisterForClicks, b, "LeftButtonUp")
+      local t = tbText(root, 10, 0.90, 0.88, 0.82)
+      if right then t:SetPoint("TOPRIGHT", root, "TOPRIGHT", -(W - x - w), y - 2)
+      else t:SetPoint("TOPLEFT", root, "TOPLEFT", x + 2, y - 2) end
+      return b, t
+    end
+    local nb, nt = cell(46, 150, false)
+    local qb, qt = cell(200, 44, true)
+    local pb, pt = cell(256, 44, true)
+    r.name, r.nt, r.pt = nt, qt, pt
+    r.nameBtn, r.nBtn, r.pBtn = nb, qb, pb
+    local db = tbBtn(root, W - 44, y, 32, L("TB_BUY_DEL"), function() end)
+    r.del = db.btn r.delText = db.text
+    rows[i] = r
+  end
+  local empty = tbText(root, 10, 0.60, 0.58, 0.50)
+  empty:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -46)
+  empty:SetText(L("TB_BUY_EMPTY"))
+  buyUI.empty = empty
+  local hint = tbText(root, 9, 0.55, 0.60, 0.55)
+  hint:SetPoint("TOPLEFT", root, "TOPLEFT", 12, -(44 + TB_BUY_UI_ROWS * 18 + 6))
+  hint:SetText(L("TB_BUY_HINT"))
+  tbBtn(root, 12, -(H - 26), 84, L("TB_BUY_ADD"), function()
+    if type(EVAL_TN_OPEN) ~= "function" then return end
+    EVAL_TN_OPEN(L("TB_BUY_ASK_NAME"), "", function(txt)
+      txt = string.gsub(txt or "", "^%s*(.-)%s*$", "%1")
+      if txt == "" then return end
+      local list = buyUIList()
+      if not list then return end
+      for _, w in ipairs(list) do
+        if w.name == txt then say(string.format(L("TB_BUY_DUP"), txt)) return end
+      end
+      table.insert(list, { name = txt, n = 1, per = 1, on = true })
+      buyUIRefresh() EVAL_TB_REFRESH()
+    end)
+  end)
+  tbBtn(root, 102, -(H - 26), 62, L("TB_BUY_CLR"), function()
+    local tb = tbCfg()
+    if tb then tb.buy = {} end
+    buyUIRefresh() EVAL_TB_REFRESH()
+  end)
+  tbBtn(root, W - 74, -(H - 26), 62, L("TB_BUY_CLOSE"), function() root:Hide() end)
+  local up = tbBtn(root, W - 20, -44, 14, "^", function() buyUI.off = math.max(0, buyUI.off - 1) buyUIRefresh() end)
+  local dn = tbBtn(root, W - 20, -(44 + (TB_BUY_UI_ROWS - 1) * 18), 14, "v", function() buyUI.off = buyUI.off + 1 buyUIRefresh() end)
+  buyUI.up, buyUI.dn = up, dn
+  local ind = tbText(root, 9, 0.65, 0.62, 0.50)
+  ind:SetPoint("TOPRIGHT", root, "TOPRIGHT", -36, -46)
+  buyUI.ind = ind
+  root:Hide()
+  buyUI.root = root
+end
+
+function EVAL_BUY_UI_OPEN()
+  buyUIBuild()
+  buyUI.off = 0
+  buyUIRefresh()
+  buyUI.root:Show()
+end
+function EVAL_BUY_UI_REFRESH() buyUIRefresh() end
+function EVAL_BUY_UI_CLOSE() if buyUI.root then buyUI.root:Hide() end end
+
+-- ★测试观测口：当前**可见**的列表行（读控件当前文本，而不是读配置）
+function EVAL_TEST_BUY_UI_TEXTS()
+  local out = {}
+  if not buyUI.root then return out end
+  local oks, shown = pcall(buyUI.root.IsShown, buyUI.root)
+  if not (oks and shown) then return out end
+  for i = 1, TB_BUY_UI_ROWS do
+    local r = buyUI.rows[i]
+    local okv, vis = pcall(r.chk.IsVisible, r.chk)
+    if okv and vis then
+      local okm, mvis = pcall(r.mark.IsShown, r.mark)
+      table.insert(out, { on = (okm and mvis) and true or false, name = r.name:GetText() or "",
+                          n = r.nt:GetText() or "", per = r.pt:GetText() or "" })
+    end
+  end
+  return out
+end
+function EVAL_TEST_BUY_UI_SHOWN()
+  if not buyUI.root then return false end
+  local ok, shown = pcall(buyUI.root.IsShown, buyUI.root)
+  return (ok and shown) and true or false
+end
+function EVAL_TEST_BUY_UI_CELL(i, which)
+  local r = buyUI.rows and buyUI.rows[i]
+  if not r then return nil end
+  if which == "chk" then return r.chk end
+  if which == "name" then return r.nameBtn end
+  if which == "n" then return r.nBtn end
+  if which == "per" then return r.pBtn end
+  if which == "del" then return r.del end
+  return nil
+end
+function EVAL_TEST_BUY_UI_OFF() buyUI.off = buyUI.off end
+
 
 -- ===== 测试钩子（放在文件末尾） =====
 -- ★1.71.2 把队列的**模块级时间戳**还原成干净值。

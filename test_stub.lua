@@ -91,6 +91,12 @@ local function newMock()
     --   而旧桩的纹理没有父级 → 断言只能验「偏移是 0」，验不了「高度等于条高 / 满值不留缝」。
     --   ★判据同「桩必须记住被测代码读的每一个状态」：几何断言需要什么，桩就得给什么。
     GetParent = function() return rawget(m, "__parent") end,
+    -- ★1.71.3 桩必须记住**纹理路径**：本轮新增「类别图标 / 异常标记」两列，
+    --   而旧桩的 SetTexture 走 __index 兜底（返回一个空函数）→ 断言读不到任何路径，
+    --   「图标到底画了哪张」在测试里完全不可见（同族教训：桩不记状态 = 断言失明）。
+    --   ★只记字符串（uiSolid 走的是 SetTexture(r,g,b) 三数值形态，不记路径）。
+    SetTexture = function(_, a1) if type(a1) == "string" then rawset(m, "__tex", a1) end end,
+    GetTexture = function() return rawget(m, "__tex") end,
   }
   setmetatable(m, { __index = function(_, k)
     if special[k] then return special[k] end
@@ -228,7 +234,21 @@ UnitName = function(u)
   return u == "player" and "测试玩家" or (TEST.curTargetName or "测试怪")
 end
 UnitLevel = function() return 60 end
-UnitClass = function(u) if u == "target" then return "战士", TEST.targetClass, 1 end return "战士", "WARRIOR", 1 end
+UnitClass = function(u)
+  -- ★1.71.3 队伍/团队成员记录里带 cls 时按它报（职业过滤要用），否则沿用原来的老行为（既有用例不变）
+  local r = teamRec(u)
+  if r and r.cls then return (r.clsLoc or "战士"), r.cls, 1 end
+  if u == "target" then return "战士", TEST.targetClass, 1 end
+  return "战士", "WARRIOR", 1
+end
+-- ★1.71.3 GetRaidRosterInfo（官方文档现场核对：非团队或下标越界时**只返回一个 nil**；否则 9 个值）：
+--   name, rank, subgroup(1-8), level, classLoc, classFile, zone, online, isDead
+--   ★小队号与职业来自同一处 —— 正是「小队多选」「职业过滤」两条的数据源。
+GetRaidRosterInfo = function(i)
+  local r = TEST.raid and TEST.raid[i]
+  if not r then return nil end
+  return r.name or r.unit, 0, tonumber(r.grp) or 1, 60, "战士", r.cls or "WARRIOR", "测试区", 1, nil
+end
 UnitHealth = function(u)
   local r = teamRec(u)
   if r then return r.hp or 0 end
@@ -333,9 +353,30 @@ GetActionTexture = function(slot) return "tex" .. slot end
 GetActionCooldown = function() return 0, 0 end
 IsUsableAction = function() if TEST.usableRet then return TEST.usableRet.u, TEST.usableRet.noMana end return true end
 IsCurrentAction = function(slot) return TEST.currentAction == slot end
-SpellStopCasting = function() TEST.castStopped = true end
+IsAutoRepeatAction = function(slot) return TEST.autoRepeat == slot end -- 1.71.3 停止攻击：自动射击/魔杖自动重复判定
+SpellStopCasting = function() TEST.castStoppedDirect = true end -- 1.71.3 ★真机行为：SpellStopCasting 是 Protected，插件**直调静默无效** → 桩必须如实模拟，否则「改回直调」这种回归测不出来（1.49.3 老 bug）
 RunScript = function(code) TEST.runScript = code TEST.runScripts = TEST.runScripts or {} table.insert(TEST.runScripts, code) if code == "SpellStopCasting()" then TEST.castStopped = true end end -- 1.69.0 收集多条
 IsInGuild = function() return TEST.inGuild or false end
+-- ★1.71.3 跟随（Movement 分类）：文档原文 **not protected**、按名字跟（省略/空名 = 跟当前目标）、**无返回值**。
+--   桩要**如实记下参数**：真接口没有返回值，所以「跟谁」是这个功能**唯一可断言的输出**；
+--   同时记调用次数，好让「本地先挡掉的两条硬规则」能验成「根本没调」。
+FollowByName = function(nm)
+  TEST.followCalls = (TEST.followCalls or 0) + 1
+  TEST.followed = nm
+  return nil
+end
+-- ★不给 FollowUnit 建桩（生产代码不走它）：万一有人改成 FollowUnit，pcall 会失败 → 断言当场变红。
+-- ★1.71.3 宏图标枚举（IconBrowser.lua 的数据源）。桩必须给得出**真实形状**的数据：
+--   否则「图标库」整页在测试里永远是空的（桩太宽松 → 断言失明，本项目老坑）。
+--   TEST.macroIcons = { "Spell_Fire_Fireball", ... }；nil = 一枚都没有（模拟「接口在但表为空」）。
+GetNumMacroIcons = function() return type(TEST.macroIcons) == "table" and table.getn(TEST.macroIcons) or 0 end
+GetMacroIconInfo = function(i)
+  local t = TEST.macroIcons
+  if type(t) ~= "table" then return nil end
+  local name = t[i]
+  if type(name) ~= "string" then return nil end -- ★非字符串 = 取失败（用于测「失败要记账」）
+  return "Interface\\Icons\\" .. name
+end
 -- ★★★合并冲突留下的**重复定义**（1.71.1 修）：v1.71.0 的方案分享补了这两行简版桩，
 --   而队友/团员扫描在文件上方另有一份**支持 TEST.team/TEST.raid 列表**的桩。
 --   Lua 里**后赋值者静默获胜** → 简版把我那份整个盖掉 → 队伍扫描只扫到自己，
@@ -344,6 +385,10 @@ IsInGuild = function() return TEST.inGuild or false end
 --     谁在后面谁生效。改完必须跑测试，不能只看语法。（详见 CLAUDE.md 的 F3/教训节）
 --   （两份桩已合并：上方那份保留 TEST.partyN/TEST.team 两种数据源）
 AttackTarget = function() TEST.attackTried = true end
+-- ★1.71.3 反向哨兵：这两条**故意留着**——停读条确认无法真中断（移动脉冲实测无效、已从生产代码删除），
+--   断言用它们证明「我们**绝不**去动玩家角色」（调用了就让断言变红）。
+MoveForwardStart = function() TEST.moveStart = (TEST.moveStart or 0) + 1 end
+MoveForwardStop = function() TEST.moveStop = (TEST.moveStop or 0) + 1 end
 UseAction = function(slot) table.insert(TEST.used, slot) end
 TargetNearestEnemy = function()
   TEST.targetSel = "nearEnemy"

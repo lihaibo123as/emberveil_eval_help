@@ -1,0 +1,504 @@
+-- EvalHelp · IconBrowser.lua —— 图标库（1.71.3 独立载入：配置窗第 5 个 Tab「图标库」）
+-- 独立原则：本文件自绘 UI（复刻 Toolbox/DataSearch 的风格），不改主程序任何函数；
+--   依赖仅全局件：EVAL_GET_LANG/EVAL_LOCALES（i18n）、EVAL_SAY（Core 桥）、
+--   EVAL_DD_OPEN（主程序下拉组件）、EVAL_HELP_CFG_TAB / EVAL_HELP_SE_WARN_ICON（主程序读值口）。
+--
+-- 数据源 = **客户端内置的宏图标表**（就是宏编辑器里「选图标」那一屏）：
+--   GetNumMacroIcons() / GetMacroIconInfo(i)  —— 本机 api_*.html 的函数索引里 Macro 分类共 8 个，
+--   这两个都在其中（CreateMacro/DeleteMacro/EditMacro/GetMacroIndexByName/GetMacroInfo/GetNumMacros 另六个）。
+--   ★它给的是**路径**（Interface\Icons\xxx），不是文件：整套图标打包在客户端资源里（Content\Paks），
+--     磁盘上取不到文件；但 UI 只需要路径就能画，而且它是**客户端内置、无版权问题、零依赖**的资源。
+--   ★取不到就**如实说**（绝不假装有图标）：状态分三类 —— ok / noapi（没有这个接口）/ empty（接口在但一枚都没拿到）。
+--
+-- 另有一组「本插件在用」的图标：**从生产代码里读**（EVAL_GO_SKILL_CATEGORIES 的 icon 字段 + 警示图标读值口），
+--   不在这里另写一份名单 —— 那种「两份名单」迟早漂移（本项目反复踩过）。
+
+local IB = { built = false, page = 1, group = "all", cells = {}, items = {}, status = nil }
+local IB_TAB = 5 -- 配置窗第 5 个 Tab（与 EvalHelp.lua 的 tabNames 顺序一一对应）
+local IB_CELL, IB_ICON, IB_ROWS, IB_PADX = 34, 26, 6, 20
+local IB_Y_STATUS, IB_Y_GROUP, IB_Y_GRID = -56, -76, -100
+
+-- ===== 自绘基础件（与 Toolbox/DataSearch 同风格：WHITE8X8 纯色 + 字体链兜底） =====
+local function ibSolid(tex, r, g, b, a)
+  pcall(tex.SetTexture, tex, "Interface\\Buttons\\WHITE8X8")
+  pcall(tex.SetVertexColor, tex, r, g, b, a or 1)
+end
+
+local function ibText(parent, size, r, g, b)
+  local fs = parent:CreateFontString(nil, "OVERLAY")
+  local ok = false
+  for _, fo in ipairs({ "GameFontHighlightSmall", "ChatFontNormal", "GameFontNormal" }) do
+    if pcall(fs.SetFontObject, fs, fo) then ok = true break end
+  end
+  if not ok then
+    for _, fp in ipairs({ "Fonts\\FZLBJW.TTF", "Fonts\\FRIZQT__.TTF", "Fonts\\ARIALN.TTF" }) do
+      local okF, ok2 = pcall(fs.SetFont, fs, fp, size, "")
+      if okF and ok2 then ok = true break end
+    end
+  end
+  pcall(fs.SetTextColor, fs, r, g, b)
+  return fs
+end
+
+local function ibBtn(parent, x, y, w, label, onClick, widgets)
+  local b = CreateFrame("Button", nil, parent)
+  b:SetWidth(w) b:SetHeight(16)
+  b:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+  pcall(b.EnableMouse, b, true)
+  pcall(b.RegisterForClicks, b, "LeftButtonUp")
+  local bg = b:CreateTexture(nil, "BACKGROUND")
+  ibSolid(bg, 0.22, 0.18, 0.10, 1)
+  bg:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+  bg:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+  local bt = ibText(b, 10, 0.95, 0.82, 0.35)
+  bt:SetPoint("CENTER", b, "CENTER", 0, 0)
+  bt:SetText(label)
+  b:SetScript("OnClick", onClick)
+  if widgets then table.insert(widgets, b) end
+  return { btn = b, bg = bg, text = bt }
+end
+
+-- ===== i18n / 输出 =====
+local function L(k)
+  local lang = (type(EVAL_GET_LANG) == "function") and EVAL_GET_LANG() or "zhCN"
+  local pack = EVAL_LOCALES and EVAL_LOCALES[lang]
+  local v = pack and pack[k]
+  if v == nil and EVAL_LOCALES and EVAL_LOCALES.zhCN then v = EVAL_LOCALES.zhCN[k] end
+  return v or k
+end
+
+local function say(t)
+  if type(EVAL_SAY) == "function" then EVAL_SAY(t)
+  elseif DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage(tostring(t)) end
+end
+
+-- ===== 名称 / 分组（纯函数，脱离游戏可测） =====
+-- 名称 = 路径最后一段（并去掉扩展名：.blp/.tga 都见过）
+--   ★不用 string.gmatch / # （本客户端的老坑），只用 string.match 的字符类。
+function EVAL_IB_NAME_OF(path)
+  if type(path) ~= "string" or path == "" then return nil end
+  local seg = string.match(path, "[^\\/]+$") or path
+  seg = string.match(seg, "^(.-)%.[%a]+$") or seg
+  if seg == "" then return nil end
+  return seg
+end
+
+-- 分组定义：**顺序稳定**（先匹配到的胜出），最后一条 pat = nil 作兜底。
+--   ★判据 = 文件名前缀：宏图标表的命名本身就分族（Spell_Fire_* / Spell_Frost_* / INV_* / Ability_* …）。
+local IB_GROUPS = {
+  { id = "local",   pat = nil,              key = "IB_G_LOCAL" },   -- 由调用方显式指定（见 ibLocalItems）
+  { id = "fire",    pat = "^Spell_Fire",    key = "IB_G_FIRE" },
+  { id = "frost",   pat = "^Spell_Frost",   key = "IB_G_FROST" },
+  { id = "shadow",  pat = "^Spell_Shadow",  key = "IB_G_SHADOW" },
+  { id = "holy",    pat = "^Spell_Holy",    key = "IB_G_HOLY" },
+  { id = "nature",  pat = "^Spell_Nature",  key = "IB_G_NATURE" },
+  { id = "arcane",  pat = "^Spell_Arcane",  key = "IB_G_ARCANE" },
+  { id = "spell",   pat = "^Spell_",        key = "IB_G_SPELL" },
+  { id = "ability", pat = "^Ability_",      key = "IB_G_ABILITY" },
+  { id = "inv",     pat = "^INV_",          key = "IB_G_INV" },
+  { id = "trade",   pat = "^Trade_",        key = "IB_G_TRADE" },
+  { id = "racial",  pat = "^Racial_",       key = "IB_G_RACIAL" },
+  { id = "temp",    pat = "^Temp",          key = "IB_G_TEMP" },
+  { id = "other",   pat = nil,              key = "IB_G_OTHER" },   -- 兜底
+}
+local function ibGroupByPattern(name)
+  for i = 1, table.getn(IB_GROUPS) do
+    local g = IB_GROUPS[i]
+    if g.pat ~= nil and string.find(name, g.pat) then return g.id end
+  end
+  return "other"
+end
+
+function EVAL_IB_GROUP_OF(path)
+  local n = EVAL_IB_NAME_OF(path)
+  if not n then return nil end
+  return ibGroupByPattern(n)
+end
+
+function EVAL_IB_GROUPS() return IB_GROUPS end
+
+function EVAL_IB_GROUP_LABEL(id)
+  if id == nil or id == "all" then return L("IB_G_ALL") end
+  for i = 1, table.getn(IB_GROUPS) do
+    if IB_GROUPS[i].id == id then return L(IB_GROUPS[i].key) end
+  end
+  return tostring(id)
+end
+
+-- ===== 本插件在用的图标（**从生产代码读**，不另写名单） =====
+local function ibPushItem(out, seen, path, group)
+  if type(path) ~= "string" or path == "" or seen[path] then return end
+  seen[path] = true
+  table.insert(out, { path = path, name = EVAL_IB_NAME_OF(path) or path,
+                      group = group or EVAL_IB_GROUP_OF(path) or "other", idx = 0 })
+end
+
+local function ibLocalItems()
+  local out, seen = {}, {}
+  if type(EVAL_GO_SKILL_CATEGORIES) == "function" then
+    local okc, cats = pcall(EVAL_GO_SKILL_CATEGORIES)
+    if okc and type(cats) == "table" then
+      for i = 1, table.getn(cats) do
+        local c = cats[i]
+        if type(c) == "table" then ibPushItem(out, seen, c.icon, "local") end
+      end
+    end
+  end
+  if type(EVAL_HELP_SE_WARN_ICON) == "function" then
+    local okw, wp = pcall(EVAL_HELP_SE_WARN_ICON)
+    if okw then ibPushItem(out, seen, wp, "local") end
+  end
+  -- ★1.71.3 非动作条动作的图标（目前是「跟随」）：同样**从生产代码读**（单一真值，不另抄路径）
+  if type(EVAL_FOLLOW_ICON) == "string" then ibPushItem(out, seen, EVAL_FOLLOW_ICON, "local") end
+  -- ★1.71.3 状态标记整套（白=不可用 / 黄=待测试）：**从生产代码读**（同一份真值，不在这里另抄路径）。
+  --   ★白的与上面 SE_WARN_ICON 是同一条路径 → ibPushItem 里按路径去重，只算一枚（不会多出来）。
+  if type(EVAL_HELP_SE_MARK_ICONS) == "function" then
+    local okm, mm = pcall(EVAL_HELP_SE_MARK_ICONS)
+    if okm and type(mm) == "table" then
+      ibPushItem(out, seen, mm.unavail, "local")
+      ibPushItem(out, seen, mm.test, "local")
+    end
+  end
+  return out
+end
+
+-- ===== 枚举（pcall 守卫 + 如实记账） =====
+-- 返回状态表：{ state = "ok"/"noapi"/"empty", macro = 取到几枚, failed = 几枚取失败 }
+function EVAL_IB_SCAN(force)
+  if IB.status and not force then return IB.status end
+  local st = { state = "ok", macro = 0, failed = 0 }
+  local items = ibLocalItems() -- ★本插件在用的图标**永远在**（接口缺失时这一组就是全部内容）
+  if type(GetNumMacroIcons) ~= "function" or type(GetMacroIconInfo) ~= "function" then
+    st.state = "noapi" -- ★如实：本客户端没有这个接口（不假装列出了一堆图标）
+  else
+    local okn, n = pcall(GetNumMacroIcons)
+    n = okn and tonumber(n) or nil
+    if not n or n < 1 then
+      st.state = "empty" -- ★接口在，但一枚都没有
+    else
+      local seen = {}
+      for i = 1, table.getn(items) do seen[items[i].path] = true end
+      for i = 1, n do
+        local oki, tex = pcall(GetMacroIconInfo, i)
+        if oki and type(tex) == "string" and tex ~= "" then
+          if not seen[tex] then
+            seen[tex] = true
+            table.insert(items, { path = tex, name = EVAL_IB_NAME_OF(tex) or tex,
+                                  group = EVAL_IB_GROUP_OF(tex) or "other", idx = i })
+          end
+          st.macro = st.macro + 1
+        else
+          st.failed = st.failed + 1 -- ★取失败要**数出来**（本项目「绝不静默」）
+        end
+      end
+      if st.macro == 0 then st.state = "empty" end
+    end
+  end
+  IB.items = items
+  IB.status = st
+  return st
+end
+
+function EVAL_IB_STATUS() return IB.status end
+function EVAL_IB_ITEMS() return IB.items end
+function EVAL_IB_TOTAL() return table.getn(IB.items) end
+
+-- ===== 过滤 / 分页（纯函数：先过滤再切页） =====
+-- ★顺序很重要：**先按分组过滤、再切页**。先切页后过滤会让翻页漏项（每页只显示寥寥几枚）。
+function EVAL_IB_MATCH(it, groupId)
+  if groupId == nil or groupId == "all" then return true end
+  return type(it) == "table" and it.group == groupId
+end
+
+function EVAL_IB_FILTER(items, groupId)
+  local out = {}
+  for i = 1, table.getn(items or {}) do
+    if EVAL_IB_MATCH(items[i], groupId) then table.insert(out, items[i]) end
+  end
+  return out
+end
+
+function EVAL_IB_PAGE_COUNT(n, per)
+  per = tonumber(per) or 0
+  if per < 1 then return 1 end
+  local pc = math.ceil((tonumber(n) or 0) / per)
+  if pc < 1 then pc = 1 end
+  return pc
+end
+
+-- 返回：本页条目表, 夹取后的页码, 总页数, 过滤后总数
+function EVAL_IB_PAGE_ITEMS(items, groupId, page, per)
+  local list = EVAL_IB_FILTER(items, groupId)
+  local total = table.getn(list)
+  local pages = EVAL_IB_PAGE_COUNT(total, per)
+  page = tonumber(page) or 1
+  if page < 1 then page = 1 end
+  if page > pages then page = pages end
+  local from = (page - 1) * per + 1
+  local out = {}
+  for i = from, math.min(from + per - 1, total) do table.insert(out, list[i]) end
+  return out, page, pages, total
+end
+
+-- 分组下拉的选项：只列**真的有图**的分组（空分组不占行）+ 表头的「全部」
+function EVAL_IB_GROUP_OPTIONS(items)
+  local counts, order = {}, {}
+  table.insert(order, "all")
+  counts.all = table.getn(items or {})
+  for i = 1, table.getn(IB_GROUPS) do
+    local id = IB_GROUPS[i].id
+    if id ~= "other" then counts[id] = 0 order[table.getn(order) + 1] = id end
+  end
+  counts.other = 0
+  table.insert(order, "other")
+  for i = 1, table.getn(items or {}) do
+    local g = items[i].group or "other"
+    if counts[g] == nil then counts[g] = 0 end
+    counts[g] = counts[g] + 1
+  end
+  local out = {}
+  for i = 1, table.getn(order) do
+    local id = order[i]
+    if (counts[id] or 0) > 0 then
+      table.insert(out, { id = id, label = EVAL_IB_GROUP_LABEL(id) .. " (" .. tostring(counts[id] or 0) .. ")" })
+    end
+  end
+  return out
+end
+
+-- 网格排版：列数由**真实窗口宽度**算（列数 × 行数 = 每页枚数）
+function EVAL_IB_LAYOUT(W)
+  local w = tonumber(W) or 660
+  local cols = math.floor((w - IB_PADX * 2) / IB_CELL)
+  if cols < 1 then cols = 1 end
+  return cols, IB_ROWS, cols * IB_ROWS
+end
+
+function EVAL_IB_PER_PAGE(W)
+  local _, _, per = EVAL_IB_LAYOUT(W)
+  return per
+end
+
+-- 翻页（生产与测试共用；越界夹取在 PAGE_ITEMS 里做，这里只管推进页码）
+function EVAL_IB_STEP(delta)
+  local d = tonumber(delta) or 0
+  if d == 0 then return false end
+  IB.page = (IB.page or 1) + d
+  EVAL_IB_REFRESH()
+  return true
+end
+
+function EVAL_IB_SET_GROUP(id)
+  IB.group = id or "all"
+  IB.page = 1
+  EVAL_IB_REFRESH()
+end
+
+-- ===== UI =====
+local function ibSetStatusText(st, total, page, pages)
+  local txt
+  if st.state == "ok" then
+    txt = string.format(L("IB_STATUS"), total, page, pages)
+    if (st.failed or 0) > 0 then txt = txt .. string.format(L("IB_STATUS_FAIL"), st.failed) end
+  elseif st.state == "noapi" then
+    txt = L("IB_NOAPI")
+  else
+    txt = L("IB_EMPTY")
+  end
+  return txt
+end
+
+function EVAL_IB_REFRESH()
+  if not IB.built then return end
+  IB.refreshes = (IB.refreshes or 0) + 1 -- ★切 Tab 真的刷新了吗？用计数器钉住（不是「数据对不对」）
+  local st = EVAL_IB_SCAN()
+  local items = IB.items
+  local cols, rows, per = EVAL_IB_LAYOUT(IB.W)
+  local pageItems, page, pages, total = EVAL_IB_PAGE_ITEMS(items, IB.group, IB.page, per)
+  IB.page, IB.pages, IB.total, IB.per = page, pages, total, per
+  IB.pageItems = pageItems
+  if IB.statusFS then pcall(IB.statusFS.SetText, IB.statusFS, ibSetStatusText(st, total, page, pages)) end
+  if IB.groupText then
+    pcall(IB.groupText.SetText, IB.groupText,
+      string.format(L("IB_GROUP_BTN"), EVAL_IB_GROUP_LABEL(IB.group) .. " (" .. tostring(total) .. ")"))
+  end
+  for i = 1, table.getn(IB.cells) do
+    local c = IB.cells[i]
+    local it = pageItems[i]
+    c.item = it
+    if it then
+      pcall(c.tex.SetTexture, c.tex, it.path)
+      pcall(c.tex.Show, c.tex)
+      pcall(c.btn.Show, c.btn)
+    else
+      pcall(c.btn.Hide, c.btn)
+    end
+  end
+end
+
+function EVAL_IB_BUILD(root, page, refreshes)
+  if IB.built then return end
+  local widgets = page.widgets
+  local W = 660
+  local okw, ww = pcall(root.GetWidth, root)
+  if okw and type(ww) == "number" and ww > 0 then W = ww end
+  IB.W = W
+  IB.root = root
+
+  -- 状态行（左）：共 N 枚 / 第 x/y 页；接口缺失时在这里如实说明
+  local stFS = ibText(root, 10, 0.85, 0.82, 0.70)
+  stFS:SetPoint("TOPLEFT", root, "TOPLEFT", IB_PADX, IB_Y_STATUS)
+  pcall(stFS.SetWidth, stFS, W - 300)
+  pcall(stFS.SetJustifyH, stFS, "LEFT")
+  pcall(stFS.SetNonSpaceWrap, stFS, false)
+  IB.statusFS = stFS
+  table.insert(widgets, stFS)
+
+  -- 右上：翻页 + 重扫
+  local bw = 52
+  local bx = W - IB_PADX - bw * 3 - 8
+  IB.btns = {}
+  IB.btns.prev = ibBtn(root, bx, IB_Y_STATUS, bw, L("IB_PREV"), function() EVAL_IB_STEP(-1) end, widgets).btn
+  IB.btns.next = ibBtn(root, bx + bw + 4, IB_Y_STATUS, bw, L("IB_NEXT"), function() EVAL_IB_STEP(1) end, widgets).btn
+  IB.btns.rescan = ibBtn(root, bx + (bw + 4) * 2, IB_Y_STATUS, bw, L("IB_RESCAN"),
+    function() EVAL_IB_SCAN(true) EVAL_IB_REFRESH() end, widgets).btn
+
+  -- 分组过滤（复用主程序下拉组件；回调按**下标**映射回 id，不解析标签文字）
+  -- ★★回调里要用 gb 自己（点它开下拉）→ 必须**先声明后赋值**：
+  --   写成 local gb = ibBtn(..., function() ... gb ... end) 时，闭包里的 gb 会绑到**全局 nil**
+  --   （局部变量在语句执行完才进入作用域）——本项目「声明顺序」老坑的第 N 次。
+  local gb
+  gb = ibBtn(root, IB_PADX, IB_Y_GROUP, 200, "", function()
+    local opts = EVAL_IB_GROUP_OPTIONS(IB.items)
+    local labels = {}
+    for i = 1, table.getn(opts) do labels[i] = opts[i].label end
+    if type(EVAL_DD_OPEN) ~= "function" then return end
+    EVAL_DD_OPEN(gb.btn, labels, function(pi)
+      local o = opts[pi]
+      if o then EVAL_IB_SET_GROUP(o.id) end
+    end)
+  end, widgets)
+  IB.groupBtn = gb
+  local gt = ibText(gb.btn, 10, 0.95, 0.82, 0.35)
+  gt:SetPoint("CENTER", gb.btn, "CENTER", 0, 0)
+  pcall(gt.SetWidth, gt, 194)
+  pcall(gt.SetNonSpaceWrap, gt, false)
+  IB.groupText = gt
+
+  -- 图标网格（池子：建 pageSize 个格子，翻页时只换纹理与数据，不重建控件）
+  local cols, rows, per = EVAL_IB_LAYOUT(W)
+  for i = 1, per do
+    local col = math.mod(i - 1, cols)
+    local row = math.floor((i - 1) / cols)
+    local b = CreateFrame("Button", nil, root)
+    b:SetWidth(IB_CELL - 4) b:SetHeight(IB_CELL - 4)
+    b:SetPoint("TOPLEFT", root, "TOPLEFT", IB_PADX + col * IB_CELL, IB_Y_GRID - row * IB_CELL)
+    pcall(b.EnableMouse, b, true)
+    pcall(b.RegisterForClicks, b, "LeftButtonUp")
+    local bg = b:CreateTexture(nil, "BACKGROUND")
+    ibSolid(bg, 0.10, 0.09, 0.06, 1)
+    bg:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+    bg:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+    local tex = b:CreateTexture(nil, "ARTWORK")
+    tex:SetWidth(IB_ICON) tex:SetHeight(IB_ICON)
+    tex:SetPoint("CENTER", b, "CENTER", 0, 0)
+    local cell = { btn = b, bg = bg, tex = tex, item = nil }
+    -- ★脚本只在建池时设一次；数据靠 cell.item 现读 —— 避免每页重设脚本
+    --   （本客户端 SetScript 是单槽位，反复重设容易把别的处理漏掉）
+    b:SetScript("OnClick", function()
+      if cell.item then say(string.format(L("IB_PICK"), cell.item.path)) end
+    end)
+    b:SetScript("OnEnter", function()
+      pcall(bg.SetVertexColor, bg, 0.38, 0.30, 0.10, 1)
+      local it = cell.item
+      if not it or type(GameTooltip) == "nil" then return end
+      pcall(GameTooltip.SetOwner, GameTooltip, b, "ANCHOR_RIGHT")
+      pcall(GameTooltip.AddLine, GameTooltip, it.name)
+      pcall(GameTooltip.AddLine, GameTooltip, string.format(L("IB_TIP_GROUP"), EVAL_IB_GROUP_LABEL(it.group)))
+      if (it.idx or 0) > 0 then
+        pcall(GameTooltip.AddLine, GameTooltip, string.format(L("IB_TIP_IDX"), it.idx))
+      else
+        pcall(GameTooltip.AddLine, GameTooltip, L("IB_TIP_LOCAL"))
+      end
+      pcall(GameTooltip.AddLine, GameTooltip, it.path)
+      pcall(GameTooltip.Show, GameTooltip)
+    end)
+    b:SetScript("OnLeave", function()
+      pcall(bg.SetVertexColor, bg, 0.10, 0.09, 0.06, 1)
+      if type(GameTooltip) ~= "nil" then pcall(GameTooltip.Hide, GameTooltip) end
+    end)
+    table.insert(widgets, b)
+    IB.cells[i] = cell
+  end
+
+  -- 滚轮翻页：**链式接管**（先问既有处理器，不吞别人事件——DataSearch/Toolbox 用的是同一套路）
+  pcall(root.EnableMouseWheel, root, true)
+  local prevWheel = nil
+  if type(root.GetScript) == "function" then
+    local okg, g = pcall(root.GetScript, root, "OnMouseWheel")
+    if okg and type(g) == "function" then prevWheel = g end
+  end
+  root:SetScript("OnMouseWheel", function(a, b)
+    local active = true
+    if type(EVAL_HELP_CFG_TAB) == "function" then active = (EVAL_HELP_CFG_TAB() == IB_TAB) end
+    if active then
+      local d = b or arg1 or 0
+      if d ~= 0 then
+        EVAL_IB_STEP(d > 0 and 1 or -1)
+        return
+      end
+    end
+    if prevWheel then pcall(prevWheel, a, b) end
+  end)
+
+  IB.built = true
+  EVAL_IB_SCAN(true)
+  EVAL_IB_REFRESH()
+end
+
+-- ===== 测试钩子（读**生产代码的实际状态**，不在测试里复刻逻辑） =====
+function EVAL_IB_TEST_BUILT() return IB.built and true or false end
+function EVAL_IB_TEST_STATE() local s = IB.status return s and s.state or nil end
+function EVAL_IB_TEST_COUNTS()
+  local s = IB.status or {}
+  return { macro = s.macro or 0, failed = s.failed or 0, items = table.getn(IB.items), local_ = table.getn(ibLocalItems()) }
+end
+function EVAL_IB_TEST_PAGE() return IB.page, IB.pages, IB.total end
+function EVAL_IB_TEST_GROUP() return IB.group end
+function EVAL_IB_TEST_CELL(i) return IB.cells[i] end
+function EVAL_IB_TEST_CELL_COUNT() return table.getn(IB.cells) end
+function EVAL_IB_TEST_STATUS_TEXT()
+  if not IB.statusFS then return nil end
+  local ok, t = pcall(IB.statusFS.GetText, IB.statusFS)
+  return ok and t or nil
+end
+function EVAL_IB_TEST_GROUP_TEXT()
+  if not IB.groupText then return nil end
+  local ok, t = pcall(IB.groupText.GetText, IB.groupText)
+  return ok and t or nil
+end
+function EVAL_IB_TEST_GROUP_BTN() return IB.groupBtn and IB.groupBtn.btn end
+function EVAL_IB_TEST_BTN(which) return IB.btns and IB.btns[which] or nil end
+function EVAL_IB_TEST_W() return IB.W end
+function EVAL_IB_TEST_REFRESH_COUNT() return IB.refreshes or 0 end
+function EVAL_IB_TEST_CLICK_CELL(i)
+  local c = IB.cells[i]
+  if not (c and c.btn and type(c.btn.GetScript) == "function") then return false end
+  local ok, fn = pcall(c.btn.GetScript, c.btn, "OnClick")
+  if not (ok and type(fn) == "function") then return false end
+  fn()
+  return true
+end
+function EVAL_IB_TEST_HOVER_CELL(i)
+  local c = IB.cells[i]
+  if not (c and c.btn and type(c.btn.GetScript) == "function") then return false end
+  local ok, fn = pcall(c.btn.GetScript, c.btn, "OnEnter")
+  if not (ok and type(fn) == "function") then return false end
+  fn()
+  return true
+end
+function EVAL_IB_TEST_RESET()
+  IB.status = nil
+  IB.page = 1
+  IB.group = "all"
+end

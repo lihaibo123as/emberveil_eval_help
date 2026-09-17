@@ -380,9 +380,26 @@ function EVAL_HELP_TEAM_ENSURE(scope)
     if partyN > TEAM_PARTY_MAX then partyN = TEAM_PARTY_MAX end -- ★团队里 partyN 会是「团人数-1」
     for i = 1, partyN do table.insert(units, "party" .. i) end
   end
-  for _, u in ipairs(units) do
+  for ui, u in ipairs(units) do
     if UnitExists(u) then
       local rec = { unit = u, name = UnitName(u) or u }
+      -- ★1.71.3 成员职业 / 小队号（供「职业多选」「队伍多选」过滤，用户要求）：
+      --   团队优先问 GetRaidRosterInfo —— **一次调用同时拿到小队号与职业**。官方文档现场核对（Raid 页）：
+      --   返回 name, rank, **subgroup(1-8；未知按 1)**, level, classLoc, **classFile(WARRIOR/MAGE/…)**, zone, online, isDead；
+      --   ★非团队（或下标越界）时**只返回一个 nil** → 队伍成员走 UnitClass 那条路。
+      --   队伍里没有「小队号」概念（小队多选只出现在**团员**条件上）→ 恒记 1。
+      if isRaid and type(GetRaidRosterInfo) == "function" then
+        local okr, _rn, _rr, sub, _rl, _rcl, rcfile = pcall(GetRaidRosterInfo, ui)
+        if okr then
+          rec.grp = tonumber(sub) or 1
+          if type(rcfile) == "string" and rcfile ~= "" then rec.cls = rcfile end
+        end
+      end
+      if not rec.cls and type(UnitClass) == "function" then
+        local okc, _cl, cfile = pcall(UnitClass, u)
+        if okc and type(cfile) == "string" and cfile ~= "" then rec.cls = cfile end
+      end
+      if not isRaid then rec.grp = 1 end
       local hp, hpmax = UnitHealth(u), UnitHealthMax(u)
       rec.hp, rec.hpMax = tonumber(hp) or 0, tonumber(hpmax) or 0
       rec.hpPct = (rec.hpMax > 0) and (rec.hp / rec.hpMax * 100) or 0
