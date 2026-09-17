@@ -50,7 +50,7 @@ node test_engine.js  # 逻辑冒烟测试：打桩 WoW API 加载整个插件，
 | 一键模块 | `WAR_SKILLS` 技能白名单、`wslots` 动作条扫描（`EVAL_GO_RESCAN`）、`wready/wuse/wlog` |
 | 规则引擎 | `condOne/groupsOK/EVAL_RULE_RUN`（组内 & 组间 |，带 trace）；`EVAL_PARSE_CONDS` 中文+英文条件解析；兼容旧 when={} 格式 |
 | 宏入口 | `EVAL_GO(profSel)`：0/不传=激活方案，1-4/方案名=直触；`EVAL_GO1~4` 便捷函数 |
-| 战斗信息UI | `EVAL_HELP_UI_BUILD/TICK`：三条状态条+技能图标行+方案行+方案技能行 |
+| 战斗信息UI | `EVAL_HELP_UI_BUILD/TICK`：标题=玩家名（取不到退回语言包文案）；两大区块（**战斗区**=血/能量/连击/目标条+读条+挥击条+状态行，**方案区**=方案切换行+技能图标带）各有独立子开关 `cfg.ui.subCombat/subScheme`（1.71.12，nil=开，关=整块不画、布局随之前移、帧高跟着变；tick 只认 BUILD 时定下的 `ui.combatOn/schemeOn`，普攻判定不随区块跳过） |
 | 状态信息UI | `EVAL_HELP_ST_*`：状态变量总览+最近释放明细 |
 | 配置窗 | `cfgBuild`：Tab{全局, 一键宏设置}；方案栏/技能列表/[添加技能]/[导入导出] |
 | 技能编辑窗 | `EVAL_HELP_SE_*`：条件逐行配置（seGroupsToLinear/seLinearToGroups 线性↔分组） |

@@ -6735,4 +6735,94 @@ do
   EVAL_HELP_UI_BUILD()
   if not wasShown93 and EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end -- 恢复原可见状态
 end
+
+-- 94) ★★★1.71.12 用户两条要求：
+--   ①「战斗信息 标题换成 用户名字」；②「战斗信息UI 再加2个子选项，战斗，方案，分开控制显示和隐藏。」
+--   ★本组全程走**真实入口 + 真实控件**：点配置窗里那两个真勾选框（OnClick）→ 真重建 →
+--     读**真帧高**与**真控件存在性**；标题从真 FontString 上读文本（不读源码字面量）。
+do
+  if not (EVAL_HELP_CFGWIN and EVAL_HELP_CFGWIN.root) then EVAL_HELP_CFG_TOGGLE() end
+  local uw = EVAL_HELP_CFGWIN and EVAL_HELP_CFGWIN.uiRows
+  local bx = EVAL_HELP_CFGWIN and EVAL_HELP_CFGWIN.uiBoxes
+  eq(type(uw) == "table" and type(bx) == "table", true, "①前置：配置窗导出「界面」分组的真实行位置与真实勾选框")
+  -- 真控件的左/上（桩把 SetPoint 传入的 x/y 记下来；★不反查生产常量）
+  local function p94of(k)
+    local b = bx and bx[k] and bx[k].btn
+    if not b then return nil, nil end
+    local okx, x = pcall(b.GetLeft, b)
+    local oky, y = pcall(b.GetTop, b)
+    return (okx and type(x) == "number") and x or nil, (oky and type(y) == "number") and y or nil
+  end
+  local p94 = {}
+  for _, k in ipairs({ "combat", "subCombat", "subScheme", "state" }) do
+    local px0, py0 = p94of(k)
+    p94[k] = { x = px0, y = py0 }
+  end
+  eq((p94.combat.x and p94.combat.y and p94.subCombat.x and p94.subCombat.y
+     and p94.subScheme.x and p94.subScheme.y and p94.state.x and p94.state.y) and true or false, true,
+    "①前置：四个勾选框都建出来了且有真实几何")
+  eq(p94.subCombat.x == p94.combat.x + uw.indent, true,
+    "①★两个子开关真的**缩进**在主开关右侧 " .. tostring(uw.indent) .. "px（从属关系看得见）")
+  eq(p94.subScheme.x == p94.subCombat.x, true, "①两个子开关左缘对齐（同一列）")
+  eq(p94.subCombat.y < p94.combat.y and p94.subScheme.y < p94.subCombat.y and p94.state.y < p94.subScheme.y, true,
+    "①★行序 = 主开关 → 战斗 → 方案 → 状态信息UI（逐级向下）")
+  local g1 = p94.combat.y - p94.subCombat.y
+  local g2 = p94.subCombat.y - p94.subScheme.y
+  local g3 = p94.subScheme.y - p94.state.y
+  eq(g1 >= 16 and g2 >= 16 and g3 >= 16, true,
+    "①★相邻勾选框不重叠（间距 ≥ 勾选框高 16）: " .. g1 .. "/" .. g2 .. "/" .. g3)
+  eq(g3 > g2, true,
+    "①★状态信息UI 与子项之间留了**更大的分组间距**（否则看着像第三个子项）: " .. g3 .. " > " .. g2)
+  print(string.format("  界面分组行距：主→战斗 %d / 战斗→方案 %d / 方案→状态 %d（子项缩进 %d）", g1, g2, g3, uw.indent))
+
+  local wasShown94 = EVAL_TEST_UI_SHOWN()
+  if not wasShown94 then EVAL_HELP_UI_TOGGLE() end
+  local saveC94, saveS94 = EVAL_HELP_CONFIG.ui.subCombat, EVAL_HELP_CONFIG.ui.subScheme
+  EVAL_HELP_CONFIG.ui.subCombat, EVAL_HELP_CONFIG.ui.subScheme = nil, nil -- 老配置形态：这两个键根本不存在
+  EVAL_HELP_UI_REBUILD_IF_SHOWN()
+  local s1 = EVAL_TEST_UI_SECTIONS()
+  eq(s1.title, UnitName("player"), "①★★标题 = 玩家名字（读真 FontString 文本）: " .. tostring(s1.title))
+  eq(s1.title ~= EVAL_L("G_UI_TITLE"), true, "①反向哨兵：名字拿得到时不许用兜底文案")
+  eq(s1.combat == true and s1.scheme == true, true, "②★★老配置（两个子键不存在）→ 两个区块都画（nil = 开）")
+  eq(s1.hasCombat == true and s1.hasScheme == true, true, "②两个区块的控件真的建出来了（不是空标志）")
+  -- 取不到名字 → 退回语言包文案（不许把标题栏留空）
+  local savedUN94 = UnitName
+  UnitName = function(u) if u == "player" then return "" end return savedUN94(u) end
+  EVAL_HELP_UI_REBUILD_IF_SHOWN()
+  eq(EVAL_TEST_UI_SECTIONS().title, EVAL_L("G_UI_TITLE"), "①★UnitName 给空串时退回语言包文案（标题栏不空白）")
+  UnitName = savedUN94
+  EVAL_HELP_UI_REBUILD_IF_SHOWN()
+  eq(EVAL_TEST_UI_SECTIONS().title, UnitName("player"), "①名字恢复后标题跟着回来（没有粘住兜底值）")
+  local hOn = s1.rootH
+  local fnC94 = bx.subCombat.btn:GetScript("OnClick")
+  local fnS94 = bx.subScheme.btn:GetScript("OnClick")
+  eq(type(fnC94) == "function" and type(fnS94) == "function", true, "②两个子开关都有真实 OnClick")
+  if type(fnC94) == "function" then fnC94() end -- 点真勾选框：关「战斗」
+  local s2 = EVAL_TEST_UI_SECTIONS()
+  eq(s2.combat, false, "②★点真勾选框 → 「战斗」区块关（ui.combatOn=false）")
+  eq(s2.hasCombat, false, "②★★控件真的**没建**（不是画完再 Hide）")
+  eq(EVAL_HELP_CONFIG.ui.subCombat, false, "②写进配置的是真值")
+  eq(s2.scheme == true and s2.hasScheme == true, true, "②★两个子开关**互相独立**：战斗关了方案区不受影响")
+  eq(type(s2.rootH) == "number" and type(hOn) == "number" and s2.rootH < hOn, true,
+    "②★★帧高随「战斗」区消失而变小: " .. tostring(s2.rootH) .. " < " .. tostring(hOn))
+  eq(pcall(EVAL_HELP_UI_TICK), true, "②★★区块没建时 tick 不报错（nil 控件不把心跳打断）")
+  if type(fnS94) == "function" then fnS94() end -- 再关「方案」
+  local s3 = EVAL_TEST_UI_SECTIONS()
+  eq(s3.combat == false and s3.scheme == false, true, "②再关「方案」→ 两个区块都关")
+  eq(s3.hasScheme, false, "②方案区控件也没建")
+  eq(type(s3.rootH) == "number" and s3.rootH < s2.rootH, true,
+    "②★两个都关 → 帧高只剩标题栏那点: " .. tostring(s3.rootH) .. " < " .. tostring(s2.rootH))
+  eq(pcall(EVAL_HELP_UI_TICK), true, "②两个区块都关时 tick 也不报错")
+  if type(fnC94) == "function" then fnC94() end -- 点回来
+  if type(fnS94) == "function" then fnS94() end
+  local s4 = EVAL_TEST_UI_SECTIONS()
+  eq(s4.combat == true and s4.scheme == true, true, "②★点回来 → 两个区块都恢复")
+  eq(s4.hasCombat == true and s4.hasScheme == true, true, "②控件重新建出来")
+  eq(s4.rootH, hOn, "②★★开关往返一圈后帧高回到原值（无累积偏移）: " .. tostring(s4.rootH) .. " vs " .. tostring(hOn))
+  -- 还原：测试不改变生产状态
+  EVAL_HELP_CONFIG.ui.subCombat, EVAL_HELP_CONFIG.ui.subScheme = saveC94, saveS94
+  EVAL_HELP_UI_REBUILD_IF_SHOWN()
+  eq(EVAL_TEST_UI_SECTIONS().rootH, hOn, "②还原配置后帧高 = 原始值")
+  if not wasShown94 and EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end -- 恢复原可见状态
+end
 print("ALL TESTS PASS")

@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.71.11"
+local VERSION = "1.71.12"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -166,6 +166,19 @@ function EVAL_HELP_UI_BUILD()
     pcall(ui.root.SetScript, ui.root, "OnUpdate", nil)
   end
 
+  -- ★★★1.71.12 子开关「战斗 / 方案」= 关时对应区块**整块不画** → 这里必须先清掉上一轮的引用：
+  --   ui 表是**复用**的（不是每轮新建），不清就会留下**上一轮控件**的引用，
+  --   而 tick 里的存在性判据（`if ui.castBar then` / `if ui.profCells then`）会照样成立 → **写幽灵控件**。
+  --   （与「桩有错状态比桩没状态更隐蔽」同族：留存的是旧状态，不是缺失。）
+  ui.hpFill, ui.hpText, ui.hpW = nil, nil, nil
+  ui.pwFill, ui.pwText, ui.pwW = nil, nil, nil
+  ui.tgBar, ui.tgFill, ui.tgText, ui.tgW = nil, nil, nil, nil
+  ui.tgRange, ui.status, ui.comboSegs = nil, nil, nil
+  ui.castBar, ui.castFill, ui.castText, ui.castW = nil, nil, nil, nil
+  ui.swingBar, ui.swingFill, ui.swingText, ui.swingW = nil, nil, nil, nil
+  ui.profBtns, ui.profCells = nil, nil
+  ui.profRows, ui.profNeed, ui.profAvail, ui.profPad, ui.profCap, ui.profSig = nil, nil, nil, nil, nil, nil
+
   local root = CreateFrame("Frame", "EVAL_HELP_UI", UIParent)
   pcall(root.SetFrameStrata, root, "MEDIUM")
   pcall(root.SetFrameLevel, root, 10)
@@ -201,233 +214,266 @@ function EVAL_HELP_UI_BUILD()
   pcall(titleBar.RegisterForDrag, titleBar, "LeftButton")
   local title = uiText(titleBar, math.max(9, math.floor(11 * z)), 0.9, 0.8, 0.4)
   title:SetPoint("CENTER", titleBar, "CENTER", 0, 0)
-  title:SetText("战斗信息")
+  -- ★1.71.12 用户要求：「战斗信息 标题换成 用户名字」。
+  --   ★取不到名字要**如实退回**旧文案（载入极早期 / 某些客户端 UnitName 可能给 nil 或空串）——
+  --     直接 SetText(nil) 会让标题栏空着，比旧文案更糟。
+  local pname = UnitName("player")
+  if type(pname) ~= "string" or pname == "" then pname = L("G_UI_TITLE") end
+  title:SetText(pname)
 
-  -- 三条状态条：血 / 能量 / 目标
+  -- ★★★1.71.12 用户要求：「战斗信息UI 再加2个子选项，战斗、方案，分开控制显示和隐藏。」
+  --   ★语义：**nil = 开**（老配置里没有这两个键 → 行为与旧版逐字一致）；只有显式 false 才不画。
+  --   ★为什么是「不画」而不是「画完再 Hide」：布局 y 必须随之前移（否则留一条空白带），帧高也要跟着变
+  --     ——Hide 做不到这两件事（本项目「隐藏 = 不画」的既有判据，黑块那轮的教训）。
+  --   ★两个区块各自独立：`战斗` = 血/能量/连击/目标条 + 读条 + 挥击条 + 状态行；
+  --     `方案` = 方案切换行 + 技能图标带。
+  local subCombat = (u.subCombat ~= false)
+  local subScheme = (u.subScheme ~= false)
+
+  -- 三条状态条：血 / 能量 / 目标（子开关「战斗」关掉时整块不画）
   local y = titleBarH + gap
-  local barW = W - pad * 2
-  local hpBar, hpFill, hpText, hpW = uiMakeBar(root, barW, barH)
-  hpBar:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
-  y = y + barH + gap
-  local pwBar, pwFill, pwText, pwW = uiMakeBar(root, barW, barH)
-  pwBar:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
-  y = y + barH + gap
-  -- 连击点条（1.67.0，贼/德专属）：能量条下方一行 5 等宽小块——激活高亮金填充、未激活浅灰
-  local comboSegs = nil
-  do
-    local okc, _cl, clsTok = pcall(UnitClass, "player")
-    if clsTok == "ROGUE" or clsTok == "DRUID" then
-      comboSegs = {}
-      local segGap = 2
-      local segW = math.floor((barW - segGap * 4) / 5)
-      local segH = math.max(5, math.floor(7 * z))
-      for ci = 1, 5 do
-        local seg = root:CreateTexture(nil, "ARTWORK")
-        uiSolid(seg, 0.25, 0.25, 0.25, 1)
-        seg:SetWidth(segW) seg:SetHeight(segH)
-        seg:SetPoint("TOPLEFT", root, "TOPLEFT", pad + (ci - 1) * (segW + segGap), -y)
-        comboSegs[ci] = seg
+  if subCombat then -- ★1.71.12 子开关「战斗」：关 = 血/能量/目标/读条/挥击/状态行整块不画
+    local barW = W - pad * 2
+    local hpBar, hpFill, hpText, hpW = uiMakeBar(root, barW, barH)
+    hpBar:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
+    y = y + barH + gap
+    local pwBar, pwFill, pwText, pwW = uiMakeBar(root, barW, barH)
+    pwBar:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
+    y = y + barH + gap
+    -- 连击点条（1.67.0，贼/德专属）：能量条下方一行 5 等宽小块——激活高亮金填充、未激活浅灰
+    local comboSegs = nil
+    do
+      local okc, _cl, clsTok = pcall(UnitClass, "player")
+      if clsTok == "ROGUE" or clsTok == "DRUID" then
+        comboSegs = {}
+        local segGap = 2
+        local segW = math.floor((barW - segGap * 4) / 5)
+        local segH = math.max(5, math.floor(7 * z))
+        for ci = 1, 5 do
+          local seg = root:CreateTexture(nil, "ARTWORK")
+          uiSolid(seg, 0.25, 0.25, 0.25, 1)
+          seg:SetWidth(segW) seg:SetHeight(segH)
+          seg:SetPoint("TOPLEFT", root, "TOPLEFT", pad + (ci - 1) * (segW + segGap), -y)
+          comboSegs[ci] = seg
+        end
+        y = y + segH + gap
       end
-      y = y + segH + gap
     end
-  end
-  ui.comboSegs = comboSegs
-  local tgBar, tgFill, tgText, tgW = uiMakeBar(root, barW, barH)
-  tgBar:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
-  y = y + barH + gap
+    ui.comboSegs = comboSegs
+    local tgBar, tgFill, tgText, tgW = uiMakeBar(root, barW, barH)
+    tgBar:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
+    y = y + barH + gap
 
-  -- 状态行：战斗状态 · 姿态 · 普攻
-  local status = uiText(root, math.max(8, math.floor(10 * z)), 0.75, 0.75, 0.75)
-  -- 施法读条（1.38.1）：目标条下方细条，仅读条中显示（进度=剩余/总时长，反向填充=正在消耗的时间）
-  local castBar, castFill, castText, castW = uiMakeBar(root, barW, math.max(6, math.floor(8 * z)))
-  castBar:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
-  y = y + math.max(6, math.floor(8 * z)) + gap
-  ui.castBar, ui.castFill, ui.castText, ui.castW = castBar, castFill, castText, castW
-  -- 挥击计时条（1.55.0）：读条下方细条——进度=距下次挥击（自学习锚点+攻速），金色
-  local swBar, swFill, swText, swW = uiMakeBar(root, barW, math.max(6, math.floor(8 * z)))
-  swBar:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
-  y = y + math.max(6, math.floor(8 * z)) + gap
-  ui.swingBar, ui.swingFill, ui.swingText, ui.swingW = swBar, swFill, swText, swW
-  status:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
-  y = y + math.floor(13 * z) + gap
+    -- 状态行：战斗状态 · 姿态 · 普攻
+    local status = uiText(root, math.max(8, math.floor(10 * z)), 0.75, 0.75, 0.75)
+    -- 施法读条（1.38.1）：目标条下方细条，仅读条中显示（进度=剩余/总时长，反向填充=正在消耗的时间）
+    local castBar, castFill, castText, castW = uiMakeBar(root, barW, math.max(6, math.floor(8 * z)))
+    castBar:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
+    y = y + math.max(6, math.floor(8 * z)) + gap
+    ui.castBar, ui.castFill, ui.castText, ui.castW = castBar, castFill, castText, castW
+    -- 挥击计时条（1.55.0）：读条下方细条——进度=距下次挥击（自学习锚点+攻速），金色
+    local swBar, swFill, swText, swW = uiMakeBar(root, barW, math.max(6, math.floor(8 * z)))
+    swBar:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
+    y = y + math.max(6, math.floor(8 * z)) + gap
+    ui.swingBar, ui.swingFill, ui.swingText, ui.swingW = swBar, swFill, swText, swW
+    status:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
+    y = y + math.floor(13 * z) + gap
+    -- 目标距离文本（1.37.0）：目标条右缘（近战/冲锋距/远程外，EVAL_T_RANGE 分档）
+    local tgRange = uiText(tgBar, math.max(8, math.floor(9 * z)), 1, 0.85, 0.4)
+    tgRange:SetPoint("RIGHT", tgBar, "RIGHT", -4, 0)
+    pcall(tgRange.SetJustifyH, tgRange, "RIGHT")
+    ui.tgRange = tgRange
+    -- ★★★1.71.12 这些 `ui.*` 赋值必须在**块内**：子开关「战斗」= 关时控件根本不建，
+    --   块外再赋值就会把「这一轮没建」这件事盖掉（见 BUILD 开头的清空说明）。
+    ui.hpFill, ui.hpText, ui.hpW = hpFill, hpText, hpW
+    ui.pwFill, ui.pwText, ui.pwW = pwFill, pwText, pwW
+    ui.tgBar, ui.tgFill, ui.tgText, ui.tgW = tgBar, tgFill, tgText, tgW
+    ui.status = status
+  end
 
-  -- 方案切换行：点击按钮换激活方案（一键宏立即换套路；Shift+按宏 / /eh go next 也可切）
-  -- 1.56.0 自适应布局：行宽与上方状态条对齐（右缘一致）；方案多时自动换行。
-  -- ★★★1.71.10 用户实测「有些方案会溢出宽度」——根因是**按钮宽度按行均分**（同一行所有按钮一样宽）：
-  --   长名字（如「一键团队驱散」）撑破自己的按钮、压在邻居上。现改为**按名字实测宽度**分配：
-  --     · 每格宽 = 量宽(名字) + 内边距，夹在 [minBW, 整行可用宽] 之间；
-  --     · 按可用宽**贪心换行**（首行扣掉「方案」标签宽）；
-  --     · 每行剩余空间**均摊**回该行按钮 —— 保住 1.56.0 的「每行填满」观感；
-  --     · 文字格显式限宽 + 禁折行（名字极长时在自己的按钮里裁掉，不再压邻居）。
-  --   ★量宽走 ruler FontString（挪出可视区量：本客户端 Hide 过的控件仍可能被绘出）；
-  --     拿不到 GetStringWidth 时退化为「中文一字约 9px」的近似（本机 API 表里没有它）。
-  --   ★方案名/数量变了要重排：由 EVAL_WAR_TAB_REFRESH 比对签名后**整体重建**
-  --     （重建会重算行数 → 帧高与下方技能带一起挪）；每 0.15s 的 tick 里**不量宽**（频率防护）。
-  local profBtns = {}
-  local w20 = uiWarCfg()
-  local nProf = (w20.profiles and table.getn(w20.profiles)) or 1
-  local labelW = math.floor(28 * z)
-  local btnH = math.floor(15 * z)
-  local barAvailW = W - pad * 2
-  local minBW = math.floor(34 * z) -- 单按钮最小宽（名字可读）
-  local PGAP = 2
-  local plabel = uiText(root, math.max(8, math.floor(9 * z)), 0.95, 0.82, 0.35)
-  plabel:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -(y + math.floor(3 * z)))
-  plabel:SetText("方案")
-  -- 量宽尺（与方案按钮同字号；挪出可视区，不参与显示）
-  local uiRuler = uiText(root, math.max(7, math.floor(9 * z)), 0.85, 0.80, 0.70)
-  pcall(uiRuler.SetPoint, uiRuler, "TOPLEFT", root, "TOPLEFT", -2000, 0)
-  local function uiMeasure(s)
-    s = tostring(s or "")
-    local w0 = 0
-    pcall(uiRuler.SetText, uiRuler, s)
-    if type(uiRuler.GetStringWidth) == "function" then
-      local okv, v = pcall(uiRuler.GetStringWidth, uiRuler)
-      if okv and type(v) == "number" and v > 0 then w0 = v end
-    end
-    if w0 <= 0 then w0 = math.floor(string.len(s) / 3 + 0.5) * 9 end -- 近似：中文字一字约 9px
-    return w0
-  end
-  local function profNeed(name) -- 一格需要多宽（实测 + 内边距；夹在 [minBW, 整行宽]）
-    local w0 = uiMeasure(name) + math.floor(10 * z)
-    if w0 < minBW then w0 = minBW end
-    if w0 > barAvailW then w0 = barAvailW end
-    return w0
-  end
-  local needW = {}
-  for i = 1, 12 do
-    local prof = w20.profiles and w20.profiles[i]
-    needW[i] = profNeed(prof and prof.name or ("方案" .. tostring(i)))
-  end
-  -- 贪心换行 + 每行剩余**限量**均摊（余数给前几格）→ geo[i] = { x, y, w }
-  --   ★★★1.71.11 用户第二轮反馈「空的太多了」：上一版把每行剩余**全部**均摊 → 一行里只有一个短名时，
-  --     那个按钮被拉成一个大空框（截图红圈）。现在给每格**设上限**：最多比「名字需要宽」多 MAX_EXTRA，
-  --     超出的部分**留在行尾**（宁可行尾留白，也不做空框）——★上限值可调：想要「完全按名宽」就把 MAX_EXTRA 设 0。
-  local MAX_EXTRA = math.floor(24 * z)
-  local geo, rowIdx, x = {}, 0, pad + labelW
-  local rowItems, rowAvail = {}, barAvailW - labelW
-  local function flushRow()
-    local k = table.getn(rowItems)
-    if k == 0 then return end
-    local sumW = 0
-    for _, idx in ipairs(rowItems) do sumW = sumW + needW[idx] end
-    local leftover = rowAvail - (k - 1) * PGAP - sumW
-    if leftover < 0 then leftover = 0 end
-    local add = math.floor(leftover / k)
-    local capped = false
-    if add > MAX_EXTRA then add = MAX_EXTRA capped = true end
-    local extra = capped and 0 or (leftover - add * k)
-    local xx = (rowIdx == 0) and (pad + labelW) or pad
-    for n, idx in ipairs(rowItems) do
-      local wI = needW[idx] + add + ((n <= extra) and 1 or 0)
-      geo[idx] = { x = xx, y = -(y + rowIdx * (btnH + PGAP)), w = wI }
-      xx = xx + wI + PGAP
-    end
-    rowItems = {}
-  end
-  for i = 1, math.max(1, math.min(12, nProf)) do
-    local wI = needW[i]
-    if table.getn(rowItems) > 0 and x + wI > pad + barAvailW + 0.5 then
-      flushRow()
-      rowIdx = rowIdx + 1
-      rowAvail = barAvailW
-      x = pad
-    end
-    table.insert(rowItems, i)
-    x = x + wI + PGAP
-  end
-  flushRow()
-  local rows = rowIdx + 1
-  local geoFallback = { x = pad, y = -(y + rows * (btnH + PGAP)), w = needW[nProf] or minBW }
-  for i = 1, 12 do
-    local g0 = geo[i] or geo[nProf] or geoFallback
-    local pb = CreateFrame("Button", nil, root)
-    pb:SetWidth(g0.w) pb:SetHeight(btnH)
-    pb:SetPoint("TOPLEFT", root, "TOPLEFT", g0.x, g0.y)
-    pcall(pb.EnableMouse, pb, true)
-    pcall(pb.RegisterForClicks, pb, "LeftButtonUp")
-    local pbg = pb:CreateTexture(nil, "BACKGROUND")
-    uiSolid(pbg, 0.16, 0.13, 0.08, 1)
-    pbg:SetPoint("TOPLEFT", pb, "TOPLEFT", 0, 0)
-    pbg:SetPoint("BOTTOMRIGHT", pb, "BOTTOMRIGHT", 0, 0)
-    local pt = uiText(pb, math.max(7, math.floor(9 * z)), 0.85, 0.80, 0.70)
-    pt:SetPoint("CENTER", pb, "CENTER", 0, 0)
-    pcall(pt.SetWidth, pt, g0.w - 4) -- ★限宽：极长名在自己的按钮里裁掉，不压邻居
-    pcall(pt.SetNonSpaceWrap, pt, false)
-    local pidx = i
-    pb:SetScript("OnClick", function()
-      local w2 = uiWarCfg()
-      if w2.profiles and w2.profiles[pidx] then
-        w2.activeProfile = pidx
-        say("切换到方案: " .. tostring(w2.profiles[pidx].name))
+  if subScheme then -- ★1.71.12 子开关「方案」：关 = 方案行与技能图标带整块不画（布局随之前移）
+    -- 方案切换行：点击按钮换激活方案（一键宏立即换套路；Shift+按宏 / /eh go next 也可切）
+    -- 1.56.0 自适应布局：行宽与上方状态条对齐（右缘一致）；方案多时自动换行。
+    -- ★★★1.71.10 用户实测「有些方案会溢出宽度」——根因是**按钮宽度按行均分**（同一行所有按钮一样宽）：
+    --   长名字（如「一键团队驱散」）撑破自己的按钮、压在邻居上。现改为**按名字实测宽度**分配：
+    --     · 每格宽 = 量宽(名字) + 内边距，夹在 [minBW, 整行可用宽] 之间；
+    --     · 按可用宽**贪心换行**（首行扣掉「方案」标签宽）；
+    --     · 每行剩余空间**均摊**回该行按钮 —— 保住 1.56.0 的「每行填满」观感；
+    --     · 文字格显式限宽 + 禁折行（名字极长时在自己的按钮里裁掉，不再压邻居）。
+    --   ★量宽走 ruler FontString（挪出可视区量：本客户端 Hide 过的控件仍可能被绘出）；
+    --     拿不到 GetStringWidth 时退化为「中文一字约 9px」的近似（本机 API 表里没有它）。
+    --   ★方案名/数量变了要重排：由 EVAL_WAR_TAB_REFRESH 比对签名后**整体重建**
+    --     （重建会重算行数 → 帧高与下方技能带一起挪）；每 0.15s 的 tick 里**不量宽**（频率防护）。
+    local profBtns = {}
+    local w20 = uiWarCfg()
+    local nProf = (w20.profiles and table.getn(w20.profiles)) or 1
+    local labelW = math.floor(28 * z)
+    local btnH = math.floor(15 * z)
+    local barAvailW = W - pad * 2
+    local minBW = math.floor(34 * z) -- 单按钮最小宽（名字可读）
+    local PGAP = 2
+    local plabel = uiText(root, math.max(8, math.floor(9 * z)), 0.95, 0.82, 0.35)
+    plabel:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -(y + math.floor(3 * z)))
+    plabel:SetText("方案")
+    -- 量宽尺（与方案按钮同字号；挪出可视区，不参与显示）
+    local uiRuler = uiText(root, math.max(7, math.floor(9 * z)), 0.85, 0.80, 0.70)
+    pcall(uiRuler.SetPoint, uiRuler, "TOPLEFT", root, "TOPLEFT", -2000, 0)
+    local function uiMeasure(s)
+      s = tostring(s or "")
+      local w0 = 0
+      pcall(uiRuler.SetText, uiRuler, s)
+      if type(uiRuler.GetStringWidth) == "function" then
+        local okv, v = pcall(uiRuler.GetStringWidth, uiRuler)
+        if okv and type(v) == "number" and v > 0 then w0 = v end
       end
-    end)
-    profBtns[i] = { btn = pb, bg = pbg, text = pt }
-  end
-  ui.profRows, ui.profNeed, ui.profAvail, ui.profPad, ui.profCap = rows, needW, barAvailW, pad, MAX_EXTRA -- ★1.71.10/1.71.11 供断言读生产真值
-  -- ★1.71.10 版式签名（方案名序列）：EVAL_WAR_TAB_REFRESH 比它决定「要不要重建战斗信息UI」
-  --   （方案名/数量变了 → 按钮宽度与行数都得重算，帧高与下方技能带也要随之挪 → 整体重建最省心）
-  local sig0 = ""
-  for i = 1, table.getn((w20 and w20.profiles) or {}) do
-    sig0 = sig0 .. tostring(((w20.profiles[i]) or {}).name or "") .. "|"
-  end
-  ui.profSig = sig0
-  y = y + rows * (btnH + PGAP) + gap -- 1.56.0 多行高度（行数按名字实宽算，行数变了帧高随之变）
+      if w0 <= 0 then w0 = math.floor(string.len(s) / 3 + 0.5) * 9 end -- 近似：中文字一字约 9px
+      return w0
+    end
+    local function profNeed(name) -- 一格需要多宽（实测 + 内边距；夹在 [minBW, 整行宽]）
+      local w0 = uiMeasure(name) + math.floor(10 * z)
+      if w0 < minBW then w0 = minBW end
+      if w0 > barAvailW then w0 = barAvailW end
+      return w0
+    end
+    local needW = {}
+    for i = 1, 12 do
+      local prof = w20.profiles and w20.profiles[i]
+      needW[i] = profNeed(prof and prof.name or ("方案" .. tostring(i)))
+    end
+    -- 贪心换行 + 每行剩余**限量**均摊（余数给前几格）→ geo[i] = { x, y, w }
+    --   ★★★1.71.11 用户第二轮反馈「空的太多了」：上一版把每行剩余**全部**均摊 → 一行里只有一个短名时，
+    --     那个按钮被拉成一个大空框（截图红圈）。现在给每格**设上限**：最多比「名字需要宽」多 MAX_EXTRA，
+    --     超出的部分**留在行尾**（宁可行尾留白，也不做空框）——★上限值可调：想要「完全按名宽」就把 MAX_EXTRA 设 0。
+    local MAX_EXTRA = math.floor(24 * z)
+    local geo, rowIdx, x = {}, 0, pad + labelW
+    local rowItems, rowAvail = {}, barAvailW - labelW
+    local function flushRow()
+      local k = table.getn(rowItems)
+      if k == 0 then return end
+      local sumW = 0
+      for _, idx in ipairs(rowItems) do sumW = sumW + needW[idx] end
+      local leftover = rowAvail - (k - 1) * PGAP - sumW
+      if leftover < 0 then leftover = 0 end
+      local add = math.floor(leftover / k)
+      local capped = false
+      if add > MAX_EXTRA then add = MAX_EXTRA capped = true end
+      local extra = capped and 0 or (leftover - add * k)
+      local xx = (rowIdx == 0) and (pad + labelW) or pad
+      for n, idx in ipairs(rowItems) do
+        local wI = needW[idx] + add + ((n <= extra) and 1 or 0)
+        geo[idx] = { x = xx, y = -(y + rowIdx * (btnH + PGAP)), w = wI }
+        xx = xx + wI + PGAP
+      end
+      rowItems = {}
+    end
+    for i = 1, math.max(1, math.min(12, nProf)) do
+      local wI = needW[i]
+      if table.getn(rowItems) > 0 and x + wI > pad + barAvailW + 0.5 then
+        flushRow()
+        rowIdx = rowIdx + 1
+        rowAvail = barAvailW
+        x = pad
+      end
+      table.insert(rowItems, i)
+      x = x + wI + PGAP
+    end
+    flushRow()
+    local rows = rowIdx + 1
+    local geoFallback = { x = pad, y = -(y + rows * (btnH + PGAP)), w = needW[nProf] or minBW }
+    for i = 1, 12 do
+      local g0 = geo[i] or geo[nProf] or geoFallback
+      local pb = CreateFrame("Button", nil, root)
+      pb:SetWidth(g0.w) pb:SetHeight(btnH)
+      pb:SetPoint("TOPLEFT", root, "TOPLEFT", g0.x, g0.y)
+      pcall(pb.EnableMouse, pb, true)
+      pcall(pb.RegisterForClicks, pb, "LeftButtonUp")
+      local pbg = pb:CreateTexture(nil, "BACKGROUND")
+      uiSolid(pbg, 0.16, 0.13, 0.08, 1)
+      pbg:SetPoint("TOPLEFT", pb, "TOPLEFT", 0, 0)
+      pbg:SetPoint("BOTTOMRIGHT", pb, "BOTTOMRIGHT", 0, 0)
+      local pt = uiText(pb, math.max(7, math.floor(9 * z)), 0.85, 0.80, 0.70)
+      pt:SetPoint("CENTER", pb, "CENTER", 0, 0)
+      pcall(pt.SetWidth, pt, g0.w - 4) -- ★限宽：极长名在自己的按钮里裁掉，不压邻居
+      pcall(pt.SetNonSpaceWrap, pt, false)
+      local pidx = i
+      pb:SetScript("OnClick", function()
+        local w2 = uiWarCfg()
+        if w2.profiles and w2.profiles[pidx] then
+          w2.activeProfile = pidx
+          say("切换到方案: " .. tostring(w2.profiles[pidx].name))
+        end
+      end)
+      profBtns[i] = { btn = pb, bg = pbg, text = pt }
+    end
+    ui.profRows, ui.profNeed, ui.profAvail, ui.profPad, ui.profCap = rows, needW, barAvailW, pad, MAX_EXTRA -- ★1.71.10/1.71.11 供断言读生产真值
+    -- ★1.71.10 版式签名（方案名序列）：EVAL_WAR_TAB_REFRESH 比它决定「要不要重建战斗信息UI」
+    --   （方案名/数量变了 → 按钮宽度与行数都得重算，帧高与下方技能带也要随之挪 → 整体重建最省心）
+    local sig0 = ""
+    for i = 1, table.getn((w20 and w20.profiles) or {}) do
+      sig0 = sig0 .. tostring(((w20.profiles[i]) or {}).name or "") .. "|"
+    end
+    ui.profSig = sig0
+    y = y + rows * (btnH + PGAP) + gap -- 1.56.0 多行高度（行数按名字实宽算，行数变了帧高随之变）
 
-  -- 技能图标带（1.46.0 两行合一：内容=激活方案技能，8 格/行超过自动换第二行，最多 16 格；
-  -- 悬停 tooltip 看触发条件；点击开编辑窗；亮金=条件当前满足；动作条技能带冷却倒数）
-  local profCells = {}
-  local pcell = math.floor(24 * z)
-  local pgap2 = math.floor(3 * z)
-  for i = 1, 16 do
-    local row0 = math.floor((i - 1) / 8)
-    local col0 = (i - 1) - row0 * 8
-    local px = pad + col0 * (pcell + pgap2)
-    local cb = CreateFrame("Button", nil, root)
-    cb:SetWidth(pcell) cb:SetHeight(pcell)
-    cb:SetPoint("TOPLEFT", root, "TOPLEFT", px, -(y + row0 * (pcell + pgap2)))
-    pcall(cb.EnableMouse, cb, true)
-    pcall(cb.RegisterForClicks, cb, "LeftButtonUp")
-    local cbg = cb:CreateTexture(nil, "BACKGROUND")
-    uiSolid(cbg, 0.45, 0.38, 0.15, 1)
-    cbg:SetPoint("TOPLEFT", cb, "TOPLEFT", 0, 0)
-    cbg:SetPoint("BOTTOMRIGHT", cb, "BOTTOMRIGHT", 0, 0)
-    local cicon = cb:CreateTexture(nil, "ARTWORK")
-    uiSolid(cicon, 0.2, 0.2, 0.2, 1)
-    cicon:SetPoint("TOPLEFT", cb, "TOPLEFT", 1, -1)
-    cicon:SetPoint("BOTTOMRIGHT", cb, "BOTTOMRIGHT", -1, 1)
-    local ctext = uiText(cb, math.max(7, math.floor(9 * z)), 1, 1, 0.4)
-    ctext:SetPoint("CENTER", cb, "CENTER", 0, 0)
-    local ci = i
-    cb:SetScript("OnEnter", function()
-      local r = uiWarActiveRule(ci)
-      if not r then return end
-      GameTooltip:SetOwner(cb, "ANCHOR_RIGHT")
-      GameTooltip:AddLine(tostring(r.skill), 1, 0.82, 0.3)
-      GameTooltip:AddLine((r.enabled ~= false) and ("|cff00ff00" .. L("TIP_ON") .. "|r") or ("|cffff0000" .. L("TIP_OFF") .. "|r"))
-      GameTooltip:AddLine(L("TIP_COND_H"), 0.62, 0.55, 0.40)
-      local gcount = 0
-      for gi, g in ipairs(r.groups or {}) do
-        gcount = gi
-        local cs = {}
-        for _, cd in ipairs(g) do table.insert(cs, EVAL_COND_STR(cd)) end
-        GameTooltip:AddLine(string.format("%d. %s", gi, table.concat(cs, " & ")), 0.85, 0.85, 0.85)
-      end
-      if gcount == 0 then
-        GameTooltip:AddLine(L("TIP_NOCOND"), 0.6, 0.6, 0.6)
-      end
-      GameTooltip:AddLine(L("TIP_CLICK"), 0.5, 0.5, 0.5)
-      GameTooltip:Show()
-    end)
-    cb:SetScript("OnLeave", function() GameTooltip:Hide() end)
-    cb:SetScript("OnClick", function()
-      local w2 = uiWarCfg()
-      local p = w2.profiles and w2.profiles[w2.activeProfile or 1]
-      if p and p.skills[ci] then EVAL_HELP_SE_OPEN(w2.activeProfile or 1, ci) end
-    end)
-    profCells[i] = { btn = cb, bg = cbg, icon = cicon, text = ctext }
+    -- 技能图标带（1.46.0 两行合一：内容=激活方案技能，8 格/行超过自动换第二行，最多 16 格；
+    -- 悬停 tooltip 看触发条件；点击开编辑窗；亮金=条件当前满足；动作条技能带冷却倒数）
+    local profCells = {}
+    local pcell = math.floor(24 * z)
+    local pgap2 = math.floor(3 * z)
+    for i = 1, 16 do
+      local row0 = math.floor((i - 1) / 8)
+      local col0 = (i - 1) - row0 * 8
+      local px = pad + col0 * (pcell + pgap2)
+      local cb = CreateFrame("Button", nil, root)
+      cb:SetWidth(pcell) cb:SetHeight(pcell)
+      cb:SetPoint("TOPLEFT", root, "TOPLEFT", px, -(y + row0 * (pcell + pgap2)))
+      pcall(cb.EnableMouse, cb, true)
+      pcall(cb.RegisterForClicks, cb, "LeftButtonUp")
+      local cbg = cb:CreateTexture(nil, "BACKGROUND")
+      uiSolid(cbg, 0.45, 0.38, 0.15, 1)
+      cbg:SetPoint("TOPLEFT", cb, "TOPLEFT", 0, 0)
+      cbg:SetPoint("BOTTOMRIGHT", cb, "BOTTOMRIGHT", 0, 0)
+      local cicon = cb:CreateTexture(nil, "ARTWORK")
+      uiSolid(cicon, 0.2, 0.2, 0.2, 1)
+      cicon:SetPoint("TOPLEFT", cb, "TOPLEFT", 1, -1)
+      cicon:SetPoint("BOTTOMRIGHT", cb, "BOTTOMRIGHT", -1, 1)
+      local ctext = uiText(cb, math.max(7, math.floor(9 * z)), 1, 1, 0.4)
+      ctext:SetPoint("CENTER", cb, "CENTER", 0, 0)
+      local ci = i
+      cb:SetScript("OnEnter", function()
+        local r = uiWarActiveRule(ci)
+        if not r then return end
+        GameTooltip:SetOwner(cb, "ANCHOR_RIGHT")
+        GameTooltip:AddLine(tostring(r.skill), 1, 0.82, 0.3)
+        GameTooltip:AddLine((r.enabled ~= false) and ("|cff00ff00" .. L("TIP_ON") .. "|r") or ("|cffff0000" .. L("TIP_OFF") .. "|r"))
+        GameTooltip:AddLine(L("TIP_COND_H"), 0.62, 0.55, 0.40)
+        local gcount = 0
+        for gi, g in ipairs(r.groups or {}) do
+          gcount = gi
+          local cs = {}
+          for _, cd in ipairs(g) do table.insert(cs, EVAL_COND_STR(cd)) end
+          GameTooltip:AddLine(string.format("%d. %s", gi, table.concat(cs, " & ")), 0.85, 0.85, 0.85)
+        end
+        if gcount == 0 then
+          GameTooltip:AddLine(L("TIP_NOCOND"), 0.6, 0.6, 0.6)
+        end
+        GameTooltip:AddLine(L("TIP_CLICK"), 0.5, 0.5, 0.5)
+        GameTooltip:Show()
+      end)
+      cb:SetScript("OnLeave", function() GameTooltip:Hide() end)
+      cb:SetScript("OnClick", function()
+        local w2 = uiWarCfg()
+        local p = w2.profiles and w2.profiles[w2.activeProfile or 1]
+        if p and p.skills[ci] then EVAL_HELP_SE_OPEN(w2.activeProfile or 1, ci) end
+      end)
+      profCells[i] = { btn = cb, bg = cbg, icon = cicon, text = ctext }
+    end
+    -- ★1.71.12 同上：块内赋值（子开关「方案」= 关时既没有方案按钮也没有图标格）
+    ui.profBtns, ui.profCells = profBtns, profCells -- 1.46.0 技能带=profCells（两行合一，ui.cells 已废）
+    y = y + 2 * (pcell + pgap2) + pad -- 固定预留两行高度（空位刷新时整格隐藏，窗口尺寸稳定）
+  else
+    y = y + pad -- 方案块不画时只留底部内边距（否则内容贴着标题栏下缘）
   end
-  y = y + 2 * (pcell + pgap2) + pad -- 固定预留两行高度（空位刷新时整格隐藏，窗口尺寸稳定）
 
   root:SetWidth(W)
   root:SetHeight(y)
@@ -480,16 +526,8 @@ function EVAL_HELP_UI_BUILD()
   end
 
   ui.root, ui.title = root, title
-  ui.hpFill, ui.hpText, ui.hpW = hpFill, hpText, hpW
-  ui.pwFill, ui.pwText, ui.pwW = pwFill, pwText, pwW
-  ui.tgBar, ui.tgFill, ui.tgText, ui.tgW = tgBar, tgFill, tgText, tgW
-  -- 目标距离文本（1.37.0）：目标条右缘（近战/冲锋距/远程外，EVAL_T_RANGE 分档）
-  local tgRange = uiText(tgBar, math.max(8, math.floor(9 * z)), 1, 0.85, 0.4)
-  tgRange:SetPoint("RIGHT", tgBar, "RIGHT", -4, 0)
-  pcall(tgRange.SetJustifyH, tgRange, "RIGHT")
-  ui.tgRange = tgRange
-  ui.status = status
-  ui.profBtns, ui.profCells = profBtns, profCells -- 1.46.0 技能带=profCells（两行合一，ui.cells 已废）
+  -- ★1.71.12 子开关的**真实生效值**留在 ui 上：tick 只认这两个标志（且不每帧回读配置）。
+  ui.combatOn, ui.schemeOn = subCombat, subScheme
 
   root:SetScript("OnUpdate", function()
     local now = GetTime()
@@ -514,6 +552,18 @@ function EVAL_HELP_UI_TICK()
   -- 统一走角色状态表（每次心跳刷新一次，之后只读变量——Cat 思路）
   EVAL_HELP_UPDATE_STATE()
 
+  -- ★1.71.12 普攻判定**前置**：它写的是 `st.autoAttack`（状态表的一部分，规则引擎要用），
+  --   所以**不能**跟着「战斗区画不画」一起被跳过（子开关只决定画不画，不改变状态）。
+  local atkOn = false
+  if wslots["攻击"] and type(IsCurrentAction) == "function" then
+    local oka, cur = pcall(IsCurrentAction, wslots["攻击"].slot)
+    atkOn = oka and cur and true or false
+  end
+  st.autoAttack = atkOn -- 同步进状态表（Cat 的 MPAutoAttack）
+
+  -- ★1.71.12 子开关「战斗」= 关时这些控件**根本不存在**（ui.hpFill 等为 nil）→ 整段一起跳过。
+  --   ★判据用 `ui.combatOn`（BUILD 时定下的标志），**不是**每帧回读配置——配置只在重建时才生效。
+  if ui.combatOn then
   -- 血条：绿→红渐变
   local hfrac = (st.hpMax and st.hpMax > 0) and (st.hp / st.hpMax) or 0
   uiSetBar(ui.hpFill, ui.hpText, ui.hpW, hfrac, 1 - hfrac, hfrac, 0.15,
@@ -569,20 +619,16 @@ function EVAL_HELP_UI_TICK()
     uiSetBar(ui.tgFill, ui.tgText, ui.tgW, 0, 0.3, 0.3, 0.3, "无目标")
   end
 
-  -- 状态行
+  -- 状态行（普攻判定已在上方算好——见「前置」说明）
   local inCombat = st.inCombat
   local form = st.form or "无姿态"
-  local atkOn = false
-  if wslots["攻击"] and type(IsCurrentAction) == "function" then
-    local oka, cur = pcall(IsCurrentAction, wslots["攻击"].slot)
-    atkOn = oka and cur and true or false
-  end
-  st.autoAttack = atkOn -- 同步进状态表（Cat 的 MPAutoAttack）
   ui.status:SetText(string.format("%s · %s · 普攻:%s",
     inCombat and "|cffff5040战斗中|r" or "|cff80ff80非战斗|r",
     form, atkOn and "|cff00ff00开|r" or "|cff909090关|r"))
+  end -- ★1.71.12 子开关「战斗」段结束
 
   -- 方案切换行：当前激活金色高亮，不存在的方案位隐藏
+  --   ★1.71.12 子开关「方案」= 关时 ui.profBtns / ui.profCells 为 nil（BUILD 里根本没建）→ 下面两个循环自然跳过。
   if ui.profBtns then
     local w2 = uiWarCfg()
     for i, pb in ipairs(ui.profBtns) do
@@ -600,7 +646,8 @@ function EVAL_HELP_UI_TICK()
   end
 
   -- 技能图标带（1.46.0 两行合一）：亮金=条件当前满足，半暗=不满足，灰+停=已停用；动作条技能带冷却倒数
-  if not EVAL_IS_SCANNED() then EVAL_GO_RESCAN(true, "auto") end
+  -- ★1.71.12 子开关「方案」关掉时图标带不画 → 连带这次自动重扫也不需要（少一份无谓的动作条扫描）。
+  if ui.schemeOn and not EVAL_IS_SCANNED() then EVAL_GO_RESCAN(true, "auto") end
   if ui.profCells then
     for i, pc in ipairs(ui.profCells) do
       local r = uiWarActiveRule(i)
@@ -671,6 +718,17 @@ function EVAL_HELP_UI_TOGGLE()
   end
 end
 
+-- ★1.71.12 子开关「战斗 / 方案」改动后**若窗口开着**要重建才能看到效果（几何随之前移）；窗口关着就什么都不做。
+--   ★为什么必须重建而不是 Hide 控件：布局 y 与帧高都要跟着变（见 BUILD 里的说明）。
+function EVAL_HELP_UI_REBUILD_IF_SHOWN()
+  if not ui.root then return false end
+  local ok, vis = pcall(ui.root.IsVisible, ui.root)
+  if not (ok and vis) then return false end
+  EVAL_HELP_UI_BUILD()
+  if ui.root then ui.root:Show() end
+  return true
+end
+
 -- ============ 配置窗口 + 小地图图标（参考 UnrealQuest 设置面板：深底金边 + 金框勾选 + 滑条 + 底部关闭） ============
 -- 打开方式：小地图左侧金色「EH」图标，或 /eh cfg。改动即时写入 EVAL_HELP_CONFIG（SavedVariables 自动存档）。
 -- 窗口按 UnrealQuest 的实测构件法：纯色纹理(WHITE8X8)+金边、自绘勾选框/滑条，不依赖任何客户端贴图/模板/Slider 控件。
@@ -693,7 +751,7 @@ local function warCfg()
 end
 
 -- 金框勾选框（参考截图的方形金框 checkbox）：Button + 外金框 + 内暗底 + 打勾金色块
-local function cfgCheck(parent, x, y, label, get, set, list, tip) -- 1.50.0 可选 tip=悬停提示
+local function cfgCheck(parent, x, y, label, get, set, list, tip, into) -- 1.50.0 可选 tip=悬停提示；1.71.12 可选 into=交出真实控件
   local b = CreateFrame("Button", nil, parent)
   b:SetWidth(16) b:SetHeight(16)
   b:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
@@ -715,6 +773,9 @@ local function cfgCheck(parent, x, y, label, get, set, list, tip) -- 1.50.0 可�
   -- 1.45.1 对齐修复：文字相对勾选框 RIGHT 锚定（纵向共中心线），不再用父级 y-3 估算——旧写法视觉上方框偏低
   text:SetPoint("LEFT", b, "RIGHT", 6, 0)
   text:SetText(label)
+  -- ★1.71.12 可选 out 参数 `into`：把**真实控件**交出去——断言要能点真按钮、读真文字，
+  --   凭「y 值反查」等于测测试自己（本项目老坑）。
+  if into then into.btn = b into.text = text end
   if list then table.insert(list, b) table.insert(list, text) end
   local function refresh()
     if get() then mark:Show() else mark:Hide() end
@@ -1026,20 +1087,50 @@ local function cfgBuild()
   table.insert(cfgWin.logRows, { key = "G_LOG_AUTO", y = LOG_Y_AUTO })
 
   cfgHeader(root, LX, -138, L("G_UI_H"), G)
-  table.insert(refreshes, cfgCheck(root, LX, -156, L("G_UI_COMBAT"),
+  -- ★★★1.71.12 用户要求：「战斗信息UI 再加2个子选项，战斗、方案，分开控制显示和隐藏。」
+  --   行序 = 主开关 → 两个**缩进 16px** 的子开关（从属关系一眼可见）→ 状态信息UI
+  --   （状态信息UI 与子项之间多留 6px 分组间距，免得被当成「第三个子项」）。
+  --   ★y 值集中在这里定义并**导出**（`cfgWin.uiRows`）：断言读生产值，而不是自己再写一遍常量
+  --     ——「测试复刻布局常量」是本项目反复吃亏的老毛病（生产改了它不跟着变）。
+  local UIY_COMBAT = -156
+  local UIY_SUBC = UIY_COMBAT - 20 -- 「战斗」子项
+  local UIY_SUBS = UIY_SUBC - 20   -- 「方案」子项
+  local UIY_STATE = UIY_SUBS - 26  -- 状态信息UI（与子项之间多 6px 分组间距）
+  local UI_IND = 16                -- 子项缩进（勾选框 x 相对 LX）
+  cfgWin.uiRows = { combat = UIY_COMBAT, subCombat = UIY_SUBC, subScheme = UIY_SUBS, state = UIY_STATE, indent = UI_IND }
+  cfgWin.uiBoxes = { combat = {}, subCombat = {}, subScheme = {}, state = {} } -- 交出这四行的**真实控件**（断言要点它，不是改配置）
+  table.insert(refreshes, cfgCheck(root, LX, UIY_COMBAT, L("G_UI_COMBAT"),
     function() local u = c(); return u.ui and u.ui.enabled end,
     function(v)
       local u = c()
       if not u.ui then u.ui = { enabled = false, x = 0, y = -180, scale = 1 } end
       if v ~= (u.ui.enabled and true or false) then EVAL_HELP_UI_TOGGLE() end
-    end, G))
-  table.insert(refreshes, cfgCheck(root, LX, -180, L("G_UI_STATE"),
+    end, G, nil, cfgWin.uiBoxes.combat))
+  -- 子开关「战斗」：★语义 = nil 视为开（老配置里没有这个键 → 行为与旧版逐字一致）。
+  table.insert(refreshes, cfgCheck(root, LX + UI_IND, UIY_SUBC, L("G_UI_SUBC"),
+    function() local u = c(); return not (u.ui and u.ui.subCombat == false) end,
+    function(v)
+      local u = c()
+      if not u.ui then u.ui = { enabled = false, x = 0, y = -180, scale = 1 } end
+      u.ui.subCombat = v and true or false
+      EVAL_HELP_UI_REBUILD_IF_SHOWN() -- 窗口开着就重建（几何要随之前移），关着什么都不做
+    end, G, L("G_UI_SUBC_TIP"), cfgWin.uiBoxes.subCombat))
+  -- 子开关「方案」：同上（方案行 + 技能图标带）
+  table.insert(refreshes, cfgCheck(root, LX + UI_IND, UIY_SUBS, L("G_UI_SUBS"),
+    function() local u = c(); return not (u.ui and u.ui.subScheme == false) end,
+    function(v)
+      local u = c()
+      if not u.ui then u.ui = { enabled = false, x = 0, y = -180, scale = 1 } end
+      u.ui.subScheme = v and true or false
+      EVAL_HELP_UI_REBUILD_IF_SHOWN()
+    end, G, L("G_UI_SUBS_TIP"), cfgWin.uiBoxes.subScheme))
+  table.insert(refreshes, cfgCheck(root, LX, UIY_STATE, L("G_UI_STATE"),
     function() local u = c(); return u.st and u.st.enabled end,
     function(v)
       local u = c()
       if not u.st then u.st = { enabled = false, x = 330, y = -180 } end
       if v ~= (u.st.enabled and true or false) then EVAL_HELP_ST_TOGGLE() end
-    end, G))
+    end, G, nil, cfgWin.uiBoxes.state))
 
   cfgHeader(root, RX, -56, L("G_HELP_H"), G)
   -- 分组排版（1.21.5）：金色小标题 + 缩进条目 + 组间留白；命令行用亮米色区分
@@ -5256,6 +5347,31 @@ function EVAL_TEST_UI_PROF()
       textW = num(pb.text.GetWidth, pb.text), -- 文字格自身的宽（限宽后应 ≤ 按钮宽）
       need = ui.profNeed and ui.profNeed[i] or nil,
     }
+  end
+  return out
+end
+
+-- ★★★1.71.12 断言入口：两个子开关（战斗 / 方案）的**真实生效结果**——
+--   刻意读 `ui.combatOn/schemeOn`（BUILD 时定下）+ 控件的**存在性**，而不是回读配置：
+--   配置写了什么与「这一轮到底建没建」是两件事（本项目「配置产出/消费两边都要断言」的判据）。
+--   另附标题文本与帧宽高（标题 = 玩家名、帧高要随子开关变化）。
+function EVAL_TEST_UI_SECTIONS()
+  local out = { combat = false, scheme = false, hasCombat = false, hasScheme = false,
+    title = nil, rootW = nil, rootH = nil }
+  if not ui then return out end
+  out.combat = ui.combatOn and true or false
+  out.scheme = ui.schemeOn and true or false
+  out.hasCombat = (ui.hpFill ~= nil) and true or false
+  out.hasScheme = (ui.profBtns ~= nil) and true or false
+  if ui.title then
+    local okt, t = pcall(ui.title.GetText, ui.title)
+    out.title = (okt and tostring(t or "")) or nil
+  end
+  if ui.root then
+    local okw, w = pcall(ui.root.GetWidth, ui.root)
+    out.rootW = (okw and type(w) == "number") and w or nil
+    local okh, h = pcall(ui.root.GetHeight, ui.root)
+    out.rootH = (okh and type(h) == "number") and h or nil
   end
   return out
 end
