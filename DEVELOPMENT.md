@@ -28,16 +28,26 @@ node test_engine.js  # 逻辑冒烟测试：打桩 WoW API 加载整个插件，
 **版本号只有两处**：`EvalHelp.lua` 的 `local VERSION` + `EvalHelp.toc` 的 `## Version`（`VERSION CHECK` 守着两侧一致）。
 ★文件头**不再写版本号**：旧写法（`-- EvalHelp 1.70.44`）实际漂移了十几个版本都没人发现，因为源码检查只比对那两处。
 
-## 🚀 发布流程（用户定，6 步；每次发版必做）
+## 🚀 发布流程（用户定，**9 步**；每次发版必做）
 
-1. **统计里程碑**：从「上一次 release 版本」到最新，逐版本列里程碑（发布了什么、跨了哪些版本）；
+> ★★**「release」= 下面 9 步全做完**，不是只 `git push`（用户 1.72.0 明确）。
+
+1. **统计里程碑**：从「上一次 release 版本」到最新，**逐版本列里程碑**（发布了什么、跨了哪些版本）。
+   ★产物有两个去处：**① README 的「里程碑」板块**（面向用户、只讲这一批的故事）**② 注解 tag 的说明**（Release 页正文）；
 2. **项目说明更新**：`README.md` / `README_en.md` / `README_ru.md` —— ★版本记录**只保留最近 10 个**；
 3. **扫描旧版信息**：全仓库排查版本号、文件结构、功能清单、过时描述（新窗口 / 新 Tab / 新条件要补上），逐一清理；
 4. **更新对应板块**：按「上次 release → 最新」的信息更新 README 的功能·用法板块、DEVELOPMENT 的架构板块等；
+   ★★**README 的 `## 🏁 里程碑` 必须同步**：标题范围改成最新版本，并在**最前面**插入本次的 `### <上次> → <最新>` 小节
+     （**新版本在前**，与既有小节顺序一致）；每条 = `**emoji 主题**（版本范围）：说清做了什么 + 关键判据/教训`；
 5. **版本记录**：`CHANGELOG.md` 写 `## 🎯 vX.Y.Z — 主题` 详情小节（**完整记录，不删旧条目**）；
-   `EvalHelp.lua` 的 `local VERSION` 与 `EvalHelp.toc` 的 `## Version` 同步；提交 `release: vX.Y.Z <主题>` + 注解 tag；
+   `EvalHelp.lua` 的 `local VERSION` 与 `EvalHelp.toc` 的 `## Version` 同步；
 6. **审计记忆体**：`CLAUDE.md` —— 版本要点**汇总统计后放到文档末尾**；★头部只保留**比较新的记忆注意事项（最多 20 个版本）**，
    ★不许再把一堆版本记录堆到记忆体头部（那会让整份记忆体超预算、被截断掉文末的项目现状）。
+7. **提交 + 打「附注」标签**：`git tag -a vX.Y.Z -F <说明文件>` —— ★**必须 `-a`**（轻量标签没有说明，Release 页要用它当正文）；
+   ★说明文件**不能用 PowerShell `>` 重定向写**（那是 UTF-16LE → 标签说明整段乱码），要用 UTF-8 写并**回读复核**；
+8. **推送（分支 + 标签都要推）**：`git push origin master && git push github master`，再 `git push origin --tags && git push github --tags`；
+9. **出发布包 + 建 Release 页**：打包 `EvalHelp-vX.Y.Z.zip`（放 `Interface/AddOns/` 下，顶层一个 `EvalHelp\`，内容 = `.toc` 实际清单，
+   ★装完核对条目数）→ 在 gitee / github 网页建 Release（**需要 API token，AI 做不了** → 如实告知用户去建，并给全 URL/标题/说明/附件）。
 
 > ★发布前必跑：`node luacheck.js` + `node test_engine.js` 双绿；提交用 `git add <明确路径>`（**不要** `git add -A`）。
 > ★推送：分支 `master`；远端 `origin`=gitee、`github`=github（用默认密钥 `~/.ssh/id_rsa`，别指定 `gitee_id_rsa`）。
