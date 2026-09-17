@@ -29,8 +29,12 @@ function checkIconAssets() {
     return;
   }
   // 2) 恰好两个构建点调用它（配置窗 + 技能编辑窗）
-  // 只数「构建点」：它们都是赋值形式（local W... = cfWinWidth()）；测试访问器不算。
-  const calls = (src.match(/= cfWinWidth\(\)/g) || []).length;
+  // 只数「窗口宽度赋值」这种形态。★不能用 / = cfWinWidth\(\)/ ——
+  //   那会把「用窗口宽度做布局换算」的调用也算进来（如 closeLeft = cfWinWidth() - 12 - 64），
+  //   而那是**正确的用法**（读同一个来源做布局），不是多出来的构建点（本轮实测误报）。
+  //   判据：检查要盯「宽度**被赋值**」这个语义，而不是「文本里出现了这个调用」。
+  const calls = (src.match(/(local\s+[\w, ]*?W[\w, ]*?)\s*=\s*cfWinWidth\(\)/g) || []).length +
+                (src.match(/WIDE and cfWinWidth\(\)|cfWinWidth\(\)/g) || []).length * 0;
   if (calls !== 2) {
     console.log("WIN WIDTH CHECK: FAIL - expected exactly 2 build sites calling cfWinWidth(), found " + calls);
     process.exitCode = 1;
@@ -330,6 +334,76 @@ function checkIconAssets() {
   console.log("COMMENT SWALLOW CHECK: no statement lost to a trailing comment");
 })();
 
+// ===== IO BTN LABEL WIDTH CHECK（1.71.2）：IO 窗底部按钮的文字必须显式限宽 =====
+// ★背景：用户截图里按钮被排成两排、还被提示文字压住。修完后有一类**回归无法被行为断言抓住**——
+//   「标签 FontString 忘了 SetWidth」：不限宽时宽度由内容决定，换语言（英文/俄文更长）就会
+//   溢出压到相邻按钮，而 Lua 侧一切正常（不报错、位置也对）。
+// 判据：ioBtn 里必须同时出现 SetWidth 与 SetNonSpaceWrap（限宽 + 禁止折行）。
+(function () {
+  const p = path.join(__dirname, 'EvalHelp.lua');
+  if (!fs.existsSync(p)) { console.log('IO BTN LABEL CHECK: file missing'); process.exit(1); }
+  const src = fs.readFileSync(p, 'utf8');
+  const i = src.indexOf('local function ioBtn(');
+  if (i < 0) { console.log('IO BTN LABEL CHECK: FAIL - ioBtn not found'); process.exit(1); }
+  const body = src.slice(i, src.indexOf(String.fromCharCode(10) + '  end', i));
+  // ★必须剥掉注释再匹配：直接扫原文会被**注释里提到的 SetWidth** 骗过
+  //   （本轮实测：把调用注释掉、注释里仍留着方法名的变异体**存活**）。
+  //   判据：源码检查也要「看代码，不看注释」——与 COMMENT SWALLOW CHECK 同一类纪律。
+  const code = body.split(/\r?\n/).map(l => {
+    const ci = l.indexOf('--');
+    return ci >= 0 ? l.slice(0, ci) : l;
+  }).join('\n');
+  // ★必须精确到**标签**那个变量（bt），不能只匹配方法名：
+  //   按钮本体也有 b:SetWidth(w)，只写 /SetWidth/ 时「标签限宽被删掉」的变异体照样通过
+  //   （本轮实测存活）。判据：源码检查要盯**目标对象**，不是「文件里出现过这个方法」。
+  const okW = /SetWidth\s*,\s*bt\b|\bbt:SetWidth\b/.test(code);
+  const okN = /SetNonSpaceWrap\s*,\s*bt\b|\bbt:SetNonSpaceWrap\b/.test(code);
+  if (!okW || !okN) {
+    console.log('IO BTN LABEL CHECK: FAIL - label must be width-limited and non-wrapping (SetWidth=' + okW + ' SetNonSpaceWrap=' + okN + ')');
+    process.exit(1);
+  }
+  console.log('IO BTN LABEL CHECK: button labels are width-limited and non-wrapping');
+})();
+
+// ===== AURA SEARCH CHECK（1.71.2 第八轮）：光环下拉必须**启用面板内搜索框** =====
+// ★背景：用户要求「这个功能还原，到输入框格保持在下拉内，
+//   并且支持打字过滤和自定义输入」。
+//   实现 = 光环下拉传 opts.search = true（面板内搜索框）+ onFreeText（自定义输入）。
+// ★为什么需要源码级检查：行为断言直接调 EVAL_DD_TEST_OPEN_SEARCH，
+//   **绕过了光环菜单那个真实调用点** —— 把 search = true 改成 nil 时行为断言照样全绿
+//   （同 1.71.2 第二轮的教训：组件能力 ≠ 调用点接线，两件事必须各测一条）。
+(function () {
+  const p = path.join(__dirname, 'EvalHelp.lua');
+  if (!fs.existsSync(p)) { console.log('AURA SEARCH CHECK: file missing'); process.exit(1); }
+  const src = fs.readFileSync(p, 'utf8');
+  const lines = src.split(/\r?\n/);
+  // ★★必须**锚定到光环那个真实调用点**，不能全文件找 "search = true"：
+  //   实测该串在文件里另有 2 处（一个测试钩子 2785、一句注释 3581）——
+  //   全文件搜索时把调用点改掉**照样通过**（假绿）。
+  //   ★判据同 IO BTN LABEL CHECK：**源码检查要盯「目标位置上的那次调用」**，
+  //     不是「文件里出现过这个字符串」。
+  const anchor = lines.findIndex(l => l.includes('SE_AURA_MENU(it.cd.k)'));
+  if (anchor < 0) {
+    console.log('AURA SEARCH CHECK: FAIL - cannot locate the aura menu call site (SE_AURA_MENU)');
+    process.exit(1);
+  }
+  // 调用点之后 30 行内必须出现 search = true（即 opts 表里真的开了搜索框）
+  let found = false, staleKw = false;
+  for (let i = anchor; i < Math.min(anchor + 30, lines.length); i++) {
+    if (lines[i].includes('search = true')) found = true;
+    if (lines[i].includes('kw = it.cd._kw')) staleKw = true;
+  }
+  if (!found) {
+    console.log('AURA SEARCH CHECK: FAIL - the aura dropdown call site does not enable the in-panel search box');
+    process.exit(1);
+  }
+  if (staleKw) {
+    console.log('AURA SEARCH CHECK: FAIL - stale host-keyword wiring still present (kw = it.cd._kw)');
+    process.exit(1);
+  }
+  console.log('AURA SEARCH CHECK: the aura dropdown enables the in-panel search box');
+})();
+
   if (!rootMatch) { console.log('ICON CHECK: no DS_ANN_ICON_ROOT found'); process.exit(1); }
   const rootWin = rootMatch[1];
   // Texture paths are game-relative and start with Interface\AddOns\<addon>\...
@@ -356,11 +430,51 @@ function checkIconAssets() {
   }
   return names.length;
 }
+// ===== EXAMPLES TOC CHECK（1.71.2）：模版数据文件必须都在 .toc 里，且顺序 = 选单顺序 =====
+// 背景：模版数据从 EvalHelp.lua 拆到 examples/*.lua，靠 EvalHelp.toc 载入（本客户端没有文件读取 API）。
+//   → 「新增一个职业模版」现在要动两处：磁盘上的文件 + .toc 里的一行。
+//   漏掉任何一处都是静默的：漏 .toc = 模版选单里永远少一组（不报错）；漏文件 = 载入报错或少内容。
+// 判据：磁盘 <-> .toc 集合相等（两个方向都查）+ .toc 顺序给出预期职业顺序 + 数据不许搬回生产文件 + 载入顺序。
+(function () {
+  const dir = path.join(__dirname, "examples");
+  if (!fs.existsSync(dir)) { console.log("EXAMPLES TOC CHECK: FAIL - examples/ directory is missing"); process.exit(1); }
+  const onDisk = fs.readdirSync(dir).filter(f => f.slice(-4) === ".lua").sort();
+  const toc = fs.readFileSync(path.join(__dirname, "EvalHelp.toc"), "utf8").split(/\r?\n/).map(s => s.trim());
+  const listed = toc.filter(l => /^examples[\\/].+\.lua$/.test(l)).map(l => l.replace(/^examples[\\/]/, ""));
+  const missing = onDisk.filter(f => listed.indexOf(f) < 0);
+  const ghost = listed.filter(f => onDisk.indexOf(f) < 0);
+  if (missing.length || ghost.length) {
+    console.log("EXAMPLES TOC CHECK: FAIL - disk/toc mismatch; not-listed=[" + missing.join(",") + "] not-on-disk=[" + ghost.join(",") + "]");
+    process.exit(1);
+  }
+  const expect = ["战士", "法师", "通用法系", "盗贼", "猎人", "骑士"];
+  const got = listed.map(f => { const m = fs.readFileSync(path.join(dir, f), "utf8").match(/cls\s*=\s*"([^"]+)"/); return m ? m[1] : "?"; });
+  if (got.join(",") !== expect.join(",")) {
+    console.log("EXAMPLES TOC CHECK: FAIL - toc order gives [" + got.join("/") + "], expected [" + expect.join("/") + "]");
+    process.exit(1);
+  }
+  // ① 模版数据只能住在 examples/：别的生产文件里再出现 cls = " 就是「又搬回去了 / 多了一份」
+  //   （同一个东西两份真值，正是本项目反复踩的坑：改一处漏一处、后写的静默获胜）。
+  const prodFiles = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua"];
+  const leaked = prodFiles.filter(f => { const p = path.join(__dirname, f); return fs.existsSync(p) && /cls\s*=\s*"/.test(fs.readFileSync(p, "utf8")); });
+  if (leaked.length) { console.log("EXAMPLES TOC CHECK: FAIL - template data leaked back into " + leaked.join(",")); process.exit(1); }
+  // ② 载入顺序：examples 必须排在 EvalHelp.lua 之后（引擎里的初始化先跑）。
+  //   顺序颠倒了也不会丢数据（那行是 `or {}`），可一旦有人把它写成 `= {}`，颠倒就会静默清空全部模版
+  //   —— 所以把顺序本身也钉住，别让这个前提悄悄漂掉。
+  const iEngine = toc.findIndex(l => l === "EvalHelp.lua");
+  const iFirst = toc.findIndex(l => /^examples[\\/]/.test(l));
+  if (iEngine < 0 || iFirst < 0 || iFirst < iEngine) {
+    console.log("EXAMPLES TOC CHECK: FAIL - examples must be listed AFTER EvalHelp.lua (engine=" + iEngine + " firstExample=" + iFirst + ")");
+    process.exit(1);
+  }
+  console.log("EXAMPLES TOC CHECK: " + listed.length + " example data files, order = " + got.join(" / "));
+})();
+
 checkIconAssets();
 
 const L=lauxlib.luaL_newstate();
 lualib.luaL_openlibs(L);
-for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','Toolbox.lua','DataSearch.lua','Share.lua','test_assert.lua']){
+for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','Toolbox.lua','DataSearch.lua','Share.lua','test_assert.lua']){
   const src=fs.readFileSync(f);
   const st=lauxlib.luaL_loadbuffer(L,src,src.length,to_luastring(f));
   if(st!==lua.LUA_OK){ console.log('LOAD ERROR ['+f+']:',lua.lua_tojsstring(L,-1)); process.exit(1); }

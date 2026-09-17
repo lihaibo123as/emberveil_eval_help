@@ -9,6 +9,17 @@ local function newMock()
   local m = {}
   local shown, scripts, texts = false, {}, {}
   local w, h = nil, nil -- ★1.70.46 帧必须记得自己的尺寸（见下方 SetWidth/SetHeight 说明）
+  local layer, level = nil, nil -- ★1.71.2 层（见下方 SetDrawLayer 说明）
+  local focused = false -- ★1.71.2（第七轮）焦点状态（见下方 SetFocus 说明）
+  local point, relTo, relPoint = nil, nil, nil -- ★1.71.2 锚点语义（见下方 SetPoint 说明）
+  -- ★★★1.71.2（第二十轮）**x, y 必须是每个 mock 自己的局部变量**。
+  --   原桩漏了这一行 → SetPoint 里的 `x, y = a4, a5` 实际上是给**全局** x/y 赋值，
+  --   GetPoint/GetLeft/GetTop 读的也是那两个全局 → **所有帧共享最后一次写入的位置**！
+  --   后果：任何「比较两个帧的几何」的断言都在读同一个值（=最后一次 SetPoint 的那个），
+  --     恒真或恒假，等于没测（本轮实测：五条状态条全读到 -4，那其实是最后画的目标距离文字的偏移）。
+  --   ★这与「桩太宽松 → 断言失明」是同一族，只是更隐蔽：**它让断言看起来在读数，其实读的是别人写的数**。
+  --   （此前 IO 窗钩子注释里记着「登记 x=14、GetPoint 却回 0」，根因就是这里。）
+  local x, y = nil, nil
   local special = {
     -- ★1.70.25：帧必须真的有显隐状态。原桩的 Show/Hide 是空操作、IsShown 恒 nil，
     --   导致「点选后面板是否仍打开」这类行为断言永远是 false —— 断言失效而不自知。
@@ -29,10 +40,65 @@ local function newMock()
     SetHeight = function(_, v) h = v end,
     GetWidth = function() return w end,
     GetHeight = function() return h end,
+    -- ★1.71.2：桩必须记录锚点。原桩把 SetPoint/ClearAllPoints 当空操作、GetLeft 返回 nil，
+    --   于是「搜索框被挪到屏幕外」这种**位置语义**的修复在测试里完全不可见——
+    --   而这次的真 bug 恰恰是一个位置问题（EditBox 用 Hide() 后仍会画底条，
+    --   修法改为「挪出可视区」，用户截图：所有弹窗上部一条看不见的黑块）。
+    --   x,y 允许为 nil（("CENTER") 这类只有锚点名的调用），GetLeft 保持返回数字或 nil。
+    -- ★1.71.2：桩必须记录「层」。本客户端 EditBox 的底条画在高于 BACKGROUND 的层，
+    --   用户在**别的弹窗**顶部看到一条黑块就是这个原因；桩若不记录，SetDrawLayer 写错也测不出来。
+    SetDrawLayer = function(_, l) layer = l end,
+    GetDrawLayer = function() return layer end,
+    SetFrameLevel = function(_, l) level = l end,
+    GetFrameLevel = function() return level end,
+    ClearAllPoints = function() x = nil y = nil end,
+    -- ★1.71.2 桩必须同时记住**锚点语义**（point/relPoint/relTo），不能只记偏移量：
+    --   用户截图事故是「按钮压在小地图左下角」，而判据是**锚到了邻居的哪条边**
+    --   （锚 TOPLEFT = 贴左边缘会压进圆里；锚 LEFT = 落在圆外）。只记 x/y 根本表达不了这个差异。
+    --   GetPoint 缺失时 newMock 的兜底会返回一个**函数**，pcall 照样成功 →
+    --   锚点信息全是假值，几何断言随之失去意义（本轮实测就是这么被误导的）。
+    -- ★★★1.71.2 用 **varargs** 按实参个数解析，绝不写死形参个数：
+    --   本客户端有两种调用形态 —— SetPoint(point, relTo, relPoint, x, y)（5 参）
+    --   与 SetPoint(point) / SetPoint(point, relTo)（2-3 参）。
+    --   旧桩写死 6 个形参，遇到 5 参调用时整体**错位一格**：x 收到 relPoint 字符串、
+    --   y 收到真正的 x → 所有几何断言读到假值（本轮实测：6 个按钮的 x 全成 0）。
+    --   这与「ipairs 遇 nil 即停」是同一类错误：**假定了一种调用形态，而实际有多种**。
+    SetPoint = function(_, a1, a2, a3, a4, a5)
+      point, relTo, relPoint, x, y = a1, a2, a3, nil, nil
+      if a4 ~= nil then x, y = a4, a5 end -- 5 参形态：末两个才是偏移量
+      if a3 == nil then relTo, relPoint = nil, nil end
+    end,
+    GetPoint = function() return point, relTo, relPoint, x, y end,
+    GetLeft = function() return x end,
+    GetTop = function() return y end,
+    -- ★1.71.2 桩必须让几何**自洽**：uiOffscreen 会同时读 Left/Right/Top/Bottom 四个数字，
+    --   只提供 Left/Top 时它拿到 nil 去比较 → 直接抛错
+    --   （本轮实测：attempt to compare nil with number，且不带行号，极难定位）。
+    --   Right/Bottom 由 Left/Top 与宽高推导；桩不模拟真正的锚点解算，但对越界判定足够。
+    GetRight = function() if type(x) == "number" and type(w) == "number" then return x + w end return nil end,
+    GetBottom = function() if type(y) == "number" and type(h) == "number" then return y - h end return nil end,
+    -- ★★★1.71.2（第七轮）**桩必须记录焦点状态**。
+    --   事故：条件行的光环格是 EditBox，点击热区（Button）后建、压在它上面，
+    --   于是点一下永远拿不到焦点、打不了字——而旧桩**没有任何焦点概念**，
+    --   SetFocus 是空操作、HasFocus 恒 nil → 「点击能否聚焦」在测试里**完全不可见**
+    --   （本项目第 N 次「桩太宽松 → 真实事故测不出来」，见 CLAUDE.md 该主题的历次发作）。
+    --   ★判据：**被测代码读的每一个状态，桩都必须能记住**。
+    SetFocus = function() focused = true end,
+    ClearFocus = function() focused = false end,
+    HasFocus = function() return focused end,
+    -- ★1.71.2（第二十轮）纹理/字串必须能反查**所在帧**。
+    --   事故：状态条的填充层是否「内缩 1px」只能拿它和**它所在的条**比才看得出，
+    --   而旧桩的纹理没有父级 → 断言只能验「偏移是 0」，验不了「高度等于条高 / 满值不留缝」。
+    --   ★判据同「桩必须记住被测代码读的每一个状态」：几何断言需要什么，桩就得给什么。
+    GetParent = function() return rawget(m, "__parent") end,
   }
   setmetatable(m, { __index = function(_, k)
     if special[k] then return special[k] end
-    if k == "CreateTexture" or k == "CreateFontString" then return function() return newMock() end end
+    if k == "CreateTexture" or k == "CreateFontString" then
+      -- ★1.71.2（第二十轮）子对象要记住**创建它的那个帧**（见上方 GetParent 说明）。
+      --   注意用 rawset：__parent 必须是真字段，否则读取时会命中 __index 的「返回函数」兜底。
+      return function() local ch = newMock() rawset(ch, "__parent", _) return ch end
+    end
     return function() return nil end
   end })
   return m
@@ -88,14 +154,35 @@ UIParent = newFrame(nil)
 rawset(UIParent, "__parent", nil) -- 根帧：祖先链到此为止
 -- 3D 视口，独立于 UI 显隐（真客户端恒存在）。
 WorldFrame = newFrame(UIParent)
-Minimap = newMock()
+-- ★1.71.2 小地图必须有**真实几何**：用户截图事故是「EH 按钮压在小地图左下角」，
+--   而旧桩的 Minimap 是个没有尺寸的空 mock（GetLeft/Right/Top/Bottom 全 nil），
+--   于是「按钮是否压在地图上」这类**几何断言**在测试里根本无法成立（本项目第 N 次栽在「桩太宽松」）。
+--   给一个贴近实机的小地图矩形（右上角，140×140，圆心=(sw-84, sh-84)、半径=70）。
+Minimap = newFrame(UIParent)
+do
+  local sw, sh = 1024, 768
+  local ml, mr = sw - 84 - 70, sw - 84 + 70
+  local mb, mt = sh - 84 - 70, sh - 84 + 70
+  rawset(Minimap, "GetLeft", function() return ml end)
+  rawset(Minimap, "GetRight", function() return mr end)
+  rawset(Minimap, "GetBottom", function() return mb end)
+  rawset(Minimap, "GetTop", function() return mt end)
+  rawset(Minimap, "GetWidth", function() return mr - ml end)
+  rawset(Minimap, "GetHeight", function() return mt - mb end)
+end
 GameTooltipTextLeft1 = { GetText = function()
   if TEST.curBuff then return TEST.buffs[TEST.curBuff + 1] and TEST.buffs[TEST.curBuff + 1].name end
   if TEST.curDebuff then return TEST.debuffs[TEST.curDebuff] and TEST.debuffs[TEST.curDebuff].name end
   return TEST.slotNames[TEST.curSlot or 0]
 end }
 GameTooltip = {
-  SetOwner = function() end, Hide = function() end,
+  SetOwner = function() end, Hide = function() end, Show = function() end,
+  -- ★1.71.2（第十九轮）记录 AddLine 的文本：断言要验「按钮 tooltip 到底写了什么」，
+  --   桩不记录的话，这类**纯提示**需求在测试里完全不可见（本项目「桩太宽松 → 断言失明」的老坑）。
+  AddLine = function(_, text, r, g, b)
+    TEST.tipLines = TEST.tipLines or {}
+    table.insert(TEST.tipLines, { text = tostring(text), r = r, g = g, b = b })
+  end,
   ClearLines = function() TEST.curSlot = nil TEST.curDebuff = nil TEST.curBuff = nil end,
   SetAction = function(_, slot) TEST.curSlot = slot return true end,
   SetUnitDebuff = function(_, _, i) TEST.curDebuff = i return TEST.debuffs[i] ~= nil end,
@@ -378,6 +465,18 @@ AcceptQuest = function() TEST.questAccepted = true end
 CompleteQuest = function() TEST.questCompleted = true end
 IsQuestCompletable = function() return TEST.questCompletable or false end
 GetNumQuestChoices = function() return TEST.questChoices or 0 end
-GetQuestReward = function(c) TEST.questReward = c or 0 end
+-- ★★★1.71.2 桩必须模拟「领奖会**再触发一次** QUEST_COMPLETE」——
+--   这正是用户实测的死循环成因（GetQuestReward → QUEST_COMPLETE → 再领 → …）。
+--   旧桩只记一个 TEST.questReward 就完事，于是「无限刷屏」在测试里**完全不可见**
+--   （本项目第 N 次栽在「桩太宽松 → 真实事故测不出来」）。
+--   ★设 TEST.rewardRefires = true 才模拟，默认 false 保持既有用例行为不变。
+--   计数上限防止测试自身跑不完（真实事故里循环可以跑到几千次）。
+GetQuestReward = function(c)
+  TEST.questReward = c or 0
+  TEST.rewardCalls = (TEST.rewardCalls or 0) + 1
+  if TEST.rewardRefires and (TEST.rewardCalls or 0) < 500 then
+    if type(EVAL_TB_ONEVENT) == "function" then EVAL_TB_ONEVENT("QUEST_COMPLETE") end
+  end
+end
 SetCVar = function(k, v) TEST.cvars = TEST.cvars or {} TEST.cvars[k] = tostring(v) end
 GetCVar = function(k) return (TEST.cvars and TEST.cvars[k]) or "0" end

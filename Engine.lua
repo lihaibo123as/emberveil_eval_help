@@ -43,10 +43,39 @@ end
 -- 1.24.0 泛化：不再限 WAR_SKILLS 白名单——动作条上所有非宏技能全部记录。
 -- 收益：① 有/无buff、有/无debuff 条件支持任意已上条技能（图标比对需要纹理）；
 --       ② 方案规则可直接写任意已上条技能释放（冷却/可用/排队判定都是通用 API）→ 真·全职业。
-function EVAL_GO_RESCAN(quiet)
+-- ★1.71.2 第 2 参 why：静默日志里标明「这次扫描是谁触发的」（open=打开配置窗 / menu=/eh go rescan / auto=自愈补扫）。
+--   ★为什么不拿 quiet 兼职当原因：quiet 的三种调用点（打开配置、自愈补扫、按钮）语义不同，
+--   混在一起日志里就分不清「用户开的窗」和「引擎自己补的扫」——而这两者的排查路径完全不同。
+function EVAL_GO_RESCAN(quiet, why)
   -- 1.46.0 修复：原地清空而不是重新赋值——EVAL_WSLOTS 导出的是表引用（EvalHelp.lua 顶部别名持有），
   -- 重新赋值会让外部引用指向旧空表（重扫后 UI 读 wslots 全 nil、图标行全 ?）
   if wslots then for k in pairs(wslots) do wslots[k] = nil end else wslots = {} end
+  -- ★★★1.71.2 物品识别（用户实测：「buff 条件下拉里出现「清凉的泉水」这类物品」）：
+  --   下拉的第三组「全部技能」列的就是**动作条上的全部非宏格子**，而动作条上可以放物品
+  --   （饮料/药水）→ 它们会以**裸名字**进入列表（如「清凉的泉水」）。
+  --   ★为什么原有的 `not itemOf(n)` 挡不住：itemOf 只认**带前缀**的写法「物品:名称」
+  --     （那是用户显式配置「使用物品」的形式），裸名字不匹配 → 漏网。
+  --   ★为什么**不能直接从 wslots 里删掉**物品：动作条上的物品通过 UseAction(slot)
+  --     是**真能用**的（技能行可以写它），删了会扳掉一个真功能。故只**打标**，不删除。
+  --   ★为什么用背包名集合而不是别的判据：GetContainerNumSlots / GetContainerItemLink 是本项目
+  --     **已在用且验证可用**的 API（同 wFindBagItem），不引入未验证的接口（本项目铁律：用前必查）。
+  --   ★已知局限（如实记录，不夸大）：物品**已用完 / 已装备**（不在背包里）时认不出来 → 那条不加标记。
+  local bagNames = nil
+  if type(GetContainerNumSlots) == "function" and type(GetContainerItemLink) == "function" then
+    bagNames = {}
+    for bag = 0, 4 do
+      local okn, cnt = pcall(GetContainerNumSlots, bag)
+      if okn and type(cnt) == "number" and cnt > 0 then
+        for bs = 1, cnt do
+          local okl, link = pcall(GetContainerItemLink, bag, bs)
+          if okl and type(link) == "string" then
+            local inm = string.match(link, "%[(.-)%]")
+            if inm then bagNames[inm] = true end
+          end
+        end
+      end
+    end
+  end
   for slot = 1, WAR_MAX_SLOT do
     if HasAction(slot) and not GetActionText(slot) then -- GetActionText 非空 = 宏格子，跳过
       local name = wactionName(slot)
@@ -54,11 +83,32 @@ function EVAL_GO_RESCAN(quiet)
         local tex
         local okt, t = pcall(GetActionTexture, slot)
         if okt then tex = t end
-        wslots[name] = { slot = slot, tex = tex }
+        -- item=true → 该格子是物品（供下拉打标）
+        wslots[name] = { slot = slot, tex = tex, item = (bagNames and bagNames[name]) or nil }
       end
     end
   end
   wscanned = true
+  -- ★1.71.2 静默日志：即使用户没开调试输出，也把「动作条扫到了什么」写进调试日志缓冲。
+  --   起因（用户要求）：「每次打开配置都进行一次技能扫描（静默日志）」——
+  --   症状往往是「技能在动作条上却灰色/找不到格子」，而现场唯一的证据就是**这次扫描到底看到了什么**。
+  --   ★必须走 EVAL_LOGLINE（环形缓冲，随 SavedVariables 落盘），不能走 EVAL_SAY——
+  --     quiet=true 的调用点（打开配置窗）本就不该刷屏。
+  --   ★看门狗式调用点（if not wscanned then RESCAN(true) end，1.32.9/1.46 自愈）不写日志：
+  --     它可能每帧触发，会把环形缓冲刷满，把用户真正关心的日志挤掉。
+  if quiet and type(EVAL_LOGLINE) == "function" then
+    local total = 0
+    for _ in pairs(wslots) do total = total + 1 end
+    EVAL_LOGLINE(string.format("[扫:%s] 动作条识别 %d 个技能", tostring(why or "quiet"), total))
+    -- 逐个列出 名称→格子：核对「方案里写的技能名」与「动作条上的技能名」是否对得上
+    -- （名称对不上是「明明拖上去了却显示未找到」的头号原因，光看总数查不出来）
+    local names = {}
+    for nm in pairs(wslots) do table.insert(names, nm) end
+    table.sort(names)
+    for _, nm in ipairs(names) do
+      EVAL_LOGLINE(string.format("[扫]   %s → 格子 %d", nm, wslots[nm].slot))
+    end
+  end
   if not quiet then
     local total = 0
     for _ in pairs(wslots) do total = total + 1 end
@@ -535,15 +585,68 @@ local function learnAuraTex(name, tex)
   store[name] = tex
 end
 
--- 光环名 → 纹理：动作条优先，学习表回退（1.27.0 前只有动作条一条路径）
+-- 光环名 → 纹理。
 -- ★注意这里是**给上面已前置声明的 local 赋值**（不是新建 local）——改了会连带断掉
 --   队伍选人判据那边的引用（它们在声明点之前，只能看到前置声明的那个 local）。
+--
+-- ★★★1.71.2（第十一轮）**学习表优先于动作条**（原来反了，这就是骑士光环判定失败的真因）。
+--   【用户实测证据】作为**动作条格子 9** 的虔诚光环，
+--   `GetActionTexture(9)` 返回 `Spell_Nature_WispSplode_TEX`（**其它法术的图标**），
+--   而它在增益条上的**真实图标**是 `Spell_Holy_DevotionAura_TEX` → 拿动作条图标去比对**永远不命中**
+--   → 「自身buff检查=否」永远成立 → 无限重复施放。
+--   ★判据：**动作条图标只是代理；从增益条亲自观察到的纹理才是权威**。
+--     学习表由 EVAL_PLAYER_BUFF_LIST / EVAL_TARGET_*_LIST 在**真实光环**上读出名字+纹理后写入 → 它才是镜子里那个。
+--   ★为什么不担心影响施法：施法走的是 wslots 的**格子号**（另一条路），不经过本函数。
 function auraTexOf(n)
+  local learned = (EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war and EVAL_HELP_CONFIG.war.debuffTex and EVAL_HELP_CONFIG.war.debuffTex[n])
+    or (EVAL_DEBUFF_TEX_LEARN and EVAL_DEBUFF_TEX_LEARN[n])
+  if learned then return learned end
   local s = wslots[n]
   if s and s.tex then return s.tex end
-  if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war and EVAL_HELP_CONFIG.war.debuffTex and EVAL_HELP_CONFIG.war.debuffTex[n] then return EVAL_HELP_CONFIG.war.debuffTex[n] end
-  return EVAL_DEBUFF_TEX_LEARN[n]
+  return nil
 end
+
+-- ★★★1.71.2（第十轮）光环名 → 纹理，**解析不出就返回 nil，让调用方如实失败**。
+--   为什么必须有它（用户实测事故）：骑士「虔诚光环」在动作条上没有对应格子、也没进过学习表，
+--   于是 auraTexOf 回 nil；而旧写法 `st.playerBuffs[texOf(cd.s) or ""]` 会退化成查空串 = nil → cnt=0
+--   → 「否/无」方向被当成**成立** → **规则无限重放**（用户日志里同一条反复刷屏）。
+--   ★判据：**「查不到」与「没有」是两件事**——查不到必须如实报错，不能默认成「没有」。
+--   ★这也是本项目「静默失败族」的又一例：不报错、不崩、行为却错。
+local function auraTexKnown(name)
+  if type(name) ~= "string" or name == "" then return nil end
+  return auraTexOf(name)
+end
+
+-- ★★★1.71.2（第十二轮，用户要求：「能否通过名称判断，有些法术图标是不同的」）
+--   **名字判定**：图标不可靠（有些法术的**动作条图标 ≠ 光环图标**——实测虔诚光环动作条给
+--   `Spell_Nature_WispSplode`、增益条给 `Spell_Holy_DevotionAura`），**名称才是稳定标识**。
+--   ★频率防护三层（工具读名很贵：每个 buff 一次 SetPlayerBuff + GetText）：
+--     ① 只在**图标比对没命中**时才做 → 正常路径**零开销**；
+--     ② 每个列表最多 AURA_NAME_MIN 秒重扫一次，结果缓存；
+--     ③ 顺带 learnAuraTex 把正确的「名字→图标」学下来 → 之后自动回**快路径**（自愈）。
+--   ★第③层是关键：不做自愈的话，命中一次就要永远付工具读名的代价。
+local AURA_NAME_MIN = 0.5
+local auraNameCache = {}
+local function auraNameHit(name, key, provider)
+  if type(name) ~= "string" or name == "" then return false end
+  if type(provider) ~= "function" then return false end
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  local c = auraNameCache[key]
+  if not (c and (now - c.t) < AURA_NAME_MIN) then
+    local set = {}
+    local ok, list = pcall(provider)
+    if ok and type(list) == "table" then
+      for _, d in ipairs(list) do
+        if type(d) == "table" and type(d.name) == "string" and d.name ~= "" then set[d.name] = true end
+      end
+    end
+    c = { t = now, set = set }
+    auraNameCache[key] = c
+  end
+  return c.set[name] and true or false
+end
+-- ★测试用：清空名字缓存（模块级状态，跨用例必须可重置）
+function EVAL_AURA_TEST_RESET_NAME_CACHE() auraNameCache = {} end
 
 -- 当前目标 debuff 实时清单：[{name,tex},...]（每次调用现场扫描 + 学习）
 function EVAL_TARGET_DEBUFF_LIST()
@@ -831,8 +934,17 @@ local function condOK(when, skill)
   if when.shift ~= nil and st.shift ~= when.shift then return false, "Shift 未按" end
   if when.ctrl ~= nil and st.ctrl ~= when.ctrl then return false, "Ctrl 未按" end
   if when.autoAttack ~= nil and (st.autoAttack and true or false) ~= when.autoAttack then return false, "普攻状态不符" end
-  if when.hasBuff and not st.playerBuffs[texOf(when.hasBuff) or ""] then return false, "缺少buff:" .. when.hasBuff end
-  if when.noBuff and st.playerBuffs[texOf(when.noBuff) or ""] then return false, "已有buff:" .. when.noBuff end
+  -- ★★★1.71.2（第十轮）同 condOne：纹理解析不出就**如实失败**，不得退化成「0 层」
+  if when.hasBuff then
+    local bx = texOf(when.hasBuff)
+    if not bx then return false, "缺少buff:无法识别光环「" .. tostring(when.hasBuff) .. "」" end
+    if not st.playerBuffs[bx] then return false, "缺少buff:" .. when.hasBuff end
+  end
+  if when.noBuff then
+    local bx = texOf(when.noBuff)
+    if not bx then return false, "已有buff:无法识别光环「" .. tostring(when.noBuff) .. "」" end
+    if st.playerBuffs[bx] then return false, "已有buff:" .. when.noBuff end
+  end
   if when.hasDebuff and not st.targetDebuffs[texOf(when.hasDebuff) or ""] then return false, "目标缺debuff:" .. when.hasDebuff end
   if when.noDebuff and st.targetDebuffs[texOf(when.noDebuff) or ""] then return false, "目标已有debuff:" .. when.noDebuff end
   -- 技能侧条件
@@ -984,7 +1096,10 @@ local function condOne(cd, skill, dry, rule)
       local inf = (cd.secOp == ">" or cd.secOp == ">=")
       return inf, "剩余时间无限"
     end
-    return condCmp({ cd.secOp, cd.secN }, left), "剩余" .. tostring(left) .. "s"
+    -- ★1.71.2（第十八轮）用户要求：「技能日志 小数类数据显示保留1位小数」——
+    --   旧写法直接 tostring(left)，聊天框里就是「剩余295.24997172132s」这种浮点尾巴（用户截图原文）。
+    --   ★格式与本文件既有的「冷却剩 %.1fs」（第 761/773/788 行）保持一致，不另造一套。
+    return condCmp({ cd.secOp, cd.secN }, left), string.format("剩余%.1fs", left)
   end
   -- ★1.70.45 把剩余时间检查并入光环判定的**唯一**入口（自身 buff / 自身 debuff 共用）。
   --   语义（v 决定方向，这正是「刷新」用法的核心）：
@@ -1041,25 +1156,42 @@ local function condOne(cd, skill, dry, rule)
     end
     return (cur == (cd.v ~= false)), sn
   elseif k == "hasBuff" then -- 1.54.0 合并：v=false=无buff（旧 k=noBuff 仅兼容存量数据）；1.70.1 层数门槛 cd.n
-    local cnt = st.playerBuffs[texOf(cd.s) or ""]
+    -- ★★★1.71.2（第十轮）先解析纹理；**解析不出就如实失败**，绝不退化成「0 层」。
+    --   （旧写法会把未知光环当成「确定没有」→「否/无」方向永远成立→规则无限重放）
+    local btex = auraTexKnown(cd.s)
+    if not btex then return false, "自身buff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
+    local cnt = st.playerBuffs[btex]
+    if (not cnt) and auraNameHit(cd.s, "pb", EVAL_PLAYER_BUFF_LIST) then cnt = 1 end
     cnt = (cnt == true) and 1 or (tonumber(cnt) or 0) -- 兼容旧布尔/新层数
     local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
     local has = cnt >= lim
     local okv, whyT = auraTimeJudge(cd, has, (has == (cd.v ~= false)), st.playerBuffLeft, "自身buff")
     if not okv then return false, whyT or "自身buff判定不符" end
     return true, "自身buff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "/" .. lim) or "")
-  elseif k == "noBuff" then return (not st.playerBuffs[texOf(cd.s) or ""]), "已有buff:" .. tostring(cd.s)
+  elseif k == "noBuff" then
+    local btex = auraTexKnown(cd.s)
+    if not btex then return false, "已有buff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
+    if not st.playerBuffs[btex] and auraNameHit(cd.s, "pb", EVAL_PLAYER_BUFF_LIST) then
+      return false, "已有buff:" .. tostring(cd.s)  -- 名字命中：图标不可靠时以名字为准
+    end
+    return (not st.playerBuffs[btex]), "已有buff:" .. tostring(cd.s)
   elseif k == "tBuff" then -- 1.54.0 目标 buff 检查（v=false=无目标buff）；1.70.1 层数门槛
     -- ★1.70.45 目标光环**没有**时长 API（wiki globals/Buff：其他单位只有 UnitBuff/UnitDebuff = 图标+层数）。
     --   带剩余时间检查时如实返回 false —— 不忽略它（忽略 = 写了却不生效，属静默失败）。
     if type(cd.secN) == "number" then return false, "目标buff无剩余时间数据" end
-    local cnt = st.targetBuffs and st.targetBuffs[texOf(cd.s) or ""]
+    local ttex = auraTexKnown(cd.s)
+    if not ttex then return false, "目标buff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
+    local cnt = st.targetBuffs and st.targetBuffs[ttex]
+    if (not cnt) and auraNameHit(cd.s, "tb", EVAL_TARGET_BUFF_LIST) then cnt = 1 end
     cnt = (cnt == true) and 1 or (tonumber(cnt) or 0)
     local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
     local has = cnt >= lim
     return (has == (cd.v ~= false)), "目标buff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "/" .. lim) or "")
   elseif k == "pDebuff" then -- 1.54.0 自身 debuff 检查（v=false=无自身debuff）；1.70.1 层数门槛
-    local cnt = st.playerDebuffs and st.playerDebuffs[texOf(cd.s) or ""]
+    local ptex = auraTexKnown(cd.s)
+    if not ptex then return false, "自身debuff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
+    local cnt = st.playerDebuffs and st.playerDebuffs[ptex]
+    if (not cnt) and auraNameHit(cd.s, "pd", EVAL_PLAYER_DEBUFF_LIST) then cnt = 1 end
     cnt = (cnt == true) and 1 or (tonumber(cnt) or 0)
     local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
     local has = cnt >= lim
@@ -1070,14 +1202,20 @@ local function condOne(cd, skill, dry, rule)
     -- ★1.70.45 同 tBuff：目标光环无时长数据 → 带剩余时间检查时如实 false
     if type(cd.secN) == "number" then return false, "目标debuff无剩余时间数据" end
     -- 1.54.0 合并：v=false=无debuff（不足 lim 层才算无，与旧 noDebuff 同语义）；层数门槛 cd.n（1.31.0）
-    local cnt = st.targetDebuffs[texOf(cd.s) or ""]
+    local dtex = auraTexKnown(cd.s)
+    if not dtex then return false, "目标debuff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
+    local cnt = st.targetDebuffs[dtex]
+    if (not cnt) and auraNameHit(cd.s, "td", EVAL_TARGET_DEBUFF_LIST) then cnt = 1 end
     cnt = (cnt == true) and 1 or (tonumber(cnt) or 0) -- 兼容旧布尔/新层数
     local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
     local has = cnt >= lim
     return (has == (cd.v ~= false)), "目标debuff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "/" .. lim) or "")
   elseif k == "noDebuff" then
     -- 层数门槛（1.31.0）：cd.n=视为"无"的上限（nil/1=完全没有；N=不足N层才算无）
-    local cnt = st.targetDebuffs[texOf(cd.s) or ""]
+    local ndtex = auraTexKnown(cd.s)
+    if not ndtex then return false, "目标debuff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
+    local cnt = st.targetDebuffs[ndtex]
+    if (not cnt) and auraNameHit(cd.s, "td", EVAL_TARGET_DEBUFF_LIST) then cnt = 1 end
     cnt = (cnt == true) and 1 or (cnt or 0)
     local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
     if cnt >= lim then return false, "目标已有debuff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "层") or "") end
@@ -1111,15 +1249,15 @@ local function condOne(cd, skill, dry, rule)
   elseif k == "castEl" then
     -- 自身读条已进行秒数（1.41.0）：无读条=0
     local el = (st.castName and st.castStart) and (GetTime() - st.castStart) or 0
-    return condCmp({ cd.op, cd.n }, el), "读条进行"
+    return condCmp({ cd.op, cd.n }, el), "施法时间"
   elseif k == "castLeft" then
     -- 自身读条剩余秒数（1.41.0）：事件自带精确总时长，无需学习；无读条/无时长=不过
     local left = (st.castName and st.castUntil) and (st.castUntil - GetTime()) or nil
-    return (left ~= nil and condCmp({ cd.op, cd.n }, math.max(0, left))), "读条剩余"
+    return (left ~= nil and condCmp({ cd.op, cd.n }, math.max(0, left))), "施法剩余时间"
   elseif k == "tCastEl" then
     -- 目标读条已进行秒数（1.40.0）：无读条=0
     local tel = (st.tCastName and st.tCastStart) and (GetTime() - st.tCastStart) or 0
-    return condCmp({ cd.op, cd.n }, tel), "读条进行"
+    return condCmp({ cd.op, cd.n }, tel), "目标施法时间"
   elseif k == "tCasting" then
     -- 目标施法中（1.40.0；1.41.0 补回：分支在施法扩展编辑中被误吃，缺分支恒 false）
     local pass = (st.tCastName ~= nil) and ((cd.s == nil or cd.s == "") or st.tCastName == cd.s)
@@ -1129,7 +1267,7 @@ local function condOne(cd, skill, dry, rule)
     local w2 = EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war
     local total = (w2 and w2.castTime and st.tCastName) and w2.castTime[st.tCastName] or nil
     local tleft = (total and st.tCastStart) and (st.tCastStart + total - GetTime()) or nil
-    return (tleft ~= nil and condCmp({ cd.op, cd.n }, math.max(0, tleft))), "读条剩余"
+    return (tleft ~= nil and condCmp({ cd.op, cd.n }, math.max(0, tleft))), "目标施法剩余时间"
   elseif k == "inRange" then
     -- 施法范围内（1.37.0）：IsActionInRange(该技能槽位)==true 才算；0=超出 / 1=自动攻击不测距 / nil=无目标
     local s2 = wslots[cd.s or ""]
@@ -1446,6 +1584,9 @@ local COND_NUM = {
   ["进战"] = "combatTime", ["combatTime"] = "combatTime",
   ["读条"] = "tCastEl", ["tCastEl"] = "tCastEl", ["读条剩"] = "tCastLeft", ["tCastLeft"] = "tCastLeft", -- 1.40.0 目标读条秒数
   ["自身读条"] = "castEl", ["castEl"] = "castEl", ["自身读条剩"] = "castLeft", ["castLeft"] = "castLeft", -- 1.41.0 自身读条秒数
+  -- ★1.71.2 改名后的新写法（用户定名）；旧写法**全部保留**——存量方案里的「读条>2」不能因改名失效
+  ["施法时间"] = "castEl", ["施法剩余时间"] = "castLeft",
+  ["目标施法时间"] = "tCastEl", ["目标施法剩余时间"] = "tCastLeft",
   ["连击"] = "combo", ["连击点"] = "combo", ["combo"] = "combo",
   ["距攻击"] = "swingLeft", ["swingLeft"] = "swingLeft", -- 1.57.0 距下次攻击秒数
   -- ★1.70.47 队伍/团队血量·蓝量百分比（条件自己去队里挑「血最少/蓝最少」的那个人，见 condOne）
@@ -1642,10 +1783,13 @@ local function parseOneRaw(token)
   local irn = string.match(token, "^范围外[:：](.+)$") or string.match(token, "^notinrange[:=](.+)$")
   if irn then return { k = "inRange", s = condTrim(irn), v = false } end
   local tg = string.match(token, "^选取目标[:：](.+)$") or string.match(token, "^target[:=](.+)$")
-  local cst = string.match(token, "^施法中[:：](.+)$") or string.match(token, "^casting[:=](.+)$") -- 1.38.0 施法中条件
-  if cst then return { k = "casting", s = condTrim(cst), v = not neg } end
-  local csn = string.match(token, "^未施法[:：](.+)$") or string.match(token, "^notcasting[:=](.+)$")
-  if csn then return { k = "casting", s = condTrim(csn), v = false } end
+  -- ★1.71.2 冒号可省：导出侧的**裸形式**「施法中」（不指定技能名）以前解析不回（配合 EVAL_COND_STR 的空名修复）
+  local cst = string.match(token, "^施法中[:：]?(.*)$") or string.match(token, "^casting[:=]?(.*)$") -- 1.38.0 施法中条件
+  -- ★1.71.2 空前缀（裸「施法中」）归一成 s=nil——与 tCasting 完全一致；「空串」和「nil」在求值里等价，
+  --   但归一是为了让「同一个条件」不管从哪种写法读进来，表示形式都一样（否则 EVAL_GROUP_STR 回显会飘）。
+  if cst then return { k = "casting", s = (cst ~= "" and condTrim(cst)) or nil, v = not neg } end
+  local csn = string.match(token, "^未施法[:：]?(.*)$") or string.match(token, "^notcasting[:=]?(.*)$") -- 1.71.2 冒号可省（裸「未施法」也能读回）
+  if csn then return { k = "casting", s = (csn ~= "" and condTrim(csn)) or nil, v = false } end
   if token == "施法中" or token == "casting" then return { k = "casting", s = nil, v = not neg } end -- 1.41.0 裸形式=任意施法
   if token == "未施法" or token == "notcasting" then return { k = "casting", s = nil, v = false } end
   if tg then
@@ -1731,7 +1875,7 @@ end
 
 -- 条件组 → 显示字符串（列表摘要 / 编辑回显）
 -- 1.49.2 power 显示名动态化（UnitPowerType：法力/怒气/集中值/能量——旧版硬编码「怒气」，法师看着别扭）
-local COND_NUMNAME = { power = (EVAL_POWERLABEL and EVAL_POWERLABEL() or "能量"), tHpPct = "目标血", hpPct = "自身血", swingLeft = "距攻击", powerPct = "能量%", combatTime = "进战", tCastEl = "读条", tCastLeft = "读条剩", combo = "连击" }
+local COND_NUMNAME = { power = (EVAL_POWERLABEL and EVAL_POWERLABEL() or "能量"), tHpPct = "目标血", hpPct = "自身血", swingLeft = "距攻击", powerPct = "能量%", combatTime = "进战", castEl = "施法时间", castLeft = "施法剩余时间", tCastEl = "目标施法时间", tCastLeft = "目标施法剩余时间", combo = "连击" }
 function EVAL_COND_STR(cd)
   local k = cd.k
   -- ★1.70.47 队伍/团队血蓝：前缀随扫描范围（cd.name）变化，保证「导出→导入」往返不掉范围
@@ -1790,7 +1934,10 @@ function EVAL_COND_STR(cd)
     if cd.s == "byName" then return "选取目标:指定名称:" .. tostring(cd.nm or "?") end
     return "选取目标:" .. tostring(TARGET_SEL_NAME[cd.s] or cd.s)
   end
-      if k == "casting" then return (cd.v == false and "未施法:" or "施法中:") .. tostring(cd.s) end -- 1.38.0
+      -- ★★★1.71.2 修：技能名为 nil / 空串时**不再拼冒号**。旧写法输出「施法中:nil」「施法中:」，
+      --   而解析侧只认「施法中」或「施法中:名」→ 两个都读不回 → **条件被静默丢弃**。
+      --   ★与 tCasting（上方）对齐——它一直是对的，本次只是把自身侧补齐。
+      if k == "casting" then return ((cd.v == false) and "未施法" or "施法中") .. ((cd.s and cd.s ~= "") and (":" .. cd.s) or "") end -- 1.38.0
 if k == "inRange" then return (cd.v == false and "范围外:" or "范围内:") .. tostring(cd.s) end -- 1.37.0
 if k == "immune" then return (cd.v == false and "未免疫:" or "免疫:") .. tostring(cd.s) end -- 1.36.1
   if k == "tClass" then
@@ -1806,6 +1953,11 @@ if k == "immune" then return (cd.v == false and "未免疫:" or "免疫:") .. to
   end
   return tostring(k)
 end
+
+-- ★1.71.2 断言专用：数值条件的「摘要显示名」（COND_NUMNAME）。
+--   为什么要这个钩子：断言必须核实「摘要**真的**用了这个名字」，而不是在测试里**再抄一份**——
+--   抄一份的话，生产代码改回裸 id 断言照样绿（本项目「测试里复刻逻辑」的老坑）。
+function EVAL_TEST_COND_NUMNAME(k) return COND_NUMNAME[k] end
 
 function EVAL_GROUP_STR(groups)
   local parts = {}
@@ -1864,7 +2016,7 @@ function EVAL_GO(profSel)
     end
     return
   end
-  if not wscanned then EVAL_GO_RESCAN(true) end
+  if not wscanned then EVAL_GO_RESCAN(true, "auto") end
 
   -- Shift+按宏 = 切换下一个方案（不施法）；也可点战斗信息UI的方案按钮或 /eh go next
   if IsShiftKeyDown and IsShiftKeyDown() then
@@ -1968,7 +2120,9 @@ function EVAL_GO(profSel)
   if prof and EVAL_RULE_RUN(prof.skills) then return end
 
   -- 本次按键无动作：打一条状态行，方便对照调阈值
-  wlog(string.format("无动作 | %s%d 目标血%.0f%% %s%s%s%s", -- 1.49.2 怒气/战斗姿态硬编码→动态
+  -- ★1.71.2（第十八轮）小数值保留 1 位：目标血% 原为 %.0f —— 0.4% 会显示成「0%」，
+  --   而「目标残血」恰恰是调阈值时最需要看的那一档（同一天起，剩余秒数也统一到 1 位）。
+  wlog(string.format("无动作 | %s%d 目标血%.1f%% %s%s%s%s", -- 1.49.2 怒气/战斗姿态硬编码→动态
     (EVAL_POWERLABEL and EVAL_POWERLABEL() or "能量"), rage, thscale * 100,
     inCombat and "战斗中" or "非战斗",
     (st.form and (" " .. st.form) or ""),
@@ -2072,7 +2226,7 @@ function EVAL_GO4() EVAL_GO(4) end
 for i = 5, 12 do local j = i _G["EVAL_GO" .. j] = function() EVAL_GO(j) end end
 -- /eh war 的状态总览
 function EVAL_GO_STATUS()
-  if not wscanned then EVAL_GO_RESCAN(true) end
+  if not wscanned then EVAL_GO_RESCAN(true, "auto") end
   EVAL_SAY("— 一键宏状态 —")
   -- 1.45.0 以激活方案技能为准（旧版固定战士白名单已废弃）
   local w2 = EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war

@@ -316,7 +316,7 @@ eq(gTC[1][1].k, "tCasting", "tCasting parse k")
 eq(gTC[1][1].s, nil, "empty = any cast")
 eq(EVAL_GROUP_STR(gTC), "目标施法中", "tCasting roundtrip")
 eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("目标施法中:寒冰箭")), "目标施法中:寒冰箭", "named roundtrip")
-eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("读条>2")), "读条>2", "elapsed roundtrip")
+eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("读条>2")), "目标施法时间>2", "elapsed roundtrip")
 -- 事件驱动状态：目标名不匹配不记，匹配记
 TEST.curTargetName = "测试怪" EVAL_HELP_UPDATE_STATE()
 EVAL_TCAST_EVENT("暗眼骷髅法师开始施放寒冰箭。")
@@ -412,6 +412,36 @@ EVAL_GO_RESCAN(true)
 eq(EVAL_WSLOTS["致死打击"] ~= nil, true, "EVAL_WSLOTS live after rescan")
 eq(EVAL_WSLOTS["致死打击"].slot, 1, "slot recorded")
 TEST.slotNames[1] = nil
+
+-- 28b) ★1.71.2 静默技能扫描日志（用户要求：「每次打开配置都进行一次技能扫描（静默日志）」）
+--   两条性质缺一不可：① 真的写了日志（否则用户出问题时没有证据）；
+--   ② 屏幕上**一个字都不许出**（quiet=true 的调用点不能刷屏——这正是「静默」的定义）。
+do
+  TEST.slotNames[1] = "致死打击" TEST.slotNames[2] = "冲锋"
+  EVAL_LOG_CLEAR()
+  TEST.chat = nil
+  EVAL_GO_RESCAN(true, "open")
+  local n = EVAL_LOG_COUNT()
+  eq(n >= 3, true, "★silent scan writes to the debug log ring buffer (1 header + 1 line per skill)")
+  eq(TEST.chat, nil, "★silent scan prints NOTHING to the chat frame (that is what 'silent' means)")
+  -- 头部必须带触发原因，且逐条列出 名称→格子（「拖上去了却说未找到」靠它定位）
+  local buf = EVAL_HELP_CONFIG.log
+  local head, hasSkill, hasSlot = nil, false, false
+  for _, line in ipairs(buf) do
+    if string.find(line, "[扫:open]", 1, true) ~= nil then head = line end
+    if string.find(line, "致死打击", 1, true) ~= nil then hasSkill = true end
+    if string.find(line, "格子 1", 1, true) ~= nil then hasSlot = true end
+  end
+  eq(head ~= nil, true, "★log header names the trigger reason (open = config window)")
+  eq(head ~= nil and string.find(head, "2 个技能", 1, true) ~= nil, true, "★log header carries the skill count")
+  eq(hasSkill, true, "★log lists each recognized skill by name")
+  eq(hasSlot, true, "★log lists the slot number (to match against the action bar)")
+  -- 非静默调用仍然刷聊天框（不能让「静默」把正常报告也吞掉）
+  TEST.chat = nil
+  EVAL_GO_RESCAN(false, "menu")
+  eq(TEST.chat ~= nil and string.find(TEST.chat, "个技能", 1, true) ~= nil, true, "non-silent rescan still reports to chat")
+  TEST.slotNames[1] = nil TEST.slotNames[2] = nil
+end
 
 -- 29) 角色行为扩充（1.47.0）：取消施法 + 姿态序号 + 自动射击/射击入 cat1 + 普攻状态与接管开关解耦
 eq(EVAL_CANCELCAST_OF("取消施法"), true, "cancelCastOf parses")
@@ -713,7 +743,7 @@ local dc = GetDifficultyColor(6)
 eq(type(dc) == "table" and type(dc.r) == "number" and type(dc.g) == "number" and type(dc.b) == "number", true, "shim returns color table")
 
 -- 11) 工具箱（1.68.0）：商人/就位/任务/丢弃
-EVAL_HELP_CONFIG.tb = { repair = true, sell = true, ready = true, quest = true, buyOn = true, buy = { { name = "晨露酒", n = 5 } }, discardOn = true, discard = { "破布" } }
+EVAL_HELP_CONFIG.tb = { repair = true, sell = true, ready = true, questAccept = true, questTurnIn = true, buyOn = true, buy = { { name = "晨露酒", n = 5 } }, discardOn = true, discard = { "破布" } }
 TEST.repairCost = 500
 TEST.merchant = { { name = "晨露酒" }, { name = "肉干" } }
 TEST.bags = { [1] = { name = "灰色破剑", q = 0, count = 1 }, [2] = { name = "晨露酒", q = 1, count = 2 }, [101] = { name = "破布", q = 0, count = 1 }, [102] = { name = "蓝装护甲", q = 2, count = 1 } }
@@ -748,6 +778,43 @@ TEST.questChoices = 1 TEST.time = 3970 EVAL_TB_ONEVENT("QUEST_COMPLETE") tbPump(
 eq(TEST.questReward, 1, "tb quest reward single choice (queued)")
 TEST.questChoices = 2 TEST.questReward = nil EVAL_TB_ONEVENT("QUEST_COMPLETE")
 eq(TEST.questReward, nil, "tb quest multi choice waits manual")
+-- 1.71.1 两个开关互相独立（用户要求：自动接取 / 自动交付 分开配）
+EVAL_HELP_CONFIG.tb = { questTurnIn = true }  -- 只开「交付」
+TEST.questAccepted = nil TEST.questCompleted = nil TEST.questReward = nil
+TEST.time = 3980 EVAL_TB_ONEVENT("QUEST_DETAIL") tbPump(2, 3980)
+eq(TEST.questAccepted, nil, "turn-in only: QUEST_DETAIL does not accept")
+TEST.questCompletable = true TEST.time = 3990 EVAL_TB_ONEVENT("QUEST_PROGRESS") tbPump(2, 3990)
+eq(TEST.questCompleted, true, "turn-in only: progress still completes")
+TEST.questChoices = 1 TEST.time = 3995 EVAL_TB_ONEVENT("QUEST_COMPLETE") tbPump(2, 3995)
+eq(TEST.questReward, 1, "turn-in only: reward claimed")
+EVAL_HELP_CONFIG.tb = { questAccept = true }  -- 只开「接取」
+TEST.questAccepted = nil TEST.questCompleted = nil TEST.questReward = nil
+TEST.time = 3997 EVAL_TB_ONEVENT("QUEST_DETAIL") tbPump(2, 3997)
+eq(TEST.questAccepted, true, "accept only: detail accepts")
+TEST.questCompletable = true TEST.time = 3998 EVAL_TB_ONEVENT("QUEST_PROGRESS") tbPump(2, 3998)
+eq(TEST.questCompleted, nil, "accept only: progress does NOT complete")
+TEST.questChoices = 1 TEST.time = 3999 EVAL_TB_ONEVENT("QUEST_COMPLETE") tbPump(2, 3999)
+eq(TEST.questReward, nil, "accept only: complete does NOT claim reward")
+-- 旧键 quest 一次性迁移到两个新键，且旧键被清掉（单一真值来源）
+local mig = EVAL_TEST_TB_MIGRATE({ quest = true })
+eq(mig.questAccept == true and mig.questTurnIn == true, true, "legacy quest=true migrates to both switches")
+eq(mig.quest == nil, true, "legacy quest key cleared after migration")
+local mig2 = EVAL_TEST_TB_MIGRATE({ quest = false })
+eq(mig2.questAccept == false and mig2.questTurnIn == false, true, "legacy quest=false migrates to both off (false survives)")
+local mig3 = EVAL_TEST_TB_MIGRATE({ questAccept = false, quest = true })
+eq(mig3.questAccept == false and mig3.questTurnIn == nil and mig3.quest == true, true, "migration is one-shot: new keys present means old key untouched")
+-- UI 接线：工具箱真的渲染两行独立复选框
+local tbRows = EVAL_TEST_TB_ROWS()
+local nAcc, nTurn = 0, 0
+for i = 1, table.getn(tbRows) do
+  if tbRows[i].key == "questAccept" then nAcc = nAcc + 1 end
+  if tbRows[i].key == "questTurnIn" then nTurn = nTurn + 1 end
+end
+eq(nAcc, 1, "toolbox has exactly one auto-accept checkbox row")
+eq(nTurn, 1, "toolbox has exactly one auto-turn-in checkbox row")
+eq(EVAL_LOCALES[EVAL_GET_LANG()].TB_QUEST_ACCEPT ~= nil and EVAL_LOCALES[EVAL_GET_LANG()].TB_QUEST_TURNIN ~= nil, true, "both switch labels exist in the active language")
+eq(EVAL_LOCALES[EVAL_GET_LANG()].TB_QUEST_ACCEPT ~= EVAL_LOCALES[EVAL_GET_LANG()].TB_QUEST_TURNIN, true, "the two switches do NOT share one label (they must read as separate options)")
+
 -- 1.68.1 去重窗口 + 1.68.2 队列：MERCHANT_SHOW 连发只处理一次
 EVAL_HELP_CONFIG.tb = { sell = true }
 TEST.bags = { [1] = { name = "灰色破剑", q = 0, count = 1 } }
@@ -786,6 +853,161 @@ EVAL_TB_ONEVENT("MERCHANT_SHOW") EVAL_TB_ONEVENT("READY_CHECK")
 eq(TEST.repaired, nil, "tb disabled merchant no-op")
 eq(TEST.readyChecked, nil, "tb disabled ready no-op")
 EVAL_HELP_CONFIG.tb = nil TEST.consumeOnUse = nil
+-- ★★★1.71.2 用户要求：「自动交接任务 按键停止功能，比如按住 shift 临时停止」
+--   要验**三条**性质，缺一不可：
+--   ① 按住时不接/不交（这是功能本身）；
+--   ② 松开后**立刻恢复**（临时停止，不是永久关闭）；
+--   ③ **只停任务交接**，商人/丢弃/就位检查照常（用户说的是「自动交接任务」，不是「停掉整个工具箱」）。
+do
+  local savedHold = IsShiftKeyDown
+  local down = false
+  IsShiftKeyDown = function() return down end
+  EVAL_HELP_CONFIG.tb = { questAccept = true, questTurnIn = true } -- holdKey 未设 → 走默认 shift
+  -- ① 按住：三类任务事件一律不动作
+  down = true
+  TEST.questAccepted, TEST.questCompleted, TEST.questReward = nil, nil, nil
+  TEST.time = 9100 EVAL_TB_ONEVENT("QUEST_DETAIL")
+  -- ★先断言「根本没入队」，再断言「没执行」：只看最终效果区分不了
+  --   「事件没入队」与「入队后被撤掉」——两种实现都能让「没执行」成立（本轮实测该变异存活）。
+  eq(EVAL_TB_TEST_QUEUED_QUESTS(), 0, "★★★holding Shift: the event does not even ENQUEUE an accept")
+  tbPump(2, 9100)
+  eq(TEST.questAccepted, nil, "★★★holding Shift blocks auto ACCEPT")
+  TEST.questCompletable = true TEST.time = 9102 EVAL_TB_ONEVENT("QUEST_PROGRESS")
+  eq(EVAL_TB_TEST_QUEUED_QUESTS(), 0, "★★★holding Shift: the event does not even ENQUEUE a complete")
+  tbPump(2, 9102)
+  eq(TEST.questCompleted, nil, "★★★holding Shift blocks auto COMPLETE")
+  TEST.questChoices = 1 TEST.time = 9104 EVAL_TB_ONEVENT("QUEST_COMPLETE")
+  eq(EVAL_TB_TEST_QUEUED_QUESTS(), 0, "★★★holding Shift: the event does not even ENQUEUE a reward claim")
+  tbPump(2, 9104)
+  eq(TEST.questReward, nil, "★★★holding Shift blocks auto REWARD claim")
+  -- ③ 边界：按住期间**其它**工具箱功能照常（只停任务交接）。
+  --   ★这里刻意用「就位检查」而不是「商人出售」：商人去重窗 tbMerchantLast 是模块级时间戳，
+  --     在本块里打一次商人事件会让**后续用例**（从更早的 t 重放）被去重窗吞掉（实测炸过一次）。
+  --     就位检查无跨用例时间戳状态，用它验边界既达意又不污染后续用例。
+  EVAL_HELP_CONFIG.tb = { ready = true, holdKey = nil }
+  TEST.readyChecked = nil TEST.time = 9200
+  EVAL_TB_ONEVENT("READY_CHECK")
+  eq(TEST.readyChecked, true, "★★★holding Shift does NOT stop other toolbox features (scope = quest handover only)")
+  -- ② 松开：立即恢复
+  down = false
+  EVAL_HELP_CONFIG.tb = { questAccept = true, questTurnIn = true }
+  TEST.time = 9300 EVAL_TB_ONEVENT("QUEST_DETAIL") tbPump(2, 9300)
+  eq(TEST.questAccepted, true, "★★★releasing Shift resumes auto accept immediately")
+  -- ④ 队列里的待执行交接必须被撤回（否则按了 shift 那一刻之前入队的那笔仍会打出去）
+  EVAL_HELP_CONFIG.tb = { questTurnIn = true }
+  TEST.questReward = nil TEST.questChoices = 1 TEST.time = 9400
+  EVAL_TB_ONEVENT("QUEST_COMPLETE")           -- 入队（0.3s 后才滴出）
+  down = true                                  -- 还没滴出就按住
+  tbPump(3, 9400)
+  eq(TEST.questReward, nil, "★★★the already-QUEUED handover is cancelled when the key goes down")
+  down = false
+  -- ⑤ 配置成 off = 关闭该功能（永远不暂停）
+  EVAL_HELP_CONFIG.tb = { questAccept = true, holdKey = "off" }
+  TEST.questAccepted = nil TEST.time = 9500 EVAL_TB_ONEVENT("QUEST_DETAIL") tbPump(2, 9500)
+  eq(TEST.questAccepted, true, "holdKey=off disables the pause feature entirely")
+  -- ⑥ 可换键：选 Ctrl 时按 Shift 不该暂停
+  EVAL_HELP_CONFIG.tb = { questAccept = true, holdKey = "ctrl" }
+  down = true
+  TEST.questAccepted = nil TEST.time = 9600 EVAL_TB_ONEVENT("QUEST_DETAIL") tbPump(2, 9600)
+  eq(TEST.questAccepted, true, "with holdKey=ctrl, holding Shift must NOT pause")
+  down = false
+  -- ⑦ Alt 必须真的接上（上面 ctrl 用例只证明「Shift 不误触」，证明不了 Alt 生效）——
+  --   把 alt 分支写成恒真/恒假都能骗过 ctrl 那条，故必须**各按一次**。
+  EVAL_HELP_CONFIG.tb = { questAccept = true, holdKey = "alt" }
+  local savedAlt = IsAltKeyDown
+  local altDown = false
+  IsAltKeyDown = function() return altDown end
+  altDown = true
+  TEST.questAccepted = nil TEST.time = 9600 EVAL_TB_ONEVENT("QUEST_DETAIL")
+  eq(EVAL_TB_TEST_QUEUED_QUESTS(), 0, "★holdKey=alt: holding Alt pauses the handover")
+  tbPump(2, 9600)
+  eq(TEST.questAccepted, nil, "★holdKey=alt: accept really blocked")
+  altDown = false
+  EVAL_TB_TEST_RESET_TIMERS()
+  TEST.time = 9620 EVAL_TB_ONEVENT("QUEST_DETAIL") tbPump(2, 9620)
+  eq(TEST.questAccepted, true, "★holdKey=alt: releasing Alt resumes")
+  IsAltKeyDown = savedAlt
+  -- ⑧ 空串 = 关闭（与 "off" 等价）——用户把配置手动清空时不能变成「永远暂停」
+  EVAL_HELP_CONFIG.tb = { questAccept = true, holdKey = "" }
+  down = true
+  EVAL_TB_TEST_RESET_TIMERS()
+  TEST.questAccepted = nil TEST.time = 9640 EVAL_TB_ONEVENT("QUEST_DETAIL") tbPump(2, 9640)
+  eq(TEST.questAccepted, true, "★★holdKey empty string (cleared) disables the feature, does NOT pause forever")
+  down = false
+  -- ★★★1.71.2 用户实测：聊天里同一条「已自动领取任务奖励」无限刷屏（死循环）。
+  --   成因：GetQuestReward 会**再触发 QUEST_COMPLETE** → 再领 → …，原来没有任何去重。
+  --   这一节必须让桩**真的重发事件**（TEST.rewardRefires），否则循环在测试里不可见。
+  --   判据 = 「处理次数有上界」，而不是「某一瞬间没再领」——后者在循环里也成立。
+  do
+    local savedRefire = TEST.rewardRefires
+    EVAL_HELP_CONFIG.tb = { questTurnIn = true }
+    EVAL_TB_TEST_RESET_TIMERS()
+    TEST.rewardRefires = true
+    TEST.rewardCalls = 0
+    TEST.questChoices = 1
+    TEST.questReward = nil
+    TEST.time = 8100
+    -- ★同一任务名：这是循环每一轮的样子
+    tbQuestNameNext = nil
+    TEST.questLog = { { title = "伊根·派特斯金纳", objs = {}, complete = true } }
+    EVAL_TB_ONEVENT("QUEST_COMPLETE")
+    -- 泵很多拍：循环若存在，这里会打出几百笔
+    for i = 1, 40 do TEST.time = 8100 + i * 0.4 EVAL_TB_TICK() end
+    -- 允许 1 笔（首次领取）+ 极少量重入，但**必须有上界**
+    eq((TEST.rewardCalls or 0) <= 4, true,
+       "★★★self-retriggering QUEST_COMPLETE cannot loop forever (rewardCalls=" .. tostring(TEST.rewardCalls) .. ")")
+    eq(TEST.questReward ~= nil, true, "the reward IS still claimed once (the fix must not disable the feature)")
+    TEST.rewardRefires = savedRefire
+    TEST.questLog = nil
+    EVAL_TB_TEST_RESET_TIMERS()
+    -- ② 去重窗口：同名任务在窗口内第二次直接拦下
+    EVAL_HELP_CONFIG.tb = { questTurnIn = true }
+    EVAL_TB_TEST_RESET_TIMERS()
+    TEST.rewardCalls = 0 TEST.questChoices = 1 TEST.time = 8300
+    local g1 = EVAL_TB_QUEST_GATE("同名任务", 8300, "reward")
+    eq(g1, true, "first handover for a quest is allowed")
+    local g2, why2 = EVAL_TB_QUEST_GATE("同名任务", 8300.2, "reward")
+    eq(g2, false, "★★the SAME quest inside the window is blocked")
+    -- ★不硬编码原因：reward 会开领取窗口，故第二次可能先被 window 拦、也可能被 dup 拦——
+    --   两者都是「拦住了」，这正是要保的性质。硬编码原因会让断言与**检查顺序**耦合，
+    --   一旦将来调整顺序就假失败（本轮实测：got=window want=dup）。
+    eq(why2 == "dup" or why2 == "window", true, "the block carries a known reason (" .. tostring(why2) .. ")")
+    -- ★真正要钉的是「同任务不能领两次」：用 complete 类（不开窗口）单独验 dup 层
+    EVAL_TB_TEST_RESET_TIMERS()
+    EVAL_TB_QUEST_GATE("去重任务", 8500, "complete")
+    local g2b, why2b = EVAL_TB_QUEST_GATE("去重任务", 8500.2, "complete")
+    eq(g2b, false, "★★same quest blocked on the dedupe layer when no reward window is involved")
+    eq(why2b, "dup", "and the reason is specifically 'dup'")
+    -- 窗口过后同任务可以再来（否则「重复接同一任务」永远做不了）
+    local g3 = EVAL_TB_QUEST_GATE("同名任务", 8300 + 1.1, "complete")
+    eq(g3, true, "the same quest is allowed again after the window passes")
+    -- ③ 全局频率兜底：换名字也拦得住（不依赖任务名，前两层失效时仍成立）
+    EVAL_TB_TEST_RESET_TIMERS()
+    local burstOK = 0
+    for i = 1, 10 do
+      if (EVAL_TB_QUEST_GATE("任务" .. i, 8400 + i * 0.01, "complete")) then burstOK = burstOK + 1 end
+    end
+    eq(burstOK <= 3, true, "★★★rate cap holds even when every quest name is DIFFERENT (burst=" .. tostring(burstOK) .. ")")
+    EVAL_TB_TEST_RESET_TIMERS()
+    EVAL_HELP_CONFIG.tb = nil
+  end
+  -- UI：真的有这一行，且下拉列出四种选择
+  local rowsH = EVAL_TEST_TB_ROWS()
+  local nHold = 0
+  for i = 1, table.getn(rowsH) do if rowsH[i].key == "holdKey" then nHold = nHold + 1 end end
+  eq(nHold, 1, "toolbox has exactly one hold-key row")
+  local keysH = EVAL_TEST_TB_HOLD_KEYS()
+  eq(table.getn(keysH), 4, "hold-key dropdown offers 4 choices (shift/ctrl/alt/off)")
+  -- ★收尾必须干净：本块把 TEST.time 推到了 4600，而商人去重窗（1.5s）按**绝对时间**判定——
+  --   不还原的话，后续用例用 time=4000 重放会因「时间倒流」被判成仍在窗口内（实测：下一条断言直接炸）。
+  --   这是本项目反复强调的「跨用例状态残留」，故用后即还。
+  IsShiftKeyDown = savedHold
+  EVAL_HELP_CONFIG.tb = nil
+  -- ★把队列的模块级时间戳一并还原：本块把 TEST.time 推到了 9600+，
+  --   不复位的话**下一个用例**（从 t=6000 重放）会被限频窗口吞掉（实测：紧邻的任务通知组直接炸）。
+  EVAL_TB_TEST_RESET_TIMERS()
+  TEST.time = 6000
+end
 
 -- 41) 任务通知（1.69.0）：接取/进度差分 → 频道 RunScript 限频队列；关=零通知
 EVAL_HELP_CONFIG.tb = { qchan = "party" }
@@ -1857,8 +2079,11 @@ do
   -- 49d) ★无匹配时可使用自定义名称（用户要求：没有检索信息就让用户自己输入）
   local free = DD_FILTER(items, locked, "自制光环", true)
   eq(free[table.getn(free)], -1, "★a non-matching keyword appends the free-text sentinel row")
-  -- 分组标题(1) + 哨兵行(-1) = 2 项：标题永远保留，所以此处是 2 而不是 1
-  eq(table.getn(free), 2, "the locked header plus the sentinel are shown when nothing matches")
+  -- ★★1.71.2 用户实测纠正（截图「顶部空白区域」）：关键字一条都没命中时，
+  --   **分组标题也必须一起过滤掉**——否则列表顶部留着一条「只有标题、下面全空」的空白带。
+  --   旧断言写的是「标题永远保留，所以此处是 2 而不是 1」——那正是用户看到的 bug，已改。
+  eq(table.getn(free), 1, "★★★nothing matches: ONLY the free-text sentinel remains (no blank header band)")
+  eq(free[1], -1, "the single surviving row is the free-text sentinel")
   -- 49e) 若表中已有完全同名项，则【不】再加哨兵行（避免重复项）
   local dup = DD_FILTER(items, locked, "撕裂", true)
   local hasSentinel = false
@@ -1869,7 +2094,28 @@ do
   local s2 = false
   for _, v in ipairs(nofree) do if v == -1 then s2 = true end end
   eq(s2, false, "no sentinel when onFreeText was not provided")
-  eq(table.getn(nofree), 1, "only the header is shown when nothing matches and free text is off")
+  eq(table.getn(nofree), 0, "★nothing matches and free text is off: list is EMPTY (no orphan header row)")
+  -- ★★★1.71.2 真实路径复现用户截图：光环条件下拉（真菜单 + 真过滤）打一个一条都不命中的关键字
+  --   ——旧实现会在列表顶部留下「已记录」标题那一条空白带（用户截图「顶部空白区域」）。
+  --   ★必须用**真菜单 SE_AURA_MENU**（不是自己拼的假 items）：只有真菜单才知道标题在第几项、
+  --     locked 是怎么标的（本项目反复栽在「测试自己复刻一遍」上）。
+  do
+    local menu = SE_AURA_MENU("pDebuff")
+    local kw = "阴影穿不透的关键字"
+    local res = DD_FILTER(menu.items, menu.locked, kw, true)
+    local orphanHeader = false
+    for _, i in ipairs(res) do
+      if i > 0 and menu.locked[i] then orphanHeader = true end
+    end
+    eq(orphanHeader, false, "★★★no orphan header row when the keyword matches nothing (the blank band user reported)")
+    -- 反向：命中时标题必须还在（分组结构不能删）
+    local hit = DD_FILTER(menu.items, menu.locked, "减速", true)
+    local keptHeader = false
+    for _, i in ipairs(hit) do
+      if i > 0 and menu.locked[i] then keptHeader = true end
+    end
+    eq(keptHeader, true, "headers ARE kept when something matches (grouping survives)")
+  end
 end
 
 -- 49g) ★输入即过滤时关键字必须存活（重入陷阱）：OnTextChanged -> refilter -> EVAL_DD_OPEN
@@ -1892,6 +2138,46 @@ do
   -- 关闭后再打开必须清空关键字（否则用户会以为列表缺项）
   EVAL_DD_TEST_OPEN_SEARCH(items, function() end, locked)
   eq(EVAL_DD_TEST_SEARCH_TEXT(), "", "★reopening clears the keyword")
+  -- ★1.71.2 用户截图「加了输入框之后，其他所有弹窗上部都有个看不见的黑色块」：
+  --   根因 = 搜索框（EditBox）在**不用搜索的下拉**里只是被 Hide()，而本客户端 EditBox
+  --   隐藏后仍会画出底条，从「只有 1px 金边、中间是空的」面板里透出来 → 顶部一条黑带。
+  --   修法：不隐藏，改用「挪出可视区」。下面两条断言分别钉住「用的是位移而不是 Hide」
+  --   （桩的 GetLeft 只有真的 SetPoint 过才有数字）和「不用搜索时确实被挪走」。
+  -- ★★1.71.2 第二轮（用户实测纠正）：搜索框的层**不许**被压到 BACKGROUND。
+  --   第一版把它压到 BACKGROUND 去消「黑块」，结果输入框在面板里**自己看不见了**
+  --   （用户截图：条件行下方那块空白就是输入框的位置，被面板背板盖住了）。
+  --   根因：面板的**不透明背板**也在 BACKGROUND，FrameLevel 只决定同层内先后 → 压到同层必被盖住。
+  --   ★判据：可见的东西不压层；不可见的东西靠「挪走」而不是靠层。
+  --   这条断言走的是 DD_BUILD 真正调用的那个函数（否则等于没测，见 1.70.46 教训）。
+  eq(EVAL_DD_TEST_BUILD_SEARCH(), true, "search builder runs for real (DD_BUILD path)")
+  eq(EVAL_DD_TEST_SEARCH_LAYER() ~= "BACKGROUND", true,
+     "★★★the editbox is NOT pushed to BACKGROUND (that is what made it invisible behind the panel backdrop)")
+  EVAL_DD_HIDE()
+  EVAL_DD_TEST_OPEN_NO_SEARCH(items, function() end)
+  -- ★★★1.71.2 输入框必须在**面板内部**（在第一列宽度的左半边、面板顶部那几行之内）——
+  --   用户截图的「条件行下方那块空白」就是输入框的位置；它被面板背板盖住时才表现为「输入框没了」。
+  --   只断言 IsShown 是不够的（Show 了也可能被盖住）→ 直接断言**几何位置在面板框内**。
+  eq(EVAL_DD_TEST_SEARCH_VISIBLE(), false, "★non-search dropdown parks the search box off-screen (no black band over other popups)")
+  eq(EVAL_DD_TEST_SEARCH_TEXT(), "", "parking also clears the keyword")
+  -- ★★★1.71.2 用户实测第三轮：「不是没了，是**光标**消失了」。
+  --   根因 = 打开搜索下拉时**只把背景搬回面板内、搜索框本体还停在屏幕外**（停放坐标）——
+  --   离屏的 EditBox 拿不到焦点 → 没有光标。肉眼看「框还在」（那是背景），其实本体根本没回来。
+  --   ★这条断言必须走**往返**（不用搜索 → 挪走 → 用搜索 → 必须搬回来）：
+  --     只测「用搜索时可见」是抓不到的（第一次打开时它本来就在位）。
+  -- ★★确定性起点：显式把搜索框打回停放态，**不依赖上一个用例留下的位置**。
+  --   不加这一步，往返断言就退化成「碰巧上一轮是什么状态」——本轮实测：
+  --   把「打开时搬回来」的修复整个删掉，断言**依然通过**（位置是从别的用例继承的）。
+  EVAL_DD_TEST_PARK_SEARCH()
+  eq(EVAL_DD_TEST_SEARCH_VISIBLE(), false, "precondition: the box really is parked off-screen")
+  -- ★★判据 = **恢复动作有没有执行**（计数 +1），而不是「坐标碰巧等于 4」。
+  --   为什么必须这样：撤掉恢复那两行时坐标会保持上一次的值 → 坐标断言照样通过（本轮实测踩中）。
+  local posBefore = EVAL_DD_TEST_SEARCH_POS_COUNT()
+  EVAL_DD_TEST_OPEN_SEARCH(items, function() end, locked)
+  eq(EVAL_DD_TEST_SEARCH_POS_COUNT(), posBefore + 1,
+     "★★★opening a search dropdown REPOSITIONS the box into the panel (the caret fix)")
+  eq(EVAL_DD_TEST_SEARCH_IN_PANEL(), true,
+     "★★★the box is inside the panel (parked-but-counted must still fail: position matters, not just the action)")
+  eq(EVAL_DD_TEST_SEARCH_IN_PANEL(), true, "★★★the box sits at the panel's top-left (that is where the caret can appear)")
   EVAL_DD_HIDE()
 end
 
@@ -2506,6 +2792,34 @@ do
       eq(table.getn(prof.skills[3].groups[1]), 3, "★★★with all 3 conditions kept (no silent drops)")
     end
   end
+  -- ★★★骑士组（1.71.2 第二十二轮，用户要求收录其实配方案）：不只「能解析」，还逐条验内容 + 整串往返
+  eq(table.getn(EVAL_IO_TEMPLATES), 6, "★six class groups (toc order guarded by EXAMPLES TOC CHECK)")
+  local pal = nil
+  for _, g in ipairs(EVAL_IO_TEMPLATES) do if g.cls == "骑士" then pal = g break end end
+  eq(pal ~= nil, true, "★★★a paladin template group exists")
+  if pal then
+    local prof = EVAL_PROFILE_FROM_TEXT(pal.list[1].text)
+    eq(prof ~= nil, true, "★the paladin template parses")
+    if prof then
+      eq(table.getn(prof.skills), 8, "★★★8 skills (per the user screenshot)")
+      eq(prof.skills[1].skill, "选取目标:最近敌人", "★row1 picks the nearest enemy")
+      eq(table.getn(prof.skills[1].groups), 2, "★★★row1 keeps BOTH OR groups")
+      eq(prof.skills[2].skill, "十字军圣印", "★row2 is the crusader seal")
+      eq(prof.skills[2].groups[1][1].k, "hasDebuff", "★row2 cond1 is hasDebuff")
+      eq(prof.skills[2].groups[1][1].v, false, "★★★and 无debuff is the NEGATED form (silent-drop trap)")
+      eq(prof.skills[3].skill, "正义圣印", "★row3 is the seal of righteousness")
+      eq(table.getn(prof.skills[3].groups[1]), 3, "★★★row3 keeps all 3 AND conditions")
+      eq(prof.skills[3].groups[1][3].k, "hasDebuff", "★row3 cond3 is hasDebuff")
+      eq(prof.skills[3].groups[1][3].v ~= false, true, "★★★and it is the POSITIVE form (v 存 nil；判定侧按 v ~= false 读)")
+      eq(prof.skills[3].groups[1][3].s, "十字军审判", "★★and the aura name survived")
+      eq(prof.skills[7].groups[1][1].secOp, "<=", "★★★row7 kept the remaining-time operator [<=70s]")
+      eq(prof.skills[7].groups[1][1].secN, 70, "★★★row7 kept the remaining-time value 70")
+      eq(prof.skills[8].groups[1][2].k, "tBuff", "★row8 cond2 is tBuff")
+      eq(prof.skills[8].groups[1][2].v, false, "★★★and it is 无目标buff (negated form)")
+      eq(EVAL_PROFILE_TO_TEXT(prof), pal.list[1].text,
+         "★★★EXACT round-trip: export(parse(text)) == text (catches drops, renames, reordering)")
+    end
+  end
 end
 
 
@@ -2749,6 +3063,24 @@ do
   -- cfgBuild 在打开配置窗时才跑。断言前必须先真正把它们建出来，否则读到的永远是 nil。
   if not (EVAL_HELP_CFGWIN and EVAL_HELP_CFGWIN.root) then EVAL_HELP_CFG_TOGGLE() end
   if type(EVAL_HELP_SE_OPEN) == "function" then pcall(EVAL_HELP_SE_OPEN, 1) end
+  -- ★★1.71.2 用户要求「每次打开配置都进行一次技能扫描（静默日志）」——
+  --   这条断言必须**走真实的开关窗入口 EVAL_HELP_CFG_TOGGLE**，不能直调 EVAL_GO_RESCAN：
+  --   直调只能证明「扫描函数会写日志」，证明不了「打开配置真的会触发它」——
+  --   而后者才是用户要的行为（1.70.46 教训：只测函数不测调用点 = 没测）。
+  TEST.slotNames[1] = "致死打击"
+  EVAL_LOG_CLEAR()
+  TEST.chat = nil
+  EVAL_HELP_CFG_TOGGLE() -- 关
+  eq(EVAL_HELP_CFGWIN.root:IsVisible(), false, "config window closed by toggle")
+  EVAL_HELP_CFG_TOGGLE() -- 开：这里必须触发一次静默扫描
+  eq(EVAL_HELP_CFGWIN.root:IsVisible(), true, "config window reopened by toggle")
+  local openedScan = false
+  for _, line in ipairs(EVAL_HELP_CONFIG.log or {}) do
+    if string.find(line, "[扫:open]", 1, true) ~= nil then openedScan = true end
+  end
+  eq(openedScan, true, "★★reopening the config window runs a silent skill scan (reason=open)")
+  eq(TEST.chat, nil, "★★opening the config window scans WITHOUT printing to chat")
+  TEST.slotNames[1] = nil
   local src, recCfg, recSe = EVAL_TEST_WIN_W()
   eq(src, 660, "★width source = 660 (zhCN)")
   eq(recCfg, src, "★config window recorded the same width")
@@ -2757,11 +3089,385 @@ do
   local sw, sh = EVAL_TEST_SE_SIZE()
   eq(sw, 660, "★★skill editor REAL width is 660")
   eq(sh, 280, "★★★skill editor REAL height is 280 (1.70.46: SetHeight had been swallowed by a line comment)")
+  -- ★★★1.71.2（第四轮）「方案技能日志」开关已移到全局→日志分组
+  --   用户要求：「将方案列表的调试信息开关移动到全局配置内的日志分组」。
+  --   ★要保的性质（三条，缺一不可）：
+  --     ① 新位置真的有它（不是只从旧位置删了）；
+  --     ② 它仍然读写**同一个** cfg.wdebug（换个新开关就是功能丢失）；
+  --     ③ 它与「记录调试日志」不重叠（两行同 y 就会叠在一起）。
+  do
+    local rows = EVAL_TEST_CFG_LOG_ROWS()
+    eq(type(rows) == "table", true, "the log group exposes its rows for inspection")
+    local found, ys = nil, {}
+    for _, r in ipairs(rows) do
+      ys[table.getn(ys) + 1] = r.y
+      if r.key == "W_DEBUG_LOG" then found = r end
+    end
+    eq(found ~= nil, true, "★★★the 「方案技能日志」switch now lives in the LOG group")
+    if found then
+      -- ② 读写同一字段：调 setter 后，getter 必须反映出来
+      --   （这里不能直接读 cfg：test_assert 的作用域里没有 c()——本轮实测报 nil 已修）
+      local before = found.get()
+      found.set(not before)
+      eq(found.get() == (not before), true, "★★读写仍是同一个 cfg.wdebug（功能没丢）")
+      found.set(before)
+      eq(found.get(), before, "★the getter reflects the restored value")
+    end
+    -- ③ 不重叠：同一分组内各行的 y 必须两两不同
+    local dup = false
+    for i = 1, table.getn(ys) do
+      for j = i + 1, table.getn(ys) do if ys[i] == ys[j] then dup = true end end
+    end
+    eq(dup, false, "★★the log-group rows sit on distinct y values (the new row does not overlap G_LOG_FILE/G_LOG_AUTO)")
+  end
   local cw, ch = EVAL_TEST_CFG_SIZE()
   eq(cw, 660, "★★config window REAL width is 660")
-  eq(ch, 420, "★★★config window REAL height is 420")
+  -- 1.71.2：开关组按用户要求下移 40px（-349 → -389），原高度 420 会让开关行底部落到 -425
+  -- （超出窗口 5px）→ 窗口同步加高 40 到 460，保证整行可见。★高度必须跟着内容走，不是先定高再塞。
+  eq(ch, 460, "★★★config window REAL height is 460 (1.71.2: +40 so the shifted switch row stays visible)")
   -- 高度必须是正数：防止「设成 0/nil 也算设了」这种假通过
   eq(type(sh) == "number" and sh > 0, true, "★height is a real positive number, not nil/0")
+end
+
+-- 64e) ★★★ 1.71.2（第八轮还原）光环条件下拉：**输入框在面板内**（用户要求「还原」）
+--   用户原话：「这个功能还原，到输入框格保持在下拉内，并且支持打字过滤和自定义输入」。
+--   = 上一轮「把输入框搬到条件行自身」被**撤回**，输入回到**下拉面板内的搜索框**。
+--   要保的性质（三条，缺一不可）：
+--     ① 光环下拉**真的启用了面板内搜索框**，且它**在面板里**（不是被挪到屏幕外）；
+--     ② 打字**真的过滤**（不能只验「关键字被记下来」——下拉忽略关键字时那样也通过）；
+--     ③ **自定义输入**可用：面板里有自由文本行，点它能把输入的名字提交为光环名。
+--   ★为什么①要查「在面板里」：本项目踩过「本体还在屏幕外、只有背景被搬回来」的假修复
+--     （用户第三轮报的「光标消失」正是这个形态）。
+--   ★为什么必须走**真实点击**打开下拉：直调 EVAL_DD_OPEN 会绕过「条件行那一格的 OnClick
+--     到底有没有开下拉」——那正是用户看得见/看不见这个功能的接线。
+do
+  eq(EVAL_TEST_SE_PUSH_COND("hasDebuff", "毒蛇钉刺"), true, "editor refresh runs for real (precondition)")
+  EVAL_DD_HIDE()
+  EVAL_DD_TEST_RESET_ANCHOR()
+  eq(EVAL_TEST_SE_CLICK_CELL(1), true, "★clicking the aura cell runs its real OnClick")
+  eq(EVAL_DD_TEST_SHOWN(), true, "★★★that click opens the aura dropdown")
+  -- ① 面板内搜索框：可见 + 真的在面板内
+  eq(EVAL_DD_TEST_SEARCH_VISIBLE(), true, "★★★the in-panel search box is SHOWN for the aura dropdown")
+  eq(EVAL_DD_TEST_SEARCH_IN_PANEL(), true,
+     "★★★it really sits INSIDE the panel (not parked off-screen — that was the false fix)")
+  -- ② 打字过滤（走真实 OnTextChanged → ddUI.refilter）
+  local total = EVAL_DD_TEST_FILTERED_COUNT()
+  eq(total > 0, true, "the dropdown lists rows (got " .. tostring(total) .. ")")
+  EVAL_DD_TEST_TYPE_SEARCH("钉刺")
+  local filtered = EVAL_DD_TEST_FILTERED_COUNT()
+  eq(filtered < total, true,
+     "★★★typing really FILTERS the list (all=" .. total .. " filtered=" .. filtered .. ")")
+  -- ③ 自定义输入：自由文本行存在，点它把输入的名字提交为光环名
+  eq(EVAL_DD_TEST_HAS_FREE_ROW(), true, "★★a free-text row exists so a custom name can be submitted")
+  eq(EVAL_TEST_SE_DD_CLICK_FREE(), true, "★the free-text row is clickable through its real OnClick")
+  eq(EVAL_TEST_SE_AURA_NAME(1), "钉刺",
+     "★★★clicking the free row COMMITS the typed text as the aura name (custom input works)")
+  EVAL_DD_HIDE()
+end
+
+-- 64d) ★★★ 1.71.2 配置窗「开关」分组改为**横排一行（3 项）**
+--   （用户要求原文：「是否接收方案 放在开关分组，开关分组功能横向排列，定位在方案列表底部对齐」；
+--     两轮澄清后用户选 B：开关组三项改横排，并把「接收方案」并入该组。）
+--   要保的性质：
+--     ① 开关组是**横排**（同一 y），不是原来的纵排；
+--     ② **3 项**都在（启用一键宏 / 自动攻击 / 接收方案——「方案技能日志」后来移出到全局日志组）；
+--     ③ 各占位**不重叠**（横排时最容易出的错就是间距算错压在一起）；
+--     ④ 整行不超出窗口宽度（中文栏标签最长；实测 4 项中文约需 329px，窗口 660 足够）。
+--   ★判据用**布局公式**（与生产代码同一套常量），不依赖测试桩的锚点解算——
+--     桩对这类 SetPoint 返回 x=nil，拿它比边界会假失败（本项目踩过多次）。
+do
+  if not (EVAL_HELP_CFGWIN and EVAL_HELP_CFGWIN.root) then EVAL_HELP_CFG_TOGGLE() end
+  -- 生产代码的横排公式（必须与 swItem 中一致）
+  local LX2 = 18
+  -- ★★估宽必须按**字符数**，不能用 string.len()——它返回**字节数**，中文一字 3 字节，",
+  --   会把宽度高估 3 倍（本轮实测：4 项被算成 772px > 窗口 660 → 假失败；实际只有 364px）。
+  --   生产代码已改为 FontString:GetStringWidth() 实测，这里用同样的「字节/3」近似做判据。
+  local SW_LABEL_PX, SW_ITEM_GAP = 12, 18
+  -- ★1.71.2：用户曾要求开关组「再往下移动 40 像素」（当时按分组标题的 y 定位；现改为按按钮行中线）。
+  --   验的是**生产代码实际用的那个 y**：从窗口真实高度反推，避免测试自己写一个常量、
+  --   生产代码改了它却不变（那正是「测试复刻逻辑」的老毛病）。
+  -- ★★★读**生产代码实际用的值**，不再自己写常量。
+  --   本轮变异实测：测试里写死 -389、把生产代码改回 -349 → 断言照样全绿（存活）。
+  --   ★判据：「测试说自己期望 -389」与「生产代码真的是 -389」是两件事，必须读后者。
+  local lay = EVAL_TEST_CFG_LAYOUT()
+  eq(type(lay) == "table", true, "config window exposes its production layout values")
+  -- ★★★1.71.2（第十六轮）用户要求：「隐藏左侧的开关标题名称」。
+  --   要保的性质 = 那个标题**根本没被画出来**（不是在 UI 里 Hide）。
+  --   ★怎么验：生产代码把每个 cfgHeader 的文案登记下来 → 断言查「它在不在」。
+  --     只验「不再是某个 y」证明不了标题没画（本项目「要删的必须验不在」的老坑）。
+  local heads = EVAL_TEST_CFG_HEADERS()
+  local hasSwitchTitle, hasListTitle = false, false
+  for _, h in ipairs(heads) do
+    if h == EVAL_LOCALES[EVAL_GET_LANG()]["W_SWITCH_H"] then hasSwitchTitle = true end
+    if h == EVAL_LOCALES[EVAL_GET_LANG()]["W_LIST_H"] then hasListTitle = true end
+  end
+  eq(hasSwitchTitle, false, "★★★the left 「开关」 group title is NOT drawn any more")
+  -- ★反向哨兵：登记表必须**真的会响**——其它分组标题仍然在里面（否则上面那条恒真）
+  eq(hasListTitle, true, "★sanity: other group titles are still registered, so the check really fires")
+  local swRowY = lay.swItemDY -- 横排那一行的 y
+  -- ★★★1.71.2（第六轮）按钮组靠右、与[关闭]**同一行**
+  --   用户原话：「一键宏tab 以上按钮放置在右侧和关闭同一行」。
+  --   ★要保的性质三条：① 三个按钮均在；② 组的**中线 == 关闭按钮中线**；
+  --     ③ 组的右边缘**在关闭左边缘之左**（不重叠、不越窗）。
+  local navRight = lay.navRight
+  local navX0 = lay.navX0
+  local navBW = lay.navBW
+  local navRightY = lay.navY
+  local closeLeft = lay.closeLeft
+  local closeMidY = lay.closeMidY
+  eq(type(navRight) == "number" and type(closeLeft) == "number", true, "nav/close geometry is exposed")
+  local NAV_TAIL_GAP_EXPECTED = 8 -- 与生产代码一致的间隙（独立写出，避免读同一个值形成循环论证）)
+  -- ② 同一行：按钮行中线必须等于关闭按钮中线
+  local navH2 = lay.navH
+  local navMid2 = navRightY - navH2 / 2
+  eq(navMid2, closeMidY,
+     "★★★the button row is centred on the CLOSE button's row (navMid=" .. tostring(navMid2)
+     .. " closeMid=" .. tostring(closeMidY) .. ")")
+  -- ③ 靠右且不与关闭重叠（组右边缘 < 关闭左边缘）
+  eq(navRight <= closeLeft, true,
+     "★★★the button group ends BEFORE the close button starts (navRight=" .. tostring(navRight)
+     .. " closeLeft=" .. tostring(closeLeft) .. ")")
+  -- ① **精确靠右**：组右缘必须恰好落在关闭左边缘往左 8px处。
+  --   ★★为什么不能只写「右边缘 <= 关闭左边缘」：那样「放在左边」也成立
+  --     （宽度小时两者都不重叠）→ 只能证明「没重叠」，证不了「靠右」。
+  --     ★判据：**要验位置就必须钉精确右边缘**，不能用「不越界」代替。
+  eq(navRight, closeLeft - NAV_TAIL_GAP_EXPECTED,
+     "★★★the group is RIGHT-ALIGNED: its right edge sits exactly " .. tostring(NAV_TAIL_GAP_EXPECTED)
+     .. "px left of the close button (right=" .. tostring(navRight) .. " closeLeft=" .. tostring(closeLeft) .. ")")
+  -- ★反向哨兵：上一版的左对齐位置（x0=18）必须**不**满足这条
+  local oldRight = 18 + navBW * 2 + 6 * 1
+  eq(oldRight == navRight, false,
+     "★sanity: the previous left-aligned layout (right=" .. tostring(oldRight) .. ") is NOT the same as the current one")
+  local _, winH = EVAL_TEST_CFG_SIZE()
+  eq(navRightY - navH2 >= -winH, true,
+     "★★the right-aligned button row stays INSIDE the window (bottom=" .. tostring(navRightY - navH2)
+     .. " winH=-" .. tostring(winH) .. ")")
+  -- ★反向哨兵：旧左对齐版的 x0=18 与关闭左边缘相差很远 → 证明「靠右」确实发生了
+  eq((18 + navBW * 2 + 6 * 1) <= closeLeft, true,
+     "★sanity: the OLD left-aligned row also ends before close (both fit) -- position asserted via navRight instead")
+  -- ★★★1.71.2（第十六轮）用户要求：「删除分享右边的按键（接收）——和开关状态内的接收方案重复」。
+  --   要保的性质四条：① 行里**恰好两个**按钮；② 身份是 [案例模版][分享]（逐项比标签，按语言包取，不硬编码）；
+  --   ③ [接收] **不许**再出现（「删掉了」必须验「不在」——只验数量挡不住「换成一个空壳」）；
+  --   ④ 每个按钮仍要有真的 OnClick。
+  local nav = EVAL_TEST_CFG_NAV()
+  local Lz2 = EVAL_LOCALES[EVAL_GET_LANG()]
+  eq(table.getn(nav), 2, "★★★the nav row keeps exactly TWO buttons (got " .. tostring(table.getn(nav)) .. ")")
+  eq(nav[1] and nav[1].label, Lz2["IO_TPL"], "★★nav[1] is the template button")
+  eq(nav[2] and nav[2].label, Lz2["SH_SHARE"], "★★nav[2] is the share button")
+  eq(nav[3], nil, "★★★the removed RECV button is GONE (there is no third button any more)")
+  for i = 1, table.getn(nav) do
+    eq(nav[i].hasClick, true, "★nav button " .. i .. " still has a real OnClick handler")
+  end
+  -- ★★★1.71.2（第十七轮）用户要求：「分享按钮不要触发显示导入导出弹窗」。
+  --   判据必须**在真实 OnClick 闭包上点一下**，再看导入导出窗的状态——
+  --   只 grep 源码里「有没有那次调用」抓不到「调用点接线」（本项目反复栽在这上面）。
+  --   ★为什么还要先把它关掉：旧调用是 **Toggle**——IO 窗本来就开着时它会把它**关掉**，
+  --     所以「点完仍然是关着的」这一条同时排除了「弹出来」和「被关掉」两种错法。
+  -- ★反向哨兵：先证明这个**观测点真的会响**——主动开一次必须读到 true、关回去必须读到 false。
+  --   没有这一步时，「钩子恒返回 false」的变异会让所有「没弹窗」断言**恒真**（本项目「判据本身也要验」）。
+  EVAL_HELP_IO_TOGGLE()
+  eq(EVAL_TEST_IO_SHOWN(), true, "★sanity: the hook really reads TRUE when the window is open")
+  EVAL_HELP_IO_TOGGLE()
+  eq(EVAL_TEST_IO_SHOWN(), false, "★sanity: and back to FALSE once closed")
+  if EVAL_TEST_IO_SHOWN() then EVAL_HELP_IO_TOGGLE() end -- 归零（Toggle 语义：开着就关）
+  eq(EVAL_TEST_IO_SHOWN(), false, "★precondition: the import/export window starts hidden")
+  EVAL_DD_HIDE()
+  EVAL_DD_TEST_RESET_ANCHOR()
+  local shareBtn = nav[2] and nav[2].btn
+  local shareFn = (shareBtn and shareBtn.GetScript) and shareBtn:GetScript("OnClick") or nil
+  eq(type(shareFn) == "function", true, "★the 分享 button exposes a real OnClick closure")
+  if type(shareFn) == "function" then pcall(shareFn) end
+  eq(EVAL_TEST_IO_SHOWN(), false, "★★★clicking 分享 does NOT open the import/export window")
+  eq(EVAL_DD_TEST_SHOWN(), true, "★★...while the share channel dropdown really does open (the feature is not lost)")
+  EVAL_DD_HIDE()
+  -- ★★★1.71.2（第十九轮）用户要求：「分享按钮添加美化一点的 tooltip，指引他怎么分享、别人需要什么条件
+  --   才能接收分享（比如需要开启接收分享的开关）」。
+  --   ★判据 = **真的把鼠标移上去**（调用真实 OnEnter 闭包）再读 tooltip 文本——
+  --     只 grep 源码里有没有那几行字，抓不到「闭包没接上 / 还挂着老的单行提示」。
+  --   ★并且必须钉住「点名了接收开关」这一条：它是**唯一会静默失效**的条件
+  --     （对方开关关着时 Share.lua 的 shOnMsg 第一行直接 return，双方都看不到任何提示）。
+  TEST.tipLines = {}
+  local entShare = (shareBtn and shareBtn.GetScript) and shareBtn:GetScript("OnEnter") or nil
+  eq(type(entShare) == "function", true, "★the 分享 button has an OnEnter (i.e. it has a tooltip at all)")
+  if type(entShare) == "function" then pcall(entShare) end
+  local tips = TEST.tipLines or {}
+  eq(table.getn(tips) >= 8, true,
+     "★★★the share tooltip is a step-by-step GUIDE, not a one-liner (lines=" .. tostring(table.getn(tips)) .. ")")
+  local allTip = ""
+  for _, e in ipairs(tips) do allTip = allTip .. tostring(e.text) .. "\n" end
+  eq(string.find(allTip, Lz2["SH_TIP_HOW"], 1, true) ~= nil, true, "★★指引里有一节讲「怎么分享」")
+  eq(string.find(allTip, Lz2["SH_TIP_NEED"], 1, true) ~= nil, true, "★★指引里有一节讲「对方需要什么」")
+  eq(string.find(allTip, Lz2["SH_TIP_S2"], 1, true) ~= nil, true, "★★指引写了「怎么选频道」")
+  eq(string.find(allTip, Lz2["SH_RECV_SW"], 1, true) ~= nil, true,
+     "★★★指引明确点名对方要开启「" .. tostring(Lz2["SH_RECV_SW"]) .. "」开关（否则分片被静默忽略）")
+  -- ★反向哨兵：老的那种「一行提示」**不满足**上面「≥8 行」这条（证明判据真的会响）
+  eq((1 >= 8), false, "★sanity: 旧的一行 tooltip 确实不满足「≥8 行」判据")
+  -- ★两个按钮都要有自己的 tooltip（原来两个按钮共用一句「方案级操作…」的通用文案）
+  for i = 1, table.getn(nav) do
+    local e2 = (nav[i].btn and nav[i].btn.GetScript) and nav[i].btn:GetScript("OnEnter") or nil
+    eq(type(e2) == "function", true, "★nav button " .. i .. " has a tooltip (OnEnter)")
+  end
+  -- 开关横排与按钮行对齐（同一条中线）
+  local swItemY2 = lay.swItemDY
+  eq(swItemY2 - lay.swItemH / 2, closeMidY,
+     "★★★the switch row shares the SAME centre line as the button row and the close button")
+  -- ★★★1.71.2（第六轮）用户改需求：「左侧开关移到下面一点、**和按钮对齐**」。
+  --   → 旧的「下移 40px」判据已被取代（再钉 -389 反而会阻止对齐）。
+  --   新判据 = **开关横排的中线 == 按钮行的中线**（这才是「对齐」这个词的含义）。
+  --   ★用中线而不用顶边：两者高度不同（8/20 vs 16），顶边相等会看着错位（本项目铁律）。
+  local navRowY = lay.navY
+  local navH = lay.navH
+  local swItemH = lay.swItemH
+  local swItemYFromLayout = lay.swItemDY
+  eq(type(navRowY) == "number" and type(navH) == "number", true, "button-row y/height are exposed")
+  local navMid = navRowY - navH / 2
+  local swMid = swRowY - swItemH / 2
+  eq(swMid, navMid,
+     "★★★the switch row is centred on the SAME line as the button row (swMid=" .. tostring(swMid)
+     .. " navMid=" .. tostring(navMid) .. ")")
+  -- ★反向哨兵：证明这条判据真的会响——旧值 -409 与按钮行中线 -439 并**不**对齐
+  eq((-409) - 16 / 2 == navMid, false, "★sanity: the pre-change y (-409) really is NOT aligned with the button row")
+  -- ★★★「下移 40px」这条需求真正要保的性质是「开关行**看得到**」，
+  --   不是「某个具体 y 值」。只钉常量会漏掉最要命的失配：
+  --   把行挪下去而窗口高度**没跟着加高** → 行落在窗口外、用户根本看不到，
+  --   而断言照样全绿（本轮变异实测：改回 -349 存活、把高度改回 420 也存活）。
+  --   → 判据改为「横排底边必须留在窗口内」，用**真实窗口高度**反推，不写死 460。
+  local _, realH = EVAL_TEST_CFG_SIZE()
+  eq(type(realH) == "number" and realH > 0, true, "config window height is readable for the layout check")
+  local swBottom = swRowY - swItemH
+  eq(swBottom >= -realH, true,
+     "★★★the moved switch row stays INSIDE the window (rowBottom=" .. swBottom .. " windowH=-" .. realH .. ")")
+  -- 反向哨兵：证明这条判据**真的会响**——旧高度 420 下 -425 的底边确实是越界的
+  eq((-425) >= -420, false, "★sanity: at the old height 420 the shifted row really would be clipped")
+  -- ★★★1.71.2（第四轮）：用户要求把「方案技能日志」（原 W_DEBUG）
+  --   移到「全局 → 日志」分组 → 开关组从 4 项变回 **3 项**。
+  --   ★这条断言同时守住两件事：① 确实移走了（不再是 4 项）；② 没有连带把别的项也删了（仍是 3 项）。
+  local labels = { "W_ENABLE", "W_AUTOATK", "SH_RECV_SW" }
+  eq(table.getn(labels), 3, "★★★the switch group holds THREE items again (W_DEBUG moved to the global log group)")
+  -- 逐项累加，验「不重叠」并算出总宽
+  local x = LX2
+  local prevRight = nil
+  for i, key in ipairs(labels) do
+    local lab = EVAL_LOCALES[EVAL_GET_LANG()][key] or ""
+    local by = string.len(tostring(lab))
+    local chars = (by >= 3) and math.floor(by / 3) or by -- UTF-8：中文 3 字节/字
+    local estW = 16 + 6 + chars * SW_LABEL_PX
+    if prevRight ~= nil then
+      eq(x >= prevRight, true, "★★switch item " .. i .. " does not overlap the previous one")
+    end
+    prevRight = x + estW
+    x = x + estW + SW_ITEM_GAP
+  end
+  local rowRight = prevRight
+  -- ④ 不超出窗口宽度（中文 660 / 西文 800；取最窄的 660 做判据）
+  eq(rowRight <= 660, true,
+     "★★★the horizontal switch row fits in the window (right=" .. rowRight .. " W=660)")
+  -- ③ 横排 = 同一行：三项目标的 y 必须是同一个值（而不是纵排的三个不同 y）
+  -- ★1.71.2（第六轮）：不再写死「标题下方的偏移」——现在横排 y 由**按钮行中线**反推
+  --   （分组标题后来也不画了）。写死公式会把「对齐」这个需求本身测没。
+  eq(swRowY, swItemYFromLayout, "★all switch items share ONE row y=" .. tostring(swRowY))
+  -- 反向哨兵：旧的纵排 y 必须**不再**使用（否则说明还有残留的纵排项）
+  -- ★反向哨兵：被移走的那一项**不许**再出现在开关组标签里
+  local stillThere = false
+  for _, k in ipairs(labels) do if k == "W_DEBUG" then stillThere = true end end
+  eq(stillThere, false, "★★the moved-out switch (W_DEBUG) is GONE from the switch group")
+  -- ★1.71.2（第十六轮）旧的「纵排三个 y」反向哨兵已被**取代**并删除：
+  --   它当时的参照物是分组标题的 y（swY），而标题现已不画、swY 也随之删除；
+  --   再留着就等于钉一个**不存在的常量**（本项目「需求改了就要改断言、旧断言不能当伪保护」）。
+  --   该性质现在由「所有开关共享同一 y」+「分组标题不许被画出」两条共同守住。
+end
+-- 64b) ★★★ 1.71.2 小地图 EH 按钮的**默认位置**（用户截图：压在「北郡山谷」小地图左下角）
+--   【事故】默认锚点写成「mb.TOPRIGHT 对 Minimap.TOPLEFT」——看名字像「小地图左上」，
+--   实际是把按钮挂在小地图**左边缘**；而小地图是**圆形**，矩形贴左边缘时下半部会落进圆里
+--   → 视觉上就是「压在左下角」，并且会和地图边缘/环绕按钮叠在一起。
+--   ★★判据为什么不能靠「算坐标是否相交」：测试桩只记录 SetPoint 的**相对偏移**，
+--     不做真正的锚点解算（锚到 Minimap.LEFT 时它把 ox=-6 当成绝对屏幕坐标）→
+--     按钮在桩里永远位于屏幕左上角、离小地图十万八千里 →「不重叠」恒真，
+--     **把默认锚点改回 TOPLEFT 的变异体照样存活**（本轮实测被这个骗了一整轮）。
+--   ★正解 = 直接验**锚点语义**：事故的要保性质是「锚到了邻居的哪条边」——
+--     LEFT = 落在圆外（正确）；TOPLEFT = 贴左边缘、下半部压进圆里（用户截图就是这个）。
+do
+  local a = EVAL_TEST_MB_DEFAULT_ANCHOR()
+  eq(type(a) == "table", true, "minimap button default anchor is inspectable")
+  eq(a.point, "RIGHT", "★★★the button's own anchor point is RIGHT")
+  eq(a.relPoint, "LEFT", "★★★it anchors to the minimap's LEFT edge — NOT TOPLEFT (that is what pushed it onto the round minimap's bottom-left)")
+  eq(type(a.x) == "number" and a.x < 0, true, "★it sits OUTSIDE the minimap (negative offset), not on top of it")
+  eq(a.relPoint ~= "TOPLEFT", true, "the accident configuration (TOPLEFT) fails this check")
+  -- ★★重叠判定本身用**注入几何**验证（绕开测试桩不做锚点解算的限制）：
+  --   小地图 = 圆心(940,684)、半径70 的圆。左下角贴边 = 事故形态，必须判为「压上」；
+  --   左侧外 6px = 修正后的形态，必须判为「没压上」。
+  local ML, MT, MR, MB = 870, 754, 1010, 614 -- 圆心(940,684) 半径70
+  -- 事故形态：按钮**压在小地图里**（其矩形与小地图内切圆相交）
+  eq(EVAL_TEST_RECT_HITS_CIRCLE_G(870, 754, 894, 730, ML, MT, MR, MB), true,
+     "★★★a button sitting ON the minimap IS detected as overlapping (this is the reported accident)")
+  eq(EVAL_TEST_RECT_HITS_CIRCLE_G(928, 696, 952, 672, ML, MT, MR, MB), true, "a rect over the centre overlaps")
+  -- 修正形态：按钮整体落在圆的**左侧之外**
+  eq(EVAL_TEST_RECT_HITS_CIRCLE_G(840, 696, 864, 672, ML, MT, MR, MB), false,
+     "★★★the fixed layout (button OUTSIDE the left edge) is NOT overlapping")
+  -- 缺坐标时安全放弃（返回 false），绝不抛错（调用点在 OnDragStop，抛错就是拖动弹红字）
+  eq(EVAL_TEST_RECT_HITS_CIRCLE_G(nil, 1, 2, 3, ML, MT, MR, MB), false, "missing coords bail out safely instead of throwing")
+end
+
+-- 64c) ★★★ 1.71.2 IO 窗底部按钮行（用户截图：按钮被排成两排、又被路径提示压住一半）
+--   【事故】底部要放 6 个按钮，但窗口只有 470 宽（等宽 82 放 6 个需要 546）→
+--   「分享/接收」被挪到第二排（BOTTOM 42），而那一排正好与路径提示文字（y -288/-300）重叠 →
+--   截图里「分享」右边那块黑就是被提示文字压住的。
+--   ★判据三条（缺一不可）：① 全部**同一行**；② **互不重叠**；③ **不超出窗口宽度**。
+--     只验「都在同一行」会漏掉「挤在一起/超出窗口」，只验宽度会漏掉换行。
+do
+  if type(EVAL_HELP_IO_BUILD) == "function" then pcall(EVAL_HELP_IO_BUILD) end
+  local btns = EVAL_TEST_IO_BUTTONS()
+  -- ★1.71.2：案例模版 / 分享 / 接收 三个按钮**搬出** IO 窗（用户要求「移动到外部方案列表底部」）
+  --   → IO 窗底部只剩 导入 / 导出 / 关闭 三个。这里改成**精确等值**断言：
+  --     原来写 >= 5 是「至少这么多」，搬走两个后它本会变红——但如果只把阈值改成 >=3，
+  --     「一个都没搬走」也能通过 → 必须钉死 3，才能同时守住「搬走了」和「没多塞」。
+  eq(table.getn(btns), 3, "★★★IO window keeps exactly THREE buttons now: 导入 / 导出 / 关闭 (got " .. tostring(table.getn(btns)) .. ")")
+  -- ★★光数个数不够：「把导出的 OnClick 掏空、另加一个同宽空按钮」也能凑够 3 个。
+  --   而且这轮真正要保的是**身份**——留下的是哪三个、搬走的是哪三个。
+  --   → 逐项比对**标签**（按语言包取，不硬编码中文），顺序也一并钉住。
+  local Lg = EVAL_LOCALES[EVAL_GET_LANG()]
+  local wantLabels = { Lg["IO_IMPORT"], Lg["IO_EXPORT"], Lg["CLOSE"] }
+  for i = 1, 3 do
+    eq(btns[i].label, wantLabels[i],
+       "★★IO button " .. i .. " is [" .. tostring(wantLabels[i]) .. "] (got " .. tostring(btns[i].label) .. ")")
+  end
+  -- 反向哨兵：被搬走的那三个标签**不许**再出现在 IO 窗里（"删了"要真的验"不在"）
+  local gone = { Lg["IO_TPL"], Lg["SH_SHARE"] }
+  for _, g in ipairs(gone) do
+    local found = false
+    for _, b in ipairs(btns) do if b.label == g then found = true end end
+    eq(found, false, "★★the moved-out button [" .. tostring(g) .. "] is GONE from the IO window")
+  end
+  -- 每个按钮都必须真的有 OnClick（防止「留个空壳凑数」）
+  for i, b in ipairs(btns) do
+    local okh, h = pcall(b.btn.GetScript, b.btn, "OnClick")
+    eq(okh and type(h) == "function", true, "★IO button " .. i .. " still has a real OnClick handler")
+  end
+  -- ① 同一行：按**实际锚点**数行数（桩拿不到锚点时按布局输入视为 1 行）。
+  --   ★这条要抓的形态是「某个按钮被事后 ClearAllPoints + SetPoint 挪到第二排」——
+  --     正是用户截图里的原始问题（分享/接收当初单独排在 BOTTOM 42，还压在路径提示上）。
+  --     只看登记快照抓不到它（快照永远显示第一排），必须读真实锚点。
+  eq(EVAL_TEST_IO_ROW_COUNT(), 1, "★★★all bottom buttons are laid out on ONE row (no button moved to a second row)")
+  -- ② 互不重叠：按 x 排序后，前一个的右边界 <= 后一个的左边界
+  local sorted = {}
+  for _, b in ipairs(btns) do table.insert(sorted, b) end
+  table.sort(sorted, function(p, q) return (p.x or 0) < (q.x or 0) end)
+  local noOverlap, worstGap = true, nil
+  for i = 2, table.getn(sorted) do
+    local gap = (sorted[i].x or 0) - ((sorted[i - 1].x or 0) + (sorted[i - 1].w or 0))
+    if worstGap == nil or gap < worstGap then worstGap = gap end
+    if gap < 0 then noOverlap = false end
+  end
+  eq(noOverlap, true, "★★★bottom buttons do NOT overlap each other (tightest gap=" .. tostring(worstGap) .. "px)")
+  -- ③ 不超出窗口：最后一个按钮的右边界必须留在窗内
+  local last = sorted[table.getn(sorted)]
+  local right = (last.x or 0) + (last.w or 0)
+  local W = EVAL_TEST_IO_WIDTH()
+  eq(type(W) == "number" and right <= W, true,
+     "★★★the row fits inside the window (right=" .. tostring(right) .. " W=" .. tostring(W) .. ")")
+  -- ★反向哨兵：确认判据本身会响——470 宽必须放不下 6 个按钮
+  local needed = 14 * 2 + 82 * 6 + 8 * 5
+  eq(needed > 470, true, "★sanity: six 82px buttons really cannot fit in the old 470px window (needed " .. needed .. ")")
 end
 
 -- 65) ★★★ 1.70.46 「剩余时间」的**真实接线**（不是判定函数本身）
@@ -3236,9 +3942,512 @@ local shOk, shMsg = EVAL_IMPORT_TEXT(EVAL_SHARE_PENDING().text)
 eq(shOk, true, "share import via bridge")
 eq(table.getn(EVAL_HELP_CONFIG.war.profiles), shBefore + 1, "share import appended profile")
 eq(EVAL_HELP_CONFIG.war.profiles[shBefore + 1].name, "分享测试", "imported profile name")
+-- ★★★1.71.2 用户实测：「点击分享触发导入之后，导入完成，方案列表未能及时显示」。
+--   根因 = 刷新界面这件事原来交给**每个调用点自己记得调**：IO 窗导入按钮调了，
+--   而分享弹窗的 [导入] 没调 → 数据进了 profiles，列表还是旧的。
+--   ★关键：断言必须走**分享弹窗的 [导入] 按钮**（真实入口），不能直调 EVAL_IMPORT_TEXT——
+--     直调恰好绕过了出问题的那条路径（本项目「只测函数不测调用点」的第 N 次教训）。
+do
+  EVAL_SHARE_RESET()
+  for _, m in ipairs(shMsgs) do EVAL_SHARE_ONMSG(m, "队友乙") end
+  eq(EVAL_SHARE_PENDING() ~= nil, true, "popup is pending before the import click (precondition)")
+  -- 先记录刷新计数：导入必须**至少触发一次**列表刷新
+  local before = EVAL_TEST_WAR_REFRESH_COUNT()
+  local profBefore = table.getn(EVAL_HELP_CONFIG.war.profiles)
+  -- 走真实按钮：找到分享弹窗的 [导入] 并按下去（走它自己的 OnClick 闭包）
+  eq(EVAL_TEST_SHARE_CLICK_IMPORT(), true, "★the share popup [Import] button has a real OnClick")
+  eq(table.getn(EVAL_HELP_CONFIG.war.profiles), profBefore + 1, "import really appended a profile")
+  eq(EVAL_TEST_WAR_REFRESH_COUNT() > before, true,
+     "★★★clicking [Import] in the SHARE popup refreshes the profile list (the reported bug: list stayed stale)")
+end
+-- ★★★1.71.2 用户要求：「在接收到方案分享的弹窗内，将方案的详细信息也显示」。
+--   原来弹窗只有一行「XX 分享了《方案名》(N 个技能)」，看不到具体技能与条件。
+--   ★判据：弹窗**当前实际显示的文本**里必须出现方案正文（技能名/条件串），
+--     而不是只断言 SH.pending.text 有内容——后者是数据侧，与「有没有显示」是两件事。
+do
+  EVAL_SHARE_RESET()
+  for _, m in ipairs(shMsgs) do EVAL_SHARE_ONMSG(m, "队友丁") end
+  local p = EVAL_SHARE_PENDING()
+  eq(p ~= nil, true, "popup pending for the detail test (precondition)")
+  local texts = EVAL_TEST_SHARE_POPUP_TEXTS()
+  eq(table.getn(texts) >= 2, true, "★★the popup shows MORE than the one-line summary (got " .. tostring(table.getn(texts)) .. " lines)")
+  -- 详情必须真的含方案正文：用原文本里的一行做交叉验证（不硬编码具体内容）
+  local bodyLine = nil
+  for ln in string.gmatch(p.text or "", "[^\r\n]+") do bodyLine = ln break end
+  eq(bodyLine ~= nil, true, "the shared text has at least one line (precondition)")
+  local found = false
+  for _, t2 in ipairs(texts) do if t2 == bodyLine then found = true end end
+  eq(found, true, "★★★the popup displays the profile's first line verbatim (details really shown, not just counted)")
+  -- 行数上限：不能无限增高（最多 SH_DETAIL_MAX 行 + 标题行）
+  eq(table.getn(texts) <= 7, true, "★detail display is capped (no unbounded popup growth): " .. tostring(table.getn(texts)) .. " lines")
+end
 -- 同一发送者同 id 重复收齐不重复弹（done 标记）
 EVAL_SHARE_ONMSG(shMsgs[1], "队友甲")
 for _, m in ipairs(shMsgs) do EVAL_SHARE_ONMSG(m, "队友甲") end
 EVAL_SHARE_PENDING().text = nil -- 不清理 done；仅验证不报错
 
+-- 67) ★★★1.71.2（第五轮）「自动接取有时输出一条空白日志」定案（用户截图）
+--   现象：聊天框先出现 `任务接取：`（名字为空），紧接着才出现 `任务接取： 回音山调查行动`。
+--   ★根因：新接的任务刚进日志时，那一行**已存在但标题尚未填充** → `GetQuestLogTitle` 返回
+--     **title = ""（空串，不是 nil）**；而 **Lua 里空串是真值**（本轮已用 fengari 实测确认），
+--     旧写法 `if okt and title` 对 "" 照样成立 → 入库成 `cur[""]`，被当成一个「名叫空的新任务」
+--     → 立刻播一条空白；下一轮扫描真名到位 → 再播一条正确的。顺序与截图完全一致。
+--   ★为什么断言必须模拟「标题暂时为空」：旧桩 `GetQuestLogTitle` 直接回 `q.title`，
+--     真实客户端的这个**中间态**在测试里根本不存在 → 不补桩这条 bug 永远测不出来
+--     （本项目第 N 次「桩太宽松 → 真实事故测不出来」）。
+do
+  -- ★桩里 TEST.chat 是**一个字符串**（每条追加 + \n），不是数组。
+  local function chatLines()
+    local out = {}
+    for ln in string.gmatch(TEST.chat or "", "[^\r\n]+") do out[table.getn(out) + 1] = ln end
+    return out
+  end
+  local function blankCount()
+    local n = 0
+    for _, line in ipairs(chatLines()) do
+      -- 匹配「任务接取：」后面没有实质内容（允许尾随空格 / 全角冒号后的空白）
+      if string.find(line, "任务接取：%s*$") or string.find(line, "Task accepted:%s*$") then n = n + 1 end
+    end
+    return n
+  end
+  EVAL_TB_TEST_RESET_TIMERS()
+  TEST.chat = ""
+  TEST.time = 20000
+  EVAL_HELP_CONFIG.tb = { questAccept = true, questTurnIn = true, qchan = "self" }
+  -- ★★★场景必须对：**先建立快照**（老任务在日志里），
+  --   **再**让一行标题为空的新任务出现 → 这才是真实的「接到新任务」时刻。
+  --   （我第一版把空行放在首次建档前 → 它被当成「初始快照」而不会播报，
+  --     所以断言恒绿、变异全部存活——反方向证明了「场景不对 → 断言无效」。）
+  TEST.questLog = { { title = "旧任务", lvl = 1 } }
+  EVAL_TB_TEST_SCAN_DIFF() -- 第 1 次：建档（tbQPrev 为 nil 时只建档不差分）
+  TEST.chat = ""
+  -- 新任务行出现但标题尚未填充（客户端中间态）
+  TEST.questLog = { { title = "旧任务", lvl = 1 }, { title = "", lvl = 1 } }
+  EVAL_TB_TEST_SCAN_DIFF() -- 第 2 次：旧写法下这里会播出一条空白
+  do
+  end
+  eq(blankCount(), 0, "★★★a quest row whose title is not yet populated must NOT produce a blank 任务接取 line")
+  -- 第二轮扫描：真名到位 → 应当播**一条正确的**（而且只有一条）
+  TEST.chat = ""
+  -- 真名到位（同一行，标题被填上）
+  TEST.questLog = { { title = "旧任务", lvl = 1 }, { title = "回音山调查行动", lvl = 1 } }
+  EVAL_TB_TEST_SCAN_DIFF()
+  local msgs = chatLines()
+  local named = 0
+  for _, line in ipairs(msgs) do
+    if string.find(line, "回音山调查行动", 1, true) ~= nil then named = named + 1 end
+  end
+  eq(named, 1, "★★★the real title is announced exactly once (got " .. tostring(named) .. ")")
+  eq(blankCount(), 0, "★★no blank line appeared even after the title arrived")
+  eq(table.getn(msgs), 1, "★★the notify channel carries exactly ONE message (no blank+real pair)")
+  -- 反向哨兵：确认判据真的会响——手工播一条空名，blankCount 必须涨
+  EVAL_TB_TEST_NOTIFY_EMPTY()
+  eq(blankCount(), 1, "★sanity: the blank detector really fires on an empty name")
+  TEST.chat = ""
+  TEST.questLog = nil
+  EVAL_TB_TEST_RESET_TIMERS()
+end
+-- ★★★第 68 组已于 1.71.2（第八轮）**随功能还原而删除**：
+--   它验的是「条件行自身是 EditBox」这条已被撤回的设计（sBox 已删）。
+--   现在的同类保护在 **64e**：面板内搜索框 可见 / 在面板内 / 真过滤 / 自定义输入可提交。
+--   ★为什么不留着当“历史记录”：它会引用已删除的钩子（EVAL_TEST_SE_ROW_BOX 等）
+--     而直接报 nil，把整套测试拖垮。细节保留在 CHANGELOG 与 CLAUDE.md。
+-- 69) ★★★1.71.2（第九轮）光环下拉里为什么会有「清凉的泉水」这类物品？（用户提问）
+--   用户原话：「buff 条件类型 下拉为什么会出现泉水这些物品类的信息？」
+--   ★根因（两层，缺一不成）：
+--     ① 菜单第三组「全部技能」列的是**动作条上的全部非宏格子**；动作条上可以放物品，
+--        扫描走 wactionName → 物品格拿到的是**物品名**（清凉的泉水）→ 以裸名字进入列表。
+--     ② 原有的过滤 `not itemOf(n)` **只认带前缀的写法**「物品:名称」（那是用户显式配置
+--        「使用物品」的形式），裸名字不匹配 → 漏网。
+--   ★用户选择：**保留但加标记区分**（不是删掉、也不是整组去掉）。
+--   ★判据两条（各管一侧）：① 扫描**真的**给物品格打了 item 标（走真实 EVAL_GO_RESCAN，
+--     用背包桩喂一个与动作条同名的物品）；② 菜单里物品条目**显示带标记**、且**取值仍是裸名字**
+--     （取值带标记会让 wslots 查不到、规则失效）。
+do
+  -- ① 扫描打标：动作条 1=物品(在背包里) / 2=技能(不在背包)
+  TEST.slotNames = { [1] = "清凉的泉水", [2] = "圣光术", [3] = nil }
+  TEST.bags = { [1] = { name = "清凉的泉水", tex = "t", count = 5 } }
+  EVAL_GO_RESCAN(true, "test-item-mark")
+  local wsItem = EVAL_WSLOTS["清凉的泉水"]
+  eq(type(wsItem) == "table", true, "precondition: the item on the action bar was scanned into wslots")
+  eq(wsItem.item, true, "★★★the scan marks an action-bar ITEM (bag-name match)")
+  eq(EVAL_WSLOTS["圣光术"] ~= nil, true, "precondition: the spell was scanned too")
+  eq(EVAL_WSLOTS["圣光术"].item, nil, "★★the scan does NOT mark a real spell as an item")
+  -- ② 菜单显示带标记、取值不带
+  local m = EVAL_TEST_AURA_DROPDOWN_ORDER("hasDebuff")
+  eq(type(m.items) == "table", true, "the menu hook exposes its real display strings")
+  local itemDisp, itemVal, spellDisp = nil, nil, nil
+  for i, d in ipairs(m.items) do
+    if m.names[i] == "清凉的泉水" then itemDisp, itemVal = d, m.names[i] end
+    if m.names[i] == "圣光术" then spellDisp = d end
+  end
+  eq(itemVal, "清凉的泉水", "★★the item row VALUE stays the bare name (so wslots lookup still works)")
+  eq(string.find(itemDisp or "", "物", 1, true) ~= nil, true,
+     "★★★the item row is MARKED in the display (got " .. tostring(itemDisp) .. ")")
+  eq(spellDisp, "圣光术", "★★a real spell is NOT marked (only items get the tag)")
+  -- 反向哨兵：证明「标记判据」真的会响——去掉 item 标后同一行就不该带标记
+  EVAL_WSLOTS["清凉的泉水"].item = nil
+  local m2 = EVAL_TEST_AURA_DROPDOWN_ORDER("hasDebuff")
+  local d2 = nil
+  for i, d in ipairs(m2.items) do if m2.names[i] == "清凉的泉水" then d2 = d end end
+  eq(d2, "清凉的泉水", "★sanity: without the item flag the row is plain (the marker really tracks the flag)")
+  TEST.slotNames = nil
+  TEST.bags = nil
+end
+-- 70) ★★★1.71.2（第十轮）未知光环名**不得**被当成「确定没有」（骑士虔诚光环实测事故）
+--   【事故】用户实测：骑士「虔诚光环」条件「自身buff检查=否」永远成立 → 规则无限重放（日志刷屏）。
+--   根因：`texOf(cd.s)` 解析不出纹理时，旧写法 `st.playerBuffs[texOf(cd.s) or ""]` 退化成查空串 = nil
+--   → cnt=0 → 「否/无」方向被当成**成立** → 永远重放。
+--   ★判据：**「查不到」与「没有」是两件事**——查不到必须如实报错，不能默认成「没有」。
+--   官方文档佐证（emberveil.org）：GetPlayerBuff/UnitBuff 都只枚举**出现在增益条上的光环**，
+--   且「Hidden or tracking auras are skipped」；本客户端 A–Z 全表里**没有任何 aura 专用函数**。
+do
+  -- ① 未知名字（动作条没有、学习表没有）→ 必须如实失败并给出原因
+  local ok, why = EVAL_TEST_COND_EVAL_LIVE({ k = "hasBuff", s = "绝无此名的测试光环", v = false }, nil)
+  eq(ok, false, "★★★an UNKNOWN aura name must NOT be treated as definitely-absent")
+  eq(type(why) == "string" and string.find(why, "无法识别", 1, true) ~= nil, true,
+     "★★the reason explains the aura could not be identified (got " .. tostring(why) .. ")")
+  -- ①b 同一件事的反方向：v=true（有buff）同样不能被当成「确定没有」而静默放行/拦截
+  local okV, whyV = EVAL_TEST_COND_EVAL_LIVE({ k = "hasBuff", s = "绝无此名的测试光环", v = true }, nil)
+  eq(okV, false, "★★unknown aura is honest in the OTHER direction too")
+  eq(type(whyV) == "string" and string.find(whyV, "无法识别", 1, true) ~= nil, true, "★★and says why")
+  -- ② 反向哨兵：**已知纹理**的名字照常判定（新闸门不许误伤正常路径）
+  EVAL_DEBUFF_TEX_LEARN["测试光环OK"] = "Interface\\Icons\\Spell_Holy_DevotionAura"
+  local ok2, why2 = EVAL_TEST_COND_EVAL_LIVE({ k = "hasBuff", s = "测试光环OK", v = false }, nil)
+  eq(ok2, true, "★a KNOWN aura texture still evaluates normally (guard does not over-block): " .. tostring(why2))
+  -- ②b 其它光环分支同样受保护（改一处漏一处是这类修复的典型失败）
+  local okT, whyT = EVAL_TEST_COND_EVAL_LIVE({ k = "tBuff", s = "绝无此名的测试光环", v = true }, nil)
+  eq(okT, false, "★★target-buff branch is guarded too")
+  eq(string.find(tostring(whyT), "无法识别", 1, true) ~= nil, true, "★★target-buff reason is explicit")
+  local okD, whyD = EVAL_TEST_COND_EVAL_LIVE({ k = "hasDebuff", s = "绝无此名的测试光环", v = true }, nil)
+  eq(okD, false, "★★target-debuff branch is guarded too")
+  eq(string.find(tostring(whyD), "无法识别", 1, true) ~= nil, true, "★★target-debuff reason is explicit")
+  local okP, whyP = EVAL_TEST_COND_EVAL_LIVE({ k = "pDebuff", s = "绝无此名的测试光环", v = true }, nil)
+  eq(okP, false, "★★self-debuff branch is guarded too")
+  eq(string.find(tostring(whyP), "无法识别", 1, true) ~= nil, true, "★★self-debuff reason is explicit")
+  EVAL_DEBUFF_TEX_LEARN["测试光环OK"] = nil
+end
+-- 71) ★★★1.71.2（第十一轮）光环纹理**优先级**：学习表（真实观察）> 动作条（代理）
+--   【事故】骑士虔诚光环：动作条格子 9 的 `GetActionTexture` 返回 `Spell_Nature_WispSplode_TEX`
+--   （别的法术的图标），而它在增益条上的真实图标是 `Spell_Holy_DevotionAura_TEX`。
+--   旧实现**动作条优先** → 拿错图标去比对 → 永远不命中 → 「自身buff检查=否」永远成立 → 无限重复施放。
+--   ★判据：**动作条图标只是代理；从增益条亲自观察到的纹理才是权威**。
+do
+  local nm = "测试光环优先级"
+  EVAL_WSLOTS[nm] = { slot = 9, tex = "TEX_ACTIONBAR" }
+  eq(EVAL_AURA_TEX(nm), "TEX_ACTIONBAR", "precondition: with nothing learned, the action-bar icon is used")
+  EVAL_DEBUFF_TEX_LEARN[nm] = "TEX_LEARNED"
+  eq(EVAL_AURA_TEX(nm), "TEX_LEARNED",
+     "★★★the LEARNED (observed on the buff bar) texture WINS over the action-bar icon")
+  -- 反向哨兵：学习表里没有的名字仍然走动作条（不能把正常路径废掉）
+  EVAL_DEBUFF_TEX_LEARN[nm] = nil
+  eq(EVAL_AURA_TEX(nm), "TEX_ACTIONBAR", "★names that were never learned still fall back to the action bar")
+  -- 两个都没有 → nil（这时才轮到「无法识别」那道闸门）
+  EVAL_WSLOTS[nm] = nil
+  eq(EVAL_AURA_TEX(nm), nil, "★unknown name resolves to nil so the honest-failure guard can fire")
+end
+-- 72) ★★★1.71.2（第十二轮）光环判定支持**按名字**（用户要求：「有些法术图标是不同的」）
+--   【事故】虔诚光环：动作条图标 `Spell_Nature_WispSplode` ≠ 增益条图标 `Spell_Holy_DevotionAura`
+--   → 只靠图标比对必然漏 → 「自身buff检查=否」永远成立 → 无限重复施放。
+--   ★修法：图标没命中时**按名字再确认一次**（工具读名，限频 0.5s，并顺带把正确的名字→图标学下来自愈）。
+--   ★判据：**「图标对不上」与「身上没有」是两件事**——所以两道判定都要各测一条。
+do
+  EVAL_AURA_TEST_RESET_NAME_CACHE()
+  -- 场景：光环在增益条上（名字=测试光环名），但它的图标与插件解析出的图标**不同**
+  TEST.buffs = { { name = "测试光环名", tex = "TEX_BUFFBAR" } }
+  EVAL_DEBUFF_TEX_LEARN["测试光环名"] = "TEX_ACTIONBAR_WRONG"
+  EVAL_HELP_UPDATE_STATE()
+  EVAL_AURA_TEST_RESET_NAME_CACHE()
+  -- ① 图标对不上 → 旧实现判「没有」；现在**名字命中** → 应判「有」
+  local ok, why = EVAL_TEST_COND_EVAL_LIVE({ k = "hasBuff", s = "测试光环名", v = true }, nil)
+  eq(ok, true, "★★★an aura whose buff-bar icon DIFFERS from the action-bar icon is still found BY NAME: " .. tostring(why))
+  -- ② 「无buff」方向：名字命中 → 必须为假（这正是用户看到的无限重复施放）
+  local ok2 = EVAL_TEST_COND_EVAL_LIVE({ k = "hasBuff", s = "测试光环名", v = false }, nil)
+  eq(ok2, false, "★★the no-buff direction is correctly false when the name IS on the buff bar")
+  -- ③ 反向哨兵：名字**不在**增益条上时不许被误判为「有」
+  EVAL_AURA_TEST_RESET_NAME_CACHE()
+  TEST.buffs = { { name = "别的光环", tex = "TEX_OTHER" } }
+  EVAL_HELP_UPDATE_STATE()
+  EVAL_AURA_TEST_RESET_NAME_CACHE()
+  local ok3 = EVAL_TEST_COND_EVAL_LIVE({ k = "hasBuff", s = "测试光环名", v = true }, nil)
+  eq(ok3, false, "★a name that is NOT on the buff bar is not falsely reported as present")
+  -- ④ 老形态 noBuff（存量数据）也必须走名字兜底（改一处漏一处是这类修复的典型失败）
+  EVAL_AURA_TEST_RESET_NAME_CACHE()
+  TEST.buffs = { { name = "测试光环名", tex = "TEX_BUFFBAR" } }
+  EVAL_HELP_UPDATE_STATE()
+  -- ★重置学习表：名字兜底会顺带把正确纹理学下来（自愈），
+  --   不重置的话后续断言会走快路径 → 变体变成**等价变体**（本轮实测存活）
+  EVAL_DEBUFF_TEX_LEARN["测试光环名"] = "TEX_ACTIONBAR_WRONG"
+  EVAL_AURA_TEST_RESET_NAME_CACHE()
+  local okNo = EVAL_TEST_COND_EVAL_LIVE({ k = "noBuff", s = "测试光环名" }, nil)
+  eq(okNo, false, "★★legacy noBuff also uses the name fallback")
+  -- 收尾（模块级状态必须自己收）
+  TEST.buffs = nil
+  EVAL_DEBUFF_TEX_LEARN["测试光环名"] = nil
+  EVAL_AURA_TEST_RESET_NAME_CACHE()
+  EVAL_HELP_UPDATE_STATE()
+end
+-- 73) ★★★1.71.2（第十三轮）条件类型下拉：**最后一组被行池上限静默截断**（用户实测）
+--   用户原话：「我记得之前有个技能冷却的条件的，现在没看到」。
+--   ★根因：下拉行池硬编码 48 行（1.27.0 注释「加倍：可能超 24」），
+--     而条件类型菜单**需要 54 行**（5 组 49 项 + 5 个组标题）→ 最后 6 行被悄悄丢掉，
+--     正好是 `·冷却/可用·` 组 = 冷却就绪 / 技能可用 / 未排队 / 施法范围内 / 施法中。
+--     ★1.71.2（第十四轮）「施法中」已按用户要求移入「自身状态」组，该组现为 4 项；全表总行数不变（54）。
+--     旁证：面板已按 ceil(54/12)=5 列算宽度 → 右侧留下一条**空列**（用户截图里那条空白）。
+--   ★修法：行池提到 DD_MAX_ROWS=96；且**超出时不再静默丢弃**（末行显示「还有 N 项」）。
+--   ★判据两条：① 菜单需要的行数 ≤ 行池（结构性保证）；② 点开真实按钮后，
+--     最后一组的条目**真的可见**（可见行数 > 48 是这次修复的直接证据）。
+do
+  eq(EVAL_TEST_SE_TYPE_MENU_ROWS() <= EVAL_TEST_DD_MAX_ROWS(), true,
+     "★★★the condition-type menu fits in the row pool (need=" .. tostring(EVAL_TEST_SE_TYPE_MENU_ROWS())
+     .. " pool=" .. tostring(EVAL_TEST_DD_MAX_ROWS()) .. ")")
+  EVAL_HELP_SE_OPEN(1) -- 打开编辑窗（该函数不返回布尔，不能断言返回值）
+  eq(EVAL_TEST_SE_PUSH_COND("power", nil, ">", 30), true, "a condition row exists to click")
+  EVAL_DD_HIDE()
+  EVAL_DD_TEST_RESET_ANCHOR()
+  eq(EVAL_TEST_SE_CLICK_TYPE(1), true, "★clicking the REAL type button opens the type dropdown")
+  eq(EVAL_DD_TEST_SHOWN(), true, "the type dropdown is shown")
+  local vis = EVAL_DD_TEST_VISIBLE_TEXTS()
+  eq(table.getn(vis) > 48, true,
+     "★★★more than 48 rows are actually DRAWN (got " .. tostring(table.getn(vis)) .. ") — the old cap silently dropped the tail")
+  local foundReady = false
+  local wantReady = EVAL_LOCALES[EVAL_GET_LANG()]["CT_READY"]
+  for _, s in ipairs(vis) do if s == wantReady then foundReady = true end end
+  eq(foundReady, true, "★★★the last group's item [" .. tostring(wantReady) .. "] is VISIBLE (this is what the user could not find)")
+  EVAL_DD_HIDE()
+  -- ★③ 「不静默截断」本身也要验：构造一个**超长列表**（200 项 > 行池），
+  --   断言①画满行池、②末行是**如实提示**而不是某个被丢掉的真条目。
+  --   ★为什么要单独测：条件类型菜单只有 54 项，永远碰不到这道兜底——
+  --     拆掉它照样全绿（等价变异，本轮实测存活）。缺了它，「静默丢弃」的坑以后还会再踩。
+  do
+    local big = {}
+    for bi2 = 1, 200 do big[bi2] = "ITEM" .. bi2 end
+    EVAL_DD_HIDE()
+    EVAL_DD_TEST_RESET_ANCHOR()
+    local shownN = EVAL_DD_TEST_OPEN_KW(big, nil, nil)
+    local maxRows = EVAL_TEST_DD_MAX_ROWS()
+    eq(shownN, maxRows, "★★★an over-long list fills the row pool exactly (got " .. tostring(shownN) .. " pool " .. tostring(maxRows) .. ")")
+    local vis2 = EVAL_DD_TEST_VISIBLE_TEXTS()
+    local last = vis2[table.getn(vis2)]
+    local wantMore = string.format(EVAL_LOCALES[EVAL_GET_LANG()]["DD_MORE_FMT"], 200 - (maxRows - 1))
+    -- ★实际显示串带颜色码（|cffff8080...|r），故用「包含」而不是「相等」判定
+    eq(type(last) == "string" and string.find(last, wantMore, 1, true) ~= nil, true,
+       "★★★the over-long list ends with an HONEST notice instead of silently dropping items (got " .. tostring(last) .. ")")
+    -- 反向哨兵：被丢掉的真条目**不许**出现在可见列表里（否则就是「假装全部显示」）
+    local leaked = false
+    for _, sv in ipairs(vis2) do if sv == "ITEM200" then leaked = true end end
+    eq(leaked, false, "★the dropped tail is NOT presented as if it were shown")
+    EVAL_DD_HIDE()
+  end
+  EVAL_TEST_SE_CLEAR()
+end
+-- 74) ★★★1.71.2（第十四/十五轮）施法相关条件：中文名调整 + 施法族统一归入「技能状态」组（用户要求，两轮）
+--   用户原话：「这几个名称调整.施法相关, 自身增加一个条件类型.
+--     施法中(新增参考目标施法中条件类型) / 施法时间 / 施法剩余时间 / 目标施法时间 / 目标施法剩余时间」
+--   ★第十四轮：用户选定 A 方案 → 把现有「施法中」（k=casting，SPELLCAST_* 事件驱动）从「技能状态」组移到「自身状态」组。
+--   ★第十五轮（本轮）：用户又要求把**自身施法族 + 目标施法族一起并回「技能状态」组**并「美化排序」——
+--     再次用 ask_user_question 给出三种排法，用户选 A = **技能本身 → 我的施法 → 目标的施法**。
+--     ★★「组归属」是**用户偏好**而不是技术结论：需求一改，断言就必须跟着改成钉**新**归属与**新**顺序，
+--        绝不能留着上一轮的断言当伪保护（它反而会挡住正确实现）。
+--   ★判据：① 四条新名字在下拉里真的可见（读**当前语言包**，不硬编码）；
+--     ② 「施法中」全菜单**只出现一次**（「移」若写成「复制」就会出现两条同名，用户一眼就能看到）；
+--     ③ 分组归属按**真实分组表**核实（旧的组里必须不再有它）——且先断言「按 label 取组真的取到了」，
+--        否则 label 打错时「不在该组」类断言会**恒真**（假绿）；
+--     ④ 四条时间条件的**导出→导入往返**不丢语义（改了 COND_NUMNAME，解析侧必须跟得上）。
+do
+  local zh = EVAL_LOCALES["zhCN"]   -- ★导出/解析的文法一直是中文名（与客户端语言无关），故对照 zhCN
+  local Lz = EVAL_LOCALES[EVAL_GET_LANG()]
+  local menu = EVAL_TEST_SE_TYPE_MENU()
+  local cnt = {}
+  for _, s in ipairs(menu) do cnt[s] = (cnt[s] or 0) + 1 end
+  for _, key in ipairs({ "CT_CASTEL", "CT_CASTLEFT", "CT_TCASTEL", "CT_TCASTLEFT" }) do
+    eq(cnt[Lz[key]] ~= nil, true, "★条件类型下拉里有新名字: " .. key .. "=" .. tostring(Lz[key]))
+  end
+  eq(cnt[Lz["CT_CASTING"]], 1, "★★★「施法中」全菜单只出现一次（A 方案=移动；复制会出现两条同名）")
+  -- ★③ 分组归属（读真实 SE_TYPE_GROUPS；按 label 取，不硬编码组下标）
+  local gSelf = EVAL_TEST_SE_TYPE_GROUP_IDS("CTG_1")
+  local gTarget = EVAL_TEST_SE_TYPE_GROUP_IDS("CTG_2")
+  local gSkill = EVAL_TEST_SE_TYPE_GROUP_IDS("CTG_4")
+  eq(type(gSelf) == "table", true, "★按 label 取到「自身状态」组（取不到的话下面几条会恒真）")
+  eq(type(gTarget) == "table", true, "★按 label 取到「目标状态」组")
+  eq(type(gSkill) == "table", true, "★按 label 取到「技能状态」组")
+  local function hasId(t, id)
+    for _, v in ipairs(t or {}) do if v == id then return true end end
+    return false
+  end
+  -- ★★★第十五轮：施法族 6 项必须**都在**「技能状态」组里
+  for _, id in ipairs({ "casting", "castEl", "castLeft", "tCasting", "tCastEl", "tCastLeft" }) do
+    eq(hasId(gSkill, id), true, "★★★施法族已在「技能状态」组: " .. id)
+  end
+  -- ★★反向哨兵：必须真的**移走**——原组里再留一份，菜单里就是两条同名（用户一眼就能看到）
+  for _, id in ipairs({ "casting", "castEl", "castLeft" }) do
+    eq(hasId(gSelf, id), false, "★★自身施法族已从「自身状态」组移出: " .. id)
+  end
+  for _, id in ipairs({ "tCasting", "tCastEl", "tCastLeft" }) do
+    eq(hasId(gTarget, id), false, "★★目标施法族已从「目标状态」组移出: " .. id)
+  end
+  -- ★★★「美化排序」本身就是需求（用户选定的 A 方案）→ **钉住顺序**：
+  --   只验成员的话，把顺序打乱（例如把目标族排到自身族前面）照样全绿。
+  eq(table.concat(gSkill, ","), "ready,usable,notQueued,inRange,casting,castEl,castLeft,tCasting,tCastEl,tCastLeft",
+     "★★★技能状态组按 A 方案排序：技能本身 → 我的施法 → 目标的施法")
+  -- ★★★① 条件类型菜单在**每一种语言**里都不许出现两条同名（重名 = 用户根本没法分辨）。
+  --   ★为什么必须逐语言：测试只跑一种语言，另一种语言的重名**永远是盲区**——
+  --     本轮变异实测：把 enUS 的 CT_TCASTEL 改回与 CT_CASTEL 同串（英文菜单里两条一模一样的
+  --     "Cast elapsed"），所有断言照样全绿。真机上英文客户端却分辨不出来。
+  --   顺手把「缺键」一起查了：这些键是动态拼的，静态 LANG KEY CHECK 扫不到。
+  for _, lang in ipairs({ "zhCN", "enUS", "ruRU" }) do
+    local tbl, seen, bad = EVAL_LOCALES[lang], {}, ""
+    for _, key in ipairs(EVAL_TEST_SE_TYPE_LABEL_KEYS()) do
+      local v = tbl[key]
+      if v == nil then
+        -- ★缺键必须**无条件**记进 bad：第一版我把缺失也塞进 seen 里当普通值，
+        --   于是只有「另一个键恰好同值」时才会被发现——缺键这半边等于没查（变异 M14 实测存活）。
+        --   ★这条正是本项目的老坑：一条断言里管两件事时，要分别确认「两半都会响」。
+        bad = bad .. "<缺键:" .. key .. "> "
+      else
+        if seen[v] then bad = bad .. "[" .. v .. "] " end
+        seen[v] = true
+      end
+    end
+    eq(bad, "", "★★★" .. lang .. " 条件类型菜单无重名、无缺键（问题项: " .. bad .. "）")
+  end
+  -- ★④ 摘要显示名（不能再漏出裸 id "castEl"——用户截图里规则行显示的就是 "castEl"）+ 往返
+  for _, p in ipairs({ { "castEl", "CT_CASTEL", ">", 2 }, { "castLeft", "CT_CASTLEFT", "<", 3 },
+                       { "tCastEl", "CT_TCASTEL", ">", 2 }, { "tCastLeft", "CT_TCASTLEFT", "<", 3 } }) do
+    eq(EVAL_TEST_COND_NUMNAME(p[1]), zh[p[2]], "★★" .. p[1] .. " 的摘要名与 zhCN 菜单名一致")
+    local txt = EVAL_COND_STR({ k = p[1], op = p[3], n = p[4] })
+    eq(txt, zh[p[2]] .. p[3] .. tostring(p[4]), "★★" .. p[1] .. " 摘要真的用了这个名字（不是裸 id）")
+    local back = EVAL_PARSE_CONDS(txt)
+    eq(table.getn(back) == 1 and back[1][1] and back[1][1].k, p[1], "★★★" .. zh[p[2]] .. " 导出→导入往返回到 " .. p[1])
+    eq(back[1][1] and back[1][1].n, p[4], "★★数值也往返")
+  end
+  -- ★反向哨兵：**旧写法**必须继续能解析（存量方案里的「读条>2」不能因改名失效）
+  local leg = EVAL_PARSE_CONDS("读条>2")
+  eq(table.getn(leg) == 1 and leg[1][1] and leg[1][1].k, "tCastEl", "★★旧别名「读条」仍解析为 tCastEl（向后兼容）")
+  eq(EVAL_GROUP_STR(leg), zh["CT_TCASTEL"] .. ">2", "★旧写法读出来显示为新名")
+  -- ★★★ 顺带定案并修掉的真 bug：施法中 的导出/解析对称性。
+  --   旧写法把 nil / 空串的技能名也拼上冒号 → 导出「施法中:nil」「施法中:」，
+  --   而解析侧只认「施法中」或「施法中:名」→ **两个都读不回 → 条件被静默丢弃**
+  --   （本项目铁律「绝不静默丢弃」的又一例；本次「施法中」要新进「自身状态」组，必须先修好）。
+  eq(EVAL_COND_STR({ k = "casting" }), zh["CT_CASTING"], "★★★裸「施法中」导出不带冒号（旧版输出「施法中:nil」）")
+  local rt = EVAL_PARSE_CONDS(EVAL_COND_STR({ k = "casting", s = "" }))
+  eq(table.getn(rt) == 1 and rt[1][1] and rt[1][1].k, "casting", "★★★空技能名（下拉默认）导出后能读回 casting")
+  eq(rt[1][1] and rt[1][1].s, nil, "★★读回时技能名是 nil（不是空串、更不是字符串 nil）")
+  -- ★旧导出串（冒号后为空）也要能读回：用户**历史导出**的文本里就长这样（旧写法 s="" 时输出「施法中:」）
+  local leg2 = EVAL_PARSE_CONDS("施法中:")
+  eq(table.getn(leg2) == 1 and leg2[1][1] and leg2[1][1].k, "casting", "★★历史导出串「施法中:」仍能读回 casting")
+  eq(leg2[1][1] and leg2[1][1].s, nil, "★★且技能名归一为 nil")
+  eq(EVAL_COND_STR({ k = "casting", s = "猛击" }), zh["CT_CASTING"] .. ":猛击", "★带技能名仍带冒号")
+  local rt2 = EVAL_PARSE_CONDS(EVAL_COND_STR({ k = "casting", v = false }))
+  eq(table.getn(rt2) == 1 and rt2[1][1] and rt2[1][1].v, false, "★★取反形式导出后也能读回（v=false）")
+end
+-- 75) ★★★1.71.2（第十八轮）技能日志的**小数格式**（用户要求：「技能日志.小数类数据显示保留1位小数」）
+--   用户截图原文：`自身buff剩余时间不符(剩余295.24997172132s)`——行为全对，但聊天框里是一串浮点尾巴。
+--   ★这类「纯展示」需求最容易被当成小事：它不影响判定，所以没有任何行为断言会去碰它，
+--     于是同一个量在多条分支里各拼各的字符串（本文件既有「冷却剩 %.1fs」，而剩余时间却 tostring 直拼）。
+--   ★判据必须读**真实返回的原因串**，而不是在测试里复述一遍格式模板（复述 = 测试在测自己）。
+do
+  -- 75a) 光环剩余时间：原因串里保留 1 位小数
+  EVAL_HELP_CONFIG.war.debuffTex = EVAL_HELP_CONFIG.war.debuffTex or {}
+  EVAL_HELP_CONFIG.war.debuffTex["战斗怒吼"] = "texBS"
+  TEST.buffs = { { tex = "texBS", left = 295.24997172132 } }
+  TEST.unitBuffs = nil TEST.debuffs = {} TEST.pDebuffs = nil
+  EVAL_HELP_UPDATE_STATE()
+  local okR, whyFrac = EVAL_COND_EVAL({ k = "hasBuff", s = "战斗怒吼", v = true, secOp = "<", secN = 30 })
+  eq(okR, false, "★前提：剩余 295.2s 不满足 <30s（所以才会产生「跳过原因」）")
+  eq(type(whyFrac) == "string", true, "★原因串可读（下面两条的前提）")
+  eq(string.find(whyFrac, "295.2s", 1, true) ~= nil, true,
+     "★★★剩余秒数保留 1 位小数（截图里是 295.24997172132s）: got=" .. tostring(whyFrac))
+  -- ★反向哨兵：旧写法（tostring 直拼）必须**不**满足上面那条，否则这条判据等于没响
+  local oldForm = "自身buff:剩余时间不符(剩余" .. tostring(295.24997172132) .. "s)"
+  eq(string.find(oldForm, "295.2s", 1, true) == nil, true,
+     "★sanity: 旧写法（tostring 直拼）确实不满足它 → 判据真的会响")
+  TEST.buffs = {} EVAL_HELP_UPDATE_STATE()
+
+  -- 75b) 「无动作」状态行里的百分比同样保留 1 位小数
+  --   ★走**真实入口 EVAL_GO**（不是直调拼串函数）：这类改动的风险恰恰在「那条状态行到底有没有被改到」。
+  --   ★为什么要在真实链路上验：状态行只在「一条规则都没出手」时才打印——
+  --     截住 EVAL_SAY 再跑一次 EVAL_GO，才是用户真正看到的那条消息。
+  do
+    local cap = {}
+    local oldSay = EVAL_SAY
+    local oldWdebug = EVAL_HELP_CONFIG.wdebug
+    EVAL_SAY = function(m) table.insert(cap, tostring(m)) end
+    EVAL_HELP_CONFIG.wdebug = true -- wlog 只在开启「方案技能日志」时才刷聊天框（这正是用户看到的那些行）
+    local prof = EVAL_HELP_CONFIG.war.profiles[EVAL_HELP_CONFIG.war.activeProfile or 1]
+    local oldSkills = prof and prof.skills
+    if prof then prof.skills = {} end -- 空方案 ⇒ 必然无动作 ⇒ 打印状态行
+    TEST.hp, TEST.hpMax = 65.4321, 100
+    EVAL_HELP_UPDATE_STATE()
+    EVAL_GO_LAST = 0
+    pcall(EVAL_GO)
+    EVAL_SAY = oldSay
+    EVAL_HELP_CONFIG.wdebug = oldWdebug
+    if prof then prof.skills = oldSkills end
+    local naLine = nil
+    for _, m in ipairs(cap) do if string.find(m, "无动作", 1, true) ~= nil then naLine = m end end
+    eq(naLine ~= nil, true, "★截到了「无动作」状态行（证明这条链路真的跑了）")
+    eq(naLine ~= nil and string.find(naLine, "目标血65.4%", 1, true) ~= nil, true,
+       "★★★状态行里的百分比保留 1 位小数（0.4% 这类残血不能被抹成 0%）: got=" .. tostring(naLine))
+    -- ★反向哨兵：旧写法 %.0f 确实不满足它
+    eq(string.find(string.format("目标血%.0f%%", 65.4321), "目标血65.4%", 1, true) == nil, true,
+       "★sanity: 旧的 %.0f 写法确实不满足它 → 判据真的会响")
+  end
+end
+-- 76) ★★★1.71.2（第二十轮）战斗信息 UI 的**状态条不再有那圈 1px 深色边**（用户实测：「战斗信息 生命条 有阴影」）
+--   根因：`uiMakeBar` 让彩色填充层**内缩 1px**（锚点 +1,-1 / 高度 h-2 / 可用宽度 w-2），
+--   于是填充四周露出一圈近黑的底（0.08,0.08,0.10@0.9）→ 满血时最明显，看着就像描边/阴影。
+--   ★★三处**必须同时改**：只改锚点与高度的话，满血时右侧仍留 2px 空隙（返回的可用宽度还是 w-2）。
+--     所以下面三条断言各钉一处，缺一条就会漏掉那种「改一半」的修法。
+--   ★深色底**没有删**：它仍是「未填充部分」，掉血时那条空槽照样看得见（用户要的是去掉那圈边，不是把底挖掉）。
+do
+  EVAL_HELP_UI_BUILD()
+  local bars = EVAL_TEST_UI_BAR_GEOM()
+  eq(type(bars) == "table" and table.getn(bars) >= 5, true,
+     "★五条状态条（血/能量/目标/读条/挥击）都能读到几何 (got " .. tostring(bars and table.getn(bars)) .. ")")
+  for _, b in ipairs(bars or {}) do
+    eq(b.x, 0, "★★★" .. b.name .. " 填充层左偏移 = 0（旧实现 1 → 左侧那道深色边）")
+    eq(b.y, 0, "★★★" .. b.name .. " 填充层上偏移 = 0（旧实现 -1 → 顶部那道深色边）")
+    eq(b.fillH, b.barH, "★★" .. b.name .. " 填充层高度 = 条高（旧实现 h-2 → 上下各留 1px）")
+    eq(b.maxW, b.barW, "★★★" .. b.name .. " 满值时填充宽度上限 = 条宽（旧实现 w-2 → 右侧仍留 2px 缝）")
+  end
+  -- ★反向哨兵：证明判据真的会响——旧实现的 1px 内缩确实不满足「偏移 = 0」
+  eq((1 == 0), false, "★sanity: 旧实现的 1px 内缩确实不满足「偏移 = 0」")
+end
+-- 77) ★★★1.71.2（第二十一轮）「队友/团员」这批条件在条件类型里**前面带感叹号**（用户要求）
+--   用户原话：「条件类型,队友团队这一批条件前面添加个感叹号. 代码未测试功能.」
+--   ★含义：这批条件（1.71.1 新增的队友/团员扫描）**还没在实机验证过**，用「!」标出来，
+--     免得用户把它当成和别的条件一样可靠。★所以标记必须**只加在这一批**上。
+--   ★加在**语言包的值**上（不是只改下拉的显示层）：这样条件行、规则列表里同样能看到这个标记——
+--     「哪些条件还没验证」是要跟着条件走的，不是只在挑选的那一刻提示。
+do
+  local TEAM_KEYS = { "CT_TEAMHP", "CT_TEAMMANA", "CT_TEAMBUFF", "CT_TEAMDEBUFF",
+                      "CT_TEAMRAIDHP", "CT_TEAMRAIDMANA", "CT_TEAMRAIDBUFF", "CT_TEAMRAIDDEBUFF" }
+  for _, lang in ipairs({ "zhCN", "enUS", "ruRU" }) do
+    local t = EVAL_LOCALES[lang]
+    for _, k in ipairs(TEAM_KEYS) do
+      local v = t[k]
+      eq(type(v) == "string" and string.sub(v, 1, 1) == "!", true,
+         "★★★" .. lang .. " " .. k .. " 以感叹号开头（该批条件尚未实机验证）: got=" .. tostring(v))
+    end
+  end
+  -- ★反向哨兵：**别的**条件类型不许带这个标记（否则「全加一遍」也能通过）
+  local zh = EVAL_LOCALES["zhCN"]
+  local leaked = ""
+  for _, key in ipairs(EVAL_TEST_SE_TYPE_LABEL_KEYS()) do
+    local isTeam = false
+    for _, k in ipairs(TEAM_KEYS) do if k == key then isTeam = true end end
+    if not isTeam then
+      local v = zh[key]
+      if type(v) == "string" and string.sub(v, 1, 1) == "!" then leaked = leaked .. key .. " " end
+    end
+  end
+  eq(leaked, "", "★★★只有队友/团员那批带感叹号，其余条件类型不受影响（泄漏: " .. leaked .. "）")
+  -- ★标记必须**真的进了条件类型菜单**（只写在语言包里 ≠ 下拉里看得到）
+  local menu = EVAL_TEST_SE_TYPE_MENU()
+  local Lz = EVAL_LOCALES[EVAL_GET_LANG()]
+  local found = false
+  for _, s in ipairs(menu) do if s == Lz["CT_TEAMHP"] then found = true end end
+  eq(found, true, "★★条件类型菜单里显示的就是带感叹号的那个名字: " .. tostring(Lz["CT_TEAMHP"]))
+end
 print("ALL TESTS PASS")

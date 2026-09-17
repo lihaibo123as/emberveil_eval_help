@@ -20,6 +20,7 @@
 
 | Version | Theme | One-line highlight |
 | :-- | :-- | :-- |
+| **1.71.2** | 🧙 Condition regroup + config-window cleanup + 📂 templates out of the script | Casting-family conditions renamed and consolidated into the **Skill state** group (Casting / Cast time / Cast remaining ‖ T:Casting / T:Cast time / T:Cast remaining); the duplicate **[Receive]** button removed, the "Toggles" heading hidden, **[Share]** got a step-by-step tooltip; the example-template library moved to per-class files under `examples/`; ★a batch of **silent-failure** bugs fixed (an unresolvable aura is now reported instead of treated as "absent", exported conditions are no longer dropped, the 1px bar shadow, the test stub sharing one position) |
 | **1.71.1** | 🩺 Party/Raid scan | One key scans your party/raid and picks by condition (lowest HP/mana, has magic debuff, missing a buff) → switches target → the spell lands on them |
 | **1.71.0** | 📡 Profile sharing | Send a profile to a chat channel; teammates get a popup and click Import |
 | **1.52.0** | 📏 Auto-attack range check | Auto Shot / wand out of range (IsActionInRange=0) now auto-falls back to melee auto-attack — point-blank hunters no longer swing their bow at thin air |
@@ -66,29 +67,20 @@
 
 ![Config window · Global tab](preview/main.png)
 
-**Config window · One-key macro tab**: left profile bar (multiple profiles ≤12, click to switch / right-click to rename) + skill list (order = priority, checkbox = enabled, conditions visible at a glance) + [Add Skill] / [Import-Export]
+**Config window · One-key macro tab**: left profile bar (multiple profiles ≤12, click to switch / right-click to rename) + skill list (order = priority, checkbox = enabled, conditions visible at a glance) + [Add Skill] / [Import-Export]; bottom row = three feature toggles + [Templates] / [Share] / [Close]
 
-![Config window · One-key macro tab](preview/cfg.png)
+![Config window · One-key macro tab](preview/cfg1.png)
 
 **Skill editor** (opened via [Edit] or by clicking a skill icon): per-row independent condition editing — condition type / params all chosen from dropdowns (28 condition types, grouped as self / target / aura / skill), relation column toggles & (all-in-group) / | (any-group), live preview
 
 ![Skill editor](preview/skill_doif.png)
 
-**Skill two-level dropdown**: skill row = [Category▾][Item▾] side-by-side double dropdown, options with icons — character skills (action-bar scan of all skills on your bars):
+**Skill two-level dropdown · four kinds** (a skill row in the editor = `[Category▾][Item▾]` side-by-side double dropdown, options with icons):
 
-![Skill dropdown · character skills](preview/skill_person.png)
-
-**Pet commands**: 8 pet commands (direct Pet API calls, no action slot), command icons self-learned from the pet action bar:
-
-![Pet commands](preview/skill_pet.png)
-
-**Target selection**: 9 switch modes (nearest enemy / last target / target's target / by name / clear target…), the macro switches target first, then acts:
-
-![Target selection](preview/skill_target.png)
-
-**Item use**: live bag scan (with icons + counts) + custom name — consumables used directly, equipment auto-equipped:
-
-![Item use](preview/skill_item.png)
+- **Character skills**: whitelist + a scan of every skill on your action bars
+- **Pet commands**: 8 pet commands (direct Pet API calls, no action slot), command icons self-learned from the pet action bar
+- **Target selection**: 9 switch modes (nearest enemy / last target / target's target / by name / clear target…); the macro switches target first, then acts
+- **Item use**: live bag scan (with icons + counts) + custom name — consumables used directly, equipment auto-equipped
 
 **Aura checks (4 types)**: self buff / target debuff / target buff / self debuff (yes/no toggle, live items ◆○●▲) — `无buff:再生` drives one-key potion drinking, `无目标buff:奥术智慧` drives buff rounds:
 

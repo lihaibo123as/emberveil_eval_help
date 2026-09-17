@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.71.1"
+local VERSION = "1.71.2"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -109,12 +109,19 @@ local function uiMakeBar(parent, w, h)
   bg:SetPoint("BOTTOMRIGHT", bar, "BOTTOMRIGHT", 0, 0)
   local fill = bar:CreateTexture(nil, "ARTWORK")
   uiSolid(fill, 0.5, 0.5, 0.5, 1)
-  fill:SetPoint("TOPLEFT", bar, "TOPLEFT", 1, -1)
-  fill:SetHeight(h - 2)
+  -- ★★★1.71.2（第二十轮）用户实测：「战斗信息 生命条 有阴影」——就是这三行。
+  --   旧写法让彩色填充层**内缩 1px**（锚点 +1,-1、高度 h-2、可用宽 w-2）→
+  --   满血时四周露出一圈近黑的底（0.08,0.08,0.10@0.9），看着就像描边/阴影。
+  --   ★三处**必须同时改**：只改锚点与高度的话，满血时右侧仍留 2px 空隙（下面返回的 w 也是修复的一部分）。
+  --   ★深色底**不删**——它仍是「未填充部分」，掉血后那条空槽照样看得见（用户要的是去掉那圈边）。
+  fill:SetPoint("TOPLEFT", bar, "TOPLEFT", 0, 0)
+  fill:SetHeight(h)
   pcall(fill.SetWidth, fill, 1)
   local text = uiText(bar, math.max(8, h - 6), 1, 1, 1)
   text:SetPoint("CENTER", bar, "CENTER", 0, 0)
-  return bar, fill, text, w - 2
+  -- ★1.71.2（第二十轮）返回的可用宽度改为 **w**（原 w-2，是配合 1px 内缩的）：
+  --   填充层现在铺满整条，满值时就该占满条宽——否则右侧仍会留 2px 的深色缝。
+  return bar, fill, text, w
 end
 
 -- 技能图标行（1.45.0 起）：内容以【激活方案的技能】为准，旧版固定战士清单（UI_ICONS）已废弃
@@ -509,7 +516,7 @@ function EVAL_HELP_UI_TICK()
   end
 
   -- 技能图标带（1.46.0 两行合一）：亮金=条件当前满足，半暗=不满足，灰+停=已停用；动作条技能带冷却倒数
-  if not EVAL_IS_SCANNED() then EVAL_GO_RESCAN(true) end
+  if not EVAL_IS_SCANNED() then EVAL_GO_RESCAN(true, "auto") end
   if ui.profCells then
     for i, pc in ipairs(ui.profCells) do
       local r = uiWarActiveRule(i)
@@ -721,11 +728,17 @@ local function cfgSlider(parent, x, y, w, label, get, set, list)
   return function() place(get() or 0) valText:SetText(tostring(get() or 0)) end
 end
 
+-- ★1.71.2 配置窗章节标题**登记表**（供断言核实「哪个标题真的画了」）。
+--   为什么需要：标题是 FontString，测试桩无法从控件树反查它的文本，
+--   而某轮的需求恰恰是「某个标题**不许**再画出来」——没有这份登记就只能靠人眼看截图。
+local cfgHeaderTexts = {}
+
 -- 章节标题
 local function cfgHeader(parent, x, y, label, list)
   local t = uiText(parent, 11, 0.95, 0.80, 0.30)
   t:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
   t:SetText(label)
+  table.insert(cfgHeaderTexts, tostring(label))
   if list then table.insert(list, t) end
 end
 
@@ -741,7 +754,9 @@ end
 local function cfgBuild()
   if cfgWin.root then return cfgWin.root end
   local WIDE = (EVAL_GET_LANG() ~= "zhCN") -- 1.34.1 i18n：西文（英/俄）比中文宽 ~1.5 倍，窗口与右列自适应加宽
-local W, H = cfWinWidth(), 420 -- 1.70.45 加宽 ~100（原 700/560）
+  -- ★1.71.2 高度 420 → **460**：用户要求开关组再下移 40px，
+  --   而原高度下移到 -389 时底部会超出窗口 5px（实测算过）→ 同步加高 40 保持全部可见。
+  local W, H = cfWinWidth(), 460 -- 1.70.45 加宽 ~100（原 700/560）；1.71.2 加高 40（开关组下移）
   local root = CreateFrame("Frame", "EVAL_HELP_CFG", UIParent)
   pcall(root.SetFrameStrata, root, "DIALOG")
   pcall(root.EnableMouse, root, true)
@@ -879,19 +894,52 @@ local W, H = cfWinWidth(), 420 -- 1.70.45 加宽 ~100（原 700/560）
   end
 
   local LX, RX, RW = 18, WIDE and 330 or 250, 160 -- RX 右列随语言加宽
+  -- ★★1.71.2（第六轮）**关闭按钮几何提为单一来源**：
+  --   用户要求「案例模版/分享/接收放到右侧、与[关闭]**同一行**」
+  --   → 必须知道关闭按钮的左边缘与**中线 y**。若在两处各写一遍，
+  --   改一个会漂移（本项目反复踩过：上一轮的测试副本就是这个形态）。
+  --   ★判据同「窗口宽度单一来源 cfWinWidth()」。
+  local CLOSE_W, CLOSE_H, CLOSE_RIGHT, CLOSE_BOTTOM = 64, 22, -12, 10
+  local CLOSE_LEFT = W + CLOSE_RIGHT - CLOSE_W
+  local CLOSE_MIDY = -(H - CLOSE_BOTTOM - CLOSE_H / 2)
 
   -- ===== Tab 1「全局」：日志 / 界面 / 帮助（非职业相关） =====
   local G = pages[1].widgets
   cfgHeader(root, LX, -56, L("G_LOG_H"), G)
+  -- ★1.71.2（第四轮）：日志组各行的 y 提为**单一来源常量**。
+  --   原因：测试可见的行表要记 y，若这里手写一份、cfgCheck 又写一份，
+  --   两份会各自漂移（本轮实测：把新行改到 -122 造成重叠，断言竟然未发现）。
+  --   ★与本项目「窗口宽度单一来源 cfWinWidth()」同一条律。
+  local LOG_Y_FILE, LOG_Y_DBG, LOG_Y_AUTO = -74, -98, -122
   -- 1.70.12：勾选框读写 cfg.log.on（cfg.log 本体是日志环形缓冲表，不能再整体当布尔用）
-  table.insert(refreshes, cfgCheck(root, LX, -74, L("G_LOG_FILE"),
+  local lfRow = cfgCheck(root, LX, LOG_Y_FILE, L("G_LOG_FILE"),
     function() local lg = c().log return not (type(lg) == "table" and lg.on == false) end,
     function(v)
       if type(c().log) ~= "table" then c().log = {} end
       c().log.on = v and true or false
-    end, G))
-  table.insert(refreshes, cfgCheck(root, LX, -98, L("G_LOG_AUTO"),
+    end, G)
+  table.insert(refreshes, lfRow)
+  cfgWin.logRows = cfgWin.logRows or {}
+  table.insert(cfgWin.logRows, { key = "G_LOG_FILE", y = LOG_Y_FILE })
+  -- ★★★1.71.2（第四轮）用户要求：把方案列表的「方案技能日志」开关移到这里（日志分组内）。
+  --   它与上面「记录调试日志」**不是同一功能**（排查记录见开关组处）：
+  --     上面 = 总闸门（写不写日志）；本行 = 只把每次按键的决策原因同步刷到聊天框（说不说）。
+  --   ★位置紧跟「记录调试日志」下方：两者同属日志输出，放一起才好对照理解。
+  -- ★★★注册到测试可见的行表 —— **必须直接用真实的读写器**，
+  --   不能再手写一份：我第一版就是手写的（另写一个 get/set 包一层），
+  --   结果把上面 cfgCheck 的字段改成 c().auto，**断言照样全绿**（本轮变异实测 SURVIVED）——
+  --   因为断言读的是那份手写副本，不是真正装上去的那个控件。
+  --   ★判据：**测试读的必须是生产代码实际使用的那个对象**，不能是它的一份平行拷贝。
+  local dbgGet = function() return c().wdebug end
+  local dbgSet = function(v) c().wdebug = v end
+  local dbgRow = cfgCheck(root, LX, LOG_Y_DBG, L("W_DEBUG_LOG"), dbgGet, dbgSet, G)
+  table.insert(refreshes, dbgRow)
+  cfgWin.logRows = cfgWin.logRows or {}
+  table.insert(cfgWin.logRows, { key = "W_DEBUG_LOG", y = LOG_Y_DBG, get = dbgGet, set = dbgSet })
+  -- 「进出战斗自动输出」顺势下移一行（原 -98 → -122），避免与上面新增项重叠
+  table.insert(refreshes, cfgCheck(root, LX, LOG_Y_AUTO, L("G_LOG_AUTO"),
     function() return c().auto end, function(v) c().auto = v end, G))
+  table.insert(cfgWin.logRows, { key = "G_LOG_AUTO", y = LOG_Y_AUTO })
 
   cfgHeader(root, LX, -138, L("G_UI_H"), G)
   table.insert(refreshes, cfgCheck(root, LX, -156, L("G_UI_COMBAT"),
@@ -1020,17 +1068,194 @@ local W, H = cfWinWidth(), 420 -- 1.70.45 加宽 ~100（原 700/560）
     table.insert(Wp, delB)
   end
 
-  -- 左栏下方：全局开关
-  local swY = -74 - (MAXPROF + 1) * 19 - 18
-  cfgHeader(root, LX, swY, L("W_SWITCH_H"), Wp)
-  table.insert(refreshes, cfgCheck(root, LX, swY - 18, L("W_ENABLE"),
+  -- ★★★1.71.2（第六轮）用户要求：「一键宏tab 以上按钮放置在右侧和关闭同一行」。
+  --   即：【案例模版 / 分享】整组从左侧**靠右**，与右下角的 [关闭] 排在**同一水平线**上。
+  --   ★1.71.2（第十六轮）用户要求：「删除分享右边的按键」——那正是 [接收]：
+  --     它的 OnClick 就是 EVAL_SHARE_RECV_TOGGLE，与开关组的「接收方案」**是同一个开关**（用户判断正确），
+  --     留着就是同一功能两个入口，还白占本行 84px。
+  --   ★为什么靠右而不是继续靠左：左下角要让给开关组（见下方 swItem），
+  --     两者各占一侧才不会互相挤（上一版正是因为都在左侧才显得拥挤）。
+  --   ★定位算法（不写死坐标，两种语言宽度 660/800 自适应）：
+  --     组右缘 = 关闭左边缘 - 8；已知组宽反推左边起点。
+  --   ★纵向：**按钮行中线对齐关闭按钮中线**（本项目铁律：同一行混用顶边/中线对齐必然错位）。
+  local NAV_GAP, NAV_H = 6, 20
+  local NAV_TAIL_GAP = 8 -- 组右缘与关闭左边缘的间隙
+  -- ★★两版对比（本轮实算过）：第一版把可用宽度**平分给三个按钮**
+  --   → 每个 182px、整行从 x=18 铺到 576（几乎横贯全窗），看上去像一排巨块；
+  --   而且**左边对齐与右边对齐数值上完全相等**（x0 两种算法都是 18）——
+  --   意味着那个变体是**等价变体**，测不出来也是应该的。
+  -- ★正确读法：按钮用**自然宽度**（够放下中文标签），**整组靠右**贴着关闭，
+  --   左侧腾出来的空间正好给开关行用 —— 这才是「放在右侧」的本意。
+  local NAV_BW = 78 -- 单个按钮宽（自然宽度：最长标签「案例模版」4 字 ×12px + 余量）
+  local NAV_ROW_Y = CLOSE_MIDY + NAV_H / 2 -- 顶边 y（中线对齐关闭）
+  local NAV_X0 = CLOSE_LEFT - NAV_TAIL_GAP - (NAV_BW * 2 + NAV_GAP * 1) -- 整组靠右（第十六轮 [接收] 已删 → 2 个按钮）
+  local navBtns = {}
+  local function navBtn(idx, label, fn, tip)
+    local b = CreateFrame("Button", nil, root)
+    b:SetWidth(NAV_BW) b:SetHeight(NAV_H)
+    b:SetPoint("TOPLEFT", root, "TOPLEFT", NAV_X0 + (idx - 1) * (NAV_BW + NAV_GAP), NAV_ROW_Y)
+    pcall(b.EnableMouse, b, true)
+    pcall(b.RegisterForClicks, b, "LeftButtonUp")
+    local bb = b:CreateTexture(nil, "BACKGROUND")
+    uiSolid(bb, 0.16, 0.13, 0.08, 1)
+    bb:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+    bb:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+    local bt = uiText(b, 9, 0.95, 0.82, 0.35)
+    bt:SetPoint("CENTER", b, "CENTER", 0, 0)
+    pcall(bt.SetWidth, bt, NAV_BW - 4) -- 限宽+不折行（本项目铁律：不限宽会溢出压到邻居）
+    pcall(bt.SetNonSpaceWrap, bt, false)
+    bt:SetText(label)
+    b:SetScript("OnClick", fn)
+    if tip then
+      b:SetScript("OnEnter", function()
+        GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
+        GameTooltip:AddLine(tostring(label), 1, 0.82, 0.3)
+        -- ★1.71.2（第十九轮）tip 既可以是**一行字符串**（老写法），也可以是
+        --   { {文本, r, g, b}, ... } 的**多行富提示**——分享按钮要分「怎么发 / 对方要满足什么」两段讲，
+        --   塞进一行会被自动折行成一坨，读不出层次。
+        --   ★用 ipairs 遍历是安全的：这张表由本文件自己构造、**没有 nil 洞**
+        --     （分隔行写的是空格字符串，不是 nil——本项目在「ipairs 遇 nil 即停」上栽过两次）。
+        if type(tip) == "table" then
+          for _, ln in ipairs(tip) do
+            if ln[1] ~= nil then
+              GameTooltip:AddLine(tostring(ln[1]), ln[2] or 0.85, ln[3] or 0.85, ln[4] or 0.85, true)
+            end
+          end
+        else
+          GameTooltip:AddLine(tip, 0.85, 0.85, 0.85, 1)
+        end
+        GameTooltip:Show()
+      end)
+      b:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    end
+    table.insert(Wp, b)
+    table.insert(Wp, bt)
+    navBtns[idx] = { btn = b, text = bt, label = label } -- label 供断言逐项比对（不从控件反查，桩里文本不可靠）
+    return b
+  end
+  -- ★★★1.71.2（第十九轮）分享按钮的 tooltip（用户要求）：「指引他怎么分享，别人需要什么条件才能接收分享，
+  --   比如需要开启接收分享的开关」。
+  --   ★为什么这条提示值得单独写：分享是**跨玩家**功能——**自己这端成功 ≠ 对方收得到**。
+  --     最容易踩的坑就是「对方没开『接收方案』开关」：Share.lua 的 shOnMsg 第一行就是
+  --     `if not shCfg().recv then return end` → **静默忽略，双方都没有任何提示**。
+  --     所以那一条用绿色高亮：它是唯一「错了也不知道」的条件。
+  --   ★文案全部走语言包（三语言齐），不在代码里写死中文。
+  local function shareNavTip()
+    return {
+      { L("SH_TIP_HOW"),  1.00, 0.85, 0.35 },
+      { L("SH_TIP_S1"),   0.88, 0.88, 0.88 },
+      { L("SH_TIP_S2"),   0.88, 0.88, 0.88 },
+      { L("SH_TIP_S3"),   0.88, 0.88, 0.88 },
+      { " ",              0.50, 0.50, 0.50 }, -- 空行分段（写空格而不是 nil：见 navBtn 里 ipairs 的说明）
+      { L("SH_TIP_NEED"), 1.00, 0.85, 0.35 },
+      { L("SH_TIP_R1"),   0.88, 0.88, 0.88 },
+      { string.format(L("SH_TIP_R2"), L("SH_RECV_SW")), 0.45, 1.00, 0.45 },
+      { L("SH_TIP_R3"),   0.88, 0.88, 0.88 },
+      { L("SH_TIP_R4"),   0.88, 0.88, 0.88 },
+      { " ",              0.50, 0.50, 0.50 },
+      { L("SH_TIP_FOOT"), 0.60, 0.60, 0.60 },
+    }
+  end
+  navBtn(1, L("IO_TPL"), function()
+    if type(EVAL_HELP_TPL_TOGGLE) == "function" then pcall(EVAL_HELP_TPL_TOGGLE) end
+  end, L("CF_TPL_TIP"))
+  navBtn(2, L("SH_SHARE"), function()
+    -- ★★★1.71.2（第十七轮）用户要求：「分享按钮不要触发显示导入导出弹窗」→ **删掉那次 IO 窗调用**。
+    --   ★先核实过「分享流程到底需不需要它」：**不需要**。分享走的是
+    --     EVAL_SHARE_SEND → EVAL_PROFILE_TO_TEXT() 取当前方案文本 → hex 分片 → RunScript(SendChatMessage)，
+    --     **全程不碰 IO 窗、也不碰它那个输入框**（原注释「分享流程需要 IO 窗承载 hex 文本」是旧设计的残留）。
+    --   ★而且那个函数是 **Toggle**：IO 窗本来就开着时，点分享反而会把它**关掉**——比「多开一个窗」更糟。
+    if type(EVAL_SHARE_SEND_UI) == "function" then pcall(EVAL_SHARE_SEND_UI, navBtns[2].btn) end
+  end, shareNavTip())
+  -- ★★★1.71.2（第十六轮）[接收] 按钮**已删除**（用户要求：「删除分享右边的按键，和开关状态内的接收方案重复」）。
+  --   ★动手前核实过（不是照字面删）：它的 OnClick 调 EVAL_SHARE_RECV_TOGGLE() = 翻转 cfg.share.recv，
+  --     而开关组第 3 项「接收方案」调的是**同一个函数** → 确实是重复入口，删掉不丢任何功能。
+  cfgWin.nav = navBtns
+  -- ★1.71.2 导出**生产代码真正用的布局值**：断言若自己再写一遍常量，
+  --   生产代码改了它不会跟着变（「测试复刻逻辑」的老毛病，本轮变异实测：swY 改回 -349 存活）。
+  --   让测试读真实值，才能验「开关组真的下移了 40px」这条需求本身。
+  cfgWin.layout = { navY = NAV_ROW_Y, navH = NAV_H, navX0 = NAV_X0, navBW = NAV_BW,
+                    navRight = NAV_X0 + NAV_BW * 2 + NAV_GAP * 1,
+                    closeLeft = CLOSE_LEFT, closeMidY = CLOSE_MIDY, closeW = CLOSE_W, closeH = CLOSE_H,
+                    swItemDY = nil }
+
+  -- ★★★1.71.2（第六轮）用户要求：「左侧开关再移动到下面一点、**和按钮对齐**」。
+  --   实现方式 = 把横排中线对齐到按钮行中线（NAV_ROW_Y - NAV_H/2）——**不写死 y**，避免与按钮行各自漂移。
+  --   ★1.71.2（第十六轮）标题已隐藏，但横排位置**不变**（用户只要求藏标题，没要求挪行）。
+  --   ★本项目铁律：同一行混用顶边/中线对齐必然错位 → 这里一律用**中线**反推。
+  local SW_ITEM_H = 16 -- swItem 勾选框高度
+  local swRowMid = NAV_ROW_Y - NAV_H / 2 -- 按钮行的中线
+  local swItemY = swRowMid + SW_ITEM_H / 2 -- 开关横排的顶边 y（cfgCheck 用顶边）
+  if cfgWin.layout then cfgWin.layout.swItemDY = swItemY; cfgWin.layout.swItemH = SW_ITEM_H end
+  -- ★★★1.71.2（第十六轮）用户要求：「隐藏左侧的开关标题名称」→ **不再调用 cfgHeader**（根本不画）。
+  --   ★为什么是「不画」而不是「画完再 Hide」：本客户端 Hide 之后控件仍可能被绘出（黑块那一轮吃过亏），
+  --     不建才是真的不显示。swY（标题 y）随之删除——留着就是没人消费的死状态。
+  -- ★★★1.71.2 用户要求（选 B）：「开关组三项改成**横排一行**，并把「接收方案」并入该组（共 4 项）」。
+  --   原来三项纵排（在分组标题下方的 -18/-42/-66；该标题本轮已隐藏）。横排后每项占位 = 勾选框16 + 间距6 + 标签宽 + 项间隔。
+  --   ★标签宽度只能**估算**（本客户端拿不到精确文本宽）→ 留足余量，中文按每字 12px 估。
+  --   横排横跨窗口宽度：左栏只有 232px 而四项中文标签需要约 329px（实测算过，左栏放不下）。
+  --   右边界给右下角「关闭」按钮让位（关闭在 W-76..W-12），故本行右缘不设限（四项远够不着）。
+  local SW_ITEM_GAP = 18 -- 项间距
+  local swX = LX
+  -- ★★标签宽度：优先用 FontString:GetStringWidth() **实测**（文档里是 FontString(widget) 的方法）；",
+  --   拿不到时退化为「按字符数估算」——**不能**用 string.len()：它返回**字节数**，",
+  --   中文一字 3 字节 → 宽度被高估 3 倍（本轮实测：4 项被算成 772px，实际只有 364px）。",
+  --   ★估算的字符数用「UTF-8 字节数 / 3」近似中文，西文（1 字节/字符）会偏小——",
+  --     故实测优先，估算只作兜底且按**中文字数**保守取值。",
+  local function swLabelWidth(fs, label)
+    if fs and fs.GetStringWidth then
+      local ok, w = pcall(fs.GetStringWidth, fs)
+      if ok and type(w) == "number" and w > 0 then return w end
+    end
+    local by = string.len(tostring(label)) -- 字节数
+    -- 粗略把字节数换算成字符数：>=3 字节的按 3 字节一字（中文），否则 1 字节一字（西文）
+    local chars = (by >= 3) and math.floor(by / 3) or by
+    return chars * 13
+  end
+  -- ★cfgCheck 返回的是 refresh **函数**（不是按钮），拿不到内部 FontString ——",
+  --   故这里自建一个**离屏测量用** FontString，用同一字体链量宽度（量完即 Hide）。",
+  --   本客户端 FontString:GetStringWidth() 在文档中存在（widgets/FontString#getstringwidth）。",
+  local measure = root:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  for _, fp in ipairs({ "Fonts\\FZLBJW.TTF", "Fonts\\FRIZQT__.TTF", "Fonts\\ARIALN.TTF" }) do
+    local okf = pcall(measure.SetFont, measure, fp, 11, "OUTLINE")
+    if okf then break end
+  end
+  pcall(measure.Hide, measure)
+  local function swItem(label, get, set, tip)
+    local c1 = cfgCheck(root, swX, swItemY, label, get, set, Wp, tip)
+    table.insert(refreshes, c1)
+    pcall(measure.SetText, measure, tostring(label))
+    swX = swX + 16 + 6 + swLabelWidth(measure, label) + SW_ITEM_GAP
+    return c1
+  end
+  swItem(L("W_ENABLE"),
     function() return warCfg().enabled ~= false end,
-    function(v) warCfg().enabled = v end, Wp))
-  table.insert(refreshes, cfgCheck(root, LX, swY - 42, L("W_AUTOATK"),
+    function(v) warCfg().enabled = v end)
+  swItem(L("W_AUTOATK"),
     function() return warCfg().attack ~= false end,
-    function(v) warCfg().attack = v end, Wp, L("W_AUTOATK_TIP")))
-  table.insert(refreshes, cfgCheck(root, LX, swY - 66, L("W_DEBUG"),
-    function() return c().wdebug end, function(v) c().wdebug = v end, Wp))
+    function(v) warCfg().attack = v end, L("W_AUTOATK_TIP"))
+  -- ★★★1.71.2（第四轮）用户要求：「将方案列表的调试信息开关移动到全局配置内的日志分组」。
+  --   排查结论（先查后动，本轮实测确认）：它与全局→日志的「记录调试日志」**不是同一个功能**，故**不合并**：
+  --     · 「记录调试日志」= cfg.log.on = **总闸门**，Core.logLine 开头就是 if not logEnabled() then return end
+  --       → 关掉后 EVAL_LOGLINE **一个字都不记**（数据层「写不写」）
+  --     · 本开关 = cfg.wdebug → 只控制 Engine 里那一批 if ... wdebug then EVAL_SAY(...) end
+  --       → **日志照写**，只是不把决策原因同步刷到聊天框（输出层「说不说」）
+  --   ★为什么原来放在「开关」组是错的：本组其余三项（启用一键宏/自动攻击/接收方案）都是**功能开关**，
+  --     惟独它是**日志输出开关**，语义不属于这一组 → 移到「全局 → 日志」分组。
+  --   ★用户定名：**「方案技能日志」**（原名「调试日志」与「记录调试日志」几乎同名，
+  --     并排显示时会被误认成重复项——本次排查正是由这个歧义引起的）。
+  -- ★第 4 项：接收方案开关并入本组（用户要求）。
+  --   它原来在 IO 窗的分享第二排；这里是**同一个开关的常驻入口**（读写同一个 cfg.share.recv，单一真值）。
+  --   ★不是「搬运」而是「新增入口」：分享发送流程在 IO 窗内，把收发拆到两个窗口会让流程断裂。
+  swItem(L("SH_RECV_SW"),
+    function()
+      if type(EVAL_SHARE_RECV_ON) == "function" then return EVAL_SHARE_RECV_ON() end
+      local sh = rawget(_G, "EVAL_HELP_CONFIG") and EVAL_HELP_CONFIG.share
+      return (type(sh) == "table") and (sh.recv ~= false) or true
+    end,
+    function(v)
+      if type(EVAL_SHARE_RECV_TOGGLE) == "function" then pcall(EVAL_SHARE_RECV_TOGGLE) end
+    end, L("SH_RECV_SW_TIP"))
 
   -- 右侧：技能规则列表（顺序=优先级；勾选=技能配置开关）
   local RX2 = 128
@@ -1066,7 +1291,7 @@ local W, H = cfWinWidth(), 420 -- 1.70.45 加宽 ~100（原 700/560）
 
   -- 全局 Tab「一键宏」组（1.32.2）：重扫动作条按钮，等同 /eh go rescan——拖动过技能后点一下即可
   cfgHeader(root, LX, -212, L("G_MACRO_H"), G)
-  local rsB, rsT = mkSmall(LX, -232, 130, L("G_RESCAN"), function() EVAL_GO_RESCAN() end, G)
+  local rsB, rsT = mkSmall(LX, -232, 130, L("G_RESCAN"), function() EVAL_GO_RESCAN(false, "menu") end, G)
   local rsTip = uiText(root, 8, 0.6, 0.6, 0.6)
   rsTip:SetPoint("TOPLEFT", root, "TOPLEFT", LX, -252)
   rsTip:SetText(L("G_RESCAN_TIP"))
@@ -1195,10 +1420,22 @@ local W, H = cfWinWidth(), 420 -- 1.70.45 加宽 ~100（原 700/560）
     end)
   end
 
+  -- ★★★1.71.2（第十六轮）**删除一段历史残留**（它比它记录的那个状态活得更久）。
+  --   这里原本写着 `cfgWin.nav = nil`（注释：「不再有底部导航按钮组，断言据此判定」）——
+  --   那是「三个按钮被搬到 IO 窗」那一轮的遗留；而**第六轮用户又要求把它们搬回配置窗底部**
+  --   （见上方 navBtn），可这个块没删 → 按钮真的建出来了、登记却被当场清空。
+  --   ★为什么几轮都没人发现：唯一会读它的 EVAL_TEST_CFG_NAV() **当时没有任何断言调用**（死代码），
+  --     于是「导航按钮组」在测试里长期是**空的**；本轮加断言时才当场暴露（got=0 want=2）。
+  --   ★判据：**改需求时必须回头删掉描述旧状态的记录**——一句与代码相反的注释比没有注释更危险，
+  --     下一个人会照着注释做。导航按钮组只在**上方 navBtn 处**创建，不要在这里再加一组。
+  -- ★★另一条留给后人的话：**导出的测试钩子没人用，就等于没有**——它的存在感会让人以为「这块有覆盖」。
+
   -- 底部关闭按钮（截图同款右下「关闭」）
   local close = CreateFrame("Button", nil, root)
-  close:SetWidth(64) close:SetHeight(22)
-  close:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", -12, 10)
+  -- ★1.71.2（第十六轮）改用**单一来源**的几何常量：导航按钮组是按 CLOSE_LEFT / CLOSE_MIDY 对齐的，
+  --   而这里是关闭按钮**真正被创建**的地方——两处各写一遍的话，改一处就会让导航组静默错位。
+  close:SetWidth(CLOSE_W) close:SetHeight(CLOSE_H)
+  close:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", CLOSE_RIGHT, CLOSE_BOTTOM)
   pcall(close.EnableMouse, close, true)
   pcall(close.RegisterForClicks, close, "LeftButtonUp")
   local cbg = close:CreateTexture(nil, "BACKGROUND")
@@ -1558,8 +1795,18 @@ function EVAL_WAR_DEL_PROFILE(idx)
 end
 
 -- 一键宏 Tab 列表刷新（方案按钮选中态 / 技能行内容 / 图标选择器高亮）
+-- ★1.71.2 方案列表刷新计数。
+--   为什么需要它：用户报的 bug 是「导入完成但列表没刷新」——这是**调用有没有发生**的问题，
+--   而「列表内容对不对」在数据层永远是对的（profiles 确实写进去了）。
+--   ★判据：凡是要验「某动作有没有触发刷新」，就必须**计数**，不能只看最终数据。
+--   ★必须声明在本函数**之前**（词法作用域）——放到后面会被 DECL ORDER CHECK 当场抓出。
+local warRefreshCount = 0
+local function warRefreshTick() warRefreshCount = warRefreshCount + 1 end
+function EVAL_TEST_WAR_REFRESH_COUNT() return warRefreshCount end
+
 function EVAL_WAR_TAB_REFRESH()
-  if not EVAL_IS_SCANNED() then EVAL_GO_RESCAN(true) end -- 1.32.9 自愈：初始化重扫若早于动作条就绪，这里补扫（否则技能行图标全灰）
+  warRefreshTick() -- ★1.71.2 计数（见 warRefreshTick 说明：只验数据验不出「没刷新」）
+  if not EVAL_IS_SCANNED() then EVAL_GO_RESCAN(true, "auto") end -- 1.32.9 自愈：初始化重扫若早于动作条就绪，这里补扫（否则技能行图标全灰）
   local warUI = cfgWin.warUI
   if not warUI then return end
   local w2 = warCfg()
@@ -1645,6 +1892,42 @@ function EVAL_HELP_CFG_SETTAB(idx)
   if idx == 4 and type(EVAL_DS_REFRESH) == "function" then pcall(EVAL_DS_REFRESH) end -- 数据检索
 end
 
+-- ★1.71.2 测试钩子：配置窗底部导航按钮（模版/分享/接收）的几何。
+--   用途：验「它们在关闭按钮左侧、同一行、不重叠、不越界」——
+--   否则这类布局问题只能靠人眼看截图（正是本轮改动的起因）。
+function EVAL_TEST_CFG_NAV()
+  local out = {}
+  for i, e in ipairs(cfgWin.nav or {}) do
+    local ok, p, _, _, ox, oy = pcall(e.btn.GetPoint, e.btn, 1)
+    local okw, aw = pcall(e.btn.GetWidth, e.btn)
+    local okc, fn = pcall(e.btn.GetScript, e.btn, "OnClick")
+    out[i] = {
+      x = (ok and type(ox) == "number") and ox or nil,
+      y = (ok and type(oy) == "number") and oy or nil,
+      point = ok and p or nil,
+      w = (okw and type(aw) == "number") and aw or nil,
+      -- ★1.71.2（第十六轮）身份与接线：label 取**登记值**（不从控件反查，桩里文本不可靠）；
+      --   hasClick 用于「删掉一个按钮」这类需求的反向哨兵——**不许留空壳凑数**。
+      label = e.label or "",
+      hasClick = (okc and type(fn) == "function") and true or false,
+      -- ★1.71.2（第十七轮）暴露按钮本体：断言要在**真实 OnClick 闭包**上点一下
+      --   （例如「点分享不该弹出导入导出窗」——只有真点才知道）。
+      btn = e.btn,
+    }
+  end
+  return out
+end
+
+-- ★1.71.2（第十六轮）断言专用：配置窗**真的画出来的**章节标题文案（按绘制顺序）。
+--   本轮需求是「隐藏左侧的开关标题」——要验的是「它根本没被画」，不是「它被 Hide 了」
+--   （本客户端 Hide 后控件仍可能被绘出，本项目在黑块那一轮吃过亏）。
+--   反向哨兵同样必要：断言「不在」时，必须先证明这份登记表**本来会响**（其它标题仍在里面）。
+function EVAL_TEST_CFG_HEADERS()
+  local out = {}
+  for _, t in ipairs(cfgHeaderTexts) do table.insert(out, t) end
+  return out
+end
+
 function EVAL_HELP_CFG_TOGGLE()
   local win = cfgBuild()
   if win:IsVisible() then
@@ -1657,12 +1940,86 @@ function EVAL_HELP_CFG_TOGGLE()
       c().cfgPos = nil
     end
     if cfgWin.refresh then cfgWin.refresh() end
+    -- ★1.71.2 用户要求「每次打开配置都进行一次技能扫描（静默日志）」：
+    --   配置窗里的技能列表/图标/条件参数全靠 wslots（动作条扫描结果），
+    --   而动作条随时会变（换装备、拖新技能、切天赋）——每次打开都以**当前**动作条为准。
+    --   quiet=true：不刷聊天框，只写调试日志缓冲（EVAL_GO_RESCAN 内的静默日志分支）。
+    if type(EVAL_GO_RESCAN) == "function" then pcall(EVAL_GO_RESCAN, true, "open") end
     EVAL_HELP_CFG_SETTAB(cfgWin.tab or c().cfgTab or 1)
     win:Show()
   end
 end
 
--- 小地图图标：挂在小地图左侧的金色 EH 按钮。
+-- ★★★1.71.2 用户截图：EH 按钮压在小地图**左下角**、和地图边缘/边框叠在一起。
+--   根因：默认锚点写成「mb 的 TOPRIGHT 对 Minimap 的 TOPLEFT」——看名字像「小地图左上」，
+--   实际是把按钮**挂在小地图左边缘**，而小地图是**圆形**：矩形按钮贴左边缘时，
+--   上半部在小地图外（正常），下半部就落进圆形轮廓里 → 视觉上「压在左下角」。
+--   ★判据（本轮定）：**锚点描述的是邻居的哪条边，不是「我想要哪个角」**——
+--     要让按钮落在圆外侧，必须锚到 **Minimap 的右边缘（RIGHT）之外**，而不是 TOPLEFT。
+--   同时：① 默认位置整体避开小地图下方的按钮簇；② 记忆位置若**压在小地图上**也要丢弃
+--   （原来只判「飞出屏幕」，压在圆里不算越界 → 一旦拖进去就永久记住，用户每次登录都看到它压着）。
+local MB_SIZE = 24
+local function mbAnchorDefault(mb)
+  if not mb then return end
+  pcall(mb.ClearAllPoints, mb)
+  -- 优先用 MinimapCluster（它是有实际尺寸的容器），退而用 Minimap
+  local anchor = nil
+  if type(MinimapCluster) == "table" or type(MinimapCluster) == "userdata" then anchor = MinimapCluster end
+  if not anchor and (type(Minimap) == "table" or type(Minimap) == "userdata") then anchor = Minimap end
+  if anchor then
+    -- ★落在容器**左侧之外**、且**贴在垂直中部**（圆的左右两侧是最宽处，矩形不会被圆吃掉）
+    local ok = pcall(mb.SetPoint, mb, "RIGHT", anchor, "LEFT", -6, 0)
+    if ok then return end
+  end
+  pcall(mb.SetPoint, mb, "TOPRIGHT", UIParent, "TOPRIGHT", -8, -8)
+end
+-- 按钮是否「压在小地图上」（矩形与小地图外接方框相交）——比 uiOffscreen 更严的一层
+-- ★★前置声明（无 = 号）：纯函数 EVAL_TEST_RECT_HITS_CIRCLE 定义在本函数**之后**，
+--   而 Lua 的作用域是**词法**的——不前置声明的话，mbOverlapsMinimap 里的引用会绑到**全局 nil**，
+--   表现为「拖动/登录时的越界判定直接红字」。这正是本项目累计十几次的同一类坑（A 节）。
+local EVAL_TEST_RECT_HITS_CIRCLE
+local function mbOverlapsMinimap(mb)
+  if not mb then return false end
+  local okm, m = pcall(function() return Minimap end)
+  if not (okm and m) then return false end
+  local okl, l = pcall(mb.GetLeft, mb) local okr, r = pcall(mb.GetRight, mb)
+  local okt, t = pcall(mb.GetTop, mb) local okb, b = pcall(mb.GetBottom, mb)
+  local oml, ml = pcall(m.GetLeft, m) local omr, mr = pcall(m.GetRight, m)
+  local omt, mt = pcall(m.GetTop, m) local omb, mbb = pcall(m.GetBottom, m)
+  if not (okl and okr and okt and okb and oml and omr and omt and omb) then return false end
+  -- ★每个坐标都必须真的是数字：少一个就放弃判定（返回 false = 「没压上」），
+  --   绝不让 nil 进入算术（本轮实测：桩的某一边缺失 → attempt to perform arithmetic on nil）。
+  --   ★这条防御是**必要**的：本函数的调用点在 OnDragStop（用户松手那一刻），
+  --     抛错会在拖动时弹红字——宁可漏判一次，也不能在交互路径上炸。
+  -- ★同上：ipairs 遇 nil 即停，这里必须显式判定（该函数在 OnDragStop 上，抛错=拖动弹红字）
+  if type(l) ~= "number" or type(r) ~= "number" or type(t) ~= "number" or type(b) ~= "number" then return false end
+  if type(ml) ~= "number" or type(mr) ~= "number" or type(mt) ~= "number" or type(mbb) ~= "number" then return false end
+  -- ★判定逻辑只有一份实现（下面的纯函数）：本函数只负责取坐标再调它。
+  --   这样断言可以直接**注入几何**构造用例，不必依赖测试桩会做锚点解算（它不会）。
+  return EVAL_TEST_RECT_HITS_CIRCLE(l, t, r, b, ml, mt, mr, mbb)
+end
+-- ★1.71.2 圆-矩形相交的纯函数（内切圆近似：小地图是圆的，矩形贴着左边缘时下半部会压进圆里）
+--   留 2px 余量，避免「刚好擦边」被判成压上。
+-- ★注意：因为上面有「前置声明 local EVAL_TEST_RECT_HITS_CIRCLE」，这里是给**那个 local** 赋值
+--   （不是新建全局）。测试需要全局入口 → 下面单独挂一次导出桥（项目既有范式）。
+function EVAL_TEST_RECT_HITS_CIRCLE(rl, rt, rr, rb, ml, mt, mr2, mb2)
+  -- ★★绝不能用 ipairs 遍历「可能含 nil 的表」：Lua 的 ipairs 遇到 nil **立即停止**（不是跳过），
+  --   表里第一个元素是 nil 时循环体一次都不执行 → nil 直接进入下面的算术 → 抛错。
+  --   ★这正是本项目 1.71.1 记过的同一个坑（ipairs({st.team, st.teamRaid}) 遇 nil 洞即停）；
+  --     那次代价是「团队成员查不到」，这次是「拖动弹红字」，形态不同、根因完全一样。
+  --   → 改为显式逐个判定（八个值写八次，丑但绝对正确）。
+  if type(rl) ~= "number" or type(rt) ~= "number" or type(rr) ~= "number" or type(rb) ~= "number" then return false end
+  if type(ml) ~= "number" or type(mt) ~= "number" or type(mr2) ~= "number" or type(mb2) ~= "number" then return false end
+  local cx, cy = (ml + mr2) / 2, (mt + mb2) / 2
+  local rad = math.min(mr2 - ml, mt - mb2) / 2
+  if rad <= 0 then return false end
+  local nx = math.max(rl, math.min(cx, rr))
+  local ny = math.max(rb, math.min(cy, rt))
+  local dx, dy = nx - cx, ny - cy
+  return (dx * dx + dy * dy) < (rad + 2) * (rad + 2)
+end
+EVAL_TEST_RECT_HITS_CIRCLE_G = EVAL_TEST_RECT_HITS_CIRCLE -- 全局导出桥（测试用）
+-- 小地图图标：挂在**小地图外侧**的金色 EH 按钮。
 -- UnrealQuest 实测要点：parent 用 UIParent（不是 Minimap——它是地图外的 chrome）；
 -- 锚链 Minimap → MinimapCluster → UIParent 右上角；RegisterForClicks 注册点击；
 -- 悬停用 OnEnter/OnLeave 改边框色 + GameTooltip 提示（不用 SetHighlightTexture）。
@@ -1677,16 +2034,7 @@ do
   pcall(mb.EnableMouse, mb, true)
   pcall(mb.RegisterForClicks, mb, "LeftButtonUp")
   pcall(mb.RegisterForDrag, mb, "LeftButton")
-  local anchored = false
-  if type(Minimap) == "table" or type(Minimap) == "userdata" then
-    anchored = pcall(mb.SetPoint, mb, "TOPRIGHT", Minimap, "TOPLEFT", -6, 0)
-  end
-  if not anchored and (type(MinimapCluster) == "table" or type(MinimapCluster) == "userdata") then
-    anchored = pcall(mb.SetPoint, mb, "TOPRIGHT", MinimapCluster, "TOPLEFT", -6, -6)
-  end
-  if not anchored then
-    pcall(mb.SetPoint, mb, "TOPRIGHT", UIParent, "TOPRIGHT", -8, -8)
-  end
+  mbAnchorDefault(mb) -- ★1.71.2 默认落在小地图**左侧之外**（旧的 TOPLEFT 锚点会压在圆的左下角）
   local ring = mb:CreateTexture(nil, "BACKGROUND")
   uiSolid(ring, 0.85, 0.70, 0.20, 1)
   ring:SetPoint("TOPLEFT", mb, "TOPLEFT", 0, 0)
@@ -1716,6 +2064,13 @@ do
         x = (type(x) == "number") and x or 0,
         y = (type(y) == "number") and y or 0,
       }
+      -- ★1.71.2 拖完当场校验：压在小地图上 / 飞出屏幕的位置**不落盘**，
+      --   直接弹回默认锚点。放在这里而不是只放在登录恢复处：用户拖歪的那一刻就纠正，
+      --   不必等下次登录才「自己跳回去」（那会显得像 bug）。
+      if uiOffscreen(mb) or mbOverlapsMinimap(mb) then
+        c().mbPos = nil
+        mbAnchorDefault(mb)
+      end
     end
   end)
   mb:SetScript("OnEnter", function()
@@ -1738,6 +2093,25 @@ do
     EVAL_HELP_CFG_TOGGLE()
   end)
   minimapBtn = mb
+end
+
+-- ★1.71.2 测试钩子：小地图按钮的默认锚点与重叠判定（否则只能靠人眼看界面）。
+--   ★必须物理放在上面那个 do 块**之后**——minimapBtn / mbAnchorDefault / mbOverlapsMinimap
+--     都是 local，写在使用点之前会解析成全局 nil（DECL ORDER CHECK 当场抓出 3 条 FAIL）。
+function EVAL_TEST_MB_DEFAULT_ANCHOR()
+  if not minimapBtn then return nil end
+  mbAnchorDefault(minimapBtn)
+  local ok, point, _, relPoint, x, y = pcall(minimapBtn.GetPoint, minimapBtn, 1)
+  if not ok then return nil end
+  return { point = point, relPoint = relPoint, x = x, y = y }
+end
+function EVAL_TEST_MB_OVERLAPS() return mbOverlapsMinimap(minimapBtn) end
+function EVAL_TEST_MB_BTN() return minimapBtn end
+function EVAL_TEST_MB_ANCHOR_CURRENT()
+  if not minimapBtn then return nil end
+  local ok, point, _, relPoint, x, y = pcall(minimapBtn.GetPoint, minimapBtn, 1)
+  if not ok then return nil end
+  return { point = point, relPoint = relPoint, x = x, y = y }
 end
 
 -- ============ 状态信息 UI（展示 Cat 式角色状态表 EVAL_HELP_STATE 的实时值） ============
@@ -1979,11 +2353,11 @@ local SE_TYPES = {
   { id = "immune",    name = "目标免疫技能", kind = "skill", s = "" }, -- 1.36.1 免疫学习表判定；1.70.0 去战士化：默认空（旧默认 撕裂）
   { id = "inRange",   name = "施法范围内",  kind = "skill", s = "" }, -- 1.37.0 IsActionInRange；1.70.0 去战士化：默认空（旧默认 冲锋）
   { id = "casting",   name = "施法中",      kind = "skill", s = "" }, -- 1.38.0 SPELLCAST_* 事件驱动 -- 1.41.0 默认空=任意施法
-  { id = "castEl",    name = "自身读条进行", kind = "num", n = 0.1 }, -- 1.58.0 时间型：初始 0.1（步进 0.1 区间 0-10）
-  { id = "castLeft",  name = "自身读条剩余", kind = "num", n = 0.1 },
+  { id = "castEl",    name = "施法时间", kind = "num", n = 0.1 }, -- 1.58.0 时间型：初始 0.1（步进 0.1 区间 0-10）；1.71.2 改名（原「自身读条进行」）
+  { id = "castLeft",  name = "施法剩余时间", kind = "num", n = 0.1 }, -- 1.71.2 改名（原「自身读条剩余」）
   { id = "tCasting",  name = "目标施法中",  kind = "skill", s = "" }, -- 1.40.0 空参数=任意施法
-  { id = "tCastEl",   name = "读条已进行",  kind = "num", n = 0.1 }, -- 1.58.0 时间型：初始 0.1
-  { id = "tCastLeft", name = "读条剩余",    kind = "num", n = 0.1 },
+  { id = "tCastEl",   name = "目标施法时间", kind = "num", n = 0.1 }, -- 1.58.0 时间型：初始 0.1；1.71.2 改名（原「读条已进行」）
+  { id = "tCastLeft", name = "目标施法剩余时间", kind = "num", n = 0.1 }, -- 1.71.2 改名（原「读条剩余」）
   -- ★1.70.47 队伍/团队条件（用户要求：一键扫描队伍 → 血量/蓝量/buff/debuff 检测）。
   --   ★★设计定案（用户拍板）：条件类型里**直接列出 队伍/团队 两套**（不搞范围下拉），
   --     并且条件**自己负责在队里挑人**——
@@ -2045,13 +2419,19 @@ for _, c in ipairs(CREATURE_TYPES) do CREATURE_BY_ID[c.id] = c end
 
 -- 条件类型分组（1.32.5 下拉美化）：金色组标题行不可选；SE_TYPES 本体顺序不动，仅展示层分组
 local SE_TYPE_GROUPS = {
-  { label = "CTG_1", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "swingLeft", "combat", "autoAttack", "autoShot", "wandShoot", "alt", "shift", "ctrl", "form", "castEl", "castLeft" } },
-  { label = "CTG_2", ids = { "tHpPct", "hasTarget", "canAttack", "canBleed", "tFriendly", "tHostile", "tNeutral", "isElite", "isBoss", "tInCombat", "tClass", "tCreature", "immune", "tCasting", "tCastEl", "tCastLeft" } },
+  { label = "CTG_1", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "swingLeft", "combat", "autoAttack", "autoShot", "wandShoot", "alt", "shift", "ctrl", "form" } }, -- ★1.71.2（第十五轮）施法族（施法中/施法时间/施法剩余时间）已统一移入 CTG_4
+  { label = "CTG_2", ids = { "tHpPct", "hasTarget", "canAttack", "canBleed", "tFriendly", "tHostile", "tNeutral", "isElite", "isBoss", "tInCombat", "tClass", "tCreature", "immune" } }, -- ★1.71.2（第十五轮）目标施法族（目标施法中/目标施法时间/目标施法剩余时间）已统一移入 CTG_4
   { label = "CTG_3", ids = { "hasBuff", "pDebuff", "hasDebuff", "tBuff" } }, -- 1.54.0 光环检查四型
   -- ★1.70.47 队伍/团队条件单列一组：**队伍与团队各列一份**（用户要求：
   --   「条件类型: 队伍debuff / 队伍buff / 团队debuff / 团队buff」——直接作为可选类型出现，不用范围下拉）
   { label = "CTG_5", ids = { "teamHp", "teamMana", "teamBuff", "teamDebuff", "teamRaidHp", "teamRaidMana", "teamRaidBuff", "teamRaidDebuff" } },
-  { label = "CTG_4", ids = { "ready", "usable", "notQueued", "inRange", "casting" } },
+  -- ★★★1.71.2（第十五轮）施法族归并（用户要求）：「自身施法相关 + 目标施法相关」全部并进本组。
+  --   顺序 = 用户选定的 A 方案：**技能本身的状态 → 我的施法 → 目标的施法**（两段名字互为镜像：
+  --   施法中/施法时间/施法剩余时间 ↔ 目标施法中/目标施法时间/目标施法剩余时间）。
+  --   ★顺序本身就是需求，断言必须**钉住顺序**而不只钉成员（只钉成员时打乱排序照样全绿）。
+  --   ★是「移」而不是「复制」：菜单里出现两条同名（例如两个「施法中」）用户根本没法分辨 →
+  --     断言同时钉「本组必须有」与「原组必须没有」两条，只钉前者时复制也照样通过。
+  { label = "CTG_4", ids = { "ready", "usable", "notQueued", "inRange", "casting", "castEl", "castLeft", "tCasting", "tCastEl", "tCastLeft" } },
 }
 
 local seUI = { root = nil, ed = nil, rows = {} }
@@ -2143,8 +2523,69 @@ end
 -- ===== 全局模拟下拉列表面板（1.19.0 由 SE 专用泛化：任意窗口可调用） =====
 -- EVAL_DD_OPEN(锚点按钮, 选项表, 回调)；多列 12 行/列，贴屏底自动上翻；EVAL_DD_HIDE() 收起。
 local DD_COLS = 12
+local DD_MAX_ROWS = 96 -- ★行池上限（原硬编码 48；条件类型菜单需 54 行）
+-- ★★★ 1.71.2（第十三轮）行池上限。原为硬编码 48，而**条件类型菜单需要 54 行**（五组 49 项 + 5 个组标题）
+--   → 最后一组「冷却就绪/技能可用/未排队/施法范围内/施法中」**整组被静默丢掉**，
+--   而且面板已按 5 列宽度布局 → 右侧留下一条空列（用户截图两个症状都对得上）。
+--   ★1.71.2（第十五轮）施法族（自身 3 项 + 目标 3 项）已按用户要求统一并入 CTG_4「技能状态」组 → 该组现为 10 项；
+--     全表总行数**仍然不变**（49 项 + 5 个组标题 = 54），行池上限的判断与结论都不受影响。
 local SEARCH_H = 20 -- 1.70.29 搜索框占用的额外高度（0=不显示搜索框时的高度基准不变）
+-- ★1.71.2 搜索框「停放坐标」：放在屏幕左上角外侧。
+--   为什么不用 Hide()：本客户端 EditBox 用 Hide() 之后**它的文字/底条仍会被绘出**
+--   （用户截图：搜索框消失后，所有弹窗上部留着一条看不见的黑块）→ 改用「挪出可视区」。
+--   比 0.0 透明度更可靠（透明度是 alpha 混合，残留的黑色仍可能可见）。
+local DD_SEARCH_PARK = -4000
 local ddUI = {}
+
+-- ★1.71.2 搜索框构建单独成函数（原来内联在 DD_BUILD 里）：
+--   理由一：本客户端 EditBox 的「层」设置必须是可断言的——内联时它只在 DD_BUILD 里跑一次，
+--     而 DD_BUILD 由「第一次打开下拉」触发，测试根本无法在受控时机执行它
+--     （本项目 1.70.46 教训：只测解析函数、不测真实路径 = 等于没测）。
+--   理由二：用户截图的「所有弹窗上部一条看不见的黑块」就是这里的层问题导致的，
+--     必须有一条断言真的钉住 SetDrawLayer/SetFrameLevel 被调用过。
+local function DD_MAKE_SEARCH(dd)
+-- ★1.70.29 可选搜索框（opts.search）：光环/技能名单很长，用户要能输入关键字过滤，
+--   并且在「列表里没有我要的名字」时可以直接提交自己输入的名称。
+--   放在面板顶部，行区整体下移（高度由 EVAL_DD_OPEN 按 SEARCH_H 计入）。
+local sb = CreateFrame("EditBox", nil, dd)
+sb:SetWidth(160) sb:SetHeight(16)
+sb:SetPoint("TOPLEFT", dd, "TOPLEFT", 4, -3)
+sb:SetAutoFocus(false)
+pcall(sb.EnableMouse, sb, true)
+-- ★★1.71.2 第二轮用户实测纠正：**不要**把 EditBox 压到 BACKGROUND！
+--   第一版这么做，结果输入框自己在面板里**彻底看不见了**（用户截图：条件行下方那块空白
+--   其实正是输入框的位置，只是被面板背板盖住了）。
+--   根因：压层的对象是「EditBox + 它的 FontString」，而面板的**不透明背板**也在 BACKGROUND——
+--   FrameLevel 只决定**同一层内**的先后，压到同一层就会被背板整个盖住。
+--   ★正解：EditBox 保持在正常层（可见），**靠「不用时挪出可视区」来消除干扰**（见 DD_SEARCH_PARK），
+--     不需要也不应该动它的层。**可见的东西不压层，不可见的东西不靠层隐藏**——这是本轮的两条判据。
+-- 本客户端 EditBox 默认文字居中偏右，必须显式压左并清内缩（1.70.3 实测）
+pcall(sb.SetJustifyH, sb, "LEFT")
+pcall(sb.SetJustifyV, sb, "MIDDLE")
+pcall(sb.SetTextInsets, sb, 3, 0, 0, 0)
+for _, f in ipairs({ "GameFontHighlightSmall", "ChatFontNormal", "GameFontNormal" }) do
+  if pcall(sb.SetFontObject, sb, f) then break end
+end
+local sbBg = dd:CreateTexture(nil, "BACKGROUND")
+uiSolid(sbBg, 0.10, 0.09, 0.06, 1)
+-- (定位在 EVAL_DD_OPEN 里按面板宽度重设，这里只给初值)
+ddUI.searchBg = sbBg
+ddUI.search = sb
+ddUI.searchText = ""
+-- 1.71.2 初始即停放（不能用 Hide，见 DD_SEARCH_PARK 说明）
+sb:ClearAllPoints()
+sb:SetPoint("TOPLEFT", dd, "TOPLEFT", DD_SEARCH_PARK, 0)
+sbBg:ClearAllPoints()
+sbBg:SetPoint("TOPLEFT", dd, "TOPLEFT", DD_SEARCH_PARK, 0)
+sb:SetScript("OnTextChanged", function()
+  -- 输入即过滤（无服务器写动作，无需限频；但只在面板开启时生效）
+  local t = ""
+  pcall(function() t = sb:GetText() or "" end)
+  ddUI.searchText = t
+  if ddUI.refilter then pcall(ddUI.refilter) end
+end)
+sb:SetScript("OnEscapePressed", function() EVAL_DD_HIDE() end)
+end
 
 local function DD_BUILD()
   if ddUI.root then return end
@@ -2156,6 +2597,16 @@ local function DD_BUILD()
   uiSolid(bg, 0.06, 0.05, 0.04, 0.98)
   bg:SetPoint("TOPLEFT", dd, "TOPLEFT", 0, 0)
   bg:SetPoint("BOTTOMRIGHT", dd, "BOTTOMRIGHT", 0, 0)
+  -- ★1.71.2 关窗后「所有弹窗上部一条看不见的黑块」的根因就在这个搜索框：
+  --   本客户的 EditBox 文字画在**高于 BACKGROUND 的层**（且会在自己背后画一条不透明底条），
+  --   ddUI.searchBg（BACKGROUND）根本盖不住它。于是 EnableMouse(false) 隐藏后，
+  --   面板四边的 1px 金线还在、中间是**空的**，那条黑底条就从空心里透出来（只有顶部一条带）。
+  --   修法两层：① 面板补一块**不透明**背板挡住它；② 隐藏时把它挪到屏幕外（见 DD_SEARCH_PARK）。
+  pcall(bg.SetDrawLayer, bg, "BACKGROUND")
+  local solid = dd:CreateTexture(nil, "BACKGROUND")
+  uiSolid(solid, 0.06, 0.05, 0.04, 1)
+  solid:SetPoint("TOPLEFT", dd, "TOPLEFT", 1, -1)
+  solid:SetPoint("BOTTOMRIGHT", dd, "BOTTOMRIGHT", -1, 1)
   for _, e in ipairs({ "TOP", "BOTTOM" }) do
     local t = dd:CreateTexture(nil, "BORDER")
     uiSolid(t, 0.85, 0.70, 0.20, 1)
@@ -2170,40 +2621,9 @@ local function DD_BUILD()
     t:SetPoint("BOTTOM" .. side, dd, "BOTTOM" .. side, 0, 0)
     t:SetWidth(1)
   end
-  -- ★1.70.29 可选搜索框（opts.search）：光环/技能名单很长，用户要能输入关键字过滤，
-  --   并且在「列表里没有我要的名字」时可以直接提交自己输入的名称。
-  --   放在面板顶部，行区整体下移（高度由 EVAL_DD_OPEN 按 SEARCH_H 计入）。
-  local sb = CreateFrame("EditBox", nil, dd)
-  sb:SetWidth(160) sb:SetHeight(16)
-  sb:SetPoint("TOPLEFT", dd, "TOPLEFT", 4, -3)
-  sb:SetAutoFocus(false)
-  pcall(sb.EnableMouse, sb, true)
-  -- 本客户端 EditBox 默认文字居中偏右，必须显式压左并清内缩（1.70.3 实测）
-  pcall(sb.SetJustifyH, sb, "LEFT")
-  pcall(sb.SetJustifyV, sb, "MIDDLE")
-  pcall(sb.SetTextInsets, sb, 3, 0, 0, 0)
-  for _, f in ipairs({ "GameFontHighlightSmall", "ChatFontNormal", "GameFontNormal" }) do
-    if pcall(sb.SetFontObject, sb, f) then break end
-  end
-  local sbBg = dd:CreateTexture(nil, "BACKGROUND")
-  uiSolid(sbBg, 0.10, 0.09, 0.06, 1)
-  -- (定位在 EVAL_DD_OPEN 里按面板宽度重设，这里只给初值)
-  ddUI.searchBg = sbBg
-  ddUI.search = sb
-  ddUI.searchText = ""
-  sb:Hide()
-  sbBg:Hide()
-  sb:SetScript("OnTextChanged", function()
-    -- 输入即过滤（无服务器写动作，无需限频；但只在面板开启时生效）
-    local t = ""
-    pcall(function() t = sb:GetText() or "" end)
-    ddUI.searchText = t
-    if ddUI.refilter then pcall(ddUI.refilter) end
-  end)
-  sb:SetScript("OnEscapePressed", function() EVAL_DD_HIDE() end)
-
+  DD_MAKE_SEARCH(dd) -- ★1.71.2 搜索框构建（层设置/停放判定都在这一个函数里，便于断言）
   ddUI.rows = {}
-  for i = 1, 48 do -- 1.27.0 加倍：技能清单+实时debuff/buff 追加项可能超 24
+  for i = 1, DD_MAX_ROWS do -- 1.27.0 加倍；1.71.2 再抬（条件类型菜单已需 54 行）
     local rb = CreateFrame("Button", nil, dd)
     rb:SetWidth(104) rb:SetHeight(14)
     pcall(rb.EnableMouse, rb, true)
@@ -2228,6 +2648,21 @@ end
 
 function EVAL_DD_HIDE() if ddUI.root then ddUI.root:Hide() end ddUI.anchor = nil end
 
+-- ★1.71.2 供**宿主控件**（条件行里的光环名输入框）驱动的重过滤入口。
+--   设计意图（用户要求）：把「输入关键字」放在**宿主那边**、而不是下拉面板内部，
+--   于是下拉组件**完全不改**（不再有 ddUI.search / 残留黑块 / 光标那一整条链路的问题）。
+--   ★过滤关键字来源改为「宿主传入」，故这里接收一个 kw 参数并复用 ddUI.refilter 的重入保护。
+function EVAL_DD_REFILTER_OPEN(kw)
+  if not ddUI.root then return false end
+  local okS, shown = pcall(ddUI.root.IsShown, ddUI.root)
+  if not (okS and shown) then return false end
+  -- kw 传进来就更新（宿主 EditBox 每次输入都会调）；不传则沿用上次的关键字
+  if kw ~= nil then ddUI.hostKw = kw end
+  ddUI.searchText = ddUI.hostKw or ""
+  if ddUI.refilter then pcall(ddUI.refilter) end
+  return true
+end
+
 -- ★1.70.29 搜索过滤（纯函数，UI 与测试共用）：
 --   输入 items/locked/关键字 -> 返回「按显示顺序排列的原始下标列表」。
 --   · 关键字为空 = 不过滤（返回全部）
@@ -2237,10 +2672,30 @@ function EVAL_DD_HIDE() if ddUI.root then ddUI.root:Hide() end ddUI.anchor = nil
 function DD_FILTER(items, locked, kw, allowFree)
   local out = {}
   local key = (kw ~= nil) and string.lower(tostring(kw)) or ""
+  -- ★★1.71.2 两遍扫描（用户截图「顶部空白区域」）：
+  --   第一遍先问「本次关键字有没有命中任何**可选行**」；
+  --   第二遍才决定标题行的去留：
+  --     · 有命中 → 标题照旧保留（那是分组结构，删了用户看不懂列表）
+  --     · 一条都没命中 → **连标题一起过滤掉**
+  --   起因：标题原本写死「永不被过滤」，于是像「阴影」这种一条都不命中的关键字，
+  --   列表顶部会留下一条「只有标题、下面全空」的空白带——用户一眼就看到那块空白。
+  --   ★注意顺序：必须先扫完可选行再决定标题，边扫边判会因「标题在第一项」而永远误判为有命中。
+  local anyHit = false
+  if key ~= "" then
+    for i = 1, table.getn(items) do
+      if not (locked and locked[i]) then
+        if string.find(string.lower(tostring(items[i])), key, 1, true) ~= nil then anyHit = true break end
+      end
+    end
+  end
   for i = 1, table.getn(items) do
     local keep = true
-    if key ~= "" and not (locked and locked[i]) then
-      keep = (string.find(string.lower(tostring(items[i])), key, 1, true) ~= nil)
+    if key ~= "" then
+      if locked and locked[i] then
+        keep = anyHit -- 标题：有命中才保留（全部落空时不留空带）
+      else
+        keep = (string.find(string.lower(tostring(items[i])), key, 1, true) ~= nil)
+      end
     end
     if keep then table.insert(out, i) end
   end
@@ -2323,7 +2778,21 @@ function SE_AURA_MENU(k0)
   end
   if table.getn(rest) > 0 then
     if isAura then header(L("SE_ALL_SKILLS")) end
-    for _, n in ipairs(rest) do push(n, n) end
+    for _, n in ipairs(rest) do
+      -- ★★★1.71.2（用户要求）：物品条目**保留但加标记区分**。
+      --   用户实测问题：「buff 条件类型下拉为什么会出现泉水这些物品类的信息？」
+      --   答案：本组是「动作条上的全部非宏格子」，而动作条上能放物品 → 裸名字混进来了。
+      --   ★标记只改**显示串**（items[i]），不动**取值**（names[i]）——
+      --     选中后写进 cd.s 的仍然是裸名字，否则 wslots 查不到、规则也会失效。
+      --   ★为什么用**短标记 + 灰色**：下拉行的文字 FontString **没有限宽**（容易向右溢出到下一列），
+      --     标记越短越安全；灰色本身也是一层区分（不占宽度）。
+      local ws = wslots and wslots[n]
+      if ws and ws.item then
+        push(n .. " |cff888888[物]|r", n)
+      else
+        push(n, n)
+      end
+    end
   end
   return { items = items, names = names, locked = locked, liveN = liveN }
 end
@@ -2332,7 +2801,7 @@ end
 function EVAL_TEST_AURA_DROPDOWN_ORDER(kindId)
   -- 直接看 SE_AURA_MENU（UI 用的那一份）的真实输出
   local m = SE_AURA_MENU(kindId)
-  local items, locked = m.items, m.locked
+  local items, locked, names = m.items, m.locked, m.names
   local firstLive, firstSkill, firstLearned = nil, nil, nil
   for i = 1, table.getn(items) do
     local it2 = items[i]
@@ -2358,7 +2827,9 @@ function EVAL_TEST_AURA_DROPDOWN_ORDER(kindId)
     liveFirst = (firstLive ~= nil and firstSkill ~= nil and firstLive < firstSkill),
     hasHeader = (lockedN > 0),
     lockedHeaders = lockedN,
+    -- ★1.71.2 加标记断言用：暴露**真实的显示串与取值表**（不在测试里重建一份）
     skillsLast = (m.liveN > 0 and firstSkill ~= nil and firstSkill > m.liveN),
+    items = items, names = names,
   }
 end
 
@@ -2409,8 +2880,95 @@ function EVAL_DD_TEST_OPEN_SEARCH(items, onPick, locked)
   EVAL_DD_OPEN(ddUI.testAnchor, items, onPick, { search = true, locked = locked, onFreeText = function() end })
   return true
 end
+-- ★1.71.2 判据从 IsShown() 改成「有没有被停放到屏幕外」：
+--   本客户端 EditBox 用 Hide() 之后仍会画底条（用户截图「所有弹窗上部一条黑块」），
+--   所以搜索框**不再走 Hide()**，而是挪出可视区 → IsShown() 恒真，不能再当可见性判据。
+-- ★1.71.2 直接跑真实的搜索框构建（DD_BUILD 只在「第一次打开下拉」时执行，测试无法在受控时机触发它）。
+--   用户截图的「所有弹窗上部一条看不见的黑块」是**层设置**问题，只有执行真实构建路径才能验证。
+function EVAL_DD_TEST_BUILD_SEARCH()
+  DD_BUILD()
+  return ddUI.search ~= nil
+end
+-- 搜索框当前的「层」——桩把 SetDrawLayer 当空操作的话这里拿不到值，故同时暴露调用记录
+function EVAL_DD_TEST_SEARCH_LAYER()
+  if not ddUI.search then return nil end
+  local ok, lay = pcall(function() return ddUI.search:GetDrawLayer() end)
+  if ok and type(lay) == "string" then return lay end
+  return nil
+end
+-- ★1.71.2 按**宿主关键字**打开下拉（复现光环条件那条路径：面板无搜索框、靠 opts.kw 过滤）。
+--   返回可见行数，供断言验证「过滤真的生效」。
+function EVAL_DD_TEST_OPEN_KW(items, kw, locked)
+  EVAL_DD_HIDE()
+  if not ddUI.testAnchor then
+    local a = CreateFrame("Button", nil, UIParent)
+    a:SetWidth(100) a:SetHeight(16)
+    a:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 20, -20)
+    a:Show()
+    ddUI.testAnchor = a
+  end
+  ddUI.anchor = nil
+  ddUI.searchText = ""
+  ddUI.hostKw = nil
+  EVAL_DD_OPEN(ddUI.testAnchor, items, function() end, { kw = kw, locked = locked })
+  local n = 0
+  for _, row in ipairs(ddUI.rows) do
+    if row.btn and row.btn:IsShown() then n = n + 1 end
+  end
+  return n
+end
+-- 1.71.2 打开一个**不开搜索**的下拉（复现用户截图场景：条件类型/比较符/姿态号等短列表）
+function EVAL_DD_TEST_OPEN_NO_SEARCH(items, onPick)
+  EVAL_DD_HIDE()
+  if not ddUI.testAnchor then
+    local a = CreateFrame("Button", nil, UIParent)
+    a:SetWidth(100) a:SetHeight(16)
+    a:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 20, -20)
+    a:Show()
+    ddUI.testAnchor = a
+  end
+  ddUI.anchor = nil
+  ddUI.searchText = ""
+  EVAL_DD_OPEN(ddUI.testAnchor, items, onPick)
+  return true
+end
 function EVAL_DD_TEST_SEARCH_VISIBLE()
-  return (ddUI.search and ddUI.search:IsShown()) and true or false
+  if not ddUI.search then return false end
+  local ok, x = pcall(ddUI.search.GetLeft, ddUI.search)
+  if not (ok and type(x) == "number") then return false end
+  return x > DD_SEARCH_PARK + 1
+end
+-- ★1.71.2 搜索框是否**真的回到面板内**（用户第三轮报的「光标消失」= 本体还在屏幕外，
+--   只有背景被搬回来了）。判据 = 左边缘在面板左边缘附近，而不是停放坐标。
+function EVAL_DD_TEST_SEARCH_IN_PANEL()
+  if not ddUI.search then return false end
+  local ok, x = pcall(ddUI.search.GetLeft, ddUI.search)
+  if not (ok and type(x) == "number") then return false end
+  return (x > DD_SEARCH_PARK + 1) and (x < 200)
+end
+-- ★1.71.2 把搜索框强制打到「停放态」——给往返断言一个**确定性起点**。
+--   为什么必须有它：DD_BUILD 只在第一次打开下拉时执行（ddUI.root 已存在就 early-return），
+--   所以测试里搜索框的初始位置是从**上一个用例**继承来的；不显式置位的话，
+--   「先停放、再打开搜索」这条往返就变成了「碰巧上一轮是什么状态」——变异体照样能蒙混过关
+--   （本轮实测：去掉「打开时搬回来」的修复，断言依然通过，就是栽在这个残留状态上）。
+-- 记录搜索框被「搬回面板内」的次数。判据为什么用计数而不是坐标：
+--   撤掉恢复动作时，坐标会**保持上一次的值**（本轮实测：变异体照样读到 x=4 → 断言假通过）；
+--   计数才如实反映「这次打开有没有执行恢复动作」。
+function EVAL_DD_TEST_SEARCH_POS_COUNT() return ddUI.posCount or 0 end
+function EVAL_DD_TEST_PARK_SEARCH()
+  local dd = ddUI.root
+  if not (ddUI.search and dd) then return false end
+  -- ★不用 GetParent()：**当时**测试桩对未知方法的兜底是「返回一个函数」，pcall 会成功但拿到函数而非帧
+  --   （本轮实测 parkOk=false 就是这么来的）。ddUI.root 就是 DD_MAKE_SEARCH 里的那个 dd，直接用它。
+  --   ★1.71.2（第二十轮）桩已补上真正的 GetParent（纹理能反查所在帧）——这里仍保留直接引用，
+  --     因为它比「反查父帧」更**不含歧义**：少一层间接就少一个可能指错的对象。
+  ddUI.search:ClearAllPoints()
+  ddUI.search:SetPoint("TOPLEFT", dd, "TOPLEFT", DD_SEARCH_PARK, 0)
+  return true
+end
+-- 供断言使用：面板本体（不是搜索框）当前是否显示
+function EVAL_DD_TEST_ROOT_VISIBLE()
+  return (ddUI.root and ddUI.root:IsShown()) and true or false
 end
 function EVAL_DD_TEST_SEARCH_TEXT() return tostring(ddUI.searchText or "") end
 function EVAL_DD_TEST_TYPE_SEARCH(txt)
@@ -2510,22 +3068,46 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
   --   这样 onPick(pi) / ddUI.sel[pi] / opts.icons[pi] 全部语义不变，过滤只是「少显示几行」。
   local useSearch = (opts and opts.search) and true or false
   ddUI.useSearch = useSearch
+  -- ★1.71.2 opts.kw = **宿主**提供的过滤关键字（条件行里的光环名输入框）。
+  --   与 opts.search 的区别：kw 只提供「过滤词」，**不显示面板内搜索框**（用户要求去掉那个框）。
+  --   ★过滤逻辑完全复用 DD_FILTER —— 单一实现，避免两处过滤行为漂移。
+  if opts and opts.kw ~= nil then ddUI.searchText = tostring(opts.kw) end
+  if not useSearch then ddUI.hostKw = (opts and opts.kw) or nil end
+  -- 过滤关键字：面板内搜索框开启时用 searchText，否则用宿主提供的 hostKw
+  local filterKw = useSearch and ddUI.searchText or ddUI.hostKw
   -- 过滤与「自由文本行」的判定抽成纯函数 DD_FILTER（见下）——UI 与测试共用同一份实现，
   -- 否则测试只能复刻逻辑，变异将不可见（本项目已三次踩到这个坑）。
-  local shownList = DD_FILTER(items, ddUI.locked, useSearch and ddUI.searchText or nil,
+  -- ★1.71.2 过滤关键字来源：面板内搜索框（useSearch）或**宿主输入框**（filterKw）。
+  --   自由文本哨兵行只在「面板内有搜索框」时启用——宿主方案下由宿主自己提交自定义名称。
+  local shownList = DD_FILTER(items, ddUI.locked, filterKw,
     useSearch and (opts.onFreeText ~= nil) or false)
   local nAll = table.getn(items)
   local n = table.getn(shownList)
-  local cols = math.ceil(n / DD_COLS)
+  -- ★★★ 绝不静默截断（本项目铁律）：超出行池时**如实告知还有多少项**，而不是悄悄丢掉。
+  local truncated, nDraw = 0, n
+  if n > DD_MAX_ROWS then truncated = n - (DD_MAX_ROWS - 1) nDraw = DD_MAX_ROWS end
+  local cols = math.ceil(nDraw / DD_COLS)
   if cols < 1 then cols = 1 end
   local icons = opts and opts.icons -- 1.32.4 可选图标列：与 items 同序的纹理表
   local colW = icons and 124 or 108
   for slot, row in ipairs(ddUI.rows) do
-    if slot <= n then
+    if slot <= nDraw then
       local i = shownList[slot]   -- 显示位置 -> 原始下标（负数 = 自由文本哨兵行）
       local pi = i                -- pi 保持「原始下标」语义（onPick/sel/icons 都按它索引）
-      -- ★自由文本行：渲染成「✎ 使用 "关键字"」，点击回调 onPick(-1, 关键字)
-      if i == -1 then
+      if truncated > 0 and slot == nDraw then
+        -- ★截断提示行（不可点）
+        row.icon:Hide()
+        row.text:ClearAllPoints()
+        row.text:SetPoint("LEFT", row.btn, "LEFT", 4, 0)
+        row.text:SetText("|cffff8080" .. string.format(L("DD_MORE_FMT"), truncated) .. "|r")
+        row.btn:SetScript("OnClick", nil)
+        local colT = math.floor((slot - 1) / DD_COLS)
+        local riT = math.mod(slot - 1, DD_COLS)
+        row.btn:ClearAllPoints()
+        row.btn:SetPoint("TOPLEFT", dd, "TOPLEFT", 4 + colT * colW, -(4 + SEARCH_H) - riT * 15)
+        row._ddPaint = nil
+        row.btn:Show()
+      elseif i == -1 then
         row.icon:Hide()
         row.text:ClearAllPoints()
         row.text:SetPoint("LEFT", row.btn, "LEFT", 4, 0)
@@ -2618,10 +3200,21 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
       if okw and type(wv) == "number" and wv > 0 then ddW = wv end
       local w = math.max(60, ddW - 8)
       pcall(ddUI.search.SetWidth, ddUI.search, w - 4)
+      -- ★★★1.71.2 第三轮（用户实测：「不是没了，是**光标**消失了」）：
+      --   搜索框本体是显示的，丢的是**输入光标/聚焦状态**。
+      --   根因就在这几行：原来只把 searchBg 重新锚回面板内，**搜索框自己却还停在停放坐标**
+      --   （DD_SEARCH_PARK，屏幕外）——它没有任何 EditBox 的错，只是被上一次「不用搜索的下拉」
+      --   挪走后再没搬回来；离屏的 EditBox 拿不到焦点，自然没有光标。
+      --   ★教训：把控件「挪走」是一个**状态**，凡是挪走就必须在**所有**恢复路径上搬回来。
+      --     只恢复背景不恢复本体，就是「一半搬回来」——肉眼看不出控件缺失，只表现为光标不见了。
+      ddUI.search:ClearAllPoints()
+      ddUI.search:SetPoint("TOPLEFT", dd, "TOPLEFT", 4, -3)
+      pcall(ddUI.search.Show, ddUI.search)
+      ddUI.posCount = (ddUI.posCount or 0) + 1 -- 「搬回来了」的计数（见 EVAL_DD_TEST_SEARCH_POS_COUNT）
       ddUI.searchBg:ClearAllPoints()
       ddUI.searchBg:SetPoint("TOPLEFT", dd, "TOPLEFT", 4, -3)
       ddUI.searchBg:SetWidth(w) ddUI.searchBg:SetHeight(16)
-      ddUI.search:Show() ddUI.searchBg:Show()
+      pcall(ddUI.searchBg.Show, ddUI.searchBg)
       -- 每次【用户重新打开】才清空；过滤引发的重入必须保留关键字，
       -- 否则打字一个字就被自己清掉（本特性最容易踩的坑）。
       if not ddUI.reentrant then
@@ -2630,7 +3223,11 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
         pcall(ddUI.search.SetFocus, ddUI.search)
       end
     else
-      ddUI.search:Hide() ddUI.searchBg:Hide()
+      -- ★1.71.2 不用 Hide()：本客户端 EditBox 隐藏后仍会画出底条（用户截图证据）→ 挪出屏幕
+      ddUI.search:ClearAllPoints()
+      ddUI.search:SetPoint("TOPLEFT", dd, "TOPLEFT", DD_SEARCH_PARK, 0)
+      ddUI.searchBg:ClearAllPoints()
+      ddUI.searchBg:SetPoint("TOPLEFT", dd, "TOPLEFT", DD_SEARCH_PARK, 0)
       ddUI.searchText = ""
     end
   end
@@ -3091,7 +3688,17 @@ local function SE_BUILD()
     pcall(st2.SetWidth, st2, 100) -- 1.70.1 收窄：给右侧 是/否+层 让位
     row.skillText = st2
     reg(st2)
-    -- 1.35.2 布局优化：[v] 箭头按钮取消——文字本身就是触发区（透明热区覆盖，悬停高亮提示可点）
+    -- ★★★1.71.2（第八轮）**还原**：条件行里的输入框改回纯文本**，输入改回面板内。
+    --   用户原话：「这个功能还原，到输入框格保持在下拉内，并且支持打字过滤和自定义输入」。
+    --   → 输入框回到**下拉面板内**（opts.search = true，见下方 sDrop 的 EVAL_DD_OPEN），
+    --     本行只保留 FontString 做**显示**（点它仍然打开下拉，但不再聚焦打字）。
+    --   ★为什么删掉 EditBox 而不是留着：它与这个 FontString **同坐标重叠**，
+    --     留着就是两个显示体互相遮盖（本项目反复踩过「同坐标双控件」）；而且它的输入能力已由面板内搜索框取代。
+    -- ★1.35.2 起：点击热区（透明 Button）—— 与文字 FontString 同坐标，负责接收点击。
+    --   ★第七轮曾在这里与一个 EditBox（sBox）共存，而两者同坐标重叠 → 后建的 sHit 在上层，
+    --   EditBox 拿不到焦点（那是当时的真 bug，已修）。
+    --   ★★第八轮还原后 EditBox 已删，这里**只剩 sHit 一个点击体**，点一下就是开下拉。
+    --   ★同坐标多控件的谁上谁下由**创建顺序**决定——这条教训保留（本项目反复踩过）。
     local sHit = CreateFrame("Button", nil, root)
     sHit:SetWidth(100) sHit:SetHeight(15)
     sHit:SetPoint("TOPLEFT", root, "TOPLEFT", 140, y)
@@ -3204,8 +3811,12 @@ local function SE_BUILD()
         EVAL_HELP_SE_REFRESH()
       end, {
         icons = anyIcon and icons or nil, locked = locked,
-        -- ★1.70.29 用户要求：光环条件下拉支持输入检索；列表里没有想要的名称时，
-        --   允许直接把用户输入的名称作为条件值（自制/未记录的光环也能用）。
+        -- ★★★1.71.2（第八轮）用户要求**还原**：「这个功能还原，到输入框格保持在下拉内，
+        --   并且支持打字过滤和自定义输入」。
+        --   → 重新启用**面板内搜索框**：打字即过滤；自定义输入走 onFreeText（自由文本行）。
+        --   ★★这不是把老 bug 请回来：该链路的两个历史问题修复**仍然全在**：
+        --     ① 面板有**不透明背板**（挡住 EditBox 自带的黑底条）；
+        --     ② 搜索框不用时靠**挪出可视区**（DD_SEARCH_PARK）而不是 Hide。
         search = true,
         onFreeText = function(txt)
           if txt == nil or txt == "" then return end
@@ -3215,7 +3826,14 @@ local function SE_BUILD()
       })
     end)
     row.sDrop.btn:Hide() -- 1.35.2 v 按钮常驻隐藏
-    sHit:SetScript("OnClick", function() local c = row.sDrop.btn:GetScript("OnClick") if c then c() end end)
+    -- ★★★1.71.2（第八轮还原）点一下 = **只开下拉**（不再聚焦行内输入框——它已删）。
+    --   输入改在**面板内的搜索框**（opts.search），面板一开就能直接打字过滤。
+    --   ★旧的“合并两个行为”标记：那是因为行内 EditBox 需要聚焦；
+    --     现在行内已回到纯文本，自然不需要聚焦这一步。
+    sHit:SetScript("OnClick", function()
+      local c = row.sDrop.btn:GetScript("OnClick")
+      if c then c() end
+    end)
     reg(row.sDrop.btn)
     -- 免疫条件的 免疫/未免疫 切换（1.36.3：kind=skill 共用参数区，仅 immune 类型显示）
     -- 1.36.4 修：此块 1.36.3 误嵌进 sDrop 调用中间，导致只在点击时才赋值（刷新时 immBtn nil 报错）
@@ -3387,6 +4005,68 @@ function EVAL_TEST_SE_ROW_DT(i)
   return (okS and s) and true or false, okT and t or nil
 end
 -- 行内「剩余时间」控件的可见性与文案（问真实控件，不问常量）
+-- ★★★1.71.2（第八轮还原）**行内输入框已删**，输入回到面板内。
+--   所以原来那批「行内输入框」钩子（ROW_BOX / BOX_TEXT / BOX_FOCUSED / TYPE_AURA / PRESS_ENTER / KW）
+--   **全部删除**：它们指向的控件已不存在，留着只会让断言误判。
+--   ★新断言改用**面板内搜索框**的现成钩子：EVAL_DD_TEST_SEARCH_VISIBLE / SEARCH_IN_PANEL /
+--     TYPE_SEARCH / FILTERED_COUNT / HAS_FREE_ROW（全部问**真实控件**）。
+-- ★保留：模拟点击那一格（走 sHit 的**真实 OnClick**）—— 现在它应该**只开下拉**。
+function EVAL_TEST_SE_CLICK_CELL(i)
+  local r = seUI and seUI.rows and seUI.rows[i]
+  if not (r and r.sHit) then return false end
+  local ok, fn = pcall(r.sHit.GetScript, r.sHit, "OnClick")
+  if not (ok and type(fn) == "function") then return false end
+  fn()
+  return true
+end
+-- ★读该行当前的光环名（cd.s）——验「自定义输入提交」用
+function EVAL_TEST_SE_AURA_NAME(i)
+  local ed = seUI and seUI.ed
+  local it = ed and ed.conds and ed.conds[i]
+  return it and it.cd and it.cd.s or nil
+end
+-- ★点**面板内的自由文本行**（✎ 开头）—— 验「列表里没有就用自己输入的名字」这条能力。
+--   ★为什么要走真实 OnClick：直接调 onFreeText 会绕过「面板真的渲染出了这一行」，
+--     而那正是用户能不能用这个功能的前提。
+function EVAL_TEST_SE_DD_CLICK_FREE()
+  if not ddUI.rows then return false end
+  for _, row in ipairs(ddUI.rows) do
+    if row.btn and row.btn:IsShown() and row.text then
+      local t = row.text:GetText() or ""
+      if string.find(t, "✎", 1, true) then
+        local fn = row.btn:GetScript("OnClick")
+        if fn then fn() return true end
+      end
+    end
+  end
+  return false
+end
+
+-- ★1.71.2（第十三轮）点**真实的条件类型按钮**（走它自己的 OnClick 闭包）→ 打开类型下拉。
+--   为什么必须走真实 OnClick：行池上限这类 bug **只在真实构建路径上**才暴露，
+--   测试自己拼一份 items 是测不出来的（本项目多次栽在「只测函数不测调用点」）。
+function EVAL_TEST_SE_CLICK_TYPE(i)
+  local r = seUI and seUI.rows and seUI.rows[i]
+  if not (r and r.typeBtn and r.typeBtn.btn) then return false end
+  local ok, fn = pcall(r.typeBtn.btn.GetScript, r.typeBtn.btn, "OnClick")
+  if not (ok and type(fn) == "function") then return false end
+  fn()
+  return true
+end
+-- ★行池上限（供断言直接读，不写死数字）
+function EVAL_TEST_DD_MAX_ROWS() return DD_MAX_ROWS end
+-- ★条件类型菜单**总共需要多少行**（真实遍历 SE_TYPE_GROUPS，不在测试里重算）
+function EVAL_TEST_SE_TYPE_MENU_ROWS()
+  local rows = 0
+  for _, grp in ipairs(SE_TYPE_GROUPS) do
+    rows = rows + 1 -- 组标题
+    for _, id in ipairs(grp.ids) do
+      local ti2 = SE_BY_K[id]
+      if ti2 and not SE_TYPES[ti2].hidden then rows = rows + 1 end
+    end
+  end
+  return rows
+end
 function EVAL_TEST_SE_ROW_SEC(i)
   local row = seUI.rows and seUI.rows[i]
   if not (row and row.secOp) then return nil, nil end
@@ -3447,6 +4127,32 @@ function EVAL_TEST_SE_TYPE_MENU()
   end
   return out
 end
+-- ★1.71.2 断言专用：按**组标签**取真实分组表的 id 列表（返回副本，测试改不动生产表）。
+--   ★为什么按 label 而不按下标：有人调整组的先后时，下标就会悄悄指错组。
+--     但调用侧**必须同时断言「取到的不是 nil」**——否则 label 打错会让「不在该组」类断言恒真。
+-- ★1.71.2 断言专用：条件类型菜单里每个条目所用的**语言包键**（按菜单顺序，跳过 hidden）。
+--   存在理由：这些键是**运行时拼出来的**（"CT_" .. string.upper(id)），静态 LANG KEY CHECK
+--   只扫源码里的 L("字面量")，**扫不到它们** → 「某语言缺键」「某语言两条同名」都只能在运行时逐语言核对。
+function EVAL_TEST_SE_TYPE_LABEL_KEYS()
+  local out = {}
+  for _, grp in ipairs(SE_TYPE_GROUPS) do
+    for _, id in ipairs(grp.ids) do
+      local ti = SE_BY_K[id]
+      if ti and not SE_TYPES[ti].hidden then table.insert(out, "CT_" .. string.upper(SE_TYPES[ti].id)) end
+    end
+  end
+  return out
+end
+function EVAL_TEST_SE_TYPE_GROUP_IDS(label)
+  for _, grp in ipairs(SE_TYPE_GROUPS) do
+    if grp.label == label then
+      local out = {}
+      for _, v in ipairs(grp.ids) do table.insert(out, v) end
+      return out
+    end
+  end
+  return nil
+end
 function EVAL_TEST_SE_CLEAR()
   if seUI.root then pcall(seUI.root.Hide, seUI.root) end
   seUI.ed = nil
@@ -3469,6 +4175,22 @@ function EVAL_TEST_SE_SIZE()
   local okh, h = pcall(r.GetHeight, r)
   return (okw and type(w) == "number") and w or nil, (okh and type(h) == "number") and h or nil
 end
+-- ★1.71.2 暴露配置窗**生产代码实际使用的布局值**（开关组 y / 按钮行 y / 项高）。
+--   用途：断言必须验「生产代码真的把开关组下移了」——
+--   测试自己写一份 -389 只能证明测试自己写了 -389（本轮变异实测：生产改回 -349 照样绿）。
+-- ★1.71.2 暴露「全局 → 日志」分组的行（key + y + 读写器）。
+--   用途：断言要验「方案技能日志开关**真的在日志组里**（而不是只从旧位置删了），
+--   且仍读写同一个 cfg.wdebug」—— 只扫源码文本拿不到这两件事。
+function EVAL_TEST_CFG_LOG_ROWS()
+  local cw = EVAL_HELP_CFGWIN
+  return cw and cw.logRows or nil
+end
+
+function EVAL_TEST_CFG_LAYOUT()
+  local cw = EVAL_HELP_CFGWIN
+  return cw and cw.layout or nil
+end
+
 function EVAL_TEST_CFG_SIZE()
   local cw = EVAL_HELP_CFGWIN
   local r = cw and cw.root
@@ -3532,72 +4254,43 @@ end
 local ioUI = { root = nil, eb = nil }
 local tplUI = { root = nil } -- 1.44.0 案例模版选单
 
--- 案例模版库（1.44.0）：按职业分组，导入弹窗内 [案例模版] 打开选单直接导入。
--- text 与导入导出同 md 格式（EVAL_PROFILE_FROM_TEXT 解析）；原「武器战示例」按钮已并入此处。
-EVAL_IO_TEMPLATES = {
-  { cls = "战士", list = {
-    { name = "武器战", desc = "姿态开怪/压制优先/怒吼保持/断筋撕裂/猛击Alt", text = "# 方案: 武器战\n\n" ..
-      "- 姿态:战斗姿态 | 非战斗 & 非姿态1 & 可攻击\n" ..
-      "- 压制 | 怒气>5 & 可用 & 就绪\n" ..
-      "- 战斗怒吼 | 怒气>9 & 无buff:战斗怒吼\n" ..
-      "- 断筋 | 目标血<30 & 怒气>9 & 无debuff:断筋\n" ..
-      "- 撕裂 | 可流血 & 目标血>10 & 怒气>9 & 无debuff:撕裂\n" ..
-      "- 血性狂暴 | 战斗中 & 无buff:血性狂暴 & 就绪\n" ..
-      "- 猛击 | Alt & 怒气>20\n" ..
-      "- 英勇打击 | 怒气>30 & 未排队" },
-  }},
-  -- 1.56.1 法师案例（用户实配收录）
-  { cls = "法师", list = {
-    { name = "法师一键", desc = "选敌开怪/寒冰箭射程内/火球补刀/霜甲智慧保持", text = "# 方案: 法师一键\n\n" ..
-      "- 选取目标:最近敌人 | 非战斗 & 无目标\n" ..
-      "- 寒冰箭 | 范围内:寒冰箭 & 就绪 & 可攻击\n" ..
-      "- 火球术 | 可攻击 & 就绪\n" ..
-      "- 霜甲术 | 能量%>30 & 无buff:霜甲术\n" ..
-      "- 奥术智慧 | 无buff:奥术智慧" },
-  }},
-  -- 1.67.5 通用法系独立分组（周围补buff 从法师组拆出——牧补韧/德拍爪/法补智同模式）
-  { cls = "通用法系", list = {
-    { name = "周围补buff", desc = "切最近友方挨个补奥术智慧（切+补一键完成；buff 技能自行替换）", text = "# 方案: 周围补buff\n\n" ..
-      "- 选取目标:最近友方 | 目标非战斗\n" ..
-      "- 奥术智慧 | 无目标buff:奥术智慧" },
-  }},
-  -- 1.67.2 盗贼案例（用户实配收录）：攒星+终结
-  { cls = "盗贼", list = {
-    { name = "盗贼一键", desc = "选敌起手/邪恶攻击攒星（能量>70）/剔骨终结（满5星；目标血<30 时 ≥4 星即收）", text = "# 方案: 盗贼一键\n\n" ..
-      "- 选取目标:最近敌人 | 无目标\n" ..
-      "- 邪恶攻击 | 能量>70\n" ..
-      "- 剔骨 | 能量>50 & 连击>=4 & 目标血<30\n" ..
-      "- 剔骨 | 能量>50 & 连击>=5" },
-  }},
-  -- 1.70.43 猎人案例（用户实配收录）：选敌起手 / 印记+钉刺双debuff / 宠物攻击 / 近战猛禽 / 远程奥射
-  --   ★顺序即优先级，忠实照抄用户的方案列表：选取目标 → 猎人印记 → 毒蛇钉刺 → 宠物:攻击 → 猛禽一击 → 奥术射击。
-  --   ★「不可攻击 | 友善」是**两个 OR 组**（目标不可攻击或友善时重新选最近的敌人）——
-  --     它与「技能名 | 条件」的那个竖线同形，导入器按**第一个**竖线切分技能名，故写法正确。
-  --   ★模版文本在加载期不会被解析，写错只会在导入时才爆（或静默丢条件）——
-  --     故用 test 组 60 把**每一个模版**都过一遍解析器。
-  { cls = "猎人", list = {
-    { name = "猎人一键", desc = "选敌起手（目标不可攻击/友善时重选）/印记+钉刺双debuff/宠物攻击/近战猛禽/远程奥射", text = "# 方案: 猎人一键\n\n" ..
-      "- 选取目标:最近敌人 | 不可攻击 | 友善\n" ..
-      "- 猎人印记 | 无debuff:猎人印记 & 目标血>30\n" ..
-      "- 毒蛇钉刺 | 无debuff:毒蛇钉刺 & 目标血>35 & 能量%>20\n" ..
-      "- 宠物:攻击\n" ..
-      "- 猛禽一击 | 范围内:猛禽一击 & 能量%>30\n" ..
-      "- 奥术射击 | 能量%>75 & 可攻击" },
-  }},
-}
+-- 案例模版库（1.44.0）：**数据已移出本文件**，改放 examples/ 下按职业分文件（见 EvalHelp.toc 的载入顺序）。
+--   为什么拆：本文件已经很大，而模版是纯数据（改模版不该动引擎代码）。
+--   为什么是「.lua 文件 + 列进 .toc」而不是「运行时读 .md」：本客户端**没有文件读取 API**
+--   （Lua 沙箱里没有 io/os），插件读不了自己的目录 → 唯一受支持的「从文件载入」就是
+--   把文件列进 .toc，让客户端把它当 Lua 模块加载。所以 examples/ 下每个文件都是
+--   **可直接编辑的 Lua 数据文件**，里面的模版文本与导入导出格式完全一致（md）。
+--   顺序 = .toc 里的顺序 = 模版选单里的顺序（EXAMPLES TOC CHECK 守着两者一致）。
+--   本行只是兜底初始化（万一 examples 没被列进 toc，选单至少是空表而不是 nil 崩掉）；
+--   它**不是**数据源——数据只在 examples/*.lua 里 append（同一个东西不能有两份真值）。
+EVAL_IO_TEMPLATES = EVAL_IO_TEMPLATES or {}
 
 -- 文本导入共用入口（1.44.0 抽出）：导入按钮与案例模版同走；成功返回 true+提示
+-- ★★★1.71.2 导入成功后**必须在本函数内刷新方案列表**（用户实测：「点击分享触发导入之后，
+--   导入完成，方案列表未能及时显示」）。
+--   根因：原来「刷新界面」这件事交给**每个调用点自己记得调**——IO 窗的导入按钮调了
+--   EVAL_WAR_TAB_REFRESH，而 Share.lua 的分享弹窗 [导入]**没调** → 数据已进 profiles，
+--   配置窗列表却还是旧的（要切 Tab 或重开才出现）。
+--   ★判据：**「数据变了」与「界面更新」是同一件事，必须在同一个地方做**——
+--     把刷新放在写入点（本函数）而不是散落在各调用点，调用点就再也不可能漏。
+--     （与本项目「A 产出配置、B 消费配置，两边都要断言」是同一类问题。）
 local function ioImportText(text)
   local prof, err = EVAL_PROFILE_FROM_TEXT(text)
   if not prof then return false, "导入失败: " .. tostring(err) end
   local w2 = warCfg()
+  local msg
   if table.getn(w2.profiles) < 12 then -- 1.44.0 修正：方案上限 1.42.0 已 4→12，此处残留旧值
     table.insert(w2.profiles, prof)
     w2.activeProfile = table.getn(w2.profiles)
-    return true, "已导入为新方案: " .. tostring(prof.name) .. "（" .. table.getn(prof.skills) .. " 个技能）"
+    msg = "已导入为新方案: " .. tostring(prof.name) .. "（" .. table.getn(prof.skills) .. " 个技能）"
+  else
+    w2.profiles[w2.activeProfile or 1] = prof
+    msg = "方案已满 12 个，已替换当前方案: " .. tostring(prof.name)
   end
-  w2.profiles[w2.activeProfile or 1] = prof
-  return true, "方案已满 12 个，已替换当前方案: " .. tostring(prof.name)
+  -- ★刷新方案列表（配置窗「一键宏设置」页）。pcall 包裹：分享弹窗可能在配置窗**从未建过**
+  --   的情况下导入，此时刷新函数内部会自行 return，绝不能因此打断导入结果。
+  if type(EVAL_WAR_TAB_REFRESH) == "function" then pcall(EVAL_WAR_TAB_REFRESH) end
+  return true, msg
 end
 
 EVAL_IMPORT_TEXT = ioImportText -- 1.69.0 桥：Share.lua 方案分享弹窗的 [导入] 走这里
@@ -3605,7 +4298,11 @@ EVAL_IMPORT_TEXT = ioImportText -- 1.69.0 桥：Share.lua 方案分享弹窗的 
 -- 方案 → md 文本（导出）
 function EVAL_PROFILE_TO_TEXT(idx)
   local w2 = warCfg()
-  local p = w2.profiles[idx or (w2.activeProfile or 1)]
+  -- ★1.71.2（第二十二轮）idx 也接受方案表本身（原先只认下标）：
+  --   模版库的往返断言要验「导出(解析(文本)) == 文本」；不这样就只能把它塞进真实 profiles 再取回来，
+  --   那会动到用户的方案列表（测试不该为了断言改数据）。
+  --   向后兼容：现有调用传的是 nil 或数字，行为完全不变。
+  local p = (type(idx) == "table") and idx or w2.profiles[idx or (w2.activeProfile or 1)]
   if not p then return "" end
   local lines = {}
   table.insert(lines, "# 方案: " .. tostring(p.name))
@@ -3655,6 +4352,12 @@ end
 
 function EVAL_HELP_IO_BUILD()
   if ioUI.root then return end
+  -- ★1.71.2 宽度 470 → 560：用户截图里「分享/接收」被挤到第二排、又被路径提示压住。
+  --   底部要排 **6 个**按钮（导入/导出/案例模版/分享/接收/关闭）——按等宽 82 + 8 间距算，
+  --   470 宽最多放下 4 个，硬塞必然换行或互相压字。
+  --   ★判据（本轮定）：**窗口宽度要由「最宽那一行的控件总宽」反推**，不能先定宽再往里塞。
+  --   ★1.71.2 第三轮：案例模版/分享/接收已移到配置窗方案列表底部 → 底部只剩 3 个按钮
+  --     （等宽 82 + 间距 8 = 262px），「6 个按钮需要 546」这条加宽依据消失 → 宽度回 **470**。
   local W, H = 470, 350
   local root = CreateFrame("Frame", "EVAL_HELP_IO", UIParent)
   root:SetWidth(W) root:SetHeight(H)
@@ -3793,6 +4496,9 @@ function EVAL_HELP_IO_BUILD()
   pcall(pathTip2.SetJustifyH, pathTip2, "LEFT")
   pathTip2:SetText("%LOCALAPPDATA%\\Azeroth\\Saved\\Account\\<你的账号>\\SavedVariables\\EVAL_HELP.lua")
 
+  -- ★1.71.2 底部按钮统一走「一行等宽」布局（原来是各处硬编码 x/宽度 → 换语言就压字）。
+  --   IO_GAP/IO_BW 是**单一来源**：所有按钮共用，改一个数整行自动重排。
+  local IO_BW, IO_GAP, IO_PAD = 82, 8, 14
   -- 底部按钮行
   local function ioBtn(x, w, label, fn)
     local b = CreateFrame("Button", nil, root)
@@ -3806,11 +4512,23 @@ function EVAL_HELP_IO_BUILD()
     bb:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
     local bt = uiText(b, 10, 0.95, 0.82, 0.35)
     bt:SetPoint("CENTER", b, "CENTER", 0, 0)
+    -- ★1.71.2 显式限宽 + 禁止折行：FontString 不限宽时宽度由内容决定，
+    --   换语言/改文案就会溢出压到相邻按钮（本项目既有铁律，底部这排是 6 个挨着的最容易中招）。
+    pcall(bt.SetWidth, bt, w - 6)
+    pcall(bt.SetNonSpaceWrap, bt, false)
     bt:SetText(label)
     b:SetScript("OnClick", fn)
+    -- ★1.71.2 登记到 ioUI.btns：供断言检查「同一行 / 不重叠 / 不超出窗口」
+    --   （否则「按钮排成两行」这种布局问题只能靠人眼看截图，正是本轮的起因）
+    if not ioUI.btns then ioUI.btns = {} end
+    table.insert(ioUI.btns, { btn = b, x = x, w = w, label = label, text = bt })
     return b
   end
-  ioBtn(14, 108, L("IO_IMPORT"), function()
+  -- 按钮 x 一律由 IO_PAD + 序号 × (IO_BW + IO_GAP) 推出（单一来源，不写死坐标）
+  local _bx = { [1] = IO_PAD, [2] = IO_PAD + (IO_BW + IO_GAP), [3] = IO_PAD + 2 * (IO_BW + IO_GAP),
+                [4] = IO_PAD + 3 * (IO_BW + IO_GAP), [5] = IO_PAD + 4 * (IO_BW + IO_GAP),
+                [6] = IO_PAD + 5 * (IO_BW + IO_GAP) }
+  ioBtn(_bx[1], IO_BW, L("IO_IMPORT"), function()
     local text = ""
     if ioUI.eb then
       local ok, t = pcall(ioUI.eb.GetText, ioUI.eb)
@@ -3820,7 +4538,7 @@ function EVAL_HELP_IO_BUILD()
     say(msg)
     if ok then pcall(EVAL_WAR_TAB_REFRESH) ioUI.root:Hide() end
   end)
-  ioBtn(128, 108, L("IO_EXPORT"), function()
+  ioBtn(_bx[2], IO_BW, L("IO_EXPORT"), function()
     if ioUI.eb then
       pcall(ioUI.eb.SetText, ioUI.eb, EVAL_PROFILE_TO_TEXT())
       pcall(ioUI.eb.SetFocus, ioUI.eb)
@@ -3829,28 +4547,101 @@ function EVAL_HELP_IO_BUILD()
     EVAL_HELP_IO_REFRESH()
     say("已导出到输入框并全选：Ctrl+C 复制，存成 .md 即可分享（输入框不显示就看下方预览区）")
   end)
-  ioBtn(242, 108, L("IO_TPL"), function() EVAL_HELP_TPL_TOGGLE() end) -- 1.44.0 案例模版（按职业）
-  ioBtn(392, 64, L("CLOSE"), function() ioUI.root:Hide() end)
-
-  -- 1.69.0 方案分享第二排按钮（Share.lua 独立载入；local 作用域陷阱——OnClick 赋值后单独挂）
-  if type(EVAL_SHARE_SEND_UI) == "function" then
-    local sbtn = ioBtn(14, 108, L("SH_SHARE"), function() end)
-    sbtn:ClearAllPoints() sbtn:SetPoint("BOTTOMLEFT", root, "BOTTOMLEFT", 14, 42)
-    sbtn:SetScript("OnClick", function() EVAL_SHARE_SEND_UI(sbtn) end)
-    local rbtn = ioBtn(128, 130, "", function() end)
-    rbtn:ClearAllPoints() rbtn:SetPoint("BOTTOMLEFT", root, "BOTTOMLEFT", 128, 42)
-    rbtn:SetScript("OnClick", function()
-      EVAL_SHARE_RECV_TOGGLE()
-      EVAL_SHARE_RECV_LABEL(rbtn)
-    end)
-    ioUI.shareRecvBtn = rbtn
-    EVAL_SHARE_RECV_LABEL(rbtn)
-  end
+  -- ★★★1.71.2 用户要求（第三轮）：「导入导出内的**案例模版、分享、分享接收开关删除**，
+  --   移动到外部方案列表底部」。
+  --   所以这里**不再创建**那三个按钮；导入导出窗只保留：导入为新方案 / 导出当前方案 / 关闭。
+  --   ★按钮序号保持 [1]导入 / [2]导出 / [3]关闭（连续，不留空洞）。
+  ioBtn(_bx[3], IO_BW, L("CLOSE"), function() ioUI.root:Hide() end)
 
   -- 1.44.0 IO 窗关闭时模版选单联动关闭
   root:SetScript("OnHide", function() if tplUI.root then tplUI.root:Hide() end end)
   root:Hide()
   ioUI.root = root
+end
+
+-- ★1.71.2 测试钩子：IO 窗底部按钮行的几何（同一行判定 / 重叠 / 越界）
+function EVAL_TEST_IO_BUTTONS()
+  local out = {}
+  for _, e in ipairs(ioUI.btns or {}) do
+    -- ★x/w 取**登记值**（布局输入）——这才是「排布算得对不对」这条性质本身。
+    --   为什么不取 GetPoint：测试桩不做锚点解算，对 5 参 SetPoint 调用回的偏移量不可靠
+    --   （本轮实测：登记 x=14、GetPoint 却回 0）→ 直接用它会产生**假失败**。
+    --   ★py 另外单独取（用于「有没有按钮被事后搬到别的行」），拿不到时置 nil 由断言侧处理。
+    local ok, p, _, _, ox, oy = pcall(e.btn.GetPoint, e.btn, 1)
+    local textW = nil
+    if e.text then
+      local okt, tw = pcall(e.text.GetWidth, e.text)
+      if okt and type(tw) == "number" then textW = tw end
+    end
+    out[table.getn(out) + 1] = {
+      label = e.label or "", x = e.x, w = e.w,
+      point = ok and p or nil, px = ox,
+      py = (ok and type(oy) == "number") and oy or nil,
+      textW = textW,
+      -- ★1.71.2 暴露按钮本体：断言要验「每个按钮真的有 OnClick」（防止留空壳凑数），
+      --   只给标签与几何做不到这件事。
+      btn = e.btn,
+    }
+  end
+  return out
+end
+-- ★1.71.2 从**实际锚点**数底部按钮占了几行（拿不到锚点时按布局输入视为 1 行）。
+--   用途：抓住「某个按钮被事后 ClearAllPoints + SetPoint 挪到第二排」这个形态
+--   ——它正是用户截图里的原始问题（分享/接收当初单独排在 BOTTOM 42）。
+function EVAL_TEST_IO_ROW_COUNT()
+  local ys = {}
+  for _, e in ipairs(ioUI.btns or {}) do
+    local ok, _, _, _, _, oy = pcall(e.btn.GetPoint, e.btn, 1)
+    if ok and type(oy) == "number" then ys[oy] = true end
+  end
+  local n = 0
+  for _ in pairs(ys) do n = n + 1 end
+  if n == 0 then return 1 end
+  return n
+end
+function EVAL_TEST_IO_WIDTH()
+  local ok, w = pcall(ioUI.root.GetWidth, ioUI.root)
+  return (ok and type(w) == "number") and w or nil
+end
+
+-- ★1.71.2（第十七轮）断言专用：导入导出窗**当前是否可见**。
+--   用途：验「某个按钮**不该**把它弹出来」——这类需求必须**点一下真实按钮**再看状态，
+--   只 grep 源码里有没有那行调用抓不到「调用点接线」（本项目反复栽在这上面）。
+-- ★1.71.2（第二十轮）断言专用：战斗信息 UI 每条状态条的真实几何
+--   （填充层的内缩偏移/高度 + 所在条的宽高 + 满值时的宽度上限）。
+--   本轮需求「生命条看着有阴影」= 填充层内缩 1px 露出的近黑底，是**纯几何**问题，只能读真实数值。
+--   ★为什么要读「父帧」：偏移是相对条的，只验「偏移=0」证明不了「高度等于条高 / 满值不留缝」。
+--   ★桩的纹理必须能 GetParent（本轮已补，见 test_stub.lua）。
+function EVAL_TEST_UI_BAR_GEOM()
+  local out = {}
+  local spec = {
+    { "hp", ui.hpFill, ui.hpW }, { "power", ui.pwFill, ui.pwW }, { "target", ui.tgFill, ui.tgW },
+    { "cast", ui.castFill, ui.castW }, { "swing", ui.swingFill, ui.swingW },
+  }
+  for _, it in ipairs(spec) do
+    local fill, maxW = it[2], it[3]
+    local e = { name = it[1], maxW = maxW }
+    if fill then
+      local okp, _, _, _, ox, oy = pcall(fill.GetPoint, fill, 1)
+      if okp then e.x, e.y = ox, oy end
+      local okh, hh = pcall(fill.GetHeight, fill)
+      if okh and type(hh) == "number" then e.fillH = hh end
+      local okg, par = pcall(fill.GetParent, fill)
+      if okg and type(par) == "table" then
+        local okw2, ww = pcall(par.GetWidth, par)
+        local okh2, hh2 = pcall(par.GetHeight, par)
+        if okw2 and type(ww) == "number" then e.barW = ww end
+        if okh2 and type(hh2) == "number" then e.barH = hh2 end
+      end
+    end
+    table.insert(out, e)
+  end
+  return out
+end
+function EVAL_TEST_IO_SHOWN()
+  if not ioUI.root then return false end
+  local ok, v = pcall(ioUI.root.IsVisible, ioUI.root)
+  return (ok and v) and true or false
 end
 
 -- ============ 案例模版选单（1.44.0）：按职业分组，点击方案行直接导入 ============
@@ -4197,7 +4988,7 @@ if type(SlashCmdList) == "table" then
     elseif msg == "go" then
       EVAL_GO_STATUS()
     elseif msg == "go rescan" then
-      EVAL_GO_RESCAN(false)
+      EVAL_GO_RESCAN(false, "menu")
     elseif msg == "go trace" then
       -- 执行追踪（1.54.2）：最近 12 次 EVAL_GO 调用时间戳+去抖标记——偶发「按一下执行两次」定位用
       local tr = EVAL_GO_TRACE
@@ -4306,7 +5097,7 @@ if type(SlashCmdList) == "table" then
     elseif msg == "go immune clear" then
       if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war then EVAL_HELP_CONFIG.war.immune = {} end
       say("免疫学习记录已清空")
-    elseif msg == "go probe" then
+    elseif msg == "go probe" or msg == "go 光环" or string.find(msg or "", "^go 光环 ") == 1 then
       -- buff 探针（1.33.1）：两条枚举+tooltip 读名路径原始值打印，诊断药品类 buff 不进下拉
       say("— buff 探针（结果同时写调试日志） —")
       local function pr(s) say(s) logLine(s) end
@@ -4337,6 +5128,79 @@ if type(SlashCmdList) == "table" then
           pcall(function() GameTooltip:Hide() end)
         end
       end
+      -- ★★★1.71.2（第十轮）**指定光环名的定向探查**（用户实测：骑士「虔诚光环」判定失败）。
+      --   为什么要它：官方文档明写 GetPlayerBuff/UnitBuff 只枚举**出现在增益条上的光环**，
+      --   且「Hidden or tracking auras are skipped」——若该光环不占增益条槽位，两个 API 都看不到它。
+      --   到底是「没有这个光环」还是「有但纹理对不上」，只有现场数据能分辨 → 做成一条命令。
+      --   ★用法：/eh go 光环 虔诚光环   （不写名字则默认查「虔诚光环」）
+      do
+        local want = string.match(msg or "", "^go 光环%s+(.+)$") or "虔诚光环"
+        want = string.gsub(want, "^%s*(.-)%s*$", "%1")
+        local wslot = wslots and wslots[want]
+        local wtex = auraTexOf(want)
+        pr("【光环定向探查】目标名称=「" .. want .. "」")
+        pr("  动作条有该格子吗：" .. (wslot and ("有（格子 " .. tostring(wslot.slot) .. "）") or "没有"))
+        pr("  auraTexOf 解析纹理：" .. tostring(wtex))
+        pr("  状态表里有这个纹理吗：" .. tostring(wtex and EVAL_HELP_STATE and EVAL_HELP_STATE.playerBuffs and EVAL_HELP_STATE.playerBuffs[wtex]))
+        -- ★直接给出「插件此刻的判定」：这才是用户问题的答案（看数据还得自己推）
+        local curCnt = (wtex and EVAL_HELP_STATE and EVAL_HELP_STATE.playerBuffs and tonumber(EVAL_HELP_STATE.playerBuffs[wtex])) or 0
+        if EVAL_HELP_STATE and EVAL_HELP_STATE.playerBuffs and EVAL_HELP_STATE.playerBuffs[wtex] == true then curCnt = 1 end
+        if not wtex then
+          pr("  ⇒ 插件判定：**无法判定**（名字解析不出纹理）—— 修复后会如实报错，不再重复施放")
+        elseif curCnt > 0 then
+          pr("  ⇒ 插件判定：**有**该光环（层数 " .. curCnt .. "）→ 条件「自身buff检查=否」**不成立**，不应重复施放")
+        else
+          pr("  ⇒ 插件判定：**没有**该光环（纹理 " .. tostring(wtex) .. "）→ 条件「否」成立，会重复施放")
+        end
+        local gpbN, ubN, gpbHit, ubHit = 0, 0, nil, nil
+        if type(GetPlayerBuff) == "function" then
+          for i = 0, 31 do
+            local okb, bi = pcall(GetPlayerBuff, i, "HELPFUL")
+            if not okb or type(bi) ~= "number" or bi < 0 then break end
+            gpbN = gpbN + 1
+            local okt, tex = pcall(GetPlayerBuffTexture, bi)
+            local nm
+            if GameTooltip and GameTooltip.SetPlayerBuff then
+              pcall(function() GameTooltip:SetOwner(UIParent, "ANCHOR_NONE") end)
+              pcall(function() GameTooltip:ClearLines() end)
+              pcall(GameTooltip.SetPlayerBuff, GameTooltip, bi)
+              if GameTooltipTextLeft1 and GameTooltipTextLeft1.GetText then nm = GameTooltipTextLeft1:GetText() end
+              pcall(function() GameTooltip:Hide() end)
+            end
+            logLine(string.format("GPB[%d] bi=%d tex=%s name=%s", i, bi, tostring(tex), tostring(nm)))
+            if (wtex and tex == wtex) or (nm and nm == want) then gpbHit = i end
+          end
+        end
+        if type(UnitBuff) == "function" then
+          for i = 1, 32 do
+            local oku, tex = pcall(UnitBuff, "player", i)
+            if not oku or not tex then break end
+            ubN = ubN + 1
+            local nm
+            if GameTooltip and GameTooltip.SetUnitBuff then
+              pcall(function() GameTooltip:SetOwner(UIParent, "ANCHOR_NONE") end)
+              pcall(function() GameTooltip:ClearLines() end)
+              pcall(GameTooltip.SetUnitBuff, GameTooltip, "player", i)
+              if GameTooltipTextLeft1 and GameTooltipTextLeft1.GetText then nm = GameTooltipTextLeft1:GetText() end
+              pcall(function() GameTooltip:Hide() end)
+            end
+            logLine(string.format("UB[%d] tex=%s name=%s", i, tostring(tex), tostring(nm)))
+            if (wtex and tex == wtex) or (nm and nm == want) then ubHit = i end
+          end
+        end
+        pr(string.format("  增益条共 %d 条（GetPlayerBuff）/ %d 条（UnitBuff）", gpbN, ubN))
+        pr("  命中：GetPlayerBuff=" .. tostring(gpbHit or "未命中") .. "  UnitBuff=" .. tostring(ubHit or "未命中"))
+        if not wtex then
+          pr("  ⇒ 结论：**这个名字解析不出纹理** —— 旧版会把它当成「确定没有」（已修）")
+        elseif gpbHit or ubHit then
+          pr("  ⇒ 结论：光环**就在增益条上**，判定失败是别的原因（看上面的纹理值）")
+        else
+          pr("  ⇒ 结论：光环**没有出现在增益条上** —— 官方文档：两个 API 只枚举增益条上的光环")
+        end
+        if gpbN > 0 or ubN > 0 then
+          pr("  （逐条明细已写入调试日志：/eh logdump）")
+        end
+      end
     elseif msg == "wdebug" or msg == "debug" then
       cfg.wdebug = not cfg.wdebug
       say("调试日志: " .. (cfg.wdebug and "|cff00ff00开|r" or "|cffff0000关|r"))
@@ -4346,6 +5210,7 @@ if type(SlashCmdList) == "table" then
       say("|cffffff00命令:|r /eh 输出状态 | /eh log 写日志开关 | /eh auto 进出战斗自动输出")
       say("/eh ui 战斗信息UI | /eh st 状态信息UI | /eh cfg 设置窗口（小地图旁 EH 图标同效）")
       say("/eh go 一键宏状态 | /eh go rescan 重扫动作条 | /eh debug 调试日志（/eh war 旧命令仍兼容）")
+      say("/eh go probe 增益探针（逐条枚举自身 buff） | /eh go 光环 [名字] 光环定向探查")
       say("方案命令：/eh go list 查看 | go add 技能 条件 | go del N | go newprof 名 | go prof N | go rename 新名 | go delprof N")
       say("方案导入导出（md 文本复制粘贴）：/eh go io，内置案例模版按职业直接导入")
       say("方案切换：Shift+按一键宏 | /eh go next | 战斗信息UI 方案按钮")
@@ -4394,14 +5259,12 @@ init:SetScript("OnEvent", function(a, b)
       pcall(minimapBtn.ClearAllPoints, minimapBtn)
       pcall(minimapBtn.SetPoint, minimapBtn, cfg.mbPos.point, UIParent,
         cfg.mbPos.relPoint or cfg.mbPos.point, cfg.mbPos.x or 0, cfg.mbPos.y or 0)
-      if uiOffscreen(minimapBtn) then
+      -- ★1.71.2 丢弃记忆的判据从「飞出屏幕」扩到「压在小地图上」：
+      --   用户截图里按钮压在小地图左下角，但它并**没有**飞出屏幕 → 旧判据放行 → 位置被永久记住，
+      --   每次登录都看到同一个压边现象。现在两者任一成立就回到默认锚点。
+      if uiOffscreen(minimapBtn) or mbOverlapsMinimap(minimapBtn) then
         cfg.mbPos = nil
-        pcall(minimapBtn.ClearAllPoints, minimapBtn)
-        if type(Minimap) == "table" or type(Minimap) == "userdata" then
-          pcall(minimapBtn.SetPoint, minimapBtn, "TOPRIGHT", Minimap, "TOPLEFT", -6, 0)
-        else
-          pcall(minimapBtn.SetPoint, minimapBtn, "TOPRIGHT", UIParent, "TOPRIGHT", -8, -8)
-        end
+        mbAnchorDefault(minimapBtn)
       end
     end
     -- 战斗信息UI：上次开着的话恢复显示

@@ -173,10 +173,16 @@ end)
 
 -- ===== 接收弹窗（自绘；点 [导入] 走 EVAL_IMPORT_TEXT 桥） =====
 local shp = {}
+-- ★1.71.2 弹窗最多显示几行方案详情（超出折叠为「…还有 N 行」）。
+--   为什么要有上限：方案最多 12 技能 × 每行可能很长的条件串，弹窗不能无限增高。
+local SH_DETAIL_MAX = 6
 
 local function shPopupBuild()
   if shp.root then return end
-  local W, H = 300, 130
+  -- ★1.71.2 高度 130 → 200：要容纳「标题 + 6 行方案详情 + 按钮行」。
+  --   算一遍：标题在 -10、详情首行 -52、6 行 × 12 = 至 -124、按钮行占底部 34 → 需要约 170，
+  --   留余量取 200（长条件串还会占更宽，但不增高）。
+  local W, H = 380, 200
   local root = CreateFrame("Frame", "EVAL_SHARE_POPUP", UIParent)
   root:SetWidth(W) root:SetHeight(H)
   root:SetPoint("CENTER", UIParent, "CENTER", 0, 190)
@@ -213,7 +219,26 @@ local function shPopupBuild()
   body:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -34)
   pcall(body.SetWidth, body, W - 32)
   pcall(body.SetJustifyH, body, "LEFT")
+  pcall(body.SetNonSpaceWrap, body, false) -- 不允许换行：过长的条件串宁可裁掉，也不要把行数搞乱
   shp.body = body
+  -- ★1.71.2 用户要求：「在接收到方案分享的弹窗内，将方案的详细信息也显示」。
+  --   原来只显示一行「XX 分享了《方案名》(N 个技能)」，用户看不到**具体有哪些技能/条件**，
+  --   必须点导入进配置窗才知道内容。
+  --   ★实现方式：按行显示（每条技能一个 FontString），而不是塞进一个多行 FontString——
+  --     本客户端的多行 FontString 行高/换行行为不稳（本项目既有记录），逐行独立控件最可靠，
+  --     也便于「最多显示 N 行」的裁剪与断言。
+  shp.detailLines = {}
+  for i = 1, SH_DETAIL_MAX do
+    local fs = shText(root, 9, 0.80, 0.78, 0.70)
+    fs:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -52 - (i - 1) * 12)
+    pcall(fs.SetWidth, fs, W - 32)
+    pcall(fs.SetJustifyH, fs, "LEFT")
+    pcall(fs.SetNonSpaceWrap, fs, false)
+    fs:Hide()
+    -- ★注意：本弹窗是**独立弹窗**，不参与配置窗的 Tab 显隐契约，故没有 widgets 表可插。
+    --   （误抄 EvalHelp.lua 的 page.widgets 写法会直接报 nil —— 本轮已避免。）
+    shp.detailLines[i] = fs
+  end
   local function bBtn(x, label, fn)
     local b = CreateFrame("Button", nil, root)
     b:SetWidth(90) b:SetHeight(22)
@@ -230,7 +255,7 @@ local function shPopupBuild()
     b:SetScript("OnClick", fn)
     return b
   end
-  bBtn(56, L("SH_IMPORT"), function()
+  local importBtn = bBtn(56, L("SH_IMPORT"), function()
     local p = SH.pending
     if not p then shp.root:Hide() return end
     if type(EVAL_IMPORT_TEXT) == "function" then
@@ -242,6 +267,7 @@ local function shPopupBuild()
     end
   end)
   bBtn(160, L("SH_IGNORE"), function() shp.root:Hide() SH.pending = nil end)
+  shp.importBtn = importBtn -- ★1.71.2 供断言走**真实按钮**（否则只能直调导入函数，绕过了出问题的路径）
   root:Hide()
   shp.root = root
 end
@@ -256,21 +282,72 @@ function EVAL_SH_POPUP(sender, text)
   end
   SH.pending = { sender = sender, text = text, name = name, count = count }
   shp.body:SetText(string.format(L("SH_POP_GOT"), tostring(sender), name, count))
+  -- ★1.71.2 详情：把导入文本按行显示，让用户在**点导入之前**就能看清内容。
+  --   用**逐个 FontString** 而非一个多行 FontString（本客户端多行行为不稳，逐行最可靠）。
+  --   最多 SH_DETAIL_MAX 行，超出时最后一行提示还剩多少（不静默截断——诚实告知）。
+  if shp.detailLines then
+    local lines = {}
+    for ln in string.gmatch(text or "", "[^\r\n]+") do table.insert(lines, ln) end
+    local shown, total = 0, table.getn(lines)
+    for i = 1, SH_DETAIL_MAX do
+      local fs = shp.detailLines[i]
+      if fs then
+        local l = lines[i]
+        if l then
+          fs:SetText(l)
+          fs:Show()
+          shown = i
+        else
+          fs:Hide()
+        end
+      end
+    end
+    -- 超出部分：复用最后一行显示「…还有 N 行」
+    if total > SH_DETAIL_MAX and shp.detailLines[SH_DETAIL_MAX] then
+      shp.detailLines[SH_DETAIL_MAX]:SetText(string.format(L("SH_POP_MORE"), total - SH_DETAIL_MAX + 1))
+      shp.detailLines[SH_DETAIL_MAX]:Show()
+    end
+  end
   shp.root:Show()
 end
 
--- IO 窗接收开关按钮文字刷新（EvalHelp 调用）
-function EVAL_SHARE_RECV_LABEL(btn)
-  if not btn or not btn.GetRegions then return end
-  -- ioBtn 的文字是按钮上的 FontString 区域（CENTER 锚定），遍历区域直接改
-  pcall(function()
-    local regions = { btn:GetRegions() }
-    for _, r in ipairs(regions) do
-      if r and r.SetText then r:SetText(string.format(L("SH_RECV"), EVAL_SHARE_RECV_ON() and L("SH_ON") or L("SH_OFF"))) end
+-- ★1.71.2（第十六轮）**删除 EVAL_SHARE_RECV_LABEL**（原先在这里）。
+--   它唯一的作用是刷新那个「接收:开/关」按钮的文字，而那个按钮本轮已被用户要求删掉
+--   （它与开关组的「接收方案」是同一个开关）→ 调用点归零，成为**孤儿函数**。
+--   ★为什么必须删而不是留着：本项目刚刚才吃到一次「留着一份描述旧状态的代码」的亏
+--     （见 EvalHelp.lua 里那段 `cfgWin.nav = nil` 的残留：按钮真的建了、登记却被清空，
+--       而读它的测试钩子无人调用 → 整整几轮没人发现）。孤儿代码会让人以为「这块还有功能」。
+--   ★若将来又需要「在某个按钮上显示接收开关状态」，照下面两行重写即可：
+--     EVAL_SHARE_RECV_ON() 读当前值；文字用 string.format(L("SH_RECV"), L("SH_ON"/"SH_OFF"))。
+
+-- ★1.71.2 测试钩子：弹窗**当前实际显示**的文本（标题行 + 详情行）。
+--   用途：验「详情真的填进去了」。★必须读控件当前文本（走真实渲染），
+--   不能只断言 SH.pending.text 里有内容——那是数据侧，与「有没有显示」是两件事。
+function EVAL_TEST_SHARE_POPUP_TEXTS()
+  local t = {}
+  if shp.body then
+    local okb, tb = pcall(shp.body.GetText, shp.body)
+    if okb and type(tb) == "string" and tb ~= "" then table.insert(t, tb) end
+  end
+  for _, fs in ipairs(shp.detailLines or {}) do
+    local okS, shown = pcall(fs.IsShown, fs)
+    if okS and shown then
+      local okt, txt = pcall(fs.GetText, fs)
+      if okt and type(txt) == "string" and txt ~= "" then table.insert(t, txt) end
     end
-  end)
+  end
+  return t
 end
 
 -- 测试观察口
 function EVAL_SHARE_PENDING() return SH.pending end
 function EVAL_SHARE_RESET() SH.buf = {} SH.done = {} SH.pending = nil end
+-- ★1.71.2 测试钩子：按分享弹窗的 [导入] 按钮（走它自己的 OnClick 闭包）。
+--   用户报的 bug 正是这条路径漏了刷新——直调 EVAL_IMPORT_TEXT 会绕过它、测不出来。
+function EVAL_TEST_SHARE_CLICK_IMPORT()
+  if not (shp.importBtn and shp.importBtn.GetScript) then return false end
+  local fn = shp.importBtn:GetScript("OnClick")
+  if not fn then return false end
+  fn()
+  return true
+end
