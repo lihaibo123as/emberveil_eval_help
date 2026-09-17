@@ -180,14 +180,228 @@ local TARGET_SEL = {
   { id = "targetTarget", name = "目标的目标", fn = "TargetUnit", arg = "targettarget" },
   { id = "byName",       name = "指定名称",   fn = "TargetByName", needsName = true },
   { id = "clear",        name = "清除目标",   fn = "ClearTarget" },
+  -- ★★1.70.47 队伍/团队**自动扫描**选取（用户需求定案，原话）：
+  --   「新增行为类型 选取目标: - 队伍成员 - 团队成员」，自动实施扫描。
+  --   ★它是**成员扫描器 + 过滤器**，两件事都做：
+  --     ① 扫描（队伍 = 自己 + party1..N；团队 = raid1..N）
+  --     ② 用**这一行自己的条件列表**逐个候选过滤（用户示例：目标血量<N% / 目标buff:名 / 目标debuff:名）
+  --     ③ 命中者 TargetUnit 过去，并记入 **st.allyUnit**（后续技能行的 UseAction 就打在他身上）
+  --   ★候选顺序 = 血量百分比升序（最危险优先）→ 天然满足「扫描全员取最低」。
+  --   ★为什么过滤要**切过去再判定**：条件里的「目标血量/目标buff/目标debuff」读的是 st 里的
+  --     当前目标数据；只有真的切过去 + 刷新状态，那些条件才是**真的**在判定这个候选
+  --     （不切就只能靠扫描记录猜，职业/类型/精英类条件根本答不出来）。代价 = ≤队伍人数 次切换，
+  --     且**按需**发生（没配条件就不切），符合频率防护总则。
+  --   ★teamSel = true：执行时**跳过常规条件预判**（那些条件是对「当前目标」说的，对扫描器无意义），
+  --     直接进 wuse → EVAL_TEAM_PICK 按候选逐个判定（见 EVAL_RULE_RUN 的 teamSel 分支）。
+  { id = "teamParty", name = "队伍成员", fn = "EVAL_TEAM_PICK", arg = "auto", teamSel = "party" },
+  { id = "teamRaid",  name = "团队成员", fn = "EVAL_TEAM_PICK", arg = "auto", teamSel = "raid" },
 }
 local TARGET_SEL_NAME, TARGET_SEL_ID, TARGET_SEL_FN, TARGET_SEL_ARG = {}, {}, {}, {}
+local TARGET_SEL_TEAMSEL = {} -- 扫描范围（"party"/"raid"）；非成员选取器为 nil
 for _, t in ipairs(TARGET_SEL) do
   TARGET_SEL_NAME[t.id] = t.name
   TARGET_SEL_ID[t.name] = t.id
   TARGET_SEL_ID[t.id] = t.id
   TARGET_SEL_FN[t.id] = t.fn
   TARGET_SEL_ARG[t.id] = t.arg
+  if t.teamSel then TARGET_SEL_TEAMSEL[t.id] = t.teamSel end
+end
+
+-- ★1.70.47 dispel（可驱散）类型表：id 是**入库/文本用的稳定英文 token**（来自客户端 UnitDebuff 第三返回的同一套），
+--   loc 是中文显示名。★客户端返回值可能是**本地化名**（中文客户端 tooltip 显示「魔法」）也可能是英文 token，
+--   故匹配一律走 dispelMatch 双向容忍（与 1.70.28 目标类型「带后缀的本地化名」同一类教训）。
+local DISPEL_TYPES = {
+  { id = "Magic",   tok = "Magic",   loc = "魔法" },
+  { id = "Curse",   tok = "Curse",   loc = "诅咒" },
+  { id = "Poison",  tok = "Poison",  loc = "毒" },
+  { id = "Disease", tok = "Disease", loc = "疾病" },
+}
+EVAL_DISPEL_TYPES = DISPEL_TYPES -- 全局桥：编辑窗下拉与断言共用同一份
+
+local function dispelMatch(actual, want)
+  if want == nil or want == "" or want == "any" then return true end -- 未指定类型 = 任意
+  if type(actual) ~= "string" or actual == "" then return false end
+  local a, w = string.lower(actual), string.lower(want)
+  if a == w then return true end
+  -- 客户端可能返回本地化名/带修饰的长串 → 双向包含兜底
+  if string.find(a, w, 1, true) or string.find(w, a, 1, true) then return true end
+  -- 英文 token ↔ 本地化标签 互认
+  for _, t in ipairs(DISPEL_TYPES) do
+    local tl, tt = string.lower(t.loc), string.lower(t.tok)
+    if (w == tl or w == tt) and (a == tl or a == tt) then return true end
+  end
+  return false
+end
+
+-- 把用户写的类型（英文 token 或中文标签 / 大小写不一）归一成**入库用的英文 id**；不认识就原样返回
+local function dispelNorm(want)
+  if type(want) ~= "string" then return nil end
+  local w = string.lower(string.gsub(want, "^%s*(.-)%s*$", "%1"))
+  if w == "" then return nil end
+  if w == "any" then return "any" end
+  for _, t in ipairs(DISPEL_TYPES) do
+    if w == string.lower(t.tok) or w == string.lower(t.loc) then return t.id end
+  end
+  return want
+end
+
+-- 解析「名字(类型)」/「名字」/「类型」三种写法（导入侧宽松；类型单独写时归一到英文 id）
+local function dispelSplit(s)
+  s = string.gsub(s or "", "^%s*(.-)%s*$", "%1")
+  local open, close = string.find(s, "%("), string.find(s, "%)%s*$")
+  if open and close and close > open then
+    local nm = string.gsub(string.sub(s, 1, open - 1), "^%s*(.-)%s*$", "%1")
+    local dt = string.gsub(string.sub(s, open + 1, close - 1), "^%s*(.-)%s*$", "%1")
+    if nm == "" then nm = nil end
+    return nm, dispelNorm(dt)
+  end
+  -- 没有括号：整串若是一个 dispel 类型，就当作「类型」；否则当作「名称」
+  local norm = dispelNorm(s)
+  for _, t in ipairs(DISPEL_TYPES) do
+    if norm == t.id then return nil, t.id end
+  end
+  if s == "" then return nil, nil end
+  return s, nil
+end
+
+-- ★1.70.47 队伍成员扫描选取的**内部判据**（只被 EVAL_TEAM_PICK 用；用户看不到，也不必看到）：
+--   hpLow   = 血量%最低者（满血也会被选中，交给后续「队伍血量<X%」条件把关）
+--   manaLow = 蓝量%最低者（**只考虑有蓝职业**：UnitPowerType 非 0 的成员跳过）
+--   buff:名 / buff:名(层数) = 身上有该 buff 的**层数最少**者（缺这个 buff 的优先，用于补 buff）
+--   debuff:类型[:名称] = 身上有该类型（或该名称）负面效果的第一个成员
+-- ★判据在 auto 模式下由「同一条规则里已有的队伍条件」反推（见 teamCriteriaFor）。
+--   teamPickArg 是 condOne → EVAL_TEAM_PICK 的**传参通道**（Lua 只能按位置传参，而执行路径是 pcall(fn, arg)）；
+--   TARGET_SEL_ARG_LAST 记「这次点的是 队伍 还是 团队」，决定扫描范围。
+local teamPickArg = { arg = "hpLow" }
+local TARGET_SEL_ARG_LAST = nil
+
+-- ★1.70.47 前置声明：groupsOK（条件组求值）在文件后半段才实现，但「选取目标:队伍成员」的
+--   **候选过滤**要用它（对每个候选跑一遍这一行自己的条件列表）。Lua 词法作用域 → 必须先声明。
+local groupsOK
+
+-- ★1.70.47 前置声明：auraTexOf 的**真正实现**在下面（光环名→纹理，动作条优先/学习表回退）。
+--   本段（队伍选人判据）在它之前就要用「buff 名 → 纹理」做比对，而 Lua 只认**词法**作用域：
+--   不前置声明的话，这里的 auraTexOf 会解析成**全局 nil** → 一按队伍buff 条件就红字报错。
+--   ★这正是本项目累计十几次的同一类坑；DECL ORDER CHECK 这次**没抓到**（它只扫
+--     「顶层 local 声明 vs 使用」，而这里的问题是「使用了下面才声明的东西」——
+--     检查方向需要覆盖「同一文件内、引用点早于声明点」的相互次序，已记入待办）。
+local auraTexOf
+local function teamPickBest(list, crit, bufTex, bufNeed, debTex, debWant)
+  local best, bestKey = nil, nil
+  for _, r in ipairs(list) do
+    if crit == "hpLow" then
+      if r.hpMax > 0 and (bestKey == nil or r.hpPct < bestKey) then best, bestKey = r, r.hpPct end
+    elseif crit == "manaLow" then
+      local isMana = (r.powerType == nil or r.powerType == 0)
+      if isMana and r.powerMax > 0 and (bestKey == nil or r.powerPct < bestKey) then best, bestKey = r, r.powerPct end
+    elseif crit == "buff" then
+      -- 补 buff 语义：优先选**缺这个 buff**（或层数不足）的成员；都齐了就退化为血量最低者
+      local cnt = bufTex and r.buffs[bufTex] or nil
+      cnt = (cnt == true) and 1 or (tonumber(cnt) or 0)
+      if cnt < bufNeed then
+        local key = cnt -- 层数越少越优先；同层数再比血量
+        if bestKey == nil or key < bestKey or (key == bestKey and r.hpPct < (best.hpPct or 999)) then
+          best, bestKey = r, key
+        end
+      end
+    else -- debuff
+      local hit, hitCnt = false, 0
+      if debTex then
+        local d = r.debuffs[debTex]
+        if d and dispelMatch(d.t, debWant) then hit = true hitCnt = tonumber(d.n) or 1 end
+      else
+        for _, d in pairs(r.debuffs) do
+          if dispelMatch(d.t, debWant) then hit = true hitCnt = tonumber(d.n) or 1 break end
+        end
+      end
+      if hit and (bestKey == nil or hitCnt > bestKey) then best, bestKey = r, hitCnt end
+    end
+  end
+  return best
+end
+
+-- ★1.70.47 已删除「按同一规则里的队伍条件反推判据」那套（teamCriteriaFor）。
+--   为什么删：用户需求定案后，「挑选谁」改由**选取器那一行自己的条件列表**逐候选过滤
+--   （见 EVAL_TEAM_PICK 的 ① 分支）——那比「反推判据」更直接、更可预测，也支持任意条件组合。
+--   反推那套就只剩「无规则时默认血量最低」，一行足矣。★前提被取代的机制要删掉，别留着空转。
+
+-- ★1.70.47 队伍成员自动扫描选取（用户要求）。
+--   crit="auto"：判据由**同一条规则里的队伍条件**反推（见 teamCriteriaFor）——这就是「选取目标:队伍」的全部行为
+--   选中后：设 st.teamCur（队伍/团队条件按它求值）+ TargetUnit(unit)（后续技能行 UseAction 就打在它身上）。
+-- ★为什么要切目标：CastSpellByName/SpellTargetUnit 在本客户端**都是 Protected**，插件无法直接指定施法对象；
+--   TargetUnit 非 Protected，所以「切目标 → 用技能 → 还原」是唯一可行路径（见 CLAUDE.md F2 节）。
+-- ★频率防护：整个扫描只在这里发生一次（按宏那一轮），UPDATE_STATE 绝不扫描。
+-- 候选按血量百分比升序（最危险优先）——「扫描全员取最低」的自然顺序
+local function teamSortByHp(list)
+  local out = {}
+  for i = 1, table.getn(list) do out[i] = list[i] end
+  table.sort(out, function(a, b) return (a.hpPct or 0) < (b.hpPct or 0) end)
+  return out
+end
+
+-- 记下「这一次按键选中的队友」：后续技能行的 UseAction 就打在他身上
+local function teamSelect(rec)
+  st.allyUnit = rec and rec.unit or nil
+  st.teamCur = rec
+  if rec and type(TargetUnit) == "function" then pcall(TargetUnit, rec.unit) end
+  return rec and rec.unit or nil
+end
+
+function EVAL_TEAM_PICK(crit)
+  -- 叫「队伍成员」就只扫队伍，叫「团队成员」就扫团队
+  local scope = (TARGET_SEL_ARG_LAST == "teamRaid") and "raid" or "party"
+  local list = EVAL_HELP_TEAM_ENSURE and EVAL_HELP_TEAM_ENSURE(scope) or nil
+  if not list or table.getn(list) == 0 then st.teamCur, st.allyUnit = nil, nil return nil end
+
+  -- ① 有规则（「选取目标:队伍成员」技能行）→ **按这一行自己的条件逐个候选过滤**
+  local rule = teamPickArg.rule
+  if rule then
+    -- ★原目标要尽量**精确**记住：优先用 UnitIsUnit 反查出它的 unit id（还原最可靠）；查不到才退化为按名字。
+    --   ★为什么不能只靠名字：文档（Targetting#targetbyname）明确 TargetByName 只认**附近**单位——
+    --     原目标在远处时按名字还原会**静默失败**，目标就丢在最后一个候选身上了。
+    --   （UnitIsUnit 文档：相同返回 true，不同返回 **nil**（绝不 false）→ 判定只能看真值，不能 == true）
+    local origName = (st.hasTarget and st.targetName) and st.targetName or nil
+    local origUnit = nil
+    if origName and type(UnitIsUnit) == "function" then
+      for _, rec in ipairs(list) do
+        if UnitIsUnit("target", rec.unit) then origUnit = rec.unit break end
+      end
+    end
+    local sorted = teamSortByHp(list)
+    for _, rec in ipairs(sorted) do
+      if type(TargetUnit) == "function" then pcall(TargetUnit, rec.unit) end
+      if EVAL_HELP_UPDATE_STATE then pcall(EVAL_HELP_UPDATE_STATE) end
+      local ok = groupsOK(rule, false)
+      if ok then return teamSelect(rec) end
+    end
+    -- 全员都不满足 → **还原原目标**（诚实：不把目标丢在最后一个候选身上就算完）
+    if origUnit then
+      pcall(TargetUnit, origUnit) -- 精确还原（原目标就是某个队友/自己）
+    elseif origName then
+      pcall(TargetByName, origName) -- 仅对附近单位有效；失败时下面这条日志会如实说明
+      wlog("队伍选取: 没选到成员；已尝试按名字还原目标「" .. tostring(origName) .. "」(TargetByName 只认附近单位)")
+    else
+      pcall(ClearTarget) -- 本来就没有目标 → 还原成「无目标」
+    end
+    if EVAL_HELP_UPDATE_STATE then pcall(EVAL_HELP_UPDATE_STATE) end
+    st.teamCur, st.allyUnit = nil, nil
+    return nil
+  end
+
+  -- ② 无规则：按判据直接挑（测试直调 / 内部复用）
+  local bufTex, bufNeed, debTex, debWant = nil, 1, nil, nil
+  if crit == "auto" or crit == nil then
+    crit = "hpLow" -- 无规则可过滤时的默认：血量最低（治疗场景最保守的选择）
+  elseif crit == "buff" then
+    bufTex, bufNeed = teamPickArg.tex, (teamPickArg.n or 1)
+  elseif crit == "debuff" then
+    debTex, debWant = teamPickArg.tex, teamPickArg.dt
+  end
+  local best = teamPickBest(list, crit, bufTex, bufNeed, debTex, debWant)
+  -- 补 buff 场景下若全队都有该 buff → 退化为血量最低者（仍选一个人出来，别空手）
+  if not best and crit == "buff" then best = teamPickBest(list, "hpLow") end
+  if not best then st.teamCur, st.allyUnit = nil, nil return nil end
+  return teamSelect(best)
 end
 
 -- 选取目标技能级解析（1.32.0）："选取目标:最近敌人" → id；"选取目标:指定名称:嗜血者" → "byName","嗜血者"
@@ -322,7 +536,9 @@ local function learnAuraTex(name, tex)
 end
 
 -- 光环名 → 纹理：动作条优先，学习表回退（1.27.0 前只有动作条一条路径）
-local function auraTexOf(n)
+-- ★注意这里是**给上面已前置声明的 local 赋值**（不是新建 local）——改了会连带断掉
+--   队伍选人判据那边的引用（它们在声明点之前，只能看到前置声明的那个 local）。
+function auraTexOf(n)
   local s = wslots[n]
   if s and s.tex then return s.tex end
   if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war and EVAL_HELP_CONFIG.war.debuffTex and EVAL_HELP_CONFIG.war.debuffTex[n] then return EVAL_HELP_CONFIG.war.debuffTex[n] end
@@ -492,7 +708,15 @@ local function wuse(name, reason)
     local fn = getglobal(TARGET_SEL_FN[ts])
     if type(fn) ~= "function" then wlog(name .. ": 无选取函数") return false end
     if ts == "byName" then pcall(fn, tsnm)
-    elseif TARGET_SEL_ARG[ts] then pcall(fn, TARGET_SEL_ARG[ts])
+    elseif TARGET_SEL_ARG[ts] then
+      -- ★1.70.47 技能行也可以直接是「选取目标:队伍成员/团队成员」（用户在技能下拉的分类里加）。
+      --   这条路径**不经过 condOne**，所以必须同样把范围传下去——否则团队会被当成队伍扫。
+      --   ★★teamPickArg.rule 由**调用方**负责：EVAL_RULE_RUN 的成员选取器分支会先把整条规则放进去
+      --     （那是候选过滤条件），condOne 的 target 分支也会。这里**绝不能清掉它**——
+      --     清掉就等于「过滤器失效」，扫描器会退化成「无脑选血量最低」，而且**静默**（不报错）。
+      TARGET_SEL_ARG_LAST = ts
+      pcall(fn, TARGET_SEL_ARG[ts])
+      TARGET_SEL_ARG_LAST = nil
     else pcall(fn) end
     local tline = string.format("→ %s (%s) | 当前目标:%s", name, reason, UnitName("target") or "无")
     EVAL_LOGLINE(tline)
@@ -744,9 +968,42 @@ end
 --   目标职业: {k="tClass",cs={WARRIOR=true,...}}（1.26.0 多选或关系，比对 UnitClass 英文 token）
 
 -- 单个条件求值；返回 true 或 false+原因。dry=true 为预览求值（UI 亮金），副作用条件（选取目标）只验函数存在不执行
-local function condOne(cd, skill, dry)
+local function condOne(cd, skill, dry, rule)
   local k = cd.k
   local function texOf(n) return auraTexOf(n) end -- 动作条 + 学习表回退（1.27.0）
+  -- ★1.70.45 自身光环「剩余时间检查」（cd.secOp / cd.secN，单位秒）。
+  --   只在**光环确实存在**时才参与判定：于是「无buff:奥术智慧[<30s]」= 没有 或 快到期（正是「该补了」）。
+  --   left == 0：wiki（globals/Buff）明确「越界/空槽/无限/无结束时间都返回 0」→ 视作**永不到期**，
+  --   只有 > / >= 才算满足。若把 0 当「0 秒」，<N 会恒真 → 每次求值都判「该补」→ 无脑重施。
+  local function auraTimeCmp(cd, tbl)
+    local tex = texOf(cd.s)
+    if not tex then return false, "未知光环" end
+    local left = tbl and tbl[tex] or nil
+    if type(left) ~= "number" then return false, "无剩余时间数据" end
+    if left <= 0 then
+      local inf = (cd.secOp == ">" or cd.secOp == ">=")
+      return inf, "剩余时间无限"
+    end
+    return condCmp({ cd.secOp, cd.secN }, left), "剩余" .. tostring(left) .. "s"
+  end
+  -- ★1.70.45 把剩余时间检查并入光环判定的**唯一**入口（自身 buff / 自身 debuff 共用）。
+  --   语义（v 决定方向，这正是「刷新」用法的核心）：
+  --     · v=true （有buff）：必须「有」**且**剩余满足比较；
+  --     · v=false（无buff）：没有 **或** 剩余满足比较 —— 于是
+  --       「无buff:奥术智慧[<30s]」= 没有 或 快到期 → 正是「该补了」。
+  --     · 光环不存在时不查时间（没有东西可查）：v=false 直接判真（该补），v=true 已判假。
+  --   ★我第一版把 v=false 时「有 buff 但时间满足」也判成假（因为「有≠无」先短路了），
+  --     被用例 (2) 当场抓到——注释写对了、代码没写对，是测试把它逼出来的。
+  local function auraTimeJudge(cd, has, okv, tbl, label)
+    if type(cd.secN) ~= "number" or not has then return okv, nil end
+    local okT, why = auraTimeCmp(cd, tbl)
+    if cd.v == false then
+      if okT then return true, nil end
+      return false, label .. "剩余时间不符(" .. tostring(why) .. ")"
+    end
+    if not okT then return false, label .. "剩余时间不符(" .. tostring(why) .. ")" end
+    return okv, nil
+  end
   if k == "combat" then return (st.inCombat == cd.v), "战斗状态"
   elseif k == "combatTime" then return condCmp({ cd.op, cd.n }, st.combatTime), "进战时间"
   elseif k == "combo" then return condCmp({ cd.op, cd.n }, st.combo or 0), "连击点"
@@ -788,9 +1045,14 @@ local function condOne(cd, skill, dry)
     cnt = (cnt == true) and 1 or (tonumber(cnt) or 0) -- 兼容旧布尔/新层数
     local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
     local has = cnt >= lim
-    return (has == (cd.v ~= false)), "自身buff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "/" .. lim) or "")
+    local okv, whyT = auraTimeJudge(cd, has, (has == (cd.v ~= false)), st.playerBuffLeft, "自身buff")
+    if not okv then return false, whyT or "自身buff判定不符" end
+    return true, "自身buff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "/" .. lim) or "")
   elseif k == "noBuff" then return (not st.playerBuffs[texOf(cd.s) or ""]), "已有buff:" .. tostring(cd.s)
   elseif k == "tBuff" then -- 1.54.0 目标 buff 检查（v=false=无目标buff）；1.70.1 层数门槛
+    -- ★1.70.45 目标光环**没有**时长 API（wiki globals/Buff：其他单位只有 UnitBuff/UnitDebuff = 图标+层数）。
+    --   带剩余时间检查时如实返回 false —— 不忽略它（忽略 = 写了却不生效，属静默失败）。
+    if type(cd.secN) == "number" then return false, "目标buff无剩余时间数据" end
     local cnt = st.targetBuffs and st.targetBuffs[texOf(cd.s) or ""]
     cnt = (cnt == true) and 1 or (tonumber(cnt) or 0)
     local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
@@ -801,8 +1063,12 @@ local function condOne(cd, skill, dry)
     cnt = (cnt == true) and 1 or (tonumber(cnt) or 0)
     local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
     local has = cnt >= lim
-    return (has == (cd.v ~= false)), "自身debuff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "/" .. lim) or "")
+    local okv, whyT = auraTimeJudge(cd, has, (has == (cd.v ~= false)), st.playerDebuffLeft, "自身debuff")
+    if not okv then return false, whyT or "自身debuff判定不符" end
+    return true, "自身debuff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "/" .. lim) or "")
   elseif k == "hasDebuff" then
+    -- ★1.70.45 同 tBuff：目标光环无时长数据 → 带剩余时间检查时如实 false
+    if type(cd.secN) == "number" then return false, "目标debuff无剩余时间数据" end
     -- 1.54.0 合并：v=false=无debuff（不足 lim 层才算无，与旧 noDebuff 同语义）；层数门槛 cd.n（1.31.0）
     local cnt = st.targetDebuffs[texOf(cd.s) or ""]
     cnt = (cnt == true) and 1 or (tonumber(cnt) or 0) -- 兼容旧布尔/新层数
@@ -900,10 +1166,120 @@ local function condOne(cd, skill, dry)
     if cd.s == "byName" and not (cd.nm and cd.nm ~= "") then return false, "未设目标名称" end
     if not dry then
       if cd.s == "byName" then pcall(fn, cd.nm)
-      elseif TARGET_SEL_ARG[cd.s] then pcall(fn, TARGET_SEL_ARG[cd.s])
+      elseif TARGET_SEL_ARG[cd.s] then
+        -- ★1.70.47 队伍/团队选取：把「规则」与「队伍 or 团队」传给 EVAL_TEAM_PICK，
+        --   让它按同规则里的队伍条件反推选人判据（选血最少 / 蓝最少 / 中魔法的那个）。
+        teamPickArg.rule = rule
+        TARGET_SEL_ARG_LAST = cd.s
+        pcall(fn, TARGET_SEL_ARG[cd.s])
+        teamPickArg.rule, TARGET_SEL_ARG_LAST = nil, nil
       else pcall(fn) end
     end
     return true, "选取目标:" .. tostring(TARGET_SEL_NAME[cd.s] or cd.s)
+  end
+  -- ★1.70.47 队友/团员条件（用户需求定案）。四种：血量% / 蓝量% / debuff 检测 / buff 检测。
+  --   ★语义（用户原话「扫描全员取最低，记下 unitID → st.allyUnit」）：
+  --     teamHp     : 扫描全员取**血量%最低**者，与该值比较；命中时记 st.allyUnit = 他
+  --     teamMana   : 同上，只算**有蓝职业**（怒气/能量/集中/幸福职业跳过，绝不当成 0% 蓝）
+  --     teamBuff   : 「有」= 任一成员带该 buff ；「无/缺」= 任一成员缺该 buff
+  --     teamDebuff : 「有」= 任一成员中该类型负面（★这正是「队友有魔法→解魔法」）；「无」= 没人中
+  --   ★谁被扫：由 **cd.name** 决定（"队伍" → player+partyN；"团队" → raidN），两类条件各扫各的。
+  --   ★★★命中时**切目标并把 unit 记进 st.allyUnit**（用户要求）——这样单条条件就能自足地完成
+  --     「找出该治/该解的人 → 后续技能行 UseAction 打在他身上」，不强制额外配一行选取目标。
+  --     ★只在**非 dry** 时切（dry = 战斗信息UI 每 0.15s 的预览求值 → 绝不能切目标）。
+  --     ★与「选取目标:队伍成员」的配合：规则按顺序全部执行，**后写的条件/选取者决定最终目标**
+  --       （确定性的「后者覆盖前者」，不是随机）。
+  --     ★「无/缺」方向（没人中 / 没人缺）不切目标：那是**存在性**判定，没有「该对谁施法」的含义。
+  --   ★诚实失败：不在队/团里、成员无蓝、无人符合 → 返回 false **并给出原因**；
+  --     绝不退化成对玩家自己求值（那会把「队友有魔法」静默变成「我有魔法」）。
+  if k == "teamHp" or k == "teamMana" or k == "teamBuff" or k == "teamDebuff" then
+    local scope = (cd.name == "团队") and "raid" or "party"
+    local scopeName = (scope == "raid") and "团队" or "队伍"
+    local list = EVAL_HELP_TEAM_ENSURE and EVAL_HELP_TEAM_ENSURE(scope) or nil
+    if not list or table.getn(list) == 0 then
+      return false, "不在" .. scopeName .. "中（无成员可检测）"
+    end
+    local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
+    local best, bestKey = nil, nil
+
+    if k == "teamHp" or k == "teamMana" then
+      for _, r in ipairs(list) do
+        local isMana = (r.powerType == nil or r.powerType == 0)
+        if k == "teamMana" and not isMana then
+          -- 没蓝的职业没有「蓝量%」可言，跳过（不报错，只不参与比较）
+        else
+          local maxv = (k == "teamHp") and r.hpMax or r.powerMax
+          local pct  = (k == "teamHp") and r.hpPct or r.powerPct
+          if maxv and maxv > 0 and (bestKey == nil or pct < bestKey) then best, bestKey = r, pct end
+        end
+      end
+      if not best then return false, scopeName .. "中无人可测蓝量" end
+      local pass = condCmp({ cd.op, cd.n }, bestKey)
+      local lbl = ((k == "teamHp") and scopeName .. "血%" or scopeName .. "蓝%")
+        .. ":" .. tostring(bestKey) .. "% " .. tostring(best.name or best.unit)
+      -- ★命中即「记下这个人」并切过去：后续技能行的 UseAction 就落在他身上
+      if pass and not dry then teamSelect(best) end
+      return pass, lbl
+    elseif k == "teamBuff" then
+      -- 「有队伍buff:X」= **有任一**成员带 X（层数够）；「无队伍buff:X」= **有任一**成员缺 X。
+      --   ★语义与自身/目标的 有buff/无buff 对齐：都是「存在性」判定，不要求全队一致。
+      --   报出的成员：有 → 层数最高的那个；无 → 层数最少的那个（= 最该补的人）。
+      local tex = texOf(cd.s)
+      if not tex then return false, "未知buff:" .. tostring(cd.s) end
+      local have, haveCnt, lack, lackCnt = nil, nil, nil, nil
+      for _, r in ipairs(list) do
+        local cnt = r.buffs[tex]
+        cnt = (cnt == true) and 1 or (tonumber(cnt) or 0)
+        -- ★并列时的裁决：层数相同就选**血量百分比更低**的那个。
+        --   与 EVAL_TEAM_PICK 的 teamPickBest 用同一条规则——否则「条件报出的人」和
+        --   「选取目标实际切过去的人」可能不是同一个（日志与行为对不上，用户会以为选错了）。
+        if cnt >= lim then
+          if not have or cnt > haveCnt or (cnt == haveCnt and r.hpPct < have.hpPct) then have, haveCnt = r, cnt end
+        else
+          if not lack or cnt < lackCnt or (cnt == lackCnt and r.hpPct < lack.hpPct) then lack, lackCnt = r, cnt end
+        end
+      end
+      local lbl = scopeName .. "buff:" .. tostring(cd.s) .. (lim > 1 and (">=" .. lim) or "")
+      if cd.v == false then
+        if not lack then return false, lbl .. " 全都有" end -- 「无/缺」不成立：没人缺
+        if not dry then teamSelect(lack) end -- 缺 buff 的人 = 该被补的那个人
+        return true, lbl .. " 缺:" .. tostring(lack.name or lack.unit)
+      end
+      if not have then return false, lbl .. " 无人有" end
+      -- 「有」= 纯存在性判定（不是「该对谁施法」）→ **不切目标**
+      return true, lbl .. " 有:" .. tostring(have.name or have.unit)
+    else -- teamDebuff
+      -- 「有队伍debuff:X」= **有任一**成员中 X；「无队伍debuff:X」= **没人**中 X。
+      --   ★这正是「队伍有魔法 → 解魔法」：正向为真时，报出的那个成员就是该解的人。
+      local want = cd.dt
+      local hasName = (cd.s ~= nil and cd.s ~= "")
+      local tex = hasName and texOf(cd.s) or nil
+      if hasName and not tex then return false, "未知debuff:" .. tostring(cd.s) end
+      local hit, hitCnt, best = false, 0, nil
+      for _, r in ipairs(list) do
+        local cur2, curCnt = false, 0
+        if tex then
+          local d = r.debuffs[tex]
+          if d and dispelMatch(d.t, want) then cur2 = true curCnt = tonumber(d.n) or 1 end
+        else
+          for _, d in pairs(r.debuffs) do
+            if dispelMatch(d.t, want) then cur2 = true curCnt = tonumber(d.n) or 1 break end
+          end
+        end
+        if cur2 and (best == nil or curCnt > hitCnt) then hit, hitCnt, best = true, curCnt, r end
+      end
+      local lbl = scopeName .. "debuff:" .. (hasName and tostring(cd.s) or "(任意)")
+        .. ((want ~= nil and want ~= "" and want ~= "any") and ("(" .. tostring(want) .. ")") or "")
+      if not hit then
+        -- 没人中：正向（有）如实失败；取反（无）如实通过
+        return (cd.v == false), lbl .. " 无人有"
+      end
+      if cd.v == false then return false, lbl .. " 有人有:" .. tostring(best.name or best.unit) end
+      local ok = hitCnt >= lim
+      -- ★命中即切过去：这正是「队友有魔法 → 解魔法」——不切的话技能会打在别人身上
+      if ok and not dry then teamSelect(best) end
+      return ok, lbl .. (ok and (" 有:" .. tostring(best.name or best.unit)) or (" 层数不足(" .. tostring(hitCnt) .. ")"))
+    end
   end
   return false, "未知条件:" .. tostring(k)
 end
@@ -912,14 +1288,16 @@ end
 -- 命中时返回第三个值 trace = 该组每个条件的逐项判定明细（释放日志用）
 -- 1.49.1：条件为空 = 无条件直接执行（旧行为：空 groups 表一组都不进 → 恒 false 永远不触发，
 -- 编辑窗不配条件保存 / 导入文本 "- 技能 | " 都会产出空表——技能变死条目）
-local function groupsOK(rule, dry)
+-- ★注意这里是**给上面已前置声明的 local 赋值**（不是新建 local）——
+--   改了会连带断掉「队伍成员」扫描器里的候选过滤（那些引用在声明点之前）。
+function groupsOK(rule, dry)
   if not rule.groups or table.getn(rule.groups) == 0 then return true, nil, "无条件" end
   local lastWhy = "条件不满足"
   for _, g in ipairs(rule.groups or {}) do
     local allOK = true
     local trace = {}
     for _, cd in ipairs(g) do
-      local ok, why = condOne(cd, rule.skill, dry)
+      local ok, why = condOne(cd, rule.skill, dry, rule)
       table.insert(trace, EVAL_COND_STR(cd) .. (ok and "√" or "×"))
       if not ok then allOK = false lastWhy = why break end
     end
@@ -1012,6 +1390,22 @@ function EVAL_RULE_RUN(rules)
       wlog(r.skill .. "跳过: 不在动作条")
     elseif wImmuneTo(r.skill) then
       wlog(r.skill .. "跳过: 目标已免疫（学习记录 " .. tostring(st.targetName) .. "）")
+    elseif TARGET_SEL_TEAMSEL[targetSelOf(r.skill)] then
+      -- ★★1.70.47「选取目标:队伍成员/团队成员」技能行——**不做常规条件预判**：
+      --   那一行的条件列表是给**候选**用的过滤条件（目标血量/目标buff/目标debuff 说的是「被扫描到的那个人」），
+      --   拿它对「当前目标」预判毫无意义（一个都过不了 → 扫描器永远不执行）。
+      --   所以直接进 wuse，由 EVAL_TEAM_PICK 逐候选判定（见那里的 ① 分支）。
+      teamPickArg.rule = r
+      local tsel = targetSelOf(r.skill)
+      TARGET_SEL_ARG_LAST = tsel
+      local okw = wuse(r.skill, r.why or r.skill)
+      teamPickArg.rule, TARGET_SEL_ARG_LAST = nil, nil
+      if okw then
+        acted = true
+        EVAL_HELP_UPDATE_STATE() -- 目标已切到选中成员，后续条件按新状态判定
+      else
+        wlog(r.skill .. "跳过: 队伍/团队里没有符合该行条件的成员")
+      end
     else
       local ok, why, trace
       if r.groups then ok, why, trace = groupsOK(r) else ok, why = condOK(r.when or {}, r.skill) end
@@ -1054,6 +1448,11 @@ local COND_NUM = {
   ["自身读条"] = "castEl", ["castEl"] = "castEl", ["自身读条剩"] = "castLeft", ["castLeft"] = "castLeft", -- 1.41.0 自身读条秒数
   ["连击"] = "combo", ["连击点"] = "combo", ["combo"] = "combo",
   ["距攻击"] = "swingLeft", ["swingLeft"] = "swingLeft", -- 1.57.0 距下次攻击秒数
+  -- ★1.70.47 队伍/团队血量·蓝量百分比（条件自己去队里挑「血最少/蓝最少」的那个人，见 condOne）
+  ["队伍血"] = "teamHp", ["队伍血量"] = "teamHp", ["teamHp"] = "teamHp",
+  ["队伍蓝"] = "teamMana", ["队伍蓝量"] = "teamMana", ["teamMana"] = "teamMana",
+  ["团队血"] = "teamHp", ["团队血量"] = "teamHp",
+  ["团队蓝"] = "teamMana", ["团队蓝量"] = "teamMana",
 }
 local COND_BOOL = {
   ["战斗中"] = { "combat", true }, ["非战斗"] = { "combat", false }, ["combat"] = { "combat", true },
@@ -1105,14 +1504,23 @@ local COND_FLAG_INV = {
   ["已排队"] = "notQueued", ["queued"] = "notQueued",
 }
 
-function EVAL_PARSE_ONE(token)
+-- ★1.70.45 内层：原 EVAL_PARSE_ONE 主体。外层（见下方 EVAL_PARSE_ONE）负责先剥掉
+--   「剩余时间」后缀 [<30s]，再统一挂到结果 cd 上——这样 8 个光环分支一处都不用改，
+--   也保证任何分支都不会把后缀当成光环名字的一部分（否则名字错=永远静默匹配不上）。
+local function parseOneRaw(token)
   token = condTrim(token)
   if token == "" then return nil end
   local neg = false
   if string.sub(token, 1, 1) == "!" then neg = true token = condTrim(string.sub(token, 2)) end
   local name, op, num = string.match(token, "^(.-)([><]=?)(%d+)$")
   if name and COND_NUM[condTrim(name)] then
-    return { k = COND_NUM[condTrim(name)], op = op, n = tonumber(num) }
+    local ck = COND_NUM[condTrim(name)]
+    -- ★1.70.47 队伍/团队血蓝：「团队血<50」要带上扫描范围（cd.name），否则导出回来会退化成队伍
+    if ck == "teamHp" or ck == "teamMana" then
+      local sc = string.match(condTrim(name), "^团队") and "团队" or "队伍"
+      return { k = ck, op = op, n = tonumber(num), name = sc }
+    end
+    return { k = ck, op = op, n = tonumber(num) }
   end
   local fn = string.match(token, "^姿态(%d)$")
   if fn then return { k = "form", n = tonumber(fn) } end
@@ -1147,6 +1555,44 @@ function EVAL_PARSE_ONE(token)
   if bs then local nm, n = auraStack(bs, "max") return { k = "hasDebuff", s = nm, n = n, v = false } end -- 1.54.0 合并
   bs = string.match(token, "^有debuff[:：](.+)$") or string.match(token, "^hasDebuff[:=](.+)$")
   if bs then local nm, n = auraStack(bs, "min") return { k = "hasDebuff", s = nm, n = n } end
+  -- ★1.70.47 队伍/团队 buff/debuff（导入/文本编辑）：前缀「队伍」或「团队」决定扫描范围（cd.name）。
+  --   写法：有/无{队伍|团队}buff:名 ；有/无{队伍|团队}debuff:名(类型) 或直接写类型 ；英文 id teamBuff/teamDebuff(默认队伍)
+  --   ★★★两条 Lua 模式的硬规矩（都是本项目 H 节记过、我这次又踩的）：
+  --     ① **`|` 不是交替**——写成 (队伍|团队) 只在匹配字面串「队伍|团队」时成立，
+  --        结果是任何队伍/团队条件都解析不出来（表现：编辑窗存了、再导入条件**静默消失**）。
+  --     ② **字符组不能装多字节字**——`[伍团]` 是**按字节**匹配的集合，
+  --        匹配 '伍' 的首字节后剩下两个尾字节对不上后面的 buff，照样失败。
+  --     所以这里改成「先用 .+ 抓前缀，再**用字符串比较**校验前缀」——不受多字节影响。
+  local function teamScope(pfx)
+    if pfx == "队伍" or pfx == "团队" then return pfx end
+    return nil
+  end
+  local p1, p2
+  p1, p2 = string.match(token, "^有(.+)buff[:：](.+)$")
+  if p1 and teamScope(p1) then local nm, n = auraStack(p2, "min")
+    return { k = "teamBuff", s = nm, n = n, v = not neg, name = teamScope(p1) } end
+  p1, p2 = string.match(token, "^无(.+)buff[:：](.+)$")
+  if p1 and teamScope(p1) then local nm, n = auraStack(p2, "max")
+    return { k = "teamBuff", s = nm, n = n, v = false, name = teamScope(p1) } end
+  p1, p2 = string.match(token, "^(.+)无buff[:：](.+)$")
+  if p1 and teamScope(p1) then local nm, n = auraStack(p2, "max")
+    return { k = "teamBuff", s = nm, n = n, v = false, name = teamScope(p1) } end
+  p1, p2 = string.match(token, "^有(.+)debuff[:：](.*)$")
+  if p1 and teamScope(p1) then local nm, dt = dispelSplit(p2)
+    return { k = "teamDebuff", s = nm, dt = dt, v = not neg, name = teamScope(p1) } end
+  p1, p2 = string.match(token, "^无(.+)debuff[:：](.*)$")
+  if p1 and teamScope(p1) then local nm, dt = dispelSplit(p2)
+    return { k = "teamDebuff", s = nm, dt = dt, v = false, name = teamScope(p1) } end
+  p1, p2 = string.match(token, "^(.+)无debuff[:：](.*)$")
+  if p1 and teamScope(p1) then local nm, dt = dispelSplit(p2)
+    return { k = "teamDebuff", s = nm, dt = dt, v = false, name = teamScope(p1) } end
+  -- 英文 id（默认队伍范围）
+  local tbf = string.match(token, "^teamBuff[:=](.+)$")
+  if tbf then local nm, n = auraStack(tbf, "min")
+    return { k = "teamBuff", s = nm, n = n, v = not neg, name = "队伍" } end
+  local tdb = string.match(token, "^teamDebuff[:=](.*)$")
+  if tdb then local nm, dt = dispelSplit(tdb)
+    return { k = "teamDebuff", s = nm, dt = dt, v = not neg, name = "队伍" } end
   -- 1.70.28 目标类型（导入）：支持 目标类型:野兽/元素、目标类型非:元素、tCreature=beast
   local tcr = string.match(token, "^目标类型非[:：](.+)$") or string.match(token, "^notcreature[:=](.+)$")
   if tcr then
@@ -1221,8 +1667,54 @@ function EVAL_PARSE_ONE(token)
   return nil
 end
 
+-- ★★1.70.45 剩余时间后缀 [<op><n>s]（用户要求：buff 类条件加「剩余时间检查」，单位秒）。
+--   语法示例：无buff:奥术智慧[<30s]  = 没有「奥术智慧」或 剩余不足 30 秒
+--           有buff:奥术智慧[>=60s] = 有，且剩余至少 60 秒
+--   ★为什么用方括号：层数后缀（名<N / 名>=N）已经占用了「名字后面直接跟比较符」的写法，
+--     两者若共用一套语法必然歧义。方括号把时间段整个包住、且以 s 结尾，互不干扰。
+--   ★作用范围：本客户端**只有自身光环**有时长 API（wiki globals/Buff：
+--     GetPlayerBuffTimeLeft 返回秒；其他单位的 UnitBuff/UnitDebuff 只给图标+层数）。
+--     故后缀**只在 自身buff(hasBuff) / 自身debuff(pDebuff) 上生效**；
+--     目标两类即使写了也会在求值阶段如实返回 false（见 condOne 的注释），不静默当作没写。
+--   ★非光环条件带这个后缀 = 写法错误 → 返回 nil（宁可丢弃，也不静默接受一个无意义的字段）。
+function EVAL_PARSE_ONE(token)
+  token = condTrim(token)
+  if token == "" then return nil end
+  local stripped, sop, snum = string.match(token, "^(.-)%[([<>=]+)(%d+)s%]$")
+  local cd = parseOneRaw(stripped and condTrim(stripped) or token)
+  if not stripped then return cd end
+  if not cd then return nil end
+  if cd.k == "hasBuff" or cd.k == "pDebuff" or cd.k == "tBuff" or cd.k == "hasDebuff" then
+    cd.secOp, cd.secN = sop, tonumber(snum)
+    return cd
+  end
+  return nil -- 非光环条件不允许带剩余时间后缀
+end
+
 -- 测试直调：单条件求值（EVAL_RULE_RUN 会跳过「不在动作条」的技能，无法用于纯粹的条件断言）
 function EVAL_COND_EVAL(cd) return condOne(cd, nil, true) end
+
+-- ★1.70.47 断言专用：以**非 dry** 方式求值单个条件（= 按宏时真正走的那条路）。
+--   存在理由：dry 模式不执行副作用（不切目标）、也不做队伍扫描；
+--   而队伍/团队条件的核心行为**恰恰是扫描+选人+切目标**——只用 dry 断言等于没测。
+--   这是本项目第 4 次栽在「只测解析不测调用点」上之后补的钩子。
+function EVAL_TEST_COND_EVAL_LIVE(cd, rule) return condOne(cd, nil, false, rule) end
+
+-- ★1.70.47 断言专用：走「选取目标:队伍/团队」的 auto 判据推断（等价于 condOne 的 target 分支）。
+--   传 nil 规则 = 无队伍条件 → 退化「血量最低」；传规则 = 按规则里的队伍条件反推。
+-- ★1.70.47 断言专用：直调**技能级执行**（选取目标/宠物指令/物品/动作条那条路）。
+--   存在理由：技能行也能写成「选取目标:团队」，那条路径**不经过 condOne**，
+--   是个独立调用点；只测条件路径会漏掉它（本项目「A 产出 / B 消费 两边都要断言」）。
+function EVAL_TEST_WUSE(name) return wuse(name, "test") end
+
+function EVAL_TEST_TEAM_PICK_AUTO(rule, selId)
+  teamPickArg.rule = rule
+  TARGET_SEL_ARG_LAST = selId or "teamParty"
+  local ok, unit = pcall(EVAL_TEAM_PICK, "auto")
+  teamPickArg.rule, TARGET_SEL_ARG_LAST = nil, nil
+  if not ok then return nil, tostring(unit) end
+  return unit
+end
 
 function EVAL_PARSE_CONDS(str)
   local groups = {}
@@ -1242,6 +1734,10 @@ end
 local COND_NUMNAME = { power = (EVAL_POWERLABEL and EVAL_POWERLABEL() or "能量"), tHpPct = "目标血", hpPct = "自身血", swingLeft = "距攻击", powerPct = "能量%", combatTime = "进战", tCastEl = "读条", tCastLeft = "读条剩", combo = "连击" }
 function EVAL_COND_STR(cd)
   local k = cd.k
+  -- ★1.70.47 队伍/团队血蓝：前缀随扫描范围（cd.name）变化，保证「导出→导入」往返不掉范围
+  local tscope = (cd.name == "团队") and "团队" or "队伍"
+  if k == "teamHp" then return tscope .. "血" .. (cd.op or ">") .. tostring(cd.n) end
+  if k == "teamMana" then return tscope .. "蓝" .. (cd.op or ">") .. tostring(cd.n) end
   if COND_NUMNAME[k] then return COND_NUMNAME[k] .. (cd.op or ">") .. tostring(cd.n) end
   if k == "combat" then return cd.v and "战斗中" or "非战斗" end
   if k == "form" then return "姿态" .. tostring(cd.n) end
@@ -1267,12 +1763,26 @@ function EVAL_COND_STR(cd)
     if type(cd.n) == "number" and cd.n > 1 then return ((cd.v == false) and "<" or ">=") .. cd.n end
     return ""
   end
-  if k == "hasBuff" then return ((cd.v == false) and "无buff:" or "有buff:") .. tostring(cd.s) .. stkSuffix() end -- 1.54.0 合并（旧 k=noBuff 走下一行兼容）
+  -- ★1.70.45 剩余时间后缀（单位秒）：[<30s] / [>=60s] … 与层数后缀（名<N）不冲突，理由见 EVAL_PARSE_ONE
+  local function secSuffix()
+    if type(cd.secN) == "number" and type(cd.secOp) == "string" then
+      return "[" .. cd.secOp .. cd.secN .. "s]"
+    end
+    return ""
+  end
+  if k == "hasBuff" then return ((cd.v == false) and "无buff:" or "有buff:") .. tostring(cd.s) .. stkSuffix() .. secSuffix() end -- 1.54.0 合并（旧 k=noBuff 走下一行兼容）
   if k == "noBuff" then return "无buff:" .. tostring(cd.s) end
-  if k == "tBuff" then return ((cd.v == false) and "无目标buff:" or "目标buff:") .. tostring(cd.s) .. stkSuffix() end -- 1.54.0
-  if k == "pDebuff" then return ((cd.v == false) and "无自身debuff:" or "自身debuff:") .. tostring(cd.s) .. stkSuffix() end -- 1.54.0
-  if k == "hasDebuff" then return ((cd.v == false) and "无debuff:" or "有debuff:") .. tostring(cd.s) .. ((type(cd.n) == "number" and cd.n > 1) and ((cd.v == false and "<" or ">=") .. cd.n) or "") end
+  if k == "tBuff" then return ((cd.v == false) and "无目标buff:" or "目标buff:") .. tostring(cd.s) .. stkSuffix() .. secSuffix() end -- 1.54.0
+  if k == "pDebuff" then return ((cd.v == false) and "无自身debuff:" or "自身debuff:") .. tostring(cd.s) .. stkSuffix() .. secSuffix() end -- 1.54.0
+  if k == "hasDebuff" then return ((cd.v == false) and "无debuff:" or "有debuff:") .. tostring(cd.s) .. ((type(cd.n) == "number" and cd.n > 1) and ((cd.v == false and "<" or ">=") .. cd.n) or "") .. secSuffix() end
   if k == "noDebuff" then return "无debuff:" .. tostring(cd.s) .. ((type(cd.n) == "number" and cd.n > 1) and ("<" .. cd.n) or "") end
+  -- ★1.70.47 队伍/团队 buff/debuff（用户要求）：前缀带扫描范围；类型以 (Magic) 后缀附上，解析侧双向容忍本地化名
+  if k == "teamBuff" then return ((cd.v == false) and ("无" .. tscope .. "buff:") or ("有" .. tscope .. "buff:")) .. tostring(cd.s) .. stkSuffix() end
+  if k == "teamDebuff" then
+    local nm = (cd.s ~= nil and cd.s ~= "") and tostring(cd.s) or ""
+    local dt = (cd.dt ~= nil and cd.dt ~= "" and cd.dt ~= "any") and ("(" .. tostring(cd.dt) .. ")") or ""
+    return ((cd.v == false) and ("无" .. tscope .. "debuff:") or ("有" .. tscope .. "debuff:")) .. nm .. dt
+  end
   if k == "ready" then return cd.inv and "未就绪" or "就绪" end
   if k == "usable" then return cd.inv and "不可用" or "可用" end
   if k == "notQueued" then return cd.inv and "已排队" or "未排队" end
@@ -1370,6 +1880,10 @@ function EVAL_GO(profSel)
 
   -- 刷新角色状态表（Cat 思路：宏只读缓存变量，不重复调 API）
   EVAL_HELP_UPDATE_STATE()
+  -- ★1.70.47「这一次按键选中的队友」必须在**每次按键开头清空**：
+  --   否则上一轮选的人会被这一轮当成「本次命中的人」，技能就打在旧目标身上了。
+  --   它由 队友/团员条件 或 选取目标:队伍成员/团队成员 在**本轮**写入。
+  st.allyUnit, st.teamCur = nil, nil
   local rage     = st.power
   local inCombat = st.inCombat
 

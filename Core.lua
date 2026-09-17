@@ -341,6 +341,99 @@ EVAL_BLEED_WHITELIST = EVAL_BLEED_WHITELIST or {}
 local BLEED_SKILLS = { "撕裂", "割裂", "绞袭", "斜掠", "撕扯", "Rend", "Rupture", "Garrote", "Rake", "Rip" }
 
 -- 刷新全部角色状态；返回状态表本身
+-- ★1.70.47 队伍/团队成员状态：**惰性采集**（用户要求：一键扫描队伍 → 血量/蓝量/buff/debuff 条件）。
+--   ★为什么不写在 UPDATE_STATE 里：那个函数被战斗信息UI 每 0.15s 调一次，而一次全团扫描
+--     ≈ 40 人 × (32 buff + 16 debuff) ≈ 2000 次 API 调用 → 每秒上万次，违反频率防护总则。
+--     所以 UPDATE_STATE 只失效缓存，真正的扫描在这里、由团队条件/团队目标选取触发一次。
+--   ★数据来源（EmberVeil wiki globals/Unit，1.70.46 已逐条核对）：
+--     · UnitHealth/UnitHealthMax/UnitMana/UnitManaMax/UnitPowerType(unit) 对队伍/团队成员有效，
+--       **且超出距离时用 roster 数据**（partypetN 用宠物数据）→ 远处队友的血蓝也读得到。
+--     · UnitBuff(unit,1..32) → 图标, 层数；UnitDebuff(unit,1..16) → 图标, 层数, **dispel 类型 token**。
+--       ★第三返回值（Magic/Curse/Disease/Poison/…）正是「解魔法/解诅咒」的判据，客户端直接给。
+-- ★1.70.47 scope："party"（默认）= 队伍（自己 + party1..N）；"raid" = 团队（raid1..N，已含自己）。
+--   「团队」条件要求真在团队里（n==0 时返回空表 → 条件如实报「不在团队中」），
+--   不拿队伍成员冒充团队成员；「队伍」在无队伍时退化为只有自己（自我治疗仍可用）。
+-- ★★★官方文档现场核对（2026-09 查 emberveil.org/wiki/lua/globals/Group 与 /Raid），两条**反直觉**事实：
+--   ① party 索引只有 party1..party4，且**不含自己**（原文 The local player is not a party index）。
+--   ② ★GetNumPartyMembers() 在**团队里依然返回「团队人数 - 1」**（原文 In a raid it is still the
+--      other-member count (raid size minus one), not 0）→ **不能拿它当 party 循环上界**：
+--      40 人团会去试 party1..party39（大多根本不存在）。故这里夹到 4（= 文档给出的 party 索引域）；
+--      语义上「队伍成员」= 自己所在小队（在团队里就是本小队）。
+--   ③ GetNumRaidMembers() = 团队人数**含自己**（原文 including the local player），非团队时 0 →
+--      raid 范围直接 raid1..N、不需要再补 player。
+local TEAM_PARTY_MAX = 4
+function EVAL_HELP_TEAM_ENSURE(scope)
+  local isRaid = (scope == "raid")
+  if isRaid then
+    if st.teamRaid then return st.teamRaid end
+  elseif st.team then
+    return st.team
+  end
+  local list = {}
+  local raidN = (type(GetNumRaidMembers) == "function") and (tonumber(GetNumRaidMembers()) or 0) or 0
+  local partyN = (type(GetNumPartyMembers) == "function") and (tonumber(GetNumPartyMembers()) or 0) or 0
+  local units = {}
+  if isRaid then
+    for i = 1, raidN do table.insert(units, "raid" .. i) end -- raidN 已含自己
+  else
+    table.insert(units, "player") -- ★partyN 是**别人**（文档：自己不是 party 索引），自己另算
+    if partyN > TEAM_PARTY_MAX then partyN = TEAM_PARTY_MAX end -- ★团队里 partyN 会是「团人数-1」
+    for i = 1, partyN do table.insert(units, "party" .. i) end
+  end
+  for _, u in ipairs(units) do
+    if UnitExists(u) then
+      local rec = { unit = u, name = UnitName(u) or u }
+      local hp, hpmax = UnitHealth(u), UnitHealthMax(u)
+      rec.hp, rec.hpMax = tonumber(hp) or 0, tonumber(hpmax) or 0
+      rec.hpPct = (rec.hpMax > 0) and (rec.hp / rec.hpMax * 100) or 0
+      local mp, mpmax = UnitMana(u), UnitManaMax(u)
+      rec.power, rec.powerMax = tonumber(mp) or 0, tonumber(mpmax) or 0
+      rec.powerPct = (rec.powerMax > 0) and (rec.power / rec.powerMax * 100) or 0
+      if type(UnitPowerType) == "function" then
+        local okp, pt = pcall(UnitPowerType, u)
+        if okp then rec.powerType = pt end
+      end
+      rec.buffs, rec.debuffs = {}, {}
+      if type(UnitBuff) == "function" then
+        for i = 1, 32 do
+          local okb, tex, apps = pcall(UnitBuff, u, i)
+          if not okb or not tex then break end
+          rec.buffs[tex] = (type(apps) == "number" and apps > 0) and apps or 1
+        end
+      end
+      if type(UnitDebuff) == "function" then
+        for i = 1, 16 do
+          local okd, tex, apps, dtype = pcall(UnitDebuff, u, i)
+          if not okd or not tex then break end
+          rec.debuffs[tex] = {
+            n = (type(apps) == "number" and apps > 0) and apps or 1,
+            t = (type(dtype) == "string" and dtype ~= "") and dtype or nil,
+          }
+        end
+      end
+      table.insert(list, rec)
+    end
+  end
+  if isRaid then st.teamRaid = list else st.team = list end
+  return list
+end
+
+-- 按 unit 取已采集的成员记录（队伍/团队条件会设 st.teamCur，后续条件按它求值）
+-- ★1.70.47 两个范围的表都要找（选的是 raidN 还是 partyN 由 cd.name 决定）
+--   ★不要写成 ipairs({ st.team, st.teamRaid })——两个缓存里常有一个是 nil，
+--     而 Lua 的 ipairs 遇到 nil 洞会**立刻停止**（不是跳过）→ 有团队缓存时会一个都找不到。
+--     （组 66 当场抓到：只扫团队时 raid 成员查不到。）
+function EVAL_HELP_TEAM_GET(unit)
+  if not unit then return nil end
+  if st.team then
+    for _, r in ipairs(st.team) do if r.unit == unit then return r end end
+  end
+  if st.teamRaid then
+    for _, r in ipairs(st.teamRaid) do if r.unit == unit then return r end end
+  end
+  return nil
+end
+
 function EVAL_HELP_UPDATE_STATE()
   local now = GetTime()
   st.now = now
@@ -440,6 +533,37 @@ function EVAL_HELP_UPDATE_STATE()
       if not okd or not tex then break end
       st.playerDebuffs[tex] = (type(apps) == "number" and apps > 0) and apps or 1
     end
+  end
+
+  -- ★1.70.47 队伍/团队：这里**只失效缓存、不做扫描**（用户要求：一键扫描队伍 → 血/蓝/buff/debuff 条件）。
+  --   本函数会被战斗信息UI 每 0.15s 调一次；40 人团 × (32 buff + 16 debuff) ≈ 2000 次 API 调用，
+  --   每秒上万次——严重违反频率防护总则。真正扫描放在 EVAL_HELP_TEAM_ENSURE()，
+  --   由「团队条件求值 / 团队目标选取」在**按宏那一轮**触发一次。
+  st.teamEpoch = (st.teamEpoch or 0) + 1 -- 仅供诊断/断言
+  st.team, st.teamRaid, st.teamCur = nil, nil, nil
+
+  -- ★1.70.45 自身光环「剩余秒数」表（用户要求：buff 类条件加剩余时间检查）。
+  --   数据源**只有** GetPlayerBuff* 家族（wiki globals/Buff 明文）：
+  --     GetPlayerBuff(i, "HELPFUL"/"HARMFUL") → 内部槽位（0-31 helpful / 32-47 harmful，-1=无）
+  --     GetPlayerBuffTexture(bi)          → 图标（与动作条图标比对法同源，故表键仍是纹理）
+  --     GetPlayerBuffTimeLeft(bi)         → 剩余**秒**（越界/空槽/无限/无结束时间 → 0）
+  --   ★其他单位（目标）没有时长 API：UnitBuff/UnitDebuff 只返回 图标+层数 ——
+  --     所以本表只覆盖自身，目标侧的时间检查在求值阶段如实返回 false（见 Engine condOne）。
+  --   频率防护：本段随状态刷新走（事件/节流驱动），不做逐帧扫描；每轮最多 32+16 次 pcall。
+  st.playerBuffLeft, st.playerDebuffLeft = {}, {}
+  if type(GetPlayerBuff) == "function" and type(GetPlayerBuffTimeLeft) == "function"
+     and type(GetPlayerBuffTexture) == "function" then
+    local function scanLeft(filter, into)
+      for i = 0, 31 do
+        local okb, bi = pcall(GetPlayerBuff, i, filter)
+        if not okb or type(bi) ~= "number" or bi < 0 then break end
+        local okt, tex = pcall(GetPlayerBuffTexture, bi)
+        local okl, left = pcall(GetPlayerBuffTimeLeft, bi)
+        if okt and tex and okl and type(left) == "number" then into[tex] = left end
+      end
+    end
+    scanLeft("HELPFUL", st.playerBuffLeft)
+    scanLeft("HARMFUL", st.playerDebuffLeft)
   end
 
   -- 修饰键（猛击 Alt 门等）

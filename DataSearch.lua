@@ -49,9 +49,25 @@ local function dsBtn(parent, x, y, w, label, onClick, widgets)
 end
 
 -- ===== i18n =====
+-- ★1.70.46 修正语言来源（真 bug，「静默失败」家族）：
+--   原写法 `(type(EVAL_RESOLVE_LANG) == "function") and EVAL_RESOLVE_LANG() or "zhCN"`
+--   **恒等于 "zhCN"**：Core.lua 的 ehResolveLang() 是个「写入器」——它只把语言存进
+--   local EH_LANG，每个分支都是**裸 return（没有任何返回值）**，末尾以 EH_LANG = "zhCN" 收尾。
+--   于是 EVAL_RESOLVE_LANG() 返回 nil，被 `or "zhCN"` 兜底 → 本 Tab 在英/俄客户端里
+--   **整页显示中文**；更隐蔽的是 dsLang() 也这样写 → 永远去取 `items_zhCN`/`units_zhCN` 子表，
+--   物品/怪物/任务名一律中文。全程不报错。
+--   主程序取语言一直用的是**读取器** EVAL_GET_LANG()（见 EvalHelp.lua 的 cfWinWidth/WIDE）。
+--   ★教训：写入器与读取器混用 → 调用点拿到 nil → 被 `or 默认值` 吞掉。
+local function dsLangCode()
+  if type(EVAL_GET_LANG) == "function" then
+    local l = EVAL_GET_LANG()
+    if type(l) == "string" and l ~= "" then return l end
+  end
+  return "zhCN"
+end
+
 local function L(k)
-  local lang = (type(EVAL_RESOLVE_LANG) == "function") and EVAL_RESOLVE_LANG() or "zhCN"
-  local pack = EVAL_LOCALES and EVAL_LOCALES[lang]
+  local pack = EVAL_LOCALES and EVAL_LOCALES[dsLangCode()]
   local v = pack and pack[k]
   if v == nil and EVAL_LOCALES and EVAL_LOCALES.zhCN then v = EVAL_LOCALES.zhCN[k] end
   return v or k
@@ -79,13 +95,56 @@ local function dsDb()
   return d
 end
 
-local function dsLang()
-  if type(EVAL_RESOLVE_LANG) == "function" then
-    local l = EVAL_RESOLVE_LANG()
-    if type(l) == "string" and l ~= "" then return l end -- 初始化前可能 nil（VARIABLES_LOADED 前）
-  end
-  return "zhCN"
+-- ===== 依赖探测：数据来源 UnrealQuest 是否可用（1.70.46）=====
+-- 本 Tab 强依赖 UnrealQuest：任务/物品/生物/对象数据库全部来自它的全局表 UnrealQuestData，
+-- 地图定位走它的 UnrealQuest.Client。对方缺席时必须给出**可行动**的引导，而不是让用户在
+-- 搜索框里打字却只拿到空列表——本项目最忌讳的「静默失败」。
+-- 本客户端有完整的 Addon API（emberveil.org/wiki/lua/globals/Addon）：
+--   GetAddOnInfo(名)          → 文件夹名,标题,备注,URL,可加载(1/nil),原因token,SECURE/INSECURE
+--                              ★未知插件：除 security 外全部 nil → 用第一个返回值判「未安装」
+--   GetAddOnEnableState(nil,名) → 0 未启用 / 1 部分角色 / 2 已启用
+--   IsAddOnLoaded(名)         → 是否已加载
+-- 名称查找大小写不敏感；LoadAddOn 是 Protected（插件不能自行加载对方）→ 不给「一键加载」按钮，只做引导。
+-- ★主判据始终是 dsDb()：对方元信息只用来**细化措辞**，绝不因为元信息异常就否掉可用的数据。
+local DS_DEP_OK, DS_DEP_MISSING, DS_DEP_OFF, DS_DEP_PENDING, DS_DEP_UNKNOWN = 0, 1, 2, 3, 4
+-- 文件夹实际名是 UnrealQuest（磁盘上亲测）；文档说查找大小写不敏感，两种拼写都试一次做双保险。
+local DS_DEP_ADDON = { "UnrealQuest", "unrealQuest" }
+
+local function dsCall(name, ...)
+  local f = rawget(_G, name)
+  if type(f) ~= "function" then return nil end
+  local ok, a = pcall(f, ...)
+  if ok then return a end
+  return nil
 end
+
+local function dsDepState()
+  if type(dsDb()) == "table" then return DS_DEP_OK end
+  if type(rawget(_G, "GetAddOnInfo")) ~= "function" then return DS_DEP_UNKNOWN end -- 客户端无 Addon API：只知数据不可用
+  local folder = nil
+  for _, nm in ipairs(DS_DEP_ADDON) do
+    local f = dsCall("GetAddOnInfo", nm)
+    if type(f) == "string" and f ~= "" then folder = f break end
+  end
+  if folder == nil then return DS_DEP_MISSING end -- 未知插件 = 装都没装（GetAddOnInfo 对未知插件只回 security）
+  local en = dsCall("GetAddOnEnableState", nil, folder)
+  if en == 0 then return DS_DEP_OFF end          -- 装了但没勾选启用
+  return DS_DEP_PENDING                           -- 已启用，但数据表还没就绪（首次进游戏/尚未建立）
+end
+
+-- 状态 → 文案键。★纯函数且**唯一**：UI 与断言共用同一份，
+-- 避免「测试里复刻一份逻辑」导致变异不可见（本项目已在此栽过 4 次）。
+local DS_DEP_KEY = {
+  [DS_DEP_MISSING] = "DS_NEED_UQ",
+  [DS_DEP_OFF]     = "DS_DEP_OFF",
+  [DS_DEP_PENDING] = "DS_DEP_PENDING",
+  [DS_DEP_UNKNOWN] = "DS_DEP_UNKNOWN",
+}
+local function dsDepText(st) return DS_DEP_KEY[st] or "DS_NEED_UQ" end
+
+-- 数据库本地化子表所用的语言码（items_zhCN / units_enUS …）。
+-- ★必须与 L() 同源（dsLangCode），否则界面语言与数据语言会不一致。
+local function dsLang() return dsLangCode() end
 
 -- 本地化名称表：优先界面语言，条目缺失回退 enUS（UnrealQuest LocaleTable 同款）
 local function dsLocEntry(base, id)
@@ -2005,22 +2064,35 @@ local function dsTabActive() -- 去抖/事件触发时 Tab 可能已切走：显
   return type(c) == "table" and c.cfgTab == 4
 end
 
+-- 依赖状态 → 面板文案。面板未构建时只记状态（EVAL_DS_REFRESH 可能先于 UI 构建被调用）。
+local function dsDepApply(st)
+  local d = DS.dep
+  DS.depState = st
+  if not d then return end
+  d.title:SetText(L("DS_DEP_TITLE"))
+  d.why:SetText(L("DS_DEP_WHY"))
+  d.msg:SetText(L(dsDepText(st)))
+  d.foot:SetText(L("DS_DEP_FOOT"))
+  pcall(d.frame.Show, d.frame)
+end
+
 function EVAL_DS_REFRESH()
   if not DS.built then return end
   if not dsTabActive() then return end
-  local db = dsDb()
-  if not db then -- 未装/未启用 UnrealQuest：引导提示，其余全藏
-    DS.hint:SetText(L("DS_NEED_UQ"))
-    DS.hint:Show()
-    for _, w in ipairs(DS.searchWidgets) do pcall(w.Show, w) end
-    if not DS.echoNeeded then pcall(DS.echo.Hide, DS.echo) end
+  local st = dsDepState()
+  if st ~= DS_DEP_OK then -- 强依赖缺席（未装/未启用/未就绪/无法判定）：只留引导面板
+    dsDepApply(st)
+    -- ★这里必须把搜索行**一并收起**。旧实现只显示一行黄字、控件照旧可交互，
+    --   用户会打字、会点按钮，却只能得到空列表——那正是「静默失败」。
+    --   让界面看上去就「本页当前不可用」，用户才会去看引导。
+    for _, w in ipairs(DS.searchWidgets) do pcall(w.Hide, w) end
     for _, r in ipairs(DS.resRows) do r.btn:Hide() r.mapBtn:Hide() r.iconBtn:Hide() end
     DS.back.btn:Hide() DS.backBottom.btn:Hide() DS.title:Hide() DS.subtitle:Hide() DS.titleMap:Hide()
     for _, l in ipairs(DS.detLines) do l.btn:Hide() l.mapBtn:Hide() l.iconBtn:Hide() end
     if DS.scrollUp then DS.scrollUp.btn:Hide() DS.scrollDn.btn:Hide() DS.indicator:Hide() end
     return
   end
-  DS.hint:Hide()
+  if DS.dep then pcall(DS.dep.frame.Hide, DS.dep.frame) end -- 依赖就绪：收起引导面板
   if dsMode() == "detail" then
     for _, w in ipairs(DS.searchWidgets) do pcall(w.Hide, w) end -- 详情模式隐藏搜索行（修 1.0 实测重叠）
     DS.back.btn:Show() -- 1.70.7 重置钮在详情模式也常显（一键归零）
@@ -2574,13 +2646,42 @@ function EVAL_DS_BUILD(root, page, refreshes)
   DS.searchWidgets = { DS.filterBtn.btn, ebBg, eb, ph, focusBtn, DS.catBtn.btn }
   table.insert(DS.searchWidgets, echo)
 
-  -- UnrealQuest 缺失引导
-  local hint = dsText(root, 11, 0.95, 0.80, 0.30)
-  hint:SetPoint("TOPLEFT", root, "TOPLEFT", LX, -110)
-  pcall(hint.SetWidth, hint, RW - 40)
-  pcall(hint.SetJustifyH, hint, "LEFT")
-  DS.hint = hint
-  table.insert(widgets, hint)
+  -- ===== UnrealQuest 缺失引导面板（1.70.46，用户要求「未安装时给友好的依赖提示」）=====
+  -- 旧实现只有一行黄字。改为一块面板，回答用户的四个问题：
+  --   ① 缺什么（标题）② 为什么需要它（数据来源）③ 我该做什么（按**探测到的真实状态**分叉）
+  --   ④ 会影响别的功能吗（只影响本页）。
+  -- ★文案由 dsDepText() 给出（与断言共用同一份），面板只负责摆放。
+  -- ★只用「底色 + 左侧金色竖条」，不用四边框贴图：文字换行/字体链差异都不会显得「破框」。
+  local DEP_PAD, DEP_W = 14, RW - 36
+  local dep = CreateFrame("Frame", nil, root)
+  dep:SetPoint("TOPLEFT", root, "TOPLEFT", LX, -104)
+  dep:SetWidth(DEP_W) dep:SetHeight(132)
+  local depBg = dep:CreateTexture(nil, "BACKGROUND")
+  dsSolid(depBg, 0.11, 0.09, 0.05, 0.92)
+  depBg:SetPoint("TOPLEFT", dep, "TOPLEFT", 0, 0)
+  depBg:SetPoint("BOTTOMRIGHT", dep, "BOTTOMRIGHT", 0, 0)
+  local depBar = dep:CreateTexture(nil, "ARTWORK") -- 左侧金色竖条
+  dsSolid(depBar, 0.95, 0.78, 0.25, 0.85)
+  depBar:SetPoint("TOPLEFT", dep, "TOPLEFT", 0, 0)
+  depBar:SetWidth(3) depBar:SetHeight(132)
+  local depTitle = dsText(dep, 12, 0.98, 0.84, 0.35)
+  depTitle:SetPoint("TOPLEFT", dep, "TOPLEFT", DEP_PAD, -12)
+  pcall(depTitle.SetWidth, depTitle, DEP_W - DEP_PAD * 2)
+  pcall(depTitle.SetJustifyH, depTitle, "LEFT")
+  local depWhy = dsText(dep, 10, 0.80, 0.76, 0.62)
+  depWhy:SetPoint("TOPLEFT", dep, "TOPLEFT", DEP_PAD, -38)
+  pcall(depWhy.SetWidth, depWhy, DEP_W - DEP_PAD * 2)
+  pcall(depWhy.SetJustifyH, depWhy, "LEFT")
+  local depMsg = dsText(dep, 10, 0.96, 0.82, 0.32) -- 状态对策（按探测结果变化）
+  depMsg:SetPoint("TOPLEFT", dep, "TOPLEFT", DEP_PAD, -72)
+  pcall(depMsg.SetWidth, depMsg, DEP_W - DEP_PAD * 2)
+  pcall(depMsg.SetJustifyH, depMsg, "LEFT")
+  local depFoot = dsText(dep, 9, 0.62, 0.58, 0.46)
+  depFoot:SetPoint("TOPLEFT", dep, "TOPLEFT", DEP_PAD, -104)
+  pcall(depFoot.SetWidth, depFoot, DEP_W - DEP_PAD * 2)
+  pcall(depFoot.SetJustifyH, depFoot, "LEFT")
+  DS.dep = { frame = dep, title = depTitle, why = depWhy, msg = depMsg, foot = depFoot, w = DEP_W }
+  table.insert(widgets, dep) -- 只登记外框：子 FontString 随外框显隐，不会有「藏了面板还留一行字」
 
   -- 结果行 ×10（模拟下拉：输入框正下方；左图标=链接指向类型，右地图图标=有坐标可定位）
   DS.resRows = {}
@@ -2809,6 +2910,41 @@ function EVAL_DS_BUILD_FOR_TEST()
 end
 function EVAL_DS_TEST_LINE(i) return DS.detLines and DS.detLines[i] end
 function EVAL_DS_TEST_ROW(i) return DS.resRows and DS.resRows[i] end
+
+-- 依赖探测与引导面板的测试访问器（1.70.46）
+-- ★断言必须落在**文案内容**上，不能只断言「面板存在/文本是字符串」——
+--   旧文本会一直留在 FontString 里，跳过刷新也能让存在性断言通过（1.70.38 教训）。
+function EVAL_DS_DEP_STATE() return dsDepState() end
+function EVAL_DS_TEST_DEP_MSG()
+  local d = DS.dep
+  if not d then return nil end
+  local ok, t = pcall(d.msg.GetText, d.msg)
+  if ok then return t end
+  return nil
+end
+function EVAL_DS_TEST_DEP_LINE(which)
+  local d = DS.dep
+  if not d then return nil end
+  local fs = (which == "title") and d.title or (which == "why") and d.why
+    or (which == "msg") and d.msg or (which == "foot") and d.foot
+  if not fs then return nil end
+  local ok, t = pcall(fs.GetText, fs)
+  if ok then return t end
+  return nil
+end
+function EVAL_DS_TEST_DEP_SHOWN()
+  local d = DS.dep
+  if not d then return nil end
+  local ok, v = pcall(d.frame.IsShown, d.frame)
+  if ok then return v end
+  return nil
+end
+-- 状态 → 文案键（断言映射本身：只断言「四条文本两两不同」抓不到状态与文案被互换）
+function EVAL_DS_TEST_DEP_KEY(st) return dsDepText(st) end
+-- 控制行控件清单（断言「依赖缺席时交互控件全部收起」用）
+function EVAL_DS_TEST_SEARCH_WIDGETS() return DS.searchWidgets end
+-- 数据本地化子表所用的语言码（items_zhCN / units_enUS …）——与 L() 必须同源
+function EVAL_DS_TEST_LANG() return dsLang() end
 
 function EVAL_DS_PROBE()
   if not DS.built then return "未构建（先 /eh cfg 打开配置窗）" end

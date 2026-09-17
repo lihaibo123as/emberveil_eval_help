@@ -729,16 +729,25 @@ local function cfgHeader(parent, x, y, label, list)
   if list then table.insert(list, t) end
 end
 
+-- ★1.70.45 窗口宽度的**单一来源**：配置窗与技能编辑窗必须同宽（用户要求），
+--   且两份宽度必须由同一个函数给出——否则改一处漏一处（本项目「两份数据必须有断言盯着」的惯例）。
+--   用户要求：在原来基础上加宽 ~100（中 560→660 / 西文 700→800）。
+--   语言在构建期定型（切语言需 /reload），故这里按 EH_LANG 直接算即可。
+local function cfWinWidth()
+  return (EVAL_GET_LANG() ~= "zhCN") and 800 or 660
+end
+
 -- 构建配置窗口（只建一次；开关 = Show/Hide）
 local function cfgBuild()
   if cfgWin.root then return cfgWin.root end
   local WIDE = (EVAL_GET_LANG() ~= "zhCN") -- 1.34.1 i18n：西文（英/俄）比中文宽 ~1.5 倍，窗口与右列自适应加宽
-local W, H = WIDE and 700 or 560, 420
+local W, H = cfWinWidth(), 420 -- 1.70.45 加宽 ~100（原 700/560）
   local root = CreateFrame("Frame", "EVAL_HELP_CFG", UIParent)
   pcall(root.SetFrameStrata, root, "DIALOG")
   pcall(root.EnableMouse, root, true)
   pcall(root.SetMovable, root, true)
   root:SetWidth(W) root:SetHeight(H)
+  cfgWin.W = W -- 1.70.45 记下实际宽度：断言「编辑窗与配置窗同宽」时读它（同一来源的**结果**，不是再抄一份）
   -- 位置：默认左移错开 UnrealQuest 的居中设置窗口；拖动后按记忆位置恢复
   root:ClearAllPoints()
   local pos = c().cfgPos
@@ -1125,7 +1134,7 @@ local W, H = WIDE and 700 or 560, 420
     table.insert(Wp, nm)
     local cds = uiText(root, 9, 0.70, 0.70, 0.70)
     cds:SetPoint("TOPLEFT", root, "TOPLEFT", RX2 + 102, y - 3)
-    pcall(cds.SetWidth, cds, WIDE and 356 or 236) -- 1.33.0 让位滚动条；1.34.1 宽语言再加宽
+    pcall(cds.SetWidth, cds, WIDE and 456 or 336) -- 1.33.0 让位滚动条；1.34.1 宽语言再加宽；1.70.45 随窗口 +100
     pcall(cds.SetJustifyH, cds, "LEFT")
     row.conds = cds
     table.insert(Wp, cds)
@@ -1975,12 +1984,43 @@ local SE_TYPES = {
   { id = "tCasting",  name = "目标施法中",  kind = "skill", s = "" }, -- 1.40.0 空参数=任意施法
   { id = "tCastEl",   name = "读条已进行",  kind = "num", n = 0.1 }, -- 1.58.0 时间型：初始 0.1
   { id = "tCastLeft", name = "读条剩余",    kind = "num", n = 0.1 },
+  -- ★1.70.47 队伍/团队条件（用户要求：一键扫描队伍 → 血量/蓝量/buff/debuff 检测）。
+  --   ★★设计定案（用户拍板）：条件类型里**直接列出 队伍/团队 两套**（不搞范围下拉），
+  --     并且条件**自己负责在队里挑人**——
+  --     「队伍血量<50」= 队里**血最少的那个**是否低于 50%（不是只看某个人）
+  --     「队伍debuff(魔法)」= 队里**是否有人中魔法** → 挑出那个人并切成当前目标 → 后面技能就解他
+  --   扫描范围写进 **cd.name**（"队伍"/"团队"）；kind=num → 比较符+数值；
+  --   kind=skill → 光环名下拉 + 是/否 + 层数；debuff 型再多个「类型」下拉（row.dtBtn）。
+  { id = "teamHp",        name = "队友血量%",  kind = "num",   n = 60, name2 = "队伍" },
+  { id = "teamMana",      name = "队友蓝量%",  kind = "num",   n = 20, name2 = "队伍" },
+  { id = "teamBuff",      name = "队友缺buff", kind = "skill", s = "",  name2 = "队伍" },
+  { id = "teamDebuff",    name = "队友debuff", kind = "skill", s = "",  name2 = "队伍" },
+  { id = "teamRaidHp",    name = "团员血量%",  kind = "num",   n = 60, name2 = "团队", base = "teamHp" },
+  { id = "teamRaidMana",  name = "团员蓝量%",  kind = "num",   n = 20, name2 = "团队", base = "teamMana" },
+  { id = "teamRaidBuff",  name = "团员缺buff", kind = "skill", s = "",  name2 = "团队", base = "teamBuff" },
+  { id = "teamRaidDebuff",name = "团员debuff", kind = "skill", s = "",  name2 = "团队", base = "teamDebuff" },
 }
 local SE_BY_K = {}
 for i, td in ipairs(SE_TYPES) do SE_BY_K[td.id] = i end
 SE_BY_K["formNot"] = SE_BY_K["form"]
 SE_BY_K["noBuff"] = SE_BY_K["hasBuff"] -- 1.54.0 存量数据归并显示
 SE_BY_K["noDebuff"] = SE_BY_K["hasDebuff"]
+
+-- ★1.70.47 队伍/团队类型解析：同一条引擎条件 k（teamHp/teamMana/teamBuff/teamDebuff）
+--   在条件类型下拉里占两行——「队伍」与「团队」（分辨靠 cd.name）。
+--   所以 cd.k 单独查 SE_BY_K 只能拿到第一行，必须带 name 一起查。
+--   ★td.base = 引擎用的 k（团队行才需要，nil 表示 id 本身就是 k）；td.name2 = 扫描范围。
+local function seTypeIndexOf(k, name)
+  local fallback = nil
+  for i, td in ipairs(SE_TYPES) do
+    local bk = td.base or td.id
+    if bk == k then
+      if td.name2 == nil or td.name2 == name then return i end
+      if not fallback then fallback = i end
+    end
+  end
+  return fallback or SE_BY_K[k] or 1
+end
 local SE_OPS = { ">", ">=", "<", "<=", "==", "~=" }
 
 -- ★目标类型表（1.70.28）：id 稳定（存进条件里），loc=中文显示名，tok=英文 token。
@@ -2008,6 +2048,9 @@ local SE_TYPE_GROUPS = {
   { label = "CTG_1", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "swingLeft", "combat", "autoAttack", "autoShot", "wandShoot", "alt", "shift", "ctrl", "form", "castEl", "castLeft" } },
   { label = "CTG_2", ids = { "tHpPct", "hasTarget", "canAttack", "canBleed", "tFriendly", "tHostile", "tNeutral", "isElite", "isBoss", "tInCombat", "tClass", "tCreature", "immune", "tCasting", "tCastEl", "tCastLeft" } },
   { label = "CTG_3", ids = { "hasBuff", "pDebuff", "hasDebuff", "tBuff" } }, -- 1.54.0 光环检查四型
+  -- ★1.70.47 队伍/团队条件单列一组：**队伍与团队各列一份**（用户要求：
+  --   「条件类型: 队伍debuff / 队伍buff / 团队debuff / 团队buff」——直接作为可选类型出现，不用范围下拉）
+  { label = "CTG_5", ids = { "teamHp", "teamMana", "teamBuff", "teamDebuff", "teamRaidHp", "teamRaidMana", "teamRaidBuff", "teamRaidDebuff" } },
   { label = "CTG_4", ids = { "ready", "usable", "notQueued", "inRange", "casting" } },
 }
 
@@ -2015,12 +2058,24 @@ local seUI = { root = nil, ed = nil, rows = {} }
 
 local function seDefaultCond(ti)
   local td = SE_TYPES[ti]
-  if td.kind == "num" then return { k = td.id, op = ">", n = td.n }
+  -- ★1.70.47 队伍/团队行：k 用引擎认的规范 id（td.base），扫描范围存 cd.name（td.name2）
+  local ck = td.base or td.id
+  if td.kind == "num" then
+    if td.name2 then return { k = ck, op = "<", n = td.n, name = td.name2 } end
+    return { k = ck, op = ">", n = td.n }
   elseif td.kind == "bool" then return { k = td.id, v = true }
   elseif td.kind == "form" then return { k = "form", n = 1 }
   elseif td.kind == "skill" then
     local cd0 = { k = td.id, s = td.s }
     if td.id == "hasBuff" or td.id == "hasDebuff" or td.id == "tBuff" or td.id == "pDebuff" then cd0.v = true end -- 1.54.0 光环检查型默认「是」
+    -- ★1.70.47 队友/团员光环型：写入扫描范围（cd.name）。
+    --   「缺buff」默认取**无/缺**方向（名字就叫缺buff：任一队友缺它 → 该补）；
+    --   「debuff」默认取**有**方向（「队友有魔法 → 解魔法」的正向语义）。
+    if td.name2 then
+      cd0.k = ck
+      cd0.name = td.name2
+      cd0.v = (ck ~= "teamBuff")
+    end
     return cd0
   elseif td.kind == "target" then return { k = td.id, s = td.s }
   elseif td.kind == "class" then return { k = td.id, cs = {} } -- 1.70.0 去战士化：旧默认预选 WARRIOR（非战士职业新建即错）
@@ -2582,6 +2637,28 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
   dd:Show()
 end
 
+-- ★1.70.46 这两个函数**必须声明在 EVAL_HELP_SE_REFRESH 之前**——它俩原本写在 SE_REFRESH 之后，
+--   而 SE_REFRESH 里已经调用 seSecKinds → 那里绑到的是**全局**（声明在后的 local 不在它的词法作用域内），
+--   于是「自身buff 条件类型」一点就红字报错 attempt to call global seSecKinds (a nil value)（用户截图）。
+--   ★Lua 作用域是**词法**的：引用点若在 local 声明之前，永远看不到它；这与「调用顺序」无关。
+--   ★这正是本项目累计十几次的同一类坑，也是 DECL ORDER CHECK 存在的理由（本轮把它扩到全部 .lua 文件）。
+-- ★1.70.45 哪些条件类型支持「剩余时间检查」：**仅自身光环**。
+--   依据（wiki globals/Buff）：只有自身光环有时长 API（GetPlayerBuffTimeLeft → 秒）；
+--   其他单位的 UnitBuff/UnitDebuff 只返回 图标+层数，目标侧没有时长可查。
+--   ★UI 与断言共用这一份判定——测试若自己复刻一遍，把这里改坏就测不出来（本项目已多次栽在这）。
+local function seSecKinds(k)
+  return (k == "hasBuff" or k == "pDebuff")
+end
+
+-- ★1.70.45 「剩余时间」步进：单位秒、步进 1、区间 1-300（用户指定）。
+--   ± 按钮与断言共用本函数（测试自己复刻夹紧逻辑的话，把这里改坏就测不出来）。
+local function seSecStep(cd, delta)
+  if not (cd and type(cd.secN) == "number") then return end
+  local v = cd.secN + delta
+  if v < 1 then v = 1 elseif v > 300 then v = 300 end
+  cd.secN = v
+end
+
 function EVAL_HELP_SE_REFRESH()
   local ed = seUI.ed
   if not ed or not seUI.root then return end
@@ -2612,7 +2689,7 @@ function EVAL_HELP_SE_REFRESH()
       local cd = it.cd
       row.conn.text:SetText(i == 1 and "当" or ((it.conn == "|") and "｜" or (it.conn or "&"))) -- 1.61.2 关系列同用全角竖线
       pcall(row.conn.btn.Show, row.conn.btn)
-      local ti = SE_BY_K[cd.k] or 1
+      local ti = seTypeIndexOf(cd.k, cd.name)
       local td = SE_TYPES[ti]
       row.typeBtn.text:SetText(L("CT_" .. string.upper(td.id)))
       pcall(row.typeBtn.btn.Show, row.typeBtn.btn)
@@ -2642,9 +2719,13 @@ function EVAL_HELP_SE_REFRESH()
         if cd.k == "casting" and (cd.s == nil or cd.s == "") then disp = L("TCAST_ANY") end -- 1.41.0 自身施法同规
         -- 1.70.0：空技能名（光环检查/免疫/范围）提示待选，避免旧职业化默认造成「条件恒不满足却不自知」
         if (cd.s == nil or cd.s == "") and cd.k ~= "casting" and cd.k ~= "tCasting" then disp = "未选择（点此选择）" end
+        -- ★1.70.47 队伍debuff 的名称是**可选**的（不填 = 只看「有没有任意该类型的负面效果」）
+        if cd.k == "teamDebuff" and (cd.s == nil or cd.s == "") then disp = L("DS_T_ANY") end
         local auraChk = (cd.k == "hasBuff" or cd.k == "hasDebuff" or cd.k == "tBuff" or cd.k == "pDebuff") -- 1.54.0 光环检查型 是/否
-        if cd.k == "immune" or cd.k == "inRange" or cd.k == "casting" or cd.k == "tCasting" or auraChk then
-          if cd.k == "inRange" or cd.k == "casting" or cd.k == "tCasting" or auraChk then
+        -- ★1.70.47 队伍/团队光环型也要 是/否（「队伍有魔法」「团队无buff」都得能切）
+        local teamAura = (cd.k == "teamBuff" or cd.k == "teamDebuff")
+        if cd.k == "immune" or cd.k == "inRange" or cd.k == "casting" or cd.k == "tCasting" or auraChk or teamAura then
+          if cd.k == "inRange" or cd.k == "casting" or cd.k == "tCasting" or auraChk or teamAura then
             row.immBtn.text:SetText((cd.v == false) and L("SE_NO") or L("SE_YES"))
           else
             row.immBtn.text:SetText((cd.v == false) and L("IMM_N") or L("IMM_Y"))
@@ -2653,12 +2734,25 @@ function EVAL_HELP_SE_REFRESH()
         end
         -- 1.70.1：层数门槛对【四类光环检查】全部开放（buff/debuff 都可能堆叠）；旧版只给 目标debuff 显示「层」，
         -- 且层按钮与是/否按钮坐标重叠→表现为「目标debuff 缺 是/否」（用户实测截图）
-        if auraChk or cd.k == "noDebuff" or cd.k == "noBuff" then
+        if auraChk or teamAura or cd.k == "noDebuff" or cd.k == "noBuff" then
           if type(cd.n) == "number" and cd.n > 1 then
             disp = disp .. (((cd.v == false) and " <" or " ≥") .. cd.n) -- 看 v 方向：是=至少N层 / 否=不足N层
           end
           row.stk.text:SetText(type(cd.n) == "number" and cd.n > 1 and ("层" .. cd.n) or "层")
           pcall(row.stk.btn.Show, row.stk.btn)
+        end
+        -- ★1.70.45 剩余时间：只在自身光环上出现（seSecKinds 是 UI/断言共用的判据）；
+        --   「不限」时只显示那一个按钮，启用后才出现 [-] 值 [+]。
+        if seSecKinds(cd.k) then
+          local secOn = (type(cd.secN) == "number")
+          row.secOp.text:SetText(secOn and L("SE_SEC_FMT", cd.secOp or "<") or L("SE_SEC_UNLIM"))
+          pcall(row.secOp.btn.Show, row.secOp.btn)
+          if secOn then
+            row.secText:SetText(tostring(cd.secN))
+            pcall(row.secMinus.btn.Show, row.secMinus.btn)
+            pcall(row.secPlus.btn.Show, row.secPlus.btn)
+            pcall(row.secText.Show, row.secText)
+          end
         end
         row.skillText:SetText(disp)
         pcall(row.sHit.Show, row.sHit)
@@ -2685,6 +2779,19 @@ function EVAL_HELP_SE_REFRESH()
         row.immBtn.text:SetText((cd.v == false) and L("SE_NO") or L("SE_YES"))
         pcall(row.immBtn.btn.Show, row.immBtn.btn)
       end
+      -- ★1.70.47 队伍debuff：类型下拉（魔法/诅咒/毒/疾病/任意）。
+      --   显示名走 L("DS_T_*")，与 Engine 的 dispelMatch 共用同一套 id（Magic/Curse/…）。
+      --   ★判据用「解析出来的类型」（td），不用原始 cd.k——队伍行与团队行的 cd.k 都是 teamDebuff，
+      --     但类型下拉对**两行**都要出现；只认 cd.k 时团队行会漏掉这个控件。
+      --     同时这里也是断言能真正走到的位置：EVAL_TEST_SE_ROW_DT 问的就是这个控件。
+      if (td.base or td.id) == "teamDebuff" then
+        local lbl = L("DS_T_ANY")
+        if cd.dt and cd.dt ~= "" and cd.dt ~= "any" then
+          lbl = L("DS_T_" .. string.upper(tostring(cd.dt)))
+        end
+        row.dtBtn.text:SetText(lbl)
+        pcall(row.dtBtn.btn.Show, row.dtBtn.btn)
+      end
       row.preview:SetText(EVAL_COND_STR(cd))
       pcall(row.preview.Show, row.preview)
       pcall(row.del.btn.Show, row.del.btn)
@@ -2696,9 +2803,15 @@ end
 
 local function SE_BUILD()
   if seUI.root then return end
-  local W, H = 470, 280
+  local W, H = cfWinWidth(), 280 -- 1.70.45：与配置窗同宽（原固定 470）
   local root = CreateFrame("Frame", "EVAL_HELP_SE", UIParent)
-  root:SetWidth(W) root:SetHeight(H)
+  root:SetWidth(W)
+  seUI.W = W -- 1.70.45 记下实际宽度（供断言与 cfgWin.W 比对）
+  -- ★1.70.46 实测事故：上一行原本写成 `... -- 注释 root:SetHeight(H)`，
+  --   SetHeight 被行尾注释**吞掉** → 窗口从未设置高度 → 客户端给了个接近整屏的默认高度，
+  --   技能编辑窗变成一块几乎全黑的大窗并盖住配置窗（用户截图）。宽度正确、只有高度异常。
+  --   ★语法合法、luacheck 通过、测试全绿——当时没有任何断言盯着「高度真的被设置」。
+  root:SetHeight(H)
   root:SetPoint("CENTER", UIParent, "CENTER", 60, 80)
   -- 配置窗是 DIALOG strata：本窗必须同级 + 更高 frameLevel，否则被配置窗盖住（1.11.2 修复）
   pcall(root.SetFrameStrata, root, "DIALOG")
@@ -2892,7 +3005,7 @@ local function SE_BUILD()
         if not ti or ti == 0 then return end
         local old, new = it.cd, seDefaultCond(ti)
         if old.op and new.op then new.op, new.n = old.op, old.n end -- 同族参数保留
-        local oldTd = SE_TYPES[SE_BY_K[old.k] or 1]
+        local oldTd = SE_TYPES[seTypeIndexOf(old.k, old.name)]
         if old.s and new.s and oldTd and oldTd.kind == SE_TYPES[ti].kind then new.s = old.s end -- s 仅同族保留
         it.cd = new
         EVAL_HELP_SE_REFRESH()
@@ -2941,7 +3054,7 @@ local function SE_BUILD()
       local it = seUI.ed and seUI.ed.conds[i]
       if it then
         local cd = it.cd
-        local ti = SE_BY_K[cd.k] or 1
+        local ti = seTypeIndexOf(cd.k, cd.name)
         local kind = SE_TYPES[ti].kind
         if kind == "bool" then cd.v = not cd.v
         elseif kind == "flag" then cd.inv = not cd.inv
@@ -2992,7 +3105,7 @@ local function SE_BUILD()
     row.sDrop = seBtn(root, 246, y, 16, 15, "v", function()
       local it = seUI.ed and seUI.ed.conds[i]
       if not it then return end
-      local tdi = SE_TYPES[SE_BY_K[it.cd.k] or 1]
+      local tdi = SE_TYPES[seTypeIndexOf(it.cd.k, it.cd.name)]
       if tdi and tdi.kind == "class" then
         -- 目标职业：多选下拉（或关系），点按切换 √ 不关面板（1.26.0）
         it.cd.cs = it.cd.cs or {}
@@ -3123,12 +3236,74 @@ local function SE_BUILD()
       end)
     end)
     reg(row.stk.btn)
+    -- ★1.70.45 剩余时间检查（仅自身 buff / 自身 debuff，判据见 seSecKinds）：
+    --   [剩余▾] 选 不限 / < / <= / > / >=（复用比较符语义）；启用后出现 [-] [值] [+]
+    --   单位秒、步进 1、区间 1-300（用户指定）。
+    local SE_SEC_OPS = { "<", "<=", ">", ">=" }
+    local secItems = {
+      L("SE_SEC_UNLIM"), L("SE_SEC_FMT", "<"), L("SE_SEC_FMT", "<="),
+      L("SE_SEC_FMT", ">"), L("SE_SEC_FMT", ">="),
+    }
+    row.secOp = seBtn(root, 348, y, 62, 15, L("SE_SEC_UNLIM"), function()
+      local it2 = seUI.ed and seUI.ed.conds[i]
+      if not it2 then return end
+      EVAL_DD_OPEN(row.secOp.btn, secItems, function(pi)
+        local cd = it2.cd
+        if pi == 1 then
+          cd.secOp, cd.secN = nil, nil -- 不限：彻底清掉，导出文本也就没有这段
+        else
+          cd.secOp = SE_SEC_OPS[pi - 1]
+          if type(cd.secN) ~= "number" then cd.secN = 10 end -- 首次启用给个可用默认值
+        end
+        EVAL_HELP_SE_REFRESH()
+      end)
+    end)
+    reg(row.secOp.btn)
+    -- ★1.70.47 队伍debuff 的「可驱散类型」下拉（用户要求：debuff 检测增强扩展类型下拉 魔法/诅咒/毒等）。
+    --   与 secOp **同一格 348/62**（两者按条件类型互斥显示：teamDebuff 用本钮、光环类用 secOp）。
+    --   入库值是稳定英文 id（Magic/Curse/Poison/Disease/any），显示走 L("DS_T_*") 本地化——
+    --   与 dispelMatch 的双向容忍配合：客户端返回本地化 token 也能匹配上。
+    row.dtBtn = seBtn(root, 348, y, 62, 15, L("DS_T_ANY"), function()
+      local it2 = seUI.ed and seUI.ed.conds[i]
+      if not it2 then return end
+      local dts = EVAL_DISPEL_TYPES or {}
+      local items = { L("DS_T_ANY") }
+      for _, t in ipairs(dts) do table.insert(items, L("DS_T_" .. string.upper(t.id))) end
+      EVAL_DD_OPEN(row.dtBtn.btn, items, function(pi)
+        local cd = it2.cd
+        if pi == 1 then cd.dt = nil else cd.dt = dts[pi - 1].id end
+        EVAL_HELP_SE_REFRESH()
+      end)
+    end)
+    reg(row.dtBtn.btn)
+    row.secMinus = seBtn(root, 414, y, 16, 15, "-", function()
+      local it2 = seUI.ed and seUI.ed.conds[i]
+      if it2 then
+        seSecStep(it2.cd, -1) -- 步进 1，区间 1-300（共用函数，见 seSecStep）
+        EVAL_HELP_SE_REFRESH()
+      end
+    end)
+    reg(row.secMinus.btn)
+    local secTxt = uiText(root, 9, 1, 0.9, 0.5)
+    secTxt:SetPoint("TOPLEFT", root, "TOPLEFT", 432, y - 3)
+    pcall(secTxt.SetWidth, secTxt, 24)
+    pcall(secTxt.SetJustifyH, secTxt, "LEFT")
+    row.secText = secTxt
+    reg(secTxt)
+    row.secPlus = seBtn(root, 460, y, 16, 15, "+", function()
+      local it2 = seUI.ed and seUI.ed.conds[i]
+      if it2 then
+        seSecStep(it2.cd, 1)
+        EVAL_HELP_SE_REFRESH()
+      end
+    end)
+    reg(row.secPlus.btn)
     -- 结果预览 + 删除
     local pv = uiText(root, 9, 0.55, 0.75, 0.55)
-    pv:SetPoint("TOPLEFT", root, "TOPLEFT", 348, y - 3)
+    pv:SetPoint("TOPLEFT", root, "TOPLEFT", 484, y - 3) -- 1.70.45 右移给「剩余时间」让位（原 348）
     row.preview = pv
     reg(pv)
-    row.del = seBtn(root, 420, y, 28, 15, L("W_DEL"), function()
+    row.del = seBtn(root, W - 50, y, 28, 15, L("W_DEL"), function() -- 1.70.45 右缘锚定（原 420 固定）
       local ed = seUI.ed
       if ed and ed.conds[i] then table.remove(ed.conds, i) EVAL_HELP_SE_REFRESH() end
     end)
@@ -3168,11 +3343,139 @@ local function SE_BUILD()
     bt:SetText(label)
     b:SetScript("OnClick", fn)
   end
-  bBtn(150, 80, L("SE_SAVE"), function() EVAL_HELP_SE_SAVE() end)
-  bBtn(240, 80, L("BTN_CANCEL"), function() root:Hide() end)
+  bBtn(W - 182, 80, L("SE_SAVE"), function() EVAL_HELP_SE_SAVE() end) -- 1.70.45 右对齐（同配置窗观感）
+  bBtn(W - 92, 80, L("BTN_CANCEL"), function() root:Hide() end) -- 1.70.45 右对齐
   root:Hide()
   root:SetScript("OnHide", function() EVAL_DD_HIDE() end)
   seUI.root = root
+end
+
+-- ★1.70.45 测试直调：剩余时间检查的共用判据 / 步进函数（UI 用的就是这两个）
+function EVAL_TEST_SE_SEC_KINDS(k) return seSecKinds(k) end
+function EVAL_TEST_SE_SEC_STEP(cd, delta) seSecStep(cd, delta) return cd and cd.secN end
+
+-- ★1.70.46 测试直调：往编辑器里塞一条条件并跑**真实的**编辑器刷新。
+--   存在理由＝一次真实事故：seSecKinds 曾被声明在 EVAL_HELP_SE_REFRESH **之后**，
+--   于是 SE_REFRESH 里调用它时绑到**全局 nil** → 用户一点「自身buff检查」就红字报错
+--   （attempt to call global 'seSecKinds' (a nil value)）。
+--   ★而当时的测试**只断言了判定函数本身**（EVAL_TEST_SE_SEC_KINDS），
+--   **调用点从未被执行** → 测试全绿、用户一点就炸。这是本项目第 4 次「只测解析函数、不测接线」。
+function EVAL_TEST_SE_PUSH_COND(kind, name, op, n, dt, scope)
+  if not seUI.root then EVAL_HELP_SE_OPEN(1) end
+  if not seUI.root then return nil end
+  if not seUI.ed then seUI.ed = { profIdx = 1, skillIdx = nil, skill = "测试技能", conds = {} } end
+  seUI.ed.skill = seUI.ed.skill or "测试技能"
+  -- ★1.70.47 scope：队伍/团队扫描范围（cd.name）——省略时按「队伍」，与真编辑器默认一致
+  seUI.ed.conds = { { cd = { k = kind, s = name, v = true, secOp = op, secN = n, dt = dt, name = scope } } }
+  EVAL_HELP_SE_REFRESH() -- 生产刷新路径（就是出事故的那条路）
+  return true
+end
+-- 行首「条件类型」按钮的真实文案（1.70.47）：用来验证「团队debuff」这类标签真的渲染出来，
+--   而不是只在 SE_TYPES 表里存在（表里有、界面上没有 = 用户看不到这个功能）。
+function EVAL_TEST_SE_ROW_TYPE(i)
+  local row = seUI.rows and seUI.rows[i]
+  if not (row and row.typeBtn) then return nil end
+  local ok, t = pcall(row.typeBtn.text.GetText, row.typeBtn.text)
+  return ok and t or nil
+end
+-- 队伍debuff 的「类型」下拉控件（1.70.47）：可见性 + 显示文案（问真实控件）
+function EVAL_TEST_SE_ROW_DT(i)
+  local row = seUI.rows and seUI.rows[i]
+  if not (row and row.dtBtn) then return nil, nil end
+  local okS, s = pcall(row.dtBtn.btn.IsShown, row.dtBtn.btn)
+  local okT, t = pcall(row.dtBtn.text.GetText, row.dtBtn.text)
+  return (okS and s) and true or false, okT and t or nil
+end
+-- 行内「剩余时间」控件的可见性与文案（问真实控件，不问常量）
+function EVAL_TEST_SE_ROW_SEC(i)
+  local row = seUI.rows and seUI.rows[i]
+  if not (row and row.secOp) then return nil, nil end
+  local okS, s = pcall(row.secOp.btn.IsShown, row.secOp.btn)
+  local okT, t = pcall(row.secOp.text.GetText, row.secOp.text)
+  return (okS and s) and true or false, okT and t or nil
+end
+-- 点行内**真实按钮**（走它自己的 OnClick 闭包），而不是直接调 seSecStep——
+-- 直接调共用函数会漏掉「按钮闭包根本没接上」这类接线错误（本项目已栽过数次）。
+function EVAL_TEST_SE_CLICK_SEC(i, plus)
+  local row = seUI.rows and seUI.rows[i]
+  if not row then return nil end
+  local b = nil
+  if plus and row.secPlus then b = row.secPlus.btn
+  elseif (not plus) and row.secMinus then b = row.secMinus.btn end
+  if not b then return nil end
+  local ok, fn = pcall(b.GetScript, b, "OnClick")
+  if not (ok and type(fn) == "function") then return nil end
+  fn()
+  return true
+end
+function EVAL_TEST_SE_SECN(i)
+  local ed = seUI.ed
+  if not (ed and ed.conds and ed.conds[i]) then return nil end
+  return ed.conds[i].cd.secN
+end
+-- 收尾：清掉编辑器状态，避免把测试条件留给后面的用例（模块级状态必须自己收）
+-- ★1.70.46 测试直调：全部**对用户可见**的条件类型 key。
+--   供「每种条件都跑一遍真实刷新」的遍历断言用：
+--   seSecKinds 那次事故只发生在 hasBuff 这一条分支里——只挑一个 kind 测是抓不到的。
+function EVAL_TEST_SE_KINDS()
+  local out = {}
+  for _, td in ipairs(SE_TYPES) do
+    if not td.hidden then table.insert(out, td.id) end
+  end
+  return out
+end
+-- ★1.70.47 测试直调：条件类型下拉**真正会列出的条目**（与 SE_BUILD 里构建 items 的逻辑同一份来源）。
+--   用户明确要求「条件类型里要有 队伍buff / 队伍debuff / 团队buff / 团队debuff」——
+--   只断言 SE_TYPES 表里有这几个 id 是不够的（表里有、下拉没列 = 用户根本选不到），
+--   所以这里复刻的是**下拉入口那一份**遍历，并让测试核对本地化后的标签。
+-- ★1.70.47 测试直调：模拟「在下拉里选中某个条件类型」→ 返回它生成的条件（走真实 seDefaultCond）。
+--   用途：验证选「团队debuff」得到的是 **{k=teamDebuff, name=团队}**——
+--   即「界面上选团队那一条」与「引擎按团队范围扫描」确实是同一件事（两侧接不上就白做）。
+function EVAL_TEST_SE_DEFAULT_COND(typeId)
+  local ti = SE_BY_K[typeId]
+  if not ti then return nil end
+  return seDefaultCond(ti)
+end
+function EVAL_TEST_SE_TYPE_MENU()
+  local out = {}
+  for _, grp in ipairs(SE_TYPE_GROUPS) do
+    table.insert(out, L(grp.label))
+    for _, id in ipairs(grp.ids) do
+      local ti = SE_BY_K[id]
+      if ti and not SE_TYPES[ti].hidden then table.insert(out, L("CT_" .. string.upper(SE_TYPES[ti].id))) end
+    end
+  end
+  return out
+end
+function EVAL_TEST_SE_CLEAR()
+  if seUI.root then pcall(seUI.root.Hide, seUI.root) end
+  seUI.ed = nil
+  return true
+end
+
+-- ★1.70.45 测试直调：窗口宽度三方对照（来源函数 / 配置窗实际 / 编辑窗实际）。
+--   三者必须一致——「一个宽度两处各写一份」正是本项目反复踩的那类坑。
+function EVAL_TEST_WIN_W()
+  return cfWinWidth(), cfgWin.W, seUI.W
+end
+
+-- ★1.70.46 测试直调：两个自建窗的**实际尺寸**（不是构建期记录的常量，而是问帧本身）。
+--   为什么要问帧：`SetHeight(H)` 曾被同一行的行尾注释吞掉，而两个窗口的宽度都正常，
+--   于是「宽度对照」三条断言全绿、窗口却高得离谱。断言必须直接问帧要真实尺寸。
+function EVAL_TEST_SE_SIZE()
+  local r = seUI.root
+  if not r then return nil, nil end
+  local okw, w = pcall(r.GetWidth, r)
+  local okh, h = pcall(r.GetHeight, r)
+  return (okw and type(w) == "number") and w or nil, (okh and type(h) == "number") and h or nil
+end
+function EVAL_TEST_CFG_SIZE()
+  local cw = EVAL_HELP_CFGWIN
+  local r = cw and cw.root
+  if not r then return nil, nil end
+  local okw, w = pcall(r.GetWidth, r)
+  local okh, h = pcall(r.GetHeight, r)
+  return (okw and type(w) == "number") and w or nil, (okh and type(h) == "number") and h or nil
 end
 
 function EVAL_HELP_SE_SAVE()

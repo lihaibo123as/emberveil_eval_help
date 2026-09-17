@@ -2508,4 +2508,691 @@ do
   end
 end
 
+
+-- 61) ★★ 1.70.45 窗口宽度：单一来源 + 加宽 ~100（用户要求「加宽UI 100左右」+「技能编辑与配置窗同宽」）
+do
+  local w0 = EVAL_TEST_WIN_W() -- 第一个返回 = 来源函数当前值
+  eq(type(w0) == "number", true, "★the window width comes from a single source function")
+  eq(w0, 660, "★★ zhCN window width is 660 (was 560, +100 per user request)")
+  eq(w0 > 560, true, "★the UI really got wider")
+  -- 西文分支（原 700）
+  local okLang = EVAL_SET_LANG("enUS")
+  if okLang then
+    eq(EVAL_TEST_WIN_W(), 800, "★★ enUS/ruRU window width is 800 (was 700, +100)")
+    EVAL_SET_LANG("zhCN")
+    eq(EVAL_TEST_WIN_W(), 660, "★language switch is reversible (restored zhCN)")
+  end
+end
+
+
+-- 62) ★★★ 1.70.45 「剩余时间检查」（用户要求：buff 类条件加剩余时间，单位秒）
+-- ★作用域：本客户端只有**自身光环**有时长 API（wiki globals/Buff：GetPlayerBuffTimeLeft → 秒），
+--   其他单位的 UnitBuff/UnitDebuff 只给 图标+层数 → 目标侧如实失败，不静默当作没写。
+do
+  -- 62a) 作用域判据（UI 与断言共用同一份 seSecKinds）
+  eq(EVAL_TEST_SE_SEC_KINDS("hasBuff"), true, "★自身buff 支持剩余时间检查")
+  eq(EVAL_TEST_SE_SEC_KINDS("pDebuff"), true, "★自身debuff 支持")
+  eq(EVAL_TEST_SE_SEC_KINDS("tBuff"), false, "★★目标buff 不支持（客户端无时长 API）")
+  eq(EVAL_TEST_SE_SEC_KINDS("hasDebuff"), false, "★★目标debuff 不支持")
+  eq(EVAL_TEST_SE_SEC_KINDS("hpPct"), false, "★非光环条件不支持")
+
+  -- 62b) 步进 1 / 区间 1-300（UI 按钮与断言共用 seSecStep）
+  local c = { secN = 10 }
+  eq(EVAL_TEST_SE_SEC_STEP(c, 1), 11, "★步进=1（+）")
+  eq(EVAL_TEST_SE_SEC_STEP(c, -1), 10, "★步进=1（-）")
+  c.secN = 1   eq(EVAL_TEST_SE_SEC_STEP(c, -1), 1,   "★★下界夹紧到 1")
+  c.secN = 300 eq(EVAL_TEST_SE_SEC_STEP(c, 1), 300, "★★上界夹紧到 300")
+  eq(EVAL_TEST_SE_SEC_STEP({}, 1), nil, "★未启用时步进是空操作（不会凭空生值）")
+
+  -- 62c) 文本往返（四类光环 × 四个方向）：导出→导入必须逐字一致
+  for _, t in ipairs({
+      "无buff:奥术智慧[<30s]", "有buff:奥术智慧[>=60s]",
+      "无buff:战斗怒吼<3[<=15s]", "自身debuff:减速[>5s]",
+      "无自身debuff:减速[>=10s]", "目标buff:嗜血[<20s]",
+      "无debuff:断筋[<=45s]", "有debuff:裂伤[>2s]",
+    }) do
+    local cd = EVAL_PARSE_ONE(t)
+    eq(cd ~= nil, true, "★解析成功: " .. t)
+    if cd then
+      eq(EVAL_COND_STR(cd), t, "★★往返一致: " .. t)
+      eq(type(cd.secN) == "number", true, "★剩余秒数已入库: " .. t)
+    end
+  end
+  -- 层数与剩余时间同时存在时不得互相吞掉
+  local both = EVAL_PARSE_ONE("无buff:战斗怒吼<3[<=15s]")
+  eq(both.n, 3, "★层数仍为 3（与时间后缀共存）")
+  eq(both.secOp, "<=", "★方向 <=")
+  eq(both.secN, 15, "★秒数 15")
+  -- 非光环条件带后缀 = 写法错误 → 丢弃（宁可丢，不静默接受无意义字段）
+  eq(EVAL_PARSE_ONE("可攻击[<30s]") == nil, true, "★非光环条件带剩余时间后缀→丢弃")
+  eq(EVAL_PARSE_ONE("无buff:奥术智慧").secN, nil, "★无后缀时不带 secN")
+
+  -- 62d) 求值语义（真正要保的行为）
+  EVAL_HELP_CONFIG.war.debuffTex = EVAL_HELP_CONFIG.war.debuffTex or {}
+  EVAL_HELP_CONFIG.war.debuffTex["战斗怒吼"] = "texBS"
+  local function secCase(left)
+    -- left=nil 表示「条目不带 left」→ 桩返回 0（= 无限/无结束时间，与实测语义一致）
+    TEST.buffs = { { tex = "texBS", left = left } }
+    TEST.unitBuffs = nil TEST.debuffs = {} TEST.pDebuffs = nil
+    EVAL_HELP_UPDATE_STATE()
+  end
+  -- (1) 光环不存在 + 「无buff & 剩余<30」→ 该补（此时时间检查不参与）
+  TEST.buffs = {} TEST.unitBuffs = nil EVAL_HELP_UPDATE_STATE()
+  eq(EVAL_COND_EVAL({ k = "hasBuff", s = "战斗怒吼", v = false, secOp = "<", secN = 30 }), true, "★★没有 buff 时「剩余<30」仍为真（=该补了）")
+  -- (2) 存在且即将到期 → 真
+  secCase(10)
+  eq(EVAL_COND_EVAL({ k = "hasBuff", s = "战斗怒吼", v = false, secOp = "<", secN = 30 }), true, "★★剩余 10s < 30s → 该补")
+  -- (3) 存在且还早 → 假（不重施）
+  secCase(60)
+  eq(EVAL_COND_EVAL({ k = "hasBuff", s = "战斗怒吼", v = false, secOp = "<", secN = 30 }), false, "★★剩余 60s → 不该补")
+  -- (4) 方向可切换：>= 方向
+  eq(EVAL_COND_EVAL({ k = "hasBuff", s = "战斗怒吼", v = true, secOp = ">=", secN = 60 }), true, "★★剩余 60s >= 60s → 真")
+  secCase(59)
+  eq(EVAL_COND_EVAL({ k = "hasBuff", s = "战斗怒吼", v = true, secOp = ">=", secN = 60 }), false, "★★剩余 59s < 60s → 假")
+  -- (5) ★★无限/无结束时间（API 返回 0）不能当「0 秒」：否则 <N 恒真 → 每帧都判「该补」（无脑重施）
+  secCase(nil)
+  eq(EVAL_COND_EVAL({ k = "hasBuff", s = "战斗怒吼", v = false, secOp = "<", secN = 30 }), false, "★★无限时长 + <30 必须为假（否则无脑重施）")
+  eq(EVAL_COND_EVAL({ k = "hasBuff", s = "战斗怒吼", v = true, secOp = ">=", secN = 30 }), true, "★无限时长 + >=30 算满足")
+  -- (6) ★无剩余时间数据（光环在 UnitBuff 而不在 buff 栏）→ 如实不满足
+  TEST.buffs = {} TEST.unitBuffs = { { tex = "texBS", apps = 1 } } EVAL_HELP_UPDATE_STATE()
+  eq(EVAL_HELP_STATE.playerBuffs["texBS"] ~= nil, true, "★前提：UnitBuff 路径确实认为「有 buff」")
+  eq(EVAL_COND_EVAL({ k = "hasBuff", s = "战斗怒吼", v = true, secOp = "<", secN = 30 }), false, "★★无剩余数据时如实不满足（不静默当通过）")
+  -- (7) 目标光环带时间检查 → 如实 false（客户端没有目标时长数据）
+  TEST.tgtBuffs = { { tex = "texBS", apps = 1 } } EVAL_HELP_UPDATE_STATE()
+  eq(EVAL_COND_EVAL({ k = "tBuff", s = "战斗怒吼", v = true, secOp = "<", secN = 30 }), false, "★★目标buff 时间检查→如实 false")
+  TEST.tgtBuffs = nil TEST.unitBuffs = nil TEST.buffs = {} EVAL_HELP_UPDATE_STATE()
+end
+
+-- 63) ★★★ 1.70.46 UnrealQuest 强依赖的友好提示（用户要求「未安装该插件时做一个友好的依赖提示」）
+-- ★本组盯住三件事，而不是「面板存在」：
+--   ① 探测状态正确（就绪 / 未安装 / 已装未启用 / 已启用未就绪 / 客户端无 Addon API）；
+--   ② 文案按状态**分叉**：四条文本两两不同 + 文案键映射正确。
+--      （只断言「是字符串」会被旧文本蒙过去——1.70.38 教训）
+--   ③ 依赖缺席时**交互控件必须收起**：否则用户打字、点按钮，只得到空列表 = 静默失败。
+do
+  EVAL_DS_BUILD_FOR_TEST()
+  EVAL_HELP_CONFIG.cfgTab = 4
+  local savedDb = UnrealQuestData
+  local savedInfo, savedState, savedLoaded = GetAddOnInfo, GetAddOnEnableState, IsAddOnLoaded
+  local function allHidden(list)
+    for _, w in ipairs(list) do
+      if w.IsShown and w:IsShown() then return false end
+    end
+    return true
+  end
+  local sw = EVAL_DS_TEST_SEARCH_WIDGETS()
+  eq(type(savedDb) == "table", true, "precondition: the UnrealQuestData stub is in place")
+
+  -- (a) 数据表在 → 就绪：面板收起、搜索行可用
+  TEST.uqAddon = { installed = true, enabled = true, loaded = true }
+  UnrealQuestData = savedDb
+  EVAL_DS_REFRESH()
+  eq(EVAL_DS_DEP_STATE(), 0, "★db present → dependency state OK")
+  eq(EVAL_DS_TEST_DEP_SHOWN(), false, "★★ready: the notice panel is hidden")
+  eq(sw[1]:IsShown(), true, "★ready: the search row is shown")
+
+  -- (b) 未安装：引导面板出现，交互控件全部收起
+  UnrealQuestData = nil
+  TEST.uqAddon = { installed = false }
+  EVAL_DS_REFRESH()
+  eq(EVAL_DS_DEP_STATE(), 1, "★not installed → state MISSING")
+  eq(EVAL_DS_TEST_DEP_SHOWN(), true, "★★missing: the notice panel is shown")
+  eq(allHidden(sw), true, "★★★missing: search controls are hidden (no silent empty-result path)")
+  local mMissing = EVAL_DS_TEST_DEP_MSG()
+
+  -- (c) 已安装但未启用 → 指引去插件列表勾选
+  TEST.uqAddon = { installed = true, enabled = false }
+  EVAL_DS_REFRESH()
+  eq(EVAL_DS_DEP_STATE(), 2, "★installed but disabled → state OFF")
+  eq(allHidden(sw), true, "★disabled: search controls stay hidden")
+  local mOff = EVAL_DS_TEST_DEP_MSG()
+
+  -- (d) 已启用但数据表还没就绪
+  TEST.uqAddon = { installed = true, enabled = true, loaded = true }
+  EVAL_DS_REFRESH()
+  eq(EVAL_DS_DEP_STATE(), 3, "★enabled without data → state PENDING")
+  local mPending = EVAL_DS_TEST_DEP_MSG()
+
+  -- (e) 客户端不提供 Addon API → 如实说「无法判定」，不假装知道
+  GetAddOnInfo = nil
+  EVAL_DS_REFRESH()
+  eq(EVAL_DS_DEP_STATE(), 4, "★no addon API → state UNKNOWN")
+  local mUnknown = EVAL_DS_TEST_DEP_MSG()
+
+  -- ② 文案键映射（防止状态与文案被互换：只断言「两两不同」抓不到互换）
+  eq(EVAL_DS_TEST_DEP_KEY(1), "DS_NEED_UQ", "★state 1 (未安装) maps to DS_NEED_UQ")
+  eq(EVAL_DS_TEST_DEP_KEY(2), "DS_DEP_OFF", "★state 2 (未启用) maps to DS_DEP_OFF")
+  eq(EVAL_DS_TEST_DEP_KEY(3), "DS_DEP_PENDING", "★state 3 (未就绪) maps to DS_DEP_PENDING")
+  eq(EVAL_DS_TEST_DEP_KEY(4), "DS_DEP_UNKNOWN", "★state 4 (无法判定) maps to DS_DEP_UNKNOWN")
+  local _ = mMissing and mOff and mPending and mUnknown -- （第一轮已取值，此处仅为可读性保留）
+
+  -- ③ 三语言 × 四状态全跑一遍：文案必须真的**解析出来**（缺键时 L() 会把键名本身当文案显示）
+  -- ★为什么必须逐语言跑：这 4 个键是**动态解析**的（L(dsDepText(st))），源码里没有
+  --   L("DS_DEP_OFF") 这样的字面量 → test_engine 的 LANG KEY CHECK（静态扫字面量）看不见它们。
+  --   第一版只断言了当前语言，于是我把 enUS 的 DS_DEP_OFF 改坏后检查照样通过——盲区已由此循环补上。
+  for _, lg in ipairs({ "zhCN", "enUS", "ruRU" }) do
+    if EVAL_SET_LANG(lg) then
+      GetAddOnInfo = savedInfo -- ★必须先还原：上面的 (e) 步骤把它置成 nil 了，
+      --   否则本循环的 t1~t3 会全部退化成「无法判定」文案，四条文案「两两不同」的断言就会误报。
+      --   （这正是本组新加的三语言断言当场抓到的：测试自身的全局状态泄漏。）
+      UnrealQuestData = nil
+      TEST.uqAddon = { installed = false } ; EVAL_DS_REFRESH() ; local t1 = EVAL_DS_TEST_DEP_MSG()
+      TEST.uqAddon = { installed = true, enabled = false } ; EVAL_DS_REFRESH() ; local t2 = EVAL_DS_TEST_DEP_MSG()
+      TEST.uqAddon = { installed = true, enabled = true, loaded = true } ; EVAL_DS_REFRESH() ; local t3 = EVAL_DS_TEST_DEP_MSG()
+      GetAddOnInfo = nil ; EVAL_DS_REFRESH() ; local t4 = EVAL_DS_TEST_DEP_MSG()
+      GetAddOnInfo = savedInfo
+      UnrealQuestData = savedDb -- 数据语言检查需要真库
+
+      -- ④ 数据语言：dsLang() 决定去取哪个本地化子表（items_zhCN / items_enUS …）。
+      --   原实现同样写错 → 英/俄客户端里物品/怪物/任务名恒为中文。
+      eq(EVAL_DS_TEST_LANG(), lg, "★★" .. lg .. ": dsLang() (DB sub-table language) follows the selected language")
+      local probe = ({ zhCN = "亚麻", enUS = "Linen", ruRU = nil })[lg]
+      local col = "items_" .. lg
+      if probe and UnrealQuestData[col] then -- 桩里只有 items_zhCN / items_enUS，故只对这两种语言做端到端
+        local res = EVAL_DS_SEARCH(probe, "item")
+        eq(table.getn(res) >= 1, true, "★★" .. lg .. ": search by the " .. lg .. " name hits item 2589")
+        eq(res[1] and res[1].name, UnrealQuestData[col][2589], "★★" .. lg .. ": result name comes from " .. col)
+      end
+      local four = { t1, t2, t3, t4 }
+      local seenL, dupL = {}, false
+      for i = 1, 4 do
+        eq(type(four[i]) == "string" and four[i] ~= "", true, lg .. " state " .. i .. ": notice text is non-empty")
+        eq(four[i] ~= EVAL_DS_TEST_DEP_KEY(i), true,
+          "★★" .. lg .. " state " .. i .. ": locale key really resolved (not the bare key name)")
+        if seenL[four[i]] then dupL = true end
+        seenL[four[i]] = true
+      end
+      eq(dupL, false, "★★" .. lg .. ": the four states produce four DIFFERENT messages")
+      -- ★「语言真的生效了吗」：文案必须**逐字等于该语言包里的值**。
+      --   这一条正是抓出真 bug 的断言：原实现 L() 调的是 EVAL_RESOLVE_LANG()（无返回值）→ 恒取 zhCN，
+      --   于是英/俄客户端整页中文；只断言「四条两两不同」**抓不到**（四条全是中文照样两两不同）。
+      local pack = EVAL_LOCALES and EVAL_LOCALES[lg]
+      eq(pack ~= nil, true, lg .. ": locale pack exists")
+      if pack then
+        eq(t1, pack.DS_NEED_UQ, "★★" .. lg .. " state-1 text comes from the " .. lg .. " pack (not a zhCN fallback)")
+        eq(t2, pack.DS_DEP_OFF, "★★" .. lg .. " state-2 text comes from the " .. lg .. " pack")
+        eq(t3, pack.DS_DEP_PENDING, "★★" .. lg .. " state-3 text comes from the " .. lg .. " pack")
+        eq(t4, pack.DS_DEP_UNKNOWN, "★★" .. lg .. " state-4 text comes from the " .. lg .. " pack")
+        eq(EVAL_DS_TEST_DEP_LINE("title"), pack.DS_DEP_TITLE, "★★" .. lg .. ": notice title comes from the " .. lg .. " pack")
+      end
+      -- 面板的静态键（标题/原因/影响范围）在同一语言下也必须解析出来
+      eq(EVAL_DS_TEST_DEP_LINE("title") ~= "DS_DEP_TITLE", true, "★" .. lg .. ": title key resolved")
+      eq(EVAL_DS_TEST_DEP_LINE("why") ~= "DS_DEP_WHY", true, "★" .. lg .. ": why key resolved")
+      eq(EVAL_DS_TEST_DEP_LINE("msg") ~= "DS_DEP_MSG", true, "★" .. lg .. ": state line is a message, not a key")
+      eq(EVAL_DS_TEST_DEP_LINE("foot") ~= "DS_DEP_FOOT", true, "★" .. lg .. ": foot key resolved")
+      for _, k in ipairs({ "title", "why", "msg", "foot" }) do
+        local v = EVAL_DS_TEST_DEP_LINE(k)
+        eq(type(v) == "string" and v ~= "", true, lg .. " panel line '" .. k .. "' is filled")
+      end
+    end
+  end
+  EVAL_SET_LANG("zhCN")
+
+  -- 还原（1.68.2 教训：测试替换全局必须 save/restore）
+  GetAddOnInfo, GetAddOnEnableState, IsAddOnLoaded = savedInfo, savedState, savedLoaded
+  TEST.uqAddon = { installed = false }
+  UnrealQuestData = savedDb
+  EVAL_DS_REFRESH()
+  eq(EVAL_DS_DEP_STATE(), 0, "★restored: dependency state is OK again")
+  eq(EVAL_DS_TEST_DEP_SHOWN(), false, "★restored: notice panel hidden again")
+end
+
+-- 64) ★★★ 1.70.46 窗口尺寸：宽度三方一致 + **高度必须真的被设置**
+-- 【实测事故】用户截图：技能编辑窗变成一块几乎全黑的大窗、还盖住了配置窗。
+--   根因：`seUI.W = W -- 注释 root:SetHeight(H)` —— SetHeight 被**同一行的行尾注释吞掉**，
+--   窗口从未设置高度，客户端给了个接近整屏的默认高度。**宽度完全正常，只有高度异常**。
+--   语法合法 / luacheck 通过 / 测试全绿：当时只有「宽度」断言，高度一条都没有。
+-- ★教训：断言必须**直接问帧要真实尺寸**（GetWidth/GetHeight），而不是只读构建期记录的常量；
+--   并且「宽度有断言」不代表「尺寸有断言」——一半的维度没断言就等于没断言。
+do
+  -- 两个窗都不是加载期构建的：SE_BUILD 在 EVAL_HELP_SE_OPEN 里（点「添加条件」才建），
+  -- cfgBuild 在打开配置窗时才跑。断言前必须先真正把它们建出来，否则读到的永远是 nil。
+  if not (EVAL_HELP_CFGWIN and EVAL_HELP_CFGWIN.root) then EVAL_HELP_CFG_TOGGLE() end
+  if type(EVAL_HELP_SE_OPEN) == "function" then pcall(EVAL_HELP_SE_OPEN, 1) end
+  local src, recCfg, recSe = EVAL_TEST_WIN_W()
+  eq(src, 660, "★width source = 660 (zhCN)")
+  eq(recCfg, src, "★config window recorded the same width")
+  eq(recSe, src, "★skill-editor window recorded the same width")
+  -- 真实尺寸（问帧，不问常量）
+  local sw, sh = EVAL_TEST_SE_SIZE()
+  eq(sw, 660, "★★skill editor REAL width is 660")
+  eq(sh, 280, "★★★skill editor REAL height is 280 (1.70.46: SetHeight had been swallowed by a line comment)")
+  local cw, ch = EVAL_TEST_CFG_SIZE()
+  eq(cw, 660, "★★config window REAL width is 660")
+  eq(ch, 420, "★★★config window REAL height is 420")
+  -- 高度必须是正数：防止「设成 0/nil 也算设了」这种假通过
+  eq(type(sh) == "number" and sh > 0, true, "★height is a real positive number, not nil/0")
+end
+
+-- 65) ★★★ 1.70.46 「剩余时间」的**真实接线**（不是判定函数本身）
+--   【用户实测事故】点「自身buff检查」条件类型 → 红字报错：
+--     attempt to call global 'seSecKinds' (a nil value)  @ EvalHelp.lua:2674 in EVAL_HELP_SE_REFRESH
+--   根因：seSecKinds 声明在 EVAL_HELP_SE_REFRESH **之后** → 词法作用域看不见 → 绑到全局 nil。
+--   ★当时测试只断言 EVAL_TEST_SE_SEC_KINDS（判定函数），**调用点从未被执行** → 全绿。
+--   本组因此改为：塞一条条件 + 跑**真实刷新** + 点**真实按钮**（走行内 OnClick 闭包）。
+do
+  eq(EVAL_TEST_SE_PUSH_COND("hasBuff", "奥术智慧"), true, "★editor refresh runs for real with a self-buff condition")
+  local shown, txt = EVAL_TEST_SE_ROW_SEC(1)
+  eq(shown, true, "★★the 剩余时间 control appears on a self-buff row")
+  eq(type(txt) == "string" and txt ~= "", true, "★and it carries a label (不限 / 剩余…) ")
+  -- 非光环条件不得出现该控件（判定必须真的接到 UI 上）
+  eq(EVAL_TEST_SE_PUSH_COND("hpPct", nil), true, "★refresh for real with a non-aura condition")
+  eq((EVAL_TEST_SE_ROW_SEC(1)), false, "★★non-aura rows hide the 剩余时间 control")
+  -- 真实按钮：+ / − 走各自行内的 OnClick 闭包（直接调 seSecStep 会漏掉接线错误）
+  EVAL_TEST_SE_PUSH_COND("hasBuff", "奥术智慧", "<", 10)
+  eq(EVAL_TEST_SE_SECN(1), 10, "precondition: 10s in the editor")
+  eq(EVAL_TEST_SE_CLICK_SEC(1, true), true, "★the [+] button has a real OnClick")
+  eq(EVAL_TEST_SE_SECN(1), 11, "★★the [+] button really steps the value")
+  eq(EVAL_TEST_SE_CLICK_SEC(1, false), true, "★the [-] button has a real OnClick")
+  eq(EVAL_TEST_SE_SECN(1), 10, "★★the [-] button really steps the value")
+  EVAL_TEST_SE_PUSH_COND("hasBuff", "奥术智慧", "<", 1)
+  EVAL_TEST_SE_CLICK_SEC(1, false)
+  eq(EVAL_TEST_SE_SECN(1), 1, "★★clamped at 1 through the real button")
+  -- ⑤ ★遍历**全部条件类型**各跑一次真实刷新：任何一条分支里引用错名字 / 缺控件都会当场炸。
+  --   seSecKinds 那次事故只影响 hasBuff 这一条分支——只测一个 kind 是抓不到的。
+  local kinds = EVAL_TEST_SE_KINDS()
+  eq(table.getn(kinds) >= 10, true, "★the editor exposes many condition kinds (got " .. table.getn(kinds) .. ")")
+  local failed = {}
+  for _, k in ipairs(kinds) do
+    if not pcall(EVAL_TEST_SE_PUSH_COND, k, "测试", "<", 5) then table.insert(failed, k) end
+  end
+  eq(table.concat(failed, ","), "", "★★★every condition kind refreshes through the real UI path without error"
+    .. (table.getn(failed) > 0 and (" (failed: " .. table.concat(failed, ",") .. ")") or ""))
+  eq(EVAL_TEST_SE_CLEAR(), true, "★editor state cleared for later cases")
+end
+
+-- 66) ★★★ 1.70.47 队友/团员扫描（用户需求定案，两轮确认）
+--   用户原话：
+--   「新增行为类型 选取目标: - 队伍成员 - 团队成员,自动实施扫描.
+--     搭配条件类型: 团队/队伍成员目标: 血量 蓝量 debuff检测 buff检测 四种条件,
+--     debuff 检测增强扩展类型下拉:魔法,诅咒,毒等.
+--     流程: 一键扫描队伍 血量少于% 释放 xx 治疗; 队伍有 xx 魔法,释放 解魔法技能」
+--   方案示例（一键奶）：选取目标:队伍成员(目标血量<N% / 目标buff:名 / 目标debuff:名)
+--                    → 强效治疗术(队友血量<60 & 就绪) → 驱散魔法(队友debuff:魔法 & 就绪)
+--   ★本组盯六件事：① 扫描（含队伍/团队两个范围、缓存复用）
+--     ② **选取器那一行自己的条件列表**逐候选过滤（用户示例的核心机制）
+--     ③ 四种队友条件 + **命中即记 st.allyUnit 并切目标**（单条条件就能自足）
+--     ④ dry（UI 预览）绝不切目标 ⑤ 往返/UI/三语言 ⑥ **端到端一键奶**（真跑 EVAL_RULE_RUN）
+do
+  local savedTeam, savedRaid, savedRaidN = TEST.team, TEST.raid, TEST.raidN
+  local savedDebuffTex = EVAL_HELP_CONFIG.war.debuffTex
+  EVAL_HELP_CONFIG.war.debuffTex = { ["回春术"] = "texRejuv", ["痛苦诅咒"] = "texCurse", ["魔法"] = "texCurse" }
+  TEST.team = {
+    { unit = "party1", name = "甲", hp = 50, hpMax = 100, mana = 50, manaMax = 100, powerType = 0,
+      buffs = { { tex = "texRejuv", apps = 1 } }, debuffs = {} },
+    { unit = "party2", name = "乙", hp = 10, hpMax = 100, mana = 8, manaMax = 100, powerType = 0,
+      buffs = {}, debuffs = { { tex = "texCurse", apps = 2, type = "Magic" } } },
+  }
+  TEST.raid, TEST.raidN = nil, nil
+  EVAL_HELP_UPDATE_STATE()
+
+  -- (a) 扫描：队伍 = 自己 + 两名队友；含 debuff 类型
+  local list = EVAL_HELP_TEAM_ENSURE()
+  eq(table.getn(list), 3, "★★party scan covers player + 2 party members")
+  local r2 = EVAL_HELP_TEAM_GET("party2")
+  eq(r2 ~= nil, true, "★member lookup by unit works")
+  eq(r2.hpPct, 10, "★★hp% computed from UnitHealth/UnitHealthMax")
+  eq(r2.powerPct, 8, "★mana% computed")
+  eq(r2.powerType, 0, "★power type captured (0 = mana)")
+  eq(r2.debuffs["texCurse"] ~= nil, true, "★debuff texture captured")
+  eq(r2.debuffs["texCurse"].t, "Magic", "★★★debuff DISPEL TYPE captured (UnitDebuff 3rd return)")
+  eq(r2.debuffs["texCurse"].n, 2, "★debuff stack count captured")
+
+  -- (a2) 团队范围：不在团队必须返回空表（绝不拿队伍成员冒充团员）
+  eq(table.getn(EVAL_HELP_TEAM_ENSURE("raid")), 0, "★★★raid scope with no raid → empty (never fakes party as raid)")
+  TEST.raid = {
+    { unit = "raid1", name = "团长", hp = 90, hpMax = 100, mana = 90, manaMax = 100, powerType = 0, buffs = {}, debuffs = {} },
+    { unit = "raid2", name = "团员", hp = 25, hpMax = 100, mana = 90, manaMax = 100, powerType = 0, buffs = {}, debuffs = {} },
+  }
+  EVAL_HELP_UPDATE_STATE()
+  eq(table.getn(EVAL_HELP_TEAM_ENSURE("raid")), 2, "★★raid scope scans raid1..N")
+  eq(EVAL_HELP_TEAM_GET("raid2") ~= nil, true, "★raid member lookup works")
+
+  -- (a3) 缓存必须真的被复用（频率防护的核心：一次按键只扫一遍）
+  local savedUH, uhCalls = UnitHealth, 0
+  UnitHealth = function(u) uhCalls = uhCalls + 1 return savedUH(u) end
+  EVAL_HELP_STATE.teamRaid = nil
+  EVAL_HELP_TEAM_ENSURE("raid")
+  local afterFirst = uhCalls
+  EVAL_HELP_TEAM_ENSURE("raid")
+  UnitHealth = savedUH
+  eq(afterFirst > 0, true, "★首次扫描真的调了 UnitHealth")
+  eq(uhCalls - afterFirst, 0, "★★★第二次 ENSURE 走缓存：0 次额外 API 调用")
+  EVAL_HELP_STATE.teamRaid = nil
+  EVAL_HELP_UPDATE_STATE()
+
+  -- (b) ★★★「选取目标:队伍成员」= 扫描器 + **用这一行自己的条件过滤候选**
+  --   用户示例正是这个形态：条件列表写「目标血量<N% / 目标buff:名 / 目标debuff:名」
+  local function selRule(filters, skillName)
+    return { skill = skillName or "选取目标:队伍成员", why = "t", groups = filters }
+  end
+  TEST.targetSel = nil
+  -- 无过滤条件 → 候选按血量升序，第一个即血量最低者
+  eq(EVAL_RULE_RUN({ selRule(nil) }), true, "★★选取目标:队伍成员 执行成功")
+  eq(TEST.targetSel, "unit:party2", "★★★无过滤条件 → 默认选血量最低的(乙 10%)")
+  eq(EVAL_HELP_STATE.allyUnit, "party2", "★★★并记入 st.allyUnit")
+  TEST.targetSel = nil
+  -- 目标血量 < N% 过滤：只有乙(10%)满足
+  eq(EVAL_RULE_RUN({ selRule({ { { k = "tHpPct", op = "<", n = 40 } } }) }), true, "★目标血量<40 过滤命中")
+  eq(TEST.targetSel, "unit:party2", "★★过滤后选的还是乙")
+  TEST.targetSel = nil
+  -- 目标buff 过滤：只有甲有 回春术 → 应选甲（即使乙血更低）
+  eq(EVAL_RULE_RUN({ selRule({ { { k = "tBuff", s = "回春术", v = true } } }) }), true, "★目标buff:回春术 过滤命中")
+  eq(TEST.targetSel, "unit:party1", "★★★过滤选的是「有该 buff 的人」(甲)，不是血量最低的乙")
+  TEST.targetSel = nil
+  -- 目标debuff 过滤：只有乙中诅咒 → 选乙
+  eq(EVAL_RULE_RUN({ selRule({ { { k = "hasDebuff", s = "痛苦诅咒", v = true } } }) }), true, "★目标debuff 过滤命中")
+  eq(TEST.targetSel, "unit:party2", "★★过滤选的是「中该 debuff 的人」")
+  TEST.targetSel = nil
+  -- 多条件 & ：血量<40 **且** 有回春术 → 没人同时满足
+  local _, whyNoCand = EVAL_RULE_RUN({ selRule({ { { k = "tHpPct", op = "<", n = 40 }, { k = "tBuff", s = "回春术", v = true } } }) })
+  eq(whyNoCand, nil, "★(sanity) 无人满足时 EVAL_RULE_RUN 返回 false")
+  eq(EVAL_HELP_STATE.allyUnit, nil, "★★★无人满足 → st.allyUnit 清空")
+  -- ★★★全候选都不满足时必须**还原原目标**，不能把目标丢在最后一个候选身上就算完。
+  --   靠 TargetByName(原目标名) 还原（真客户端同款 API，项目里「指定名称」已在用）。
+  TEST.targetSel = nil
+  TEST.targetUnit = nil -- 当前目标是「一只普通怪」（不是队伍成员）
+  TEST.curTargetName = "某只怪"
+  EVAL_HELP_UPDATE_STATE() -- 让 st.targetName 反映当前目标
+  EVAL_RULE_RUN({ selRule({ { { k = "tHpPct", op = "<", n = 1 } } }) })
+  eq(TEST.targetSel, "name:某只怪", "★★★无人满足 → 用名字还原了原目标（不是留在最后一个候选身上）")
+  TEST.curTargetName, TEST.targetSel, TEST.targetUnit = nil, nil, nil
+  EVAL_HELP_UPDATE_STATE()
+  -- ★★原目标是**队友**时要走精确还原（TargetUnit ← UnitIsUnit 反查出的 unit id）——
+  --   这条比「按名字还原」更可靠，而且文档明确 TargetByName 只认**附近**单位，不能只靠它。
+  TEST.targetUnit, TEST.targetSel = "party1", nil
+  EVAL_HELP_UPDATE_STATE()
+  eq(EVAL_HELP_STATE.targetName, "甲", "★(sanity) 当前目标 = 甲")
+  EVAL_RULE_RUN({ selRule({ { { k = "tHpPct", op = "<", n = 1 } } }) })
+  eq(TEST.targetSel, "unit:party1", "★★★原目标是队友 → 用 unit id **精确**还原（不是按名字）")
+  -- 原目标是**自己**也要能精确还原（自己不是 party 索引，得单独 UnitIsUnit 比对一次）
+  TEST.targetUnit, TEST.targetSel = "player", nil
+  EVAL_HELP_UPDATE_STATE()
+  EVAL_RULE_RUN({ selRule({ { { k = "tHpPct", op = "<", n = 1 } } }) })
+  eq(TEST.targetSel, "unit:player", "★★★原目标是玩家自己 → 也能精确还原")
+  TEST.targetUnit, TEST.targetSel = nil, nil
+  EVAL_HELP_UPDATE_STATE()
+
+  -- ★★★文档事实：团队里 GetNumPartyMembers 返回「团队人数 - 1」（**不是 0**），
+  --   而 party 索引只到 party4 → 循环上界必须夹到 4，否则 40 人团会去试 party1..party39。
+  --   用 UnitExists 的调用计数把上界钉死（只断言结果相同是抓不到这个的）。
+  local savedPartyN, savedUE = TEST.partyN, UnitExists
+  TEST.partyN, TEST.partyCalls = 39, 0
+  UnitExists = function(u)
+    if string.sub(tostring(u), 1, 5) == "party" then TEST.partyCalls = TEST.partyCalls + 1 end
+    return savedUE(u)
+  end
+  EVAL_HELP_STATE.team = nil
+  local lPartyInRaid = EVAL_HELP_TEAM_ENSURE()
+  UnitExists = savedUE
+  TEST.partyN = savedPartyN
+  eq(TEST.partyCalls, 4, "★★★团队里 party 扫描只试 party1..party4（文档给出的 party 索引域）")
+  eq(table.getn(lPartyInRaid), 3, "★成员表仍是「自己 + 两名真实队友」")
+  TEST.partyCalls = nil
+  -- 团队范围：选团队里的血量最低者
+  TEST.targetSel = nil
+  eq(EVAL_RULE_RUN({ { skill = "选取目标:团队成员", why = "t", groups = {} } }), true, "★选取目标:团队成员 执行成功")
+  eq(TEST.targetSel, "unit:raid2", "★★★团队成员 → 从 raid 名单里选(raid2 25%)")
+  eq(EVAL_HELP_STATE.allyUnit, "raid2", "★并记入 st.allyUnit")
+  TEST.targetSel = nil
+
+  -- (b2) ★★「选取目标:队伍成员」作为**条件**（存量配置 / 文本导入形态）也要能用。
+  --   它走 condOne 的 target 分支——那是**另一个调用点**（技能行走 EVAL_RULE_RUN 的成员选取器分支）。
+  --   只测一条路径就会漏掉另一条（本项目「A 产出 / B 消费 两边都要断言」的老教训）。
+  TEST.targetSel = nil
+  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "target", s = "teamParty" },
+      { groups = { { { k = "tBuff", s = "回春术", v = true } } } }), true, "★条件形态的 选取目标:队伍成员 恒真")
+  eq(TEST.targetSel, "unit:party1", "★★★条件形态同样按规则过滤候选（选中有该 buff 的甲）")
+  TEST.targetSel = nil
+  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "target", s = "teamRaid" }, nil), true, "★条件形态的 选取目标:团队成员 恒真")
+  eq(TEST.targetSel, "unit:raid2", "★★条件形态按**团队**范围选人（raid2 血最少）")
+  TEST.targetSel = nil
+
+  -- (c) 四种队友/团员条件：**命中即记 st.allyUnit 并切目标**（用户要求「记下 unitID → st.allyUnit」）
+  --   这样单条条件就能自足完成「找出该治/该解的人 → 后续技能打在他身上」。
+  --   ★★★每条断言前都必须**清空 allyUnit 与 targetSel**：否则「上一条留下的值」会让
+  --     「忘了记录/忘了切目标」的变异体照样通过（弱代理性质——本轮变异矩阵真的抓到过）。
+  local function clearAlly() TEST.targetSel = nil EVAL_HELP_STATE.allyUnit = nil end
+  clearAlly()
+  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "teamHp", op = "<", n = 60 }, nil), true, "★★队友血量<60 命中(乙 10%)")
+  eq(EVAL_HELP_STATE.allyUnit, "party2", "★★★队友血量 命中后记下 unitID")
+  eq(TEST.targetSel, "unit:party2", "★★★并且真的切了过去（后续 UseAction 才打对人）")
+  clearAlly()
+  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "teamHp", op = ">", n = 60 }, nil), false, "★反向比较如实为假")
+  eq(EVAL_HELP_STATE.allyUnit, nil, "★未命中就不该记人（别把上一轮的人留下）")
+  clearAlly()
+  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "teamMana", op = "<", n = 20 }, nil), true, "★★队友蓝量<20 命中(乙 8%)")
+  eq(EVAL_HELP_STATE.allyUnit, "party2", "★★队友蓝量 命中后也记人")
+  clearAlly()
+  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "teamDebuff", dt = "Magic" }, nil), true, "★★★队友debuff(魔法) 命中")
+  eq(EVAL_HELP_STATE.allyUnit, "party2", "★★★并记下「中魔法的那个人」")
+  eq(TEST.targetSel, "unit:party2", "★★★且切过去（这正是「队友有魔法→解魔法」的施法前提）")
+  clearAlly()
+  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "teamDebuff", dt = "Curse" }, nil), false, "★队友debuff(诅咒) 无人有 → 假")
+  clearAlly()
+  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "teamDebuff", dt = "Curse", v = false }, nil), true, "★★取反方向(无诅咒)如实为真")
+  eq(TEST.targetSel, nil, "★★「无debuff」是存在性判定 → 不切目标")
+  clearAlly()
+  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "teamBuff", s = "回春术", v = false }, nil), true, "★★队友缺buff:回春术 → 乙缺 → 真")
+  eq(EVAL_HELP_STATE.allyUnit, "party2", "★★★记下「缺这个 buff 的人」(该给他补)")
+  eq(TEST.targetSel, "unit:party2", "★★★并切过去（补 buff 才补对人）")
+  clearAlly()
+  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "teamBuff", s = "回春术", v = true }, nil), true, "★★队友有buff:回春术 → 甲有 → 真")
+  eq(TEST.targetSel, nil, "★★「有buff」是存在性判定 → **不切目标**（没有「该对谁施法」的含义）")
+  eq(EVAL_HELP_STATE.allyUnit, nil, "★★也不记人")
+  clearAlly()
+  -- 全队都有该 buff → 「缺buff」必须如实为假（否则会无限补 buff）
+  local p2b = EVAL_HELP_TEAM_GET("party2")
+  local p2bSaved = p2b.buffs["texRejuv"]
+  local savedUB3 = TEST.unitBuffs
+  TEST.unitBuffs = { { tex = "texRejuv", apps = 1 } }
+  EVAL_HELP_STATE.team = nil
+  EVAL_HELP_TEAM_ENSURE() -- 重扫后再改记录（玩家也要有该 buff）
+  EVAL_HELP_TEAM_GET("party2").buffs["texRejuv"] = 1
+  local okAllHave, whyAllHave = EVAL_TEST_COND_EVAL_LIVE({ k = "teamBuff", s = "回春术", v = false }, nil)
+  eq(okAllHave, false, "★★★全队都有回春术 → 队友缺buff 如实为假（否则无限补 buff）")
+  eq(type(whyAllHave) == "string" and string.find(whyAllHave, "全都", 1, true) ~= nil, true, "★并说明「全都有」")
+  TEST.unitBuffs = savedUB3
+  EVAL_HELP_STATE.team = nil
+  EVAL_HELP_UPDATE_STATE()
+  EVAL_HELP_TEAM_ENSURE()
+
+  -- (c2) dry（战斗信息UI 每 0.15s 的预览求值）**绝不能切目标**——
+  --   每个会切目标的类型都要各测一遍（只测一种抓不到另一种漏了 dry 门）
+  for _, dryCd in ipairs({ { k = "teamHp", op = "<", n = 60 }, { k = "teamMana", op = "<", n = 20 },
+                           { k = "teamDebuff", dt = "Magic" }, { k = "teamBuff", s = "回春术", v = false } }) do
+    clearAlly()
+    eq(EVAL_COND_EVAL(dryCd), true, "★dry 求值同样得出 true: " .. tostring(dryCd.k))
+    eq(TEST.targetSel, nil, "★★★dry 求值没有切目标（" .. tostring(dryCd.k) .. "）")
+    eq(EVAL_HELP_STATE.allyUnit, nil, "★★dry 也不写 st.allyUnit（" .. tostring(dryCd.k) .. "）")
+  end
+
+  -- (c3) 诚实失败
+  TEST.raid = nil
+  EVAL_HELP_UPDATE_STATE()
+  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "teamHp", op = "<", n = 90, name = "团队" }, nil), false, "★★★团队条件在没有团队时如实失败")
+  local _, whyNoRaid = EVAL_TEST_COND_EVAL_LIVE({ k = "teamDebuff", dt = "Magic", name = "团队" }, nil)
+  eq(type(whyNoRaid) == "string" and string.find(whyNoRaid, "不在团队中", 1, true) ~= nil, true, "★原因说明不在团队中")
+  -- 怒气职业没有「蓝量%」可言：绝不当成 0% 蓝（mana 故意给 0，闸失效就会误报丙）
+  local rage = { unit = "party3", name = "丙", hp = 5, hpMax = 100, mana = 0, manaMax = 100, powerType = 1, buffs = {}, debuffs = {} }
+  table.insert(TEST.team, rage)
+  EVAL_HELP_UPDATE_STATE()
+  local okMana, whyRage = EVAL_TEST_COND_EVAL_LIVE({ k = "teamMana", op = "<", n = 50 }, nil)
+  eq(okMana, true, "★★蓝量条件仍能在有蓝成员上成立")
+  eq(string.find(whyRage, "丙", 1, true) == nil, true, "★★★怒气成员不被当成 0 蓝")
+  eq(string.find(whyRage, "乙", 1, true) ~= nil, true, "★报出的是真正有蓝且最低的乙")
+  TEST.team = { rage }
+  EVAL_HELP_UPDATE_STATE()
+  local okNoMana, whyNoMana = EVAL_TEST_COND_EVAL_LIVE({ k = "teamMana", op = "<", n = 50 }, nil)
+  eq(okNoMana, false, "★★队伍里全是怒气职业 → 蓝量条件如实失败")
+  eq(type(whyNoMana) == "string" and string.find(whyNoMana, "蓝", 1, true) ~= nil, true, "★并给出原因")
+  -- ★把怒气成员**移除**（不是恢复成带他的表）：后面的端到端用例要的是「甲满/乙最低」这套干净数据，
+  --   留着丙(hp 5%) 会让所有「最该治的人」断言都指向丙——测试数据必须自己收拾干净。
+  TEST.team = {
+    { unit = "party1", name = "甲", hp = 50, hpMax = 100, mana = 50, manaMax = 100, powerType = 0,
+      buffs = { { tex = "texRejuv", apps = 1 } }, debuffs = {} },
+    { unit = "party2", name = "乙", hp = 10, hpMax = 100, mana = 8, manaMax = 100, powerType = 0,
+      buffs = {}, debuffs = { { tex = "texCurse", apps = 2, type = "Magic" } } },
+  }
+  EVAL_HELP_UPDATE_STATE()
+
+  -- (d) 导出→导入往返：四种条件 × 两种范围，一个都不能丢参数（含扫描范围 name）
+  local rt = {
+    { k = "teamHp", op = "<", n = 40, name = "队伍" },
+    { k = "teamHp", op = "<", n = 40, name = "团队" },
+    { k = "teamMana", op = ">=", n = 20, name = "队伍" },
+    { k = "teamMana", op = ">=", n = 20, name = "团队" },
+    { k = "teamBuff", s = "回春术", v = false, name = "队伍" },
+    { k = "teamBuff", s = "回春术", v = true, name = "团队" },
+    { k = "teamDebuff", s = "痛苦诅咒", dt = "Magic", v = true, name = "队伍" },
+    { k = "teamDebuff", dt = "Curse", v = true, name = "团队" },
+    { k = "teamDebuff", s = "回春术", v = false, name = "团队" },
+  }
+  local broken = {}
+  for _, cd in ipairs(rt) do
+    local ss = EVAL_COND_STR(cd)
+    local back = EVAL_PARSE_ONE(ss)
+    if not back or back.k ~= cd.k or back.v ~= cd.v or back.op ~= cd.op or back.n ~= cd.n
+      or back.s ~= cd.s or back.dt ~= cd.dt or back.name ~= cd.name then
+      table.insert(broken, ss .. " → " .. tostring(back and (back.k .. "/" .. tostring(back.name)) or "nil"))
+    end
+  end
+  eq(table.concat(broken, " | "), "", "★★★四种队友/团员条件都能往返（含扫描范围）")
+  -- 行为类型只有两条：队伍成员 / 团队成员
+  eq(table.getn(EVAL_TARGET_SEL), 11, "★★★选取目标只增加了 2 条成员扫描器")
+  for _, id in ipairs({ "teamParty", "teamRaid" }) do
+    local s2 = EVAL_COND_STR({ k = "target", s = id })
+    local b2 = EVAL_PARSE_ONE(s2)
+    eq(b2 and b2.k == "target" and b2.s == id, true, "★选取目标往返: " .. id)
+  end
+
+  -- (e) UI 接线：8 行类型都要在**真实编辑窗**里渲染，且标签随扫描范围变化
+  local uiTypes = {
+    { "teamHp", nil, "<", 60, nil, "队伍", "CT_TEAMHP" },
+    { "teamMana", nil, "<", 20, nil, "队伍", "CT_TEAMMANA" },
+    { "teamHp", nil, "<", 60, nil, "团队", "CT_TEAMRAIDHP" },
+    { "teamMana", nil, "<", 20, nil, "团队", "CT_TEAMRAIDMANA" },
+  }
+  for _, u in ipairs(uiTypes) do
+    eq(EVAL_TEST_SE_PUSH_COND(u[1], u[2], u[3], u[4], u[5], u[6]), true, "★editor renders " .. u[1] .. "/" .. u[6])
+    eq(EVAL_TEST_SE_ROW_TYPE(1), EVAL_LOCALES[EVAL_GET_LANG()][u[7]], "★★行标签 = " .. u[7])
+  end
+  eq(EVAL_TEST_SE_PUSH_COND("teamBuff", "回春术", nil, nil, nil, "队伍"), true, "★editor renders 队友缺buff")
+  eq(EVAL_TEST_SE_ROW_TYPE(1), EVAL_LOCALES[EVAL_GET_LANG()].CT_TEAMBUFF, "★★标签 = 队友缺buff")
+  eq(EVAL_TEST_SE_PUSH_COND("teamBuff", "回春术", nil, nil, nil, "团队"), true, "★editor renders 团员缺buff")
+  eq(EVAL_TEST_SE_ROW_TYPE(1), EVAL_LOCALES[EVAL_GET_LANG()].CT_TEAMRAIDBUFF, "★★标签 = 团员缺buff")
+  eq(EVAL_TEST_SE_PUSH_COND("teamDebuff", nil, nil, nil, nil, "队伍"), true, "★editor renders 队友debuff")
+  local dtShown, dtText = EVAL_TEST_SE_ROW_DT(1)
+  eq(dtShown, true, "★★★队友debuff 行出现「类型」下拉")
+  eq(dtText, EVAL_LOCALES[EVAL_GET_LANG()].DS_T_ANY, "★默认任意负面")
+  EVAL_TEST_SE_PUSH_COND("teamDebuff", nil, nil, nil, "Magic", "团队")
+  eq(EVAL_TEST_SE_ROW_TYPE(1), EVAL_LOCALES[EVAL_GET_LANG()].CT_TEAMRAIDDEBUFF, "★★标签 = 团员debuff")
+  local _, dtMagic = EVAL_TEST_SE_ROW_DT(1)
+  eq(dtMagic, EVAL_LOCALES[EVAL_GET_LANG()].DS_T_MAGIC, "★★类型下拉显示 魔法")
+  EVAL_TEST_SE_PUSH_COND("teamHp", nil, "<", 40, nil, "队伍")
+  eq((EVAL_TEST_SE_ROW_DT(1)), false, "★非 debuff 行不残留类型下拉")
+  eq(EVAL_TEST_SE_CLEAR(), true, "★editor cleared")
+
+  -- (e2) 条件类型下拉里必须**真的列出**这四种（用户明确要求）
+  local menu = EVAL_TEST_SE_TYPE_MENU()
+  local inMenu = {}
+  for _, lbl in ipairs(menu) do inMenu[lbl] = true end
+  local zh = EVAL_LOCALES["zhCN"]
+  for _, key in ipairs({ "CT_TEAMHP", "CT_TEAMMANA", "CT_TEAMBUFF", "CT_TEAMDEBUFF",
+                         "CT_TEAMRAIDHP", "CT_TEAMRAIDMANA", "CT_TEAMRAIDBUFF", "CT_TEAMRAIDDEBUFF" }) do
+    eq(inMenu[zh[key]] == true, true, "★★★条件类型下拉里列出了: " .. key)
+  end
+  -- 选中后产出的条件必须是「引擎 k + 正确扫描范围」
+  for _, pair in ipairs({ { "teamBuff", "teamBuff", "队伍" }, { "teamDebuff", "teamDebuff", "队伍" },
+                          { "teamRaidBuff", "teamBuff", "团队" }, { "teamRaidDebuff", "teamDebuff", "团队" },
+                          { "teamHp", "teamHp", "队伍" }, { "teamRaidHp", "teamHp", "团队" },
+                          { "teamMana", "teamMana", "队伍" }, { "teamRaidMana", "teamMana", "团队" } }) do
+    local cd = EVAL_TEST_SE_DEFAULT_COND(pair[1])
+    eq(cd ~= nil, true, "★★下拉选得到: " .. pair[1])
+    if cd then
+      eq(cd.k, pair[2], "★★" .. pair[1] .. " → engine k = " .. pair[2])
+      eq(cd.name, pair[3], "★★★" .. pair[1] .. " → 扫描范围 = " .. pair[3])
+    end
+  end
+  local hpc = EVAL_TEST_SE_DEFAULT_COND("teamHp")
+  eq(hpc.op, "<", "★队友血量默认比较符是 <（该加血了）")
+  local mc = EVAL_TEST_SE_DEFAULT_COND("teamMana")
+  eq(mc.op, "<", "★队友蓝量默认比较符是 <")
+  -- 缺buff 型默认取「缺」方向（名字就是缺buff）
+  eq(EVAL_TEST_SE_DEFAULT_COND("teamBuff").v, false, "★★队友缺buff 默认 = 缺方向")
+  eq(EVAL_TEST_SE_DEFAULT_COND("teamDebuff").v, true, "★★队友debuff 默认 = 有方向（有人中魔法）")
+
+  -- (f) 动态键三语言齐全（类型标签是拼接键，静态检查看不见）
+  for _, lg in ipairs({ "zhCN", "enUS", "ruRU" }) do
+    if EVAL_SET_LANG(lg) then
+      local pack = EVAL_LOCALES and EVAL_LOCALES[lg]
+      eq(pack ~= nil, true, lg .. ": locale pack exists")
+      if pack then
+        for _, k in ipairs({ "DS_T_ANY", "DS_T_MAGIC", "DS_T_CURSE", "DS_T_POISON", "DS_T_DISEASE",
+                             "CT_TEAMHP", "CT_TEAMMANA", "CT_TEAMBUFF", "CT_TEAMDEBUFF",
+                             "CT_TEAMRAIDHP", "CT_TEAMRAIDMANA", "CT_TEAMRAIDBUFF", "CT_TEAMRAIDDEBUFF",
+                             "CTG_5" }) do
+          eq(type(pack[k]) == "string" and pack[k] ~= "" and pack[k] ~= k, true,
+            "★★" .. lg .. ": team key resolved: " .. k)
+        end
+        eq(pack.CT_TEAMDEBUFF ~= pack.CT_TEAMRAIDDEBUFF, true, "★★" .. lg .. ": 队友/团员 labels differ")
+      end
+    end
+  end
+  EVAL_SET_LANG("zhCN")
+
+  -- (g) ★★★端到端「一键奶」：真跑 EVAL_RULE_RUN，验证两段流程各自打在**正确的人**身上
+  --   用户方案： 选取目标:队伍成员(过滤) → 强效治疗术(队友血量<60 & 就绪) → 驱散魔法(队友debuff:魔法 & 就绪)
+  local savedSlots = TEST.slotNames
+  TEST.slotNames = { [1] = "强效治疗术", [2] = "驱散魔法" }
+  EVAL_GO_RESCAN(true)
+  EVAL_HELP_UPDATE_STATE()
+  TEST.used, TEST.targetSel = {}, nil
+  local healRule  = { skill = "强效治疗术", why = "heal", groups = { { { k = "teamHp", op = "<", n = 60 }, { k = "ready" } } } }
+  local dispelRule = { skill = "驱散魔法",  why = "dispel", groups = { { { k = "teamDebuff", dt = "Magic" }, { k = "ready" } } } }
+  local acted = EVAL_RULE_RUN({ healRule, dispelRule })
+  eq(acted, true, "★★★一键奶：本次按键有动作")
+  eq(table.getn(TEST.used) >= 1, true, "★★至少放出一个技能（" .. tostring(table.getn(TEST.used)) .. " 个）")
+  eq(TEST.used[1], 1, "★★★先放的是治疗(槽1)")
+  eq(EVAL_HELP_STATE.allyUnit, "party2", "★★★治疗/驱散的目标都是「中魔法且血最少」的乙")
+  eq(TEST.targetSel, "unit:party2", "★★★目标确实切到了乙（UseAction 因此打在他身上）")
+
+  -- 单独验证「只配治疗、没配选取目标」也能自足工作（条件自己记人+切目标）
+  TEST.used, TEST.targetSel = {}, nil
+  eq(EVAL_RULE_RUN({ healRule }), true, "★★只配一条队友条件也能出手（条件自足）")
+  eq(TEST.targetSel, "unit:party2", "★★★条件自己把目标切到了最该治的人")
+
+  -- 队伍全满血 → 治疗条件不满足，不该出手（诚实失败，别乱放技能）
+  -- ★EVAL_RULE_RUN 出手后会 UPDATE_STATE，而它会**作废扫描缓存**（st.team=nil）→ 读记录前要重扫
+  EVAL_HELP_TEAM_ENSURE()
+  local p1h, p2h = EVAL_HELP_TEAM_GET("party1"), EVAL_HELP_TEAM_GET("party2")
+  local h1, h2 = p1h.hpPct, p2h.hpPct
+  p1h.hpPct, p2h.hpPct = 100, 100
+  TEST.used, TEST.targetSel = {}, nil
+  eq(EVAL_RULE_RUN({ healRule }), false, "★★★全队满血 → 不施法")
+  eq(table.getn(TEST.used), 0, "★★一个技能都没放")
+  p1h.hpPct, p2h.hpPct = h1, h2
+
+  -- ★★★每次按键开头必须**清空 st.allyUnit**：否则上一轮选的人会被这一轮当成「本次命中的人」。
+  --   这条只能靠**真实入口 EVAL_GO** 验证（清空动作就在它里面）——所以这里真的按一次宏，
+  --   而不是调内部函数（本项目「能点就点真实按钮」的同一原则）。
+  local savedProf, savedActive, savedDeb = EVAL_HELP_CONFIG.war.profiles, EVAL_HELP_CONFIG.war.activeProfile, EVAL_HELP_CONFIG.goDebounce
+  EVAL_HELP_CONFIG.war.profiles = { { name = "probe", skills = {
+    { skill = "强效治疗术", why = "x", enabled = true, groups = { { { k = "tHpPct", op = "<", n = 1 } } } } } } }
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  EVAL_HELP_CONFIG.goDebounce = 0 -- 关掉去抖窗，否则同一 GetTime 下第二次按宏被跳过
+  TEST.targetUnit, TEST.targetSel, TEST.used = nil, nil, {}
+  EVAL_HELP_STATE.allyUnit = "stale:上一次按键选的人"
+  EVAL_GO()
+  eq(EVAL_HELP_STATE.allyUnit, nil, "★★★每按一次宏都清空 st.allyUnit（旧值绝不冒充本次选中的人）")
+  eq(table.getn(TEST.used), 0, "★(sanity) 本轮条件不满足 → 没施法")
+  EVAL_HELP_CONFIG.war.profiles, EVAL_HELP_CONFIG.war.activeProfile, EVAL_HELP_CONFIG.goDebounce = savedProf, savedActive, savedDeb
+
+  TEST.slotNames = savedSlots
+  EVAL_GO_RESCAN(true)
+  TEST.team, TEST.raid, TEST.raidN = savedTeam, savedRaid, savedRaidN
+  EVAL_HELP_CONFIG.war.debuffTex = savedDebuffTex
+  EVAL_HELP_STATE.teamCur, EVAL_HELP_STATE.allyUnit = nil, nil
+  EVAL_HELP_UPDATE_STATE()
+end
 print("ALL TESTS PASS")

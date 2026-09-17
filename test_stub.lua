@@ -8,6 +8,7 @@ TEST = { used = {}, targetClass = "WARRIOR", hasTarget = true, slotNames = { [1]
 local function newMock()
   local m = {}
   local shown, scripts, texts = false, {}, {}
+  local w, h = nil, nil -- ★1.70.46 帧必须记得自己的尺寸（见下方 SetWidth/SetHeight 说明）
   local special = {
     -- ★1.70.25：帧必须真的有显隐状态。原桩的 Show/Hide 是空操作、IsShown 恒 nil，
     --   导致「点选后面板是否仍打开」这类行为断言永远是 false —— 断言失效而不自知。
@@ -20,6 +21,14 @@ local function newMock()
     GetScript = function(_, ev) return scripts[ev] end,
     SetText = function(_, t) texts.t = t end,
     GetText = function() return texts.t end,
+    -- ★1.70.46：桩必须记得尺寸。原桩把 SetWidth/SetHeight 当空操作、GetWidth/GetHeight 恒 nil，
+    --   于是「窗口高度根本没被设置」这类事故在测试里**完全不可见**——用户实测：技能编辑窗高得离谱，
+    --   根因是 `seUI.W = W -- 注释 root:SetHeight(H)` 里 SetHeight 被行尾注释吞掉。
+    --   当时宽度有断言、高度一条都没有 → 只漏了高度。桩越接近真实，这类事故越早暴露。
+    SetWidth = function(_, v) w = v end,
+    SetHeight = function(_, v) h = v end,
+    GetWidth = function() return w end,
+    GetHeight = function() return h end,
   }
   setmetatable(m, { __index = function(_, k)
     if special[k] then return special[k] end
@@ -95,14 +104,70 @@ GameTooltip = {
 DEFAULT_CHAT_FRAME = { AddMessage = function(_, msg) TEST.chat = (TEST.chat or "") .. tostring(msg) .. "\n" end }
 
 GetTime = function() return TEST.time or 1000 end
-UnitName = function(u) return u == "player" and "测试玩家" or (TEST.curTargetName or "测试怪") end
+-- ★1.70.47 队伍/团队成员桩（用户要求：一键扫描队伍 → 血/蓝/buff/debuff 条件）：
+--   TEST.team = { { unit="party1", name=, hp=, hpMax=, mana=, manaMax=, powerType=,
+--                   buffs={ {tex=,apps=} }, debuffs={ {tex=,apps=,type=} } }, ... }
+--   未设置 TEST.team 时（绝大多数既有用例）成员数为 0、teamRec 恒 nil → **老用例行为完全不变**。
+--   TEST.raid = 同上结构，但 unit 用 "raid1".."raidN"（团队范围，radN 已含玩家自己）。
+--   ★TEST.partyN 用于模拟**团队里**的返回值（文档：团队里它是「团人数 - 1」，不是 0）
+GetNumPartyMembers = function()
+  if TEST.partyN then return TEST.partyN end
+  return TEST.team and table.getn(TEST.team) or 0
+end
+GetNumRaidMembers = function()
+  if TEST.raid then return table.getn(TEST.raid) end
+  return TEST.raidN or 0
+end
+-- ★★★1.70.47「当前目标」必须能映射到**被切过去的那个单位**：
+--   TargetUnit("party1") 之后，UnitBuff/UnitDebuff/UnitHealth("target") 要回报 party1 的数据
+--   （真客户端就是这样；队伍选取器的候选过滤完全依赖这一点）。
+--   ★不设 TEST.targetUnit 时**行为完全不变** → 既有用例不受影响。
+--   ★为什么必须补：旧桩里 "target" 恒读 TEST.tgtBuffs/TEST.debuffs（模拟某个固定怪），
+--     于是「切过去再按目标条件判定」在测试里永远是错的——断言会得出与真机相反的结论。
+local function resolveTarget(u)
+  if u == "target" and TEST.targetUnit then return TEST.targetUnit end
+  return u
+end
+local function teamRec(u)
+  u = resolveTarget(u)
+  for _, r in ipairs(TEST.team or {}) do if r.unit == u then return r end end
+  for _, r in ipairs(TEST.raid or {}) do if r.unit == u then return r end end
+  return nil
+end
+TEST.teamRec = function(u) return teamRec(u) end
+UnitName = function(u)
+  local r = teamRec(u)
+  if r then return r.name or u end
+  return u == "player" and "测试玩家" or (TEST.curTargetName or "测试怪")
+end
 UnitLevel = function() return 60 end
 UnitClass = function(u) if u == "target" then return "战士", TEST.targetClass, 1 end return "战士", "WARRIOR", 1 end
-UnitHealth = function() return 80 end
-UnitHealthMax = function() return 100 end
-UnitMana = function() return 50 end
-UnitManaMax = function() return 100 end
-UnitPowerType = function() return 1 end
+UnitHealth = function(u)
+  local r = teamRec(u)
+  if r then return r.hp or 0 end
+  return TEST.hp or 80
+end
+UnitHealthMax = function(u)
+  local r = teamRec(u)
+  if r then return r.hpMax or 100 end
+  return TEST.hpMax or 100
+end
+UnitMana = function(u)
+  local r = teamRec(u)
+  if r then return r.mana or 0 end
+  return TEST.mana or 50
+end
+UnitManaMax = function(u)
+  local r = teamRec(u)
+  if r then return r.manaMax or 100 end
+  return TEST.manaMax or 100
+end
+UnitPowerType = function(u)
+  local r = teamRec(u)
+  if r and r.powerType ~= nil then return r.powerType end
+  if u and u ~= "player" and u ~= "target" then return 0 end -- 队友默认按法力职业（0=mana）
+  return TEST.powerType or 1
+end
 GetComboPoints = function() return TEST.combo or 0 end
 -- 宠物指令桩（1.30.0）：记录调用
 HasPetUI = function() return TEST.hasPet ~= false, true end
@@ -124,14 +189,48 @@ GetNumShapeshiftForms = function() return TEST.stances and table.getn(TEST.stanc
 GetShapeshiftFormInfo = function(i) local f = TEST.stances and TEST.stances[i] if not f then return nil end return f.icon, f.name, f.active, f.castable end
 GetShapeshiftFormCooldown = function() return 0, 0, 1 end
 CastShapeshiftForm = function(i) TEST.stanceCast = i local f = TEST.stances and TEST.stances[i] if f then f.active = 1 end end
-GetPlayerBuff = function(i) return TEST.buffs[i + 1] and i or -1 end
-GetPlayerBuffTexture = function(bi) return TEST.buffs[bi + 1] and TEST.buffs[bi + 1].tex or nil end
-UnitDebuff = function(_, i) local d = TEST.debuffs[i] if not d then return nil end return d.tex, d.apps or 0 end
-UnitBuff = function(u, i) local t = (u == "target") and TEST.tgtBuffs or TEST.unitBuffs local b = t and t[i] if not b then return nil end return b.tex, b.apps or 0 end -- 1.32.10 兜底枚举桩；1.54.0 target 分表；1.70.1 返回层数
+-- ★1.70.45 桩改为 filter 感知：HELPFUL 走 TEST.buffs、HARMFUL 走 TEST.pDebuffs（默认 nil → -1 立即停）。
+--   原因是新功能要分别为「自身buff / 自身debuff」取剩余秒数，两个列表必须是不同的（真 API 亦然）。
+GetPlayerBuff = function(i, filter)
+  local list = (filter == "HARMFUL") and TEST.pDebuffs or TEST.buffs
+  return (list and list[i + 1]) and i or -1
+end
+local function stubBuffAt(bi)
+  return TEST.buffs[bi + 1] or (TEST.pDebuffs and TEST.pDebuffs[bi + 1])
+end
+GetPlayerBuffTexture = function(bi) local b = stubBuffAt(bi) return b and b.tex or nil end
+-- ★剩余秒数：条目可带 left（秒）。实测语义：越界/空槽/无限/无结束时间都返回 0（wiki globals/Buff）
+GetPlayerBuffTimeLeft = function(bi) local b = stubBuffAt(bi) return b and (b.left or 0) or 0 end
+-- ★1.70.47 UnitDebuff 第三返回值 = dispel 类型 token（Magic/Curse/Disease/Poison/…，可能 nil）——
+--   这是「解魔法/解诅咒」的判据来源，桩必须如实返回（wiki globals/Unit 已核对签名）。
+UnitDebuff = function(u, i)
+  local r = teamRec(u)
+  if r then local d = r.debuffs and r.debuffs[i] if not d then return nil end return d.tex, d.apps or 0, d.type end
+  local d = TEST.debuffs[i] if not d then return nil end
+  return d.tex, d.apps or 0, d.type
+end
+UnitBuff = function(u, i)
+  local r = teamRec(u)
+  if r then local b = r.buffs and r.buffs[i] if not b then return nil end return b.tex, b.apps or 0 end
+local t = (u == "target") and TEST.tgtBuffs or TEST.unitBuffs local b = t and t[i] if not b then return nil end return b.tex, b.apps or 0 end -- 1.32.10 兜底枚举桩；1.54.0 target 分表；1.70.1 返回层数
+-- ★1.70.47 UnitIsUnit（文档：相同返回 true，不同返回 **nil**，绝不 false）——
+--   队伍选取器用它反查「当前目标是哪个单位」以便精确还原，所以桩必须按文档语义返回 nil 而不是 false。
+UnitIsUnit = function(a, b)
+  if a == nil or b == nil then return nil end
+  if a == b then return true end
+  if resolveTarget(a) == resolveTarget(b) then return true end
+  return nil
+end
 IsAltKeyDown = function() return false end
 IsShiftKeyDown = function() return false end
 IsControlKeyDown = function() return false end
-UnitExists = function(u) return u == "target" and TEST.hasTarget or false end
+UnitExists = function(u)
+  -- ★1.70.47 "player" 恒存在（真 API 语义）；队伍成员按 TEST.team 判定。
+  --   此前桩对 player 返回 false —— 团队扫描把它自己漏掉了（被组 66 当场抓到）。
+  if u == "player" then return true end
+  if teamRec(u) then return true end
+  return u == "target" and TEST.hasTarget or false
+end
 UnitIsDeadOrGhost = function() return false end
 UnitIsDead = function() return false end
 UnitAttackSpeed = function() return TEST.atkSpd or 0, TEST.atkSpdOff end
@@ -158,10 +257,16 @@ TargetNearestEnemy = function()
     TEST.curTargetName = TEST.nearby[TEST.nearIdx]
   end
 end
-TargetUnit = function(u) TEST.targetSel = "unit:" .. tostring(u) end
+TargetUnit = function(u)
+  TEST.targetSel = "unit:" .. tostring(u)
+  TEST.targetUnit = u -- 之后 UnitXxx("target") 就回报这个单位的数据（见 resolveTarget）
+end
 TargetByName = function(n)
   TEST.targetSel = "name:" .. tostring(n)
   TEST.byNameArg = n
+  TEST.targetUnit = nil
+  for _, r in ipairs(TEST.team or {}) do if r.name == n then TEST.targetUnit = r.unit end end
+  for _, r in ipairs(TEST.raid or {}) do if r.name == n then TEST.targetUnit = r.unit end end
   if TEST.nearby then TEST.curTargetName = n end -- 还原目标模拟
 end
 TargetNearestFriend = function() TEST.targetSel = "nearFriend" end
@@ -169,7 +274,7 @@ TargetNearestPartyMember = function() TEST.targetSel = "nearParty" end
 TargetNearestRaidMember = function() TEST.targetSel = "nearRaid" end
 TargetLastEnemy = function() TEST.targetSel = "lastEnemy" end
 TargetLastTarget = function() TEST.targetSel = "lastTarget" end
-ClearTarget = function() TEST.targetSel = "clear" end
+ClearTarget = function() TEST.targetSel = "clear" TEST.targetUnit = nil end
 -- 物品使用桩（1.32.0）：TEST.bags = { [bag*100+slot] = { name=, tex=, count=, cd= } }
 GetContainerNumSlots = function(bag) return (bag >= 0 and bag <= 4) and 2 or 0 end
 GetContainerItemLink = function(bag, slot) local it = TEST.bags and TEST.bags[bag * 100 + slot] return it and ("|Hitem:1|h[" .. it.name .. "]|h") or nil end
@@ -217,6 +322,28 @@ UnrealQuestData = {
   ["zones_zhCN"] = { [14] = "杜隆塔尔", [1637] = "奥格瑞玛" },
   ["zones_enUS"] = { [14] = "Durotar", [1637] = "Orgrimmar" },
 }
+-- Addon 依赖探测桩（1.70.46：DataSearch 判断 UnrealQuest 是否可用）
+-- 文档要点（emberveil.org/wiki/lua/globals/Addon）：
+--   · GetAddOnInfo(名) → 文件夹名,标题,备注,URL,可加载(1/nil),原因token,SECURE/INSECURE
+--     ★未知插件：除 security 外**全部 nil** —— 探测逻辑正是靠「第一个返回值是否为 nil」判「未安装」
+--   · GetAddOnEnableState(char, 名) → 0 未启用 / 1 部分角色 / 2 已启用
+--   · IsAddOnLoaded(名) → 布尔
+-- TEST.uqAddon 驱动：{ installed = ?, enabled = ? }（默认「未安装」）
+TEST.uqAddon = { installed = false }
+GetAddOnInfo = function(name)
+  local a = TEST.uqAddon
+  if not (a and a.installed) then return nil, nil, nil, nil, nil, nil, "INSECURE", nil end
+  return "UnrealQuest", "UnrealQuest", "", nil, 1, nil, "INSECURE", nil
+end
+GetAddOnEnableState = function(chr, name)
+  local a = TEST.uqAddon
+  if not (a and a.installed) then return 0 end
+  return a.enabled and 2 or 0
+end
+IsAddOnLoaded = function(name)
+  local a = TEST.uqAddon
+  return (a and a.installed and a.loaded) and true or false
+end
 -- 工具箱桩（1.68.0）
 GetMoney = function() return 1000000 end
 CanMerchantRepair = function() return true end

@@ -46,8 +46,11 @@ local function tbBtn(parent, x, y, w, label, onClick, widgets)
 end
 
 -- ===== i18n / 输出 / 配置 =====
+-- ★1.70.46 修正语言来源：原写法 `... and EVAL_RESOLVE_LANG() or "zhCN"` 恒等于 "zhCN"
+--   （Core.lua 的 ehResolveLang 只把语言写进 EH_LANG、不返回任何值）→ 工具箱在英/俄客户端里
+--   整页中文且不报错。与主程序一致改用读取器 EVAL_GET_LANG()。
 local function L(k)
-  local lang = (type(EVAL_RESOLVE_LANG) == "function") and EVAL_RESOLVE_LANG() or "zhCN"
+  local lang = (type(EVAL_GET_LANG) == "function") and EVAL_GET_LANG() or "zhCN"
   local pack = EVAL_LOCALES and EVAL_LOCALES[lang]
   local v = pack and pack[k]
   if v == nil and EVAL_LOCALES and EVAL_LOCALES.zhCN then v = EVAL_LOCALES.zhCN[k] end

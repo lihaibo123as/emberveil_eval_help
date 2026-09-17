@@ -13,45 +13,121 @@ function checkIconAssets() {
   if (!fs.existsSync(dsPath)) return null;
   const ds = fs.readFileSync(dsPath, 'utf8');
   const rootMatch = ds.match(/DS_ANN_ICON_ROOT\s*=\s*"([^"]+)"/);
+// ===== WIN WIDTH CHECK: one width source, both windows use it =====
+// ★ 1.70.45 用户要求：配置窗加宽 ~100，且技能编辑窗与它同宽。
+// 两个窗口各写一份宽度就是本项目反复踩的「两份数据」坑（版本号/声明顺序同理），故用源码检查钉死。
+(function () {
+  const src = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
+  const nl = src.split(String.fromCharCode(10));
+  // 1) 来源函数存在且返回 800/660
+  const fnIdx = nl.findIndex(l => l.indexOf("local function cfWinWidth()") === 0);
+  if (fnIdx < 0) { console.log("WIN WIDTH CHECK: FAIL - cfWinWidth() is missing"); process.exitCode = 1; return; }
+  const body = nl.slice(fnIdx, fnIdx + 3).join(" ");
+  if (body.indexOf("800 or 660") < 0) {
+    console.log("WIN WIDTH CHECK: FAIL - cfWinWidth() must return 800 (wide langs) or 660 (zhCN); got: " + body.trim());
+    process.exitCode = 1;
+    return;
+  }
+  // 2) 恰好两个构建点调用它（配置窗 + 技能编辑窗）
+  // 只数「构建点」：它们都是赋值形式（local W... = cfWinWidth()）；测试访问器不算。
+  const calls = (src.match(/= cfWinWidth\(\)/g) || []).length;
+  if (calls !== 2) {
+    console.log("WIN WIDTH CHECK: FAIL - expected exactly 2 build sites calling cfWinWidth(), found " + calls);
+    process.exitCode = 1;
+    return;
+  }
+  // 3) 旧字面量不得残留
+  const stale = ["WIDE and 700 or 560", "local W, H = 470, 280"];
+  const bad = stale.filter(x => src.indexOf(x) >= 0);
+  if (bad.length) {
+    console.log("WIN WIDTH CHECK: FAIL - stale hardcoded width still present: " + bad.join(" | "));
+    process.exitCode = 1;
+    return;
+  }
+  console.log("WIN WIDTH CHECK: single source, 2 build sites, 800/660");
+})();
+
 // ===== DECL ORDER CHECK: every top-level local must be declared before its first use =====
 // ★★1.70.44 用户实测定案：「点定位后地图空白」的真凶是一个变量被两批函数分别绑到了两个位置：
 //   dsOverlayStr/dsSetOverlay 定义在 local dsAnnOverlay 之前 → 绑全局（写入成功）；
 //   dsAnnDraw/REFRESH 定义在其后 → 读局部（恒 nil）。
 //   Lua 不报错、pcall 全成功，只是行为错——而日志里两个读者会给出相反的答案。
-// 本检查把「声明必须早于首次引用」做成系统性规则，不再靠人肉眼（同类坑已累计 12 次）。
+//   ★Lua 的作用域是**词法**的：引用点若在 local 声明之前，永远看不到它（与调用顺序无关）——
+//     所以「声明在引用之后」一定是真 bug，不存在误报式的「其实运行时能拿到」。
+// ★★1.70.46 两处扩展（本轮的坑正是踩在这两点上）：
+//   ① 覆盖面：从只扫 DataSearch.lua 扩到**全部生产 .lua 文件**。
+//      事故：seSecKinds 声明在 EVAL_HELP_SE_REFRESH 之后 → 用户点「自身buff检查」直接红字
+//      attempt to call global 'seSecKinds' (a nil value)。旧检查只扫 DataSearch.lua，完全看不见。
+//      **检查存在 ≠ 覆盖到位**：一个只保护一个文件的检查，对其它文件等于没有。
+//   ② 跳过「同名还有函数内 local 声明」的短名（W / H / x / y 这类）：它们在文件里是**多个不同的变量**，
+//      按名字比对必然误报（首版就误报了 EvalHelp.lua:153 的 local W —— 那是另一个函数里的 W）。
 (function () {
-  const src = fs.readFileSync(path.join(__dirname, "DataSearch.lua"), "utf8");
-  const lines = src.split(String.fromCharCode(10));
-  const strip = (l) => { const i = l.indexOf("--"); return i >= 0 ? l.slice(0, i) : l; };
-  // 收集顶层 local 声明（含多名字与 local function）
-  const decls = {};
-  for (let i = 0; i < lines.length; i++) {
-    const code = strip(lines[i]);
-    let m = code.match(new RegExp("^local" + "[ ]+" + "function" + "[ ]+" + "([A-Za-z_][A-Za-z0-9_]*)"));
-    if (m) { if (decls[m[1]] === undefined) decls[m[1]] = i + 1; continue; }
-    m = code.match(new RegExp("^local" + "[ ]+(.+?)="));
-    if (m) {
-      const names = m[1].split(",");
-      for (const raw of names) {
-        const nm = raw.trim();
-        if (new RegExp("^[A-Za-z_][A-Za-z0-9_]*$").test(nm) && decls[nm] === undefined) decls[nm] = i + 1;
+  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua"];
+  const bad = [];
+  let totalLocals = 0;
+  const isName = (s) => new RegExp("^[A-Za-z_][A-Za-z0-9_]*$").test(s);
+  for (const f of files) {
+    const p = path.join(__dirname, f);
+    if (!fs.existsSync(p)) continue;
+    const lines = fs.readFileSync(p, "utf8").split(String.fromCharCode(10));
+    // ★1.70.47 本仓库是 **CRLF** 文件：按 "\n" 切行后行尾还留一个 "\r"。
+    //   对 `local x` 这种「整行都是模式」的匹配来说，`(.+)$` 会把 "\r" 一起抓进名字里 →
+    //   isName 判定失败 → 该声明**对检查不可见**（正是 auraTexOf 前置声明漏网的原因）。
+    const strip = (l) => { const i = l.indexOf("--"); const s = i >= 0 ? l.slice(0, i) : l; return s.replace(/\r+$/, ""); };
+    // 收集「函数内」的 local 名字（行首有缩进）→ 这些名字有歧义，跳过
+    const inner = new Set();
+    for (let i = 0; i < lines.length; i++) {
+      const code = strip(lines[i]);
+      let m = code.match(new RegExp("^[ ]+local" + "[ ]+" + "function" + "[ ]+" + "([A-Za-z_][A-Za-z0-9_]*)"));
+      if (m) { inner.add(m[1]); continue; }
+      m = code.match(new RegExp("^[ ]+local" + "[ ]+(.+?)="));
+      if (m) for (const raw of m[1].split(",")) { const nm = raw.trim(); if (isName(nm)) inner.add(nm); }
+    }
+    // 收集顶层 local 声明（含多名字、local function、以及**无初始值的纯前置声明**）
+    // ★★1.70.47 补第三种形态：`local auraTexOf`（无 `=` 的前置声明）。
+    //   事故：队伍选人判据要在 auraTexOf 之前用它（Lua 词法作用域 → 会绑到全局 nil），
+    //   修法是**前置声明**；但旧正则只认 `local x = ...` 与 `local function x`，
+    //   于是「前置声明」这个写法本身对检查**完全不可见**——检查静默通过，运行期才炸
+    //   （而且被 pcall 吞成「选人结果不对」，不是红字，最难查）。
+    //   ★教训：检查器要覆盖**它自己那套写法**的所有变体，否则修 bug 的手法会顺手挖出新盲区。
+    const decls = {};
+    for (let i = 0; i < lines.length; i++) {
+      const code = strip(lines[i]);
+      let m = code.match(new RegExp("^local" + "[ ]+" + "function" + "[ ]+" + "([A-Za-z_][A-Za-z0-9_]*)"));
+      if (m) { if (decls[m[1]] === undefined) decls[m[1]] = i + 1; continue; }
+      m = code.match(new RegExp("^local" + "[ ]+(.+?)="));
+      if (m) {
+        for (const raw of m[1].split(",")) {
+          const nm = raw.trim();
+          if (isName(nm) && decls[nm] === undefined) decls[nm] = i + 1;
+        }
+        continue;
+      }
+      m = code.match(new RegExp("^local" + "[ ]+(.+)$"));
+      if (m) {
+        for (const raw of m[1].split(",")) {
+          const nm = raw.trim();
+          if (isName(nm) && decls[nm] === undefined) decls[nm] = i + 1;
+        }
+      }
+    }
+    totalLocals += Object.keys(decls).length;
+    for (const nm of Object.keys(decls)) {
+      if (inner.has(nm)) continue; // 名字在文件内有多个绑定 → 无法按名字判定，跳过
+      const d = decls[nm];
+      const re = new RegExp("(^|[^A-Za-z0-9_])" + nm + "([^A-Za-z0-9_]|$)");
+      for (let i = 0; i < d - 1; i++) {
+        if (re.test(strip(lines[i]))) { bad.push(f + ": " + nm + " used at " + (i + 1) + " but declared at " + d); break; }
       }
     }
   }
-  const bad = [];
-  for (const nm of Object.keys(decls)) {
-    const d = decls[nm];
-    const re = new RegExp("(^|[^A-Za-z0-9_])" + nm + "([^A-Za-z0-9_]|$)");
-    for (let i = 0; i < d - 1; i++) {
-      if (re.test(strip(lines[i]))) { bad.push(nm + " used at " + (i + 1) + " but declared at " + d); break; }
-    }
-  }
   if (bad.length) {
-    for (const b of bad) console.log("DECL ORDER CHECK: FAIL - " + b);
+    for (const b of bad.slice(0, 12)) console.log("DECL ORDER CHECK: FAIL - " + b);
+    if (bad.length > 12) console.log("DECL ORDER CHECK: FAIL - ... and " + (bad.length - 12) + " more");
     process.exitCode = 1;
     return;
   }
-  console.log("DECL ORDER CHECK: " + Object.keys(decls).length + " top-level locals declare before use");
+  console.log("DECL ORDER CHECK: " + totalLocals + " top-level locals declare before use (" + files.length + " files)");
 })();
 
 // ===== LAYOUT CHECK: a local must be declared before the code that reads it =====
@@ -122,6 +198,136 @@ function checkIconAssets() {
     return;
   }
   console.log("VERSION CHECK: " + tocVer + " (source and toc agree)");
+})();
+
+// ===== LANG KEY CHECK: every literal L("KEY") must exist in all three locale packs =====
+// ★为什么需要它：L() 找不到键时**返回键名本身**，于是界面上直接显示 "DS_DEP_OFF" 这种
+//   内部标识——不报错、不崩溃，纯静默失败（本项目最典型的 bug 家族）。
+//   键分散在 5 个源文件 × 3 个语言包里，靠人眼同步必然漏（1.70.28/1.70.45 都靠手工补键）。
+// ★两处必须注意：① 语言包**一行多个键**，正则不能按行首锚定（我第一版就因此误报一片）；
+//   ② `L("CT_" .. k)` 这类**拼接前缀**不是键，必须排除，否则同样误报。
+(function () {
+  const langs = ["zhCN", "enUS", "ruRU"];
+  const packs = {};
+  for (const lg of langs) {
+    const s = fs.readFileSync(path.join(__dirname, "Locales", lg + ".lua"), "utf8");
+    const set = new Set();
+    for (const line of s.split(/\r?\n/)) {
+      const code = line.replace(/--.*$/, "");
+      let m; const re = /([A-Za-z_][A-Za-z0-9_]*)\s*=/g;
+      while ((m = re.exec(code))) set.add(m[1]);
+    }
+    packs[lg] = set;
+  }
+  const used = new Set();
+  for (const f of ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua"]) {
+    const p = path.join(__dirname, f);
+    if (!fs.existsSync(p)) continue;
+    const src = fs.readFileSync(p, "utf8");
+    for (const line of src.split(/\r?\n/)) {
+      const code = line.replace(/--.*$/, ""); // 注释里出现的 L("KEY") 不算（Core.lua 的说明注释里有）
+      let m; const re = /L\(\s*"([A-Za-z0-9_]+)"(\s*\.\.)?/g;
+      while ((m = re.exec(code))) if (!m[2]) used.add(m[1]); // m[2] 有值 = 拼接前缀，不是整键
+    }
+  }
+  const missing = [];
+  for (const k of used) for (const lg of langs) if (!packs[lg].has(k)) missing.push(k + "@" + lg);
+  if (missing.length) {
+    console.log("LANG KEY CHECK: FAIL - " + missing.length + " key(s) missing; L() would show the bare key:");
+    for (const k of missing.slice(0, 20)) console.log("    " + k);
+    process.exitCode = 1;
+    return;
+  }
+  console.log("LANG KEY CHECK: " + used.size + " keys present in all 3 languages");
+})();
+
+// ===== LANG SOURCE CHECK: 取语言必须用读取器 EVAL_GET_LANG()，不能用写入器 EVAL_RESOLVE_LANG() =====
+// ★1.70.46 发现真 bug：DataSearch.lua / Toolbox.lua 都写成
+//   `(type(EVAL_RESOLVE_LANG) == "function") and EVAL_RESOLVE_LANG() or "zhCN"`，
+//   而 Core.lua 的 ehResolveLang() **没有任何返回值**——它只把语言写进 local EH_LANG
+//   （每个分支都是裸 return，末尾以 EH_LANG = "zhCN" 收尾）。
+//   于是 `nil or "zhCN"` 兜底 → 工具箱/数据检索在英俄客户端**恒显示中文**，
+//   且 dsLang() 永远去取 `*_zhCN` 子表（物品/怪物/任务名全中文），全程不报错。
+// ★写入器与读取器混用 = 典型静默失败：调用点拿到 nil，被 `or 默认值` 吞掉。
+//   放在能读文件的一侧：这两个文件里除注释外不允许再出现 EVAL_RESOLVE_LANG。
+(function () {
+  const bad = [];
+  for (const f of ["DataSearch.lua", "Toolbox.lua"]) {
+    const p = path.join(__dirname, f);
+    if (!fs.existsSync(p)) continue;
+    const lines = fs.readFileSync(p, "utf8").split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const code = lines[i].replace(/--.*$/, "");
+      if (code.indexOf("EVAL_RESOLVE_LANG") >= 0) bad.push(f + ":" + (i + 1));
+    }
+  }
+  if (bad.length) {
+    console.log("LANG SOURCE CHECK: FAIL - EVAL_RESOLVE_LANG is a WRITER (no return value); use EVAL_GET_LANG(): " + bad.join(", "));
+    process.exitCode = 1;
+    return;
+  }
+  console.log("LANG SOURCE CHECK: DataSearch/Toolbox read the language via EVAL_GET_LANG()");
+})();
+
+// ===== WINDOW SIZE CHECK: 每个自建窗都必须**真的**设置宽与高 =====
+// ★1.70.46 实测事故（用户截图）：技能编辑窗变成一块几乎全黑的大窗并盖住配置窗。
+//   根因：`seUI.W = W -- 1.70.45 注释...` 与同一行的 `root:SetHeight(H)` 挤在一起后，
+//   SetHeight 落在 `--` 之后 → **被行尾注释吞掉** → 窗口从未设置高度 → 客户端给了接近整屏的默认高度。
+//   ★宽度完全正常、只有高度异常；语法合法、luacheck 通过、测试全绿（当时只有宽度断言）。
+//   两处 SetWidth/SetHeight 判断都**先剥掉行尾注释**，再找活语句。
+(function () {
+  const src = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
+  const lines = src.split(/\r?\n/);
+  const live = s => s.replace(/--.*$/, "");
+  const bad = [];
+  for (const fn of ["local function cfgBuild()", "local function SE_BUILD()"]) {
+    const i = lines.findIndex(l => l.trim() === fn);
+    if (i < 0) { bad.push(fn + ": not found"); continue; }
+    let w = false, h = false;
+    for (let j = i; j < Math.min(i + 25, lines.length); j++) {
+      if (/:SetWidth\s*\(/.test(live(lines[j]))) w = true;
+      if (/:SetHeight\s*\(/.test(live(lines[j]))) h = true;
+    }
+    if (!w) bad.push(fn + ": no LIVE :SetWidth(");
+    if (!h) bad.push(fn + ": no LIVE :SetHeight( -- swallowed by a line comment?");
+  }
+  if (bad.length) {
+    console.log("WINDOW SIZE CHECK: FAIL - " + bad.join(" | "));
+    process.exitCode = 1;
+    return;
+  }
+  console.log("WINDOW SIZE CHECK: both windows set width and height");
+})();
+
+// ===== COMMENT SWALLOW CHECK: 语句不能被同一行的行尾注释吞掉 =====
+// ★通用防线。触发条件：一行里 `--` **前面是非空代码**（即「代码 + 行尾注释」），
+//   而注释文本里还跟着一个**方法调用**（形如 `xxx:Method(` 或 `xxx.Method(`）。
+//   这几乎只可能是「本该独立成句的代码被注释掉」。
+//   ★只扫 .lua（JS 里的 `--` 是自减运算符，扫 JS 会误报——第一版就误报了 test_engine.js）。
+//   ★注释里提到 `SomeCall()` 属于正常（本仓库有大量 API 说明注释），故必须要求「方法调用」
+//   （带 `:` / `.`）而不是裸调用，否则误报成片（实测：裸调用规则会命中 test_assert.lua:240）。
+(function () {
+  const files = ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua",
+                 "Locales/zhCN.lua", "Locales/enUS.lua", "Locales/ruRU.lua", "test_assert.lua", "test_stub.lua"];
+  const bad = [];
+  for (const f of files) {
+    const p = path.join(__dirname, f);
+    if (!fs.existsSync(p)) continue;
+    const lines = fs.readFileSync(p, "utf8").split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const ci = lines[i].indexOf("--");
+      if (ci <= 0) continue;
+      if (lines[i].slice(0, ci).trim() === "") continue;
+      const tail = lines[i].slice(ci + 2);
+      if (/[A-Za-z_][A-Za-z0-9_]*\s*[:.]\s*[A-Za-z_][A-Za-z0-9_]*\s*\(/.test(tail)) bad.push(f + ":" + (i + 1));
+    }
+  }
+  if (bad.length) {
+    console.log("COMMENT SWALLOW CHECK: FAIL - code looks commented out by a trailing -- at: " + bad.join(", "));
+    process.exitCode = 1;
+    return;
+  }
+  console.log("COMMENT SWALLOW CHECK: no statement lost to a trailing comment");
 })();
 
   if (!rootMatch) { console.log('ICON CHECK: no DS_ANN_ICON_ROOT found'); process.exit(1); }
