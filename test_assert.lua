@@ -7557,4 +7557,83 @@ do
   print("  分享发送限频：第1片立即发、其余按 0.35s 排队滴出；收不齐超时**如实点名报片数**且缓冲真被丢")
 end
 
+-- 107) ★★★1.72.3 接收**冗余时长**（1~2 秒内的迟到都容忍）+ 只认方案标识 + 发送限频
+--   用户原话：「分片接收添加接收冗余时长.比如 1-2 秒内都可以.创建可以传达其他对话信息.
+--             但是方案只识别方案特定的标识,发送也添加发送频率.不要在瞬间发送大量文字.
+--             不然服务器被触发预警」。
+--   ★判据：① 分片**跨多秒**（每片间隔 0.5s）+ 中间夹**普通聊天** → 照样收齐弹窗；
+--     ② 非本协议的消息（含形似但载荷非法的）→ 完全忽略，连提示都不发；
+--     ③ 缺片时 2 秒如实提醒但**不删缓冲** → 迟到的片补齐后**仍然弹窗**（这就是冗余时长的价值）；
+--     ④ 发送间隔 0.5s：同一刻 tick 抽不干（不在瞬间倾泻）。
+do
+  EVAL_SHARE_RESET()
+  EVAL_HELP_CONFIG.share = { recv = true }
+  local long = "# 方案: 冗余窗口测试\n"
+  for i = 1, 30 do long = long .. "- 测试技能" .. i .. " | 怒气>30\n" end
+  local savedP, savedA = EVAL_HELP_CONFIG.war.profiles, EVAL_HELP_CONFIG.war.activeProfile
+  EVAL_HELP_CONFIG.war.profiles = { EVAL_PROFILE_FROM_TEXT(long) }
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  local function sents107()
+    local out = {}
+    for _, s in ipairs(TEST.runScripts or {}) do
+      local m = string.match(s, 'SendChatMessage%("(.-)", "GUILD"%)')
+      if m then table.insert(out, m) end
+    end
+    return out
+  end
+  TEST.runScripts = nil
+  EVAL_SHARE_SEND("GUILD")
+  -- ④ 发送限频：推进 0.4s（< 0.5s）不许滴出第二片
+  TEST.time = (TEST.time or 1000) + 0.4
+  EVAL_SHARE_TEST_TICK()
+  eq(table.getn(sents107()), 1, "④★★发送间隔 0.5s：0.4s 时不许滴出第二片（不瞬间倾泻）")
+  local msgs, guard = sents107(), 0
+  local n = 0
+  local _, nStr = string.match(tostring(msgs[1] or ""), "^%[EHPF#%x+ (%d+)/(%d+)%]")
+  n = tonumber(nStr) or 0
+  eq(n >= 3, true, "①前置：长方案分成 ≥3 片（got " .. tostring(n) .. "）")
+  while table.getn(msgs) < n and guard < n + 5 do
+    guard = guard + 1
+    TEST.time = TEST.time + 0.6
+    EVAL_SHARE_TEST_TICK()
+    msgs = sents107()
+  end
+  eq(table.getn(msgs), n, "①前置：全部 " .. tostring(n) .. " 片滴完")
+  -- ① 冗余窗口 + 夹普通聊天 → 照样收齐
+  EVAL_SHARE_RESET() TEST.chat = nil
+  for i = 1, n do
+    TEST.time = (TEST.time or 1000) + 0.5
+    EVAL_SHARE_ONMSG(msgs[i], "队友甲")
+    EVAL_SHARE_ONMSG("大家好啊，今天打本吗？", "路人") -- ★同频道普通聊天：必须被完全忽略
+  end
+  local pend1 = EVAL_SHARE_PENDING()
+  eq(pend1 ~= nil and pend1.name == "冗余窗口测试", true,
+     "★★★分片跨 " .. tostring(n * 0.5) .. " 秒、中间夹普通聊天，照样收齐并弹窗")
+  -- ② 非本协议消息 → 完全忽略（连提示都不发）
+  EVAL_SHARE_RESET() TEST.chat = nil
+  EVAL_SHARE_ONMSG("[EHPF#zz 1/3]这不是hex", "队友乙")
+  EVAL_SHARE_ONMSG("随便聊聊", "队友乙")
+  eq(EVAL_SHARE_PENDING(), nil, "②★形似但载荷非法的消息不入缓冲")
+  eq(tostring(TEST.chat or "") == "", true, "②★不是我们的标识就当普通聊天——一个字都不该上屏")
+  -- ③ 缺片：2 秒如实提醒但**不删** → 迟到的片补齐后仍能弹窗
+  EVAL_SHARE_RESET() TEST.chat = nil
+  for i = 1, n - 1 do
+    TEST.time = (TEST.time or 1000) + 0.5
+    EVAL_SHARE_ONMSG(msgs[i], "队友丙")
+  end
+  TEST.time = TEST.time + 2.5 -- 超过冗余时长(2s)、远未到兜底(60s)
+  EVAL_SHARE_ONMSG("[EHPF#fe 1/4]4142", "路人丁") -- 触发 sweep（走真实路径）
+  eq(string.find(tostring(TEST.chat), "未收齐", 1, true) ~= nil, true, "③★★2 秒未收齐 → 如实提醒")
+  eq(EVAL_SHARE_PENDING(), nil, "③前置：此时还没收齐，不弹窗")
+  TEST.time = TEST.time + 0.3
+  EVAL_SHARE_ONMSG(msgs[n], "队友丙") -- ★晚到的最后一片
+  local pend3 = EVAL_SHARE_PENDING()
+  eq(pend3 ~= nil and pend3.name == "冗余窗口测试", true,
+     "③★★★冗余窗口的价值：晚到的分片补齐后**仍然弹窗**（到点就删的旧行为救不回来）")
+  -- 收尾
+  EVAL_HELP_CONFIG.war.profiles = savedP EVAL_HELP_CONFIG.war.activeProfile = savedA
+  EVAL_SHARE_RESET() TEST.runScripts = nil TEST.chat = nil
+  print("  分享接收：容忍 1~2 秒迟到（提醒但保留缓冲）+ 只认 [EHPF#] 标识 + 发送限频 0.5s")
+end
+
 print("ALL TESTS PASS")

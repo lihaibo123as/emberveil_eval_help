@@ -104,7 +104,7 @@ end
 --     通知类输出也要入限频队列」——分享发送当时没遵守。
 --   【修法】第 1 片立即发（手感不变），其余进 FIFO，由 OnUpdate 每 SH_SEND_RATE 秒滴一片；
 --     队列上限 SH_MAX_QUEUE 防失控（超出如实取消）。
-local SH_SEND_RATE = 0.35 -- 相邻两片之间的最小间隔（秒）
+local SH_SEND_RATE = 0.5 -- 相邻两片之间的最小间隔（秒）
 local SH_MAX_QUEUE = 200  -- 发送队列上限（条）
 local shTxQ, shTxLast = {}, 0
 local shTxFrame
@@ -160,7 +160,8 @@ end
 --   R7 **接收侧提示统一限频** SH_WARN_GAP：窗口内只报一次，并在下一次真正报出时告知「另有 N 条已省略」。
 --      ★为什么连我们自己的提示也要限频：提示同样是聊天消息——**滥发者能让我们的提示刷屏**。
 --      ★限频的是「说不说」，**不是「拦不拦」**：数据侧的拒收/替换一律照常执行（绝不因为限频而静默放过）。
-local SH_BUF_TIMEOUT = 60   -- 在途传输超时（秒）
+local SH_RECV_TOLERANCE = 2 -- ★1.72.3 **接收冗余时长**：某片最多容忍 2 秒的迟到/抖动（每片到达即重置计时）
+local SH_BUF_TIMEOUT = 60   -- 在途传输**真正丢弃**的兜底时长（秒）——先提醒、再等，最后才丢
 local SH_MAX_BUF = 4        -- 同时在途的传输笔数上限
 local SH_MAX_CHUNKS = 40    -- 单笔分享的最大分片数（合法方案远小于此）
 local SH_MAX_TEXT = 8192    -- 单笔分享解码后的最大字节数
@@ -224,13 +225,24 @@ function shTxEnqueue(bodies, chanId)
 end
 -- ★测试直调：驱动与 OnUpdate **同一个**函数（判据必须落在真实调用点/真实闭包上）
 function EVAL_SHARE_TEST_TICK() shTxStep() end
-function EVAL_SHARE_TEST_QUEUE_LEN() return table.getn(shTxQ) end-- ★1.72.3 **收不齐绝不静默**：超时丢弃在途传输时如实报出「谁发的、收了几片」。
---   【为什么必须说】旧实现到点直接 SH.buf[k] = nil —— 接收方只看到「什么都没发生」，
---     发送方也永远不知道（用户报的「对方有时候接收不到」正是这个静默态）。
+function EVAL_SHARE_TEST_QUEUE_LEN() return table.getn(shTxQ) end-- ★★★1.72.3 **收不齐绝不静默**，且**给晚到的分片留冗余窗口**（用户要求：1~2 秒内都可以）。
+--   两级判定：
+--     ① 空闲超过 SH_RECV_TOLERANCE(2s) 仍未收齐 → **如实提醒**（点名发送者 + 收了几片），
+--        ★但**不删缓冲**：发送是限频滴出的（每片 0.5s），漏一片时后面几片还会来；
+--        晚到的那片若能补齐，这一笔照样弹窗（冗余窗口就是为它留的）。
+--     ② 空闲超过 SH_BUF_TIMEOUT(60s) → 才真正丢弃（已提醒过就不再重复刷屏）。
+--   ★为什么按「最后一片到达时刻」计时（b.t 每片刷新）：发送方在持续滴片时窗口不断顺延，
+--     不会因为「方案长、总耗时 4~5 秒」而误报；只有**对方停止发送**之后才可能触发提醒。
 local function shSweepBuf(now)
   for k, b in pairs(SH.buf) do
-    if now - b.t > SH_BUF_TIMEOUT then
+    local idle = now - b.t
+    if idle > SH_BUF_TIMEOUT then
       SH.buf[k] = nil
+      if not b.warned then
+        shWarn(string.format(L("SH_RECV_PARTIAL"), tostring(b.from or "?"), b.got or 0, b.n or 0))
+      end
+    elseif idle > SH_RECV_TOLERANCE and not b.warned then
+      b.warned = true
       shWarn(string.format(L("SH_RECV_PARTIAL"), tostring(b.from or "?"), b.got or 0, b.n or 0))
     end
   end
