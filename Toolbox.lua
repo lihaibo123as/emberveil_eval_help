@@ -794,6 +794,44 @@ function EVAL_TB_CHAT_COLOR_LINE(msg)
     return string.sub(msg, 1, s - 1) .. "|c" .. string.sub(hex, 3) .. string.sub(msg, s, e) .. "|r" ..
            string.sub(msg, e + 1)
   end
+  -- ⓪ ★★★1.73.12（用户实测「全都没染色」后的定案方向）：客户端给的聊天行里，名字往往是
+  --   **可点玩家链接**、并自带客户端自己的颜色码：
+  --     |cRRGGBB|Hplayer:名字|h[名字]|h|r 悄悄地说: 1        （实测形态）
+  --     |Hplayer:名字|h[名字]|h 说: 1                       （链接前面没有颜色码的情形）
+  --   ★旧判据「已经在富文本里 → 整行放行」在这里会让**每一行都不上色**（这正是用户看到的现象）。
+  --   正解 = **改那段颜色码**（同长度替换 → 位置不变、链接照样可点、其余原样）；
+  --   没有颜色码时就把整个链接段**包进**职业色。
+  local function paintLink(s, e, colS, colE)
+    local cap = string.sub(msg, s, e)
+    local nm = string.match(cap, "^|Hplayer:([^|]-)|h")
+    local disp = string.match(cap, "%[([^%]]*)%]")
+    local tok = nm and tbNameClassGet(nm) or nil
+    if not tok and disp then tok = tbNameClassGet(disp) end
+    if not tok then return nil end
+    local hex = TB_PAINT_CLASS_COLOR[tok]
+    if type(hex) ~= "string" or string.len(hex) ~= 8 then return nil end
+    noteCandidate(nm or disp)
+    local col = "|c" .. string.sub(hex, 3)
+    if colS then
+      -- 把客户端那段颜色码整段换成职业色（其余原样；链接与 |r 都保留 → 照样可点、不会串色）
+      return string.sub(msg, 1, colS - 1) .. col .. string.sub(msg, colE + 1, e) ..
+             string.sub(msg, e + 1), (nm or disp)
+    end
+    return string.sub(msg, 1, s - 1) .. col .. cap .. "|r" .. string.sub(msg, e + 1), (nm or disp)
+  end
+  -- 带颜色的玩家链接（★颜色码长度不写死：本客户端给的是 |c + **8** 位 hex（aarrggbb），
+  --   而 6 位 hex（rrggbb）也可能出现 → 用 |c%x+ 抓下来按实际长度替换）
+  local cs, ce, colcap = string.find(msg, "(|c%x+)(|Hplayer:[^|]-|h.-|h)", 1)
+  if cs then
+    local out, who = paintLink(cs + string.len(colcap), ce, cs, cs + string.len(colcap) - 1)
+    if out then return out, who, cands end
+  end
+  -- 不带颜色的玩家链接
+  local ls, le = string.find(msg, "(|Hplayer:[^|]-|h.-|h)", 1)
+  if ls then
+    local out, who = paintLink(ls, le, nil)
+    if out then return out, who, cands end
+  end
   -- ① 候选起点 = 行首 + 每个「方括号段 / 颜色段之后」（覆盖「[频道] 名字:」与「|c..[频道]|r 名字:」两种前缀）
   local starts = { 1 }
   local from = 1
@@ -831,6 +869,38 @@ function EVAL_TB_CHAT_COLOR_LINE(msg)
     from2 = e + 1
   end
   return msg, nil, cands
+end
+
+-- ★1.73.12 取证读值口：**每个聊天窗入口现在到底是不是我们挂的那一层** + 其它候选入口是否存在。
+--   ★为什么必须有：用户报「全都没染色」，而「我们的包装被客户端顶掉」与「客户端不走 Lua 打印」
+--     是两种**现象相同、修法完全不同**的原因（1.71.3 频道屏蔽就吃过这个亏）→ 必须能分开看。
+function EVAL_TB_CHATCOLOR_ROUTES()
+  local keys = tbChatFrameKeys()
+  local rows, ours, live, sameAsDefault = {}, 0, 0, 0
+  for i = 1, table.getn(keys) do
+    local k = keys[i]
+    local f = _G[k]
+    local cur = nil
+    if f ~= nil then
+      local okr, v = pcall(function() return f.AddMessage end)
+      if okr then cur = v end
+    end
+    local isOurs = (cur ~= nil and TB.chanWrappers ~= nil and cur == TB.chanWrappers[k]) and true or false
+    if f ~= nil then live = live + 1 end
+    if isOurs then ours = ours + 1 end
+    if f ~= nil and f == DEFAULT_CHAT_FRAME then sameAsDefault = sameAsDefault + 1 end
+    rows[k] = { exists = (f ~= nil), hasAddMessage = (type(cur) == "function"), ours = isOurs }
+  end
+  -- 其它可能的入口（有就说明还能换个地方挂；没有就说明客户端不走这条路）
+  local others = {
+    "ChatFrame_OnEvent", "ChatFrame_MessageEventHandler", "ChatFrame_AddMessage",
+    "AddMessage", "SetItemRef", "ChatFrame_OnUpdate",
+  }
+  local found = {}
+  for i = 1, table.getn(others) do
+    if type(_G[others[i]]) == "function" then table.insert(found, others[i]) end
+  end
+  return rows, ours, live, sameAsDefault, found
 end
 
 -- 诊断读值口（/eh go 聊天 与断言共用）

@@ -8874,6 +8874,48 @@ do
   SlashCmdList["EVALHELP"]("go 聊天 试")
   local t121c = tostring(TEST.chat or "")
   eq(string.find(t121c, "测试玩家", 1, true) ~= nil, true, "⑬★不带文本时默认拿**玩家自己**的名字当样本（一跑就能看到「命中」长什么样）")
+  -- ⑭ ★★★1.73.12 客户端自带的「玩家链接 + 客户端颜色」形态（用户实测「全都没染色」的定案方向）
+  EVAL_TB_NAMECLASS_PUT("Ionol", "圣骑士")
+  local colPal = "|c" .. string.sub(EVAL_TB_PAINT_CLASS_COLOR_OF("PALADIN"), 3)
+  local linkCol = "|cffff80ff|Hplayer:Ionol|h[Ionol]|h|r 悄悄地说: 1"
+  eq(EVAL_TB_CHAT_COLOR_LINE(linkCol), colPal .. "|Hplayer:Ionol|h[Ionol]|h|r 悄悄地说: 1",
+     "⑭★★★客户端自带的玩家链接（带它自己的颜色）→ **改颜色码**（旧版「已在富文本里就整行放行」= 用户看到的「全都没染色」）")
+  eq(EVAL_TB_CHAT_COLOR_LINE("|Hplayer:Ionol|h[Ionol]|h 说: 1"), colPal .. "|Hplayer:Ionol|h[Ionol]|h|r 说: 1",
+     "⑭★★链接前没有颜色码时 → 把整个链接段包进职业色")
+  eq(string.find(EVAL_TB_CHAT_COLOR_LINE(linkCol), "|Hplayer:Ionol|h[Ionol]|h", 1, true) ~= nil, true,
+     "⑭★★链接本身**原样保留**（名字照样可点，只换颜色）")
+  eq(EVAL_TB_CHAT_COLOR_LINE("|cff9d9d9d|Hitem:1234:0:0:0|h[守夜人]|h|r 获得了"),
+     "|cff9d9d9d|Hitem:1234:0:0:0|h[守夜人]|h|r 获得了",
+     "⑭★★反向哨兵：**物品**链接仍旧不碰（只认 player 链接）")
+  eq(EVAL_TB_CHAT_COLOR_LINE("[公会] [Ionol]: 1"), "[公会] " .. colPal .. "[Ionol]|r: 1",
+     "⑭★★用户截图里的「[公会] [名字]: 」形态能染色")
+  eq(EVAL_TB_CHAT_COLOR_LINE("[Ionol] 说: 1"), colPal .. "[Ionol]|r 说: 1", "⑭★用户截图里的「[名字] 说: 」形态能染色")
+  -- ⑭b 入口在位检查读值口（区分「我们的包装被顶掉」与「客户端不走 Lua 打印」）
+  local rows121, ours121, live121 = EVAL_TB_CHATCOLOR_ROUTES()
+  eq(ours121 >= 1 and live121 >= 1, true,
+     "⑭b★★读值口能报「有几个聊天框 / 其中几个是我们的包装」（" .. tostring(ours121) .. "/" .. tostring(live121) .. "）")
+  eq(type(rows121) == "table" and rows121["DEFAULT_CHAT_FRAME"] ~= nil, true, "⑭b★并且**逐个**聊天框可查")
+  -- ⑭c 诊断把三种原因（被顶掉 / 不走 Lua / 判据不认）分开打印 —— 用户报「全都没染色」时靠这一屏定案
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 聊天")
+  local c121d = tostring(TEST.chat or "")
+  eq(string.find(c121d, "入口在位检查", 1, true) ~= nil, true, "⑭c★★诊断打印「入口在位检查」（我们挂的层还在不在）")
+  eq(string.find(c121d, "另外的候选入口", 1, true) ~= nil or string.find(c121d, "另外还存在的入口", 1, true) ~= nil, true,
+     "⑭c★★诊断列出其它候选入口（Lua 打印这条路是死是活一眼看到）")
+  eq(string.find(c121d, "同层包装（频道屏蔽）", 1, true) ~= nil, true, "⑭c★★并把频道屏蔽的「经过/吞掉」条数一起打出来（旁证同一层包装）")
+  -- ⑭b2 读值口真的在查**当前**入口：造一个「不是我们挂的」聊天框 → live +1 而 ours 不变
+  ChatFrame3 = { AddMessage = function() end }
+  local _r121b, ours121b, live121b = EVAL_TB_CHATCOLOR_ROUTES()
+  eq(live121b, live121 + 1, "⑭b★★新增一个「不是我们挂的」聊天框 → live +1（读值口查的是**当前**入口，不是记账）")
+  eq(ours121b, ours121, "⑭b★而 ours 不变（那个入口不是我们的包装）")
+  ChatFrame3 = nil
+  -- ⑭c2 见到 0 条时**如实判读**为「客户端不走 Lua 打印」（这正是用户这次现象之一的判读口）
+  EVAL_TB_CHATCOLOR_RESET()
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 聊天")
+  local c121e = tostring(TEST.chat or "")
+  eq(string.find(c121e, "一条聊天消息都没经过我们的入口", 1, true) ~= nil, true,
+     "⑭c★★★经过入口 0 条时如实判读「客户端不走 Lua 打印」（不把「没收到」说成「没认出来」）")
   -- 收尾：还原入口 / 计数 / 配置 / 时间（跨用例状态残留是本项目老坑）
   f121.AddMessage = saved121
   EVAL_TEST_TB_CHAN_RESET()

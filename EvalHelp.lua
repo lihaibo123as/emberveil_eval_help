@@ -7333,6 +7333,38 @@ if type(SlashCmdList) == "table" then
         say("名字缓存：" .. tostring(st.cache) .. " 个（来源：公会/查询/好友窗口上色时白拿 + 队伍/团队/自己/目标）")
         say("经过入口的消息：" .. tostring(st.seen) .. " 条；被染色：" .. tostring(st.painted) .. " 条" ..
           (st.last and ("（最近：" .. tostring(st.last) .. "）") or ""))
+        -- ★★★1.73.12 取证：把三种「现象相同、修法不同」的原因分开（用户报「全都没染色」时靠这一屏定案）
+        --   ① 我们的包装**不在位**（被客户端/别的插件顶掉）→ 重挂即可；
+        --   ② 包装在位但**一条聊天都没经过它** → 客户端不走 Lua 打印（Lua 层做不到，要换入口）；
+        --   ③ 收得到聊天行却一条都没认出来 → 判据/格式问题（下面的原文就是依据）。
+        if type(EVAL_TB_CHATCOLOR_ROUTES) == "function" then
+          local rows, ours, live, sameAsDefault, found = EVAL_TB_CHATCOLOR_ROUTES()
+          say("入口在位检查：有聊天框 " .. tostring(live) .. " 个；其中**是我们的包装** " .. tostring(ours) .. " 个" ..
+            "；与主窗同一对象 " .. tostring(sameAsDefault) .. " 个")
+          local notOurs, missList = 0, {}
+          for k, v in pairs(rows or {}) do
+            if v.exists and not v.ours then
+              notOurs = notOurs + 1
+              table.insert(missList, tostring(k))
+            end
+          end
+          if notOurs > 0 then
+            table.sort(missList)
+            say("|cffff8080这些聊天框的入口**不是我们挂的**：" .. table.concat(missList, "、") ..
+              "（= 被顶掉了，/eh go 聊天 装 可立刻重挂）|r")
+          end
+          if type(found) == "table" and table.getn(found) > 0 then
+            say("另外还存在的入口：" .. table.concat(found, "、") .. "（若上面「经过入口」一直 0，就换这些挂）")
+          else
+            say("另外的候选入口：一个都不存在（ChatFrame_OnEvent / ChatFrame_MessageEventHandler 等）")
+          end
+        end
+        -- 频道屏蔽与本功能**共用同一层包装** → 它的计数是判断「客户端走不走 Lua 打印」的旁证
+        if type(EVAL_TEST_TB_CHAN_STATE) == "function" then
+          local _on, _hk, chFiltered, _sp, chLive, chSeen = EVAL_TEST_TB_CHAN_STATE()
+          say("同层包装（频道屏蔽）：经过 " .. tostring(chSeen) .. " 条；吞掉 " .. tostring(chFiltered) ..
+            " 条；我们的包装在位=" .. tostring(chLive))
+        end
         local sm = st.samples
         if type(sm) == "table" and table.getn(sm) > 0 then
           say("最近 " .. table.getn(sm) .. " 条聊天**原文** → 我们的判决（★格式校准就看这一屏）：")
@@ -7352,6 +7384,13 @@ if type(SlashCmdList) == "table" then
           say("|cffff8080判读：一个聊天窗都没挂上 → 聊天框还没就绪或接口不同（可用 /eh go 聊天 装 重试）|r")
         elseif st.cache == 0 then
           say("|cffff8080判读：挂上了但缓存是空的 → 打开一次公会/查询/好友窗口（或组一次队）再回来看|r")
+        elseif st.seen == 0 then
+          say("|cffff8080判读：**一条聊天消息都没经过我们的入口** → 这个客户端不走 Lua 打印（Lua 层着色/屏蔽都做不到），" ..
+            "把这一屏发我（我换入口）；先看上面「入口在位检查」是不是「不是我们挂的」|r")
+        elseif st.painted == 0 and type(st.samples) == "table" and table.getn(st.samples) > 0 then
+          say("|cffff8080判读：收得到聊天行、但一条都没认出来 → **判据/格式**问题，上面那几行原文就是依据（发我）|r")
+        else
+          say("判读：正常工作中（名字按职业色；认不出来的名字保持原样）")
         end
         say("用法：/eh go 聊天 = 重试挂载并打印诊断；/eh go 聊天 装 = 只重试挂载")
       end
