@@ -8706,4 +8706,161 @@ do
     lay120.cols, lay120.colW, lay120.colGap, lay120.pageN, lay120.rowsL, lay120.rowsR))
 end
 
+-- 121) ★★★1.73.12 聊天窗名字着色（用户：「聊天窗 内的名字能着色吗?需要走缓存?」）
+--   判据：① 缓存单一来源（写入点唯一）：职业名认得出才写、单字名不写、宠物名归主人、大小写不敏感；
+--         ② 纯函数认得出三种形态（方括号 / 行首「名字:」/ 方括号前缀之后）；
+--         ③ ★反向哨兵：未知名 / 单字名 / 频道通知 / 已上过色 / 物品链接里的同名 → **一个都不改**；
+--         ④ 只染第一处；⑤ 走**真实打印入口**真的带色（不是只在纯函数里对）；⑥ 开关关掉一个字不改；
+--         ⑦ 与频道屏蔽**共用包装体**且互不干扰；⑧ 缓存来源（窗口上色白拿 + 只读采集）；
+--         ⑨ 采集**限频**（窗口内第二次不去扫名册 —— 用「新增行采不到」证明，避免弱判据）；
+--         ⑩ 多聊天窗（ChatFrame2 也挂上）；⑪ 工具箱里有这一行且标签走语言包。
+do
+  local pack121 = EVAL_LOCALES[EVAL_GET_LANG()] or EVAL_LOCALES.zhCN
+  local savedTb121 = EVAL_HELP_CONFIG.tb
+  local savedTime121 = TEST.time
+  EVAL_HELP_CONFIG.tb = {}
+  -- ① 缓存（name→职业 token）：唯一写入点 + 键规范化 + 「认不出就不写」
+  eq(EVAL_TB_NAMECLASS_PUT("守夜人", "萨满"), true, "①写入中文职业名（走 Engine 的 CLASS_LIST）")
+  eq(EVAL_TB_NAMECLASS_GET("守夜人"), "SHAMAN", "①★读回来是职业 token")
+  eq(EVAL_TB_NAMECLASS_PUT("NIGHTWATCH", "WARRIOR"), true, "①写英文名 + 英文职业 token")
+  eq(EVAL_TB_NAMECLASS_GET("nightwatch"), "WARRIOR", "①★★大小写不敏感（键统一小写）")
+  eq(EVAL_TB_NAMECLASS_PUT("骑猪人-宠物", "猎人"), true, "①写宠物形态的名字")
+  eq(EVAL_TB_NAMECLASS_GET("骑猪人"), "HUNTER", "①★★宠物名「主人-宠物」归到主人")
+  eq(EVAL_TB_NAMECLASS_PUT("甲", "战士"), false, "①★单字名不写（误伤面太大）")
+  eq(EVAL_TB_NAMECLASS_GET("甲"), nil, "①★单字名也查不到")
+  eq(EVAL_TB_NAMECLASS_PUT("阿甲", "战士"), true, "①★★两个字的中文名照常写入（★反例：string.len 按字节数会把单字判成 2 字符）")
+  eq(EVAL_TB_NAMECLASS_PUT("守夜人", "查无此职业"), false, "①★★认不出职业 → **不写**（不猜）")
+  eq(EVAL_TB_NAMECLASS_GET("守夜人"), "SHAMAN", "①★★而且不覆盖已有记录（坏值不污染缓存）")
+  -- ② 纯函数：认得出 → 染色
+  local colSha = "|c" .. string.sub(EVAL_TB_PAINT_CLASS_COLOR_OF("SHAMAN"), 3)
+  local colWar = "|c" .. string.sub(EVAL_TB_PAINT_CLASS_COLOR_OF("WARRIOR"), 3)
+  local o121, w121 = EVAL_TB_CHAT_COLOR_LINE("[守夜人]: 你好")
+  eq(o121, colSha .. "[守夜人]|r: 你好", "②★★★方括号形态染色（1.12 组合行里名字带方括号 —— 与 ChatMOD 同一依据）")
+  eq(w121, "守夜人", "②★返回命中的名字（诊断要能说清染的是谁）")
+  eq(EVAL_TB_CHAT_COLOR_LINE("nightwatch: 走起"), colWar .. "nightwatch|r: 走起", "②★行首「名字:」形态染色")
+  eq(EVAL_TB_CHAT_COLOR_LINE("[4. 世界防务] NIGHTWATCH: 走起"), "[4. 世界防务] " .. colWar .. "NIGHTWATCH|r: 走起",
+     "②★★频道名方括号前缀之后的名字也认得出")
+  eq(EVAL_TB_CHAT_COLOR_LINE("[守夜人] 说: 你好"), colSha .. "[守夜人]|r 说: 你好", "②★★「[名字] 说:」形态")
+  -- ③ 反向哨兵：拿不准的一律**原样返回**
+  local raw121 = {
+    "[路人甲]: 你好",                                        -- 缓存里没有这个名字
+    "甲: 你好",                                              -- 单字名
+    "[4. 世界防务] 进入频道。",                               -- 频道通知（归频道屏蔽那条路管）
+    "|cffc79c6e守夜人|r: 客户端已上过色",                     -- 客户端已经染过
+    "|cff9d9d9d|Hitem:1234:0:0:0|h[守夜人]|h|r 获得了物品",   -- 物品链接的显示名恰好同名
+  }
+  local bad121 = ""
+  for i = 1, table.getn(raw121) do
+    local okv, out = pcall(EVAL_TB_CHAT_COLOR_LINE, raw121[i])
+    if not okv or out ~= raw121[i] then bad121 = bad121 .. "[" .. i .. "] " end
+  end
+  eq(bad121, "", "③★★★反向哨兵：未知名/单字名/频道通知/已上色/物品链接 → 一个都不改（改了就是把人聊天弄坏）")
+  eq(EVAL_TB_CHAT_COLOR_LINE("|cff20a0ff[4. 世界防务] 守夜人: 你好"), "|cff20a0ff[4. 世界防务] 守夜人: 你好",
+     "③b★★★**未闭合**的颜色段里不叠加颜色（「不碰已有富文本」这条判据的边界；变异 M110 靠它捕获）")
+  eq(EVAL_TB_CHAT_COLOR_LINE(nil), nil, "③nil 原样返回、不崩")
+  eq(EVAL_TB_CHAT_COLOR_LINE(""), "", "③空串原样返回")
+  -- ④ 只染第一处
+  local o121b = EVAL_TB_CHAT_COLOR_LINE("[守夜人] 和 [守夜人] 都来了")
+  local _, c121 = string.gsub(o121b, "|c", "")
+  eq(c121, 1, "④★★只染第一处（实测颜色码出现 " .. tostring(c121) .. " 次）")
+  -- ⑤ 走**真实打印入口**：颜色码真的送到了聊天框（与频道屏蔽共用同一层包装）
+  local f121 = DEFAULT_CHAT_FRAME
+  local saved121 = function(_, m) TEST.chat = (TEST.chat or "") .. tostring(m) .. "\n" end
+  f121.AddMessage = saved121 -- 干净底层（Toolbox 载入时已挂过一层，不还原会在自己头上再包一层）
+  EVAL_TEST_TB_CHAN_RESET()
+  eq(EVAL_TB_CHAN_INSTALL(), true, "⑤前置：挂上聊天打印入口")
+  TEST.chat = ""
+  f121:AddMessage("[守夜人]: 你好")
+  eq(TEST.chat ~= nil and string.find(tostring(TEST.chat), colSha, 1, true) ~= nil, true,
+     "⑤★★★经过真实入口后聊天框收到的**已经带职业色**（不是只在纯函数里对）")
+  eq(string.find(tostring(TEST.chat), "|r: 你好", 1, true) ~= nil, true, "⑤★颜色只包住名字，正文没被破坏")
+  local st121 = EVAL_TB_CHATCOLOR_STATE()
+  eq(st121.painted >= 1, true, "⑤★计数：被染色 " .. tostring(st121.painted) .. " 条（诊断读值口）")
+  eq(st121.cache >= 2, true, "⑤★缓存里有 " .. tostring(st121.cache) .. " 个名字")
+  -- ⑤b 我们自己的输出（EVAL_SAY 都带 EVAL_HELP: 前缀）既不进样本缓冲、也不会被自己染色
+  local smp121 = table.getn(EVAL_TB_CHATCOLOR_STATE().samples)
+  TEST.chat = ""
+  f121:AddMessage("|cff66ccffEVAL_HELP:|r 我自己的输出 [守夜人]")
+  eq(table.getn(EVAL_TB_CHATCOLOR_STATE().samples), smp121,
+     "⑤b★★自己的输出不进样本缓冲（否则 /eh go 聊天 每跑一次就把真实样本挤掉一批）")
+  eq(tostring(TEST.chat) == "|cff66ccffEVAL_HELP:|r 我自己的输出 [守夜人]\n", true,
+     "⑤b★自己的输出原样打印（不给自己染色 —— 诊断输出要能看清原文）")
+  -- ⑥ 开关关掉 → 一个字都不改（开关在**调用时**读，不用 /reload）
+  EVAL_HELP_CONFIG.tb.chatColor = false
+  TEST.chat = ""
+  f121:AddMessage("[守夜人]: 你好")
+  eq(tostring(TEST.chat) == "[守夜人]: 你好\n", true, "⑥★★★关掉开关后**原样**进聊天框（不改一个字）")
+  eq(EVAL_TB_CHATCOLOR_STATE().painted, st121.painted, "⑥★关掉后计数不再增长")
+  -- ⑦ 与频道屏蔽**互不干扰**（两者共用同一个包装体）
+  EVAL_HELP_CONFIG.tb = { chatColor = true, chanJoin = true }
+  TEST.chat = ""
+  f121:AddMessage("[4. 世界防务] 进入频道。")
+  eq(tostring(TEST.chat) == "", true, "⑦★★★共用包装体：频道通知照旧被吞（名字着色没有把它放行）")
+  TEST.chat = ""
+  f121:AddMessage("[守夜人]: 又见面了")
+  eq(string.find(tostring(TEST.chat), colSha, 1, true) ~= nil, true, "⑦★反过来：普通聊天照旧被染色")
+  -- ⑧ 缓存来源：窗口上色时「白拿」+ 只读采集（绝不发服务器查询）
+  TEST.guildRows = { { name = "公会甲", class = "德鲁伊" }, { name = "公会乙", class = "盗贼" } }
+  TEST.whoRows = { { name = "查询甲", class = "牧师" } }
+  TEST.friendRows = { { name = "好友甲", class = "法师" } }
+  EVAL_TB_PAINT_INSTALL_ALL()
+  GuildStatus_Update() -- 走真实刷新 → 顺手写缓存
+  eq(EVAL_TB_NAMECLASS_GET("公会甲"), "DRUID",
+     "⑧★★「白拿」：公会窗口上色时顺手把名字+职业记进缓存（零额外 API 调用）")
+  EVAL_TB_NAMECLASS_HARVEST("who")
+  eq(EVAL_TB_NAMECLASS_GET("查询甲"), "PRIEST", "⑧★只读采集也能补缓存（who 列表）")
+  EVAL_TB_NAMECLASS_HARVEST("friends")
+  eq(EVAL_TB_NAMECLASS_GET("好友甲"), "MAGE", "⑧★好友列表")
+  EVAL_TB_NAMECLASS_HARVEST("guild")
+  eq(EVAL_TB_NAMECLASS_GET("公会乙"), "ROGUE", "⑧★公会名册（**只读**本地缓存，不发查询）")
+  -- ⑨ 采集限频：★用「窗口内新增的行采不到」证明它真的**没去扫**（否则 0 可能是「扫了没新的」= 弱判据）
+  TEST.time = 20000
+  EVAL_TB_CHATCOLOR_RESET() -- 清限频窗
+  TEST.guildRows = { { name = "新甲", class = "法师" } }
+  eq(EVAL_TB_NAMECLASS_HARVEST_THROTTLED("guild"), 1, "⑨前置：窗口外真的扫了名册（采到 1 条新名字）")
+  TEST.guildRows = { { name = "新甲", class = "法师" }, { name = "新乙", class = "盗贼" } }
+  eq(EVAL_TB_NAMECLASS_HARVEST_THROTTLED("guild"), 0, "⑨★★限频：窗口内第二次**没去扫名册**")
+  eq(EVAL_TB_NAMECLASS_GET("新乙"), nil, "⑨★★★反向哨兵：被限频挡下的那条确实没进缓存（证明「0」是没扫，不是扫了没新的）")
+  TEST.time = 20031
+  eq(EVAL_TB_NAMECLASS_HARVEST_THROTTLED("guild") >= 1, true, "⑨★过了窗口就恢复采集（限频不是永久停摆）")
+  TEST.guildRows, TEST.whoRows, TEST.friendRows = nil, nil, nil
+  -- ⑩ 多聊天窗：2 号窗也挂上（旧版只挂 DEFAULT_CHAT_FRAME → 2 号窗以后既冒通知、名字也不上色）
+  local raw122 = function() end
+  ChatFrame2 = { AddMessage = raw122 }
+  EVAL_TEST_TB_CHAN_RESET()
+  eq(EVAL_TB_CHAN_INSTALL(), true, "⑩挂载成功")
+  eq(ChatFrame2.AddMessage ~= raw122, true, "⑩★★ChatFrame2 也被挂上（用户要的是「聊天窗」，不是只有主窗）")
+  eq(select(8, EVAL_TEST_TB_CHAN_STATE()) >= 2, true, "⑩★记账：挂上的聊天窗数 ≥2")
+  ChatFrame2 = nil
+  -- ⑪ 工具箱里有这一行（UI 接线）+ 标签走语言包 + 勾/取消勾即时生效
+  local hasRow121, label121 = false, nil
+  for _, it121 in ipairs(EVAL_TEST_TB_ROWS()) do
+    if it121.key == "chatColor" then hasRow121 = true label121 = it121.label end
+  end
+  eq(hasRow121, true, "⑪★★工具箱列模型里有「聊天窗名字着色」这一行（队伍/社交组）")
+  eq(label121, pack121.TB_CHATCOLOR, "⑪★标签走语言包")
+  eq(type(pack121.TB_CHATCOLOR_TIP) == "string" and pack121.TB_CHATCOLOR_TIP ~= "", true, "⑪★悬停提示存在")
+  EVAL_HELP_CONFIG.tb.chatColor = false
+  eq(EVAL_TB_CHATCOLOR_ON(), false, "⑪★开关读的是配置（关掉 = 不再染）")
+  EVAL_HELP_CONFIG.tb.chatColor = true
+  eq(EVAL_TB_CHATCOLOR_AFTER_TOGGLE(), true, "⑪★勾上后的即时动作（补缓存 + 回一句）返回真值")
+  -- ⑫ /eh go 聊天 = 用户的**格式校准入口**，本身必须能用（写错一个字就是静默没输出）
+  f121:AddMessage("[守夜人]: 校准样本")
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 聊天")
+  local c121 = tostring(TEST.chat or "")
+  eq(string.find(c121, "聊天窗名字着色", 1, true) ~= nil, true, "⑫★★/eh go 聊天 打得出诊断（用户唯一的格式校准出口）")
+  eq(string.find(c121, "名字缓存", 1, true) ~= nil, true, "⑫★报告名字缓存条数")
+  eq(string.find(c121, "原文", 1, true) ~= nil, true, "⑫★★把最近聊天**原文**摊开（校准就看这一屏）")
+  eq(string.find(c121, "染色：守夜人", 1, true) ~= nil, true, "⑫★★★诊断对样本的判决与生产**同源**（读值口走同一个纯函数，不复刻判据）")
+  -- 收尾：还原入口 / 计数 / 配置 / 时间（跨用例状态残留是本项目老坑）
+  f121.AddMessage = saved121
+  EVAL_TEST_TB_CHAN_RESET()
+  EVAL_TB_CHAN_INSTALL()
+  EVAL_HELP_CONFIG.tb = savedTb121
+  TEST.time = savedTime121
+  print("  聊天名字着色：缓存单一来源（白拿 + 只读采集）· 三形态染色 · 未知名/单字/已上色/物品链接一律不碰 · 只染第一处")
+  print("                真实打印入口真的带色 · 开关即时生效 · 与频道屏蔽共用一层互不干扰 · 采集限频 · 多聊天窗")
+end
+
 print("ALL TESTS PASS")

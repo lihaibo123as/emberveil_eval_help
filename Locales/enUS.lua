@@ -183,6 +183,10 @@ TB_CHANJOIN_TIP = "Hides \"X joined / left channel\" notices. Channel chat itsel
   TB_CLEAR = "Clear",
   TB_UP = "Up", TB_DN = "Down", -- 1.73.9 toolbox scroll buttons (bottom row)
   TB_COLORCLASS = "Class-color names", -- 1.73.10
+TB_CHATCOLOR = "Color chat names by class", -- 1.73.12
+TB_CHATCOLOR_TIP = "Colors character names in the chat frame by class (shares the same name cache as the Guild / Who / Friends windows; unknown names are left untouched - no guessing, no server queries). On by default; applies to new messages.",
+TB_CHATCOLOR_ON_MSG = "Chat name coloring: ON (applies to new messages)",
+TB_CHATCOLOR_OFF_MSG = "Chat name coloring: OFF (chat text is no longer modified)",
   TB_COLORCLASS_TIP = "Color character names by class in the Guild / Who / Friends windows (level by difficulty, same-zone in green, offline members dimmed). On by default.",
   TB_BUY_ASK = "Add buy item (format: name,count)",
 TB_BUY_BAGFULL = "Bags are full: auto-buy stopped",

@@ -7284,6 +7284,48 @@ if type(SlashCmdList) == "table" then
         end
         say("用法：/eh go 着色 = 重试挂载并打印诊断（打开公会/查询/好友窗口后看更准）")
       end
+    elseif msg == "go 聊天" or string.find(msg or "", "^go 聊天") == 1 then
+      -- ★1.73.12 取证：聊天窗名字着色到底**认不认得出**名字（= 格式校准入口）。
+      --   ★为什么必须有这个命令：客户端聊天行的**真实文案**我们看不到（本机客户端没有 FrameXML 源码，
+      --     只能从 ChatMOD 那种时代相同的老插件反推）→ 判据按推断写，就必须有地方**对照真相**。
+      --     这里把最近 12 条**原文**摊开，连同「我们的判据对它的判决」一起打出来（铁律 4 的取证协议：
+      --     能做成命令就别让用户手工复现）。
+      local sarg = string.match(msg or "", "^go 聊天%s*(.-)%s*$") or ""
+      if type(EVAL_TB_CHAN_INSTALL) == "function" and (string.find(sarg, "^装") == 1 or sarg == "") then
+        pcall(EVAL_TB_CHAN_INSTALL) -- 顺手重试一次挂载（含 ChatFrame2..7）
+      end
+      if type(EVAL_TB_CHATCOLOR_STATE) ~= "function" then
+        say("聊天名字着色：本版本没有这个功能（EVAL_TB_CHATCOLOR_STATE 不存在）")
+      else
+        local st = EVAL_TB_CHATCOLOR_STATE()
+        say("— 聊天窗名字着色 诊断 —")
+        say("开关：着色=" .. (st.on and "开" or "关") .. "（工具箱 → 队伍/社交；默认开）")
+        say("聊天窗入口：挂上 " .. tostring(st.frames) .. " 个；不可用 " .. tostring(st.miss) .. " 个")
+        say("名字缓存：" .. tostring(st.cache) .. " 个（来源：公会/查询/好友窗口上色时白拿 + 队伍/团队/自己/目标）")
+        say("经过入口的消息：" .. tostring(st.seen) .. " 条；被染色：" .. tostring(st.painted) .. " 条" ..
+          (st.last and ("（最近：" .. tostring(st.last) .. "）") or ""))
+        local sm = st.samples
+        if type(sm) == "table" and table.getn(sm) > 0 then
+          say("最近 " .. table.getn(sm) .. " 条聊天**原文** → 我们的判决（★格式校准就看这一屏）：")
+          for i = 1, table.getn(sm) do
+            local raw = tostring(sm[i])
+            local hit, who = false, nil
+            if type(EVAL_TB_CHATCOLOR_VOTE) == "function" then hit, who = EVAL_TB_CHATCOLOR_VOTE(raw) end
+            -- ★把 | 打成 ||（客户端会显示成一个 |）：否则颜色码会被当场渲染出来，看不出**原文**是什么样
+            say("  " .. i .. ". " .. string.gsub(raw, "|", "||") .. "  →" ..
+              (hit and ("染色：" .. tostring(who)) or "没认出来"))
+          end
+          say("判读：上面若有形如 [名字] 或 名字: 的原文却判成「没认出来」→ 把这一屏发我（判据照真实格式改）")
+        else
+          say("（还没有经过入口的聊天消息 —— 先说一句话 / 进一个频道，再回来看这一屏）")
+        end
+        if st.frames == 0 then
+          say("|cffff8080判读：一个聊天窗都没挂上 → 聊天框还没就绪或接口不同（可用 /eh go 聊天 装 重试）|r")
+        elseif st.cache == 0 then
+          say("|cffff8080判读：挂上了但缓存是空的 → 打开一次公会/查询/好友窗口（或组一次队）再回来看|r")
+        end
+        say("用法：/eh go 聊天 = 重试挂载并打印诊断；/eh go 聊天 装 = 只重试挂载")
+      end
     elseif msg == "go immune" then
       local im = (EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war and EVAL_HELP_CONFIG.war.immune) or {}
       local n, keys = 0, {}

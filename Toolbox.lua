@@ -102,9 +102,24 @@ local function tbCfg()
   if c.tb.chanJoin == nil then c.tb.chanJoin = true end
   -- ★1.73.10 角色名职业着色：nil 也视为开（用户要求加的功能，装上就生效；取消勾选 = 不叠色）
   if c.tb.colorClass == nil then c.tb.colorClass = true end
+  -- ★1.73.12 聊天窗名字着色：同上默认开（引擎侧与窗口着色共用同一份名字缓存）
+  if c.tb.chatColor == nil then c.tb.chatColor = true end
   tbMigrateBuy(c.tb) -- ★1.71.3 自动购买：老条目补 每次数量/启用 字段
   return c.tb
 end
+-- ★1.73.12 聊天窗挂载点清单（「频道进出屏蔽」与「聊天名字着色」**共用**同一个包装体）：
+--   · 真客户端里 DEFAULT_CHAT_FRAME 与 ChatFrame1 常常是**同一个对象** → 不能按名字去重，
+--     只能按「当前入口是不是我们挂的那一层」判幂等（见 EVAL_TB_CHAN_INSTALL_ONE）；
+--   · ChatFrame2..N 由 FrameXML 懒建 → 除了载入时挂一次，还由限频重试**补挂**（见 tbChanRetry）；
+--   · 为什么不止挂主窗口：用户要的「聊天窗内的名字着色」与既有「频道进出屏蔽」都该覆盖**所有**聊天窗
+--     （旧版只挂了 DEFAULT_CHAT_FRAME → 2 号窗以后照旧冒通知、名字也不上色）。
+local function tbChatFrameKeys()
+  local keys = { "DEFAULT_CHAT_FRAME", "ChatFrame1" }
+  local n = (type(NUM_CHAT_WINDOWS) == "number" and NUM_CHAT_WINDOWS > 0) and NUM_CHAT_WINDOWS or 7
+  for i = 2, n do table.insert(keys, "ChatFrame" .. i) end
+  return keys
+end
+
 -- ===== 频道进出信息屏蔽（1.71.3 用户要求：工具箱 → 队伍/社交 → 默认开启）=====
 -- ★API 核查（本机 api_*.html 全表 1370 条）：**没有任何「聊天过滤器」API**
 --   （`ChatFrame_AddMessageEventFilter` 之类不存在；ChatWindow 分类只有 增删消息组 / 颜色 / 日志）。
@@ -152,19 +167,37 @@ function EVAL_TB_CHAN_ON()
   return tb.chanJoin ~= false
 end
 
--- 挂聊天打印入口（幂等：已挂过直接返回 true，**绝不重复包装**）
-function EVAL_TB_CHAN_INSTALL()
-  if TB.chanHooked then return true end
-  local f = DEFAULT_CHAT_FRAME
-  -- ★不再要求是 table（本客户端帧未必是 table，只看有没有 AddMessage）
+-- 挂**一个**聊天窗入口（幂等：当前入口就是我们挂的那层 → 直接算已挂，**绝不重复包装**）
+--   ★不要求入口是 table（本客户端帧未必是 table，只看有没有 AddMessage）——读写都走 pcall。
+--   返回 true = 在位或刚挂上 / false = 这个窗口现在不可用（由调用方记账，不假称成功）
+function EVAL_TB_CHAN_INSTALL_ONE(key)
+  local f = _G[key]
   if f == nil then return false end
   local okr, cur = pcall(function() return f.AddMessage end)
   if not (okr and type(cur) == "function") then return false end
-  -- ★只要当前入口**就是我们挂的那个**，就算已挂（防「状态说挂了、其实被别人顶掉」）
-  if TB.chanWrapper and cur == TB.chanWrapper then TB.chanHooked = true return true end
+  TB.chanWrappers = TB.chanWrappers or {}
+  -- ★只要当前入口**就是我们挂的那层**，就算已挂（防「状态说挂了、其实被别人顶掉」→ 这里会重挂）
+  if cur == TB.chanWrappers[key] then return true end
+  -- ★同一个对象可能以两个名字出现（DEFAULT_CHAT_FRAME == ChatFrame1）：入口等于**我们挂的任何一层**
+  --   都算已挂 —— 否则会在自己头上再包一层（同一条消息被数两次、频道通知会被判两次）
+  for _, w in pairs(TB.chanWrappers) do
+    if cur == w then TB.chanWrappers[key] = cur return true end
+  end
   local orig = cur
   local function wrapper(self, msg, ...)
     TB.chanSeenAll = (TB.chanSeenAll or 0) + 1 -- ★诊断用：经过本入口的聊天消息总数
+    TB.chatSeen = (TB.chatSeen or 0) + 1
+    -- ★我们自己打印的行（EVAL_SAY 都带「|cff66ccffEVAL_HELP:|r」前缀）:
+    --   · 不进样本缓冲（否则 /eh go 聊天 每打印一次就把真实样本挤掉一批，而且会自己染自己）；
+    --   · 也不参与名字着色（诊断输出要保持原样可读）。
+    local selfPrint = (type(msg) == "string" and string.find(msg, "EVAL_HELP:", 1, true) ~= nil)
+    -- 原始样本环形缓冲（只留 12 条）：/eh go 聊天 靠它把**客户端真实文案**摊开给人看
+    --   ★这是「不猜格式」的取证入口：判据认不出名字时，靠这些原文校准（铁律 4）
+    if not selfPrint then
+      TB.chatRaw = TB.chatRaw or {}
+      table.insert(TB.chatRaw, tostring(msg))
+      while table.getn(TB.chatRaw) > 12 do table.remove(TB.chatRaw, 1) end
+    end
     if EVAL_TB_CHAN_ON() and EVAL_TB_CHAN_BLOCK(msg) then
       TB.chanFiltered = (TB.chanFiltered or 0) + 1
       TB.chanSamples = TB.chanSamples or {}
@@ -172,13 +205,39 @@ function EVAL_TB_CHAN_INSTALL()
       while table.getn(TB.chanSamples) > 8 do table.remove(TB.chanSamples, 1) end
       return -- 吞掉：不进聊天框
     end
-    return orig(self, msg, ...)
+    -- ★1.73.12 聊天名字着色：与频道屏蔽**共用同一个包装体**（一次包装两个功能，绝不叠两层包装）
+    local out = msg
+    if not selfPrint and EVAL_TB_CHATCOLOR_ON() and type(EVAL_TB_CHAT_COLOR_LINE) == "function" then
+      local okc, colored, who = pcall(EVAL_TB_CHAT_COLOR_LINE, msg)
+      if okc and type(colored) == "string" and colored ~= msg then
+        out = colored
+        TB.chatPainted = (TB.chatPainted or 0) + 1
+        TB.chatLast = who
+      end
+    end
+    return orig(self, out, ...)
   end
   local okw = pcall(function() f.AddMessage = wrapper end)
   if not okw then return false end -- ★挂不上就如实返回 false（不假称挂上了）
-  TB.chanWrapper = wrapper
-  TB.chanHooked = true
+  TB.chanWrappers[key] = wrapper
+  if key == "DEFAULT_CHAT_FRAME" then TB.chanWrapper = wrapper end
   return true
+end
+
+-- 挂**所有**聊天窗入口（旧版只挂 DEFAULT_CHAT_FRAME）。返回「至少挂上一个」= true，
+--   与旧版语义一致：一个聊天框都拿不到时**如实返回 false**（不假称挂上了）。
+function EVAL_TB_CHAN_INSTALL()
+  local keys = tbChatFrameKeys()
+  local ok, miss = 0, 0
+  for i = 1, table.getn(keys) do
+    if EVAL_TB_CHAN_INSTALL_ONE(keys[i]) then ok = ok + 1 else miss = miss + 1 end
+  end
+  TB.chanFrames, TB.chanMiss = ok, miss
+  if TB.chanWrappers then
+    TB.chanWrapper = TB.chanWrappers["DEFAULT_CHAT_FRAME"] or TB.chanWrappers["ChatFrame1"] or TB.chanWrapper
+  end
+  TB.chanHooked = (ok > 0)
+  return TB.chanHooked
 end
 
 -- ★★★1.71.3 **静默失效的根治**（用户实测「屏蔽频道进出信息未能正确工作」）：
@@ -188,14 +247,24 @@ end
 --   + 每帧队列帧兜底 + `/eh go 频道` 可手动立刻重试。
 --   ★判据：**「尝试过」≠「挂上了」**——失败必须重试，成功/放弃都要如实写日志。
 local function tbChanRetry()
-  if TB.chanHooked then return true end
+  if TB.chanHooked then
+    -- ★1.73.12 补挂**后续才建出来**的聊天窗（FrameXML 懒建）：限频 5s 扫一次；
+    --   已挂的窗口在 INSTALL_ONE 里直接短路，代价只是几次 _G 取值。
+    local now2 = (type(GetTime) == "function") and GetTime() or 0
+    if now2 - (TB.chanSweepAt or -99) >= 5 then
+      TB.chanSweepAt = now2
+      EVAL_TB_CHAN_INSTALL()
+    end
+    return true
+  end
   local now = (type(GetTime) == "function") and GetTime() or 0
   if now - (TB.chanTryAt or -99) < 1 then return false end
   TB.chanTryAt = now
   TB.chanTries = (TB.chanTries or 0) + 1
   local ok = EVAL_TB_CHAN_INSTALL()
   if ok then
-    EVAL_LOGLINE("[频道屏蔽] 挂载成功（第 " .. tostring(TB.chanTries) .. " 次尝试）")
+    EVAL_LOGLINE("[频道屏蔽] 挂载成功（第 " .. tostring(TB.chanTries) .. " 次尝试；聊天窗 " ..
+      tostring(TB.chanFrames or 0) .. " 个）")
   elseif TB.chanTries >= 60 then
     EVAL_LOGLINE("[频道屏蔽] 挂载失败：" .. tostring(TB.chanTries) .. " 次尝试后放弃（DEFAULT_CHAT_FRAME 始终不可用）")
   end
@@ -209,16 +278,19 @@ EVAL_LOGLINE("[频道屏蔽] 载入时挂载：" .. (TB.chanHooked and "成功" 
 function EVAL_TEST_TB_CHAN_STATE()
   return EVAL_TB_CHAN_ON(), TB.chanHooked and true or false, (TB.chanFiltered or 0), TB.chanSamples,
          (TB.chanWrapper ~= nil and DEFAULT_CHAT_FRAME ~= nil and DEFAULT_CHAT_FRAME.AddMessage == TB.chanWrapper) and true or false,
-         (TB.chanSeenAll or 0), (TB.chanTries or 0)
+         (TB.chanSeenAll or 0), (TB.chanTries or 0),
+         (TB.chanFrames or 0), (TB.chatSeen or 0), (TB.chanMiss or 0) -- ★1.73.12 挂上的聊天窗数 / 经过入口的消息数 / 不可用窗口数
 end
 
-function EVAL_TEST_TB_CHAN_RESET() -- 测试用：清计数并允许重新挂载（不还原已包装的入口）
+function EVAL_TEST_TB_CHAN_RESET() -- 测试用：清计数并允许重新挂载（不还原已包装的入口、不清名字缓存）
   TB.chanHooked = false
   TB.chanFiltered = 0
   TB.chanSamples = {}
   TB.chanSeenAll = 0
   TB.chanTryAt = nil
   TB.chanTries = 0
+  TB.chanSweepAt = nil
+  TB.chatSeen, TB.chatPainted, TB.chatRaw, TB.chatLast = 0, 0, {}, nil
 end
 
 -- ===== 角色名职业着色（1.73.10 用户要求：工具箱 → 队伍/社交）=====
@@ -298,6 +370,55 @@ local TB_PAINT_LISTS = {
     cols = { name = "ButtonTextNameLocation", info = "ButtonTextInfo" } },
 }
 
+-- ★1.73.12 名字 → 职业 token 缓存（「聊天窗名字着色」的**唯一**数据来源）：
+--   · 写入只有一个 helper（tbNameClassPut），读取只有一个（tbNameClassGet）—— 单一真值，不在别处再存一份；
+--   · 键规范化：去首尾空白 + 小写；宠物名「主人-宠物」取主人（1.12 的角色名里不会有连字符）；
+--   · 长度 < 2 的键**不写也不查**（单字名的误伤面太大）；
+--   · 认不出职业的名字**不写**（不猜）—— 「拿不到就不猜」纪律。
+local tbNameClass = {}
+-- ★**字符数**而不是字节数：UTF-8 里一个中文字是 3 字节 —— 用 string.len 判「单字名」
+--   会把「甲」当成 2 个字符放过去（本项目反复踩过的「string.len 是字节数」）。判据 = 数首字节。
+local function tbNameCharLen(s)
+  local n = 0
+  local len = (type(s) == "string") and string.len(s) or 0
+  for i = 1, len do
+    local b = string.byte(s, i)
+    -- ASCII（<0x80）与 UTF-8 首字节（>=0xC0）各算一个字符；续字节 0x80..0xBF 不数
+    if b and (b < 128 or b >= 192) then n = n + 1 end
+  end
+  return n
+end
+local function tbNameClassKey(name)
+  if type(name) ~= "string" then return nil end
+  local s = string.gsub(name, "^%s*(.-)%s*$", "%1")
+  if s == "" then return nil end
+  s = string.lower(s)
+  local dash = string.find(s, "-", 1, true)
+  if dash and dash > 1 then s = string.sub(s, 1, dash - 1) end
+  if tbNameCharLen(s) < 2 then return nil end
+  return s
+end
+local function tbNameClassPut(name, klass)
+  local k = tbNameClassKey(name)
+  if not k then return false end
+  local tok = EVAL_TB_PAINT_CLASS_TOKEN_OF(klass)
+  if not tok then return false end
+  tbNameClass[k] = tok
+  return true
+end
+local function tbNameClassGet(name)
+  local k = tbNameClassKey(name)
+  if not k then return nil end
+  return tbNameClass[k]
+end
+function EVAL_TB_NAMECLASS_PUT(n, k) return tbNameClassPut(n, k) end
+function EVAL_TB_NAMECLASS_GET(n) return tbNameClassGet(n) end
+function EVAL_TB_NAMECLASS_SIZE()
+  local n = 0
+  for _ in pairs(tbNameClass) do n = n + 1 end
+  return n
+end
+
 -- 开关：nil 视为**开**（用户要求加的，默认就生效；关掉 = 不叠色）
 function EVAL_TB_COLOR_ON()
   local tb = tbCfg()
@@ -345,6 +466,9 @@ function EVAL_TB_PAINT_ROW(list, i, off, myZone)
   local idx = (tonumber(off) or 0) + i
   local d = tbPaintRowData(list, idx)
   if not d then return 0 end
+  -- ★1.73.12 「白拿」的一笔：上色时手上已经有 名字 + 职业 → 顺手写进名字缓存（零额外 API 调用）。
+  --   聊天窗名字着色的一半数据就从这里来（另一半是队伍/团队/自己/目标，见 EVAL_TB_NAMECLASS_HARVEST）。
+  tbNameClassPut(d.name, d.klass)
   local mul = d.online and 1 or 0.5 -- ★离线整行减半（XGuild 的做法保留）
   local pfx = list.btn .. tostring(i)
   local cr, cg, cb = tbHexToRGB(EVAL_TB_PAINT_CLASS_COLOR_OF(d.klass))
@@ -527,6 +651,204 @@ function EVAL_TB_PAINT_RESET() -- 测试用：清计数（不还原已包装的�
   TB.paintCalls, TB.paintPainted, TB.paintRows = 0, 0, 0
   TB.paintTryAt, TB.paintTries = nil, 0
   TB.paintLogged = false
+end
+
+-- ===== 聊天窗名字职业着色（1.73.12 用户要求：「聊天窗 内的名字能着色吗?需要走缓存?」）=====
+-- 参考 tmp/ChatMOD 的**机制**（同为 1.12 客户端）：它维护 name→class 缓存（来源 = 好友/公会/团队/队伍/目标/who 列表），
+--   再在聊天打印入口里把名字染成职业色。我们**轻量化重写**（它的 1600 行只取这一小块），并遵守本项目纪律：
+--   ① 缓存只有**一份真值**（tbNameClass；写入点唯一 = tbNameClassPut）：
+--      · 来源①「白拿」：公会/查询/好友三个窗口上色时顺手记下（零额外 API 调用，见 EVAL_TB_PAINT_ROW）；
+--      · 来源② 自己/队伍/团队/目标：UnitName + UnitClass（**事件驱动 + 限频**，见 tbNcHarvest）；
+--      · 来源③ 客户端**本地已缓存**的公会名册 / 好友 / 查询结果（只读，**不发服务器查询**）。
+--   ② ★**不做**自动 /who：SendWho 是**服务器写动作**，ChatMOD 靠手动开关 + 3 秒窗兜着；
+--      我们这一版干脆不做 —— 查不到的名字就**不上色**（不猜、不打扰服务器）= 频率防护总则。
+--   ③ 判据是**纯函数** EVAL_TB_CHAT_COLOR_LINE（只做字符串处理 + 查缓存，能脱游戏直接断言）；
+--   ④ 只在**聊天打印入口**加一层（与频道屏蔽**共用同一个包装体**，见 EVAL_TB_CHAN_INSTALL_ONE）；
+--   ⑤ 缓存**不落盘**（会话级）：避免 SavedVariables 膨胀与过期清理策略（ChatMOD 要 7 周清理正是因为落了盘）。
+
+-- 开关：nil 视为**开**（与「角色名职业着色」同一套默认：装上就生效；取消勾选 = 不再染）
+function EVAL_TB_CHATCOLOR_ON()
+  local tb = tbCfg()
+  if not tb then return true end
+  return tb.chatColor ~= false
+end
+
+-- 采集一个单位（自己/队友/团员/目标）：UnitName + UnitClass 都是**只读**调用，不向服务器发请求
+local function tbNameClassScanUnit(unit)
+  if type(UnitName) ~= "function" or type(UnitClass) ~= "function" then return false end
+  local okn, name = pcall(UnitName, unit)
+  if not (okn and type(name) == "string" and name ~= "") then return false end
+  local okc, a, b = pcall(UnitClass, unit)
+  if not okc then return false end
+  -- ★UnitClass 两个返回值哪个是「职业」在各客户端/各语言下不一致 → **两个都试**，都认不出就不写（不猜）
+  if tbNameClassPut(name, a) then return true end
+  return tbNameClassPut(name, b)
+end
+
+-- 采集（kind = unit / guild / friends / who；nil = 全部）；返回**本次新写入**条数
+function EVAL_TB_NAMECLASS_HARVEST(kind)
+  local before = EVAL_TB_NAMECLASS_SIZE()
+  local all = (kind == nil)
+  if all or kind == "unit" then
+    tbNameClassScanUnit("player")
+    for i = 1, 4 do tbNameClassScanUnit("party" .. i) end
+    local rn = 0
+    if type(GetNumRaidMembers) == "function" then
+      local okr, n = pcall(GetNumRaidMembers)
+      if okr and type(n) == "number" and n > 0 then rn = n end
+    end
+    for i = 1, rn do tbNameClassScanUnit("raid" .. i) end
+    tbNameClassScanUnit("target")
+  end
+  if (all or kind == "guild") and type(GetNumGuildMembers) == "function" and type(GetGuildRosterInfo) == "function" then
+    -- ★只读客户端**本地已缓存**的名册：**不调 GuildRoster()**（那是向服务器发查询 → 违反频率防护）
+    local okg, n = pcall(GetNumGuildMembers)
+    if okg and type(n) == "number" and n > 0 then
+      for i = 1, n do
+        local okp, nm, _rank, _ri, _lv, klass = pcall(GetGuildRosterInfo, i)
+        if okp and type(nm) == "string" then tbNameClassPut(nm, klass) end
+      end
+    end
+  end
+  if (all or kind == "friends") and type(GetNumFriends) == "function" and type(GetFriendInfo) == "function" then
+    local okf, n = pcall(GetNumFriends)
+    if okf and type(n) == "number" then
+      for i = 1, n do
+        local okp, nm, _lv, klass = pcall(GetFriendInfo, i)
+        if okp and type(nm) == "string" then tbNameClassPut(nm, klass) end
+      end
+    end
+  end
+  if (all or kind == "who") and type(GetNumWhoResults) == "function" and type(GetWhoInfo) == "function" then
+    local okw, n = pcall(GetNumWhoResults)
+    if okw and type(n) == "number" then
+      for i = 1, n do
+        local okp, nm, _g, _lv, _race, klass = pcall(GetWhoInfo, i)
+        if okp and type(nm) == "string" then tbNameClassPut(nm, klass) end
+      end
+    end
+  end
+  return EVAL_TB_NAMECLASS_SIZE() - before
+end
+
+-- 限频采集（**事件驱动**，绝不进聊天热路径）：每类各自一个窗口，避免「一换目标就扫整张名册」
+local TB_NC_THROTTLE = { unit = 5, guild = 30, friends = 10, who = 10 }
+local tbNcAt = {}
+local function tbNcHarvest(kind)
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  if now - (tbNcAt[kind] or -999) < (TB_NC_THROTTLE[kind] or 10) then return 0 end
+  tbNcAt[kind] = now
+  local ok, added = pcall(EVAL_TB_NAMECLASS_HARVEST, kind)
+  if ok and type(added) == "number" and added > 0 then TB.ncAdded = (TB.ncAdded or 0) + added end
+  return (ok and type(added) == "number") and added or 0
+end
+EVAL_TB_NAMECLASS_HARVEST_THROTTLED = tbNcHarvest -- 供事件 / 诊断 / 断言直调
+
+-- 纯函数：把一行聊天文本里的**第一处**已知玩家名染成职业色；返回 (新文本, 命中的名字)。
+--   ★判据（保守：宁可不上色，也不要把人家的聊天弄坏）：
+--     ① 只认两种形态 —— 方括号名「[名字]」（1.12 组合行里的名字是带方括号的，ChatMOD 也按这个上色）
+--        与行首「名字:」/「名字：」（说话人一定在最前面）；★形态**未经验证**的地方一律不猜，
+--        靠 /eh go 聊天 打出来的原文样本校准（铁律 4：拿不准就取证，不靠推断）；
+--     ② 方括号里含 | 号（物品链接/颜色码）→ 不碰；段前 11 字节内有 |c / |H（客户端已上过色）→ 不碰；
+--     ③ 名字不足 2 个字符 → 不碰；缓存里查不到 → 不碰（**不猜**）；
+--     ④ 只染第一处（后面重复提到的同一个名字不动，避免整行花掉）。
+function EVAL_TB_CHAT_COLOR_LINE(msg)
+  if type(msg) ~= "string" or msg == "" then return msg, nil end
+  -- ★「已经在富文本里」= 前缀里**最后一个 |c / |H 还没被 |r / |h 闭合**（闭合了的不算）。
+  --   ★为什么不看「往前 11 字节窗口」：物品链接 |cff..|Hitem:..|h[名字]|h|r 里，名字左边 11 字节内
+  --     根本没有 |c/|H → 只看窗口会把**链接的显示名**也染色（本轮实测到的坑）。
+  local function lastIndex(s, pat)
+    local last, from = nil, 1
+    while true do
+      local i = string.find(s, pat, from, true)
+      if not i then break end
+      last, from = i, i + 1
+    end
+    return last
+  end
+  local function alreadyColored(pos)
+    if pos <= 1 then return false end
+    local pre = string.sub(msg, 1, pos - 1)
+    local lc, lr = lastIndex(pre, "|c"), lastIndex(pre, "|r")
+    if lc and (lr == nil or lc > lr) then return true end
+    local lH, lh = lastIndex(pre, "|H"), lastIndex(pre, "|h")
+    if lH and (lh == nil or lH > lh) then return true end
+    return false
+  end
+  local function paint(name, s, e)
+    local tok = tbNameClassGet(name)
+    if not tok then return nil end
+    local hex = TB_PAINT_CLASS_COLOR[tok]
+    if type(hex) ~= "string" or string.len(hex) ~= 8 then return nil end
+    return string.sub(msg, 1, s - 1) .. "|c" .. string.sub(hex, 3) .. string.sub(msg, s, e) .. "|r" ..
+           string.sub(msg, e + 1)
+  end
+  -- ① 候选起点 = 行首 + 每个「方括号段 / 颜色段之后」（覆盖「[频道] 名字:」与「|c..[频道]|r 名字:」两种前缀）
+  local starts = { 1 }
+  local from = 1
+  while true do
+    local s, e = string.find(msg, "[%]r]%s", from) -- ] 或 r 后面跟空白
+    if not s then break end
+    table.insert(starts, e + 1)
+    from = e + 1
+  end
+  for i = 1, table.getn(starts) do
+    local sp = starts[i]
+    -- 名字 = 起点处**不含空白/冒号/竖线**的第一段（角色名里不会有这几种字符）
+    local nm = string.match(string.sub(msg, sp), "^([^%s:：|]+)")
+    if nm and tbNameCharLen(nm) >= 2 and not alreadyColored(sp) then
+      local out = paint(nm, sp, sp + string.len(nm) - 1)
+      if out then return out, nm end
+    end
+  end
+  -- ② 逐个方括号段（最多看 4 个：在前面的可能是频道名/公会名/队伍标记）
+  local from2 = 1
+  for _ = 1, 4 do
+    local s, e = string.find(msg, "%[[^%[%]]*%]", from2)
+    if not s then break end
+    local inner = string.sub(msg, s + 1, e - 1)
+    if string.find(inner, "|", 1, true) == nil and not alreadyColored(s) then
+      local out = paint(inner, s, e)
+      if out then return out, inner end
+    end
+    from2 = e + 1
+  end
+  return msg, nil
+end
+
+-- 诊断读值口（/eh go 聊天 与断言共用）
+function EVAL_TB_CHATCOLOR_STATE()
+  return { on = EVAL_TB_CHATCOLOR_ON(), cache = EVAL_TB_NAMECLASS_SIZE(), seen = TB.chatSeen or 0,
+           painted = TB.chatPainted or 0, last = TB.chatLast, samples = TB.chatRaw or {},
+           frames = TB.chanFrames or 0, miss = TB.chanMiss or 0, added = TB.ncAdded or 0 }
+end
+-- 诊断用：对一条原文给出判决（不打印，只回值）—— 与生产**同一个**纯函数，绝不复刻判据
+function EVAL_TB_CHATCOLOR_VOTE(msg)
+  if type(EVAL_TB_CHAT_COLOR_LINE) ~= "function" then return false, nil end
+  local ok, out, who = pcall(EVAL_TB_CHAT_COLOR_LINE, msg)
+  if not ok then return false, nil end
+  return (type(out) == "string" and out ~= msg) and true or false, who
+end
+function EVAL_TB_CHATCOLOR_RESET() -- 测试用：清计数与样本（不还原入口、**不清**名字缓存）
+  TB.chatSeen, TB.chatPainted, TB.chatRaw, TB.chatLast = 0, 0, {}, nil
+  tbNcAt = {}
+  TB.ncAdded = 0
+end
+-- 勾/取消勾后的即时动作：立刻补一次缓存（勾上就能用）+ 如实回一句，并把**自己的名字**染出来当示例
+function EVAL_TB_CHATCOLOR_AFTER_TOGGLE()
+  pcall(tbNcHarvest, "unit")
+  pcall(tbNcHarvest, "guild")
+  local on = EVAL_TB_CHATCOLOR_ON()
+  local demo = ""
+  local okn, nm = pcall(UnitName, "player")
+  if okn and type(nm) == "string" and nm ~= "" then
+    local tok = tbNameClassGet(nm)
+    local hex = tok and TB_PAINT_CLASS_COLOR[tok]
+    if hex then demo = "（示例：" .. "|c" .. string.sub(hex, 3) .. nm .. "|r）" end
+  end
+  say(on and L("TB_CHATCOLOR_ON_MSG") or L("TB_CHATCOLOR_OFF_MSG"))
+  if demo ~= "" and on then say(demo) end
+  return on
 end
 
 -- ★1.71.2 用户要求：「工具箱 → 自动交接任务 按键停止功能，比如按住 shift 临时停止」
@@ -1079,6 +1401,16 @@ function EVAL_TB_ONEVENT(e)
     end
   elseif e == "QUEST_LOG_UPDATE" then -- 1.69.2 只排期不同步扫（事件先于数据落地，同步扫=滞后一个状态）
     tbQScanDue = ((type(GetTime) == "function") and GetTime() or 0) + TB_QSCAN_DELAY
+  -- ★1.73.12 聊天名字着色：缓存采集（**只读**来源；每类各自限频，见 TB_NC_THROTTLE）
+  elseif e == "GUILD_ROSTER_UPDATE" then
+    tbNcHarvest("guild")
+  elseif e == "FRIENDLIST_UPDATE" then
+    tbNcHarvest("friends")
+  elseif e == "WHO_LIST_UPDATE" then
+    tbNcHarvest("who")
+  elseif e == "PARTY_MEMBERS_CHANGED" or e == "RAID_ROSTER_UPDATE" or e == "PLAYER_TARGET_CHANGED" or
+         e == "PLAYER_ENTERING_WORLD" or e == "VARIABLES_LOADED" then
+    tbNcHarvest("unit")
   end
 end
 
@@ -1094,6 +1426,14 @@ evf:RegisterEvent("QUEST_COMPLETE")
 evf:RegisterEvent("QUEST_LOG_UPDATE") -- 1.69.0 任务进度通知（日志扫描差分）
 evf:RegisterEvent("VARIABLES_LOADED")      -- ★1.71.3 频道屏蔽：载入时聊天框常还没建好，这里再试一次
 evf:RegisterEvent("PLAYER_ENTERING_WORLD") -- ★进入世界后再试一次（最可靠的时机）
+-- ★1.73.12 聊天名字着色的**缓存采集**事件（全是只读来源；绝不发服务器查询）：
+--   公会名册到位 / 好友列表刷新 / 队伍与团队变动 / 查询结果回来 / 换目标 → 各补一次缓存（各有限频窗）
+evf:RegisterEvent("GUILD_ROSTER_UPDATE")
+evf:RegisterEvent("FRIENDLIST_UPDATE")
+evf:RegisterEvent("PARTY_MEMBERS_CHANGED")
+evf:RegisterEvent("RAID_ROSTER_UPDATE")
+evf:RegisterEvent("WHO_LIST_UPDATE")
+evf:RegisterEvent("PLAYER_TARGET_CHANGED")
 evf:SetScript("OnEvent", function()
   local e = nil
   if type(event) == "string" then e = event end
@@ -1136,6 +1476,8 @@ local function tbModel()
     { t = "c", key = "chanJoin", label = L("TB_CHANJOIN"), tip = L("TB_CHANJOIN_TIP") },
     -- ★1.73.10 用户要求：角色名按职业着色（参考 tmp/XGuild 的**需求**，实现见本文件「职业着色」段；默认开）
     { t = "c", key = "colorClass", label = L("TB_COLORCLASS"), tip = L("TB_COLORCLASS_TIP") },
+    -- ★1.73.12 用户要求：「聊天窗 内的名字能着色吗?需要走缓存?」→ 聊天文字里的角色名按职业色（默认开）
+    { t = "c", key = "chatColor", label = L("TB_CHATCOLOR"), tip = L("TB_CHATCOLOR_TIP") },
     { t = "g", label = L("TB_GUILDNOTIFY"), tip = L("TB_GUILDNOTIFY_TIP") },
     { t = "h", label = L("TB_H_QAUTO") }, -- 1.69.0 任务组拆分：自动交接 / 任务通知
     -- ★1.71.2 用户要求：自动接取 / 交付任务 **分成两个开关**（原来共用一个 quest 键，想只接取不交付做不到）
@@ -1423,6 +1765,9 @@ function EVAL_TB_BUILD(root, page, refreshes)
       -- ★1.73.10 职业着色是**即时生效**的全局行为：勾/取消勾后立刻重刷三个窗口，
       --   否则颜色要等窗口自己下次刷新才变，用户会以为开关没反应（本项目「改开关立即生效」惯例）
       if row.modelKey == "colorClass" then pcall(EVAL_TB_PAINT_REFRESH) end
+      -- ★1.73.12 聊天名字着色同样是**即时生效**的全局行为：勾上就补缓存 + 回一句示例；
+      --   已打印的历史行**改不了**（聊天框不复渲）→ 提示语里写清「对之后的消息生效」。
+      if row.modelKey == "chatColor" then pcall(EVAL_TB_CHATCOLOR_AFTER_TOGGLE) end
       EVAL_TB_REFRESH()
     end)
     chk:SetScript("OnEnter", function()

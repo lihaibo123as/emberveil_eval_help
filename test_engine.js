@@ -489,6 +489,53 @@ function checkIconAssets() {
   console.log('PAINT WIRING CHECK: 三窗口接线 + local 备份 + 无不可用 API + 诊断入口（retry ' + sites + ' 处）');
 })();
 
+// ===== CHAT COLOR WIRING CHECK（1.73.12）：聊天窗名字着色的「接线 + 频率防护」 =====
+// 背景：名字着色与职业着色一样是**静默失败**大户 —— 没接上/格式不认，游戏里就是「没颜色」，不报错不崩。
+//   纯函数写得再好，只要没接在聊天打印入口上，行为断言照样全绿（本项目「源码检查补位 UI 接线」的纪律）。
+// 判据：
+//   ① 名字着色**必须在 AddMessage 包装体内部**被调用（与频道屏蔽共用一个包装体）；
+//   ② 缓存「白拿」那一笔必须在 EVAL_TB_PAINT_ROW 里（上色时顺手写，零额外调用）；
+//   ③ ★频率防护：Toolbox.lua **不许**向服务器发查询（SendWho / GuildRoster() / ShowFriends()）——
+//      「查不到的名字就不上色」是刻意的取舍，不许被后人悄悄改成自动 /who；
+//   ④ 采集必须走**限频**入口，且被事件分派 EVAL_TB_ONEVENT 接线；
+//   ⑤ 有诊断入口 /eh go 聊天（格式校准 + 挂载状态）。
+(function () {
+  const rawTb = fs.readFileSync(path.join(__dirname, 'Toolbox.lua'), 'utf8');
+  const eh = fs.readFileSync(path.join(__dirname, 'EvalHelp.lua'), 'utf8');
+  // ★★★「看代码，不看注释」：本文件里到处写着「不做自动 /who（SendWho）」这类**说明性**注释，
+  //   直接扫全文会把说明当成违规 → 先把行尾注释摘掉再判（与 COMMENT SWALLOW/IO BTN LABEL 同一条纪律）。
+  const tb = rawTb.split(/\r?\n/).map(function (l) {
+    const i = l.indexOf('--');
+    return i >= 0 ? l.slice(0, i) : l;
+  }).join('\n');
+  const bad = [];
+  // ① 包装体内调用
+  const iWrapper = tb.indexOf('local function wrapper(self, msg, ...)');
+  const iWrapped = tb.indexOf('TB.chanWrappers[key] = wrapper');
+  const iColorCall = tb.indexOf('EVAL_TB_CHAT_COLOR_LINE, msg');
+  if (iWrapper < 0 || iWrapped < 0 || iColorCall < 0)
+    bad.push('找不到包装体或名字着色调用点（wrapper=' + iWrapper + ' end=' + iWrapped + ' call=' + iColorCall + '）');
+  else if (!(iColorCall > iWrapper && iColorCall < iWrapped))
+    bad.push('EVAL_TB_CHAT_COLOR_LINE 不在聊天打印包装体内部（没接上入口 = 纯函数白写）');
+  // ② 白拿
+  const iRow = tb.indexOf('function EVAL_TB_PAINT_ROW');
+  const iNextFn = tb.indexOf('\nfunction ', iRow + 10);
+  const rowBody = (iRow >= 0) ? tb.slice(iRow, iNextFn > 0 ? iNextFn : iRow + 2000) : '';
+  if (!/tbNameClassPut\(d\.name/.test(rowBody))
+    bad.push('EVAL_TB_PAINT_ROW 里没有「白拿」写缓存（tbNameClassPut(d.name, ...)）');
+  // ③ 频率防护：不许有服务器写/查询动作
+  const forbidden = tb.match(/\bSendWho\b|\bGuildRoster\s*\(|\bShowFriends\s*\(/g) || [];
+  if (forbidden.length) bad.push('出现了向服务器发查询的调用：' + forbidden.join(', ') + '（违反频率防护总则）');
+  // ④ 限频入口 + 事件接线
+  const throttleSites = (tb.match(/tbNcHarvest\(/g) || []).length;
+  if (throttleSites < 5) bad.push('tbNcHarvest 只有 ' + throttleSites + ' 处（要 >=5：定义 + 导出 + 至少 4 个事件分派）');
+  if (!/EVAL_TB_NAMECLASS_HARVEST_THROTTLED = tbNcHarvest/.test(tb)) bad.push('没有导出 EVAL_TB_NAMECLASS_HARVEST_THROTTLED');
+  // ⑤ 诊断入口
+  if (!/go 聊天/.test(eh)) bad.push('没有诊断入口（/eh go 聊天）');
+  if (bad.length) { console.log('CHAT COLOR WIRING CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
+  console.log('CHAT COLOR WIRING CHECK: 挂在聊天入口内 + 白拿缓存 + 无服务器查询 + 限频采集 + 诊断入口');
+})();
+
 // ===== UI ICON CHECK（1.71.3）：新 UI 用的**自包含**图标必须真的在磁盘上 =====
 // 背景：本客户端纹理路径写错时**什么都不画**（不报错、不崩，只是空白）——而本轮新增的
 //   「类别图标 / 弹窗标题图标」都是刚从 UnrealQuest 拷进本插件的 .tga：漏拷一个、

@@ -705,4 +705,10 @@ GetFriendInfo = function(i)
   if not r then return nil end
   return r.name, r.level or 10, r.class or "法师", r.zone or "艾尔文森林", (r.online ~= false)
 end
+-- ★1.73.12 聊天名字着色：采集只读「名册条数」。桩必须**真的**存在这三个 API ——
+--   否则生产代码里那条「type(X) == "function"」守卫会让整条采集路径在测试里**从未被走到**
+--   （本项目老坑：桩太宽松 → 断言失明）。条数由上面三张行表驱动。
+GetNumGuildMembers = function() return table.getn(TEST.guildRows or {}) end
+GetNumWhoResults = function() return table.getn(TEST.whoRows or {}) end
+GetNumFriends = function() return table.getn(TEST.friendRows or {}) end
 
