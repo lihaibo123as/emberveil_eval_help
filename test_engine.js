@@ -523,9 +523,36 @@ function checkIconAssets() {
   const rowBody = (iRow >= 0) ? tb.slice(iRow, iNextFn > 0 ? iNextFn : iRow + 2000) : '';
   if (!/tbNameClassPut\(d\.name/.test(rowBody))
     bad.push('EVAL_TB_PAINT_ROW 里没有「白拿」写缓存（tbNameClassPut(d.name, ...)）');
-  // ③ 频率防护：不许有服务器写/查询动作
-  const forbidden = tb.match(/\bSendWho\b|\bGuildRoster\s*\(|\bShowFriends\s*\(/g) || [];
-  if (forbidden.length) bad.push('出现了向服务器发查询的调用：' + forbidden.join(', ') + '（违反频率防护总则）');
+  // ③ ★频率防护（1.73.12 用户追加要求「未缓存角色默认开启主动查询」后的新判据）：
+  //   SendWho 是**服务器查询**，可以存在，但**只允许出现在限频滴出 tbWhoTick 里**——
+  //   聊天热路径（AddMessage 包装体）里直接发 = 一句话一发 = 必被服务器反滥用（本项目 1.68.2 被踢线的同族教训）。
+  //   并且 tbWhoTick 里四道闸门必须都在：频率下限 / 单飞 / 负缓存 / 队列上限。
+  //   GuildRoster() / ShowFriends() 仍然是**一律禁止**（那不是用户要求的，纯粹白打扰服务器）。
+  const forbidden = tb.match(/\bGuildRoster\s*\(|\bShowFriends\s*\(/g) || [];
+  if (forbidden.length) bad.push('出现了未被允许的服务器查询：' + forbidden.join(', '));
+  const iTick = tb.indexOf('local function tbWhoTick()');
+  const iTickEnd = tb.indexOf('EVAL_TB_WHO_TICK = tbWhoTick');
+  const iSend = tb.indexOf('SendWho');
+  if (iSend < 0) bad.push('没有 SendWho（用户要求「未缓存角色默认开启主动查询」）');
+  else if (!(iTick > 0 && iTickEnd > iTick && iSend > iTick && iSend < iTickEnd))
+    bad.push('SendWho 出现在限频滴出 tbWhoTick 之外（热路径直接发查询 = 会被服务器反滥用）');
+  if (iTick > 0 && iTickEnd > iTick) {
+    const tickBody = tb.slice(iTick, iTickEnd);
+    // 「发不发」的两道闸门必须在**发送处**：频率下限 + 单飞
+    if (tickBody.indexOf('TB_WHO_GAP') < 0) bad.push('tbWhoTick 里没有频率下限 TB_WHO_GAP');
+    if (tickBody.indexOf('TB.whoPending') < 0) bad.push('tbWhoTick 里没有单飞判据 TB.whoPending');
+  }
+  // 「该不该入队」的两道闸门必须在**入队口**（唯一入队口）：负缓存 + 队列上限
+  const iEnq = tb.indexOf('function EVAL_TB_WHO_ENQUEUE');
+  const iEnqEnd = iTick; // 入队口的下一个代码块就是滴出函数（★注释已被摘掉，不能拿注释当锚点）
+  if (!(iEnq > 0 && iEnqEnd > iEnq)) bad.push('找不到唯一的入队口 EVAL_TB_WHO_ENQUEUE');
+  else {
+    const enqBody = tb.slice(iEnq, iEnqEnd);
+    if (enqBody.indexOf('EVAL_TB_WHO_ISMISS') < 0) bad.push('入队口没有负缓存判据（查不到的名字会被反复查）');
+    if (enqBody.indexOf('TB_WHO_QMAX') < 0) bad.push('入队口没有队列上限判据');
+  }
+  const inserts = (tb.match(/table\.insert\(tbWhoQ,/g) || []).length;
+  if (inserts !== 1) bad.push('入队口不唯一（table.insert(tbWhoQ, ...) 出现 ' + inserts + ' 次；入队只允许一条路）');
   // ④ 限频入口 + 事件接线
   const throttleSites = (tb.match(/tbNcHarvest\(/g) || []).length;
   if (throttleSites < 5) bad.push('tbNcHarvest 只有 ' + throttleSites + ' 处（要 >=5：定义 + 导出 + 至少 4 个事件分派）');
@@ -534,7 +561,7 @@ function checkIconAssets() {
   if (!/go 聊天/.test(eh)) bad.push('没有诊断入口（/eh go 聊天）');
   if (eh.indexOf('string.find(sarg, "^试")') < 0) bad.push('诊断里没有「试」自检分支（/eh go 聊天 试 <文本>）');
   if (bad.length) { console.log('CHAT COLOR WIRING CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
-  console.log('CHAT COLOR WIRING CHECK: 挂在聊天入口内 + 白拿缓存 + 无服务器查询 + 限频采集 + 诊断入口');
+  console.log('CHAT COLOR WIRING CHECK: 挂在聊天入口内 + 白拿缓存 + SendWho 只在限频滴出（四道闸门齐）+ 限频采集 + 诊断入口');
 })();
 
 // ===== UI ICON CHECK（1.71.3）：新 UI 用的**自包含**图标必须真的在磁盘上 =====

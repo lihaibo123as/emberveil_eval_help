@@ -104,6 +104,8 @@ local function tbCfg()
   if c.tb.colorClass == nil then c.tb.colorClass = true end
   -- ★1.73.12 聊天窗名字着色：同上默认开（引擎侧与窗口着色共用同一份名字缓存）
   if c.tb.chatColor == nil then c.tb.chatColor = true end
+  -- ★1.73.12 未缓存角色的主动查询：用户要求**默认开启**（工具箱里可关）
+  if c.tb.whoQuery == nil then c.tb.whoQuery = true end
   tbMigrateBuy(c.tb) -- ★1.71.3 自动购买：老条目补 每次数量/启用 字段
   return c.tb
 end
@@ -214,6 +216,12 @@ function EVAL_TB_CHAN_INSTALL_ONE(key)
         TB.chatPainted = (TB.chatPainted or 0) + 1
         TB.chatLast = who
       end
+    end
+    -- ★1.73.12（用户追加要求）：未缓存的名字 → 排进**主动查询**队列；
+    --   ★这里只负责「入队」，真正**发不发**由 tbWhoTick 的四道闸门决定（频率下限/单飞/负缓存/队列上限）。
+    if not selfPrint and type(EVAL_TB_WHO_CANDIDATE) == "function" then
+      local cand = EVAL_TB_WHO_CANDIDATE(msg)
+      if cand and type(EVAL_TB_WHO_ENQUEUE) == "function" then pcall(EVAL_TB_WHO_ENQUEUE, cand) end
     end
     return orig(self, out, ...)
   end
@@ -923,6 +931,206 @@ function EVAL_TB_CHATCOLOR_RESET() -- 测试用：清计数与样本（不还原
   TB.ncAdded = 0
 end
 -- 勾/取消勾后的即时动作：立刻补一次缓存（勾上就能用）+ 如实回一句，并把**自己的名字**染出来当示例
+-- ===== 未缓存角色的**主动查询**（/who）—— 1.73.12 用户追加要求 =====
+-- 用户原话：「未缓存角色默认开启主动查询进缓存,设定个查询频率限制,做好查询不到结果的做好防止重复查询的机制.
+--   将关闭查询的开关在工具箱内设置,输出查询日志.归入调试日志」
+-- ★这是对先前「不做自动 /who」的**用户明确推翻**（原决定是「查不到就不上色，不打扰服务器」）→ 现在做，
+--   但按本项目《频率防护总则》**四道闸门一起上**（缺一道就是被踢线/刷屏/白刷服务器）：
+--   ① **频率下限**：每 TB_WHO_GAP 秒**最多一发**（/who 是服务器写动作，绝不许连发）；
+--   ② **单飞**：上一发的结果没回来（或超时 TB_WHO_PEND 秒）之前，绝不发下一发（防结果串台）；
+--   ③ **负缓存**：查过没查到的名字记档 TB_WHO_MISS_TTL 秒，期内**不再查** —— 这就是用户要的「防止重复查询」；
+--   ④ **队列上限**：待查队列满了就**如实丢弃并记日志**（不静默、不无限堆积）。
+-- ★查询日志一律进**调试日志**（EVAL_LOGLINE → /eh logdump 或存档文件），**不刷聊天框**（用户明确「归入调试日志」）。
+local TB_WHO_GAP = 5         -- 两次查询的最小间隔（秒）
+local TB_WHO_PEND = 8        -- 单飞超时（秒）：这么久还没 WHO_LIST_UPDATE 就当没查到
+local TB_WHO_MISS_TTL = 1800 -- 负缓存时长（秒）：查不到的名字半小时内不再查
+local TB_WHO_QMAX = 20       -- 待查队列上限
+local tbWhoQ = {}            -- 待查队列（存规范化后的键）
+
+-- 开关：nil 视为**开**（用户要求「未缓存角色默认开启主动查询」）
+function EVAL_TB_WHO_ON()
+  local tb = tbCfg()
+  if not tb then return true end
+  return tb.whoQuery ~= false
+end
+
+-- 纯函数：这一行聊天里**该去查的人名**（没有就返回 nil）。
+--   ★与「上色候选」是**两套不同严格度**的判据（并且各自只有一份实现）：
+--     上色认得多（方括号 / 行首 / 玩家链接），**查询只认「发送者位置」**——
+--     去查方括号频道名、地名、物品名这种是白打扰服务器（次数还是有限的）。
+--   判据（照用户截图的真实形态定的）：
+--     · 方括号里是**名字形状**：无空白/点/冒号/竖线/括号，≥2 字符、≤16 字符、不是纯数字；
+--     · 且处在**发送者位置**：紧跟其后就是冒号，**或者**它是本行**第一个**方括号段、且这段之后
+--       到下一个左方括号之前还出现过冒号（覆盖「名字 + 动词 + 冒号」= 说话 这种形态）。
+--   例：[Ionol]: 1 ✓ · [Ionol] 说: 1 ✓ · [公会] [Ionol]: 1 → 只取 [Ionol] ✓（公会那段后面是方括号不是冒号）
+--       [4. 世界防务] 加入频道。 ✗（名字形状不过）· 玩家链接形态不进查询（那是上色判据的事）
+function EVAL_TB_WHO_CANDIDATE(msg)
+  if type(msg) ~= "string" or msg == "" then return nil end
+  local first = true
+  local from = 1
+  for _ = 1, 4 do
+    local s, e = string.find(msg, "%[[^%[%]]*%]", from)
+    if not s then return nil end
+    local inner = string.sub(msg, s + 1, e - 1)
+    local rest = string.sub(msg, e + 1)
+    local len = tbNameCharLen(inner)
+    local okShape = (string.find(inner, "[%s%.%:|%[%]]") == nil) and len >= 2 and len <= 16 and
+                    (string.find(inner, "^%d+$") == nil)
+    if okShape then
+      local colon = string.find(rest, "[:：]")
+      local nxt = string.find(rest, "%[")
+      if (colon and colon == 1) or (first and colon and (nxt == nil or colon < nxt)) then
+        return inner
+      end
+    end
+    first = false
+    from = e + 1
+  end
+  return nil
+end
+
+-- 负缓存：查不到的名字记档（期内不再查）；表本身也有上限与过期清理，避免无限长
+local function tbWhoMissPut(key)
+  TB.whoMiss = TB.whoMiss or {}
+  TB.whoMiss[key] = (type(GetTime) == "function") and GetTime() or 0
+  TB.whoMissN = (TB.whoMissN or 0) + 1
+  local n = 0
+  for _ in pairs(TB.whoMiss) do n = n + 1 end
+  if n > 200 then
+    local now = (type(GetTime) == "function") and GetTime() or 0
+    for k, t in pairs(TB.whoMiss) do if now - t > TB_WHO_MISS_TTL then TB.whoMiss[k] = nil end end
+  end
+end
+function EVAL_TB_WHO_ISMISS(name)
+  local k = tbNameClassKey(name)
+  if not k or type(TB.whoMiss) ~= "table" then return false end
+  local t = TB.whoMiss[k]
+  if not t then return false end
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  if now - t > TB_WHO_MISS_TTL then TB.whoMiss[k] = nil return false end
+  return true
+end
+
+local function tbWhoQueued(key)
+  for i = 1, table.getn(tbWhoQ) do if tbWhoQ[i] == key then return true end end
+  return false
+end
+-- 入队（**唯一的入队口**；返回 true=入队 / false + 原因）—— 所有「不查」的理由都在这一处判
+function EVAL_TB_WHO_ENQUEUE(name)
+  if not EVAL_TB_WHO_ON() then return false, "off" end
+  if TB.whoNoApi then return false, "noapi" end
+  local k = tbNameClassKey(name)
+  if not k then return false, "badname" end
+  if tbNameClass[k] then return false, "cached" end
+  if EVAL_TB_WHO_ISMISS(k) then return false, "miss" end -- ★用户要的「查不到就别反复查」
+  if tbWhoQueued(k) or (TB.whoPending and TB.whoPending.key == k) then return false, "dup" end
+  if table.getn(tbWhoQ) >= TB_WHO_QMAX then
+    TB.whoDropped = (TB.whoDropped or 0) + 1
+    EVAL_LOGLINE("[名字查询] 队列已满（" .. tostring(TB_WHO_QMAX) .. " 条），丢弃：" .. tostring(name))
+    return false, "full"
+  end
+  table.insert(tbWhoQ, k)
+  TB.whoQueued = (TB.whoQueued or 0) + 1
+  EVAL_LOGLINE("[名字查询] 入队：" .. tostring(name) .. "（未缓存 → 待查；队列 " .. tostring(table.getn(tbWhoQ)) .. "）")
+  return true
+end
+
+-- 滴出（每帧由 OnUpdate 调；频率下限 + 单飞都在这里）
+local function tbWhoTick()
+  if not EVAL_TB_WHO_ON() then return end
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  local p = TB.whoPending
+  if p then
+    if now - p.at < TB_WHO_PEND then return end -- 单飞：结果没回来就等着
+    tbWhoMissPut(p.key)                          -- 超时 = 当作没查到（记负缓存，别反复查）
+    TB.whoPending = nil
+    TB.whoTimeout = (TB.whoTimeout or 0) + 1
+    EVAL_LOGLINE("[名字查询] 超时无结果（" .. tostring(TB_WHO_PEND) .. " 秒）：" .. tostring(p.name) .. " → 记入负缓存")
+    return
+  end
+  if table.getn(tbWhoQ) < 1 then return end
+  if now - (TB.whoLast or -999) < TB_WHO_GAP then return end -- ★频率下限
+  local key = table.remove(tbWhoQ, 1)
+  if tbNameClass[key] then return end -- 排队期间已被别的来源补上 → 不查
+  TB.whoLast = now
+  TB.whoPending = { key = key, name = key, at = now }
+  TB.whoSent = (TB.whoSent or 0) + 1
+  if type(SendWho) ~= "function" then
+    TB.whoPending = nil
+    TB.whoNoApi = true
+    EVAL_LOGLINE("[名字查询] 本客户端没有 SendWho → 主动查询不可用（自动退化为只用本地缓存）")
+    return
+  end
+  local ok = pcall(SendWho, key)
+  if ok then
+    EVAL_LOGLINE("[名字查询] 已发出：/who " .. tostring(key) .. "（第 " .. tostring(TB.whoSent) ..
+      " 次；结果回来前不再发，下次最早 " .. tostring(TB_WHO_GAP) .. " 秒后）")
+  else
+    TB.whoPending = nil
+    EVAL_LOGLINE("[名字查询] SendWho 调用失败：" .. tostring(key))
+  end
+end
+EVAL_TB_WHO_TICK = tbWhoTick -- 供每帧 / 测试直调
+
+-- WHO_LIST_UPDATE 到了：先结清在途那一发（查到 → 进缓存；没有 → 记负缓存），再顺带采集整张结果表
+function EVAL_TB_WHO_ONRESULTS()
+  local p = TB.whoPending
+  if not p then return false, nil end
+  local n = 0
+  if type(GetNumWhoResults) == "function" then
+    local ok, v = pcall(GetNumWhoResults)
+    if ok and type(v) == "number" then n = v end
+  end
+  local found = false
+  if type(GetWhoInfo) == "function" then
+    for i = 1, n do
+      local okp, nm, _g, _lv, _race, klass = pcall(GetWhoInfo, i)
+      if okp and type(nm) == "string" and tbNameClassKey(nm) == p.key then
+        found = true
+        tbNameClassPut(nm, klass)
+      end
+    end
+  end
+  TB.whoPending = nil
+  TB.whoLast = (type(GetTime) == "function") and GetTime() or TB.whoLast
+  if found then
+    TB.whoHit = (TB.whoHit or 0) + 1
+    EVAL_LOGLINE("[名字查询] 查到：" .. tostring(p.name) .. " → 已进名字缓存（可上色了）")
+  else
+    tbWhoMissPut(p.key)
+    EVAL_LOGLINE("[名字查询] 没查到：" .. tostring(p.name) .. "（" .. tostring(n) .. " 条结果里没有）→ 记入负缓存，期内不再查")
+  end
+  return found, p.name
+end
+
+function EVAL_TB_WHO_STATE()
+  local miss = 0
+  for _ in pairs(TB.whoMiss or {}) do miss = miss + 1 end
+  return { on = EVAL_TB_WHO_ON(), noApi = TB.whoNoApi and true or false, queued = table.getn(tbWhoQ),
+           pending = TB.whoPending and TB.whoPending.name or nil, gap = TB_WHO_GAP, pend = TB_WHO_PEND,
+           ttl = TB_WHO_MISS_TTL, qmax = TB_WHO_QMAX,
+           sent = TB.whoSent or 0, hit = TB.whoHit or 0, missN = TB.whoMissN or 0, missed = miss,
+           dropped = TB.whoDropped or 0, timeout = TB.whoTimeout or 0, enq = TB.whoQueued or 0 }
+end
+function EVAL_TB_WHO_RESET() -- 测试用：清队列/在途/负缓存/计数（**不清**名字缓存）
+  tbWhoQ = {}
+  TB.whoPending, TB.whoLast, TB.whoNoApi = nil, nil, nil
+  TB.whoMiss = {}
+  TB.whoSent, TB.whoHit, TB.whoMissN, TB.whoDropped, TB.whoTimeout, TB.whoQueued = 0, 0, 0, 0, 0, 0
+end
+-- 勾/取消勾：关掉 = 立刻停止并**清空队列**（如实记日志）；打开 = 记一行
+function EVAL_TB_WHO_AFTER_TOGGLE()
+  local on = EVAL_TB_WHO_ON()
+  if not on then
+    local n = table.getn(tbWhoQ)
+    tbWhoQ, TB.whoPending = {}, nil
+    EVAL_LOGLINE("[名字查询] 已关闭主动查询（清空待查队列 " .. tostring(n) .. " 条）")
+  else
+    EVAL_LOGLINE("[名字查询] 已开启主动查询（未缓存的名字会按 " .. tostring(TB_WHO_GAP) .. " 秒/次限频查询）")
+  end
+  return on
+end
+
 function EVAL_TB_CHATCOLOR_AFTER_TOGGLE()
   pcall(tbNcHarvest, "unit")
   pcall(tbNcHarvest, "guild")
@@ -1432,7 +1640,7 @@ local function tbQuestTick()
   tbQScanLast = now
   tbQuestDiff()
 end
-function EVAL_TB_TICK() tbQuestTick() tbQPump() end -- 测试直调（= qf OnUpdate 本体）
+function EVAL_TB_TICK() tbQuestTick() tbQPump() tbWhoTick() end -- 测试直调（= qf OnUpdate 本体）
 
 -- 事件统一入口（测试可直调）
 -- ★1.71.2 事件节流：QUEST_* 三类事件加上闸门后，**被拦下的不再入队、也不再播报**——
@@ -1495,6 +1703,8 @@ function EVAL_TB_ONEVENT(e)
   elseif e == "FRIENDLIST_UPDATE" then
     tbNcHarvest("friends")
   elseif e == "WHO_LIST_UPDATE" then
+    -- ★1.73.12 先结清在途那一发（查到 → 进缓存；没有 → 写负缓存），再顺带采集整张结果表
+    EVAL_TB_WHO_ONRESULTS()
     tbNcHarvest("who")
   elseif e == "PARTY_MEMBERS_CHANGED" or e == "RAID_ROSTER_UPDATE" or e == "PLAYER_TARGET_CHANGED" or
          e == "PLAYER_ENTERING_WORLD" or e == "VARIABLES_LOADED" then
@@ -1538,6 +1748,7 @@ qf:SetScript("OnUpdate", function()
   tbChanRetry() -- ★1.71.3 频道屏蔽挂载的兜底重试（限频 1s；挂上后只做一次布尔判断，开销可忽略）
   tbPaintRetry() -- ★1.73.10 职业着色挂载的兜底重试（限频 1s；三个窗口都挂上后只做一次布尔判断）
   tbQuestTick() tbQPump() -- 1.69.2 任务延迟扫描 + 队列滴出
+  tbWhoTick() -- ★1.73.12 名字主动查询的滴出（频率下限/单飞都在它里面；队列空时只有几次判断）
 end)
 
 -- ===== Tab 内容模型（分组归类；列表行动态展开） =====
@@ -1566,6 +1777,8 @@ local function tbModel()
     { t = "c", key = "colorClass", label = L("TB_COLORCLASS"), tip = L("TB_COLORCLASS_TIP") },
     -- ★1.73.12 用户要求：「聊天窗 内的名字能着色吗?需要走缓存?」→ 聊天文字里的角色名按职业色（默认开）
     { t = "c", key = "chatColor", label = L("TB_CHATCOLOR"), tip = L("TB_CHATCOLOR_TIP") },
+    -- ★1.73.12 用户追加要求：未缓存的名字**主动查一次**（默认开；可在这里关掉）
+    { t = "c", key = "whoQuery", label = L("TB_WHOQ"), tip = L("TB_WHOQ_TIP") },
     { t = "g", label = L("TB_GUILDNOTIFY"), tip = L("TB_GUILDNOTIFY_TIP") },
     { t = "h", label = L("TB_H_QAUTO") }, -- 1.69.0 任务组拆分：自动交接 / 任务通知
     -- ★1.71.2 用户要求：自动接取 / 交付任务 **分成两个开关**（原来共用一个 quest 键，想只接取不交付做不到）
@@ -1856,6 +2069,8 @@ function EVAL_TB_BUILD(root, page, refreshes)
       -- ★1.73.12 聊天名字着色同样是**即时生效**的全局行为：勾上就补缓存 + 回一句示例；
       --   已打印的历史行**改不了**（聊天框不复渲）→ 提示语里写清「对之后的消息生效」。
       if row.modelKey == "chatColor" then pcall(EVAL_TB_CHATCOLOR_AFTER_TOGGLE) end
+      -- ★1.73.12 关掉主动查询 = 立刻停止并清空待查队列（如实记日志，不静默）
+      if row.modelKey == "whoQuery" then pcall(EVAL_TB_WHO_AFTER_TOGGLE) end
       EVAL_TB_REFRESH()
     end)
     chk:SetScript("OnEnter", function()

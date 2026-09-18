@@ -7365,6 +7365,32 @@ if type(SlashCmdList) == "table" then
           say("同层包装（频道屏蔽）：经过 " .. tostring(chSeen) .. " 条；吞掉 " .. tostring(chFiltered) ..
             " 条；我们的包装在位=" .. tostring(chLive))
         end
+        -- ★1.73.12 未缓存角色的**主动查询**（用户要求：默认开 + 限频 + 防重复查询 + 可关 + 日志进调试日志）
+        if type(EVAL_TB_WHO_STATE) == "function" then
+          local w = EVAL_TB_WHO_STATE()
+          say("名字查询（主动 /who）：开关=" .. (w.on and "开" or "关") .. "；队列 " .. tostring(w.queued) ..
+            "；在途 " .. (w.pending and tostring(w.pending) or "无") .. "；已发 " .. tostring(w.sent) ..
+            " 次（查到 " .. tostring(w.hit) .. " / 查不到 " .. tostring(w.missN) .. " / 超时 " ..
+            tostring(w.timeout) .. " / 丢 " .. tostring(w.dropped) .. "）")
+          say("负缓存 " .. tostring(w.missed) .. " 条（" .. tostring(w.ttl) .. " 秒内**不重复查**；限频 " ..
+            tostring(w.gap) .. " 秒/发，单飞超时 " .. tostring(w.pend) .. " 秒，队列上限 " .. tostring(w.qmax) .. "）")
+          if w.noApi then
+            say("|cffff8080判读：本客户端没有 SendWho → 主动查询不可用（已自动退化为只用本地缓存）|r")
+          end
+          -- 最近 3 条查询日志（完整日志走 /eh logdump；用户要求「查询日志归入调试日志」）
+          local buf = (type(EVAL_HELP_CONFIG) == "table" and type(EVAL_HELP_CONFIG.log) == "table") and
+                      EVAL_HELP_CONFIG.log or {}
+          local shown = 0
+          for i = table.getn(buf), 1, -1 do
+            local ln = tostring(buf[i])
+            if string.find(ln, "[名字查询]", 1, true) ~= nil then
+              say("  " .. ln)
+              shown = shown + 1
+              if shown >= 3 then break end
+            end
+          end
+          if shown == 0 then say("（调试日志里还没有查询记录；完整日志用 /eh logdump）") end
+        end
         local sm = st.samples
         if type(sm) == "table" and table.getn(sm) > 0 then
           say("最近 " .. table.getn(sm) .. " 条聊天**原文** → 我们的判决（★格式校准就看这一屏）：")

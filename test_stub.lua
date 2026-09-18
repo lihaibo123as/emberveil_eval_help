@@ -710,5 +710,12 @@ end
 --   （本项目老坑：桩太宽松 → 断言失明）。条数由上面三张行表驱动。
 GetNumGuildMembers = function() return table.getn(TEST.guildRows or {}) end
 GetNumWhoResults = function() return table.getn(TEST.whoRows or {}) end
+-- ★1.73.12 名字主动查询：记录发出的 /who（断言「发了什么 / 发了几次 / 间隔对不对」）
+TEST.whoSent = {}
+SendWho = function(filter)
+  TEST.whoSent = TEST.whoSent or {}
+  table.insert(TEST.whoSent, tostring(filter))
+  return true
+end
 GetNumFriends = function() return table.getn(TEST.friendRows or {}) end
 

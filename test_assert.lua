@@ -8926,4 +8926,146 @@ do
   print("                真实打印入口真的带色 · 开关即时生效 · 与频道屏蔽共用一层互不干扰 · 采集限频 · 多聊天窗")
 end
 
+-- 122) ★★★1.73.12 未缓存角色的**主动查询**（用户追加要求：
+--   「未缓存角色默认开启主动查询进缓存,设定个查询频率限制,做好查询不到结果的做好防止重复查询的机制.
+--     将关闭查询的开关在工具箱内设置,输出查询日志.归入调试日志」）
+--   判据：① 只查「发送者位置」的名字（拿用户截图的真实形态当用例；频道名/地名/物品名一律不查）；
+--         ② 已缓存 / 负缓存 / 队列里已有 → 一律不重复入队；
+--         ③ ★频率下限（一次 tick 只发一发）+ ★★单飞（上一发没结果绝不发下一发）；
+--         ④ 查到 → 进缓存；没查到 → 负缓存（**期内再遇到不再查**）；超时也记负缓存；
+--         ⑤ 工具箱开关关掉 = 不入队 + 队列清空 + 一发都不发；
+--         ⑥ 查询日志进**调试日志**（EVAL_HELP_CONFIG.log，/eh logdump 可查）；⑦ 队列满如实丢弃并记日志；
+--         ⑧ 诊断命令里能看到查询状态。
+do
+  local pack122 = EVAL_LOCALES[EVAL_GET_LANG()] or EVAL_LOCALES.zhCN
+  local savedTb122 = EVAL_HELP_CONFIG.tb
+  local savedTime122, savedLog122 = TEST.time, EVAL_HELP_CONFIG.log
+  EVAL_HELP_CONFIG.tb = {}
+  EVAL_HELP_CONFIG.log = {}
+  EVAL_TB_WHO_RESET()
+  TEST.whoSent = {}
+  -- ① 谁该被查（纯函数；用例直接照用户截图里的真实形态写）
+  eq(EVAL_TB_WHO_CANDIDATE("[Ionol]: 1"), "Ionol", "①★[名字]: 形态 → 该查")
+  eq(EVAL_TB_WHO_CANDIDATE("[Ionol] 说: 1"), "Ionol", "①★[名字] 说: 形态 → 该查")
+  eq(EVAL_TB_WHO_CANDIDATE("[Ionol] 悄悄地说: 1"), "Ionol", "①★悄悄话形态 → 该查")
+  eq(EVAL_TB_WHO_CANDIDATE("发送给 [Ionol]: 1"), "Ionol", "①★发送给 [名字]: → 该查")
+  eq(EVAL_TB_WHO_CANDIDATE("[公会] [Ionol]: 1"), "Ionol", "①★★[公会] [名字]: → **只取名字**（公会那段不算）")
+  eq(EVAL_TB_WHO_CANDIDATE("[4. 世界防务] [Ionol]: 1"), "Ionol", "①★★频道前缀 + [名字]: → 只取名字")
+  eq(EVAL_TB_WHO_CANDIDATE("[4. 世界防务] 加入频道。"), nil, "①★★反向：频道通知不许拿去查（白打扰服务器）")
+  eq(EVAL_TB_WHO_CANDIDATE("[公会] 今天活动取消"), nil, "①★反向：只有公会前缀、没有发送者 → 不查")
+  eq(EVAL_TB_WHO_CANDIDATE("|cff9d9d9d|Hitem:1:0:0:0|h[守夜人]|h|r 获得了"), nil, "①★反向：物品链接不查")
+  eq(EVAL_TB_WHO_CANDIDATE("[123] 说: 1"), nil, "①★反向：纯数字（等级/计数）不查")
+  eq(EVAL_TB_WHO_CANDIDATE(nil), nil, "①nil 不崩")
+  -- ② 已缓存 / 队列里已有 → 不重复入队
+  EVAL_TB_NAMECLASS_PUT("已知道", "战士")
+  eq(EVAL_TB_WHO_ENQUEUE("已知道"), false, "②★已在缓存里 → 不查")
+  eq(EVAL_TB_WHO_ENQUEUE("陌路人"), true, "②★没有缓存 → 入队")
+  eq(EVAL_TB_WHO_ENQUEUE("陌路人"), false, "②★★同一个名字已在队列 → 不重复入队")
+  -- ③ 频率下限 + 单飞
+  TEST.time = 30000
+  EVAL_TB_WHO_RESET()
+  TEST.whoSent = {}
+  EVAL_TB_WHO_ENQUEUE("甲甲") EVAL_TB_WHO_ENQUEUE("乙乙") EVAL_TB_WHO_ENQUEUE("丙丙")
+  EVAL_TB_WHO_TICK()
+  eq(table.getn(TEST.whoSent), 1, "③★★★一次 tick 只发一发（绝不在同一帧连发查询）")
+  eq(EVAL_TB_WHO_STATE().queued, 2, "③★剩下 2 个还在队列里等着")
+  EVAL_TB_WHO_TICK()
+  eq(table.getn(TEST.whoSent), 1, "③★★★单飞：上一发还没有结果 → 打死也不发第二发")
+  -- ④ 结果回来 → 进缓存；没查到 → 负缓存（用户要的「防止重复查询」）
+  TEST.whoRows = { { name = "甲甲", class = "牧师" } }
+  local hit122 = EVAL_TB_WHO_ONRESULTS()
+  eq(hit122, true, "④★在途那一发的结果被结清（查到）")
+  eq(EVAL_TB_NAMECLASS_GET("甲甲"), "PRIEST", "④★★查到 → 立刻进名字缓存（之后就能上色）")
+  TEST.whoRows = {}
+  TEST.time = 30000 + 5
+  EVAL_TB_WHO_TICK()
+  eq(table.getn(TEST.whoSent), 2, "④★过了频率窗口 → 发第二发（上一个查到了不影响下一个）")
+  EVAL_TB_WHO_ONRESULTS()
+  eq(EVAL_TB_WHO_ISMISS("乙乙"), true, "④★★没查到 → 记入负缓存")
+  local sent122 = table.getn(TEST.whoSent)
+  EVAL_TB_WHO_TICK()
+  eq(table.getn(TEST.whoSent), sent122, "④c★★★结果刚回来、但**频率窗口没到** → 照样一发不发（限频独立于单飞）")
+  eq(EVAL_TB_WHO_ENQUEUE("乙乙"), false, "④★★★负缓存期内再遇到这个名字 → **不再查**（「防止重复查询」）")
+  -- ④b 单飞超时：迟迟没有结果 → 也记负缓存（不会卡死在「等结果」上）
+  TEST.time = 30000 + 20
+  EVAL_TB_WHO_TICK() -- 队列里剩下的「丙丙」这一发出去（在途）
+  eq(EVAL_TB_WHO_STATE().pending ~= nil, true, "④b前置：有一发在途（超时判据的前提）")
+  eq(table.getn(TEST.whoSent), 3, "④b前置：第三发已发出")
+  TEST.time = 30000 + 20 + 9 -- 超过单飞超时 8 秒
+  EVAL_TB_WHO_TICK()
+  eq(EVAL_TB_WHO_STATE().timeout, 1, "④b★★超时无结果 → 计入超时并记负缓存（不卡死、也不重发）")
+  eq(EVAL_TB_WHO_ISMISS("丙丙"), true, "④b★超时的那个名字也进了负缓存")
+  eq(table.getn(TEST.whoSent), 3, "④b★超时只是记账，**没有**因为超时而补发一发")
+  -- ⑤ 工具箱开关关掉 = 不入队 + 一发都不发 + 队列清空
+  EVAL_HELP_CONFIG.tb.whoQuery = false
+  eq(EVAL_TB_WHO_ON(), false, "⑤★开关读的是配置（工具箱 → 队伍/社交；默认开）")
+  eq(EVAL_TB_WHO_ENQUEUE("丁丁"), false, "⑤★★关掉后不再入队")
+  TEST.whoSent = {}
+  EVAL_TB_WHO_TICK()
+  eq(table.getn(TEST.whoSent), 0, "⑤★★★关掉后就算队列里还有东西也一发都不发")
+  EVAL_TB_WHO_AFTER_TOGGLE()
+  eq(EVAL_TB_WHO_STATE().queued, 0, "⑤★关掉时清空待查队列")
+  eq(EVAL_TB_WHO_ENQUEUE("戊戊"), false, "⑤★关掉后任何新名字都不入队")
+  -- ⑥ 查询日志进**调试日志**（用户明确：输出查询日志.归入调试日志）
+  EVAL_HELP_CONFIG.tb.whoQuery = true
+  EVAL_HELP_CONFIG.log = {}
+  EVAL_TB_WHO_RESET()
+  TEST.chat = "" -- ★清掉前面诊断命令留下的输出，否则「一条都不上屏」这条断言测的是别人
+  TEST.time = 40000
+  EVAL_TB_WHO_ENQUEUE("己己")
+  EVAL_TB_WHO_TICK()
+  TEST.whoRows = { { name = "己己", class = "法师" } }
+  EVAL_TB_WHO_ONRESULTS()
+  local logs122 = table.concat(EVAL_HELP_CONFIG.log or {}, "\n")
+  eq(string.find(logs122, "[名字查询] 入队：己己", 1, true) ~= nil, true, "⑥★★入队有日志（调试日志）")
+  eq(string.find(logs122, "[名字查询] 已发出：/who 己己", 1, true) ~= nil, true, "⑥★★发出有日志")
+  eq(string.find(logs122, "[名字查询] 查到：己己", 1, true) ~= nil, true, "⑥★★查到也有日志")
+  eq(string.find(tostring(TEST.chat or ""), "名字查询", 1, true) == nil, true, "⑥★★★查询日志**不刷聊天框**（只进调试日志）")
+  -- ⑥b 查不到也要有日志（用户要的「查询不到结果」的机制，日志就是它的可观测面）
+  EVAL_HELP_CONFIG.log = {}
+  TEST.time = 50000
+  EVAL_TB_WHO_ENQUEUE("庚庚")
+  EVAL_TB_WHO_TICK()
+  TEST.whoRows = {}
+  EVAL_TB_WHO_ONRESULTS()
+  local logs122b = table.concat(EVAL_HELP_CONFIG.log or {}, "\n")
+  eq(string.find(logs122b, "[名字查询] 没查到：庚庚", 1, true) ~= nil, true, "⑥b★★查不到也要有日志（并说明已记入负缓存）")
+  -- ⑦ 队列上限：满了如实丢弃并记日志
+  EVAL_TB_WHO_RESET()
+  EVAL_HELP_CONFIG.log = {}
+  TEST.time = 41000
+  local okN122, full122 = 0, 0
+  for i = 1, 21 do
+    local okq, why = EVAL_TB_WHO_ENQUEUE("队列测试" .. tostring(i))
+    if okq then okN122 = okN122 + 1 elseif why == "full" then full122 = full122 + 1 end
+  end
+  eq(okN122, 20, "⑦★队列上限 20：前 20 个入队（实际 " .. tostring(okN122) .. "）")
+  eq(full122, 1, "⑦★第 21 个被如实拒收")
+  eq(string.find(table.concat(EVAL_HELP_CONFIG.log or {}, "\n"), "队列已满", 1, true) ~= nil, true, "⑦★★拒收**有日志**（不静默丢）")
+  -- ⑧ 工具箱里真的有这一行（开关放工具箱）+ 标签走语言包 + 默认开
+  local hasWho122, labelWho122 = false, nil
+  for _, it122 in ipairs(EVAL_TEST_TB_ROWS()) do
+    if it122.key == "whoQuery" then hasWho122 = true labelWho122 = it122.label end
+  end
+  eq(hasWho122, true, "⑧★★工具箱列模型里有「未缓存角色主动查询」这一行（队伍/社交组）")
+  eq(labelWho122, pack122.TB_WHOQ, "⑧★标签走语言包")
+  eq(type(pack122.TB_WHOQ_TIP) == "string" and pack122.TB_WHOQ_TIP ~= "", true, "⑧★悬停提示存在（三语言齐全）")
+  EVAL_HELP_CONFIG.tb = savedTb122 and EVAL_HELP_CONFIG.tb and savedTb122 or EVAL_HELP_CONFIG.tb
+  EVAL_HELP_CONFIG.tb = savedTb122
+  eq(EVAL_TB_WHO_ON(), true, "⑧★默认开启（配置里没有这个键也视为开）")
+  -- ⑨ 诊断命令里能看到查询状态
+  EVAL_TB_WHO_RESET()
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 聊天")
+  local c122 = tostring(TEST.chat or "")
+  eq(string.find(c122, "名字查询", 1, true) ~= nil, true, "⑨★★/eh go 聊天 打印主动查询的状态（开关/队列/在途/计数/负缓存）")
+  eq(string.find(c122, "负缓存", 1, true) ~= nil, true, "⑨★并说明负缓存条数（这就是「防止重复查询」的可观测口）")
+  EVAL_TB_WHO_RESET()
+  EVAL_HELP_CONFIG.log = savedLog122
+  TEST.time = savedTime122
+  TEST.whoRows = nil
+  print("  名字主动查询：只查发送者位置（频道名/物品/纯数字不查）· 已缓存/负缓存/重复 → 不入队 · 一次 tick 只发一发 + 单飞")
+  print("                查到进缓存 · 查不到记负缓存（期内不再查）· 超时不卡死 · 开关在工具箱 · 日志只进调试日志 · 队列满如实丢弃")
+end
+
 print("ALL TESTS PASS")
