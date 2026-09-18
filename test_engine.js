@@ -634,6 +634,42 @@ function checkIconAssets() {
   console.log("STOP ATTACK WIRING CHECK: skillNoSlotOk 名单 7/7 + 被接线 " + callers + " 处 + 其余 " + sites.length + " 个站点逐行含 stopAllOf/followOf");
 })();
 
+// ===== WHEEL DIRECTION CHECK（1.73.3）：滚轮方向必须**单一来源**，且不许出现反向写法 =====
+// ★背景（用户实测）：「图标库的滚动监测鼠标滚动方向和滚动效果相反了」——5 处滚轮里 4 处是「off - d」
+//   （上滚 = 回到前面），图标库写成了「d > 0 → 下一页」= 反的；更糟的是**当时的断言把 -1 当「向上」**，
+//   把反向 bug 一起验过去了。★教训：方向这种「全局约定」必须有单一来源 + 源码检查兜底，
+//   否则每个新列表都会各写一遍、错一个没人发现。
+(function () {
+  const files = ["EvalHelp.lua", "Toolbox.lua", "DataSearch.lua", "IconBrowser.lua", "PetHelper.lua"];
+  const sites = [];
+  const bad = [];
+  for (const f of files) {
+    const p = path.join(__dirname, f);
+    if (!fs.existsSync(p)) continue;
+    const lines = fs.readFileSync(p, "utf8").split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      // 两种写法都要认：obj:SetScript("OnMouseWheel", fn) 与 pcall(obj.SetScript, obj, "OnMouseWheel", fn)
+      if (!/SetScript[^\n]*"OnMouseWheel"/.test(lines[i])) continue;
+      const body = lines.slice(i, Math.min(lines.length, i + 14)).join("\n");
+      sites.push(f + ":" + (i + 1));
+      if (body.indexOf("EVAL_WHEEL_DIR(") < 0) bad.push(f + ":" + (i + 1) + " 没有走 EVAL_WHEEL_DIR");
+      if (/\+\s*(dir|d)\b/.test(body.replace(/EVAL_WHEEL_DIR/g, ""))) bad.push(f + ":" + (i + 1) + " 位移与方向同号（上滚往后 = 反了）");
+      if (/d\s*>\s*0\s*and\s*1\s*or\s*-1/.test(body)) bad.push(f + ":" + (i + 1) + " 还在用旧的反向写法");
+    }
+  }
+  if (sites.length < 5) {
+    console.log("WHEEL DIRECTION CHECK: FAIL - 只找到 " + sites.length + " 处滚轮处理器（应 >= 5）(" + sites.join(", ") + ")");
+    process.exitCode = 1;
+    return;
+  }
+  if (bad.length) {
+    console.log("WHEEL DIRECTION CHECK: FAIL - " + bad.join(" | "));
+    process.exitCode = 1;
+    return;
+  }
+  console.log("WHEEL DIRECTION CHECK: " + sites.length + " 处滚轮处理器全部走 EVAL_WHEEL_DIR（上滚 = 回到前面）");
+})();
+
 // ===== PACK LIST CHECK（1.73.0）：发布包清单必须**跟着 .toc 走**，条目数基准也要对得上 =====
 // ★背景两笔代价：① 1.72.0 发现随包的 zip **只有 25 个文件**（缺 IconBrowser.lua + 5 个 examples）
 //   —— 用户装了会**直接报错**；② 1.73.0 新增 PetData.lua / PetHelper.lua 后，记忆体第 9 步里的打包脚本

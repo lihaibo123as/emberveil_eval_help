@@ -57,6 +57,23 @@
 
 -- ============ 输出：聊天 + 调试日志 ============
 
+-- ===== ★★★1.73.3 滚轮方向（**单一来源**）=====
+-- 本客户端（1.12 系）OnMouseWheel 的方向约定：**向上滚 = +1，向下滚 = -1**（见 EvalHelp war 页脚本的老注释）。
+--   ★三个坑必须在这一处解决，各页面自己取值必错一个：
+--   ① 处理器既有 `function(a, b)` 写法，也有 `function()` + 全局 arg1 的老写法 → 三种都要认；
+--   ② a/b 里还可能是 self（表格/userdata）→ 必须**类型检查**，不能直接当数字；
+--   ③ 方向语义：**上滚 = 回到前面**（列表 offset 减、页码减）。1.73.3 实事故：图标库写成了
+--      `d > 0 → 下一页`（方向反了），而其余 4 处都是 `off - d` 的正确写法。
+--   ★用法：`local dir = EVAL_WHEEL_DIR(a, b)`（0 = 不是滚轮事件）；列表用 `off - dir`，翻页用 `STEP(-dir)`。
+function EVAL_WHEEL_DIR(a, b)
+  local d = 0
+  if type(b) == "number" then d = b
+  elseif type(a) == "number" then d = a
+  elseif type(arg1) == "number" then d = arg1 end
+  if d == 0 then return 0 end
+  return (d > 0) and 1 or -1
+end
+
 local function say(msg)
   if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
     DEFAULT_CHAT_FRAME:AddMessage("|cff66ccffEVAL_HELP:|r " .. tostring(msg))

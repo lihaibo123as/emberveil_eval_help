@@ -1076,11 +1076,13 @@ function EVAL_TB_BUILD(root, page, refreshes)
   TB.indicator = ind
   table.insert(widgets, ind)
   pcall(root.EnableMouseWheel, root, true)
-  root:SetScript("OnMouseWheel", function()
+  root:SetScript("OnMouseWheel", function(a, b)
     -- 仅 Tab3 可见时响应（widgets 显隐契约：非本 Tab 全部 Hide，首行组标题必然隐藏）
     if not (TB.rows[1] and TB.rows[1].hdr:IsVisible()) then return end
-    local d = arg1 or 0
-    TB.off = math.max(0, TB.off - d)
+    -- ★1.73.3 方向单一来源（原来只读全局 arg1；现在 a/b/arg1 三种写法都认）
+    local dir = EVAL_WHEEL_DIR(a, b)
+    if dir == 0 then return end
+    TB.off = math.max(0, TB.off - dir) -- 上滚 = 回到前面
     EVAL_TB_REFRESH()
   end)
 

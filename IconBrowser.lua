@@ -460,9 +460,12 @@ function EVAL_IB_BUILD(root, page, refreshes)
     local active = true
     if type(EVAL_HELP_CFG_TAB) == "function" then active = (EVAL_HELP_CFG_TAB() == IB_TAB) end
     if active then
-      local d = b or arg1 or 0
-      if d ~= 0 then
-        EVAL_IB_STEP(d > 0 and 1 or -1)
+      -- ★1.73.3 修方向（用户报「滚动方向与效果相反」）：本客户端**上滚 = +1**，
+      --   而上滚应当回到**前面**（上一页）——原来写成 `d > 0 → +1（下一页）`，正好反了。
+      --   方向一律从 EVAL_WHEEL_DIR 取（单一来源；其余 4 处滚轮也都是「上滚 = 回到前面」）。
+      local dir = EVAL_WHEEL_DIR(a, b)
+      if dir ~= 0 then
+        EVAL_IB_STEP(-dir)
         return
       end
     end

@@ -2907,9 +2907,10 @@ function EVAL_DS_BUILD(root, page, refreshes)
   root:SetScript("OnMouseWheel", function(a, b)
     -- 数据检索 Tab 可见（搜索框在列即代表本 Tab 激活）且处于详情模式时才消费滚轮
     if dsTabActive() and dsMode() == "detail" then
-      local d = b or arg1 or 0
-      if d ~= 0 then
-        DS.detOff = math.max(0, (DS.detOff or 0) - d)
+      -- ★1.73.3 方向单一来源（上滚 = 回到前面）
+      local dir = EVAL_WHEEL_DIR(a, b)
+      if dir ~= 0 then
+        DS.detOff = math.max(0, (DS.detOff or 0) - dir)
         EVAL_DS_REFRESH()
         return
       end

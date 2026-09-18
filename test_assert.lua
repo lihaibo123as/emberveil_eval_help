@@ -5425,8 +5425,11 @@ do
   eq(select(1, EVAL_IB_TEST_PAGE()) == pageBefore + 1, true, "★★点「下页」真的翻了一页")
   local wheel84 = EVAL_CFG_WHEEL_SCRIPT()
   eq(type(wheel84) == "function", true, "★拿到配置窗的滚轮脚本（链式接管）")
-  if type(wheel84) == "function" then wheel84(nil, -1) end
-  eq(select(1, EVAL_IB_TEST_PAGE()) == pageBefore, true, "★★滚轮向上真的翻回上一页（第 5 个 Tab 时消费滚轮）")
+  -- ★★★1.73.3 方向约定修正：本客户端**上滚 = +1**（见 Core.lua EVAL_WHEEL_DIR 的说明 + war 页老注释）。
+  --   ★原断言用 -1 当「向上」→ 它和图标库那段反向代码**互相印证**，把 bug 一起验过去了
+  --     （断言自己写错了方向 = 本项目最恨的「绿但真错」）。现在两个方向都必须对。
+  if type(wheel84) == "function" then wheel84(nil, 1) end
+  eq(select(1, EVAL_IB_TEST_PAGE()) == pageBefore, true, "★★滚轮向上（+1）真的翻回上一页（第 5 个 Tab 时消费滚轮）")
   -- ★正向证据：用 +3（足以往前翻页）——若被消费，页码必然变；只测 -1 会被「页码夹取到 1」掩盖
   --   （本轮变异实测：写 -1 时「无条件消费滚轮」的变异体**存活**，就是被夹取骗过去了）。
   EVAL_HELP_CFG_SETTAB(1)
@@ -8172,6 +8175,99 @@ do
   EVAL_TEST_SE_CLEAR()
   EVAL_HELP_CFG_SETTAB(1)
   print("  debuff 类型多选：集合判定（空集=任意）+ 文本往返 (Magic/Poison) + 真实多选面板 + 互斥「任意负面」+ 窄格文案与悬停全清单")
+end
+
+-- 115) ★★★1.73.3 滚轮方向统一（用户报「图标库滚动方向与效果相反」）
+--   约定（单一来源 = Core.lua EVAL_WHEEL_DIR）：**上滚 = +1 = 回到前面**（列表 offset 减 / 页码减）。
+--   ★为什么必须有这一组：5 处滚轮里 4 处本来就对，图标库那处是反的；而当时的断言**用 -1 当「向上」**，
+--     正好和反向代码互相印证 —— 断言自己写错方向 = 本项目最恨的「绿但真错」。
+do
+  -- ① 方向助手：三种老写法都要认，且 0 表示「不是滚轮」
+  eq(EVAL_WHEEL_DIR(nil, 1), 1, "①上滚 = +1（本客户端约定）")
+  eq(EVAL_WHEEL_DIR(nil, -1), -1, "①下滚 = -1")
+  eq(EVAL_WHEEL_DIR(2, nil), 1, "①方向写在第一个参数上也认")
+  eq(EVAL_WHEEL_DIR(nil, "x"), 0, "①非数字 = 不是滚轮事件（0，调用方必须原地返回）")
+  arg1 = -1
+  eq(EVAL_WHEEL_DIR(nil, nil), -1, "①1.12 老写法（方向在全局 arg1）也认")
+  arg1 = nil
+  local wheel115 = EVAL_CFG_WHEEL_SCRIPT()
+  eq(type(wheel115) == "function", true, "①拿到配置窗滚轮脚本（各 Tab 链式接管的那一个）")
+  local function fire(d) if type(wheel115) == "function" then wheel115(nil, d) end end
+  -- ② 图标库（用户报的那一处）：两个方向都要对
+  --   ★前置要自己建立：上一组（组 84）末尾把宏图标桩换成了 6 枚的小表 → 只剩一页，
+  --     页码夹取会把方向错误掩盖掉（本项目「前置不许靠别人留下的状态」）。
+  local savedMacro115 = TEST.macroIcons
+  local big115 = {}
+  for i = 1, 200 do big115[i] = "Spell_Fire_Test" .. tostring(i) end -- 必须够多：一页能放 ~54 枚
+  TEST.macroIcons = big115
+  EVAL_HELP_CFG_SETTAB(5)
+  EVAL_IB_SCAN(true)
+  EVAL_IB_SET_GROUP("all")
+  local p0 = select(1, EVAL_IB_TEST_PAGE())
+  local _, pgs0 = EVAL_IB_TEST_PAGE()
+  eq(pgs0 >= 2, true, "②前置：图标库多于一页（才能验方向）")
+  fire(-1)
+  local p1 = select(1, EVAL_IB_TEST_PAGE())
+  eq(p1 == p0 + 1, true, "②★★下滚（-1）→ 下一页：" .. tostring(p0) .. "→" .. tostring(p1))
+  fire(1)
+  local p2 = select(1, EVAL_IB_TEST_PAGE())
+  eq(p2 == p1 - 1, true, "②★★★上滚（+1）→ **上一页**（用户报的正是这里反了）：" .. tostring(p1) .. "→" .. tostring(p2))
+  -- ③ 抓宠列表（另一处真实滚动条）：上滚往回、下滚往后、到顶夹取
+  EVAL_HELP_CFG_SETTAB(6)
+  EVAL_PH_TEST_RESET()
+  EVAL_PH_SET_QUERY("") -- 全量列表，才滚得动
+  local o0 = EVAL_PH_TEST_STATE().off
+  fire(-3)
+  local o1 = EVAL_PH_TEST_STATE().off
+  -- ★一次滚轮只走一行：helper 把幅度归一成 ±1（有的客户端给 ±120 —— 若按原值位移会一次跳 120 行）
+  eq(o1 == o0 + 1, true, "③★★下滚往后一格（" .. tostring(o0) .. "→" .. tostring(o1) .. "；幅度归一 = 防 ±120 跳行）")
+  fire(1)
+  local o2 = EVAL_PH_TEST_STATE().off
+  eq(o2 == o1 - 1, true, "③★★★上滚真的往回走（" .. tostring(o1) .. "→" .. tostring(o2) .. "）")
+  fire(-1)
+  eq(EVAL_PH_TEST_STATE().off == o2 + 1, true, "③★★下滚真的往后走")
+  for _ = 1, 8 do fire(1) end
+  eq(EVAL_PH_TEST_STATE().off >= 0, true, "③上滚到顶夹取在 0（不越界）")
+  eq(EVAL_PH_TEST_STATE().off == 0, true, "③★★一直上滚真的回到列表开头")
+  -- 收尾（把桩还原成上一组留下的样子）
+  TEST.macroIcons = savedMacro115
+  EVAL_IB_SCAN(true)
+  EVAL_PH_TEST_RESET()
+  EVAL_HELP_CFG_SETTAB(1)
+  print("  滚轮方向：单一来源 EVAL_WHEEL_DIR（三种老写法都认）+ 图标库双向 + 抓宠列表双向与夹取")
+end
+
+-- 116) ★★★1.73.3 「/eh go icons」：把客户端**真实可用**的图标路径采集进存档（用户要求）
+--   为什么要这么做：内置图标打包在 Content\Paks，**磁盘上取不到**；宏图标表是唯一能把整表路径
+--   吐出来的官方入口。采集 → 写 SavedVariables → /reload 落盘 → 外部读出来生成图标路径文件。
+--   ★判据：路径必须**真的是客户端给的**（不是我们自己拼的）、失败要计数、不打印整表（避免刷屏/限流）。
+do
+  local saved116 = TEST.macroIcons
+  TEST.macroIcons = { "Spell_Fire_Fireball", "INV_Misc_Bag_01", 12345, "Ability_Warrior_Charge" }
+  TEST.chat = nil
+  local old116 = EVAL_HELP_CONFIG.iconDump
+  SlashCmdList["EVALHELP"]("go icons")
+  local d116 = EVAL_HELP_CONFIG.iconDump
+  eq(type(d116) == "table", true, "①采集结果写进了存档（EVAL_HELP_CONFIG.iconDump）")
+  eq(d116.n, 4, "①枚举到 4 枚（含 1 枚故意给非字符串）")
+  eq(d116.got, 3, "①★★只把**取成功**的路径收进来（3 枚）")
+  eq(d116.failed, 1, "①★★取失败要**计数**（非字符串那枚），不许静默略过")
+  eq(table.getn(d116.list), 3, "①列表长度 = got")
+  eq(d116.list[1], "Interface\\Icons\\Spell_Fire_Fireball", "①★★存的是**客户端给的原文**（Interface\\Icons\\… 完整路径）")
+  eq(string.find(tostring(TEST.chat), "4", 1, true) ~= nil, true, "①★★聊天里如实报了数量（用户要据此确认）")
+  eq(string.find(tostring(TEST.chat), "Interface\\Icons\\Spell_Fire_Fireball", 1, true) == nil, true, "①★★**不打印整表**（上千行会刷屏 + 撞反刷屏限流），只报数量与落盘提示")
+  eq(string.find(tostring(TEST.chat), "reload", 1, true) ~= nil, true, "①★★提示 /reload 让存档落盘（否则用户白等）")
+  -- 空表也要如实报告（不假装成功）
+  TEST.macroIcons = nil
+  TEST.chat = nil
+  SlashCmdList["EVALHELP"]("go icons")
+  eq(EVAL_HELP_CONFIG.iconDump.got, 0, "②一枚都取不到时长度为 0")
+  eq(string.find(tostring(TEST.chat), "一枚都没取到", 1, true) ~= nil, true, "②★★如实例外（不假装采集成功）")
+  -- 收尾
+  EVAL_HELP_CONFIG.iconDump = old116
+  TEST.macroIcons = saved116
+  TEST.chat = nil
+  print("  图标路径采集：/eh go icons 把宏图标表全表路径写进存档（成功/失败都计数、不刷屏、如实报数）")
 end
 
 print("ALL TESTS PASS")

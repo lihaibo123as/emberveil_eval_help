@@ -570,12 +570,13 @@ function EVAL_PH_BUILD(root, page, refreshes)
     local active = true
     if type(EVAL_HELP_CFG_TAB) == "function" then active = (EVAL_HELP_CFG_TAB() == PH_TAB) end
     if active then
-      local d = b or arg1 or 0
-      if d ~= 0 then
+      -- ★1.73.3 方向单一来源（上滚 = 回到前面）
+      local dir = EVAL_WHEEL_DIR(a, b)
+      if dir ~= 0 then
         if PH.view == "detail" then
-          PH.detOff = math.max(0, PH.detOff - d)
+          PH.detOff = math.max(0, PH.detOff - dir)
         else
-          PH.off = math.max(0, PH.off - d)
+          PH.off = math.max(0, PH.off - dir)
         end
         EVAL_PH_REFRESH()
         return

@@ -549,10 +549,7 @@ function EVAL_HELP_UI_BUILD()
   -- 悬停滚轮缩放（EnableMouseWheel 本客户端可能缺，全程 pcall——OneJudge 1.7.2 教训）
   if pcall(root.EnableMouseWheel, root, true) then
     pcall(root.SetScript, root, "OnMouseWheel", function(a, b)
-      local d = 0
-      if type(b) == "number" then d = b
-      elseif type(a) == "number" then d = a
-      elseif type(arg1) == "number" then d = arg1 end
+      local d = EVAL_WHEEL_DIR(a, b) -- ★1.73.3 方向单一来源（上滚=+1）
       if d == 0 then return end
       local s = (u.scale or 1) + (d > 0 and 0.1 or -0.1)
       s = math.min(1.6, math.max(0.5, s))
@@ -1657,10 +1654,11 @@ local function cfgBuild()
   end, nil, true)
   local okWheel = pcall(root.EnableMouseWheel, root, true)
   if okWheel then
-    root:SetScript("OnMouseWheel", function()
-      local d = arg1 -- 1.12 风格：滚轮方向在全局 arg1（上=+1）
-      if type(d) ~= "number" then return end
-      warUI.offset = math.max(0, (warUI.offset or 0) - d)
+    root:SetScript("OnMouseWheel", function(a, b)
+      -- ★1.73.3 方向统一走 EVAL_WHEEL_DIR（上滚=+1；本客户端老写法把方向放在全局 arg1，helper 三种都认）
+      local dir = EVAL_WHEEL_DIR(a, b)
+      if dir == 0 then return end
+      warUI.offset = math.max(0, (warUI.offset or 0) - dir) -- 上滚 = 回到前面
       EVAL_WAR_TAB_REFRESH()
     end)
   end
@@ -6997,6 +6995,34 @@ if type(SlashCmdList) == "table" then
       end
       if n == 0 then say(L("BIND_ST_NONE")) end
       say("绑法：战斗信息UI 方案行**右键**开弹窗；清空：右键「方案」标签；诊断：/eh go diag（写盘，需 /reload）")
+    elseif msg == "go icons" then
+      -- ★★★1.73.3 图标路径采集（用户要求）：「通过日志信息获取系统图标所有图片路径,存储到一个图标路径文件内」。
+      --   为什么只能这样做：客户端的内置图标打包在 Content\Paks，**磁盘上取不到**；唯一能把整表路径
+      --   吐出来的官方入口就是**宏图标表**（GetNumMacroIcons/GetMacroIconInfo 给的是路径字符串）。
+      --   采集结果写进 SavedVariables（EVAL_HELP_CONFIG.iconDump）→ /reload 后落盘 → 由外部读出来
+      --   生成图标路径文件（doc/图标路径清单.txt），供挑选/替换插件里的占位图标。
+      --   ★不打印整表（上千行会刷屏 + 撞反刷屏限流），只报数量与落盘提示（如实、不静默）。
+      local n = 0
+      if type(GetNumMacroIcons) == "function" then
+        local okn, v = pcall(GetNumMacroIcons)
+        if okn and type(v) == "number" then n = v end
+      end
+      local list, fail = {}, 0
+      for i = 1, n do
+        local oki, tex = pcall(GetMacroIconInfo, i)
+        if oki and type(tex) == "string" and tex ~= "" then table.insert(list, tex) else fail = fail + 1 end
+      end
+      EVAL_HELP_CONFIG.iconDump = {
+        t = (type(GetTime) == "function") and GetTime() or 0,
+        n = n, got = table.getn(list), failed = fail, list = list,
+      }
+      say("— 图标路径采集 —")
+      say(string.format("枚举 %d 枚 / 收到 %d 枚 / 取失败 %d 枚", n, table.getn(list), fail))
+      if table.getn(list) == 0 then
+        say("一枚都没取到：本客户端可能没有宏图标表（如实报告，不假装采集成功）")
+      else
+        say("已写入存档（EVAL_HELP_CONFIG.iconDump）→ 请 /reload 或小退让存档落盘，然后让 AI 读取该文件")
+      end
     elseif msg == "go tex" then
       -- ★1.72.2 光环「名字→纹理」学习表诊断（**分享方案排查专用**）：
       --   别人角色没学过某个 debuff 的纹理时，判定会先走「按名字扫描」并自动学回来；
@@ -7345,6 +7371,7 @@ if type(SlashCmdList) == "table" then
       say("|cffffff00异常自救:|r 技能不识别/界面异常/刚更新过插件 → 先 /reload 重载（配置已存盘不会丢）；重扫动作条 /eh go rescan")
       say("|cffffff00问题反馈:|r https://gitee.com/xeval/emberveil_eval_help.git —— 插件持续优化中，欢迎测试并留下宝贵意见")
       say("调试日志: /eh logdump 查看（存 SavedVariables，随 /reload 落盘）| /eh log 开关 | /eh logclear 清空")
+      say("图标路径采集: /eh go icons —— 把客户端宏图标表全表路径写入存档（/reload 后落盘）")
       say("数据检索诊断: /eh ds | /eh ds hud 地图诊断浮层(推荐) | /eh ds snap 一键快照 | /eh ds rnd 随机点测试 + rndstat 统计 | /eh ds trace 轨迹日志 | /eh ds probe 详情行几何")
       say("地图标注: 一个「地图标注(N)」按钮即可——点开勾选类别（=开关）；/eh ds cat <类别> on|off 命令行等价 | /eh ds clear 清空")
     else
