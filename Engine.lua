@@ -1168,7 +1168,67 @@ local function wready(name)
 end
 
 -- 出手一个技能：写动作日志（文件必写；wdebug 时同步聊天框）
-local function wuse(name, reason)
+-- ★★★1.72.4 「释放指定等级」的官方判据（本机 api_spell.html 原文）：
+--   · `CastSpell(id, bookType)` → **Protected: yes**（插件不能直调）
+--   · `CastSpellByName(name)` → Protected，**但 name 可以带括号等级**：
+--       "name may include rank in parentheses, for example Fireball(Rank 3)；
+--        text inside the parentheses must match the spell's subtext exactly；
+--        With no parentheses, the last known [rank]"  → 这就是指定等级的写法，Protected 走 RunScript 绕行。
+--   · `GetSpellName(spellID, bookType)` → **第二返回就是 rank/subtext**（中文客户端形如「等级 3」）
+--       → 等级列表直接从**法术书**枚举，不需要 tooltip、也不需要占动作格。
+--   ★频率防护：法术书扫描按名字缓存 SB_TTL 秒（一次扫描可能上百次 API 调用，绝不能每次按键都扫）。
+local sbCache, SB_TTL = {}, 2
+function EVAL_SPELLBOOK_RANKS(name)
+  if type(name) ~= "string" or name == "" then return {} end
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  local c = sbCache[name]
+  if c and (now - c.t) < SB_TTL then return c.list end
+  local out = {}
+  if type(GetNumSpellTabs) == "function" and type(GetSpellTabInfo) == "function" and type(GetSpellName) == "function" then
+    local okt, nt = pcall(GetNumSpellTabs)
+    if okt and type(nt) == "number" then
+      for tab = 1, nt do
+        local ok1, _tn, _tex, off, num = pcall(GetSpellTabInfo, tab)
+        if ok1 and type(off) == "number" and type(num) == "number" then
+          for i = off + 1, off + num do
+            local ok2, nm, sub = pcall(GetSpellName, i, "spell")
+            if ok2 and nm == name and type(sub) == "string" and sub ~= "" then
+              local dup = false
+              for _, v in ipairs(out) do if v == sub then dup = true break end end
+              if not dup then table.insert(out, sub) end
+            end
+          end
+        end
+      end
+    end
+  end
+  sbCache[name] = { t = now, list = out }
+  return out
+end
+-- 该「名字+等级」是否**真实存在**（CastSpellByName 要求括号内与 subtext 逐字相符，猜错会静默失败）
+function EVAL_SPELLBOOK_HAS(name, rank)
+  for _, v in ipairs(EVAL_SPELLBOOK_RANKS(name)) do if v == rank then return true end end
+  return false
+end
+-- 测试用：清空法术书缓存（模块级状态必须可重置）
+function EVAL_SPELLBOOK_TEST_RESET() sbCache = {} end
+
+local function wuse(name, reason, rank)
+  -- ★1.72.4 指定等级：`CastSpellByName("名(等级 N)")`（Protected → RunScript 绕行），**不占动作格**
+  if rank and rank ~= "" then
+    if not EVAL_SPELLBOOK_HAS(name, rank) then
+      -- ★绝不静默放行：等级拼错/该等级没学过 → 如实报错（CastSpellByName 括号内必须与 subtext 逐字相符）
+      wlog(name .. "跳过: 法术书里没有「" .. tostring(name) .. "(" .. tostring(rank) .. ")」这个等级")
+      return false
+    end
+    if type(RunScript) ~= "function" then wlog(name .. "跳过: 本客户端没有 RunScript") return false end
+    local esc = function(s) return (string.gsub(string.gsub(tostring(s), "\\", "\\\\"), '"', '\\"')) end
+    pcall(RunScript, 'CastSpellByName("' .. esc(name) .. "(" .. esc(rank) .. ')"' .. ')')
+    local rline = string.format("→ %s(%s) (%s)", name, rank, reason)
+    EVAL_LOGLINE(rline)
+    if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cff7fff7f" .. rline .. "|r") end
+    return true
+  end
   local pc = petCmdOf(name)
   if pc then
     -- 宠物指令（1.30.0）：不占动作条，直接调 Pet API；无宠物时静默跳过
@@ -2052,7 +2112,7 @@ function EVAL_RULE_RUN(rules)
   for _, r in ipairs(rules) do
     if r.enabled == false then
       -- 技能配置开关关掉的：静默跳过
-    elseif not wslots[r.skill] and not petCmdOf(r.skill) and not targetSelOf(r.skill) and not itemOf(r.skill) and not stanceOf(r.skill) and not cancelCastOf(r.skill) and not stopAllOf(r.skill) and not followOf(r.skill) then
+    elseif not (r.rank or wslots[r.skill]) and not petCmdOf(r.skill) and not targetSelOf(r.skill) and not itemOf(r.skill) and not stanceOf(r.skill) and not cancelCastOf(r.skill) and not stopAllOf(r.skill) and not followOf(r.skill) then
       wlog(r.skill .. "跳过: 不在动作条")
     elseif wImmuneTo(r.skill) then
       wlog(r.skill .. "跳过: 目标已免疫（学习记录 " .. tostring(st.targetName) .. "）")
@@ -2064,7 +2124,7 @@ function EVAL_RULE_RUN(rules)
       teamPickArg.rule = r
       local tsel = targetSelOf(r.skill)
       TARGET_SEL_ARG_LAST = tsel
-      local okw = wuse(r.skill, r.why or r.skill)
+      local okw = wuse(r.skill, r.why or r.skill, r.rank)
       teamPickArg.rule, TARGET_SEL_ARG_LAST = nil, nil
       if okw then
         acted = true
@@ -2076,7 +2136,7 @@ function EVAL_RULE_RUN(rules)
       local ok, why, trace
       if r.groups then ok, why, trace = groupsOK(r) else ok, why = condOK(r.when or {}, r.skill) end
       if ok then
-        if wuse(r.skill, r.why or r.skill) then
+        if wuse(r.skill, r.why or r.skill, r.rank) then
           -- 释放成功：记入释放日志（状态信息UI「最近释放」展示触发条件明细）
           st.castLog = st.castLog or {}
           table.insert(st.castLog, 1, {

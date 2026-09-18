@@ -205,6 +205,18 @@ DEFAULT_CHAT_FRAME = { AddMessage = function(_, msg) TEST.chat = (TEST.chat or "
 SlashCmdList = {}
 
 GetTime = function() return TEST.time or 1000 end
+-- ★1.72.4 法术书桩（「释放指定等级」用）：TEST.spellbook = { {name="火球术", sub="等级 3"}, ... }
+--   真客户端：GetNumSpellTabs / GetSpellTabInfo(返回 name,tex,offset,num) / GetSpellName(i,"spell") 的第二返回就是等级 subtext
+GetNumSpellTabs = function() return TEST.spellTabs or 1 end
+GetSpellTabInfo = function(tab)
+  if tab > (TEST.spellTabs or 1) then return nil end
+  return "测试页", "tex", 0, table.getn(TEST.spellbook or {})
+end
+GetSpellName = function(i, book)
+  local e = (TEST.spellbook or {})[i]
+  if not e then return nil end
+  return e.name, e.sub
+end
 -- ★1.70.47 队伍/团队成员桩（用户要求：一键扫描队伍 → 血/蓝/buff/debuff 条件）：
 --   TEST.team = { { unit="party1", name=, hp=, hpMax=, mana=, manaMax=, powerType=,
 --                   buffs={ {tex=,apps=} }, debuffs={ {tex=,apps=,type=} } }, ... }

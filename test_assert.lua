@@ -7636,4 +7636,53 @@ do
   print("  分享接收：容忍 1~2 秒迟到（提醒但保留缓冲）+ 只认 [EHPF#] 标识 + 发送限频 0.5s")
 end
 
+-- 108) ★★★1.72.4 「释放指定等级」（用户要求：技能右侧加等级下拉，默认无等级）
+--   官方判据（本机 api_spell.html 原文）：
+--     · `CastSpell(id, bookType)` = Protected ✗；`CastSpellByName(name)` = Protected，
+--       但 **name 可带括号等级**（"text inside the parentheses must match the spell's subtext exactly；
+--       With no parentheses, the last known [rank]"）→ 指定等级的正解，Protected 走 `RunScript` 绕行。
+--     · `GetSpellName(spellID, bookType)` **第二返回 = rank/subtext** → 等级列表直接从法术书枚举。
+--   ★判据：① 枚举出的等级与法术书一致（无 subtext 的技能没有等级可选）；
+--     ② 指定等级时**不在动作条也能出手**，且发出的脚本文本逐字正确；
+--     ③ 法术书里没有的等级 → **如实失败、一个字都不发**（绝不静默放行）；
+--     ④ 默认「无等级」→ 行为一字不变（仍要求动作条）。
+do
+  EVAL_SPELLBOOK_TEST_RESET()
+  TEST.spellbook = {
+    { name = "火球术", sub = "等级 1" },
+    { name = "火球术", sub = "等级 3" },
+    { name = "冰霜新星" },
+  }
+  local rs = EVAL_SPELLBOOK_RANKS("火球术")
+  eq(table.getn(rs), 2, "①法术书枚举出 2 个等级（got " .. tostring(table.getn(rs)) .. "）")
+  eq(rs[1], "等级 1", "①按法术书顺序")
+  eq(EVAL_SPELLBOOK_HAS("火球术", "等级 3"), true, "①该等级存在")
+  eq(EVAL_SPELLBOOK_HAS("火球术", "等级 9"), false, "①不存在的等级如实为假")
+  eq(table.getn(EVAL_SPELLBOOK_RANKS("冰霜新星")), 0, "①没有 subtext 的技能没有等级可选")
+  TEST.inCombat = false EVAL_HELP_UPDATE_STATE()
+  local savedP = EVAL_HELP_CONFIG.war.profiles
+  EVAL_HELP_CONFIG.war.profiles = { { name = "T", enabled = true, skills = {} } }
+  -- ② 指定等级 → 不占格 + 串逐字正确
+  TEST.runScripts = nil
+  eq(EVAL_RULE_RUN({ { skill = "火球术", rank = "等级 3", why = "测试", groups = EVAL_PARSE_CONDS("非战斗") } }), true,
+     "②指定等级时**不在动作条也能出手**（走 RunScript，不占格）")
+  local joined = table.concat(TEST.runScripts or {}, " | ")
+  eq(string.find(joined, 'CastSpellByName("火球术(等级 3)")', 1, true) ~= nil, true,
+     "②★★★发出的脚本逐字是 CastSpellByName(\"火球术(等级 3)\")（括号内必须与 subtext 一致）")
+  -- ③ 等级不存在 → 如实失败
+  TEST.runScripts = nil
+  eq(EVAL_RULE_RUN({ { skill = "火球术", rank = "等级 9", why = "测试", groups = EVAL_PARSE_CONDS("非战斗") } }), false,
+     "③法术书里没有的等级 → 不出手")
+  eq(TEST.runScripts == nil or table.getn(TEST.runScripts) == 0, true, "③★且一个字都没发出去（不静默放行）")
+  -- ④ 默认无等级 → 老路（仍要求动作条）
+  TEST.runScripts = nil
+  eq(EVAL_RULE_RUN({ { skill = "火球术", why = "测试", groups = EVAL_PARSE_CONDS("非战斗") } }), false,
+     "④默认「无等级」行为一字不变（不在动作条就不出手）")
+  -- 收尾
+  EVAL_HELP_CONFIG.war.profiles = savedP
+  TEST.spellbook = nil TEST.runScripts = nil
+  EVAL_SPELLBOOK_TEST_RESET()
+  print("  指定等级：法术书枚举等级 + CastSpellByName 走 RunScript + 不存在则如实失败 + 默认无等级走老路")
+end
+
 print("ALL TESTS PASS")
