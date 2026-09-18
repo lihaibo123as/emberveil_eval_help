@@ -4281,6 +4281,39 @@ local function seSecStep(cd, delta)
   cd.secN = v
 end
 
+-- ★1.72.4 测试观测口/注入口：「等级元素默认隐藏、设了才显示」必须能被断言（否则只是这一次的手工动作）
+function EVAL_TEST_SE_RANK()
+  local w = seUI and seUI.rankW
+  local shown, nameShown, txt = false, false, nil
+  if w and w.btn and w.btn.IsShown then
+    local ok, v = pcall(w.btn.IsShown, w.btn)
+    shown = (ok and v) and true or false
+    if seUI.rankName and seUI.rankName.IsShown then
+      local ok2, v2 = pcall(seUI.rankName.IsShown, seUI.rankName)
+      nameShown = (ok2 and v2) and true or false
+    end
+  end
+  if seUI and seUI.rankName and seUI.rankName.GetText then
+    local ok3, v3 = pcall(seUI.rankName.GetText, seUI.rankName)
+    if ok3 then txt = v3 end
+  end
+  return { exists = (w ~= nil), shown = shown, nameShown = nameShown,
+           rank = (seUI and seUI.ed and seUI.ed.rank) or nil, text = txt }
+end
+function EVAL_TEST_SE_SET_RANK(rk)
+  if not (seUI and seUI.ed) then return false end
+  seUI.ed.rank = (rk == nil or rk == "") and nil or rk
+  EVAL_HELP_SE_REFRESH()
+  return true
+end
+-- ★走**真实 OnClick 闭包**：右键入口这条接线必须被执行（只调判定函数测不出「压根没接上」）
+function EVAL_TEST_SE_RANK_CLICK(btn)
+  if not (seUI and seUI.skillBtn) then return false end
+  local ok, fn = pcall(seUI.skillBtn.GetScript, seUI.skillBtn, "OnClick")
+  if not (ok and type(fn) == "function") then return false end
+  fn(seUI.skillBtn, btn or "RightButton")
+  return true
+end
 function EVAL_HELP_SE_REFRESH()
   local ed = seUI.ed
   if not ed or not seUI.root then return end
@@ -4294,6 +4327,13 @@ function EVAL_HELP_SE_REFRESH()
   end
   seUI.skillName:SetText(tostring(ed.skill))
   if seUI.rankName then seUI.rankName:SetText(ed.rank or L("SE_RANK_ANY")) end
+  if seUI.rankW then -- ★1.72.4 有自定义等级才显示（没等级 = 一行只显示技能）
+    local vis = ed.rank and true or false
+    local how = vis and "Show" or "Hide"
+    pcall(seUI.rankW.btn[how], seUI.rankW.btn)
+    if seUI.rankW.bg then pcall(seUI.rankW.bg[how], seUI.rankW.bg) end
+    if seUI.rankName then pcall(seUI.rankName[how], seUI.rankName) end
+  end
   if seUI.catName then -- 分类按钮文字 = 当前技能所属类（1.32.3）
     local cl = { L("SK_CAT_1"), L("SK_CAT_2"), L("SK_CAT_3"), L("SK_CAT_4"), L("SK_CAT_5") }
     local ci = 2
@@ -4629,6 +4669,23 @@ local function SE_BUILD()
   icon:SetPoint("TOPLEFT", root, "TOPLEFT", 94, -24)
   icon:SetWidth(15) icon:SetHeight(15)
   seUI.skillIcon = icon
+  -- ★1.72.4 「释放指定等级」下拉（用户要求：技能右侧可选 不限/等级1/等级2…；★没设等级时元素不显示）。
+  --   ★入口：技能名上**右键**（等级元素默认隐藏 → 设了自定义等级才出现，此时也可点它改）。
+  --   ★选项来自**法术书**（GetSpellName 第二返回 = rank/subtext），保证括号内文本与客户端逐字相符
+  --     （CastSpellByName 的括号内容必须与 subtext 完全一致，所以不能自己编「等级 N」）。
+  --   ★默认「不限」= 老行为（技能须在动作条上、走 UseAction）。
+  --   ★锚点用技能名按钮：等级元素隐藏时它仍在屏幕上，弹出位置稳定。
+  local function seOpenRankMenu()
+    if not (seUI and seUI.ed) then return end
+    local opts = { L("SE_RANK_ANY") }
+    local ranks = EVAL_SPELLBOOK_RANKS(seUI.ed.skill)
+    for i = 1, table.getn(ranks) do opts[i + 1] = ranks[i] end
+    EVAL_DD_OPEN(seUI.skillBtn, opts, function(pi)
+      if not seUI.ed then return end
+      seUI.ed.rank = (pi == 1) and nil or ranks[pi - 1]
+      EVAL_HELP_SE_REFRESH()
+    end)
+  end
   -- 具体项下拉（二级）：直接弹当前分类的项列表
   -- 注意：seBtn 返回包裹表 { btn, bg, text }，不是按钮本体——锚点/加文字一律用 .btn（1.21.4 修复）
   local skW = seBtn(root, 114, -24, 100, 16, "", function()
@@ -4647,23 +4704,27 @@ local function SE_BUILD()
   skName:SetPoint("CENTER", skBtn, "CENTER", 0, 0)
   pcall(skName.SetWidth, skName, 96) -- 长名（物品:xxx）裁剪防溢出到启用框
   pcall(skName.SetNonSpaceWrap, skName, false)
+  -- ★1.72.4 技能名右键 = 设置/清除释放等级（等级元素默认隐藏 → 这是默认状态下的唯一入口）
+  --   ★必须链式转发 seBtn 已挂的左键处理器：SetScript 是单槽位，直接覆盖 = 左键点技能名打不开列表。
+  pcall(skBtn.RegisterForClicks, skBtn, "LeftButtonUp", "RightButtonUp")
+  local skPrevClick = skBtn:GetScript("OnClick")
+  skBtn:SetScript("OnClick", function(a, b)
+    local mbtn = (type(a) == "string" and a) or (type(b) == "string" and b) or (type(arg1) == "string" and arg1) or "LeftButtonUp"
+    if string.find(mbtn, "RightButton", 1, true) then seOpenRankMenu() return end
+    if skPrevClick then skPrevClick(a, b) end
+  end)
   seUI.skillName = skName
   -- ★1.72.4 「释放指定等级」下拉（用户要求：技能右侧加一个「不限 / 等级1 / 等级2 …」）
   --   选项来自**法术书**（GetSpellName 第二返回），保证括号内与 subtext 逐字相符；
   --   默认「不限」= 老行为（要求技能在动作条上、走 UseAction）。
-  local rkW = seBtn(root, 218, -24, 88, 16, L("SE_RANK_ANY"), function() -- ★1.72.4 紧贴技能名右侧；单一元素：标题即当前值（默认「不限」）
-    if not seUI.ed then return end
-    local opts = { L("SE_RANK_ANY") }
-    local ranks = EVAL_SPELLBOOK_RANKS(seUI.ed.skill)
-    for i = 1, table.getn(ranks) do opts[i + 1] = ranks[i] end
-    EVAL_DD_OPEN(seUI.rankBtn, opts, function(pi)
-      if not seUI.ed then return end
-      seUI.ed.rank = (pi == 1) and nil or ranks[pi - 1]
-      EVAL_HELP_SE_REFRESH()
-    end)
-  end)
+  local rkW = seBtn(root, 218, -24, 88, 16, L("SE_RANK_ANY"), seOpenRankMenu) -- ★1.72.4 标题=当前等级；★默认隐藏（见 rankW）
   seUI.rankBtn = rkW.btn
   seUI.rankName = rkW.text
+  seUI.rankW = rkW
+  -- ★初始态：不显示（真正的判据在 EVAL_HELP_SE_REFRESH 里按 ed.rank 显隐——单点判据；
+  --   这两行只是「建出来就是藏着的」初始值，变异实测它不是保护点，别把它当保护点）
+  pcall(rkW.btn.Hide, rkW.btn)
+  pcall(rkW.text.Hide, rkW.text)
   local enChk = CreateFrame("Button", nil, root)
   enChk:SetWidth(14) enChk:SetHeight(14)
   pcall(enChk.EnableMouse, enChk, true)
@@ -5565,11 +5626,12 @@ function EVAL_HELP_SE_SAVE()
     r.skill = ed.skill
     r.enabled = ed.enabled
     r.groups = groups
-    say("已保存技能: " .. tostring(ed.skill) .. " → " .. uiEsc(EVAL_GROUP_STR(groups)))
+    r.rank = ed.rank -- ★1.72.4 等级随技能一起保存（不保存 = 用户设了等级却永远不生效）
+    say("已保存技能: " .. tostring(ed.skill) .. (ed.rank and ("(" .. tostring(ed.rank) .. ")") or "") .. " → " .. uiEsc(EVAL_GROUP_STR(groups))) -- ★1.72.4 等级一并回报
   else
     -- 1.33.0 取消 8 技能上限（配置窗列表支持滚动）
-    table.insert(p.skills, { skill = ed.skill, enabled = ed.enabled, groups = groups, why = ed.skill })
-    say("已添加技能: " .. tostring(ed.skill) .. " → " .. uiEsc(EVAL_GROUP_STR(groups)))
+    table.insert(p.skills, { skill = ed.skill, enabled = ed.enabled, groups = groups, why = ed.skill, rank = ed.rank }) -- ★1.72.4
+    say("已添加技能: " .. tostring(ed.skill) .. (ed.rank and ("(" .. tostring(ed.rank) .. ")") or "") .. " → " .. uiEsc(EVAL_GROUP_STR(groups))) -- ★1.72.4 等级一并回报
   end
   pcall(EVAL_WAR_TAB_REFRESH)
   if seUI.root then seUI.root:Hide() end
@@ -5587,6 +5649,7 @@ function EVAL_HELP_SE_OPEN(profIdx, skillIdx, presetSkill)
     ed.skill = r.skill
     ed.enabled = r.enabled ~= false
     ed.conds = seGroupsToLinear(r.groups)
+    ed.rank = r.rank -- ★1.72.4 载入已有等级（编辑时标题要显示它）
   else
     ed.skill = presetSkill or "攻击" -- 1.48.0 白名单已删，兜底用「攻击」
     ed.enabled = true

@@ -278,7 +278,7 @@ PM_HINT = "Left-click a profile = activate; right-click = open this window (rena
   LANG_RELOAD = "Language switched to %s — /reload to apply everywhere",
 
   -- ===== 1.35.0 P1 =====
-  SE_TITLE = "Skill Editor (click name/param buttons for dropdowns)",
+  SE_TITLE = "Skill Editor (click name/param buttons for dropdowns - right-click the skill name to set a rank)",
   SE_ENABLE = "Enable this skill",
   SE_HEADER = "Rel   Condition        Params                            Result",
   SE_WHEN = "When",
