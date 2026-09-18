@@ -1321,6 +1321,12 @@ local function cfgBuild()
   local NAV_BW = 78 -- 单个按钮宽（自然宽度：最长标签「案例模版」4 字 ×12px + 余量）
   local NAV_ROW_Y = CLOSE_MIDY + NAV_H / 2 -- 顶边 y（中线对齐关闭）
   local NAV_X0 = CLOSE_LEFT - NAV_TAIL_GAP - (NAV_BW * 2 + NAV_GAP * 1) -- 整组靠右（第十六轮 [接收] 已删 → 2 个按钮）
+  -- ★★★1.73.8 交给其它 Tab 页的**底部行几何**（生产读值口，不是测试专用）：
+  --   图标库的「分页信息 + 翻页按钮」要挪到与 [关闭] **同一行**并对齐它。
+  --   ★为什么必须从这里读：CLOSE_MIDY / CLOSE_LEFT 是**本文件的单一来源**，别的文件读不到 local ——
+  --     各写一份 y 就是「两份真值」，改一处必然漂移（与「窗口宽度单一来源 cfWinWidth()」同一条律）。
+  EVAL_HELP_CFG_BOTTOM = { w = W, midY = CLOSE_MIDY, closeLeft = CLOSE_LEFT, closeW = CLOSE_W,
+                           closeH = CLOSE_H, rowY = NAV_ROW_Y, rowH = NAV_H, navX0 = NAV_X0 }
   local navBtns = {}
   local function navBtn(idx, label, fn, tip)
     local b = CreateFrame("Button", nil, root)

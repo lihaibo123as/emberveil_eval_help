@@ -23,7 +23,17 @@ local IB_TAB = 5 -- 配置窗第 5 个 Tab（与 EvalHelp.lua 的 tabNames 顺�
 --     所以这一条必须先算后放（本项目「布局类需求先算可用空间」的铁律）。
 --   · 每页枚数 = 列数 × 行数（中文窗 660 → floor((660-40)/34)=18 列 → **162 枚/页**，原 108 枚）。
 local IB_CELL, IB_ICON, IB_ROWS, IB_PADX = 34, 26, 9, 20
-local IB_Y_STATUS, IB_Y_GROUP, IB_Y_GRID = -56, -76, -100
+local IB_Y_GROUP, IB_Y_GRID = -76, -100
+-- ★★★1.73.8 用户：「分页信息这行移动到底部和关闭同行.对齐关闭,别重叠」
+--   → 状态行（共 N 枚 / 第 x/y 页）+ [上页][下页][重扫] 从**顶部**（原 IB_Y_STATUS=-56）
+--     挪到**窗口底部那一行**，与 [关闭] **中线对齐**，且三段（状态文字 / 翻页按钮 / 关闭）互不重叠。
+--   ★★几何**绝不写死**：底部行中线与 [关闭] 左边缘从 EvalHelp 的读值口 EVAL_HELP_CFG_BOTTOM() 取
+--     （CLOSE_MIDY / CLOSE_LEFT 是那边的单一来源）；各写一份必然漂移 —— 本项目老坑。
+--   ★排布 = [状态文字 …] ←(留 8px)→ [上页][下页][重扫] ←(留 IB_TAIL_GAP)→ [关闭]
+local IB_TAIL_GAP = 10   -- 翻页按钮组右端与 [关闭] 左边缘的间隔
+local IB_BTN_W = 52      -- 单个翻页按钮宽（与改动前一致）
+local IB_BTN_GAP = 4     -- 按钮之间的间隔
+local IB_STATUS_GAP = 8  -- 状态文字右端与按钮组左端的间隔
 
 -- ===== 自绘基础件（与 Toolbox/DataSearch 同风格：WHITE8X8 纯色 + 字体链兜底） =====
 local function ibSolid(tex, r, g, b, a)
@@ -445,22 +455,37 @@ function EVAL_IB_BUILD(root, page, refreshes)
   IB.W = W
   IB.root = root
 
+  -- ★★★1.73.8 底部行几何：与 [关闭] 同一行（中线对齐），整组停在关闭**左边**
+  --   · 主来源 = EvalHelp 的读值口 EVAL_HELP_CFG_BOTTOM()（生产口）；拿不到就按关闭按钮的公式回退
+  --     （页面不崩、也不写死坐标）
+  --   · 状态文字宽度 = 到按钮组左端再留 IB_STATUS_GAP —— 「三段不重叠」是**算出来**的，不是靠运气
+  local BOT = (type(EVAL_HELP_CFG_BOTTOM) == "function") and EVAL_HELP_CFG_BOTTOM() or nil
+  local okh, hWin = pcall(root.GetHeight, root)
+  if type(hWin) ~= "number" or hWin <= 0 then hWin = 460 end
+  local botMidY = (BOT and tonumber(BOT.midY)) or -(hWin - 10 - 11) -- 10=底边距 11=关闭高/2
+  local closeLeft = (BOT and tonumber(BOT.closeLeft)) or (W - 12 - 64)
+  IB.botMidY, IB.closeLeft = botMidY, closeLeft
+  local bw = IB_BTN_W
+  local grpW = bw * 3 + IB_BTN_GAP * 2
+  local bx = closeLeft - IB_TAIL_GAP - grpW            -- 按钮组左端（右端 = closeLeft - IB_TAIL_GAP）
+  local btnTop = botMidY + 8                           -- 按钮高 16 → 中线对齐关闭的中线
+
   -- 状态行（左）：共 N 枚 / 第 x/y 页；接口缺失时在这里如实说明
   local stFS = ibText(root, 10, 0.85, 0.82, 0.70)
-  stFS:SetPoint("TOPLEFT", root, "TOPLEFT", IB_PADX, IB_Y_STATUS)
-  pcall(stFS.SetWidth, stFS, W - 300)
+  stFS:SetPoint("TOPLEFT", root, "TOPLEFT", IB_PADX, botMidY + 5)
+  local stW = bx - IB_STATUS_GAP - IB_PADX
+  if stW < 120 then stW = 120 end
+  pcall(stFS.SetWidth, stFS, stW)
   pcall(stFS.SetJustifyH, stFS, "LEFT")
   pcall(stFS.SetNonSpaceWrap, stFS, false)
   IB.statusFS = stFS
   table.insert(widgets, stFS)
 
-  -- 右上：翻页 + 重扫
-  local bw = 52
-  local bx = W - IB_PADX - bw * 3 - 8
+  -- 右下：翻页 + 重扫（与 [关闭] 同行、停在其左侧）
   IB.btns = {}
-  IB.btns.prev = ibBtn(root, bx, IB_Y_STATUS, bw, L("IB_PREV"), function() EVAL_IB_STEP(-1) end, widgets).btn
-  IB.btns.next = ibBtn(root, bx + bw + 4, IB_Y_STATUS, bw, L("IB_NEXT"), function() EVAL_IB_STEP(1) end, widgets).btn
-  IB.btns.rescan = ibBtn(root, bx + (bw + 4) * 2, IB_Y_STATUS, bw, L("IB_RESCAN"),
+  IB.btns.prev = ibBtn(root, bx, btnTop, bw, L("IB_PREV"), function() EVAL_IB_STEP(-1) end, widgets).btn
+  IB.btns.next = ibBtn(root, bx + bw + IB_BTN_GAP, btnTop, bw, L("IB_NEXT"), function() EVAL_IB_STEP(1) end, widgets).btn
+  IB.btns.rescan = ibBtn(root, bx + (bw + IB_BTN_GAP) * 2, btnTop, bw, L("IB_RESCAN"),
     function() EVAL_IB_SCAN(true) EVAL_IB_REFRESH() end, widgets).btn
 
   -- 分组过滤（复用主程序下拉组件；回调按**下标**映射回 id，不解析标签文字）
@@ -677,6 +702,23 @@ end
 function EVAL_IB_TEST_CELL(i) return IB.cells[i] end
 -- ★1.71.9 断言入口：网格的**真实几何**（首/末格的 Top/Left/Bottom/Right + 池子枚数）——
 --   判据是「末格下缘仍在底部按钮行之上、右缘不越窗」，不是读常量（本项目「读常量 = 测自己」的老坑）。
+-- ★★★1.73.8 断言入口：**底部行**（状态文字 + 翻页按钮）与 [关闭] 的真实几何
+--   判据 = 与关闭**中线对齐**、整组停在关闭左边、状态文字与按钮组不重叠、且整行在图标网格**下面**。
+function EVAL_IB_TEST_BOTTOM()
+  local function rect(o)
+    if not o then return nil end
+    local okx, x = pcall(o.GetLeft, o)
+    local oky, y = pcall(o.GetTop, o)
+    local okw, w = pcall(o.GetWidth, o)
+    local okh, h = pcall(o.GetHeight, o)
+    local oks, sh = pcall(o.IsShown, o)
+    return { x = okx and x or nil, y = oky and y or nil, w = okw and w or nil, h = okh and h or nil,
+             shown = (oks and sh) and true or false }
+  end
+  return { midY = IB.botMidY, closeLeft = IB.closeLeft, w = IB.W,
+           status = rect(IB.statusFS), prev = rect(IB.btns and IB.btns.prev),
+           next = rect(IB.btns and IB.btns.next), rescan = rect(IB.btns and IB.btns.rescan) }
+end
 function EVAL_IB_TEST_GRID_BOX()
   local n = table.getn(IB.cells)
   if n < 1 then return nil end

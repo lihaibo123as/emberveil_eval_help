@@ -6706,6 +6706,30 @@ do
     "②★末格下缘仍在底部按钮行之上（不重叠）：" .. tostring(box92 and box92.lastBottom) .. " > " .. tostring(lay92.closeMidY + 12))
   eq(box92 ~= nil and type(box92.lastRight) == "number" and box92.lastRight < EVAL_TEST_WIN_W() - 10, true,
     "②★网格不越出窗口右缘：" .. tostring(box92 and box92.lastRight))
+  -- ★★★1.73.8 用户（截图圈出顶部那一行）：「分页信息这行移动到底部和关闭同行.对齐关闭,别重叠」
+  --   判据全是**真实控件几何 × 生产的关闭几何**（不写死坐标）：
+  local savedTab92 = EVAL_HELP_CFG_TAB()
+  EVAL_HELP_CFG_SETTAB(5) -- 图标库 Tab：底部行控件在该 Tab 的**显式显隐清单**里（不切过来就是 Hide）
+  local bot = EVAL_IB_TEST_BOTTOM()
+  eq(type(bot) == "table" and bot.status ~= nil and bot.prev ~= nil, true, "③前置：拿到底部行的真实几何")
+  eq(bot.midY, lay92.closeMidY, "③★★★底部行中线取自生产单一来源（== [关闭] 的中线）")
+  local function midOf92(r) if r and type(r.y) == "number" and type(r.h) == "number" then return r.y - r.h / 2 end return nil end
+  eq(math.abs((midOf92(bot.prev) or 999) - bot.midY) <= 1, true,
+     "③★★[上页] 与 [关闭] **中线对齐**（实测 " .. tostring(midOf92(bot.prev)) .. " vs " .. tostring(bot.midY) .. "）")
+  eq(math.abs((midOf92(bot.next) or 999) - bot.midY) <= 1 and math.abs((midOf92(bot.rescan) or 999) - bot.midY) <= 1, true,
+     "③★★[下页]/[重扫] 同样与 [关闭] 中线对齐")
+  eq(bot.rescan.x + bot.rescan.w <= bot.closeLeft - 4, true,
+     "③★★★翻页按钮组停在 [关闭]**左边**、不重叠（右端 " .. tostring(bot.rescan.x + bot.rescan.w) ..
+     " < 关闭左边缘 " .. tostring(bot.closeLeft) .. "）")
+  eq(bot.status.x + bot.status.w <= bot.prev.x - 2, true,
+     "③★★★状态文字与按钮组不重叠（文字右端 " .. tostring(bot.status.x + bot.status.w) ..
+     " < 按钮左端 " .. tostring(bot.prev.x) .. "）")
+  eq(bot.status.y < box92.lastBottom, true,
+     "③★★★状态行在**底部**（整个图标网格下面）：y=" .. tostring(bot.status.y) .. " < 网格末行下缘 " .. tostring(box92.lastBottom))
+  local cwW92, cwH92 = EVAL_TEST_CFG_SIZE()
+  eq(bot.status.y > -cwH92 + 4, true, "③★整行仍在窗口内（y=" .. tostring(bot.status.y) .. "，窗高 " .. tostring(cwH92) .. "）")
+  eq(bot.status.shown and bot.prev.shown and bot.rescan.shown, true, "③★底部行的控件是显示状态")
+  EVAL_HELP_CFG_SETTAB(savedTab92) -- 还原 Tab（跨用例状态残留是本项目老坑）
   print(string.format("  图标库版式：%d 列 × %d 行 = %d 枚/页；网格末行下缘 %.0f，底部按钮行中线 %.0f",
     cols92, rows92, per92, box92 and box92.lastBottom or 0, lay92.closeMidY))
 end
