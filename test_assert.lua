@@ -10136,4 +10136,50 @@ do
   print("  输入弹窗规程：层级 " .. tostring(z135.level) .. "（200~250）· 可拖柄(Button+LeftButton) · 宽 " ..
         tostring(z135.w) .. " · 按钮居中 · 标签随调用方")
 end
+
+-- 136) ★★★1.73.33 自动购买弹窗的三处修复（用户：「这个弹窗还是不能被拖拽；标题右侧的说明统一移动到
+--   安全说明下面对齐；红线位置布局异常」）——
+--   ① 列头与数据列**必须对得上**（根因：列头把「距左边」当「距右边」用 → 两个列头叠在一起、与数据列错位）；
+--   ② 弹窗必须有**拖动柄**（1.73.31 只修了层级/鼠标，柄是漏的）；③ 说明行挪到安全说明**正下方并左对齐**。
+do
+  EVAL_BUY_UI_OPEN()
+  local g136 = EVAL_TEST_BUY_UI_GEO()
+  eq(type(g136) == "table", true, "①前置：读得到弹窗几何")
+  -- ① 列头 vs 数据列对齐（右对齐的列比右边缘，左对齐的比左边缘；容差 2px）
+  local hN, hPer = g136.heads[3], g136.heads[4]
+  eq(type(hN) == "table" and type(g136.cells.n) == "table", true, "①前置：总数列头与单元格都在")
+  eq(math.abs((hN.r or -999) - (g136.cells.n.r or -998)) <= 2, true,
+     "①★★★总数列头的右边缘 ≈ 该列数据右边缘（" .. tostring(hN.r) .. " vs " .. tostring(g136.cells.n.r) .. "）")
+  eq(math.abs((hPer.r or -999) - (g136.cells.per.r or -998)) <= 2, true,
+     "①★★★每次列头的右边缘 ≈ 该列数据右边缘（" .. tostring(hPer.r) .. " vs " .. tostring(g136.cells.per.r) .. "）")
+  eq(math.abs((g136.heads[2].x or -999) - (g136.cells.name.x or -998)) <= 2, true,
+     "①★★名称列头与名称格左对齐（" .. tostring(g136.heads[2].x) .. " vs " .. tostring(g136.cells.name.x) .. "）")
+  eq(math.abs((g136.heads[1].x or -999) - g136.cols.chkX) <= 2, true, "①★启用列头压在勾选列上")
+  --   ★★列头**不许互相重叠**（截图里那串「启用每次称 总数」就是两个列头叠着画出来的）
+  local badOv136, prevR = "", nil
+  for i = 1, table.getn(g136.heads) do
+    local h = g136.heads[i]
+    if h and h.x then
+      if prevR and h.x < prevR - 1 then
+        badOv136 = badOv136 .. "第" .. tostring(i) .. "个列头(x=" .. tostring(h.x) .. ")压到前一个(右=" .. tostring(prevR) .. ") "
+      end
+      if h.r then prevR = h.r end
+    end
+  end
+  eq(badOv136, "", "①★★★列头互不重叠：" .. badOv136)
+  -- ② 拖动柄（本项目 UI 配方：Button + SetMovable + RegisterForDrag + RegisterForClicks）
+  eq(tostring(g136.drag or ""), "LeftButton", "②★★★有拖动柄且注册了 RegisterForDrag(LeftButton)（原来**根本没有柄**）")
+  eq(string.find(tostring(g136.clicks or ""), "LeftButtonUp", 1, true) ~= nil, true, "②★★注册了 RegisterForClicks(LeftButtonUp)")
+  eq(g136.movable, true, "②★★SetMovable(true)")
+  eq((g136.titleLevel or 0) > (g136.level or 0), true, "②★★柄的层级高于窗口（" .. tostring(g136.titleLevel) ..
+     " > " .. tostring(g136.level) .. "）")
+  -- ③ 说明行在安全说明**正下方**、左对齐
+  eq(type(g136.hint) == "table" and type(g136.tip) == "table", true, "③前置：两条说明都在")
+  eq(math.abs((g136.tip.x or -999) - (g136.hint.x or -998)) <= 2, true,
+     "③★★★说明行与安全说明**左对齐**（" .. tostring(g136.tip.x) .. " vs " .. tostring(g136.hint.x) .. "）")
+  eq((g136.tip.y or 0) < (g136.hint.y or 0), true, "③★★★说明行在安全说明**下面**（" ..
+     tostring(g136.tip.y) .. " < " .. tostring(g136.hint.y) .. "）")
+  EVAL_BUY_UI_CLOSE()
+  print("  自动购买弹窗：列头与数据列对齐且互不重叠 · 有拖动柄(Button+LeftButton) · 说明行移到安全说明下方并左对齐")
+end
 print("ALL TESTS PASS")

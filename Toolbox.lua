@@ -3165,6 +3165,9 @@ end
 --   挤在摘要行里根本没法编辑 → 独立列表窗最清楚（列头 + 每行可点格子）。
 -- ★交互沿用既有范式：勾选框 = 启用；点格子 → EVAL_TN_OPEN 输入；[删] = 单条删除；[清空] = 全清。
 local TB_BUY_UI_ROWS = 8
+-- ★★★1.73.33 自动购买弹窗的**列几何单一来源**（全部「距左边」；右对齐的列写**右边缘**）——
+--   列头与单元格必须都从这里取，否则就会出现「列头挤成一团、与数据列对不上」（用户红线指出的事故）。
+local TB_BUY_COLS = { chkX = 14, chkW = 28, nameX = 46, nameW = 140, nR = 244, nW = 44, perR = 300, perW = 44, delW = 32 }
 local buyUI = { off = 0 }
 
 local function buyUIList()
@@ -3267,20 +3270,58 @@ local function buyUIBuild()
   local title = tbText(root, 12, 0.95, 0.80, 0.30)
   title:SetPoint("TOPLEFT", root, "TOPLEFT", 10, -6)
   title:SetText(L("TB_BUY_UI_TITLE"))
-  local tipLine = tbText(root, 9, 0.62, 0.60, 0.52)
-  tipLine:SetPoint("TOPLEFT", root, "TOPLEFT", 120, -9)
-  tipLine:SetText(L("TB_BUY_UI_TIP"))
+  -- ★★★1.73.33 用户：「这个弹窗还是不能被拖拽」——【根因】它**根本没有拖动柄**（1.73.31 只修了层级/鼠标，
+  --   拖动柄是 1.73.32 给「通用输入弹窗」加的，这个弹窗漏了）→ 照项目规程补：柄必须是 **Button**，
+  --   同 DIALOG、level = 窗口+1，SetMovable + RegisterForClicks(LeftButtonUp) + RegisterForDrag(LeftButton)，
+  --   StartMoving 用 warm-up 两步（本客户端 Frame 的 OnDragStart 不触发）。
+  local titleBar = CreateFrame("Button", nil, root)
+  titleBar:SetWidth(W - 32) titleBar:SetHeight(20)
+  titleBar:SetPoint("TOPLEFT", root, "TOPLEFT", 2, -2)
+  pcall(titleBar.SetFrameLevel, titleBar, 201)
+  pcall(titleBar.EnableMouse, titleBar, true)
+  pcall(titleBar.RegisterForClicks, titleBar, "LeftButtonUp")
+  pcall(titleBar.RegisterForDrag, titleBar, "LeftButton")
+  local tbBg = titleBar:CreateTexture(nil, "BACKGROUND")
+  tbSolid(tbBg, 0.14, 0.11, 0.06, 0.55)
+  tbBg:SetPoint("TOPLEFT", titleBar, "TOPLEFT", 0, 0)
+  tbBg:SetPoint("BOTTOMRIGHT", titleBar, "BOTTOMRIGHT", 0, 0)
+  titleBar:SetScript("OnDragStart", function()
+    pcall(root.SetMovable, root, true)
+    pcall(root.StartMoving, root)
+    pcall(root.StopMovingOrSizing, root)
+    pcall(root.StartMoving, root)
+  end)
+  titleBar:SetScript("OnDragStop", function() pcall(root.StopMovingOrSizing, root) end)
+  pcall(root.SetMovable, root, true)
+  buyUI.titleBar = titleBar
   local closeB = tbBtn(root, W - 26, -3, 18, "X", function() root:Hide() end)
-  -- 列头
-  local function head(x, txt, right)
+  -- ★★★1.73.33 用户红线指出「列头布局异常」——【根因】列头把「距左边」的数值当「距右边」的偏移用：
+  --   总数/每次两个列头锚成 TOPRIGHT -244/-302 → 跑到 x≈116 / x≈58，**互相压在一起**（截图上那串
+  --   「启用每次称 总数」就是两个列头叠着画出来的），而且与下面的数据列对不上。
+  --   【修法】列几何**单一来源** TB_BUY_COLS（全部用「距左边」表示；右对齐的列写右边缘），列头与单元格都从它取。
+  local cols = TB_BUY_COLS
+  buyUI.heads = {}
+  -- ★列头宽度 = **本列宽度**（单一来源）→ 文字不会串到隔壁列，盒子也不会互相重叠
+  local function headL(x, w, txt)
     local h = tbText(root, 10, 0.80, 0.72, 0.45)
-    if right then h:SetPoint("TOPRIGHT", root, "TOPRIGHT", -x, -30)
-    else h:SetPoint("TOPLEFT", root, "TOPLEFT", x, -30) end
+    h:SetPoint("TOPLEFT", root, "TOPLEFT", x, -30)
+    pcall(h.SetWidth, h, w)
     h:SetText(txt)
+    table.insert(buyUI.heads, h)
   end
-  head(14, L("TB_BUY_COL_ON")) head(46, L("TB_BUY_COL_NAME"))
-  head(244, L("TB_BUY_COL_N"), true) head(302, L("TB_BUY_COL_PER"), true)
-  head(W - 12, L("TB_BUY_COL_DEL"), true)
+  local function headR(rightEdge, w, txt)
+    local h = tbText(root, 10, 0.80, 0.72, 0.45)
+    h:SetPoint("TOPRIGHT", root, "TOPRIGHT", -(W - rightEdge), -30)
+    pcall(h.SetWidth, h, w)
+    pcall(h.SetJustifyH, h, "RIGHT")
+    h:SetText(txt)
+    table.insert(buyUI.heads, h)
+  end
+  headL(cols.chkX, cols.chkW, L("TB_BUY_COL_ON"))
+  headL(cols.nameX, cols.nameW, L("TB_BUY_COL_NAME"))
+  headR(cols.nR, cols.nW, L("TB_BUY_COL_N"))      -- ★总数（与 r.nt 那一列同右边缘）
+  headR(cols.perR, cols.perW, L("TB_BUY_COL_PER"))-- ★每次（与 r.pt 那一列同右边缘）
+  headR(W - 12, cols.delW, L("TB_BUY_COL_DEL"))   -- ★操作（删除列）
   local rows = {}
   buyUI.rows = rows
   for i = 1, TB_BUY_UI_ROWS do
@@ -3316,9 +3357,9 @@ local function buyUIBuild()
       else t:SetPoint("TOPLEFT", root, "TOPLEFT", x + 2, y - 2) end
       return b, t
     end
-    local nb, nt = cell(46, 150, false)
-    local qb, qt = cell(200, 44, true)
-    local pb, pt = cell(256, 44, true)
+    local nb, nt = cell(cols.nameX, cols.nameW, false)      -- 名称
+    local qb, qt = cell(cols.nR - 44, 44, true)             -- 总数（右边缘 = cols.nR）
+    local pb, pt = cell(cols.perR - 44, 44, true)           -- 每次（右边缘 = cols.perR）
     r.name, r.nt, r.pt = nt, qt, pt
     r.nameBtn, r.nBtn, r.pBtn = nb, qb, pb
     local db = tbBtn(root, W - 44, y, 32, L("TB_BUY_DEL"), function() end)
@@ -3329,9 +3370,18 @@ local function buyUIBuild()
   empty:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -46)
   empty:SetText(L("TB_BUY_EMPTY"))
   buyUI.empty = empty
+  -- ★1.73.33 用户：「标题右侧的说明统一移动到安全说明下面对齐」——
+  --   原来 tipLine 挤在标题右边（与标题/X 抢位置），现在放到安全说明**正下方**、同一条左对齐（都贴 12）。
+  local hintY = -(44 + TB_BUY_UI_ROWS * 18 + 6)
   local hint = tbText(root, 9, 0.55, 0.60, 0.55)
-  hint:SetPoint("TOPLEFT", root, "TOPLEFT", 12, -(44 + TB_BUY_UI_ROWS * 18 + 6))
+  hint:SetPoint("TOPLEFT", root, "TOPLEFT", 12, hintY)
+  pcall(hint.SetWidth, hint, W - 24)
   hint:SetText(L("TB_BUY_HINT"))
+  local tipLine = tbText(root, 9, 0.62, 0.60, 0.52)
+  tipLine:SetPoint("TOPLEFT", root, "TOPLEFT", 12, hintY - 13)
+  pcall(tipLine.SetWidth, tipLine, W - 24)
+  tipLine:SetText(L("TB_BUY_UI_TIP"))
+  buyUI.hint, buyUI.tip = hint, tipLine
   tbBtn(root, 12, -(H - 26), 84, L("TB_BUY_ADD"), function()
     if type(EVAL_TN_OPEN) ~= "function" then return end
     EVAL_TN_OPEN(L("TB_BUY_ASK_NAME"), "", function(txt)
@@ -3405,6 +3455,62 @@ function EVAL_TEST_BUY_UI_Z()
       if ok and type(l) == "number" then out.toolbox = l break end
     end
   end
+  return out
+end
+-- ★★★1.73.33 读值口：自动购买弹窗的**列几何 / 拖动柄 / 说明行**（用户红线指出的两处布局问题都在这可断言）
+function EVAL_TEST_BUY_UI_GEO()
+  if not buyUI.root then return nil end
+  local W = 360
+  local okW, w0 = pcall(buyUI.root.GetWidth, buyUI.root)
+  if okW and type(w0) == "number" then W = w0 end
+  local function num(o, m)
+    if not o or type(o[m]) ~= "function" then return nil end
+    local ok, v = pcall(o[m], o)
+    return (ok and type(v) == "number") and v or nil
+  end
+  -- ★坐标统一换算成「距窗口左边」（本机桩记录的是**锚点语义**：TOPRIGHT 的 x 是负偏移）——
+  --   这样「列头右边缘」与「数据右边缘」才可比（左对齐/右对齐两种锚法都能算到同一条基准线上）。
+  local function rect(o)
+    if not o then return nil end
+    local out = {}
+    local okp, point, _relTo, relPoint, ox, oy = pcall(o.GetPoint, o)
+    if okp and type(ox) == "number" then
+      out.point, out.relPoint, out.ox, out.oy = point, relPoint, ox, oy
+      local w = num(o, "GetWidth") or 0
+      if relPoint == "TOPRIGHT" then
+        out.r = W + ox
+        out.x = out.r - w
+      else
+        out.x = ox
+        out.r = ox + w
+      end
+      out.y = oy
+    end
+    return out
+  end
+  local out = { W = W, cols = TB_BUY_COLS, heads = {}, cells = {} }
+  for i = 1, table.getn(buyUI.heads or {}) do out.heads[i] = rect(buyUI.heads[i]) end
+  local r1 = buyUI.rows and buyUI.rows[1]
+  if r1 then
+    out.cells.name = rect(r1.name) out.cells.n = rect(r1.nt)
+    out.cells.per = rect(r1.pt) out.cells.del = rect(r1.del)
+  end
+  local tb = buyUI.titleBar
+  if tb then
+    local function val(m)
+      if type(tb[m]) ~= "function" then return nil end
+      local ok, v = pcall(tb[m], tb)
+      if ok and v ~= nil then return v end
+      return nil
+    end
+    out.drag = val("GetDragRegistered")
+    out.clicks = val("GetClicksRegistered")
+    out.titleLevel = num(tb, "GetFrameLevel")
+  end
+  out.level = num(buyUI.root, "GetFrameLevel")
+  local okM, mv = pcall(buyUI.root.IsMovable, buyUI.root)
+  if okM then out.movable = mv and true or false end
+  out.hint = rect(buyUI.hint) out.tip = rect(buyUI.tip)
   return out
 end
 function EVAL_TEST_BUY_UI_SHOWN()
