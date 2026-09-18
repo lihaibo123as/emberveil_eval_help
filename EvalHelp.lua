@@ -4666,7 +4666,6 @@ local function SE_BUILD()
   seUI.rankName = rkW.text
   local enChk = CreateFrame("Button", nil, root)
   enChk:SetWidth(14) enChk:SetHeight(14)
-  enChk:SetPoint("TOPLEFT", root, "TOPLEFT", 316, -25) -- ★1.72.4 右移，给等级下拉腾位置（等级 218..306，勾选框 316 起）
   pcall(enChk.EnableMouse, enChk, true)
   pcall(enChk.RegisterForClicks, enChk, "LeftButtonUp")
   local enOut = enChk:CreateTexture(nil, "BACKGROUND")
@@ -4686,7 +4685,6 @@ local function SE_BUILD()
   end)
   seUI.enMark = enMark
   local enLabel = uiText(root, 9, 0.75, 0.75, 0.75)
-  enLabel:SetPoint("TOPLEFT", root, "TOPLEFT", 334, -27)
   enLabel:SetText(L("SE_ENABLE"))
   -- ★★★1.71.3 图例（用户要求「启用此技能 右侧添加几个图标 寓意 tooltip」）：
   --   白感叹号 = 不可用 / 黄感叹号 = 待测试；**意义只在悬停里**（用户要的就是这个）。
@@ -4699,7 +4697,7 @@ local function SE_BUILD()
     if okw and type(wv) == "number" and wv > 0 then enW = wv end
   end
   if enW <= 0 then enW = math.floor(string.len(L("SE_ENABLE")) / 3 + 0.5) * 9 end
-  local SE_MARK_X = 334 + enW + 14 -- ★1.72.4 与「启用此技能」标签同步右移（起点按实测宽度推，语言无关）
+  local SE_MARK_X -- ★1.72.4 右对齐起点：在下面按窗口宽度反推（不再写死 x）
   seUI.marks = {}
   -- ★文案写成**字面量** L("SE_MARK_...")（而不是 tkey="..." 运行时拼）：
   --   静态 LANG KEY CHECK 才扫得到这三语言 4 个键（运行时拼的键正是它扫不到的盲区）。
@@ -4707,6 +4705,22 @@ local function SE_BUILD()
     { tex = SE_MARK_UNAVAIL, tip = function() return { L("SE_MARK_UNAVAIL_T"), L("SE_MARK_UNAVAIL_D") } end },
     { tex = SE_MARK_TEST,    tip = function() return { L("SE_MARK_TEST_T"),    L("SE_MARK_TEST_D") }    end },
   }
+  -- ★1.72.4 **右边对齐**（用户要求：「启动此技能开关 + 图标 右边对齐」）
+  --   按窗口宽度反推起点（中文 660 / 西文 800，单一来源 seUI.W）：
+  --   整组宽 = 勾选框 14 + 间隙 4 + 标签实测宽 enW + 间隙 14 + 图例 (N-1)*20+16，右侧留白 16。
+  --   ★兜底：窗口再窄也不许越过等级下拉（218..306）→ 起点不小于 320。
+  --   ★必须先 ClearAllPoints 再锚：不能靠「再加一个锚点」——多锚点会把控件拉伸（本项目老教训）。
+  do
+    local markN = table.getn(SE_MARK_DEFS)
+    local marksW = (markN - 1) * 20 + 16
+    local enX = (seUI.W or 660) - 16 - marksW - 14 - enW - 18
+    if enX < 320 then enX = 320 end
+    pcall(enChk.ClearAllPoints, enChk)
+    enChk:SetPoint("TOPLEFT", root, "TOPLEFT", enX, -25)
+    pcall(enLabel.ClearAllPoints, enLabel)
+    enLabel:SetPoint("TOPLEFT", root, "TOPLEFT", enX + 18, -27)
+    SE_MARK_X = enX + 18 + enW + 14
+  end
   for mi = 1, table.getn(SE_MARK_DEFS) do
     local md = SE_MARK_DEFS[mi]
     local mb = CreateFrame("Button", nil, root)
