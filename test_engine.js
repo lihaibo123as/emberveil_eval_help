@@ -634,6 +634,72 @@ function checkIconAssets() {
   console.log("STOP ATTACK WIRING CHECK: skillNoSlotOk 名单 7/7 + 被接线 " + callers + " 处 + 其余 " + sites.length + " 个站点逐行含 stopAllOf/followOf");
 })();
 
+// ===== PACK LIST CHECK（1.73.0）：发布包清单必须**跟着 .toc 走**，条目数基准也要对得上 =====
+// ★背景两笔代价：① 1.72.0 发现随包的 zip **只有 25 个文件**（缺 IconBrowser.lua + 5 个 examples）
+//   —— 用户装了会**直接报错**；② 1.73.0 新增 PetData.lua / PetHelper.lua 后，记忆体第 9 步里的打包脚本
+//   仍写着「7 个 .lua 模块」、基准仍写着 60 —— 这类「**不报错、只是清单过时**」正是本项目最恨的一族
+//   （与 README 版本行插错表同类：结构假设错了，跑起来毫无提示）。
+// 判据：CLAUDE.md 发布包 Copy-Item 行里的**顶层 .lua 名单** == EvalHelp.toc 的顶层 .lua 名单（逐个一致），
+//   且记忆体里写的**条目数基准** == 按打包脚本口径算出来的真实集合大小（toc + 顶层 .lua + 5 份文档
+//   + Locales/* + examples/* + media/* 去掉 media/Textures）。
+// ★变异验证：从 CLAUDE.md 删掉 PetData.lua → 当场 FAIL；把基准数改成 60 → 当场 FAIL。
+(function () {
+  const cpath = path.join(__dirname, "CLAUDE.md");
+  if (!fs.existsSync(cpath)) {
+    console.log("PACK LIST CHECK: FAIL - 找不到 CLAUDE.md（发布流程第 9 步的打包清单就在里面）");
+    process.exitCode = 1;
+    return;
+  }
+  const claude = fs.readFileSync(cpath, "utf8");
+  const packLine = claude.split(/\r?\n/).find(l => /Copy-Item .*EvalHelp\.toc.*\$staging/.test(l));
+  if (!packLine) {
+    console.log("PACK LIST CHECK: FAIL - CLAUDE.md 第 9 步里找不到打包 Copy-Item 行");
+    process.exitCode = 1;
+    return;
+  }
+  const listed = (packLine.match(/\$src\\([A-Za-z0-9_]+\.lua)/g) || []).map(s => s.replace("$src\\", ""));
+  const toc = fs.readFileSync(path.join(__dirname, "EvalHelp.toc"), "utf8")
+    .split(/\r?\n/).map(s => s.trim()).filter(s => s && s.charAt(0) !== "#");
+  const topLua = toc.filter(f => /\.lua$/i.test(f) && f.indexOf("/") < 0 && f.indexOf("\\") < 0);
+  const missing = topLua.filter(f => listed.indexOf(f) < 0);
+  const ghost = listed.filter(f => topLua.indexOf(f) < 0);
+  if (missing.length || ghost.length) {
+    console.log("PACK LIST CHECK: FAIL - CLAUDE.md 打包清单与 .toc 不一致；清单缺=[" + missing.join(",") + "] 清单多余=[" + ghost.join(",") + "]");
+    process.exitCode = 1;
+    return;
+  }
+  // 条目数基准：按打包脚本的同一口径数一遍
+  const set = [];
+  const push = p => { if (set.indexOf(p) < 0) set.push(p); };
+  push("EvalHelp.toc");
+  topLua.forEach(push);
+  ["README.md", "README_en.md", "README_ru.md", "CHANGELOG.md", "DEVELOPMENT.md"].forEach(push);
+  const walk = (dir, rel) => {
+    if (!fs.existsSync(dir)) return;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) { if (/Textures$/.test(p)) continue; walk(p, rel + "/" + e.name); }
+      else push(rel + "/" + e.name);
+    }
+  };
+  walk(path.join(__dirname, "Locales"), "Locales");
+  walk(path.join(__dirname, "examples"), "examples");
+  walk(path.join(__dirname, "media"), "media");
+  const real = set.length;
+  const mNum = claude.match(/基准\s*=\s*\*\*(\d+)\s*个\*\*/);
+  if (!mNum) {
+    console.log("PACK LIST CHECK: FAIL - CLAUDE.md 里读不到「基准 = **N 个**」这一条（装完没得核对）");
+    process.exitCode = 1;
+    return;
+  }
+  if (parseInt(mNum[1], 10) !== real) {
+    console.log("PACK LIST CHECK: FAIL - 条目数基准过期：记忆体写 " + mNum[1] + " 个，实际按打包口径是 " + real + " 个");
+    process.exitCode = 1;
+    return;
+  }
+  console.log("PACK LIST CHECK: 打包清单 " + listed.length + " 个模块与 .toc 一致，条目数基准 " + real + " 个");
+})();
+
 // ===== README TABLE CHECK（1.72.0）：版本行必须落在「更新日志」表里，不能落进「模块」表 =====
 // ★背景（1.72.0 实事故）：发版时用脚本往 README 插版本行，脚本按「第一张表的表头分隔行」定位，
 //   把 1.72.0 / 1.71.24 / 1.71.23 / 1.71.22 **四行插进了开头的「模块」功能表**里，

@@ -43,6 +43,7 @@
    ★★★**是「归纳」不是「罗列」**（用户 1.72.0 明确）：「里程碑是要你总结上个里程碑到最新版本的信息归纳，
    而不是把版本信息全部罗列，不然内容太多了 —— **每次里程碑归纳内容最终控制在 10 条以内**」，
    随后又收紧：「**控制在 10 个点、10 行文字以内**」→ 细节归 `CHANGELOG.md`，板块里每条只留一句话。
+   ★另有 **`PACK LIST CHECK`**（第 18 道：1.73.0 加：记忆体第 9 步的发布包模块清单必须与 `EvalHelp.toc` 的顶层 `.lua` **逐个一致**，且「条目数基准」必须等于按打包口径现算的真实集合大小——守「新增模块后清单/基准过期，出包缺文件用户装不上」这一类**不报错、只是清单过时**的事故；变异：删掉清单里的 PetData.lua / 把基准 62 写回 60 / 清单塞不存在的模块 → 三发全中）。
    ★判据已落成源码检查 **`MILESTONE CHECK`**（第 17 道：3 个 README 都有 🏁 板块 + **里程碑在更新日志之前** +
    标题范围末端 == 当前 VERSION + **板块正文非空行 1..10** + **每条都是 `- ` 列表项**），变异全捕获。
    ★★**「如何总结里程碑」= 上面这三条**（① 归纳不罗列、**一条一行** ② 三语言一起 ③ **全板块 ≤10 行**），
@@ -84,15 +85,17 @@ $src = "$PWD\EvalHelp"; $out = "$PWD\EvalHelp-vX.Y.Z.zip"
 $staging = "$env:TEMP\eh_pkg"
 if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
 New-Item -ItemType Directory -Path "$staging\EvalHelp" | Out-Null
-# ★只装运行必需：.toc + 7 个 .lua 模块 + Locales + examples + media + 三语言 README/CHANGELOG/DEVELOPMENT
-Copy-Item "$src\EvalHelp.toc","$src\Core.lua","$src\Engine.lua","$src\EvalHelp.lua","$src\Toolbox.lua","$src\DataSearch.lua","$src\Share.lua","$src\IconBrowser.lua" "$staging\EvalHelp\"
+# ★只装运行必需：.toc + 9 个 .lua 模块 + Locales + examples + media + 三语言 README/CHANGELOG/DEVELOPMENT
+# ★★清单必须**跟着 EvalHelp.toc 走**（下面的模块名与基准数由源码检查 PACK LIST CHECK 守着，改漏一处当场 FAIL）
+Copy-Item "$src\EvalHelp.toc","$src\Core.lua","$src\Engine.lua","$src\EvalHelp.lua","$src\Toolbox.lua","$src\DataSearch.lua","$src\Share.lua","$src\IconBrowser.lua","$src\PetData.lua","$src\PetHelper.lua" "$staging\EvalHelp\"
 Copy-Item "$src\README.md","$src\README_en.md","$src\README_ru.md","$src\CHANGELOG.md","$src\DEVELOPMENT.md" "$staging\EvalHelp\"
 Copy-Item "$src\Locales","$src\examples","$src\media" "$staging\EvalHelp\" -Recurse
 Remove-Item "$staging\EvalHelp\media\Textures" -Recurse -Force -ErrorAction SilentlyContinue  # 主题素材不进包
 [System.IO.Compression.ZipFile]::CreateFromDirectory($staging, $out)
 Remove-Item $staging -Recurse -Force
 ```
-★**装完必须核对条目数**（1.72.0 基准 = **60 个**）：少一个就是缺文件，用户装了会**直接报错**。
+★**装完必须核对条目数**（1.73.0 基准 = **62 个**；1.72.0 时是 60，多了 PetData.lua + PetHelper.lua）：少一个就是缺文件，用户装了会**直接报错**。
+  ★这一条与上面的模块清单都有源码检查 `PACK LIST CHECK` 守着（清单与 .toc 逐个比对 + 基准数按打包口径现算），过时当场 FAIL。
 ★**不装**：`luacheck.js`/`test_*.lua`/`test_engine.js`（测试）、`preview/`（截图）、`node_modules/`、
 `api_*.html`、`.git/`、`bindings/`、`_icons_scan/`、`pay/`。
 
@@ -111,8 +114,8 @@ Remove-Item $staging -Recurse -Force
   fengari 已装在工作区 node_modules（npm 走代理 `127.0.0.1:10809`）。
 - ★★**判据必须同时看「退出码」与「输出文本」**：源码检查失败走 `process.exitCode = 1` 而**脚本照跑到底**，于是 `ALL TESTS PASS` **照样打印**——只看这句话会**漏报**。
   行为断言失败打的是 **`ASSERT FAIL`**，源码检查失败打的是 **`: FAIL`**（两者都要在输出里找）。
-- **源码级检查**（`test_engine.js` 内，**改了对应区域就必须让它们继续通过**）：`WIN WIDTH`（窗口宽度单一来源）· `DECL ORDER`（**7 个文件**的顶层 local 声明早于使用）· `LAYOUT`（`EVAL_DS_BUILD` 布局常量）· `VERSION`（源码 VERSION == toc）· `LANG KEY`（`L("字面量")` 三语言齐全）· `LANG SOURCE`（取语言只认 `EVAL_GET_LANG`）· `WINDOW SIZE`（自建窗真的设了宽与高）· `COMMENT SWALLOW`（语句没被行尾注释吞掉）· `ICON`（图标素材真实存在）。
-  后续又加到 **15 道以上**：`STOP ATTACK WIRING`（第 13 道：`stopAllOf`/`followOf` 那 7 个站点接线）· `UI ICON`（第 14 道：纹理路径逐个核到磁盘 + 类别图标不许撞图）· `CHAN RETRY WIRING`（第 15 道：`tbChanRetry()` ≥3 处接线 + 手动重试入口）· `EXAMPLES TOC`（磁盘 ↔ .toc 双向一致 + 顺序 = 选单顺序 + 数据不许搬回生产文件）· `README TABLE`（第 16 道：3 个 README 的版本行必须全在「更新日志」表里、恰好 10 行；CHANGELOG 保留完整历史 —— 守「发版脚本把版本行插错表」这类**不报错只是位置不对**的事故）· `MILESTONE`（第 17 道：3 个 README 都有 🏁 板块 + **里程碑在更新日志之上** + 标题范围末端 == 当前 VERSION + **板块正文 1..10 行**（10 个点、一条一行）+ **每条都是 `- ` 列表项**—— 守「顺序反了 / 里程碑又写成版本流水账 / 只更新了 CHANGELOG 忘了里程碑范围 / 排版被合并成一大段」）。
+- **源码级检查**（`test_engine.js` 内，**改了对应区域就必须让它们继续通过**）：`WIN WIDTH`（窗口宽度单一来源）· `DECL ORDER`（**9 个文件**的顶层 local 声明早于使用——1.73.0 起含 PetData/PetHelper）· `LAYOUT`（`EVAL_DS_BUILD` 布局常量）· `VERSION`（源码 VERSION == toc）· `LANG KEY`（`L("字面量")` 三语言齐全）· `LANG SOURCE`（取语言只认 `EVAL_GET_LANG`）· `WINDOW SIZE`（自建窗真的设了宽与高）· `COMMENT SWALLOW`（语句没被行尾注释吞掉）· `ICON`（图标素材真实存在）。
+  后续又加到 **18 道以上**：`STOP ATTACK WIRING`（第 13 道：`stopAllOf`/`followOf` 那 7 个站点接线）· `UI ICON`（第 14 道：纹理路径逐个核到磁盘 + 类别图标不许撞图）· `CHAN RETRY WIRING`（第 15 道：`tbChanRetry()` ≥3 处接线 + 手动重试入口）· `EXAMPLES TOC`（磁盘 ↔ .toc 双向一致 + 顺序 = 选单顺序 + 数据不许搬回生产文件）· `README TABLE`（第 16 道：3 个 README 的版本行必须全在「更新日志」表里、恰好 10 行；CHANGELOG 保留完整历史 —— 守「发版脚本把版本行插错表」这类**不报错只是位置不对**的事故）· `MILESTONE`（第 17 道：3 个 README 都有 🏁 板块 + **里程碑在更新日志之上** + 标题范围末端 == 当前 VERSION + **板块正文 1..10 行**（10 个点、一条一行）+ **每条都是 `- ` 列表项**—— 守「顺序反了 / 里程碑又写成版本流水账 / 只更新了 CHANGELOG 忘了里程碑范围 / 排版被合并成一大段」）。
   ★判据：**行为断言照不到 UI 接线（漏接不报错、只是显示不对）→ 必须用源码检查补位**；两类检查互补，缺一就有盲区。
 - **断言组 1~66+**：覆盖解析/引擎/UI/布局/语言/标注层；**新增功能请顺带加组**（写在 `test_assert.lua` 末尾 `print("ALL TESTS PASS")` 之前）。
 
