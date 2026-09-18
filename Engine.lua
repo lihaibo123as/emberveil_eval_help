@@ -307,6 +307,29 @@ local function dispelFold(list)
   for _, v in ipairs(list) do set[v] = true end
   return set
 end
+-- ★★★1.73.12 界面上要显示**本地化名**（用户报「debuff 格式化是否没做好」：预览行吐的是导出用的英文 token
+--   `(Magic/Curse/Poison)`，而编辑窗格子里明明是「魔法/诅咒/毒」）。
+--   ★做法 = **同一份格式化 + 一个显示开关**（绝不复制第二份格式化逻辑）：
+--     · 导出/往返：disp = nil → 英文 token（**存量与既有往返逐字不变**，这是兼容性的根）；
+--     · 界面显示：disp = true → 走语言包的 DS_T_<ID>（三语言齐全），拿不到再退回 loc 中文名、最后退回 id。
+--   ★为什么敢让显示形态也能被解析回：`dispelNorm` 对 tok 与 loc **双向容忍**，所以「本地化名」照旧能导入。
+local function dispelLabel(dt, disp)
+  local list = dispelList(dt)
+  if table.getn(list) == 0 then return "" end
+  if not disp then return table.concat(list, "/") end
+  local out = {}
+  for i = 1, table.getn(list) do
+    local id = list[i]
+    local label = id
+    for _, t in ipairs(DISPEL_TYPES) do if t.id == id then label = t.loc end end
+    local key = "DS_T_" .. string.upper(id)
+    local v = (type(EVAL_L) == "function") and EVAL_L(key) or nil
+    if type(v) == "string" and v ~= "" and v ~= key then label = v end
+    table.insert(out, label)
+  end
+  return table.concat(out, "/")
+end
+EVAL_DISPEL_LABEL = dispelLabel -- 全局桥：界面/断言共用同一份
 EVAL_DISPEL_LIST = dispelList   -- 全局桥：编辑窗显示/断言共用一份
 EVAL_DISPEL_FOLD = dispelFold
 
@@ -2679,7 +2702,7 @@ local function teamFilterSuffix(cd)
   return out
 end
 
-function EVAL_COND_STR(cd)
+function EVAL_COND_STR(cd, disp)
   local k = cd.k
   -- ★1.70.47 队伍/团队血蓝：前缀随扫描范围（cd.name）变化，保证「导出→导入」往返不掉范围
   local tscope = (cd.name == "团队") and "团队" or "队伍"
@@ -2736,8 +2759,9 @@ function EVAL_COND_STR(cd)
   if k == "teamDebuff" then
     local nm = (cd.s ~= nil and cd.s ~= "") and tostring(cd.s) or ""
     -- ★1.73.2 多选：导出形态 (Magic) / (Magic/Poison)；单选与存量**逐字相同**
-    local dl = dispelList(cd.dt)
-    local dt = (table.getn(dl) > 0) and ("(" .. table.concat(dl, "/") .. ")") or ""
+    -- ★1.73.12 disp=true 时走本地化名（**只影响界面显示**；导出/往返一律 false）
+    local dl = dispelLabel(cd.dt, disp)
+    local dt = (dl ~= "") and ("(" .. dl .. ")") or ""
     return ((cd.v == false) and ("无" .. tscope .. "debuff:") or ("有" .. tscope .. "debuff:")) .. nm .. dt .. teamFilterSuffix(cd)
   end
   if k == "ready" then return cd.inv and "未就绪" or "就绪" end
@@ -2772,11 +2796,11 @@ end
 --   抄一份的话，生产代码改回裸 id 断言照样绿（本项目「测试里复刻逻辑」的老坑）。
 function EVAL_TEST_COND_NUMNAME(k) return COND_NUMNAME[k] end
 
-function EVAL_GROUP_STR(groups)
+function EVAL_GROUP_STR(groups, disp)
   local parts = {}
   for _, g in ipairs(groups or {}) do
     local cs = {}
-    for _, cd in ipairs(g) do table.insert(cs, EVAL_COND_STR(cd)) end
+    for _, cd in ipairs(g) do table.insert(cs, EVAL_COND_STR(cd, disp)) end
     table.insert(parts, table.concat(cs, " & "))
   end
   return table.concat(parts, " | ")

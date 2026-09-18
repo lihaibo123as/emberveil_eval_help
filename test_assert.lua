@@ -9223,4 +9223,45 @@ do
   print("  深入 API/参考插件：官方消息组（与走不走 Lua 无关）探测+摘掉+按组还原+跟随开关 · this 帧懒挂载（ChatMOD 做法）能吞能染色")
 end
 
+-- 125) ★★★1.73.12 debuff 类型在**界面上的格式化**（用户：「debuff 格式化是否没做好」）
+--   现象：编辑窗底部预览吐的是**导出用的英文 token**（Magic/Curse/Poison），而格子里明明是「魔法/诅咒/毒」。
+--   判据：① **导出**仍走英文 token（存量/往返逐字不变 —— 组 114 的老断言继续绿就是证明）；
+--         ② **界面显示**走本地化名（底部预览 / 行内预览 / 配置窗方案行）；
+--         ③ ★★★显示形态**必须能解析回同一个集合**（本地化名往返靠 dispelNorm 的 tok/loc 双向容忍）；
+--         ④ 单选老形态显示本地化、导出逐字不变；空集（任意）不显示括号。
+do
+  local g125 = EVAL_PARSE_CONDS("有团队debuff:毒(Magic/Poison)")
+  eq(EVAL_GROUP_STR(g125), "有团队debuff:毒(Magic/Poison)", "①★★导出仍是英文 token（与组 114 的往返判据一致）")
+  local want125 = "有团队debuff:毒(" .. EVAL_L("DS_T_MAGIC") .. "/" .. EVAL_L("DS_T_POISON") .. ")"
+  eq(EVAL_GROUP_STR(g125, true), want125, "②★★★显示形态走本地化名：" .. tostring(EVAL_GROUP_STR(g125, true)))
+  eq(string.find(EVAL_GROUP_STR(g125, true), "Magic", 1, true) == nil, true, "②★★反向哨兵：显示里不许再出现英文 token")
+  local g125b = EVAL_PARSE_CONDS(EVAL_GROUP_STR(g125, true))
+  local dt125 = g125b[1][1].dt
+  eq(type(dt125) == "table" and dt125.Magic == true and dt125.Poison == true, true,
+     "③★★★本地化显示形态能**解析回同一个集合**（disp 只影响显示，不影响可往返性）")
+  eq(EVAL_GROUP_STR(g125b), "有团队debuff:毒(Magic/Poison)", "③★★往返一圈后导出仍是 token 形态")
+  local g125c = EVAL_PARSE_CONDS("有团队debuff:毒(Magic)")
+  eq(EVAL_GROUP_STR(g125c), "有团队debuff:毒(Magic)", "④★★单选导出逐字不变（存量兼容）")
+  eq(EVAL_GROUP_STR(g125c, true), "有团队debuff:毒(" .. EVAL_L("DS_T_MAGIC") .. ")", "④★单选显示也本地化")
+  -- ★注意：单独写「毒」会被解析成**类型**（不是名字）→ 正确的「没有类型」用例要用非类型名
+  eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("有团队debuff:奥术智慧"), true), "有团队debuff:奥术智慧",
+     "④★★没有写类型（= 任意）时不显示括号")
+  eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("有团队debuff:(Magic)"), true), "有团队debuff:(" .. EVAL_L("DS_T_MAGIC") .. ")",
+     "④★「只限类型、不限名字」的显示也本地化")
+  -- ⑤ 真实控件：读编辑窗**底部预览那个 FontString**（不是自己拼的字符串）
+  eq(EVAL_TEST_SE_PUSH_COND("teamDebuff", nil, nil, nil, { Magic = true, Poison = true }, "团队"), true,
+     "⑤前置：编辑器里放一条「团员debuff」并勾上 魔法+毒")
+  local pv125 = EVAL_TEST_SE_PREVIEW()
+  eq(type(pv125) == "string" and pv125 ~= "", true, "⑤★拿得到真实预览行文本")
+  eq(string.find(pv125, EVAL_L("DS_T_MAGIC"), 1, true) ~= nil and
+     string.find(pv125, EVAL_L("DS_T_POISON"), 1, true) ~= nil, true,
+     "⑤★★★预览行显示的是**本地化名**：" .. tostring(pv125))
+  eq(string.find(pv125, "Magic", 1, true) == nil and string.find(pv125, "Poison", 1, true) == nil, true,
+     "⑤★★反向哨兵：预览行里不再出现英文 token")
+  EVAL_TEST_SE_CLEAR()
+  EVAL_DD_HIDE()
+  EVAL_HELP_CFG_SETTAB(1)
+  print("  debuff 显示格式化：导出仍走 token（存量逐字不变）· 界面走本地化名（预览/方案行/行内）· 本地化形态能解析回同一集合")
+end
+
 print("ALL TESTS PASS")

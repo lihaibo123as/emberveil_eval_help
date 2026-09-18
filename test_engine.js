@@ -582,6 +582,27 @@ function checkIconAssets() {
   console.log('CHAT COLOR WIRING CHECK: 挂在聊天入口内 + 白拿缓存 + SendWho 只在限频滴出（四道闸门齐）+ 限频采集 + 诊断入口');
 })();
 
+// ===== DEBUFF DISPLAY CHECK（1.73.12）：类型集合「界面本地化、导出 token」两条腿不能走丢 =====
+// 背景：用户报「debuff 格式化是否没做好」——编辑窗底部预览吐的是**导出用的英文 token**（Magic/Curse），
+//   而格子里是「魔法/诅咒/毒」。正解 = 同一份格式化 + 一个 disp 开关；两类检查互补：
+//   · 行为断言（组 114/125）盯「导出逐字不变」与「显示本地化 + 能解析回」；
+//   · 源码检查盯**接线**（显示路径必须真的传 disp=true —— 漏传不报错、只是界面又变回 token）。
+(function () {
+  const en = fs.readFileSync(path.join(__dirname, 'Engine.lua'), 'utf8');
+  const eh = fs.readFileSync(path.join(__dirname, 'EvalHelp.lua'), 'utf8');
+  const bad = [];
+  if (en.indexOf('local function dispelLabel(dt, disp)') < 0) bad.push('Engine 没有 dispelLabel（显示用本地化标签）');
+  if (en.indexOf('dispelLabel(cd.dt, disp)') < 0) bad.push('teamDebuff 的导出/显示没有共用 dispelLabel（会复制出第二份格式化逻辑）');
+  if (en.indexOf('function EVAL_COND_STR(cd, disp)') < 0) bad.push('EVAL_COND_STR 没有 disp 开关');
+  if (en.indexOf('function EVAL_GROUP_STR(groups, disp)') < 0) bad.push('EVAL_GROUP_STR 没有把 disp 传下去');
+  if (eh.indexOf('EVAL_GROUP_STR(seLinearToGroups(ed.conds), true)') < 0) bad.push('编辑窗底部预览没有走本地化显示（漏传 true 就会又变回 token）');
+  if (eh.indexOf('EVAL_GROUP_STR(r.groups, true)') < 0) bad.push('配置窗方案行的条件文本没有走本地化显示');
+  if (eh.indexOf('EVAL_COND_STR(cd, true)') < 0) bad.push('行内预览没有走本地化显示');
+  if (eh.indexOf('function EVAL_TEST_SE_PREVIEW()') < 0) bad.push('没有预览读值口（断言读不到真实 FontString）');
+  if (bad.length) { console.log('DEBUFF DISPLAY CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
+  console.log('DEBUFF DISPLAY CHECK: 显示走本地化名（预览/方案行/行内）+ 导出仍走 token + 只此一份格式化');
+})();
+
 // ===== UI ICON CHECK（1.71.3）：新 UI 用的**自包含**图标必须真的在磁盘上 =====
 // 背景：本客户端纹理路径写错时**什么都不画**（不报错、不崩，只是空白）——而本轮新增的
 //   「类别图标 / 弹窗标题图标」都是刚从 UnrealQuest 拷进本插件的 .tga：漏拷一个、

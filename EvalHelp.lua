@@ -2257,7 +2257,7 @@ function EVAL_WAR_TAB_REFRESH()
         uiSolid(row.icon, 0.25, 0.25, 0.25, 1)
       end
       row.name:SetText(tostring(r.skill) .. (r.rank and ("(" .. tostring(r.rank) .. ")") or "")) -- ★1.72.4 有等级才显示（默认仍是纯技能名）
-      row.conds:SetText(uiEsc(EVAL_GROUP_STR(r.groups))) -- 1.61.1 | 显示转义
+      row.conds:SetText(uiEsc(EVAL_GROUP_STR(r.groups, true))) -- 1.61.1 | 显示转义（★1.73.12 界面走本地化名）
     end
   end
   -- ★★★1.71.10 方案名 / 数量变了 → 战斗信息UI 的「方案切换行」必须重排（按钮宽度按名字实测算、
@@ -4504,14 +4504,15 @@ function EVAL_HELP_SE_REFRESH()
           pcall(row.grpBtn.btn.Show, row.grpBtn.btn)
         end
       end
-      row.preview:SetText(EVAL_COND_STR(cd))
+      row.preview:SetText(EVAL_COND_STR(cd, true)) -- ★1.73.12 界面显示走本地化名（导出仍走 token）
       -- ★让位：这两格占的正是行内预览的位置 → 队伍/团员那 8 行不显示行内预览（底部整串预览照旧）
       if isTeamKind then pcall(row.preview.Hide, row.preview) else pcall(row.preview.Show, row.preview) end
       pcall(row.del.btn.Show, row.del.btn)
     end
   end
   -- 底部实时预览（整串条件）
-  seUI.preview:SetText(uiEsc(EVAL_GROUP_STR(seLinearToGroups(ed.conds)))) -- 1.61.1 | 显示转义
+  -- ★1.73.12 底部预览是**给人看的** → 走本地化显示（第二个参数 true）；导出/存档仍用 token 形态
+  seUI.preview:SetText(uiEsc(EVAL_GROUP_STR(seLinearToGroups(ed.conds), true))) -- 1.61.1 | 显示转义
 end
 
 local function SE_BUILD()
@@ -5380,6 +5381,12 @@ function EVAL_TEST_SE_ROW_TYPE(i)
   return ok and t or nil
 end
 -- 队伍debuff 的「类型」下拉控件（1.70.47）：可见性 + 显示文案（问真实控件）
+-- ★1.73.12 预览行读值口：底部预览是**真实 FontString**，断言要读它（不能读自己拼的字符串）
+function EVAL_TEST_SE_PREVIEW()
+  if seUI == nil or seUI.preview == nil then return nil end
+  local ok, t = pcall(function() return seUI.preview:GetText() end)
+  return ok and t or nil
+end
 function EVAL_TEST_SE_ROW_DT(i)
   local row = seUI.rows and seUI.rows[i]
   if not (row and row.dtBtn) then return nil, nil end
