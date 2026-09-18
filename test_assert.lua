@@ -8009,4 +8009,87 @@ do
   print("  抓宠帮手：数据 21 技能/图标齐全/按技能与野兽双检索/详情页简介+需求+宠物列表/放大镜跳数据检索")
 end
 
+-- 113) ★★★1.73.1 抓宠帮手：两视图的**可见性 + 布局审查**（用户截图报「详情页信息错误 / 布局错乱」）
+--   ★两处真事故（文本全对、只是画不出来 → 只读文本的断言全绿）：
+--     ① 详情视图里搜索行没被隐藏 → 标签+输入框检索词+详情标题**三层叠印**在同一行（截图被读成
+--        「宠物技能爪击 · 等级爪击」），[清除] 还压在 [返回] 上；
+--     ② 宠物行的名字与元信息先 Hide、随后只 Show 了图标与放大镜 → 宠物名/等级/区域/类型永远不显示。
+--   判据一律读**真实控件**（EVAL_PH_TEST_GEOM 给矩形与显隐），不在测试里复刻坐标常量。
+do
+  local function G() return EVAL_PH_TEST_GEOM() end
+  local function rgt(r) return (r and r.x and r.w) and (r.x + r.w) or nil end
+  local function within(r, span)
+    if not (r and r.shown and span) then return true end
+    return r.x >= span.x and (r.x + r.w) <= (span.x + span.w)
+  end
+  EVAL_PH_TEST_RESET()
+  -- ① 列表视图：搜索行可见 / [返回] 隐藏 / [清除] 可见
+  EVAL_PH_SET_QUERY("爪击")
+  local g1 = G()
+  eq(g1.listRowShown, true, "①★列表视图：搜索行（标签/输入框/计数/[清除]）必须可见")
+  eq(g1.backBtn and g1.backBtn.shown, false, "①列表视图：[返回] 必须隐藏")
+  eq(g1.clearBtn and g1.clearBtn.shown, true, "①列表视图：[清除] 必须可见")
+  eq(g1.emptyListShown, false, "①有结果时空态提示不显示")
+  -- ② 详情视图：搜索行**整行隐藏**（叠印闸门）+ 标题文字正确
+  eq(EVAL_PH_OPEN(8), true, "②前置：打开「爪击 等级8」详情")
+  local g2 = G()
+  eq(g2.listRowShown, false, "②★★★详情视图：搜索行必须**整行隐藏**（否则与标题叠印 —— 用户截图的那坨字）")
+  eq(g2.clearBtn and g2.clearBtn.shown, false, "②★★详情视图：[清除] 必须隐藏（它原来压在 [返回] 上）")
+  eq(g2.backBtn and g2.backBtn.shown, true, "②详情视图：[返回] 可见")
+  local tx2 = EVAL_PH_TEST_TEXTS()
+  local want2 = string.format(EVAL_L("PH_DET_TITLE"), "爪击", 8)
+  eq(tx2.title, want2, "②★详情标题逐字 = 模板输出（不是标签+标题叠出来的乱码）")
+  eq(tostring(tx2.req), string.format(EVAL_L("PH_DET_REQ"), 56), "②★需求行 = 该等级的真实需求宠物等级")
+  -- ③ 宠物行：名字与元信息**必须可见**（不可见闸门）+ 无数据的行反向哨兵
+  local det2 = EVAL_PH_TEST_DETAIL()
+  local nb2 = table.getn(det2.beasts)
+  eq(nb2 >= 2, true, "③前置：等级8 有 ≥2 个驯服来源（实际 " .. tostring(nb2) .. "）")
+  local row1, row2 = g2.det[1], g2.det[2]
+  eq(row1.nameShown, true, "③★★★宠物行的**名字必须可见**（原来 Hide 后从没 Show → 截图里只剩图标和「查」）")
+  eq(row1.metaShown, true, "③★★★宠物行的**元信息必须可见**")
+  eq(row1.zoomShown, true, "③★放大镜按钮可见")
+  eq(type(row1.nameText) == "string" and row1.nameText ~= "", true, "③★名字有内容：" .. tostring(row1.nameText))
+  eq(string.find(tostring(row1.metaText), det2.beasts[1].zone, 1, true) ~= nil, true, "③★元信息含区域：" .. tostring(row1.metaText))
+  local emptyRow = g2.det[nb2 + 1]
+  if emptyRow then eq(emptyRow.nameShown, false, "③★★反向哨兵：没有数据的行名字必须隐藏（不残留上一级的数据）") end
+  -- ④ 几何不变量（全部读真实矩形）
+  local span = g1.list[1].btn
+  eq(rgt(row1.icon) <= row1.nameBtn.x, true, "④★宠物行：图标右端 ≤ 名字格左端")
+  eq(rgt(row1.name) <= row1.meta.x, true, "④★★宠物行：名字不压元信息")
+  eq(rgt(row1.meta) <= row1.zoom.x, true, "④★★宠物行：元信息不压放大镜")
+  eq(within(row1.meta, span) and within(row1.zoom, span), true, "④★宠物行各列都在内容区内（以列表行宽为界）")
+  eq(rgt(g2.detMeta) <= g2.detReq.x, true, "④★★属性行与需求行**不相交**（原来是 meta 宽 W-260、req 从 +300 起 → 重叠 100px）")
+  eq(rgt(g2.detTitle) <= g2.backBtn.x, true, "④★详情标题不压 [返回]")
+  local d1 = row1.nameBtn.y - row2.nameBtn.y
+  local d2 = row2.nameBtn.y - g2.det[3].nameBtn.y
+  eq(d1 > 0 and d1 == d2, true, string.format("④★行距一致（%.1f / %.1f）——行池不重叠", d1, d2))
+  local sz4w, sz4h = EVAL_TEST_CFG_SIZE()
+  if type(sz4h) == "number" then
+    local last = g2.det[12]
+    eq((last.nameBtn.y - last.nameBtn.h) >= -sz4h, true, "④★宠物行池不越出窗口下沿")
+  end
+  -- ⑤ 空结果：如实提示（不留一片空白）
+  EVAL_PH_SET_QUERY("不存在的宠物技能xyz")
+  local g5 = G()
+  eq(EVAL_PH_TEST_STATE().filtered, 0, "⑤前置：该查询无匹配")
+  eq(g5.emptyListShown, true, "⑤★★空结果显示如实提示，而不是一片空白")
+  local et5 = EVAL_PH_TEST_TEXTS()
+  local g5e = G()
+  eq(g5e.list[1].btn.shown, false, "⑤无匹配时列表行全部隐藏")
+  -- ⑥ 分页提示：撕咬 等级1 有 13 个来源 > 一屏 12 行 → 如实提示条数
+  EVAL_PH_SET_QUERY("撕咬")
+  eq(EVAL_PH_OPEN(1), true, "⑥前置：打开「撕咬 等级1」")
+  local d6 = EVAL_PH_TEST_DETAIL()
+  local g6 = G()
+  if table.getn(d6.beasts) > 12 then
+    eq(g6.detScroll and g6.detScroll.shown, true, "⑥★★来源多于一屏时**如实提示**条数（绝不静默截断）")
+  else
+    eq(g6.detScroll and g6.detScroll.shown, false, "⑥来源一屏放得下时不显示分页提示")
+  end
+  -- 收尾
+  EVAL_PH_TEST_RESET()
+  EVAL_HELP_CFG_SETTAB(1)
+  print("  抓宠布局审查：搜索行按视图显隐 + 宠物行四件套可见 + 列不相交/行距一致/不越界 + 空态与分页如实提示")
+end
+
 print("ALL TESTS PASS")
