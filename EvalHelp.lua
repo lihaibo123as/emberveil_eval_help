@@ -7434,6 +7434,10 @@ if type(SlashCmdList) == "table" then
             " 行；拼不出来（**交回客户端、不染色**）" .. tostring(ce.held or 0) .. " 行")
           say("  ★支持：说/喊/公会/官员/队伍/团队（格式串取自客户端自己的 CHAT_*_GET）；" ..
             "频道/密语暂不支持（客户端原样显示）")
+          if type(EVAL_TB_CHATCOLOR_TYPECOLOR_INFO) == "function" then
+            say("  类型色来源（client=客户端设置 / client-rgb=只给 r,g,b / builtin=内置兜底 / none=不加色）：")
+            say("    " .. EVAL_TB_CHATCOLOR_TYPECOLOR_INFO())
+          end
           say("  取不到文本的调用：" .. tostring(ce.noMsg or 0) .. " 次（若 ≈ 被调用总数 → 取参姿势不对）")
           if type(ce.shape) == "table" and table.getn(ce.shape) > 0 then
             say("  调用形态（前 " .. table.getn(ce.shape) .. " 次的原样参数；★姿势定案看这里）：")

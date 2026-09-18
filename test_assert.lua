@@ -9687,4 +9687,51 @@ do
   print("  方案A：格式串抄客户端 · 类型色只在前缀 · 名字=职业色+可点链接 · 能拼才吞 · 拼不出来绝不丢消息")
 end
 
+-- 129e) ★★★1.73.23 类型色**三个来源**（真机实测：这个客户端取不到 ChatTypeInfo → 公会前缀变白；
+--   用户截图里客户端自己画的「[公会]」逐像素取色 = **40FF40** → 内置一份**有证据的**兜底色）
+--   判据：① 客户端给了 colorStr → **永远优先**；② 只给 r/g/b → 自己合成（0.25/1/0.25 → 40ff40）；
+--         ③ 客户端完全没有 → 用**有证据的**兜底（公会 = 截图取色 40FF40）；
+--         ④ **没证据的类型宁可不加色**（不许瞎猜配色）；⑤ 诊断读值口逐类型摊开「色 + 来源」。
+do
+  local saved129e = EVAL_HELP_CONFIG.tb
+  EVAL_HELP_CONFIG.tb = { chatColor = true }
+  local savedCti129e = _G.ChatTypeInfo
+  local hex129e = EVAL_TB_PAINT_CLASS_COLOR_OF("PALADIN")
+  _G.CHAT_GUILD_GET = "[公会] %s: "
+  _G.CHAT_PARTY_GET = "[队伍] %s: "
+  -- ① 客户端有 colorStr → 优先
+  _G.ChatTypeInfo = { GUILD = { colorStr = "|cff123456" } }
+  local c129e1, s129e1 = EVAL_TB_CHATTYPECOLOR("CHAT_MSG_GUILD")
+  eq(c129e1, "|cff123456", "①★★客户端有 colorStr → **优先用客户端的配色**（尊重玩家设置）")
+  eq(s129e1, "client", "①★并标出来源 = client")
+  -- ② 只给 r/g/b → 自己合成
+  _G.ChatTypeInfo = { GUILD = { r = 0.25, g = 1, b = 0.25 } }
+  local c129e2, s129e2 = EVAL_TB_CHATTYPECOLOR("CHAT_MSG_GUILD")
+  eq(c129e2, "|cff40ff40", "②★★只给 r/g/b → 合成 8 位色码（0.25/1/0.25 → 40ff40，四舍五入）")
+  eq(s129e2, "client-rgb", "②★来源标成 client-rgb")
+  -- ③ 客户端完全没有 ChatTypeInfo → 内置兜底（公会 = 截图取色）
+  _G.ChatTypeInfo = nil
+  local l129e = EVAL_TB_CHATCOMPOSE("CHAT_MSG_GUILD", "集合", "Ionol", hex129e)
+  local pre129e = "|cff40ff40[公会] |r"
+  eq(string.sub(tostring(l129e), 1, string.len(pre129e)) == pre129e, true,
+     "③★★★客户端没有 ChatTypeInfo 时用**内置兜底色**（截图取色 40ff40）：" .. tostring(l129e))
+  eq(select(2, EVAL_TB_CHATTYPECOLOR("CHAT_MSG_GUILD")), "builtin", "③★来源标成 builtin（诊断能看出来）")
+  -- ④ 没证据的类型 → **不加色**（绝不瞎猜）：队伍行的第一个色码就是名字自己的
+  local p129e = EVAL_TB_CHATCOMPOSE("CHAT_MSG_PARTY", "集合", "Ionol", hex129e)
+  --  ★判据要写准：队伍模板本身有前缀（"[队伍] "），所以「没加类型色」= **第一个色码之前就是那个前缀**。
+  local fc129e = string.find(tostring(p129e), "|c", 1, true)
+  eq(fc129e ~= nil and string.sub(tostring(p129e), 1, fc129e - 1) == "[队伍] ", true,
+     "④★★没证据的类型（队伍）**不加类型色** —— 第一个色码之前就是客户端前缀（宁缺勿猜）：" .. tostring(p129e))
+  eq(EVAL_TB_CHATTYPECOLOR("CHAT_MSG_PARTY"), nil, "④★读值口如实回答 nil")
+  -- ⑤ 诊断读值口：逐类型摊开
+  local info129e = tostring(EVAL_TB_CHATCOLOR_TYPECOLOR_INFO() or "")
+  eq(string.find(info129e, "ChatTypeInfo=**没有**", 1, true) ~= nil, true, "⑤★如实说客户端没有 ChatTypeInfo")
+  eq(string.find(info129e, "GUILD=|cff40ff40（builtin）", 1, true) ~= nil, true, "⑤★★逐类型给出「用到的色 + 来源」")
+  eq(string.find(info129e, "PARTY=nil（none）", 1, true) ~= nil, true, "⑤★没证据的类型如实标 none")
+  _G.ChatTypeInfo = savedCti129e
+  _G.CHAT_GUILD_GET, _G.CHAT_PARTY_GET = nil, nil
+  EVAL_HELP_CONFIG.tb = saved129e
+  print("  类型色三来源：客户端优先 · 只给 r,g,b 就合成 · 没有就内置（只放截图取过色的）· 没证据宁可不加色")
+end
+
 print("ALL TESTS PASS")

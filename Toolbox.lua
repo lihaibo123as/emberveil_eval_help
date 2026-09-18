@@ -733,16 +733,48 @@ local TB_CE_TYPE = {
   CHAT_MSG_SAY = "SAY", CHAT_MSG_YELL = "YELL", CHAT_MSG_GUILD = "GUILD",
   CHAT_MSG_OFFICER = "OFFICER", CHAT_MSG_PARTY = "PARTY", CHAT_MSG_RAID = "RAID",
 }
--- 消息类型色：`ChatTypeInfo[类型].colorStr`（客户端有就用它 —— 不自己发明配色；取不到就不加色）
+-- ★★★1.73.23 消息类型色**三个来源**（真机实测：这个客户端取不到 ChatTypeInfo → 公会前缀变白；
+--   而用户截图里**客户端自己画的** [公会] 我逐像素取色 = **40FF40** → 内置一份**有证据的**兜底色）
+--   ① 客户端 `ChatTypeInfo[类型].colorStr` —— **永远优先**（尊重客户端/玩家的配色设置）；
+--   ② 客户端只给 r/g/b → 自己合成 8 位色码（四舍五入到 0..255）；
+--   ③ 都没有 → **内置兜底表**：只放**从用户截图取过色**的项；没证据的**宁可不加色**（绝不瞎猜配色）。
+local TB_CE_COLOR_FALLBACK = {
+  GUILD = "ff40ff40", -- ★证据：用户截图里客户端自己画的「[公会]」= 40FF40（逐像素取色，29 次命中）
+}
 function EVAL_TB_CHATTYPECOLOR(ev)
   local t = TB_CE_TYPE[ev]
+  if not t then return nil, "none" end
   local cti = _G.ChatTypeInfo
-  if not t or type(cti) ~= "table" then return nil end
-  local e = cti[t]
-  if type(e) ~= "table" then return nil end
-  local s = e.colorStr
-  if type(s) == "string" and string.len(s) >= 10 then return s end -- "|c" + 8 位
-  return nil
+  if type(cti) == "table" then
+    local e = cti[t]
+    if type(e) == "table" then
+      local s = e.colorStr
+      if type(s) == "string" and string.len(s) >= 10 then return s, "client" end -- "|c" + 8 位
+      local r, g, b = tonumber(e.r), tonumber(e.g), tonumber(e.b)
+      if r and g and b then
+        local function h(x)
+          local v = math.floor(x * 255 + 0.5)
+          if v < 0 then v = 0 elseif v > 255 then v = 255 end
+          return string.format("%02x", v)
+        end
+        return "|cff" .. h(r) .. h(g) .. h(b), "client-rgb"
+      end
+    end
+  end
+  local fb = TB_CE_COLOR_FALLBACK[t]
+  if fb then return "|c" .. fb, "builtin" end
+  return nil, "none"
+end
+-- 诊断读值口：逐类型把「用到的色 + 来源」摊开（取证用；★不许在诊断里另写一套判据）
+function EVAL_TB_CHATCOLOR_TYPECOLOR_INFO()
+  local keys = { "SAY", "YELL", "GUILD", "OFFICER", "PARTY", "RAID" }
+  local parts = {}
+  for i = 1, table.getn(keys) do
+    local c, src = EVAL_TB_CHATTYPECOLOR("CHAT_MSG_" .. keys[i])
+    table.insert(parts, keys[i] .. "=" .. tostring(c) .. "（" .. tostring(src) .. "）")
+  end
+  local cti = _G.ChatTypeInfo
+  return "ChatTypeInfo=" .. ((type(cti) == "table") and "有" or "**没有**") .. "；" .. table.concat(parts, " ")
 end
 -- 纯函数：拼一行（**能拼 → 字符串**；任一条判据不满足 → **nil = 不许吞**）。
 -- ★类型色只在**前缀**上（与客户端一样：公会前缀是绿的、正文是白的）：前缀后立刻 `|r` 复位。
