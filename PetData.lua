@@ -1,32 +1,32 @@
 -- EvalHelp · PetData.lua —— 猎人宠物技能数据（1.73.0 独立载入）
 -- 数据来源：用户提供的宠物技能总表截图（doc/pet_info.png），转录整理见 doc/宠物技能数据.md。
 -- 结构：skills（技能定义+图标）/ ranks[技能名]（各等级：需求宠物等级 + 驯服来源）/ families（家族→图标）。
--- 图标：**客户端内置图标**（Interface\Icons...）——先用 INV_Misc_QuestionMark 占位，真实路径待用户确认后只改本文件的 ICONROOT 一行。
+-- 图标：**本客户端真实纹理路径**（/Game/Interface/Icons/<名字>_TEX，Unreal 资产路径）——取自 doc/图标路径清单.txt，由 PET ICON CHECK 逐条核对存在性；★1.12 的 Interface\Icons\ 写法在本客户端只显示成引擎的「?」缺图占位。
 
 EVAL_PET_DB = {}
 
 EVAL_PET_DB.skills = {
-  { id = "bite", name = "撕咬", cost = 35, cast = "瞬发", range = "5码", cd = "10秒", kind = "主动", intro = "撕咬目标，宠物最基础的伤害技能", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  { id = "claw", name = "爪击", cost = 25, cast = "瞬发", range = "5码", cd = "无", kind = "主动", intro = "快速爪击，无冷却但消耗集中值", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  { id = "dash", name = "突进", cost = 20, cast = "瞬发", range = "—", cd = "30秒", kind = "主动", intro = "短时间大幅提升移动速度，追击或脱离用", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  { id = "dive", name = "俯冲", cost = 20, cast = "瞬发", range = "—", cd = "30秒", kind = "主动", intro = "飞行系宠物的冲刺，效果同突进", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  { id = "charge", name = "冲锋", cost = 35, cast = "瞬发", range = "8-25码", cd = "25秒", kind = "主动", intro = "冲锋并定身目标，下一次攻击附加伤害", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  { id = "howl", name = "嚎叫", cost = 60, cast = "瞬发", range = "15码", cd = "10秒", kind = "主动", intro = "为队友的下一次攻击附加伤害", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  { id = "lightning", name = "闪电吐息", cost = 50, cast = "瞬发", range = "20码", cd = "无", kind = "主动", intro = "远程自然伤害，风蛇专属", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  { id = "prowl", name = "潜伏", cost = 40, cast = "瞬发", range = "—", cd = "10秒", kind = "主动", intro = "进入潜行，下一次攻击获得额外伤害", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  { id = "scorpid", name = "蝎毒", cost = 30, cast = "瞬发", range = "—", cd = "4秒", kind = "主动", intro = "持续自然伤害，可叠加5次", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  { id = "screech", name = "尖啸", cost = 20, cast = "瞬发", range = "8码", cd = "4秒", kind = "主动", intro = "降低范围内敌人的攻击强度", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  { id = "shell", name = "甲壳护盾", cost = 10, cast = "瞬发", range = "—", cd = "180秒", kind = "主动", intro = "降低受到的伤害，代价是攻击间隔变长", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  { id = "thunder", name = "雷霆践踏", cost = 60, cast = "瞬发", range = "8码", cd = "60秒", kind = "主动", intro = "范围自然伤害，猩猩专属", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  { id = "cower", name = "畏缩", cost = 25, cast = "瞬发", range = "5码", cd = "5秒", kind = "主动", intro = "降低仇恨值（与低吼共享冷却）", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  { id = "growl", name = "低吼", cost = 15, cast = "瞬发", range = "5码", cd = "5秒", kind = "被动-训练师", intro = "提高仇恨，宠物坦克核心（训练师学习）", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  { id = "stamina", name = "持久耐力", cost = 0, cast = "被动", range = "—", cd = "—", kind = "被动-训练师", intro = "提高宠物耐力（训练师学习）", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  { id = "natarmor", name = "自然护甲", cost = 0, cast = "被动", range = "—", cd = "—", kind = "被动-训练师", intro = "提高宠物护甲（训练师学习）", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  { id = "fireres", name = "火焰抗性", cost = 0, cast = "被动", range = "—", cd = "—", kind = "被动-训练师", intro = "提高火焰抗性（训练师学习）", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  { id = "frostres", name = "冰霜抗性", cost = 0, cast = "被动", range = "—", cd = "—", kind = "被动-训练师", intro = "提高冰霜抗性（训练师学习）", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  { id = "shadowres", name = "暗影抗性", cost = 0, cast = "被动", range = "—", cd = "—", kind = "被动-训练师", intro = "提高暗影抗性（训练师学习）", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  { id = "natureres", name = "自然抗性", cost = 0, cast = "被动", range = "—", cd = "—", kind = "被动-训练师", intro = "提高自然抗性（训练师学习）", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  { id = "arcaneres", name = "奥术抗性", cost = 0, cast = "被动", range = "—", cd = "—", kind = "被动-训练师", intro = "提高奥术抗性（训练师学习）", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  { id = "bite", name = "撕咬", cost = 35, cast = "瞬发", range = "5码", cd = "10秒", kind = "主动", intro = "撕咬目标，宠物最基础的伤害技能", icon = "/Game/Interface/Icons/INV_Misc_MonsterFang_01_TEX" },
+  { id = "claw", name = "爪击", cost = 25, cast = "瞬发", range = "5码", cd = "无", kind = "主动", intro = "快速爪击，无冷却但消耗集中值", icon = "/Game/Interface/Icons/INV_Misc_MonsterClaw_03_TEX" },
+  { id = "dash", name = "突进", cost = 20, cast = "瞬发", range = "—", cd = "30秒", kind = "主动", intro = "短时间大幅提升移动速度，追击或脱离用", icon = "/Game/Interface/Icons/Ability_Druid_Dash_TEX" },
+  { id = "dive", name = "俯冲", cost = 20, cast = "瞬发", range = "—", cd = "30秒", kind = "主动", intro = "飞行系宠物的冲刺，效果同突进", icon = "/Game/Interface/Icons/INV_Feather_01_TEX" },
+  { id = "charge", name = "冲锋", cost = 35, cast = "瞬发", range = "8-25码", cd = "25秒", kind = "主动", intro = "冲锋并定身目标，下一次攻击附加伤害", icon = "/Game/Interface/Icons/Ability_Warrior_Charge_TEX" },
+  { id = "howl", name = "嚎叫", cost = 60, cast = "瞬发", range = "15码", cd = "10秒", kind = "主动", intro = "为队友的下一次攻击附加伤害", icon = "/Game/Interface/Icons/Ability_Warrior_WarCry_TEX" },
+  { id = "lightning", name = "闪电吐息", cost = 50, cast = "瞬发", range = "20码", cd = "无", kind = "主动", intro = "远程自然伤害，风蛇专属", icon = "/Game/Interface/Icons/Spell_Nature_Lightning_TEX" },
+  { id = "prowl", name = "潜伏", cost = 40, cast = "瞬发", range = "—", cd = "10秒", kind = "主动", intro = "进入潜行，下一次攻击获得额外伤害", icon = "/Game/Interface/Icons/Ability_Stealth_TEX" },
+  { id = "scorpid", name = "蝎毒", cost = 30, cast = "瞬发", range = "—", cd = "4秒", kind = "主动", intro = "持续自然伤害，可叠加5次", icon = "/Game/Interface/Icons/Ability_PoisonSting_TEX" },
+  { id = "screech", name = "尖啸", cost = 20, cast = "瞬发", range = "8码", cd = "4秒", kind = "主动", intro = "降低范围内敌人的攻击强度", icon = "/Game/Interface/Icons/Spell_Shadow_PsychicScream_TEX" },
+  { id = "shell", name = "甲壳护盾", cost = 10, cast = "瞬发", range = "—", cd = "180秒", kind = "主动", intro = "降低受到的伤害，代价是攻击间隔变长", icon = "/Game/Interface/Icons/INV_Misc_Shell_02_TEX" },
+  { id = "thunder", name = "雷霆践踏", cost = 60, cast = "瞬发", range = "8码", cd = "60秒", kind = "主动", intro = "范围自然伤害，猩猩专属", icon = "/Game/Interface/Icons/Ability_ThunderClap_TEX" },
+  { id = "cower", name = "畏缩", cost = 25, cast = "瞬发", range = "5码", cd = "5秒", kind = "主动", intro = "降低仇恨值（与低吼共享冷却）", icon = "/Game/Interface/Icons/Ability_Druid_Cower_TEX" },
+  { id = "growl", name = "低吼", cost = 15, cast = "瞬发", range = "5码", cd = "5秒", kind = "被动-训练师", intro = "提高仇恨，宠物坦克核心（训练师学习）", icon = "/Game/Interface/Icons/Ability_Physical_Taunt_TEX" },
+  { id = "stamina", name = "持久耐力", cost = 0, cast = "被动", range = "—", cd = "—", kind = "被动-训练师", intro = "提高宠物耐力（训练师学习）", icon = "/Game/Interface/Icons/Spell_Nature_UnyeildingStamina_TEX" },
+  { id = "natarmor", name = "自然护甲", cost = 0, cast = "被动", range = "—", cd = "—", kind = "被动-训练师", intro = "提高宠物护甲（训练师学习）", icon = "/Game/Interface/Icons/Spell_Nature_SpiritArmor_TEX" },
+  { id = "fireres", name = "火焰抗性", cost = 0, cast = "被动", range = "—", cd = "—", kind = "被动-训练师", intro = "提高火焰抗性（训练师学习）", icon = "/Game/Interface/Icons/Spell_FireResistanceTotem_01_TEX" },
+  { id = "frostres", name = "冰霜抗性", cost = 0, cast = "被动", range = "—", cd = "—", kind = "被动-训练师", intro = "提高冰霜抗性（训练师学习）", icon = "/Game/Interface/Icons/Spell_Fire_FrostResistanceTotem_TEX" },
+  { id = "shadowres", name = "暗影抗性", cost = 0, cast = "被动", range = "—", cd = "—", kind = "被动-训练师", intro = "提高暗影抗性（训练师学习）", icon = "/Game/Interface/Icons/Spell_Shadow_ShadowWard_TEX" },
+  { id = "natureres", name = "自然抗性", cost = 0, cast = "被动", range = "—", cd = "—", kind = "被动-训练师", intro = "提高自然抗性（训练师学习）", icon = "/Game/Interface/Icons/Spell_Nature_NatureResistanceTotem_TEX" },
+  { id = "arcaneres", name = "奥术抗性", cost = 0, cast = "被动", range = "—", cd = "—", kind = "被动-训练师", intro = "提高奥术抗性（训练师学习）", icon = "/Game/Interface/Icons/Spell_Arcane_ArcaneResilience_TEX" },
 }
 
 EVAL_PET_DB.ranks = {
@@ -567,22 +567,22 @@ EVAL_PET_DB.ranks = {
 }
 
 EVAL_PET_DB.families = {
-  wolf = { label = "狼", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  spider = { label = "蜘蛛", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  cat = { label = "猫科", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  bear = { label = "熊", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  boar = { label = "野猪", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  crab = { label = "蟹", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  turtle = { label = "龟", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  crocolisk = { label = "鳄鱼", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  bat = { label = "蝙蝠", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  bird = { label = "鸟类", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  owl = { label = "枭", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  gorilla = { label = "猩猩", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  windserpent = { label = "风蛇", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  scorpid = { label = "蝎", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  tallstrider = { label = "陆行鸟", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
-  other = { label = "其他", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  wolf = { label = "狼", icon = "/Game/Interface/Icons/Ability_Hunter_Pet_Wolf_TEX" },
+  spider = { label = "蜘蛛", icon = "/Game/Interface/Icons/Ability_Hunter_Pet_Spider_TEX" },
+  cat = { label = "猫科", icon = "/Game/Interface/Icons/Ability_Hunter_Pet_Cat_TEX" },
+  bear = { label = "熊", icon = "/Game/Interface/Icons/Ability_Hunter_Pet_Bear_TEX" },
+  boar = { label = "野猪", icon = "/Game/Interface/Icons/Ability_Hunter_Pet_Boar_TEX" },
+  crab = { label = "蟹", icon = "/Game/Interface/Icons/Ability_Hunter_Pet_Crab_TEX" },
+  turtle = { label = "龟", icon = "/Game/Interface/Icons/Ability_Hunter_Pet_Turtle_TEX" },
+  crocolisk = { label = "鳄鱼", icon = "/Game/Interface/Icons/Ability_Hunter_Pet_Crocolisk_TEX" },
+  bat = { label = "蝙蝠", icon = "/Game/Interface/Icons/Ability_Hunter_Pet_Bat_TEX" },
+  bird = { label = "鸟类", icon = "/Game/Interface/Icons/Ability_Hunter_Pet_Vulture_TEX" },
+  owl = { label = "枭", icon = "/Game/Interface/Icons/Ability_Hunter_Pet_Owl_TEX" },
+  gorilla = { label = "猩猩", icon = "/Game/Interface/Icons/Ability_Hunter_Pet_Gorilla_TEX" },
+  windserpent = { label = "风蛇", icon = "/Game/Interface/Icons/Ability_Hunter_Pet_WindSerpent_TEX" },
+  scorpid = { label = "蝎", icon = "/Game/Interface/Icons/Ability_Hunter_Pet_Scorpid_TEX" },
+  tallstrider = { label = "陆行鸟", icon = "/Game/Interface/Icons/Ability_Hunter_Pet_TallStrider_TEX" },
+  other = { label = "其他", icon = "/Game/Interface/Icons/Ability_Hunter_BeastCall_TEX" },
 }
 
 return EVAL_PET_DB

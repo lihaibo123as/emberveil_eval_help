@@ -60,14 +60,52 @@ for (const raw of src) {
   if (m && curRank) { const f = familyOf(m[2]); curRank.beasts.push({ zone: m[1], name: m[2], level: m[3], fam: f[0] }); continue; }
 }
 const out = [];
-// ★★图标改用**客户端内置图标**（用户 1.73.0 指示：先用内置随便选一个占位，下次再确认真实路径）。
-//   占位 = INV_Misc_QuestionMark（1.12 必有的问号图标，明确表示「待确认」）；
-//   真实路径确定后**只改这张表**（每个技能一行），其余代码与数据不用动。
-const ICONROOT = 'Interface\\\\Icons\\\\INV_Misc_QuestionMark';
+// ★★★1.73.4 图标全部换成**客户端真实路径**（用户要求：「完善宠物助手tab 内所有图标替换，先根据语义从系统图标文件内自己匹配对应语义相似的图标」）。
+//   ★本客户端的纹理路径是 **Unreal 资产路径**：/Game/Interface/Icons/<名字>_TEX
+//     —— 不是 1.12 的 Interface\Icons\<名字>（那种写法在这个客户端会显示成引擎的「?」缺图占位，
+//     就是用户截图里那一屏问号的来源）。
+//   ★下面每个名字都来自游戏内采集的清单（/eh go icons → doc/图标路径清单.txt，1018 条），
+//     由 test_engine.js 的 PET ICON CHECK **逐条精确核对存在性**——写错一个当场 FAIL。
+const ICONPREFIX = '/Game/Interface/Icons/';
+const ICONSUFFIX = '_TEX';
+const iconPath = n => ICONPREFIX + n + ICONSUFFIX;
+// 技能图标：按**语义**挑（撕咬=獠牙、爪击=爪、突进=疾跑、低吼=嘲讽、抗性=对应抗性图腾…）
+const SKILL_ICON = {
+  bite:      'INV_Misc_MonsterFang_01',           // 獠牙 = 撕咬
+  claw:      'INV_Misc_MonsterClaw_03',           // 爪 = 爪击
+  dash:      'Ability_Druid_Dash',                // 疾跑 = 突进
+  dive:      'INV_Feather_01',                    // 羽毛 = 俯冲（飞行冲刺）
+  charge:    'Ability_Warrior_Charge',            // 冲锋
+  howl:      'Ability_Warrior_WarCry',            // 战吼 = 嚎叫
+  lightning: 'Spell_Nature_Lightning',            // 闪电 = 闪电吐息
+  prowl:     'Ability_Stealth',                   // 潜行 = 潜伏
+  scorpid:   'Ability_PoisonSting',               // 毒刺 = 蝎毒
+  screech:   'Spell_Shadow_PsychicScream',        // 尖啸
+  shell:     'INV_Misc_Shell_02',                 // 甲壳 = 甲壳护盾
+  thunder:   'Ability_ThunderClap',               // 雷霆践踏
+  cower:     'Ability_Druid_Cower',               // 畏缩
+  growl:     'Ability_Physical_Taunt',            // 嘲讽 = 低吼（提高仇恨）
+  stamina:   'Spell_Nature_UnyeildingStamina',    // 耐力
+  natarmor:  'Spell_Nature_SpiritArmor',          // 护甲（自然）
+  fireres:   'Spell_FireResistanceTotem_01',      // 火抗图腾
+  frostres:  'Spell_Fire_FrostResistanceTotem',   // 冰抗图腾
+  shadowres: 'Spell_Shadow_ShadowWard',           // 暗影防护
+  natureres: 'Spell_Nature_NatureResistanceTotem',// 自然抗性图腾
+  arcaneres: 'Spell_Arcane_ArcaneResilience',     // 奥术抗性
+};
+// 家族图标：客户端自带一整套 **Ability_Hunter_Pet_***（一一对应，不撞图）
+const FAM_ICON = {
+  wolf: 'Ability_Hunter_Pet_Wolf', cat: 'Ability_Hunter_Pet_Cat', bear: 'Ability_Hunter_Pet_Bear',
+  boar: 'Ability_Hunter_Pet_Boar', crab: 'Ability_Hunter_Pet_Crab', turtle: 'Ability_Hunter_Pet_Turtle',
+  crocolisk: 'Ability_Hunter_Pet_Crocolisk', bat: 'Ability_Hunter_Pet_Bat', bird: 'Ability_Hunter_Pet_Vulture',
+  owl: 'Ability_Hunter_Pet_Owl', gorilla: 'Ability_Hunter_Pet_Gorilla', windserpent: 'Ability_Hunter_Pet_WindSerpent',
+  scorpid: 'Ability_Hunter_Pet_Scorpid', tallstrider: 'Ability_Hunter_Pet_TallStrider',
+  spider: 'Ability_Hunter_Pet_Spider', other: 'Ability_Hunter_BeastCall',
+};
 out.push('-- EvalHelp · PetData.lua —— 猎人宠物技能数据（1.73.0 独立载入）');
 out.push('-- 数据来源：用户提供的宠物技能总表截图（doc/pet_info.png），转录整理见 doc/宠物技能数据.md。');
 out.push('-- 结构：skills（技能定义+图标）/ ranks[技能名]（各等级：需求宠物等级 + 驯服来源）/ families（家族→图标）。');
-out.push('-- 图标：**客户端内置图标**（Interface\\Icons\...）——先用 INV_Misc_QuestionMark 占位，真实路径待用户确认后只改本文件的 ICONROOT 一行。');
+out.push('-- 图标：**本客户端真实纹理路径**（/Game/Interface/Icons/<名字>_TEX，Unreal 资产路径）——取自 doc/图标路径清单.txt，由 PET ICON CHECK 逐条核对存在性；★1.12 的 Interface\\Icons\\ 写法在本客户端只显示成引擎的「?」缺图占位。');
 out.push('');
 out.push('EVAL_PET_DB = {}');
 out.push('');
@@ -75,7 +113,7 @@ out.push('EVAL_PET_DB.skills = {');
 for (const name of skills) {
   const m = META[name];
   if (!m) continue;
-  out.push('  { id = ' + Q + m[0] + Q + ', name = ' + Q + name + Q + ', cost = ' + m[2] + ', cast = ' + Q + m[3] + Q + ', range = ' + Q + m[4] + Q + ', cd = ' + Q + m[5] + Q + ', kind = ' + Q + m[6] + Q + ', intro = ' + Q + m[7] + Q + ', icon = ' + Q + ICONROOT + Q + ' },');
+  out.push('  { id = ' + Q + m[0] + Q + ', name = ' + Q + name + Q + ', cost = ' + m[2] + ', cast = ' + Q + m[3] + Q + ', range = ' + Q + m[4] + Q + ', cd = ' + Q + m[5] + Q + ', kind = ' + Q + m[6] + Q + ', intro = ' + Q + m[7] + Q + ', icon = ' + Q + iconPath(SKILL_ICON[m[0]]) + Q + ' },');
 }
 out.push('}');
 out.push('');
@@ -112,7 +150,7 @@ for (const name of skills) {
 out.push('}');
 out.push('');
 out.push('EVAL_PET_DB.families = {');
-for (const f of FAM.concat([['other','其他']])) { out.push('  ' + f[0] + ' = { label = ' + Q + f[1] + Q + ', icon = ' + Q + ICONROOT + Q + ' },'); }
+for (const f of FAM.concat([['other','其他']])) { out.push('  ' + f[0] + ' = { label = ' + Q + f[1] + Q + ', icon = ' + Q + iconPath(FAM_ICON[f[0]] || 'Ability_Hunter_BeastCall') + Q + ' },'); }
 out.push('}');
 out.push('');
 

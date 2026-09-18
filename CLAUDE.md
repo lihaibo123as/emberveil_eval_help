@@ -310,7 +310,11 @@ Remove-Item $staging -Recurse -Force
 - ★★★**`UnitMana` 是「主能量」且有显示缩放**（怒气 ÷10、幸福 ÷1000）→「蓝量」条件**必须先判 `UnitPowerType(unit)==0`**；血量/蓝量对队伍/团队成员有效、**超距离走 roster 数据**。
 - ★★★**施法 API 全是 Protected**（`CastSpellByName`（且只有 onSelf）/ `CastSpell` / `SpellTargetUnit` / `SpellStopTargeting` / `SpellStopCasting`）→ **插件无法直接把法术打给队友**；`TargetUnit` **非 Protected** → **唯一路径 = 切目标 → `UseAction(slot)` → 还原原目标**（`UseAction` 第 3 参 onSelf = 对自己）；`Targetting` 分类另有 `TargetLastTarget`/`ClearTarget`/`TargetByName`/`TargetNearestPartyMember` 等。
 - ★★**1.12 系队长/团长聊天走独立事件**（`CHAT_MSG_PARTY_LEADER`/`CHAT_MSG_RAID_LEADER`）→ 只注册 `CHAT_MSG_PARTY/RAID` 的接收端**永远收不到**（且失败静默）→ 分享发送侧只留 公会/队伍/说、接收侧注册保持原样；**来源判据 = 触发的事件名**、**认不出来就不标**、三态分派抽 `EVAL_SHARE_DISPATCH`。
-- ★★**本机 `api_*.html` 只有函数索引（1370 条）、没有事件列表** → 事件类问题只能两套都注册或 `/eh go probe` 取证；宏图标表 `GetNumMacroIcons`/`GetMacroIconInfo` 给的是**路径**、整套打包在 `Content\Paks`（磁盘取不到）、**纹理不用写进 .toc**；★**纹理路径写错时什么都不画**（不报错不崩只是空白）→ 路径必须解析到磁盘核对。
+- ★★★1.73.4 **本客户端的纹理路径是 Unreal 资产路径**：`/Game/Interface/Icons/<名字>_TEX` —— **不是** 1.12 的 `Interface\Icons\<名字>`。★写成 1.12 那种**不会"不画"，而是显示成引擎的「?」缺图占位**（用户截图里一屏问号就是这么来的；旧记忆写「写错什么都不画」是错的，已更正）。
+  ★**宏图标表 = 唯一能把整表合法路径吐出来的官方入口**（`GetNumMacroIcons`/`GetMacroIconInfo`，"内置图标磁盘取不到"只对了一半）→ 新增 `/eh go icons` 采集进 `EVAL_HELP_CONFIG.iconDump`，/reload 落盘后取出 1018 条 → 落成 **`doc/图标路径清单.txt`**。
+  ★★**这张清单现在是判据的一部分**：`PET ICON CHECK` 从「只守格式」升级为**真存在性校验**（逐条精确匹配清单 + 前缀/`_TEX` 后缀 + 技能间/家族间不撞图）；变异 M58（不存在的名字）/M59（退回老路径）/M60（家族撞图）/M61（少 `_TEX`）全捕获。★要换/加图标：从清单里挑 → 只改 `gen_petdata.js` 的 `SKILL_ICON`/`FAM_ICON` 两张表 → 重生成（该生成器逐字复现 `PetData.lua`，可直接重跑）。
+  ★宠物家族用客户端自带的一整套 `Ability_Hunter_Pet_*`（狼/猫/熊/野猪/蟹/龟/鳄/蝙蝠/秃鹫/枭/猩猩/风蛇/蝎/陆行鸟/蜘蛛），**一族一枚不撞图**。
+- ★★**本机 `api_*.html` 只有函数索引（1370 条）、没有事件列表** → 事件类问题只能两套都注册或 `/eh go probe` 取证；宏图标表 `GetNumMacroIcons`/`GetMacroIconInfo` 给的是**路径**、整套打包在 `Content\Paks`（磁盘取不到）、**纹理不用写进 .toc**；★（**已更正**：纹理路径写错不是"什么都不画"，而是显示成引擎的「?」缺图占位——见本节 1.73.4 条；路径一律从 `doc/图标路径清单.txt` 挑，并由 `PET ICON CHECK` 逐条核对。）
 
 ### 5.6 内容 / 数据质量
 - ★★★1.73.2 **「可驱散类型」多选 = 一个字段三种形态，读侧归一**（用户：「debuff 类型检测 包括团队debuff 类型要支持多选」）：`cd.dt` 可以是 `nil/""/"any"`（任意）、**字符串**（单选 = **存量数据的原样**）、**集合表**（多选，命中任一即算命中）。★**空集 = 任意**（与 nil 同义）——反过来写成「永不命中」是最容易犯的语义错。★文本形态：多选 `(Magic/Poison)`、**单选仍是 `(Magic)`**（老配置导出逐字不变，配反向哨兵）；导入按斜杠拆，顿号/逗号也认（手写宽松）。★改动点只在 `dispelMatch` + 导出/解析三处 → 自身/目标/队友/团员/候选者/选取器**一处生效全部生效**（这就是把判定收在一个函数里的价值）。判据 = 组 114；变异 M46/M47/M50 捕获。

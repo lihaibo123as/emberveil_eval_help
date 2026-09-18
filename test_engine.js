@@ -881,35 +881,71 @@ function checkIconAssets() {
   console.log("FRAME NAME CLASH CHECK: " + frames.length + " named frames, none shadows an addon global function");
 })();
 
-// ===== PET ICON CHECK（1.73.0）：抓宠帮手的图标路径必须**格式正确且指向客户端内置图标** =====
-// 背景变更（用户 1.73.0 指示）：图标从「截图裁切的 media/pet/*.tga」改为**客户端内置图标**
-//   （先用 INV_Misc_QuestionMark 占位，真实路径待用户下轮确认）。
-//   ★内置图标**无法做磁盘校验**——它们打包在客户端资源里（Content\Paks），磁盘上取不到（与宏图标表同理，见记忆体）。
-//   所以本检查改为守**能守的部分**：① 每个技能/家族都有 icon；② 一律是 Interface\Icons 下的内置路径；
-//   ③ 不带扩展名（本客户端约定）；④ 数量 ≥ 20。等换成真实路径时，这条检查会继续守住「别写成自包含 media 路径」。
+// ===== PET ICON CHECK（1.73.4）：抓宠帮手的图标必须是**客户端清单里真的存在**的路径 =====
+// ★★1.73.4 事实更正（这一条推翻了 1.73.0 的假设）：本客户端的纹理路径是 **Unreal 资产路径**
+//   `/Game/Interface/Icons/<名字>_TEX`，而**不是** 1.12 的 `Interface\Icons\<名字>`——
+//   写成后者不会"不画"，而是显示成引擎的**「?」缺图占位**（用户截图里那一屏问号就是这么来的）。
+//   ★而且「内置图标磁盘取不到」只对了一半：**宏图标表**（GetNumMacroIcons/GetMacroIconInfo）
+//   能把整表路径吐出来 → `/eh go icons` 采集进 `doc/图标路径清单.txt`（1018 条）。
+//   所以现在这条检查可以做到**真正的存在性校验**：逐个精确匹配白名单，写错一个当场 FAIL。
+// 判据：① 每个 icon 都以 /Game/Interface/Icons/ 开头、_TEX 结尾；② **逐条存在于白名单**；
+//   ③ 没有扩展名（本客户端约定）；④ 数量 ≥ 20；⑤ 技能之间不撞图、家族之间不撞图（防复制粘贴错）。
 (function () {
   const p = path.join(__dirname, 'PetData.lua');
   if (!fs.existsSync(p)) { console.log('PET ICON CHECK: skipped (no PetData.lua)'); return; }
+  const wl = path.join(__dirname, 'doc', '图标路径清单.txt');
+  if (!fs.existsSync(wl)) {
+    console.log('PET ICON CHECK: FAIL - 缺少 doc/图标路径清单.txt（游戏内 /eh go icons 采集所得，是图标存在性的唯一依据）');
+    process.exitCode = 1;
+    return;
+  }
+  const white = new Set(fs.readFileSync(wl, 'utf8').split(/\r?\n/).map(s => s.trim()).filter(s => s && s.charAt(0) !== '#'));
   const src = fs.readFileSync(p, 'utf8');
-  const BS = String.fromCharCode(92);
-  const ICONS = 'Interface' + BS + BS + 'Icons' + BS + BS;
+  const PREFIX = '/Game/Interface/Icons/';
+  const SUFFIX = '_TEX';
   const icons = [];
   const re = /icon = "([^"\r\n]+)"/g;
   let m;
   while ((m = re.exec(src)) !== null) icons.push(m[1]);
-  const bad = icons.filter(v => v.indexOf(ICONS) !== 0);
+  const badForm = icons.filter(v => v.indexOf(PREFIX) !== 0 || v.slice(-SUFFIX.length) !== SUFFIX);
+  const notInWhite = icons.filter(v => !white.has(v));
   const withExt = icons.filter(v => /\.(tga|blp|png)$/i.test(v));
-  console.log('PET ICON CHECK: ' + icons.length + ' icon refs, ' + bad.length + ' not built-in, ' + withExt.length + ' with extension');
-  if (bad.length) {
-    console.log('  NOT BUILT-IN: ' + bad.slice(0, 3).join(' | '));
-    console.log('  (placeholder phase: built-in Interface' + BS + 'Icons paths only)');
-    process.exit(1);
+  const legacy = icons.filter(v => v.indexOf('Interface\\Icons') === 0);
+  // 技能段（skills 表）与家族段（families 表）分别查重
+  const skillsSeg = src.slice(src.indexOf('EVAL_PET_DB.skills'), src.indexOf('EVAL_PET_DB.ranks') > 0 ? src.indexOf('EVAL_PET_DB.ranks') : src.length);
+  const famSeg = src.slice(src.indexOf('EVAL_PET_DB.families'));
+  const segIcons = seg => { const out = []; const rr = /icon = "([^"\r\n]+)"/g; let mm; while ((mm = rr.exec(seg)) !== null) out.push(mm[1]); return out; };
+  const skIcons = segIcons(skillsSeg), famIcons = segIcons(famSeg);
+  const dupSk = skIcons.filter((v, i) => skIcons.indexOf(v) !== i);
+  const dupFam = famIcons.filter((v, i) => famIcons.indexOf(v) !== i);
+  console.log('PET ICON CHECK: ' + icons.length + ' icon refs, ' + badForm.length + ' bad format, ' + notInWhite.length +
+    ' not in client list, ' + withExt.length + ' with extension, ' + (dupSk.length + dupFam.length) + ' duplicated');
+  if (legacy.length) {
+    console.log('  LEGACY 1.12 PATH: ' + legacy.slice(0, 3).join(' | ') + '  → 本客户端会显示成「?」缺图占位');
+    process.exitCode = 1;
+    return;
+  }
+  if (badForm.length) {
+    console.log('  BAD FORMAT: ' + badForm.slice(0, 3).join(' | ') + '  (want ' + PREFIX + '<name>' + SUFFIX + ')');
+    process.exitCode = 1;
+    return;
+  }
+  if (notInWhite.length) {
+    console.log('  NOT IN CLIENT LIST: ' + notInWhite.slice(0, 3).join(' | ') + '  (写错路径 = 引擎画「?」)');
+    process.exitCode = 1;
+    return;
   }
   if (withExt.length) {
     console.log('  HAS EXTENSION: ' + withExt.slice(0, 3).join(' | ') + '  (this client wants no extension)');
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
-  if (icons.length < 20) { console.log('PET ICON CHECK: FAIL - expected >= 20 icon refs, got ' + icons.length); process.exit(1); }
+  if (dupSk.length || dupFam.length) {
+    console.log('  DUPLICATED: skills=[' + dupSk.slice(0, 2).join(',') + '] families=[' + dupFam.slice(0, 2).join(',') + ']');
+    process.exitCode = 1;
+    return;
+  }
+  if (icons.length < 20) { console.log('PET ICON CHECK: FAIL - expected >= 20 icon refs, got ' + icons.length); process.exitCode = 1; return; }
 })();
 checkIconAssets();
 

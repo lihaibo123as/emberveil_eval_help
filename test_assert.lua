@@ -7945,12 +7945,29 @@ do
   for i = 1, nsk112 do
     local ic = tostring(sk112[i].icon or "")
     if ic ~= "" then withIcon112 = withIcon112 + 1 end
-    -- ★1.73.0 用户指示：图标先用**客户端内置图标**占位（真实路径待下轮确认）——
-    --   所以判据是「指向客户端内置 Interface\Icons 且不带扩展名」，而不是「在插件 media 里」
-    eq(string.sub(ic, 1, 15) == "Interface\\Icons", true, "★技能图标指向客户端内置图标：" .. tostring(sk112[i].name))
+    -- ★★★1.73.4 图标已全部换成**客户端真实路径**（用户：「完善宠物助手tab 内所有图标替换」）：
+    --   本客户端的纹理是 Unreal 资产路径 /Game/Interface/Icons/<名字>_TEX；
+    --   写 1.12 的 Interface\Icons\ 会显示成引擎的「?」缺图占位（用户截图那一屏问号就是这么来的）。
+    eq(string.find(ic, "/Game/Interface/Icons/", 1, true) == 1, true, "★技能图标是客户端资产路径：" .. tostring(sk112[i].name))
+    eq(string.sub(ic, -4) == "_TEX", true, "★以 _TEX 结尾（本客户端约定）：" .. tostring(sk112[i].name))
+    eq(string.find(ic, "QuestionMark", 1, true) == nil, true, "★★不再是问号占位（语义匹配的真实图标）：" .. tostring(sk112[i].name))
     eq(string.find(ic, ".tga", 1, true) == nil, true, "★不带扩展名（本客户端约定）：" .. tostring(sk112[i].name))
   end
   eq(withIcon112, nsk112, "★★每个技能都有图标（用户要求「搭配图标」）")
+  -- 家族图标：同样必须是真实路径、且**一族一枚**（撞图就是复制粘贴错）
+  do
+    local fams112, famSeen, famDup = 0, {}, ""
+    for fid, f in pairs(EVAL_PET_DB.families or {}) do
+      fams112 = fams112 + 1
+      local fi = tostring(f.icon or "")
+      eq(string.find(fi, "/Game/Interface/Icons/", 1, true) == 1 and string.sub(fi, -4) == "_TEX", true,
+         "★家族图标是客户端资产路径：" .. tostring(fid))
+      if famSeen[fi] then famDup = famDup .. tostring(fid) .. " " end
+      famSeen[fi] = true
+    end
+    eq(fams112 >= 16, true, "★家族数 ≥ 16（实际 " .. tostring(fams112) .. "）")
+    eq(famDup, "", "★★家族图标一族一枚（撞图 = 复制粘贴错）：" .. famDup)
+  end
   -- ② 条目 = 技能 × 等级（列表要「显示各等级的技能」）
   local st112 = EVAL_PH_TEST_STATE()
   eq(st112.entries, 106, "★★条目数 = 技能×等级 = 106（13 主动 58 + 8 训练师被动 48）")
