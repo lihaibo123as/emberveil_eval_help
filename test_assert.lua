@@ -9399,6 +9399,79 @@ do
   print("  取证白名单：法术刷屏不再挤掉玩家聊天样本（记 arg1+arg2）· 事件计数 · 官方消息组判读分三态（不假报已屏蔽）")
 end
 
+-- 129b) ★★★1.73.18 真机定案后的**名字着色**（用户样本：arg1 = 只有正文 "1"/"你有队"，arg2 = 发送者名）
+--   判据：① arg1=正文 + arg2=发送者 时，把 **arg2 包成 |c职业色名字|r**（这才是真机能染色的一处）；
+--         ② 名字不在缓存 → 一个字都不改（**不许涂默认灰**：不知道职业 ≠ 职业是灰）；
+--         ③ 已带 |c 的不重复包；④ 主动查询的触发点 = **发送者名**（正文里根本没有名字可找）。
+do
+  local savedTb129b = EVAL_HELP_CONFIG.tb
+  EVAL_HELP_CONFIG.tb = { chatColor = true, whoQuery = true }
+  EVAL_TB_WHO_RESET()
+  TEST.whoSent = {}
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  EVAL_TB_NAMECLASS_PUT("Ionol", "圣骑士")
+  local colPal129 = "|c" .. string.sub(EVAL_TB_PAINT_CLASS_COLOR_OF("PALADIN"), 3)
+  -- ① 真机形态：正文 "1" + 发送者 "Ionol"（在缓存里）
+  TEST.ceCalls, TEST.ceSeen = 0, {}
+  arg1 = "1" arg2 = "Ionol"
+  ChatFrame_OnEvent("CHAT_MSG_SAY")
+  local seen129 = TEST.ceSeen[table.getn(TEST.ceSeen)]
+  eq(seen129 ~= nil and seen129.arg2, colPal129 .. "Ionol|r",
+     "①★★★arg2（发送者）被包成职业色：" .. tostring(seen129 and seen129.arg2))
+  eq(seen129 ~= nil and seen129.arg1, "1", "①★正文一个字都不改（名字不在正文里）")
+  eq(EVAL_TB_CHATEVENT_STATE().named, 1, "①★名字上色计数 +1")
+  -- ② 名字不在缓存 → 原样（绝不涂默认灰）
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  TEST.ceCalls, TEST.ceSeen = 0, {}
+  arg1 = "1" arg2 = "查无此人"
+  ChatFrame_OnEvent("CHAT_MSG_SAY")
+  local seen129b = TEST.ceSeen[table.getn(TEST.ceSeen)]
+  eq(seen129b ~= nil and seen129b.arg2, "查无此人", "②★★★不在缓存的名字**一个字都不改**（不许涂默认灰）")
+  eq(EVAL_TB_CHATEVENT_STATE().nameMiss >= 1, true, "②★并如实记「名字不在缓存」的计数（诊断里能看到）")
+  -- ③ 已带色 → 不重复包
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  TEST.ceCalls, TEST.ceSeen = 0, {}
+  local already129 = colPal129 .. "Ionol|r"
+  arg1 = "1" arg2 = already129
+  ChatFrame_OnEvent("CHAT_MSG_SAY")
+  local seen129c = TEST.ceSeen[table.getn(TEST.ceSeen)]
+  eq(seen129c ~= nil and seen129c.arg2, already129, "③★★已带颜色的名字不重复包裹（幂等）")
+  --   ★★幂等必须由「重建结果与原文**逐字节相同**」保证（不是靠「看到 |c 就跳过」的守卫）：
+  --     所以**两个计数都必须为 0** —— 否则「什么都没做」与「查得到但不该动」分不清（变异 M177 靠这条抓）。
+  local st129c = EVAL_TB_CHATEVENT_STATE()
+  eq((st129c.named or 0) == 0 and (st129c.nameMiss or 0) == 0, true,
+     "③★已是我们那层色 → 既不上色也不记「不在缓存」：named=" .. tostring(st129c.named) .. " miss=" .. tostring(st129c.nameMiss))
+  -- ③b ★★★客户端自己先上过色（**默认灰**）→ 查到职业就必须改成职业色：
+  --     这是用户那句「角色名还是没染色」的真身（旧代码拿带码的串查缓存 → 永远查不到人 → 什么都不改）。
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  TEST.ceCalls, TEST.ceSeen = 0, {}
+  arg1 = "1" arg2 = "|cff808080Ionol|r"
+  ChatFrame_OnEvent("CHAT_MSG_SAY")
+  local seen129d = TEST.ceSeen[table.getn(TEST.ceSeen)]
+  eq(seen129d ~= nil and seen129d.arg2, already129,
+     "③b★★★客户端自己上的灰被改成职业色：" .. tostring(seen129d and seen129d.arg2))
+  eq(tonumber(EVAL_TB_CHATEVENT_STATE().named or 0) >= 1, true, "③b★并记「名字上色」计数 +1")
+  -- ④ 主动查询触发点 = 发送者名（正文里没有名字可找）
+  EVAL_TB_WHO_RESET()
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  arg1 = "1" arg2 = "陌生人甲"
+  ChatFrame_OnEvent("CHAT_MSG_GUILD")
+  eq(EVAL_TB_WHO_STATE().queued >= 1, true, "④★★★发送者名不在缓存 → 排进主动查询队列（正文里根本没名字）")
+  -- ⑤ 诊断里能看到名字上色的两个计数
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  arg1 = "1" arg2 = "Ionol"
+  ChatFrame_OnEvent("CHAT_MSG_SAY")
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 聊天")
+  local c129b = tostring(TEST.chat or "")
+  eq(string.find(c129b, "名字（arg2 = 发送者）上色", 1, true) ~= nil, true, "⑤★★诊断打印「名字上色 N 次 / 名字不在缓存 M 次」")
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  EVAL_TB_WHO_RESET()
+  arg1, arg2 = nil, nil
+  EVAL_HELP_CONFIG.tb = savedTb129b
+  print("  名字着色（真机形态）：arg2=发送者 → 包职业色 · 不在缓存不涂灰 · 已带色不重复包 · 主动查询按发送者触发")
+end
+
 -- 129) ★★★1.73.17 取参兼容**全部调用形态** + 调用形态取证（用户实测：ChatFrame_OnEvent 被调用 1513 次、
 --   零样本零事件计数 → 取参姿势不对；而计数被写在「取到文本」之后 → 诊断把证据自己藏了）
 --   判据：① (event)+全局 / ② (event,文本,发送者) / ③ (self,event,文本,发送者) 三种形态都要取到「事件名 + 文本 + 发送者」；

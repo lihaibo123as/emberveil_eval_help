@@ -27,6 +27,41 @@ local function tbNameCharLen(s)
   return n
 end
 
+-- ★★★1.73.18 名字 → 职业 token 缓存**上移到文件顶部**：聊天入口（更早的代码）要读它；
+--   局部队变量必须声明在**使用之前**（本轮两次实测：直接引用后段的 local → 拿到全局 nil →
+--   attempt to call a nil value）。单一真值：写入点只有 tbNameClassPut。
+local tbNameClass = {}
+local function tbNameClassKey(name)
+  if type(name) ~= "string" then return nil end
+  local s = string.gsub(name, "^%s*(.-)%s*$", "%1")
+  if s == "" then return nil end
+  s = string.lower(s)
+  local dash = string.find(s, "-", 1, true)
+  if dash and dash > 1 then s = string.sub(s, 1, dash - 1) end
+  if tbNameCharLen(s) < 2 then return nil end
+  return s
+end
+local function tbNameClassPut(name, klass)
+  local k = tbNameClassKey(name)
+  if not k then return false end
+  local tok = EVAL_TB_PAINT_CLASS_TOKEN_OF(klass)
+  if not tok then return false end
+  tbNameClass[k] = tok
+  return true
+end
+local function tbNameClassGet(name)
+  local k = tbNameClassKey(name)
+  if not k then return nil end
+  return tbNameClass[k]
+end
+function EVAL_TB_NAMECLASS_PUT(n, k) return tbNameClassPut(n, k) end
+function EVAL_TB_NAMECLASS_GET(n) return tbNameClassGet(n) end
+function EVAL_TB_NAMECLASS_SIZE()
+  local n = 0
+  for _ in pairs(tbNameClass) do n = n + 1 end
+  return n
+end
+
 -- ===== 自绘基础件（与主程序同风格：WHITE8X8 纯色纹理 + 字体链） =====
 local function tbSolid(tex, r, g, b, a)
   pcall(tex.SetTexture, tex, "Interface\\Buttons\\WHITE8X8")
@@ -577,12 +612,48 @@ function EVAL_TB_CHATEVENT_INSTALL()
       end
       -- ①b ★ChatMOD 的做法：趁事件在手，对 this 帧试一次懒挂载（成败都记账）
       if this ~= nil then pcall(EVAL_TB_THIS_HOOK, this) end
-      -- ①c 未缓存名字 → 排进主动查询队列（与 AddMessage 层同一个入队口，重复的会被它自己挡掉）
+      -- ★★★1.73.18 真机定案（用户样本）：**arg1 只有正文**（"1" / "你有队"），**arg2 才是发送者名**（"Ionol" / "猎狂"）。
+      --   调用形态 = 经典「(event) + 全局 arg1..arg9」（取证里 e=PLAYER_ENTERING_WORLD ｜ a1=nil ｜ arg1=player）。
+      --   ⇒ 名字**不在 arg1 里**（客户端自己把它拼成 "[名字]: 正文"）→ 要让名字带上职业色，
+      --     唯一能改的就是 **arg2 本身**（处理器从全局取值）。
+      local sender = nil
+      if type(arg2) == "string" and arg2 ~= "" then sender = arg2 end
+      if sender == nil then sender = tbCeSenderOf(msg, a1, ...) end
+      -- ①c 主动查询：**发送者名**才是最好的触发点（原来从正文找方括号名字，而正文只有 "1"/"你有队" → 永远找不到）
+      if type(EVAL_TB_WHO_ENQUEUE) == "function" and sender then pcall(EVAL_TB_WHO_ENQUEUE, sender) end
       if type(EVAL_TB_WHO_CANDIDATE) == "function" and type(EVAL_TB_WHO_ENQUEUE) == "function" then
-        local cand = EVAL_TB_WHO_CANDIDATE(msg)
+        local cand = EVAL_TB_WHO_CANDIDATE(msg) -- 兼容：正文里若真带 [名字]（别的客户端形态）也试一次
         if cand then pcall(EVAL_TB_WHO_ENQUEUE, cand) end
       end
-      -- ② 名字着色：只改文本那一个值，其余一律原样
+      -- ②a ★名字着色（**本轮真正的修复**）：把 arg2 包成 |c职业色名字|r。
+      --   ★做法 =「**剥码 → 查缓存 → 用纯名字重建**」：
+      --     先剥掉已有的颜色码拿到**纯名字**再查职业色，然后用**纯名字**重建整段。于是：
+      --     ① 客户端自己先上过色（不知道职业时的**默认灰**）→ 照样能被改成职业色
+      --        —— 用户抱怨的「角色名还是没染色」正是这种（旧代码拿带码的串查缓存、永远查不到人）；
+      --     ② 已经是我们那层色 → 重建出来**逐字节相同** → **天然幂等**、不重复包裹，也不记任何计数。
+      --   ★上一版「看到 |c 就整段跳过」的写法里，查缓存用的却是**带码的串** → 那条守卫是**死代码**
+      --     （变异 M176 实测存活）；改成重建之后，「剥码」这一步是**承重的**（删掉它 = 灰名字改不掉，变异 M176 捕获）。
+      --   ★保守：只在「缓存里有这个职业色」时重建；**不自己加 |Hplayer: 链接**
+      --     （真机还没确认客户端是否自己拼链接；先把颜色上上去，链接形态等实测反馈再定）。
+      local senderPlain = sender
+      if type(senderPlain) == "string" then
+        senderPlain = string.gsub(senderPlain, "|c%x+", "")
+        senderPlain = string.gsub(senderPlain, "|r", "")
+      end
+      if sender and type(EVAL_TB_CHATCOLOR_ON) == "function" and EVAL_TB_CHATCOLOR_ON() then
+        local hex = nil
+        if type(EVAL_TB_PAINT_COLOR_OF) == "function" then hex = EVAL_TB_PAINT_COLOR_OF(senderPlain) end
+        if hex then
+          local coloredSender = "|c" .. string.sub(hex, 3) .. senderPlain .. "|r"
+          if coloredSender ~= sender then -- ★相等 = 「已经是对的」→ 一个字都不动（幂等在这里，不在守卫里）
+            if type(arg2) == "string" and arg2 == sender then arg2 = coloredSender end -- 回写全局（真机就是全局形态）
+            TB.ceNamed = (TB.ceNamed or 0) + 1
+          end
+        else
+          TB.ceNameMiss = (TB.ceNameMiss or 0) + 1 -- 名字不在缓存里（如实记账，诊断里能看到）
+        end
+      end
+      -- ② 正文着色（其它客户端形态下正文里可能带 [名字]；无副作用：认不出就不动）
       local out = msg
       if type(EVAL_TB_CHATCOLOR_ON) == "function" and EVAL_TB_CHATCOLOR_ON() and
          type(EVAL_TB_CHAT_COLOR_LINE) == "function" then
@@ -630,11 +701,13 @@ function EVAL_TB_CHATEVENT_STATE()
            thisOk = TB.thisOk or 0, thisStuck = TB.thisStuck or 0,
            thisSeen = TB.thisSeen or 0, thisFiltered = TB.thisFiltered or 0, thisPainted = TB.thisPainted or 0,
            chat = TB.ceChat or {}, byEv = TB.ceByEv or {},
-           shape = TB.ceShape or {}, noMsg = TB.ceNoMsg or 0 }
+           shape = TB.ceShape or {}, noMsg = TB.ceNoMsg or 0,
+           named = TB.ceNamed or 0, nameMiss = TB.ceNameMiss or 0 }
 end
 function EVAL_TEST_TB_CHATEVENT_RESET()
   TB.ceSeen, TB.ceFiltered, TB.cePainted, TB.ceRaw = 0, 0, 0, {}
   TB.ceChat, TB.ceByEv, TB.ceShape, TB.ceNoMsg, TB.ceShapeN = {}, {}, {}, 0, 0
+  TB.ceNamed, TB.ceNameMiss = 0, 0
   TB.ceTryAt, TB.ceTries, TB.ceLogged = nil, 0, false
 end
 TB.ceHooked = EVAL_TB_CHATEVENT_INSTALL() and true or false
@@ -688,6 +761,13 @@ function EVAL_TB_PAINT_CLASS_COLOR_OF(name)
   local tok = EVAL_TB_PAINT_CLASS_TOKEN_OF(name)
   return (tok and TB_PAINT_CLASS_COLOR[tok]) or TB_PAINT_DEFAULT_COLOR
 end
+-- ★★★1.73.18 名字**已缓存**时的职业色（聊天名字着色用；不在缓存里返回 **nil** —— 绝不返回默认灰：
+--   「不知道职业」和「职业色是灰」是两件事，返回灰会把没见过的名字也涂灰）。
+function EVAL_TB_PAINT_COLOR_OF(name)
+  local tok = tbNameClassGet(name)
+  if not tok then return nil end
+  return TB_PAINT_CLASS_COLOR[tok]
+end
 -- 纯函数③：公会阶级色 = 红(最低)→黄(中)→绿(最高) 线性插值，返回 r,g,b
 --   ★XGuild 原作此处有个 bug：它用「rankIndex 是否等于 nRanks/2」判中点，而 nRanks 为**奇数**时
 --     那个分支永远不命中（Lua 的 / 是浮点）→ 这里改成**按比例**插值，任何档数都连续。
@@ -723,37 +803,7 @@ local TB_PAINT_LISTS = {
 --   · 键规范化：去首尾空白 + 小写；宠物名「主人-宠物」取主人（1.12 的角色名里不会有连字符）；
 --   · 长度 < 2 的键**不写也不查**（单字名的误伤面太大）；
 --   · 认不出职业的名字**不写**（不猜）—— 「拿不到就不猜」纪律。
-local tbNameClass = {}
-local function tbNameClassKey(name)
-  if type(name) ~= "string" then return nil end
-  local s = string.gsub(name, "^%s*(.-)%s*$", "%1")
-  if s == "" then return nil end
-  s = string.lower(s)
-  local dash = string.find(s, "-", 1, true)
-  if dash and dash > 1 then s = string.sub(s, 1, dash - 1) end
-  if tbNameCharLen(s) < 2 then return nil end
-  return s
-end
-local function tbNameClassPut(name, klass)
-  local k = tbNameClassKey(name)
-  if not k then return false end
-  local tok = EVAL_TB_PAINT_CLASS_TOKEN_OF(klass)
-  if not tok then return false end
-  tbNameClass[k] = tok
-  return true
-end
-local function tbNameClassGet(name)
-  local k = tbNameClassKey(name)
-  if not k then return nil end
-  return tbNameClass[k]
-end
-function EVAL_TB_NAMECLASS_PUT(n, k) return tbNameClassPut(n, k) end
-function EVAL_TB_NAMECLASS_GET(n) return tbNameClassGet(n) end
-function EVAL_TB_NAMECLASS_SIZE()
-  local n = 0
-  for _ in pairs(tbNameClass) do n = n + 1 end
-  return n
-end
+-- （名字缓存已上移到文件顶部：聊天入口要用它，局部队变量必须先声明）
 
 -- 开关：nil 视为**开**（用户要求加的，默认就生效；关掉 = 不叠色）
 function EVAL_TB_COLOR_ON()
