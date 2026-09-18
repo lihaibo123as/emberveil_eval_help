@@ -7490,4 +7490,71 @@ do
   print("  载入提示 + 新手引导：每次加载都打全（含 /reload），/eh guide 可随时重看")
 end
 
+-- 106) ★★★1.72.3 分享发送限频（修「长方案对方偶尔收不到」）+ 收不齐必须如实说
+--   【用户实测】方案长到 4 片时对方有时收不到；短方案（1 片）从不出问题。
+--   【根因】原实现在一个 for 循环里**连着 RunScript** 发全部片段（同一帧 N 条 SendChatMessage）
+--     → 撞反刷屏限流被吞一片 → 接收端永远收不齐；而收不齐当时是**静默丢弃**（一声不吭）。
+--   ★判据（三条）：① 第 1 片立即发，**其余必须排队**（旧实现一帧全发）；
+--     ② 队列按 SH_SEND_RATE 分时滴出（同一时刻连 tick 也抽不干）；
+--     ③ 超时丢弃在途传输时**如实点名报片数**，且缓冲真的被丢弃（迟到的那片不会凑成一笔）。
+do
+  EVAL_SHARE_RESET()
+  EVAL_HELP_CONFIG.share = { recv = true }
+  local long = "# 方案: 长方案测试\n"
+  for i = 1, 30 do long = long .. "- 测试技能" .. i .. " | 怒气>30\n" end
+  local savedP, savedA = EVAL_HELP_CONFIG.war.profiles, EVAL_HELP_CONFIG.war.activeProfile
+  EVAL_HELP_CONFIG.war.profiles = { EVAL_PROFILE_FROM_TEXT(long) }
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  local function sents106()
+    local out = {}
+    for _, s in ipairs(TEST.runScripts or {}) do
+      local m = string.match(s, 'SendChatMessage%("(.-)", "GUILD"%)')
+      if m then table.insert(out, m) end
+    end
+    return out
+  end
+  TEST.runScripts = nil TEST.chat = nil
+  eq(EVAL_SHARE_SEND("GUILD"), true, "长方案分享启动")
+  local first = sents106()
+  local _, nStr = string.match(tostring(first[1] or ""), "^%[EHPF#%x+ (%d+)/(%d+)%]")
+  local total = tonumber(nStr) or 0
+  eq(total >= 3, true, "①前置：方案确实分成 ≥3 片（got " .. tostring(total) .. "）")
+  -- ★① 核心判据
+  eq(table.getn(first), 1, "★★★只立即发第 1 片，其余排队（旧实现一帧连发 " .. tostring(total) .. " 片）")
+  eq(EVAL_SHARE_TEST_QUEUE_LEN(), total - 1, "★★队列里正好剩 " .. tostring(total - 1) .. " 片")
+  eq(string.find(tostring(TEST.chat), "排队", 1, true) ~= nil, true, "★★并且如实告知「已排队发送」")
+  -- ★② 限频：同一时刻 tick 也不许滴出第二片
+  EVAL_SHARE_TEST_TICK()
+  eq(table.getn(sents106()), 1, "★★同一时刻 tick 不许滴出第二片（限频生效）")
+  local sent, guard = 1, 0
+  while sent < total and guard < total + 5 do
+    guard = guard + 1
+    TEST.time = (TEST.time or 1000) + 1
+    EVAL_SHARE_TEST_TICK()
+    sent = table.getn(sents106())
+  end
+  eq(sent, total, "★★★全部 " .. tostring(total) .. " 片最终分时发出（不是一帧倾泻）")
+  eq(EVAL_SHARE_TEST_QUEUE_LEN(), 0, "★队列已清空")
+  local msgs = sents106()
+  -- ★③ 收不齐 → 如实报 + 缓冲真被丢
+  EVAL_SHARE_RESET()
+  for i = 1, total - 1 do EVAL_SHARE_ONMSG(msgs[i], "队友甲") end
+  eq(EVAL_SHARE_PENDING(), nil, "③前置：半包不弹窗")
+  TEST.time = (TEST.time or 1000) + 100 -- 超过 SH_BUF_TIMEOUT(60s)
+  TEST.chat = nil
+  -- 用另一笔「残缺」分片触发 sweep（sweep 就在 shOnMsg 里，走真实路径；不弹窗免得干扰后续断言）
+  EVAL_SHARE_ONMSG("[EHPF#fe 1/4]4142", "队友乙")
+  local chat = tostring(TEST.chat or "")
+  eq(string.find(chat, "队友甲", 1, true) ~= nil, true, "★★★超时丢弃要**点名是谁发的**（旧实现一声不吭）")
+  eq(string.find(chat, tostring(total - 1) .. "/" .. tostring(total), 1, true) ~= nil, true,
+     "★★★并如实报「收了几片」（要 " .. tostring(total - 1) .. "/" .. tostring(total) .. "）")
+  -- ★反向哨兵：迟到的那片不该凑成一笔（证明缓冲真被丢掉了）
+  EVAL_SHARE_ONMSG(msgs[total], "队友甲")
+  eq(EVAL_SHARE_PENDING(), nil, "★★超时后迟到的最后一片不会凑成一笔（缓冲确实已丢弃）")
+  -- 收尾
+  EVAL_HELP_CONFIG.war.profiles = savedP EVAL_HELP_CONFIG.war.activeProfile = savedA
+  EVAL_SHARE_RESET() TEST.runScripts = nil TEST.chat = nil
+  print("  分享发送限频：第1片立即发、其余按 0.35s 排队滴出；收不齐超时**如实点名报片数**且缓冲真被丢")
+end
+
 print("ALL TESTS PASS")

@@ -96,6 +96,21 @@ local function shChanOf(id)
   for _, c in ipairs(SH_CHANS) do if c.id == id then return c end end
   return nil
 end
+-- ★★★1.72.3 发送限频队列（修「长方案对方偶尔收不到」）
+--   【用户实测】方案长到 4 片时对方有时收不到；短方案（1 片）从不出问题。
+--   【根因】原实现把分片在**一个 for 循环里连着 RunScript** 发出去（同一帧 4 条 SendChatMessage）
+--     → 撞客户端/服务器的反刷屏限流，被吞掉的那一片让接收端**永远收不齐**。
+--   ★这正是本项目记忆体里写明的铁律：「RunScript 本身也是队列，**连发聊天同样会被反滥用踢线**，
+--     通知类输出也要入限频队列」——分享发送当时没遵守。
+--   【修法】第 1 片立即发（手感不变），其余进 FIFO，由 OnUpdate 每 SH_SEND_RATE 秒滴一片；
+--     队列上限 SH_MAX_QUEUE 防失控（超出如实取消）。
+local SH_SEND_RATE = 0.35 -- 相邻两片之间的最小间隔（秒）
+local SH_MAX_QUEUE = 200  -- 发送队列上限（条）
+local shTxQ, shTxLast = {}, 0
+local shTxFrame
+-- ★前置声明（本项目铁律：引用点在声明之前会解析成全局 nil）——
+--   实现在 shNowT 之后，那里才拿得到计时函数。
+local shTxEnqueue, shTxStep
 function EVAL_SHARE_SEND(chanId)
   if not shChanOf(chanId) then shSay(L("SH_CH_OFF")) return false end -- 1.71.3 团队频道已下线，白名单外一律拒收
   if type(EVAL_PROFILE_TO_TEXT) ~= "function" then shSay(L("SH_NOEXPORT")) return false end
@@ -104,13 +119,13 @@ function EVAL_SHARE_SEND(chanId)
   if not text or text == "" then shSay(L("SH_EMPTY")) return false end
   local hex = toHex(text)
   local n = math.ceil(string.len(hex) / SH_CHUNK)
-  local idh = string.format("%02x", math.random(0, 255))
+  local idh = string.format("%02x", math.random(0, 255)) -- 本次传输 id（接收端按 发送者+id 归并分片）
+  local bodies = {}
   for i = 1, n do
-    local body = "[EHPF#" .. idh .. " " .. i .. "/" .. n .. "]" .. string.sub(hex, (i - 1) * SH_CHUNK + 1, i * SH_CHUNK)
-    RunScript('SendChatMessage("' .. body .. '", "' .. chanId .. '")') -- 纯 ASCII 负载，无引号/反斜杠需转义
+    bodies[i] = "[EHPF#" .. idh .. " " .. i .. "/" .. n .. "]" .. string.sub(hex, (i - 1) * SH_CHUNK + 1, i * SH_CHUNK)
   end
-  shSay(string.format(L("SH_SENT"), n))
-  return true
+  -- ★1.72.3 分片必须**限频发送**（同帧连发会被反刷屏吞掉 → 对方永远收不齐）
+  return shTxEnqueue(bodies, chanId) -- 队列满时如实返回 false（并已 shSay 说明）
 end
 
 -- IO 窗 [分享] 按钮：频道下拉
@@ -167,12 +182,59 @@ local function shWarn(msg)
   shSay(msg .. ((skip > 0) and string.format(L("SH_WARN_MORE"), skip) or ""))
 end
 
+-- ★1.72.3 发送队列实现（实现在这里，因为要用上面的 shNowT）
+function shTxStep()
+  if table.getn(shTxQ) == 0 then
+    if shTxFrame then pcall(shTxFrame.Hide, shTxFrame) end
+    return
+  end
+  local now = shNowT()
+  if now - shTxLast < SH_SEND_RATE then return end -- ★限频：到点才滴下一片
+  shTxLast = now
+  local job = table.remove(shTxQ, 1)
+  if type(RunScript) == "function" then
+    RunScript('SendChatMessage("' .. job.body .. '", "' .. job.chan .. '")')
+  end
+  if table.getn(shTxQ) == 0 and shTxFrame then pcall(shTxFrame.Hide, shTxFrame) end
+end
+local function shEnsureTxTicker()
+  if not shTxFrame then
+    shTxFrame = CreateFrame("Frame", "EVAL_SHARE_TX", UIParent)
+    shTxFrame:SetScript("OnUpdate", shTxStep)
+  end
+  pcall(shTxFrame.Show, shTxFrame)
+end
+function shTxEnqueue(bodies, chanId)
+  local n = table.getn(bodies)
+  if table.getn(shTxQ) + n > SH_MAX_QUEUE then
+    shSay(string.format(L("SH_Q_FULL"), SH_MAX_QUEUE))
+    return false
+  end
+  -- 第 1 片立即发（手感与旧版一致），其余排队
+  RunScript('SendChatMessage("' .. bodies[1] .. '", "' .. chanId .. '")')
+  for i = 2, n do table.insert(shTxQ, { body = bodies[i], chan = chanId }) end
+  if n > 1 then
+    shTxLast = shNowT()
+    shEnsureTxTicker()
+    shSay(string.format(L("SH_QUEUED"), n, (n - 1) * SH_SEND_RATE))
+  else
+    shSay(string.format(L("SH_SENT"), n))
+  end
+  return true
+end
+-- ★测试直调：驱动与 OnUpdate **同一个**函数（判据必须落在真实调用点/真实闭包上）
+function EVAL_SHARE_TEST_TICK() shTxStep() end
+function EVAL_SHARE_TEST_QUEUE_LEN() return table.getn(shTxQ) end-- ★1.72.3 **收不齐绝不静默**：超时丢弃在途传输时如实报出「谁发的、收了几片」。
+--   【为什么必须说】旧实现到点直接 SH.buf[k] = nil —— 接收方只看到「什么都没发生」，
+--     发送方也永远不知道（用户报的「对方有时候接收不到」正是这个静默态）。
 local function shSweepBuf(now)
   for k, b in pairs(SH.buf) do
-    if now - b.t > SH_BUF_TIMEOUT then SH.buf[k] = nil end
+    if now - b.t > SH_BUF_TIMEOUT then
+      SH.buf[k] = nil
+      shWarn(string.format(L("SH_RECV_PARTIAL"), tostring(b.from or "?"), b.got or 0, b.n or 0))
+    end
   end
 end
-
 -- R3：在途笔数超上限 → 丢最久未活动的一笔（如实提示）
 local function shTrimBuf()
   local cnt, oldK, oldT = 0, nil, nil
@@ -275,7 +337,7 @@ local function shOnMsg(msg, sender, ev)
   local b = SH.buf[key]
   if not b then
     shDropSenderBufs(sender, key) -- R2
-    b = { n = n, chunks = {}, got = 0, t = now, ev = ev }
+    b = { n = n, chunks = {}, got = 0, t = now, ev = ev, from = sender } -- ★1.72.3 记住谁发的（收不齐时要如实点名）
     SH.buf[key] = b
     shTrimBuf() -- R3
   end
