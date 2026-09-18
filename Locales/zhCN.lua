@@ -284,7 +284,6 @@ PM_HINT = "左键方案 = 激活；右键方案 = 开本窗口（改名 + 绑键
   SE_WHEN = "当",
   SE_TYPE_PH = "条件类型",
   SE_YES = "是",
-  SE_RANK_H = "等级",
   SE_RANK_ANY = "不限",
   SE_NO = "否",
   SE_STK = "层",

@@ -284,7 +284,6 @@ PM_HINT = "Left-click a profile = activate; right-click = open this window (rena
   SE_WHEN = "When",
   SE_TYPE_PH = "Type",
   SE_YES = "Yes",
-  SE_RANK_H = "Rank",
   SE_RANK_ANY = "Any",
   SE_NO = "No",
   SE_STK = "Stk",

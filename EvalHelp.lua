@@ -4651,10 +4651,7 @@ local function SE_BUILD()
   -- ★1.72.4 「释放指定等级」下拉（用户要求：技能右侧加一个「不限 / 等级1 / 等级2 …」）
   --   选项来自**法术书**（GetSpellName 第二返回），保证括号内与 subtext 逐字相符；
   --   默认「不限」= 老行为（要求技能在动作条上、走 UseAction）。
-  local rkCap = uiText(root, 9, 0.95, 0.82, 0.35)
-  rkCap:SetPoint("TOPLEFT", root, "TOPLEFT", 278, -25)
-  rkCap:SetText(L("SE_RANK_H"))
-  local rkW = seBtn(root, 300, -24, 92, 16, L("SE_RANK_ANY"), function()
+  local rkW = seBtn(root, 218, -24, 88, 16, L("SE_RANK_ANY"), function() -- ★1.72.4 紧贴技能名右侧；单一元素：标题即当前值（默认「不限」）
     if not seUI.ed then return end
     local opts = { L("SE_RANK_ANY") }
     local ranks = EVAL_SPELLBOOK_RANKS(seUI.ed.skill)
@@ -4669,7 +4666,7 @@ local function SE_BUILD()
   seUI.rankName = rkW.text
   local enChk = CreateFrame("Button", nil, root)
   enChk:SetWidth(14) enChk:SetHeight(14)
-  enChk:SetPoint("TOPLEFT", root, "TOPLEFT", 216, -25)
+  enChk:SetPoint("TOPLEFT", root, "TOPLEFT", 316, -25) -- ★1.72.4 右移，给等级下拉腾位置（等级 218..306，勾选框 316 起）
   pcall(enChk.EnableMouse, enChk, true)
   pcall(enChk.RegisterForClicks, enChk, "LeftButtonUp")
   local enOut = enChk:CreateTexture(nil, "BACKGROUND")
@@ -4689,7 +4686,7 @@ local function SE_BUILD()
   end)
   seUI.enMark = enMark
   local enLabel = uiText(root, 9, 0.75, 0.75, 0.75)
-  enLabel:SetPoint("TOPLEFT", root, "TOPLEFT", 234, -27)
+  enLabel:SetPoint("TOPLEFT", root, "TOPLEFT", 334, -27)
   enLabel:SetText(L("SE_ENABLE"))
   -- ★★★1.71.3 图例（用户要求「启用此技能 右侧添加几个图标 寓意 tooltip」）：
   --   白感叹号 = 不可用 / 黄感叹号 = 待测试；**意义只在悬停里**（用户要的就是这个）。
@@ -4702,7 +4699,7 @@ local function SE_BUILD()
     if okw and type(wv) == "number" and wv > 0 then enW = wv end
   end
   if enW <= 0 then enW = math.floor(string.len(L("SE_ENABLE")) / 3 + 0.5) * 9 end
-  local SE_MARK_X = 234 + enW + 14
+  local SE_MARK_X = 334 + enW + 14 -- ★1.72.4 与「启用此技能」标签同步右移（起点按实测宽度推，语言无关）
   seUI.marks = {}
   -- ★文案写成**字面量** L("SE_MARK_...")（而不是 tkey="..." 运行时拼）：
   --   静态 LANG KEY CHECK 才扫得到这三语言 4 个键（运行时拼的键正是它扫不到的盲区）。
