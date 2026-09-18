@@ -4341,7 +4341,7 @@ function EVAL_HELP_SE_REFRESH()
   -- ★1.72.4 等级元素：**常显**（用户：「默认值显示技能」）——没设等级时显示「技能」，设了就显示该等级。
   --   ★「隐藏入口」被用户当场否掉（「技能右侧的等级配置没显示」）：入口藏起来 = 用户找不到功能，
   --     所以元素一直在，默认文案本身就是「当前用的是技能本身（不指定等级）」这层含义。
-  if seUI.rankName then seUI.rankName:SetText(ed.rank or L("SE_RANK_SKILL")) end
+  if seUI.rankName then seUI.rankName:SetText(ed.rank or L("SE_RANK_ANY")) end
   if seUI.catName then -- 分类按钮文字 = 当前技能所属类（1.32.3）
     local cl = { L("SK_CAT_1"), L("SK_CAT_2"), L("SK_CAT_3"), L("SK_CAT_4"), L("SK_CAT_5") }
     local ci = 2
@@ -4692,7 +4692,7 @@ local function SE_BUILD()
       say(string.format(L("SE_RANK_NONE"), tostring(seUI.ed.skill)))
       return
     end
-    local opts = { L("SE_RANK_SKILL") }
+    local opts = { L("SE_RANK_ANY") }
     for i = 1, table.getn(ranks) do opts[i + 1] = ranks[i] end
     EVAL_DD_OPEN(seUI.skillBtn, opts, function(pi)
       if not seUI.ed then return end
@@ -4731,7 +4731,7 @@ local function SE_BUILD()
   -- ★1.72.4 「释放指定等级」元素：**常显在技能名右侧**（用户：「默认值显示技能」）。
   --   文案 = 当前等级；没设等级时显示「技能」= 用技能本身（老行为：要求技能在动作条上、走 UseAction）。
   --   点它 / 右键技能名 都能开下拉；选项来自**法术书**（GetSpellName 第二返回），与 subtext 逐字相符。
-  local rkW = seBtn(root, 218, -24, 88, 16, L("SE_RANK_SKILL"), seOpenRankMenu)
+  local rkW = seBtn(root, 218, -24, 88, 16, L("SE_RANK_ANY"), seOpenRankMenu)
   seUI.rankBtn = rkW.btn
   seUI.rankName = rkW.text
   seUI.rankW = rkW

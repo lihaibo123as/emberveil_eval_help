@@ -7743,7 +7743,11 @@ do
   eq(r0.shown, true, "①★★★默认**可见**（入口不许藏）")
   eq(r0.nameShown, true, "①★★文字也真的显示出来")
   eq(r0.rank, nil, "①默认没有自定义等级")
-  eq(r0.text, EVAL_L("SE_RANK_SKILL"), "①★★★默认文案 = 「技能」（用技能本身、不指定等级）")
+  eq(r0.text, EVAL_L("SE_RANK_ANY"), "①★★★默认文案 = 「不限」（用技能本身、不指定等级）")
+  -- ★★★1.72.4 **用词本身也要钉住**：用户定稿是「不限」，我曾按「默认值显示技能」自行改成「技能」并发出去，
+  --   用户装上一眼看到就退回。★上一行为什么钉不住：两侧都读同一个语言键 → 改语言包的值照样绿（等价变异），
+  --   所以这里**直接钉中文用词**（= 用户看到的那个词）。
+  eq(EVAL_LOCALES.zhCN.SE_RANK_ANY, "不限", "①★★★默认文案的**用词** = 不限（用户定稿；改词要有明确指令）")
   -- ② 悬停说明（走真实 OnEnter → GameTooltip；⭐测试只能经**钩子**进生产代码——seUI 是 EvalHelp.lua 的 local）
   TEST.tipLines = nil
   eq(EVAL_TEST_SE_RANK_TIP(), true, "⑧等级元素挂着真实 OnEnter（走钩子，不越界掏 local）")
@@ -7756,7 +7760,7 @@ do
   eq(EVAL_TEST_SE_RANK_CLICK("RightButton"), true, "②技能名按钮上挂着真实 OnClick（右键入口接线在）")
   eq(EVAL_DD_TEST_SHOWN(), true, "②★★右键真的弹出了等级下拉")
   local visTxt = table.concat(EVAL_DD_TEST_VISIBLE_TEXTS(), "\n")
-  eq(string.find(visTxt, EVAL_L("SE_RANK_SKILL"), 1, true) ~= nil, true, "②★下拉第一项 = 技能（默认项）")
+  eq(string.find(visTxt, EVAL_L("SE_RANK_ANY"), 1, true) ~= nil, true, "②★下拉第一项 = 不限（默认项）")
   eq(string.find(visTxt, "等级 2", 1, true) ~= nil, true, "②★★下拉里是**法术书**枚举出的等级")
   -- ④ 点真实的行 → 落值 + 文案变等级
   local idxRank2 = nil
@@ -7786,7 +7790,7 @@ do
   -- ⑦ 设回「技能」→ 文案回到默认 + 库里清干净
   eq(EVAL_TEST_SE_SET_RANK(nil), true, "⑦设回默认（技能）")
   local r3 = EVAL_TEST_SE_RANK()
-  eq(r3.text, EVAL_L("SE_RANK_SKILL"), "⑦★★★清掉等级后文案回到「技能」（默认态）")
+  eq(r3.text, EVAL_L("SE_RANK_ANY"), "⑦★★★清掉等级后文案回到「不限」（默认态）")
   eq(r3.shown, true, "⑦★★元素还在（默认态也能一眼看到入口）")
   EVAL_HELP_SE_SAVE()
   eq(EVAL_HELP_CONFIG.war.profiles[1].skills[1].rank, nil, "⑦★★库里也清干净了（不是只改了界面文案）")
@@ -7800,7 +7804,7 @@ do
   eq(EVAL_DD_TEST_SHOWN(), false, "⑨★★法术书里没有等级 → **不弹**只有一项的残废下拉")
   eq(string.find(tostring(TEST.chat), "无等级技能", 1, true) ~= nil, true, "⑨★★★如实点名说明（查不到 ≠ 没有，绝不静默）")
   local r4 = EVAL_TEST_SE_RANK()
-  eq(r4.text, EVAL_L("SE_RANK_SKILL"), "⑨反向哨兵：没有任何等级可选时，默认文案也没有被改坏")
+  eq(r4.text, EVAL_L("SE_RANK_ANY"), "⑨反向哨兵：没有任何等级可选时，默认文案也没有被改坏")
   -- 收尾
   TEST.chat = nil
   EVAL_TEST_SE_CLEAR()
@@ -7809,7 +7813,7 @@ do
   TEST.spellbook = nil
   EVAL_SPELLBOOK_TEST_RESET()
   EVAL_DD_HIDE()
-  print("  等级元素：常显 + 默认文案「技能」+ 右键/左键双入口 + 法术书等级 + 保存/重开往返 + 空等级如实说明")
+  print("  等级元素：常显 + 默认文案「不限」+ 右键/左键双入口 + 法术书等级 + 保存/重开往返 + 空等级如实说明")
 end
 
 -- 111) ★★★1.72.4 「指定等级」对**方案模版 / 导入导出**的影响审计（审计必须落成闸门，否则只是这一次的手工动作）
