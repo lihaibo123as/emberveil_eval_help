@@ -9347,4 +9347,56 @@ do
   print("  tooltip 隔离：自建隐形 tooltip 读数（与 GameTooltip 不同对象）· 读遍四个入口不碰玩家 tooltip · 退化时「正显示就不读」")
 end
 
+-- 128) ★★★1.73.16 聊天取证的**样本白名单** + 官方消息组判读的三态（用户实测两处都出过错）
+--   ① 上一版把**所有** CHAT_MSG_* 都塞进 12 格缓冲 → 战斗/法术刷屏把真实聊天行挤出去（用户截图 12 条全是 SPELL_*）
+--      → 「名字在 arg1 还是只在 arg2」这个关键证据**永远看不到**；
+--   ② 官方消息组的判读把「本来就没有这个组」也说成「已由官方接口屏蔽」（用户截图：窗口1 只有 SYSTEM、摘掉 0 个）
+--      → 假判读，必须分清三态。
+do
+  local savedTb128 = EVAL_HELP_CONFIG.tb
+  EVAL_HELP_CONFIG.tb = { chanJoin = true }
+  -- ① 法术刷屏 20 条后，玩家聊天样本必须仍在
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  for _ = 1, 20 do
+    arg1 = "Ledbybag从Ledbybag的智慧祝福获得了10点MANA_POINTS."
+    arg2 = "Ledbybag"
+    ChatFrame_OnEvent("CHAT_MSG_SPELL_PERIODIC_FRIENDLYPLAYER_BUFFS")
+  end
+  arg1 = "[守夜人] 说: 你好"
+  arg2 = "守夜人"
+  ChatFrame_OnEvent("CHAT_MSG_SAY")
+  local cet128 = EVAL_TB_CHATEVENT_STATE()
+  eq(table.getn(cet128.chat) == 1, true, "①★★★法术刷屏 20 条后，**玩家聊天样本仍然在**（只留玩家聊天的白名单）")
+  eq(string.find(tostring(cet128.chat[1]), "CHAT_MSG_SAY", 1, true) ~= nil, true, "①★样本里就是那条 SAY")
+  eq(string.find(tostring(cet128.chat[1]), "arg2=守夜人", 1, true) ~= nil, true,
+     "①★★并且记下了 **arg2（发送者名）** —— 定案「名字在 arg1 还是 arg2」就靠它")
+  eq((cet128.byEv or {})["CHAT_MSG_SAY"] ~= nil, true, "②★事件计数里有 SAY（证明玩家聊天真的到达了这一层）")
+  eq((cet128.byEv or {})["CHAT_MSG_SPELL_PERIODIC_FRIENDLYPLAYER_BUFFS"] ~= nil, true, "②★法术事件也在计数里（证明那 20 条真的进来了）")
+  -- ③ 官方消息组判读三态
+  EVAL_TEST_TB_CHAN_OFFICIAL_RESET()
+  TEST.cwMsg[1] = "SAY,YELL,CHANNEL,CHANNEL_NOTICE,GUILD"
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 聊天")
+  local c128 = tostring(TEST.chat or "")
+  eq(string.find(c128, "通知组**还在**", 1, true) ~= nil, true, "③★组还在 → 如实判「还在」（不许说已屏蔽）")
+  EVAL_TB_CHAN_OFFICIAL_APPLY(true)
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 聊天")
+  c128 = tostring(TEST.chat or "")
+  eq(string.find(c128, "是我们摘掉的", 1, true) ~= nil, true, "③★是我们摘的 → 判「已由官方接口屏蔽」")
+  EVAL_TB_CHAN_OFFICIAL_APPLY(false)
+  EVAL_TEST_TB_CHAN_OFFICIAL_RESET()
+  TEST.cwMsg[1] = "SYSTEM" -- ★复现用户实测：本客户端窗口1 只有 SYSTEM 这一组
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 聊天")
+  c128 = tostring(TEST.chat or "")
+  eq(string.find(c128, "官方这条路在本客户端用不上", 1, true) ~= nil, true,
+     "③★★★第三种：本来就没有这个组 → 如实说「官方路用不上」（上一版这里**假报**「已屏蔽」）")
+  TEST.cwMsg[1] = "SAY,YELL,CHANNEL,CHANNEL_NOTICE,GUILD"
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  EVAL_TEST_TB_CHAN_OFFICIAL_RESET()
+  EVAL_HELP_CONFIG.tb = savedTb128
+  print("  取证白名单：法术刷屏不再挤掉玩家聊天样本（记 arg1+arg2）· 事件计数 · 官方消息组判读分三态（不假报已屏蔽）")
+end
+
 print("ALL TESTS PASS")

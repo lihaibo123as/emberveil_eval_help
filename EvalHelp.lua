@@ -7391,10 +7391,27 @@ if type(SlashCmdList) == "table" then
           say("  this 帧懒挂载（ChatMOD 的做法）：成功 " .. tostring(ce.thisOk) .. " 个 / **写不进去** " ..
             tostring(ce.thisStuck) .. " 个；经它收到 " .. tostring(ce.thisSeen) .. " 条（吞掉 " ..
             tostring(ce.thisFiltered) .. " / 染色 " .. tostring(ce.thisPainted) .. "）")
-          if type(ce.raw) == "table" and table.getn(ce.raw) > 0 then
-            say("  经它收到的**原文**（这才是客户端真实文案；★格式校准看这里）：")
-            for i = 1, table.getn(ce.raw) do
-              say("   " .. i .. ". " .. string.gsub(tostring(ce.raw[i]), "|", "||"))
+          -- ★★★1.73.16 只打**玩家聊天**样本（上一版把战斗/法术消息也塞进 12 格缓冲 → 真实聊天行被挤出去，
+          --   用户截图里 12 条全是 CHAT_MSG_SPELL_*，格式证据永远看不到）。arg1 + arg2 一起打：
+          --   「名字到底在 arg1 里（可直接改文本）还是只在 arg2 里（要改别的招）」就看这一屏。
+          if type(ce.chat) == "table" and table.getn(ce.chat) > 0 then
+            say("  经它收到的**玩家聊天**（arg1/arg2；★格式定案看这里）：")
+            for i = 1, table.getn(ce.chat) do
+              say("   " .. i .. ". " .. string.gsub(tostring(ce.chat[i]), "|", "||"))
+            end
+          else
+            say("  （玩家聊天样本为空 —— 说一句 / 在公会频道发一句，再回来看这一屏）")
+          end
+          if type(ce.byEv) == "table" then
+            local es = {}
+            for k, v in pairs(ce.byEv) do table.insert(es, { k = tostring(k), v = tonumber(v) or 0 }) end
+            table.sort(es, function(x, y) return x.v > y.v end)
+            local parts = {}
+            for i = 1, math.min(8, table.getn(es)) do
+              table.insert(parts, es[i].k .. "=" .. tostring(es[i].v))
+            end
+            if table.getn(parts) > 0 then
+              say("  事件计数（前 " .. table.getn(parts) .. " 种）：" .. table.concat(parts, "、"))
             end
           end
           if ce.exists and not ce.live then
@@ -7414,10 +7431,15 @@ if type(SlashCmdList) == "table" then
             for i = 1, table.getn(off.groups) do
               if string.find(string.upper(off.groups[i]), off.hint, 1, true) ~= nil then hasNotice = true end
             end
+            -- ★★★1.73.16 判读必须**分清三种情况**（上一版把「本来就没有这个组」也说成「已由官方接口屏蔽」——
+            --   用户截图实测：窗口1 只有 SYSTEM 一组、我们一个都没摘，却打了「已屏蔽」= 假判读，必须改）：
             if hasNotice then
               say("|cffff8080判读：通知组**还在**（没摘掉，或开关是关的）→ 若开屏蔽却仍在，把这一屏发我|r")
+            elseif off.saved > 0 then
+              say("判读：**是我们摘掉的**（已摘 " .. tostring(off.saved) .. " 个窗口）→ 频道进出通知由官方接口屏蔽（与 Lua 无关）")
             else
-              say("判读：窗口1 已无含 " .. tostring(off.hint) .. " 的组 → 频道进出通知由**官方接口**屏蔽（与 Lua 无关）")
+              say("|cffff8080判读：本客户端**没有**含 " .. tostring(off.hint) .. " 的消息组（窗口1 只有 " .. gl ..
+                "）→ **官方这条路在本客户端用不上**；频道进出通知只能靠 Lua 层文本匹配（走 ChatFrame_OnEvent）|r")
             end
           end
         end

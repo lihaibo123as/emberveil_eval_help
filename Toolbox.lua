@@ -8,6 +8,10 @@ local TB = { off = 0, rows = {}, ROWS = 13 }
 --   本轮实测：一开始放在刷新段旁边 → 被 CHECK 当场挡下，这就是那条检查的价值）
 local TB_COLS = 2        -- 列数（用户要求两列；将来加第三列只需改这里，列宽/切点算法都是通用的）
 local TB_COL_GAP = 24    -- 两列之间的缝
+-- ★1.73.16 「玩家聊天」事件白名单（取证缓冲只留这些：战斗/法术刷屏会把真实聊天挤出去）
+local TB_CHAT_EV_KEYS = {
+  "SAY", "YELL", "PARTY", "RAID", "GUILD", "OFFICER", "CHANNEL", "WHISPER", "EMOTE", "TEXT_EMOTE",
+}
 
 -- ===== 自绘基础件（与主程序同风格：WHITE8X8 纯色纹理 + 字体链） =====
 local function tbSolid(tex, r, g, b, a)
@@ -377,6 +381,10 @@ function EVAL_TB_CHAN_OFFICIAL_SYNC()
   end
   return true, found or 0
 end
+function EVAL_TEST_TB_CHAN_OFFICIAL_RESET() -- 测试用：清「已摘掉哪些窗口」的记账（模块级状态必须可重置）
+  tbChanSaved = nil
+  TB.chanOffFound, TB.chanOffAct, TB.chanOffLogged = 0, 0, false
+end
 function EVAL_TB_CHAN_OFFICIAL_STATE()
   local groups, err = EVAL_TB_CHAN_GROUPS(1)
   local saved = 0
@@ -466,10 +474,31 @@ function EVAL_TB_CHATEVENT_INSTALL()
     if msg == nil and type(arg1) == "string" then msg = arg1 end
     local isChat = (ev == "" or string.find(ev, "CHAT_MSG") ~= nil)
     if isChat and type(msg) == "string" and msg ~= "" then
-      -- 原始样本（★这才是「客户端真实文案」的取证口：AddMessage 那层收不到，这里能收到）
+      -- ★★★1.73.16 取证实录（用户报「角色名还是没染色」）：**样本必须只留玩家聊天**。
+      --   上一版把**所有** CHAT_MSG_* 都塞进 12 格环形缓冲 → 战斗/法术刷屏（实测那 12 条全是
+      --   CHAT_MSG_SPELL_PERIODIC_FRIENDLYPLAYER_BUFFS）把真实聊天行**挤出去**了 → 关键证据永远看不到。
+      --   ★判据：取证缓冲要按**问题相关的事件白名单**过滤，不能"来者不拒"。
+      TB.ceByEv = TB.ceByEv or {}
+      TB.ceByEv[ev] = (TB.ceByEv[ev] or 0) + 1
+      -- 原始样本：只记**玩家聊天**（说/喊/队伍/团队/公会/官员/频道/密语/表情）
+      local evUp = string.upper(ev)
+      local isPlayerChat = false
+      for _, k in ipairs(TB_CHAT_EV_KEYS) do
+        if string.find(evUp, k, 1, true) ~= nil then isPlayerChat = true break end
+      end
+      if isPlayerChat then
+        -- ★arg2 = 发送者名（1.12 语义）：一并记下来 —— 「名字到底在 arg1 里还是只在 arg2 里」是本轮要定的案
+        local a2 = nil
+        local v2 = select(2, ...) -- ★不能用 type(select(2, ...))：没有第 2 个参数时 type 收不到值直接报错
+        if type(v2) == "string" then a2 = v2 end
+        if a2 == nil and type(arg2) == "string" then a2 = arg2 end
+        TB.ceChat = TB.ceChat or {}
+        table.insert(TB.ceChat, evUp .. " ｜ arg1=" .. msg .. " ｜ arg2=" .. tostring(a2))
+        while table.getn(TB.ceChat) > 12 do table.remove(TB.ceChat, 1) end
+      end
+      -- 兼容：老读值口 ceRaw 继续记（但只记前 4 条，避免刷屏把它撑满）
       TB.ceRaw = TB.ceRaw or {}
-      table.insert(TB.ceRaw, ev .. " ｜ " .. msg)
-      while table.getn(TB.ceRaw) > 12 do table.remove(TB.ceRaw, 1) end
+      if table.getn(TB.ceRaw) < 4 then table.insert(TB.ceRaw, ev .. " ｜ " .. msg) end
       -- ① 频道进出通知：不调原函数 = 真的不显示
       if EVAL_TB_CHAN_ON() and EVAL_TB_CHAN_BLOCK(msg) then
         TB.ceFiltered = (TB.ceFiltered or 0) + 1
@@ -528,10 +557,12 @@ function EVAL_TB_CHATEVENT_STATE()
            tries = TB.ceTries or 0,
            -- ★this 帧懒挂载（ChatMOD 的做法）的战果：挂上几个 / 写不进去几个 / 经它收到与吞掉多少
            thisOk = TB.thisOk or 0, thisStuck = TB.thisStuck or 0,
-           thisSeen = TB.thisSeen or 0, thisFiltered = TB.thisFiltered or 0, thisPainted = TB.thisPainted or 0 }
+           thisSeen = TB.thisSeen or 0, thisFiltered = TB.thisFiltered or 0, thisPainted = TB.thisPainted or 0,
+           chat = TB.ceChat or {}, byEv = TB.ceByEv or {} }
 end
 function EVAL_TEST_TB_CHATEVENT_RESET()
   TB.ceSeen, TB.ceFiltered, TB.cePainted, TB.ceRaw = 0, 0, 0, {}
+  TB.ceChat, TB.ceByEv = {}, {}
   TB.ceTryAt, TB.ceTries, TB.ceLogged = nil, 0, false
 end
 TB.ceHooked = EVAL_TB_CHATEVENT_INSTALL() and true or false
