@@ -4306,7 +4306,7 @@ end
 --     （权威来源），它能回答「有没有」——这正是分享出去、别人角色纹理表为空时的唯一出路。
 --   ★本组的判据：**「扫描器都不可用」时才必须如实失败**（比旧版「名字不认识就失败」更强也更准）。
 do
-  local GT = GameTooltip
+  local GT = EVAL_TEST_WTT() -- ★1.73.14 扫描器现在是**自家隐形 tooltip**（不再是 GameTooltip）
   local svb, svd, svp = GT.SetUnitBuff, GT.SetUnitDebuff, GT.SetPlayerBuff
   -- ① 扫描器不可用（工具读名的三个入口全断）→ 必须如实失败并给出原因
   GT.SetUnitBuff, GT.SetUnitDebuff, GT.SetPlayerBuff = nil, nil, nil
@@ -7445,7 +7445,7 @@ do
   eq(EVAL_AURA_TEX("十字军审判"), "TEX_JUDGE", "★★★a hit LEARNS the name→texture pair (self-heal)")
   -- ③ 自愈后不再依赖扫描：工具读名入口全断，照样判得出来（快路径）
   EVAL_AURA_TEST_RESET_NAME_CACHE()
-  local GT = GameTooltip
+  local GT = EVAL_TEST_WTT() -- ★1.73.14 扫描器现在是**自家隐形 tooltip**（不再是 GameTooltip）
   local svb, svd, svp = GT.SetUnitBuff, GT.SetUnitDebuff, GT.SetPlayerBuff
   GT.SetUnitBuff, GT.SetUnitDebuff, GT.SetPlayerBuff = nil, nil, nil
   local ok2 = EVAL_TEST_COND_EVAL_LIVE({ k = "hasDebuff", s = "十字军审判", v = true }, nil)
@@ -9262,6 +9262,49 @@ do
   EVAL_DD_HIDE()
   EVAL_HELP_CFG_SETTAB(1)
   print("  debuff 显示格式化：导出仍走 token（存量逐字不变）· 界面走本地化名（预览/方案行/行内）· 本地化形态能解析回同一集合")
+end
+
+-- 126) ★★★1.73.14 「开启战斗UI 后物品 tooltip 显示几秒就自动隐藏」（用户报）
+--   根因：Engine 的读数口借用了**真实 GameTooltip**（`local WTT = GameTooltip`）——
+--     每次读光环/技能都要 SetOwner → ClearLines → 填内容 → Hide，于是战斗UI / 状态UI 的**定时刷新**
+--     （条件求值要读光环）会把玩家正看的物品 tooltip **清空并关掉**（几秒一次）。
+--   判据：① 有一个**自家**隐形 tooltip，且与 GameTooltip **不是同一个对象**（这就是回归防线）；
+--         ② 走遍四个光环读口，**真实 GameTooltip 一次都没被碰**（SetOwner/ClearLines/Hide 计数全 0）；
+--         ③ 读的是**自家**那个 TextLeft1（不是 GameTooltipTextLeft1）；④ 退化模式的守卫是纯函数、可单测。
+do
+  local st126 = EVAL_WTT_STATE()
+  eq(type(st126) == "table" and st126.hasWtt == true, true, "①前置：有一个在用的隐性 tooltip")
+  eq(st126.self, true, "①★★★读数据用的是**自家**隐形 tooltip（" .. tostring(st126.name) .. "）")
+  local wtt126 = EVAL_TEST_WTT()
+  eq(wtt126 ~= nil and wtt126 ~= GameTooltip, true, "①★★★它与 GameTooltip **不是同一个对象**（本轮根因的回归防线）")
+  -- ② 读遍四个入口 → 玩家的 tooltip 一次都不能被碰
+  TEST.buffs = { { name = "隔离测试buff", tex = "TEX_ISO_B" } }
+  TEST.debuffs = { { name = "隔离测试debuff", tex = "TEX_ISO_D", apps = 1 } }
+  TEST.unitBuffs = { { name = "隔离测试buff2", tex = "TEX_ISO_B2" } }
+  TEST.slotNames = { [1] = "隔离测试技能" }
+  TEST.gtCalls = { setOwner = 0, clear = 0, hide = 0, show = 0 }
+  TEST.ttReadFrom = nil
+  pcall(EVAL_PLAYER_BUFF_LIST)
+  pcall(EVAL_TARGET_DEBUFF_LIST)
+  pcall(EVAL_TARGET_BUFF_LIST)
+  pcall(EVAL_PLAYER_DEBUFF_LIST)
+  local touched126 = TEST.gtCalls.setOwner + TEST.gtCalls.clear + TEST.gtCalls.hide + TEST.gtCalls.show
+  eq(touched126, 0, "②★★★读遍四个光环读口，**真实 GameTooltip 一次都没被碰**（实测 " .. tostring(touched126) .. " 次）")
+  eq(type(TEST.ttReadFrom) == "string", true, "②前提：确实读了 tooltip 文本（证明上面不是「什么都没跑」）")
+  eq(string.find(tostring(TEST.ttReadFrom), "GameTooltipTextLeft1", 1, true) == nil, true,
+     "③★★★读的是**自家**那个 TextLeft1（实际：" .. tostring(TEST.ttReadFrom) .. "）")
+  -- ④ 退化模式的守卫（纯函数；真机借不到自建 tooltip 时的那道防线）
+  eq(EVAL_WTT_MAY_READ_PURE(true, true), true, "④★自建 tooltip → 随便读（玩家的 tooltip 与我们无关）")
+  eq(EVAL_WTT_MAY_READ_PURE(false, true), false, "④★★★退化成真实 tooltip 且它**正显示** → **不读**（绝不碰玩家正看的那个）")
+  eq(EVAL_WTT_MAY_READ_PURE(false, false), true, "④★退化且它没显示 → 可以读")
+  -- ⑤ 诊断命令
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go wtt")
+  local c126 = tostring(TEST.chat or "")
+  eq(string.find(c126, "隐形 tooltip", 1, true) ~= nil, true, "⑤★/eh go wtt 打印状态（自建/退化 + 碰过真实 tooltip 的次数）")
+  eq(string.find(c126, "碰过**真实 GameTooltip**", 1, true) ~= nil, true, "⑤★并如实报「碰过真实的几次」（应为 0）")
+  TEST.buffs, TEST.debuffs, TEST.unitBuffs, TEST.slotNames = nil, nil, nil, nil
+  print("  tooltip 隔离：自建隐形 tooltip 读数（与 GameTooltip 不同对象）· 读遍四个入口不碰玩家 tooltip · 退化时「正显示就不读」")
 end
 
 print("ALL TESTS PASS")

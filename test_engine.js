@@ -603,6 +603,34 @@ function checkIconAssets() {
   console.log('DEBUFF DISPLAY CHECK: 显示走本地化名（预览/方案行/行内）+ 导出仍走 token + 只此一份格式化');
 })();
 
+// ===== WTT ISOLATION CHECK（1.73.14）：读数用的隐形 tooltip 绝不能是真实 GameTooltip =====
+// 背景（用户报「开启战斗UI 后物品 tooltip 显示几秒就自动隐藏」）：Engine 原来是 `local WTT = GameTooltip`，
+//   而每次读光环/技能都要 SetOwner → ClearLines → 填内容 → Hide → **玩家正看的 tooltip 被清空并关掉**；
+//   战斗UI/状态UI 的定时刷新（条件求值要读光环）会周期性触发 → 几秒一次。
+// 判据（行为断言照不到「借用了哪个对象」，只能靠源码检查补位）：
+//   ① 不许再出现 `local WTT = GameTooltip`；② 必须自建隐形 tooltip；③ 必须读**自家**那个 TextLeft1；
+//   ④ 退化路径必须有「真实 tooltip 正显示就不读」的纯函数守卫；⑤ 要有读值口与诊断入口。
+(function () {
+  // ★★扫描前**先摘行尾注释**（本检查的说明里就写着那句反面教材 `local WTT = GameTooltip`；
+  //   不摘注释 = 说明文字被当成违规 → 假 FAIL。本项目 CHAT COLOR WIRING CHECK 踩过同一个坑）
+  const strip = (s) => s.split(/\r?\n/).map(function (l) {
+    const i = l.indexOf('--');
+    return i >= 0 ? l.slice(0, i) : l;
+  }).join('\n');
+  const en = strip(fs.readFileSync(path.join(__dirname, 'Engine.lua'), 'utf8'));
+  const eh = strip(fs.readFileSync(path.join(__dirname, 'EvalHelp.lua'), 'utf8'));
+  const bad = [];
+  if (/local WTT = GameTooltip/.test(en)) bad.push('WTT 又借用了真实 GameTooltip（读数会清空/关闭玩家的 tooltip）');
+  if (en.indexOf('CreateFrame("GameTooltip", "EVAL_HELP_WTT"') < 0) bad.push('没有自建隐形 tooltip（照 Heart/C 的 C_Tooltip 范式）');
+  if (/getglobal\("GameTooltipTextLeft1"\)/.test(en)) bad.push('还在读 GameTooltipTextLeft1（应读自家 tooltip 自己的 TextLeft1）');
+  if (en.indexOf('EVAL_WTT_MAY_READ_PURE') < 0) bad.push('没有「真实 tooltip 正显示就不读」的纯函数守卫');
+  if (en.indexOf('EVAL_WTT_MAY_READ()') < 0) bad.push('读口没有调用守卫');
+  if (en.indexOf('function EVAL_TEST_WTT()') < 0) bad.push('没有 EVAL_TEST_WTT() 读值口（测试改不动真正在用的那个 tooltip）');
+  if (eh.indexOf('go wtt') < 0) bad.push('没有 /eh go wtt 诊断入口');
+  if (bad.length) { console.log('WTT ISOLATION CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
+  console.log('WTT ISOLATION CHECK: 自建隐形 tooltip + 读自家 TextLeft1 + 退化有守卫 + 读值口/诊断齐');
+})();
+
 // ===== UI ICON CHECK（1.71.3）：新 UI 用的**自包含**图标必须真的在磁盘上 =====
 // 背景：本客户端纹理路径写错时**什么都不画**（不报错、不崩，只是空白）——而本轮新增的
 //   「类别图标 / 弹窗标题图标」都是刚从 UnrealQuest 拷进本插件的 .tga：漏拷一个、

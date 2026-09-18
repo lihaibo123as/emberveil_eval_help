@@ -7291,6 +7291,22 @@ if type(SlashCmdList) == "table" then
         end
         say("用法：/eh go 着色 = 重试挂载并打印诊断（打开公会/查询/好友窗口后看更准）")
       end
+    elseif msg == "go wtt" or string.find(msg or "", "^go wtt") == 1 then
+      -- ★1.73.14 取证（用户报「开启战斗UI 后物品 tooltip 显示几秒就自动隐藏」）：
+      --   读数用的「隐形 tooltip」到底是不是**自家的**；以及我们**碰过真实 GameTooltip 几次**。
+      if type(EVAL_WTT_STATE) ~= "function" then
+        say("隐形 tooltip：本版本没有这个读值口")
+      else
+        local w = EVAL_WTT_STATE()
+        say("— 隐形 tooltip（读光环/技能数据用）诊断 —")
+        say("在用对象：" .. tostring(w.name) .. "；自建=" .. tostring(w.self) .. "；说明=" .. tostring(w.why))
+        say("碰过**真实 GameTooltip** 的次数：" .. tostring(w.touches) .. "（★应为 0；>0 = 退了化又真去读过）")
+        if w.self then
+          say("判读：走的是**自家** tooltip → 玩家的物品 tooltip 永远不会被我们清空/关闭（这条就是本轮的根因修复）")
+        else
+          say("|cffff8080判读：退化用 GameTooltip —— 只在它**没显示**时才读；若仍看到 tooltip 被关，把这一屏发我|r")
+        end
+      end
     elseif msg == "go 聊天" or string.find(msg or "", "^go 聊天") == 1 then
       -- ★1.73.12 取证：聊天窗名字着色到底**认不认得出**名字（= 格式校准入口）。
       --   ★为什么必须有这个命令：客户端聊天行的**真实文案**我们看不到（本机客户端没有 FrameXML 源码，

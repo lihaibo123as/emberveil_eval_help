@@ -271,6 +271,28 @@ Remove-Item $staging -Recurse -Force
 - ★★**判据表要照客户端真实文案抄**（真实文案是「**进入**频道。」，旧表只有「加入」→ 那一半功能根本没生效）；**「尝试过」≠「挂上了」**（载入即挂必须**失败重试**：`Toolbox.lua` 载入那刻 `DEFAULT_CHAT_FRAME` 还没建好）。
 - ★★**Lua 的 function 不是 table** → 不能 `wrapper.__flag = true`（身份判定只能 `cur == TB.chanWrapper`）；**标记只加在显示串上**（动作条物品 `[物]` 只改显示、取值仍裸名）→ ① 扫描真打标 ② 显示带标**且取值不带**；**「还原/撤回」不是回退到有 bug 的状态**；**跨玩家功能的提示要写出「对方那一侧的前提」**（`shOnMsg` 的 `if not shCfg().recv then return end` = 静默忽略 → 必须点名「接收方案」开关）。
 
+- ★★★1.73.14 **「借用了别人的 UI 对象」= 静默破坏玩家界面**（用户报「开启战斗UI 后物品 tooltip 显示几秒就自动隐藏」）：
+  【根因】`Engine.lua` 的读数口写的是 `local WTT = GameTooltip` —— 「隐形 tooltip 当 API 用」这个范式
+  （Heart/C 的 `C_Tooltip`）**要求的是自己新建的那个**；借用真身时每次读都要
+  `SetOwner(UIParent,"ANCHOR_NONE")` → `ClearLines()` → 填内容 → `Hide()`，
+  于是**战斗UI / 状态UI 的定时刷新**（条件求值要读光环）会把玩家正看着的物品 tooltip **清空并关掉**（几秒一次）。
+  ★正解：`CreateFrame("GameTooltip","EVAL_HELP_WTT",UIParent,"GameTooltipTemplate")` 自建 + `SetOwner(ANCHOR_NONE)` /
+  `SetClampedToScreen(0)`（与 C.xml 同款 hack），读数一律走它；**读 TextLeft1 也必须读自家那个**
+  （`<帧名>TextLeft1`，不是 `GameTooltipTextLeft1`）。
+  ★退化路径（客户端不给该 frame 类型）必须有守卫：**真实 tooltip 正显示时就不读**——
+  `EVAL_WTT_MAY_READ_PURE(isSelf, shown)` 抽成**纯函数**可单测，运行时 `EVAL_WTT_MAY_READ()` 包一层并计次。
+  ★判据 = 组 126（自建且与 GameTooltip 不同对象 / 读遍四个入口**一次都不碰**真实 tooltip 的 SetOwner·ClearLines·Hide /
+  读的是自家 FontString / 退化守卫三态）+ 源码检查 `WTT ISOLATION CHECK`（禁止 `local WTT = GameTooltip`、必须自建、
+  必须读自家 FontString、必须有守卫与诊断；★**扫描前先摘注释**——说明文字里就写着那句反面教材，不摘就是假 FAIL）。
+  变异 M154~M159 全捕获。
+  ★★**桩保真（本轮两个关键点，缺一个这个 bug 在测试里就不存在）**：
+  ① `CreateFrame("GameTooltip", ...)` 必须返回**另一个**独立 tooltip（真机语义），且**每个 tooltip 有它自己的 TextLeft1**；
+  ② 真实 GameTooltip 的 `SetOwner/ClearLines/Hide` 要**记账**（`TEST.gtCalls`）→「读数有没有碰玩家的 tooltip」才**可断言**。
+  ③ 这类 tooltip mock **必须是普通 table**（不能带 `__index` 兜底）：测试靠 `GT.SetUnitBuff = nil` 模拟「入口不可用」，
+  带元表的 mock 会把 nil "复活"成兜底函数 → 前提根本建不起来（M157 实测；连带组 70 的「扫描器不可用」用例也会失效）。
+  ★教训推广：**凡「借用共享 UI 对象」（GameTooltip / UIErrorsFrame / UIParent / 别人的帧）当读值口，都要问一句
+  「我会不会把它清空/关掉/挪走」**——共享对象上的一次 SetOwner/ClearLines/Hide 就是玩家界面上的一次可见破坏。
+
 - ★★★1.73.12 **「写成功了」≠「写进去生效了」**（用户真机截图定案，比上一条更毒一层）：
   `frame.AddMessage = wrapper` 在这个客户端**写入被吞掉**——pcall 不报错、INSTALL 自报「挂上 8 个 / 不可用 0 个」，
   而**逐框读回来**是「其中是我们的包装 **0 个**」。后果 = 频道屏蔽与名字着色**从来没拦到过一条消息**：
@@ -582,6 +604,7 @@ Remove-Item $staging -Recurse -Force
   **1.73.11** 工具箱改成**两列**（组边界切分 + 列不相交的几何断言 + 窄窗自动退回单列）。
   **1.73.12** 聊天窗名字**按职业色**着色（缓存单一来源 + 白拿/只读采集、拿不准不碰、不做自动 /who、一个包装体管两个功能且覆盖 ChatFrame1~7、`/eh go 聊天` 当格式校准入口）。
   **1.73.13** debuff 类型显示**本地化**（界面走本地化名、导出仍走 token；同一份格式化 + disp 开关；本地化形态能解析回同一集合）。
+  **1.73.14** 修「开启战斗UI 后物品 tooltip 几秒自动消失」：读数口不再借用真实 GameTooltip，改自建隐形 tooltip（+退化守卫、`/eh go wtt`）。
   新增断言组 106 + 既有「Tab 数 = 5」同步改 6；★本轮踩的坑：**生成器补丁插在输出之后**（数据没进文件，条目数 58≠106 当场暴露）、
      **PetHelper 的 PH 表漏了行池字段**（`PH.rows` 为 nil → 配置窗构建即红字）、**DataSearch 新入口定义在 `dsDoSearch` 之前**（DECL ORDER CHECK 抓住）。
   - 上一版 **1.72.2**（分享方案光环修复 + 载入引导每次都在）：

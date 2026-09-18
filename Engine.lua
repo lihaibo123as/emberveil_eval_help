@@ -14,7 +14,71 @@ local formatStats, collectStats = EVAL_FORMAT_STATS, EVAL_COLLECT_STATS -- 1.41.
 
 local WAR_MAX_SLOT = 119
 -- 1.48.0 清理：WAR_SKILLS 战士白名单已删除——技能清单一切以动作条扫描（wslots）为准，真·全职业
-local WTT = GameTooltip -- 识别动作条技能用
+-- ★★★1.73.14 隐形 tooltip（读数用）：**绝不能再借用真实 GameTooltip**
+--   【实事故·用户报「开启战斗UI 后物品 tooltip 显示几秒就自动隐藏」】旧代码是 `local WTT = GameTooltip` ——
+--   也就是「读光环/技能数据」用的是**玩家正在看的那个 tooltip**：每次读都要
+--   SetOwner(UIParent,"ANCHOR_NONE") → ClearLines() → 填内容 → Hide()，
+--   于是战斗UI / 状态UI 的**定时刷新**（条件求值要读光环）会把玩家正看的物品 tooltip **清空并关掉**。
+--   ★正解 = 照 Heart/C 的范式（`C.xml` 里的 `C_Tooltip`）**自建一个隐形 tooltip**，只读它、永不碰 GameTooltip。
+--   ★自建失败（客户端不给该 frame 类型）→ 才退回 GameTooltip，并加一道守卫：
+--     只有「它当时没在显示」时才敢读（即便退化，也绝不碰玩家正看着的那一个）。
+local WTT, WTTSELF, WTT_TOUCH, WTT_WHY = nil, false, 0, nil
+do
+  local tries = {
+    function() return CreateFrame("GameTooltip", "EVAL_HELP_WTT", UIParent, "GameTooltipTemplate") end,
+    function() return CreateFrame("GameTooltip", "EVAL_HELP_WTT", UIParent) end,
+  }
+  local got = nil
+  for i = 1, table.getn(tries) do
+    local okc, f = pcall(tries[i])
+    if okc and type(f) == "table" and f ~= GameTooltip then got = f break end
+  end
+  if got ~= nil then
+    WTT, WTTSELF = got, true
+    WTT_WHY = "自建隐形 tooltip（EVAL_HELP_WTT）"
+  else
+    WTT, WTTSELF = GameTooltip, false
+    WTT_WHY = "自建失败 → 退化用 GameTooltip（只在它没显示时才读）"
+  end
+  if WTT ~= nil then
+    pcall(function() WTT:SetOwner(UIParent, "ANCHOR_NONE") end) -- 1.10 hack（与 C.xml 同款）
+    pcall(function() WTT:SetClampedToScreen(0) end)            -- 1.11 hack
+    pcall(function() WTT:Hide() end)
+  end
+end
+-- 读第一行：**读 WTT 自己的那个 FontString**（真实 GameTooltip 的是 GameTooltipTextLeft1；读错就读到玩家的内容）
+local function wtText1()
+  if WTT == nil then return nil end
+  local base = "GameTooltip"
+  if WTTSELF then
+    local okn, n = pcall(function() return WTT:GetName() end)
+    if okn and type(n) == "string" and n ~= "" then base = n end
+  end
+  local fs = getglobal(base .. "TextLeft1")
+  if fs and fs.GetText then
+    local ok2, t = pcall(function() return fs:GetText() end)
+    if ok2 then return t end
+  end
+  return nil
+end
+-- 纯函数：这次到底敢不敢碰 WTT（自建 → 随便读；退化成真实 tooltip → 只有**没在显示**时才敢读）
+function EVAL_WTT_MAY_READ_PURE(isSelf, realShown)
+  if isSelf == true then return true end
+  return (realShown ~= true)
+end
+function EVAL_WTT_MAY_READ()
+  if WTT == nil then return false end
+  if WTTSELF then return true end
+  local oks, shown = pcall(function() return WTT:IsShown() end)
+  local may = EVAL_WTT_MAY_READ_PURE(false, (oks and shown == true))
+  if may then WTT_TOUCH = WTT_TOUCH + 1 end -- 退化模式下真碰了玩家那个 tooltip 的次数（应该尽量 0）
+  return may
+end
+function EVAL_TEST_WTT() return WTT end -- ★测试用：读出**真正在用的**那个隐性 tooltip（断言要改它、别再改 GameTooltip）
+function EVAL_WTT_STATE()
+  return { self = WTTSELF, name = (WTTSELF and "EVAL_HELP_WTT" or "GameTooltip"),
+           why = WTT_WHY, touches = WTT_TOUCH, hasWtt = (WTT ~= nil) }
+end
 local wslots = {}       -- 技能名 -> { slot, tex }
 local wscanned = false
 local wLastAttackTry = 0
@@ -29,15 +93,13 @@ end
 
 local function wactionName(slot)
   if not WTT or not WTT.SetAction then return nil end
+  if not EVAL_WTT_MAY_READ() then return nil end -- ★1.73.14 别碰玩家正看着的 tooltip
   local ok = pcall(function() WTT:SetOwner(UIParent, "ANCHOR_NONE") end)
   if not ok then pcall(function() WTT:SetOwner(UIParent, "ANCHOR_TOPLEFT") end) end
   pcall(function() WTT:ClearLines() end)
   local ok2 = pcall(WTT.SetAction, WTT, slot) -- 1.33.2 同探针结论：built 返回值在本客户端不可信，不拿它当门槛
   local name
-  if ok2 then
-    local fs = getglobal("GameTooltipTextLeft1")
-    if fs and fs.GetText then name = fs:GetText() end
-  end
+  if ok2 then name = wtText1() end -- ★读**自家** tooltip 那一行（不再读 GameTooltipTextLeft1）
   pcall(function() WTT:Hide() end)
   return name
 end
@@ -1096,6 +1158,7 @@ function EVAL_TARGET_DEBUFF_LIST()
   local list = {}
   if not (UnitExists("target") and type(UnitDebuff) == "function") then return list, false end
   if not (WTT and WTT.SetUnitDebuff) then return list, false end
+  if not EVAL_WTT_MAY_READ() then return list, false end -- ★1.73.14 玩家正看 tooltip 时不读（如实判「不可信」）
   pcall(function() WTT:SetOwner(UIParent, "ANCHOR_NONE") end)
   -- ★1.72.2 第二返回 = **本次扫描是否可信**：只有「每个有光环的槽都读到了名字」才算干净。
   --   读到一半就下结论「没有这个 debuff」是危险的（负向判定会因此放行 → 重放）。
@@ -1107,10 +1170,7 @@ function EVAL_TARGET_DEBUFF_LIST()
     local name
     pcall(function() WTT:ClearLines() end)
     local oks = pcall(WTT.SetUnitDebuff, WTT, "target", i) -- 1.33.2 探针实测：返回值恒 nil 但 tooltip 已填充，built 不能当门槛
-    if oks then
-      local fs = getglobal("GameTooltipTextLeft1")
-      if fs and fs.GetText then name = fs:GetText() end
-    end
+    if oks then name = wtText1() end
     if name and name ~= "" then
       named = named + 1
       table.insert(list, { name = name, tex = tex })
@@ -1128,6 +1188,7 @@ local function wScanAuras(unit, harmful)
   local api = harmful and UnitDebuff or UnitBuff
   local ttm = WTT and (harmful and WTT.SetUnitDebuff or WTT.SetUnitBuff)
   if type(api) ~= "function" or not ttm then return list, false end
+  if not EVAL_WTT_MAY_READ() then return list, false end -- ★1.73.14 同上
   pcall(function() WTT:SetOwner(UIParent, "ANCHOR_NONE") end)
   local slots, named = 0, 0 -- ★1.72.2 同 EVAL_TARGET_DEBUFF_LIST：读全了才算「扫描可信」
   for i = 1, 16 do
@@ -1137,10 +1198,7 @@ local function wScanAuras(unit, harmful)
     local name
     pcall(function() WTT:ClearLines() end)
     local oks = pcall(ttm, WTT, unit, i) -- 1.33.2 探针实测：返回值恒 nil 但 tooltip 已填充
-    if oks then
-      local fs = getglobal("GameTooltipTextLeft1")
-      if fs and fs.GetText then name = fs:GetText() end
-    end
+    if oks then name = wtText1() end
     if name and name ~= "" then
       named = named + 1
       table.insert(list, { name = name, tex = tex })
@@ -1159,12 +1217,8 @@ function EVAL_PLAYER_BUFF_LIST()
   -- ★1.72.2 第二返回 = **本次扫描是否可信**（每个「看到的光环」都进了清单且读到了名字）。
   --   ``ran`` = 两条路径是否真的跑过（都没有 → 不可信，调用方必须如实失败）。
   local ran, slots, named = false, 0, 0
-  local function tooltipName() -- 读 tooltip 第一行（WTT=GameTooltip）
-    local fs = getglobal("GameTooltipTextLeft1")
-    if fs and fs.GetText then return fs:GetText() end
-    return nil
-  end
-  if type(GetPlayerBuff) == "function" and WTT and WTT.SetPlayerBuff then
+  local function tooltipName() return wtText1() end -- ★1.73.14 读**自家** tooltip 那一行
+  if type(GetPlayerBuff) == "function" and WTT and WTT.SetPlayerBuff and EVAL_WTT_MAY_READ() then
     ran = true
     pcall(function() WTT:SetOwner(UIParent, "ANCHOR_NONE") end)
     for i = 0, 31 do
@@ -1186,7 +1240,7 @@ function EVAL_PLAYER_BUFF_LIST()
   end
   -- 1.32.10 兜底：一个名字都没读到时换 UnitBuff+SetUnitBuff 路径（本客户端 SetPlayerBuff
   -- 读名可能失败——药品类 buff 不进下拉的病根；SetUnitBuff 与已验证的 SetUnitDebuff 同族）
-  if table.getn(list) == 0 and type(UnitBuff) == "function" and WTT and WTT.SetUnitBuff then
+  if table.getn(list) == 0 and type(UnitBuff) == "function" and WTT and WTT.SetUnitBuff and EVAL_WTT_MAY_READ() then
     ran = true
     slots, named = 0, 0 -- 换路径重新计（同一条光环不能算两次）
     pcall(function() WTT:SetOwner(UIParent, "ANCHOR_NONE") end)

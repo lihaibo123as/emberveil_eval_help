@@ -145,7 +145,41 @@ local function newFrame(parent)
   rawset(m, "__parent", parent or UIParent)
   return m
 end
+-- ★1.73.14 造一个「独立 tooltip」：自己的文本 + 自己的 tooltip API（真机里 CreateFrame("GameTooltip", ...) 就是这个）
+local function mkTooltipFrame(name)
+  -- ★必须是**普通 table**（不能是带元表兜底的 mock）：测试要能靠 `GT.SetUnitBuff = nil` 如实模拟
+  --   「这个入口不可用」——带 __index 兜底的 mock 里赋值 nil 会被兜底函数"复活"（真值），
+  --   于是「扫描器不可用」这个前提根本建不起来（组 70 / 组 108 都靠它）。
+  local f = {}
+  rawset(f, "__name", name)
+  rawset(f, "GetName", function() return name end)
+  rawset(f, "SetOwner", function() end)
+  rawset(f, "SetClampedToScreen", function() end)
+  rawset(f, "Hide", function() end)
+  rawset(f, "Show", function() end)
+  rawset(f, "IsShown", function() return false end)
+  rawset(f, "ClearLines", function() TEST.curSlot = nil TEST.curDebuff = nil TEST.curBuff = nil end)
+  rawset(f, "SetAction", function(_, slot) TEST.curSlot = slot return true end)
+  rawset(f, "SetUnitDebuff", function(_, _, i) TEST.curDebuff = i return TEST.debuffs[i] ~= nil end)
+  rawset(f, "SetUnitBuff", function(_, _, i) TEST.curBuff = i return TEST.buffs[i] ~= nil end)
+  rawset(f, "SetPlayerBuff", function(_, bi) TEST.curBuff = bi return TEST.buffs[bi + 1] ~= nil end)
+  rawset(f, "SetSpell", function() return true end)
+  rawset(f, "AddLine", function() end)
+  rawset(_G, name .. "TextLeft1", { GetText = function()
+    TEST.ttReadFrom = name .. "TextLeft1"
+    if TEST.curBuff then return TEST.buffs[TEST.curBuff + 1] and TEST.buffs[TEST.curBuff + 1].name end
+    if TEST.curDebuff then return TEST.debuffs[TEST.curDebuff] and TEST.debuffs[TEST.curDebuff].name end
+    return TEST.slotNames and TEST.slotNames[TEST.curSlot or 0]
+  end })
+  return f
+end
+
 function CreateFrame(ftype, name, parent)
+  if ftype == "GameTooltip" and type(name) == "string" and name ~= "" and name ~= "GameTooltip" then
+    local t = mkTooltipFrame(name) -- ★真机里这就是「另一个 tooltip」，与单例 GameTooltip **不是同一个对象**
+    rawset(_G, name, t)
+    return t
+  end
   local f = newFrame(parent)
   rawset(f, "__name", name)
   if ftype == "EditBox" then f.__markEditBox() end -- 见 newMock 里 SetText 的说明
@@ -205,20 +239,33 @@ do
   rawset(Minimap, "GetWidth", function() return mr - ml end)
   rawset(Minimap, "GetHeight", function() return mt - mb end)
 end
+-- ★★★1.73.14 桩保真（用户报「开战斗UI 后物品 tooltip 几秒就消失」）：
+--   真机语义 = **GameTooltip 是单例**，而 `CreateFrame("GameTooltip", "X", UIParent)` 给的是**另一个独立 tooltip**；
+--   每个 tooltip 有**自己的** TextLeft1。桩不建模这两点 → 「代码借用了真实 GameTooltip」这种最毒的 bug
+--   在测试里**根本不存在**（旧桩里 CreateFrame 返回的 GameTooltip 类型帧既没有 tooltip API，也没有自己的文本）。
+--   因此这里：① 记 **TEST.gtCalls**（真实 GameTooltip 的 SetOwner/ClearLines/Hide 调用次数）——
+--   「读光环数据时有没有碰玩家正在看的 tooltip」从此是**可断言**的性质；② **TEST.ttReadFrom** 记录读的是哪个 TextLeft1。
+TEST.gtCalls = { setOwner = 0, clear = 0, hide = 0, show = 0 }
+TEST.ttReadFrom = nil
 GameTooltipTextLeft1 = { GetText = function()
+  TEST.ttReadFrom = "GameTooltipTextLeft1"
   if TEST.curBuff then return TEST.buffs[TEST.curBuff + 1] and TEST.buffs[TEST.curBuff + 1].name end
   if TEST.curDebuff then return TEST.debuffs[TEST.curDebuff] and TEST.debuffs[TEST.curDebuff].name end
-  return TEST.slotNames[TEST.curSlot or 0]
+  return TEST.slotNames and TEST.slotNames[TEST.curSlot or 0]
 end }
 GameTooltip = {
-  SetOwner = function() end, Hide = function() end, Show = function() end,
+  SetOwner = function() TEST.gtCalls.setOwner = TEST.gtCalls.setOwner + 1 end,
+  Hide = function() TEST.gtCalls.hide = TEST.gtCalls.hide + 1 end,
+  Show = function() TEST.gtCalls.show = TEST.gtCalls.show + 1 end,
+  IsShown = function() return TEST.gtShown and true or false end,
+  GetName = function() return "GameTooltip" end,
   -- ★1.71.2（第十九轮）记录 AddLine 的文本：断言要验「按钮 tooltip 到底写了什么」，
   --   桩不记录的话，这类**纯提示**需求在测试里完全不可见（本项目「桩太宽松 → 断言失明」的老坑）。
   AddLine = function(_, text, r, g, b)
     TEST.tipLines = TEST.tipLines or {}
     table.insert(TEST.tipLines, { text = tostring(text), r = r, g = g, b = b })
   end,
-  ClearLines = function() TEST.curSlot = nil TEST.curDebuff = nil TEST.curBuff = nil end,
+  ClearLines = function() TEST.gtCalls.clear = TEST.gtCalls.clear + 1 TEST.curSlot = nil TEST.curDebuff = nil TEST.curBuff = nil end,
   SetAction = function(_, slot) TEST.curSlot = slot return true end,
   SetUnitDebuff = function(_, _, i) TEST.curDebuff = i return TEST.debuffs[i] ~= nil end,
   SetPlayerBuff = function(_, bi) TEST.curBuff = bi return TEST.buffs[bi + 1] ~= nil end,
