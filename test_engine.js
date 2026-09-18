@@ -705,6 +705,42 @@ function checkIconAssets() {
   console.log("MILESTONE CHECK: 3 READMEs, milestone above changelog, range ends at " + ver + ", body <=10 list items");
 })();
 
+// ===== FRAME NAME CLASH CHECK（1.72.2）：具名帧会占用同名全局，绝不能与插件内全局函数同名 =====
+// ★背景（1.72.2 实事故）：DataSearch.lua 里 `function EVAL_DS_HUD(on)` 与
+//   `CreateFrame("Frame","EVAL_DS_HUD",canvas)` **同名** → 真客户端里具名帧会成为同名全局、
+//   把函数顶掉 → `/eh ds hud` 入口的 `if type(EVAL_DS_HUD)=="function"` 不成立
+//   → **命令静默失效**（HUD 打开后再也关不掉，且没有任何报错/提示）。
+//   ★为什么以前一直没发现：测试桩的 CreateFrame 只存 __name、**不挂全局** → 「同名冲突」在测试里根本不存在。
+//   1.72.2 把桩改成真客户端行为（具名帧挂全局）后，组 54 当场报 `attempt to call a table value` —— 这就是暴露途径。
+// 判据：全仓扫描 `CreateFrame(..., "NAME", ...)` 的第二参，不得与任何 `function NAME(` 同名。
+(function () {
+  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconBrowser.lua"];
+  const funcs = {}, frames = [];
+  for (const f of files) {
+    if (!fs.existsSync(path.join(__dirname, f))) continue;
+    const lines = fs.readFileSync(path.join(__dirname, f), "utf8").split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const fm = lines[i].match(/^\s*function\s+([A-Za-z_]\w*)\s*\(/);
+      if (fm) funcs[fm[1]] = f + ":" + (i + 1);
+      const cm = lines[i].match(/CreateFrame\s*\(\s*[^,]+,\s*"([^"]+)"/);
+      if (cm) frames.push([cm[1], f + ":" + (i + 1)]);
+    }
+  }
+  if (!frames.length) {
+    console.log("FRAME NAME CLASH CHECK: FAIL - no named frames found (the scan pattern must have gone stale)");
+    process.exitCode = 1;
+    return;
+  }
+  const bad = frames.filter(function (p) { return funcs[p[0]]; })
+    .map(function (p) { return p[0] + " (" + p[1] + " shadows function at " + funcs[p[0]] + ")"; });
+  if (bad.length) {
+    console.log("FRAME NAME CLASH CHECK: FAIL - a named frame shadows an addon global function: " + bad.join(", "));
+    process.exitCode = 1;
+    return;
+  }
+  console.log("FRAME NAME CLASH CHECK: " + frames.length + " named frames, none shadows an addon global function");
+})();
+
 checkIconAssets();
 
 const L=lauxlib.luaL_newstate();

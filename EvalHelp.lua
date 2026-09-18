@@ -7251,12 +7251,12 @@ init:SetScript("OnEvent", function(a, b)
         if msgT then EVAL_TCAST_EVENT(msgT) end
       end
     end)
-    -- 1.72.1：加载成功提示 + 首次进入给一遍友好引导（老用户可用 /eh guide 重看）
+    -- 1.72.1：加载成功提示 + 新手引导
+    -- ★1.72.2（用户要求：「之前的新手引导功能需要在这里显示」）：引导改成**每次加载都打**——
+    --   原来用 cfg.guideSeen 只出一次，新人不一定第一局就盯着聊天框，错过就**再也看不到**了。
+    --   ★废弃键：cfg.guideSeen 不再读写（存量存档里残留的 true 无害，不再影响行为）。
     say(string.format(L("LOAD_OK"), VERSION))
     say(L("LOAD_HINT"))
-    if not cfg.guideSeen then
-      cfg.guideSeen = true
-      EVAL_HELP_GUIDE(false)
-    end
+    EVAL_HELP_GUIDE(false)
   end
 end)

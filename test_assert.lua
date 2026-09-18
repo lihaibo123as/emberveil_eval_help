@@ -7449,4 +7449,45 @@ do
   print("  学习表诊断命令：/eh go tex | texdel 名字(大小写不敏感) | texclear | texscan；删掉纹理后判定会自动扫描并学回来")
 end
 
+-- 105) ★★★1.72.2 载入提示 + 新手引导：**每次加载**都要打到聊天框
+--   【事故】1.72.1 把引导做成「只在人生第一局出一次」（`cfg.guideSeen`）→ 用户重载/重进之后**再也看不到**，
+--     截图里只剩「✅ 已加载成功 + 一行提示」，四步引导缺失（用户原话：「之前的新手引导功能需要在这里显示」）。
+--   ★判据：① 触发 VARIABLES_LOADED（= 进游戏 / /reload）后，聊天框必须有
+--     载入成功行（带版本号）+ 引导标题 + 步骤正文；
+--     ② **再来一次仍然要出** —— 这条正是旧实现的死因
+--        （变异：把 `if not cfg.guideSeen` 那个门加回来 → 本组必炸）。
+do
+  local f105 = EVAL_HELPInitFrame
+  eq(type(f105) == "table" and type(f105.GetScript) == "function", true,
+     "①前置：拿到具名帧 EVAL_HELPInitFrame（桩已按真客户端行为把它挂成全局）")
+  local onEvent = f105:GetScript("OnEvent")
+  eq(type(onEvent) == "function", true, "①前置：init 帧挂着 OnEvent")
+  local function loadOnce105(tag)
+    TEST.chat = nil
+    local ok, err = pcall(onEvent, "VARIABLES_LOADED", nil)
+    eq(ok, true, "★★VARIABLES_LOADED 处理不许报错（" .. tag .. " err=" .. tostring(err) .. "）")
+    return tostring(TEST.chat or "")
+  end
+  local chat1 = loadOnce105("first")
+  eq(string.find(chat1, "已加载成功", 1, true) ~= nil, true, "★★载入成功提示要打出来")
+  eq(string.find(chat1, "EvalHelp %d+%.%d+%.%d+") ~= nil, true,
+     "★★载入提示里要带版本号（形如 EvalHelp 1.72.1）")
+  local LANG = EVAL_GET_LANG()
+  local title = EVAL_LOCALES[LANG]["GUIDE_TITLE"]
+  local step1 = EVAL_LOCALES[LANG]["GUIDE_S1"]
+  eq(string.find(chat1, title, 1, true) ~= nil, true,
+     "★★★首次加载必须打出四步引导（用户截图缺的就是它）: 找「" .. tostring(title) .. "」")
+  eq(string.find(chat1, step1, 1, true) ~= nil, true, "★★引导正文（① 开战斗UI）也要在")
+  -- ② 第二次加载（= /reload 语义）**仍然**要打 —— 旧实现就是死在这一条
+  local chat2 = loadOnce105("second")
+  eq(string.find(chat2, title, 1, true) ~= nil, true,
+     "★★★第二次加载(/reload)**仍然**要打印引导 —— 旧实现被 cfg.guideSeen 挡掉，用户就是这样看不到的")
+  -- ③ 手动重看这条路也得在
+  TEST.chat = nil
+  SlashCmdList["EVALHELP"]("guide")
+  eq(string.find(tostring(TEST.chat), title, 1, true) ~= nil, true, "★/eh guide 仍可随时重看")
+  TEST.chat = nil
+  print("  载入提示 + 新手引导：每次加载都打全（含 /reload），/eh guide 可随时重看")
+end
+
 print("ALL TESTS PASS")

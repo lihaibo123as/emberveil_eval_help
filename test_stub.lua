@@ -124,6 +124,10 @@ end
 function CreateFrame(_, name, parent)
   local f = newFrame(parent)
   rawset(f, "__name", name)
+  -- ★1.72.2：真客户端里 CreateFrame("Frame","某名字") 会让该名字**成为全局**；
+  --   旧桩只存 __name 不挂全局 → 测试拿不到具名帧（如 EVAL_HELPInitFrame），
+  --   于是「加载提示 / 新手引导」这条路径**根本无法被断言**（组 105 就是靠它才建起来的）。
+  if type(name) == "string" and name ~= "" then rawset(_G, name, f) end
   return f
 end
 

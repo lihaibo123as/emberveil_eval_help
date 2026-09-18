@@ -1816,7 +1816,12 @@ local function dsHudEnsure()
   local ok, canvas = pcall(cl.GetWorldMapCanvas)
   if not ok or not canvas then return nil end
   -- 用 Frame 承载文本；父级=地图画布 → 随地图一起显隐
-  local f = CreateFrame("Frame", "EVAL_DS_HUD", canvas)
+  -- ★★★1.72.2 **具名帧会占用同名全局**（真客户端行为）——原名字 "EVAL_DS_HUD" 与本文件上面的
+  --  全局函数 `function EVAL_DS_HUD(on)` **同名** → 帧把这个函数顶掉之后，`/eh ds hud` 入口的
+  --  `if type(EVAL_DS_HUD) == "function"` 就不成立 → **命令静默失效**（HUD 打开后再也关不掉，且没有任何提示）。
+  --  ★暴露途径：测试桩 1.72.2 起按真客户端行为把具名帧挂到全局，组 54 立刻报 attempt to call a table value。
+  --  ★判据：**帧名必须与插件内任何全局函数名错开**（新增源码检查 FRAME NAME CLASH 守着这一类）。
+  local f = CreateFrame("Frame", "EVAL_DS_HUDFrame", canvas)
   pcall(f.SetWidth, f, 300)
   pcall(f.SetHeight, f, 90)
   pcall(f.SetPoint, f, "TOPLEFT", canvas, "TOPLEFT", 6, -6)
