@@ -85,16 +85,16 @@ $src = "$PWD\EvalHelp"; $out = "$PWD\EvalHelp-vX.Y.Z.zip"
 $staging = "$env:TEMP\eh_pkg"
 if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
 New-Item -ItemType Directory -Path "$staging\EvalHelp" | Out-Null
-# ★只装运行必需：.toc + 9 个 .lua 模块 + Locales + examples + media + 三语言 README/CHANGELOG/DEVELOPMENT
+# ★只装运行必需：.toc + 10 个 .lua 模块 + Locales + examples + media + 三语言 README/CHANGELOG/DEVELOPMENT
 # ★★清单必须**跟着 EvalHelp.toc 走**（下面的模块名与基准数由源码检查 PACK LIST CHECK 守着，改漏一处当场 FAIL）
-Copy-Item "$src\EvalHelp.toc","$src\Core.lua","$src\Engine.lua","$src\EvalHelp.lua","$src\Toolbox.lua","$src\DataSearch.lua","$src\Share.lua","$src\IconBrowser.lua","$src\PetData.lua","$src\PetHelper.lua" "$staging\EvalHelp\"
+Copy-Item "$src\EvalHelp.toc","$src\Core.lua","$src\Engine.lua","$src\EvalHelp.lua","$src\Toolbox.lua","$src\DataSearch.lua","$src\Share.lua","$src\IconSem.lua","$src\IconBrowser.lua","$src\PetData.lua","$src\PetHelper.lua" "$staging\EvalHelp\"
 Copy-Item "$src\README.md","$src\README_en.md","$src\README_ru.md","$src\CHANGELOG.md","$src\DEVELOPMENT.md" "$staging\EvalHelp\"
 Copy-Item "$src\Locales","$src\examples","$src\media" "$staging\EvalHelp\" -Recurse
 Remove-Item "$staging\EvalHelp\media\Textures" -Recurse -Force -ErrorAction SilentlyContinue  # 主题素材不进包
 [System.IO.Compression.ZipFile]::CreateFromDirectory($staging, $out)
 Remove-Item $staging -Recurse -Force
 ```
-★**装完必须核对条目数**（1.73.0 基准 = **62 个**；1.72.0 时是 60，多了 PetData.lua + PetHelper.lua）：少一个就是缺文件，用户装了会**直接报错**。
+★**装完必须核对条目数**（1.73.5 基准 = **63 个**；1.73.0 时是 62，多了 IconSem.lua）：少一个就是缺文件，用户装了会**直接报错**。
   ★这一条与上面的模块清单都有源码检查 `PACK LIST CHECK` 守着（清单与 .toc 逐个比对 + 基准数按打包口径现算），过时当场 FAIL。
 ★**不装**：`luacheck.js`/`test_*.lua`/`test_engine.js`（测试）、`preview/`（截图）、`node_modules/`、
 `api_*.html`、`.git/`、`bindings/`、`_icons_scan/`、`pay/`。
@@ -282,6 +282,10 @@ Remove-Item $staging -Recurse -Force
 - ★★★**变异锚点必须唯一定位到目标那一行**（`b:SetScript("OnClick",fn)` 有 6~7 处、`OnEnter` 6 处）→ **整行对齐**、**命中数必须 == 1**、CRLF 先摘 CR、**变异体本身必须语法合法**；★报 ANCHOR-MISS 时**先怀疑锚点**。
 - ★★★**判「捕获」要同时看退出码与输出文本**（`: FAIL` 只覆盖源码检查，行为断言打 `ASSERT FAIL`；`execSync` 抛异常时正文在 **`e.stdout`**；`-Last 6` 会漏掉打在 **stderr** 上的 `LANG KEY CHECK` FAIL）。
 - ★★**断言必须落在真实调用点/真实闭包/真实入口上**；**观测点必须配反向哨兵**、「删掉了」验「不在」、**写了钩子没人调用等于没有**；**模块级状态必须纳入 `EVAL_TB_TEST_RESET_TIMERS`**（放**文件末尾**，否则 DECL ORDER CHECK 抓 4 条 FAIL）；**判据要盯要保的那条性质本身**（「刷新次数 +1」而不是「数据对不对」）；**等价变异如实记录、未覆盖就说未覆盖**。
+- ★★★1.73.5 **两条「弱判据」实录（本轮变异先存活、补强后才捕获 —— M65 / M67）**：
+  ① **页码夹取会替断言把事做掉**——「改过滤词回第 1 页」在**命中只剩一页**时，`PAGE_ITEMS` 的越界夹取**自己就回到第 1 页** → 把 `IB.page = 1` 删掉照样绿；正解 = 用**改词后仍有多页**的词（`/Game/` 1018 枚 / `法术` 351 枚）先把页码推到第 2 页再改词（并把「先推到第 2 页」写成**前置断言**，M74 证明它真的挡得住）。
+  ② **递归会被 `pcall` 吞掉**——「无条件回写输入框 → `SetText` 再触发 `OnTextChanged` → 递归」真会发生，但沿途 `pcall` 把递归错误吞了、刷新次数反而只剩 1 次 →「刷新次数没爆」这条断言**照样绿**；正解 = 让桩**计数**（`TEST.ebSetTextCalls`）再断言**次数有界**（实测 198 次 vs 有界 ≤2）。
+- ★★1.73.5 **桩要模拟「EditBox 的 `SetText` 会再触发 `OnTextChanged`」**（真客户端行为，1.73.1 踩过）：旧桩不触发 → 「无条件回写」的变异**存活**、那条判据**永远验不到东西**；桩里到 50 层就 `error()`，免得测试卡死。★补上后顺带覆盖了 1.73.1 的 `EVAL_PH_SET_QUERY` 同款写法（全套测试仍全绿 = 没有别处犯这个错）。
 
 ### 5.4 UI 与布局
 - ★★★1.73.3 **滚轮方向必须单一来源**（用户报「图标库的滚动方向和效果相反」）：6 处滚轮里只有图标库是反的（写成「d > 0 → 下一页」），其余 5 处都是「上滚 = 回到前面」（offset 减 / 上一页）。★★**真正的根因是断言写错了方向**：当时那条断言**用 -1 当「滚轮向上」**，与反向代码互相印证 → 反向 bug 被"验证"通过了（本项目最恨的「绿但真错」）。正解 = `Core.lua` 的 **`EVAL_WHEEL_DIR(a, b)`**：① 认 a / b / 全局 `arg1`（1.12 老写法）三种；② 非数字（可能是 self）判类型；③ **幅度归一成 ±1**（客户端给 ±120 时按原值位移会一次跳 120 行）。★判据 = 源码检查 **`WHEEL DIRECTION CHECK`**（6 处都必须走它 + 禁止「位移与方向同号」）+ 组 115（双向 + 到顶夹取）；变异 M52~M55 全捕获。★新增滚轮处理器的纪律：**用 helper、写双向断言**。
@@ -314,6 +318,12 @@ Remove-Item $staging -Recurse -Force
   ★**宏图标表 = 唯一能把整表合法路径吐出来的官方入口**（`GetNumMacroIcons`/`GetMacroIconInfo`，"内置图标磁盘取不到"只对了一半）→ 新增 `/eh go icons` 采集进 `EVAL_HELP_CONFIG.iconDump`，/reload 落盘后取出 1018 条 → 落成 **`doc/图标路径清单.txt`**。
   ★★**这张清单现在是判据的一部分**：`PET ICON CHECK` 从「只守格式」升级为**真存在性校验**（逐条精确匹配清单 + 前缀/`_TEX` 后缀 + 技能间/家族间不撞图）；变异 M58（不存在的名字）/M59（退回老路径）/M60（家族撞图）/M61（少 `_TEX`）全捕获。★要换/加图标：从清单里挑 → 只改 `gen_petdata.js` 的 `SKILL_ICON`/`FAM_ICON` 两张表 → 重生成（该生成器逐字复现 `PetData.lua`，可直接重跑）。
   ★宠物家族用客户端自带的一整套 `Ability_Hunter_Pet_*`（狼/猫/熊/野猪/蟹/龟/鳄/蝙蝠/秃鹫/枭/猩猩/风蛇/蝎/陆行鸟/蜘蛛），**一族一枚不撞图**。
+- ★★★1.73.5 **图标语义表（`IconSem.lua`：名称 + 多标签）+ 图标库关键字过滤**（用户：「对存储下来的图标路径进行语义识别,对应一个名称,语义tag 一个图标可以设置多个,比如爪子…然后再图标库内加个输入过滤根据名称/路径进行筛选」）：
+  ① **数据** = `gen_iconsem.js` 从 `doc/图标路径清单.txt` 生成 `EVAL_ICON_SEM = { ["<基础名>"] = "名称|标签1/标签2/…" }`（1018 条、**823 条有中文名**，认不出的**如实退回英文基础名**，不编）；生成物独立成文件 = 单一真值（搬进 UI 就是第二份名单）。
+  ② ★★★**基础名必须剥 `_TEX`**：客户端给的是 `/Game/Interface/Icons/INV_Misc_MonsterClaw_03_TEX` —— 不剥后缀，语义表的 key **一个都对不上** → 全部退回英文名、中文过滤全废，**而且一声不响**（1.73.4「路径形态」坑的翻版）。判据 = 组 117①b（拿**真实路径形态**直接断言）；变异 M62 当场捕获。
+  ③ **过滤 = 四种命中**（语义名 / 标签 / 原始基础名 / 完整路径，大小写不敏感）+ 与分组**叠加**（先分组再关键字、先过滤再切页）；改词走**唯一入口** `EVAL_IB_SET_QUERY`（回第 1 页 + `GetText` **比对后**才回写）；空匹配**如实点名**（不是一片空白）。
+  ④ ★★**「叠加」的判据不能只比数量大小**：`nInv <= nAll` 在把分组判定整段删掉时**照样成立** → 必须查**命中项各自的 group**（新增读值口 `EVAL_IB_TEST_MATCH_GROUPS`）+ 一个必然为 0 的反向分组（药水在 inv 有、在 ability 必须 0）。
+  ⑤ 测试素材用**真实形态**：`test_engine.js` 把整份清单注入 Lua（`TEST_ICON_FIXTURE`），桩对「已是完整路径」的表项**原样返回**（否则桩永远只喂 1.12 老形态，_TEX 这类错照不到）。
 - ★★**本机 `api_*.html` 只有函数索引（1370 条）、没有事件列表** → 事件类问题只能两套都注册或 `/eh go probe` 取证；宏图标表 `GetNumMacroIcons`/`GetMacroIconInfo` 给的是**路径**、整套打包在 `Content\Paks`（磁盘取不到）、**纹理不用写进 .toc**；★（**已更正**：纹理路径写错不是"什么都不画"，而是显示成引擎的「?」缺图占位——见本节 1.73.4 条；路径一律从 `doc/图标路径清单.txt` 挑，并由 `PET ICON CHECK` 逐条核对。）
 
 ### 5.6 内容 / 数据质量
@@ -425,18 +435,22 @@ Remove-Item $staging -Recurse -Force
 ## 八、项目位置与现状
 
 - **插件目录**：`G:\game\u5wow\Azeroth\Binaries\Win64\Games\Emberveil\live\Azeroth\Interface\AddOns\EvalHelp\`（1.21 后由 EVAL_HELP 改名 **EvalHelp**；★**目录名 == toc 基名**才加载；改名时游戏必须关闭，否则 Access denied）。
-- **文件结构（1.39.0 起模块化，不是单文件）**：`EvalHelp.toc` + `Locales/{zhCN,enUS,ruRU}.lua` + `Core.lua`（输出/i18n/状态采集）+ `Engine.lua`（规则引擎）+ `EvalHelp.lua`（UI/斜杠命令/init）+ `Toolbox.lua`（工具箱 Tab3）+ `DataSearch.lua`（数据检索 Tab4）+ `Share.lua`（方案分享，1.71.0）+ `IconBrowser.lua`（图标库 Tab5）+ `examples/*.lua`（**11 个数据文件**）；文档 `README.md`/`README_en.md`/`README_ru.md`/`CHANGELOG.md`/`DEVELOPMENT.md`/`CLAUDE.md`；测试 `luacheck.js`/`test_engine.js`/`test_stub.lua`/`test_assert.lua`。**行数随开发变化，别当固定值引用**。
-- ★**toc 载入顺序（以 `EvalHelp.toc` 为唯一真值）**：`Locales/{zhCN,enUS,ruRU}` → `Core` → `Engine` → `EvalHelp` → **`examples/*`（11 个数据文件，必须排在 EvalHelp.lua 之后）** → `Toolbox` → `DataSearch` → `Share` → `IconBrowser`（★`EXAMPLES TOC CHECK` 守着「磁盘 ↔ .toc 双向一致 + 顺序 = 选单顺序」）。
-- ★**新增 .lua 模块要同时改三处**：`EvalHelp.toc` 载入列表、`test_engine.js` 的加载数组（否则测试根本不加载它）、`DECL ORDER CHECK` 的文件清单（**目前 9 个文件**：EvalHelp/Core/Engine/Toolbox/DataSearch/Share/IconBrowser —— Share 与 IconBrowser 已纳入，不再是盲区）。
+- **文件结构（1.39.0 起模块化，不是单文件）**：`EvalHelp.toc` + `Locales/{zhCN,enUS,ruRU}.lua` + `Core.lua`（输出/i18n/状态采集）+ `Engine.lua`（规则引擎）+ `EvalHelp.lua`（UI/斜杠命令/init）+ `Toolbox.lua`（工具箱 Tab3）+ `DataSearch.lua`（数据检索 Tab4）+ `Share.lua`（方案分享，1.71.0）+ `IconBrowser.lua`（图标库 Tab5）+ `PetData.lua`/`PetHelper.lua`（抓宠 Tab6，1.73.0）+ `IconSem.lua`（**图标语义表**，1.73.5）+ `examples/*.lua`（**11 个数据文件**）；文档 `README.md`/`README_en.md`/`README_ru.md`/`CHANGELOG.md`/`DEVELOPMENT.md`/`CLAUDE.md`；测试 `luacheck.js`/`test_engine.js`/`test_stub.lua`/`test_assert.lua`。**行数随开发变化，别当固定值引用**。
+- ★**toc 载入顺序（以 `EvalHelp.toc` 为唯一真值）**：`Locales/{zhCN,enUS,ruRU}` → `Core` → `Engine` → `EvalHelp` → **`examples/*`（11 个数据文件，必须排在 EvalHelp.lua 之后）** → `Toolbox` → `DataSearch` → `Share` → **`IconSem`** → `IconBrowser` → `PetData` → `PetHelper`（★`EXAMPLES TOC CHECK` 守着「磁盘 ↔ .toc 双向一致 + 顺序 = 选单顺序」；`IconSem` 必须在 `IconBrowser` **之前**——后者读它的 `EVAL_ICON_SEM`）。
+- ★**新增 .lua 模块要同时改三处**：`EvalHelp.toc` 载入列表、`test_engine.js` 的加载数组（**6 处清单**：DECL ORDER / LANG KEY / COMMENT SWALLOW / EXAMPLES TOC / FRAME NAME CLASH / 主加载循环 —— 漏一处就是那一类检查的盲区，本项目踩过）、`DECL ORDER CHECK` 的文件清单（**目前 10 个**：EvalHelp/Core/Engine/Toolbox/DataSearch/Share/IconSem/IconBrowser/PetData/PetHelper）。★1.73.5 实事故：新增 `IconSem.lua` 后**主加载循环**漏加 → `EVAL_ICON_SEM` 在测试里是 nil，图标库语义/过滤整组断言**全红**（这正是「检查存在 ≠ 覆盖到位」）。
 - ★**案例模版数据文件（1.71.2 新增 `examples/*.lua`）只需改两处**：`EvalHelp.toc` + `test_engine.js` 加载数组（它们没有顶层 local，故不进 DECL ORDER 清单）。
 - **当前版本**：**1.73.0**（头条 = **抓宠帮手（配置窗第 6 个 Tab）**：
   ① **数据** `PetData.lua` 独立载入（21 技能 = 13 主动 + 8 训练师被动，106 条「技能×等级」，280 条驯服来源）；
      来源 = 用户提供的宠物技能总表截图（`doc/pet_info.png`）逐行转录 → `doc/宠物技能数据.md`；
-  ② **图标**：**客户端内置图标占位**（`Interface\Icons\INV_Misc_QuestionMark`）——用户 1.73.0 指示「先用内置随便选一个替代，下次再确认真实路径」；
-     `PET ICON CHECK` 守**格式**（一律 `Interface\Icons`、不带扩展名、≥20 条）——★内置图标在 `Content\Paks` 里，磁盘取不到，做不了存在性校验；
+  ② **图标**：1.73.0 先用占位 → **1.73.4 已全部换成客户端真实路径**（`/Game/Interface/Icons/<名>_TEX`，21 技能 + 16 家族各一枚不撞图）；
+     `PET ICON CHECK` 也随之上台阶：从「只守格式」变成**逐条精确匹配 `doc/图标路径清单.txt`**（真存在性校验）；
   ③ **检索**：顶部输入框即时过滤（纯本地数据，无需去抖），列表列出**各等级**；支持按**技能名**或**野兽名/区域**两种搜法；
   ④ **详情页**：简介 / 集中·施法·射程·冷却 / 需求宠物等级 / 拥有该技能的宠物列表（家族 + 名称 + 等级·区域）；训练师被动技能如实注明「无驯服来源」；
   ⑤ **放大镜跳转**：宠物行右侧按钮 → 填入宠物名 → 切「数据检索」Tab 并立即检索（新增 `EVAL_DS_SEARCH_NAME` 入口 + `EVAL_DS_LAST_QUERY` 读值口）；
+- **在途（已本地提交、尚未发布/推送；用户实测通过后才进 release）**：
+  **1.73.1** 抓宠详情页两处真 bug（搜索行整块没隐藏 = 三层叠印 / Hide 过的控件没逐个 Show）+ 布局审查改成几何断言 →
+  **1.73.2** debuff 可驱散类型**多选**（含队友/团员）→ **1.73.3** 滚轮方向收成单一来源 `EVAL_WHEEL_DIR` + `/eh go icons` 图标路径采集 →
+  **1.73.4** 抓宠图标全部换成客户端真实路径 → **1.73.5** 图标**语义表**（名称 + 多标签）+ 图标库**关键字过滤**（按语义名/标签/原始名/路径）。
   新增断言组 106 + 既有「Tab 数 = 5」同步改 6；★本轮踩的坑：**生成器补丁插在输出之后**（数据没进文件，条目数 58≠106 当场暴露）、
      **PetHelper 的 PH 表漏了行池字段**（`PH.rows` 为 nil → 配置窗构建即红字）、**DataSearch 新入口定义在 `dsDoSearch` 之前**（DECL ORDER CHECK 抓住）。
   - 上一版 **1.72.2**（分享方案光环修复 + 载入引导每次都在）：

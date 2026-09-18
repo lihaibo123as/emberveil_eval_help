@@ -13,6 +13,11 @@ local function newMock()
   --   去掉那两行 Hide 的变异竟然 SURVIVED；用户随后当场报「等级配置没显示」= 真回归被桩漏掉）。
   --   ★判据：桩对「默认状态」必须与客户端一致——状态型桩错的不是「没状态」，而是**默认值反了**。
   local shown, scripts, texts = true, {}, {}
+  -- ★★★1.73.5 桩保真：真客户端的 **EditBox 里 SetText 会再触发 OnTextChanged**（1.73.1 踩过的坑：
+  --   回写输入框不比对 → 递归）。旧桩不触发 → 「无条件回写」的变异**存活**，
+  --   而我们那条「回写不会递归刷新」的断言其实**永远验不到东西**（桩太宽松 = 断言失明，本项目老坑）。
+  --   ★只对 EditBox 生效（其余控件 SetText 不触发任何脚本），并由下方 CreateFrame 打开开关。
+  local isEditBox, txtDepth = false, 0
   local w, h = nil, nil -- ★1.70.46 帧必须记得自己的尺寸（见下方 SetWidth/SetHeight 说明）
   local layer, level = nil, nil -- ★1.71.2 层（见下方 SetDrawLayer 说明）
   local focused = false -- ★1.71.2（第七轮）焦点状态（见下方 SetFocus 说明）
@@ -35,7 +40,19 @@ local function newMock()
     IsVisible = function() return shown end,
     SetScript = function(_, ev, fn) scripts[ev] = fn end,
     GetScript = function(_, ev) return scripts[ev] end,
-    SetText = function(_, t) texts.t = t end,
+    SetText = function(_, t)
+      texts.t = t
+      -- ★计数：让「回写有没有变成一串递归」可被判据直接读到（递归会被 pcall 吞掉，光看报错看不出来）
+      if isEditBox then TEST.ebSetTextCalls = (TEST.ebSetTextCalls or 0) + 1 end
+      if isEditBox and type(scripts.OnTextChanged) == "function" then
+        txtDepth = txtDepth + 1
+        -- ★递归闸门：真客户端上「无条件回写」会无限递归；这里到 50 层就**如实报错**，
+        --   免得测试卡死（报错本身就是「这条判据被违反了」的最强证据）。
+        if txtDepth > 50 then txtDepth = 0 error("EditBox SetText 递归超过 50 层（真客户端会无限递归）") end
+        scripts.OnTextChanged()
+        txtDepth = txtDepth - 1
+      end
+    end,
     GetText = function() return texts.t end,
     -- ★1.70.46：桩必须记得尺寸。原桩把 SetWidth/SetHeight 当空操作、GetWidth/GetHeight 恒 nil，
     --   于是「窗口高度根本没被设置」这类事故在测试里**完全不可见**——用户实测：技能编辑窗高得离谱，
@@ -102,6 +119,8 @@ local function newMock()
     --   ★只记字符串（uiSolid 走的是 SetTexture(r,g,b) 三数值形态，不记路径）。
     SetTexture = function(_, a1) if type(a1) == "string" then rawset(m, "__tex", a1) end end,
     GetTexture = function() return rawget(m, "__tex") end,
+    -- ★1.73.5 CreateFrame 拿到 "EditBox" 类型后调用它，打开「SetText 会再触发 OnTextChanged」的保真开关
+    __markEditBox = function() isEditBox = true end,
   }
   setmetatable(m, { __index = function(_, k)
     if special[k] then return special[k] end
@@ -126,9 +145,10 @@ local function newFrame(parent)
   rawset(m, "__parent", parent or UIParent)
   return m
 end
-function CreateFrame(_, name, parent)
+function CreateFrame(ftype, name, parent)
   local f = newFrame(parent)
   rawset(f, "__name", name)
+  if ftype == "EditBox" then f.__markEditBox() end -- 见 newMock 里 SetText 的说明
   -- ★1.72.2：真客户端里 CreateFrame("Frame","某名字") 会让该名字**成为全局**；
   --   旧桩只存 __name 不挂全局 → 测试拿不到具名帧（如 EVAL_HELPInitFrame），
   --   于是「加载提示 / 新手引导」这条路径**根本无法被断言**（组 105 就是靠它才建起来的）。
@@ -405,6 +425,10 @@ GetMacroIconInfo = function(i)
   if type(t) ~= "table" then return nil end
   local name = t[i]
   if type(name) ~= "string" then return nil end -- ★非字符串 = 取失败（用于测「失败要记账」）
+  -- ★1.73.5 表里给的若**已经是完整路径**（含 / 或 \），原样返回 —— 这样才能用
+  --   doc/图标路径清单.txt 里的**真实形态**（/Game/Interface/Icons/X_TEX）当测试素材，
+  --   否则桩永远只喂 1.12 老形态，生产上「_TEX 后缀没剥」这类问题就永远照不到。
+  if string.find(name, "/", 1, true) or string.find(name, "\\", 1, true) then return name end
   return "Interface\\Icons\\" .. name
 end
 -- ★1.71.16 KeyBinding 桩（方案快捷键绑定弹窗 + /eh go bind 探针）：TEST.bindings = { [键] = 命令 }。

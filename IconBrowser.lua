@@ -13,7 +13,7 @@
 -- 另有一组「本插件在用」的图标：**从生产代码里读**（EVAL_GO_SKILL_CATEGORIES 的 icon 字段 + 警示图标读值口），
 --   不在这里另写一份名单 —— 那种「两份名单」迟早漂移（本项目反复踩过）。
 
-local IB = { built = false, page = 1, group = "all", cells = {}, items = {}, status = nil }
+local IB = { built = false, page = 1, group = "all", q = "", cells = {}, items = {}, status = nil }
 local IB_TAB = 5 -- 配置窗第 5 个 Tab（与 EvalHelp.lua 的 tabNames 顺序一一对应）
 -- ★★★1.71.9 用户要求「图标容器高度可以再增加」→ 一页行数 6 → **9**（先把可用空间算清楚再定行数）：
 --   · 网格顶边 IB_Y_GRID = -100；配置窗高 H=460，底部两条（开关横排 / [案例模版][分享][关闭]）的中线
@@ -79,15 +79,57 @@ local function say(t)
   elseif DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage(tostring(t)) end
 end
 
+-- ===== 语义表（IconSem.lua：名称 + 多标签）=====
+-- ★★★1.73.5 用户要求：「对存储下来的图标路径进行语义识别,对应一个名称,语义tag 一个图标可以设置多个,
+--   比如爪子」——IconSem.lua 里每条 = "名称|标签1/标签2/…"（爪子那枚就是「爪|物品/杂物/爪/爪子/爪击/尖爪」）。
+--   ★为什么放在独立数据文件：① 它是**生成物**（gen_iconsem.js 从客户端采集的清单生成，单一真值）；
+--     ② 过滤/显示都要读它，写在 UI 里就成了第二份真值（本项目「两份名单迟早漂移」的老坑）。
+--   ★解析结果**缓存**：过滤是每帧路径（输入即过滤），不能每次重新 split。
+local ibSemCache = {}
+function EVAL_IB_SEM_OF(base)
+  if type(base) ~= "string" or base == "" then return nil end
+  if ibSemCache[base] ~= nil then return ibSemCache[base] end
+  local out = nil
+  local db = rawget(_G, "EVAL_ICON_SEM")
+  local v = db and db[base]
+  if type(v) == "string" and v ~= "" then
+    local nm, tagstr = string.match(v, "^([^|]*)|(.*)$")
+    local tags = {}
+    if tagstr then
+      -- ★用 gmatch 的**显式分隔符**收集（本客户端老坑：不要用 # 与复杂模式）
+      for t in string.gmatch(tagstr .. "/", "([^/]+)/") do
+        if t ~= "" then table.insert(tags, t) end
+      end
+    end
+    out = { name = (nm ~= "" and nm) or base, tags = tags, raw = base }
+  end
+  ibSemCache[base] = out or false -- false = 查过了、没有（避免每次重查）
+  return out
+end
+
 -- ===== 名称 / 分组（纯函数，脱离游戏可测） =====
 -- 名称 = 路径最后一段（并去掉扩展名：.blp/.tga 都见过）
 --   ★不用 string.gmatch / # （本客户端的老坑），只用 string.match 的字符类。
-function EVAL_IB_NAME_OF(path)
+-- 原始基础名（路径最后一段，去扩展名）——语义表的 key 就是它
+function EVAL_IB_RAWN_OF(path)
   if type(path) ~= "string" or path == "" then return nil end
   local seg = string.match(path, "[^\\/]+$") or path
-  seg = string.match(seg, "^(.-)%.[%a]+$") or seg
+  seg = string.match(seg, "^(.-)%.[%a]+$") or seg   -- 去扩展名（本插件自带素材是 .tga/.blp）
+  -- ★★★1.73.5 **必须去掉 Unreal 资产的 _TEX 后缀**：本客户端宏图标表给的是
+  --   `/Game/Interface/Icons/<名字>_TEX`（见 doc/图标路径清单.txt）——不去掉的话
+  --   EVAL_ICON_SEM 的 key（基础名）一个都对不上 → **全部退回英文名**、中文过滤全废，
+  --   而且**一声不响**（这正是 1.73.4 那条「路径形态是 Unreal 资产路径」的同一个坑的翻版）。
+  seg = string.match(seg, "^(.-)_TEX$") or seg
   if seg == "" then return nil end
   return seg
+end
+
+-- 显示名 = **语义名**（IconSem.lua），没有语义记录时退回原始基础名（如实）
+function EVAL_IB_NAME_OF(path)
+  local raw = EVAL_IB_RAWN_OF(path)
+  if not raw then return nil end
+  local sem = EVAL_IB_SEM_OF(raw)
+  return (sem and sem.name) or raw
 end
 
 -- 分组定义：**顺序稳定**（先匹配到的胜出），最后一条 pat = nil 作兜底。
@@ -117,7 +159,8 @@ local function ibGroupByPattern(name)
 end
 
 function EVAL_IB_GROUP_OF(path)
-  local n = EVAL_IB_NAME_OF(path)
+  -- ★分组看**原始名**的前缀（Spell_Fire_* 这种），不能拿语义名去匹配前缀
+  local n = EVAL_IB_RAWN_OF(path)
   if not n then return nil end
   return ibGroupByPattern(n)
 end
@@ -133,11 +176,19 @@ function EVAL_IB_GROUP_LABEL(id)
 end
 
 -- ===== 本插件在用的图标（**从生产代码读**，不另写名单） =====
+-- ★1.73.5 条目工厂：名称/标签/原始名**一处构造**（扫描与「本插件在用」两条路共用，避免两边漂移）
+function EVAL_IB_MAKE_ITEM(path, group, idx)
+  local raw = EVAL_IB_RAWN_OF(path) or path
+  local sem = EVAL_IB_SEM_OF(raw)
+  return { path = path, raw = raw, name = (sem and sem.name) or raw,
+           tags = (sem and sem.tags) or nil,
+           group = group or EVAL_IB_GROUP_OF(path) or "other", idx = idx or 0 }
+end
+
 local function ibPushItem(out, seen, path, group)
   if type(path) ~= "string" or path == "" or seen[path] then return end
   seen[path] = true
-  table.insert(out, { path = path, name = EVAL_IB_NAME_OF(path) or path,
-                      group = group or EVAL_IB_GROUP_OF(path) or "other", idx = 0 })
+  table.insert(out, EVAL_IB_MAKE_ITEM(path, group, 0))
 end
 
 local function ibLocalItems()
@@ -190,8 +241,7 @@ function EVAL_IB_SCAN(force)
         if oki and type(tex) == "string" and tex ~= "" then
           if not seen[tex] then
             seen[tex] = true
-            table.insert(items, { path = tex, name = EVAL_IB_NAME_OF(tex) or tex,
-                                  group = EVAL_IB_GROUP_OF(tex) or "other", idx = i })
+            table.insert(items, EVAL_IB_MAKE_ITEM(tex, nil, i))
           end
           st.macro = st.macro + 1
         else
@@ -212,15 +262,35 @@ function EVAL_IB_TOTAL() return table.getn(IB.items) end
 
 -- ===== 过滤 / 分页（纯函数：先过滤再切页） =====
 -- ★顺序很重要：**先按分组过滤、再切页**。先切页后过滤会让翻页漏项（每页只显示寥寥几枚）。
-function EVAL_IB_MATCH(it, groupId)
-  if groupId == nil or groupId == "all" then return true end
-  return type(it) == "table" and it.group == groupId
+-- ★★1.73.5 新增**关键字过滤**（用户要求：「在图标库内加个输入过滤根据名称/路径进行筛选功能」）：
+--   搜**语义名**（中文）/ **标签**（同义词 + 类别/学派/职业）/ **原始基础名** / **完整路径** —— 四种都命中，
+--   大小写不敏感（英文部分）；中文按字节包含即可（不需要分词）。
+function EVAL_IB_HIT(it, q)
+  if q == nil or q == "" then return true end
+  if type(it) ~= "table" then return false end
+  local needle = string.lower(q)
+  local function has(s)
+    return type(s) == "string" and s ~= "" and string.find(string.lower(s), needle, 1, true) ~= nil
+  end
+  if has(it.name) or has(it.raw) or has(it.path) then return true end
+  local tags = it.tags
+  for i = 1, table.getn(tags or {}) do
+    if has(tags[i]) then return true end
+  end
+  return false
 end
 
-function EVAL_IB_FILTER(items, groupId)
+function EVAL_IB_MATCH(it, groupId, q)
+  if groupId ~= nil and groupId ~= "all" then
+    if not (type(it) == "table" and it.group == groupId) then return false end
+  end
+  return EVAL_IB_HIT(it, q)
+end
+
+function EVAL_IB_FILTER(items, groupId, q)
   local out = {}
   for i = 1, table.getn(items or {}) do
-    if EVAL_IB_MATCH(items[i], groupId) then table.insert(out, items[i]) end
+    if EVAL_IB_MATCH(items[i], groupId, q) then table.insert(out, items[i]) end
   end
   return out
 end
@@ -234,8 +304,8 @@ function EVAL_IB_PAGE_COUNT(n, per)
 end
 
 -- 返回：本页条目表, 夹取后的页码, 总页数, 过滤后总数
-function EVAL_IB_PAGE_ITEMS(items, groupId, page, per)
-  local list = EVAL_IB_FILTER(items, groupId)
+function EVAL_IB_PAGE_ITEMS(items, groupId, page, per, q)
+  local list = EVAL_IB_FILTER(items, groupId, q)
   local total = table.getn(list)
   local pages = EVAL_IB_PAGE_COUNT(total, per)
   page = tonumber(page) or 1
@@ -301,12 +371,32 @@ function EVAL_IB_SET_GROUP(id)
   EVAL_IB_REFRESH()
 end
 
+-- ★1.73.5 关键字过滤的**唯一入口**（输入框 OnTextChanged 也走它）：
+--   ① 改词 = 回到第 1 页（否则停在第 5 页看着空列表，以为没匹配）；
+--   ② 回写输入框要**比对后再写**——本客户端 SetText 会再触发 OnTextChanged，无条件回写 = 递归。
+function EVAL_IB_SET_QUERY(q)
+  q = tostring(q or "")
+  IB.q = q
+  IB.page = 1
+  if IB.eb then
+    local okc, cur = pcall(IB.eb.GetText, IB.eb)
+    if not (okc and cur == q) then pcall(IB.eb.SetText, IB.eb, q) end
+  end
+  EVAL_IB_REFRESH()
+  return IB.q
+end
+
 -- ===== UI =====
-local function ibSetStatusText(st, total, page, pages)
+local function ibSetStatusText(st, total, page, pages, q)
   local txt
   if st.state == "ok" then
+    if total == 0 and q ~= nil and q ~= "" then
+      -- ★1.73.5 空匹配**如实说明**（并提示可搜什么）——不然用户只看到一片空白
+      return string.format(L("IB_EMPTY_MATCH"), tostring(q))
+    end
     txt = string.format(L("IB_STATUS"), total, page, pages)
     if (st.failed or 0) > 0 then txt = txt .. string.format(L("IB_STATUS_FAIL"), st.failed) end
+    if q ~= nil and q ~= "" then txt = txt .. string.format(L("IB_FILTERING"), tostring(q)) end
   elseif st.state == "noapi" then
     txt = L("IB_NOAPI")
   else
@@ -321,10 +411,13 @@ function EVAL_IB_REFRESH()
   local st = EVAL_IB_SCAN()
   local items = IB.items
   local cols, rows, per = EVAL_IB_LAYOUT(IB.W)
-  local pageItems, page, pages, total = EVAL_IB_PAGE_ITEMS(items, IB.group, IB.page, per)
+  local pageItems, page, pages, total = EVAL_IB_PAGE_ITEMS(items, IB.group, IB.page, per, IB.q)
   IB.page, IB.pages, IB.total, IB.per = page, pages, total, per
   IB.pageItems = pageItems
-  if IB.statusFS then pcall(IB.statusFS.SetText, IB.statusFS, ibSetStatusText(st, total, page, pages)) end
+  if IB.statusFS then pcall(IB.statusFS.SetText, IB.statusFS, ibSetStatusText(st, total, page, pages, IB.q)) end
+  if IB.ebPh then
+    if IB.q == "" then pcall(IB.ebPh.Show, IB.ebPh) else pcall(IB.ebPh.Hide, IB.ebPh) end
+  end
   if IB.groupText then
     pcall(IB.groupText.SetText, IB.groupText,
       string.format(L("IB_GROUP_BTN"), EVAL_IB_GROUP_LABEL(IB.group) .. " (" .. tostring(total) .. ")"))
@@ -392,6 +485,57 @@ function EVAL_IB_BUILD(root, page, refreshes)
   pcall(gt.SetNonSpaceWrap, gt, false)
   IB.groupText = gt
 
+  -- ★1.73.5 关键字过滤输入框（用户要求：按名称/路径筛选）——与分组**叠加**（先分组、再关键字）
+  --   位置：分组按钮右边（228..428），再右边是 [清除]；都在同一行，不与右上翻页按钮打架。
+  local boxX, boxW = IB_PADX + 208, 200
+  local ebBg = root:CreateTexture(nil, "BACKGROUND")
+  ibSolid(ebBg, 0.10, 0.09, 0.06, 1)
+  ebBg:SetPoint("TOPLEFT", root, "TOPLEFT", boxX - 2, IB_Y_GROUP - 2)
+  ebBg:SetWidth(boxW + 4) ebBg:SetHeight(20)
+  table.insert(widgets, ebBg)
+  local okEb, eb = pcall(CreateFrame, "EditBox", "EVAL_IB_EB", root)
+  if okEb and eb then
+    pcall(eb.SetAutoFocus, eb, false)
+    pcall(eb.EnableMouse, eb, true)
+    eb:SetWidth(boxW) eb:SetHeight(16)
+    eb:SetPoint("TOPLEFT", root, "TOPLEFT", boxX, IB_Y_GROUP)
+    local setF = false
+    for _, fo in ipairs({ "GameFontHighlightSmall", "ChatFontNormal", "GameFontNormal" }) do
+      if pcall(eb.SetFontObject, eb, fo) then setF = true break end
+    end
+    if not setF then
+      for _, fp in ipairs({ "Fonts\\FZLBJW.TTF", "Fonts\\FRIZQT__.TTF", "Fonts\\ARIALN.TTF" }) do
+        local okF, ok2 = pcall(eb.SetFont, eb, fp, 10, "")
+        if okF and ok2 then setF = true break end
+      end
+    end
+    pcall(eb.SetTextColor, eb, 1, 1, 1)
+    pcall(eb.SetJustifyH, eb, "LEFT")
+    pcall(eb.SetJustifyV, eb, "MIDDLE")
+    pcall(eb.SetTextInsets, eb, 2, 0, 0, 0)
+    IB.eb = eb
+    table.insert(widgets, eb)
+    eb:SetScript("OnTextChanged", function()
+      local okt, t = pcall(eb.GetText, eb)
+      -- 纯本地过滤，无需去抖；走**唯一入口**（含回写比对，不会递归）
+      if okt and type(t) == "string" and t ~= IB.q then EVAL_IB_SET_QUERY(t) end
+    end)
+    eb:SetScript("OnEnterPressed", function() pcall(eb.ClearFocus, eb) end)
+    eb:SetScript("OnEscapePressed", function() pcall(eb.ClearFocus, eb) end)
+  end
+  -- 占位提示（EditBox 不渲染时的保底，同样给提示）
+  local ebPh = ibText(root, 10, 0.55, 0.52, 0.45)
+  ebPh:SetPoint("TOPLEFT", root, "TOPLEFT", boxX + 4, IB_Y_GROUP - 3)
+  pcall(ebPh.SetWidth, ebPh, boxW - 8)
+  pcall(ebPh.SetJustifyH, ebPh, "LEFT")
+  pcall(ebPh.SetNonSpaceWrap, ebPh, false)
+  ebPh:SetText(L("IB_FILTER_PH"))
+  IB.ebPh = ebPh
+  table.insert(widgets, ebPh)
+  local clr = ibBtn(root, boxX + boxW + 8, IB_Y_GROUP, 52, L("IB_FILTER_CLR"),
+    function() EVAL_IB_SET_QUERY("") end, widgets)
+  IB.filterClear = clr.btn
+
   -- 图标网格（池子：建 pageSize 个格子，翻页时只换纹理与数据，不重建控件）
   local cols, rows, per = EVAL_IB_LAYOUT(W)
   for i = 1, per do
@@ -432,6 +576,10 @@ function EVAL_IB_BUILD(root, page, refreshes)
       pcall(GameTooltip.SetOwner, GameTooltip, b, "ANCHOR_RIGHT")
       pcall(GameTooltip.AddLine, GameTooltip, it.name)
       pcall(GameTooltip.AddLine, GameTooltip, string.format(L("IB_TIP_GROUP"), EVAL_IB_GROUP_LABEL(it.group)))
+      -- ★1.73.5 语义标签（同义词 + 类别/学派/职业）——用户要求「一个图标可以设置多个 tag」的落地处之一
+      if it.tags and table.getn(it.tags) > 0 then
+        pcall(GameTooltip.AddLine, GameTooltip, string.format(L("IB_TIP_TAGS"), table.concat(it.tags, " / ")), 0.75, 0.85, 0.95)
+      end
       if (it.idx or 0) > 0 then
         pcall(GameTooltip.AddLine, GameTooltip, string.format(L("IB_TIP_IDX"), it.idx))
       else
@@ -486,6 +634,46 @@ function EVAL_IB_TEST_COUNTS()
 end
 function EVAL_IB_TEST_PAGE() return IB.page, IB.pages, IB.total end
 function EVAL_IB_TEST_GROUP() return IB.group end
+-- ★1.73.5 语义表/过滤器 的断言入口（读生产真值，不在测试里复刻规则）
+function EVAL_IB_TEST_Q() return IB.q end
+function EVAL_IB_TEST_SET_Q(q) return EVAL_IB_SET_QUERY(q) end
+function EVAL_IB_TEST_SEM(base)
+  local s = EVAL_IB_SEM_OF(base)
+  if not s then return nil end
+  return { name = s.name, tags = s.tags, raw = s.raw }
+end
+function EVAL_IB_TEST_SEM_SIZE()
+  local db = rawget(_G, "EVAL_ICON_SEM")
+  local n = 0
+  if type(db) == "table" then for _ in pairs(db) do n = n + 1 end end
+  return n
+end
+function EVAL_IB_TEST_MATCH_NAMES(q)
+  local out = {}
+  local list = EVAL_IB_FILTER(IB.items, IB.group, q)
+  for i = 1, table.getn(list) do out[table.getn(out) + 1] = list[i].name end
+  return out
+end
+function EVAL_IB_TEST_MATCH_COUNT(q) return table.getn(EVAL_IB_FILTER(IB.items, IB.group, q)) end
+-- ★1.73.5 「分组 + 关键字」叠加是否真生效：返回命中项**各自的 group** ——
+--   光比数量大小是弱判据（只写 <= 时，把分组判定整段删掉的变异照样绿）。
+function EVAL_IB_TEST_MATCH_GROUPS(q)
+  local out = {}
+  local list = EVAL_IB_FILTER(IB.items, IB.group, q)
+  for i = 1, table.getn(list) do out[table.getn(out) + 1] = list[i].group end
+  return out
+end
+function EVAL_IB_TEST_EB() return IB.eb end
+function EVAL_IB_TEST_EB_TEXT()
+  if not IB.eb then return nil end
+  local ok, t = pcall(IB.eb.GetText, IB.eb)
+  return (ok and tostring(t)) or nil
+end
+function EVAL_IB_TEST_PH_SHOWN()
+  if not IB.ebPh then return false end
+  local ok, v = pcall(IB.ebPh.IsShown, IB.ebPh)
+  return (ok and v) and true or false
+end
 function EVAL_IB_TEST_CELL(i) return IB.cells[i] end
 -- ★1.71.9 断言入口：网格的**真实几何**（首/末格的 Top/Left/Bottom/Right + 池子枚数）——
 --   判据是「末格下缘仍在底部按钮行之上、右缘不越窗」，不是读常量（本项目「读常量 = 测自己」的老坑）。
@@ -539,4 +727,9 @@ function EVAL_IB_TEST_RESET()
   IB.status = nil
   IB.page = 1
   IB.group = "all"
+  IB.q = "" -- ★1.73.5 过滤词也是模块级状态，重置要一起清（否则下一个用例带着上一个的词）
+  if IB.eb then
+    local okc, cur = pcall(IB.eb.GetText, IB.eb)
+    if not (okc and cur == "") then pcall(IB.eb.SetText, IB.eb, "") end
+  end
 end

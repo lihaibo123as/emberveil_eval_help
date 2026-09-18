@@ -27,6 +27,7 @@ examples\group.lua
 Toolbox.lua
 DataSearch.lua
 Share.lua
+IconSem.lua
 IconBrowser.lua
 PetData.lua
 PetHelper.lua

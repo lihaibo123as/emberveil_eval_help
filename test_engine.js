@@ -68,7 +68,7 @@ function checkIconAssets() {
 //   ② 跳过「同名还有函数内 local 声明」的短名（W / H / x / y 这类）：它们在文件里是**多个不同的变量**，
 //      按名字比对必然误报（首版就误报了 EvalHelp.lua:153 的 local W —— 那是另一个函数里的 W）。
 (function () {
-  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua"];
+  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua"];
   const bad = [];
   let totalLocals = 0;
   const isName = (s) => new RegExp("^[A-Za-z_][A-Za-z0-9_]*$").test(s);
@@ -228,7 +228,7 @@ function checkIconAssets() {
   const used = new Set();
   // ★1.71.3 补上 Share.lua：它此前**不在扫描名单里**（与 DECL ORDER 的已知盲区同源）——
   //   于是「Share 用了某个键、只改了两种语言」永远是盲区（本轮 SH_CH_OFF 正好落在这里）。
-  for (const f of ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua"]) {
+  for (const f of ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua"]) {
     const p = path.join(__dirname, f);
     if (!fs.existsSync(p)) continue;
     const src = fs.readFileSync(p, "utf8");
@@ -315,7 +315,7 @@ function checkIconAssets() {
 //   ★注释里提到 `SomeCall()` 属于正常（本仓库有大量 API 说明注释），故必须要求「方法调用」
 //   （带 `:` / `.`）而不是裸调用，否则误报成片（实测：裸调用规则会命中 test_assert.lua:240）。
 (function () {
-  const files = ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua",
+  const files = ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua",
                  "Locales/zhCN.lua", "Locales/enUS.lua", "Locales/ruRU.lua", "test_assert.lua", "test_stub.lua"];
   const bad = [];
   for (const f of files) {
@@ -540,7 +540,7 @@ function checkIconAssets() {
   }
   // ① 模版数据只能住在 examples/：别的生产文件里再出现 cls = " 就是「又搬回去了 / 多了一份」
   //   （同一个东西两份真值，正是本项目反复踩的坑：改一处漏一处、后写的静默获胜）。
-  const prodFiles = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua"];
+  const prodFiles = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua"];
   const leaked = prodFiles.filter(f => { const p = path.join(__dirname, f); return fs.existsSync(p) && /cls\s*=\s*"/.test(fs.readFileSync(p, "utf8")); });
   if (leaked.length) { console.log("EXAMPLES TOC CHECK: FAIL - template data leaked back into " + leaked.join(",")); process.exit(1); }
   // ② 载入顺序：examples 必须排在 EvalHelp.lua 之后（引擎里的初始化先跑）。
@@ -634,6 +634,44 @@ function checkIconAssets() {
   console.log("STOP ATTACK WIRING CHECK: skillNoSlotOk 名单 7/7 + 被接线 " + callers + " 处 + 其余 " + sites.length + " 个站点逐行含 stopAllOf/followOf");
 })();
 
+// ===== ICON SEM CHECK（1.73.5）：图标语义表必须与客户端清单**一一对应**，且真的被载入 =====
+// ★背景（用户要求）：「对存储下来的图标路径进行语义识别,对应一个名称,语义tag 一个图标可以设置多个」
+//   语义表是**生成物**（gen_iconsem.js 从 doc/图标路径清单.txt 生成）→ 两份文件必须逐条对齐：
+//   ① 清单里每条都要有语义记录（少一条 = 过滤/显示查不到它）；② 语义表里不许有清单外的孤儿；
+//   ③ 每条都要有名称与至少 1 个标签；④ 中文名覆盖率有下限（词表退化会当场响）；⑤ 必须列进 .toc（否则运行期满盘皆 nil）。
+(function () {
+  const wlPath = path.join(__dirname, 'doc', '图标路径清单.txt');
+  const semPath = path.join(__dirname, 'IconSem.lua');
+  if (!fs.existsSync(wlPath)) { console.log('ICON SEM CHECK: FAIL - 缺少 doc/图标路径清单.txt'); process.exitCode = 1; return; }
+  if (!fs.existsSync(semPath)) { console.log('ICON SEM CHECK: FAIL - 缺少 IconSem.lua'); process.exitCode = 1; return; }
+  const bases = fs.readFileSync(wlPath, 'utf8').split(/\r?\n/).map(s => s.trim())
+    .filter(s => s && s.charAt(0) !== '#').map(p => p.replace('/Game/Interface/Icons/', '').replace(/_TEX$/, ''));
+  const want = new Set(bases);
+  const sem = fs.readFileSync(semPath, 'utf8');
+  const got = new Set();
+  const re = /\["([^"]+)"\] = "([^"]*)",/g;
+  let m, named = 0, noName = 0, noTag = 0;
+  while ((m = re.exec(sem)) !== null) {
+    const key = m[1], val = m[2];
+    got.add(key);
+    const bar = val.indexOf('|');
+    const nm = bar >= 0 ? val.slice(0, bar) : '';
+    const tags = bar >= 0 ? val.slice(bar + 1) : '';
+    if (!nm) noName++;
+    if (nm === key) { /* 英文名退回，如实 */ } else named++;
+    if (!tags) noTag++;
+  }
+  const missing = [...want].filter(x => !got.has(x));
+  const ghost = [...got].filter(x => !want.has(x));
+  const toc = fs.readFileSync(path.join(__dirname, 'EvalHelp.toc'), 'utf8');
+  const inToc = toc.split(/\r?\n/).some(l => l.trim() === 'IconSem.lua');
+  console.log('ICON SEM CHECK: ' + got.size + ' entries, ' + named + ' named, ' + missing.length + ' missing, ' + ghost.length + ' orphan, ' + (noName + noTag) + ' empty');
+  if (!inToc) { console.log('ICON SEM CHECK: FAIL - IconSem.lua 没有列进 EvalHelp.toc（运行期读不到）'); process.exitCode = 1; return; }
+  if (missing.length) { console.log('ICON SEM CHECK: FAIL - 清单里有 ' + missing.length + ' 条没语义记录，例如 ' + missing.slice(0, 3).join(', ')); process.exitCode = 1; return; }
+  if (ghost.length) { console.log('ICON SEM CHECK: FAIL - 语义表里有 ' + ghost.length + ' 条不在客户端清单里（幽灵条目），例如 ' + ghost.slice(0, 3).join(', ')); process.exitCode = 1; return; }
+  if (noName || noTag) { console.log('ICON SEM CHECK: FAIL - ' + noName + ' 条没名称 / ' + noTag + ' 条没标签'); process.exitCode = 1; return; }
+  if (named < 700) { console.log('ICON SEM CHECK: FAIL - 中文名只有 ' + named + ' 条（词表退化？下限 700）'); process.exitCode = 1; return; }
+})();
 // ===== WHEEL DIRECTION CHECK（1.73.3）：滚轮方向必须**单一来源**，且不许出现反向写法 =====
 // ★背景（用户实测）：「图标库的滚动监测鼠标滚动方向和滚动效果相反了」——5 处滚轮里 4 处是「off - d」
 //   （上滚 = 回到前面），图标库写成了「d > 0 → 下一页」= 反的；更糟的是**当时的断言把 -1 当「向上」**，
@@ -854,7 +892,7 @@ function checkIconAssets() {
 //   1.72.2 把桩改成真客户端行为（具名帧挂全局）后，组 54 当场报 `attempt to call a table value` —— 这就是暴露途径。
 // 判据：全仓扫描 `CreateFrame(..., "NAME", ...)` 的第二参，不得与任何 `function NAME(` 同名。
 (function () {
-  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua"];
+  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua"];
   const funcs = {}, frames = [];
   for (const f of files) {
     if (!fs.existsSync(path.join(__dirname, f))) continue;
@@ -949,9 +987,29 @@ function checkIconAssets() {
 })();
 checkIconAssets();
 
+// ★1.73.5 把 doc/图标路径清单.txt（客户端采集的 1018 条**真实路径**）注入成测试素材：
+//   图标库的语义名/关键字过滤必须拿**生产形态**（/Game/Interface/Icons/X_TEX）来验 ——
+//   只喂编出来的短名，会把「_TEX 后缀没剥 / 路径前缀不同」这类**只有真机才犯、且一声不响**的错一起放过。
+const iconFixture = (function () {
+  try {
+    const p = path.join(__dirname, 'doc', '图标路径清单.txt');
+    const names = fs.readFileSync(p, 'utf8').split(/\r?\n/)
+      .map(s => s.trim())
+      .filter(s => s && s.charAt(0) !== '#')
+      .filter(s => /^\/Game\/Interface\/Icons\/[A-Za-z0-9_]+_TEX$/.test(s));
+    if (names.length < 1000) return null;
+    return 'TEST_ICON_FIXTURE = {"' + names.join('","') + '"}';
+  } catch (e) { return null; }
+})();
 const L=lauxlib.luaL_newstate();
 lualib.luaL_openlibs(L);
-for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','examples/priest.lua','examples/druid.lua','examples/warlock.lua','examples/shaman.lua','examples/group.lua','Toolbox.lua','DataSearch.lua','Share.lua','IconBrowser.lua','PetData.lua','PetHelper.lua','test_assert.lua']){
+for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','examples/priest.lua','examples/druid.lua','examples/warlock.lua','examples/shaman.lua','examples/group.lua','Toolbox.lua','DataSearch.lua','Share.lua','IconSem.lua','IconBrowser.lua','PetData.lua','PetHelper.lua','test_assert.lua']){
+  if(f==='test_assert.lua' && iconFixture){
+    const fx=to_luastring(iconFixture);
+    const stx=lauxlib.luaL_loadbuffer(L,fx,fx.length,to_luastring('icon_fixture'));
+    if(stx!==lua.LUA_OK){ console.log('LOAD ERROR [icon_fixture]:',lua.lua_tojsstring(L,-1)); process.exit(1); }
+    if(lua.lua_pcall(L,0,0,0)!==lua.LUA_OK){ console.log('RUNTIME ERROR [icon_fixture]:',lua.lua_tojsstring(L,-1)); process.exit(1); }
+  }
   const src=fs.readFileSync(f);
   const st=lauxlib.luaL_loadbuffer(L,src,src.length,to_luastring(f));
   if(st!==lua.LUA_OK){ console.log('LOAD ERROR ['+f+']:',lua.lua_tojsstring(L,-1)); process.exit(1); }

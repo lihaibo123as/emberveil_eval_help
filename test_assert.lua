@@ -5319,8 +5319,12 @@ end
 do
   local L84 = EVAL_LOCALES[EVAL_GET_LANG()]
   -- ① 名称 / 分组（纯函数）
-  eq(EVAL_IB_NAME_OF("Interface\\Icons\\Spell_Fire_Fireball"), "Spell_Fire_Fireball", "★名称=路径最后一段")
-  eq(EVAL_IB_NAME_OF("Interface\\AddOns\\EvalHelp\\media\\icons\\trainer.tga"), "trainer", "★顺手去掉扩展名")
+  -- ★1.73.5 显示名改成**语义名**（IconSem.lua），原始基础名另走 EVAL_IB_RAWN_OF —— 两条路都钉住
+  eq(EVAL_IB_RAWN_OF("Interface\\Icons\\Spell_Fire_Fireball"), "Spell_Fire_Fireball", "★原始名=路径最后一段")
+  eq(EVAL_IB_RAWN_OF("Interface\\AddOns\\EvalHelp\\media\\icons\\trainer.tga"), "trainer", "★顺手去掉扩展名")
+  eq(EVAL_IB_NAME_OF("Interface\\Icons\\Spell_Fire_Fireball"), "火球", "★★显示名=语义名（火球，不是英文原名）")
+  eq(EVAL_IB_NAME_OF("Interface\\AddOns\\EvalHelp\\media\\icons\\trainer.tga"), "trainer", "★★语义表里没有的（本插件自带素材）如实退回原始名")
+  eq(EVAL_IB_RAWN_OF(nil), nil, "★nil 安全（不炸）")
   eq(EVAL_IB_NAME_OF(nil), nil, "★nil 安全（不炸）")
   eq(EVAL_IB_GROUP_OF("Interface\\Icons\\Spell_Frost_Nova"), "frost", "★冰霜按前缀归类")
   eq(EVAL_IB_GROUP_OF("Interface\\Icons\\Spell_Fire_Fireball"), "fire", "★火焰")
@@ -8285,6 +8289,118 @@ do
   TEST.macroIcons = saved116
   TEST.chat = nil
   print("  图标路径采集：/eh go icons 把宏图标表全表路径写进存档（成功/失败都计数、不刷屏、如实报数）")
+end
+
+-- 117) ★★★1.73.5 图标语义表（名称 + 多标签）+ 图标库关键字过滤
+--   用户原话：「对存储下来的图标路径进行语义识别,对应一个名称,语义tag 一个图标可以设置多个,比如爪子....
+--   然后再图标库内加个输入过滤根据名称/路径进行筛选功能.」
+do
+  local function has117(t, v)
+    for i = 1, table.getn(t or {}) do if t[i] == v then return true end end
+    return false
+  end
+  -- ⓪ 素材：用 doc/图标路径清单.txt 的**真实形态**（/Game/Interface/Icons/X_TEX，1018 条）
+  --   ★这是生产上宏图标表真正给的形态 —— 用编出来的短名验，就照不到「_TEX 没剥」这类只有真机才犯的错。
+  local savedMacro117 = TEST.macroIcons
+  eq(type(TEST_ICON_FIXTURE) == "table", true, "⓪前置：客户端图标清单被注入了（doc/图标路径清单.txt）")
+  eq(table.getn(TEST_ICON_FIXTURE or {}) >= 1000, true, "⓪前置：清单条数 ≥1000（实际 " .. table.getn(TEST_ICON_FIXTURE or {}) .. "）")
+  TEST.macroIcons = TEST_ICON_FIXTURE
+  EVAL_IB_TEST_RESET()
+  EVAL_IB_SCAN(true)
+  -- ① 语义表：名称 + 多标签（用户举的例子：爪子那枚）
+  --   ★★★两条路都要钉：① 直接查基础名（表 key）；② 走**真实 Unreal 路径**（生产唯一形态）。
+  local sem = EVAL_IB_TEST_SEM("INV_Misc_MonsterClaw_03")
+  eq(sem ~= nil, true, "①语义表查得到爪类图标")
+  eq(sem and sem.name, "爪", "①★★★名称 = 爪（用户举的那个例子）")
+  eq(has117(sem and sem.tags, "爪子"), true, "①★★标签里有「爪子」（同义词）")
+  eq(has117(sem and sem.tags, "爪击"), true, "①★★标签里有「爪击」（一个图标多个 tag）")
+  eq(has117(sem and sem.tags, "物品"), true, "①★标签里还有类别「物品」（前缀给的）")
+  eq(type(sem and sem.tags) == "table" and table.getn(sem.tags) >= 3, true, "①★★一个图标的标签 ≥3 个")
+  eq(EVAL_IB_TEST_SEM_SIZE() >= 1000, true, "①★★语义表覆盖整份清单（实际 " .. EVAL_IB_TEST_SEM_SIZE() .. " 条）")
+  local semW = EVAL_IB_TEST_SEM("Ability_Hunter_Pet_Wolf")
+  eq(semW and semW.name, "狼", "①★★家族图标也有语义名（狼）")
+  eq(has117(semW and semW.tags, "宠物"), true, "①★家族图标带「宠物」标签")
+  -- ①b ★★★**真实路径形态**（/Game/Interface/Icons/X_TEX）必须也能查到 ——
+  --   这是生产上唯一会走的那条路：宏图标表给的就是这种带 _TEX 的 Unreal 资产路径。
+  --   ★若 EVAL_IB_RAWN_OF 没剥 _TEX，这一段全红（而且真机上是一声不响地全部退回英文名）。
+  eq(EVAL_IB_RAWN_OF("/Game/Interface/Icons/INV_Misc_MonsterClaw_03_TEX"), "INV_Misc_MonsterClaw_03",
+     "①b★★★真实路径里剥掉 _TEX（基础名才是语义表的 key）")
+  eq(EVAL_IB_NAME_OF("/Game/Interface/Icons/INV_Misc_MonsterClaw_03_TEX"), "爪",
+     "①b★★★真实路径 → 语义名「爪」（生产形态能查到，不是只有短名能）")
+  eq(EVAL_IB_NAME_OF("/Game/Interface/Icons/Ability_Hunter_Pet_Wolf_TEX"), "狼", "①b★★真实路径 → 家族语义名")
+  eq(EVAL_IB_GROUP_OF("/Game/Interface/Icons/Spell_Fire_Fireball_TEX"), "fire",
+     "①b★★分组仍按原始名前缀（_TEX 与语义名都不影响归类）")
+  -- ② 过滤：名称 / 标签 / 路径 / 大小写不敏感 / 反例
+  EVAL_IB_TEST_RESET()
+  EVAL_IB_SET_GROUP("all")
+  eq(EVAL_IB_TEST_MATCH_COUNT("爪子") >= 1, true, "②★★按**标签**能搜到（爪子 → " .. EVAL_IB_TEST_MATCH_COUNT("爪子") .. " 枚）")
+  eq(EVAL_IB_TEST_MATCH_COUNT("药水") >= 10, true, "②★★按**名称**能搜到一批（药水 → " .. EVAL_IB_TEST_MATCH_COUNT("药水") .. " 枚）")
+  eq(EVAL_IB_TEST_MATCH_COUNT("MonsterFang") >= 1, true, "②★★按**原始名/路径**也能搜（MonsterFang → " .. EVAL_IB_TEST_MATCH_COUNT("MonsterFang") .. " 枚）")
+  eq(EVAL_IB_TEST_MATCH_COUNT("PET_WOLF") >= 1, true, "②★英文大小写不敏感（PET_WOLF → " .. EVAL_IB_TEST_MATCH_COUNT("PET_WOLF") .. " 枚）")
+  eq(EVAL_IB_TEST_MATCH_COUNT("绝不可能存在的词zzz"), 0, "②反向哨兵：查不到就是 0 枚")
+  -- ③ 分组与关键字**叠加**（先分组、再关键字）
+  --   ★★★弱判据警告：原来只写「inv 的命中数 <= 全部」——把分组判定整段删掉时两边相等、**照样绿**。
+  --     正解 = 查**命中项各自的 group**（必须全落在所选分组里）+ 一个必然为 0 的反向分组。
+  local nAllPot = EVAL_IB_TEST_MATCH_COUNT("药水")
+  eq(nAllPot >= 10, true, "③前置：全部里有 " .. nAllPot .. " 枚药水")
+  EVAL_IB_SET_GROUP("inv")
+  local nInvPot = EVAL_IB_TEST_MATCH_COUNT("药水")
+  eq(EVAL_IB_TEST_GROUP(), "inv", "③★分组真的切过去了")
+  eq(nInvPot >= 10, true, "③★★inv 分组里药水仍有 " .. nInvPot .. " 枚（叠加不能把命中全挡掉）")
+  local gs117 = EVAL_IB_TEST_MATCH_GROUPS("药水")
+  local allInv117 = true
+  for i = 1, table.getn(gs117) do if gs117[i] ~= "inv" then allInv117 = false end end
+  eq(allInv117, true, "③★★★命中的**每一条**都真在所选分组里（把分组判定删掉就会混进别组）")
+  EVAL_IB_SET_GROUP("ability")
+  eq(EVAL_IB_TEST_MATCH_COUNT("药水"), 0, "③★★★反向：换到 ability 分组后药水一枚都搜不到（=关键字真的被分组裁过）")
+  EVAL_IB_SET_GROUP("all")
+  -- ④ 单一入口：状态/输入框同步 + 回第 1 页 + 不递归
+  EVAL_IB_TEST_RESET()
+  EVAL_IB_SET_GROUP("all")
+  -- ★★★「回第 1 页」必须用**改词后仍有多页**的词来验：
+  --   ① 直接在首页改词 → 断言恒真；
+  --   ② 命中只剩一页时，页码**夹取**会自己回到第 1 页 → 把 IB.page = 1 删掉照样绿（本变异第一版就是这么存活的）。
+  EVAL_IB_TEST_SET_Q("/Game/")
+  local many117 = EVAL_IB_TEST_MATCH_COUNT("/Game/")
+  eq(many117 > EVAL_IB_PER_PAGE(EVAL_IB_TEST_W()), true, "④前置：该词命中多页（" .. many117 .. " 枚）")
+  EVAL_IB_STEP(1)
+  local pgPre = select(1, EVAL_IB_TEST_PAGE())
+  eq(pgPre > 1, true, "④前置：先把页码推到第 " .. tostring(pgPre) .. " 页，否则「回第 1 页」恒真")
+  EVAL_IB_TEST_SET_Q("法术")
+  eq(EVAL_IB_TEST_MATCH_COUNT("法术") > EVAL_IB_PER_PAGE(EVAL_IB_TEST_W()), true, "④前置：新词也仍有多页（夹取救不了多页）")
+  eq(select(1, EVAL_IB_TEST_PAGE()) == 1, true, "④★★改词回到第 1 页（多页时停在旧页码 = 看到错页）")
+  EVAL_IB_TEST_SET_Q("爪")
+  eq(EVAL_IB_TEST_Q(), "爪", "④★状态记下过滤词")
+  eq(EVAL_IB_TEST_EB_TEXT(), "爪", "④★★输入框文本被同步（用户看得见自己在过滤什么）")
+  eq(select(1, EVAL_IB_TEST_PAGE()) == 1, true, "④★★改词回到第 1 页（否则停在第 5 页看着空列表）")
+  eq(EVAL_IB_TEST_PH_SHOWN(), false, "④★有词时占位提示隐藏")
+  local rc0 = EVAL_IB_TEST_REFRESH_COUNT()
+  -- ★★★不递归的判据 = **回写次数有界**。原来只看「刷新次数没爆」是**弱判据**：
+  --   真客户端上「无条件回写」会变成 SetText→OnTextChanged→SetText… 的递归，
+  --   而递归会被沿途的 pcall 吞掉、刷新次数反而只剩 1 次 → 变异**存活**（实测）。
+  TEST.ebSetTextCalls = 0
+  EVAL_IB_TEST_SET_Q("爪子")
+  eq(TEST.ebSetTextCalls <= 2, true, "④★★★回写输入框不会递归（SetText 实测 " .. tostring(TEST.ebSetTextCalls) .. " 次；两道比对拆掉 = 51 次）")
+  eq(EVAL_IB_TEST_REFRESH_COUNT() <= rc0 + 3, true, "④★★刷新次数也没爆（+ " .. tostring(EVAL_IB_TEST_REFRESH_COUNT() - rc0) .. "）")
+  -- ⑤ 空匹配**如实点名**（不是一片空白）+ 清除复原
+  EVAL_IB_TEST_SET_Q("绝不可能存在的词zzz")
+  eq(EVAL_IB_TEST_MATCH_COUNT("绝不可能存在的词zzz"), 0, "⑤前置：0 枚")
+  local stTxt = tostring(EVAL_IB_TEST_STATUS_TEXT())
+  eq(string.find(stTxt, "绝不可能存在的词zzz", 1, true) ~= nil, true, "⑤★★空匹配时状态行点名说明：「" .. stTxt .. "」")
+  EVAL_IB_TEST_SET_Q("")
+  eq(EVAL_IB_TEST_PH_SHOWN(), true, "⑤★清空后占位提示回来")
+  eq(EVAL_IB_TEST_MATCH_COUNT("") >= 1000, true, "⑤★清空后恢复全量")
+  -- ⑥ 命中列表真的按语义名显示（不是只有过滤能命中）
+  local names = EVAL_IB_TEST_MATCH_NAMES("爪子")
+  local foundClaw = false
+  for i = 1, table.getn(names) do if names[i] == "爪" then foundClaw = true end end
+  eq(foundClaw, true, "⑥★★命中的条目**显示名**是语义名（爪），不是英文原名")
+  -- 收尾：把宏图标表还原（下一个用例别带着 1018 条真实图标跑）
+  TEST.macroIcons = savedMacro117
+  EVAL_IB_TEST_RESET()
+  EVAL_IB_SCAN(true)
+  EVAL_HELP_CFG_SETTAB(1)
+  print("  图标语义 + 过滤：语义名/多标签（爪子）· 按名称/标签/路径/大小写搜 · 与分组叠加 · 单一入口不递归 · 空匹配如实点名")
 end
 
 print("ALL TESTS PASS")
