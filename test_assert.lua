@@ -8914,8 +8914,8 @@ do
   TEST.chat = ""
   SlashCmdList["EVALHELP"]("go 聊天")
   local c121e = tostring(TEST.chat or "")
-  eq(string.find(c121e, "一条聊天消息都没经过我们的入口", 1, true) ~= nil, true,
-     "⑭c★★★经过入口 0 条时如实判读「客户端不走 Lua 打印」（不把「没收到」说成「没认出来」）")
+  eq(string.find(c121e, "都**一条消息都没收到**", 1, true) ~= nil, true,
+     "⑭c★★★两个入口都没收到时如实判读「客户端不走 Lua」（不把「没收到」说成「没认出来」）")
   -- 收尾：还原入口 / 计数 / 配置 / 时间（跨用例状态残留是本项目老坑）
   f121.AddMessage = saved121
   EVAL_TEST_TB_CHAN_RESET()
@@ -9066,6 +9066,85 @@ do
   TEST.whoRows = nil
   print("  名字主动查询：只查发送者位置（频道名/物品/纯数字不查）· 已缓存/负缓存/重复 → 不入队 · 一次 tick 只发一发 + 单飞")
   print("                查到进缓存 · 查不到记负缓存（期内不再查）· 超时不卡死 · 开关在工具箱 · 日志只进调试日志 · 队列满如实丢弃")
+end
+
+-- 123) ★★★1.73.12 第二入口 ChatFrame_OnEvent（真机实测：frame.AddMessage 写了不生效 → 换入口）
+--   判据：① 挂载后**读回来确认**在位（真机刚吃过「写成功了但不生效」的亏）+ 幂等；
+--         ② 频道进出通知：**不调原函数**（这才叫吞掉；旧那层是「试过了」）；
+--         ③ 名字着色：**回写全局 arg1**（处理器从全局取值）→ 原函数读到着色后的文本；
+--         ④ 反向：未知名不改字；⑤ 非聊天事件一律原样放行；⑥ 开关关掉就放行；
+--         ⑦ 被客户端顶掉后能重挂，且**绝不重复包装**（否则同一条消息会被处理两次）；
+--         ⑧ 诊断里能分开看到两个入口各自的计数与收到的原文。
+do
+  local savedTb123 = EVAL_HELP_CONFIG.tb
+  local savedLog123 = EVAL_HELP_CONFIG.log
+  EVAL_HELP_CONFIG.tb = {}
+  EVAL_HELP_CONFIG.log = {}
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  -- ① 挂载 + 读回确认 + 幂等
+  eq(EVAL_TB_CHATEVENT_INSTALL(), true, "①★挂上 ChatFrame_OnEvent")
+  local w123 = ChatFrame_OnEvent
+  eq(EVAL_TB_CHATEVENT_STATE().live, true, "①★★挂完**读回来确认**在位（真机刚吃过「写成功但不生效」的亏）")
+  eq(EVAL_TB_CHATEVENT_INSTALL(), true, "①★再挂一次仍返回 true（幂等）")
+  eq(ChatFrame_OnEvent == w123, true, "①★★幂等：**没有**重复包装")
+  -- ② 频道通知：命中 → 不调原函数
+  TEST.ceCalls = 0
+  arg1 = "[4. 世界防务] 离开频道。"
+  ChatFrame_OnEvent("CHAT_MSG_CHANNEL_NOTICE")
+  eq(TEST.ceCalls, 0, "②★★★频道进出通知被**真的吞掉**（原函数一次都没被调用）")
+  eq(EVAL_TB_CHATEVENT_STATE().filtered, 1, "②★并且吞掉计数 +1")
+  -- ③ 名字着色：回写全局 arg1
+  EVAL_TB_NAMECLASS_PUT("守夜人", "萨满")
+  TEST.ceCalls, TEST.ceSeen = 0, {}
+  arg1 = "[守夜人]: 你好"
+  ChatFrame_OnEvent("CHAT_MSG_SAY")
+  eq(TEST.ceCalls, 1, "③★普通聊天照旧交给原函数（只改文本，不拦消息）")
+  local seen123 = TEST.ceSeen[table.getn(TEST.ceSeen)]
+  eq(seen123 ~= nil and string.find(seen123.arg1, "|c0070de", 1, true) ~= nil, true,
+     "③★★★回写全局 arg1：原函数读到的是**着色后**的文本（真机上就是这条让它显色）")
+  eq(seen123 ~= nil and string.find(seen123.arg1, "|r: 你好", 1, true) ~= nil, true, "③★正文没被破坏")
+  eq(EVAL_TB_CHATEVENT_STATE().painted >= 1, true, "③★染色计数 +1")
+  -- ④ 反向：未知名一个字不改
+  TEST.ceCalls, TEST.ceSeen = 0, {}
+  arg1 = "[路人乙]: 你好"
+  ChatFrame_OnEvent("CHAT_MSG_SAY")
+  eq(TEST.ceSeen[table.getn(TEST.ceSeen)].arg1, "[路人乙]: 你好", "④★★未知名 → 原样交给原函数（一个字不改）")
+  -- ⑤ 非聊天事件：一律原样放行
+  TEST.ceCalls, TEST.ceSeen = 0, {}
+  arg1 = "[守夜人]: 你好"
+  ChatFrame_OnEvent("UPDATE_CHAT_COLOR")
+  eq(TEST.ceCalls, 1, "⑤★非聊天事件照旧放行")
+  eq(TEST.ceSeen[table.getn(TEST.ceSeen)].arg1, "[守夜人]: 你好", "⑤★★非聊天事件**不做任何改动**（连着色都不做）")
+  -- ⑥ 开关关掉 → 通知放行
+  EVAL_HELP_CONFIG.tb.chanJoin = false
+  TEST.ceCalls = 0
+  arg1 = "[4. 世界防务] 离开频道。"
+  ChatFrame_OnEvent("CHAT_MSG_CHANNEL_NOTICE")
+  eq(TEST.ceCalls, 1, "⑥★★关掉屏蔽开关 → 通知放行（开关在调用时读）")
+  EVAL_HELP_CONFIG.tb.chanJoin = true
+  -- ⑦ 被顶掉 → 重挂，且不重复包装
+  EVAL_TEST_CE_RECLAIM()
+  eq(EVAL_TB_CHATEVENT_STATE().live, false, "⑦前置：模拟客户端把自己的实现写回全局（真机就是这么顶掉我们的）")
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  eq(EVAL_TB_CHATEVENT_RETRY(), true, "⑦★★被顶掉后**重挂成功**")
+  eq(EVAL_TB_CHATEVENT_STATE().live, true, "⑦★重挂后读回确认在位")
+  TEST.ceCalls, TEST.ceSeen = 0, {}
+  local seenBefore123 = EVAL_TB_CHATEVENT_STATE().seen
+  arg1 = "[守夜人]: 又来"
+  ChatFrame_OnEvent("CHAT_MSG_SAY")
+  eq(TEST.ceCalls, 1, "⑦★★★重挂后一条消息只交给原函数**一次**（重复包装会让它被处理两次）")
+  eq(EVAL_TB_CHATEVENT_STATE().seen, seenBefore123 + 1, "⑦★★我们的计数也只 +1（没有两层包装）")
+  -- ⑧ 日志 + 诊断（两个入口分开计数）
+  EVAL_TB_CHATEVENT_RETRY()
+  local logs123 = table.concat(EVAL_HELP_CONFIG.log or {}, "\n")
+  eq(string.find(logs123, "[聊天入口] ChatFrame_OnEvent 挂载成功", 1, true) ~= nil, true, "⑧★★挂载成功有日志（进调试日志）")
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 聊天")
+  local c123 = tostring(TEST.chat or "")
+  eq(string.find(c123, "第二入口 ChatFrame_OnEvent", 1, true) ~= nil, true, "⑧★★诊断里**分开**打印第二入口的状态（两个入口谁在干活一眼看到）")
+  EVAL_HELP_CONFIG.log = savedLog123
+  EVAL_HELP_CONFIG.tb = savedTb123
+  print("  第二入口：ChatFrame_OnEvent 挂载后读回确认 + 幂等 + 被顶掉能重挂（不重复包装）· 通知真的吞掉 · 回写全局 arg1 让原函数读到着色文本")
 end
 
 print("ALL TESTS PASS")

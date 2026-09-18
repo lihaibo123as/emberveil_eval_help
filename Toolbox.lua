@@ -301,6 +301,99 @@ function EVAL_TEST_TB_CHAN_RESET() -- 测试用：清计数并允许重新挂载
   TB.chatSeen, TB.chatPainted, TB.chatRaw, TB.chatLast = 0, 0, {}, nil
 end
 
+-- ===== 第二入口：ChatFrame_OnEvent（1.73.12 实测「frame.AddMessage 写了不生效」后的换入口）=====
+-- ★★★实事故（用户真机截图）：`聊天窗入口：挂上 8 个；不可用 0 个` 与 `其中**是我们的包装** 0 个`
+--   **同时出现** —— 说明 `ChatFrame1..7 / DEFAULT_CHAT_FRAME.AddMessage = wrapper` 这层写入
+--   在**这个客户端不生效**（pcall 不报错、读回来却不是我们那层）→ 于是「频道屏蔽」与「名字着色」
+--   **从来没有真正拦到过一条消息**（截图里「经过入口 0 条」「通知照旧显示」都是这一个根因）。
+--   ★这是本项目「尝试过 ≠ 挂上了」那条铁律的**再深一层**：现在还要区分
+--     「**写成功了**」与「**写进去生效了**」——凡挂入口，写完后必须**读回来确认**（下面就是）。
+--   本客户端聊天框的入口里，`ChatFrame_OnEvent` 是**普通全局函数**（写进去一定生效）→ 改挂它：
+--     ① 频道进出通知：命中就 **不调原函数**（这才是真的吞掉，不是「试过了」）；
+--     ② 名字着色：把着色后的文本**回写到全局 arg1**（1.12 的聊天处理器逐条从全局 arg1..arg9 取值），
+--        并把着色后的文本**作为第二参数转发**（兼容「按形参取值」的写法）。
+--   ★两条路都留着：AddMessage 那层在别的客户端有效，本客户端由这一层干活；两层都无害
+--     （着色幂等、吞掉只会吞一次），而且诊断里**分开计数**，谁在干活一眼看得出。
+local function tbCeEventOf(e, a1)
+  if type(e) == "string" and e ~= "" then return e end
+  if type(event) == "string" then return event end
+  if type(a1) == "string" and string.find(a1, "^CHAT_MSG") then return a1 end
+  return ""
+end
+function EVAL_TB_CHATEVENT_INSTALL()
+  local cur = _G.ChatFrame_OnEvent
+  if type(cur) ~= "function" then return false end
+  if cur == TB.ceWrapper then return true end -- 幂等：当前入口就是我们的那层
+  local orig = cur
+  local function wrapper(e, a1, ...)
+    TB.ceSeen = (TB.ceSeen or 0) + 1
+    local ev = tbCeEventOf(e, a1)
+    -- 消息文本：优先第二参数（且它不像事件名），否则全局 arg1（1.12 的老写法）
+    local msg = nil
+    if type(a1) == "string" and string.find(a1, "^CHAT_MSG") == nil then msg = a1 end
+    if msg == nil and type(arg1) == "string" then msg = arg1 end
+    local isChat = (ev == "" or string.find(ev, "CHAT_MSG") ~= nil)
+    if isChat and type(msg) == "string" and msg ~= "" then
+      -- 原始样本（★这才是「客户端真实文案」的取证口：AddMessage 那层收不到，这里能收到）
+      TB.ceRaw = TB.ceRaw or {}
+      table.insert(TB.ceRaw, ev .. " ｜ " .. msg)
+      while table.getn(TB.ceRaw) > 12 do table.remove(TB.ceRaw, 1) end
+      -- ① 频道进出通知：不调原函数 = 真的不显示
+      if EVAL_TB_CHAN_ON() and EVAL_TB_CHAN_BLOCK(msg) then
+        TB.ceFiltered = (TB.ceFiltered or 0) + 1
+        return
+      end
+      -- ② 名字着色：只改文本那一个值，其余一律原样
+      local out = msg
+      if type(EVAL_TB_CHATCOLOR_ON) == "function" and EVAL_TB_CHATCOLOR_ON() and
+         type(EVAL_TB_CHAT_COLOR_LINE) == "function" then
+        local okc, colored = pcall(EVAL_TB_CHAT_COLOR_LINE, msg)
+        if okc and type(colored) == "string" and colored ~= msg then
+          out = colored
+          TB.cePainted = (TB.cePainted or 0) + 1
+        end
+      end
+      if out ~= msg then
+        if type(arg1) == "string" and arg1 == msg then arg1 = out end -- 回写全局（处理器从全局取值）
+        return orig(e, out, ...)
+      end
+    end
+    return orig(e, a1, ...)
+  end
+  local okw = pcall(function() _G.ChatFrame_OnEvent = wrapper end)
+  if not okw then return false end
+  -- ★★★写进去必须**读回来确认**（本客户端刚刚吃过这个亏：AddMessage 写成功但不生效）
+  if _G.ChatFrame_OnEvent ~= wrapper then return false end
+  TB.ceWrapper = wrapper
+  return true
+end
+function EVAL_TB_CHATEVENT_RETRY()
+  if TB.ceWrapper and _G.ChatFrame_OnEvent == TB.ceWrapper then return true end
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  if now - (TB.ceTryAt or -99) < 1 then return false end
+  TB.ceTryAt = now
+  TB.ceTries = (TB.ceTries or 0) + 1
+  local ok = EVAL_TB_CHATEVENT_INSTALL()
+  if ok and not TB.ceLogged then
+    TB.ceLogged = true
+    EVAL_LOGLINE("[聊天入口] ChatFrame_OnEvent 挂载成功并**读回确认**（AddMessage 那层在本客户端不生效）")
+  end
+  return ok
+end
+function EVAL_TB_CHATEVENT_STATE()
+  return { seen = TB.ceSeen or 0, filtered = TB.ceFiltered or 0, painted = TB.cePainted or 0,
+           live = (TB.ceWrapper ~= nil and _G.ChatFrame_OnEvent == TB.ceWrapper) and true or false,
+           exists = (type(_G.ChatFrame_OnEvent) == "function"), raw = TB.ceRaw or {},
+           tries = TB.ceTries or 0 }
+end
+function EVAL_TEST_TB_CHATEVENT_RESET()
+  TB.ceSeen, TB.ceFiltered, TB.cePainted, TB.ceRaw = 0, 0, 0, {}
+  TB.ceTryAt, TB.ceTries, TB.ceLogged = nil, 0, false
+end
+TB.ceHooked = EVAL_TB_CHATEVENT_INSTALL() and true or false
+EVAL_LOGLINE("[聊天入口] ChatFrame_OnEvent 载入时挂载：" ..
+  (TB.ceHooked and "成功" or "函数还不存在（将由事件/每帧重试）"))
+
 -- ===== 角色名职业着色（1.73.10 用户要求：工具箱 → 队伍/社交）=====
 -- 需求出处 = tmp/XGuild（1.2，275 行）——按本项目规范**轻量化重写**。XGuild 的三个毛病都已在下面规避：
 --   1. 公会/查询/好友三段几乎逐字重复（同一套 getglobal+SetTextColor 抄三遍）；
@@ -1738,6 +1831,7 @@ evf:SetScript("OnEvent", function()
   if not e and type(arg1) == "string" then e = arg1 end
   if not e and type(arg2) == "string" then e = arg2 end
   tbChanRetry() -- ★1.71.3 每次事件顺手重试一次频道屏蔽挂载（幂等；成功后立即短路）
+  if type(EVAL_TB_CHATEVENT_RETRY) == "function" then EVAL_TB_CHATEVENT_RETRY() end -- ★1.73.12 第二入口
   tbPaintRetry() -- ★1.73.10 职业着色：公会/查询/好友三个窗口同样是懒加载的，一并重试
   if e then EVAL_TB_ONEVENT(e) end
 end)
@@ -1746,6 +1840,7 @@ end)
 local qf = CreateFrame("Frame", "EVAL_TOOLBOX_QUEUE", UIParent)
 qf:SetScript("OnUpdate", function()
   tbChanRetry() -- ★1.71.3 频道屏蔽挂载的兜底重试（限频 1s；挂上后只做一次布尔判断，开销可忽略）
+  if type(EVAL_TB_CHATEVENT_RETRY) == "function" then EVAL_TB_CHATEVENT_RETRY() end -- ★1.73.12 第二入口兜底重试
   tbPaintRetry() -- ★1.73.10 职业着色挂载的兜底重试（限频 1s；三个窗口都挂上后只做一次布尔判断）
   tbQuestTick() tbQPump() -- 1.69.2 任务延迟扫描 + 队列滴出
   tbWhoTick() -- ★1.73.12 名字主动查询的滴出（频率下限/单飞都在它里面；队列空时只有几次判断）

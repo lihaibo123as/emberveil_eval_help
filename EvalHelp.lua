@@ -7359,6 +7359,22 @@ if type(SlashCmdList) == "table" then
             say("另外的候选入口：一个都不存在（ChatFrame_OnEvent / ChatFrame_MessageEventHandler 等）")
           end
         end
+        -- ★1.73.12 第二入口：本客户端 frame.AddMessage 写了不生效（实测 0/8），改挂 ChatFrame_OnEvent
+        if type(EVAL_TB_CHATEVENT_STATE) == "function" then
+          local ce = EVAL_TB_CHATEVENT_STATE()
+          say("第二入口 ChatFrame_OnEvent：函数存在=" .. tostring(ce.exists) .. " 我们的层在位=" .. tostring(ce.live) ..
+            "；被调用 " .. tostring(ce.seen) .. " 次（吞掉 " .. tostring(ce.filtered) .. " / 染色 " ..
+            tostring(ce.painted) .. "）（尝试挂载 " .. tostring(ce.tries) .. " 次）")
+          if type(ce.raw) == "table" and table.getn(ce.raw) > 0 then
+            say("  经它收到的**原文**（这才是客户端真实文案；★格式校准看这里）：")
+            for i = 1, table.getn(ce.raw) do
+              say("   " .. i .. ". " .. string.gsub(tostring(ce.raw[i]), "|", "||"))
+            end
+          end
+          if ce.exists and not ce.live then
+            say("|cffff8080判读：ChatFrame_OnEvent 存在但我们的层不在位（被顶掉了）→ /eh go 聊天 装 可立刻重挂|r")
+          end
+        end
         -- 频道屏蔽与本功能**共用同一层包装** → 它的计数是判断「客户端走不走 Lua 打印」的旁证
         if type(EVAL_TEST_TB_CHAN_STATE) == "function" then
           local _on, _hk, chFiltered, _sp, chLive, chSeen = EVAL_TEST_TB_CHAN_STATE()
@@ -7406,13 +7422,17 @@ if type(SlashCmdList) == "table" then
         else
           say("（还没有经过入口的聊天消息 —— 先说一句话 / 进一个频道，再回来看这一屏）")
         end
+        local ceSeen = 0
+        if type(EVAL_TB_CHATEVENT_STATE) == "function" then ceSeen = EVAL_TB_CHATEVENT_STATE().seen or 0 end
         if st.frames == 0 then
           say("|cffff8080判读：一个聊天窗都没挂上 → 聊天框还没就绪或接口不同（可用 /eh go 聊天 装 重试）|r")
         elseif st.cache == 0 then
           say("|cffff8080判读：挂上了但缓存是空的 → 打开一次公会/查询/好友窗口（或组一次队）再回来看|r")
-        elseif st.seen == 0 then
-          say("|cffff8080判读：**一条聊天消息都没经过我们的入口** → 这个客户端不走 Lua 打印（Lua 层着色/屏蔽都做不到），" ..
-            "把这一屏发我（我换入口）；先看上面「入口在位检查」是不是「不是我们挂的」|r")
+        elseif st.seen == 0 and (ceSeen or 0) == 0 then
+          say("|cffff8080判读：**两个聊天入口**（AddMessage 包装 / ChatFrame_OnEvent）都**一条消息都没收到** → " ..
+            "客户端聊天完全不走 Lua（Lua 层着色/屏蔽都做不到），把这一屏发我|r")
+        elseif st.seen == 0 and (ceSeen or 0) > 0 then
+          say("判读：AddMessage 那层收不到（本客户端正常现象），但 **ChatFrame_OnEvent 这层在收消息** → 着色/屏蔽都由它干活")
         elseif st.painted == 0 and type(st.samples) == "table" and table.getn(st.samples) > 0 then
           say("|cffff8080判读：收得到聊天行、但一条都没认出来 → **判据/格式**问题，上面那几行原文就是依据（发我）|r")
         else

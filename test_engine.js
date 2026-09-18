@@ -560,6 +560,13 @@ function checkIconAssets() {
   // ⑤ 诊断入口
   if (!/go 聊天/.test(eh)) bad.push('没有诊断入口（/eh go 聊天）');
   if (eh.indexOf('string.find(sarg, "^试")') < 0) bad.push('诊断里没有「试」自检分支（/eh go 聊天 试 <文本>）');
+  // ⑥ ★★★1.73.12 第二入口的**读回确认**：真机实测 frame.AddMessage「写成功但不生效」——
+  //   凡挂入口都必须写完**读回来确认**（这是那类「静默失效」的唯一自动化防线），并且要有幂等守卫。
+  if (tb.indexOf('_G.ChatFrame_OnEvent = wrapper') < 0) bad.push('没有挂第二入口 ChatFrame_OnEvent');
+  if (tb.indexOf('if _G.ChatFrame_OnEvent ~= wrapper then return false end') < 0)
+    bad.push('挂 ChatFrame_OnEvent 后**没有读回确认**（真机吃过「写成功但不生效」的亏）');
+  if (tb.indexOf('if cur == TB.ceWrapper then return true end') < 0)
+    bad.push('第二入口没有幂等守卫（会重复包装、同一条消息被处理两次）');
   if (bad.length) { console.log('CHAT COLOR WIRING CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
   console.log('CHAT COLOR WIRING CHECK: 挂在聊天入口内 + 白拿缓存 + SendWho 只在限频滴出（四道闸门齐）+ 限频采集 + 诊断入口');
 })();

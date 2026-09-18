@@ -717,5 +717,16 @@ SendWho = function(filter)
   table.insert(TEST.whoSent, tostring(filter))
   return true
 end
+-- ★1.73.12 第二入口桩：本客户端聊天框走 ChatFrame_OnEvent（真机实测 frame.AddMessage 写了不生效）。
+--   ★桩必须**从全局读 arg1**（1.12 的聊天处理器就是这么取值的）——否则「回写全局 arg1」这条修复
+--     在测试里根本验不到（本项目「桩太宽松 → 断言失明」的老坑）。
+TEST.ceCalls, TEST.ceSeen = 0, {}
+local function tbCeStub(e)
+  TEST.ceCalls = TEST.ceCalls + 1
+  table.insert(TEST.ceSeen, { event = tostring(e), arg1 = tostring(arg1), arg2 = tostring(arg2) })
+end
+ChatFrame_OnEvent = tbCeStub
+-- 模拟「客户端把自己的实现写回全局」（真机上就是这么顶掉我们那层的）
+function EVAL_TEST_CE_RECLAIM() ChatFrame_OnEvent = tbCeStub end
 GetNumFriends = function() return table.getn(TEST.friendRows or {}) end
 
