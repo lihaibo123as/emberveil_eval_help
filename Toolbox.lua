@@ -644,7 +644,11 @@ function EVAL_TB_CHATEVENT_INSTALL()
         local hex = nil
         if type(EVAL_TB_PAINT_COLOR_OF) == "function" then hex = EVAL_TB_PAINT_COLOR_OF(senderPlain) end
         if hex then
-          local coloredSender = "|c" .. string.sub(hex, 3) .. senderPlain .. "|r"
+          -- ★★★1.73.19 颜色码必须带 **alpha 两位**（`|cAARRGGBB` = 8 位 hex）：
+          --   写 6 位（`|cRRGGBB`）本客户端**根本不解析** —— 用户截图里名字直接显示成
+          --   「[|cf58cbaIonol|r]说: 1」这种**原文**（代码当普通文字画出来了）。
+          --   ★表里存的本来就是 8 位（`fff58cba`），上一版却 sub(hex,3) 把 alpha 切掉了 → 正是这个 bug。
+          local coloredSender = "|c" .. hex .. senderPlain .. "|r"
           if coloredSender ~= sender then -- ★相等 = 「已经是对的」→ 一个字都不动（幂等在这里，不在守卫里）
             if type(arg2) == "string" and arg2 == sender then arg2 = coloredSender end -- 回写全局（真机就是全局形态）
             TB.ceNamed = (TB.ceNamed or 0) + 1
@@ -1177,7 +1181,7 @@ function EVAL_TB_CHAT_COLOR_LINE(msg)
     if not tok then return nil end
     local hex = TB_PAINT_CLASS_COLOR[tok]
     if type(hex) ~= "string" or string.len(hex) ~= 8 then return nil end
-    return string.sub(msg, 1, s - 1) .. "|c" .. string.sub(hex, 3) .. string.sub(msg, s, e) .. "|r" ..
+    return string.sub(msg, 1, s - 1) .. "|c" .. hex .. string.sub(msg, s, e) .. "|r" ..
            string.sub(msg, e + 1)
   end
   -- ⓪ ★★★1.73.12（用户实测「全都没染色」后的定案方向）：客户端给的聊天行里，名字往往是
@@ -1197,7 +1201,7 @@ function EVAL_TB_CHAT_COLOR_LINE(msg)
     local hex = TB_PAINT_CLASS_COLOR[tok]
     if type(hex) ~= "string" or string.len(hex) ~= 8 then return nil end
     noteCandidate(nm or disp)
-    local col = "|c" .. string.sub(hex, 3)
+    local col = "|c" .. hex -- ★8 位（aarrggbb）：6 位客户端不解析，屏幕上会直接显示 |c 原文
     if colS then
       -- 把客户端那段颜色码整段换成职业色（其余原样；链接与 |r 都保留 → 照样可点、不会串色）
       return string.sub(msg, 1, colS - 1) .. col .. string.sub(msg, colE + 1, e) ..
@@ -1518,7 +1522,7 @@ function EVAL_TB_CHATCOLOR_AFTER_TOGGLE()
   if okn and type(nm) == "string" and nm ~= "" then
     local tok = tbNameClassGet(nm)
     local hex = tok and TB_PAINT_CLASS_COLOR[tok]
-    if hex then demo = "（示例：" .. "|c" .. string.sub(hex, 3) .. nm .. "|r）" end
+    if hex then demo = "（示例：" .. "|c" .. hex .. nm .. "|r）" end
   end
   say(on and L("TB_CHATCOLOR_ON_MSG") or L("TB_CHATCOLOR_OFF_MSG"))
   if demo ~= "" and on then say(demo) end

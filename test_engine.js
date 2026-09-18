@@ -883,6 +883,42 @@ function checkIconAssets() {
   console.log("WHEEL DIRECTION CHECK: " + sites.length + " 处滚轮处理器全部走 EVAL_WHEEL_DIR（上滚 = 回到前面）");
 })();
 
+// ===== COLOR CODE LEN CHECK（1.73.19）：聊天里的颜色码必须是 **8 位 aarrggbb** =====
+// ★背景（用户真机截图定案）：工具箱里「表」存的是 8 位（`fff58cba`），而写进聊天文本时用了
+//   `string.sub(hex, 3)` 把 **alpha 两位切掉** → 变成 6 位的 `|cf58cba` —— 本客户端**不解析**这种码，
+//   于是名字以**原文**画出来：「[|cf58cbaIonol|r]说: 1」（用户截图可见）。
+//   ★教训：颜色码长度是**客户端约定**（1.12 = |cAARRGGBB），行为断言里比的是「我们写的串」→
+//     再怎么比也验不到「客户端认不认」；只能把约定写成**源码检查**：禁止 sub(hex,3) 这种切码写法 +
+//     职业色表逐项必须是 8 位。
+(function () {
+  const files = ["EvalHelp.lua", "Toolbox.lua", "Engine.lua", "Core.lua", "Share.lua", "DataSearch.lua", "IconBrowser.lua", "PetHelper.lua"];
+  const bad = [];
+  let uses = 0;
+  for (const f of files) {
+    const p = path.join(__dirname, f);
+    if (!fs.existsSync(p)) continue;
+    const lines = fs.readFileSync(p, "utf8").split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const ln = lines[i];
+      if (/^\s*--/.test(ln)) continue; // 注释行不算（说明文字里就写着反面教材）
+      if (/"\|c"\s*\.\.\s*string\.sub\(/.test(ln)) bad.push(f + ":" + (i + 1) + " 颜色码被切短（|c + sub(hex,3) = 6 位）");
+      if (/"\|c"\s*\.\.\s*(hex|col|cls|color)\b/.test(ln)) uses++;
+    }
+  }
+  const tb = fs.readFileSync(path.join(__dirname, "Toolbox.lua"), "utf8");
+  const tbl = (tb.match(/local TB_PAINT_CLASS_COLOR = \{[\s\S]*?\n\}/) || [""])[0];
+  const entries = (tbl.match(/"[0-9a-fA-F]+"/g) || []).map(function (s) { return s.replace(/"/g, ""); });
+  const badLen = entries.filter(function (s) { return s.length !== 8; });
+  if (bad.length) { console.log("COLOR CODE LEN CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
+  if (uses < 3) { console.log("COLOR CODE LEN CHECK: FAIL - 只找到 " + uses + " 处 |c + 完整色码（应 >= 3）"); process.exitCode = 1; return; }
+  if (entries.length < 9 || badLen.length) {
+    console.log("COLOR CODE LEN CHECK: FAIL - 职业色表 " + entries.length + " 项里有 " + badLen.length + " 项不是 8 位（" + badLen.slice(0, 3).join(",") + "）");
+    process.exitCode = 1;
+    return;
+  }
+  console.log("COLOR CODE LEN CHECK: " + uses + " 处颜色码全走 8 位 aarrggbb；职业色表 " + entries.length + " 项逐项 8 位（6 位码客户端不解析 → 会显示成原文）");
+})();
+
 // ===== PACK LIST CHECK（1.73.0）：发布包清单必须**跟着 .toc 走**，条目数基准也要对得上 =====
 // ★背景两笔代价：① 1.72.0 发现随包的 zip **只有 25 个文件**（缺 IconBrowser.lua + 5 个 examples）
 //   —— 用户装了会**直接报错**；② 1.73.0 新增 PetData.lua / PetHelper.lua 后，记忆体第 9 步里的打包脚本

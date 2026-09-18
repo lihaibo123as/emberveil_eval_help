@@ -8772,10 +8772,14 @@ do
   eq(EVAL_TB_NAMECLASS_PUT("守夜人", "查无此职业"), false, "①★★认不出职业 → **不写**（不猜）")
   eq(EVAL_TB_NAMECLASS_GET("守夜人"), "SHAMAN", "①★★而且不覆盖已有记录（坏值不污染缓存）")
   -- ② 纯函数：认得出 → 染色
-  local colSha = "|c" .. string.sub(EVAL_TB_PAINT_CLASS_COLOR_OF("SHAMAN"), 3)
-  local colWar = "|c" .. string.sub(EVAL_TB_PAINT_CLASS_COLOR_OF("WARRIOR"), 3)
+  -- ★★★1.73.19 颜色码 = "|c" + **8 位** aarrggbb（★表里存的就是 8 位；上一版 sub(hex,3) 切掉 alpha
+  --   → 客户端不解析、屏幕上直接显示 |c 原文，用户截图实锤）→ 判据跟着改成「整串 8 位」
+  local colSha = "|c" .. EVAL_TB_PAINT_CLASS_COLOR_OF("SHAMAN")
+  local colWar = "|c" .. EVAL_TB_PAINT_CLASS_COLOR_OF("WARRIOR")
   local o121, w121 = EVAL_TB_CHAT_COLOR_LINE("[守夜人]: 你好")
   eq(o121, colSha .. "[守夜人]|r: 你好", "②★★★方括号形态染色（1.12 组合行里名字带方括号 —— 与 ChatMOD 同一依据）")
+  eq(string.len(string.match(o121, "^|c%x+") or ""), 10,
+     "②★★★颜色码必须是 8 位 aarrggbb：6 位（|cRRGGBB）本客户端**不解析** → 屏幕上直接显示 |c 原文")
   eq(w121, "守夜人", "②★返回命中的名字（诊断要能说清染的是谁）")
   eq(EVAL_TB_CHAT_COLOR_LINE("nightwatch: 走起"), colWar .. "nightwatch|r: 走起", "②★行首「名字:」形态染色")
   eq(EVAL_TB_CHAT_COLOR_LINE("[4. 世界防务] NIGHTWATCH: 走起"), "[4. 世界防务] " .. colWar .. "NIGHTWATCH|r: 走起",
@@ -8916,7 +8920,7 @@ do
   eq(string.find(t121c, "测试玩家", 1, true) ~= nil, true, "⑬★不带文本时默认拿**玩家自己**的名字当样本（一跑就能看到「命中」长什么样）")
   -- ⑭ ★★★1.73.12 客户端自带的「玩家链接 + 客户端颜色」形态（用户实测「全都没染色」的定案方向）
   EVAL_TB_NAMECLASS_PUT("Ionol", "圣骑士")
-  local colPal = "|c" .. string.sub(EVAL_TB_PAINT_CLASS_COLOR_OF("PALADIN"), 3)
+  local colPal = "|c" .. EVAL_TB_PAINT_CLASS_COLOR_OF("PALADIN")
   local linkCol = "|cffff80ff|Hplayer:Ionol|h[Ionol]|h|r 悄悄地说: 1"
   eq(EVAL_TB_CHAT_COLOR_LINE(linkCol), colPal .. "|Hplayer:Ionol|h[Ionol]|h|r 悄悄地说: 1",
      "⑭★★★客户端自带的玩家链接（带它自己的颜色）→ **改颜色码**（旧版「已在富文本里就整行放行」= 用户看到的「全都没染色」）")
@@ -9140,7 +9144,7 @@ do
   ChatFrame_OnEvent("CHAT_MSG_SAY")
   eq(TEST.ceCalls, 1, "③★普通聊天照旧交给原函数（只改文本，不拦消息）")
   local seen123 = TEST.ceSeen[table.getn(TEST.ceSeen)]
-  eq(seen123 ~= nil and string.find(seen123.arg1, "|c0070de", 1, true) ~= nil, true,
+  eq(seen123 ~= nil and string.find(seen123.arg1, "|cff0070de", 1, true) ~= nil, true,
      "③★★★回写全局 arg1：原函数读到的是**着色后**的文本（真机上就是这条让它显色）")
   eq(seen123 ~= nil and string.find(seen123.arg1, "|r: 你好", 1, true) ~= nil, true, "③★正文没被破坏")
   eq(EVAL_TB_CHATEVENT_STATE().painted >= 1, true, "③★染色计数 +1")
@@ -9243,7 +9247,7 @@ do
   eq(table.getn(rec124), 0, "⑥★★★经 this 帧打的**频道通知被吞掉**（参考插件那条路真的能吞）")
   fakeFrame124:AddMessage("[守夜人]: 你好")
   eq(table.getn(rec124), 1, "⑥★普通聊天照旧打印一次")
-  eq(string.find(rec124[1] or "", "|c0070de", 1, true) ~= nil, true, "⑥★★而且打印出来的是**着色后**的文本")
+  eq(string.find(rec124[1] or "", "|cff0070de", 1, true) ~= nil, true, "⑥★★而且打印出来的是**着色后**的文本（★8 位色码）")
   eq(EVAL_TB_CHATEVENT_STATE().thisPainted >= 1, true, "⑥★染色记账 +1")
   -- ⑧ ★★★**真机那种「写进去不生效」的对象**：写被吞（__newindex 忽略）→ 读回来还是原来的
   --   ★这条就是在测试里复现真机现象（frame.AddMessage 写成功但不生效），把「如实记账」钉住
@@ -9410,7 +9414,7 @@ do
   TEST.whoSent = {}
   EVAL_TEST_TB_CHATEVENT_RESET()
   EVAL_TB_NAMECLASS_PUT("Ionol", "圣骑士")
-  local colPal129 = "|c" .. string.sub(EVAL_TB_PAINT_CLASS_COLOR_OF("PALADIN"), 3)
+  local colPal129 = "|c" .. EVAL_TB_PAINT_CLASS_COLOR_OF("PALADIN")
   -- ① 真机形态：正文 "1" + 发送者 "Ionol"（在缓存里）
   TEST.ceCalls, TEST.ceSeen = 0, {}
   arg1 = "1" arg2 = "Ionol"
@@ -9420,6 +9424,10 @@ do
      "①★★★arg2（发送者）被包成职业色：" .. tostring(seen129 and seen129.arg2))
   eq(seen129 ~= nil and seen129.arg1, "1", "①★正文一个字都不改（名字不在正文里）")
   eq(EVAL_TB_CHATEVENT_STATE().named, 1, "①★名字上色计数 +1")
+  --  ★★★颜色码必须 **8 位 aarrggbb**：写 6 位（|cRRGGBB）本客户端**不解析**，名字会以**原文**显示
+  --    （用户截图：聊天里出现「[|cf58cbaIonol|r]说: 1」这种把颜色码当普通文字画出来的行）。
+  eq(string.len(string.match(tostring(seen129 and seen129.arg2 or ""), "^|c%x+") or ""), 10,
+     "①★★★arg2 的颜色码是 8 位 aarrggbb（6 位客户端不解析 → 屏幕上直接显示 |c 原文）")
   -- ② 名字不在缓存 → 原样（绝不涂默认灰）
   EVAL_TEST_TB_CHATEVENT_RESET()
   TEST.ceCalls, TEST.ceSeen = 0, {}
