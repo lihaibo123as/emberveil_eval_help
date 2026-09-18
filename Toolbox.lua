@@ -96,6 +96,8 @@ local function tbCfg()
   tbMigrateQuest(c.tb)
   -- ★1.71.3 频道进出信息屏蔽：**默认开**（用户要求）。nil 也视为开（见 EVAL_TB_CHAN_ON）。
   if c.tb.chanJoin == nil then c.tb.chanJoin = true end
+  -- ★1.73.10 角色名职业着色：nil 也视为开（用户要求加的功能，装上就生效；取消勾选 = 不叠色）
+  if c.tb.colorClass == nil then c.tb.colorClass = true end
   tbMigrateBuy(c.tb) -- ★1.71.3 自动购买：老条目补 每次数量/启用 字段
   return c.tb
 end
@@ -213,6 +215,314 @@ function EVAL_TEST_TB_CHAN_RESET() -- 测试用：清计数并允许重新挂载
   TB.chanSeenAll = 0
   TB.chanTryAt = nil
   TB.chanTries = 0
+end
+
+-- ===== 角色名职业着色（1.73.10 用户要求：工具箱 → 队伍/社交）=====
+-- 需求出处 = tmp/XGuild（1.2，275 行）——按本项目规范**轻量化重写**。XGuild 的三个毛病都已在下面规避：
+--   1. 公会/查询/好友三段几乎逐字重复（同一套 getglobal+SetTextColor 抄三遍）；
+--   2. 原函数备份存**全局**（oldGuildStatus_Update 之类）→ 污染命名空间；
+--   3. 依赖本客户端**不存在**的 GetDifficultyColor（本机 api_*.html 全表 **0 命中**；只有 Core.lua 的垫片提供它）。
+-- 本实现 = **一张描述表 + 一个通用上色流程 + 三个纯函数**：
+--   · 三窗口差异（按钮前缀 / 行数常量 / 翻页框 / 列后缀）全进 TB_PAINT_LISTS —— 加窗口只加一行；
+--   · 颜色决策（职业色 / 等级难度色 / 同地图绿 / 离线减半 / 阶级插值）是**纯函数**，能脱离游戏断言；
+--   · 包装全局刷新函数时**先调原函数**（客户端自己的配色先落地）再叠色，带**幂等守卫**（绝不重复包装）；
+--   · 每一处 _G 取值与 SetTextColor 都走 pcall：客户端没那个窗口/控件 → **整窗口跳过并如实记账**；
+--   · 开关关掉 = **不再叠色**（原函数会把颜色刷回客户端原本的配色），不是「停止刷新」。
+local TB_PAINT_DEFAULT_COLOR = "ffa0a0a0"
+-- 职业色**自建**（不读 RAID_CLASS_COLORS）：ChatMOD 原作者在注释里写明「本客户端它有时不按预期工作」；
+--   自建表还能让判据落在「颜色对不对」上，而不是「有没有调用某个 API」。
+local TB_PAINT_CLASS_COLOR = {
+  WARRIOR = "ffc79c6e", PALADIN = "fff58cba", HUNTER = "ffabd473", ROGUE = "fffff569",
+  PRIEST = "ffffffff", SHAMAN = "ff0070de", MAGE = "ff69ccf0", WARLOCK = "ff9482c9", DRUID = "ffff7d0a",
+}
+local function tbHexToRGB(h)
+  local s = (type(h) == "string") and h or ""
+  if string.len(s) == 8 then s = string.sub(s, 3) end -- aarrggbb → 取后 6 位
+  if string.len(s) < 6 then return 1, 1, 1 end
+  local r = tonumber(string.sub(s, 1, 2), 16) or 255
+  local g = tonumber(string.sub(s, 3, 4), 16) or 255
+  local b = tonumber(string.sub(s, 5, 6), 16) or 255
+  return r / 255, g / 255, b / 255
+end
+-- 纯函数①：职业显示名（"战士" / "WARRIOR"）→ token（认不出来返回 nil，**不瞎猜**）
+--   本地化名 → token 走 Engine 的 CLASS_LIST（EVAL_CLASS_LIST，单一来源；不在这里再抄一份职业名表）
+function EVAL_TB_PAINT_CLASS_TOKEN_OF(name)
+  if type(name) ~= "string" or name == "" then return nil end
+  local up = string.upper(name)
+  if TB_PAINT_CLASS_COLOR[up] then return up end
+  local list = (type(EVAL_CLASS_LIST) == "table") and EVAL_CLASS_LIST or nil
+  if list then
+    for i = 1, table.getn(list) do
+      local c = list[i]
+      if type(c) == "table" and (c.id == up or c.name == name) then return c.id end
+    end
+  end
+  return nil
+end
+-- 纯函数②：职业名 → 颜色串（认不出来如实退回默认灰）
+function EVAL_TB_PAINT_CLASS_COLOR_OF(name)
+  local tok = EVAL_TB_PAINT_CLASS_TOKEN_OF(name)
+  return (tok and TB_PAINT_CLASS_COLOR[tok]) or TB_PAINT_DEFAULT_COLOR
+end
+-- 纯函数③：公会阶级色 = 红(最低)→黄(中)→绿(最高) 线性插值，返回 r,g,b
+--   ★XGuild 原作此处有个 bug：它用「rankIndex 是否等于 nRanks/2」判中点，而 nRanks 为**奇数**时
+--     那个分支永远不命中（Lua 的 / 是浮点）→ 这里改成**按比例**插值，任何档数都连续。
+function EVAL_TB_PAINT_RANK_RGB(idx, n)
+  local n2, i2 = tonumber(n) or 0, tonumber(idx) or 0
+  if n2 < 2 then return 1, 1, 1 end
+  local t = i2 / (n2 - 1)          -- 0（最低档）→ 1（最高档）
+  if t < 0 then t = 0 elseif t > 1 then t = 1 end
+  local RED = { 1.00, 0.10, 0.10 }
+  local YEL = { 1.00, 0.82, 0.00 }
+  local GRN = { 0.10, 1.00, 0.10 }
+  local a, b, k
+  if t <= 0.5 then a, b, k = RED, YEL, t / 0.5 else a, b, k = YEL, GRN, (t - 0.5) / 0.5 end
+  return a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k, a[3] + (b[3] - a[3]) * k
+end
+
+-- 三窗口描述表（**唯一的差异集中处**；新增窗口 = 加一行）
+local TB_PAINT_LISTS = {
+  { key = "guild", upd = "GuildStatus_Update", rows = "GUILDMEMBERS_TO_DISPLAY", scroll = "GuildListScrollFrame",
+    btn = "GuildFrameButton", sbtn = "GuildFrameGuildStatusButton",
+    cols = { name = "Name", klass = "Class", level = "Level", zone = "Zone" },
+    scols = { name = "Name", rank = "Rank", note = "Note" } },
+  { key = "who", upd = "WhoList_Update", rows = "WHOS_TO_DISPLAY", scroll = "WhoListScrollFrame",
+    btn = "WhoFrameButton",
+    cols = { name = "Name", klass = "Class", level = "Level", variable = "Variable" } },
+  { key = "friends", upd = "FriendsList_Update", rows = "FRIENDS_TO_DISPLAY", scroll = "FriendsFrameFriendsScrollFrame",
+    btn = "FriendsFrameFriendButton",
+    cols = { name = "ButtonTextNameLocation", info = "ButtonTextInfo" } },
+}
+
+-- 开关：nil 视为**开**（用户要求加的，默认就生效；关掉 = 不叠色）
+function EVAL_TB_COLOR_ON()
+  local tb = tbCfg()
+  if not tb then return true end
+  return tb.colorClass ~= false
+end
+
+local function tbPaintFS(name, r, g, b)
+  local fs = _G[name]
+  if fs == nil then return false end
+  local ok = pcall(function() fs:SetTextColor(r, g, b) end)
+  return ok and true or false
+end
+
+-- 取一行数据（pcall；拿不到返回 nil → 该行不画）
+local function tbPaintRowData(list, idx)
+  if list.key == "guild" then
+    local ok, name, rank, rankIndex, level, class, zone, note, officernote, online = pcall(GetGuildRosterInfo, idx)
+    if not (ok and name ~= nil) then return nil end
+    return { name = name, rank = rank, rankIndex = rankIndex, level = level, klass = class, zone = zone, online = online }
+  elseif list.key == "who" then
+    local ok, name, guild, level, race, class, zone = pcall(GetWhoInfo, idx)
+    if not (ok and name ~= nil) then return nil end
+    return { name = name, level = level, klass = class, zone = zone, online = true }
+  else
+    local ok, name, level, class, zone, online = pcall(GetFriendInfo, idx)
+    if not (ok and name ~= nil) then return nil end
+    return { name = name, level = level, klass = class, zone = zone, online = online }
+  end
+end
+
+-- who 窗口第三列（Variable）当前是不是「区域」——本客户端 api 表里查不到 UIDropDownMenu_GetSelectedID，
+--   ★查不到就**不猜**：拿不到排序维度时这一列不画（其余列照画）。
+local function tbPaintWhoSortIsZone()
+  if type(UIDropDownMenu_GetSelectedID) ~= "function" then return nil end
+  local d = _G["WhoFrameDropDown"]
+  if d == nil then return nil end
+  local ok, id = pcall(UIDropDownMenu_GetSelectedID, d)
+  if not ok or type(id) ~= "number" then return nil end
+  return id == 1
+end
+
+-- 画一行；返回「真的画了几处」（0 = 这一行没画/控件不存在）
+function EVAL_TB_PAINT_ROW(list, i, off, myZone)
+  local idx = (tonumber(off) or 0) + i
+  local d = tbPaintRowData(list, idx)
+  if not d then return 0 end
+  local mul = d.online and 1 or 0.5 -- ★离线整行减半（XGuild 的做法保留）
+  local pfx = list.btn .. tostring(i)
+  local cr, cg, cb = tbHexToRGB(EVAL_TB_PAINT_CLASS_COLOR_OF(d.klass))
+  local n = 0
+  local cols = list.cols or {}
+  if cols.name and tbPaintFS(pfx .. cols.name, cr * mul, cg * mul, cb * mul) then n = n + 1 end
+  if cols.klass and tbPaintFS(pfx .. cols.klass, cr * mul, cg * mul, cb * mul) then n = n + 1 end
+  if cols.level then
+    local lv = tonumber(d.level)
+    if lv and type(GetDifficultyColor) == "function" then
+      local okc, c = pcall(GetDifficultyColor, lv)
+      if okc and type(c) == "table" then
+        if tbPaintFS(pfx .. cols.level, (c.r or 1) * mul, (c.g or 1) * mul, (c.b or 1) * mul) then n = n + 1 end
+      end
+    end
+  end
+  -- 同地图：公会/好友直接看 Zone 列；who 要看当前排序维度（拿不到就跳过）
+  if cols.zone and myZone and d.zone == myZone then
+    if tbPaintFS(pfx .. cols.zone, 0, d.online and 1 or 0.5, 0) then n = n + 1 end
+  elseif cols.variable and myZone and d.zone == myZone then
+    -- ★只有**确知**当前排序维度是「区域」时才涂这一列（nil = 拿不到排序维度 → 不猜、不涂）
+    if tbPaintWhoSortIsZone() == true then
+      if tbPaintFS(pfx .. cols.variable, 0, 1, 0) then n = n + 1 end
+    end
+  end
+  -- 好友行：在线名字用职业色（上面已画 ButtonTextNameLocation）、离线整体灰、同地图绿
+  if cols.info then
+    local ir, ig, ib = 1, 1, 1
+    if not d.online then ir, ig, ib = 0.5, 0.5, 0.5
+    elseif myZone and d.zone == myZone then ir, ig, ib = 0, 1, 0 end
+    if tbPaintFS(pfx .. cols.info, ir, ig, ib) then n = n + 1 end
+  end
+  -- 公会：状态行的名字/阶级/备注
+  local scols = list.scols
+  if scols then
+    local spfx = (list.sbtn or list.btn) .. tostring(i)
+    if scols.name and tbPaintFS(spfx .. scols.name, cr * mul, cg * mul, cb * mul) then n = n + 1 end
+    if scols.rank and d.rankIndex ~= nil then
+      local nRanks = 0
+      if type(GuildControlGetNumRanks) == "function" then
+        local okn, v = pcall(GuildControlGetNumRanks)
+        if okn and type(v) == "number" then nRanks = v end
+      end
+      local rr, gg, bb = EVAL_TB_PAINT_RANK_RGB(d.rankIndex, nRanks)
+      if tbPaintFS(spfx .. scols.rank, rr * mul, gg * mul, bb * mul) then n = n + 1 end
+    end
+    if scols.note and tbPaintFS(spfx .. scols.note, 0.54 * mul, 0.54 * mul, 0.54 * mul) then n = n + 1 end
+  end
+  return n
+end
+
+-- 画一整张列表；返回 画了几处, 扫了几行（0,0 = 窗口/控件不存在或没数据）
+function EVAL_TB_PAINT_LIST(list)
+  local rowsN = _G[list.rows]
+  if type(rowsN) ~= "number" or rowsN < 1 then return 0, 0 end
+  local scroll = _G[list.scroll]
+  if scroll == nil then return 0, 0 end
+  local off = 0
+  if type(FauxScrollFrame_GetOffset) == "function" then
+    local ok, v = pcall(FauxScrollFrame_GetOffset, scroll)
+    if ok and type(v) == "number" then off = v end
+  end
+  local myZone = nil
+  if type(GetRealZoneText) == "function" then
+    local okz, z = pcall(GetRealZoneText)
+    if okz and type(z) == "string" and z ~= "" then myZone = z end
+  end
+  local painted, rows = 0, 0
+  for i = 1, rowsN do
+    rows = rows + 1
+    local ok, c = pcall(EVAL_TB_PAINT_ROW, list, i, off, myZone)
+    if ok and type(c) == "number" then painted = painted + c end
+  end
+  return painted, rows
+end
+
+-- 原函数备份存 **local**（XGuild 存全局 → 污染命名空间，与本项目 FRAME NAME CLASH 同一族隐患）
+local tbPaintBackup, tbPaintWrapperMap = {}, {}
+
+-- 包装一个窗口的刷新函数（幂等：已包装或当前入口就是我们的 wrapper → 直接返回 true）
+function EVAL_TB_PAINT_INSTALL(list)
+  local key = list.upd
+  local cur = _G[key]
+  if type(cur) ~= "function" then
+    TB.paintMissing = TB.paintMissing or {}
+    TB.paintMissing[key] = true
+    return false
+  end
+  if tbPaintWrapperMap[key] and cur == tbPaintWrapperMap[key] then
+    TB.paintInstalled = TB.paintInstalled or {}
+    TB.paintInstalled[key] = true
+    return true
+  end
+  local orig = tbPaintBackup[key] or cur
+  tbPaintBackup[key] = orig
+  local wrapper = function(...)
+    TB.paintCalls = (TB.paintCalls or 0) + 1
+    local okc = pcall(orig, ...) -- ★先调原函数：客户端自己的配色/文本先落地
+    if EVAL_TB_COLOR_ON() then
+      local okp, painted, rows = pcall(EVAL_TB_PAINT_LIST, list)
+      if okp and type(painted) == "number" then
+        TB.paintPainted = (TB.paintPainted or 0) + painted
+        TB.paintRows = rows
+      end
+    end
+    return okc
+  end
+  local okw = pcall(function() _G[key] = wrapper end)
+  if not okw then return false end
+  tbPaintWrapperMap[key] = wrapper
+  TB.paintInstalled = TB.paintInstalled or {}
+  TB.paintInstalled[key] = true
+  return true
+end
+
+function EVAL_TB_PAINT_INSTALL_ALL()
+  local ok = 0
+  for i = 1, table.getn(TB_PAINT_LISTS) do
+    if EVAL_TB_PAINT_INSTALL(TB_PAINT_LISTS[i]) then ok = ok + 1 end
+  end
+  return ok, table.getn(TB_PAINT_LISTS)
+end
+
+-- 立刻用当前开关状态重刷三个窗口（勾/取消勾时调一次：颜色立刻跟着变，不用等下次刷新）
+function EVAL_TB_PAINT_REFRESH()
+  local n = 0
+  for i = 1, table.getn(TB_PAINT_LISTS) do
+    local fn = tbPaintWrapperMap[TB_PAINT_LISTS[i].upd]
+    if type(fn) == "function" then
+      local ok = pcall(fn)
+      if ok then n = n + 1 end
+    end
+  end
+  return n
+end
+
+-- 限频重试（窗口是 FrameXML 懒加载的；载入那一刻可能还没建好）——与频道屏蔽同一套纪律
+local function tbPaintRetry()
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  if now - (TB.paintTryAt or -99) < 1 then return false end
+  TB.paintTryAt = now
+  TB.paintTries = (TB.paintTries or 0) + 1
+  local ok, total = EVAL_TB_PAINT_INSTALL_ALL()
+  if ok >= total then
+    if not TB.paintLogged then
+      TB.paintLogged = true
+      EVAL_LOGLINE("[职业着色] 挂载成功（" .. tostring(ok) .. "/" .. tostring(total) .. " 个窗口）")
+    end
+    return true
+  end
+  if TB.paintTries >= 60 then
+    EVAL_LOGLINE("[职业着色] 挂载不完整：" .. tostring(ok) .. "/" .. tostring(total) ..
+      "（窗口还没建好或本客户端没有该窗口；可用 /eh go 着色 看清单）")
+  end
+  return false
+end
+EVAL_TB_PAINT_RETRY = tbPaintRetry
+
+-- 诊断/断言读值口：开关 / 已挂窗口 / 缺失窗口 / 累计调用与上色数
+function EVAL_TB_PAINT_STATE()
+  local ins, mis = {}, {}
+  for k, v in pairs(TB.paintInstalled or {}) do if v then ins[k] = true end end
+  for k, v in pairs(TB.paintMissing or {}) do if v then mis[k] = true end end
+  local wired = false
+  for _ in pairs(tbPaintWrapperMap) do wired = true end
+  return { on = EVAL_TB_COLOR_ON(), installed = ins, missing = mis,
+           calls = TB.paintCalls or 0, painted = TB.paintPainted or 0, rows = TB.paintRows or 0,
+           tries = TB.paintTries or 0, wired = wired }
+end
+function EVAL_TB_PAINT_LISTS() return TB_PAINT_LISTS end
+-- 勾/取消勾（走真实逻辑：写配置 + 立刻重刷，颜色立即跟着变）
+function EVAL_TB_PAINT_CLICK()
+  local tb = tbCfg()
+  if not tb then return false end
+  tb.colorClass = (tb.colorClass == false)
+  EVAL_TB_PAINT_REFRESH()
+  return tb.colorClass
+end
+function EVAL_TB_PAINT_RESET() -- 测试用：清计数（不还原已包装的入口）
+  TB.paintCalls, TB.paintPainted, TB.paintRows = 0, 0, 0
+  TB.paintTryAt, TB.paintTries = nil, 0
+  TB.paintLogged = false
 end
 
 -- ★1.71.2 用户要求：「工具箱 → 自动交接任务 按键停止功能，比如按住 shift 临时停止」
@@ -786,6 +1096,7 @@ evf:SetScript("OnEvent", function()
   if not e and type(arg1) == "string" then e = arg1 end
   if not e and type(arg2) == "string" then e = arg2 end
   tbChanRetry() -- ★1.71.3 每次事件顺手重试一次频道屏蔽挂载（幂等；成功后立即短路）
+  tbPaintRetry() -- ★1.73.10 职业着色：公会/查询/好友三个窗口同样是懒加载的，一并重试
   if e then EVAL_TB_ONEVENT(e) end
 end)
 
@@ -793,6 +1104,7 @@ end)
 local qf = CreateFrame("Frame", "EVAL_TOOLBOX_QUEUE", UIParent)
 qf:SetScript("OnUpdate", function()
   tbChanRetry() -- ★1.71.3 频道屏蔽挂载的兜底重试（限频 1s；挂上后只做一次布尔判断，开销可忽略）
+  tbPaintRetry() -- ★1.73.10 职业着色挂载的兜底重试（限频 1s；三个窗口都挂上后只做一次布尔判断）
   tbQuestTick() tbQPump() -- 1.69.2 任务延迟扫描 + 队列滴出
 end)
 
@@ -818,6 +1130,8 @@ local function tbModel()
     { t = "c", key = "ready", label = L("TB_READY"), tip = L("TB_READY_TIP") },
     -- ★1.71.3 用户要求：屏蔽「XX 加入/离开频道」这类通知（默认开）
     { t = "c", key = "chanJoin", label = L("TB_CHANJOIN"), tip = L("TB_CHANJOIN_TIP") },
+    -- ★1.73.10 用户要求：角色名按职业着色（参考 tmp/XGuild 的**需求**，实现见本文件「职业着色」段；默认开）
+    { t = "c", key = "colorClass", label = L("TB_COLORCLASS"), tip = L("TB_COLORCLASS_TIP") },
     { t = "g", label = L("TB_GUILDNOTIFY"), tip = L("TB_GUILDNOTIFY_TIP") },
     { t = "h", label = L("TB_H_QAUTO") }, -- 1.69.0 任务组拆分：自动交接 / 任务通知
     -- ★1.71.2 用户要求：自动接取 / 交付任务 **分成两个开关**（原来共用一个 quest 键，想只接取不交付做不到）
@@ -900,6 +1214,7 @@ function EVAL_TB_REFRESH()
     local it = m[TB.off + i]
     r.chk:Hide() r.text:Hide() r.hdr:Hide() r.extra:Hide() r.add.btn:Hide() r.clr.btn:Hide() r.chv.btn:Hide()
     r.get, r.set = nil, nil
+    r.modelKey = it and it.key or nil -- ★1.73.10 记住这一格当前是哪个 key（勾选后要按 key 做即时副作用）
     if it then
       if it.t == "h" then
         r.hdr:SetText(it.label)
@@ -1030,6 +1345,9 @@ function EVAL_TB_BUILD(root, page, refreshes)
     row.chk, row.mark = chk, mark
     chk:SetScript("OnClick", function()
       if row.get and row.set then row.set(not row.get()) end
+      -- ★1.73.10 职业着色是**即时生效**的全局行为：勾/取消勾后立刻重刷三个窗口，
+      --   否则颜色要等窗口自己下次刷新才变，用户会以为开关没反应（本项目「改开关立即生效」惯例）
+      if row.modelKey == "colorClass" then pcall(EVAL_TB_PAINT_REFRESH) end
       EVAL_TB_REFRESH()
     end)
     chk:SetScript("OnEnter", function()

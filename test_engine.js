@@ -456,6 +456,39 @@ function checkIconAssets() {
   console.log('CHAN RETRY WIRING CHECK: retry wired at ' + sites + ' sites + manual command');
 })();
 
+// ===== PAINT WIRING CHECK（1.73.10）：职业着色的「接线 + 不用本客户端没有的 API」 =====
+// 背景：着色是**静默失败**大户——窗口不存在/控件改名/漏接线时，游戏里就是「没颜色」，不报错、不崩。
+//   行为断言只在测试里跑，照不到「生产里到底有没有接线」以及「有没有用了不可用的 API」。
+// 判据：
+//   ① tbPaintRetry() 至少 2 处（定义 + 每帧兜底/事件驱动之一）——与频道屏蔽同一条纪律；
+//   ② 三个窗口刷新函数名都在描述表里（GuildStatus_Update / WhoList_Update / FriendsList_Update）；
+//   ③ ★原函数备份**必须是 local**：不许出现 XGuild 那种 oldGuildStatus_Update = … 的全局赋值；
+//   ④ ★禁用本客户端**没有**的 hooksecurefunc（本机 api_*.html 全表 0 命中）；
+//   ⑤ 有手动诊断入口 /eh go 着色。
+(function () {
+  const tb = fs.readFileSync(path.join(__dirname, 'Toolbox.lua'), 'utf8');
+  const eh = fs.readFileSync(path.join(__dirname, 'EvalHelp.lua'), 'utf8');
+  const bad = [];
+  const sites = (tb.match(/tbPaintRetry\(\)/g) || []).length;
+  if (sites < 2) bad.push('tbPaintRetry() 只有 ' + sites + ' 处（要 >=2：定义 + 每帧/事件之一）');
+  if (!/EVAL_TB_PAINT_RETRY = tbPaintRetry/.test(tb)) bad.push('没有导出 EVAL_TB_PAINT_RETRY');
+  for (const fn of ['GuildStatus_Update', 'WhoList_Update', 'FriendsList_Update']) {
+    if (tb.indexOf('"' + fn + '"') < 0) bad.push('描述表里没有 ' + fn);
+  }
+  // ③ 备份不许是全局（XGuild 的毛病：oldGuildStatus_Update 之类挂到 _G 上）
+  const globalBackup = tb.match(/^\s*old[A-Za-z_]+\s*=/gm) || [];
+  if (globalBackup.length) bad.push('发现全局备份赋值：' + globalBackup.join(' / '));
+  if (!/local tbPaintBackup/.test(tb)) bad.push('没有 local tbPaintBackup（原函数备份必须存 local）');
+  // ④ 禁用的 API
+  for (const f of ['hooksecurefunc']) {
+    if (tb.indexOf(f) >= 0 || eh.indexOf(f) >= 0) bad.push('用了本客户端不存在的 ' + f);
+  }
+  // ⑤ 诊断入口
+  if (!/go 着色/.test(eh)) bad.push('没有手动诊断入口（/eh go 着色）');
+  if (bad.length) { console.log('PAINT WIRING CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
+  console.log('PAINT WIRING CHECK: 三窗口接线 + local 备份 + 无不可用 API + 诊断入口（retry ' + sites + ' 处）');
+})();
+
 // ===== UI ICON CHECK（1.71.3）：新 UI 用的**自包含**图标必须真的在磁盘上 =====
 // 背景：本客户端纹理路径写错时**什么都不画**（不报错、不崩，只是空白）——而本轮新增的
 //   「类别图标 / 弹窗标题图标」都是刚从 UnrealQuest 拷进本插件的 .tga：漏拷一个、

@@ -8508,4 +8508,109 @@ do
   print("  工具箱滚动：挪到底部行、与 [关闭] 中线对齐、右对齐停在关闭旁边（文字按钮，不再是 ▲/▼）")
 end
 
+-- 119) ★★★1.73.10 工具箱：角色名职业着色（需求参考 tmp/XGuild，按本项目规范轻量化重写）
+--   判据分三层：① 纯函数（职业名→色 / 阶级插值，含 XGuild 那个奇数档 bug 的反例）；
+--   ② 接线（三个窗口都挂上、原函数仍在链上、幂等不重复包装）；
+--   ③ 真实控件颜色（职业色 / 同地图绿 / 离线减半 / 关掉开关不再叠色 / 缺窗口不崩）。
+do
+  local pack119 = EVAL_LOCALES[EVAL_GET_LANG()] or EVAL_LOCALES.zhCN
+  -- ① 纯函数
+  eq(EVAL_TB_PAINT_CLASS_COLOR_OF("战士"), "ffc79c6e", "①职业显示名 → 职业色（战士）")
+  eq(EVAL_TB_PAINT_CLASS_COLOR_OF("WARRIOR"), "ffc79c6e", "①英文 token 也认")
+  eq(EVAL_TB_PAINT_CLASS_COLOR_OF("圣骑士"), "fff58cba", "①★★中文名走 Engine 的 CLASS_LIST（单一来源，不另抄一份职业名表）")
+  eq(EVAL_TB_PAINT_CLASS_TOKEN_OF("德鲁伊"), "DRUID", "①本地化名 → token")
+  eq(EVAL_TB_PAINT_CLASS_COLOR_OF("查无此职业"), "ffa0a0a0", "①★反向哨兵：认不出来 = 默认灰（不瞎猜）")
+  local r0, g0 = EVAL_TB_PAINT_RANK_RGB(0, 5)
+  local r2, g2 = EVAL_TB_PAINT_RANK_RGB(2, 5)
+  local r4, g4 = EVAL_TB_PAINT_RANK_RGB(4, 5)
+  eq(g0 < g2 and g2 < g4, true, "①阶级色按比例连续（绿分量递增）")
+  -- ★红分量在前半段保持 1.0（红→黄只动绿蓝），后半段才降 → 判据要写 ≥ 而不是 >
+  eq(r0 >= r2 and r2 > r4, true, "①阶级色按比例连续（红分量：红→黄不变、黄→绿递减）")
+  eq(math.abs(g2 - 0.82) < 0.01, true, "①★★奇数档（5 档）的中点也拿得到黄色 —— XGuild 原作在这里永远拿不到（idx == nRanks/2 恒假）")
+  eq(EVAL_TB_PAINT_RANK_RGB(0, 1), 1, "①只有一档时不炸（返回白色）")
+  -- ② 工具箱里真的有这一行（UI 接线，不是只有引擎）
+  local hasRow119, label119 = false, nil
+  for _, it119 in ipairs(EVAL_TEST_TB_ROWS()) do
+    if it119.key == "colorClass" then hasRow119 = true label119 = it119.label end
+  end
+  eq(hasRow119, true, "②★★工具箱列模型里有「角色名职业着色」这一行（队/社交组）")
+  eq(label119, pack119.TB_COLORCLASS, "②★标签走语言包")
+  -- ③ 挂载：三个窗口都挂上 + 原函数仍在链上 + 幂等
+  TEST.paintFS = {}
+  TEST.guildUpd, TEST.whoUpd, TEST.friendsUpd = 0, 0, 0
+  local okN119, totN119 = EVAL_TB_PAINT_INSTALL_ALL()
+  eq(okN119, totN119, "③三个窗口的刷新函数都挂上了（" .. tostring(okN119) .. "/" .. tostring(totN119) .. "）")
+  local wrapped119 = GuildStatus_Update
+  EVAL_TB_PAINT_INSTALL_ALL() -- 再挂一次
+  eq(GuildStatus_Update == wrapped119, true, "③★★幂等：重复挂载**不重复包装**（否则原函数会被调多次/颜色被叠多层）")
+  -- ④ 走真实入口：原函数被调 + 颜色真的落在控件上
+  local savedCC119 = EVAL_HELP_CONFIG.tb.colorClass
+  EVAL_HELP_CONFIG.tb.colorClass = true
+  TEST.paintOffset, TEST.paintZone, TEST.paintRanks = 0, "艾尔文森林", 5
+  TEST.guildRows = {
+    { name = "甲", class = "战士",  level = 10, zone = "艾尔文森林", rankIndex = 0, online = true },
+    { name = "乙", class = "法师",  level = 10, zone = "暴风城",   rankIndex = 2, online = true },
+    { name = "丙", class = "德鲁伊", level = 10, zone = "艾尔文森林", rankIndex = 4, online = false },
+  }
+  TEST.paintFS = {}
+  GuildStatus_Update()
+  eq(TEST.guildUpd, 1, "④★★**先调原函数**（客户端的文本/配色先落地，我们再叠色）")
+  local fsA = TEST.paintFS["GuildFrameButton1Name"]
+  local fsB = TEST.paintFS["GuildFrameButton2Name"]
+  eq(fsA ~= nil and math.abs(fsA.r - 0.780) < 0.02, true, "④战士的名字是职业色（r=" .. tostring(fsA and fsA.r) .. "）")
+  eq(fsB ~= nil and math.abs(fsB.r - 0.412) < 0.02, true, "④法师用另一套色（r=" .. tostring(fsB and fsB.r) .. "）")
+  eq(fsA.r ~= fsB.r, true, "④★不同职业不同色（反向哨兵：不是「都涂同一个颜色」）")
+  eq(TEST.paintFS["GuildFrameGuildStatusButton1Name"] ~= nil, true, "④状态行的名字也上色（XGuild 两处都涂，这里保持）")
+  local fsZ = TEST.paintFS["GuildFrameButton1Zone"]
+  eq(fsZ ~= nil and fsZ.g == 1 and fsZ.r == 0, true, "④与自己同地图 → Zone 绿字")
+  eq(TEST.paintFS["GuildFrameButton2Zone"] == nil, true, "④★反向：不同地图的行**不动** Zone 列")
+  local fsC = TEST.paintFS["GuildFrameButton3Name"]
+  eq(fsC ~= nil and math.abs(fsC.r - 0.5) < 0.02, true, "④★离线成员整行减半亮度（德鲁伊 1.0 → 0.5，实测 " .. tostring(fsC and fsC.r) .. "）")
+  local rank1 = TEST.paintFS["GuildFrameGuildStatusButton1Rank"]
+  local rank3 = TEST.paintFS["GuildFrameGuildStatusButton3Rank"]
+  eq(rank1 ~= nil and rank1.g < 0.2, true, "④最低阶＝红（g=" .. tostring(rank1 and rank1.g) .. "）")
+  eq(rank3 ~= nil and rank3.g > rank1.g, true, "④最高阶＝偏绿（离线再减半，仍比最低阶绿）")
+  -- ⑤ 单人数据源：who / friends 也真的画
+  TEST.paintFS = {}
+  TEST.whoRows = { { name = "丁", class = "盗贼", level = 10, zone = "艾尔文森林" } }
+  WhoList_Update()
+  eq(TEST.whoUpd, 1, "⑤who 窗口：原函数被调")
+  eq(TEST.paintFS["WhoFrameButton1Name"] ~= nil, true, "⑤who 行的名字上色")
+  eq(TEST.paintFS["WhoFrameButton1Variable"] == nil, true, "⑤★本客户端查不到排序维度（UIDropDownMenu_GetSelectedID 不在 api 表里）→ 该列**不猜**、不涂")
+  TEST.paintFS = {}
+  TEST.friendRows = {
+    { name = "戊", class = "猎人", level = 10, zone = "艾尔文森林", online = true },
+    { name = "己", class = "牧师", level = 10, zone = "暴风城",   online = false },
+  }
+  FriendsList_Update()
+  eq(TEST.friendsUpd, 1, "⑤好友窗口：原函数被调")
+  local info1 = TEST.paintFS["FriendsFrameFriendButton1ButtonTextInfo"]
+  local info2 = TEST.paintFS["FriendsFrameFriendButton2ButtonTextInfo"]
+  eq(info1 ~= nil and info1.g == 1 and info1.r == 0, true, "⑤好友同地图 → 信息列绿字")
+  eq(info2 ~= nil and math.abs(info2.r - 0.5) < 0.02, true, "⑤好友离线 → 信息列灰（0.5）")
+  -- ⑥ 关掉开关：不再叠色（但原函数照跑 —— 客户端自己的配色会刷回去）
+  EVAL_HELP_CONFIG.tb.colorClass = false
+  TEST.paintFS = {}
+  GuildStatus_Update()
+  eq(TEST.guildUpd, 2, "⑥关掉后原函数照样被调（我们不是拦截刷新，只是不再叠色）")
+  eq(next(TEST.paintFS) == nil, true, "⑥★反向哨兵：关掉后**一处都不涂**（颜色由客户端自己刷回）")
+  -- ⑦ 开关的「即时生效」：勾/取消勾立刻重刷三个窗口
+  local mid119 = EVAL_TB_PAINT_CLICK()
+  eq(EVAL_HELP_CONFIG.tb.colorClass, mid119, "⑦勾选状态写进配置")
+  eq(EVAL_TB_PAINT_REFRESH(), 3, "⑦★★重刷覆盖三个窗口（勾/取消勾立即生效，不用 /reload）")
+  EVAL_HELP_CONFIG.tb.colorClass = savedCC119
+  -- ⑧ 缺窗口：摘掉一个刷新函数 → 如实记账、不崩、其余照常
+  TEST.paintFS = {}
+  WhoList_Update = nil
+  local okN119b, totN119b = EVAL_TB_PAINT_INSTALL_ALL()
+  eq(okN119b, totN119b - 1, "⑧★窗口不存在时如实少挂一个（" .. tostring(okN119b) .. "/" .. tostring(totN119b) .. "）")
+  local st119 = EVAL_TB_PAINT_STATE()
+  eq(st119.missing["WhoList_Update"], true, "⑧★★缺失窗口**记名**（不是静默失败：诊断命令要能列出来）")
+  GuildStatus_Update()
+  eq(TEST.paintFS["GuildFrameButton1Name"] ~= nil, true, "⑧缺一个窗口不影响其余窗口上色")
+  WhoList_Update = function() TEST.whoUpd = TEST.whoUpd + 1 end
+  EVAL_TB_PAINT_INSTALL_ALL() -- 恢复后重挂（幂等）
+  print("  职业着色：职业名→职业色 · 阶级按比例插值（含奇数档反例）· 三窗口挂载+幂等+先调原函数 · 同地图绿/离线减半 · 关开关不叠色 · 缺窗口如实记账")
+end
+
 print("ALL TESTS PASS")

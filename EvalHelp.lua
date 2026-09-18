@@ -7249,6 +7249,41 @@ if type(SlashCmdList) == "table" then
         end
         say("用法：/eh go 频道 试 [文本] = 试判据；/eh go 频道 装 = 立刻重试挂载")
       end
+    elseif msg == "go 着色" or string.find(msg or "", "^go 着色") == 1 then
+      -- ★1.73.10 取证：角色名职业着色到底挂上了没有、画了多少处。
+      --   ★为何要给命令：「窗口不存在/控件改名」在本客户端是**静默**的（不报错、只是没颜色），
+      --     必须能把「没挂上 / 挂上了但取不到数据 / 数据有了但控件不在」这三种情况分开。
+      local sarg = string.match(msg or "", "^go 着色%s*(.-)%s*$") or ""
+      if type(EVAL_TB_PAINT_RETRY) == "function" and (string.find(sarg, "^装") == 1 or sarg == "") then
+        pcall(EVAL_TB_PAINT_RETRY) -- 顺手重试一次（幂等）
+      end
+      if type(EVAL_TB_PAINT_STATE) ~= "function" then
+        say("职业着色：本版本没有这个功能（EVAL_TB_PAINT_STATE 不存在）")
+      else
+        local st = EVAL_TB_PAINT_STATE()
+        say("— 角色名职业着色 诊断 —")
+        say("开关：着色=" .. (st.on and "开" or "关") .. "（工具箱 → 队伍/社交；默认开）")
+        local listsN = 0
+        if type(EVAL_TB_PAINT_LISTS) == "function" then listsN = table.getn(EVAL_TB_PAINT_LISTS()) end
+        local ins, mis = {}, {}
+        for k in pairs(st.installed or {}) do table.insert(ins, tostring(k)) end
+        for k in pairs(st.missing or {}) do table.insert(mis, tostring(k)) end
+        say("已挂载刷新函数（" .. tostring(table.getn(ins)) .. "/" .. tostring(listsN) .. "）：" ..
+          ((table.getn(ins) > 0) and table.concat(ins, "、") or "（无）"))
+        say("本客户端没有的窗口：" .. ((table.getn(mis) > 0) and table.concat(mis, "、") or "（无）"))
+        say("窗口刷新被调：" .. tostring(st.calls) .. " 次；累计上色：" .. tostring(st.painted) ..
+          " 处；最近一次扫了 " .. tostring(st.rows) .. " 行（尝试挂载 " .. tostring(st.tries) .. " 次）")
+        if not st.wired then
+          say("|cffff8080判读：一条都还没挂上 → 这三个刷新函数在本客户端不存在或名字不同（把清单发我）|r")
+        elseif st.calls == 0 then
+          say("|cffff8080判读：挂上了但窗口从未刷新过 → 打开一次公会/查询/好友窗口再看这一屏|r")
+        elseif st.painted == 0 then
+          say("|cffff8080判读：窗口刷新了但**一处都没画上** → 控件名与预期不同（GuildFrameButton1Name 之类），把这一屏发我|r")
+        else
+          say("判读：正常工作中（颜色由本插件叠加；关掉开关会恢复客户端原本配色）")
+        end
+        say("用法：/eh go 着色 = 重试挂载并打印诊断（打开公会/查询/好友窗口后看更准）")
+      end
     elseif msg == "go immune" then
       local im = (EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war and EVAL_HELP_CONFIG.war.immune) or {}
       local n, keys = 0, {}

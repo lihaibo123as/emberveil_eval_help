@@ -642,3 +642,67 @@ GetQuestReward = function(c)
 end
 SetCVar = function(k, v) TEST.cvars = TEST.cvars or {} TEST.cvars[k] = tostring(v) end
 GetCVar = function(k) return (TEST.cvars and TEST.cvars[k]) or "0" end
+-- ===== 1.73.10 角色名职业着色（工具箱）桩：公会 / 查询 / 好友三个窗口 =====
+-- ★桩的纪律（本项目老坑）：必须让被测代码读到的**每一个状态**都真实存在并且**可观测**——
+--   · 三个刷新函数桩各自计数（证明「我们先调原函数再叠色」这条链没断）；
+--   · 每个 FontString 的 SetTextColor 单独记账（否则只能测「有没有崩」，测不出「颜色对不对」）；
+--   · 数据源（GetGuildRosterInfo/GetWhoInfo/GetFriendInfo）由 TEST.paint* 驱动，方便造在线/离线/同地图三种行。
+TEST.paintFS = {}
+TEST.paintZone = "艾尔文森林"
+TEST.paintRanks = 5
+TEST.paintOffset = 0
+TEST.guildUpd, TEST.whoUpd, TEST.friendsUpd = 0, 0, 0
+local function mkPaintFS(name)
+  local fs = newMock()
+  rawset(fs, "SetTextColor", function(_, r, g, b) TEST.paintFS[name] = { r = r, g = g, b = b } end)
+  rawset(_G, name, fs)
+  return fs
+end
+GUILDMEMBERS_TO_DISPLAY, WHOS_TO_DISPLAY, FRIENDS_TO_DISPLAY = 3, 3, 3
+GuildListScrollFrame, WhoListScrollFrame, FriendsFrameFriendsScrollFrame = newMock(), newMock(), newMock()
+FauxScrollFrame_GetOffset = function() return TEST.paintOffset or 0 end
+GetRealZoneText = function() return TEST.paintZone or "艾尔文森林" end
+GuildControlGetNumRanks = function() return TEST.paintRanks or 5 end
+for i = 1, 3 do
+  mkPaintFS("GuildFrameButton" .. i .. "Name")
+  mkPaintFS("GuildFrameButton" .. i .. "Class")
+  mkPaintFS("GuildFrameButton" .. i .. "Level")
+  mkPaintFS("GuildFrameButton" .. i .. "Zone")
+  mkPaintFS("GuildFrameGuildStatusButton" .. i .. "Name")
+  mkPaintFS("GuildFrameGuildStatusButton" .. i .. "Rank")
+  mkPaintFS("GuildFrameGuildStatusButton" .. i .. "Note")
+  mkPaintFS("WhoFrameButton" .. i .. "Name")
+  mkPaintFS("WhoFrameButton" .. i .. "Class")
+  mkPaintFS("WhoFrameButton" .. i .. "Level")
+  mkPaintFS("WhoFrameButton" .. i .. "Variable")
+  mkPaintFS("FriendsFrameFriendButton" .. i .. "ButtonTextNameLocation")
+  mkPaintFS("FriendsFrameFriendButton" .. i .. "ButtonTextInfo")
+end
+-- ★三个「原函数」桩必须是**可辨识的独立函数**（生产代码会存起来再包一层）
+GuildStatus_Update = function() TEST.guildUpd = TEST.guildUpd + 1 end
+WhoList_Update = function() TEST.whoUpd = TEST.whoUpd + 1 end
+FriendsList_Update = function() TEST.friendsUpd = TEST.friendsUpd + 1 end
+-- ★复位：让「窗口不存在」这种用例可以把某个全局摘掉，再由这里还原（生产代码是幂等安装，重装不重复包装）
+function EVAL_TEST_RESET_PAINT_GLOBALS()
+  GuildStatus_Update = function() TEST.guildUpd = TEST.guildUpd + 1 end
+  WhoList_Update = function() TEST.whoUpd = TEST.whoUpd + 1 end
+  FriendsList_Update = function() TEST.friendsUpd = TEST.friendsUpd + 1 end
+end
+EVAL_TEST_RESET_PAINT_GLOBALS()
+GetGuildRosterInfo = function(i)
+  local r = TEST.guildRows and TEST.guildRows[i]
+  if not r then return nil end
+  return r.name, r.rank or "成员", r.rankIndex or 3, r.level or 10, r.class or "战士",
+         r.zone or "艾尔文森林", r.note or "", "", (r.online ~= false)
+end
+GetWhoInfo = function(i)
+  local r = TEST.whoRows and TEST.whoRows[i]
+  if not r then return nil end
+  return r.name, r.guild or "", r.level or 10, r.race or "人类", r.class or "法师", r.zone or "艾尔文森林"
+end
+GetFriendInfo = function(i)
+  local r = TEST.friendRows and TEST.friendRows[i]
+  if not r then return nil end
+  return r.name, r.level or 10, r.class or "法师", r.zone or "艾尔文森林", (r.online ~= false)
+end
+
