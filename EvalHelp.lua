@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.72.0"
+local VERSION = "1.72.1"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -1172,6 +1172,24 @@ local function cfgBuild()
     end, G, nil, cfgWin.uiBoxes.state))
 
   cfgHeader(root, RX, -56, L("G_HELP_H"), G)
+  -- 1.72.1 [使用引导]：把五步新手指引打到聊天框（用户要求：给不懂宏的新人友好引导）
+  do
+    local gb = CreateFrame("Button", nil, root)
+    gb:SetWidth(70) gb:SetHeight(15)
+    gb:SetPoint("TOPLEFT", root, "TOPLEFT", RX + 44, -52)
+    pcall(gb.EnableMouse, gb, true)
+    pcall(gb.RegisterForClicks, gb, "LeftButtonUp")
+    local gg = gb:CreateTexture(nil, "BACKGROUND")
+    uiSolid(gg, 0.22, 0.18, 0.10, 1)
+    gg:SetPoint("TOPLEFT", gb, "TOPLEFT", 0, 0)
+    gg:SetPoint("BOTTOMRIGHT", gb, "BOTTOMRIGHT", 0, 0)
+    local gt = uiText(gb, 9, 0.95, 0.82, 0.35)
+    gt:SetPoint("CENTER", gb, "CENTER", 0, 0)
+    gt:SetText(L("GUIDE_BTN"))
+    gb:SetScript("OnClick", function() EVAL_HELP_GUIDE(true) end)
+    table.insert(G, gb)
+    table.insert(G, gt)
+  end
   -- 分组排版（1.21.5）：金色小标题 + 缩进条目 + 组间留白；命令行用亮米色区分
   -- 1.32.7 重整：清掉战士残留（猛击 Alt），补五分类/Shift切方案/重扫按钮/导入导出
   local helpLines = { -- 1.34.0 i18n：全部走语言包键
@@ -6423,6 +6441,8 @@ if type(SlashCmdList) == "table" then
       EVAL_HELP_UI_TOGGLE()
     elseif msg == "cfg" or msg == "config" or msg == "set" then
       EVAL_HELP_CFG_TOGGLE()
+    elseif msg == "guide" or msg == "help2" or msg == "新手" then -- 1.72.1 新手指引重看
+      EVAL_HELP_GUIDE(true)
     elseif msg == "st" or msg == "state" or msg == "info" then
       EVAL_HELP_ST_TOGGLE()
     elseif msg == "ds" then -- 数据检索诊断：采集点标注层的当前状态（切换区域不生效时用它取证）
@@ -7045,6 +7065,21 @@ if type(SlashCmdList) == "table" then
   end
 end
 
+-- ============ 新手引导（1.72.1）：首次加载自动提示 + /eh guide 随时重看 ============
+-- 用户需求（原话要点）：加载成功要有提示；建议开启战斗UI；技能释放异常时开技能日志（战斗日志→方案）；
+--   对不熟悉宏的新人给出友好指引——怎么打开战斗UI、怎么配第一个宏、怎么绑按键。
+function EVAL_HELP_GUIDE(force)
+  say(L("GUIDE_TITLE"))
+  say(L("GUIDE_S1"))
+  say(L("GUIDE_S2"))
+  say(L("GUIDE_S3"))
+  say(L("GUIDE_S3B")) -- 1.72.1 备选：宏流程（用户要求：首选右键绑键，宏降为备选）
+  say(L("GUIDE_S4"))
+  say(L("GUIDE_S5"))
+  if force then say(L("GUIDE_MORE")) end
+  return true
+end
+
 -- ============ 初始化（SavedVariables 要等 VARIABLES_LOADED 才恢复） ============
 
 local init = CreateFrame("Frame", "EVAL_HELPInitFrame", UIParent)
@@ -7158,6 +7193,12 @@ init:SetScript("OnEvent", function(a, b)
         if msgT then EVAL_TCAST_EVENT(msgT) end
       end
     end)
-    say("全职业施法工具 " .. VERSION .. "（通用一键宏） — 一键宏 /run EVAL_GO() | /eh cfg 配置 | /eh help 帮助")
+    -- 1.72.1：加载成功提示 + 首次进入给一遍友好引导（老用户可用 /eh guide 重看）
+    say(string.format(L("LOAD_OK"), VERSION))
+    say(L("LOAD_HINT"))
+    if not cfg.guideSeen then
+      cfg.guideSeen = true
+      EVAL_HELP_GUIDE(false)
+    end
   end
 end)
