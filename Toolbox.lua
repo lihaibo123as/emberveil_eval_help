@@ -12,6 +12,13 @@ local TB_COL_GAP = 24    -- 两列之间的缝
 local TB_CHAT_EV_KEYS = {
   "SAY", "YELL", "PARTY", "RAID", "GUILD", "OFFICER", "CHANNEL", "WHISPER", "EMOTE", "TEXT_EMOTE",
 }
+-- ★★★1.73.20
+-- **名字槽（arg2）不吃富文本 —— 8 位色码也被原样画出来**（用户截图逐字放大定案：
+--   「[1. 综合] [|cfff58cbaIonol|r]: 1」；而同一屏里经 AddMessage 打印的 8 位码是**有色**的）。
+--   ⇒ 现在**绝不回写 arg2**：宁可不染色，也**不许在玩家聊天里显示颜色码原文**（那是可见的破坏，
+--      比不染色糟得多）。认得出来的名字照旧计数（诊断里能看到），只是「暂不回写」。
+--   ★等方案定了（吞掉客户端那行自己拼 / 试出可用的写法）再把这里打开。
+local TB_NAMECOLOR_WRITE = false
 -- ★**字符数**而不是字节数：UTF-8 里一个中文字是 3 字节 —— 用 string.len 判「单字名」
 --   会把「甲」当成 2 个字符放过去（本项目反复踩过的「string.len 是字节数」）。判据 = 数首字节。
 --   ★1.73.17 从「名字缓存」段**上移到文件顶部**：聊天取参（更早的代码）也要用它 ——
@@ -650,8 +657,14 @@ function EVAL_TB_CHATEVENT_INSTALL()
           --   ★表里存的本来就是 8 位（`fff58cba`），上一版却 sub(hex,3) 把 alpha 切掉了 → 正是这个 bug。
           local coloredSender = "|c" .. hex .. senderPlain .. "|r"
           if coloredSender ~= sender then -- ★相等 = 「已经是对的」→ 一个字都不动（幂等在这里，不在守卫里）
-            if type(arg2) == "string" and arg2 == sender then arg2 = coloredSender end -- 回写全局（真机就是全局形态）
-            TB.ceNamed = (TB.ceNamed or 0) + 1
+            TB.ceNamed = (TB.ceNamed or 0) + 1 -- 认得出来（诊断看这个）
+            -- ★★★1.73.20 名字槽不吃富文本（实测 8 位码也原样显示）→ **默认不回写**：
+            --   宁可不染色，绝不在玩家聊天里显示「|cfff58cbaIonol|r」这种原文（那是可见破坏）。
+            if TB_NAMECOLOR_WRITE then
+              if type(arg2) == "string" and arg2 == sender then arg2 = coloredSender end -- 回写全局（1.12 处理器从全局取值）
+            else
+              TB.ceNameHold = (TB.ceNameHold or 0) + 1
+            end
           end
         else
           TB.ceNameMiss = (TB.ceNameMiss or 0) + 1 -- 名字不在缓存里（如实记账，诊断里能看到）
@@ -757,13 +770,23 @@ function EVAL_TB_CHATEVENT_STATE()
            thisSeen = TB.thisSeen or 0, thisFiltered = TB.thisFiltered or 0, thisPainted = TB.thisPainted or 0,
            chat = TB.ceChat or {}, byEv = TB.ceByEv or {},
            shape = TB.ceShape or {}, noMsg = TB.ceNoMsg or 0,
-           named = TB.ceNamed or 0, nameMiss = TB.ceNameMiss or 0 }
+           named = TB.ceNamed or 0, nameMiss = TB.ceNameMiss or 0,
+           -- ★1.73.20 「认得出职业、但按当前结论**暂不回写**」的次数（名字槽不吃富文本）
+           held = TB.ceNameHold or 0 }
 end
 function EVAL_TEST_TB_CHATEVENT_RESET()
   TB.ceSeen, TB.ceFiltered, TB.cePainted, TB.ceRaw = 0, 0, 0, {}
   TB.ceChat, TB.ceByEv, TB.ceShape, TB.ceNoMsg, TB.ceShapeN = {}, {}, {}, 0, 0
-  TB.ceNamed, TB.ceNameMiss = 0, 0
+  TB.ceNamed, TB.ceNameMiss, TB.ceNameHold = 0, 0, 0
   TB.ceTryAt, TB.ceTries, TB.ceLogged = nil, 0, false
+end
+-- ★1.73.20 试验口：临时打开/关闭「回写 arg2」（**默认关** —— 名字槽不吃富文本，回写只会显示成原文）。
+--   有了它，「闸门关着 → arg2 一个字不改」与「闸门开着 → 真的会包成职业色」**两条都能被断言钉住**，
+--   否则那段回写逻辑就成了「没被任何断言覆盖」的死代码（本项目最忌讳的盲区）。
+function EVAL_TEST_TB_NAMECOLOR_WRITE(on)
+  local old = TB_NAMECOLOR_WRITE
+  TB_NAMECOLOR_WRITE = (on == true)
+  return old
 end
 TB.ceHooked = EVAL_TB_CHATEVENT_INSTALL() and true or false
 EVAL_LOGLINE("[聊天入口] ChatFrame_OnEvent 载入时挂载：" ..

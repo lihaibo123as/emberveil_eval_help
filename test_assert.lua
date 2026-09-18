@@ -9420,14 +9420,27 @@ do
   arg1 = "1" arg2 = "Ionol"
   ChatFrame_OnEvent("CHAT_MSG_SAY")
   local seen129 = TEST.ceSeen[table.getn(TEST.ceSeen)]
-  eq(seen129 ~= nil and seen129.arg2, colPal129 .. "Ionol|r",
-     "①★★★arg2（发送者）被包成职业色：" .. tostring(seen129 and seen129.arg2))
+  --  ★★★1.73.20 默认闸门**关**：名字槽实测不吃富文本（8 位码也原样显示）→ **一个字都不改**。
+  --    「宁可不染色，也绝不在玩家聊天里显示颜色码原文」——这是可见破坏，比不染色糟得多。
+  eq(seen129 ~= nil and seen129.arg2, "Ionol",
+     "①★★★默认**不回写**arg2（名字槽不吃富文本）：" .. tostring(seen129 and seen129.arg2))
   eq(seen129 ~= nil and seen129.arg1, "1", "①★正文一个字都不改（名字不在正文里）")
-  eq(EVAL_TB_CHATEVENT_STATE().named, 1, "①★名字上色计数 +1")
-  --  ★★★颜色码必须 **8 位 aarrggbb**：写 6 位（|cRRGGBB）本客户端**不解析**，名字会以**原文**显示
-  --    （用户截图：聊天里出现「[|cf58cbaIonol|r]说: 1」这种把颜色码当普通文字画出来的行）。
-  eq(string.len(string.match(tostring(seen129 and seen129.arg2 or ""), "^|c%x+") or ""), 10,
-     "①★★★arg2 的颜色码是 8 位 aarrggbb（6 位客户端不解析 → 屏幕上直接显示 |c 原文）")
+  local st129a = EVAL_TB_CHATEVENT_STATE()
+  eq(st129a.named, 1, "①★认得出职业的名字计数 +1（诊断看这个）")
+  eq(st129a.held, 1, "①★★并记「按当前结论**暂不回写**」计数 +1（不是静默）")
+  --  ①b 闸门**打开**时那条路必须真的能包色（否则回写逻辑成了没被覆盖的死代码）：
+  --     颜色码必须 **8 位 aarrggbb**（6 位客户端不解析）；断言就钉在**打开后**的实际串上。
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  TEST.ceCalls, TEST.ceSeen = 0, {}
+  EVAL_TEST_TB_NAMECOLOR_WRITE(true)
+  arg1 = "1" arg2 = "Ionol"
+  ChatFrame_OnEvent("CHAT_MSG_SAY")
+  local seen129w = TEST.ceSeen[table.getn(TEST.ceSeen)]
+  eq(seen129w ~= nil and seen129w.arg2, colPal129 .. "Ionol|r",
+     "①b★★★闸门打开 → arg2 真的被包成职业色：" .. tostring(seen129w and seen129w.arg2))
+  eq(string.len(string.match(tostring(seen129w and seen129w.arg2 or ""), "^|c%x+") or ""), 10,
+     "①b★★★颜色码是 8 位 aarrggbb（6 位客户端不解析 → 屏幕上直接显示 |c 原文）")
+  EVAL_TEST_TB_NAMECOLOR_WRITE(false)
   -- ② 名字不在缓存 → 原样（绝不涂默认灰）
   EVAL_TEST_TB_CHATEVENT_RESET()
   TEST.ceCalls, TEST.ceSeen = 0, {}
@@ -9456,9 +9469,11 @@ do
   arg1 = "1" arg2 = "|cff808080Ionol|r"
   ChatFrame_OnEvent("CHAT_MSG_SAY")
   local seen129d = TEST.ceSeen[table.getn(TEST.ceSeen)]
-  eq(seen129d ~= nil and seen129d.arg2, already129,
-     "③b★★★客户端自己上的灰被改成职业色：" .. tostring(seen129d and seen129d.arg2))
-  eq(tonumber(EVAL_TB_CHATEVENT_STATE().named or 0) >= 1, true, "③b★并记「名字上色」计数 +1")
+  eq(seen129d ~= nil and seen129d.arg2, "|cff808080Ionol|r",
+     "③b★★★闸门关着 → 客户端自己上的灰也不动（宁可不动，也不显示原文）：" .. tostring(seen129d and seen129d.arg2))
+  local st129d = EVAL_TB_CHATEVENT_STATE()
+  eq(tonumber(st129d.named or 0) >= 1, true, "③b★认得出来（named +1）")
+  eq(tonumber(st129d.held or 0) >= 1, true, "③b★并如实记「暂不回写」（held +1）")
   -- ④ 主动查询触发点 = 发送者名（正文里没有名字可找）
   EVAL_TB_WHO_RESET()
   EVAL_TEST_TB_CHATEVENT_RESET()
@@ -9472,7 +9487,8 @@ do
   TEST.chat = ""
   SlashCmdList["EVALHELP"]("go 聊天")
   local c129b = tostring(TEST.chat or "")
-  eq(string.find(c129b, "名字（arg2 = 发送者）上色", 1, true) ~= nil, true, "⑤★★诊断打印「名字上色 N 次 / 名字不在缓存 M 次」")
+  eq(string.find(c129b, "名字（arg2 = 发送者）认得出职业", 1, true) ~= nil, true, "⑤★★诊断打印「认得出职业 N 次 / 名字不在缓存 M 次」")
+  eq(string.find(c129b, "暂不回写 arg2", 1, true) ~= nil, true, "⑤★★并如实打印「暂不回写」的次数与原因（名字槽不吃富文本）")
   EVAL_TEST_TB_CHATEVENT_RESET()
   EVAL_TB_WHO_RESET()
   arg1, arg2 = nil, nil
