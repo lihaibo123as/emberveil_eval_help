@@ -318,7 +318,10 @@ function EVAL_HELP_UI_BUILD()
     --   悬停出三行操作说明；**右键点它 = 清除全部自定义绑定**（EVAL_BIND_CLEAR_ALL）。
     local plb = CreateFrame("Button", nil, root)
     plb:SetWidth(labelW) plb:SetHeight(btnH)
-    plb:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -(y + math.floor(3 * z)))
+    -- ★★★1.73.25 用户（截图在「方案」二字下划线）：「方案的位置调高一点」——
+    --   实测根因：方案按钮行在 `-y`，而「方案」标签被额外压了 3z px（y + 3z）→ 标签比按钮**低半行**。
+    --   正解 = 标签与第一行按钮**共中线**（同一 y），不再各算各的（改这一处不影响下方按钮与技能带）。
+    plb:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
     pcall(plb.EnableMouse, plb, true)
     pcall(plb.RegisterForClicks, plb, "LeftButtonUp", "RightButtonUp")
     local plabel = uiText(plb, math.max(8, math.floor(9 * z)), 0.95, 0.82, 0.35)
@@ -2157,9 +2160,45 @@ end
 -- 删除方案（至少保留一个；activeProfile 随删除左移/收敛）
 function EVAL_WAR_DEL_PROFILE(idx)
   local w2 = warCfg()
-  if table.getn(w2.profiles) <= 1 then say("至少保留一个方案") return false end
+  local n0 = table.getn(w2.profiles)
+  if n0 <= 1 then say("至少保留一个方案") return false end
   if not w2.profiles[idx] then return false end
-  say("已删除方案: " .. tostring(w2.profiles[idx].name))
+  local nm = tostring(w2.profiles[idx].name)
+  -- ★★★1.73.25 用户：「方案删除 要删除对应绑定的按键信息」。
+  --   绑定是按**方案序号**存的（w2.bindKeys[pidx] / w2.bindSlots[pidx]，单一真源见 EVAL_BIND_*）→
+  --   删掉第 idx 个方案时必须做三件事，缺一就会留下错位/幽灵按键：
+  --   ① 把 idx 那一格**解绑 + 清空**（EVAL_BIND_CLEAR，它自带 SaveBindings）；
+  --   ② 把 idx **之后**的绑定**整体左移一格**（★不左移 = 被删方案的键会「粘」到下一个方案身上）；
+  --   ③ 左移之后再 SaveBindings 落盘（前一步存的是中间状态，这里必须再存一次）。
+  local freed, moved = false, 0
+  if type(EVAL_BIND_CLEAR) == "function" then
+    local ok = pcall(EVAL_BIND_CLEAR, idx)
+    if ok and w2.bindKeys and w2.bindKeys[idx] == nil then freed = true end
+    -- ★EVAL_BIND_CLEAR 里的判据已经清过一遍；这里再确认一次「解绑真的生效」（不许只看返回值）
+    local stillKey = w2.bindKeys and w2.bindKeys[idx]
+    if stillKey == nil and w2.bindSlots and w2.bindSlots[idx] == nil then freed = true end
+  end
+  local function tbShiftBind(tbl)
+    if type(tbl) ~= "table" then return end
+    local nt = {}
+    for i = 1, n0 do
+      if i ~= idx and tbl[i] ~= nil then
+        local j = (i < idx) and i or (i - 1)
+        nt[j] = tbl[i]
+        moved = moved + 1
+      end
+    end
+    for k in pairs(tbl) do tbl[k] = nil end
+    for k, v in pairs(nt) do tbl[k] = v end
+  end
+  tbShiftBind(w2.bindKeys)
+  tbShiftBind(w2.bindSlots)
+  if moved > 0 and type(SaveBindings) == "function" then
+    pcall(SaveBindings, (type(GetCurrentBindingSet) == "function" and GetCurrentBindingSet()) or 1)
+  end
+  say("已删除方案: " .. nm ..
+      (freed and "（已解除它自己的快捷键绑定）" or "") ..
+      (moved > 0 and ("；后面 " .. tostring(moved) .. " 个方案的绑定已左移一格") or ""))
   table.remove(w2.profiles, idx)
   if (w2.activeProfile or 1) > table.getn(w2.profiles) then
     w2.activeProfile = table.getn(w2.profiles)

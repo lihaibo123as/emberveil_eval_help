@@ -2763,6 +2763,28 @@ do
   eq(table.getn(bad), 0, "★★★every template parses through the importer, broken=" .. table.getn(bad))
   eq(total >= 5, true, "★the library has all groups (" .. groups .. " groups / " .. total .. " templates)")
 
+  -- ★★★1.73.25 用户要求（截图三：他自己的猫德配置）：「加入猫德一键宏模版」——
+  --   逐条验内容（不只是「能解析」）：技能条数、以及**照抄截图的条件写法**（未免疫:… / 无debuff:… / 连击>=4）。
+  do
+    local druid60 = nil
+    for _, g in ipairs(EVAL_IO_TEMPLATES) do if g.cls == "德鲁伊" then druid60 = g break end end
+    eq(druid60 ~= nil, true, "★★★德鲁伊模版组存在")
+    local cnm60 = nil
+    for _, tpl in ipairs((druid60 and druid60.list) or {}) do
+      if tostring(tpl.name) == "猫德一键宏" then cnm60 = tpl end
+    end
+    eq(cnm60 ~= nil, true, "★★★「猫德一键宏」模版存在（用户点名要的那个）")
+    local pcn60 = cnm60 and EVAL_PROFILE_FROM_TEXT(cnm60.text or "")
+    eq(pcn60 ~= nil and table.getn(pcn60.skills) >= 6, true,
+       "★★它解析出 ≥6 条技能行（实际 " .. tostring(pcn60 and table.getn(pcn60.skills) or 0) .. " 条）")
+    local tx60 = tostring((cnm60 and cnm60.text) or "")
+    eq(string.find(tx60, "未免疫:撕扯", 1, true) ~= nil, true, "★★条件写法照抄截图：未免疫:撕扯")
+    eq(string.find(tx60, "连击>=4", 1, true) ~= nil, true, "★★含「连击>=4」收尾条件")
+    eq(string.find(tx60, "姿态:猎豹形态", 1, true) ~= nil, true, "★★含姿态守门行（重复变豹会取消形态）")
+    --  ★plain=true 找的是**字面字符**（写 "%%" 就永远找不到 —— 本项目已第三次踩这个坑，见 §5.1）
+    eq(string.find(tx60, "能量%>50", 1, true) ~= nil, true, "★★含猛虎之怒的能量门槛（原文写法 能量%>50）")
+  end
+
   -- ★猎人组（1.70.43 用户要求新增）：逐条验证内容，而不只是「能解析」
   local hunter = nil
   for _, g in ipairs(EVAL_IO_TEMPLATES) do if g.cls == "猎人" then hunter = g break end end
@@ -6798,6 +6820,19 @@ do
   EVAL_HELP_UI_TICK() -- ★方案行的**文本**由 tick 落上去（BUILD 只建空壳）
   local up = EVAL_TEST_UI_PROF()
   eq(type(up) == "table", true, "前置：拿到方案切换行的真实几何")
+  --  ★★★1.73.25 用户（截图在「方案」二字下划线）：「方案的位置调高一点」——
+  --    实测根因：方案按钮行在 `-y`，而「方案」标签被额外压了 3z px（看着比按钮**低半行**）→ 修成共中线。
+  --    判据读**真实控件**：标签中心 == 第一行第一个按钮中心（容差 2px；修之前差 3px，这条会响）。
+  do
+    local lb93 = up.labelBtn
+    local b93 = up.btns and up.btns[1]
+    local ok1, ly = pcall(lb93.GetTop, lb93)
+    local ok2, lh = pcall(lb93.GetHeight, lb93)
+    local lcy = (ok1 and type(ly) == "number" and ok2 and type(lh) == "number") and (ly - lh / 2) or nil
+    local bcy = (b93 and type(b93.y) == "number" and type(b93.h) == "number") and (b93.y - b93.h / 2) or nil
+    eq(lcy ~= nil and bcy ~= nil and math.abs(lcy - bcy) <= 2, true,
+       "★★★「方案」标签与第一行按钮**共中线**（标签 " .. tostring(lcy) .. " vs 按钮 " .. tostring(bcy) .. "）")
+  end
   eq(up.rows >= 2, true, "★6 个方案（含长名）要排成多行: " .. tostring(up.rows) .. " 行")
   eq(type(up.cap) == "number" and up.cap >= 0 and up.cap <= 32, true,
     "★★★每格的「拉伸上限」必须是个小数字（调大就会把按钮拉成空框）: cap=" .. tostring(up.cap))
@@ -8728,6 +8763,31 @@ do
     end
   end
   eq(bad120, "", "③★★★列不相交 + 控件都在本列内: " .. bad120)
+  --  ★★★1.73.25 用户：「自动购买/自动丢弃 这两个的 [添加][清空] 要和左侧名称**对齐**」——
+  --    判据 = 右键控件的**顶边**与同行名称的顶边一致（容差 1px）。
+  --    ★为什么比「顶边」而不是「中心」：标签是 FontString，**没有显式高度**（GetHeight 拿不到可靠值）
+  --      → 拿它算中心会得到 nil（本轮实测：判据一个控件都没量到，被下面的反向哨兵当场抓住）。
+  --      而生产的修法本身就是「两者用**同一个下偏常量**」= 顶边相同，所以顶边就是这条判据的本质。
+  --    ★修之前按钮顶边 = y、标签顶边 = y-3（差 3px），这条会当场响。
+  local badAli120, nAli120 = "", 0
+  for k = 1, table.getn(lay120.rows) do
+    local rr = lay120.rows[k]
+    if rr and rr.text and rr.text.shown and type(rr.text.y) == "number" then
+      for _, nm in ipairs({ "add", "clr", "chv" }) do
+        local rect = rr[nm]
+        if rect and rect.shown and type(rect.y) == "number" then
+          nAli120 = nAli120 + 1
+          if math.abs(rect.y - rr.text.y) > 1 then
+            badAli120 = badAli120 .. nm .. "@" .. tostring(rr.key) ..
+              "(差" .. tostring(math.floor(math.abs(rect.y - rr.text.y) + 0.5)) .. ") "
+          end
+        end
+      end
+    end
+  end
+  eq(badAli120, "", "③b★★★右侧按键与**左侧名称同顶边**（容差 1px）: " .. badAli120)
+  --  ★反向哨兵：这条判据必须**真的量到控件**（一个都没量到就是空跑——本项目「写了钩子没人调用等于没有」）
+  eq(nAli120 >= 2, true, "③b★对齐判据真的量到了行内按键（量到 " .. tostring(nAli120) .. " 个）")
   eq(cnt120, lay120.pageN, "③★★两列显示的条目数 = 本页条数（" .. tostring(cnt120) .. "）")
   eq(lay120.pageN, table.getn(EVAL_TEST_TB_ROWS()), "③★16 条全在一页（pageN=" .. tostring(lay120.pageN) .. "）")
   -- ④ 一页装得下 → 指示行与翻页按钮都隐藏（★这条钉住「每页 = 列数 × 行数」，退回单列会当场响）
@@ -9824,6 +9884,36 @@ do
   EVAL_TEST_TB_NAMEMENU_RESET()
   EVAL_HELP_CONFIG.tb = saved130
   print("  名字右键菜单：读回确认挂载 · 右键接管/左键放行 · 邀请三种路径 · 复制=已全选框 · /s 去抖 · 开关可关")
+end
+
+-- 131) ★★★1.73.25 用户：「方案删除 要删除对应绑定的按键信息」
+--   绑定按**方案序号**存（w2.bindKeys / w2.bindSlots，单一真源见 EVAL_BIND_*）→ 删掉中间那个方案时必须：
+--   ① 解绑它自己的键；② 它**后面**的绑定整体**左移一格**；③ SaveBindings 落盘。
+--   ★不左移的后果 = 被删方案的键「粘」到下一个方案身上（按那个键会激活错的方案）——所以逐条钉序号。
+do
+  local w2 = EVAL_HELP_CONFIG.war
+  local sp131, sk131, ss131, sa131 = w2.profiles, w2.bindKeys, w2.bindSlots, w2.activeProfile
+  w2.profiles = { { name = "甲", skills = {} }, { name = "乙", skills = {} }, { name = "丙", skills = {} }, { name = "丁", skills = {} } }
+  w2.activeProfile = 3
+  w2.bindKeys = { [1] = "A", [2] = "B", [3] = "C", [4] = "D" }
+  w2.bindSlots = { [1] = 11, [2] = 12, [3] = 13, [4] = 14 }
+  TEST.bindings, TEST.saveBindingsCalls, TEST.chat = {}, 0, ""
+  eq(EVAL_WAR_DEL_PROFILE(2), true, "①★删掉第 2 个方案")
+  eq(table.getn(w2.profiles), 3, "①★方案真的少了一个")
+  eq(tostring(w2.profiles[2].name), "丙", "①★后面的方案顶上来（序号语义要对得上）")
+  eq(w2.bindKeys[1], "A", "②★★第 1 个方案的绑定**不动**")
+  eq(w2.bindKeys[2], "C", "②★★★被删方案**后面**的绑定左移一格（不左移就会粘到错方案上）")
+  eq(w2.bindKeys[3], "D", "②★再后面那个也左移")
+  eq(w2.bindKeys[4], nil, "②★★末尾不留幽灵绑定")
+  eq(w2.bindSlots[2], 13, "②★格号映射同样左移（否则按键会派发到错方案）")
+  eq(w2.bindSlots[3], 14, "②★再往后也对得上")
+  eq(w2.bindSlots[4], nil, "②★格号不留幽灵")
+  eq(TEST.bindings["B"], nil, "③★★★被删方案自己的键**真的解绑了**（没有残留按键）")
+  eq((TEST.saveBindingsCalls or 0) >= 1, true, "④★改动后 SaveBindings 落盘（不存就随重登丢）")
+  eq(string.find(tostring(TEST.chat or ""), "已解除它自己的快捷键绑定", 1, true) ~= nil, true, "④★如实播报「已解除它自己的快捷键绑定」")
+  w2.profiles, w2.bindKeys, w2.bindSlots, w2.activeProfile = sp131, sk131, ss131, sa131
+  TEST.bindings = nil
+  print("  方案删除：解绑自己的键 · 后面的绑定左移一格 · 落盘 · 如实播报")
 end
 
 print("ALL TESTS PASS")

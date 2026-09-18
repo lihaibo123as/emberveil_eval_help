@@ -2868,8 +2868,11 @@ function EVAL_TB_BUILD(root, page, refreshes)
     --   两列下「自动宽度」会压过列缝，而列不相交必须是**可断言**的（见 EVAL_TB_TEST_LAYOUT）
     local TB_LABEL_W = math.floor(colW * 0.30)
     local TB_EXTRA_X = math.floor(colW * 0.32)
+    -- ★1.73.25 标签相对行顶的下偏量：**单一来源**（以前只写在标签锚点里，按钮另算 y → 两者差 3px）
+    if not TB_ROW_TXT_DY then TB_ROW_TXT_DY = 3 end
+    local TB_ROW_TXT_DY = TB_ROW_TXT_DY
     local text = tbText(root, 11, 0.92, 0.88, 0.80)
-    text:SetPoint("TOPLEFT", root, "TOPLEFT", cX + 22, y - 3)
+    text:SetPoint("TOPLEFT", root, "TOPLEFT", cX + 22, y - TB_ROW_TXT_DY)
     pcall(text.SetWidth, text, TB_LABEL_W)
     pcall(text.SetNonSpaceWrap, text, false)
     row.text = text
@@ -2894,6 +2897,21 @@ function EVAL_TB_BUILD(root, page, refreshes)
     row.add = tbBtn(root, cRight - 96, y, 44, L("TB_ADD"), function() end, widgets)
     row.clr = tbBtn(root, cRight - 48, y, 40, L("TB_CLEAR"), function() end, widgets)
     row.chv = tbBtn(root, cRight - 96, y, 88, "", function() end, widgets) -- 1.69.0 频道值按钮（ch 行）
+    -- ★★★1.73.25 用户（截图圈出「自动购买指定物 / 自动丢弃指定物」两行）：
+    --   「右侧的对应的按键 [要与] 左侧名称**对齐**」。
+    --   根因（读代码可证）：标签 FontString 锚在 `y - TB_ROW_TXT_DY`（往下 3px），而按钮锚在同行的 `y`
+    --   → 按钮比名称**高 3px**（右上那两对 [添加][清空] 最显眼）。
+    --   正解：按钮也按**同一个标签偏移**定位 —— 同一行的控制件共用一条基线，别再各算各的 y。
+    --   ★这里刻意用**绝对坐标 + 同一个常量**（不锚到标签控件上）：一是行池里的控件显隐不定，
+    --     锚到可能被 Hide 的控件会让读值口拿到不可靠几何；二是布局断言读的是绝对矩形。
+    local function tbRowBtnAlign(btn, absX)
+      if not btn then return end
+      pcall(btn.ClearAllPoints, btn)
+      pcall(btn.SetPoint, btn, "TOPLEFT", root, "TOPLEFT", absX, y - TB_ROW_TXT_DY)
+    end
+    tbRowBtnAlign(row.add.btn, cRight - 96)
+    tbRowBtnAlign(row.clr.btn, cRight - 48)
+    tbRowBtnAlign(row.chv.btn, cRight - 96)
     row.labelW, row.extraW = TB_LABEL_W, extraW
     TB.rows[i] = row
   end
@@ -3233,8 +3251,10 @@ function EVAL_TB_TEST_LAYOUT()
     local okx, x = pcall(o.GetLeft, o)
     local okw, w = pcall(o.GetWidth, o)
     local oky, y = pcall(o.GetTop, o)
+    local okh, h = pcall(o.GetHeight, o)
     local oks, sh = pcall(o.IsShown, o)
-    return { x = okx and x or nil, w = okw and w or nil, y = oky and y or nil,
+    -- ★1.73.25 补上高度：断言要能比「垂直中心」（用户要求「按键与左侧名称对齐」）
+    return { x = okx and x or nil, w = okw and w or nil, y = oky and y or nil, h = okh and h or nil,
              shown = (oks and sh) and true or false }
   end
   local out = { cols = TB.cols, colW = TB.colW, colGap = TB.colGap, colX = TB.colX,
