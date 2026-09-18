@@ -583,8 +583,46 @@ function checkIconAssets() {
       if (!/followOf\s*\(/.test(code)) bad.push(f + ":" + (i + 1) + " 缺 followOf");
     }
   }
-  if (sites.length < 7) {
-    console.log("STOP ATTACK WIRING CHECK: FAIL - expected >=7 wiring sites, found " + sites.length + " (" + sites.join(", ") + ")");
+  // ★1.72.4 「指定等级」让这类名单出现了第 8 个成员，而它同时暴露了**名单被抄了三份**：
+  //   引擎闸门 / 亮金白名单 / 缺技能问号白名单 各写了一遍（新增成员时只改一处，另两处静默不同步）。
+  //   已把那份名单抽成 Engine.lua 的 **skillNoSlotOk(skill, rank)** 单一来源 → 本检查随之升级为三段：
+  //   ① 判据本体必须列全 7 个特殊行为（名字清单不许漏）；
+  //   ② 判据必须真的被接线（引擎 + 两个 UI 站点 ≥ 3 处调用）——「定义了没人用」等于没定义；
+  //   ③ 老写法不许复活：仍按「一行里 cancelCastOf 与邻居同列 → 必须也有 stopAllOf/followOf」守住剩余站点。
+  const eng = fs.readFileSync(path.join(__dirname, "Engine.lua"), "utf8").split(/\r?\n/);
+  const defStart = eng.findIndex(l => /^function skillNoSlotOk\s*\(/.test(l));
+  if (defStart < 0) {
+    console.log("STOP ATTACK WIRING CHECK: FAIL - 找不到单一判据 skillNoSlotOk(skill, rank)（Engine.lua）");
+    process.exitCode = 1;
+    return;
+  }
+  let defEnd = defStart;
+  while (defEnd < eng.length && !/^end\s*$/.test(eng[defEnd])) defEnd++;
+  const defBody = eng.slice(defStart, defEnd + 1).join("\n");
+  const members = ["petCmdOf", "targetSelOf", "itemOf", "stanceOf", "cancelCastOf", "stopAllOf", "followOf"];
+  const missMem = members.filter(n => defBody.indexOf(n + "(") < 0);
+  if (missMem.length || defBody.indexOf("rank") < 0) {
+    console.log("STOP ATTACK WIRING CHECK: FAIL - skillNoSlotOk 名单不全（缺 " + missMem.join(",") + (defBody.indexOf("rank") < 0 ? ",rank" : "") + "）");
+    process.exitCode = 1;
+    return;
+  }
+  let callers = 0;
+  for (const f of files) {
+    const p = path.join(__dirname, f);
+    if (!fs.existsSync(p)) continue;
+    for (const line of fs.readFileSync(p, "utf8").split(/\r?\n/)) {
+      const code = line.split("--")[0];
+      // 引擎侧叫 skillNoSlotOk，UI 侧是同一函数的本地别名 noSlotOk（两者都算接线）
+      if (/(^|[^A-Za-z_])(skillNoSlotOk|noSlotOk)\s*\(/.test(code)) callers++;
+    }
+  }
+  if (callers < 3) {
+    console.log("STOP ATTACK WIRING CHECK: FAIL - 单一判据只被调用 " + callers + " 处（引擎闸门 + 亮金 + 缺技能问号 应为 3 处）");
+    process.exitCode = 1;
+    return;
+  }
+  if (sites.length < 5) {
+    console.log("STOP ATTACK WIRING CHECK: FAIL - expected >=5 remaining wiring sites, found " + sites.length + " (" + sites.join(", ") + ")");
     process.exitCode = 1;
     return;
   }
@@ -593,7 +631,7 @@ function checkIconAssets() {
     process.exitCode = 1;
     return;
   }
-  console.log("STOP ATTACK WIRING CHECK: stopAllOf + followOf wired alongside cancelCastOf at all " + sites.length + " sites");
+  console.log("STOP ATTACK WIRING CHECK: skillNoSlotOk 名单 7/7 + 被接线 " + callers + " 处 + 其余 " + sites.length + " 个站点逐行含 stopAllOf/followOf");
 })();
 
 // ===== README TABLE CHECK（1.72.0）：版本行必须落在「更新日志」表里，不能落进「模块」表 =====

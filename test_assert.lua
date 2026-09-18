@@ -13,7 +13,11 @@ eq(EVAL_PARSE_CONDS("tClass:WARRIOR")[1][1].cs.WARRIOR, true, "parse en token")
 local g3 = EVAL_PARSE_CONDS("目标职业:猎人、牧师")
 eq(g3[1][1].cs.HUNTER, true, "parse 顿号 HUNTER")
 eq(g3[1][1].cs.PRIEST, true, "parse 顿号 PRIEST")
-eq(EVAL_PARSE_CONDS("目标职业:圣骑士")[1], nil, "非法职业整条丢弃")
+-- ★1.72.4 审计：原样本用的是「圣骑士」——它当时确实是**未知职业**（CLASS_LIST 里根本没有圣骑士），
+--   于是这条断言其实一直在替那个数据缺口作证。1.72.4 已把圣骑士补进 CLASS_LIST（追加在末尾），
+--   所以「非法职业」的样本改成真正不存在的职业名（死亡骑士 = 本客户端没有的职业）。
+eq(EVAL_PARSE_CONDS("目标职业:死亡骑士")[1], nil, "非法职业整条丢弃")
+eq(EVAL_PARSE_CONDS("目标职业:圣骑士")[1][1].cs.PALADIN, true, "★★★1.72.4 审计补漏：圣骑士现在是已知职业（此前模版里的 [职业:圣骑士] 全被静默丢弃）")
 
 -- 2) 显示回环（CLASS_LIST 顺序：法师在战士前）；组间 | 不被职业串干扰
 eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("目标职业:战士/法师")), "目标职业:法师/战士", "str roundtrip")
@@ -7772,6 +7776,100 @@ do
   EVAL_SPELLBOOK_TEST_RESET()
   EVAL_DD_HIDE()
   print("  等级元素：默认隐藏（含文字）+ 右键真实接线 + 法术书等级 + 设了才显示 + 保存/重开往返")
+end
+
+-- 111) ★★★1.72.4 「指定等级」对**方案模版 / 导入导出**的影响审计（审计必须落成闸门，否则只是这一次的手工动作）
+--   ① 内置模版（examples/，11 组）解析后**一个等级都不许冒出来**，且导出→导入逐字往返
+--      —— 证明新语法没动到既有数据（「内置模版是导入导出的亲兄弟格式」）；
+--   ② 真法术名「火球术(等级 3)」照官方语法拆出等级；
+--   ③ 带前缀的特殊技能名（物品:/跟随:/选取目标:）里的括号属于**名字本身** → 一个字都不许拆
+--      （拆了 = 静默改义：技能名被改、行为被改，而两边都不报错）；
+--   ④ 分享通道走同一条文本 → 等级随分享传输，且「同名但等级不同」不会被误判成自己的回声；
+--   ⑤ 指定等级的技能**不在动作条**是正常的 → 战斗信息UI 不许标「?」，列表行要显示等级（没等级时不显示）。
+do
+  -- ① 内置模版：解析后**一个等级都没有** + 文本通道**幂等**（导出→导入→再导出，逐字相同）
+--   ★为什么不要求「模版文本 == 导出文本」逐字相同：手写模版里本就有几处**既有**的形态差异
+--     （与等级无关，本轮审计实测并留档）：职业名单按 CLASS_LIST 顺序重排、驱散类型写成
+--     (Magic)/(Disease)、「能量」与「怒气」同归一码（power）。这些是**导入导出通道的既有行为**，
+--     不是新语法带来的；幂等才是这条通道该保证的性质。
+  local badRank, badIdem, badCls, nTpl = "", "", "", 0
+  local function nows(s) return (string.gsub(tostring(s or ""), "%s+", "")) end
+  for gi, g in ipairs(EVAL_IO_TEMPLATES) do
+    for ti, t in ipairs(g.list or {}) do
+      nTpl = nTpl + 1
+      local prof = EVAL_PROFILE_FROM_TEXT(t.text or "")
+      local key = tostring(g.cls) .. "/" .. tostring(t.name)
+      for si, sk in ipairs((prof and prof.skills) or {}) do
+        if sk.rank ~= nil then badRank = badRank .. key .. "#" .. si .. "(" .. tostring(sk.rank) .. ") " end
+      end
+      local ex1 = EVAL_PROFILE_TO_TEXT(prof)
+      local ex2 = EVAL_PROFILE_TO_TEXT(EVAL_PROFILE_FROM_TEXT(ex1))
+      if nows(ex1) ~= nows(ex2) then badIdem = badIdem .. key .. " " end
+      -- ⑥ 职业过滤里的每个名字都必须是**已知职业**（否则解析侧静默丢名单——1.72.4 实测：
+      --    CLASS_LIST 里原本没有圣骑士，模版里的 [职业:圣骑士] 一直是死的）
+      for names in string.gmatch(tostring(t.text or ""), "%[职业:([^%]]*)%]") do
+        for one in string.gmatch(names .. "/", "([^/]+)/") do
+          local kn = false
+          for _, c in ipairs(EVAL_CLASS_LIST) do if c.name == one then kn = true end end
+          if not kn then badCls = badCls .. key .. "(" .. one .. ") " end
+        end
+      end
+    end
+  end
+  eq(nTpl >= 11, true, "①前置：内置模版都拿到了（" .. tostring(nTpl) .. " 个）")
+  eq(badRank, "", "①★★★内置模版解析后**一个等级都没有**（新语法没动到既有数据）: " .. badRank)
+  eq(badIdem, "", "①★★文本通道幂等（导出→导入→再导出逐字相同）: " .. badIdem)
+  eq(badCls, "", "⑥★★★模版职业过滤里的名字必须都是已知职业（否则那类成员被**静默丢弃**）: " .. badCls)
+  -- ② 真法术名 → 拆等级（官方语法）
+  local p2 = EVAL_PROFILE_FROM_TEXT("# 方案: r\n- 火球术(等级 3) | 非战斗")
+  eq(p2 and p2.skills[1].skill, "火球术", "②真法术名：括号被拆成等级（与官方 CastSpellByName 语法同形）")
+  eq(p2 and p2.skills[1].rank, "等级 3", "②★★等级逐字保留")
+  -- ③ 带前缀的特殊技能名：括号属于名字本身，不拆
+  local p3 = EVAL_PROFILE_FROM_TEXT("# 方案: p\n- 物品:治疗药水(大) | 非战斗\n- 跟随:某人(等级 2) | 非战斗\n- 选取目标:指定名称:阿三(等级 1) | 非战斗")
+  eq(p3 and p3.skills[1].skill, "物品:治疗药水(大)", "③★★★物品名里的括号属于名字本身（不许拆）")
+  eq(p3 and p3.skills[1].rank, nil, "③★★★而且一个字都不许变成等级（拆了 = 静默改义）")
+  eq(p3 and p3.skills[2].skill, "跟随:某人(等级 2)", "③★★跟随的目标名同理（玩家名可以带括号）")
+  eq(p3 and p3.skills[2].rank, nil, "③★★")
+  eq(p3 and p3.skills[3].skill, "选取目标:指定名称:阿三(等级 1)", "③★★选取目标的指定名同理")
+  local out3 = EVAL_PROFILE_TO_TEXT(p3)
+  eq(string.find(out3, "物品:治疗药水(大) |", 1, true) ~= nil, true, "③★★导出侧也不会给它补一个等级（往返逐字）")
+  -- ④ 分享：等级随文本传输；同名不同等级 ≠ 我的回声
+  local savedP11 = EVAL_HELP_CONFIG.war.profiles
+  local savedA11 = EVAL_HELP_CONFIG.war.activeProfile
+  EVAL_HELP_CONFIG.war.profiles = { { name = "等级回声", skills = { { skill = "火球术", rank = "等级 3", groups = EVAL_PARSE_CONDS("非战斗") } } } }
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  local mine = EVAL_PROFILE_TO_TEXT(EVAL_HELP_CONFIG.war.profiles[1])
+  eq(string.find(mine, "火球术(等级 3)", 1, true) ~= nil, true, "④★分享文本里带着等级（同一条文本通道）")
+  eq(EVAL_SHARE_IS_MINE(mine), true, "④同一份（含等级）→ 认得是自己的回声")
+  eq(EVAL_SHARE_IS_MINE("# 方案: 等级回声\n\n- 火球术 | 非战斗"), false, "④★★★等级不同 → **不是**我的（只比名字会把别人同技能方案误吞）")
+  -- ⑤ 不在动作条 = 合法：战斗信息UI 不许标「?」；列表行显示等级（没等级不显示）
+  local wasShown11 = EVAL_TEST_UI_SHOWN()
+  if not wasShown11 then EVAL_HELP_UI_TOGGLE() end
+  local cfgWas = EVAL_TEST_CFG_VISIBLE()
+  if not (EVAL_HELP_CFGWIN and EVAL_HELP_CFGWIN.warUI) then EVAL_HELP_CFG_TOGGLE() end
+  EVAL_HELP_CONFIG.war.profiles = { { name = "UI等级", enabled = true, skills = { { skill = "测试技能", rank = "等级 2", enabled = true, groups = EVAL_PARSE_CONDS("") } } } }
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  EVAL_WAR_TAB_REFRESH()
+  EVAL_HELP_UI_TICK()
+  local cells11 = EVAL_TEST_UI_CELLS()
+  eq(cells11[1] ~= nil, true, "⑤前置：战斗信息UI 的技能格拿到了")
+  eq(cells11[1] and cells11[1].text ~= "?", true, "⑤★★★指定等级的技能不在动作条 → **不许**标「?」（假告警）")
+  local rows11 = EVAL_TEST_WAR_ROWS()
+  eq(rows11.names[1], "测试技能(等级 2)", "⑤★★一键宏列表行显示等级（两条同名技能才分得清）")
+  TEST.chat = nil
+  SlashCmdList["EVALHELP"]("go list")
+  eq(string.find(tostring(TEST.chat), "测试技能(等级 2)", 1, true) ~= nil, true, "⑤★★/eh go list 也带等级（对方案核对的通道）")
+  EVAL_HELP_CONFIG.war.profiles = { { name = "UI等级", enabled = true, skills = { { skill = "测试技能", enabled = true, groups = EVAL_PARSE_CONDS("") } } } }
+  EVAL_WAR_TAB_REFRESH()
+  eq(EVAL_TEST_WAR_ROWS().names[1], "测试技能", "⑤★★反向：没有等级时行文案逐字不变（默认只显示技能）")
+  -- 收尾
+  TEST.chat = nil
+  EVAL_HELP_CONFIG.war.profiles = savedP11
+  EVAL_HELP_CONFIG.war.activeProfile = savedA11
+  EVAL_WAR_TAB_REFRESH()
+  if not cfgWas and EVAL_TEST_CFG_VISIBLE() then EVAL_HELP_CFG_TOGGLE() end
+  if not wasShown11 and EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end
+  print("  等级 × 导入导出审计：" .. tostring(nTpl) .. " 个内置模版 0 等级 0 往返差异 + 前缀名不拆 + 分享自称判据 + UI 不误报")
 end
 
 print("ALL TESTS PASS")

@@ -52,6 +52,7 @@ local colonNorm = EVAL_COLON_NORM -- ★1.71.3 全角冒号归一（导入文本
 local cancelCastOf = EVAL_CANCELCAST_OF -- 1.47.0 取消施法特殊行为
 local stopAllOf = EVAL_STOPALL_OF -- 1.71.3 停止攻击特殊行为
 local followOf = EVAL_FOLLOW_OF -- ★1.71.3 跟随特殊行为（同样不占动作条：亮金/分类/候选列表都要按它处理）
+local noSlotOk = EVAL_NO_SLOT_OK -- ★1.72.4 「不占动作条也合法」的单一判据（含指定等级）——UI 侧不许再各写一份名单
 local tselTeam = EVAL_TSEL_TEAMSEL -- ★1.71.3 条件类型下拉要按「这一行是不是成员选取器」过滤
 -- ★★★1.71.3 状态标记（全插件共用的**单一来源**）：白感叹号 = 不可用、黄感叹号 = 待测试。
 --   用户要求：「右边换成**插件图标内的白色感叹号**」＋「启用此技能 右侧添加几个图标 寓意 tooltip：
@@ -482,7 +483,7 @@ function EVAL_HELP_UI_BUILD()
         local r = uiWarActiveRule(ci)
         if not r then return end
         GameTooltip:SetOwner(cb, "ANCHOR_RIGHT")
-        GameTooltip:AddLine(tostring(r.skill), 1, 0.82, 0.3)
+        GameTooltip:AddLine(tostring(r.skill) .. (r.rank and ("(" .. tostring(r.rank) .. ")") or ""), 1, 0.82, 0.3) -- ★1.72.4 等级一并显示
         GameTooltip:AddLine((r.enabled ~= false) and ("|cff00ff00" .. L("TIP_ON") .. "|r") or ("|cffff0000" .. L("TIP_OFF") .. "|r"))
         GameTooltip:AddLine(L("TIP_COND_H"), 0.62, 0.55, 0.40)
         local gcount = 0
@@ -701,14 +702,14 @@ function EVAL_HELP_UI_TICK()
         elseif t0 then pcall(pc.icon.SetTexture, pc.icon, t0) end
         local enabled = r.enabled ~= false
         local pass = false
-        if enabled and (s or petCmdOf(r.skill) or targetSelOf(r.skill) or itemOf(r.skill) or stanceOf(r.skill) or cancelCastOf(r.skill) or stopAllOf(r.skill) or followOf(r.skill)) and r.groups then -- 宠物/选取目标/物品/姿态/取消施法/停止攻击/跟随 不占动作条也参与亮金（1.30.0~1.71.3）
+        if enabled and (s or noSlotOk(r.skill, r.rank)) and r.groups then -- ★1.72.4 单一判据：宠物/选取目标/物品/姿态/取消施法/停止攻击/跟随/**指定等级** 都不占动作条，也都要参与亮金
           local okp = groupsOK(r, true) -- dry: 亮金预览不触发选取目标等副作用
           pass = okp and true or false
         end
         if not enabled then
           pcall(pc.icon.SetVertexColor, pc.icon, 0.25, 0.25, 0.25)
           pc.text:SetText("停")
-        elseif not s and not petCmdOf(r.skill) and not targetSelOf(r.skill) and not itemOf(r.skill) and not stanceOf(r.skill) and not cancelCastOf(r.skill) and not stopAllOf(r.skill) and not followOf(r.skill) then -- 特殊技能不占动作条不算缺失（1.30.0~1.71.3）
+        elseif not s and not noSlotOk(r.skill, r.rank) then -- ★1.72.4 单一判据：这些不占动作条不算缺失（★指定等级的技能不在动作条是正常的，不许标「?」）
           pcall(pc.icon.SetVertexColor, pc.icon, 0.35, 0.35, 0.35)
           pc.text:SetText("?")
         else
@@ -2250,7 +2251,7 @@ function EVAL_WAR_TAB_REFRESH()
       else
         uiSolid(row.icon, 0.25, 0.25, 0.25, 1)
       end
-      row.name:SetText(tostring(r.skill))
+      row.name:SetText(tostring(r.skill) .. (r.rank and ("(" .. tostring(r.rank) .. ")") or "")) -- ★1.72.4 有等级才显示（默认仍是纯技能名）
       row.conds:SetText(uiEsc(EVAL_GROUP_STR(r.groups))) -- 1.61.1 | 显示转义
     end
   end
@@ -3189,7 +3190,7 @@ function EVAL_HELP_ST_TICK()
       if not e then break end
       local ago = now - (e.t or now)
       table.insert(lines, string.format("|cff909090%.0fs前|r |cffffd050%s|r%s%s",
-        ago, tostring(e.skill),
+        ago, tostring(e.skill) .. (e.rank and ("(" .. tostring(e.rank) .. ")") or ""), -- ★1.72.4 等级一并显示
         (e.target and e.target ~= "") and ("→" .. e.target) or "",
         (e.why and e.why ~= "") and (" |cff909090← " .. tostring(e.why) .. "|r") or ""))
       if e.trace and e.trace ~= "" then
@@ -5600,6 +5601,20 @@ function EVAL_TEST_CFG_LOG_ROWS()
   return cw and cw.logRows or nil
 end
 
+-- ★1.72.4 断言入口：一键宏设置页的**技能行**（读真实控件文案，验「有等级才显示等级」）
+function EVAL_TEST_WAR_ROWS()
+  local cw = EVAL_HELP_CFGWIN
+  local wu = cw and cw.warUI
+  local out = { n = 0, names = {} }
+  if not (wu and wu.rows) then return out end
+  for i, row in ipairs(wu.rows) do
+    local ok, t = pcall(row.name.GetText, row.name)
+    out.n = i
+    out.names[i] = (ok and tostring(t or "")) or ""
+  end
+  return out
+end
+
 function EVAL_TEST_CFG_LAYOUT()
   local cw = EVAL_HELP_CFGWIN
   return cw and cw.layout or nil
@@ -5665,6 +5680,12 @@ end
 --   # 方案: 武器战
 --   - 压制 | 怒气>5 & 可用 & 就绪
 --   - !猛击 | Alt & 怒气>20        （技能名前 ! = 该技能停用）
+--   - 火球术(等级 3) | 非战斗      （★1.72.4 技能名后的括号 = **施法等级**，与官方 CastSpellByName 语法同形；
+--                                  括号内必须与**法术书 subtext 逐字相符** → 它是**每语言**的文本
+--                                  （等级 3 / Rank 3 / Ранг 3），**跨语言客户端不通用**：
+--                                  对方法术书里没有该串时引擎**如实失败**，绝不退化成「无等级乱放」）
+-- ★等级只对**真法术名**成立：带前缀的特殊技能名（物品:/宠物:/姿态:/跟随:/选取目标:）里的括号
+--   属于名字本身，导入时**不拆**（守卫见 EVAL_PROFILE_FROM_TEXT）。
 -- 解析容忍 markdown 杂物：# 开头 = 方案名，> 或 < 开头/超长行忽略，无 | 的行忽略。
 
 local ioUI = { root = nil, eb = nil }
@@ -5758,7 +5779,12 @@ function EVAL_PROFILE_FROM_TEXT(text)
         -- 带前缀技能名更长：选取目标:指定名称:嗜血者=39B、物品:弱效巨魔之血药水=36B，旧 24B 上限会把它们静默丢行
         -- ★1.72.4 「技能名(等级 3)」→ 拆出等级（与官方 CastSpellByName 语法同形；括号内必须与 subtext 逐字相符）
         local rank2 = nil
-        do
+        -- ★★★1.72.4 守卫：**带前缀的特殊技能名**（物品:/宠物:/姿态:/跟随:/选取目标:/取消施法/停止攻击）
+        --   走的是各自的分派，**永远不是法术**；它们名字里的括号属于名字本身
+        --   （如「物品:治疗药水(大)」「跟随:某人(等级 2)」）——拆开 = **静默改义**（技能名被改、行为被改，
+        --   而导入侧与使用侧都不报错）。★只有真法术名才可能带官方等级括号，才允许拆。
+        --   ★判据：本守卫 + 断言组 111（前缀名带括号 → 逐字保留；真法术名 → 照拆）。
+        if not (itemOf(sn) or petCmdOf(sn) or stanceOf(sn) or followOf(sn) or targetSelOf(sn) or cancelCastOf(sn) or stopAllOf(sn)) then
           local base2, rk2 = string.match(sn, "^(.-)%s*%(([^()]+)%)$")
           if base2 and base2 ~= "" and rk2 and rk2 ~= "" then sn, rank2 = condTrim(base2), condTrim(rk2) end
         end
@@ -6098,6 +6124,18 @@ function EVAL_TEST_UI_PROF()
       textW = num(pb.text.GetWidth, pb.text), -- 文字格自身的宽（限宽后应 ≤ 按钮宽）
       need = ui.profNeed and ui.profNeed[i] or nil,
     }
+  end
+  return out
+end
+
+-- ★★1.72.4 断言入口：战斗信息UI「方案技能带」每格的**真实文字**（读控件，不读常量）。
+--   判据：不在动作条但**合法**的技能（指定等级 / 特殊技能）不许被标成 "?"（假告警）。
+function EVAL_TEST_UI_CELLS()
+  local out = {}
+  if not (ui and ui.profCells) then return out end
+  for i, pc in ipairs(ui.profCells) do
+    local ok, t = pcall(pc.text.GetText, pc.text)
+    out[i] = { text = (ok and tostring(t or "")) or "", shown = true }
   end
   return out
 end
@@ -6698,7 +6736,7 @@ if type(SlashCmdList) == "table" then
       say("— 方案[" .. tostring(p and p.name) .. "] —")
       if p then
         for i, r in ipairs(p.skills) do
-          say(string.format("%d. %s %s | %s", i, tostring(r.skill),
+          say(string.format("%d. %s %s | %s", i, tostring(r.skill) .. (r.rank and ("(" .. tostring(r.rank) .. ")") or ""), -- ★1.72.4 等级一并显示（对方案核对的唯一通道）
             (r.enabled ~= false) and "|cff00ff00开|r" or "|cffff0000关|r", uiEsc(EVAL_GROUP_STR(r.groups))))
         end
       end

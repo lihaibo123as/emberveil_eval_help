@@ -751,6 +751,17 @@ local function followOf(skill)
   return nil
 end
 
+-- ★★★1.72.4 「不占动作条也合法」的**单一判据**（引擎闸门 + 战斗信息UI 的亮金/缺失判定共用一份）。
+--   为什么必须抽成一份：原来这段 7 个 or 的名单在**三个地方各写了一遍**（引擎跳过判据、
+--   战斗信息UI 亮金白名单、战斗信息UI「缺技能?」白名单）→ 新增一类「不需要动作条」的技能时
+--   只改一处，另外两处就静默不同步（表现：技能其实能放，图标却是灰的 + 标着「?」= 假告警）。
+--   ★rank（指定等级）走 RunScript 直接施法，**本来就不需要动作条** → 必须算进来。
+function skillNoSlotOk(skill, rank)
+  if rank then return true end
+  return (petCmdOf(skill) or targetSelOf(skill) or itemOf(skill) or stanceOf(skill)
+          or cancelCastOf(skill) or stopAllOf(skill) or followOf(skill)) and true or false
+end
+
 -- ===== 「停读条」通道（1.71.3：**保留原始 SpellStopCasting 方式**；移动脉冲实测无效、已删）=====
 -- ★核查过程（本机 api_*.html 全表 1370 条逐类翻过）：
 --   · 停读条接口**只有 `SpellStopCasting` 一个**（`SpellStopTargeting` 只收待选目标的光标），
@@ -1537,6 +1548,11 @@ local CLASS_LIST = {
   { id = "ROGUE",   name = "盗贼" },
   { id = "WARRIOR", name = "战士" },
   { id = "DRUID",   name = "德鲁伊" },
+  -- ★1.72.4 审计补漏：**原本整张表里没有圣骑士** → 任何 [职业:圣骑士] 的职业过滤都被
+  --   解析侧静默丢弃（名单少一个人 = 那个人永远不被选中；不报错、只是永远不生效）。
+  --   ★必须**追加在末尾**：CLASS_ID 索引/职业下拉的行号都是按本表下标一一对应的，
+  --     插在中间会让已有的行号错位。判据 = 断言组 111 ⑥（模版里的职业名必须都在本表里）。
+  { id = "PALADIN", name = "圣骑士" },
 }
 local CLASS_NAME_BY_ID, CLASS_ID = {}, {} -- CLASS_ID 同时收中文名/英文 token（导入文本两种都认）
 for _, c in ipairs(CLASS_LIST) do
@@ -2112,7 +2128,7 @@ function EVAL_RULE_RUN(rules)
   for _, r in ipairs(rules) do
     if r.enabled == false then
       -- 技能配置开关关掉的：静默跳过
-    elseif not (r.rank or wslots[r.skill]) and not petCmdOf(r.skill) and not targetSelOf(r.skill) and not itemOf(r.skill) and not stanceOf(r.skill) and not cancelCastOf(r.skill) and not stopAllOf(r.skill) and not followOf(r.skill) then
+    elseif not wslots[r.skill] and not skillNoSlotOk(r.skill, r.rank) then -- ★1.72.4 单一判据（rank = 指定等级，走 RunScript 不需要动作条）
       wlog(r.skill .. "跳过: 不在动作条")
     elseif wImmuneTo(r.skill) then
       wlog(r.skill .. "跳过: 目标已免疫（学习记录 " .. tostring(st.targetName) .. "）")
@@ -2142,6 +2158,7 @@ function EVAL_RULE_RUN(rules)
           table.insert(st.castLog, 1, {
             t = GetTime(),
             skill = r.skill,
+            rank = r.rank, -- ★1.72.4 释放日志也记等级（否则两条只差等级的规则在「最近释放」里长得一模一样）
             why = r.why or r.skill,
             trace = trace or "",
             target = (st.hasTarget and st.targetName) and tostring(st.targetName) or "",
@@ -2989,6 +3006,7 @@ EVAL_STANCE_OF = stanceOf
 EVAL_CANCELCAST_OF = cancelCastOf
 EVAL_STOPALL_OF = stopAllOf -- 1.71.3 停止攻击特殊行为（UI 层判定「不占动作条」用）
 EVAL_FOLLOW_OF = followOf -- ★1.71.3 跟随特殊行为（UI 层同样按「不占动作条」处理）
+EVAL_NO_SLOT_OK = skillNoSlotOk -- ★1.72.4 「不占动作条也合法」的单一判据（引擎与战斗信息UI 共用，不许再各写一份名单）
 EVAL_FOLLOW_ICON = ACT_FOLLOW_ICON -- ★1.71.3 跟随的图标（图标库「本插件在用」要列它；单一来源，不另抄路径）
 -- 1.71.3 移动脉冲已删（实测无效）→ 对应的两个测试观测口一并删除（不留死状态）
 EVAL_TARGET_SEL = TARGET_SEL
