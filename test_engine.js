@@ -567,6 +567,17 @@ function checkIconAssets() {
     bad.push('挂 ChatFrame_OnEvent 后**没有读回确认**（真机吃过「写成功但不生效」的亏）');
   if (tb.indexOf('if cur == TB.ceWrapper then return true end') < 0)
     bad.push('第二入口没有幂等守卫（会重复包装、同一条消息被处理两次）');
+  // ⑦ ChatMOD 的做法（参考插件实证）：在事件里对 this 帧懒挂载，且**读回确认**（写不进就记 thisStuck）
+  if (tb.indexOf('function EVAL_TB_THIS_HOOK(f)') < 0) bad.push('没有 this 帧懒挂载（ChatMOD 的做法）');
+  if (tb.indexOf('back == wrapper') < 0) bad.push('this 帧懒挂载没有读回确认');
+  if (tb.indexOf('TB.thisStuck') < 0) bad.push('this 帧懒挂载不记账「写不进去」（真机就分不出成败）');
+  // ⑧ 官方「消息组」屏蔽（与走不走 Lua 无关的那条路）：必须有应用 + 撤销 + 探测
+  for (const fn of ['EVAL_TB_CHAN_OFFICIAL_APPLY', 'EVAL_TB_CHAN_OFFICIAL_SYNC', 'EVAL_TB_CHAN_GROUPS']) {
+    if (tb.indexOf('function ' + fn) < 0) bad.push('缺少官方消息组接口：' + fn);
+  }
+  if (tb.indexOf('RemoveChatWindowMessages') < 0 || tb.indexOf('AddChatWindowMessages') < 0)
+    bad.push('官方消息组屏蔽缺少 摘掉/加回 两侧（撤不回去就是残状态）');
+  if (eh.indexOf('官方消息组') < 0) bad.push('诊断里没有官方消息组的状态（看不出这条路生没生效）');
   if (bad.length) { console.log('CHAT COLOR WIRING CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
   console.log('CHAT COLOR WIRING CHECK: 挂在聊天入口内 + 白拿缓存 + SendWho 只在限频滴出（四道闸门齐）+ 限频采集 + 诊断入口');
 })();

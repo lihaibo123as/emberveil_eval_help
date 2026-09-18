@@ -282,6 +282,18 @@ Remove-Item $staging -Recurse -Force
   ★判据 = 组 123 + 源码检查 `CHAT COLOR WIRING CHECK` 的「读回确认 + 幂等守卫」两条；变异 M137~M141/M142b 全捕获。
   ★★**诊断必须逐个入口分开计数**（AddMessage 那层 / ChatFrame_OnEvent 那层各自的 调用 / 吞掉 / 染色 + 收到的原文），
   否则「哪层在干活、哪层是死的」永远分不清（本轮正是靠 0/8 一眼定案）。
+  ★★★**深入 API + 参考插件后的两条新路**（用户要求「解决不了就深入分析 API lua 和参考插件是否实现」）：
+  ① **官方消息组**（api 全表 1369 条逐条核过，类别 ChatWindow）：`GetChatWindowMessages / RemoveChatWindowMessages /
+     AddChatWindowMessages` —— 这是客户端官方给的「**某类消息不显示**」开关，**与「客户端走不走 Lua」完全无关**，
+     是「屏蔽频道进出通知」最稳的实现。★组名清单 api 索引里**没有** → 现场从 GetChatWindowMessages 里探测
+     「组名含 NOTICE」那一组（**不许猜组名**：猜错就是把别的消息一起屏蔽），摘掉前记下组名与原始组串，
+     关掉开关时**按单个组名加回**（`AddChatWindowMessages` 收的是组名，塞整串会让集合重复 → 变异 M144 实测抓到）。
+  ② **ChatMOD 的做法**（同代参考插件实证 `tmp/ChatMOD.lua:514-517`）：它在 **ChatFrame_OnEvent 处理体里**懒挂载——
+     `this.AddMessage = S_AddMessage`，挂的是**事件里的 this 那个对象**，不是 `_G["ChatFrame1"]`。
+     ★我们照做并**每帧只试一次 + 读回确认 + 成败都记账**（`thisOk` / `thisStuck`）。
+  ★★**测试要能复现真机那种「写不进去」的对象**：用 `setmetatable({}, {__index=store, __newindex=function() end})` 造
+     「写被吞、读回来还是原来的」帧（组 124 ⑧）—— 否则「如实记 thisStuck」这条判据在桩里**永远验不到**（M148 先存活后捕获）。
+  变异 M143~M148 全捕获（不匹配组名 / 撤销塞整串 / 不做读回确认 / this 层不吞 / 同步不看开关 / 不记账）。
 
 ### 5.3 测试与断言
 - ★★★1.72.4 **桩的「默认值」也是桩的一部分**：真客户端 `CreateFrame` 出来的帧**默认就是显示的**，而桩里写的是 `local shown = false` → 于是「没调 Hide 也断言 `IsShown()==false`」这类断言**恒真通过**：它不仅不检查，还**把「入口被藏起来」的真回归掩盖成绿灯**（1.72.4 实测：把「默认隐藏」写进代码后，去掉那两行 Hide 的变异竟然 SURVIVED；用户装上当场报「等级配置没显示」）。★判据：状态型桩错的往往不是「没状态」，而是**默认值反了**——桩建好后要**逐个默认值**与客户端对齐。连带 3 处测试的**隐式前置**（靠旧默认值碰巧成立）必须改成**显式建立**（`pcall(root.Show, root)` 并断言前置；重排走生产路径 `EVAL_WAR_TAB_REFRESH()`，不许靠 toggle 的副作用）。判据 = 组 110①⑧⑨ + 组 64/93 的显式前置；变异 M30（改回隐藏）/M32（桩退回假默认）都当场捕获。

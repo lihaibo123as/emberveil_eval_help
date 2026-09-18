@@ -9147,4 +9147,80 @@ do
   print("  第二入口：ChatFrame_OnEvent 挂载后读回确认 + 幂等 + 被顶掉能重挂（不重复包装）· 通知真的吞掉 · 回写全局 arg1 让原函数读到着色文本")
 end
 
+-- 124) ★★★1.73.12 深入 API 后的两条新路（用户：「如果解决不了再深入分析 API lua 和参考插件是否实现」）
+--   ① **官方消息组**（api 全表逐条核过，类别 ChatWindow）：GetChatWindowMessages / RemoveChatWindowMessages /
+--      AddChatWindowMessages —— 这是客户端官方给的「某类消息不显示」的开关，**与「走不走 Lua」无关**；
+--   ② **ChatMOD 的做法**（参考插件实证 tmp/ChatMOD.lua:514-517）：在 ChatFrame_OnEvent 处理体里对
+--      **this 那个帧**懒挂载 AddMessage（我们先前挂 _G 那层真机写不进去）。
+--   判据：① 探测到含 NOTICE 的组（**不误伤 CHANNEL 组**）+ 摘掉 + 其它组一个不动 + 幂等 + 按组还原 + 跟随开关；
+--         ② this 帧挂上后：通知**被吞**、名字**被着色**、每帧只试一次、成败都记账。
+do
+  local savedTb124 = EVAL_HELP_CONFIG.tb
+  EVAL_HELP_CONFIG.tb = {}
+  TEST.cwMsg = { [1] = "SAY,YELL,CHANNEL,CHANNEL_NOTICE,GUILD" }
+  local function setOf(s)
+    local out, n = {}, 0
+    for part in string.gmatch(tostring(s or ""), "[^,]+") do n = n + 1 out[part] = true end
+    return out, n
+  end
+  -- ① 探测
+  local list124 = EVAL_TB_CHAN_GROUPS(1)
+  eq(type(list124) == "table", true, "①★★读得到消息组清单（官方 API：GetChatWindowMessages）")
+  local st124 = EVAL_TB_CHAN_OFFICIAL_STATE()
+  eq(st124.apiRemove and st124.apiAdd, true, "①★摘掉/加回两个 API 都在")
+  -- ② 应用：摘掉通知组，CHANNEL 组与其它组一个不动
+  local found124, act124 = EVAL_TB_CHAN_OFFICIAL_APPLY(true)
+  eq(found124 >= 1 and act124 >= 1, true, "②★★找到并摘掉通知组（找到 " .. tostring(found124) .. " / 动作 " .. tostring(act124) .. "）")
+  local set124 = setOf(TEST.cwMsg[1])
+  eq(set124.CHANNEL_NOTICE, nil, "②★★通知组 CHANNEL_NOTICE 已摘掉")
+  eq(set124.CHANNEL, true, "②★★★反向：普通频道那组 CHANNEL **还在**（绝不误伤频道聊天）")
+  eq(set124.SAY and set124.YELL and set124.GUILD, true, "②★其它组一个不动")
+  -- ③ 幂等：再应用一次什么都不做（摘掉后就探测不到了）
+  eq(EVAL_TB_CHAN_OFFICIAL_APPLY(true), 0, "③★★幂等：已摘掉 → 第二次找不到组、不做动作（不会把原始组串记错）")
+  -- ④ 撤销：按**单个组名**加回，集合完整还原
+  EVAL_TB_CHAN_OFFICIAL_APPLY(false)
+  local set124b, n124b = setOf(TEST.cwMsg[1])
+  eq(n124b, 5, "④★★★还原后组数回到 5 个（实际 " .. tostring(n124b) .. "）")
+  eq(set124b.CHANNEL_NOTICE and set124b.CHANNEL and set124b.SAY and set124b.YELL and set124b.GUILD, true,
+     "④★★五个组一个不少（撤不干净就是给用户留残状态）")
+  -- ⑤ 跟随开关（勾/取消勾立刻生效）
+  EVAL_HELP_CONFIG.tb.chanJoin = true
+  EVAL_TB_CHAN_OFFICIAL_SYNC()
+  eq(setOf(TEST.cwMsg[1]).CHANNEL_NOTICE, nil, "⑤★开关=开 → 同步后通知组被摘掉")
+  EVAL_HELP_CONFIG.tb.chanJoin = false
+  EVAL_TB_CHAN_OFFICIAL_SYNC()
+  eq(setOf(TEST.cwMsg[1]).CHANNEL_NOTICE, true, "⑤★开关=关 → 同步后加回来")
+  -- ⑥ ChatMOD 的做法：在事件处理里对 this 帧懒挂载
+  TEST.ceSeen, TEST.ceCalls = {}, 0
+  local rec124 = {}
+  local fakeFrame124 = { AddMessage = function(self, text) table.insert(rec124, tostring(text)) end }
+  eq(EVAL_TB_THIS_HOOK(fakeFrame124), true, "⑥★★在 this 帧上懒挂载成功（ChatMOD 的做法；读回确认过）")
+  eq(EVAL_TB_CHATEVENT_STATE().thisOk >= 1, true, "⑥★记账：挂上 " .. tostring(EVAL_TB_CHATEVENT_STATE().thisOk) .. " 个")
+  eq(EVAL_TB_THIS_HOOK(fakeFrame124), true, "⑥★同一个帧只试一次（幂等）")
+  EVAL_HELP_CONFIG.tb = { chanJoin = true, chatColor = true }
+  EVAL_TB_NAMECLASS_PUT("守夜人", "萨满")
+  fakeFrame124:AddMessage("[4. 世界防务] 离开频道。")
+  eq(table.getn(rec124), 0, "⑥★★★经 this 帧打的**频道通知被吞掉**（参考插件那条路真的能吞）")
+  fakeFrame124:AddMessage("[守夜人]: 你好")
+  eq(table.getn(rec124), 1, "⑥★普通聊天照旧打印一次")
+  eq(string.find(rec124[1] or "", "|c0070de", 1, true) ~= nil, true, "⑥★★而且打印出来的是**着色后**的文本")
+  eq(EVAL_TB_CHATEVENT_STATE().thisPainted >= 1, true, "⑥★染色记账 +1")
+  -- ⑧ ★★★**真机那种「写进去不生效」的对象**：写被吞（__newindex 忽略）→ 读回来还是原来的
+  --   ★这条就是在测试里复现真机现象（frame.AddMessage 写成功但不生效），把「如实记账」钉住
+  local store124 = { AddMessage = function() end }
+  local mt124 = { __index = function(_, k) return store124[k] end, __newindex = function() end }
+  local stuck124 = setmetatable({}, mt124)
+  local stuckBefore = EVAL_TB_CHATEVENT_STATE().thisStuck
+  eq(EVAL_TB_THIS_HOOK(stuck124), false, "⑧★★★写不进的对象：懒挂载**如实返回 false**（不假称挂上了）")
+  eq(EVAL_TB_CHATEVENT_STATE().thisStuck, stuckBefore + 1, "⑧★★★并且记一笔「写不进去」（真机诊断靠它分出成败）")
+  -- ⑦ 诊断里两条新路都看得见
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 聊天")
+  local c124 = tostring(TEST.chat or "")
+  eq(string.find(c124, "官方消息组", 1, true) ~= nil, true, "⑦★★诊断打印官方消息组状态（现有组 / 已摘掉窗口数）")
+  eq(string.find(c124, "this 帧懒挂载", 1, true) ~= nil, true, "⑦★★诊断打印 this 帧懒挂载的战果（成功几个 / 写不进几个）")
+  EVAL_HELP_CONFIG.tb = savedTb124
+  print("  深入 API/参考插件：官方消息组（与走不走 Lua 无关）探测+摘掉+按组还原+跟随开关 · this 帧懒挂载（ChatMOD 做法）能吞能染色")
+end
+
 print("ALL TESTS PASS")

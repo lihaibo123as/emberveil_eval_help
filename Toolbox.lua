@@ -301,6 +301,92 @@ function EVAL_TEST_TB_CHAN_RESET() -- 测试用：清计数并允许重新挂载
   TB.chatSeen, TB.chatPainted, TB.chatRaw, TB.chatLast = 0, 0, {}, nil
 end
 
+-- ===== 频道进出通知：走**官方消息组**接口（1.73.12 深入 API 后的发现）=====
+-- ★API 事实（本机 api 全表 1369 条逐条核过，类别 = ChatWindow）：
+--   GetChatWindowMessages(窗口)（读该窗口**开了哪些消息组**）、RemoveChatWindowMessages(窗口, 组)（摘掉一组）、
+--   AddChatWindowMessages(窗口, 组)（加回来）。**这是客户端官方给的「某类消息不显示」的开关**——
+--   把含 NOTICE 的那一组从聊天窗口摘掉，通知就根本不显示，**与「客户端走不走 Lua」完全无关**。
+--   ★为什么必须有这条：真机实测 frame.AddMessage 那层「写成功但不生效」→ Lua 入口可能整层是死的；
+--     官方消息组这条路**不依赖任何 Lua 打印路径**，是需求「屏蔽频道进出信息」最稳的实现。
+--   ★组名清单 api 索引里**没有**（只有函数名）→ 现场探测：从 GetChatWindowMessages(win) 里找含 NOTICE 的那组；
+--     找不到就**如实记账、不猜组名**（猜错组名 = 把别的消息也屏蔽了）。
+--   ★可回滚：记住每个窗口的**原始组串**，开关关掉时按原样加回去（绝不留下「少了一组」的残状态）。
+local TB_CHAN_GROUP_HINT = "NOTICE" -- 组名里含它（大小写不敏感）就算「频道进出通知」那一组
+local tbChanSaved = nil             -- { [窗口] = { grp = "CHANNEL_NOTICE", orig = "SAY,CHANNEL,..." } }
+
+-- 读某窗口的组名清单（返回表 + 失败原因）
+function EVAL_TB_CHAN_GROUPS(win)
+  if type(GetChatWindowMessages) ~= "function" then return nil, "noapi" end
+  local ok, s = pcall(GetChatWindowMessages, win or 1)
+  if not ok or type(s) ~= "string" then return nil, "unreadable" end
+  local out = {}
+  for part in string.gmatch(s, "[^,%s]+") do table.insert(out, part) end
+  return out, nil
+end
+-- 找「通知」那一组（找不到返回 nil）
+local function tbChanNoticeGroup(win)
+  local list = EVAL_TB_CHAN_GROUPS(win)
+  if type(list) ~= "table" then return nil end
+  for i = 1, table.getn(list) do
+    if string.find(string.upper(list[i]), TB_CHAN_GROUP_HINT, 1, true) ~= nil then return list[i] end
+  end
+  return nil
+end
+-- 应用/撤销官方屏蔽；返回 找到组的窗口数, 实际动作数, 说明
+function EVAL_TB_CHAN_OFFICIAL_APPLY(on)
+  if type(RemoveChatWindowMessages) ~= "function" or type(AddChatWindowMessages) ~= "function" then
+    return 0, 0, "noapi"
+  end
+  local n = (type(NUM_CHAT_WINDOWS) == "number" and NUM_CHAT_WINDOWS > 0) and NUM_CHAT_WINDOWS or 7
+  tbChanSaved = tbChanSaved or {}
+  local found, act = 0, 0
+  for w = 1, n do
+    if on then
+      local grp = tbChanNoticeGroup(w) -- ★注意：摘掉之后就再也探测不到 → 所以下面要记下组名
+      if grp then
+        found = found + 1
+        if tbChanSaved[w] == nil then
+          local okr, orig = pcall(GetChatWindowMessages, w)
+          tbChanSaved[w] = { grp = grp, orig = (okr and type(orig) == "string") and orig or grp }
+        end
+        local ok = pcall(RemoveChatWindowMessages, w, grp)
+        if ok then act = act + 1 end
+      end
+    else
+      local rec = tbChanSaved[w]
+      if rec ~= nil then
+        -- ★按 API 语义「按**单个组名**加回」（AddChatWindowMessages 收的就是组名；塞整串不是它的用法）
+        local ok = pcall(AddChatWindowMessages, w, rec.grp)
+        if ok then act = act + 1 end
+        tbChanSaved[w] = nil
+      end
+    end
+  end
+  return found, act, "ok"
+end
+-- 开关驱动：按当前开关状态应用（幂等；找不到组就什么都不做）
+function EVAL_TB_CHAN_OFFICIAL_SYNC()
+  local on = EVAL_TB_CHAN_ON()
+  local ok, found, act = pcall(EVAL_TB_CHAN_OFFICIAL_APPLY, on)
+  if not ok then return false, 0 end
+  TB.chanOffFound, TB.chanOffAct = found, act
+  if on and found and found > 0 and not TB.chanOffLogged then
+    TB.chanOffLogged = true
+    EVAL_LOGLINE("[频道屏蔽] 官方消息组：在 " .. tostring(found) .. " 个聊天窗口摘掉含 " .. TB_CHAN_GROUP_HINT ..
+      " 的消息组（这是与「走不走 Lua」无关的官方路子）")
+  end
+  return true, found or 0
+end
+function EVAL_TB_CHAN_OFFICIAL_STATE()
+  local groups, err = EVAL_TB_CHAN_GROUPS(1)
+  local saved = 0
+  for _ in pairs(tbChanSaved or {}) do saved = saved + 1 end
+  return { apiRemove = (type(RemoveChatWindowMessages) == "function"),
+           apiAdd = (type(AddChatWindowMessages) == "function"),
+           groups = groups, err = err, hint = TB_CHAN_GROUP_HINT,
+           saved = saved, found = TB.chanOffFound or 0, act = TB.chanOffAct or 0 }
+end
+
 -- ===== 第二入口：ChatFrame_OnEvent（1.73.12 实测「frame.AddMessage 写了不生效」后的换入口）=====
 -- ★★★实事故（用户真机截图）：`聊天窗入口：挂上 8 个；不可用 0 个` 与 `其中**是我们的包装** 0 个`
 --   **同时出现** —— 说明 `ChatFrame1..7 / DEFAULT_CHAT_FRAME.AddMessage = wrapper` 这层写入
@@ -314,6 +400,52 @@ end
 --        并把着色后的文本**作为第二参数转发**（兼容「按形参取值」的写法）。
 --   ★两条路都留着：AddMessage 那层在别的客户端有效，本客户端由这一层干活；两层都无害
 --     （着色幂等、吞掉只会吞一次），而且诊断里**分开计数**，谁在干活一眼看得出。
+-- ★★参考插件实证（tmp/ChatMOD.lua:514-517，同代 1.12 插件）：它在 **ChatFrame_OnEvent 处理体里**做懒挂载——
+--     `if not this.ORG_AddMessage then this.ORG_AddMessage = this.AddMessage; this.AddMessage = S_AddMessage end`
+--   即：挂的是**事件里的 this 那个对象**，不是 `_G["ChatFrame1"]`。我们先前对 _G 挂、真机写不进去；
+--   这里照它的做法再试一次，并且**每个帧只试一次 + 读回确认 + 成败都记账**（诊断里能看出哪种对象挂得上）。
+function EVAL_TB_THIS_HOOK(f)
+  if type(f) ~= "table" then return false end
+  TB.thisTried = TB.thisTried or {}
+  if TB.thisTried[f] then return (TB.thisHooked and TB.thisHooked[f]) and true or false end
+  TB.thisTried[f] = true
+  local okr, cur = pcall(function() return f.AddMessage end)
+  if not (okr and type(cur) == "function") then return false end
+  local orig = cur
+  local function wrapper(self, text, ...)
+    TB.thisSeen = (TB.thisSeen or 0) + 1
+    local out = text
+    if type(text) == "string" then
+      if EVAL_TB_CHAN_ON() and EVAL_TB_CHAN_BLOCK(text) then
+        TB.thisFiltered = (TB.thisFiltered or 0) + 1
+        return -- 这里也能吞：真的不调底层打印
+      end
+      if type(EVAL_TB_CHATCOLOR_ON) == "function" and EVAL_TB_CHATCOLOR_ON() and
+         type(EVAL_TB_CHAT_COLOR_LINE) == "function" then
+        local okc, colored = pcall(EVAL_TB_CHAT_COLOR_LINE, text)
+        if okc and type(colored) == "string" and colored ~= text then
+          out = colored
+          TB.thisPainted = (TB.thisPainted or 0) + 1
+        end
+      end
+    end
+    return orig(self, out, ...)
+  end
+  local okw = pcall(function() f.AddMessage = wrapper end)
+  if not okw then return false end
+  local ok2, back = pcall(function() return f.AddMessage end)
+  if not (ok2 and back == wrapper) then
+    -- ★真机实测：对某些帧对象这么写**不生效**（写成功、读回来不是我们的）→ 如实记一笔，别假称挂上了
+    TB.thisStuck = (TB.thisStuck or 0) + 1
+    return false
+  end
+  TB.thisHooked = TB.thisHooked or {}
+  TB.thisHooked[f] = true
+  TB.thisOk = (TB.thisOk or 0) + 1
+  EVAL_LOGLINE("[聊天入口] 在事件里对 this 帧懒挂载 AddMessage **成功**（ChatMOD 的做法，读回确认过）")
+  return true
+end
+
 local function tbCeEventOf(e, a1)
   if type(e) == "string" and e ~= "" then return e end
   if type(event) == "string" then return event end
@@ -342,6 +474,13 @@ function EVAL_TB_CHATEVENT_INSTALL()
       if EVAL_TB_CHAN_ON() and EVAL_TB_CHAN_BLOCK(msg) then
         TB.ceFiltered = (TB.ceFiltered or 0) + 1
         return
+      end
+      -- ①b ★ChatMOD 的做法：趁事件在手，对 this 帧试一次懒挂载（成败都记账）
+      if this ~= nil then pcall(EVAL_TB_THIS_HOOK, this) end
+      -- ①c 未缓存名字 → 排进主动查询队列（与 AddMessage 层同一个入队口，重复的会被它自己挡掉）
+      if type(EVAL_TB_WHO_CANDIDATE) == "function" and type(EVAL_TB_WHO_ENQUEUE) == "function" then
+        local cand = EVAL_TB_WHO_CANDIDATE(msg)
+        if cand then pcall(EVAL_TB_WHO_ENQUEUE, cand) end
       end
       -- ② 名字着色：只改文本那一个值，其余一律原样
       local out = msg
@@ -374,6 +513,8 @@ function EVAL_TB_CHATEVENT_RETRY()
   TB.ceTryAt = now
   TB.ceTries = (TB.ceTries or 0) + 1
   local ok = EVAL_TB_CHATEVENT_INSTALL()
+  -- ★顺便把「官方消息组」屏蔽同步一次（幂等；与走不走 Lua 无关的那条路）
+  if type(EVAL_TB_CHAN_OFFICIAL_SYNC) == "function" then pcall(EVAL_TB_CHAN_OFFICIAL_SYNC) end
   if ok and not TB.ceLogged then
     TB.ceLogged = true
     EVAL_LOGLINE("[聊天入口] ChatFrame_OnEvent 挂载成功并**读回确认**（AddMessage 那层在本客户端不生效）")
@@ -384,7 +525,10 @@ function EVAL_TB_CHATEVENT_STATE()
   return { seen = TB.ceSeen or 0, filtered = TB.ceFiltered or 0, painted = TB.cePainted or 0,
            live = (TB.ceWrapper ~= nil and _G.ChatFrame_OnEvent == TB.ceWrapper) and true or false,
            exists = (type(_G.ChatFrame_OnEvent) == "function"), raw = TB.ceRaw or {},
-           tries = TB.ceTries or 0 }
+           tries = TB.ceTries or 0,
+           -- ★this 帧懒挂载（ChatMOD 的做法）的战果：挂上几个 / 写不进去几个 / 经它收到与吞掉多少
+           thisOk = TB.thisOk or 0, thisStuck = TB.thisStuck or 0,
+           thisSeen = TB.thisSeen or 0, thisFiltered = TB.thisFiltered or 0, thisPainted = TB.thisPainted or 0 }
 end
 function EVAL_TEST_TB_CHATEVENT_RESET()
   TB.ceSeen, TB.ceFiltered, TB.cePainted, TB.ceRaw = 0, 0, 0, {}
@@ -2166,6 +2310,11 @@ function EVAL_TB_BUILD(root, page, refreshes)
       if row.modelKey == "chatColor" then pcall(EVAL_TB_CHATCOLOR_AFTER_TOGGLE) end
       -- ★1.73.12 关掉主动查询 = 立刻停止并清空待查队列（如实记日志，不静默）
       if row.modelKey == "whoQuery" then pcall(EVAL_TB_WHO_AFTER_TOGGLE) end
+      -- ★1.73.12 频道屏蔽开关：勾/取消勾时立刻应用/撤销**官方消息组**（与 Lua 层那条路并存）
+      if row.modelKey == "chanJoin" then
+        TB.chanOffLogged = false
+        pcall(EVAL_TB_CHAN_OFFICIAL_SYNC)
+      end
       EVAL_TB_REFRESH()
     end)
     chk:SetScript("OnEnter", function()

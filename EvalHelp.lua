@@ -7365,6 +7365,9 @@ if type(SlashCmdList) == "table" then
           say("第二入口 ChatFrame_OnEvent：函数存在=" .. tostring(ce.exists) .. " 我们的层在位=" .. tostring(ce.live) ..
             "；被调用 " .. tostring(ce.seen) .. " 次（吞掉 " .. tostring(ce.filtered) .. " / 染色 " ..
             tostring(ce.painted) .. "）（尝试挂载 " .. tostring(ce.tries) .. " 次）")
+          say("  this 帧懒挂载（ChatMOD 的做法）：成功 " .. tostring(ce.thisOk) .. " 个 / **写不进去** " ..
+            tostring(ce.thisStuck) .. " 个；经它收到 " .. tostring(ce.thisSeen) .. " 条（吞掉 " ..
+            tostring(ce.thisFiltered) .. " / 染色 " .. tostring(ce.thisPainted) .. "）")
           if type(ce.raw) == "table" and table.getn(ce.raw) > 0 then
             say("  经它收到的**原文**（这才是客户端真实文案；★格式校准看这里）：")
             for i = 1, table.getn(ce.raw) do
@@ -7373,6 +7376,26 @@ if type(SlashCmdList) == "table" then
           end
           if ce.exists and not ce.live then
             say("|cffff8080判读：ChatFrame_OnEvent 存在但我们的层不在位（被顶掉了）→ /eh go 聊天 装 可立刻重挂|r")
+          end
+        end
+        -- ★1.73.12 官方「消息组」屏蔽（与走不走 Lua **无关**的那条路；深入 API 后的发现）
+        if type(EVAL_TB_CHAN_OFFICIAL_STATE) == "function" then
+          local off = EVAL_TB_CHAN_OFFICIAL_STATE()
+          local gl = (type(off.groups) == "table") and table.concat(off.groups, ",") or
+                     ("（读不到：" .. tostring(off.err) .. "）")
+          say("官方消息组：API 可用=" .. tostring(off.apiRemove) .. "/" .. tostring(off.apiAdd) ..
+            "；窗口1 现有组=" .. gl .. "；已摘掉通知组的窗口=" .. tostring(off.saved) ..
+            "（判据：组名含 " .. tostring(off.hint) .. "）")
+          if type(off.groups) == "table" then
+            local hasNotice = false
+            for i = 1, table.getn(off.groups) do
+              if string.find(string.upper(off.groups[i]), off.hint, 1, true) ~= nil then hasNotice = true end
+            end
+            if hasNotice then
+              say("|cffff8080判读：通知组**还在**（没摘掉，或开关是关的）→ 若开屏蔽却仍在，把这一屏发我|r")
+            else
+              say("判读：窗口1 已无含 " .. tostring(off.hint) .. " 的组 → 频道进出通知由**官方接口**屏蔽（与 Lua 无关）")
+            end
           end
         end
         -- 频道屏蔽与本功能**共用同一层包装** → 它的计数是判断「客户端走不走 Lua 打印」的旁证

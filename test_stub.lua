@@ -728,5 +728,23 @@ end
 ChatFrame_OnEvent = tbCeStub
 -- 模拟「客户端把自己的实现写回全局」（真机上就是这么顶掉我们那层的）
 function EVAL_TEST_CE_RECLAIM() ChatFrame_OnEvent = tbCeStub end
+-- ★1.73.12 官方「消息组」API 桩（类别 ChatWindow）：TEST.cwMsg[窗口] = "SAY,CHANNEL,CHANNEL_NOTICE"
+--   ★桩必须**按组名增删**（真的改变字符串），否则「摘掉/还原」这两条断言根本验不到东西。
+TEST.cwMsg = { [1] = "SAY,YELL,CHANNEL,CHANNEL_NOTICE,GUILD" }
+NUM_CHAT_WINDOWS = 7
+GetChatWindowMessages = function(win) return TEST.cwMsg[win] end
+RemoveChatWindowMessages = function(win, grp)
+  local s = TEST.cwMsg[win]
+  if type(s) ~= "string" then return false end
+  local out = {}
+  for part in string.gmatch(s, "[^,]+") do if part ~= grp then table.insert(out, part) end end
+  TEST.cwMsg[win] = table.concat(out, ",")
+  return true
+end
+AddChatWindowMessages = function(win, grp)
+  if type(grp) ~= "string" or grp == "" then return false end
+  TEST.cwMsg[win] = (type(TEST.cwMsg[win]) == "string" and TEST.cwMsg[win] ~= "") and (TEST.cwMsg[win] .. "," .. grp) or grp
+  return true
+end
 GetNumFriends = function() return table.getn(TEST.friendRows or {}) end
 
