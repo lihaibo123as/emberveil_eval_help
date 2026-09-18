@@ -12,6 +12,20 @@ local TB_COL_GAP = 24    -- 两列之间的缝
 local TB_CHAT_EV_KEYS = {
   "SAY", "YELL", "PARTY", "RAID", "GUILD", "OFFICER", "CHANNEL", "WHISPER", "EMOTE", "TEXT_EMOTE",
 }
+-- ★**字符数**而不是字节数：UTF-8 里一个中文字是 3 字节 —— 用 string.len 判「单字名」
+--   会把「甲」当成 2 个字符放过去（本项目反复踩过的「string.len 是字节数」）。判据 = 数首字节。
+--   ★1.73.17 从「名字缓存」段**上移到文件顶部**：聊天取参（更早的代码）也要用它 ——
+--     局部队变量必须声明在**使用之前**（本轮实测：调用到全局 nil → attempt to call a nil value）。
+local function tbNameCharLen(s)
+  local n = 0
+  local len = (type(s) == "string") and string.len(s) or 0
+  for i = 1, len do
+    local b = string.byte(s, i)
+    -- ASCII（<0x80）与 UTF-8 首字节（>=0xC0）各算一个字符；续字节 0x80..0xBF 不数
+    if b and (b < 128 or b >= 192) then n = n + 1 end
+  end
+  return n
+end
 
 -- ===== 自绘基础件（与主程序同风格：WHITE8X8 纯色纹理 + 字体链） =====
 local function tbSolid(tex, r, g, b, a)
@@ -454,11 +468,56 @@ function EVAL_TB_THIS_HOOK(f)
   return true
 end
 
-local function tbCeEventOf(e, a1)
+-- ★★★1.73.17 **取参必须兼容全部调用形态**（用户实测：ChatFrame_OnEvent 被调用 1513 次，我们却一条文本都没取到、
+--   连事件计数都是空的 → 说明**姿势不对**）。可能的形态（本项目其它地方也踩过「事件名在哪一个参数」这类坑）：
+--     (a) ChatFrame_OnEvent(event)                        + 全局 arg1..arg9（1.12 老写法）
+--     (b) ChatFrame_OnEvent(event, 文本, 发送者, ...)      （按形参）
+--     (c) ChatFrame_OnEvent(self, event, 文本, 发送者, ...)（按处理器调用）
+--   ★判据：**把 varargs 全部收进表，按顺序挑「不像事件名的那一个字符串」当文本**（事件名 = 以 CHAT_MSG 开头），
+--     再退回全局 arg1 —— 三种形态都能取到；取不到就**如实记 noMsg 计数**（不许静默跳过，见下面 wrapper 里的计数位置）。
+local function tbCeArgs(a1, ...)
+  local n = select("#", ...)
+  local cand = { a1 }
+  for i = 1, n do cand[i + 1] = select(i, ...) end
+  return cand
+end
+local function tbCeIsEvStr(v)
+  return (type(v) == "string" and v ~= "" and string.find(v, "^CHAT_MSG") ~= nil)
+end
+local function tbCeEventOf(e, a1, ...)
+  local cand = tbCeArgs(a1, ...)
+  if tbCeIsEvStr(e) then return e end
+  for i = 1, table.getn(cand) do
+    if tbCeIsEvStr(cand[i]) then return cand[i] end
+  end
   if type(e) == "string" and e ~= "" then return e end
-  if type(event) == "string" then return event end
-  if type(a1) == "string" and string.find(a1, "^CHAT_MSG") then return a1 end
+  if type(event) == "string" and event ~= "" then return event end
   return ""
+end
+-- 文本：按顺序挑第一个「不是事件名」的非空字符串（★同时覆盖 (b)/(c) 两种形态），再退回全局 arg1
+local function tbCeMsgOf(a1, ...)
+  local cand = tbCeArgs(a1, ...)
+  for i = 1, table.getn(cand) do
+    local v = cand[i]
+    if type(v) == "string" and v ~= "" and not tbCeIsEvStr(v) then return v end
+    if type(v) == "number" then return tostring(v) end
+  end
+  if type(arg1) == "string" and arg1 ~= "" and not tbCeIsEvStr(arg1) then return arg1 end
+  return nil
+end
+-- 发送者名：**候选里挑**（(event,msg,发送者) 与 (self,event,msg,发送者) 下它分别是第 1/第 2 个 vararg → 位置不定），
+--   形状像角色名（无空白/冒号/方括号/竖线、2..16 字符）且不等于文本；取不到再退回全局 arg2。
+local function tbCeSenderOf(msg, a1, ...)
+  local cand = tbCeArgs(a1, ...)
+  for i = 1, table.getn(cand) do
+    local v = cand[i]
+    if type(v) == "string" and v ~= "" and v ~= msg and not tbCeIsEvStr(v) then
+      local len = tbNameCharLen(v)
+      if string.find(v, "[%s:：|%[%]]") == nil and len >= 2 and len <= 16 then return v end
+    end
+  end
+  if type(arg2) == "string" and arg2 ~= "" and arg2 ~= msg then return arg2 end
+  return nil
 end
 function EVAL_TB_CHATEVENT_INSTALL()
   local cur = _G.ChatFrame_OnEvent
@@ -467,19 +526,34 @@ function EVAL_TB_CHATEVENT_INSTALL()
   local orig = cur
   local function wrapper(e, a1, ...)
     TB.ceSeen = (TB.ceSeen or 0) + 1
-    local ev = tbCeEventOf(e, a1)
-    -- 消息文本：优先第二参数（且它不像事件名），否则全局 arg1（1.12 的老写法）
-    local msg = nil
-    if type(a1) == "string" and string.find(a1, "^CHAT_MSG") == nil then msg = a1 end
-    if msg == nil and type(arg1) == "string" then msg = arg1 end
+    -- ★★★1.73.17 取参：兼容 (event) + 全局 / (event, 文本…) / (self, event, 文本…) 三种形态
+    local ev = tbCeEventOf(e, a1, ...)
+    local msg = tbCeMsgOf(a1, ...)
+    -- ★★★调用形态取证（用户实测：1513 次调用一条文本都没取到 → 必须先把**客户端怎么调的**看清楚）：
+    --   记前 6 次的原始形状：e / 第 1 个 vararg / 全局 arg1 / 全局 arg2 的类型与值（截断 28 字）
+    if (TB.ceShapeN or 0) < 6 then
+      TB.ceShapeN = (TB.ceShapeN or 0) + 1
+      TB.ceShape = TB.ceShape or {}
+      local function sh(v)
+        local t = type(v)
+        local s = tostring(v)
+        if string.len(s) > 28 then s = string.sub(s, 1, 28) .. "…" end
+        return t .. "=" .. s
+      end
+      table.insert(TB.ceShape, "e:" .. sh(e) .. " ｜ a1:" .. sh(a1) .. " ｜ arg1:" .. sh(arg1) ..
+        " ｜ arg2:" .. sh(arg2))
+    end
+    -- ★★★计数与「取不到文本」都要在**守卫之前**记：上一版把它们写在「取到文本」之后 →
+    --   1513 次调用、计数却是空的 = 诊断自己把证据藏了（这就是用户那张截图的由来）。
+    TB.ceByEv = TB.ceByEv or {}
+    TB.ceByEv[ev] = (TB.ceByEv[ev] or 0) + 1
+    if type(msg) ~= "string" or msg == "" then TB.ceNoMsg = (TB.ceNoMsg or 0) + 1 end
     local isChat = (ev == "" or string.find(ev, "CHAT_MSG") ~= nil)
     if isChat and type(msg) == "string" and msg ~= "" then
       -- ★★★1.73.16 取证实录（用户报「角色名还是没染色」）：**样本必须只留玩家聊天**。
       --   上一版把**所有** CHAT_MSG_* 都塞进 12 格环形缓冲 → 战斗/法术刷屏（实测那 12 条全是
       --   CHAT_MSG_SPELL_PERIODIC_FRIENDLYPLAYER_BUFFS）把真实聊天行**挤出去**了 → 关键证据永远看不到。
       --   ★判据：取证缓冲要按**问题相关的事件白名单**过滤，不能"来者不拒"。
-      TB.ceByEv = TB.ceByEv or {}
-      TB.ceByEv[ev] = (TB.ceByEv[ev] or 0) + 1
       -- 原始样本：只记**玩家聊天**（说/喊/队伍/团队/公会/官员/频道/密语/表情）
       local evUp = string.upper(ev)
       local isPlayerChat = false
@@ -488,10 +562,7 @@ function EVAL_TB_CHATEVENT_INSTALL()
       end
       if isPlayerChat then
         -- ★arg2 = 发送者名（1.12 语义）：一并记下来 —— 「名字到底在 arg1 里还是只在 arg2 里」是本轮要定的案
-        local a2 = nil
-        local v2 = select(2, ...) -- ★不能用 type(select(2, ...))：没有第 2 个参数时 type 收不到值直接报错
-        if type(v2) == "string" then a2 = v2 end
-        if a2 == nil and type(arg2) == "string" then a2 = arg2 end
+        local a2 = tbCeSenderOf(msg, a1, ...) -- ★三种形态下发送者位置不同 → 按候选挑（不再假设是第 2 个 vararg）
         TB.ceChat = TB.ceChat or {}
         table.insert(TB.ceChat, evUp .. " ｜ arg1=" .. msg .. " ｜ arg2=" .. tostring(a2))
         while table.getn(TB.ceChat) > 12 do table.remove(TB.ceChat, 1) end
@@ -558,11 +629,12 @@ function EVAL_TB_CHATEVENT_STATE()
            -- ★this 帧懒挂载（ChatMOD 的做法）的战果：挂上几个 / 写不进去几个 / 经它收到与吞掉多少
            thisOk = TB.thisOk or 0, thisStuck = TB.thisStuck or 0,
            thisSeen = TB.thisSeen or 0, thisFiltered = TB.thisFiltered or 0, thisPainted = TB.thisPainted or 0,
-           chat = TB.ceChat or {}, byEv = TB.ceByEv or {} }
+           chat = TB.ceChat or {}, byEv = TB.ceByEv or {},
+           shape = TB.ceShape or {}, noMsg = TB.ceNoMsg or 0 }
 end
 function EVAL_TEST_TB_CHATEVENT_RESET()
   TB.ceSeen, TB.ceFiltered, TB.cePainted, TB.ceRaw = 0, 0, 0, {}
-  TB.ceChat, TB.ceByEv = {}, {}
+  TB.ceChat, TB.ceByEv, TB.ceShape, TB.ceNoMsg, TB.ceShapeN = {}, {}, {}, 0, 0
   TB.ceTryAt, TB.ceTries, TB.ceLogged = nil, 0, false
 end
 TB.ceHooked = EVAL_TB_CHATEVENT_INSTALL() and true or false
@@ -652,18 +724,6 @@ local TB_PAINT_LISTS = {
 --   · 长度 < 2 的键**不写也不查**（单字名的误伤面太大）；
 --   · 认不出职业的名字**不写**（不猜）—— 「拿不到就不猜」纪律。
 local tbNameClass = {}
--- ★**字符数**而不是字节数：UTF-8 里一个中文字是 3 字节 —— 用 string.len 判「单字名」
---   会把「甲」当成 2 个字符放过去（本项目反复踩过的「string.len 是字节数」）。判据 = 数首字节。
-local function tbNameCharLen(s)
-  local n = 0
-  local len = (type(s) == "string") and string.len(s) or 0
-  for i = 1, len do
-    local b = string.byte(s, i)
-    -- ASCII（<0x80）与 UTF-8 首字节（>=0xC0）各算一个字符；续字节 0x80..0xBF 不数
-    if b and (b < 128 or b >= 192) then n = n + 1 end
-  end
-  return n
-end
 local function tbNameClassKey(name)
   if type(name) ~= "string" then return nil end
   local s = string.gsub(name, "^%s*(.-)%s*$", "%1")

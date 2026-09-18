@@ -9399,4 +9399,69 @@ do
   print("  取证白名单：法术刷屏不再挤掉玩家聊天样本（记 arg1+arg2）· 事件计数 · 官方消息组判读分三态（不假报已屏蔽）")
 end
 
+-- 129) ★★★1.73.17 取参兼容**全部调用形态** + 调用形态取证（用户实测：ChatFrame_OnEvent 被调用 1513 次、
+--   零样本零事件计数 → 取参姿势不对；而计数被写在「取到文本」之后 → 诊断把证据自己藏了）
+--   判据：① (event)+全局 / ② (event,文本,发送者) / ③ (self,event,文本,发送者) 三种形态都要取到「事件名 + 文本 + 发送者」；
+--         ④ **取不到文本也要计数**（noMsg + byEv）——这是本轮的关键修复；⑤ 前几次的**原始参数形状**要记下来（姿势定案）。
+do
+  local savedTb129 = EVAL_HELP_CONFIG.tb
+  EVAL_HELP_CONFIG.tb = { chatColor = true }
+  local function cnt129(evKey)
+    local cet = EVAL_TB_CHATEVENT_STATE()
+    return (cet.byEv or {})[evKey] or 0, cet
+  end
+  -- ① (event) + 全局（1.12 老写法）
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  arg1 = "[守夜人] 说: 你好" arg2 = "守夜人"
+  ChatFrame_OnEvent("CHAT_MSG_SAY")
+  local n129a, s129a = cnt129("CHAT_MSG_SAY")
+  eq(n129a, 1, "①★形态 (event)+全局：事件计数 +1")
+  eq(table.getn(s129a.chat), 1, "①★样本里有了这条 SAY")
+  eq(string.find(tostring(s129a.chat[1]), "arg2=守夜人", 1, true) ~= nil, true, "①★发送者名取自全局 arg2")
+  -- ② (event, 文本, 发送者)
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  arg1, arg2 = nil, nil
+  ChatFrame_OnEvent("CHAT_MSG_GUILD", "[公会] [守夜人]: 集合", "守夜人")
+  local n129b, s129b = cnt129("CHAT_MSG_GUILD")
+  eq(n129b, 1, "②★形态 (event,文本,发送者)：事件计数 +1")
+  eq(table.getn(s129b.chat), 1, "②★样本里有了这条公会聊天")
+  eq(string.find(tostring(s129b.chat[1]), "arg1=%[公会%] %[守夜人%]: 集合", 1) ~= nil, true,
+     "②★★文本取自第 1 个 vararg：" .. tostring(s129b.chat[1]))
+  eq(string.find(tostring(s129b.chat[1]), "arg2=守夜人", 1, true) ~= nil, true, "②★★发送者取自第 2 个 vararg（位置与形态①不同）")
+  -- ③ (self, event, 文本, 发送者) —— 最可能的真机形态
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  arg1, arg2 = nil, nil
+  ChatFrame_OnEvent(UIParent, "CHAT_MSG_PARTY", "[守夜人] 说: 走", "守夜人")
+  local n129c, s129c = cnt129("CHAT_MSG_PARTY")
+  eq(n129c, 1, "③★形态 (self,event,文本,发送者)：事件计数 +1")
+  eq(table.getn(s129c.chat), 1, "③★★样本里有了这条队伍聊天")
+  eq(string.find(tostring(s129c.chat[1]), "arg1=%[守夜人%] 说: 走", 1) ~= nil, true,
+     "③★★★文本取自第 2 个 vararg（**这正是真机最可能的形态**）：" .. tostring(s129c.chat[1]))
+  eq(string.find(tostring(s129c.chat[1]), "arg2=守夜人", 1, true) ~= nil, true, "③★★发送者取自第 3 个 vararg")
+  -- ④ 取不到文本也必须计数（本轮的关键修复）
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  arg1, arg2 = nil, nil
+  ChatFrame_OnEvent("CHAT_MSG_RAID") -- 没给文本、也没给全局
+  local n129d, s129d = cnt129("CHAT_MSG_RAID")
+  eq(n129d, 1, "④★★★取不到文本时**仍然计数**（上一版把计数写在取值之后 → 1513 次调用却是空的）")
+  eq(s129d.noMsg, 1, "④★★并如实记「取不到文本的调用」= 1")
+  eq(table.getn(s129d.chat), 0, "④★没有文本就没有样本（不塞空串）")
+  -- ⑤ 调用形态取证已记录
+  -- ⑤ 调用形态取证：连打三种形态，应记下 3 条形状（★注意：RESET 会清形状，所以这里重新打 3 次）
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  arg1, arg2 = "m1", "n1"
+  ChatFrame_OnEvent("CHAT_MSG_SAY")
+  ChatFrame_OnEvent("CHAT_MSG_GUILD", "m2", "n2")
+  ChatFrame_OnEvent(UIParent, "CHAT_MSG_PARTY", "m3", "n3")
+  local s129e = EVAL_TB_CHATEVENT_STATE()
+  eq(type(s129e.shape) == "table" and table.getn(s129e.shape) == 3, true,
+     "⑤★★记下了前 3 次调用的**原始参数形状**（e / a1 / arg1 / arg2）→ 真机姿势一屏定案")
+  eq(string.find(tostring(s129e.shape[3] or ""), "CHAT_MSG_PARTY", 1, true) ~= nil, true,
+     "⑤★第三种形态的形状里能看到事件名（记的确实是原始参数）")
+  print("  取参形态：三种调用形态都能取到 事件名+文本+发送者 · 取不到文本也计数（不藏证据）· 记原始参数形状")
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  arg1, arg2 = nil, nil
+  EVAL_HELP_CONFIG.tb = savedTb129
+end
+
 print("ALL TESTS PASS")

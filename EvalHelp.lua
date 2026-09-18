@@ -7412,6 +7412,16 @@ if type(SlashCmdList) == "table" then
             end
             if table.getn(parts) > 0 then
               say("  事件计数（前 " .. table.getn(parts) .. " 种）：" .. table.concat(parts, "、"))
+            else
+              say("|cffff8080  事件计数为空（被调用 " .. tostring(ce.seen) .. " 次却一条都没记上）|r")
+            end
+          end
+          -- ★★★1.73.17 调用形态 + 取不到文本的计数（用户实测：1513 次调用、零样本零计数 → 姿势问题）
+          say("  取不到文本的调用：" .. tostring(ce.noMsg or 0) .. " 次（若 ≈ 被调用总数 → 取参姿势不对）")
+          if type(ce.shape) == "table" and table.getn(ce.shape) > 0 then
+            say("  调用形态（前 " .. table.getn(ce.shape) .. " 次的原样参数；★姿势定案看这里）：")
+            for i = 1, table.getn(ce.shape) do
+              say("   " .. i .. ". " .. string.gsub(tostring(ce.shape[i]), "|", "||"))
             end
           end
           if ce.exists and not ce.live then
