@@ -20,7 +20,7 @@
 
 > 📌 Continuously improving — testing and feedback welcome!　🐞 [Bug reports / suggestions](https://gitee.com/xeval/emberveil_eval_help.git) (Issues)　🤖 Developed with DeepSeek Harness AI assistance (see "Contributing" at the bottom)
 
-## 🏁 Milestones (1.52.0 → 1.72.0)
+## 🏁 Milestones (1.52.0 → 1.72.1)
 
 - **⌨️ Profile hotkeys actually work** (1.71.16 → 1.72.0): after four dead ends, `ACTIONBUTTON<n>` + hooking `ActionButtonDown/Up` — zero cost: no macro slots, no stolen keys, live while the game runs.
 - **🗂 Right-click features merged into one Profile Manager** (1.71.24): profile name + hotkey, one [Save] commits both; ★no aliases for the old entry points.
@@ -37,6 +37,7 @@
 
 | Version | Theme | One-line highlight |
 | :-- | :-- | :-- |
+| **1.72.1** | 🧭 Friendly first-run | Load confirmation + a four-step starter guide on first login (combat UI / first profile / key binding / skill log); replay it from the Global tab or `/eh guide` |
 | **1.72.0** | 🎉 **Profile hotkeys fixed + a batch of UI polish** (spans 1.71.3–1.71.24) | 22 versions shipped at once: **profile hotkeys went from "never fire" to actually working** (four dead ends ruled out: CLICK hijacked the mouse → raw command names are not dispatched → this client does not read addon Bindings.xml → **hooking ActionButtonDown/Up**; zero cost, no macro slots, no stolen keys, live while the game runs); **right-click features merged** into one Profile Manager window (rename + hotkey, one Save commits both); case-template window redesigned three times; Icon Library tab + right-click to set the minimap icon; combat HUD title shows the player name; Stop Attack / Follow / member filtering / share overhaul |
 | **1.71.24** | 🗂 右键功能合并成一个「方案管理」弹窗 | 用户：「将这两个功能合并成一个弹窗管理.都是右键触发.」—— 把此前**两个独立的右键弹窗**（配置窗方案按钮右键=重命名 / 战斗信息UI 方案按钮右键=快捷键绑定）合并成**一个方案管理窗**：窗内两段 ① 方案名称 ② 快捷键，**[保存] 一次提交两段**（改名 + 绑键，互不牵连）；**两处右键都开同一个窗**（左键语义不变，仍是激活方案）；★关键决定 = **不为旧入口留别名**（留别名会让「调用点改回旧名字」的回归悄悄通过——实测变异 M1/M2 正是这样 SURVIVED 的）；组 102 + 变异 **8/8** 全捕获 |
 | **1.71.23** | 🧹 清理四次试错留下的死探针代码 | 快捷派发定案后回头清理：删掉已判死的 go bind2/go bind3/go actbar 三个写入型探针（它们验的是 CLICK / 裸命令名 / Bindings.xml 三条已被证伪的路线，**留着只会误导后人**），go bind 从「写入试验」改为「现状检查」（只读：派发前提 / 接管状态 / 逐方案绑定与占用格）；文件净减 **205 行**；/eh go diag 保留为唯一诊断入口 |
@@ -46,7 +47,6 @@
 | **1.71.19** | 🏷 "Profiles" label tooltip + right-click clears ALL custom bindings | The "方案" label is now clickable: hovering shows three polished hint lines (left-click = activate / right-click = bind / right-click the label = clear all, 3 languages); right-clicking it really **unbinds every key + clears the table + saves** (returns the count, idempotent); left-click does nothing; ★assertions drive the real right-click/hover, 4/4 mutations caught |
 | **1.71.18** | 🔧 Binding dispatch drops CLICK for raw command names (fix: key did not fire + mouse buttons hijacked) | Live testing showed the client mis-parses CLICK dispatch — the bound key did not fire and the left/right mouse buttons lost their camera-turn (yet the addon still got triggered, so the path works) → dispatch now uses **raw command names `EVAL_GO<i>`** (built-in commands are camelCase globals; `EVAL_GO1~12` already exist); ★new sentinel "every dispatch name must resolve to a real global", 3/3 mutations caught |
 | **1.71.17** | 🖼 Default minimap icon is now Blessing of Strength (user pick) | After the user hand-picked the golden-fist `Spell_Holy_BlessingOfStrength` in the icon library, she asked the **initial default to be the same icon** — it now tops the auto-pick candidates; a hand-picked icon still always wins; ★pure-function assertion "blessing beats wrench", 2/2 mutations caught |
-| **1.71.16** | ⌨ Profile hotkey binding (right-click a profile → binding popup, keys grouped keyboard/mouse/modifiers) | Verified first (`/eh go bind` proved SetBinding accepts custom command names) → **right-click any profile** in the combat info UI to open a polished popup: **categorized key dropdown** (function/number/letter/mouse/modified) + conflict hint; dispatch via **CLICK on a hidden button** (key press = client clicks `EVAL_GO_KEY_i` → run & activate); rebinding frees the old key, saving is immediate; probe `/eh go bind2` included; ★assertions drive the real right-click, 6/6 mutations caught |
 
 > 📜 Detailed per-version notes live in **[CHANGELOG.md](CHANGELOG.md)**; earlier history is in the git commit log.
 
@@ -122,8 +122,9 @@ switches target, casts, and restores your original target — **you never click 
 
 1. Drag the skills you want onto your action bars (any class — the plugin recognizes whatever is on your bars).
 2. In game, run `/eh go rescan` so the plugin learns the slots (`/eh go` shows the scan result).
-3. Create a macro with the one-line body `/run EVAL_GO()`, drag it onto a key, and spam away.
-4. Start from a **case template**: open `/eh cfg` → one-key macro tab → [Import/Export] → [Case Templates], pick your class and import — then tweak thresholds via the golden EH icon by the minimap; `/eh debug` shows the decision reason for every key press in chat.
+3. **Bind a key (recommended, click-only)**: right-click any profile (the profile row in the combat UI or the profile list in settings) → Profile Manager → pick a key in the Hotkey dropdown → [Save] — pressing it runs that profile. **Alternative** if you prefer macros: create a macro with the one-line body `/run EVAL_GO()` and drag it onto a key.
+4. **New here?** Type `/eh guide` for the four-step starter guide (combat UI → first profile → key binding → skill log); it also plays once automatically on first login.
+5. Start from a **case template**: open `/eh cfg` → one-key macro tab → [Import/Export] → [Case Templates], pick your class and import — then tweak thresholds via the golden EH icon by the minimap; `/eh debug` shows the decision reason for every key press in chat.
 
 ## Installation
 
@@ -160,6 +161,18 @@ Interface/AddOns/
 - Workflow convention: bump the version number on every change (lua header comment + `local VERSION` + toc, three places in sync), and run `node luacheck.js` for a full syntax parse after editing;
 - Extending to new classes: skills come from **action-bar scanning** — anything dragged onto your bars is recognized, so there is no per-class skill whitelist; the rule engine / profiles / UI are all class-agnostic;
 - This addon is developed with **DeepSeek Harness AI** assistance — you're welcome to bring your own AI along too.
+
+## Support Us
+
+EvalHelp has been, and always will be, free and open source.
+
+If it happens to help you and you feel like encouraging the author, you can sponsor a little computing power ☕. Every bit goes to the sharp end: more careful polish, faster bug fixes, and ready-made templates for more classes.
+
+And of course, even just a star, a suggestion, or telling a guildmate about it means a great deal to us. Thank you for reading this far.
+
+| Alipay | WeChat |
+| :---: | :---: |
+| ![Alipay QR](pay/bao.jpg) | ![WeChat QR](pay/wei.jpg) |
 
 ## Acknowledgements
 
