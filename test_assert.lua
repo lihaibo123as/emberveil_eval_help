@@ -8853,6 +8853,27 @@ do
   eq(string.find(c121, "名字缓存", 1, true) ~= nil, true, "⑫★报告名字缓存条数")
   eq(string.find(c121, "原文", 1, true) ~= nil, true, "⑫★★把最近聊天**原文**摊开（校准就看这一屏）")
   eq(string.find(c121, "染色：守夜人", 1, true) ~= nil, true, "⑫★★★诊断对样本的判决与生产**同源**（读值口走同一个纯函数，不复刻判据）")
+  -- ⑬ 「试」= 一键自检：拿**生产判据**判一条文本 + 说清**为什么**（候选名由判据自己交出，不复刻判据）
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 聊天 试 [守夜人]: 你好")
+  local t121 = tostring(TEST.chat or "")
+  eq(string.find(t121, "认出来了", 1, true) ~= nil, true, "⑬★★★「/eh go 聊天 试 <文本>」能当场验一条文本（不用等真人说话）")
+  eq(string.find(t121, "守夜人", 1, true) ~= nil and string.find(t121, "SHAMAN", 1, true) ~= nil, true,
+     "⑬★★并报出「候选名 → 缓存里的职业 token」（说清为什么认得出）")
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 聊天 试 [路人甲]: 你好")
+  local t121b = tostring(TEST.chat or "")
+  eq(string.find(t121b, "没认出来", 1, true) ~= nil, true, "⑬★★认不出的样本如实说「没认出来」")
+  eq(string.find(t121b, "不在缓存", 1, true) ~= nil, true,
+     "⑬★★★并说清原因（名字不在缓存 ≠ 形态不匹配）—— 候选名来自**判据自己**的第三返回值，诊断不复刻判据")
+  local _, _, cd121 = EVAL_TB_CHATCOLOR_VOTE("[路人甲]: 你好")
+  eq(type(cd121) == "table" and table.getn(cd121) == 1 and cd121[1] == "路人甲", true,
+     "⑬★读值口确实拿得到「考虑过的候选」（上面那条说明的**单一来源**）")
+  eq(type(select(3, EVAL_TB_CHATCOLOR_VOTE("[路人甲]: 你好"))) == "table", true, "⑬★第三返回值是候选表")
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 聊天 试")
+  local t121c = tostring(TEST.chat or "")
+  eq(string.find(t121c, "测试玩家", 1, true) ~= nil, true, "⑬★不带文本时默认拿**玩家自己**的名字当样本（一跑就能看到「命中」长什么样）")
   -- 收尾：还原入口 / 计数 / 配置 / 时间（跨用例状态残留是本项目老坑）
   f121.AddMessage = saved121
   EVAL_TEST_TB_CHAN_RESET()

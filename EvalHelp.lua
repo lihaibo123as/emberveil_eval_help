@@ -7294,6 +7294,35 @@ if type(SlashCmdList) == "table" then
       if type(EVAL_TB_CHAN_INSTALL) == "function" and (string.find(sarg, "^装") == 1 or sarg == "") then
         pcall(EVAL_TB_CHAN_INSTALL) -- 顺手重试一次挂载（含 ChatFrame2..7）
       end
+      -- ★★1.73.12 「试」= 一键自检：拿**生产判据**判一条文本并说明**为什么**是这个结果。
+      --   用法：/eh go 聊天 试 [守夜人]: 你好 —— 不用等真人说话就能当场验形态；
+      --   ★「为什么」的来源 = 判据**自己**交出的候选名（EVAL_TB_CHATCOLOR_VOTE 第三返回值），
+      --     绝不在诊断里另写一套判据复刻（本项目「读值口不许复刻映射逻辑」的同一族纪律）。
+      if string.find(sarg, "^试") == 1 then
+        local sample = string.match(sarg, "^试%s*(.*)$") or ""
+        if sample == "" then
+          -- ★默认样本 = **玩家自己**（他一定在自己的缓存里）→ 不带参数跑一下就看得见「命中」长什么样
+          local okn, pnm = pcall(UnitName, "player")
+          if okn and type(pnm) == "string" and pnm ~= "" then sample = "[" .. pnm .. "]: 你好"
+          else sample = "[守夜人]: 你好" end
+        end
+        say("样本：" .. sample)
+        local hit, who, cands = false, nil, nil
+        if type(EVAL_TB_CHATCOLOR_VOTE) == "function" then hit, who, cands = EVAL_TB_CHATCOLOR_VOTE(sample) end
+        say("判据：" .. (hit and ("认出来了 → 会把「" .. tostring(who) .. "」染成职业色") or "**没认出来** → 会原样放行（不碰）"))
+        if type(cands) == "table" and table.getn(cands) > 0 then
+          local parts = {}
+          for i = 1, table.getn(cands) do
+            local nm = cands[i]
+            local tok = (type(EVAL_TB_NAMECLASS_GET) == "function") and EVAL_TB_NAMECLASS_GET(nm)
+            table.insert(parts, nm .. (tok and ("（缓存=" .. tostring(tok) .. "）") or "（**不在缓存**）"))
+          end
+          say("判据考虑过的候选：" .. table.concat(parts, "、"))
+        else
+          say("判据**没找到任何候选名字** → 形态与推断不符（这一行完整原文发我，我按真实形态改判据）")
+        end
+        say("提示：把聊天框里**真实的一行**整行贴过来试试，例如 /eh go 聊天 试 [名字]: 你好")
+      end
       if type(EVAL_TB_CHATCOLOR_STATE) ~= "function" then
         say("聊天名字着色：本版本没有这个功能（EVAL_TB_CHATCOLOR_STATE 不存在）")
       else

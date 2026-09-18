@@ -532,6 +532,7 @@ function checkIconAssets() {
   if (!/EVAL_TB_NAMECLASS_HARVEST_THROTTLED = tbNcHarvest/.test(tb)) bad.push('没有导出 EVAL_TB_NAMECLASS_HARVEST_THROTTLED');
   // ⑤ 诊断入口
   if (!/go 聊天/.test(eh)) bad.push('没有诊断入口（/eh go 聊天）');
+  if (eh.indexOf('string.find(sarg, "^试")') < 0) bad.push('诊断里没有「试」自检分支（/eh go 聊天 试 <文本>）');
   if (bad.length) { console.log('CHAT COLOR WIRING CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
   console.log('CHAT COLOR WIRING CHECK: 挂在聊天入口内 + 白拿缓存 + 无服务器查询 + 限频采集 + 诊断入口');
 })();

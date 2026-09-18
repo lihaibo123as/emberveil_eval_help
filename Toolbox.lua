@@ -775,6 +775,17 @@ function EVAL_TB_CHAT_COLOR_LINE(msg)
     if lH and (lh == nil or lH > lh) then return true end
     return false
   end
+  -- ★诊断用：本次**考虑过**的候选名（由判据自己记录 —— 绝不在别处再实现一遍判据；
+  --   这就是本项目「读值口不许复刻逻辑」那条纪律的正解：让生产把自己的实际过程说出来）。
+  --   ★只影响诊断输出、**不影响判据**：去掉方括号这层包装、去重、丢掉带括号的碎片（如「[4.」）。
+  local cands, candSeen = {}, {}
+  local function noteCandidate(name)
+    if string.find(name, "[%[%]]") then return end
+    local plain = string.gsub(name, "^%s*(.-)%s*$", "%1")
+    if plain == "" or candSeen[plain] then return end
+    candSeen[plain] = true
+    table.insert(cands, plain)
+  end
   local function paint(name, s, e)
     local tok = tbNameClassGet(name)
     if not tok then return nil end
@@ -796,9 +807,12 @@ function EVAL_TB_CHAT_COLOR_LINE(msg)
     local sp = starts[i]
     -- 名字 = 起点处**不含空白/冒号/竖线**的第一段（角色名里不会有这几种字符）
     local nm = string.match(string.sub(msg, sp), "^([^%s:：|]+)")
-    if nm and tbNameCharLen(nm) >= 2 and not alreadyColored(sp) then
-      local out = paint(nm, sp, sp + string.len(nm) - 1)
-      if out then return out, nm end
+    if nm and tbNameCharLen(nm) >= 2 then
+      noteCandidate(nm)
+      if not alreadyColored(sp) then
+        local out = paint(nm, sp, sp + string.len(nm) - 1)
+        if out then return out, nm, cands end
+      end
     end
   end
   -- ② 逐个方括号段（最多看 4 个：在前面的可能是频道名/公会名/队伍标记）
@@ -807,13 +821,16 @@ function EVAL_TB_CHAT_COLOR_LINE(msg)
     local s, e = string.find(msg, "%[[^%[%]]*%]", from2)
     if not s then break end
     local inner = string.sub(msg, s + 1, e - 1)
-    if string.find(inner, "|", 1, true) == nil and not alreadyColored(s) then
-      local out = paint(inner, s, e)
-      if out then return out, inner end
+    if string.find(inner, "|", 1, true) == nil then
+      noteCandidate(inner)
+      if not alreadyColored(s) then
+        local out = paint(inner, s, e)
+        if out then return out, inner, cands end
+      end
     end
     from2 = e + 1
   end
-  return msg, nil
+  return msg, nil, cands
 end
 
 -- 诊断读值口（/eh go 聊天 与断言共用）
@@ -825,9 +842,10 @@ end
 -- 诊断用：对一条原文给出判决（不打印，只回值）—— 与生产**同一个**纯函数，绝不复刻判据
 function EVAL_TB_CHATCOLOR_VOTE(msg)
   if type(EVAL_TB_CHAT_COLOR_LINE) ~= "function" then return false, nil end
-  local ok, out, who = pcall(EVAL_TB_CHAT_COLOR_LINE, msg)
+  local ok, out, who, cands = pcall(EVAL_TB_CHAT_COLOR_LINE, msg)
   if not ok then return false, nil end
-  return (type(out) == "string" and out ~= msg) and true or false, who
+  -- 第三个返回值 = 判据**自己**记下的候选名（诊断靠它说明「为什么没认出来」，而不是另写一套判据）
+  return (type(out) == "string" and out ~= msg) and true or false, who, cands
 end
 function EVAL_TB_CHATCOLOR_RESET() -- 测试用：清计数与样本（不还原入口、**不清**名字缓存）
   TB.chatSeen, TB.chatPainted, TB.chatRaw, TB.chatLast = 0, 0, {}, nil
