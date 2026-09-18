@@ -6767,6 +6767,64 @@ if type(SlashCmdList) == "table" then
       end
       if n == 0 then say(L("BIND_ST_NONE")) end
       say("绑法：战斗信息UI 方案行**右键**开弹窗；清空：右键「方案」标签；诊断：/eh go diag（写盘，需 /reload）")
+    elseif msg == "go tex" then
+      -- ★1.72.2 光环「名字→纹理」学习表诊断（**分享方案排查专用**）：
+      --   别人角色没学过某个 debuff 的纹理时，判定会先走「按名字扫描」并自动学回来；
+      --   这里可以看学到了什么、删掉单条、或全清——用来实机验证「自动扫描」到底有没有工作。
+      local store = (EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war and EVAL_HELP_CONFIG.war.debuffTex) or {}
+      local n1, n2, i = 0, 0, 0
+      for _ in pairs(store) do n1 = n1 + 1 end
+      for _ in pairs(EVAL_DEBUFF_TEX_LEARN or {}) do n2 = n2 + 1 end
+      say("— 光环「名字→纹理」学习表（分享方案排查）—")
+      say("持久表 cfg.war.debuffTex = " .. n1 .. " 条；运行时兜底表 = " .. n2 .. " 条")
+      for k, v in pairs(store) do
+        i = i + 1
+        if i > 12 then break end
+        say("  " .. tostring(k) .. " → " .. tostring(v))
+      end
+      if n1 > 12 then say("  …另有 " .. (n1 - 12) .. " 条未列出") end
+      say("删单条 /eh go texdel 名字 ｜ 全清 /eh go texclear ｜ 立即扫一遍 /eh go texscan")
+    elseif string.find(msg, "^go texdel ") then
+      -- ★1.72.2 删掉一条学习记录 → 下次判定应**重新扫描并自动学回来**（这正是你要验的「自动扫描」）
+      local want = string.sub(msg, 11) -- "go texdel " 共 10 字符
+      local hit = nil
+      local function delFrom(t)
+        if type(t) ~= "table" then return end
+        if t[want] ~= nil then hit = want t[want] = nil return end
+        for k in pairs(t) do -- ★/eh 会把整条命令转小写，所以名字要**大小写不敏感**匹配
+          if type(k) == "string" and string.lower(k) == want then hit = k t[k] = nil return end
+        end
+      end
+      delFrom(EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war and EVAL_HELP_CONFIG.war.debuffTex)
+      delFrom(EVAL_DEBUFF_TEX_LEARN)
+      EVAL_AURA_TEST_RESET_NAME_CACHE()
+      if hit then
+        say("已删除学习记录：" .. tostring(hit) .. " —— 下次判定会**重新扫描**并按名字自动学回来")
+      else
+        say("学习表里没有「" .. tostring(want) .. "」这条（可能本来就没学过）")
+      end
+    elseif msg == "go texclear" then
+      local n = 0
+      local function clearT(t)
+        if type(t) ~= "table" then return end
+        for k in pairs(t) do n = n + 1 t[k] = nil end
+      end
+      clearT(EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war and EVAL_HELP_CONFIG.war.debuffTex)
+      clearT(EVAL_DEBUFF_TEX_LEARN)
+      EVAL_AURA_TEST_RESET_NAME_CACHE()
+      say("已清空光环学习表（" .. n .. " 条）—— 之后光环判定会先按名字扫描、并自动学回来")
+    elseif msg == "go texscan" then
+      -- ★1.72.2 立即扫一遍四类光环：名字=纹理 + **本次扫描是否可信**（三态设计的直接证据）
+      local G = { { "自身buff", EVAL_PLAYER_BUFF_LIST }, { "自身debuff", EVAL_PLAYER_DEBUFF_LIST },
+                  { "目标buff", EVAL_TARGET_BUFF_LIST }, { "目标debuff", EVAL_TARGET_DEBUFF_LIST } }
+      say("— 光环立即扫描（扫描可信 = 每个看到的光环槽都读到了名字）—")
+      for _, g in ipairs(G) do
+        local list, okScan = g[2]()
+        local cnt = 0
+        for _ in ipairs(list or {}) do cnt = cnt + 1 end
+        say(string.format("%s：读到 %d 个（扫描可信=%s）", g[1], cnt, tostring(okScan == true)))
+        for _, d in ipairs(list or {}) do say("    " .. tostring(d.name) .. " = " .. tostring(d.tex)) end
+      end
     elseif msg == "go probe immune" then
       -- 免疫事件探针（1.35.1，免疫学习器前置验证）：30 秒全事件抓取——CHAT_MSG_* 或参数含「免疫/immune」
       -- 的写调试日志；对免疫怪放技能后翻日志拿真实事件名+文本格式，再写解析器（事件 wiki 无文档页）

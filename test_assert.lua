@@ -4286,38 +4286,58 @@ do
   TEST.slotNames = nil
   TEST.bags = nil
 end
--- 70) ★★★1.71.2（第十轮）未知光环名**不得**被当成「确定没有」（骑士虔诚光环实测事故）
---   【事故】用户实测：骑士「虔诚光环」条件「自身buff检查=否」永远成立 → 规则无限重放（日志刷屏）。
---   根因：`texOf(cd.s)` 解析不出纹理时，旧写法 `st.playerBuffs[texOf(cd.s) or ""]` 退化成查空串 = nil
---   → cnt=0 → 「否/无」方向被当成**成立** → 永远重放。
---   ★判据：**「查不到」与「没有」是两件事**——查不到必须如实报错，不能默认成「没有」。
---   官方文档佐证（emberveil.org）：GetPlayerBuff/UnitBuff 都只枚举**出现在增益条上的光环**，
---   且「Hidden or tracking auras are skipped」；本客户端 A–Z 全表里**没有任何 aura 专用函数**。
+-- 70) ★★★1.71.2（第十轮）+ 1.72.2（分享方案）光环判定：**「认不出来」绝不能被当成「确定没有」**
+--   【1.71.2 事故】骑士虔诚光环：「自身buff检查=否」永远成立 → 规则无限重放（日志刷屏）。
+--     根因：`texOf` 解析不出纹理时旧写法 `st.playerBuffs[texOf(cd.s) or ""]` 退化成查空串 = nil
+--     → cnt=0 → 「否/无」方向被当成**成立** → 永远重放。
+--   【1.72.2 修正】判据升级为**两级解析**：
+--     ① 纹理快路径（学习表/动作条）→ ② 名字慢路径（工具读名，限频 0.5s，命中即自愈学习）；
+--     只有**两条路都不可用**才如实失败。★为什么必须这样：名字扫描读的是**增益条/减益条本身**
+--     （权威来源），它能回答「有没有」——这正是分享出去、别人角色纹理表为空时的唯一出路。
+--   ★本组的判据：**「扫描器都不可用」时才必须如实失败**（比旧版「名字不认识就失败」更强也更准）。
 do
-  -- ① 未知名字（动作条没有、学习表没有）→ 必须如实失败并给出原因
+  local GT = GameTooltip
+  local svb, svd, svp = GT.SetUnitBuff, GT.SetUnitDebuff, GT.SetPlayerBuff
+  -- ① 扫描器不可用（工具读名的三个入口全断）→ 必须如实失败并给出原因
+  GT.SetUnitBuff, GT.SetUnitDebuff, GT.SetPlayerBuff = nil, nil, nil
+  EVAL_AURA_TEST_RESET_NAME_CACHE()
   local ok, why = EVAL_TEST_COND_EVAL_LIVE({ k = "hasBuff", s = "绝无此名的测试光环", v = false }, nil)
-  eq(ok, false, "★★★an UNKNOWN aura name must NOT be treated as definitely-absent")
+  eq(ok, false, "★★★an aura that can NOT be identified AND can NOT be scanned must never count as definitely-absent")
   eq(type(why) == "string" and string.find(why, "无法识别", 1, true) ~= nil, true,
      "★★the reason explains the aura could not be identified (got " .. tostring(why) .. ")")
-  -- ①b 同一件事的反方向：v=true（有buff）同样不能被当成「确定没有」而静默放行/拦截
+  -- ①b 反方向同样诚实
   local okV, whyV = EVAL_TEST_COND_EVAL_LIVE({ k = "hasBuff", s = "绝无此名的测试光环", v = true }, nil)
-  eq(okV, false, "★★unknown aura is honest in the OTHER direction too")
+  eq(okV, false, "★★unknown+unscannable is honest in the OTHER direction too")
   eq(type(whyV) == "string" and string.find(whyV, "无法识别", 1, true) ~= nil, true, "★★and says why")
+  -- ①c 四个光环分支都要守（改一处漏一处是这类修复的典型失败）
+  EVAL_AURA_TEST_RESET_NAME_CACHE()
+  local okT, whyT = EVAL_TEST_COND_EVAL_LIVE({ k = "tBuff", s = "绝无此名的测试光环", v = true }, nil)
+  eq(okT, false, "★★target-buff branch is guarded too")
+  eq(string.find(tostring(whyT), "无法识别", 1, true) ~= nil, true, "★★target-buff reason is explicit")
+  EVAL_AURA_TEST_RESET_NAME_CACHE()
+  local okD, whyD = EVAL_TEST_COND_EVAL_LIVE({ k = "hasDebuff", s = "绝无此名的测试光环", v = true }, nil)
+  eq(okD, false, "★★target-debuff branch is guarded too")
+  eq(string.find(tostring(whyD), "无法识别", 1, true) ~= nil, true, "★★target-debuff reason is explicit")
+  EVAL_AURA_TEST_RESET_NAME_CACHE()
+  local okP, whyP = EVAL_TEST_COND_EVAL_LIVE({ k = "pDebuff", s = "绝无此名的测试光环", v = true }, nil)
+  eq(okP, false, "★★self-debuff branch is guarded too")
+  eq(string.find(tostring(whyP), "无法识别", 1, true) ~= nil, true, "★★self-debuff reason is explicit")
+  -- 还原扫描器
+  GT.SetUnitBuff, GT.SetUnitDebuff, GT.SetPlayerBuff = svb, svd, svp
+  EVAL_AURA_TEST_RESET_NAME_CACHE()
   -- ② 反向哨兵：**已知纹理**的名字照常判定（新闸门不许误伤正常路径）
   EVAL_DEBUFF_TEX_LEARN["测试光环OK"] = "Interface\\Icons\\Spell_Holy_DevotionAura"
   local ok2, why2 = EVAL_TEST_COND_EVAL_LIVE({ k = "hasBuff", s = "测试光环OK", v = false }, nil)
   eq(ok2, true, "★a KNOWN aura texture still evaluates normally (guard does not over-block): " .. tostring(why2))
-  -- ②b 其它光环分支同样受保护（改一处漏一处是这类修复的典型失败）
-  local okT, whyT = EVAL_TEST_COND_EVAL_LIVE({ k = "tBuff", s = "绝无此名的测试光环", v = true }, nil)
-  eq(okT, false, "★★target-buff branch is guarded too")
-  eq(string.find(tostring(whyT), "无法识别", 1, true) ~= nil, true, "★★target-buff reason is explicit")
-  local okD, whyD = EVAL_TEST_COND_EVAL_LIVE({ k = "hasDebuff", s = "绝无此名的测试光环", v = true }, nil)
-  eq(okD, false, "★★target-debuff branch is guarded too")
-  eq(string.find(tostring(whyD), "无法识别", 1, true) ~= nil, true, "★★target-debuff reason is explicit")
-  local okP, whyP = EVAL_TEST_COND_EVAL_LIVE({ k = "pDebuff", s = "绝无此名的测试光环", v = true }, nil)
-  eq(okP, false, "★★self-debuff branch is guarded too")
-  eq(string.find(tostring(whyP), "无法识别", 1, true) ~= nil, true, "★★self-debuff reason is explicit")
+  -- ③ 新契约的反面：扫描**可信**且名字确实不在 → 负向方向如实为真（旧版这里恒假）
+  TEST.buffs = { { name = "别的光环", tex = "TEX_OTHER_B" } }
+  EVAL_HELP_UPDATE_STATE()
+  EVAL_AURA_TEST_RESET_NAME_CACHE()
+  local ok3, why3 = EVAL_TEST_COND_EVAL_LIVE({ k = "hasBuff", s = "测试光环不在场", v = false }, nil)
+  eq(ok3, true, "★★★a TRUSTWORTHY scan that does not contain the name means genuinely absent → no-buff is true: " .. tostring(why3))
+  TEST.buffs = {} EVAL_HELP_UPDATE_STATE()
   EVAL_DEBUFF_TEX_LEARN["测试光环OK"] = nil
+  EVAL_AURA_TEST_RESET_NAME_CACHE()
 end
 -- 71) ★★★1.71.2（第十一轮）光环纹理**优先级**：学习表（真实观察）> 动作条（代理）
 --   【事故】骑士虔诚光环：动作条格子 9 的 `GetActionTexture` 返回 `Spell_Nature_WispSplode_TEX`
@@ -7322,6 +7342,111 @@ do
   EVAL_HELP_UI_BUILD()
   if not wasShown102 and EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end
   print("  方案管理窗：两处右键（战斗信息UI / 配置窗）都开同一个窗；窗内改名 + 绑键两段；[保存]一次提交两段；左键仍激活")
+end
+
+-- 103) ★★★1.72.2 分享方案的解：别人角色**从未学过**该 debuff 的纹理 → 名字扫描兜底 + 命中即自愈
+--   【用户实测】分享出去的方案在别人角色上，日志刷
+--   「十字军圣印跳过: 目标debuff:无法识别光环「十字军审判」（纹理未记录）」→ 技能永远不放。
+--   根因：`debuffTex` 学习表是**每角色**的；「十字军审判」又不是对方动作条上的技能 → 纹理两条路都空；
+--     而旧代码「纹理解析不出就先 return」，**按名字兜底永远到不了** —— 恰是最需要它的时候（死接线）。
+--   ★判据（四条）：① 纹理未知 + 名字在 → 判「有」；② 命中即自愈（学下纹理）；
+--     ③ 自愈后走快路径（扫描器断掉也照常判）；④ 扫描可信 + 确实没有 → 负向方向如实为真（旧版恒假）。
+do
+  local function clearTex103(nm)
+    EVAL_DEBUFF_TEX_LEARN[nm] = nil
+    if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war and EVAL_HELP_CONFIG.war.debuffTex then
+      EVAL_HELP_CONFIG.war.debuffTex[nm] = nil
+    end
+  end
+  clearTex103("十字军审判")
+  EVAL_AURA_TEST_RESET_NAME_CACHE()
+  TEST.debuffs = { { name = "十字军审判", tex = "TEX_JUDGE" } }
+  EVAL_HELP_UPDATE_STATE()
+  eq(EVAL_AURA_TEX("十字军审判"), nil, "①前置：纹理确实未知（学习表与动作条都没有）——复现用户场景")
+  -- ① 核心：纹理未知，但名字就在目标身上 → 判「有」
+  local ok1, why1 = EVAL_TEST_COND_EVAL_LIVE({ k = "hasDebuff", s = "十字军审判", v = true }, nil)
+  eq(ok1, true, "★★★texture unknown but the NAME is on the target → hasDebuff is TRUE (the shared profile can finally fire): " .. tostring(why1))
+  -- ② 命中即自愈
+  eq(EVAL_AURA_TEX("十字军审判"), "TEX_JUDGE", "★★★a hit LEARNS the name→texture pair (self-heal)")
+  -- ③ 自愈后不再依赖扫描：工具读名入口全断，照样判得出来（快路径）
+  EVAL_AURA_TEST_RESET_NAME_CACHE()
+  local GT = GameTooltip
+  local svb, svd, svp = GT.SetUnitBuff, GT.SetUnitDebuff, GT.SetPlayerBuff
+  GT.SetUnitBuff, GT.SetUnitDebuff, GT.SetPlayerBuff = nil, nil, nil
+  local ok2 = EVAL_TEST_COND_EVAL_LIVE({ k = "hasDebuff", s = "十字军审判", v = true }, nil)
+  eq(ok2, true, "★★★after self-heal the judgement no longer needs the scanner at all (fast path)")
+  GT.SetUnitBuff, GT.SetUnitDebuff, GT.SetPlayerBuff = svb, svd, svp
+  EVAL_AURA_TEST_RESET_NAME_CACHE()
+  -- ④ 负向方向：扫描可信 + 名字确实不在 → 如实为真（旧代码这里恒假 → 「无debuff」条件永远不成立）
+  clearTex103("十字军审判")
+  TEST.debuffs = { { name = "别的debuff", tex = "TEX_OTHER_D" } }
+  EVAL_HELP_UPDATE_STATE()
+  EVAL_AURA_TEST_RESET_NAME_CACHE()
+  local ok3, why3 = EVAL_TEST_COND_EVAL_LIVE({ k = "hasDebuff", s = "十字军审判", v = false }, nil)
+  eq(ok3, true, "★★★trustworthy scan without the name → no-debuff is TRUE (was permanently false before): " .. tostring(why3))
+  -- 收尾（模块级状态自己收）
+  TEST.debuffs = {}
+  clearTex103("十字军审判")
+  EVAL_AURA_TEST_RESET_NAME_CACHE()
+  EVAL_HELP_UPDATE_STATE()
+  print("  分享方案纹理缺失：名字扫描兜底命中 + 自愈学纹理 + 之后走快路径；负向方向也如实判定")
+end
+
+-- 104) ★★★1.72.2 学习表诊断命令（用户实机验证「自动扫描」的入口）
+--   用户要求：「模拟本地清理纹理记录，先主动删除一些纹理，我测试下能否自动扫描」。
+--   ★判据：① 命令真的删（**两个存储**都删）② 删完之后再判定要**重新扫描并学回来**（自愈闭环）
+--          ③ 名字匹配**大小写不敏感**（/eh 会把整条命令转小写）④ 删不存在的名字要如实回报、不许崩。
+do
+  local function cmd104(s) SlashCmdList["EVALHELP"](s) end
+  local cfgW = EVAL_HELP_CONFIG.war
+  cfgW.debuffTex = cfgW.debuffTex or {}
+  -- ① 概览
+  EVAL_DEBUFF_TEX_LEARN["测试命令光环"] = "TEX_CMD"
+  cfgW.debuffTex["TestCaseAura"] = "TEX_CASE"
+  TEST.chat = nil
+  cmd104("go tex")
+  eq(TEST.chat ~= nil and string.find(TEST.chat, "学习表", 1, true) ~= nil, true, "★/eh go tex 能打印学习表概览")
+  -- ② 删单条（中文精确命中）
+  TEST.chat = nil
+  cmd104("go texdel 测试命令光环")
+  eq(EVAL_DEBUFF_TEX_LEARN["测试命令光环"], nil, "★★texdel 真的删掉了运行时兜底表里的记录")
+  eq(string.find(tostring(TEST.chat), "已删除", 1, true) ~= nil, true, "★★并如实回报已删除")
+  -- ③ 大小写不敏感
+  TEST.chat = nil
+  cmd104("go texdel TestCaseAura")
+  eq(cfgW.debuffTex["TestCaseAura"], nil, "★★★texdel 大小写不敏感（/eh 会把整条命令转小写）")
+  -- ④ 删不存在的名字：如实回报
+  TEST.chat = nil
+  cmd104("go texdel 绝不存在的名字")
+  eq(string.find(tostring(TEST.chat), "没有", 1, true) ~= nil, true, "★删不存在的名字如实回报「没有」")
+  -- ⑤ 自愈闭环：删掉纹理记录后重新判定 → 自动重新扫描并学回来（用户要验的就是这个）
+  EVAL_AURA_TEST_RESET_NAME_CACHE()
+  TEST.debuffs = { { name = "十字军审判", tex = "TEX_JUDGE2" } }
+  EVAL_HELP_UPDATE_STATE()
+  EVAL_DEBUFF_TEX_LEARN["十字军审判"] = nil
+  cfgW.debuffTex["十字军审判"] = nil
+  eq(EVAL_AURA_TEX("十字军审判"), nil, "⑤前置：纹理确实已空（模拟本地清理纹理记录）")
+  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "hasDebuff", s = "十字军审判", v = true }, nil), true,
+     "★★★清理纹理记录后，判定**自动扫描**并命中（这就是分享方案的解）")
+  eq(EVAL_AURA_TEX("十字军审判"), "TEX_JUDGE2", "★★★并且把纹理学了回来（自愈闭环）")
+  -- ⑥ 全清：两个存储都要空
+  TEST.chat = nil
+  cmd104("go texclear")
+  eq(string.find(tostring(TEST.chat), "已清空", 1, true) ~= nil, true, "★texclear 回报已清空")
+  local n1, n2 = 0, 0
+  for _ in pairs(cfgW.debuffTex) do n1 = n1 + 1 end
+  for _ in pairs(EVAL_DEBUFF_TEX_LEARN) do n2 = n2 + 1 end
+  eq(n1 == 0 and n2 == 0, true, "★★texclear 真的把两个存储都清空了（残留 " .. n1 .. "/" .. n2 .. "）")
+  -- ⑦ texscan 不报错并打印四类（含新的「扫描可信」）
+  TEST.chat = nil
+  cmd104("go texscan")
+  eq(string.find(tostring(TEST.chat), "扫描可信", 1, true) ~= nil, true, "★texscan 打印四类光环与本次扫描是否可信")
+  -- 收尾（模块级状态自己收）
+  TEST.debuffs = {}
+  EVAL_HELP_UPDATE_STATE()
+  EVAL_AURA_TEST_RESET_NAME_CACHE()
+  TEST.chat = nil
+  print("  学习表诊断命令：/eh go tex | texdel 名字(大小写不敏感) | texclear | texscan；删掉纹理后判定会自动扫描并学回来")
 end
 
 print("ALL TESTS PASS")

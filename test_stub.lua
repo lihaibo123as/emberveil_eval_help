@@ -195,6 +195,10 @@ GameTooltip = {
   SetPlayerBuff = function(_, bi) TEST.curBuff = bi return TEST.buffs[bi + 1] ~= nil end,
 }
 DEFAULT_CHAT_FRAME = { AddMessage = function(_, msg) TEST.chat = (TEST.chat or "") .. tostring(msg) .. "\n" end }
+-- ★1.72.2：**必须给 SlashCmdList**。此前桩里没有它，而插件把整条 /eh 命令链包在
+--   @@if type(SlashCmdList) == "table" then@@ 里 → 测试里那段代码**从未被注册**，
+--   于是所有斜杠命令（含新加的 /eh go tex* 诊断命令）都是**零覆盖盲区**。
+SlashCmdList = {}
 
 GetTime = function() return TEST.time or 1000 end
 -- ★1.70.47 队伍/团队成员桩（用户要求：一键扫描队伍 → 血/蓝/buff/debuff 条件）：

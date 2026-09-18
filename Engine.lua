@@ -956,36 +956,66 @@ end
 --   ★第③层是关键：不做自愈的话，命中一次就要永远付工具读名的代价。
 local AURA_NAME_MIN = 0.5
 local auraNameCache = {}
+-- ★★★1.72.2（分享方案事故）**三态**：true=命中 / false=**扫描干净跑完**且确实不在 / nil=不可信。
+--   【事故】分享出去的方案在别人角色上：`debuffTex` 学习表是**每角色**的、目标身上的 debuff（如「十字军审判」）
+--     又不是对方动作条上的技能 → `auraTexKnown` 两条路都回 nil → 判定以「纹理未记录」直接失败
+--     → 条件恒假、技能永远不放（用户日志：十字军圣印/正义圣印跳过）。
+--   【为什么旧版够不到】旧 `auraNameHit` 只回 true/false，分不清「扫描器没跑」与「跑了、确实没有」；
+--     而调用点又写成「纹理解析不出就先 return」，于是按名字兜底**只在纹理已知时**才到达 —— 恰是最不需要它的时候。
+--   ★判据：① **命中永远可信**（读到名字就是有，哪怕扫描残缺）；
+--           ② 「确实没有」只有在**扫描可信**（跑完且每个有光环的槽都读到了名字）时才敢下结论；
+--           ③ 其余一律 nil → 调用方必须**如实失败**（1.71.2「查不到 ≠ 没有」的铁律不破）。
 local function auraNameHit(name, key, provider)
-  if type(name) ~= "string" or name == "" then return false end
-  if type(provider) ~= "function" then return false end
+  if type(name) ~= "string" or name == "" then return nil end
+  if type(provider) ~= "function" then return nil end
   local now = (type(GetTime) == "function") and GetTime() or 0
   local c = auraNameCache[key]
   if not (c and (now - c.t) < AURA_NAME_MIN) then
     local set = {}
-    local ok, list = pcall(provider)
-    if ok and type(list) == "table" then
+    local okRun, list, okScan = pcall(provider) -- provider 第二返回 = 本次扫描是否可信
+    if okRun and type(list) == "table" then
       for _, d in ipairs(list) do
         if type(d) == "table" and type(d.name) == "string" and d.name ~= "" then set[d.name] = true end
       end
     end
-    c = { t = now, set = set }
+    c = { t = now, set = set, ok = (okRun and okScan) and true or false }
     auraNameCache[key] = c
   end
-  return c.set[name] and true or false
+  if c.set[name] then return true end
+  if c.ok then return false end
+  return nil
 end
 -- ★测试用：清空名字缓存（模块级状态，跨用例必须可重置）
 function EVAL_AURA_TEST_RESET_NAME_CACHE() auraNameCache = {} end
 
+-- ★★★1.72.2 光环**两级解析**统一入口：① 纹理快路径（学习表/动作条）→ ② 名字慢路径（工具读名，限频 0.5s，命中即自愈学习）。
+--   返回 (cnt, unknown)：unknown=true = **两条路都认不出这个光环** → 调用方必须如实失败，
+--   **绝不能当成「没有」**（1.71.2 铁律：查不到 ≠ 没有；旧写法就是这里退化成 0 → 规则无限重放）。
+--   texStore 传 st.playerBuffs / st.playerDebuffs / st.targetBuffs / st.targetDebuffs。
+local function auraCountOf(cd, texStore, key, provider)
+  local tex = auraTexKnown(cd.s)
+  local cnt = tex and texStore and texStore[tex] or nil
+  if not cnt then
+    local hit = auraNameHit(cd.s, key, provider)
+    if hit == true then cnt = 1
+    elseif hit == nil and not tex then return nil, true end -- 既没纹理、名字扫描也不可信 → 如实失败
+  end
+  return cnt, false
+end
+
 -- 当前目标 debuff 实时清单：[{name,tex},...]（每次调用现场扫描 + 学习）
 function EVAL_TARGET_DEBUFF_LIST()
   local list = {}
-  if not (UnitExists("target") and type(UnitDebuff) == "function") then return list end
-  if not (WTT and WTT.SetUnitDebuff) then return list end
+  if not (UnitExists("target") and type(UnitDebuff) == "function") then return list, false end
+  if not (WTT and WTT.SetUnitDebuff) then return list, false end
   pcall(function() WTT:SetOwner(UIParent, "ANCHOR_NONE") end)
+  -- ★1.72.2 第二返回 = **本次扫描是否可信**：只有「每个有光环的槽都读到了名字」才算干净。
+  --   读到一半就下结论「没有这个 debuff」是危险的（负向判定会因此放行 → 重放）。
+  local slots, named = 0, 0
   for i = 1, 16 do
     local okd, tex = pcall(UnitDebuff, "target", i)
     if not okd or not tex then break end
+    slots = slots + 1
     local name
     pcall(function() WTT:ClearLines() end)
     local oks = pcall(WTT.SetUnitDebuff, WTT, "target", i) -- 1.33.2 探针实测：返回值恒 nil 但 tooltip 已填充，built 不能当门槛
@@ -994,25 +1024,28 @@ function EVAL_TARGET_DEBUFF_LIST()
       if fs and fs.GetText then name = fs:GetText() end
     end
     if name and name ~= "" then
+      named = named + 1
       table.insert(list, { name = name, tex = tex })
       learnAuraTex(name, tex)
     end
   end
   pcall(function() WTT:Hide() end)
-  return list
+  return list, (named == slots)
 end
 
 -- 通用光环实时清单（1.54.0）：unit="target"/"player"，harmful=true=debuff / false=buff
 local function wScanAuras(unit, harmful)
   local list = {}
-  if not UnitExists(unit) then return list end
+  if not UnitExists(unit) then return list, false end
   local api = harmful and UnitDebuff or UnitBuff
   local ttm = WTT and (harmful and WTT.SetUnitDebuff or WTT.SetUnitBuff)
-  if type(api) ~= "function" or not ttm then return list end
+  if type(api) ~= "function" or not ttm then return list, false end
   pcall(function() WTT:SetOwner(UIParent, "ANCHOR_NONE") end)
+  local slots, named = 0, 0 -- ★1.72.2 同 EVAL_TARGET_DEBUFF_LIST：读全了才算「扫描可信」
   for i = 1, 16 do
     local okd, tex = pcall(api, unit, i)
     if not okd or not tex then break end
+    slots = slots + 1
     local name
     pcall(function() WTT:ClearLines() end)
     local oks = pcall(ttm, WTT, unit, i) -- 1.33.2 探针实测：返回值恒 nil 但 tooltip 已填充
@@ -1021,35 +1054,42 @@ local function wScanAuras(unit, harmful)
       if fs and fs.GetText then name = fs:GetText() end
     end
     if name and name ~= "" then
+      named = named + 1
       table.insert(list, { name = name, tex = tex })
       learnAuraTex(name, tex)
     end
   end
   pcall(function() WTT:Hide() end)
-  return list
+  return list, (named == slots)
 end
-function EVAL_TARGET_BUFF_LIST() return wScanAuras("target", false) end -- 目标 buff（1.54.0）
-function EVAL_PLAYER_DEBUFF_LIST() return wScanAuras("player", true) end -- 自身 debuff（1.54.0）
+function EVAL_TARGET_BUFF_LIST() local l, ok = wScanAuras("target", false) return l, ok end -- 目标 buff（1.54.0）
+function EVAL_PLAYER_DEBUFF_LIST() local l, ok = wScanAuras("player", true) return l, ok end -- 自身 debuff（1.54.0）
 
 -- 当前自身 buff 实时清单（GetPlayerBuff 0 起始索引 + SetPlayerBuff 读名）
 function EVAL_PLAYER_BUFF_LIST()
   local list = {}
+  -- ★1.72.2 第二返回 = **本次扫描是否可信**（每个「看到的光环」都进了清单且读到了名字）。
+  --   ``ran`` = 两条路径是否真的跑过（都没有 → 不可信，调用方必须如实失败）。
+  local ran, slots, named = false, 0, 0
   local function tooltipName() -- 读 tooltip 第一行（WTT=GameTooltip）
     local fs = getglobal("GameTooltipTextLeft1")
     if fs and fs.GetText then return fs:GetText() end
     return nil
   end
   if type(GetPlayerBuff) == "function" and WTT and WTT.SetPlayerBuff then
+    ran = true
     pcall(function() WTT:SetOwner(UIParent, "ANCHOR_NONE") end)
     for i = 0, 31 do
       local okb, bi = pcall(GetPlayerBuff, i, "HELPFUL")
       if not okb or type(bi) ~= "number" or bi < 0 then break end
+      slots = slots + 1
       local okt, tex = pcall(GetPlayerBuffTexture, bi)
       local name
       pcall(function() WTT:ClearLines() end)
       local oks = pcall(WTT.SetPlayerBuff, WTT, bi) -- 1.33.2 同探针实测：built 恒 nil 但 name 可读
       if oks then name = tooltipName() end
       if name and name ~= "" and okt and tex then
+        named = named + 1
         table.insert(list, { name = name, tex = tex })
         learnAuraTex(name, tex)
       end
@@ -1059,22 +1099,26 @@ function EVAL_PLAYER_BUFF_LIST()
   -- 1.32.10 兜底：一个名字都没读到时换 UnitBuff+SetUnitBuff 路径（本客户端 SetPlayerBuff
   -- 读名可能失败——药品类 buff 不进下拉的病根；SetUnitBuff 与已验证的 SetUnitDebuff 同族）
   if table.getn(list) == 0 and type(UnitBuff) == "function" and WTT and WTT.SetUnitBuff then
+    ran = true
+    slots, named = 0, 0 -- 换路径重新计（同一条光环不能算两次）
     pcall(function() WTT:SetOwner(UIParent, "ANCHOR_NONE") end)
     for i = 1, 32 do
       local oku, tex = pcall(UnitBuff, "player", i)
       if not oku or not tex then break end
+      slots = slots + 1
       local name
       pcall(function() WTT:ClearLines() end)
       local oks = pcall(WTT.SetUnitBuff, WTT, "player", i) -- 1.33.2 同探针实测
       if oks then name = tooltipName() end
       if name and name ~= "" then
+        named = named + 1
         table.insert(list, { name = name, tex = tex })
         learnAuraTex(name, tex)
       end
     end
     pcall(function() WTT:Hide() end)
   end
-  return list
+  return list, (ran and named == slots)
 end
 
 -- 技能冷却是否就绪；不就绪时返回剩余秒数说明
@@ -1596,10 +1640,8 @@ local function condOne(cd, skill, dry, rule)
   elseif k == "hasBuff" then -- 1.54.0 合并：v=false=无buff（旧 k=noBuff 仅兼容存量数据）；1.70.1 层数门槛 cd.n
     -- ★★★1.71.2（第十轮）先解析纹理；**解析不出就如实失败**，绝不退化成「0 层」。
     --   （旧写法会把未知光环当成「确定没有」→「否/无」方向永远成立→规则无限重放）
-    local btex = auraTexKnown(cd.s)
-    if not btex then return false, "自身buff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
-    local cnt = st.playerBuffs[btex]
-    if (not cnt) and auraNameHit(cd.s, "pb", EVAL_PLAYER_BUFF_LIST) then cnt = 1 end
+    local cnt, unknownAura = auraCountOf(cd, st.playerBuffs, "pb", EVAL_PLAYER_BUFF_LIST)
+    if unknownAura then return false, "自身buff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
     cnt = (cnt == true) and 1 or (tonumber(cnt) or 0) -- 兼容旧布尔/新层数
     local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
     local has = cnt >= lim
@@ -1607,29 +1649,23 @@ local function condOne(cd, skill, dry, rule)
     if not okv then return false, whyT or "自身buff判定不符" end
     return true, "自身buff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "/" .. lim) or "")
   elseif k == "noBuff" then
-    local btex = auraTexKnown(cd.s)
-    if not btex then return false, "已有buff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
-    if not st.playerBuffs[btex] and auraNameHit(cd.s, "pb", EVAL_PLAYER_BUFF_LIST) then
-      return false, "已有buff:" .. tostring(cd.s)  -- 名字命中：图标不可靠时以名字为准
-    end
-    return (not st.playerBuffs[btex]), "已有buff:" .. tostring(cd.s)
+    local cnt, unknownAura = auraCountOf(cd, st.playerBuffs, "pb", EVAL_PLAYER_BUFF_LIST)
+    if unknownAura then return false, "已有buff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
+    local have = (cnt == true) or ((tonumber(cnt) or 0) > 0)
+    return (not have), "已有buff:" .. tostring(cd.s)
   elseif k == "tBuff" then -- 1.54.0 目标 buff 检查（v=false=无目标buff）；1.70.1 层数门槛
     -- ★1.70.45 目标光环**没有**时长 API（wiki globals/Buff：其他单位只有 UnitBuff/UnitDebuff = 图标+层数）。
     --   带剩余时间检查时如实返回 false —— 不忽略它（忽略 = 写了却不生效，属静默失败）。
     if type(cd.secN) == "number" then return false, "目标buff无剩余时间数据" end
-    local ttex = auraTexKnown(cd.s)
-    if not ttex then return false, "目标buff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
-    local cnt = st.targetBuffs and st.targetBuffs[ttex]
-    if (not cnt) and auraNameHit(cd.s, "tb", EVAL_TARGET_BUFF_LIST) then cnt = 1 end
+    local cnt, unknownAura = auraCountOf(cd, st.targetBuffs, "tb", EVAL_TARGET_BUFF_LIST)
+    if unknownAura then return false, "目标buff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
     cnt = (cnt == true) and 1 or (tonumber(cnt) or 0)
     local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
     local has = cnt >= lim
     return (has == (cd.v ~= false)), "目标buff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "/" .. lim) or "")
   elseif k == "pDebuff" then -- 1.54.0 自身 debuff 检查（v=false=无自身debuff）；1.70.1 层数门槛
-    local ptex = auraTexKnown(cd.s)
-    if not ptex then return false, "自身debuff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
-    local cnt = st.playerDebuffs and st.playerDebuffs[ptex]
-    if (not cnt) and auraNameHit(cd.s, "pd", EVAL_PLAYER_DEBUFF_LIST) then cnt = 1 end
+    local cnt, unknownAura = auraCountOf(cd, st.playerDebuffs, "pd", EVAL_PLAYER_DEBUFF_LIST)
+    if unknownAura then return false, "自身debuff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
     cnt = (cnt == true) and 1 or (tonumber(cnt) or 0)
     local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
     local has = cnt >= lim
@@ -1640,20 +1676,16 @@ local function condOne(cd, skill, dry, rule)
     -- ★1.70.45 同 tBuff：目标光环无时长数据 → 带剩余时间检查时如实 false
     if type(cd.secN) == "number" then return false, "目标debuff无剩余时间数据" end
     -- 1.54.0 合并：v=false=无debuff（不足 lim 层才算无，与旧 noDebuff 同语义）；层数门槛 cd.n（1.31.0）
-    local dtex = auraTexKnown(cd.s)
-    if not dtex then return false, "目标debuff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
-    local cnt = st.targetDebuffs[dtex]
-    if (not cnt) and auraNameHit(cd.s, "td", EVAL_TARGET_DEBUFF_LIST) then cnt = 1 end
+    local cnt, unknownAura = auraCountOf(cd, st.targetDebuffs, "td", EVAL_TARGET_DEBUFF_LIST)
+    if unknownAura then return false, "目标debuff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
     cnt = (cnt == true) and 1 or (tonumber(cnt) or 0) -- 兼容旧布尔/新层数
     local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
     local has = cnt >= lim
     return (has == (cd.v ~= false)), "目标debuff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "/" .. lim) or "")
   elseif k == "noDebuff" then
     -- 层数门槛（1.31.0）：cd.n=视为"无"的上限（nil/1=完全没有；N=不足N层才算无）
-    local ndtex = auraTexKnown(cd.s)
-    if not ndtex then return false, "目标debuff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
-    local cnt = st.targetDebuffs[ndtex]
-    if (not cnt) and auraNameHit(cd.s, "td", EVAL_TARGET_DEBUFF_LIST) then cnt = 1 end
+    local cnt, unknownAura = auraCountOf(cd, st.targetDebuffs, "td", EVAL_TARGET_DEBUFF_LIST)
+    if unknownAura then return false, "目标debuff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
     cnt = (cnt == true) and 1 or (cnt or 0)
     local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
     if cnt >= lim then return false, "目标已有debuff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "层") or "") end
