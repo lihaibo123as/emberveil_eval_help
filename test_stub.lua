@@ -75,6 +75,9 @@ local function newMock()
     GetFrameLevel = function() return level end,
     -- ★1.73.31 桩保真：鼠标开关要能读回来（「弹窗点击不到」的一半原因是它没吃掉落在自己身上的点击）
     EnableMouse = function(self, v) rawset(self, "__mouse", v and true or false) end,
+    -- ★1.73.34 滚轮开关也要能读回来（「列表支不支持滚轮」才可断言；不给默认值 → 漏装当场false）
+    EnableMouseWheel = function(self, v) rawset(self, "__wheel", v and true or false) end,
+    IsMouseWheelEnabled = function(self) return rawget(self, "__wheel") and true or false end,
     IsMouseEnabled = function(self) return rawget(self, "__mouse") and true or false end,
     ClearAllPoints = function() x = nil y = nil end,
     -- ★1.71.2 桩必须同时记住**锚点语义**（point/relPoint/relTo），不能只记偏移量：

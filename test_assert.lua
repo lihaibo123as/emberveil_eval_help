@@ -10182,4 +10182,61 @@ do
   EVAL_BUY_UI_CLOSE()
   print("  自动购买弹窗：列头与数据列对齐且互不重叠 · 有拖动柄(Button+LeftButton) · 说明行移到安全说明下方并左对齐")
 end
+
+-- 137) ★★★1.73.34 用户：「审计自动购买内的滚动条机制是否符合项目规范」——
+--   审计发现 3 处不符 + 2 处联动问题，全部修复；判据如下（都读**真实控件/真实脚本**）：
+do
+  local tb137 = EVAL_HELP_CONFIG.tb
+  local savedBuy137 = tb137.buy
+  tb137.buy = {}
+  for i = 1, 10 do table.insert(tb137.buy, { name = "物品" .. i, n = 1, per = 1, on = true }) end
+  EVAL_BUY_UI_OPEN() -- ★必须真的打开一次（刷新才会按 10 条算页码/边界）
+  local s137 = EVAL_TEST_BUY_UI_SCROLL()
+  eq(type(s137) == "table", true, "①前置：读得到滚动条状态")
+  -- ① 滚轮：装上了、方向单一来源、上滚 = 回到前面、且**夹取**（不越界）
+  eq(s137.wheel, true, "①★★★弹窗装了 OnMouseWheel 脚本（原来**根本没有滚轮**）")
+  eq(s137.mouseWheel, true, "①★★EnableMouseWheel(true)（不装开关收不到滚轮事件）")
+  eq(s137.off, 0, "①前置：初始在第一页")
+  EVAL_TEST_BUY_UI_WHEEL(nil, 1) -- 上滚 = +1 = 回到前面
+  eq(EVAL_TEST_BUY_UI_SCROLL().off, 0, "①★★★已在第一页时上滚不再往上（夹取，不是负数）")
+  EVAL_TEST_BUY_UI_WHEEL(nil, -1)
+  eq(EVAL_TEST_BUY_UI_SCROLL().off, 1, "①★★★下滚 = 往后一行（off +1）")
+  EVAL_TEST_BUY_UI_WHEEL(nil, -1)
+  eq(EVAL_TEST_BUY_UI_SCROLL().off, 2, "①★连续下滚继续往后")
+  EVAL_TEST_BUY_UI_WHEEL(nil, 1)
+  eq(EVAL_TEST_BUY_UI_SCROLL().off, 1, "①★★★上滚 = 回到前面（off -1，方向与本项目其它 6 处一致）")
+  local before137 = EVAL_TEST_BUY_UI_SCROLL().off
+  EVAL_TEST_BUY_UI_WHEEL(nil, "x") -- 非滚轮事件（dir = 0）
+  eq(EVAL_TEST_BUY_UI_SCROLL().off, before137, "①★★dir=0（不是滚轮事件）→ 原地不动（交还原脚本的链式接管）")
+  EVAL_TEST_BUY_UI_WHEEL(nil, -1) EVAL_TEST_BUY_UI_WHEEL(nil, -1) EVAL_TEST_BUY_UI_WHEEL(nil, -1)
+  EVAL_TEST_BUY_UI_WHEEL(nil, -1) EVAL_TEST_BUY_UI_WHEEL(nil, -1) EVAL_TEST_BUY_UI_WHEEL(nil, -1)
+  EVAL_TEST_BUY_UI_WHEEL(nil, -1) EVAL_TEST_BUY_UI_WHEEL(nil, -1) EVAL_TEST_BUY_UI_WHEEL(nil, -1)
+  local s137b = EVAL_TEST_BUY_UI_SCROLL()
+  eq(s137b.off <= 10 - 8, true, "①★★滚到底不越界（off " .. tostring(s137b.off) .. " ≤ 2 = 10-8）")
+  EVAL_BUY_UI_REFRESH()
+  local s137b2 = EVAL_TEST_BUY_UI_SCROLL()
+  eq(s137b.dnShown, false, "①★★到底 → ▼ 隐藏（边界状态）")
+  for i = 1, 10 do EVAL_TEST_BUY_UI_WHEEL(nil, 1) end
+  local s137c = EVAL_TEST_BUY_UI_SCROLL()
+  eq(s137c.off, 0, "①★一路滚回顶（off = 0）")
+  eq(s137c.upShown, false, "①★★到顶 → ▲ 隐藏")
+  eq(s137c.dnShown, true, "①★★未到底 → ▼ 显示")
+  -- ② 箭头进「右侧专用滚动槽」：不许压在「删除」按钮上
+  eq(type(s137.up) == "table" and type(s137.del) == "table", true, "②前置：读得到箭头与删除按钮")
+  eq((s137.up.x or -999) >= (s137.del.r or 9999), true, "②★★★▲ 在删除列**右边**（箭头左 " .. tostring(s137.up.x) ..
+     " ≥ 删除右 " .. tostring(s137.del.r) .. "）—— 原来两者重叠，点删除会点到箭头")
+  eq((s137.up.r or 9999) <= s137.W, true, "②★★▲ 不出窗口（" .. tostring(s137.up.r) .. " ≤ " .. tostring(s137.W) .. "）")
+  -- ③ 页码指示在底栏，不压数据行
+  -- ④ 页码：整数页 + 到底算最后一页 + 箭头按页滚（原来浮点除法：真机显示「1.25/2」）
+  eq(s137.indText, "1/2  (10)", "④★★★起始页码是**整数**页（实际「" .. tostring(s137.indText) .. "」；原来是浮点除法）")
+  EVAL_TEST_BUY_UI_SCROLL() -- 读一次状态（无副作用）
+  for i = 1, 12 do EVAL_TEST_BUY_UI_WHEEL(nil, -1) end
+  local s137d = EVAL_TEST_BUY_UI_SCROLL()
+  eq(s137d.indText, "2/2  (10)", "④★★★到底 → 页码 = **最后一页**（实际「" .. tostring(s137d.indText) .. "」）")
+  eq(string.find(tostring(s137d.indText), ".", 1, true), nil, "④★★★页码里**不许出现小数点**（真机老 bug 就是「1.25/2」）")
+  eq((s137.ind.y or 0) < ((s137.delLast and s137.delLast.y) or 0), true, "③★★★页码指示在**所有数据行下方**（指示 y " ..
+     tostring(s137.ind.y) .. " < 末行 y " .. tostring(s137.delLast and s137.delLast.y) .. "）—— 原来锚在 y=-46 正压第一行")
+  tb137.buy = savedBuy137
+  print("  自动购买滚动条：滚轮(单一来源+夹取+边界隐藏) · ▲▼ 进右侧专用槽不压删除列 · 页码指示移到底栏")
+end
 print("ALL TESTS PASS")

@@ -3232,13 +3232,44 @@ local function buyUIRefresh()
   end
   if buyUI.ind then
     local pages = math.max(1, math.ceil(n / TB_BUY_UI_ROWS))
-    buyUI.ind:SetText(string.format("%d/%d  (%d)", buyUI.off / TB_BUY_UI_ROWS + 1, pages, n))
+    -- ★★★1.73.34 滚动条审计：页码三处修正 ——
+    --   ① 原来是 off / ROWS + 1（**浮点除法**）：真客户端显示「1.25/2」，fengari 直接报错（bad argument #2 to format）；
+    --   ② 而且到底时 off 被夹到 maxOff（不是 ROWS 的整数倍）→ 算出来还是第 1 页 ⇒ 到底就取**最后一页**；
+    --   ③ 箭头原来按「行」滚、指示按「页」算 → 两者对不上 ⇒ 箭头改成**按页**滚（一次一页，与指示一致）。
+    local page
+    if n == 0 then
+      page = 1
+    elseif buyUI.off >= math.max(0, n - TB_BUY_UI_ROWS) then
+      page = pages -- 到底（含夹取后的位置）= 最后一页
+    else
+      page = math.floor(buyUI.off / TB_BUY_UI_ROWS) + 1
+    end
+    if page < 1 then page = 1 end
+    if page > pages then page = pages end
+    buyUI.ind:SetText(string.format("%d/%d  (%d)", page, pages, n))
+  end
+  -- ★1.73.34 边界状态：到顶隐藏 ▲、到底隐藏 ▼（空列表两个都藏）——滚动条机制该有的反馈
+  -- ★注意：tbBtn 返回的是**包裹表** {btn,bg,text}，显隐必须走 .btn（本项目的老坑）
+  local upBtn = buyUI.up and buyUI.up.btn
+  local dnBtn = buyUI.dn and buyUI.dn.btn
+  if upBtn and dnBtn then
+    if n == 0 then
+      upBtn:Hide() dnBtn:Hide()
+    else
+      if buyUI.off <= 0 then upBtn:Hide() else upBtn:Show() end
+      if buyUI.off + TB_BUY_UI_ROWS >= n then dnBtn:Hide() else dnBtn:Show() end
+    end
   end
 end
 
 local function buyUIBuild()
   if buyUI.root then return end
-  local W, H = 360, 268
+  -- ★★★1.73.34 审计滚动条（用户：「审计自动购买内的滚动条机制是否符合项目规范」）——
+  --   发现 3 处不符：① **完全没有滚轮**（配置窗内其余 5 个列表都有，且都走 EVAL_WHEEL_DIR 单一来源）；
+  --   ② ▲▼ 箭头画在 x=W-20，**压在「删除」按钮上**（删除列 316..348 vs 箭头 340..354）→ 点删除会点到箭头；
+  --   ③ 页码指示 ind 锚在 y=-46，正压在第一行数据上。
+  --   ⇒ 窗口加宽到 384，右侧留 **30px 专用滚动槽**（删除列右边缘 = W-30），箭头进槽、指示挪到底栏。
+  local W, H = 384, 268
   local root = CreateFrame("Frame", "EVAL_BUY_UI", UIParent)
   root:SetWidth(W) root:SetHeight(H)
   root:SetPoint("CENTER", UIParent, "CENTER", 60, 40)
@@ -3321,7 +3352,7 @@ local function buyUIBuild()
   headL(cols.nameX, cols.nameW, L("TB_BUY_COL_NAME"))
   headR(cols.nR, cols.nW, L("TB_BUY_COL_N"))      -- ★总数（与 r.nt 那一列同右边缘）
   headR(cols.perR, cols.perW, L("TB_BUY_COL_PER"))-- ★每次（与 r.pt 那一列同右边缘）
-  headR(W - 12, cols.delW, L("TB_BUY_COL_DEL"))   -- ★操作（删除列）
+  headR(W - 30, cols.delW, L("TB_BUY_COL_DEL"))   -- ★操作（删除列；右边缘 = W-30，右侧留滚动槽）
   local rows = {}
   buyUI.rows = rows
   for i = 1, TB_BUY_UI_ROWS do
@@ -3362,7 +3393,7 @@ local function buyUIBuild()
     local pb, pt = cell(cols.perR - 44, 44, true)           -- 每次（右边缘 = cols.perR）
     r.name, r.nt, r.pt = nt, qt, pt
     r.nameBtn, r.nBtn, r.pBtn = nb, qb, pb
-    local db = tbBtn(root, W - 44, y, 32, L("TB_BUY_DEL"), function() end)
+    local db = tbBtn(root, W - 62, y, 32, L("TB_BUY_DEL"), function() end) -- 右边缘 = W-30（不占滚动槽）
     r.del = db.btn r.delText = db.text
     rows[i] = r
   end
@@ -3402,12 +3433,31 @@ local function buyUIBuild()
     buyUIRefresh() EVAL_TB_REFRESH()
   end)
   tbBtn(root, W - 74, -(H - 26), 62, L("TB_BUY_CLOSE"), function() root:Hide() end)
-  local up = tbBtn(root, W - 20, -44, 14, "^", function() buyUI.off = math.max(0, buyUI.off - 1) buyUIRefresh() end)
-  local dn = tbBtn(root, W - 20, -(44 + (TB_BUY_UI_ROWS - 1) * 18), 14, "v", function() buyUI.off = buyUI.off + 1 buyUIRefresh() end)
+  -- ▲▼ 放进右侧**专用滚动槽**（x = W-22，宽 16）：不再压住「删除」按钮
+  -- ★1.73.34 箭头按**页**滚动（原来按行滚、而指示按页算 → 对不上）：一次一页，与页码指示一致
+  local up = tbBtn(root, W - 22, -44, 16, "^", function() buyUI.off = math.max(0, buyUI.off - TB_BUY_UI_ROWS) buyUIRefresh() end)
+  local dn = tbBtn(root, W - 22, -(44 + (TB_BUY_UI_ROWS - 1) * 18), 16, "v", function() buyUI.off = buyUI.off + TB_BUY_UI_ROWS buyUIRefresh() end)
   buyUI.up, buyUI.dn = up, dn
+  -- 页码指示挪到**底栏**（原来锚在 y=-46 压着第一行数据）
   local ind = tbText(root, 9, 0.65, 0.62, 0.50)
-  ind:SetPoint("TOPRIGHT", root, "TOPRIGHT", -36, -46)
+  ind:SetPoint("TOPLEFT", root, "TOPLEFT", 176, -(H - 24))
+  pcall(ind.SetWidth, ind, 120)
+  pcall(ind.SetJustifyH, ind, "LEFT")
   buyUI.ind = ind
+  -- ★★★1.73.34 补滚轮（项目规范：方向单一来源 EVAL_WHEEL_DIR；上滚 = 回到前面；dir=0 不是滚轮事件 → 交还原脚本）
+  pcall(root.EnableMouseWheel, root, true)
+  local prevWheel = nil
+  local okg, g = pcall(root.GetScript, root, "OnMouseWheel")
+  if okg and type(g) == "function" then prevWheel = g end
+  root:SetScript("OnMouseWheel", function(a, b)
+    local dir = EVAL_WHEEL_DIR(a, b)
+    if dir == 0 then
+      if prevWheel then return prevWheel(a, b) end -- ★链式接管（项目规范）
+      return
+    end
+    buyUI.off = math.max(0, buyUI.off - dir) -- 上滚(+1) = 回到前面
+    buyUIRefresh()
+  end)
   root:Hide()
   buyUI.root = root
 end
@@ -3512,6 +3562,67 @@ function EVAL_TEST_BUY_UI_GEO()
   if okM then out.movable = mv and true or false end
   out.hint = rect(buyUI.hint) out.tip = rect(buyUI.tip)
   return out
+end
+-- ★★★1.73.34 读值口：滚动条机制（滚轮安装/方向/夹取 · 箭头与删除列不重叠 · 指示在底栏 · 边界状态）
+function EVAL_TEST_BUY_UI_SCROLL()
+  if not buyUI.root then return nil end
+  local W = 384
+  local okW, w0 = pcall(buyUI.root.GetWidth, buyUI.root)
+  if okW and type(w0) == "number" then W = w0 end
+  local function num(o, m)
+    if not o or type(o[m]) ~= "function" then return nil end
+    local ok, v = pcall(o[m], o)
+    return (ok and type(v) == "number") and v or nil
+  end
+  local function rect(o)
+    if not o then return nil end
+    local out = {}
+    local okp, point, _relTo, relPoint, ox, oy = pcall(o.GetPoint, o)
+    if okp and type(ox) == "number" then
+      local w = num(o, "GetWidth") or 0
+      if relPoint == "TOPRIGHT" then
+        out.r = W + ox
+        out.x = out.r - w
+      else
+        out.x = ox
+        out.r = ox + w
+      end
+      out.y = oy
+      out.w = w
+    end
+    return out
+  end
+  local out = { off = buyUI.off or 0, W = W }
+  local okf, f = pcall(buyUI.root.GetScript, buyUI.root, "OnMouseWheel")
+  out.wheel = (okf and type(f) == "function") and true or false
+  local okm, mw = pcall(buyUI.root.IsMouseWheelEnabled, buyUI.root)
+  out.mouseWheel = (okm and mw) and true or false
+  out.up = rect(buyUI.up and buyUI.up.btn) out.dn = rect(buyUI.dn and buyUI.dn.btn)
+  out.ind = rect(buyUI.ind)
+  local r1 = buyUI.rows and buyUI.rows[1]
+  out.del = rect(r1 and r1.del)
+  local rl = buyUI.rows and buyUI.rows[TB_BUY_UI_ROWS]
+  out.delLast = rect(rl and rl.del) -- ★最后一行的控件 y（指示必须在它下面 = 不压任何数据行）
+  local function shown(o)
+    if not o then return nil end
+    local ok, v = pcall(o.IsShown, o)
+    return (ok and v) and true or false
+  end
+  out.upShown = shown(buyUI.up and buyUI.up.btn)
+  out.dnShown = shown(buyUI.dn and buyUI.dn.btn)
+  local okI, txt = pcall(buyUI.ind.GetText, buyUI.ind)
+  out.indText = (okI and tostring(txt or "")) or ""
+  out.pages = math.max(1, math.ceil((table.getn(buyUIList() or {})) / TB_BUY_UI_ROWS))
+  out.n = table.getn(buyUIList() or {})
+  return out
+end
+-- ★模拟一次滚轮事件（走**真实**的 OnMouseWheel 脚本）
+function EVAL_TEST_BUY_UI_WHEEL(a, b)
+  if not buyUI.root then return false end
+  local ok, f = pcall(buyUI.root.GetScript, buyUI.root, "OnMouseWheel")
+  if not ok or type(f) ~= "function" then return false end
+  pcall(f, a, b)
+  return true
 end
 function EVAL_TEST_BUY_UI_SHOWN()
   if not buyUI.root then return false end
