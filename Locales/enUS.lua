@@ -377,6 +377,8 @@ PM_HINT = "Left-click a profile = activate; right-click = open this window (rena
   DS_T_CURSE = "Curse",
   DS_T_POISON = "Poison",
   DS_T_DISEASE = "Disease",
+  DS_T_TIP_T = "Dispel types (multi-select)",
+  DS_T_TIP = "selected: %s",
   TCAST_ANY = "any cast",
   IMM_Y = "Immune",
   IMM_N = "Not immune",

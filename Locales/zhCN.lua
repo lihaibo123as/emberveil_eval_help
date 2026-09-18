@@ -382,6 +382,8 @@ PM_HINT = "左键方案 = 激活；右键方案 = 开本窗口（改名 + 绑键
   DS_T_CURSE = "诅咒",
   DS_T_POISON = "毒",
   DS_T_DISEASE = "疾病",
+  DS_T_TIP_T = "可驱散类型（可多选）",
+  DS_T_TIP = "已选：%s",
   TCAST_ANY = "任意施法",
   IMM_Y = "免疫",
   IMM_N = "未免疫",

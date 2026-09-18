@@ -4328,6 +4328,14 @@ function EVAL_TEST_SE_RANK_CLICK(btn)
   fn(seUI.skillBtn, btn or "RightButton")
   return true
 end
+-- ★1.73.2 可驱散类型集合的本地化清单（tooltip 用）：62px 的窄格只列得下 2 项，
+--   完整清单必须**另有地方给全**——不因为格子窄就把用户选的信息藏掉（本项目「绝不静默截断」）。
+local function seDispelAllNames(ids)
+  local out = {}
+  for _, v in ipairs(ids or {}) do table.insert(out, L("DS_T_" .. string.upper(tostring(v)))) end
+  return table.concat(out, "/")
+end
+
 function EVAL_HELP_SE_REFRESH()
   local ed = seUI.ed
   if not ed or not seUI.root then return end
@@ -4458,9 +4466,16 @@ function EVAL_HELP_SE_REFRESH()
       --     但类型下拉对**两行**都要出现；只认 cd.k 时团队行会漏掉这个控件。
       --     同时这里也是断言能真正走到的位置：EVAL_TEST_SE_ROW_DT 问的就是这个控件。
       if (td.base or td.id) == "teamDebuff" or td.id == "candDebuff" then -- ★1.71.3 候选者debuff 也要类型下拉
+        -- ★1.73.2 多选：显示串 = 0 项「任意负面」/ 1 项该类型名 / ≥2 项「A/B…」
+        --   窄格（62px）只列得下 2 项，多的用 …；**完整清单走 tooltip**（不因为格子窄就藏信息）
+        local ids = EVAL_DISPEL_LIST(cd.dt)
+        local n = table.getn(ids)
         local lbl = L("DS_T_ANY")
-        if cd.dt and cd.dt ~= "" and cd.dt ~= "any" then
-          lbl = L("DS_T_" .. string.upper(tostring(cd.dt)))
+        if n == 1 then
+          lbl = L("DS_T_" .. string.upper(ids[1]))
+        elseif n >= 2 then
+          local parts = { L("DS_T_" .. string.upper(ids[1])), L("DS_T_" .. string.upper(ids[2])) }
+          lbl = table.concat(parts, "/") .. (n > 2 and "…" or "")
         end
         row.dtBtn.text:SetText(lbl)
         pcall(row.dtBtn.btn.Show, row.dtBtn.btn)
@@ -5173,19 +5188,52 @@ local function SE_BUILD()
     --   与 secOp **同一格 348/62**（两者按条件类型互斥显示：teamDebuff 用本钮、光环类用 secOp）。
     --   入库值是稳定英文 id（Magic/Curse/Poison/Disease/any），显示走 L("DS_T_*") 本地化——
     --   与 dispelMatch 的双向容忍配合：客户端返回本地化 token 也能匹配上。
+    -- ★1.73.2 多选（用户：「debuff 类型检测 包括团队debuff 类型要支持多选」）：
+    --   · 下拉走**多选**面板（opts.multi）——面板不会因为点一下而关闭，可以连着勾几个；
+    --   · 「任意负面」= 空集，与具体类型**互斥**（勾了类型就自动取消它，反之亦然）；
+    --   · 勾选状态每次由 cd.dt **重算**后整表重绘（EVAL_DD_SYNC）——不靠面板自己那份状态，
+    --     否则「先勾任意、再勾魔法」会留下两处勾。
     row.dtBtn = seBtn(root, 348, y, 62, 15, L("DS_T_ANY"), function()
       local it2 = seUI.ed and seUI.ed.conds[i]
       if not it2 then return end
+      local cd = it2.cd
       local dts = EVAL_DISPEL_TYPES or {}
       local items = { L("DS_T_ANY") }
       for _, t in ipairs(dts) do table.insert(items, L("DS_T_" .. string.upper(t.id))) end
-      EVAL_DD_OPEN(row.dtBtn.btn, items, function(pi)
-        local cd = it2.cd
-        if pi == 1 then cd.dt = nil else cd.dt = dts[pi - 1].id end
+      local function selOf(dt)
+        local s = {}
+        local ids = EVAL_DISPEL_LIST(dt)
+        if table.getn(ids) == 0 then s[1] = true end
+        for pi = 2, table.getn(items) do
+          for _, v in ipairs(ids) do if v == dts[pi - 1].id then s[pi] = true end end
+        end
+        return s
+      end
+      EVAL_DD_OPEN(row.dtBtn.btn, items, function(pi, on)
+        local ids = EVAL_DISPEL_LIST(cd.dt)
+        local set = {}
+        for _, v in ipairs(ids) do set[v] = true end
+        if pi == 1 then
+          if on then set = {} end -- 「任意负面」= 清空全部（互斥）
+        else
+          local id = dts[pi - 1].id
+          if on then set[id] = true else set[id] = nil end
+        end
+        -- 按 DISPEL_TYPES 的固定顺序收成列表 → 折叠回入库形态（0 项 nil / 1 项字符串 / ≥2 项集合）
+        local list = {}
+        for _, t in ipairs(dts) do if set[t.id] then table.insert(list, t.id) end end
+        cd.dt = EVAL_DISPEL_FOLD(list)
+        pcall(EVAL_DD_SYNC, selOf(cd.dt))
         EVAL_HELP_SE_REFRESH()
-      end)
+      end, { multi = true, selected = selOf(cd.dt) })
     end)
     reg(row.dtBtn.btn)
+    seHoverTip(row.dtBtn.btn, function()
+      local it3 = seUI.ed and seUI.ed.conds[i]
+      local ids = EVAL_DISPEL_LIST(it3 and it3.cd and it3.cd.dt)
+      if table.getn(ids) < 2 then return nil end
+      return { "|cffffd100" .. L("DS_T_TIP_T") .. "|r", string.format(L("DS_T_TIP"), seDispelAllNames(ids)) }
+    end)
     row.secMinus = seBtn(root, 414, y, 16, 15, "-", function()
       local it2 = seUI.ed and seUI.ed.conds[i]
       if it2 then
@@ -5356,6 +5404,20 @@ function EVAL_TEST_SE_ROW_PREVIEW(i)
   local okS, s = pcall(row.preview.IsShown, row.preview)
   return (okS and s) and true or false
 end
+-- ★1.73.2 点**真实的类型格**（走它自己的 OnClick → 打开多选面板）
+function EVAL_TEST_SE_CLICK_DT(i)
+  local row = seUI.rows and seUI.rows[i]
+  if not (row and row.dtBtn) then return false end
+  local ok, fn = pcall(row.dtBtn.btn.GetScript, row.dtBtn.btn, "OnClick")
+  if not (ok and type(fn) == "function") then return false end
+  fn()
+  return true
+end
+-- ★1.73.2 交出类型格真实控件（悬停说明断言用）
+function EVAL_TEST_SE_DT_BTN(i)
+  local row = seUI.rows and seUI.rows[i]
+  return (row and row.dtBtn and row.dtBtn.btn) or nil
+end
 function EVAL_TEST_SE_ROW_CLS_BTN(i)
   local row = seUI.rows and seUI.rows[i]
   return (row and row.clsBtn and row.clsBtn.btn) or nil
@@ -5387,6 +5449,12 @@ function EVAL_TEST_SE_AURA_NAME(i)
 end
 -- ★1.71.3 断言入口：读该行条件的**数据侧**类型 id（与显示侧的 ROW_TYPE 各钉一半——
 --   「数据对了但没显示出来」与「显示了但数据不对」是两回事，本项目两边都栽过）
+-- ★1.73.2 读第 i 行条件的**类型值**（原样交出：可能是 nil / 单选字符串 / 多选集合）
+function EVAL_TEST_SE_COND_DT(i)
+  local ed = seUI and seUI.ed
+  local it = ed and ed.conds and ed.conds[i]
+  return it and it.cd and it.cd.dt or nil
+end
 function EVAL_TEST_SE_COND_K(i)
   local ed = seUI and seUI.ed
   local it = ed and ed.conds and ed.conds[i]

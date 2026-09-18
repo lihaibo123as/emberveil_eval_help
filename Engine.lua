@@ -282,7 +282,47 @@ local DISPEL_TYPES = {
 }
 EVAL_DISPEL_TYPES = DISPEL_TYPES -- 全局桥：编辑窗下拉与断言共用同一份
 
+-- ★1.73.2 多选支持（用户：「debuff 类型检测 包括团队debuff 类型要支持多选」）：
+--   cd.dt 允许三种形态，全部在**读侧**归一（不强制迁移存量数据）：
+--     nil / "" / "any"  → 任意（不过滤类型）
+--     "Magic"（字符串） → 单选（**存量数据的原样**，导出逐字不变）
+--     { Magic=true, Poison=true } → 多选（新增；命中任一即算命中）
+--   ★判据：集合里一个都没勾 = 任意（与 nil 同义，不能反过来变成「永不命中」）；
+--     勾了几个就只认这几个（Poison 命中、Curse 不命中）。
+local function dispelList(dt)
+  local out = {}
+  if type(dt) == "table" then
+    for _, t in ipairs(DISPEL_TYPES) do if dt[t.id] then table.insert(out, t.id) end end
+  elseif type(dt) == "string" and dt ~= "" and dt ~= "any" then
+    table.insert(out, dt)
+  end
+  return out
+end
+-- 列表 → 入库形态：0 项 = nil（任意）、1 项 = 字符串（**保持存量导出逐字不变**）、≥2 项 = 集合表
+local function dispelFold(list)
+  local n = table.getn(list or {})
+  if n == 0 then return nil end
+  if n == 1 then return list[1] end
+  local set = {}
+  for _, v in ipairs(list) do set[v] = true end
+  return set
+end
+EVAL_DISPEL_LIST = dispelList   -- 全局桥：编辑窗显示/断言共用一份
+EVAL_DISPEL_FOLD = dispelFold
+
 local function dispelMatch(actual, want)
+  -- ★1.73.2 多选：want 是集合 → 命中任一即真；**集合为空 = 任意**（与 nil/"any" 同义）
+  if type(want) == "table" then
+    local picked = false
+    for id, on in pairs(want) do
+      if on then
+        picked = true
+        if dispelMatch(actual, id) then return true end
+      end
+    end
+    if not picked then return true end
+    return false
+  end
   if want == nil or want == "" or want == "any" then return true end -- 未指定类型 = 任意
   if type(actual) ~= "string" or actual == "" then return false end
   local a, w = string.lower(actual), string.lower(want)
@@ -309,6 +349,19 @@ local function dispelNorm(want)
   return want
 end
 
+-- 文本里的一串类型（斜杠分隔、顿号/逗号也认）→ 入库形态
+local function dispelFromText(s)
+  local list, seen = {}, {}
+  for one in string.gmatch(tostring(s or "") .. "/", "([^/%s,、]+)[/%s,、]") do
+    local norm = dispelNorm(one)
+    if norm and norm ~= "any" and not seen[norm] then
+      seen[norm] = true
+      table.insert(list, norm)
+    end
+  end
+  return dispelFold(list)
+end
+
 -- 解析「名字(类型)」/「名字」/「类型」三种写法（导入侧宽松；类型单独写时归一到英文 id）
 local function dispelSplit(s)
   s = string.gsub(s or "", "^%s*(.-)%s*$", "%1")
@@ -317,7 +370,8 @@ local function dispelSplit(s)
     local nm = string.gsub(string.sub(s, 1, open - 1), "^%s*(.-)%s*$", "%1")
     local dt = string.gsub(string.sub(s, open + 1, close - 1), "^%s*(.-)%s*$", "%1")
     if nm == "" then nm = nil end
-    return nm, dispelNorm(dt)
+    -- ★1.73.2 括号里可以是一串类型（斜杠分隔），逐项归一后再折叠回 单值/集合
+    return nm, dispelFromText(dt)
   end
   -- 没有括号：整串若是一个 dispel 类型，就当作「类型」；否则当作「名称」
   local norm = dispelNorm(s)
@@ -2681,7 +2735,9 @@ function EVAL_COND_STR(cd)
   if k == "teamBuff" then return ((cd.v == false) and ("无" .. tscope .. "buff:") or ("有" .. tscope .. "buff:")) .. tostring(cd.s) .. stkSuffix() .. teamFilterSuffix(cd) end
   if k == "teamDebuff" then
     local nm = (cd.s ~= nil and cd.s ~= "") and tostring(cd.s) or ""
-    local dt = (cd.dt ~= nil and cd.dt ~= "" and cd.dt ~= "any") and ("(" .. tostring(cd.dt) .. ")") or ""
+    -- ★1.73.2 多选：导出形态 (Magic) / (Magic/Poison)；单选与存量**逐字相同**
+    local dl = dispelList(cd.dt)
+    local dt = (table.getn(dl) > 0) and ("(" .. table.concat(dl, "/") .. ")") or ""
     return ((cd.v == false) and ("无" .. tscope .. "debuff:") or ("有" .. tscope .. "debuff:")) .. nm .. dt .. teamFilterSuffix(cd)
   end
   if k == "ready" then return cd.inv and "未就绪" or "就绪" end
@@ -3024,6 +3080,8 @@ EVAL_WSLOTS = wslots
 EVAL_WICON = wicon
 EVAL_GROUPS_OK = groupsOK
 EVAL_AURA_TEX = auraTexOf
+-- ★1.73.2 断言入口：可驱散类型的匹配判定（含**多选集合**）——测试直接问生产实现，不另写一份
+function EVAL_TEST_DISPEL_MATCH(actual, want) return dispelMatch(actual, want) end
 EVAL_PET_OF = petCmdOf
 EVAL_TGT_OF = targetSelOf
 EVAL_TSEL_TEAMSEL = TARGET_SEL_TEAMSEL -- ★1.71.3 条件类型下拉要按「这一行是不是成员选取器」过滤

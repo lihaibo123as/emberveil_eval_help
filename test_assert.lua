@@ -8092,4 +8092,86 @@ do
   print("  抓宠布局审查：搜索行按视图显隐 + 宠物行四件套可见 + 列不相交/行距一致/不越界 + 空态与分页如实提示")
 end
 
+-- 114) ★★★1.73.2 debuff 类型**多选**（用户：「debuff 类型检测 包括团队debuff 类型要支持多选」）
+--   ★三层都要通：① 判定（集合命中任一 / 空集=任意 / 单选不变）② 文本往返（导出 (Magic/Poison)、
+--   单选导出与存量逐字相同）③ 编辑窗真实下拉（多选面板 + 互斥「任意负面」+ 窄格文案 + 悬停给全清单）。
+do
+  -- ① 判定
+  eq(EVAL_TEST_DISPEL_MATCH("Poison", { Poison = true, Magic = true }), true, "①★★集合里命中任一即为真（毒在集合里）")
+  eq(EVAL_TEST_DISPEL_MATCH("Magic", { Poison = true }), false, "①★★没勾的类型不命中")
+  eq(EVAL_TEST_DISPEL_MATCH("Curse", {}), true, "①★★★**空集 = 任意**（与 nil 同义；绝不能变成「永不命中」）")
+  eq(EVAL_TEST_DISPEL_MATCH("Curse", "Poison"), false, "①★单选字符串行为一字不变")
+  eq(EVAL_TEST_DISPEL_MATCH("Curse", nil), true, "①nil = 任意")
+  eq(EVAL_TEST_DISPEL_MATCH("Disease", { Disease = true }), true, "①单元素集合也当真（与单选等价）")
+  -- ② 文本往返
+  local g114 = EVAL_PARSE_CONDS("有团队debuff:毒(Magic/Poison)")
+  local cd114 = g114[1][1]
+  eq(type(cd114.dt) == "table", true, "②★★解析括号里的一串类型 → 集合（got " .. type(cd114.dt) .. "）")
+  eq(cd114.dt.Magic == true and cd114.dt.Poison == true, true, "②★★两项都进了集合")
+  local s114 = EVAL_GROUP_STR(g114)
+  eq(string.find(s114, "(Magic/Poison)", 1, true) ~= nil, true, "②★★★导出逐字 = (Magic/Poison)：" .. tostring(s114))
+  local g114b = EVAL_PARSE_CONDS("有团队debuff:毒(Magic)")
+  eq(EVAL_GROUP_STR(g114b), "有团队debuff:毒(Magic)", "②反向哨兵：**单选导出与存量逐字相同**（老配置导出不变）")
+  local g114c = EVAL_PARSE_CONDS("有团队debuff:毒(魔法、毒)")
+  local cd114c = g114c[1][1]
+  eq(type(cd114c.dt) == "table" and cd114c.dt.Poison == true, true, "②手写的顿号分隔也认（导入宽松）")
+  -- ③ 编辑窗真实下拉：多选 + 互斥 + 文案
+  eq(EVAL_TEST_SE_PUSH_COND("teamDebuff", nil, nil, nil, nil, "团队"), true, "③前置：编辑器里放一条「团员debuff」（类型先留空 = 任意负面）")
+  local sh3, tx3 = EVAL_TEST_SE_ROW_DT(1)
+  eq(sh3, true, "③前置：类型格可见")
+  eq(tx3, EVAL_L("DS_T_ANY"), "③前置：默认文案 = 任意负面")
+  EVAL_DD_TEST_RESET_ANCHOR()
+  eq(EVAL_TEST_SE_CLICK_DT(1), true, "③点**真实的类型格**（走它自己的 OnClick）")
+  eq(EVAL_DD_TEST_SHOWN(), true, "③★★下拉真的打开了")
+  eq(EVAL_DD_TEST_MULTI(), true, "③★★★这个下拉是**多选**面板（用户要求多选）")
+  local idxMagic114, idxPoison114 = nil, nil
+  local dts114 = EVAL_DISPEL_TYPES or {}
+  for i = 1, table.getn(dts114) do
+    if dts114[i].id == "Magic" then idxMagic114 = i + 1 end
+    if dts114[i].id == "Poison" then idxPoison114 = i + 1 end
+  end
+  eq(idxMagic114 ~= nil and idxPoison114 ~= nil, true, "③前置：找得到「魔法」「毒」两行")
+  EVAL_DD_TEST_CLICK(idxMagic114)
+  local _, tx3a = EVAL_TEST_SE_ROW_DT(1)
+  eq(tx3a, EVAL_L("DS_T_MAGIC"), "③★★勾一个后格子里就是该类型名")
+  EVAL_DD_TEST_CLICK(idxPoison114)
+  local _, tx3b = EVAL_TEST_SE_ROW_DT(1)
+  local want3 = EVAL_L("DS_T_MAGIC") .. "/" .. EVAL_L("DS_T_POISON")
+  eq(tx3b, want3, "③★★★勾两个 → 格子文案「魔法/毒」：" .. tostring(tx3b))
+  eq(EVAL_DD_TEST_SELAT(idxMagic114), true, "③★★两个勾都在（多选状态真的保持住）")
+  eq(EVAL_DD_TEST_SELAT(idxPoison114), true, "③★★")
+  -- 数据侧也必须是集合（判据不能只看文案；★只能经钩子读——seUI 是生产文件的 local）
+  local dt3 = EVAL_TEST_SE_COND_DT(1)
+  eq(type(dt3) == "table", true, "③★★★数据侧真的存成了集合（不是只有文案好看）：got " .. type(dt3))
+  eq(EVAL_TEST_DISPEL_MATCH("Poison", dt3), true, "③★★判定能命中集合里的毒")
+  eq(EVAL_TEST_DISPEL_MATCH("Curse", dt3), false, "③★★没勾的诅咒不命中")
+  -- 悬停给全清单（窄格放不下的信息另有地方给全）
+  do
+    local btn = EVAL_TEST_SE_DT_BTN(1)
+    eq(btn ~= nil, true, "③交出类型格真实控件")
+    local fn = btn and btn:GetScript("OnEnter")
+    eq(type(fn) == "function", true, "③★★多选时挂上了悬停说明")
+    TEST.tipLines = nil
+    if type(fn) == "function" then fn() end
+    local tip = ""
+    for _, ln in ipairs(TEST.tipLines or {}) do tip = tip .. tostring(ln.text or "") .. "\n" end
+    eq(string.find(tip, EVAL_L("DS_T_POISON"), 1, true) ~= nil, true, "③★★★悬停里给出完整清单（含「毒」）")
+    TEST.tipLines = nil
+  end
+  -- 互斥：勾「任意负面」→ 清空具体类型，且面板上的旧勾要清掉（EVAL_DD_SYNC 整表重绘）
+  EVAL_DD_TEST_CLICK(1)
+  local _, tx3c = EVAL_TEST_SE_ROW_DT(1)
+  eq(tx3c, EVAL_L("DS_T_ANY"), "③★★勾「任意负面」→ 文案回到「任意负面」")
+  eq(EVAL_DD_TEST_SELAT(idxMagic114), nil, "③★★★互斥：具体类型的勾被清掉了（不是两处都亮）")
+  eq(EVAL_DD_TEST_SELAT(1), true, "③★★「任意负面」自己亮着")
+  -- ④ 老数据形态：编辑器里存的单选字符串仍能被格子显示 + 判定
+  eq(EVAL_TEST_SE_PUSH_COND("teamDebuff", nil, nil, nil, "Poison", "团队"), true, "④放一条**单选**（老形态）条件")
+  local _, tx4 = EVAL_TEST_SE_ROW_DT(1)
+  eq(tx4, EVAL_L("DS_T_POISON"), "④★★单选老形态照常显示")
+  EVAL_DD_HIDE()
+  EVAL_TEST_SE_CLEAR()
+  EVAL_HELP_CFG_SETTAB(1)
+  print("  debuff 类型多选：集合判定（空集=任意）+ 文本往返 (Magic/Poison) + 真实多选面板 + 互斥「任意负面」+ 窄格文案与悬停全清单")
+end
+
 print("ALL TESTS PASS")
