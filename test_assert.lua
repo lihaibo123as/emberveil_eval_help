@@ -9856,18 +9856,24 @@ do
   eq(string.find(tostring(TEST.runScripts[table.getn(TEST.runScripts)] or ""), "GuildInviteByName", 1, true) ~= nil, true,
      "④c★排队的脚本里是 GuildInviteByName")
   _G.GuildInviteByName = savedGIN130
-  -- ⑤ ★★★1.73.28 用户定：「/s 说出 => 复制名字，实际执行的是 /s 名字」——
-  --   条目叫「复制名字」，动作 = 用 /s 把名字**说出来**（本客户端没有剪贴板接口，这是用户选定的替代做法）。
+  -- ⑤ ★★★1.73.29 用户改口径：「是在 /say 频道**输入名字**，但是不要打印出去，只是打开输入框输入名字」
+  --   ⇒ 「复制名字」= **只预填**「/s 名字」到聊天输入框；★**绝不发送**（不走 RunScript / SendChatMessage）。
   EVAL_TEST_TB_NAMEMENU_RESET()
-  TEST.runScripts = {}
-  eq(EVAL_TB_NAME_SAY("Ionol"), true, "⑤★★★「复制名字」真的发了一句 /s 名字")
-  local sc130s = tostring(TEST.runScripts[table.getn(TEST.runScripts)] or "")
-  eq(string.find(sc130s, "SendChatMessage(\"Ionol\", \"SAY\")", 1, true) ~= nil, true, "⑤★★而且是 /s（不是密语/队伍）：" .. sc130s)
-  eq(EVAL_TB_NAMEMENU_STATE().said, 1, "⑤★并记「说出去的次数」")
-  local before130 = table.getn(TEST.runScripts)
-  eq(EVAL_TB_NAME_SAY("Ionol", true), false, "⑤★★0.5 秒内连点 → 拒绝再发（服务器写动作一律限频）")
-  eq(table.getn(TEST.runScripts), before130, "⑤★★队列没有增长（真的没发出去）")
-  eq(EVAL_TB_NAMEMENU_STATE().sayDeb, 1, "⑤★并如实记「被去抖挡下」的次数")
+  TEST.openChats, TEST.runScripts = {}, {}
+  eq(EVAL_TB_NAME_SAY("Ionol"), true, "⑤★★★「复制名字」打开了聊天输入框")
+  eq(tostring(TEST.openChats[1] or ""), "/s Ionol", "⑤★★★输入框里是「/s 名字」：" .. tostring(TEST.openChats[1]))
+  eq(table.getn(TEST.runScripts), 0, "⑤★★★而且**一个字都没发出去**（用户明确：不要打印出去）")
+  eq(EVAL_TB_NAMEMENU_STATE().said, 1, "⑤★并记「填进输入框的次数」")
+  eq(string.find(tostring(TEST.chat), "按回车才发出", 1, true) ~= nil, true, "⑤★★提示里写清「还没发出去、按回车才发出」")
+  -- ⑤a 没有打开聊天框的接口 → **如实提示**（不静默、也绝不偷偷发送）
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  local savedOC130s = _G.ChatFrame_OpenChat
+  _G.ChatFrame_OpenChat = nil
+  TEST.runScripts, TEST.chat = {}, ""
+  eq(EVAL_TB_NAME_SAY("Ionol"), false, "⑤a★★没有接口 → 如实返回失败")
+  eq(table.getn(TEST.runScripts), 0, "⑤a★★★更没有偷偷用 /s 发出去（不许替用户按回车）")
+  eq(string.find(tostring(TEST.chat), "请手动输入 /s", 1, true) ~= nil, true, "⑤a★★并告诉用户「请手动输入 /s 名字」")
+  _G.ChatFrame_OpenChat = savedOC130s
   -- ⑤b 悄悄话（原始功能）：优先用客户端的打开聊天框接口
   EVAL_TEST_TB_NAMEMENU_RESET()
   TEST.openChats = {}

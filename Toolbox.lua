@@ -909,7 +909,6 @@ local function tbSafeName(s)
   s = string.gsub(s, TB_BS, "")
   return s
 end
-local TB_NAME_SAY_AT = -99
 function EVAL_TB_NAMEMENU_ON()
   return tbCfg().nameMenu ~= false
 end
@@ -1133,48 +1132,51 @@ function EVAL_TB_NAME_TARGET(name)
   end
   return ok
 end
--- 动作④：悄悄话（原始功能里的「悄悄话」）—— 优先用客户端的打开聊天框接口；★没有就**如实降级**，不静默
-function EVAL_TB_NAME_WHISPER(name)
-  if type(name) ~= "string" or name == "" then return false end
-  local safe = tbSafeName(name)
-  local pre = "/w " .. safe .. " "
+-- ★★★1.73.29 **预填聊天输入框（不发送）**：悄悄话与「复制名字」共用这一条实现。
+--   优先客户端自带的打开聊天框接口；没有就退回 ChatEdit_ActivateChat + 编辑框；两条都不行 → 返回 nil（调用方如实提示）。
+--   ★「不要打印出去」= 我们**只把文本放进输入框**，绝不替用户按回车（不走 SendChatMessage / RunScript）。
+local function tbMenuPrefill(text)
+  if type(text) ~= "string" or text == "" then return nil end
   if type(ChatFrame_OpenChat) == "function" then
-    local ok = pcall(ChatFrame_OpenChat, pre)
-    if ok then
-      TB_NAME_MENU.whisper = (TB_NAME_MENU.whisper or 0) + 1
-      say(string.format(L("TB_NAMEMENU_WHISPEROK"), safe))
-      return true
-    end
+    if pcall(ChatFrame_OpenChat, text) then return "openchat" end
   end
   local eb = _G.ChatFrameEditBox or _G.ChatFrame1EditBox
   if type(ChatEdit_ActivateChat) == "function" and eb and type(eb.SetText) == "function" then
     local ok = pcall(function()
       ChatEdit_ActivateChat(eb)
-      eb:SetText(pre)
+      eb:SetText(text)
       if type(eb.HighlightText) == "function" then eb:HighlightText() end
     end)
-    if ok then
-      TB_NAME_MENU.whisper = (TB_NAME_MENU.whisper or 0) + 1
-      say(string.format(L("TB_NAMEMENU_WHISPEROK"), safe))
-      return true
-    end
+    if ok then return "editbox" end
+  end
+  return nil
+end
+-- 动作④：悄悄话（原始功能里的「悄悄话」）：预填 /w 名字 + 空格，**不发送**
+function EVAL_TB_NAME_WHISPER(name)
+  if type(name) ~= "string" or name == "" then return false end
+  local safe = tbSafeName(name)
+  local how = tbMenuPrefill("/w " .. safe .. " ")
+  if how then
+    TB_NAME_MENU.whisper = (TB_NAME_MENU.whisper or 0) + 1
+    say(string.format(L("TB_NAMEMENU_WHISPEROK"), safe))
+    return true
   end
   say(string.format(L("TB_NAMEMENU_WHISPERFAIL"), safe))
   return false
 end
--- 动作⑤：「复制名字」= 用 /s 把名字**说出来**（用户定：条目叫复制名字，实际执行的是 /s 名字）
---   ★服务器写动作：走 RunScript + 0.5 秒去抖（连点两下也只发一次）
-function EVAL_TB_NAME_SAY(name, quiet)
+-- 动作⑤：「复制名字」★1.73.29 用户改口径：「是在 /say 频道**输入名字**，但是不要打印出去，只是打开输入框输入名字」
+--   ⇒ 只**预填**「/s 名字」到输入框，**不发送**（不走 RunScript / SendChatMessage）；没有接口就如实提示。
+function EVAL_TB_NAME_SAY(name)
   if type(name) ~= "string" or name == "" then return false end
-  if not tbMenuThrottle("say", 0.5) then
-    TB_NAME_SAY_DEB = (TB_NAME_SAY_DEB or 0) + 1
-    return false
-  end
   local safe = tbSafeName(name)
-  local ok = pcall(RunScript, "SendChatMessage(\"" .. safe .. "\", \"SAY\")")
-  if ok then TB_NAME_MENU.said = (TB_NAME_MENU.said or 0) + 1 end
-  if ok and not quiet then say(string.format(L("TB_NAMEMENU_SAYOK"), safe)) end
-  return ok
+  local how = tbMenuPrefill("/s " .. safe)
+  if how then
+    TB_NAME_MENU.said = (TB_NAME_MENU.said or 0) + 1
+    say(string.format(L("TB_NAMEMENU_SAYOK"), safe))
+    return true
+  end
+  say(string.format(L("TB_NAMEMENU_SAYFAIL"), safe))
+  return false
 end
 function EVAL_TB_SIR_HANDLE(link, button)
   if type(link) ~= "string" then return false end
@@ -1222,7 +1224,6 @@ function EVAL_TB_NAMEMENU_STATE()
     seen = TB.sirSeen or 0, handled = TB.sirHandled or 0,
     shown = TB_NAME_MENU.shown and true or false, name = TB_NAME_MENU.name,
     inviteDirect = TB_NAME_MENU.inviteDirect or 0, inviteScript = TB_NAME_MENU.inviteScript or 0,
-    sayDeb = TB_NAME_SAY_DEB or 0,
     -- ★1.73.28 五个动作各自的战果（诊断与断言都读这里，不在别处复刻）
     party = TB_NAME_MENU.party or 0, target = TB_NAME_MENU.target or 0,
     whisper = TB_NAME_MENU.whisper or 0, said = TB_NAME_MENU.said or 0,
@@ -1235,7 +1236,6 @@ function EVAL_TEST_TB_NAMEMENU_RESET()
   TB_NAME_MENU.inviteDirect, TB_NAME_MENU.inviteScript = 0, 0
   TB_NAME_MENU.party, TB_NAME_MENU.target, TB_NAME_MENU.whisper = 0, 0, 0
   TB_NAME_MENU.said, TB_NAME_MENU.throttled = 0, 0
-  TB_NAME_SAY_DEB, TB_NAME_SAY_AT = 0, -99
   TB_MENU_AT = {}
   EVAL_TB_MENU_HIDE()
 end
