@@ -5477,10 +5477,11 @@ do
   eq(stEm.state, "empty", "★★接口在但一枚都没有 → empty")
   EVAL_IB_REFRESH()
   eq(EVAL_IB_TEST_STATUS_TEXT(), L84["IB_EMPTY"], "★★状态行如实说明「接口在但没取到」")
-  -- ★Tab 名单：必须真的有 5 个，且第 5 个的标签就是语言包里的「图标库」（读真实按钮文本）
+  -- ★Tab 名单：必须真的有 6 个（1.73.0 起新增「抓宠帮手」），标签读**真实按钮文本**
   local names84 = EVAL_TEST_CFG_TAB_NAMES()
-  eq(table.getn(names84), 5, "★★配置窗现在有 5 个 Tab")
+  eq(table.getn(names84), 6, "★★配置窗现在有 6 个 Tab")
   eq(names84[5], L84["TAB_ICONS"], "★★第 5 个 Tab 的标签 = 语言包 TAB_ICONS")
+  eq(names84[6], L84["TAB_PET"], "★★第 6 个 Tab 的标签 = 语言包 TAB_PET（抓宠帮手）")
   -- ★「取失败」要如实记账（不是静默当 0）：第 2 项给个非字符串 → 桩按取失败处理
   TEST.macroIcons = { "Spell_Fire_One", false, "Spell_Fire_Three" }
   EVAL_IB_TEST_RESET()
@@ -7926,6 +7927,86 @@ do
   if not cfgWas and EVAL_TEST_CFG_VISIBLE() then EVAL_HELP_CFG_TOGGLE() end
   if not wasShown11 and EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end
   print("  等级 × 导入导出审计：" .. tostring(nTpl) .. " 个内置模版 0 等级 0 往返差异 + 前缀名不拆 + 分享自称判据 + UI 不误报")
+end
+-- 112) ★1.73.0 抓宠帮手（配置窗第 6 个 Tab）：数据 / 检索 / 详情 / 放大镜跳转 全链路
+--   需求（用户原话）：顶部输入框检索「宠物技能」，列表显示各等级；选中→技能详情页
+--   （简介/需求等级/拥有该技能的宠物）；右侧放大镜点宠物名→跳数据检索并自动检索。
+do
+  local pack112 = EVAL_LOCALES[EVAL_GET_LANG()] or EVAL_LOCALES.zhCN
+  -- ① 数据模块：PetData.lua 真的被载入（DECL ORDER/载入链都接了它）
+  eq(type(EVAL_PET_DB) == "table", true, "★★PetData.lua 已载入（EVAL_PET_DB 是表）")
+  local sk112 = EVAL_PET_DB.skills or {}
+  local nsk112 = table.getn(sk112)
+  eq(nsk112, 21, "★★技能 21 条（13 主动 + 8 训练师被动，来自截图转录）")
+  local withIcon112 = 0
+  for i = 1, nsk112 do
+    local ic = tostring(sk112[i].icon or "")
+    if ic ~= "" then withIcon112 = withIcon112 + 1 end
+    -- ★1.73.0 用户指示：图标先用**客户端内置图标**占位（真实路径待下轮确认）——
+    --   所以判据是「指向客户端内置 Interface\Icons 且不带扩展名」，而不是「在插件 media 里」
+    eq(string.sub(ic, 1, 15) == "Interface\\Icons", true, "★技能图标指向客户端内置图标：" .. tostring(sk112[i].name))
+    eq(string.find(ic, ".tga", 1, true) == nil, true, "★不带扩展名（本客户端约定）：" .. tostring(sk112[i].name))
+  end
+  eq(withIcon112, nsk112, "★★每个技能都有图标（用户要求「搭配图标」）")
+  -- ② 条目 = 技能 × 等级（列表要「显示各等级的技能」）
+  local st112 = EVAL_PH_TEST_STATE()
+  eq(st112.entries, 106, "★★条目数 = 技能×等级 = 106（13 主动 58 + 8 训练师被动 48）")
+  -- 被动技能也必须能被检索到（它们没有驯服来源，但有等级与需求等级）
+  EVAL_PH_SET_QUERY("低吼")
+  eq(EVAL_PH_TEST_STATE().filtered, 7, "★★被动技能「低吼」7 个等级也进检索列表")
+  local dP = EVAL_PH_OPEN(1) ; local detP = EVAL_PH_TEST_DETAIL()
+  eq(detP.skill, "低吼", "★打开被动技能详情")
+  eq(table.getn(detP.beasts), 0, "★训练师技能没有驯服来源（空表）")
+  -- ③ 按技能名检索：撕咬 8 个等级
+  EVAL_PH_SET_QUERY("撕咬")
+  local s2 = EVAL_PH_TEST_STATE()
+  eq(s2.filtered, 8, "★★检索「撕咬」命中 8 个等级（实际 " .. tostring(s2.filtered) .. "）")
+  local e1 = EVAL_PH_TEST_ENTRY(1)
+  eq(e1.skill, "撕咬", "★第 1 条是撕咬")
+  eq(e1.rank, 1, "★第 1 条是等级 1")
+  eq(e1.req, 1, "★等级 1 需宠物等级 1")
+  local lb112 = EVAL_PH_TEST_LABEL(1)
+  eq(string.find(lb112, "撕咬", 1, true) ~= nil, true, "★列表标签含技能名：" .. tostring(lb112))
+  eq(string.find(lb112, "1", 1, true) ~= nil, true, "★列表标签含等级信息")
+  -- ④ 按野兽名检索（第二种搜法）：血斧座狼教 3 个技能等级
+  EVAL_PH_SET_QUERY("血斧座狼")
+  local s3 = EVAL_PH_TEST_STATE()
+  eq(s3.filtered >= 3, true, "★★按野兽名也能搜到（血斧座狼 → " .. tostring(s3.filtered) .. " 条）")
+  local lbH = EVAL_PH_TEST_LABEL(1)
+  eq(string.find(lbH, pack112.PH_ENTRY_HIT, 1, true) == nil, true, "★命中来源后缀是格式化串，不是字面键名")
+  -- ⑤ 详情页：选中 → 技能简介 / 需求等级 / 宠物列表
+  EVAL_PH_SET_QUERY("撕咬")
+  eq(EVAL_PH_OPEN(8), true, "★打开第 8 条（撕咬 等级8）")
+  local d8 = EVAL_PH_TEST_DETAIL()
+  eq(d8.skill, "撕咬", "★详情页技能名")
+  eq(d8.rank, 8, "★详情页等级 8")
+  eq(d8.req, 56, "★★详情页需求宠物等级 56")
+  eq(type(d8.intro) == "string" and d8.intro ~= "", true, "★★详情页有技能简介")
+  eq(table.getn(d8.beasts) >= 1, true, "★★详情页列出拥有该技能的宠物（" .. tostring(table.getn(d8.beasts)) .. " 条）")
+  local r8 = EVAL_PH_TEST_DETROW(1)
+  eq(type(r8.name) == "string" and r8.name ~= "", true, "★宠物行有名字：" .. tostring(r8.name))
+  eq(string.find(r8.meta, "56", 1, true) ~= nil or string.find(r8.meta, "57", 1, true) ~= nil, true,
+     "★宠物行写出等级/区域/家族：" .. tostring(r8.meta))
+  eq(r8.zoomShown, true, "★★宠物行右侧的放大镜按钮是显示状态")
+  eq(EVAL_PH_TEST_STATE().view, "detail", "★处于详情视图")
+  -- ⑥ 返回列表
+  EVAL_PH_BACK()
+  eq(EVAL_PH_TEST_STATE().view, "list", "★返回后回到列表视图")
+  -- ⑦ 放大镜 → 数据检索：真的把检索词填进去，并切到第 4 个 Tab
+  EVAL_PH_RESET_JUMP()
+  EVAL_HELP_CFG_SETTAB(6)
+  local okJ = EVAL_PH_JUMP("血斧座狼")
+  eq(okJ, true, "★★放大镜跳转成功（数据检索入口可用）")
+  eq(EVAL_PH_TEST_LAST_JUMP(), "血斧座狼", "★★跳转带上宠物名")
+  eq(EVAL_HELP_CFG_TAB(), 4, "★★★跳转后停在「数据检索」Tab（第 4 个）")
+  eq(EVAL_DS_LAST_QUERY(), "血斧座狼", "★★★数据检索侧真的收到了检索词（后续走它自己的流程）")
+  -- ⑧ 家族标签可读（宠物「类型」信息）
+  local fam = EVAL_PH_TEST_FAMILY_LABEL("wolf")
+  eq(type(fam) == "string" and fam ~= "" and fam ~= "wolf", true, "★★家族标签取到中文名：" .. tostring(fam))
+  -- 收尾：还原状态与 Tab（跨用例状态残留是本项目的老坑）
+  EVAL_PH_TEST_RESET()
+  EVAL_HELP_CFG_SETTAB(1)
+  print("  抓宠帮手：数据 21 技能/图标齐全/按技能与野兽双检索/详情页简介+需求+宠物列表/放大镜跳数据检索")
 end
 
 print("ALL TESTS PASS")

@@ -227,7 +227,7 @@ Remove-Item $staging -Recurse -Force
 
 ### 4.3 当前功能地图（用户视角）
 - `/eh` 状态日志 | `/eh ui` 战斗信息UI（方案切换行 + 方案技能行 + 条件 tooltip + 实时条件亮金）| `/eh st` 状态信息UI（状态变量 + 最近释放条件明细）。
-- `/eh cfg` 配置窗 660×420（中文）/ 800×420（西文），**五个 Tab**：① 全局（日志/界面/帮助）② 一键宏设置（方案栏 + 技能列表 + `[添加技能]` + `[导入导出]`；1.20.0 起底部的图标选择器/条件输入框/`EVAL_WAR_ADD_FROM_UI` 已删除，**新增技能走编辑窗**）③ 工具箱（`Toolbox.lua`，1.68.0）④ 数据检索（`DataSearch.lua`）⑤ **图标库**（`IconBrowser.lua`，1.71.3；★1.71.3 起是**第 5 个** Tab —— 旧记录写「四个 Tab」是过期信息）。
+- `/eh cfg` 配置窗 660×420（中文）/ 800×420（西文），**六个 Tab**：① 全局（日志/界面/帮助）② 一键宏设置（方案栏 + 技能列表 + `[添加技能]` + `[导入导出]`；1.20.0 起底部的图标选择器/条件输入框/`EVAL_WAR_ADD_FROM_UI` 已删除，**新增技能走编辑窗**）③ 工具箱（`Toolbox.lua`，1.68.0）④ 数据检索（`DataSearch.lua`）⑤ **图标库**（`IconBrowser.lua`，1.71.3）⑥ **抓宠帮手**（`PetHelper.lua` + `PetData.lua`，1.73.0：检索宠物技能 → 详情页驯服来源 → 放大镜跳数据检索）。
 - 技能编辑窗：点 `[编]` 或技能图标打开，条件逐行独立配置（类型/参数/删/添加），关系列切 `&`/`|`；条件类型分 5 组（`CTG_5` = **队友/团员状态**：队友血量%/队友蓝量%/队友debuff/队友缺buff + 团员同名四型）。
 - **队友/团员怎么用（1.70.47）**——两种用法都能独立工作：① **只配条件**（最省事）：技能行加 `队友血量% <60` → 条件自己**扫描全队取血最低者**、切目标、记 `st.allyUnit`，技能就打在他身上；解魔法同理。② **要自定义筛选**：加一行行为 `选取目标:队伍成员`（或 `团队成员`），把筛选条件写在这**一行**上（`目标血量<N%` / `目标buff:名` / `目标debuff:名`）→ 按血量升序逐候选判定，选第一个全过的。**规则按顺序全部执行**，所以「选取器 → 治疗 → 驱散」在一次按键里依次生效。
 - **定位：通用职业一键宏框架**（1.18.0 起全部用户可见描述已去「战士」化；技能白名单仅作下拉置顶，1.24.0 起重扫记录全部上条技能，任意技能可入方案/条件）；一键宏 `/run EVAL_GO()`；方案函数式调用 `/run EVAL_GO(2)` 或 `EVAL_GO1~4()`（执行指定方案并且激活，绑多按键）；技能需拖上动作条，改动后 `/eh go rescan`；`/eh war` 是旧命令别名（1.21.1 起改名 `/eh go`，handler 里仍兼容）。
@@ -413,9 +413,26 @@ Remove-Item $staging -Recurse -Force
 - **插件目录**：`G:\game\u5wow\Azeroth\Binaries\Win64\Games\Emberveil\live\Azeroth\Interface\AddOns\EvalHelp\`（1.21 后由 EVAL_HELP 改名 **EvalHelp**；★**目录名 == toc 基名**才加载；改名时游戏必须关闭，否则 Access denied）。
 - **文件结构（1.39.0 起模块化，不是单文件）**：`EvalHelp.toc` + `Locales/{zhCN,enUS,ruRU}.lua` + `Core.lua`（输出/i18n/状态采集）+ `Engine.lua`（规则引擎）+ `EvalHelp.lua`（UI/斜杠命令/init）+ `Toolbox.lua`（工具箱 Tab3）+ `DataSearch.lua`（数据检索 Tab4）+ `Share.lua`（方案分享，1.71.0）+ `IconBrowser.lua`（图标库 Tab5）+ `examples/*.lua`（**11 个数据文件**）；文档 `README.md`/`README_en.md`/`README_ru.md`/`CHANGELOG.md`/`DEVELOPMENT.md`/`CLAUDE.md`；测试 `luacheck.js`/`test_engine.js`/`test_stub.lua`/`test_assert.lua`。**行数随开发变化，别当固定值引用**。
 - ★**toc 载入顺序（以 `EvalHelp.toc` 为唯一真值）**：`Locales/{zhCN,enUS,ruRU}` → `Core` → `Engine` → `EvalHelp` → **`examples/*`（11 个数据文件，必须排在 EvalHelp.lua 之后）** → `Toolbox` → `DataSearch` → `Share` → `IconBrowser`（★`EXAMPLES TOC CHECK` 守着「磁盘 ↔ .toc 双向一致 + 顺序 = 选单顺序」）。
-- ★**新增 .lua 模块要同时改三处**：`EvalHelp.toc` 载入列表、`test_engine.js` 的加载数组（否则测试根本不加载它）、`DECL ORDER CHECK` 的文件清单（**目前 7 个文件**：EvalHelp/Core/Engine/Toolbox/DataSearch/Share/IconBrowser —— Share 与 IconBrowser 已纳入，不再是盲区）。
+- ★**新增 .lua 模块要同时改三处**：`EvalHelp.toc` 载入列表、`test_engine.js` 的加载数组（否则测试根本不加载它）、`DECL ORDER CHECK` 的文件清单（**目前 9 个文件**：EvalHelp/Core/Engine/Toolbox/DataSearch/Share/IconBrowser —— Share 与 IconBrowser 已纳入，不再是盲区）。
 - ★**案例模版数据文件（1.71.2 新增 `examples/*.lua`）只需改两处**：`EvalHelp.toc` + `test_engine.js` 加载数组（它们没有顶层 local，故不进 DECL ORDER 清单）。
-- **当前版本**：**1.72.2**（头条 = **分享方案光环修复 + 载入引导每次都在**：
+- **当前版本**：**1.73.0**（头条 = **抓宠帮手（配置窗第 6 个 Tab）**：
+  ① **数据** `PetData.lua` 独立载入（21 技能 = 13 主动 + 8 训练师被动，106 条「技能×等级」，280 条驯服来源）；
+     来源 = 用户提供的宠物技能总表截图（`doc/pet_info.png`）逐行转录 → `doc/宠物技能数据.md`；
+  ② **图标**：**客户端内置图标占位**（`Interface\Icons\INV_Misc_QuestionMark`）——用户 1.73.0 指示「先用内置随便选一个替代，下次再确认真实路径」；
+     `PET ICON CHECK` 守**格式**（一律 `Interface\Icons`、不带扩展名、≥20 条）——★内置图标在 `Content\Paks` 里，磁盘取不到，做不了存在性校验；
+  ③ **检索**：顶部输入框即时过滤（纯本地数据，无需去抖），列表列出**各等级**；支持按**技能名**或**野兽名/区域**两种搜法；
+  ④ **详情页**：简介 / 集中·施法·射程·冷却 / 需求宠物等级 / 拥有该技能的宠物列表（家族 + 名称 + 等级·区域）；训练师被动技能如实注明「无驯服来源」；
+  ⑤ **放大镜跳转**：宠物行右侧按钮 → 填入宠物名 → 切「数据检索」Tab 并立即检索（新增 `EVAL_DS_SEARCH_NAME` 入口 + `EVAL_DS_LAST_QUERY` 读值口）；
+  新增断言组 106 + 既有「Tab 数 = 5」同步改 6；★本轮踩的坑：**生成器补丁插在输出之后**（数据没进文件，条目数 58≠106 当场暴露）、
+     **PetHelper 的 PH 表漏了行池字段**（`PH.rows` 为 nil → 配置窗构建即红字）、**DataSearch 新入口定义在 `dsDoSearch` 之前**（DECL ORDER CHECK 抓住）。
+  - 上一版 **1.72.2**（分享方案光环修复 + 载入引导每次都在）：
+  ① **分享出去的方案在别人角色上放不出技能** → 根因是六个光环分支「纹理解析不出就先 return」，**按名字扫描的兜底永远到不了**；
+  改成**两级解析**（纹理快路径 → 名字慢路径，0.5s 缓存、命中即自愈学习）+ **扫描可信度三态**（不可信就如实失败，防复活 1.71.2 无限重放）；
+  ② **新手引导改成每次加载都打**（原来用 `cfg.guideSeen` 只出一次，新人错过第一局就再也看不到，该键已废弃）；
+  ③ 顺带修 `EVAL_DS_HUD` 具名帧顶掉同名全局函数 → `/eh ds hud` 静默失效（HUD 开得开、关不掉）；
+  新增诊断命令 `/eh go tex | texdel 名字 | texclear | texscan`、源码检查 `FRAME NAME CLASH CHECK`、断言组 103/104/105（变异 M1~M6 全捕获）；
+  三语言 README 与 CHANGELOG 同步（版本表 10 行、里程碑范围 1.72.2）；
+  ★**已推送**（origin + github 两端 + tag v1.72.2）。
   ① **分享出去的方案在别人角色上放不出技能** → 根因是六个光环分支「纹理解析不出就先 return」，**按名字扫描的兜底永远到不了**；
   改成**两级解析**（纹理快路径 → 名字慢路径，0.5s 缓存、命中即自愈学习）+ **扫描可信度三态**（不可信就如实失败，防复活 1.71.2 无限重放）；
   ② **新手引导改成每次加载都打**（原来用 `cfg.guideSeen` 只出一次，新人错过第一局就再也看不到，该键已废弃）；

@@ -1,0 +1,588 @@
+-- EvalHelp · PetData.lua —— 猎人宠物技能数据（1.73.0 独立载入）
+-- 数据来源：用户提供的宠物技能总表截图（doc/pet_info.png），转录整理见 doc/宠物技能数据.md。
+-- 结构：skills（技能定义+图标）/ ranks[技能名]（各等级：需求宠物等级 + 驯服来源）/ families（家族→图标）。
+-- 图标：**客户端内置图标**（Interface\Icons...）——先用 INV_Misc_QuestionMark 占位，真实路径待用户确认后只改本文件的 ICONROOT 一行。
+
+EVAL_PET_DB = {}
+
+EVAL_PET_DB.skills = {
+  { id = "bite", name = "撕咬", cost = 35, cast = "瞬发", range = "5码", cd = "10秒", kind = "主动", intro = "撕咬目标，宠物最基础的伤害技能", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  { id = "claw", name = "爪击", cost = 25, cast = "瞬发", range = "5码", cd = "无", kind = "主动", intro = "快速爪击，无冷却但消耗集中值", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  { id = "dash", name = "突进", cost = 20, cast = "瞬发", range = "—", cd = "30秒", kind = "主动", intro = "短时间大幅提升移动速度，追击或脱离用", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  { id = "dive", name = "俯冲", cost = 20, cast = "瞬发", range = "—", cd = "30秒", kind = "主动", intro = "飞行系宠物的冲刺，效果同突进", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  { id = "charge", name = "冲锋", cost = 35, cast = "瞬发", range = "8-25码", cd = "25秒", kind = "主动", intro = "冲锋并定身目标，下一次攻击附加伤害", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  { id = "howl", name = "嚎叫", cost = 60, cast = "瞬发", range = "15码", cd = "10秒", kind = "主动", intro = "为队友的下一次攻击附加伤害", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  { id = "lightning", name = "闪电吐息", cost = 50, cast = "瞬发", range = "20码", cd = "无", kind = "主动", intro = "远程自然伤害，风蛇专属", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  { id = "prowl", name = "潜伏", cost = 40, cast = "瞬发", range = "—", cd = "10秒", kind = "主动", intro = "进入潜行，下一次攻击获得额外伤害", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  { id = "scorpid", name = "蝎毒", cost = 30, cast = "瞬发", range = "—", cd = "4秒", kind = "主动", intro = "持续自然伤害，可叠加5次", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  { id = "screech", name = "尖啸", cost = 20, cast = "瞬发", range = "8码", cd = "4秒", kind = "主动", intro = "降低范围内敌人的攻击强度", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  { id = "shell", name = "甲壳护盾", cost = 10, cast = "瞬发", range = "—", cd = "180秒", kind = "主动", intro = "降低受到的伤害，代价是攻击间隔变长", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  { id = "thunder", name = "雷霆践踏", cost = 60, cast = "瞬发", range = "8码", cd = "60秒", kind = "主动", intro = "范围自然伤害，猩猩专属", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  { id = "cower", name = "畏缩", cost = 25, cast = "瞬发", range = "5码", cd = "5秒", kind = "主动", intro = "降低仇恨值（与低吼共享冷却）", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  { id = "growl", name = "低吼", cost = 15, cast = "瞬发", range = "5码", cd = "5秒", kind = "被动-训练师", intro = "提高仇恨，宠物坦克核心（训练师学习）", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  { id = "stamina", name = "持久耐力", cost = 0, cast = "被动", range = "—", cd = "—", kind = "被动-训练师", intro = "提高宠物耐力（训练师学习）", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  { id = "natarmor", name = "自然护甲", cost = 0, cast = "被动", range = "—", cd = "—", kind = "被动-训练师", intro = "提高宠物护甲（训练师学习）", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  { id = "fireres", name = "火焰抗性", cost = 0, cast = "被动", range = "—", cd = "—", kind = "被动-训练师", intro = "提高火焰抗性（训练师学习）", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  { id = "frostres", name = "冰霜抗性", cost = 0, cast = "被动", range = "—", cd = "—", kind = "被动-训练师", intro = "提高冰霜抗性（训练师学习）", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  { id = "shadowres", name = "暗影抗性", cost = 0, cast = "被动", range = "—", cd = "—", kind = "被动-训练师", intro = "提高暗影抗性（训练师学习）", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  { id = "natureres", name = "自然抗性", cost = 0, cast = "被动", range = "—", cd = "—", kind = "被动-训练师", intro = "提高自然抗性（训练师学习）", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  { id = "arcaneres", name = "奥术抗性", cost = 0, cast = "被动", range = "—", cd = "—", kind = "被动-训练师", intro = "提高奥术抗性（训练师学习）", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+}
+
+EVAL_PET_DB.ranks = {
+  ["撕咬"] = {
+    { rank = 1, req = 1, beasts = {
+      { zone = "丹莫罗", name = "雪狼", level = "6-7", fam = "wolf" },
+      { zone = "丹莫罗", name = "冬狼", level = "6-8", fam = "wolf" },
+      { zone = "杜隆塔尔", name = "巨齿鳄鱼", level = "9-11", fam = "crocolisk" },
+      { zone = "艾尔文森林", name = "森林蜘蛛", level = "5-6", fam = "spider" },
+      { zone = "艾尔文森林", name = "森林灰狼", level = "7-8", fam = "wolf" },
+      { zone = "莫高雷", name = "草原狼", level = "5-6", fam = "wolf" },
+      { zone = "莫高雷", name = "草原捕食者", level = "7-8", fam = "cat" },
+      { zone = "泰达希尔", name = "邪恶的基塞伊斯", level = "5", fam = "other" },
+      { zone = "泰达希尔", name = "树林蜘蛛", level = "3-4", fam = "spider" },
+      { zone = "提瑞斯法林地", name = "夜行蜘蛛", level = "3-4", fam = "spider" },
+      { zone = "提瑞斯法林地", name = "夜行雌蜘蛛", level = "5", fam = "spider" },
+      { zone = "西部荒野", name = "山狗", level = "10-11", fam = "other" },
+      { zone = "西部荒野", name = "山狗首领", level = "11-12", fam = "other" },
+    } },
+    { rank = 2, req = 8, beasts = {
+      { zone = "贫瘠之地", name = "绿洲钳嘴龟", level = "15-16", fam = "turtle" },
+      { zone = "丹莫罗", name = "饥饿的冬狼", level = "8-9", fam = "wolf" },
+      { zone = "丹莫罗", name = "狂暴的冬狼", level = "10", fam = "wolf" },
+      { zone = "艾尔文森林", name = "觅食的灰狼", level = "9-10", fam = "wolf" },
+      { zone = "艾尔文森林", name = "母蜘蛛", level = "10", fam = "spider" },
+      { zone = "洛克莫丹", name = "森林潜伏者", level = "10-11", fam = "other" },
+      { zone = "洛克莫丹", name = "洛克鳄", level = "14-15", fam = "crocolisk" },
+      { zone = "莫高雷", name = "草原狼前锋", level = "9-10", fam = "wolf" },
+      { zone = "赤脊山", name = "狼蛛", level = "14", fam = "wolf" },
+    } },
+    { rank = 3, req = 16, beasts = {
+      { zone = "灰谷", name = "幽爪奔跑者", level = "19-20", fam = "other" },
+      { zone = "黑暗深渊副本", name = "阿库麦尔食鱼龟", level = "23-24", fam = "turtle" },
+      { zone = "黑暗深渊副本", name = "加摩拉", level = "25", fam = "turtle" },
+      { zone = "暮色森林", name = "绿色独行蛛", level = "21-22", fam = "spider" },
+      { zone = "暮色森林", name = "鲁伯斯", level = "23", fam = "other" },
+      { zone = "希尔斯布莱德丘陵", name = "森林食苔蛛", level = "20-21", fam = "spider" },
+      { zone = "洛克莫丹", name = "林木潜伏者", level = "17-18", fam = "other" },
+      { zone = "赤脊山", name = "巨型狼蛛", level = "19-20", fam = "wolf" },
+      { zone = "石爪山脉", name = "贝瑟莱斯", level = "21", fam = "spider" },
+      { zone = "石爪山脉", name = "深苔爬行者", level = "16-17", fam = "spider" },
+      { zone = "石爪山脉", name = "深苔结网蛛", level = "19-20", fam = "spider" },
+      { zone = "哀嚎洞穴副本", name = "变异鳄鱼", level = "18-19", fam = "crocolisk" },
+    } },
+    { rank = 4, req = 24, beasts = {
+      { zone = "灰谷", name = "幽爪前锋", level = "27-28", fam = "other" },
+      { zone = "灰谷", name = "野棘潜伏者", level = "28-29", fam = "other" },
+      { zone = "黑暗深渊副本", name = "阿库麦尔钳嘴龟", level = "26-27", fam = "turtle" },
+      { zone = "暮色森林", name = "黑色破坏者", level = "24-25", fam = "other" },
+      { zone = "暮色森林", name = "巨型黑色破坏者", level = "25-26", fam = "other" },
+      { zone = "暮色森林", name = "拉克西斯", level = "27", fam = "spider" },
+      { zone = "希尔斯布莱德丘陵", name = "老食苔蛛", level = "26-27", fam = "spider" },
+      { zone = "希尔斯布莱德丘陵", name = "巨型食苔蛛", level = "24-26", fam = "spider" },
+    } },
+    { rank = 5, req = 32, beasts = {
+      { zone = "阿拉希高地", name = "巨型平原狼蛛", level = "35-36", fam = "wolf" },
+      { zone = "阿拉希高地", name = "平原狼蛛", level = "32-33", fam = "wolf" },
+      { zone = "荒芜之地", name = "峭壁山狗", level = "35-36", fam = "other" },
+      { zone = "尘泥沼泽", name = "暗牙爬行者", level = "38-39", fam = "spider" },
+      { zone = "尘泥沼泽", name = "暗牙潜伏者", level = "36-37", fam = "other" },
+      { zone = "尘泥沼泽", name = "暗牙蜘蛛", level = "35-36", fam = "spider" },
+      { zone = "尘泥沼泽", name = "尘泥鳄鱼", level = "35-36", fam = "crocolisk" },
+      { zone = "尘泥沼泽", name = "尘泥杂斑鳄鱼", level = "38-39", fam = "crocolisk" },
+      { zone = "尘泥沼泽", name = "泥石海龟", level = "36-37", fam = "turtle" },
+      { zone = "千针石林", name = "盐壳钳嘴龟", level = "34-35", fam = "turtle" },
+    } },
+    { rank = 6, req = 40, beasts = {
+      { zone = "艾萨拉", name = "林木隐匿者", level = "47-48", fam = "other" },
+      { zone = "荒芜之地", name = "巴纳布斯", level = "39", fam = "other" },
+      { zone = "尘泥沼泽", name = "死沼巨鳄", level = "45", fam = "crocolisk" },
+      { zone = "尘泥沼泽", name = "尘泥利齿鳄鱼", level = "40-41", fam = "crocolisk" },
+      { zone = "尘泥沼泽", name = "泥石钳嘴龟", level = "41-42", fam = "turtle" },
+      { zone = "费伍德森林", name = "魔爪狼", level = "47-48", fam = "wolf" },
+      { zone = "菲拉斯", name = "长牙奔跑者", level = "40-41", fam = "other" },
+      { zone = "菲拉斯", name = "咆哮者", level = "42", fam = "other" },
+    } },
+    { rank = 7, req = 48, beasts = {
+      { zone = "费伍德森林", name = "魔爪掠夺者", level = "51-52", fam = "other" },
+      { zone = "辛特兰", name = "铁背龟", level = "51", fam = "turtle" },
+      { zone = "辛特兰", name = "海水钳嘴龟", level = "49-50", fam = "turtle" },
+      { zone = "辛特兰", name = "邪枝巨狼", level = "50-51", fam = "wolf" },
+      { zone = "安戈洛环形山", name = "乌卡洛克", level = "52-53", fam = "gorilla" },
+      { zone = "西瘟疫之地", name = "生病的狼", level = "53-54", fam = "wolf" },
+      { zone = "西瘟疫之地", name = "瘟疫潜伏者", level = "54-55", fam = "other" },
+      { zone = "灼热峡谷", name = "雷克提拉克", level = "49", fam = "spider" },
+      { zone = "暴风城", name = "下水道鳄鱼", level = "50", fam = "crocolisk" },
+      { zone = "悲伤沼泽", name = "死亡狼蛛", level = "40-41", fam = "wolf" },
+      { zone = "悲伤沼泽", name = "盐齿钳嘴鳄", level = "41-42", fam = "crocolisk" },
+      { zone = "菲拉斯", name = "铁鬃熊王", level = "48-49", fam = "bear" },
+      { zone = "诅咒之地", name = "掠夺者科拉克", level = "53", fam = "scorpid" },
+    } },
+    { rank = 8, req = 56, beasts = {
+      { zone = "黑石塔副本", name = "血斧座狼", level = "56-57", fam = "wolf" },
+      { zone = "冬泉谷", name = "老碎齿熊", level = "57-58", fam = "bear" },
+      { zone = "冬泉谷", name = "冬泉鸣枭", level = "57-59", fam = "owl" },
+    } },
+  },
+  ["爪击"] = {
+    { rank = 1, req = 1, beasts = {
+      { zone = "杜隆塔尔", name = "小海湾蟹", level = "5-6", fam = "crab" },
+      { zone = "杜隆塔尔", name = "萨科斯", level = "4", fam = "scorpid" },
+      { zone = "杜隆塔尔", name = "蝎子", level = "3", fam = "scorpid" },
+      { zone = "丹莫罗", name = "冰爪熊", level = "7-8", fam = "bear" },
+      { zone = "泰达希尔", name = "巨翼枭", level = "5-6", fam = "owl" },
+    } },
+    { rank = 2, req = 8, beasts = {
+      { zone = "银松森林", name = "凶猛的灰斑熊", level = "11-12", fam = "bear" },
+      { zone = "泰达希尔", name = "巨翼猎枭", level = "8-9", fam = "owl" },
+    } },
+    { rank = 3, req = 16, beasts = {
+      { zone = "希尔斯布莱德丘陵", name = "灰熊", level = "21-22", fam = "bear" },
+      { zone = "灰谷", name = "灰谷熊", level = "21-22", fam = "bear" },
+      { zone = "灰谷", name = "巨钳蟹", level = "19-20", fam = "crab" },
+      { zone = "黑海岸", name = "薊熊", level = "11-12", fam = "bear" },
+      { zone = "黑海岸", name = "潮行蟹", level = "13-14", fam = "crab" },
+      { zone = "丹莫罗", name = "癞爪", level = "11", fam = "other" },
+      { zone = "丹莫罗", name = "游荡的冰爪熊", level = "12", fam = "bear" },
+      { zone = "艾尔文森林", name = "森林熊幼崽", level = "8-9", fam = "bear" },
+      { zone = "洛克莫丹", name = "黑熊首领", level = "16-17", fam = "bear" },
+      { zone = "洛克莫丹", name = "奥尔苏迪", level = "20", fam = "other" },
+      { zone = "西部荒野", name = "猎行蛛", level = "17-18", fam = "other" },
+    } },
+    { rank = 4, req = 24, beasts = {
+      { zone = "千针石林", name = "恐蝎劫掠者", level = "31-32", fam = "scorpid" },
+      { zone = "黑暗深渊副本", name = "刺毛甲壳蟹", level = "25-26", fam = "crab" },
+      { zone = "凄凉之地", name = "荒土巨钳蝎", level = "30-31", fam = "scorpid" },
+      { zone = "尘泥沼泽", name = "尘泥钳嘴鳄鱼", level = "37-38", fam = "crocolisk" },
+    } },
+    { rank = 5, req = 32, beasts = {
+      { zone = "凄凉之地", name = "荒土鞭尾蝎", level = "34-35", fam = "scorpid" },
+    } },
+    { rank = 6, req = 40, beasts = {
+      { zone = "塔纳利斯", name = "沙漠猎食蝎", level = "40-41", fam = "scorpid" },
+      { zone = "荆棘谷", name = "虎王邦加拉什", level = "43", fam = "cat" },
+    } },
+    { rank = 7, req = 48, beasts = {
+      { zone = "菲拉斯", name = "铁鬃熊王", level = "48-49", fam = "bear" },
+      { zone = "诅咒之地", name = "掠夺者科拉克", level = "53", fam = "scorpid" },
+    } },
+    { rank = 8, req = 56, beasts = {
+      { zone = "冬泉谷", name = "老碎齿熊", level = "57-58", fam = "bear" },
+      { zone = "冬泉谷", name = "冬泉鸣枭", level = "57-59", fam = "owl" },
+    } },
+  },
+  ["突进"] = {
+    { rank = 1, req = 30, beasts = {
+      { zone = "荒芜之地", name = "断牙", level = "37", fam = "cat" },
+      { zone = "荒芜之地", name = "峭壁山狗", level = "35-36", fam = "other" },
+      { zone = "荒芜之地", name = "老峭壁山狗", level = "38-40", fam = "other" },
+      { zone = "凄凉之地", name = "骨爪土狼", level = "33-35", fam = "wolf" },
+      { zone = "凄凉之地", name = "玛格拉姆骨爪土狼", level = "37-38", fam = "wolf" },
+      { zone = "血色修道院副本", name = "血色猎犬", level = "33-34", fam = "other" },
+      { zone = "荆棘谷", name = "库尔森战虎", level = "32-33", fam = "cat" },
+      { zone = "荆棘谷", name = "荆棘谷猛虎", level = "32-33", fam = "cat" },
+      { zone = "荆棘谷", name = "辛达尔", level = "37", fam = "cat" },
+    } },
+    { rank = 2, req = 40, beasts = {
+      { zone = "荒芜之地", name = "山脊雄豹", level = "40-41", fam = "cat" },
+      { zone = "诅咒之地", name = "灰鬃野猪", level = "48-49", fam = "boar" },
+      { zone = "诅咒之地", name = "格朗特", level = "50", fam = "boar" },
+      { zone = "菲拉斯", name = "长牙奔跑者", level = "40-41", fam = "other" },
+      { zone = "辛特兰", name = "海崖奔跳者", level = "42", fam = "other" },
+      { zone = "辛特兰", name = "银鬃捕猎者", level = "47-48", fam = "other" },
+      { zone = "荆棘谷", name = "巴尔瑟拉", level = "40", fam = "cat" },
+      { zone = "荆棘谷", name = "老年深喉猎豹", level = "42-43", fam = "cat" },
+      { zone = "荆棘谷", name = "虎王邦加拉什", level = "43", fam = "cat" },
+      { zone = "塔纳利斯", name = "疱爪土狼", level = "44-45", fam = "wolf" },
+      { zone = "塔纳利斯", name = "疯狂的疱爪土狼", level = "47-48", fam = "wolf" },
+    } },
+    { rank = 3, req = 50, beasts = {
+      { zone = "燃烧平原", name = "黑石座狼", level = "54-55", fam = "wolf" },
+      { zone = "冬泉谷", name = "霜刃捕食者", level = "59-60", fam = "cat" },
+      { zone = "冬泉谷", name = "拉克西里", level = "59", fam = "cat" },
+      { zone = "诅咒之地", name = "格朗特", level = "50", fam = "boar" },
+      { zone = "辛特兰", name = "邪枝巨狼", level = "50-51", fam = "wolf" },
+      { zone = "黑石塔副本", name = "血斧座狼", level = "56-57", fam = "wolf" },
+    } },
+  },
+  ["俯冲"] = {
+    { rank = 1, req = 30, beasts = {
+      { zone = "阿拉希高地", name = "山地秃鹫", level = "34-35", fam = "bird" },
+      { zone = "阿拉希高地", name = "山地秃鹫幼崽", level = "31-32", fam = "bird" },
+      { zone = "剃刀沼泽副本", name = "沼泽蝙蝠", level = "30-31", fam = "bat" },
+      { zone = "凄凉之地", name = "恐怖飞鸟", level = "36-37", fam = "other" },
+      { zone = "奥达曼副本", name = "利齿蝙蝠", level = "38-39", fam = "bat" },
+    } },
+    { rank = 2, req = 40, beasts = {
+      { zone = "费伍德森林", name = "铁喙猫头鹰", level = "48-49", fam = "owl" },
+      { zone = "塔纳利斯", name = "大鹏", level = "41-43", fam = "bird" },
+      { zone = "塔纳利斯", name = "火鹏", level = "43-45", fam = "bird" },
+      { zone = "菲拉斯", name = "阿拉瑟希斯", level = "49", fam = "other" },
+      { zone = "菲拉斯", name = "游荡的山谷尖啸者", level = "44-46", fam = "bird" },
+      { zone = "菲拉斯", name = "山谷尖啸者", level = "41-43", fam = "bird" },
+    } },
+    { rank = 3, req = 50, beasts = {
+      { zone = "费伍德森林", name = "铁喙狩猎者", level = "50-51", fam = "other" },
+      { zone = "费伍德森林", name = "铁喙尖啸者", level = "52-53", fam = "bird" },
+      { zone = "费伍德森林", name = "智者奥尔姆", level = "53", fam = "owl" },
+      { zone = "冬泉谷", name = "冬泉鸣枭", level = "57-59", fam = "owl" },
+      { zone = "荒芜之地", name = "扎里科特", level = "55", fam = "bird" },
+      { zone = "诅咒之地", name = "斯比弗雷尔", level = "52", fam = "bird" },
+      { zone = "东瘟疫之地", name = "天灾蝙蝠", level = "53-55", fam = "bat" },
+    } },
+  },
+  ["冲锋"] = {
+    { rank = 1, req = 1, beasts = {
+      { zone = "杜隆塔尔", name = "杂斑野猪", level = "1-2", fam = "boar" },
+      { zone = "杜隆塔尔", name = "可怕的杂斑野猪", level = "6-7", fam = "boar" },
+      { zone = "杜隆塔尔", name = "老杂斑野猪", level = "8-9", fam = "boar" },
+      { zone = "杜隆塔尔", name = "堕落的杂斑野猪", level = "10-11", fam = "boar" },
+      { zone = "丹莫罗", name = "小型峭壁野猪", level = "3", fam = "boar" },
+      { zone = "丹莫罗", name = "峭壁野猪", level = "5-6", fam = "boar" },
+      { zone = "丹莫罗", name = "老峭壁野猪", level = "7-8", fam = "boar" },
+      { zone = "艾尔文森林", name = "石牙野猪", level = "5-6", fam = "boar" },
+      { zone = "艾尔文森林", name = "公主的随从", level = "7", fam = "boar" },
+      { zone = "艾尔文森林", name = "石皮野猪", level = "7-8", fam = "boar" },
+      { zone = "莫高雷", name = "年幼的斗猪", level = "3-4", fam = "boar" },
+      { zone = "莫高雷", name = "刺背斗猪", level = "4-5", fam = "boar" },
+      { zone = "泰达希尔", name = "草刺野猪", level = "1-2", fam = "boar" },
+    } },
+    { rank = 2, req = 12, beasts = {
+      { zone = "洛克莫丹", name = "老山猪", level = "16-17", fam = "boar" },
+      { zone = "洛克莫丹", name = "癞皮山猪", level = "14-15", fam = "boar" },
+      { zone = "赤脊山", name = "巨型血牙野猪", level = "16-17", fam = "boar" },
+      { zone = "西部荒野", name = "幼年血牙野猪", level = "12-13", fam = "boar" },
+      { zone = "西部荒野", name = "血牙野猪", level = "14-15", fam = "boar" },
+    } },
+    { rank = 3, req = 24, beasts = {
+      { zone = "剃刀沼泽副本", name = "阿迦玛", level = "24-25", fam = "boar" },
+      { zone = "剃刀沼泽副本", name = "暴怒的阿迦玛", level = "25-26", fam = "boar" },
+      { zone = "剃刀沼泽副本", name = "腐烂的阿迦玛", level = "28", fam = "boar" },
+      { zone = "赤脊山", name = "贝利格拉布", level = "24", fam = "other" },
+    } },
+    { rank = 4, req = 48, beasts = {
+      { zone = "诅咒之地", name = "灰鬃野猪", level = "48-49", fam = "boar" },
+      { zone = "诅咒之地", name = "格朗特", level = "50", fam = "boar" },
+    } },
+    { rank = 5, req = 60, beasts = {
+      { zone = "东瘟疫之地", name = "天灾野猪", level = "60", fam = "boar" },
+    } },
+  },
+  ["嚎叫"] = {
+    { rank = 1, req = 10, beasts = {
+      { zone = "银松森林", name = "座狼", level = "10-11", fam = "wolf" },
+      { zone = "西部荒野", name = "山狗首领", level = "11-12", fam = "other" },
+    } },
+    { rank = 2, req = 24, beasts = {
+      { zone = "暮色森林", name = "巨型黑色破坏者", level = "25-26", fam = "other" },
+      { zone = "灰谷", name = "幽爪前锋", level = "27-28", fam = "other" },
+      { zone = "荒芜之地", name = "老峭壁山狗", level = "38-40", fam = "other" },
+      { zone = "菲拉斯", name = "长牙奔跑者", level = "40-41", fam = "other" },
+      { zone = "辛特兰", name = "银鬃狼", level = "43-44", fam = "wolf" },
+      { zone = "辛特兰", name = "银鬃嗥狼", level = "45-46", fam = "wolf" },
+    } },
+    { rank = 3, req = 40, beasts = {
+      { zone = "菲拉斯", name = "长牙嚎叫者", level = "43-44", fam = "other" },
+      { zone = "费伍德森林", name = "魔爪狼", level = "47-48", fam = "wolf" },
+    } },
+    { rank = 4, req = 56, beasts = {
+      { zone = "黑石塔副本", name = "血斧座狼", level = "56-57", fam = "wolf" },
+    } },
+  },
+  ["闪电吐息"] = {
+    { rank = 1, req = 1, beasts = {
+      { zone = "哀嚎洞穴副本", name = "变异刺喉蛇", level = "16-17", fam = "other" },
+    } },
+    { rank = 2, req = 12, beasts = {
+      { zone = "哀嚎洞穴副本", name = "变异尖牙风蛇", level = "20-21", fam = "windserpent" },
+      { zone = "哀嚎洞穴副本", name = "变异剧毒风蛇", level = "20-21", fam = "windserpent" },
+      { zone = "贫瘠之地", name = "雷鹰雏鸟", level = "18-20", fam = "bird" },
+      { zone = "贫瘠之地", name = "雷鹰破云者", level = "20-22", fam = "bird" },
+      { zone = "贫瘠之地", name = "大型雷鹰", level = "23-24", fam = "bird" },
+    } },
+    { rank = 3, req = 24, beasts = {
+      { zone = "千针石林", name = "风蛇", level = "25-26", fam = "windserpent" },
+      { zone = "千针石林", name = "毒性风蛇", level = "26-28", fam = "windserpent" },
+      { zone = "千针石林", name = "老风蛇", level = "27-29", fam = "windserpent" },
+    } },
+    { rank = 4, req = 36, beasts = {
+      { zone = "菲拉斯", name = "山谷尖啸者", level = "41-43", fam = "bird" },
+      { zone = "菲拉斯", name = "游荡的山谷尖啸者", level = "44-46", fam = "bird" },
+      { zone = "菲拉斯", name = "阿拉瑟希斯", level = "49", fam = "other" },
+    } },
+    { rank = 5, req = 48, beasts = {
+      { zone = "沉没的神庙副本", name = "哈卡莱霜翼飞蛇", level = "49-50", fam = "windserpent" },
+      { zone = "沉没的神庙副本", name = "哈卡莱挖掘者", level = "49-50", fam = "other" },
+    } },
+    { rank = 6, req = 60, beasts = {
+      { zone = "祖尔格拉布副本", name = "哈卡之子", level = "60", fam = "windserpent" },
+    } },
+  },
+  ["潜伏"] = {
+    { rank = 1, req = 30, beasts = {
+      { zone = "奥特兰克山脉", name = "山地狮", level = "32-33", fam = "cat" },
+      { zone = "荒芜之地", name = "山脊巡行者", level = "36-37", fam = "cat" },
+      { zone = "荆棘谷", name = "深喉猎豹", level = "37-38", fam = "cat" },
+      { zone = "悲伤沼泽", name = "暗影黑豹", level = "39-40", fam = "cat" },
+    } },
+    { rank = 2, req = 40, beasts = {
+      { zone = "荒芜之地", name = "山脊雄豹", level = "40-41", fam = "cat" },
+      { zone = "荆棘谷", name = "老年深喉猎豹", level = "42-43", fam = "cat" },
+    } },
+    { rank = 3, req = 50, beasts = {
+      { zone = "荆棘谷", name = "丛林猎豹", level = "50", fam = "cat" },
+      { zone = "冬泉谷", name = "霜刃捕食者", level = "59-60", fam = "cat" },
+      { zone = "祖尔格拉布", name = "祖利安雌猎虎", level = "60", fam = "cat" },
+    } },
+  },
+  ["蝎毒"] = {
+    { rank = 1, req = 8, beasts = {
+      { zone = "杜隆塔尔", name = "毒尾蝎", level = "9-10", fam = "scorpid" },
+      { zone = "杜隆塔尔", name = "堕落的蝎", level = "10-11", fam = "scorpid" },
+      { zone = "杜隆塔尔", name = "死亡毒蝎", level = "11", fam = "scorpid" },
+      { zone = "贫瘠之地", name = "异种爬行者", level = "20-21", fam = "spider" },
+      { zone = "贫瘠之地", name = "异种群居蝎", level = "21-22", fam = "scorpid" },
+    } },
+    { rank = 2, req = 24, beasts = {
+      { zone = "凄凉之地", name = "荒土巨钳蝎", level = "30-31", fam = "scorpid" },
+      { zone = "凄凉之地", name = "荒土鞭尾蝎", level = "34-35", fam = "scorpid" },
+      { zone = "凄凉之地", name = "荒土毒尾蝎", level = "38-39", fam = "scorpid" },
+      { zone = "千针石林", name = "恐蝎劫掠者", level = "31-32", fam = "scorpid" },
+      { zone = "千针石林", name = "恐蝎", level = "33-34", fam = "scorpid" },
+      { zone = "千针石林", name = "邪刺恐蝎", level = "35", fam = "scorpid" },
+    } },
+    { rank = 3, req = 40, beasts = {
+      { zone = "塔纳利斯", name = "沙漠猎食蝎", level = "40-41", fam = "scorpid" },
+      { zone = "塔纳利斯", name = "沙漠鞭尾蝎", level = "43-44", fam = "scorpid" },
+      { zone = "塔纳利斯", name = "沙漠疾行蝎", level = "46-47", fam = "scorpid" },
+      { zone = "诅咒之地", name = "厚甲毒刺蝎", level = "50-51", fam = "scorpid" },
+      { zone = "燃烧平原", name = "毒尖蝎", level = "52-53", fam = "scorpid" },
+      { zone = "燃烧平原", name = "死鞭蝎", level = "54", fam = "scorpid" },
+      { zone = "希利苏斯", name = "石鞭蝎", level = "54-55", fam = "scorpid" },
+    } },
+    { rank = 4, req = 56, beasts = {
+      { zone = "燃烧平原", name = "火尾蝎", level = "56-57", fam = "scorpid" },
+      { zone = "希利苏斯", name = "石鞭巨钳蝎", level = "56-57", fam = "scorpid" },
+      { zone = "希利苏斯", name = "石鞭掠夺者", level = "58-59", fam = "other" },
+      { zone = "希利苏斯", name = "克里拉克", level = "56", fam = "scorpid" },
+    } },
+  },
+  ["尖啸"] = {
+    { rank = 1, req = 8, beasts = {
+      { zone = "西部荒野", name = "大碎尸鸟", level = "16-17", fam = "bird" },
+    } },
+    { rank = 2, req = 24, beasts = {
+      { zone = "千针石林", name = "盐湖秃鹫", level = "32-34", fam = "bird" },
+      { zone = "凄凉之地", name = "恐怖撕裂者", level = "39-40", fam = "spider" },
+      { zone = "奥达曼副本", name = "利齿蝙蝠", level = "38-39", fam = "bat" },
+    } },
+    { rank = 3, req = 40, beasts = {
+      { zone = "费伍德森林", name = "铁喙猫头鹰", level = "48-49", fam = "owl" },
+      { zone = "费伍德森林", name = "智者奥尔姆", level = "52", fam = "owl" },
+      { zone = "西瘟疫之地", name = "食腐秃鹫", level = "50-52", fam = "bird" },
+    } },
+    { rank = 4, req = 56, beasts = {
+      { zone = "东瘟疫之地", name = "巨型天灾蝙蝠", level = "56-58", fam = "bat" },
+      { zone = "冬泉谷", name = "冬泉鸣枭", level = "57-59", fam = "owl" },
+    } },
+  },
+  ["甲壳护盾"] = {
+    { rank = 1, req = 20, beasts = {
+      { zone = "黑暗深渊副本", name = "阿库麦尔食鱼龟", level = "23-24", fam = "turtle" },
+      { zone = "黑暗深渊副本", name = "加摩拉", level = "25", fam = "turtle" },
+      { zone = "希尔斯布莱德丘陵", name = "钳嘴龟", level = "30-31", fam = "turtle" },
+      { zone = "辛特兰", name = "铁背龟", level = "51", fam = "turtle" },
+      { zone = "哀嚎洞穴副本", name = "克雷什", level = "20", fam = "turtle" },
+    } },
+  },
+  ["雷霆践踏"] = {
+    { rank = 1, req = 30, beasts = {
+      { zone = "荆棘谷", name = "丛林大猩猩", level = "37-38", fam = "gorilla" },
+      { zone = "荆棘谷", name = "迷雾谷猩猩", level = "32-33", fam = "gorilla" },
+    } },
+    { rank = 2, req = 40, beasts = {
+      { zone = "菲拉斯", name = "格罗多克大猩猩", level = "49-50", fam = "gorilla" },
+      { zone = "荆棘谷", name = "老迈的迷雾谷猩猩", level = "40-41", fam = "gorilla" },
+    } },
+    { rank = 3, req = 50, beasts = {
+      { zone = "安戈洛环形山", name = "安戈洛猩猩", level = "50-51", fam = "gorilla" },
+      { zone = "安戈洛环形山", name = "尤尔查", level = "55", fam = "gorilla" },
+    } },
+  },
+  ["畏缩"] = {
+    { rank = 1, req = 5, beasts = {
+      { zone = "贫瘠之地", name = "老平原陆行鸟", level = "8-9", fam = "tallstrider" },
+      { zone = "贫瘠之地", name = "敏捷的平原陆行鸟", level = "12-13", fam = "tallstrider" },
+      { zone = "丹莫罗", name = "雪豹幼崽", level = "5-6", fam = "cat" },
+      { zone = "杜隆塔尔", name = "杜隆塔尔猛虎", level = "7-8", fam = "cat" },
+      { zone = "黑海岸", name = "森林陆行鸟雏鸟", level = "11-13", fam = "tallstrider" },
+      { zone = "黑海岸", name = "月夜猛虎幼崽", level = "10-11", fam = "cat" },
+      { zone = "莫高雷", name = "平原狮", level = "7-8", fam = "cat" },
+      { zone = "莫高雷", name = "马兹拉纳其", level = "9", fam = "other" },
+      { zone = "泰达希尔", name = "夜刃豹", level = "5-6", fam = "cat" },
+    } },
+    { rank = 2, req = 15, beasts = {
+      { zone = "希尔斯布莱德丘陵", name = "饥饿的山地狮", level = "23-24", fam = "cat" },
+      { zone = "贫瘠之地", name = "暴躁的平原陆行鸟", level = "16-17", fam = "tallstrider" },
+      { zone = "贫瘠之地", name = "草原狮王", level = "15-16", fam = "cat" },
+      { zone = "石爪山脉", name = "夜行虎", level = "23-24", fam = "cat" },
+      { zone = "黑海岸", name = "月夜雄虎", level = "17-18", fam = "cat" },
+      { zone = "黑海岸", name = "凶猛的森林陆行鸟", level = "17-19", fam = "tallstrider" },
+    } },
+    { rank = 3, req = 25, beasts = {
+      { zone = "希尔斯布莱德丘陵", name = "野生山地狮", level = "27-28", fam = "cat" },
+      { zone = "剃刀沼泽副本", name = "盲眼猎手", level = "32", fam = "bat" },
+      { zone = "剃刀沼泽副本", name = "沼泽蝙蝠", level = "30-31", fam = "bat" },
+      { zone = "千针石林", name = "峭壁捕猎者", level = "25-26", fam = "other" },
+      { zone = "荆棘谷", name = "黑豹", level = "32-33", fam = "cat" },
+      { zone = "荆棘谷", name = "猎豹幼崽", level = "30-31", fam = "cat" },
+      { zone = "荆棘谷", name = "荆棘谷猛虎幼崽", level = "30-31", fam = "cat" },
+    } },
+    { rank = 4, req = 35, beasts = {
+      { zone = "荒芜之地", name = "山脊巡行者", level = "36-37", fam = "cat" },
+      { zone = "荒芜之地", name = "山脊雄豹", level = "38-39", fam = "cat" },
+      { zone = "奥达曼副本", name = "利齿蝙蝠", level = "38-39", fam = "bat" },
+      { zone = "东瘟疫之地", name = "天灾蝙蝠", level = "53-55", fam = "bat" },
+      { zone = "荆棘谷", name = "丛林猎豹", level = "50", fam = "cat" },
+    } },
+    { rank = 5, req = 45, beasts = {
+      { zone = "东瘟疫之地", name = "毒性瘟疫蝙蝠", level = "54-56", fam = "bat" },
+    } },
+    { rank = 6, req = 55, beasts = {
+      { zone = "冬泉谷", name = "幼霜刃豹", level = "55-56", fam = "cat" },
+    } },
+  },
+  ["低吼"] = {
+    { rank = 1, req = 10, beasts = {
+    } },
+    { rank = 2, req = 10, beasts = {
+    } },
+    { rank = 3, req = 20, beasts = {
+    } },
+    { rank = 4, req = 30, beasts = {
+    } },
+    { rank = 5, req = 40, beasts = {
+    } },
+    { rank = 6, req = 50, beasts = {
+    } },
+    { rank = 7, req = 60, beasts = {
+    } },
+  },
+  ["持久耐力"] = {
+    { rank = 1, req = 10, beasts = {
+    } },
+    { rank = 2, req = 12, beasts = {
+    } },
+    { rank = 3, req = 18, beasts = {
+    } },
+    { rank = 4, req = 24, beasts = {
+    } },
+    { rank = 5, req = 30, beasts = {
+    } },
+    { rank = 6, req = 36, beasts = {
+    } },
+    { rank = 7, req = 42, beasts = {
+    } },
+    { rank = 8, req = 48, beasts = {
+    } },
+  },
+  ["自然护甲"] = {
+    { rank = 1, req = 10, beasts = {
+    } },
+    { rank = 2, req = 12, beasts = {
+    } },
+    { rank = 3, req = 18, beasts = {
+    } },
+    { rank = 4, req = 24, beasts = {
+    } },
+    { rank = 5, req = 30, beasts = {
+    } },
+    { rank = 6, req = 36, beasts = {
+    } },
+    { rank = 7, req = 42, beasts = {
+    } },
+    { rank = 8, req = 48, beasts = {
+    } },
+  },
+  ["火焰抗性"] = {
+    { rank = 1, req = 20, beasts = {
+    } },
+    { rank = 2, req = 30, beasts = {
+    } },
+    { rank = 3, req = 40, beasts = {
+    } },
+    { rank = 4, req = 50, beasts = {
+    } },
+    { rank = 5, req = 60, beasts = {
+    } },
+  },
+  ["冰霜抗性"] = {
+    { rank = 1, req = 20, beasts = {
+    } },
+    { rank = 2, req = 30, beasts = {
+    } },
+    { rank = 3, req = 40, beasts = {
+    } },
+    { rank = 4, req = 50, beasts = {
+    } },
+    { rank = 5, req = 60, beasts = {
+    } },
+  },
+  ["暗影抗性"] = {
+    { rank = 1, req = 20, beasts = {
+    } },
+    { rank = 2, req = 30, beasts = {
+    } },
+    { rank = 3, req = 40, beasts = {
+    } },
+    { rank = 4, req = 50, beasts = {
+    } },
+    { rank = 5, req = 60, beasts = {
+    } },
+  },
+  ["自然抗性"] = {
+    { rank = 1, req = 20, beasts = {
+    } },
+    { rank = 2, req = 30, beasts = {
+    } },
+    { rank = 3, req = 40, beasts = {
+    } },
+    { rank = 4, req = 50, beasts = {
+    } },
+    { rank = 5, req = 60, beasts = {
+    } },
+  },
+  ["奥术抗性"] = {
+    { rank = 1, req = 20, beasts = {
+    } },
+    { rank = 2, req = 30, beasts = {
+    } },
+    { rank = 3, req = 40, beasts = {
+    } },
+    { rank = 4, req = 50, beasts = {
+    } },
+    { rank = 5, req = 60, beasts = {
+    } },
+  },
+}
+
+EVAL_PET_DB.families = {
+  wolf = { label = "狼", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  spider = { label = "蜘蛛", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  cat = { label = "猫科", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  bear = { label = "熊", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  boar = { label = "野猪", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  crab = { label = "蟹", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  turtle = { label = "龟", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  crocolisk = { label = "鳄鱼", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  bat = { label = "蝙蝠", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  bird = { label = "鸟类", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  owl = { label = "枭", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  gorilla = { label = "猩猩", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  windserpent = { label = "风蛇", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  scorpid = { label = "蝎", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  tallstrider = { label = "陆行鸟", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+  other = { label = "其他", icon = "Interface\\Icons\\INV_Misc_QuestionMark" },
+}
+
+return EVAL_PET_DB

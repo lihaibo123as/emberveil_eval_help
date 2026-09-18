@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.72.2"
+local VERSION = "1.73.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -1059,7 +1059,7 @@ local function cfgBuild()
   -- Tab 按钮行（全局 / 一键宏设置；选中=金底亮字，未选=暗底灰字——参考 UnrealQuest 标签页风格）
   local pages = {}
   cfgWin.pages = pages
-  local tabNames = { L("TAB_GLOBAL"), L("TAB_MACRO"), L("TAB_TOOLBOX"), L("TAB_DS"), L("TAB_ICONS") } -- ★1.71.3 第 5 个 Tab：图标库（IconBrowser.lua 独立载入）
+  local tabNames = { L("TAB_GLOBAL"), L("TAB_MACRO"), L("TAB_TOOLBOX"), L("TAB_DS"), L("TAB_ICONS"), L("TAB_PET") } -- ★1.73.0 第 6 个 Tab：抓宠帮手（PetHelper.lua 独立载入）
   for i, name in ipairs(tabNames) do
     local tb = CreateFrame("Button", nil, root)
     tb:SetWidth(90) tb:SetHeight(18)
@@ -1698,6 +1698,7 @@ local function cfgBuild()
   if type(EVAL_TB_BUILD) == "function" then EVAL_TB_BUILD(root, pages[3], refreshes) end -- 工具箱 Tab（1.68.0 Toolbox.lua 独立载入）
   if type(EVAL_DS_BUILD) == "function" then EVAL_DS_BUILD(root, pages[4], refreshes) end -- 数据检索 Tab（DataSearch.lua 独立载入，基于 UnrealQuest 数据库）
   if type(EVAL_IB_BUILD) == "function" then EVAL_IB_BUILD(root, pages[5], refreshes) end -- 图标库 Tab（IconBrowser.lua 独立载入）
+  if type(EVAL_PH_BUILD) == "function" then EVAL_PH_BUILD(root, pages[6], refreshes) end -- 抓宠帮手 Tab（PetHelper.lua 独立载入）
   EVAL_HELP_CFG_SETTAB(c().cfgTab or 1)
   return root
 end
@@ -2294,6 +2295,7 @@ function EVAL_HELP_CFG_SETTAB(idx)
   if idx == 3 and type(EVAL_TB_REFRESH) == "function" then pcall(EVAL_TB_REFRESH) end -- 工具箱
   if idx == 4 and type(EVAL_DS_REFRESH) == "function" then pcall(EVAL_DS_REFRESH) end -- 数据检索
   if idx == 5 and type(EVAL_IB_REFRESH) == "function" then pcall(EVAL_IB_REFRESH) end -- 图标库
+  if idx == 6 and type(EVAL_PH_REFRESH) == "function" then pcall(EVAL_PH_REFRESH) end -- 抓宠帮手
 end
 
 -- ★1.71.2 测试钩子：配置窗底部导航按钮（模版/分享/接收）的几何。

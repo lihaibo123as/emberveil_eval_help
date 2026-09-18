@@ -20,7 +20,7 @@
 
 > 📌 Continuously improving — testing and feedback welcome!　🐞 [Bug reports / suggestions](https://gitee.com/xeval/emberveil_eval_help.git) (Issues)　🤖 Developed with DeepSeek Harness AI assistance (see "Contributing" at the bottom)
 
-## 🏁 Milestones (1.52.0 → 1.72.2)
+## 🏁 Milestones (1.52.0 → 1.73.0)
 
 - **🔍 Shared-profile aura fix + guide on every load** (1.72.2): when another character never learned a debuff texture, the addon now **falls back to a name scan and self-heals** (a hit learns name→texture, then the fast path); the starter guide prints **on every load**; also fixed the `EVAL_DS_HUD` frame name shadowing its own global function (which made `/eh ds hud` silently dead)
 
@@ -31,13 +31,14 @@
 - **📤 🔇 Sharing and notifications rewritten** (1.71.3): the "raid" channel dropped (1.12 leader chat uses separate events), four receive caps + a 5s throttle; channel join/leave notices suppressed.
 - **🧑‍🤝‍🧑 🧙 Member picker and conditions** (1.70.45 → 1.71.2): 4 "candidate" conditions + picking by comparison operator; aura remaining-time check, casting conditions unified.
 - **🧰 🗺️ 📡 Three new tabs** (1.68.0 → 1.71.1): Toolbox (queued + verified one by one), Data search (16 map annotation categories), profile sharing (one click to a channel).
-- **📚 Case templates: 11 groups / 27 entries** (1.67.2 → 1.71.8): grouped by class, one click to import; party / raid ones are "explicit skill + member condition".
+- **🐾 Pet Helper** (1.73.0): 6th config tab - search pet abilities (icons + ranks) -> detail with intro, pet level and tame sources -> magnifier jumps to Data Search for spawn points.
 - **🧪 Engineering infrastructure** (1.52.0 → 1.72.0): 17 source-level checks + mutation tests every round; the "silent failure family" cleared out.
 
 ## Changelog
 
 | Version | Theme | One-line highlight |
 | :-- | :-- | :-- |
+| **1.73.0** | 🐾 Pet Helper | 6th tab: search pet abilities (icons + ranks) -> detail with tame sources -> magnifier jumps to Data Search |
 | **1.72.2** | 🔍 Shared-profile aura fix + guide on every load | Unlearned auras now fall back to a name scan and self-heal; the starter guide prints on every load; fixed a frame name shadowing its global function |
 | **1.72.1** | 🧭 Friendly first-run | Load confirmation + a four-step starter guide on first login (combat UI / first profile / key binding / skill log); replay it from the Global tab or `/eh guide` |
 | **1.72.0** | 🎉 **Profile hotkeys fixed + a batch of UI polish** (spans 1.71.3–1.71.24) | 22 versions shipped at once: **profile hotkeys went from "never fire" to actually working** (four dead ends ruled out: CLICK hijacked the mouse → raw command names are not dispatched → this client does not read addon Bindings.xml → **hooking ActionButtonDown/Up**; zero cost, no macro slots, no stolen keys, live while the game runs); **right-click features merged** into one Profile Manager window (rename + hotkey, one Save commits both); case-template window redesigned three times; Icon Library tab + right-click to set the minimap icon; combat HUD title shows the player name; Stop Attack / Follow / member filtering / share overhaul |
@@ -47,7 +48,6 @@
 | **1.71.21** | 📦 Bindings.xml ships with the addon (zero user config) + login self-check | The file ships with the addon (12 commands, zero config), binding happens entirely in the popup (zero manual work), the user only **restarts the client once**; doc evidence: dispatch needs a client-side press/release handler that addons cannot register (`SetConsoleKey` is a documented no-op stub) → the startup command table is the only registration path; `EVAL_BIND_XML_STATUS()` self-check honestly reminds to restart when missing; ★exact-prefix counting assertions, 2/2 mutations caught |
 | **1.71.20** | 🖨 Left-click the "Profiles" label = print current bindings | New left-click on the label: prints "profile = key" line by line (print-only, bindings untouched), or honestly says there are none; tooltip gains a 4th line (3 languages); includes the `/eh go bind3` colon-free CLICK probe (restart-required paths were ruled out per user); ★assertions drive the real left-click/hover, 4/4 mutations caught |
 | **1.71.19** | 🏷 "Profiles" label tooltip + right-click clears ALL custom bindings | The "方案" label is now clickable: hovering shows three polished hint lines (left-click = activate / right-click = bind / right-click the label = clear all, 3 languages); right-clicking it really **unbinds every key + clears the table + saves** (returns the count, idempotent); left-click does nothing; ★assertions drive the real right-click/hover, 4/4 mutations caught |
-| **1.71.18** | 🔧 Binding dispatch drops CLICK for raw command names (fix: key did not fire + mouse buttons hijacked) | Live testing showed the client mis-parses CLICK dispatch — the bound key did not fire and the left/right mouse buttons lost their camera-turn (yet the addon still got triggered, so the path works) → dispatch now uses **raw command names `EVAL_GO<i>`** (built-in commands are camelCase globals; `EVAL_GO1~12` already exist); ★new sentinel "every dispatch name must resolve to a real global", 3/3 mutations caught |
 
 > 📜 Detailed per-version notes live in **[CHANGELOG.md](CHANGELOG.md)**; earlier history is in the git commit log.
 

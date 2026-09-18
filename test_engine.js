@@ -68,7 +68,7 @@ function checkIconAssets() {
 //   ② 跳过「同名还有函数内 local 声明」的短名（W / H / x / y 这类）：它们在文件里是**多个不同的变量**，
 //      按名字比对必然误报（首版就误报了 EvalHelp.lua:153 的 local W —— 那是另一个函数里的 W）。
 (function () {
-  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconBrowser.lua"];
+  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua"];
   const bad = [];
   let totalLocals = 0;
   const isName = (s) => new RegExp("^[A-Za-z_][A-Za-z0-9_]*$").test(s);
@@ -228,7 +228,7 @@ function checkIconAssets() {
   const used = new Set();
   // ★1.71.3 补上 Share.lua：它此前**不在扫描名单里**（与 DECL ORDER 的已知盲区同源）——
   //   于是「Share 用了某个键、只改了两种语言」永远是盲区（本轮 SH_CH_OFF 正好落在这里）。
-  for (const f of ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconBrowser.lua"]) {
+  for (const f of ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua"]) {
     const p = path.join(__dirname, f);
     if (!fs.existsSync(p)) continue;
     const src = fs.readFileSync(p, "utf8");
@@ -315,7 +315,7 @@ function checkIconAssets() {
 //   ★注释里提到 `SomeCall()` 属于正常（本仓库有大量 API 说明注释），故必须要求「方法调用」
 //   （带 `:` / `.`）而不是裸调用，否则误报成片（实测：裸调用规则会命中 test_assert.lua:240）。
 (function () {
-  const files = ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconBrowser.lua",
+  const files = ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua",
                  "Locales/zhCN.lua", "Locales/enUS.lua", "Locales/ruRU.lua", "test_assert.lua", "test_stub.lua"];
   const bad = [];
   for (const f of files) {
@@ -540,7 +540,7 @@ function checkIconAssets() {
   }
   // ① 模版数据只能住在 examples/：别的生产文件里再出现 cls = " 就是「又搬回去了 / 多了一份」
   //   （同一个东西两份真值，正是本项目反复踩的坑：改一处漏一处、后写的静默获胜）。
-  const prodFiles = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconBrowser.lua"];
+  const prodFiles = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua"];
   const leaked = prodFiles.filter(f => { const p = path.join(__dirname, f); return fs.existsSync(p) && /cls\s*=\s*"/.test(fs.readFileSync(p, "utf8")); });
   if (leaked.length) { console.log("EXAMPLES TOC CHECK: FAIL - template data leaked back into " + leaked.join(",")); process.exit(1); }
   // ② 载入顺序：examples 必须排在 EvalHelp.lua 之后（引擎里的初始化先跑）。
@@ -752,7 +752,7 @@ function checkIconAssets() {
 //   1.72.2 把桩改成真客户端行为（具名帧挂全局）后，组 54 当场报 `attempt to call a table value` —— 这就是暴露途径。
 // 判据：全仓扫描 `CreateFrame(..., "NAME", ...)` 的第二参，不得与任何 `function NAME(` 同名。
 (function () {
-  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconBrowser.lua"];
+  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua"];
   const funcs = {}, frames = [];
   for (const f of files) {
     if (!fs.existsSync(path.join(__dirname, f))) continue;
@@ -779,11 +779,41 @@ function checkIconAssets() {
   console.log("FRAME NAME CLASH CHECK: " + frames.length + " named frames, none shadows an addon global function");
 })();
 
+// ===== PET ICON CHECK（1.73.0）：抓宠帮手的图标路径必须**格式正确且指向客户端内置图标** =====
+// 背景变更（用户 1.73.0 指示）：图标从「截图裁切的 media/pet/*.tga」改为**客户端内置图标**
+//   （先用 INV_Misc_QuestionMark 占位，真实路径待用户下轮确认）。
+//   ★内置图标**无法做磁盘校验**——它们打包在客户端资源里（Content\Paks），磁盘上取不到（与宏图标表同理，见记忆体）。
+//   所以本检查改为守**能守的部分**：① 每个技能/家族都有 icon；② 一律是 Interface\Icons 下的内置路径；
+//   ③ 不带扩展名（本客户端约定）；④ 数量 ≥ 20。等换成真实路径时，这条检查会继续守住「别写成自包含 media 路径」。
+(function () {
+  const p = path.join(__dirname, 'PetData.lua');
+  if (!fs.existsSync(p)) { console.log('PET ICON CHECK: skipped (no PetData.lua)'); return; }
+  const src = fs.readFileSync(p, 'utf8');
+  const BS = String.fromCharCode(92);
+  const ICONS = 'Interface' + BS + BS + 'Icons' + BS + BS;
+  const icons = [];
+  const re = /icon = "([^"\r\n]+)"/g;
+  let m;
+  while ((m = re.exec(src)) !== null) icons.push(m[1]);
+  const bad = icons.filter(v => v.indexOf(ICONS) !== 0);
+  const withExt = icons.filter(v => /\.(tga|blp|png)$/i.test(v));
+  console.log('PET ICON CHECK: ' + icons.length + ' icon refs, ' + bad.length + ' not built-in, ' + withExt.length + ' with extension');
+  if (bad.length) {
+    console.log('  NOT BUILT-IN: ' + bad.slice(0, 3).join(' | '));
+    console.log('  (placeholder phase: built-in Interface' + BS + 'Icons paths only)');
+    process.exit(1);
+  }
+  if (withExt.length) {
+    console.log('  HAS EXTENSION: ' + withExt.slice(0, 3).join(' | ') + '  (this client wants no extension)');
+    process.exit(1);
+  }
+  if (icons.length < 20) { console.log('PET ICON CHECK: FAIL - expected >= 20 icon refs, got ' + icons.length); process.exit(1); }
+})();
 checkIconAssets();
 
 const L=lauxlib.luaL_newstate();
 lualib.luaL_openlibs(L);
-for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','examples/priest.lua','examples/druid.lua','examples/warlock.lua','examples/shaman.lua','examples/group.lua','Toolbox.lua','DataSearch.lua','Share.lua','IconBrowser.lua','test_assert.lua']){
+for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','examples/priest.lua','examples/druid.lua','examples/warlock.lua','examples/shaman.lua','examples/group.lua','Toolbox.lua','DataSearch.lua','Share.lua','IconBrowser.lua','PetData.lua','PetHelper.lua','test_assert.lua']){
   const src=fs.readFileSync(f);
   const st=lauxlib.luaL_loadbuffer(L,src,src.length,to_luastring(f));
   if(st!==lua.LUA_OK){ console.log('LOAD ERROR ['+f+']:',lua.lua_tojsstring(L,-1)); process.exit(1); }

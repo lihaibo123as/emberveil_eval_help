@@ -2209,6 +2209,24 @@ local function dsDoSearch()
   if dsMode() == "search" then EVAL_DS_REFRESH() end
 end
 
+-- ★1.73.0 外部入口（抓宠帮手「放大镜」）：填入名称 + 立即检索（用户已明确点了一次，不需要输入去抖）
+--   返回实际生效的检索词（供断言读真值）；DS.eb 不存在时（无 UI 环境）也照样更新检索词与结果状态。
+--   ★必须定义在 dsDoSearch（local）**之后**——DECL ORDER CHECK 会抓「声明晚于引用」。
+function EVAL_DS_LAST_QUERY() return DS.lastQuery end -- 读值口：放大镜跳转后「数据检索侧真正收到的词」
+
+function EVAL_DS_SEARCH_NAME(name)
+  name = tostring(name or "")
+  DS.query = name
+  DS.nav = {}          -- 回到检索视图（详情栈清空）
+  DS.due = 0
+  if DS.eb then
+    pcall(DS.eb.SetText, DS.eb, name)
+    if DS.echoNeeded and DS.echo then pcall(DS.echo.SetText, DS.echo, name) end
+  end
+  dsDoSearch()
+  return DS.lastQuery
+end
+
 -- 输入去抖帧（频率防护总则：按键高频必去抖 0.25s；纯本地数据展示，无服务器写动作）
 -- 统一标注层的 tick 挂在这里（自带 0.25s 节流 + 地图签名比对）——不新增帧。
 -- 旧的「搜索结果钉 60s 自熄」已删除：现在所有标注都由地图绑定管理，不再有发射后不管的钉子。
