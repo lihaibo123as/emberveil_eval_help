@@ -188,19 +188,26 @@ TB_CHATCOLOR_TIP = "把聊天框里出现的角色名按**职业颜色**显示�
 TB_CHATCOLOR_ON_MSG = "聊天窗名字着色：已开启（对之后出现的消息生效）",
 TB_CHATCOLOR_OFF_MSG = "聊天窗名字着色：已关闭（不再改动聊天文字）",
 -- ★1.73.24 用户要求：右键聊天名字 → 公会邀请 / 复制名字 / /s 说出名字
+-- ★1.73.28 右键菜单（用户定稿）：原始功能三条（悄悄话/邀请/目标）+ 我们的两条（公会邀请/复制名字）
 TB_NAMEMENU = "聊天名字右键菜单",
-TB_NAMEMENU_TIP = "在聊天里**右键角色名**弹出菜单：公会邀请 / 复制名字 / 用 /s 说出这个名字。左键与其它链接不动。★本客户端没有剪贴板接口，所以「复制名字」= 弹出输入框并把名字**全选**，按 Ctrl+C 即可复制。",
+TB_NAMEMENU_TIP = "在聊天里**右键角色名**弹出菜单（半透明 · 窄）：悄悄话 / 邀请 / 目标 / 公会邀请 / 复制名字。左键与其它链接不动。★「复制名字」执行的是用 /s 把名字说出来（本客户端没有剪贴板接口）。",
 TB_NAMEMENU_TITLE = "名字：%s",
+TB_NAMEMENU_WHISPER = "悄悄话",
+TB_NAMEMENU_PARTY = "邀请",
+TB_NAMEMENU_TARGET = "目标",
 TB_NAMEMENU_INVITE = "公会邀请",
-TB_NAMEMENU_COPY = "复制名字",
-TB_NAMEMENU_SAY = "/s 说出",  -- ★1.73.26 用户要求「最多 4 字宽」→ 条目文字一起压短
-TB_NAMEMENU_OFFICIAL = "官方菜单", -- ★1.73.26 「保留原来右键的功能」：点这条 = 把这次点击原样转发给客户端
-TB_NAMEMENU_NOOFFICIAL = "客户端没给官方菜单（转发没生效）—— 说明这个客户端右键名字本来就没菜单",
+TB_NAMEMENU_SAY = "复制名字",
 TB_NAMEMENU_CLOSE = "关闭",
-TB_NAMEMENU_COPYHINT = "（本客户端没有剪贴板接口）名字已放进下面的框并全选 → 按 Ctrl+C 复制",
+TB_NAMEMENU_WHISPEROK = "已打开密语输入框：/w %s",
+TB_NAMEMENU_WHISPERFAIL = "本客户端没有打开聊天框的接口 → 请手动 /w %s",
+TB_NAMEMENU_PARTYOK = "已邀请入队：%s",
+TB_NAMEMENU_PARTYFAIL = "邀请没发出去（%s）—— 可能对方已在队伍/离线，或接口不可用",
+TB_NAMEMENU_TARGETOK = "已选中目标：%s",
+TB_NAMEMENU_TARGETFAIL = "选不中目标（%s）—— TargetByName 只认附近单位，太远就选不到",
+TB_NAMEMENU_TOOFAST = "操作太快：0.5 秒内只执行一次",
 TB_NAMEMENU_INVOK = "已发出公会邀请：%s",
 TB_NAMEMENU_INVFAIL = "公会邀请没发出去（%s）—— 可能没有邀请权限，或该接口在本客户端不可用",
-TB_NAMEMENU_SAYOK = "已用 /s 说出：%s",
+TB_NAMEMENU_SAYOK = "已用 /s 说出名字：%s（可在聊天里点它密语）",
 TB_NAMEMENU_SAYDEB = "/s 太快了：0.5 秒内只发一次",
 TB_WHOQ = "未缓存角色主动查询", -- 1.73.12
 TB_WHOQ_TIP = "聊天里遇到**没见过的角色名**时，自动发一次 /who 把职业补进缓存（之后就能上色）。有限频保护：每 5 秒最多一发、上一发没结果不发下一发、**查不到的名字半小时内不再重复查**；查询记录只进**调试日志**（/eh logdump），不刷聊天框。默认开启。",

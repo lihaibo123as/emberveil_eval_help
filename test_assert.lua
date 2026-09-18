@@ -9856,54 +9856,102 @@ do
   eq(string.find(tostring(TEST.runScripts[table.getn(TEST.runScripts)] or ""), "GuildInviteByName", 1, true) ~= nil, true,
      "④c★排队的脚本里是 GuildInviteByName")
   _G.GuildInviteByName = savedGIN130
-  -- ⑤ 复制名字（无剪贴板接口 → 已全选的框）
-  EVAL_TEST_TB_NAMEMENU_RESET()
-  TEST.chat = ""
-  eq(EVAL_TB_NAME_COPY("Ionol"), true, "⑤★复制名字：弹出「已全选」的框")
-  eq(EVAL_TB_NAMEMENU_STATE().copyLast, "Ionol", "⑤★★读值口记下最近复制的名字（没有剪贴板 API，这是可断言的那部分）")
-  eq(string.find(tostring(TEST.chat), "没有剪贴板接口", 1, true) ~= nil, true, "⑤★★如实说明本客户端没有剪贴板接口（不假称已复制）")
-  -- ⑥ /s 说出名字 + 去抖
+  -- ⑤ ★★★1.73.28 用户定：「/s 说出 => 复制名字，实际执行的是 /s 名字」——
+  --   条目叫「复制名字」，动作 = 用 /s 把名字**说出来**（本客户端没有剪贴板接口，这是用户选定的替代做法）。
   EVAL_TEST_TB_NAMEMENU_RESET()
   TEST.runScripts = {}
-  eq(EVAL_TB_NAME_SAY("Ionol"), true, "⑥★/s 说出名字")
-  local sc130 = tostring(TEST.runScripts[table.getn(TEST.runScripts)] or "")
-  eq(string.find(sc130, "SendChatMessage(\"Ionol\", \"SAY\")", 1, true) ~= nil, true, "⑥★★发的就是 /s 且内容就是名字：" .. sc130)
+  eq(EVAL_TB_NAME_SAY("Ionol"), true, "⑤★★★「复制名字」真的发了一句 /s 名字")
+  local sc130s = tostring(TEST.runScripts[table.getn(TEST.runScripts)] or "")
+  eq(string.find(sc130s, "SendChatMessage(\"Ionol\", \"SAY\")", 1, true) ~= nil, true, "⑤★★而且是 /s（不是密语/队伍）：" .. sc130s)
+  eq(EVAL_TB_NAMEMENU_STATE().said, 1, "⑤★并记「说出去的次数」")
   local before130 = table.getn(TEST.runScripts)
-  eq(EVAL_TB_NAME_SAY("Ionol", true), false, "⑥★★0.5 秒内连点 → 拒绝再发（服务器写动作一律限频）")
-  eq(table.getn(TEST.runScripts), before130, "⑥★★队列没有增长（真的没发出去）")
-  eq(EVAL_TB_NAMEMENU_STATE().sayDeb, 1, "⑥★并如实记「被去抖挡下」的次数")
-  -- ⑧ ★★★1.73.26 用户（拿官方右键菜单截图对比）：「透明背景 · 宽度小点、最多 4 字宽 · 保留原来右键的功能」。
-  --   ★判据读**真实控件**：菜单宽 ≤ 4 个汉字宽（10px 字 ×4 + 留白 → 上限 70px）、背景半透明（alpha < 0.8）、
-  --     条目文字也 ≤4 个汉字（UTF-8 下 12 字节）、且「官方菜单」那条**真的把点击原样转发**给客户端。
+  eq(EVAL_TB_NAME_SAY("Ionol", true), false, "⑤★★0.5 秒内连点 → 拒绝再发（服务器写动作一律限频）")
+  eq(table.getn(TEST.runScripts), before130, "⑤★★队列没有增长（真的没发出去）")
+  eq(EVAL_TB_NAMEMENU_STATE().sayDeb, 1, "⑤★并如实记「被去抖挡下」的次数")
+  -- ⑤b 悄悄话（原始功能）：优先用客户端的打开聊天框接口
   EVAL_TEST_TB_NAMEMENU_RESET()
-  TEST.sirCalls = {}
-  SetItemRef("player:Ionol", "[Ionol]", "RightButton") -- 先弹一次（菜单是懒建的）
-  local mg130 = EVAL_TB_MENU_GEOM()
-  eq(type(mg130) == "table", true, "⑧★菜单已建好（读得到真实几何）")
-  eq(type(mg130.w) == "number" and mg130.w <= 70, true, "⑧★★★宽度 ≤ 4 个汉字宽（" .. tostring(mg130.w) .. "px ≤ 70）")
-  eq(type(mg130.bg and mg130.bg.a) == "number" and mg130.bg.a < 0.8, true,
-     "⑧★★★背景是**半透明**（alpha=" .. tostring(mg130.bg and mg130.bg.a) .. " < 0.8）")
-  local nIt130, badLbl130 = table.getn(mg130.items or {}), ""
-  eq(nIt130 >= 4, true, "⑧★条目 ≥4 条（" .. tostring(nIt130) .. "）")
-  for i = 1, nIt130 do
-    local lb = tostring(mg130.items[i].label or "")
-    if string.len(lb) > 12 then badLbl130 = badLbl130 .. lb .. "(" .. tostring(string.len(lb)) .. "字节) " end
-  end
-  eq(badLbl130, "", "⑧★★条目文字也压到 ≤4 个汉字（12 字节）: " .. badLbl130)
-  --  ★「官方菜单」这条必须真的把点击转发给客户端（= 用户要的「保留原来右键的功能」）
-  TEST.sirCalls = {}
-  eq(EVAL_TB_NAME_OFFICIAL(), true, "⑧★★★「官方菜单」转发成功（回调到客户端的 SetItemRef）")
-  eq(table.getn(TEST.sirCalls), 1, "⑧★★★而且只**原样**转发一次（没有吞掉原来的右键功能）")
-  eq(string.find(tostring(TEST.sirCalls[1] or ""), "player:Ionol|RightButton", 1, true) ~= nil, true,
-     "⑧★★转发的就是那次点击（link + RightButton）")
-  eq(EVAL_TB_NAMEMENU_STATE().official, 1, "⑧★转发计数 +1（诊断看得到）")
-  -- ⑨ 机制探针：跑一次不崩、逐个报候选全局、并给出「有没有官方菜单表」的结论
+  TEST.openChats = {}
+  eq(EVAL_TB_NAME_WHISPER("Ionol"), true, "⑤b★★「悄悄话」打开了密语输入框")
+  eq(tostring(TEST.openChats[1] or ""), "/w Ionol ", "⑤b★★★预填的就是 /w 名字 + 空格（用户接着打字）")
+  eq(EVAL_TB_NAMEMENU_STATE().whisper, 1, "⑤b★并记次数")
+  -- ⑤c 悄悄话没有接口 → **如实降级**（不静默、不崩）
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  local savedOC130 = _G.ChatFrame_OpenChat
+  _G.ChatFrame_OpenChat = nil
   TEST.chat = ""
-  eq(EVAL_TB_OFFICIALMENU_PROBE(), true, "⑨★菜单机制探针能跑")
-  local c130b = tostring(TEST.chat or "")
-  eq(string.find(c130b, "UnitPopupMenus", 1, true) ~= nil, true, "⑨★★探针逐个报了候选全局")
-  eq(string.find(c130b, "官方菜单表", 1, true) ~= nil, true, "⑨★★并对「有没有官方菜单表」给出结论")
+  eq(EVAL_TB_NAME_WHISPER("Ionol"), false, "⑤c★★没有打开聊天框的接口 → 如实返回失败")
+  eq(string.find(tostring(TEST.chat), "请手动 /w", 1, true) ~= nil, true, "⑤c★★★并明确告诉用户「请手动 /w 名字」（不静默）")
+  _G.ChatFrame_OpenChat = savedOC130
+  -- ⑤d 邀请入队（原始功能）：InviteToParty 优先 + 去抖
   EVAL_TEST_TB_NAMEMENU_RESET()
+  TEST.partyInvites, TEST.partyInviteCalls = {}, 0
+  eq(EVAL_TB_NAME_PARTY("Ionol"), true, "⑤d★★「邀请」发出队伍邀请")
+  eq(TEST.partyInviteCalls, 1, "⑤d★★调的是 InviteToParty")
+  eq(tostring(TEST.partyInvites[1] or ""), "Ionol", "⑤d★名字对")
+  eq(EVAL_TB_NAME_PARTY("Ionol"), false, "⑤d★★0.5 秒内连点 → 限频挡下")
+  eq(TEST.partyInviteCalls, 1, "⑤d★★确实只发了一次")
+  eq(EVAL_TB_NAMEMENU_STATE().throttled >= 1, true, "⑤d★并如实记「限频挡下」次数")
+  -- ⑤e 目标（原始功能）：TargetByName
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  TEST.targetSel = nil
+  eq(EVAL_TB_NAME_TARGET("Ionol"), true, "⑤e★★「目标」选中了对方")
+  eq(tostring(TEST.targetSel or ""), "name:Ionol", "⑤e★★★走的是 TargetByName(名字)")
+  eq(EVAL_TB_NAMEMENU_STATE().target, 1, "⑤e★并记次数")
+  -- ⑥ 菜单条目：六条、顺序与用户列表一致、**没有**「官方菜单」、宽度 ≤4 字、半透明，
+  --    ★高度**自适应条目数**（读真实高度 vs 公式 EVAL_TB_MENU_HEIGHT(条数)）
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  TEST.sirCalls = {}
+  SetItemRef("player:Ionol", "[Ionol]", "RightButton")
+  local mg130 = EVAL_TB_MENU_GEOM()
+  eq(type(mg130) == "table", true, "⑥★菜单已建好（读得到真实几何）")
+  eq(mg130.w <= 70, true, "⑥★★★宽度 ≤ 4 个汉字宽（" .. tostring(mg130.w) .. "px ≤ 70）")
+  eq(type(mg130.bg and mg130.bg.a) == "number" and mg130.bg.a < 0.8, true,
+     "⑥★★背景是**半透明**（alpha=" .. tostring(mg130.bg and mg130.bg.a) .. " < 0.8）")
+  local nIt130 = table.getn(mg130.items or {})
+  eq(nIt130, 6, "⑥★★★菜单正好 6 条（悄悄话/邀请/目标/公会邀请/复制名字/关闭），实际 " .. tostring(nIt130))
+  eq(mg130.h, EVAL_TB_MENU_HEIGHT(nIt130), "⑥★★★高度**自适应条目数**：真实高 " ..
+     tostring(mg130.h) .. " == 公式(" .. tostring(nIt130) .. " 条)=" .. tostring(EVAL_TB_MENU_HEIGHT(nIt130)))
+  --  ★★判据写**字面**（用户点名的那几个词），**不读 EVAL_L**：本轮实测 M239（把语言包里
+  --     复制名字改回 /s 说出）**存活** —— 因为期望值也跟着语言包变 → 断言在「测自己」。
+  --     用户要的就是屏幕上那几个词，判据就钉字面。
+  local want130 = { "悄悄话", "邀请", "目标", "公会邀请", "复制名字", "关闭" }
+  local badLbl130 = ""
+  for i = 1, nIt130 do
+    local lb = tostring((mg130.items[i] or {}).label or "")
+    if lb ~= tostring(want130[i]) then badLbl130 = badLbl130 .. i .. ":" .. lb .. "(应为" .. tostring(want130[i]) .. ") " end
+    if string.len(lb) > 12 then badLbl130 = badLbl130 .. i .. ":太长(" .. tostring(string.len(lb)) .. "字节) " end
+  end
+  eq(badLbl130, "", "⑥★★条目顺序/名称/字数全对: " .. badLbl130)
+  local hasOfficial130 = false
+  for i = 1, nIt130 do
+    if string.find(tostring(mg130.items[i].label or ""), "官方", 1, true) ~= nil then hasOfficial130 = true end
+  end
+  eq(hasOfficial130, false, "⑥★★★菜单里**没有**「官方菜单」条目（用户要求取消）")
+  --  ★★1.73.28 「高度自适应内部项目」的**真判据**：换一组条目 → 高度跟着换（写死高度当场响）
+  local h6 = mg130.h
+  EVAL_TEST_TB_MENU_DROP()
+  local savedOC130b = _G.ChatFrame_OpenChat
+  local savedCA130b = _G.ChatEdit_ActivateChat
+  _G.ChatFrame_OpenChat, _G.ChatEdit_ActivateChat = nil, nil
+  SetItemRef("player:Ionol", "[Ionol]", "RightButton")
+  local mg130b = EVAL_TB_MENU_GEOM()
+  eq(table.getn(mg130b.items or {}), nIt130 - 1, "⑥b★★★没有「打开聊天框」接口时**少一条**（不摆按了没用的项）：" ..
+     tostring(table.getn(mg130b.items or {})) .. " = " .. tostring(nIt130) .. "-1")
+  eq(mg130b.h, EVAL_TB_MENU_HEIGHT(table.getn(mg130b.items or {})), "⑥b★★★条目少了 → 高度**跟着变**：" ..
+     tostring(mg130b.h) .. "（原来 " .. tostring(h6) .. "）")
+  eq(mg130b.h < h6, true, "⑥b★★★而且确实变矮（自适应内部项目）")
+  _G.ChatFrame_OpenChat, _G.ChatEdit_ActivateChat = savedOC130b, savedCA130b
+  EVAL_TEST_TB_MENU_DROP()
+  SetItemRef("player:Ionol", "[Ionol]", "RightButton")
+  eq(EVAL_TB_MENU_HEIGHT(7) > EVAL_TB_MENU_HEIGHT(6), true, "⑥b★公式本身随条目数增长")
+  eq(EVAL_TB_MENU_HEIGHT(8) - EVAL_TB_MENU_HEIGHT(7) == EVAL_TB_MENU_HEIGHT(7) - EVAL_TB_MENU_HEIGHT(6), true,
+     "⑥b★每多一条的增量恒定（= 行高）")
+  -- ⑦ 接口探针（1.73.28 改）：报这个菜单真正要用的 API
+  TEST.chat = ""
+  eq(EVAL_TB_MENU_API_PROBE(), true, "⑦★菜单接口探针能跑")
+  local c130b = tostring(TEST.chat or "")
+  eq(string.find(c130b, "InviteToParty", 1, true) ~= nil, true, "⑦★★探针报了邀请接口")
+  eq(string.find(c130b, "ChatFrame_OpenChat", 1, true) ~= nil, true, "⑦★★探针报了「打开聊天框」接口（悄悄话要用）")
   -- ⑦ 关掉开关 → 不再接管
   EVAL_HELP_CONFIG.tb.nameMenu = false
   EVAL_TEST_TB_NAMEMENU_RESET()

@@ -471,6 +471,20 @@ GuildInviteByName = function(name)
   TEST.inviteCalls = (TEST.inviteCalls or 0) + 1
   table.insert(TEST.invites, tostring(name))
 end
+-- ★1.73.28 右键菜单新增动作用到的桩：邀请入队（InviteToParty 优先）+ 打开聊天框（悄悄话）
+TEST.partyInvites, TEST.openChats = {}, {}
+InviteToParty = function(name)
+  TEST.partyInviteCalls = (TEST.partyInviteCalls or 0) + 1
+  table.insert(TEST.partyInvites, tostring(name))
+end
+InviteByName = function(name)
+  TEST.inviteByNameCalls = (TEST.inviteByNameCalls or 0) + 1
+  table.insert(TEST.partyInvites, tostring(name))
+end
+ChatFrame_OpenChat = function(text)
+  TEST.openChatCalls = (TEST.openChatCalls or 0) + 1
+  table.insert(TEST.openChats, tostring(text))
+end
 CanGuildInvite = function() return TEST.canGuildInvite ~= false end
 -- ★1.71.3 跟随（Movement 分类）：文档原文 **not protected**、按名字跟（省略/空名 = 跟当前目标）、**无返回值**。
 --   桩要**如实记下参数**：真接口没有返回值，所以「跟谁」是这个功能**唯一可断言的输出**；

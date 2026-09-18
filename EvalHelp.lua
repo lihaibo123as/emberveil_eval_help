@@ -7411,12 +7411,12 @@ if type(SlashCmdList) == "table" then
       -- ★★★1.73.20 「色测」= 名字槽渲染试验：用户真机截图逐字放大定案「8 位色码在名字槽里也原样显示」
       --   而同一屏里经 AddMessage 打印的 8 位色码是有色的 ⇒ 名字槽不吃富文本。
       --   最后一条路 = 吞掉客户端那行、自己拼整行（代价：窗口分流/气泡/音效）→ **先取证再定方案**。
-      -- ★1.73.26 「右键」= 客户端**自己的右键菜单**机制探针（用户问「能否保持官方风格」→ 先查有没有官方菜单表）
+      -- ★1.73.26 起「右键」= 右键菜单相关诊断（1.73.28 改为报「这个菜单真正要用的接口」在不在）
       if string.find(sarg, "^右键") == 1 then
-        if type(EVAL_TB_OFFICIALMENU_PROBE) == "function" then
-          pcall(EVAL_TB_OFFICIALMENU_PROBE)
+        if type(EVAL_TB_MENU_API_PROBE) == "function" then
+          pcall(EVAL_TB_MENU_API_PROBE)
         else
-          say("右键菜单机制探针：本版本没有（EVAL_TB_OFFICIALMENU_PROBE 不存在）")
+          say("右键菜单接口探针：本版本没有（EVAL_TB_MENU_API_PROBE 不存在）")
         end
         if type(EVAL_TB_MENU_GEOM) == "function" then
           local mg = EVAL_TB_MENU_GEOM()

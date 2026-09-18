@@ -898,7 +898,17 @@ EVAL_LOGLINE("[聊天入口] ChatFrame_OnEvent 载入时挂载：" ..
 --      「没有剪贴板 API」的替代做法（本实现照抄这个思路：给一个**已全选**的输入框）。
 --   ③ 我们**不塞自定义链接**：自己拼的聊天行已经带 `|Hplayer:名字|h`（方案A 加的）→ 直接认 **player: 链接的右键**；
 --      ★左键、以及 item:/quest:/spell: 等其它链接**一律原样交给客户端**（不动既有行为）；挂载后**读回确认**（1.73.12 的教训）。
-local TB_NAME_MENU = { shown = false, name = nil, copyLast = nil }
+local TB_NAME_MENU = { shown = false, name = nil } -- ★1.73.28 计数都挂在这张表上（party/target/whisper/said/throttled）
+-- ★1.73.28 名字要塞进 RunScript 的字符串里 → 先去掉引号与反斜杠。
+--   ★用 string.char 构造这两个字符：**不要在 Lua 源码里手写转义** —— 本轮实测，手写转义把文件写坏，
+--     而且 luacheck 居然还报 SYNTAX OK，直到运行时 load 才炸（LOAD ERROR 报 near backslash）→ 已补源码检查。
+local TB_Q, TB_BS = string.char(34), string.char(92)
+local function tbSafeName(s)
+  if type(s) ~= "string" then return "" end
+  s = string.gsub(s, TB_Q, "")
+  s = string.gsub(s, TB_BS, "")
+  return s
+end
 local TB_NAME_SAY_AT = -99
 function EVAL_TB_NAMEMENU_ON()
   return tbCfg().nameMenu ~= false
@@ -907,28 +917,52 @@ function EVAL_TB_MENU_HIDE()
   if TB.menu then pcall(TB.menu.Hide, TB.menu) end
   TB_NAME_MENU.shown = false
 end
--- ★★★1.73.26 用户（拿官方右键菜单截图对比）：「UI 风格能否保持官方风格；做不到就把现在的美化一下：
---   **透明背景** · **宽度小点、最多 4 字宽** · **保留原来右键的功能** · 再叠加我们自定义的功能」。
---   【能做的与做不到的，如实分层】：
---     ① **官方风格**要靠把条目**塞进客户端自己的菜单**（1.12 的 UnitPopupMenus / UnitPopupButtons 那套）——
---        需运行时确认这些全局是否存在（`/eh go 聊天 右键` 探针会逐个报），存在就直接注入（真·官方风格）；
---     ② 不论注入成不成，自己的小菜单先按用户要求美化：**半透明黑底**（能透出背景 = 用户说的「透明」）、
---        **窄**（≤4 个汉字宽）、条目文字也压到 ≤4 字；标题行放名字（与官方那行「林七夜」同构）；
---     ③ **保留原来的右键功能** = 菜单里加一条「官方菜单」→ 把这次点击**原样转发**给客户端的 SetItemRef
---        （官方有菜单就弹官方的，没有就什么都不做），绝不因为我们的菜单而丢掉既有行为。
-local TB_MENU_W = 62 -- ★≤4 个汉字宽（10px 字 × 4 + 两侧留白）；这是用户点名的宽度上限
+-- ★★★1.73.28 用户（拿官方右键菜单截图对比之后定的最终版）：
+--   ① 「右键功能开关加入工具箱」→ 工具箱 → 队伍/社交 → 「聊天名字右键菜单」（1.73.24 起就在，默认开）；
+--   ② 「把原始的功能（悄悄话 / 邀请 / 目标）也加入」→ 菜单里**直接给这三条**（自己实现，不再转发官方菜单）；
+--   ③ 「取消官方菜单项目」→ 去掉那条；
+--   ④ 「/s 说出 => 复制名字，实际执行的是 /s 名字」→ 条目改叫「复制名字」，动作 = 发一句 /s 名字。
+--   ⑤ 「弹窗高度自适应内部项目」→ 高度**由条目数算出来**（单一来源 EVAL_TB_MENU_HEIGHT），不再是写死的数字。
+--   风格沿用 1.73.26 的美化：半透明黑底、宽度 ≤4 个汉字、条目 2~4 字。
+local TB_MENU_W = 62 -- ★≤4 个汉字宽（用户点名的宽度上限）
+local TB_MENU_ITEM_H = 15 -- 单条行高
+local TB_MENU_TOP = -19 -- 第一条相对窗口顶的偏移（标题占的那一行）
+local TB_MENU_PAD = 6 -- 末条下方的留白
+-- ★高度 = 标题行 + 条目数 × 行高 + 留白（**单一来源**：UI 只调它，断言也只读它）
+function EVAL_TB_MENU_HEIGHT(n)
+  n = tonumber(n) or 0
+  if n < 1 then n = 1 end
+  return -TB_MENU_TOP + (n - 1) * TB_MENU_ITEM_H + TB_MENU_PAD
+end
+-- ★条目清单 = 数据（顺序即显示顺序）；加/删条目只改这里，高度与行位置自动跟着变
+local function tbMenuItems()
+  local out = {}
+  -- ★1.73.28 条目**按能力过滤**：这个客户端连一个「打开聊天框」的接口都没有 → **不摆**「悄悄话」
+  --   （按了没用的项不如不摆）；高度随之少一行 —— 这正是「高度自适应内部项目」的落地处，
+  --   也让判据能验「换一组条目 → 高度跟着换」（把高度写死当场响）。
+  if type(ChatFrame_OpenChat) == "function" or type(ChatEdit_ActivateChat) == "function" then
+    table.insert(out, { L("TB_NAMEMENU_WHISPER"), EVAL_TB_NAME_WHISPER })
+  end
+  table.insert(out, { L("TB_NAMEMENU_PARTY"), EVAL_TB_NAME_PARTY })
+  table.insert(out, { L("TB_NAMEMENU_TARGET"), EVAL_TB_NAME_TARGET })
+  table.insert(out, { L("TB_NAMEMENU_INVITE"), EVAL_TB_NAME_INVITE })
+  table.insert(out, { L("TB_NAMEMENU_SAY"), EVAL_TB_NAME_SAY })
+  return out
+end
 local function tbMenuBuild()
   if TB.menu then return TB.menu end
   local f = CreateFrame("Frame", "EVAL_TB_NAMEMENU", UIParent)
   local W = TB_MENU_W
-  f:SetWidth(W) f:SetHeight(84)
+  local items = tbMenuItems()
+  local n = table.getn(items) + 1 -- +1 = [关闭]
+  -- ★高度自适应：跟着条目数走（用户要求「弹窗高度自适应内部项目」）
+  f:SetWidth(W) f:SetHeight(EVAL_TB_MENU_HEIGHT(n))
   f:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
   pcall(f.SetFrameStrata, f, "DIALOG")
   pcall(f.SetFrameLevel, f, 250)
   pcall(f.EnableMouse, f, true)
   local bg = f:CreateTexture(nil, "BACKGROUND")
-  -- ★半透明黑底（官方菜单就是这个观感：能透出背景，文字仍然清楚）
-  tbSolid(bg, 0.02, 0.02, 0.03, 0.62)
+  tbSolid(bg, 0.02, 0.02, 0.03, 0.62) -- 半透明黑底（能透出背景、文字仍清楚）
   bg:SetPoint("TOPLEFT", f, "TOPLEFT", 0, 0)
   bg:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
   f.bg = bg
@@ -938,39 +972,33 @@ local function tbMenuBuild()
   pcall(title.SetJustifyH, title, "LEFT")
   f.title = title
   f.rows = {}
-  local function item(y, label, fn)
-    -- ★按钮也半透明（原来是一块不透明的深黄底 → 与「透明背景」的要求相反）：只留文字 + 轻微底
-    local b = tbBtn(f, 3, y, W - 6, label, fn, nil)
+  local y = TB_MENU_TOP
+  local function item(label, fn)
+    local b = tbBtn(f, 3, y, W - 6, label, function() fn(TB_NAME_MENU.name) EVAL_TB_MENU_HIDE() end, nil)
     if b.bg then pcall(b.bg.SetVertexColor, b.bg, 0.10, 0.09, 0.06, 0.35) end
     if b.text then
       pcall(b.text.SetWidth, b.text, W - 10)
       pcall(b.text.SetJustifyH, b.text, "LEFT")
     end
     table.insert(f.rows, b)
+    y = y - TB_MENU_ITEM_H
     return b
   end
-  item(-20, L("TB_NAMEMENU_INVITE"), function() EVAL_TB_NAME_INVITE(TB_NAME_MENU.name) EVAL_TB_MENU_HIDE() end)
-  item(-35, L("TB_NAMEMENU_COPY"), function() EVAL_TB_NAME_COPY(TB_NAME_MENU.name) EVAL_TB_MENU_HIDE() end)
-  item(-50, L("TB_NAMEMENU_SAY"), function() EVAL_TB_NAME_SAY(TB_NAME_MENU.name) EVAL_TB_MENU_HIDE() end)
-  item(-65, L("TB_NAMEMENU_OFFICIAL"), function() EVAL_TB_NAME_OFFICIAL() EVAL_TB_MENU_HIDE() end)
-  item(-80, L("TB_NAMEMENU_CLOSE"), function() EVAL_TB_MENU_HIDE() end)
+  -- 原始功能在前（悄悄话/邀请/目标），我们的在后（公会邀请/复制名字=发 /s 名字）
+  for i = 1, table.getn(items) do item(items[i][1], items[i][2]) end
+  item(L("TB_NAMEMENU_CLOSE"), function() end)
   pcall(f.Hide, f)
   TB.menu = f
   return f
 end
--- ★「保留原来的右键功能」：把这次点击**原样转发**给客户端（官方有菜单就弹，没有就什么都不做）
-function EVAL_TB_NAME_OFFICIAL()
-  local m = TB_NAME_MENU
-  if type(TB.sirOrig) ~= "function" then
-    say(L("TB_NAMEMENU_NOOFFICIAL"))
-    return false
-  end
-  local ok = pcall(TB.sirOrig, m.link, m.text, "RightButton")
-  TB_NAME_MENU.official = (TB_NAME_MENU.official or 0) + 1
-  if not ok then say(L("TB_NAMEMENU_NOOFFICIAL")) end
-  return ok
+-- ★诊断读值口：菜单的真实几何（宽/高/背景透明度/条目文字）——断言拿它跟 EVAL_TB_MENU_HEIGHT(条数) 对
+-- ★测试钩子：丢掉已建的菜单 → 下次右键会**按当时的条目**重建（用来验高度自适应）
+function EVAL_TEST_TB_MENU_DROP()
+  if TB.menu then pcall(TB.menu.Hide, TB.menu) end
+  TB.menu = nil
+  TB_NAME_MENU.shown = false
+  return true
 end
--- ★诊断读值口：菜单的真实几何（宽度/背景透明度/条目文字）
 function EVAL_TB_MENU_GEOM()
   if not TB.menu then return nil end
   local f = TB.menu
@@ -989,11 +1017,11 @@ function EVAL_TB_MENU_GEOM()
   end
   return out
 end
--- ★探针：客户端**自己的右键菜单**机制在不在（在 → 下一步就能把我们的条目注入官方菜单，风格天然一致）
-function EVAL_TB_OFFICIALMENU_PROBE()
-  local names = { "UnitPopupMenus", "UnitPopupButtons", "UnitPopup_ShowMenu", "UnitPopup_OnClick",
-                  "UIDropDownMenu_Initialize", "UIDropDownMenu_CreateInfo", "ToggleDropDownMenu",
-                  "CloseMenus", "PlayerFrameDropDown", "SetItemRef", "UnitPopup_OnUpdate" }
+-- ★探针（1.73.28 改）：报「这个菜单真正要用的接口」在不在 ——
+--   悄悄话要能打开聊天框、邀请要有邀请 API、目标要有 TargetByName；缺哪个就如实降级并说清楚。
+function EVAL_TB_MENU_API_PROBE()
+  local names = { "InviteToParty", "InviteByName", "TargetByName", "GuildInviteByName", "CanGuildInvite",
+                  "ChatFrame_OpenChat", "ChatEdit_ActivateChat", "ChatFrameEditBox", "ChatFrame1EditBox", "SetItemRef" }
   local parts = {}
   for i = 1, table.getn(names) do
     local v = _G[names[i]]
@@ -1005,16 +1033,10 @@ function EVAL_TB_OFFICIALMENU_PROBE()
     end
     table.insert(parts, names[i] .. "=" .. t)
   end
-  say("客户端右键菜单机制探针（table(数字) = 存在及条目数）：")
+  say("右键菜单接口探针（function = 可用）：")
   say("  " .. table.concat(parts, " ｜ "))
-  local um = _G.UnitPopupMenus
-  if type(um) == "table" and type(um["PLAYER"]) == "table" then
-    local lst = {}
-    for i = 1, table.getn(um["PLAYER"]) do table.insert(lst, tostring(um["PLAYER"][i])) end
-    say("  UnitPopupMenus[PLAYER] = " .. table.concat(lst, " / "))
-    say("|cff00ff00  ⇒ 有官方菜单表：下一步可把「公会邀请 / 复制名字 / /s 说出」注入进去（真·官方风格）|r")
-  else
-    say("|cffff8080  ⇒ 本客户端没给官方菜单表 → 维持自绘菜单（已按你的要求：半透明底 + 窄）|r")
+  if type(ChatFrame_OpenChat) ~= "function" and type(ChatEdit_ActivateChat) ~= "function" then
+    say("|cffff8080  ⇒ 没有「打开聊天框」的接口：菜单里的「悄悄话」会如实提示请手动 /w（不静默）|r")
   end
   return true
 end
@@ -1051,7 +1073,7 @@ function EVAL_TB_NAME_INVITE(name)
       return false
     end
   end
-  local safe = string.gsub(name, "[\"\\]", "")
+  local safe = tbSafeName(name)
   local okd = false
   if type(GuildInviteByName) == "function" then
     okd = pcall(GuildInviteByName, safe)
@@ -1065,63 +1087,95 @@ function EVAL_TB_NAME_INVITE(name)
   else say(string.format(L("TB_NAMEMENU_INVFAIL"), "GuildInviteByName")) end
   return okd
 end
--- 动作②：复制名字（本客户端**没有剪贴板 API** → 给一个「已全选」的框，用户 Ctrl+C）
-local function tbCopyBuild()
-  if TB.copy then return TB.copy end
-  local f = CreateFrame("Frame", "EVAL_TB_NAMECOPY", UIParent)
-  f:SetWidth(250) f:SetHeight(104)
-  f:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
-  pcall(f.SetFrameStrata, f, "DIALOG")
-  pcall(f.SetFrameLevel, f, 252)
-  local bg = f:CreateTexture(nil, "BACKGROUND")
-  tbSolid(bg, 0.06, 0.06, 0.08, 0.96)
-  bg:SetPoint("TOPLEFT", f, "TOPLEFT", 0, 0)
-  bg:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
-  local t = tbText(f, 10, 0.95, 0.82, 0.35)
-  t:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -6)
-  pcall(t.SetWidth, t, 234)
-  pcall(t.SetJustifyH, t, "LEFT")
-  t:SetText(L("TB_NAMEMENU_COPYHINT"))
-  local eb = CreateFrame("EditBox", nil, f)
-  eb:SetWidth(234) eb:SetHeight(20)
-  eb:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -42)
-  pcall(eb.SetAutoFocus, eb, false)
-  local ebg = eb:CreateTexture(nil, "BACKGROUND")
-  tbSolid(ebg, 0.16, 0.14, 0.10, 1)
-  ebg:SetPoint("TOPLEFT", eb, "TOPLEFT", 0, 0)
-  ebg:SetPoint("BOTTOMRIGHT", eb, "BOTTOMRIGHT", 0, 0)
-  tbBtn(f, 8, -72, 60, L("TB_NAMEMENU_CLOSE"), function() pcall(f.Hide, f) end, nil)
-  pcall(f.Hide, f)
-  TB.copy = { frame = f, edit = eb }
-  return TB.copy
-end
-function EVAL_TB_NAME_COPY(name)
-  if type(name) ~= "string" or name == "" then return false end
-  local c = tbCopyBuild()
-  TB_NAME_MENU.copyLast = name -- ★读值口（测试与诊断都读它，不在诊断里复刻逻辑）
-  pcall(c.edit.SetText, c.edit, name)
-  pcall(c.edit.HighlightText, c.edit) -- 全选（省一步手动）
-  pcall(c.edit.SetFocus, c.edit)
-  pcall(c.frame.Show, c.frame)
-  say(L("TB_NAMEMENU_COPYHINT"))
-  return true
-end
--- 动作③：/s 说出名字（★服务器写动作：走 RunScript + 0.5 秒去抖，连点两下也只说一次）
-function EVAL_TB_NAME_SAY(name, quiet)
-  if type(name) ~= "string" or name == "" then return false end
+-- ★1.73.28 服务器写动作一律限频：邀请 / 密语（发消息）在 0.5 秒内只做一次
+local TB_MENU_AT = {}
+local function tbMenuThrottle(key, gap)
   local now = (type(GetTime) == "function") and GetTime() or 0
-  if now - TB_NAME_SAY_AT < 0.5 then
-    TB_NAME_SAY_DEB = (TB_NAME_SAY_DEB or 0) + 1
-    if not quiet then say(L("TB_NAMEMENU_SAYDEB")) end
+  if now - (TB_MENU_AT[key] or -99) < (tonumber(gap) or 0.5) then
+    TB_NAME_MENU.throttled = (TB_NAME_MENU.throttled or 0) + 1
+    say(L("TB_NAMEMENU_TOOFAST"))
     return false
   end
-  TB_NAME_SAY_AT = now
-  local safe = string.gsub(name, "[\"\\]", "")
+  TB_MENU_AT[key] = now
+  return true
+end
+-- 动作②：邀请入队（原始功能里的「邀请」）：首选 InviteToParty，老客户端退回 InviteByName，再退回 RunScript
+function EVAL_TB_NAME_PARTY(name)
+  if type(name) ~= "string" or name == "" then return false end
+  if not tbMenuThrottle("party", 0.5) then return false end
+  local safe = tbSafeName(name)
+  local ok = false
+  if type(InviteToParty) == "function" then ok = pcall(InviteToParty, safe) end
+  if not ok and type(InviteByName) == "function" then ok = pcall(InviteByName, safe) end
+  if not ok then ok = pcall(RunScript, "InviteToParty(\"" .. safe .. "\")") end
+  if ok then
+    TB_NAME_MENU.party = (TB_NAME_MENU.party or 0) + 1
+    say(string.format(L("TB_NAMEMENU_PARTYOK"), safe))
+  else
+    say(string.format(L("TB_NAMEMENU_PARTYFAIL"), "InviteToParty"))
+  end
+  return ok
+end
+-- 动作③：选中目标（原始功能里的「目标」）—— TargetByName 只认**附近**单位，够不着就如实说
+function EVAL_TB_NAME_TARGET(name)
+  if type(name) ~= "string" or name == "" then return false end
+  if type(TargetByName) ~= "function" then
+    say(string.format(L("TB_NAMEMENU_TARGETFAIL"), "TargetByName"))
+    return false
+  end
+  local safe = tbSafeName(name)
+  local ok = pcall(TargetByName, safe)
+  if ok then
+    TB_NAME_MENU.target = (TB_NAME_MENU.target or 0) + 1
+    say(string.format(L("TB_NAMEMENU_TARGETOK"), safe))
+  else
+    say(string.format(L("TB_NAMEMENU_TARGETFAIL"), "TargetByName"))
+  end
+  return ok
+end
+-- 动作④：悄悄话（原始功能里的「悄悄话」）—— 优先用客户端的打开聊天框接口；★没有就**如实降级**，不静默
+function EVAL_TB_NAME_WHISPER(name)
+  if type(name) ~= "string" or name == "" then return false end
+  local safe = tbSafeName(name)
+  local pre = "/w " .. safe .. " "
+  if type(ChatFrame_OpenChat) == "function" then
+    local ok = pcall(ChatFrame_OpenChat, pre)
+    if ok then
+      TB_NAME_MENU.whisper = (TB_NAME_MENU.whisper or 0) + 1
+      say(string.format(L("TB_NAMEMENU_WHISPEROK"), safe))
+      return true
+    end
+  end
+  local eb = _G.ChatFrameEditBox or _G.ChatFrame1EditBox
+  if type(ChatEdit_ActivateChat) == "function" and eb and type(eb.SetText) == "function" then
+    local ok = pcall(function()
+      ChatEdit_ActivateChat(eb)
+      eb:SetText(pre)
+      if type(eb.HighlightText) == "function" then eb:HighlightText() end
+    end)
+    if ok then
+      TB_NAME_MENU.whisper = (TB_NAME_MENU.whisper or 0) + 1
+      say(string.format(L("TB_NAMEMENU_WHISPEROK"), safe))
+      return true
+    end
+  end
+  say(string.format(L("TB_NAMEMENU_WHISPERFAIL"), safe))
+  return false
+end
+-- 动作⑤：「复制名字」= 用 /s 把名字**说出来**（用户定：条目叫复制名字，实际执行的是 /s 名字）
+--   ★服务器写动作：走 RunScript + 0.5 秒去抖（连点两下也只发一次）
+function EVAL_TB_NAME_SAY(name, quiet)
+  if type(name) ~= "string" or name == "" then return false end
+  if not tbMenuThrottle("say", 0.5) then
+    TB_NAME_SAY_DEB = (TB_NAME_SAY_DEB or 0) + 1
+    return false
+  end
+  local safe = tbSafeName(name)
   local ok = pcall(RunScript, "SendChatMessage(\"" .. safe .. "\", \"SAY\")")
+  if ok then TB_NAME_MENU.said = (TB_NAME_MENU.said or 0) + 1 end
   if ok and not quiet then say(string.format(L("TB_NAMEMENU_SAYOK"), safe)) end
   return ok
 end
--- 右键分发：只认 player: 链接的**右键**；其余一律返回 false（交回客户端）
 function EVAL_TB_SIR_HANDLE(link, button)
   if type(link) ~= "string" then return false end
   local name = string.match(link, "^player:(.+)$")
@@ -1136,8 +1190,6 @@ function EVAL_TB_SETITEMREF_INSTALL()
   local orig = cur
   local function wrapper(link, text, button)
     TB.sirSeen = (TB.sirSeen or 0) + 1
-    -- ★1.73.26 记下这次的 link/text：「官方菜单」那条要把这次点击**原样转发**给客户端
-    TB_NAME_MENU.link, TB_NAME_MENU.text = link, text
     local ok, handled = pcall(EVAL_TB_SIR_HANDLE, link, button)
     if ok and handled then
       TB.sirHandled = (TB.sirHandled or 0) + 1
@@ -1169,18 +1221,22 @@ function EVAL_TB_NAMEMENU_STATE()
     live = (TB.sirWrapper ~= nil and _G.SetItemRef == TB.sirWrapper) and true or false,
     seen = TB.sirSeen or 0, handled = TB.sirHandled or 0,
     shown = TB_NAME_MENU.shown and true or false, name = TB_NAME_MENU.name,
-    copyLast = TB_NAME_MENU.copyLast,
     inviteDirect = TB_NAME_MENU.inviteDirect or 0, inviteScript = TB_NAME_MENU.inviteScript or 0,
     sayDeb = TB_NAME_SAY_DEB or 0,
-    official = TB_NAME_MENU.official or 0, -- ★1.73.26 「官方菜单」转发次数
+    -- ★1.73.28 五个动作各自的战果（诊断与断言都读这里，不在别处复刻）
+    party = TB_NAME_MENU.party or 0, target = TB_NAME_MENU.target or 0,
+    whisper = TB_NAME_MENU.whisper or 0, said = TB_NAME_MENU.said or 0,
+    throttled = TB_NAME_MENU.throttled or 0,
   }
 end
 function EVAL_TEST_TB_NAMEMENU_RESET()
   TB.sirSeen, TB.sirHandled = 0, 0
-  TB_NAME_MENU.shown, TB_NAME_MENU.name, TB_NAME_MENU.copyLast = false, nil, nil
+  TB_NAME_MENU.shown, TB_NAME_MENU.name = false, nil
   TB_NAME_MENU.inviteDirect, TB_NAME_MENU.inviteScript = 0, 0
+  TB_NAME_MENU.party, TB_NAME_MENU.target, TB_NAME_MENU.whisper = 0, 0, 0
+  TB_NAME_MENU.said, TB_NAME_MENU.throttled = 0, 0
   TB_NAME_SAY_DEB, TB_NAME_SAY_AT = 0, -99
-  TB_NAME_MENU.official = 0
+  TB_MENU_AT = {}
   EVAL_TB_MENU_HIDE()
 end
 TB.sirHooked = EVAL_TB_SETITEMREF_INSTALL() and true or false
