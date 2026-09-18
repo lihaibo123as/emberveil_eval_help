@@ -166,6 +166,8 @@ local function tbCfg()
   if c.tb.chatColor == nil then c.tb.chatColor = true end
   -- ★1.73.12 未缓存角色的主动查询：用户要求**默认开启**（工具箱里可关）
   if c.tb.whoQuery == nil then c.tb.whoQuery = true end
+-- ★1.73.24 用户要求：右键聊天名字 → 公会邀请 / 复制名字 / /s 说出名字（默认开）
+if c.tb.nameMenu == nil then c.tb.nameMenu = true end
   tbMigrateBuy(c.tb) -- ★1.71.3 自动购买：老条目补 每次数量/启用 字段
   return c.tb
 end
@@ -706,6 +708,8 @@ function EVAL_TB_CHATEVENT_RETRY()
   TB.ceTryAt = now
   TB.ceTries = (TB.ceTries or 0) + 1
   local ok = EVAL_TB_CHATEVENT_INSTALL()
+  -- ★1.73.24 顺手重试「名字右键菜单」的 SetItemRef 挂载（同一批事件；它自己还有 1 秒限频）
+  if type(EVAL_TB_NAMEMENU_RETRY) == "function" then pcall(EVAL_TB_NAMEMENU_RETRY) end
   -- ★顺便把「官方消息组」屏蔽同步一次（幂等；与走不走 Lua 无关的那条路）
   if type(EVAL_TB_CHAN_OFFICIAL_SYNC) == "function" then pcall(EVAL_TB_CHAN_OFFICIAL_SYNC) end
   if ok and not TB.ceLogged then
@@ -883,6 +887,222 @@ end
 TB.ceHooked = EVAL_TB_CHATEVENT_INSTALL() and true or false
 EVAL_LOGLINE("[聊天入口] ChatFrame_OnEvent 载入时挂载：" ..
   (TB.ceHooked and "成功" or "函数还不存在（将由事件/每帧重试）"))
+
+-- ===== 聊天名字右键菜单（1.73.24 用户要求：「右键聊天名字 → 公会邀请 / 复制名字 / /s 输出名字」）=====
+-- 【排查（用户明确要求：先查 API lua 与参考插件）】
+--   ① 本机 API 全表：**有** `GuildInviteByName`（类别 Guild）与 `CanGuildInvite`；
+--      **没有** `SetClipboardText` / `GetClipboardText` → 「复制名字」**写不进系统剪贴板**（只能给「已全选」的框手动 Ctrl+C）；
+--      **没有** `UIDropDownMenu` / `ToggleDropDownMenu` → 菜单得自己画（用本文件既有的 tbText/tbBtn 原语）。
+--   ② 参考插件 ChatMOD（`tmp/ChatMOD.lua:1284-1298` 与 `1429-1430`）：它**包 `SetItemRef`**（普通全局，直接可写）
+--      并往文本里塞自定义链接 `|Hinv:名字|h` → 点它自己调 `InviteByName`；它的 EasyCopy 弹窗正是
+--      「没有剪贴板 API」的替代做法（本实现照抄这个思路：给一个**已全选**的输入框）。
+--   ③ 我们**不塞自定义链接**：自己拼的聊天行已经带 `|Hplayer:名字|h`（方案A 加的）→ 直接认 **player: 链接的右键**；
+--      ★左键、以及 item:/quest:/spell: 等其它链接**一律原样交给客户端**（不动既有行为）；挂载后**读回确认**（1.73.12 的教训）。
+local TB_NAME_MENU = { shown = false, name = nil, copyLast = nil }
+local TB_NAME_SAY_AT = -99
+function EVAL_TB_NAMEMENU_ON()
+  return tbCfg().nameMenu ~= false
+end
+function EVAL_TB_MENU_HIDE()
+  if TB.menu then pcall(TB.menu.Hide, TB.menu) end
+  TB_NAME_MENU.shown = false
+end
+-- 懒建：整块只建一次（窗口 + 标题 + 四个按钮）
+local function tbMenuBuild()
+  if TB.menu then return TB.menu end
+  local f = CreateFrame("Frame", "EVAL_TB_NAMEMENU", UIParent)
+  f:SetWidth(180) f:SetHeight(100)
+  f:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+  pcall(f.SetFrameStrata, f, "DIALOG")
+  pcall(f.SetFrameLevel, f, 250)
+  pcall(f.EnableMouse, f, true)
+  local bg = f:CreateTexture(nil, "BACKGROUND")
+  tbSolid(bg, 0.06, 0.06, 0.08, 0.96)
+  bg:SetPoint("TOPLEFT", f, "TOPLEFT", 0, 0)
+  bg:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
+  local title = tbText(f, 10, 0.95, 0.82, 0.35)
+  title:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -6)
+  pcall(title.SetWidth, title, 164)
+  pcall(title.SetJustifyH, title, "LEFT")
+  f.title = title
+  f.rows = {}
+  local function item(y, label, fn)
+    local b = tbBtn(f, 8, y, 164, label, fn, nil)
+    table.insert(f.rows, b)
+    return b
+  end
+  item(-22, L("TB_NAMEMENU_INVITE"), function() EVAL_TB_NAME_INVITE(TB_NAME_MENU.name) EVAL_TB_MENU_HIDE() end)
+  item(-40, L("TB_NAMEMENU_COPY"), function() EVAL_TB_NAME_COPY(TB_NAME_MENU.name) EVAL_TB_MENU_HIDE() end)
+  item(-58, L("TB_NAMEMENU_SAY"), function() EVAL_TB_NAME_SAY(TB_NAME_MENU.name) EVAL_TB_MENU_HIDE() end)
+  item(-76, L("TB_NAMEMENU_CLOSE"), function() EVAL_TB_MENU_HIDE() end)
+  pcall(f.Hide, f)
+  TB.menu = f
+  return f
+end
+function EVAL_TB_MENU_SHOW(name)
+  if not EVAL_TB_NAMEMENU_ON() then return false end
+  if type(name) ~= "string" or name == "" then return false end
+  local f = tbMenuBuild()
+  TB_NAME_MENU.name = name
+  if f.title then pcall(f.title.SetText, f.title, string.format(L("TB_NAMEMENU_TITLE"), name)) end
+  -- 跟着鼠标出现（取不到鼠标位置就居中；★坐标要按 UIParent 缩放折算，否则高缩放下会飘）
+  local x, y = 0, 0
+  if type(GetCursorPosition) == "function" then
+    local ok, cx, cy = pcall(GetCursorPosition)
+    if ok and cx and cy then x, y = cx, cy end
+  end
+  local sc = 1
+  if type(UIParent) == "table" and type(UIParent.GetEffectiveScale) == "function" then
+    local ok2, s2 = pcall(UIParent.GetEffectiveScale, UIParent)
+    if ok2 and s2 and s2 > 0 then sc = s2 end
+  end
+  pcall(f.ClearAllPoints, f)
+  pcall(f.SetPoint, f, "TOPLEFT", UIParent, "BOTTOMLEFT", x / sc, y / sc)
+  pcall(f.Show, f)
+  TB_NAME_MENU.shown = true
+  return true
+end
+-- 动作①：公会邀请（★先问 CanGuildInvite，再直接调；直接调不可用就走 RunScript —— 本项目受保护函数的既定通道）
+function EVAL_TB_NAME_INVITE(name)
+  if type(name) ~= "string" or name == "" then return false end
+  if type(CanGuildInvite) == "function" then
+    local okc, v = pcall(CanGuildInvite)
+    if okc and v == false then
+      say(string.format(L("TB_NAMEMENU_INVFAIL"), "CanGuildInvite=false"))
+      return false
+    end
+  end
+  local safe = string.gsub(name, "[\"\\]", "")
+  local okd = false
+  if type(GuildInviteByName) == "function" then
+    okd = pcall(GuildInviteByName, safe)
+    if okd then TB_NAME_MENU.inviteDirect = (TB_NAME_MENU.inviteDirect or 0) + 1 end
+  end
+  if not okd then
+    okd = pcall(RunScript, "GuildInviteByName(\"" .. safe .. "\")")
+    if okd then TB_NAME_MENU.inviteScript = (TB_NAME_MENU.inviteScript or 0) + 1 end
+  end
+  if okd then say(string.format(L("TB_NAMEMENU_INVOK"), safe))
+  else say(string.format(L("TB_NAMEMENU_INVFAIL"), "GuildInviteByName")) end
+  return okd
+end
+-- 动作②：复制名字（本客户端**没有剪贴板 API** → 给一个「已全选」的框，用户 Ctrl+C）
+local function tbCopyBuild()
+  if TB.copy then return TB.copy end
+  local f = CreateFrame("Frame", "EVAL_TB_NAMECOPY", UIParent)
+  f:SetWidth(250) f:SetHeight(104)
+  f:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
+  pcall(f.SetFrameStrata, f, "DIALOG")
+  pcall(f.SetFrameLevel, f, 252)
+  local bg = f:CreateTexture(nil, "BACKGROUND")
+  tbSolid(bg, 0.06, 0.06, 0.08, 0.96)
+  bg:SetPoint("TOPLEFT", f, "TOPLEFT", 0, 0)
+  bg:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
+  local t = tbText(f, 10, 0.95, 0.82, 0.35)
+  t:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -6)
+  pcall(t.SetWidth, t, 234)
+  pcall(t.SetJustifyH, t, "LEFT")
+  t:SetText(L("TB_NAMEMENU_COPYHINT"))
+  local eb = CreateFrame("EditBox", nil, f)
+  eb:SetWidth(234) eb:SetHeight(20)
+  eb:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -42)
+  pcall(eb.SetAutoFocus, eb, false)
+  local ebg = eb:CreateTexture(nil, "BACKGROUND")
+  tbSolid(ebg, 0.16, 0.14, 0.10, 1)
+  ebg:SetPoint("TOPLEFT", eb, "TOPLEFT", 0, 0)
+  ebg:SetPoint("BOTTOMRIGHT", eb, "BOTTOMRIGHT", 0, 0)
+  tbBtn(f, 8, -72, 60, L("TB_NAMEMENU_CLOSE"), function() pcall(f.Hide, f) end, nil)
+  pcall(f.Hide, f)
+  TB.copy = { frame = f, edit = eb }
+  return TB.copy
+end
+function EVAL_TB_NAME_COPY(name)
+  if type(name) ~= "string" or name == "" then return false end
+  local c = tbCopyBuild()
+  TB_NAME_MENU.copyLast = name -- ★读值口（测试与诊断都读它，不在诊断里复刻逻辑）
+  pcall(c.edit.SetText, c.edit, name)
+  pcall(c.edit.HighlightText, c.edit) -- 全选（省一步手动）
+  pcall(c.edit.SetFocus, c.edit)
+  pcall(c.frame.Show, c.frame)
+  say(L("TB_NAMEMENU_COPYHINT"))
+  return true
+end
+-- 动作③：/s 说出名字（★服务器写动作：走 RunScript + 0.5 秒去抖，连点两下也只说一次）
+function EVAL_TB_NAME_SAY(name, quiet)
+  if type(name) ~= "string" or name == "" then return false end
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  if now - TB_NAME_SAY_AT < 0.5 then
+    TB_NAME_SAY_DEB = (TB_NAME_SAY_DEB or 0) + 1
+    if not quiet then say(L("TB_NAMEMENU_SAYDEB")) end
+    return false
+  end
+  TB_NAME_SAY_AT = now
+  local safe = string.gsub(name, "[\"\\]", "")
+  local ok = pcall(RunScript, "SendChatMessage(\"" .. safe .. "\", \"SAY\")")
+  if ok and not quiet then say(string.format(L("TB_NAMEMENU_SAYOK"), safe)) end
+  return ok
+end
+-- 右键分发：只认 player: 链接的**右键**；其余一律返回 false（交回客户端）
+function EVAL_TB_SIR_HANDLE(link, button)
+  if type(link) ~= "string" then return false end
+  local name = string.match(link, "^player:(.+)$")
+  if not name or name == "" then return false end
+  if button ~= "RightButton" then return false end
+  return EVAL_TB_MENU_SHOW(name)
+end
+function EVAL_TB_SETITEMREF_INSTALL()
+  local cur = _G.SetItemRef
+  if type(cur) ~= "function" then return false end
+  if TB.sirWrapper and cur == TB.sirWrapper then return true end -- 幂等
+  local orig = cur
+  local function wrapper(link, text, button)
+    TB.sirSeen = (TB.sirSeen or 0) + 1
+    local ok, handled = pcall(EVAL_TB_SIR_HANDLE, link, button)
+    if ok and handled then
+      TB.sirHandled = (TB.sirHandled or 0) + 1
+      return
+    end
+    return orig(link, text, button)
+  end
+  local okw = pcall(function() _G.SetItemRef = wrapper end)
+  if not okw then return false end
+  -- ★★写完**读回来确认**（1.73.12 的教训：本客户端吞过 AddMessage 的写；SetItemRef 是普通全局，写进去一定生效）
+  if _G.SetItemRef ~= wrapper then return false end
+  TB.sirWrapper, TB.sirOrig = wrapper, orig
+  return true
+end
+function EVAL_TB_NAMEMENU_RETRY()
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  if now - (TB.sirTryAt or -99) < 1 then return false end
+  TB.sirTryAt = now
+  local ok = EVAL_TB_SETITEMREF_INSTALL()
+  if ok and not TB.sirLogged then
+    TB.sirLogged = true
+    EVAL_LOGLINE("[名字菜单] SetItemRef 挂载成功并**读回确认**（右键 player: 链接弹菜单）")
+  end
+  return ok
+end
+function EVAL_TB_NAMEMENU_STATE()
+  return {
+    exists = (type(_G.SetItemRef) == "function"),
+    live = (TB.sirWrapper ~= nil and _G.SetItemRef == TB.sirWrapper) and true or false,
+    seen = TB.sirSeen or 0, handled = TB.sirHandled or 0,
+    shown = TB_NAME_MENU.shown and true or false, name = TB_NAME_MENU.name,
+    copyLast = TB_NAME_MENU.copyLast,
+    inviteDirect = TB_NAME_MENU.inviteDirect or 0, inviteScript = TB_NAME_MENU.inviteScript or 0,
+    sayDeb = TB_NAME_SAY_DEB or 0,
+  }
+end
+function EVAL_TEST_TB_NAMEMENU_RESET()
+  TB.sirSeen, TB.sirHandled = 0, 0
+  TB_NAME_MENU.shown, TB_NAME_MENU.name, TB_NAME_MENU.copyLast = false, nil, nil
+  TB_NAME_MENU.inviteDirect, TB_NAME_MENU.inviteScript = 0, 0
+  TB_NAME_SAY_DEB, TB_NAME_SAY_AT = 0, -99
+  EVAL_TB_MENU_HIDE()
+end
+TB.sirHooked = EVAL_TB_SETITEMREF_INSTALL() and true or false
+EVAL_LOGLINE("[名字菜单] SetItemRef 载入时挂载：" ..
+  (TB.sirHooked and "成功" or "还没就绪（将由事件/限频重试挂上）"))
 
 -- ===== 角色名职业着色（1.73.10 用户要求：工具箱 → 队伍/社交）=====
 -- 需求出处 = tmp/XGuild（1.2，275 行）——按本项目规范**轻量化重写**。XGuild 的三个毛病都已在下面规避：
@@ -2329,6 +2549,8 @@ local function tbModel()
     { t = "c", key = "chatColor", label = L("TB_CHATCOLOR"), tip = L("TB_CHATCOLOR_TIP") },
     -- ★1.73.12 用户追加要求：未缓存的名字**主动查一次**（默认开；可在这里关掉）
     { t = "c", key = "whoQuery", label = L("TB_WHOQ"), tip = L("TB_WHOQ_TIP") },
+    -- ★1.73.24 用户要求：右键聊天名字弹菜单（公会邀请 / 复制名字 / /s 说出名字；默认开）
+    { t = "c", key = "nameMenu", label = L("TB_NAMEMENU"), tip = L("TB_NAMEMENU_TIP") },
     { t = "g", label = L("TB_GUILDNOTIFY"), tip = L("TB_GUILDNOTIFY_TIP") },
     { t = "h", label = L("TB_H_QAUTO") }, -- 1.69.0 任务组拆分：自动交接 / 任务通知
     -- ★1.71.2 用户要求：自动接取 / 交付任务 **分成两个开关**（原来共用一个 quest 键，想只接取不交付做不到）
@@ -2621,6 +2843,10 @@ function EVAL_TB_BUILD(root, page, refreshes)
       if row.modelKey == "chatColor" then pcall(EVAL_TB_CHATCOLOR_AFTER_TOGGLE) end
       -- ★1.73.12 关掉主动查询 = 立刻停止并清空待查队列（如实记日志，不静默）
       if row.modelKey == "whoQuery" then pcall(EVAL_TB_WHO_AFTER_TOGGLE) end
+                  if row.modelKey == "nameMenu" then
+                    -- ★关掉 = 菜单收起来（包装仍留着但一律放行 → 不改客户端既有行为）
+                    if EVAL_TB_NAMEMENU_ON() then pcall(EVAL_TB_NAMEMENU_RETRY) else pcall(EVAL_TB_MENU_HIDE) end
+                  end
       -- ★1.73.12 频道屏蔽开关：勾/取消勾时立刻应用/撤销**官方消息组**（与 Lua 层那条路并存）
       if row.modelKey == "chanJoin" then
         TB.chanOffLogged = false

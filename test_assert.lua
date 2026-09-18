@@ -9734,4 +9734,96 @@ do
   print("  类型色三来源：客户端优先 · 只给 r,g,b 就合成 · 没有就内置（只放截图取过色的）· 没证据宁可不加色")
 end
 
+-- 130) ★★★1.73.24 聊天名字右键菜单（用户要求：「右键聊天名字 → 公会邀请 / 复制名字 / /s 输出名字」）
+--   判据：① 挂 SetItemRef（参考 ChatMOD 的包法）**读回确认** + 幂等；
+--         ② 右键 player: 链接 → 弹菜单且**不转发**给客户端（否则动作做两遍）；
+--         ③ 左键 / 非玩家链接（item: 等）→ **原样转发**（不动客户端既有行为）；
+--         ④ 公会邀请：优先直调 GuildInviteByName；**没权限就不发**；接口不可用 → 走 RunScript；
+--         ⑤ 复制名字：★本客户端**没有剪贴板接口** → 名字进「已全选」的框，读值口记下（不假称已复制）；
+--         ⑥ /s 说出名字：走 RunScript 且 **0.5 秒去抖**（连点两次只发一次）；
+--         ⑦ 开关关掉 → 右键不再接管（照旧转发）。
+do
+  local saved130 = EVAL_HELP_CONFIG.tb
+  EVAL_HELP_CONFIG.tb = { nameMenu = true }
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  local savedCGI130 = _G.CanGuildInvite
+  -- ① 挂载 + 读回确认 + 幂等
+  eq(EVAL_TB_NAMEMENU_ON(), true, "①★开关默认开")
+  eq(EVAL_TB_SETITEMREF_INSTALL(), true, "①★挂上 SetItemRef")
+  local w130 = SetItemRef
+  eq(EVAL_TB_NAMEMENU_STATE().live, true, "①★★挂完**读回来确认**在位（1.73.12 的教训）")
+  eq(EVAL_TB_SETITEMREF_INSTALL(), true, "①★再挂一次仍 true（幂等）")
+  eq(SetItemRef == w130, true, "①★★幂等：没有重复包装")
+  -- ② 右键 player: → 弹菜单 + 不转发
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  TEST.sirCalls = {}
+  SetItemRef("player:Ionol", "[Ionol]", "RightButton")
+  local st130b = EVAL_TB_NAMEMENU_STATE()
+  eq(st130b.shown, true, "②★★★右键角色名 → 弹出菜单")
+  eq(st130b.name, "Ionol", "②★★菜单记住的是这个名字（动作都对着它）")
+  eq(table.getn(TEST.sirCalls), 0, "②★★而且**不转发**给客户端（否则同一个动作做两遍）")
+  eq(st130b.handled >= 1, true, "②★如实记「已接管」计数")
+  -- ③ 左键 / 非玩家链接 → 原样转发
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  TEST.sirCalls = {}
+  SetItemRef("player:Ionol", "[Ionol]", "LeftButton")
+  SetItemRef("item:1234:0:0:0", "[物品]", "RightButton")
+  eq(table.getn(TEST.sirCalls), 2, "③★★左键与**非玩家链接**一律原样转发（不动既有行为）")
+  eq(string.find(tostring(TEST.sirCalls[1]), "player:Ionol|LeftButton", 1, true) ~= nil, true, "③★左键转发的就是原链接")
+  eq(EVAL_TB_NAMEMENU_STATE().shown, false, "③★左键不弹菜单")
+  -- ④ 公会邀请（直调）
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  TEST.invites, TEST.inviteCalls, TEST.chat = {}, 0, ""
+  _G.CanGuildInvite = function() return true end
+  eq(EVAL_TB_NAME_INVITE("Ionol"), true, "④★公会邀请：直调成功")
+  eq(TEST.inviteCalls, 1, "④★★GuildInviteByName 真的被调用")
+  eq(tostring(TEST.invites[1]), "Ionol", "④★★而且名字对")
+  eq(string.find(tostring(TEST.chat), "已发出公会邀请", 1, true) ~= nil, true, "④★如实播报「已发出」（不给用户假承诺「成功」）")
+  -- ④b 没有权限 → 一次都不发
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  TEST.invites, TEST.inviteCalls, TEST.chat = {}, 0, ""
+  _G.CanGuildInvite = function() return false end
+  eq(EVAL_TB_NAME_INVITE("Ionol"), false, "④b★★没有邀请权限 → 不发")
+  eq(TEST.inviteCalls, 0, "④b★★一次都没调接口")
+  eq(string.find(tostring(TEST.chat), "公会邀请没发出去", 1, true) ~= nil, true, "④b★并如实说明原因")
+  -- ④c 接口不可用 → 走 RunScript
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  _G.CanGuildInvite = function() return true end
+  local savedGIN130 = _G.GuildInviteByName
+  _G.GuildInviteByName = nil
+  TEST.runScripts = {}
+  eq(EVAL_TB_NAME_INVITE("甲"), true, "④c★★直调不可用 → 走 RunScript（本项目受保护函数的既定通道）")
+  eq(string.find(tostring(TEST.runScripts[table.getn(TEST.runScripts)] or ""), "GuildInviteByName", 1, true) ~= nil, true,
+     "④c★排队的脚本里是 GuildInviteByName")
+  _G.GuildInviteByName = savedGIN130
+  -- ⑤ 复制名字（无剪贴板接口 → 已全选的框）
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  TEST.chat = ""
+  eq(EVAL_TB_NAME_COPY("Ionol"), true, "⑤★复制名字：弹出「已全选」的框")
+  eq(EVAL_TB_NAMEMENU_STATE().copyLast, "Ionol", "⑤★★读值口记下最近复制的名字（没有剪贴板 API，这是可断言的那部分）")
+  eq(string.find(tostring(TEST.chat), "没有剪贴板接口", 1, true) ~= nil, true, "⑤★★如实说明本客户端没有剪贴板接口（不假称已复制）")
+  -- ⑥ /s 说出名字 + 去抖
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  TEST.runScripts = {}
+  eq(EVAL_TB_NAME_SAY("Ionol"), true, "⑥★/s 说出名字")
+  local sc130 = tostring(TEST.runScripts[table.getn(TEST.runScripts)] or "")
+  eq(string.find(sc130, "SendChatMessage(\"Ionol\", \"SAY\")", 1, true) ~= nil, true, "⑥★★发的就是 /s 且内容就是名字：" .. sc130)
+  local before130 = table.getn(TEST.runScripts)
+  eq(EVAL_TB_NAME_SAY("Ionol", true), false, "⑥★★0.5 秒内连点 → 拒绝再发（服务器写动作一律限频）")
+  eq(table.getn(TEST.runScripts), before130, "⑥★★队列没有增长（真的没发出去）")
+  eq(EVAL_TB_NAMEMENU_STATE().sayDeb, 1, "⑥★并如实记「被去抖挡下」的次数")
+  -- ⑦ 关掉开关 → 不再接管
+  EVAL_HELP_CONFIG.tb.nameMenu = false
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  TEST.sirCalls = {}
+  SetItemRef("player:Ionol", "[Ionol]", "RightButton")
+  eq(table.getn(TEST.sirCalls), 1, "⑦★★开关关掉 → 右键不再接管（照旧转发给客户端）")
+  eq(EVAL_TB_NAMEMENU_STATE().shown, false, "⑦★也不弹菜单")
+  EVAL_HELP_CONFIG.tb.nameMenu = true
+  _G.CanGuildInvite = savedCGI130
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  EVAL_HELP_CONFIG.tb = saved130
+  print("  名字右键菜单：读回确认挂载 · 右键接管/左键放行 · 邀请三种路径 · 复制=已全选框 · /s 去抖 · 开关可关")
+end
+
 print("ALL TESTS PASS")

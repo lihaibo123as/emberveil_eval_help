@@ -454,6 +454,16 @@ IsAutoRepeatAction = function(slot) return TEST.autoRepeat == slot end -- 1.71.3
 SpellStopCasting = function() TEST.castStoppedDirect = true end -- 1.71.3 ★真机行为：SpellStopCasting 是 Protected，插件**直调静默无效** → 桩必须如实模拟，否则「改回直调」这种回归测不出来（1.49.3 老 bug）
 RunScript = function(code) TEST.runScript = code TEST.runScripts = TEST.runScripts or {} table.insert(TEST.runScripts, code) if code == "SpellStopCasting()" then TEST.castStopped = true end end -- 1.69.0 收集多条
 IsInGuild = function() return TEST.inGuild or false end
+-- ★1.73.24 名字右键菜单：SetItemRef（参考 ChatMOD 的包法 —— 普通全局、可写）+ 公会邀请 API 的记录器
+TEST.sirCalls, TEST.invites = {}, {}
+SetItemRef = function(link, text, button)
+  table.insert(TEST.sirCalls, tostring(link) .. "|" .. tostring(button))
+end
+GuildInviteByName = function(name)
+  TEST.inviteCalls = (TEST.inviteCalls or 0) + 1
+  table.insert(TEST.invites, tostring(name))
+end
+CanGuildInvite = function() return TEST.canGuildInvite ~= false end
 -- ★1.71.3 跟随（Movement 分类）：文档原文 **not protected**、按名字跟（省略/空名 = 跟当前目标）、**无返回值**。
 --   桩要**如实记下参数**：真接口没有返回值，所以「跟谁」是这个功能**唯一可断言的输出**；
 --   同时记调用次数，好让「本地先挡掉的两条硬规则」能验成「根本没调」。
