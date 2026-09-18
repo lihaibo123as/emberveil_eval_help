@@ -9948,4 +9948,54 @@ do
   print("  方案删除：解绑自己的键 · 后面的绑定左移一格 · 落盘 · 如实播报")
 end
 
+-- 132) ★★★1.73.27 用户问：「能量对法系职业是否也是魔法值？名称完善下。」
+--   答：是 —— 1.12 的资源约定 0=法力 / 1=怒气 / 2=集中值 / 3=能量，法系的「能量」就是**法力（魔法值）**。
+--   判据：① 资源类条件的显示名与百分比名**跟着 UnitPowerType 实时变**（建表时定死，德鲁伊变形后就会显示错）；
+--         ② 方案行/导出文本（EVAL_COND_STR）用同一个实时名字；③ 解析侧**认这些名字**（否则导出再导入就丢条件）。
+do
+  local saved132 = TEST.powerType
+  local function pt132(v) TEST.powerType = v end
+  -- ① 显示名实时跟随资源类型
+  pt132(0)
+  eq(EVAL_TEST_SE_TYPELABEL("power"), "法力", "①★★★法系（powerType=0）→ 「法力」")
+  eq(EVAL_TEST_SE_TYPELABEL("powerPct"), "法力%", "①★★★百分比形态 → 「法力%」")
+  pt132(1)
+  eq(EVAL_TEST_SE_TYPELABEL("power"), "怒气", "①★战士（1）→ 「怒气」")
+  eq(EVAL_TEST_SE_TYPELABEL("powerPct"), "怒气%", "①★百分比也跟着变")
+  pt132(2)
+  eq(EVAL_TEST_SE_TYPELABEL("power"), "集中值", "①★猎人（2）→ 「集中值」")
+  pt132(3)
+  eq(EVAL_TEST_SE_TYPELABEL("power"), "能量", "①★盗贼/德鲁伊豹（3）→ 「能量」")
+  --  ★★「不许建表时定死」：同一个会话里换一次形态，名字必须跟着换
+  pt132(0)
+  local a132 = EVAL_TEST_SE_TYPELABEL("powerPct")
+  pt132(3)
+  local b132 = EVAL_TEST_SE_TYPELABEL("powerPct")
+  eq(a132.."→"..b132 == "法力%→能量%", true, "①★★★同一个会话里变形后名字实时改：" .. tostring(a132) .. "→" .. tostring(b132))
+  -- ② 非资源类条件的名字不受影响（回归哨兵）
+  eq(EVAL_TEST_SE_TYPELABEL("hpPct"), EVAL_L("CT_HPPCT"), "②★其它条件名不受影响（自身血%）")
+  eq(EVAL_TEST_SE_TYPELABEL("swingLeft"), EVAL_L("CT_SWINGLEFT"), "②★距下次攻击（用户截图里也在用）")
+  -- ③ 方案行/导出文本与下拉同源
+  pt132(0)
+  eq(EVAL_COND_STR({ k = "powerPct", op = ">", n = 50 }), "法力%>50", "③★★法系的方案行/导出文本 = 法力%>50")
+  eq(EVAL_COND_STR({ k = "power", op = "<", n = 30 }), "法力<30", "③★绝对值形态同理")
+  pt132(1)
+  eq(EVAL_COND_STR({ k = "powerPct", op = ">", n = 50 }), "怒气%>50", "③★战士仍显示怒气%")
+  -- ④ 解析侧认这些名字（导出 → 导入不丢条件）
+  local function parseK132(txt2)
+    local pr = EVAL_PROFILE_FROM_TEXT("# 方案: 甲\n\n- 爪击 | " .. txt2)
+    if not pr or not pr.skills or not pr.skills[1] then return nil end
+    local g = pr.skills[1].groups
+    if not g or not g[1] or not g[1][1] then return nil end
+    return g[1][1].k
+  end
+  eq(parseK132("法力%>50"), "powerPct", "④★★★导入「法力%>50」→ powerPct（法系导出再导入不丢条件）")
+  eq(parseK132("法力<30"), "power", "④★★导入「法力<30」→ power")
+  eq(parseK132("怒气%>40"), "powerPct", "④★★顺势补上「怒气%」（原来只有「能量%」能解析）")
+  eq(parseK132("集中值%>20"), "powerPct", "④★猎人的「集中值%」也认")
+  eq(parseK132("魔法值>100"), "power", "④★「魔法值」= 法力 的另一种叫法也认")
+  pt132(saved132)
+  print("  资源名：显示名跟着 UnitPowerType 实时变（法力/怒气/集中值/能量）· 方案行与导出同源 · 解析侧认全套写法")
+end
+
 print("ALL TESTS PASS")

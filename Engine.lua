@@ -2340,9 +2340,17 @@ end
 local function condTrim(s) return (string.gsub(s or "", "^%s*(.-)%s*$", "%1")) end
 local COND_NUM = {
   ["怒气"] = "power", ["能量"] = "power", ["power"] = "power",
+  -- ★★★1.73.27 资源名的**其他叫法**（单位权力 0=法力 / 2=集中值）：法系资源就是「法力/魔法值」，
+  --   而导出/回显用的名字来自 EVAL_POWERLABEL()（动态）→ **解析侧必须认这些名字**，
+  --   否则法系玩家把方案导出再导入就会丢条件（本项目「导出侧与解析侧成对验」的老纪律）。
+  ["法力"] = "power", ["魔法"] = "power", ["魔法值"] = "power", ["蓝"] = "power",
+  ["集中值"] = "power", ["集中"] = "power", ["精力"] = "power",
   ["目标血"] = "tHpPct", ["tHpPct"] = "tHpPct",
   ["自身血"] = "hpPct", ["hpPct"] = "hpPct",
   ["能量%"] = "powerPct", ["powerPct"] = "powerPct",
+  -- ★1.73.27 各资源名的百分比写法（少一个都会让「导出→导入」丢条件）
+  ["法力%"] = "powerPct", ["魔法%"] = "powerPct", ["魔法值%"] = "powerPct", ["蓝%"] = "powerPct",
+  ["集中值%"] = "powerPct", ["集中%"] = "powerPct", ["怒气%"] = "powerPct", ["精力%"] = "powerPct",
   ["进战"] = "combatTime", ["combatTime"] = "combatTime",
   ["读条"] = "tCastEl", ["tCastEl"] = "tCastEl", ["读条剩"] = "tCastLeft", ["tCastLeft"] = "tCastLeft", -- 1.40.0 目标读条秒数
   ["自身读条"] = "castEl", ["castEl"] = "castEl", ["自身读条剩"] = "castLeft", ["castLeft"] = "castLeft", -- 1.41.0 自身读条秒数
@@ -2767,6 +2775,13 @@ function EVAL_COND_STR(cd, disp)
   if k == "candPower" then return "候选者能量" .. (cd.op or ">") .. tostring(cd.n) .. teamFilterSuffix(cd) end
   -- ★候选者光环型的导出行放在**stkSuffix 定义之后**（见下面 hasBuff 那一段）——Lua 词法作用域，
   --   放上面会绑到全局 nil（本轮实测报 attempt to call a nil value (global 'stkSuffix')）。
+  -- ★★★1.73.27 资源类条件（power / powerPct）的显示名**每次现算**：德鲁伊变豹=能量、变熊=怒气、人形态=法力，
+  --   建表时定死会在变形后显示错的名字（用户问的「能量对法系是不是魔法值」就是这个问题）。
+  if k == "power" or k == "powerPct" then
+    local lbl = (EVAL_POWERLABEL and EVAL_POWERLABEL() or "能量")
+    if k == "powerPct" then lbl = lbl .. "%" end
+    return lbl .. (cd.op or ">") .. tostring(cd.n)
+  end
   if COND_NUMNAME[k] then return COND_NUMNAME[k] .. (cd.op or ">") .. tostring(cd.n) end
   if k == "combat" then return cd.v and "战斗中" or "非战斗" end
   if k == "form" then return "姿态" .. tostring(cd.n) end

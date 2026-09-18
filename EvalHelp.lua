@@ -3265,6 +3265,29 @@ end
 -- conn 语义：& 并入当前组、| 新开一组 → 与引擎 groups（组内 & 、组间 | ）一一对应。
 -- 本客户端无下拉控件：技能/条件类型/比较符/技能名全部用「点击循环」按钮实现。
 
+-- ★★★1.73.27 用户问：「能量对法系职业是否也是魔法值？名称完善下。」
+--   【答】是 —— 本客户端沿用 1.12 的资源约定（UnitPowerType：0=法力 / 1=怒气 / 2=集中值 / 3=能量）：
+--     法系职业的「能量」就是**法力（魔法值）**。Core 的 EVAL_POWERLABEL() 会按**当前形态**实时给出正确名字
+--     （德鲁伊变豹=能量、变熊=怒气、人形态=法力）⇒ **不能在建表时定死**，必须显示的那一刻才取。
+--   ⇒ 下拉与按钮上的「怒气/能量」「能量%」换成**实时资源名**（法力 / 法力%），与方案行、导出文本一致。
+local function seTypeLabel(id)
+  local key = string.upper(tostring(id or ""))
+  local function powerName()
+    if type(EVAL_POWERLABEL) ~= "function" then return nil end
+    local ok, v = pcall(EVAL_POWERLABEL)
+    if ok and type(v) == "string" and v ~= "" then return v end
+    return nil
+  end
+  if key == "POWER" then
+    return powerName() or L("CT_" .. key)
+  elseif key == "POWERPCT" then
+    local p = powerName()
+    if p then return p .. "%" end
+  end
+  return L("CT_" .. key)
+end
+-- 读值口：断言与 UI 读**同一份**名字（本项目「不许在断言里另写一套判据」的纪律）
+function EVAL_TEST_SE_TYPELABEL(id) return seTypeLabel(id) end
 local SE_TYPES = {
   { id = "power",      name = "怒气/能量",   kind = "num",   n = 30 },
   { id = "tHpPct",     name = "目标血%",     kind = "num",   n = 10 },
@@ -3459,7 +3482,7 @@ local function seTypeTip(id)
   if id == nil then return nil end
   local isTodo = SE_TODO_KINDS[id] and true or false
   if not SE_TIP_RULE_KINDS[id] and not isTodo then return nil end
-  local lines = { "|cffffd100" .. L("CT_" .. string.upper(id)) .. "|r" }
+  local lines = { "|cffffd100" .. seTypeLabel(id) .. "|r" }
   if SE_TIP_SEM[id] then table.insert(lines, L(SE_TIP_SEM[id])) end
   if SE_TIP_RULE_KINDS[id] then table.insert(lines, "|cff9fe0ff" .. L("SE_TIP_RULE") .. "|r") end
   if SE_TIP_SEM[id] then table.insert(lines, "|cffa0a0a0" .. L("SE_TIP_CAND_ONLY") .. "|r") end
@@ -4415,7 +4438,7 @@ function EVAL_HELP_SE_REFRESH()
       pcall(row.conn.btn.Show, row.conn.btn)
       local ti = seTypeIndexOf(cd.k, cd.name)
       local td = SE_TYPES[ti]
-      row.typeBtn.text:SetText(L("CT_" .. string.upper(td.id)))
+      row.typeBtn.text:SetText(seTypeLabel(td.id)) -- ★1.73.27 实时资源名（法系显示「法力」）
       pcall(row.typeBtn.btn.Show, row.typeBtn.btn)
       if td.kind == "num" then
         row.opBtn.text:SetText(cd.op or ">")
@@ -4927,7 +4950,7 @@ local function SE_BUILD()
           for _, id in ipairs(grp.ids) do
             local ti2 = SE_BY_K[id]
             if ti2 and not SE_TYPES[ti2].hidden then
-              table.insert(items, L("CT_" .. string.upper(SE_TYPES[ti2].id)))
+              table.insert(items, seTypeLabel(SE_TYPES[ti2].id)) -- ★1.73.27 下拉里也显示实时资源名
               table.insert(idxMap, ti2)
               tips[table.getn(items)] = seTypeTip(SE_TYPES[ti2].id)
               if SE_TODO_KINDS[SE_TYPES[ti2].id] then
@@ -5678,7 +5701,7 @@ function EVAL_TEST_SE_TYPE_MENU()
     table.insert(out, L(grp.label))
     for _, id in ipairs(grp.ids) do
       local ti = SE_BY_K[id]
-      if ti and not SE_TYPES[ti].hidden then table.insert(out, L("CT_" .. string.upper(SE_TYPES[ti].id))) end
+      if ti and not SE_TYPES[ti].hidden then table.insert(out, seTypeLabel(SE_TYPES[ti].id)) end -- ★1.73.27 读值口与 UI 同源
     end
   end
   return out
