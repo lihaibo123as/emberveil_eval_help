@@ -1188,6 +1188,31 @@ end
 --   · `GetSpellName(spellID, bookType)` → **第二返回就是 rank/subtext**（中文客户端形如「等级 3」）
 --       → 等级列表直接从**法术书**枚举，不需要 tooltip、也不需要占动作格。
 --   ★频率防护：法术书扫描按名字缓存 SB_TTL 秒（一次扫描可能上百次 API 调用，绝不能每次按键都扫）。
+-- ★1.72.4 等级排序（用户要求：下拉里**从低到高**排，别按法术书里那副乱序）。
+--   ★必须按**数字**比，不能按字符串：字符串序下「等级 10」会排在「等级 3」前面（真坑）。
+--   ★取不到数字的（subtext 不含数字，如「变形」）排在**最后**，并保持它们彼此的原有顺序。
+--   ★table.sort 在 5.1 里**不稳定** → 用「数字 + 原始下标」做全序装饰排序（同一份输入永远同一结果）。
+local function sbRankNum(sub)
+  local n = string.match(tostring(sub or ""), "(%d+)")
+  return n and tonumber(n) or nil
+end
+local function sbSortRanks(list)
+  local d = {}
+  for i, v in ipairs(list) do d[i] = { v = v, n = sbRankNum(v), i = i } end
+  table.sort(d, function(a, b)
+    if a.n and b.n then
+      if a.n ~= b.n then return a.n < b.n end
+      return a.i < b.i
+    end
+    if a.n then return true end
+    if b.n then return false end
+    return a.i < b.i
+  end)
+  local out = {}
+  for i = 1, table.getn(d) do out[i] = d[i].v end
+  return out
+end
+
 local sbCache, SB_TTL = {}, 2
 function EVAL_SPELLBOOK_RANKS(name)
   if type(name) ~= "string" or name == "" then return {} end
@@ -1213,6 +1238,7 @@ function EVAL_SPELLBOOK_RANKS(name)
       end
     end
   end
+  out = sbSortRanks(out) -- ★1.72.4 顺序在这里定一次（下拉与任何未来调用者共用同一份「从低到高」）
   sbCache[name] = { t = now, list = out }
   return out
 end

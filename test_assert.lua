@@ -7674,6 +7674,22 @@ do
   eq(EVAL_SPELLBOOK_HAS("火球术", "等级 3"), true, "①该等级存在")
   eq(EVAL_SPELLBOOK_HAS("火球术", "等级 9"), false, "①不存在的等级如实为假")
   eq(table.getn(EVAL_SPELLBOOK_RANKS("冰霜新星")), 0, "①没有 subtext 的技能没有等级可选")
+  -- ①b ★1.72.4 顺序：**从低到高、按数字比**（用户要求「从低到高排」）。
+  --   为什么必须钉：法术书枚举出来的顺序是乱的（用户截图里就是「等级 2 → 等级 1」），
+  --   而按**字符串**序排会把「等级 10」排到「等级 3」前面——这是最容易写错的那种排序。
+  local sbSaved = TEST.spellbook
+  TEST.spellbook = {
+    { name = "排序测试", sub = "等级 10" },
+    { name = "排序测试", sub = "等级 3" },
+    { name = "排序测试", sub = "等级 1" },
+    { name = "排序测试", sub = "变形" }, -- 不含数字 → 排最后
+    { name = "排序测试", sub = "等级 2" },
+  }
+  EVAL_SPELLBOOK_TEST_RESET()
+  eq(table.concat(EVAL_SPELLBOOK_RANKS("排序测试"), ","), "等级 1,等级 2,等级 3,等级 10,变形",
+     "①b★★★等级从低到高（数字序，不是字符串序）+ 无数字的排最后")
+  TEST.spellbook = sbSaved
+  EVAL_SPELLBOOK_TEST_RESET()
   TEST.inCombat = false EVAL_HELP_UPDATE_STATE()
   local savedP = EVAL_HELP_CONFIG.war.profiles
   EVAL_HELP_CONFIG.war.profiles = { { name = "T", enabled = true, skills = {} } }
@@ -7736,7 +7752,7 @@ do
   EVAL_HELP_CONFIG.war.profiles = { { name = "等级UI测试", enabled = true, skills = {} } }
   EVAL_HELP_CONFIG.war.activeProfile = 1
   EVAL_SPELLBOOK_TEST_RESET()
-  TEST.spellbook = { { name = "测试技能", sub = "等级 1" }, { name = "测试技能", sub = "等级 2" } }
+  TEST.spellbook = { { name = "测试技能", sub = "等级 2" }, { name = "测试技能", sub = "等级 1" } } -- 故意乱序：验下拉会排好
   EVAL_HELP_SE_OPEN(1, nil, "测试技能") -- 新增技能：默认没有等级
   local r0 = EVAL_TEST_SE_RANK()
   eq(r0.exists, true, "①等级元素真的建出来了")
@@ -7762,6 +7778,8 @@ do
   local visTxt = table.concat(EVAL_DD_TEST_VISIBLE_TEXTS(), "\n")
   eq(string.find(visTxt, EVAL_L("SE_RANK_ANY"), 1, true) ~= nil, true, "②★下拉第一项 = 不限（默认项）")
   eq(string.find(visTxt, "等级 2", 1, true) ~= nil, true, "②★★下拉里是**法术书**枚举出的等级")
+  local row110 = EVAL_DD_TEST_ROW(2)
+  eq(row110 and tostring(row110.text:GetText()), "等级 1", "②★★★下拉顺序 = 从低到高（法术书给的是「等级 2, 等级 1」乱序，这里必须是 等级 1 在前）")
   -- ④ 点真实的行 → 落值 + 文案变等级
   local idxRank2 = nil
   for i = 1, 4 do
