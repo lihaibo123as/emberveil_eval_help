@@ -8469,4 +8469,43 @@ do
   print("  图标语义 + 过滤：语义名/多标签（爪子）· 按名称/标签/路径/大小写搜 · 与分组叠加 · 单一入口不递归 · 空匹配如实点名")
 end
 
+-- 118) ★★★1.73.9 工具箱滚动控件：挪到**底部行**、与 [关闭] 同行对齐
+--   用户原话（截图圈出右上 ▲ 与列表下方 ▼+计数）：
+--   「工具箱滚动样式参考图标库那边的滚动方式,然后放置在底部和关闭同行.右对齐关闭旁边」
+--   判据全是**真实控件几何 × 生产的关闭几何**（不写死坐标）。
+do
+  local savedTab118 = EVAL_HELP_CFG_TAB()
+  EVAL_HELP_CFG_SETTAB(3) -- 工具箱 Tab（底部行控件在该 Tab 的**显式显隐清单**里，不切过来就是 Hide）
+  local tbs = EVAL_TB_TEST_SCROLL()
+  eq(type(tbs) == "table" and tbs.up ~= nil and tbs.dn ~= nil, true, "①前置：拿到工具箱滚动控件的真实几何")
+  local lay118 = EVAL_TEST_CFG_LAYOUT()
+  eq(tbs.midY, lay118.closeMidY, "①★★★滚动按钮取自**生产的底部行中线**（== [关闭] 的中线）")
+  local function midOf118(r) if r and type(r.y) == "number" and type(r.h) == "number" then return r.y - r.h / 2 end return nil end
+  eq(math.abs((midOf118(tbs.up) or 999) - tbs.midY) <= 1, true,
+     "①★★[上翻] 与 [关闭]**中线对齐**（实测 " .. tostring(midOf118(tbs.up)) .. " vs " .. tostring(tbs.midY) .. "）")
+  eq(math.abs((midOf118(tbs.dn) or 999) - tbs.midY) <= 1, true, "①★★[下翻] 同样与 [关闭] 中线对齐")
+  eq(tbs.dn.x + tbs.dn.w <= tbs.closeLeft - 4, true,
+     "①★★★按钮组**右对齐、停在 [关闭] 左边**（右端 " .. tostring(tbs.dn.x + tbs.dn.w) .. " < 关闭左边缘 " .. tostring(tbs.closeLeft) .. "）")
+  eq(tbs.up.x + tbs.up.w <= tbs.dn.x - 1, true, "①★两个滚动按钮之间不重叠")
+  eq(tbs.indicator ~= nil and tbs.indicator.x + tbs.indicator.w <= tbs.up.x - 2, true,
+     "①★★★计数文字与按钮组不重叠（文字右端 " .. tostring(tbs.indicator and (tbs.indicator.x + tbs.indicator.w)) ..
+     " < 按钮左端 " .. tostring(tbs.up.x) .. "）")
+  eq(tbs.indicator ~= nil and tbs.indicator.y < lay118.closeMidY + 40, true,
+     "①★★★计数文字在**底部行**（实测 y=" .. tostring(tbs.indicator and tbs.indicator.y) .. "，关闭中线 " .. tostring(lay118.closeMidY) .. "）")
+  -- ② 样式：不再是 ▲/▼ 字形按钮，改成图标库同款的**文字按钮**（文案走语言包）
+  eq(tbs.up.text ~= "▲" and tbs.dn.text ~= "▼", true,
+     "②★★★不再是 ▲/▼ 字形（实测「" .. tostring(tbs.up.text) .. "」「" .. tostring(tbs.dn.text) .. "」）")
+  eq(tbs.up.text == EVAL_L("TB_UP") and tbs.dn.text == EVAL_L("TB_DN"), true,
+     "②★★文案走语言包（TB_UP/TB_DN，三语言齐全）")
+  -- ③ 滚动真的还能用（点**真实 OnClick**：下翻一次 → off 不回退；上翻一次 → off 不前进）
+  local off0 = EVAL_TB_TEST_OFF()
+  eq(EVAL_TB_TEST_SCROLL_CLICK("dn"), true, "③前置：[下翻] 有真实 OnClick 且点得动")
+  local off1 = EVAL_TB_TEST_OFF()
+  eq(off1 >= off0, true, "③★★点 [下翻] 后列表位移不倒退（" .. tostring(off0) .. " → " .. tostring(off1) .. "）")
+  eq(EVAL_TB_TEST_SCROLL_CLICK("up"), true, "③前置：[上翻] 有真实 OnClick 且点得动")
+  eq(EVAL_TB_TEST_OFF() <= off1, true, "③★★点 [上翻] 后不回退（" .. tostring(off1) .. " → " .. tostring(EVAL_TB_TEST_OFF()) .. "）")
+  EVAL_HELP_CFG_SETTAB(savedTab118) -- 还原 Tab（跨用例状态残留是本项目老坑）
+  print("  工具箱滚动：挪到底部行、与 [关闭] 中线对齐、右对齐停在关闭旁边（文字按钮，不再是 ▲/▼）")
+end
+
 print("ALL TESTS PASS")

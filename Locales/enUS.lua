@@ -181,6 +181,7 @@ TB_CHANJOIN_TIP = "Hides \"X joined / left channel\" notices. Channel chat itsel
   TB_HOLD_STOP = "Quest handover paused (key held), %d queued action(s) cancelled",
   TB_ADD = "Add",
   TB_CLEAR = "Clear",
+  TB_UP = "Up", TB_DN = "Down", -- 1.73.9 toolbox scroll buttons (bottom row)
   TB_BUY_ASK = "Add buy item (format: name,count)",
 TB_BUY_BAGFULL = "Bags are full: auto-buy stopped",
 TB_BUY_CAP = "Auto-buy stopped: %d items bought this visit (session cap)",

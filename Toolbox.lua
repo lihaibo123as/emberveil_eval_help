@@ -1062,17 +1062,36 @@ function EVAL_TB_BUILD(root, page, refreshes)
     TB.rows[i] = row
   end
 
-  -- 滚动：[▲][▼] + 滚轮（滚轮挂配置窗 root，仅 Tab3 响应）
-  TB.scrollUp = tbBtn(root, RW - 14, -50, 16, "▲", function()
+  -- ★★★1.73.9 用户（截图圈出右侧的 ▲ 与底部 ▼+计数）：
+  --   「工具箱滚动样式参考图标库那边的滚动方式,然后放置在底部和关闭同行.右对齐关闭旁边」
+  --   → 撤掉右上角的 ▲ 与列表下方的 ▼，改成**底部一行**（图标库同款）：
+  --     [计数文字 ……]              [上翻][下翻]  [关闭]
+  --     两个文字按钮右端停在 [关闭] 左边、与 [关闭]**中线对齐**；计数文字挪到同一行左侧。
+  --   ★几何从 EvalHelp 的**生产读值口** EVAL_HELP_CFG_BOTTOM() 取（CLOSE_MIDY / CLOSE_LEFT 的单一来源）；
+  --     拿不到就按关闭按钮的公式回退（不写死坐标、也不崩）。滚轮那段保持原样（挂 root、仅 Tab3 响应）。
+  local TB_TAIL_GAP, TB_BTN_W, TB_BTN_GAP, TB_STATUS_GAP = 10, 52, 4, 8
+  local BOT = (type(EVAL_HELP_CFG_BOTTOM) == "function") and EVAL_HELP_CFG_BOTTOM() or nil
+  local okh, hWin = pcall(root.GetHeight, root)
+  if type(hWin) ~= "number" or hWin <= 0 then hWin = 460 end
+  local botMidY = (BOT and tonumber(BOT.midY)) or -(hWin - 10 - 11) -- 10=底边距 11=关闭高/2
+  local closeLeft = (BOT and tonumber(BOT.closeLeft)) or ((root.GetWidth and root:GetWidth() or 660) - 12 - 64)
+  TB.botMidY, TB.closeLeft = botMidY, closeLeft
+  local bx = closeLeft - TB_TAIL_GAP - (TB_BTN_W * 2 + TB_BTN_GAP) -- 按钮组左端（右端 = closeLeft - TB_TAIL_GAP）
+  local btnTop = botMidY + 7.5 -- tbBtn 高 15 → 中线对齐关闭的中线
+  TB.scrollUp = tbBtn(root, bx, btnTop, TB_BTN_W, L("TB_UP"), function()
     TB.off = math.max(0, TB.off - 1)
     EVAL_TB_REFRESH()
   end, widgets)
-  TB.scrollDn = tbBtn(root, RW - 14, -56 - (TB.ROWS - 1) * ROWH - 20, 16, "▼", function()
+  TB.scrollDn = tbBtn(root, bx + TB_BTN_W + TB_BTN_GAP, btnTop, TB_BTN_W, L("TB_DN"), function()
     TB.off = TB.off + 1
     EVAL_TB_REFRESH()
   end, widgets)
-  local ind = tbText(root, 9, 0.65, 0.62, 0.50)
-  ind:SetPoint("TOPRIGHT", root, "TOPRIGHT", -20, -56 - TB.ROWS * ROWH - 8)
+  local ind = tbText(root, 10, 0.65, 0.62, 0.50)
+  ind:SetPoint("TOPLEFT", root, "TOPLEFT", LX, botMidY + 5)
+  local indW = bx - TB_STATUS_GAP - LX
+  if indW < 120 then indW = 120 end
+  pcall(ind.SetWidth, ind, indW)
+  pcall(ind.SetJustifyH, ind, "LEFT")
   TB.indicator = ind
   table.insert(widgets, ind)
   pcall(root.EnableMouseWheel, root, true)
@@ -1336,6 +1355,46 @@ function EVAL_TEST_BUY_UI_OFF() buyUI.off = buyUI.off end
 --   （本轮就在这里连着栽了两次）。用完即还，是本项目反复强调的纪律。
 --   ★必须物理放在文件**末尾**：这些 local 的声明点分散在全文（tbMerchantLast 在 264、tbQScanDue 在 412…），
 --     写在使用点之前会被 DECL ORDER CHECK 当场抓住（本轮实测：4 条 FAIL）。
+-- ★★★1.73.9 断言入口：工具箱**滚动控件**（底部行）的真实几何
+--   判据 = 与 [关闭] 中线对齐、按钮组停在关闭左边、计数文字与按钮组不重叠、且整行在列表下面。
+function EVAL_TB_TEST_SCROLL()
+  local function num(f, o) local ok, v = pcall(f, o) return (ok and type(v) == "number") and v or nil end
+  local function txt(o)
+    if not o or type(o.GetText) ~= "function" then return nil end
+    local ok, v = pcall(o.GetText, o)
+    return ok and tostring(v or "") or nil
+  end
+  local function shown(o)
+    if not o then return false end
+    local ok, v = pcall(o.IsShown, o)
+    return (ok and v) and true or false
+  end
+  local function frame(o)
+    if not o then return nil end
+    return { x = num(o.GetLeft, o), y = num(o.GetTop, o), w = num(o.GetWidth, o), h = num(o.GetHeight, o), shown = shown(o) }
+  end
+  local up = TB.scrollUp and frame(TB.scrollUp.btn) or nil
+  local dn = TB.scrollDn and frame(TB.scrollDn.btn) or nil
+  if up then up.text = txt(TB.scrollUp.text) end
+  if dn then dn.text = txt(TB.scrollDn.text) end
+  local ind = nil
+  if TB.indicator then
+    ind = { x = num(TB.indicator.GetLeft, TB.indicator), y = num(TB.indicator.GetTop, TB.indicator),
+            w = num(TB.indicator.GetWidth, TB.indicator), text = txt(TB.indicator), shown = shown(TB.indicator) }
+  end
+  return { midY = TB.botMidY, closeLeft = TB.closeLeft, up = up, dn = dn, indicator = ind,
+           firstRowY = (TB.rows[1] and num(TB.rows[1].chk.GetTop, TB.rows[1].chk)) or nil }
+end
+function EVAL_TB_TEST_OFF() return TB.off end
+-- 点滚动按钮走**真实 OnClick**（不在测试里复刻「off ± 1」的逻辑）
+function EVAL_TB_TEST_SCROLL_CLICK(which)
+  local b = (which == "up") and TB.scrollUp or TB.scrollDn
+  if not (b and b.btn and type(b.btn.GetScript) == "function") then return false end
+  local ok, fn = pcall(b.btn.GetScript, b.btn, "OnClick")
+  if not (ok and type(fn) == "function") then return false end
+  fn()
+  return true
+end
 function EVAL_TB_TEST_RESET_TIMERS()
   tbQLast, tbMerchantLast, tbDiscardLast = 0, 0, 0
   tbQScanLast, tbQScanDue = 0, 0
