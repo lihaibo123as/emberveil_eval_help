@@ -679,6 +679,7 @@ function EVAL_TB_CHATEVENT_INSTALL()
   -- ★★★写进去必须**读回来确认**（本客户端刚刚吃过这个亏：AddMessage 写成功但不生效）
   if _G.ChatFrame_OnEvent ~= wrapper then return false end
   TB.ceWrapper = wrapper
+  TB.ceOrig = orig -- ★1.73.20 取证口：留一份**原函数**（渲染试验要绕过我们自己这层，直接让客户端拼行）
   return true
 end
 function EVAL_TB_CHATEVENT_RETRY()
@@ -695,6 +696,56 @@ function EVAL_TB_CHATEVENT_RETRY()
     EVAL_LOGLINE("[聊天入口] ChatFrame_OnEvent 挂载成功并**读回确认**（AddMessage 那层在本客户端不生效）")
   end
   return ok
+end
+-- ★★★1.73.20 名字槽**渲染试验**（取证口；铁律 4：能做成命令就别让用户手工复现）
+--   【为什么需要它】用户真机截图逐字放大后定案：名字槽里**8 位色码也原样显示**
+--   （「[1. 综合] [|cfff58cbaIonol|r]: 1」—— 代码当普通文字画出来），
+--   而同一屏里我们自己经 AddMessage 打印的 8 位色码**是有色的** ⇒ 「名字槽不吃富文本」。
+--   于是最后一条路只剩「吞掉客户端那行、自己拼整行」，但那有代价（窗口分流 / 气泡 / 音效），
+--   **不能靠猜** ⇒ 先做这一屏试验：让客户端自己渲染四种名字写法，用户看一眼就知道哪条路通。
+function EVAL_TB_CHATCOLOR_NAMEPROBE()
+  local o = TB.ceOrig
+  if type(o) ~= "function" and type(EVAL_TB_CHATEVENT_INSTALL) == "function" then
+    pcall(EVAL_TB_CHATEVENT_INSTALL)
+    o = TB.ceOrig
+  end
+  local hex = "fff58cba"
+  if type(EVAL_TB_PAINT_CLASS_COLOR_OF) == "function" then hex = EVAL_TB_PAINT_CLASS_COLOR_OF("圣骑士") end
+  local col = "|c" .. hex
+  say("— 名字槽渲染试验（★每行下面那行是**客户端自己拼**的；看哪一行名字**有色 / 可点**）—")
+  local tests = {
+    { "① 8 位色码（对照）", col .. "Ionol|r" },
+    { "② 链接形态 |Hplayer:", "|Hplayer:Ionol|h[Ionol]|h" },
+    { "③ 链接 + 内层色码", "|Hplayer:Ionol|h[" .. col .. "Ionol|r]|h" },
+    { "④ 纯名字（对照）", "Ionol" },
+    { "⑤ 转义测试 A||B", "A||B" },
+  }
+  local okn = (type(o) == "function")
+  if okn then
+    for i = 1, table.getn(tests) do
+      say("  试验 " .. tests[i][1] .. "：")
+      arg1, arg2 = "色测正文", tests[i][2]
+      pcall(o, "CHAT_MSG_SAY")
+      arg1, arg2 = nil, nil
+    end
+  else
+    say("  （原函数拿不到 → 先 /eh go 聊天 装，再重跑 色测）")
+  end
+  local function g(k)
+    local v = _G[k]
+    if v == nil then return "nil" end
+    return tostring(v)
+  end
+  say("客户端聊天格式串：CHAT_SAY_GET=" .. g("CHAT_SAY_GET") .. " ｜ CHAT_YELL_GET=" .. g("CHAT_YELL_GET") ..
+      " ｜ CHAT_GUILD_GET=" .. g("CHAT_GUILD_GET") .. " ｜ CHAT_CHANNEL_GET=" .. g("CHAT_CHANNEL_GET"))
+  -- ③ 「吞掉客户端那行、自己拼整行」的样子（名字才能带色；链接也由我们给 → 照样可点）
+  local link = col .. "|Hplayer:Ionol|h[Ionol]|h|r"
+  say("— 若走「吞行 + 自己拼」方案，聊天里会长这样 —")
+  say("[公会] [" .. link .. "]: 色测正文")
+  say("[" .. link .. "] 说: 色测正文")
+  say("[1. 综合] [" .. link .. "]: 色测正文")
+  say("★代价：**分流**（哪类消息进哪个聊天窗）、说/喊**气泡**、部分音效由客户端管 → 自己拼就没有了")
+  return okn
 end
 function EVAL_TB_CHATEVENT_STATE()
   return { seen = TB.ceSeen or 0, filtered = TB.ceFiltered or 0, painted = TB.cePainted or 0,

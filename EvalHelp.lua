@@ -7346,6 +7346,17 @@ if type(SlashCmdList) == "table" then
         end
         say("提示：把聊天框里**真实的一行**整行贴过来试试，例如 /eh go 聊天 试 [名字]: 你好")
       end
+      -- ★★★1.73.20 「色测」= 名字槽渲染试验：用户真机截图逐字放大定案「8 位色码在名字槽里也原样显示」
+      --   而同一屏里经 AddMessage 打印的 8 位色码是有色的 ⇒ 名字槽不吃富文本。
+      --   最后一条路 = 吞掉客户端那行、自己拼整行（代价：窗口分流/气泡/音效）→ **先取证再定方案**。
+      if string.find(sarg, "^色测") == 1 then
+        if type(EVAL_TB_CHATCOLOR_NAMEPROBE) == "function" then
+          pcall(EVAL_TB_CHATCOLOR_NAMEPROBE)
+        else
+          say("名字槽渲染试验：本版本没有（EVAL_TB_CHATCOLOR_NAMEPROBE 不存在）")
+        end
+        say("提示：把这一屏发我 —— ①~⑤ 里哪一行名字**有色/可点**，以及「自己拼」那三行你能不能接受")
+      end
       if type(EVAL_TB_CHATCOLOR_STATE) ~= "function" then
         say("聊天名字着色：本版本没有这个功能（EVAL_TB_CHATCOLOR_STATE 不存在）")
       else

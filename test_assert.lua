@@ -9545,4 +9545,48 @@ do
   EVAL_HELP_CONFIG.tb = savedTb129
 end
 
+-- 129c) ★★★1.73.20 名字槽**渲染试验**（取证口）：用户真机截图定案「8 位色码在名字槽里也原样显示」，
+--   而同一屏里经 AddMessage 打印的 8 位色码是有色的 ⇒ 名字槽不吃富文本 → 最后一条路 = 吞行 + 自己拼。
+--   判据：① 试验**真的让客户端自己渲染了 5 种名字写法**（走原函数，不是我们复刻）；
+--         ② 候选里既有「8 位色码」也有「|Hplayer: 链接形态」（这是唯一可能不必吞行的路）；
+--         ③ 「自己拼」的三行示例里名字是**8 位色码 + 可点链接**；④ 如实写出吞行的代价。
+do
+  local savedTb129c = EVAL_HELP_CONFIG.tb
+  EVAL_HELP_CONFIG.tb = { chatColor = true }
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  EVAL_TB_NAMECLASS_PUT("Ionol", "圣骑士")
+  eq(type(EVAL_TB_CHATEVENT_INSTALL) == "function" and EVAL_TB_CHATEVENT_INSTALL(), true, "①★入口在位（试验要拿原函数）")
+  eq(type(EVAL_TB_CHATCOLOR_NAMEPROBE) == "function", true, "①★试验函数存在（没有 = 取证口没做出来）")
+  TEST.ceCalls, TEST.ceSeen = 0, {}
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 聊天 色测")
+  eq(TEST.ceCalls, 5, "①★★★五种名字写法**都**让客户端自己渲染了一行（实际 " .. tostring(TEST.ceCalls) .. "）")
+  local linkSeen, codeSeen = false, false
+  for i = 1, table.getn(TEST.ceSeen) do
+    local a2 = tostring(TEST.ceSeen[i].arg2 or "")
+    if string.find(a2, "|Hplayer:", 1, true) ~= nil then linkSeen = true end
+    if string.find(a2, "^|c%x%x%x%x%x%x%x%x", 1) ~= nil then codeSeen = true end
+  end
+  eq(codeSeen, true, "②★试验里含「8 位色码」的候选（对照用：客户端认不认看这里）")
+  eq(linkSeen, true, "②★★试验里含「|Hplayer: 链接形态」候选（唯一可能不必吞行的路）")
+  local c129c = tostring(TEST.chat or "")
+  eq(string.find(c129c, "名字槽渲染试验", 1, true) ~= nil, true, "③★屏上有试验标题")
+  eq(string.find(c129c, "链接 + 内层色码", 1, true) ~= nil, true, "③★四个候选标签都打出来了")
+  eq(string.find(c129c, "CHAT_SAY_GET", 1, true) ~= nil, true, "③★打印客户端聊天格式串（nil = 本客户端没给，只能自己拼）")
+  eq(string.find(c129c, "|Hplayer:Ionol|h[Ionol]|h", 1, true) ~= nil, true,
+     "③★★「自己拼」的示例里带**可点链接**（吞行方案要保住点名字密语）")
+  --  ★三种形态**逐条**钉住：只写「含链接」的话，删掉其中一行照样绿（M186 实测 SURVIVED —— 弱判据当场补强）
+  eq(string.find(c129c, "[公会] [", 1, true) ~= nil, true, "③b★示例含公会形态（[公会] [名]: 正文）")
+  eq(string.find(c129c, "] 说: 色测正文", 1, true) ~= nil, true, "③b★示例含「说」形态（[名] 说: 正文）")
+  eq(string.find(c129c, "[1. 综合] [", 1, true) ~= nil, true, "③b★示例含频道形态（[频道名] [名]: 正文）")
+  eq(string.find(c129c, "分流", 1, true) ~= nil, true, "④★★如实写出吞行的代价（不是只说好处）")
+  --  ★注意：不能直接抓第一个「|c%x+」——EVAL_SAY 的前缀 |cff66ccff 后面紧跟 "EVAL_HELP" 里的 **E 是 hex**
+  --     → 贪婪匹配会多吞一位（实测 got=11）。要对准**紧贴在链接前**的那个色码。
+  eq(string.len(string.match(c129c, "(|c%x+)|Hplayer:Ionol") or ""), 10, "④★示例里链接前的色码是 8 位 aarrggbb")
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  arg1, arg2 = nil, nil
+  EVAL_HELP_CONFIG.tb = savedTb129c
+  print("  名字槽渲染试验：5 种写法让客户端自己渲染 · 含链接形态候选 · 自己拼的示例带可点链接 · 如实写代价")
+end
+
 print("ALL TESTS PASS")
