@@ -7685,4 +7685,27 @@ do
   print("  指定等级：法术书枚举等级 + CastSpellByName 走 RunScript + 不存在则如实失败 + 默认无等级走老路")
 end
 
+-- 109) ★★★1.72.4 指定等级的**文本往返**（导出 → 导入必须逐字保留等级；分享方案就靠这条通道）
+do
+  local prof = {
+    name = "等级往返测试",
+    skills = {
+      { skill = "火球术", enabled = true, rank = "等级 3", groups = EVAL_PARSE_CONDS("怒气>30") },
+      { skill = "冰霜新星", enabled = false, groups = EVAL_PARSE_CONDS("") },
+    },
+  }
+  local txt = EVAL_PROFILE_TO_TEXT(prof)
+  eq(string.find(txt, "- 火球术(等级 3) | 怒气>30", 1, true) ~= nil, true,
+     "①导出形态 = 技能名(等级 3) | 条件（与官方 CastSpellByName 语法同形）：" .. tostring(txt))
+  local back = EVAL_PROFILE_FROM_TEXT(txt)
+  eq(back ~= nil, true, "②导入成功")
+  eq(back.skills[1].skill, "火球术", "②技能名拆干净（括号不留在名字里）")
+  eq(back.skills[1].rank, "等级 3", "★★★等级逐字往返（not lost）")
+  eq(back.skills[2].rank, nil, "②没写等级的行不带 rank")
+  eq(back.skills[2].enabled, false, "②停用标记与等级共存")
+  local back2 = EVAL_PROFILE_FROM_TEXT("# 方案: 老文本\n- 火球术 | 怒气>30")
+  eq(back2.skills[1].rank, nil, "③反向哨兵：无括号的老文本导入后 rank 仍为 nil（老行为一字不变）")
+  print("  指定等级文本往返：导出 技能名(等级 3)、导入逐字还原、无括号老文本行为不变")
+end
+
 print("ALL TESTS PASS")

@@ -284,6 +284,8 @@ PM_HINT = "ЛКМ по профилю = активировать; ПКМ = эт�
   SE_WHEN = "Если",
   SE_TYPE_PH = "Тип",
   SE_YES = "Да",
+  SE_RANK_H = "Ранг",
+  SE_RANK_ANY = "Любой",
   SE_NO = "Нет",
   SE_STK = "Ст.",
   SE_STK_UNLIM = "Любые стаки",

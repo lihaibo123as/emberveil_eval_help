@@ -4293,6 +4293,7 @@ function EVAL_HELP_SE_REFRESH()
     uiSolid(seUI.skillIcon, 0.25, 0.25, 0.25, 1)
   end
   seUI.skillName:SetText(tostring(ed.skill))
+  if seUI.rankName then seUI.rankName:SetText(ed.rank or L("SE_RANK_ANY")) end
   if seUI.catName then -- 分类按钮文字 = 当前技能所属类（1.32.3）
     local cl = { L("SK_CAT_1"), L("SK_CAT_2"), L("SK_CAT_3"), L("SK_CAT_4"), L("SK_CAT_5") }
     local ci = 2
@@ -4595,6 +4596,7 @@ local function SE_BUILD()
       return
     end
     seUI.ed.skill = string.match(v, "^(物品[:：].-)×%d+$") or v
+    seUI.ed.rank = nil -- ★1.72.4 换技能必须清空旧等级（那个等级对新技能无效，留着只会如实失败）
     EVAL_HELP_SE_REFRESH()
   end
   -- 分类下拉（一级）
@@ -4646,6 +4648,25 @@ local function SE_BUILD()
   pcall(skName.SetWidth, skName, 96) -- 长名（物品:xxx）裁剪防溢出到启用框
   pcall(skName.SetNonSpaceWrap, skName, false)
   seUI.skillName = skName
+  -- ★1.72.4 「释放指定等级」下拉（用户要求：技能右侧加一个「不限 / 等级1 / 等级2 …」）
+  --   选项来自**法术书**（GetSpellName 第二返回），保证括号内与 subtext 逐字相符；
+  --   默认「不限」= 老行为（要求技能在动作条上、走 UseAction）。
+  local rkCap = uiText(root, 9, 0.95, 0.82, 0.35)
+  rkCap:SetPoint("TOPLEFT", root, "TOPLEFT", 278, -25)
+  rkCap:SetText(L("SE_RANK_H"))
+  local rkW = seBtn(root, 300, -24, 92, 16, L("SE_RANK_ANY"), function()
+    if not seUI.ed then return end
+    local opts = { L("SE_RANK_ANY") }
+    local ranks = EVAL_SPELLBOOK_RANKS(seUI.ed.skill)
+    for i = 1, table.getn(ranks) do opts[i + 1] = ranks[i] end
+    EVAL_DD_OPEN(seUI.rankBtn, opts, function(pi)
+      if not seUI.ed then return end
+      seUI.ed.rank = (pi == 1) and nil or ranks[pi - 1]
+      EVAL_HELP_SE_REFRESH()
+    end)
+  end)
+  seUI.rankBtn = rkW.btn
+  seUI.rankName = rkW.text
   local enChk = CreateFrame("Button", nil, root)
   enChk:SetWidth(14) enChk:SetHeight(14)
   enChk:SetPoint("TOPLEFT", root, "TOPLEFT", 216, -25)
@@ -5630,7 +5651,7 @@ function EVAL_PROFILE_TO_TEXT(idx)
   table.insert(lines, "")
   for _, r in ipairs(p.skills or {}) do
     local dis = (r.enabled == false) and "!" or ""
-    table.insert(lines, "- " .. dis .. tostring(r.skill) .. " | " .. EVAL_GROUP_STR(r.groups))
+    table.insert(lines, "- " .. dis .. tostring(r.skill) .. (r.rank and ("(" .. tostring(r.rank) .. ")") or "") .. " | " .. EVAL_GROUP_STR(r.groups)) -- ★1.72.4 等级与官方语法同形
   end
   return table.concat(lines, "\n")
 end
@@ -5661,8 +5682,14 @@ function EVAL_PROFILE_FROM_TEXT(text)
         if string.sub(sn, 1, 1) == "!" then enabled = false sn = condTrim(string.sub(sn, 2)) end
         -- 技能名合理性守卫：超长按说明文字处理。1.56.1 上限 24→48 字节（16 汉字）——
         -- 带前缀技能名更长：选取目标:指定名称:嗜血者=39B、物品:弱效巨魔之血药水=36B，旧 24B 上限会把它们静默丢行
+        -- ★1.72.4 「技能名(等级 3)」→ 拆出等级（与官方 CastSpellByName 语法同形；括号内必须与 subtext 逐字相符）
+        local rank2 = nil
+        do
+          local base2, rk2 = string.match(sn, "^(.-)%s*%(([^()]+)%)$")
+          if base2 and base2 ~= "" and rk2 and rk2 ~= "" then sn, rank2 = condTrim(base2), condTrim(rk2) end
+        end
         if sn ~= "" and string.len(sn) <= 48 then
-          table.insert(skills, { skill = sn, enabled = enabled, groups = EVAL_PARSE_CONDS(conds or ""), why = sn })
+          table.insert(skills, { skill = sn, enabled = enabled, groups = EVAL_PARSE_CONDS(conds or ""), why = sn, rank = rank2 })
         end
       end
     end
