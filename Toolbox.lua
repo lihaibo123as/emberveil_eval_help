@@ -3201,21 +3201,21 @@ local function buyUIRefresh()
         EVAL_TN_OPEN(L("TB_BUY_ASK_NAME"), tostring(e.name or ""), function(txt)
           txt = string.gsub(txt or "", "^%s*(.-)%s*$", "%1")
           if txt ~= "" then e.name = txt buyUIRefresh() EVAL_TB_REFRESH() end
-        end)
+        end, L("TN_LABEL_NAME"))
       end)
       r.nBtn:SetScript("OnClick", function()
         if type(EVAL_TN_OPEN) ~= "function" then return end
         EVAL_TN_OPEN(L("TB_BUY_ASK_N"), tostring(e.n or 1), function(txt)
           local v = tonumber(txt)
           if v and v >= 1 then e.n = math.floor(v) buyUIRefresh() EVAL_TB_REFRESH() end
-        end)
+        end, L("TN_LABEL_N"))
       end)
       r.pBtn:SetScript("OnClick", function()
         if type(EVAL_TN_OPEN) ~= "function" then return end
         EVAL_TN_OPEN(L("TB_BUY_ASK_PER"), tostring(e.per or 1), function(txt)
           local v = tonumber(txt)
           if v and v >= 1 then e.per = math.floor(v) buyUIRefresh() EVAL_TB_REFRESH() end
-        end)
+        end, L("TN_LABEL_PER"))
       end)
       r.del:SetScript("OnClick", function()
         local l2 = buyUIList() or {}

@@ -1989,12 +1989,19 @@ local tnUI = {}
 
 function EVAL_TN_BUILD()
   if tnUI.root then return end
-  local W, H = 300, 150
+  -- ★★★1.73.32 用户报「添加物品弹窗被遮盖 / 无法拖拽」——【审计结论】
+  --   ① 层级：本弹窗是 130，而工具箱里从它**打开**的「自动购买设置」弹窗是 200（1.73.31 刚抬上去）
+  --      → 子弹窗被父弹窗压住，**点击与拖动都被父弹窗吃掉**（用户看到的正是这个）；
+  --   ② 宽度：原来固定 300，标题长一点就顶满、输入框只有 220；
+  --   ③ 内部布局：两个按钮的 x 是**写死的**（70/160）→ 窗口一加宽就不居中，看着"乱"；
+  --      标签还写死成「目标名称：」（那是「指定目标」用法的文案，物品/数量/每次都跟着错）。
+  --   ⇒ 层级改成 **220**（高于工具箱各弹窗 200、低于全局下拉 250）；宽度 400；按钮按宽度**居中**；标签由调用方给。
+  local W, H = 400, 150
   local root = CreateFrame("Frame", "EVAL_HELP_TN", UIParent)
   root:SetWidth(W) root:SetHeight(H)
   root:SetPoint("CENTER", UIParent, "CENTER", 0, 130)
   pcall(root.SetFrameStrata, root, "DIALOG")
-  pcall(root.SetFrameLevel, root, 130) -- 高于技能编辑窗(100)
+  pcall(root.SetFrameLevel, root, 220) -- ★高于工具箱弹窗(200)，低于全局下拉(250)
   pcall(root.SetMovable, root, true)
   pcall(root.EnableMouse, root, true)
   if uiOffscreen(root) then
@@ -2022,7 +2029,7 @@ function EVAL_TN_BUILD()
   local titleBar = CreateFrame("Button", nil, root)
   titleBar:SetWidth(W - 4) titleBar:SetHeight(22)
   titleBar:SetPoint("TOP", root, "TOP", 0, -2)
-  pcall(titleBar.SetFrameLevel, titleBar, 131)
+  pcall(titleBar.SetFrameLevel, titleBar, 221)
   pcall(titleBar.EnableMouse, titleBar, true)
   pcall(titleBar.RegisterForClicks, titleBar, "LeftButtonUp")
   pcall(titleBar.RegisterForDrag, titleBar, "LeftButton")
@@ -2032,7 +2039,11 @@ function EVAL_TN_BUILD()
   tbBg:SetPoint("BOTTOMRIGHT", titleBar, "BOTTOMRIGHT", 0, 0)
   local title = uiText(titleBar, 10, 0.95, 0.82, 0.35)
   title:SetPoint("CENTER", titleBar, "CENTER", 0, 0)
+  pcall(title.SetWidth, title, W - 20)
+  pcall(title.SetJustifyH, title, "CENTER")
   tnUI.titleText = title
+  tnUI.titleBar = titleBar -- ★1.73.32 读值口要读它的拖动注册/层级
+  tnUI.btns = {}
   titleBar:SetScript("OnDragStart", function()
     pcall(root.SetMovable, root, true)
     pcall(root.StartMoving, root)
@@ -2043,13 +2054,15 @@ function EVAL_TN_BUILD()
 
   local lab = uiText(root, 10, 0.85, 0.85, 0.85)
   lab:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -36)
-  lab:SetText("目标名称：")
+  pcall(lab.SetWidth, lab, W - 32)
+  lab:SetText(L("TN_LABEL") .. "：") -- ★1.73.32 由 EVAL_TN_OPEN 的第 4 参覆盖（原来是写死的「目标名称：」）
+  tnUI.label = lab
 
   local okEb, eb = pcall(CreateFrame, "EditBox", "EVAL_HELP_TN_EB", root)
   if okEb and eb then
     pcall(eb.SetAutoFocus, eb, false)
     pcall(eb.EnableMouse, eb, true)
-    eb:SetWidth(220) eb:SetHeight(18)
+    eb:SetWidth(W - 60) eb:SetHeight(18) -- ★1.73.32 跟着窗口宽度走（原来写死 220）
     eb:SetPoint("TOPLEFT", root, "TOPLEFT", 20, -54)
     local setF = false
     for _, fo in ipairs({ "GameFontHighlightSmall", "ChatFontNormal", "GameFontNormal" }) do
@@ -2102,9 +2115,13 @@ function EVAL_TN_BUILD()
     tnUI.eb:SetScript("OnEscapePressed", function() root:Hide() end)
   end
 
-  local function bBtn(x, label, fn)
+  -- ★1.73.32 按钮改为**按窗口宽度居中**（原来 x 写死 70/160 → 窗口一宽就偏在左边，看着乱）
+  local btnW, btnGap = 90, 20
+  local function bBtn(slot, label, fn)
+    local total = btnW * 2 + btnGap
+    local x = math.floor((W - total) / 2 + (slot - 1) * (btnW + btnGap))
     local b = CreateFrame("Button", nil, root)
-    b:SetWidth(80) b:SetHeight(22)
+    b:SetWidth(btnW) b:SetHeight(22)
     b:SetPoint("BOTTOMLEFT", root, "BOTTOMLEFT", x, 12)
     pcall(b.EnableMouse, b, true)
     pcall(b.RegisterForClicks, b, "LeftButtonUp")
@@ -2116,19 +2133,23 @@ function EVAL_TN_BUILD()
     bt:SetPoint("CENTER", b, "CENTER", 0, 0)
     bt:SetText(label)
     b:SetScript("OnClick", fn)
+    table.insert(tnUI.btns, b)
   end
-  bBtn(70, L("BTN_OK"), function() apply() end)
-  bBtn(160, L("BTN_CANCEL"), function() root:Hide() end)
+  bBtn(1, L("BTN_OK"), function() apply() end)
+  bBtn(2, L("BTN_CANCEL"), function() root:Hide() end)
+  tnUI.btnW, tnUI.btnGap, tnUI.W = btnW, btnGap, W
 
   root:Hide()
   root:SetScript("OnHide", function() tnUI.onOk = nil end)
   tnUI.root = root
 end
 
-function EVAL_TN_OPEN(title, cur, onOk)
+-- ★1.73.32 第 4 参 label = 输入框上方那行标签（不给就用通用「输入」；不同用法各说各的，别再一律写「目标名称：」）
+function EVAL_TN_OPEN(title, cur, onOk, label)
   EVAL_TN_BUILD()
   tnUI.onOk = onOk
-  if tnUI.titleText then tnUI.titleText:SetText(title or "输入名称") end
+  if tnUI.titleText then tnUI.titleText:SetText(title or L("TN_LABEL")) end
+  if tnUI.label then tnUI.label:SetText((label or L("TN_LABEL")) .. "：") end
   if tnUI.eb then
     pcall(tnUI.eb.SetText, tnUI.eb, cur or "")
     pcall(tnUI.eb.SetFocus, tnUI.eb)
@@ -2136,6 +2157,35 @@ function EVAL_TN_OPEN(title, cur, onOk)
   if tnUI.echo then tnUI.echo:SetText(cur or "") end
   tnUI.root:Show()
 end
+-- ★★★1.73.32 读值口：通用输入弹窗的**规程审计**（层级 / 拖动协议 / 宽度 / 内部布局 / 标签）
+function EVAL_TEST_TN_Z()
+  if not tnUI.root then return nil end
+  local function num(o, m)
+    if not o or type(o[m]) ~= "function" then return nil end
+    local ok, v = pcall(o[m], o)
+    return (ok and type(v) == "number") and v or nil
+  end
+  local function val(o, m)
+    if not o or type(o[m]) ~= "function" then return nil end
+    local ok, v = pcall(o[m], o)
+    if ok and v ~= nil then return v end
+    return nil
+  end
+  local out = { w = num(tnUI.root, "GetWidth"), h = num(tnUI.root, "GetHeight"),
+                level = num(tnUI.root, "GetFrameLevel"), movable = val(tnUI.root, "IsMovable"),
+                ebW = num(tnUI.eb, "GetWidth"), btns = {} }
+  out.titleLevel = num(tnUI.titleBar, "GetFrameLevel")
+  out.drag = val(tnUI.titleBar, "GetDragRegistered")
+  out.clicks = val(tnUI.titleBar, "GetClicksRegistered")
+  local okL, labT = pcall(tnUI.label.GetText, tnUI.label)
+  out.label = (okL and tostring(labT or "")) or ""
+  for i = 1, table.getn(tnUI.btns or {}) do
+    local b = tnUI.btns[i]
+    table.insert(out.btns, { x = num(b, "GetLeft"), w = num(b, "GetWidth"), y = num(b, "GetTop") })
+  end
+  return out
+end
+function EVAL_TEST_TN_CLOSE() if tnUI.root then pcall(tnUI.root.Hide, tnUI.root) end return true end
 -- ★1.71.3 断言入口：通用名称输入弹窗（跟随 / 物品 / 指定目标 都走它）。
 --   ★为什么要它：这些「点了弹框输入」的入口以前**没有任何观测口**——「点了没反应」在测试里完全看不见，
 --     而本轮「跟随:指定名字…」正是靠它落值（判据同「要验点了会弹，就必须点一下看结果」）。

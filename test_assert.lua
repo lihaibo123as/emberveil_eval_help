@@ -10104,4 +10104,36 @@ do
   print("  资源名：显示名跟着 UnitPowerType 实时变（法力/怒气/集中值/能量）· 方案行与导出同源 · 解析侧认全套写法")
 end
 
+
+-- 135) ★★★1.73.32 通用输入弹窗（EVAL_TN）**规程审计**（用户：「审计下…是否符合项目弹窗规程；
+--   要能拖拽（现在无法拖拽）+ 加宽尺寸 + 内部布局乱 + 添加物品弹窗被遮盖」）。
+--   审计结论：① 层级 130 < 工具箱弹窗 200 → **被父弹窗压住**（点击/拖动都被吃掉）= 用户看到的现象；
+--   ② 宽度固定 300、输入框固定 220；③ 两个按钮 x **写死 70/160** → 加宽后不居中；④ 标签写死「目标名称：」。
+--   判据（读**真实控件**）：层级在 200~250 之间 · 柄 level > 窗口 · SetMovable + RegisterForDrag(LeftButton)
+--   + RegisterForClicks(LeftButtonUp) · 宽度 ≥380 且输入框跟着宽度 · 按钮组**居中**且不出界 · 标签由调用方给。
+do
+  EVAL_TN_OPEN("甲", "", nil, EVAL_L("TN_LABEL_NAME"))
+  local z135 = EVAL_TEST_TN_Z()
+  eq(type(z135) == "table", true, "①前置：输入弹窗已建好")
+  eq(z135.level > 200, true, "①★★★层级高于工具箱弹窗 200（实际 " .. tostring(z135.level) .. "）—— 否则被压住、点不动也拖不动")
+  eq(z135.level < 250, true, "①★且低于全局下拉 250（不能盖住下拉）")
+  eq(z135.titleLevel > z135.level, true, "①★★拖动柄 level > 窗口 level（本项目 UI 配方第 1 条）")
+  eq(z135.movable, true, "②★★★窗口 SetMovable(true)")
+  eq(tostring(z135.drag or ""), "LeftButton", "②★★★拖动柄注册了 RegisterForDrag(LeftButton)（Frame 的 OnDragStart 不触发）")
+  eq(string.find(tostring(z135.clicks or ""), "LeftButtonUp", 1, true) ~= nil, true, "②★★注册了 RegisterForClicks(LeftButtonUp)")
+  eq(z135.w >= 380, true, "③★★★窗口加宽（实际 " .. tostring(z135.w) .. " ≥ 380）")
+  eq(type(z135.ebW) == "number" and z135.ebW >= z135.w - 80, true, "③★★输入框跟着窗口宽度走（" .. tostring(z135.ebW) .. "）")
+  eq(table.getn(z135.btns), 2, "③前置：两个按钮")
+  local b1, b2 = z135.btns[1], z135.btns[2]
+  eq(b1 and b2 and b2.x >= b1.x + b1.w, true, "③★两个按钮不重叠")
+  local mid135 = (b1.x + (b2.x + b2.w)) / 2
+  eq(math.abs(mid135 - z135.w / 2) <= 2, true, "③★★★按钮组**居中**（组中线 " .. tostring(mid135) ..
+     " ≈ 窗宽一半 " .. tostring(z135.w / 2) .. "）—— 写死 x 的老写法加宽后就偏了")
+  eq(b2.x + b2.w <= z135.w, true, "③★按钮不出界")
+  eq(z135.label, EVAL_L("TN_LABEL_NAME") .. "：", "④★★★标签由调用方给（实际 " .. tostring(z135.label) .. "）")
+  eq(string.find(tostring(z135.label), "目标名称", 1, true), nil, "④★★不再写死「目标名称：」（物品/数量/每次都跟着错）")
+  EVAL_TEST_TN_CLOSE()
+  print("  输入弹窗规程：层级 " .. tostring(z135.level) .. "（200~250）· 可拖柄(Button+LeftButton) · 宽 " ..
+        tostring(z135.w) .. " · 按钮居中 · 标签随调用方")
+end
 print("ALL TESTS PASS")

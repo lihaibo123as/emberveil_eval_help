@@ -108,6 +108,17 @@ local function newMock()
     --   SetFocus 是空操作、HasFocus 恒 nil → 「点击能否聚焦」在测试里**完全不可见**
     --   （本项目第 N 次「桩太宽松 → 真实事故测不出来」，见 CLAUDE.md 该主题的历次发作）。
     --   ★判据：**被测代码读的每一个状态，桩都必须能记住**。
+    -- ★1.73.32 桩保真：拖动协议要能读回来（「弹窗能不能拖」这类判据原来无从下手）——
+    --   真机语义：拖动柄必须是 Button（Frame 的 OnDragStart 不触发），且要 RegisterForDrag("LeftButton")
+    --   + RegisterForClicks("LeftButtonUp") + SetMovable(true) 才拖得动（本项目 UI 配方第 1 条）。
+    SetMovable = function(self, v) rawset(self, "__movable", v and true or false) end,
+    IsMovable = function(self) return rawget(self, "__movable") and true or false end,
+    RegisterForDrag = function(self, ...) rawset(self, "__drag", table.concat({ ... }, ",")) end,
+    GetDragRegistered = function(self) return rawget(self, "__drag") end,
+    RegisterForClicks = function(self, ...) rawset(self, "__clicks", table.concat({ ... }, ",")) end,
+    GetClicksRegistered = function(self) return rawget(self, "__clicks") end,
+    StartMoving = function(self) rawset(self, "__moving", true) end,
+    StopMovingOrSizing = function(self) rawset(self, "__moving", false) end,
     SetFocus = function() focused = true end,
     ClearFocus = function() focused = false end,
     HasFocus = function() return focused end,
