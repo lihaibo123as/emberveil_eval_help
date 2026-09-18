@@ -5304,10 +5304,50 @@ do
   local pos83 = EVAL_TEST_SHARE_BTN_POS()
   eq(pos83.W > 0 and pos83.w > 0 and pos83.x1 ~= nil and pos83.x2 ~= nil, true,
      "前置：拿到弹窗与两个按钮的真实几何（W=" .. tostring(pos83.W) .. "）")
-  local mid83 = (pos83.x1 + pos83.x2 + pos83.w) / 2
-  eq(mid83 == pos83.W / 2, true,
-     "★★★两个按钮整组以窗口中线对齐（mid=" .. tostring(mid83) .. " 中线=" .. tostring(pos83.W / 2) .. "）")
-  eq(pos83.x1 == 56 or pos83.x2 == 160, false, "★反向哨兵：不再是旧的左偏位置 56/160")
+  -- ★1.73.14 用户要求：「接收方案开关在分享方案位置也添加一个方便快速关闭，然后三个位置居中对齐」
+  --   → 判据从「两个按钮居中」升级成「**三段整组**居中 + 三段互不重叠」（相对量，不写死坐标）。
+  eq(pos83.sx ~= nil, true, "★★★弹窗底部多了一个「接收方案」勾选框（真实控件）")
+  eq(type(pos83.rowX0) == "number" and type(pos83.rowW) == "number" and type(pos83.chkW) == "number", true,
+     "★★★交出底部一行的**布局真值**（左起点 / 整行宽 / 勾选框段宽）")
+  -- ① 整组居中（用生产数字，不写死坐标）
+  -- 居中 = **左边距 == 右边距**（右边距是 窗口宽 − 左起点 − 整行宽；不要写成 W−rowW，那差一个左起点）
+  local rightPad83 = pos83.W - (pos83.rowX0 + pos83.rowW)
+  eq(math.abs(pos83.rowX0 - rightPad83) <= 1, true,
+     "★★★三段（勾选框 + [导入] + [忽略]）**整组**以窗口中线对齐（左边距 " .. tostring(pos83.rowX0) ..
+     " / 右边距 " .. tostring(rightPad83) .. "）")
+  -- ② 生产数字**真的落到了真实控件上**（否则「算得对但没摆对」照样过）
+  eq(pos83.x1, pos83.rowX0 + pos83.chkW + pos83.btnGap, true,
+     "★★★[导入] 的真实左边缘 = 左起点 + 勾选框段宽 + 缝（" .. tostring(pos83.x1) .. "）")
+  eq(pos83.x2, pos83.x1 + pos83.btnW + pos83.btnGap, true, "★★[忽略] 紧跟其后")
+  -- ③ 三段互不重叠（勾选框段右端 ≤ [导入] 左端，这是**算出来的**，不是碰巧）
+  eq(pos83.rowX0 + pos83.chkW <= pos83.x1, true, "★★★三段互不重叠（勾选框段右端 " ..
+     tostring(pos83.rowX0 + pos83.chkW) .. " ≤ [导入] 左端 " .. tostring(pos83.x1) .. "）")
+  eq(pos83.x1 + pos83.btnW <= pos83.x2, true, "★★两个按钮之间也不重叠")
+  eq(pos83.x2 + pos83.btnW <= pos83.W - pos83.rowX0 + 1, true, "★★整行没越出弹窗右边界")
+  eq(pos83.x1 == 56 or pos83.x2 == 160, false, "★反向哨兵：不再是旧的「只居中两个按钮」位置 56/160")
+  -- ⑥ 这个勾选框就是**配置窗那同一个开关**（同一份真值；翻它两边都变）
+  local savedRecv83 = EVAL_SHARE_RECV_ON()
+  local chk83, mark83 = EVAL_TEST_SHARE_RECV_CHK()
+  eq(chk83 ~= nil and mark83 ~= nil, true, "⑥★★交出真实勾选框与真实勾选块（断言读控件，不读自己拼的状态）")
+  eq(mark83:IsShown() == (savedRecv83 and true or false), true, "⑥★勾选态与开关当前值一致")
+  local fn83 = chk83 and chk83:GetScript("OnClick")
+  eq(type(fn83) == "function", true, "⑥★勾选框挂了真实 OnClick")
+  if type(fn83) == "function" then fn83() end
+  eq(EVAL_SHARE_RECV_ON() ~= savedRecv83, true, "⑥★★★点它真的翻转了**共用的那个开关**（EVAL_SHARE_RECV_ON 变了）")
+  eq(EVAL_HELP_CONFIG.share.recv == EVAL_SHARE_RECV_ON(), true, "⑥★★写的是同一份真值 cfg.share.recv（没有另存一份）")
+  eq(mark83:IsShown() == (EVAL_SHARE_RECV_ON() and true or false), true,
+     "⑥★★勾选块立刻跟着变（不用重开弹窗）：开关=" .. tostring(EVAL_SHARE_RECV_ON()) ..
+     " 勾选块=" .. tostring(mark83:IsShown()))
+  if type(fn83) == "function" then fn83() end -- 还原
+  eq(EVAL_SHARE_RECV_ON(), savedRecv83, "⑥前置还原：开关回到原值")
+  -- 反向：外部（配置窗）改了开关 → 弹窗刷新时勾选态要跟上（双入口一致性）
+  EVAL_HELP_CONFIG.share.recv = not savedRecv83
+  EVAL_SH_POPUP("测试", "# 方案: 图标测试", nil) -- ★走**真实弹出路径**（不是只调测试钩子）
+  eq(mark83:IsShown() == (EVAL_SHARE_RECV_ON() and true or false), true,
+     "⑥★★外部改了开关后，**再次弹出**即同步（两个入口一份真值）")
+  EVAL_HELP_CONFIG.share.recv = savedRecv83
+  EVAL_SH_POPUP("测试", "# 方案: 图标测试", nil)
+  eq(EVAL_SHARE_RECV_ON(), savedRecv83, "⑥收尾：开关还原（不污染后续用例）")
   eq(EVAL_TEST_SHARE_TITLE_ICON(), full83, "★标题图标仍是同一张（自包含路径）")
   EVAL_SHARE_RESET()
 end

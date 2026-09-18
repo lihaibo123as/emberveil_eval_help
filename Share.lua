@@ -500,12 +500,85 @@ local function shPopupBuild()
     --   （误抄 EvalHelp.lua 的 page.widgets 写法会直接报 nil —— 本轮已避免。）
     shp.detailLines[i] = fs
   end
-  -- ★1.71.3 用户要求「按钮位置居中对齐下」：两个按钮**整组以窗口中线对齐**。
-  --   算一遍：90 + 14 + 90 = 194 → 左起点 = floor((W-194)/2)（W=380 → 93，两个按钮 93/197）。
-  --   ★宽与间距是**单一来源**（BTN_W/BTN_GAP），按钮本体也用 BTN_W——两处各写一遍迟早漂移。
+  -- ★1.73.14 用户要求：「接收方案开关在分享方案位置也添加一个方便快速关闭，然后三个位置居中对齐」
+  --   【为什么加在弹窗里】收到别人分享时如果不想收，原来要：关弹窗 → 开配置窗 → 找到「接收方案」勾 → 取消（三步）；
+  --     这里多一个常驻勾选框，**当场就能关掉**。
+  --   ★★它读写的是**同一份真值**（EVAL_SHARE_RECV_ON / EVAL_SHARE_RECV_TOGGLE，与配置窗那个开关同一个），
+  --     绝不另存一份状态（本项目「一份真值」铁律）。
+  --   【布局】三段 = 「接收方案」勾选框 + [导入] + [忽略]，在弹窗宽度内**整体居中**（原来只有两个按钮居中）。
+  local CHK_BOX, CHK_LBL_GAP = 16, 6
+  local function shRecvLabelW(fs, label)
+    pcall(fs.SetText, fs, tostring(label))
+    if fs.GetStringWidth then
+      local okw, v = pcall(fs.GetStringWidth, fs)
+      if okw and type(v) == "number" and v > 0 then return v end
+    end
+    -- 兜底：只能按字符数估（★不能拿 string.len 当字符数：中文一字 3 字节）
+    local by = string.len(tostring(label))
+    return (((by >= 3) and math.floor(by / 3) or by)) * 13
+  end
+  -- 勾选框（复刻配置窗 cfgCheck 的金框/深底/亮块观感）；labelFS 由外面先建好（量宽后锚上来）
+  local function shRecvCheck(x, y, label, tip, labelFS)
+    local btn = CreateFrame("Button", nil, root)
+    btn:SetWidth(CHK_BOX) btn:SetHeight(CHK_BOX)
+    btn:SetPoint("BOTTOMLEFT", root, "BOTTOMLEFT", x, y)
+    pcall(btn.EnableMouse, btn, true)
+    pcall(btn.RegisterForClicks, btn, "LeftButtonUp")
+    local outer = btn:CreateTexture(nil, "BACKGROUND")
+    shSolid(outer, 0.85, 0.70, 0.20, 1)
+    outer:SetPoint("TOPLEFT", btn, "TOPLEFT", 0, 0)
+    outer:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", 0, 0)
+    local inner = btn:CreateTexture(nil, "ARTWORK")
+    shSolid(inner, 0.10, 0.09, 0.06, 1)
+    inner:SetPoint("TOPLEFT", btn, "TOPLEFT", 1, -1)
+    inner:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", -1, 1)
+    local mark = btn:CreateTexture(nil, "OVERLAY")
+    shSolid(mark, 0.95, 0.80, 0.25, 1)
+    mark:SetPoint("TOPLEFT", btn, "TOPLEFT", 3, -3)
+    mark:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", -3, 3)
+    if labelFS then pcall(labelFS.SetPoint, labelFS, "LEFT", btn, "RIGHT", CHK_LBL_GAP, 0) end
+    pcall(btn.SetScript, btn, "OnEnter", function()
+      if type(GameTooltip) == "nil" then return end
+      pcall(GameTooltip.SetOwner, GameTooltip, btn, "ANCHOR_RIGHT")
+      pcall(GameTooltip.AddLine, GameTooltip, tostring(label), 1, 0.82, 0.3)
+      pcall(GameTooltip.AddLine, GameTooltip, tostring(tip), 0.85, 0.85, 0.85, 1)
+      pcall(GameTooltip.Show, GameTooltip)
+    end)
+    pcall(btn.SetScript, btn, "OnLeave", function()
+      if type(GameTooltip) ~= "nil" then pcall(GameTooltip.Hide, GameTooltip) end
+    end)
+    local function refresh()
+      -- ★★★注意：**不能**写 `(type(f) == "function") and f() or true` ——
+      --   f() 返回 false 时整个表达式会被 or 兜成 true（Lua 的 and/or 链没有布尔语义）→
+      --   「关掉开关后勾选块仍然亮着」。本项目 1.70.46 在语言来源上踩过**一模一样的**写法
+      --   （`... and EVAL_RESOLVE_LANG() or "zhCN"` 恒等于 zhCN），这里是第二次：照旧分两步写。
+      local on = true
+      if type(EVAL_SHARE_RECV_ON) == "function" then on = EVAL_SHARE_RECV_ON() and true or false end
+      if on then pcall(mark.Show, mark) else pcall(mark.Hide, mark) end
+    end
+    pcall(btn.SetScript, btn, "OnClick", function()
+      if type(EVAL_SHARE_RECV_TOGGLE) == "function" then pcall(EVAL_SHARE_RECV_TOGGLE) end
+      refresh() -- 立刻反映（与配置窗那个开关是同一份真值，两边永远一致）
+    end)
+    refresh()
+    return btn, mark, refresh
+  end
+  -- ★1.71.3 用户要求「按钮位置居中对齐下」+ 1.73.14 **三段整组居中**（勾选框 + [导入] + [忽略]）
+  --   算一遍总宽再求左起点；宽度与间距是**单一来源**（CHK_*/BTN_*），三处各写一遍迟早漂移。
   local BTN_W, BTN_GAP = 90, 14
-  local btnX1 = math.floor((W - (BTN_W * 2 + BTN_GAP)) / 2)
+  local recvLbl = shText(root, 10, 0.92, 0.88, 0.80) -- ★真实标签（不再建「只为量宽」的幽灵控件：Hide 后仍可能被绘出）
+  local recvLblW = shRecvLabelW(recvLbl, L("SH_RECV_SW"))
+  local CHK_W = CHK_BOX + CHK_LBL_GAP + recvLblW
+  local TOTAL_W = CHK_W + BTN_GAP + BTN_W + BTN_GAP + BTN_W
+  local rowX0 = math.floor((W - TOTAL_W) / 2)
+  if rowX0 < 10 then rowX0 = 10 end
+  local chkX = rowX0
+  local btnX1 = rowX0 + CHK_W + BTN_GAP
   local btnX2 = btnX1 + BTN_W + BTN_GAP
+  local recvChk, recvMark, recvRefresh = shRecvCheck(chkX, 15, L("SH_RECV_SW"), L("SH_RECV_SW_TIP"), recvLbl)
+  shp.recvChk, shp.recvLbl, shp.recvMark, shp.recvRefresh = recvChk, recvLbl, recvMark, recvRefresh
+  -- 布局真值一起记下（诊断/断言读它，不写死坐标）
+  shp.rowX0, shp.rowW, shp.chkW, shp.btnW, shp.btnGap = rowX0, TOTAL_W, CHK_W, BTN_W, BTN_GAP
   local function bBtn(x, label, fn)
     local b = CreateFrame("Button", nil, root)
     b:SetWidth(BTN_W) b:SetHeight(22)
@@ -550,6 +623,9 @@ end
 
 function EVAL_SH_POPUP(sender, text, ev)
   shPopupBuild()
+  -- ★1.73.14 每次弹出都刷新「接收方案」勾选态：开关可能在配置窗里被改过（**两个入口一份真值**，
+  --   不刷新就会出现「配置窗显示关、弹窗里还亮着」的自相矛盾）
+  if type(shp.recvRefresh) == "function" then pcall(shp.recvRefresh) end
   -- 预览解析（只读不导入）：拿方案名与技能数
   local name, count = "?", 0
   if type(EVAL_PROFILE_FROM_TEXT) == "function" then
@@ -649,9 +725,11 @@ function EVAL_TEST_SHARE_DETAIL_RAW()
   return t
 end
 
--- ★1.71.3 弹窗按钮位置/宽度（读**真实控件**，用于验「整组以窗口中线对齐」；窗口宽也读真实控件）
+-- ★1.71.3 弹窗底部一行的位置/宽度（读**真实控件**；窗口宽也读真实控件）
+-- ★1.73.14 三段版：勾选框 + [导入] + [忽略] —— 把勾选框与它标签的几何也交出来，
+--   断言才能验「**三段整组**以窗口中线对齐」+「三段互不重叠」（而不是只验两个按钮）。
 function EVAL_TEST_SHARE_BTN_POS()
-  local out = { x1 = nil, x2 = nil, w = 0, W = 0 }
+  local out = { x1 = nil, x2 = nil, w = 0, W = 0, sx = nil, sw = 0, lw = 0 }
   if not shp.root then return out end
   local okW, ww = pcall(shp.root.GetWidth, shp.root)
   if okW and type(ww) == "number" then out.W = ww end
@@ -665,7 +743,31 @@ function EVAL_TEST_SHARE_BTN_POS()
       if i == 1 and okw and type(bw) == "number" then out.w = bw end
     end
   end
+  -- ★1.73.14 底部一行的**布局真值**（生产算出来的那些数）+ 两枚按钮的真实几何：
+  --   断言用「生产数字」验整组居中（不写死坐标），再用「真实控件」验这些数字**真的落到了控件上**。
+  out.rowX0 = shp.rowX0    -- 整行左起点（算出来的）
+  out.rowW = shp.rowW      -- 整行总宽（勾选框段 + 缝 + 按钮 + 缝 + 按钮）
+  out.chkW = shp.chkW      -- 勾选框整段宽（16 框 + 6 缝 + 标签实测宽）
+  out.btnW = shp.btnW      -- 单个按钮宽
+  out.btnGap = shp.btnGap  -- 缝
+  if shp.recvChk then
+    local okl, l = pcall(shp.recvChk.GetLeft, shp.recvChk)
+    if okl and type(l) == "number" then out.sx = l end
+  end
   return out
+end
+-- ★1.73.14 勾选框读值口：真实控件 + 真实勾选态（断言要读它，不读自己拼的状态）
+function EVAL_TEST_SHARE_RECV_CHK()
+  local mark = nil
+  if shp.recvChk then
+    local okm, m = pcall(shp.recvChk.GetChildren, shp.recvChk) -- 兜底：拿不到就直接用闭包记录的那个
+    mark = shp.recvMark
+  end
+  return shp.recvChk, mark, shp.recvLbl
+end
+-- ★1.73.14 让测试驱动「弹窗显示时刷新勾选态」（与真实显示路径同一个函数）
+function EVAL_TEST_SHARE_RECV_REFRESH()
+  if type(shp.recvRefresh) == "function" then shp.recvRefresh() end
 end
 -- ★1.71.3 弹窗标题图标的**实际纹理**（读控件，不读常量——否则测的是「写死的字符串」而不是「画出来的东西」）
 function EVAL_TEST_SHARE_TITLE_ICON()
