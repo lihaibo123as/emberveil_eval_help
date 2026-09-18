@@ -29,8 +29,15 @@ local PH_BACK_W = 70      -- [返回] 宽
 local PH_ZOOM_W = 24      -- [查]（放大镜）宽
 local PH_NAME_W = 150     -- 宠物名格宽
 local PH_META_X = 180     -- 宠物元信息起点（相对 PH_X）
--- 放大镜素材：客户端内置图标（望远镜）；写错路径只是不画，按钮文字仍在（不影响可用性）
-local PH_ZOOM_ICON = "Interface\\Icons\\INV_Misc_Spyglass_02"
+-- ★★★1.73.6 放大镜素材：**客户端真实纹理路径**（doc/图标路径清单.txt 第 489 条）。
+--   【实事故】原值是 `Interface\Icons\INV_Misc_Spyglass_02` —— **两处都错**：
+--     ① 前缀是 1.12 老形态（本客户端是 Unreal 资产路径 /Game/Interface/Icons/<名>_TEX）；
+--     ② 名字 `_02` **在客户端里根本不存在**（清单里只有 INV_Misc_Spyglass_01）。
+--   → 于是它一直画成引擎的「?」缺图占位，用户看到的就只剩保底文字「查」（截图圈出处）。
+--   ★为什么 1.73.4 换图标时漏了它：`PET ICON CHECK` 当时**只扫 PetData.lua 的 icon = "…"**，
+--     这行是 PetHelper.lua 里的 `local ... = "…"`，等于完全没被检查过（「检查存在 ≠ 覆盖到位」）。
+--     本轮已把该检查扩到 PetHelper.lua（任何客户端纹理字面量都必须精确在白名单里）。
+local PH_ZOOM_ICON = "/Game/Interface/Icons/INV_Misc_Spyglass_01_TEX"
 
 -- ===== 自绘基础件（与 Toolbox/DataSearch/IconBrowser 同风格） =====
 local function phSolid(tex, r, g, b, a)
@@ -520,11 +527,14 @@ function EVAL_PH_BUILD(root, page, refreshes)
     pcall(meta.SetJustifyH, meta, "LEFT")
     table.insert(widgets, meta)
     local zoom = phBtn(root, RX - PH_ZOOM_W, y + 2, PH_ZOOM_W, PH_ROW_H - 4, L("PH_ZOOM"), function() end)
-    -- 放大镜素材（客户端内置望远镜图标）：路径若不对**静默不画**，按钮文字「查」仍是保底
+    -- ★1.73.6 用户：「换成 放大镜图标」—— 图标**顶替**保底文字「查」：贴真素材 + 把文字显式藏掉。
+    --   ★文字仍保留在建好的控件上（phBtn 的 label 参数），只是**显式 Hide**：这样 L("PH_ZOOM") 这个
+    --     语言键仍是「在用」的，而「图标没画出来」的回归由 PET ICON CHECK + 断言一起挡（不靠那行文字兜底）。
     local zi = zoom.btn:CreateTexture(nil, "ARTWORK")
-    zi:SetWidth(14) zi:SetHeight(14)
+    zi:SetWidth(16) zi:SetHeight(16)
     zi:SetPoint("CENTER", zoom.btn, "CENTER", 0, 0)
     pcall(zi.SetTexture, zi, PH_ZOOM_ICON)
+    pcall(zoom.text.Hide, zoom.text)
     table.insert(widgets, zi)
     pcall(zoom.btn.SetScript, zoom.btn, "OnEnter", function()
       if type(GameTooltip) ~= "nil" then
@@ -537,7 +547,7 @@ function EVAL_PH_BUILD(root, page, refreshes)
       if type(GameTooltip) ~= "nil" then pcall(GameTooltip.Hide, GameTooltip) end
     end)
     table.insert(widgets, zoom.btn)
-    PH.detRows[i] = { bg = bg, icon = icon, name = name, nameBtn = nb, meta = meta, zoom = zoom }
+    PH.detRows[i] = { bg = bg, icon = icon, name = name, nameBtn = nb, meta = meta, zoom = zoom, zoomIcon = zi }
   end
 
   PH.detWidgets = { detIcon, detTitle, detIntro, detMeta, detReq, detPetTitle, sep, detScroll, backBtn.btn }
@@ -626,6 +636,24 @@ function EVAL_PH_TEST_DETROW(i)
   local r = PH.detRows[i]
   if not r then return nil end
   return { name = r.name:GetText(), meta = r.meta:GetText(), zoomShown = (r.zoom.btn.IsShown and r.zoom.btn:IsShown()) and true or false }
+end
+-- ★1.73.6 放大镜按钮的**真实状态**：① 真控件上贴的纹理是哪个；② 保底文字「查」是否被藏掉。
+--   ★判据要盯「画出来的图标 == 客户端清单里那枚放大镜」，而不是「代码里写了某个字符串」——
+--     上一版的错就错在**字符串写错而没有任何断言看得见**（它画成了「?」，只有保底文字露在外面）。
+function EVAL_PH_TEST_ZOOM(i)
+  local r = PH.detRows[i or 1]
+  if not r then return nil end
+  local path = nil
+  if r.zoomIcon and type(r.zoomIcon.GetTexture) == "function" then
+    local ok, v = pcall(r.zoomIcon.GetTexture, r.zoomIcon)
+    if ok then path = v end
+  end
+  local textShown = false
+  if r.zoom and r.zoom.text and type(r.zoom.text.IsShown) == "function" then
+    local ok2, v2 = pcall(r.zoom.text.IsShown, r.zoom.text)
+    textShown = (ok2 and v2) and true or false
+  end
+  return { path = path, textShown = textShown, iconW = (r.zoomIcon and r.zoomIcon:GetWidth()) or nil }
 end
 function EVAL_PH_TEST_LAST_JUMP() return PH.lastJump end
 function EVAL_PH_RESET_JUMP() PH.lastJump = nil end

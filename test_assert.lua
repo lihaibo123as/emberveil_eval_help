@@ -8012,6 +8012,16 @@ do
   eq(string.find(r8.meta, "56", 1, true) ~= nil or string.find(r8.meta, "57", 1, true) ~= nil, true,
      "★宠物行写出等级/区域/家族：" .. tostring(r8.meta))
   eq(r8.zoomShown, true, "★★宠物行右侧的放大镜按钮是显示状态")
+  -- ★★★1.73.6 放大镜**画出来的到底是什么**（用户：「换成 放大镜图标」）：
+  --   原实现贴的是 `Interface\Icons\INV_Misc_Spyglass_02` —— 1.12 老前缀 + 客户端里不存在的名字，
+  --   于是真机上只有保底文字「查」露在外面（截图圈出处）。判据 = **真控件上的纹理**精确是清单里那枚 + 文字被藏掉。
+  local z8 = EVAL_PH_TEST_ZOOM(1)
+  eq(z8 and z8.path, "/Game/Interface/Icons/INV_Misc_Spyglass_01_TEX",
+     "★★★放大镜按钮贴的是客户端真实路径（Unreal 资产 + 清单里真实存在的 _01）")
+  eq(z8 and z8.path ~= nil and string.find(z8.path, "Interface\\Icons\\", 1, true) == nil, true,
+     "★★反向哨兵：不再是 1.12 老形态路径")
+  eq(z8 and z8.textShown, false, "★★★保底文字「查」被显式藏掉（图标顶替它，不是两者叠印）")
+  eq(z8 and z8.iconW, 16, "★放大镜图标尺寸 16px（与 24x20 的按钮相称）")
   eq(EVAL_PH_TEST_STATE().view, "detail", "★处于详情视图")
   -- ⑥ 返回列表
   EVAL_PH_BACK()
@@ -8317,6 +8327,10 @@ do
   eq(has117(sem and sem.tags, "物品"), true, "①★标签里还有类别「物品」（前缀给的）")
   eq(type(sem and sem.tags) == "table" and table.getn(sem.tags) >= 3, true, "①★★一个图标的标签 ≥3 个")
   eq(EVAL_IB_TEST_SEM_SIZE() >= 1000, true, "①★★语义表覆盖整份清单（实际 " .. EVAL_IB_TEST_SEM_SIZE() .. " 条）")
+  -- ★1.73.6 抓宠详情页右侧那枚放大镜：用户就是这么叫它的（工具提示与图标库显示名要一致）
+  local semZ = EVAL_IB_TEST_SEM("INV_Misc_Spyglass_01")
+  eq(semZ and semZ.name, "放大镜", "①★放大镜那枚的语义名 = 放大镜（用户的原话）")
+  eq(has117(semZ and semZ.tags, "望远镜"), true, "①★并带「望远镜」同义标签")
   local semW = EVAL_IB_TEST_SEM("Ability_Hunter_Pet_Wolf")
   eq(semW and semW.name, "狼", "①★★家族图标也有语义名（狼）")
   eq(has117(semW and semW.tags, "宠物"), true, "①★家族图标带「宠物」标签")

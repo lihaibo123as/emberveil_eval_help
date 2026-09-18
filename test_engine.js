@@ -949,6 +949,27 @@ function checkIconAssets() {
   const notInWhite = icons.filter(v => !white.has(v));
   const withExt = icons.filter(v => /\.(tga|blp|png)$/i.test(v));
   const legacy = icons.filter(v => v.indexOf('Interface\\Icons') === 0);
+  // ★★1.73.6 覆盖面修正（本轮实事故）：本检查原来**只扫 PetData.lua 的 icon = "…"** —— 于是
+  //   PetHelper.lua 里那行 local PH_ZOOM_ICON = "Interface\Icons\INV_Misc_Spyglass_02" **从未被检查过**，
+  //   它同时犯了两个错（① 1.12 老前缀 ② 客户端里根本没有 _02，清单里只有 _01）却一路绿灯；
+  //   用户看到的就是引擎的「?」缺图占位 + 露在外面的保底文字「查」（截图圈出处）。
+  //   → 现在 PetHelper.lua 里**任何**客户端纹理字面量（老形态或 Unreal 形态）都必须精确在白名单里。
+  const phPath = path.join(__dirname, 'PetHelper.lua');
+  const phIcons = [];
+  if (fs.existsSync(phPath)) {
+    const phSrc = fs.readFileSync(phPath, 'utf8');
+    // ★★注意「源码里的转义」：Lua 源文件里写的是 "Interface\\Icons\\X"（两个反斜杠），
+    //   所以正则必须匹配 **两** 个反斜杠（regex 的 \\\\），取出来后再 unesc 还原成单反斜杠再比对 ——
+    //   第一版这里只写了一个反斜杠 → 老形态**永远匹配不到**，于是「LEGACY」这条判据其实是死的
+    //   （变异实测：M75 被下面的「0 个纹理」覆盖面守卫挡住，看着像捕获、其实走的是另一条路）。
+    const rePh = /"((?:Interface\\\\Icons\\\\|\/Game\/Interface\/Icons\/)[^"\r\n]*)"/g;
+    let mph;
+    while ((mph = rePh.exec(phSrc)) !== null) phIcons.push(mph[1]);
+  }
+  const unesc = (s) => s.split('\\\\').join('\\'); // 源码转义 → 运行时真值（Unreal 形态没有反斜杠，原样返回）
+  const phLegacy = phIcons.filter(v => unesc(v).indexOf('Interface\\Icons') === 0);
+  const phBad = phIcons.filter(v => { const u = unesc(v); return u.indexOf(PREFIX) !== 0 || u.slice(-SUFFIX.length) !== SUFFIX; });
+  const phNotWhite = phIcons.filter(v => !white.has(unesc(v)));
   // 技能段（skills 表）与家族段（families 表）分别查重
   const skillsSeg = src.slice(src.indexOf('EVAL_PET_DB.skills'), src.indexOf('EVAL_PET_DB.ranks') > 0 ? src.indexOf('EVAL_PET_DB.ranks') : src.length);
   const famSeg = src.slice(src.indexOf('EVAL_PET_DB.families'));
@@ -956,10 +977,26 @@ function checkIconAssets() {
   const skIcons = segIcons(skillsSeg), famIcons = segIcons(famSeg);
   const dupSk = skIcons.filter((v, i) => skIcons.indexOf(v) !== i);
   const dupFam = famIcons.filter((v, i) => famIcons.indexOf(v) !== i);
-  console.log('PET ICON CHECK: ' + icons.length + ' icon refs, ' + badForm.length + ' bad format, ' + notInWhite.length +
+  console.log('PET ICON CHECK: ' + icons.length + ' icon refs (PetData) + ' + phIcons.length + ' (PetHelper), ' +
+    (badForm.length + phBad.length) + ' bad format, ' + (notInWhite.length + phNotWhite.length) +
     ' not in client list, ' + withExt.length + ' with extension, ' + (dupSk.length + dupFam.length) + ' duplicated');
-  if (legacy.length) {
-    console.log('  LEGACY 1.12 PATH: ' + legacy.slice(0, 3).join(' | ') + '  → 本客户端会显示成「?」缺图占位');
+  if (legacy.length || phLegacy.length) {
+    console.log('  LEGACY 1.12 PATH: ' + legacy.concat(phLegacy).slice(0, 3).join(' | ') + '  → 本客户端会显示成「?」缺图占位');
+    process.exitCode = 1;
+    return;
+  }
+  if (phIcons.length < 1) {
+    console.log('  FAIL - PetHelper.lua 里一个客户端纹理都没扫到：要么放大镜图标被删了，要么扫描正则又不匹配了');
+    process.exitCode = 1;
+    return;
+  }
+  if (phBad.length) {
+    console.log('  BAD FORMAT (PetHelper): ' + phBad.slice(0, 3).join(' | '));
+    process.exitCode = 1;
+    return;
+  }
+  if (phNotWhite.length) {
+    console.log('  NOT IN CLIENT LIST (PetHelper): ' + phNotWhite.slice(0, 3).join(' | ') + '  (写错路径 = 引擎画「?」)');
     process.exitCode = 1;
     return;
   }

@@ -94,6 +94,8 @@ const W = {
   HolidayGift: ["节日礼物"], Wood: ["木材"], Metal: ["金属"], Glass: ["玻璃"], Leather: ["皮革"],
   Mail: ["锁甲"], Plate: ["板甲"], ClothArmor: ["布甲"], Scroll2: ["卷轴"], Letter: ["信件"],
   Map: ["地图"], Compass: ["罗盘"], Lantern: ["灯笼"], Torch: ["火把"], Candle: ["蜡烛"],
+  // ★1.73.6 放大镜（抓宠详情页右侧按钮用的那枚；用户就是这么叫它的）
+  Spyglass: ["放大镜", "望远镜"],
   Devour: ["吞噬"], Harass: ["侵扰"], Pierce: ["穿刺"], Avatar: ["化身"], BloodRage: ["血性狂暴"],
   Cannibalize: ["食尸"], ShadowMeld: ["影遁"], Ultravision: ["夜视"], Repair: ["修理"], Disguise: ["伪装"],
   Distract: ["扰敌"], DualWeild: ["双武器"], Eviscerate: ["剔骨"], Cursed: ["被诅咒"], Golem: ["魔像"],
