@@ -6357,25 +6357,53 @@ do
   eq(fake91.over, 0, "★★★没有任何元素越出**本列**右边界（「不换行 / 只排一列」的变异踩这一条）")
   eq(fake91.gapBad, 0, "★★同行相邻留足了 GAP")
   eq(fake91.colStartBad, 0, "★★每个组标题都落在本列的行首")
+  -- ★★★1.73.7 新不变量（用户「方案类别独立一行,方案同行多个.」）：
+  eq(fake91.hdrShared, 0, "★★★合成数据：类别独占一行（没有任何按钮与标题同行）")
+  eq(fake91.rowStartBad, 0, "★★★按钮行从**本列左边界**开始排（标题已独占上一行，按钮不该再缩进）")
+  eq(fake91.rowsInconsistent, 0, "★★★版式自报行数 == plan 真实占用行数（合成数据也要一致）: 实测 " ..
+     tostring(fake91.realRows) .. " vs " .. tostring(fake91.rowsL + fake91.rowsR))
   eq(fake91.perCol[1] > 0 and fake91.perCol[2] > 0, true, "★★两列都有按钮: " .. tostring(fake91.perCol[1]) .. "/" .. tostring(fake91.perCol[2]))
   print(string.format("  合成数据版式：%d 组 / 两列 %d+%d 行 / 按钮 %d+%d（逼出换行+分列两条路）",
     fake91.groups, fake91.rowsL, fake91.rowsR, fake91.perCol[1], fake91.perCol[2]))
-  -- 真实渲染的标题几何：标题必须落在**本列行首**，且所在行至少有一个**本组**按钮
+  -- ★★★1.73.7 真实渲染的标题几何（用户要求「方案类别独立一行,方案同行多个.」）：
+  --   ① 标题落在**本列行首**；② 标题**独占一行**（同行不许有任何按钮）；③ 本组按钮都在标题**下面**的行。
   local hdrs91 = EVAL_TEST_TPL_HEADERS()
   eq(table.getn(hdrs91), lay.groups, "★★★真实渲染出来的组标题数 = 组数（每个组都有标题）")
-  local alone91, hdBad91 = "", ""
+  local shared91, hdBad91, belowBad91, empty91 = "", "", "", ""
   for i = 1, table.getn(hdrs91) do
     local h = hdrs91[i]
     local ci = colOf91(h.x)
     if math.abs(h.x - colX91[ci]) > 0.5 then hdBad91 = hdBad91 .. tostring(h.cls) .. "(不在列首) " end
-    local same = 0
+    local hasBtn, below = false, true
     for j = 1, table.getn(rows91) do
-      if rows91[j].cls == h.cls and rows91[j].y == h.y then same = same + 1 end
+      local rr = rows91[j]
+      if colOf91(rr.x) == ci then
+        if rr.y == h.y then shared91 = shared91 .. tostring(h.cls) .. "(" .. tostring(rr.name) .. ") " end
+        if rr.cls == h.cls then
+          hasBtn = true
+          if not (rr.y < h.y - 0.5) then below = false end -- y 越小越靠下：按钮必须在标题下面
+        end
+      end
     end
-    if same == 0 then alone91 = alone91 .. tostring(h.cls) .. " " end
+    if not hasBtn then empty91 = empty91 .. tostring(h.cls) .. " " end
+    if hasBtn and not below then belowBad91 = belowBad91 .. tostring(h.cls) .. " " end
   end
   eq(hdBad91, "", "★★组标题都在**本列行首**（每个组从新的一行开始）: " .. hdBad91)
-  eq(alone91, "", "★★每个标题所在行都有本组至少一个按钮: " .. alone91)
+  eq(shared91, "", "★★★类别**独占一行**：没有任何按钮与标题同行（这就是「方案类别独立一行」）: " .. shared91)
+  eq(belowBad91, "", "★★★本组方案都在类别**下面**的行上（方案从标题的下一行开始，不是接着标题往右排）: " .. belowBad91)
+  eq(empty91, "", "★每个有方案的类别下面都有本组按钮: " .. empty91)
+  -- ★★★1.73.7 **版式自报的行数 == 真实控件的行数**（标题行 + 按钮行，逐列数）。
+  --   ★为什么必须单独钉这一条：M82（rowsOf 少算「第一行按钮」）**存活过一次** ——
+  --     它让 rowsL/rowsR 报 6+7（真实是 11+13），而当时唯一的关联断言「rowCount91 <= lines*2」
+  --     在 13 <= 14 下**照样成立**（弱判据）。两处算法一旦不一致，切点与窗口高度就都错。
+  local rowsReal = { {}, {} }
+  for i = 1, table.getn(rows91) do local rr = rows91[i] rowsReal[colOf91(rr.x)][tostring(rr.y)] = true end
+  for i = 1, table.getn(hdrs91) do local h = hdrs91[i] rowsReal[colOf91(h.x)][tostring(h.y)] = true end
+  local nL, nR = 0, 0
+  for _ in pairs(rowsReal[1]) do nL = nL + 1 end
+  for _ in pairs(rowsReal[2]) do nR = nR + 1 end
+  eq(nL == lay.rowsL and nR == lay.rowsR, true,
+     "★★★版式自报的行数 == 真实控件的行数: 实测 " .. nL .. "/" .. nR .. " vs 自报 " .. tostring(lay.rowsL) .. "/" .. tostring(lay.rowsR))
   -- ② 标题感叹号 + 悬停说明
   eq(EVAL_TEST_TPL_TIP_TEXT(), "!", "★★标题上有金色文字感叹号（不用我们那两枚有固定含义的 mark 图标）")
   local tip91 = EVAL_TEST_TPL_TIP()

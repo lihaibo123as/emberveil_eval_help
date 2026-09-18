@@ -6255,12 +6255,15 @@ function EVAL_TEST_UI_SECTIONS()
 end
 
 -- ============ 案例模版选单（1.44.0）：按职业分组，点击方案行直接导入 ============
--- ★★★1.71.8 案例模版窗的**版式计算**（纯函数：不建控件、不碰 UI）——用户要求：
---   「案例模版 分组 分两列, 分组内的方案 同行 自动换行.」
+-- ★★★1.73.7 案例模版窗的**版式计算**（纯函数：不建控件、不碰 UI）——用户最新要求：
+--   「方案类别独立一行,方案同行多个.」
 --   ① 窗口按列宽一分为二：colW = (W - 2*margin - colGap) / 2（窄到放不下两列时退化单列，不硬撑）；
 --   ② **组是不拆的最小单位**：按顺序切成「左段 / 右段」，一个组绝不会跨到另一列（拆开看着像少了一组）；
---   ③ **组内流式**：标题后跟本组按钮，同一行依次往右排、放不下就换行回**本列**左边界；
---      每个组从新的一行开始（否则两组会挤在同一行，看着像一组）；
+--   ③ ★★★**类别独占一行**：组标题自己占一行（行首 = 本列左边界），**本组按钮从下一行开始**、
+--      从本列左边界依次往右排、放不下就换行回本列左边界（「方案同行多个」）；
+--      ★这一条推翻了 1.71.5~1.71.8 的「标题 + 按钮同行流式」：那时标题会被按钮挤在行尾、
+--        续行又没有标题，长组看着像**两个类别**（用户截图里【通用法系】/【牧师】/【队伍/团队】就是这个观感）。
+--      ★代价 = 每组多占一行 → 窗口高度自动变高（本窗高度一直是**算出来的**，不用手改常量）。
 --   ④ 切点 = **两列行数差最小**（遍历所有切点）——★别用「塞到过半就停」的贪心：
 --      它在当前数据上看着对，内容一改就失衡（1.71.5 的教训）。
 --   ★★为什么是纯函数：布局的核心（分列 + 换行）埋在 BUILD 里就只能用真实模版数据测，
@@ -6272,17 +6275,23 @@ local function tplTwoColPlan(W, groups, measure, margin, gap, rowH, colGap)
   local colX = { margin, margin + colW + colGap }
   local colMax = { colX[1] + colW, colX[2] + colW }
   local n = table.getn(groups)
-  -- ① 一个组在**本列列宽**下要占几行（组内同行 + 自动换行）
+  -- ① 一个组在**本列列宽**下要占几行 = **标题 1 行** + 按钮行（组内同行 + 自动换行）
+  --   ★1.73.7 按钮从**本列左边界**起排（标题已独占上一行）——所以这里 px 从 colX[1] 开始，
+  --     与下方摆放逻辑必须**逐字一致**（两处算得不一样 = 切点与真实高度不符，本项目老坑）。
   local function rowsOf(c)
-    local lw = measure("【" .. tostring(c.cls) .. "】")
-    local px, rows = colX[1] + lw + gap, 1
+    -- ★★★别漏掉「第一行按钮」：标题独占 1 行之后，**第一个按钮就是新的一行**
+    --   （第一版写成 rows=1 起数、只在换行时 +1 → 每组少算一行，切点与真实高度不符；
+    --     真实数据上表现为 rowsL/rowsR 报 6+7 而实际要 11 行 —— 两处算法必须逐字一致。）
+    local btnRows, px = 0, colX[1]
     for _, p in ipairs(c.list) do
       local bw = measure(tostring(p.name)) + 16
       if bw > colW then bw = colW end
-      if px + bw > colMax[1] + 0.5 then rows = rows + 1 px = colX[1] end
+      if btnRows == 0 or px + bw > colMax[1] + 0.5 then
+        btnRows = btnRows + 1 px = colX[1]
+      end
       px = px + bw + gap
     end
-    return rows
+    return 1 + btnRows -- 1 = 标题独占的那一行
   end
   -- ② 最优切点（两列行数差最小；组不拆）
   local rows, total = {}, 0
@@ -6297,7 +6306,7 @@ local function tplTwoColPlan(W, groups, measure, margin, gap, rowH, colGap)
       if best == nil or diff < best then best, cut = diff, k end
     end
   end
-  -- ③ 照切点摆两列：每组从新行开始，标题在**本列行首**，组内同行自动换行
+  -- ③ 照切点摆两列：每组从新行开始，**标题独占一行**（在本列行首），按钮从下一行起流式排
   local plan, minY = {}, -26
   local used = { 0, 0 }
   for ci = 1, 2 do
@@ -6310,8 +6319,11 @@ local function tplTwoColPlan(W, groups, measure, margin, gap, rowH, colGap)
         first = false
         used[ci] = used[ci] + rows[i]
         local lw = measure("【" .. tostring(c.cls) .. "】")
+        -- ★★★1.73.7 类别**独占一行**（用户：「方案类别独立一行」）：这一行只放标题，
         table.insert(plan, { kind = "header", cls = c.cls, x = x0, y = py, w = lw })
-        local px = x0 + lw + gap
+        -- 按钮从**下一行**开始、从本列左边界起排（用户：「方案同行多个」）
+        py = py - rowH
+        local px = x0
         for _, p in ipairs(c.list) do
           local bw = measure(tostring(p.name)) + 16
           if bw > colW then bw = colW end
@@ -6332,9 +6344,9 @@ function EVAL_HELP_TPL_BUILD()
   --   ★宽度跟配置窗**同一来源**（cfWinWidth：中文 660 / 西文 800）——不再各写一份宽度（本项目老坑）。
   local W = cfWinWidth()
   local MARGIN, GAP, ROW_H, COL_GAP = 14, 6, 20, 12 -- COL_GAP = 两列之间的间隔（1.71.8 分两列）
-  -- ★★★1.71.5 版式：**流式（自动换行）布局**（用户要求：「模版不用一列，可以同行，自动换行布局」）。
-  --   · 组标题与方案按钮**一起**从左往右排，放不下就换行（回到左边界）——不再「每行一个 / 每列一组」。
-  --   · 每个按钮宽度 = FontString:GetStringWidth() **实测** + 内边距（拿不到就按「字符数 × 9px」近似）。
+  -- ★★★1.73.7 版式（用户最新要求）：「**方案类别独立一行，方案同行多个**」——
+  --   · **类别标题独占一行**（本列行首），本组方案从**下一行**起从左往右排、放不下就换行回本列左边界；
+  --   · 每个按钮宽度 = FontString:GetStringWidth() **实测** + 内边距（拿不到就按「字符数 × 9px」近似）；
   --   · 版式先算成一张 plan 表（位置**单一来源**），再照它建控件；断言读的仍是**真实控件几何**。
   local H = 0 -- 高度由 plan 算出来（量完标签再 SetHeight）
   tplUI.rowBtns = {}
@@ -6418,9 +6430,8 @@ function EVAL_HELP_TPL_BUILD()
   tplUI.tipBtn = tipBtn
   tplUI.tipText = tipTxt
 
-  -- ★★★1.71.5 **流式（自动换行）布局**（用户要求：「模版不用一列，可以同行，自动换行布局」）：
-  --   ① 先算 plan（位置单一来源）：组标题与按钮**同一行里依次往右排**，放不下就换行回左边界；
-  --      ★标题不许「孤零零留在行尾」——要求「标题 + 该组第一个按钮」能一起放下，否则先换行。
+  -- ★★★1.73.7 **「类别一行 + 方案同行多个」布局**（用户要求：「方案类别独立一行,方案同行多个.」）：
+  --   ① 先算 plan（位置单一来源）：**标题独占一行**，本组按钮从下一行起依次往右排、放不下就换行回本列左边界；
   --   ② 再照 plan 建控件（渲染只读 plan，位置不会两处各算一遍而漂移）。
   local ruler = uiText(root, 9, 0.88, 0.88, 0.88)
   pcall(ruler.SetPoint, ruler, "TOPLEFT", root, "TOPLEFT", -2000, 0) -- 量宽用的「尺」：挪出可视区（本客户端 Hide 过的控件仍可能被绘出）
@@ -6577,6 +6588,7 @@ function EVAL_TEST_TPL_PLAN_FAKE(w, gn, per, chars)
     table.insert(byRow[key], e)
   end
   local items, rows, over, gapBad, colStartBad = 0, 0, 0, 0, 0
+  local rowStartBad = 0 -- ★1.73.7 按钮行必须从**本列左边界**开始（标题已独占上一行，不该再缩进）
   local perCol, colGroups = { 0, 0 }, { {}, {} }
   for _, list in pairs(byRow) do
     rows = rows + 1
@@ -6589,9 +6601,24 @@ function EVAL_TEST_TPL_PLAN_FAKE(w, gn, per, chars)
       if e.x + e.w > colMax[ci] + 1 then over = over + 1 end -- 越出**本列**右边界
       local x0 = (ci == 1) and 14 or colX2
       if e.kind == "header" and math.abs(e.x - x0) > 0.5 then colStartBad = colStartBad + 1 end
+      if e.kind == "item" and i == 1 and math.abs(e.x - x0) > 0.5 then rowStartBad = rowStartBad + 1 end
       if i > 1 then
         local prev = list[i - 1]
         if colOf(prev.x) == ci and e.x < prev.x + prev.w + 6 - 0.5 then gapBad = gapBad + 1 end
+      end
+    end
+  end
+  -- ★★★1.73.7 新不变量：「类别独占一行」= 任何**标题行**上都不许有按钮（这一行整行留给类别）
+  local withItem = {}
+  for key, list in pairs(byRow) do
+    for _, e in ipairs(list) do if e.kind == "item" then withItem[key] = true break end end
+  end
+  local hdrShared = 0
+  for _, list in pairs(byRow) do
+    for _, e in ipairs(list) do
+      if e.kind == "header" then
+        local key = tostring(e.y) .. "#" .. tostring(colOf(e.x))
+        if withItem[key] then hdrShared = hdrShared + 1 end
       end
     end
   end
@@ -6603,8 +6630,14 @@ function EVAL_TEST_TPL_PLAN_FAKE(w, gn, per, chars)
   end
   for _ in pairs(colGroups[1]) do g1 = g1 + 1 end
   for _ in pairs(colGroups[2]) do g2 = g2 + 1 end
+  -- ★1.73.7 版式自报的行数必须 == plan 里真实占用的行数（标题行 + 按钮行）：
+  --   rowsOf 与摆放逻辑**必须逐字一致**，少算一行时切点与窗口高度都会错，而它**不报错**。
+  local realRows = 0
+  for _ in pairs(byRow) do realRows = realRows + 1 end
+  local rowsInconsistent = (realRows == rowsL + rowsR) and 0 or 1
   return { items = items, groups = gn, rows = rows, perCol = perCol, colGroups = { g1, g2 },
     over = over, gapBad = gapBad, colStartBad = colStartBad, splitBad = splitBad,
+    hdrShared = hdrShared, rowStartBad = rowStartBad, realRows = realRows, rowsInconsistent = rowsInconsistent,
     balance = math.abs(rowsL - rowsR), rowsL = rowsL, rowsR = rowsR, colW = colW, colX2 = colX2 }
 end
 function EVAL_TEST_TPL_TIP() EVAL_HELP_TPL_BUILD() return tplUI.tipBtn end
