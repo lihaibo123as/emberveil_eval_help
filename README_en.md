@@ -20,7 +20,9 @@
 
 > 📌 Continuously improving — testing and feedback welcome!　🐞 [Bug reports / suggestions](https://gitee.com/xeval/emberveil_eval_help.git) (Issues)　🤖 Developed with DeepSeek Harness AI assistance (see "Contributing" at the bottom)
 
-## 🏁 Milestones (1.52.0 → 1.72.1)
+## 🏁 Milestones (1.52.0 → 1.72.2)
+
+- **🔍 Shared-profile aura fix + guide on every load** (1.72.2): when another character never learned a debuff texture, the addon now **falls back to a name scan and self-heals** (a hit learns name→texture, then the fast path); the starter guide prints **on every load**; also fixed the `EVAL_DS_HUD` frame name shadowing its own global function (which made `/eh ds hud` silently dead)
 
 - **⌨️ Profile hotkeys actually work** (1.71.16 → 1.72.0): after four dead ends, `ACTIONBUTTON<n>` + hooking `ActionButtonDown/Up` — zero cost: no macro slots, no stolen keys, live while the game runs.
 - **🗂 Right-click features merged into one Profile Manager** (1.71.24): profile name + hotkey, one [Save] commits both; ★no aliases for the old entry points.
@@ -31,12 +33,12 @@
 - **🧰 🗺️ 📡 Three new tabs** (1.68.0 → 1.71.1): Toolbox (queued + verified one by one), Data search (16 map annotation categories), profile sharing (one click to a channel).
 - **📚 Case templates: 11 groups / 27 entries** (1.67.2 → 1.71.8): grouped by class, one click to import; party / raid ones are "explicit skill + member condition".
 - **🧪 Engineering infrastructure** (1.52.0 → 1.72.0): 17 source-level checks + mutation tests every round; the "silent failure family" cleared out.
-- **⚡ Execution model and usability** (1.52.1 → 1.64.0): target selection no longer eats the key press, parallel execution, no GCD stop; root cause "Lua multiple-return truncation".
 
 ## Changelog
 
 | Version | Theme | One-line highlight |
 | :-- | :-- | :-- |
+| **1.72.2** | 🔍 Shared-profile aura fix + guide on every load | Unlearned auras now fall back to a name scan and self-heal; the starter guide prints on every load; fixed a frame name shadowing its global function |
 | **1.72.1** | 🧭 Friendly first-run | Load confirmation + a four-step starter guide on first login (combat UI / first profile / key binding / skill log); replay it from the Global tab or `/eh guide` |
 | **1.72.0** | 🎉 **Profile hotkeys fixed + a batch of UI polish** (spans 1.71.3–1.71.24) | 22 versions shipped at once: **profile hotkeys went from "never fire" to actually working** (four dead ends ruled out: CLICK hijacked the mouse → raw command names are not dispatched → this client does not read addon Bindings.xml → **hooking ActionButtonDown/Up**; zero cost, no macro slots, no stolen keys, live while the game runs); **right-click features merged** into one Profile Manager window (rename + hotkey, one Save commits both); case-template window redesigned three times; Icon Library tab + right-click to set the minimap icon; combat HUD title shows the player name; Stop Attack / Follow / member filtering / share overhaul |
 | **1.71.24** | 🗂 右键功能合并成一个「方案管理」弹窗 | 用户：「将这两个功能合并成一个弹窗管理.都是右键触发.」—— 把此前**两个独立的右键弹窗**（配置窗方案按钮右键=重命名 / 战斗信息UI 方案按钮右键=快捷键绑定）合并成**一个方案管理窗**：窗内两段 ① 方案名称 ② 快捷键，**[保存] 一次提交两段**（改名 + 绑键，互不牵连）；**两处右键都开同一个窗**（左键语义不变，仍是激活方案）；★关键决定 = **不为旧入口留别名**（留别名会让「调用点改回旧名字」的回归悄悄通过——实测变异 M1/M2 正是这样 SURVIVED 的）；组 102 + 变异 **8/8** 全捕获 |
@@ -46,7 +48,6 @@
 | **1.71.20** | 🖨 Left-click the "Profiles" label = print current bindings | New left-click on the label: prints "profile = key" line by line (print-only, bindings untouched), or honestly says there are none; tooltip gains a 4th line (3 languages); includes the `/eh go bind3` colon-free CLICK probe (restart-required paths were ruled out per user); ★assertions drive the real left-click/hover, 4/4 mutations caught |
 | **1.71.19** | 🏷 "Profiles" label tooltip + right-click clears ALL custom bindings | The "方案" label is now clickable: hovering shows three polished hint lines (left-click = activate / right-click = bind / right-click the label = clear all, 3 languages); right-clicking it really **unbinds every key + clears the table + saves** (returns the count, idempotent); left-click does nothing; ★assertions drive the real right-click/hover, 4/4 mutations caught |
 | **1.71.18** | 🔧 Binding dispatch drops CLICK for raw command names (fix: key did not fire + mouse buttons hijacked) | Live testing showed the client mis-parses CLICK dispatch — the bound key did not fire and the left/right mouse buttons lost their camera-turn (yet the addon still got triggered, so the path works) → dispatch now uses **raw command names `EVAL_GO<i>`** (built-in commands are camelCase globals; `EVAL_GO1~12` already exist); ★new sentinel "every dispatch name must resolve to a real global", 3/3 mutations caught |
-| **1.71.17** | 🖼 Default minimap icon is now Blessing of Strength (user pick) | After the user hand-picked the golden-fist `Spell_Holy_BlessingOfStrength` in the icon library, she asked the **initial default to be the same icon** — it now tops the auto-pick candidates; a hand-picked icon still always wins; ★pure-function assertion "blessing beats wrench", 2/2 mutations caught |
 
 > 📜 Detailed per-version notes live in **[CHANGELOG.md](CHANGELOG.md)**; earlier history is in the git commit log.
 
@@ -152,6 +153,7 @@ Interface/AddOns/
 2. Moved skills around / dragged new ones onto bars → `/eh go rescan` to rescan;
 3. Want to watch the decision process → `/eh debug` (why each skill fired or didn't, per-condition √/×);
 4. Still stuck → file an Issue at <https://gitee.com/xeval/emberveil_eval_help.git> (attaching an `/eh st` status screenshot + the log file helps a lot).
+5. **A shared profile never fires some skills**: usually that aura's texture was never learned on this machine — it is now scanned by name and learned automatically; `/eh go tex` lists the table, `/eh go texdel <name>` forgets one, `/eh go texclear` wipes it;
 
 ## Contributing (welcome aboard!)
 

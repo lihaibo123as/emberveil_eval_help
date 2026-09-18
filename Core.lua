@@ -52,7 +52,8 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.38.1"
+-- 1.72.2 删除死掉的 local VERSION = "1.38.1"（定义后从未被引用，属发布流程第 3 步「旧版信息」清理）；
+--   版本号唯一来源 = EvalHelp.lua 的 local VERSION + EvalHelp.toc 的 ## Version（VERSION CHECK 守着）。
 
 -- ============ 输出：聊天 + 调试日志 ============
 
