@@ -91,6 +91,61 @@ local function tbText(parent, size, r, g, b)
   return fs
 end
 
+-- ★★★1.73.30 组标题栏：**宽度自适应本列**（用户：「工具箱 内项目标题栏宽度自适应」）
+--   语言包里的标题自带装饰（「—— 任务·通知 ——」）→ 这里把装饰**剥掉**再**按本列宽补足**，
+--   拼成「———— 任务·通知 ————」的分隔条：列宽变了（两列/单列）标题栏跟着变，不再是一串死字数。
+--   ★两个坑：① 「—」是 U+2014（UTF-8 三字节）→ **绝不能塞进 Lua 字符集**（本项目铁律），
+--     用 string.char(226,128,148) 构造后再 string.sub 比较；② 本机拿不到 GetStringWidth →
+--     用既有近似「字符数 × 11px」。
+local TB_HDR_DASH = string.char(226, 128, 148)
+local function tbHdrStrip(s)
+  s = string.gsub(tostring(s or ""), "^%s+", "")
+  s = string.gsub(s, "%s+$", "")
+  while string.sub(s, 1, 1) == "-" or string.sub(s, 1, 3) == TB_HDR_DASH do
+    if string.sub(s, 1, 3) == TB_HDR_DASH then s = string.sub(s, 4) else s = string.sub(s, 2) end
+    s = string.gsub(s, "^%s+", "")
+  end
+  while true do
+    local n = string.len(s)
+    if n >= 3 and string.sub(s, n - 2, n) == TB_HDR_DASH then
+      s = string.sub(s, 1, n - 3)
+    elseif n >= 1 and string.sub(s, n, n) == "-" then
+      s = string.sub(s, 1, n - 1)
+    else
+      break
+    end
+    s = string.gsub(s, "%s+$", "")
+  end
+  return s
+end
+-- 纯函数：标题 + 列宽 → 分隔条文本（渲染与断言**共用这一份**）
+local TB_HDR_PER = 11 -- 一个汉字/破折号约 11px（本机拿不到 GetStringWidth 的既有近似）
+local function tbHdrEst(s) return tbNameCharLen(tostring(s or "")) * TB_HDR_PER end
+-- 读值口：估算宽度（**与生产同一个口径**；断言不许自己另写一套估算）
+function EVAL_TEST_TB_HDR_EST(s) return tbHdrEst(s) end
+function EVAL_TB_HDR_TEXT(label, colW)
+  local title = tbHdrStrip(label)
+  local w = tonumber(colW) or 300
+  local per = TB_HDR_PER
+  local need = tbHdrEst(title) + 2 * per -- 标题 + 两侧各一个空格
+  local room = math.floor((w - 8 - need) / 2)
+  local n = math.floor(room / per)
+  if n < 2 then n = 2 end
+  local d = string.rep(TB_HDR_DASH, n)
+  return d .. " " .. title .. " " .. d
+end
+-- 读值口：某个组标题**渲染出来的真文本**（断言与 UI 同源；标题行按 label 找）
+function EVAL_TEST_TB_HDR_TEXT(label)
+  local want = tostring(label or "")
+  for k = 1, TB.ROWS * (TB.cols or TB_COLS) do
+    local r = TB.rows[k]
+    if r and r.hdr and r.item and r.item.t == "h" and tostring(r.item.label) == want then
+      local ok, t = pcall(r.hdr.GetText, r.hdr)
+      return (ok and tostring(t or "")) or ""
+    end
+  end
+  return nil
+end
 local function tbBtn(parent, x, y, w, label, onClick, widgets)
   local b = CreateFrame("Button", nil, parent)
   b:SetWidth(w) b:SetHeight(15)
@@ -2833,7 +2888,8 @@ function EVAL_TB_REFRESH()
     r.modelKey = it and it.key or nil -- ★1.73.10 记住这一格当前是哪个 key（勾选后要按 key 做即时副作用）
     if it then
       if it.t == "h" then
-        r.hdr:SetText(it.label)
+        -- ★1.73.30 组标题栏宽度自适应本列（纯函数拼分隔条；渲染与断言同源）
+        r.hdr:SetText(EVAL_TB_HDR_TEXT(it.label, TB.colW))
         r.hdr:Show()
       else
         if it.t == "c" then

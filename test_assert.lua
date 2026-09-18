@@ -8801,6 +8801,35 @@ do
   eq(buyKey ~= nil, true, "⑤模型里有「自动购买指定物品」行")
   eq(EVAL_TEST_TB_ADD_BTN_FOR("buy") ~= nil, true, "⑤★★两列下仍能按 key 找到那一行的 [添加] 按钮（列→条目映射没错位）")
   eq(EVAL_TEST_TB_ADD_BTN_FOR("discard") ~= nil, true, "⑤★同理找得到 [清空] 所属行")
+  --  ★★★1.73.30 用户：「工具箱 内项目标题栏宽度自适应」——
+  --    组标题栏 = 按**本列宽**拼出来的分隔条（纯函数 EVAL_TB_HDR_TEXT）；判据：
+  --    ① 装饰剥干净（标题只出现一次）；② 估算宽度**填满本列但不溢出**；③ 列宽变大 → 分隔条更长；
+  --    ④ 渲染出的真文本 == 纯函数输出（UI 与断言同源，且确实被重写过）。
+  do
+    local hdrLab133 = EVAL_L("TB_H_QNOTIFY")
+    local h300 = EVAL_TB_HDR_TEXT(hdrLab133, 300)
+    local h400 = EVAL_TB_HDR_TEXT(hdrLab133, 400)
+    eq(string.find(h300, "任务·通知", 1, true) ~= nil, true, "⑨★★★标题栏里有标题（装饰剥掉后只剩一份）：" .. tostring(h300))
+    local _, cntT133 = string.gsub(h300, "任务·通知", "")
+    eq(cntT133, 1, "⑨★★标题在分隔条里只出现一次（没有叠成两份）")
+    eq(EVAL_TEST_TB_HDR_EST(h300) <= 300, true,
+       "⑨★★★分隔条**不溢出**列宽（估算 " .. tostring(EVAL_TEST_TB_HDR_EST(h300)) .. " ≤ 300）")
+    eq(EVAL_TEST_TB_HDR_EST(h300) >= 300 * 0.85, true,
+       "⑨★★★而且**填满**本列（估算 " .. tostring(EVAL_TEST_TB_HDR_EST(h300)) .. " ≥ 255）")
+    eq(EVAL_TEST_TB_HDR_EST(h400) <= 400 and EVAL_TEST_TB_HDR_EST(h400) >= 400 * 0.85, true,
+       "⑨★★宽列同样填满不溢出（" .. tostring(EVAL_TEST_TB_HDR_EST(h400)) .. "）")
+    eq(string.len(h400) > string.len(h300), true, "⑨★★★列宽变大 → 分隔条更长（宽度自适应）")
+    --  ★「剥装饰」必须**承重**：带装饰的标签（语言包原串）与纯标题必须算出**同一条**分隔条 ——
+    --    只比「含标题」的话，不剥装饰（标题里再套一层破折号）也能过（M246 实测就是这种漏网）。
+    eq(EVAL_TB_HDR_TEXT("任务·通知", 300), h300, "⑨★★★带装饰的标签与纯标题算出**同一条**分隔条（剥装饰承重）")
+    --  渲染侧同源：真实控件的文本 == 纯函数按**同一列宽**算出来的那份
+    local rendered133 = EVAL_TEST_TB_HDR_TEXT(hdrLab133)
+    eq(rendered133, EVAL_TB_HDR_TEXT(hdrLab133, lay120.colW),
+       "⑨★★★渲染出的标题栏 == 纯函数算出来的那份（列宽 " .. tostring(lay120.colW) .. "）")
+    eq(rendered133 ~= hdrLab133, true, "⑨★★而且真的被重写过（不是把语言包原串原封不动塞进去）")
+    eq(EVAL_TEST_TB_HDR_EST(rendered133) <= lay120.colW, true,
+       "⑨★★真实列宽下也不溢出（" .. tostring(EVAL_TEST_TB_HDR_EST(rendered133)) .. " ≤ " .. tostring(lay120.colW) .. "）")
+  end
   EVAL_HELP_CFG_SETTAB(savedTab120) -- 还原 Tab（跨用例状态残留是本项目老坑）
   print(string.format("  工具箱两列：%d 列 / 列宽 %d / 列缝 %d / 本页 %d 条 = 左 %d + 右 %d（右列从组标题起）",
     lay120.cols, lay120.colW, lay120.colGap, lay120.pageN, lay120.rowsL, lay120.rowsR))
