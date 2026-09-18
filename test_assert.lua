@@ -9872,6 +9872,38 @@ do
   eq(EVAL_TB_NAME_SAY("Ionol", true), false, "⑥★★0.5 秒内连点 → 拒绝再发（服务器写动作一律限频）")
   eq(table.getn(TEST.runScripts), before130, "⑥★★队列没有增长（真的没发出去）")
   eq(EVAL_TB_NAMEMENU_STATE().sayDeb, 1, "⑥★并如实记「被去抖挡下」的次数")
+  -- ⑧ ★★★1.73.26 用户（拿官方右键菜单截图对比）：「透明背景 · 宽度小点、最多 4 字宽 · 保留原来右键的功能」。
+  --   ★判据读**真实控件**：菜单宽 ≤ 4 个汉字宽（10px 字 ×4 + 留白 → 上限 70px）、背景半透明（alpha < 0.8）、
+  --     条目文字也 ≤4 个汉字（UTF-8 下 12 字节）、且「官方菜单」那条**真的把点击原样转发**给客户端。
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  TEST.sirCalls = {}
+  SetItemRef("player:Ionol", "[Ionol]", "RightButton") -- 先弹一次（菜单是懒建的）
+  local mg130 = EVAL_TB_MENU_GEOM()
+  eq(type(mg130) == "table", true, "⑧★菜单已建好（读得到真实几何）")
+  eq(type(mg130.w) == "number" and mg130.w <= 70, true, "⑧★★★宽度 ≤ 4 个汉字宽（" .. tostring(mg130.w) .. "px ≤ 70）")
+  eq(type(mg130.bg and mg130.bg.a) == "number" and mg130.bg.a < 0.8, true,
+     "⑧★★★背景是**半透明**（alpha=" .. tostring(mg130.bg and mg130.bg.a) .. " < 0.8）")
+  local nIt130, badLbl130 = table.getn(mg130.items or {}), ""
+  eq(nIt130 >= 4, true, "⑧★条目 ≥4 条（" .. tostring(nIt130) .. "）")
+  for i = 1, nIt130 do
+    local lb = tostring(mg130.items[i].label or "")
+    if string.len(lb) > 12 then badLbl130 = badLbl130 .. lb .. "(" .. tostring(string.len(lb)) .. "字节) " end
+  end
+  eq(badLbl130, "", "⑧★★条目文字也压到 ≤4 个汉字（12 字节）: " .. badLbl130)
+  --  ★「官方菜单」这条必须真的把点击转发给客户端（= 用户要的「保留原来右键的功能」）
+  TEST.sirCalls = {}
+  eq(EVAL_TB_NAME_OFFICIAL(), true, "⑧★★★「官方菜单」转发成功（回调到客户端的 SetItemRef）")
+  eq(table.getn(TEST.sirCalls), 1, "⑧★★★而且只**原样**转发一次（没有吞掉原来的右键功能）")
+  eq(string.find(tostring(TEST.sirCalls[1] or ""), "player:Ionol|RightButton", 1, true) ~= nil, true,
+     "⑧★★转发的就是那次点击（link + RightButton）")
+  eq(EVAL_TB_NAMEMENU_STATE().official, 1, "⑧★转发计数 +1（诊断看得到）")
+  -- ⑨ 机制探针：跑一次不崩、逐个报候选全局、并给出「有没有官方菜单表」的结论
+  TEST.chat = ""
+  eq(EVAL_TB_OFFICIALMENU_PROBE(), true, "⑨★菜单机制探针能跑")
+  local c130b = tostring(TEST.chat or "")
+  eq(string.find(c130b, "UnitPopupMenus", 1, true) ~= nil, true, "⑨★★探针逐个报了候选全局")
+  eq(string.find(c130b, "官方菜单表", 1, true) ~= nil, true, "⑨★★并对「有没有官方菜单表」给出结论")
+  EVAL_TEST_TB_NAMEMENU_RESET()
   -- ⑦ 关掉开关 → 不再接管
   EVAL_HELP_CONFIG.tb.nameMenu = false
   EVAL_TEST_TB_NAMEMENU_RESET()

@@ -193,7 +193,9 @@ TB_NAMEMENU_TIP = "在聊天里**右键角色名**弹出菜单：公会邀请 / 
 TB_NAMEMENU_TITLE = "名字：%s",
 TB_NAMEMENU_INVITE = "公会邀请",
 TB_NAMEMENU_COPY = "复制名字",
-TB_NAMEMENU_SAY = "/s 说出名字",
+TB_NAMEMENU_SAY = "/s 说出",  -- ★1.73.26 用户要求「最多 4 字宽」→ 条目文字一起压短
+TB_NAMEMENU_OFFICIAL = "官方菜单", -- ★1.73.26 「保留原来右键的功能」：点这条 = 把这次点击原样转发给客户端
+TB_NAMEMENU_NOOFFICIAL = "客户端没给官方菜单（转发没生效）—— 说明这个客户端右键名字本来就没菜单",
 TB_NAMEMENU_CLOSE = "关闭",
 TB_NAMEMENU_COPYHINT = "（本客户端没有剪贴板接口）名字已放进下面的框并全选 → 按 Ctrl+C 复制",
 TB_NAMEMENU_INVOK = "已发出公会邀请：%s",

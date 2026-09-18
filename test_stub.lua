@@ -118,6 +118,14 @@ local function newMock()
     --   「图标到底画了哪张」在测试里完全不可见（同族教训：桩不记状态 = 断言失明）。
     --   ★只记字符串（uiSolid 走的是 SetTexture(r,g,b) 三数值形态，不记路径）。
     SetTexture = function(_, a1) if type(a1) == "string" then rawset(m, "__tex", a1) end end,
+    -- ★1.73.26 桩保真：真客户端纹理有顶点色（SetVertexColor / GetVertexColor）——
+    --   原来桩里没有 → 说明「半透明背景」这类判据**根本读不到值**（本项目「桩太宽松 → 断言失明」那一族）。
+    SetVertexColor = function(self, r, g, b, a)
+      rawset(self, "__vr", r) rawset(self, "__vg", g) rawset(self, "__vb", b) rawset(self, "__va", a)
+    end,
+    GetVertexColor = function(self)
+      return rawget(self, "__vr") or 1, rawget(self, "__vg") or 1, rawget(self, "__vb") or 1, rawget(self, "__va") or 1
+    end,
     GetTexture = function() return rawget(m, "__tex") end,
     -- ★1.73.5 CreateFrame 拿到 "EditBox" 类型后调用它，打开「SetText 会再触发 OnTextChanged」的保真开关
     __markEditBox = function() isEditBox = true end,

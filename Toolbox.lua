@@ -907,37 +907,116 @@ function EVAL_TB_MENU_HIDE()
   if TB.menu then pcall(TB.menu.Hide, TB.menu) end
   TB_NAME_MENU.shown = false
 end
--- 懒建：整块只建一次（窗口 + 标题 + 四个按钮）
+-- ★★★1.73.26 用户（拿官方右键菜单截图对比）：「UI 风格能否保持官方风格；做不到就把现在的美化一下：
+--   **透明背景** · **宽度小点、最多 4 字宽** · **保留原来右键的功能** · 再叠加我们自定义的功能」。
+--   【能做的与做不到的，如实分层】：
+--     ① **官方风格**要靠把条目**塞进客户端自己的菜单**（1.12 的 UnitPopupMenus / UnitPopupButtons 那套）——
+--        需运行时确认这些全局是否存在（`/eh go 聊天 右键` 探针会逐个报），存在就直接注入（真·官方风格）；
+--     ② 不论注入成不成，自己的小菜单先按用户要求美化：**半透明黑底**（能透出背景 = 用户说的「透明」）、
+--        **窄**（≤4 个汉字宽）、条目文字也压到 ≤4 字；标题行放名字（与官方那行「林七夜」同构）；
+--     ③ **保留原来的右键功能** = 菜单里加一条「官方菜单」→ 把这次点击**原样转发**给客户端的 SetItemRef
+--        （官方有菜单就弹官方的，没有就什么都不做），绝不因为我们的菜单而丢掉既有行为。
+local TB_MENU_W = 62 -- ★≤4 个汉字宽（10px 字 × 4 + 两侧留白）；这是用户点名的宽度上限
 local function tbMenuBuild()
   if TB.menu then return TB.menu end
   local f = CreateFrame("Frame", "EVAL_TB_NAMEMENU", UIParent)
-  f:SetWidth(180) f:SetHeight(100)
+  local W = TB_MENU_W
+  f:SetWidth(W) f:SetHeight(84)
   f:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
   pcall(f.SetFrameStrata, f, "DIALOG")
   pcall(f.SetFrameLevel, f, 250)
   pcall(f.EnableMouse, f, true)
   local bg = f:CreateTexture(nil, "BACKGROUND")
-  tbSolid(bg, 0.06, 0.06, 0.08, 0.96)
+  -- ★半透明黑底（官方菜单就是这个观感：能透出背景，文字仍然清楚）
+  tbSolid(bg, 0.02, 0.02, 0.03, 0.62)
   bg:SetPoint("TOPLEFT", f, "TOPLEFT", 0, 0)
   bg:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
+  f.bg = bg
   local title = tbText(f, 10, 0.95, 0.82, 0.35)
-  title:SetPoint("TOPLEFT", f, "TOPLEFT", 8, -6)
-  pcall(title.SetWidth, title, 164)
+  title:SetPoint("TOPLEFT", f, "TOPLEFT", 5, -5)
+  pcall(title.SetWidth, title, W - 10)
   pcall(title.SetJustifyH, title, "LEFT")
   f.title = title
   f.rows = {}
   local function item(y, label, fn)
-    local b = tbBtn(f, 8, y, 164, label, fn, nil)
+    -- ★按钮也半透明（原来是一块不透明的深黄底 → 与「透明背景」的要求相反）：只留文字 + 轻微底
+    local b = tbBtn(f, 3, y, W - 6, label, fn, nil)
+    if b.bg then pcall(b.bg.SetVertexColor, b.bg, 0.10, 0.09, 0.06, 0.35) end
+    if b.text then
+      pcall(b.text.SetWidth, b.text, W - 10)
+      pcall(b.text.SetJustifyH, b.text, "LEFT")
+    end
     table.insert(f.rows, b)
     return b
   end
-  item(-22, L("TB_NAMEMENU_INVITE"), function() EVAL_TB_NAME_INVITE(TB_NAME_MENU.name) EVAL_TB_MENU_HIDE() end)
-  item(-40, L("TB_NAMEMENU_COPY"), function() EVAL_TB_NAME_COPY(TB_NAME_MENU.name) EVAL_TB_MENU_HIDE() end)
-  item(-58, L("TB_NAMEMENU_SAY"), function() EVAL_TB_NAME_SAY(TB_NAME_MENU.name) EVAL_TB_MENU_HIDE() end)
-  item(-76, L("TB_NAMEMENU_CLOSE"), function() EVAL_TB_MENU_HIDE() end)
+  item(-20, L("TB_NAMEMENU_INVITE"), function() EVAL_TB_NAME_INVITE(TB_NAME_MENU.name) EVAL_TB_MENU_HIDE() end)
+  item(-35, L("TB_NAMEMENU_COPY"), function() EVAL_TB_NAME_COPY(TB_NAME_MENU.name) EVAL_TB_MENU_HIDE() end)
+  item(-50, L("TB_NAMEMENU_SAY"), function() EVAL_TB_NAME_SAY(TB_NAME_MENU.name) EVAL_TB_MENU_HIDE() end)
+  item(-65, L("TB_NAMEMENU_OFFICIAL"), function() EVAL_TB_NAME_OFFICIAL() EVAL_TB_MENU_HIDE() end)
+  item(-80, L("TB_NAMEMENU_CLOSE"), function() EVAL_TB_MENU_HIDE() end)
   pcall(f.Hide, f)
   TB.menu = f
   return f
+end
+-- ★「保留原来的右键功能」：把这次点击**原样转发**给客户端（官方有菜单就弹，没有就什么都不做）
+function EVAL_TB_NAME_OFFICIAL()
+  local m = TB_NAME_MENU
+  if type(TB.sirOrig) ~= "function" then
+    say(L("TB_NAMEMENU_NOOFFICIAL"))
+    return false
+  end
+  local ok = pcall(TB.sirOrig, m.link, m.text, "RightButton")
+  TB_NAME_MENU.official = (TB_NAME_MENU.official or 0) + 1
+  if not ok then say(L("TB_NAMEMENU_NOOFFICIAL")) end
+  return ok
+end
+-- ★诊断读值口：菜单的真实几何（宽度/背景透明度/条目文字）
+function EVAL_TB_MENU_GEOM()
+  if not TB.menu then return nil end
+  local f = TB.menu
+  local function num(m, o) local ok, v = pcall(m, o) return (ok and type(v) == "number") and v or nil end
+  local out = { w = num(f.GetWidth, f), h = num(f.GetHeight, f), items = {}, bg = {} }
+  if f.bg and type(f.bg.GetVertexColor) == "function" then
+    local ok, r, g, b, a = pcall(f.bg.GetVertexColor, f.bg)
+    if ok then out.bg = { r = r, g = g, b = b, a = a } end
+  end
+  for i = 1, table.getn(f.rows or {}) do
+    local b = f.rows[i]
+    local ok, t = pcall(b.text.GetText, b.text)
+    out.items[i] = { label = (ok and tostring(t or "")) or "",
+                     x = num(b.btn.GetLeft, b.btn), y = num(b.btn.GetTop, b.btn),
+                     w = num(b.btn.GetWidth, b.btn), h = num(b.btn.GetHeight, b.btn) }
+  end
+  return out
+end
+-- ★探针：客户端**自己的右键菜单**机制在不在（在 → 下一步就能把我们的条目注入官方菜单，风格天然一致）
+function EVAL_TB_OFFICIALMENU_PROBE()
+  local names = { "UnitPopupMenus", "UnitPopupButtons", "UnitPopup_ShowMenu", "UnitPopup_OnClick",
+                  "UIDropDownMenu_Initialize", "UIDropDownMenu_CreateInfo", "ToggleDropDownMenu",
+                  "CloseMenus", "PlayerFrameDropDown", "SetItemRef", "UnitPopup_OnUpdate" }
+  local parts = {}
+  for i = 1, table.getn(names) do
+    local v = _G[names[i]]
+    local t = type(v)
+    if t == "table" then
+      local n = 0
+      for _ in pairs(v) do n = n + 1 end
+      t = "table(" .. tostring(n) .. ")"
+    end
+    table.insert(parts, names[i] .. "=" .. t)
+  end
+  say("客户端右键菜单机制探针（table(数字) = 存在及条目数）：")
+  say("  " .. table.concat(parts, " ｜ "))
+  local um = _G.UnitPopupMenus
+  if type(um) == "table" and type(um["PLAYER"]) == "table" then
+    local lst = {}
+    for i = 1, table.getn(um["PLAYER"]) do table.insert(lst, tostring(um["PLAYER"][i])) end
+    say("  UnitPopupMenus[PLAYER] = " .. table.concat(lst, " / "))
+    say("|cff00ff00  ⇒ 有官方菜单表：下一步可把「公会邀请 / 复制名字 / /s 说出」注入进去（真·官方风格）|r")
+  else
+    say("|cffff8080  ⇒ 本客户端没给官方菜单表 → 维持自绘菜单（已按你的要求：半透明底 + 窄）|r")
+  end
+  return true
 end
 function EVAL_TB_MENU_SHOW(name)
   if not EVAL_TB_NAMEMENU_ON() then return false end
@@ -1057,6 +1136,8 @@ function EVAL_TB_SETITEMREF_INSTALL()
   local orig = cur
   local function wrapper(link, text, button)
     TB.sirSeen = (TB.sirSeen or 0) + 1
+    -- ★1.73.26 记下这次的 link/text：「官方菜单」那条要把这次点击**原样转发**给客户端
+    TB_NAME_MENU.link, TB_NAME_MENU.text = link, text
     local ok, handled = pcall(EVAL_TB_SIR_HANDLE, link, button)
     if ok and handled then
       TB.sirHandled = (TB.sirHandled or 0) + 1
@@ -1091,6 +1172,7 @@ function EVAL_TB_NAMEMENU_STATE()
     copyLast = TB_NAME_MENU.copyLast,
     inviteDirect = TB_NAME_MENU.inviteDirect or 0, inviteScript = TB_NAME_MENU.inviteScript or 0,
     sayDeb = TB_NAME_SAY_DEB or 0,
+    official = TB_NAME_MENU.official or 0, -- ★1.73.26 「官方菜单」转发次数
   }
 end
 function EVAL_TEST_TB_NAMEMENU_RESET()
@@ -1098,6 +1180,7 @@ function EVAL_TEST_TB_NAMEMENU_RESET()
   TB_NAME_MENU.shown, TB_NAME_MENU.name, TB_NAME_MENU.copyLast = false, nil, nil
   TB_NAME_MENU.inviteDirect, TB_NAME_MENU.inviteScript = 0, 0
   TB_NAME_SAY_DEB, TB_NAME_SAY_AT = 0, -99
+  TB_NAME_MENU.official = 0
   EVAL_TB_MENU_HIDE()
 end
 TB.sirHooked = EVAL_TB_SETITEMREF_INSTALL() and true or false

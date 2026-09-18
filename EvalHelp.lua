@@ -7388,6 +7388,24 @@ if type(SlashCmdList) == "table" then
       -- ★★★1.73.20 「色测」= 名字槽渲染试验：用户真机截图逐字放大定案「8 位色码在名字槽里也原样显示」
       --   而同一屏里经 AddMessage 打印的 8 位色码是有色的 ⇒ 名字槽不吃富文本。
       --   最后一条路 = 吞掉客户端那行、自己拼整行（代价：窗口分流/气泡/音效）→ **先取证再定方案**。
+      -- ★1.73.26 「右键」= 客户端**自己的右键菜单**机制探针（用户问「能否保持官方风格」→ 先查有没有官方菜单表）
+      if string.find(sarg, "^右键") == 1 then
+        if type(EVAL_TB_OFFICIALMENU_PROBE) == "function" then
+          pcall(EVAL_TB_OFFICIALMENU_PROBE)
+        else
+          say("右键菜单机制探针：本版本没有（EVAL_TB_OFFICIALMENU_PROBE 不存在）")
+        end
+        if type(EVAL_TB_MENU_GEOM) == "function" then
+          local mg = EVAL_TB_MENU_GEOM()
+          if mg then
+            say("我们自绘菜单的几何：宽 " .. tostring(mg.w) .. " ｜ 背景 alpha " ..
+                tostring(mg.bg and mg.bg.a) .. " ｜ 条目：" .. tostring(table.getn(mg.items)) .. " 条")
+          else
+            say("我们自绘菜单：还没建（右键一次名字再看）")
+          end
+        end
+        say("提示：把这一屏发我 —— 有 UnitPopupMenus 就能做成**真·官方风格**（我们的条目注入官方菜单）")
+      end
       if string.find(sarg, "^色测") == 1 then
         if type(EVAL_TB_CHATCOLOR_NAMEPROBE) == "function" then
           pcall(EVAL_TB_CHATCOLOR_NAMEPROBE)
