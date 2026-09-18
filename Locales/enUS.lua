@@ -278,13 +278,16 @@ PM_HINT = "Left-click a profile = activate; right-click = open this window (rena
   LANG_RELOAD = "Language switched to %s — /reload to apply everywhere",
 
   -- ===== 1.35.0 P1 =====
-  SE_TITLE = "Skill Editor (click name/param buttons for dropdowns - right-click the skill name to set a rank)",
+  SE_TITLE = "Skill Editor (click name/param buttons for dropdowns - cast rank is right of the skill name)",
   SE_ENABLE = "Enable this skill",
   SE_HEADER = "Rel   Condition        Params                            Result",
   SE_WHEN = "When",
   SE_TYPE_PH = "Type",
   SE_YES = "Yes",
-  SE_RANK_ANY = "Any",
+  SE_RANK_SKILL = "Skill",
+  SE_RANK_NONE = "No ranks found for %s in the spellbook (the spell may have none, or the spellbook could not be read)",
+  SE_RANK_TIP = "Cast rank (click to choose)",
+  SE_RANK_TIP2 = "\"Skill\" = use the spell as-is, no rank; picking a rank casts it directly (no action bar slot needed)",
   SE_NO = "No",
   SE_STK = "Stk",
   SE_STK_UNLIM = "Any stacks",

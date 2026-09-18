@@ -3074,6 +3074,12 @@ do
   TEST.slotNames[1] = "致死打击"
   EVAL_LOG_CLEAR()
   TEST.chat = nil
+  -- ★★★1.72.4 前置条件必须**显式写出来**：本段要验「关窗」，前提是窗此刻是**开着**的。
+  --   老写法把这个前提偷偷交给了桩的一个错误默认值（桩里新建帧默认 shown=false，
+  --   而真客户端是**默认显示**）→ 桩改对之后本条立刻炸。
+  --   ★判据：「前提来自被测代码的行为」可以，但「前提来自桩的默认值」不行——那是在借假前提。
+  pcall(EVAL_HELP_CFGWIN.root.Show, EVAL_HELP_CFGWIN.root)
+  eq(EVAL_HELP_CFGWIN.root:IsVisible(), true, "precondition: config window is open")
   EVAL_HELP_CFG_TOGGLE() -- 关
   eq(EVAL_HELP_CFGWIN.root:IsVisible(), false, "config window closed by toggle")
   EVAL_HELP_CFG_TOGGLE() -- 开：这里必须触发一次静默扫描
@@ -6683,7 +6689,12 @@ do
   }
   EVAL_HELP_CONFIG.war.activeProfile = 1
   local wasShown93 = EVAL_TEST_UI_SHOWN()
-  if not wasShown93 then EVAL_HELP_UI_TOGGLE() end -- 首次会 BUILD + Show（tick 只在可见时刷新）
+  -- ★★★1.72.4 前置必须**显式建立**，不许借桩的默认值：
+  --   本段要验「这 6 个方案被重排成多行」，而重排的**生产路径**是 EVAL_WAR_TAB_REFRESH
+  --   （比对方案名签名 → 整体重建）。老写法只 toggle + tick，靠旧桩「新建帧默认隐藏」
+  --   恰好走了「未显示 → toggle → BUILD」那条路才碰巧成立；桩把默认值改对后当场暴露。
+  if not wasShown93 then EVAL_HELP_UI_TOGGLE() end
+  EVAL_WAR_TAB_REFRESH() -- 生产重排路径（方案名签名变了 → 整体重建）
   EVAL_HELP_UI_TICK() -- ★方案行的**文本**由 tick 落上去（BUILD 只建空壳）
   local up = EVAL_TEST_UI_PROF()
   eq(type(up) == "table", true, "前置：拿到方案切换行的真实几何")
@@ -7712,11 +7723,13 @@ do
   print("  指定等级文本往返：导出 技能名(等级 3)、导入逐字还原、无括号老文本行为不变")
 end
 
--- 110) ★★★1.72.4 等级元素「没设等级就不显示」（用户要求：默认值显示技能；有自定义等级才出现）
---   判据盯的性质：① 默认隐藏（元素存在但不显示，且**文字也要一起藏**——本项目的显隐契约是显式的，
---   不靠父子传播）；② 右键技能名是**真实接线**（走它自己的 OnClick，而不是测试直调函数）；
---   ③ 下拉选项来自**法术书**（不是自己编的「等级 N」）；④ 设了等级 → 显示 + 标题 = 该等级；
---   ⑤ 左键没被顶掉（SetScript 是单槽位，链式转发错了就静默丢功能）；⑥ 编辑器 ↔ 方案数据往返。
+-- 110) ★★★1.72.4 等级元素（用户 1.72.4 定稿：「默认值显示技能」——**元素常显**，默认文案 = 「技能」）
+--   ★设计变更留档：先前一版做成「没设等级就整块隐藏」，用户装上当场否掉（原话：「技能右侧的等级配置没显示」）
+--     —— **入口藏起来 = 用户找不到功能**。正解：元素一直在，默认文案「技能」本身就表达「用技能本身、不指定等级」。
+--   判据盯的性质：① 默认**可见**且文案 = 「技能」（不是隐藏、也不是空白）；② 右键技能名是**真实接线**；
+--   ③ 下拉选项来自**法术书**（不是自己编的「等级 N」）；④ 设了等级 → 文案 = 该等级（元素仍在）；
+--   ⑤ 左键没被右键顶掉（SetScript 单槽位）；⑥ 编辑器 ↔ 方案数据往返；⑦ 法术书里没有该技能等级时**如实说明**、
+--   不弹残废下拉；⑧ 悬停说明真的有内容（写了 tooltip 没人看得见 = 没写）。
 do
   local savedP = EVAL_HELP_CONFIG.war.profiles
   local savedA = EVAL_HELP_CONFIG.war.activeProfile
@@ -7726,56 +7739,77 @@ do
   TEST.spellbook = { { name = "测试技能", sub = "等级 1" }, { name = "测试技能", sub = "等级 2" } }
   EVAL_HELP_SE_OPEN(1, nil, "测试技能") -- 新增技能：默认没有等级
   local r0 = EVAL_TEST_SE_RANK()
-  eq(r0.exists, true, "①等级元素真的建出来了（存在，只是不显示）")
-  eq(r0.shown, false, "①★★★默认**不显示**（没有等级时一行只显示技能）")
-  eq(r0.nameShown, false, "①★★反向：文字也一起藏（显隐契约是显式的，不许靠父子传播）")
+  eq(r0.exists, true, "①等级元素真的建出来了")
+  eq(r0.shown, true, "①★★★默认**可见**（入口不许藏）")
+  eq(r0.nameShown, true, "①★★文字也真的显示出来")
   eq(r0.rank, nil, "①默认没有自定义等级")
-  -- ② 右键技能名（真实 OnClick 闭包）
+  eq(r0.text, EVAL_L("SE_RANK_SKILL"), "①★★★默认文案 = 「技能」（用技能本身、不指定等级）")
+  -- ② 悬停说明（走真实 OnEnter → GameTooltip；⭐测试只能经**钩子**进生产代码——seUI 是 EvalHelp.lua 的 local）
+  TEST.tipLines = nil
+  eq(EVAL_TEST_SE_RANK_TIP(), true, "⑧等级元素挂着真实 OnEnter（走钩子，不越界掏 local）")
+  local tipTxt = ""
+  for _, ln in ipairs(TEST.tipLines or {}) do tipTxt = tipTxt .. tostring(ln.text or "") .. "\n" end
+  eq(string.find(tipTxt, EVAL_L("SE_RANK_TIP"), 1, true) ~= nil, true, "⑧★★悬停说明真的有内容（写明「点这里选择」）")
+  TEST.tipLines = nil
+  -- ③ 右键技能名（真实 OnClick 闭包）
   EVAL_DD_TEST_RESET_ANCHOR()
   eq(EVAL_TEST_SE_RANK_CLICK("RightButton"), true, "②技能名按钮上挂着真实 OnClick（右键入口接线在）")
   eq(EVAL_DD_TEST_SHOWN(), true, "②★★右键真的弹出了等级下拉")
   local visTxt = table.concat(EVAL_DD_TEST_VISIBLE_TEXTS(), "\n")
-  eq(string.find(visTxt, EVAL_L("SE_RANK_ANY"), 1, true) ~= nil, true, "②★下拉第一项 = 不限（默认项）")
+  eq(string.find(visTxt, EVAL_L("SE_RANK_SKILL"), 1, true) ~= nil, true, "②★下拉第一项 = 技能（默认项）")
   eq(string.find(visTxt, "等级 2", 1, true) ~= nil, true, "②★★下拉里是**法术书**枚举出的等级")
-  -- ③ 点真实的行 → 落值 + 元素出现
+  -- ④ 点真实的行 → 落值 + 文案变等级
   local idxRank2 = nil
   for i = 1, 4 do
     local row = EVAL_DD_TEST_ROW(i)
     if row and row.text and row.text.GetText and tostring(row.text:GetText()) == "等级 2" then idxRank2 = i end
   end
-  eq(idxRank2 ~= nil, true, "③下拉里找得到「等级 2」那一行（前置）")
+  eq(idxRank2 ~= nil, true, "④下拉里找得到「等级 2」那一行（前置）")
   if idxRank2 then EVAL_DD_TEST_CLICK(idxRank2) end
   local r1 = EVAL_TEST_SE_RANK()
-  eq(r1.rank, "等级 2", "③★点一下真的落到编辑器数据（ed.rank）")
-  eq(r1.shown, true, "③★★★设了自定义等级才显示（与 ① 的隐藏互为对照）")
-  eq(r1.text, "等级 2", "③★★标题 = 当前等级（只有一个元素，标题即当前值）")
-  eq(r1.nameShown, true, "③★★文字也真的显示出来（只 Show 按钮 = 真机上标题不出现）")
-  -- ④ 左键仍开技能列表（右键接线没把左键顶掉）
+  eq(r1.rank, "等级 2", "④★点一下真的落到编辑器数据（ed.rank）")
+  eq(r1.text, "等级 2", "④★★★设置了等级 → 文案更新为该等级（用户：「设置等级1 则标题名称更新」）")
+  eq(r1.shown, true, "④★★元素仍在（不是设完就消失）")
+  -- ⑤ 左键仍开技能列表（右键接线没把左键顶掉）
   EVAL_DD_TEST_RESET_ANCHOR()
-  eq(EVAL_TEST_SE_RANK_CLICK("LeftButtonUp"), true, "④左键点技能名（走同一个 OnClick）")
-  eq(EVAL_DD_TEST_SHOWN(), true, "④★★★左键没被右键接线顶掉：技能列表照旧打开")
+  eq(EVAL_TEST_SE_RANK_CLICK("LeftButtonUp"), true, "⑤左键点技能名（走同一个 OnClick）")
+  eq(EVAL_DD_TEST_SHOWN(), true, "⑤★★★左键没被右键接线顶掉：技能列表照旧打开")
   EVAL_DD_HIDE()
-  -- ⑤ 保存 → 落库；重开 → 载回
+  -- ⑥ 保存 → 落库；重开 → 载回
   EVAL_HELP_SE_SAVE()
   local saved = EVAL_HELP_CONFIG.war.profiles[1].skills[1]
-  eq(saved ~= nil and saved.rank, "等级 2", "⑤★★保存后等级真的进了方案数据（界面设了、库里没有 = 功能等于不存在）")
+  eq(saved ~= nil and saved.rank, "等级 2", "⑥★★保存后等级真的进了方案数据（界面设了、库里没有 = 功能等于不存在）")
   EVAL_HELP_SE_OPEN(1, 1) -- 重开这条技能
   local r2 = EVAL_TEST_SE_RANK()
-  eq(r2.rank, "等级 2", "⑤★★重开时把已有等级载回编辑器")
-  eq(r2.shown, true, "⑤★★而且元素重新显示（不是载回了值却看不见）")
-  -- ⑥ 设回「不限」→ 重新隐藏 + 库里清干净
-  eq(EVAL_TEST_SE_SET_RANK(nil), true, "⑥设回「不限」")
-  eq(EVAL_TEST_SE_RANK().shown, false, "⑥★★★设回不限 → 元素重新隐藏（默认态）")
+  eq(r2.rank, "等级 2", "⑥★★重开时把已有等级载回编辑器")
+  eq(r2.text, "等级 2", "⑥★★而且文案显示的是该等级（不是载回了值却看不见）")
+  -- ⑦ 设回「技能」→ 文案回到默认 + 库里清干净
+  eq(EVAL_TEST_SE_SET_RANK(nil), true, "⑦设回默认（技能）")
+  local r3 = EVAL_TEST_SE_RANK()
+  eq(r3.text, EVAL_L("SE_RANK_SKILL"), "⑦★★★清掉等级后文案回到「技能」（默认态）")
+  eq(r3.shown, true, "⑦★★元素还在（默认态也能一眼看到入口）")
   EVAL_HELP_SE_SAVE()
-  eq(EVAL_HELP_CONFIG.war.profiles[1].skills[1].rank, nil, "⑥★★库里也清干净了（不是只藏了界面）")
+  eq(EVAL_HELP_CONFIG.war.profiles[1].skills[1].rank, nil, "⑦★★库里也清干净了（不是只改了界面文案）")
+  -- ⑧ 法术书里读不到等级 → 如实说明、不弹残废下拉
+  TEST.spellbook = { { name = "无等级技能" } }
+  EVAL_SPELLBOOK_TEST_RESET()
+  EVAL_HELP_SE_OPEN(1, nil, "无等级技能")
+  EVAL_DD_TEST_RESET_ANCHOR()
+  TEST.chat = nil
+  eq(EVAL_TEST_SE_RANK_CLICK("RightButton"), true, "⑨右键入口仍在（只是这次没有等级可选）")
+  eq(EVAL_DD_TEST_SHOWN(), false, "⑨★★法术书里没有等级 → **不弹**只有一项的残废下拉")
+  eq(string.find(tostring(TEST.chat), "无等级技能", 1, true) ~= nil, true, "⑨★★★如实点名说明（查不到 ≠ 没有，绝不静默）")
+  local r4 = EVAL_TEST_SE_RANK()
+  eq(r4.text, EVAL_L("SE_RANK_SKILL"), "⑨反向哨兵：没有任何等级可选时，默认文案也没有被改坏")
   -- 收尾
+  TEST.chat = nil
   EVAL_TEST_SE_CLEAR()
   EVAL_HELP_CONFIG.war.profiles = savedP
   EVAL_HELP_CONFIG.war.activeProfile = savedA
   TEST.spellbook = nil
   EVAL_SPELLBOOK_TEST_RESET()
   EVAL_DD_HIDE()
-  print("  等级元素：默认隐藏（含文字）+ 右键真实接线 + 法术书等级 + 设了才显示 + 保存/重开往返")
+  print("  等级元素：常显 + 默认文案「技能」+ 右键/左键双入口 + 法术书等级 + 保存/重开往返 + 空等级如实说明")
 end
 
 -- 111) ★★★1.72.4 「指定等级」对**方案模版 / 导入导出**的影响审计（审计必须落成闸门，否则只是这一次的手工动作）

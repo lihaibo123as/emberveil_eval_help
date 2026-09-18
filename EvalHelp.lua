@@ -4301,6 +4301,17 @@ function EVAL_TEST_SE_RANK()
   return { exists = (w ~= nil), shown = shown, nameShown = nameShown,
            rank = (seUI and seUI.ed and seUI.ed.rank) or nil, text = txt }
 end
+-- ★1.72.4 断言入口：走**真实 OnEnter**（写 tooltip → 桩记录行），返回是否真的挂上了。
+--   ★为什么不让测试自己掏控件：seUI 是本文件的 **local**，测试脚本够不着（1.72.4 实测：
+--     测试里写 seUI.rankW.btn 全是 nil，断言看起来在验接线、其实什么都没读到）。
+function EVAL_TEST_SE_RANK_TIP()
+  local w = seUI and seUI.rankW
+  if not (w and w.btn and w.btn.GetScript) then return nil end
+  local ok, fn = pcall(w.btn.GetScript, w.btn, "OnEnter")
+  if not (ok and type(fn) == "function") then return nil end
+  fn()
+  return true
+end
 function EVAL_TEST_SE_SET_RANK(rk)
   if not (seUI and seUI.ed) then return false end
   seUI.ed.rank = (rk == nil or rk == "") and nil or rk
@@ -4327,14 +4338,10 @@ function EVAL_HELP_SE_REFRESH()
     uiSolid(seUI.skillIcon, 0.25, 0.25, 0.25, 1)
   end
   seUI.skillName:SetText(tostring(ed.skill))
-  if seUI.rankName then seUI.rankName:SetText(ed.rank or L("SE_RANK_ANY")) end
-  if seUI.rankW then -- ★1.72.4 有自定义等级才显示（没等级 = 一行只显示技能）
-    local vis = ed.rank and true or false
-    local how = vis and "Show" or "Hide"
-    pcall(seUI.rankW.btn[how], seUI.rankW.btn)
-    if seUI.rankW.bg then pcall(seUI.rankW.bg[how], seUI.rankW.bg) end
-    if seUI.rankName then pcall(seUI.rankName[how], seUI.rankName) end
-  end
+  -- ★1.72.4 等级元素：**常显**（用户：「默认值显示技能」）——没设等级时显示「技能」，设了就显示该等级。
+  --   ★「隐藏入口」被用户当场否掉（「技能右侧的等级配置没显示」）：入口藏起来 = 用户找不到功能，
+  --     所以元素一直在，默认文案本身就是「当前用的是技能本身（不指定等级）」这层含义。
+  if seUI.rankName then seUI.rankName:SetText(ed.rank or L("SE_RANK_SKILL")) end
   if seUI.catName then -- 分类按钮文字 = 当前技能所属类（1.32.3）
     local cl = { L("SK_CAT_1"), L("SK_CAT_2"), L("SK_CAT_3"), L("SK_CAT_4"), L("SK_CAT_5") }
     local ci = 2
@@ -4670,16 +4677,22 @@ local function SE_BUILD()
   icon:SetPoint("TOPLEFT", root, "TOPLEFT", 94, -24)
   icon:SetWidth(15) icon:SetHeight(15)
   seUI.skillIcon = icon
-  -- ★1.72.4 「释放指定等级」下拉（用户要求：技能右侧可选 不限/等级1/等级2…；★没设等级时元素不显示）。
-  --   ★入口：技能名上**右键**（等级元素默认隐藏 → 设了自定义等级才出现，此时也可点它改）。
+  -- ★1.72.4 「释放指定等级」下拉（用户要求：技能右侧可选 技能/等级1/等级2…；默认值显示「技能」）。
+  --   ★两个入口共用本函数：① 点技能名右侧的等级元素 ② 技能名上右键（快捷方式）。
   --   ★选项来自**法术书**（GetSpellName 第二返回 = rank/subtext），保证括号内文本与客户端逐字相符
   --     （CastSpellByName 的括号内容必须与 subtext 完全一致，所以不能自己编「等级 N」）。
-  --   ★默认「不限」= 老行为（技能须在动作条上、走 UseAction）。
-  --   ★锚点用技能名按钮：等级元素隐藏时它仍在屏幕上，弹出位置稳定。
+  --   ★默认「技能」= 老行为（技能须在动作条上、走 UseAction）。
+  --   ★锚点用技能名按钮：位置稳定，弹出不受等级元素自身文案宽度影响。
   local function seOpenRankMenu()
     if not (seUI and seUI.ed) then return end
-    local opts = { L("SE_RANK_ANY") }
     local ranks = EVAL_SPELLBOOK_RANKS(seUI.ed.skill)
+    if table.getn(ranks) == 0 then
+      -- ★★「查不到」≠「没有」：法术书里读不到该技能的等级 → **如实说明**，
+      --   绝不弹一个只有「技能」一项的残废下拉（用户只会以为功能坏了）。
+      say(string.format(L("SE_RANK_NONE"), tostring(seUI.ed.skill)))
+      return
+    end
+    local opts = { L("SE_RANK_SKILL") }
     for i = 1, table.getn(ranks) do opts[i + 1] = ranks[i] end
     EVAL_DD_OPEN(seUI.skillBtn, opts, function(pi)
       if not seUI.ed then return end
@@ -4715,17 +4728,25 @@ local function SE_BUILD()
     if skPrevClick then skPrevClick(a, b) end
   end)
   seUI.skillName = skName
-  -- ★1.72.4 「释放指定等级」下拉（用户要求：技能右侧加一个「不限 / 等级1 / 等级2 …」）
-  --   选项来自**法术书**（GetSpellName 第二返回），保证括号内与 subtext 逐字相符；
-  --   默认「不限」= 老行为（要求技能在动作条上、走 UseAction）。
-  local rkW = seBtn(root, 218, -24, 88, 16, L("SE_RANK_ANY"), seOpenRankMenu) -- ★1.72.4 标题=当前等级；★默认隐藏（见 rankW）
+  -- ★1.72.4 「释放指定等级」元素：**常显在技能名右侧**（用户：「默认值显示技能」）。
+  --   文案 = 当前等级；没设等级时显示「技能」= 用技能本身（老行为：要求技能在动作条上、走 UseAction）。
+  --   点它 / 右键技能名 都能开下拉；选项来自**法术书**（GetSpellName 第二返回），与 subtext 逐字相符。
+  local rkW = seBtn(root, 218, -24, 88, 16, L("SE_RANK_SKILL"), seOpenRankMenu)
   seUI.rankBtn = rkW.btn
   seUI.rankName = rkW.text
   seUI.rankW = rkW
-  -- ★初始态：不显示（真正的判据在 EVAL_HELP_SE_REFRESH 里按 ed.rank 显隐——单点判据；
-  --   这两行只是「建出来就是藏着的」初始值，变异实测它不是保护点，别把它当保护点）
-  pcall(rkW.btn.Hide, rkW.btn)
-  pcall(rkW.text.Hide, rkW.text)
+  -- 悬停说明（就一个元素，文字太短说不清语义 → 用 tooltip 补；与技能名右键入口同一份说明）
+  pcall(rkW.btn.EnableMouse, rkW.btn, true)
+  rkW.btn:SetScript("OnEnter", function()
+    if not GameTooltip then return end
+    GameTooltip:SetOwner(rkW.btn, "ANCHOR_RIGHT")
+    GameTooltip:AddLine(L("SE_RANK_TIP"), 1, 0.82, 0.3)
+    GameTooltip:AddLine(L("SE_RANK_TIP2"), 0.62, 0.55, 0.40)
+    GameTooltip:Show()
+  end)
+  rkW.btn:SetScript("OnLeave", function()
+    if GameTooltip and GameTooltip.Hide then pcall(GameTooltip.Hide, GameTooltip) end
+  end)
   local enChk = CreateFrame("Button", nil, root)
   enChk:SetWidth(14) enChk:SetHeight(14)
   pcall(enChk.EnableMouse, enChk, true)

@@ -7,7 +7,12 @@ TEST = { used = {}, targetClass = "WARRIOR", hasTarget = true, slotNames = { [1]
 
 local function newMock()
   local m = {}
-  local shown, scripts, texts = false, {}, {}
+  -- ★★★1.72.4 桩保真：真客户端里 CreateFrame 出来的帧**默认就是显示的**（除非显式 Hide）。
+  --   原桩初始值写 false → 于是「没调 Hide 也断言 IsShown()==false」这类断言**恒真通过**：
+  --   它不仅不检查，还会把「入口被藏起来」的真回归掩盖成绿灯（1.72.4 实测：把默认隐藏写进代码后，
+  --   去掉那两行 Hide 的变异竟然 SURVIVED；用户随后当场报「等级配置没显示」= 真回归被桩漏掉）。
+  --   ★判据：桩对「默认状态」必须与客户端一致——状态型桩错的不是「没状态」，而是**默认值反了**。
+  local shown, scripts, texts = true, {}, {}
   local w, h = nil, nil -- ★1.70.46 帧必须记得自己的尺寸（见下方 SetWidth/SetHeight 说明）
   local layer, level = nil, nil -- ★1.71.2 层（见下方 SetDrawLayer 说明）
   local focused = false -- ★1.71.2（第七轮）焦点状态（见下方 SetFocus 说明）
