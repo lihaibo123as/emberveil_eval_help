@@ -73,6 +73,9 @@ local function newMock()
     GetDrawLayer = function() return layer end,
     SetFrameLevel = function(_, l) level = l end,
     GetFrameLevel = function() return level end,
+    -- ★1.73.31 桩保真：鼠标开关要能读回来（「弹窗点击不到」的一半原因是它没吃掉落在自己身上的点击）
+    EnableMouse = function(self, v) rawset(self, "__mouse", v and true or false) end,
+    IsMouseEnabled = function(self) return rawget(self, "__mouse") and true or false end,
     ClearAllPoints = function() x = nil y = nil end,
     -- ★1.71.2 桩必须同时记住**锚点语义**（point/relPoint/relTo），不能只记偏移量：
     --   用户截图事故是「按钮压在小地图左下角」，而判据是**锚到了邻居的哪条边**
@@ -151,6 +154,16 @@ end
 local function newFrame(parent)
   local m = newMock()
   rawset(m, "__parent", parent or UIParent)
+  -- ★★★1.73.31 桩保真：真客户端里**子帧的 frame level = 父帧 + 1**，同 strata 内按 level 排先后。
+  --   本轮事故（用户：「自动购买的弹窗点击不到」）**正是**这条语义：弹窗只设了 strata、没设 level，
+  --   而工具箱行按钮是配置窗的子帧（level 更高）→ 画在弹窗之上、把鼠标吃掉。
+  --   桩若不模拟继承，弹窗 level 恒 0、这个 bug 在测试里**根本不存在**（同族：桩太宽松 → 断言失明）。
+  local lvl = 1
+  if parent and type(parent.GetFrameLevel) == "function" then
+    local ok, pl = pcall(parent.GetFrameLevel, parent)
+    if ok and type(pl) == "number" then lvl = pl + 1 end
+  end
+  if type(m.SetFrameLevel) == "function" then pcall(m.SetFrameLevel, m, lvl) end
   return m
 end
 -- ★1.73.14 造一个「独立 tooltip」：自己的文本 + 自己的 tooltip API（真机里 CreateFrame("GameTooltip", ...) 就是这个）

@@ -8835,6 +8835,29 @@ do
     lay120.cols, lay120.colW, lay120.colGap, lay120.pageN, lay120.rowsL, lay120.rowsR))
 end
 
+-- 134) ★★★1.73.31 用户报「自动购买的弹窗点击不到」（截图里工具箱行文字/按钮压在弹窗上）——
+--   【根因】弹窗只设了 strata、**没设 frame level**：同一个 DIALOG 层里按 frame level 排先后，
+--     工具箱的行按钮是配置窗的子帧（level 更高）→ 画在弹窗之上，鼠标也被它们吃掉。
+--   【判据】① 弹窗层级 ≥ 200（高于配置窗各弹窗 100~140，低于全局下拉 250）；
+--           ② 弹窗层级 **压过** 工具箱的交互控件（真实控件读回来的层级）；
+--           ③ 弹窗 EnableMouse(true)：吃掉落在自己身上的点击，**不穿透**到底下的复选框。
+do
+  local savedTab134 = EVAL_HELP_CFG_TAB()
+  EVAL_HELP_CFG_SETTAB(3)
+  EVAL_TB_REFRESH()
+  EVAL_BUY_UI_OPEN()
+  local z134 = EVAL_TEST_BUY_UI_Z()
+  eq(type(z134.buy) == "number", true, "①前置：弹窗已建好且读得到层级（" .. tostring(z134.buy) .. "）")
+  eq(z134.buy >= 200, true, "①★★★弹窗层级 ≥ 200（实际 " .. tostring(z134.buy) .. "）")
+  eq(type(z134.toolbox) == "number", true, "①前置：读得到工具箱交互控件的层级（" .. tostring(z134.toolbox) .. "）")
+  eq(z134.buy > z134.toolbox, true, "②★★★弹窗压过工具箱行控件（" .. tostring(z134.buy) .. " > " ..
+     tostring(z134.toolbox) .. "）—— 否则点击被它们吃掉")
+  eq(z134.mouse, true, "③★★★弹窗 EnableMouse(true)（不把点击漏给下面的复选框）")
+  EVAL_BUY_UI_CLOSE()
+  EVAL_HELP_CFG_SETTAB(savedTab134)
+  print("  自动购买弹窗：层级 200（压过工具箱行控件）+ 吃掉点击（用户报「点击不到」的根因）")
+end
+
 -- 121) ★★★1.73.12 聊天窗名字着色（用户：「聊天窗 内的名字能着色吗?需要走缓存?」）
 --   判据：① 缓存单一来源（写入点唯一）：职业名认得出才写、单字名不写、宠物名归主人、大小写不敏感；
 --         ② 纯函数认得出三种形态（方括号 / 行首「名字:」/ 方括号前缀之后）；

@@ -3240,6 +3240,14 @@ local function buyUIBuild()
   root:SetWidth(W) root:SetHeight(H)
   root:SetPoint("CENTER", UIParent, "CENTER", 60, 40)
   pcall(root.SetFrameStrata, root, "DIALOG")
+  -- ★★★1.73.31 用户报「自动购买的弹窗点击不到」——【根因】只设了 strata、**没设 frame level**：
+  --   同一个 DIALOG 层里按 frame level 排先后，工具箱的行按钮是配置窗的子帧（level 更高）
+  --   → 它们**画在弹窗之上**，鼠标也被它们吃掉（截图里能看到行文字/按钮压在弹窗上）。
+  --   【修法】① 明确抬到 200（高于配置窗各弹窗 100~140，**低于**全局下拉 250）；
+  --           ② EnableMouse(true)：落在弹窗体内的点击由弹窗吃掉，**不再穿透**到底下的工具箱行
+  --              （否则在弹窗空白处点一下会勾到后面的复选框）。
+  pcall(root.SetFrameLevel, root, 200)
+  pcall(root.EnableMouse, root, true)
   local bg = root:CreateTexture(nil, "BACKGROUND")
   tbSolid(bg, 0.05, 0.05, 0.07, 0.96)
   bg:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
@@ -3376,6 +3384,25 @@ function EVAL_TEST_BUY_UI_TEXTS()
       local okm, mvis = pcall(r.mark.IsShown, r.mark)
       table.insert(out, { on = (okm and mvis) and true or false, name = r.name:GetText() or "",
                           n = r.nt:GetText() or "", per = r.pt:GetText() or "" })
+    end
+  end
+  return out
+end
+-- ★★★1.73.31 读值口：弹窗的**层级/鼠标开关** + 工具箱交互控件的层级（「点击不到」= 层级被压 / 不吃点击）
+function EVAL_TEST_BUY_UI_Z()
+  local out = { buy = nil, toolbox = nil, mouse = nil }
+  if buyUI.root then
+    local ok, l = pcall(buyUI.root.GetFrameLevel, buyUI.root)
+    if ok then out.buy = l end
+    local okm, m = pcall(buyUI.root.IsMouseEnabled, buyUI.root)
+    if okm then out.mouse = m and true or false end
+  end
+  for k = 1, (TB.ROWS or 0) do
+    local r = TB.rows and TB.rows[k]
+    local o = r and (r.chk or (r.add and r.add.btn) or r.clr)
+    if o and type(o.GetFrameLevel) == "function" then
+      local ok, l = pcall(o.GetFrameLevel, o)
+      if ok and type(l) == "number" then out.toolbox = l break end
     end
   end
   return out
