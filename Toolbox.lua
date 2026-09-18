@@ -651,20 +651,24 @@ function EVAL_TB_CHATEVENT_INSTALL()
         local hex = nil
         if type(EVAL_TB_PAINT_COLOR_OF) == "function" then hex = EVAL_TB_PAINT_COLOR_OF(senderPlain) end
         if hex then
-          -- ★★★1.73.19 颜色码必须带 **alpha 两位**（`|cAARRGGBB` = 8 位 hex）：
-          --   写 6 位（`|cRRGGBB`）本客户端**根本不解析** —— 用户截图里名字直接显示成
-          --   「[|cf58cbaIonol|r]说: 1」这种**原文**（代码当普通文字画出来了）。
-          --   ★表里存的本来就是 8 位（`fff58cba`），上一版却 sub(hex,3) 把 alpha 切掉了 → 正是这个 bug。
-          local coloredSender = "|c" .. hex .. senderPlain .. "|r"
-          if coloredSender ~= sender then -- ★相等 = 「已经是对的」→ 一个字都不动（幂等在这里，不在守卫里）
-            TB.ceNamed = (TB.ceNamed or 0) + 1 -- 认得出来（诊断看这个）
-            -- ★★★1.73.20 名字槽不吃富文本（实测 8 位码也原样显示）→ **默认不回写**：
-            --   宁可不染色，绝不在玩家聊天里显示「|cfff58cbaIonol|r」这种原文（那是可见破坏）。
-            if TB_NAMECOLOR_WRITE then
-              if type(arg2) == "string" and arg2 == sender then arg2 = coloredSender end -- 回写全局（1.12 处理器从全局取值）
-            else
-              TB.ceNameHold = (TB.ceNameHold or 0) + 1
-            end
+          TB.ceNamed = (TB.ceNamed or 0) + 1 -- 认得出来（诊断看这个）
+          -- ★★★1.73.22 方案 A：**自己拼整行 + 吞掉客户端那行**（名字槽不吃富文本，只有这条路能染色）。
+          --   拼得出来 → 打印我们那一行并 **return（不调原函数）**；拼不出来 → 一个字都不改、原样放行。
+          local cline = nil
+          if type(EVAL_TB_CHATCOMPOSE) == "function" then
+            cline = EVAL_TB_CHATCOMPOSE(evUp, msg, senderPlain, hex)
+          end
+          local fr = _G.DEFAULT_CHAT_FRAME
+          if cline and fr and type(fr.AddMessage) == "function" then
+            pcall(fr.AddMessage, fr, cline)
+            TB.ceReplaced = (TB.ceReplaced or 0) + 1
+            return -- ★吞掉：客户端不再自己打这一行（这是「真吞掉」）
+          end
+          -- 兜底（拼不出来）：**不动任何东西**，交给客户端原样显示（宁可没色，绝不丢消息/串格式）
+          TB.ceNameHold = (TB.ceNameHold or 0) + 1
+          -- ★后手：名字槽何时能被客户端解析还是未知 —— 只有显式打开才回写 arg2（默认关，见 1.73.20/1.73.21）
+          if TB_NAMECOLOR_WRITE and type(arg2) == "string" and arg2 == sender then
+            arg2 = "|c" .. hex .. senderPlain .. "|r"
           end
         else
           TB.ceNameMiss = (TB.ceNameMiss or 0) + 1 -- 名字不在缓存里（如实记账，诊断里能看到）
@@ -710,6 +714,60 @@ function EVAL_TB_CHATEVENT_RETRY()
   end
   return ok
 end
+-- ★★★1.73.22 方案 A（**用户拍板**）：**吞掉客户端那行 + 自己拼整行** —— 只有这条路能让名字带上职业色。
+--   【为什么只能这样】名字槽（arg2）实测**不做富文本解析**（8 位色码也原样显示，见 1.73.20），
+--     而 AddMessage 通道**认代码**（我们自己的诊断行一直是有色的）→ 自己拼才染得上。
+--   【格式忠实抄客户端】用**客户端自己的全局格式串**拼（取证屏已看到它们都在）：
+--     CHAT_SAY_GET="%s说: " ｜ CHAT_YELL_GET="%s喊道: " ｜ CHAT_GUILD_GET="[公会] %s: " …
+--     拿同一份模板拼，文案/三语言/客户端改动都不用我们跟。
+--   【拿不准就不吞】下面任一条不成立 → **一个字都不改，原样交给客户端**（宁可没色，绝不丢消息或串格式）：
+--     ① 事件在支持表里；② 客户端真有那个格式串；③ 模板里**恰好一个 %s**；④ 名字在缓存里（有职业色）。
+--   【名字怎么给】`|c职业色|Hplayer:名字|h[名字]|h|r` —— 自己补 `|Hplayer:` 链接 → **点名字照样能密语**。
+--   【代价（取证屏已写明，用户接受）】聊天窗**分流**、说/喊**气泡**、部分音效不再由客户端出。
+local TB_CE_FMT = {
+  CHAT_MSG_SAY = "CHAT_SAY_GET", CHAT_MSG_YELL = "CHAT_YELL_GET",
+  CHAT_MSG_GUILD = "CHAT_GUILD_GET", CHAT_MSG_OFFICER = "CHAT_OFFICER_GET",
+  CHAT_MSG_PARTY = "CHAT_PARTY_GET", CHAT_MSG_RAID = "CHAT_RAID_GET",
+}
+local TB_CE_TYPE = {
+  CHAT_MSG_SAY = "SAY", CHAT_MSG_YELL = "YELL", CHAT_MSG_GUILD = "GUILD",
+  CHAT_MSG_OFFICER = "OFFICER", CHAT_MSG_PARTY = "PARTY", CHAT_MSG_RAID = "RAID",
+}
+-- 消息类型色：`ChatTypeInfo[类型].colorStr`（客户端有就用它 —— 不自己发明配色；取不到就不加色）
+function EVAL_TB_CHATTYPECOLOR(ev)
+  local t = TB_CE_TYPE[ev]
+  local cti = _G.ChatTypeInfo
+  if not t or type(cti) ~= "table" then return nil end
+  local e = cti[t]
+  if type(e) ~= "table" then return nil end
+  local s = e.colorStr
+  if type(s) == "string" and string.len(s) >= 10 then return s end -- "|c" + 8 位
+  return nil
+end
+-- 纯函数：拼一行（**能拼 → 字符串**；任一条判据不满足 → **nil = 不许吞**）。
+-- ★类型色只在**前缀**上（与客户端一样：公会前缀是绿的、正文是白的）：前缀后立刻 `|r` 复位。
+function EVAL_TB_CHATCOMPOSE(ev, body, sender, hex)
+  if type(ev) ~= "string" or type(sender) ~= "string" or sender == "" then return nil end
+  local key = TB_CE_FMT[ev]
+  if not key then return nil end
+  local tpl = _G[key]
+  if type(tpl) ~= "string" then return nil end -- ② 客户端没这个格式串 → 不猜
+  local pre, post = string.match(tpl, "^(.-)%%s(.*)$")
+  if pre == nil then return nil end            -- ③ 模板里没有 %s
+  --  ★plain=true 时找的是**字面两个字符** "%s"（不是模式里的 %%s！）—— 本轮实测：写成 "%%s" 永远找不到，
+  --   于是「模板里不止一个 %s → 不许拼」这条判据**整个是死的**（组 129d③ 当场抓到）。
+  if string.find(post, "%s", 1, true) then return nil end -- ③ 不止一个 %s → 不猜
+  local name = "[" .. sender .. "]"
+  if type(hex) == "string" and string.len(hex) == 8 then
+    name = "|c" .. hex .. "|Hplayer:" .. sender .. "|h[" .. sender .. "]|h|r"
+  end
+  local tc = EVAL_TB_CHATTYPECOLOR(ev)
+  if tc then
+    return tc .. pre .. "|r" .. name .. tc .. post .. tostring(body or "") .. "|r"
+  end
+  return pre .. name .. post .. tostring(body or "")
+end
+
 -- ★★★1.73.20 名字槽**渲染试验**（取证口；铁律 4：能做成命令就别让用户手工复现）
 --   【为什么需要它】用户真机截图逐字放大后定案：名字槽里**8 位色码也原样显示**
 --   （「[1. 综合] [|cfff58cbaIonol|r]: 1」—— 代码当普通文字画出来），
@@ -772,12 +830,14 @@ function EVAL_TB_CHATEVENT_STATE()
            shape = TB.ceShape or {}, noMsg = TB.ceNoMsg or 0,
            named = TB.ceNamed or 0, nameMiss = TB.ceNameMiss or 0,
            -- ★1.73.20 「认得出职业、但按当前结论**暂不回写**」的次数（名字槽不吃富文本）
-           held = TB.ceNameHold or 0 }
+           held = TB.ceNameHold or 0,
+           -- ★1.73.22 方案 A：真的「吞行 + 自己拼」了几行
+           replaced = TB.ceReplaced or 0 }
 end
 function EVAL_TEST_TB_CHATEVENT_RESET()
   TB.ceSeen, TB.ceFiltered, TB.cePainted, TB.ceRaw = 0, 0, 0, {}
   TB.ceChat, TB.ceByEv, TB.ceShape, TB.ceNoMsg, TB.ceShapeN = {}, {}, {}, 0, 0
-  TB.ceNamed, TB.ceNameMiss, TB.ceNameHold = 0, 0, 0
+  TB.ceNamed, TB.ceNameMiss, TB.ceNameHold, TB.ceReplaced = 0, 0, 0, 0
   TB.ceTryAt, TB.ceTries, TB.ceLogged = nil, 0, false
 end
 -- ★1.73.20 试验口：临时打开/关闭「回写 arg2」（**默认关** —— 名字槽不吃富文本，回写只会显示成原文）。

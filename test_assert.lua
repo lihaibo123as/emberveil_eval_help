@@ -9415,6 +9415,10 @@ do
   EVAL_TEST_TB_CHATEVENT_RESET()
   EVAL_TB_NAMECLASS_PUT("Ionol", "圣骑士")
   local colPal129 = "|c" .. EVAL_TB_PAINT_CLASS_COLOR_OF("PALADIN")
+  --  ★本组只验**兜底路径**（拼不出来 → 原样交给客户端）：把客户端的格式串清掉，
+  --   强制 EVAL_TB_CHATCOMPOSE 回 nil，这样原函数才会被调用、才读得到它收到的 arg2。
+  --   ★「能拼出来 → 吞行 + 自己拼」在组 129d 里验（两组各管一条路，互不掩盖）。
+  _G.CHAT_SAY_GET, _G.CHAT_GUILD_GET, _G.CHAT_PARTY_GET = nil, nil, nil
   -- ① 真机形态：正文 "1" + 发送者 "Ionol"（在缓存里）
   TEST.ceCalls, TEST.ceSeen = 0, {}
   arg1 = "1" arg2 = "Ionol"
@@ -9427,7 +9431,8 @@ do
   eq(seen129 ~= nil and seen129.arg1, "1", "①★正文一个字都不改（名字不在正文里）")
   local st129a = EVAL_TB_CHATEVENT_STATE()
   eq(st129a.named, 1, "①★认得出职业的名字计数 +1（诊断看这个）")
-  eq(st129a.held, 1, "①★★并记「按当前结论**暂不回写**」计数 +1（不是静默）")
+  eq(st129a.held, 1, "①★★并记「拼不出来 → 交回客户端」计数 +1（不是静默）")
+  eq(st129a.replaced, 0, "①★这一路**没有**接管（拼不出来就不许吞）")
   --  ①b 闸门**打开**时那条路必须真的能包色（否则回写逻辑成了没被覆盖的死代码）：
   --     颜色码必须 **8 位 aarrggbb**（6 位客户端不解析）；断言就钉在**打开后**的实际串上。
   EVAL_TEST_TB_CHATEVENT_RESET()
@@ -9457,11 +9462,13 @@ do
   ChatFrame_OnEvent("CHAT_MSG_SAY")
   local seen129c = TEST.ceSeen[table.getn(TEST.ceSeen)]
   eq(seen129c ~= nil and seen129c.arg2, already129, "③★★已带颜色的名字不重复包裹（幂等）")
-  --   ★★幂等必须由「重建结果与原文**逐字节相同**」保证（不是靠「看到 |c 就跳过」的守卫）：
-  --     所以**两个计数都必须为 0** —— 否则「什么都没做」与「查得到但不该动」分不清（变异 M177 靠这条抓）。
+  --   ★★1.73.22 起「剥码 → 查纯名字」让**已带色的名字照样认得出**（这是 1.73.18 那个修复的延续）：
+  --     所以这里 named≥1（认得出来）、miss=0（不是「查不到人」）、且**没有**接管（本组无格式串 → 走兜底）。
   local st129c = EVAL_TB_CHATEVENT_STATE()
-  eq((st129c.named or 0) == 0 and (st129c.nameMiss or 0) == 0, true,
-     "③★已是我们那层色 → 既不上色也不记「不在缓存」：named=" .. tostring(st129c.named) .. " miss=" .. tostring(st129c.nameMiss))
+  eq((st129c.named or 0) >= 1 and (st129c.nameMiss or 0) == 0, true,
+     "③★已带色的名字照样认得出来（剥码查缓存）：named=" .. tostring(st129c.named) .. " miss=" .. tostring(st129c.nameMiss))
+  eq((st129c.held or 0) >= 1 and (st129c.replaced or 0) == 0, true,
+     "③★这一路（客户端没给格式串）走兜底：held=" .. tostring(st129c.held) .. " replaced=" .. tostring(st129c.replaced))
   -- ③b ★★★客户端自己先上过色（**默认灰**）→ 查到职业就必须改成职业色：
   --     这是用户那句「角色名还是没染色」的真身（旧代码拿带码的串查缓存 → 永远查不到人 → 什么都不改）。
   EVAL_TEST_TB_CHATEVENT_RESET()
@@ -9472,8 +9479,9 @@ do
   eq(seen129d ~= nil and seen129d.arg2, "|cff808080Ionol|r",
      "③b★★★闸门关着 → 客户端自己上的灰也不动（宁可不动，也不显示原文）：" .. tostring(seen129d and seen129d.arg2))
   local st129d = EVAL_TB_CHATEVENT_STATE()
-  eq(tonumber(st129d.named or 0) >= 1, true, "③b★认得出来（named +1）")
-  eq(tonumber(st129d.held or 0) >= 1, true, "③b★并如实记「暂不回写」（held +1）")
+  eq(tonumber(st129d.named or 0) >= 1, true, "③b★认得出来（剥掉客户端的灰码后查到职业）：named≥1")
+  eq(tonumber(st129d.nameMiss or 0) == 0, true, "③b★不是「查不到人」（miss=0）—— 这正是 1.73.18 那个修复的价值")
+  eq(tonumber(st129d.held or 0) >= 1 and tonumber(st129d.replaced or 0) == 0, true, "③b★这一路走兜底（held≥1、replaced=0）")
   -- ④ 主动查询触发点 = 发送者名（正文里没有名字可找）
   EVAL_TB_WHO_RESET()
   EVAL_TEST_TB_CHATEVENT_RESET()
@@ -9488,7 +9496,8 @@ do
   SlashCmdList["EVALHELP"]("go 聊天")
   local c129b = tostring(TEST.chat or "")
   eq(string.find(c129b, "名字（arg2 = 发送者）认得出职业", 1, true) ~= nil, true, "⑤★★诊断打印「认得出职业 N 次 / 名字不在缓存 M 次」")
-  eq(string.find(c129b, "暂不回写 arg2", 1, true) ~= nil, true, "⑤★★并如实打印「暂不回写」的次数与原因（名字槽不吃富文本）")
+  eq(string.find(c129b, "真的接管", 1, true) ~= nil, true, "⑤★★并如实打印「方案A 真的接管 N 行 / 拼不出来 M 行」")
+  eq(string.find(c129b, "频道/密语暂不支持", 1, true) ~= nil, true, "⑤★★并写明**支持范围**（频道/密语暂不支持，客户端原样显示）")
   EVAL_TEST_TB_CHATEVENT_RESET()
   EVAL_TB_WHO_RESET()
   arg1, arg2 = nil, nil
@@ -9603,6 +9612,79 @@ do
   arg1, arg2 = nil, nil
   EVAL_HELP_CONFIG.tb = savedTb129c
   print("  名字槽渲染试验：5 种写法让客户端自己渲染 · 含链接形态候选 · 自己拼的示例带可点链接 · 如实写代价")
+end
+
+-- 129d) ★★★1.73.22 方案 A（**用户拍板**）：吞掉客户端那行 + 自己拼整行 —— 名字才能带职业色。
+--   判据：① 格式串**抄客户端的**（CHAT_*_GET）；② 名字 = 8 位职业色 + 自己补的 |Hplayer: 链接（照样能密语）；
+--         ③ **类型色只在前缀上**（前缀后立刻 |r 复位，与客户端一致）；
+--         ④ 端到端：能拼 → **原函数一次都不被调用**（真吞掉）+ 我们那行真的打到聊天框；
+--         ⑤ 任一条判据不满足（不支持的事件 / 客户端没那个格式串 / 模板里不止一个 %s）→ **拼不出来 → 不吞**
+--            （宁可没色，绝不丢消息或串格式）。
+do
+  local saved129d = EVAL_HELP_CONFIG.tb
+  EVAL_HELP_CONFIG.tb = { chatColor = true }
+  EVAL_TB_NAMECLASS_PUT("Ionol", "圣骑士")
+  local hex129d = EVAL_TB_PAINT_CLASS_COLOR_OF("PALADIN")
+  local link129d = "|c" .. hex129d .. "|Hplayer:Ionol|h[Ionol]|h|r"
+  _G.CHAT_GUILD_GET = "[公会] %s: "
+  _G.CHAT_SAY_GET = "%s说: "
+  _G.ChatTypeInfo = { GUILD = { colorStr = "|cff33ff33" }, SAY = { colorStr = "|cffffffff" } }
+  -- ① 纯函数：公会（有类型色）
+  local l129d = EVAL_TB_CHATCOMPOSE("CHAT_MSG_GUILD", "集合", "Ionol", hex129d)
+  eq(type(l129d) == "string", true, "①★有模板 + 名字有职业色 → 拼得出来")
+  --  ★注意：前缀里有中文（一个字 **3 字节**）→ 长度必须用 string.len 现算，别写死数字（写 17 就少了）
+  local pre129d = "|cff33ff33[公会] |r"
+  eq(string.sub(tostring(l129d), 1, string.len(pre129d)) == pre129d, true,
+     "①★★用**客户端的格式串**打头，且类型色只在前缀上（前缀后 |r 复位）：" .. tostring(l129d))
+  eq(string.find(tostring(l129d), link129d, 1, true) ~= nil, true,
+     "①★★★名字 = 8 位职业色 + 自己补的 |Hplayer: 链接（点名字照样密语）")
+  eq(string.find(tostring(l129d), "集合", 1, true) ~= nil, true, "①★正文原样带上")
+  eq(string.len(string.match(tostring(l129d), "(|c%x+)|Hplayer:Ionol") or ""), 10, "①★名字的色码是 8 位 aarrggbb")
+  -- ② 说：模板在名字**前面没有前缀**，名字夹在中间
+  local l129e = EVAL_TB_CHATCOMPOSE("CHAT_MSG_SAY", "你好", "Ionol", hex129d)
+  eq(string.find(tostring(l129e), link129d .. "|cffffffff说: 你好|r", 1, true) ~= nil, true,
+     "②★「说」的行形态（名字 + 客户端模板 + 正文）：" .. tostring(l129e))
+  -- ③ 拿不准就不拼（nil = 不许吞）
+  --  ★★弱判据教训（M195 实测）：如果**不给** CHANNEL 准备模板，那么「频道 → nil」既可能是
+  --     「不在支持表」，也可能是「没有格式串」—— 删掉支持表限制（把频道加进去）照样绿。
+  --     ⇒ 这里**先把模板也给它**，让这条断言只可能因为「不在支持表」而成立。
+  --  ★而且模板必须是**单 %s**的：若给 "[%s] %s: "，"多于一个 %s" 那条守卫会**替支持表把事做掉**
+  --    （M195 第二次实测仍是 SURVIVED）→ 用 "%s: " 让这条断言只可能因为「不在支持表」而成立。
+  _G.CHAT_CHANNEL_GET = "%s: "
+  eq(EVAL_TB_CHATCOMPOSE("CHAT_MSG_CHANNEL", "1", "Ionol", hex129d), nil,
+     "③★★频道**就算有现成模板也**不拼（频道名前缀要靠别的参数 → 只有它不在支持表里）")
+  _G.CHAT_GUILD_GET = nil
+  eq(EVAL_TB_CHATCOMPOSE("CHAT_MSG_GUILD", "1", "Ionol", hex129d), nil, "③★客户端没这个格式串 → nil（不猜文案）")
+  _G.CHAT_GUILD_GET = "[%s] %s: "
+  eq(EVAL_TB_CHATCOMPOSE("CHAT_MSG_GUILD", "1", "Ionol", hex129d), nil, "③★模板里不止一个 %s → nil（不猜位置）")
+  _G.CHAT_GUILD_GET = "[公会] %s: "
+  -- ④ 端到端：能拼 → 吞行 + 我们那行进聊天框
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  TEST.ceCalls, TEST.ceSeen, TEST.chat = 0, {}, ""
+  arg1, arg2 = "集合", "Ionol"
+  ChatFrame_OnEvent("CHAT_MSG_GUILD")
+  eq(TEST.ceCalls, 0, "④★★★**吞掉客户端那行**（原函数一次都没被调用 —— 这才叫真吞）")
+  eq(string.find(tostring(TEST.chat or ""), link129d, 1, true) ~= nil, true, "④★★我们拼的那行真的打到了聊天框")
+  eq(string.find(tostring(TEST.chat or ""), "[公会] ", 1, true) ~= nil, true, "④★而且带着**客户端的公会前缀**")
+  local st129d2 = EVAL_TB_CHATEVENT_STATE()
+  eq(st129d2.replaced, 1, "④★接管计数 +1")
+  eq(st129d2.held, 0, "④★没有走兜底")
+  -- ⑤ 兜底：格式串不在 → **不吞、不改**（宁可没色，绝不丢消息）
+  _G.CHAT_GUILD_GET = nil
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  TEST.ceCalls, TEST.ceSeen = 0, {}
+  arg1, arg2 = "集合", "Ionol"
+  ChatFrame_OnEvent("CHAT_MSG_GUILD")
+  local seen129dz = TEST.ceSeen[table.getn(TEST.ceSeen)]
+  eq(TEST.ceCalls, 1, "⑤★★拼不出来 → 原样交给客户端（一次都不许吞）")
+  eq(seen129dz ~= nil and seen129dz.arg2, "Ionol", "⑤★★并且 arg2 一个字都不改")
+  eq(tonumber(EVAL_TB_CHATEVENT_STATE().held or 0) >= 1, true, "⑤★如实记「交回客户端」的次数")
+  eq(tonumber(EVAL_TB_CHATEVENT_STATE().replaced or 0) == 0, true, "⑤★没有接管")
+  _G.CHAT_GUILD_GET, _G.CHAT_SAY_GET, _G.CHAT_CHANNEL_GET, _G.ChatTypeInfo = nil, nil, nil, nil
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  arg1, arg2 = nil, nil
+  EVAL_HELP_CONFIG.tb = saved129d
+  print("  方案A：格式串抄客户端 · 类型色只在前缀 · 名字=职业色+可点链接 · 能拼才吞 · 拼不出来绝不丢消息")
 end
 
 print("ALL TESTS PASS")

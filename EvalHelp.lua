@@ -7430,9 +7430,10 @@ if type(SlashCmdList) == "table" then
           -- ★★★1.73.17 调用形态 + 取不到文本的计数（用户实测：1513 次调用、零样本零计数 → 姿势问题）
           say("  名字（arg2 = 发送者）认得出职业：" .. tostring(ce.named or 0) .. " 次；名字不在缓存：" ..
             tostring(ce.nameMiss or 0) .. " 次（★miss 很大 = 缓存里没这些人，先去打开一次公会/查询窗口）")
-          say("|cffff8080  暂不回写 arg2：" .. tostring(ce.held or 0) ..
-            " 次 —— 实测**名字槽不吃富文本**（8 位色码也被原样画出来）→ 宁可不染色，也不显示色码原文；" ..
-            "跑 /eh go 聊天 色测 看有没有别的写法能用|r")
+          say("  方案A「吞行 + 自己拼」：真的接管 " .. tostring(ce.replaced or 0) ..
+            " 行；拼不出来（**交回客户端、不染色**）" .. tostring(ce.held or 0) .. " 行")
+          say("  ★支持：说/喊/公会/官员/队伍/团队（格式串取自客户端自己的 CHAT_*_GET）；" ..
+            "频道/密语暂不支持（客户端原样显示）")
           say("  取不到文本的调用：" .. tostring(ce.noMsg or 0) .. " 次（若 ≈ 被调用总数 → 取参姿势不对）")
           if type(ce.shape) == "table" and table.getn(ce.shape) > 0 then
             say("  调用形态（前 " .. table.getn(ce.shape) .. " 次的原样参数；★姿势定案看这里）：")
