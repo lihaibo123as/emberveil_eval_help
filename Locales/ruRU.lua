@@ -316,7 +316,7 @@ PM_HINT = "ЛКМ по профилю = активировать; ПКМ = эт�
   SK_CAT_5 = "Предметы",
   CTG_1 = "Себя",
   CTG_2 = "Цель",
-  CTG_3 = "Ауры",
+  CTG_3 = "Проверки баффов/дебаффов",
   CTG_4 = "Навык",
   CT_POWER = "Ярость/Энергия", CT_THPPCT = "HP цели%", CT_HPPCT = "Свое HP%", CT_POWERPCT = "Энергия%",
   CT_COMBATTIME = "Время в бою", CT_COMBO = "Комбо-очки", CT_SWINGLEFT = "До атаки", CT_COMBAT = "В бою", CT_HASTARGET = "Цель есть",

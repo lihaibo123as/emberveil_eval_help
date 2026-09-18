@@ -316,7 +316,7 @@ PM_HINT = "左键方案 = 激活；右键方案 = 开本窗口（改名 + 绑键
   SK_CAT_5 = "物品使用",
   CTG_1 = "自身状态",
   CTG_2 = "目标状态",
-  CTG_3 = "光环效果",
+  CTG_3 = "buff/debuff检查",
   CTG_4 = "技能状态",
   CT_POWER = "怒气/能量", CT_THPPCT = "目标血%", CT_HPPCT = "自身血%", CT_POWERPCT = "能量%",
   CT_COMBATTIME = "进战秒数", CT_COMBO = "连击点数", CT_SWINGLEFT = "距下次攻击", CT_COMBAT = "战斗状态", CT_HASTARGET = "目标存在",

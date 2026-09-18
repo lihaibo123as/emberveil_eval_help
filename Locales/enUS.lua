@@ -316,7 +316,7 @@ PM_HINT = "Left-click a profile = activate; right-click = open this window (rena
   SK_CAT_5 = "Items",
   CTG_1 = "Self",
   CTG_2 = "Target",
-  CTG_3 = "Auras",
+  CTG_3 = "Buff / Debuff checks",
   CTG_4 = "Skill State",
   CT_POWER = "Rage/Energy", CT_THPPCT = "Target HP%", CT_HPPCT = "Self HP%", CT_POWERPCT = "Power%",
   CT_COMBATTIME = "Combat Time", CT_COMBO = "Combo Points", CT_SWINGLEFT = "Next Swing In", CT_COMBAT = "In Combat", CT_HASTARGET = "Target Exists",
