@@ -8613,4 +8613,97 @@ do
   print("  职业着色：职业名→职业色 · 阶级按比例插值（含奇数档反例）· 三窗口挂载+幂等+先调原函数 · 同地图绿/离线减半 · 关开关不叠色 · 缺窗口如实记账")
 end
 
+-- 120) ★★★1.73.11 工具箱两列版式（用户：「工具箱分两列」）
+--   判据：① 切点是**组边界**（右列从组标题开头）且两列行数差最小；
+--         ② 真实控件几何**列不相交**（右列控件左边缘 > 左列控件右边缘）+ 每个控件都在**本列**内；
+--         ③ 每个条目只出现一次（两列并集 = 本页，无重无漏）；
+--         ④ 两列后 16 条一页装得下 → 指示行与翻页按钮都隐藏。
+do
+  local pack120 = EVAL_LOCALES[EVAL_GET_LANG()] or EVAL_LOCALES.zhCN
+  -- ① 纯函数：合成模型 3 组 5/5/6（与真实模型同形）
+  local fake = {}
+  local idx = 0
+  for gi = 1, 3 do
+    idx = idx + 1 fake[idx] = { t = "h", label = "组" .. gi }
+    local body = (gi == 3) and 5 or 4
+    for j = 1, body do idx = idx + 1 fake[idx] = { t = "c", key = "k" .. gi .. "_" .. j } end
+  end
+  eq(idx, 16, "①前置：合成模型 16 条（3 组 5/5/6）")
+  local cut120, l120, r120, pn120 = EVAL_TB_COL_CUT(fake, 0, 13, 2)
+  eq(pn120, 16, "①本页 16 条")
+  eq(l120 + r120, pn120, "①两列行数之和 = 本页条数（不重不漏）")
+  eq(fake[cut120 + 1] ~= nil and fake[cut120 + 1].t == "h", true,
+     "①★★★切点落在**组边界**（右列从组标题开头；实际 cut=" .. tostring(cut120) .. "，右列首条=" .. tostring(fake[cut120 + 1] and fake[cut120 + 1].t) .. "）")
+  -- ★「平衡」的正确说法 = **在允许的组边界切点里差最小**（组大小 5/5/6 时不可能做到 8/8，
+  --   所以不能写死「差 ≤2」；这里自己把候选切点算一遍，跟纯函数挑出来的比）
+  local best120 = nil
+  for _, cc in ipairs({ 5, 10, 16 }) do
+    local d = math.abs(cc - (16 - cc))
+    if best120 == nil or d < best120 then best120 = d end
+  end
+  eq(math.abs(l120 - r120) <= best120, true,
+     "①两列在**组边界候选**里差最小（" .. tostring(l120) .. "/" .. tostring(r120) .. "，最优差 " .. tostring(best120) .. "）")
+  -- 单列（cols=1）：不切，整页都在左列；行数上限给足 99 才能一页装下 16 条
+  local c1a, l1a, r1a, p1a = EVAL_TB_COL_CUT(fake, 0, 99, 1)
+  eq(c1a, 16, "①单列时不切（左列装全部 16 条）")
+  eq(r1a, 0, "①单列时右列为空")
+  eq(p1a, 16, "①单列一页 16 条")
+  -- ② 真实版式（先切到工具箱 Tab：行控件的显隐走**显式清单**，不切过来全是 Hide）
+  local savedTab120 = EVAL_HELP_CFG_TAB()
+  EVAL_HELP_CFG_SETTAB(3)
+  local lay120 = EVAL_TB_TEST_LAYOUT()
+  eq(type(lay120) == "table" and lay120.cols ~= nil, true, "②前置：拿到工具箱真实版式")
+  eq(lay120.cols, 2, "②★★工具箱真的分两列（cols=" .. tostring(lay120.cols) .. "，列宽 " .. tostring(lay120.colW) .. "，列缝 " .. tostring(lay120.colGap) .. "）")
+  eq(lay120.colW >= 200, true, "②列宽够放「勾选框 + 文案 + 按钮」：" .. tostring(lay120.colW))
+  eq(lay120.colX[2], lay120.colX[1] + lay120.colW + lay120.colGap, "②右列起点 = 左列右边界 + 列缝")
+  eq(lay120.pool, lay120.rowsPerCol * 2, "②行池 = 每列行数 × 列数（" .. tostring(lay120.pool) .. "）")
+  eq(lay120.rowsL > 0 and lay120.rowsR > 0, true, "②★★两列都真的有内容（" .. tostring(lay120.rowsL) .. "+" .. tostring(lay120.rowsR) .. "）")
+  eq(lay120.rows[lay120.rowsPerCol + 1] ~= nil and lay120.rows[lay120.rowsPerCol + 1].kind == "h", true,
+     "②★★★右列第一格是**组标题**（组不被拆到两列）")
+  -- ③ 列不相交 + 每个控件在本列内 + 条目不重不漏
+  local bad120, seen120, cnt120 = "", {}, 0
+  local function rightOf(rect)
+    if not (rect and type(rect.x) == "number" and type(rect.w) == "number") then return nil end
+    return rect.x + rect.w
+  end
+  for k = 1, table.getn(lay120.rows) do
+    local rr = lay120.rows[k]
+    -- ★按 kind 判断「这一格有东西」（组标题、以及没有 key 的行如「屏蔽公会成员上下线提示」也算）
+    if rr and rr.kind ~= nil then
+      cnt120 = cnt120 + 1
+      if rr.key then
+        if seen120[rr.key] then bad120 = bad120 .. "重复:" .. tostring(rr.key) .. " " end
+        seen120[rr.key] = true
+      end
+      local cL, cR = lay120.colX[rr.col], lay120.colX[rr.col] + lay120.colW
+      for _, nm in ipairs({ "chk", "text", "extra", "add", "clr", "chv", "hdr" }) do
+        local rect = rr[nm]
+        if rect and rect.shown then
+          if rect.x < cL - 0.5 then bad120 = bad120 .. nm .. "越左:" .. tostring(rr.key) .. " " end
+          local rt = rightOf(rect)
+          if rt == nil then bad120 = bad120 .. nm .. "没有宽度:" .. tostring(rr.key) .. " " end
+          if rt and rt > cR + 0.5 then bad120 = bad120 .. nm .. "越出本列:" .. tostring(rr.key) .. "(" .. tostring(math.floor(rt)) .. ">" .. tostring(cR) .. ") " end
+        end
+      end
+    end
+  end
+  eq(bad120, "", "③★★★列不相交 + 控件都在本列内: " .. bad120)
+  eq(cnt120, lay120.pageN, "③★★两列显示的条目数 = 本页条数（" .. tostring(cnt120) .. "）")
+  eq(lay120.pageN, table.getn(EVAL_TEST_TB_ROWS()), "③★16 条全在一页（pageN=" .. tostring(lay120.pageN) .. "）")
+  -- ④ 一页装得下 → 指示行与翻页按钮都隐藏（★这条钉住「每页 = 列数 × 行数」，退回单列会当场响）
+  local tbs120 = EVAL_TB_TEST_SCROLL()
+  eq(tbs120.indicator == nil or tbs120.indicator.shown == false, true, "④★★16 条一页装下 → 计数行隐藏（退回单列会变成 13/页、这行就会冒出来）")
+  eq(EVAL_TB_TEST_OFF(), 0, "④停在第 1 页（只有一页）")
+  -- ⑤ 勾选行仍然可用：拿真实 [添加] 按钮（两列映射没错位）
+  local m120 = EVAL_TEST_TB_ROWS()
+  local buyKey, buyShown = nil, 0
+  for i = 1, table.getn(m120) do if m120[i].key == "buy" then buyKey = i end end
+  eq(buyKey ~= nil, true, "⑤模型里有「自动购买指定物品」行")
+  eq(EVAL_TEST_TB_ADD_BTN_FOR("buy") ~= nil, true, "⑤★★两列下仍能按 key 找到那一行的 [添加] 按钮（列→条目映射没错位）")
+  eq(EVAL_TEST_TB_ADD_BTN_FOR("discard") ~= nil, true, "⑤★同理找得到 [清空] 所属行")
+  EVAL_HELP_CFG_SETTAB(savedTab120) -- 还原 Tab（跨用例状态残留是本项目老坑）
+  print(string.format("  工具箱两列：%d 列 / 列宽 %d / 列缝 %d / 本页 %d 条 = 左 %d + 右 %d（右列从组标题起）",
+    lay120.cols, lay120.colW, lay120.colGap, lay120.pageN, lay120.rowsL, lay120.rowsR))
+end
+
 print("ALL TESTS PASS")

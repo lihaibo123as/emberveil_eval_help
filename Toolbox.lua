@@ -4,6 +4,10 @@
 -- 配置直读 EVAL_HELP_CONFIG.tb（SavedVariables 自动持久化；全部功能默认关，逐项勾选开启）。
 
 local TB = { off = 0, rows = {}, ROWS = 13 }
+-- ★1.73.11 两列版式的列数/列缝：**模块级常量放文件顶部**（DECL ORDER CHECK 会抓「用在前、声明在后」；
+--   本轮实测：一开始放在刷新段旁边 → 被 CHECK 当场挡下，这就是那条检查的价值）
+local TB_COLS = 2        -- 列数（用户要求两列；将来加第三列只需改这里，列宽/切点算法都是通用的）
+local TB_COL_GAP = 24    -- 两列之间的缝
 
 -- ===== 自绘基础件（与主程序同风格：WHITE8X8 纯色纹理 + 字体链） =====
 local function tbSolid(tex, r, g, b, a)
@@ -1152,10 +1156,11 @@ function EVAL_TEST_TB_CFG() return tbCfg() end
 -- ★1.71.3 测试钩子：取某个 key 对应行的 [添加] 按钮（走真实控件，断言才能点真实 OnClick）
 function EVAL_TEST_TB_ADD_BTN_FOR(key)
   if not TB.built then return nil end
-  local m = tbModel()
-  for i = 1, TB.ROWS do
-    local it = m[TB.off + i]
-    if it and it.key == key and TB.rows[i] and TB.rows[i].add then return TB.rows[i].add.btn end
+  local cols = TB.cols or TB_COLS
+  for k = 1, TB.ROWS * cols do
+    local r = TB.rows[k]
+    -- ★读 r.item（刷新时记下的**实际映射**），不在这里重算（否则变异测不出来）
+    if r and r.item and r.item.key == key and r.add then return r.add.btn end
   end
   return nil
 end
@@ -1201,17 +1206,74 @@ local function tbListSummary(key)
   return s
 end
 
+-- ===== 1.73.11 两列版式（用户：「工具箱分两列」）=====
+-- 判据与分类模版窗同一套纪律（见 tplTwoColPlan）：**组是不拆的最小单位**（组的标题与它的行必须同列，
+--   否则右列开头孤零零几行看着像「少了一组 / 多了一组」），切点取**两列行数差最小**。
+-- ★与分类模版窗的差别：这里每行都是**可交互控件行**（勾选框 / 文案 / 摘要 / 按钮），行高列宽固定 →
+--   不需要量宽；但「列不相交」必须能断言（右列控件的左边缘 > 左列控件的右边缘）。
+-- 纯函数：在**本页**的条目里找一个「组边界」切点，使两列行数差最小
+--   items = 全模型（含组标题行 t="h"）；off = 本页起始下标（0 基）；rows = 每列行数上限；cols = 列数
+--   返回：cut（本页左列占几条）、rowsL、rowsR、pageN（本页实际显示几条）
+function EVAL_TB_COL_CUT(items, off, rows, cols)
+  local n = table.getn(items or {})
+  local c = tonumber(cols) or TB_COLS
+  local per = (tonumber(rows) or TB.ROWS) * c
+  local pageN = n - (tonumber(off) or 0)
+  if pageN > per then pageN = per end
+  if pageN < 0 then pageN = 0 end
+  if pageN == 0 then return 0, 0, 0, 0 end
+  if c < 2 then return pageN, pageN, 0, pageN end
+  -- 允许的切点 = 本页内「下一个条目是组标题」的位置，以及末尾
+  --   ★组边界切点保证右列**从组标题开头**（不会把某组的后半截甩到右列）
+  local cands = { pageN }
+  for i = 1, pageN - 1 do
+    local nxt = items[(tonumber(off) or 0) + i + 1]
+    if type(nxt) == "table" and nxt.t == "h" then table.insert(cands, i) end
+  end
+  local bestCut, bestDiff = nil, nil
+  for i = 1, table.getn(cands) do
+    local cc = cands[i]
+    local l, r = cc, pageN - cc
+    if l <= (tonumber(rows) or TB.ROWS) and r <= (tonumber(rows) or TB.ROWS) then
+      local d = math.abs(l - r)
+      if bestDiff == nil or d < bestDiff then bestDiff, bestCut = d, cc end
+    end
+  end
+  if bestCut == nil then bestCut = math.min(tonumber(rows) or TB.ROWS, pageN) end -- 兜底：单个组太长时硬切（不至于溢出）
+  return bestCut, bestCut, pageN - bestCut, pageN
+end
+
 -- ===== 刷新（滚动窗口切片：可见性走显式 Show/Hide 契约） =====
 function EVAL_TB_REFRESH()
   if not TB.built then return end
   local m = tbModel()
   local n = table.getn(m)
-  local maxOff = math.max(0, n - TB.ROWS)
-  TB.off = math.min(TB.off, maxOff)
+  -- ★1.73.11 两列：每页 = 每列行数 × 列数；页码按**整页**推进（与图标库的「上页/下页」同语义）
+  local cols = TB.cols or TB_COLS
+  local per = TB.ROWS * cols
+  local pages = math.max(1, math.ceil(n / per))
+  local maxOff = (pages - 1) * per
+  if TB.off > maxOff then TB.off = maxOff end
+  if TB.off < 0 then TB.off = 0 end
+  -- 本页按「组边界」切成左右两段（切点是纯函数，见 EVAL_TB_COL_CUT）
+  local cut, rowsL, rowsR, pageN = EVAL_TB_COL_CUT(m, TB.off, TB.ROWS, cols)
+  TB.cut, TB.rowsL, TB.rowsR, TB.pageN = cut, rowsL, rowsR, pageN
   local LX = 18
-  for i = 1, TB.ROWS do
-    local r = TB.rows[i]
-    local it = m[TB.off + i]
+  for k = 1, TB.ROWS * cols do
+    local r = TB.rows[k]
+    -- 第 1 列取本页第 slot 条；第 2 列取本页第 (cut + slot) 条（超出本页 → 这一格空着）
+    -- ★★左列只放本页前 cut 条、右列只放第 cut+1..pageN 条 —— 两边都越界就会**同一条出现两次**
+    --   （本轮实测：漏了「左列也要受 cut 约束」→ 组 120 的「条目不重不漏」当场抓到）
+    local it = nil
+    if r then
+      local pi = (r.col == 2) and (cut + r.slot) or r.slot
+      local okc = (r.col == 2) and (pi > cut and pi <= pageN) or (pi >= 1 and pi <= cut)
+      if okc then it = m[TB.off + pi] end
+      -- ★★把**实际映射**记在行上（r.pi / r.item）：读值口与 [添加] 查找都从这里读 ——
+      --   绝不在别处再实现一遍。本轮实测：读值口自己复刻了一遍映射 → M106（左列不受 cut 约束）的变异
+      --   **照样存活**，因为测试读到的是读值口那份"正确版本"，不是刷新真正用的那份。
+      r.pi, r.item = okc and pi or nil, it
+    end
     r.chk:Hide() r.text:Hide() r.hdr:Hide() r.extra:Hide() r.add.btn:Hide() r.clr.btn:Hide() r.chv.btn:Hide()
     r.get, r.set = nil, nil
     r.modelKey = it and it.key or nil -- ★1.73.10 记住这一格当前是哪个 key（勾选后要按 key 做即时副作用）
@@ -1300,8 +1362,9 @@ function EVAL_TB_REFRESH()
     end
   end
   if TB.indicator then
-    if n > TB.ROWS then
-      TB.indicator:SetText(string.format("%d-%d / %d", TB.off + 1, math.min(TB.off + TB.ROWS, n), n))
+    -- ★1.73.11 计数按**本页实际显示**的区间报（两列时每页 = 每列行数 × 列数）
+    if n > per then
+      TB.indicator:SetText(string.format("%d-%d / %d", TB.off + 1, TB.off + pageN, n))
       TB.indicator:Show()
     else
       TB.indicator:Hide()
@@ -1319,14 +1382,26 @@ function EVAL_TB_BUILD(root, page, refreshes)
   local widgets = page.widgets
   local LX, ROWH = 18, 24
   local RW = (root.GetWidth and root:GetWidth() or 560) - 18
+  -- ★1.73.11 两列：列宽 = (可用宽 − 列缝 × (列数−1)) / 列数；窗口太窄（列宽 < 200）退化成单列
+  --   （硬分两列会把「标签 + 摘要 + 两个按钮」压成一团 —— 与分类模版窗同一条「先算可用空间」纪律）
+  local colW = math.floor(((RW - LX) - TB_COL_GAP * (TB_COLS - 1)) / TB_COLS)
+  local cols = TB_COLS
+  if colW < 200 then cols = 1 colW = RW - LX end
+  local colX = { LX }
+  for ci = 2, cols do colX[ci] = LX + (ci - 1) * (colW + TB_COL_GAP) end
+  TB.cols, TB.colW, TB.colX, TB.colGap = cols, colW, colX, TB_COL_GAP
 
-  for i = 1, TB.ROWS do
-    local y = -56 - (i - 1) * ROWH
-    local row = {}
+  for i = 1, TB.ROWS * cols do
+    local col = math.floor((i - 1) / TB.ROWS) + 1
+    if col > cols then col = cols end
+    local slot = ((i - 1) % TB.ROWS) + 1
+    local cX, cRight = colX[col], colX[col] + colW
+    local y = -56 - (slot - 1) * ROWH
+    local row = { col = col, slot = slot, x = cX, right = cRight }
     -- 勾选框（复刻 cfgCheck 金边风格）
     local chk = CreateFrame("Button", nil, root)
     chk:SetWidth(16) chk:SetHeight(16)
-    chk:SetPoint("TOPLEFT", root, "TOPLEFT", LX, y)
+    chk:SetPoint("TOPLEFT", root, "TOPLEFT", cX, y)
     pcall(chk.EnableMouse, chk, true)
     pcall(chk.RegisterForClicks, chk, "LeftButtonUp")
     local outer = chk:CreateTexture(nil, "BACKGROUND")
@@ -1360,23 +1435,37 @@ function EVAL_TB_BUILD(root, page, refreshes)
     chk:SetScript("OnLeave", function() GameTooltip:Hide() end)
     table.insert(widgets, chk)
     -- 标签（与勾选框共中心线锚定，1.45.1 对齐范式）
+    -- 标签：★改成**绝对锚点 + 显式限宽**（原来锚在勾选框右侧、宽度自动）——
+    --   两列下「自动宽度」会压过列缝，而列不相交必须是**可断言**的（见 EVAL_TB_TEST_LAYOUT）
+    local TB_LABEL_W = math.floor(colW * 0.30)
+    local TB_EXTRA_X = math.floor(colW * 0.32)
     local text = tbText(root, 11, 0.92, 0.88, 0.80)
-    text:SetPoint("LEFT", chk, "RIGHT", 6, 0)
+    text:SetPoint("TOPLEFT", root, "TOPLEFT", cX + 22, y - 3)
+    pcall(text.SetWidth, text, TB_LABEL_W)
+    pcall(text.SetNonSpaceWrap, text, false)
     row.text = text
     table.insert(widgets, text)
     -- 组标题
     local hdr = tbText(root, 11, 0.95, 0.80, 0.30)
-    hdr:SetPoint("TOPLEFT", root, "TOPLEFT", LX, y - 3)
+    hdr:SetPoint("TOPLEFT", root, "TOPLEFT", cX, y - 3)
+    -- ★组标题也要**显式限宽**：不限宽时它按文字自动撑开，长标题会压过列缝（列不相交就断了）
+    pcall(hdr.SetWidth, hdr, colW - 8)
+    pcall(hdr.SetNonSpaceWrap, hdr, false)
     row.hdr = hdr
     table.insert(widgets, hdr)
-    -- 列表摘要 + 添加/清空
+    -- 列表摘要 + 添加/清空（全部**按本列**定位；右对齐的那几个贴本列右边缘）
     local extra = tbText(root, 10, 0.75, 0.72, 0.60)
-    extra:SetPoint("TOPLEFT", root, "TOPLEFT", LX + 190, y - 3)
+    extra:SetPoint("TOPLEFT", root, "TOPLEFT", cX + TB_EXTRA_X, y - 3)
+    local extraW = (colW - 96) - TB_EXTRA_X - 6
+    if extraW < 20 then extraW = 20 end
+    pcall(extra.SetWidth, extra, extraW)
+    pcall(extra.SetNonSpaceWrap, extra, false)
     row.extra = extra
     table.insert(widgets, extra)
-    row.add = tbBtn(root, RW - 96, y, 44, L("TB_ADD"), function() end, widgets)
-    row.clr = tbBtn(root, RW - 48, y, 40, L("TB_CLEAR"), function() end, widgets)
-    row.chv = tbBtn(root, RW - 96, y, 88, "", function() end, widgets) -- 1.69.0 频道值按钮（ch 行）
+    row.add = tbBtn(root, cRight - 96, y, 44, L("TB_ADD"), function() end, widgets)
+    row.clr = tbBtn(root, cRight - 48, y, 40, L("TB_CLEAR"), function() end, widgets)
+    row.chv = tbBtn(root, cRight - 96, y, 88, "", function() end, widgets) -- 1.69.0 频道值按钮（ch 行）
+    row.labelW, row.extraW = TB_LABEL_W, extraW
     TB.rows[i] = row
   end
 
@@ -1396,12 +1485,14 @@ function EVAL_TB_BUILD(root, page, refreshes)
   TB.botMidY, TB.closeLeft = botMidY, closeLeft
   local bx = closeLeft - TB_TAIL_GAP - (TB_BTN_W * 2 + TB_BTN_GAP) -- 按钮组左端（右端 = closeLeft - TB_TAIL_GAP）
   local btnTop = botMidY + 7.5 -- tbBtn 高 15 → 中线对齐关闭的中线
+  -- ★1.73.11 两列后翻页按**整页**推进（与图标库「上页/下页」同语义；原来每次 ±1 行）
+  local function tbPageStep() return TB.ROWS * (TB.cols or TB_COLS) end
   TB.scrollUp = tbBtn(root, bx, btnTop, TB_BTN_W, L("TB_UP"), function()
-    TB.off = math.max(0, TB.off - 1)
+    TB.off = math.max(0, TB.off - tbPageStep())
     EVAL_TB_REFRESH()
   end, widgets)
   TB.scrollDn = tbBtn(root, bx + TB_BTN_W + TB_BTN_GAP, btnTop, TB_BTN_W, L("TB_DN"), function()
-    TB.off = TB.off + 1
+    TB.off = TB.off + tbPageStep()
     EVAL_TB_REFRESH()
   end, widgets)
   local ind = tbText(root, 10, 0.65, 0.62, 0.50)
@@ -1419,7 +1510,7 @@ function EVAL_TB_BUILD(root, page, refreshes)
     -- ★1.73.3 方向单一来源（原来只读全局 arg1；现在 a/b/arg1 三种写法都认）
     local dir = EVAL_WHEEL_DIR(a, b)
     if dir == 0 then return end
-    TB.off = math.max(0, TB.off - dir) -- 上滚 = 回到前面
+    TB.off = math.max(0, TB.off - dir * TB.ROWS * (TB.cols or TB_COLS)) -- 上滚 = 回到前面（两列后按整页）
     EVAL_TB_REFRESH()
   end)
 
@@ -1704,6 +1795,38 @@ function EVAL_TB_TEST_SCROLL()
            firstRowY = (TB.rows[1] and num(TB.rows[1].chk.GetTop, TB.rows[1].chk)) or nil }
 end
 function EVAL_TB_TEST_OFF() return TB.off end
+-- ★★★1.73.11 断言入口：两列版式的**真实几何**（每行控件的 x/宽 + 列几何 + 切点/两列行数）
+--   判据要能验「列不相交」（右列控件左边缘 > 左列控件右边缘）——所以读的是**控件自身**的坐标，
+--   不是我们算出来的常量（本项目「不写死布局常量」的纪律）。
+function EVAL_TB_TEST_LAYOUT()
+  local function rect(o)
+    if not o then return nil end
+    local okx, x = pcall(o.GetLeft, o)
+    local okw, w = pcall(o.GetWidth, o)
+    local oky, y = pcall(o.GetTop, o)
+    local oks, sh = pcall(o.IsShown, o)
+    return { x = okx and x or nil, w = okw and w or nil, y = oky and y or nil,
+             shown = (oks and sh) and true or false }
+  end
+  local out = { cols = TB.cols, colW = TB.colW, colGap = TB.colGap, colX = TB.colX,
+                rowsPerCol = TB.ROWS, off = TB.off, cut = TB.cut, rowsL = TB.rowsL, rowsR = TB.rowsR,
+                pageN = TB.pageN, pool = table.getn(TB.rows or {}), rows = {} }
+  local m = tbModel()
+  local cols = TB.cols or TB_COLS
+  for k = 1, TB.ROWS * cols do
+    local r = TB.rows[k]
+    if r then
+      -- ★读刷新时记下的**实际映射**（r.item / r.pi）——本读值口**不重算**（重算 = 测试验的是读值口自己）
+      local it = r.item
+      out.rows[k] = { col = r.col, slot = r.slot, pi = r.pi, key = it and it.key or nil,
+                      kind = it and it.t or nil, shown = r.chk:IsShown() and true or false,
+                      chk = rect(r.chk), text = rect(r.text), extra = rect(r.extra),
+                      add = rect(r.add and r.add.btn), clr = rect(r.clr and r.clr.btn),
+                      chv = rect(r.chv and r.chv.btn), hdr = rect(r.hdr) }
+    end
+  end
+  return out
+end
 -- 点滚动按钮走**真实 OnClick**（不在测试里复刻「off ± 1」的逻辑）
 function EVAL_TB_TEST_SCROLL_CLICK(which)
   local b = (which == "up") and TB.scrollUp or TB.scrollDn
