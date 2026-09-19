@@ -10874,6 +10874,7 @@ do
     eq(string.find(dc, "[" .. rn .. "]", 1, true) ~= nil, true, "★★样例里有境界：" .. rn)
   end
   eq(string.find(dc, "|cffb87333", 1, true) ~= nil, true, "★样例里有暗金色码（源代码档）")
+  EVAL_HELP_CONFIG.shareSealDemo = nil
   SlashCmdList["EVALHELP"]("go 秘籍样例")
   eq(string.find(tostring(TEST.chat or ""), "秘籍样例", 1, true) ~= nil, true, "★★★/eh go 秘籍样例 真的执行（命令在 go 组里）")
   TEST.chat = nil
@@ -10923,3 +10924,7 @@ do
   print("  分享显示行：境界 7 档 · 品阶评分边界(3/4/6/7/9/10/12/13) · 5 色(含暗金) · 每档 10 条评语随机 · 命令接线")
 end
 print("ALL TESTS PASS")
+
+  local sd142 = EVAL_HELP_CONFIG.shareSealDemo
+  eq(type(sd142) == "table" and sd142.n == 12, true,
+     "★★★/eh go 秘籍样例 真的执行了（以**落盘字段**为证：n=" .. tostring(type(sd142) == "table" and sd142.n or "nil") .. "）")

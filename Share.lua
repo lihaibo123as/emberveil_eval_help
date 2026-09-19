@@ -659,6 +659,12 @@ function EVAL_SHARE_SEAL_DEMO()
     local info = EVAL_SHARE_SEAL_INFO(mk(14), levels[i], i)
     if info then table.insert(lines, info.line) end
   end
+  -- ★★★1.73.42f 判据用的「证人」：把「跑了没 / 跑了几行」写进存档
+  --   （上一轮 M336 实测：用聊天「含子串」判接线 → 被前一段输出顶住、断言假绿）
+  local cfgD = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(cfgD) == "table" then
+    cfgD.shareSealDemo = { n = table.getn(lines), at = (type(GetTime) == "function") and GetTime() or 0 }
+  end
   shSay("===== 秘籍样例（5 品阶 × 7 境界，共 " .. tostring(table.getn(lines)) .. " 行）=====")
   for i = 1, table.getn(lines) do shSay("  " .. lines[i]) end
   return table.getn(lines)
