@@ -11030,7 +11030,10 @@ do
   local sealA = tostring(sealSt144.first or "")
   eq(string.len(seal) > 0, true, "①★★★算出了分享信息行（只剩 B 行）")
   eq(string.len(sealA) > 0, true, "①★★★A 身份行有内容（用户：身份要有颜色 ⇒ 单独一条、只带身份色）")
-  eq(string.find(sealA, "|HEHPF:", 1, true) == nil, true, "①★★★A 行**不带链接**（一段色码 + 纯文本，与自家 EVAL_HELP 行同款）")
+  -- ★1.73.43p 真机对照：同样 1 秒间隔下，B（一段色码 + 链接）显示、A（一段色码 + **无链接**）不显示
+  --   ⇒ A 改成与 B **同款结构**（一段色码 + `|HEHPF:` 链接 + `[标签]|h|r` + 尾巴）
+  eq(string.find(sealA, "|HEHPF:", 1, true) ~= nil, true, "①★★★A 行也带链接（与 B 同款结构 —— 不带链接那种实测不显示）")
+  eq(string.find(sealA, " 0/1:0|h[", 1, true) ~= nil, true, "①★★A 载荷序号 0/1:0（接收端按越界忽略）")
   eq(string.find(seal, "秘籍·", 1, true) ~= nil, true, "①★★B 行含 [品阶秘籍·方案名]")
   eq(string.find(seal, "|HEHPF:", 1, true) ~= nil, true, "①★★★B 行带链接（点它直接导入）")
   -- ★★★1.73.43h 真机定案：**一条消息里多段色码会被客户端整条吞掉** ⇒ 数色码段（行为判据；源码检查数不到变量里的色码）
@@ -11073,7 +11076,7 @@ do
   local cntA144 = 0
   for k7 = 1, table.getn(all) do
     local m7 = tostring(all[k7] or "")
-    if string.find(m7, " 分享了", 1, true) and string.find(m7, "|HEHPF:", 1, true) == nil then cntA144 = cntA144 + 1 end
+    if string.find(m7, " 分享了", 1, true) then cntA144 = cntA144 + 1 end -- ★A 现在也带链接，不再按「无链接」认
   end
   eq(cntA144, 1, "①★★★身份行真的发了一条（带身份色、不带链接），实际 " .. tostring(cntA144))
   local sid = string.match(tostring(msgB), "|HEHPF:(%x+) ") -- ★1.73.43o 这一行之前被误删过（sid 恒 nil → 判据假红）

@@ -198,6 +198,13 @@ local function shBuildFor(text)
   --     A 身份行 = `|c<身份色><头衔>|r <名字> 分享了`  ← 色码打头、**一段色码**、无链接、无方括号
   --   ★为什么现在敢恢复：v4 已证明「色码打头 + 一段色码」的形态没问题；而当初 A 行不显示是夹在**限流窗口**里的
   --     （v3 那轮整体被限流，v4 同形态就正常了）⇒ 现在间隔 1 秒、身份行排在分片之后、信息行之前。
+  -- ★★★1.73.43p 真机再分析（用户第三次截图，1 秒间隔、同一次分享的干净对照）：
+  --   · **B 行（一段色码 + `|HEHPF:` 链接 + `[标签]|h|r` + 尾巴）显示正常** ✓
+  --   · **A 行（一段色码 + 纯文本，**没有链接**）依旧不显示** ✗
+  --   ⇒ 把两条并排看，唯一差别就是「**有没有链接**」（颜色值也换成同款试过：仍是这一条差异最干净）。
+  --   ⇒ A 行改成与 B **同款结构**：`|c<身份色>|HEHPF:<id> 0/1:0|h[<头衔>]|h|r <名字> 分享了`
+  --     （= 变异测 v2 的 [4]「纯文本 + 一段色码 + 链接 + 标签 + 评语」那一形态，**当时就画出来了** ✓）。
+  --   ★判定依据仍**只认形态**（色码打头 · 一段色码 · 带链接），不发明新写法。
   local sealA, sealB = nil, nil
   if sealLine and sealLine ~= "" and type(EVAL_SHARE_SEAL_INFO) == "function" then
     local okI, sinfo = pcall(EVAL_SHARE_SEAL_INFO, text)
@@ -212,7 +219,8 @@ local function shBuildFor(text)
           if okN and type(vN) == "string" and vN ~= "" then who2 = vN end
         end
         if who2 then
-          sealA = ((titleCol2 and (titleCol2 .. titleTxt .. "|r ")) or (titleTxt .. " ")) .. who2 .. " 分享了"
+          -- ★同款结构：一段色码打头 + 链接（序号 0/1:0，接收端按越界忽略）+ `[标签]|h|r` + 尾巴文字
+          sealA = ((titleCol2 and (titleCol2 .. "|HEHPF:" .. idh .. " 0/1:0|h[" .. titleTxt .. "]|h|r  ")) or (titleTxt .. " ")) .. who2 .. " 分享了"
           if string.len(sealA) > SH_MSG_MAX then sealA = nil end -- 长度守卫（同规矩）
         end
       end
@@ -224,7 +232,7 @@ local function shBuildFor(text)
         if titleTxt ~= "" then tail = titleTxt .. "  " end -- 身份：链接之后的**纯文本**（无方括号、无色码）
         -- ★1.73.43n 长度守卫：分享信息那条**必须与分片同规矩**（≤ SH_MSG_MAX）。
         --   超了先砍评语，还超就整条不发（**如实说一声**，绝不发一条会被客户端/服务器丢掉的超长消息）。
-        local sealBase = tierCol2 .. "|HEHPF:" .. idh .. " 0/1:0|h[" .. sym2 .. tostring(sinfo.tierName) .. "秘籍·" .. tostring(sinfo.plan) .. "]|h|r  " .. tail
+        local sealBase = tierCol2 .. "|HEHPF:" .. idh .. " 0/1:1|h[" .. sym2 .. tostring(sinfo.tierName) .. "秘籍·" .. tostring(sinfo.plan) .. "]|h|r  " .. tail
         sealB = sealBase .. cmt2
         if string.len(sealB) > SH_MSG_MAX then
           sealB = sealBase
