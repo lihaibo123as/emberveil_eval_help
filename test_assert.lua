@@ -10711,6 +10711,24 @@ do
   EVAL_TEST_SHARE_PROBE_STEP()
   eq(EVAL_TEST_SHARE_PROBE_PLAN(), 2, "⑨★★到点会自动出结果（步数 3 → 2）")
 
+  -- ⑩ ★★★1.73.41c 命令**接线**判据（真事故）：探针命令属于 `/eh go` 组，`msg` 是**带 `go ` 前缀**的全串
+  --   —— 我一开始写成 `msg == "探针全跑"`，用户敲 `/eh go 探针全跑` **什么都不会发生（静默！）**。
+  --   ★教训：只测 `EVAL_SHARE_PROBE_AUTORUN()` = **没测接线**；判据必须走**真实命令入口** SlashCmdList["EVALHELP"]。
+  EVAL_SHARE_PROBE_OFF()
+  SlashCmdList["EVALHELP"]("go 探针全跑")
+  eq(EVAL_TEST_SHARE_PROBE_PLAN() >= 3, true,
+     "⑩★★★/eh go 探针全跑 真的排上了自动步骤（实际 " .. tostring(EVAL_TEST_SHARE_PROBE_PLAN()) .. "）")
+  SlashCmdList["EVALHELP"]("go 探针关")
+  SlashCmdList["EVALHELP"]("go 链接探针")
+  eq(EVAL_SHARE_PROBE_STATE().armed, "link", "⑩★★★/eh go 链接探针 真的武装了探针（命令前缀写错就什么都不会发生）")
+  SlashCmdList["EVALHELP"]("go 长度探针")
+  eq(EVAL_SHARE_PROBE_STATE().armed, "len", "⑩★★/eh go 长度探针 也真的武装了")
+  SlashCmdList["EVALHELP"]("go 探针结果")
+  eq(type(EVAL_HELP_CONFIG.shareProbe) == "string" and string.len(EVAL_HELP_CONFIG.shareProbe) > 40, true,
+     "⑩★★/eh go 探针结果 真的出了结果并落盘")
+  SlashCmdList["EVALHELP"]("go 探针关")
+  eq(EVAL_SHARE_PROBE_STATE().armed, nil, "⑩★/eh go 探针关 真的关掉了")
+  TEST.chat = nil
   TEST.chat = nil
   print("  调研探针：4 形态逐字节比对（一致/被改/未收到）+ 长度阶梯（完整/截断）+ 不污染正常接收")
 end

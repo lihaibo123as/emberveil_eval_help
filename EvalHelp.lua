@@ -6840,7 +6840,7 @@ if type(SlashCmdList) == "table" then
     elseif msg == "cfg" or msg == "config" or msg == "set" then
       EVAL_HELP_CFG_TOGGLE()
     -- ★1.73.41 调研探针（分支 probe/share-hide-link）：只做取证，**不动分享协议**
-    elseif msg == "链接探针" or string.find(msg, "^链接探针%s") or msg == "linkprobe" then
+    elseif msg == "go 链接探针" or string.find(msg, "^go 链接探针%s") or msg == "go linkprobe" then
       -- ★可选频道：默认密语自己（单机可测）；自密语不回声时改用 队伍/公会（需有人在同一频道）
       if type(EVAL_SHARE_LINK_PROBE) == "function" then
         local chanP = "WHISPER"
@@ -6851,7 +6851,7 @@ if type(SlashCmdList) == "table" then
       else
         say("分享模块未载入（EVAL_SHARE_LINK_PROBE 不存在）")
       end
-    elseif msg == "长度探针" or string.find(msg, "^长度探针%s") or msg == "lenprobe" then
+    elseif msg == "go 长度探针" or string.find(msg, "^go 长度探针%s") or msg == "go lenprobe" then
       if type(EVAL_SHARE_LEN_PROBE) == "function" then
         local chanL = "WHISPER"
         if string.find(msg, "公会", 1, true) then chanL = "GUILD"
@@ -6860,19 +6860,20 @@ if type(SlashCmdList) == "table" then
       else
         say("分享模块未载入（EVAL_SHARE_LEN_PROBE 不存在）")
       end
-    elseif msg == "探针全跑" or msg == "probeall" then
+    elseif msg == "go 探针全跑" or msg == "go probeall" then
       if type(EVAL_SHARE_PROBE_AUTORUN) == "function" then
         EVAL_SHARE_PROBE_AUTORUN("WHISPER")
       else
         say("分享模块未载入（EVAL_SHARE_PROBE_AUTORUN 不存在）")
       end
-    elseif msg == "探针结果" or msg == "probe" then
+    -- ★别用 `go probe`：那个已经被「光环探针」占了（同一个 if 链里的 go probe）→ 用 proberes
+    elseif msg == "go 探针结果" or msg == "go proberes" then
       if type(EVAL_SHARE_PROBE_REPORT) == "function" then
         EVAL_SHARE_PROBE_REPORT()
       else
         say("分享模块未载入（EVAL_SHARE_PROBE_REPORT 不存在）")
       end
-    elseif msg == "探针关" or msg == "probeoff" then
+    elseif msg == "go 探针关" or msg == "go probeoff" then
       if type(EVAL_SHARE_PROBE_OFF) == "function" then
         EVAL_SHARE_PROBE_OFF()
         say("探针已关闭（回到正常接收）")
