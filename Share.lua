@@ -131,6 +131,10 @@ end
 --   实现在 shNowT 之后，那里才拿得到计时函数。
 local shTxEnqueue, shTxStep
 local shSealRowApply -- ★1.73.42i 品阶栏刷新（前向声明：它在弹窗段才实现，但封皮晚到时也要能刷）
+-- ★★★1.73.44 分片/信息行的**传输色**（单一来源）：色码是这个客户端最容易「整条吞掉消息」的成分
+--   （非 8 位吞整条 · 一条多段吞整条 · 有色码但不带链接不画），而色表是会被改的
+--   ⇒ 提成具名常量：① 分片体与封皮兜底色都从它取；② `/eh go 色码测` 也**从它取**（改色自动进测试，不写死就不会漏测）。
+local SH_CHUNK_COLOR = "|cff9ad4ff"
 -- ★1.73.35 分片构造**单一来源**（频道分享与「密语给某玩家」共用，避免两份实现漂移）
 -- ★★★1.73.42h 方案名（分片标签与封皮行共用）：必须声明在 shBodies 之前
 local function shSealName(text)
@@ -159,7 +163,7 @@ local function shBuildFor(text)
   local function chunkBody(idx, tot, part, label)
     local pct = math.ceil(idx * 100 / tot)
     if not label then label = "方案:" .. nm2 .. " 传输中..." .. pct .. "%" end
-    return "|cff9ad4ff|HEHPF:" .. idh .. " " .. idx .. "/" .. tot .. ":" .. part .. "|h[" .. label .. "]|h|r"
+    return SH_CHUNK_COLOR .. "|HEHPF:" .. idh .. " " .. idx .. "/" .. tot .. ":" .. part .. "|h[" .. label .. "]|h|r"
   end
   -- ★预算：单条 <= 250 字节（实测 250 通过、270 整条丢）→ 先量包装，剩下的都给 hex
   -- ★★★1.73.42h 量的必须是**最坏形状**，不能拿 idx=1/tot=1 当样本：样本的 "1/1" 与 "100%" 是最短的，
@@ -226,7 +230,7 @@ local function shBuildFor(text)
       end
       if type(sinfo.tierName) == "string" and type(sinfo.plan) == "string" then
         local sym2 = tostring(sinfo.symbol or "")
-        local tierCol2 = (type(sinfo.color) == "string" and sinfo.color ~= "") and sinfo.color or "|cff9ad4ff"
+        local tierCol2 = (type(sinfo.color) == "string" and sinfo.color ~= "") and sinfo.color or SH_CHUNK_COLOR
         local cmt2 = (type(sinfo.comment) == "string") and sinfo.comment or ""
         local tail = ""
         if titleTxt ~= "" then tail = titleTxt .. "  " end -- 身份：链接之后的**纯文本**（无方括号、无色码）
@@ -1326,6 +1330,62 @@ function EVAL_SHARE_SEAL_DEMO()
   for i = 1, table.getn(lines) do shSay("  " .. lines[i]) end
   return table.getn(lines)
 end
+
+-- ===== 1.73.44 「色码测」：把**分享真正会发到聊天的每一个色码**各发一条，实测哪个画不出来 ==========
+-- 用户要求：「将现在所使用的所有颜色色码都测试下」。
+-- 为什么值得做成命令（客户端对色码的口径很窄，而且**三种坑的症状完全不同**）：
+--   ① 非 8 位色码（如 7 位）→ **整条消息被吞**（1.73.43e 真机定案）；
+--   ② 一条消息里塞多段色码 → **整条被吞**（1.73.43h 真机定案）；
+--   ③ 有色码但**不带链接** → 这条**不画**（1.73.43p 真机定案）。
+--   ⇒ 色表（品阶 5 档 / 头衔 5 档 / 彩蛋专属色 / 分片传输色）**每次改动都该跑一次这个命令实测**，
+--     而不是等玩家分享出去才发现少了一行（这三种坑都不报错，只是消息不见了）。
+-- ★★列表**从色表实时生成、不手抄**：改了色表这个命令自动跟着变 —— 不写死就不会漏测（源码检查守这条）。
+-- ★每条只放**一段色码**、带链接、色码打头（= 1.73.43p 验证过能画的形态），间隔 ≥1 秒（与分享同一条限频队列）。
+function EVAL_SHARE_CHUNK_COLOR() return SH_CHUNK_COLOR end -- 读值口：色码测与断言同源
+
+function EVAL_SHARE_COLOR_PROBE()
+  local list = {}
+  table.insert(list, { code = SH_CHUNK_COLOR, label = "分片传输色" })
+  for i = 1, table.getn(SH_SEAL_TIERS) do
+    local t = SH_SEAL_TIERS[i]
+    table.insert(list, { code = t.color, label = "品阶" .. tostring(i) .. "·" .. L(t.key) })
+  end
+  for i = 1, table.getn(SH_TITLE_COLORS) do
+    local nm = "头衔" .. tostring(i)
+    if type(EVAL_TITLE_KEY) == "function" then
+      local k = EVAL_TITLE_KEY(i, 1)
+      if type(k) == "string" and k ~= "" then nm = nm .. "·" .. L(k) end
+    end
+    table.insert(list, { code = SH_TITLE_COLORS[i], label = nm })
+  end
+  table.insert(list, { code = SH_TITLE_CUSTOM_COLOR, label = "彩蛋·自定义名号" })
+  local n = table.getn(list)
+  local bodies = {}
+  for i = 1, n do
+    local e = list[i]
+    local idh = string.format("c0%02x", i)
+    local body = e.code .. "|HEHPF:" .. idh .. " 0/1:0|h[色码测" .. tostring(i) .. "]|h|r  " .. tostring(e.label)
+    if string.len(body) > SH_MSG_MAX then -- 长度守卫（与分享同规矩：超了先砍描述，绝不发会被丢的超长消息）
+      body = e.code .. "|HEHPF:" .. idh .. " 0/1:0|h[" .. tostring(i) .. "]|h|r"
+    end
+    if string.len(body) > SH_MSG_MAX then body = nil end
+    e.body = body
+    table.insert(bodies, body or "")
+    if body then table.insert(shTxQ, { body = body, chan = "SAY" }) end
+  end
+  shTxLast = shNowT()
+  shEnsureTxTicker()
+  local cfgP = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(cfgP) == "table" then cfgP.shColorProbe = { n = n, list = bodies, at = shNowT() } end -- ★落盘证人
+  shSay("===== 色码测（" .. tostring(n) .. " 条，已排队到「说」频道）=====")
+  shSay("  每条间隔 1 秒（★跑完请**等 30 秒以上**再跑第二次，期间别再分享/发言 —— 短时间多条会被吞，结果不可信）")
+  shSay("  请把**实际出现的编号**告诉我（没出现的同样重要）")
+  for i = 1, n do
+    shSay("  [" .. tostring(i) .. "] " .. shRawForPrint(list[i].code) .. "  " .. tostring(list[i].label))
+  end
+  return { n = n, list = list, bodies = bodies, at = shNowT() }
+end
+
 -- ===== 1.73.42p 「创世者亲临」彩蛋窗口 ==================================================
 --   用户要求：「先提供个命令.让我能触发创世神的关注…（名字）能体现位格.霸气. 然后弹窗内的文字美化一下.霸气一下.」
 --   ★命名：**创世者亲临**（备选：本源垂青 / 造物主之约 / 万法之源的注视）——位格=创世者，动作=亲临，

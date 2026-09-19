@@ -12178,6 +12178,100 @@ do
   print("  封皮变异测：9 条编号形态走同一队列发到「说」（纯文本/箭头/星星/色码/链接/链接+后续/完整/换箭头/去星）")
 end
 
+-- 158) ★★★1.73.44 「色码测」命令：把分享**真正会发到聊天的每一个色码**各发一条编号消息
+--   用户要求：「将现在所使用的所有颜色色码都测试下」。
+--   为什么必须是命令：这个客户端对色码的口径很窄，而三种坑**症状相同、根因不同** ——
+--   非 8 位色码吞整条（1.73.43e）· 一条多段色码吞整条（1.73.43h）· 有色码但不带链接不画（1.73.43p）；
+--   三者都**不报错**，只是消息不见了 ⇒ 只能实测。而色表（品阶/头衔/彩蛋/分片色）是会被改的，
+--   所以命令必须**从色表实时取色**（写死一份清单 = 改了色表就漏测）。
+do
+  local g158 = 0
+  while EVAL_SHARE_TEST_QUEUE_LEN() > 0 and g158 < 400 do
+    g158 = g158 + 1
+    TEST.time = (TEST.time or 2000) + 1
+    EVAL_SHARE_TEST_TICK()
+  end
+  local savedTb158 = EVAL_HELP_CONFIG.tb
+  EVAL_HELP_CONFIG.tb = EVAL_HELP_CONFIG.tb or {}
+  EVAL_HELP_CONFIG.shColorProbe = nil
+  TEST.chat, TEST.runScripts = nil, nil
+  local pr158 = EVAL_SHARE_COLOR_PROBE()
+
+  -- ① 期望的色码集合 **从同一批表现算**（抄死 12 个色码 = 测自己；表改了断言也跟着假绿）
+  local want158 = {}
+  table.insert(want158, tostring(EVAL_SHARE_CHUNK_COLOR()))         -- 分片传输色
+  local scores158 = { 1, 4, 7, 10, 13 }                              -- 五档各取一个评分
+  for i = 1, 5 do
+    local _, ti = EVAL_SHARE_SEAL_TIER(scores158[i])
+    table.insert(want158, tostring(ti.color))
+  end
+  local demo158 = EVAL_TITLE_DEMO_LINES()
+  for i = 1, 5 do
+    table.insert(want158, tostring(string.match(tostring(demo158[i] or ""), "^(|c%x+)")))  -- 头衔五档色
+  end
+  table.insert(want158, tostring(EVAL_TITLE_CUSTOM_COLOR()))        -- 彩蛋专属色
+  local wantN158 = table.getn(want158)
+
+  eq(type(pr158) == "table", true, "①★★★色码测返回结果表")
+  eq(pr158 and pr158.n == wantN158, true, "①★★★覆盖**当前在用的每一个色码**（实际 " .. tostring(pr158 and pr158.n) .. "，期望 " .. tostring(wantN158) .. "）")
+  eq(EVAL_SHARE_TEST_QUEUE_LEN(), wantN158, "②★★★全部进**同一条限频队列**（不瞬间倾泻）")
+  eq(type(EVAL_HELP_CONFIG.shColorProbe) == "table" and EVAL_HELP_CONFIG.shColorProbe.n == wantN158, true, "②★★★命令**落盘**了（cfg.shColorProbe，接线证人）")
+
+  -- ③ 逐条**色码打头 + 8 位 hex + 一条只一段色码 + 带链接**（= 已证明能画的形态，缺一样客户端就不画）
+  local badHead158, badLen158, badSeg158, badLink158, badSize158, badNum158 = 0, 0, 0, 0, 0, 0
+  for i = 1, wantN158 do
+    local e = (pr158.list or {})[i] or {}
+    local body = tostring(e.body or "")
+    local code = string.match(body, "^(|c%x+)") or ""
+    if code ~= tostring(e.code) then badHead158 = badHead158 + 1 end
+    if string.len(string.sub(code, 3)) ~= 8 then badLen158 = badLen158 + 1 end
+    local seg = 0
+    string.gsub(body, "|c", function() seg = seg + 1 end)
+    if seg ~= 1 then badSeg158 = badSeg158 + 1 end
+    if string.find(body, "|HEHPF:", 1, true) == nil or string.find(body, "]|h|r", 1, true) == nil then badLink158 = badLink158 + 1 end
+    if string.len(body) > 250 then badSize158 = badSize158 + 1 end
+    if string.find(body, "[色码测" .. tostring(i) .. "]", 1, true) == nil then badNum158 = badNum158 + 1 end
+  end
+  eq(badHead158, 0, "③★★★每条**色码打头**（" .. tostring(badHead158) .. " 条不是）")
+  eq(badLen158, 0, "③★★★色码全是 **8 位** aarrggbb（" .. tostring(badLen158) .. " 条不是 —— 非 8 位客户端吞整条）")
+  eq(badSeg158, 0, "③★★★每条**只有一段色码**（" .. tostring(badSeg158) .. " 条多段 —— 多段客户端吞整条）")
+  eq(badLink158, 0, "③★★★每条都**带链接**（" .. tostring(badLink158) .. " 条没有 —— 有色码无链接客户端不画）")
+  eq(badSize158, 0, "③★★每条 ≤250 字节（" .. tostring(badSize158) .. " 条超了）")
+  eq(badNum158, 0, "③★★每条都有自己的**编号**（用户靠编号回报哪些没出现）")
+
+  -- ④ 集合覆盖：期望的每个色码都在清单里（缺一个 = 那个色码没被实测到）
+  local miss158 = 0
+  for i = 1, wantN158 do
+    local hit = false
+    for k = 1, wantN158 do
+      if tostring(((pr158.list or {})[k] or {}).code) == want158[i] then hit = true end
+    end
+    if not hit then miss158 = miss158 + 1 end
+  end
+  eq(miss158, 0, "④★★★在用的色码**一个不漏**（漏 " .. tostring(miss158) .. " 个）")
+
+  -- ⑤ 证据打印也转义（`|` → `||`）：否则玩家在聊天里看到的图例被客户端当色码吃掉，对照不了编号
+  eq(string.find(tostring(TEST.chat or ""), "||c", 1, true) ~= nil, true, "⑤★★图例把色码**转义后**打出来（否则对照不了编号与颜色）")
+
+  -- ⑥ 真的都发出去（同一条限频队列、分时滴完）
+  local g158b = 0
+  while EVAL_SHARE_TEST_QUEUE_LEN() > 0 and g158b < 400 do
+    g158b = g158b + 1
+    TEST.time = (TEST.time or 2000) + 1
+    EVAL_SHARE_TEST_TICK()
+  end
+  local say158 = 0
+  for _, sc in ipairs(TEST.runScripts or {}) do
+    if string.find(sc, '", "SAY")', 1, true) then say158 = say158 + 1 end
+  end
+  eq(say158 >= wantN158, true, "⑥★★★" .. tostring(wantN158) .. " 条都真的发出去了（实际 " .. tostring(say158) .. "）")
+
+  EVAL_HELP_CONFIG.tb = savedTb158
+  EVAL_HELP_CONFIG.shColorProbe = nil
+  TEST.chat, TEST.runScripts = nil, nil
+  print("  色码测：" .. tostring(wantN158) .. " 个在用色码逐条编号实发（分片色 + 5 品阶 + 5 头衔 + 彩蛋专属色）")
+end
+
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")

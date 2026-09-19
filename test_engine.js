@@ -1213,6 +1213,68 @@ function checkIconAssets() {
   console.log("SHARE MSG SHAPE CHECK: 分享信息两条各自 <=1 段色码（客户端会吞多段色码的消息，已实测定案）");
 })();
 
+// ===== SHARE PALETTE CHECK（1.73.44）：分享**在用的每一个色码**都必须 8 位，且「色码测」命令要从色表现取 =====
+// ★背景（用户要求：「将现在所使用的所有颜色色码都测试下」）：色码是这个客户端最容易「整条吞掉消息」的成分，
+//   而三种坑**症状相同、根因不同**（非 8 位吞整条 1.73.43e · 一条多段吞整条 1.73.43h · 有色码无链接不画 1.73.43p）。
+//   ★这一条守的是「**测试清单不能写死**」：命令若把 12 个色码抄在函数里，往色表里加/改一个色码，
+//     命令照旧只测老的 12 个 —— **不报错、只是漏测**（正是本项目反复踩的那类静默失败）。
+//     ⇒ 源码检查：色表逐项 8 位 + 命令必须**引用四张色表**（分片色 / 品阶 / 头衔 / 彩蛋）+ 命令里不许出现字面色码。
+(function () {
+  const p = path.join(__dirname, "Share.lua");
+  const src = fs.readFileSync(p, "utf8");
+  const need = [
+    ["分片传输色 SH_CHUNK_COLOR", /local SH_CHUNK_COLOR = "\|c([0-9a-fA-F]+)"/],
+    ["品阶色表 SH_SEAL_TIERS", /local SH_SEAL_TIERS = \{[\s\S]*?\n\}/],
+    ["头衔色表 SH_TITLE_COLORS", /local SH_TITLE_COLORS = \{([^}]*)\}/],
+    ["彩蛋专属色 SH_TITLE_CUSTOM_COLOR", /local SH_TITLE_CUSTOM_COLOR = "\|c([0-9a-fA-F]+)"/],
+  ];
+  const bad = [];
+  for (const item of need) if (!item[1].test(src)) bad.push("找不到 " + item[0] + "（改名了？色码测会漏测）");
+  if (bad.length) { console.log("SHARE PALETTE CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
+
+  const codes = [];
+  codes.push(["SH_CHUNK_COLOR", src.match(/local SH_CHUNK_COLOR = "\|c([0-9a-fA-F]+)"/)[1]]);
+  const tierBlock = src.match(/local SH_SEAL_TIERS = \{[\s\S]*?\n\}/)[0];
+  const tierCols = (tierBlock.match(/color = "\|c([0-9a-fA-F]+)"/g) || []).map(function (s) { return s.replace(/.*"\|c/, "").replace(/"/, ""); });
+  if (tierCols.length !== 5) bad.push("品阶色表应为 5 档，实际 " + tierCols.length + " 项");
+  tierCols.forEach(function (c, i) { codes.push(["品阶" + (i + 1), c]); });
+  const titleBlock = src.match(/local SH_TITLE_COLORS = \{([^}]*)\}/)[1];
+  const titleCols = (titleBlock.match(/\|c[0-9a-fA-F]{8}/g) || []).map(function (s) { return s.replace("|c", ""); });
+  if (titleCols.length !== 5) bad.push("头衔色表应为 5 档，实际 " + titleCols.length + " 项");
+  titleCols.forEach(function (c, i) { codes.push(["头衔" + (i + 1), c]); });
+  codes.push(["彩蛋专属色", src.match(/local SH_TITLE_CUSTOM_COLOR = "\|c([0-9a-fA-F]+)"/)[1]]);
+  // ★档数不对（色表被改坏/解析失效）也要当场响，不能只算长度
+  if (bad.length) { console.log("SHARE PALETTE CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
+  // ★每项必须**正好 8 位**（6 位客户端不解析 · 7 位吞整条）
+  const badLen = codes.filter(function (c) { return c[1].length !== 8; });
+  if (badLen.length) {
+    console.log("SHARE PALETTE CHECK: FAIL - 在用色码不是 8 位（客户端不解析/吞整条）：" +
+      badLen.map(function (c) { return c[0] + "=" + c[1] + "(" + c[1].length + "位)"; }).join(" | "));
+    process.exitCode = 1; return;
+  }
+  // ★「色码测」命令必须**从色表现取**（引用四张表）+ 不许字面色码（写死 = 改色表就漏测）
+  const pm = src.match(/function EVAL_SHARE_COLOR_PROBE\(\)[\s\S]*?\nend/);
+  if (!pm) { console.log("SHARE PALETTE CHECK: FAIL - 找不到色码测命令 EVAL_SHARE_COLOR_PROBE（改名了？）"); process.exitCode = 1; return; }
+  const probe = pm[0];
+  const refs = ["SH_CHUNK_COLOR", "SH_SEAL_TIERS", "SH_TITLE_COLORS", "SH_TITLE_CUSTOM_COLOR", "SH_MSG_MAX", "shTxQ", "shEnsureTxTicker"];
+  const missRef = refs.filter(function (r) { return probe.indexOf(r) < 0; });
+  if (missRef.length) {
+    console.log("SHARE PALETTE CHECK: FAIL - 色码测命令没有引用 " + missRef.join("/") + "（写死清单 = 改色表就漏测）");
+    process.exitCode = 1; return;
+  }
+  if (/"[^"]*\|c[0-9a-fA-F]/.test(probe)) {
+    console.log("SHARE PALETTE CHECK: FAIL - 色码测命令里出现了**字面色码**（应当从色表取色，否则加/改色码就漏测）");
+    process.exitCode = 1; return;
+  }
+  // ★接线：命令入口要真的能调到它（真事故：前缀写错 → 敲了静默无反应）
+  const eh = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
+  if (!/go 色码测/.test(eh) || !/EVAL_SHARE_COLOR_PROBE\(\)/.test(eh)) {
+    console.log("SHARE PALETTE CHECK: FAIL - /eh go 色码测 没接到命令入口（敲了会静默无反应）");
+    process.exitCode = 1; return;
+  }
+  console.log("SHARE PALETTE CHECK: 在用色码 " + codes.length + " 个逐项 8 位；色码测命令从四张色表现取（无字面色码）且已接上入口");
+})();
+
 // ===== PACK LIST CHECK（1.73.0）：发布包清单必须**跟着 .toc 走**，条目数基准也要对得上 =====
 // ★背景两笔代价：① 1.72.0 发现随包的 zip **只有 25 个文件**（缺 IconBrowser.lua + 5 个 examples）
 //   —— 用户装了会**直接报错**；② 1.73.0 新增 PetData.lua / PetHelper.lua 后，记忆体第 9 步里的打包脚本

@@ -6982,6 +6982,15 @@ if type(SlashCmdList) == "table" then
       else
         say("分享探针：Share 模块未载入（EVAL_SHARE_SEND_PROBE 不存在）")
       end
+    -- ★★★1.73.44 色码测（用户要求「将现在所使用的所有颜色色码都测试下」）：
+    --   把分享真正会发到聊天的每一个色码各发一条编号消息（列表**从色表实时生成**，不手抄）——
+    --   这个客户端对色码的口径很窄（非 8 位吞整条 / 多段吞整条 / 无链接不画），三种坑都不报错，只能实测。
+    elseif msg == "go 色码测" or msg == "go colortest" or msg == "go 颜色测" or msg == "go palette" then
+      if type(EVAL_SHARE_COLOR_PROBE) == "function" then
+        EVAL_SHARE_COLOR_PROBE()
+      else
+        say("色码测：Share 模块未载入（EVAL_SHARE_COLOR_PROBE 不存在）")
+      end
     -- ★★★1.73.42s 取证：右键名字菜单的能力 + 记账（用户：「右键邀请触发」＝点了没反应）
     elseif msg == "go 名字探针" or msg == "go namemenu" or msg == "go 社交探针" then
       if type(EVAL_TB_NAME_PROBE) == "function" then
