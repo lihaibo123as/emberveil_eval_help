@@ -332,6 +332,19 @@ function EVAL_TB_CHAN_INSTALL_ONE(key)
         out = colored
         TB.chatPainted = (TB.chatPainted or 0) + 1
         TB.chatLast = who
+      elseif type(EVAL_TB_NAMECLASS_HEAL) == "function" then
+        -- ★★★1.73.51 未命中 → 先补一次**本地只读**缓存（公会名册/好友/查询结果；零服务器请求），
+        --   真采到新名字就**当场重判这一行**（不等下一行）—— 用户报的「刚载入不染色」正是这一段能救的。
+        local okh, added = pcall(EVAL_TB_NAMECLASS_HEAL)
+        if okh and type(added) == "number" and added > 0 then
+          local ok2, col2, who2 = pcall(EVAL_TB_CHAT_COLOR_LINE, msg)
+          if ok2 and type(col2) == "string" and col2 ~= msg then
+            out = col2
+            TB.chatPainted = (TB.chatPainted or 0) + 1
+            TB.chatLast = who2
+            TB.chatHealed = (TB.chatHealed or 0) + 1
+          end
+        end
       end
     end
     -- ★1.73.12（用户追加要求）：未缓存的名字 → 排进**主动查询**队列；
@@ -2447,13 +2460,29 @@ local TB_NC_THROTTLE = { unit = 5, guild = 30, friends = 10, who = 10 }
 local tbNcAt = {}
 local function tbNcHarvest(kind)
   local now = (type(GetTime) == "function") and GetTime() or 0
-  if now - (tbNcAt[kind] or -999) < (TB_NC_THROTTLE[kind] or 10) then return 0 end
-  tbNcAt[kind] = now
+  -- ★1.73.51 兜底：kind 为 nil（= 采全部）时用 "all" 当限频键 —— 绝不拿 nil 做表键（那会当场 `table index is nil`）
+  local kkey = kind or "all"
+  if now - (tbNcAt[kkey] or -999) < (TB_NC_THROTTLE[kkey] or 10) then return 0 end
+  tbNcAt[kkey] = now
   local ok, added = pcall(EVAL_TB_NAMECLASS_HARVEST, kind)
   if ok and type(added) == "number" and added > 0 then TB.ncAdded = (TB.ncAdded or 0) + added end
   return (ok and type(added) == "number") and added or 0
 end
 EVAL_TB_NAMECLASS_HARVEST_THROTTLED = tbNcHarvest -- 供事件 / 诊断 / 断言直调
+
+-- ★★★1.73.51 未命中自愈：把三类**本地只读**来源按各自限频窗再采一遍（零服务器请求）。
+--   为什么需要它：用户实测「打开一次公会信息才开始染色」= 公会名册是**懒加载**的；我们不能替他开公会窗，
+--   但名册/好友/查询结果一旦到位，这里就能在下一次聊天命中失败时自己补上（配合聊天入口的「当场重判」）。
+--   ★频率：单次最多 3 次 GetTime + 表查找（真正贵的遍历只在窗口到点时发生一次，见 TB_NC_THROTTLE），
+--     所以从聊天热路径调用是安全的。返回本次**新写入**的条数。
+function EVAL_TB_NAMECLASS_HEAL()
+  if not EVAL_TB_CHATCOLOR_ON() then return 0 end
+  local n = 0
+  n = n + (tbNcHarvest("guild") or 0)
+  n = n + (tbNcHarvest("friends") or 0)
+  n = n + (tbNcHarvest("who") or 0)
+  return n
+end
 
 -- 纯函数：把一行聊天文本里的**第一处**已知玩家名染成职业色；返回 (新文本, 命中的名字)。
 --   ★判据（保守：宁可不上色，也不要把人家的聊天弄坏）：
@@ -2618,7 +2647,60 @@ end
 function EVAL_TB_CHATCOLOR_STATE()
   return { on = EVAL_TB_CHATCOLOR_ON(), cache = EVAL_TB_NAMECLASS_SIZE(), seen = TB.chatSeen or 0,
            painted = TB.chatPainted or 0, last = TB.chatLast, samples = TB.chatRaw or {},
-           frames = TB.chanFrames or 0, miss = TB.chanMiss or 0, added = TB.ncAdded or 0 }
+           frames = TB.chanFrames or 0, miss = TB.chanMiss or 0, added = TB.ncAdded or 0,
+           healed = TB.chatHealed or 0 }
+end
+-- ★★★1.73.51 取证命令 `/eh go 名字缓存`：把「名字→职业」缓存的**每个来源**一次摊开。
+--   为什么要有它：用户真机现象「刚载入不染色 · 查询完成还是不染色 · **打开一次公会信息**才开始」——
+--   这三种表现对应三个完全不同的原因（来源没数据 / 职业名认不出来 / 聊天入口没挂上），
+--   而它们只能靠**当场读各来源的条数与职业原文**分辨（本项目「写成功 ≠ 写进去生效」那一族）。
+function EVAL_TB_NAMECLASS_PROBE()
+  local function apiOk(n) return (type(_G[n]) == "function") and "有" or "**无**" end
+  local function countOf(n)
+    if type(_G[n]) ~= "function" then return "API无" end
+    local ok, v = pcall(_G[n])
+    return (ok and type(v) == "number") and tostring(v) or "报错/nil"
+  end
+  local function tokOf(k) return tostring(EVAL_TB_PAINT_CLASS_TOKEN_OF(k)) end
+  say("===== 名字染色缓存探针 =====")
+  say("  开关(chatColor)=" .. tostring(EVAL_TB_CHATCOLOR_ON()) .. " · 缓存条数=" .. tostring(EVAL_TB_NAMECLASS_SIZE()) ..
+      " · 本会话采集新增=" .. tostring(TB.ncAdded or 0) .. " · 未命中自愈上色=" .. tostring(TB.chatHealed or 0))
+  say("  公会名册: GetNumGuildMembers=" .. apiOk("GetNumGuildMembers") .. " · GetGuildRosterInfo=" .. apiOk("GetGuildRosterInfo") ..
+      " · 本地条数=" .. countOf("GetNumGuildMembers") .. "（★懒加载：没开过公会窗前通常是 0）")
+  if type(GetGuildRosterInfo) == "function" and type(GetNumGuildMembers) == "function" then
+    local okn, n = pcall(GetNumGuildMembers)
+    if okn and type(n) == "number" and n > 0 then
+      local okp, nm, _r, _ri, _lv, klass = pcall(GetGuildRosterInfo, 1)
+      say("    首条: " .. tostring(nm) .. " · 职业原文=" .. tostring(klass) .. " → token=" .. tokOf(klass))
+    end
+  end
+  say("  查询结果: GetNumWhoResults=" .. apiOk("GetNumWhoResults") .. " · GetWhoInfo=" .. apiOk("GetWhoInfo") ..
+      " · 条数=" .. countOf("GetNumWhoResults"))
+  if type(GetWhoInfo) == "function" and type(GetNumWhoResults) == "function" then
+    local okn, n = pcall(GetNumWhoResults)
+    if okn and type(n) == "number" and n > 0 then
+      local okp, nm, _g, _lv, _race, klass = pcall(GetWhoInfo, 1)
+      say("    首条: " .. tostring(nm) .. " · 职业原文=" .. tostring(klass) .. " → token=" .. tokOf(klass))
+    end
+  end
+  say("  好友: GetNumFriends=" .. apiOk("GetNumFriends") .. " · GetFriendInfo=" .. apiOk("GetFriendInfo") .. " · 条数=" .. countOf("GetNumFriends"))
+  if type(GetFriendInfo) == "function" and type(GetNumFriends) == "function" then
+    local okn, n = pcall(GetNumFriends)
+    if okn and type(n) == "number" and n > 0 then
+      local okp, nm, _lv, klass = pcall(GetFriendInfo, 1)
+      say("    首条: " .. tostring(nm) .. " · 职业原文=" .. tostring(klass) .. " → token=" .. tokOf(klass))
+    end
+  end
+  local added = EVAL_TB_NAMECLASS_HARVEST(nil)
+  say("  立刻做一次**全量只读采集** → 新增 " .. tostring(added) .. " 条；缓存现在 " .. tostring(EVAL_TB_NAMECLASS_SIZE()) .. " 条")
+  local st = EVAL_TB_CHATCOLOR_STATE() or {}
+  say("  聊天入口: 已包装帧=" .. tostring(st.frames) .. " · 经过 " .. tostring(st.seen) .. " 条 · 上色 " .. tostring(st.painted) .. " 条 · 最近上色=" .. tostring(st.last))
+  local ps = EVAL_TB_PAINT_STATE() or {}
+  say("  三个窗口(公会/查询/好友): calls=" .. tostring(ps.calls) .. " · painted=" .. tostring(ps.painted) ..
+      "（窗口没打开过就是 0 —— 那也是「缓存为空」的一个来源）")
+  say("  ★判读：某来源「本地条数=0」= 客户端还没拉到数据（懒加载）；「职业原文=xx → token=nil」= 职业名认不出（要补映射）；")
+  say("     缓存条数 >0 却仍不染色 → 看「聊天入口」那行（已包装帧=0 = 入口没挂上）")
+  return true
 end
 -- 诊断用：对一条原文给出判决（不打印，只回值）—— 与生产**同一个**纯函数，绝不复刻判据
 function EVAL_TB_CHATCOLOR_VOTE(msg)
@@ -2632,6 +2714,7 @@ function EVAL_TB_CHATCOLOR_RESET() -- 测试用：清计数与样本（不还原
   TB.chatSeen, TB.chatPainted, TB.chatRaw, TB.chatLast = 0, 0, {}, nil
   tbNcAt = {}
   TB.ncAdded = 0
+  TB.chatHealed = 0
 end
 -- 勾/取消勾后的即时动作：立刻补一次缓存（勾上就能用）+ 如实回一句，并把**自己的名字**染出来当示例
 -- ===== 未缓存角色的**主动查询**（/who）—— 1.73.12 用户追加要求 =====
@@ -3409,9 +3492,20 @@ function EVAL_TB_ONEVENT(e)
     -- ★1.73.12 先结清在途那一发（查到 → 进缓存；没有 → 写负缓存），再顺带采集整张结果表
     EVAL_TB_WHO_ONRESULTS()
     tbNcHarvest("who")
-  elseif e == "PARTY_MEMBERS_CHANGED" or e == "RAID_ROSTER_UPDATE" or e == "PLAYER_TARGET_CHANGED" or
-         e == "PLAYER_ENTERING_WORLD" or e == "VARIABLES_LOADED" then
+  elseif e == "PARTY_MEMBERS_CHANGED" or e == "RAID_ROSTER_UPDATE" or e == "PLAYER_TARGET_CHANGED" then
     tbNcHarvest("unit")
+  elseif e == "PLAYER_ENTERING_WORLD" or e == "VARIABLES_LOADED" then
+    -- ★★★1.73.51 用户真机实测：「插件刚载入 → 染色失败；即使玩家查询完成还是失败；**只有打开公会信息**才开始染」。
+    --   【根因】原来这两条事件只采 `unit`（自己/队伍/团队/目标），而聊天里的人名绝大多数来自**公会/好友/查询**；
+    --     公会名册又是**懒加载**的（客户端要等公会窗打开才把名册拉到本地）⇒ 那段时间缓存里根本没有那些名字。
+    --   ⇒ 载入时把**所有只读来源**都采一遍（公会名册 / 好友 / 查询结果 / 队伍）——依旧是零服务器请求，
+    --     名册真到位了就立刻能染色；没到位也只是读了个 0（无害）。
+    --   ★★四类**逐个**调用、不传 nil：限频表是按 kind 做键的，`tbNcAt[nil]` 会直接 `table index is nil`
+    --     （本轮的实测事故 —— 判据当场把它抓出来了）。
+    tbNcHarvest("unit")
+    tbNcHarvest("guild")
+    tbNcHarvest("friends")
+    tbNcHarvest("who")
   end
 end
 

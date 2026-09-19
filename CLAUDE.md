@@ -332,6 +332,25 @@ Remove-Item $staging -Recurse -Force
      「写被吞、读回来还是原来的」帧（组 124 ⑧）—— 否则「如实记 thisStuck」这条判据在桩里**永远验不到**（M148 先存活后捕获）。
   变异 M143~M148 全捕获（不匹配组名 / 撤销塞整串 / 不做读回确认 / this 层不吞 / 同步不看开关 / 不记账）。
 
+- ★★★1.73.51 **名字染色缓存「什么时候载入」**（用户真机：「插件刚载入 → 染色失败；即使玩家查询完成还是失败；
+  **只有打开公会信息才开始染**」）—— 先把载入点列全（这是本轮分析的结论，别再靠猜）：
+  · 缓存 = 名字（小写/去服务器后缀）→ **职业 token**，唯一写入点 `tbNameClassPut`，**不落盘**（会话级，避免膨胀与过期策略）。
+  · **四条载入路径**：① **白拿**（公会/查询/好友三个窗口刷新时顺手写，零额外 API）；
+    ② **只读采集** `EVAL_TB_NAMECLASS_HARVEST(kind)`：unit（自己/队伍/团队/目标，`UnitName`+`UnitClass`）/
+    guild（`GetGuildRosterInfo` 本地名册）/ friends（`GetFriendInfo`）/ who（`GetWhoInfo`）；
+    ③ **主动 /who**（未缓存的名字，四道闸门限频，结果回来写缓存 —— 用户 1.73.12 追加要求）；
+    ④ 事件驱动：`GUILD_ROSTER_UPDATE`→guild · `FRIENDLIST_UPDATE`→friends · `WHO_LIST_UPDATE`→who（+结清在途）·
+    `PARTY_MEMBERS_CHANGED`/`RAID_ROSTER_UPDATE`/`PLAYER_TARGET_CHANGED`→unit · **载入事件**（见下）。
+  · **根因（本轮修的两条）**：ⓐ 载入事件（`PLAYER_ENTERING_WORLD`/`VARIABLES_LOADED`）原来**只采 unit** ⇒ 公会/好友/查询里的人名**全都进不了缓存**；
+    已改成**四类逐个采**（★别写 `tbNcHarvest(nil)`：限频表按 kind 做键，`tbNcAt[nil]` 直接 `table index is nil` —— 本轮实测事故，判据当场抓住）；
+    ⓑ **公会名册是懒加载的**（客户端要等公会窗打开、`GuildRoster()` 查询回来才把名册放到本地，之前 `GetNumGuildMembers()` 一直是 0），
+    而我们**只读本地缓存、绝不发服务器查询**（频率防护）⇒ 没人开过公会窗时那些名字**任何来源里都没有**。
+    补法 = **未命中自愈** `EVAL_TB_NAMECLASS_HEAL()`：聊天入口未命中时把三类只读来源按各自限频窗再采一遍（零服务器请求），
+    采到新名字就**当场重判这一行**（不等下一行）；判据 = 组 161（载入采全 / 自愈当场染色 / 自愈后仍未知**照旧不染**）；变异 M482d/M483/M484b 全捕获。
+  · **取证命令 `/eh go 名字缓存`**（`EVAL_TB_NAMECLASS_PROBE`）：把每个来源的**API 有无 / 本地条数 / 首条职业原文 → token**、
+    缓存条数、聊天入口包装帧数与上色计数一次摊开 —— 真机上「没数据 / 职业名认不出 / 入口没挂上」三种原因**只能这样分辨**；
+    接线由源码检查 `NAME CACHE PROBE WIRING CHECK` 守着（变异 M485）。★职业名必须与 `EVAL_CLASS_LIST` **逐字相同**
+    （"萨满祭司" 认不出 → 如实不写缓存；本轮夹具就踩了这个，判据当场报 want=SHAMAN got=nil）。
 - ★★★1.73.18 **名字在 `arg2`，不在正文里**（用户「角色迷你还是没染色」两轮后靠**取证探针**定案）：
   真机样本逐条打印出 `arg1` = **只有正文**（`1` / `你有队`）、`arg2` = **发送者名**（`Ionol` / `猎狂`）——
   客户端自己把名字拼成「[名字] 说: 正文」⇒ **改 `arg1` 永远染不上色**；名字着色与「按发送者触发主动查询」都要挂在 **`arg2`** 上。

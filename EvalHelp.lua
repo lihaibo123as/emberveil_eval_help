@@ -7166,6 +7166,14 @@ if type(SlashCmdList) == "table" then
         say("名号色：Share 模块未载入（EVAL_SHARE_TITLE_COLOR_PROBE 不存在）")
       end
     -- ★★★1.73.42s 取证：右键名字菜单的能力 + 记账（用户：「右键邀请触发」＝点了没反应）
+    -- ★★★1.73.51 名字染色缓存取证（用户：「分析玩家姓名染色缓存是什么时候载入的」）：
+    --   把每个来源的**条数 + 职业原文 → token** 一次摊开（真机上「没数据 / 认不出职业 / 入口没挂上」三选一）。
+    elseif msg == "go 名字缓存" or msg == "go namcache" or msg == "go 染色缓存" then
+      if type(EVAL_TB_NAMECLASS_PROBE) == "function" then
+        EVAL_TB_NAMECLASS_PROBE()
+      else
+        say("名字缓存探针：工具箱未载入（EVAL_TB_NAMECLASS_PROBE 不存在）")
+      end
     -- ★★★1.73.49 方案列表图标取证（用户：「方案左侧的图片还没显示」）
     elseif msg == "go 方案图标" or msg == "go proficon" or msg == "go 图标探针2" then
       if type(EVAL_WAR_PROF_ICON_PROBE) == "function" then

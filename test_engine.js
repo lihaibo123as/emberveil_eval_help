@@ -1213,6 +1213,18 @@ function checkIconAssets() {
   console.log("SHARE MSG SHAPE CHECK: 分享信息两条各自 <=1 段色码（客户端会吞多段色码的消息，已实测定案）");
 })();
 
+// ===== NAME CACHE PROBE WIRING CHECK（1.73.51）：名字染色缓存探针要真的接在 /eh go 上 =====
+// ★背景：用户报「刚载入不染色、查询完成还是不染色、只有打开公会信息才开始」——真机上这三句话对应三个不同的根因，
+//   只能靠**当场读各来源的条数与职业原文**分辨 ⇒ 必须给用户一条能跑的命令（写错前缀 = 敲了静默无反应）。
+(function () {
+  const eh = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
+  if (!/msg == "go 名字缓存"/.test(eh) || !/EVAL_TB_NAMECLASS_PROBE\(\)/.test(eh)) {
+    console.log("NAME CACHE PROBE WIRING CHECK: FAIL - /eh go 名字缓存 没接到命令入口（敲了会静默无反应）");
+    process.exitCode = 1; return;
+  }
+  console.log("NAME CACHE PROBE WIRING CHECK: /eh go 名字缓存 已接上（读各来源条数与职业原文）");
+})();
+
 // ===== PROF ICON PROBE WIRING CHECK（1.73.49）：方案图标取证命令要真的接在 /eh go 上 =====
 // ★背景：用户报「方案左侧的图片还没显示」，而真机上「没请求 / 请求了没生效 / 生效了没画出来」三种原因
 //   只能靠**读回来的纹理路径**分辨 ⇒ 必须给用户一条能跑的命令。命令写错前缀 = 敲了静默无反应（本项目真事故）。

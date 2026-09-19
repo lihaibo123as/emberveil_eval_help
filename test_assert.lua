@@ -12511,6 +12511,53 @@ do
   print("  方案列表：品阶图标（只传 1 个实参）+ 品阶色（文字色 = 品阶色 · 底色 = 品阶色 × 0.22 / 激活 0.45）—— 与案例模版同一套规则")
 end
 
+-- 161) ★★★1.73.51 名字染色缓存：**载入时把所有只读来源都采一遍** + 未命中自愈（用户真机：「刚载入不染色，
+--   即使查询完成还是失败，只有打开公会信息才开始」—— 因为公会名册懒加载，而我们只读本地缓存、不发服务器查询）
+do
+  local savedTb161 = EVAL_HELP_CONFIG.tb
+  EVAL_HELP_CONFIG.tb = { chatColor = true }
+  -- ① 载入事件（PLAYER_ENTERING_WORLD / VARIABLES_LOADED）必须采**全部**只读来源（原来只采 unit）
+  EVAL_TB_CHATCOLOR_RESET() -- 清限频窗与计数（**不动**名字缓存）
+  TEST.guildRows = { { name = "载入甲", class = "德鲁伊" } }
+  TEST.whoRows = { { name = "载入乙", class = "牧师" } }
+  TEST.friendRows = { { name = "载入丙", class = "法师" } }
+  EVAL_TB_ONEVENT("PLAYER_ENTERING_WORLD")
+  eq(EVAL_TB_NAMECLASS_GET("载入甲"), "DRUID",
+     "①★★★载入事件采到**公会名册**（用户的 bug：只采 unit → 公会聊天里的人名全进不了缓存）")
+  eq(EVAL_TB_NAMECLASS_GET("载入乙"), "PRIEST", "①★★载入事件也采到**查询结果**")
+  eq(EVAL_TB_NAMECLASS_GET("载入丙"), "MAGE", "①★★载入事件也采到**好友列表**")
+  -- ①b VARIABLES_LOADED 走同一条路（两个载入时机都不能漏）
+  EVAL_TB_CHATCOLOR_RESET()
+  TEST.guildRows = { { name = "载入丁", class = "萨满" } } -- ★职业名必须与 EVAL_CLASS_LIST **逐字相同**（"萨满祭司" 认不出 → 如实不写缓存）
+  TEST.whoRows, TEST.friendRows = {}, {}
+  EVAL_TB_ONEVENT("VARIABLES_LOADED")
+  eq(EVAL_TB_NAMECLASS_GET("载入丁"), "SHAMAN", "①b★★VARIABLES_LOADED 同样采全（两个载入时机都不能只采 unit）")
+  -- ② 未命中自愈：名字只在 whoRows 里（缓存里还没有）→ 从**真实打印入口**发一行，应当当场补上并染色
+  EVAL_TB_CHATCOLOR_RESET()
+  TEST.guildRows, TEST.whoRows, TEST.friendRows = {}, { { name = "自愈甲", class = "术士" } }, {}
+  local f161 = DEFAULT_CHAT_FRAME
+  f161.AddMessage = function(_, m) TEST.chat = (TEST.chat or "") .. tostring(m) .. "\n" end -- 干净底层（否则在自己头上再包一层）
+  EVAL_TEST_TB_CHAN_RESET()
+  eq(EVAL_TB_CHAN_INSTALL(), true, "②前置：挂上聊天打印入口")
+  TEST.chat = ""
+  f161:AddMessage("[自愈甲]: 在吗")
+  local hexWarlock161 = EVAL_TB_PAINT_CLASS_COLOR_OF("术士")
+  eq(string.find(tostring(TEST.chat), hexWarlock161, 1, true) ~= nil, true,
+     "②★★★缓存未命中 → **自愈**（补本地只读来源）并**当场重判这一行**：术士色已上（" .. tostring(hexWarlock161) .. "）")
+  eq((EVAL_TB_CHATCOLOR_STATE().healed or 0) >= 1, true, "②★★自愈计数在涨（诊断看得见）")
+  -- ②b 反向：来源里**也没有**这个名字 → 不许染色（自愈也不能瞎猜）
+  TEST.chat = ""
+  f161:AddMessage("[谁都没见过的名字]: 在吗")
+  eq(string.find(tostring(TEST.chat), "|c", 1, true) == nil, true, "②b★★自愈之后仍未命中 → **照旧不染色**（不猜、不涂默认灰）")
+  -- ③ 取证命令能跑（用户真机回报用）
+  TEST.chat = ""
+  eq(EVAL_TB_NAMECLASS_PROBE(), true, "③★/eh go 名字缓存 探针能跑")
+  eq(string.find(tostring(TEST.chat), "名字染色缓存探针", 1, true) ~= nil, true, "③★★探针真的把各来源摊开打印了")
+  EVAL_HELP_CONFIG.tb = savedTb161
+  EVAL_TB_CHATCOLOR_RESET()
+  print("  名字染色缓存：载入采全（公会/好友/查询/队伍）+ 未命中自愈（只读来源，零服务器请求）+ /eh go 名字缓存 探针")
+end
+
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")
