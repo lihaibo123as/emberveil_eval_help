@@ -552,7 +552,8 @@ local function shHoverFlush()
   local c = rawget(_G, "EVAL_HELP_CONFIG")
   if type(c) ~= "table" then return end
   c.shareProbeHover = { hooks = SH_HOVER.hooks, log = SH_HOVER.log, counts = SH_HOVER.counts,
-                        scriptProbe = SH_HOVER.scriptProbe, sent = SH_HOVER.sent }
+                        scriptProbe = SH_HOVER.scriptProbe, sent = SH_HOVER.sent,
+                        armedAt = SH_HOVER.armedAt }
 end
 local function shHoverBump(name)
   SH_HOVER.counts[name] = (SH_HOVER.counts[name] or 0) + 1
@@ -582,6 +583,8 @@ function EVAL_SHARE_HOVER_HOOKS()
       return true
     end
     wrap("SetHyperlink", true) -- ★最关键：画链接 tooltip 的必经之路（能截住 = 能换成方案详情）
+    wrap("SetItemByID", true)  -- 另一条可能被走的路（有就包，没有就跳过）
+    wrap("Show", false)
     wrap("SetOwner", false)
     wrap("ClearLines", false)
     wrap("AddLine", false)
@@ -615,6 +618,11 @@ function EVAL_SHARE_HOVER_PROBE(chanId)
   SH_HOVER.sent = bodies
   SH_HOVER.log = {}
   SH_HOVER.counts = {}
+  SH_HOVER.armedAt = (type(GetTime) == "function") and GetTime() or 0
+  -- ★★★1.73.41e 取证缺陷（用户实测：存档里 shareProbeHover 完全缺席）：只在「事件」里刷盘的话，
+  --   一个 hook 都没触发时存档里**什么都没有** → 分不清「探针没跑」还是「跑了但悬停不走 Lua」。
+  --   → 发探针时先写一次（含「装了哪些 hook」+ 空日志 + 时间戳）：这样「一个事件都没有」本身就是结论。
+  shHoverFlush()
   local ok = shProbeSend(bodies, chanId)
   shSay("悬停探针已发出（" .. tostring(chanId) .. "）：请把鼠标**依次停在**聊天里那三条链接上各一下，再各点一下")
   shSay("  ① 自定义链接  ② 假物品链接  ③ 真物品 id(6948) 对照 —— 然后 /reload，我读账本（或 /eh go 探针结果）")
@@ -696,6 +704,10 @@ function EVAL_SHARE_PROBE_REPORT()
       emit("  还没装挂钩（先 /eh go 悬停探针）")
     else
       emit("  已挂：" .. table.concat(h.hooks, "、"))
+      emit("  时间戳：" .. tostring(h.armedAt or 0) .. "；日志条数：" .. tostring(table.getn(h.log)))
+      if table.getn(h.log) == 0 then
+        emit("  ★一个事件都没有 = 悬停**不走 Lua**（这就是结论）→ 改用「点击看详情」或自绘悬停热区")
+      end
       emit("  SetHyperlink 命中 " .. tostring(table.getn(h.log)) .. " 次（>0 = 有 Lua 路径画链接 tooltip，可截可换）")
       for i = 1, math.min(table.getn(h.log), 6) do
         emit("     [" .. i .. "] " .. tostring(h.log[i].hook) .. " → " .. tostring(h.log[i].link))

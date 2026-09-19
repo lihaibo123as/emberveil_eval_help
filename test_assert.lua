@@ -10788,6 +10788,14 @@ do
   eq(string.find(c142, "悬停探针账本", 1, true) ~= nil, true,
      "⑦★★★无数据也照样输出悬停账本（早退就把它吞了）")
   TEST.chat = nil
+  -- ⑧ ★★★1.73.41e 真事故：发探针时就得先写一次账本——否则「一个 hook 都没触发」时存档里什么都没有，
+  --   分不清「探针没跑」还是「跑了但悬停不走 Lua」（用户实测：shareProbeHover 完全缺席）。
+  EVAL_HELP_CONFIG.shareProbeHover = nil
+  eq(EVAL_SHARE_HOVER_PROBE("WHISPER") ~= false, true, "⑧发探针（用来验「发就写」）")
+  local hov142 = EVAL_HELP_CONFIG.shareProbeHover
+  eq(type(hov142) == "table", true, "⑧★★★发探针**立即**写一次账本（不依赖任何 hook 事件）")
+  eq(table.getn((hov142 or {}).log or {}) == 0, true, "⑧★刚发的时候日志是空的（「一个事件都没有」本身就是可读的证据）")
+  eq(type((hov142 or {}).armedAt) == "number", true, "⑧★还有时间戳（能证明探针真的跑过）")
   print("  悬停探针：挂钩幂等+透传+记账 · 三条形态（自定义/假物品/真物品对照）· 账本落盘 · 命令接线")
 end
 print("ALL TESTS PASS")
