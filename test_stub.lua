@@ -184,6 +184,18 @@ local function newMock()
     GetTextColor = function(self)
       return rawget(self, "__tr") or 1, rawget(self, "__tg") or 1, rawget(self, "__tb") or 1
     end,
+    -- ★★★1.73.42q 桩保真：**字体**要被记住（用户真机报「没输入框」= 分享彩蛋窗的 EditBox 字体链断了，
+    --   一个字都不画 → 看着就像没有输入框）。旧桩里 SetFont/SetFontObject 走 __index 空操作 →
+    --   「到底有没有设上字体」在测试里完全不可见（桩不记状态 = 断言失明，本项目老族教训）。
+    --   ★保真细节：真客户端 `FontString:SetFont()` **没有返回值** → 桩也不返回值（保持「pcall 成功但返回 nil」），
+    --     这样生产代码里那条「带 flags 失败再试不带 flags」的回退链才是**真的被走到**。
+    SetFontObject = function(self, fo) -- ★1.73.42q 也记下来（否则「字体对象到底设上没有」在测试里不可见）
+      rawset(self, "__fo", tostring(fo))
+      return true
+    end,
+    SetFont = function(self, fp, size, flags)
+      rawset(self, "__font", tostring(fp) .. "|" .. tostring(size) .. "|" .. tostring(flags))
+    end,
     GetTexture = function() return rawget(m, "__tex") end,
     -- ★1.73.5 CreateFrame 拿到 "EditBox" 类型后调用它，打开「SetText 会再触发 OnTextChanged」的保真开关
     __markEditBox = function() isEditBox = true end,

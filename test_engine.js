@@ -813,6 +813,17 @@ function checkIconAssets() {
   // ⑥ 彩蛋「创世者亲临」（1.73.42p）：窗口入口 · 专属色 · 文案走 Locales（不许把霸道文案写死在代码里）·
   //    四句道白是**拼出来的键**（CREATOR_L..i）→ LANG KEY CHECK 看不见，这里按清单逐个核三语言。
   if (shr.indexOf('function EVAL_TITLE_CREATOR_OPEN()') < 0) bad.push('没有彩蛋窗口的打开入口');
+  // ★1.73.42q 用户真机报「没输入框」：EditBox 必须 ①收鼠标（否则点不进焦点）②有**字体路径兜底链**
+  //   （字体对象缺失时一个字都画不出 —— 看着就是「没有输入框」）。
+  //   ★★★检查必须**收窄到彩蛋窗口的构建段**：`Fonts\...` 与 `fieldHit` 这两个词别处也有
+  //   （shText 自己的字体链、测试钩子里的 fieldHit）→ 全文件找会让变异**存活**（本轮实测 M403/M404 SURVIVED）。
+  const cbStart = shr.indexOf('local function shCreatorBuild()');
+  const cbEnd = shr.indexOf('function EVAL_TITLE_CREATOR_OPEN()', cbStart);
+  const creator = (cbStart >= 0 && cbEnd > cbStart) ? shr.slice(cbStart, cbEnd) : '';
+  if (!creator) bad.push('找不到彩蛋窗口构建段（锚点变了？）');
+  if (creator && creator.indexOf('pcall(eb.EnableMouse, eb, true)') < 0) bad.push('彩蛋输入框没有 EnableMouse（点不进焦点 → 打不了字）');
+  if (creator && creator.indexOf('Fonts\\\\FZLBJW.TTF') < 0) bad.push('彩蛋输入框没有字体路径兜底链（字体对象缺失时一个字都画不出）');
+  if (creator && creator.indexOf('shCreator.fieldHit = hit') < 0) bad.push('彩蛋输入框没有点击聚焦层（本客户端 EditBox 自己收鼠标不保险）');
   if (shr.indexOf('SH_TITLE_CUSTOM_COLOR') < 0) bad.push('自定义名号没有专属色（与抽卡色分不开）');
   if (shr.indexOf('local lineKeys = { "CREATOR_L1"') < 0) bad.push('四条道白没有走 Locales 键表');
   ['CREATOR_T', 'CREATOR_L1', 'CREATOR_L2', 'CREATOR_L3', 'CREATOR_L4', 'CREATOR_HINT', 'CREATOR_OK',

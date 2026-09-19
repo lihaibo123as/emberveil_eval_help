@@ -11061,7 +11061,8 @@ do
   TEST.chat = nil
   eq(EVAL_SHARE_CLICK_IMPORT("EHPF:" .. tostring(sid)), true, "③★★★命中缓存 → 导入返回成功")
   TEST.chat = nil
-  EVAL_TEST_SIR_CLICK("EHPF:ff")
+  -- ★1.73.42q 用**不可能存在**的 id（真实传输 id 只有 4 位 hex；2 字符的 "ff" 会偶发撞上缓存键后缀 → 假红）
+  EVAL_TEST_SIR_CLICK("EHPF:ffffffff")
   local miss = tostring(TEST.chat or "")
   eq(string.find(miss, "还没收齐", 1, true) ~= nil, true, "③★★没缓存 → 如实提示「还没收齐」（实际：" .. string.sub(miss, 1, 60) .. "）")
   TEST.chat = nil
@@ -11451,8 +11452,16 @@ do
   eq(tx150.one, EVAL_L("CREATOR_ONE"), "②★★页脚「仅此一次」= 定稿")
   eq(string.find(tostring(tx150.cur or ""), "当前名号", 1, true) ~= nil, true, "②★窗口里写出了**当前名号**（替换前先看得见旧的）")
   -- ③ 回声行保底（EditBox 本客户端可能不渲染）：逐字镜像
+  -- ★★★1.73.42q 用户真机报「没输入框」= EditBox 不收鼠标 + 字体链断了（一个字都画不出）。判据钉死这三点：
+  eq(EVAL_TEST_CREATOR_EDIT_MOUSE(), true, "③★★★输入框**收鼠标**（不补 EnableMouse 就点不进焦点）")
+  local fnt150 = EVAL_TEST_CREATOR_EDIT_FONT() or {}
+  eq(fnt150.fo ~= nil or fnt150.path ~= nil, true, "③★★★输入框**设上了字体**（字体对象或字体路径至少一条；两条都断了就一个字不画 → 看着像没输入框）：fo=" ..
+     tostring(fnt150.fo) .. " path=" .. tostring(fnt150.path))
+  eq(EVAL_TEST_CREATOR_FOCUS(), true, "③★★★点框内 → EditBox 真的拿到焦点（桩自 1.71.2 起记焦点）")
+  eq(EVAL_TEST_CREATOR_FIELD_HINT_SHOWN(), true, "③★★空框里有提示字（EditBox 不给光标时也看得见该在哪写）")
   eq(EVAL_TEST_CREATOR_INPUT("太古之名"), true, "③前置：能驱动真实 EditBox")
   eq(EVAL_TEST_CREATOR_ECHO(), "太古之名", "③★★★回声行逐字镜像（EditBox 不渲染也看得见自己打的名字）")
+  eq(EVAL_TEST_CREATOR_FIELD_HINT_SHOWN(), false, "③★★一输入，空框提示就藏掉（不挡字）")
   -- ④ [放弃这份机缘]：只关窗，什么都不写
   eq(EVAL_TEST_CREATOR_CLICK("cancel"), true, "④★★按了真实的 [放弃这份机缘]")
   eq(EVAL_TEST_CREATOR_SHOWN(), false, "④★窗口关掉了")
@@ -11490,6 +11499,17 @@ do
   TEST.chat = nil
   eq(EVAL_TITLE_SET_CUSTOM("改一下"), false, "⑥★★★第二次改写被拒（只有一次机会）")
   eq(((EVAL_HELP_CONFIG.title or {}).custom), "太古之名", "⑥★★名号没被改掉")
+  -- ★★★1.73.42q 命令后路：`/eh go 创世 <名号>` 直接落笔（EditBox 万一还是打不了字也有路走）
+  EVAL_TITLE_CLEAR_CUSTOM()
+  TEST.chat = nil
+  SlashCmdList["EVALHELP"]("go 创世 本源之名")
+  eq(((EVAL_HELP_CONFIG.title or {}).custom), "本源之名", "⑦★★★命令带名号 → 直接写进存档（不依赖输入框）")
+  eq(string.find(tostring(TEST.chat or ""), "本源之名", 1, true) ~= nil, true, "⑦★★并且如实播报了这个名号")
+  TEST.chat = nil
+  SlashCmdList["EVALHELP"]("go 创世 再改一次")
+  eq(((EVAL_HELP_CONFIG.title or {}).custom), "本源之名", "⑦★★★机缘已用尽 → 命令里的名号也改不动")
+  eq(string.find(tostring(TEST.chat or ""), "用尽", 1, true) ~= nil, true, "⑦★★如实说「机缘已用尽」")
+  TEST.chat = nil
   -- ⑦ 还原现场（存档与窗口都不是本次测试的私产）
   EVAL_TITLE_CLEAR_CUSTOM()
   EVAL_TITLE_CREATOR_CLOSE()

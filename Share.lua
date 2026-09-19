@@ -1072,22 +1072,26 @@ local function shCreatorSubmit()
     local ok2, v2 = pcall(shCreator.echo.GetText, shCreator.echo)
     if ok2 and type(v2) == "string" then txt = v2 end -- 回声行兜底（EditBox 不渲染时玩家看的是它）
   end
-  local cfgT = rawget(_G, "EVAL_HELP_CONFIG")
-  local t = (type(cfgT) == "table" and type(cfgT.title) == "table") and cfgT.title or nil
-  if t and type(t.custom) == "string" and t.custom ~= "" then
-    shSay(L("CREATOR_USED"))
+  local ok, key = EVAL_TITLE_CREATOR_TRY(txt)
+  if ok then
+    shSay(string.format(L(key), tostring(txt)))
     if shCreator.root then shCreator.root:Hide() end
-    return false
+    return true
   end
-  if not EVAL_TITLE_SET_CUSTOM(txt) then
-    shSay(L("CREATOR_ERR"))
-    return false
-  end
-  shSay(string.format(L("CREATOR_DONE"), tostring(txt)))
-  if shCreator.root then shCreator.root:Hide() end
-  return true
+  shSay(L(key))
+  -- ★名字不合法时**窗口留着**（让他改）；机缘已用尽才关窗（再留着也没意义）
+  if key == "CREATOR_USED" and shCreator.root then shCreator.root:Hide() end
+  return false
 end
 function EVAL_TITLE_CREATOR_SUBMIT() return shCreatorSubmit() end
+-- ★1.73.42q 统一提交入口（弹窗与「命令后路」共用一份判断）：返回 ok, 消息键（CREATOR_DONE / CREATOR_USED / CREATOR_ERR）
+function EVAL_TITLE_CREATOR_TRY(name)
+  local cfgT = rawget(_G, "EVAL_HELP_CONFIG")
+  local t = (type(cfgT) == "table" and type(cfgT.title) == "table") and cfgT.title or nil
+  if t and type(t.custom) == "string" and t.custom ~= "" then return false, "CREATOR_USED" end
+  if not EVAL_TITLE_SET_CUSTOM(name) then return false, "CREATOR_ERR" end
+  return true, "CREATOR_DONE"
+end
 local function shCreatorClose(reason)
   if shCreator.root then shCreator.root:Hide() end
   if reason then shSay(reason) end
@@ -1158,40 +1162,85 @@ local function shCreatorBuild()
   pcall(curFs.SetWidth, curFs, W - 40)
   pcall(curFs.SetJustifyH, curFs, "CENTER")
   shCreator.curFs = curFs
-  -- 输入区：金色边框 + EditBox + **回声行保底**（EditBox 不渲染也看得见自己在打什么）
-  local box = root:CreateTexture(nil, "ARTWORK")
-  shSolid(box, 0.06, 0.05, 0.03, 1)
-  box:SetPoint("TOP", root, "TOP", 0, -142)
-  box:SetWidth(W - 120) box:SetHeight(26)
-  local boxEdge = root:CreateTexture(nil, "ARTWORK")
-  shSolid(boxEdge, 0.55, 0.44, 0.18, 1)
-  boxEdge:SetPoint("TOP", root, "TOP", 0, -142)
-  boxEdge:SetWidth(W - 120) boxEdge:SetHeight(1)
-  local okEb, eb = pcall(CreateFrame, "EditBox", nil, root)
+  -- ★★★1.73.42q 输入区（用户真机报「没输入框」：EditBox 的**字体链断了就没字也没光标**，看着就像没有输入框）——
+  --   ① 补 `EnableMouse`（不然点不进焦点）；② 字体对象全失败时**必须**再走 SetFont(字体路径) 兜底链
+  --   （EvalHelp 的 TN/IO 窗同款做法：Fonts\FZLBJW.TTF → FRIZQT__ → ARIALN，带不带 OUTLINE 各试一次）；
+  --   ③ 输入区画成**看得见的框**（暗底 + 四条金边，不是只画一条上边）；④ 空框里放提示字，一输入就藏；
+  --   ⑤ 顶上再压一个**点击层**（本客户端 EditBox 自己收鼠标不保险 → 点框内任意处都 SetFocus）。
+  local FIELD_W, FIELD_H, FIELD_Y = W - 120, 28, -140
+  local box = root:CreateTexture(nil, "BACKGROUND")
+  shSolid(box, 0.04, 0.04, 0.06, 1)
+  box:SetPoint("TOP", root, "TOP", 0, FIELD_Y)
+  box:SetWidth(FIELD_W) box:SetHeight(FIELD_H)
+  for _, e in ipairs({ "TOP", "BOTTOM" }) do -- 上下两条金边（左右各一条）
+    local ln = root:CreateTexture(nil, "BORDER")
+    shSolid(ln, 0.62, 0.50, 0.20, 1)
+    ln:SetPoint(e, root, "TOP", 0, FIELD_Y - (e == "TOP" and 0 or (FIELD_H - 1)))
+    ln:SetWidth(FIELD_W) ln:SetHeight(1)
+  end
+  for _, sx in ipairs({ -1, 1 }) do
+    local ln = root:CreateTexture(nil, "BORDER")
+    shSolid(ln, 0.62, 0.50, 0.20, 1)
+    ln:SetPoint("TOP", root, "TOP", sx * (FIELD_W / 2), FIELD_Y)
+    ln:SetWidth(1) ln:SetHeight(FIELD_H)
+  end
+  local okEb, eb = pcall(CreateFrame, "EditBox", "EVAL_TITLE_CREATOR_EB", root)
   if okEb and eb then
-    eb:SetWidth(W - 140) eb:SetHeight(22)
-    eb:SetPoint("TOP", root, "TOP", 0, -145)
-    -- 字体链：本客户端字体对象未必齐 → 逐个 pcall 试（EvalHelp 的 IO 窗同款做法）
-    if not pcall(eb.SetFontObject, eb, GameFontHighlightSmall) then
-      if not pcall(eb.SetFontObject, eb, ChatFontNormal) then pcall(eb.SetFontObject, eb, GameFontNormal) end
-    end
-    pcall(eb.SetTextInsets, eb, 0, 0, 0, 0) -- 本客户端默认文字居中偏右（1.70.3 实测）
-    pcall(eb.SetJustifyH, eb, "CENTER")
     pcall(eb.SetAutoFocus, eb, false)
+    pcall(eb.EnableMouse, eb, true) -- ★不补这句：本客户端点不进焦点（用户实测「没输入框」的一半原因）
+    eb:SetWidth(FIELD_W - 16) eb:SetHeight(FIELD_H - 8)
+    eb:SetPoint("TOP", root, "TOP", 0, FIELD_Y - 5)
+    local setF = false
+    for _, fo in ipairs({ "GameFontHighlightSmall", "ChatFontNormal", "GameFontNormal" }) do
+      if pcall(eb.SetFontObject, eb, fo) then setF = true break end
+    end
+    if not setF then -- ★字体对象都没有 → 走**字体路径链**（不然一个字都不画：看着就是「没有输入框」）
+      for _, fp in ipairs({ "Fonts\\FZLBJW.TTF", "Fonts\\FRIZQT__.TTF", "Fonts\\ARIALN.TTF" }) do
+        local okF, ok2 = pcall(eb.SetFont, eb, fp, 12, "OUTLINE")
+        if not (okF and ok2) then okF, ok2 = pcall(eb.SetFont, eb, fp, 12, "") end
+        if okF and ok2 then setF = true break end
+      end
+    end
+    if not setF then pcall(eb.SetTextHeight, eb, 12) end
+    pcall(eb.SetTextColor, eb, 1, 0.94, 0.72)
+    pcall(eb.SetTextInsets, eb, 4, 4, 0, 0) -- 本客户端默认文字居中偏右（1.70.3 实测）
+    pcall(eb.SetJustifyH, eb, "CENTER")
     pcall(eb.SetMaxLetters, eb, 12)
+    pcall(eb.SetScript, eb, "OnMouseDown", function() pcall(eb.SetFocus, eb) end)
     pcall(eb.SetScript, eb, "OnTextChanged", function()
       local okt, tv = pcall(eb.GetText, eb)
-      if shCreator.echo and okt and type(tv) == "string" then
+      if type(tv) ~= "string" then tv = "" end
+      if shCreator.echo then -- 回声行保底：EditBox 不渲染也看得见自己打的名字
         pcall(shCreator.echo.SetText, shCreator.echo, tv)
-        if tv ~= "" then pcall(shCreator.echo.Show, shCreator.echo) end
+      end
+      if shCreator.fieldHint then -- 有字就藏掉框内提示
+        if tv == "" then pcall(shCreator.fieldHint.Show, shCreator.fieldHint)
+        else pcall(shCreator.fieldHint.Hide, shCreator.fieldHint) end
       end
     end)
     pcall(eb.SetScript, eb, "OnEnterPressed", function() shCreatorSubmit() end) -- 回车即落笔
     pcall(eb.SetScript, eb, "OnEscapePressed", function() shCreatorClose(L("CREATOR_CLOSED")) end)
     shCreator.edit = eb
   end
+  -- 空框内的提示（一输入就藏；EditBox 不给光标时至少这里看得见「该在这里写字」）
+  local fieldHint = shText(root, 10, 0.55, 0.50, 0.38)
+  fieldHint:SetPoint("TOP", root, "TOP", 0, FIELD_Y - 7)
+  pcall(fieldHint.SetWidth, fieldHint, FIELD_W - 20)
+  pcall(fieldHint.SetJustifyH, fieldHint, "CENTER")
+  pcall(fieldHint.SetText, fieldHint, L("CREATOR_HINT"))
+  shCreator.fieldHint = fieldHint
+  -- 点击层：点框内任意处都聚焦 EdiBox（本客户端 EditBox 收鼠标不保险）
+  local hit = CreateFrame("Button", nil, root)
+  hit:SetWidth(FIELD_W) hit:SetHeight(FIELD_H)
+  hit:SetPoint("TOP", root, "TOP", 0, FIELD_Y)
+  pcall(hit.EnableMouse, hit, true)
+  pcall(hit.RegisterForClicks, hit, "LeftButtonUp")
+  pcall(hit.SetScript, hit, "OnClick", function()
+    if shCreator.edit then pcall(shCreator.edit.SetFocus, shCreator.edit) end
+  end)
+  shCreator.fieldHit = hit
   local echo = shText(root, 11, 1, 0.92, 0.60)
-  echo:SetPoint("TOP", root, "TOP", 0, -170)
+  echo:SetPoint("TOP", root, "TOP", 0, -172)
   pcall(echo.SetWidth, echo, W - 60)
   pcall(echo.SetJustifyH, echo, "CENTER")
   pcall(echo.SetText, echo, "")
@@ -1245,8 +1294,12 @@ function EVAL_TITLE_CREATOR_OPEN()
   end
   local cur = EVAL_TITLE_CURRENT()
   if shCreator.curFs then pcall(shCreator.curFs.SetText, shCreator.curFs, string.format(L("CREATOR_CUR"), cur and tostring(cur.name) or "—")) end
-  if shCreator.edit then pcall(shCreator.edit.SetText, shCreator.edit, "") end
+  if shCreator.edit then
+    pcall(shCreator.edit.SetText, shCreator.edit, "")
+    pcall(shCreator.edit.Show, shCreator.edit)
+  end
   if shCreator.echo then pcall(shCreator.echo.SetText, shCreator.echo, "") end
+  if shCreator.fieldHint then pcall(shCreator.fieldHint.Show, shCreator.fieldHint) end -- 空框提示回来
   shCreator.root:Show()
   if shCreator.edit then pcall(shCreator.edit.SetFocus, shCreator.edit) end
   shSay(L("CREATOR_ONE"))
@@ -1284,6 +1337,32 @@ function EVAL_TEST_CREATOR_INPUT(txt)
   return true
 end
 function EVAL_TEST_CREATOR_ECHO() return shCreatorRead(shCreator.echo) end
+-- ★1.73.42q 「没输入框」事故的专用读值口：EditBox 收不收鼠标 / 能不能聚焦 / 空框提示在不在
+function EVAL_TEST_CREATOR_EDIT_MOUSE()
+  if not shCreator.edit then return nil end
+  return rawget(shCreator.edit, "__mouse") and true or false
+end
+function EVAL_TEST_CREATOR_EDIT_FONT() -- EditBox 实际设上的字体（两条路都没有 = 一个字都画不出 → 看着像「没输入框」）
+  if not shCreator.edit then return nil end
+  return { fo = rawget(shCreator.edit, "__fo"), path = rawget(shCreator.edit, "__font") }
+end
+function EVAL_TEST_CREATOR_FOCUS()
+  if not shCreator.edit then return nil end
+  local ok, v = pcall(shCreator.edit.HasFocus, shCreator.edit)
+  return (ok and v) and true or false
+end
+function EVAL_TEST_CREATOR_FIELD_HINT_SHOWN()
+  if not shCreator.fieldHint then return nil end
+  local ok, v = pcall(shCreator.fieldHint.IsShown, shCreator.fieldHint)
+  return (ok and v) and true or false
+end
+function EVAL_TEST_CREATOR_CLICK_FIELD() -- 模拟「点框内任意处」（本客户端 EditBox 收鼠标不保险 → 有点击层）
+  if not shCreator.fieldHit then return false end
+  local ok, fn = pcall(shCreator.fieldHit.GetScript, shCreator.fieldHit, "OnClick")
+  if not (ok and type(fn) == "function") then return false end
+  pcall(fn)
+  return true
+end
 function EVAL_TEST_CREATOR_CLICK(which)
   local b = (which == "cancel") and shCreator.cancel or shCreator.ok
   if not b then return false end

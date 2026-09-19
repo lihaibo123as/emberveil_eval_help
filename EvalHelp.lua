@@ -6938,9 +6938,17 @@ if type(SlashCmdList) == "table" then
       end
     -- ★★★1.73.42p 彩蛋「创世者亲临」：先给命令手动触发（用户：「先提供个命令.让我能触发创世神的关注」），
     --   真正的触发机制（写方案达到某机制）以后再接。机缘**只有一次**，用过就如实拒绝。
-    elseif msg == "go 创世" or msg == "go 彩蛋" or msg == "go creator" then
+    elseif msg == "go 创世" or msg == "go 彩蛋" or msg == "go creator"
+        or string.find(msg, "^go 创世%s") or string.find(msg, "^go 彩蛋%s") or string.find(msg, "^go creator%s") then
       if type(EVAL_TITLE_CREATOR_OPEN) == "function" then
-        EVAL_TITLE_CREATOR_OPEN() -- 打不开（机缘已用尽）时它自己会如实播报 CREATOR_USED
+        -- ★1.73.42q **命令后路**：`/eh go 创世 <名号>` 直接落笔（万一 EditBox 还是打不了字，这条也走得通）
+        local argC = string.match(msg, "^go [^%s]+%s+(.+)$")
+        if argC and type(EVAL_TITLE_CREATOR_TRY) == "function" then
+          local okC, keyC = EVAL_TITLE_CREATOR_TRY(argC)
+          if okC then say(string.format(EVAL_L(keyC), tostring(argC))) else say(EVAL_L(keyC)) end
+        else
+          EVAL_TITLE_CREATOR_OPEN() -- 打不开（机缘已用尽）时它自己会如实播报 CREATOR_USED
+        end
       else
         say("创世者亲临：分享模块未载入（EVAL_TITLE_CREATOR_OPEN 不存在）")
       end
