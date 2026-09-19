@@ -11611,7 +11611,19 @@ end
 do
   local keepTitle150 = EVAL_HELP_CONFIG.title
   local keepOpen150 = EVAL_HELP_CONFIG.shareCreatorOpen
-  EVAL_HELP_CONFIG.title = nil
+  local keepWar150 = EVAL_HELP_CONFIG.war
+  -- ★★★1.73.63 彩蛋现在有**三条件闸门**（手动方案 ≥3 + 其中一个神级 + 头衔满档）。
+  --   本组测的是「条件满足之后」的窗口行为 ⇒ 先把条件造出来。
+  --   （**旧行为**是命令无条件就开 —— 那正是本轮要改掉的；闸门本身由组 169 逐条验。）
+  local function manualProf150(nm, n)
+    local p = { name = nm, skills = {}, src = "manual" }
+    for i = 1, n do table.insert(p.skills, { skill = "技能" .. i, groups = {} }) end
+    return p
+  end
+  EVAL_HELP_CONFIG.war = { activeProfile = 1, profiles = {
+    manualProf150("神级甲", 26), manualProf150("乙", 1), manualProf150("丙", 1) } }
+  EVAL_HELP_CONFIG.title = { tier = 5, draws = { 1, 1, 1, 1, 1 } }
+  EVAL_HELP_CONFIG.title.custom = nil
   EVAL_HELP_CONFIG.shareCreatorOpen = nil
   EVAL_TITLE_REFRESH()
   TEST.chat = nil
@@ -11691,9 +11703,10 @@ do
   EVAL_TITLE_CLEAR_CUSTOM()
   EVAL_TITLE_CREATOR_CLOSE()
   EVAL_HELP_CONFIG.title = keepTitle150
+  EVAL_HELP_CONFIG.war = keepWar150
   EVAL_HELP_CONFIG.shareCreatorOpen = keepOpen150
   TEST.chat = nil
-  print("  创世者亲临：命令触发 · 匾额/道白/落笔文案走三语言 · 回声行保底 · 落笔写档+专属色 · 仅此一次")
+  print("  创世者亲临：三条件闸门内触发 · 匾额/道白/落笔文案走三语言 · 回声行保底 · 落笔写档+专属色 · 仅此一次")
 end
 
 -- 151) ★★★1.73.42r 重置命令（诊断/测试用）：删除自定义名号 · 重置头衔进度并立即重抽
@@ -13017,6 +13030,98 @@ do
   EVAL_HELP_UI_TICK()
   pcall(EVAL_HELP_ST_TICK)
   print("  状态信息UI 标题栏：名称 + 档位 + 头衔（与战斗信息UI **同一份实现**：文案/颜色/锚点规矩逐项一致）")
+end
+
+-- 169) ★★★1.73.63 彩蛋「创世者亲临」的**触发闸门**（用户 1.73.63 定的三条件）
+--   ★先把事实记下：**以前彩蛋没有任何游戏条件** —— 只有一条命令 `/eh go 创世`（源码原话「触发机制以后再接」），
+--     谁都能在任何时候开。现在必须**三条件同时**成立：
+--     ① 手动创建的方案里有一个达到**神级**（评分 ≥25）；② 手动创建的方案 **≥3 个**；③ **头衔满档**（5 档）。
+do
+  local savedWar169 = EVAL_HELP_CONFIG.war
+  local savedTitle169 = EVAL_HELP_CONFIG.title
+  local function mp169(nm, n)
+    local p = { name = nm, skills = {}, src = "manual" }
+    for i = 1, n do table.insert(p.skills, { skill = "技能" .. i, groups = {} }) end
+    return p
+  end
+  local function set169(profs, tier)
+    EVAL_HELP_CONFIG.war = { activeProfile = 1, profiles = profs }
+    EVAL_HELP_CONFIG.title = { tier = tier or 0, draws = {} }
+  end
+  -- ① 三条件逐条卡（每条单独不满足 → 闸门必须关；这是「边界两侧都钉」的老规矩）
+  set169({ mp169("甲", 26), mp169("乙", 1), mp169("丙", 1) }, 4)
+  local g169 = EVAL_TITLE_CREATOR_GATE()
+  eq(g169.ok, false, "①★★★头衔只有 4 档 → 闸门关（手动 " .. tostring(g169.manualN) .. " 个 · 头衔 " .. tostring(g169.titleTier) .. " 档）")
+  eq(g169.manualN, 3, "①★手动方案数数对了（3）")
+  eq(g169.godN, 1, "①★神级手动方案已认出（" .. tostring(g169.godName) .. "）")
+  set169({ mp169("甲", 24), mp169("乙", 1), mp169("丙", 1) }, 5)
+  eq(EVAL_TITLE_CREATOR_GATE().ok, false, "①★★★最高 24 分（差 1 分到神级）→ 闸门关")
+  set169({ mp169("甲", 25), mp169("乙", 1), mp169("丙", 1) }, 5)
+  eq(EVAL_TITLE_CREATOR_GATE().ok, true, "①★★★25 分 = 神级，三条件齐 → 闸门开")
+  set169({ mp169("甲", 25), mp169("乙", 1) }, 5)
+  eq(EVAL_TITLE_CREATOR_GATE().ok, false, "①★★★只有 2 个手动方案 → 闸门关（需 3）")
+  set169({ mp169("甲", 25), mp169("乙", 1), mp169("丙", 1) }, 0)
+  eq(EVAL_TITLE_CREATOR_GATE().ok, false, "①★★★头衔 0 档 → 闸门关")
+  -- ② **导入来的不算「自己手动创建」**（src 由 EVAL_PROFILE_FROM_TEXT 在唯一解析出口盖成 "text"）
+  set169({ mp169("甲", 25), mp169("乙", 1), mp169("丙", 1) }, 5)
+  EVAL_HELP_CONFIG.war.profiles[1].src = "text"
+  local g169b = EVAL_TITLE_CREATOR_GATE()
+  eq(g169b.ok, false, "②★★★神级那个是**导入**来的（src=text）→ 不算手动，闸门关")
+  eq(g169b.manualN, 2, "②★★手动方案只剩 2 个（导入那个不计）")
+  set169({ mp169("甲", 25), mp169("乙", 1), mp169("丙", 1), mp169("丁", 1) }, 5)
+  EVAL_HELP_CONFIG.war.profiles[1].src = "text"
+  eq(EVAL_TITLE_CREATOR_GATE().ok, false, "②★★手动的够 3 个了，但**神级那个仍是导入的** → 闸门仍关（两条件都要落在手动集合里）")
+  -- ②b 解析出口真的盖了 text（读生产函数，不读源码字面量）
+  local pText169 = EVAL_PROFILE_FROM_TEXT("# 方案: 导入来的\n- 技能甲 | 可攻击")
+  eq(type(pText169) == "table" and pText169.src, "text", "②b★★★从文本解析出来的方案带 src=text（导入/模版/分享接收都走这一个出口）")
+  -- ②c 手工创建那条路真的打标（走命令 /eh go newprof，端到端）
+  set169({ mp169("甲", 1) }, 0)
+  TEST.chat = nil
+  SlashCmdList["EVALHELP"]("go newprof 手工方案")
+  local profs169 = EVAL_HELP_CONFIG.war.profiles
+  local last169 = profs169[table.getn(profs169)]
+  eq(type(last169) == "table" and last169.src, "manual", "②c★★★手工新建的方案带 src=manual（闸门据此认「自己写的」）")
+  -- ③ 老存档没有 src 字段 ⇒ 按**手动**算（不能让老玩家因为升级一次就永远够不到自己的彩蛋）
+  set169({ mp169("甲", 25), mp169("乙", 1), mp169("丙", 1) }, 5)
+  for _, p in ipairs(EVAL_HELP_CONFIG.war.profiles) do p.src = nil end
+  eq(EVAL_TITLE_CREATOR_GATE().ok, true, "③★★老存档（没有 src 字段）按手动算 → 闸门开")
+  -- ④ 闸门关着时：窗口不开 + 如实说还差什么 + **「直接落笔」那条路也堵住**
+  set169({ mp169("甲", 5), mp169("乙", 1) }, 2)
+  EVAL_TITLE_CREATOR_CLOSE()
+  EVAL_TITLE_CLEAR_CUSTOM()
+  TEST.chat = nil
+  eq(EVAL_TITLE_CREATOR_OPEN(), false, "④★★★闸门关着 → 命令**不开窗**（**旧行为是无条件就开** —— 这正是本轮改掉的）")
+  eq(EVAL_TEST_CREATOR_SHOWN(), false, "④★窗口确实没开")
+  eq(string.find(tostring(TEST.chat or ""), "机缘未至", 1, true) ~= nil, true, "④★★而且**如实说还差什么**（绝不静默拒绝）")
+  local okT169, keyT169, msgT169 = EVAL_TITLE_CREATOR_TRY("偷偷落笔")
+  eq(okT169, false, "④★★★「直接落笔」那条路**同样被堵**（只堵窗口 = 留了一条后门）")
+  eq(keyT169, "CREATOR_GATE", "④★★拒绝原因 = 闸门未过")
+  eq(type(msgT169) == "string" and string.find(msgT169, "机缘未至", 1, true) ~= nil, true, "④★★并把「还差什么」整句交出来（调用方直接播报）")
+  eq(((EVAL_HELP_CONFIG.title or {}).custom), nil, "④★★名号没被写进存档")
+  -- ⑤ 自动触发：达标 → 播报一次 + 弹窗；已触发过就不再重复
+  set169({ mp169("甲", 25), mp169("乙", 1), mp169("丙", 1) }, 5)
+  EVAL_TITLE_CREATOR_CLOSE()
+  EVAL_TITLE_CLEAR_CUSTOM()
+  TEST.chat = nil
+  eq(EVAL_TITLE_EGG_CHECK(), true, "⑤★★★条件达成 → **自动触发**（第一次）")
+  eq(string.find(tostring(TEST.chat or ""), "机缘已至", 1, true) ~= nil, true, "⑤★★播报「机缘已至」")
+  eq(EVAL_TEST_CREATOR_SHOWN(), true, "⑤★★非战斗时直接把窗口弹出来")
+  TEST.chat = nil
+  eq(EVAL_TITLE_EGG_CHECK(), false, "⑤★★已经触发过 → 不再重复（否则以后每次编辑技能都刷屏）")
+  eq(tostring(TEST.chat or ""), "", "⑤★确实一个字都没再播报")
+  -- ⑤b **接线**：条件达成后，走**生产路径**（EVAL_WAR_TAB_REFRESH —— 方案/技能任何改动都走它）也能自动触发
+  set169({ mp169("甲", 25), mp169("乙", 1), mp169("丙", 1) }, 5)
+  EVAL_TITLE_CREATOR_CLOSE()
+  EVAL_TITLE_CLEAR_CUSTOM()
+  TEST.chat = nil
+  EVAL_WAR_TAB_REFRESH()
+  eq(EVAL_TEST_CREATOR_SHOWN(), true, "⑤b★★★自动触发**接在生产路径上**（不是只有我手动调那个函数才响）")
+  -- ⑥ 收尾
+  EVAL_TITLE_CREATOR_CLOSE()
+  EVAL_TITLE_CLEAR_CUSTOM()
+  EVAL_HELP_CONFIG.war = savedWar169
+  EVAL_HELP_CONFIG.title = savedTitle169
+  print("  彩蛋闸门：手动方案≥3 + 其中一个神级（≥25 分）+ 头衔满档 —— 三条件齐才触发；导入的不算手动；老存档按手动算")
 end
 
 print("ALL TESTS PASS")

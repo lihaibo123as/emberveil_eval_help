@@ -206,6 +206,9 @@ SH_TIP_R3 = "- You must be on the same channel (pick Party/Say if not in a guild
   CREATOR_ONE = "* One chance only - once written, it can never be changed",
   CREATOR_USED = "The gift is spent: your name was written long ago and all worlds know it.",
   CREATOR_DONE = "[The Creator Descends] Your name is set: %s - all worlds now hear it.",
+  CREATOR_GATE = "The Creator waits: not yet - hand-made plans %d (need 3) - divine one: %s - title tier %d (need 5).",
+  CREATOR_READY = "The Creator descends: the moment has come - three plans of your own making, one of them divine, and your title at its highest tier. You may sign your name only once.",
+  CREATOR_READY_TIP = "(no popup while in combat) Type /eh go creator when you are ready.",
   CREATOR_ERR = "That name cannot be used: it must not be empty and must not contain a pipe character.",
   CREATOR_CLOSED = "You close the Origin pen - the gift stays here; return when ready.",
   -- ★★★1.73.42r Title reset (user: give me a command to reset/delete the custom name - for testing). Diagnostic only.

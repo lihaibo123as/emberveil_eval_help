@@ -1417,6 +1417,43 @@ function EVAL_SHARE_COLOR_PROBE()
   return { n = n, list = list, bodies = bodies, at = shNowT() }
 end
 
+-- ★★★1.73.63 彩蛋「创世者亲临」的**触发闸门**（用户 1.73.63 定稿）。
+--   ★先说清**以前的触发方式**（本轮排查结论）：彩蛋**没有任何游戏条件**——只有一条命令 `/eh go 创世`
+--     （或 `/eh go 创世 <名号>` 直接落笔）。源码原话：「触发机制以后再接（写方案达到一定机制）；
+--     现在先给命令手动触发」⇒ 任何人任何时候敲那条命令就能开（唯一限制是**用过一次就不再给**）。
+--   现在三条件**同时**成立才给开：
+--     ① 有**自己手动创建**的方案（src ~= "text"）且它的品阶 = **神级**（评分 ≥ 25）；
+--     ② 手动创建的方案 **≥ 3 个**；
+--     ③ **头衔**抽到最高档（档位 = 5）。
+--   ★不满足时**如实报出还差什么**（差多少是玩家唯一能行动的信息）——绝不静默拒绝。
+--   ★「手动创建」判据 = 方案表里的 src：手工插入点写 "manual"，**凡从文本解析出来的**（导入/模版/分享接收）
+--     在唯一解析出口盖 "text"（见 EVAL_PROFILE_FROM_TEXT）。**老存档没有 src ⇒ 按手动算**
+--     （不能让老玩家因为升级一次就永远够不到自己的彩蛋）。
+function EVAL_TITLE_CREATOR_GATE()
+  local out = { ok = false, manualN = 0, godN = 0, godName = "", titleTier = 0, needN = 3, needScore = 25, needTier = 5 }
+  local cfgGT = rawget(_G, "EVAL_HELP_CONFIG")
+  local profs = (type(cfgGT) == "table" and type(cfgGT.war) == "table") and cfgGT.war.profiles or nil
+  if type(profs) == "table" then
+    for i = 1, table.getn(profs) do
+      local p = profs[i]
+      if type(p) == "table" and p.src ~= "text" then -- nil（老存档）/ "manual" 都算手动
+        out.manualN = out.manualN + 1
+        if out.godN == 0 and EVAL_PROFILE_SCORE(p) >= out.needScore then
+          out.godN, out.godName = 1, tostring(p.name or "")
+        end
+      end
+    end
+  end
+  local t = shTitleState()
+  out.titleTier = (t and tonumber(t.tier)) or 0
+  out.ok = (out.godN >= 1) and (out.manualN >= out.needN) and (out.titleTier >= out.needTier)
+  return out
+end
+-- 闸门的**人类可读**说明（命令与自动播报共用同一份措辞 —— 不各写一遍）
+function EVAL_TITLE_CREATOR_GATE_TEXT(g)
+  g = g or EVAL_TITLE_CREATOR_GATE()
+  return string.format(L("CREATOR_GATE"), g.manualN, (g.godName ~= "" and g.godName) or "—", g.titleTier)
+end
 -- ===== 1.73.42p 「创世者亲临」彩蛋窗口 ==================================================
 --   用户要求：「先提供个命令.让我能触发创世神的关注…（名字）能体现位格.霸气. 然后弹窗内的文字美化一下.霸气一下.」
 --   ★命名：**创世者亲临**（备选：本源垂青 / 造物主之约 / 万法之源的注视）——位格=创世者，动作=亲临，
@@ -1490,20 +1527,27 @@ local function shCreatorSubmit()
     local ok2, v2 = pcall(shCreator.echo.GetText, shCreator.echo)
     if ok2 and type(v2) == "string" then txt = v2 end -- 回声行兜底（EditBox 不渲染时玩家看的是它）
   end
-  local ok, key = EVAL_TITLE_CREATOR_TRY(txt)
+  local ok, key, msg = EVAL_TITLE_CREATOR_TRY(txt)
   if ok then
     shSay(string.format(L(key), tostring(txt)))
     if shCreator.root then shCreator.root:Hide() end
     return true
   end
-  shSay(L(key))
+  shSay(msg or L(key)) -- ★闸门未过时 TRY 交出「还差什么」的整句（第三返回值）
   -- ★名字不合法时**窗口留着**（让他改）；机缘已用尽才关窗（再留着也没意义）
   if key == "CREATOR_USED" and shCreator.root then shCreator.root:Hide() end
   return false
 end
 function EVAL_TITLE_CREATOR_SUBMIT() return shCreatorSubmit() end
--- ★1.73.42q 统一提交入口（弹窗与「命令后路」共用一份判断）：返回 ok, 消息键（CREATOR_DONE / CREATOR_USED / CREATOR_ERR）
+-- ★1.73.42q 统一提交入口（弹窗与「命令后路」共用一份判断）：返回 ok, 消息键（CREATOR_DONE / CREATOR_USED / CREATOR_ERR），
+--   ★1.73.63 起**失败时可能多一个第三返回值**：闸门未过时把「还差什么」的整句交出去（调用方直接播报，不再拼文案）。
 function EVAL_TITLE_CREATOR_TRY(name)
+  -- ★★★1.73.63 **闸门对「直接落笔」这条路同样生效** —— 命令后路（/eh go 创世 <名>）不许绕过三条件
+  --   （只堵 OPEN 不堵 TRY = 留了一条后门；判据组 169 两条路各验一次）。
+  if type(EVAL_TITLE_CREATOR_GATE) == "function" then
+    local gTry = EVAL_TITLE_CREATOR_GATE()
+    if not gTry.ok then return false, "CREATOR_GATE", EVAL_TITLE_CREATOR_GATE_TEXT(gTry) end
+  end
   local cfgT = rawget(_G, "EVAL_HELP_CONFIG")
   local t = (type(cfgT) == "table" and type(cfgT.title) == "table") and cfgT.title or nil
   if t and type(t.custom) == "string" and t.custom ~= "" then return false, "CREATOR_USED" end
@@ -1698,6 +1742,15 @@ local function shCreatorBuild()
 end
 -- 打开（命令入口）：机缘用过就**如实拒绝**并说明，绝不再改；打开时把旧名号写在窗口里
 function EVAL_TITLE_CREATOR_OPEN()
+  -- ★★★1.73.63 闸门**先查**（用户定的三条件）：没到条件就不开窗，并如实说还差什么
+  --   ★这道检查必须在这里、而不是只放在命令入口 —— 自动触发与命令入口是**同一条路**（单一来源）。
+  if type(EVAL_TITLE_CREATOR_GATE) == "function" then
+    local gGate = EVAL_TITLE_CREATOR_GATE()
+    if not gGate.ok then
+      shSay(EVAL_TITLE_CREATOR_GATE_TEXT(gGate))
+      return false
+    end
+  end
   shCreatorBuild()
   if not shCreator.root then return false end
   local cfgT = rawget(_G, "EVAL_HELP_CONFIG")
@@ -1721,6 +1774,33 @@ function EVAL_TITLE_CREATOR_OPEN()
   shCreator.root:Show()
   if shCreator.edit then pcall(shCreator.edit.SetFocus, shCreator.edit) end
   shSay(L("CREATOR_ONE"))
+  return true
+end
+-- ★★★1.73.63 **自动触发检查**：任何「方案库可能变了」的时机都可以调它（方案增删 / 技能编辑保存 / 登入）。
+--   三条件达标且**还没领过**（cfg.title.creatorOffered 未记）→ 播报 + 把窗口弹出来；
+--   ★**战斗中只播报不弹窗**（弹窗会吃鼠标，不该在打架时糊脸）——机灵的做法是等玩家自己敲命令。
+--   ★只播报**一次**（记在 cfg.title.creatorOffered）：否则以后每次编辑技能都会刷屏。
+function EVAL_TITLE_EGG_CHECK()
+  local cfgE = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(cfgE) ~= "table" then return false end
+  local t = (type(cfgE.title) == "table") and cfgE.title or nil
+  if t and type(t.custom) == "string" and t.custom ~= "" then return false end -- 机缘已用（一次性）
+  if t and t.creatorOffered then return false end -- 已经播报过（只报一次）
+  local g = EVAL_TITLE_CREATOR_GATE()
+  if not g.ok then return false end
+  if type(cfgE.title) ~= "table" then cfgE.title = {} end
+  cfgE.title.creatorOffered = shNowT()
+  shSay(L("CREATOR_READY"))
+  local fighting = false
+  if type(UnitAffectingCombat) == "function" then
+    local okc, v = pcall(UnitAffectingCombat, "player")
+    fighting = (okc and v) and true or false
+  end
+  if fighting then
+    shSay(L("CREATOR_READY_TIP"))
+  elseif type(EVAL_TITLE_CREATOR_OPEN) == "function" then
+    pcall(EVAL_TITLE_CREATOR_OPEN)
+  end
   return true
 end
 function EVAL_TITLE_CREATOR_CLOSE() shCreatorClose(nil) end

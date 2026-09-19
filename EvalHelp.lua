@@ -1535,7 +1535,7 @@ local function cfgBuild()
       if pidx <= table.getn(w2.profiles) then
         w2.activeProfile = pidx
       elseif pidx == table.getn(w2.profiles) + 1 and table.getn(w2.profiles) < MAXPROF then
-        table.insert(w2.profiles, { name = "方案" .. tostring(table.getn(w2.profiles) + 1), skills = {} })
+        table.insert(w2.profiles, { name = "方案" .. tostring(table.getn(w2.profiles) + 1), skills = {}, src = "manual" }) -- ★1.73.63 手动创建（彩蛋闸门要认）
         w2.activeProfile = table.getn(w2.profiles)
         say("新建方案: " .. tostring(w2.profiles[w2.activeProfile].name))
       end
@@ -2741,6 +2741,9 @@ function EVAL_WAR_TAB_REFRESH()
     if ui.root and wasShown then pcall(ui.root.Show, ui.root) end
   end
   if ui then ui.profSig = sigNow end
+  -- ★★★1.73.63 彩蛋闸门检查：本函数是**方案/技能任何改动的汇聚点**（增删方案、编辑技能保存、导入、切 Tab 都走它）
+  --   ⇒ 彩蛋的自动触发挂在这里最省事也最不容易漏（检查本身很便宜，且播报过就早退）。
+  if type(EVAL_TITLE_EGG_CHECK) == "function" then pcall(EVAL_TITLE_EGG_CHECK) end
 end
 
 -- Tab 切换：按控件列表显式 Show/Hide（本客户端可见性契约：走控件列表，不靠父框架传播）
@@ -6466,7 +6469,11 @@ function EVAL_PROFILE_FROM_TEXT(text)
     end
   end
   if table.getn(skills) == 0 then return nil, "没解析到技能行（格式: - 技能名 | 条件）" end
-  return { name = name or "导入方案", skills = skills } -- 1.33.0 取消 8 技能上限
+  -- ★★★1.73.63 来源标记：**凡是从文本解析出来的方案**（导入文本 / 案例模版 / 分享接收 / examples）都盖 src = "text"——
+  --   彩蛋「创世者亲临」的触发条件之一是「**自己手动创建**的方案达到神级」，所以必须能分辨来源（用户 1.73.63 定）。
+  --   ★盖在**唯一的解析出口**上：不用去每个导入入口分别打标（那样迟早漏一处，就是本项目「两份状态」的老账）。
+  --   ★手工创建的方案在插入点写 src = "manual"；**老存档没有 src** 的按「手动」算（见 EVAL_TITLE_CREATOR_GATE）。
+  return { name = name or "导入方案", skills = skills, src = "text" } -- 1.33.0 取消 8 技能上限
 end
 
 function EVAL_HELP_IO_BUILD()
@@ -7525,8 +7532,8 @@ if type(SlashCmdList) == "table" then
         -- ★1.73.42q **命令后路**：`/eh go 创世 <名号>` 直接落笔（万一 EditBox 还是打不了字，这条也走得通）
         local argC = string.match(msg, "^go [^%s]+%s+(.+)$")
         if argC and type(EVAL_TITLE_CREATOR_TRY) == "function" then
-          local okC, keyC = EVAL_TITLE_CREATOR_TRY(argC)
-          if okC then say(string.format(EVAL_L(keyC), tostring(argC))) else say(EVAL_L(keyC)) end
+          local okC, keyC, msgC = EVAL_TITLE_CREATOR_TRY(argC) -- ★1.73.63 第三个返回值 = 闸门未过时的「还差什么」
+          if okC then say(string.format(EVAL_L(keyC), tostring(argC))) else say(msgC or EVAL_L(keyC)) end
         else
           EVAL_TITLE_CREATOR_OPEN() -- 打不开（机缘已用尽）时它自己会如实播报 CREATOR_USED
         end
@@ -7808,7 +7815,7 @@ if type(SlashCmdList) == "table" then
       local nm = string.match(msg, "^go newprof%s*(.*)$")
       local w2 = warCfg()
       if table.getn(w2.profiles) < 4 then
-        table.insert(w2.profiles, { name = (nm and nm ~= "") and nm or ("方案" .. tostring(table.getn(w2.profiles) + 1)), skills = {} })
+        table.insert(w2.profiles, { name = (nm and nm ~= "") and nm or ("方案" .. tostring(table.getn(w2.profiles) + 1)), skills = {}, src = "manual" }) -- ★1.73.63 手动创建（彩蛋闸门要认）
         w2.activeProfile = table.getn(w2.profiles)
         say("新建并切换到: " .. tostring(w2.profiles[w2.activeProfile].name))
         pcall(EVAL_WAR_TAB_REFRESH)
@@ -8895,6 +8902,8 @@ init:SetScript("OnEvent", function(a, b)
     -- ★★★1.73.42n 头衔抽卡：进游戏就重算一次（方案库可能变了）——**只升不降**，已抽过的档绝不重抽；
     --   新达到的档在这里完成「每档只抽一次」的抽取（不必等玩家去点分享或敲命令）。
     if type(EVAL_TITLE_REFRESH) == "function" then pcall(EVAL_TITLE_REFRESH) end
+    -- ★1.73.63 登录也查一次彩蛋闸门（离线时方案可能已经达标：比如上次在别的机器上编辑过存档）
+    if type(EVAL_TITLE_EGG_CHECK) == "function" then pcall(EVAL_TITLE_EGG_CHECK) end
     -- ★1.71.22 方案快捷键派发上线：登录时把 ActionButtonDown/Up 接管装上（运行中立即生效，无需重启）。
     --   ★装不上要**如实说**（客户端若没这两个全局，按键就永远不会触发 —— 不许假装成功）。
     if type(EVAL_BIND_INSTALL) == "function" then

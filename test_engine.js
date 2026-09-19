@@ -856,6 +856,41 @@ function checkIconAssets() {
   });
   if (bad.length) { console.log('TITLE GACHA CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
   console.log('TITLE GACHA CHECK: 5×15=75 头衔（三语言齐）· 评分单一来源 · 每档只抽一次 · 彩蛋仅一次 · 身份走单一入口');
+
+// ===== CREATOR GATE CHECK（1.73.63）：彩蛋「创世者亲临」的触发条件 =====
+// ★背景：用户「排查下 之前的彩蛋是如何触发的. 调整彩蛋触发规则」——排查结论 = **以前根本没有条件**，
+//   只有一条命令 `/eh go 创世`（源码原话「触发机制以后再接」）。现在用户定了三条件：
+//   ① 手动创建的方案里有一个达到神级（≥25 分）② 手动创建的方案 ≥3 个 ③ 头衔满档（5 档）。
+//   ★这类「加一道闸门」最容易出的两种静默错：a) 只堵窗口那条路、`TRY`（命令后路）留了后门；
+//     b) 闸门函数写了但没人调（等于没有）。行为断言组 169 能抓，源码检查再钉一层。
+(function () {
+  const eh = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
+  const sh = fs.readFileSync(path.join(__dirname, "Share.lua"), "utf8");
+  const noComment = function (s) { return s.split(/\r?\n/).map(function (l) { const i = l.indexOf("--"); return i >= 0 ? l.slice(0, i) : l; }).join("\n"); };
+  const shNo = noComment(sh), ehNo = noComment(eh);
+  const bad = [];
+  // ① 闸门函数存在，且**三条条件都在**（少一条 = 条件被悄悄放宽）
+  if (shNo.indexOf("function EVAL_TITLE_CREATOR_GATE(") < 0) bad.push("找不到闸门函数 EVAL_TITLE_CREATOR_GATE");
+  const gi = shNo.indexOf("function EVAL_TITLE_CREATOR_GATE(");
+  const gEnd = shNo.indexOf("\nend", gi);
+  const gateBody = (gi >= 0 && gEnd > gi) ? shNo.slice(gi, gEnd) : "";
+  ["src ~= \"text\"", ">= out.needScore", "out.manualN >= out.needN", "out.titleTier >= out.needTier"]
+    .forEach(function (k) { if (gateBody.indexOf(k) < 0) bad.push("闸门里少了条件：" + k); });
+  // ② **两条路都要过闸门**：窗口入口 + 命令后路（只堵一条 = 后门）
+  if (shNo.indexOf("if not gGate.ok then") < 0) bad.push("EVAL_TITLE_CREATOR_OPEN 没先查闸门（旧行为：无条件开窗）");
+  if (shNo.indexOf("if not gTry.ok then") < 0) bad.push("EVAL_TITLE_CREATOR_TRY 没查闸门（/eh go 创世 <名号> 会绕过条件）");
+  // ③ 来源标记：解析出口盖 text、手工插入点盖 manual
+  if (shNo.indexOf("src = \"text\"") >= 0) bad.push("src=text 不该在 Share.lua（解析出口在 EvalHelp.lua）");
+  if (ehNo.indexOf("src = \"text\"") < 0) bad.push("EVAL_PROFILE_FROM_TEXT 没盖 src=text（导入来的会被当成自己写的）");
+  const manualN = (ehNo.match(/src = "manual"/g) || []).length;
+  if (manualN < 2) bad.push("手工创建方案的插入点只打了 " + manualN + " 处 src=manual（应为 2：配置窗 [+] 与 /eh go newprof）");
+  // ④ 自动触发检查必须**接线**（写在 Share.lua 里却没人调 = 等于没有）
+  if (shNo.indexOf("function EVAL_TITLE_EGG_CHECK(") < 0) bad.push("找不到自动触发检查 EVAL_TITLE_EGG_CHECK");
+  const wired = (ehNo.match(/EVAL_TITLE_EGG_CHECK/g) || []).length;
+  if (wired < 2) bad.push("EVAL_TITLE_EGG_CHECK 只接了 " + wired + " 处（方案/技能改动后 + 登录，两处都要）");
+  if (bad.length) { console.log("CREATOR GATE CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
+  console.log("CREATOR GATE CHECK: 三条件闸门（手动方案≥3 + 一个神级 + 头衔满档）· 窗口与命令后路都过闸 · 来源标记齐 · 自动触发已接线");
+})();
 })();
 // ===== SEAL ICON NAMES CHECK（1.73.42l）：品阶图标的**名字**必须是客户端真有的（用户指定的五张） =====
 // 背景：图标由用户点名（截图里是 `.../INV_Misc_ShadowEgg_TEX` 这种**资源名**）——
