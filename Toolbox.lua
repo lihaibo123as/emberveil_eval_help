@@ -1068,10 +1068,11 @@ local function tbMenuBuild()
   end
   for i = 1, table.getn(items) do
     local it = items[i]
-    local nm = TB_NAME_MENU.name
-    put(i, it[1], function() it[2](nm) EVAL_TB_MENU_HIDE() end)
+    -- ★点击那一刻再读名字（不捕获构建期快照 —— 快照在「首次右键」时必定是 nil）
+    put(i, it[1], function() it[2](TB_NAME_MENU.name) EVAL_TB_MENU_HIDE() end)
   end
-  put(table.getn(items) + 1, L("TB_NAMEMENU_CLOSE"), function() end)
+  -- ★★★「关闭」原来是空函数（点了什么都不做）→ 真的关
+  put(table.getn(items) + 1, L("TB_NAMEMENU_CLOSE"), function() EVAL_TB_MENU_HIDE() end)
   pcall(f.Hide, f)
   TB.menu = f
   return f
@@ -1082,6 +1083,29 @@ function EVAL_TEST_TB_MENU_DROP()
   TB.menu = nil
   TB_NAME_MENU.shown = false
   return true
+end
+-- ★★★1.73.37 测试：按**标签**点菜单条目 —— 走按钮的**真实 OnClick**（不是直接调动作函数）
+--   （1.73.35 的教训：测试直接调动作函数 → 按钮接线断了也照样绿）
+function EVAL_TEST_TB_MENU_CLICK(label)
+  if not TB.menu then return false end
+  local want = tostring(label or "")
+  for i = 1, table.getn(TB.menu.rows or {}) do
+    -- ★注意：tbBtn 返回的是**包裹表** {btn,bg,text} —— 文字在包裹表上、脚本在 .btn 上
+    --   （第一版我写成 b.btn.text → 永远读不到标签，「点到了吗」恒 false；这正是本项目那个老坑）
+    local b = TB.menu.rows[i]
+    if b and b.text and b.btn then
+      local ok, t = pcall(b.text.GetText, b.text)
+      if ok and tostring(t or "") == want then
+        local okf, fn = pcall(b.btn.GetScript, b.btn, "OnClick")
+        if okf and type(fn) == "function" then
+          pcall(fn)
+          return true
+        end
+        return false
+      end
+    end
+  end
+  return false
 end
 function EVAL_TB_MENU_GEOM()
   if not TB.menu then return nil end
@@ -1130,8 +1154,11 @@ end
 function EVAL_TB_MENU_SHOW(name)
   if not EVAL_TB_NAMEMENU_ON() then return false end
   if type(name) ~= "string" or name == "" then return false end
-  local f = tbMenuBuild()
+  -- ★★★1.73.37 用户报「某些按键点了没反应」——【根因】名字必须在 **build 之前**写好：
+  --   原顺序是 build → 赋值，而条目闭包在建菜单时就把 TB_NAME_MENU.name（当时是 nil）**捕获**了
+  --   → 所有动作都拿到 nil → 静默返回 false（点了像没反应）。
   TB_NAME_MENU.name = name
+  local f = tbMenuBuild()
   if f.title then pcall(f.title.SetText, f.title, string.format(L("TB_NAMEMENU_TITLE"), name)) end
   -- ★★★1.73.36 用户澄清：**相对鼠标点击位置的右上角** —— 弹窗的**左下角贴光标**，向上、向右展开
   --   （拿不到光标 → 退回屏幕右下角；贴到屏幕边时**夹取**，保证菜单不会跑出屏幕）。

@@ -10337,4 +10337,57 @@ do
   EVAL_TEST_TB_MENU_DROP()
   print("  右键菜单扩展：权限/队伍门(不满足就不出现) · 分享方案(激活方案·密语) · 交易/查询(名字→unit) · 踢人(队长/权限) · 载入弹窗(知道了/关闭)")
 end
+
+-- 139) ★★★1.73.37 用户报「某些按键无法使用：关闭/悄悄话/目标/查询/邀请/复制名字」——
+--   【根因】① SHOW 里先 tbMenuBuild() 再赋值 TB_NAME_MENU.name，而条目闭包在建菜单时把名字
+--   **捕获**成了 nil → 所有动作拿到 nil → 静默 return false（点了像没反应）；② 「关闭」传的是**空函数**。
+--   ★判据必须走**真实 OnClick**（按标签点），不能直接调动作函数 —— 上一轮就是这么漏掉的。
+do
+  local savedTN139 = EVAL_TN_OPEN
+  EVAL_TN_OPEN = function() end -- 别真弹输入框
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  TEST.sirCalls = {}
+  -- ★★★必须**丢掉已建的菜单**再弹：真机上菜单是**第一次右键时**才建的，那时名字还是 nil
+  --   —— 不丢的话「快照 bug」在测试里根本复现不出来（M267/M269 实测就是这么存活的）
+  EVAL_TEST_TB_MENU_DROP()
+  SetItemRef("player:Ionol", "[Ionol]", "RightButton") -- 第一次弹（菜单在此刻懒建）
+  local g139 = EVAL_TB_MENU_GEOM()
+  eq(type(g139) == "table", true, "①前置：菜单已建好")
+  -- ① 悄悄话：点真实按钮 → 预填 /w Ionol
+  TEST.openChats = {}
+  eq(EVAL_TEST_TB_MENU_CLICK(EVAL_L("TB_NAMEMENU_WHISPER")), true, "①★★★点到了「悄悄话」按钮（真实 OnClick）")
+  eq(tostring(TEST.openChats[1] or ""), "/w Ionol ", "①★★★而且真的带着**菜单里那个人**去预填（名字不是 nil）")
+  -- ② 目标：点真实按钮 → TargetByName(Ionol)
+  TEST.targetSel = nil
+  eq(EVAL_TEST_TB_MENU_CLICK(EVAL_L("TB_NAMEMENU_TARGET")), true, "②★★★点到了「目标」")
+  eq(tostring(TEST.targetSel or ""), "name:Ionol", "②★★★走的是 TargetByName(菜单里的名字)")
+  -- ③ 邀请：点真实按钮 → InviteToParty(Ionol)
+  TEST.partyInvites, TEST.partyInviteCalls = {}, 0
+  eq(EVAL_TEST_TB_MENU_CLICK(EVAL_L("TB_NAMEMENU_PARTY")), true, "③★★★点到了「邀请」")
+  eq(tostring(TEST.partyInvites[1] or ""), "Ionol", "③★★★名字对")
+  -- ④ 复制名字：点真实按钮 → 预填 /s Ionol（不发送）
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  SetItemRef("player:Ionol", "[Ionol]", "RightButton")
+  TEST.openChats, TEST.runScripts = {}, {}
+  eq(EVAL_TEST_TB_MENU_CLICK(EVAL_L("TB_NAMEMENU_SAY")), true, "④★★★点到了「复制名字」")
+  eq(tostring(TEST.openChats[1] or ""), "/s Ionol", "④★★★输入框里是 /s 名字")
+  eq(table.getn(TEST.runScripts), 0, "④★★一个字都没发出去")
+  -- ⑤ 查询：点真实按钮 → 入限频 who 队列（解析不到 unit 时）
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  SetItemRef("player:Ionol", "[Ionol]", "RightButton")
+  local savedWho139, whoQ139 = EVAL_TB_WHO_ENQUEUE, nil
+  EVAL_TB_WHO_ENQUEUE = function(n) whoQ139 = tostring(n) return true end
+  eq(EVAL_TEST_TB_MENU_CLICK(EVAL_L("TB_NAMEMENU_QUERY")), true, "⑤★★★点到了「查询」")
+  eq(whoQ139, "Ionol", "⑤★★★查询用的是菜单里的名字")
+  EVAL_TB_WHO_ENQUEUE = savedWho139
+  -- ⑥ 关闭：点真实按钮 → 菜单真的收起来
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  SetItemRef("player:Ionol", "[Ionol]", "RightButton")
+  eq(EVAL_TB_NAMEMENU_STATE().shown, true, "⑥前置：菜单是开着的")
+  eq(EVAL_TEST_TB_MENU_CLICK(EVAL_L("TB_NAMEMENU_CLOSE")), true, "⑥★★★点到了「关闭」")
+  eq(EVAL_TB_NAMEMENU_STATE().shown, false, "⑥★★★菜单真的关掉了（原来是空函数 = 点了没反应）")
+  EVAL_TN_OPEN = savedTN139
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  print("  右键菜单接线：每个条目都走**真实 OnClick** 且带着菜单里的名字（悄悄话/目标/邀请/复制名字/查询/关闭）")
+end
 print("ALL TESTS PASS")
