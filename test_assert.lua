@@ -11243,6 +11243,13 @@ do
   eq(EVAL_SHARE_PENDING() ~= nil, true, "③前置：收齐后弹窗（数据在）")
   local view145 = EVAL_TEST_SHARE_SEAL_ROW()
   eq(view145.shown, true, "③★★★品阶栏真的显示了（读真图标 IsShown）")
+  -- ★★★1.73.43e 用户：「分享方案内**颜色替代武器战的位置**就可以」⇒ 标题里的《方案名》必须带**品阶色**
+  local popTitle145 = table.concat(EVAL_TEST_SHARE_POPUP_TEXTS() or {}, " | ")
+  local wantCol145 = select(2, EVAL_SHARE_SEAL_TIER(EVAL_SHARE_SEAL_SCORE(txt145(14)))).color
+  eq(string.find(popTitle145, wantCol145 .. "甲", 1, true) ~= nil, true,
+     "③★★★弹窗标题的方案名带品阶色（" .. tostring(wantCol145) .. "甲），实际：" .. string.sub(popTitle145, 1, 90))
+  eq(string.find(popTitle145, "《《", 1, true) == nil, true, "③★★★标题不许出现双括号《《（模板里已有《》，只上色不再补括号）")
+  eq(string.find(popTitle145, "《" .. "甲" .. "》", 1, true) ~= nil or string.find(popTitle145, "《", 1, true) ~= nil, true, "③★方案名照旧在标题里（只多了一层颜色）")
   local wantIcon145 = EVAL_SHARE_SEAL_ICON(select(1, EVAL_SHARE_SEAL_TIER(EVAL_SHARE_SEAL_SCORE(txt145(14)))))
   eq(view145.icon, wantIcon145, "③★★★图标纹理 = 该品阶的图标（读真控件 GetTexture，不读常量）")
   eq(string.find(tostring(view145.head), "[源代码秘籍·甲]", 1, true) ~= nil, true, "③★★头一行带品阶与方案名")
@@ -12087,24 +12094,24 @@ do
   EVAL_PROFILE_TO_TEXT = function() return "# 方案: 变异测\n\n- 技能1 | 可攻击" end
   local pr157 = EVAL_SHARE_SEAL_VARIANT_PROBE()
   EVAL_PROFILE_TO_TEXT = keep157
-  eq(type(pr157) == "table" and pr157.n == 9, true, "①★★变异测排了 9 条（实际 " .. tostring(pr157 and pr157.n) .. "）")
+  eq(type(pr157) == "table" and pr157.n == 10, true, "①★★变异测 v2 排了 10 条（实际 " .. tostring(pr157 and pr157.n) .. "）")
   eq(type(EVAL_HELP_CONFIG.shVariantProbe) == "table", true, "①★★★命令**落盘**了（cfg.shVariantProbe，接线证人）")
-  eq(EVAL_SHARE_TEST_QUEUE_LEN(), 9, "②★★★9 条全在队列里（走同一限频队列，不瞬间倾泻）")
+  eq(EVAL_SHARE_TEST_QUEUE_LEN(), 10, "②★★★10 条全在队列里（走同一限频队列，不瞬间倾泻）")
   -- ③ 编号必须逐条在（用户靠编号回报；少了编号这种事后没法对齐）
   local miss157, long157 = 0, 0
-  for i = 1, 9 do
+  for i = 1, 10 do
     local body = tostring((pr157.list or {})[i] or "")
     if string.find(body, "[" .. i .. "]", 1, true) ~= 1 then miss157 = miss157 + 1 end
     if string.len(body) > 250 then long157 = long157 + 1 end
   end
   eq(miss157, 0, "③★★★每条都以**自己的编号**开头（`[n]`），缺编号 " .. tostring(miss157) .. " 条")
   eq(long157, 0, "③★★每条都 ≤ 250 字节（变异测本身不能被上限吞掉，超长 " .. tostring(long157) .. "）")
-  eq(string.find(tostring(pr157.list[1] or ""), "纯文本", 1, true) ~= nil, true, "④★含「纯文本」基线")
-  eq(string.find(tostring(pr157.list[2] or ""), "→", 1, true) ~= nil, true, "④★含「箭头」变体")
-  eq(string.find(tostring(pr157.list[3] or ""), "★", 1, true) ~= nil, true, "④★含「星星」变体")
-  eq(string.find(tostring(pr157.list[5] or ""), "|HEHPF:aa01|h", 1, true) ~= nil, true, "④★含「链接」变体")
-  eq(string.find(tostring(pr157.list[6] or ""), "后面还有字", 1, true) ~= nil, true, "④★含「链接+后续文字」变体（正是封皮的结构）")
-  -- ⑤ 滴干：真的按 SAY 发出去（同一发送通道）
+  eq(string.find(tostring(pr157.list[1] or ""), "两段色码", 1, true) ~= nil, true, "④★含「两段色码（无链接）」变体")
+  eq(string.find(tostring(pr157.list[2] or ""), "|HEHPF:", 1, true) ~= nil, true, "④★含完整封皮（带链接）")
+  eq(string.find(tostring(pr157.list[3] or ""), "去标题色", 1, true) ~= nil, true, "④★含「去标题色」变体")
+  eq(string.find(tostring(pr157.list[4] or ""), "去品阶色", 1, true) ~= nil, true, "④★含「去品阶色」变体")
+  eq(string.find(tostring(pr157.list[5] or ""), "两个色都去", 1, true) ~= nil, true, "④★含「两个色都去」变体")
+  eq(string.find(tostring(pr157.list[6] or ""), "去链接", 1, true) ~= nil, true, "④★含「去链接」变体")
   local say157 = 0
   local g157b = 0
   while EVAL_SHARE_TEST_QUEUE_LEN() > 0 and g157b < 400 do

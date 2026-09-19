@@ -425,38 +425,59 @@ function EVAL_SHARE_TEST_TICK() shTxStep() end
 --   用户只需回报「哪些编号出现了」—— 一次就把「是哪个字符/哪种结构让客户端吞消息」夹出来。
 --   为什么这么干：客户端不回话，而这一个现象已经来回三轮（本轮已能证明「我们发了、客户端不画」）。
 function EVAL_SHARE_SEAL_VARIANT_PROBE()
-  local full = "[7] 完整封皮（算不出方案文本）"
-  if type(EVAL_PROFILE_TO_TEXT) == "function" then
+  -- ★★★1.73.43e 第二轮变异测（第一轮结论已定案两件事）：
+  --   ① 第一轮里 **[4]「色码」那条整条没出现** —— 而那条是我手打错的**7 位色码**（`|cffff2c8`）⇒
+  --      **客户端遇到不合法的颜色码会把整条消息吞掉**（不报错、不显示）——这是本次最有价值的客户端事实。
+  --   ② 于是本轮把「色码/链接/符号/方括号/长度」逐个拆开，专门夹出**封皮那条**死在哪个成分上。
+  --   ★所有色码一律用 8 位（`|cAARRGGBB`）字面量，不再手打。
+  local TITLE_COL = "|cfffff2c8"   -- 彩蛋自定义头衔色（8 位，取自 SH_TITLE_CUSTOM_COLOR）
+  local TIER_COL  = "|cffb87333"   -- 源代码档品阶色（8 位，取自 SH_SEAL_TIERS）
+  local who, plan, cmt, sym, title = "Ionol", "武器战", "看懂？", "★", "阿凡提"
+  if type(UnitName) == "function" then
+    local ok, v = pcall(UnitName, "player")
+    if ok and type(v) == "string" and v ~= "" then who = v end
+  end
+  local idh = "e251"
+  local tinfo = nil
+  if type(EVAL_PROFILE_TO_TEXT) == "function" and type(EVAL_SHARE_SEAL_INFO) == "function" then
     local t = EVAL_PROFILE_TO_TEXT()
-    if type(t) == "string" and t ~= "" and type(EVAL_SHARE_SEAL_INFO) == "function" then
-      local info = EVAL_SHARE_SEAL_INFO(t)
-      if info and info.line then full = tostring(info.line) end
+    if type(t) == "string" and t ~= "" then
+      tinfo = EVAL_SHARE_SEAL_INFO(t)
+      if tinfo and tinfo.plan then plan = tostring(tinfo.plan) end
+      if tinfo and tinfo.titleName then title = tostring(tinfo.titleName) end
+      if tinfo and tinfo.comment then cmt = tostring(tinfo.comment) end
     end
   end
-  local noArrow = string.gsub(full, "→", "->")           -- 箭头换成 ASCII
-  local noStar = string.gsub(noArrow, "★", "*")           -- 再去掉星星
+  local link = "|HEHPF:" .. idh .. "|h"
+  local head = TITLE_COL .. "[" .. title .. "]|r" .. who .. " 分享了 → " .. TIER_COL .. sym
+  local tailTxt = "[" .. plan .. "]|h|r " .. cmt
+  local sFull    = head .. link .. tailTxt                       -- 现写法（完整封皮）
+  local sNoTitle = who .. " 分享了 → " .. TIER_COL .. sym .. link .. tailTxt
+  local sNoTier  = TITLE_COL .. "[" .. title .. "]|r" .. who .. " 分享了 → " .. sym .. link .. tailTxt
+  local sNoCol   = "[" .. title .. "]" .. who .. " 分享了 → " .. sym .. link .. tailTxt
+  local sNoLink  = head .. "[" .. plan .. "]|r " .. cmt
   local vs = {
-    "[1] 纯文本测试",
-    "[2] 箭头 → 测试",
-    "[3] 星星 ★ 测试",
-    "[4] 色码 |cffff2c8[头衔]|r",
-    "[5] 链接 |cff9ad4ff|HEHPF:aa01|h[标签]|h|r",
-    "[6] 链接+后续文字 |cff9ad4ff|HEHPF:aa02|h[标签]|h|r 后面还有字",
-    "[7] 完整封皮（现写法）：" .. full,
-    "[8] 完整封皮 · 箭头换 -> ：" .. noArrow,
-    "[9] 完整封皮 · 去星去箭 ：" .. noStar,
+    "[1] 两段色码（无链接）：" .. TITLE_COL .. "[" .. title .. "]|r" .. TIER_COL .. sym .. "|r",
+    "[2] 完整封皮（现写法）：" .. sFull,
+    "[3] 完整封皮 · 去标题色：" .. sNoTitle,
+    "[4] 完整封皮 · 去品阶色：" .. sNoTier,
+    "[5] 完整封皮 · 两个色都去：" .. sNoCol,
+    "[6] 完整封皮 · 去链接：" .. sNoLink,
+    "[7] 完整封皮 · 星换 * ：" .. string.gsub(sFull, "★", "*"),
+    "[8] 完整封皮 · 箭头换 -> ：" .. string.gsub(sFull, "→", "->"),
+    "[9] 完整封皮 · 方括号换圆括号：" .. string.gsub(string.gsub(sFull, "%[", "("), "%]", ")"),
+    "[10] 纯文本（等长填充）：" .. string.rep("X", 100),
   }
   local n = table.getn(vs)
   for i = 1, n do table.insert(shTxQ, { body = vs[i], chan = "SAY" }) end
   shTxLast = shNowT()
   shEnsureTxTicker()
   local cfgP = rawget(_G, "EVAL_HELP_CONFIG")
-  local probe = { n = n, list = vs, at = shNowT() }
+  local probe = { n = n, list = vs, at = shNowT(), idh = idh }
   if type(cfgP) == "table" then cfgP.shVariantProbe = probe end -- ★落盘证人
-  shSay("===== 封皮变异测（9 条，已排队到「说」）=====")
-  shSay("  每 0.5 秒一条，请等 6 秒发完，然后把**实际出现的编号**告诉我")
-  shSay("  （没出现的编号同样重要 —— 一比就知道是哪个字符/结构被客户端吞掉）")
-  shSay("  1 纯文本 · 2 箭头 · 3 星星 · 4 色码 · 5 链接 · 6 链接+后续文字 · 7 现写法 · 8 箭头换-> · 9 去星去箭")
+  shSay("===== 封皮变异测 v2（10 条，已排队到「说」）=====")
+  shSay("  每 0.5 秒一条，约 6 秒发完；请把**实际出现的编号**告诉我（没出现的同样重要）")
+  shSay("  1 两段色码 · 2 完整封皮 · 3 去标题色 · 4 去品阶色 · 5 去两色 · 6 去链接 · 7 星换* · 8 箭换-> · 9 括号换() · 10 纯文本")
   return probe
 end
 
@@ -2147,7 +2168,22 @@ function EVAL_SH_POPUP(sender, text, ev, idh)
   -- ★1.73.42i 记下**本次传输 id**：封皮行若晚到（单片方案：分片先到、封皮紧随），要靠它把品阶栏从「未知」补成真实值。
   SH.pending = { sender = sender, text = text, name = name, count = count, chan = chanLab, ev = ev, idh = idh }
   local showFrom = chanLab and ("[" .. chanLab .. "] " .. tostring(sender)) or tostring(sender)
-  shp.body:SetText(string.format(L("SH_POP_GOT"), showFrom, name, count))
+  -- ★★★1.73.43e 用户（截图圈住标题里的《武器战》+ 划掉下面那三行）：「分享方案内**颜色替代武器战的位置**就可以，
+  --   其他品阶,身份,评语都可以不显示」⇒ ① 那三行不再显示（见 shSealRowApply）；② **方案名用它的品阶色**（颜色补到名字上）。
+  --   ★品阶由**收到的方案文本**本地重算（EVAL_SHARE_SEAL_SCORE/TIER，与聊天行/模版窗同一套判定），算不出就不加色（不猜）。
+  -- ★模板 `SH_POP_GOT` 里**已经有《》**：这里只负责上色，绝不再补一层括号
+  --   （第一版写成 `"《" .. name .. "》"` → 标题变成《《甲》》—— 判据的失败信息当场暴露了这个 bug）
+  local nameTxt = tostring(name)
+  local tcol = nil
+  if type(EVAL_SHARE_SEAL_SCORE) == "function" and type(EVAL_SHARE_SEAL_TIER) == "function" then
+    local okS, sc = pcall(EVAL_SHARE_SEAL_SCORE, text)
+    if okS and sc ~= nil then
+      local okT, ti, tier = pcall(EVAL_SHARE_SEAL_TIER, sc)
+      if okT and type(tier) == "table" and type(tier.color) == "string" then tcol = tier.color end
+    end
+  end
+  if tcol then nameTxt = tcol .. nameTxt .. "|r" end
+  shp.body:SetText(string.format(L("SH_POP_GOT"), showFrom, nameTxt, count))
   -- ★1.71.2 详情：把导入文本按行显示，让用户在**点导入之前**就能看清内容。
   --   用**逐个 FontString** 而非一个多行 FontString（本客户端多行行为不稳，逐行最可靠）。
   --   最多 SH_DETAIL_MAX 行，超出时最后一行提示还剩多少（不静默截断——诚实告知）。

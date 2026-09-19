@@ -1143,6 +1143,37 @@ function checkIconAssets() {
   const entries = (tbl.match(/"[0-9a-fA-F]+"/g) || []).map(function (s) { return s.replace(/"/g, ""); });
   const badLen = entries.filter(function (s) { return s.length !== 8; });
   if (bad.length) { console.log("COLOR CODE LEN CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
+  // ★★★1.73.43e 新增：**写在字面量里的色码必须是 8 位**。
+  //   背景（用户真机「变异测」一测定案）：我在变异测里手打了一个 **7 位**色码（`|cffff2c8`），
+  //   结果那一条消息**整个没出现**（同一批的 1/2/3/5/6 都出来了）⇒ 客户端遇到不合法的颜色码会**吞掉整条消息**
+  //   （不报错、不显示）。★这与 1.73.19 是同一族：**客户端约定类的错误，行为断言天然验不到**（我们发的串自己也认）
+  //   ⇒ 只能写成源码检查。
+  //   ★排除两类**合法**写法：① 注释行；② 动态拼接（`"|cff" .. h(r) .. ...`，色码本身不完整是正常的）。
+  const typo = [];
+  for (const f of files) {
+    const p2 = path.join(__dirname, f);
+    if (!fs.existsSync(p2)) continue;
+    const ls2 = fs.readFileSync(p2, "utf8").split(/\r?\n/);
+    for (let i2 = 0; i2 < ls2.length; i2++) {
+      const ln2 = ls2[i2];
+      if (/^\s*--/.test(ln2)) continue;
+      const re2 = /\|c([0-9a-fA-F]+)/g;
+      let m2;
+      while ((m2 = re2.exec(ln2))) {
+        let hex2 = m2[1];
+        const after2 = ln2.slice(m2.index + m2[0].length);
+        // 动态拼接（色码正好结束在字符串末尾，紧跟着 .. ）→ 跳过
+        if (/^"\s*\.\./.test(after2)) continue;
+        // `|cff66ccffEVAL_HELP` 这种：多出来的是紧接着的**文字**，取前 8 位即可
+        if (hex2.length > 8) hex2 = hex2.slice(0, 8);
+        if (hex2.length !== 8) typo.push(f + ":" + (i2 + 1) + " |c" + hex2 + "（" + hex2.length + " 位）");
+      }
+    }
+  }
+  if (typo.length) {
+    console.log("COLOR CODE LEN CHECK: FAIL - 字面量色码不是 8 位（客户端会吞掉整条消息）：" + typo.slice(0, 5).join(" | "));
+    process.exitCode = 1; return;
+  }
   if (uses < 3) { console.log("COLOR CODE LEN CHECK: FAIL - 只找到 " + uses + " 处 |c + 完整色码（应 >= 3）"); process.exitCode = 1; return; }
   if (entries.length < 9 || badLen.length) {
     console.log("COLOR CODE LEN CHECK: FAIL - 职业色表 " + entries.length + " 项里有 " + badLen.length + " 项不是 8 位（" + badLen.slice(0, 3).join(",") + "）");
