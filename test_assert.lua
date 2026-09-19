@@ -5195,6 +5195,21 @@ do
   eq(EVAL_SHARE_IS_MINE(OTHER82), false, "★别人的方案不算我的")
   eq(EVAL_SHARE_IS_MINE(""), false, "★空串不算我的")
   eq(EVAL_SHARE_IS_MINE(nil), false, "★nil 不算我的")
+  local keepTitle82 = EVAL_HELP_CONFIG.title
+  -- ★★★1.73.64 命中「10 条候选之一」的判据（文案按语言包实取；档位由调用方钉死 ⇒ 可预测）
+  local function funHit82(tbl, t, s, sender, name, chan)
+    local pool = tbl and tbl[t] and tbl[t][s]
+    if type(pool) ~= "table" then return nil end
+    for _, sc in ipairs(TEST.runScripts or {}) do
+      for k = 1, table.getn(pool) do
+        if string.find(sc, string.format(pool[k], sender, tostring(name)), 1, true)
+           and string.find(sc, '"' .. chan .. '"', 1, true) then
+          return sc
+        end
+      end
+    end
+    return nil
+  end
 
   -- ① 公会来源 + 自己的方案 → 忽略（不弹窗、且在观测口上如实 +1）
   EVAL_SHARE_RESET()
@@ -5215,24 +5230,20 @@ do
   eq(EVAL_SHARE_PENDING() == nil, true, "★★队伍来源的自我回声同样忽略")
   eq(EVAL_TEST_SHARE_SELF_SKIPPED() == base82 + 2, true, "★忽略计数又 +1")
 
-  -- ④ 公会来源 + 别人的方案 → 点 [忽略] 在公会频道玩一句
+  -- ④ 公会来源 + 别人的方案 → 点 [忽略] 按（头衔档×秘籍档）在公会频道抽一句
   EVAL_SHARE_RESET()
   TEST.inGuild = true
+  EVAL_HELP_CONFIG.title = { tier = 2, draws = {} } -- ★1.73.64 让语气可预测（头衔 2 档 × 秘籍 1 档）
   for _, m in ipairs(other82) do EVAL_SHARE_ONMSG(m, "彩虹", "CHAT_MSG_GUILD") end
   local p82 = EVAL_SHARE_PENDING()
   eq(p82 ~= nil, true, "前置：别人的公会分享正常弹出")
   TEST.runScripts = nil
   eq(EVAL_TEST_SHARE_CLICK_IGNORE(), true, "★点到了真实的 [忽略] 按钮（走它自己的 OnClick 闭包）")
-  local wantIgn = string.format(L82["SH_FUN_IGNORE"], "彩虹", tostring(p82.name))
-  local gotIgn = nil
-  for _, s in ipairs(TEST.runScripts or {}) do
-    if string.find(s, wantIgn, 1, true) then gotIgn = s end
-  end
-  eq(gotIgn ~= nil, true, "★★★[忽略] 在公会频道玩了梗句（RunScript 排队 + 文案按语言包实取）")
-  eq(gotIgn ~= nil and string.find(gotIgn, '"GUILD"', 1, true) ~= nil, true, "★★真的发到公会频道")
+  eq(funHit82(L82.SH_FUN_IGN, 2, 1, "彩虹", p82.name, "GUILD") ~= nil, true,
+     "★★★[忽略] 按（头衔档 2 × 秘籍档 1）从 **10 条候选**里抽了一句发在公会频道（1.73.64 抽奖式）")
   eq(EVAL_SHARE_PENDING() == nil, true, "★忽略后待导入清空")
 
-  -- ⑤ 公会来源 + 别人的方案 → 点 [导入] 玩另一句，并且**照旧真的导入**
+  -- ⑤ 公会来源 + 别人的方案 → 点 [导入] 也抽一句，并且**照旧真的导入**
   EVAL_SHARE_RESET()
   for _, m in ipairs(other82) do EVAL_SHARE_ONMSG(m, "彩虹", "CHAT_MSG_GUILD") end
   local p82b = EVAL_SHARE_PENDING()
@@ -5240,14 +5251,9 @@ do
   local before82 = table.getn(EVAL_HELP_CONFIG.war.profiles)
   TEST.runScripts = nil
   eq(EVAL_TEST_SHARE_CLICK_IMPORT(), true, "★点到了真实的 [导入] 按钮")
-  local wantImp = string.format(L82["SH_FUN_IMPORT"], "彩虹", tostring(p82b.name))
-  local gotImp = nil
-  for _, s in ipairs(TEST.runScripts or {}) do
-    if string.find(s, wantImp, 1, true) then gotImp = s end
-  end
-  eq(gotImp ~= nil, true, "★★★[导入] 在公会频道玩了另一句梗")
-  eq(gotImp ~= nil and string.find(gotImp, '"GUILD"', 1, true) ~= nil, true, "★★也是发到公会频道")
-  eq(table.getn(EVAL_HELP_CONFIG.war.profiles) > before82, true, "★★玩梗句不替代导入：方案真的进列表了")
+  eq(funHit82(L82.SH_FUN_IMP, 2, 1, "彩虹", p82b.name, "GUILD") ~= nil, true,
+     "★★★[导入] 也按（头衔档×秘籍档）抽了一句发在公会频道")
+  eq(table.getn(EVAL_HELP_CONFIG.war.profiles) > before82, true, "★★反应句不替代导入：方案真的进列表了")
 
   -- ⑥ 不在公会里 → 一句都不发（不假装发了）
   --   ★⑤真的把「别人的甲」导进来了，此刻它已经变成「我的方案」→ 必须先把配置还原成只有我自己的那份
@@ -5261,17 +5267,29 @@ do
   EVAL_TEST_SHARE_CLICK_IGNORE()
   eq(table.getn(TEST.runScripts or {}), 0, "★★不在公会里 → 一条都不发（不假装做到）")
 
-  -- ⑦ 队伍来源 → 不去公会频道发（玩梗句是公会来源专属）
+  -- ⑦ ★★★1.73.64 「说/队伍 加入」——队伍来源**也发**，发到**队伍**频道（不再是「只认公会」）
   EVAL_SHARE_RESET()
   TEST.inGuild = true
   for _, m in ipairs(other82) do EVAL_SHARE_ONMSG(m, "彩虹", "CHAT_MSG_PARTY") end
-  eq(EVAL_SHARE_PENDING() ~= nil, true, "前置：队伍来源正常弹窗")
+  local p82c = EVAL_SHARE_PENDING()
+  eq(p82c ~= nil, true, "前置：队伍来源正常弹窗")
   TEST.runScripts = nil
   EVAL_TEST_SHARE_CLICK_IGNORE()
-  eq(table.getn(TEST.runScripts or {}), 0, "★★队伍来源不发公会玩梗句（只认公会来源）")
+  eq(funHit82(L82.SH_FUN_IGN, 2, 1, "彩虹", p82c.name, "PARTY") ~= nil, true,
+     "★★★队伍来源发到**队伍**频道（1.73.64 新增；旧规则是「只认公会」，已被用户改掉）")
+  -- ⑦b 说来源 → 发到**说**频道
+  EVAL_SHARE_RESET()
+  for _, m in ipairs(other82) do EVAL_SHARE_ONMSG(m, "彩虹", "CHAT_MSG_SAY") end
+  local p82d = EVAL_SHARE_PENDING()
+  eq(p82d ~= nil, true, "前置：说来源正常弹窗")
+  TEST.runScripts = nil
+  EVAL_TEST_SHARE_CLICK_IGNORE()
+  eq(funHit82(L82.SH_FUN_IGN, 2, 1, "彩虹", p82d.name, "SAY") ~= nil, true,
+     "★★★说来源发到**说**频道（1.73.64 新增）")
 
   TEST.inGuild = false
   EVAL_SHARE_RESET()
+  EVAL_HELP_CONFIG.title = keepTitle82 -- ★还原头衔档位（别让本组的夹具污染后面的组）
 end
 -- 83) ★1.71.3 图标美化（用户要求）+ 「取消施法」异常标记（问号图标 + 悬停说明）
 --   ① 五个技能类别各带图标，且都指向**本插件自己**的 media\icons（自包含，不依赖对方目录）；
@@ -13122,6 +13140,72 @@ do
   EVAL_HELP_CONFIG.war = savedWar169
   EVAL_HELP_CONFIG.title = savedTitle169
   print("  彩蛋闸门：手动方案≥3 + 其中一个神级（≥25 分）+ 头衔满档 —— 三条件齐才触发；导入的不算手动；老存档按手动算")
+end
+
+-- 170) ★★★1.73.64 彩蛋「角色扮演反应」：三语言 50 格 × 10 条齐全 + 秘籍档映射（端到端）
+--   ★结构：SH_FUN_IMP / SH_FUN_IGN 各一个**嵌套表**键（头衔档 1..5 → 秘籍档 1..5 → 10 条候选），
+--     L() 能返回表 ⇒ 两个键就够（不用 500 个扁平键）；每条恰 2 个 %s（发送者、方案名，**顺序不能错**）。
+do
+  -- ① 三语言齐全 + 每格 10 条 + 每条恰 2 个 %s
+  for _, lg in ipairs({ "zhCN", "enUS", "ruRU" }) do
+    local tb170 = EVAL_LOCALES[lg]
+    for _, op in ipairs({ "IMP", "IGN" }) do
+      local t170 = tb170["SH_FUN_" .. op]
+      eq(type(t170) == "table", true, "①★★★" .. lg .. " 里有 SH_FUN_" .. op .. "（嵌套表）")
+      for t = 1, 5 do
+        for s = 1, 5 do
+          local pool = t170[t] and t170[t][s]
+          eq(type(pool) == "table" and table.getn(pool) == 10, true,
+             "①★★" .. lg .. " SH_FUN_" .. op .. "[" .. t .. "][" .. s .. "] 应为 10 条（实际 " .. tostring(type(pool) == "table" and table.getn(pool) or 0) .. "）")
+          for k = 1, 10 do
+            local n170 = select(2, string.gsub(pool[k], "%%s", ""))
+            eq(n170, 2, "①★" .. lg .. " [" .. t .. "][" .. s .. "] 第 " .. k .. " 条应恰 2 个 %s（实际 " .. n170 .. "；1 个会把发送者填到方案位）")
+          end
+        end
+      end
+    end
+  end
+  -- ② 秘籍档映射（端到端）：低头衔收**神级** → 命中 [1][5] 那格
+  local savedTitle170 = EVAL_HELP_CONFIG.title
+  local big170 = "# 方案: 神级甲"
+  for i = 1, 26 do big170 = big170 .. "\n- 技能" .. i end -- 26 技能 = 26 分 → 神级（档 5）
+  local keepProfs170 = EVAL_HELP_CONFIG.war.profiles
+  EVAL_HELP_CONFIG.war.profiles = { EVAL_PROFILE_FROM_TEXT(big170) }
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  TEST.runScripts = nil
+  EVAL_SHARE_SEND("GUILD")
+  EVAL_TEST_SHARE_DRAIN() -- ★多片方案：发送是限频队列，不抽干收不齐（第 1 片立即发、其余排队滴出）
+  local msgs170 = {}
+  for _, sc in ipairs(TEST.runScripts or {}) do
+    local m = string.match(sc, 'SendChatMessage%("(.-)", "GUILD"%)')
+    if m and (string.sub(m, 1, 6) == "[EHPF#" or string.find(m, "|HEHPF:", 1, true)) then table.insert(msgs170, m) end
+  end
+  EVAL_HELP_CONFIG.war.profiles = keepProfs170 -- 还原，让收到的方案**不算「我的」**（否则被回声忽略）
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  eq(table.getn(msgs170) >= 1, true, "②前置：神级方案分片造出来了（" .. tostring(table.getn(msgs170)) .. " 条）")
+  EVAL_SHARE_RESET()
+  TEST.inGuild = true
+  for _, m in ipairs(msgs170) do EVAL_SHARE_ONMSG(m, "彩虹", "CHAT_MSG_GUILD") end
+  local p170 = EVAL_SHARE_PENDING()
+  eq(p170 ~= nil, true, "②前置：神级方案收齐弹出")
+  -- ★★在**点击那一刻**才把接收者头衔档钉成 1：发送时 EVAL_SHARE_SEAL_INFO → EVAL_TITLE_REFRESH
+  --   会按方案库把它「只升不降」地升到 5（26 技能就是神级 —— 生产上是对的），
+    --   所以**不能在发送前**设（会被重算掉；本轮实测 titleTier 从 1 变回 5）。
+  EVAL_HELP_CONFIG.title = { tier = 1, draws = {} }
+  TEST.runScripts = nil
+  EVAL_TEST_SHARE_CLICK_IGNORE()
+  local L170 = EVAL_LOCALES.zhCN
+  local hit170 = nil
+  for _, sc in ipairs(TEST.runScripts or {}) do
+    for k = 1, 10 do
+      if string.find(sc, string.format(L170.SH_FUN_IGN[1][5][k], "彩虹", p170.name), 1, true) then hit170 = sc end
+    end
+  end
+  eq(hit170 ~= nil, true, "②★★★低头衔收神级 → 命中 [1][5] 那格（秘籍档映射正确，走真实接收+点击路径）")
+  TEST.inGuild = false
+  EVAL_SHARE_RESET()
+  EVAL_HELP_CONFIG.title = savedTitle170
+  print("  彩蛋反应：三语言 50 格 × 10 条齐全 · 头衔档×秘籍档 抽奖式 · 公会/说/队伍三频道 · 每句恰 2 占位符")
 end
 
 print("ALL TESTS PASS")

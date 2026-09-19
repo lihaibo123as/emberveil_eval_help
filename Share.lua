@@ -695,21 +695,48 @@ function EVAL_SHARE_IS_MINE(text)
   return false
 end
 
--- ★1.71.3 公会来源的分享：点按钮时在**公会频道**玩一句（用户指定的两句话）。
---   ★只在「触发事件是 CHAT_MSG_GUILD」且**真的在公会里**时才发（公会聊天 SendChatMessage 是 Protected → 走 RunScript，同分享发送）。
---   ★发不出去就返回 false（不假装发了）。
-local function shGuildFun(fmtKey)
+-- ★★★1.73.64 用户：「根据当前秘籍等级 和接收者自身的头衔 等级 做出导入(接收)/忽略(忽略)的符合角色扮演语境反应会话」
+--   + 「说/队伍 加入」⇒ **公会 / 说 / 队伍** 三个来源都回一句（原来只有公会，键见 SH_FUN_CHAN）。
+--   语气由**两张表**决定：接收者头衔档（EVAL_TITLE_STATE().tier）× 收到的秘籍品阶档（收到的文本现算），
+--   从那 50 格里**抽奖式**挑一条发出去（每格 10 条候选）。
+local SH_FUN_CHAN = { CHAT_MSG_GUILD = "GUILD", CHAT_MSG_PARTY = "PARTY", CHAT_MSG_SAY = "SAY" }
+-- 收到的方案文本 → 品阶档（1..5；算不出按 1 档 —— 不让一句话把整个按钮卡死）
+local function shReactionTierOf(text)
+  if type(EVAL_SHARE_SEAL_SCORE) ~= "function" or type(EVAL_SHARE_SEAL_TIER) ~= "function" then return 1 end
+  local okS, sc = pcall(EVAL_SHARE_SEAL_SCORE, text)
+  if not okS or type(sc) ~= "number" then return 1 end
+  local okT, ti = pcall(EVAL_SHARE_SEAL_TIER, sc)
+  if okT and type(ti) == "number" and ti >= 1 and ti <= 5 then return ti end
+  return 1
+end
+-- 接收者自己的头衔档（1..5；没入档按 1 档新手语气，永不出界）
+local function shMyTitleTier()
+  if type(EVAL_TITLE_STATE) ~= "function" then return 1 end
+  local ok, st = pcall(EVAL_TITLE_STATE)
+  local t = (ok and type(st) == "table" and tonumber(st.tier)) or 1
+  if t < 1 then t = 1 elseif t > 5 then t = 5 end
+  return t
+end
+-- op = "imp"（导入）/ "ign"（忽略）。只在来源频道属于 公会/说/队伍 时才发；
+--   公会那条仍要真的在公会里（IsInGuild）。★发不出去就返回 false（不假装发了）。
+local function shSendReaction(op)
   local p = SH.pending
   if not p then return false end
-  if p.ev ~= "CHAT_MSG_GUILD" then return false end
-  if type(IsInGuild) == "function" then
+  local chan = SH_FUN_CHAN[p.ev]
+  if not chan then return false end
+  if chan == "GUILD" and type(IsInGuild) == "function" then
     local okg, ing = pcall(IsInGuild)
     if okg and not ing then return false end
   end
-  local txt = string.format(L(fmtKey), tostring(p.sender), tostring(p.name))
+  local t, s = shMyTitleTier(), shReactionTierOf(p.text)
+  local tb = L(op == "ign" and "SH_FUN_IGN" or "SH_FUN_IMP")
+  local pool = (type(tb) == "table") and tb[t] and tb[t][s] or nil
+  local line = (type(pool) == "table" and table.getn(pool) > 0) and pool[math.random(1, table.getn(pool))] or nil
+  if type(line) ~= "string" or line == "" then return false end
+  local txt = string.format(line, tostring(p.sender), tostring(p.name))
   if type(RunScript) ~= "function" then return false end
-  pcall(RunScript, string.format("SendChatMessage(%q, %q)", txt, "GUILD"))
-  EVAL_LOGLINE("[分享] 已在公会频道发送：" .. txt)
+  pcall(RunScript, string.format("SendChatMessage(%q, %q)", txt, chan))
+  EVAL_LOGLINE("[分享] 已在" .. chan .. "频道发送：" .. txt)
   return true
 end
 
@@ -2431,7 +2458,7 @@ local function shPopupBuild()
       local ok, msg = EVAL_IMPORT_TEXT(p.text)
       shSay(tostring(msg))
       if ok then
-        shGuildFun("SH_FUN_IMPORT") -- 公会来源：点「导入/确认」在公会频道玩另一句（用户指定）
+        shSendReaction("imp") -- ★1.73.64 导入后按（头衔档×秘籍档）在来源频道抽一句角色扮演反应（公会/说/队伍）
         shp.root:Hide()
         SH.pending = nil
       end
@@ -2440,7 +2467,7 @@ local function shPopupBuild()
     end
   end)
   local ignoreBtn = bBtn(btnX2, L("SH_IGNORE"), function()
-    shGuildFun("SH_FUN_IGNORE") -- 公会来源：点「忽略」在公会频道玩一句（用户指定）
+    shSendReaction("ign") -- ★1.73.64 忽略时同理（公会/说/队伍）
     shp.root:Hide()
     SH.pending = nil
   end)

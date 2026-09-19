@@ -892,6 +892,29 @@ function checkIconAssets() {
   console.log("CREATOR GATE CHECK: 三条件闸门（手动方案≥3 + 一个神级 + 头衔满档）· 窗口与命令后路都过闸 · 来源标记齐 · 自动触发已接线");
 })();
 })();
+
+// ===== SH FUN CHECK（1.73.64）：彩蛋「角色扮演反应」的接线 =====
+// ★背景：用户「根据当前秘籍等级 和接收者自身的头衔等级 做出导入/忽略的符合角色扮演语境反应会话」
+//   + 「说/队伍 加入」。最易出的静默错：① 频道映射漏了（说/队伍不发）；② 抽奖写成恒取第 1 条；
+//   ③ 两个按钮传错 op（忽略却发导入的句子）；④ 语气档位算错（秘籍档/头衔档反了）。
+//   行为断言（组 82 + 组 170）能抓大部分，源码检查再钉「接线都在」。
+(function () {
+  const sh = fs.readFileSync(path.join(__dirname, "Share.lua"), "utf8");
+  const noComment = sh.split(/\r?\n/).map(function (l) { const i = l.indexOf("--"); return i >= 0 ? l.slice(0, i) : l; }).join("\n");
+  const bad = [];
+  if (noComment.indexOf("local SH_FUN_CHAN = {") < 0) bad.push("找不到频道映射 SH_FUN_CHAN");
+  ["CHAT_MSG_GUILD = \"GUILD\"", "CHAT_MSG_PARTY = \"PARTY\"", "CHAT_MSG_SAY = \"SAY\""]
+    .forEach(function (k) { if (noComment.indexOf(k) < 0) bad.push("频道映射缺：" + k); });
+  if (noComment.indexOf("local function shSendReaction(") < 0) bad.push("找不到反应函数 shSendReaction");
+  if (noComment.indexOf("shSendReaction(\"imp\")") < 0) bad.push("[导入] 没接 shSendReaction(\"imp\")");
+  if (noComment.indexOf("shSendReaction(\"ign\")") < 0) bad.push("[忽略] 没接 shSendReaction(\"ign\")");
+  if (noComment.indexOf("math.random(1, table.getn(pool))") < 0) bad.push("反应不是抽奖式随机（应在 10 条候选里随机挑）");
+  if (noComment.indexOf('L(op == "ign" and "SH_FUN_IGN" or "SH_FUN_IMP")') < 0) bad.push("反应没按 op 选 SH_FUN_IMP/SH_FUN_IGN 那张表");
+  if (noComment.indexOf("EVAL_TITLE_STATE") < 0) bad.push("反应没读接收者头衔档（EVAL_TITLE_STATE）");
+  if (noComment.indexOf("EVAL_SHARE_SEAL_SCORE") < 0) bad.push("反应没现算秘籍品阶档（EVAL_SHARE_SEAL_SCORE）");
+  if (bad.length) { console.log("SH FUN CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
+  console.log("SH FUN CHECK: 公会/说/队伍三频道 · 导入/忽略两路 op · 抽奖式随机 · 头衔档×秘籍档两表决定语气");
+})();
 // ===== SEAL ICON NAMES CHECK（1.73.42l）：品阶图标的**名字**必须是客户端真有的（用户指定的五张） =====
 // 背景：图标由用户点名（截图里是 `.../INV_Misc_ShadowEgg_TEX` 这种**资源名**）——
 //   ① `_TEX` 是客户端资源命名，插件侧路径一律 `Interface\\Icons\\<裸名>`，带上后缀真机**画不出东西**；
