@@ -971,47 +971,72 @@ function EVAL_TB_MENU_HIDE()
   if TB.menu then pcall(TB.menu.Hide, TB.menu) end
   TB_NAME_MENU.shown = false
 end
--- ★★★1.73.28 用户（拿官方右键菜单截图对比之后定的最终版）：
---   ① 「右键功能开关加入工具箱」→ 工具箱 → 队伍/社交 → 「聊天名字右键菜单」（1.73.24 起就在，默认开）；
---   ② 「把原始的功能（悄悄话 / 邀请 / 目标）也加入」→ 菜单里**直接给这三条**（自己实现，不再转发官方菜单）；
---   ③ 「取消官方菜单项目」→ 去掉那条；
---   ④ 「/s 说出 => 复制名字，实际执行的是 /s 名字」→ 条目改叫「复制名字」，动作 = 发一句 /s 名字。
---   ⑤ 「弹窗高度自适应内部项目」→ 高度**由条目数算出来**（单一来源 EVAL_TB_MENU_HEIGHT），不再是写死的数字。
---   风格沿用 1.73.26 的美化：半透明黑底、宽度 ≤4 个汉字、条目 2~4 字。
-local TB_MENU_W = 62 -- ★≤4 个汉字宽（用户点名的宽度上限）
-local TB_MENU_ITEM_H = 15 -- 单条行高
-local TB_MENU_TOP = -19 -- 第一条相对窗口顶的偏移（标题占的那一行）
-local TB_MENU_PAD = 6 -- 末条下方的留白
--- ★高度 = 标题行 + 条目数 × 行高 + 留白（**单一来源**：UI 只调它，断言也只读它）
-function EVAL_TB_MENU_HEIGHT(n)
+-- ★★★1.73.35 用户（第 2 条）：右键菜单**扩展 + 两列 + 宽高自适应 + 锚点右上**
+--   条目（按用户列表）：悄悄话 / 邀请 / 目标 / 复制名字 / **分享方案（默认当前激活方案）** / **交易** / **查询** /
+--   **踢出队伍（在队伍里才显示）** / **踢出公会（有权限才显示）** / **邀请公会（有权限才显示）** / 关闭。
+--   ★权限/条件门：CanGuildInvite() / CanGuildRemove() / GetNumPartyMembers()>0 决定条目**出不出现**（不是点了才说没权限）。
+--   ★版式：**两列**（每条仍 ≤4 个汉字宽），宽高**由条目数算出来**（单一来源 EVAL_TB_MENU_LAYOUT）。
+--   ★锚点：窗口**右上角**（用户要求「弹窗锚点右上」）。
+local TB_MENU_COL_W = 62 -- 单列宽（≤4 个汉字）
+local TB_MENU_GAP = 4
+local TB_MENU_ITEM_H = 15
+local TB_MENU_TOP = -19
+local TB_MENU_PAD = 6
+-- 纯函数：条目数 → 宽 / 高 / 行数 / 列数（渲染与断言**共用这一份**）
+function EVAL_TB_MENU_LAYOUT(n)
   n = tonumber(n) or 0
   if n < 1 then n = 1 end
-  return -TB_MENU_TOP + (n - 1) * TB_MENU_ITEM_H + TB_MENU_PAD
+  local rows = math.ceil(n / 2)
+  local w = TB_MENU_COL_W * 2 + TB_MENU_GAP
+  local h = -TB_MENU_TOP + (rows - 1) * TB_MENU_ITEM_H + TB_MENU_PAD
+  return w, h, rows, 2
 end
--- ★条目清单 = 数据（顺序即显示顺序）；加/删条目只改这里，高度与行位置自动跟着变
+function EVAL_TB_MENU_HEIGHT(n) local _, h = EVAL_TB_MENU_LAYOUT(n) return h end
+function EVAL_TB_MENU_WIDTH(n) local w = EVAL_TB_MENU_LAYOUT(n) return w end
+-- 条目清单 = 数据（顺序即显示顺序：先读一行、再读一列）；加/删条目只改这里
 local function tbMenuItems()
   local out = {}
-  -- ★1.73.28 条目**按能力过滤**：这个客户端连一个「打开聊天框」的接口都没有 → **不摆**「悄悄话」
-  --   （按了没用的项不如不摆）；高度随之少一行 —— 这正是「高度自适应内部项目」的落地处，
-  --   也让判据能验「换一组条目 → 高度跟着换」（把高度写死当场响）。
-  if type(ChatFrame_OpenChat) == "function" or type(ChatEdit_ActivateChat) == "function" then
-    table.insert(out, { L("TB_NAMEMENU_WHISPER"), EVAL_TB_NAME_WHISPER })
+  local function add(label, fn)
+    if type(label) == "string" and label ~= "" and type(fn) == "function" then
+      table.insert(out, { label, fn })
+    end
   end
-  table.insert(out, { L("TB_NAMEMENU_PARTY"), EVAL_TB_NAME_PARTY })
-  table.insert(out, { L("TB_NAMEMENU_TARGET"), EVAL_TB_NAME_TARGET })
-  table.insert(out, { L("TB_NAMEMENU_INVITE"), EVAL_TB_NAME_INVITE })
-  table.insert(out, { L("TB_NAMEMENU_SAY"), EVAL_TB_NAME_SAY })
+  -- 第一列：原始功能三条 + 我们的「复制名字」
+  if type(ChatFrame_OpenChat) == "function" or type(ChatEdit_ActivateChat) == "function" then
+    add(L("TB_NAMEMENU_WHISPER"), EVAL_TB_NAME_WHISPER)
+  end
+  add(L("TB_NAMEMENU_PARTY"), EVAL_TB_NAME_PARTY)
+  add(L("TB_NAMEMENU_TARGET"), EVAL_TB_NAME_TARGET)
+  add(L("TB_NAMEMENU_SAY"), EVAL_TB_NAME_SAY)
+  -- 第二列：分享 / 交易 / 查询 / 踢人（按权限与队伍条件决定出不出现）
+  add(L("TB_NAMEMENU_SHARE"), EVAL_TB_NAME_SHARE)
+  add(L("TB_NAMEMENU_TRADE"), EVAL_TB_NAME_TRADE)
+  add(L("TB_NAMEMENU_QUERY"), EVAL_TB_NAME_QUERY)
+  -- ★队伍里才显示「踢出队伍」
+  if type(GetNumPartyMembers) == "function" then
+    local ok, n = pcall(GetNumPartyMembers)
+    if ok and type(n) == "number" and n > 0 then add(L("TB_NAMEMENU_KICKP"), EVAL_TB_NAME_KICKP) end
+  end
+  -- ★有权限才显示「踢出公会 / 邀请公会」
+  if type(CanGuildRemove) == "function" then
+    local ok, v = pcall(CanGuildRemove)
+    if ok and v then add(L("TB_NAMEMENU_KICKG"), EVAL_TB_NAME_KICKG) end
+  end
+  if type(CanGuildInvite) == "function" then
+    local ok, v = pcall(CanGuildInvite)
+    if ok and v then add(L("TB_NAMEMENU_INVITE"), EVAL_TB_NAME_INVITE) end
+  end
   return out
 end
 local function tbMenuBuild()
   if TB.menu then return TB.menu end
-  local f = CreateFrame("Frame", "EVAL_TB_NAMEMENU", UIParent)
-  local W = TB_MENU_W
   local items = tbMenuItems()
   local n = table.getn(items) + 1 -- +1 = [关闭]
-  -- ★高度自适应：跟着条目数走（用户要求「弹窗高度自适应内部项目」）
-  f:SetWidth(W) f:SetHeight(EVAL_TB_MENU_HEIGHT(n))
-  f:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+  local W, H = EVAL_TB_MENU_LAYOUT(n)
+  local f = CreateFrame("Frame", "EVAL_TB_NAMEMENU", UIParent)
+  f:SetWidth(W) f:SetHeight(H)
+  -- ★锚点：屏幕**右上角**（用户要求）
+  f:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -10, -10)
   pcall(f.SetFrameStrata, f, "DIALOG")
   pcall(f.SetFrameLevel, f, 250)
   pcall(f.EnableMouse, f, true)
@@ -1026,27 +1051,32 @@ local function tbMenuBuild()
   pcall(title.SetJustifyH, title, "LEFT")
   f.title = title
   f.rows = {}
-  local y = TB_MENU_TOP
-  local function item(label, fn)
-    local b = tbBtn(f, 3, y, W - 6, label, function() fn(TB_NAME_MENU.name) EVAL_TB_MENU_HIDE() end, nil)
+  -- ★两列：第 i 条 → 列 = (i-1) % 2、行 = floor((i-1)/2)（坐标全由 TB_MENU_* 常量算出）
+  local function put(i, label, fn)
+    local col = (i - 1) % 2
+    local row = math.floor((i - 1) / 2)
+    local x = col * (TB_MENU_COL_W + TB_MENU_GAP) + 1
+    local y = TB_MENU_TOP - row * TB_MENU_ITEM_H
+    local b = tbBtn(f, x, y, TB_MENU_COL_W - 2, label, fn, nil)
     if b.bg then pcall(b.bg.SetVertexColor, b.bg, 0.10, 0.09, 0.06, 0.35) end
     if b.text then
-      pcall(b.text.SetWidth, b.text, W - 10)
+      pcall(b.text.SetWidth, b.text, TB_MENU_COL_W - 6)
       pcall(b.text.SetJustifyH, b.text, "LEFT")
     end
     table.insert(f.rows, b)
-    y = y - TB_MENU_ITEM_H
     return b
   end
-  -- 原始功能在前（悄悄话/邀请/目标），我们的在后（公会邀请/复制名字=发 /s 名字）
-  for i = 1, table.getn(items) do item(items[i][1], items[i][2]) end
-  item(L("TB_NAMEMENU_CLOSE"), function() end)
+  for i = 1, table.getn(items) do
+    local it = items[i]
+    local nm = TB_NAME_MENU.name
+    put(i, it[1], function() it[2](nm) EVAL_TB_MENU_HIDE() end)
+  end
+  put(table.getn(items) + 1, L("TB_NAMEMENU_CLOSE"), function() end)
   pcall(f.Hide, f)
   TB.menu = f
   return f
 end
--- ★诊断读值口：菜单的真实几何（宽/高/背景透明度/条目文字）——断言拿它跟 EVAL_TB_MENU_HEIGHT(条数) 对
--- ★测试钩子：丢掉已建的菜单 → 下次右键会**按当时的条目**重建（用来验高度自适应）
+
 function EVAL_TEST_TB_MENU_DROP()
   if TB.menu then pcall(TB.menu.Hide, TB.menu) end
   TB.menu = nil
@@ -1058,6 +1088,9 @@ function EVAL_TB_MENU_GEOM()
   local f = TB.menu
   local function num(m, o) local ok, v = pcall(m, o) return (ok and type(v) == "number") and v or nil end
   local out = { w = num(f.GetWidth, f), h = num(f.GetHeight, f), items = {}, bg = {} }
+  -- ★1.73.35 锚点读值（用户要求「弹窗锚点右上」→ 判据必须读得到真实的锚点语义）
+  local okp, point, _relTo, relPoint, ox, oy = pcall(f.GetPoint, f)
+  if okp then out.point, out.relPoint, out.ox, out.oy = point, relPoint, ox, oy end
   if f.bg and type(f.bg.GetVertexColor) == "function" then
     local ok, r, g, b, a = pcall(f.bg.GetVertexColor, f.bg)
     if ok then out.bg = { r = r, g = g, b = b, a = a } end
@@ -1100,24 +1133,46 @@ function EVAL_TB_MENU_SHOW(name)
   local f = tbMenuBuild()
   TB_NAME_MENU.name = name
   if f.title then pcall(f.title.SetText, f.title, string.format(L("TB_NAMEMENU_TITLE"), name)) end
-  -- 跟着鼠标出现（取不到鼠标位置就居中；★坐标要按 UIParent 缩放折算，否则高缩放下会飘）
-  local x, y = 0, 0
-  if type(GetCursorPosition) == "function" then
-    local ok, cx, cy = pcall(GetCursorPosition)
-    if ok and cx and cy then x, y = cx, cy end
-  end
-  local sc = 1
-  if type(UIParent) == "table" and type(UIParent.GetEffectiveScale) == "function" then
-    local ok2, s2 = pcall(UIParent.GetEffectiveScale, UIParent)
-    if ok2 and s2 and s2 > 0 then sc = s2 end
-  end
+  -- ★★★1.73.35 锚点固定在**屏幕右上角**（用户要求「弹窗锚点右上」）——
+  --   原来「跟着鼠标出现」在跨分辨率/高缩放下会飘，而且和「右上角」的要求相反；现在只做一件事：贴右上角。
   pcall(f.ClearAllPoints, f)
-  pcall(f.SetPoint, f, "TOPLEFT", UIParent, "BOTTOMLEFT", x / sc, y / sc)
+  pcall(f.SetPoint, f, "TOPRIGHT", UIParent, "TOPRIGHT", -10, -10)
   pcall(f.Show, f)
   TB_NAME_MENU.shown = true
   return true
 end
--- 动作①：公会邀请（★先问 CanGuildInvite，再直接调；直接调不可用就走 RunScript —— 本项目受保护函数的既定通道）
+-- ★★★1.73.29 预填聊天输入框（不发送）：悄悄话与「复制名字」共用这一条实现。
+--   优先客户端自带的打开聊天框接口；没有就退回 ChatEdit_ActivateChat + 编辑框；两条都不行 → 返回 nil（调用方如实提示）。
+--   ★「不要打印出去」= 我们**只把文本放进输入框**，绝不替用户按回车（不走 SendChatMessage / RunScript）。
+local function tbMenuPrefill(text)
+  if type(text) ~= "string" or text == "" then return nil end
+  if type(ChatFrame_OpenChat) == "function" then
+    if pcall(ChatFrame_OpenChat, text) then return "openchat" end
+  end
+  local eb = _G.ChatFrameEditBox or _G.ChatFrame1EditBox
+  if type(ChatEdit_ActivateChat) == "function" and eb and type(eb.SetText) == "function" then
+    local ok = pcall(function()
+      ChatEdit_ActivateChat(eb)
+      eb:SetText(text)
+      if type(eb.HighlightText) == "function" then eb:HighlightText() end
+    end)
+    if ok then return "editbox" end
+  end
+  return nil
+end
+-- ★1.73.28 服务器写动作一律限频：邀请 / 密语（发消息）在 0.5 秒内只做一次
+local TB_MENU_AT = {}
+local function tbMenuThrottle(key, gap)
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  if now - (TB_MENU_AT[key] or -99) < (tonumber(gap) or 0.5) then
+    TB_NAME_MENU.throttled = (TB_NAME_MENU.throttled or 0) + 1
+    say(L("TB_NAMEMENU_TOOFAST"))
+    return false
+  end
+  TB_MENU_AT[key] = now
+  return true
+end
+-- 公会邀请（★先问 CanGuildInvite，再直接调；直接调不可用就走 RunScript）
 function EVAL_TB_NAME_INVITE(name)
   if type(name) ~= "string" or name == "" then return false end
   if type(CanGuildInvite) == "function" then
@@ -1141,19 +1196,7 @@ function EVAL_TB_NAME_INVITE(name)
   else say(string.format(L("TB_NAMEMENU_INVFAIL"), "GuildInviteByName")) end
   return okd
 end
--- ★1.73.28 服务器写动作一律限频：邀请 / 密语（发消息）在 0.5 秒内只做一次
-local TB_MENU_AT = {}
-local function tbMenuThrottle(key, gap)
-  local now = (type(GetTime) == "function") and GetTime() or 0
-  if now - (TB_MENU_AT[key] or -99) < (tonumber(gap) or 0.5) then
-    TB_NAME_MENU.throttled = (TB_NAME_MENU.throttled or 0) + 1
-    say(L("TB_NAMEMENU_TOOFAST"))
-    return false
-  end
-  TB_MENU_AT[key] = now
-  return true
-end
--- 动作②：邀请入队（原始功能里的「邀请」）：首选 InviteToParty，老客户端退回 InviteByName，再退回 RunScript
+-- 邀请入队（原始功能「邀请」）：InviteToParty 优先，老客户端退回 InviteByName，再退回 RunScript
 function EVAL_TB_NAME_PARTY(name)
   if type(name) ~= "string" or name == "" then return false end
   if not tbMenuThrottle("party", 0.5) then return false end
@@ -1170,7 +1213,7 @@ function EVAL_TB_NAME_PARTY(name)
   end
   return ok
 end
--- 动作③：选中目标（原始功能里的「目标」）—— TargetByName 只认**附近**单位，够不着就如实说
+-- 选中目标：TargetByName 只认**附近**单位，够不着就如实说
 function EVAL_TB_NAME_TARGET(name)
   if type(name) ~= "string" or name == "" then return false end
   if type(TargetByName) ~= "function" then
@@ -1187,26 +1230,7 @@ function EVAL_TB_NAME_TARGET(name)
   end
   return ok
 end
--- ★★★1.73.29 **预填聊天输入框（不发送）**：悄悄话与「复制名字」共用这一条实现。
---   优先客户端自带的打开聊天框接口；没有就退回 ChatEdit_ActivateChat + 编辑框；两条都不行 → 返回 nil（调用方如实提示）。
---   ★「不要打印出去」= 我们**只把文本放进输入框**，绝不替用户按回车（不走 SendChatMessage / RunScript）。
-local function tbMenuPrefill(text)
-  if type(text) ~= "string" or text == "" then return nil end
-  if type(ChatFrame_OpenChat) == "function" then
-    if pcall(ChatFrame_OpenChat, text) then return "openchat" end
-  end
-  local eb = _G.ChatFrameEditBox or _G.ChatFrame1EditBox
-  if type(ChatEdit_ActivateChat) == "function" and eb and type(eb.SetText) == "function" then
-    local ok = pcall(function()
-      ChatEdit_ActivateChat(eb)
-      eb:SetText(text)
-      if type(eb.HighlightText) == "function" then eb:HighlightText() end
-    end)
-    if ok then return "editbox" end
-  end
-  return nil
-end
--- 动作④：悄悄话（原始功能里的「悄悄话」）：预填 /w 名字 + 空格，**不发送**
+-- 悄悄话：预填 /w 名字 + 空格，**不发送**
 function EVAL_TB_NAME_WHISPER(name)
   if type(name) ~= "string" or name == "" then return false end
   local safe = tbSafeName(name)
@@ -1219,8 +1243,7 @@ function EVAL_TB_NAME_WHISPER(name)
   say(string.format(L("TB_NAMEMENU_WHISPERFAIL"), safe))
   return false
 end
--- 动作⑤：「复制名字」★1.73.29 用户改口径：「是在 /say 频道**输入名字**，但是不要打印出去，只是打开输入框输入名字」
---   ⇒ 只**预填**「/s 名字」到输入框，**不发送**（不走 RunScript / SendChatMessage）；没有接口就如实提示。
+-- 「复制名字」= 只**预填**「/s 名字」到输入框，**不发送**（用户明确：不要打印出去）
 function EVAL_TB_NAME_SAY(name)
   if type(name) ~= "string" or name == "" then return false end
   local safe = tbSafeName(name)
@@ -1233,6 +1256,141 @@ function EVAL_TB_NAME_SAY(name)
   say(string.format(L("TB_NAMEMENU_SAYFAIL"), safe))
   return false
 end
+-- ★★★1.73.35 新增动作：分享方案 / 交易 / 查询 / 踢出队伍 / 踢出公会
+--   【先查 API 全表（本机 api_lua.html）】：InitiateTrade ✓ · UninviteByName ✓ · GuildUninviteByName ✓ ·
+--   CanGuildRemove ✓ · CanGuildInvite ✓ · SendWho ✓ · NotifyInspect ✓ · IsPartyLeader ✓ · GetNumPartyMembers ✓
+--   （**没有** PromoteToLeader / SetGuildLeader / InspectUnit —— 别写进菜单）。
+-- ★名字 → unit 的解析（交易/查询都要 unit）：只扫**本机能看到**的单位；查不到就如实退回（不猜）。
+local function tbUnitOf(name)
+  if type(name) ~= "string" or name == "" then return nil end
+  local function same(u)
+    if type(UnitName) ~= "function" then return false end
+    local ok, un = pcall(UnitName, u)
+    if not ok or type(un) ~= "string" or un == "" then return false end
+    return string.lower(un) == string.lower(name)
+  end
+  local fixed = { "target", "mouseover", "targettarget", "player", "pet", "partypet1", "partypet2", "partypet3", "partypet4" }
+  for i = 1, table.getn(fixed) do if same(fixed[i]) then return fixed[i] end end
+  for i = 1, 4 do
+    local u = "party" .. i
+    if same(u) then return u end
+  end
+  local nRaid = 0
+  if type(GetNumRaidMembers) == "function" then
+    local ok, n = pcall(GetNumRaidMembers)
+    if ok and type(n) == "number" then nRaid = n end
+  end
+  for i = 1, nRaid do
+    local u = "raid" .. i
+    if same(u) then return u end
+  end
+  return nil
+end
+-- 分享方案：把**当前激活方案**密语给这个玩家（Share 模块同一份分片 + 同一限频队列）
+function EVAL_TB_NAME_SHARE(name)
+  if type(EVAL_SHARE_SEND_TO) ~= "function" then
+    say(L("TB_NAMEMENU_SHAREFAIL"))
+    return false
+  end
+  local prof = nil
+  -- 激活方案名（读配置真值；拿不到就如实显示 ?）
+  local c = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(c) == "table" and type(c.war) == "table" and type(c.war.profiles) == "table" then
+    local pi = c.war.activeProfile or 1
+    local p = c.war.profiles[pi]
+    if type(p) == "table" then prof = p.name end
+  end
+  local ok = EVAL_SHARE_SEND_TO(name)
+  if ok then
+    TB_NAME_MENU.share = (TB_NAME_MENU.share or 0) + 1
+    say(string.format(L("TB_NAMEMENU_SHAREOK"), tostring(prof or "?"), tostring(name)))
+  else
+    say(L("TB_NAMEMENU_SHAREFAIL"))
+  end
+  return ok
+end
+-- 交易：需要 unit（本机只能解析「看得到」的单位）——解析不到就如实说明，不硬来
+function EVAL_TB_NAME_TRADE(name)
+  if type(InitiateTrade) ~= "function" then
+    say(string.format(L("TB_NAMEMENU_TRADEFAIL"), "InitiateTrade"))
+    return false
+  end
+  local u = tbUnitOf(name)
+  if not u then
+    say(string.format(L("TB_NAMEMENU_TRADEFAIL"), L("TB_NAMEMENU_NOUNIT")))
+    return false
+  end
+  local ok = pcall(InitiateTrade, u)
+  if ok then
+    TB_NAME_MENU.trade = (TB_NAME_MENU.trade or 0) + 1
+    say(string.format(L("TB_NAMEMENU_TRADEOK"), tostring(name)))
+  else
+    say(string.format(L("TB_NAMEMENU_TRADEFAIL"), "InitiateTrade"))
+  end
+  return ok
+end
+-- 查询（玩家信息）：能解析到 unit → 观察（NotifyInspect）；否则退回 /who 查询（本客户端没有 InspectUnit）
+function EVAL_TB_NAME_QUERY(name)
+  local u = tbUnitOf(name)
+  if u and type(NotifyInspect) == "function" then
+    local ok = pcall(NotifyInspect, u)
+    if ok then
+      TB_NAME_MENU.query = (TB_NAME_MENU.query or 0) + 1
+      say(string.format(L("TB_NAMEMENU_QUERYOK"), tostring(name)))
+      return true
+    end
+  end
+  -- ★★★1.73.35 查询必须走**限频 who 队列**（源码检查 CHAT COLOR WIRING CHECK 当场抓到：直调 SendWho 是热路径，
+  --   会被服务器反滥用）——工具箱里本来就有 EVAL_TB_WHO_ENQUEUE（带队列 + 负缓存 + 在途去重），直接用它。
+  if type(EVAL_TB_WHO_ENQUEUE) == "function" then
+    local ok = pcall(EVAL_TB_WHO_ENQUEUE, tostring(name))
+    if ok then
+      TB_NAME_MENU.query = (TB_NAME_MENU.query or 0) + 1
+      say(string.format(L("TB_NAMEMENU_QUERYWHO"), tostring(name)))
+      return true
+    end
+  end
+  say(string.format(L("TB_NAMEMENU_QUERYFAIL"), tostring(name)))
+  return false
+end
+-- 踢出队伍：只有队长能踢（条目本身只在「在队伍里」时出现）
+function EVAL_TB_NAME_KICKP(name)
+  if type(UninviteByName) ~= "function" then
+    say(string.format(L("TB_NAMEMENU_KICKPFAIL"), "UninviteByName"))
+    return false
+  end
+  if type(IsPartyLeader) == "function" then
+    local okL, lead = pcall(IsPartyLeader)
+    if okL and lead == false then
+      say(string.format(L("TB_NAMEMENU_KICKPFAIL"), L("TB_NAMEMENU_NOLEAD")))
+      return false
+    end
+  end
+  local ok = pcall(UninviteByName, tostring(name))
+  if ok then
+    TB_NAME_MENU.kickp = (TB_NAME_MENU.kickp or 0) + 1
+    say(string.format(L("TB_NAMEMENU_KICKPOK"), tostring(name)))
+  else
+    say(string.format(L("TB_NAMEMENU_KICKPFAIL"), "UninviteByName"))
+  end
+  return ok
+end
+-- 踢出公会：需要会长/官员权限（条目本身只在 CanGuildRemove() 为真时出现）
+function EVAL_TB_NAME_KICKG(name)
+  if type(GuildUninviteByName) ~= "function" then
+    say(string.format(L("TB_NAMEMENU_KICKGFAIL"), "GuildUninviteByName"))
+    return false
+  end
+  local ok = pcall(GuildUninviteByName, tostring(name))
+  if ok then
+    TB_NAME_MENU.kickg = (TB_NAME_MENU.kickg or 0) + 1
+    say(string.format(L("TB_NAMEMENU_KICKGOK"), tostring(name)))
+  else
+    say(string.format(L("TB_NAMEMENU_KICKGFAIL"), "GuildUninviteByName"))
+  end
+  return ok
+end
+
 function EVAL_TB_SIR_HANDLE(link, button)
   if type(link) ~= "string" then return false end
   local name = string.match(link, "^player:(.+)$")

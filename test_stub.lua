@@ -330,6 +330,14 @@ end
 --   未设置 TEST.team 时（绝大多数既有用例）成员数为 0、teamRec 恒 nil → **老用例行为完全不变**。
 --   TEST.raid = 同上结构，但 unit 用 "raid1".."raidN"（团队范围，radN 已含玩家自己）。
 --   ★TEST.partyN 用于模拟**团队里**的返回值（文档：团队里它是「团人数 - 1」，不是 0）
+-- ★★★1.73.35 右键菜单新动作的桩：交易 / 观察 / 踢人 / 权限门（全部记账，判据才读得到）
+TEST.trades, TEST.inspects, TEST.uninvites, TEST.guildUninvites = {}, {}, {}, {}
+InitiateTrade = function(u) TEST.initiateTradeCalls = (TEST.initiateTradeCalls or 0) + 1 table.insert(TEST.trades, tostring(u)) end
+NotifyInspect = function(u) TEST.inspectCalls = (TEST.inspectCalls or 0) + 1 table.insert(TEST.inspects, tostring(u)) end
+UninviteByName = function(n) TEST.uninviteCalls = (TEST.uninviteCalls or 0) + 1 table.insert(TEST.uninvites, tostring(n)) end
+GuildUninviteByName = function(n) TEST.guildUninviteCalls = (TEST.guildUninviteCalls or 0) + 1 table.insert(TEST.guildUninvites, tostring(n)) end
+CanGuildRemove = function() return TEST.canGuildRemove and true or false end
+IsPartyLeader = function() return TEST.partyLeader and true or false end
 GetNumPartyMembers = function()
   if TEST.partyN then return TEST.partyN end
   return TEST.team and table.getn(TEST.team) or 0

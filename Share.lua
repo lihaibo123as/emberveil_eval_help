@@ -111,12 +111,12 @@ local shTxFrame
 -- ★前置声明（本项目铁律：引用点在声明之前会解析成全局 nil）——
 --   实现在 shNowT 之后，那里才拿得到计时函数。
 local shTxEnqueue, shTxStep
-function EVAL_SHARE_SEND(chanId)
-  if not shChanOf(chanId) then shSay(L("SH_CH_OFF")) return false end -- 1.71.3 团队频道已下线，白名单外一律拒收
-  if type(EVAL_PROFILE_TO_TEXT) ~= "function" then shSay(L("SH_NOEXPORT")) return false end
-  if type(RunScript) ~= "function" then shSay(L("SH_NORUNSCRIPT")) return false end
+-- ★1.73.35 分片构造**单一来源**（频道分享与「密语给某玩家」共用，避免两份实现漂移）
+local function shBodies()
+  if type(EVAL_PROFILE_TO_TEXT) ~= "function" then shSay(L("SH_NOEXPORT")) return nil end
+  if type(RunScript) ~= "function" then shSay(L("SH_NORUNSCRIPT")) return nil end
   local text = EVAL_PROFILE_TO_TEXT()
-  if not text or text == "" then shSay(L("SH_EMPTY")) return false end
+  if not text or text == "" then shSay(L("SH_EMPTY")) return nil end
   local hex = toHex(text)
   local n = math.ceil(string.len(hex) / SH_CHUNK)
   local idh = string.format("%02x", math.random(0, 255)) -- 本次传输 id（接收端按 发送者+id 归并分片）
@@ -124,10 +124,22 @@ function EVAL_SHARE_SEND(chanId)
   for i = 1, n do
     bodies[i] = "[EHPF#" .. idh .. " " .. i .. "/" .. n .. "]" .. string.sub(hex, (i - 1) * SH_CHUNK + 1, i * SH_CHUNK)
   end
-  -- ★1.72.3 分片必须**限频发送**（同帧连发会被反刷屏吞掉 → 对方永远收不齐）
-  return shTxEnqueue(bodies, chanId) -- 队列满时如实返回 false（并已 shSay 说明）
+  return bodies
 end
-
+-- ★1.73.35 右键菜单「分享方案」：把**当前激活方案**密语给这个玩家（同一份分片 + 同一限频队列，只多一个 target）
+function EVAL_SHARE_SEND_TO(name)
+  if type(name) ~= "string" or name == "" then return false end
+  local bodies = shBodies()
+  if not bodies then return false end
+  return shTxEnqueue(bodies, "WHISPER", name)
+end
+function EVAL_SHARE_SEND(chanId)
+  if not shChanOf(chanId) then shSay(L("SH_CH_OFF")) return false end -- 1.71.3 团队频道已下线，白名单外一律拒收
+  local bodies = shBodies()
+  if not bodies then return false end
+  -- ★1.72.3 分片必须**限频发送**（同帧连发会被反刷屏吞掉 → 对方永远收不齐）
+  return shTxEnqueue(bodies, chanId)
+end
 -- IO 窗 [分享] 按钮：频道下拉
 function EVAL_SHARE_SEND_UI(anchor)
   if type(EVAL_DD_OPEN) ~= "function" then EVAL_SHARE_SEND("GUILD") return end
@@ -194,7 +206,12 @@ function shTxStep()
   shTxLast = now
   local job = table.remove(shTxQ, 1)
   if type(RunScript) == "function" then
-    RunScript('SendChatMessage("' .. job.body .. '", "' .. job.chan .. '")')
+    -- ★1.73.35 密语分享：带 target 时补第 4 参（SendChatMessage(body, "WHISPER", nil, 目标)）
+    if job.target and job.target ~= "" then
+      RunScript('SendChatMessage("' .. job.body .. '", "' .. job.chan .. '", nil, "' .. job.target .. '")')
+    else
+      RunScript('SendChatMessage("' .. job.body .. '", "' .. job.chan .. '")')
+    end
   end
   if table.getn(shTxQ) == 0 and shTxFrame then pcall(shTxFrame.Hide, shTxFrame) end
 end
@@ -205,15 +222,19 @@ local function shEnsureTxTicker()
   end
   pcall(shTxFrame.Show, shTxFrame)
 end
-function shTxEnqueue(bodies, chanId)
+function shTxEnqueue(bodies, chanId, target)
   local n = table.getn(bodies)
   if table.getn(shTxQ) + n > SH_MAX_QUEUE then
     shSay(string.format(L("SH_Q_FULL"), SH_MAX_QUEUE))
     return false
   end
   -- 第 1 片立即发（手感与旧版一致），其余排队
-  RunScript('SendChatMessage("' .. bodies[1] .. '", "' .. chanId .. '")')
-  for i = 2, n do table.insert(shTxQ, { body = bodies[i], chan = chanId }) end
+  if target and target ~= "" then
+    RunScript('SendChatMessage("' .. bodies[1] .. '", "' .. chanId .. '", nil, "' .. target .. '")')
+  else
+    RunScript('SendChatMessage("' .. bodies[1] .. '", "' .. chanId .. '")')
+  end
+  for i = 2, n do table.insert(shTxQ, { body = bodies[i], chan = chanId, target = target }) end
   if n > 1 then
     shTxLast = shNowT()
     shEnsureTxTicker()

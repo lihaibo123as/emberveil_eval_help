@@ -7622,16 +7622,21 @@ do
   eq(string.find(chat1, "已加载成功", 1, true) ~= nil, true, "★★载入成功提示要打出来")
   eq(string.find(chat1, "EvalHelp %d+%.%d+%.%d+") ~= nil, true,
      "★★载入提示里要带版本号（形如 EvalHelp 1.72.1）")
+  -- ★★★1.73.35 用户第 3 条：载入信息（含四步引导）**已移到独立弹窗** → 判据跟着落点走（落到弹窗上）
   local LANG = EVAL_GET_LANG()
   local title = EVAL_LOCALES[LANG]["GUIDE_TITLE"]
   local step1 = EVAL_LOCALES[LANG]["GUIDE_S1"]
-  eq(string.find(chat1, title, 1, true) ~= nil, true,
-     "★★★首次加载必须打出四步引导（用户截图缺的就是它）: 找「" .. tostring(title) .. "」")
-  eq(string.find(chat1, step1, 1, true) ~= nil, true, "★★引导正文（① 开战斗UI）也要在")
-  -- ② 第二次加载（= /reload 语义）**仍然**要打 —— 旧实现就是死在这一条
+  local lp1 = EVAL_TEST_LOADPOP_STATE()
+  eq(lp1.built, true, "★★★首次加载要建出**载入信息弹窗**（不再往聊天打 7 行）")
+  eq(lp1.shown, true, "★★★首次加载弹窗要**显示**")
+  eq(string.find(tostring(lp1.body), title, 1, true) ~= nil, true,
+     "★★★四步引导在弹窗正文里（用户截图缺的就是它）: 找「" .. tostring(title) .. "」")
+  eq(string.find(tostring(lp1.body), step1, 1, true) ~= nil, true, "★★引导正文（① 开战斗UI）也要在")
+  -- ② 第二次加载（= /reload 语义）**仍然**要显示 —— 旧实现被 cfg.guideSeen 挡掉
   local chat2 = loadOnce105("second")
-  eq(string.find(chat2, title, 1, true) ~= nil, true,
-     "★★★第二次加载(/reload)**仍然**要打印引导 —— 旧实现被 cfg.guideSeen 挡掉，用户就是这样看不到的")
+  local lp2 = EVAL_TEST_LOADPOP_STATE()
+  eq(lp2.shown, true,
+     "★★★第二次加载(/reload)弹窗**仍然**显示 —— 旧实现被 cfg.guideSeen 挡掉，用户就是这样看不到的")
   -- ③ 手动重看这条路也得在
   TEST.chat = nil
   SlashCmdList["EVALHELP"]("guide")
@@ -9955,55 +9960,56 @@ do
   eq(EVAL_TB_NAME_TARGET("Ionol"), true, "⑤e★★「目标」选中了对方")
   eq(tostring(TEST.targetSel or ""), "name:Ionol", "⑤e★★★走的是 TargetByName(名字)")
   eq(EVAL_TB_NAMEMENU_STATE().target, 1, "⑤e★并记次数")
-  -- ⑥ 菜单条目：六条、顺序与用户列表一致、**没有**「官方菜单」、宽度 ≤4 字、半透明，
-  --    ★高度**自适应条目数**（读真实高度 vs 公式 EVAL_TB_MENU_HEIGHT(条数)）
+  -- ⑥ ★★★1.73.35 菜单版式（用户：「操作分两列、宽高自适应、弹窗锚点右上」）——
+  --   判据读**真实控件**：两列（x 只有两个取值）· 每条 ≤4 个汉字宽 · 宽高 == 纯函数按**条目数**算出来的 ·
+  --   锚点在**屏幕右上角** · 条目按权限/队伍条件出现 · 半透明底。
   EVAL_TEST_TB_NAMEMENU_RESET()
   TEST.sirCalls = {}
   SetItemRef("player:Ionol", "[Ionol]", "RightButton")
   local mg130 = EVAL_TB_MENU_GEOM()
   eq(type(mg130) == "table", true, "⑥★菜单已建好（读得到真实几何）")
-  eq(mg130.w <= 70, true, "⑥★★★宽度 ≤ 4 个汉字宽（" .. tostring(mg130.w) .. "px ≤ 70）")
-  eq(type(mg130.bg and mg130.bg.a) == "number" and mg130.bg.a < 0.8, true,
-     "⑥★★背景是**半透明**（alpha=" .. tostring(mg130.bg and mg130.bg.a) .. " < 0.8）")
   local nIt130 = table.getn(mg130.items or {})
-  eq(nIt130, 6, "⑥★★★菜单正好 6 条（悄悄话/邀请/目标/公会邀请/复制名字/关闭），实际 " .. tostring(nIt130))
-  eq(mg130.h, EVAL_TB_MENU_HEIGHT(nIt130), "⑥★★★高度**自适应条目数**：真实高 " ..
-     tostring(mg130.h) .. " == 公式(" .. tostring(nIt130) .. " 条)=" .. tostring(EVAL_TB_MENU_HEIGHT(nIt130)))
-  --  ★★判据写**字面**（用户点名的那几个词），**不读 EVAL_L**：本轮实测 M239（把语言包里
-  --     复制名字改回 /s 说出）**存活** —— 因为期望值也跟着语言包变 → 断言在「测自己」。
-  --     用户要的就是屏幕上那几个词，判据就钉字面。
-  local want130 = { "悄悄话", "邀请", "目标", "公会邀请", "复制名字", "关闭" }
+  eq(nIt130 >= 4, true, "⑥★条目 ≥4（实际 " .. tostring(nIt130) .. "）")
+  -- ★宽高**自适应**：读真实窗口 vs 纯函数（同一份公式）
+  eq(mg130.w, EVAL_TB_MENU_WIDTH(nIt130), "⑥★★★宽度 == 公式（" .. tostring(mg130.w) .. "，两列）")
+  eq(mg130.h, EVAL_TB_MENU_HEIGHT(nIt130), "⑥★★★高度 == 公式（" .. tostring(mg130.h) .. " 条数 " .. tostring(nIt130) .. "）")
+  eq(mg130.w ~= mg130.h, true, "⑥★不是正方形常数")
+  eq(EVAL_TB_MENU_WIDTH(11) == EVAL_TB_MENU_WIDTH(5), true, "⑥★两列：宽只跟「列」有关（条目数变了宽度不变）")
+  eq(EVAL_TB_MENU_HEIGHT(11) > EVAL_TB_MENU_HEIGHT(5), true, "⑥★行多了高度才变（自适应）")
+  -- ★两列：所有条目的 x 只应有两个取值，且第二列严格在第一列右侧
+  local xs130, bad130, colW130 = {}, "", 0
+  for i = 1, nIt130 do
+    local it = mg130.items[i]
+    if it and it.x then
+      xs130[it.x] = true
+      if (it.w or 0) > 66 then bad130 = bad130 .. i .. ":太宽(" .. tostring(it.w) .. ") " end
+      if (it.w or 0) > colW130 then colW130 = it.w or 0 end
+    end
+  end
+  local nx130 = 0
+  for _ in pairs(xs130) do nx130 = nx130 + 1 end
+  eq(nx130, 2, "⑥★★★恰好两列（x 取值数 = " .. tostring(nx130) .. "）")
+  eq(bad130, "", "⑥★★每条 ≤4 个汉字宽（≤66px）: " .. bad130)
+  -- ★锚点在**屏幕右上角**
+  eq(tostring(mg130.point or ""), "TOPRIGHT", "⑥★★★弹窗锚点 = 右上角（实际 " .. tostring(mg130.point) .. "）")
+  eq(tostring(mg130.relPoint or ""), "TOPRIGHT", "⑥★★锚到 UIParent 的右上角")
+  -- ★条目：核心几条必须在，且标签 ≤4 个汉字（12 字节）
+  local have130 = {}
   local badLbl130 = ""
   for i = 1, nIt130 do
     local lb = tostring((mg130.items[i] or {}).label or "")
-    if lb ~= tostring(want130[i]) then badLbl130 = badLbl130 .. i .. ":" .. lb .. "(应为" .. tostring(want130[i]) .. ") " end
-    if string.len(lb) > 12 then badLbl130 = badLbl130 .. i .. ":太长(" .. tostring(string.len(lb)) .. "字节) " end
+    have130[lb] = true
+    if string.len(lb) > 12 then badLbl130 = badLbl130 .. i .. ":" .. lb .. "(" .. tostring(string.len(lb)) .. "字节) " end
   end
-  eq(badLbl130, "", "⑥★★条目顺序/名称/字数全对: " .. badLbl130)
-  local hasOfficial130 = false
-  for i = 1, nIt130 do
-    if string.find(tostring(mg130.items[i].label or ""), "官方", 1, true) ~= nil then hasOfficial130 = true end
+  eq(badLbl130, "", "⑥★★每条标签 ≤4 个汉字（12 字节）: " .. badLbl130)
+  for _, need in ipairs({ EVAL_L("TB_NAMEMENU_PARTY"), EVAL_L("TB_NAMEMENU_TARGET"), EVAL_L("TB_NAMEMENU_SAY"), EVAL_L("TB_NAMEMENU_CLOSE") }) do
+    eq(have130[need] == true, true, "⑥★★必须有条目：" .. tostring(need))
   end
-  eq(hasOfficial130, false, "⑥★★★菜单里**没有**「官方菜单」条目（用户要求取消）")
-  --  ★★1.73.28 「高度自适应内部项目」的**真判据**：换一组条目 → 高度跟着换（写死高度当场响）
-  local h6 = mg130.h
-  EVAL_TEST_TB_MENU_DROP()
-  local savedOC130b = _G.ChatFrame_OpenChat
-  local savedCA130b = _G.ChatEdit_ActivateChat
-  _G.ChatFrame_OpenChat, _G.ChatEdit_ActivateChat = nil, nil
-  SetItemRef("player:Ionol", "[Ionol]", "RightButton")
-  local mg130b = EVAL_TB_MENU_GEOM()
-  eq(table.getn(mg130b.items or {}), nIt130 - 1, "⑥b★★★没有「打开聊天框」接口时**少一条**（不摆按了没用的项）：" ..
-     tostring(table.getn(mg130b.items or {})) .. " = " .. tostring(nIt130) .. "-1")
-  eq(mg130b.h, EVAL_TB_MENU_HEIGHT(table.getn(mg130b.items or {})), "⑥b★★★条目少了 → 高度**跟着变**：" ..
-     tostring(mg130b.h) .. "（原来 " .. tostring(h6) .. "）")
-  eq(mg130b.h < h6, true, "⑥b★★★而且确实变矮（自适应内部项目）")
-  _G.ChatFrame_OpenChat, _G.ChatEdit_ActivateChat = savedOC130b, savedCA130b
-  EVAL_TEST_TB_MENU_DROP()
-  SetItemRef("player:Ionol", "[Ionol]", "RightButton")
-  eq(EVAL_TB_MENU_HEIGHT(7) > EVAL_TB_MENU_HEIGHT(6), true, "⑥b★公式本身随条目数增长")
-  eq(EVAL_TB_MENU_HEIGHT(8) - EVAL_TB_MENU_HEIGHT(7) == EVAL_TB_MENU_HEIGHT(7) - EVAL_TB_MENU_HEIGHT(6), true,
-     "⑥b★每多一条的增量恒定（= 行高）")
+  eq(have130[EVAL_L("TB_NAMEMENU_SHARE")] == true, true, "⑥★★★新增条目「分享方案」在菜单里")
+  eq(have130[EVAL_L("TB_NAMEMENU_TRADE")] == true, true, "⑥★★★新增条目「交易」在菜单里")
+  eq(have130[EVAL_L("TB_NAMEMENU_QUERY")] == true, true, "⑥★★★新增条目「查询」在菜单里")
+  eq(type(mg130.bg and mg130.bg.a) == "number" and mg130.bg.a < 0.8, true,
+     "⑥★★背景仍是半透明（alpha=" .. tostring(mg130.bg and mg130.bg.a) .. "）")
   -- ⑦ 接口探针（1.73.28 改）：报这个菜单真正要用的 API
   TEST.chat = ""
   eq(EVAL_TB_MENU_API_PROBE(), true, "⑦★菜单接口探针能跑")
@@ -10238,5 +10244,95 @@ do
      tostring(s137.ind.y) .. " < 末行 y " .. tostring(s137.delLast and s137.delLast.y) .. "）—— 原来锚在 y=-46 正压第一行")
   tb137.buy = savedBuy137
   print("  自动购买滚动条：滚轮(单一来源+夹取+边界隐藏) · ▲▼ 进右侧专用槽不压删除列 · 页码指示移到底栏")
+end
+
+-- 138) ★★★1.73.35 右键菜单扩展（用户第 2 条）：新动作 + **权限/队伍门** + 载入信息弹窗（用户第 3 条）
+do
+  -- ① 权限/队伍门：条目**出现与否**由权限与队伍决定（不是点了才说没权限）
+  local savedCR138, savedPL138, savedPN138 = TEST.canGuildRemove, TEST.partyLeader, TEST.partyN
+  local function menuLabels138()
+    EVAL_TEST_TB_MENU_DROP()
+    SetItemRef("player:Ionol", "[Ionol]", "RightButton")
+    local g = EVAL_TB_MENU_GEOM()
+    local out = {}
+    for i = 1, table.getn(g.items or {}) do out[tostring(g.items[i].label)] = true end
+    return out
+  end
+  TEST.canGuildRemove, TEST.partyLeader, TEST.partyN = false, false, 0
+  local lb1 = menuLabels138()
+  eq(lb1[EVAL_L("TB_NAMEMENU_KICKG")] == true, false, "①★★★没权限 → **不出现**「踢出公会」")
+  eq(lb1[EVAL_L("TB_NAMEMENU_KICKP")] == true, false, "①★★★不在队伍 → **不出现**「踢出队伍」")
+  TEST.canGuildRemove, TEST.partyN = true, 3
+  local lb2 = menuLabels138()
+  eq(lb2[EVAL_L("TB_NAMEMENU_KICKG")] == true, true, "①★★★有权限 → 出现「踢出公会」")
+  eq(lb2[EVAL_L("TB_NAMEMENU_KICKP")] == true, true, "①★★★在队伍里 → 出现「踢出队伍」")
+  eq(lb2[EVAL_L("TB_NAMEMENU_SHARE")] == true, true, "①★★「分享方案」常在")
+  eq(lb2[EVAL_L("TB_NAMEMENU_TRADE")] == true, true, "①★★「交易」常在")
+  eq(lb2[EVAL_L("TB_NAMEMENU_QUERY")] == true, true, "①★★「查询」常在")
+  -- ② 分享方案：把**当前激活方案**密语给对方（走 Share 的 EVAL_SHARE_SEND_TO）
+  local savedShare138 = EVAL_SHARE_SEND_TO
+  local shared138 = nil
+  EVAL_SHARE_SEND_TO = function(n) shared138 = tostring(n) return true end
+  TEST.chat = ""
+  eq(EVAL_TB_NAME_SHARE("Ionol"), true, "②★★★「分享方案」真的发起了分享")
+  eq(shared138, "Ionol", "②★★★分享对象是菜单里那个人")
+  eq(string.find(tostring(TEST.chat), "分享", 1, true) ~= nil, true, "②★★如实播报")
+  EVAL_SHARE_SEND_TO = savedShare138
+  -- ③ 交易：解析到 unit 才发（本机只能解析「看得到」的单位）
+  TEST.team = { { unit = "party1", name = "Ionol", hp = 1, hpMax = 1, mana = 0, manaMax = 1 } }
+  TEST.trades = {}
+  eq(EVAL_TB_NAME_TRADE("Ionol"), true, "③★★★「交易」发起成功（解析到 unit）")
+  eq(tostring(TEST.trades[1] or ""), "party1", "③★★★用的是解析出来的 unit（party1），不是名字")
+  TEST.team = nil
+  TEST.chat = ""
+  eq(EVAL_TB_NAME_TRADE("陌生人"), false, "③★★解析不到 unit → 如实失败")
+  eq(string.find(tostring(TEST.chat), "拿不到单位", 1, true) ~= nil, true, "③★★并说明原因（不猜、不硬来）")
+  -- ④ 查询：能解析 → 观察；不能 → **限频 who 队列**（★不许直调 SendWho）
+  TEST.team = { { unit = "party1", name = "Ionol", hp = 1, hpMax = 1, mana = 0, manaMax = 1 } }
+  TEST.inspects = {}
+  eq(EVAL_TB_NAME_QUERY("Ionol"), true, "④★★★「查询」→ 观察（NotifyInspect）")
+  eq(tostring(TEST.inspects[1] or ""), "party1", "④★★走的是解析出的 unit")
+  TEST.team = nil
+  local savedWho138 = EVAL_TB_WHO_ENQUEUE
+  local whoQ138 = nil
+  EVAL_TB_WHO_ENQUEUE = function(n) whoQ138 = tostring(n) return true end
+  TEST.sirSendWho138 = TEST.sirSendWho138
+  local whoBefore138 = TEST.whoCalls
+  eq(EVAL_TB_NAME_QUERY("陌生人"), true, "④★★★解析不到 → 走查询（who）")
+  eq(whoQ138, "陌生人", "④★★★入的是**限频 who 队列**（EVAL_TB_WHO_ENQUEUE）")
+  eq(TEST.whoCalls, whoBefore138, "④★★★没有直调 SendWho（热路径会被服务器反滥用）")
+  EVAL_TB_WHO_ENQUEUE = savedWho138
+  -- ⑤ 踢人：非队长不踢（如实说明）；队长才发
+  TEST.partyLeader = false
+  TEST.uninvites = {}
+  TEST.chat = ""
+  eq(EVAL_TB_NAME_KICKP("Ionol"), false, "⑤★★非队长 → 不踢")
+  eq(table.getn(TEST.uninvites), 0, "⑤★★一次都没调接口")
+  eq(string.find(tostring(TEST.chat), "只有队长", 1, true) ~= nil, true, "⑤★★并如实说明原因")
+  TEST.partyLeader = true
+  eq(EVAL_TB_NAME_KICKP("Ionol"), true, "⑤★★★队长 → 踢出队伍")
+  eq(tostring(TEST.uninvites[1] or ""), "Ionol", "⑤★★名字对")
+  TEST.guildUninvites = {}
+  eq(EVAL_TB_NAME_KICKG("Ionol"), true, "⑤★★★「踢出公会」调 GuildUninviteByName")
+  eq(tostring(TEST.guildUninvites[1] or ""), "Ionol", "⑤★★名字对")
+  -- ⑥ 载入信息弹窗：两个按钮 + seen 开关（知道了=下次不弹 / 关闭=每次都弹）
+  local savedSeen138 = EVAL_HELP_CONFIG.loadMsgSeen
+  EVAL_HELP_CONFIG.loadMsgSeen = false
+  eq(EVAL_LOADPOP_SHOW(), true, "⑥★★★开关关着 → 载入时弹窗显示")
+  local lp138 = EVAL_TEST_LOADPOP_STATE()
+  eq(lp138.built, true, "⑥★弹窗建好了")
+  eq(lp138.hasThanks and lp138.hasClose, true, "⑥★★两个按钮都在（知道了 / 关闭）")
+  eq(lp138.tip ~= "", true, "⑥★有说明行（知道了=下次不弹；关闭=每次都弹）")
+  eq(EVAL_TEST_LOADPOP_CLICK("thanks"), true, "⑥★★★点「知道了」（走真实 OnClick）")
+  eq(EVAL_HELP_CONFIG.loadMsgSeen, true, "⑥★★★知道了 → 记下「下次不展示」")
+  eq(EVAL_LOADPOP_SHOW(), false, "⑥★★★下次载入**不再弹**（开关生效）")
+  EVAL_LOADPOP_HIDE()
+  eq(EVAL_TEST_LOADPOP_CLICK("close"), true, "⑥★★点「关闭」")
+  eq(EVAL_HELP_CONFIG.loadMsgSeen, false, "⑥★★★关闭 → 恢复「每次载入都展示」")
+  EVAL_HELP_CONFIG.loadMsgSeen = savedSeen138
+  EVAL_TEST_LOADPOP_CLICK("close")
+  TEST.canGuildRemove, TEST.partyLeader, TEST.partyN = savedCR138, savedPL138, savedPN138
+  EVAL_TEST_TB_MENU_DROP()
+  print("  右键菜单扩展：权限/队伍门(不满足就不出现) · 分享方案(激活方案·密语) · 交易/查询(名字→unit) · 踢人(队长/权限) · 载入弹窗(知道了/关闭)")
 end
 print("ALL TESTS PASS")

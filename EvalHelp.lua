@@ -7854,6 +7854,137 @@ function EVAL_HELP_GUIDE(force)
   return true
 end
 
+-- ★★★1.73.35 用户第 3 条：**插件载入信息移到独立弹窗**（原来往聊天框打 7 行）——
+--   两个操作： [知道了] = 下次载入不再弹（**tooltip 说明**，写进 cfg.loadMsgSeen）；
+--              [关闭]   = 每次载入都弹（cfg.loadMsgSeen = false）。
+--   ★「初始打开与帮助窗同一个控制」：两者都读同一个 cfg.loadMsgSeen —— 弹窗上点「知道了」，
+--     帮助/引导也不再自动弹；配置窗里改回 true 即恢复（单一来源，不搞两份开关）。
+local loadUI = {}
+-- 读值口（断言与 UI 同源）
+function EVAL_TEST_LOADPOP_STATE()
+  local shown = false
+  if loadUI.root and type(loadUI.root.IsShown) == "function" then
+    local ok, v = pcall(loadUI.root.IsShown, loadUI.root)
+    shown = (ok and v) and true or false
+  end
+  return { built = (loadUI.root ~= nil), shown = shown,
+           seen = (type(cfg) == "table" and cfg.loadMsgSeen) and true or false,
+           hasThanks = (loadUI.thanks ~= nil), hasClose = (loadUI.closeBtn ~= nil),
+           lines = loadUI.lineCount or 0, tip = loadUI.tipText or "",
+           body = loadUI.bodyText or "" }
+end
+local function loadPopBuild()
+  if loadUI.root then return end
+  local W, H = 460, 210
+  local root = CreateFrame("Frame", "EVAL_HELP_LOADPOP", UIParent)
+  root:SetWidth(W) root:SetHeight(H)
+  root:SetPoint("CENTER", UIParent, "CENTER", 0, 60)
+  pcall(root.SetFrameStrata, root, "DIALOG")
+  pcall(root.SetFrameLevel, root, 230) -- 高于输入弹窗(220)，低于全局下拉(250)
+  pcall(root.SetMovable, root, true)
+  pcall(root.EnableMouse, root, true)
+  local bg = root:CreateTexture(nil, "BACKGROUND")
+  uiSolid(bg, 0.06, 0.05, 0.04, 0.97)
+  bg:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
+  bg:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", 0, 0)
+  -- 拖动柄（规程：必须是 Button + 全套注册；窗口自身可拖）
+  local bar = CreateFrame("Button", nil, root)
+  bar:SetWidth(W - 4) bar:SetHeight(22)
+  bar:SetPoint("TOP", root, "TOP", 0, -2)
+  pcall(bar.SetFrameLevel, bar, 231)
+  pcall(bar.EnableMouse, bar, true)
+  pcall(bar.RegisterForClicks, bar, "LeftButtonUp")
+  pcall(bar.RegisterForDrag, bar, "LeftButton")
+  bar:SetScript("OnDragStart", function()
+    pcall(root.SetMovable, root, true)
+    pcall(root.StartMoving, root)
+    pcall(root.StopMovingOrSizing, root)
+    pcall(root.StartMoving, root)
+  end)
+  bar:SetScript("OnDragStop", function() pcall(root.StopMovingOrSizing, root) end)
+  local t = uiText(bar, 11, 0.95, 0.82, 0.35)
+  t:SetPoint("CENTER", bar, "CENTER", 0, 0)
+  t:SetText(string.format(L("LOAD_OK"), VERSION))
+  local body = uiText(root, 10, 0.88, 0.86, 0.80)
+  body:SetPoint("TOPLEFT", root, "TOPLEFT", 14, -34)
+  pcall(body.SetWidth, body, W - 28)
+  pcall(body.SetJustifyH, body, "LEFT")
+  local lines = { L("LOAD_HINT"), L("GUIDE_TITLE"), L("GUIDE_S1"), L("GUIDE_S2"), L("GUIDE_S3"), L("GUIDE_S4") }
+  body:SetText(table.concat(lines, "\n"))
+  loadUI.lineCount = table.getn(lines)
+  loadUI.bodyText = table.concat(lines, "\n") -- ★读值口：断言要能读弹窗正文（引导已从聊天移到这里）
+  local tip = uiText(root, 9, 0.62, 0.60, 0.52)
+  tip:SetPoint("BOTTOMLEFT", root, "BOTTOMLEFT", 14, 44)
+  pcall(tip.SetWidth, tip, W - 28)
+  pcall(tip.SetJustifyH, tip, "LEFT")
+  tip:SetText(L("LOADPOP_TIP"))
+  loadUI.tipText = L("LOADPOP_TIP")
+  -- 按钮（本文件没有通用按钮件 → 就地建一个；与 EVAL_TN 的 bBtn 同款）
+  local function mkBtn(x, w2, label, fn)
+    local b = CreateFrame("Button", nil, root)
+    b:SetWidth(w2) b:SetHeight(22)
+    b:SetPoint("BOTTOMLEFT", root, "BOTTOMLEFT", x, 12)
+    pcall(b.EnableMouse, b, true)
+    pcall(b.RegisterForClicks, b, "LeftButtonUp")
+    local bb = b:CreateTexture(nil, "BACKGROUND")
+    uiSolid(bb, 0.22, 0.18, 0.10, 1)
+    bb:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+    bb:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+    local bt = uiText(b, 10, 0.95, 0.82, 0.35)
+    bt:SetPoint("CENTER", b, "CENTER", 0, 0)
+    bt:SetText(label)
+    b:SetScript("OnClick", fn)
+    return b
+  end
+  -- [知道了] = 下次不再弹（悬停 tooltip 说明）
+  local thanks = mkBtn(W - 220, 100, L("LOADPOP_THANKS"), function()
+    if type(cfg) == "table" then cfg.loadMsgSeen = true end
+    pcall(root.Hide, root)
+    say(L("LOADPOP_THANKS_TIP"))
+  end)
+  -- [关闭] = 每次载入都显示
+  local closeB = mkBtn(W - 112, 100, L("LOADPOP_CLOSE"), function()
+    if type(cfg) == "table" then cfg.loadMsgSeen = false end
+    pcall(root.Hide, root)
+  end)
+  loadUI.thanks, loadUI.closeBtn = thanks, closeB
+  -- 悬停 tooltip（用户要求「知道了」要有 tooltip 提醒）
+  local function hover(btn, text)
+    if not btn or type(btn.SetScript) ~= "function" then return end
+    pcall(btn.SetScript, btn, "OnEnter", function()
+      if type(GameTooltip) ~= "table" and type(GameTooltip) ~= "userdata" then return end
+      pcall(GameTooltip.SetOwner, GameTooltip, btn, "ANCHOR_RIGHT")
+      pcall(GameTooltip.ClearLines, GameTooltip)
+      pcall(GameTooltip.AddLine, GameTooltip, text)
+      pcall(GameTooltip.Show, GameTooltip)
+    end)
+    pcall(btn.SetScript, btn, "OnLeave", function() pcall(GameTooltip.Hide, GameTooltip) end)
+  end
+  hover(thanks, L("LOADPOP_THANKS_HOVER"))
+  hover(closeB, L("LOADPOP_CLOSE_HOVER"))
+  pcall(root.Hide, root)
+  loadUI.root = root
+end
+-- 载入时调用：cfg.loadMsgSeen 为真就不再弹（force = 手动重看，无视开关）
+function EVAL_LOADPOP_SHOW(force)
+  if not force and type(cfg) == "table" and cfg.loadMsgSeen then return false end
+  loadPopBuild()
+  pcall(loadUI.root.Show, loadUI.root)
+  return true
+end
+function EVAL_LOADPOP_HIDE()
+  if loadUI.root then pcall(loadUI.root.Hide, loadUI.root) end
+end
+-- 测试：走**真实 OnClick**（不是只调钩子）
+function EVAL_TEST_LOADPOP_CLICK(which)
+  loadPopBuild()
+  local b = (which == "close") and loadUI.closeBtn or loadUI.thanks
+  if not b then return false end
+  local ok, fn = pcall(b.GetScript, b, "OnClick")
+  if ok and type(fn) == "function" then pcall(fn) return true end
+  return false
+end
+
 -- ============ 初始化（SavedVariables 要等 VARIABLES_LOADED 才恢复） ============
 
 local init = CreateFrame("Frame", "EVAL_HELPInitFrame", UIParent)
@@ -7972,7 +8103,13 @@ init:SetScript("OnEvent", function(a, b)
     --   原来用 cfg.guideSeen 只出一次，新人不一定第一局就盯着聊天框，错过就**再也看不到**了。
     --   ★废弃键：cfg.guideSeen 不再读写（存量存档里残留的 true 无害，不再影响行为）。
     say(string.format(L("LOAD_OK"), VERSION))
-    say(L("LOAD_HINT"))
-    EVAL_HELP_GUIDE(false)
+    -- ★★★1.73.35 用户第 3 条：载入信息**移到独立弹窗**（原来往聊天打 7 行）——
+    --   聊天只留一行「已加载」，指引/提示全在弹窗里；弹窗的 [知道了]/[关闭] 决定下次还弹不弹。
+    if type(EVAL_LOADPOP_SHOW) == "function" then
+      EVAL_LOADPOP_SHOW()
+    else
+      say(L("LOAD_HINT"))
+      EVAL_HELP_GUIDE(false)
+    end
   end
 end)
