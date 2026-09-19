@@ -12794,6 +12794,61 @@ do
   print("  配置窗 Tab 可见性：停在别的 Tab 刷新数据不会把一键宏技能列表叠出来（关闭重开也停在原 Tab）")
 end
 
+-- 166) ★★★1.73.57 战斗信息UI 标题栏：**玩家头衔**（用户：「显示玩家的头衔」）
+--   头衔由 Share.lua 的抽卡系统决定（彩蛋自定义优先、抽卡头衔兜底、**没入档就如实 nil**）—— UI 侧只读，
+--   不在这里另判一次档位/卡池。★位置：玩家名 → 档位徽标 → 头衔（依次锚在**前一个控件的右边缘**）；
+--   颜色 = 头衔自己的色码（抽到的头衔 = 该档头衔色；彩蛋自定义 = 专属名号色），走唯一的解析口 EVAL_COLOR_RGB。
+do
+  local savedTitle166 = EVAL_HELP_CONFIG.title
+  local savedWar166 = EVAL_HELP_CONFIG.war
+  local near166 = function(a, b) return type(a) == "number" and type(b) == "number" and math.abs(a - b) < 1e-6 end
+  -- 造一个能入档的方案库（3 个技能 + 3 个条件 = 6 分 → 稀有 → 2 档），再让它抽卡
+  EVAL_HELP_CONFIG.war = { activeProfile = 1, profiles = {
+    EVAL_PROFILE_FROM_TEXT("# 方案: 头衔166\n- 甲 | 可攻击\n- 乙 | 可攻击\n- 丙 | 可攻击") } }
+  EVAL_HELP_CONFIG.title = { tier = 0, draws = {} }
+  eq(EVAL_TITLE_REFRESH() >= 1, true, "前置：方案库让玩家入档（实际 " .. tostring(EVAL_TITLE_REFRESH()) .. " 档）")
+  EVAL_HELP_UI_BUILD()
+  if not EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end -- tick 在窗口隐藏时直接 return（前置显式建立）
+  local cur166 = EVAL_TITLE_CURRENT()
+  eq(type(cur166) == "table" and type(cur166.name) == "string", true, "前置：抽卡系统给出当前头衔")
+  local v166 = EVAL_TEST_UI_TITLEBAR()
+  eq(v166.ptitle, cur166.name,
+     "①★★★标题栏显示**玩家头衔**（期望「" .. tostring(cur166.name) .. "」，实际「" .. tostring(v166.ptitle) .. "」）")
+  local rgb166 = EVAL_COLOR_RGB(cur166.color)
+  eq(rgb166 ~= nil and v166.ptitleColor ~= nil and near166(v166.ptitleColor[1], rgb166.r)
+     and near166(v166.ptitleColor[2], rgb166.g) and near166(v166.ptitleColor[3], rgb166.b), true,
+     "①★★文字色 = 头衔自己的色码（经唯一的解析口 EVAL_COLOR_RGB；读真控件 GetTextColor）")
+  -- ② 位置：锚在**档位徽标**的右边缘（顺序 名字 → 档位 → 头衔）
+  eq(v166.ptitlePoint, "LEFT", "②★头衔锚 LEFT（实际 " .. tostring(v166.ptitlePoint) .. "）")
+  eq(v166.tierText ~= nil and v166.ptitleRelTo == v166.tierText, true,
+     "②★★★头衔锚在**档位徽标**的右边缘（两者都在玩家名右边、依次排开）")
+  eq(v166.ptitleRelPoint, "RIGHT", "②★★锚的是徽标的右边缘（实际 " .. tostring(v166.ptitleRelPoint) .. "）")
+  eq(type(v166.ptitleX) == "number" and v166.ptitleX > 0, true, "②★与徽标之间留了间隙（实际 " .. tostring(v166.ptitleX) .. "）")
+  -- ③ 彩蛋自定义头衔：下一个心跳就换过来，而且用**专属名号色**
+  eq(EVAL_TITLE_SET_CUSTOM("头衔测试甲"), true, "前置：写下彩蛋自定义头衔")
+  EVAL_HELP_UI_TICK()
+  local v3166 = EVAL_TEST_UI_TITLEBAR()
+  eq(v3166.ptitle, "头衔测试甲", "③★★★彩蛋自定义头衔**压过抽到的卡**（下一个心跳就换过来）")
+  local cro166 = EVAL_COLOR_RGB(EVAL_TITLE_CUSTOM_COLOR())
+  eq(cro166 ~= nil and v3166.ptitleColor ~= nil and near166(v3166.ptitleColor[3], cro166.b), true,
+     "③★★自定义名号用**专属名号色**（与抽卡头衔色不是同一个来源）")
+  EVAL_TITLE_CLEAR_CUSTOM()
+  -- ④ 没有头衔（没入档 + 没自定义）→ 如实清空 + 中性灰（不硬编一个头衔、也不沿用上一个颜色）
+  EVAL_HELP_CONFIG.war = { activeProfile = 1, profiles = {} }
+  EVAL_HELP_CONFIG.title = { tier = 0, draws = {} }
+  eq(EVAL_TITLE_CURRENT(), nil, "前置：没入档也没自定义 → 抽卡系统如实给 nil")
+  EVAL_HELP_UI_TICK()
+  local v4166 = EVAL_TEST_UI_TITLEBAR()
+  eq(v4166.ptitle, "", "④★★★没有头衔 → 标题栏**如实清空**（不硬编一个头衔）")
+  eq(v4166.ptitleColor ~= nil and near166(v4166.ptitleColor[1], 0.72) and near166(v4166.ptitleColor[3], 0.62), true,
+     "④★★颜色收回中性灰（不沿用上一个头衔色 —— 那会画出一个假头衔）")
+  -- ⑤ 收尾：恢复存档状态，界面跟着回来（不是一次性坏掉）
+  EVAL_HELP_CONFIG.war = savedWar166
+  EVAL_HELP_CONFIG.title = savedTitle166
+  EVAL_HELP_UI_TICK()
+  print("  标题栏玩家头衔：名字→档位徽标→头衔 依次锚右缘 · 彩蛋自定义优先 · 没有就如实清空（中性灰）")
+end
+
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")

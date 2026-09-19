@@ -1812,16 +1812,24 @@ function EVAL_SHARE_SEAL_ICON_COUNT() return table.getn(SH_SEAL_ICONS) end
 --   与聊天行/弹窗用的是**同一张**色表（SH_SEAL_TIERS[].color）→ 三处永不漂移。
 --   ★解析 8 位色码（`|c` + AARRGGBB）：从第 5 字节起取 R/G/B（**不切 alpha**——本项目 COLOR CODE LEN CHECK 守着
 --     「不许把 8 位切出 6 位」那条真事故）；解析不出来就如实给 nil（调用方退回原来的暗黄底色）。
-function EVAL_SHARE_SEAL_TIER_RGB(tierIdx)
-  local i = tonumber(tierIdx) or 1
-  local t = SH_SEAL_TIERS[i] or SH_SEAL_TIERS[1]
-  local code = t and t.color
+-- ★★★1.73.57 **色码 → RGB 的唯一解析口**：8 位 |cAARRGGBB → { r, g, b, hex }；
+--   解析不出来**如实返回 nil**（调用方各自退回中性色，**绝不猜一个颜色**）。
+--   ★只认**恰好 10 字节**（|c + 8 位 hex）—— 本项目 COLOR CODE LEN CHECK 守着「不许把 8 位切出 6 位」那条真事故；
+--     ★不切 alpha（第 3~4 字节是 AA，R/G/B 从第 5 字节起）。
+--   ★为什么抽成一个口：品阶色（方案列表 / 案例模版 / 标题栏徽标 / 分享封皮）与**头衔色**要的是同一件事 ——
+--     原来只有 EVAL_SHARE_SEAL_TIER_RGB 一份实现；再加一份就是「同一规则两处实现」（本项目的老账）。
+function EVAL_COLOR_RGB(code)
   if type(code) ~= "string" or string.len(code) ~= 10 or string.sub(code, 1, 2) ~= "|c" then return nil end
   local r = tonumber(string.sub(code, 5, 6), 16)
   local g = tonumber(string.sub(code, 7, 8), 16)
   local b = tonumber(string.sub(code, 9, 10), 16)
   if not r or not g or not b then return nil end
   return { r = r / 255, g = g / 255, b = b / 255, hex = code }
+end
+function EVAL_SHARE_SEAL_TIER_RGB(tierIdx)
+  local i = tonumber(tierIdx) or 1
+  local t = SH_SEAL_TIERS[i] or SH_SEAL_TIERS[1]
+  return EVAL_COLOR_RGB(t and t.color)
 end
 -- 探针：4 种写法各一条（密语自己），④ 是纯符号对照（永远能渲染，作为保底参照）
 function EVAL_SHARE_ICON_PROBE(chanId)

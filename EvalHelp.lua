@@ -199,27 +199,63 @@ local function uiProfileTierText()
   return { tier = ti, score = sc, text = "[" .. sym .. tostring(tier.name or "") .. "]", rgb = rgb }
 end
 
--- 档位徽标的刷新口（BUILD 里一次 + tick 里每次；**文案没变就不碰控件**，不每帧写 SetText）。
---   ★位置 = 锚在**标题文字的右边缘**（标题是只锚了 LEFT 的 FontString，宽度随文字自适应）⇒ 徽标天然跟在
---     玩家名后面；右侧两个开关在更右边，三者不会互相压。**不需要任何手工量宽**（本项目手工量宽是给
---     「按名字排布的一排按钮」用的，这里没有那个问题）。
---   ★颜色也从品阶表来：算不出档位 → 中性灰 + 空文案（**不是**沿用上一档的颜色 —— 那会画出一个假的档位）。
-local function uiTitleTierRefresh()
-  local fs = ui.tierText
-  if not fs then return false end
-  local info = uiProfileTierText()
-  local txt = (info and info.text) or ""
-  local okc, cur = pcall(fs.GetText, fs)
-  if not (okc and tostring(cur or "") == txt) then pcall(fs.SetText, fs, txt) end
-  ui.tierShown = txt
-  if info and info.rgb then
-    pcall(fs.SetTextColor, fs, info.rgb.r, info.rgb.g, info.rgb.b)
-    ui.tierScore, ui.tierIdx = info.score, info.tier
-    return true
+-- ★★★1.73.57 标题栏的**玩家头衔**（用户：「显示玩家的头衔」）。
+--   · 单一来源 = EVAL_TITLE_CURRENT()（彩蛋自定义**优先度最高**、抽卡头衔兜底、**没入档就如实 nil**）——
+--     这里不再判一次档位/卡池（那是 Share.lua 的规矩）。
+--   · 颜色也用它给的那个色码（抽到的头衔 = 该档头衔色；彩蛋自定义 = 专属名号色），经 EVAL_COLOR_RGB 解析；
+--     解析不出来 → 中性色显示原文（**不猜颜色**、也不因为解析失败就不显示头衔）。
+local function uiPlayerTitle()
+  if type(EVAL_TITLE_CURRENT) ~= "function" then return nil end
+  local okT, cur = pcall(EVAL_TITLE_CURRENT)
+  if not okT or type(cur) ~= "table" then return nil end
+  local nm = cur.name
+  if type(nm) ~= "string" or nm == "" then return nil end
+  local rgb = nil
+  if type(EVAL_COLOR_RGB) == "function" then
+    local okR, r2 = pcall(EVAL_COLOR_RGB, cur.color)
+    if okR and type(r2) == "table" then rgb = r2 end
   end
-  pcall(fs.SetTextColor, fs, 0.72, 0.70, 0.62)
-  ui.tierScore, ui.tierIdx = nil, nil
-  return false
+  return { name = nm, rgb = rgb, custom = cur.custom and true or false }
+end
+
+-- ★★★1.73.57 标题栏**两个文字徽标**的刷新口（档位 + 头衔；BUILD 里一次 + tick 里每次）。
+--   ★文案没变就不碰控件（不每帧写 SetText）。位置：两者都锚在**前一个控件的右边缘**上 ——
+--     玩家名 → 档位徽标（锚名字右缘）→ 头衔（锚徽标右缘）；右侧两个开关在更右边，互不遮挡。
+--     这样**不需要任何手工量宽**（本项目手工量宽是给「按名字排布的一排按钮」用的，这里没有那个问题）。
+--   ★两处都遵守同一条诚实规矩：**算不出来就如实清空 + 收回中性灰**（既不硬编一个档位/头衔，
+--     也不沿用上一个颜色 —— 那会画出一个假档位/假头衔）。
+local function uiTitleBadgeRefresh()
+  local fs = ui.tierText
+  if fs then
+    local info = uiProfileTierText()
+    local txt = (info and info.text) or ""
+    local okc, cur = pcall(fs.GetText, fs)
+    if not (okc and tostring(cur or "") == txt) then pcall(fs.SetText, fs, txt) end
+    ui.tierShown = txt
+    if info and info.rgb then
+      pcall(fs.SetTextColor, fs, info.rgb.r, info.rgb.g, info.rgb.b)
+      ui.tierScore, ui.tierIdx = info.score, info.tier
+    else
+      pcall(fs.SetTextColor, fs, 0.72, 0.70, 0.62)
+      ui.tierScore, ui.tierIdx = nil, nil
+    end
+  end
+  -- 头衔（在徽标右边；没入档 / 没抽到 → 如实清空）
+  local tfs = ui.titleText
+  if tfs then
+    local ti = uiPlayerTitle()
+    local ttxt = (ti and ti.name) or ""
+    local okt, cur2 = pcall(tfs.GetText, tfs)
+    if not (okt and tostring(cur2 or "") == ttxt) then pcall(tfs.SetText, tfs, ttxt) end
+    ui.titleShown = ttxt
+    ui.titleCustom = (ti and ti.custom) or false
+    if ti and ti.rgb then
+      pcall(tfs.SetTextColor, tfs, ti.rgb.r, ti.rgb.g, ti.rgb.b)
+    else
+      pcall(tfs.SetTextColor, tfs, 0.72, 0.70, 0.62)
+    end
+  end
+  return true
 end
 
 -- ★★★1.73.54 **标题栏右侧的快捷开关**（用户：「将上面两个开关（战斗区/方案区）在标题栏右侧对应添加两个开关，
@@ -301,6 +337,7 @@ function EVAL_HELP_UI_BUILD()
   ui.profBtns, ui.profCells = nil, nil
   ui.profRows, ui.profNeed, ui.profAvail, ui.profPad, ui.profCap, ui.profSig = nil, nil, nil, nil, nil, nil
   ui.tierText, ui.tierShown, ui.tierScore, ui.tierIdx = nil, nil, nil, nil -- ★1.73.55 标题栏档位徽标（同上：不清会写成幽灵控件）
+  ui.titleText, ui.titleShown, ui.titleCustom = nil, nil, nil -- ★1.73.57 标题栏玩家头衔（同上）
 
   local root = CreateFrame("Frame", "EVAL_HELP_UI", UIParent)
   pcall(root.SetFrameStrata, root, "MEDIUM")
@@ -343,17 +380,23 @@ function EVAL_HELP_UI_BUILD()
   -- ★1.71.12 用户要求：「战斗信息 标题换成 用户名字」；★1.73.53 起与状态信息UI 共用同一个取名函数
   title:SetText(uiTitleName("G_UI_TITLE"))
   -- ★★★1.73.55 标题栏中段的**方案档位**徽标（用户：「这位置增加显示玩家方案的档位」）——
-  --   锚在**标题文字的右边缘**（标题只锚了 LEFT，宽度随文字自适应）⇒ 自然跟在玩家名后面；
-  --   在它右边才是那两个快捷开关，三者从左到右依次排开，互不遮挡。
-  --   文案/颜色由 uiTitleTierRefresh() 写（BUILD 一次 + tick 每次），这里只负责建控件与定位置。
+  --   锚在**标题文字的右边缘**（标题只锚了 LEFT，宽度随文字自适应）⇒ 自然跟在玩家名后面。
+  -- ★★★1.73.57 紧随其后是**玩家头衔**（用户：「显示玩家的头衔」）——锚在徽标的右边缘上，同样跟着走。
+  --   最右边才是那两个快捷开关；四个控件从左到右依次排开，互不遮挡。
+  --   文案/颜色由 uiTitleBadgeRefresh() 写（BUILD 一次 + tick 每次），这里只负责建控件与定位置。
   do
     local tierFs = uiText(titleBar, math.max(9, math.floor(10 * z)), 0.72, 0.70, 0.62)
     tierFs:SetPoint("LEFT", title, "RIGHT", math.floor(8 * z), 0)
     pcall(tierFs.SetJustifyH, tierFs, "LEFT")
     pcall(tierFs.SetNonSpaceWrap, tierFs, false)
     ui.tierText = tierFs
+    local titleFs = uiText(titleBar, math.max(9, math.floor(10 * z)), 0.72, 0.70, 0.62)
+    titleFs:SetPoint("LEFT", tierFs, "RIGHT", math.floor(8 * z), 0)
+    pcall(titleFs.SetJustifyH, titleFs, "LEFT")
+    pcall(titleFs.SetNonSpaceWrap, titleFs, false)
+    ui.titleText = titleFs
   end
-  uiTitleTierRefresh()
+  uiTitleBadgeRefresh()
   -- ★★★1.73.54 标题栏右侧的两个**快捷开关**（战斗区 / 方案区）——与配置窗「界面」组里那两个缩进子开关**同一份真值**：
   --   左→右 = 战斗区、方案区（与配置窗从上到下的顺序一致）；各自贴右端、宽 13、间隔 4；
   --   点一下立刻开/关对应区块（整帧重建，窗口高度随之变化）。
@@ -819,7 +862,7 @@ function EVAL_HELP_UI_TICK()
   -- ★★★1.73.55 标题栏的**方案档位**徽标：跟着「当前激活方案」走 —— 切换方案 / 改方案内容 / 切语言之后，
   --   下一个心跳就更新（现算，见 uiProfileTierText 的说明）。
   --   ★**不看「方案区」子开关**：徽标画在标题栏里，方案区关掉时它照样说明「现在用的是哪一档」。
-  uiTitleTierRefresh()
+  uiTitleBadgeRefresh()
 
   -- 方案切换行：当前激活金色高亮，不存在的方案位隐藏
   --   ★1.71.12 子开关「方案」= 关时 ui.profBtns / ui.profCells 为 nil（BUILD 里根本没建）→ 下面两个循环自然跳过。
@@ -6725,6 +6768,19 @@ function EVAL_TEST_UI_TITLEBAR()
     end
     local okc, cr, cg, cb = pcall(ui.tierText.GetTextColor, ui.tierText)
     if okc and type(cr) == "number" then out.tierColor = { cr, cg, cb } end
+  end
+  -- ★★★1.73.57 玩家头衔徽标（同款读值口：真控件的文案 / 锚点 / 文字色 —— 不读我们自己的记账）
+  out.ptitle, out.ptitlePoint, out.ptitleRelTo, out.ptitleRelPoint, out.ptitleX, out.ptitleColor = nil, nil, nil, nil, nil, nil
+  if ui.titleText then
+    out.ptitleFs = ui.titleText
+    local okt, tv = pcall(ui.titleText.GetText, ui.titleText)
+    if okt and type(tv) == "string" then out.ptitle = tv end
+    local okp, pt, rel, rp, px = pcall(ui.titleText.GetPoint, ui.titleText)
+    if okp and type(pt) == "string" then
+      out.ptitlePoint, out.ptitleRelTo, out.ptitleRelPoint, out.ptitleX = pt, rel, rp, px
+    end
+    local okc2, cr2, cg2, cb2 = pcall(ui.titleText.GetTextColor, ui.titleText)
+    if okc2 and type(cr2) == "number" then out.ptitleColor = { cr2, cg2, cb2 } end
   end
   return out
 end
