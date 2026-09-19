@@ -625,7 +625,7 @@ function EVAL_SHARE_HOVER_PROBE(chanId)
   shHoverFlush()
   local ok = shProbeSend(bodies, chanId)
   shSay("悬停探针已发出（" .. tostring(chanId) .. "）：请把鼠标**依次停在**聊天里那三条链接上各一下，再各点一下")
-  shSay("  ① 自定义链接  ② 假物品链接  ③ 真物品 id(6948) 对照 —— 然后 /reload，我读账本（或 /eh go 探针结果）")
+  shSay("  ① 自定义链接  ② 假物品链接  ③ 真物品 id(6948) 对照 —— **悬停完请先敲 /eh go 探针结果**（无条件写盘），再 /reload")
   return ok and true or false
 end
 
