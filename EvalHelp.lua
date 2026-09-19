@@ -6866,6 +6866,12 @@ if type(SlashCmdList) == "table" then
       else
         say("分享模块未载入（EVAL_SHARE_PROBE_AUTORUN 不存在）")
       end
+    elseif msg == "go 悬停探针" or msg == "go hovprobe" then
+      if type(EVAL_SHARE_HOVER_PROBE) == "function" then
+        EVAL_SHARE_HOVER_PROBE("WHISPER")
+      else
+        say("分享模块未载入（EVAL_SHARE_HOVER_PROBE 不存在）")
+      end
     -- ★别用 `go probe`：那个已经被「光环探针」占了（同一个 if 链里的 go probe）→ 用 proberes
     elseif msg == "go 探针结果" or msg == "go proberes" then
       if type(EVAL_SHARE_PROBE_REPORT) == "function" then

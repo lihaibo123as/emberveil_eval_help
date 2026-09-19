@@ -335,6 +335,13 @@ GameTooltip = {
   Show = function() TEST.gtCalls.show = TEST.gtCalls.show + 1 end,
   IsShown = function() return TEST.gtShown and true or false end,
   GetName = function() return "GameTooltip" end,
+  -- ★1.73.41c 桩保真：GameTooltip:SetHyperlink 是「画链接 tooltip」的必经之路（探针要包它），
+  --   桩不给它 = 探针在测试里根本装不上（又是「桩太宽松 → 断言失明」）。
+  SetHyperlink = function(_, link)
+    TEST.gtHyperlinks = TEST.gtHyperlinks or {}
+    table.insert(TEST.gtHyperlinks, tostring(link))
+    return true
+  end,
   -- ★1.71.2（第十九轮）记录 AddLine 的文本：断言要验「按钮 tooltip 到底写了什么」，
   --   桩不记录的话，这类**纯提示**需求在测试里完全不可见（本项目「桩太宽松 → 断言失明」的老坑）。
   AddLine = function(_, text, r, g, b)

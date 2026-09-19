@@ -10706,10 +10706,10 @@ do
   eq(string.find(tostring(EVAL_HELP_CONFIG.shareProbe), "探针结果", 1, true) ~= nil, true, "⑧★落盘的文字里带标题")
   -- ⑨ ★★「一次跑完」：一条命令 → 自动出结果（省用户操作）
   eq(EVAL_SHARE_PROBE_AUTORUN("WHISPER"), true, "⑨★★「探针全跑」入口能跑")
-  eq(EVAL_TEST_SHARE_PROBE_PLAN(), 3, "⑨★★★排了 3 步（6s 出结果 / 12s 长度探针 / 18s 出结果）")
+  eq(EVAL_TEST_SHARE_PROBE_PLAN(), 4, "⑨★★★排了 4 步（6s 出结果 / 12s 长度探针 / 18s 出结果 / 20s 悬停探针）")
   TEST.time = (TEST.time or 1000) + 7
   EVAL_TEST_SHARE_PROBE_STEP()
-  eq(EVAL_TEST_SHARE_PROBE_PLAN(), 2, "⑨★★到点会自动出结果（步数 3 → 2）")
+  eq(EVAL_TEST_SHARE_PROBE_PLAN(), 3, "⑨★★到点会自动出结果（步数 4 → 3）")
 
   -- ⑩ ★★★1.73.41c 命令**接线**判据（真事故）：探针命令属于 `/eh go` 组，`msg` 是**带 `go ` 前缀**的全串
   --   —— 我一开始写成 `msg == "探针全跑"`，用户敲 `/eh go 探针全跑` **什么都不会发生（静默！）**。
@@ -10731,5 +10731,41 @@ do
   TEST.chat = nil
   TEST.chat = nil
   print("  调研探针：4 形态逐字节比对（一致/被改/未收到）+ 长度阶梯（完整/截断）+ 不污染正常接收")
+end
+-- 142) ★★★1.73.41c 悬停探针：用户要「角色名: 分享了一份绝世秘籍 —— 鼠标移动上去才能看到详情」。
+--   离线能测的是**挂钩本身**（幂等、透传、记账、落盘、命令接线）；
+--   「客户端悬停时到底哪条 Lua 路径被走到」必须**真机悬停后读账本**。
+do
+  local hooks = EVAL_SHARE_HOVER_HOOKS()
+  eq(type(hooks) == "table" and table.getn(hooks) >= 1, true, "①挂钩装上了（实际 " .. tostring(table.getn(hooks or {})) .. " 个）")
+  eq(hooks[1], "SetHyperlink", "①第一个就是 SetHyperlink（画链接 tooltip 的必经之路）")
+  local n1 = table.getn(hooks)
+  EVAL_SHARE_HOVER_HOOKS()
+  eq(table.getn(EVAL_SHARE_HOVER_HOOKS()), n1, "①★★幂等：重复安装不会变两层（两层 = 一次悬停记两次账）")
+  TEST.gtHyperlinks = {}
+  local before = table.getn(EVAL_SHARE_HOVER_STATE().log) or 0
+  GameTooltip:SetHyperlink("|cffffffff|Hitem:1234:0:0:0:0:0:0:0|h[测试物品]|h|r")
+  eq(table.getn(TEST.gtHyperlinks), 1, "②★★原函数透传（桩记到了那一次 SetHyperlink）")
+  eq(table.getn(EVAL_SHARE_HOVER_STATE().log), before + 1, "②★★账本记了 1 条（幂等时不会记 2 条）")
+  eq(EVAL_SHARE_HOVER_STATE().log[before + 1].hook, "GameTooltip:SetHyperlink", "②★账本记的是 hook 名")
+  TEST.runScripts = {}
+  eq(EVAL_SHARE_HOVER_PROBE("WHISPER") ~= false, true, "③悬停探针发送入口能跑")
+  local hs = EVAL_SHARE_HOVER_STATE()
+  eq(table.getn(hs.sent or {}), 3, "③★★三条形态都发了（实际 " .. tostring(table.getn(hs.sent or {})) .. "）")
+  eq(string.find(tostring(hs.sent[1]), "分享了一份绝世秘籍", 1, true) ~= nil, true, "③★★带用户要的文案「分享了一份绝世秘籍」")
+  eq(string.find(tostring(hs.sent[1]), "|HEHPF:", 1, true) ~= nil, true, "③形态①=自定义链接")
+  eq(string.find(tostring(hs.sent[2]), "|Hitem:", 1, true) ~= nil, true, "③形态②=假物品链接")
+  eq(string.find(tostring(hs.sent[3]), "Hitem:6948", 1, true) ~= nil, true, "③形态③=真物品 id 对照")
+  EVAL_SHARE_PROBE_REPORT()
+  eq(type(EVAL_HELP_CONFIG.shareProbeHover) == "table", true, "④★★★悬停账本落盘（shareProbeHover）")
+  eq(type(EVAL_HELP_CONFIG.shareProbeHover.hooks) == "table", true, "④账本里有挂钩清单")
+  eq(type(EVAL_HELP_CONFIG.shareProbeHover.scriptProbe) == "table", true, "④也有「聊天帧有没有 Hyperlink 脚本」的探测结果")
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 悬停探针")
+  eq(string.find(tostring(TEST.chat or ""), "悬停探针已发出", 1, true) ~= nil, true,
+     "⑤★★★/eh go 悬停探针 真的执行了（命令在 go 组里、前缀要对）")
+  eq(table.getn(EVAL_SHARE_HOVER_STATE().sent or {}), 3, "⑤★命令跑完仍只有三条最新形态")
+  TEST.chat = nil
+  print("  悬停探针：挂钩幂等+透传+记账 · 三条形态（自定义/假物品/真物品对照）· 账本落盘 · 命令接线")
 end
 print("ALL TESTS PASS")

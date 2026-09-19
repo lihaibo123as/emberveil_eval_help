@@ -539,6 +539,79 @@ local function shProbeFind(mode, tag)
   end
   return nil
 end
+-- ===== 1.73.41c 探针 ③：悬停 tooltip 机制发现 ===========================================
+-- 用户需求（原话）：「角色名: 分享了一份绝世秘籍 —— 鼠标移动上去才能看到详细的方案信息」。
+--   两个判断**读码定不了、必须实测**：
+--     ① 聊天里的**自定义链接**悬停时客户端自己会不会弹 tooltip（引擎认不认这个类型）；
+--     ② 会弹的话是**哪条 Lua 路径**画的（能不能被我们截住、换成方案详情）。
+--   做法：把候选入口包一层**只记账、不改行为**（原函数照调、幂等），用户悬停/点击后读账本。
+local SH_HOVER = { installed = false, hooks = {}, log = {}, counts = {}, sent = {}, scriptProbe = nil }
+local function shHoverBump(name)
+  SH_HOVER.counts[name] = (SH_HOVER.counts[name] or 0) + 1
+end
+local function shHoverNote(hook, link)
+  if table.getn(SH_HOVER.log) >= 40 then return end
+  table.insert(SH_HOVER.log, { hook = tostring(hook), link = tostring(link or ""),
+                               n = string.len(tostring(link or "")) })
+end
+function EVAL_SHARE_HOVER_HOOKS()
+  if SH_HOVER.installed then return SH_HOVER.hooks end
+  SH_HOVER.installed = true
+  local gt = rawget(_G, "GameTooltip")
+  if type(gt) == "table" then
+    local function wrap(name, wantLink)
+      local orig = gt[name]
+      if type(orig) ~= "function" then return false end
+      gt[name] = function(self, ...)
+        local a1 = ...
+        shHoverBump(name)
+        if wantLink then shHoverNote("GameTooltip:" .. name, type(a1) == "string" and a1 or "") end
+        return orig(self, ...)
+      end
+      table.insert(SH_HOVER.hooks, name)
+      return true
+    end
+    wrap("SetHyperlink", true) -- ★最关键：画链接 tooltip 的必经之路（能截住 = 能换成方案详情）
+    wrap("SetOwner", false)
+    wrap("ClearLines", false)
+    wrap("AddLine", false)
+  end
+  local f = rawget(_G, "DEFAULT_CHAT_FRAME")
+  local probe = {}
+  if type(f) == "table" and type(f.GetScript) == "function" then
+    for _, ev in ipairs({ "OnHyperlinkEnter", "OnHyperlinkLeave", "OnHyperlinkClick", "OnHyperlinkShow", "OnEnter" }) do
+      local ok2, v = pcall(f.GetScript, f, ev)
+      probe[ev] = (ok2 and type(v) == "function") and "已注册" or "无"
+    end
+  end
+  SH_HOVER.scriptProbe = probe
+  return SH_HOVER.hooks
+end
+function EVAL_SHARE_HOVER_STATE()
+  return { installed = SH_HOVER.installed, hooks = SH_HOVER.hooks, log = SH_HOVER.log,
+           counts = SH_HOVER.counts, sent = SH_HOVER.sent, scriptProbe = SH_HOVER.scriptProbe }
+end
+-- 发三条形态（都带「分享了一份绝世秘籍」这句文案），请用户**逐个悬停/点击**后读账本
+function EVAL_SHARE_HOVER_PROBE(chanId)
+  chanId = (type(chanId) == "string" and chanId ~= "") and chanId or "WHISPER"
+  EVAL_SHARE_HOVER_HOOKS()
+  local prefix = "ho" .. shProbeRandomTag()
+  local t1 = prefix .. "01"
+  local bodies = {}
+  table.insert(bodies, "分享了一份绝世秘籍 → |cff9ad4ff|HEHPF:" .. t1 .. " 1/1:" .. toHex("HOVER-" .. t1) ..
+                      "|h[绝世秘籍·自定义链接]|h|r")
+  table.insert(bodies, "分享了一份绝世秘籍 → |cffa335ee|Hitem:1234:0:0:0:0:0:0:0|h[绝世秘籍·假物品链接]|h|r")
+  table.insert(bodies, "分享了一份绝世秘籍 → |cffffffff|Hitem:6948:0:0:0:0:0:0:0|h[炉石·真物品id对照]|h|r")
+  SH_HOVER.sent = bodies
+  SH_HOVER.log = {}
+  SH_HOVER.counts = {}
+  local ok = shProbeSend(bodies, chanId)
+  shSay("悬停探针已发出（" .. tostring(chanId) .. "）：请把鼠标**依次停在**聊天里那三条链接上各一下，再各点一下")
+  shSay("  ① 自定义链接  ② 假物品链接  ③ 真物品 id(6948) 对照 —— 然后 /reload，我读账本（或 /eh go 探针结果）")
+  return ok and true or false
+end
+
+
 -- 探针结果：**如实**报告（一致 / 被改 / 未收到；长度档位看实际字节数与尾部哨兵）
 -- ★★★1.73.41b 用户「操作完了.看下」暴露的**取证缺口**：结果原来只打进**聊天框**，而本机没有聊天日志文件、
 --   SavedVariables 里也没有 → AI/事后都读不到。现在**每条都同时落盘**（EVAL_LOGLINE + EVAL_HELP_CONFIG.shareProbe
@@ -604,7 +677,30 @@ function EVAL_SHARE_PROBE_REPORT()
   emit("  ★结论怎么读：① 若「自定义链接」= 一致 → 隐藏方案可行（服务器转发自定义链接）；" ..
        "② 若只有 ②③/④ 一致 → 自定义类型被服务器剥了，改走已知类型或退回「只缩短」；" ..
        "③ 长度档出现「截断」→ 记下那一档的真实字节数，SH_CHUNK 要按它重算")
-  -- ★落盘：/reload 之后从存档里就能读回（本机**没有**聊天日志文件；聊天框一关就没了）
+  -- ★★1.73.41c 悬停探针账本（「鼠标移上去才能看到详情」能不能做，就看这里）
+  do
+    local h = SH_HOVER
+    emit("  --- 悬停探针账本（谁在画 tooltip） ---")
+    if not h.installed then
+      emit("  还没装挂钩（先 /eh go 悬停探针）")
+    else
+      emit("  已挂：" .. table.concat(h.hooks, "、"))
+      emit("  SetHyperlink 命中 " .. tostring(table.getn(h.log)) .. " 次（>0 = 有 Lua 路径画链接 tooltip，可截可换）")
+      for i = 1, math.min(table.getn(h.log), 6) do
+        emit("     [" .. i .. "] " .. tostring(h.log[i].hook) .. " → " .. tostring(h.log[i].link))
+      end
+      emit("  其它计数：SetOwner=" .. tostring(h.counts.SetOwner or 0) .. " ClearLines=" .. tostring(h.counts.ClearLines or 0) ..
+           " AddLine=" .. tostring(h.counts.AddLine or 0))
+      local sp = h.scriptProbe or {}
+      emit("  聊天帧脚本探测：OnHyperlinkEnter=" .. tostring(sp.OnHyperlinkEnter) .. " / OnHyperlinkLeave=" .. tostring(sp.OnHyperlinkLeave) ..
+           " / OnHyperlinkClick=" .. tostring(sp.OnHyperlinkClick) .. " / OnHyperlinkShow=" .. tostring(sp.OnHyperlinkShow))
+    end
+    local cfgH = rawget(_G, "EVAL_HELP_CONFIG")
+    if type(cfgH) == "table" then
+      cfgH.shareProbeHover = { hooks = h.hooks, log = h.log, counts = h.counts,
+                               scriptProbe = h.scriptProbe, sent = h.sent }
+    end
+  end
   local cfgT = rawget(_G, "EVAL_HELP_CONFIG")
   if type(cfgT) == "table" then
     cfgT.shareProbe = string.sub(table.concat(lines, "\n"), 1, 8000)
@@ -648,14 +744,16 @@ function EVAL_SHARE_PROBE_AUTORUN(chanId)
   shProbeSchedule(18, function()
     shSay("【自动】长度阶梯结果：")
     EVAL_SHARE_PROBE_REPORT()
-    shSay("★探针全跑完成 —— 现在 /reload，结果就已经在存档里了")
+  end)
+  -- ★1.73.41c 第 4 步：悬停探针（需用户**自己把鼠标停在链接上**）
+  shProbeSchedule(20, function()
+    EVAL_SHARE_HOVER_PROBE(chanId)
   end)
   return true
 end
 -- 测试钩子：驱动与 OnUpdate **同一个**函数（判据落在真实调用点）；PLAN 给出待跑步数
 function EVAL_TEST_SHARE_PROBE_STEP() shProbeTick() end
 function EVAL_TEST_SHARE_PROBE_PLAN() return table.getn(shProbePlan) end
-
 -- ★1.71.3 事件分派（三态兼容）抽成函数：事件名在 1参 / 2参 / 全局 event，参数随之一档右移。
 --   ★抽出来的理由：断言要验的是**真实分派逻辑**（不能在测试里重写一遍）。
 function EVAL_SHARE_DISPATCH(ev, a1, a2, a3, a4)
