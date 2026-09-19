@@ -11595,7 +11595,7 @@ do
   local cur150 = EVAL_TITLE_CURRENT()
   eq(cur150 and cur150.name, "太古之名", "⑤★★当前名号 = 自定义那个（优先度最高）")
   eq(cur150 and cur150.custom, true, "⑤★标记为自定义")
-  eq(cur150 and cur150.color, EVAL_TITLE_CUSTOM_COLOR(), "⑤★★★自定义名号用**专属淡金色**（一眼看出不是抽来的）")
+  eq(cur150 and cur150.color, EVAL_TITLE_CUSTOM_COLOR(), "⑤★★★自定义名号用**专属候选色**（默认帝王金；与品阶/头衔五档都不撞 —— 一眼看出不是抽来的）")
   eq(string.len(tostring(EVAL_TITLE_CUSTOM_COLOR())) == 10, true, "⑤★专属色也是 8 位色码")
   -- ★★★专属色必须与「5 档头衔色 + 5 品阶色」**全不相同**（否则「一眼看出不是抽来的」就不成立）
   local customCol150, clash150 = tostring(EVAL_TITLE_CUSTOM_COLOR()), ""
@@ -11634,7 +11634,7 @@ do
   EVAL_HELP_CONFIG.title = keepTitle150
   EVAL_HELP_CONFIG.shareCreatorOpen = keepOpen150
   TEST.chat = nil
-  print("  创世者亲临：命令触发 · 匾额/道白/落笔文案走三语言 · 回声行保底 · 落笔写档+专属淡金 · 仅此一次")
+  print("  创世者亲临：命令触发 · 匾额/道白/落笔文案走三语言 · 回声行保底 · 落笔写档+专属色 · 仅此一次")
 end
 
 -- 151) ★★★1.73.42r 重置命令（诊断/测试用）：删除自定义名号 · 重置头衔进度并立即重抽
@@ -12270,6 +12270,111 @@ do
   EVAL_HELP_CONFIG.shColorProbe = nil
   TEST.chat, TEST.runScripts = nil, nil
   print("  色码测：" .. tostring(wantN158) .. " 个在用色码逐条编号实发（分片色 + 5 品阶 + 5 头衔 + 彩蛋专属色）")
+end
+
+-- 159) ★★★1.73.45 彩蛋名号色：默认「帝王金」+ 候选表 + `/eh go 名号色` 命令（用户：「彩蛋头衔 颜色设置霸气一点」）
+--   为什么给候选：颜色是主观偏好 —— 一次摊开让玩家自己挑，胜过「再霸气一点」来回改版；
+--   而候选**必须两两不撞**（品阶五档 / 头衔五档会同屏出现），否则一眼分不出「这不是抽来的」。
+do
+  local g159 = 0
+  while EVAL_SHARE_TEST_QUEUE_LEN() > 0 and g159 < 400 do
+    g159 = g159 + 1
+    TEST.time = (TEST.time or 4000) + 1
+    EVAL_SHARE_TEST_TICK()
+  end
+  local savedTb159 = EVAL_HELP_CONFIG.tb
+  local savedTitle159 = EVAL_HELP_CONFIG.title
+  EVAL_HELP_CONFIG.tb = EVAL_HELP_CONFIG.tb or {}
+  EVAL_HELP_CONFIG.title = { custom = "阿凡提" }   -- 有个彩蛋名号，才验得到「名号跟着变色」
+  EVAL_HELP_CONFIG.shTitleColorProbe = nil
+
+  local list159 = EVAL_TITLE_CUSTOM_COLOR_LIST()
+  local n159 = table.getn(list159)
+  eq(n159 >= 3, true, "①★★★候选表非空（实际 " .. tostring(n159) .. " 个）")
+  -- ① 每个候选 8 位 + 色名真的解析出来了（键名写错会原样退回键名 → 这里当场抓住）
+  local badLen159, badName159 = 0, 0
+  for i = 1, n159 do
+    if string.len(string.sub(tostring(list159[i].code), 3)) ~= 8 then badLen159 = badLen159 + 1 end
+    local nm159 = tostring(list159[i].name)
+    if nm159 == "" or nm159 == tostring(list159[i].key) then badName159 = badName159 + 1 end
+  end
+  eq(badLen159, 0, "①★★★候选色码全是 8 位（" .. tostring(badLen159) .. " 个不是）")
+  eq(badName159, 0, "①★★★候选**色名走语言包**（键名写错会原样退回键名：坏 " .. tostring(badName159) .. " 个）")
+  -- ② 默认 = 候选 1（单一来源：改候选表即改默认）
+  eq(tostring(EVAL_TITLE_CUSTOM_COLOR()), tostring(list159[1].code), "②★★★没选过时用的就是**候选 1**（默认与候选表对齐）")
+  -- ③ 候选不与品阶/头衔/分片撞色（同屏两个维度糊在一起就白做）
+  local clash159 = {}
+  local function mark159(c) local k = tostring(c) clash159[k] = (clash159[k] or 0) + 1 end
+  for i = 1, n159 do mark159(list159[i].code) end
+  local sc159 = { 1, 4, 7, 10, 13 }
+  for i = 1, 5 do
+    local _, ti159 = EVAL_SHARE_SEAL_TIER(sc159[i])
+    mark159(ti159.color)
+  end
+  local demo159 = EVAL_TITLE_DEMO_LINES()
+  for i = 1, 5 do mark159(string.match(tostring(demo159[i] or ""), "^(|c%x+)")) end
+  mark159(EVAL_SHARE_CHUNK_COLOR())
+  local dup159 = 0
+  for _, v159 in pairs(clash159) do if v159 > 1 then dup159 = dup159 + 1 end end
+  eq(dup159, 0, "③★★★候选色与品阶/头衔/分片色**两两不撞**（撞了 " .. tostring(dup159) .. " 个）")
+  -- ④ 选用：写档 + 立刻生效（渲染/分享读的是同一个读值口）
+  eq(tostring(EVAL_TITLE_SET_CUSTOM_COLOR(3)), tostring(list159[3].code), "④★★★名号色 <3> 写入候选 3 的色码")
+  eq(tostring(EVAL_HELP_CONFIG.title.customColor), tostring(list159[3].code), "④★★★**落档**（cfg.title.customColor）")
+  eq(tostring(EVAL_TITLE_CUSTOM_COLOR()), tostring(list159[3].code), "④★★★读值口立刻变（渲染与分享都走它）")
+  local cur159 = EVAL_TITLE_CURRENT()
+  eq(cur159 ~= nil and tostring(cur159.color) == tostring(list159[3].code), true, "④★★★**彩蛋名号真的跟着变色**（current.color）")
+  -- ⑤ 非法编号**如实拒绝且不改**（不许悄悄改成默认 —— 那是「假成功」）
+  eq(EVAL_TITLE_SET_CUSTOM_COLOR(0), nil, "⑤★★越界编号如实返回 nil")
+  eq(EVAL_TITLE_SET_CUSTOM_COLOR(99), nil, "⑤★★越界编号如实返回 nil")
+  eq(EVAL_TITLE_SET_CUSTOM_COLOR("x"), nil, "⑤★★非数字如实返回 nil")
+  eq(tostring(EVAL_HELP_CONFIG.title.customColor), tostring(list159[3].code), "⑤★★★拒绝之后**存档一字未改**（不假成功）")
+  -- ⑨ 存档被手改成非法色码时**退回默认**（非 8 位色码会吞整条消息 —— 只认 8 位才许照发）
+  EVAL_HELP_CONFIG.title.customColor = "|cf58cba"
+  eq(tostring(EVAL_TITLE_CUSTOM_COLOR()), tostring(list159[1].code), "⑨★★★存档里的**6 位色码被无视**，退回默认色（绝不照发会被吞的码）")
+  EVAL_HELP_CONFIG.title.customColor = "|cffffffff"
+  eq(tostring(EVAL_TITLE_CUSTOM_COLOR()), "|cffffffff", "⑨★★合法 8 位存档色照用")
+  EVAL_HELP_CONFIG.title.customColor = tostring(list159[3].code)
+  -- ⑥ 预览命令：每条一色、色码打头、8 位、只一段色码、带链接、≤250B，全部进同一条限频队列
+  TEST.chat, TEST.runScripts = nil, nil
+  local pr159 = EVAL_SHARE_TITLE_COLOR_PROBE()
+  eq(pr159 ~= nil and pr159.n == n159, true, "⑥★★★预览排了 " .. tostring(n159) .. " 条")
+  eq(EVAL_SHARE_TEST_QUEUE_LEN(), n159, "⑥★★★全部进**同一条限频队列**（不瞬间倾泻）")
+  eq(type(EVAL_HELP_CONFIG.shTitleColorProbe) == "table", true, "⑥★★★命令**落盘**了（cfg.shTitleColorProbe，接线证人）")
+  local bad159 = 0
+  for i = 1, n159 do
+    local body159 = tostring(((pr159.list or {})[i] or {}).body or "")
+    local seg159 = 0
+    string.gsub(body159, "|c", function() seg159 = seg159 + 1 end)
+    local code159 = string.match(body159, "^(|c%x+)") or ""
+    if string.len(string.sub(code159, 3)) ~= 8 then bad159 = bad159 + 1
+    elseif seg159 ~= 1 then bad159 = bad159 + 1
+    elseif string.find(body159, "|HEHPF:", 1, true) == nil then bad159 = bad159 + 1
+    elseif string.find(body159, "]|h|r", 1, true) == nil then bad159 = bad159 + 1
+    elseif string.len(body159) > 250 then bad159 = bad159 + 1
+    end
+  end
+  eq(bad159, 0, "⑥★★★每条都是**已证形态**（色码打头 + 8 位 + 单段 + 链接 + ≤250B）：坏 " .. tostring(bad159) .. " 条")
+  -- ⑦ 预览里显示的是**玩家自己的名号**（看到什么就是分享出去的样子）
+  eq(string.find(tostring(((pr159.list or {})[1] or {}).body or ""), "[阿凡提]", 1, true) ~= nil, true, "⑦★★★预览方括号里是**玩家自己的名号**")
+  eq(string.find(tostring(TEST.chat or ""), "||c", 1, true) ~= nil, true, "⑦★★图例把色码**转义后**打出来（否则对照不了编号与颜色）")
+  -- ⑧ 真的都发出去
+  local g159b = 0
+  while EVAL_SHARE_TEST_QUEUE_LEN() > 0 and g159b < 400 do
+    g159b = g159b + 1
+    TEST.time = (TEST.time or 4000) + 1
+    EVAL_SHARE_TEST_TICK()
+  end
+  local say159 = 0
+  for _, sc159 in ipairs(TEST.runScripts or {}) do
+    if string.find(sc159, '", "SAY")', 1, true) then say159 = say159 + 1 end
+  end
+  eq(say159 >= n159, true, "⑧★★★" .. tostring(n159) .. " 条预览都真的发出去了（实际 " .. tostring(say159) .. "）")
+
+  EVAL_HELP_CONFIG.tb = savedTb159
+  EVAL_HELP_CONFIG.title = savedTitle159
+  EVAL_HELP_CONFIG.shTitleColorProbe = nil
+  TEST.chat, TEST.runScripts = nil, nil
+  print("  名号色：默认帝王金 · " .. tostring(n159) .. " 个候选两两不撞色 · /eh go 名号色 <n> 落档即生效 · 非法编号如实拒绝")
 end
 
 print("ALL TESTS PASS")

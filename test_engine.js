@@ -1226,7 +1226,7 @@ function checkIconAssets() {
     ["分片传输色 SH_CHUNK_COLOR", /local SH_CHUNK_COLOR = "\|c([0-9a-fA-F]+)"/],
     ["品阶色表 SH_SEAL_TIERS", /local SH_SEAL_TIERS = \{[\s\S]*?\n\}/],
     ["头衔色表 SH_TITLE_COLORS", /local SH_TITLE_COLORS = \{([^}]*)\}/],
-    ["彩蛋专属色 SH_TITLE_CUSTOM_COLOR", /local SH_TITLE_CUSTOM_COLOR = "\|c([0-9a-fA-F]+)"/],
+    ["彩蛋名号色候选表 SH_TITLE_CUSTOM_COLORS", /local SH_TITLE_CUSTOM_COLORS = \{[\s\S]*?\n\}/],
   ];
   const bad = [];
   for (const item of need) if (!item[1].test(src)) bad.push("找不到 " + item[0] + "（改名了？色码测会漏测）");
@@ -1242,7 +1242,18 @@ function checkIconAssets() {
   const titleCols = (titleBlock.match(/\|c[0-9a-fA-F]{8}/g) || []).map(function (s) { return s.replace("|c", ""); });
   if (titleCols.length !== 5) bad.push("头衔色表应为 5 档，实际 " + titleCols.length + " 项");
   titleCols.forEach(function (c, i) { codes.push(["头衔" + (i + 1), c]); });
-  codes.push(["彩蛋专属色", src.match(/local SH_TITLE_CUSTOM_COLOR = "\|c([0-9a-fA-F]+)"/)[1]]);
+  // ★1.73.45 彩蛋名号色现在是**候选表**（用户：「彩蛋头衔 颜色设置霸气一点」）：
+  //   ① 每个候选都要 8 位；② **默认色 == 候选 1**（单一来源，改表即改默认，永远不漂移）；
+  //   ③ 候选与品阶/头衔**两两不撞**（同屏糊在一起就分不清「这不是抽来的」）。
+  const custBlock = src.match(/local SH_TITLE_CUSTOM_COLORS = \{[\s\S]*?\n\}/)[0];
+  const custCols = (custBlock.match(/code = "\|c([0-9a-fA-F]+)"/g) || []).map(function (s) { return s.replace(/.*"\|c/, "").replace(/"/, ""); });
+  if (custCols.length < 3) bad.push("彩蛋名号色候选应 >=3 个，实际 " + custCols.length + " 个");
+  custCols.forEach(function (c, i) { codes.push(["名号色" + (i + 1), c]); });
+  if (!/local SH_TITLE_CUSTOM_COLOR = SH_TITLE_CUSTOM_COLORS\[1\]\.code/.test(src)) {
+    bad.push("默认名号色必须取自候选表第 1 项（SH_TITLE_CUSTOM_COLORS[1].code）—— 否则默认与候选会漂移");
+  }
+  const dupCodes = codes.map(function (c) { return c[1]; }).filter(function (v, i, a) { return a.indexOf(v) !== i; });
+  if (dupCodes.length) bad.push("色码撞车（同屏会分不清）：" + dupCodes.join(","));
   // ★档数不对（色表被改坏/解析失效）也要当场响，不能只算长度
   if (bad.length) { console.log("SHARE PALETTE CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
   // ★每项必须**正好 8 位**（6 位客户端不解析 · 7 位吞整条）
@@ -1256,8 +1267,9 @@ function checkIconAssets() {
   const pm = src.match(/function EVAL_SHARE_COLOR_PROBE\(\)[\s\S]*?\nend/);
   if (!pm) { console.log("SHARE PALETTE CHECK: FAIL - 找不到色码测命令 EVAL_SHARE_COLOR_PROBE（改名了？）"); process.exitCode = 1; return; }
   const probe = pm[0];
-  const refs = ["SH_CHUNK_COLOR", "SH_SEAL_TIERS", "SH_TITLE_COLORS", "SH_TITLE_CUSTOM_COLOR", "SH_MSG_MAX", "shTxQ", "shEnsureTxTicker"];
+  const refs = ["SH_CHUNK_COLOR", "SH_SEAL_TIERS", "SH_TITLE_COLORS", "SH_MSG_MAX", "shTxQ", "shEnsureTxTicker"];
   const missRef = refs.filter(function (r) { return probe.indexOf(r) < 0; });
+  if (probe.indexOf("SH_TITLE_CUSTOM_COLOR") < 0 && probe.indexOf("shTitleCustomColor") < 0) missRef.push("SH_TITLE_CUSTOM_COLOR/shTitleCustomColor");
   if (missRef.length) {
     console.log("SHARE PALETTE CHECK: FAIL - 色码测命令没有引用 " + missRef.join("/") + "（写死清单 = 改色表就漏测）");
     process.exitCode = 1; return;
@@ -1268,11 +1280,32 @@ function checkIconAssets() {
   }
   // ★接线：命令入口要真的能调到它（真事故：前缀写错 → 敲了静默无反应）
   const eh = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
-  if (!/go 色码测/.test(eh) || !/EVAL_SHARE_COLOR_PROBE\(\)/.test(eh)) {
+  // ★用**精确分支写法**（msg == "go 色码测"）而不是「含 go 色码测」：带我踩过的弱判据坑 ——
+  //   分支被改坏时，同屏那句 `string.find(msg, "^go 色码测%s")` 里照样含这个子串 → 「含」判据会假绿（M457 实测 SURVIVED）。
+  if (!/msg == "go 色码测"/.test(eh) || !/EVAL_SHARE_COLOR_PROBE\(\)/.test(eh)) {
     console.log("SHARE PALETTE CHECK: FAIL - /eh go 色码测 没接到命令入口（敲了会静默无反应）");
     process.exitCode = 1; return;
   }
-  console.log("SHARE PALETTE CHECK: 在用色码 " + codes.length + " 个逐项 8 位；色码测命令从四张色表现取（无字面色码）且已接上入口");
+  // ★1.73.45 「名号色」命令同样是**从候选表现取**（`/eh go 名号色` 逐条编号预览 / `<n>` 选用并存档）
+  const tm = src.match(/function EVAL_SHARE_TITLE_COLOR_PROBE\(\)[\s\S]*?\nend/);
+  if (!tm) { console.log("SHARE PALETTE CHECK: FAIL - 找不到名号色命令 EVAL_SHARE_TITLE_COLOR_PROBE（改名了？）"); process.exitCode = 1; return; }
+  const tprobe = tm[0];
+  const trefs = ["EVAL_TITLE_CUSTOM_COLOR_LIST", "SH_MSG_MAX", "shTxQ", "shEnsureTxTicker"];
+  const tmiss = trefs.filter(function (r) { return tprobe.indexOf(r) < 0; });
+  if (tmiss.length) {
+    console.log("SHARE PALETTE CHECK: FAIL - 名号色命令没有引用 " + tmiss.join("/") + "（写死清单 = 改候选表就漏测）");
+    process.exitCode = 1; return;
+  }
+  if (/"[^"]*\|c[0-9a-fA-F]/.test(tprobe)) {
+    console.log("SHARE PALETTE CHECK: FAIL - 名号色命令里出现了**字面色码**（应当从候选表取色）");
+    process.exitCode = 1; return;
+  }
+  // ★同样用精确分支写法：`string.find(msg, "^go 名号色%s")`（带参数那条路）里也含这个子串，弱判据会假绿。
+  if (!/msg == "go 名号色"/.test(eh) || !/EVAL_SHARE_TITLE_COLOR_PROBE\(\)/.test(eh) || !/EVAL_TITLE_SET_CUSTOM_COLOR\(/.test(eh)) {
+    console.log("SHARE PALETTE CHECK: FAIL - /eh go 名号色 没接上入口（预览与选用两条都要接）");
+    process.exitCode = 1; return;
+  }
+  console.log("SHARE PALETTE CHECK: 在用色码 " + codes.length + " 个逐项 8 位且互不撞色（含 " + custCols.length + " 个名号色候选）；色码测/名号色两条命令都从色表现取（无字面色码）且已接上入口");
 })();
 
 // ===== PACK LIST CHECK（1.73.0）：发布包清单必须**跟着 .toc 走**，条目数基准也要对得上 =====

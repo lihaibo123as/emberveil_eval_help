@@ -6991,6 +6991,28 @@ if type(SlashCmdList) == "table" then
       else
         say("色码测：Share 模块未载入（EVAL_SHARE_COLOR_PROBE 不存在）")
       end
+    -- ★★★1.73.45 名号色（用户：「彩蛋头衔 颜色设置霸气一点」）：不带编号 = **逐条编号预览候选**（真形态真颜色）；
+    --   带编号 = 当场选用并存档（cfg.title.customColor，立刻生效、重登仍在）。
+    elseif msg == "go 名号色" or msg == "go 头衔色" or msg == "go titlecolor"
+        or string.find(msg, "^go 名号色%s") or string.find(msg, "^go 头衔色%s") or string.find(msg, "^go titlecolor%s") then
+      if type(EVAL_SHARE_TITLE_COLOR_PROBE) == "function" then
+        local argC = string.match(msg, "^go [^%s]+%s+(%S+)$")
+        if argC then
+          local colC = (type(EVAL_TITLE_SET_CUSTOM_COLOR) == "function") and EVAL_TITLE_SET_CUSTOM_COLOR(argC) or nil
+          if colC then
+            local listC = (type(EVAL_TITLE_CUSTOM_COLOR_LIST) == "function") and EVAL_TITLE_CUSTOM_COLOR_LIST() or nil
+            local nmC = (listC and listC[tonumber(argC)] and listC[tonumber(argC)].name) or ""
+            say(string.format(EVAL_L("TC_SET_FMT"), tostring(colC) .. tostring(nmC) .. "|r"))
+          else
+            local nC = (type(EVAL_TITLE_CUSTOM_COLOR_LIST) == "function") and table.getn(EVAL_TITLE_CUSTOM_COLOR_LIST()) or 0
+            say(string.format(EVAL_L("TC_BAD"), nC))
+          end
+        else
+          EVAL_SHARE_TITLE_COLOR_PROBE()
+        end
+      else
+        say("名号色：Share 模块未载入（EVAL_SHARE_TITLE_COLOR_PROBE 不存在）")
+      end
     -- ★★★1.73.42s 取证：右键名字菜单的能力 + 记账（用户：「右键邀请触发」＝点了没反应）
     elseif msg == "go 名字探针" or msg == "go namemenu" or msg == "go 社交探针" then
       if type(EVAL_TB_NAME_PROBE) == "function" then

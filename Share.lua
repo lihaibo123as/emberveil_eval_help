@@ -490,7 +490,9 @@ function EVAL_SHARE_SEAL_VARIANT_PROBE()
   --      **客户端遇到不合法的颜色码会把整条消息吞掉**（不报错、不显示）——这是本次最有价值的客户端事实。
   --   ② 于是本轮把「色码/链接/符号/方括号/长度」逐个拆开，专门夹出**封皮那条**死在哪个成分上。
   --   ★所有色码一律用 8 位（`|cAARRGGBB`）字面量，不再手打。
-  local TITLE_COL = "|cfffff2c8"   -- 彩蛋自定义头衔色（8 位，取自 SH_TITLE_CUSTOM_COLOR）
+  local TITLE_COL = "|cffffd700"   -- 彩蛋自定义头衔色（8 位；★1.73.45 起默认=帝王金，实际选用色见 shTitleCustomColor()）
+  --   ★这里保留**字面量快照**（不变色）：本命令测的是**消息形态**（哪个结构会被客户端吞），颜色取哪个都一样；
+  --     且本函数声明在 shTitleCustomColor() 之前，直接调用会踩「local 声明晚于使用」的铁律（DECL ORDER 守着）。
   local TIER_COL  = "|cffb87333"   -- 源代码档品阶色（8 位，取自 SH_SEAL_TIERS）
   local who, plan, cmt, sym, title = "Ionol", "武器战", "看懂？", "★", "阿凡提"
   if type(UnitName) == "function" then
@@ -1005,8 +1007,27 @@ local SH_SEAL_SYMBOLS = { "·", "◆", "■", "●", "★" }
 --   1 档 青灰 |cff8fa8b8 · 2 档 青 |cff00e5ff · 3 档 蓝 |cff4f9bff · 4 档 品红 |cffff4fd8 · 5 档 极光青绿 |cff5cffd2。
 --   ★色码必须 8 位（`|c` + AARRGGBB）：6 位本客户端**不解析**，会把色码原文画进聊天（1.73.19 实测）。
 local SH_TITLE_COLORS = { "|cff8fa8b8", "|cff00e5ff", "|cff4f9bff", "|cffff4fd8", "|cff5cffd2" }
--- ★1.73.42p 彩蛋自定义名号的专属色（**淡金·神性**）：与 5 档头衔的冷色系、5 品阶的暖色系都不撞，一眼看出「这不是抽来的」
-local SH_TITLE_CUSTOM_COLOR = "|cfffff2c8"
+-- ★★★1.73.45 彩蛋自定义名号的**默认色 = 帝王金**（原 1.73.42p 的淡金 |cfffff2c8 太素 —— 用户要求「霸气一点」）。
+--   ★颜色是主观偏好 ⇒ 顺带给**候选表 + 命令**：/eh go 名号色 把候选**各发一条编号预览**（真形态、真颜色），
+--     /eh go 名号色 <编号> 当场选用并**存档**（cfg.title.customColor）—— 免得为了「再霸气一点」来回改版。
+--   ★候选一律**避开**品阶五档（白/绿/紫/橙/暗金）与头衔五档（青灰/青/蓝/品红/青绿）：同屏不糊成一团（源码检查守着）。
+local SH_TITLE_CUSTOM_COLORS = {
+  { code = "|cffffd700", key = "TC_GOLD" },   -- 1 帝王金（默认）
+  { code = "|cffff2400", key = "TC_FLAME" },  -- 2 烈焰赤
+  { code = "|cffdc143c", key = "TC_BLOOD" },  -- 3 龙血赤
+  { code = "|cffb22222", key = "TC_DARK" },   -- 4 暗血赤
+  { code = "|cffff8c00", key = "TC_MOLTEN" }, -- 5 熔金橙
+}
+-- ★单一来源：默认色**就是候选表第 1 项**（改候选表即改默认，永远对齐）
+local SH_TITLE_CUSTOM_COLOR = SH_TITLE_CUSTOM_COLORS[1].code
+-- 有效色（**渲染 / 分享 / 命令 / 断言都走这一个读值口**）：玩家选过且形态合法 → 用玩家的；否则用默认。
+--   ★只认 8 位色码（|cAARRGGBB）：存档被手改成 6/7 位时**不许照发**（非 8 位客户端会整条吞消息，1.73.43e 实测）。
+local function shTitleCustomColor()
+  local cfgC = rawget(_G, "EVAL_HELP_CONFIG")
+  local v = (type(cfgC) == "table" and type(cfgC.title) == "table") and cfgC.title.customColor or nil
+  if type(v) == "string" and string.match(v, "^|c%x%x%x%x%x%x%x%x$") ~= nil then return v end
+  return SH_TITLE_CUSTOM_COLOR
+end
 -- ===== 1.73.42n 头衔抽卡（用户 2026-09-19 定稿）==========================================
 --   用户原话：「每个档位只抽卡一次.不重复抽卡.唯一不变.」+「档位可以和方案的档位数量相同. 每个档位卡池…15 个」
 --     +「根据用户当前方案稀有度的数量, 达成档位的需求就晋升档位. 当我只升不降.」
@@ -1114,7 +1135,7 @@ function EVAL_TITLE_CURRENT()
   if type(t.custom) == "string" and t.custom ~= "" then custom = t.custom end
   local tier = tonumber(t.tier) or 0
   if tier < 1 then
-    if custom then return { tier = 0, name = custom, color = SH_TITLE_CUSTOM_COLOR, custom = true } end
+    if custom then return { tier = 0, name = custom, color = shTitleCustomColor(), custom = true } end
     return nil
   end
   local idx = tonumber(t.draws and t.draws[tier])
@@ -1122,7 +1143,7 @@ function EVAL_TITLE_CURRENT()
   local name, isCustom = L(key), false
   if custom then name, isCustom = custom, true end
   return { tier = ti, idx = (not isCustom) and k or nil, key = (not isCustom) and key or nil,
-           name = name, color = isCustom and SH_TITLE_CUSTOM_COLOR or (SH_TITLE_COLORS[ti] or SH_TITLE_COLORS[1]), custom = isCustom,
+           name = name, color = isCustom and shTitleCustomColor() or (SH_TITLE_COLORS[ti] or SH_TITLE_COLORS[1]), custom = isCustom,
            counts = t.counts, at = t.at }
 end
 -- 按**名字**回找头衔（接收端只有封皮行里的文字）：返回档位与颜色；不是我们发的头衔（或对方是彩蛋自定义）
@@ -1358,7 +1379,7 @@ function EVAL_SHARE_COLOR_PROBE()
     end
     table.insert(list, { code = SH_TITLE_COLORS[i], label = nm })
   end
-  table.insert(list, { code = SH_TITLE_CUSTOM_COLOR, label = "彩蛋·自定义名号" })
+  table.insert(list, { code = shTitleCustomColor(), label = "彩蛋·自定义名号" })
   local n = table.getn(list)
   local bodies = {}
   for i = 1, n do
@@ -1394,7 +1415,61 @@ end
 --   ★窗口配方照本项目弹窗规范：DIALOG + **明确 frame level 210**（高于分享弹窗 140 / 名称弹窗 130）+
 --     EnableMouse + 可拖动 + 越界回归；EditBox 在本客户端**可能不渲染** → 必有**金色回声行**保底（1.15.1 教训）。
 local shCreator = { root = nil }
-function EVAL_TITLE_CUSTOM_COLOR() return SH_TITLE_CUSTOM_COLOR end
+function EVAL_TITLE_CUSTOM_COLOR() return shTitleCustomColor() end
+-- ★★★1.73.45 「名号色」命令（用户：「彩蛋头衔 颜色设置霸气一点」）
+--   ① /eh go 名号色 → 把候选色**各发一条编号预览**到「说」（形态与分享行同款：色码打头 + 链接 + [名号]|h|r + 说明）：
+--      预览方括号里就是**玩家自己的名号**，看到什么就是分享出去的样子；
+--   ② /eh go 名号色 <编号> → 当场选用并存档（cfg.title.customColor），立刻生效、重登仍在。
+--   ★为什么给候选而不是直接改死：颜色是主观偏好，一次摊开让玩家自己挑，比「再霸气一点」来回改版快得多
+--     （本项目已在「够不够亮 / 看不看得见」上往返好几轮）。候选一律**避开品阶与头衔五档**（源码检查守着）。
+function EVAL_TITLE_CUSTOM_COLOR_LIST()
+  local out = {}
+  for i = 1, table.getn(SH_TITLE_CUSTOM_COLORS) do
+    local e = SH_TITLE_CUSTOM_COLORS[i]
+    out[i] = { n = i, code = e.code, key = e.key, name = L(e.key), current = (e.code == shTitleCustomColor()) }
+  end
+  return out
+end
+-- 选用：只认候选表里的编号（越界/非数字**如实返回 nil**，绝不悄悄改成默认）
+function EVAL_TITLE_SET_CUSTOM_COLOR(n)
+  n = tonumber(n)
+  if not n or n < 1 or n > table.getn(SH_TITLE_CUSTOM_COLORS) then return nil end
+  local cfgS = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(cfgS) ~= "table" then return nil end
+  cfgS.title = cfgS.title or {}
+  cfgS.title.customColor = SH_TITLE_CUSTOM_COLORS[n].code
+  return cfgS.title.customColor
+end
+function EVAL_SHARE_TITLE_COLOR_PROBE()
+  local list = EVAL_TITLE_CUSTOM_COLOR_LIST()
+  local n = table.getn(list)
+  -- 预览标签 = **玩家自己的名号**（没有自定义名号就用抽到的那个；都没有才用中性示例名）
+  local who = L("TC_SAMPLE")
+  local cur = (type(EVAL_TITLE_CURRENT) == "function") and EVAL_TITLE_CURRENT() or nil
+  if cur and type(cur.name) == "string" and cur.name ~= "" then who = cur.name end
+  local bodies = {}
+  for i = 1, n do
+    local e = list[i]
+    local idh = string.format("d0%02x", i)
+    local body = e.code .. "|HEHPF:" .. idh .. " 0/1:0|h[" .. who .. "]|h|r  " .. tostring(i) .. "·" .. tostring(e.name)
+    if string.len(body) > SH_MSG_MAX then body = e.code .. "|HEHPF:" .. idh .. " 0/1:0|h[" .. who .. "]|h|r" end
+    if string.len(body) > SH_MSG_MAX then body = nil end
+    e.body = body
+    table.insert(bodies, body or "")
+    if body then table.insert(shTxQ, { body = body, chan = "SAY" }) end
+  end
+  shTxLast = shNowT()
+  shEnsureTxTicker()
+  local cfgP = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(cfgP) == "table" then cfgP.shTitleColorProbe = { n = n, list = bodies, at = shNowT() } end
+  shSay(string.format(L("TC_PROBE_HEAD"), n))
+  shSay(L("TC_PROBE_TIP"))
+  for i = 1, n do
+    shSay("  [" .. tostring(i) .. "] " .. shRawForPrint(list[i].code) .. "  " .. tostring(list[i].name) ..
+          (list[i].current and ("  " .. L("TC_CUR")) or ""))
+  end
+  return { n = n, list = list, bodies = bodies, at = shNowT() }
+end
 -- 提交：把输入写进存档（**只有一次**，由 EVAL_TITLE_SET_CUSTOM 把守）——成功/失败都如实播报，绝不静默
 local function shCreatorSubmit()
   if not (shCreator and shCreator.edit) then return false end
