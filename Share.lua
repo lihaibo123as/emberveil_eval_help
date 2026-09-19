@@ -204,7 +204,17 @@ local function shBuildFor(text)
         local cmt2 = (type(sinfo.comment) == "string") and sinfo.comment or ""
         local tail = ""
         if titleTxt ~= "" then tail = titleTxt .. "  " end -- 身份：链接之后的**纯文本**（无方括号、无色码）
-        sealB = tierCol2 .. "|HEHPF:" .. idh .. " 0/1:0|h[" .. sym2 .. tostring(sinfo.tierName) .. "秘籍·" .. tostring(sinfo.plan) .. "]|h|r  " .. tail .. cmt2
+        -- ★1.73.43n 长度守卫：分享信息那条**必须与分片同规矩**（≤ SH_MSG_MAX）。
+        --   超了先砍评语，还超就整条不发（**如实说一声**，绝不发一条会被客户端/服务器丢掉的超长消息）。
+        local sealBase = tierCol2 .. "|HEHPF:" .. idh .. " 0/1:0|h[" .. sym2 .. tostring(sinfo.tierName) .. "秘籍·" .. tostring(sinfo.plan) .. "]|h|r  " .. tail
+        sealB = sealBase .. cmt2
+        if string.len(sealB) > SH_MSG_MAX then
+          sealB = sealBase
+          if string.len(sealB) > SH_MSG_MAX then
+            sealB = nil
+            shSay("分享信息行超过本客户端实测上限 " .. SH_MSG_MAX .. " 字节，本次省略（方案分片照常发送）")
+          end
+        end
       end
     end
   end

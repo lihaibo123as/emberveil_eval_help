@@ -11065,6 +11065,7 @@ do
   local nAll144 = table.getn(all)
   local msgB = tostring(all[nAll144] or "")
   eq(string.find(msgB, seal, 1, true) ~= nil, true, "①★★★最后一条 = 分享信息行（走同一条已被证明能画的结构）")
+  eq(string.len(msgB) <= 250, true, "①★★★分享信息那条也 ≤250 字节（与分片同规矩；超限真机上整条丢）：" .. tostring(string.len(msgB)))
   eq(string.find(msgB, "|HEHPF:", 1, true) ~= nil, true, "①★★★它带可点链接（点它即可导入）")
   eq(sealA, "", true, "①★★★A 身份行已删除（用户：「不能用就删除」）")
   -- ★但读值口只看 `sealSentFirst`，看不出「又偷偷排了第二条」⇒ 直接数**真正发出去的消息**里有没有「X 分享了」（M459 就是这么存活的）
