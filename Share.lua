@@ -115,6 +115,13 @@ local SH_SEND_RATE = 0.5 -- 相邻两片之间的最小间隔（秒）
 local SH_MAX_QUEUE = 200  -- 发送队列上限（条）
 local shTxQ, shTxLast = {}, 0
 local shTxFrame
+
+-- ★★★1.73.43c **取证打印必须先转义 `|`（写成 `||`）**：否则客户端把 `|HEHPF:…|h` 当链接吃掉、`|cff…` 当颜色吃掉，
+--   打出来的「脚本原文」根本不是原文 —— 本轮第一份取证就是这么被瞒过去的（看到的脚本里 `|` 全没了）。
+--   ★声明放在这里（上方探针要用它；DECL ORDER 检查守这条）。
+local function shRawForPrint(t)
+  return string.gsub(tostring(t or ""), "|", "||")
+end
 -- ★前置声明（本项目铁律：引用点在声明之前会解析成全局 nil）——
 --   实现在 shNowT 之后，那里才拿得到计时函数。
 local shTxEnqueue, shTxStep
@@ -177,7 +184,17 @@ local function shBuildFor(text)
       local sps = string.find(sline, smark, 1, true)
       if sps then
         local scut = sps + string.len(tostring(sinfo.symbol)) - 1
-        sline = string.sub(sline, 1, scut) .. "|HEHPF:" .. idh .. "|h" .. string.sub(sline, scut + 1) .. "|h"
+        -- ★★★1.73.43c 真机取证结论（探针）：封皮那条**我们确实发了**、队列也滴干了，客户端**就是不画**。
+        --   与分片逐字对比，唯一结构差别在这里：老写法让链接**一直开到评语之后**（`[名]` 与 `|r` 都在链接内），
+        --   而分片是 `|HEHPF:…|h[标签]|h|r`（链接**只包标签**）。⇒ 现在封皮照抄分片结构。
+        --   ★附带好处：可点区域正好是那个方括号（评语不再是链接的一部分）。
+        local stail = string.sub(sline, scut + 1)
+        local sclose = string.find(stail, "]", 1, true)
+        if sclose then
+          sline = string.sub(sline, 1, scut) .. "|HEHPF:" .. idh .. "|h" .. string.sub(stail, 1, sclose) .. "|h" .. string.sub(stail, sclose + 1)
+        else
+          sline = string.sub(sline, 1, scut) .. "|HEHPF:" .. idh .. "|h" .. stail .. "|h" -- 保底：找不到 ] 退回老写法（绝不留半条链接）
+        end
       end
       SH.sealPending = sline -- ★封皮排在**分片之后**（最后一步）
       SH.sealSentLast = sline -- ★1.73.43b 发送侧单独记（原来与接收侧共用 sealLast → 收到别人分享就把自己的盖掉了）
@@ -223,7 +240,7 @@ function EVAL_SHARE_SEND_PROBE()
   if type(cfgP) == "table" then cfgP.shProbe = probe end -- ★落盘证人（判据不玩聊天含子串）
   shSay("===== 分享发送 · 取证 =====")
   shSay("  封皮行：长度 " .. tostring(probe.sealLen) .. " 字节" ..
-        ((probe.sealLen == 0) and "（★空串！这就是「没显示」的原因）" or ("：" .. probe.seal)))
+        ((probe.sealLen == 0) and "（★空串！这就是「没显示」的原因）" or ("：" .. shRawForPrint(string.sub(seal, 1, 110)))))
   shSay("  封皮进度：排队中残留=" .. tostring(SH.sealPending ~= nil) .. " · 已从队列弹出 " .. tostring(probe.sealPopped) .. " 次")
   shSay("  队列剩余：" .. tostring(probe.queueLen) .. " 条" .. ((probe.queueLen > 0) and "（★卡住了：发完前别重复点）" or "（已发完）"))
   for i = 1, math.min(4, table.getn(q)) do
@@ -234,7 +251,12 @@ function EVAL_SHARE_SEND_PROBE()
   for i = table.getn(log), 1, -1 do
     if shown < 6 then
       shown = shown + 1
-      shSay("    " .. (log[i].seal and "[封皮] " or "[分片] ") .. " " .. string.sub(tostring(log[i].s), 1, 70))
+      -- ★头 + 尾都打（中间省略）：只看头会把「链接怎么闭合的」这件事永远藏起来
+      local full = tostring(log[i].s)
+      local head = string.sub(full, 1, 56)
+      local tail = string.sub(full, -26)
+      shSay("    " .. (log[i].seal and "[封皮] " or "[分片] ") .. " " .. tostring(string.len(full)) .. "B · " ..
+            shRawForPrint(head) .. " … " .. shRawForPrint(tail))
     end
   end
   if table.getn(log) == 0 then shSay("    （一条都没发出去 —— 连第 1 片都没有，说明发送路径没走到）") end
@@ -320,6 +342,9 @@ local function shSentLog(script, isSeal)
 end
 -- ★★★脚本串必须中和引号/反斜杠：`SendChatMessage("…")` 里只要出现一个 `"`，**整条脚本作废**，
 --   而 RunScript **一声不响**（玩家看到的就是「这条消息凭空消失」）。同名老坑：`tbSafeName` 就是为它写的。
+-- ★★★1.73.43c **取证打印必须先转义 `|`（写成 `||`）**：否则客户端把 `|HEHPF:…|h` 当链接吃掉、`|cff…` 当颜色吃掉，
+--   打出来的「脚本原文」根本不是原文 —— 本轮第一份取证就是这么被瞒过去的（看到的脚本里 `|` 全没了）。
+--   ★声明放在这里（上方探针要用它；DECL ORDER 检查守这条）。
 local function shScriptSafe(t)
   t = tostring(t or "")
   t = string.gsub(t, string.char(34), "'")
@@ -578,17 +603,27 @@ local function shOnMsg(msg, sender, ev)
       local rank, rankColor = nil, nil
       if idName and idName ~= "" then rank, rankColor = idName, idColor
       else rank = string.match(msg, "%[([^%]]*)%]") end
-      local disp = string.match(msg, "|HEHPF:[^|]*|h(.-)|h")
+      -- ★★★1.73.43c 两种结构都要认：
+      --   ① **新**（1.73.43c 起）：链接只包 `[品阶秘籍·名]`，评语在**链接之外**（与分片同款结构）→
+      --      形如 `…|HEHPF:id|h[源代码秘籍·名]|h|r 评语`；
+      --   ② **老**（老版本发出来的）：链接一直开到评语之后 → 评语在链接**内**。
+      --   ★只认一种 = 另一侧发来的封皮**评语全丢**（判据 145③ 当场抓到）。
       local comment = nil
-      if disp then
-        local rb = string.find(disp, "%]")
-        if rb then comment = string.sub(disp, rb + 1) end
-        if comment then
-          comment = string.gsub(comment, "|r", "")
-          comment = string.gsub(comment, "^%s+", "")
-          comment = string.gsub(comment, "%s+$", "")
-          if comment == "" then comment = nil end
+      local inside, after = string.match(msg, "|HEHPF:[^|]*|h(%[.-%])|h(.*)$")
+      if inside and after and string.gsub(after, "%s", "") ~= "" then
+        comment = after
+      else
+        local disp = string.match(msg, "|HEHPF:[^|]*|h(.-)|h")
+        if disp then
+          local rb = string.find(disp, "%]")
+          if rb then comment = string.sub(disp, rb + 1) end
         end
+      end
+      if comment then
+        comment = string.gsub(comment, "|r", "")
+        comment = string.gsub(comment, "^%s+", "")
+        comment = string.gsub(comment, "%s+$", "")
+        if comment == "" then comment = nil end
       end
       SH.sealMeta = SH.sealMeta or {}
       SH.sealMeta[sid] = { rank = rank, rankColor = rankColor, comment = comment } -- ★颜色也存（发送端怎么显示，我们就怎么显示）

@@ -12013,6 +12013,57 @@ do
   print("  分享发送留痕：脚本原文 + 封皮是否弹出 + 落盘探针 · 正文引号/反斜杠已中和（脚本不再凭空作废）")
 end
 
+-- 156) ★★★1.73.43c 真机取证后的候选修复：封皮链接结构 + 探针转义 + 接收端**双结构**兼容
+--   取证结论（用户探针截图）：封皮**确实发了**（145 字节、已从队列弹出 1 次、队列已空），客户端就是不画；
+--   与分片逐字对比，唯一结构差别 = 老写法让链接**一直开到评语之后**（`[名]` 与 `|r` 都在链接内）。
+do
+  local keep156 = EVAL_PROFILE_TO_TEXT
+  local savedTb156 = EVAL_HELP_CONFIG.tb
+  EVAL_HELP_CONFIG.tb = EVAL_HELP_CONFIG.tb or {}
+  EVAL_PROFILE_TO_TEXT = function() return "# 方案: 结构测试\n\n- 技能1 | 可攻击" end
+  EVAL_TEST_SHARE_SENTLOG_CLEAR()
+  TEST.runScripts, TEST.chat = nil, nil
+  EVAL_SHARE_SEND("GUILD")
+  local g156 = 0
+  while EVAL_SHARE_TEST_QUEUE_LEN() > 0 and g156 < 400 do
+    g156 = g156 + 1
+    TEST.time = (TEST.time or 1000) + 1
+    EVAL_SHARE_TEST_TICK()
+  end
+  -- ④ 封皮链接结构：链接**只包** `[品阶秘籍·名]`，闭合之后才是 `|r` 与评语（与分片同款）
+  local body156 = tostring((EVAL_SHARE_SEAL_STATE() or {}).last or "")
+  local li156 = string.find(body156, "|HEHPF:", 1, true)
+  eq(li156 ~= nil, true, "④★★封皮带回传链接")
+  if li156 then
+    local lh156 = string.find(body156, "|h", li156, true)
+    eq(string.sub(body156, lh156 + 2, lh156 + 2), "[", "④★★★链接**只包方括号**（`|h` 后紧跟 `[`）")
+    local lc156 = string.find(body156, "|h", lh156 + 2, true)
+    eq(lc156 ~= nil, true, "④★★★链接在 `]` 之后**立刻闭合**")
+    eq(string.find(string.sub(body156, lc156 + 2), "|r", 1, true), 1, "④★★★`|r` 与评语都在链接**之外**（老写法正是把它们包在链接里 → 客户端不画）")
+    eq(string.sub(body156, -2) == "|h", false, "④★★整行不再以 `|h` 收尾（那是老结构的尾巴）")
+  end
+  -- ⑤ 取证打印转义：客户端会把 |H…|h 当链接吃掉 → 不打成 `||` 就看不到真证据
+  EVAL_HELP_CONFIG.shProbe = nil
+  TEST.chat = nil
+  EVAL_SHARE_SEND_PROBE()
+  eq(string.find(tostring(TEST.chat or ""), "||HEHPF:", 1, true) ~= nil, true, "⑤★★★探针把 `|` 打成 `||`（否则「脚本原文」里的链接与颜色全被吃掉）")
+  eq(string.find(tostring(TEST.chat or ""), 'SendChatMessage("||', 1, true) ~= nil, true, "⑤★★★**留痕里的脚本原文**也转了义（弱判据教训：只查 ||HEHPF 会被「封皮行也转了义」顶住，M443 实测 SURVIVED）")
+  -- ⑥ 接收端**两种结构**都要能解析出评语（新：评语在链接外；老：评语在链接内）
+  EVAL_SHARE_RESET()
+  EVAL_SHARE_ONMSG("[头衔]某人 分享了 → |cffb87333★|HEHPF:aaa1|h[源代码秘籍·甲]|h|r  新结构评语", "A", "CHAT_MSG_SAY")
+  EVAL_SHARE_ONMSG("[头衔]某人 分享了 → |cffb87333★|HEHPF:aaa2|h[源代码秘籍·甲]|r  老结构评语|h", "B", "CHAT_MSG_SAY")
+  local meta156 = (EVAL_SHARE_SEAL_STATE() or {}).meta or {}
+  eq(type(meta156.aaa1) == "table", true, "⑥★★新版封皮被认出来了")
+  eq(tostring(meta156.aaa1 and meta156.aaa1.comment or ""), "新结构评语", "⑥★★★新结构：评语在链接**外**也解析得到")
+  eq(tostring(meta156.aaa2 and meta156.aaa2.comment or ""), "老结构评语", "⑥★★★老结构：评语在链接**内**照样解析（老版本发来的封皮不许丢评语）")
+  EVAL_PROFILE_TO_TEXT = keep156
+  EVAL_HELP_CONFIG.tb = savedTb156
+  EVAL_HELP_CONFIG.shProbe = nil
+  TEST.chat = nil
+  print("  封皮结构：链接只包方括号（与分片同款）· 探针转义 `||` · 接收端双结构都能取到评语")
+end
+
+print("ALL TESTS PASS")
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")
