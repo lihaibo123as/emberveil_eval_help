@@ -16,8 +16,14 @@ local function shSay(t)
   elseif DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage(tostring(t)) end
 end
 
+-- ★★★1.73.42j **修真事故**：语言来源必须是**读取器** EVAL_GET_LANG()。
+--   老写法 `(type(EVAL_RESOLVE_LANG) == "function") and EVAL_RESOLVE_LANG() or "zhCN"` **恒等于 "zhCN"**：
+--   Core.lua 的 ehResolveLang() 是**写入器**（每个分支裸 return、末尾 EH_LANG = "zhCN"）→ 返回 nil，
+--   被 `or "zhCN"` 兜底（Lua 的 and/or 链没有布尔语义）→ 整个分享模块（接收弹窗/按钮/提示/封皮行）
+--   在英/俄客户端里**一律显示中文**，而且全程不报错。DataSearch 与 Toolbox 在 1.70.46 已改，**Share 漏了**；
+--   本轮把 50 条评语/境界/品阶迁进 Locales 时，新判据（切语言读值口必须变）当场把它逼了出来。
 local function L(k)
-  local lang = (type(EVAL_RESOLVE_LANG) == "function") and EVAL_RESOLVE_LANG() or "zhCN"
+  local lang = (type(EVAL_GET_LANG) == "function") and EVAL_GET_LANG() or "zhCN"
   local pack = EVAL_LOCALES and EVAL_LOCALES[lang]
   local v = pack and pack[k]
   if v == nil and EVAL_LOCALES and EVAL_LOCALES.zhCN then v = EVAL_LOCALES.zhCN[k] end
@@ -690,39 +696,37 @@ end
 --   品阶 = **技能条数 + 每条技能里的条件数**（评分制）：≤3 普通 / 4-6 稀有 / 7-9 珍稀 / 10-12 绝版 / **≥13 源代码**；
 --   颜色：白 |cffffffff · 绿 |cff1eff00 · 紫 |cffa335ee · 橙 |cffff8000 · **暗金 |cffb87333**（用户定的）；
 --   评语：每档 **10 条**（用户要求），分享时**随机抽一条**。★这些文案下一步要迁进 Locales 三语言（现为本轮预览用）。
+-- ★★★1.73.42j 这三张表现在只存**结构 + 键**，文案一律走 Locales（L()）：
+--   ★为什么必须搬：用户要求「50 条评语与境界/品阶名迁进 Locales 三语言」——文案散在源码里 = 换语言时
+--     分享行还是中文（本项目「命名/文案也是功能」的老账）。色码与符号**留在 Share.lua**（那是协议不是文案）。
 local SH_SEAL_RANKS = {
-  { 1, 9, "炼气" }, { 10, 19, "筑基" }, { 20, 29, "金丹" }, { 30, 39, "元婴" },
-  { 40, 49, "化神" }, { 50, 59, "炼虚" }, { 60, 60, "大乘" },
+  { 1, 9, "SEAL_RANK_1" }, { 10, 19, "SEAL_RANK_2" }, { 20, 29, "SEAL_RANK_3" }, { 30, 39, "SEAL_RANK_4" },
+  { 40, 49, "SEAL_RANK_5" }, { 50, 59, "SEAL_RANK_6" }, { 60, 60, "SEAL_RANK_7" },
 }
 local SH_SEAL_TIERS = {
-  { max = 3,  name = "普通",   color = "|cffffffff" },
-  { max = 6,  name = "稀有",   color = "|cff1eff00" },
-  { max = 9,  name = "珍稀",   color = "|cffa335ee" },
-  { max = 12, name = "绝版",   color = "|cffff8000" },
-  { max = 9999, name = "源代码", color = "|cffb87333" },
+  { max = 3,  key = "SEAL_TIER_1", color = "|cffffffff" },
+  { max = 6,  key = "SEAL_TIER_2", color = "|cff1eff00" },
+  { max = 9,  key = "SEAL_TIER_3", color = "|cffa335ee" },
+  { max = 12,  key = "SEAL_TIER_4", color = "|cffff8000" },
+  { max = 9999, key = "SEAL_TIER_5", color = "|cffb87333" },
 }
 local SH_SEAL_COMMENTS = {
-  -- 普通
-  { "拿来练手，聊胜于无。", "有总比没有强，先练着。", "凡人入门，聊以自慰。", "江湖地摊货，胜在免费。", "练废了也不心疼。", "聊胜于无，且行且珍惜。", "有手就行，别挑。", "基础中的基础，地基里的地基。", "先用着，等有更好的再换。", "此物平平无奇，胜在不要钱。" },
-  -- 稀有
-  { "有点东西，值得一学。", "江湖上能见着，不算稀奇。", "小有所成，可堪一用。", "比上不足，比下有余。", "寻常货色里的上等货。", "值得抄在作业本上。", "拿去打本，不至于丢人。", "有点门道，别小看它。", "绿光一闪，聊胜于白。", "修炼路上的一块垫脚石。" },
-  -- 珍稀
-  { "此物不常见，收好。", "三生有幸，方得一见。", "紫气东来，必是精品。", "拿出来能唬住半条街。", "老玩家看了会点头。", "这不是烂大街的货。", "若非有缘，你一辈子碰不上。", "值得截图发群里。", "有点东西，这次是真的有点东西。", "见者有份，别声张。" },
-  -- 绝版
-  { "世间仅此一份，见者有缘。", "此乃孤本，失传莫怪。", "橙光普照，江湖震动。", "这等货色，拍卖行都不敢挂。", "错过今天，再无来日。", "连 GM 都没见过这份。", "得之你幸，失之你命。", "传说级待遇，请正襟危坐。", "有此一物，可以镇宅。", "别问价格，问就是无价。" },
-  -- 源代码
-  { "天书原文，凡人勿近。", "此乃源代码，改一个字符都会天崩地裂。", "创世之初写下的那一行。", "观之可开悟，抄之恐遭雷劈。", "作者亲笔，非请勿动。", "此物一出，江湖再无秘密。", "此码不仁，以规则为螺丝。", "看懂了能成神，看不懂会头疼。", "本源之力，慎入。", "此乃源码，非修仙之人不可直视。" },
+  { "SEAL_C1_1", "SEAL_C1_2", "SEAL_C1_3", "SEAL_C1_4", "SEAL_C1_5", "SEAL_C1_6", "SEAL_C1_7", "SEAL_C1_8", "SEAL_C1_9", "SEAL_C1_10" },
+  { "SEAL_C2_1", "SEAL_C2_2", "SEAL_C2_3", "SEAL_C2_4", "SEAL_C2_5", "SEAL_C2_6", "SEAL_C2_7", "SEAL_C2_8", "SEAL_C2_9", "SEAL_C2_10" },
+  { "SEAL_C3_1", "SEAL_C3_2", "SEAL_C3_3", "SEAL_C3_4", "SEAL_C3_5", "SEAL_C3_6", "SEAL_C3_7", "SEAL_C3_8", "SEAL_C3_9", "SEAL_C3_10" },
+  { "SEAL_C4_1", "SEAL_C4_2", "SEAL_C4_3", "SEAL_C4_4", "SEAL_C4_5", "SEAL_C4_6", "SEAL_C4_7", "SEAL_C4_8", "SEAL_C4_9", "SEAL_C4_10" },
+  { "SEAL_C5_1", "SEAL_C5_2", "SEAL_C5_3", "SEAL_C5_4", "SEAL_C5_5", "SEAL_C5_6", "SEAL_C5_7", "SEAL_C5_8", "SEAL_C5_9", "SEAL_C5_10" },
 }
 local SH_SEAL_SYMBOLS = { "·", "◆", "✦", "★", "✸" }
 function EVAL_SHARE_SEAL_RANK(level)
   level = tonumber(level) or 1
   for i = 1, table.getn(SH_SEAL_RANKS) do
     local r = SH_SEAL_RANKS[i]
-    if level >= r[1] and level <= r[2] then return r[3] end
+    if level >= r[1] and level <= r[2] then return L(r[3]) end
   end
   -- 越界兜底：低于 1 → 最低档；高于 60 → **最高档**（大乘）
-  if level < 1 then return SH_SEAL_RANKS[1][3] end
-  return SH_SEAL_RANKS[table.getn(SH_SEAL_RANKS)][3]
+  if level < 1 then return L(SH_SEAL_RANKS[1][3]) end
+  return L(SH_SEAL_RANKS[table.getn(SH_SEAL_RANKS)][3])
 end
 -- 评分 = 技能条数 + 技能内每个条件（★复用项目**同一个**导入解析器，不另写一套）
 function EVAL_SHARE_SEAL_SCORE(text)
@@ -738,10 +742,14 @@ function EVAL_SHARE_SEAL_SCORE(text)
 end
 function EVAL_SHARE_SEAL_TIER(score)
   score = tonumber(score) or 0
+  local pick = table.getn(SH_SEAL_TIERS)
   for i = 1, table.getn(SH_SEAL_TIERS) do
-    if score <= SH_SEAL_TIERS[i].max then return i, SH_SEAL_TIERS[i] end
+    if score <= SH_SEAL_TIERS[i].max then pick = i break end
   end
-  return table.getn(SH_SEAL_TIERS), SH_SEAL_TIERS[table.getn(SH_SEAL_TIERS)]
+  local t = SH_SEAL_TIERS[pick]
+  -- ★返回**当场按当前语言解析**的副本：调用方（分享行/弹窗品阶栏/模版 tooltip）照旧读 .name/.color/.max，
+  --   而语言在配置窗里能随时切 —— 缓存一份 name 会出现「切了语言还是旧文案」的静默不一致。
+  return pick, { max = t.max, key = t.key, color = t.color, name = L(t.key) }
 end
 function EVAL_SHARE_SEAL_COMMENT(tierIdx, forced)
   local list = SH_SEAL_COMMENTS[tierIdx]
@@ -749,7 +757,7 @@ function EVAL_SHARE_SEAL_COMMENT(tierIdx, forced)
   local n = table.getn(list)
   local i = tonumber(forced) or math.random(1, n)
   if i < 1 or i > n then i = 1 end
-  return list[i], i
+  return L(list[i]), i
 end
 -- ★★★1.73.42i 详情弹窗「品阶栏」的**单一读值口**（渲染与断言同源，纯函数）。
 --   ★分成两半，各自的诚实边界写死在返回值里（meta 为 nil 时就是「未知」三个字的来源）：

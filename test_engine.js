@@ -260,7 +260,16 @@ function checkIconAssets() {
 //   放在能读文件的一侧：这两个文件里除注释外不允许再出现 EVAL_RESOLVE_LANG。
 (function () {
   const bad = [];
-  for (const f of ["DataSearch.lua", "Toolbox.lua"]) {
+  // ★★★1.73.42j 扫描面从「两个已知文件」扩成**所有自建 local L(k) 的模块**：
+  //   本轮发现 Share.lua 也犯了同一个错（分享模块在英俄客户端恒显示中文）——写死文件名就是盲区，
+  //   改成按「谁定义了 L() 就查谁」，新增模块漏改也拦得住。
+  const _lFiles = fs.readdirSync(__dirname).filter(function (f) { return /\.lua$/.test(f); });
+  const _targets = ["DataSearch.lua", "Toolbox.lua"];
+  _lFiles.forEach(function (f) {
+    const src = fs.readFileSync(path.join(__dirname, f), "utf8");
+    if (/local\s+function\s+L\s*\(/.test(src) && _targets.indexOf(f) < 0) _targets.push(f);
+  });
+  for (const f of _targets) {
     const p = path.join(__dirname, f);
     if (!fs.existsSync(p)) continue;
     const lines = fs.readFileSync(p, "utf8").split(/\r?\n/);
@@ -274,7 +283,7 @@ function checkIconAssets() {
     process.exitCode = 1;
     return;
   }
-  console.log("LANG SOURCE CHECK: DataSearch/Toolbox read the language via EVAL_GET_LANG()");
+  console.log("LANG SOURCE CHECK: " + _targets.join("/") + " read the language via EVAL_GET_LANG() only");
 })();
 
 // ===== WINDOW SIZE CHECK: 每个自建窗都必须**真的**设置宽与高 =====

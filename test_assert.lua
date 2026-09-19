@@ -11188,6 +11188,75 @@ do
   print("  详情弹窗品阶栏：真纹理图标 + 符号 + 品阶/评分 + 发送端境界 + 评语 · 拿不到就写未知 · 让开详情与按钮")
 end
 
+-- 146) ★★★1.73.42j 分享文案迁进 Locales 三语言（50 条评语 + 7 境界 + 5 品阶）
+--   用户要求（项 4）：文案走 L() 取键；色码与符号**留在 Share.lua**（那是协议不是文案）；三语言键必须齐。
+--   ★为什么还要行为断言：源码检查 LANG KEY CHECK 只认 `L("字面量")`，而这里的键是**拼出来的**
+--     （"SEAL_C"..档.."_"..序号）→ 它看不见这 62 个键，必须由本组逐个语言亲自查一遍。
+do
+  local langs146 = { "zhCN", "enUS", "ruRU" }
+  local keys146 = {}
+  for i = 1, 7 do table.insert(keys146, "SEAL_RANK_" .. i) end
+  for i = 1, 5 do table.insert(keys146, "SEAL_TIER_" .. i) end
+  for t = 1, 5 do for k = 1, 10 do table.insert(keys146, "SEAL_C" .. t .. "_" .. k) end end
+  eq(table.getn(keys146), 62, "①键总数 = 7 境界 + 5 品阶 + 50 评语（" .. tostring(table.getn(keys146)) .. "）")
+  for _, lg in ipairs(langs146) do
+    local tb = EVAL_LOCALES[lg]
+    eq(type(tb) == "table", true, "①语言包存在：" .. lg)
+    local miss, empty = {}, {}
+    for _, k in ipairs(keys146) do
+      local v = tb and tb[k]
+      if type(v) ~= "string" then table.insert(miss, k)
+      elseif v == "" then table.insert(empty, k) end
+    end
+    eq(table.getn(miss), 0, "①★★★" .. lg .. " 62 个键一个都不缺（缺：" .. table.concat(miss, ",") .. "）")
+    eq(table.getn(empty), 0, "①★" .. lg .. " 没有空文案（空：" .. table.concat(empty, ",") .. "）")
+  end
+  -- ② 中文是**原文**（用户定稿，一字不改）：按档拼起来逐字比 —— 改一个字 / 删一条都会当场响
+  local wantZh146 = {
+    [1] = "拿来练手，聊胜于无。有总比没有强，先练着。凡人入门，聊以自慰。江湖地摊货，胜在免费。练废了也不心疼。聊胜于无，且行且珍惜。有手就行，别挑。基础中的基础，地基里的地基。先用着，等有更好的再换。此物平平无奇，胜在不要钱。",
+    [2] = "有点东西，值得一学。江湖上能见着，不算稀奇。小有所成，可堪一用。比上不足，比下有余。寻常货色里的上等货。值得抄在作业本上。拿去打本，不至于丢人。有点门道，别小看它。绿光一闪，聊胜于白。修炼路上的一块垫脚石。",
+    [3] = "此物不常见，收好。三生有幸，方得一见。紫气东来，必是精品。拿出来能唬住半条街。老玩家看了会点头。这不是烂大街的货。若非有缘，你一辈子碰不上。值得截图发群里。有点东西，这次是真的有点东西。见者有份，别声张。",
+    [4] = "世间仅此一份，见者有缘。此乃孤本，失传莫怪。橙光普照，江湖震动。这等货色，拍卖行都不敢挂。错过今天，再无来日。连 GM 都没见过这份。得之你幸，失之你命。传说级待遇，请正襟危坐。有此一物，可以镇宅。别问价格，问就是无价。",
+    [5] = "天书原文，凡人勿近。此乃源代码，改一个字符都会天崩地裂。创世之初写下的那一行。观之可开悟，抄之恐遭雷劈。作者亲笔，非请勿动。此物一出，江湖再无秘密。此码不仁，以规则为螺丝。看懂了能成神，看不懂会头疼。本源之力，慎入。此乃源码，非修仙之人不可直视。",
+  }
+  for t = 1, 5 do
+    local join = ""
+    for k = 1, 10 do join = join .. tostring(EVAL_LOCALES.zhCN["SEAL_C" .. t .. "_" .. k]) end
+    eq(join == wantZh146[t], true, "②★★★第 " .. t .. " 档 10 条评语与定稿**逐字相同**（长度 " .. tostring(string.len(join)) .. " / " .. tostring(string.len(wantZh146[t])) .. "）")
+  end
+  local ranksZh146 = { "炼气", "筑基", "金丹", "元婴", "化神", "炼虚", "大乘" }
+  local tiersZh146 = { "普通", "稀有", "珍稀", "绝版", "源代码" }
+  for i = 1, 7 do eq(EVAL_LOCALES.zhCN["SEAL_RANK_" .. i] == ranksZh146[i], true, "②★境界原文 " .. i .. " = " .. ranksZh146[i]) end
+  for i = 1, 5 do eq(EVAL_LOCALES.zhCN["SEAL_TIER_" .. i] == tiersZh146[i], true, "②★品阶原文 " .. i .. " = " .. tiersZh146[i]) end
+  -- ③ 真的走语言：切到英/俄，**四处读值口**（境界 / 品阶 / 评语 / 整行）当场跟着变
+  local keepLang146, keepCfgLang146 = EVAL_GET_LANG(), EVAL_HELP_CONFIG.lang
+  for _, lg in ipairs({ "enUS", "ruRU" }) do
+    eq(EVAL_SET_LANG(lg), true, "③前置：切语言到 " .. lg)
+    local tb = EVAL_LOCALES[lg]
+    eq(EVAL_SHARE_SEAL_RANK(1), tb.SEAL_RANK_1, "③★★★境界跟着语言（" .. lg .. "：" .. tostring(tb.SEAL_RANK_1) .. "）")
+    local _, ti146 = EVAL_SHARE_SEAL_TIER(13)
+    eq(ti146.name, tb.SEAL_TIER_5, "③★★★品阶名跟着语言（" .. lg .. "：" .. tostring(tb.SEAL_TIER_5) .. "）")
+    eq(EVAL_SHARE_SEAL_COMMENT(5, 1), tb.SEAL_C5_1, "③★★★评语跟着语言（" .. lg .. "）")
+    local info146 = EVAL_SHARE_SEAL_INFO("# 方案: 甲\n- 技能甲", 1, 1)
+    eq(type(info146) == "table", true, "③前置：整行算得出来")
+    if info146 then
+      eq(string.find(info146.line, tostring(tb.SEAL_TIER_1), 1, true) ~= nil, true, "③★★整行品阶用该语言文案")
+      eq(string.find(info146.line, tostring(tb.SEAL_RANK_1), 1, true) ~= nil, true, "③★★整行境界用该语言文案")
+      eq(string.find(info146.line, tostring(tb.SEAL_C1_1), 1, true) ~= nil, true, "③★★整行评语用该语言文案")
+    end
+  end
+  -- ④ 还原语言（**必须**：其它用例都假定 zhCN）并与 cfg 同步
+  eq(EVAL_SET_LANG(keepLang146), true, "④收尾：语言切回 " .. tostring(keepLang146))
+  EVAL_HELP_CONFIG.lang = keepCfgLang146
+  eq(EVAL_GET_LANG(), keepLang146, "④★★语言已还原（不许污染其它用例）")
+  eq(EVAL_SHARE_SEAL_RANK(1), EVAL_LOCALES[keepLang146].SEAL_RANK_1, "④还原后读值口回到原语言")
+  -- ⑤ 色码与符号**留在源码**：迁文案不许把它们也搬走（它们是协议的一部分）
+  eq(EVAL_SHARE_SEAL_SYMBOL(5), "✸", "⑤符号留在源码（✸）")
+  eq(select(2, EVAL_SHARE_SEAL_TIER(13)).color, "|cffb87333", "⑤暗金色码留在源码")
+  TEST.chat = nil
+  print("  分享文案三语言：62 键逐语言齐全 · 中文原文逐字校验 · 切语言四处读值口即时生效 · 符号/色码仍在源码")
+end
+
 print("ALL TESTS PASS")
 
   local sd142 = EVAL_HELP_CONFIG.shareSealDemo
