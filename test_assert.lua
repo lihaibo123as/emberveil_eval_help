@@ -10906,6 +10906,20 @@ do
   eq(type(EVAL_HELP_CONFIG.shareIconProbe) == "table", true, "★★★/eh go 图标探针 真的执行了（以落盘字段为证）")
   eq(table.getn((EVAL_HELP_CONFIG.shareIconProbe or {}).bodies or {}) == 4, true, "★★命令跑完写出四条形态")
   TEST.chat = nil
+  -- ★★★1.73.42d 用户回报：|T 不可用（只有符号对照出来）→ 聊天行改用符号，图标进详情弹窗
+  local symSeen = {}
+  for i = 1, 5 do
+    local s = EVAL_SHARE_SEAL_SYMBOL(i)
+    eq(type(s) == "string" and string.len(s) > 0, true, "品阶符号非空 " .. i)
+    eq(symSeen[s] == nil, true, "★五个品阶符号不重复：" .. tostring(s))
+    symSeen[s] = true
+  end
+  eq(EVAL_SHARE_SEAL_SYMBOL(1), "·", "普通 = ·")
+  eq(EVAL_SHARE_SEAL_SYMBOL(5), "✸", "源代码 = ✸")
+  local iSym = EVAL_SHARE_SEAL_INFO(txt(13), 10)
+  eq(iSym.symbol, "✸", "整行 info 里带符号")
+  eq(string.find(iSym.line, "✸[源代码秘籍·甲]", 1, true) ~= nil, true, "★★整行是「符号 + [品阶秘籍·名]」")
+  eq(string.find(iSym.line, "|T", 1, true) == nil, true, "★聊天行里不再出现 |T（实测不可用）")
   print("  分享显示行：境界 7 档 · 品阶评分边界(3/4/6/7/9/10/12/13) · 5 色(含暗金) · 每档 10 条评语随机 · 命令接线")
 end
 print("ALL TESTS PASS")

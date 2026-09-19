@@ -583,6 +583,7 @@ local SH_SEAL_COMMENTS = {
   -- 源代码
   { "天书原文，凡人勿近。", "此乃源代码，改一个字符都会天崩地裂。", "创世之初写下的那一行。", "观之可开悟，抄之恐遭雷劈。", "作者亲笔，非请勿动。", "此物一出，江湖再无秘密。", "此码不仁，以规则为螺丝。", "看懂了能成神，看不懂会头疼。", "本源之力，慎入。", "此乃源码，非修仙之人不可直视。" },
 }
+local SH_SEAL_SYMBOLS = { "·", "◆", "✦", "★", "✸" }
 function EVAL_SHARE_SEAL_RANK(level)
   level = tonumber(level) or 1
   for i = 1, table.getn(SH_SEAL_RANKS) do
@@ -630,10 +631,11 @@ function EVAL_SHARE_SEAL_INFO(text, level, forcedIdx)
   local who = (type(UnitName) == "function") and UnitName("player") or "?"
   local name = shSealName(text or "")
   -- ★颜色包住整个方括号（看着更像品阶；也让 `[品阶秘籍·名]` 能被文字直接搜到）
-  local line = "[" .. rank .. "]" .. tostring(who) .. " 分享了一份传家宝 → " .. tier.color ..
+  local sym = SH_SEAL_SYMBOLS[idx] or SH_SEAL_SYMBOLS[1]
+  local line = "[" .. rank .. "]" .. tostring(who) .. " 分享了一份传家宝 → " .. tier.color .. sym ..
                "[" .. tier.name .. "秘籍·" .. name .. "]|r  " .. comment
   return { score = score, tier = idx, tierName = tier.name, color = tier.color,
-           rank = rank, comment = comment, commentIdx = ci, plan = name, line = line }
+           rank = rank, comment = comment, commentIdx = ci, plan = name, line = line, symbol = sym }
 end
 -- ★1.73.42b 用户要求：「添加一个测试命令，输入所有类型的分享案例」
 --   一次打出 **5 品阶 × 7 境界** 共 12 行样例（品阶用代表评分 3/5/8/11/14，境界用 1/10/20/30/40/50/60）
@@ -669,6 +671,11 @@ end
 local SH_SEAL_ICONS = {
   "INV_Misc_Book_07", "INV_Misc_Gem_02", "INV_Misc_Gem_Amethyst_01", "INV_Crown_01", "INV_Misc_Gear_01",
 }
+-- ★★★1.73.42d 实测结论（用户回报探针）：`|T` 内联纹理**不可用**（只有纯符号对照 ④ 渲染出来）
+--   → 聊天行改用**符号**按品阶区分；图标留到**点击后的详情弹窗**里（UI 纹理 100% 可行）。
+function EVAL_SHARE_SEAL_SYMBOL(tierIdx)
+  return SH_SEAL_SYMBOLS[tonumber(tierIdx) or 1] or SH_SEAL_SYMBOLS[1]
+end
 function EVAL_SHARE_SEAL_ICON(tierIdx)
   local f = SH_SEAL_ICONS[tonumber(tierIdx) or 1] or SH_SEAL_ICONS[1]
   return "Interface\\Icons\\" .. f, f
