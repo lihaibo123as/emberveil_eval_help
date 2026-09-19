@@ -10862,6 +10862,21 @@ do
   SlashCmdList["EVALHELP"]("go 秘籍")
   eq(string.find(tostring(TEST.chat or ""), "秘籍预览", 1, true) ~= nil, true, "★★★/eh go 秘籍 真的执行（命令在 go 组里）")
   TEST.chat = nil
+  -- ★★★1.73.42b 用户：「添加一个测试命令，输入所有类型的分享案例」
+  TEST.chat = ""
+  local demoN = EVAL_SHARE_SEAL_DEMO()
+  eq(demoN, 12, "★★★样例要打 12 行（5 品阶 + 7 境界），实际 " .. tostring(demoN))
+  local dc = tostring(TEST.chat or "")
+  for _, tn in ipairs({ "普通", "稀有", "珍稀", "绝版", "源代码" }) do
+    eq(string.find(dc, tn, 1, true) ~= nil, true, "★★样例里有品阶：" .. tn)
+  end
+  for _, rn in ipairs({ "炼气", "筑基", "金丹", "元婴", "化神", "炼虚", "大乘" }) do
+    eq(string.find(dc, "[" .. rn .. "]", 1, true) ~= nil, true, "★★样例里有境界：" .. rn)
+  end
+  eq(string.find(dc, "|cffb87333", 1, true) ~= nil, true, "★样例里有暗金色码（源代码档）")
+  SlashCmdList["EVALHELP"]("go 秘籍样例")
+  eq(string.find(tostring(TEST.chat or ""), "秘籍样例", 1, true) ~= nil, true, "★★★/eh go 秘籍样例 真的执行（命令在 go 组里）")
+  TEST.chat = nil
   print("  分享显示行：境界 7 档 · 品阶评分边界(3/4/6/7/9/10/12/13) · 5 色(含暗金) · 每档 10 条评语随机 · 命令接线")
 end
 print("ALL TESTS PASS")

@@ -635,6 +635,32 @@ function EVAL_SHARE_SEAL_INFO(text, level, forcedIdx)
   return { score = score, tier = idx, tierName = tier.name, color = tier.color,
            rank = rank, comment = comment, commentIdx = ci, plan = name, line = line }
 end
+-- ★1.73.42b 用户要求：「添加一个测试命令，输入所有类型的分享案例」
+--   一次打出 **5 品阶 × 7 境界** 共 12 行样例（品阶用代表评分 3/5/8/11/14，境界用 1/10/20/30/40/50/60）
+--   目的：不用造真方案，就能一眼看全所有档位的显示效果（含颜色与评语）
+function EVAL_SHARE_SEAL_DEMO()
+  local plan = (type(EVAL_PROFILE_TO_TEXT) == "function") and EVAL_PROFILE_TO_TEXT() or "# 方案: 样例"
+  local base = "# 方案: " .. shSealName(plan)
+  local function mk(n)
+    local s = base
+    for k = 1, n do s = s .. "\n- 技能" .. k end
+    return s
+  end
+  local reps = { 3, 5, 8, 11, 14 }
+  local levels = { 1, 10, 20, 30, 40, 50, 60 }
+  local lines = {}
+  for i = 1, table.getn(reps) do
+    local info = EVAL_SHARE_SEAL_INFO(mk(reps[i]), 60, i)
+    if info then table.insert(lines, info.line) end
+  end
+  for i = 1, table.getn(levels) do
+    local info = EVAL_SHARE_SEAL_INFO(mk(14), levels[i], i)
+    if info then table.insert(lines, info.line) end
+  end
+  shSay("===== 秘籍样例（5 品阶 × 7 境界，共 " .. tostring(table.getn(lines)) .. " 行）=====")
+  for i = 1, table.getn(lines) do shSay("  " .. lines[i]) end
+  return table.getn(lines)
+end
 -- ===== 1.73.41c 探针 ③：悬停 tooltip 机制发现 ===========================================
 -- 用户需求（原话）：「角色名: 分享了一份绝世秘籍 —— 鼠标移动上去才能看到详细的方案信息」。
 --   两个判断**读码定不了、必须实测**：

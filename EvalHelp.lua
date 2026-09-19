@@ -6866,6 +6866,12 @@ if type(SlashCmdList) == "table" then
       else
         say("分享模块未载入（EVAL_SHARE_PROBE_AUTORUN 不存在）")
       end
+    elseif msg == "go 秘籍样例" or msg == "go sealdemo" then
+      if type(EVAL_SHARE_SEAL_DEMO) == "function" then
+        EVAL_SHARE_SEAL_DEMO()
+      else
+        say("秘籍样例：分享模块未载入（EVAL_SHARE_SEAL_DEMO 不存在）")
+      end
     elseif msg == "go 秘籍" or msg == "go seal" then
       -- ★1.73.42 预览：显示行（境界/品阶/评语）到底长什么样，先在游戏里看一眼
       if type(EVAL_SHARE_SEAL_INFO) == "function" and type(EVAL_PROFILE_TO_TEXT) == "function" then
