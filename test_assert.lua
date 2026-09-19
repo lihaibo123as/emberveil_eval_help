@@ -11021,18 +11021,18 @@ do
 end
 -- 144) ★★★1.73.42g 封皮行（显示）+ 点击直接导入（SetItemRef 的 EHPF: 分支）
 do
+  -- ★★★1.73.43i 用户真机回报「A 身份行没出现」⇒ 按「不能用就删除」：A 已删，身份并进 B 行链接之后的**纯文本**
   EVAL_SHARE_RESET()
   TEST.chat = nil TEST.runScripts = nil
   eq(EVAL_SHARE_SEND("GUILD"), true, "①分享能发出")
-  -- ★★★1.73.43g 用户：「如果一段话不够用，就把方案信息**分多段话依次发**」⇒ 分享信息 = **两条**：
-  --   A 身份行（一段色码 + 纯文本，无链接 —— 与自家 EVAL_HELP 行同款）+ B 品阶行（分片同款结构）。
   local sealSt144 = EVAL_SHARE_SEAL_STATE() or {}
-  local sealA = tostring(sealSt144.first or "")
   local seal = tostring(sealSt144.last or "")
-  eq(string.len(sealA) > 0 and string.len(seal) > 0, true, "①★★★算出了两条分享信息（A 身份 + B 品阶）")
-  eq(string.find(sealA, " 分享了", 1, true) ~= nil, true, "①★★A 行含「分享了」")
-  eq(string.find(sealA, "|HEHPF:", 1, true) == nil, true, "①★★★A 行**不带链接**（只用一段色码 + 纯文本，实测这种形态一定能画）")
-  -- ★★★1.73.43h 真机定案：**一条消息里多段色码会被客户端整条吞掉** ⇒ 逐条数色码段（行为判据；源码检查数不到变量里的色码）
+  local sealA = tostring(sealSt144.first or "")
+  eq(string.len(seal) > 0, true, "①★★★算出了分享信息行（只剩 B 行）")
+  eq(sealA, "", "①★★★A 身份行已按用户要求**删除**（不再发第二条消息）")
+  eq(string.find(seal, "秘籍·", 1, true) ~= nil, true, "①★★B 行含 [品阶秘籍·方案名]")
+  eq(string.find(seal, "|HEHPF:", 1, true) ~= nil, true, "①★★★B 行带链接（点它直接导入）")
+  -- ★★★1.73.43h 真机定案：**一条消息里多段色码会被客户端整条吞掉** ⇒ 数色码段（行为判据；源码检查数不到变量里的色码）
   local function segCount144(sTxt)
     local c, p2 = 0, 1
     while true do
@@ -11043,11 +11043,10 @@ do
     end
     return c
   end
-  eq(segCount144(sealA) <= 1, true, "①★★★A 身份行只有 " .. tostring(segCount144(sealA)) .. " 段色码（多段会被吞，实测）")
-  eq(segCount144(seal) <= 1, true, "①★★★B 品阶行只有 " .. tostring(segCount144(seal)) .. " 段色码（多段会被吞，实测）")
-  eq(string.find(seal, "秘籍·", 1, true) ~= nil, true, "①★★B 行含 [品阶秘籍·方案名]")
-  eq(string.find(seal, "|HEHPF:", 1, true) ~= nil, true, "①★★★B 行带链接（点它直接导入）")
-  eq(string.find(sealA .. seal, "|T", 1, true) == nil, true, "①★两条都不含 |T（实测不可用）")
+  eq(segCount144(seal) <= 1, true, "①★★★分享信息行只有 " .. tostring(segCount144(seal)) .. " 段色码（多段会被吞，实测）")
+  eq(string.find(seal, "|T", 1, true) == nil, true, "①★不含 |T（实测不可用）")
+  -- ★1.73.43i 身份并进 B 行（链接之后的**纯文本**，不加色码、不加方括号）
+  eq(string.find(seal, "  ", 1, true) ~= nil, true, "①★B 行标签后有分隔（身份/评语区）")
   -- ★★★1.73.43f 用户：「特殊标识那条走不通就用能用的……不能用就删除」⇒ 分享信息**不再单独发一条**，
   --   而是当**最后一片的显示标签**（那一条与其余分片逐字节同款结构 = 已被证明能画的那条通道）。
   local g144 = 0
@@ -11062,13 +11061,19 @@ do
     local m = string.match(sc, 'SendChatMessage%("(.-)", "GUILD"%)')
     if m then table.insert(all, m) end
   end
-  -- ★1.73.43g 最后两条 = 分享信息（A 身份行 → B 品阶行），顺序不许反
+  -- ★★★1.73.43i 只剩一条分享信息 ⇒ 它必须是**最后一条**（排在所有分片之后）
   local nAll144 = table.getn(all)
   local msgB = tostring(all[nAll144] or "")
-  local msgA = tostring(all[nAll144 - 1] or "")
-  eq(string.find(msgB, seal, 1, true) ~= nil, true, "①★★★最后一条 = B 品阶行（走同一条已被证明能画的结构）")
-  eq(string.find(msgB, "|HEHPF:", 1, true) ~= nil, true, "①★★★B 带可点链接（点它即可导入）")
-  eq(msgA == sealA, true, "①★★★倒数第二条 = A 身份行（先身份后品阶，依次发）")
+  eq(string.find(msgB, seal, 1, true) ~= nil, true, "①★★★最后一条 = 分享信息行（走同一条已被证明能画的结构）")
+  eq(string.find(msgB, "|HEHPF:", 1, true) ~= nil, true, "①★★★它带可点链接（点它即可导入）")
+  eq(sealA, "", true, "①★★★A 身份行已删除（用户：「不能用就删除」）")
+  -- ★但读值口只看 `sealSentFirst`，看不出「又偷偷排了第二条」⇒ 直接数**真正发出去的消息**里有没有「X 分享了」（M459 就是这么存活的）
+  local cntA144 = 0
+  for k7 = 1, table.getn(all) do
+    local m7 = tostring(all[k7] or "")
+    if string.find(m7, " 分享了", 1, true) and string.find(m7, "|HEHPF:", 1, true) == nil then cntA144 = cntA144 + 1 end
+  end
+  eq(cntA144, 0, "①★★★发出去的消息里没有第二条「X 分享了」（A 行确实删了），实际 " .. tostring(cntA144))
   local sid = string.match(tostring(msgB), "|HEHPF:(%x+) ")
   eq(type(sid) == "string", true, "①读得到传输 id（" .. tostring(sid) .. "）")
   -- ★1.73.43f 只收**真分片**：分享信息那条的序号是 `0/1:`（接收端按越界忽略），别混进分片统计
@@ -11249,15 +11254,12 @@ do
     TEST.time = (TEST.time or 1000) + 1
     EVAL_SHARE_TEST_TICK()
   end
-  -- ★★★1.73.43g 分享信息现在是**两条**（A 身份行 + B 品阶行）⇒ 收集器按各自特征认：
-  --   A = 含「 分享了」且**不带链接**；B = 带 `0/1:` 链接（与分片同款结构，排在最后）。
-  local sid145, seal145, sealA145 = nil, nil, nil
+  -- ★1.73.43i A 身份行已删除（用户：「不能用就删除」）⇒ 只找那条**带链接的分享信息行**
+  local sid145, seal145 = nil, nil
   for _, m in ipairs(collect145()) do
-    if string.find(m, " 分享了", 1, true) and string.find(m, "|HEHPF:", 1, true) == nil then sealA145 = m end
-    if string.find(m, "|HEHPF:", 1, true) and string.find(m, " 0/1:", 1, true) then seal145 = m end -- ★plain 模式：别把 %x+ 当模式写（上一版就是这么假红的）
+    if string.find(m, "|HEHPF:", 1, true) and string.find(m, " 0/1:", 1, true) then seal145 = m end
   end
-  eq(type(sealA145) == "string", true, "③★★A 身份行发出来了（不带链接）")
-  eq(type(seal145) == "string", true, "③★★B 品阶行发出来了（带链接）")
+  eq(type(seal145) == "string", true, "③★★分享信息行发出来了（带链接，序号 0/1）")
   sid145 = string.match(tostring(seal145), "|HEHPF:(%x+)")
   eq(type(sid145) == "string", true, "③★传输 id 读得到")
   local guard145 = 0
@@ -11320,14 +11322,13 @@ do
     EVAL_SHARE_TEST_TICK()
   end
   -- ★★★1.73.43g 现在是 **1 片 + 两条分享信息**（A 身份行 / B 品阶行）
-  local one5, sealA5, sealB5 = nil, nil, nil
+  -- ★1.73.43i 只剩一条分享信息（B）
+  local one5, sealB5 = nil, nil
   for _, m in ipairs(collect145()) do
-    if string.find(m, " 分享了", 1, true) and string.find(m, "|HEHPF:", 1, true) == nil then sealA5 = m
-    elseif string.find(m, " 0/1:", 1, true) then sealB5 = m
+    if string.find(m, "|HEHPF:", 1, true) and string.find(m, " 0/1:", 1, true) then sealB5 = m
     else one5 = m end
   end
-  eq(type(one5) == "string" and type(sealA5) == "string" and type(sealB5) == "string", true,
-     "⑤前置：单片分享 = 1 片 + 2 条信息（A 身份 / B 品阶）")
+  eq(type(one5) == "string" and type(sealB5) == "string", true, "⑤前置：单片分享 = 1 片 + 1 条信息（B）")
   EVAL_SHARE_ONMSG(one5, "队友乙")
   local vA = EVAL_TEST_SHARE_SEAL_ROW()
   -- ★★★1.73.43d 用户：「这块信息不需要在分享方案内显示」⇒ 判据改成**读真控件的可见性**：
@@ -12087,12 +12088,10 @@ do
     local m156 = string.match(sc156, 'SendChatMessage%("(.-)", "GUILD"%)')
     if m156 then table.insert(msgs156, m156) end
   end
-  -- ★★★1.73.43g 最后两条 = 分享信息：A 身份行（一段色码 + 纯文本，**无链接**）→ B 品阶行（分片同款结构）
-  local infoA156 = tostring(msgs156[table.getn(msgs156) - 1] or "")
+  -- ★★★1.73.43i A 身份行已删除（用户：「不能用就删除」）⇒ 只剩最后一条分享信息，身份是它**链接之后的纯文本**
   local info156 = tostring(msgs156[table.getn(msgs156)] or "")
-  eq(string.find(infoA156, " 分享了", 1, true) ~= nil, true, "④★★倒数第二条 = 身份行（含「分享了」）")
-  eq(string.find(infoA156, "|HEHPF:", 1, true) == nil, true, "④★★★身份行**不带链接**（只用一段色码 + 纯文本 —— 变异测里这种形态必能画）")
-  eq(string.find(info156, "|HEHPF:", 1, true) ~= nil, true, "④★★★最后一条 = 品阶行（带链接，可点导入）")
+  eq(string.find(info156, "|HEHPF:", 1, true) ~= nil, true, "④★★★最后一条 = 分享信息行（带链接，可点导入）")
+  eq(string.find(info156, " 分享了", 1, true) == nil, true, "④★★不再是「X 分享了」那种第二行（A 行已删）")
   -- ⑤ 取证打印转义：客户端会把 |H…|h 当链接吃掉 → 不打成 `||` 就看不到真证据
   EVAL_HELP_CONFIG.shProbe = nil
   TEST.chat = nil

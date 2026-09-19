@@ -181,41 +181,32 @@ local function shBuildFor(text)
     bodies[k] = chunkBody(k, n, string.sub(hex, (k - 1) * chunk + 1, k * chunk))
   end
   --     发送队列里**再也不会有第二个来源**（这正是「特殊标识那条路走不通就别留着」的落地）。
-  -- ★★★1.73.43g 用户：「如果一段话不够用，就把方案信息**分多段话依次发**」——
-  --   真机变异测已经把「一条长消息塞两段色码 / 带方括号的头衔前缀」判成**会被客户端整条吞掉**，
-  --   所以拆成两条，每条只用**已被证明能画**的形态：
-  --     A 身份行 = `|c<身份色><头衔>|r <名字> 分享了`（与自家 EVAL_HELP 行同款：**一段色码 + 纯文本，无链接**）
-  --     B 品阶行 = `|c<品阶色>|HEHPF:<id> 0/1:0|h[<符号><品阶>秘籍·<方案名>]|h|r  <评语>`
-  --              （与分片逐字节同款结构：一段色码 + 链接 + `[标签]|h|r` ✅ 变异测里 [1]/[4] 两条就是这种形态，都能画）
-  --   ★序号仍写 0/1：接收端按「i < 1 越界」忽略，对收方案零影响；两条都带 seal 标记（不算分片）。
-  local sealA, sealB = nil, nil
+  -- ★★★1.73.43i 用户真机回报：「A 身份行**没出现**」⇒ 按他自己定的规矩「**不能用就删除**」：
+  --   **删掉 A 行**，把身份并进 B 行的**链接之后**（纯文本、不加色码、不加方括号）：
+  --     B = `|c<品阶色>|HEHPF:<id> 0/1:0|h[<符号><品阶>秘籍·<方案名>]|h|r  <头衔>  <评语>`
+  --   ★这个形态正是变异测里 **[4]「纯文本 + 一段色码 + 链接 + 标签 + 评语」** —— 那一测**当场画出来了** ✓
+  --     （身份放在 `|h|r` **之后**＝「链接后的纯文本」这个位置，[4] 已验证没问题；不再用第二条消息。）
+  --   ★序号仍写 0/1：接收端按「i < 1 越界」忽略，对收方案零影响；带 seal 标记（不算分片）。
+  --   ★一条消息里**只有一段色码**（判据 + 源码检查 `SHARE MSG SHAPE CHECK` 都盯着这条）。
+  local sealB = nil
   if sealLine and sealLine ~= "" and type(EVAL_SHARE_SEAL_INFO) == "function" then
     local okI, sinfo = pcall(EVAL_SHARE_SEAL_INFO, text)
     if okI and type(sinfo) == "table" then
-      local titleTxt = (type(sinfo.titleName) == "string" and sinfo.titleName ~= "") and tostring(sinfo.titleName) or nil
-      local titleCol = (type(sinfo.title) == "table" and type(sinfo.title.color) == "string") and sinfo.title.color or nil
-      local whoB = nil
-      if type(UnitName) == "function" then
-        local okN, vN = pcall(UnitName, "player")
-        if okN and type(vN) == "string" and vN ~= "" then whoB = vN end
-      end
-      if whoB and titleTxt then
-        -- A：一段色码 + 纯文本（无方括号、无链接）—— 与自家 EVAL_HELP 行同款
-        sealA = ((titleCol and (titleCol .. titleTxt .. "|r ")) or (titleTxt .. " ")) .. whoB .. " 分享了"
-      end
+      local titleTxt = (type(sinfo.titleName) == "string" and sinfo.titleName ~= "") and tostring(sinfo.titleName) or ""
       if type(sinfo.tierName) == "string" and type(sinfo.plan) == "string" then
         local sym2 = tostring(sinfo.symbol or "")
         local tierCol2 = (type(sinfo.color) == "string" and sinfo.color ~= "") and sinfo.color or "|cff9ad4ff"
         local cmt2 = (type(sinfo.comment) == "string") and sinfo.comment or ""
-        -- B：一段品阶色 + 链接（序号 0/1）+ `[标签]|h|r` + 评语 —— 与分片同款结构
-        sealB = tierCol2 .. "|HEHPF:" .. idh .. " 0/1:0|h[" .. sym2 .. tostring(sinfo.tierName) .. "秘籍·" .. tostring(sinfo.plan) .. "]|h|r  " .. cmt2
+        local tail = ""
+        if titleTxt ~= "" then tail = titleTxt .. "  " end -- 身份：链接之后的**纯文本**（无方括号、无色码）
+        sealB = tierCol2 .. "|HEHPF:" .. idh .. " 0/1:0|h[" .. sym2 .. tostring(sinfo.tierName) .. "秘籍·" .. tostring(sinfo.plan) .. "]|h|r  " .. tail .. cmt2
       end
     end
   end
-  -- ★1.73.43g 两条分享信息（A 身份行 → B 品阶行）交给发送队列；探针与判据从这里读
-  SH.sealPendA, SH.sealPendB = sealA, sealB
+  -- ★1.73.43i 只剩一条分享信息（B）；A 行按用户「不能用就删除」已去掉
+  SH.sealPendA, SH.sealPendB = nil, sealB
   SH.sealSentLast = sealB or sealLine or ""
-  SH.sealSentFirst = sealA or ""
+  SH.sealSentFirst = ""
   SH.sealLast = SH.sealSentLast
   return bodies -- ★★（上一版把这一行连同旧块一起替换掉了 → shBuildFor 返回 nil、分享直接失败；判据当场抓到）
 end
