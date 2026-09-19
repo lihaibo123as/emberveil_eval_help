@@ -488,6 +488,8 @@ TB_BUY_UI_TIP = "Click a cell to edit; the checkbox enables the entry",
   G_UI_SUBC = "Combat block (bars + status line)",
   G_UI_SUBS = "Profile block (profile row + icons)",
   G_UI_TITLE = "Combat info",
+  -- ★1.73.53 Fallback title for the status window: the player name is shown when available.
+  G_ST_TITLE = "Status",
   -- 1.71.13 minimap button tooltip (beautified per user request)
   MB_TIP_TITLE = "EvalHelp All-Class Casting Tool",
   MB_TIP_1 = "All-class one-key macro (condition engine)",

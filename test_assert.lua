@@ -12601,6 +12601,35 @@ do
   print("  名字染色缓存：载入采全（公会/好友/查询/队伍）+ 未命中自愈（只读来源，零服务器请求）+ /eh go 名字缓存 探针")
 end
 
+-- 162) ★★★1.73.53 标题栏文案：战斗信息UI / 状态信息UI **都显示玩家角色名**
+--   用户（截图确认）：「战斗记录（状态信息UI）标题将玩家角色显示」——与 1.71.12 的「战斗信息 标题换成用户名字」同一条规矩，
+--   两处共用 `uiTitleName()`；取不到名字**如实退回**各自窗口名（绝不留空标题）。
+do
+  local keepUnitName162 = UnitName
+  local want162 = tostring(UnitName("player"))
+  EVAL_HELP_UI_BUILD() -- 战斗信息UI（重建）
+  EVAL_HELP_ST_BUILD() -- 状态信息UI（重建）
+  eq(EVAL_TEST_ST_TITLE(), want162,
+     "①★★★状态信息UI 标题 = **玩家角色名**（用户 1.73.53 要求），实际：" .. tostring(EVAL_TEST_ST_TITLE()))
+  eq(tostring(EVAL_TEST_UI_SECTIONS().title), want162, "①★★战斗信息UI 标题同样是玩家角色名（两处同一条规矩，共用取名函数）")
+  -- ② 取不到名字 → 如实退回各自窗口名（**不能留空**：直接 SetText(nil) 比旧文案更糟）
+  UnitName = function() return nil end
+  EVAL_HELP_UI_BUILD()
+  EVAL_HELP_ST_BUILD()
+  eq(EVAL_TEST_ST_TITLE(), EVAL_L("G_ST_TITLE"),
+     "②★★★取不到名字 → 状态信息UI 退回窗口名（" .. tostring(EVAL_L("G_ST_TITLE")) .. "），不留空标题")
+  eq(tostring(EVAL_TEST_UI_SECTIONS().title), EVAL_L("G_UI_TITLE"), "②★★战斗信息UI 也退回自己的窗口名")
+  -- ②b ★空字符串在 Lua 里是**真值**（本项目踩过的坑）：空串照样要当「取不到」
+  UnitName = function() return "" end
+  EVAL_HELP_ST_BUILD()
+  eq(EVAL_TEST_ST_TITLE(), EVAL_L("G_ST_TITLE"), "②b★★UnitName 返回空串时同样退回窗口名（空串是真值，不能只看 type）")
+  UnitName = keepUnitName162
+  EVAL_HELP_UI_BUILD()
+  EVAL_HELP_ST_BUILD()
+  eq(EVAL_TEST_ST_TITLE(), want162, "③收尾：恢复 UnitName 后标题又是玩家名（不是一次性坏掉）")
+  print("  标题栏：战斗信息UI / 状态信息UI 都显示玩家角色名（取不到如实退回各自窗口名，绝不留空）")
+end
+
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")

@@ -158,6 +158,16 @@ local function uiWarActiveRule(i)
   return (p and p.skills) and p.skills[i] or nil
 end
 
+-- ★★★1.73.53 标题栏文案的**单一来源**：玩家名优先；取不到（载入极早期 / 某些客户端 UnitName 给 nil 或空串）
+--   **如实退回**窗口自己的名字 —— 直接 SetText(nil) 会让标题栏空着，比旧文案更糟。
+--   ★两处共用（战斗信息UI / 状态信息UI）：用户 1.73.53 要求「状态信息UI 标题也显示玩家角色」，
+--     与 1.71.12 的「战斗信息 标题换成用户名字」是同一条规矩 —— 同一条规矩只写一遍（本项目老账）。
+local function uiTitleName(fallbackKey)
+  local nm = UnitName("player")
+  if type(nm) == "string" and nm ~= "" then return nm end
+  return L(fallbackKey)
+end
+
 -- 重建/新建战斗信息UI（改缩放时整帧重建，见上方 SetScale 说明）
 function EVAL_HELP_UI_BUILD()
   local u = uiCfg()
@@ -215,12 +225,8 @@ function EVAL_HELP_UI_BUILD()
   pcall(titleBar.RegisterForDrag, titleBar, "LeftButton")
   local title = uiText(titleBar, math.max(9, math.floor(11 * z)), 0.9, 0.8, 0.4)
   title:SetPoint("CENTER", titleBar, "CENTER", 0, 0)
-  -- ★1.71.12 用户要求：「战斗信息 标题换成 用户名字」。
-  --   ★取不到名字要**如实退回**旧文案（载入极早期 / 某些客户端 UnitName 可能给 nil 或空串）——
-  --     直接 SetText(nil) 会让标题栏空着，比旧文案更糟。
-  local pname = UnitName("player")
-  if type(pname) ~= "string" or pname == "" then pname = L("G_UI_TITLE") end
-  title:SetText(pname)
+  -- ★1.71.12 用户要求：「战斗信息 标题换成 用户名字」；★1.73.53 起与状态信息UI 共用同一个取名函数
+  title:SetText(uiTitleName("G_UI_TITLE"))
 
   -- ★★★1.71.12 用户要求：「战斗信息UI 再加2个子选项，战斗、方案，分开控制显示和隐藏。」
   --   ★语义：**nil = 开**（老配置里没有这两个键 → 行为与旧版逐字一致）；只有显式 false 才不画。
@@ -3242,7 +3248,7 @@ end
 -- /eh st 开关；标题栏拖动（位置记忆+越界回归）；每 0.15s 刷新一次 EVAL_HELP_UPDATE_STATE()。
 -- 内容 = 状态模块全部字段：玩家数值/战斗计时/姿态/修饰键/普攻 + 目标可攻击/可流血/精英Boss 等。
 
-local stui = { root = nil, body = nil }
+local stui = { root = nil, body = nil, title = nil }
 local stLastTick = 0
 local ST_TICK = 0.15
 
@@ -3308,7 +3314,10 @@ function EVAL_HELP_ST_BUILD()
   pcall(titleBar.RegisterForDrag, titleBar, "LeftButton")
   local title = uiText(titleBar, 10, 0.95, 0.82, 0.35)
   title:SetPoint("CENTER", titleBar, "CENTER", 0, 0)
-  title:SetText("状态信息")
+  -- ★★★1.73.53 用户（截图确认）：「战斗记录（状态信息UI）标题将玩家角色显示」——
+  --   与战斗信息UI 同一条规矩：有玩家名就用玩家名；取不到退回窗口自己的名字（G_ST_TITLE，走语言包，不硬编码中文）。
+  title:SetText(uiTitleName("G_ST_TITLE"))
+  stui.title = title -- ★读值口（判据读**真控件**，不读我们自己的意图）
   titleBar:SetScript("OnDragStart", function()
     pcall(root.SetMovable, root, true)
     pcall(root.StartMoving, root)
@@ -3417,6 +3426,12 @@ function EVAL_HELP_ST_TICK()
   stui.body:SetText(table.concat(lines, "\n"))
 end
 
+-- ★★★1.73.53 读值口：状态信息UI 标题栏的**真实文本**（判据读真控件；用户要求它显示玩家角色名）
+function EVAL_TEST_ST_TITLE()
+  if not stui.title then return nil end
+  local ok, v = pcall(stui.title.GetText, stui.title)
+  return (ok and type(v) == "string") and v or nil
+end
 function EVAL_HELP_ST_TOGGLE()
   local sc = stCfg()
   if stui.root and stui.root:IsVisible() then

@@ -1233,6 +1233,22 @@ function checkIconAssets() {
   console.log("SHARE MSG SHAPE CHECK: 分享信息两条各自 <=1 段色码（客户端会吞多段色码的消息，已实测定案）");
 })();
 
+// ===== UI TITLE NAME CHECK（1.73.53）：两个窗口的标题都要显示玩家角色名、且**同一条规矩只写一遍** =====
+// ★背景：用户 1.71.12 要求「战斗信息 标题换成用户名字」，1.73.53 又要求「状态信息UI 标题也显示玩家角色」。
+//   两份各自写一遍 = 迟早漂移（本项目「同一规则两处实现」的老账）⇒ 必须共用 `uiTitleName()`；
+//   而且**取不到名字要如实退回窗口名**（空标题比旧文案更糟）——这条只靠源码检查才守得住（行为断言要能造出 nil）。
+(function () {
+  const eh = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
+  const noComment = eh.split(/\r?\n/).map(function (l) { const i = l.indexOf("--"); return i >= 0 ? l.slice(0, i) : l; }).join("\n");
+  const bad = [];
+  if (noComment.indexOf("local function uiTitleName(") < 0) bad.push("找不到标题取名函数 uiTitleName（两处共用的那个）");
+  if (noComment.indexOf('uiTitleName("G_UI_TITLE")') < 0) bad.push("战斗信息UI 标题没走 uiTitleName(\"G_UI_TITLE\")");
+  if (noComment.indexOf('uiTitleName("G_ST_TITLE")') < 0) bad.push("状态信息UI 标题没走 uiTitleName(\"G_ST_TITLE\")");
+  if (/title:SetText\("[^"]/.test(noComment)) bad.push("还有窗口把标题写死成字面量（应走语言包 + 玩家名）");
+  if (bad.length) { console.log("UI TITLE NAME CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
+  console.log("UI TITLE NAME CHECK: 两个窗口标题共用 uiTitleName（玩家名优先 / 如实退回窗口名 / 无硬编码标题）");
+})();
+
 // ===== NAME CACHE PROBE WIRING CHECK（1.73.51）：名字染色缓存探针要真的接在 /eh go 上 =====
 // ★背景：用户报「刚载入不染色、查询完成还是不染色、只有打开公会信息才开始」——真机上这三句话对应三个不同的根因，
 //   只能靠**当场读各来源的条数与职业原文**分辨 ⇒ 必须给用户一条能跑的命令（写错前缀 = 敲了静默无反应）。
