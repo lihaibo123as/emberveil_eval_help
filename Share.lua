@@ -2271,9 +2271,9 @@ local SH_DETAIL_MAX = 6
 --     · 详情首行 -74（6 行 × 12 → 末行 -134、底约 -146）· 分隔线 底部+42 · 按钮行 底部 12~34（顶边 -166）
 --   ⇒ 末行底与按钮顶之间约 20px 余量。★竖着放不下**唯一**的出路是加高窗口，
 --     绝不许把详情行压到按钮上（那是「看不见的坏」：按钮被盖住/点不到，用户只会说「点不了」）。
-local SH_SEAL_ROW_Y = -50   -- 品阶行顶部（品阶图标顶边）
+local SH_SEAL_ROW_Y = -46   -- ★1.73.67 品阶行只剩图标（重复的文字行已删），上移贴着摘要行
 local SH_SEAL_ROW_H = 16    -- 品阶图标边长
-local SH_DETAIL_Y1 = -74    -- 详情首行（紧跟品阶行下方）
+local SH_DETAIL_Y1 = -66    -- ★1.73.67 详情首行上移（品阶行只剩图标，原 -74 留了个空档）
 -- ★1.71.3 弹窗图标（自包含：这批 .tga 已从 UnrealQuest 拷进本插件 media\icons\）与标题栏高度
 local SH_POP_ICON = "Interface\\AddOns\\EvalHelp\\media\\icons\\trainers-icon"
 local SH_TITLE_H = 18
@@ -2331,7 +2331,7 @@ local function shPopupBuild()
   -- 详情区下沉底板 + 按钮上方的分隔线（观感分层，与配置窗同一套配色）
   local dPanel = root:CreateTexture(nil, "BACKGROUND")
   shSolid(dPanel, 0.02, 0.02, 0.02, 0.85)
-  dPanel:SetPoint("TOPLEFT", root, "TOPLEFT", 10, -46)
+  dPanel:SetPoint("TOPLEFT", root, "TOPLEFT", 10, -42) -- ★1.73.67 详情面板上移（品阶行只剩图标，不再留那 24px 空档）
   dPanel:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", -10, 44)
   local bSep = root:CreateTexture(nil, "BORDER")
   shSolid(bSep, 0.45, 0.38, 0.16, 1)
@@ -2523,8 +2523,10 @@ shSealRowApply = function()
   shp.sealRow = row
   if row then
     pcall(shp.sealIcon.SetTexture, shp.sealIcon, row.icon)
-    pcall(shp.sealHead.SetText, shp.sealHead, row.head)
-    shp.sealIcon:Show() shp.sealHead:Show()
+    -- ★★★1.73.67 用户（截图划出下面那行重复的 `★[品阶秘籍·名]`）：「重复了」「删除下面的那个」⇒
+    --   品阶行**只留图标**：名字已在摘要行（1.73.66），这一行不再重复那段文字。
+    pcall(shp.sealHead.SetText, shp.sealHead, "")
+    shp.sealIcon:Show() shp.sealHead:Hide()
   else
     -- 文本解析不出方案（不是合法方案文本）→ **整行如实隐藏**，不编造一个品阶出来
     -- ★先清空文本再 Hide：本客户端 Hide 过的控件仍可能被绘出（1.71.3 那轮「残留」的教训，

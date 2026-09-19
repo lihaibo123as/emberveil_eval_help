@@ -11402,9 +11402,10 @@ do
   eq(string.find(popTitle145, "《", 1, true) == nil, true, "③★★标题行不引入书名号（用的是 [品阶秘籍·名]，不是《》）")
   local wantIcon145 = EVAL_SHARE_SEAL_ICON(select(1, EVAL_SHARE_SEAL_TIER(EVAL_SHARE_SEAL_SCORE(txt145(25)))))
   eq(view145.icon, wantIcon145, "③★★★图标纹理 = 该品阶的图标（读真控件 GetTexture，不读常量）")
-  eq(string.find(tostring(view145.head), "[神级秘籍·甲]", 1, true) ~= nil, true, "③★★品阶行头一行仍带品阶与方案名")
-  eq(string.sub(tostring(view145.head), 1, 10) == wantCol145, true,
-     "③★★★品阶行**带品阶色**（与标题行同一段文本）：" .. string.sub(tostring(view145.head), 1, 30))
+  -- ★★★1.73.67 用户：「重复了」「删除下面的那个」⇒ 品阶行**只留图标**，重复的文字行删了（名字已在摘要行，上面 11398/11400 验过）
+  eq(tostring(view145.head or "") == "" and view145.headShown == false, true,
+     "③★★★品阶行的**重复文字已删**（只留图标；名字不重复出现）")
+  eq(view145.iconShown, true, "③★★★品阶图标**仍在**（删的是重复的文字，不是图标）")
   -- ★★★1.73.43g 新格式下**接收端不解析身份**了：身份在 A 行（纯文本、无链接），接收端只认带 `|HEHPF:` 的消息。
   -- ★★★1.73.43g 新格式（A 身份行 + B 品阶行）下，接收端**不再从消息里抠身份/评语**：
   --   身份在聊天里直接看得见；弹窗那三行按用户要求也不显示 ⇒ 不需要再抠（老格式的解析仍在，见组 156⑥）。
@@ -11414,7 +11415,8 @@ do
   eq(view145.commentShown, false, "③★★★弹窗**不显示**评语行（用户要求，原来会显示「未知（未收到封皮行）」）")
   eq(tostring(view145.meta or ""), "", "③★★那两行文本也**清空了**（本客户端 Hide 过的控件仍可能被绘出 → 只 Hide 会留假信息）")
   eq(tostring(view145.comment or ""), "", "③★★评语行同样清空")
-  eq(view145.headShown ~= false, true, "③★★顶上的 `★[品阶秘籍·名]` **照旧显示**（品阶信息没丢）")
+  eq(view145.headShown == false, true, "③★★1.73.67 顶上那行重复的 `★[品阶秘籍·名]` **不再显示**（删了；名字在摘要行）")
+  eq(view145.iconShown, true, "③★★★品阶**图标**照旧显示（删的是重复文字，图标这处品阶信息没丢）")
   -- ④ 几何：品阶栏让开详情行，详情行让开按钮（空间是**加**出来的，不是挤出来的）
   -- ★坐标以**顶部为 0**：-50 在 -96 **上面**（值越大越靠上）——第一版把不等号写反了，当场被这条判据抓住
   eq(view145.sealY > view145.detailY1, true, "④★★品阶栏在详情**上面**（" .. tostring(view145.sealY) .. " > " .. tostring(view145.detailY1) .. "）")
@@ -11451,7 +11453,8 @@ do
   --   没收到封皮 → 两行**隐藏且文本清空**（不许再显示「未知（未收到封皮行）」这种噪音）。
   eq(vA.metaShown, false, "⑤★★封皮没到 → 身份/品阶行**不显示**（用户要求，原来是「未知（未收到封皮行）」）")
   eq(tostring(vA.meta or ""), "", "⑤★★而且文本已清空（不留残影/假信息）")
-  eq(vA.headShown ~= false, true, "⑤★顶上的品阶行照旧在（品阶来自本地解析，不依赖封皮）")
+  eq(vA.headShown == false, true, "⑤★★1.73.67 品阶行的**文字**不再显示（重复的名字行已删；品阶来自本地解析）")
+  eq(vA.iconShown ~= false, true, "⑤★但品阶**图标**仍在（品阶来自本地解析，不依赖封皮）")
   -- ★1.73.43g 新格式的 B 行不带身份 ⇒ 用**合成老格式封皮**（同一个 id）验「晚到的封皮照样能解析身份」
   local sid5 = string.match(tostring(sealB5), "|HEHPF:(%x+)")
   eq(type(sid5) == "string", true, "⑤★读得到传输 id（" .. tostring(sid5) .. "）")
