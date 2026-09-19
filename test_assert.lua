@@ -12630,6 +12630,46 @@ do
   print("  标题栏：战斗信息UI / 状态信息UI 都显示玩家角色名（取不到如实退回各自窗口名，绝不留空）")
 end
 
+-- 163) ★★★1.73.54 战斗信息UI 标题栏：**标题左对齐** + **右侧两个快捷开关**（战斗区 / 方案区）
+--   用户：「将上面两个开关在标题栏右侧对应添加两个开关，快速开启关闭；标题左对齐、控制开关右对齐」。
+--   ★要点：① 标题从居中改贴左（给右侧让位）；② 两个开关与配置窗那两个缩进子开关**同一份真值**、
+--     点一下即生效（整帧重建，窗口高度随之变化）；③ 断言走**真实 OnClick**（不直调 setter）。
+do
+  local savedUi163 = EVAL_HELP_CONFIG.ui
+  EVAL_HELP_CONFIG.ui = { enabled = true, subCombat = true, subScheme = true }
+  EVAL_HELP_UI_BUILD()
+  local v163 = EVAL_TEST_UI_TITLEBAR()
+  eq(v163.titlePoint, "LEFT", "①★★★标题**左对齐**（读真控件的锚点，实际 " .. tostring(v163.titlePoint) .. "）")
+  eq(v163.titleJustify, "LEFT", "①★★对齐也设成 LEFT（免得框内又居中）")
+  eq(type(v163.combat) == "table" and type(v163.scheme) == "table", true, "②★★★两个快捷开关都在（战斗区 / 方案区）")
+  eq(v163.combat.point, "RIGHT", "②★★战斗区开关贴**右端**（锚 RIGHT，实际 " .. tostring(v163.combat.point) .. "）")
+  eq(v163.scheme.point, "RIGHT", "②★★方案区开关贴**右端**（锚 RIGHT）")
+  eq(v163.combat.x < v163.scheme.x, true,
+     "②★★战斗区在方案区**左边**（顺序与配置窗一致）：" .. tostring(v163.combat.x) .. " < " .. tostring(v163.scheme.x))
+  eq((v163.combat.x or 0) + (v163.combat.w or 0) <= (v163.scheme.x or 0), true, "②★★两个开关**不重叠**")
+  eq(v163.combat.hasClick and v163.scheme.hasClick, true, "②★★两个开关都挂了真实 OnClick")
+  eq(tostring(v163.combat.mark), "■", "②★勾选态 = 方块（与配置窗观感一致）")
+  -- ③ 点**真按钮**：写同一份配置 + HUD 重建 + 外观跟着变
+  eq(EVAL_TEST_UI_TITLEBAR_CLICK("combat"), true, "③前置：点得到真按钮")
+  eq(EVAL_HELP_CONFIG.ui.subCombat, false, "③★★★点一下 = 写**同一份配置**（ui.subCombat=false）")
+  eq(EVAL_TEST_UI_SECTIONS().combat, false, "③★★★HUD 真的重建了：战斗区块不再画（combatOn=false）")
+  eq(EVAL_TEST_UI_SECTIONS().scheme, true, "③★★方案区不受影响（两个开关各自独立）")
+  eq(tostring(EVAL_TEST_UI_TITLEBAR().combat.mark), "", "③★★开关外观跟着变（方块消失）")
+  -- ④ 再点一次恢复
+  EVAL_TEST_UI_TITLEBAR_CLICK("combat")
+  eq(EVAL_HELP_CONFIG.ui.subCombat, true, "④★★再点一次恢复开")
+  eq(EVAL_TEST_UI_SECTIONS().combat, true, "④★★HUD 重建后战斗区又画出来")
+  -- ⑤ 方案区开关写的是**自己的**键（防两个开关接到同一个键上）
+  EVAL_TEST_UI_TITLEBAR_CLICK("scheme")
+  eq(EVAL_HELP_CONFIG.ui.subScheme, false, "⑤★★★方案区开关写的是自己的键（subScheme）")
+  eq(EVAL_TEST_UI_SECTIONS().scheme, false, "⑤★★方案区块不再画")
+  eq(EVAL_TEST_UI_SECTIONS().combat, true, "⑤★★而且没有误伤战斗区")
+  EVAL_TEST_UI_TITLEBAR_CLICK("scheme")
+  EVAL_HELP_CONFIG.ui = savedUi163
+  EVAL_HELP_UI_BUILD()
+  print("  战斗信息UI 标题栏：标题左对齐 + 右侧两个快捷开关（战斗区/方案区，同一份真值、即点即生效）")
+end
+
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")

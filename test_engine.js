@@ -1233,6 +1233,28 @@ function checkIconAssets() {
   console.log("SHARE MSG SHAPE CHECK: 分享信息两条各自 <=1 段色码（客户端会吞多段色码的消息，已实测定案）");
 })();
 
+// ===== UI TITLEBAR CHECK（1.73.54）：HUD 标题栏 = 标题左对齐 + 右侧两个快捷开关（与配置窗同一份真值） =====
+// ★背景（用户）：「将上面两个开关（战斗区/方案区）在标题栏右侧对应添加两个开关，快速开启关闭；标题左对齐、控制开关右对齐」。
+//   ★这类「加个开关」的改动最容易出的两种静默错：① 开关只是画上去、点了没接线；② 接到**同一个键**上（两个开关联动）。
+//     行为断言能抓（走真实 OnClick），源码检查再钉一层「两个开关各自绑自己的键 + 提示走语言包」。
+(function () {
+  const eh = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
+  const bad = [];
+  if (eh.indexOf('title:SetPoint("LEFT", titleBar') < 0) bad.push("标题没有左对齐（应锚 titleBar 左端）");
+  if (eh.indexOf('ui.tglCombat = uiTitleToggle(') < 0) bad.push("找不到战斗区快捷开关 ui.tglCombat");
+  if (eh.indexOf('ui.tglScheme = uiTitleToggle(') < 0) bad.push("找不到方案区快捷开关 ui.tglScheme");
+  // 两个开关必须各自写自己的键（接到同一个键上 = 两个开关联动，用户没法分别控制）
+  const iC = eh.indexOf("ui.tglCombat = uiTitleToggle(");
+  const iS = eh.indexOf("ui.tglScheme = uiTitleToggle(");
+  const segC = eh.slice(iC, eh.indexOf("end)", iC) > 0 ? eh.indexOf("end)", iC) : iC + 900);
+  const segS = eh.slice(iS, eh.indexOf("end)", iS) > 0 ? eh.indexOf("end)", iS) : iS + 900);
+  if (segC.indexOf("subCombat") < 0) bad.push("战斗区开关没写 subCombat（会接到别的键上）");
+  if (segS.indexOf("subScheme") < 0) bad.push("方案区开关没写 subScheme（会接到同一个键上）");
+  if (eh.indexOf('L("G_UI_SUBC_TIP")') < 0 || eh.indexOf('L("G_UI_SUBS_TIP")') < 0) bad.push("开关提示没走配置窗那两条文案（应单一来源）");
+  if (bad.length) { console.log("UI TITLEBAR CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
+  console.log("UI TITLEBAR CHECK: 标题左对齐 + 两个快捷开关各自绑自己的键 + 提示复用配置窗文案");
+})();
+
 // ===== UI TITLE NAME CHECK（1.73.53）：两个窗口的标题都要显示玩家角色名、且**同一条规矩只写一遍** =====
 // ★背景：用户 1.71.12 要求「战斗信息 标题换成用户名字」，1.73.53 又要求「状态信息UI 标题也显示玩家角色」。
 //   两份各自写一遍 = 迟早漂移（本项目「同一规则两处实现」的老账）⇒ 必须共用 `uiTitleName()`；

@@ -168,6 +168,63 @@ local function uiTitleName(fallbackKey)
   return L(fallbackKey)
 end
 
+-- ★★★1.73.54 **标题栏右侧的快捷开关**（用户：「将上面两个开关（战斗区/方案区）在标题栏右侧对应添加两个开关，
+--   快速开启关闭；**标题左对齐、控制开关右对齐**」）。
+--   ★为什么是小方框：标题栏总宽只有 ~224px（还要放玩家名，名字可能很长）；方框 + **悬停提示**最省地方，
+--     提示文案直接复用配置窗那两条（`G_UI_SUBC_TIP` / `G_UI_SUBS_TIP`）——**文案单一来源**，不另抄一份。
+--   ★点一下 = 改**同一份配置**（`uiCfg().subCombat/subScheme`）+ **整帧重建**（与配置窗那条路殊途同归）+
+--     顺手 `cfgWin.refresh()`（两个入口一份真值，界面必须同步 —— 本项目「两份状态」的老账）。
+--   ★配方照本项目 UI 规程：Button + EnableMouse + RegisterForClicks（Frame 的点击不吃）；
+--     层级 = 标题栏 +1（保证盖在拖动柄之上、点得到；**不用 strata 抬高**那条失败做法）。
+local function uiTitleToggle(parent, z, xRight, getter, setter, tip)
+  local box = math.floor(13 * z)
+  local b = CreateFrame("Button", nil, parent)
+  b:SetWidth(box) b:SetHeight(box)
+  b:SetPoint("RIGHT", parent, "RIGHT", xRight, 0)
+  pcall(b.EnableMouse, b, true)
+  pcall(b.RegisterForClicks, b, "LeftButtonUp")
+  local okLvl, lvl = pcall(parent.GetFrameLevel, parent)
+  if okLvl and type(lvl) == "number" then pcall(b.SetFrameLevel, b, lvl + 1) end
+  local bg = b:CreateTexture(nil, "BACKGROUND")
+  uiSolid(bg, 0.10, 0.09, 0.07, 1)
+  bg:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+  bg:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+  local mark = uiText(b, math.max(9, math.floor(11 * z)), 1, 0.85, 0.35)
+  mark:SetPoint("CENTER", b, "CENTER", 0, 0)
+  b.mark = mark -- ★读值口：断言读**真控件**上的方块（不读我们自己的记账）
+  local function onNow()
+    if type(getter) ~= "function" then return true end
+    local ok, v = pcall(getter)
+    if not ok then return true end
+    if v then return true end
+    return false
+  end
+  b.refresh = function()
+    local on = onNow()
+    pcall(mark.SetText, mark, on and "■" or "")
+    pcall(bg.SetVertexColor, bg, on and 0.45 or 0.10, on and 0.35 or 0.09, on and 0.10 or 0.07, 1)
+  end
+  b:SetScript("OnClick", function()
+    local on = onNow()
+    if type(setter) == "function" then pcall(setter, not on) end -- setter 内部会写配置 + 整帧重建
+    b.refresh()
+    -- ★配置窗同步（同一份真值）：走**全局桥** EVAL_HELP_CFGWIN —— 不能用 cfgWin 这个 local，
+    --   它声明在本文件后段（DECL ORDER 检查当场抓到过：EvalHelp.lua:211 used before declared at 855）。
+    local cw = rawget(_G, "EVAL_HELP_CFGWIN")
+    if type(cw) == "table" and type(cw.refresh) == "function" then pcall(cw.refresh) end
+  end)
+  if type(tip) == "string" and tip ~= "" then
+    b:SetScript("OnEnter", function()
+      pcall(GameTooltip.SetOwner, GameTooltip, b, "ANCHOR_RIGHT")
+      pcall(GameTooltip.AddLine, GameTooltip, tip, 0.9, 0.88, 0.72, true)
+      pcall(GameTooltip.Show, GameTooltip)
+    end)
+    b:SetScript("OnLeave", function() pcall(GameTooltip.Hide, GameTooltip) end)
+  end
+  b.refresh()
+  return b
+end
+
 -- 重建/新建战斗信息UI（改缩放时整帧重建，见上方 SetScale 说明）
 function EVAL_HELP_UI_BUILD()
   local u = uiCfg()
@@ -224,9 +281,29 @@ function EVAL_HELP_UI_BUILD()
   pcall(titleBar.EnableMouse, titleBar, true)
   pcall(titleBar.RegisterForDrag, titleBar, "LeftButton")
   local title = uiText(titleBar, math.max(9, math.floor(11 * z)), 0.9, 0.8, 0.4)
-  title:SetPoint("CENTER", titleBar, "CENTER", 0, 0)
+  -- ★★★1.73.54 用户：「标题左对齐、控制开关右对齐」——标题从**居中**改成**贴左**（给右侧两个开关让位）。
+  title:SetPoint("LEFT", titleBar, "LEFT", math.floor(6 * z), 0)
+  pcall(title.SetJustifyH, title, "LEFT")
+  pcall(title.SetNonSpaceWrap, title, false)
   -- ★1.71.12 用户要求：「战斗信息 标题换成 用户名字」；★1.73.53 起与状态信息UI 共用同一个取名函数
   title:SetText(uiTitleName("G_UI_TITLE"))
+  -- ★★★1.73.54 标题栏右侧的两个**快捷开关**（战斗区 / 方案区）——与配置窗「界面」组里那两个缩进子开关**同一份真值**：
+  --   左→右 = 战斗区、方案区（与配置窗从上到下的顺序一致）；各自贴右端、宽 13、间隔 4；
+  --   点一下立刻开/关对应区块（整帧重建，窗口高度随之变化）。
+  do
+    local togW = math.floor(13 * z)
+    local togGap = math.floor(4 * z)
+    local xScheme = -math.floor(6 * z)
+    local xCombat = xScheme - (togW + togGap)
+    ui.tglScheme = uiTitleToggle(titleBar, z, xScheme,
+      function() local u3 = uiCfg() return not (u3.subScheme == false) end,
+      function(v) local u3 = uiCfg() u3.subScheme = v and true or false EVAL_HELP_UI_BUILD() end,
+      L("G_UI_SUBS_TIP"))
+    ui.tglCombat = uiTitleToggle(titleBar, z, xCombat,
+      function() local u3 = uiCfg() return not (u3.subCombat == false) end,
+      function(v) local u3 = uiCfg() u3.subCombat = v and true or false EVAL_HELP_UI_BUILD() end,
+      L("G_UI_SUBC_TIP"))
+  end
 
   -- ★★★1.71.12 用户要求：「战斗信息UI 再加2个子选项，战斗、方案，分开控制显示和隐藏。」
   --   ★语义：**nil = 开**（老配置里没有这两个键 → 行为与旧版逐字一致）；只有显式 false 才不画。
@@ -6503,6 +6580,51 @@ end
 --   刻意读 `ui.combatOn/schemeOn`（BUILD 时定下）+ 控件的**存在性**，而不是回读配置：
 --   配置写了什么与「这一轮到底建没建」是两件事（本项目「配置产出/消费两边都要断言」的判据）。
 --   另附标题文本与帧宽高（标题 = 玩家名、帧高要随子开关变化）。
+-- ★★★1.73.54 读值口：HUD 标题栏（标题的**锚点/对齐** + 右侧两个快捷开关的真控件/锚点/方块文本）。
+--   一律读真控件（GetPoint/GetText/IsShown）—— 本项目「读自己拼的账 = 测自己」的老坑。
+function EVAL_TEST_UI_TITLEBAR()
+  local out = { title = nil, titlePoint = nil, titleJustify = nil, titleX = nil, combat = nil, scheme = nil }
+  if ui.title then
+    local okt, tv = pcall(ui.title.GetText, ui.title)
+    if okt and type(tv) == "string" then out.title = tv end
+    local okp, pt, _rel, _rp, px = pcall(ui.title.GetPoint, ui.title)
+    if okp and type(pt) == "string" then out.titlePoint = pt out.titleX = px end
+    local okj, jv = pcall(ui.title.GetJustifyH, ui.title)
+    if okj and type(jv) == "string" then out.titleJustify = jv end
+  end
+  local function one(b)
+    if not b then return nil end
+    local o = { point = nil, x = nil, w = nil, mark = nil, shown = nil, hasClick = false }
+    local okp, pt, _rel, _rp, px = pcall(b.GetPoint, b)
+    if okp and type(pt) == "string" then o.point = pt o.x = px end
+    local okw, wv = pcall(b.GetWidth, b)
+    if okw and type(wv) == "number" then o.w = wv end
+    if b.mark then
+      local okt, tv = pcall(b.mark.GetText, b.mark)
+      if okt and type(tv) == "string" then o.mark = tv end
+    end
+    local oks, sv = pcall(b.IsShown, b)
+    o.shown = (oks and sv) and true or false
+    if type(b.GetScript) == "function" then
+      local okc, fn = pcall(b.GetScript, b, "OnClick")
+      o.hasClick = (okc and type(fn) == "function") or false
+    end
+    return o
+  end
+  out.combat, out.scheme = one(ui.tglCombat), one(ui.tglScheme)
+  out.combatBtn, out.schemeBtn = ui.tglCombat, ui.tglScheme -- 真控件（点击钩子要用）
+  return out
+end
+-- ★★★测试钩子：点标题栏右侧的快捷开关 —— 走它**真实的 OnClick 闭包**（不直调 setter）。
+--   ★为什么必须这样：本项目真事故「直接调动作函数全绿、按钮接线断了也不知道」（1.73.37 右键菜单那轮）。
+function EVAL_TEST_UI_TITLEBAR_CLICK(which)
+  local b = (which == "scheme") and ui.tglScheme or ui.tglCombat
+  if not (b and type(b.GetScript) == "function") then return false end
+  local ok, fn = pcall(b.GetScript, b, "OnClick")
+  if not (ok and type(fn) == "function") then return false end
+  pcall(fn)
+  return true
+end
 function EVAL_TEST_UI_SECTIONS()
   local out = { combat = false, scheme = false, hasCombat = false, hasScheme = false,
     title = nil, rootW = nil, rootH = nil }

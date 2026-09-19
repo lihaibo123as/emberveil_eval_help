@@ -661,7 +661,17 @@ Remove-Item $staging -Recurse -Force
 - ★★★1.73.8 **变异脚本的「还原」必须来自运行前读入内存的原文 —— 绝不能 `git show HEAD:<file>`**：【实事故】本轮为了「还原得干净」用了 git 还原，而 1.73.8 的改动**还没提交** → 跑第一个变异就把 `IconBrowser.lua` + `EvalHelp.lua` 的改动**整段抹掉**（工作区被换成 HEAD 版本，只剩未纳入还原的 `test_assert.lua`），只能重做一遍。正解 = 开头把每个文件读进 `base`，每轮从 `base` 复制出 `work`、跑完把 `base` 写回。
 
 ### 5.4 UI 与布局
-- ★★★1.73.53 **两个窗口的标题都要显示玩家角色名，且同一条规矩只写一遍**（用户 1.71.12「战斗信息 标题换成用户名字」
+- ★★★1.73.54 **HUD 标题栏 = 标题左对齐 + 右侧两个快捷开关**（用户：「将上面两个开关（战斗区/方案区）在标题栏右侧
+  对应添加两个开关，快速开启关闭；标题左对齐、控制开关右对齐」）：新增 `uiTitleToggle(parent, z, xRight, getter, setter, tip)`，
+  在战斗信息UI 标题条右端放两个 13px 小方框（左→右 = 战斗区 / 方案区，与配置窗缩进顺序一致；勾选态 = `■` + 金色底）；
+  **点一下 = 写同一份配置（`uiCfg().subCombat/subScheme`）+ 整帧重建**（窗口高度随之变化）+ 顺手刷新配置窗 ——
+  「两个入口一份真值」；★提示文案复用配置窗那两条 `G_UI_SUBC_TIP` / `G_UI_SUBS_TIP`（不另抄）。
+  · 措辞对照：`subCombat/subScheme` 语义是 **nil = 开**，所以 getter 一律写成 `not (u.x == false)`（别写成真值判断）。
+  · ★★**DECL ORDER 实录**：`uiTitleToggle` 在文件前段（~211）想调 `cfgWin.refresh`，而 `cfgWin` 是**后段**（~855）的 local
+    → 检查当场报「EvalHelp.lua:211 cfgWin used before declared at 855」；正解 = 走**全局桥** `rawget(_G,"EVAL_HELP_CFGWIN")`。
+  · 判据 = 组 163（标题锚 **LEFT** · 两个开关都锚 RIGHT 且不重叠 · 各自绑自己的键 · **走真实 OnClick** 后配置真值/HUD 重建/外观三处同步）
+    + 源码检查 **`UI TITLEBAR CHECK`**（标题左对齐 + 两个 `uiTitleToggle` 各自绑 `subCombat`/`subScheme` + 提示复用配置窗文案）；
+    变异 M493（标题回居中）/ M494（开关不写配置）/ M495（开关跑左边）/ M496（两个开关接同一个键）全捕获。- ★★★1.73.53 **两个窗口的标题都要显示玩家角色名，且同一条规矩只写一遍**（用户 1.71.12「战斗信息 标题换成用户名字」
   → 1.73.53「状态信息UI 标题将玩家角色显示」）：抽成 `local function uiTitleName(fallbackKey)`（**单一来源**）：
   有玩家名就用玩家名；**取不到（nil 或空串）如实退回窗口自己的名字**（`G_UI_TITLE` / `G_ST_TITLE`，走语言包）——
   直接 `SetText(nil)` 会让标题栏**空着**，比旧文案更糟；★**空字符串在 Lua 里是真值**，所以判据必须是
