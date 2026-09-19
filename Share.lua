@@ -294,7 +294,9 @@ local function shEnsureTxTicker()
 end
 function shTxEnqueue(bodies, chanId, target)
   local n = table.getn(bodies)
-  if table.getn(shTxQ) + n > SH_MAX_QUEUE then
+  -- ★1.73.43 上限如实算上封皮那一条（它现在也进队列，排在最后）
+  local extra = (SH.sealPending and 1 or 0)
+  if table.getn(shTxQ) + n + extra > SH_MAX_QUEUE then
     shSay(string.format(L("SH_Q_FULL"), SH_MAX_QUEUE))
     return false
   end
@@ -304,27 +306,26 @@ function shTxEnqueue(bodies, chanId, target)
   else
     RunScript('SendChatMessage("' .. bodies[1] .. '", "' .. chanId .. '")')
   end
-  -- ★★★1.73.42g 封皮行：**不进分片队列**，跟着第 1 片立即发一条。
-  --   ★这样「第 1 片立即发 / 其余排队」这套队列语义与既有判据**完全不变**
-  --   （否则每分享一次多一条，队列数判据全乱 —— 实测 got=17 want=8、got=6 want=0）。
-  if SH.sealPending then
-    local sline = SH.sealPending
-    SH.sealPending = nil
-    if type(RunScript) == "function" then
-      if target and target ~= "" then
-        RunScript('SendChatMessage("' .. sline .. '", "' .. chanId .. '", nil, "' .. target .. '")')
-      else
-        RunScript('SendChatMessage("' .. sline .. '", "' .. chanId .. '")')
-      end
-    end
-  end
   for i = 2, n do table.insert(shTxQ, { body = bodies[i], chan = chanId, target = target }) end
-  if n > 1 then
+  -- ★★★1.73.43 用户（复审时明确）：「**方案分享最后一步** 展示分享信息」——
+  --   封皮行（`[档位]<玩家名> 分享了 → [品阶秘籍·方案名]  <评语>`）要排在**所有分片之后**，
+  --   也就是玩家在聊天里**最后**看到的那一条；原来是「跟着第 1 片立即发」→ 长方案时它被顶到很上面，
+  --   末尾只剩「传输中...100%」，用户会以为**分享信息根本没出现**。
+  --   ★带 `seal = true` 标记：它不是分片 —— 队列计数/滴干判据都按**分片形态**数，不受影响。
+  local hasSeal = false
+  if SH.sealPending then
+    table.insert(shTxQ, { body = SH.sealPending, chan = chanId, target = target, seal = true })
+    SH.sealPending = nil
+    hasSeal = true
+  end
+  -- ★条数如实：分片 + 封皮（原来只报分片数，长方案时比真实条数少报 1 条）
+  local total = n + (hasSeal and 1 or 0)
+  if total > 1 then
     shTxLast = shNowT()
     shEnsureTxTicker()
-    shSay(string.format(L("SH_QUEUED"), n, (n - 1) * SH_SEND_RATE))
+    shSay(string.format(L("SH_QUEUED"), total, (total - 1) * SH_SEND_RATE))
   else
-    shSay(string.format(L("SH_SENT"), n))
+    shSay(string.format(L("SH_SENT"), total))
   end
   return true
 end

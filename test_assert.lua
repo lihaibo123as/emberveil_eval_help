@@ -11029,6 +11029,16 @@ do
   eq(string.find(seal, "|HEHPF:", 1, true) ~= nil, true, "①★★封皮行带可点链接（载荷=传输 id）")
   eq(string.find(seal, "秘籍·", 1, true) ~= nil, true, "①★★封皮行含 [品阶秘籍·方案名]")
   eq(string.find(seal, "|T", 1, true) == nil, true, "①★封皮行不含 |T（实测不可用）")
+  -- ★★★1.73.43 封皮改成**最后一步**（用户复审要求）：它现在排在队列里 → 先滴干队列再收集，
+  --   否则 RunScript 里只有第 1 片（判据会假红）。★滴干用「队列总长」而不是「按 id 数分片」：
+  --   封皮**不是分片**（不带序号），按 id 数会漏掉它 → 队列里留一条尾巴污染后续用例。
+  local g144 = 0
+  while EVAL_SHARE_TEST_QUEUE_LEN() > 0 and g144 < 400 do
+    g144 = g144 + 1
+    TEST.time = (TEST.time or 1000) + 1
+    EVAL_SHARE_TEST_TICK()
+  end
+  eq(EVAL_SHARE_TEST_QUEUE_LEN(), 0, "①前置：发送队列已滴干（" .. tostring(g144) .. " 次 tick）")
   local all = {}
   for _, sc in ipairs(TEST.runScripts or {}) do
     local m = string.match(sc, 'SendChatMessage%("(.-)", "GUILD"%)')
@@ -11037,6 +11047,7 @@ do
   local foundSeal = false
   for k2 = 1, table.getn(all) do if all[k2] == seal then foundSeal = true end end
   eq(foundSeal, true, "①★★★封皮**真的走了发送通道**（RunScript 里有它）")
+  eq(all[table.getn(all)] == seal, true, "①★★★封皮是**最后一条**（用户：「方案分享最后一步 展示分享信息」）")
   local sid = string.match(seal, "|HEHPF:(%x+)|h")
   eq(type(sid) == "string", true, "①读得到传输 id（" .. tostring(sid) .. "）")
   local chunks = {}
@@ -11201,6 +11212,13 @@ do
   EVAL_PROFILE_TO_TEXT = function() return txt145(14) end -- ★只换**数据来源**，发送路径一行不改
   eq(EVAL_SHARE_SEND("GUILD"), true, "③前置：分享发出")
   EVAL_PROFILE_TO_TEXT = keepToText145
+  -- ★1.73.43 封皮成了**最后一步**（排在队列尾）→ 先把队列滴干，收集里才有它
+  local guard145a = 0
+  while EVAL_SHARE_TEST_QUEUE_LEN() > 0 and guard145a < 400 do
+    guard145a = guard145a + 1
+    TEST.time = (TEST.time or 1000) + 1
+    EVAL_SHARE_TEST_TICK()
+  end
   local sid145, seal145 = nil, nil
   for _, m in ipairs(collect145()) do
     if string.find(m, " 分享了 → ", 1, true) then seal145 = m end
@@ -11220,7 +11238,7 @@ do
     if string.find(m, "|HEHPF:" .. tostring(sid145), 1, true) then table.insert(msgs145, m) end
   end
   eq(table.getn(msgs145) >= 3, true, "③★14 分的方案 = 多片 + 封皮（" .. tostring(table.getn(msgs145)) .. " 条）")
-  eq(msgs145[table.getn(msgs145)] == seal145, false, "③★★封皮在**最后一片之前**（发送侧真实顺序：第 1 片 → 封皮 → 其余）")
+  eq(msgs145[table.getn(msgs145)] == seal145, true, "③★★★封皮是**最后一条**（用户：「方案分享最后一步 展示分享信息」）")
   for _, m in ipairs(msgs145) do EVAL_SHARE_ONMSG(m, "队友甲") end
   eq(EVAL_SHARE_PENDING() ~= nil, true, "③前置：收齐后弹窗（数据在）")
   local view145 = EVAL_TEST_SHARE_SEAL_ROW()
@@ -11254,6 +11272,12 @@ do
   EVAL_PROFILE_TO_TEXT = function() return "# 方案: 短片\n\n- 技能甲" end
   EVAL_SHARE_SEND("GUILD")
   EVAL_PROFILE_TO_TEXT = keepToText5
+  local guard5 = 0 -- ★封皮现在排在队列尾：单片分享也要滴干才收得到它
+  while EVAL_SHARE_TEST_QUEUE_LEN() > 0 and guard5 < 400 do
+    guard5 = guard5 + 1
+    TEST.time = (TEST.time or 1000) + 1
+    EVAL_SHARE_TEST_TICK()
+  end
   local one5, seal5 = nil, nil
   for _, m in ipairs(collect145()) do
     if string.find(m, " 分享了 → ", 1, true) then seal5 = m
