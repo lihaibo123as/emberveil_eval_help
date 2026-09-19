@@ -6952,6 +6952,13 @@ if type(SlashCmdList) == "table" then
       else
         say("创世者亲临：分享模块未载入（EVAL_TITLE_CREATOR_OPEN 不存在）")
       end
+    -- ★★★1.73.42s 取证：右键名字菜单的能力 + 记账（用户：「右键邀请触发」＝点了没反应）
+    elseif msg == "go 名字探针" or msg == "go namemenu" or msg == "go 社交探针" then
+      if type(EVAL_TB_NAME_PROBE) == "function" then
+        EVAL_TB_NAME_PROBE() -- 能力与记账都在它里面打出来并落盘
+      else
+        say("名字探针：工具箱未载入（EVAL_TB_NAME_PROBE 不存在）")
+      end
     -- ★★★1.73.42r 重置（用户：「给我一个重置删除自定义的命令.测试」）——诊断/测试用，正常玩法没有这条路
     elseif msg == "go 重置名号" or msg == "go 清名号" or msg == "go resetname" then
       if type(EVAL_TITLE_CLEAR_CUSTOM) == "function" then

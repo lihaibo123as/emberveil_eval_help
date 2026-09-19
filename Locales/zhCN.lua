@@ -372,7 +372,12 @@ TB_NAMEMENU_SAY = "复制名字",
 TB_NAMEMENU_CLOSE = "关闭",
 TB_NAMEMENU_WHISPEROK = "已打开密语输入框：/w %s",
 TB_NAMEMENU_WHISPERFAIL = "本客户端没有打开聊天框的接口 → 请手动 /w %s",
-TB_NAMEMENU_PARTYOK = "已邀请入队：%s",
+  -- ★★★1.73.42s 邀请入队的**如实措辞**（用户真机反馈：点了邀请、提示「已邀请入队」，但什么都没发生）：
+  --   ① 不在队伍里=队长（邀请有效）；**在队伍里而我不是队长 → 服务器会静默忽略**，所以要**先查后说**；
+  --   ② RunScript 只是**入队一个脚本**，它永远不失败 → 不能当成「已邀请成功」播报。
+  TB_NAMEMENU_PARTYOK = "已发出邀请请求：%s（能不能入队看对方：未接受 / 不在线 / 名字不对，服务器会忽略）",
+  TB_NAMEMENU_PARTYNOTLEAD = "你不是队长 —— 服务器会忽略这个邀请，所以**没有发出**（让队长来邀请）",
+  TB_NAMEMENU_PARTYSCRIPT = "已把邀请请求排队给客户端执行：%s（★无法确认是否真的发出 —— 接口在本客户端不能直调）",
 TB_NAMEMENU_PARTYFAIL = "邀请没发出去（%s）—— 可能对方已在队伍/离线，或接口不可用",
 TB_NAMEMENU_TARGETOK = "已选中目标：%s",
 TB_NAMEMENU_TARGETFAIL = "选不中目标（%s）—— TargetByName 只认附近单位，太远就选不到",

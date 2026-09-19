@@ -1416,19 +1416,56 @@ function EVAL_TB_NAME_INVITE(name)
   return okd
 end
 -- 邀请入队（原始功能「邀请」）：InviteToParty 优先，老客户端退回 InviteByName，再退回 RunScript
+-- ★★★1.73.42s 用户真机反馈：「右键邀请触发」——点了邀请、聊天说「已邀请入队」，但实际什么都没发生。
+--   两条**假成功**的来源（本客户端 API 表实测：InviteToParty / InviteByName / IsPartyLeader / GetNumPartyMembers 都有）：
+--     ① **不是队长**时服务器会静默忽略邀请 —— 客户端不报错，我们就当成成功了；
+--     ② `RunScript` 只是把脚本**排队**，入队本身**永远不失败**（真机上脚本还可能因为接口不可调而静默报错）
+--        → 拿它当「已邀请成功」播报就是**假承诺**。
+--   ⇒ 现在：先查队长（不该发就**不发**并说清）→ 直调哪个 API 就记哪个 → 只剩 RunScript 这条路时**只播报「已排队，无法确认」**。
 function EVAL_TB_NAME_PARTY(name)
   if type(name) ~= "string" or name == "" then return false end
   if not tbMenuThrottle("party", 0.5) then return false end
   local safe = tbSafeName(name)
-  local ok = false
-  if type(InviteToParty) == "function" then ok = pcall(InviteToParty, safe) end
-  if not ok and type(InviteByName) == "function" then ok = pcall(InviteByName, safe) end
-  if not ok then ok = pcall(RunScript, "InviteToParty(\"" .. safe .. "\")") end
+  -- ① 队长门：不在队伍里 = 队长（邀请有效）；在队伍里而我不是队长 → 服务器忽略，**干脆不发**
+  local notLeader = false
+  if type(GetNumPartyMembers) == "function" and type(IsPartyLeader) == "function" then
+    local okn, n = pcall(GetNumPartyMembers)
+    if okn and (tonumber(n) or 0) > 0 then
+      local okl, lead = pcall(IsPartyLeader)
+      if okl and lead == false then notLeader = true end
+    end
+  end
+  if notLeader then
+    TB_NAME_MENU.partyNotLeader = (TB_NAME_MENU.partyNotLeader or 0) + 1
+    say(L("TB_NAMEMENU_PARTYNOTLEAD"))
+    return false
+  end
+  -- ② 直调优先：成功就记下**走的是哪个接口**（诊断与判据都读它）
+  local ok, via = false, nil
+  if type(InviteToParty) == "function" then
+    ok = pcall(InviteToParty, safe)
+    if ok then via = "InviteToParty" end
+  end
+  if not ok and type(InviteByName) == "function" then
+    ok = pcall(InviteByName, safe)
+    if ok then via = "InviteByName" end
+  end
+  if not ok then
+    -- ③ 后路：RunScript 只代表「已排队」——**不当成功**，措辞与计数都分开
+    local okq = pcall(RunScript, "InviteToParty(\"" .. safe .. "\")")
+    if okq then
+      TB_NAME_MENU.partyScript = (TB_NAME_MENU.partyScript or 0) + 1
+      say(string.format(L("TB_NAMEMENU_PARTYSCRIPT"), safe))
+      return true
+    end
+  end
   if ok then
     TB_NAME_MENU.party = (TB_NAME_MENU.party or 0) + 1
+    TB_NAME_MENU.partyVia = via
     say(string.format(L("TB_NAMEMENU_PARTYOK"), safe))
   else
-    say(string.format(L("TB_NAMEMENU_PARTYFAIL"), "InviteToParty"))
+    TB_NAME_MENU.partyFail = (TB_NAME_MENU.partyFail or 0) + 1
+    say(string.format(L("TB_NAMEMENU_PARTYFAIL"), "InviteToParty / InviteByName"))
   end
   return ok
 end
@@ -1673,7 +1710,52 @@ function EVAL_TB_NAMEMENU_STATE()
     party = TB_NAME_MENU.party or 0, target = TB_NAME_MENU.target or 0,
     whisper = TB_NAME_MENU.whisper or 0, said = TB_NAME_MENU.said or 0,
     throttled = TB_NAME_MENU.throttled or 0,
+    -- ★1.73.42s 邀请的三条路分开记（不是队长拒发 / 只排队未确认 / 直调失败）+ 最近走的接口
+    partyVia = TB_NAME_MENU.partyVia, partyNotLeader = TB_NAME_MENU.partyNotLeader or 0,
+    partyScript = TB_NAME_MENU.partyScript or 0, partyFail = TB_NAME_MENU.partyFail or 0,
   }
+end
+-- ★★★1.73.42s 取证命令（用户：「右键邀请触发」= 点了没反应）：**能力 + 记账**一次打出来，一条命令定位
+--   为什么需要它：本客户端的 API 表里 InviteToParty / InviteByName / IsPartyLeader / GetNumPartyMembers **都有** ⇒
+--   「点了没反应」不可能是「接口不存在」，只可能是 ①不是队长被服务器静默忽略 ②名字不对/对方离线 ③只排了队没真发。
+--   这三条**在客户端里都看不到结果**，只能靠「我们到底调了什么 + 走的是哪条路」的记账来判。
+function EVAL_TB_NAME_PROBE()
+  local cap = {
+    InviteToParty = (type(InviteToParty) == "function"),
+    InviteByName = (type(InviteByName) == "function"),
+    IsPartyLeader = (type(IsPartyLeader) == "function"),
+    GetNumPartyMembers = (type(GetNumPartyMembers) == "function"),
+    GuildInviteByName = (type(GuildInviteByName) == "function"),
+    CanGuildInvite = (type(CanGuildInvite) == "function"),
+    TargetByName = (type(TargetByName) == "function"),
+  }
+  local lead, pnum, canGi = nil, nil, nil
+  if cap.IsPartyLeader then local okl, v = pcall(IsPartyLeader) if okl then lead = v and true or false end end
+  if cap.GetNumPartyMembers then local okn, v = pcall(GetNumPartyMembers) if okn then pnum = tonumber(v) or 0 end end
+  if cap.CanGuildInvite then local okc, v = pcall(CanGuildInvite) if okc then canGi = v and true or false end end
+  local m = TB_NAME_MENU
+  say("===== 右键名字菜单 · 取证 =====")
+  say("  邀请接口：InviteToParty=" .. (cap.InviteToParty and "有" or "无") ..
+      " · InviteByName=" .. (cap.InviteByName and "有" or "无") ..
+      " · 目标=" .. (cap.TargetByName and "有" or "无"))
+  say("  队长身份：IsPartyLeader=" .. (cap.IsPartyLeader and "有" or "无") ..
+      " · 队伍人数=" .. tostring(pnum) .. " · 我是队长=" .. tostring(lead))
+  say("  公会：GuildInviteByName=" .. (cap.GuildInviteByName and "有" or "无") ..
+      " · CanGuildInvite=" .. (cap.CanGuildInvite and "有" or "无") .. "（值=" .. tostring(canGi) .. "）")
+  say("  邀请记账：直调成功 " .. tostring(m.party or 0) .. "（最近走 " .. tostring(m.partyVia or "—") .. "）" ..
+      " · 不是队长拒发 " .. tostring(m.partyNotLeader or 0) ..
+      " · 只排队未确认 " .. tostring(m.partyScript or 0) ..
+      " · 直调失败 " .. tostring(m.partyFail or 0) ..
+      " · 限频拦下 " .. tostring(m.throttled or 0))
+  say("  公会邀请记账：直调 " .. tostring(m.inviteDirect or 0) .. " · 排队 " .. tostring(m.inviteScript or 0) ..
+      " · 目标 " .. tostring(m.target or 0) .. " · 密语 " .. tostring(m.whisper or 0))
+  local snap = { at = (type(GetTime) == "function") and GetTime() or 0, cap = cap, lead = lead, partyN = pnum, canGuildInvite = canGi,
+                 party = m.party or 0, partyVia = m.partyVia, partyNotLeader = m.partyNotLeader or 0,
+                 partyScript = m.partyScript or 0, partyFail = m.partyFail or 0, throttled = m.throttled or 0,
+                 inviteDirect = m.inviteDirect or 0, inviteScript = m.inviteScript or 0 }
+  local cfgP = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(cfgP) == "table" then cfgP.tbNameProbe = snap end -- ★命令接线的**落盘证人**（M336：不玩聊天含子串）
+  return snap
 end
 function EVAL_TEST_TB_NAMEMENU_RESET()
   TB.sirSeen, TB.sirHandled = 0, 0
@@ -1681,6 +1763,9 @@ function EVAL_TEST_TB_NAMEMENU_RESET()
   TB_NAME_MENU.inviteDirect, TB_NAME_MENU.inviteScript = 0, 0
   TB_NAME_MENU.party, TB_NAME_MENU.target, TB_NAME_MENU.whisper = 0, 0, 0
   TB_NAME_MENU.said, TB_NAME_MENU.throttled = 0, 0
+  -- ★1.73.42s 本轮新增的记账也要清（不是队长拒发 / 只排队未确认 / 直调失败 / 最近走的接口）
+  TB_NAME_MENU.partyNotLeader, TB_NAME_MENU.partyScript, TB_NAME_MENU.partyFail = 0, 0, 0
+  TB_NAME_MENU.partyVia = nil
   TB_MENU_AT = {}
   EVAL_TB_MENU_HIDE()
 end

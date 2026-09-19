@@ -11580,6 +11580,83 @@ do
   print("  头衔重置命令：删除自定义名号（进度不动，可再写）· 重置档位与五档记录并立即重抽 · 没得清时如实说")
 end
 
+-- 152) ★★★1.73.42s 右键「邀请」的**假成功**修复（用户：「右键邀请触发」）+ 取证命令
+--   用户真机现象：点右键菜单的「邀请」→ 聊天说「已邀请入队：X」→ 实际什么都没发生。
+--   本客户端 API 表实测：InviteToParty / InviteByName / IsPartyLeader / GetNumPartyMembers **都有** ⇒
+--   假成功只可能来自 ①**不是队长**时服务器静默忽略 ②RunScript **只是排队**（入队永远不失败，却被当成成功）。
+do
+  local keepLeader152, keepN152 = TEST.partyLeader, TEST.partyN
+  local savedITP152, savedIBN152 = _G.InviteToParty, _G.InviteByName
+  -- ① 不是队长 → **一个邀请都不发**，如实说
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  TEST.partyN = 2 TEST.partyLeader = false
+  TEST.partyInvites, TEST.partyInviteCalls = {}, 0
+  TEST.chat = nil
+  eq(EVAL_TB_NAME_PARTY("队长测试"), false, "①★★★我不是队长 → 不发（返回 false）")
+  eq(TEST.partyInviteCalls, 0, "①★★★真的**一个邀请都没调**（老实现照发，然后被服务器静默忽略 → 假成功）")
+  eq(EVAL_TB_NAMEMENU_STATE().partyNotLeader, 1, "①★★记账 +1（不是队长拒发）")
+  eq(string.find(tostring(TEST.chat or ""), "不是队长", 1, true) ~= nil, true, "①★★如实说「你不是队长」")
+  -- ② 单人（=队长）→ 直调 InviteToParty，并记下**走的是哪个接口**
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  TEST.partyN = 0 TEST.partyLeader = true
+  TEST.partyInvites, TEST.partyInviteCalls = {}, 0
+  TEST.chat = nil
+  eq(EVAL_TB_NAME_PARTY("正常测试"), true, "②★★单人 → 邀请发得出去")
+  eq(TEST.partyInviteCalls, 1, "②★★调的是 InviteToParty")
+  eq(EVAL_TB_NAMEMENU_STATE().partyVia, "InviteToParty", "②★★★记下了**走的是哪个接口**（诊断与判据都读它）")
+  eq(string.find(tostring(TEST.chat or ""), "已发出邀请请求", 1, true) ~= nil, true, "②★★措辞如实（「已发出…请求」，不承诺入队）")
+  -- ③ InviteToParty 不可用 → 退 InviteByName（仍然如实）
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  _G.InviteToParty = nil
+  TEST.partyInvites, TEST.partyInviteCalls, TEST.inviteByNameCalls = {}, 0, 0
+  TEST.chat = nil
+  eq(EVAL_TB_NAME_PARTY("退回测试"), true, "③★★没有 InviteToParty → 退回 InviteByName")
+  eq(TEST.inviteByNameCalls, 1, "③★★确实走了 InviteByName")
+  eq(EVAL_TB_NAMEMENU_STATE().partyVia, "InviteByName", "③★★记账记的是 InviteByName")
+  _G.InviteToParty = savedITP152
+  -- ④ ★★★两个直调接口都没有 → 只剩 RunScript：**只播报「已排队、无法确认」**，绝不当成邀请成功
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  _G.InviteToParty, _G.InviteByName = nil, nil
+  TEST.runScripts = {}
+  TEST.chat = nil
+  eq(EVAL_TB_NAME_PARTY("排队测试"), true, "④★★后路：请求已排给客户端执行")
+  eq(EVAL_TB_NAMEMENU_STATE().partyScript, 1, "④★★记账走的是「只排队」这条（与直调成功分开记）")
+  eq(EVAL_TB_NAMEMENU_STATE().party, 0, "④★★★**没有**记成「直调成功」（老实现就是在这里骗人的）")
+  eq(string.find(tostring(TEST.chat or ""), "无法确认", 1, true) ~= nil, true, "④★★★如实说「无法确认是否真的发出」")
+  eq(string.find(tostring(TEST.chat or ""), "已邀请入队", 1, true) == nil, true, "④★★★绝不再说「已邀请入队」")
+  eq(string.find(tostring(TEST.runScripts[table.getn(TEST.runScripts)] or ""), "InviteToParty", 1, true) ~= nil, true, "④★排队的脚本里是 InviteToParty")
+  _G.InviteToParty, _G.InviteByName = savedITP152, savedIBN152
+  -- ⑤ 取证命令：能力 + 记账一次打出，并以**落盘字段**当接线证人
+  --   ★先给两条路各留一次痕（不是队长拒发 + 只剩 RunScript 排队），这样探针必须把**三条路**都摊开
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  TEST.partyN = 2 TEST.partyLeader = false
+  TEST.chat = nil
+  EVAL_TB_NAME_PARTY("探针甲")
+  TEST.time = (TEST.time or 1000) + 1 -- 跨过去抖窗（0.5 秒），否则第二次调用会被限频拦下
+  TEST.partyN = 0 TEST.partyLeader = true -- ★先把自己变回队长（否则第二条又被「不是队长」拦下）
+  _G.InviteToParty, _G.InviteByName = nil, nil
+  EVAL_TB_NAME_PARTY("探针乙")
+  _G.InviteToParty, _G.InviteByName = savedITP152, savedIBN152
+  eq((EVAL_TB_NAMEMENU_STATE().partyNotLeader or 0) >= 1, true, "⑤前置：不是队长那条有痕迹")
+  eq((EVAL_TB_NAMEMENU_STATE().partyScript or 0) >= 1, true, "⑤前置：只排队那条也有痕迹")
+  EVAL_HELP_CONFIG.tbNameProbe = nil
+  TEST.chat = nil
+  SlashCmdList["EVALHELP"]("go 名字探针")
+  local pr152 = EVAL_HELP_CONFIG.tbNameProbe
+  eq(type(pr152) == "table", true, "⑤★★★/eh go 名字探针 真的执行了（以**落盘字段**为证）")
+  eq(type(pr152.cap) == "table", true, "⑤★★记账里带能力表")
+  eq(pr152.cap.InviteToParty, true, "⑤★记录了「本客户端有 InviteToParty」")
+  eq(pr152.partyScript, 1, "⑤★★记账跟着上一段走（只排队 1 次）")
+  eq(pr152.partyNotLeader, 1, "⑤★★不是队长拒发 1 次也记着")
+  eq(string.find(tostring(TEST.chat or ""), "右键名字菜单", 1, true) ~= nil, true, "⑤★聊天里也打出来了")
+  TEST.chat = nil
+  EVAL_HELP_CONFIG.tbNameProbe = nil
+  -- ⑥ 还原
+  TEST.partyLeader, TEST.partyN = keepLeader152, keepN152
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  print("  右键邀请：不是队长**不发**并说明 · 记下走的接口 · 只剩 RunScript 时只说「已排队、无法确认」· 取证命令落盘")
+end
+
 print("ALL TESTS PASS")
 
   local sd142 = EVAL_HELP_CONFIG.shareSealDemo
