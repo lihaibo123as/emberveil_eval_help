@@ -10897,18 +10897,23 @@ do
   SlashCmdList["EVALHELP"]("go 秘籍样例")
   eq(string.find(tostring(TEST.chat or ""), "秘籍样例", 1, true) ~= nil, true, "★★★/eh go 秘籍样例 真的执行（命令在 go 组里）")
   TEST.chat = nil
-  -- ★★★1.73.42c 品阶图标（语义配图）+ |T 内联纹理探针（用户：「按语义给等级配图标，先验证可行性」）
+  -- ★★★1.73.42l 品阶图标 = **用户指定**（真机反馈：「案例方案内图标替换，名称和颜色背景都要符合以上规则」）
+  --   按用户给的顺序：源代码=暗影蛋 · 绝版=暗影蛋 · 普通=堕落灰烬使者 · 稀有=斧 · 珍稀=矛。
+  --   ⚠️ 用户给的「图1（源代码）」与「图2（绝版）」是**同一张**（INV_Misc_ShadowEgg），本轮照他列的顺序都用它；
+  --      所以「五张互不相同」这条老判据改成「**前四档互不相同** + 第 5 档与第 4 档同图是用户指定的」。
   eq(EVAL_SHARE_SEAL_ICON_COUNT(), 5, "五个品阶各一个图标")
+  local wantIcons143 = { "INV_Sword_2H_AshbringerCorrupt", "INV_Axe_10", "INV_Spear_04", "INV_Misc_ShadowEgg", "INV_Misc_ShadowEgg" }
   local iconSeen = {}
   for i = 1, 5 do
     local path, file = EVAL_SHARE_SEAL_ICON(i)
     eq(string.find(path, "Interface\\Icons\\", 1, true), 1, "图标路径是本客户端 Icon 目录：" .. tostring(path))
-    eq(iconSeen[file] == nil, true, "★品阶图标不许撞图：" .. tostring(file))
+    eq(file, wantIcons143[i], "★★★第 " .. i .. " 档图标 = 用户指定那张（" .. tostring(wantIcons143[i]) .. "）")
+    if i <= 4 then eq(iconSeen[file] == nil, true, "★普通/稀有/珍稀/绝版 四张不许撞图：" .. tostring(file)) end
     iconSeen[file] = true
   end
   local p1 = EVAL_SHARE_SEAL_ICON(1)
-  eq(string.find(p1, "INV_Misc_Book_07", 1, true) ~= nil, true, "普通档 = 书（语义：入门书）")
-  eq(string.find(EVAL_SHARE_SEAL_ICON(5), "INV_Misc_Gear_01", 1, true) ~= nil, true, "源代码档 = 齿轮（语义：机械/源码）")
+  eq(string.find(p1, "INV_Sword_2H_AshbringerCorrupt", 1, true) ~= nil, true, "普通档 = 堕落灰烬使者（用户指定）")
+  eq(string.find(EVAL_SHARE_SEAL_ICON(5), "INV_Misc_ShadowEgg", 1, true) ~= nil, true, "源代码档 = 暗影蛋（用户指定）")
   EVAL_HELP_CONFIG.shareIconProbe = nil
   TEST.runScripts = {}
   eq(EVAL_SHARE_ICON_PROBE("WHISPER") ~= false, true, "图标探针发送入口能跑")
@@ -11334,6 +11339,48 @@ do
   EVAL_HELP_CONFIG.shareSealDemo = keepDemo147 -- ★原样还回去（不要吃掉别人要读的证人）
   TEST.chat = nil
   print("  境界=方案内最大技能等级（各档一色）· 文案「分享了」· 弹窗与分享行同源 · 样例 7 档带色")
+end
+
+-- 148) ★★★1.73.42l 案例模版行：图标 + **名称文字色** + **背景色** 全按品阶（用户真机反馈）
+--   用户原话：「案例方案内图标替换，名称和颜色背景都要符合以上规则」——「规则」= 前面定的品阶判定与配色。
+do
+  -- ① 色码 → RGB：必须与品阶色表**同源**（逐档把 HEX 自己算一遍来比，不看实现里的常量）
+  local reps148 = { 1, 4, 7, 10, 13 }
+  local okAll148 = true
+  for i = 1, 5 do
+    local _, ti = EVAL_SHARE_SEAL_TIER(reps148[i])
+    local rgb = EVAL_SHARE_SEAL_TIER_RGB(i)
+    if type(rgb) ~= "table" then okAll148 = false
+    else
+      local r = tonumber(string.sub(ti.color, 5, 6), 16) / 255
+      local g = tonumber(string.sub(ti.color, 7, 8), 16) / 255
+      local b = tonumber(string.sub(ti.color, 9, 10), 16) / 255
+      if math.abs(rgb.r - r) > 0.001 or math.abs(rgb.g - g) > 0.001 or math.abs(rgb.b - b) > 0.001 then okAll148 = false end
+    end
+  end
+  eq(okAll148, true, "①★★★RGB 由品阶色码解析而来（与聊天行/弹窗同一张色表，五档逐个核）")
+  eq(EVAL_SHARE_SEAL_TIER_RGB(5).hex, "|cffb87333", "①★源代码档 = 暗金（RGB 有据）")
+  -- ② 真实模版行：图标 = 该品阶图标 · 名称色 = 品阶色 · 背景色 = 同色调 22% 暗色
+  local rows148 = EVAL_TEST_TPL_ROWS()
+  eq(table.getn(rows148) >= 5, true, "②前置：模版行数 " .. tostring(table.getn(rows148)))
+  local checked148, badIcon148, badText148, badBg148 = 0, 0, 0, 0
+  local seenTier148, nTier148 = {}, 0
+  for i = 1, table.getn(rows148) do
+    local v = EVAL_TEST_TPL_TIER(i)
+    if v and v.tier and v.want then
+      checked148 = checked148 + 1
+      if not seenTier148[v.tier] then seenTier148[v.tier] = true nTier148 = nTier148 + 1 end
+      if v.icon ~= EVAL_SHARE_SEAL_ICON(v.tier) then badIcon148 = badIcon148 + 1 end
+      if math.abs((v.textR or -1) - v.want.r) > 0.01 or math.abs((v.textG or -1) - v.want.g) > 0.01 or math.abs((v.textB or -1) - v.want.b) > 0.01 then badText148 = badText148 + 1 end
+      if math.abs((v.bgR or -1) - v.want.r * 0.22) > 0.01 or math.abs((v.bgG or -1) - v.want.g * 0.22) > 0.01 or math.abs((v.bgB or -1) - v.want.b * 0.22) > 0.01 then badBg148 = badBg148 + 1 end
+    end
+  end
+  eq(checked148 >= 5, true, "②★★真的查到带品阶的模版行（" .. tostring(checked148) .. " 行）")
+  eq(badIcon148, 0, "②★★★每行图标纹理 = 该品阶图标（读真控件 GetTexture），不符 " .. tostring(badIcon148) .. " 行")
+  eq(badText148, 0, "②★★★每行**名称文字色** = 该品阶色（读真控件 GetTextColor），不符 " .. tostring(badText148) .. " 行")
+  eq(badBg148, 0, "②★★★每行**背景色** = 该品阶色的 22% 暗色（读真控件 GetVertexColor），不符 " .. tostring(badBg148) .. " 行")
+  eq(nTier148 >= 2, true, "③★★★模版窗里至少出现 2 个不同品阶（否则「颜色跟着品阶」根本验不出来），实际 " .. tostring(nTier148))
+  print("  案例模版行外观：图标 + 名称文字色 + 背景暗色调 全按品阶（读真控件）· RGB 与色码同源")
 end
 
 print("ALL TESTS PASS")

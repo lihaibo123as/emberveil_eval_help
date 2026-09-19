@@ -898,12 +898,16 @@ function EVAL_SHARE_SEAL_DEMO()
   return table.getn(lines)
 end
 -- ===== 1.73.42c 品阶图标 + 「|T 内联纹理」可行性探针（用户要求：按语义给等级配图标，先验证）=====
--- 语义配图：从 IconSem.lua（客户端图标清单生成、带中文标签）里按标签挑，**保证路径真实存在**：
---   普通=书 INV_Misc_Book_07 · 稀有=宝石 INV_Misc_Gem_02 · 珍稀=紫水晶 INV_Misc_Gem_Amethyst_01
---   绝版=王冠 INV_Crown_01 · 源代码=齿轮 INV_Misc_Gear_01（机械＝源码味）
+-- ★★★1.73.42l 图标由**用户指定**（2026-09-19 真机反馈：「案例方案内图标替换，名称和颜色背景都要符合以上规则」）：
+--   按用户给的顺序对号入座 —— 源代码=暗影蛋 INV_Misc_ShadowEgg · 绝版=暗影蛋 INV_Misc_ShadowEgg
+--   · 普通=堕落灰烬使者 INV_Sword_2H_AshbringerCorrupt · 稀有=斧 INV_Axe_10 · 珍稀=矛 INV_Spear_04。
+--   ⚠️ 用户给的「图1（源代码）」与「图2（绝版）」是**同一张** INV_Misc_ShadowEgg（两张截图逐字相同）——
+--      本轮先照他列的顺序都用它；要区分只需换掉本表里第 4 项（绝版）。
+--   ★五个名字都在 IconSem.lua（客户端图标清单）里**逐字存在**（已核）→ 路径真实、本客户端画得出来。
+--     ★文件名**不带** `_TEX` 后缀：`_TEX` 是客户端资源命名，插件侧路径一律 `Interface\Icons\<名>`。
 -- ★但「聊天行里能不能画图标」是本客户端**未知数**：`|T` 标记在本仓库与两个参考插件里**使用次数为 0** ⇒ 必须实测。
 local SH_SEAL_ICONS = {
-  "INV_Misc_Book_07", "INV_Misc_Gem_02", "INV_Misc_Gem_Amethyst_01", "INV_Crown_01", "INV_Misc_Gear_01",
+  "INV_Sword_2H_AshbringerCorrupt", "INV_Axe_10", "INV_Spear_04", "INV_Misc_ShadowEgg", "INV_Misc_ShadowEgg",
 }
 -- ★★★1.73.42d 实测结论（用户回报探针）：`|T` 内联纹理**不可用**（只有纯符号对照 ④ 渲染出来）
 --   → 聊天行改用**符号**按品阶区分；图标留到**点击后的详情弹窗**里（UI 纹理 100% 可行）。
@@ -915,6 +919,21 @@ function EVAL_SHARE_SEAL_ICON(tierIdx)
   return "Interface\\Icons\\" .. f, f
 end
 function EVAL_SHARE_SEAL_ICON_COUNT() return table.getn(SH_SEAL_ICONS) end
+-- ★★★1.73.42l 品阶色码 → RGB（0..1）：案例模版行的**名称文字色**与**背景色**都用它，
+--   与聊天行/弹窗用的是**同一张**色表（SH_SEAL_TIERS[].color）→ 三处永不漂移。
+--   ★解析 8 位色码（`|c` + AARRGGBB）：从第 5 字节起取 R/G/B（**不切 alpha**——本项目 COLOR CODE LEN CHECK 守着
+--     「不许把 8 位切出 6 位」那条真事故）；解析不出来就如实给 nil（调用方退回原来的暗黄底色）。
+function EVAL_SHARE_SEAL_TIER_RGB(tierIdx)
+  local i = tonumber(tierIdx) or 1
+  local t = SH_SEAL_TIERS[i] or SH_SEAL_TIERS[1]
+  local code = t and t.color
+  if type(code) ~= "string" or string.len(code) ~= 10 or string.sub(code, 1, 2) ~= "|c" then return nil end
+  local r = tonumber(string.sub(code, 5, 6), 16)
+  local g = tonumber(string.sub(code, 7, 8), 16)
+  local b = tonumber(string.sub(code, 9, 10), 16)
+  if not r or not g or not b then return nil end
+  return { r = r / 255, g = g / 255, b = b / 255, hex = code }
+end
 -- 探针：4 种写法各一条（密语自己），④ 是纯符号对照（永远能渲染，作为保底参照）
 function EVAL_SHARE_ICON_PROBE(chanId)
   chanId = (type(chanId) == "string" and chanId ~= "") and chanId or "WHISPER"

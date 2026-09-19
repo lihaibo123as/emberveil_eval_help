@@ -709,6 +709,11 @@ function checkIconAssets() {
   if (t.indexOf('EVAL_SHARE_SEAL_SCORE(p.text)') < 0) bad.push('模版窗没有按品阶评分（EVAL_SHARE_SEAL_SCORE(p.text)）');
   if (t.indexOf('EVAL_SHARE_SEAL_ICON(tiIdx)') < 0) bad.push('模版窗没有取品阶图标（EVAL_SHARE_SEAL_ICON）');
   if (t.indexOf('品阶：') < 0) bad.push('模版 tooltip 没有给出品阶说明');
+  // ★★★1.73.42l 用户：「名称和颜色背景都要符合以上规则」——名称文字色与行背景色的接线也必须守着
+  //   （漏了不报错、只是全窗一个色 → 正是源码检查要补的盲区）
+  if (t.indexOf('EVAL_SHARE_SEAL_TIER_RGB(tiIdx)') < 0) bad.push('模版行没有按品阶取 RGB（名称/背景不会跟品阶变色）');
+  if (t.indexOf('SetTextColor, bt, tiRGB.r') < 0) bad.push('模版行的名称没有上品阶色');
+  if (t.indexOf('SetVertexColor, bb, br, bgc, bbc') < 0) bad.push('模版行的背景没有上品阶暗色调');
   if (bad.length) { console.log('TPL TIER ICON CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
   console.log('TPL TIER ICON CHECK: 模版窗按品阶评分 + 图标 + tooltip 品阶行');
 })();
@@ -741,6 +746,25 @@ function checkIconAssets() {
   if (t.indexOf('SH.sealMeta[sid]') < 0) bad.push('封皮行没有解析出发送端信息（SH.sealMeta）');
   if (bad.length) { console.log('SHARE SEAL ROW CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
   console.log('SHARE SEAL ROW CHECK: 弹窗品阶栏 = 真纹理图标 + 同源品阶判定 + 未知兜底 + 封皮元数据');
+})();
+// ===== SEAL ICON NAMES CHECK（1.73.42l）：品阶图标的**名字**必须是客户端真有的（用户指定的五张） =====
+// 背景：图标由用户点名（截图里是 `.../INV_Misc_ShadowEgg_TEX` 这种**资源名**）——
+//   ① `_TEX` 是客户端资源命名，插件侧路径一律 `Interface\\Icons\\<裸名>`，带上后缀真机**画不出东西**；
+//   ② 拼错一个字母同样「不报错、只是空白」→ 必须拿 IconSem.lua（客户端图标清单）逐个核。
+(function () {
+  const t = fs.readFileSync(path.join(__dirname, 'Share.lua'), 'utf8');
+  const sem = fs.readFileSync(path.join(__dirname, 'IconSem.lua'), 'utf8');
+  const m = t.match(/local SH_SEAL_ICONS = \{([\s\S]*?)\}/);
+  if (!m) { console.log('SEAL ICON NAMES CHECK: FAIL - 找不到 SH_SEAL_ICONS 表'); process.exit(1); }
+  const names = (m[1].match(/"([^"]+)"/g) || []).map(function (s) { return s.slice(1, -1); });
+  const bad = [];
+  if (names.length !== 5) bad.push('品阶图标不是 5 个（实际 ' + names.length + '）');
+  names.forEach(function (n) {
+    if (n.indexOf('_TEX') >= 0) bad.push(n + ' 带了 _TEX 后缀（插件路径只用裸名）');
+    if (sem.indexOf('["' + n + '"]') < 0) bad.push(n + ' 不在 IconSem.lua（客户端图标清单）里，真机会画不出东西');
+  });
+  if (bad.length) { console.log('SEAL ICON NAMES CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
+  console.log('SEAL ICON NAMES CHECK: 品阶图标 5 张都在客户端图标清单里（裸名，无 _TEX）');
 })();
 // ===== TEMPLATE COUNT CHECK（1.73.40）：文档里那句「案例模版 N 条」必须等于 examples/ 里的**真实条数** =====
 // 背景（用户「将当前方案添加到案例模版」）：模版数据在 examples/*.lua，而「一共有多少条」这句话**散在 4 个地方**

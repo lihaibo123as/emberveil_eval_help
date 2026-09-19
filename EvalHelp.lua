@@ -6608,7 +6608,9 @@ function EVAL_HELP_TPL_BUILD()
       uiSolid(bb, 0.12, 0.10, 0.06, 1)
       bb:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
       bb:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+      b.tierBgTex = bb -- ★1.73.42l 供判据读**真实背景色**（桩会记账，真机 GetVertexColor 可读）
       local bt = uiText(b, 9, 0.88, 0.88, 0.88)
+      b.tierText = bt -- ★1.73.42l 供判据读**真实文字色**
       bt:SetPoint("CENTER", b, "CENTER", 0, 0)
       pcall(bt.SetWidth, bt, e.w - 8) -- 实测宽度留的内边距足够；超长名仍裁掉（tooltip 里有全名）
       pcall(bt.SetNonSpaceWrap, bt, false)
@@ -6629,16 +6631,32 @@ function EVAL_HELP_TPL_BUILD()
         pcall(bt.SetPoint, bt, "LEFT", b, "LEFT", 18, 0)
         pcall(bt.SetWidth, bt, e.w - 22)
         pcall(bt.SetJustifyH, bt, "LEFT")
+        -- ★★★1.73.42l 用户：「案例方案内图标替换，名称和颜色背景都要符合以上规则」
+        --   ① 名称文字 = **品阶色**（与聊天行/弹窗同一张色表，经 EVAL_SHARE_SEAL_TIER_RGB 解析）；
+        --   ② 行背景 = 同色调**压暗到 22%**（饱和底色会把文字吃掉——本项目「文字色 vs 背景色」那条老教训）；
+        --   ③ 悬停 = 同色调 42%（比常态亮，但不跳色）；解析不出色码就退回原来的暗黄底，绝不闪成黑块。
+        tiRGB = (type(EVAL_SHARE_SEAL_TIER_RGB) == "function") and EVAL_SHARE_SEAL_TIER_RGB(tiIdx) or nil
+        if tiRGB then
+          pcall(bt.SetTextColor, bt, tiRGB.r, tiRGB.g, tiRGB.b)
+          b.tierTextR, b.tierTextG, b.tierTextB = tiRGB.r, tiRGB.g, tiRGB.b
+          local br, bgc, bbc = tiRGB.r * 0.22, tiRGB.g * 0.22, tiRGB.b * 0.22
+          pcall(bb.SetVertexColor, bb, br, bgc, bbc, 1)
+          b.tierBgR, b.tierBgG, b.tierBgB = br, bgc, bbc
+          b.tierHoverR, b.tierHoverG, b.tierHoverB = tiRGB.r * 0.42, tiRGB.g * 0.42, tiRGB.b * 0.42
+        end
       end
       table.insert(tplUI.rowBtns, { name = tostring(p.name), cls = tostring(e.cls), btn = b })
       b:SetScript("OnEnter", function()
-        pcall(bb.SetVertexColor, bb, 0.30, 0.25, 0.12, 1)
+        if b.tierHoverR then pcall(bb.SetVertexColor, bb, b.tierHoverR, b.tierHoverG, b.tierHoverB, 1)
+        else pcall(bb.SetVertexColor, bb, 0.30, 0.25, 0.12, 1) end
         pcall(function()
           GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
           GameTooltip:AddLine(tostring(p.name), 1, 0.85, 0.3)
           if b.tierScore then
             local _, ti = EVAL_SHARE_SEAL_TIER(b.tierScore)
-            GameTooltip:AddLine("品阶：" .. tostring(ti.name) .. "（评分 " .. tostring(b.tierScore) .. "）", 1, 0.9, 0.5)
+            -- ★1.73.42l tooltip 里的品阶行也用**该品阶的颜色**（与行内名称、分享行一致）
+            GameTooltip:AddLine("品阶：" .. tostring(ti.name) .. "（评分 " .. tostring(b.tierScore) .. "）",
+              b.tierTextR or 1, b.tierTextG or 0.9, b.tierTextB or 0.5)
           end
           if p.desc then GameTooltip:AddLine(tostring(p.desc), 0.85, 0.85, 0.85, true) end
           for ln2 in string.gmatch(tostring(p.text or ""), "([^\n]+)") do
@@ -6648,7 +6666,8 @@ function EVAL_HELP_TPL_BUILD()
         end)
       end)
       b:SetScript("OnLeave", function()
-        pcall(bb.SetVertexColor, bb, 0.12, 0.10, 0.06, 1)
+        if b.tierBgR then pcall(bb.SetVertexColor, bb, b.tierBgR, b.tierBgG, b.tierBgB, 1)
+        else pcall(bb.SetVertexColor, bb, 0.12, 0.10, 0.06, 1) end
         pcall(GameTooltip.Hide, GameTooltip)
       end)
       b:SetScript("OnClick", function()
@@ -6709,6 +6728,30 @@ function EVAL_TEST_TPL_ROWS()
     local okw, w2 = pcall(e.btn.GetWidth, e.btn)
     out[i] = { name = e.name, cls = e.cls, x = okx and x or nil, y = oky and y or nil, w = okw and w2 or nil }
   end
+  return out
+end
+-- ★★★1.73.42l 案例模版行的「品阶外观」读值口：图标纹理 + 名称**文字色** + 行**背景色**（都读**真控件**，
+--   不读我们自己记的账——本项目「断言读自己拼的状态 = 测自己」的老坑）。
+function EVAL_TEST_TPL_TIER(i)
+  EVAL_HELP_TPL_BUILD()
+  local e = (tplUI.rowBtns or {})[tonumber(i) or 0]
+  if not e or not e.btn then return nil end
+  local b = e.btn
+  local out = { name = e.name, cls = e.cls, tier = b.tierIdx, score = b.tierScore, icon = nil,
+                textR = nil, textG = nil, textB = nil, bgR = nil, bgG = nil, bgB = nil, want = nil }
+  if b.tierIcon then
+    local ok, t = pcall(b.tierIcon.GetTexture, b.tierIcon)
+    out.icon = ok and t or nil
+  end
+  if b.tierText then
+    local okt, tr, tg, tb = pcall(b.tierText.GetTextColor, b.tierText)
+    if okt then out.textR, out.textG, out.textB = tr, tg, tb end
+  end
+  if b.tierBgTex then
+    local okv, vr, vg, vb = pcall(b.tierBgTex.GetVertexColor, b.tierBgTex)
+    if okv then out.bgR, out.bgG, out.bgB = vr, vg, vb end
+  end
+  if type(EVAL_SHARE_SEAL_TIER_RGB) == "function" and b.tierIdx then out.want = EVAL_SHARE_SEAL_TIER_RGB(b.tierIdx) end
   return out
 end
 function EVAL_TEST_TPL_HEADERS()
