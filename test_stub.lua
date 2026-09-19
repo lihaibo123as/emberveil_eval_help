@@ -394,7 +394,24 @@ end
 TEST.trades, TEST.inspects, TEST.uninvites, TEST.guildUninvites = {}, {}, {}, {}
 InitiateTrade = function(u) TEST.initiateTradeCalls = (TEST.initiateTradeCalls or 0) + 1 table.insert(TEST.trades, tostring(u)) end
 NotifyInspect = function(u) TEST.inspectCalls = (TEST.inspectCalls or 0) + 1 table.insert(TEST.inspects, tostring(u)) end
-UninviteByName = function(n) TEST.uninviteCalls = (TEST.uninviteCalls or 0) + 1 table.insert(TEST.uninvites, tostring(n)) end
+-- ★1.73.42v 桩保真：UninviteByName 要**真的**把人移出队伍/团队（wiki：把名字交给服务器 → 服务器取消邀请或移出成员），
+--   否则「操作前后队伍人数变没变」这条判据在测试里**永远看不到变化**（桩不记状态 = 断言失明）。
+--   TEST.uninviteNoop = true 模拟「请求发了但服务器没动」（用来验「不假称已移出」）。
+UninviteByName = function(n)
+  TEST.uninviteCalls = (TEST.uninviteCalls or 0) + 1
+  table.insert(TEST.uninvites, tostring(n))
+  if TEST.uninviteNoop then return end
+  local want = string.lower(tostring(n or ""))
+  for _, key in ipairs({ "team", "raid" }) do
+    local list = TEST[key]
+    if type(list) == "table" then
+      for i = 1, table.getn(list) do
+        local nm = type(list[i]) == "table" and list[i].name or nil
+        if nm and string.lower(tostring(nm)) == want then table.remove(list, i) return end
+      end
+    end
+  end
+end
 GuildUninviteByName = function(n) TEST.guildUninviteCalls = (TEST.guildUninviteCalls or 0) + 1 table.insert(TEST.guildUninvites, tostring(n)) end
 CanGuildRemove = function() return TEST.canGuildRemove and true or false end
 IsPartyLeader = function() return TEST.partyLeader and true or false end
@@ -877,7 +894,35 @@ end
 GetFriendInfo = function(i)
   local r = TEST.friendRows and TEST.friendRows[i]
   if not r then return nil end
-  return r.name, r.level or 10, r.class or "法师", r.zone or "艾尔文森林", (r.online ~= false)
+  -- ★1.73.42u 桩保真（wiki）：name「来自本地缓存，**可能暂时为空**」→ TEST.friendNameCache = false 时模拟这个窗口
+  local nm = (TEST.friendNameCache == false) and "" or r.name
+  return nm, r.level or 10, r.class or "法师", r.zone or "艾尔文森林", (r.online ~= false)
+end
+-- ★★★1.73.42u 好友增删桩（与上面**同一张** TEST.friendRows：两处共用一个好友列表，不搞两份模型）：
+--   · AddFriend(name) —— wiki：无返回值；TEST.friendAddNoop = true 模拟「请求发了但服务器没动」；
+--   · RemoveFriend(序号或名字) —— wiki：两种都收；TEST.friendRemoveNoop 同理。
+AddFriend = function(name)
+  TEST.friendAddCalls = (TEST.friendAddCalls or 0) + 1
+  if TEST.friendAddNoop then return end
+  local n = tostring(name or "")
+  if n == "" then return end
+  TEST.friendRows = TEST.friendRows or {}
+  for i = 1, table.getn(TEST.friendRows) do
+    if string.lower(tostring(TEST.friendRows[i].name or "")) == string.lower(n) then return end
+  end
+  table.insert(TEST.friendRows, { name = n, level = 60, class = "战士", zone = "未知", online = true })
+end
+RemoveFriend = function(arg)
+  TEST.friendRemoveCalls = (TEST.friendRemoveCalls or 0) + 1
+  if TEST.friendRemoveNoop then return end
+  if type(arg) == "number" then
+    if TEST.friendRows and TEST.friendRows[arg] then table.remove(TEST.friendRows, arg) end
+    return
+  end
+  local want = string.lower(tostring(arg or ""))
+  for i = 1, table.getn(TEST.friendRows or {}) do
+    if string.lower(tostring(TEST.friendRows[i].name or "")) == want then table.remove(TEST.friendRows, i) return end
+  end
 end
 -- ★1.73.12 聊天名字着色：采集只读「名册条数」。桩必须**真的**存在这三个 API ——
 --   否则生产代码里那条「type(X) == "function"」守卫会让整条采集路径在测试里**从未被走到**

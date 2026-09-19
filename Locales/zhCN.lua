@@ -379,6 +379,29 @@ TB_NAMEMENU_WHISPERFAIL = "本客户端没有打开聊天框的接口 → 请手
   TB_NAMEMENU_PARTYNOTLEAD = "你不是队长 —— 服务器会忽略这个邀请，所以**没有发出**（让队长来邀请）",
   TB_NAMEMENU_PARTYSCRIPT = "已把邀请请求排队给客户端执行：%s（★无法确认是否真的发出 —— 接口在本客户端不能直调）",
   TB_NAMEMENU_PARTYSELF = "不能邀请自己（客户端会直接报 invite-self 错，**不会发送**）",
+  -- ★★★1.73.42u 右键菜单新增「添加好友 / 删除好友（是好友才显示）」（用户要求）。
+  --   ★语义按客户端官方 wiki（emberveil.org/wiki/lua/globals/Friend）：AddFriend(name) **无返回值**；
+  --     RemoveFriend 既收 **1-based 序号** 也收**角色名**；GetFriendInfo 的 name「来自本地缓存，**可能暂时为空**」
+  --     ⇒ 名字读不到时**不确认**（不拿空行当好友），增删都用「操作前后 GetNumFriends() 对比」如实播报。
+  TB_NAMEMENU_ADDFRIEND = "添加好友",
+  TB_NAMEMENU_DELFRIEND = "删除好友",
+  TB_NAMEMENU_FRIENDADDOK = "已添加好友：%s",
+  TB_NAMEMENU_FRIENDADDUNK = "已发送添加好友请求：%s（好友列表还没刷新，暂时确认不了）",
+  TB_NAMEMENU_FRIENDALREADY = "已经在好友列表里了：%s",
+  TB_NAMEMENU_FRIENDREMOVEOK = "已删除好友：%s",
+  TB_NAMEMENU_FRIENDNOTON = "对方不在你的好友列表里：%s",
+  TB_NAMEMENU_FRIENDFAIL = "好友操作没生效（%s）",
+  TB_NAMEMENU_FRIENDNOAPI = "本客户端没有好友接口（%s）",
+  -- ★★★1.73.42v 取消邀请（用户：「添加取消邀请,在队伍内的情况下」）。
+  --   ★语义按客户端官方 wiki（Group）：`UninviteByName(Name)`「Removes a party or raid member by character name.
+  --     Sends the given name to the server. **Does not look the name up locally first**.」
+  --     ⇒ 它只是把名字交给服务器：对方**还没接受**时服务器直接**取消邀请**，已在队伍里才是「移出队伍」——
+  --       同一个接口两种结果，所以措辞必须覆盖两种，并用「操作前后队伍人数」如实区分。
+  TB_NAMEMENU_CANCELINVITE = "取消邀请",
+  TB_NAMEMENU_CANCELSENT = "已请求取消对 %s 的邀请（对方还没接受的话，服务器会直接取消）",
+  TB_NAMEMENU_CANCELKICKED = "已把 %s 移出队伍",
+  TB_NAMEMENU_CANCELFAIL = "取消邀请没发出去（%s）",
+  TB_NAMEMENU_KICKPUNK = "已发出踢出请求：%s（队伍人数没变，可能对方已不在队伍里）",
 TB_NAMEMENU_PARTYFAIL = "邀请没发出去（%s）—— 可能对方已在队伍/离线，或接口不可用",
 TB_NAMEMENU_TARGETOK = "已选中目标：%s",
 TB_NAMEMENU_TARGETFAIL = "选不中目标（%s）—— TargetByName 只认附近单位，太远就选不到",

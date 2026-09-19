@@ -11673,6 +11673,119 @@ do
   print("  右键邀请：不是队长**不发**并说明 · 记下走的接口 · 只剩 RunScript 时只说「已排队、无法确认」· 取证命令落盘")
 end
 
+-- 153) ★★★1.73.42u/v 右键菜单：添加好友 / 删除好友（是好友才显示）/ 取消邀请（在队伍内）
+--   用户要求：「名字右键菜单增加: 添加好友.删除好友(是好友的情况下)」「添加取消邀请,在队伍内的情况下」
+do
+  local savedTb153 = EVAL_HELP_CONFIG.tb
+  EVAL_HELP_CONFIG.tb = { nameMenu = true }
+  local keepFriendRows153 = TEST.friendRows
+  local keepTeam153, keepPartyN153, keepLead153 = TEST.team, TEST.partyN, TEST.partyLeader
+  local keepCache153, keepNoop153 = TEST.friendNameCache, TEST.friendAddNoop
+  local keepUninviteNoop153 = TEST.uninviteNoop
+  TEST.friendRows = {}
+  TEST.friendNameCache, TEST.friendAddNoop = true, false
+  TEST.uninviteNoop = false
+  TEST.partyN, TEST.partyLeader = 0, false
+  TEST.team = nil
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  EVAL_TEST_TB_MENU_DROP()
+  -- ① 不是好友时：菜单里**没有**「删除好友」，但有「添加好友」
+  TEST.chat = nil
+  TEST.time = (TEST.time or 1000) + 1 -- 跨过 0.5 秒服务器写动作限频窗（好友/取消邀请共用同一个限频器）
+  EVAL_TB_MENU_SHOW("Ionol")
+  eq(EVAL_TEST_TB_MENU_CLICK(EVAL_L("TB_NAMEMENU_DELFRIEND")), false, "①★★★不是好友 → 菜单里没有「删除好友」（点不到）")
+  eq(EVAL_TEST_TB_MENU_CLICK(EVAL_L("TB_NAMEMENU_ADDFRIEND")), true, "②★★★「添加好友」在菜单里，点的是真实按钮")
+  eq(table.getn(TEST.friendRows), 1, "②★★★好友列表里真的多了一个")
+  eq(tostring((TEST.friendRows[1] or {}).name or ""), "Ionol", "②★★加的是这个名字")
+  print("DBG153 typeGN=" .. type(GetNumFriends) .. " n=" .. tostring(GetNumFriends and select(2, pcall(GetNumFriends)) or -1) .. " addCalls=" .. tostring(TEST.friendAddCalls) .. " add=" .. tostring(EVAL_TB_NAMEMENU_STATE().friendAdd) .. " unk=" .. tostring(EVAL_TB_NAMEMENU_STATE().friendAddUnk) .. " chat=[" .. tostring(TEST.chat) .. "]")
+  eq(EVAL_TB_NAMEMENU_STATE().friendAdd, 1, "②★★记账：加成功 1 次")
+  eq(string.find(tostring(TEST.chat or ""), "已添加好友", 1, true) ~= nil, true, "②★★如实播报「已添加好友」")
+  -- ③ 已经是好友再加：不重复加，如实说
+  TEST.chat = nil
+  eq(EVAL_TB_NAME_ADDFRIEND("Ionol"), false, "③★★已经是好友 → 不再发（返回 false）")
+  eq(table.getn(TEST.friendRows), 1, "③★★列表没被重复插入")
+  eq(string.find(tostring(TEST.chat or ""), "已经在好友列表里", 1, true) ~= nil, true, "③★★如实说「已经在好友列表里」")
+  -- ④ 同一个名字**重新显示菜单**：这次「删除好友」出现了（条目按当前状态重算，不是首次建好就冻结）
+  TEST.chat = nil
+  TEST.time = (TEST.time or 1000) + 1 -- 跨过 0.5 秒服务器写动作限频窗（好友/取消邀请共用同一个限频器）
+  EVAL_TB_MENU_SHOW("Ionol")
+  eq(EVAL_TEST_TB_MENU_CLICK(EVAL_L("TB_NAMEMENU_DELFRIEND")), true, "④★★★加完好友再开菜单 →「删除好友」出现了")
+  eq(table.getn(TEST.friendRows), 0, "④★★★点了之后真的从好友列表里删掉了")
+  eq(EVAL_TB_NAMEMENU_STATE().friendRemove, 1, "④★★记账：删成功 1 次")
+  eq(string.find(tostring(TEST.chat or ""), "已删除好友", 1, true) ~= nil, true, "④★★如实播报「已删除好友」")
+  -- ⑤ 服务器没接受（列表没变）→ 不许假称「已添加」
+  TEST.friendAddNoop = true
+  TEST.chat = nil
+  TEST.time = (TEST.time or 1000) + 1 -- 跨过 0.5 秒服务器写动作限频窗（好友/取消邀请共用同一个限频器）
+  eq(EVAL_TB_NAME_ADDFRIEND("乙玩家"), true, "⑤★★请求发出去了（返回 true）")
+  eq(EVAL_TB_NAMEMENU_STATE().friendAdd, 1, "⑤★★★没有记成「加成功」（还是 1）")
+  eq(EVAL_TB_NAMEMENU_STATE().friendAddUnk, 1, "⑤★★★记的是「请求已发但确认不了」")
+  eq(string.find(tostring(TEST.chat or ""), "暂时确认不了", 1, true) ~= nil, true, "⑤★★★措辞如实（不假称已添加）")
+  TEST.friendAddNoop = false
+  -- ⑥ 名字缓存还没到（wiki：GetFriendInfo 的 name 可能暂时为空）→ 不能确认，就不显示删除好友
+  TEST.friendRows = { { name = "缓存甲" } }
+  TEST.friendNameCache = false
+  EVAL_TEST_TB_MENU_DROP()
+  TEST.chat = nil
+  EVAL_TB_MENU_SHOW("缓存甲")
+  eq(EVAL_TEST_TB_MENU_CLICK(EVAL_L("TB_NAMEMENU_DELFRIEND")), false, "⑥★★★好友名字读不到（缓存未到）→ 不显示删除好友（不猜）")
+  TEST.friendNameCache = true
+  TEST.friendRows = {}
+  -- ⑦ 取消邀请：不在队伍里就没有这个条目（用户：在队伍内的情况下）
+  EVAL_TEST_TB_MENU_DROP()
+  TEST.partyN, TEST.partyLeader = 0, false
+  TEST.chat = nil
+  TEST.time = (TEST.time or 1000) + 1 -- 跨过 0.5 秒服务器写动作限频窗（好友/取消邀请共用同一个限频器）
+  EVAL_TB_MENU_SHOW("Ionol")
+  eq(EVAL_TEST_TB_MENU_CLICK(EVAL_L("TB_NAMEMENU_CANCELINVITE")), false, "⑦★★★不在队伍 → 菜单里没有「取消邀请」")
+  -- ⑧ 在队伍里（且我是队长）：条目出现 → 点它 → 人真的被移出（人数 2 → 1）→ 措辞是「已把 X 移出队伍」
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  EVAL_TEST_TB_MENU_DROP()
+  TEST.partyN = nil
+  TEST.team = { { unit = "party1", name = "Ionol" }, { unit = "party2", name = "别人" } }
+  TEST.partyLeader = true
+  TEST.uninviteNoop = false
+  TEST.chat = nil
+  TEST.time = (TEST.time or 1000) + 1 -- 跨过 0.5 秒服务器写动作限频窗（好友/取消邀请共用同一个限频器）
+  EVAL_TB_MENU_SHOW("Ionol")
+  eq(EVAL_TEST_TB_MENU_CLICK(EVAL_L("TB_NAMEMENU_CANCELINVITE")), true, "⑧★★★队伍里才有「取消邀请」，点的是真实按钮")
+  eq(table.getn(TEST.team), 1, "⑧★★★真的把人移出队伍了（2 → 1）")
+  eq(EVAL_TB_NAMEMENU_STATE().cancelKicked, 1, "⑧★★记账：真移出 1 次")
+  eq(string.find(tostring(TEST.chat or ""), "移出队伍", 1, true) ~= nil, true, "⑧★★措辞是「已把 X 移出队伍」")
+  -- ⑨ 服务器没动（人数没变）→ 只说「已请求取消对 X 的邀请」，不假称移出
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  TEST.team = { { unit = "party1", name = "Ionol" } }
+  TEST.uninviteNoop = true
+  TEST.chat = nil
+  TEST.time = (TEST.time or 1000) + 1 -- 跨过 0.5 秒服务器写动作限频窗（好友/取消邀请共用同一个限频器）
+  eq(EVAL_TB_NAME_CANCELINVITE("Ionol"), true, "⑨★★请求已发（返回 true）")
+  eq(EVAL_TB_NAMEMENU_STATE().cancelSent, 1, "⑨★★★记的是「请求已发」而不是「真移出」")
+  eq(EVAL_TB_NAMEMENU_STATE().cancelKicked, 0, "⑨★★★确认真移出仍是 0")
+  eq(string.find(tostring(TEST.chat or ""), "已请求取消", 1, true) ~= nil, true, "⑨★★★措辞如实（覆盖「对方还没接受」那种情况）")
+  TEST.uninviteNoop = false
+  -- ⑩ 取证命令也把这些记账摊开（落盘为证）
+  EVAL_HELP_CONFIG.tbNameProbe = nil
+  TEST.chat = nil
+  SlashCmdList["EVALHELP"]("go 名字探针")
+  local pr153 = EVAL_HELP_CONFIG.tbNameProbe
+  eq(type(pr153) == "table", true, "⑩★★★/eh go 名字探针 真的执行（落盘为证）")
+  eq(pr153.cap.AddFriend and pr153.cap.RemoveFriend, true, "⑩★★探针报了好友接口")
+  eq(pr153.cancelSent, 1, "⑩★★记账跟着走：取消邀请「请求已发」1 次")
+  eq(string.find(tostring(TEST.chat or ""), "好友接口", 1, true) ~= nil, true, "⑩★聊天里也摊开了好友能力")
+  EVAL_HELP_CONFIG.tbNameProbe = nil
+  TEST.chat = nil
+  -- 还原现场
+  TEST.friendRows, TEST.team = keepFriendRows153, keepTeam153
+  TEST.partyN, TEST.partyLeader = keepPartyN153, keepLead153
+  TEST.friendNameCache, TEST.friendAddNoop = keepCache153, keepNoop153
+  TEST.uninviteNoop = keepUninviteNoop153
+  EVAL_TEST_TB_MENU_DROP()
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  EVAL_HELP_CONFIG.tb = savedTb153
+  print("  右键菜单：添加好友 · 删除好友（仅好友/名字读不到就不显示）· 取消邀请（仅队伍内）· 假成功一律改成如实措辞")
+end
+
+print("ALL TESTS PASS")
 print("ALL TESTS PASS")
 
   local sd142 = EVAL_HELP_CONFIG.shareSealDemo
