@@ -504,7 +504,13 @@ local function shOnMsg(msg, sender, ev)
       --   ★解析不出来就**不记** → 弹窗如实写「未知」，绝不拿本机角色/本机随机评语冒充发送端的。
       -- ★1.73.42k 境界前面多了**颜色码**（`|cff9d9d9d[炼气]|r`）→ 原来锚定行首的 `^%[` 会直接失效，
       --   改成取**行内第一个方括号组**（封皮行里境界总在最前，品阶方括号在链接显示段里，排在它后面）。
-      local rank = string.match(msg, "%[([^%]]*)%]")
+      -- ★★★1.73.42o 身份**连颜色一起**从封皮行读回来（用户：「最终只是文本发出去.而不是本地变量调用.
+      --   「所以不存在在其他玩家上电脑上看不到空的情况」）→ 接收端**照抄发送端的显示**：
+      --   连**彩蛋自定义**的头衔也能原样带色显示（本地卡表里查不到那 75 张也照样显示，绝不空白）。
+      local idColor, idName = string.match(msg, "(|c%x%x%x%x%x%x%x%x)%[([^%]]*)%]")
+      local rank, rankColor = nil, nil
+      if idName and idName ~= "" then rank, rankColor = idName, idColor
+      else rank = string.match(msg, "%[([^%]]*)%]") end
       local disp = string.match(msg, "|HEHPF:[^|]*|h(.-)|h")
       local comment = nil
       if disp then
@@ -518,7 +524,7 @@ local function shOnMsg(msg, sender, ev)
         end
       end
       SH.sealMeta = SH.sealMeta or {}
-      SH.sealMeta[sid] = { rank = rank, comment = comment }
+      SH.sealMeta[sid] = { rank = rank, rankColor = rankColor, comment = comment } -- ★颜色也存（发送端怎么显示，我们就怎么显示）
       shSealNote(sender, sid)
       -- ★封皮**晚到**（单片分享：分片先弹出、封皮紧随其后）→ 当场补刷品阶栏（同一份实现）
       if type(shSealRowApply) == "function" and SH.pending and tostring(SH.pending.idh or "") == tostring(sid) then
@@ -718,7 +724,13 @@ local SH_SEAL_COMMENTS = {
   { "SEAL_C4_1", "SEAL_C4_2", "SEAL_C4_3", "SEAL_C4_4", "SEAL_C4_5", "SEAL_C4_6", "SEAL_C4_7", "SEAL_C4_8", "SEAL_C4_9", "SEAL_C4_10" },
   { "SEAL_C5_1", "SEAL_C5_2", "SEAL_C5_3", "SEAL_C5_4", "SEAL_C5_5", "SEAL_C5_6", "SEAL_C5_7", "SEAL_C5_8", "SEAL_C5_9", "SEAL_C5_10" },
 }
-local SH_SEAL_SYMBOLS = { "·", "◆", "✦", "★", "✸" }
+-- ★★★1.73.42o **符号必须落在客户端字体真的有的区块**（用户真机反馈：「字符图标,珍稀,源代码级别没生效」）——
+--   实测：`·`(U+00B7) `◆`(U+25C6) `★`(U+2605) 都画得出来，而 `✦`(U+2726) `✸`(U+2738) **一个像素都不显示**
+--   （它们属于 Dingbats 块 U+2700–U+27BF，本客户端字体没带这半边）。⇒ 五档只用**已实测可渲染**的区块：
+--   Latin-1 补充 + Geometric Shapes（U+25A0–U+25FF）+ Miscellaneous Symbols（U+2600–U+26FF）。
+--   阶梯按视觉分量递增：点 → 菱 → 方 → 圆 → 星（星是所有人都认得的「最好」）。
+--   ★不许再用 Dingbats 花体字形；改这里务必先进游戏看一眼（源码检查 SEAL SYMBOL CHECK 只挡得住那一个块）。
+local SH_SEAL_SYMBOLS = { "·", "◆", "■", "●", "★" }
 -- ★★★1.73.42n 头衔的颜色 = **冷色系**（与品阶的暖色稀有度系**逐个不相等**，有判据守着）：
 --   为什么必须错开：品阶用白/绿/紫/橙/暗金；头衔若也用它，同一行里「[大元帅]」和「[源代码秘籍]」
 --   会看起来是同一档东西，**两个维度糊在一起**。
@@ -959,8 +971,14 @@ function EVAL_SHARE_SEAL_ROW(text, meta)
   local rank, rankColor, rankFrom = nil, nil, nil
   if type(meta) == "table" and type(meta.rank) == "string" and meta.rank ~= "" then
     rank, rankFrom = meta.rank, "seal"
-    local look = EVAL_TITLE_LOOKUP(rank)
-    rankColor = look and look.color or "|cff8fa8b8"
+    -- ★1.73.42o 颜色优先取**封皮行里发送端自带的那个**（纯文本传递，连彩蛋自定义头衔也照抄）；
+    --   老版本封皮没带色码时才按名字反查我们那 75 张；再查不到 → 中性色显示原文（绝不显示成空白）。
+    if type(meta.rankColor) == "string" and string.len(meta.rankColor) == 10 then
+      rankColor, rankFrom = meta.rankColor, "seal-color"
+    else
+      local look = EVAL_TITLE_LOOKUP(rank)
+      rankColor = look and look.color or "|cff8fa8b8"
+    end
   end
   local comment = (type(meta) == "table") and meta.comment or nil
   local rankTxt = "未知（未收到封皮行）"

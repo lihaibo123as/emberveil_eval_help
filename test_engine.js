@@ -747,6 +747,29 @@ function checkIconAssets() {
   if (bad.length) { console.log('SHARE SEAL ROW CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
   console.log('SHARE SEAL ROW CHECK: 弹窗品阶栏 = 真纹理图标 + 同源品阶判定 + 未知兜底 + 封皮元数据');
 })();
+// ===== SEAL SYMBOL CHECK（1.73.42o）：品阶符号必须是**本客户端字体真有的字形** =====
+// 背景（用户真机反馈）：「字符图标,珍稀,源代码级别没生效」——`✦`(U+2726) 与 `✸`(U+2738) 都在 **Dingbats 块**
+//   (U+2700–U+27BF)，本客户端字体没带这半边 → 聊天里**一个像素都不显示**（而且不报错，肉眼才发现）。
+//   ★教训推广：这一类「客户端字体没有的字形」行为断言照不到（字符串比的是我们自己写的），必须源码检查钉住区块。
+(function () {
+  const shr = fs.readFileSync(path.join(__dirname, 'Share.lua'), 'utf8');
+  const m = shr.match(/local SH_SEAL_SYMBOLS = \{([^}]*)\}/);
+  if (!m) { console.log('SEAL SYMBOL CHECK: FAIL - 找不到 SH_SEAL_SYMBOLS'); process.exit(1); }
+  const syms = (m[1].match(/"([^"]+)"/g) || []).map(function (s) { return s.slice(1, -1); });
+  const bad = [];
+  if (syms.length !== 5) bad.push('符号不是 5 个（' + syms.length + '）');
+  const seen = {};
+  syms.forEach(function (s) {
+    const cps = Array.from(s);
+    if (cps.length !== 1) { bad.push('"' + s + '" 不是单字形（' + cps.length + ' 个码点）'); return; }
+    const cp = s.codePointAt(0);
+    if (cp >= 0x2700 && cp <= 0x27BF) bad.push('"' + s + '" 落在 Dingbats 块 U+' + cp.toString(16).toUpperCase() + '（本客户端不显示）');
+    if (seen[s]) bad.push('符号重复：' + s);
+    seen[s] = true;
+  });
+  if (bad.length) { console.log('SEAL SYMBOL CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
+  console.log('SEAL SYMBOL CHECK: 5 个符号都是单字形且不在 Dingbats 块（' + syms.join(' ') + '）');
+})();
 // ===== TITLE GACHA CHECK（1.73.42n）：头衔抽卡的**结构与单一来源**必须钉死 =====
 // 背景（用户定稿）：「5 档（= 方案稀有度档数）× 每档 15 张」「每档只抽一次、不重复、唯一不变」「只升不降」
 //   + 彩蛋预留：自定义头衔优先度最高、**只有一次**修改机会。

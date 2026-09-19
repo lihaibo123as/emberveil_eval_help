@@ -10958,10 +10958,29 @@ do
     symSeen[s] = true
   end
   eq(EVAL_SHARE_SEAL_SYMBOL(1), "·", "普通 = ·")
-  eq(EVAL_SHARE_SEAL_SYMBOL(5), "✸", "源代码 = ✸")
+  eq(EVAL_SHARE_SEAL_SYMBOL(5), "★", "★★★源代码 = ★（1.73.42o 换掉 ✸：Dingbats 块本客户端字体没有，聊天里不显示）")
+  -- ★★★1.73.42o 用户真机反馈：「字符图标,珍稀,源代码级别没生效」——✦(U+2726)/✸(U+2738) 属于 Dingbats 块
+  --   (U+2700–U+27BF)，本客户端字体没带这半边 → **一个像素都不显示**。判据钉死：五个符号都不许落在这个块里。
+  local function cp142o(s) -- 取首个 Unicode 码点（UTF-8 1~3 字节够用）
+    local b1 = string.byte(s, 1)
+    if not b1 then return nil end
+    if b1 < 128 then return b1 end
+    local b2 = string.byte(s, 2) or 0
+    if b1 >= 224 then return (b1 - 224) * 4096 + (b2 - 128) * 64 + ((string.byte(s, 3) or 128) - 128) end
+    return (b1 - 192) * 64 + (b2 - 128)
+  end
+  local symSeen142o = {}
+  for i = 1, 5 do
+    local sy = EVAL_SHARE_SEAL_SYMBOL(i)
+    local cpv = cp142o(sy)
+    eq(type(cpv) == "number", true, "符号 " .. i .. " 取得到码点")
+    eq(cpv >= 0x2700 and cpv <= 0x27BF, false, "★★★符号 " .. i .. " 不许落在 Dingbats 块（本客户端不显示）：" .. tostring(sy))
+    eq(symSeen142o[sy] == nil, true, "★五个符号不重复：" .. tostring(sy))
+    symSeen142o[sy] = true
+  end
   local iSym = EVAL_SHARE_SEAL_INFO(txt(13), 10)
-  eq(iSym.symbol, "✸", "整行 info 里带符号")
-  eq(string.find(iSym.line, "✸[源代码秘籍·甲]", 1, true) ~= nil, true, "★★整行是「符号 + [品阶秘籍·名]」")
+  eq(iSym.symbol, "★", "整行 info 里带符号")
+  eq(string.find(iSym.line, "★[源代码秘籍·甲]", 1, true) ~= nil, true, "★★整行是「符号 + [品阶秘籍·名]」")
   eq(string.find(iSym.line, "|T", 1, true) == nil, true, "★聊天行里不再出现 |T（实测不可用）")
   print("  分享显示行：境界 7 档 · 品阶评分边界(3/4/6/7/9/10/12/13) · 5 色(含暗金) · 每档 10 条评语随机 · 命令接线")
 end
@@ -11071,9 +11090,9 @@ do
   if r5 then
     eq(r5.tier, 5, "①★14 分 = 第 5 档（源代码）")
     eq(r5.icon, EVAL_SHARE_SEAL_ICON(5), "①★★★图标 = 该品阶的图标（同一来源，不另写一份）")
-    eq(string.find(r5.head, "✸[源代码秘籍·甲]", 1, true) ~= nil, true, "①★★头一行 = 符号 + [品阶秘籍·名]")
+    eq(string.find(r5.head, "★[源代码秘籍·甲]", 1, true) ~= nil, true, "①★★头一行 = 符号 + [品阶秘籍·名]")
     eq(string.find(r5.meta, "品阶：源代码（评分 14）", 1, true) ~= nil, true, "①★★含品阶与评分")
-    eq(r5.rankFrom, "seal", "①★★身份只能来自封皮行（抽卡结果接收端复现不了）")
+    eq(r5.rankFrom, "seal", "①★★这里的来信**没带色码** → 回退按名字反查（老版本封皮也看得见，不空白）")
     eq(string.find(r5.meta, titleSample145, 1, true) ~= nil, true, "①★★含发送端身份")
     eq(string.find(r5.meta, r5.rankColor .. titleSample145 .. "|r", 1, true) ~= nil, true,
        "①★★★身份带**它那一档**的颜色（按名字反查 75 张卡得到）")
@@ -11086,6 +11105,20 @@ do
     eq(ri ~= nil and ri.tier == i, true, "①★档位与分数对应 " .. i)
     eq(ri ~= nil and ri.icon == EVAL_SHARE_SEAL_ICON(i), true, "①★图标跟着档位 " .. i)
   end
+  -- ★★★1.73.42o 用户：「分享…最终只是文本发出去.而不是本地变量调用. 所以不存在在其他玩家上电脑上看不到空的情况」
+  --   ⇒ 判据：对方发来一个**我们卡表里没有**的头衔（比如彩蛋自定义）也必须原样显示、连颜色照抄。
+  local rowCustom145 = EVAL_SHARE_SEAL_ROW(txt145(14), { rank = "创世之影", rankColor = "|cffff00ff", comment = "天书原文，凡人勿近。" })
+  eq(type(rowCustom145) == "table", true, "①★★自定义头衔也能渲染（不查本地卡表）")
+  if rowCustom145 then
+    eq(rowCustom145.rankFrom, "seal-color", "①★★★来源仍是封皮行文本（连颜色）")
+    eq(rowCustom145.rankColor, "|cffff00ff", "①★★★颜色 = 发送端那个（不是我们查表猜的）")
+    eq(string.find(rowCustom145.meta, "|cffff00ff创世之影|r", 1, true) ~= nil, true, "①★★整行照抄发送端的显示（绝不空白）")
+    eq(EVAL_TITLE_LOOKUP("创世之影") == nil, true, "①★这个名字本地卡表里确实没有（证明不依赖本地表）")
+  end
+  -- 老版本封皮没带色码 → 回退按名字反查（仍然看得见）
+  local rowOld145 = EVAL_SHARE_SEAL_ROW(txt145(14), { rank = titleSample145, comment = "天书原文，凡人勿近。" })
+  eq(rowOld145.rankFrom, "seal", "①★★老版本封皮（不带色码）→ 回退按名字反查")
+  eq(rowOld145.rankColor, EVAL_TITLE_LOOKUP(titleSample145).color, "①★★反查到的颜色 = 该档头衔色")
   -- ② 拿不到发送端信息 → 如实「未知」，一个字都不编
   local rHon = EVAL_SHARE_SEAL_ROW(txt145(14), nil)
   eq(string.find(rHon.meta, "身份：未知", 1, true) ~= nil, true, "②★★★没有封皮行 → 身份如实写未知（不冒充）")
@@ -11163,7 +11196,7 @@ do
   local meta145 = (((EVAL_SHARE_SEAL_STATE() or {}).meta) or {})[tostring(sid145)]
   eq(type(meta145) == "table", true, "③★★封皮行解析出发送端信息（meta 里有这一笔）")
   if type(meta145) == "table" then
-    eq(view145.rankFrom, "seal", "③★★★弹窗身份取自封皮行（来源如实标 seal）")
+    eq(view145.rankFrom, "seal-color", "③★★★弹窗身份**连颜色**都取自封皮行文本（不依赖本地存档/卡表）")
     eq(string.find(tostring(view145.meta), tostring(meta145.rank or "?"), 1, true) ~= nil, true,
        "③★★★弹窗里的境界 = 封皮行里**发送端**的境界（" .. tostring(meta145.rank) .. "）")
     eq(string.find(tostring(view145.comment), tostring(meta145.comment or "?"), 1, true) ~= nil, true,
@@ -11296,7 +11329,7 @@ do
   eq(EVAL_GET_LANG(), keepLang146, "④★★语言已还原（不许污染其它用例）")
   eq(EVAL_L("TITLE_3_1"), EVAL_LOCALES[keepLang146].TITLE_3_1, "④还原后读值口回到原语言")
   -- ⑤ 色码与符号**留在源码**：迁文案不许把它们也搬走（它们是协议的一部分）
-  eq(EVAL_SHARE_SEAL_SYMBOL(5), "✸", "⑤符号留在源码（✸）")
+  eq(EVAL_SHARE_SEAL_SYMBOL(5), "★", "⑤符号留在源码（★）")
   eq(select(2, EVAL_SHARE_SEAL_TIER(13)).color, "|cffb87333", "⑤暗金色码留在源码")
   TEST.chat = nil
   print("  分享文案三语言：130 键（5 品阶 + 50 评语 + 75 头衔）逐语言齐全 · 中文原文逐字校验 · 切语言读值口即时生效 · 符号/色码仍在源码")
