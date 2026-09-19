@@ -737,6 +737,8 @@ local SH_SEAL_SYMBOLS = { "·", "◆", "■", "●", "★" }
 --   1 档 青灰 |cff8fa8b8 · 2 档 青 |cff00e5ff · 3 档 蓝 |cff4f9bff · 4 档 品红 |cffff4fd8 · 5 档 极光青绿 |cff5cffd2。
 --   ★色码必须 8 位（`|c` + AARRGGBB）：6 位本客户端**不解析**，会把色码原文画进聊天（1.73.19 实测）。
 local SH_TITLE_COLORS = { "|cff8fa8b8", "|cff00e5ff", "|cff4f9bff", "|cffff4fd8", "|cff5cffd2" }
+-- ★1.73.42p 彩蛋自定义名号的专属色（**淡金·神性**）：与 5 档头衔的冷色系、5 品阶的暖色系都不撞，一眼看出「这不是抽来的」
+local SH_TITLE_CUSTOM_COLOR = "|cfffff2c8"
 -- ===== 1.73.42n 头衔抽卡（用户 2026-09-19 定稿）==========================================
 --   用户原话：「每个档位只抽卡一次.不重复抽卡.唯一不变.」+「档位可以和方案的档位数量相同. 每个档位卡池…15 个」
 --     +「根据用户当前方案稀有度的数量, 达成档位的需求就晋升档位. 当我只升不降.」
@@ -844,7 +846,7 @@ function EVAL_TITLE_CURRENT()
   if type(t.custom) == "string" and t.custom ~= "" then custom = t.custom end
   local tier = tonumber(t.tier) or 0
   if tier < 1 then
-    if custom then return { tier = 0, name = custom, color = SH_TITLE_COLORS[1], custom = true } end
+    if custom then return { tier = 0, name = custom, color = SH_TITLE_CUSTOM_COLOR, custom = true } end
     return nil
   end
   local idx = tonumber(t.draws and t.draws[tier])
@@ -852,7 +854,7 @@ function EVAL_TITLE_CURRENT()
   local name, isCustom = L(key), false
   if custom then name, isCustom = custom, true end
   return { tier = ti, idx = (not isCustom) and k or nil, key = (not isCustom) and key or nil,
-           name = name, color = SH_TITLE_COLORS[ti] or SH_TITLE_COLORS[1], custom = isCustom,
+           name = name, color = isCustom and SH_TITLE_CUSTOM_COLOR or (SH_TITLE_COLORS[ti] or SH_TITLE_COLORS[1]), custom = isCustom,
            counts = t.counts, at = t.at }
 end
 -- 按**名字**回找头衔（接收端只有封皮行里的文字）：返回档位与颜色；不是我们发的头衔（或对方是彩蛋自定义）
@@ -1051,6 +1053,246 @@ function EVAL_SHARE_SEAL_DEMO()
   for i = 1, table.getn(lines) do shSay("  " .. lines[i]) end
   return table.getn(lines)
 end
+-- ===== 1.73.42p 「创世者亲临」彩蛋窗口 ==================================================
+--   用户要求：「先提供个命令.让我能触发创世神的关注…（名字）能体现位格.霸气. 然后弹窗内的文字美化一下.霸气一下.」
+--   ★命名：**创世者亲临**（备选：本源垂青 / 造物主之约 / 万法之源的注视）——位格=创世者，动作=亲临，
+--     文案全部走 Locales（CREATOR_*），改文案不用动代码。
+--   ★触发机制以后再接（「写方案达到一定机制」）；现在先给命令 `/eh go 创世` 手动触发，玩家先看效果。
+--   ★窗口配方照本项目弹窗规范：DIALOG + **明确 frame level 210**（高于分享弹窗 140 / 名称弹窗 130）+
+--     EnableMouse + 可拖动 + 越界回归；EditBox 在本客户端**可能不渲染** → 必有**金色回声行**保底（1.15.1 教训）。
+local shCreator = { root = nil }
+function EVAL_TITLE_CUSTOM_COLOR() return SH_TITLE_CUSTOM_COLOR end
+-- 提交：把输入写进存档（**只有一次**，由 EVAL_TITLE_SET_CUSTOM 把守）——成功/失败都如实播报，绝不静默
+local function shCreatorSubmit()
+  if not (shCreator and shCreator.edit) then return false end
+  local txt = ""
+  local ok, v = pcall(shCreator.edit.GetText, shCreator.edit)
+  if ok and type(v) == "string" then txt = v end
+  if txt == "" and shCreator.echo then
+    local ok2, v2 = pcall(shCreator.echo.GetText, shCreator.echo)
+    if ok2 and type(v2) == "string" then txt = v2 end -- 回声行兜底（EditBox 不渲染时玩家看的是它）
+  end
+  local cfgT = rawget(_G, "EVAL_HELP_CONFIG")
+  local t = (type(cfgT) == "table" and type(cfgT.title) == "table") and cfgT.title or nil
+  if t and type(t.custom) == "string" and t.custom ~= "" then
+    shSay(L("CREATOR_USED"))
+    if shCreator.root then shCreator.root:Hide() end
+    return false
+  end
+  if not EVAL_TITLE_SET_CUSTOM(txt) then
+    shSay(L("CREATOR_ERR"))
+    return false
+  end
+  shSay(string.format(L("CREATOR_DONE"), tostring(txt)))
+  if shCreator.root then shCreator.root:Hide() end
+  return true
+end
+function EVAL_TITLE_CREATOR_SUBMIT() return shCreatorSubmit() end
+local function shCreatorClose(reason)
+  if shCreator.root then shCreator.root:Hide() end
+  if reason then shSay(reason) end
+end
+local function shCreatorBuild()
+  if shCreator.root then return end
+  local W, H = 470, 268
+  local root = CreateFrame("Frame", "EVAL_TITLE_CREATOR", UIParent)
+  root:SetWidth(W) root:SetHeight(H)
+  root:SetPoint("CENTER", UIParent, "CENTER", 0, 130)
+  pcall(root.SetFrameStrata, root, "DIALOG")
+  pcall(root.SetFrameLevel, root, 210) -- 高于分享弹窗 140 / 名称弹窗 130
+  pcall(root.SetMovable, root, true)
+  pcall(root.EnableMouse, root, true)
+  if type(EVAL_UIOFFSCREEN) == "function" and EVAL_UIOFFSCREEN(root) then
+    root:ClearAllPoints()
+    root:SetPoint("CENTER", UIParent, "CENTER", 0, 110)
+  end
+  -- 底板：近黑 + 三层金边（外暗金 1px、亮金 1px、内暗金）——「本源」的观感
+  local bg = root:CreateTexture(nil, "BACKGROUND")
+  shSolid(bg, 0.03, 0.02, 0.01, 0.98)
+  bg:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
+  bg:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", 0, 0)
+  local outer = root:CreateTexture(nil, "BORDER")
+  shSolid(outer, 0.62, 0.48, 0.16, 1)
+  outer:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
+  outer:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", 0, 0)
+  local inner = root:CreateTexture(nil, "ARTWORK")
+  shSolid(inner, 0.03, 0.02, 0.01, 1)
+  inner:SetPoint("TOPLEFT", root, "TOPLEFT", 2, -2)
+  inner:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", -2, 2)
+  local halo = root:CreateTexture(nil, "BORDER")
+  shSolid(halo, 1.0, 0.90, 0.55, 1)
+  halo:SetPoint("TOPLEFT", root, "TOPLEFT", 1, -1)
+  halo:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", -1, 1)
+  -- 顶部横幅 + 标题（两侧各一条金线做「匾额」观感）
+  local banner = root:CreateTexture(nil, "ARTWORK")
+  shSolid(banner, 0.20, 0.15, 0.05, 1)
+  banner:SetPoint("TOPLEFT", root, "TOPLEFT", 3, -3)
+  banner:SetPoint("TOPRIGHT", root, "TOPRIGHT", -3, -3)
+  banner:SetHeight(34)
+  local title = shText(root, 15, 1, 0.92, 0.55)
+  title:SetPoint("TOP", root, "TOP", 0, -12)
+  pcall(title.SetText, title, L("CREATOR_T"))
+  shCreator.title = title
+  for _, sx in ipairs({ -1, 1 }) do
+    local ln = root:CreateTexture(nil, "ARTWORK")
+    shSolid(ln, 0.75, 0.60, 0.22, 1)
+    ln:SetHeight(1)
+    ln:SetPoint("TOP", root, "TOP", sx * (W / 2 - 30), -30)
+    ln:SetWidth(W / 2 - 70)
+  end
+  -- 四条霸气道白（居中逐行；本客户端多行 FontString 不稳 → 一行一个控件）
+  local lineKeys = { "CREATOR_L1", "CREATOR_L2", "CREATOR_L3", "CREATOR_L4" }
+  shCreator.lineFs = {}
+  for i = 1, 4 do
+    local fs = shText(root, 11, 0.95, 0.88, 0.62)
+    fs:SetPoint("TOP", root, "TOP", 0, -42 - (i - 1) * 18)
+    pcall(fs.SetWidth, fs, W - 40)
+    pcall(fs.SetJustifyH, fs, "CENTER")
+    pcall(fs.SetNonSpaceWrap, fs, false)
+    pcall(fs.SetText, fs, L(lineKeys[i]))
+    shCreator.lineFs[i] = fs
+  end
+  -- 当前名号（替换前的旧名，暗金小字）
+  local curFs = shText(root, 10, 0.72, 0.66, 0.42)
+  curFs:SetPoint("TOP", root, "TOP", 0, -122)
+  pcall(curFs.SetWidth, curFs, W - 40)
+  pcall(curFs.SetJustifyH, curFs, "CENTER")
+  shCreator.curFs = curFs
+  -- 输入区：金色边框 + EditBox + **回声行保底**（EditBox 不渲染也看得见自己在打什么）
+  local box = root:CreateTexture(nil, "ARTWORK")
+  shSolid(box, 0.06, 0.05, 0.03, 1)
+  box:SetPoint("TOP", root, "TOP", 0, -142)
+  box:SetWidth(W - 120) box:SetHeight(26)
+  local boxEdge = root:CreateTexture(nil, "ARTWORK")
+  shSolid(boxEdge, 0.55, 0.44, 0.18, 1)
+  boxEdge:SetPoint("TOP", root, "TOP", 0, -142)
+  boxEdge:SetWidth(W - 120) boxEdge:SetHeight(1)
+  local okEb, eb = pcall(CreateFrame, "EditBox", nil, root)
+  if okEb and eb then
+    eb:SetWidth(W - 140) eb:SetHeight(22)
+    eb:SetPoint("TOP", root, "TOP", 0, -145)
+    -- 字体链：本客户端字体对象未必齐 → 逐个 pcall 试（EvalHelp 的 IO 窗同款做法）
+    if not pcall(eb.SetFontObject, eb, GameFontHighlightSmall) then
+      if not pcall(eb.SetFontObject, eb, ChatFontNormal) then pcall(eb.SetFontObject, eb, GameFontNormal) end
+    end
+    pcall(eb.SetTextInsets, eb, 0, 0, 0, 0) -- 本客户端默认文字居中偏右（1.70.3 实测）
+    pcall(eb.SetJustifyH, eb, "CENTER")
+    pcall(eb.SetAutoFocus, eb, false)
+    pcall(eb.SetMaxLetters, eb, 12)
+    pcall(eb.SetScript, eb, "OnTextChanged", function()
+      local okt, tv = pcall(eb.GetText, eb)
+      if shCreator.echo and okt and type(tv) == "string" then
+        pcall(shCreator.echo.SetText, shCreator.echo, tv)
+        if tv ~= "" then pcall(shCreator.echo.Show, shCreator.echo) end
+      end
+    end)
+    pcall(eb.SetScript, eb, "OnEnterPressed", function() shCreatorSubmit() end) -- 回车即落笔
+    pcall(eb.SetScript, eb, "OnEscapePressed", function() shCreatorClose(L("CREATOR_CLOSED")) end)
+    shCreator.edit = eb
+  end
+  local echo = shText(root, 11, 1, 0.92, 0.60)
+  echo:SetPoint("TOP", root, "TOP", 0, -170)
+  pcall(echo.SetWidth, echo, W - 60)
+  pcall(echo.SetJustifyH, echo, "CENTER")
+  pcall(echo.SetText, echo, "")
+  shCreator.echo = echo
+  local hint = shText(root, 9, 0.62, 0.58, 0.46)
+  hint:SetPoint("TOP", root, "TOP", 0, -186)
+  pcall(hint.SetText, hint, L("CREATOR_HINT"))
+  shCreator.hint = hint
+  -- 按钮：[落笔] / [放弃这份机缘]（居中两段）
+  local function mkBtn(x, label, fr, fg, fb, fn)
+    local b = CreateFrame("Button", nil, root)
+    b:SetWidth(150) b:SetHeight(24)
+    b:SetPoint("TOP", root, "TOP", x, -206)
+    pcall(b.EnableMouse, b, true)
+    pcall(b.RegisterForClicks, b, "LeftButtonUp")
+    local bb = b:CreateTexture(nil, "BACKGROUND")
+    shSolid(bb, 0.18, 0.14, 0.05, 1)
+    bb:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+    bb:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+    local bt = shText(b, 11, fr, fg, fb)
+    bt:SetPoint("CENTER", b, "CENTER", 0, 0)
+    pcall(bt.SetText, bt, label)
+    pcall(b.SetScript, b, "OnClick", fn)
+    return b, bt
+  end
+  local okBtn, okTxt = mkBtn(-80, L("CREATOR_OK"), 1, 0.92, 0.55, function() shCreatorSubmit() end)
+  local noBtn, noTxt = mkBtn(80, L("CREATOR_CANCEL"), 0.72, 0.66, 0.52, function() shCreatorClose(L("CREATOR_CLOSED")) end)
+  shCreator.ok, shCreator.okText = okBtn, okTxt
+  shCreator.cancel, shCreator.cancelText = noBtn, noTxt
+  -- 页脚：只有一次
+  local one = shText(root, 9, 0.90, 0.72, 0.28)
+  one:SetPoint("BOTTOM", root, "BOTTOM", 0, 10)
+  pcall(one.SetText, one, L("CREATOR_ONE"))
+  shCreator.oneFs = one
+  root:Hide()
+  shCreator.root = root
+end
+-- 打开（命令入口）：机缘用过就**如实拒绝**并说明，绝不再改；打开时把旧名号写在窗口里
+function EVAL_TITLE_CREATOR_OPEN()
+  shCreatorBuild()
+  if not shCreator.root then return false end
+  local cfgT = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(cfgT) == "table" then
+    -- ★接线判据的**落盘证人**（M336 教训：别用「聊天含子串」判命令有没有跑）
+    cfgT.shareCreatorOpen = { at = shNowT() }
+  end
+  local t = (type(cfgT) == "table" and type(cfgT.title) == "table") and cfgT.title or nil
+  if t and type(t.custom) == "string" and t.custom ~= "" then
+    shSay(L("CREATOR_USED"))
+    return false
+  end
+  local cur = EVAL_TITLE_CURRENT()
+  if shCreator.curFs then pcall(shCreator.curFs.SetText, shCreator.curFs, string.format(L("CREATOR_CUR"), cur and tostring(cur.name) or "—")) end
+  if shCreator.edit then pcall(shCreator.edit.SetText, shCreator.edit, "") end
+  if shCreator.echo then pcall(shCreator.echo.SetText, shCreator.echo, "") end
+  shCreator.root:Show()
+  if shCreator.edit then pcall(shCreator.edit.SetFocus, shCreator.edit) end
+  shSay(L("CREATOR_ONE"))
+  return true
+end
+function EVAL_TITLE_CREATOR_CLOSE() shCreatorClose(nil) end
+-- ===== 测试钩子（读**真控件**，不读我们自己的账）=====
+function EVAL_TEST_CREATOR_SHOWN()
+  if not shCreator.root then return false end
+  local ok, v = pcall(shCreator.root.IsShown, shCreator.root)
+  return (ok and v) and true or false
+end
+local function shCreatorRead(fs)
+  if not fs then return nil end
+  local ok, v = pcall(fs.GetText, fs)
+  if ok and type(v) == "string" then return v end
+  return nil
+end
+function EVAL_TEST_CREATOR_TEXTS()
+  local out = { lines = {} }
+  out.title = shCreatorRead(shCreator.title)
+  for i = 1, 4 do out.lines[i] = shCreatorRead(shCreator.lineFs and shCreator.lineFs[i]) end
+  out.hint = shCreatorRead(shCreator.hint)
+  out.ok = shCreatorRead(shCreator.okText)
+  out.cancel = shCreatorRead(shCreator.cancelText)
+  out.one = shCreatorRead(shCreator.oneFs)
+  out.cur = shCreatorRead(shCreator.curFs)
+  return out
+end
+function EVAL_TEST_CREATOR_INPUT(txt)
+  if not shCreator.edit then return false end
+  pcall(shCreator.edit.SetText, shCreator.edit, tostring(txt or ""))
+  local ok, fn = pcall(shCreator.edit.GetScript, shCreator.edit, "OnTextChanged")
+  if ok and type(fn) == "function" then pcall(fn, shCreator.edit, true) end -- 与真实逐字输入同一条路
+  return true
+end
+function EVAL_TEST_CREATOR_ECHO() return shCreatorRead(shCreator.echo) end
+function EVAL_TEST_CREATOR_CLICK(which)
+  local b = (which == "cancel") and shCreator.cancel or shCreator.ok
+  if not b then return false end
+  local ok, fn = pcall(b.GetScript, b, "OnClick")
+  if not (ok and type(fn) == "function") then return false end
+  pcall(fn)
+  return true
+end
+
 -- ===== 1.73.42c 品阶图标 + 「|T 内联纹理」可行性探针（用户要求：按语义给等级配图标，先验证）=====
 -- ★★★1.73.42l 图标由**用户指定**（2026-09-19 真机反馈：「案例方案内图标替换，名称和颜色背景都要符合以上规则」）：
 --   按用户给的顺序对号入座 —— 源代码=暗影蛋 INV_Misc_ShadowEgg · 绝版=暗影蛋 INV_Misc_ShadowEgg

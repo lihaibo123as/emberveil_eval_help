@@ -6936,6 +6936,14 @@ if type(SlashCmdList) == "table" then
       else
         say("图标探针：分享模块未载入（EVAL_SHARE_ICON_PROBE 不存在）")
       end
+    -- ★★★1.73.42p 彩蛋「创世者亲临」：先给命令手动触发（用户：「先提供个命令.让我能触发创世神的关注」），
+    --   真正的触发机制（写方案达到某机制）以后再接。机缘**只有一次**，用过就如实拒绝。
+    elseif msg == "go 创世" or msg == "go 彩蛋" or msg == "go creator" then
+      if type(EVAL_TITLE_CREATOR_OPEN) == "function" then
+        EVAL_TITLE_CREATOR_OPEN() -- 打不开（机缘已用尽）时它自己会如实播报 CREATOR_USED
+      else
+        say("创世者亲临：分享模块未载入（EVAL_TITLE_CREATOR_OPEN 不存在）")
+      end
     -- ★★★1.73.42n 头衔抽卡：当前头衔 + 五档抽取记录 + 距下一档还差什么（用户：「每个档位只抽卡一次」）
     elseif msg == "go 头衔" or msg == "go title" or msg == "go 抽卡" then
       if type(EVAL_TITLE_REFRESH) == "function" and type(EVAL_TITLE_PROGRESS) == "function" then

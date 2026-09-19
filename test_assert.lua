@@ -11429,6 +11429,76 @@ do
   print("  头衔抽卡：5 档 × 15 张 · 按方案库稀有度晋升（只升不降）· 每档只抽一次且唯一不变 · 彩蛋自定义优先且仅一次")
 end
 
+-- 150) ★★★1.73.42p 彩蛋「创世者亲临」：命令触发 · 弹窗文案 · 回声行保底 · 落笔写档 · 仅此一次
+do
+  local keepTitle150 = EVAL_HELP_CONFIG.title
+  local keepOpen150 = EVAL_HELP_CONFIG.shareCreatorOpen
+  EVAL_HELP_CONFIG.title = nil
+  EVAL_HELP_CONFIG.shareCreatorOpen = nil
+  EVAL_TITLE_REFRESH()
+  TEST.chat = nil
+  SlashCmdList["EVALHELP"]("go 创世")
+  eq(type(EVAL_HELP_CONFIG.shareCreatorOpen) == "table", true, "①★★★/eh go 创世 真的执行了（以**落盘字段**为证）")
+  eq(EVAL_TEST_CREATOR_SHOWN(), true, "①★★★弹窗真的显示出来了（读真控件 IsShown）")
+  local tx150 = EVAL_TEST_CREATOR_TEXTS()
+  eq(tx150.title, EVAL_L("CREATOR_T"), "②★★标题文案 = 定稿（" .. tostring(tx150.title) .. "）")
+  for i = 1, 4 do
+    eq(tx150.lines[i], EVAL_L("CREATOR_L" .. i), "②★★第 " .. i .. " 句道白 = 定稿")
+  end
+  eq(tx150.hint, EVAL_L("CREATOR_HINT"), "②★输入提示 = 定稿")
+  eq(tx150.ok, EVAL_L("CREATOR_OK"), "②★[落笔] 文案 = 定稿")
+  eq(tx150.cancel, EVAL_L("CREATOR_CANCEL"), "②★[放弃] 文案 = 定稿")
+  eq(tx150.one, EVAL_L("CREATOR_ONE"), "②★★页脚「仅此一次」= 定稿")
+  eq(string.find(tostring(tx150.cur or ""), "当前名号", 1, true) ~= nil, true, "②★窗口里写出了**当前名号**（替换前先看得见旧的）")
+  -- ③ 回声行保底（EditBox 本客户端可能不渲染）：逐字镜像
+  eq(EVAL_TEST_CREATOR_INPUT("太古之名"), true, "③前置：能驱动真实 EditBox")
+  eq(EVAL_TEST_CREATOR_ECHO(), "太古之名", "③★★★回声行逐字镜像（EditBox 不渲染也看得见自己打的名字）")
+  -- ④ [放弃这份机缘]：只关窗，什么都不写
+  eq(EVAL_TEST_CREATOR_CLICK("cancel"), true, "④★★按了真实的 [放弃这份机缘]")
+  eq(EVAL_TEST_CREATOR_SHOWN(), false, "④★窗口关掉了")
+  eq(((EVAL_HELP_CONFIG.title or {}).custom), nil, "④★★★放弃之后**什么都没写**（机缘还在）")
+  TEST.chat = nil
+  -- ⑤ 再开一次 → 落笔：写进存档 + 专属色 + 整条显示链跟着变
+  SlashCmdList["EVALHELP"]("go 创世")
+  eq(EVAL_TEST_CREATOR_SHOWN(), true, "⑤前置：机缘还在，能再开")
+  EVAL_TEST_CREATOR_INPUT("太古之名")
+  eq(EVAL_TEST_CREATOR_CLICK("ok"), true, "⑤★★按了真实的 [落笔]")
+  eq(((EVAL_HELP_CONFIG.title or {}).custom), "太古之名", "⑤★★★名号真的写进存档了")
+  eq(EVAL_TEST_CREATOR_SHOWN(), false, "⑤★落笔后窗口自动关闭")
+  local cur150 = EVAL_TITLE_CURRENT()
+  eq(cur150 and cur150.name, "太古之名", "⑤★★当前名号 = 自定义那个（优先度最高）")
+  eq(cur150 and cur150.custom, true, "⑤★标记为自定义")
+  eq(cur150 and cur150.color, EVAL_TITLE_CUSTOM_COLOR(), "⑤★★★自定义名号用**专属淡金色**（一眼看出不是抽来的）")
+  eq(string.len(tostring(EVAL_TITLE_CUSTOM_COLOR())) == 10, true, "⑤★专属色也是 8 位色码")
+  -- ★★★专属色必须与「5 档头衔色 + 5 品阶色」**全不相同**（否则「一眼看出不是抽来的」就不成立）
+  local customCol150, clash150 = tostring(EVAL_TITLE_CUSTOM_COLOR()), ""
+  local reps150 = { 1, 4, 7, 10, 13 }
+  for i = 1, 5 do
+    local look150 = EVAL_TITLE_LOOKUP(EVAL_L(EVAL_TITLE_KEY(i, 1)))
+    if look150 and customCol150 == look150.color then clash150 = clash150 .. " 撞头衔" .. i end
+    local _, ti150 = EVAL_SHARE_SEAL_TIER(reps150[i])
+    if customCol150 == ti150.color then clash150 = clash150 .. " 撞品阶" .. i end
+  end
+  eq(clash150, "", "⑤★★★专属色与 5 档头衔色、5 品阶色全不相同（" .. clash150 .. "）")
+  local line150 = EVAL_SHARE_SEAL_INFO("# 方案: 甲\n- 技能甲")
+  eq(line150 and string.find(line150.line, EVAL_TITLE_CUSTOM_COLOR() .. "[太古之名]|r", 1, true) ~= nil, true,
+     "⑤★★★分享行用的是自定义名号（带专属色）")
+  -- ⑥ 仅此一次：命令再打也不给开，直接提交也被拒
+  TEST.chat = nil
+  eq(EVAL_TITLE_CREATOR_OPEN(), false, "⑥★★★机缘已用尽 → 命令不再给开（如实拒绝）")
+  eq(EVAL_TEST_CREATOR_SHOWN(), false, "⑥★窗口没被打开")
+  TEST.chat = nil
+  eq(EVAL_TITLE_SET_CUSTOM("改一下"), false, "⑥★★★第二次改写被拒（只有一次机会）")
+  eq(((EVAL_HELP_CONFIG.title or {}).custom), "太古之名", "⑥★★名号没被改掉")
+  -- ⑦ 还原现场（存档与窗口都不是本次测试的私产）
+  EVAL_TITLE_CLEAR_CUSTOM()
+  EVAL_TITLE_CREATOR_CLOSE()
+  EVAL_HELP_CONFIG.title = keepTitle150
+  EVAL_HELP_CONFIG.shareCreatorOpen = keepOpen150
+  TEST.chat = nil
+  print("  创世者亲临：命令触发 · 匾额/道白/落笔文案走三语言 · 回声行保底 · 落笔写档+专属淡金 · 仅此一次")
+end
+
 print("ALL TESTS PASS")
 
   local sd142 = EVAL_HELP_CONFIG.shareSealDemo

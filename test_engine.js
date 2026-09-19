@@ -810,6 +810,19 @@ function checkIconAssets() {
     bad.push('彩蛋自定义没有「只有一次」守卫');
   // ⑤ 分享行取身份的唯一入口
   if (shr.indexOf('local tt = EVAL_TITLE_CURRENT()') < 0) bad.push('分享行没有用 EVAL_TITLE_CURRENT() 取头衔');
+  // ⑥ 彩蛋「创世者亲临」（1.73.42p）：窗口入口 · 专属色 · 文案走 Locales（不许把霸道文案写死在代码里）·
+  //    四句道白是**拼出来的键**（CREATOR_L..i）→ LANG KEY CHECK 看不见，这里按清单逐个核三语言。
+  if (shr.indexOf('function EVAL_TITLE_CREATOR_OPEN()') < 0) bad.push('没有彩蛋窗口的打开入口');
+  if (shr.indexOf('SH_TITLE_CUSTOM_COLOR') < 0) bad.push('自定义名号没有专属色（与抽卡色分不开）');
+  if (shr.indexOf('local lineKeys = { "CREATOR_L1"') < 0) bad.push('四条道白没有走 Locales 键表');
+  ['CREATOR_T', 'CREATOR_L1', 'CREATOR_L2', 'CREATOR_L3', 'CREATOR_L4', 'CREATOR_HINT', 'CREATOR_OK',
+   'CREATOR_CANCEL', 'CREATOR_ONE', 'CREATOR_USED', 'CREATOR_DONE', 'CREATOR_ERR', 'CREATOR_CLOSED', 'CREATOR_CUR'
+  ].forEach(function (k) {
+    for (const lg of ['zhCN', 'enUS', 'ruRU']) {
+      const loc = fs.readFileSync(path.join(__dirname, 'Locales', lg + '.lua'), 'utf8');
+      if (loc.indexOf('  ' + k + ' = ') < 0) bad.push(lg + ' 缺彩蛋文案键 ' + k);
+    }
+  });
   if (bad.length) { console.log('TITLE GACHA CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
   console.log('TITLE GACHA CHECK: 5×15=75 头衔（三语言齐）· 评分单一来源 · 每档只抽一次 · 彩蛋仅一次 · 身份走单一入口');
 })();
