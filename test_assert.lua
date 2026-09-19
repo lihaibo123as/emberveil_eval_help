@@ -11249,12 +11249,14 @@ do
   local meta145 = (((EVAL_SHARE_SEAL_STATE() or {}).meta) or {})[tostring(sid145)]
   eq(type(meta145) == "table", true, "③★★封皮行解析出发送端信息（meta 里有这一笔）")
   if type(meta145) == "table" then
-    eq(view145.rankFrom, "seal-color", "③★★★弹窗身份**连颜色**都取自封皮行文本（不依赖本地存档/卡表）")
-    eq(string.find(tostring(view145.meta), tostring(meta145.rank or "?"), 1, true) ~= nil, true,
-       "③★★★弹窗里的境界 = 封皮行里**发送端**的境界（" .. tostring(meta145.rank) .. "）")
-    eq(string.find(tostring(view145.comment), tostring(meta145.comment or "?"), 1, true) ~= nil, true,
-       "③★★★弹窗里的评语 = 发送端那条评语")
-    eq(string.find(tostring(view145.comment), "未知", 1, true) == nil, true, "③★有封皮时不再显示未知")
+    -- ★★★1.73.43d 用户（截图圈出那两行）：「这块信息不需要在分享方案内显示」⇒
+    --   身份/评语**不再上屏**；但**数据照样解析**（SH.sealMeta 仍在，供点击导入/将来用），只是不显示。
+    eq(tostring(meta145.rank or "") ~= "", true, "③★★封皮行里的身份**照样解析出来**（" .. tostring(meta145.rank) .. "）")
+    eq(view145.metaShown, false, "③★★★弹窗**不显示**身份/品阶行（用户要求）")
+    eq(view145.commentShown, false, "③★★★弹窗**不显示**评语行（用户要求，原来会显示「未知（未收到封皮行）」）")
+    eq(tostring(view145.meta or ""), "", "③★★那两行文本也**清空了**（本客户端 Hide 过的控件仍可能被绘出 → 只 Hide 会留假信息）")
+    eq(tostring(view145.comment or ""), "", "③★★评语行同样清空")
+    eq(view145.headShown ~= false, true, "③★★顶上的 `★[品阶秘籍·名]` **照旧显示**（品阶信息没丢）")
   end
   -- ④ 几何：品阶栏让开详情行，详情行让开按钮（空间是**加**出来的，不是挤出来的）
   -- ★坐标以**顶部为 0**：-50 在 -96 **上面**（值越大越靠上）——第一版把不等号写反了，当场被这条判据抓住
@@ -11286,14 +11288,18 @@ do
   eq(type(one5) == "string" and type(seal5) == "string", true, "⑤前置：单片分享 = 1 片 + 1 封皮")
   EVAL_SHARE_ONMSG(one5, "队友乙")
   local vA = EVAL_TEST_SHARE_SEAL_ROW()
-  eq(string.find(tostring(vA.meta), "身份：未知", 1, true) ~= nil, true, "⑤★★封皮没到 → 如实显示未知")
+  -- ★★★1.73.43d 用户：「这块信息不需要在分享方案内显示」⇒ 判据改成**读真控件的可见性**：
+  --   没收到封皮 → 两行**隐藏且文本清空**（不许再显示「未知（未收到封皮行）」这种噪音）。
+  eq(vA.metaShown, false, "⑤★★封皮没到 → 身份/品阶行**不显示**（用户要求，原来是「未知（未收到封皮行）」）")
+  eq(tostring(vA.meta or ""), "", "⑤★★而且文本已清空（不留残影/假信息）")
+  eq(vA.headShown ~= false, true, "⑤★顶上的品阶行照旧在（品阶来自本地解析，不依赖封皮）")
   EVAL_SHARE_ONMSG(seal5, "队友乙")
   local vB = EVAL_TEST_SHARE_SEAL_ROW()
-  eq(string.find(tostring(vB.meta), "身份：未知", 1, true) == nil, true, "⑤★★★封皮晚到 → **当场补刷**（不再是未知）")
   local sid5 = string.match(tostring(seal5), "|HEHPF:(%x+)|h")
   local meta5 = (((EVAL_SHARE_SEAL_STATE() or {}).meta) or {})[tostring(sid5)]
-  eq(type(meta5) == "table" and string.find(tostring(vB.meta), tostring(meta5.rank or "?"), 1, true) ~= nil, true,
-     "⑤★★补刷的是发送端的真实境界")
+  eq(type(meta5) == "table" and tostring(meta5.rank or "") ~= "", true,
+     "⑤★★★封皮晚到时**数据照样解析**（" .. tostring(meta5 and meta5.rank) .. "）——只是不上屏")
+  eq(vB.metaShown, false, "⑤★★补刷之后这两行**依然不显示**（不是「补刷成文字」）")
   -- ⑥ 解析不出方案 → 整栏**如实隐藏**（并且清空文本，不留残影）
   local keepParse6 = EVAL_PROFILE_FROM_TEXT
   EVAL_PROFILE_FROM_TEXT = function() return nil end
@@ -12063,6 +12069,60 @@ do
   print("  封皮结构：链接只包方括号（与分片同款）· 探针转义 `||` · 接收端双结构都能取到评语")
 end
 
+-- 157) ★★★1.73.43d 封皮**变异测**命令：9 种编号形态 → 用户回报「哪些编号出现」
+--   为什么需要它：客户端不回话，「封皮不显示」已三轮 ⇒ 用**一次编号实验**夹出是哪个字符/结构被吞。
+do
+  local savedTb157 = EVAL_HELP_CONFIG.tb
+  EVAL_HELP_CONFIG.tb = EVAL_HELP_CONFIG.tb or {}
+  EVAL_HELP_CONFIG.shVariantProbe = nil
+  -- 清队列（前面用例可能留东西）
+  local g157 = 0
+  while EVAL_SHARE_TEST_QUEUE_LEN() > 0 and g157 < 400 do
+    g157 = g157 + 1
+    TEST.time = (TEST.time or 1000) + 1
+    EVAL_SHARE_TEST_TICK()
+  end
+  TEST.chat, TEST.runScripts = nil, nil
+  local keep157 = EVAL_PROFILE_TO_TEXT
+  EVAL_PROFILE_TO_TEXT = function() return "# 方案: 变异测\n\n- 技能1 | 可攻击" end
+  local pr157 = EVAL_SHARE_SEAL_VARIANT_PROBE()
+  EVAL_PROFILE_TO_TEXT = keep157
+  eq(type(pr157) == "table" and pr157.n == 9, true, "①★★变异测排了 9 条（实际 " .. tostring(pr157 and pr157.n) .. "）")
+  eq(type(EVAL_HELP_CONFIG.shVariantProbe) == "table", true, "①★★★命令**落盘**了（cfg.shVariantProbe，接线证人）")
+  eq(EVAL_SHARE_TEST_QUEUE_LEN(), 9, "②★★★9 条全在队列里（走同一限频队列，不瞬间倾泻）")
+  -- ③ 编号必须逐条在（用户靠编号回报；少了编号这种事后没法对齐）
+  local miss157, long157 = 0, 0
+  for i = 1, 9 do
+    local body = tostring((pr157.list or {})[i] or "")
+    if string.find(body, "[" .. i .. "]", 1, true) ~= 1 then miss157 = miss157 + 1 end
+    if string.len(body) > 250 then long157 = long157 + 1 end
+  end
+  eq(miss157, 0, "③★★★每条都以**自己的编号**开头（`[n]`），缺编号 " .. tostring(miss157) .. " 条")
+  eq(long157, 0, "③★★每条都 ≤ 250 字节（变异测本身不能被上限吞掉，超长 " .. tostring(long157) .. "）")
+  eq(string.find(tostring(pr157.list[1] or ""), "纯文本", 1, true) ~= nil, true, "④★含「纯文本」基线")
+  eq(string.find(tostring(pr157.list[2] or ""), "→", 1, true) ~= nil, true, "④★含「箭头」变体")
+  eq(string.find(tostring(pr157.list[3] or ""), "★", 1, true) ~= nil, true, "④★含「星星」变体")
+  eq(string.find(tostring(pr157.list[5] or ""), "|HEHPF:aa01|h", 1, true) ~= nil, true, "④★含「链接」变体")
+  eq(string.find(tostring(pr157.list[6] or ""), "后面还有字", 1, true) ~= nil, true, "④★含「链接+后续文字」变体（正是封皮的结构）")
+  -- ⑤ 滴干：真的按 SAY 发出去（同一发送通道）
+  local say157 = 0
+  local g157b = 0
+  while EVAL_SHARE_TEST_QUEUE_LEN() > 0 and g157b < 400 do
+    g157b = g157b + 1
+    TEST.time = (TEST.time or 1000) + 1
+    EVAL_SHARE_TEST_TICK()
+  end
+  for _, sc in ipairs(TEST.runScripts or {}) do
+    if string.find(sc, '", "SAY")', 1, true) then say157 = say157 + 1 end
+  end
+  eq(say157 >= 9, true, "⑤★★★9 条都真的按「说」发出去了（实际 " .. tostring(say157) .. "）")
+  EVAL_HELP_CONFIG.tb = savedTb157
+  EVAL_HELP_CONFIG.shVariantProbe = nil
+  TEST.chat, TEST.runScripts = nil, nil
+  print("  封皮变异测：9 条编号形态走同一队列发到「说」（纯文本/箭头/星星/色码/链接/链接+后续/完整/换箭头/去星）")
+end
+
+print("ALL TESTS PASS")
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")

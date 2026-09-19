@@ -214,9 +214,6 @@ end
 --   （短方案只出一片，片长上限定多少都看不出来——变异「忽略预算、退回固定 220」曾在短方案下 SURVIVED），
 --   同时长方案收回来要能逐字节复原（分片切法改错会在这里露出）。
 function EVAL_TEST_SHARE_BUILD_TEXT(text) return shBuildFor(tostring(text or "")) end
--- ★★★1.73.43b 取证命令 `/eh go 分享探针`（用户报「还是没显示分享信息」）：把**唯一的现场**一次摊开 ——
---   客户端不回话（RunScript/SendChatMessage 都不报错），所以只能看：① 封皮行算什么了、多长；
---   ② 队列里还剩什么（是否卡着封皮）；③ **真正交给 RunScript 的脚本原文**；④ 封皮有没有被弹出过。
 function EVAL_SHARE_SEND_PROBE()
   local q, i = {}, 0
   for i = 1, table.getn(shTxQ) do
@@ -421,6 +418,48 @@ end
 -- ★测试直调：驱动与 OnUpdate **同一个**函数（判据必须落在真实调用点/真实闭包上）
 function EVAL_SHARE_TEST_TICK() shTxStep() end
 -- ★1.73.43b 测试钩子：清空「发送留痕」（判据只看**本次分享**发出的脚本，不受前面用例污染）
+-- ★★★1.73.43b 取证命令 `/eh go 分享探针`（用户报「还是没显示分享信息」）：把**唯一的现场**一次摊开 ——
+--   客户端不回话（RunScript/SendChatMessage 都不报错），所以只能看：① 封皮行算什么了、多长；
+--   ② 队列里还剩什么（是否卡着封皮）；③ **真正交给 RunScript 的脚本原文**；④ 封皮有没有被弹出过。
+-- ★★★1.73.43d 一封「**变异测**」命令：把封皮拆成 9 种形态**编号**发到「说」频道（每 0.5 秒一条，同一限频队列），
+--   用户只需回报「哪些编号出现了」—— 一次就把「是哪个字符/哪种结构让客户端吞消息」夹出来。
+--   为什么这么干：客户端不回话，而这一个现象已经来回三轮（本轮已能证明「我们发了、客户端不画」）。
+function EVAL_SHARE_SEAL_VARIANT_PROBE()
+  local full = "[7] 完整封皮（算不出方案文本）"
+  if type(EVAL_PROFILE_TO_TEXT) == "function" then
+    local t = EVAL_PROFILE_TO_TEXT()
+    if type(t) == "string" and t ~= "" and type(EVAL_SHARE_SEAL_INFO) == "function" then
+      local info = EVAL_SHARE_SEAL_INFO(t)
+      if info and info.line then full = tostring(info.line) end
+    end
+  end
+  local noArrow = string.gsub(full, "→", "->")           -- 箭头换成 ASCII
+  local noStar = string.gsub(noArrow, "★", "*")           -- 再去掉星星
+  local vs = {
+    "[1] 纯文本测试",
+    "[2] 箭头 → 测试",
+    "[3] 星星 ★ 测试",
+    "[4] 色码 |cffff2c8[头衔]|r",
+    "[5] 链接 |cff9ad4ff|HEHPF:aa01|h[标签]|h|r",
+    "[6] 链接+后续文字 |cff9ad4ff|HEHPF:aa02|h[标签]|h|r 后面还有字",
+    "[7] 完整封皮（现写法）：" .. full,
+    "[8] 完整封皮 · 箭头换 -> ：" .. noArrow,
+    "[9] 完整封皮 · 去星去箭 ：" .. noStar,
+  }
+  local n = table.getn(vs)
+  for i = 1, n do table.insert(shTxQ, { body = vs[i], chan = "SAY" }) end
+  shTxLast = shNowT()
+  shEnsureTxTicker()
+  local cfgP = rawget(_G, "EVAL_HELP_CONFIG")
+  local probe = { n = n, list = vs, at = shNowT() }
+  if type(cfgP) == "table" then cfgP.shVariantProbe = probe end -- ★落盘证人
+  shSay("===== 封皮变异测（9 条，已排队到「说」）=====")
+  shSay("  每 0.5 秒一条，请等 6 秒发完，然后把**实际出现的编号**告诉我")
+  shSay("  （没出现的编号同样重要 —— 一比就知道是哪个字符/结构被客户端吞掉）")
+  shSay("  1 纯文本 · 2 箭头 · 3 星星 · 4 色码 · 5 链接 · 6 链接+后续文字 · 7 现写法 · 8 箭头换-> · 9 去星去箭")
+  return probe
+end
+
 function EVAL_TEST_SHARE_SENTLOG_CLEAR() SH.sentLog = {} return true end
 -- ★按本次传输 id 数队列里的分片（不受上一笔遗留影响）
 function EVAL_TEST_SHARE_QUEUE_ID_COUNT(idh)
@@ -2075,9 +2114,13 @@ shSealRowApply = function()
   if row then
     pcall(shp.sealIcon.SetTexture, shp.sealIcon, row.icon)
     pcall(shp.sealHead.SetText, shp.sealHead, row.head)
-    pcall(shp.sealMeta.SetText, shp.sealMeta, row.meta)
-    pcall(shp.sealComment.SetText, shp.sealComment, row.commentLine)
-    shp.sealIcon:Show() shp.sealHead:Show() shp.sealMeta:Show() shp.sealComment:Show()
+    -- ★★★1.73.43d 用户（截图圈出那两行）：「这块信息不需要在分享方案内显示」⇒
+    --   **品阶/身份/评语三行一律不显示**（顶上的 `★[品阶秘籍·名]` 已经把品阶与方案名说清了；
+    --   而封皮行没收到时那两行会显示「未知（未收到封皮行）」= 噪音）。
+    --   ★照旧**先清空再 Hide**（本客户端 Hide 过的控件仍可能被绘出 → 只 Hide 会留下上一笔的假信息）。
+    pcall(shp.sealMeta.SetText, shp.sealMeta, "")
+    pcall(shp.sealComment.SetText, shp.sealComment, "")
+    shp.sealIcon:Show() shp.sealHead:Show() shp.sealMeta:Hide() shp.sealComment:Hide()
   else
     -- 文本解析不出方案（不是合法方案文本）→ **整栏如实隐藏**，不编造一个品阶出来
     -- ★先清空文本再 Hide：本客户端 Hide 过的控件仍可能被绘出（1.71.3 那轮「残留」的教训，
@@ -2270,6 +2313,19 @@ function EVAL_TEST_SHARE_SEAL_ROW()
     return nil
   end
   out.head, out.meta, out.comment = rd(shp.sealHead), rd(shp.sealMeta), rd(shp.sealComment)
+  -- ★1.73.43d 可见性也要交出来（用户要求「这块不显示」→ 判据必须读真控件的 IsShown，不看我们自己的意图）
+  local function shownOf(f)
+    if not f then return nil end
+    if type(f.IsShown) ~= "function" then return nil end
+    local ok, v = pcall(f.IsShown, f)
+    -- ★★★`and/or` 链**没有布尔语义**（本项目 1.70.46 / 1.73.15 两次踩过）：
+    --   `ok and (v and true or false) or nil` 在 v=false 时会**返回 nil** → 必须显式分步判。
+    if not ok or v == nil then return nil end
+    if v then return true end
+    return false
+  end
+  out.iconShown, out.headShown = shownOf(shp.sealIcon), shownOf(shp.sealHead)
+  out.metaShown, out.commentShown = shownOf(shp.sealMeta), shownOf(shp.sealComment)
   local r = shp.sealRow
   if type(r) == "table" then
     out.tier, out.rank, out.score = r.tier, r.rank, r.score

@@ -6969,6 +6969,13 @@ if type(SlashCmdList) == "table" then
         say("创世者亲临：分享模块未载入（EVAL_TITLE_CREATOR_OPEN 不存在）")
       end
     -- ★★★1.73.43b 分享发送取证（用户：「还是没显示分享信息」）
+    -- ★★★1.73.43d 封皮变异测：9 种编号形态发到「说」，用户回报「哪些编号出现」即可定位
+    elseif msg == "go 封皮测" or msg == "go shvariant" or msg == "go 变异测" then
+      if type(EVAL_SHARE_SEAL_VARIANT_PROBE) == "function" then
+        EVAL_SHARE_SEAL_VARIANT_PROBE()
+      else
+        say("封皮变异测：Share 模块未载入")
+      end
     elseif msg == "go 分享探针" or msg == "go shprobe" or msg == "go 发送探针" then
       if type(EVAL_SHARE_SEND_PROBE) == "function" then
         EVAL_SHARE_SEND_PROBE()
