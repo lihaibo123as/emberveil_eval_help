@@ -11141,10 +11141,26 @@ do
   for k4 = 1, table.getn(chunks) do EVAL_SHARE_ONMSG(chunks[k4], "队友甲") end
   eq(table.getn((EVAL_SHARE_RECENT_STATE() or {}).list or {}) >= 1, true, "②★★收齐后缓存了整份方案（点击导入要取回它）")
   TEST.chat = nil
+  -- ★★★1.73.46 用户：「点击分享链接需要弹出方案分享,让用户自己确认.不要自动导入.」
+  --   ⇒ 判据三件事：① 真的弹出弹窗（读真控件文本）② **方案库一字未变**（没导入）③ 如实播报「请自己确认」。
+  --   ★「没导入」只认**可观察的副作用**（方案库条数），不认我们自己嘴上说的话。
+  local profBefore146 = table.getn(((EVAL_HELP_CONFIG or {}).war or {}).profiles or {})
+  local recent146 = EVAL_SHARE_RECENT_STATE()
+  local seed146 = nil
+  for _, k146 in ipairs(recent146.list or {}) do
+    local e146 = (recent146.recent or {})[k146]
+    if e146 and string.sub(tostring(k146), -string.len(tostring(sid))) == tostring(sid) then seed146 = e146 end
+  end
+  eq(seed146 ~= nil, true, "③★★缓存里存着这份分享（点链接要取回它）")
   eq(EVAL_TEST_SIR_CLICK("EHPF:" .. tostring(sid)), true, "③★★走**真实 SetItemRef** 点了封皮")
-  eq(string.len(tostring(TEST.chat or "")) > 0, true, "③★★点击后有如实播报（导入桥的回执）")
-  TEST.chat = nil
-  eq(EVAL_SHARE_CLICK_IMPORT("EHPF:" .. tostring(sid)), true, "③★★★命中缓存 → 导入返回成功")
+  local pend146 = EVAL_SHARE_PENDING()
+  eq(pend146 ~= nil and seed146 ~= nil and tostring(pend146.text) == tostring(seed146.text), true,
+     "③★★★点链接 → **弹出方案分享窗**（待确认的就是缓存里那一份）")
+  eq(string.len(table.concat(EVAL_TEST_SHARE_POPUP_TEXTS() or {}, "")) > 0, true, "③★★弹窗真的画出来了（读真控件文本）")
+  eq(table.getn(((EVAL_HELP_CONFIG or {}).war or {}).profiles or {}), profBefore146, true,
+     "③★★★点链接**没有导入**（方案库条数不变 —— 写入只能由弹窗的 [导入] 按钮触发）")
+  eq(string.find(tostring(TEST.chat or ""), "确认", 1, true) ~= nil, true,
+     "③★★并如实播报「请自己确认」（实际：" .. string.sub(tostring(TEST.chat or ""), 1, 60) .. "）")
   TEST.chat = nil
   -- ★1.73.42q 用**不可能存在**的 id（真实传输 id 只有 4 位 hex；2 字符的 "ff" 会偶发撞上缓存键后缀 → 假红）
   EVAL_TEST_SIR_CLICK("EHPF:ffffffff")
@@ -11154,7 +11170,7 @@ do
   EVAL_TEST_SIR_CLICK("player:Ionol")
   eq(string.find(tostring(TEST.chat or ""), "还没收齐", 1, true) == nil, true, "③★非 EHPF 链接不进入口（原样放行）")
   TEST.chat = nil
-  print("  封皮行：分享了 → + 品阶秘籍 + 可点链接 · 立即发 · 收齐缓存 · 点击直接导入 · 未命中如实提示")
+  print("  封皮行：分享了 → + 品阶秘籍 + 可点链接 · 立即发 · 收齐缓存 · 点链接只弹窗让用户确认（不自动导入） · 未命中如实提示")
 end
 
 -- 145) ★★★1.73.42i 收到分享的详情弹窗「品阶栏」：图标 + 符号 + 品阶/评分 + 发送端境界 + 评语
@@ -11284,16 +11300,20 @@ do
   eq(EVAL_SHARE_PENDING() ~= nil, true, "③前置：收齐后弹窗（数据在）")
   local view145 = EVAL_TEST_SHARE_SEAL_ROW()
   eq(view145.shown, true, "③★★★品阶栏真的显示了（读真图标 IsShown）")
-  -- ★★★1.73.43e 用户：「分享方案内**颜色替代武器战的位置**就可以」⇒ 标题里的《方案名》必须带**品阶色**
-  local popTitle145 = table.concat(EVAL_TEST_SHARE_POPUP_TEXTS() or {}, " | ")
+  -- ★★★1.73.46 用户（选定方案 B）：「标题行去掉《武器战》，下面那行带彩色的当方案名」
+  --   ⇒ 标题里**不许再出现方案名**（名字只留一处 = 品阶行），下面那条判据读**真控件**验颜色与名字。
+  -- ★★只取**标题那一行**（弹窗读值口的第 1 条 = 摘要行）：拼上详情行会让「含方案名」这类判据被
+  --   「# 方案: 甲」顶住 —— M459b 实测 SURVIVED 的正是这个坑（弱判据）。
+  local popTitle145 = tostring((EVAL_TEST_SHARE_POPUP_TEXTS() or {})[1] or "")
   local wantCol145 = select(2, EVAL_SHARE_SEAL_TIER(EVAL_SHARE_SEAL_SCORE(txt145(14)))).color
-  eq(string.find(popTitle145, wantCol145 .. "甲", 1, true) ~= nil, true,
-     "③★★★弹窗标题的方案名带品阶色（" .. tostring(wantCol145) .. "甲），实际：" .. string.sub(popTitle145, 1, 90))
-  eq(string.find(popTitle145, "《《", 1, true) == nil, true, "③★★★标题不许出现双括号《《（模板里已有《》，只上色不再补括号）")
-  eq(string.find(popTitle145, "《" .. "甲" .. "》", 1, true) ~= nil or string.find(popTitle145, "《", 1, true) ~= nil, true, "③★方案名照旧在标题里（只多了一层颜色）")
+  eq(string.find(popTitle145, "分享的方案", 1, true) ~= nil, true, "③★标题行照旧说明「谁分享的方案 + 几个技能」")
+  eq(string.find(popTitle145, "《甲》", 1, true) == nil, true, "③★★★标题行**不再重复方案名**（名字只留一处，用户要求）")
+  eq(string.find(popTitle145, "《", 1, true) == nil, true, "③★★标题行不再出现书名号（方案名已由品阶行承担）")
   local wantIcon145 = EVAL_SHARE_SEAL_ICON(select(1, EVAL_SHARE_SEAL_TIER(EVAL_SHARE_SEAL_SCORE(txt145(14)))))
   eq(view145.icon, wantIcon145, "③★★★图标纹理 = 该品阶的图标（读真控件 GetTexture，不读常量）")
   eq(string.find(tostring(view145.head), "[源代码秘籍·甲]", 1, true) ~= nil, true, "③★★头一行带品阶与方案名")
+  eq(string.sub(tostring(view145.head), 1, 10) == wantCol145, true,
+     "③★★★品阶行**带品阶色**（它就是唯一的「方案名」那处）：" .. string.sub(tostring(view145.head), 1, 30))
   -- ★★★1.73.43g 新格式下**接收端不解析身份**了：身份在 A 行（纯文本、无链接），接收端只认带 `|HEHPF:` 的消息。
   -- ★★★1.73.43g 新格式（A 身份行 + B 品阶行）下，接收端**不再从消息里抠身份/评语**：
   --   身份在聊天里直接看得见；弹窗那三行按用户要求也不显示 ⇒ 不需要再抠（老格式的解析仍在，见组 156⑥）。
@@ -11311,7 +11331,7 @@ do
      "④★★★品阶栏底不压详情首行（" .. tostring(view145.sealY - view145.sealH) .. " > " .. tostring(view145.detailY1) .. "）")
   eq(view145.detailYN - 12 > view145.btnTop, true,
      "④★★★详情末行底不压按钮行顶（" .. tostring(view145.detailYN - 12) .. " > " .. tostring(view145.btnTop) .. "）")
-  eq(view145.H >= 216, true, "④★窗口加高到 216（空间是加出来的，不是挤出来的）")
+  eq(view145.H >= 190, true, "④★窗口够高（200：品阶行 + 6 行详情 + 按钮都不挤）")
   eq(view145.W, 380, true, "④★宽度不变 380")
   -- ⑤ 单片方案的真实情形：分片先到（弹窗已出）→ 封皮**晚到** → 当场补刷
   EVAL_SHARE_RESET()
@@ -11359,6 +11379,13 @@ do
   eq(v6.shown, false, "⑥★★★解析不出方案 → 品阶栏如实隐藏（不编造一个品阶）")
   eq(tostring(v6.head or "") == "" and tostring(v6.meta or "") == "", true, "⑥★★隐藏时文本也清空（Hide 过的控件仍可能被绘出）")
   EVAL_PROFILE_FROM_TEXT = keepParse6
+  -- ★★★1.73.46 兜底：**解析不出品阶**时名字要退回标题行（方案名绝不能因为「名字只留一处」而丢掉）
+  local keepScore6b = EVAL_SHARE_SEAL_SCORE
+  EVAL_SHARE_SEAL_SCORE = function() return nil end
+  EVAL_SH_POPUP("测试", "# 方案: 甲\n- 技能1", nil)
+  local t6b = tostring((EVAL_TEST_SHARE_POPUP_TEXTS() or {})[1] or "") -- ★同上：只看标题行，别被详情行顶住
+  eq(string.find(t6b, "甲", 1, true) ~= nil, true, "⑥★★★解析不出品阶 → 名字**退回标题行**（绝不丢名字）")
+  EVAL_SHARE_SEAL_SCORE = keepScore6b
   EVAL_SH_POPUP("测试", txt145(13), nil)
   eq(EVAL_TEST_SHARE_SEAL_ROW().shown, true, "⑥收尾：恢复后品阶栏又能显示（不是一次性坏掉）")
   TEST.inGuild = keepInGuild145

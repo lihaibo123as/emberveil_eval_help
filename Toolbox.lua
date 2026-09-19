@@ -1879,9 +1879,10 @@ end
 
 function EVAL_TB_SIR_HANDLE(link, button)
   if type(link) ~= "string" then return false end
-  -- ★★★1.73.42g 分享封皮链接：点它 = **直接导入方案**（用户要求）；只认 EHPF: 前缀，其余原样放行。
+  -- ★★★1.73.46 分享封皮链接：点它 = **弹出「方案分享」窗让玩家自己确认**（用户：「不要自动导入」）；
+  --   只认 EHPF: 前缀，其余原样放行。★旧行为是直接导入 —— 一个没有确认的写操作，已按用户要求改掉。
   if string.find(tostring(link or ""), "^EHPF:") then
-    if type(EVAL_SHARE_CLICK_IMPORT) == "function" then pcall(EVAL_SHARE_CLICK_IMPORT, link) end
+    if type(EVAL_SHARE_CLICK_OPEN) == "function" then pcall(EVAL_SHARE_CLICK_OPEN, link) end
     return true
   end
   local name = string.match(link, "^player:(.+)$")

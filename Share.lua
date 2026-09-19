@@ -1007,13 +1007,15 @@ local SH_SEAL_SYMBOLS = { "·", "◆", "■", "●", "★" }
 --   1 档 青灰 |cff8fa8b8 · 2 档 青 |cff00e5ff · 3 档 蓝 |cff4f9bff · 4 档 品红 |cffff4fd8 · 5 档 极光青绿 |cff5cffd2。
 --   ★色码必须 8 位（`|c` + AARRGGBB）：6 位本客户端**不解析**，会把色码原文画进聊天（1.73.19 实测）。
 local SH_TITLE_COLORS = { "|cff8fa8b8", "|cff00e5ff", "|cff4f9bff", "|cffff4fd8", "|cff5cffd2" }
--- ★★★1.73.45 彩蛋自定义名号的**默认色 = 帝王金**（原 1.73.42p 的淡金 |cfffff2c8 太素 —— 用户要求「霸气一点」）。
+-- ★★★1.73.45 彩蛋自定义名号的**默认色 = 烈焰赤**（原 1.73.42p 的淡金 |cfffff2c8 太素 —— 用户要求「霸气一点」，
+--   并在候选里**选定「烈焰赤」**）。
 --   ★颜色是主观偏好 ⇒ 顺带给**候选表 + 命令**：/eh go 名号色 把候选**各发一条编号预览**（真形态、真颜色），
---     /eh go 名号色 <编号> 当场选用并**存档**（cfg.title.customColor）—— 免得为了「再霸气一点」来回改版。
+--     /eh go 名号色 <编号> 当场选用并**存档**（cfg.title.customColor）—— 免得为了「霸气一点」来回改版。
 --   ★候选一律**避开**品阶五档（白/绿/紫/橙/暗金）与头衔五档（青灰/青/蓝/品红/青绿）：同屏不糊成一团（源码检查守着）。
+--   ★顺序 = 默认（候选 1 即默认，单一来源）：改默认**只改顺序/第 1 项**，别的都不用动。
 local SH_TITLE_CUSTOM_COLORS = {
-  { code = "|cffffd700", key = "TC_GOLD" },   -- 1 帝王金（默认）
-  { code = "|cffff2400", key = "TC_FLAME" },  -- 2 烈焰赤
+  { code = "|cffff2400", key = "TC_FLAME" },  -- 1 烈焰赤（默认 —— 用户选定）
+  { code = "|cffffd700", key = "TC_GOLD" },   -- 2 帝王金
   { code = "|cffdc143c", key = "TC_BLOOD" },  -- 3 龙血赤
   { code = "|cffb22222", key = "TC_DARK" },   -- 4 暗血赤
   { code = "|cffff8c00", key = "TC_MOLTEN" }, -- 5 熔金橙
@@ -2106,15 +2108,18 @@ local shp = {}
 -- ★1.71.2 弹窗最多显示几行方案详情（超出折叠为「…还有 N 行」）。
 --   为什么要有上限：方案最多 12 技能 × 每行可能很长的条件串，弹窗不能无限增高。
 local SH_DETAIL_MAX = 6
--- ★★★1.73.42i 详情弹窗新增「品阶栏」（用户要求：收到分享的弹窗里要有 品阶图标 + 符号 + 境界 + 品阶 + 评语）
---   布局算术（顶部为 0）：标题 -10 · 摘要行 -34 · **品阶栏 -50**（16px 图标 + 品阶头一行 + 品阶/评分与境界一行 + 评语一行，到 -90）
---     · 详情首行 -96（6 行 × 12 → 末行 -156、底约 -166）· 分隔线 底部+42 · 按钮行 底部 12~34（顶边 -182）
---   ⇒ 末行底与按钮顶之间还有约 16px 余量。★竖着放不下**唯一**的出路是加高窗口（200 → 216），
+-- ★★★1.73.42i 详情弹窗有「品阶行」：16px 品阶图标 + `★[品阶秘籍·名]`（带品阶色）—— 这一行就是**方案名**。
+-- ★★★1.73.46 用户改版（红框那两行删掉 + 名字只留一处）：
+--   ① 「品阶/身份」与「评语」两个控件**整个删除**（原来只是 Hide，看着还在）；
+--   ② 标题行**不再重复《方案名》**（方案名由下面那行带品阶色的 `★[品阶秘籍·名]` 承担）——
+--      只有**解析不出品阶**时才退回「标题里带名字」的旧写法（名字绝不能丢）。
+--   布局算术（顶部为 0）：标题 -10 · 摘要行 -34 · 品阶行 -50（图标 16px 到 -66）
+--     · 详情首行 -74（6 行 × 12 → 末行 -134、底约 -146）· 分隔线 底部+42 · 按钮行 底部 12~34（顶边 -166）
+--   ⇒ 末行底与按钮顶之间约 20px 余量。★竖着放不下**唯一**的出路是加高窗口，
 --     绝不许把详情行压到按钮上（那是「看不见的坏」：按钮被盖住/点不到，用户只会说「点不了」）。
-local SH_SEAL_ROW_Y = -50   -- 品阶栏顶部（品阶图标顶边）
+local SH_SEAL_ROW_Y = -50   -- 品阶行顶部（品阶图标顶边）
 local SH_SEAL_ROW_H = 16    -- 品阶图标边长
-local SH_SEAL_TXT_X = 38    -- 品阶栏文字左起点（16 边距 + 16 图标 + 6 缝）
-local SH_DETAIL_Y1 = -96    -- 详情首行（必须让开品阶栏）
+local SH_DETAIL_Y1 = -74    -- 详情首行（紧跟品阶行下方）
 -- ★1.71.3 弹窗图标（自包含：这批 .tga 已从 UnrealQuest 拷进本插件 media\icons\）与标题栏高度
 local SH_POP_ICON = "Interface\\AddOns\\EvalHelp\\media\\icons\\trainers-icon"
 local SH_TITLE_H = 18
@@ -2124,7 +2129,7 @@ local function shPopupBuild()
   -- ★1.71.2 高度 130 → 200：要容纳「标题 + 6 行方案详情 + 按钮行」。
   --   算一遍：标题在 -10、详情首行 -52、6 行 × 12 = 至 -124、按钮行占底部 34 → 需要约 170，
   --   留余量取 200（长条件串还会占更宽，但不增高）。
-  local W, H = 380, 216 -- ★1.73.42i 200 → 216：品阶栏占 44px（-50 ~ -90），详情行与按钮都不许被压
+  local W, H = 380, 200 -- ★1.73.46 216 → 200：那两行（品阶/身份 + 评语）删掉后空间富余，窗口收回原高（少挡画面）
   local root = CreateFrame("Frame", "EVAL_SHARE_POPUP", UIParent)
   root:SetWidth(W) root:SetHeight(H)
   root:SetPoint("CENTER", UIParent, "CENTER", 0, 190)
@@ -2216,18 +2221,12 @@ local function shPopupBuild()
   local sealHead = shText(root, 10, 0.95, 0.88, 0.72)
   sealHead:SetPoint("LEFT", sealIcon, "RIGHT", 6, 0)
   pcall(sealHead.SetNonSpaceWrap, sealHead, false)
-  local sealMeta = shText(root, 9, 0.80, 0.78, 0.70)
-  sealMeta:SetPoint("TOPLEFT", root, "TOPLEFT", SH_SEAL_TXT_X, SH_SEAL_ROW_Y - 18)
-  pcall(sealMeta.SetWidth, sealMeta, W - SH_SEAL_TXT_X - 10)
-  pcall(sealMeta.SetJustifyH, sealMeta, "LEFT")
-  pcall(sealMeta.SetNonSpaceWrap, sealMeta, false)
-  local sealComment = shText(root, 9, 0.72, 0.70, 0.62)
-  sealComment:SetPoint("TOPLEFT", root, "TOPLEFT", SH_SEAL_TXT_X, SH_SEAL_ROW_Y - 30)
-  pcall(sealComment.SetWidth, sealComment, W - SH_SEAL_TXT_X - 10)
-  pcall(sealComment.SetJustifyH, sealComment, "LEFT")
-  pcall(sealComment.SetNonSpaceWrap, sealComment, false)
-  sealHead:Hide() sealMeta:Hide() sealComment:Hide()
-  shp.sealHead, shp.sealMeta, shp.sealComment = sealHead, sealMeta, sealComment
+  sealHead:Hide()
+  shp.sealHead = sealHead
+  -- ★★★1.73.46 用户（截图红框那两行）：「方案分享删除红色区域内的内容」⇒ 「品阶/身份」与「评语」
+  --   两个控件**整个删掉**（原来是建出来再 Hide —— 那正是「看着还在」的来源；现在弹窗里只剩
+  --   「图标 + `★[品阶秘籍·名]`」这一行，它就是方案名，标题行不再重复《方案名》）。
+  --   ★那两行本来就是「未知（未收到封皮行）」的噪音：发送端的身份/评语接收端本来也复现不了。
   -- 几何真值（断言读它，不写死坐标）
   shp.sealY, shp.sealH = SH_SEAL_ROW_Y, SH_SEAL_ROW_H
   shp.detailY1 = SH_DETAIL_Y1
@@ -2355,14 +2354,13 @@ local function shPopupBuild()
   shp.root = root
 end
 
--- ★★★1.73.42i 品阶栏刷新（**唯一实现**）：弹窗弹出时调一次；封皮行**晚到**（单片方案）时再调一次。
+-- ★★★1.73.42i 品阶行刷新（**唯一实现**）：弹窗弹出时调一次；封皮行**晚到**（单片方案）时再调一次。
 --   两处走同一个函数 → 不会出现「弹窗里一套、晚到补写另一套」的漂移。
---   ★数据来源分两半，各自的诚实边界都写在这里：
---     ① 品阶/评分/图标/符号：由**收到的方案文本**复算（品阶本来就是方案的函数，接收端能独立算出来）；
---     ② 境界/评语：**只有发送端知道** —— 从封皮行解析（SH.sealMeta）；解析不到就写「未知（未收到封皮行）」，
---        **绝不**拿本机角色的境界或本机随机抽的评语顶上（那就是在编数据骗用户）。
+--   ★★★1.73.46 这一行现在**就是方案名**（用户改版：标题行不再重复《方案名》，身份/评语两行整个删掉）：
+--     ① 品阶/评分/图标/符号由**收到的方案文本**复算（品阶本来就是方案的函数，接收端能独立算出来）；
+--     ② 算不出（不是合法方案文本）→ **整行如实隐藏**，标题那边退回「带方案名」的旧写法（名字绝不丢）。
 shSealRowApply = function()
-  if not (shp.sealIcon and shp.sealHead and shp.sealMeta and shp.sealComment) then return nil end
+  if not (shp.sealIcon and shp.sealHead) then return nil end
   local p = SH.pending
   local text = p and p.text
   local meta = nil
@@ -2372,21 +2370,13 @@ shSealRowApply = function()
   if row then
     pcall(shp.sealIcon.SetTexture, shp.sealIcon, row.icon)
     pcall(shp.sealHead.SetText, shp.sealHead, row.head)
-    -- ★★★1.73.43d 用户（截图圈出那两行）：「这块信息不需要在分享方案内显示」⇒
-    --   **品阶/身份/评语三行一律不显示**（顶上的 `★[品阶秘籍·名]` 已经把品阶与方案名说清了；
-    --   而封皮行没收到时那两行会显示「未知（未收到封皮行）」= 噪音）。
-    --   ★照旧**先清空再 Hide**（本客户端 Hide 过的控件仍可能被绘出 → 只 Hide 会留下上一笔的假信息）。
-    pcall(shp.sealMeta.SetText, shp.sealMeta, "")
-    pcall(shp.sealComment.SetText, shp.sealComment, "")
-    shp.sealIcon:Show() shp.sealHead:Show() shp.sealMeta:Hide() shp.sealComment:Hide()
+    shp.sealIcon:Show() shp.sealHead:Show()
   else
-    -- 文本解析不出方案（不是合法方案文本）→ **整栏如实隐藏**，不编造一个品阶出来
+    -- 文本解析不出方案（不是合法方案文本）→ **整行如实隐藏**，不编造一个品阶出来
     -- ★先清空文本再 Hide：本客户端 Hide 过的控件仍可能被绘出（1.71.3 那轮「残留」的教训，
     --   详情行那边也是这么写的）→ 只 Hide 不清空 = 上一笔的品阶还挂在屏幕上（那是**假信息**）。
     pcall(shp.sealHead.SetText, shp.sealHead, "")
-    pcall(shp.sealMeta.SetText, shp.sealMeta, "")
-    pcall(shp.sealComment.SetText, shp.sealComment, "")
-    shp.sealIcon:Hide() shp.sealHead:Hide() shp.sealMeta:Hide() shp.sealComment:Hide()
+    shp.sealIcon:Hide() shp.sealHead:Hide()
   end
   return row
 end
@@ -2420,7 +2410,7 @@ function EVAL_SH_POPUP(sender, text, ev, idh)
     end
   end
   if tcol then nameTxt = tcol .. nameTxt .. "|r" end
-  shp.body:SetText(string.format(L("SH_POP_GOT"), showFrom, nameTxt, count))
+  -- ★★★1.73.46 摘要行文本**挪到品阶行刷新之后**再写（那时才知道有没有品阶行可承担方案名）—— 见本函数末尾。
   -- ★1.71.2 详情：把导入文本按行显示，让用户在**点导入之前**就能看清内容。
   --   用**逐个 FontString** 而非一个多行 FontString（本客户端多行行为不稳，逐行最可靠）。
   --   最多 SH_DETAIL_MAX 行，超出时最后一行提示还剩多少（不静默截断——诚实告知）。
@@ -2450,8 +2440,16 @@ function EVAL_SH_POPUP(sender, text, ev, idh)
       shp.detailLines[SH_DETAIL_MAX]:Show()
     end
   end
-  -- ★1.73.42i 品阶栏（渲染与断言同源的那个纯函数说了算）
+  -- ★1.73.42i 品阶行（渲染与断言同源的那个纯函数说了算）
   if type(shSealRowApply) == "function" then shSealRowApply() end
+  -- ★★★1.73.46 摘要行（用户选定方案 B）：「标题行去掉《方案名》，下面那行带品阶色的当方案名」。
+  --   ⇒ 有品阶行时标题只报「谁 + 几个技能」；**解析不出品阶**时退回带名字的旧模板（名字绝不能丢）。
+  local rowH = shp.sealRow
+  if rowH ~= nil and type(rowH.head) == "string" and rowH.head ~= "" then
+    shp.body:SetText(string.format(L("SH_POP_GOT_NAME"), showFrom, count))
+  else
+    shp.body:SetText(string.format(L("SH_POP_GOT"), showFrom, nameTxt, count))
+  end
   shp.root:Show()
 end
 
@@ -2588,7 +2586,8 @@ function EVAL_TEST_SHARE_SEAL_ROW()
   out.head, out.meta, out.comment = rd(shp.sealHead), rd(shp.sealMeta), rd(shp.sealComment)
   -- ★1.73.43d 可见性也要交出来（用户要求「这块不显示」→ 判据必须读真控件的 IsShown，不看我们自己的意图）
   local function shownOf(f)
-    if not f then return nil end
+    -- ★1.73.46 控件已被**整个删除**（红框那两行）→ 「不存在」就等于「没显示」，返回 false 而不是 nil
+    if not f then return false end
     if type(f.IsShown) ~= "function" then return nil end
     local ok, v = pcall(f.IsShown, f)
     -- ★★★`and/or` 链**没有布尔语义**（本项目 1.70.46 / 1.73.15 两次踩过）：
@@ -2607,8 +2606,12 @@ function EVAL_TEST_SHARE_SEAL_ROW()
   end
   return out
 end
--- ★★1.73.42g 点击封皮链接 → 直接导入（SetItemRef 的 EHPF: 分支调它）
-function EVAL_SHARE_CLICK_IMPORT(link)
+-- ★★★1.73.46 点击封皮链接 → **弹出「方案分享」窗，让玩家自己确认**（用户：「点击分享链接需要弹出方案分享,
+--   让用户自己确认.不要自动导入.」）。
+--   ★旧行为（1.73.42g）是**点一下就直接写进方案库** —— 一个没有确认的写操作：点错、误点、被别人的链接勾一下，
+--     方案库就变了，用户无从反悔。新行为**只读**：把那一份取出来弹窗，[导入] 仍是唯一写入路径（用户自己按）。
+--   ★查不到就**如实说**（沿用 SH_CLICK_MISS），绝不静默。
+function EVAL_SHARE_CLICK_OPEN(link)
   local id = string.match(tostring(link or ""), "^EHPF:(%x+)")
   if not id then return false end
   local hit = nil
@@ -2620,10 +2623,9 @@ function EVAL_SHARE_CLICK_IMPORT(link)
     shSay(L("SH_CLICK_MISS"))
     return false
   end
-  if type(EVAL_IMPORT_TEXT) ~= "function" then shSay(L("SH_NOIMPORT")) return false end
-  local ok, msg = EVAL_IMPORT_TEXT(hit.text)
-  shSay(tostring(msg))
-  return ok and true or false
+  EVAL_SH_POPUP(hit.sender, hit.text, hit.ev, id) -- ★只弹窗；导入由弹窗里的 [导入] 按钮触发
+  shSay(L("SH_CLICK_OPEN"))
+  return true
 end
 function EVAL_SHARE_SEAL_STATE()
   return { last = SH.sealSentLast or SH.sealLast, first = SH.sealSentFirst, recvLast = SH.sealRecvLast,
