@@ -202,6 +202,12 @@ SH_TIP_R3 = "- You must be on the same channel (pick Party/Say if not in a guild
   CREATOR_DONE = "[The Creator Descends] Your name is set: %s - all worlds now hear it.",
   CREATOR_ERR = "That name cannot be used: it must not be empty and must not contain a pipe character.",
   CREATOR_CLOSED = "You close the Origin pen - the gift stays here; return when ready.",
+  -- ★★★1.73.42r Title reset (user: give me a command to reset/delete the custom name - for testing). Diagnostic only.
+  TITLE_RST_CUSTOM = "Custom name deleted - now showing the drawn title: %s",
+  TITLE_RST_CUSTOM_NONE = "There was no custom name (the drawn titles are untouched)",
+  TITLE_RST_ALL = "Title progress reset: tier and all five draw records cleared - the next plan-library scan draws anew",
+  TITLE_RST_ALL_NONE = "There was no title progress (nothing to reset)",
+  TITLE_RST_NAME = "(not ranked yet)",
   SH_RECV_ON = "Profile share receiving: ON",
   SH_RECV_OFF = "Profile share receiving: OFF",
   SH_NOEXPORT = "Export function unavailable",

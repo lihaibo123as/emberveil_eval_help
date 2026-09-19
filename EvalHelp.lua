@@ -6952,6 +6952,31 @@ if type(SlashCmdList) == "table" then
       else
         say("创世者亲临：分享模块未载入（EVAL_TITLE_CREATOR_OPEN 不存在）")
       end
+    -- ★★★1.73.42r 重置（用户：「给我一个重置删除自定义的命令.测试」）——诊断/测试用，正常玩法没有这条路
+    elseif msg == "go 重置名号" or msg == "go 清名号" or msg == "go resetname" then
+      if type(EVAL_TITLE_CLEAR_CUSTOM) == "function" then
+        local cfgR = EVAL_HELP_CONFIG
+        local hadR = (type(cfgR) == "table" and type(cfgR.title) == "table" and type(cfgR.title.custom) == "string" and cfgR.title.custom ~= "")
+        EVAL_TITLE_CLEAR_CUSTOM()
+        if hadR then
+          local curR = (type(EVAL_TITLE_CURRENT) == "function") and EVAL_TITLE_CURRENT() or nil
+          say(string.format(EVAL_L("TITLE_RST_CUSTOM"), curR and tostring(curR.name) or EVAL_L("TITLE_RST_NAME")))
+        else
+          say(EVAL_L("TITLE_RST_CUSTOM_NONE"))
+        end
+      else
+        say("重置名号：分享模块未载入（EVAL_TITLE_CLEAR_CUSTOM 不存在）")
+      end
+    elseif msg == "go 重置头衔" or msg == "go 清头衔" or msg == "go resettitle" then
+      if type(EVAL_TITLE_RESET_ALL) == "function" then
+        local cfgR2 = EVAL_HELP_CONFIG
+        local had2 = (type(cfgR2) == "table" and type(cfgR2.title) == "table" and ((tonumber(cfgR2.title.tier) or 0) > 0 or type(cfgR2.title.custom) == "string"))
+        EVAL_TITLE_RESET_ALL()
+        if type(EVAL_TITLE_REFRESH) == "function" then EVAL_TITLE_REFRESH() end -- 立刻按当前方案库重算重抽
+        if had2 then say(EVAL_L("TITLE_RST_ALL")) else say(EVAL_L("TITLE_RST_ALL_NONE")) end
+      else
+        say("重置头衔：分享模块未载入（EVAL_TITLE_RESET_ALL 不存在）")
+      end
     -- ★★★1.73.42n 头衔抽卡：当前头衔 + 五档抽取记录 + 距下一档还差什么（用户：「每个档位只抽卡一次」）
     elseif msg == "go 头衔" or msg == "go title" or msg == "go 抽卡" then
       if type(EVAL_TITLE_REFRESH) == "function" and type(EVAL_TITLE_PROGRESS) == "function" then

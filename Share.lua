@@ -905,6 +905,15 @@ function EVAL_TITLE_SET_CUSTOM(name)
   t.customAt = shNowT()
   return true
 end
+-- ★★★1.73.42r 重置（用户：「给我一个重置删除自定义的命令.测试」）——**只给命令用**（诊断/测试），
+--   正常玩法里没有这条路：彩蛋一旦落笔就不可改（EVAL_TITLE_SET_CUSTOM 的「只有一次」守卫仍然生效）。
+--   ★为什么要它：想再看一遍弹窗 / 想重新抽一次手气，必须能回到干净状态，否则测一次就废一个号。
+function EVAL_TITLE_RESET_ALL()
+  local cfgT = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(cfgT) ~= "table" then return false end
+  cfgT.title = { tier = 0, draws = {} } -- ★档位与五档抽取记录一起清（下次重算会重新抽）
+  return true
+end
 -- 诊断/测试用（游戏里没有「清空彩蛋」这条路：只有一次机会）
 function EVAL_TITLE_CLEAR_CUSTOM()
   local t = shTitleState()

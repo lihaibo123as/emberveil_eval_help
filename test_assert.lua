@@ -11519,6 +11519,67 @@ do
   print("  创世者亲临：命令触发 · 匾额/道白/落笔文案走三语言 · 回声行保底 · 落笔写档+专属淡金 · 仅此一次")
 end
 
+-- 151) ★★★1.73.42r 重置命令（诊断/测试用）：删除自定义名号 · 重置头衔进度并立即重抽
+do
+  local keepProfs151 = EVAL_HELP_CONFIG.war.profiles
+  local keepTitle151 = EVAL_HELP_CONFIG.title
+  local function prof151(score)
+    local p = { name = "R" .. tostring(score), skills = {} }
+    for i = 1, score do table.insert(p.skills, { skill = "技能" .. i, groups = {} }) end
+    return p
+  end
+  EVAL_HELP_CONFIG.war.profiles = { prof151(2), prof151(5), prof151(14) } -- 普通 + 稀有 + 源代码 → 5 档
+  EVAL_HELP_CONFIG.title = nil
+  eq(EVAL_TITLE_REFRESH(), 5, "①前置：按方案库算到 5 档")
+  local d1_151 = EVAL_TITLE_STATE().draws[1]
+  -- ★★★1.73.42r 直接验**重置函数**：档位与**抽取记录**必须一起清（只清档位 = 下次刷新不会重抽 → 重置形同虚设）
+  EVAL_TITLE_SET_CUSTOM("再来一个")
+  eq(type(EVAL_TITLE_STATE().draws[5]) == "number", true, "①前置：重置前五档有抽取记录")
+  eq(EVAL_TITLE_RESET_ALL(), true, "①前置：重置函数跑得通")
+  local after151 = EVAL_TITLE_STATE()
+  eq(after151.tier, 0, "①★★★重置后档位清零")
+  eq(after151.custom, nil, "①★★★自定义名号也清零")
+  local n151 = 0
+  for _ in pairs(after151.draws or {}) do n151 = n151 + 1 end
+  eq(n151, 0, "①★★★抽取记录必须**清空**（残留 " .. tostring(n151) .. " 条 = 重抽抽不动）")
+  eq(EVAL_TITLE_REFRESH(), 5, "①收尾：重算又回到 5 档（记录会重新抽）")
+  local d1_151b = EVAL_TITLE_STATE().draws[1]
+  eq(type(d1_151b) == "number", true, "①★★重算后重新抽了卡（" .. tostring(d1_151b) .. "）")
+  eq(EVAL_TITLE_SET_CUSTOM("测试之名"), true, "②前置：先写一个自定义名号")
+  eq(EVAL_TITLE_CURRENT().custom, true, "②前置：当前显示的是自定义名号")
+  TEST.chat = nil
+  SlashCmdList["EVALHELP"]("go 重置名号")
+  eq(((EVAL_HELP_CONFIG.title or {}).custom), nil, "②★★★/eh go 重置名号 真的删掉了自定义名号（落盘为证）")
+  eq(EVAL_TITLE_STATE().tier, 5, "②★★档位不受影响（只删名号，不动进度）")
+  eq(EVAL_TITLE_STATE().draws[1], d1_151b, "②★★抽卡记录也不动（与重置后重抽到的那张比，不是更早那张）")
+  eq(EVAL_TITLE_CURRENT().custom, false, "②★★现在显示的是抽到的头衔")
+  eq(string.find(tostring(TEST.chat or ""), "已删除自定义名号", 1, true) ~= nil, true, "②★如实播报删掉了")
+  TEST.chat = nil
+  eq(EVAL_TITLE_SET_CUSTOM("第二春"), true, "②★★★重置之后**又可以写一次**（测试命令的意义所在）")
+  -- ③ 重置头衔：档位 + 五档记录一起清，命令内立即重算重抽
+  TEST.chat = nil
+  SlashCmdList["EVALHELP"]("go 重置头衔")
+  local st151 = EVAL_TITLE_STATE()
+  eq(st151.tier, 5, "③★★重置后**立刻按当前方案库重算**（仍到 5 档，" .. tostring(st151.tier) .. "）")
+  eq(type(st151.draws[5]) == "number", true, "③★★★重算后重新抽了卡（五档都有记录）")
+  eq(st151.custom, nil, "③★★自定义名号也一起清了")
+  eq(string.find(tostring(TEST.chat or ""), "已重置头衔进度", 1, true) ~= nil, true, "③★如实播报重置")
+  -- ④ 本来就没什么可清时，也要如实说
+  EVAL_HELP_CONFIG.title = nil
+  TEST.chat = nil
+  SlashCmdList["EVALHELP"]("go 重置名号")
+  eq(string.find(tostring(TEST.chat or ""), "本来就没有自定义名号", 1, true) ~= nil, true, "④★没得删时如实说「本来就没有」")
+  TEST.chat = nil
+  EVAL_HELP_CONFIG.title = { tier = 0, draws = {} }
+  SlashCmdList["EVALHELP"]("go 重置头衔")
+  eq(string.find(tostring(TEST.chat or ""), "本来就没有头衔进度", 1, true) ~= nil, true, "④★没进度时也如实说")
+  -- ⑤ 还原现场
+  EVAL_HELP_CONFIG.war.profiles = keepProfs151
+  EVAL_HELP_CONFIG.title = keepTitle151
+  TEST.chat = nil
+  print("  头衔重置命令：删除自定义名号（进度不动，可再写）· 重置档位与五档记录并立即重抽 · 没得清时如实说")
+end
+
 print("ALL TESTS PASS")
 
   local sd142 = EVAL_HELP_CONFIG.shareSealDemo
