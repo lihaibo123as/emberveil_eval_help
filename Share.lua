@@ -546,13 +546,23 @@ end
 --     ② 会弹的话是**哪条 Lua 路径**画的（能不能被我们截住、换成方案详情）。
 --   做法：把候选入口包一层**只记账、不改行为**（原函数照调、幂等），用户悬停/点击后读账本。
 local SH_HOVER = { installed = false, hooks = {}, log = {}, counts = {}, sent = {}, scriptProbe = nil }
+-- ★★★1.73.41d 事件即刷盘（真事故：用户悬停完直接 /reload → 账本没落盘，因为原来只有「报告」才写）
+--   每次记账都把账本写进存档字段（小表、事件稀少，成本可忽略）：这样用户**只需悬停 + /reload**。
+local function shHoverFlush()
+  local c = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(c) ~= "table" then return end
+  c.shareProbeHover = { hooks = SH_HOVER.hooks, log = SH_HOVER.log, counts = SH_HOVER.counts,
+                        scriptProbe = SH_HOVER.scriptProbe, sent = SH_HOVER.sent }
+end
 local function shHoverBump(name)
   SH_HOVER.counts[name] = (SH_HOVER.counts[name] or 0) + 1
+  shHoverFlush() -- ★事件即刷盘
 end
 local function shHoverNote(hook, link)
   if table.getn(SH_HOVER.log) >= 40 then return end
   table.insert(SH_HOVER.log, { hook = tostring(hook), link = tostring(link or ""),
                                n = string.len(tostring(link or "")) })
+  shHoverFlush() -- ★事件即刷盘
 end
 function EVAL_SHARE_HOVER_HOOKS()
   if SH_HOVER.installed then return SH_HOVER.hooks end
@@ -628,10 +638,11 @@ function EVAL_SHARE_PROBE_REPORT()
   end
   emit("===== 探针结果（发出 vs 收到）=====")
   if table.getn(p.sent or {}) == 0 and table.getn(p.ladderSent or {}) == 0 then
-    emit("  还没发过探针 → 先 /eh go 链接探针 或 /eh go 长度探针")
-    return out
+    -- ★★★1.73.41d 真事故：这里原来是 `return out`（早退）→ 用户在**没跑分片探针的会话里**敲报告，
+    --   悬停账本就被吞掉、永远落不了盘（用户实测：12:53 存档里 shareProbeHover 一片空白）。
+    emit("  （本会话还没发过分片探针：链接/长度部分无数据；下面的悬停账本照样输出）")
   end
-  for i = 1, table.getn(p.sent or {}) do
+  for i = 1, table.getn(p.sent or {}) do -- ★无数据时这个循环自然不进
     local f = p.sent[i]
     local r = shProbeFind("link", f.tag)
     local v, extra

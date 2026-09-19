@@ -10766,6 +10766,28 @@ do
      "⑤★★★/eh go 悬停探针 真的执行了（命令在 go 组里、前缀要对）")
   eq(table.getn(EVAL_SHARE_HOVER_STATE().sent or {}), 3, "⑤★命令跑完仍只有三条最新形态")
   TEST.chat = nil
+  -- ⑥ ★★★1.73.41d 真事故一：账本要**事件即刷盘**——用户悬停完直接 /reload 就得能读到
+  --   （原来只有「报告命令」才写；用户实测 12:53 存档里 shareProbeHover 一片空白）
+  EVAL_HELP_CONFIG.shareProbeHover = nil
+  TEST.gtHyperlinks = {}
+  GameTooltip:SetHyperlink("|cffffffff|Hitem:1:0:0:0:0:0:0:0|h[刷盘测试]|h|r")
+  eq(type(EVAL_HELP_CONFIG.shareProbeHover) == "table", true,
+     "⑥★★★账本**事件即刷盘**（不用先跑报告命令）")
+  -- ⑦ ★★★1.73.41d 真事故二：报告不许因「本会话没跑分片探针」就**早退**（会把悬停账本吞掉）
+  local st142 = EVAL_SHARE_PROBE_STATE()
+  if type(st142.forms) == "table" then
+    for i = table.getn(st142.forms), 1, -1 do table.remove(st142.forms, i) end
+  end
+  if type(st142.ladder) == "table" then
+    for i = table.getn(st142.ladder), 1, -1 do table.remove(st142.ladder, i) end
+  end
+  TEST.chat = ""
+  EVAL_SHARE_PROBE_REPORT()
+  local c142 = tostring(TEST.chat or "")
+  eq(string.find(c142, "还没发过分片探针", 1, true) ~= nil, true, "⑦★无数据时如实说明")
+  eq(string.find(c142, "悬停探针账本", 1, true) ~= nil, true,
+     "⑦★★★无数据也照样输出悬停账本（早退就把它吞了）")
+  TEST.chat = nil
   print("  悬停探针：挂钩幂等+透传+记账 · 三条形态（自定义/假物品/真物品对照）· 账本落盘 · 命令接线")
 end
 print("ALL TESTS PASS")
