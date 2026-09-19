@@ -10872,7 +10872,8 @@ do
   eq(info.score, 13, "整行评分 13")
   eq(info.tierName, "源代码", "整行品阶 = 源代码")
   eq(info.rank, "筑基", "整行境界 = 筑基（10 级）")
-  eq(string.find(info.line, "分享了一份传家宝", 1, true) ~= nil, true, "整行含「分享了一份传家宝」")
+  eq(string.find(info.line, " 分享了 → ", 1, true) ~= nil, true, "整行含「分享了 →」（1.73.42k 由「分享了一份传家宝」改短）")
+  eq(string.find(info.line, "传家宝", 1, true) == nil, true, "★★整行不许再有「传家宝」（用户要求）")
   eq(string.find(info.line, "[源代码秘籍·甲]", 1, true) ~= nil, true, "整行含 [品阶秘籍·方案名]")
   eq(string.find(info.line, info.comment, 1, true) ~= nil, true, "整行含评语")
   eq(string.find(info.line, "|cffb87333", 1, true) ~= nil, true, "整行含暗金色码")
@@ -10948,7 +10949,7 @@ do
   eq(EVAL_SHARE_SEND("GUILD"), true, "①分享能发出")
   local seal = tostring((EVAL_SHARE_SEAL_STATE() or {}).last or "")
   eq(string.len(seal) > 0, true, "①★★★算出了封皮行")
-  eq(string.find(seal, "分享了一份传家宝", 1, true) ~= nil, true, "①★★封皮行含「分享了一份传家宝」")
+  eq(string.find(seal, " 分享了 → ", 1, true) ~= nil, true, "①★★封皮行含「分享了 →」")
   eq(string.find(seal, "|HEHPF:", 1, true) ~= nil, true, "①★★封皮行带可点链接（载荷=传输 id）")
   eq(string.find(seal, "秘籍·", 1, true) ~= nil, true, "①★★封皮行含 [品阶秘籍·方案名]")
   eq(string.find(seal, "|T", 1, true) == nil, true, "①★封皮行不含 |T（实测不可用）")
@@ -11025,7 +11026,7 @@ do
   EVAL_TEST_SIR_CLICK("player:Ionol")
   eq(string.find(tostring(TEST.chat or ""), "还没收齐", 1, true) == nil, true, "③★非 EHPF 链接不进入口（原样放行）")
   TEST.chat = nil
-  print("  封皮行：传家宝 + 品阶秘籍 + 可点链接 · 立即发 · 收齐缓存 · 点击直接导入 · 未命中如实提示")
+  print("  封皮行：分享了 → + 品阶秘籍 + 可点链接 · 立即发 · 收齐缓存 · 点击直接导入 · 未命中如实提示")
 end
 
 -- 145) ★★★1.73.42i 收到分享的详情弹窗「品阶栏」：图标 + 符号 + 品阶/评分 + 发送端境界 + 评语
@@ -11048,7 +11049,9 @@ do
     eq(r5.icon, EVAL_SHARE_SEAL_ICON(5), "①★★★图标 = 该品阶的图标（同一来源，不另写一份）")
     eq(string.find(r5.head, "✸[源代码秘籍·甲]", 1, true) ~= nil, true, "①★★头一行 = 符号 + [品阶秘籍·名]")
     eq(string.find(r5.meta, "品阶：源代码（评分 14）", 1, true) ~= nil, true, "①★★含品阶与评分")
-    eq(string.find(r5.meta, "境界：炼气", 1, true) ~= nil, true, "①★★含发送端境界")
+    eq(r5.rankFrom, "seal", "①★★方案里没写等级 → 境界退回来信（seal）")
+    eq(string.find(r5.meta, "炼气", 1, true) ~= nil, true, "①★★含发送端境界")
+    eq(string.find(r5.meta, r5.rankColor .. "炼气|r", 1, true) ~= nil, true, "①★★境界带自己的色码（1.73.42k）")
     eq(string.find(r5.commentLine, "天书原文，凡人勿近。", 1, true) ~= nil, true, "①★★含发送端评语")
   end
   local reps145 = { 1, 4, 7, 10, 13 }
@@ -11106,7 +11109,7 @@ do
   EVAL_PROFILE_TO_TEXT = keepToText145
   local sid145, seal145 = nil, nil
   for _, m in ipairs(collect145()) do
-    if string.find(m, "分享了一份传家宝", 1, true) then seal145 = m end
+    if string.find(m, " 分享了 → ", 1, true) then seal145 = m end
   end
   eq(type(seal145) == "string", true, "③★★封皮行发出来了")
   sid145 = string.match(tostring(seal145), "|HEHPF:(%x+)|h")
@@ -11134,7 +11137,8 @@ do
   local meta145 = (((EVAL_SHARE_SEAL_STATE() or {}).meta) or {})[tostring(sid145)]
   eq(type(meta145) == "table", true, "③★★封皮行解析出发送端信息（meta 里有这一笔）")
   if type(meta145) == "table" then
-    eq(string.find(tostring(view145.meta), "境界：" .. tostring(meta145.rank or "?"), 1, true) ~= nil, true,
+    eq(view145.rankFrom, "seal", "③★★★方案里没写等级 → 弹窗境界取自封皮行（来源如实标 seal）")
+    eq(string.find(tostring(view145.meta), tostring(meta145.rank or "?"), 1, true) ~= nil, true,
        "③★★★弹窗里的境界 = 封皮行里**发送端**的境界（" .. tostring(meta145.rank) .. "）")
     eq(string.find(tostring(view145.comment), tostring(meta145.comment or "?"), 1, true) ~= nil, true,
        "③★★★弹窗里的评语 = 发送端那条评语")
@@ -11158,7 +11162,7 @@ do
   EVAL_PROFILE_TO_TEXT = keepToText5
   local one5, seal5 = nil, nil
   for _, m in ipairs(collect145()) do
-    if string.find(m, "分享了一份传家宝", 1, true) then seal5 = m
+    if string.find(m, " 分享了 → ", 1, true) then seal5 = m
     else one5 = m end
   end
   eq(type(one5) == "string" and type(seal5) == "string", true, "⑤前置：单片分享 = 1 片 + 1 封皮")
@@ -11255,6 +11259,81 @@ do
   eq(select(2, EVAL_SHARE_SEAL_TIER(13)).color, "|cffb87333", "⑤暗金色码留在源码")
   TEST.chat = nil
   print("  分享文案三语言：62 键逐语言齐全 · 中文原文逐字校验 · 切语言四处读值口即时生效 · 符号/色码仍在源码")
+end
+
+-- 147) ★★★1.73.42k 境界 = **方案里最大的技能等级**（各档一色）+ 文案「分享了」（用户真机反馈的三条）
+--   用户原话：「用户的等级根据他方案内的最大等级来对应. 并且加上不同的字体颜色. 分享了一份传家宝调整 分享了 三个字.」
+do
+  local function lvTxt(levels) -- 造一份「技能带等级」的方案文本（等级与官方语法同形：技能(60)）
+    local s = "# 方案: 甲"
+    for i = 1, table.getn(levels) do s = s .. "\n- 技能" .. i .. "(" .. tostring(levels[i]) .. ")" end
+    return s
+  end
+  local rankLevels = { 1, 10, 20, 30, 40, 50, 60 }
+  -- ① 读值口：方案里最大的技能等级
+  eq(EVAL_SHARE_SEAL_MAXLEVEL(lvTxt({ 5, 60, 30 })), 60, "①★★最大技能等级 = 60（取最大，不是取第一条）")
+  eq(EVAL_SHARE_SEAL_MAXLEVEL(lvTxt({ 7 })), 7, "①★单条等级也能取")
+  eq(EVAL_SHARE_SEAL_MAXLEVEL("# 方案: 甲\n- 技能甲"), nil, "①★★没写等级 → nil（不瞎猜）")
+  eq(EVAL_SHARE_SEAL_MAXLEVEL("# 方案: 甲\n- 技能甲(等级 3)"), 3, "①★「等级 3」也取得出数字")
+  eq(EVAL_SHARE_SEAL_MAXLEVEL("# 方案: 甲\n- 技能甲(大)"), nil, "①★括号里没有数字 → nil")
+  -- ② 分享行的境界跟着**方案内最大等级**（不再看角色/形参等级）
+  local iMax = EVAL_SHARE_SEAL_INFO(lvTxt({ 5, 30, 60 }), 1, 1) -- 形参故意给 1（炼气），方案说 60
+  eq(type(iMax) == "table", true, "②前置：整行算得出来")
+  if iMax then
+    eq(iMax.rank, "大乘", "②★★★境界 = 方案内最大等级（60 → 大乘），形参 level 不作数")
+    eq(iMax.rankFrom, "plan", "②★★来源如实标 plan")
+    eq(iMax.rankIdx, 7, "②★档位序号 = 7")
+    eq(string.find(iMax.line, iMax.rankColor .. "[大乘]|r", 1, true) ~= nil, true, "②★★★境界带**自己的颜色**（" .. tostring(iMax.rankColor) .. "）")
+  end
+  local iLow = EVAL_SHARE_SEAL_INFO(lvTxt({ 1, 9 }), 60, 1)
+  if iLow then
+    eq(iLow.rank, "炼气", "②★★方案内最大等级 9 → 炼气（角色 60 也不影响）")
+    eq(iLow.rankColor, EVAL_SHARE_SEAL_RANK_INFO(1).color, "②★炼气用自己的色")
+  end
+  local iNo = EVAL_SHARE_SEAL_INFO("# 方案: 甲\n- 技能甲", 30, 1)
+  if iNo then
+    eq(iNo.rank, "元婴", "②★★方案里没写等级 → 退回显式/角色等级（30 → 元婴）")
+    eq(iNo.rankFrom, "char", "②★★来源如实标 char（**不假装**是方案算出来的）")
+  end
+  -- ③ 7 档 7 色：都不重复、都是 8 位色码（6 位本客户端不解析）
+  local seen147 = {}
+  for i = 1, 7 do
+    local ri = EVAL_SHARE_SEAL_RANK_INFO(rankLevels[i])
+    eq(ri.idx, i, "③档位序号 " .. i)
+    eq(type(ri.color) == "string" and string.len(ri.color) == 10, true, "③★★色码 8 位（|c + 8 = 10 字节）：" .. tostring(ri.color))
+    eq(string.sub(ri.color, 1, 2) == "|c", true, "③色码前缀 |c")
+    eq(seen147[ri.color] == nil, true, "③★★★境界色不重复：" .. tostring(ri.color))
+    seen147[ri.color] = true
+  end
+  eq(EVAL_SHARE_SEAL_RANK_COLOR_OF("大乘") == EVAL_SHARE_SEAL_RANK_INFO(60).color, true, "③★★按名字也能找回颜色（封皮行里只有名字）")
+  eq(EVAL_SHARE_SEAL_RANK_COLOR_OF("不存在的境界") == EVAL_SHARE_SEAL_RANK_INFO(1).color, true, "③★找不到 → 最低档色（不猜）")
+  -- ④ 文案改成「分享了」：整行不许再出现「传家宝」
+  local iTxt = EVAL_SHARE_SEAL_INFO(lvTxt({ 13 }), 60, 1)
+  if iTxt then
+    eq(string.find(iTxt.line, " 分享了 → ", 1, true) ~= nil, true, "④★★★文案是「分享了」（用户要求三个字）")
+    eq(string.find(iTxt.line, "传家宝", 1, true) == nil, true, "④★★★整行不许再有「传家宝」")
+  end
+  -- ⑤ 品阶栏：境界优先由方案文本复算（与分享行同源）→ 两边**逐字一致**
+  local rowP = EVAL_SHARE_SEAL_ROW(lvTxt({ 13 }), { rank = "炼气", comment = "天书原文，凡人勿近。" })
+  eq(type(rowP) == "table", true, "⑤前置：品阶栏算得出来")
+  if rowP and iTxt then
+    eq(rowP.rank, iTxt.rank, "⑤★★★弹窗境界 = 分享行境界（同一套判定，必然一致）")
+    eq(rowP.rankFrom, "plan", "⑤★★来源 plan（不必等封皮行）")
+    eq(string.find(rowP.meta, rowP.rankColor .. rowP.rank .. "|r", 1, true) ~= nil, true, "⑤★★弹窗里的境界也带色")
+  end
+  -- ⑥ 样例命令仍要覆盖 7 档境界（等级已写进方案文本，否则 7 行会全是同一档）
+  local keepDemo147 = EVAL_HELP_CONFIG.shareSealDemo -- ★末尾那条「命令接线」判据要读这个落盘证人
+  TEST.chat = nil
+  local dn147 = EVAL_SHARE_SEAL_DEMO()
+  eq(dn147, 12, "⑥★★样例仍是 12 行（" .. tostring(dn147) .. "）")
+  local dtxt147 = tostring(TEST.chat or "")
+  for i = 1, 7 do
+    local ri6 = EVAL_SHARE_SEAL_RANK_INFO(rankLevels[i])
+    eq(string.find(dtxt147, ri6.color .. "[" .. ri6.name .. "]|r", 1, true) ~= nil, true, "⑥★★样例里有**带色**的境界：" .. ri6.name)
+  end
+  EVAL_HELP_CONFIG.shareSealDemo = keepDemo147 -- ★原样还回去（不要吃掉别人要读的证人）
+  TEST.chat = nil
+  print("  境界=方案内最大技能等级（各档一色）· 文案「分享了」· 弹窗与分享行同源 · 样例 7 档带色")
 end
 
 print("ALL TESTS PASS")

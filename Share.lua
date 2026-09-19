@@ -502,7 +502,9 @@ local function shOnMsg(msg, sender, ev)
       -- ★★★1.73.42i 顺手把「只有发送端知道」的两样东西记下来，供接收弹窗的品阶栏用：
       --   ① 境界 = 封皮行开头的 [境界]；② 评语 = 链接显示段 `|h[品阶秘籍·名]|h` 里方括号之后那段。
       --   ★解析不出来就**不记** → 弹窗如实写「未知」，绝不拿本机角色/本机随机评语冒充发送端的。
-      local rank = string.match(msg, "^%[([^%]]*)%]")
+      -- ★1.73.42k 境界前面多了**颜色码**（`|cff9d9d9d[炼气]|r`）→ 原来锚定行首的 `^%[` 会直接失效，
+      --   改成取**行内第一个方括号组**（封皮行里境界总在最前，品阶方括号在链接显示段里，排在它后面）。
+      local rank = string.match(msg, "%[([^%]]*)%]")
       local disp = string.match(msg, "|HEHPF:[^|]*|h(.-)|h")
       local comment = nil
       if disp then
@@ -692,7 +694,13 @@ local function shProbeFind(mode, tag)
 end
 -- 方案名（显示用）：取导出文本首行 `# 方案: 名` 里的「名」；解析不出就退回「方案」
 -- ===== 1.73.42 分享显示行：境界 · 品阶 · 评语（用户 2026-09-19 定稿）==================
--- 行格式：`<境界><角色名> 分享了一份传家宝 → [<品阶>秘籍·<方案名>]  <评语>`
+-- 行格式：`<境界色>[<境界>]|r<角色名> 分享了 → <品阶色>[<品阶>秘籍·<方案名>]|r  <评语>`
+--   ★★★1.73.42k（用户 2026-09-19 真机反馈，三条一起改）：
+--     ① **境界 = 方案里最大的技能等级**（不再看谁的等级）：「用户的等级根据他方案内的最大等级来对应」；
+--        等级本来就写在方案文本里（`- 技能(60)`）→ 发送端与接收端算出来必然一致；
+--        方案里一个等级都没写 → 退回角色等级（如实记 rankFrom，不假装是方案算出来的）；
+--     ② **境界各档一色**（用户：「加上不同的字体颜色」）→ SH_SEAL_RANK_COLORS；
+--     ③ 文案「分享了一份传家宝」→「**分享了**」（用户：「调整 分享了 三个字」）。
 --   品阶 = **技能条数 + 每条技能里的条件数**（评分制）：≤3 普通 / 4-6 稀有 / 7-9 珍稀 / 10-12 绝版 / **≥13 源代码**；
 --   颜色：白 |cffffffff · 绿 |cff1eff00 · 紫 |cffa335ee · 橙 |cffff8000 · **暗金 |cffb87333**（用户定的）；
 --   评语：每档 **10 条**（用户要求），分享时**随机抽一条**。★这些文案下一步要迁进 Locales 三语言（现为本轮预览用）。
@@ -718,15 +726,51 @@ local SH_SEAL_COMMENTS = {
   { "SEAL_C5_1", "SEAL_C5_2", "SEAL_C5_3", "SEAL_C5_4", "SEAL_C5_5", "SEAL_C5_6", "SEAL_C5_7", "SEAL_C5_8", "SEAL_C5_9", "SEAL_C5_10" },
 }
 local SH_SEAL_SYMBOLS = { "·", "◆", "✦", "★", "✸" }
-function EVAL_SHARE_SEAL_RANK(level)
+-- ★★★1.73.42k 境界的颜色（用户：「加上不同的字体颜色」）：7 档一色，越往上越亮（沿用本项目稀有度色系语汇）——
+--   炼气 灰 · 筑基 白 · 金丹 绿 · 元婴 蓝 · 化神 紫 · 炼虚 橙 · 大乘 **暗金**。
+--   ★色码必须 8 位（`|c` + AARRGGBB）：6 位本客户端**不解析**，会把色码原文画进聊天（1.73.19 实测）。
+local SH_SEAL_RANK_COLORS = {
+  "|cff9d9d9d", "|cffffffff", "|cff1eff00", "|cff0070dd", "|cffa335ee", "|cffff8000", "|cffb87333",
+}
+-- 境界档位信息（序号 + 名 + 色）：名字走 Locales，颜色留在源码（颜色是显示规则、不是文案）
+function EVAL_SHARE_SEAL_RANK_INFO(level)
   level = tonumber(level) or 1
+  local idx = table.getn(SH_SEAL_RANKS)
   for i = 1, table.getn(SH_SEAL_RANKS) do
     local r = SH_SEAL_RANKS[i]
-    if level >= r[1] and level <= r[2] then return L(r[3]) end
+    if level >= r[1] and level <= r[2] then idx = i break end
   end
-  -- 越界兜底：低于 1 → 最低档；高于 60 → **最高档**（大乘）
-  if level < 1 then return L(SH_SEAL_RANKS[1][3]) end
-  return L(SH_SEAL_RANKS[table.getn(SH_SEAL_RANKS)][3])
+  if level < 1 then idx = 1 end -- 低于 1 → 最低档；高于 60 → 最高档（大乘），与老行为逐字一致
+  local key = SH_SEAL_RANKS[idx][3]
+  return { idx = idx, key = key, name = L(key), color = SH_SEAL_RANK_COLORS[idx] or SH_SEAL_RANK_COLORS[1], level = level }
+end
+-- 按**名字**回找颜色（封皮行里只有名字，没有档位序号）：找不到就给最低档色（不猜、不编）
+function EVAL_SHARE_SEAL_RANK_COLOR_OF(name)
+  local want = tostring(name or "")
+  for i = 1, table.getn(SH_SEAL_RANKS) do
+    if L(SH_SEAL_RANKS[i][3]) == want then return SH_SEAL_RANK_COLORS[i] or SH_SEAL_RANK_COLORS[1] end
+  end
+  return SH_SEAL_RANK_COLORS[1]
+end
+-- ★★★1.73.42k 境界的依据 = **方案里最大的技能等级**（用户要求）。
+--   ① 它是**方案的属性** → 发送端与接收端各自复算，结果必然一致（不必靠封皮行传）；
+--   ② 不再受「谁的等级高」影响（原来用 UnitLevel("player")，同一条分享在不同人眼里境界不同）。
+--   ★等级串可能是「60」「等级 3」「Rank 5」→ 取其中第一段数字；没写等级/没有数字 → 返回 nil，
+--     由上层决定兜底（分享行退回角色等级；弹窗退回封皮行的境界，再不行如实「未知」）。
+function EVAL_SHARE_SEAL_MAXLEVEL(text)
+  if type(EVAL_PROFILE_FROM_TEXT) ~= "function" then return nil end
+  local p = EVAL_PROFILE_FROM_TEXT(tostring(text or ""))
+  if type(p) ~= "table" or type(p.skills) ~= "table" then return nil end
+  local best = nil
+  for i = 1, table.getn(p.skills) do
+    local rk = p.skills[i] and p.skills[i].rank
+    local n = tonumber(string.match(tostring(rk or ""), "%d+"))
+    if n and (best == nil or n > best) then best = n end
+  end
+  return best
+end
+function EVAL_SHARE_SEAL_RANK(level)
+  return EVAL_SHARE_SEAL_RANK_INFO(level).name
 end
 -- 评分 = 技能条数 + 技能内每个条件（★复用项目**同一个**导入解析器，不另写一套）
 function EVAL_SHARE_SEAL_SCORE(text)
@@ -762,7 +806,9 @@ end
 -- ★★★1.73.42i 详情弹窗「品阶栏」的**单一读值口**（渲染与断言同源，纯函数）。
 --   ★分成两半，各自的诚实边界写死在返回值里（meta 为 nil 时就是「未知」三个字的来源）：
 --     ① 品阶/评分/图标/符号/方案名：由**收到的方案文本**复算 —— 品阶本来就是方案的函数，接收端能独立算出来；
---     ② 境界/评语：只有发送端知道（封皮行解析来的 meta）→ 拿不到就如实写「未知（未收到封皮行）」。
+--     ② **境界**：先由方案文本复算（1.73.42k = 方案里最大的技能等级，发送端与接收端必然一致）；
+--        方案里没写等级 → 才退回封皮行里发送端的境界；两者都没有 → 如实「未知」（不拿本机角色编造）。
+--     ③ 评语：只有发送端知道（封皮行解析来的 meta）→ 拿不到就如实写「未知（未收到封皮行）」。
 --   ★返回 nil 的唯一情形：文本解析不出方案（那就别画品阶栏，而不是随便给一档）。
 function EVAL_SHARE_SEAL_ROW(text, meta)
   local score = EVAL_SHARE_SEAL_SCORE(text)
@@ -771,15 +817,23 @@ function EVAL_SHARE_SEAL_ROW(text, meta)
   local icon = EVAL_SHARE_SEAL_ICON(idx)
   local sym = EVAL_SHARE_SEAL_SYMBOL(idx)
   local plan = shSealName(text or "")
-  local rank = (type(meta) == "table") and meta.rank or nil
+  local ri, rank, rankColor, rankFrom = nil, nil, nil, nil
+  local lv = EVAL_SHARE_SEAL_MAXLEVEL(text)
+  if lv then
+    ri = EVAL_SHARE_SEAL_RANK_INFO(lv)
+    rank, rankColor, rankFrom = ri.name, ri.color, "plan"
+  elseif type(meta) == "table" and type(meta.rank) == "string" and meta.rank ~= "" then
+    rank, rankColor, rankFrom = meta.rank, EVAL_SHARE_SEAL_RANK_COLOR_OF(meta.rank), "seal"
+  end
   local comment = (type(meta) == "table") and meta.comment or nil
-  local rankTxt = "未知（未收到封皮行）"
-  if type(rank) == "string" and rank ~= "" then rankTxt = rank end
+  local rankTxt = "未知（方案里没写等级，也没收到封皮行）"
+  if rank then rankTxt = tostring(rankColor) .. rank .. "|r" end
   local cmtTxt = "未知（未收到封皮行）"
   if type(comment) == "string" and comment ~= "" then cmtTxt = comment end
   return {
     tier = idx, tierName = tier.name, color = tier.color, symbol = sym, score = score,
-    icon = icon, plan = plan, rank = rank, comment = comment,
+    icon = icon, plan = plan, comment = comment,
+    rank = rank, rankIdx = ri and ri.idx or nil, rankColor = rankColor, rankFrom = rankFrom,
     head = tier.color .. sym .. "[" .. tier.name .. "秘籍·" .. plan .. "]|r",
     meta = "品阶：" .. tier.name .. "（评分 " .. tostring(score) .. "）· 境界：" .. rankTxt,
     commentLine = "评语：" .. cmtTxt,
@@ -791,15 +845,23 @@ function EVAL_SHARE_SEAL_INFO(text, level, forcedIdx)
   if score == nil then return nil end -- 算不出就如实 nil
   local idx, tier = EVAL_SHARE_SEAL_TIER(score)
   local comment, ci = EVAL_SHARE_SEAL_COMMENT(idx, forcedIdx)
-  local rank = EVAL_SHARE_SEAL_RANK(level or ((type(UnitLevel) == "function") and UnitLevel("player") or 1))
+  -- ★★★1.73.42k 境界 = **方案里最大的技能等级**（用户要求）；方案里没写等级才退回显式参数/角色等级，
+  --   来源如实记在 rankFrom 里（plan / char）——判据与弹窗都读它，免得「看起来一样、其实来源不同」。
+  local lv, from = EVAL_SHARE_SEAL_MAXLEVEL(text), "plan"
+  if lv == nil then
+    from = "char"
+    lv = tonumber(level) or ((type(UnitLevel) == "function") and UnitLevel("player") or 1)
+  end
+  local ri = EVAL_SHARE_SEAL_RANK_INFO(lv)
   local who = (type(UnitName) == "function") and UnitName("player") or "?"
   local name = shSealName(text or "")
-  -- ★颜色包住整个方括号（看着更像品阶；也让 `[品阶秘籍·名]` 能被文字直接搜到）
+  -- ★两个色码：境界各档一色（用户要求）；品阶色包住整个方括号（也让 `[品阶秘籍·名]` 能被文字直接搜到）
   local sym = SH_SEAL_SYMBOLS[idx] or SH_SEAL_SYMBOLS[1]
-  local line = "[" .. rank .. "]" .. tostring(who) .. " 分享了一份传家宝 → " .. tier.color .. sym ..
+  local line = ri.color .. "[" .. ri.name .. "]|r" .. tostring(who) .. " 分享了 → " .. tier.color .. sym ..
                "[" .. tier.name .. "秘籍·" .. name .. "]|r  " .. comment
   return { score = score, tier = idx, tierName = tier.name, color = tier.color,
-           rank = rank, comment = comment, commentIdx = ci, plan = name, line = line, symbol = sym }
+           rank = ri.name, rankIdx = ri.idx, rankColor = ri.color, rankFrom = from, level = lv,
+           comment = comment, commentIdx = ci, plan = name, line = line, symbol = sym }
 end
 -- ★1.73.42b 用户要求：「添加一个测试命令，输入所有类型的分享案例」
 --   一次打出 **5 品阶 × 7 境界** 共 12 行样例（品阶用代表评分 3/5/8/11/14，境界用 1/10/20/30/40/50/60）
@@ -807,20 +869,22 @@ end
 function EVAL_SHARE_SEAL_DEMO()
   local plan = (type(EVAL_PROFILE_TO_TEXT) == "function") and EVAL_PROFILE_TO_TEXT() or "# 方案: 样例"
   local base = "# 方案: " .. shSealName(plan)
-  local function mk(n)
+  -- ★★★1.73.42k 等级**写进方案文本**（`- 技能1(60)`）：境界现在取自「方案里最大的技能等级」，
+  --   所以在形参里传 level 已经不作数了——样例要能让 7 档境界真的各出现一次，就必须把等级写进方案。
+  local function mk(n, lv)
     local s = base
-    for k = 1, n do s = s .. "\n- 技能" .. k end
+    for k = 1, n do s = s .. "\n- 技能" .. k .. (lv and ("(" .. tostring(lv) .. ")") or "") end
     return s
   end
   local reps = { 3, 5, 8, 11, 14 }
   local levels = { 1, 10, 20, 30, 40, 50, 60 }
   local lines = {}
   for i = 1, table.getn(reps) do
-    local info = EVAL_SHARE_SEAL_INFO(mk(reps[i]), 60, i)
+    local info = EVAL_SHARE_SEAL_INFO(mk(reps[i], 60), 60, i) -- 5 品阶（等级固定 60 = 大乘）
     if info then table.insert(lines, info.line) end
   end
   for i = 1, table.getn(levels) do
-    local info = EVAL_SHARE_SEAL_INFO(mk(14), levels[i], i)
+    local info = EVAL_SHARE_SEAL_INFO(mk(14, levels[i]), levels[i], i) -- 7 境界（等级写进方案）
     if info then table.insert(lines, info.line) end
   end
   -- ★★★1.73.42f 判据用的「证人」：把「跑了没 / 跑了几行」写进存档
@@ -1602,7 +1666,11 @@ function EVAL_TEST_SHARE_SEAL_ROW()
   end
   out.head, out.meta, out.comment = rd(shp.sealHead), rd(shp.sealMeta), rd(shp.sealComment)
   local r = shp.sealRow
-  if type(r) == "table" then out.tier, out.rank, out.score = r.tier, r.rank, r.score end
+  if type(r) == "table" then
+    out.tier, out.rank, out.score = r.tier, r.rank, r.score
+    -- ★1.73.42k 判据要验「境界是**方案算的**还是退回来信的」→ 来源与配色也要交出来
+    out.rankFrom, out.rankColor, out.rankIdx = r.rankFrom, r.rankColor, r.rankIdx
+  end
   return out
 end
 -- ★★1.73.42g 点击封皮链接 → 直接导入（SetItemRef 的 EHPF: 分支调它）
