@@ -181,16 +181,41 @@ local function shBuildFor(text)
     bodies[k] = chunkBody(k, n, string.sub(hex, (k - 1) * chunk + 1, k * chunk))
   end
   --     发送队列里**再也不会有第二个来源**（这正是「特殊标识那条路走不通就别留着」的落地）。
-  -- ★★★1.73.43f 用户：「特殊标识那条走不通就用能用的……不能用就删除」⇒ 分享信息**不再自创消息形态**：
-  --   它现在就是一条**与分片逐字节同款结构**的消息（同色前缀 + 同 `|HEHPF:` 链接 + 同 `[标签]|h|r`），
-  --   只把链路里的序号写成 **0/1**（接收端按「i < 1 越界」直接忽略 ⇒ 对接收零影响，老协议也不受影响），
-  --   标签文字换成 `[档位]名 分享了 → [品阶秘籍·名] 评语`。★用的是**已被证明能画**的那条通道。
-  if sealLine and sealLine ~= "" then
-    SH.sealPending = chunkBody(0, 1, "0", sealLine) -- 0/1：形态与分片完全相同，但接收端会当越界丢掉
-  else
-    SH.sealPending = nil
+  -- ★★★1.73.43g 用户：「如果一段话不够用，就把方案信息**分多段话依次发**」——
+  --   真机变异测已经把「一条长消息塞两段色码 / 带方括号的头衔前缀」判成**会被客户端整条吞掉**，
+  --   所以拆成两条，每条只用**已被证明能画**的形态：
+  --     A 身份行 = `|c<身份色><头衔>|r <名字> 分享了`（与自家 EVAL_HELP 行同款：**一段色码 + 纯文本，无链接**）
+  --     B 品阶行 = `|c<品阶色>|HEHPF:<id> 0/1:0|h[<符号><品阶>秘籍·<方案名>]|h|r  <评语>`
+  --              （与分片逐字节同款结构：一段色码 + 链接 + `[标签]|h|r` ✅ 变异测里 [1]/[4] 两条就是这种形态，都能画）
+  --   ★序号仍写 0/1：接收端按「i < 1 越界」忽略，对收方案零影响；两条都带 seal 标记（不算分片）。
+  local sealA, sealB = nil, nil
+  if sealLine and sealLine ~= "" and type(EVAL_SHARE_SEAL_INFO) == "function" then
+    local okI, sinfo = pcall(EVAL_SHARE_SEAL_INFO, text)
+    if okI and type(sinfo) == "table" then
+      local titleTxt = (type(sinfo.titleName) == "string" and sinfo.titleName ~= "") and tostring(sinfo.titleName) or nil
+      local titleCol = (type(sinfo.title) == "table" and type(sinfo.title.color) == "string") and sinfo.title.color or nil
+      local whoB = nil
+      if type(UnitName) == "function" then
+        local okN, vN = pcall(UnitName, "player")
+        if okN and type(vN) == "string" and vN ~= "" then whoB = vN end
+      end
+      if whoB and titleTxt then
+        -- A：一段色码 + 纯文本（无方括号、无链接）—— 与自家 EVAL_HELP 行同款
+        sealA = ((titleCol and (titleCol .. titleTxt .. "|r ")) or (titleTxt .. " ")) .. whoB .. " 分享了"
+      end
+      if type(sinfo.tierName) == "string" and type(sinfo.plan) == "string" then
+        local sym2 = tostring(sinfo.symbol or "")
+        local tierCol2 = (type(sinfo.color) == "string" and sinfo.color ~= "") and sinfo.color or "|cff9ad4ff"
+        local cmt2 = (type(sinfo.comment) == "string") and sinfo.comment or ""
+        -- B：一段品阶色 + 链接（序号 0/1）+ `[标签]|h|r` + 评语 —— 与分片同款结构
+        sealB = tierCol2 .. "|HEHPF:" .. idh .. " 0/1:0|h[" .. sym2 .. tostring(sinfo.tierName) .. "秘籍·" .. tostring(sinfo.plan) .. "]|h|r  " .. cmt2
+      end
+    end
   end
-  SH.sealSentLast = sealLine or ""
+  -- ★1.73.43g 两条分享信息（A 身份行 → B 品阶行）交给发送队列；探针与判据从这里读
+  SH.sealPendA, SH.sealPendB = sealA, sealB
+  SH.sealSentLast = sealB or sealLine or ""
+  SH.sealSentFirst = sealA or ""
   SH.sealLast = SH.sealSentLast
   return bodies -- ★★（上一版把这一行连同旧块一起替换掉了 → shBuildFor 返回 nil、分享直接失败；判据当场抓到）
 end
@@ -217,9 +242,10 @@ function EVAL_SHARE_SEND_PROBE()
     local e = SH.sentLog[i]
     table.insert(log, { seal = e.seal and true or false, at = e.at, s = tostring(e.s or "") }) -- ★完整脚本（判据要数引号；聊天打印时再截断）
   end
-  local seal = tostring(SH.sealSentLast or SH.sealLast or "") -- ★发送侧那条（接收侧有自己的字段）
+  local seal = tostring(SH.sealSentLast or SH.sealLast or "")
+  local sealA2 = tostring(SH.sealSentFirst or "") -- ★发送侧那条（接收侧有自己的字段）
   local probe = { sealLen = string.len(seal), seal = string.sub(seal, 1, 90),
-                  sealPending = (SH.sealPending ~= nil), sealPopped = SH.sealPopped or 0,
+                  sealPending = (SH.sealPendA ~= nil or SH.sealPendB ~= nil), sealA = SH.sealPendA, sealB = SH.sealPendB, sealPopped = SH.sealPopped or 0,
                   queueLen = table.getn(shTxQ), queue = q, sent = log,
                   ticker = (shTxFrame ~= nil),
                   tickerShown = (shTxFrame and type(shTxFrame.IsShown) == "function" and (pcall(shTxFrame.IsShown, shTxFrame) == true)) and true or false,
@@ -227,9 +253,10 @@ function EVAL_SHARE_SEND_PROBE()
   local cfgP = rawget(_G, "EVAL_HELP_CONFIG")
   if type(cfgP) == "table" then cfgP.shProbe = probe end -- ★落盘证人（判据不玩聊天含子串）
   shSay("===== 分享发送 · 取证 =====")
-  shSay("  封皮行：长度 " .. tostring(probe.sealLen) .. " 字节" ..
+  shSay("  身份行：长度 " .. tostring(string.len(sealA2)) .. " 字节 · " .. shRawForPrint(string.sub(sealA2, 1, 90)))
+  shSay("  品阶行：长度 " .. tostring(probe.sealLen) .. " 字节" ..
         ((probe.sealLen == 0) and "（★空串！这就是「没显示」的原因）" or ("：" .. shRawForPrint(string.sub(seal, 1, 110)))))
-  shSay("  封皮进度：排队中残留=" .. tostring(SH.sealPending ~= nil) .. " · 已从队列弹出 " .. tostring(probe.sealPopped) .. " 次")
+  shSay("  分享信息进度：排队中残留=" .. tostring(probe.sealPending) .. "（A/B 两条）· 已从队列弹出 " .. tostring(probe.sealPopped) .. " 次")
   shSay("  队列剩余：" .. tostring(probe.queueLen) .. " 条" .. ((probe.queueLen > 0) and "（★卡住了：发完前别重复点）" or "（已发完）"))
   for i = 1, math.min(4, table.getn(q)) do
     shSay("    " .. i .. (q[i].seal and " [封皮]" or " [分片]") .. " " .. tostring(q[i].len) .. "B · " .. q[i].head)
@@ -373,10 +400,16 @@ local function shEnsureTxTicker()
   end
   pcall(shTxFrame.Show, shTxFrame)
 end
+-- ★1.73.43g 分享信息现在可能有**两条**（A 身份行 / B 品阶行）—— 统一从这里数
+local function shSealCount()
+  local c = 0
+  if type(SH.sealPendA) == "string" and SH.sealPendA ~= "" then c = c + 1 end
+  if type(SH.sealPendB) == "string" and SH.sealPendB ~= "" then c = c + 1 end
+  return c
+end
 function shTxEnqueue(bodies, chanId, target)
   local n = table.getn(bodies)
-  -- ★1.73.43f 上限如实算上分享信息那一条（它排在分片之后）
-  local extra = (type(SH.sealPending) == "string" and SH.sealPending ~= "") and 1 or 0
+  local extra = shSealCount() -- ★上限如实算上分享信息那两条（它们排在分片之后）
   if table.getn(shTxQ) + n + extra > SH_MAX_QUEUE then
     shSay(string.format(L("SH_Q_FULL"), SH_MAX_QUEUE))
     return false
@@ -387,12 +420,16 @@ function shTxEnqueue(bodies, chanId, target)
   -- ★★★1.73.43f 分享信息排在**所有分片之后**（用户：「方案分享最后一步 展示分享信息」）；
   --   它是一条与分片**同款结构**的消息（见 shBuildFor），所以走同一条已被证明能画的通道。
   local hasSeal = false
-  if type(SH.sealPending) == "string" and SH.sealPending ~= "" then
-    table.insert(shTxQ, { body = SH.sealPending, chan = chanId, target = target, seal = true })
-    SH.sealPending = nil
-    hasSeal = true
+  if type(SH.sealPendA) == "string" and SH.sealPendA ~= "" then
+    table.insert(shTxQ, { body = SH.sealPendA, chan = chanId, target = target, seal = true })
+    SH.sealPendA = nil hasSeal = true
   end
-  local total = n + (hasSeal and 1 or 0)
+  if type(SH.sealPendB) == "string" and SH.sealPendB ~= "" then
+    table.insert(shTxQ, { body = SH.sealPendB, chan = chanId, target = target, seal = true })
+    SH.sealPendB = nil hasSeal = true
+  end
+  -- ★条数如实 = 分片 + 分享信息（0~2 条）；两条都排在分片之后
+  local total = n + extra
   if total > 1 then
     shTxLast = shNowT()
     shEnsureTxTicker()
@@ -2407,7 +2444,8 @@ function EVAL_SHARE_CLICK_IMPORT(link)
   return ok and true or false
 end
 function EVAL_SHARE_SEAL_STATE()
-  return { last = SH.sealSentLast or SH.sealLast, recvLast = SH.sealRecvLast, pending = SH.sealPending,
+  return { last = SH.sealSentLast or SH.sealLast, first = SH.sealSentFirst, recvLast = SH.sealRecvLast,
+           pending = (SH.sealPendA ~= nil or SH.sealPendB ~= nil),
            seals = SH.sealSeen or 0, meta = SH.sealMeta or {} } -- ★1.73.42i meta 供判据读；★1.73.43b 收发分开（境界/评语真的解析到了没）
 end
 function EVAL_SHARE_RECENT_STATE()
@@ -2431,7 +2469,7 @@ function EVAL_SHARE_RESET()
   -- ★1.73.43f **发送侧也一起重置**：队列里可能还压着「分享信息」那一条（它在分片之后），
   --   只按 id 数分片的滴干循环会把这条**留在队列里**，下一个用例就会把它当成自己的第一片（真机上=串包，测试里=判据假红）。
   shTxQ = {}
-  SH.sealPending = nil
+  SH.sealPendA, SH.sealPendB = nil, nil
 SH.buf = {} SH.done = {} SH.doneList = {} SH.pending = nil SH.recent = {} SH.recentList = {} SH.sealMeta = {} end -- ★1.73.42i 封皮元数据也清（跨用例不许残留）
 -- ★1.71.2 测试钩子：按分享弹窗的 [导入] 按钮（走它自己的 OnClick 闭包）。
 --   用户报的 bug 正是这条路径漏了刷新——直调 EVAL_IMPORT_TEXT 会绕过它、测不出来。
