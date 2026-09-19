@@ -1005,11 +1005,12 @@ local function tbMenuItems()
   if type(ChatFrame_OpenChat) == "function" or type(ChatEdit_ActivateChat) == "function" then
     add(L("TB_NAMEMENU_WHISPER"), EVAL_TB_NAME_WHISPER)
   end
-  add(L("TB_NAMEMENU_PARTY"), EVAL_TB_NAME_PARTY)
+  -- ★★★1.73.39 用户要求：「分享方案 ↔ 邀请 对调位置」——分享方案挪到第 2 位（第一行右列），邀请挪到第 5 位
+  add(L("TB_NAMEMENU_SHARE"), EVAL_TB_NAME_SHARE)
   add(L("TB_NAMEMENU_TARGET"), EVAL_TB_NAME_TARGET)
   add(L("TB_NAMEMENU_SAY"), EVAL_TB_NAME_SAY)
-  -- 第二列：分享 / 交易 / 查询 / 踢人（按权限与队伍条件决定出不出现）
-  add(L("TB_NAMEMENU_SHARE"), EVAL_TB_NAME_SHARE)
+  -- 第二列续：邀请 / 交易 / 查询 / 踢人（按权限与队伍条件决定出不出现）
+  add(L("TB_NAMEMENU_PARTY"), EVAL_TB_NAME_PARTY)
   add(L("TB_NAMEMENU_TRADE"), EVAL_TB_NAME_TRADE)
   add(L("TB_NAMEMENU_QUERY"), EVAL_TB_NAME_QUERY)
   -- ★队伍里才显示「踢出队伍」
@@ -1045,6 +1046,20 @@ local function tbMenuBuild()
   bg:SetPoint("TOPLEFT", f, "TOPLEFT", 0, 0)
   bg:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
   f.bg = bg
+  -- ★★★1.73.39 用户要求「边框 白色高亮」：四条 1px 白边（半透明白，别抢文字）
+  local border = {}
+  local function edge(name, ax, ay, w2, h2)
+    local t = f:CreateTexture(nil, "BORDER")
+    tbSolid(t, 1, 1, 1, 0.75)
+    t:SetPoint("TOPLEFT", f, "TOPLEFT", ax, ay)
+    t:SetWidth(w2) t:SetHeight(h2)
+    border[name] = t
+  end
+  edge("top", 0, 0, W, 1)
+  edge("bottom", 0, -(H - 1), W, 1)
+  edge("left", 0, 0, 1, H)
+  edge("right", W - 1, 0, 1, H)
+  f.border = border
   local title = tbText(f, 10, 0.95, 0.82, 0.35)
   title:SetPoint("TOPLEFT", f, "TOPLEFT", 5, -5)
   pcall(title.SetWidth, title, W - 10)
@@ -1115,6 +1130,22 @@ function EVAL_TB_MENU_GEOM()
   -- ★1.73.35 锚点读值（用户要求「弹窗锚点右上」→ 判据必须读得到真实的锚点语义）
   local okp, point, _relTo, relPoint, ox, oy = pcall(f.GetPoint, f)
   if okp then out.point, out.relPoint, out.ox, out.oy = point, relPoint, ox, oy end
+  -- ★1.73.39 边框读值口（用户要求「白色高亮」→ 判据要读得到颜色与尺寸）
+  out.border = {}
+  if f.border then
+    local names = { "top", "bottom", "left", "right" }
+    for i = 1, table.getn(names) do
+      local t = f.border[names[i]]
+      if t then
+        local b = { w = num(t.GetWidth, t), h = num(t.GetHeight, t) }
+        if type(t.GetVertexColor) == "function" then
+          local okc, cr, cg, cb2, ca = pcall(t.GetVertexColor, t)
+          if okc then b.r, b.g, b.b, b.a = cr, cg, cb2, ca end
+        end
+        out.border[names[i]] = b
+      end
+    end
+  end
   if f.bg and type(f.bg.GetVertexColor) == "function" then
     local ok, r, g, b, a = pcall(f.bg.GetVertexColor, f.bg)
     if ok then out.bg = { r = r, g = g, b = b, a = a } end

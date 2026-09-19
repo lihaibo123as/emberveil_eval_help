@@ -10010,6 +10010,27 @@ do
   eq(have130[EVAL_L("TB_NAMEMENU_SHARE")] == true, true, "⑥★★★新增条目「分享方案」在菜单里")
   eq(have130[EVAL_L("TB_NAMEMENU_TRADE")] == true, true, "⑥★★★新增条目「交易」在菜单里")
   eq(have130[EVAL_L("TB_NAMEMENU_QUERY")] == true, true, "⑥★★★新增条目「查询」在菜单里")
+  -- ★★★1.73.39 用户两条：①「分享方案 ↔ 邀请 对调位置」②「边框 白色高亮」
+  local it2 = mg130.items[2] and tostring(mg130.items[2].label or "")
+  local it5 = mg130.items[5] and tostring(mg130.items[5].label or "")
+  if it2 ~= "" and it5 ~= "" then
+    eq(it2, EVAL_L("TB_NAMEMENU_SHARE"), "⑥b★★★第 2 条 = 分享方案（对调后；实际 " .. it2 .. "）")
+    eq(it5, EVAL_L("TB_NAMEMENU_PARTY"), "⑥b★★★第 5 条 = 邀请（对调后；实际 " .. it5 .. "）")
+  end
+  -- 边框：四条白边（r/g/b ≈ 1、alpha 够亮、上边框宽度 == 窗口宽）
+  local bd130 = mg130.border or {}
+  local nb130 = 0
+  for _, k in ipairs({ "top", "bottom", "left", "right" }) do if bd130[k] then nb130 = nb130 + 1 end end
+  eq(nb130, 4, "⑥b★★★四条边框都在（实际 " .. tostring(nb130) .. "）")
+  eq(type(bd130.top and bd130.top.r) == "number" and bd130.top.r >= 0.9 and bd130.top.g >= 0.9 and bd130.top.b >= 0.9,
+     true, "⑥b★★★边框是**白色**（r/g/b = " .. tostring(bd130.top and bd130.top.r) .. "/" ..
+     tostring(bd130.top and bd130.top.g) .. "/" .. tostring(bd130.top and bd130.top.b) .. "）")
+  eq(type(bd130.top and bd130.top.a) == "number" and bd130.top.a >= 0.5, true,
+     "⑥b★★边框够亮（alpha=" .. tostring(bd130.top and bd130.top.a) .. " ≥ 0.5）")
+  eq(bd130.top and bd130.top.w == mg130.w, true, "⑥b★★上边框横跨整窗（" .. tostring(bd130.top and bd130.top.w) ..
+     " == " .. tostring(mg130.w) .. "）")
+  eq(bd130.left and bd130.left.h == mg130.h, true, "⑥b★★左边框竖跨整窗（" .. tostring(bd130.left and bd130.left.h) ..
+     " == " .. tostring(mg130.h) .. "）")
   eq(type(mg130.bg and mg130.bg.a) == "number" and mg130.bg.a < 0.8, true,
      "⑥★★背景仍是半透明（alpha=" .. tostring(mg130.bg and mg130.bg.a) .. "）")
   -- ⑦ 接口探针（1.73.28 改）：报这个菜单真正要用的 API
