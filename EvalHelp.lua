@@ -6839,6 +6839,38 @@ if type(SlashCmdList) == "table" then
       EVAL_HELP_UI_TOGGLE()
     elseif msg == "cfg" or msg == "config" or msg == "set" then
       EVAL_HELP_CFG_TOGGLE()
+    -- ★1.73.41 调研探针（分支 probe/share-hide-link）：只做取证，**不动分享协议**
+    elseif msg == "链接探针" or string.find(msg, "^链接探针%s") or msg == "linkprobe" then
+      -- ★可选频道：默认密语自己（单机可测）；自密语不回声时改用 队伍/公会（需有人在同一频道）
+      if type(EVAL_SHARE_LINK_PROBE) == "function" then
+        local chanP = "WHISPER"
+        if string.find(msg, "公会", 1, true) then chanP = "GUILD"
+        elseif string.find(msg, "队伍", 1, true) or string.find(msg, "小队", 1, true) then chanP = "PARTY"
+        elseif string.find(msg, "说", 1, true) then chanP = "SAY" end
+        EVAL_SHARE_LINK_PROBE(chanP)
+      else
+        say("分享模块未载入（EVAL_SHARE_LINK_PROBE 不存在）")
+      end
+    elseif msg == "长度探针" or string.find(msg, "^长度探针%s") or msg == "lenprobe" then
+      if type(EVAL_SHARE_LEN_PROBE) == "function" then
+        local chanL = "WHISPER"
+        if string.find(msg, "公会", 1, true) then chanL = "GUILD"
+        elseif string.find(msg, "队伍", 1, true) or string.find(msg, "小队", 1, true) then chanL = "PARTY" end
+        EVAL_SHARE_LEN_PROBE(chanL)
+      else
+        say("分享模块未载入（EVAL_SHARE_LEN_PROBE 不存在）")
+      end
+    elseif msg == "探针结果" or msg == "probe" then
+      if type(EVAL_SHARE_PROBE_REPORT) == "function" then
+        EVAL_SHARE_PROBE_REPORT()
+      else
+        say("分享模块未载入（EVAL_SHARE_PROBE_REPORT 不存在）")
+      end
+    elseif msg == "探针关" or msg == "probeoff" then
+      if type(EVAL_SHARE_PROBE_OFF) == "function" then
+        EVAL_SHARE_PROBE_OFF()
+        say("探针已关闭（回到正常接收）")
+      end
     elseif msg == "guide" or msg == "help2" or msg == "新手" then -- 1.72.1 新手指引重看
       EVAL_HELP_GUIDE(true)
     elseif msg == "st" or msg == "state" or msg == "info" then

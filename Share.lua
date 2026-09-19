@@ -355,8 +355,24 @@ local function shGuildFun(fmtKey)
 end
 
 -- msg/sender 来自事件；ev = 触发的事件名（可缺：测试直调时为 nil）
+-- ★1.73.41 调研探针状态 + 捕获（探针数据**绝不进正常接收缓冲**，避免污染导入流程）
+local SH_PROBE = { armed = nil, sent = {}, recv = {}, ladderSent = {}, verdicts = nil }
+local function shProbeCapture(msg, sender, ev)
+  local p = SH_PROBE
+  if not p.armed then return false end
+  local mode = p.armed.mode or "?"
+  p.recv[mode] = p.recv[mode] or {}
+  table.insert(p.recv[mode], { raw = msg, sender = tostring(sender or "?"), ev = tostring(ev or "?"),
+                               n = string.len(msg) })
+  return true
+end
 local function shOnMsg(msg, sender, ev)
   if type(msg) ~= "string" then return end
+  -- ★1.73.41 探针优先：命中探针标识的消息**只记进探针**，不进正常缓冲
+  if SH_PROBE.armed and string.find(msg, SH_PROBE.armed.tag, 1, true) then
+    shProbeCapture(msg, sender, ev)
+    return
+  end
   local idh, i, n, payload = string.match(msg, "^%[EHPF#(%x+) (%d+)/(%d+)%](%x*)$")
   if not idh then return end
   if not shCfg().recv then return end
@@ -407,6 +423,173 @@ local function shOnMsg(msg, sender, ev)
 end
 
 function EVAL_SHARE_ONMSG(msg, sender, ev) shOnMsg(msg, sender, ev) end -- 测试直调（ev 可缺）
+-- ===== 1.73.41 调研探针（分支 probe/share-hide-link）=====================================
+-- 目的（用户：「新开一个分支测试以上探针」）：把调研报告里**读码定不了的两个行为**一次问清楚 ——
+--   ① 自定义链接 `|c..|H<类型>:<载荷>|h[短文字]|h|r` 经**服务器往返**后还在不在（|c/|H 会不会被剥、载荷会不会被改）；
+--   ② 聊天消息**真实长度上限**（现在 220 hex 字符/片是照 255 估的，**没有实测**）。
+-- ★纪律：探针**只发不解析** —— 命中探针标识的消息只进 `SH_PROBE.recv`，**绝不进正常接收缓冲**（不污染导入流程）。
+-- ★不动正常协议：[分享] 按钮 / 右键菜单那条路一行都不改；探针只在显式命令下运行，平时零开销。
+-- ★两个探针都靠**明文里的唯一 tag** 认形态：即使服务器把 |c/|H 整段剥掉，形态仍能被认出来（这是能不能定案的关键）。
+function EVAL_SHARE_PROBE_ARM(mode, tag)
+  if type(mode) ~= "string" or type(tag) ~= "string" then return false end
+  SH_PROBE.armed = { mode = mode, tag = tag }
+  SH_PROBE.recv[mode] = {}
+  return true
+end
+function EVAL_SHARE_PROBE_OFF()
+  SH_PROBE.armed = nil
+  return true
+end
+function EVAL_SHARE_PROBE_STATE()
+  local p = SH_PROBE
+  return { armed = (p.armed and p.armed.mode) or nil, tag = (p.armed and p.armed.tag) or nil,
+           sent = table.getn(p.sent or {}), got = table.getn((p.recv or {}).link or {}),
+           ladderSent = table.getn(p.ladderSent or {}), ladderGot = table.getn((p.recv or {}).len or {}),
+           forms = p.sent, ladder = p.ladderSent, verdicts = p.verdicts or {} }
+end
+-- 探针 ① 的四种形态：同一前缀 tag，各形态再带**各自唯一**的 tag（明文可见，剥标记也认得出）
+local function shProbeForms(prefix)
+  local out = {}
+  local function disp(i) return prefix .. string.format("%02x", i) end
+  local hex1 = toHex("PROBE-" .. disp(1))
+  -- ① 自定义链接（候选 v2）：载荷进 |H 段，只显示 [方案:探针 …]；② / ③ 是已知类型对照；④ 是现状格式对照
+  table.insert(out, { idx = 1, tag = disp(1), label = "① 自定义链接（候选 v2）",
+    body = "|cff9ad4ff|HEHPF:" .. disp(1) .. " 1/1:" .. hex1 .. "|h[方案:探针 " .. disp(1) .. "]|h|r" })
+  table.insert(out, { idx = 2, tag = disp(2), label = "② 假物品链接（已知类型 item:）",
+    body = "|cff9d9d9d|Hitem:1234:0:0:0:0:0:0:0|h[探针物品 " .. disp(2) .. "]|h|r" })
+  table.insert(out, { idx = 3, tag = disp(3), label = "③ 假玩家链接（已知类型 player:）",
+    body = "|cffff80ff|Hplayer:Probe" .. disp(3) .. "|h[探针 " .. disp(3) .. "]|h|r" })
+  local hex4 = toHex("PROBE-" .. disp(4))
+  table.insert(out, { idx = 4, tag = disp(4), label = "④ 明文分片（现状格式，对照组）",
+    body = "[EHPF#" .. disp(4) .. " 1/1]" .. hex4 })
+  return out
+end
+-- 探针 ② 的长度阶梯：每条消息**恰好 target 字节**，尾部带哨兵 `E<target>E`（被截断时哨兵先没）
+local SH_PROBE_LADDER = { 200, 230, 250, 270 }
+local function shProbeLadder(prefix, ladder)
+  ladder = ladder or SH_PROBE_LADDER
+  local out = {}
+  for i = 1, table.getn(ladder) do
+    local target = ladder[i]
+    local tg = prefix .. string.format("%02x", i)
+    local tail = "E" .. tostring(target) .. "E"
+    local head = "[LAD#" .. tg .. " " .. tostring(target) .. "]"
+    local fill = target - string.len(head) - string.len(tail)
+    if fill < 1 then fill = 1 end
+    table.insert(out, { idx = i, tag = tg, target = target, tail = tail,
+      body = head .. string.rep("a", fill) .. tail })
+  end
+  return out
+end
+local function shProbeRandomTag() return string.format("%04x", math.random(0, 65535)) end
+local function shProbeSend(bodies, chanId)
+  local target = nil
+  if chanId == "WHISPER" then
+    target = (type(UnitName) == "function") and UnitName("player") or nil
+    if type(target) ~= "string" or target == "" then
+      shSay("探针：拿不到自己的名字（UnitName 不可用）→ 请改用 /eh go 链接探针 队伍（需在队伍里）")
+      return false
+    end
+  end
+  return shTxEnqueue(bodies, chanId, target)
+end
+-- 探针 ①：发 4 种形态（默认密语自己：单机可测、不扰民）
+function EVAL_SHARE_LINK_PROBE(chanId)
+  chanId = (type(chanId) == "string" and chanId ~= "") and chanId or "WHISPER"
+  local prefix = "be" .. shProbeRandomTag()
+  local forms = shProbeForms(prefix)
+  SH_PROBE.sent = forms
+  if not EVAL_SHARE_PROBE_ARM("link", prefix) then return false end
+  local bodies = {}
+  for i = 1, table.getn(forms) do table.insert(bodies, forms[i].body) end
+  local ok = shProbeSend(bodies, chanId)
+  shSay("链接转发探针已发出（" .. tostring(chanId) .. "，限频队列约 " .. tostring(table.getn(bodies)) .. " 秒发完）：")
+  for i = 1, table.getn(forms) do
+    shSay("  " .. forms[i].label .. "  " .. tostring(string.len(forms[i].body)) .. " 字节")
+  end
+  shSay("  ★等 2~3 秒 → /eh go 探针结果（把整段结果贴给我）；★同时看一眼聊天框：哪一种显示成了短文字")
+  return ok and true or false
+end
+-- 探针 ②：发长度阶梯
+function EVAL_SHARE_LEN_PROBE(chanId, ladder)
+  chanId = (type(chanId) == "string" and chanId ~= "") and chanId or "WHISPER"
+  local prefix = "la" .. shProbeRandomTag()
+  local rows = shProbeLadder(prefix, ladder)
+  SH_PROBE.ladderSent = rows
+  if not EVAL_SHARE_PROBE_ARM("len", prefix) then return false end
+  local bodies = {}
+  for i = 1, table.getn(rows) do table.insert(bodies, rows[i].body) end
+  local ok = shProbeSend(bodies, chanId)
+  shSay("长度阶梯探针已发出（" .. tostring(chanId) .. "）：目标 " .. tostring(table.getn(rows)) .. " 档")
+  shSay("  ★等 3 秒 → /eh go 探针结果（看每档「收到多少字节 / 尾部哨兵在不在」）")
+  return ok and true or false
+end
+-- 逐字节比对（返回首个不同处的字节位；完全相同返回 nil）
+local function shProbeDiff(a, b)
+  a, b = tostring(a), tostring(b)
+  local n = math.min(string.len(a), string.len(b))
+  for k = 1, n do if string.byte(a, k) ~= string.byte(b, k) then return k end end
+  if string.len(a) ~= string.len(b) then return n + 1 end
+  return nil
+end
+local function shProbeFind(mode, tag)
+  local list = (SH_PROBE.recv or {})[mode] or {}
+  for i = 1, table.getn(list) do
+    if string.find(tostring(list[i].raw or ""), tostring(tag), 1, true) then return list[i] end
+  end
+  return nil
+end
+-- 探针结果：**如实**报告（一致 / 被改 / 未收到；长度档位看实际字节数与尾部哨兵）
+function EVAL_SHARE_PROBE_REPORT()
+  local p = SH_PROBE
+  local out = { link = {}, len = {} }
+  shSay("===== 探针结果（发出 vs 收到）=====")
+  if table.getn(p.sent or {}) == 0 and table.getn(p.ladderSent or {}) == 0 then
+    shSay("  还没发过探针 → 先 /eh go 链接探针 或 /eh go 长度探针")
+    return out
+  end
+  for i = 1, table.getn(p.sent or {}) do
+    local f = p.sent[i]
+    local r = shProbeFind("link", f.tag)
+    local v, extra
+    if not r then v, extra = "未收到", "（可能是：没回声 / 服务器丢了 / 还没到）"
+    else
+      local d = shProbeDiff(f.body, r.raw)
+      if d == nil then v, extra = "一致", "（逐字节相同，" .. tostring(string.len(r.raw)) .. " 字节）"
+      else v, extra = "被改", "（首个不同处第 " .. tostring(d) .. " 字节；发出=" ..
+             string.sub(f.body, d, d + 14) .. " 收到=" .. string.sub(r.raw, d, d + 14) .. "）" end
+      local hasC = string.find(r.raw, "|c", 1, true) ~= nil
+      local hasH = string.find(r.raw, "|H", 1, true) ~= nil
+      extra = extra .. "  标记：" .. (hasC and "|c 在" or "|c 没了") .. " / " .. (hasH and "|H 在" or "|H 没了")
+    end
+    out.link[i] = { label = f.label, tag = f.tag, sent = string.len(f.body),
+                    got = r and string.len(r.raw) or 0, verdict = v }
+    shSay("  " .. f.label .. " → " .. v .. " " .. extra)
+    if r then shSay("     发出：" .. f.body) shSay("     收到：" .. r.raw) end
+  end
+  for i = 1, table.getn(p.ladderSent or {}) do
+    local row = p.ladderSent[i]
+    local r = shProbeFind("len", row.tag)
+    local v, extra
+    if not r then v, extra = "未收到", ""
+    else
+      local tailOK = string.find(r.raw, row.tail, 1, true) ~= nil
+      local len = string.len(r.raw)
+      if tailOK and len == row.target then v = "完整"
+      else v = "截断" end
+      extra = "（目标 " .. tostring(row.target) .. " → 收到 " .. tostring(len) .. "，尾部哨兵 " ..
+              (tailOK and "在" or "没了") .. "）"
+    end
+    out.len[i] = { target = row.target, tag = row.tag, got = r and string.len(r.raw) or 0, verdict = v }
+    shSay("  长度档 " .. tostring(row.target) .. " → " .. v .. " " .. extra)
+  end
+  p.verdicts = out
+  shSay("  ★结论怎么读：① 若「自定义链接」= 一致 → 隐藏方案可行（服务器转发自定义链接）；" ..
+        "② 若只有 ②③/④ 一致 → 自定义类型被服务器剥了，改走已知类型或退回「只缩短」；" ..
+        "③ 长度档出现「截断」→ 记下那一档的真实字节数，SH_CHUNK 要按它重算")
+  p.armed = nil
+  return out
+end
 
 -- ★1.71.3 事件分派（三态兼容）抽成函数：事件名在 1参 / 2参 / 全局 event，参数随之一档右移。
 --   ★抽出来的理由：断言要验的是**真实分派逻辑**（不能在测试里重写一遍）。

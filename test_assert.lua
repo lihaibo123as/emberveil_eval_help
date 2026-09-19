@@ -10611,4 +10611,94 @@ do
   eq(string.find(tip140, "\n", 1, true) ~= nil, true, "③★★而且**分行**（不是一大坨）")
   print("  分享接收：私聊来源已支持（注册 + 收全 + 弹窗标「密语」）· 右键开关 tooltip 列全功能并分层上色")
 end
+-- 141) ★★★1.73.41 调研探针（分支 probe/share-hide-link）：隐藏载荷 + 长度上限两条未知数
+--   「服务器到底转发不转发**自定义链接**」只能真机跑探针；这里离线可测的是**判定逻辑本身**：
+--   ① 探针平时关着、不改正常协议；② 四种形态真的进发送通道（第一条立即发）；
+--   ③ 完美回声 → 四种全部判「一致」；④ **模拟被剥标记的服务器** → 必须判「被改」（报告不许永远说好话）；
+--   ⑤ 探针数据**不进正常接收缓冲**；⑥ 长度阶梯：完整回声全「完整」、被砍尾巴那一档判「截断」；
+--   ⑦ 只发不收 → 如实「未收到」；探针能关掉。
+do
+  if type(EVAL_SHARE_PROBE_OFF) == "function" then EVAL_SHARE_PROBE_OFF() end
+  local st0 = EVAL_SHARE_PROBE_STATE()
+  eq(type(st0) == "table" and st0.armed == nil, true, "①前置：探针默认**关着**（平时零开销、不动协议）")
+  local buf0 = EVAL_TEST_SHARE_BUF_COUNT()
+  local done0 = EVAL_TEST_SHARE_DONE_COUNT()
+  -- ② 四种形态进发送通道（走真实入口 EVAL_SHARE_LINK_PROBE）
+  TEST.runScripts = {}
+  eq(EVAL_SHARE_LINK_PROBE("WHISPER") ~= false, true, "②链接探针发送入口能跑")
+  local st1 = EVAL_SHARE_PROBE_STATE()
+  eq(st1.sent, 4, "②★★★四种形态都进了发送队列（实际 " .. tostring(st1.sent) .. "）")
+  eq(st1.armed, "link", "②探针已启用（armed=link）")
+  local forms = st1.forms or {}
+  eq(table.getn(forms), 4, "②读得到发出的四条原文（读值口）")
+  eq(string.find(tostring(forms[1] and forms[1].body), "|HEHPF:", 1, true) ~= nil, true,
+     "②★★形态①是**自定义链接**（载荷进 |H 段）")
+  eq(string.find(tostring(forms[1] and forms[1].body), "|h[方案:探针 ", 1, true) ~= nil, true,
+     "②★★形态①只显示**短文字**（不是 220 字符乱码）")
+  eq(string.find(tostring(forms[2] and forms[2].body), "|Hitem:", 1, true) ~= nil, true, "②形态②=假物品链接（已知类型对照）")
+  eq(string.find(tostring(forms[3] and forms[3].body), "|Hplayer:", 1, true) ~= nil, true, "②形态③=假玩家链接（已知类型对照）")
+  eq(string.find(tostring(forms[4] and forms[4].body), "[EHPF#", 1, true), 1, "②形态④=现状明文（对照组）")
+  eq(string.find(tostring(TEST.runScript or ""), "|HEHPF:", 1, true) ~= nil, true,
+     "②★★第一条**真的**走了 SendChatMessage（RunScript 里含链接形态）")
+  -- ③ 完美回声 → 四种全部「一致」
+  for i = 1, 4 do EVAL_SHARE_ONMSG(forms[i].body, "我", "CHAT_MSG_WHISPER") end
+  local rep1 = EVAL_SHARE_PROBE_REPORT()
+  eq(table.getn(rep1.link or {}), 4, "③报告覆盖四种形态")
+  local okAll = true
+  for i = 1, 4 do if tostring(rep1.link[i].verdict) ~= "一致" then okAll = false end end
+  eq(okAll, true, "③★★★完美回声 → 四种全部判「一致」（实际 " .. tostring(rep1.link[1].verdict) .. "/" ..
+     tostring(rep1.link[2].verdict) .. "/" .. tostring(rep1.link[3].verdict) .. "/" .. tostring(rep1.link[4].verdict) .. "）")
+  -- ④ 模拟「服务器把 |c/|H 标记剥掉」→ 必须判「被改」
+  EVAL_SHARE_LINK_PROBE("WHISPER")
+  local forms2 = EVAL_SHARE_PROBE_STATE().forms or {}
+  for i = 1, 4 do
+    local raw = tostring(forms2[i] and forms2[i].body or "")
+    local stripped = string.gsub(raw, "|c%x%x%x%x%x%x%x%x", "")
+    stripped = string.gsub(stripped, "|H[^|]*|h%[(.-)%]|h", "%1")
+    stripped = string.gsub(stripped, "|r", "")
+    EVAL_SHARE_ONMSG(stripped, "我", "CHAT_MSG_WHISPER")
+  end
+  local rep2 = EVAL_SHARE_PROBE_REPORT()
+  eq(tostring(rep2.link[1].verdict) ~= "一致", true,
+     "④★★★被剥标记后**不许**判「一致」（实际 " .. tostring(rep2.link[1].verdict) .. "）")
+  eq(string.find(tostring(rep2.link[1].got and "x" or ""), "x", 1, true) ~= nil, true, "④报告里带上「收到多少字节」")
+  -- ⑤ 探针数据不进正常接收缓冲（形态④长得与真分片一模一样）
+  eq(EVAL_TEST_SHARE_BUF_COUNT(), buf0, "⑤★★★探针消息**没有**污染正常接收缓冲")
+  eq(EVAL_TEST_SHARE_DONE_COUNT(), done0,
+     "⑤★★★也没被当成真分享走完整流程（完成表没动；只看缓冲数会假绿）")
+  -- ⑥ 长度阶梯：完整回声全「完整」
+  eq(EVAL_SHARE_LEN_PROBE("WHISPER") ~= false, true, "⑥长度探针发送入口能跑")
+  local stL = EVAL_SHARE_PROBE_STATE()
+  eq(stL.ladderSent, 4, "⑥★★四个阶梯档都进队列（实际 " .. tostring(stL.ladderSent) .. "）")
+  local rows = stL.ladder or {}
+  eq(string.len(tostring(rows[1] and rows[1].body)) == (rows[1] and rows[1].target), true,
+     "⑥★★第 1 档消息长度**恰好**等于目标（" .. tostring(string.len(tostring(rows[1] and rows[1].body))) .. " == " ..
+     tostring(rows[1] and rows[1].target) .. "）")
+  for i = 1, 4 do EVAL_SHARE_ONMSG(rows[i].body, "我", "CHAT_MSG_WHISPER") end
+  local repL = EVAL_SHARE_PROBE_REPORT()
+  local okL = true
+  for i = 1, 4 do if tostring(repL.len[i].verdict) ~= "完整" then okL = false end end
+  eq(okL, true, "⑥★★★完整回声 → 四档全判「完整」")
+  -- ⑥b 砍掉最后一档的尾巴 → 只有那一档判「截断」
+  EVAL_SHARE_LEN_PROBE("WHISPER")
+  local rows2 = EVAL_SHARE_PROBE_STATE().ladder or {}
+  for i = 1, 4 do
+    local body = tostring(rows2[i] and rows2[i].body or "")
+    if i == 4 then body = string.sub(body, 1, string.len(body) - 6) end
+    EVAL_SHARE_ONMSG(body, "我", "CHAT_MSG_WHISPER")
+  end
+  local repL2 = EVAL_SHARE_PROBE_REPORT()
+  eq(tostring(repL2.len[4].verdict), "截断", "⑥b★★★被砍尾巴那一档必须判「截断」（实际 " .. tostring(repL2.len[4].verdict) .. "）")
+  eq(tostring(repL2.len[1].verdict), "完整", "⑥b★★其余档不受影响（第 1 档仍「完整」）")
+  -- ⑦ 只发不收 → 如实「未收到」；探针能关掉
+  EVAL_SHARE_LINK_PROBE("WHISPER")
+  local repN = EVAL_SHARE_PROBE_REPORT()
+  local anyMissing = false
+  for i = 1, 4 do if tostring(repN.link[i].verdict) == "未收到" then anyMissing = true end end
+  eq(anyMissing, true, "⑦★★★没收到就如实说「未收到」（不许假装成功）")
+  EVAL_SHARE_PROBE_OFF()
+  eq(EVAL_SHARE_PROBE_STATE().armed, nil, "⑦探针能关掉（回到正常接收）")
+  TEST.chat = nil
+  print("  调研探针：4 形态逐字节比对（一致/被改/未收到）+ 长度阶梯（完整/截断）+ 不污染正常接收")
+end
 print("ALL TESTS PASS")
