@@ -10058,7 +10058,7 @@ do
        "⑥c★★★圆角边框是**白色高亮**（SetBackdropBorderColor = " .. tostring(bc[1]) .. "/" .. tostring(bc[2]) ..
        "/" .. tostring(bc[3]) .. "/" .. tostring(bc[4]) .. "）")
     local bgc = TEST.backdropColor or {}
-    eq(type(bgc[4]) == "number" and bgc[4] < 0.8, true, "⑥c★圆角底仍半透明（alpha=" .. tostring(bgc[4]) .. "）")
+    eq(type(bgc[4]) == "number" and bgc[4] >= 0.8, true, "⑥c★外框背景**加深**（面板底 alpha ≥ 0.8；实际 " .. tostring(bgc[4]) .. "）")
     eq(mg130.bgShown, false, "⑥c★★圆角时不再叠自己的方形底（两层半透明叠加会发黑）")
   else
     eq(mg130.chrome, "flat", "⑥c★★退化路径必须是四条平白边（实际 " .. tostring(mg130.chrome) .. "）")
@@ -10071,7 +10071,7 @@ do
     eq(type(bd130.top and bd130.top.a) == "number" and bd130.top.a >= 0.5, true, "⑥c★★退化边框够亮")
     eq(bd130.top and bd130.top.w == mg130.w, true, "⑥c★★上边框横跨整窗")
     eq(bd130.left and bd130.left.h == mg130.h, true, "⑥c★★左边框竖跨整窗")
-    eq(type(mg130.bg and mg130.bg.a) == "number" and mg130.bg.a < 0.8, true, "⑥c★背景仍半透明")
+    eq(type(mg130.bg and mg130.bg.a) == "number" and mg130.bg.a >= 0.8, true, "⑥c★退化路径下面板底也**加深**")
   end
   -- ⑥c2 ★★★退化路径：把 SetBackdrop 弄成服务端不支持（error）→ 必须如实退回**四条平白边**，
   --   不允许静默地丢掉白色高亮边框（这正是 1.73.20 那类「看不见的退化」教训）。
@@ -10106,26 +10106,49 @@ do
   eq(out130, "", "⑥d★★★每条（含关闭）都落在窗口矩形内；越界 = " .. out130)
   eq(tostring((mg130.items[nIt130] or {}).label or ""), EVAL_L("TB_NAMEMENU_CLOSE"),
      "⑥d★★★「关闭」是**最后一条**（实际 " .. tostring((mg130.items[nIt130] or {}).label) .. "）")
-  -- ⑥e 悬停变色（用户「鼠标获取焦点 增加变色美化」）：全程走**真实 OnEnter/OnLeave 脚本**
-  local hov130 = ""
+  -- ⑥e ★★★1.73.40 用户四条：「框增加 padding」「操作获取加点白色」「只要文字变色，不用背景变色，背景透明」
+  --   判据（全部读**真控件**，阈值**独立**于生产常量）：
+  --     ① 内边距：条目左右/下都离框 ≥6px、标题离左边 ≥6px、标题与首行不重叠
+  --     ② 条目底**透明**（alpha == 0）③ 面板底**加深**（alpha ≥ 0.8）
+  --     ④ 悬停**只**动文字色：文字变白；底色**逐值一点都没变**（用户「不用背景变色」）
+  local pad130 = ""
+  if not (type(mg130.padX) == "number" and mg130.padX >= 6) then pad130 = pad130 .. "左右内边距不足(" .. tostring(mg130.padX) .. ") " end
+  if not (type(mg130.padB) == "number" and mg130.padB >= 6) then pad130 = pad130 .. "下内边距不足(" .. tostring(mg130.padB) .. ") " end
+  if not (type(mg130.titleLeft) == "number" and mg130.titleLeft >= 6) then pad130 = pad130 .. "标题贴左边(" .. tostring(mg130.titleLeft) .. ") " end
   for i = 1, nIt130 do
-    if type((mg130.items[i] or {}).r) ~= "number" then hov130 = hov130 .. i .. " " end
+    local it = mg130.items[i] or {}
+    if (it.x or -1) < 6 then pad130 = pad130 .. i .. ":左贴边(" .. tostring(it.x) .. ") " end
+    if ((it.x or 0) + (it.w or 0)) > (mg130.w or 0) - 6 then pad130 = pad130 .. i .. ":右贴边 " end
+    if ((it.y or 0) - (it.h or 0)) < -((mg130.h or 0) - 6) then pad130 = pad130 .. i .. ":下贴边 " end
   end
-  eq(hov130, "", "⑥e★★每条都能从**真控件**读回底色: " .. hov130)
   local it1 = mg130.items[1] or {}
-  local nrm130 = { it1.r, it1.a }
+  if type(mg130.titleTop) == "number" and type(it1.y) == "number" and it1.y > mg130.titleTop - 10 then pad130 = pad130 .. "标题压首行 " end
+  eq(pad130, "", "⑥e★★★框内边距（padding）：左右/下/标题都离边 ≥6px 且标题不压首行；问题 = " .. pad130)
+  local bgBad130 = ""
+  for i = 1, nIt130 do
+    local it = mg130.items[i] or {}
+    if type(it.a) ~= "number" or it.a ~= 0 then bgBad130 = bgBad130 .. i .. "(a=" .. tostring(it.a) .. ") " end
+  end
+  eq(bgBad130, "", "⑥e★★★条目背景**透明**（底色 alpha 必须 0；用户「背景透明」）超出 = " .. bgBad130)
+  eq(type(mg130.bg and mg130.bg.a) == "number" and mg130.bg.a >= 0.8, true,
+     "⑥e★★★外框背景**加深**（面板底 alpha ≥ 0.8；实际 " .. tostring(mg130.bg and mg130.bg.a) .. "）")
+  eq(type(it1.tr) == "number", true, "⑥e★能从**真控件**读回文字色（否则「只文字变色」判不出来）")
+  local nrmTxt130 = { it1.tr, it1.tg, it1.tb }
+  local nrmBg130 = { it1.r, it1.g, it1.b, it1.a }
   eq(it1.hot, false, "⑥e★默认不是高亮态")
   eq(EVAL_TEST_TB_MENU_HOVER(it1.label, true), true, "⑥e★★★触发了第 1 条的**真实 OnEnter** 脚本")
   local itH = (EVAL_TB_MENU_GEOM().items or {})[1] or {}
   eq(itH.hot, true, "⑥e★★悬停后如实置为高亮态")
-  eq(type(itH.r) == "number" and (itH.r or 0) > (nrm130[1] or 0) and (itH.a or 0) > (nrm130[2] or 0), true,
-     "⑥e★★★悬停**真的变色**（底色 " .. tostring(nrm130[1]) .. "/" .. tostring(nrm130[2]) .. " → " ..
-     tostring(itH.r) .. "/" .. tostring(itH.a) .. "）")
+  eq((itH.tr or 0) >= 0.99 and (itH.tg or 0) >= 0.99 and (itH.tb or 0) >= 0.99, true,
+     "⑥e★★★悬停**给文字加点白**（" .. tostring(nrmTxt130[1]) .. "/" .. tostring(nrmTxt130[2]) .. "/" .. tostring(nrmTxt130[3]) ..
+     " → " .. tostring(itH.tr) .. "/" .. tostring(itH.tg) .. "/" .. tostring(itH.tb) .. "）")
+  eq(itH.r == nrmBg130[1] and itH.g == nrmBg130[2] and itH.b == nrmBg130[3] and itH.a == nrmBg130[4], true,
+     "⑥e★★★悬停**背景一点都没变**（用户「不用背景变色」；" .. tostring(itH.a) .. " == " .. tostring(nrmBg130[4]) .. "）")
   eq(EVAL_TEST_TB_MENU_HOVER(it1.label, false), true, "⑥e★★触发了**真实 OnLeave** 脚本")
   local itL = (EVAL_TB_MENU_GEOM().items or {})[1] or {}
   eq(itL.hot, false, "⑥e★离开后回到非高亮态")
-  eq(itL.r == nrm130[1] and itL.a == nrm130[2], true, "⑥e★★★离开后**逐值复原**（" .. tostring(itL.r) .. "/" ..
-     tostring(itL.a) .. " == " .. tostring(nrm130[1]) .. "/" .. tostring(nrm130[2]) .. "）")
+  eq(itL.tr == nrmTxt130[1] and itL.tg == nrmTxt130[2] and itL.tb == nrmTxt130[3], true,
+     "⑥e★★★离开后文字色**逐值复原**（" .. tostring(itL.tr) .. " == " .. tostring(nrmTxt130[1]) .. "）")
   -- ★★★每一条都必须挂上两个脚本（漏挂一条 = 那一条永不变色，而且**不报错**）
   local mm130 = _G.EVAL_TB_NAMEMENU
   eq(type(mm130) == "table", true, "⑥e★具名帧 EVAL_TB_NAMEMENU 在全局里（读值口要能拿到它的按钮）")

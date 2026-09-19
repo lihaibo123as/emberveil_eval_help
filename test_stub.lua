@@ -176,6 +176,14 @@ local function newMock()
     end,
     SetBackdropColor = function(_, r, g, b, a) TEST.backdropColor = { r, g, b, a } end,
     SetBackdropBorderColor = function(_, r, g, b, a) TEST.backdropBorderColor = { r, g, b, a } end,
+    -- ★1.73.40 桩保真：FontString 的**文字色**要能读回来（用户「只要**文字**变色，不用背景变色」）——
+    --   否则「到底哪一层在变色」根本判不出来（桩不记 = 断言失明，本项目老族教训）。
+    SetTextColor = function(self, r, g, b)
+      rawset(self, "__tr", r) rawset(self, "__tg", g) rawset(self, "__tb", b)
+    end,
+    GetTextColor = function(self)
+      return rawget(self, "__tr") or 1, rawget(self, "__tg") or 1, rawget(self, "__tb") or 1
+    end,
     GetTexture = function() return rawget(m, "__tex") end,
     -- ★1.73.5 CreateFrame 拿到 "EditBox" 类型后调用它，打开「SetText 会再触发 OnTextChanged」的保真开关
     __markEditBox = function() isEditBox = true end,

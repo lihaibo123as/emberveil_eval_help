@@ -980,14 +980,20 @@ end
 local TB_MENU_COL_W = 62 -- 单列宽（≤4 个汉字）
 local TB_MENU_GAP = 4
 local TB_MENU_ITEM_H = 15
-local TB_MENU_TOP = -19
-local TB_MENU_PAD = 6
--- ★★★1.73.40 悬停配色（用户「鼠标获取焦点 增加变色美化」）：常态暗底暗金字；悬停亮金底 + 近白字
-local TB_MENU_HOT = {
-  bg     = { 0.10, 0.09, 0.06, 0.35 },
-  hot    = { 0.55, 0.42, 0.16, 0.85 },
-  txt    = { 0.95, 0.82, 0.35 },
-  txthot = { 1.00, 0.97, 0.80 },
+local TB_MENU_TITLE_H = 13
+-- ★★★1.73.40 用户「框增加 padding」：左右/上/下**都有内边距**（标题与条目都不贴边）——
+--   ★宽度、高度、标题位置、条目位置**全部由这几个常量算**（单一来源，改一处全都动）。
+local TB_MENU_PAD = { x = 8, t = 6, b = 8 }
+local TB_MENU_TOP = -(TB_MENU_PAD.t + TB_MENU_TITLE_H) -- 第一行条目的顶边
+-- ★★★1.73.40 用户「外框背景加深 / 背景透明 / 只要文字变色，不用背景变色」：
+--   面板底**加深**（0.88），条目按钮底**完全透明**（alpha 0）→ 悬停就只剩「文字变白」这一处变化。
+local TB_MENU_COLORS = {
+  panelRGBA  = { 0.01, 0.01, 0.02, 0.88 }, -- 外框背景（加深）
+  itemRGBA   = { 0, 0, 0, 0 },             -- 条目背景（完全透明）
+  txtRGBA    = { 0.95, 0.82, 0.35 },       -- 常态文字（金）
+  txtHotRGBA = { 1.00, 1.00, 1.00 },       -- 悬停文字（只给文字加点白）
+  borderRGBA = { 1, 1, 1, 0.75 },          -- 圆角边框色（白色高亮）
+  flatRGBA   = { 1, 1, 1, 0.75 },          -- 退化路径四条平边
 }
 -- ★原生圆角边的 edgeSize：必须整数（参考插件实测：小数在本客户端栅格化不可靠）
 local TB_MENU_EDGE = 16
@@ -996,12 +1002,12 @@ function EVAL_TB_MENU_LAYOUT(n)
   n = tonumber(n) or 0
   if n < 1 then n = 1 end
   local rows = math.ceil(n / 2)
-  local w = TB_MENU_COL_W * 2 + TB_MENU_GAP
+  local w = TB_MENU_PAD.x * 2 + TB_MENU_COL_W * 2 + TB_MENU_GAP
   -- ★★★1.73.40 用户截图「右键框未包含关闭按键」——根因就在这一行：
   --   原式只算了 (rows-1) 个**行距**，**最后一行的自身高度没算**，
   --   于是末行按钮吊在窗口底 9px 之外（关闭正好在末行 → 看起来菜单里根本没关闭）。
   --   ★判据 = 组 130③d 的**包含性**（每条按钮的矩形必须落在窗口矩形内，独立于本函数）。
-  local h = -TB_MENU_TOP + rows * TB_MENU_ITEM_H + TB_MENU_PAD
+  local h = -TB_MENU_TOP + rows * TB_MENU_ITEM_H + TB_MENU_PAD.b
   return w, h, rows, 2
 end
 function EVAL_TB_MENU_HEIGHT(n) local _, h = EVAL_TB_MENU_LAYOUT(n) return h end
@@ -1060,10 +1066,10 @@ local function tbMenuChrome(f, W, H)
     })
     if ok then
       if type(f.SetBackdropColor) == "function" then
-        pcall(f.SetBackdropColor, f, 0.02, 0.02, 0.03, 0.62)
+        pcall(f.SetBackdropColor, f, TB_MENU_COLORS.panelRGBA[1], TB_MENU_COLORS.panelRGBA[2], TB_MENU_COLORS.panelRGBA[3], TB_MENU_COLORS.panelRGBA[4])
       end
       if type(f.SetBackdropBorderColor) == "function" then
-        pcall(f.SetBackdropBorderColor, f, 1, 1, 1, 0.75) -- 白色高亮（1.73.39 的要求）
+        pcall(f.SetBackdropBorderColor, f, TB_MENU_COLORS.borderRGBA[1], TB_MENU_COLORS.borderRGBA[2], TB_MENU_COLORS.borderRGBA[3], TB_MENU_COLORS.borderRGBA[4]) -- 白色高亮（1.73.39 的要求）
       end
       if type(f.GetBackdrop) == "function" then
         local oks, str = pcall(f.GetBackdrop, f)
@@ -1078,7 +1084,7 @@ local function tbMenuChrome(f, W, H)
     -- 退化路径 = 1.73.39 的四条 1px 平白边（半透明白，别抢文字）
     local function edgeTex(name, ax, ay, w2, h2)
       local t = f:CreateTexture(nil, "BORDER")
-      tbSolid(t, 1, 1, 1, 0.75)
+      tbSolid(t, TB_MENU_COLORS.flatRGBA[1], TB_MENU_COLORS.flatRGBA[2], TB_MENU_COLORS.flatRGBA[3], TB_MENU_COLORS.flatRGBA[4])
       t:SetPoint("TOPLEFT", f, "TOPLEFT", ax, ay)
       t:SetWidth(w2) t:SetHeight(h2)
       border[name] = t
@@ -1103,7 +1109,7 @@ local function tbMenuBuild()
   pcall(f.SetFrameLevel, f, 250)
   pcall(f.EnableMouse, f, true)
   local bg = f:CreateTexture(nil, "BACKGROUND")
-  tbSolid(bg, 0.02, 0.02, 0.03, 0.62) -- 半透明黑底（能透出背景、文字仍清楚）
+  tbSolid(bg, TB_MENU_COLORS.panelRGBA[1], TB_MENU_COLORS.panelRGBA[2], TB_MENU_COLORS.panelRGBA[3], TB_MENU_COLORS.panelRGBA[4]) -- 外框背景（加深）
   bg:SetPoint("TOPLEFT", f, "TOPLEFT", 0, 0)
   bg:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
   f.bg = bg
@@ -1116,8 +1122,8 @@ local function tbMenuBuild()
   -- ★圆角时底由 backdrop 自己画（insets 4 → 落在圆角内侧）；再叠一层自己的方形半透明底会发黑
   if chrome.kind == "rounded" then pcall(bg.Hide, bg) end
   local title = tbText(f, 10, 0.95, 0.82, 0.35)
-  title:SetPoint("TOPLEFT", f, "TOPLEFT", 5, -5)
-  pcall(title.SetWidth, title, W - 10)
+  title:SetPoint("TOPLEFT", f, "TOPLEFT", TB_MENU_PAD.x, -TB_MENU_PAD.t)
+  pcall(title.SetWidth, title, W - TB_MENU_PAD.x * 2)
   pcall(title.SetJustifyH, title, "LEFT")
   f.title = title
   f.rows = {}
@@ -1125,9 +1131,14 @@ local function tbMenuBuild()
   local function put(i, label, fn)
     local col = (i - 1) % 2
     local row = math.floor((i - 1) / 2)
-    local x = col * (TB_MENU_COL_W + TB_MENU_GAP) + 1
+    local x = TB_MENU_PAD.x + col * (TB_MENU_COL_W + TB_MENU_GAP)
     local y = TB_MENU_TOP - row * TB_MENU_ITEM_H
-    local b = tbBtn(f, x, y, TB_MENU_COL_W - 2, label, fn, nil)
+    local b = tbBtn(f, x, y, TB_MENU_COL_W, label, fn, nil)
+    -- ★条目底**透明**（用户「背景透明」）：底色只在这里写一次，悬停**不再动它**
+    if b.bg then
+      pcall(b.bg.SetVertexColor, b.bg, TB_MENU_COLORS.itemRGBA[1], TB_MENU_COLORS.itemRGBA[2],
+            TB_MENU_COLORS.itemRGBA[3], TB_MENU_COLORS.itemRGBA[4])
+    end
     if b.text then
       pcall(b.text.SetWidth, b.text, TB_MENU_COL_W - 6)
       pcall(b.text.SetJustifyH, b.text, "LEFT")
@@ -1136,10 +1147,10 @@ local function tbMenuBuild()
     --   悬停高亮 —— 本项目配方禁用 SetHighlightTexture，一律 OnEnter/OnLeave **改颜色**
     --   （底色变亮金 + 文字变亮），并挂在**真实 OnEnter/OnLeave 脚本**上（判据走真实脚本触发）。
     local function paint(hot)
-      local c = hot and TB_MENU_HOT.hot or TB_MENU_HOT.bg
-      if b.bg then pcall(b.bg.SetVertexColor, b.bg, c[1], c[2], c[3], c[4]) end
+      -- ★★★1.73.40 用户：「操作获取加点白色，只要文字变色，**不用背景变色**」→
+      --   这里**只**动 FontString 的颜色（不加白底、不改底色）。
+      local tc = hot and TB_MENU_COLORS.txtHotRGBA or TB_MENU_COLORS.txtRGBA
       if b.text and type(b.text.SetTextColor) == "function" then
-        local tc = hot and TB_MENU_HOT.txthot or TB_MENU_HOT.txt
         pcall(b.text.SetTextColor, b.text, tc[1], tc[2], tc[3])
       end
       b.hot = hot and true or false
@@ -1236,6 +1247,10 @@ function EVAL_TB_MENU_GEOM()
     end
   end
   -- ★1.73.40 圆角读值口：菜单用的是**原生圆角边**（rounded）还是**四条平边**（flat）退化路径
+  -- ★1.73.40 padding 读值口（用户「框增加 padding」）
+  out.padX, out.padT, out.padB = TB_MENU_PAD.x, TB_MENU_PAD.t, TB_MENU_PAD.b
+  out.titleH = TB_MENU_TITLE_H
+  if f.title then out.titleLeft = num(f.title.GetLeft, f.title) out.titleTop = num(f.title.GetTop, f.title) end
   out.chrome = f.chrome
   out.edge = f.chromeEdge
   if f.bg and type(f.bg.IsShown) == "function" then
@@ -1256,6 +1271,11 @@ function EVAL_TB_MENU_GEOM()
     if b.bg and type(b.bg.GetVertexColor) == "function" then
       local okc, cr, cg, cb2b, ca = pcall(b.bg.GetVertexColor, b.bg)
       if okc then it.r, it.g, it.b, it.a = cr, cg, cb2b, ca end
+    end
+    -- ★1.73.40 文字色读值口（「只要**文字**变色」→ 必须能分别读到文字色与底色）
+    if b.text and type(b.text.GetTextColor) == "function" then
+      local okt, tr, tg, tb2b = pcall(b.text.GetTextColor, b.text)
+      if okt then it.tr, it.tg, it.tb = tr, tg, tb2b end
     end
     it.hot = b.hot and true or false
     out.items[i] = it

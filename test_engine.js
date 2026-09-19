@@ -744,8 +744,10 @@ function checkIconAssets() {
   if (!m) bad.push('没有 edgeSize');
   else if (!/_EDGE$/.test(m[1]) && !/^[0-9]+$/.test(m[1])) bad.push('edgeSize 不是整数常量: ' + m[1]);
   if (tb.indexOf('SetBackdropBorderColor') < 0) bad.push('没有 SetBackdropBorderColor（边框会保持客户端默认色）');
-  const bw = tb.match(/SetBackdropBorderColor, f, ([0-9.]+), ([0-9.]+), ([0-9.]+), ([0-9.]+)/);
-  if (!bw || Number(bw[1]) < 0.9 || Number(bw[2]) < 0.9 || Number(bw[3]) < 0.9 || Number(bw[4]) < 0.5) bad.push('边框色不是白色高亮: ' + (bw && bw.slice(1).join('/')));
+  // ★边框色现在走**单一常量**（TB_MENU_COLORS.borderRGBA）→ 两边都要钉：常量本身是白色 + 调用点真的用它
+  const bwDef = tb.match(/borderRGBA\s*=\s*\{\s*([0-9.]+),\s*([0-9.]+),\s*([0-9.]+),\s*([0-9.]+)\s*\}/);
+  if (!bwDef || Number(bwDef[1]) < 0.9 || Number(bwDef[2]) < 0.9 || Number(bwDef[3]) < 0.9 || Number(bwDef[4]) < 0.5) bad.push('边框色常量不是白色高亮: ' + (bwDef && bwDef.slice(1).join('/')));
+  if (tb.indexOf('SetBackdropBorderColor, f, TB_MENU_COLORS.borderRGBA') < 0) bad.push('调用点没走白色边框常量（写死别的色也能过）');
   if (tb.indexOf('GetBackdrop') < 0) bad.push('没有 GetBackdrop 读回确认（挂没挂上不可知）');
   if (tb.indexOf('kind = "flat"') < 0 && tb.indexOf('edgeTex') < 0) bad.push('没有「挂不上就退回四条平边」的退化路径');
   if (/GetBackdropColor|GetBackdropBorderColor/.test(tb)) bad.push('调了本客户端不存在的读值口 GetBackdropColor/GetBackdropBorderColor');
