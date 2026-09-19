@@ -11266,7 +11266,7 @@ do
   print("  分享文案三语言：62 键逐语言齐全 · 中文原文逐字校验 · 切语言四处读值口即时生效 · 符号/色码仍在源码")
 end
 
--- 147) ★★★1.73.42k 境界 = **方案里最大的技能等级**（各档一色）+ 文案「分享了」（用户真机反馈的三条）
+-- 147) ★★★1.73.42k/m 境界 = **方案里最大的技能等级**（各档一色，且色系与品阶**错开**）+ 文案「分享了」
 --   用户原话：「用户的等级根据他方案内的最大等级来对应. 并且加上不同的字体颜色. 分享了一份传家宝调整 分享了 三个字.」
 do
   local function lvTxt(levels) -- 造一份「技能带等级」的方案文本（等级与官方语法同形：技能(60)）
@@ -11310,6 +11310,29 @@ do
     eq(seen147[ri.color] == nil, true, "③★★★境界色不重复：" .. tostring(ri.color))
     seen147[ri.color] = true
   end
+  -- ★★★1.73.42m 用户：「角色等级的颜色可以换一套其他的颜色体系. 不要和方案颜色相同」
+  --   ⇒ 判据 = 7 个境界色与 5 个品阶色**逐个不相等**（两套色系不许有交集；同色就说明两个维度糊在一起了）
+  local tierColors147 = {}
+  for i = 1, 5 do
+    local _, ti147 = EVAL_SHARE_SEAL_TIER(({ 1, 4, 7, 10, 13 })[i])
+    tierColors147[ti147.color] = true
+  end
+  local clash147 = ""
+  for i = 1, 7 do
+    local rc147 = EVAL_SHARE_SEAL_RANK_INFO(rankLevels[i]).color
+    if tierColors147[rc147] then clash147 = clash147 .. " " .. rc147 end
+  end
+  eq(clash147, "", "③★★★境界色与品阶色**一个都不许相同**（撞色：" .. clash147 .. "）")
+  -- 反向哨兵：境界内部也不许同色（同色 = 亮度阶梯没做出来）
+  local pairClash147 = ""
+  for i = 1, 7 do
+    for j = i + 1, 7 do
+      if EVAL_SHARE_SEAL_RANK_INFO(rankLevels[i]).color == EVAL_SHARE_SEAL_RANK_INFO(rankLevels[j]).color then
+        pairClash147 = pairClash147 .. " " .. i .. "=" .. j
+      end
+    end
+  end
+  eq(pairClash147, "", "③★★境界内部也不许同色（撞色：" .. pairClash147 .. "）")
   eq(EVAL_SHARE_SEAL_RANK_COLOR_OF("大乘") == EVAL_SHARE_SEAL_RANK_INFO(60).color, true, "③★★按名字也能找回颜色（封皮行里只有名字）")
   eq(EVAL_SHARE_SEAL_RANK_COLOR_OF("不存在的境界") == EVAL_SHARE_SEAL_RANK_INFO(1).color, true, "③★找不到 → 最低档色（不猜）")
   -- ④ 文案改成「分享了」：整行不许再出现「传家宝」
@@ -11338,7 +11361,7 @@ do
   end
   EVAL_HELP_CONFIG.shareSealDemo = keepDemo147 -- ★原样还回去（不要吃掉别人要读的证人）
   TEST.chat = nil
-  print("  境界=方案内最大技能等级（各档一色）· 文案「分享了」· 弹窗与分享行同源 · 样例 7 档带色")
+  print("  境界=方案内最大技能等级（各档一色，且与品阶色系**不撞**）· 文案「分享了」· 弹窗与分享行同源 · 样例 7 档带色")
 end
 
 -- 148) ★★★1.73.42l 案例模版行：图标 + **名称文字色** + **背景色** 全按品阶（用户真机反馈）
