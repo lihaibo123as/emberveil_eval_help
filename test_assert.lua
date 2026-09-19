@@ -3988,7 +3988,7 @@ eq(EVAL_SHARE_SEND("GUILD"), true, "share send ok")
 local shMsgs = {}
 for _, s in ipairs(TEST.runScripts or {}) do
   local m = string.match(s, 'SendChatMessage%("(.-)", "GUILD"%)')
-    if m and (string.sub(m, 1, 6) == "[EHPF#" or (string.find(m, "|HEHPF:", 1, true) and string.find(m, "传输中", 1, true))) then table.insert(shMsgs, m) end -- ★封皮不算分片（v1/v2）
+    if m and (string.sub(m, 1, 6) == "[EHPF#" or string.find(m, "|HEHPF:", 1, true)) then table.insert(shMsgs, m) end -- ★封皮不算分片（v1/v2）
 end
 eq(table.getn(shMsgs) >= 1, true, "share chunked messages emitted")
 -- 收齐全片 → 弹窗待导入
@@ -5130,6 +5130,7 @@ do
   EVAL_HELP_CONFIG.war.profiles = { prof81 } EVAL_HELP_CONFIG.war.activeProfile = 1
   TEST.runScripts = nil
   EVAL_SHARE_SEND("GUILD")
+  EVAL_TEST_SHARE_DRAIN() -- ★最后一片标签更长 → 分片数可能变多，先滴干再收集
   local msgs81 = {}
   for _, s in ipairs(TEST.runScripts or {}) do
     local m = string.match(s, 'SendChatMessage%("(.-)", "GUILD"%)')
@@ -5175,7 +5176,7 @@ do
     local out = {}
     for _, s in ipairs(TEST.runScripts or {}) do
       local m = string.match(s, 'SendChatMessage%("(.-)", "GUILD"%)')
-      if m and (string.sub(m, 1, 6) == "[EHPF#" or (string.find(m, "|HEHPF:", 1, true) and string.find(m, "传输中", 1, true))) then table.insert(out, m) end -- ★★封皮不算片（v1/v2）
+      if m and (string.sub(m, 1, 6) == "[EHPF#" or string.find(m, "|HEHPF:", 1, true)) then table.insert(out, m) end -- ★★封皮不算片（v1/v2）
     end
     EVAL_HELP_CONFIG.war.profiles = keep
     EVAL_HELP_CONFIG.war.activeProfile = 1
@@ -7725,7 +7726,7 @@ do
     local out = {}
     for _, s in ipairs(TEST.runScripts or {}) do
       local m = string.match(s, 'SendChatMessage%("(.-)", "GUILD"%)')
-      if m and (string.sub(m, 1, 6) == "[EHPF#" or (string.find(m, "|HEHPF:", 1, true) and string.find(m, "传输中", 1, true))) then table.insert(out, m) end -- ★封皮不算分片（v1/v2）
+      if m and (string.sub(m, 1, 6) == "[EHPF#" or string.find(m, "|HEHPF:", 1, true)) then table.insert(out, m) end -- ★封皮不算分片（v1/v2）
     end
     return out
   end
@@ -7801,7 +7802,7 @@ do
     local out = {}
     for _, s in ipairs(TEST.runScripts or {}) do
       local m = string.match(s, 'SendChatMessage%("(.-)", "GUILD"%)')
-      if m and (string.sub(m, 1, 6) == "[EHPF#" or (string.find(m, "|HEHPF:", 1, true) and string.find(m, "传输中", 1, true))) then table.insert(out, m) end -- ★封皮不算分片（v1/v2）
+      if m and (string.sub(m, 1, 6) == "[EHPF#" or string.find(m, "|HEHPF:", 1, true)) then table.insert(out, m) end -- ★封皮不算分片（v1/v2）
     end
     return out
   end
@@ -11024,14 +11025,12 @@ do
   TEST.chat = nil TEST.runScripts = nil
   eq(EVAL_SHARE_SEND("GUILD"), true, "①分享能发出")
   local seal = tostring((EVAL_SHARE_SEAL_STATE() or {}).last or "")
-  eq(string.len(seal) > 0, true, "①★★★算出了封皮行")
-  eq(string.find(seal, " 分享了 → ", 1, true) ~= nil, true, "①★★封皮行含「分享了 →」")
-  eq(string.find(seal, "|HEHPF:", 1, true) ~= nil, true, "①★★封皮行带可点链接（载荷=传输 id）")
-  eq(string.find(seal, "秘籍·", 1, true) ~= nil, true, "①★★封皮行含 [品阶秘籍·方案名]")
-  eq(string.find(seal, "|T", 1, true) == nil, true, "①★封皮行不含 |T（实测不可用）")
-  -- ★★★1.73.43 封皮改成**最后一步**（用户复审要求）：它现在排在队列里 → 先滴干队列再收集，
-  --   否则 RunScript 里只有第 1 片（判据会假红）。★滴干用「队列总长」而不是「按 id 数分片」：
-  --   封皮**不是分片**（不带序号），按 id 数会漏掉它 → 队列里留一条尾巴污染后续用例。
+  eq(string.len(seal) > 0, true, "①★★★算出了分享信息行")
+  eq(string.find(seal, " 分享了 → ", 1, true) ~= nil, true, "①★★信息行含「分享了 →」")
+  eq(string.find(seal, "秘籍·", 1, true) ~= nil, true, "①★★信息行含 [品阶秘籍·方案名]")
+  eq(string.find(seal, "|T", 1, true) == nil, true, "①★信息行不含 |T（实测不可用）")
+  -- ★★★1.73.43f 用户：「特殊标识那条走不通就用能用的……不能用就删除」⇒ 分享信息**不再单独发一条**，
+  --   而是当**最后一片的显示标签**（那一条与其余分片逐字节同款结构 = 已被证明能画的那条通道）。
   local g144 = 0
   while EVAL_SHARE_TEST_QUEUE_LEN() > 0 and g144 < 400 do
     g144 = g144 + 1
@@ -11044,17 +11043,25 @@ do
     local m = string.match(sc, 'SendChatMessage%("(.-)", "GUILD"%)')
     if m then table.insert(all, m) end
   end
-  local foundSeal = false
-  for k2 = 1, table.getn(all) do if all[k2] == seal then foundSeal = true end end
-  eq(foundSeal, true, "①★★★封皮**真的走了发送通道**（RunScript 里有它）")
-  eq(all[table.getn(all)] == seal, true, "①★★★封皮是**最后一条**（用户：「方案分享最后一步 展示分享信息」）")
-  local sid = string.match(seal, "|HEHPF:(%x+)|h")
+  -- ★最后一片的标签 = 分享信息（整条消息与其它分片同款结构，只是标签换了）
+  local lastMsg = tostring(all[table.getn(all)] or "")
+  eq(string.find(lastMsg, seal, 1, true) ~= nil, true, "①★★★最后一片的标签 = 分享信息（真的走了同一条发送通道）")
+  eq(string.find(lastMsg, "|HEHPF:", 1, true) ~= nil, true, "①★★★它照旧带可点链接（点标签即可导入）")
+  eq(string.find(lastMsg, "]|h|r", 1, true) ~= nil, true, "①★★结构与分片同款（`[…[标签]|h|r`），不再有第二种消息形态")
+  local sid = string.match(lastMsg, "|HEHPF:(%x+) ")
   eq(type(sid) == "string", true, "①读得到传输 id（" .. tostring(sid) .. "）")
+  -- ★1.73.43f 只收**真分片**：分享信息那条的序号是 `0/1:`（接收端按越界忽略），别混进分片统计
   local chunks = {}
-  for k3 = 1, table.getn(all) do if string.sub(all[k3], 1, 6) == "[EHPF#" or (string.find(all[k3], "|HEHPF:", 1, true) and string.find(all[k3], "传输中", 1, true)) then table.insert(chunks, all[k3]) end end
+  for k3 = 1, table.getn(all) do
+    local i3 = string.match(tostring(all[k3] or ""), "|HEHPF:%x+ (%d+)/")
+    if string.sub(all[k3], 1, 6) == "[EHPF#" or (string.find(all[k3], "|HEHPF:", 1, true) and tonumber(i3 or "0") >= 1) then table.insert(chunks, all[k3]) end end
   eq(table.getn(chunks) >= 1, true, "②前置：拿到分片（" .. tostring(table.getn(chunks)) .. "）")
   eq(string.find(tostring(chunks[1] or ""), "|HEHPF:", 1, true) ~= nil, true, "②★★分片 = v2 链接形态（载荷藏在 |H 段）")
+  -- ★1.73.43f 分片标签**恒为进度**；分享信息是**另一条**消息（同款结构、序号 0/1）
   eq(string.find(tostring(chunks[1] or ""), "传输中...", 1, true) ~= nil, true, "②★★分片标签 = 方案:名 传输中...%")
+  local sealMsg = tostring(all[table.getn(all)] or "")
+  eq(string.find(sealMsg, "0/1:", 1, true) ~= nil, true, "②★★★分享信息那条与分片**同款结构**（序号 0/1 → 接收端按越界忽略）")
+  eq(string.find(sealMsg, seal, 1, true) ~= nil, true, "②★★★它的标签就是分享信息")
   local over = 0
   for k5 = 1, table.getn(chunks) do if string.len(chunks[k5]) > 250 then over = over + 1 end end
   eq(over, 0, "②★★★每条消息都 <= 250 字节（实测上限），超限条数=" .. tostring(over))
@@ -11086,7 +11093,9 @@ do
       EVAL_SHARE_RESET()
     end
   end
-  eq(string.find(tostring(chunks[table.getn(chunks)] or ""), "100%", 1, true) ~= nil, true, "②★★末片标签 = 100%")
+  if table.getn(chunks) > 1 then
+    eq(string.find(tostring(chunks[table.getn(chunks)] or ""), "100%", 1, true) ~= nil, true, "②★★末片标签 = 100%")
+  end
   local pctAll = true
   for k6 = 1, table.getn(chunks) do if string.find(chunks[k6], "传输中...", 1, true) == nil then pctAll = false end end
   eq(pctAll, true, "②★每片都带进度百分比")
@@ -11224,7 +11233,7 @@ do
     if string.find(m, " 分享了 → ", 1, true) then seal145 = m end
   end
   eq(type(seal145) == "string", true, "③★★封皮行发出来了")
-  sid145 = string.match(tostring(seal145), "|HEHPF:(%x+)|h")
+  sid145 = string.match(tostring(seal145), "|HEHPF:(%x+)")
   eq(type(sid145) == "string", true, "③★传输 id 读得到")
   local guard145 = 0
   while EVAL_TEST_SHARE_QUEUE_ID_COUNT(sid145) > 0 and guard145 < 300 do
@@ -11302,7 +11311,7 @@ do
   eq(vA.headShown ~= false, true, "⑤★顶上的品阶行照旧在（品阶来自本地解析，不依赖封皮）")
   EVAL_SHARE_ONMSG(seal5, "队友乙")
   local vB = EVAL_TEST_SHARE_SEAL_ROW()
-  local sid5 = string.match(tostring(seal5), "|HEHPF:(%x+)|h")
+  local sid5 = string.match(tostring(seal5), "|HEHPF:(%x+)")
   local meta5 = (((EVAL_SHARE_SEAL_STATE() or {}).meta) or {})[tostring(sid5)]
   eq(type(meta5) == "table" and tostring(meta5.rank or "") ~= "", true,
      "⑤★★★封皮晚到时**数据照样解析**（" .. tostring(meta5 and meta5.rank) .. "）——只是不上屏")
@@ -12043,18 +12052,18 @@ do
     TEST.time = (TEST.time or 1000) + 1
     EVAL_SHARE_TEST_TICK()
   end
-  -- ④ 封皮链接结构：链接**只包** `[品阶秘籍·名]`，闭合之后才是 `|r` 与评语（与分片同款）
-  local body156 = tostring((EVAL_SHARE_SEAL_STATE() or {}).last or "")
-  local li156 = string.find(body156, "|HEHPF:", 1, true)
-  eq(li156 ~= nil, true, "④★★封皮带回传链接")
-  if li156 then
-    local lh156 = string.find(body156, "|h", li156, true)
-    eq(string.sub(body156, lh156 + 2, lh156 + 2), "[", "④★★★链接**只包方括号**（`|h` 后紧跟 `[`）")
-    local lc156 = string.find(body156, "|h", lh156 + 2, true)
-    eq(lc156 ~= nil, true, "④★★★链接在 `]` 之后**立刻闭合**")
-    eq(string.find(string.sub(body156, lc156 + 2), "|r", 1, true), 1, "④★★★`|r` 与评语都在链接**之外**（老写法正是把它们包在链接里 → 客户端不画）")
-    eq(string.sub(body156, -2) == "|h", false, "④★★整行不再以 `|h` 收尾（那是老结构的尾巴）")
+  -- ④ ★★★1.73.43f 分享信息的那条消息 = **与分片同款结构**（同色前缀 + 同链接 + 同 `[标签]|h|r`），序号 0/1
+  local msgs156 = {}
+  for _, sc156 in ipairs(TEST.runScripts or {}) do
+    local m156 = string.match(sc156, 'SendChatMessage%("(.-)", "GUILD"%)')
+    if m156 then table.insert(msgs156, m156) end
   end
+  local info156 = tostring(msgs156[table.getn(msgs156)] or "")
+  eq(string.find(info156, " 分享了 → ", 1, true) ~= nil, true, "④★★最后一条 = 分享信息")
+  eq(string.find(info156, "|HEHPF:", 1, true) ~= nil, true, "④★★★它带链接（同款结构 → 走已被证明能画的那条通道）")
+  eq(string.find(info156, " 0/1:", 1, true) ~= nil, true, "④★★★序号写成 0/1（接收端按越界忽略，对收方案零影响）")
+  eq(string.find(info156, "]|h|r", 1, true) ~= nil, true, "④★★★同款收尾（`]|h|r`）")
+  eq(string.len(info156) <= 250, true, "④★★它也 ≤250 字节（超限真机上整条丢）")
   -- ⑤ 取证打印转义：客户端会把 |H…|h 当链接吃掉 → 不打成 `||` 就看不到真证据
   EVAL_HELP_CONFIG.shProbe = nil
   TEST.chat = nil
@@ -12126,6 +12135,12 @@ do
   EVAL_HELP_CONFIG.tb = savedTb157
   EVAL_HELP_CONFIG.shVariantProbe = nil
   TEST.chat, TEST.runScripts = nil, nil
+  -- ★1.73.43f 队列上限：**分享信息那一条也要算进去**（否则会挤爆队列、静默丢消息）
+  EVAL_TEST_SHARE_QUEUE_FILL(199)
+  TEST.chat = nil
+  eq(EVAL_SHARE_SEND("GUILD"), false, "⑥★★★队列将满（199 + 分片 + 分享信息 > 200）→ 如实拒绝，不放进来")
+  eq(string.find(tostring(TEST.chat or ""), "队列", 1, true) ~= nil, true, "⑥★★并如实说明（不静默）")
+  EVAL_TEST_SHARE_QUEUE_FILL(0)
   print("  封皮变异测：9 条编号形态走同一队列发到「说」（纯文本/箭头/星星/色码/链接/链接+后续/完整/换箭头/去星）")
 end
 

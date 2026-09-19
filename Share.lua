@@ -150,9 +150,11 @@ local function shBuildFor(text)
   local idh = string.format("%04x", math.random(0, 65535)) -- 本次传输 id（接收端按 发送者+id 归并分片）
   -- ★★★1.73.42h v2 分片体：载荷藏进自定义链接的 |H 段，聊天里**只显示**「方案:名 传输中...%」
   local nm2 = shSealName(text)
-  local function chunkBody(idx, tot, part)
+  -- ★1.73.43f label 可选：最后一片要把**分享信息**当标签（用户：「用能用的那几个」）
+  local function chunkBody(idx, tot, part, label)
     local pct = math.ceil(idx * 100 / tot)
-    return "|cff9ad4ff|HEHPF:" .. idh .. " " .. idx .. "/" .. tot .. ":" .. part .. "|h[方案:" .. nm2 .. " 传输中..." .. pct .. "%]|h|r"
+    if not label then label = "方案:" .. nm2 .. " 传输中..." .. pct .. "%" end
+    return "|cff9ad4ff|HEHPF:" .. idh .. " " .. idx .. "/" .. tot .. ":" .. part .. "|h[" .. label .. "]|h|r"
   end
   -- ★预算：单条 <= 250 字节（实测 250 通过、270 整条丢）→ 先量包装，剩下的都给 hex
   -- ★★★1.73.42h 量的必须是**最坏形状**，不能拿 idx=1/tot=1 当样本：样本的 "1/1" 与 "100%" 是最短的，
@@ -162,46 +164,35 @@ local function shBuildFor(text)
   local chunk = SH_MSG_MAX - wrapLen
   if chunk > SH_CHUNK then chunk = SH_CHUNK end
   if chunk < 40 then chunk = 40 end
+  -- ★★★1.73.43f 用户：「如果特殊标识不可用就使用能用的前面能用你的那几个就可以. 不能用就删除」⇒
+  --   **放弃「单独一条封皮消息」**（真机四轮已证明：那条我们确实发了，客户端就是不画），
+  --   改成把分享信息**当最后一片的显示标签**：那一条与其余分片**逐字节同款结构**
+  --   （同色前缀 + 同 `|HEHPF:` 链接 + 同 `[…]|h|r`），只是标签文字换成 `[档位]名 分享了 → [品阶秘籍·名] 评语`。
+  --   ★这样用的是**已被证明能画**的同一条通道，而且**不再多发任何消息**。
+  --   ★客户端那边照旧按链路载荷(id + i/n + hex)解析，标签只是显示 ⇒ 接收完全不受影响。
+  local sealLine = nil
+  if type(EVAL_SHARE_SEAL_INFO) == "function" then
+    local okf, sinfo = pcall(EVAL_SHARE_SEAL_INFO, text)
+    if okf and type(sinfo) == "table" and type(sinfo.line) == "string" and sinfo.line ~= "" then sealLine = sinfo.line end
+  end
   local n = math.ceil(string.len(hex) / chunk)
   local bodies = {}
   for k = 1, n do
     bodies[k] = chunkBody(k, n, string.sub(hex, (k - 1) * chunk + 1, k * chunk))
   end
-  -- ★如实：万一还是超预算，说出来（绝不静默丢片）
-  for k = 1, table.getn(bodies) do
-    if string.len(bodies[k]) > SH_MSG_MAX then
-      shSay("分享分片 " .. k .. "/" .. table.getn(bodies) .. " 有 " .. string.len(bodies[k]) .. " 字节，超过本客户端实测上限 " .. SH_MSG_MAX)
-      break
-    end
+  --     发送队列里**再也不会有第二个来源**（这正是「特殊标识那条路走不通就别留着」的落地）。
+  -- ★★★1.73.43f 用户：「特殊标识那条走不通就用能用的……不能用就删除」⇒ 分享信息**不再自创消息形态**：
+  --   它现在就是一条**与分片逐字节同款结构**的消息（同色前缀 + 同 `|HEHPF:` 链接 + 同 `[标签]|h|r`），
+  --   只把链路里的序号写成 **0/1**（接收端按「i < 1 越界」直接忽略 ⇒ 对接收零影响，老协议也不受影响），
+  --   标签文字换成 `[档位]名 分享了 → [品阶秘籍·名] 评语`。★用的是**已被证明能画**的那条通道。
+  if sealLine and sealLine ~= "" then
+    SH.sealPending = chunkBody(0, 1, "0", sealLine) -- 0/1：形态与分片完全相同，但接收端会当越界丢掉
+  else
+    SH.sealPending = nil
   end
-  -- ★★★1.73.42g 封皮行：分片之后追加**一条**短消息，链接载荷只有传输 id（不带 hex）；
-  --   ★分片格式**不动**（仍是 v1 明文）→ 老版本照旧能收；点它 = 直接导入。
-  if type(EVAL_SHARE_SEAL_INFO) == "function" then
-    local sinfo = EVAL_SHARE_SEAL_INFO(text)
-    if sinfo and sinfo.line then
-      local sline = tostring(sinfo.line)
-      local smark = tostring(sinfo.symbol) .. "[" .. tostring(sinfo.tierName) .. "秘籍·" .. tostring(sinfo.plan) .. "]"
-      local sps = string.find(sline, smark, 1, true)
-      if sps then
-        local scut = sps + string.len(tostring(sinfo.symbol)) - 1
-        -- ★★★1.73.43c 真机取证结论（探针）：封皮那条**我们确实发了**、队列也滴干了，客户端**就是不画**。
-        --   与分片逐字对比，唯一结构差别在这里：老写法让链接**一直开到评语之后**（`[名]` 与 `|r` 都在链接内），
-        --   而分片是 `|HEHPF:…|h[标签]|h|r`（链接**只包标签**）。⇒ 现在封皮照抄分片结构。
-        --   ★附带好处：可点区域正好是那个方括号（评语不再是链接的一部分）。
-        local stail = string.sub(sline, scut + 1)
-        local sclose = string.find(stail, "]", 1, true)
-        if sclose then
-          sline = string.sub(sline, 1, scut) .. "|HEHPF:" .. idh .. "|h" .. string.sub(stail, 1, sclose) .. "|h" .. string.sub(stail, sclose + 1)
-        else
-          sline = string.sub(sline, 1, scut) .. "|HEHPF:" .. idh .. "|h" .. stail .. "|h" -- 保底：找不到 ] 退回老写法（绝不留半条链接）
-        end
-      end
-      SH.sealPending = sline -- ★封皮排在**分片之后**（最后一步）
-      SH.sealSentLast = sline -- ★1.73.43b 发送侧单独记（原来与接收侧共用 sealLast → 收到别人分享就把自己的盖掉了）
-      SH.sealLast = sline
-    end
-  end
-  return bodies
+  SH.sealSentLast = sealLine or ""
+  SH.sealLast = SH.sealSentLast
+  return bodies -- ★★（上一版把这一行连同旧块一起替换掉了 → shBuildFor 返回 nil、分享直接失败；判据当场抓到）
 end
 local function shBodies()
   if type(EVAL_PROFILE_TO_TEXT) ~= "function" then shSay(L("SH_NOEXPORT")) return nil end
@@ -384,8 +375,8 @@ local function shEnsureTxTicker()
 end
 function shTxEnqueue(bodies, chanId, target)
   local n = table.getn(bodies)
-  -- ★1.73.43 上限如实算上封皮那一条（它现在也进队列，排在最后）
-  local extra = (SH.sealPending and 1 or 0)
+  -- ★1.73.43f 上限如实算上分享信息那一条（它排在分片之后）
+  local extra = (type(SH.sealPending) == "string" and SH.sealPending ~= "") and 1 or 0
   if table.getn(shTxQ) + n + extra > SH_MAX_QUEUE then
     shSay(string.format(L("SH_Q_FULL"), SH_MAX_QUEUE))
     return false
@@ -393,18 +384,14 @@ function shTxEnqueue(bodies, chanId, target)
   -- 第 1 片立即发（手感与旧版一致），其余排队（★同走 shSendNow：留痕不断层）
   shSendNow(bodies[1], chanId, target, false)
   for i = 2, n do table.insert(shTxQ, { body = bodies[i], chan = chanId, target = target }) end
-  -- ★★★1.73.43 用户（复审时明确）：「**方案分享最后一步** 展示分享信息」——
-  --   封皮行（`[档位]<玩家名> 分享了 → [品阶秘籍·方案名]  <评语>`）要排在**所有分片之后**，
-  --   也就是玩家在聊天里**最后**看到的那一条；原来是「跟着第 1 片立即发」→ 长方案时它被顶到很上面，
-  --   末尾只剩「传输中...100%」，用户会以为**分享信息根本没出现**。
-  --   ★带 `seal = true` 标记：它不是分片 —— 队列计数/滴干判据都按**分片形态**数，不受影响。
+  -- ★★★1.73.43f 分享信息排在**所有分片之后**（用户：「方案分享最后一步 展示分享信息」）；
+  --   它是一条与分片**同款结构**的消息（见 shBuildFor），所以走同一条已被证明能画的通道。
   local hasSeal = false
-  if SH.sealPending then
+  if type(SH.sealPending) == "string" and SH.sealPending ~= "" then
     table.insert(shTxQ, { body = SH.sealPending, chan = chanId, target = target, seal = true })
     SH.sealPending = nil
     hasSeal = true
   end
-  -- ★条数如实：分片 + 封皮（原来只报分片数，长方案时比真实条数少报 1 条）
   local total = n + (hasSeal and 1 or 0)
   if total > 1 then
     shTxLast = shNowT()
@@ -482,14 +469,36 @@ function EVAL_SHARE_SEAL_VARIANT_PROBE()
 end
 
 function EVAL_TEST_SHARE_SENTLOG_CLEAR() SH.sentLog = {} return true end
+-- ★1.73.43f 测试钩子：把发送队列**一次滴干**（分片数会随方案长度变化，夹具必须先滴干再收集）
+-- ★1.73.43f 测试钩子：把发送队列填到指定条数（验「队列上限把分享信息那一条也算进去」）
+function EVAL_TEST_SHARE_QUEUE_FILL(n)
+  shTxQ = {}
+  local k = tonumber(n) or 0
+  for i = 1, k do
+    table.insert(shTxQ, { body = "|cff9ad4ff|HEHPF:ffff " .. i .. "/" .. k .. ":00|h[填队列]|h|r", chan = "SAY" })
+  end
+  return table.getn(shTxQ)
+end
+function EVAL_TEST_SHARE_DRAIN()
+  local g = 0
+  while table.getn(shTxQ) > 0 and g < 500 do
+    g = g + 1
+    if type(TEST) == "table" then TEST.time = (TEST.time or 1000) + 1 end
+    shTxStep()
+  end
+  return g
+end
 -- ★按本次传输 id 数队列里的分片（不受上一笔遗留影响）
 function EVAL_TEST_SHARE_QUEUE_ID_COUNT(idh)
   local want = tostring(idh or "")
   if want == "" then return -1 end
   local c = 0
   for q = 1, table.getn(shTxQ) do
-    local bd = tostring(shTxQ[q].body or "")
-    if string.find(bd, "|HEHPF:" .. want .. " ", 1, true) or string.find(bd, "[EHPF#" .. want .. " ", 1, true) then c = c + 1 end
+    -- ★1.73.43f 封皮那条带 seal 标记、且序号是 0/1（不是分片）→ 不计数
+    if not shTxQ[q].seal then
+      local bd = tostring(shTxQ[q].body or "")
+      if string.find(bd, "|HEHPF:" .. want .. " ", 1, true) or string.find(bd, "[EHPF#" .. want .. " ", 1, true) then c = c + 1 end
+    end
   end
   return c
 end
@@ -647,10 +656,10 @@ local function shOnMsg(msg, sender, ev)
     local inner = string.match(msg, "|HEHPF:([^|]*)|h")
     if inner then idh, i, n, payload = string.match(inner, "^(%x+) (%d+)/(%d+):(%x*)$") end
   end
-  if not idh then
-    -- ★★★1.73.42g 封皮行：不带 hex，只带传输 id —— 记下「这一笔真的发完了」
-    local sid = string.match(msg, "|HEHPF:(%x+)|h")
-    if sid then
+  -- ★★★1.73.43f 分享信息那条的**统一处理**：老式（`|HEHPF:id|h`，无序号）与新式（`<id> 0/1:0`，与分片同款结构）
+  --   都从这里进 —— 记「这一笔真的发完了」+ 身份/评语（只有发送端知道的那两样）。
+  local function shSealCapture(sid)
+    if not sid then return end
       -- ★★★1.73.42i 顺手把「只有发送端知道」的两样东西记下来，供接收弹窗的品阶栏用：
       --   ① 境界 = 封皮行开头的 [境界]；② 评语 = 链接显示段 `|h[品阶秘籍·名]|h` 里方括号之后那段。
       --   ★解析不出来就**不记** → 弹窗如实写「未知」，绝不拿本机角色/本机随机评语冒充发送端的。
@@ -692,12 +701,18 @@ local function shOnMsg(msg, sender, ev)
       if type(shSealRowApply) == "function" and SH.pending and tostring(SH.pending.idh or "") == tostring(sid) then
         pcall(shSealRowApply)
       end
-    end
+  end
+  if not idh then
+    shSealCapture(string.match(msg, "|HEHPF:(%x+)")) -- 老式封皮：没有序号、链接只带 id
     return
   end
   if not shCfg().recv then return end
   i, n = tonumber(i), tonumber(n)
-  if not i or not n or n < 1 or i < 1 or i > n then return end -- 防异常包（非数字 / 索引越界）
+  if not i or not n or n < 1 or i < 1 or i > n then
+    -- ★1.73.43f 新式分享信息（序号 0/1）会走到这里 —— 它**带发送端信息**，顺手记进 meta（接收行为不变）
+    if string.find(msg, " 分享了 → ", 1, true) then shSealCapture(idh) end
+    return
+  end
   if n > SH_MAX_CHUNKS then shWarn(string.format(L("SH_DROP_BIG"), n, SH_MAX_CHUNKS)) return end -- R4
   sender = tostring(sender or "?")
   local now = shNowT()
@@ -2400,13 +2415,21 @@ function EVAL_TEST_SHARE_BUILD() return shBodies() end
 function EVAL_TEST_SHARE_QUEUE_CHUNKS()
   local c = 0
   for q = 1, table.getn(shTxQ) do
-    local bd = tostring(shTxQ[q].body or "")
-    if string.sub(bd, 1, 6) == "[EHPF#" or string.find(bd, "|HEHPF:", 1, true) then c = c + 1 end
+    -- ★1.73.43f 分享信息那条**不是分片**（带 seal 标记）→ 不计数（否则「队列里正好 N 片」这类判据会多算一条）
+    if not shTxQ[q].seal then
+      local bd = tostring(shTxQ[q].body or "")
+      if string.sub(bd, 1, 6) == "[EHPF#" or string.find(bd, "|HEHPF:", 1, true) then c = c + 1 end
+    end
   end
   return c
 end
 function EVAL_SHARE_PENDING() return SH.pending end
-function EVAL_SHARE_RESET() SH.buf = {} SH.done = {} SH.doneList = {} SH.pending = nil SH.recent = {} SH.recentList = {} SH.sealMeta = {} end -- ★1.73.42i 封皮元数据也清（跨用例不许残留）
+function EVAL_SHARE_RESET()
+  -- ★1.73.43f **发送侧也一起重置**：队列里可能还压着「分享信息」那一条（它在分片之后），
+  --   只按 id 数分片的滴干循环会把这条**留在队列里**，下一个用例就会把它当成自己的第一片（真机上=串包，测试里=判据假红）。
+  shTxQ = {}
+  SH.sealPending = nil
+SH.buf = {} SH.done = {} SH.doneList = {} SH.pending = nil SH.recent = {} SH.recentList = {} SH.sealMeta = {} end -- ★1.73.42i 封皮元数据也清（跨用例不许残留）
 -- ★1.71.2 测试钩子：按分享弹窗的 [导入] 按钮（走它自己的 OnClick 闭包）。
 --   用户报的 bug 正是这条路径漏了刷新——直调 EVAL_IMPORT_TEXT 会绕过它、测不出来。
 function EVAL_TEST_SHARE_SELF_SKIPPED() return SH.selfSkipped or 0 end
