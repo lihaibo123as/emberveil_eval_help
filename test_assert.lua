@@ -12142,12 +12142,11 @@ do
     if string.len(body) > 250 then long157 = long157 + 1 end
   end
   eq(miss157, 0, "③★★★每条都以**自己的编号**开头（`[n]`），缺编号 " .. tostring(miss157) .. " 条")
-  eq(string.find(tostring(pr157.list[1] or ""), "A行原样", 1, true) ~= nil, true, "④★含「A 行原样」（被测对象）")
-  eq(string.find(tostring(pr157.list[2] or ""), "换品阶色", 1, true) ~= nil, true, "④★含「A 行换品阶色」（隔离自定义头衔色）")
-  eq(string.find(tostring(pr157.list[3] or ""), "只色码+头衔", 1, true) ~= nil, true, "④★含「只色码+头衔」")
-  eq(string.find(tostring(pr157.list[4] or ""), "无色码", 1, true) ~= nil, true, "④★含「A 行无色码」")
-  eq(string.find(tostring(pr157.list[9] or ""), "|HEHPF:", 1, true) ~= nil, true, "④★★含「现用 B 行」（对照，必须出现）")
-  eq(string.find(tostring(pr157.list[10] or ""), "纯文本", 1, true) ~= nil, true, "④★含「纯文本等长填充」对照")
+  eq(string.find(tostring(pr157.list[1] or ""), "说 · 色码+纯文本", 1, true) ~= nil, true, "④★含「说 · 色码+纯文本」（频道轴 A）")
+  eq(string.find(tostring(pr157.list[2] or ""), "小队 · 同一串", 1, true) ~= nil, true, "④★含「小队 · 同一串」（频道轴 B：同串换频道）")
+  eq(string.find(tostring(pr157.list[3] or ""), "0/1:0链接", 1, true) ~= nil, true, "④★含「0/1:0 链接」（现用载荷）")
+  eq(string.find(tostring(pr157.list[4] or ""), "1/1:00链接", 1, true) ~= nil, true, "④★含「1/1:00 链接」（合法分片载荷）")
+  eq(string.find(tostring(pr157.list[10] or ""), "现用B行原样", 1, true) ~= nil, true, "④★★含「小队 · 现用 B 行」（对照，必须出现）")
   local say157 = 0
   local g157b = 0
   while EVAL_SHARE_TEST_QUEUE_LEN() > 0 and g157b < 400 do
@@ -12155,10 +12154,13 @@ do
     TEST.time = (TEST.time or 1000) + 1
     EVAL_SHARE_TEST_TICK()
   end
+  -- ★1.73.43m v4 起**两条轴一起验**：7 条走「说」、3 条走「小队」（同串两频道才能对比）
+  local party157 = 0
   for _, sc in ipairs(TEST.runScripts or {}) do
     if string.find(sc, '", "SAY")', 1, true) then say157 = say157 + 1 end
+    if string.find(sc, '", "PARTY")', 1, true) then party157 = party157 + 1 end
   end
-  eq(say157 >= 9, true, "⑤★★★9 条都真的按「说」发出去了（实际 " .. tostring(say157) .. "）")
+  eq(say157 >= 7 and party157 >= 3, true, "⑤★★★10 条都真的发出去了（说 " .. tostring(say157) .. " / 小队 " .. tostring(party157) .. "）")
   EVAL_HELP_CONFIG.tb = savedTb157
   EVAL_HELP_CONFIG.shVariantProbe = nil
   TEST.chat, TEST.runScripts = nil, nil
