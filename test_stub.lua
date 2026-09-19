@@ -151,7 +151,15 @@ local function newMock()
     -- ★★★1.73.47 用户要求「方案标题左对齐·**垂直居中**」→ 桩也得记住垂直对齐（否则这条判据读不到值 = 失明）
     SetJustifyV = function(self, v) rawset(self, "__justifyV", v) end,
     GetJustifyV = function(self) return rawget(self, "__justifyV") end,
-    SetTexture = function(_, a1) if type(a1) == "string" then rawset(m, "__tex", a1) end end,
+    -- ★★★1.73.49 桩保真：`SetTexture` **传了几个实参**也要记下来。
+    --   真机事故：把「返回两个值的函数」直接内联成实参（`SetTexture(f())`）→ Lua 展开成两个参数 →
+    --   第二参（本客户端是 **wrap 模式**）拿到一个字符串 → 纹理尺寸对、**整块纯黑**。
+    --   旧桩只取第一个参数、不当回事 → 「多传了一个参数」在测试里**完全不可见**。
+    SetTexture = function(_, a1, a2)
+      if type(a1) == "string" then rawset(m, "__tex", a1) end
+      rawset(m, "__texArgs", (a2 == nil) and 1 or 2)
+    end,
+    GetSetTextureArgs = function(self) return rawget(self, "__texArgs") end,
     -- ★1.73.26 桩保真：真客户端纹理有顶点色（SetVertexColor / GetVertexColor）——
     --   原来桩里没有 → 说明「半透明背景」这类判据**根本读不到值**（本项目「桩太宽松 → 断言失明」那一族）。
     SetVertexColor = function(self, r, g, b, a)

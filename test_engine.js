@@ -1213,6 +1213,18 @@ function checkIconAssets() {
   console.log("SHARE MSG SHAPE CHECK: 分享信息两条各自 <=1 段色码（客户端会吞多段色码的消息，已实测定案）");
 })();
 
+// ===== PROF ICON PROBE WIRING CHECK（1.73.49）：方案图标取证命令要真的接在 /eh go 上 =====
+// ★背景：用户报「方案左侧的图片还没显示」，而真机上「没请求 / 请求了没生效 / 生效了没画出来」三种原因
+//   只能靠**读回来的纹理路径**分辨 ⇒ 必须给用户一条能跑的命令。命令写错前缀 = 敲了静默无反应（本项目真事故）。
+(function () {
+  const eh = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
+  if (!/msg == "go 方案图标"/.test(eh) || !/EVAL_WAR_PROF_ICON_PROBE\(\)/.test(eh)) {
+    console.log("PROF ICON PROBE WIRING CHECK: FAIL - /eh go 方案图标 没接到命令入口（敲了会静默无反应）");
+    process.exitCode = 1; return;
+  }
+  console.log("PROF ICON PROBE WIRING CHECK: /eh go 方案图标 已接上（读回纹理/传参/显示）");
+})();
+
 // ===== SHARE LABEL I18N CHECK（1.73.47）：分片标签必须**走 Locales**，不许在源码里硬编码 =====
 // ★背景（用户：「方案:xxx 传输中 -> 秘籍传输中...」）：分片标签是**玩家看得见的文案**——
 //   硬编码中文 = 英/俄玩家看到中文（而且不报错，只是不同步，正是本项目最恨的一族）。

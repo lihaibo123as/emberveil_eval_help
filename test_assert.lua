@@ -12481,7 +12481,28 @@ do
   EVAL_HELP_CONFIG.war.profiles = savedProfiles160
   EVAL_HELP_CONFIG.war.activeProfile = savedActive160
   EVAL_WAR_TAB_REFRESH()
-  print("  方案列表：品阶图标 + 品阶色（文字色 = 品阶色 · 底色 = 品阶色 × 0.22 / 激活 0.45）—— 与案例模版同一套规则")
+  -- ⑥ ★★★1.73.49 用户：「方案左侧的图片还没显示」——真机黑图的根因是 `SetTexture` **多传了一个实参**
+  --   （`EVAL_SHARE_SEAL_ICON` 返回两个值，内联成实参时 Lua 全展开 → 第二参被当 wrap 模式 → 尺寸对但整块纯黑）。
+  --   ⇒ 判据：每行的图标纹理调用**只传 1 个参数**（桩如实记账；旧桩不记 → 这个 bug 在测试里完全不可见）。
+  local badArgs160 = 0
+  for i = 1, 3 do
+    local v = rows160[i] or {}
+    if tonumber(v.iconArgs or 0) ~= 1 then badArgs160 = badArgs160 + 1 end
+  end
+  eq(badArgs160, 0, "⑥★★★图标纹理调用只传 1 个实参（多传第二个会被当 wrap 模式 → 真机**整块纯黑**），坏 " .. tostring(badArgs160) .. " 行")
+  -- ⑦ ★★★1.73.49 用户：「品阶每次打开方案自动计算完善」——**打开配置窗就按当前方案内容重算一遍**（不看缓存），
+  --   而且**与这次落在哪个 Tab 无关**（所以先把 Tab 切到 4 再开窗，只有「打开时显式刷新」这条路能救）。
+  local calcBefore160 = EVAL_TEST_WAR_TIER_CALC_COUNT()
+  EVAL_HELP_CFG_SETTAB(4)
+  if EVAL_TEST_CFG_VISIBLE() then EVAL_HELP_CFG_TOGGLE() end -- 先关（保证下面这次真的走「打开」分支）
+  EVAL_HELP_CFG_TOGGLE()
+  eq(EVAL_TEST_WAR_TIER_CALC_COUNT() > calcBefore160, true,
+     "⑦★★★打开配置窗（哪怕落在别的 Tab）也会**重算方案品阶**：" .. tostring(calcBefore160) .. " → " .. tostring(EVAL_TEST_WAR_TIER_CALC_COUNT()))
+  EVAL_HELP_CFG_SETTAB(2)
+  -- ⑧ 取证命令能跑（用户真机回报用）：返回行数据、不报错
+  local pr160 = EVAL_WAR_PROF_ICON_PROBE()
+  eq(type(pr160) == "table" and table.getn(pr160) >= 3, true, "⑧★/eh go 方案图标 探针能跑并给出每行的实际纹理/传参/显示")
+  print("  方案列表：品阶图标（只传 1 个实参）+ 品阶色（文字色 = 品阶色 · 底色 = 品阶色 × 0.22 / 激活 0.45）—— 与案例模版同一套规则")
 end
 
 print("ALL TESTS PASS")

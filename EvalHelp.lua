@@ -2282,6 +2282,8 @@ end
 --   ★必须声明在本函数**之前**（词法作用域）——放到后面会被 DECL ORDER CHECK 当场抓出。
 local warRefreshCount = 0
 local function warRefreshTick() warRefreshCount = warRefreshCount + 1 end
+-- ★1.73.49 方案列表「品阶重算」次数（每次刷新按方案内容重算一次；判据读它证明「打开就算」）
+local warProfTierCalc = 0
 -- ★1.71.9 断言入口：技能列表「调序 ▲▼」与「滚动 ▲▼」四个按钮的**真实文本**。
 --   ★为什么必须读控件：用户看到的是控件上的字，生产代码里的那份常量只是副本 ——
 --     读常量 = 测自己（本项目「断言里写死布局常量」的老坑）。
@@ -2300,8 +2302,29 @@ function EVAL_TEST_WAR_ARROWS()
   return out
 end
 function EVAL_TEST_WAR_REFRESH_COUNT() return warRefreshCount end
+-- ★★★1.73.49 品阶重算计数（用户：「品阶每次打开方案自动计算完善」）——「打开了就重算」这件事必须**可断言**
+function EVAL_TEST_WAR_TIER_CALC_COUNT() return warProfTierCalc end
 -- ★★★1.73.48 方案列表行的**外观读值口**（「图标和配色与案例模版同一套」这条判据读它）：
 --   一律读**真控件**（GetTexture / IsShown / GetTextColor / GetVertexColor）——本项目「读自己拼的账 = 测自己」的老坑。
+-- ★★★1.73.49 取证命令 `/eh go 方案图标`：方案列表每行的 **品阶 → 请求的纹理 → 客户端实际报回来的纹理 → 是否显示**
+--   一次摊开。为什么要有它：真机上「图标是黑的」有三种完全不同的原因（没请求 / 请求了没生效 / 生效了没画出来），
+--   而它们的区别**只能靠读回来的纹理路径**分辨（本项目「写成功 ≠ 写进去生效」那一族）。
+function EVAL_WAR_PROF_ICON_PROBE()
+  if not EVAL_TEST_CFG_LAYOUT() then pcall(EVAL_HELP_CFG_TOGGLE) end
+  pcall(EVAL_WAR_TAB_REFRESH)
+  local rows = EVAL_TEST_WAR_PROF_ROWS()
+  local n = table.getn(rows)
+  say("===== 方案图标探针（方案列表 " .. tostring(n) .. " 行）=====")
+  for i = 1, n do
+    local v = rows[i]
+    if tostring(v.name or "") ~= "" then
+      say(string.format("  [%d] %s · 实际纹理=%s · 传参=%s · 显示=%s",
+        i, tostring(v.name), tostring(v.icon or "nil"), tostring(v.iconArgs or "?"), tostring(v.iconShown)))
+    end
+  end
+  say("  ★「实际纹理=nil」= SetTexture 没生效；有路径但图黑 = 传参/纹理本身问题（正常应传 1 个参数）")
+  return rows
+end
 function EVAL_TEST_WAR_PROF_ROWS()
   local w = cfgWin.warUI or {}
   local out = {}
@@ -2325,6 +2348,11 @@ function EVAL_TEST_WAR_PROF_ROWS()
       if okt and type(tv) == "string" then o.icon = tv end
       local oks, sv = pcall(e.icon.IsShown, e.icon)
       o.iconShown = (oks and sv) and true or false
+      -- ★1.73.49 「SetTexture 传了几个实参」也要读得回来（真机黑图正是**多传了第二个参数**）
+      if type(e.icon.GetSetTextureArgs) == "function" then
+        local oka, av = pcall(e.icon.GetSetTextureArgs, e.icon)
+        if oka and type(av) == "number" then o.iconArgs = av end
+      end
     end
     out[i] = o
   end
@@ -2345,7 +2373,10 @@ function EVAL_WAR_TAB_REFRESH()
       -- ★★★1.73.48 用户：「方案列表的图标和配色方案采用相同规则」——即**案例模版那一套**：
       --   图标 = 该方案品阶的 IconSem 纹理；文字色 = 品阶色；底色 = 品阶色 × 0.22（当前激活 × 0.45）。
       --   ★算不出品阶（老存档 / 坏数据 / Share 未载入）→ **如实退回**原来的暗金底 + 暖色字，**不硬编一个品阶**。
+      -- ★★★1.73.49 用户：「品阶每次打开方案自动计算完善」⇒ 每次刷新**当场按方案内容重算**（不看缓存），
+      --   并**计数**（判据要能证明「这次打开真的算了」，而不是只看界面长得对）。
       local trgb, tidx = nil, nil
+      warProfTierCalc = warProfTierCalc + 1
       if type(EVAL_PROFILE_SCORE) == "function" and type(EVAL_SHARE_SEAL_TIER) == "function"
          and type(EVAL_SHARE_SEAL_TIER_RGB) == "function" and type(EVAL_SHARE_SEAL_ICON) == "function" then
         local okS, sc = pcall(EVAL_PROFILE_SCORE, prof)
@@ -2362,8 +2393,22 @@ function EVAL_WAR_TAB_REFRESH()
         pcall(pb.bg.SetVertexColor, pb.bg, trgb.r * k, trgb.g * k, trgb.b * k, 1)
         pcall(pb.text.SetTextColor, pb.text, trgb.r, trgb.g, trgb.b)
         if pb.icon then
-          pcall(pb.icon.SetTexture, pb.icon, EVAL_SHARE_SEAL_ICON(tidx))
-          pb.icon:Show()
+          -- ★★★1.73.49 真机「图标还是黑的」的根因：`EVAL_SHARE_SEAL_ICON` **返回两个值**（路径 + 文件名），
+          --   直接**内联成实参**时 Lua 会把两个都展开 → 实际调用成了 `SetTexture(路径, 文件名)`；
+          --   而本客户端的 `SetTexture` 第二参是 **wrap 模式**（现代签名）→ 拿到一个字符串 → 尺寸对、**整块纯黑**
+          --   （正是用户截图里那个 13×13 的黑方块）。★模板窗那边写的是 `local tiPath = …` 再传 → 一直正常。
+          --   ⇒ ① 只取第一个返回值；② 写完**读回来确认**（本项目在 ChatFrame_OnEvent 上吃过「写成功 ≠ 写进去」的亏）。
+          local ipath = EVAL_SHARE_SEAL_ICON(tidx)
+          if type(ipath) == "string" and ipath ~= "" then
+            pcall(pb.icon.SetTexture, pb.icon, ipath)
+            local okr, got = pcall(pb.icon.GetTexture, pb.icon)
+            if (not okr) or type(got) ~= "string" or got == "" then
+              warUI.iconNoTex = (warUI.iconNoTex or 0) + 1 -- 如实记账（探针会打印它）
+            end
+            pcall(pb.icon.Show, pb.icon)
+          else
+            pcall(pb.icon.Hide, pb.icon)
+          end
         end
       else
         pcall(pb.bg.SetVertexColor, pb.bg, sel and 0.45 or 0.16, sel and 0.35 or 0.13, sel and 0.10 or 0.08, 1)
@@ -2586,6 +2631,9 @@ function EVAL_HELP_CFG_TOGGLE()
     --   quiet=true：不刷聊天框，只写调试日志缓冲（EVAL_GO_RESCAN 内的静默日志分支）。
     if type(EVAL_GO_RESCAN) == "function" then pcall(EVAL_GO_RESCAN, true, "open") end
     EVAL_HELP_CFG_SETTAB(cfgWin.tab or c().cfgTab or 1)
+    -- ★★★1.73.49 用户：「品阶每次打开方案自动计算完善」——不管这次落在哪个 Tab，**打开就按当前方案内容重算一遍**
+    --   方案列表的品阶/图标/配色（SETTAB 只在 Tab=2 时刷；这里补一次，保证切过去的瞬间就是最新的）。
+    if type(EVAL_WAR_TAB_REFRESH) == "function" then pcall(EVAL_WAR_TAB_REFRESH) end
     win:Show()
   end
 end
@@ -7118,6 +7166,13 @@ if type(SlashCmdList) == "table" then
         say("名号色：Share 模块未载入（EVAL_SHARE_TITLE_COLOR_PROBE 不存在）")
       end
     -- ★★★1.73.42s 取证：右键名字菜单的能力 + 记账（用户：「右键邀请触发」＝点了没反应）
+    -- ★★★1.73.49 方案列表图标取证（用户：「方案左侧的图片还没显示」）
+    elseif msg == "go 方案图标" or msg == "go proficon" or msg == "go 图标探针2" then
+      if type(EVAL_WAR_PROF_ICON_PROBE) == "function" then
+        EVAL_WAR_PROF_ICON_PROBE()
+      else
+        say("方案图标探针：配置窗未载入（EVAL_WAR_PROF_ICON_PROBE 不存在）")
+      end
     elseif msg == "go 名字探针" or msg == "go namemenu" or msg == "go 社交探针" then
       if type(EVAL_TB_NAME_PROBE) == "function" then
         EVAL_TB_NAME_PROBE() -- 能力与记账都在它里面打出来并落盘
