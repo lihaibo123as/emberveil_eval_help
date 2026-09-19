@@ -826,6 +826,8 @@ GetNumGuildMembers = function() return table.getn(TEST.guildRows or {}) end
 GetNumWhoResults = function() return table.getn(TEST.whoRows or {}) end
 -- ★1.73.12 名字主动查询：记录发出的 /who（断言「发了什么 / 发了几次 / 间隔对不对」）
 TEST.whoSent = {}
+-- ★1.73.36 光标位置（「弹窗相对鼠标点击位置」这条判据必须读得到真实取值）
+GetCursorPosition = function() return TEST.cursorX or 400, TEST.cursorY or 300 end
 SendWho = function(filter)
   TEST.whoSent = TEST.whoSent or {}
   table.insert(TEST.whoSent, tostring(filter))

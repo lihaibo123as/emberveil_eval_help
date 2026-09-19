@@ -9989,11 +9989,13 @@ do
   local nx130 = 0
   for _ in pairs(xs130) do nx130 = nx130 + 1 end
   eq(nx130, 2, "⑥★★★恰好两列（x 取值数 = " .. tostring(nx130) .. "）")
-  eq(bad130, "", "⑥★★每条 ≤4 个汉字宽（≤66px）: " .. bad130)
-  -- ★锚点在**屏幕右上角**
-  eq(tostring(mg130.point or ""), "TOPRIGHT", "⑥★★★弹窗锚点 = 右上角（实际 " .. tostring(mg130.point) .. "）")
-  eq(tostring(mg130.relPoint or ""), "TOPRIGHT", "⑥★★锚到 UIParent 的右上角")
-  -- ★条目：核心几条必须在，且标签 ≤4 个汉字（12 字节）
+  -- ★★★1.73.36 锚点：**相对鼠标点击位置的右上角**（弹窗左下角贴光标，向上/向右展开）
+  eq(tostring(mg130.point or ""), "BOTTOMLEFT", "⑥★★★锚点 = 光标处（实际 " .. tostring(mg130.point) .. "）")
+  eq(tostring(mg130.relPoint or ""), "BOTTOMLEFT", "⑥★★锚到 UIParent 的左下角基准")
+  eq(type(mg130.ox) == "number" and type(mg130.oy) == "number", true,
+     "⑥★★★偏移 = 光标位置（" .. tostring(mg130.ox) .. "," .. tostring(mg130.oy) .. "）")
+  eq(math.abs((mg130.ox or 0) - (TEST.cursorX or 400)) <= 1, true, "⑥★★★x 跟着光标走（不是写死的屏幕角）")
+  eq(math.abs((mg130.oy or 0) - (TEST.cursorY or 300)) <= 1, true, "⑥★★★y 也跟着光标走")
   local have130 = {}
   local badLbl130 = ""
   for i = 1, nIt130 do

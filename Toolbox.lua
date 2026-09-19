@@ -1035,8 +1035,8 @@ local function tbMenuBuild()
   local W, H = EVAL_TB_MENU_LAYOUT(n)
   local f = CreateFrame("Frame", "EVAL_TB_NAMEMENU", UIParent)
   f:SetWidth(W) f:SetHeight(H)
-  -- ★锚点：屏幕**右上角**（用户要求）
-  f:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -10, -10)
+  -- ★锚点：默认放屏幕右下角；真正显示时 EVAL_TB_MENU_SHOW 会改成「相对鼠标点击位置的右上角」
+  f:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -10, 10)
   pcall(f.SetFrameStrata, f, "DIALOG")
   pcall(f.SetFrameLevel, f, 250)
   pcall(f.EnableMouse, f, true)
@@ -1133,10 +1133,40 @@ function EVAL_TB_MENU_SHOW(name)
   local f = tbMenuBuild()
   TB_NAME_MENU.name = name
   if f.title then pcall(f.title.SetText, f.title, string.format(L("TB_NAMEMENU_TITLE"), name)) end
-  -- ★★★1.73.35 锚点固定在**屏幕右上角**（用户要求「弹窗锚点右上」）——
-  --   原来「跟着鼠标出现」在跨分辨率/高缩放下会飘，而且和「右上角」的要求相反；现在只做一件事：贴右上角。
+  -- ★★★1.73.36 用户澄清：**相对鼠标点击位置的右上角** —— 弹窗的**左下角贴光标**，向上、向右展开
+  --   （拿不到光标 → 退回屏幕右下角；贴到屏幕边时**夹取**，保证菜单不会跑出屏幕）。
+  --   ★坐标要按 UIParent 缩放折算（GetCursorPosition 给的是物理像素），否则高缩放下会飘。
+  local px, py = nil, nil
+  if type(GetCursorPosition) == "function" then
+    local okc, cx, cy = pcall(GetCursorPosition)
+    if okc and type(cx) == "number" and type(cy) == "number" then px, py = cx, cy end
+  end
+  local sc = 1
+  if type(UIParent) == "table" and type(UIParent.GetEffectiveScale) == "function" then
+    local oks, s = pcall(UIParent.GetEffectiveScale, UIParent)
+    if oks and type(s) == "number" and s > 0 then sc = s end
+  end
   pcall(f.ClearAllPoints, f)
-  pcall(f.SetPoint, f, "TOPRIGHT", UIParent, "TOPRIGHT", -10, -10)
+  if px and py then
+    px, py = px / sc, py / sc
+    local W, H = 128, 100
+    local okw, w1 = pcall(f.GetWidth, f)
+    if okw and type(w1) == "number" then W = w1 end
+    local okh, h1 = pcall(f.GetHeight, f)
+    if okh and type(h1) == "number" then H = h1 end
+    local sw, sh = 1024, 768
+    if type(UIParent) == "table" then
+      local ok1, s1 = pcall(UIParent.GetWidth, UIParent)
+      if ok1 and type(s1) == "number" then sw = s1 end
+      local ok2, s2 = pcall(UIParent.GetHeight, UIParent)
+      if ok2 and type(s2) == "number" then sh = s2 end
+    end
+    if px + W > sw then px = math.max(0, sw - W) end
+    if py + H > sh then py = math.max(0, sh - H) end
+    pcall(f.SetPoint, f, "BOTTOMLEFT", UIParent, "BOTTOMLEFT", px, py) -- 左下角 = 光标
+  else
+    pcall(f.SetPoint, f, "BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -10, 10)
+  end
   pcall(f.Show, f)
   TB_NAME_MENU.shown = true
   return true
