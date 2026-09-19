@@ -1533,16 +1533,19 @@ function checkIconAssets() {
 //   + Locales/* + examples/* + media/* 去掉 media/Textures）。
 // ★变异验证：从 CLAUDE.md 删掉 PetData.lua → 当场 FAIL；把基准数改成 60 → 当场 FAIL。
 (function () {
-  const cpath = path.join(__dirname, "CLAUDE.md");
+  // ★1.74.0 起发布流程第 9 步（打包清单 + 基准数）在**参考卷** `CLAUDE_REFERENCE.md`（常驻卷 CLAUDE.md 瘦身时被移出）；
+  //   参考卷不在则退回常驻卷 CLAUDE.md（兼容未提交参考卷的旧布局 —— 别让检查依赖「参考卷是否已入库」）。
+  let cpath = path.join(__dirname, "CLAUDE_REFERENCE.md");
+  if (!fs.existsSync(cpath)) cpath = path.join(__dirname, "CLAUDE.md");
   if (!fs.existsSync(cpath)) {
-    console.log("PACK LIST CHECK: FAIL - 找不到 CLAUDE.md（发布流程第 9 步的打包清单就在里面）");
+    console.log("PACK LIST CHECK: FAIL - 找不到 CLAUDE_REFERENCE.md / CLAUDE.md（发布流程第 9 步的打包清单在里面）");
     process.exitCode = 1;
     return;
   }
   const claude = fs.readFileSync(cpath, "utf8");
   const packLine = claude.split(/\r?\n/).find(l => /Copy-Item .*EvalHelp\.toc.*\$staging/.test(l));
   if (!packLine) {
-    console.log("PACK LIST CHECK: FAIL - CLAUDE.md 第 9 步里找不到打包 Copy-Item 行");
+    console.log("PACK LIST CHECK: FAIL - CLAUDE_REFERENCE.md 第 9 步里找不到打包 Copy-Item 行");
     process.exitCode = 1;
     return;
   }
@@ -1553,7 +1556,7 @@ function checkIconAssets() {
   const missing = topLua.filter(f => listed.indexOf(f) < 0);
   const ghost = listed.filter(f => topLua.indexOf(f) < 0);
   if (missing.length || ghost.length) {
-    console.log("PACK LIST CHECK: FAIL - CLAUDE.md 打包清单与 .toc 不一致；清单缺=[" + missing.join(",") + "] 清单多余=[" + ghost.join(",") + "]");
+    console.log("PACK LIST CHECK: FAIL - CLAUDE_REFERENCE.md 打包清单与 .toc 不一致；清单缺=[" + missing.join(",") + "] 清单多余=[" + ghost.join(",") + "]");
     process.exitCode = 1;
     return;
   }
@@ -1577,12 +1580,12 @@ function checkIconAssets() {
   const real = set.length;
   const mNum = claude.match(/基准\s*=\s*\*\*(\d+)\s*个\*\*/);
   if (!mNum) {
-    console.log("PACK LIST CHECK: FAIL - CLAUDE.md 里读不到「基准 = **N 个**」这一条（装完没得核对）");
+    console.log("PACK LIST CHECK: FAIL - CLAUDE_REFERENCE.md 里读不到「基准 = **N 个**」这一条（装完没得核对）");
     process.exitCode = 1;
     return;
   }
   if (parseInt(mNum[1], 10) !== real) {
-    console.log("PACK LIST CHECK: FAIL - 条目数基准过期：记忆体写 " + mNum[1] + " 个，实际按打包口径是 " + real + " 个");
+    console.log("PACK LIST CHECK: FAIL - 条目数基准过期：参考卷写 " + mNum[1] + " 个，实际按打包口径是 " + real + " 个");
     process.exitCode = 1;
     return;
   }

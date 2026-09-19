@@ -75,10 +75,6 @@ switches target, casts, and restores your original target — **you never click 
 
 ![Config window · Global tab](preview/main.png)
 
-**Config window · One-key macro tab**: left profile bar (multiple profiles ≤12, click to switch / right-click to rename) + skill list (order = priority, checkbox = enabled, conditions visible at a glance) + [Add Skill] / [Import-Export]; bottom row = three feature toggles + [Templates] / [Share] / [Close]
-
-![Config window · One-key macro tab](preview/cfg.png)
-
 **Case-template window** (bottom of the one-key macro tab, `[Case Templates]`): 11 groups / 29 ready-made profiles grouped by class, laid out as **two columns of groups with wrapping inside each group** — one click imports a profile, hover shows its contents
 
 ![Case-template window](preview/skill_tpl.png)
@@ -116,9 +112,11 @@ switches target, casts, and restores your original target — **you never click 
 
 ![Data search · map annotation categories](preview/dataset.png)
 
-**Data search · map pinning**: click the map icon at the end of a row to open the world map on that zone; hover a pin to see what it holds (e.g. a vein's container drop table)
+**Pet helper (Tab 6)**: search pet abilities (icon + per-rank list) → the detail page lists the description / required level / **taming source** (which mob, where) → the magnifier jumps to Data Search for spawn points — from "which pet learns this ability" to "where to tame it", end to end
 
-![Data search · map pinning](preview/dataset_map.png)
+![Pet helper · search abilities](preview/pet_skill_search.png)
+
+![Pet helper · taming source](preview/pet_skill_info.png)
 
 ## Quick Start
 
