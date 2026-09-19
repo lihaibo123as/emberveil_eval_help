@@ -747,6 +747,49 @@ function checkIconAssets() {
   if (bad.length) { console.log('SHARE SEAL ROW CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
   console.log('SHARE SEAL ROW CHECK: 弹窗品阶栏 = 真纹理图标 + 同源品阶判定 + 未知兜底 + 封皮元数据');
 })();
+// ===== TITLE GACHA CHECK（1.73.42n）：头衔抽卡的**结构与单一来源**必须钉死 =====
+// 背景（用户定稿）：「5 档（= 方案稀有度档数）× 每档 15 张」「每档只抽一次、不重复、唯一不变」「只升不降」
+//   + 彩蛋预留：自定义头衔优先度最高、**只有一次**修改机会。
+//   ★行为断言能验「现在跑得对」，但验不了「以后改表改坏」→ 结构类事实交给源码检查：
+//     ① 卡池 5×15=75 个键，且三语言都齐；② 评分只有**一个**来源（EVAL_PROFILE_SCORE）；
+//     ③ 「已抽过就不重抽」的守卫必须在；④ 彩蛋自定义的「只有一次」守卫必须在；
+//     ⑤ 分享行必须用 EVAL_TITLE_CURRENT() 取身份（不许各处自己拼头衔）。
+(function () {
+  const shr = fs.readFileSync(path.join(__dirname, 'Share.lua'), 'utf8');
+  const bad = [];
+  const m = shr.match(/local SH_TITLES = \{([\s\S]*?)\n\}/);
+  if (!m) { console.log('TITLE GACHA CHECK: FAIL - 找不到 SH_TITLES'); process.exit(1); }
+  const keys = (m[1].match(/"(TITLE_\d+_\d+)"/g) || []).map(function (s) { return s.slice(1, -1); });
+  if (keys.length !== 75) bad.push('卡池不是 75 个键（实际 ' + keys.length + '）');
+  const byTier = {};
+  const dup = {};
+  keys.forEach(function (k) {
+    const mm = k.match(/^TITLE_(\d+)_(\d+)$/);
+    if (!mm) { bad.push('键名不规范：' + k); return; }
+    const t = Number(mm[1]);
+    byTier[t] = (byTier[t] || 0) + 1;
+    if (dup[k]) bad.push('键重复：' + k);
+    dup[k] = true;
+  });
+  for (let t = 1; t <= 5; t++) if (byTier[t] !== 15) bad.push('第 ' + t + ' 档不是 15 张（' + (byTier[t] || 0) + '）');
+  for (const lg of ['zhCN', 'enUS', 'ruRU']) {
+    const loc = fs.readFileSync(path.join(__dirname, 'Locales', lg + '.lua'), 'utf8');
+    const miss = keys.filter(function (k) { return loc.indexOf(k + ' = ') < 0; });
+    if (miss.length) bad.push(lg + ' 缺 ' + miss.length + ' 个头衔键（如 ' + miss[0] + '）');
+  }
+  // ② 评分单一来源：品阶评分与晋升统计都得走 EVAL_PROFILE_SCORE
+  if (shr.indexOf('return EVAL_PROFILE_SCORE(p)') < 0) bad.push('文本评分没有复用 EVAL_PROFILE_SCORE（会各算一套）');
+  if (shr.indexOf('EVAL_SHARE_SEAL_TIER(EVAL_PROFILE_SCORE(p))') < 0) bad.push('晋升统计没有用同一个评分函数');
+  // ③ 每档只抽一次
+  if (shr.indexOf('if t.draws[k] == nil then') < 0) bad.push('没有「已抽过就不重抽」的守卫（每档只抽一次）');
+  // ④ 彩蛋：只有一次
+  if (shr.indexOf('if type(t.custom) == "string" and t.custom ~= "" then return false end') < 0)
+    bad.push('彩蛋自定义没有「只有一次」守卫');
+  // ⑤ 分享行取身份的唯一入口
+  if (shr.indexOf('local tt = EVAL_TITLE_CURRENT()') < 0) bad.push('分享行没有用 EVAL_TITLE_CURRENT() 取头衔');
+  if (bad.length) { console.log('TITLE GACHA CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
+  console.log('TITLE GACHA CHECK: 5×15=75 头衔（三语言齐）· 评分单一来源 · 每档只抽一次 · 彩蛋仅一次 · 身份走单一入口');
+})();
 // ===== SEAL ICON NAMES CHECK（1.73.42l）：品阶图标的**名字**必须是客户端真有的（用户指定的五张） =====
 // 背景：图标由用户点名（截图里是 `.../INV_Misc_ShadowEgg_TEX` 这种**资源名**）——
 //   ① `_TEX` 是客户端资源命名，插件侧路径一律 `Interface\\Icons\\<裸名>`，带上后缀真机**画不出东西**；

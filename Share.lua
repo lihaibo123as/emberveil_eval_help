@@ -694,23 +694,16 @@ local function shProbeFind(mode, tag)
 end
 -- 方案名（显示用）：取导出文本首行 `# 方案: 名` 里的「名」；解析不出就退回「方案」
 -- ===== 1.73.42 分享显示行：境界 · 品阶 · 评语（用户 2026-09-19 定稿）==================
--- 行格式：`<境界色>[<境界>]|r<角色名> 分享了 → <品阶色>[<品阶>秘籍·<方案名>]|r  <评语>`
---   ★★★1.73.42k（用户 2026-09-19 真机反馈，三条一起改）：
---     ① **境界 = 方案里最大的技能等级**（不再看谁的等级）：「用户的等级根据他方案内的最大等级来对应」；
---        等级本来就写在方案文本里（`- 技能(60)`）→ 发送端与接收端算出来必然一致；
---        方案里一个等级都没写 → 退回角色等级（如实记 rankFrom，不假装是方案算出来的）；
---     ② **境界各档一色**（用户：「加上不同的字体颜色」）→ SH_SEAL_RANK_COLORS；
---     ③ 文案「分享了一份传家宝」→「**分享了**」（用户：「调整 分享了 三个字」）。
+-- 行格式：`<头衔色>[<头衔>]|r<角色名> 分享了 → <品阶色>[<品阶>秘籍·<方案名>]|r  <评语>`
+--   ★★★1.73.42n 用户 2026-09-19 定稿（**头衔抽卡**替代了原来的「境界/档位名」）：
+--     ① 档位数量 = **方案稀有度档数（5 档）**，不再按角色等级划分（等级那套逻辑全部下线）；
+--     ② 晋升依据 = **方案库里各稀有度的数量**（达要求即晋升），**只升不降**；
+--     ③ 每档 15 张卡池，**每档只抽一次**、不重复抽、抽到**唯一不变**（写进存档）；
+--     ④ 预留彩蛋「创世神的关注」：可**一次性**自定义头衔，优先度最高（触发机制以后再接）。
 --   品阶 = **技能条数 + 每条技能里的条件数**（评分制）：≤3 普通 / 4-6 稀有 / 7-9 珍稀 / 10-12 绝版 / **≥13 源代码**；
 --   颜色：白 |cffffffff · 绿 |cff1eff00 · 紫 |cffa335ee · 橙 |cffff8000 · **暗金 |cffb87333**（用户定的）；
---   评语：每档 **10 条**（用户要求），分享时**随机抽一条**。★这些文案下一步要迁进 Locales 三语言（现为本轮预览用）。
--- ★★★1.73.42j 这三张表现在只存**结构 + 键**，文案一律走 Locales（L()）：
---   ★为什么必须搬：用户要求「50 条评语与境界/品阶名迁进 Locales 三语言」——文案散在源码里 = 换语言时
---     分享行还是中文（本项目「命名/文案也是功能」的老账）。色码与符号**留在 Share.lua**（那是协议不是文案）。
-local SH_SEAL_RANKS = {
-  { 1, 9, "SEAL_RANK_1" }, { 10, 19, "SEAL_RANK_2" }, { 20, 29, "SEAL_RANK_3" }, { 30, 39, "SEAL_RANK_4" },
-  { 40, 49, "SEAL_RANK_5" }, { 50, 59, "SEAL_RANK_6" }, { 60, 60, "SEAL_RANK_7" },
-}
+--   评语：每档 **10 条**（用户要求），分享时**随机抽一条**。
+-- ★★★1.73.42j 这些表只存**结构 + 键**，文案一律走 Locales（L()）：文案散在源码里 = 换语言时不生效。
 local SH_SEAL_TIERS = {
   { max = 3,  key = "SEAL_TIER_1", color = "|cffffffff" },
   { max = 6,  key = "SEAL_TIER_2", color = "|cff1eff00" },
@@ -726,67 +719,207 @@ local SH_SEAL_COMMENTS = {
   { "SEAL_C5_1", "SEAL_C5_2", "SEAL_C5_3", "SEAL_C5_4", "SEAL_C5_5", "SEAL_C5_6", "SEAL_C5_7", "SEAL_C5_8", "SEAL_C5_9", "SEAL_C5_10" },
 }
 local SH_SEAL_SYMBOLS = { "·", "◆", "✦", "★", "✸" }
--- ★★★1.73.42m 境界的颜色 = **另一套色系**（用户：「角色等级的颜色可以换一套其他的颜色体系. 不要和方案颜色相同」）。
---   为什么必须错开：品阶（方案）用的是魔兽稀有度色系（白/绿/紫/橙/暗金）——境界若也用它，
---   同一行里「[大乘]」和「[源代码秘籍]」会看起来是同一档东西，**两个维度就糊在一起了**。
---   新体系 = 青→金→蓝→品红→猩红→极光的**修仙天梯**色，**与品阶色逐个不相等**（有判据守着）：
---     炼气 青灰 |cff8fa8b8 · 筑基 青 |cff00e5ff · 金丹 金 |cffffd700 · 元婴 蓝 |cff4f9bff
---     · 化神 品红 |cffff4fd8 · 炼虚 猩红 |cffff3b3b · 大乘 极光青绿 |cff5cffd2。
+-- ★★★1.73.42n 头衔的颜色 = **冷色系**（与品阶的暖色稀有度系**逐个不相等**，有判据守着）：
+--   为什么必须错开：品阶用白/绿/紫/橙/暗金；头衔若也用它，同一行里「[大元帅]」和「[源代码秘籍]」
+--   会看起来是同一档东西，**两个维度糊在一起**。
+--   1 档 青灰 |cff8fa8b8 · 2 档 青 |cff00e5ff · 3 档 蓝 |cff4f9bff · 4 档 品红 |cffff4fd8 · 5 档 极光青绿 |cff5cffd2。
 --   ★色码必须 8 位（`|c` + AARRGGBB）：6 位本客户端**不解析**，会把色码原文画进聊天（1.73.19 实测）。
-local SH_SEAL_RANK_COLORS = {
-  "|cff8fa8b8", "|cff00e5ff", "|cffffd700", "|cff4f9bff", "|cffff4fd8", "|cffff3b3b", "|cff5cffd2",
+local SH_TITLE_COLORS = { "|cff8fa8b8", "|cff00e5ff", "|cff4f9bff", "|cffff4fd8", "|cff5cffd2" }
+-- ===== 1.73.42n 头衔抽卡（用户 2026-09-19 定稿）==========================================
+--   用户原话：「每个档位只抽卡一次.不重复抽卡.唯一不变.」+「档位可以和方案的档位数量相同. 每个档位卡池…15 个」
+--     +「根据用户当前方案稀有度的数量, 达成档位的需求就晋升档位. 当我只升不降.」
+--   ① 5 档（= 方案稀有度档数：普通/稀有/珍稀/绝版/源代码）· 每档 15 张卡 · 全部是**头衔**（无人名）；
+--   ② 晋升看**方案库里各稀有度的数量**（只升不降）；③ 每档**只抽一次**，抽到写进存档、**唯一不变**。
+local SH_TITLES = {
+  { "TITLE_1_1", "TITLE_1_2", "TITLE_1_3", "TITLE_1_4", "TITLE_1_5", "TITLE_1_6", "TITLE_1_7", "TITLE_1_8", "TITLE_1_9", "TITLE_1_10", "TITLE_1_11", "TITLE_1_12", "TITLE_1_13", "TITLE_1_14", "TITLE_1_15" },
+  { "TITLE_2_1", "TITLE_2_2", "TITLE_2_3", "TITLE_2_4", "TITLE_2_5", "TITLE_2_6", "TITLE_2_7", "TITLE_2_8", "TITLE_2_9", "TITLE_2_10", "TITLE_2_11", "TITLE_2_12", "TITLE_2_13", "TITLE_2_14", "TITLE_2_15" },
+  { "TITLE_3_1", "TITLE_3_2", "TITLE_3_3", "TITLE_3_4", "TITLE_3_5", "TITLE_3_6", "TITLE_3_7", "TITLE_3_8", "TITLE_3_9", "TITLE_3_10", "TITLE_3_11", "TITLE_3_12", "TITLE_3_13", "TITLE_3_14", "TITLE_3_15" },
+  { "TITLE_4_1", "TITLE_4_2", "TITLE_4_3", "TITLE_4_4", "TITLE_4_5", "TITLE_4_6", "TITLE_4_7", "TITLE_4_8", "TITLE_4_9", "TITLE_4_10", "TITLE_4_11", "TITLE_4_12", "TITLE_4_13", "TITLE_4_14", "TITLE_4_15" },
+  { "TITLE_5_1", "TITLE_5_2", "TITLE_5_3", "TITLE_5_4", "TITLE_5_5", "TITLE_5_6", "TITLE_5_7", "TITLE_5_8", "TITLE_5_9", "TITLE_5_10", "TITLE_5_11", "TITLE_5_12", "TITLE_5_13", "TITLE_5_14", "TITLE_5_15" },
 }
--- 境界档位信息（序号 + 名 + 色）：名字走 Locales，颜色留在源码（颜色是显示规则、不是文案）
-function EVAL_SHARE_SEAL_RANK_INFO(level)
-  level = tonumber(level) or 1
-  local idx = table.getn(SH_SEAL_RANKS)
-  for i = 1, table.getn(SH_SEAL_RANKS) do
-    local r = SH_SEAL_RANKS[i]
-    if level >= r[1] and level <= r[2] then idx = i break end
-  end
-  if level < 1 then idx = 1 end -- 低于 1 → 最低档；高于 60 → 最高档（大乘），与老行为逐字一致
-  local key = SH_SEAL_RANKS[idx][3]
-  return { idx = idx, key = key, name = L(key), color = SH_SEAL_RANK_COLORS[idx] or SH_SEAL_RANK_COLORS[1], level = level }
+-- 每档卡池张数 / 取键（越界一律夹到合法范围，绝不返回 nil 让上层炸）
+function EVAL_TITLE_TIER_COUNT() return table.getn(SH_TITLES) end
+function EVAL_TITLE_COUNT(tier)
+  local list = SH_TITLES[tonumber(tier) or 1]
+  return table.getn(list or {})
 end
--- 按**名字**回找颜色（封皮行里只有名字，没有档位序号）：找不到就给最低档色（不猜、不编）
-function EVAL_SHARE_SEAL_RANK_COLOR_OF(name)
+function EVAL_TITLE_KEY(tier, idx)
+  local ti = tonumber(tier) or 1
+  if ti < 1 then ti = 1 end
+  if ti > table.getn(SH_TITLES) then ti = table.getn(SH_TITLES) end
+  local list = SH_TITLES[ti]
+  local n = table.getn(list)
+  local k = tonumber(idx) or 1
+  if k < 1 then k = 1 end
+  if k > n then k = n end
+  return list[k], ti, k
+end
+-- 方案表 → 评分（技能条数 + 条件数）：与品阶判定**同一套**（品阶与晋升档都用它，绝不各写一遍）
+function EVAL_PROFILE_SCORE(prof)
+  if type(prof) ~= "table" or type(prof.skills) ~= "table" then return 0 end
+  local score = table.getn(prof.skills)
+  for i = 1, table.getn(prof.skills) do
+    local gs = prof.skills[i] and prof.skills[i].groups
+    for g = 1, table.getn(gs or {}) do score = score + table.getn(gs[g] or {}) end
+  end
+  return score
+end
+-- 方案库 → 各稀有度数量（{ 普通, 稀有, 珍稀, 绝版, 源代码 }）
+function EVAL_TITLE_COUNTS()
+  local out = { 0, 0, 0, 0, 0 }
+  local cfgT = rawget(_G, "EVAL_HELP_CONFIG")
+  local profs = cfgT and cfgT.war and cfgT.war.profiles
+  if type(profs) ~= "table" then return out end
+  for _, p in pairs(profs) do
+    if type(p) == "table" then
+      local idx = select(1, EVAL_SHARE_SEAL_TIER(EVAL_PROFILE_SCORE(p)))
+      if idx >= 1 and idx <= 5 then out[idx] = out[idx] + 1 end
+    end
+  end
+  return out
+end
+-- 「稀有度 ≥ k」的方案总数
+function EVAL_TITLE_GE(counts, k)
+  local ge = 0
+  counts = counts or {}
+  for i = tonumber(k) or 1, 5 do ge = ge + (tonumber(counts[i]) or 0) end
+  return ge
+end
+-- ★晋升判定（纯函数，判据直接喂数量进来看结果）：
+--   1 档 = 有 ≥1 个方案；2 档 = 稀有及以上 ≥1；3 档 = 珍稀及以上 ≥1；4 档 = 绝版及以上 ≥1；5 档 = 源代码 ≥1。
+--   只升不降 ⇒ 调用方只往**更高**记（见 EVAL_TITLE_REFRESH）。
+function EVAL_TITLE_TIER_FROM_COUNTS(counts)
+  if EVAL_TITLE_GE(counts, 1) < 1 then return 0 end -- 一个方案都没有 → 还没入档
+  local at = 1
+  for i = 2, 5 do
+    if EVAL_TITLE_GE(counts, i) >= 1 then at = i end
+  end
+  return at
+end
+-- 存档态（cfg.title）：tier = 已到的最高档；draws[档] = 抽到的序号；custom = 彩蛋自定义头衔
+local function shTitleState()
+  local cfgT = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(cfgT) ~= "table" then return nil end
+  if type(cfgT.title) ~= "table" then cfgT.title = { tier = 0, draws = {} } end
+  local t = cfgT.title
+  if type(t.draws) ~= "table" then t.draws = {} end
+  t.tier = tonumber(t.tier) or 0
+  if t.tier < 0 then t.tier = 0 end
+  return t
+end
+-- ★★★重新统计方案库并**对新达到的档各抽一次**（只升不降；已抽过的档**绝不重抽**）
+function EVAL_TITLE_REFRESH()
+  local t = shTitleState()
+  if not t then return 0 end
+  local counts = EVAL_TITLE_COUNTS()
+  local reach = EVAL_TITLE_TIER_FROM_COUNTS(counts)
+  t.counts = counts
+  if reach > t.tier then
+    for k = t.tier + 1, reach do
+      -- ★「每个档位只抽卡一次」：抽过就保留原值（存档里已有 → 跳过），永不重抽、永不改写
+      if t.draws[k] == nil then t.draws[k] = math.random(1, EVAL_TITLE_COUNT(k)) end
+    end
+    t.tier = reach
+    t.at = shNowT()
+  end
+  return t.tier
+end
+-- 当前头衔（**彩蛋自定义优先度最高**）：没入档且没自定义 → 如实 nil（不编一个头衔出来）
+function EVAL_TITLE_CURRENT()
+  local t = shTitleState()
+  if not t then return nil end
+  local custom = nil
+  if type(t.custom) == "string" and t.custom ~= "" then custom = t.custom end
+  local tier = tonumber(t.tier) or 0
+  if tier < 1 then
+    if custom then return { tier = 0, name = custom, color = SH_TITLE_COLORS[1], custom = true } end
+    return nil
+  end
+  local idx = tonumber(t.draws and t.draws[tier])
+  local key, ti, k = EVAL_TITLE_KEY(tier, idx)
+  local name, isCustom = L(key), false
+  if custom then name, isCustom = custom, true end
+  return { tier = ti, idx = (not isCustom) and k or nil, key = (not isCustom) and key or nil,
+           name = name, color = SH_TITLE_COLORS[ti] or SH_TITLE_COLORS[1], custom = isCustom,
+           counts = t.counts, at = t.at }
+end
+-- 按**名字**回找头衔（接收端只有封皮行里的文字）：返回档位与颜色；不是我们发的头衔（或对方是彩蛋自定义）
+--   → 返回 nil，调用方用中性色显示原文（不猜档位、不编颜色）
+function EVAL_TITLE_LOOKUP(name)
   local want = tostring(name or "")
-  for i = 1, table.getn(SH_SEAL_RANKS) do
-    if L(SH_SEAL_RANKS[i][3]) == want then return SH_SEAL_RANK_COLORS[i] or SH_SEAL_RANK_COLORS[1] end
+  if want == "" then return nil end
+  for ti = 1, table.getn(SH_TITLES) do
+    local list = SH_TITLES[ti]
+    for k = 1, table.getn(list) do
+      if L(list[k]) == want then
+        return { tier = ti, idx = k, key = list[k], color = SH_TITLE_COLORS[ti] or SH_TITLE_COLORS[1], name = want }
+      end
+    end
   end
-  return SH_SEAL_RANK_COLORS[1]
+  return nil
 end
--- ★★★1.73.42k 境界的依据 = **方案里最大的技能等级**（用户要求）。
---   ① 它是**方案的属性** → 发送端与接收端各自复算，结果必然一致（不必靠封皮行传）；
---   ② 不再受「谁的等级高」影响（原来用 UnitLevel("player")，同一条分享在不同人眼里境界不同）。
---   ★等级串可能是「60」「等级 3」「Rank 5」→ 取其中第一段数字；没写等级/没有数字 → 返回 nil，
---     由上层决定兜底（分享行退回角色等级；弹窗退回封皮行的境界，再不行如实「未知」）。
-function EVAL_SHARE_SEAL_MAXLEVEL(text)
-  if type(EVAL_PROFILE_FROM_TEXT) ~= "function" then return nil end
-  local p = EVAL_PROFILE_FROM_TEXT(tostring(text or ""))
-  if type(p) ~= "table" or type(p.skills) ~= "table" then return nil end
-  local best = nil
-  for i = 1, table.getn(p.skills) do
-    local rk = p.skills[i] and p.skills[i].rank
-    local n = tonumber(string.match(tostring(rk or ""), "%d+"))
-    if n and (best == nil or n > best) then best = n end
+-- 距下一档还差什么（命令用）：
+--   ★基准是**已到的档**（存档里的最高档，只升不降），不是「当前方案库算出来的档」——
+--     否则玩家把方案删了之后会被提示「还差 1 个方案到 1 档」，与「只升不降」自相矛盾。
+--   下一档要求 = 「稀有度 ≥ 下一档」的方案至少 1 个（have/need 如实交出来，命令里照实说）。
+function EVAL_TITLE_PROGRESS()
+  local counts = EVAL_TITLE_COUNTS()
+  local t = shTitleState()
+  local saved = (t and tonumber(t.tier)) or 0
+  local out = { tier = saved, reach = EVAL_TITLE_TIER_FROM_COUNTS(counts), counts = counts, nextTier = nil, need = 0, have = 0 }
+  if saved < table.getn(SH_TITLES) then
+    out.nextTier = saved + 1
+    out.have = EVAL_TITLE_GE(counts, out.nextTier)
+    out.need = 1
   end
-  return best
+  return out
 end
-function EVAL_SHARE_SEAL_RANK(level)
-  return EVAL_SHARE_SEAL_RANK_INFO(level).name
+-- ★★★1.73.42n 彩蛋预留（用户：「之后会增加个彩蛋：玩家在编写方案达到一定机制.触发创世神的关注.
+--   「可以有一次自定义弹窗修改这个头衔的机会. 这个自定义头像优先度最高. 并且只有一次修改机会.」）：
+--   **触发机制以后再接**，这里只落两件硬事实：① 自定义头衔显示时压过抽到的卡；② **只有一次**（写入后再调一律拒绝）。
+function EVAL_TITLE_SET_CUSTOM(name)
+  local t = shTitleState()
+  if not t then return false end
+  if type(t.custom) == "string" and t.custom ~= "" then return false end -- ★只有一次：用过就拒绝
+  name = tostring(name or "")
+  name = string.gsub(name, "|", "") -- 竖线会破坏聊天行（分享行同样过滤）
+  name = string.gsub(name, "^%s+", "")
+  name = string.gsub(name, "%s+$", "")
+  if name == "" then return false end
+  if string.len(name) > 36 then name = string.sub(name, 1, 36) end -- 12 汉字：别把聊天行撑爆
+  t.custom = name
+  t.customAt = shNowT()
+  return true
 end
--- 评分 = 技能条数 + 技能内每个条件（★复用项目**同一个**导入解析器，不另写一套）
+-- 诊断/测试用（游戏里没有「清空彩蛋」这条路：只有一次机会）
+function EVAL_TITLE_CLEAR_CUSTOM()
+  local t = shTitleState()
+  if not t then return false end
+  t.custom, t.customAt = nil, nil
+  return true
+end
+-- 测试读值口：把存档里的原始状态交出来（判据读它，不读我们自己拼的显示串）
+function EVAL_TITLE_STATE()
+  local t = shTitleState()
+  if not t then return nil end
+  return { tier = t.tier, draws = t.draws, custom = t.custom, counts = t.counts, at = t.at }
+end
+-- 样例命令用：5 档各挑第 1 张，做成「示例分享行」（不碰存档）
+function EVAL_TITLE_DEMO_LINES()
+  local out = {}
+  for ti = 1, table.getn(SH_TITLES) do
+    local key = EVAL_TITLE_KEY(ti, 1)
+    local col = SH_TITLE_COLORS[ti] or SH_TITLE_COLORS[1]
+    table.insert(out, col .. "[" .. L(key) .. "]|r " .. SH_SEAL_SYMBOLS[ti] .. "[" .. L(SH_SEAL_TIERS[ti].key) .. "]")
+  end
+  return out
+end
+-- 评分 = 技能条数 + 技能内每个条件（★复用项目**同一个**导入解析器与**同一个**评分函数，不另写一套）
 function EVAL_SHARE_SEAL_SCORE(text)
   if type(EVAL_PROFILE_FROM_TEXT) ~= "function" then return nil end -- 解析器不在 → 如实返回 nil（不假装算得出）
   local p = EVAL_PROFILE_FROM_TEXT(tostring(text or ""))
   if type(p) ~= "table" or type(p.skills) ~= "table" then return nil end
-  local score = table.getn(p.skills)
-  for i = 1, table.getn(p.skills) do
-    local gs = p.skills[i] and p.skills[i].groups
-    for g = 1, table.getn(gs or {}) do score = score + table.getn(gs[g] or {}) end
-  end
-  return score
+  return EVAL_PROFILE_SCORE(p)
 end
 function EVAL_SHARE_SEAL_TIER(score)
   score = tonumber(score) or 0
@@ -810,8 +943,8 @@ end
 -- ★★★1.73.42i 详情弹窗「品阶栏」的**单一读值口**（渲染与断言同源，纯函数）。
 --   ★分成两半，各自的诚实边界写死在返回值里（meta 为 nil 时就是「未知」三个字的来源）：
 --     ① 品阶/评分/图标/符号/方案名：由**收到的方案文本**复算 —— 品阶本来就是方案的函数，接收端能独立算出来；
---     ② **境界**：先由方案文本复算（1.73.42k = 方案里最大的技能等级，发送端与接收端必然一致）；
---        方案里没写等级 → 才退回封皮行里发送端的境界；两者都没有 → 如实「未知」（不拿本机角色编造）。
+--     ② **身份（头衔）**：它是**抽卡结果**、是发送者的私人收藏 → 接收端**复现不了**，
+--        只能以封皮行带来的为准（封皮里第一个方括号就是它）；没收到封皮行 → 如实「未知」。
 --     ③ 评语：只有发送端知道（封皮行解析来的 meta）→ 拿不到就如实写「未知（未收到封皮行）」。
 --   ★返回 nil 的唯一情形：文本解析不出方案（那就别画品阶栏，而不是随便给一档）。
 function EVAL_SHARE_SEAL_ROW(text, meta)
@@ -821,25 +954,25 @@ function EVAL_SHARE_SEAL_ROW(text, meta)
   local icon = EVAL_SHARE_SEAL_ICON(idx)
   local sym = EVAL_SHARE_SEAL_SYMBOL(idx)
   local plan = shSealName(text or "")
-  local ri, rank, rankColor, rankFrom = nil, nil, nil, nil
-  local lv = EVAL_SHARE_SEAL_MAXLEVEL(text)
-  if lv then
-    ri = EVAL_SHARE_SEAL_RANK_INFO(lv)
-    rank, rankColor, rankFrom = ri.name, ri.color, "plan"
-  elseif type(meta) == "table" and type(meta.rank) == "string" and meta.rank ~= "" then
-    rank, rankColor, rankFrom = meta.rank, EVAL_SHARE_SEAL_RANK_COLOR_OF(meta.rank), "seal"
+  -- ★1.73.42n 身份 = 封皮行里的头衔；能对上我们 75 张卡的，用**那一档的颜色**；
+  --   对不上（对方档位更高/用了彩蛋自定义/版本不同）→ 中性色显示原文，**不猜档位、不编颜色**。
+  local rank, rankColor, rankFrom = nil, nil, nil
+  if type(meta) == "table" and type(meta.rank) == "string" and meta.rank ~= "" then
+    rank, rankFrom = meta.rank, "seal"
+    local look = EVAL_TITLE_LOOKUP(rank)
+    rankColor = look and look.color or "|cff8fa8b8"
   end
   local comment = (type(meta) == "table") and meta.comment or nil
-  local rankTxt = "未知（方案里没写等级，也没收到封皮行）"
+  local rankTxt = "未知（未收到封皮行）"
   if rank then rankTxt = tostring(rankColor) .. rank .. "|r" end
   local cmtTxt = "未知（未收到封皮行）"
   if type(comment) == "string" and comment ~= "" then cmtTxt = comment end
   return {
     tier = idx, tierName = tier.name, color = tier.color, symbol = sym, score = score,
     icon = icon, plan = plan, comment = comment,
-    rank = rank, rankIdx = ri and ri.idx or nil, rankColor = rankColor, rankFrom = rankFrom,
+    rank = rank, rankColor = rankColor, rankFrom = rankFrom,
     head = tier.color .. sym .. "[" .. tier.name .. "秘籍·" .. plan .. "]|r",
-    meta = "品阶：" .. tier.name .. "（评分 " .. tostring(score) .. "）· 境界：" .. rankTxt,
+    meta = "品阶：" .. tier.name .. "（评分 " .. tostring(score) .. "）· 身份：" .. rankTxt,
     commentLine = "评语：" .. cmtTxt,
   }
 end
@@ -849,27 +982,28 @@ function EVAL_SHARE_SEAL_INFO(text, level, forcedIdx)
   if score == nil then return nil end -- 算不出就如实 nil
   local idx, tier = EVAL_SHARE_SEAL_TIER(score)
   local comment, ci = EVAL_SHARE_SEAL_COMMENT(idx, forcedIdx)
-  -- ★★★1.73.42k 境界 = **方案里最大的技能等级**（用户要求）；方案里没写等级才退回显式参数/角色等级，
-  --   来源如实记在 rankFrom 里（plan / char）——判据与弹窗都读它，免得「看起来一样、其实来源不同」。
-  local lv, from = EVAL_SHARE_SEAL_MAXLEVEL(text), "plan"
-  if lv == nil then
-    from = "char"
-    lv = tonumber(level) or ((type(UnitLevel) == "function") and UnitLevel("player") or 1)
-  end
-  local ri = EVAL_SHARE_SEAL_RANK_INFO(lv)
+  -- ★★★1.73.42n 头衔（抽卡身份）：先**按方案库重新统计 + 抽卡**（只升不降；已抽过的档绝不重抽），
+  --   再取当前最高档的头衔。★头衔是**私人收藏** → 接收端复现不了，对面看到的以封皮行为准。
+  --   ★一个方案都没有（还没入档）时**不编头衔**：整行不带方括号身份，如实从角色名开始。
+  --   `level` 形参保留只为兼容老调用点（档位**不再**看等级，用户已明确）。
+  EVAL_TITLE_REFRESH()
+  local tt = EVAL_TITLE_CURRENT()
   local who = (type(UnitName) == "function") and UnitName("player") or "?"
   local name = shSealName(text or "")
-  -- ★两个色码：境界各档一色（用户要求）；品阶色包住整个方括号（也让 `[品阶秘籍·名]` 能被文字直接搜到）
+  -- ★两个色码：头衔各档一色（与品阶色系不撞）；品阶色包住整个方括号（`[品阶秘籍·名]` 能被文字直接搜到）
   local sym = SH_SEAL_SYMBOLS[idx] or SH_SEAL_SYMBOLS[1]
-  local line = ri.color .. "[" .. ri.name .. "]|r" .. tostring(who) .. " 分享了 → " .. tier.color .. sym ..
+  local idPart = ""
+  if tt then idPart = tt.color .. "[" .. tt.name .. "]|r" end
+  local line = idPart .. tostring(who) .. " 分享了 → " .. tier.color .. sym ..
                "[" .. tier.name .. "秘籍·" .. name .. "]|r  " .. comment
   return { score = score, tier = idx, tierName = tier.name, color = tier.color,
-           rank = ri.name, rankIdx = ri.idx, rankColor = ri.color, rankFrom = from, level = lv,
+           title = tt, titleTier = tt and tt.tier or 0, titleName = tt and tt.name or nil,
+           titleCustom = tt and tt.custom or false,
            comment = comment, commentIdx = ci, plan = name, line = line, symbol = sym }
 end
 -- ★1.73.42b 用户要求：「添加一个测试命令，输入所有类型的分享案例」
---   一次打出 **5 品阶 × 7 境界** 共 12 行样例（品阶用代表评分 3/5/8/11/14，境界用 1/10/20/30/40/50/60）
---   目的：不用造真方案，就能一眼看全所有档位的显示效果（含颜色与评语）
+--   1.73.42n 起：**5 品阶分享行 + 5 档头衔示意行 = 10 行**（原来的「7 境界」是等级派生的，已下线）
+--   目的：不用造真方案，就能一眼看全所有品阶与头衔档位的显示效果（含颜色与评语）
 function EVAL_SHARE_SEAL_DEMO()
   local plan = (type(EVAL_PROFILE_TO_TEXT) == "function") and EVAL_PROFILE_TO_TEXT() or "# 方案: 样例"
   local base = "# 方案: " .. shSealName(plan)
@@ -881,23 +1015,21 @@ function EVAL_SHARE_SEAL_DEMO()
     return s
   end
   local reps = { 3, 5, 8, 11, 14 }
-  local levels = { 1, 10, 20, 30, 40, 50, 60 }
   local lines = {}
-  for i = 1, table.getn(reps) do
-    local info = EVAL_SHARE_SEAL_INFO(mk(reps[i], 60), 60, i) -- 5 品阶（等级固定 60 = 大乘）
+  for i = 1, table.getn(reps) do -- 5 品阶的分享行（身份就是**你当前的头衔**）
+    local info = EVAL_SHARE_SEAL_INFO(mk(reps[i], 60), 60, i)
     if info then table.insert(lines, info.line) end
   end
-  for i = 1, table.getn(levels) do
-    local info = EVAL_SHARE_SEAL_INFO(mk(14, levels[i]), levels[i], i) -- 7 境界（等级写进方案）
-    if info then table.insert(lines, info.line) end
-  end
+  -- ★1.73.42n 再给 5 档头衔示意（每档第 1 张卡；不碰存档）——原来那 7 行「境界」是等级派生的，已下线
+  local titleDemo = EVAL_TITLE_DEMO_LINES()
+  for i = 1, table.getn(titleDemo) do table.insert(lines, titleDemo[i]) end
   -- ★★★1.73.42f 判据用的「证人」：把「跑了没 / 跑了几行」写进存档
   --   （上一轮 M336 实测：用聊天「含子串」判接线 → 被前一段输出顶住、断言假绿）
   local cfgD = rawget(_G, "EVAL_HELP_CONFIG")
   if type(cfgD) == "table" then
     cfgD.shareSealDemo = { n = table.getn(lines), at = (type(GetTime) == "function") and GetTime() or 0 }
   end
-  shSay("===== 秘籍样例（5 品阶 × 7 境界，共 " .. tostring(table.getn(lines)) .. " 行）=====")
+  shSay("===== 秘籍样例（5 品阶分享行 + 5 档头衔示意，共 " .. tostring(table.getn(lines)) .. " 行）=====")
   for i = 1, table.getn(lines) do shSay("  " .. lines[i]) end
   return table.getn(lines)
 end

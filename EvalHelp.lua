@@ -6936,6 +6936,41 @@ if type(SlashCmdList) == "table" then
       else
         say("图标探针：分享模块未载入（EVAL_SHARE_ICON_PROBE 不存在）")
       end
+    -- ★★★1.73.42n 头衔抽卡：当前头衔 + 五档抽取记录 + 距下一档还差什么（用户：「每个档位只抽卡一次」）
+    elseif msg == "go 头衔" or msg == "go title" or msg == "go 抽卡" then
+      if type(EVAL_TITLE_REFRESH) == "function" and type(EVAL_TITLE_PROGRESS) == "function" then
+        EVAL_TITLE_REFRESH() -- 打开就重算一次（只升不降；已抽过的档绝不重抽）
+        local cur = (type(EVAL_TITLE_CURRENT) == "function") and EVAL_TITLE_CURRENT() or nil
+        local prg = EVAL_TITLE_PROGRESS()
+        say("===== 头衔抽卡（5 档 × 15 张 · 每档只抽一次 · 只升不降）=====")
+        if cur then
+          say("  当前头衔：" .. tostring(cur.color) .. "[" .. tostring(cur.name) .. "]|r" ..
+              (cur.custom and "（**创世神的关注**·自定义，优先度最高）" or ("（第 " .. tostring(cur.tier) .. " 档抽到）")))
+        else
+          say("  当前头衔：还没有（方案库里至少要有一个方案才入档）")
+        end
+        local st = (type(EVAL_TITLE_STATE) == "function") and EVAL_TITLE_STATE() or nil
+        local draws = (st and st.draws) or {}
+        for i = 1, 5 do
+          local cname = (type(EVAL_SHARE_SEAL_TIER) == "function") and select(2, EVAL_SHARE_SEAL_TIER(({ 1, 4, 7, 10, 13 })[i])).name or ("档" .. i)
+          local d = tonumber(draws[i])
+          if d then
+            say("  第 " .. i .. " 档（" .. cname .. "）：已抽到 " .. tostring(EVAL_L(EVAL_TITLE_KEY(i, d))))
+          elseif (st and tonumber(st.tier) or 0) >= i then
+            say("  第 " .. i .. " 档（" .. cname .. "）：已到达但没抽到卡（存档异常，重登会补抽）")
+          else
+            say("  第 " .. i .. " 档（" .. cname .. "）：未达到")
+          end
+        end
+        if prg.nextTier then
+          say("  距第 " .. tostring(prg.nextTier) .. " 档：还差 " .. tostring(prg.need - prg.have) ..
+              " 个「稀有度 ≥ " .. tostring(prg.nextTier) .. "」的方案（现有 " .. tostring(prg.have) .. " 个）")
+        else
+          say("  已是最高档（封顶）")
+        end
+      else
+        say("头衔：分享模块未载入（EVAL_TITLE_REFRESH 不存在）")
+      end
     elseif msg == "go 秘籍样例" or msg == "go sealdemo" then
       if type(EVAL_SHARE_SEAL_DEMO) == "function" then
         EVAL_SHARE_SEAL_DEMO()
@@ -8168,6 +8203,9 @@ init:SetScript("OnEvent", function(a, b)
     -- ★1.71.13 小地图按钮贴图标：载入期宏图标接口未必就绪 → 在 VARIABLES_LOADED 后挑；
     --   挑不到会自动退回旧的「金框 + EH」样式（不许留空白按钮）。
     if type(EVAL_HELP_MB_SETICON) == "function" then pcall(EVAL_HELP_MB_SETICON) end
+    -- ★★★1.73.42n 头衔抽卡：进游戏就重算一次（方案库可能变了）——**只升不降**，已抽过的档绝不重抽；
+    --   新达到的档在这里完成「每档只抽一次」的抽取（不必等玩家去点分享或敲命令）。
+    if type(EVAL_TITLE_REFRESH) == "function" then pcall(EVAL_TITLE_REFRESH) end
     -- ★1.71.22 方案快捷键派发上线：登录时把 ActionButtonDown/Up 接管装上（运行中立即生效，无需重启）。
     --   ★装不上要**如实说**（客户端若没这两个全局，按键就永远不会触发 —— 不许假装成功）。
     if type(EVAL_BIND_INSTALL) == "function" then
