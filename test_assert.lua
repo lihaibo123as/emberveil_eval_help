@@ -10876,15 +10876,20 @@ do
   end
   eq(EVAL_SHARE_SEAL_SCORE(txt(3)), 3, "评分：3 条无条件 = 3")
   eq(EVAL_SHARE_SEAL_SCORE(txt(2, true)), 6, "★★评分：2 条各带 2 个条件 = 2+4 = 6")
-  eq(select(2, EVAL_SHARE_SEAL_TIER(3)).name, "普通", "品阶：3 = 普通")
-  eq(select(2, EVAL_SHARE_SEAL_TIER(4)).name, "稀有", "品阶：4 = 稀有")
-  eq(select(2, EVAL_SHARE_SEAL_TIER(6)).name, "稀有", "品阶：6 = 稀有（上沿）")
-  eq(select(2, EVAL_SHARE_SEAL_TIER(7)).name, "珍稀", "品阶：7 = 珍稀")
-  eq(select(2, EVAL_SHARE_SEAL_TIER(9)).name, "珍稀", "品阶：9 = 珍稀（上沿）")
-  eq(select(2, EVAL_SHARE_SEAL_TIER(10)).name, "绝版", "品阶：10 = 绝版")
-  eq(select(2, EVAL_SHARE_SEAL_TIER(12)).name, "绝版", "品阶：12 = 绝版（上沿）")
-  eq(select(2, EVAL_SHARE_SEAL_TIER(13)).name, "神级", "★★品阶：13 = 神级（用户定的门槛）")
-  local reps = { 1, 4, 7, 10, 13 }
+  -- ★★★1.73.61 用户：「品阶计算 25 以上算神级，其他依次调整下」⇒ 四档按同一宽度重排：
+  --   ≤6 普通 / 7-12 稀有 / 13-18 珍稀 / 19-24 绝版 / **≥25 神级**。
+  --   ★判据**每个边界的两侧都钉**（不是只钉上沿）：阈值挪 1 分就当场响（只钉一侧会漏掉「门槛偏高」那种错）。
+  local tiers143 = { "普通", "稀有", "珍稀", "绝版", "神级" }
+  local edges143 = { { 6, 7 }, { 12, 13 }, { 18, 19 }, { 24, 25 } }
+  for i = 1, 4 do
+    eq(select(2, EVAL_SHARE_SEAL_TIER(edges143[i][1])).name, tiers143[i],
+       "品阶：" .. edges143[i][1] .. " = " .. tiers143[i] .. "（第 " .. i .. " 档上沿）")
+    eq(select(2, EVAL_SHARE_SEAL_TIER(edges143[i][2])).name, tiers143[i + 1],
+       "★品阶：" .. edges143[i][2] .. " = " .. tiers143[i + 1] .. "（第 " .. (i + 1) .. " 档下沿 —— 边界两侧都要对）")
+  end
+  eq(select(2, EVAL_SHARE_SEAL_TIER(1)).name, "普通", "品阶：1 = 普通（最低档）")
+  eq(select(2, EVAL_SHARE_SEAL_TIER(999)).name, "神级", "品阶：999 = 神级（最高档无上沿）")
+  local reps = { 1, 7, 13, 19, 25 }
   local wantColor = { "|cffffffff", "|cff1eff00", "|cffa335ee", "|cffff8000", "|cffc00000" }
   for i = 1, 5 do
     local _, ti = EVAL_SHARE_SEAL_TIER(reps[i])
@@ -10909,10 +10914,10 @@ do
     if c ~= first then diff = diff + 1 end
   end
   eq(diff > 0, true, "★★评语是**随机**抽的（40 次里出现过不同条目）")
-  local info = EVAL_SHARE_SEAL_INFO(txt(13), 10)
+  local info = EVAL_SHARE_SEAL_INFO(txt(25), 10) -- 25 条无条件技能 = 25 分（1.73.61 起才是神级）
   eq(type(info) == "table", true, "整行算得出来")
-  eq(info.score, 13, "整行评分 13")
-  eq(info.tierName, "神级", "整行品阶 = 神级")
+  eq(info.score, 25, "整行评分 25")
+  eq(info.tierName, "神级", "整行品阶 = 神级（用户 1.73.61：25 以上）")
   local curTitle143 = EVAL_TITLE_CURRENT()
   if curTitle143 then
     eq(type(curTitle143) == "table", true, "整行算得出来时**当前头衔也在**（有方案库就必然入档）")
@@ -11013,11 +11018,11 @@ do
     eq(symSeen142o[sy] == nil, true, "★五个符号不重复：" .. tostring(sy))
     symSeen142o[sy] = true
   end
-  local iSym = EVAL_SHARE_SEAL_INFO(txt(13), 10)
+  local iSym = EVAL_SHARE_SEAL_INFO(txt(25), 10) -- 25 分 = 神级（1.73.61 起的门槛）
   eq(iSym.symbol, "★", "整行 info 里带符号")
   eq(string.find(iSym.line, "★[神级秘籍·甲]", 1, true) ~= nil, true, "★★整行是「符号 + [品阶秘籍·名]」")
   eq(string.find(iSym.line, "|T", 1, true) == nil, true, "★聊天行里不再出现 |T（实测不可用）")
-  print("  分享显示行：境界 7 档 · 品阶评分边界(3/4/6/7/9/10/12/13) · 5 色(含**深红**) · 每档 10 条评语随机 · 命令接线")
+  print("  分享显示行：品阶评分边界(6/7·12/13·18/19·24/25) · 5 色(含**深红**) · 每档 10 条评语随机 · 命令接线")
 end
 -- 144) ★★★1.73.42g 封皮行（显示）+ 点击直接导入（SetItemRef 的 EHPF: 分支）
 do
@@ -11200,13 +11205,13 @@ do
   end
   -- ① 读值口（渲染与断言同源）
   local titleSample145 = tostring(EVAL_L(EVAL_TITLE_KEY(2, 1))) -- 真头衔（第 2 档第 1 张）：查得到颜色
-  local r5 = EVAL_SHARE_SEAL_ROW(txt145(14), { rank = titleSample145, comment = "天书原文，凡人勿近。" })
+  local r5 = EVAL_SHARE_SEAL_ROW(txt145(25), { rank = titleSample145, comment = "天书原文，凡人勿近。" })
   eq(type(r5) == "table", true, "①★★品阶栏读值口算得出来")
   if r5 then
-    eq(r5.tier, 5, "①★14 分 = 第 5 档（神级）")
+    eq(r5.tier, 5, "①★25 分 = 第 5 档（神级）")
     eq(r5.icon, EVAL_SHARE_SEAL_ICON(5), "①★★★图标 = 该品阶的图标（同一来源，不另写一份）")
     eq(string.find(r5.head, "★[神级秘籍·甲]", 1, true) ~= nil, true, "①★★头一行 = 符号 + [品阶秘籍·名]")
-    eq(string.find(r5.meta, "品阶：神级（评分 14）", 1, true) ~= nil, true, "①★★含品阶与评分")
+    eq(string.find(r5.meta, "品阶：神级（评分 25）", 1, true) ~= nil, true, "①★★含品阶与评分")
     eq(r5.rankFrom, "seal", "①★★这里的来信**没带色码** → 回退按名字反查（老版本封皮也看得见，不空白）")
     eq(string.find(r5.meta, titleSample145, 1, true) ~= nil, true, "①★★含发送端身份")
     eq(string.find(r5.meta, r5.rankColor .. titleSample145 .. "|r", 1, true) ~= nil, true,
@@ -11214,7 +11219,7 @@ do
     eq(r5.rankColor, EVAL_TITLE_LOOKUP(titleSample145).color, "①★★颜色来源 = EVAL_TITLE_LOOKUP（与档位同源）")
     eq(string.find(r5.commentLine, "天书原文，凡人勿近。", 1, true) ~= nil, true, "①★★含发送端评语")
   end
-  local reps145 = { 1, 4, 7, 10, 13 }
+  local reps145 = { 3, 9, 15, 21, 26 }
   for i = 1, 5 do
     local ri = EVAL_SHARE_SEAL_ROW(txt145(reps145[i]), nil)
     eq(ri ~= nil and ri.tier == i, true, "①★档位与分数对应 " .. i)
@@ -11222,7 +11227,7 @@ do
   end
   -- ★★★1.73.42o 用户：「分享…最终只是文本发出去.而不是本地变量调用. 所以不存在在其他玩家上电脑上看不到空的情况」
   --   ⇒ 判据：对方发来一个**我们卡表里没有**的头衔（比如彩蛋自定义）也必须原样显示、连颜色照抄。
-  local rowCustom145 = EVAL_SHARE_SEAL_ROW(txt145(14), { rank = "创世之影", rankColor = "|cffff00ff", comment = "天书原文，凡人勿近。" })
+  local rowCustom145 = EVAL_SHARE_SEAL_ROW(txt145(25), { rank = "创世之影", rankColor = "|cffff00ff", comment = "天书原文，凡人勿近。" })
   eq(type(rowCustom145) == "table", true, "①★★自定义头衔也能渲染（不查本地卡表）")
   if rowCustom145 then
     eq(rowCustom145.rankFrom, "seal-color", "①★★★来源仍是封皮行文本（连颜色）")
@@ -11231,11 +11236,11 @@ do
     eq(EVAL_TITLE_LOOKUP("创世之影") == nil, true, "①★这个名字本地卡表里确实没有（证明不依赖本地表）")
   end
   -- 老版本封皮没带色码 → 回退按名字反查（仍然看得见）
-  local rowOld145 = EVAL_SHARE_SEAL_ROW(txt145(14), { rank = titleSample145, comment = "天书原文，凡人勿近。" })
+  local rowOld145 = EVAL_SHARE_SEAL_ROW(txt145(25), { rank = titleSample145, comment = "天书原文，凡人勿近。" })
   eq(rowOld145.rankFrom, "seal", "①★★老版本封皮（不带色码）→ 回退按名字反查")
   eq(rowOld145.rankColor, EVAL_TITLE_LOOKUP(titleSample145).color, "①★★反查到的颜色 = 该档头衔色")
   -- ② 拿不到发送端信息 → 如实「未知」，一个字都不编
-  local rHon = EVAL_SHARE_SEAL_ROW(txt145(14), nil)
+  local rHon = EVAL_SHARE_SEAL_ROW(txt145(25), nil)
   eq(string.find(rHon.meta, "身份：未知", 1, true) ~= nil, true, "②★★★没有封皮行 → 身份如实写未知（不冒充）")
   eq(string.find(rHon.commentLine, "未知", 1, true) ~= nil, true, "②★★评语同样如实写未知")
   eq(string.find(rHon.commentLine, "天书", 1, true) == nil, true, "②★★★未知时不许出现任何真实评语（一个字都不编）")
@@ -11278,7 +11283,7 @@ do
   local keepInGuild145 = TEST.inGuild
   TEST.inGuild = true
   local keepToText145 = EVAL_PROFILE_TO_TEXT
-  EVAL_PROFILE_TO_TEXT = function() return txt145(14) end -- ★只换**数据来源**，发送路径一行不改
+  EVAL_PROFILE_TO_TEXT = function() return txt145(25) end -- ★只换**数据来源**，发送路径一行不改
   eq(EVAL_SHARE_SEND("GUILD"), true, "③前置：分享发出")
   EVAL_PROFILE_TO_TEXT = keepToText145
   -- ★1.73.43 封皮成了**最后一步**（排在队列尾）→ 先把队列滴干，收集里才有它
@@ -11307,7 +11312,7 @@ do
   for _, m in ipairs(collect145()) do
     if string.find(m, "|HEHPF:" .. tostring(sid145), 1, true) then table.insert(msgs145, m) end
   end
-  eq(table.getn(msgs145) >= 3, true, "③★14 分的方案 = 多片 + 封皮（" .. tostring(table.getn(msgs145)) .. " 条）")
+  eq(table.getn(msgs145) >= 3, true, "③★25 分的方案 = 多片 + 封皮（" .. tostring(table.getn(msgs145)) .. " 条）")
   eq(msgs145[table.getn(msgs145)] == seal145, true, "③★★★B 品阶行是**最后一条**（用户：「方案分享最后一步 展示分享信息」）")
   for _, m in ipairs(msgs145) do EVAL_SHARE_ONMSG(m, "队友甲") end
   eq(EVAL_SHARE_PENDING() ~= nil, true, "③前置：收齐后弹窗（数据在）")
@@ -11318,11 +11323,11 @@ do
   -- ★★只取**标题那一行**（弹窗读值口的第 1 条 = 摘要行）：拼上详情行会让「含方案名」这类判据被
   --   「# 方案: 甲」顶住 —— M459b 实测 SURVIVED 的正是这个坑（弱判据）。
   local popTitle145 = tostring((EVAL_TEST_SHARE_POPUP_TEXTS() or {})[1] or "")
-  local wantCol145 = select(2, EVAL_SHARE_SEAL_TIER(EVAL_SHARE_SEAL_SCORE(txt145(14)))).color
+  local wantCol145 = select(2, EVAL_SHARE_SEAL_TIER(EVAL_SHARE_SEAL_SCORE(txt145(25)))).color
   eq(string.find(popTitle145, "分享的方案", 1, true) ~= nil, true, "③★标题行照旧说明「谁分享的方案 + 几个技能」")
   eq(string.find(popTitle145, "《甲》", 1, true) == nil, true, "③★★★标题行**不再重复方案名**（名字只留一处，用户要求）")
   eq(string.find(popTitle145, "《", 1, true) == nil, true, "③★★标题行不再出现书名号（方案名已由品阶行承担）")
-  local wantIcon145 = EVAL_SHARE_SEAL_ICON(select(1, EVAL_SHARE_SEAL_TIER(EVAL_SHARE_SEAL_SCORE(txt145(14)))))
+  local wantIcon145 = EVAL_SHARE_SEAL_ICON(select(1, EVAL_SHARE_SEAL_TIER(EVAL_SHARE_SEAL_SCORE(txt145(25)))))
   eq(view145.icon, wantIcon145, "③★★★图标纹理 = 该品阶的图标（读真控件 GetTexture，不读常量）")
   eq(string.find(tostring(view145.head), "[神级秘籍·甲]", 1, true) ~= nil, true, "③★★头一行带品阶与方案名")
   eq(string.sub(tostring(view145.head), 1, 10) == wantCol145, true,
@@ -11484,7 +11489,7 @@ do
     local tb = EVAL_LOCALES[lg]
     eq(EVAL_L("TITLE_3_1"), tb.TITLE_3_1, "③★★★头衔文案跟着语言（" .. lg .. "：" .. tostring(tb.TITLE_3_1) .. "）")
     eq(EVAL_TITLE_LOOKUP(tb.TITLE_3_1) ~= nil, true, "③★★该语言的头衔名也反查得到档位（回查走同一份语言包）")
-    local _, ti146 = EVAL_SHARE_SEAL_TIER(13)
+    local _, ti146 = EVAL_SHARE_SEAL_TIER(26)
     eq(ti146.name, tb.SEAL_TIER_5, "③★★★品阶名跟着语言（" .. lg .. "：" .. tostring(tb.SEAL_TIER_5) .. "）")
     eq(EVAL_SHARE_SEAL_COMMENT(5, 1), tb.SEAL_C5_1, "③★★★评语跟着语言（" .. lg .. "）")
     local info146 = EVAL_SHARE_SEAL_INFO("# 方案: 甲\n- 技能甲", 1, 1)
@@ -11503,7 +11508,7 @@ do
   eq(EVAL_L("TITLE_3_1"), EVAL_LOCALES[keepLang146].TITLE_3_1, "④还原后读值口回到原语言")
   -- ⑤ 色码与符号**留在源码**：迁文案不许把它们也搬走（它们是协议的一部分）
   eq(EVAL_SHARE_SEAL_SYMBOL(5), "★", "⑤符号留在源码（★）")
-  eq(select(2, EVAL_SHARE_SEAL_TIER(13)).color, "|cffc00000", "⑤**深红**色码留在源码（用户 1.73.60）")
+  eq(select(2, EVAL_SHARE_SEAL_TIER(26)).color, "|cffc00000", "⑤**深红**色码留在源码（用户 1.73.60）")
   TEST.chat = nil
   print("  分享文案三语言：130 键（5 品阶 + 50 评语 + 75 头衔）逐语言齐全 · 中文原文逐字校验 · 切语言读值口即时生效 · 符号/色码仍在源码")
 end
@@ -11530,7 +11535,7 @@ do
     return p
   end
   EVAL_HELP_CONFIG.title = nil
-  EVAL_HELP_CONFIG.war.profiles = { prof147(2), prof147(5) } -- 普通 + 稀有 → 2 档
+  EVAL_HELP_CONFIG.war.profiles = { prof147(2), prof147(9) } -- 普通(2) + 稀有(9) → 2 档（阈值 1.73.61 改宽了，分数也要跟着走）
   eq(EVAL_TITLE_REFRESH(), 2, "②★★按方案库算到 2 档")
   local st147 = EVAL_TITLE_STATE()
   eq(type(st147.draws[1]) == "number" and type(st147.draws[2]) == "number", true, "②★★★两个新达到的档**各抽了一次**")
@@ -11543,7 +11548,7 @@ do
   eq(EVAL_TITLE_CURRENT().name, EVAL_L(EVAL_TITLE_KEY(2, d2)), "②★★当前头衔 = **最高档**抽到的那张")
   eq(EVAL_TITLE_CURRENT().tier, 2, "②★当前档位 = 2")
   -- ③ 只升不降：加方案 → 升档（新档抽一次，老档的卡一动不动）；把方案删光 → 不掉档、不换卡
-  EVAL_HELP_CONFIG.war.profiles = { prof147(2), prof147(5), prof147(14) }
+  EVAL_HELP_CONFIG.war.profiles = { prof147(2), prof147(9), prof147(26) }
   eq(EVAL_TITLE_REFRESH(), 5, "③★★加入一个神级方案 → 升到 5 档")
   st147 = EVAL_TITLE_STATE()
   eq(st147.draws[1] == d1 and st147.draws[2] == d2, true, "③★★★升档**不动**老档的卡（收藏保留）")
@@ -11565,7 +11570,7 @@ do
   eq(EVAL_TITLE_CURRENT().name, EVAL_L(EVAL_TITLE_KEY(5, d5)), "④收尾：清掉彩蛋后回到抽到的卡（诊断口）")
   -- ⑤ 色系：5 档头衔色与 5 档品阶色**逐个不相等**（用户：「不要和方案颜色相同」）
   local tierCols147 = {}
-  local repsTier147 = { 1, 4, 7, 10, 13 }
+  local repsTier147 = { 3, 9, 15, 21, 26 }
   for i = 1, 5 do
     local _, ti147 = EVAL_SHARE_SEAL_TIER(repsTier147[i])
     tierCols147[ti147.color] = true
@@ -11653,7 +11658,7 @@ do
   eq(string.len(tostring(EVAL_TITLE_CUSTOM_COLOR())) == 10, true, "⑤★专属色也是 8 位色码")
   -- ★★★专属色必须与「5 档头衔色 + 5 品阶色」**全不相同**（否则「一眼看出不是抽来的」就不成立）
   local customCol150, clash150 = tostring(EVAL_TITLE_CUSTOM_COLOR()), ""
-  local reps150 = { 1, 4, 7, 10, 13 }
+  local reps150 = { 3, 9, 15, 21, 26 }
   for i = 1, 5 do
     local look150 = EVAL_TITLE_LOOKUP(EVAL_L(EVAL_TITLE_KEY(i, 1)))
     if look150 and customCol150 == look150.color then clash150 = clash150 .. " 撞头衔" .. i end
@@ -11700,7 +11705,7 @@ do
     for i = 1, score do table.insert(p.skills, { skill = "技能" .. i, groups = {} }) end
     return p
   end
-  EVAL_HELP_CONFIG.war.profiles = { prof151(2), prof151(5), prof151(14) } -- 普通 + 稀有 + 神级 → 5 档
+  EVAL_HELP_CONFIG.war.profiles = { prof151(3), prof151(9), prof151(26) } -- 普通 + 稀有 + 神级 → 5 档
   EVAL_HELP_CONFIG.title = nil
   eq(EVAL_TITLE_REFRESH(), 5, "①前置：按方案库算到 5 档")
   local d1_151 = EVAL_TITLE_STATE().draws[1]
@@ -12019,7 +12024,7 @@ end
 --   ★判据都读**真控件**：图标纹理 / 文字色 / 背景顶点色 / 文字区宽 / 对齐方式。
 do
   -- ① 色码 → RGB：必须与品阶色表**同源**（逐档把 HEX 自己算一遍来比，不看实现里的常量）
-  local reps148 = { 1, 4, 7, 10, 13 }
+  local reps148 = { 3, 9, 15, 21, 26 }
   local okAll148 = true
   for i = 1, 5 do
     local _, ti = EVAL_SHARE_SEAL_TIER(reps148[i])
@@ -12267,7 +12272,7 @@ do
   -- ① 期望的色码集合 **从同一批表现算**（抄死 12 个色码 = 测自己；表改了断言也跟着假绿）
   local want158 = {}
   table.insert(want158, tostring(EVAL_SHARE_CHUNK_COLOR()))         -- 分片传输色
-  local scores158 = { 1, 4, 7, 10, 13 }                              -- 五档各取一个评分
+  local scores158 = { 3, 9, 15, 21, 26 }                              -- 五档各取一个评分
   for i = 1, 5 do
     local _, ti = EVAL_SHARE_SEAL_TIER(scores158[i])
     table.insert(want158, tostring(ti.color))
@@ -12373,7 +12378,7 @@ do
   local clash159 = {}
   local function mark159(c) local k = tostring(c) clash159[k] = (clash159[k] or 0) + 1 end
   for i = 1, n159 do mark159(list159[i].code) end
-  local sc159 = { 1, 4, 7, 10, 13 }
+  local sc159 = { 3, 9, 15, 21, 26 }
   for i = 1, 5 do
     local _, ti159 = EVAL_SHARE_SEAL_TIER(sc159[i])
     mark159(ti159.color)
@@ -12459,9 +12464,10 @@ do
     for k = 1, n do s = s .. "\n- 技能" .. tostring(k) .. " | 可攻击" end
     return EVAL_PROFILE_FROM_TEXT(s)
   end
-  -- 1 / 3 / 5 个技能（每条 1 个条件）→ 2 / 6 / 10 分 → 三个**不同品阶**（否则「颜色跟着品阶」验不出来）
+  -- ★1.73.61 阈值改宽（≤6/12/18/24/≥25）后重挑夹具：2 / 7 / 14 个技能（各 1 条条件）= 4 / 14 / 28 分
+  --   → 普通 / 珍稀 / 神级，三个**不同品阶**（否则「颜色跟着品阶」验不出来）
   EVAL_HELP_CONFIG.war = EVAL_HELP_CONFIG.war or {}
-  EVAL_HELP_CONFIG.war.profiles = { mk160(1), mk160(3), mk160(5) }
+  EVAL_HELP_CONFIG.war.profiles = { mk160(2), mk160(7), mk160(14) }
   EVAL_HELP_CONFIG.war.activeProfile = 2
   -- ★★1.73.56 方案行/图标是**「一键宏」Tab 的内容**：显隐只在该 Tab 激活时由刷新函数负责（真机 bug 的修法 ——
   --   停在别的 Tab 时刷新数据不再 Show 这些控件）。⇒ 本组验的是「切到该 Tab 时」的样子，先显式切过去；
@@ -12698,9 +12704,9 @@ do
   local savedWar164 = EVAL_HELP_CONFIG.war
   local savedUi164 = EVAL_HELP_CONFIG.ui
   local low164 = { name = "低配", skills = { { groups = { { 1 } } } } } -- 1 技能 + 1 条件 = 2 分 → 普通
-  local high164 = { name = "源码", skills = {                        -- 2 + 7 + 6 = 15 分 → 神级
-    { groups = { { 1, 2, 3, 4, 5, 6, 7 } } },
-    { groups = { { 1, 2, 3, 4, 5, 6 } } } } }
+  local high164 = { name = "神档", skills = {                        -- 2 + 13 + 12 = 27 分 → 神级（1.73.61 起门槛 25）
+    { groups = { { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 } } },
+    { groups = { { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 } } } } }
   local near164 = function(a, b) return type(a) == "number" and type(b) == "number" and math.abs(a - b) < 1e-6 end
   local wantLow164 = "[" .. EVAL_SHARE_SEAL_SYMBOL(1) .. tostring(EVAL_L("SEAL_TIER_1")) .. "]"
   local wantHigh164 = "[" .. EVAL_SHARE_SEAL_SYMBOL(5) .. tostring(EVAL_L("SEAL_TIER_5")) .. "]"
@@ -12875,8 +12881,8 @@ do
     for k = 1, n do s = s .. "\n- 技能" .. tostring(k) .. " | 可攻击" end
     return EVAL_PROFILE_FROM_TEXT(s)
   end
-  -- 1 / 3 / 5 个技能（各 1 条条件）→ 2 / 6 / 10 分 → 三个**不同品阶**；第 2 个是当前激活
-  EVAL_HELP_CONFIG.war = { activeProfile = 2, profiles = { mk167(1), mk167(3), mk167(5) } }
+  -- ★1.73.61 阈值改宽后重挑夹具：2 / 7 / 14 个技能（各 1 条条件）= 4 / 14 / 28 分 → 普通 / 珍稀 / 神级；第 2 个是当前激活
+  EVAL_HELP_CONFIG.war = { activeProfile = 2, profiles = { mk167(2), mk167(7), mk167(14) } }
   EVAL_HELP_CONFIG.ui = { enabled = true, subCombat = true, subScheme = true }
   EVAL_HELP_UI_BUILD()
   if not EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end
@@ -12932,8 +12938,10 @@ do
   local savedWar168 = EVAL_HELP_CONFIG.war
   local savedTitle168 = EVAL_HELP_CONFIG.title
   local near168 = function(a, b) return type(a) == "number" and type(b) == "number" and math.abs(a - b) < 1e-6 end
+  -- ★1.73.61 阈值改宽后（≤6/12/18/24/≥25），夹具也要选**跨档**的分数：
+  --   9 条技能各带 1 个条件 = 18 分 → 珍稀（第 3 档）；④ 再改成 2 分 → 普通 ⇒ 两档不同、才验得出「跟着换」。
   EVAL_HELP_CONFIG.war = { activeProfile = 1, profiles = {
-    EVAL_PROFILE_FROM_TEXT("# 方案: 头衔168\n- 甲 | 可攻击\n- 乙 | 可攻击\n- 丙 | 可攻击") } }
+    EVAL_PROFILE_FROM_TEXT("# 方案: 头衔168\n- 甲1 | 可攻击\n- 甲2 | 可攻击\n- 甲3 | 可攻击\n- 甲4 | 可攻击\n- 甲5 | 可攻击\n- 甲6 | 可攻击\n- 甲7 | 可攻击\n- 甲8 | 可攻击\n- 甲9 | 可攻击") } }
   EVAL_HELP_CONFIG.title = { tier = 0, draws = {} }
   eq(EVAL_TITLE_REFRESH() >= 1, true, "前置：方案库让玩家入档")
   eq(EVAL_TITLE_SET_CUSTOM("布局测试名"), true, "前置：写一个确定的头衔（不依赖抽卡结果）")
@@ -12975,7 +12983,7 @@ do
   --   两个窗口都开着时，HUD 的 tick 会**替 ST 一起刷**（共用登记表），删掉 ST 的调用也不会响（M526 实测存活）。
   if EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end
   eq(EVAL_TEST_UI_SHOWN(), false, "⑤前置：战斗信息UI 已关掉")
-  profs168[1].skills = keep168 -- 6 分 → 回到稀有档
+  profs168[1].skills = keep168 -- 18 分 → 回到珍稀档
   EVAL_HELP_ST_TICK()
   local s3_168 = EVAL_TEST_ST_TITLEBAR()
   eq(s3_168.tier ~= s2_168.tier, true,
