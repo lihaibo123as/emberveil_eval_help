@@ -6866,6 +6866,19 @@ if type(SlashCmdList) == "table" then
       else
         say("分享模块未载入（EVAL_SHARE_PROBE_AUTORUN 不存在）")
       end
+    elseif msg == "go 秘籍" or msg == "go seal" then
+      -- ★1.73.42 预览：显示行（境界/品阶/评语）到底长什么样，先在游戏里看一眼
+      if type(EVAL_SHARE_SEAL_INFO) == "function" and type(EVAL_PROFILE_TO_TEXT) == "function" then
+        local info = EVAL_SHARE_SEAL_INFO(EVAL_PROFILE_TO_TEXT())
+        if not info then
+          say("秘籍预览：算不出来（方案解析器/导出不可用）")
+        else
+          say("秘籍预览（评分 " .. tostring(info.score) .. " → " .. tostring(info.tierName) .. "）：")
+          say("  " .. info.line)
+        end
+      else
+        say("秘籍预览：分享模块未载入（EVAL_SHARE_SEAL_INFO 不存在）")
+      end
     elseif msg == "go 悬停探针" or msg == "go hovprobe" then
       if type(EVAL_SHARE_HOVER_PROBE) == "function" then
         EVAL_SHARE_HOVER_PROBE("WHISPER")

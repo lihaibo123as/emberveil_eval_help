@@ -10798,4 +10798,70 @@ do
   eq(type((hov142 or {}).armedAt) == "number", true, "⑧★还有时间戳（能证明探针真的跑过）")
   print("  悬停探针：挂钩幂等+透传+记账 · 三条形态（自定义/假物品/真物品对照）· 账本落盘 · 命令接线")
 end
+-- 143) ★★★1.73.42 分享显示行：境界（等级→修仙）· 品阶（评分制）· 评语（每档 10 条随机）
+do
+  eq(EVAL_SHARE_SEAL_RANK(1), "炼气", "境界：1 级 = 炼气")
+  eq(EVAL_SHARE_SEAL_RANK(9), "炼气", "境界：9 级 = 炼气（档位上沿）")
+  eq(EVAL_SHARE_SEAL_RANK(10), "筑基", "境界：10 级 = 筑基（下一档下沿）")
+  eq(EVAL_SHARE_SEAL_RANK(20), "金丹", "境界：20 = 金丹")
+  eq(EVAL_SHARE_SEAL_RANK(30), "元婴", "境界：30 = 元婴")
+  eq(EVAL_SHARE_SEAL_RANK(40), "化神", "境界：40 = 化神")
+  eq(EVAL_SHARE_SEAL_RANK(50), "炼虚", "境界：50 = 炼虚")
+  eq(EVAL_SHARE_SEAL_RANK(60), "大乘", "境界：60 = 大乘")
+  eq(EVAL_SHARE_SEAL_RANK(99), "大乘", "境界：越界 → 最高档（不回落到炼气）")
+  local function txt(n, cond)
+    local s = "# 方案: 甲"
+    for i = 1, n do s = s .. "\n- 技能" .. i .. (cond and " | 可攻击 & 敌对" or "") end
+    return s
+  end
+  eq(EVAL_SHARE_SEAL_SCORE(txt(3)), 3, "评分：3 条无条件 = 3")
+  eq(EVAL_SHARE_SEAL_SCORE(txt(2, true)), 6, "★★评分：2 条各带 2 个条件 = 2+4 = 6")
+  eq(select(2, EVAL_SHARE_SEAL_TIER(3)).name, "普通", "品阶：3 = 普通")
+  eq(select(2, EVAL_SHARE_SEAL_TIER(4)).name, "稀有", "品阶：4 = 稀有")
+  eq(select(2, EVAL_SHARE_SEAL_TIER(6)).name, "稀有", "品阶：6 = 稀有（上沿）")
+  eq(select(2, EVAL_SHARE_SEAL_TIER(7)).name, "珍稀", "品阶：7 = 珍稀")
+  eq(select(2, EVAL_SHARE_SEAL_TIER(9)).name, "珍稀", "品阶：9 = 珍稀（上沿）")
+  eq(select(2, EVAL_SHARE_SEAL_TIER(10)).name, "绝版", "品阶：10 = 绝版")
+  eq(select(2, EVAL_SHARE_SEAL_TIER(12)).name, "绝版", "品阶：12 = 绝版（上沿）")
+  eq(select(2, EVAL_SHARE_SEAL_TIER(13)).name, "源代码", "★★品阶：13 = 源代码（用户定的门槛）")
+  local reps = { 1, 4, 7, 10, 13 }
+  local wantColor = { "|cffffffff", "|cff1eff00", "|cffa335ee", "|cffff8000", "|cffb87333" }
+  for i = 1, 5 do
+    local _, ti = EVAL_SHARE_SEAL_TIER(reps[i])
+    eq(ti.color, wantColor[i], "品阶" .. i .. " 色码对（" .. tostring(ti.color) .. "）")
+    eq(string.len(tostring(ti.color)) == 10, true, "色码必须 8 位（|c + 8 = 10 字节）")
+  end
+  eq(wantColor[5], "|cffb87333", "★★源代码 = 暗金（用户定的）")
+  for i = 1, 5 do
+    local set = {}
+    for k = 1, 10 do
+      local c = EVAL_SHARE_SEAL_COMMENT(i, k)
+      eq(type(c) == "string" and string.len(c) > 0, true, "评语非空 " .. i .. "/" .. k)
+      eq(set[c] == nil, true, "★★同档评语不重复：" .. tostring(c))
+      set[c] = true
+    end
+    eq(EVAL_SHARE_SEAL_COMMENT(i, 11) ~= "", true, "越界索引兜底不为空")
+  end
+  local first, diff = nil, 0
+  for k = 1, 40 do
+    local c = EVAL_SHARE_SEAL_COMMENT(3)
+    if not first then first = c end
+    if c ~= first then diff = diff + 1 end
+  end
+  eq(diff > 0, true, "★★评语是**随机**抽的（40 次里出现过不同条目）")
+  local info = EVAL_SHARE_SEAL_INFO(txt(13), 10)
+  eq(type(info) == "table", true, "整行算得出来")
+  eq(info.score, 13, "整行评分 13")
+  eq(info.tierName, "源代码", "整行品阶 = 源代码")
+  eq(info.rank, "筑基", "整行境界 = 筑基（10 级）")
+  eq(string.find(info.line, "分享了一份传家宝", 1, true) ~= nil, true, "整行含「分享了一份传家宝」")
+  eq(string.find(info.line, "[源代码秘籍·甲]", 1, true) ~= nil, true, "整行含 [品阶秘籍·方案名]")
+  eq(string.find(info.line, info.comment, 1, true) ~= nil, true, "整行含评语")
+  eq(string.find(info.line, "|cffb87333", 1, true) ~= nil, true, "整行含暗金色码")
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 秘籍")
+  eq(string.find(tostring(TEST.chat or ""), "秘籍预览", 1, true) ~= nil, true, "★★★/eh go 秘籍 真的执行（命令在 go 组里）")
+  TEST.chat = nil
+  print("  分享显示行：境界 7 档 · 品阶评分边界(3/4/6/7/9/10/12/13) · 5 色(含暗金) · 每档 10 条评语随机 · 命令接线")
+end
 print("ALL TESTS PASS")

@@ -539,6 +539,102 @@ local function shProbeFind(mode, tag)
   end
   return nil
 end
+-- 方案名（显示用）：取导出文本首行 `# 方案: 名` 里的「名」；解析不出就退回「方案」
+local function shSealName(text)
+  local first = string.match(tostring(text or ""), "^([^\n]*)") or ""
+  local nm = first
+  local c1 = string.find(first, "：", 1, true)
+  if c1 then nm = string.sub(first, c1 + 3) end
+  local c2 = string.find(first, ":", 1, true)
+  if c2 and (not c1 or c2 > c1) then nm = string.sub(first, c2 + 1) end
+  nm = string.gsub(nm, "%|", "")
+  nm = string.gsub(nm, "%[", "")
+  nm = string.gsub(nm, "%]", "")
+  nm = string.gsub(nm, "^%s+", "")
+  nm = string.gsub(nm, "%s+$", "")
+  if nm == "" then nm = "方案" end
+  return string.sub(nm, 1, 18)
+end
+-- ===== 1.73.42 分享显示行：境界 · 品阶 · 评语（用户 2026-09-19 定稿）==================
+-- 行格式：`<境界><角色名> 分享了一份传家宝 → [<品阶>秘籍·<方案名>]  <评语>`
+--   品阶 = **技能条数 + 每条技能里的条件数**（评分制）：≤3 普通 / 4-6 稀有 / 7-9 珍稀 / 10-12 绝版 / **≥13 源代码**；
+--   颜色：白 |cffffffff · 绿 |cff1eff00 · 紫 |cffa335ee · 橙 |cffff8000 · **暗金 |cffb87333**（用户定的）；
+--   评语：每档 **10 条**（用户要求），分享时**随机抽一条**。★这些文案下一步要迁进 Locales 三语言（现为本轮预览用）。
+local SH_SEAL_RANKS = {
+  { 1, 9, "炼气" }, { 10, 19, "筑基" }, { 20, 29, "金丹" }, { 30, 39, "元婴" },
+  { 40, 49, "化神" }, { 50, 59, "炼虚" }, { 60, 60, "大乘" },
+}
+local SH_SEAL_TIERS = {
+  { max = 3,  name = "普通",   color = "|cffffffff" },
+  { max = 6,  name = "稀有",   color = "|cff1eff00" },
+  { max = 9,  name = "珍稀",   color = "|cffa335ee" },
+  { max = 12, name = "绝版",   color = "|cffff8000" },
+  { max = 9999, name = "源代码", color = "|cffb87333" },
+}
+local SH_SEAL_COMMENTS = {
+  -- 普通
+  { "拿来练手，聊胜于无。", "有总比没有强，先练着。", "凡人入门，聊以自慰。", "江湖地摊货，胜在免费。", "练废了也不心疼。", "聊胜于无，且行且珍惜。", "有手就行，别挑。", "基础中的基础，地基里的地基。", "先用着，等有更好的再换。", "此物平平无奇，胜在不要钱。" },
+  -- 稀有
+  { "有点东西，值得一学。", "江湖上能见着，不算稀奇。", "小有所成，可堪一用。", "比上不足，比下有余。", "寻常货色里的上等货。", "值得抄在作业本上。", "拿去打本，不至于丢人。", "有点门道，别小看它。", "绿光一闪，聊胜于白。", "修炼路上的一块垫脚石。" },
+  -- 珍稀
+  { "此物不常见，收好。", "三生有幸，方得一见。", "紫气东来，必是精品。", "拿出来能唬住半条街。", "老玩家看了会点头。", "这不是烂大街的货。", "若非有缘，你一辈子碰不上。", "值得截图发群里。", "有点东西，这次是真的有点东西。", "见者有份，别声张。" },
+  -- 绝版
+  { "世间仅此一份，见者有缘。", "此乃孤本，失传莫怪。", "橙光普照，江湖震动。", "这等货色，拍卖行都不敢挂。", "错过今天，再无来日。", "连 GM 都没见过这份。", "得之你幸，失之你命。", "传说级待遇，请正襟危坐。", "有此一物，可以镇宅。", "别问价格，问就是无价。" },
+  -- 源代码
+  { "天书原文，凡人勿近。", "此乃源代码，改一个字符都会天崩地裂。", "创世之初写下的那一行。", "观之可开悟，抄之恐遭雷劈。", "作者亲笔，非请勿动。", "此物一出，江湖再无秘密。", "此码不仁，以规则为螺丝。", "看懂了能成神，看不懂会头疼。", "本源之力，慎入。", "此乃源码，非修仙之人不可直视。" },
+}
+function EVAL_SHARE_SEAL_RANK(level)
+  level = tonumber(level) or 1
+  for i = 1, table.getn(SH_SEAL_RANKS) do
+    local r = SH_SEAL_RANKS[i]
+    if level >= r[1] and level <= r[2] then return r[3] end
+  end
+  -- 越界兜底：低于 1 → 最低档；高于 60 → **最高档**（大乘）
+  if level < 1 then return SH_SEAL_RANKS[1][3] end
+  return SH_SEAL_RANKS[table.getn(SH_SEAL_RANKS)][3]
+end
+-- 评分 = 技能条数 + 技能内每个条件（★复用项目**同一个**导入解析器，不另写一套）
+function EVAL_SHARE_SEAL_SCORE(text)
+  if type(EVAL_PROFILE_FROM_TEXT) ~= "function" then return nil end -- 解析器不在 → 如实返回 nil（不假装算得出）
+  local p = EVAL_PROFILE_FROM_TEXT(tostring(text or ""))
+  if type(p) ~= "table" or type(p.skills) ~= "table" then return nil end
+  local score = table.getn(p.skills)
+  for i = 1, table.getn(p.skills) do
+    local gs = p.skills[i] and p.skills[i].groups
+    for g = 1, table.getn(gs or {}) do score = score + table.getn(gs[g] or {}) end
+  end
+  return score
+end
+function EVAL_SHARE_SEAL_TIER(score)
+  score = tonumber(score) or 0
+  for i = 1, table.getn(SH_SEAL_TIERS) do
+    if score <= SH_SEAL_TIERS[i].max then return i, SH_SEAL_TIERS[i] end
+  end
+  return table.getn(SH_SEAL_TIERS), SH_SEAL_TIERS[table.getn(SH_SEAL_TIERS)]
+end
+function EVAL_SHARE_SEAL_COMMENT(tierIdx, forced)
+  local list = SH_SEAL_COMMENTS[tierIdx]
+  if type(list) ~= "table" then return "" end
+  local n = table.getn(list)
+  local i = tonumber(forced) or math.random(1, n)
+  if i < 1 or i > n then i = 1 end
+  return list[i], i
+end
+-- 读值口：把一行显示内容算出来（测试与 /eh go 秘籍 预览共用；forcedIdx 只给测试用）
+function EVAL_SHARE_SEAL_INFO(text, level, forcedIdx)
+  local score = EVAL_SHARE_SEAL_SCORE(text)
+  if score == nil then return nil end -- 算不出就如实 nil
+  local idx, tier = EVAL_SHARE_SEAL_TIER(score)
+  local comment, ci = EVAL_SHARE_SEAL_COMMENT(idx, forcedIdx)
+  local rank = EVAL_SHARE_SEAL_RANK(level or ((type(UnitLevel) == "function") and UnitLevel("player") or 1))
+  local who = (type(UnitName) == "function") and UnitName("player") or "?"
+  local name = shSealName(text or "")
+  -- ★颜色包住整个方括号（看着更像品阶；也让 `[品阶秘籍·名]` 能被文字直接搜到）
+  local line = "[" .. rank .. "]" .. tostring(who) .. " 分享了一份传家宝 → " .. tier.color ..
+               "[" .. tier.name .. "秘籍·" .. name .. "]|r  " .. comment
+  return { score = score, tier = idx, tierName = tier.name, color = tier.color,
+           rank = rank, comment = comment, commentIdx = ci, plan = name, line = line }
+end
 -- ===== 1.73.41c 探针 ③：悬停 tooltip 机制发现 ===========================================
 -- 用户需求（原话）：「角色名: 分享了一份绝世秘籍 —— 鼠标移动上去才能看到详细的方案信息」。
 --   两个判断**读码定不了、必须实测**：
