@@ -179,7 +179,8 @@ local function shBuildFor(text)
         local scut = sps + string.len(tostring(sinfo.symbol)) - 1
         sline = string.sub(sline, 1, scut) .. "|HEHPF:" .. idh .. "|h" .. string.sub(sline, scut + 1) .. "|h"
       end
-      SH.sealPending = sline -- ★封皮**不进分片队列**（它是展示行）
+      SH.sealPending = sline -- ★封皮排在**分片之后**（最后一步）
+      SH.sealSentLast = sline -- ★1.73.43b 发送侧单独记（原来与接收侧共用 sealLast → 收到别人分享就把自己的盖掉了）
       SH.sealLast = sline
     end
   end
@@ -196,6 +197,49 @@ end
 --   （短方案只出一片，片长上限定多少都看不出来——变异「忽略预算、退回固定 220」曾在短方案下 SURVIVED），
 --   同时长方案收回来要能逐字节复原（分片切法改错会在这里露出）。
 function EVAL_TEST_SHARE_BUILD_TEXT(text) return shBuildFor(tostring(text or "")) end
+-- ★★★1.73.43b 取证命令 `/eh go 分享探针`（用户报「还是没显示分享信息」）：把**唯一的现场**一次摊开 ——
+--   客户端不回话（RunScript/SendChatMessage 都不报错），所以只能看：① 封皮行算什么了、多长；
+--   ② 队列里还剩什么（是否卡着封皮）；③ **真正交给 RunScript 的脚本原文**；④ 封皮有没有被弹出过。
+function EVAL_SHARE_SEND_PROBE()
+  local q, i = {}, 0
+  for i = 1, table.getn(shTxQ) do
+    local it = shTxQ[i]
+    table.insert(q, { seal = it.seal and true or false, chan = tostring(it.chan or ""),
+                      head = string.sub(tostring(it.body or ""), 1, 40), len = string.len(tostring(it.body or "")) })
+  end
+  local log = {}
+  for i = 1, table.getn(SH.sentLog or {}) do
+    local e = SH.sentLog[i]
+    table.insert(log, { seal = e.seal and true or false, at = e.at, s = tostring(e.s or "") }) -- ★完整脚本（判据要数引号；聊天打印时再截断）
+  end
+  local seal = tostring(SH.sealSentLast or SH.sealLast or "") -- ★发送侧那条（接收侧有自己的字段）
+  local probe = { sealLen = string.len(seal), seal = string.sub(seal, 1, 90),
+                  sealPending = (SH.sealPending ~= nil), sealPopped = SH.sealPopped or 0,
+                  queueLen = table.getn(shTxQ), queue = q, sent = log,
+                  ticker = (shTxFrame ~= nil),
+                  tickerShown = (shTxFrame and type(shTxFrame.IsShown) == "function" and (pcall(shTxFrame.IsShown, shTxFrame) == true)) and true or false,
+                  rate = SH_SEND_RATE, max = SH_MSG_MAX }
+  local cfgP = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(cfgP) == "table" then cfgP.shProbe = probe end -- ★落盘证人（判据不玩聊天含子串）
+  shSay("===== 分享发送 · 取证 =====")
+  shSay("  封皮行：长度 " .. tostring(probe.sealLen) .. " 字节" ..
+        ((probe.sealLen == 0) and "（★空串！这就是「没显示」的原因）" or ("：" .. probe.seal)))
+  shSay("  封皮进度：排队中残留=" .. tostring(SH.sealPending ~= nil) .. " · 已从队列弹出 " .. tostring(probe.sealPopped) .. " 次")
+  shSay("  队列剩余：" .. tostring(probe.queueLen) .. " 条" .. ((probe.queueLen > 0) and "（★卡住了：发完前别重复点）" or "（已发完）"))
+  for i = 1, math.min(4, table.getn(q)) do
+    shSay("    " .. i .. (q[i].seal and " [封皮]" or " [分片]") .. " " .. tostring(q[i].len) .. "B · " .. q[i].head)
+  end
+  shSay("  最近实际发出的脚本（新→旧，最多 6 条）：")
+  local shown = 0
+  for i = table.getn(log), 1, -1 do
+    if shown < 6 then
+      shown = shown + 1
+      shSay("    " .. (log[i].seal and "[封皮] " or "[分片] ") .. " " .. string.sub(tostring(log[i].s), 1, 70))
+    end
+  end
+  if table.getn(log) == 0 then shSay("    （一条都没发出去 —— 连第 1 片都没有，说明发送路径没走到）") end
+  return probe
+end
 -- ★1.73.35 右键菜单「分享方案」：把**当前激活方案**密语给这个玩家（同一份分片 + 同一限频队列，只多一个 target）
 function EVAL_SHARE_SEND_TO(name)
   if type(name) ~= "string" or name == "" then return false end
@@ -266,6 +310,34 @@ local function shWarn(msg)
 end
 
 -- ★1.72.3 发送队列实现（实现在这里，因为要用上面的 shNowT）
+-- ★★★1.73.43b 发送留痕：把**真正交给 RunScript 的脚本原文**留最近 12 条（含「是不是封皮」）。
+--   为什么要有它：客户端**不回话**（RunScript 不报错、SendChatMessage 也不报错），
+--   所以「封皮没显示」这类问题只能看「我们到底发了什么」——这就是唯一现场。
+SH.sentLog = SH.sentLog or {}
+local function shSentLog(script, isSeal)
+  table.insert(SH.sentLog, { s = tostring(script), seal = isSeal and true or false, at = shNowT() })
+  while table.getn(SH.sentLog) > 12 do table.remove(SH.sentLog, 1) end
+end
+-- ★★★脚本串必须中和引号/反斜杠：`SendChatMessage("…")` 里只要出现一个 `"`，**整条脚本作废**，
+--   而 RunScript **一声不响**（玩家看到的就是「这条消息凭空消失」）。同名老坑：`tbSafeName` 就是为它写的。
+local function shScriptSafe(t)
+  t = tostring(t or "")
+  t = string.gsub(t, string.char(34), "'")
+  t = string.gsub(t, string.char(92), "/")
+  return t
+end
+-- 唯一的发送点（立即发与队列滴出都走它）→ 留痕不会漏
+local function shSendNow(body, chanId, target, isSeal)
+  local sc
+  if target and target ~= "" then
+    sc = 'SendChatMessage("' .. shScriptSafe(body) .. '", "' .. tostring(chanId) .. '", nil, "' .. shScriptSafe(target) .. '")'
+  else
+    sc = 'SendChatMessage("' .. shScriptSafe(body) .. '", "' .. tostring(chanId) .. '")'
+  end
+  shSentLog(sc, isSeal)
+  if type(RunScript) == "function" then RunScript(sc) end
+  return sc
+end
 function shTxStep()
   if table.getn(shTxQ) == 0 then
     if shTxFrame then pcall(shTxFrame.Hide, shTxFrame) end
@@ -275,14 +347,10 @@ function shTxStep()
   if now - shTxLast < SH_SEND_RATE then return end -- ★限频：到点才滴下一片
   shTxLast = now
   local job = table.remove(shTxQ, 1)
-  if type(RunScript) == "function" then
-    -- ★1.73.35 密语分享：带 target 时补第 4 参（SendChatMessage(body, "WHISPER", nil, 目标)）
-    if job.target and job.target ~= "" then
-      RunScript('SendChatMessage("' .. job.body .. '", "' .. job.chan .. '", nil, "' .. job.target .. '")')
-    else
-      RunScript('SendChatMessage("' .. job.body .. '", "' .. job.chan .. '")')
-    end
-  end
+  if job.seal then SH.sealPopped = (SH.sealPopped or 0) + 1 end -- ★封皮真的从队列里出来了（留痕）
+  -- ★1.73.35 密语分享：带 target 时补第 4 参（SendChatMessage(body, "WHISPER", nil, 目标)）
+  --   ★1.73.43b 统一走 shSendNow：脚本串中和 + 留痕（立即发/队列滴出同一条路）
+  shSendNow(job.body, job.chan, job.target, job.seal)
   if table.getn(shTxQ) == 0 and shTxFrame then pcall(shTxFrame.Hide, shTxFrame) end
 end
 local function shEnsureTxTicker()
@@ -300,12 +368,8 @@ function shTxEnqueue(bodies, chanId, target)
     shSay(string.format(L("SH_Q_FULL"), SH_MAX_QUEUE))
     return false
   end
-  -- 第 1 片立即发（手感与旧版一致），其余排队
-  if target and target ~= "" then
-    RunScript('SendChatMessage("' .. bodies[1] .. '", "' .. chanId .. '", nil, "' .. target .. '")')
-  else
-    RunScript('SendChatMessage("' .. bodies[1] .. '", "' .. chanId .. '")')
-  end
+  -- 第 1 片立即发（手感与旧版一致），其余排队（★同走 shSendNow：留痕不断层）
+  shSendNow(bodies[1], chanId, target, false)
   for i = 2, n do table.insert(shTxQ, { body = bodies[i], chan = chanId, target = target }) end
   -- ★★★1.73.43 用户（复审时明确）：「**方案分享最后一步** 展示分享信息」——
   --   封皮行（`[档位]<玩家名> 分享了 → [品阶秘籍·方案名]  <评语>`）要排在**所有分片之后**，
@@ -331,6 +395,8 @@ function shTxEnqueue(bodies, chanId, target)
 end
 -- ★测试直调：驱动与 OnUpdate **同一个**函数（判据必须落在真实调用点/真实闭包上）
 function EVAL_SHARE_TEST_TICK() shTxStep() end
+-- ★1.73.43b 测试钩子：清空「发送留痕」（判据只看**本次分享**发出的脚本，不受前面用例污染）
+function EVAL_TEST_SHARE_SENTLOG_CLEAR() SH.sentLog = {} return true end
 -- ★按本次传输 id 数队列里的分片（不受上一笔遗留影响）
 function EVAL_TEST_SHARE_QUEUE_ID_COUNT(idh)
   local want = tostring(idh or "")
@@ -482,7 +548,7 @@ local function shRecentPut(key, text, sender, ev)
 end
 local function shSealNote(sender, id)
   SH.sealSeen = (SH.sealSeen or 0) + 1
-  SH.sealLast = tostring(sender or "?") .. "#" .. tostring(id or "?")
+  SH.sealRecvLast = tostring(sender or "?") .. "#" .. tostring(id or "?") -- ★接收侧自己的字段（不再盖发送侧）
 end
 local function shOnMsg(msg, sender, ev)
   if type(msg) ~= "string" then return end
@@ -2196,7 +2262,8 @@ function EVAL_SHARE_CLICK_IMPORT(link)
   return ok and true or false
 end
 function EVAL_SHARE_SEAL_STATE()
-  return { last = SH.sealLast, pending = SH.sealPending, seals = SH.sealSeen or 0, meta = SH.sealMeta or {} } -- ★1.73.42i meta 供判据读（境界/评语真的解析到了没）
+  return { last = SH.sealSentLast or SH.sealLast, recvLast = SH.sealRecvLast, pending = SH.sealPending,
+           seals = SH.sealSeen or 0, meta = SH.sealMeta or {} } -- ★1.73.42i meta 供判据读；★1.73.43b 收发分开（境界/评语真的解析到了没）
 end
 function EVAL_SHARE_RECENT_STATE()
   return { list = SH.recentList or {}, recent = SH.recent or {}, seals = SH.sealSeen or 0, lastSeal = SH.sealLast }

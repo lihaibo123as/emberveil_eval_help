@@ -11959,6 +11959,61 @@ end
 --   （绿得毫无根据：那 30 行判据当时根本没跑）。★做法：整段替换前先 `git grep` 该区间内的组号，
 --   或按「下一组标题」而不是「文件末尾标记」当右边界；本轮已用 Compare-Object 逐组核对补回。
 
+-- 155) ★★★1.73.43b 分享发送**留痕 + 取证命令 + 脚本串中和**（用户：「还是没显示分享信息」）
+--   客户端不回话（RunScript / SendChatMessage 都不报错）⇒ 唯一现场 = 「我们到底把什么脚本交给了 RunScript」。
+do
+  local keepToText155 = EVAL_PROFILE_TO_TEXT
+  local savedTb155 = EVAL_HELP_CONFIG.tb
+  EVAL_HELP_CONFIG.tb = EVAL_HELP_CONFIG.tb or {}
+  EVAL_HELP_CONFIG.tb.shProbe = nil
+  -- ① 正文里塞引号 + 反斜杠：脚本串必须被中和，否则 `SendChatMessage("…")` 整条作废（而 RunScript 一声不响）
+  EVAL_PROFILE_TO_TEXT = function() return "# 方案: 引号" .. string.char(34) .. "测试" .. string.char(92) .. "名\n\n- 技能1 | 可攻击" end
+  TEST.runScripts, TEST.chat = nil, nil
+  EVAL_TEST_SHARE_SENTLOG_CLEAR() -- ★只看本次分享的留痕
+  eq(EVAL_SHARE_SEND("GUILD"), true, "①★★分享发出（正文含引号与反斜杠）")
+  local g155 = 0
+  while EVAL_SHARE_TEST_QUEUE_LEN() > 0 and g155 < 400 do
+    g155 = g155 + 1
+    TEST.time = (TEST.time or 1000) + 1
+    EVAL_SHARE_TEST_TICK()
+  end
+  eq(EVAL_SHARE_TEST_QUEUE_LEN(), 0, "①前置：队列滴干（" .. tostring(g155) .. " tick）")
+  local pr155 = EVAL_SHARE_SEND_PROBE()
+  eq(type(pr155) == "table", true, "①★取证命令可调（返回探针表）")
+  eq(table.getn(pr155.sent) >= 2, true, "①★留痕里有 ≥2 条（第 1 片 + 封皮）：" .. tostring(table.getn(pr155.sent)))
+  eq(pr155.sent[table.getn(pr155.sent)].seal, true, "①★★★留痕里**最后一条是封皮**（不是分片）")
+  eq(pr155.sealPopped >= 1, true, "①★★★封皮真的从队列里被弹出过（" .. tostring(pr155.sealPopped) .. " 次）")
+  eq(pr155.sealLen > 0, true, "①★★封皮行非空（" .. tostring(pr155.sealLen) .. " 字节）")
+  eq(pr155.queueLen, 0, "①★队列已空（探针如实报 0）")
+  local badQ155, badS155 = 0, 0
+  for i = 1, table.getn(pr155.sent) do
+    local sc = tostring(pr155.sent[i].s or "")
+    local qc = 0
+    for k = 1, string.len(sc) do if string.byte(sc, k) == 34 then qc = qc + 1 end end
+    if qc ~= 4 then badQ155 = badQ155 + 1 end
+    if string.find(sc, string.char(92), 1, true) then badS155 = badS155 + 1 end
+  end
+  eq(badQ155, 0, "①★★★每条脚本恰好 4 个引号（正文里的引号已中和；6 个 = 整条脚本作废、消息凭空消失）")
+  eq(badS155, 0, "①★★★脚本里一个反斜杠都没有（反斜杠同样会让脚本作废）")
+  -- ② 探针**落盘**（命令接线的证人；不玩聊天含子串）
+  eq(type(EVAL_HELP_CONFIG.shProbe) == "table", true, "②★★★探针把现场**落盘**了（cfg.shProbe）")
+  eq(EVAL_HELP_CONFIG.shProbe.sealLen, pr155.sealLen, "②★落盘内容与返回值一致")
+  eq(string.find(tostring(TEST.chat or ""), "分享发送 · 取证", 1, true) ~= nil, true, "②★聊天里也打出来了")
+  -- ③ 收发字段分开：收到别人的封皮**不许**盖掉自己发送侧那条
+  EVAL_PROFILE_TO_TEXT = keepToText155
+  local st155before = EVAL_SHARE_SEAL_STATE()
+  local mine155 = tostring(st155before.last or "")
+  EVAL_SHARE_ONMSG("|cffffffff[某人]|rIonol 分享了 → |cffb87333★|HEHPF:deadbeef|h[源代码秘籍·测试]|r  评语|h", "Ionol", "CHAT_MSG_WHISPER")
+  local st155after = EVAL_SHARE_SEAL_STATE()
+  eq(tostring(st155after.last or "") == mine155, true, "③★★★收到别人的封皮后，**自己发送侧那条没被盖掉**")
+  eq(type(st155after.recvLast) == "string", true, "③★★接收侧单独记在自己的字段里（" .. tostring(st155after.recvLast) .. "）")
+  EVAL_HELP_CONFIG.tb = savedTb155
+  EVAL_HELP_CONFIG.shProbe = nil
+  TEST.chat = nil
+  print("  分享发送留痕：脚本原文 + 封皮是否弹出 + 落盘探针 · 正文引号/反斜杠已中和（脚本不再凭空作废）")
+end
+
+print("ALL TESTS PASS")
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")

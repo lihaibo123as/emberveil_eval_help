@@ -6968,6 +6968,13 @@ if type(SlashCmdList) == "table" then
       else
         say("创世者亲临：分享模块未载入（EVAL_TITLE_CREATOR_OPEN 不存在）")
       end
+    -- ★★★1.73.43b 分享发送取证（用户：「还是没显示分享信息」）
+    elseif msg == "go 分享探针" or msg == "go shprobe" or msg == "go 发送探针" then
+      if type(EVAL_SHARE_SEND_PROBE) == "function" then
+        EVAL_SHARE_SEND_PROBE()
+      else
+        say("分享探针：Share 模块未载入（EVAL_SHARE_SEND_PROBE 不存在）")
+      end
     -- ★★★1.73.42s 取证：右键名字菜单的能力 + 记账（用户：「右键邀请触发」＝点了没反应）
     elseif msg == "go 名字探针" or msg == "go namemenu" or msg == "go 社交探针" then
       if type(EVAL_TB_NAME_PROBE) == "function" then
