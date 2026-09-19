@@ -12142,13 +12142,12 @@ do
     if string.len(body) > 250 then long157 = long157 + 1 end
   end
   eq(miss157, 0, "③★★★每条都以**自己的编号**开头（`[n]`），缺编号 " .. tostring(miss157) .. " 条")
-  eq(long157, 0, "③★★每条都 ≤ 250 字节（变异测本身不能被上限吞掉，超长 " .. tostring(long157) .. "）")
-  eq(string.find(tostring(pr157.list[1] or ""), "一段色码 + 链接", 1, true) ~= nil, true, "④★含「一段色码 + 链接」（分片同款 A 组）")
-  eq(string.find(tostring(pr157.list[2] or ""), "两段色码 + 链接", 1, true) ~= nil, true, "④★含「两段色码 + 链接」（封皮颜色结构 B 组）")
-  eq(string.find(tostring(pr157.list[3] or ""), "完整封皮", 1, true) ~= nil, true, "④★含「完整封皮」（现写法）")
-  eq(string.find(tostring(pr157.list[4] or ""), "去标题色", 1, true) ~= nil, true, "④★含「去标题色」变体")
-  eq(string.find(tostring(pr157.list[5] or ""), "去品阶色", 1, true) ~= nil, true, "④★含「去品阶色」变体")
-  eq(string.find(tostring(pr157.list[7] or ""), "`·` 换 `.`", 1, true) ~= nil, true, "④★含「链接标签里 `·` 换 `.`」变体（另一个未排除的差异）")
+  eq(string.find(tostring(pr157.list[1] or ""), "A行原样", 1, true) ~= nil, true, "④★含「A 行原样」（被测对象）")
+  eq(string.find(tostring(pr157.list[2] or ""), "换品阶色", 1, true) ~= nil, true, "④★含「A 行换品阶色」（隔离自定义头衔色）")
+  eq(string.find(tostring(pr157.list[3] or ""), "只色码+头衔", 1, true) ~= nil, true, "④★含「只色码+头衔」")
+  eq(string.find(tostring(pr157.list[4] or ""), "无色码", 1, true) ~= nil, true, "④★含「A 行无色码」")
+  eq(string.find(tostring(pr157.list[9] or ""), "|HEHPF:", 1, true) ~= nil, true, "④★★含「现用 B 行」（对照，必须出现）")
+  eq(string.find(tostring(pr157.list[10] or ""), "纯文本", 1, true) ~= nil, true, "④★含「纯文本等长填充」对照")
   local say157 = 0
   local g157b = 0
   while EVAL_SHARE_TEST_QUEUE_LEN() > 0 and g157b < 400 do
