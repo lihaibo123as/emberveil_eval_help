@@ -11389,20 +11389,22 @@ do
   eq(EVAL_SHARE_PENDING() ~= nil, true, "③前置：收齐后弹窗（数据在）")
   local view145 = EVAL_TEST_SHARE_SEAL_ROW()
   eq(view145.shown, true, "③★★★品阶栏真的显示了（读真图标 IsShown）")
-  -- ★★★1.73.46 用户（选定方案 B）：「标题行去掉《武器战》，下面那行带彩色的当方案名」
-  --   ⇒ 标题里**不许再出现方案名**（名字只留一处 = 品阶行），下面那条判据读**真控件**验颜色与名字。
-  -- ★★只取**标题那一行**（弹窗读值口的第 1 条 = 摘要行）：拼上详情行会让「含方案名」这类判据被
+  -- ★★★1.73.46 用户（选定方案 B）：「标题行去掉《武器战》，下面那行带彩色的当方案名」—— 那时名字不进标题。
+  -- ★★★1.73.66 用户改主意（截图圈出标题行的「方案」+ 划出下面品阶行的 [品阶秘籍·名]）⇒ **标题行也带上**品阶色名字。
+  --   ★★只取**标题那一行**（弹窗读值口的第 1 条 = 摘要行）：拼上详情行会让「含方案名」这类判据被
   --   「# 方案: 甲」顶住 —— M459b 实测 SURVIVED 的正是这个坑（弱判据）。
   local popTitle145 = tostring((EVAL_TEST_SHARE_POPUP_TEXTS() or {})[1] or "")
   local wantCol145 = select(2, EVAL_SHARE_SEAL_TIER(EVAL_SHARE_SEAL_SCORE(txt145(25)))).color
-  eq(string.find(popTitle145, "分享的方案", 1, true) ~= nil, true, "③★标题行照旧说明「谁分享的方案 + 几个技能」")
-  eq(string.find(popTitle145, "《甲》", 1, true) == nil, true, "③★★★标题行**不再重复方案名**（名字只留一处，用户要求）")
-  eq(string.find(popTitle145, "《", 1, true) == nil, true, "③★★标题行不再出现书名号（方案名已由品阶行承担）")
+  eq(string.find(popTitle145, "[神级秘籍·甲]", 1, true) ~= nil, true,
+     "③★★★1.73.66 标题行带上 [品阶秘籍·名]（笼统的「方案」被它替换 —— 用户截图要求）")
+  eq(string.find(popTitle145, wantCol145, 1, true) ~= nil, true, "③★★标题行的名字**带品阶色**（复用品阶行那段）")
+  eq(string.find(popTitle145, "分享的方案", 1, true) == nil, true, "③★★标题行不再有笼统的「方案」（被具体名字替换）")
+  eq(string.find(popTitle145, "《", 1, true) == nil, true, "③★★标题行不引入书名号（用的是 [品阶秘籍·名]，不是《》）")
   local wantIcon145 = EVAL_SHARE_SEAL_ICON(select(1, EVAL_SHARE_SEAL_TIER(EVAL_SHARE_SEAL_SCORE(txt145(25)))))
   eq(view145.icon, wantIcon145, "③★★★图标纹理 = 该品阶的图标（读真控件 GetTexture，不读常量）")
-  eq(string.find(tostring(view145.head), "[神级秘籍·甲]", 1, true) ~= nil, true, "③★★头一行带品阶与方案名")
+  eq(string.find(tostring(view145.head), "[神级秘籍·甲]", 1, true) ~= nil, true, "③★★品阶行头一行仍带品阶与方案名")
   eq(string.sub(tostring(view145.head), 1, 10) == wantCol145, true,
-     "③★★★品阶行**带品阶色**（它就是唯一的「方案名」那处）：" .. string.sub(tostring(view145.head), 1, 30))
+     "③★★★品阶行**带品阶色**（与标题行同一段文本）：" .. string.sub(tostring(view145.head), 1, 30))
   -- ★★★1.73.43g 新格式下**接收端不解析身份**了：身份在 A 行（纯文本、无链接），接收端只认带 `|HEHPF:` 的消息。
   -- ★★★1.73.43g 新格式（A 身份行 + B 品阶行）下，接收端**不再从消息里抠身份/评语**：
   --   身份在聊天里直接看得见；弹窗那三行按用户要求也不显示 ⇒ 不需要再抠（老格式的解析仍在，见组 156⑥）。

@@ -2598,9 +2598,12 @@ function EVAL_SH_POPUP(sender, text, ev, idh)
   if type(shSealRowApply) == "function" then shSealRowApply() end
   -- ★★★1.73.46 摘要行（用户选定方案 B）：「标题行去掉《方案名》，下面那行带品阶色的当方案名」。
   --   ⇒ 有品阶行时标题只报「谁 + 几个技能」；**解析不出品阶**时退回带名字的旧模板（名字绝不能丢）。
+  -- ★★★1.73.66 用户（截图圈出摘要行的「方案」+ 划出下面品阶行的 [品阶秘籍·名]）：「按照图片内的要求替换」——
+  --   摘要行里那个笼统的「方案」换成**带品阶色的 [品阶秘籍·名]**（直接复用品阶行的 head，那正是图里下划线的那段）。
+  --   ★1.73.46 曾定「名字只留一处（品阶行）」，本轮用户已改主意：摘要行**也要**带名字（两处都显示）。
   local rowH = shp.sealRow
   if rowH ~= nil and type(rowH.head) == "string" and rowH.head ~= "" then
-    shp.body:SetText(string.format(L("SH_POP_GOT_NAME"), showFrom, count))
+    shp.body:SetText(string.format(L("SH_POP_GOT_NAME"), showFrom, rowH.head, count))
   else
     shp.body:SetText(string.format(L("SH_POP_GOT"), showFrom, nameTxt, count))
   end

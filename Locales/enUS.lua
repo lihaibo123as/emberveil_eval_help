@@ -34,7 +34,7 @@ LOADPOP_THANKS = "Got it",
   SH_POP_T = "Profile Share",
   SH_POP_GOT = "%s shared profile \"%s\" (%d skills)",
   -- ★★★1.73.46 Option B: the plan name appears only once (in the tier-coloured line below).
-  SH_POP_GOT_NAME = "%s shared a profile (%d skills)",
+  SH_POP_GOT_NAME = "%s shared %s (%d skills)",
   SH_POP_MORE = "... (preview only, import to see all)",
   -- 1.71.2 (round 19) tooltips for the bottom nav buttons (share button guides "how to share + what the receiver needs")
   CF_TPL_TIP = "Pick a built-in example profile and import it (grouped by class)",
