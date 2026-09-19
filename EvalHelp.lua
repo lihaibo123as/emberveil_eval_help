@@ -1173,7 +1173,9 @@ local function cfgBuild()
     end, G, nil, cfgWin.uiBoxes.state))
 
   cfgHeader(root, RX, -56, L("G_HELP_H"), G)
-  -- 1.72.1 [使用引导]：把五步新手指引打到聊天框（用户要求：给不懂宏的新人友好引导）
+  -- 1.72.1 [使用引导]：五步新手指引（用户要求：给不懂宏的新人友好引导）
+  -- ★★★1.73.41 用户：「使用引导显示弹窗的插件载入的那个引导窗」→ 这个按钮**打开载入时那个引导窗**
+  --   （`EVAL_HELP_LOADPOP`，与插件载入时弹的**同一个窗**），不再只往聊天打 7 行。
   do
     local gb = CreateFrame("Button", nil, root)
     gb:SetWidth(70) gb:SetHeight(15)
@@ -1188,6 +1190,7 @@ local function cfgBuild()
     gt:SetPoint("CENTER", gb, "CENTER", 0, 0)
     gt:SetText(L("GUIDE_BTN"))
     gb:SetScript("OnClick", function() EVAL_HELP_GUIDE(true) end)
+    cfgWin.guideBtn = gb -- ★1.73.41 读值口用：断言必须走这个按钮的**真实 OnClick**
     table.insert(G, gb)
     table.insert(G, gt)
   end
@@ -5834,6 +5837,15 @@ function EVAL_TEST_CFG_LAYOUT()
   return cw and cw.layout or nil
 end
 
+-- ★1.73.41 读值口：配置窗 [使用引导] 按钮（走它的**真实 OnClick**，不是直调动作函数）
+function EVAL_TEST_CFG_GUIDE_CLICK()
+  local cw = EVAL_HELP_CFGWIN
+  local b = cw and cw.guideBtn
+  if not b then return false end
+  local ok, fn = pcall(b.GetScript, b, "OnClick")
+  if ok and type(fn) == "function" then pcall(fn) return true end
+  return false
+end
 function EVAL_TEST_CFG_SIZE()
   local cw = EVAL_HELP_CFGWIN
   local r = cw and cw.root
@@ -7843,6 +7855,14 @@ end
 -- 用户需求（原话要点）：加载成功要有提示；建议开启战斗UI；技能释放异常时开技能日志（战斗日志→方案）；
 --   对不熟悉宏的新人给出友好指引——怎么打开战斗UI、怎么配第一个宏、怎么绑按键。
 function EVAL_HELP_GUIDE(force)
+  -- ★★★1.73.41 用户：「使用引导显示弹窗的插件载入的那个引导窗」——
+  --   引导的**唯一展示处** = 载入时那个引导窗（`EVAL_HELP_LOADPOP`）：[使用引导] 按钮 / `/eh guide` /
+  --   载入提示 三条路都走它（同一个窗、同一份正文、同一个 `cfg.loadMsgSeen` 开关，不搞两份）。
+  --   ★只有弹窗**不可用**时才退回聊天打印 —— 这种降级也必须**说出来**（绝不静默什么都不发生）。
+  if type(EVAL_LOADPOP_SHOW) == "function" then
+    local ok, shown = pcall(EVAL_LOADPOP_SHOW, true)
+    if ok and shown then return true end
+  end
   say(L("GUIDE_TITLE"))
   say(L("GUIDE_S1"))
   say(L("GUIDE_S2"))

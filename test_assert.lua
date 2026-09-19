@@ -7659,12 +7659,42 @@ do
   local lp2 = EVAL_TEST_LOADPOP_STATE()
   eq(lp2.shown, true,
      "★★★第二次加载(/reload)弹窗**仍然**显示 —— 旧实现被 cfg.guideSeen 挡掉，用户就是这样看不到的")
-  -- ③ 手动重看这条路也得在
+  -- ③ 手动重看这条路也得在 —— ★★★1.73.41 用户：「使用引导显示弹窗的插件载入的那个引导窗」
+  --   → 手动重看**打开的就是载入时那个引导窗**（不再只往聊天打 7 行）；
+  --     ★弹窗不可用时才退回聊天打印（降级也要说出来，绝不静默）。
+  if not (EVAL_HELP_CFGWIN and EVAL_HELP_CFGWIN.root) then EVAL_HELP_CFG_TOGGLE() end
+  -- ★★[使用引导] / 手动重看：必须**无视** cfg.loadMsgSeen（force）——
+  --   否则点过一次「知道了」之后就**再也看不到引导**了（这正是 1.72.2 那类「看不到」事故）。
+  EVAL_HELP_CONFIG.loadMsgSeen = true
+  EVAL_LOADPOP_HIDE()
   TEST.chat = nil
   SlashCmdList["EVALHELP"]("guide")
-  eq(string.find(tostring(TEST.chat), title, 1, true) ~= nil, true, "★/eh guide 仍可随时重看")
+  local lp3 = EVAL_TEST_LOADPOP_STATE()
+  eq(lp3.shown, true, "★★★/eh guide 要**打开引导窗**（与插件载入弹的是同一个 EVAL_HELP_LOADPOP）")
+  eq(string.find(tostring(lp3.body), title, 1, true) ~= nil, true,
+     "★★引导窗正文里有引导标题「" .. tostring(title) .. "」")
+  eq(string.find(tostring(lp3.body), step1, 1, true) ~= nil, true, "★★也要有步骤正文（不是空窗）")
+  eq(string.find(tostring(TEST.chat or ""), title, 1, true) == nil, true,
+     "★不再往聊天打 7 行（用户要的是**弹窗**）")
+  -- ③b 配置窗的 [使用引导] 按钮：走它的**真实 OnClick**，打开的必须是同一个窗
+  EVAL_LOADPOP_HIDE()
+  eq(EVAL_TEST_LOADPOP_STATE().shown, false, "③b前置：先确认窗是关的（否则「打开了」是假阳性）")
+  eq(EVAL_TEST_CFG_GUIDE_CLICK(), true, "★★★配置窗 [使用引导] 按钮：真实 OnClick 能触发")
+  local lp3b = EVAL_TEST_LOADPOP_STATE()
+  eq(lp3b.shown, true, "★★★[使用引导] 打开的就是**载入时那个引导窗**（用户点名要的行为）")
+  eq(string.find(tostring(lp3b.body), step1, 1, true) ~= nil, true, "★★同一个窗、同一份正文")
+  -- ③c 弹窗不可用 → **必须**退回聊天打印（不许静默）
+  EVAL_LOADPOP_HIDE()
+  local savedShow105 = EVAL_LOADPOP_SHOW
+  EVAL_LOADPOP_SHOW = nil
   TEST.chat = nil
-  print("  载入提示 + 新手引导：每次加载都打全（含 /reload），/eh guide 可随时重看")
+  EVAL_HELP_GUIDE(true)
+  eq(string.find(tostring(TEST.chat or ""), title, 1, true) ~= nil, true,
+     "★★★弹窗不可用 → 如实退回聊天打印（降级也说出来）")
+  EVAL_LOADPOP_SHOW = savedShow105
+  EVAL_HELP_CONFIG.loadMsgSeen = false -- 恢复默认态（后面的组 138 还要用）
+  TEST.chat = nil
+  print("  载入提示 + 新手引导：每次加载都弹（含 /reload）；[使用引导] / /eh guide 打开**同一个引导窗**")
 end
 
 -- 106) ★★★1.72.3 分享发送限频（修「长方案对方偶尔收不到」）+ 收不齐必须如实说
