@@ -11032,6 +11032,19 @@ do
   eq(string.len(sealA) > 0 and string.len(seal) > 0, true, "①★★★算出了两条分享信息（A 身份 + B 品阶）")
   eq(string.find(sealA, " 分享了", 1, true) ~= nil, true, "①★★A 行含「分享了」")
   eq(string.find(sealA, "|HEHPF:", 1, true) == nil, true, "①★★★A 行**不带链接**（只用一段色码 + 纯文本，实测这种形态一定能画）")
+  -- ★★★1.73.43h 真机定案：**一条消息里多段色码会被客户端整条吞掉** ⇒ 逐条数色码段（行为判据；源码检查数不到变量里的色码）
+  local function segCount144(sTxt)
+    local c, p2 = 0, 1
+    while true do
+      local found = string.find(sTxt, "|c", p2, true)
+      if not found then break end
+      c = c + 1
+      p2 = found + 2
+    end
+    return c
+  end
+  eq(segCount144(sealA) <= 1, true, "①★★★A 身份行只有 " .. tostring(segCount144(sealA)) .. " 段色码（多段会被吞，实测）")
+  eq(segCount144(seal) <= 1, true, "①★★★B 品阶行只有 " .. tostring(segCount144(seal)) .. " 段色码（多段会被吞，实测）")
   eq(string.find(seal, "秘籍·", 1, true) ~= nil, true, "①★★B 行含 [品阶秘籍·方案名]")
   eq(string.find(seal, "|HEHPF:", 1, true) ~= nil, true, "①★★★B 行带链接（点它直接导入）")
   eq(string.find(sealA .. seal, "|T", 1, true) == nil, true, "①★两条都不含 |T（实测不可用）")

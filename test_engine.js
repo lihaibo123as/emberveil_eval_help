@@ -1183,6 +1183,36 @@ function checkIconAssets() {
   console.log("COLOR CODE LEN CHECK: " + uses + " 处颜色码全走 8 位 aarrggbb；职业色表 " + entries.length + " 项逐项 8 位（6 位码客户端不解析 → 会显示成原文）");
 })();
 
+// ===== SHARE MSG SHAPE CHECK（1.73.43h）：分享信息每条消息**最多一段色码** =====
+// ★真机变异测定案（用户跑 `/eh go 封皮测`，10 条编号回来只有 [1][4][10] 出现）：
+//   · 能画的三条 = 「一段色码 + 链接」「纯文本 + 一段色码 + 链接 + 标签 + 评语」「纯文本」；
+//   · 被吞的那些 = 「两段色码 + 链接」「完整封皮（两三段色码）」以及**带方括号身份前缀**的写法。
+//   ⇒ 这个客户端会**整条吞掉「一条消息里塞了多段色码/多要素」的消息**（与「7 位色码吞整条」同一族）。
+//   ⇒ 分享信息因此拆成两条（A 身份行 / B 品阶行），每条只允许**一段色码**。
+//   ★客户端约定类的错误，行为断言天然验不到（我们发的串自己也认）→ 只能源码检查。
+(function () {
+  const p = path.join(__dirname, "Share.lua");
+  const src = fs.readFileSync(p, "utf8");
+  if (!/sealA\s*=/.test(src) || !/sealB\s*=/.test(src)) {
+    console.log("SHARE MSG SHAPE CHECK: FAIL - 找不到分享信息构造（sealA/sealB，改名了？）");
+    process.exitCode = 1; return;
+  }
+  const bad = [];
+  const lines = src.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    if (/^\s*--/.test(ln)) continue;
+    if (!/seal[AB]\s*=/.test(ln)) continue;
+    const c = (ln.match(/\|c/g) || []).length;
+    if (c > 1) bad.push("Share.lua:" + (i + 1) + " 有 " + c + " 段色码");
+  }
+  if (bad.length) {
+    console.log("SHARE MSG SHAPE CHECK: FAIL - 分享信息每条最多**一段色码**（多段会被客户端整条吞掉，真机实测）：" + bad.join(" | "));
+    process.exitCode = 1; return;
+  }
+  console.log("SHARE MSG SHAPE CHECK: 分享信息两条各自 <=1 段色码（客户端会吞多段色码的消息，已实测定案）");
+})();
+
 // ===== PACK LIST CHECK（1.73.0）：发布包清单必须**跟着 .toc 走**，条目数基准也要对得上 =====
 // ★背景两笔代价：① 1.72.0 发现随包的 zip **只有 25 个文件**（缺 IconBrowser.lua + 5 个 examples）
 //   —— 用户装了会**直接报错**；② 1.73.0 新增 PetData.lua / PetHelper.lua 后，记忆体第 9 步里的打包脚本
