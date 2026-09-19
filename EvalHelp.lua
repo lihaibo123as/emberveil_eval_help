@@ -168,6 +168,60 @@ local function uiTitleName(fallbackKey)
   return L(fallbackKey)
 end
 
+-- ★★★1.73.55 标题栏中段的**方案档位**（用户：「这位置增加显示玩家方案的档位」）。
+--   · 档位 = 当前**激活方案**按 `EVAL_PROFILE_SCORE` 现算出来的品阶 —— 与方案列表 / 案例模版 / 分享封皮
+--     用的是**同一张表**（Share.lua 的 SH_SEAL_TIERS），符号与色码都从它那几个读值口取，**不在这里另抄一份**
+--     （本项目「同一规则两处实现 = 迟早漂移」的老账）。
+--   · **不缓存**：用户 1.73.49 定的规矩「品阶每次打开方案自动计算完善」——配置窗侧栏每次都现算，标题栏同理，
+--     否则改了方案内容 / 换了激活方案，标题上挂的还是上一轮的档位（界面与真值自相矛盾）。
+--   · **算不出就如实返回 nil**（Share 未载入 / 方案表空 / 坏数据）→ 调用方如实清空徽标，
+--     **绝不硬编一个档位**（本项目「查不到与没有是两件事」的老账）。
+--   · 代价：EVAL_PROFILE_SCORE 只做 table.getn 级别的累加（不调任何客户端 API）⇒ tick 里现算是安全的。
+local function uiProfileTierText()
+  if type(EVAL_PROFILE_SCORE) ~= "function" or type(EVAL_SHARE_SEAL_TIER) ~= "function" then return nil end
+  local w2 = uiWarCfg()
+  local prof = w2.profiles and w2.profiles[w2.activeProfile or 1]
+  if type(prof) ~= "table" then return nil end
+  local okS, sc = pcall(EVAL_PROFILE_SCORE, prof)
+  if not okS or type(sc) ~= "number" then return nil end
+  local okT, ti, tier = pcall(EVAL_SHARE_SEAL_TIER, sc)
+  if not okT or type(ti) ~= "number" or type(tier) ~= "table" then return nil end
+  local sym = ""
+  if type(EVAL_SHARE_SEAL_SYMBOL) == "function" then
+    local okY, sy = pcall(EVAL_SHARE_SEAL_SYMBOL, ti)
+    if okY and type(sy) == "string" then sym = sy end
+  end
+  local rgb = nil
+  if type(EVAL_SHARE_SEAL_TIER_RGB) == "function" then
+    local okR, r2 = pcall(EVAL_SHARE_SEAL_TIER_RGB, ti)
+    if okR and type(r2) == "table" then rgb = r2 end
+  end
+  return { tier = ti, score = sc, text = "[" .. sym .. tostring(tier.name or "") .. "]", rgb = rgb }
+end
+
+-- 档位徽标的刷新口（BUILD 里一次 + tick 里每次；**文案没变就不碰控件**，不每帧写 SetText）。
+--   ★位置 = 锚在**标题文字的右边缘**（标题是只锚了 LEFT 的 FontString，宽度随文字自适应）⇒ 徽标天然跟在
+--     玩家名后面；右侧两个开关在更右边，三者不会互相压。**不需要任何手工量宽**（本项目手工量宽是给
+--     「按名字排布的一排按钮」用的，这里没有那个问题）。
+--   ★颜色也从品阶表来：算不出档位 → 中性灰 + 空文案（**不是**沿用上一档的颜色 —— 那会画出一个假的档位）。
+local function uiTitleTierRefresh()
+  local fs = ui.tierText
+  if not fs then return false end
+  local info = uiProfileTierText()
+  local txt = (info and info.text) or ""
+  local okc, cur = pcall(fs.GetText, fs)
+  if not (okc and tostring(cur or "") == txt) then pcall(fs.SetText, fs, txt) end
+  ui.tierShown = txt
+  if info and info.rgb then
+    pcall(fs.SetTextColor, fs, info.rgb.r, info.rgb.g, info.rgb.b)
+    ui.tierScore, ui.tierIdx = info.score, info.tier
+    return true
+  end
+  pcall(fs.SetTextColor, fs, 0.72, 0.70, 0.62)
+  ui.tierScore, ui.tierIdx = nil, nil
+  return false
+end
+
 -- ★★★1.73.54 **标题栏右侧的快捷开关**（用户：「将上面两个开关（战斗区/方案区）在标题栏右侧对应添加两个开关，
 --   快速开启关闭；**标题左对齐、控制开关右对齐**」）。
 --   ★为什么是小方框：标题栏总宽只有 ~224px（还要放玩家名，名字可能很长）；方框 + **悬停提示**最省地方，
@@ -246,6 +300,7 @@ function EVAL_HELP_UI_BUILD()
   ui.swingBar, ui.swingFill, ui.swingText, ui.swingW = nil, nil, nil, nil
   ui.profBtns, ui.profCells = nil, nil
   ui.profRows, ui.profNeed, ui.profAvail, ui.profPad, ui.profCap, ui.profSig = nil, nil, nil, nil, nil, nil
+  ui.tierText, ui.tierShown, ui.tierScore, ui.tierIdx = nil, nil, nil, nil -- ★1.73.55 标题栏档位徽标（同上：不清会写成幽灵控件）
 
   local root = CreateFrame("Frame", "EVAL_HELP_UI", UIParent)
   pcall(root.SetFrameStrata, root, "MEDIUM")
@@ -287,6 +342,18 @@ function EVAL_HELP_UI_BUILD()
   pcall(title.SetNonSpaceWrap, title, false)
   -- ★1.71.12 用户要求：「战斗信息 标题换成 用户名字」；★1.73.53 起与状态信息UI 共用同一个取名函数
   title:SetText(uiTitleName("G_UI_TITLE"))
+  -- ★★★1.73.55 标题栏中段的**方案档位**徽标（用户：「这位置增加显示玩家方案的档位」）——
+  --   锚在**标题文字的右边缘**（标题只锚了 LEFT，宽度随文字自适应）⇒ 自然跟在玩家名后面；
+  --   在它右边才是那两个快捷开关，三者从左到右依次排开，互不遮挡。
+  --   文案/颜色由 uiTitleTierRefresh() 写（BUILD 一次 + tick 每次），这里只负责建控件与定位置。
+  do
+    local tierFs = uiText(titleBar, math.max(9, math.floor(10 * z)), 0.72, 0.70, 0.62)
+    tierFs:SetPoint("LEFT", title, "RIGHT", math.floor(8 * z), 0)
+    pcall(tierFs.SetJustifyH, tierFs, "LEFT")
+    pcall(tierFs.SetNonSpaceWrap, tierFs, false)
+    ui.tierText = tierFs
+  end
+  uiTitleTierRefresh()
   -- ★★★1.73.54 标题栏右侧的两个**快捷开关**（战斗区 / 方案区）——与配置窗「界面」组里那两个缩进子开关**同一份真值**：
   --   左→右 = 战斗区、方案区（与配置窗从上到下的顺序一致）；各自贴右端、宽 13、间隔 4；
   --   点一下立刻开/关对应区块（整帧重建，窗口高度随之变化）。
@@ -748,6 +815,11 @@ function EVAL_HELP_UI_TICK()
     inCombat and "|cffff5040战斗中|r" or "|cff80ff80非战斗|r",
     form, atkOn and "|cff00ff00开|r" or "|cff909090关|r"))
   end -- ★1.71.12 子开关「战斗」段结束
+
+  -- ★★★1.73.55 标题栏的**方案档位**徽标：跟着「当前激活方案」走 —— 切换方案 / 改方案内容 / 切语言之后，
+  --   下一个心跳就更新（现算，见 uiProfileTierText 的说明）。
+  --   ★**不看「方案区」子开关**：徽标画在标题栏里，方案区关掉时它照样说明「现在用的是哪一档」。
+  uiTitleTierRefresh()
 
   -- 方案切换行：当前激活金色高亮，不存在的方案位隐藏
   --   ★1.71.12 子开关「方案」= 关时 ui.profBtns / ui.profCells 为 nil（BUILD 里根本没建）→ 下面两个循环自然跳过。
@@ -6584,6 +6656,9 @@ end
 --   一律读真控件（GetPoint/GetText/IsShown）—— 本项目「读自己拼的账 = 测自己」的老坑。
 function EVAL_TEST_UI_TITLEBAR()
   local out = { title = nil, titlePoint = nil, titleJustify = nil, titleX = nil, combat = nil, scheme = nil }
+  -- ★★★1.73.55 档位徽标：读**真控件**上的文案 / 锚点 / 文字色 —— 不读 ui.tierShown、ui.tierScore 这类
+  --   我们自己的记账（本项目「读自己拼的账 = 测自己」的老坑）。
+  out.tier, out.tierPoint, out.tierRelTo, out.tierRelPoint, out.tierX, out.tierColor = nil, nil, nil, nil, nil, nil
   if ui.title then
     local okt, tv = pcall(ui.title.GetText, ui.title)
     if okt and type(tv) == "string" then out.title = tv end
@@ -6613,6 +6688,18 @@ function EVAL_TEST_UI_TITLEBAR()
   end
   out.combat, out.scheme = one(ui.tglCombat), one(ui.tglScheme)
   out.combatBtn, out.schemeBtn = ui.tglCombat, ui.tglScheme -- 真控件（点击钩子要用）
+  out.titleFs = ui.title -- 真控件（档位徽标锚在它的右边缘上，断言要比对 relTo）
+  if ui.tierText then
+    out.tierText = ui.tierText
+    local okt, tv = pcall(ui.tierText.GetText, ui.tierText)
+    if okt and type(tv) == "string" then out.tier = tv end
+    local okp, pt, rel, rp, px = pcall(ui.tierText.GetPoint, ui.tierText)
+    if okp and type(pt) == "string" then
+      out.tierPoint, out.tierRelTo, out.tierRelPoint, out.tierX = pt, rel, rp, px
+    end
+    local okc, cr, cg, cb = pcall(ui.tierText.GetTextColor, ui.tierText)
+    if okc and type(cr) == "number" then out.tierColor = { cr, cg, cb } end
+  end
   return out
 end
 -- ★★★测试钩子：点标题栏右侧的快捷开关 —— 走它**真实的 OnClick 闭包**（不直调 setter）。

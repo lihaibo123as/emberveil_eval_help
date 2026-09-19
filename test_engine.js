@@ -1255,6 +1255,35 @@ function checkIconAssets() {
   console.log("UI TITLEBAR CHECK: 标题左对齐 + 两个快捷开关各自绑自己的键 + 提示复用配置窗文案");
 })();
 
+// ===== UI TIER BADGE CHECK（1.73.55）：标题栏中段的**方案档位**徽标（用户：「这位置增加显示玩家方案的档位」） =====
+// ★背景：档位是个**算出来的**东西，最容易出的三种静默错：① 抄一份自己的品阶表/色码（迟早和 Share.lua 漂移）；
+//   ② 只在 BUILD 时算一次（换方案/改内容后标题上挂着上一档的徽标 = 界面与真值自相矛盾）；
+//   ③ 算不出时**硬编一个档位**（本项目「查不到与没有是两件事」的老账）。
+//   行为断言能抓 ②③（组 164 现算 + 如实清空），源码检查再钉一层「只此一张表 + 两处都接上」。
+(function () {
+  const eh = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
+  const noComment = eh.split(/\r?\n/).map(function (l) { const i = l.indexOf("--"); return i >= 0 ? l.slice(0, i) : l; }).join("\n");
+  const bad = [];
+  if (noComment.indexOf("local function uiProfileTierText(") < 0) bad.push("找不到档位算法 uiProfileTierText（档位必须由当前方案现算）");
+  if (noComment.indexOf("local function uiTitleTierRefresh(") < 0) bad.push("找不到徽标刷新口 uiTitleTierRefresh");
+  if (noComment.indexOf('tierFs:SetPoint("LEFT", title, "RIGHT"') < 0) bad.push("徽标没锚在玩家名（标题文字）的右边缘");
+  // ★刷新必须**两处都接**：BUILD（开窗那一刻）+ tick（换方案 / 改内容之后跟着变）
+  const calls = (noComment.match(/uiTitleTierRefresh\(\)/g) || []).length;
+  if (calls < 2) bad.push("uiTitleTierRefresh 只接了 " + calls + " 处（BUILD + tick 两处都必须接）");
+  // ★整段徽标代码（算法 + 刷新口）取出来，逐项钉「只走 Share.lua 的读值口」——
+  //   不这么切的话，本文件别处（分享/模版）的同类调用会让检查**假通过**（本轮实测：漏了 SYMBOL 还是绿的）。
+  const i0 = noComment.indexOf("local function uiProfileTierText(");
+  const i1 = noComment.indexOf("local function uiTitleToggle(");
+  const seg = (i0 >= 0 && i1 > i0) ? noComment.slice(i0, i1) : "";
+  if (seg === "") bad.push("取不到徽标代码段（函数被改名或被挪走？）");
+  ["EVAL_PROFILE_SCORE", "EVAL_SHARE_SEAL_TIER", "EVAL_SHARE_SEAL_SYMBOL", "EVAL_SHARE_SEAL_TIER_RGB"]
+    .forEach(function (k) { if (seg.indexOf(k) < 0) bad.push("档位没走 " + k + "（徽标段内找不到）"); });
+  if (/SH_SEAL_TIERS\s*=/.test(noComment)) bad.push("EvalHelp.lua 里又声明了一张品阶表（品阶表只许 Share.lua 一张）");
+  if (/\|c[0-9a-fA-F]{8}/.test(seg)) bad.push("徽标色码写死在 UI 侧（应取自 EVAL_SHARE_SEAL_TIER_RGB）");
+  if (bad.length) { console.log("UI TIER BADGE CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
+  console.log("UI TIER BADGE CHECK: 档位现算（单一张品阶表）+ 跟在玩家名右边缘 + BUILD/tick 两处都刷新");
+})();
+
 // ===== UI TITLE NAME CHECK（1.73.53）：两个窗口的标题都要显示玩家角色名、且**同一条规矩只写一遍** =====
 // ★背景：用户 1.71.12 要求「战斗信息 标题换成用户名字」，1.73.53 又要求「状态信息UI 标题也显示玩家角色」。
 //   两份各自写一遍 = 迟早漂移（本项目「同一规则两处实现」的老账）⇒ 必须共用 `uiTitleName()`；

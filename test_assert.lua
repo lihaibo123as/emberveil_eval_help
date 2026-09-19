@@ -12670,6 +12670,78 @@ do
   print("  战斗信息UI 标题栏：标题左对齐 + 右侧两个快捷开关（战斗区/方案区，同一份真值、即点即生效）")
 end
 
+-- 164) ★★★1.73.55 战斗信息UI 标题栏中段：**当前方案的档位**徽标
+--   用户（截图圈出标题栏中段）：「这位置增加显示玩家方案的档位」。
+--   ★要点：① 档位 = 当前激活方案**现算**出来的品阶（与方案列表/案例模版/分享封皮**同一张表**）；
+--     ② 位置 = 跟在玩家名右侧（锚在标题文字的右边缘上）；③ **每次心跳现算** —— 换方案 / 改方案内容 / 切语言
+--     都跟着变（用户 1.73.49 的规矩：品阶不缓存）；④ 算不出就**如实清空**，既不硬编一个档位，
+--     也不沿用上一档的颜色（那会画出一个假档位）。
+do
+  local savedWar164 = EVAL_HELP_CONFIG.war
+  local savedUi164 = EVAL_HELP_CONFIG.ui
+  local low164 = { name = "低配", skills = { { groups = { { 1 } } } } } -- 1 技能 + 1 条件 = 2 分 → 普通
+  local high164 = { name = "源码", skills = {                        -- 2 + 7 + 6 = 15 分 → 源代码
+    { groups = { { 1, 2, 3, 4, 5, 6, 7 } } },
+    { groups = { { 1, 2, 3, 4, 5, 6 } } } } }
+  local near164 = function(a, b) return type(a) == "number" and type(b) == "number" and math.abs(a - b) < 1e-6 end
+  local wantLow164 = "[" .. EVAL_SHARE_SEAL_SYMBOL(1) .. tostring(EVAL_L("SEAL_TIER_1")) .. "]"
+  local wantHigh164 = "[" .. EVAL_SHARE_SEAL_SYMBOL(5) .. tostring(EVAL_L("SEAL_TIER_5")) .. "]"
+  local rgbLow164, rgbHigh164 = EVAL_SHARE_SEAL_TIER_RGB(1), EVAL_SHARE_SEAL_TIER_RGB(5)
+  EVAL_HELP_CONFIG.ui = { enabled = true, subCombat = true, subScheme = true }
+  EVAL_HELP_CONFIG.war = { profiles = { low164, high164 }, activeProfile = 1 }
+  EVAL_HELP_UI_BUILD()
+  -- ★前置必须**显式建立**：tick 在「窗口不可见」时直接 return，隐藏状态下徽标根本不刷新
+  if not EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end
+  -- ① BUILD 即算出并写上（现算，不是留个空壳）
+  local v164 = EVAL_TEST_UI_TITLEBAR()
+  eq(v164.tier, wantLow164,
+     "①★★★标题栏出现**当前方案的档位**（期望 " .. wantLow164 .. "，实际 " .. tostring(v164.tier) .. "）")
+  eq(v164.tierPoint, "LEFT", "①★徽标锚 LEFT（实际 " .. tostring(v164.tierPoint) .. "）")
+  eq(v164.titleFs ~= nil and v164.tierRelTo == v164.titleFs, true,
+     "①★★★徽标锚在**玩家名那条文字的右边缘**（relTo = 标题 FontString，跟着名字走、不用手工量宽）")
+  eq(v164.tierRelPoint, "RIGHT", "①★★锚的是名字的右边缘（实际 " .. tostring(v164.tierRelPoint) .. "）")
+  eq(type(v164.tierX) == "number" and v164.tierX > 0, true,
+     "①★名字与徽标之间留了间隙（实际 " .. tostring(v164.tierX) .. "）")
+  eq(v164.tierColor ~= nil and near164(v164.tierColor[1], rgbLow164.r)
+     and near164(v164.tierColor[2], rgbLow164.g) and near164(v164.tierColor[3], rgbLow164.b), true,
+     "①★★★文字色 = 该品阶色（读真控件 GetTextColor，与方案列表/案例模版**同一张色表**）")
+  -- ② 换激活方案 → 下一个心跳就换档位（**现算**，不是 BUILD 时写死的那一个）
+  EVAL_HELP_CONFIG.war.activeProfile = 2
+  EVAL_HELP_UI_TICK()
+  local v2164 = EVAL_TEST_UI_TITLEBAR()
+  eq(v2164.tier, wantHigh164,
+     "②★★★切换激活方案 → 下一个心跳徽标换成**新方案的档位**（期望 " .. wantHigh164 .. "，实际 " .. tostring(v2164.tier) .. "）")
+  eq(v2164.tierColor ~= nil and near164(v2164.tierColor[1], rgbHigh164.r)
+     and near164(v2164.tierColor[3], rgbHigh164.b), true,
+     "②★★颜色也跟着换（源代码档 = 亮蓝 r=" .. tostring(rgbHigh164.r) .. " b=" .. tostring(rgbHigh164.b) .. "）")
+  -- ③ 只改方案**内容**（激活方案没变）也要重算 —— 品阶不缓存
+  local keepSkills164 = high164.skills
+  high164.skills = { { groups = { { 1 } } } } -- 15 分 → 2 分（降到普通）
+  EVAL_HELP_UI_TICK()
+  eq(EVAL_TEST_UI_TITLEBAR().tier, wantLow164,
+     "③★★★**改方案内容**后也重算（不缓存 —— 用户 1.73.49「品阶每次打开方案自动计算完善」）")
+  high164.skills = keepSkills164
+  -- ④ 算不出档位 → 如实清空 + 中性灰（**不沿用**上一档颜色，否则就是一个假档位）
+  local keepScore164 = EVAL_PROFILE_SCORE
+  EVAL_PROFILE_SCORE = nil
+  EVAL_HELP_UI_TICK()
+  local v4164 = EVAL_TEST_UI_TITLEBAR()
+  eq(v4164.tier, "", "④★★★算不出档位（Share 未载入 / 坏数据）→ 徽标**如实清空**，不硬编一个档位")
+  eq(v4164.tierColor ~= nil and near164(v4164.tierColor[1], 0.72) and near164(v4164.tierColor[3], 0.62), true,
+     "④★★而且颜色回到中性灰（不沿用上一档的亮蓝 —— 读真控件 GetTextColor）")
+  EVAL_PROFILE_SCORE = keepScore164
+  EVAL_HELP_UI_TICK()
+  eq(EVAL_TEST_UI_TITLEBAR().tier, wantHigh164, "⑤收尾：恢复后徽标又回来了（不是一次性坏掉）")
+  -- ⑥ 方案表异常（空表）时 tick 不许被打断、徽标不许留 nil
+  EVAL_HELP_CONFIG.war = { profiles = {} }
+  eq(pcall(EVAL_HELP_UI_TICK), true, "⑥★方案表空时 tick 不报错")
+  eq(type(EVAL_TEST_UI_TITLEBAR().tier), "string", "⑥★徽标仍是个字符串（不留 nil 给 FontString）")
+  EVAL_HELP_CONFIG.war = savedWar164
+  EVAL_HELP_CONFIG.ui = savedUi164
+  EVAL_HELP_UI_BUILD()
+  print("  标题栏档位徽标：跟在玩家名右侧 · 现算不缓存 · 换方案/改内容/切语言都跟着变 · 算不出如实清空")
+end
+
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")
