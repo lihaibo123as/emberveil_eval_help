@@ -234,11 +234,13 @@ local function shBuildFor(text)
         local sym2 = tostring(sinfo.symbol or "")
         local tierCol2 = (type(sinfo.color) == "string" and sinfo.color ~= "") and sinfo.color or SH_CHUNK_COLOR
         local cmt2 = (type(sinfo.comment) == "string") and sinfo.comment or ""
-        local tail = ""
-        if titleTxt ~= "" then tail = titleTxt .. "  " end -- 身份：链接之后的**纯文本**（无方括号、无色码）
+        -- ★★★1.73.50 用户（真机截图）：「分享信息：方案**右侧的玩家角色可以不显示**」⇒ B 行**不再带身份尾巴**。
+        --   身份在 A 行（`|c<身份色>|HEHPF:id 0/1:0|h[头衔]|h|r 名字 分享了`）已经显示过一次了；
+        --   B 行紧跟其后，再带一遍「阿凡提」就是**同一屏重复**（当初留它是怕 A 行画不出来 —— A 已实测正常）。
+        --   ⇒ B 行只剩「品阶秘籍·方案 + 评语」，正是 v2 变异测里**已验证能画**的那个形态。
         -- ★1.73.43n 长度守卫：分享信息那条**必须与分片同规矩**（≤ SH_MSG_MAX）。
         --   超了先砍评语，还超就整条不发（**如实说一声**，绝不发一条会被客户端/服务器丢掉的超长消息）。
-        local sealBase = tierCol2 .. "|HEHPF:" .. idh .. " 0/1:1|h[" .. sym2 .. tostring(sinfo.tierName) .. "秘籍·" .. tostring(sinfo.plan) .. "]|h|r  " .. tail
+        local sealBase = tierCol2 .. "|HEHPF:" .. idh .. " 0/1:1|h[" .. sym2 .. tostring(sinfo.tierName) .. "秘籍·" .. tostring(sinfo.plan) .. "]|h|r  "
         sealB = sealBase .. cmt2
         if string.len(sealB) > SH_MSG_MAX then
           sealB = sealBase

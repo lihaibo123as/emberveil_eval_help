@@ -11021,7 +11021,8 @@ do
 end
 -- 144) ★★★1.73.42g 封皮行（显示）+ 点击直接导入（SetItemRef 的 EHPF: 分支）
 do
-  -- ★★★1.73.43i 用户真机回报「A 身份行没出现」⇒ 按「不能用就删除」：A 已删，身份并进 B 行链接之后的**纯文本**
+  -- ★★★当前形态（1.73.43p 起）：A 身份行（身份色 + 链接 + `[头衔]|h|r` + 名字 分享了）+ B 品阶行（品阶色 + 链接 + 品阶秘籍·方案 + 评语）；
+  --   ★1.73.50 起 B 行**不再带身份尾巴**（身份只在 A 行出现一次）
   EVAL_SHARE_RESET()
   TEST.chat = nil TEST.runScripts = nil
   eq(EVAL_SHARE_SEND("GUILD"), true, "①分享能发出")
@@ -11050,8 +11051,13 @@ do
   eq(segCount144(seal) <= 1, true, "①★★★分享信息行只有 " .. tostring(segCount144(seal)) .. " 段色码（多段会被吞，实测）")
   eq(segCount144(sealA) <= 1, true, "①★★★A 身份行也只有 " .. tostring(segCount144(sealA)) .. " 段色码（一行一段色码：多段会被吞）")
   eq(string.find(seal, "|T", 1, true) == nil, true, "①★不含 |T（实测不可用）")
-  -- ★1.73.43i 身份并进 B 行（链接之后的**纯文本**，不加色码、不加方括号）
-  eq(string.find(seal, "  ", 1, true) ~= nil, true, "①★B 行标签后有分隔（身份/评语区）")
+  -- ★★★1.73.50 用户（真机截图）：「分享信息：**方案右侧的玩家角色可以不显示**」
+  --   ⇒ 身份只在 **A 行**出现一次；B 品阶行**不再重复**（当初留它是怕 A 画不出来，A 已实测正常）。
+  local idTxt144 = string.match(sealA, "|h%[([^%]]+)%]|h") or ""
+  eq(idTxt144 ~= "", true, "①★★A 行带身份标签（" .. tostring(idTxt144) .. "）")
+  local afterB144 = string.match(seal, "]|h|r(.*)$") or ""
+  eq(string.find(afterB144, idTxt144, 1, true) == nil, true,
+     "①★★★B 品阶行**不再重复身份**（" .. tostring(idTxt144) .. " 只该出现在 A 行）—— 用户 1.73.50 要求")
   -- ★★★1.73.43f 用户：「特殊标识那条走不通就用能用的……不能用就删除」⇒ 分享信息**不再单独发一条**，
   --   而是当**最后一片的显示标签**（那一条与其余分片逐字节同款结构 = 已被证明能画的那条通道）。
   local g144 = 0
