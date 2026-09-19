@@ -8,6 +8,7 @@
 
 local SH = { buf = {}, done = {}, doneList = {} }  -- doneList=去重表的插入序（1.71.3 R6 上限淘汰用）
 local SH_CHUNK = 220 -- 每片 hex 字符数
+local SH_MSG_MAX = 250 -- ★单条预算（实测：250 通过、270 整条丢）
 
 -- ===== 基础工具（文件独立：不依赖 Toolbox/EvalHelp 的 local 件） =====
 local function shSay(t)
@@ -112,17 +113,51 @@ local shTxFrame
 --   实现在 shNowT 之后，那里才拿得到计时函数。
 local shTxEnqueue, shTxStep
 -- ★1.73.35 分片构造**单一来源**（频道分享与「密语给某玩家」共用，避免两份实现漂移）
+-- ★★★1.73.42h 方案名（分片标签与封皮行共用）：必须声明在 shBodies 之前
+local function shSealName(text)
+  local first = string.match(tostring(text or ""), "^([^\n]*)") or ""
+  local nm = first
+  local c1 = string.find(first, "：", 1, true)
+  if c1 then nm = string.sub(first, c1 + 3) end
+  local c2 = string.find(first, ":", 1, true)
+  if c2 and (not c1 or c2 > c1) then nm = string.sub(first, c2 + 1) end
+  nm = string.gsub(nm, "%|", "")
+  nm = string.gsub(nm, "%[", "")
+  nm = string.gsub(nm, "%]", "")
+  nm = string.gsub(nm, "^%s+", "")
+  nm = string.gsub(nm, "%s+$", "")
+  if nm == "" then nm = "方案" end
+  return string.sub(nm, 1, 18)
+end
 local function shBodies()
   if type(EVAL_PROFILE_TO_TEXT) ~= "function" then shSay(L("SH_NOEXPORT")) return nil end
   if type(RunScript) ~= "function" then shSay(L("SH_NORUNSCRIPT")) return nil end
   local text = EVAL_PROFILE_TO_TEXT()
   if not text or text == "" then shSay(L("SH_EMPTY")) return nil end
   local hex = toHex(text)
-  local n = math.ceil(string.len(hex) / SH_CHUNK)
   local idh = string.format("%02x", math.random(0, 255)) -- 本次传输 id（接收端按 发送者+id 归并分片）
+  -- ★★★1.73.42h v2 分片体：载荷藏进自定义链接的 |H 段，聊天里**只显示**「方案:名 传输中...%」
+  local nm2 = shSealName(text)
+  local function chunkBody(idx, tot, part)
+    local pct = math.ceil(idx * 100 / tot)
+    return "|cff9ad4ff|HEHPF:" .. idh .. " " .. idx .. "/" .. tot .. ":" .. part .. "|h[方案:" .. nm2 .. " 传输中..." .. pct .. "%]|h|r"
+  end
+  -- ★预算：单条≤ 250 字节（实测 250 通过、270 整条丢）→ 先量包装，剩下的都给 hex
+  local wrapLen = string.len(chunkBody(1, 1, ""))
+  local chunk = SH_MSG_MAX - wrapLen
+  if chunk > SH_CHUNK then chunk = SH_CHUNK end
+  if chunk < 40 then chunk = 40 end
+  local n = math.ceil(string.len(hex) / chunk)
   local bodies = {}
-  for i = 1, n do
-    bodies[i] = "[EHPF#" .. idh .. " " .. i .. "/" .. n .. "]" .. string.sub(hex, (i - 1) * SH_CHUNK + 1, i * SH_CHUNK)
+  for k = 1, n do
+    bodies[k] = chunkBody(k, n, string.sub(hex, (k - 1) * chunk + 1, k * chunk))
+  end
+  -- ★如实：万一还是超预算，说出来（绝不静默丢片）
+  for k = 1, table.getn(bodies) do
+    if string.len(bodies[k]) > SH_MSG_MAX then
+      shSay("分享分片 " .. k .. "/" .. table.getn(bodies) .. " 有 " .. string.len(bodies[k]) .. " 字节，超过本客户端实测上限 " .. SH_MSG_MAX)
+      break
+    end
   end
   -- ★★★1.73.42g 封皮行：分片之后追加**一条**短消息，链接载荷只有传输 id（不带 hex）；
   --   ★分片格式**不动**（仍是 v1 明文）→ 老版本照旧能收；点它 = 直接导入。
@@ -276,6 +311,23 @@ function shTxEnqueue(bodies, chanId, target)
 end
 -- ★测试直调：驱动与 OnUpdate **同一个**函数（判据必须落在真实调用点/真实闭包上）
 function EVAL_SHARE_TEST_TICK() shTxStep() end
+-- ★按本次传输 id 数队列里的分片（不受上一笔遗留影响）
+function EVAL_TEST_SHARE_QUEUE_ID_COUNT(idh)
+  local want = tostring(idh or "")
+  if want == "" then return -1 end
+  local c = 0
+  for q = 1, table.getn(shTxQ) do
+    local bd = tostring(shTxQ[q].body or "")
+    if string.find(bd, "|HEHPF:" .. want .. " ", 1, true) or string.find(bd, "[EHPF#" .. want .. " ", 1, true) then c = c + 1 end
+  end
+  return c
+end
+-- ★诊断：队列里到底是什么
+function EVAL_TEST_SHARE_QUEUE_DUMP()
+  local out = {}
+  for q = 1, table.getn(shTxQ) do out[q] = string.sub(tostring(shTxQ[q].body or ""), 1, 34) end
+  return out
+end
 function EVAL_SHARE_TEST_QUEUE_LEN() return table.getn(shTxQ) end-- ★★★1.72.3 **收不齐绝不静默**，且**给晚到的分片留冗余窗口**（用户要求：1~2 秒内都可以）。
 --   两级判定：
 --     ① 空闲超过 SH_RECV_TOLERANCE(2s) 仍未收齐 → **如实提醒**（点名发送者 + 收了几片），
@@ -420,6 +472,10 @@ local function shOnMsg(msg, sender, ev)
     return
   end
   local idh, i, n, payload = string.match(msg, "^%[EHPF#(%x+) (%d+)/(%d+)%](%x*)$")
+  if not idh then -- ★v2：载荷藏在自定义链接的 |H 段
+    local inner = string.match(msg, "|HEHPF:([^|]*)|h")
+    if inner then idh, i, n, payload = string.match(inner, "^(%x+) (%d+)/(%d+):(%x*)$") end
+  end
   if not idh then
     -- ★★★1.73.42g 封皮行：不带 hex，只带传输 id —— 记下「这一笔真的发完了」
     local sid = string.match(msg, "|HEHPF:(%x+)|h")
@@ -592,21 +648,6 @@ local function shProbeFind(mode, tag)
   return nil
 end
 -- 方案名（显示用）：取导出文本首行 `# 方案: 名` 里的「名」；解析不出就退回「方案」
-local function shSealName(text)
-  local first = string.match(tostring(text or ""), "^([^\n]*)") or ""
-  local nm = first
-  local c1 = string.find(first, "：", 1, true)
-  if c1 then nm = string.sub(first, c1 + 3) end
-  local c2 = string.find(first, ":", 1, true)
-  if c2 and (not c1 or c2 > c1) then nm = string.sub(first, c2 + 1) end
-  nm = string.gsub(nm, "%|", "")
-  nm = string.gsub(nm, "%[", "")
-  nm = string.gsub(nm, "%]", "")
-  nm = string.gsub(nm, "^%s+", "")
-  nm = string.gsub(nm, "%s+$", "")
-  if nm == "" then nm = "方案" end
-  return string.sub(nm, 1, 18)
-end
 -- ===== 1.73.42 分享显示行：境界 · 品阶 · 评语（用户 2026-09-19 定稿）==================
 -- 行格式：`<境界><角色名> 分享了一份传家宝 → [<品阶>秘籍·<方案名>]  <评语>`
 --   品阶 = **技能条数 + 每条技能里的条件数**（评分制）：≤3 普通 / 4-6 稀有 / 7-9 珍稀 / 10-12 绝版 / **≥13 源代码**；
@@ -1416,10 +1457,12 @@ function EVAL_SHARE_RECENT_STATE()
   return { list = SH.recentList or {}, recent = SH.recent or {}, seals = SH.sealSeen or 0, lastSeal = SH.sealLast }
 end
 function EVAL_TEST_SHARE_BUILD() return shBodies() end
+-- ★队列里的**分片**数（v1 明文 + v2 链接两种形态都算；封皮不进队列）
 function EVAL_TEST_SHARE_QUEUE_CHUNKS()
   local c = 0
-  for i = 1, table.getn(shTxQ) do
-    if string.sub(tostring(shTxQ[i].body or ""), 1, 6) == "[EHPF#" then c = c + 1 end
+  for q = 1, table.getn(shTxQ) do
+    local bd = tostring(shTxQ[q].body or "")
+    if string.sub(bd, 1, 6) == "[EHPF#" or string.find(bd, "|HEHPF:", 1, true) then c = c + 1 end
   end
   return c
 end

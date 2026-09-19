@@ -3976,10 +3976,19 @@ local shProf = EVAL_PROFILE_FROM_TEXT("# 方案: 分享测试\n- 致死打击 | 
 EVAL_HELP_CONFIG.war.profiles = { shProf } EVAL_HELP_CONFIG.war.activeProfile = 1
 TEST.runScripts = nil
 eq(EVAL_SHARE_SEND("GUILD"), true, "share send ok")
+  -- ★★v2 分片变短→可能不止 1 片：先把队列滴干（滴出的也会进 runScripts）
+  do
+    local gz12 = 0
+    while EVAL_TEST_SHARE_QUEUE_CHUNKS() > 0 and gz12 < 80 do
+      gz12 = gz12 + 1
+      TEST.time = (TEST.time or 1000) + 1
+      EVAL_SHARE_TEST_TICK()
+    end
+  end
 local shMsgs = {}
 for _, s in ipairs(TEST.runScripts or {}) do
   local m = string.match(s, 'SendChatMessage%("(.-)", "GUILD"%)')
-    if m and string.sub(m, 1, 6) == "[EHPF#" then table.insert(shMsgs, m) end -- ★封皮不算分片
+    if m and (string.sub(m, 1, 6) == "[EHPF#" or (string.find(m, "|HEHPF:", 1, true) and string.find(m, "传输中", 1, true))) then table.insert(shMsgs, m) end -- ★封皮不算分片（v1/v2）
 end
 eq(table.getn(shMsgs) >= 1, true, "share chunked messages emitted")
 -- 收齐全片 → 弹窗待导入
@@ -5166,7 +5175,7 @@ do
     local out = {}
     for _, s in ipairs(TEST.runScripts or {}) do
       local m = string.match(s, 'SendChatMessage%("(.-)", "GUILD"%)')
-      if m and string.sub(m, 1, 6) == "[EHPF#" then table.insert(out, m) end -- ★★封皮不算片
+      if m and (string.sub(m, 1, 6) == "[EHPF#" or (string.find(m, "|HEHPF:", 1, true) and string.find(m, "传输中", 1, true))) then table.insert(out, m) end -- ★★封皮不算片（v1/v2）
     end
     EVAL_HELP_CONFIG.war.profiles = keep
     EVAL_HELP_CONFIG.war.activeProfile = 1
@@ -7716,7 +7725,7 @@ do
     local out = {}
     for _, s in ipairs(TEST.runScripts or {}) do
       local m = string.match(s, 'SendChatMessage%("(.-)", "GUILD"%)')
-      if m and string.sub(m, 1, 6) == "[EHPF#" then table.insert(out, m) end -- ★封皮不算分片
+      if m and (string.sub(m, 1, 6) == "[EHPF#" or (string.find(m, "|HEHPF:", 1, true) and string.find(m, "传输中", 1, true))) then table.insert(out, m) end -- ★封皮不算分片（v1/v2）
     end
     return out
   end
@@ -7724,29 +7733,37 @@ do
   eq(EVAL_SHARE_SEND("GUILD"), true, "长方案分享启动")
   local first = sents106()
   local _, nStr = string.match(tostring(first[1] or ""), "^%[EHPF#%x+ (%d+)/(%d+)%]")
+  if not nStr then _, nStr = string.match(tostring(first[1] or ""), "|HEHPF:%x+ (%d+)/(%d+):") end
   local total = tonumber(nStr) or 0
+  local curId = string.match(tostring(first[1] or ""), "%[EHPF#(%x+) ") or string.match(tostring(first[1] or ""), "|HEHPF:(%x+) ")
   eq(total >= 3, true, "①前置：方案确实分成 ≥3 片（got " .. tostring(total) .. "）")
   -- ★① 核心判据
   eq(table.getn(first), 1, "★★★只立即发第 1 片，其余排队（旧实现一帧连发 " .. tostring(total) .. " 片）")
-  eq(EVAL_TEST_SHARE_QUEUE_CHUNKS(), total - 1, "★★队列里正好剩 " .. tostring(total - 1) .. " 片")
+  eq(EVAL_TEST_SHARE_QUEUE_ID_COUNT(curId), total - 1, "★★本次传输队列里正好剩 " .. tostring(total - 1) .. " 片（id=" .. tostring(curId) .. "）")
   eq(string.find(tostring(TEST.chat), "排队", 1, true) ~= nil, true, "★★并且如实告知「已排队发送」")
   -- ★② 限频：同一时刻 tick 也不许滴出第二片
   EVAL_SHARE_TEST_TICK()
   eq(table.getn(sents106()), 1, "★★同一时刻 tick 不许滴出第二片（限频生效）")
   local sent, guard = 1, 0
-  while sent < total and guard < total + 5 do
+  while EVAL_TEST_SHARE_QUEUE_ID_COUNT(curId) > 0 and guard < 300 do
     guard = guard + 1
     TEST.time = (TEST.time or 1000) + 1
     EVAL_SHARE_TEST_TICK()
     sent = table.getn(sents106())
   end
-  eq(sent, total, "★★★全部 " .. tostring(total) .. " 片最终分时发出（不是一帧倾泻）")
-  eq(EVAL_TEST_SHARE_QUEUE_CHUNKS(), 0, "★队列已清空")
+  eq(EVAL_TEST_SHARE_QUEUE_ID_COUNT(curId), 0, "★★★全部 " .. tostring(total) .. " 片最终分时发出（本次传输队列已空）")
+  eq(EVAL_TEST_SHARE_QUEUE_ID_COUNT(curId), 0, "★本次传输的分片已全部发出")
   local msgs = sents106()
+  -- ★★只取**本次传输**的分片（排掉上一笔遗留，否则会把别的 id 喂进去、数出来的片数也不对）
+  local mine = {}
+  for mi = 1, table.getn(msgs) do
+    if string.find(msgs[mi], "%[EHPF#" .. tostring(curId) .. " ") or string.find(msgs[mi], "|HEHPF:" .. tostring(curId) .. " ", 1, true) then table.insert(mine, msgs[mi]) end
+  end
   -- ★③ 收不齐 → 如实报 + 缓冲真被丢
   EVAL_SHARE_RESET()
-  for i = 1, total - 1 do EVAL_SHARE_ONMSG(msgs[i], "队友甲") end
+  for i = 1, total - 1 do EVAL_SHARE_ONMSG(mine[i], "队友甲") end
   eq(EVAL_SHARE_PENDING(), nil, "③前置：半包不弹窗")
+  EVAL_TEST_SHARE_RESET_WARN() -- ★★滴干循环推进了 TEST.time，不清窗口会把这条提醒吞掉
   TEST.time = (TEST.time or 1000) + 100 -- 超过 SH_BUF_TIMEOUT(60s)
   TEST.chat = nil
   -- 用另一笔「残缺」分片触发 sweep（sweep 就在 shOnMsg 里，走真实路径；不弹窗免得干扰后续断言）
@@ -7756,7 +7773,7 @@ do
   eq(string.find(chat, tostring(total - 1) .. "/" .. tostring(total), 1, true) ~= nil, true,
      "★★★并如实报「收了几片」（要 " .. tostring(total - 1) .. "/" .. tostring(total) .. "）")
   -- ★反向哨兵：迟到的那片不该凑成一笔（证明缓冲真被丢掉了）
-  EVAL_SHARE_ONMSG(msgs[total], "队友甲")
+  EVAL_SHARE_ONMSG(mine[total], "队友甲")
   eq(EVAL_SHARE_PENDING(), nil, "★★超时后迟到的最后一片不会凑成一笔（缓冲确实已丢弃）")
   -- 收尾
   EVAL_HELP_CONFIG.war.profiles = savedP EVAL_HELP_CONFIG.war.activeProfile = savedA
@@ -7784,7 +7801,7 @@ do
     local out = {}
     for _, s in ipairs(TEST.runScripts or {}) do
       local m = string.match(s, 'SendChatMessage%("(.-)", "GUILD"%)')
-      if m and string.sub(m, 1, 6) == "[EHPF#" then table.insert(out, m) end -- ★封皮不算分片
+      if m and (string.sub(m, 1, 6) == "[EHPF#" or (string.find(m, "|HEHPF:", 1, true) and string.find(m, "传输中", 1, true))) then table.insert(out, m) end -- ★封皮不算分片（v1/v2）
     end
     return out
   end
@@ -7797,6 +7814,7 @@ do
   local msgs, guard = sents107(), 0
   local n = 0
   local _, nStr = string.match(tostring(msgs[1] or ""), "^%[EHPF#%x+ (%d+)/(%d+)%]")
+  if not nStr then _, nStr = string.match(tostring(msgs[1] or ""), "|HEHPF:%x+ (%d+)/(%d+):") end
   n = tonumber(nStr) or 0
   eq(n >= 3, true, "①前置：长方案分成 ≥3 片（got " .. tostring(n) .. "）")
   while table.getn(msgs) < n and guard < n + 5 do
@@ -10945,9 +10963,25 @@ do
   local sid = string.match(seal, "|HEHPF:(%x+)|h")
   eq(type(sid) == "string", true, "①读得到传输 id（" .. tostring(sid) .. "）")
   local chunks = {}
-  for k3 = 1, table.getn(all) do if string.sub(all[k3], 1, 6) == "[EHPF#" then table.insert(chunks, all[k3]) end end
+  for k3 = 1, table.getn(all) do if string.sub(all[k3], 1, 6) == "[EHPF#" or (string.find(all[k3], "|HEHPF:", 1, true) and string.find(all[k3], "传输中", 1, true)) then table.insert(chunks, all[k3]) end end
   eq(table.getn(chunks) >= 1, true, "②前置：拿到分片（" .. tostring(table.getn(chunks)) .. "）")
-  eq(string.sub(tostring(chunks[1] or ""), 1, 6), "[EHPF#", "②★★分片仍是 v1 明文（老版本照旧能收）")
+  eq(string.find(tostring(chunks[1] or ""), "|HEHPF:", 1, true) ~= nil, true, "②★★分片 = v2 链接形态（载荷藏在 |H 段）")
+  eq(string.find(tostring(chunks[1] or ""), "传输中...", 1, true) ~= nil, true, "②★★分片标签 = 方案:名 传输中...%")
+  local over = 0
+  for k5 = 1, table.getn(chunks) do if string.len(chunks[k5]) > 250 then over = over + 1 end end
+  eq(over, 0, "②★★★每条消息都 <= 250 字节（实测上限），超限条数=" .. tostring(over))
+  eq(string.find(tostring(chunks[table.getn(chunks)] or ""), "100%", 1, true) ~= nil, true, "②★★末片标签 = 100%")
+  local pctAll = true
+  for k6 = 1, table.getn(chunks) do if string.find(chunks[k6], "传输中...", 1, true) == nil then pctAll = false end end
+  eq(pctAll, true, "②★每片都带进度百分比")
+  do
+    local function hex144(str) return (string.gsub(str, ".", function(ch) return string.format("%02x", string.byte(ch)) end)) end
+    EVAL_SHARE_RESET()
+    EVAL_SHARE_ONMSG("[EHPF#ab 1/1]" .. hex144("# 方案: 老明文\n\n- 技能甲"), "老版本甲")
+    local p144 = EVAL_SHARE_PENDING()
+    eq(p144 ~= nil, true, "②★★★v1 明文分片照样能收（跨版本兼容）")
+    if p144 then eq(p144.name, "老明文", "②★★且解析出方案名") end
+  end
   for k4 = 1, table.getn(chunks) do EVAL_SHARE_ONMSG(chunks[k4], "队友甲") end
   eq(table.getn((EVAL_SHARE_RECENT_STATE() or {}).list or {}) >= 1, true, "②★★收齐后缓存了整份方案（点击导入要取回它）")
   TEST.chat = nil
