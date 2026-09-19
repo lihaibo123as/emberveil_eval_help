@@ -12449,6 +12449,10 @@ do
   EVAL_HELP_CONFIG.war = EVAL_HELP_CONFIG.war or {}
   EVAL_HELP_CONFIG.war.profiles = { mk160(1), mk160(3), mk160(5) }
   EVAL_HELP_CONFIG.war.activeProfile = 2
+  -- ★★1.73.56 方案行/图标是**「一键宏」Tab 的内容**：显隐只在该 Tab 激活时由刷新函数负责（真机 bug 的修法 ——
+  --   停在别的 Tab 时刷新数据不再 Show 这些控件）。⇒ 本组验的是「切到该 Tab 时」的样子，先显式切过去；
+  --   否则读到的是别的 Tab 留下的隐藏态（不是产品坏了，是夹具没站在用户的视角上）。
+  EVAL_HELP_CFG_SETTAB(2)
   EVAL_WAR_TAB_REFRESH()
   local rows160 = EVAL_TEST_WAR_PROF_ROWS()
   eq(table.getn(rows160) >= 3, true, "①前置：方案行 ≥3（实际 " .. tostring(table.getn(rows160)) .. "）")
@@ -12740,6 +12744,54 @@ do
   EVAL_HELP_CONFIG.ui = savedUi164
   EVAL_HELP_UI_BUILD()
   print("  标题栏档位徽标：跟在玩家名右侧 · 现算不缓存 · 换方案/改内容/切语言都跟着变 · 算不出如实清空")
+end
+
+-- 165) ★★★1.73.56 真机 bug：Tab 切到「全局」等**非一键宏**页 → 关闭 → 重新打开，**会把一键宏的技能列表叠出来**
+--   根因：`EVAL_WAR_TAB_REFRESH()` 是**数据刷新**却顺带 Show/Hide 自己那页的控件，而它不只被「切到本 Tab」调用
+--   （打开配置窗时无条件调一次、方案管理弹窗应用改名时也调）⇒ 停在别的 Tab 时这些控件被重新 Show 出来。
+--   ★修法：可见性只由 **Tab 切换**负责（SETTAB 的控件清单），刷新函数**只在「一键宏」Tab 激活时才动显隐**。
+--   ★判据读**真控件的 IsShown**（不是我们自己的记账），并且**数据仍要照常刷新**（品阶重算计数增加）。
+do
+  local savedWar165 = EVAL_HELP_CONFIG.war
+  EVAL_HELP_CONFIG.war = { activeProfile = 1, profiles = { { name = "可见性甲", skills = {
+    { skill = "可见甲", enabled = true, groups = {} },
+    { skill = "可见乙", enabled = true, groups = {} } } } } }
+  if not EVAL_TEST_CFG_VISIBLE() then pcall(EVAL_HELP_CFG_TOGGLE) end
+  eq(EVAL_TEST_CFG_VISIBLE(), true, "前置：配置窗已打开（读真帧 IsVisible）")
+  EVAL_HELP_CFG_SETTAB(2)
+  local pre165 = EVAL_TEST_WAR_ROWS()
+  eq(pre165.n >= 2, true, "前置：一键宏页有技能行槽位（" .. tostring(pre165.n) .. "）")
+  eq(pre165.shown[1], true, "前置：Tab=2 时第一行是**显示**的")
+  -- ① 切到「全局」→ 一键宏那页的控件必须全部隐藏（Tab 切换负责显隐）
+  EVAL_HELP_CFG_SETTAB(1)
+  local v1_165 = EVAL_TEST_WAR_ROWS()
+  eq(v1_165.shown[1], false, "①★★★切到「全局」后一键宏的技能行**隐藏**")
+  eq(v1_165.profDel[1], false, "①★★方案 [删] 按钮同样隐藏")
+  -- ② 关键：停在别的 Tab 时刷新数据，**不许**把技能行又 Show 出来（本轮 bug 的根因）
+  local cntBefore165 = EVAL_TEST_WAR_TIER_CALC_COUNT()
+  EVAL_WAR_TAB_REFRESH()
+  eq(EVAL_TEST_WAR_TIER_CALC_COUNT() > cntBefore165, true,
+     "②★数据照样刷新（品阶重算计数 " .. tostring(cntBefore165) .. " → " .. tostring(EVAL_TEST_WAR_TIER_CALC_COUNT()) .. "）")
+  local v2_165 = EVAL_TEST_WAR_ROWS()
+  eq(v2_165.shown[1], false,
+     "②★★★停在别的 Tab 时刷新数据**不会**把一键宏的技能列表叠出来（这正是用户报的 bug）")
+  eq(v2_165.profDel[1], false, "②★★方案 [删] 按钮也没被重新显示")
+  -- ③ 走用户的操作顺序：关闭 → 重新打开
+  pcall(EVAL_HELP_CFG_TOGGLE)
+  eq(EVAL_TEST_CFG_VISIBLE(), false, "③前置：关掉配置窗")
+  pcall(EVAL_HELP_CFG_TOGGLE)
+  eq(EVAL_TEST_CFG_VISIBLE(), true, "③前置：重新打开")
+  eq(EVAL_HELP_CFG_TAB(), 1, "③★★重开停在**上次那个 Tab**（全局），不跳回一键宏")
+  eq(EVAL_TEST_WAR_ROWS().shown[1], false,
+     "③★★★重开后技能列表没有叠在全局页上（用户报的现象当场复现/验证）")
+  -- ④ 不许把正常路径修坏：切回一键宏 Tab，技能行照旧显示
+  EVAL_HELP_CFG_SETTAB(2)
+  eq(EVAL_TEST_WAR_ROWS().shown[1], true, "④★★切回一键宏 Tab → 技能行照旧显示")
+  eq(EVAL_HELP_CFG_TAB(), 2, "④★当前 Tab = 2")
+  EVAL_HELP_CFG_SETTAB(1)
+  EVAL_HELP_CONFIG.war = savedWar165
+  pcall(EVAL_WAR_TAB_REFRESH)
+  print("  配置窗 Tab 可见性：停在别的 Tab 刷新数据不会把一键宏技能列表叠出来（关闭重开也停在原 Tab）")
 end
 
 print("ALL TESTS PASS")

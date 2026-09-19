@@ -2519,6 +2519,15 @@ function EVAL_WAR_TAB_REFRESH()
   if not EVAL_IS_SCANNED() then EVAL_GO_RESCAN(true, "auto") end -- 1.32.9 自愈：初始化重扫若早于动作条就绪，这里补扫（否则技能行图标全灰）
   local warUI = cfgWin.warUI
   if not warUI then return end
+  -- ★★★1.73.56 用户真机 bug：「在 Tab 切到全局等**非一键宏**的 Tab 之后，关闭重新打开**会把一键宏的技能列表页显示出来**」。
+  --   根因：本函数是**数据刷新**，却顺带 Show/Hide 自己那一页的控件（技能行 / 方案删除钮 / 方案图标 / 滚动条…），
+  --   而它**不只被「切到本 Tab」调用** —— 打开配置窗时无条件被调一次（EVAL_HELP_CFG_TOGGLE）、
+  --   方案管理弹窗应用改名时也被调（EVAL_PM_APPLY）⇒ 停在别的 Tab 时这些控件被重新 Show 出来，
+  --   **盖在当前那一页上**（用户截图：全局页上叠着一整套技能列表）。
+  --   ★可见性只由 **Tab 切换**负责（EVAL_HELP_CFG_SETTAB 的控件清单 Show/Hide，本项目的可见性契约）；
+  --     所以这里**只在「一键宏」Tab 正激活时才动显隐**，数据（文字 / 配色 / 图标 / 品阶）照旧每次都刷。
+  --   ★顺序也对得上：SETTAB(2) 先把本页控件全 Show，再调本函数把「没有对应技能的空行」Hide 掉。
+  local warTabOn = (cfgWin.tab == 2)
   local w2 = warCfg()
   for i, pb in ipairs(warUI.profBtns) do
     local prof = w2.profiles[i]
@@ -2560,33 +2569,33 @@ function EVAL_WAR_TAB_REFRESH()
             if (not okr) or type(got) ~= "string" or got == "" then
               warUI.iconNoTex = (warUI.iconNoTex or 0) + 1 -- 如实记账（探针会打印它）
             end
-            pcall(pb.icon.Show, pb.icon)
+            if warTabOn then pcall(pb.icon.Show, pb.icon) end
           else
-            pcall(pb.icon.Hide, pb.icon)
+            if warTabOn then pcall(pb.icon.Hide, pb.icon) end
           end
         end
       else
         pcall(pb.bg.SetVertexColor, pb.bg, sel and 0.45 or 0.16, sel and 0.35 or 0.13, sel and 0.10 or 0.08, 1)
         pcall(pb.text.SetTextColor, pb.text, sel and 1 or 0.75, sel and 0.9 or 0.72, sel and 0.4 or 0.6)
-        if pb.icon then pb.icon:Hide() end
+        if pb.icon and warTabOn then pb.icon:Hide() end
       end
     elseif i == table.getn(w2.profiles) + 1 then
       pb.text:SetText("+")
       pcall(pb.bg.SetVertexColor, pb.bg, 0.10, 0.10, 0.10, 1)
-      if pb.icon then pb.icon:Hide() end
+      if pb.icon and warTabOn then pb.icon:Hide() end
     else
       pb.text:SetText("")
       pcall(pb.bg.SetVertexColor, pb.bg, 0.06, 0.05, 0.04, 1)
-      if pb.icon then pb.icon:Hide() end
+      if pb.icon and warTabOn then pb.icon:Hide() end
     end
     -- [删] 仅存在的方案显示；待确认状态红色高亮
     if pb.del then
       if prof then
-        pb.del:Show()
+        if warTabOn then pb.del:Show() end
         local armed = (warUI.delArm == i) and (GetTime() - (warUI.delArmT or 0) < 5)
         pcall(pb.delBg.SetVertexColor, pb.delBg, armed and 0.75 or 0.25, 0.10, 0.10, 1)
       else
-        pb.del:Hide()
+        if warTabOn then pb.del:Hide() end
       end
     end
   end
@@ -2598,19 +2607,24 @@ function EVAL_WAR_TAB_REFRESH()
   warUI.offset = math.max(0, math.min(warUI.offset or 0, maxOff))
   if warUI.scrollUp then
     if cnt > rowsN then
-      pcall(warUI.scrollUp.Show, warUI.scrollUp) pcall(warUI.scrollDn.Show, warUI.scrollDn)
+      if warTabOn then pcall(warUI.scrollUp.Show, warUI.scrollUp) pcall(warUI.scrollDn.Show, warUI.scrollDn) end
     else
-      pcall(warUI.scrollUp.Hide, warUI.scrollUp) pcall(warUI.scrollDn.Hide, warUI.scrollDn)
+      if warTabOn then pcall(warUI.scrollUp.Hide, warUI.scrollUp) pcall(warUI.scrollDn.Hide, warUI.scrollDn) end
     end
   end
   for ri, row in ipairs(warUI.rows) do
     local r = p and p.skills[ri + warUI.offset]
     local widgets = { row.chk, row.icon, row.name, row.conds, row.up, row.dn, row.edit, row.del }
     for _, wgt in ipairs(widgets) do
-      if r then pcall(wgt.Show, wgt) else pcall(wgt.Hide, wgt) end
+      -- ★1.73.56 显隐只在「一键宏」Tab 激活时动（见函数开头 warTabOn 的说明）
+      if warTabOn then
+        if r then pcall(wgt.Show, wgt) else pcall(wgt.Hide, wgt) end
+      end
     end
     if r then
-      if r.enabled ~= false then row.mark:Show() else row.mark:Hide() end
+      if warTabOn then
+        if r.enabled ~= false then row.mark:Show() else row.mark:Hide() end
+      end
       local t0 = wicon(r.skill)
       if t0 then
         pcall(row.icon.SetTexture, row.icon, t0)
@@ -6101,15 +6115,27 @@ function EVAL_TEST_CFG_LOG_ROWS()
 end
 
 -- ★1.72.4 断言入口：一键宏设置页的**技能行**（读真实控件文案，验「有等级才显示等级」）
+-- ★★★1.73.56 除文案外，还要交出**每行的真实可见性**与当前 Tab：
+--   本轮真机 bug 是「停在别的 Tab 时刷新数据，把一键宏的技能行重新 Show 出来、叠在当前那页上」——
+--   只验文案/数据**完全照不到**这类错（本项目「漏接不报错、只是显示不对」的老账）。
+--   ★读的是真控件（FontString/Button 的 IsShown），不是我们自己的记账。
 function EVAL_TEST_WAR_ROWS()
   local cw = EVAL_HELP_CFGWIN
   local wu = cw and cw.warUI
-  local out = { n = 0, names = {} }
+  local out = { n = 0, names = {}, shown = {}, profDel = {}, tab = (cw and cw.tab) or nil }
   if not (wu and wu.rows) then return out end
   for i, row in ipairs(wu.rows) do
     local ok, t = pcall(row.name.GetText, row.name)
     out.n = i
     out.names[i] = (ok and tostring(t or "")) or ""
+    local oks, sv = pcall(row.name.IsShown, row.name)
+    out.shown[i] = (oks and sv) and true or false
+  end
+  for i, pb in ipairs(wu.profBtns or {}) do
+    if pb.del then
+      local okd, dv = pcall(pb.del.IsShown, pb.del)
+      out.profDel[i] = (okd and dv) and true or false
+    end
   end
   return out
 end
