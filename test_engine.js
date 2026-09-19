@@ -1274,8 +1274,10 @@ function checkIconAssets() {
   // ★1.73.59 用户：「状态信息名称和头衔 参考战斗信息做相同的布局」——两个窗口必须**共用同一个建徽标件**
   //   （各写一遍「名字 → [品阶] → 头衔」= 迟早漂移，本项目「同一规则两处实现」的老账）。
   if (noComment.indexOf("local function uiTitleBadgesMake(") < 0) bad.push("找不到公用件 uiTitleBadgesMake（两个窗口的徽标必须同一份实现）");
-  if (noComment.indexOf('tfs:SetPoint("LEFT", titleFs, "RIGHT"') < 0) bad.push("档位徽标没锚在玩家名（标题文字）的右边缘（公用件里）");
-  if (noComment.indexOf('ifs:SetPoint("LEFT", tfs, "RIGHT"') < 0) bad.push("头衔没锚在档位徽标的右边缘（顺序必须是 名字→档位→头衔）");
+  // ★1.73.62 顺序 = 玩家名 → 头衔 → 品阶 → 方案名（用户：「品阶和头衔 位置对调. 描述调整 头衔 品阶.方案名称」）
+  if (noComment.indexOf('ifs:SetPoint("LEFT", titleFs, "RIGHT"') < 0) bad.push("头衔没锚在玩家名（标题文字）的右边缘（公用件里）");
+  if (noComment.indexOf('tfs:SetPoint("LEFT", ifs, "RIGHT"') < 0) bad.push("品阶没锚在头衔的右边缘（顺序必须是 名字→头衔→品阶→方案名）");
+  if (noComment.indexOf('pfs:SetPoint("LEFT", tfs, "RIGHT"') < 0) bad.push("方案名没锚在品阶的右边缘（顺序必须是 名字→头衔→品阶→方案名）");
   if (noComment.indexOf('uiTitleBadgesMake("ui", titleBar') < 0) bad.push("战斗信息UI 没走公用件建徽标");
   if (noComment.indexOf('uiTitleBadgesMake("st", titleBar') < 0) bad.push("状态信息UI 没走公用件建徽标（用户要求与战斗信息同一套布局）");
   if (noComment.indexOf('title:SetPoint("LEFT", titleBar, "LEFT", 6, 0)') < 0) bad.push("状态信息UI 标题没贴左（用户要求参考战斗信息的布局）");

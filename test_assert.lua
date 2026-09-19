@@ -12721,11 +12721,19 @@ do
   eq(v164.tier, wantLow164,
      "①★★★标题栏出现**当前方案的档位**（期望 " .. wantLow164 .. "，实际 " .. tostring(v164.tier) .. "）")
   eq(v164.tierPoint, "LEFT", "①★徽标锚 LEFT（实际 " .. tostring(v164.tierPoint) .. "）")
-  eq(v164.titleFs ~= nil and v164.tierRelTo == v164.titleFs, true,
-     "①★★★徽标锚在**玩家名那条文字的右边缘**（relTo = 标题 FontString，跟着名字走、不用手工量宽）")
+  eq(v164.ptitleFs ~= nil and v164.tierRelTo == v164.ptitleFs, true,
+     "①★★★品阶徽标锚在**头衔**的右边缘（1.73.62 起顺序 = 名字→头衔→品阶→方案名，跟着前一个走、不用手工量宽）")
   eq(v164.tierRelPoint, "RIGHT", "①★★锚的是名字的右边缘（实际 " .. tostring(v164.tierRelPoint) .. "）")
   eq(type(v164.tierX) == "number" and v164.tierX > 0, true,
      "①★名字与徽标之间留了间隙（实际 " .. tostring(v164.tierX) .. "）")
+  -- ★1.73.62 第三格：当前**方案名**（用户：「描述调整 头衔 品阶.方案名称」）
+  eq(v164.planFs ~= nil and type(v164.plan) == "string" and v164.plan ~= "", true,
+     "①b★★★标题栏也显示**当前方案名**（实际「" .. tostring(v164.plan) .. "」）")
+  eq(v164.tierText ~= nil and v164.planRelTo == v164.tierText and v164.planRelPoint == "RIGHT", true,
+     "①b★★★方案名锚在**品阶徽标**的右边缘（顺序 名字→头衔→品阶→方案名）")
+  eq(v164.planColor ~= nil and v164.tierColor ~= nil and near164(v164.planColor[1], v164.tierColor[1])
+     and near164(v164.planColor[3], v164.tierColor[3]), true,
+     "①b★★方案名的颜色 = **该方案的品阶色**（与紧挨着的品阶徽标同源，读真控件）")
   eq(v164.tierColor ~= nil and near164(v164.tierColor[1], rgbLow164.r)
      and near164(v164.tierColor[2], rgbLow164.g) and near164(v164.tierColor[3], rgbLow164.b), true,
      "①★★★文字色 = 该品阶色（读真控件 GetTextColor，与方案列表/案例模版**同一张色表**）")
@@ -12735,6 +12743,7 @@ do
   local v2164 = EVAL_TEST_UI_TITLEBAR()
   eq(v2164.tier, wantHigh164,
      "②★★★切换激活方案 → 下一个心跳徽标换成**新方案的档位**（期望 " .. wantHigh164 .. "，实际 " .. tostring(v2164.tier) .. "）")
+  eq(v2164.plan, "神档", "②★★换激活方案后**方案名也跟着换**（实际「" .. tostring(v2164.plan) .. "」）")
   eq(v2164.tierColor ~= nil and near164(v2164.tierColor[1], rgbHigh164.r)
      and near164(v2164.tierColor[3], rgbHigh164.b), true,
      "②★★颜色也跟着换（神级档 = 深红 r=" .. tostring(rgbHigh164.r) .. " b=" .. tostring(rgbHigh164.b) .. "）")
@@ -12840,7 +12849,7 @@ do
      "①★★文字色 = 头衔自己的色码（经唯一的解析口 EVAL_COLOR_RGB；读真控件 GetTextColor）")
   -- ② 位置：锚在**档位徽标**的右边缘（顺序 名字 → 档位 → 头衔）
   eq(v166.ptitlePoint, "LEFT", "②★头衔锚 LEFT（实际 " .. tostring(v166.ptitlePoint) .. "）")
-  eq(v166.tierText ~= nil and v166.ptitleRelTo == v166.tierText, true,
+  eq(v166.titleFs ~= nil and v166.ptitleRelTo == v166.titleFs, true,
      "②★★★头衔锚在**档位徽标**的右边缘（两者都在玩家名右边、依次排开）")
   eq(v166.ptitleRelPoint, "RIGHT", "②★★锚的是徽标的右边缘（实际 " .. tostring(v166.ptitleRelPoint) .. "）")
   eq(type(v166.ptitleX) == "number" and v166.ptitleX > 0, true, "②★与徽标之间留了间隙（实际 " .. tostring(v166.ptitleX) .. "）")
@@ -12958,9 +12967,19 @@ do
   -- ② 两个徽标都在，且锚点规矩一致：名字 → 档位 → 头衔
   eq(s168.tierFs ~= nil and s168.ptitleFs ~= nil, true, "②★★★状态信息UI 也有**档位徽标 + 头衔**两个控件")
   eq(s168.tierPoint, "LEFT", "②★档位徽标锚 LEFT")
-  eq(s168.titleFs ~= nil and s168.tierRelTo == s168.titleFs, true, "②★★★档位徽标锚在**标题文字**的右边缘")
-  eq(s168.tierRelPoint, "RIGHT", "②★★锚的是名字的右边缘（与战斗信息UI 同规矩）")
-  eq(s168.tierFs ~= nil and s168.ptitleRelTo == s168.tierFs, true, "②★★★头衔锚在**档位徽标**的右边缘（顺序 名字→档位→头衔）")
+  eq(s168.titleFs ~= nil and s168.ptitleRelTo == s168.titleFs, true, "②★★★头衔锚在**标题文字**的右边缘")
+  eq(s168.ptitleRelPoint, "RIGHT", "②★★锚的是名字的右边缘（与战斗信息UI 同规矩）")
+  -- ★1.73.62 第三格：当前方案名（顺序 名字→头衔→品阶→方案名）
+  eq(s168.planFs ~= nil, true, "②b★★★状态信息UI 也有**方案名**那一格")
+  eq(s168.tierFs ~= nil and s168.planRelTo == s168.tierFs and s168.planRelPoint == "RIGHT", true,
+     "②b★★★方案名锚在**品阶**的右边缘（顺序 名字→头衔→品阶→方案名）")
+  eq(s168.plan, u168.plan, "②b★★两窗口的**方案名逐字相同**（同一个读值口）：" .. tostring(s168.plan))
+  local wantPlan168 = EVAL_HELP_CONFIG.war.profiles[EVAL_HELP_CONFIG.war.activeProfile or 1].name
+  eq(s168.plan, wantPlan168, "②b★★显示的就是**当前激活方案**的名字（" .. tostring(wantPlan168) .. "）")
+  eq(s168.planColor ~= nil and s168.tierColor ~= nil and near168(s168.planColor[1], s168.tierColor[1])
+     and near168(s168.planColor[3], s168.tierColor[3]), true,
+     "②b★★方案名的颜色 = 该方案的品阶色（与紧挨着的品阶徽标同源）")
+  eq(s168.ptitleFs ~= nil and s168.tierRelTo == s168.ptitleFs, true, "②★★★品阶锚在**头衔**的右边缘（顺序 名字→头衔→品阶→方案名）")
   eq(s168.ptitleRelPoint, "RIGHT", "②★★锚的是徽标的右边缘")
   -- ③ 内容与战斗信息UI **逐字一致**（共用同一份读值口 ⇒ 两个窗口不可能各说各话）
   eq(s168.tier, u168.tier, "③★★★两窗口的**档位文案逐字相同**（共用同一份读值口）：" .. tostring(s168.tier))
