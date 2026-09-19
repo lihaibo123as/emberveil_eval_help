@@ -11029,7 +11029,8 @@ do
   local seal = tostring(sealSt144.last or "")
   local sealA = tostring(sealSt144.first or "")
   eq(string.len(seal) > 0, true, "①★★★算出了分享信息行（只剩 B 行）")
-  eq(sealA, "", "①★★★A 身份行已按用户要求**删除**（不再发第二条消息）")
+  eq(string.len(sealA) > 0, true, "①★★★A 身份行有内容（用户：身份要有颜色 ⇒ 单独一条、只带身份色）")
+  eq(string.find(sealA, "|HEHPF:", 1, true) == nil, true, "①★★★A 行**不带链接**（一段色码 + 纯文本，与自家 EVAL_HELP 行同款）")
   eq(string.find(seal, "秘籍·", 1, true) ~= nil, true, "①★★B 行含 [品阶秘籍·方案名]")
   eq(string.find(seal, "|HEHPF:", 1, true) ~= nil, true, "①★★★B 行带链接（点它直接导入）")
   -- ★★★1.73.43h 真机定案：**一条消息里多段色码会被客户端整条吞掉** ⇒ 数色码段（行为判据；源码检查数不到变量里的色码）
@@ -11044,6 +11045,7 @@ do
     return c
   end
   eq(segCount144(seal) <= 1, true, "①★★★分享信息行只有 " .. tostring(segCount144(seal)) .. " 段色码（多段会被吞，实测）")
+  eq(segCount144(sealA) <= 1, true, "①★★★A 身份行也只有 " .. tostring(segCount144(sealA)) .. " 段色码（一行一段色码：多段会被吞）")
   eq(string.find(seal, "|T", 1, true) == nil, true, "①★不含 |T（实测不可用）")
   -- ★1.73.43i 身份并进 B 行（链接之后的**纯文本**，不加色码、不加方括号）
   eq(string.find(seal, "  ", 1, true) ~= nil, true, "①★B 行标签后有分隔（身份/评语区）")
@@ -11067,15 +11069,14 @@ do
   eq(string.find(msgB, seal, 1, true) ~= nil, true, "①★★★最后一条 = 分享信息行（走同一条已被证明能画的结构）")
   eq(string.len(msgB) <= 250, true, "①★★★分享信息那条也 ≤250 字节（与分片同规矩；超限真机上整条丢）：" .. tostring(string.len(msgB)))
   eq(string.find(msgB, "|HEHPF:", 1, true) ~= nil, true, "①★★★它带可点链接（点它即可导入）")
-  eq(sealA, "", true, "①★★★A 身份行已删除（用户：「不能用就删除」）")
-  -- ★但读值口只看 `sealSentFirst`，看不出「又偷偷排了第二条」⇒ 直接数**真正发出去的消息**里有没有「X 分享了」（M459 就是这么存活的）
+  -- ★1.73.43o A 身份行恢复（带身份色）⇒ 发出去的消息里**应当**有一条「X 分享了」
   local cntA144 = 0
   for k7 = 1, table.getn(all) do
     local m7 = tostring(all[k7] or "")
     if string.find(m7, " 分享了", 1, true) and string.find(m7, "|HEHPF:", 1, true) == nil then cntA144 = cntA144 + 1 end
   end
-  eq(cntA144, 0, "①★★★发出去的消息里没有第二条「X 分享了」（A 行确实删了），实际 " .. tostring(cntA144))
-  local sid = string.match(tostring(msgB), "|HEHPF:(%x+) ")
+  eq(cntA144, 1, "①★★★身份行真的发了一条（带身份色、不带链接），实际 " .. tostring(cntA144))
+  local sid = string.match(tostring(msgB), "|HEHPF:(%x+) ") -- ★1.73.43o 这一行之前被误删过（sid 恒 nil → 判据假红）
   eq(type(sid) == "string", true, "①读得到传输 id（" .. tostring(sid) .. "）")
   -- ★1.73.43f 只收**真分片**：分享信息那条的序号是 `0/1:`（接收端按越界忽略），别混进分片统计
   local chunks = {}

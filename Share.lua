@@ -193,11 +193,29 @@ local function shBuildFor(text)
   --     （身份放在 `|h|r` **之后**＝「链接后的纯文本」这个位置，[4] 已验证没问题；不再用第二条消息。）
   --   ★序号仍写 0/1：接收端按「i < 1 越界」忽略，对收方案零影响；带 seal 标记（不算分片）。
   --   ★一条消息里**只有一段色码**（判据 + 源码检查 `SHARE MSG SHAPE CHECK` 都盯着这条）。
-  local sealB = nil
+  -- ★★★1.73.43o 用户真机回报：「还是没显示玩家的**品级**」——身份是显示了（纯文本「阿凡提」✓），但**没有颜色** ⇒
+  --   按用户自己定的原则「**多色码一行走不通就单色码一行一行发**」：把身份恢复成**独立一条**（只带它自己的那一段色码）：
+  --     A 身份行 = `|c<身份色><头衔>|r <名字> 分享了`  ← 色码打头、**一段色码**、无链接、无方括号
+  --   ★为什么现在敢恢复：v4 已证明「色码打头 + 一段色码」的形态没问题；而当初 A 行不显示是夹在**限流窗口**里的
+  --     （v3 那轮整体被限流，v4 同形态就正常了）⇒ 现在间隔 1 秒、身份行排在分片之后、信息行之前。
+  local sealA, sealB = nil, nil
   if sealLine and sealLine ~= "" and type(EVAL_SHARE_SEAL_INFO) == "function" then
     local okI, sinfo = pcall(EVAL_SHARE_SEAL_INFO, text)
     if okI and type(sinfo) == "table" then
       local titleTxt = (type(sinfo.titleName) == "string" and sinfo.titleName ~= "") and tostring(sinfo.titleName) or ""
+      local titleCol2 = (type(sinfo.title) == "table" and type(sinfo.title.color) == "string") and sinfo.title.color or nil
+      -- ★A 身份行：一段身份色 + 头衔 + 名字（**无方括号、无链接**；与自家 EVAL_HELP 行同款形态）
+      if titleTxt ~= "" then
+        local who2 = nil
+        if type(UnitName) == "function" then
+          local okN, vN = pcall(UnitName, "player")
+          if okN and type(vN) == "string" and vN ~= "" then who2 = vN end
+        end
+        if who2 then
+          sealA = ((titleCol2 and (titleCol2 .. titleTxt .. "|r ")) or (titleTxt .. " ")) .. who2 .. " 分享了"
+          if string.len(sealA) > SH_MSG_MAX then sealA = nil end -- 长度守卫（同规矩）
+        end
+      end
       if type(sinfo.tierName) == "string" and type(sinfo.plan) == "string" then
         local sym2 = tostring(sinfo.symbol or "")
         local tierCol2 = (type(sinfo.color) == "string" and sinfo.color ~= "") and sinfo.color or "|cff9ad4ff"
@@ -218,10 +236,10 @@ local function shBuildFor(text)
       end
     end
   end
-  -- ★1.73.43i 只剩一条分享信息（B）；A 行按用户「不能用就删除」已去掉
-  SH.sealPendA, SH.sealPendB = nil, sealB
+  -- ★1.73.43o 两条分享信息：A 身份行（带身份色）→ B 品阶行（带品阶色）；依次入队、排在所有分片之后
+  SH.sealPendA, SH.sealPendB = sealA, sealB
   SH.sealSentLast = sealB or sealLine or ""
-  SH.sealSentFirst = ""
+  SH.sealSentFirst = sealA or ""
   SH.sealLast = SH.sealSentLast
   return bodies -- ★★（上一版把这一行连同旧块一起替换掉了 → shBuildFor 返回 nil、分享直接失败；判据当场抓到）
 end
