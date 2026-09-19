@@ -703,6 +703,36 @@ function checkIconAssets() {
   if (bad.length) { console.log('TPL TIER ICON CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
   console.log('TPL TIER ICON CHECK: 模版窗按品阶评分 + 图标 + tooltip 品阶行');
 })();
+// ===== SHARE SEAL ROW CHECK（1.73.42i）：接收弹窗的「品阶栏」必须是真控件 + 真数据 ===== 
+// 背景（用户要求，项 1）：「收到分享的详情弹窗里加一栏：品阶图标 + 符号 + 境界 + 品阶 + 评语」。
+//   这是**UI 接线**（漏接不报错、只是不显示）→ 行为断言之外还要源码检查补位：
+//   ① 弹窗必须走**同一个**读值口（EVAL_SHARE_SEAL_ROW）取数据，图标必须是 UI 纹理
+//      （`|T` 内联标记已实测在本客户端不可用，1.73.42d）；
+//   ② 读值口必须复用同一套品阶判定（评分 → 档位 → 图标/符号），不许另写一份；
+//   ③ **诚实兜底**：发送端信息（境界/评语）拿不到时必须写「未知」——绝不用本机角色的境界或
+//      本机随机抽的评语冒充（那会让用户以为看到的是发送端的数据）。
+(function () {
+  const t = fs.readFileSync(path.join(__dirname, 'Share.lua'), 'utf8');
+  const bad = [];
+  const popStart = t.indexOf('local function shPopupBuild');
+  const popEnd = t.indexOf('function EVAL_SH_POPUP(');
+  const pop = (popStart >= 0 && popEnd > popStart) ? t.slice(popStart, popEnd) : '';
+  if (!pop) bad.push('找不到弹窗构建段（锚点变了？）');
+  if (pop.indexOf('EVAL_SHARE_SEAL_ROW(') < 0) bad.push('弹窗没有调用 EVAL_SHARE_SEAL_ROW（品阶栏数据来源断了）');
+  if (pop.indexOf('shp.sealIcon') < 0) bad.push('弹窗没有品阶图标控件');
+  if (pop.indexOf('CreateTexture') < 0) bad.push('品阶图标不是 UI 纹理（|T 内联标记本客户端不可用）');
+  const rfStart = t.indexOf('function EVAL_SHARE_SEAL_ROW(');
+  const rfEnd = t.indexOf('\nfunction ', rfStart + 10);
+  const rf = (rfStart >= 0 && rfEnd > rfStart) ? t.slice(rfStart, rfEnd) : '';
+  if (!rf) bad.push('找不到 EVAL_SHARE_SEAL_ROW 实现');
+  ['EVAL_SHARE_SEAL_SCORE(', 'EVAL_SHARE_SEAL_TIER(', 'EVAL_SHARE_SEAL_ICON(', 'EVAL_SHARE_SEAL_SYMBOL('].forEach(function (k) {
+    if (rf && rf.indexOf(k) < 0) bad.push('品阶栏读值口没有复用 ' + k);
+  });
+  if (rf && rf.indexOf('未知') < 0) bad.push('品阶栏没有「未知」兜底（拿不到封皮行时会编数据）');
+  if (t.indexOf('SH.sealMeta[sid]') < 0) bad.push('封皮行没有解析出发送端信息（SH.sealMeta）');
+  if (bad.length) { console.log('SHARE SEAL ROW CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
+  console.log('SHARE SEAL ROW CHECK: 弹窗品阶栏 = 真纹理图标 + 同源品阶判定 + 未知兜底 + 封皮元数据');
+})();
 // ===== TEMPLATE COUNT CHECK（1.73.40）：文档里那句「案例模版 N 条」必须等于 examples/ 里的**真实条数** =====
 // 背景（用户「将当前方案添加到案例模版」）：模版数据在 examples/*.lua，而「一共有多少条」这句话**散在 4 个地方**
 //   （.toc 的 Notes + 三语言 README 各若干处）→ 加/删一条模版只改数据不改文档，玩家看到的数量就是**骗人的**，

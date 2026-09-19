@@ -11028,6 +11028,166 @@ do
   print("  封皮行：传家宝 + 品阶秘籍 + 可点链接 · 立即发 · 收齐缓存 · 点击直接导入 · 未命中如实提示")
 end
 
+-- 145) ★★★1.73.42i 收到分享的详情弹窗「品阶栏」：图标 + 符号 + 品阶/评分 + 发送端境界 + 评语
+--   用户要求（项 1）：详情弹窗里加一栏，显示品阶图标（真 UI 纹理）、符号、境界、品阶、评语。
+--   ★诚实边界：品阶/评分/图标/符号由**收到的文本**复算（品阶本来就是方案的函数）；
+--     境界与评语**只有发送端知道**（随封皮行带来）→ 拿不到就如实写「未知」，
+--     绝不用本机角色的境界或本机随机抽的评语冒充发送端的。
+do
+  local Q145 = string.char(34) -- ★不在源码里手写引号（本项目踩过：手写转义极易写坏且 luacheck 未必拦得住）
+  local function txt145(n)
+    local s = "# 方案: 甲"
+    for i = 1, n do s = s .. "\n- 技能" .. i end
+    return s
+  end
+  -- ① 读值口（渲染与断言同源）
+  local r5 = EVAL_SHARE_SEAL_ROW(txt145(14), { rank = "炼气", comment = "天书原文，凡人勿近。" })
+  eq(type(r5) == "table", true, "①★★品阶栏读值口算得出来")
+  if r5 then
+    eq(r5.tier, 5, "①★14 分 = 第 5 档（源代码）")
+    eq(r5.icon, EVAL_SHARE_SEAL_ICON(5), "①★★★图标 = 该品阶的图标（同一来源，不另写一份）")
+    eq(string.find(r5.head, "✸[源代码秘籍·甲]", 1, true) ~= nil, true, "①★★头一行 = 符号 + [品阶秘籍·名]")
+    eq(string.find(r5.meta, "品阶：源代码（评分 14）", 1, true) ~= nil, true, "①★★含品阶与评分")
+    eq(string.find(r5.meta, "境界：炼气", 1, true) ~= nil, true, "①★★含发送端境界")
+    eq(string.find(r5.commentLine, "天书原文，凡人勿近。", 1, true) ~= nil, true, "①★★含发送端评语")
+  end
+  local reps145 = { 1, 4, 7, 10, 13 }
+  for i = 1, 5 do
+    local ri = EVAL_SHARE_SEAL_ROW(txt145(reps145[i]), nil)
+    eq(ri ~= nil and ri.tier == i, true, "①★档位与分数对应 " .. i)
+    eq(ri ~= nil and ri.icon == EVAL_SHARE_SEAL_ICON(i), true, "①★图标跟着档位 " .. i)
+  end
+  -- ② 拿不到发送端信息 → 如实「未知」，一个字都不编
+  local rHon = EVAL_SHARE_SEAL_ROW(txt145(14), nil)
+  eq(string.find(rHon.meta, "境界：未知", 1, true) ~= nil, true, "②★★★没有封皮行 → 境界如实写未知（不冒充）")
+  eq(string.find(rHon.commentLine, "未知", 1, true) ~= nil, true, "②★★评语同样如实写未知")
+  eq(string.find(rHon.commentLine, "天书", 1, true) == nil, true, "②★★★未知时不许出现任何真实评语（一个字都不编）")
+  do -- 解析不出方案 → 给 nil（不硬塞一个品阶）
+    local keepParse = EVAL_PROFILE_FROM_TEXT
+    EVAL_PROFILE_FROM_TEXT = function() return nil end
+    eq(EVAL_SHARE_SEAL_ROW("# 方案: 甲", nil) == nil, true, "②★★解析器给不出方案 → 读值口给 nil")
+    EVAL_PROFILE_FROM_TEXT = keepParse
+  end
+  -- 从 RunScript 里取回消息正文：用 string.char(34) 找引号，不写转义引号的模式
+  local function body145(sc)
+    local p1 = string.find(sc, "SendChatMessage(", 1, true)
+    if not p1 then return nil end
+    local q1 = string.find(sc, Q145, p1, true)
+    if not q1 then return nil end
+    local q2 = string.find(sc, Q145, q1 + 1, true)
+    if not q2 then return nil end
+    return string.sub(sc, q1 + 1, q2 - 1)
+  end
+  local function collect145()
+    local out = {}
+    for _, sc in ipairs(TEST.runScripts or {}) do
+      local m = body145(sc)
+      if m then table.insert(out, m) end
+    end
+    return out
+  end
+  -- ③ 走真实分享链路：发（分片 + 封皮）→ 按**真实顺序**收 → 弹窗读真控件
+  EVAL_SHARE_RESET()
+  -- ★★★先把**上一组遗留**的发送队列滴干再动（M-实测教训：滴自己的队列时会把别人的分片一起灌进
+  --   TEST.runScripts，收集器一混就把探针的 PROBE-xxxx 当成「刚收到的分享」→ 弹窗显示的其实是别人那一笔）。
+  local g0 = 0
+  while EVAL_SHARE_TEST_QUEUE_LEN() > 0 and g0 < 500 do
+    g0 = g0 + 1
+    TEST.time = (TEST.time or 1000) + 1
+    EVAL_SHARE_TEST_TICK()
+  end
+  eq(EVAL_SHARE_TEST_QUEUE_LEN(), 0, "③前置：发送队列已清空（本笔之外没有残留，" .. tostring(g0) .. " 次 tick）")
+  TEST.chat = nil TEST.runScripts = nil
+  local keepInGuild145 = TEST.inGuild
+  TEST.inGuild = true
+  local keepToText145 = EVAL_PROFILE_TO_TEXT
+  EVAL_PROFILE_TO_TEXT = function() return txt145(14) end -- ★只换**数据来源**，发送路径一行不改
+  eq(EVAL_SHARE_SEND("GUILD"), true, "③前置：分享发出")
+  EVAL_PROFILE_TO_TEXT = keepToText145
+  local sid145, seal145 = nil, nil
+  for _, m in ipairs(collect145()) do
+    if string.find(m, "分享了一份传家宝", 1, true) then seal145 = m end
+  end
+  eq(type(seal145) == "string", true, "③★★封皮行发出来了")
+  sid145 = string.match(tostring(seal145), "|HEHPF:(%x+)|h")
+  eq(type(sid145) == "string", true, "③★传输 id 读得到")
+  local guard145 = 0
+  while EVAL_TEST_SHARE_QUEUE_ID_COUNT(sid145) > 0 and guard145 < 300 do
+    guard145 = guard145 + 1
+    TEST.time = (TEST.time or 1000) + 1
+    EVAL_SHARE_TEST_TICK()
+  end
+  -- ★只收**本笔传输 id** 的消息（分片与封皮都带 |HEHPF:<id>）——队列/遗留再混也不受影响
+  local msgs145 = {}
+  for _, m in ipairs(collect145()) do
+    if string.find(m, "|HEHPF:" .. tostring(sid145), 1, true) then table.insert(msgs145, m) end
+  end
+  eq(table.getn(msgs145) >= 3, true, "③★14 分的方案 = 多片 + 封皮（" .. tostring(table.getn(msgs145)) .. " 条）")
+  eq(msgs145[table.getn(msgs145)] == seal145, false, "③★★封皮在**最后一片之前**（发送侧真实顺序：第 1 片 → 封皮 → 其余）")
+  for _, m in ipairs(msgs145) do EVAL_SHARE_ONMSG(m, "队友甲") end
+  eq(EVAL_SHARE_PENDING() ~= nil, true, "③前置：收齐后弹窗（数据在）")
+  local view145 = EVAL_TEST_SHARE_SEAL_ROW()
+  eq(view145.shown, true, "③★★★品阶栏真的显示了（读真图标 IsShown）")
+  local wantIcon145 = EVAL_SHARE_SEAL_ICON(select(1, EVAL_SHARE_SEAL_TIER(EVAL_SHARE_SEAL_SCORE(txt145(14)))))
+  eq(view145.icon, wantIcon145, "③★★★图标纹理 = 该品阶的图标（读真控件 GetTexture，不读常量）")
+  eq(string.find(tostring(view145.head), "[源代码秘籍·甲]", 1, true) ~= nil, true, "③★★头一行带品阶与方案名")
+  local meta145 = (((EVAL_SHARE_SEAL_STATE() or {}).meta) or {})[tostring(sid145)]
+  eq(type(meta145) == "table", true, "③★★封皮行解析出发送端信息（meta 里有这一笔）")
+  if type(meta145) == "table" then
+    eq(string.find(tostring(view145.meta), "境界：" .. tostring(meta145.rank or "?"), 1, true) ~= nil, true,
+       "③★★★弹窗里的境界 = 封皮行里**发送端**的境界（" .. tostring(meta145.rank) .. "）")
+    eq(string.find(tostring(view145.comment), tostring(meta145.comment or "?"), 1, true) ~= nil, true,
+       "③★★★弹窗里的评语 = 发送端那条评语")
+    eq(string.find(tostring(view145.comment), "未知", 1, true) == nil, true, "③★有封皮时不再显示未知")
+  end
+  -- ④ 几何：品阶栏让开详情行，详情行让开按钮（空间是**加**出来的，不是挤出来的）
+  -- ★坐标以**顶部为 0**：-50 在 -96 **上面**（值越大越靠上）——第一版把不等号写反了，当场被这条判据抓住
+  eq(view145.sealY > view145.detailY1, true, "④★★品阶栏在详情**上面**（" .. tostring(view145.sealY) .. " > " .. tostring(view145.detailY1) .. "）")
+  eq(view145.sealY - view145.sealH > view145.detailY1, true,
+     "④★★★品阶栏底不压详情首行（" .. tostring(view145.sealY - view145.sealH) .. " > " .. tostring(view145.detailY1) .. "）")
+  eq(view145.detailYN - 12 > view145.btnTop, true,
+     "④★★★详情末行底不压按钮行顶（" .. tostring(view145.detailYN - 12) .. " > " .. tostring(view145.btnTop) .. "）")
+  eq(view145.H >= 216, true, "④★窗口加高到 216（空间是加出来的，不是挤出来的）")
+  eq(view145.W, 380, true, "④★宽度不变 380")
+  -- ⑤ 单片方案的真实情形：分片先到（弹窗已出）→ 封皮**晚到** → 当场补刷
+  EVAL_SHARE_RESET()
+  TEST.runScripts = nil
+  local keepToText5 = EVAL_PROFILE_TO_TEXT
+  EVAL_PROFILE_TO_TEXT = function() return "# 方案: 短片\n\n- 技能甲" end
+  EVAL_SHARE_SEND("GUILD")
+  EVAL_PROFILE_TO_TEXT = keepToText5
+  local one5, seal5 = nil, nil
+  for _, m in ipairs(collect145()) do
+    if string.find(m, "分享了一份传家宝", 1, true) then seal5 = m
+    else one5 = m end
+  end
+  eq(type(one5) == "string" and type(seal5) == "string", true, "⑤前置：单片分享 = 1 片 + 1 封皮")
+  EVAL_SHARE_ONMSG(one5, "队友乙")
+  local vA = EVAL_TEST_SHARE_SEAL_ROW()
+  eq(string.find(tostring(vA.meta), "境界：未知", 1, true) ~= nil, true, "⑤★★封皮没到 → 如实显示未知")
+  EVAL_SHARE_ONMSG(seal5, "队友乙")
+  local vB = EVAL_TEST_SHARE_SEAL_ROW()
+  eq(string.find(tostring(vB.meta), "境界：未知", 1, true) == nil, true, "⑤★★★封皮晚到 → **当场补刷**（不再是未知）")
+  local sid5 = string.match(tostring(seal5), "|HEHPF:(%x+)|h")
+  local meta5 = (((EVAL_SHARE_SEAL_STATE() or {}).meta) or {})[tostring(sid5)]
+  eq(type(meta5) == "table" and string.find(tostring(vB.meta), tostring(meta5.rank or "?"), 1, true) ~= nil, true,
+     "⑤★★补刷的是发送端的真实境界")
+  -- ⑥ 解析不出方案 → 整栏**如实隐藏**（并且清空文本，不留残影）
+  local keepParse6 = EVAL_PROFILE_FROM_TEXT
+  EVAL_PROFILE_FROM_TEXT = function() return nil end
+  EVAL_SH_POPUP("测试", "# 方案: 甲", nil)
+  local v6 = EVAL_TEST_SHARE_SEAL_ROW()
+  eq(v6.shown, false, "⑥★★★解析不出方案 → 品阶栏如实隐藏（不编造一个品阶）")
+  eq(tostring(v6.head or "") == "" and tostring(v6.meta or "") == "", true, "⑥★★隐藏时文本也清空（Hide 过的控件仍可能被绘出）")
+  EVAL_PROFILE_FROM_TEXT = keepParse6
+  EVAL_SH_POPUP("测试", txt145(13), nil)
+  eq(EVAL_TEST_SHARE_SEAL_ROW().shown, true, "⑥收尾：恢复后品阶栏又能显示（不是一次性坏掉）")
+  TEST.inGuild = keepInGuild145
+  TEST.chat = nil TEST.runScripts = nil
+  EVAL_SHARE_RESET()
+  print("  详情弹窗品阶栏：真纹理图标 + 符号 + 品阶/评分 + 发送端境界 + 评语 · 拿不到就写未知 · 让开详情与按钮")
+end
+
 print("ALL TESTS PASS")
 
   local sd142 = EVAL_HELP_CONFIG.shareSealDemo

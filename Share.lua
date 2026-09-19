@@ -112,6 +112,7 @@ local shTxFrame
 -- ★前置声明（本项目铁律：引用点在声明之前会解析成全局 nil）——
 --   实现在 shNowT 之后，那里才拿得到计时函数。
 local shTxEnqueue, shTxStep
+local shSealRowApply -- ★1.73.42i 品阶栏刷新（前向声明：它在弹窗段才实现，但封皮晚到时也要能刷）
 -- ★1.73.35 分片构造**单一来源**（频道分享与「密语给某玩家」共用，避免两份实现漂移）
 -- ★★★1.73.42h 方案名（分片标签与封皮行共用）：必须声明在 shBodies 之前
 local function shSealName(text)
@@ -491,7 +492,31 @@ local function shOnMsg(msg, sender, ev)
   if not idh then
     -- ★★★1.73.42g 封皮行：不带 hex，只带传输 id —— 记下「这一笔真的发完了」
     local sid = string.match(msg, "|HEHPF:(%x+)|h")
-    if sid then shSealNote(sender, sid) end
+    if sid then
+      -- ★★★1.73.42i 顺手把「只有发送端知道」的两样东西记下来，供接收弹窗的品阶栏用：
+      --   ① 境界 = 封皮行开头的 [境界]；② 评语 = 链接显示段 `|h[品阶秘籍·名]|h` 里方括号之后那段。
+      --   ★解析不出来就**不记** → 弹窗如实写「未知」，绝不拿本机角色/本机随机评语冒充发送端的。
+      local rank = string.match(msg, "^%[([^%]]*)%]")
+      local disp = string.match(msg, "|HEHPF:[^|]*|h(.-)|h")
+      local comment = nil
+      if disp then
+        local rb = string.find(disp, "%]")
+        if rb then comment = string.sub(disp, rb + 1) end
+        if comment then
+          comment = string.gsub(comment, "|r", "")
+          comment = string.gsub(comment, "^%s+", "")
+          comment = string.gsub(comment, "%s+$", "")
+          if comment == "" then comment = nil end
+        end
+      end
+      SH.sealMeta = SH.sealMeta or {}
+      SH.sealMeta[sid] = { rank = rank, comment = comment }
+      shSealNote(sender, sid)
+      -- ★封皮**晚到**（单片分享：分片先弹出、封皮紧随其后）→ 当场补刷品阶栏（同一份实现）
+      if type(shSealRowApply) == "function" and SH.pending and tostring(SH.pending.idh or "") == tostring(sid) then
+        pcall(shSealRowApply)
+      end
+    end
     return
   end
   if not shCfg().recv then return end
@@ -537,7 +562,7 @@ local function shOnMsg(msg, sender, ev)
     end
     -- R1：只保留最新一份 —— 弹窗内容换成最新的，并如实说明替换了谁
     local old = SH.pending
-    EVAL_SH_POPUP(sender, text, b.ev)
+    EVAL_SH_POPUP(sender, text, b.ev, idh) -- ★1.73.42i 带上传输 id（品阶栏要用它取发送端的境界/评语）
     if old then shWarn(string.format(L("SH_POP_REPLACED"), tostring(sender), tostring(old.sender))) end
   end
 end
@@ -725,6 +750,32 @@ function EVAL_SHARE_SEAL_COMMENT(tierIdx, forced)
   local i = tonumber(forced) or math.random(1, n)
   if i < 1 or i > n then i = 1 end
   return list[i], i
+end
+-- ★★★1.73.42i 详情弹窗「品阶栏」的**单一读值口**（渲染与断言同源，纯函数）。
+--   ★分成两半，各自的诚实边界写死在返回值里（meta 为 nil 时就是「未知」三个字的来源）：
+--     ① 品阶/评分/图标/符号/方案名：由**收到的方案文本**复算 —— 品阶本来就是方案的函数，接收端能独立算出来；
+--     ② 境界/评语：只有发送端知道（封皮行解析来的 meta）→ 拿不到就如实写「未知（未收到封皮行）」。
+--   ★返回 nil 的唯一情形：文本解析不出方案（那就别画品阶栏，而不是随便给一档）。
+function EVAL_SHARE_SEAL_ROW(text, meta)
+  local score = EVAL_SHARE_SEAL_SCORE(text)
+  if score == nil then return nil end
+  local idx, tier = EVAL_SHARE_SEAL_TIER(score)
+  local icon = EVAL_SHARE_SEAL_ICON(idx)
+  local sym = EVAL_SHARE_SEAL_SYMBOL(idx)
+  local plan = shSealName(text or "")
+  local rank = (type(meta) == "table") and meta.rank or nil
+  local comment = (type(meta) == "table") and meta.comment or nil
+  local rankTxt = "未知（未收到封皮行）"
+  if type(rank) == "string" and rank ~= "" then rankTxt = rank end
+  local cmtTxt = "未知（未收到封皮行）"
+  if type(comment) == "string" and comment ~= "" then cmtTxt = comment end
+  return {
+    tier = idx, tierName = tier.name, color = tier.color, symbol = sym, score = score,
+    icon = icon, plan = plan, rank = rank, comment = comment,
+    head = tier.color .. sym .. "[" .. tier.name .. "秘籍·" .. plan .. "]|r",
+    meta = "品阶：" .. tier.name .. "（评分 " .. tostring(score) .. "）· 境界：" .. rankTxt,
+    commentLine = "评语：" .. cmtTxt,
+  }
 end
 -- 读值口：把一行显示内容算出来（测试与 /eh go 秘籍 预览共用；forcedIdx 只给测试用）
 function EVAL_SHARE_SEAL_INFO(text, level, forcedIdx)
@@ -1081,6 +1132,15 @@ local shp = {}
 -- ★1.71.2 弹窗最多显示几行方案详情（超出折叠为「…还有 N 行」）。
 --   为什么要有上限：方案最多 12 技能 × 每行可能很长的条件串，弹窗不能无限增高。
 local SH_DETAIL_MAX = 6
+-- ★★★1.73.42i 详情弹窗新增「品阶栏」（用户要求：收到分享的弹窗里要有 品阶图标 + 符号 + 境界 + 品阶 + 评语）
+--   布局算术（顶部为 0）：标题 -10 · 摘要行 -34 · **品阶栏 -50**（16px 图标 + 品阶头一行 + 品阶/评分与境界一行 + 评语一行，到 -90）
+--     · 详情首行 -96（6 行 × 12 → 末行 -156、底约 -166）· 分隔线 底部+42 · 按钮行 底部 12~34（顶边 -182）
+--   ⇒ 末行底与按钮顶之间还有约 16px 余量。★竖着放不下**唯一**的出路是加高窗口（200 → 216），
+--     绝不许把详情行压到按钮上（那是「看不见的坏」：按钮被盖住/点不到，用户只会说「点不了」）。
+local SH_SEAL_ROW_Y = -50   -- 品阶栏顶部（品阶图标顶边）
+local SH_SEAL_ROW_H = 16    -- 品阶图标边长
+local SH_SEAL_TXT_X = 38    -- 品阶栏文字左起点（16 边距 + 16 图标 + 6 缝）
+local SH_DETAIL_Y1 = -96    -- 详情首行（必须让开品阶栏）
 -- ★1.71.3 弹窗图标（自包含：这批 .tga 已从 UnrealQuest 拷进本插件 media\icons\）与标题栏高度
 local SH_POP_ICON = "Interface\\AddOns\\EvalHelp\\media\\icons\\trainers-icon"
 local SH_TITLE_H = 18
@@ -1090,7 +1150,7 @@ local function shPopupBuild()
   -- ★1.71.2 高度 130 → 200：要容纳「标题 + 6 行方案详情 + 按钮行」。
   --   算一遍：标题在 -10、详情首行 -52、6 行 × 12 = 至 -124、按钮行占底部 34 → 需要约 170，
   --   留余量取 200（长条件串还会占更宽，但不增高）。
-  local W, H = 380, 200
+  local W, H = 380, 216 -- ★1.73.42i 200 → 216：品阶栏占 44px（-50 ~ -90），详情行与按钮都不许被压
   local root = CreateFrame("Frame", "EVAL_SHARE_POPUP", UIParent)
   root:SetWidth(W) root:SetHeight(H)
   root:SetPoint("CENTER", UIParent, "CENTER", 0, 190)
@@ -1160,7 +1220,7 @@ local function shPopupBuild()
   shp.detailLines = {}
   for i = 1, SH_DETAIL_MAX do
     local fs = shText(root, 9, 0.80, 0.78, 0.70)
-    fs:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -52 - (i - 1) * 12)
+    fs:SetPoint("TOPLEFT", root, "TOPLEFT", 16, SH_DETAIL_Y1 - (i - 1) * 12) -- ★1.73.42i 顶端让给品阶栏
     pcall(fs.SetWidth, fs, W - 32)
     pcall(fs.SetJustifyH, fs, "LEFT")
     pcall(fs.SetNonSpaceWrap, fs, false)
@@ -1169,6 +1229,37 @@ local function shPopupBuild()
     --   （误抄 EvalHelp.lua 的 page.widgets 写法会直接报 nil —— 本轮已避免。）
     shp.detailLines[i] = fs
   end
+  -- ★★★1.73.42i 品阶栏：品阶**图标**（真 UI 纹理）+ 符号 + [品阶秘籍·名] + 品阶/评分 + 境界 + 评语。
+  --   ★图标必须用真纹理：聊天行里的 `|T` 内联标记已**实测不可用**（1.73.42d 探针），UI 纹理 100% 可行。
+  --   ★境界与评语**只有发送端知道**（随封皮行带来）→ 封皮还没到就如实写「未知」，
+  --     绝不拿本机角色的境界/本机随机评语冒充发送端的（那是在骗用户）。
+  local sealIcon = root:CreateTexture(nil, "ARTWORK")
+  sealIcon:SetWidth(SH_SEAL_ROW_H) sealIcon:SetHeight(SH_SEAL_ROW_H)
+  sealIcon:SetPoint("TOPLEFT", root, "TOPLEFT", 16, SH_SEAL_ROW_Y)
+  pcall(sealIcon.SetTexture, sealIcon, EVAL_SHARE_SEAL_ICON(1)) -- 先给占位纹理（真值由 shSealRowApply 写）
+  sealIcon:Hide()
+  shp.sealIcon = sealIcon
+  local sealHead = shText(root, 10, 0.95, 0.88, 0.72)
+  sealHead:SetPoint("LEFT", sealIcon, "RIGHT", 6, 0)
+  pcall(sealHead.SetNonSpaceWrap, sealHead, false)
+  local sealMeta = shText(root, 9, 0.80, 0.78, 0.70)
+  sealMeta:SetPoint("TOPLEFT", root, "TOPLEFT", SH_SEAL_TXT_X, SH_SEAL_ROW_Y - 18)
+  pcall(sealMeta.SetWidth, sealMeta, W - SH_SEAL_TXT_X - 10)
+  pcall(sealMeta.SetJustifyH, sealMeta, "LEFT")
+  pcall(sealMeta.SetNonSpaceWrap, sealMeta, false)
+  local sealComment = shText(root, 9, 0.72, 0.70, 0.62)
+  sealComment:SetPoint("TOPLEFT", root, "TOPLEFT", SH_SEAL_TXT_X, SH_SEAL_ROW_Y - 30)
+  pcall(sealComment.SetWidth, sealComment, W - SH_SEAL_TXT_X - 10)
+  pcall(sealComment.SetJustifyH, sealComment, "LEFT")
+  pcall(sealComment.SetNonSpaceWrap, sealComment, false)
+  sealHead:Hide() sealMeta:Hide() sealComment:Hide()
+  shp.sealHead, shp.sealMeta, shp.sealComment = sealHead, sealMeta, sealComment
+  -- 几何真值（断言读它，不写死坐标）
+  shp.sealY, shp.sealH = SH_SEAL_ROW_Y, SH_SEAL_ROW_H
+  shp.detailY1 = SH_DETAIL_Y1
+  shp.detailYN = SH_DETAIL_Y1 - (SH_DETAIL_MAX - 1) * 12
+  shp.H = H
+  shp.btnTop = -(H - 34) -- 按钮行顶边（顶部为 0 的坐标）
   -- ★1.73.14 用户要求：「接收方案开关在分享方案位置也添加一个方便快速关闭，然后三个位置居中对齐」
   --   【为什么加在弹窗里】收到别人分享时如果不想收，原来要：关弹窗 → 开配置窗 → 找到「接收方案」勾 → 取消（三步）；
   --     这里多一个常驻勾选框，**当场就能关掉**。
@@ -1290,7 +1381,38 @@ local function shPopupBuild()
   shp.root = root
 end
 
-function EVAL_SH_POPUP(sender, text, ev)
+-- ★★★1.73.42i 品阶栏刷新（**唯一实现**）：弹窗弹出时调一次；封皮行**晚到**（单片方案）时再调一次。
+--   两处走同一个函数 → 不会出现「弹窗里一套、晚到补写另一套」的漂移。
+--   ★数据来源分两半，各自的诚实边界都写在这里：
+--     ① 品阶/评分/图标/符号：由**收到的方案文本**复算（品阶本来就是方案的函数，接收端能独立算出来）；
+--     ② 境界/评语：**只有发送端知道** —— 从封皮行解析（SH.sealMeta）；解析不到就写「未知（未收到封皮行）」，
+--        **绝不**拿本机角色的境界或本机随机抽的评语顶上（那就是在编数据骗用户）。
+shSealRowApply = function()
+  if not (shp.sealIcon and shp.sealHead and shp.sealMeta and shp.sealComment) then return nil end
+  local p = SH.pending
+  local text = p and p.text
+  local meta = nil
+  if p and p.idh then meta = (SH.sealMeta or {})[tostring(p.idh)] end
+  local row = (type(text) == "string") and EVAL_SHARE_SEAL_ROW(text, meta) or nil
+  shp.sealRow = row
+  if row then
+    pcall(shp.sealIcon.SetTexture, shp.sealIcon, row.icon)
+    pcall(shp.sealHead.SetText, shp.sealHead, row.head)
+    pcall(shp.sealMeta.SetText, shp.sealMeta, row.meta)
+    pcall(shp.sealComment.SetText, shp.sealComment, row.commentLine)
+    shp.sealIcon:Show() shp.sealHead:Show() shp.sealMeta:Show() shp.sealComment:Show()
+  else
+    -- 文本解析不出方案（不是合法方案文本）→ **整栏如实隐藏**，不编造一个品阶出来
+    -- ★先清空文本再 Hide：本客户端 Hide 过的控件仍可能被绘出（1.71.3 那轮「残留」的教训，
+    --   详情行那边也是这么写的）→ 只 Hide 不清空 = 上一笔的品阶还挂在屏幕上（那是**假信息**）。
+    pcall(shp.sealHead.SetText, shp.sealHead, "")
+    pcall(shp.sealMeta.SetText, shp.sealMeta, "")
+    pcall(shp.sealComment.SetText, shp.sealComment, "")
+    shp.sealIcon:Hide() shp.sealHead:Hide() shp.sealMeta:Hide() shp.sealComment:Hide()
+  end
+  return row
+end
+function EVAL_SH_POPUP(sender, text, ev, idh)
   shPopupBuild()
   -- ★1.73.14 每次弹出都刷新「接收方案」勾选态：开关可能在配置窗里被改过（**两个入口一份真值**，
   --   不刷新就会出现「配置窗显示关、弹窗里还亮着」的自相矛盾）
@@ -1302,7 +1424,8 @@ function EVAL_SH_POPUP(sender, text, ev)
     if prof then name = tostring(prof.name) count = table.getn(prof.skills or {}) end
   end
   local chanLab = EVAL_SHARE_CHAN_LABEL(ev)
-  SH.pending = { sender = sender, text = text, name = name, count = count, chan = chanLab, ev = ev }
+  -- ★1.73.42i 记下**本次传输 id**：封皮行若晚到（单片方案：分片先到、封皮紧随），要靠它把品阶栏从「未知」补成真实值。
+  SH.pending = { sender = sender, text = text, name = name, count = count, chan = chanLab, ev = ev, idh = idh }
   local showFrom = chanLab and ("[" .. chanLab .. "] " .. tostring(sender)) or tostring(sender)
   shp.body:SetText(string.format(L("SH_POP_GOT"), showFrom, name, count))
   -- ★1.71.2 详情：把导入文本按行显示，让用户在**点导入之前**就能看清内容。
@@ -1334,6 +1457,8 @@ function EVAL_SH_POPUP(sender, text, ev)
       shp.detailLines[SH_DETAIL_MAX]:Show()
     end
   end
+  -- ★1.73.42i 品阶栏（渲染与断言同源的那个纯函数说了算）
+  if type(shSealRowApply) == "function" then shSealRowApply() end
   shp.root:Show()
 end
 
@@ -1444,6 +1569,34 @@ function EVAL_TEST_SHARE_TITLE_ICON()
   local ok, t = pcall(shp.titleIcon.GetTexture, shp.titleIcon)
   return ok and t or nil
 end
+-- ★★★1.73.42i 品阶栏读值口：图标的**实际纹理** + 三行的**实际文本** + 几何真值。
+--   ★断言必须读**真控件**（GetTexture/GetText）——只读自己算出来的那个 row 表等于在测自己。
+function EVAL_TEST_SHARE_SEAL_ROW()
+  local out = { icon = nil, head = nil, meta = nil, comment = nil, shown = false,
+                tier = nil, rank = nil, score = nil,
+                sealY = shp.sealY, sealH = shp.sealH, detailY1 = shp.detailY1,
+                detailYN = shp.detailYN, btnTop = shp.btnTop, H = shp.H, W = nil }
+  if shp.root then
+    local okw, wv = pcall(shp.root.GetWidth, shp.root)
+    if okw and type(wv) == "number" then out.W = wv end
+  end
+  if shp.sealIcon then
+    local okt, tv = pcall(shp.sealIcon.GetTexture, shp.sealIcon)
+    out.icon = (okt and type(tv) == "string") and tv or nil
+    local oks, sv = pcall(shp.sealIcon.IsShown, shp.sealIcon)
+    out.shown = (oks and sv) and true or false
+  end
+  local function rd(fs)
+    if not fs then return nil end
+    local okt, tv = pcall(fs.GetText, fs)
+    if okt and type(tv) == "string" then return tv end
+    return nil
+  end
+  out.head, out.meta, out.comment = rd(shp.sealHead), rd(shp.sealMeta), rd(shp.sealComment)
+  local r = shp.sealRow
+  if type(r) == "table" then out.tier, out.rank, out.score = r.tier, r.rank, r.score end
+  return out
+end
 -- ★★1.73.42g 点击封皮链接 → 直接导入（SetItemRef 的 EHPF: 分支调它）
 function EVAL_SHARE_CLICK_IMPORT(link)
   local id = string.match(tostring(link or ""), "^EHPF:(%x+)")
@@ -1463,7 +1616,7 @@ function EVAL_SHARE_CLICK_IMPORT(link)
   return ok and true or false
 end
 function EVAL_SHARE_SEAL_STATE()
-  return { last = SH.sealLast, pending = SH.sealPending, seals = SH.sealSeen or 0 }
+  return { last = SH.sealLast, pending = SH.sealPending, seals = SH.sealSeen or 0, meta = SH.sealMeta or {} } -- ★1.73.42i meta 供判据读（境界/评语真的解析到了没）
 end
 function EVAL_SHARE_RECENT_STATE()
   return { list = SH.recentList or {}, recent = SH.recent or {}, seals = SH.sealSeen or 0, lastSeal = SH.sealLast }
@@ -1479,7 +1632,7 @@ function EVAL_TEST_SHARE_QUEUE_CHUNKS()
   return c
 end
 function EVAL_SHARE_PENDING() return SH.pending end
-function EVAL_SHARE_RESET() SH.buf = {} SH.done = {} SH.doneList = {} SH.pending = nil SH.recent = {} SH.recentList = {} end
+function EVAL_SHARE_RESET() SH.buf = {} SH.done = {} SH.doneList = {} SH.pending = nil SH.recent = {} SH.recentList = {} SH.sealMeta = {} end -- ★1.73.42i 封皮元数据也清（跨用例不许残留）
 -- ★1.71.2 测试钩子：按分享弹窗的 [导入] 按钮（走它自己的 OnClick 闭包）。
 --   用户报的 bug 正是这条路径漏了刷新——直调 EVAL_IMPORT_TEXT 会绕过它、测不出来。
 function EVAL_TEST_SHARE_SELF_SKIPPED() return SH.selfSkipped or 0 end
