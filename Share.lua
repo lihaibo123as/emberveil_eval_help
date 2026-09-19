@@ -443,16 +443,19 @@ function EVAL_SHARE_SEAL_VARIANT_PROBE()
   local sNoTier  = TITLE_COL .. "[" .. title .. "]|r" .. who .. " 分享了 → " .. sym .. link .. tailTxt
   local sNoCol   = "[" .. title .. "]" .. who .. " 分享了 → " .. sym .. link .. tailTxt
   local sNoLink  = head .. "[" .. plan .. "]|r " .. cmt
+  -- ★★★1.73.43g 用户提问：「是因为同一段话不能加 2 个有颜色的连接吗?」⇒ 本轮把这点做成**A/B 对照**：
+  --   [1] 一段色码 + 链接（= 分片同款，已知能画）   [2] 两段色码 + 链接（= 现封皮的颜色结构）
+  --   再加上「标签里的 `·` 换掉」这一条 —— 目前**只剩这两个**结构差异还没被排除。
   local vs = {
-    "[1] 两段色码（无链接）：" .. TITLE_COL .. "[" .. title .. "]|r" .. TIER_COL .. sym .. "|r",
-    "[2] 完整封皮（现写法）：" .. sFull,
-    "[3] 完整封皮 · 去标题色：" .. sNoTitle,
-    "[4] 完整封皮 · 去品阶色：" .. sNoTier,
-    "[5] 完整封皮 · 两个色都去：" .. sNoCol,
-    "[6] 完整封皮 · 去链接：" .. sNoLink,
-    "[7] 完整封皮 · 星换 * ：" .. string.gsub(sFull, "★", "*"),
-    "[8] 完整封皮 · 箭头换 -> ：" .. string.gsub(sFull, "→", "->"),
-    "[9] 完整封皮 · 方括号换圆括号：" .. string.gsub(string.gsub(sFull, "%[", "("), "%]", ")"),
+    "[1] 一段色码 + 链接（分片同款）：" .. TIER_COL .. link .. "[标签]|h|r",
+    "[2] 两段色码 + 链接（现封皮颜色结构）：" .. TITLE_COL .. "[" .. title .. "]|r" .. TIER_COL .. sym .. link .. "[" .. plan .. "]|h|r",
+    "[3] 完整封皮（现写法）：" .. sFull,
+    "[4] 完整封皮 · 去标题色：" .. sNoTitle,
+    "[5] 完整封皮 · 去品阶色：" .. sNoTier,
+    "[6] 完整封皮 · 两个色都去：" .. sNoCol,
+    "[7] 完整封皮 · 链接标签里 `·` 换 `.`：" .. string.gsub(sFull, "·", "."),
+    "[8] 完整封皮 · 星换 * ：" .. string.gsub(sFull, "★", "*"),
+    "[9] 完整封皮 · 箭头换 -> ：" .. string.gsub(sFull, "→", "->"),
     "[10] 纯文本（等长填充）：" .. string.rep("X", 100),
   }
   local n = table.getn(vs)
@@ -464,7 +467,7 @@ function EVAL_SHARE_SEAL_VARIANT_PROBE()
   if type(cfgP) == "table" then cfgP.shVariantProbe = probe end -- ★落盘证人
   shSay("===== 封皮变异测 v2（10 条，已排队到「说」）=====")
   shSay("  每 0.5 秒一条，约 6 秒发完；请把**实际出现的编号**告诉我（没出现的同样重要）")
-  shSay("  1 两段色码 · 2 完整封皮 · 3 去标题色 · 4 去品阶色 · 5 去两色 · 6 去链接 · 7 星换* · 8 箭换-> · 9 括号换() · 10 纯文本")
+  shSay("  1 一段色码+链接 · 2 两段色码+链接 · 3 完整封皮 · 4 去标题色 · 5 去品阶色 · 6 去两色 · 7 去名字里的点 · 8 星换* · 9 箭换-> · 10 纯文本")
   return probe
 end
 
