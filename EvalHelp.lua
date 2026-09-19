@@ -168,6 +168,42 @@ local function uiTitleName(fallbackKey)
   return L(fallbackKey)
 end
 
+-- ★★★1.73.58 **方案品阶读值口**（战斗信息UI 方案行 / 配置窗方案列表 / 标题栏徽标**共用同一份判定**）：
+--   返回 rgb, tierIdx, score；**算不出来（Share 未载入 / 坏数据 / 方案表空）如实返回 nil** ——
+--   调用方各自退回原有配色，**绝不硬编一个品阶**（本项目「查不到与没有是两件事」的老账）。
+--   ★**现算不缓存**（用户 1.73.49：「品阶每次打开方案自动计算完善」）：EVAL_PROFILE_SCORE 只做 table.getn 级
+--     累加、不调任何客户端 API ⇒ 放在 0.15s 的 tick 里也是安全的。
+local function uiProfileTierRGB(prof)
+  if type(prof) ~= "table" then return nil end
+  if type(EVAL_PROFILE_SCORE) ~= "function" or type(EVAL_SHARE_SEAL_TIER) ~= "function"
+     or type(EVAL_SHARE_SEAL_TIER_RGB) ~= "function" then return nil end
+  local okS, sc = pcall(EVAL_PROFILE_SCORE, prof)
+  if not okS or type(sc) ~= "number" then return nil end
+  local okT, ti = pcall(EVAL_SHARE_SEAL_TIER, sc)
+  if not okT or type(ti) ~= "number" then return nil end
+  local okR, rgb = pcall(EVAL_SHARE_SEAL_TIER_RGB, ti)
+  if not okR or type(rgb) ~= "table" then return nil end
+  return rgb, ti, sc
+end
+
+-- ★★★1.73.58 **方案按钮配色**（用户：「方案根据品阶染色」）——与**配置窗方案列表 / 案例模版**同一套规则：
+--   文字色 = 品阶色；底色 = 品阶色 ×（当前激活 0.45 / 其余 0.22）。三处共用一张品阶表，**不另抄色**。
+--   ★算不出品阶 → **如实退回**原来的暗金底 + 暖色字（不硬编一个品阶，也不报错）。
+local function uiProfBtnPaint(pb, prof, sel)
+  if not (pb and pb.bg and pb.text) then return false end
+  local rgb = uiProfileTierRGB(prof)
+  if rgb then
+    local k = sel and 0.45 or 0.22
+    pcall(pb.bg.SetVertexColor, pb.bg, rgb.r * k, rgb.g * k, rgb.b * k, 1)
+    pcall(pb.text.SetTextColor, pb.text, rgb.r, rgb.g, rgb.b)
+    ui.profTierCalc = (ui.profTierCalc or 0) + 1 -- 记数：判据要能证明「这次真的按品阶算了」
+    return true
+  end
+  pcall(pb.bg.SetVertexColor, pb.bg, sel and 0.45 or 0.16, sel and 0.35 or 0.13, sel and 0.10 or 0.08, 1)
+  pcall(pb.text.SetTextColor, pb.text, sel and 1 or 0.72, sel and 0.9 or 0.68, sel and 0.4 or 0.55)
+  return false
+end
+
 -- ★★★1.73.55 标题栏中段的**方案档位**（用户：「这位置增加显示玩家方案的档位」）。
 --   · 档位 = 当前**激活方案**按 `EVAL_PROFILE_SCORE` 现算出来的品阶 —— 与方案列表 / 案例模版 / 分享封皮
 --     用的是**同一张表**（Share.lua 的 SH_SEAL_TIERS），符号与色码都从它那几个读值口取，**不在这里另抄一份**
@@ -178,23 +214,20 @@ end
 --     **绝不硬编一个档位**（本项目「查不到与没有是两件事」的老账）。
 --   · 代价：EVAL_PROFILE_SCORE 只做 table.getn 级别的累加（不调任何客户端 API）⇒ tick 里现算是安全的。
 local function uiProfileTierText()
-  if type(EVAL_PROFILE_SCORE) ~= "function" or type(EVAL_SHARE_SEAL_TIER) ~= "function" then return nil end
   local w2 = uiWarCfg()
   local prof = w2.profiles and w2.profiles[w2.activeProfile or 1]
   if type(prof) ~= "table" then return nil end
-  local okS, sc = pcall(EVAL_PROFILE_SCORE, prof)
-  if not okS or type(sc) ~= "number" then return nil end
-  local okT, ti, tier = pcall(EVAL_SHARE_SEAL_TIER, sc)
-  if not okT or type(ti) ~= "number" or type(tier) ~= "table" then return nil end
+  local rgb, ti, sc = uiProfileTierRGB(prof) -- ★1.73.58 与方案行/方案列表共用同一个读值口
+  if not rgb then return nil end
+  -- ★★注意 pcall 的返回：`EVAL_SHARE_SEAL_TIER` 返回 **档位序号 + 品阶表** 两个值 ⇒
+  --   pcall 之后是 ok, 序号, 品阶表 —— 写成 `local okT, tier = pcall(...)` 拿到的是**序号**（number），
+  --   于是 `type(tier) ~= "table"` 恒成立 → 整个徽标恒为 nil（1.73.59 实踩，组 164 当场报 got=nil）。
+  local okT, _pick, tier = pcall(EVAL_SHARE_SEAL_TIER, sc)
+  if not okT or type(tier) ~= "table" then return nil end
   local sym = ""
   if type(EVAL_SHARE_SEAL_SYMBOL) == "function" then
     local okY, sy = pcall(EVAL_SHARE_SEAL_SYMBOL, ti)
     if okY and type(sy) == "string" then sym = sy end
-  end
-  local rgb = nil
-  if type(EVAL_SHARE_SEAL_TIER_RGB) == "function" then
-    local okR, r2 = pcall(EVAL_SHARE_SEAL_TIER_RGB, ti)
-    if okR and type(r2) == "table" then rgb = r2 end
   end
   return { tier = ti, score = sc, text = "[" .. sym .. tostring(tier.name or "") .. "]", rgb = rgb }
 end
@@ -218,43 +251,64 @@ local function uiPlayerTitle()
   return { name = nm, rgb = rgb, custom = cur.custom and true or false }
 end
 
--- ★★★1.73.57 标题栏**两个文字徽标**的刷新口（档位 + 头衔；BUILD 里一次 + tick 里每次）。
---   ★文案没变就不碰控件（不每帧写 SetText）。位置：两者都锚在**前一个控件的右边缘**上 ——
---     玩家名 → 档位徽标（锚名字右缘）→ 头衔（锚徽标右缘）；右侧两个开关在更右边，互不遮挡。
---     这样**不需要任何手工量宽**（本项目手工量宽是给「按名字排布的一排按钮」用的，这里没有那个问题）。
---   ★两处都遵守同一条诚实规矩：**算不出来就如实清空 + 收回中性灰**（既不硬编一个档位/头衔，
---     也不沿用上一个颜色 —— 那会画出一个假档位/假头衔）。
-local function uiTitleBadgeRefresh()
-  local fs = ui.tierText
+-- ★★★1.73.59 标题栏徽标的**登记表**（按**窗口键**登记：重建时覆盖同一个键，不会越积越多 = 幽灵控件的另一种形态）。
+--   ★为什么要登记表：用户 1.73.59 要求「状态信息名称和头衔 参考战斗信息做相同的布局」——
+--     若两个窗口各写一遍「名字 → [品阶] → 头衔」，迟早漂移（本项目「同一规则两处实现」的老账）。
+--     ⇒ 建徽标的是**同一个函数**、刷新的是**同一份实现**，两个窗口只负责把自己那一对登记进来。
+local uiTitleBadgeSets = {}
+
+-- 建一对徽标并登记：锚在 titleFs（标题文字）的右边缘依次排开 —— 名字 → 档位 → 头衔。
+--   ★标题是只锚了 LEFT 的 FontString（宽度随文字自适应）⇒ 徽标天然跟随，**不需要手工量宽**。
+local function uiTitleBadgesMake(key, parent, z, titleFs)
+  local gap = math.floor(8 * z)
+  local size = math.max(9, math.floor(10 * z))
+  local tfs = uiText(parent, size, 0.72, 0.70, 0.62)
+  tfs:SetPoint("LEFT", titleFs, "RIGHT", gap, 0)
+  pcall(tfs.SetJustifyH, tfs, "LEFT")
+  pcall(tfs.SetNonSpaceWrap, tfs, false)
+  local ifs = uiText(parent, size, 0.72, 0.70, 0.62) -- 头衔（在档位徽标右边）
+  ifs:SetPoint("LEFT", tfs, "RIGHT", gap, 0)
+  pcall(ifs.SetJustifyH, ifs, "LEFT")
+  pcall(ifs.SetNonSpaceWrap, ifs, false)
+  uiTitleBadgeSets[key] = { tier = tfs, title = ifs }
+  return tfs, ifs
+end
+
+-- 写一对徽标（档位 + 头衔）的文案与颜色。
+--   ★诚实规矩（两处都一样）：**算不出来就如实清空 + 收回中性灰** —— 既不硬编一个档位/头衔，
+--     也不沿用上一个颜色（那会画出一个假档位/假头衔）。
+--   ★文案没变就不碰控件（不每帧写 SetText）。
+local function uiTitleBadgePaint(set)
+  if type(set) ~= "table" then return end
+  local fs = set.tier
   if fs then
     local info = uiProfileTierText()
     local txt = (info and info.text) or ""
     local okc, cur = pcall(fs.GetText, fs)
     if not (okc and tostring(cur or "") == txt) then pcall(fs.SetText, fs, txt) end
-    ui.tierShown = txt
     if info and info.rgb then
       pcall(fs.SetTextColor, fs, info.rgb.r, info.rgb.g, info.rgb.b)
-      ui.tierScore, ui.tierIdx = info.score, info.tier
     else
       pcall(fs.SetTextColor, fs, 0.72, 0.70, 0.62)
-      ui.tierScore, ui.tierIdx = nil, nil
     end
   end
-  -- 头衔（在徽标右边；没入档 / 没抽到 → 如实清空）
-  local tfs = ui.titleText
+  local tfs = set.title
   if tfs then
     local ti = uiPlayerTitle()
     local ttxt = (ti and ti.name) or ""
     local okt, cur2 = pcall(tfs.GetText, tfs)
     if not (okt and tostring(cur2 or "") == ttxt) then pcall(tfs.SetText, tfs, ttxt) end
-    ui.titleShown = ttxt
-    ui.titleCustom = (ti and ti.custom) or false
     if ti and ti.rgb then
       pcall(tfs.SetTextColor, tfs, ti.rgb.r, ti.rgb.g, ti.rgb.b)
     else
       pcall(tfs.SetTextColor, tfs, 0.72, 0.70, 0.62)
     end
   end
+end
+
+-- ★★★1.73.57/1.73.59 刷新口：**所有登记的窗口一次刷完**（BUILD 里一次 + tick 里每次）。
+local function uiTitleBadgeRefresh()
+  for _, set in pairs(uiTitleBadgeSets) do uiTitleBadgePaint(set) end
   return true
 end
 
@@ -379,23 +433,12 @@ function EVAL_HELP_UI_BUILD()
   pcall(title.SetNonSpaceWrap, title, false)
   -- ★1.71.12 用户要求：「战斗信息 标题换成 用户名字」；★1.73.53 起与状态信息UI 共用同一个取名函数
   title:SetText(uiTitleName("G_UI_TITLE"))
-  -- ★★★1.73.55 标题栏中段的**方案档位**徽标（用户：「这位置增加显示玩家方案的档位」）——
-  --   锚在**标题文字的右边缘**（标题只锚了 LEFT，宽度随文字自适应）⇒ 自然跟在玩家名后面。
-  -- ★★★1.73.57 紧随其后是**玩家头衔**（用户：「显示玩家的头衔」）——锚在徽标的右边缘上，同样跟着走。
+  -- ★★★1.73.55/1.73.57 标题栏中段：**方案档位徽标** + **玩家头衔**（用户：「这位置增加显示玩家方案的档位」/
+  --   「显示玩家的头衔」）——从**标题文字的右边缘**起依次排开 ⇒ 自然跟在玩家名后面；
   --   最右边才是那两个快捷开关；四个控件从左到右依次排开，互不遮挡。
-  --   文案/颜色由 uiTitleBadgeRefresh() 写（BUILD 一次 + tick 每次），这里只负责建控件与定位置。
-  do
-    local tierFs = uiText(titleBar, math.max(9, math.floor(10 * z)), 0.72, 0.70, 0.62)
-    tierFs:SetPoint("LEFT", title, "RIGHT", math.floor(8 * z), 0)
-    pcall(tierFs.SetJustifyH, tierFs, "LEFT")
-    pcall(tierFs.SetNonSpaceWrap, tierFs, false)
-    ui.tierText = tierFs
-    local titleFs = uiText(titleBar, math.max(9, math.floor(10 * z)), 0.72, 0.70, 0.62)
-    titleFs:SetPoint("LEFT", tierFs, "RIGHT", math.floor(8 * z), 0)
-    pcall(titleFs.SetJustifyH, titleFs, "LEFT")
-    pcall(titleFs.SetNonSpaceWrap, titleFs, false)
-    ui.titleText = titleFs
-  end
+  --   ★建徽标走公用件 uiTitleBadgesMake（**状态信息UI 用同一个件做同一套布局**，见 1.73.59），
+  --     文案/颜色由 uiTitleBadgeRefresh() 写（BUILD 一次 + tick 每次）。
+  ui.tierText, ui.titleText = uiTitleBadgesMake("ui", titleBar, z, title)
   uiTitleBadgeRefresh()
   -- ★★★1.73.54 标题栏右侧的两个**快捷开关**（战斗区 / 方案区）——与配置窗「界面」组里那两个缩进子开关**同一份真值**：
   --   左→右 = 战斗区、方案区（与配置窗从上到下的顺序一致）；各自贴右端、宽 13、间隔 4；
@@ -639,6 +682,8 @@ function EVAL_HELP_UI_BUILD()
         end
       end)
       profBtns[i] = { btn = pb, bg = pbg, text = pt }
+      -- ★1.73.58 建出来就按品阶上色（不等 0.15s 后的 tick，免得先闪一下暗金）
+      uiProfBtnPaint(profBtns[i], w20.profiles and w20.profiles[i], (w20.activeProfile or 1) == i)
     end
     ui.profRows, ui.profNeed, ui.profAvail, ui.profPad, ui.profCap = rows, needW, barAvailW, pad, MAX_EXTRA -- ★1.71.10/1.71.11 供断言读生产真值
     -- ★1.71.10 版式签名（方案名序列）：EVAL_WAR_TAB_REFRESH 比它决定「要不要重建战斗信息UI」
@@ -874,8 +919,9 @@ function EVAL_HELP_UI_TICK()
         pb.btn:Show()
         pb.text:SetText(tostring(prof.name or i))
         local sel = (w2.activeProfile or 1) == i
-        pcall(pb.bg.SetVertexColor, pb.bg, sel and 0.45 or 0.16, sel and 0.35 or 0.13, sel and 0.10 or 0.08, 1)
-        pcall(pb.text.SetTextColor, pb.text, sel and 1 or 0.72, sel and 0.9 or 0.68, sel and 0.4 or 0.55)
+        -- ★★★1.73.58 用户：「方案根据品阶染色」——与**配置窗方案列表 / 案例模版**同一套规则
+        --   （文字 = 品阶色，底色 = 品阶色 × 激活 0.45 / 否则 0.22；算不出品阶 → 如实退回暗金底 + 暖色字）。
+        uiProfBtnPaint(pb, prof, sel)
       else
         pb.btn:Hide()
       end
@@ -2584,17 +2630,8 @@ function EVAL_WAR_TAB_REFRESH()
       --   并**计数**（判据要能证明「这次打开真的算了」，而不是只看界面长得对）。
       local trgb, tidx = nil, nil
       warProfTierCalc = warProfTierCalc + 1
-      if type(EVAL_PROFILE_SCORE) == "function" and type(EVAL_SHARE_SEAL_TIER) == "function"
-         and type(EVAL_SHARE_SEAL_TIER_RGB) == "function" and type(EVAL_SHARE_SEAL_ICON) == "function" then
-        local okS, sc = pcall(EVAL_PROFILE_SCORE, prof)
-        if okS and sc ~= nil then
-          local okT, ti = pcall(EVAL_SHARE_SEAL_TIER, sc)
-          if okT and type(ti) == "number" then
-            local okR, rgb = pcall(EVAL_SHARE_SEAL_TIER_RGB, ti)
-            if okR and type(rgb) == "table" then trgb, tidx = rgb, ti end
-          end
-        end
-      end
+      -- ★1.73.58 品阶判定抽成 uiProfileTierRGB（**方案列表与战斗信息UI 方案行共用同一份**，不再各写一遍）
+      trgb, tidx = uiProfileTierRGB(prof)
       if trgb then
         local k = sel and 0.45 or 0.22
         pcall(pb.bg.SetVertexColor, pb.bg, trgb.r * k, trgb.g * k, trgb.b * k, 1)
@@ -3474,6 +3511,8 @@ function EVAL_HELP_ST_BUILD()
     stui.root:Hide()
     pcall(stui.root.SetScript, stui.root, "OnUpdate", nil)
   end
+  -- ★1.73.59 与战斗信息UI 同款：清掉上一轮的徽标引用（ui 表是复用的，不清就会写**幽灵控件**）
+  stui.tierText, stui.titleText = nil, nil
   local W = 250
   local pad = 8
   local titleBarH = 16
@@ -3519,11 +3558,17 @@ function EVAL_HELP_ST_BUILD()
   pcall(titleBar.RegisterForClicks, titleBar, "LeftButtonUp")
   pcall(titleBar.RegisterForDrag, titleBar, "LeftButton")
   local title = uiText(titleBar, 10, 0.95, 0.82, 0.35)
-  title:SetPoint("CENTER", titleBar, "CENTER", 0, 0)
+  -- ★★★1.73.59 用户：「状态信息名称和头衔 参考战斗信息做相同的布局」——原来标题**居中**，现在与战斗信息UI 一致：
+  --   标题**贴左**，右边依次排 档位徽标 → 头衔（同一个公用件 uiTitleBadgesMake，同一份刷新实现）。
+  title:SetPoint("LEFT", titleBar, "LEFT", 6, 0)
+  pcall(title.SetJustifyH, title, "LEFT")
+  pcall(title.SetNonSpaceWrap, title, false)
   -- ★★★1.73.53 用户（截图确认）：「战斗记录（状态信息UI）标题将玩家角色显示」——
   --   与战斗信息UI 同一条规矩：有玩家名就用玩家名；取不到退回窗口自己的名字（G_ST_TITLE，走语言包，不硬编码中文）。
   title:SetText(uiTitleName("G_ST_TITLE"))
   stui.title = title -- ★读值口（判据读**真控件**，不读我们自己的意图）
+  stui.tierText, stui.titleText = uiTitleBadgesMake("st", titleBar, 1, title) -- ★1.73.59 与战斗信息UI 同款两个徽标
+  uiTitleBadgeRefresh() -- 建完立刻写一次（不等 tick，免得开窗先空一下；与战斗信息UI 同款）
   titleBar:SetScript("OnDragStart", function()
     pcall(root.SetMovable, root, true)
     pcall(root.StartMoving, root)
@@ -3573,6 +3618,8 @@ end
 -- 每次心跳：刷新状态表，逐行重排正文（Cat 的 CatUI-Melee 状态行同款展示）
 function EVAL_HELP_ST_TICK()
   if not stui.root or not stui.root:IsVisible() then return end
+  -- ★1.73.59 与战斗信息UI 同款两个徽标（档位 + 头衔）也要跟着刷 —— 登记表里一次刷完，两个窗口共用一份实现。
+  uiTitleBadgeRefresh()
   EVAL_HELP_UPDATE_STATE()
   local lines = {}
   table.insert(lines, string.format("%s  Lv%d %s%s",
@@ -3633,10 +3680,46 @@ function EVAL_HELP_ST_TICK()
 end
 
 -- ★★★1.73.53 读值口：状态信息UI 标题栏的**真实文本**（判据读真控件；用户要求它显示玩家角色名）
+-- ★1.73.59 状态信息UI 是否可见（EVAL_HELP_ST_TOGGLE 是**切换**语义，断言前要先确认真开着）
+function EVAL_TEST_ST_VISIBLE()
+  if not (stui and stui.root) then return false end
+  local ok, v = pcall(stui.root.IsVisible, stui.root)
+  return (ok and v) and true or false
+end
 function EVAL_TEST_ST_TITLE()
   if not stui.title then return nil end
   local ok, v = pcall(stui.title.GetText, stui.title)
   return (ok and type(v) == "string") and v or nil
+end
+-- ★★★1.73.59 读值口：状态信息UI 标题栏的**布局与两个徽标**（用户：「状态信息名称和头衔 参考战斗信息做相同的布局」）。
+--   一律读**真控件**（GetText / GetPoint / GetJustifyH / GetTextColor）—— 不读我们自己的记账；
+--   与 EVAL_TEST_UI_TITLEBAR 同款字段，便于断言「两个窗口同一套布局」。
+function EVAL_TEST_ST_TITLEBAR()
+  local out = { title = nil, titlePoint = nil, titleJustify = nil, titleX = nil, tier = nil, ptitle = nil }
+  local function fsOf(fs, prefix)
+    if not fs then return end
+    local okt, tv = pcall(fs.GetText, fs)
+    if okt and type(tv) == "string" then out[prefix] = tv end
+    local okp, pt, rel, rp, px = pcall(fs.GetPoint, fs)
+    if okp and type(pt) == "string" then
+      out[prefix .. "Point"], out[prefix .. "RelTo"], out[prefix .. "RelPoint"], out[prefix .. "X"] = pt, rel, rp, px
+    end
+    local okc, cr, cg, cb = pcall(fs.GetTextColor, fs)
+    if okc and type(cr) == "number" then out[prefix .. "Color"] = { cr, cg, cb } end
+  end
+  if stui.title then
+    local okt, tv = pcall(stui.title.GetText, stui.title)
+    if okt and type(tv) == "string" then out.title = tv end
+    local okp, pt, _rel, _rp, px = pcall(stui.title.GetPoint, stui.title)
+    if okp and type(pt) == "string" then out.titlePoint = pt out.titleX = px end
+    local okj, jv = pcall(stui.title.GetJustifyH, stui.title)
+    if okj and type(jv) == "string" then out.titleJustify = jv end
+    out.titleFs = stui.title
+  end
+  fsOf(stui.tierText, "tier")
+  fsOf(stui.titleText, "ptitle")
+  out.tierFs, out.ptitleFs = stui.tierText, stui.titleText
+  return out
 end
 function EVAL_HELP_ST_TOGGLE()
   local sc = stCfg()
@@ -6684,11 +6767,17 @@ function EVAL_TEST_UI_PROF()
     local ok, v = pcall(f, o)
     return (ok and type(v) == "number") and v or nil
   end
+  local function rgb3(f, o)
+    local ok, r, g, b = pcall(f, o)
+    if ok and type(r) == "number" then return { r, g, b } end
+    return nil
+  end
   local okw, ww = pcall(ui.root.GetWidth, ui.root)
   local okh, hh = pcall(ui.root.GetHeight, ui.root)
   -- 1.71.19 交出「方案」标签按钮（右键全清的断言要真点它）
   local out = { labelBtn = ui.profLabelBtn, rows = ui.profRows or 0, avail = ui.profAvail or 0, pad = ui.profPad or 0, cap = ui.profCap or 0,
-    need = ui.profNeed, rootW = (okw and ww) or nil, rootH = (okh and hh) or nil, btns = {} }
+    need = ui.profNeed, rootW = (okw and ww) or nil, rootH = (okh and hh) or nil, btns = {},
+    tierCalc = ui.profTierCalc or 0 }
   for i, pb in ipairs(ui.profBtns) do
     local okT, txt = pcall(pb.text.GetText, pb.text)
     local oks, sh = pcall(pb.btn.IsShown, pb.btn)
@@ -6700,6 +6789,9 @@ function EVAL_TEST_UI_PROF()
       w = num(pb.btn.GetWidth, pb.btn), h = num(pb.btn.GetHeight, pb.btn),
       textW = num(pb.text.GetWidth, pb.text), -- 文字格自身的宽（限宽后应 ≤ 按钮宽）
       need = ui.profNeed and ui.profNeed[i] or nil,
+      -- ★1.73.58 品阶染色：交出**真控件**上的文字色与底色（不读我们自己的记账）
+      textRGB = rgb3(pb.text.GetTextColor, pb.text),
+      bgRGB = rgb3(pb.bg.GetVertexColor, pb.bg),
     }
   end
   return out

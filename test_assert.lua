@@ -12849,6 +12849,135 @@ do
   print("  标题栏玩家头衔：名字→档位徽标→头衔 依次锚右缘 · 彩蛋自定义优先 · 没有就如实清空（中性灰）")
 end
 
+-- 167) ★★★1.73.58 战斗信息UI 方案行：**方案根据品阶染色**（用户：「方案根据品阶染色」）
+--   与**配置窗方案列表 / 案例模版**同一套规则、同一张品阶表：文字 = 品阶色，底色 = 品阶色 ×（激活 0.45 / 否则 0.22）；
+--   算不出品阶（Share 未载入 / 坏数据）→ **如实退回**原来的暗金底 + 暖色字（不硬编一个品阶）。
+--   ★全读**真控件**（GetTextColor / GetVertexColor），并读一个计数证明「这次真的按品阶算了」而不是碰巧长得对。
+do
+  local savedWar167 = EVAL_HELP_CONFIG.war
+  local near167 = function(a, b) return type(a) == "number" and type(b) == "number" and math.abs(a - b) < 0.01 end
+  local function mk167(n)
+    local s = "# 方案: 测167-" .. tostring(n)
+    for k = 1, n do s = s .. "\n- 技能" .. tostring(k) .. " | 可攻击" end
+    return EVAL_PROFILE_FROM_TEXT(s)
+  end
+  -- 1 / 3 / 5 个技能（各 1 条条件）→ 2 / 6 / 10 分 → 三个**不同品阶**；第 2 个是当前激活
+  EVAL_HELP_CONFIG.war = { activeProfile = 2, profiles = { mk167(1), mk167(3), mk167(5) } }
+  EVAL_HELP_CONFIG.ui = { enabled = true, subCombat = true, subScheme = true }
+  EVAL_HELP_UI_BUILD()
+  if not EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end
+  local up167 = EVAL_TEST_UI_PROF()
+  eq(type(up167) == "table" and type(up167.btns) == "table", true, "前置：拿到方案行的真控件")
+  eq(up167.tierCalc > 0, true, "前置：按品阶上色真的跑过（计数 " .. tostring(up167.tierCalc) .. "）")
+  local badT167, badB167, nTier167, seen167 = 0, 0, 0, {}
+  for i = 1, 3 do
+    local prof = EVAL_HELP_CONFIG.war.profiles[i]
+    local ti = select(1, EVAL_SHARE_SEAL_TIER(EVAL_PROFILE_SCORE(prof)))
+    local rgb = EVAL_SHARE_SEAL_TIER_RGB(ti)
+    local b = up167.btns[i] or {}
+    if not seen167[ti] then seen167[ti] = true nTier167 = nTier167 + 1 end
+    if b.textRGB == nil or not (near167(b.textRGB[1], rgb.r) and near167(b.textRGB[2], rgb.g) and near167(b.textRGB[3], rgb.b)) then badT167 = badT167 + 1 end
+    local k167 = (i == 2) and 0.45 or 0.22
+    if b.bgRGB == nil or not (near167(b.bgRGB[1], rgb.r * k167) and near167(b.bgRGB[2], rgb.g * k167) and near167(b.bgRGB[3], rgb.b * k167)) then badB167 = badB167 + 1 end
+  end
+  eq(nTier167 >= 2, true, "前置：三个方案落在 ≥2 个不同品阶（实际 " .. tostring(nTier167) .. " 档）")
+  eq(badT167, 0, "①★★★方案名文字色 = **该方案的品阶色**（读真控件 GetTextColor），不符 " .. tostring(badT167) .. " 行")
+  eq(badB167, 0, "②★★★方案按钮底色 = 品阶色 ×（激活 0.45 / 否则 0.22）—— 与配置窗方案列表同一套规则，不符 " .. tostring(badB167) .. " 行")
+  -- ③ 算不出品阶 → 如实退回暗金（不硬编一个品阶、也不报错）
+  local keepScore167 = EVAL_PROFILE_SCORE
+  EVAL_PROFILE_SCORE = function() return nil end
+  EVAL_HELP_UI_TICK()
+  local up167b = EVAL_TEST_UI_PROF()
+  local fallOK167 = true
+  for i = 1, 3 do
+    local b = up167b.btns[i] or {}
+    local wantBg = (i == 2) and 0.45 or 0.16
+    if b.bgRGB == nil or not near167(b.bgRGB[1], wantBg) then fallOK167 = false end
+  end
+  eq(fallOK167, true, "③★★算不出品阶 → 如实退回原来的暗金底（不硬编一个品阶）")
+  EVAL_PROFILE_SCORE = keepScore167
+  -- ④ 换激活方案 → 下一个心跳底色跟着换（激活更亮）
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  EVAL_HELP_UI_TICK()
+  local up167c = EVAL_TEST_UI_PROF()
+  local p1 = EVAL_HELP_CONFIG.war.profiles[1]
+  local rgb1 = EVAL_SHARE_SEAL_TIER_RGB(select(1, EVAL_SHARE_SEAL_TIER(EVAL_PROFILE_SCORE(p1))))
+  local b1_167 = up167c.btns[1] or {}
+  -- ★三个通道一起比：只比 R 会被「写死的暗金底」蒙混过关（暗金激活底 R 恰好也是 0.45 —— M519 实测存活）
+  eq(b1_167.bgRGB ~= nil and near167(b1_167.bgRGB[1], rgb1.r * 0.45) and near167(b1_167.bgRGB[2], rgb1.g * 0.45)
+     and near167(b1_167.bgRGB[3], rgb1.b * 0.45), true,
+     "④★★★换成激活后底色 = **品阶色 × 0.45**（同一个心跳内跟着换，三通道一起比）")
+  EVAL_HELP_CONFIG.war = savedWar167
+  EVAL_HELP_UI_BUILD()
+  print("  战斗信息UI 方案行：按品阶染色（文字 = 品阶色 · 底色 = 品阶色 × 激活 0.45/否则 0.22 · 算不出如实退回暗金）")
+end
+-- 168) ★★★1.73.59 状态信息UI 标题栏：**名称 + 档位 + 头衔**（用户：「状态信息名称和头衔 参考战斗信息做相同的布局」）
+--   ★关键：两个窗口**共用同一个建徽标件**（uiTitleBadgesMake）与**同一份刷新实现**（登记表一次刷完）——
+--     所以本组的判据就是「两边读出来必须一样」：文案一样、颜色一样、锚点规矩一样（名字 → 档位 → 头衔 依次锚右缘）。
+do
+  local savedWar168 = EVAL_HELP_CONFIG.war
+  local savedTitle168 = EVAL_HELP_CONFIG.title
+  local near168 = function(a, b) return type(a) == "number" and type(b) == "number" and math.abs(a - b) < 1e-6 end
+  EVAL_HELP_CONFIG.war = { activeProfile = 1, profiles = {
+    EVAL_PROFILE_FROM_TEXT("# 方案: 头衔168\n- 甲 | 可攻击\n- 乙 | 可攻击\n- 丙 | 可攻击") } }
+  EVAL_HELP_CONFIG.title = { tier = 0, draws = {} }
+  eq(EVAL_TITLE_REFRESH() >= 1, true, "前置：方案库让玩家入档")
+  eq(EVAL_TITLE_SET_CUSTOM("布局测试名"), true, "前置：写一个确定的头衔（不依赖抽卡结果）")
+  EVAL_HELP_UI_BUILD()
+  if not EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end
+  pcall(EVAL_HELP_ST_BUILD)
+  if not EVAL_TEST_ST_VISIBLE() then pcall(EVAL_HELP_ST_TOGGLE) end
+  eq(EVAL_TEST_ST_VISIBLE(), true, "前置：状态信息UI 是开着的")
+  local u168, s168 = EVAL_TEST_UI_TITLEBAR(), EVAL_TEST_ST_TITLEBAR()
+  -- ① 布局与战斗信息UI 一致：标题**贴左**
+  eq(s168.titlePoint, "LEFT", "①★★★状态信息UI 标题**贴左**（与战斗信息UI 同款，实际 " .. tostring(s168.titlePoint) .. "）")
+  eq(s168.titleJustify, "LEFT", "①★★对齐也设成 LEFT（免得框内又居中）")
+  eq(type(s168.titleX) == "number" and s168.titleX > 0, true, "①★标题与左边缘留了间隙（实际 " .. tostring(s168.titleX) .. "）")
+  -- ② 两个徽标都在，且锚点规矩一致：名字 → 档位 → 头衔
+  eq(s168.tierFs ~= nil and s168.ptitleFs ~= nil, true, "②★★★状态信息UI 也有**档位徽标 + 头衔**两个控件")
+  eq(s168.tierPoint, "LEFT", "②★档位徽标锚 LEFT")
+  eq(s168.titleFs ~= nil and s168.tierRelTo == s168.titleFs, true, "②★★★档位徽标锚在**标题文字**的右边缘")
+  eq(s168.tierRelPoint, "RIGHT", "②★★锚的是名字的右边缘（与战斗信息UI 同规矩）")
+  eq(s168.tierFs ~= nil and s168.ptitleRelTo == s168.tierFs, true, "②★★★头衔锚在**档位徽标**的右边缘（顺序 名字→档位→头衔）")
+  eq(s168.ptitleRelPoint, "RIGHT", "②★★锚的是徽标的右边缘")
+  -- ③ 内容与战斗信息UI **逐字一致**（共用同一份读值口 ⇒ 两个窗口不可能各说各话）
+  eq(s168.tier, u168.tier, "③★★★两窗口的**档位文案逐字相同**（共用同一份读值口）：" .. tostring(s168.tier))
+  eq(s168.ptitle, u168.ptitle, "③★★★两窗口的**头衔逐字相同**：" .. tostring(s168.ptitle))
+  eq(s168.ptitle, "布局测试名", "③★★头衔显示的就是刚写下的那个")
+  eq(s168.tierColor ~= nil and u168.tierColor ~= nil and near168(s168.tierColor[1], u168.tierColor[1])
+     and near168(s168.tierColor[3], u168.tierColor[3]), true, "③★★两窗口**档位颜色相同**（读真控件 GetTextColor）")
+  eq(s168.ptitleColor ~= nil and u168.ptitleColor ~= nil and near168(s168.ptitleColor[3], u168.ptitleColor[3]), true,
+     "③★★两窗口**头衔颜色相同**（同一个色码解析口）")
+  -- ④ 改方案库 → 下一个心跳两边一起变（同一份刷新实现）
+  local profs168 = EVAL_HELP_CONFIG.war.profiles
+  local keep168 = profs168[1].skills
+  profs168[1].skills = { { groups = { { 1 } } } } -- 2 分 → 普通档
+  EVAL_HELP_UI_TICK()
+  EVAL_HELP_ST_TICK()
+  local u2_168, s2_168 = EVAL_TEST_UI_TITLEBAR(), EVAL_TEST_ST_TITLEBAR()
+  eq(s2_168.tier, u2_168.tier, "④★★★改方案内容后两个窗口**同时**换成新档位（同一次刷新）：" .. tostring(s2_168.tier))
+  eq(s2_168.tier ~= s168.tier, true, "④★★而且确实换了档（" .. tostring(s168.tier) .. " → " .. tostring(s2_168.tier) .. "）")
+  -- ⑤ ★★**只开状态信息UI**（关掉战斗信息UI）时也照样刷 —— 这一步才是「ST 自己那条刷新路真的接了」的判据：
+  --   两个窗口都开着时，HUD 的 tick 会**替 ST 一起刷**（共用登记表），删掉 ST 的调用也不会响（M526 实测存活）。
+  if EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end
+  eq(EVAL_TEST_UI_SHOWN(), false, "⑤前置：战斗信息UI 已关掉")
+  profs168[1].skills = keep168 -- 6 分 → 回到稀有档
+  EVAL_HELP_ST_TICK()
+  local s3_168 = EVAL_TEST_ST_TITLEBAR()
+  eq(s3_168.tier ~= s2_168.tier, true,
+     "⑤★★★只开状态信息UI 时徽标靠自己那条路跟着变（" .. tostring(s2_168.tier) .. " → " .. tostring(s3_168.tier) .. "）")
+  profs168[1].skills = keep168
+  EVAL_HELP_UI_BUILD()
+  if not EVAL_TEST_UI_SHOWN() then pcall(EVAL_HELP_UI_TOGGLE) end
+  -- ⑥ 收尾：恢复存档 + 两窗口回到干净状态
+  EVAL_TITLE_CLEAR_CUSTOM()
+  EVAL_HELP_CONFIG.war = savedWar168
+  EVAL_HELP_CONFIG.title = savedTitle168
+  EVAL_HELP_UI_TICK()
+  pcall(EVAL_HELP_ST_TICK)
+  print("  状态信息UI 标题栏：名称 + 档位 + 头衔（与战斗信息UI **同一份实现**：文案/颜色/锚点规矩逐项一致）")
+end
+
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")

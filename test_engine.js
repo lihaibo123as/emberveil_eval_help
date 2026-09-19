@@ -1267,17 +1267,24 @@ function checkIconAssets() {
   const sh = fs.readFileSync(path.join(__dirname, "Share.lua"), "utf8");
   const noComment = eh.split(/\r?\n/).map(function (l) { const i = l.indexOf("--"); return i >= 0 ? l.slice(0, i) : l; }).join("\n");
   const bad = [];
+  if (noComment.indexOf("local function uiProfileTierRGB(") < 0) bad.push("找不到品阶读值口 uiProfileTierRGB（档位必须由当前方案现算）");
   if (noComment.indexOf("local function uiProfileTierText(") < 0) bad.push("找不到档位算法 uiProfileTierText（档位必须由当前方案现算）");
   if (noComment.indexOf("local function uiPlayerTitle(") < 0) bad.push("找不到头衔读值口 uiPlayerTitle（头衔必须由抽卡系统给）");
   if (noComment.indexOf("local function uiTitleBadgeRefresh(") < 0) bad.push("找不到两个徽标的刷新口 uiTitleBadgeRefresh");
-  if (noComment.indexOf('tierFs:SetPoint("LEFT", title, "RIGHT"') < 0) bad.push("档位徽标没锚在玩家名（标题文字）的右边缘");
-  if (noComment.indexOf('titleFs:SetPoint("LEFT", tierFs, "RIGHT"') < 0) bad.push("头衔没锚在档位徽标的右边缘（顺序必须是 名字→档位→头衔）");
-  // ★刷新必须**两处都接**：BUILD（开窗那一刻）+ tick（换方案 / 改内容 / 抽到新头衔之后跟着变）
+  // ★1.73.59 用户：「状态信息名称和头衔 参考战斗信息做相同的布局」——两个窗口必须**共用同一个建徽标件**
+  //   （各写一遍「名字 → [品阶] → 头衔」= 迟早漂移，本项目「同一规则两处实现」的老账）。
+  if (noComment.indexOf("local function uiTitleBadgesMake(") < 0) bad.push("找不到公用件 uiTitleBadgesMake（两个窗口的徽标必须同一份实现）");
+  if (noComment.indexOf('tfs:SetPoint("LEFT", titleFs, "RIGHT"') < 0) bad.push("档位徽标没锚在玩家名（标题文字）的右边缘（公用件里）");
+  if (noComment.indexOf('ifs:SetPoint("LEFT", tfs, "RIGHT"') < 0) bad.push("头衔没锚在档位徽标的右边缘（顺序必须是 名字→档位→头衔）");
+  if (noComment.indexOf('uiTitleBadgesMake("ui", titleBar') < 0) bad.push("战斗信息UI 没走公用件建徽标");
+  if (noComment.indexOf('uiTitleBadgesMake("st", titleBar') < 0) bad.push("状态信息UI 没走公用件建徽标（用户要求与战斗信息同一套布局）");
+  if (noComment.indexOf('title:SetPoint("LEFT", titleBar, "LEFT", 6, 0)') < 0) bad.push("状态信息UI 标题没贴左（用户要求参考战斗信息的布局）");
+  // ★刷新必须**每处都接**：两个窗口 ×（BUILD 那一刻 + tick 跟着变）
   const calls = (noComment.match(/uiTitleBadgeRefresh\(\)/g) || []).length;
-  if (calls < 2) bad.push("uiTitleBadgeRefresh 只接了 " + calls + " 处（BUILD + tick 两处都必须接）");
+  if (calls < 4) bad.push("uiTitleBadgeRefresh 只接了 " + calls + " 处（两个窗口的 BUILD + tick 都必须接）");
   // ★整段徽标代码（两个算法 + 刷新口）取出来，逐项钉「只走 Share.lua 的读值口」——
   //   不这么切的话，本文件别处（分享/模版）的同类调用会让检查**假通过**（1.73.55 实测：漏了 SYMBOL 还是绿的）。
-  const i0 = noComment.indexOf("local function uiProfileTierText(");
+  const i0 = noComment.indexOf("local function uiProfileTierRGB(");
   const i1 = noComment.indexOf("local function uiTitleToggle(");
   const seg = (i0 >= 0 && i1 > i0) ? noComment.slice(i0, i1) : "";
   if (seg === "") bad.push("取不到徽标代码段（函数被改名或被挪走？）");
@@ -1294,7 +1301,7 @@ function checkIconAssets() {
   if (parseCount !== 1) bad.push("Share.lua 里有 " + parseCount + " 处 8 位色码解析（只许 EVAL_COLOR_RGB 一处）");
   if (!/EVAL_SHARE_SEAL_TIER_RGB[\s\S]{0,400}?EVAL_COLOR_RGB\(/.test(sh)) bad.push("EVAL_SHARE_SEAL_TIER_RGB 没复用 EVAL_COLOR_RGB（两条实现）");
   if (bad.length) { console.log("UI TITLE BADGES CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
-  console.log("UI TITLE BADGES CHECK: 档位现算 + 头衔走抽卡读值口 + 名字→档位→头衔依次锚右缘 + 单一个色码解析口 + BUILD/tick 都刷新");
+  console.log("UI TITLE BADGES CHECK: 两个窗口共用一套徽标件（档位现算 + 头衔走抽卡读值口 + 名字→档位→头衔依次锚右缘）· 单一个色码解析口 · 两窗口的 BUILD/tick 都刷新");
 })();
 
 // ===== UI TITLE NAME CHECK（1.73.53）：两个窗口的标题都要显示玩家角色名、且**同一条规矩只写一遍** =====
