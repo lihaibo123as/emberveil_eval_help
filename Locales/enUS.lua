@@ -64,7 +64,7 @@ SH_TIP_R3 = "- You must be on the same channel (pick Party/Say if not in a guild
   SEAL_TIER_2 = "Rare",
   SEAL_TIER_3 = "Precious",
   SEAL_TIER_4 = "Out of print",
-  SEAL_TIER_5 = "Source code",
+  SEAL_TIER_5 = "Divine",
   SEAL_C1_1 = "Practice fodder, better than nothing.",
   SEAL_C1_2 = "Something beats nothing - start here.",
   SEAL_C1_3 = "A mortal's first step, small comfort.",
@@ -106,7 +106,7 @@ SH_TIP_R3 = "- You must be on the same channel (pick Party/Say if not in a guild
   SEAL_C4_9 = "With this you can guard a house.",
   SEAL_C4_10 = "Do not ask the price - it is priceless.",
   SEAL_C5_1 = "The heavenly book itself - mortals keep away.",
-  SEAL_C5_2 = "This is source code; one changed character shakes the world.",
+  SEAL_C5_2 = "This is the divine tier; one changed character shakes the world.",
   SEAL_C5_3 = "The line written at the dawn of creation.",
   SEAL_C5_4 = "Reading it enlightens, copying invites lightning.",
   SEAL_C5_5 = "The author's own hand - do not touch.",
@@ -116,7 +116,7 @@ SH_TIP_R3 = "- You must be on the same channel (pick Party/Say if not in a guild
   SEAL_C5_9 = "The power of the origin - enter with care.",
   SEAL_C5_10 = "This is source; only cultivators may look.",
   -- ★★★1.73.42n 头衔抽卡（用户：「每个档位只抽卡一次.不重复抽卡.唯一不变.」）：5 档 × 15 张 = 75 个自创头衔。
-  --   键名 TITLE_<档>_<序号>；档位与**方案稀有度**一一对应（1 普通 / 2 稀有 / 3 珍稀 / 4 绝版 / 5 源代码）。
+  --   键名 TITLE_<档>_<序号>；档位与**方案稀有度**一一对应（1 普通 / 2 稀有 / 3 珍稀 / 4 绝版 / 5 神级）。
   --   ★全部是头衔，**不含任何人名**（用户明确）；彩蛋自定义头衔**不在这里**（它只存在玩家存档里）。
   TITLE_1_1 = "Nobody",
   TITLE_1_2 = "Baker's Apprentice",
