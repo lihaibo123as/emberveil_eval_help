@@ -124,6 +124,22 @@ local function shBodies()
   for i = 1, n do
     bodies[i] = "[EHPF#" .. idh .. " " .. i .. "/" .. n .. "]" .. string.sub(hex, (i - 1) * SH_CHUNK + 1, i * SH_CHUNK)
   end
+  -- ★★★1.73.42g 封皮行：分片之后追加**一条**短消息，链接载荷只有传输 id（不带 hex）；
+  --   ★分片格式**不动**（仍是 v1 明文）→ 老版本照旧能收；点它 = 直接导入。
+  if type(EVAL_SHARE_SEAL_INFO) == "function" then
+    local sinfo = EVAL_SHARE_SEAL_INFO(text)
+    if sinfo and sinfo.line then
+      local sline = tostring(sinfo.line)
+      local smark = tostring(sinfo.symbol) .. "[" .. tostring(sinfo.tierName) .. "秘籍·" .. tostring(sinfo.plan) .. "]"
+      local sps = string.find(sline, smark, 1, true)
+      if sps then
+        local scut = sps + string.len(tostring(sinfo.symbol)) - 1
+        sline = string.sub(sline, 1, scut) .. "|HEHPF:" .. idh .. "|h" .. string.sub(sline, scut + 1) .. "|h"
+      end
+      SH.sealPending = sline -- ★封皮**不进分片队列**（它是展示行）
+      SH.sealLast = sline
+    end
+  end
   return bodies
 end
 -- ★1.73.35 右键菜单「分享方案」：把**当前激活方案**密语给这个玩家（同一份分片 + 同一限频队列，只多一个 target）
@@ -233,6 +249,20 @@ function shTxEnqueue(bodies, chanId, target)
     RunScript('SendChatMessage("' .. bodies[1] .. '", "' .. chanId .. '", nil, "' .. target .. '")')
   else
     RunScript('SendChatMessage("' .. bodies[1] .. '", "' .. chanId .. '")')
+  end
+  -- ★★★1.73.42g 封皮行：**不进分片队列**，跟着第 1 片立即发一条。
+  --   ★这样「第 1 片立即发 / 其余排队」这套队列语义与既有判据**完全不变**
+  --   （否则每分享一次多一条，队列数判据全乱 —— 实测 got=17 want=8、got=6 want=0）。
+  if SH.sealPending then
+    local sline = SH.sealPending
+    SH.sealPending = nil
+    if type(RunScript) == "function" then
+      if target and target ~= "" then
+        RunScript('SendChatMessage("' .. sline .. '", "' .. chanId .. '", nil, "' .. target .. '")')
+      else
+        RunScript('SendChatMessage("' .. sline .. '", "' .. chanId .. '")')
+      end
+    end
   end
   for i = 2, n do table.insert(shTxQ, { body = bodies[i], chan = chanId, target = target }) end
   if n > 1 then
@@ -366,6 +396,22 @@ local function shProbeCapture(msg, sender, ev)
                                n = string.len(msg) })
   return true
 end
+-- ★★★1.73.42g 封皮行点击导入：收齐后缓存整份方案（FIFO 8 笔）
+local SH_RECENT_MAX = 8
+local function shRecentPut(key, text, sender, ev)
+  SH.recent = SH.recent or {}
+  SH.recentList = SH.recentList or {}
+  if not SH.recent[key] then table.insert(SH.recentList, key) end
+  SH.recent[key] = { text = text, sender = tostring(sender or "?"), ev = ev, t = shNowT() }
+  while table.getn(SH.recentList) > SH_RECENT_MAX do
+    local old = table.remove(SH.recentList, 1)
+    SH.recent[old] = nil
+  end
+end
+local function shSealNote(sender, id)
+  SH.sealSeen = (SH.sealSeen or 0) + 1
+  SH.sealLast = tostring(sender or "?") .. "#" .. tostring(id or "?")
+end
 local function shOnMsg(msg, sender, ev)
   if type(msg) ~= "string" then return end
   -- ★1.73.41 探针优先：命中探针标识的消息**只记进探针**，不进正常缓冲
@@ -374,7 +420,12 @@ local function shOnMsg(msg, sender, ev)
     return
   end
   local idh, i, n, payload = string.match(msg, "^%[EHPF#(%x+) (%d+)/(%d+)%](%x*)$")
-  if not idh then return end
+  if not idh then
+    -- ★★★1.73.42g 封皮行：不带 hex，只带传输 id —— 记下「这一笔真的发完了」
+    local sid = string.match(msg, "|HEHPF:(%x+)|h")
+    if sid then shSealNote(sender, sid) end
+    return
+  end
   if not shCfg().recv then return end
   i, n = tonumber(i), tonumber(n)
   if not i or not n or n < 1 or i < 1 or i > n then return end -- 防异常包（非数字 / 索引越界）
@@ -407,6 +458,7 @@ local function shOnMsg(msg, sender, ev)
       shWarn(string.format(L("SH_DROP_BIGTEXT"), string.len(text), SH_MAX_TEXT))
       return
     end
+    shRecentPut(key, text, sender, b.ev) -- ★1.73.42g 收齐后缓存整份方案（点击封皮时取回）
     -- ★1.71.3 用户要求：**不是「说」来源** 且内容就是**我自己的方案** → 直接忽略
     --   （自己往公会/队伍/团队发分享时，客户端会把分片**回声给自己**，不忽略就会自己弹自己的窗）。
     --   ★先确认「知道来源」（b.ev 非空）：认不出来时照旧弹出——宁可多弹一次，也不误吞真分享。
@@ -1339,8 +1391,40 @@ function EVAL_TEST_SHARE_TITLE_ICON()
   local ok, t = pcall(shp.titleIcon.GetTexture, shp.titleIcon)
   return ok and t or nil
 end
+-- ★★1.73.42g 点击封皮链接 → 直接导入（SetItemRef 的 EHPF: 分支调它）
+function EVAL_SHARE_CLICK_IMPORT(link)
+  local id = string.match(tostring(link or ""), "^EHPF:(%x+)")
+  if not id then return false end
+  local hit = nil
+  for i = table.getn(SH.recentList or {}), 1, -1 do
+    local k = SH.recentList[i]
+    if k and string.sub(k, -string.len(id)) == id then hit = SH.recent[k] break end
+  end
+  if not hit then
+    shSay(L("SH_CLICK_MISS"))
+    return false
+  end
+  if type(EVAL_IMPORT_TEXT) ~= "function" then shSay(L("SH_NOIMPORT")) return false end
+  local ok, msg = EVAL_IMPORT_TEXT(hit.text)
+  shSay(tostring(msg))
+  return ok and true or false
+end
+function EVAL_SHARE_SEAL_STATE()
+  return { last = SH.sealLast, pending = SH.sealPending, seals = SH.sealSeen or 0 }
+end
+function EVAL_SHARE_RECENT_STATE()
+  return { list = SH.recentList or {}, recent = SH.recent or {}, seals = SH.sealSeen or 0, lastSeal = SH.sealLast }
+end
+function EVAL_TEST_SHARE_BUILD() return shBodies() end
+function EVAL_TEST_SHARE_QUEUE_CHUNKS()
+  local c = 0
+  for i = 1, table.getn(shTxQ) do
+    if string.sub(tostring(shTxQ[i].body or ""), 1, 6) == "[EHPF#" then c = c + 1 end
+  end
+  return c
+end
 function EVAL_SHARE_PENDING() return SH.pending end
-function EVAL_SHARE_RESET() SH.buf = {} SH.done = {} SH.doneList = {} SH.pending = nil end
+function EVAL_SHARE_RESET() SH.buf = {} SH.done = {} SH.doneList = {} SH.pending = nil SH.recent = {} SH.recentList = {} end
 -- ★1.71.2 测试钩子：按分享弹窗的 [导入] 按钮（走它自己的 OnClick 闭包）。
 --   用户报的 bug 正是这条路径漏了刷新——直调 EVAL_IMPORT_TEXT 会绕过它、测不出来。
 function EVAL_TEST_SHARE_SELF_SKIPPED() return SH.selfSkipped or 0 end

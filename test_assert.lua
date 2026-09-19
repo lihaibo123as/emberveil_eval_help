@@ -3979,7 +3979,7 @@ eq(EVAL_SHARE_SEND("GUILD"), true, "share send ok")
 local shMsgs = {}
 for _, s in ipairs(TEST.runScripts or {}) do
   local m = string.match(s, 'SendChatMessage%("(.-)", "GUILD"%)')
-  if m then table.insert(shMsgs, m) end
+    if m and string.sub(m, 1, 6) == "[EHPF#" then table.insert(shMsgs, m) end -- ★封皮不算分片
 end
 eq(table.getn(shMsgs) >= 1, true, "share chunked messages emitted")
 -- 收齐全片 → 弹窗待导入
@@ -5166,7 +5166,7 @@ do
     local out = {}
     for _, s in ipairs(TEST.runScripts or {}) do
       local m = string.match(s, 'SendChatMessage%("(.-)", "GUILD"%)')
-      if m then table.insert(out, m) end
+      if m and string.sub(m, 1, 6) == "[EHPF#" then table.insert(out, m) end -- ★★封皮不算片
     end
     EVAL_HELP_CONFIG.war.profiles = keep
     EVAL_HELP_CONFIG.war.activeProfile = 1
@@ -7716,7 +7716,7 @@ do
     local out = {}
     for _, s in ipairs(TEST.runScripts or {}) do
       local m = string.match(s, 'SendChatMessage%("(.-)", "GUILD"%)')
-      if m then table.insert(out, m) end
+      if m and string.sub(m, 1, 6) == "[EHPF#" then table.insert(out, m) end -- ★封皮不算分片
     end
     return out
   end
@@ -7728,7 +7728,7 @@ do
   eq(total >= 3, true, "①前置：方案确实分成 ≥3 片（got " .. tostring(total) .. "）")
   -- ★① 核心判据
   eq(table.getn(first), 1, "★★★只立即发第 1 片，其余排队（旧实现一帧连发 " .. tostring(total) .. " 片）")
-  eq(EVAL_SHARE_TEST_QUEUE_LEN(), total - 1, "★★队列里正好剩 " .. tostring(total - 1) .. " 片")
+  eq(EVAL_TEST_SHARE_QUEUE_CHUNKS(), total - 1, "★★队列里正好剩 " .. tostring(total - 1) .. " 片")
   eq(string.find(tostring(TEST.chat), "排队", 1, true) ~= nil, true, "★★并且如实告知「已排队发送」")
   -- ★② 限频：同一时刻 tick 也不许滴出第二片
   EVAL_SHARE_TEST_TICK()
@@ -7741,7 +7741,7 @@ do
     sent = table.getn(sents106())
   end
   eq(sent, total, "★★★全部 " .. tostring(total) .. " 片最终分时发出（不是一帧倾泻）")
-  eq(EVAL_SHARE_TEST_QUEUE_LEN(), 0, "★队列已清空")
+  eq(EVAL_TEST_SHARE_QUEUE_CHUNKS(), 0, "★队列已清空")
   local msgs = sents106()
   -- ★③ 收不齐 → 如实报 + 缓冲真被丢
   EVAL_SHARE_RESET()
@@ -7784,7 +7784,7 @@ do
     local out = {}
     for _, s in ipairs(TEST.runScripts or {}) do
       local m = string.match(s, 'SendChatMessage%("(.-)", "GUILD"%)')
-      if m then table.insert(out, m) end
+      if m and string.sub(m, 1, 6) == "[EHPF#" then table.insert(out, m) end -- ★封皮不算分片
     end
     return out
   end
@@ -10923,6 +10923,49 @@ do
   eq(string.find(iSym.line, "|T", 1, true) == nil, true, "★聊天行里不再出现 |T（实测不可用）")
   print("  分享显示行：境界 7 档 · 品阶评分边界(3/4/6/7/9/10/12/13) · 5 色(含暗金) · 每档 10 条评语随机 · 命令接线")
 end
+-- 144) ★★★1.73.42g 封皮行（显示）+ 点击直接导入（SetItemRef 的 EHPF: 分支）
+do
+  EVAL_SHARE_RESET()
+  TEST.chat = nil TEST.runScripts = nil
+  eq(EVAL_SHARE_SEND("GUILD"), true, "①分享能发出")
+  local seal = tostring((EVAL_SHARE_SEAL_STATE() or {}).last or "")
+  eq(string.len(seal) > 0, true, "①★★★算出了封皮行")
+  eq(string.find(seal, "分享了一份传家宝", 1, true) ~= nil, true, "①★★封皮行含「分享了一份传家宝」")
+  eq(string.find(seal, "|HEHPF:", 1, true) ~= nil, true, "①★★封皮行带可点链接（载荷=传输 id）")
+  eq(string.find(seal, "秘籍·", 1, true) ~= nil, true, "①★★封皮行含 [品阶秘籍·方案名]")
+  eq(string.find(seal, "|T", 1, true) == nil, true, "①★封皮行不含 |T（实测不可用）")
+  local all = {}
+  for _, sc in ipairs(TEST.runScripts or {}) do
+    local m = string.match(sc, 'SendChatMessage%("(.-)", "GUILD"%)')
+    if m then table.insert(all, m) end
+  end
+  local foundSeal = false
+  for k2 = 1, table.getn(all) do if all[k2] == seal then foundSeal = true end end
+  eq(foundSeal, true, "①★★★封皮**真的走了发送通道**（RunScript 里有它）")
+  local sid = string.match(seal, "|HEHPF:(%x+)|h")
+  eq(type(sid) == "string", true, "①读得到传输 id（" .. tostring(sid) .. "）")
+  local chunks = {}
+  for k3 = 1, table.getn(all) do if string.sub(all[k3], 1, 6) == "[EHPF#" then table.insert(chunks, all[k3]) end end
+  eq(table.getn(chunks) >= 1, true, "②前置：拿到分片（" .. tostring(table.getn(chunks)) .. "）")
+  eq(string.sub(tostring(chunks[1] or ""), 1, 6), "[EHPF#", "②★★分片仍是 v1 明文（老版本照旧能收）")
+  for k4 = 1, table.getn(chunks) do EVAL_SHARE_ONMSG(chunks[k4], "队友甲") end
+  eq(table.getn((EVAL_SHARE_RECENT_STATE() or {}).list or {}) >= 1, true, "②★★收齐后缓存了整份方案（点击导入要取回它）")
+  TEST.chat = nil
+  eq(EVAL_TEST_SIR_CLICK("EHPF:" .. tostring(sid)), true, "③★★走**真实 SetItemRef** 点了封皮")
+  eq(string.len(tostring(TEST.chat or "")) > 0, true, "③★★点击后有如实播报（导入桥的回执）")
+  TEST.chat = nil
+  eq(EVAL_SHARE_CLICK_IMPORT("EHPF:" .. tostring(sid)), true, "③★★★命中缓存 → 导入返回成功")
+  TEST.chat = nil
+  EVAL_TEST_SIR_CLICK("EHPF:ff")
+  local miss = tostring(TEST.chat or "")
+  eq(string.find(miss, "还没收齐", 1, true) ~= nil, true, "③★★没缓存 → 如实提示「还没收齐」（实际：" .. string.sub(miss, 1, 60) .. "）")
+  TEST.chat = nil
+  EVAL_TEST_SIR_CLICK("player:Ionol")
+  eq(string.find(tostring(TEST.chat or ""), "还没收齐", 1, true) == nil, true, "③★非 EHPF 链接不进入口（原样放行）")
+  TEST.chat = nil
+  print("  封皮行：传家宝 + 品阶秘籍 + 可点链接 · 立即发 · 收齐缓存 · 点击直接导入 · 未命中如实提示")
+end
+
 print("ALL TESTS PASS")
 
   local sd142 = EVAL_HELP_CONFIG.shareSealDemo

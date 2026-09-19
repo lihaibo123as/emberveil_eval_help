@@ -1612,11 +1612,24 @@ end
 
 function EVAL_TB_SIR_HANDLE(link, button)
   if type(link) ~= "string" then return false end
+  -- ★★★1.73.42g 分享封皮链接：点它 = **直接导入方案**（用户要求）；只认 EHPF: 前缀，其余原样放行。
+  if string.find(tostring(link or ""), "^EHPF:") then
+    if type(EVAL_SHARE_CLICK_IMPORT) == "function" then pcall(EVAL_SHARE_CLICK_IMPORT, link) end
+    return true
+  end
   local name = string.match(link, "^player:(.+)$")
   if not name or name == "" then return false end
   if button ~= "RightButton" then return false end
   return EVAL_TB_MENU_SHOW(name)
 end
+-- ★1.73.42g 测试钩子：走**真实**已安装的 SetItemRef 点一个链接（不直调分支函数）
+function EVAL_TEST_SIR_CLICK(link)
+  local f = _G.SetItemRef
+  if type(f) ~= "function" then return false end
+  local ok = pcall(f, tostring(link or ""), "[链接]", "LeftButton")
+  return ok and true or false
+end
+
 function EVAL_TB_SETITEMREF_INSTALL()
   local cur = _G.SetItemRef
   if type(cur) ~= "function" then return false end

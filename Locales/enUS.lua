@@ -49,6 +49,7 @@ SH_TIP_R3 = "- You must be on the same channel (pick Party/Say if not in a guild
   SH_RECV_SW = "Recv profile", SH_RECV_SW_TIP = "Auto-receive profiles shared by teammates (same switch as in the Import/Export window)",
   SH_IMPORT = "Import",
   SH_IGNORE = "Ignore",
+  SH_CLICK_MISS = "That manual has not arrived yet (or expired) - ask the sender to resend, or use the share popup.",
   SH_RECV_ON = "Profile share receiving: ON",
   SH_RECV_OFF = "Profile share receiving: OFF",
   SH_NOEXPORT = "Export function unavailable",
