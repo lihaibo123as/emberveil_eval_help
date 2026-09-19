@@ -10885,13 +10885,13 @@ do
   eq(select(2, EVAL_SHARE_SEAL_TIER(12)).name, "绝版", "品阶：12 = 绝版（上沿）")
   eq(select(2, EVAL_SHARE_SEAL_TIER(13)).name, "源代码", "★★品阶：13 = 源代码（用户定的门槛）")
   local reps = { 1, 4, 7, 10, 13 }
-  local wantColor = { "|cffffffff", "|cff1eff00", "|cffa335ee", "|cffff8000", "|cffb87333" }
+  local wantColor = { "|cffffffff", "|cff1eff00", "|cffa335ee", "|cffff8000", "|cff00bfff" }
   for i = 1, 5 do
     local _, ti = EVAL_SHARE_SEAL_TIER(reps[i])
     eq(ti.color, wantColor[i], "品阶" .. i .. " 色码对（" .. tostring(ti.color) .. "）")
     eq(string.len(tostring(ti.color)) == 10, true, "色码必须 8 位（|c + 8 = 10 字节）")
   end
-  eq(wantColor[5], "|cffb87333", "★★源代码 = 暗金（用户定的）")
+  eq(wantColor[5], "|cff00bfff", "★★源代码 = **亮蓝**（用户 1.73.47 定的；原来是暗金）")
   for i = 1, 5 do
     local set = {}
     for k = 1, 10 do
@@ -10928,7 +10928,7 @@ do
   eq(string.find(info.line, "传家宝", 1, true) == nil, true, "★★整行不许再有「传家宝」（用户要求）")
   eq(string.find(info.line, "[源代码秘籍·甲]", 1, true) ~= nil, true, "整行含 [品阶秘籍·方案名]")
   eq(string.find(info.line, info.comment, 1, true) ~= nil, true, "整行含评语")
-  eq(string.find(info.line, "|cffb87333", 1, true) ~= nil, true, "整行含暗金色码")
+  eq(string.find(info.line, "|cff00bfff", 1, true) ~= nil, true, "整行含**亮蓝**色码（源代码档）")
   TEST.chat = ""
   SlashCmdList["EVALHELP"]("go 秘籍")
   eq(string.find(tostring(TEST.chat or ""), "秘籍预览", 1, true) ~= nil, true, "★★★/eh go 秘籍 真的执行（命令在 go 组里）")
@@ -10945,7 +10945,7 @@ do
     local dk = tostring(EVAL_L(EVAL_TITLE_KEY(i, 1)))
     eq(string.find(dc, "[" .. dk .. "]", 1, true) ~= nil, true, "★★样例里有头衔示意：" .. dk)
   end
-  eq(string.find(dc, "|cffb87333", 1, true) ~= nil, true, "★样例里有暗金色码（源代码档）")
+  eq(string.find(dc, "|cff00bfff", 1, true) ~= nil, true, "★样例里有**亮蓝**色码（源代码档）")
   EVAL_HELP_CONFIG.shareSealDemo = nil
   SlashCmdList["EVALHELP"]("go 秘籍样例")
   eq(string.find(tostring(TEST.chat or ""), "秘籍样例", 1, true) ~= nil, true, "★★★/eh go 秘籍样例 真的执行（命令在 go 组里）")
@@ -11017,7 +11017,7 @@ do
   eq(iSym.symbol, "★", "整行 info 里带符号")
   eq(string.find(iSym.line, "★[源代码秘籍·甲]", 1, true) ~= nil, true, "★★整行是「符号 + [品阶秘籍·名]」")
   eq(string.find(iSym.line, "|T", 1, true) == nil, true, "★聊天行里不再出现 |T（实测不可用）")
-  print("  分享显示行：境界 7 档 · 品阶评分边界(3/4/6/7/9/10/12/13) · 5 色(含暗金) · 每档 10 条评语随机 · 命令接线")
+  print("  分享显示行：境界 7 档 · 品阶评分边界(3/4/6/7/9/10/12/13) · 5 色(含**亮蓝**) · 每档 10 条评语随机 · 命令接线")
 end
 -- 144) ★★★1.73.42g 封皮行（显示）+ 点击直接导入（SetItemRef 的 EHPF: 分支）
 do
@@ -11089,7 +11089,14 @@ do
   eq(table.getn(chunks) >= 1, true, "②前置：拿到分片（" .. tostring(table.getn(chunks)) .. "）")
   eq(string.find(tostring(chunks[1] or ""), "|HEHPF:", 1, true) ~= nil, true, "②★★分片 = v2 链接形态（载荷藏在 |H 段）")
   -- ★1.73.43f 分片标签**恒为进度**；分享信息是**另一条**消息（同款结构、序号 0/1）
-  eq(string.find(tostring(chunks[1] or ""), "传输中...", 1, true) ~= nil, true, "②★★分片标签 = 方案:名 传输中...%")
+  -- ★★★1.73.47 用户改口径：「方案:xxx 传输中」→「秘籍传输中...」⇒ 判据取**语言包里的前缀**（不硬编码中文），
+  --   并**反向**验「标签里不再出现方案名」（否则等于没改）。
+  local lbl144 = string.match(EVAL_L("SH_CHUNK_LABEL"), "^(.-)%%d")
+  eq(type(lbl144) == "string" and lbl144 ~= "", true, "②★★★语言包里分片标签带前缀（" .. tostring(lbl144) .. "）")
+  -- ★★**逐字相等**才算数（原来只查「含前缀」+「不含 `方案:`」—— 变异 M465 把方案名直接缀在后面照样绿 = 弱判据）
+  local chunkLbl144 = string.match(tostring(chunks[1] or ""), "|h%[(.-)%]|h") or ""
+  local pct144 = tonumber(string.match(tostring(chunks[1] or ""), "%.%.%.(%d+)%%")) or 0
+  eq(chunkLbl144, string.format(EVAL_L("SH_CHUNK_LABEL"), pct144), "②★★★分片标签**逐字**等于语言包模板（" .. tostring(chunkLbl144) .. "）—— 不再带方案名（用户要求）")
   local sealMsg = tostring(all[table.getn(all)] or "")
   eq(string.find(sealMsg, "0/1:", 1, true) ~= nil, true, "②★★★B 行与分片**同款结构**（序号 0/1 → 接收端按越界忽略）")
   eq(string.find(sealMsg, seal, 1, true) ~= nil, true, "②★★★B 行标签 = 品阶行内容")
@@ -11112,7 +11119,7 @@ do
       -- ★★进度必须**真实**：逐片 = ceil(第k片/总片)。只验「末片 100%」会被「恒 100%」骗过（变异 M354 曾 SURVIVED）。
       local okPct = true
       for k9 = 1, ln8 do
-        local p9 = tonumber(string.match(lb[k9], "传输中%.%.%.(%d+)%%"))
+        local p9 = tonumber(string.match(lb[k9], "%.%.%.(%d+)%%")) -- ★1.73.47 与文案无关地取进度（标签已改成「秘籍传输中...」）
         if p9 ~= math.ceil(k9 * 100 / ln8) then okPct = false end
       end
       eq(okPct, true, "②★★★每片进度 = ceil(k/n)（真的在报进度，不是恒 100%）")
@@ -11128,7 +11135,7 @@ do
     eq(string.find(tostring(chunks[table.getn(chunks)] or ""), "100%", 1, true) ~= nil, true, "②★★末片标签 = 100%")
   end
   local pctAll = true
-  for k6 = 1, table.getn(chunks) do if string.find(chunks[k6], "传输中...", 1, true) == nil then pctAll = false end end
+  for k6 = 1, table.getn(chunks) do if string.find(chunks[k6], lbl144, 1, true) == nil then pctAll = false end end
   eq(pctAll, true, "②★每片都带进度百分比")
   do
     local function hex144(str) return (string.gsub(str, ".", function(ch) return string.format("%02x", string.byte(ch)) end)) end
@@ -11364,7 +11371,7 @@ do
   -- ★1.73.43g 新格式的 B 行不带身份 ⇒ 用**合成老格式封皮**（同一个 id）验「晚到的封皮照样能解析身份」
   local sid5 = string.match(tostring(sealB5), "|HEHPF:(%x+)")
   eq(type(sid5) == "string", true, "⑤★读得到传输 id（" .. tostring(sid5) .. "）")
-  local sealOld5 = "|cfffff2c8[巡林客]|r队友乙 分享了 → |cffb87333★|HEHPF:" .. tostring(sid5) .. "|h[源代码秘籍·短片]|h|r  老格式评语"
+  local sealOld5 = "|cfffff2c8[巡林客]|r队友乙 分享了 → |cff00bfff★|HEHPF:" .. tostring(sid5) .. "|h[源代码秘籍·短片]|h|r  老格式评语"
   EVAL_SHARE_ONMSG(sealOld5, "队友乙")
   local vB = EVAL_TEST_SHARE_SEAL_ROW()
   local meta5 = (((EVAL_SHARE_SEAL_STATE() or {}).meta) or {})[tostring(sid5)]
@@ -11476,7 +11483,7 @@ do
   eq(EVAL_L("TITLE_3_1"), EVAL_LOCALES[keepLang146].TITLE_3_1, "④还原后读值口回到原语言")
   -- ⑤ 色码与符号**留在源码**：迁文案不许把它们也搬走（它们是协议的一部分）
   eq(EVAL_SHARE_SEAL_SYMBOL(5), "★", "⑤符号留在源码（★）")
-  eq(select(2, EVAL_SHARE_SEAL_TIER(13)).color, "|cffb87333", "⑤暗金色码留在源码")
+  eq(select(2, EVAL_SHARE_SEAL_TIER(13)).color, "|cff00bfff", "⑤**亮蓝**色码留在源码（用户 1.73.47）")
   TEST.chat = nil
   print("  分享文案三语言：130 键（5 品阶 + 50 评语 + 75 头衔）逐语言齐全 · 中文原文逐字校验 · 切语言读值口即时生效 · 符号/色码仍在源码")
 end
@@ -12006,11 +12013,11 @@ do
     end
   end
   eq(okAll148, true, "①★★★RGB 由品阶色码解析而来（与分享行/弹窗同一张色表，五档逐个核）")
-  eq(EVAL_SHARE_SEAL_TIER_RGB(5).hex, "|cffb87333", "①★源代码档 = 暗金（RGB 有据）")
+  eq(EVAL_SHARE_SEAL_TIER_RGB(5).hex, "|cff00bfff", "①★源代码档 = **亮蓝**（RGB 有据）")
   -- ② 真实模版行：图标 / 文字色 / 背景色 / 文字区宽 / 居中
   local rows148 = EVAL_TEST_TPL_ROWS()
   eq(table.getn(rows148) >= 5, true, "②前置：模版行数 " .. tostring(table.getn(rows148)))
-  local checked148, badIcon148, badText148, badBg148, narrow148, offCenter148 = 0, 0, 0, 0, 0, 0
+  local checked148, badIcon148, badText148, badBg148, narrow148, badAlign148, badAlignV148 = 0, 0, 0, 0, 0, 0, 0
   local seenTier148, nTier148 = {}, 0
   for i = 1, table.getn(rows148) do
     local v = EVAL_TEST_TPL_TIER(i)
@@ -12025,8 +12032,10 @@ do
         local est148 = math.floor(string.len(tostring(v.name or "")) / 3 + 0.5) * 9
         if v.textW < est148 then narrow148 = narrow148 + 1 end
       end
-      -- ★用户：「方案名称没居中」
-      if v.textJustify ~= "CENTER" then offCenter148 = offCenter148 + 1 end
+      -- ★★★1.73.47 用户改口径：「案例模版→方案标题左对齐·垂直居中」⇒ 判据从「居中」翻成「**左对齐 + 垂直居中**」
+      --   （上一轮要的是「名称没居中」；口径变了就把判据改对，别留一条和用户当场矛盾的旧判据）
+      if v.textJustify ~= "LEFT" then badAlign148 = badAlign148 + 1 end
+      if v.textJustifyV ~= "MIDDLE" then badAlignV148 = badAlignV148 + 1 end
     end
   end
   eq(checked148 >= 5, true, "②★★真的查到带品阶的模版行（" .. tostring(checked148) .. " 行）")
@@ -12034,9 +12043,10 @@ do
   eq(badText148, 0, "②★★★每行**名称文字色** = 该品阶色（读真控件 GetTextColor），不符 " .. tostring(badText148) .. " 行")
   eq(badBg148, 0, "②★★★每行**背景色** = 该品阶色的 22% 暗色（读真控件 GetVertexColor），不符 " .. tostring(badBg148) .. " 行")
   eq(narrow148, 0, "②★★★每行文字区都放得下名字（图标位算进按钮宽，用户报「显示不全」），被裁 " .. tostring(narrow148) .. " 行")
-  eq(offCenter148, 0, "②★★★每行方案名**居中**（用户要求），没居中 " .. tostring(offCenter148) .. " 行")
+  eq(badAlign148, 0, "②★★★每行方案名**左对齐**（用户 1.73.47 要求），不左对齐 " .. tostring(badAlign148) .. " 行")
+  eq(badAlignV148, 0, "②★★★每行文字**垂直居中**（读真控件 GetJustifyV），不居中 " .. tostring(badAlignV148) .. " 行")
   eq(nTier148 >= 2, true, "③★★★模版窗里至少出现 2 个不同品阶（否则「颜色跟着品阶」验不出来），实际 " .. tostring(nTier148))
-  print("  案例模版行外观：图标 + 名称文字色 + 背景暗色调 + 文字区宽度 + 居中（全读真控件）· RGB 与色码同源")
+  print("  案例模版行外观：图标 + 名称文字色 + 背景暗色调 + 文字区宽度 + **左对齐/垂直居中**（全读真控件）· RGB 与色码同源")
 end
 -- ★★★教训（1.73.42z 记录）：上一轮「用脚本整段替换 147 组」时，替换范围写成「从 `-- 147)` 到第一个
 --   `print("ALL TESTS PASS")`」——而 148 组正好落在这个区间里 ⇒ **整组被静默删掉**，套件照旧全绿
@@ -12087,7 +12097,7 @@ do
   EVAL_PROFILE_TO_TEXT = keepToText155
   local st155before = EVAL_SHARE_SEAL_STATE()
   local mine155 = tostring(st155before.last or "")
-  EVAL_SHARE_ONMSG("|cffffffff[某人]|rIonol 分享了 → |cffb87333★|HEHPF:deadbeef|h[源代码秘籍·测试]|r  评语|h", "Ionol", "CHAT_MSG_WHISPER")
+  EVAL_SHARE_ONMSG("|cffffffff[某人]|rIonol 分享了 → |cff00bfff★|HEHPF:deadbeef|h[源代码秘籍·测试]|r  评语|h", "Ionol", "CHAT_MSG_WHISPER")
   local st155after = EVAL_SHARE_SEAL_STATE()
   eq(tostring(st155after.last or "") == mine155, true, "③★★★收到别人的封皮后，**自己发送侧那条没被盖掉**")
   eq(type(st155after.recvLast) == "string", true, "③★★接收侧单独记在自己的字段里（" .. tostring(st155after.recvLast) .. "）")
@@ -12132,8 +12142,8 @@ do
   eq(string.find(tostring(TEST.chat or ""), 'SendChatMessage("||', 1, true) ~= nil, true, "⑤★★★**留痕里的脚本原文**也转了义（弱判据教训：只查 ||HEHPF 会被「封皮行也转了义」顶住，M443 实测 SURVIVED）")
   -- ⑥ 接收端**两种结构**都要能解析出评语（新：评语在链接外；老：评语在链接内）
   EVAL_SHARE_RESET()
-  EVAL_SHARE_ONMSG("[头衔]某人 分享了 → |cffb87333★|HEHPF:aaa1|h[源代码秘籍·甲]|h|r  新结构评语", "A", "CHAT_MSG_SAY")
-  EVAL_SHARE_ONMSG("[头衔]某人 分享了 → |cffb87333★|HEHPF:aaa2|h[源代码秘籍·甲]|r  老结构评语|h", "B", "CHAT_MSG_SAY")
+  EVAL_SHARE_ONMSG("[头衔]某人 分享了 → |cff00bfff★|HEHPF:aaa1|h[源代码秘籍·甲]|h|r  新结构评语", "A", "CHAT_MSG_SAY")
+  EVAL_SHARE_ONMSG("[头衔]某人 分享了 → |cff00bfff★|HEHPF:aaa2|h[源代码秘籍·甲]|r  老结构评语|h", "B", "CHAT_MSG_SAY")
   local meta156 = (EVAL_SHARE_SEAL_STATE() or {}).meta or {}
   eq(type(meta156.aaa1) == "table", true, "⑥★★新版封皮被认出来了")
   eq(tostring(meta156.aaa1 and meta156.aaa1.comment or ""), "新结构评语", "⑥★★★新结构：评语在链接**外**也解析得到")

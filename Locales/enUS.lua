@@ -54,6 +54,8 @@ SH_TIP_R3 = "- You must be on the same channel (pick Party/Say if not in a guild
   SH_CLICK_MISS = "That manual has not arrived yet (or expired) - ask the sender to resend, or use the share popup.",
   -- ★★★1.73.46 Clicking a link only opens the popup (user: never auto-import; let the player confirm).
   SH_CLICK_OPEN = "Profile share window opened - check it and press [Import] yourself (a link click never imports)",
+  -- ★★★1.73.47 Chunk label (user: drop the plan name, just show progress).
+  SH_CHUNK_LABEL = "Tome transfer...%d%%",
   -- ★★★1.73.42n 分享显示行文案（品阶 / 评语 / **头衔**）—— 文案**只在这里**（Share.lua 只留结构与色码）。
   --   键名固定：SEAL_TIER_1..5（品阶）· SEAL_C<品阶>_<1..10>（每档 10 条评语）· TITLE_<档>_<1..15>（每档 15 个头衔）。
   --   ★中文是**基准与原文**（用户定稿，一字不改）；英/俄为简短对应句，键必须齐（缺键会回退中文）。

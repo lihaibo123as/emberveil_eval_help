@@ -157,12 +157,14 @@ local function shBuildFor(text)
   -- ★1.73.42h 传输 id 用 **16 位**随机（原 8 位）：同一发送者连着分享两笔时，id 撞车会把两笔分片
   --   并在同一个接收缓冲里（真机上表现为串包；测试里表现为队列计数偶发多一片——8 位时约 4% 概率会撞）。
   local idh = string.format("%04x", math.random(0, 65535)) -- 本次传输 id（接收端按 发送者+id 归并分片）
-  -- ★★★1.73.42h v2 分片体：载荷藏进自定义链接的 |H 段，聊天里**只显示**「方案:名 传输中...%」
-  local nm2 = shSealName(text)
+  -- ★★★1.73.42h v2 分片体：载荷藏进自定义链接的 |H 段，聊天里**只显示**传输标签。
+  -- ★★★1.73.47 用户：「方案:xxx 传输中 调整 -> 秘籍传输中...」⇒ 标签**不再带方案名**，只报「秘籍传输中...N%」
+  --   （方案名在最后那条 `★[品阶秘籍·名]` 里出现一次就够；分片行短一点、也少占聊天宽度）。
+  --   ★文案走 Locales（三语言同步），不在这里硬编码中文。
   -- ★1.73.43f label 可选：最后一片要把**分享信息**当标签（用户：「用能用的那几个」）
   local function chunkBody(idx, tot, part, label)
     local pct = math.ceil(idx * 100 / tot)
-    if not label then label = "方案:" .. nm2 .. " 传输中..." .. pct .. "%" end
+    if not label then label = string.format(L("SH_CHUNK_LABEL"), pct) end
     return SH_CHUNK_COLOR .. "|HEHPF:" .. idh .. " " .. idx .. "/" .. tot .. ":" .. part .. "|h[" .. label .. "]|h|r"
   end
   -- ★预算：单条 <= 250 字节（实测 250 通过、270 整条丢）→ 先量包装，剩下的都给 hex
@@ -493,7 +495,7 @@ function EVAL_SHARE_SEAL_VARIANT_PROBE()
   local TITLE_COL = "|cffffd700"   -- 彩蛋自定义头衔色（8 位；★1.73.45 起默认=帝王金，实际选用色见 shTitleCustomColor()）
   --   ★这里保留**字面量快照**（不变色）：本命令测的是**消息形态**（哪个结构会被客户端吞），颜色取哪个都一样；
   --     且本函数声明在 shTitleCustomColor() 之前，直接调用会踩「local 声明晚于使用」的铁律（DECL ORDER 守着）。
-  local TIER_COL  = "|cffb87333"   -- 源代码档品阶色（8 位，取自 SH_SEAL_TIERS）
+  local TIER_COL  = "|cff00bfff"   -- 源代码档品阶色（8 位；★1.73.47 起 = 亮蓝，取自 SH_SEAL_TIERS）
   local who, plan, cmt, sym, title = "Ionol", "武器战", "看懂？", "★", "阿凡提"
   if type(UnitName) == "function" then
     local ok, v = pcall(UnitName, "player")
@@ -977,7 +979,7 @@ end
 --     ③ 每档 15 张卡池，**每档只抽一次**、不重复抽、抽到**唯一不变**（写进存档）；
 --     ④ 预留彩蛋「创世神的关注」：可**一次性**自定义头衔，优先度最高（触发机制以后再接）。
 --   品阶 = **技能条数 + 每条技能里的条件数**（评分制）：≤3 普通 / 4-6 稀有 / 7-9 珍稀 / 10-12 绝版 / **≥13 源代码**；
---   颜色：白 |cffffffff · 绿 |cff1eff00 · 紫 |cffa335ee · 橙 |cffff8000 · **暗金 |cffb87333**（用户定的）；
+--   颜色：白 |cffffffff · 绿 |cff1eff00 · 紫 |cffa335ee · 橙 |cffff8000 · **亮蓝 |cff00bfff**（用户 1.73.47 定的 —— 原暗金太暗）；
 --   评语：每档 **10 条**（用户要求），分享时**随机抽一条**。
 -- ★★★1.73.42j 这些表只存**结构 + 键**，文案一律走 Locales（L()）：文案散在源码里 = 换语言时不生效。
 local SH_SEAL_TIERS = {
@@ -985,7 +987,7 @@ local SH_SEAL_TIERS = {
   { max = 6,  key = "SEAL_TIER_2", color = "|cff1eff00" },
   { max = 9,  key = "SEAL_TIER_3", color = "|cffa335ee" },
   { max = 12,  key = "SEAL_TIER_4", color = "|cffff8000" },
-  { max = 9999, key = "SEAL_TIER_5", color = "|cffb87333" },
+  { max = 9999, key = "SEAL_TIER_5", color = "|cff00bfff" }, -- ★★★1.73.47 用户：「源代码级别的方案颜色使用**亮蓝色**」（原暗金 b87333 太暗）
 }
 local SH_SEAL_COMMENTS = {
   { "SEAL_C1_1", "SEAL_C1_2", "SEAL_C1_3", "SEAL_C1_4", "SEAL_C1_5", "SEAL_C1_6", "SEAL_C1_7", "SEAL_C1_8", "SEAL_C1_9", "SEAL_C1_10" },
@@ -1002,7 +1004,7 @@ local SH_SEAL_COMMENTS = {
 --   ★不许再用 Dingbats 花体字形；改这里务必先进游戏看一眼（源码检查 SEAL SYMBOL CHECK 只挡得住那一个块）。
 local SH_SEAL_SYMBOLS = { "·", "◆", "■", "●", "★" }
 -- ★★★1.73.42n 头衔的颜色 = **冷色系**（与品阶的暖色稀有度系**逐个不相等**，有判据守着）：
---   为什么必须错开：品阶用白/绿/紫/橙/暗金；头衔若也用它，同一行里「[大元帅]」和「[源代码秘籍]」
+--   为什么必须错开：品阶用白/绿/紫/橙/亮蓝；头衔若也用它，同一行里「[大元帅]」和「[源代码秘籍]」
 --   会看起来是同一档东西，**两个维度糊在一起**。
 --   1 档 青灰 |cff8fa8b8 · 2 档 青 |cff00e5ff · 3 档 蓝 |cff4f9bff · 4 档 品红 |cffff4fd8 · 5 档 极光青绿 |cff5cffd2。
 --   ★色码必须 8 位（`|c` + AARRGGBB）：6 位本客户端**不解析**，会把色码原文画进聊天（1.73.19 实测）。
@@ -1011,7 +1013,7 @@ local SH_TITLE_COLORS = { "|cff8fa8b8", "|cff00e5ff", "|cff4f9bff", "|cffff4fd8"
 --   并在候选里**选定「烈焰赤」**）。
 --   ★颜色是主观偏好 ⇒ 顺带给**候选表 + 命令**：/eh go 名号色 把候选**各发一条编号预览**（真形态、真颜色），
 --     /eh go 名号色 <编号> 当场选用并**存档**（cfg.title.customColor）—— 免得为了「霸气一点」来回改版。
---   ★候选一律**避开**品阶五档（白/绿/紫/橙/暗金）与头衔五档（青灰/青/蓝/品红/青绿）：同屏不糊成一团（源码检查守着）。
+--   ★候选一律**避开**品阶五档（白/绿/紫/橙/亮蓝）与头衔五档（青灰/青/蓝/品红/青绿）：同屏不糊成一团（源码检查守着）。
 --   ★顺序 = 默认（候选 1 即默认，单一来源）：改默认**只改顺序/第 1 项**，别的都不用动。
 local SH_TITLE_CUSTOM_COLORS = {
   { code = "|cffff2400", key = "TC_FLAME" },  -- 1 烈焰赤（默认 —— 用户选定）

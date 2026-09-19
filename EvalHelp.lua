@@ -6620,6 +6620,11 @@ function EVAL_HELP_TPL_BUILD()
       pcall(bt.SetWidth, bt, e.w - 8) -- 实测宽度留的内边距足够；超长名仍裁掉（tooltip 里有全名）
       pcall(bt.SetNonSpaceWrap, bt, false)
       bt:SetText(tostring(p.name)) -- 1.67.6 行内只留模版名；描述+方案内容移入 tooltip
+      -- ★★★1.73.47 用户：「案例模版→方案标题左对齐·垂直居中」⇒ 名字**左对齐**（居中时两边都裁，长名从中间截断、
+      --   看不出是哪个方案）+ 行内**垂直居中**。★在**建控件时设一次**（有品阶/无品阶两条路共用），品阶分支不再改对齐 ——
+      --   免得出现「有品阶的居左、没品阶的居中」这种漂移。
+      pcall(bt.SetJustifyH, bt, "LEFT")
+      pcall(bt.SetJustifyV, bt, "MIDDLE")
       -- ★★★1.73.42e 用户要求：「案例模版内的方案根据以上方案等级配置对应的图标显示」
       --   品阶 = 技能条数 + 条件数（**与分享显示行同一套判定** EVAL_SHARE_SEAL_*）；图标来自 IconSem 语义表；
       --   ★按钮几何一律不动（免得破坏「分列/不重叠/不越界」那几条判据）——只把**文字让出图标位**。
@@ -6633,11 +6638,11 @@ function EVAL_HELP_TPL_BUILD()
         tiTex:SetWidth(13)
         tiTex:SetHeight(13)
         b.tierIcon, b.tierIdx, b.tierScore = tiTex, tiIdx, sScore
-        -- ★1.73.42z 文字区 = 按钮宽 − 内边距 − 图标位（与 tplTwoColPlan 的测量**同源**）→ 名字放得下、不再被裁；
-        --   并且**居中**（用户：「方案名称没居中」）：让出左侧图标位后，在本区里居中。
+        -- ★1.73.42z 文字区 = 按钮宽 − 内边距 − 图标位（与 tplTwoColPlan 的测量**同源**）→ 名字放得下、不再被裁。
+        --   ★★★1.73.47 **「居中」已作废**（1.73.42z 那条「名称没居中」是上一轮的要求；用户现在要「左对齐·垂直居中」）
+        --     ⇒ 对齐统一在建控件时设一次（LEFT + MIDDLE），这里**只让位、不动对齐**。
         pcall(bt.SetPoint, bt, "LEFT", b, "LEFT", 3 + 13 + 4, 0)
         pcall(bt.SetWidth, bt, e.w - TPL_ROW_PAD - TPL_ICON_W)
-        pcall(bt.SetJustifyH, bt, "CENTER")
         -- ★★★1.73.42l 用户：「案例方案内图标替换，名称和颜色背景都要符合以上规则」
         --   ① 名称文字 = **品阶色**（与聊天行/弹窗同一张色表，经 EVAL_SHARE_SEAL_TIER_RGB 解析）；
         --   ② 行背景 = 同色调**压暗到 22%**（饱和底色会把文字吃掉——本项目「文字色 vs 背景色」那条老教训）；
@@ -6764,6 +6769,9 @@ function EVAL_TEST_TPL_TIER(i)
     if okw and type(wv) == "number" then out.textW = wv end
     local okj, jv = pcall(b.tierText.GetJustifyH, b.tierText)
     if okj and type(jv) == "string" then out.textJustify = jv end
+    -- ★★★1.73.47 垂直对齐也要读得回来（用户：「垂直居中」）——桩没记就永远验不到（桩保真铁律）
+    local okjv, jvv = pcall(b.tierText.GetJustifyV, b.tierText)
+    if okjv and type(jvv) == "string" then out.textJustifyV = jvv end
   end
   local okbw, bwv = pcall(b.GetWidth, b)
   if okbw and type(bwv) == "number" then out.btnW = bwv end

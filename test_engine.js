@@ -1213,6 +1213,25 @@ function checkIconAssets() {
   console.log("SHARE MSG SHAPE CHECK: 分享信息两条各自 <=1 段色码（客户端会吞多段色码的消息，已实测定案）");
 })();
 
+// ===== SHARE LABEL I18N CHECK（1.73.47）：分片标签必须**走 Locales**，不许在源码里硬编码 =====
+// ★背景（用户：「方案:xxx 传输中 -> 秘籍传输中...」）：分片标签是**玩家看得见的文案**——
+//   硬编码中文 = 英/俄玩家看到中文（而且不报错，只是不同步，正是本项目最恨的一族）。
+//   判据：① Share.lua 里必须调 `L("SH_CHUNK_LABEL")`；② **剥掉注释后**源码里不许再出现「传输中」这个字面量。
+//   ★先剥注释再扫（说明文字里就会写「秘籍传输中...」——不剥就是假 FAIL，本项目 WTT 隔离检查踩过同款）。
+(function () {
+  const src = fs.readFileSync(path.join(__dirname, "Share.lua"), "utf8");
+  if (src.indexOf('L("SH_CHUNK_LABEL")') < 0) {
+    console.log("SHARE LABEL I18N CHECK: FAIL - 分片标签没有走 Locales（L(\"SH_CHUNK_LABEL\")）—— 三语言会不同步");
+    process.exitCode = 1; return;
+  }
+  const noComment = src.split(/\r?\n/).map(function (ln) { return ln.replace(/--.*$/, ""); }).join("\n");
+  if (/传输中/.test(noComment)) {
+    console.log("SHARE LABEL I18N CHECK: FAIL - 源码里还有硬编码的「传输中」文案（应走语言包）");
+    process.exitCode = 1; return;
+  }
+  console.log("SHARE LABEL I18N CHECK: 分片标签走 Locales（SH_CHUNK_LABEL），源码里无硬编码文案");
+})();
+
 // ===== SHARE PALETTE CHECK（1.73.44）：分享**在用的每一个色码**都必须 8 位，且「色码测」命令要从色表现取 =====
 // ★背景（用户要求：「将现在所使用的所有颜色色码都测试下」）：色码是这个客户端最容易「整条吞掉消息」的成分，
 //   而三种坑**症状相同、根因不同**（非 8 位吞整条 1.73.43e · 一条多段吞整条 1.73.43h · 有色码无链接不画 1.73.43p）。
