@@ -661,6 +661,45 @@ function EVAL_SHARE_SEAL_DEMO()
   for i = 1, table.getn(lines) do shSay("  " .. lines[i]) end
   return table.getn(lines)
 end
+-- ===== 1.73.42c 品阶图标 + 「|T 内联纹理」可行性探针（用户要求：按语义给等级配图标，先验证）=====
+-- 语义配图：从 IconSem.lua（客户端图标清单生成、带中文标签）里按标签挑，**保证路径真实存在**：
+--   普通=书 INV_Misc_Book_07 · 稀有=宝石 INV_Misc_Gem_02 · 珍稀=紫水晶 INV_Misc_Gem_Amethyst_01
+--   绝版=王冠 INV_Crown_01 · 源代码=齿轮 INV_Misc_Gear_01（机械＝源码味）
+-- ★但「聊天行里能不能画图标」是本客户端**未知数**：`|T` 标记在本仓库与两个参考插件里**使用次数为 0** ⇒ 必须实测。
+local SH_SEAL_ICONS = {
+  "INV_Misc_Book_07", "INV_Misc_Gem_02", "INV_Misc_Gem_Amethyst_01", "INV_Crown_01", "INV_Misc_Gear_01",
+}
+function EVAL_SHARE_SEAL_ICON(tierIdx)
+  local f = SH_SEAL_ICONS[tonumber(tierIdx) or 1] or SH_SEAL_ICONS[1]
+  return "Interface\\Icons\\" .. f, f
+end
+function EVAL_SHARE_SEAL_ICON_COUNT() return table.getn(SH_SEAL_ICONS) end
+-- 探针：4 种写法各一条（密语自己），④ 是纯符号对照（永远能渲染，作为保底参照）
+function EVAL_SHARE_ICON_PROBE(chanId)
+  chanId = (type(chanId) == "string" and chanId ~= "") and chanId or "WHISPER"
+  local p = EVAL_SHARE_SEAL_ICON(1)
+  local bodies = {
+    "① |T" .. p .. ":16:16:0:0|t 书（|T 带尺寸）",
+    "② |T" .. p .. ":0|t 书（|T 省略尺寸）",
+    "③ |T" .. p .. ":16|t 书（|T 只给宽）",
+    "④ ★ 书（纯符号对照——永远成功）",
+  }
+  local cfg = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(cfg) == "table" then
+    cfg.shareIconProbe = { bodies = bodies, at = (type(GetTime) == "function") and GetTime() or 0 }
+  end
+  local ok = shProbeSend(bodies, chanId)
+  shSay("图标探针已发出（" .. tostring(chanId) .. "）：请看一眼聊天框，**哪一种画出了图标**：")
+  for i = 1, table.getn(bodies) do shSay("  " .. bodies[i]) end
+  shSay("  ★判读：只有 ④ 出 = |T 不可用（聊天行改符号、图标进弹窗）；①/②/③ 出 = 聊天行可直接带图标")
+  return ok and true or false
+end
+-- 读值口（测试用：不靠聊天字符串判接线，改读落盘字段）
+function EVAL_SHARE_ICON_PROBE_BODIES()
+  local cfg = rawget(_G, "EVAL_HELP_CONFIG")
+  local p = type(cfg) == "table" and cfg.shareIconProbe
+  return (type(p) == "table") and p.bodies or nil
+end
 -- ===== 1.73.41c 探针 ③：悬停 tooltip 机制发现 ===========================================
 -- 用户需求（原话）：「角色名: 分享了一份绝世秘籍 —— 鼠标移动上去才能看到详细的方案信息」。
 --   两个判断**读码定不了、必须实测**：

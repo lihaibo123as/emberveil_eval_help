@@ -6866,6 +6866,12 @@ if type(SlashCmdList) == "table" then
       else
         say("分享模块未载入（EVAL_SHARE_PROBE_AUTORUN 不存在）")
       end
+    elseif msg == "go 图标探针" or msg == "go iconprobe" then
+      if type(EVAL_SHARE_ICON_PROBE) == "function" then
+        EVAL_SHARE_ICON_PROBE("WHISPER")
+      else
+        say("图标探针：分享模块未载入（EVAL_SHARE_ICON_PROBE 不存在）")
+      end
     elseif msg == "go 秘籍样例" or msg == "go sealdemo" then
       if type(EVAL_SHARE_SEAL_DEMO) == "function" then
         EVAL_SHARE_SEAL_DEMO()

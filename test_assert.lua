@@ -10877,6 +10877,35 @@ do
   SlashCmdList["EVALHELP"]("go 秘籍样例")
   eq(string.find(tostring(TEST.chat or ""), "秘籍样例", 1, true) ~= nil, true, "★★★/eh go 秘籍样例 真的执行（命令在 go 组里）")
   TEST.chat = nil
+  -- ★★★1.73.42c 品阶图标（语义配图）+ |T 内联纹理探针（用户：「按语义给等级配图标，先验证可行性」）
+  eq(EVAL_SHARE_SEAL_ICON_COUNT(), 5, "五个品阶各一个图标")
+  local iconSeen = {}
+  for i = 1, 5 do
+    local path, file = EVAL_SHARE_SEAL_ICON(i)
+    eq(string.find(path, "Interface\\Icons\\", 1, true), 1, "图标路径是本客户端 Icon 目录：" .. tostring(path))
+    eq(iconSeen[file] == nil, true, "★品阶图标不许撞图：" .. tostring(file))
+    iconSeen[file] = true
+  end
+  local p1 = EVAL_SHARE_SEAL_ICON(1)
+  eq(string.find(p1, "INV_Misc_Book_07", 1, true) ~= nil, true, "普通档 = 书（语义：入门书）")
+  eq(string.find(EVAL_SHARE_SEAL_ICON(5), "INV_Misc_Gear_01", 1, true) ~= nil, true, "源代码档 = 齿轮（语义：机械/源码）")
+  EVAL_HELP_CONFIG.shareIconProbe = nil
+  TEST.runScripts = {}
+  eq(EVAL_SHARE_ICON_PROBE("WHISPER") ~= false, true, "图标探针发送入口能跑")
+  local ib = EVAL_SHARE_ICON_PROBE_BODIES()
+  eq(type(ib) == "table" and table.getn(ib) == 4, true, "★探针四条形态都发了（实际 " .. tostring(ib and table.getn(ib) or 0) .. "）")
+  if type(ib) == "table" then
+    eq(string.find(ib[1], "|T", 1, true) ~= nil and string.find(ib[1], "|t", 1, true) ~= nil, true, "① |T…|t 带尺寸形态")
+    eq(string.find(ib[2], ":0|t", 1, true) ~= nil, true, "② 省略尺寸形态")
+    eq(string.find(ib[3], ":16|t", 1, true) ~= nil, true, "③ 只给宽形态")
+    eq(string.find(ib[4], "★", 1, true) ~= nil, true, "④ 纯符号对照（保底参照）")
+  end
+  -- ★接线判据用**落盘字段**当证人（不玩聊天字符串「含子串」那套——M336 实测会假绿）
+  EVAL_HELP_CONFIG.shareIconProbe = nil
+  SlashCmdList["EVALHELP"]("go 图标探针")
+  eq(type(EVAL_HELP_CONFIG.shareIconProbe) == "table", true, "★★★/eh go 图标探针 真的执行了（以落盘字段为证）")
+  eq(table.getn((EVAL_HELP_CONFIG.shareIconProbe or {}).bodies or {}) == 4, true, "★★命令跑完写出四条形态")
+  TEST.chat = nil
   print("  分享显示行：境界 7 档 · 品阶评分边界(3/4/6/7/9/10/12/13) · 5 色(含暗金) · 每档 10 条评语随机 · 命令接线")
 end
 print("ALL TESTS PASS")
