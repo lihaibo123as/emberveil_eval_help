@@ -12018,6 +12018,7 @@ do
   local rows148 = EVAL_TEST_TPL_ROWS()
   eq(table.getn(rows148) >= 5, true, "②前置：模版行数 " .. tostring(table.getn(rows148)))
   local checked148, badIcon148, badText148, badBg148, narrow148, badAlign148, badAlignV148 = 0, 0, 0, 0, 0, 0, 0
+  local badRoom148, badAnchor148 = 0, 0
   local seenTier148, nTier148 = {}, 0
   for i = 1, table.getn(rows148) do
     local v = EVAL_TEST_TPL_TIER(i)
@@ -12028,10 +12029,17 @@ do
       if math.abs((v.textR or -1) - v.want.r) > 0.01 or math.abs((v.textG or -1) - v.want.g) > 0.01 or math.abs((v.textB or -1) - v.want.b) > 0.01 then badText148 = badText148 + 1 end
       if math.abs((v.bgR or -1) - v.want.r * 0.22) > 0.01 or math.abs((v.bgG or -1) - v.want.g * 0.22) > 0.01 or math.abs((v.bgB or -1) - v.want.b * 0.22) > 0.01 then badBg148 = badBg148 + 1 end
       -- ★用户：「方案显示不全」→ 文字区宽必须 >= 名字估算宽（图标位要算进按钮宽）
+      local est148 = math.floor(string.len(tostring(v.name or "")) / 3 + 0.5) * 9
       if v.textW then
-        local est148 = math.floor(string.len(tostring(v.name or "")) / 3 + 0.5) * 9
         if v.textW < est148 then narrow148 = narrow148 + 1 end
       end
+      -- ★★★1.73.48 用户真机截图两条：「右侧还有位置，但标题却显示…」+「没垂直居中」
+      --   ① 富余量：文字框要比名字估算**宽出 ≥10px**（原来正好等于名字宽，差一两像素就出省略号）
+      --   ② 锚点：文字**只能有一个锚点**（建控件时 CENTER + 品阶分支再 SetPoint(LEFT) = 两个锚点，
+      --      真机被两头拽 → 文字偏上；旧桩只记最后一次锚点，这个 bug 在测试里完全不可见）
+      if v.textW and est148 and v.textW < est148 + 10 then badRoom148 = badRoom148 + 1 end
+      if v.textW and v.btnW and (v.btnW - v.textW) < 24 then badRoom148 = badRoom148 + 1 end
+      if v.textAnchors ~= 1 or v.textAnchorNames ~= "LEFT" or v.textTop ~= 0 then badAnchor148 = badAnchor148 + 1 end
       -- ★★★1.73.47 用户改口径：「案例模版→方案标题左对齐·垂直居中」⇒ 判据从「居中」翻成「**左对齐 + 垂直居中**」
       --   （上一轮要的是「名称没居中」；口径变了就把判据改对，别留一条和用户当场矛盾的旧判据）
       if v.textJustify ~= "LEFT" then badAlign148 = badAlign148 + 1 end
@@ -12045,8 +12053,10 @@ do
   eq(narrow148, 0, "②★★★每行文字区都放得下名字（图标位算进按钮宽，用户报「显示不全」），被裁 " .. tostring(narrow148) .. " 行")
   eq(badAlign148, 0, "②★★★每行方案名**左对齐**（用户 1.73.47 要求），不左对齐 " .. tostring(badAlign148) .. " 行")
   eq(badAlignV148, 0, "②★★★每行文字**垂直居中**（读真控件 GetJustifyV），不居中 " .. tostring(badAlignV148) .. " 行")
+  eq(badRoom148, 0, "②★★★每行文字框都有富余（≥ 名字估算 + 10px，且按钮宽 − 文字宽 ≥ 24），不够 " .. tostring(badRoom148) .. " 行")
+  eq(badAnchor148, 0, "②★★★每行文字**只有一个锚点**（LEFT, y=0 —— 两个锚点会把文字拽歪 = 用户报的「没垂直居中」），坏 " .. tostring(badAnchor148) .. " 行")
   eq(nTier148 >= 2, true, "③★★★模版窗里至少出现 2 个不同品阶（否则「颜色跟着品阶」验不出来），实际 " .. tostring(nTier148))
-  print("  案例模版行外观：图标 + 名称文字色 + 背景暗色调 + 文字区宽度 + **左对齐/垂直居中**（全读真控件）· RGB 与色码同源")
+  print("  案例模版行外观：图标 + 名称文字色 + 背景暗色调 + 文字区**富余量** + **单锚点/左对齐/垂直居中**（全读真控件）· RGB 与色码同源")
 end
 -- ★★★教训（1.73.42z 记录）：上一轮「用脚本整段替换 147 组」时，替换范围写成「从 `-- 147)` 到第一个
 --   `print("ALL TESTS PASS")`」——而 148 组正好落在这个区间里 ⇒ **整组被静默删掉**，套件照旧全绿
@@ -12411,7 +12421,67 @@ do
   EVAL_HELP_CONFIG.title = savedTitle159
   EVAL_HELP_CONFIG.shTitleColorProbe = nil
   TEST.chat, TEST.runScripts = nil, nil
-  print("  名号色：默认帝王金 · " .. tostring(n159) .. " 个候选两两不撞色 · /eh go 名号色 <n> 落档即生效 · 非法编号如实拒绝")
+  print("  名号色：默认取**候选 1**（烈焰赤）· " .. tostring(n159) .. " 个候选两两不撞色 · /eh go 名号色 <n> 落档即生效 · 非法编号如实拒绝")
+end
+
+-- 160) ★★★1.73.48 方案列表（一键宏 tab 左栏）与**案例模版同一套规则**：品阶图标 + 品阶配色
+--   用户原话：「方案列表 的图标和配色方案 采用相同规则.」
+--   ⇒ 三件事对齐：① 图标 = 该方案品阶的 IconSem 纹理（13px）；② 名称文字色 = 品阶色；
+--     ③ 底色 = 品阶色 × 0.22（当前激活 × 0.45）。★全读**真控件**（GetTexture/GetTextColor/GetVertexColor）。
+do
+  if not EVAL_TEST_CFG_LAYOUT() then EVAL_HELP_CFG_TOGGLE() end -- 配置窗没建过就先建（方案列表在它里面）
+  local savedProfiles160 = EVAL_HELP_CONFIG.war and EVAL_HELP_CONFIG.war.profiles
+  local savedActive160 = EVAL_HELP_CONFIG.war and EVAL_HELP_CONFIG.war.activeProfile
+  -- ★用**真解析器**造方案（手搓 `groups = { { 1 } }` 会被配置窗渲染行当成条件表 → EVAL_COND_STR 拿到数字当场报错；
+  --   本项目的老规矩：夹具走生产同一条路，别自己拼一个"像"的结构）
+  local function mk160(n)
+    local s = "# 方案: 测160-" .. tostring(n)
+    for k = 1, n do s = s .. "\n- 技能" .. tostring(k) .. " | 可攻击" end
+    return EVAL_PROFILE_FROM_TEXT(s)
+  end
+  -- 1 / 3 / 5 个技能（每条 1 个条件）→ 2 / 6 / 10 分 → 三个**不同品阶**（否则「颜色跟着品阶」验不出来）
+  EVAL_HELP_CONFIG.war = EVAL_HELP_CONFIG.war or {}
+  EVAL_HELP_CONFIG.war.profiles = { mk160(1), mk160(3), mk160(5) }
+  EVAL_HELP_CONFIG.war.activeProfile = 2
+  EVAL_WAR_TAB_REFRESH()
+  local rows160 = EVAL_TEST_WAR_PROF_ROWS()
+  eq(table.getn(rows160) >= 3, true, "①前置：方案行 ≥3（实际 " .. tostring(table.getn(rows160)) .. "）")
+  local badIcon160, badText160, badBg160, badJustify160 = 0, 0, 0, 0
+  local seen160, nTier160 = {}, 0
+  for i = 1, 3 do
+    local prof = EVAL_HELP_CONFIG.war.profiles[i]
+    local ti = select(1, EVAL_SHARE_SEAL_TIER(EVAL_PROFILE_SCORE(prof)))
+    local rgb = EVAL_SHARE_SEAL_TIER_RGB(ti)
+    local v = rows160[i] or {}
+    if not seen160[ti] then seen160[ti] = true nTier160 = nTier160 + 1 end
+    if v.iconShown ~= true or tostring(v.icon) ~= tostring(EVAL_SHARE_SEAL_ICON(ti)) then badIcon160 = badIcon160 + 1 end
+    if math.abs((v.textR or -1) - rgb.r) > 0.01 or math.abs((v.textG or -1) - rgb.g) > 0.01 or math.abs((v.textB or -1) - rgb.b) > 0.01 then badText160 = badText160 + 1 end
+    local k160 = (i == 2) and 0.45 or 0.22 -- 第 2 个是当前激活（更亮）
+    if math.abs((v.bgR or -1) - rgb.r * k160) > 0.01 or math.abs((v.bgG or -1) - rgb.g * k160) > 0.01 or math.abs((v.bgB or -1) - rgb.b * k160) > 0.01 then badBg160 = badBg160 + 1 end
+    if tostring(v.justify) ~= "LEFT" then badJustify160 = badJustify160 + 1 end
+  end
+  eq(badIcon160, 0, "①★★★每个方案行都挂**该品阶的图标**（读真控件 GetTexture + IsShown），不符 " .. tostring(badIcon160) .. " 行")
+  eq(badText160, 0, "②★★★方案名文字色 = **品阶色**（与聊天行/弹窗/模版同一张色表），不符 " .. tostring(badText160) .. " 行")
+  eq(badBg160, 0, "③★★★底色 = 品阶色 × 0.22（当前激活 × 0.45），不符 " .. tostring(badBg160) .. " 行")
+  eq(badJustify160, 0, "③★名字**左对齐**让出图标位（与案例模版同规矩），不符 " .. tostring(badJustify160) .. " 行")
+  eq(nTier160 >= 2, true, "④★★三个方案落在 ≥2 个不同品阶，实际 " .. tostring(nTier160) .. " 档")
+  -- ⑤ 算不出品阶（老存档 / 坏数据 / Share 未载入）→ **如实退回**默认配色、图标隐藏（不硬编品阶、也不报错）
+  local keepScore160 = EVAL_PROFILE_SCORE
+  EVAL_PROFILE_SCORE = function() return nil end
+  EVAL_WAR_TAB_REFRESH()
+  local rows160b = EVAL_TEST_WAR_PROF_ROWS()
+  local badFall160 = 0
+  for i = 1, 3 do
+    local v = rows160b[i] or {}
+    if v.iconShown ~= false then badFall160 = badFall160 + 1 end
+    if tostring(v.name or "") == "" then badFall160 = badFall160 + 1 end
+  end
+  eq(badFall160, 0, "⑤★★★算不出品阶时**如实退回**（图标隐藏、名字照旧显示，不崩也不编品阶）：坏 " .. tostring(badFall160) .. " 行")
+  EVAL_PROFILE_SCORE = keepScore160
+  EVAL_HELP_CONFIG.war.profiles = savedProfiles160
+  EVAL_HELP_CONFIG.war.activeProfile = savedActive160
+  EVAL_WAR_TAB_REFRESH()
+  print("  方案列表：品阶图标 + 品阶色（文字色 = 品阶色 · 底色 = 品阶色 × 0.22 / 激活 0.45）—— 与案例模版同一套规则")
 end
 
 print("ALL TESTS PASS")

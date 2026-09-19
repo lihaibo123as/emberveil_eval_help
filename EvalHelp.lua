@@ -1252,8 +1252,20 @@ local function cfgBuild()
     uiSolid(pbg, 0.16, 0.13, 0.08, 1)
     pbg:SetPoint("TOPLEFT", pb, "TOPLEFT", 0, 0)
     pbg:SetPoint("BOTTOMRIGHT", pb, "BOTTOMRIGHT", 0, 0)
+    -- ★★★1.73.48 用户：「方案列表的图标和配色方案采用相同规则」⇒ 与**案例模版**同一套：
+    --   ① 品阶图标（IconSem 真纹理，13px，与模版窗同尺寸）；② 名称文字色 = 品阶色；
+    --   ③ 底色 = 品阶色 × 0.22（当前激活的亮到 × 0.45）。四处（聊天行/分享弹窗/模版/方案列表）**同一张色表**。
+    --   ★文字让出左侧图标位（3 + 13 + 4 = 20）并按模板规矩**左对齐 + 垂直居中**（否则文字压在图标上）。
+    local pIcon = pb:CreateTexture(nil, "ARTWORK")
+    pIcon:SetWidth(13) pIcon:SetHeight(13)
+    pIcon:SetPoint("LEFT", pb, "LEFT", 3, 0)
+    pIcon:Hide()
     local pt = uiText(pb, 10, 0.92, 0.88, 0.80)
-    pt:SetPoint("CENTER", pb, "CENTER", 0, 0)
+    pt:SetPoint("LEFT", pb, "LEFT", 20, 0)
+    pcall(pt.SetWidth, pt, 90 - 20 - 4)
+    pcall(pt.SetJustifyH, pt, "LEFT")
+    pcall(pt.SetJustifyV, pt, "MIDDLE")
+    pcall(pt.SetNonSpaceWrap, pt, false)
     local pidx = i
     cfgWin.profBtns = cfgWin.profBtns or {}
     cfgWin.profBtns[i] = pb -- ★测试钩子：交出真实控件（右键合并的断言要真的点它）
@@ -1301,7 +1313,7 @@ local function cfgBuild()
         EVAL_WAR_TAB_REFRESH()
       end
     end)
-    warUI.profBtns[i] = { btn = pb, bg = pbg, text = pt, del = delB, delBg = delBg }
+    warUI.profBtns[i] = { btn = pb, bg = pbg, text = pt, del = delB, delBg = delBg, icon = pIcon } -- ★1.73.48 图标也交出来（断言读真控件）
     table.insert(Wp, pb)
     table.insert(Wp, delB)
   end
@@ -2288,6 +2300,36 @@ function EVAL_TEST_WAR_ARROWS()
   return out
 end
 function EVAL_TEST_WAR_REFRESH_COUNT() return warRefreshCount end
+-- ★★★1.73.48 方案列表行的**外观读值口**（「图标和配色与案例模版同一套」这条判据读它）：
+--   一律读**真控件**（GetTexture / IsShown / GetTextColor / GetVertexColor）——本项目「读自己拼的账 = 测自己」的老坑。
+function EVAL_TEST_WAR_PROF_ROWS()
+  local w = cfgWin.warUI or {}
+  local out = {}
+  for i, e in ipairs(w.profBtns or {}) do
+    local o = { name = nil, icon = nil, iconShown = false, textR = nil, textG = nil, textB = nil,
+                bgR = nil, bgG = nil, bgB = nil, justify = nil }
+    if e.text then
+      local okt, tv = pcall(e.text.GetText, e.text)
+      if okt and type(tv) == "string" then o.name = tv end
+      local okc, r, g, b = pcall(e.text.GetTextColor, e.text)
+      if okc then o.textR, o.textG, o.textB = r, g, b end
+      local okj, jv = pcall(e.text.GetJustifyH, e.text)
+      if okj and type(jv) == "string" then o.justify = jv end
+    end
+    if e.bg then
+      local okv, r, g, b = pcall(e.bg.GetVertexColor, e.bg)
+      if okv then o.bgR, o.bgG, o.bgB = r, g, b end
+    end
+    if e.icon then
+      local okt, tv = pcall(e.icon.GetTexture, e.icon)
+      if okt and type(tv) == "string" then o.icon = tv end
+      local oks, sv = pcall(e.icon.IsShown, e.icon)
+      o.iconShown = (oks and sv) and true or false
+    end
+    out[i] = o
+  end
+  return out
+end
 
 function EVAL_WAR_TAB_REFRESH()
   warRefreshTick() -- ★1.71.2 计数（见 warRefreshTick 说明：只验数据验不出「没刷新」）
@@ -2300,14 +2342,42 @@ function EVAL_WAR_TAB_REFRESH()
     if prof then
       pb.text:SetText(tostring(prof.name or ("方案" .. i)))
       local sel = (w2.activeProfile or 1) == i
-      pcall(pb.bg.SetVertexColor, pb.bg, sel and 0.45 or 0.16, sel and 0.35 or 0.13, sel and 0.10 or 0.08, 1)
-      pcall(pb.text.SetTextColor, pb.text, sel and 1 or 0.75, sel and 0.9 or 0.72, sel and 0.4 or 0.6)
+      -- ★★★1.73.48 用户：「方案列表的图标和配色方案采用相同规则」——即**案例模版那一套**：
+      --   图标 = 该方案品阶的 IconSem 纹理；文字色 = 品阶色；底色 = 品阶色 × 0.22（当前激活 × 0.45）。
+      --   ★算不出品阶（老存档 / 坏数据 / Share 未载入）→ **如实退回**原来的暗金底 + 暖色字，**不硬编一个品阶**。
+      local trgb, tidx = nil, nil
+      if type(EVAL_PROFILE_SCORE) == "function" and type(EVAL_SHARE_SEAL_TIER) == "function"
+         and type(EVAL_SHARE_SEAL_TIER_RGB) == "function" and type(EVAL_SHARE_SEAL_ICON) == "function" then
+        local okS, sc = pcall(EVAL_PROFILE_SCORE, prof)
+        if okS and sc ~= nil then
+          local okT, ti = pcall(EVAL_SHARE_SEAL_TIER, sc)
+          if okT and type(ti) == "number" then
+            local okR, rgb = pcall(EVAL_SHARE_SEAL_TIER_RGB, ti)
+            if okR and type(rgb) == "table" then trgb, tidx = rgb, ti end
+          end
+        end
+      end
+      if trgb then
+        local k = sel and 0.45 or 0.22
+        pcall(pb.bg.SetVertexColor, pb.bg, trgb.r * k, trgb.g * k, trgb.b * k, 1)
+        pcall(pb.text.SetTextColor, pb.text, trgb.r, trgb.g, trgb.b)
+        if pb.icon then
+          pcall(pb.icon.SetTexture, pb.icon, EVAL_SHARE_SEAL_ICON(tidx))
+          pb.icon:Show()
+        end
+      else
+        pcall(pb.bg.SetVertexColor, pb.bg, sel and 0.45 or 0.16, sel and 0.35 or 0.13, sel and 0.10 or 0.08, 1)
+        pcall(pb.text.SetTextColor, pb.text, sel and 1 or 0.75, sel and 0.9 or 0.72, sel and 0.4 or 0.6)
+        if pb.icon then pb.icon:Hide() end
+      end
     elseif i == table.getn(w2.profiles) + 1 then
       pb.text:SetText("+")
       pcall(pb.bg.SetVertexColor, pb.bg, 0.10, 0.10, 0.10, 1)
+      if pb.icon then pb.icon:Hide() end
     else
       pb.text:SetText("")
       pcall(pb.bg.SetVertexColor, pb.bg, 0.06, 0.05, 0.04, 1)
+      if pb.icon then pb.icon:Hide() end
     end
     -- [删] 仅存在的方案显示；待确认状态红色高亮
     if pb.del then
@@ -6411,12 +6481,24 @@ end
 --   于是名字被裁（「法…」「力量祝福（物理…」）。现在**测量与摆放共用同一个常量**（单一来源）。
 local TPL_ICON_W = 20 -- 图标 13 + 左边距 3 + 与文字的缝 4
 local TPL_ROW_PAD = 16 -- 按钮左右内边距（原来写死在两处，这里收成一份）
+-- ★★★1.73.48 用户真机截图：「右侧还有位置，但标题却显示…」——量宽给的是**正好**名字宽，
+--   差一两个像素就触发客户端的省略号。⇒ ① 按钮宽**多留 TPL_MEASURE_SAFE**；② 文字框用「按钮宽 − 图标位 − 右留白」，
+--   于是文字框比名字估算宽出 12px 的余量（宁可右边缘空一点，也不许把名字裁掉）。
+local TPL_MEASURE_SAFE = 6 -- 量宽的保险余量（GetStringWidth 与真实渲染可能有 1~2px 差）
+local TPL_TEXT_PAD = 4    -- 左对齐时文字框右侧留白（原来文字框 == 名字宽，见上）
 local function tplTwoColPlan(W, groups, measure, margin, gap, rowH, colGap)
   local colW = math.floor((W - margin * 2 - colGap) / 2)
   if colW < 60 then colW = W - margin * 2 end -- 窗口太窄：退化成单列（硬分两列会把按钮压成一条）
   local colX = { margin, margin + colW + colGap }
   local colMax = { colX[1] + colW, colX[2] + colW }
   local n = table.getn(groups)
+  -- ★★★1.73.48 按钮宽 = **单一来源**（本轮又踩了一次「两处各算一遍」：只给 rowsOf 加了量宽余量、
+  --   摆放那段没加 → 自报行数与真实占用行数当场不一致，被组 91 的判据抓个正着）。
+  local function btnWof(name)
+    local bw = measure(tostring(name)) + TPL_ROW_PAD + TPL_ICON_W + TPL_MEASURE_SAFE
+    if bw > colW then bw = colW end
+    return bw
+  end
   -- ① 一个组在**本列列宽**下要占几行 = **标题 1 行** + 按钮行（组内同行 + 自动换行）
   --   ★1.73.7 按钮从**本列左边界**起排（标题已独占上一行）——所以这里 px 从 colX[1] 开始，
   --     与下方摆放逻辑必须**逐字一致**（两处算得不一样 = 切点与真实高度不符，本项目老坑）。
@@ -6426,8 +6508,7 @@ local function tplTwoColPlan(W, groups, measure, margin, gap, rowH, colGap)
     --     真实数据上表现为 rowsL/rowsR 报 6+7 而实际要 11 行 —— 两处算法必须逐字一致。）
     local btnRows, px = 0, colX[1]
     for _, p in ipairs(c.list) do
-      local bw = measure(tostring(p.name)) + TPL_ROW_PAD + TPL_ICON_W
-      if bw > colW then bw = colW end
+      local bw = btnWof(p.name)
       if btnRows == 0 or px + bw > colMax[1] + 0.5 then
         btnRows = btnRows + 1 px = colX[1]
       end
@@ -6467,8 +6548,7 @@ local function tplTwoColPlan(W, groups, measure, margin, gap, rowH, colGap)
         py = py - rowH
         local px = x0
         for _, p in ipairs(c.list) do
-          local bw = measure(tostring(p.name)) + TPL_ROW_PAD + TPL_ICON_W
-          if bw > colW then bw = colW end
+          local bw = btnWof(p.name)
           if px + bw > mx + 0.5 then px = x0 py = py - rowH end
           table.insert(plan, { kind = "item", cls = c.cls, tpl = p, x = px, y = py, w = bw })
           px = px + bw + gap
@@ -6641,8 +6721,13 @@ function EVAL_HELP_TPL_BUILD()
         -- ★1.73.42z 文字区 = 按钮宽 − 内边距 − 图标位（与 tplTwoColPlan 的测量**同源**）→ 名字放得下、不再被裁。
         --   ★★★1.73.47 **「居中」已作废**（1.73.42z 那条「名称没居中」是上一轮的要求；用户现在要「左对齐·垂直居中」）
         --     ⇒ 对齐统一在建控件时设一次（LEFT + MIDDLE），这里**只让位、不动对齐**。
-        pcall(bt.SetPoint, bt, "LEFT", b, "LEFT", 3 + 13 + 4, 0)
-        pcall(bt.SetWidth, bt, e.w - TPL_ROW_PAD - TPL_ICON_W)
+        -- ★★★1.73.48 用户真机：「方案标题没垂直居中」——【根因】建控件时锚的是 CENTER，这里又 `SetPoint("LEFT")`：
+        --   真客户端里这是**两个锚点**（同一个 FontString 被两头拽），文字因此偏上几个像素；
+        --   旧桩只记最后一次锚点 → 这个 bug 在测试里完全不可见（本轮先补桩、再修代码）。
+        --   ⇒ 先 ClearAllPoints 再锚 LEFT（**唯一锚点** = 真正的垂直居中）。
+        pcall(bt.ClearAllPoints, bt)
+        pcall(bt.SetPoint, bt, "LEFT", b, "LEFT", TPL_ICON_W, 0)
+        pcall(bt.SetWidth, bt, e.w - TPL_ICON_W - TPL_TEXT_PAD)
         -- ★★★1.73.42l 用户：「案例方案内图标替换，名称和颜色背景都要符合以上规则」
         --   ① 名称文字 = **品阶色**（与聊天行/弹窗同一张色表，经 EVAL_SHARE_SEAL_TIER_RGB 解析）；
         --   ② 行背景 = 同色调**压暗到 22%**（饱和底色会把文字吃掉——本项目「文字色 vs 背景色」那条老教训）；
@@ -6772,6 +6857,17 @@ function EVAL_TEST_TPL_TIER(i)
     -- ★★★1.73.47 垂直对齐也要读得回来（用户：「垂直居中」）——桩没记就永远验不到（桩保真铁律）
     local okjv, jvv = pcall(b.tierText.GetJustifyV, b.tierText)
     if okjv and type(jvv) == "string" then out.textJustifyV = jvv end
+    -- ★★★1.73.48 锚点也要读回来：**两个锚点**会把文字拽歪（用户真机「没垂直居中」的根因）
+    if type(b.tierText.GetAnchorCount) == "function" then
+      local okn, nv = pcall(b.tierText.GetAnchorCount, b.tierText)
+      if okn and type(nv) == "number" then out.textAnchors = nv end
+    end
+    if type(b.tierText.GetAnchorNames) == "function" then
+      local oknm, nmv = pcall(b.tierText.GetAnchorNames, b.tierText)
+      if oknm and type(nmv) == "string" then out.textAnchorNames = nmv end
+    end
+    local okyt, yv = pcall(b.tierText.GetTop, b.tierText)
+    if okyt and type(yv) == "number" then out.textTop = yv end
   end
   local okbw, bwv = pcall(b.GetWidth, b)
   if okbw and type(bwv) == "number" then out.btnW = bwv end

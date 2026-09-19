@@ -30,6 +30,7 @@ local function newMock()
   --   ★这与「桩太宽松 → 断言失明」是同一族，只是更隐蔽：**它让断言看起来在读数，其实读的是别人写的数**。
   --   （此前 IO 窗钩子注释里记着「登记 x=14、GetPoint 却回 0」，根因就是这里。）
   local x, y = nil, nil
+  local anchors = {} -- ★1.73.48 已设过的锚点集合（同名覆盖、不同名累加；ClearAllPoints 清零）
   local special = {
     -- ★1.70.25：帧必须真的有显隐状态。原桩的 Show/Hide 是空操作、IsShown 恒 nil，
     --   导致「点选后面板是否仍打开」这类行为断言永远是 false —— 断言失效而不自知。
@@ -82,7 +83,11 @@ local function newMock()
     EnableMouseWheel = function(self, v) rawset(self, "__wheel", v and true or false) end,
     IsMouseWheelEnabled = function(self) return rawget(self, "__wheel") and true or false end,
     IsMouseEnabled = function(self) return rawget(self, "__mouse") and true or false end,
-    ClearAllPoints = function() x = nil y = nil end,
+    -- ★★★1.73.48 桩保真：**锚点数量**要记得住。真客户端里 SetPoint(CENTER) 之后再 SetPoint(LEFT)
+    --   是**两个锚点**（同一个 FontString 被两头拽 → 文字不是垂直居中，正是用户截图报的「没垂直居中」）；
+    --   而旧桩只留最后一次、GetPoint 也只回一个 → 这个 bug 在测试里**完全不可见**。
+    --   ★语义照真机：同名 point 覆盖、不同名**累加**；ClearAllPoints 清零。
+    ClearAllPoints = function() x = nil y = nil anchors = {} end,
     -- ★1.71.2 桩必须同时记住**锚点语义**（point/relPoint/relTo），不能只记偏移量：
     --   用户截图事故是「按钮压在小地图左下角」，而判据是**锚到了邻居的哪条边**
     --   （锚 TOPLEFT = 贴左边缘会压进圆里；锚 LEFT = 落在圆外）。只记 x/y 根本表达不了这个差异。
@@ -98,8 +103,11 @@ local function newMock()
       point, relTo, relPoint, x, y = a1, a2, a3, nil, nil
       if a4 ~= nil then x, y = a4, a5 end -- 5 参形态：末两个才是偏移量
       if a3 == nil then relTo, relPoint = nil, nil end
+      if type(a1) == "string" then anchors[a1] = true end -- ★1.73.48 同名覆盖、不同名累加（真机语义）
     end,
     GetPoint = function() return point, relTo, relPoint, x, y end,
+    GetAnchorCount = function() local n = 0 for _ in pairs(anchors) do n = n + 1 end return n end,
+    GetAnchorNames = function() local t = {} for k in pairs(anchors) do table.insert(t, tostring(k)) end table.sort(t) return table.concat(t, ",") end,
     GetLeft = function() return x end,
     GetTop = function() return y end,
     -- ★1.71.2 桩必须让几何**自洽**：uiOffscreen 会同时读 Left/Right/Top/Bottom 四个数字，
