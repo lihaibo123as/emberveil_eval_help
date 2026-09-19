@@ -10970,6 +10970,34 @@ do
   local over = 0
   for k5 = 1, table.getn(chunks) do if string.len(chunks[k5]) > 250 then over = over + 1 end end
   eq(over, 0, "②★★★每条消息都 <= 250 字节（实测上限），超限条数=" .. tostring(over))
+  do
+    -- ★★★1.73.42h 片长预算判据**必须喂长方案**：短方案只出一片，片长上限定多少都看不出来
+    --   （变异「忽略 250B 预算、退回固定 220」曾在短方案下 SURVIVED —— 正是这条补上的盲区）
+    local longTxt = string.rep("- 技能甲 | 条件\n", 80)
+    local lb = EVAL_TEST_SHARE_BUILD_TEXT(longTxt)
+    eq(type(lb) == "table", true, "②★长方案分片构造得出来")
+    if type(lb) == "table" then
+      local ln8 = table.getn(lb)
+      eq(ln8 >= 2, true, "②★★长方案一定不止一片（" .. tostring(ln8) .. "）")
+      local over2 = 0
+      for k7 = 1, ln8 do if string.len(lb[k7]) > 250 then over2 = over2 + 1 end end
+      eq(over2, 0, "②★★★长方案下每条仍 <= 250 字节（预算真的承重），超限 " .. tostring(over2) .. " 条")
+      eq(string.find(tostring(lb[ln8]), "100%", 1, true) ~= nil, true, "②★长方案末片也标 100%")
+      -- ★★进度必须**真实**：逐片 = ceil(第k片/总片)。只验「末片 100%」会被「恒 100%」骗过（变异 M354 曾 SURVIVED）。
+      local okPct = true
+      for k9 = 1, ln8 do
+        local p9 = tonumber(string.match(lb[k9], "传输中%.%.%.(%d+)%%"))
+        if p9 ~= math.ceil(k9 * 100 / ln8) then okPct = false end
+      end
+      eq(okPct, true, "②★★★每片进度 = ceil(k/n)（真的在报进度，不是恒 100%）")
+      EVAL_SHARE_RESET()
+      for k8 = 1, ln8 do EVAL_SHARE_ONMSG(lb[k8], "长方案友") end
+      local lp = EVAL_SHARE_PENDING()
+      eq(lp ~= nil, true, "②★★★长方案分片能收齐（点击导入的前提）")
+      if lp then eq(lp.text == longTxt, true, "②★★★长方案收回来与原文**逐字节相同**（" .. tostring(string.len(lp.text)) .. " / " .. tostring(string.len(longTxt)) .. "）") end
+      EVAL_SHARE_RESET()
+    end
+  end
   eq(string.find(tostring(chunks[table.getn(chunks)] or ""), "100%", 1, true) ~= nil, true, "②★★末片标签 = 100%")
   local pctAll = true
   for k6 = 1, table.getn(chunks) do if string.find(chunks[k6], "传输中...", 1, true) == nil then pctAll = false end end

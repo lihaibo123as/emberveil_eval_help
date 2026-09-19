@@ -129,21 +129,22 @@ local function shSealName(text)
   if nm == "" then nm = "方案" end
   return string.sub(nm, 1, 18)
 end
-local function shBodies()
-  if type(EVAL_PROFILE_TO_TEXT) ~= "function" then shSay(L("SH_NOEXPORT")) return nil end
-  if type(RunScript) ~= "function" then shSay(L("SH_NORUNSCRIPT")) return nil end
-  local text = EVAL_PROFILE_TO_TEXT()
-  if not text or text == "" then shSay(L("SH_EMPTY")) return nil end
+local function shBuildFor(text)
   local hex = toHex(text)
-  local idh = string.format("%02x", math.random(0, 255)) -- 本次传输 id（接收端按 发送者+id 归并分片）
+  -- ★1.73.42h 传输 id 用 **16 位**随机（原 8 位）：同一发送者连着分享两笔时，id 撞车会把两笔分片
+  --   并在同一个接收缓冲里（真机上表现为串包；测试里表现为队列计数偶发多一片——8 位时约 4% 概率会撞）。
+  local idh = string.format("%04x", math.random(0, 65535)) -- 本次传输 id（接收端按 发送者+id 归并分片）
   -- ★★★1.73.42h v2 分片体：载荷藏进自定义链接的 |H 段，聊天里**只显示**「方案:名 传输中...%」
   local nm2 = shSealName(text)
   local function chunkBody(idx, tot, part)
     local pct = math.ceil(idx * 100 / tot)
     return "|cff9ad4ff|HEHPF:" .. idh .. " " .. idx .. "/" .. tot .. ":" .. part .. "|h[方案:" .. nm2 .. " 传输中..." .. pct .. "%]|h|r"
   end
-  -- ★预算：单条≤ 250 字节（实测 250 通过、270 整条丢）→ 先量包装，剩下的都给 hex
-  local wrapLen = string.len(chunkBody(1, 1, ""))
+  -- ★预算：单条 <= 250 字节（实测 250 通过、270 整条丢）→ 先量包装，剩下的都给 hex
+  -- ★★★1.73.42h 量的必须是**最坏形状**，不能拿 idx=1/tot=1 当样本：样本的 "1/1" 与 "100%" 是最短的，
+  --   长方案的 "18/18" + "56%" 会多出 1~2 字节 → 实测长方案有 10 片变成 251~252 字节（**超预算 = 真机上整条丢**）。
+  --   （这条是「长方案片长判据」逼出来的真缺陷：短方案样本永远量不出这个偏差。）
+  local wrapLen = string.len(chunkBody(99999, 99999, ""))
   local chunk = SH_MSG_MAX - wrapLen
   if chunk > SH_CHUNK then chunk = SH_CHUNK end
   if chunk < 40 then chunk = 40 end
@@ -177,6 +178,17 @@ local function shBodies()
   end
   return bodies
 end
+local function shBodies()
+  if type(EVAL_PROFILE_TO_TEXT) ~= "function" then shSay(L("SH_NOEXPORT")) return nil end
+  if type(RunScript) ~= "function" then shSay(L("SH_NORUNSCRIPT")) return nil end
+  local text = EVAL_PROFILE_TO_TEXT()
+  if not text or text == "" then shSay(L("SH_EMPTY")) return nil end
+  return shBuildFor(text)
+end
+-- ★★★1.73.42h 测试挂钩：任意文本 -> 分片。判「<=250B 预算」必须能喂**长方案**
+--   （短方案只出一片，片长上限定多少都看不出来——变异「忽略预算、退回固定 220」曾在短方案下 SURVIVED），
+--   同时长方案收回来要能逐字节复原（分片切法改错会在这里露出）。
+function EVAL_TEST_SHARE_BUILD_TEXT(text) return shBuildFor(tostring(text or "")) end
 -- ★1.73.35 右键菜单「分享方案」：把**当前激活方案**密语给这个玩家（同一份分片 + 同一限频队列，只多一个 target）
 function EVAL_SHARE_SEND_TO(name)
   if type(name) ~= "string" or name == "" then return false end
