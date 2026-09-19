@@ -39,6 +39,9 @@ local function newMock()
     IsShown = function() return shown end,
     IsVisible = function() return shown end,
     SetScript = function(_, ev, fn) scripts[ev] = fn end,
+    -- ★1.73.38 桩保真：注册了哪些事件要能读回来（「接收方支持私聊」这条契约才可断言）
+    RegisterEvent = function(self, ev) rawset(self, "__ev_" .. tostring(ev), true) end,
+    IsEventRegistered = function(self, ev) return rawget(self, "__ev_" .. tostring(ev)) and true or false end,
     GetScript = function(_, ev) return scripts[ev] end,
     SetText = function(_, t)
       texts.t = t

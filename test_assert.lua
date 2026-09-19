@@ -10390,4 +10390,38 @@ do
   EVAL_TEST_TB_NAMEMENU_RESET()
   print("  右键菜单接线：每个条目都走**真实 OnClick** 且带着菜单里的名字（悄悄话/目标/邀请/复制名字/查询/关闭）")
 end
+
+-- 140) ★★★1.73.38 用户两条：① 分享方案的**接收方要支持私聊**（密语来的分片要能收全并弹窗）；
+--   ② 右键菜单开关的 tooltip 要把**支持的功能都列出来**（别停在旧的五条）。
+do
+  -- ① 接收方注册了私聊
+  local evf140 = _G.EVAL_SHARE_EVENTS
+  eq(type(evf140) == "table", true, "①前置：分享事件帧在")
+  local okR140, reg140 = pcall(evf140.IsEventRegistered, evf140, "CHAT_MSG_WHISPER")
+  eq(okR140 and reg140 == true, true, "①★★★接收方**注册了私聊**（CHAT_MSG_WHISPER）—— 别人右键「分享方案」才收得到")
+  -- ② 密语来的分片要能收全 → 弹窗（走**真实**接收路径 EVAL_SHARE_ONMSG）
+  EVAL_SHARE_RESET()
+  EVAL_SHARE_RECV_TOGGLE() -- 打开接收开关（默认关，用户自己开）
+  local recvOn140 = EVAL_SHARE_RECV_ON and EVAL_SHARE_RECV_ON()
+  if recvOn140 ~= true then EVAL_SHARE_RECV_TOGGLE() end -- 若本来就是开的，别手滑关掉
+  local txt140 = "# 方案: 甲\n\n- 爪击 | 可攻击"
+  local hex140 = ""
+  for i = 1, string.len(txt140) do hex140 = hex140 .. string.format("%02x", string.byte(txt140, i)) end
+  EVAL_SHARE_ONMSG("[EHPF#ab 1/1]" .. hex140, "Ionol", "CHAT_MSG_WHISPER")
+  local pop140 = table.concat(EVAL_TEST_SHARE_POPUP_TEXTS() or {}, " | ")
+  eq(string.find(pop140, "Ionol", 1, true) ~= nil, true, "②★★★私聊来的分享**收到了**（弹窗点名发送者）：" .. pop140)
+  eq(string.find(pop140, EVAL_L("SH_CH_WHISPER"), 1, true) ~= nil, true,
+     "②★★★来源标成「" .. tostring(EVAL_L("SH_CH_WHISPER")) .. "」（不是空白/未知）")
+  eq(string.find(pop140, "甲", 1, true) ~= nil, true, "②★★方案内容也解出来了")
+  -- ③ tooltip：功能必须**列全**（用户要求「将支持的功能都说明下」）
+  local tip140 = tostring(EVAL_L("TB_NAMEMENU_TIP"))
+  for _, k in ipairs({ "TB_NAMEMENU_WHISPER", "TB_NAMEMENU_PARTY", "TB_NAMEMENU_TARGET", "TB_NAMEMENU_SAY",
+                       "TB_NAMEMENU_SHARE", "TB_NAMEMENU_TRADE", "TB_NAMEMENU_QUERY",
+                       "TB_NAMEMENU_KICKP", "TB_NAMEMENU_KICKG", "TB_NAMEMENU_INVITE" }) do
+    eq(string.find(tip140, EVAL_L(k), 1, true) ~= nil, true, "③★★★tooltip 里列出了：" .. tostring(EVAL_L(k)))
+  end
+  eq(string.find(tip140, "|c", 1, true) ~= nil, true, "③★★tooltip 用了颜色码（样式美化：标题/功能/注意分层）")
+  eq(string.find(tip140, "\n", 1, true) ~= nil, true, "③★★而且**分行**（不是一大坨）")
+  print("  分享接收：私聊来源已支持（注册 + 收全 + 弹窗标「密语」）· 右键开关 tooltip 列全功能并分层上色")
+end
 print("ALL TESTS PASS")
