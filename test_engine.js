@@ -689,6 +689,39 @@ function checkIconAssets() {
   }
 
 })();
+// ===== TEMPLATE COUNT CHECK（1.73.40）：文档里那句「案例模版 N 条」必须等于 examples/ 里的**真实条数** =====
+// 背景（用户「将当前方案添加到案例模版」）：模版数据在 examples/*.lua，而「一共有多少条」这句话**散在 4 个地方**
+//   （.toc 的 Notes + 三语言 README 各若干处）→ 加/删一条模版只改数据不改文档，玩家看到的数量就是**骗人的**，
+//   而且**不报错**（正是本项目最怕的那一类：信息过时、位置不对、静默）。
+// 判据：① 按「每条模版都以 `{ name = "` 开头」数真实条数；② 四处文档里的数字必须**都等于**它（一个都不能漏）。
+(function () {
+  const dir = path.join(__dirname, 'examples');
+  const files = fs.readdirSync(dir).filter(function (f) { return /\.lua$/.test(f); });
+  let real = 0;
+  files.forEach(function (f) {
+    fs.readFileSync(path.join(dir, f), 'utf8').split(/\r?\n/).forEach(function (l) {
+      if (/^\s*\{\s*name\s*=\s*"/.test(l)) real++;
+    });
+  });
+  const bad = [];
+  if (real < 20) bad.push('模版条数只数出 ' + real + ' 条（扫描口径过时？）');
+  const wants = [
+    ['EvalHelp.toc', /11\s*\u7ec4\s*(\d+)\s*\u6761/g],
+    ['README.md', /11\s*\u7ec4\s*(\d+)\s*\u6761/g],
+    ['README_en.md', /11 groups[^0-9]{0,12}(\d+)/g],
+    ['README_ru.md', /11 \u0433\u0440\u0443\u043f\u043f[^0-9]{0,12}(\d+)/g],
+  ];
+  wants.forEach(function (w) {
+    const s = fs.readFileSync(path.join(__dirname, w[0]), 'utf8');
+    const nums = [];
+    let m;
+    while ((m = w[1].exec(s)) !== null) nums.push(Number(m[1]));
+    if (!nums.length) bad.push(w[0] + ' \u91cc\u627e\u4e0d\u5230\u300c11 \u7ec4 N \u6761\u300d\u8fd9\u53e5\u8bdd');
+    nums.forEach(function (n) { if (n !== real) bad.push(w[0] + ' \u5199 ' + n + ' \u6761\uff0c\u5b9e\u9645 ' + real + ' \u6761'); });
+  });
+  if (bad.length) { console.log('TEMPLATE COUNT CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
+  console.log('TEMPLATE COUNT CHECK: \u771f\u5b9e ' + real + ' \u6761 == toc Notes + \u4e09\u8bed\u8a00 README \u7684\u5199\u6cd5');
+})();
 // ===== MENU ROUND CHROME CHECK（1.73.40）：右键菜单的「圆角边框」只能走客户端原生圆角边贴图 =====
 // 背景（用户「圆角」）：1.12 没有圆角控件，圆角只能来自客户端的边贴图 Interface\Tooltips\UI-Tooltip-Border
 //   （vanilla 右键菜单/提示框就是 bgFile=UI-Tooltip-Background + edgeFile=UI-Tooltip-Border + edgeSize 16 + insets）。

@@ -10,7 +10,7 @@
 | :-- | :-- | :-- |
 | 🗡️ **Universal one-key macro** | macro `/run EVAL_GO()` | Five skill categories: character actions (Attack / Auto Shot / Shoot / Cancel Casting / Stance swap) / skills / pet commands / target selection / item use; unlimited skills per profile (scrollable list); up to ≤12 profiles, each bindable to its own key for direct triggering |
 | ⚙️ **Config window** | minimap EH icon · `/eh cfg` | Fully visual editing of profiles / skills / conditions, plus text import/export for sharing |
-| 🧩 **Case templates** | config window, one-key macro tab, bottom `[Case Templates]` | **11 groups / 27 entries** ready-made profiles (grouped by class) → **grouped two columns + wrapping within a group**; one click to import, hover to see what's inside |
+| 🧩 **Case templates** | config window, one-key macro tab, bottom `[Case Templates]` | **11 groups / 29 entries** ready-made profiles (grouped by class) → **grouped two columns + wrapping within a group**; one click to import, hover to see what's inside |
 | 🧰 **Toolbox** | config window, tab 3 | Merchant assistant (auto-repair / auto-sell grey / buy and discard by name) + party & social (auto-confirm role check / hide guild login notices / **hide "joined·left channel" notices**) + auto quest accept & turn-in (hold Shift to pause temporarily) + quest notification channel |
 | 🗺️ **Data search** | config window, tab 4 | Quest / item / mob·NPC / object search with instant results and unlimited drill-down; a **world-map annotation layer** (16 categories redrawn live as the map changes) and one-click pinning from any row with coordinates (requires UnrealQuest) |
 | 🖼️ **Icon library** | config window, tab 5 | The client's built-in macro icons grouped by prefix, hover shows the path, searchable and pageable; plus a "used by this addon" group (listing the icons this addon uses) |
@@ -51,14 +51,14 @@
 
 > 📜 Detailed per-version notes live in **[CHANGELOG.md](CHANGELOG.md)**; earlier history is in the git commit log.
 
-## 🧩 Case Templates (11 groups, 27 ready-made profiles)
+## 🧩 Case Templates (11 groups, 29 ready-made profiles)
 
 > No need to build from scratch. Config window → "One-key macro" tab → **`[Case Templates]`** at the bottom → pick one by class, **click to import**.
 
 | Item | Description |
 | :-- | :-- |
 | **Entry** | Config window, "One-key macro" tab, bottom `[Case Templates]` button |
-| **Contents** | **11 groups / 27 profiles**: 战士 / 法师 / 通用法系 / 盗贼 / 猎人 / 骑士 / 牧师 / 德鲁伊 / 术士 / 萨满 / 队伍·团队 (group headers keep the addon's own names) |
+| **Contents** | **11 groups / 29 profiles**: 战士 / 法师 / 通用法系 / 盗贼 / 猎人 / 骑士 / 牧师 / 德鲁伊 / 术士 / 萨满 / 队伍·团队 (group headers keep the addon's own names) |
 | **Layout** | Two columns by group, wrapping inside a group; **hover** a row to see its skills and conditions |
 | **Import** | One click turns it into a profile — then edit, rename and bind a key as usual |
 
@@ -78,7 +78,7 @@ switches target, casts, and restores your original target — **you never click 
 
 ![Config window · One-key macro tab](preview/cfg.png)
 
-**Case-template window** (bottom of the one-key macro tab, `[Case Templates]`): 11 groups / 27 ready-made profiles grouped by class, laid out as **two columns of groups with wrapping inside each group** — one click imports a profile, hover shows its contents
+**Case-template window** (bottom of the one-key macro tab, `[Case Templates]`): 11 groups / 29 ready-made profiles grouped by class, laid out as **two columns of groups with wrapping inside each group** — one click imports a profile, hover shows its contents
 
 ![Case-template window](preview/skill_tpl.png)
 

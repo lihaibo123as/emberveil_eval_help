@@ -2818,6 +2818,28 @@ do
       eq(table.getn(prof.skills[3].groups[1]), 3, "★★★with all 3 conditions kept (no silent drops)")
     end
   end
+  -- ★★★1.73.40 用户要求（截图 = 他自己在用的「猎人收宠」方案）：
+  --   「将当前方案添加到案例模版: 猎人分组->停止攻击&收回宠物」
+  --   判据 = ① 组里真有这条（用户点名的）② 四行技能**逐条对**（顺序也是内容：先停手 → 再收宠）
+  --           ③ 四行**都是无条件行**（保命宏被条件挡住就没意义）④ 带说明（悬停能看到它干吗）
+  do
+    local petRec = nil
+    for _, tpl in ipairs((hunter and hunter.list) or {}) do
+      if tostring(tpl.name) == "猎人收宠" then petRec = tpl end
+    end
+    eq(petRec ~= nil, true, "★★★猎人组里有「猎人收宠」模版（用户点名要的那条）")
+    local ppr = petRec and EVAL_PROFILE_FROM_TEXT(tostring(petRec.text or ""))
+    eq(ppr ~= nil and table.getn(ppr.skills) == 4, true,
+       "★★它解析出 4 条技能行（实际 " .. tostring(ppr and table.getn(ppr.skills) or 0) .. " 条）")
+    if ppr then
+      local want = { "停止攻击", "取消施法", "宠物:跟随", "宠物:被动姿态" }
+      for i = 1, 4 do
+        eq(ppr.skills[i] and ppr.skills[i].skill, want[i], "★★★第 " .. i .. " 行 = " .. want[i] .. "（先停手 → 再收宠）")
+        eq(table.getn((ppr.skills[i] and ppr.skills[i].groups) or {}), 0, "★★第 " .. i .. " 行是无条件行（保命宏不能被条件挡住）")
+      end
+    end
+    eq(string.len(tostring(petRec and petRec.desc or "")) > 0, true, "★★模版带说明（悬停能看出它干吗）")
+  end
   -- ★★★骑士组（1.71.2 第二十二轮，用户要求收录其实配方案）：不只「能解析」，还逐条验内容 + 整串往返
   eq(table.getn(EVAL_IO_TEMPLATES), 11, "★11 组（6 原有 + 牧师/德鲁伊/术士/萨满/队伍·团队；顺序由 EXAMPLES TOC CHECK 守）")
   local pal = nil
