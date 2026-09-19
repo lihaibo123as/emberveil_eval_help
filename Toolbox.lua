@@ -1034,18 +1034,21 @@ local function tbMenuItems(name)
   add(L("TB_NAMEMENU_SHARE"), EVAL_TB_NAME_SHARE)
   add(L("TB_NAMEMENU_TARGET"), EVAL_TB_NAME_TARGET)
   add(L("TB_NAMEMENU_SAY"), EVAL_TB_NAME_SAY)
-  -- 第二列续：邀请 / 交易 / 查询 / 踢人（按权限与队伍条件决定出不出现）
-  add(L("TB_NAMEMENU_PARTY"), EVAL_TB_NAME_PARTY)
   add(L("TB_NAMEMENU_TRADE"), EVAL_TB_NAME_TRADE)
-  add(L("TB_NAMEMENU_QUERY"), EVAL_TB_NAME_QUERY)
-  -- ★队伍里才显示「取消邀请 / 踢出队伍」（用户 1.73.42v：「添加取消邀请,在队伍内的情况下」）
+  -- ★★★1.73.42w 用户要求（三条）：
+  --   ① 「邀请」改名 **邀请队伍**；② **只在未在队伍内**时显示（在队伍里藏掉）；
+  --   ③ 「踢出队伍」挪到**查询上面**（同一格由队伍状态决定显示哪条：没队伍=邀请队伍，有队伍=取消邀请+踢出队伍）。
+  local tbInParty = false
   if type(GetNumPartyMembers) == "function" then
     local ok, n = pcall(GetNumPartyMembers)
-    if ok and type(n) == "number" and n > 0 then
-      if type(UninviteByName) == "function" then add(L("TB_NAMEMENU_CANCELINVITE"), EVAL_TB_NAME_CANCELINVITE) end
-      add(L("TB_NAMEMENU_KICKP"), EVAL_TB_NAME_KICKP)
-    end
+    tbInParty = ok and type(n) == "number" and n > 0
   end
+  if not tbInParty then add(L("TB_NAMEMENU_PARTY"), EVAL_TB_NAME_PARTY) end -- 没队伍才给「邀请队伍」
+  if tbInParty then
+    if type(UninviteByName) == "function" then add(L("TB_NAMEMENU_CANCELINVITE"), EVAL_TB_NAME_CANCELINVITE) end
+    add(L("TB_NAMEMENU_KICKP"), EVAL_TB_NAME_KICKP) -- ★在队伍里 = 这一格换成踢出队伍
+  end
+  add(L("TB_NAMEMENU_QUERY"), EVAL_TB_NAME_QUERY)
   -- ★有权限才显示「踢出公会 / 邀请公会」
   if type(CanGuildRemove) == "function" then
     local ok, v = pcall(CanGuildRemove)

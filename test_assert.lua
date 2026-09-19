@@ -10088,8 +10088,39 @@ do
   local it5 = mg130.items[5] and tostring(mg130.items[5].label or "")
   if it2 ~= "" and it5 ~= "" then
     eq(it2, EVAL_L("TB_NAMEMENU_SHARE"), "⑥b★★★第 2 条 = 分享方案（对调后；实际 " .. it2 .. "）")
-    eq(it5, EVAL_L("TB_NAMEMENU_PARTY"), "⑥b★★★第 5 条 = 邀请（对调后；实际 " .. it5 .. "）")
+    eq(it5, EVAL_L("TB_NAMEMENU_TRADE"), "⑥b★★★第 5 条 = 交易（1.73.42w 起，队伍那一格让给「邀请队伍/踢出队伍」；实际 " .. it5 .. "）")
   end
+  -- ★★★1.73.42w 用户三条：①「邀请」改名**邀请队伍**；②**只在未在队伍内**显示；③「踢出队伍」挪到**查询上面**
+  local idxQuery130, idxParty130, idxKick130 = nil, nil, nil
+  for i = 1, nIt130 do
+    local lb = tostring((mg130.items[i] or {}).label or "")
+    if lb == EVAL_L("TB_NAMEMENU_QUERY") and not idxQuery130 then idxQuery130 = i end
+    if lb == EVAL_L("TB_NAMEMENU_PARTY") and not idxParty130 then idxParty130 = i end
+    if lb == EVAL_L("TB_NAMEMENU_KICKP") then idxKick130 = i end
+  end
+  eq(idxParty130 ~= nil, true, "⑥d★★★没队伍 → 菜单里有「邀请队伍」")
+  eq(idxKick130 == nil, true, "⑥d★★★没队伍 → 菜单里**没有**「踢出队伍」")
+  eq(idxQuery130 ~= nil and idxParty130 == idxQuery130 - 1, true,
+     "⑥d★★★「邀请队伍」就在「查询」上面（" .. tostring(idxParty130) .. " → " .. tostring(idxQuery130) .. "）")
+  -- ⑥e 在队伍里：这一格换成「取消邀请 + 踢出队伍」，且「邀请队伍」必须消失（用户要求）
+  local keepN130b, keepL130b = TEST.partyN, TEST.partyLeader
+  TEST.partyN, TEST.partyLeader = 2, true
+  EVAL_TEST_TB_MENU_DROP()
+  EVAL_TB_MENU_SHOW("Ionol")
+  local mg130b = EVAL_TB_MENU_GEOM()
+  local partyB130, kickB130, queryB130 = nil, nil, nil
+  for i = 1, table.getn((mg130b or {}).items or {}) do
+    local lb = tostring(mg130b.items[i].label or "")
+    if lb == EVAL_L("TB_NAMEMENU_PARTY") then partyB130 = i end
+    if lb == EVAL_L("TB_NAMEMENU_KICKP") and not kickB130 then kickB130 = i end
+    if lb == EVAL_L("TB_NAMEMENU_QUERY") and not queryB130 then queryB130 = i end
+  end
+  eq(partyB130 == nil, true, "⑥e★★★在队伍里 → 「邀请队伍」**藏掉了**（用户要求）")
+  eq(kickB130 ~= nil, true, "⑥e★★★在队伍里 → 有「踢出队伍」")
+  eq(kickB130 == queryB130 - 1, true,
+     "⑥e★★★「踢出队伍」就在「查询」上面（" .. tostring(kickB130) .. " → " .. tostring(queryB130) .. "）")
+  TEST.partyN, TEST.partyLeader = keepN130b, keepL130b
+  EVAL_TEST_TB_MENU_DROP()
   -- ★★★1.73.40 用户三条：①「圆角」②截图「右键框未包含关闭按键」③「操作按键 鼠标获取焦点 增加变色美化」
   -- ⑥c 圆角：挂得上客户端**原生圆角边**（UI-Tooltip-Border）就用它，挂不上必须退回四条平白边 ——
   --   两条路各有一组断言（哪条在跑都要读得到颜色，绿色不许来自「两边都没验」）。
@@ -11308,6 +11339,9 @@ do
   end
   eq(nTitle146, 75, "②★头衔键 75 个（" .. tostring(nTitle146) .. "）")
   eq(sameTitle146, 0, "②★三语言头衔两两不许同文（同文 = 没翻）：" .. tostring(sameTitle146) .. " 处")
+  -- ★1.73.42w 用户要求：右键菜单里那条叫「**邀请队伍**」（不是「邀请」）—— 中文逐字核一遍
+  eq(EVAL_LOCALES.zhCN.TB_NAMEMENU_PARTY, "邀请队伍", "②★菜单条目中文 = 邀请队伍（用户改名）")
+  eq(EVAL_LOCALES.zhCN.TB_NAMEMENU_KICKP, "踢出队伍", "②★踢出队伍中文没变")
   -- ③ 真的走语言：切到英/俄，**四处读值口**（境界 / 品阶 / 评语 / 整行）当场跟着变
   local keepLang146, keepCfgLang146 = EVAL_GET_LANG(), EVAL_HELP_CONFIG.lang
   for _, lg in ipairs({ "enUS", "ruRU" }) do

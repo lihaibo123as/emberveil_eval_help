@@ -356,15 +356,17 @@ TB_CHATCOLOR_OFF_MSG = "Chat name coloring: OFF (chat text is no longer modified
 -- ★1.73.28 right-click name menu (final): the three original actions + our two
 TB_NAMEMENU = "Right-click name menu in chat",
 TB_NAMEMENU_TIP = "|cffffd100Right-click a character name in chat -> menu|r (two columns, translucent, opens up-right from the click)\n" ..
-  "|cff9ad4ff· Whisper|r (prefills /w name, does not send)  |cff9ad4ff· Invite|r (party)\n" ..
+  "|cff9ad4ff· Whisper|r (prefills /w name, does not send)  |cff9ad4ff· Invite to party|r (shown only when NOT in a party)\n" ..
   "|cff9ad4ff· Target|r (TargetByName)  |cff9ad4ff· Copy name|r (only puts /s name into the chat box)\n" ..
   "|cff9ad4ff· Share build|r (whispers the active build)  |cff9ad4ff· Trade|r\n" ..
   "|cff9ad4ff· Query|r (inspect, falls back to /who)  |cff9ad4ff· Kick party|r (only when grouped)\n" ..
   "|cff9ad4ff· Invite guild|r / |cff9ad4ff· Kick guild|r (only with permission)\n" ..
+  "|cff9ad4ff· Cancel invite|r / |cff9ad4ff· Kick party|r (shown while in a party, right above Query)\n" ..
+  "|cff9ad4ff· Add friend|r / |cff9ad4ff· Remove friend|r (the latter only when already a friend and the name is readable)\n" ..
   "|cffa0a0a0Copy name never auto-sends; left click and item/quest links are untouched.|r",
 TB_NAMEMENU_TITLE = "Name: %s",
 TB_NAMEMENU_WHISPER = "Whisper",
-TB_NAMEMENU_PARTY = "Invite",
+  TB_NAMEMENU_PARTY = "Invite to party",
 TB_NAMEMENU_TARGET = "Target",
 TB_NAMEMENU_INVITE = "Invite guild",
 TB_NAMEMENU_SAY = "Copy name",

@@ -357,15 +357,17 @@ TB_CHATCOLOR_OFF_MSG = "聊天窗名字着色：已关闭（不再改动聊天�
 -- ★1.73.28 右键菜单（用户定稿）：原始功能三条（悄悄话/邀请/目标）+ 我们的两条（公会邀请/复制名字）
 TB_NAMEMENU = "聊天名字右键菜单",
 TB_NAMEMENU_TIP = "|cffffd100右键聊天里的角色名 → 弹出菜单|r（两列 · 半透明 · 跟着点击位置往右上展开）\n" ..
-  "|cff9ad4ff· 悄悄话|r（预填 /w 名字，不发送）  |cff9ad4ff· 邀请|r（组队）\n" ..
+  "|cff9ad4ff· 悄悄话|r（预填 /w 名字，不发送）  |cff9ad4ff· 邀请队伍|r（★**未在队伍内**才显示）\n" ..
   "|cff9ad4ff· 目标|r（TargetByName）  |cff9ad4ff· 复制名字|r（只把 /s 名字 填进输入框）\n" ..
   "|cff9ad4ff· 分享方案|r（把当前激活方案密语给对方）  |cff9ad4ff· 交易|r\n" ..
   "|cff9ad4ff· 查询|r（观察玩家信息，够不到就走 /who）  |cff9ad4ff· 踢出队伍|r（在队伍里才出现）\n" ..
   "|cff9ad4ff· 邀请公会|r / |cff9ad4ff· 踢出公会|r（都有权限时才出现）\n" ..
+  "|cff9ad4ff· 取消邀请|r / |cff9ad4ff· 踢出队伍|r（在队伍里才出现，位于「查询」上面）\n" ..
+  "|cff9ad4ff· 添加好友|r / |cff9ad4ff· 删除好友|r（后者只在对方已是好友且名字读得到时出现）\n" ..
   "|cffa0a0a0★「复制名字」不会替你发送；左键与物品/任务等链接一律照旧，不受影响。|r",
 TB_NAMEMENU_TITLE = "名字：%s",
 TB_NAMEMENU_WHISPER = "悄悄话",
-TB_NAMEMENU_PARTY = "邀请",
+  TB_NAMEMENU_PARTY = "邀请队伍", -- ★1.73.42w 用户：改名（并只在**未在队伍内**时显示）
 TB_NAMEMENU_TARGET = "目标",
 TB_NAMEMENU_INVITE = "邀请公会",
 TB_NAMEMENU_SAY = "复制名字",
