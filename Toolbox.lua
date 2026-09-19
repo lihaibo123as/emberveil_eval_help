@@ -1058,11 +1058,15 @@ local function tbMenuItems(name)
     local ok, v = pcall(CanGuildInvite)
     if ok and v then add(L("TB_NAMEMENU_INVITE"), EVAL_TB_NAME_INVITE) end
   end
-  -- ★★★1.73.42u 好友（用户要求）：添加好友总是给（有接口就显示）；**删除好友只在「他确实在好友列表里」时出现**
-  --   ★「是不是好友」读不到时（GetNumFriends/GetFriendInfo 缺、或名字缓存还没到）→ **不显示删除**（不猜）
-  if type(AddFriend) == "function" then add(L("TB_NAMEMENU_ADDFRIEND"), EVAL_TB_NAME_ADDFRIEND) end
-  if type(RemoveFriend) == "function" and type(EVAL_TB_NAME_ISFRIEND) == "function" and EVAL_TB_NAME_ISFRIEND(name) then
-    add(L("TB_NAMEMENU_DELFRIEND"), EVAL_TB_NAME_DELFRIEND)
+  -- ★★★1.73.42x 好友（用户：「删除好友.和添加好友应该每次是只能显示一个. 要根据实际状态判断显示」）：
+  --   **已经是好友 → 只给「删除好友」；不是好友 → 只给「添加好友」**（两条永不同时出现）。
+  --   ★判断不出来时（GetNumFriends/GetFriendInfo 缺、或名字缓存还没到）→ 按「不是好友」处理、只给「添加好友」：
+  --     宁可让玩家点一下「添加好友」（服务器会忽略重复），也**绝不**把「删除好友」摆在不确定的人身上（误删更糟）。
+  local isFriendNow = (type(EVAL_TB_NAME_ISFRIEND) == "function") and (EVAL_TB_NAME_ISFRIEND(name) == true)
+  if isFriendNow then
+    if type(RemoveFriend) == "function" then add(L("TB_NAMEMENU_DELFRIEND"), EVAL_TB_NAME_DELFRIEND) end
+  elseif type(AddFriend) == "function" then
+    add(L("TB_NAMEMENU_ADDFRIEND"), EVAL_TB_NAME_ADDFRIEND)
   end
   return out
 end

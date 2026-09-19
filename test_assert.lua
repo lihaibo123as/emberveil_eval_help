@@ -11744,6 +11744,8 @@ do
   TEST.time = (TEST.time or 1000) + 1 -- 跨过 0.5 秒服务器写动作限频窗（好友/取消邀请共用同一个限频器）
   EVAL_TB_MENU_SHOW("Ionol")
   eq(EVAL_TEST_TB_MENU_CLICK(EVAL_L("TB_NAMEMENU_DELFRIEND")), true, "④★★★加完好友再开菜单 →「删除好友」出现了")
+  -- ★★★1.73.42x 用户：「添加好友和删除好友**每次只能显示一个**，按实际状态判断」
+  eq(EVAL_TEST_TB_MENU_CLICK(EVAL_L("TB_NAMEMENU_ADDFRIEND")), false, "④b★★★已是好友 → 「添加好友」**必须消失**（二选一）")
   eq(table.getn(TEST.friendRows), 0, "④★★★点了之后真的从好友列表里删掉了")
   eq(EVAL_TB_NAMEMENU_STATE().friendRemove, 1, "④★★记账：删成功 1 次")
   eq(string.find(tostring(TEST.chat or ""), "已删除好友", 1, true) ~= nil, true, "④★★如实播报「已删除好友」")
@@ -11763,6 +11765,7 @@ do
   TEST.chat = nil
   EVAL_TB_MENU_SHOW("缓存甲")
   eq(EVAL_TEST_TB_MENU_CLICK(EVAL_L("TB_NAMEMENU_DELFRIEND")), false, "⑥★★★好友名字读不到（缓存未到）→ 不显示删除好友（不猜）")
+  eq(EVAL_TEST_TB_MENU_CLICK(EVAL_L("TB_NAMEMENU_ADDFRIEND")), true, "⑥b★★★这种情况按「不是好友」处理 → 给「添加好友」（宁可多余一次，也绝不误删）")
   TEST.friendNameCache = true
   TEST.friendRows = {}
   -- ⑦ 取消邀请：不在队伍里就没有这个条目（用户：在队伍内的情况下）

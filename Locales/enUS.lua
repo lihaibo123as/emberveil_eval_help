@@ -362,7 +362,7 @@ TB_NAMEMENU_TIP = "|cffffd100Right-click a character name in chat -> menu|r (two
   "|cff9ad4ff· Query|r (inspect, falls back to /who)  |cff9ad4ff· Kick party|r (only when grouped)\n" ..
   "|cff9ad4ff· Invite guild|r / |cff9ad4ff· Kick guild|r (only with permission)\n" ..
   "|cff9ad4ff· Cancel invite|r / |cff9ad4ff· Kick party|r (shown while in a party, right above Query)\n" ..
-  "|cff9ad4ff· Add friend|r / |cff9ad4ff· Remove friend|r (the latter only when already a friend and the name is readable)\n" ..
+  "|cff9ad4ff· Add friend|r / |cff9ad4ff· Remove friend|r (only ONE shows, by actual state: already a friend -> remove)\n" ..
   "|cffa0a0a0Copy name never auto-sends; left click and item/quest links are untouched.|r",
 TB_NAMEMENU_TITLE = "Name: %s",
 TB_NAMEMENU_WHISPER = "Whisper",

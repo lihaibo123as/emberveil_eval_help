@@ -363,7 +363,7 @@ TB_NAMEMENU_TIP = "|cffffd100右键聊天里的角色名 → 弹出菜单|r（�
   "|cff9ad4ff· 查询|r（观察玩家信息，够不到就走 /who）  |cff9ad4ff· 踢出队伍|r（在队伍里才出现）\n" ..
   "|cff9ad4ff· 邀请公会|r / |cff9ad4ff· 踢出公会|r（都有权限时才出现）\n" ..
   "|cff9ad4ff· 取消邀请|r / |cff9ad4ff· 踢出队伍|r（在队伍里才出现，位于「查询」上面）\n" ..
-  "|cff9ad4ff· 添加好友|r / |cff9ad4ff· 删除好友|r（后者只在对方已是好友且名字读得到时出现）\n" ..
+  "|cff9ad4ff· 添加好友|r / |cff9ad4ff· 删除好友|r（**按实际状态二选一**：已是好友给删除，否则给添加）\n" ..
   "|cffa0a0a0★「复制名字」不会替你发送；左键与物品/任务等链接一律照旧，不受影响。|r",
 TB_NAMEMENU_TITLE = "名字：%s",
 TB_NAMEMENU_WHISPER = "悄悄话",
