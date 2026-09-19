@@ -540,12 +540,22 @@ local function shProbeFind(mode, tag)
   return nil
 end
 -- 探针结果：**如实**报告（一致 / 被改 / 未收到；长度档位看实际字节数与尾部哨兵）
+-- ★★★1.73.41b 用户「操作完了.看下」暴露的**取证缺口**：结果原来只打进**聊天框**，而本机没有聊天日志文件、
+--   SavedVariables 里也没有 → AI/事后都读不到。现在**每条都同时落盘**（EVAL_LOGLINE + EVAL_HELP_CONFIG.shareProbe
+--   的完整文字 + shareProbeVerdicts 判定表 + shareProbeRaw 发出/收到原文），/reload 之后就能读回来。
 function EVAL_SHARE_PROBE_REPORT()
   local p = SH_PROBE
   local out = { link = {}, len = {} }
-  shSay("===== 探针结果（发出 vs 收到）=====")
+  local lines, rawS = {}, { link = {}, len = {} }
+  local function emit(s)
+    s = tostring(s)
+    shSay(s)
+    if type(EVAL_LOGLINE) == "function" then pcall(EVAL_LOGLINE, "[探针] " .. s) end
+    table.insert(lines, s)
+  end
+  emit("===== 探针结果（发出 vs 收到）=====")
   if table.getn(p.sent or {}) == 0 and table.getn(p.ladderSent or {}) == 0 then
-    shSay("  还没发过探针 → 先 /eh go 链接探针 或 /eh go 长度探针")
+    emit("  还没发过探针 → 先 /eh go 链接探针 或 /eh go 长度探针")
     return out
   end
   for i = 1, table.getn(p.sent or {}) do
@@ -564,8 +574,13 @@ function EVAL_SHARE_PROBE_REPORT()
     end
     out.link[i] = { label = f.label, tag = f.tag, sent = string.len(f.body),
                     got = r and string.len(r.raw) or 0, verdict = v }
-    shSay("  " .. f.label .. " → " .. v .. " " .. extra)
-    if r then shSay("     发出：" .. f.body) shSay("     收到：" .. r.raw) end
+    emit("  " .. f.label .. " → " .. v .. " " .. extra)
+    if r then
+      emit("     发出：" .. f.body)
+      emit("     收到：" .. r.raw)
+      rawS.link[i] = { idx = f.idx, tag = f.tag, verdict = v, sent = f.body, got = r.raw,
+                       sender = r.sender, ev = r.ev }
+    end
   end
   for i = 1, table.getn(p.ladderSent or {}) do
     local row = p.ladderSent[i]
@@ -581,15 +596,65 @@ function EVAL_SHARE_PROBE_REPORT()
               (tailOK and "在" or "没了") .. "）"
     end
     out.len[i] = { target = row.target, tag = row.tag, got = r and string.len(r.raw) or 0, verdict = v }
-    shSay("  长度档 " .. tostring(row.target) .. " → " .. v .. " " .. extra)
+    emit("  长度档 " .. tostring(row.target) .. " → " .. v .. " " .. extra)
+    if r then rawS.len[i] = { idx = row.idx, tag = row.tag, target = row.target, verdict = v,
+                             got = r.raw, sender = r.sender, ev = r.ev } end
   end
   p.verdicts = out
-  shSay("  ★结论怎么读：① 若「自定义链接」= 一致 → 隐藏方案可行（服务器转发自定义链接）；" ..
-        "② 若只有 ②③/④ 一致 → 自定义类型被服务器剥了，改走已知类型或退回「只缩短」；" ..
-        "③ 长度档出现「截断」→ 记下那一档的真实字节数，SH_CHUNK 要按它重算")
+  emit("  ★结论怎么读：① 若「自定义链接」= 一致 → 隐藏方案可行（服务器转发自定义链接）；" ..
+       "② 若只有 ②③/④ 一致 → 自定义类型被服务器剥了，改走已知类型或退回「只缩短」；" ..
+       "③ 长度档出现「截断」→ 记下那一档的真实字节数，SH_CHUNK 要按它重算")
+  -- ★落盘：/reload 之后从存档里就能读回（本机**没有**聊天日志文件；聊天框一关就没了）
+  local cfgT = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(cfgT) == "table" then
+    cfgT.shareProbe = string.sub(table.concat(lines, "\n"), 1, 8000)
+    cfgT.shareProbeVerdicts = out
+    cfgT.shareProbeRaw = rawS
+  end
+  emit("  ★已写入存档（EVAL_HELP_CONFIG.shareProbe）：/reload 后即可回传；也可 /eh logdump 查看")
   p.armed = nil
   return out
 end
+-- ★1.73.41b 「一次跑完」：用户只要敲一条命令、等 20 秒、再 /reload（结果就落盘了）——
+--   探针结果原来只打聊天框，AI 事后读不到（用户「操作完了.看下」当场暴露这个缺口）。
+local shProbeFrame, shProbePlan = nil, {}
+local function shProbeNow()
+  return (type(GetTime) == "function") and GetTime() or 0
+end
+local function shProbeTick()
+  if not shProbeFrame then return end
+  local step = shProbePlan[1]
+  if not step then pcall(shProbeFrame.Hide, shProbeFrame) return end
+  if shProbeNow() >= step.at then
+    table.remove(shProbePlan, 1)
+    pcall(step.fn)
+  end
+end
+local function shProbeSchedule(delay, fn)
+  if not shProbeFrame then
+    shProbeFrame = CreateFrame("Frame", "EVAL_SHARE_PROBE_TICK", UIParent)
+    shProbeFrame:SetScript("OnUpdate", shProbeTick)
+  end
+  pcall(shProbeFrame.Show, shProbeFrame)
+  table.insert(shProbePlan, { at = shProbeNow() + delay, fn = fn })
+  table.sort(shProbePlan, function(a, b) return a.at < b.at end)
+end
+function EVAL_SHARE_PROBE_AUTORUN(chanId)
+  chanId = (type(chanId) == "string" and chanId ~= "") and chanId or "WHISPER"
+  shSay("探针全跑（约 20 秒）：链接探针 → 6s 自动出结果 → 长度阶梯 → 6s 自动出结果")
+  EVAL_SHARE_LINK_PROBE(chanId)
+  shProbeSchedule(6, function() shSay("【自动】链接探针结果：") EVAL_SHARE_PROBE_REPORT() end)
+  shProbeSchedule(12, function() EVAL_SHARE_LEN_PROBE(chanId) end)
+  shProbeSchedule(18, function()
+    shSay("【自动】长度阶梯结果：")
+    EVAL_SHARE_PROBE_REPORT()
+    shSay("★探针全跑完成 —— 现在 /reload，结果就已经在存档里了")
+  end)
+  return true
+end
+-- 测试钩子：驱动与 OnUpdate **同一个**函数（判据落在真实调用点）；PLAN 给出待跑步数
+function EVAL_TEST_SHARE_PROBE_STEP() shProbeTick() end
+function EVAL_TEST_SHARE_PROBE_PLAN() return table.getn(shProbePlan) end
 
 -- ★1.71.3 事件分派（三态兼容）抽成函数：事件名在 1参 / 2参 / 全局 event，参数随之一档右移。
 --   ★抽出来的理由：断言要验的是**真实分派逻辑**（不能在测试里重写一遍）。

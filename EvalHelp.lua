@@ -6860,6 +6860,12 @@ if type(SlashCmdList) == "table" then
       else
         say("分享模块未载入（EVAL_SHARE_LEN_PROBE 不存在）")
       end
+    elseif msg == "探针全跑" or msg == "probeall" then
+      if type(EVAL_SHARE_PROBE_AUTORUN) == "function" then
+        EVAL_SHARE_PROBE_AUTORUN("WHISPER")
+      else
+        say("分享模块未载入（EVAL_SHARE_PROBE_AUTORUN 不存在）")
+      end
     elseif msg == "探针结果" or msg == "probe" then
       if type(EVAL_SHARE_PROBE_REPORT) == "function" then
         EVAL_SHARE_PROBE_REPORT()

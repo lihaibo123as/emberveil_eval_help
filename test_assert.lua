@@ -10698,6 +10698,19 @@ do
   eq(anyMissing, true, "⑦★★★没收到就如实说「未收到」（不许假装成功）")
   EVAL_SHARE_PROBE_OFF()
   eq(EVAL_SHARE_PROBE_STATE().armed, nil, "⑦探针能关掉（回到正常接收）")
+  -- ⑧ ★★★1.73.41b 用户「操作完了.看下」暴露的缺口：结果只打聊天框 → AI/事后都读不到（本机没有聊天日志）
+  eq(type(EVAL_HELP_CONFIG.shareProbe) == "string" and string.len(EVAL_HELP_CONFIG.shareProbe) > 40, true,
+     "⑧★★★探针结果**落盘**（EVAL_HELP_CONFIG.shareProbe 有内容）")
+  eq(type(EVAL_HELP_CONFIG.shareProbeVerdicts) == "table" and type(EVAL_HELP_CONFIG.shareProbeVerdicts.link) == "table", true,
+     "⑧★★★判定表也落盘（shareProbeVerdicts.link 可机器读）")
+  eq(string.find(tostring(EVAL_HELP_CONFIG.shareProbe), "探针结果", 1, true) ~= nil, true, "⑧★落盘的文字里带标题")
+  -- ⑨ ★★「一次跑完」：一条命令 → 自动出结果（省用户操作）
+  eq(EVAL_SHARE_PROBE_AUTORUN("WHISPER"), true, "⑨★★「探针全跑」入口能跑")
+  eq(EVAL_TEST_SHARE_PROBE_PLAN(), 3, "⑨★★★排了 3 步（6s 出结果 / 12s 长度探针 / 18s 出结果）")
+  TEST.time = (TEST.time or 1000) + 7
+  EVAL_TEST_SHARE_PROBE_STEP()
+  eq(EVAL_TEST_SHARE_PROBE_PLAN(), 2, "⑨★★到点会自动出结果（步数 3 → 2）")
+
   TEST.chat = nil
   print("  调研探针：4 形态逐字节比对（一致/被改/未收到）+ 长度阶梯（完整/截断）+ 不污染正常接收")
 end
