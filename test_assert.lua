@@ -11768,14 +11768,14 @@ do
   eq(EVAL_TEST_TB_MENU_CLICK(EVAL_L("TB_NAMEMENU_ADDFRIEND")), true, "⑥b★★★这种情况按「不是好友」处理 → 给「添加好友」（宁可多余一次，也绝不误删）")
   TEST.friendNameCache = true
   TEST.friendRows = {}
-  -- ⑦ 取消邀请：不在队伍里就没有这个条目（用户：在队伍内的情况下）
+  -- ⑦ ★1.73.42y 用户：「取消邀请删除」→ 这条**不再进菜单**（任何时候都点不到）
   EVAL_TEST_TB_MENU_DROP()
   TEST.partyN, TEST.partyLeader = 0, false
   TEST.chat = nil
-  TEST.time = (TEST.time or 1000) + 1 -- 跨过 0.5 秒服务器写动作限频窗（好友/取消邀请共用同一个限频器）
+  TEST.time = (TEST.time or 1000) + 1
   EVAL_TB_MENU_SHOW("Ionol")
-  eq(EVAL_TEST_TB_MENU_CLICK(EVAL_L("TB_NAMEMENU_CANCELINVITE")), false, "⑦★★★不在队伍 → 菜单里没有「取消邀请」")
-  -- ⑧ 在队伍里（且我是队长）：条目出现 → 点它 → 人真的被移出（人数 2 → 1）→ 措辞是「已把 X 移出队伍」
+  eq(EVAL_TEST_TB_MENU_CLICK(EVAL_L("TB_NAMEMENU_CANCELINVITE")), false, "⑦★★★没队伍 → 没有「取消邀请」")
+  -- ⑧ 在队伍里（且我是队长）：这一格只给「踢出队伍」（取消邀请已按用户要求删除）；点它人真的被移出（2 → 1）
   EVAL_TEST_TB_NAMEMENU_RESET()
   EVAL_TEST_TB_MENU_DROP()
   TEST.partyN = nil
@@ -11783,12 +11783,22 @@ do
   TEST.partyLeader = true
   TEST.uninviteNoop = false
   TEST.chat = nil
-  TEST.time = (TEST.time or 1000) + 1 -- 跨过 0.5 秒服务器写动作限频窗（好友/取消邀请共用同一个限频器）
+  TEST.time = (TEST.time or 1000) + 1
   EVAL_TB_MENU_SHOW("Ionol")
-  eq(EVAL_TEST_TB_MENU_CLICK(EVAL_L("TB_NAMEMENU_CANCELINVITE")), true, "⑧★★★队伍里才有「取消邀请」，点的是真实按钮")
+  eq(EVAL_TEST_TB_MENU_CLICK(EVAL_L("TB_NAMEMENU_CANCELINVITE")), false, "⑧★★★「取消邀请」已从菜单移除（用户要求）")
+  eq(EVAL_TEST_TB_MENU_CLICK(EVAL_L("TB_NAMEMENU_KICKP")), true, "⑧★★★队伍里给的是「踢出队伍」，点的是真实按钮")
   eq(table.getn(TEST.team), 1, "⑧★★★真的把人移出队伍了（2 → 1）")
-  eq(EVAL_TB_NAMEMENU_STATE().cancelKicked, 1, "⑧★★记账：真移出 1 次")
+  eq(EVAL_TB_NAMEMENU_STATE().kickp, 1, "⑧★★记账：踢出成功 1 次")
   eq(string.find(tostring(TEST.chat or ""), "移出队伍", 1, true) ~= nil, true, "⑧★★措辞是「已把 X 移出队伍」")
+  -- ⑧b 取消邀请动作本身仍在（UninviteByName 的**双结果**如实播报实现，只是不再挂菜单）：直接调它验两种结果
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  TEST.team = { { unit = "party1", name = "Ionol" }, { unit = "party2", name = "别人" } }
+  TEST.uninviteNoop = false
+  TEST.chat = nil
+  TEST.time = (TEST.time or 1000) + 1
+  eq(EVAL_TB_NAME_CANCELINVITE("Ionol"), true, "⑧b★★动作还在（未挂菜单）")
+  eq(EVAL_TB_NAMEMENU_STATE().cancelKicked, 1, "⑧b★★真移出 1 次")
+  eq(string.find(tostring(TEST.chat or ""), "移出队伍", 1, true) ~= nil, true, "⑧b★★措辞「已把 X 移出队伍」")
   -- ⑨ 服务器没动（人数没变）→ 只说「已请求取消对 X 的邀请」，不假称移出
   EVAL_TEST_TB_NAMEMENU_RESET()
   TEST.team = { { unit = "party1", name = "Ionol" } }
@@ -11822,6 +11832,54 @@ do
   print("  右键菜单：添加好友 · 删除好友（仅好友/名字读不到就不显示）· 取消邀请（仅队伍内）· 假成功一律改成如实措辞")
 end
 
+-- 154) ★★★1.73.42y 好友动作是「服务器往返」：不许假失败 + 下次开菜单核对真结果
+--   用户真机：「删除好友操作.实际是生效了」但界面报「好友操作没生效（RemoveFriend）」→ 这是**假失败**。
+--   根因：AddFriend/RemoveFriend 是把名字交给服务器的动作（wiki），本地好友列表**不会同步变**。
+do
+  local savedTb154 = EVAL_HELP_CONFIG.tb
+  EVAL_HELP_CONFIG.tb = { nameMenu = true }
+  local keepRows154, keepNoop154 = TEST.friendRows, TEST.friendRemoveNoop
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  TEST.friendRows = { { name = "往返甲" } }
+  TEST.friendRemoveNoop = true
+  TEST.chat = nil
+  TEST.time = (TEST.time or 1000) + 1
+  eq(EVAL_TB_NAME_DELFRIEND("往返甲"), true, "①★★请求发出去了（返回 true）")
+  eq(EVAL_TB_NAMEMENU_STATE().friendRemoveUnk, 1, "①★★★记的是「已请求删除」而不是「没生效」")
+  eq(EVAL_TB_NAMEMENU_STATE().friendFail, 0, "①★★★**一次都不许记失败**（用户真机：实际生效了却报没生效）")
+  eq(string.find(tostring(TEST.chat or ""), "已请求删除好友", 1, true) ~= nil, true, "①★★★措辞如实（服务器动作）")
+  eq(string.find(tostring(TEST.chat or ""), "没生效", 1, true) == nil, true, "①★★★绝不再说「没生效」")
+  eq(type(EVAL_TB_NAMEMENU_STATE().pendingFriend) == "table", true, "①★★记下一笔 pending（等下次开菜单核对）")
+  -- ② 下次开菜单（≥1 秒后）核对：人还在 → 如实说「还在列表里」
+  TEST.time = (TEST.time or 1000) + 2
+  TEST.chat = nil
+  EVAL_TEST_TB_MENU_DROP()
+  EVAL_TB_MENU_SHOW("往返甲")
+  eq(EVAL_TB_NAMEMENU_STATE().pendingFriend == nil, true, "②★核对过就清 pending（不重复念）")
+  eq(string.find(tostring(TEST.chat or ""), "还在你的好友列表里", 1, true) ~= nil, true, "②★★★核对结果如实：还在列表里")
+  -- ③ 再来一笔：这次服务器真的处理完了（列表里没了）→ 核对结果 = 已删除好友
+  TEST.friendRows = { { name = "往返乙" } }
+  TEST.friendRemoveNoop = true
+  TEST.time = (TEST.time or 1000) + 1
+  TEST.chat = nil
+  EVAL_TB_NAME_DELFRIEND("往返乙")
+  TEST.friendRows = {}
+  TEST.time = (TEST.time or 1000) + 2
+  TEST.chat = nil
+  EVAL_TEST_TB_MENU_DROP()
+  EVAL_TB_MENU_SHOW("往返乙")
+  eq(string.find(tostring(TEST.chat or ""), "已删除好友", 1, true) ~= nil, true, "③★★★核对结果如实：已删除好友")
+  -- 还原
+  TEST.friendRemoveNoop = keepNoop154
+  TEST.friendRows = keepRows154
+  TEST.chat = nil
+  EVAL_TEST_TB_MENU_DROP()
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  EVAL_HELP_CONFIG.tb = savedTb154
+  print("  好友往返：只报「已请求…」不报「没生效」· 下次开菜单核对真结果（还在列表 / 已删除）")
+end
+
+print("ALL TESTS PASS")
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")
 

@@ -361,7 +361,7 @@ TB_NAMEMENU_TIP = "|cffffd100Right-click a character name in chat -> menu|r (two
   "|cff9ad4ff· Share build|r (whispers the active build)  |cff9ad4ff· Trade|r\n" ..
   "|cff9ad4ff· Query|r (inspect, falls back to /who)  |cff9ad4ff· Kick party|r (only when grouped)\n" ..
   "|cff9ad4ff· Invite guild|r / |cff9ad4ff· Kick guild|r (only with permission)\n" ..
-  "|cff9ad4ff· Cancel invite|r / |cff9ad4ff· Kick party|r (shown while in a party, right above Query)\n" ..
+  "|cff9ad4ff· Kick party|r (shown only while in a party, right above Query)\n" ..
   "|cff9ad4ff· Add friend|r / |cff9ad4ff· Remove friend|r (only ONE shows, by actual state: already a friend -> remove)\n" ..
   "|cffa0a0a0Copy name never auto-sends; left click and item/quest links are untouched.|r",
 TB_NAMEMENU_TITLE = "Name: %s",
@@ -387,6 +387,10 @@ TB_NAMEMENU_WHISPERFAIL = "This client cannot open the chat box - please type /w
   TB_NAMEMENU_FRIENDREMOVEOK = "Friend removed: %s",
   TB_NAMEMENU_FRIENDNOTON = "That player is not on your friends list: %s",
   TB_NAMEMENU_FRIENDFAIL = "Friend action did not take effect (%s)",
+  -- ★★★1.73.42y The friend list does NOT change synchronously (server round-trip) -> never claim failure.
+  TB_NAMEMENU_FRIENDREMOVEUNK = "Asked the server to remove the friend: %s (the list updates when the server answers)",
+  TB_NAMEMENU_FRIENDPENDON = "Check: %s is still on your friends list (the server has not processed it yet)",
+  TB_NAMEMENU_FRIENDPENDOFF = "Check: %s has not appeared on the friends list yet (the server may still be working)",
   TB_NAMEMENU_FRIENDNOAPI = "This client has no friend API (%s)",
   -- ★★★1.73.42v Cancel invite (user request; shown while in a party).
   TB_NAMEMENU_CANCELINVITE = "Cancel invite",

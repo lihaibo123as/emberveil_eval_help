@@ -1012,6 +1012,27 @@ function EVAL_TB_MENU_LAYOUT(n)
 end
 function EVAL_TB_MENU_HEIGHT(n) local _, h = EVAL_TB_MENU_LAYOUT(n) return h end
 function EVAL_TB_MENU_WIDTH(n) local w = EVAL_TB_MENU_LAYOUT(n) return w end
+local function tbFriendIndex(name)
+  if type(name) ~= "string" or name == "" then return nil end
+  if type(GetNumFriends) ~= "function" or type(GetFriendInfo) ~= "function" then return nil end
+  local okn, n = pcall(GetNumFriends)
+  if not okn then return nil end
+  n = tonumber(n) or 0
+  local want = string.lower(name)
+  for i = 1, n do
+    local okf, fname = pcall(GetFriendInfo, i)
+    if okf and type(fname) == "string" and fname ~= "" and string.lower(fname) == want then return i end
+  end
+  return nil
+end
+function EVAL_TB_NAME_ISFRIEND(name) return tbFriendIndex(name) ~= nil end
+local function tbFriendCount()
+  if type(GetNumFriends) ~= "function" then return nil end
+  local ok, n = pcall(GetNumFriends)
+  if not ok then return nil end
+  return tonumber(n) or 0
+end
+
 -- ★1.73.42u 菜单**条目集签名**（前置声明：EVAL_TEST_TB_MENU_DROP 也要清它）——
 --   条目集合变了就重建菜单（好友/队伍/权限是会变的状态，不能只建一次）
 local TB_MENU_SIG = nil
@@ -1045,8 +1066,10 @@ local function tbMenuItems(name)
   end
   if not tbInParty then add(L("TB_NAMEMENU_PARTY"), EVAL_TB_NAME_PARTY) end -- 没队伍才给「邀请队伍」
   if tbInParty then
-    if type(UninviteByName) == "function" then add(L("TB_NAMEMENU_CANCELINVITE"), EVAL_TB_NAME_CANCELINVITE) end
-    add(L("TB_NAMEMENU_KICKP"), EVAL_TB_NAME_KICKP) -- ★在队伍里 = 这一格换成踢出队伍
+    -- ★1.73.42y 用户：「取消邀请删除」→ 这一格**只留**「踢出队伍」（取消邀请那条不再进菜单）。
+    --   ★动作函数 EVAL_TB_NAME_CANCELINVITE 保留（它是 `UninviteByName` 的**双结果如实播报**实现，仍有判据在跑），
+    --     只是不再挂条目 —— 要恢复只需把下面那句加回来。
+    add(L("TB_NAMEMENU_KICKP"), EVAL_TB_NAME_KICKP) -- 在队伍里 = 这一格换成踢出队伍
   end
   add(L("TB_NAMEMENU_QUERY"), EVAL_TB_NAME_QUERY)
   -- ★有权限才显示「踢出公会 / 邀请公会」
@@ -1347,6 +1370,23 @@ local function tbMenuEnsure()
   TB.menuSig = sig
   return f
 end
+-- ★★★1.73.42y 上次好友动作的**延迟核对**：好友列表是服务器回话后才变的 → 开菜单时若有一笔 pending 且已过 1 秒，
+--   就当场核对并给出**真结果**（删成功/仍在列表 / 加成功/还没出现）——这才是「不假成功也不假失败」。
+local function tbFriendVerifyPending()
+  local p = TB_NAME_MENU.pendingFriend
+  if type(p) ~= "table" or type(p.name) ~= "string" then return end
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  if now - (tonumber(p.at) or 0) < 1 then return end -- 至少给服务器 1 秒
+  TB_NAME_MENU.pendingFriend = nil
+  local still = (tbFriendIndex(p.name) ~= nil)
+  if p.kind == "remove" then
+    if still then say(string.format(L("TB_NAMEMENU_FRIENDPENDON"), p.name))
+    else say(string.format(L("TB_NAMEMENU_FRIENDREMOVEOK"), p.name)) end
+  else
+    if still then say(string.format(L("TB_NAMEMENU_FRIENDADDOK"), p.name))
+    else say(string.format(L("TB_NAMEMENU_FRIENDPENDOFF"), p.name)) end
+  end
+end
 function EVAL_TB_MENU_SHOW(name)
   if not EVAL_TB_NAMEMENU_ON() then return false end
   if type(name) ~= "string" or name == "" then return false end
@@ -1354,6 +1394,7 @@ function EVAL_TB_MENU_SHOW(name)
   --   原顺序是 build → 赋值，而条目闭包在建菜单时就把 TB_NAME_MENU.name（当时是 nil）**捕获**了
   --   → 所有动作都拿到 nil → 静默返回 false（点了像没反应）。
   TB_NAME_MENU.name = name
+  tbFriendVerifyPending() -- ★1.73.42y 先把上次好友动作的**真实结果**核对出来（服务器回话后才准）
   local f = tbMenuEnsure() -- ★每次显示按当前状态重算条目（好友/队伍/权限会变）
   if f.title then pcall(f.title.SetText, f.title, string.format(L("TB_NAMEMENU_TITLE"), name)) end
   -- ★★★1.73.36 用户澄清：**相对鼠标点击位置的右上角** —— 弹窗的**左下角贴光标**，向上、向右展开
@@ -1530,26 +1571,6 @@ end
 --     · `GetFriendInfo(i)` —— 六返回值；★**name 来自本地缓存，可能暂时为空**（名字查询还没回来）⇒
 --       读不到名字时**不能确认**（既不把空行当好友，也不假称已加/已删）。
 --   ⇒ 一律用「操作前后 `GetNumFriends()` 对比」如实播报：变了 = 成功；没变 = 请求已发但**确认不了**（绝不假成功）。
-local function tbFriendIndex(name)
-  if type(name) ~= "string" or name == "" then return nil end
-  if type(GetNumFriends) ~= "function" or type(GetFriendInfo) ~= "function" then return nil end
-  local okn, n = pcall(GetNumFriends)
-  if not okn then return nil end
-  n = tonumber(n) or 0
-  local want = string.lower(name)
-  for i = 1, n do
-    local okf, fname = pcall(GetFriendInfo, i)
-    if okf and type(fname) == "string" and fname ~= "" and string.lower(fname) == want then return i end
-  end
-  return nil
-end
-function EVAL_TB_NAME_ISFRIEND(name) return tbFriendIndex(name) ~= nil end
-local function tbFriendCount()
-  if type(GetNumFriends) ~= "function" then return nil end
-  local ok, n = pcall(GetNumFriends)
-  if not ok then return nil end
-  return tonumber(n) or 0
-end
 -- 添加好友：先查是不是已经在列表里（不重复加）→ AddFriend → **按条数变化**如实播报
 function EVAL_TB_NAME_ADDFRIEND(name)
   if type(name) ~= "string" or name == "" then return false end
@@ -1573,8 +1594,10 @@ function EVAL_TB_NAME_ADDFRIEND(name)
     return true
   end
   if ok then
-    -- ★请求已发出但列表没变：可能是服务器稍后才回、或对方本就在列表里 —— **不假称成功**
+    -- ★请求已发出但列表没同步变：`AddFriend` 是**服务器动作**（wiki：把名字交给服务器）→ 本地列表要等回话。
+    --   **不假称成功、也绝不假称失败**：记一笔 pending，下次开菜单（≥1 秒后）再核对并如实报结果。
     TB_NAME_MENU.friendAddUnk = (TB_NAME_MENU.friendAddUnk or 0) + 1
+    TB_NAME_MENU.pendingFriend = { kind = "add", name = safe, at = (type(GetTime) == "function") and GetTime() or 0 }
     say(string.format(L("TB_NAMEMENU_FRIENDADDUNK"), safe))
     return true
   end
@@ -1605,6 +1628,15 @@ function EVAL_TB_NAME_DELFRIEND(name)
     if ok2 and before ~= nil and after2 ~= nil and after2 < before then
       TB_NAME_MENU.friendRemove = (TB_NAME_MENU.friendRemove or 0) + 1
       say(string.format(L("TB_NAMEMENU_FRIENDREMOVEOK"), safe))
+      return true
+    end
+    -- ★★★1.73.42y **不再拿「条数没立刻变小」当失败**（用户真机：好友实际删掉了，界面却报「没生效」）——
+    --   `RemoveFriend` 是服务器动作（wiki：把名字交给服务器），本地列表要等服务器回话才变。
+    --   ⇒ 只如实说「已请求删除」，并记 pending，**下次开菜单（≥1 秒后）核对**再给出真结果。
+    if ok or ok2 then
+      TB_NAME_MENU.friendRemoveUnk = (TB_NAME_MENU.friendRemoveUnk or 0) + 1
+      TB_NAME_MENU.pendingFriend = { kind = "remove", name = safe, at = (type(GetTime) == "function") and GetTime() or 0 }
+      say(string.format(L("TB_NAMEMENU_FRIENDREMOVEUNK"), safe))
       return true
     end
     TB_NAME_MENU.friendFail = (TB_NAME_MENU.friendFail or 0) + 1
@@ -1915,9 +1947,11 @@ function EVAL_TB_NAMEMENU_STATE()
     -- ★1.73.42u 好友四态（加成功 / 加请求已发但确认不了 / 已是好友 / 删成功）+ 失败
     friendAdd = TB_NAME_MENU.friendAdd or 0, friendAddUnk = TB_NAME_MENU.friendAddUnk or 0,
     friendAlready = TB_NAME_MENU.friendAlready or 0, friendRemove = TB_NAME_MENU.friendRemove or 0,
-    friendFail = TB_NAME_MENU.friendFail or 0,
+    friendFail = TB_NAME_MENU.friendFail or 0, friendRemoveUnk = TB_NAME_MENU.friendRemoveUnk or 0,
+    pendingFriend = TB_NAME_MENU.pendingFriend,
     -- ★1.73.42v 取消邀请三态（真的移出 / 请求已发 / 失败）+ 踢出未确认
     cancelKicked = TB_NAME_MENU.cancelKicked or 0, cancelSent = TB_NAME_MENU.cancelSent or 0,
+    kickp = TB_NAME_MENU.kickp or 0,
     cancelFail = TB_NAME_MENU.cancelFail or 0, kickpUnk = TB_NAME_MENU.kickpUnk or 0,
   }
 end
@@ -1993,6 +2027,7 @@ function EVAL_TEST_TB_NAMEMENU_RESET()
   TB_NAME_MENU.partySelf = 0
   TB_NAME_MENU.friendAdd, TB_NAME_MENU.friendAddUnk, TB_NAME_MENU.friendAlready = 0, 0, 0
   TB_NAME_MENU.friendRemove, TB_NAME_MENU.friendFail = 0, 0
+  TB_NAME_MENU.friendRemoveUnk, TB_NAME_MENU.pendingFriend = 0, nil
   TB_NAME_MENU.cancelKicked, TB_NAME_MENU.cancelSent, TB_NAME_MENU.cancelFail = 0, 0, 0
   TB_NAME_MENU.kickp, TB_NAME_MENU.kickpUnk = 0, 0
   TB_NAME_MENU.partyVia = nil

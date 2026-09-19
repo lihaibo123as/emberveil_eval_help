@@ -362,7 +362,7 @@ TB_NAMEMENU_TIP = "|cffffd100右键聊天里的角色名 → 弹出菜单|r（�
   "|cff9ad4ff· 分享方案|r（把当前激活方案密语给对方）  |cff9ad4ff· 交易|r\n" ..
   "|cff9ad4ff· 查询|r（观察玩家信息，够不到就走 /who）  |cff9ad4ff· 踢出队伍|r（在队伍里才出现）\n" ..
   "|cff9ad4ff· 邀请公会|r / |cff9ad4ff· 踢出公会|r（都有权限时才出现）\n" ..
-  "|cff9ad4ff· 取消邀请|r / |cff9ad4ff· 踢出队伍|r（在队伍里才出现，位于「查询」上面）\n" ..
+  "|cff9ad4ff· 踢出队伍|r（只有在队伍里才出现，位于「查询」上面）\n" ..
   "|cff9ad4ff· 添加好友|r / |cff9ad4ff· 删除好友|r（**按实际状态二选一**：已是好友给删除，否则给添加）\n" ..
   "|cffa0a0a0★「复制名字」不会替你发送；左键与物品/任务等链接一律照旧，不受影响。|r",
 TB_NAMEMENU_TITLE = "名字：%s",
@@ -393,6 +393,13 @@ TB_NAMEMENU_WHISPERFAIL = "本客户端没有打开聊天框的接口 → 请手
   TB_NAMEMENU_FRIENDREMOVEOK = "已删除好友：%s",
   TB_NAMEMENU_FRIENDNOTON = "对方不在你的好友列表里：%s",
   TB_NAMEMENU_FRIENDFAIL = "好友操作没生效（%s）",
+  -- ★★★1.73.42y 用户真机反馈：「删除好友操作.实际是生效了」但界面报「好友操作没生效（RemoveFriend）」——
+  --   根因：`RemoveFriend`/`AddFriend` 都是**服务器动作**（wiki：把名字交给服务器），本地好友列表**不会同步变**，
+  --   我们却拿「操作前后条数」当判据 → 变成**假失败**（比假成功更气人）。修法：
+  --   ① 立刻只说「已请求…」，不做「没生效」的结论；② 记一笔 pending，**下次开菜单**（≥1 秒后）再核对并如实报结果。
+  TB_NAMEMENU_FRIENDREMOVEUNK = "已请求删除好友：%s（这是服务器动作，好友列表要等服务器回话才变）",
+  TB_NAMEMENU_FRIENDPENDON = "核对结果：%s 还在你的好友列表里（服务器还没处理这次请求）",
+  TB_NAMEMENU_FRIENDPENDOFF = "核对结果：%s 还没出现在好友列表里（服务器可能还在处理）",
   TB_NAMEMENU_FRIENDNOAPI = "本客户端没有好友接口（%s）",
   -- ★★★1.73.42v 取消邀请（用户：「添加取消邀请,在队伍内的情况下」）。
   --   ★语义按客户端官方 wiki（Group）：`UninviteByName(Name)`「Removes a party or raid member by character name.
