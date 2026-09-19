@@ -137,6 +137,9 @@ local function newMock()
     --   而旧桩的 SetTexture 走 __index 兜底（返回一个空函数）→ 断言读不到任何路径，
     --   「图标到底画了哪张」在测试里完全不可见（同族教训：桩不记状态 = 断言失明）。
     --   ★只记字符串（uiSolid 走的是 SetTexture(r,g,b) 三数值形态，不记路径）。
+    -- ★1.73.42z 桩保真：**对齐方式**要能读回来（用户「方案名称没居中」这条判据原来根本读不到值）。
+    SetJustifyH = function(self, v) rawset(self, "__justify", v) end,
+    GetJustifyH = function(self) return rawget(self, "__justify") end,
     SetTexture = function(_, a1) if type(a1) == "string" then rawset(m, "__tex", a1) end end,
     -- ★1.73.26 桩保真：真客户端纹理有顶点色（SetVertexColor / GetVertexColor）——
     --   原来桩里没有 → 说明「半透明背景」这类判据**根本读不到值**（本项目「桩太宽松 → 断言失明」那一族）。

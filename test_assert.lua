@@ -10950,21 +10950,21 @@ do
   eq(string.find(tostring(TEST.chat or ""), "秘籍样例", 1, true) ~= nil, true, "★★★/eh go 秘籍样例 真的执行（命令在 go 组里）")
   TEST.chat = nil
   -- ★★★1.73.42l 品阶图标 = **用户指定**（真机反馈：「案例方案内图标替换，名称和颜色背景都要符合以上规则」）
-  --   按用户给的顺序：源代码=暗影蛋 · 绝版=暗影蛋 · 普通=堕落灰烬使者 · 稀有=斧 · 珍稀=矛。
-  --   ⚠️ 用户给的「图1（源代码）」与「图2（绝版）」是**同一张**（INV_Misc_ShadowEgg），本轮照他列的顺序都用它；
-  --      所以「五张互不相同」这条老判据改成「**前四档互不相同** + 第 5 档与第 4 档同图是用户指定的」。
+  --   ★★★1.73.42z 用户第二次给的对应关系（图标轮换 + 新增一张）：普通=斧 INV_Axe_10 · 稀有=矛 INV_Spear_04 ·
+  --     珍稀=剑 INV_Sword_22（他给的「图2」）· 绝版=堕落灰烬使者 INV_Sword_2H_AshbringerCorrupt · 源代码=暗影蛋（不变）。
+  --   ⇒ 这一次**五张全不同**，所以「五张互不相同」恢复成硬判据（上一轮因为用户给了同一张才放宽成前四档）。
   eq(EVAL_SHARE_SEAL_ICON_COUNT(), 5, "五个品阶各一个图标")
-  local wantIcons143 = { "INV_Sword_2H_AshbringerCorrupt", "INV_Axe_10", "INV_Spear_04", "INV_Misc_ShadowEgg", "INV_Misc_ShadowEgg" }
+  local wantIcons143 = { "INV_Axe_10", "INV_Spear_04", "INV_Sword_22", "INV_Sword_2H_AshbringerCorrupt", "INV_Misc_ShadowEgg" }
   local iconSeen = {}
   for i = 1, 5 do
     local path, file = EVAL_SHARE_SEAL_ICON(i)
     eq(string.find(path, "Interface\\Icons\\", 1, true), 1, "图标路径是本客户端 Icon 目录：" .. tostring(path))
     eq(file, wantIcons143[i], "★★★第 " .. i .. " 档图标 = 用户指定那张（" .. tostring(wantIcons143[i]) .. "）")
-    if i <= 4 then eq(iconSeen[file] == nil, true, "★普通/稀有/珍稀/绝版 四张不许撞图：" .. tostring(file)) end
+    eq(iconSeen[file] == nil, true, "★★★五档图标互不相同（1.73.42z 起五张全不同）：" .. tostring(file))
     iconSeen[file] = true
   end
   local p1 = EVAL_SHARE_SEAL_ICON(1)
-  eq(string.find(p1, "INV_Sword_2H_AshbringerCorrupt", 1, true) ~= nil, true, "普通档 = 堕落灰烬使者（用户指定）")
+  eq(string.find(EVAL_SHARE_SEAL_ICON(1), "INV_Axe_10", 1, true) ~= nil, true, "普通档 = 斧（1.73.42z 用户指定）")
   eq(string.find(EVAL_SHARE_SEAL_ICON(5), "INV_Misc_ShadowEgg", 1, true) ~= nil, true, "源代码档 = 暗影蛋（用户指定）")
   EVAL_HELP_CONFIG.shareIconProbe = nil
   TEST.runScripts = {}
@@ -11878,6 +11878,62 @@ do
   EVAL_HELP_CONFIG.tb = savedTb154
   print("  好友往返：只报「已请求…」不报「没生效」· 下次开菜单核对真结果（还在列表 / 已删除）")
 end
+
+-- 148) ★★★1.73.42z 案例模版行外观（**重新补回**：原组在上一次「整段替换」里被误删，见文末教训）
+--   用户要求：「案例方案内图标替换，名称和颜色背景都要符合以上规则」+ 本轮「添加图片之后方案显示不全. 方案名称没居中」
+--   ★判据都读**真控件**：图标纹理 / 文字色 / 背景顶点色 / 文字区宽 / 对齐方式。
+do
+  -- ① 色码 → RGB：必须与品阶色表**同源**（逐档把 HEX 自己算一遍来比，不看实现里的常量）
+  local reps148 = { 1, 4, 7, 10, 13 }
+  local okAll148 = true
+  for i = 1, 5 do
+    local _, ti = EVAL_SHARE_SEAL_TIER(reps148[i])
+    local rgb = EVAL_SHARE_SEAL_TIER_RGB(i)
+    if type(rgb) ~= "table" then okAll148 = false
+    else
+      local r = tonumber(string.sub(ti.color, 5, 6), 16) / 255
+      local g = tonumber(string.sub(ti.color, 7, 8), 16) / 255
+      local b = tonumber(string.sub(ti.color, 9, 10), 16) / 255
+      if math.abs(rgb.r - r) > 0.001 or math.abs(rgb.g - g) > 0.001 or math.abs(rgb.b - b) > 0.001 then okAll148 = false end
+    end
+  end
+  eq(okAll148, true, "①★★★RGB 由品阶色码解析而来（与分享行/弹窗同一张色表，五档逐个核）")
+  eq(EVAL_SHARE_SEAL_TIER_RGB(5).hex, "|cffb87333", "①★源代码档 = 暗金（RGB 有据）")
+  -- ② 真实模版行：图标 / 文字色 / 背景色 / 文字区宽 / 居中
+  local rows148 = EVAL_TEST_TPL_ROWS()
+  eq(table.getn(rows148) >= 5, true, "②前置：模版行数 " .. tostring(table.getn(rows148)))
+  local checked148, badIcon148, badText148, badBg148, narrow148, offCenter148 = 0, 0, 0, 0, 0, 0
+  local seenTier148, nTier148 = {}, 0
+  for i = 1, table.getn(rows148) do
+    local v = EVAL_TEST_TPL_TIER(i)
+    if v and v.tier and v.want then
+      checked148 = checked148 + 1
+      if not seenTier148[v.tier] then seenTier148[v.tier] = true nTier148 = nTier148 + 1 end
+      if v.icon ~= EVAL_SHARE_SEAL_ICON(v.tier) then badIcon148 = badIcon148 + 1 end
+      if math.abs((v.textR or -1) - v.want.r) > 0.01 or math.abs((v.textG or -1) - v.want.g) > 0.01 or math.abs((v.textB or -1) - v.want.b) > 0.01 then badText148 = badText148 + 1 end
+      if math.abs((v.bgR or -1) - v.want.r * 0.22) > 0.01 or math.abs((v.bgG or -1) - v.want.g * 0.22) > 0.01 or math.abs((v.bgB or -1) - v.want.b * 0.22) > 0.01 then badBg148 = badBg148 + 1 end
+      -- ★用户：「方案显示不全」→ 文字区宽必须 >= 名字估算宽（图标位要算进按钮宽）
+      if v.textW then
+        local est148 = math.floor(string.len(tostring(v.name or "")) / 3 + 0.5) * 9
+        if v.textW < est148 then narrow148 = narrow148 + 1 end
+      end
+      -- ★用户：「方案名称没居中」
+      if v.textJustify ~= "CENTER" then offCenter148 = offCenter148 + 1 end
+    end
+  end
+  eq(checked148 >= 5, true, "②★★真的查到带品阶的模版行（" .. tostring(checked148) .. " 行）")
+  eq(badIcon148, 0, "②★★★每行图标纹理 = 该品阶图标（读真控件 GetTexture），不符 " .. tostring(badIcon148) .. " 行")
+  eq(badText148, 0, "②★★★每行**名称文字色** = 该品阶色（读真控件 GetTextColor），不符 " .. tostring(badText148) .. " 行")
+  eq(badBg148, 0, "②★★★每行**背景色** = 该品阶色的 22% 暗色（读真控件 GetVertexColor），不符 " .. tostring(badBg148) .. " 行")
+  eq(narrow148, 0, "②★★★每行文字区都放得下名字（图标位算进按钮宽，用户报「显示不全」），被裁 " .. tostring(narrow148) .. " 行")
+  eq(offCenter148, 0, "②★★★每行方案名**居中**（用户要求），没居中 " .. tostring(offCenter148) .. " 行")
+  eq(nTier148 >= 2, true, "③★★★模版窗里至少出现 2 个不同品阶（否则「颜色跟着品阶」验不出来），实际 " .. tostring(nTier148))
+  print("  案例模版行外观：图标 + 名称文字色 + 背景暗色调 + 文字区宽度 + 居中（全读真控件）· RGB 与色码同源")
+end
+-- ★★★教训（1.73.42z 记录）：上一轮「用脚本整段替换 147 组」时，替换范围写成「从 `-- 147)` 到第一个
+--   `print("ALL TESTS PASS")`」——而 148 组正好落在这个区间里 ⇒ **整组被静默删掉**，套件照旧全绿
+--   （绿得毫无根据：那 30 行判据当时根本没跑）。★做法：整段替换前先 `git grep` 该区间内的组号，
+--   或按「下一组标题」而不是「文件末尾标记」当右边界；本轮已用 Compare-Object 逐组核对补回。
 
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")

@@ -6406,6 +6406,11 @@ end
 --   ★★为什么是纯函数：布局的核心（分列 + 换行）埋在 BUILD 里就只能用真实模版数据测，
 --     而真实内容下「不换行 / 只排一列」都可能是**等价**的 → 必须能用**合成数据**逼它换行、逼它分列。
 --   返回 plan, 最末一行 y, 左列行数, 右列行数, 列宽, 右列左边界 x
+-- ★★★1.73.42z 案例模版行：品阶图标占的宽度必须**算进按钮宽**（用户真机：「添加图片之后方案显示不全」）——
+--   原来只在渲染时把文字**让出**图标位（`e.w - 22`），按钮宽却仍按「名字宽 + 16」算 ⇒ 文字区比名字还窄 6px，
+--   于是名字被裁（「法…」「力量祝福（物理…」）。现在**测量与摆放共用同一个常量**（单一来源）。
+local TPL_ICON_W = 20 -- 图标 13 + 左边距 3 + 与文字的缝 4
+local TPL_ROW_PAD = 16 -- 按钮左右内边距（原来写死在两处，这里收成一份）
 local function tplTwoColPlan(W, groups, measure, margin, gap, rowH, colGap)
   local colW = math.floor((W - margin * 2 - colGap) / 2)
   if colW < 60 then colW = W - margin * 2 end -- 窗口太窄：退化成单列（硬分两列会把按钮压成一条）
@@ -6421,7 +6426,7 @@ local function tplTwoColPlan(W, groups, measure, margin, gap, rowH, colGap)
     --     真实数据上表现为 rowsL/rowsR 报 6+7 而实际要 11 行 —— 两处算法必须逐字一致。）
     local btnRows, px = 0, colX[1]
     for _, p in ipairs(c.list) do
-      local bw = measure(tostring(p.name)) + 16
+      local bw = measure(tostring(p.name)) + TPL_ROW_PAD + TPL_ICON_W
       if bw > colW then bw = colW end
       if btnRows == 0 or px + bw > colMax[1] + 0.5 then
         btnRows = btnRows + 1 px = colX[1]
@@ -6462,7 +6467,7 @@ local function tplTwoColPlan(W, groups, measure, margin, gap, rowH, colGap)
         py = py - rowH
         local px = x0
         for _, p in ipairs(c.list) do
-          local bw = measure(tostring(p.name)) + 16
+          local bw = measure(tostring(p.name)) + TPL_ROW_PAD + TPL_ICON_W
           if bw > colW then bw = colW end
           if px + bw > mx + 0.5 then px = x0 py = py - rowH end
           table.insert(plan, { kind = "item", cls = c.cls, tpl = p, x = px, y = py, w = bw })
@@ -6628,9 +6633,11 @@ function EVAL_HELP_TPL_BUILD()
         tiTex:SetWidth(13)
         tiTex:SetHeight(13)
         b.tierIcon, b.tierIdx, b.tierScore = tiTex, tiIdx, sScore
-        pcall(bt.SetPoint, bt, "LEFT", b, "LEFT", 18, 0)
-        pcall(bt.SetWidth, bt, e.w - 22)
-        pcall(bt.SetJustifyH, bt, "LEFT")
+        -- ★1.73.42z 文字区 = 按钮宽 − 内边距 − 图标位（与 tplTwoColPlan 的测量**同源**）→ 名字放得下、不再被裁；
+        --   并且**居中**（用户：「方案名称没居中」）：让出左侧图标位后，在本区里居中。
+        pcall(bt.SetPoint, bt, "LEFT", b, "LEFT", 3 + 13 + 4, 0)
+        pcall(bt.SetWidth, bt, e.w - TPL_ROW_PAD - TPL_ICON_W)
+        pcall(bt.SetJustifyH, bt, "CENTER")
         -- ★★★1.73.42l 用户：「案例方案内图标替换，名称和颜色背景都要符合以上规则」
         --   ① 名称文字 = **品阶色**（与聊天行/弹窗同一张色表，经 EVAL_SHARE_SEAL_TIER_RGB 解析）；
         --   ② 行背景 = 同色调**压暗到 22%**（饱和底色会把文字吃掉——本项目「文字色 vs 背景色」那条老教训）；
@@ -6751,6 +6758,15 @@ function EVAL_TEST_TPL_TIER(i)
     local okv, vr, vg, vb = pcall(b.tierBgTex.GetVertexColor, b.tierBgTex)
     if okv then out.bgR, out.bgG, out.bgB = vr, vg, vb end
   end
+  -- ★1.73.42z 布局判据要的：文字区宽 / 对齐方式 / 按钮宽（用户：「显示不全」+「名称没居中」）
+  if b.tierText then
+    local okw, wv = pcall(b.tierText.GetWidth, b.tierText)
+    if okw and type(wv) == "number" then out.textW = wv end
+    local okj, jv = pcall(b.tierText.GetJustifyH, b.tierText)
+    if okj and type(jv) == "string" then out.textJustify = jv end
+  end
+  local okbw, bwv = pcall(b.GetWidth, b)
+  if okbw and type(bwv) == "number" then out.btnW = bwv end
   if type(EVAL_SHARE_SEAL_TIER_RGB) == "function" and b.tierIdx then out.want = EVAL_SHARE_SEAL_TIER_RGB(b.tierIdx) end
   return out
 end
