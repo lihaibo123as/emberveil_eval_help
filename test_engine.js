@@ -689,6 +689,20 @@ function checkIconAssets() {
   }
 
 })();
+// ===== TPL TIER ICON CHECK（1.73.42e）：案例模版窗每个方案必须按**同一套品阶判定**显示图标 =====
+// 背景（用户要求）：「案例模版内的方案根据以上方案等级配置对应的图标显示」。
+//   行为断言照不到「模版窗到底有没有画图标」（那是 UI 接线：漏了不报错、只是没图标）→ 源码检查补位：
+//   ① 模版窗必须调用 EVAL_SHARE_SEAL_SCORE（评分）与 EVAL_SHARE_SEAL_ICON（取图标）；
+//   ② tooltip 必须给出品阶（不然用户不知道为什么是这个图标）。
+(function () {
+  const t = fs.readFileSync(path.join(__dirname, 'EvalHelp.lua'), 'utf8');
+  const bad = [];
+  if (t.indexOf('EVAL_SHARE_SEAL_SCORE(p.text)') < 0) bad.push('模版窗没有按品阶评分（EVAL_SHARE_SEAL_SCORE(p.text)）');
+  if (t.indexOf('EVAL_SHARE_SEAL_ICON(tiIdx)') < 0) bad.push('模版窗没有取品阶图标（EVAL_SHARE_SEAL_ICON）');
+  if (t.indexOf('品阶：') < 0) bad.push('模版 tooltip 没有给出品阶说明');
+  if (bad.length) { console.log('TPL TIER ICON CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
+  console.log('TPL TIER ICON CHECK: 模版窗按品阶评分 + 图标 + tooltip 品阶行');
+})();
 // ===== TEMPLATE COUNT CHECK（1.73.40）：文档里那句「案例模版 N 条」必须等于 examples/ 里的**真实条数** =====
 // 背景（用户「将当前方案添加到案例模版」）：模版数据在 examples/*.lua，而「一共有多少条」这句话**散在 4 个地方**
 //   （.toc 的 Notes + 三语言 README 各若干处）→ 加/删一条模版只改数据不改文档，玩家看到的数量就是**骗人的**，

@@ -6613,12 +6613,33 @@ function EVAL_HELP_TPL_BUILD()
       pcall(bt.SetWidth, bt, e.w - 8) -- 实测宽度留的内边距足够；超长名仍裁掉（tooltip 里有全名）
       pcall(bt.SetNonSpaceWrap, bt, false)
       bt:SetText(tostring(p.name)) -- 1.67.6 行内只留模版名；描述+方案内容移入 tooltip
+      -- ★★★1.73.42e 用户要求：「案例模版内的方案根据以上方案等级配置对应的图标显示」
+      --   品阶 = 技能条数 + 条件数（**与分享显示行同一套判定** EVAL_SHARE_SEAL_*）；图标来自 IconSem 语义表；
+      --   ★按钮几何一律不动（免得破坏「分列/不重叠/不越界」那几条判据）——只把**文字让出图标位**。
+      local sScore = (type(EVAL_SHARE_SEAL_SCORE) == "function") and EVAL_SHARE_SEAL_SCORE(p.text) or nil
+      if sScore then
+        local tiIdx = select(1, EVAL_SHARE_SEAL_TIER(sScore))
+        local tiPath = EVAL_SHARE_SEAL_ICON(tiIdx)
+        local tiTex = b:CreateTexture(nil, "ARTWORK")
+        pcall(tiTex.SetTexture, tiTex, tiPath)
+        tiTex:SetPoint("LEFT", b, "LEFT", 3, 0)
+        tiTex:SetWidth(13)
+        tiTex:SetHeight(13)
+        b.tierIcon, b.tierIdx, b.tierScore = tiTex, tiIdx, sScore
+        pcall(bt.SetPoint, bt, "LEFT", b, "LEFT", 18, 0)
+        pcall(bt.SetWidth, bt, e.w - 22)
+        pcall(bt.SetJustifyH, bt, "LEFT")
+      end
       table.insert(tplUI.rowBtns, { name = tostring(p.name), cls = tostring(e.cls), btn = b })
       b:SetScript("OnEnter", function()
         pcall(bb.SetVertexColor, bb, 0.30, 0.25, 0.12, 1)
         pcall(function()
           GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
           GameTooltip:AddLine(tostring(p.name), 1, 0.85, 0.3)
+          if b.tierScore then
+            local _, ti = EVAL_SHARE_SEAL_TIER(b.tierScore)
+            GameTooltip:AddLine("品阶：" .. tostring(ti.name) .. "（评分 " .. tostring(b.tierScore) .. "）", 1, 0.9, 0.5)
+          end
           if p.desc then GameTooltip:AddLine(tostring(p.desc), 0.85, 0.85, 0.85, true) end
           for ln2 in string.gmatch(tostring(p.text or ""), "([^\n]+)") do
             if string.sub(ln2, 1, 1) == "-" then GameTooltip:AddLine(ln2, 0.65, 0.65, 0.65, true) end -- 技能行预览
