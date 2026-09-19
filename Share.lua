@@ -709,6 +709,34 @@ local function shReactionTierOf(text)
   if okT and type(ti) == "number" and ti >= 1 and ti <= 5 then return ti end
   return 1
 end
+-- ★★★1.73.65 用户：「能否将盗贼替换成上面的有颜色的文字.点击能同时打开方案分享接收页面」——
+--   反应句里的方案名造回「**品阶色 + 可点链接**」（与 B 行**同款结构**，已验证可画可点）：
+--   `<色>|HEHPF:<传输id> 0/1:1|h[<符号><品阶>秘籍·<名>]|h|r`。
+--   ★点它 = 打开方案分享接收页：EVAL_SHARE_CLICK_OPEN 按**传输 id 后缀**在 SH.recent 里找
+--     （接收收齐时 shRecentPut 已把方案按 发送者#id 存好）。
+--   ★缺传输 id / 算不出品阶 → 退回**纯名字**：链接比纯名字长一截，绝不为它把整条消息做丢。
+local function shReactionNameLink(p)
+  local nm = tostring(p.name or "")
+  if type(p.idh) ~= "string" or p.idh == "" then return nm end
+  local sc = nil
+  if type(EVAL_SHARE_SEAL_SCORE) == "function" then
+    local okS, v = pcall(EVAL_SHARE_SEAL_SCORE, p.text)
+    if okS then sc = v end
+  end
+  local col, sym, tierName = SH_CHUNK_COLOR, "", ""
+  if type(sc) == "number" and type(EVAL_SHARE_SEAL_TIER) == "function" then
+    local okT, ti, tier = pcall(EVAL_SHARE_SEAL_TIER, sc)
+    if okT and type(ti) == "number" and type(tier) == "table" then
+      if type(tier.color) == "string" then col = tier.color end
+      tierName = tostring(tier.name or "")
+      if type(EVAL_SHARE_SEAL_SYMBOL) == "function" then
+        local okY, sy = pcall(EVAL_SHARE_SEAL_SYMBOL, ti)
+        if okY and type(sy) == "string" then sym = sy end
+      end
+    end
+  end
+  return col .. "|HEHPF:" .. p.idh .. " 0/1:1|h[" .. sym .. tierName .. "秘籍·" .. nm .. "]|h|r"
+end
 -- 接收者自己的头衔档（1..5；没入档按 1 档新手语气，永不出界）
 local function shMyTitleTier()
   if type(EVAL_TITLE_STATE) ~= "function" then return 1 end
@@ -733,7 +761,10 @@ local function shSendReaction(op)
   local pool = (type(tb) == "table") and tb[t] and tb[t][s] or nil
   local line = (type(pool) == "table" and table.getn(pool) > 0) and pool[math.random(1, table.getn(pool))] or nil
   if type(line) ~= "string" or line == "" then return false end
-  local txt = string.format(line, tostring(p.sender), tostring(p.name))
+  -- ★1.73.65 方案名换成**可点的品阶色链接**（点它打开方案分享接收页）；
+  --   带上链接后整条超上限 → 退回**纯名字**（绝不做丢整条消息 —— 本项目「超长会被客户端吞」的老账）。
+  local txt = string.format(line, tostring(p.sender), shReactionNameLink(p))
+  if string.len(txt) > SH_MSG_MAX then txt = string.format(line, tostring(p.sender), tostring(p.name)) end
   if type(RunScript) ~= "function" then return false end
   pcall(RunScript, string.format("SendChatMessage(%q, %q)", txt, chan))
   EVAL_LOGLINE("[分享] 已在" .. chan .. "频道发送：" .. txt)

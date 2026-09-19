@@ -912,6 +912,11 @@ function checkIconAssets() {
   if (noComment.indexOf('L(op == "ign" and "SH_FUN_IGN" or "SH_FUN_IMP")') < 0) bad.push("反应没按 op 选 SH_FUN_IMP/SH_FUN_IGN 那张表");
   if (noComment.indexOf("EVAL_TITLE_STATE") < 0) bad.push("反应没读接收者头衔档（EVAL_TITLE_STATE）");
   if (noComment.indexOf("EVAL_SHARE_SEAL_SCORE") < 0) bad.push("反应没现算秘籍品阶档（EVAL_SHARE_SEAL_SCORE）");
+  // ★1.73.65 反应句里的方案名 = **可点的品阶色链接**（点它打开方案分享接收页）
+  if (noComment.indexOf("local function shReactionNameLink(") < 0) bad.push("找不到反应名链接函数 shReactionNameLink");
+  if (noComment.indexOf('.. "|HEHPF:" .. p.idh .. " 0/1:1|h["') < 0) bad.push("反应名没造 |HEHPF:<传输id> 链接（点了打不开接收页）");
+  if (noComment.indexOf("shReactionNameLink(p)") < 0) bad.push("反应句没把方案名换成链接（shReactionNameLink(p) 没被调用）");
+  if (noComment.indexOf("> SH_MSG_MAX") < 0) bad.push("带链接后没有「超长退回纯名字」守卫（整条可能被客户端吞）");
   if (bad.length) { console.log("SH FUN CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
   console.log("SH FUN CHECK: 公会/说/队伍三频道 · 导入/忽略两路 op · 抽奖式随机 · 头衔档×秘籍档两表决定语气");
 })();

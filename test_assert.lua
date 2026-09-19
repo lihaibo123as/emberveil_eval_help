@@ -5196,13 +5196,30 @@ do
   eq(EVAL_SHARE_IS_MINE(""), false, "★空串不算我的")
   eq(EVAL_SHARE_IS_MINE(nil), false, "★nil 不算我的")
   local keepTitle82 = EVAL_HELP_CONFIG.title
-  -- ★★★1.73.64 命中「10 条候选之一」的判据（文案按语言包实取；档位由调用方钉死 ⇒ 可预测）
-  local function funHit82(tbl, t, s, sender, name, chan)
+  -- ★★★1.73.64/1.73.65 命中「10 条候选之一」的判据（文案按语言包实取；档位由调用方钉死 ⇒ 可预测）。
+  --   ★1.73.65 起方案名是**可点的品阶色链接**（不是纯名字）⇒ 期望串按**同款链接**重建。
+  local function reactLinkOf82(p) -- 与生产 shReactionNameLink 同款（经同一套 EVAL_SHARE_SEAL_* 算出）
+    local nm = tostring(p.name or "")
+    if type(p.idh) ~= "string" or p.idh == "" then return nm end
+    local col, sym, tierName = "|cff9ad4ff", "", "" -- SH_CHUNK_COLOR 兜底
+    local sc = EVAL_SHARE_SEAL_SCORE(p.text)
+    if type(sc) == "number" then
+      local ti, tier = EVAL_SHARE_SEAL_TIER(sc)
+      if type(ti) == "number" and type(tier) == "table" then
+        if type(tier.color) == "string" then col = tier.color end
+        tierName = tostring(tier.name or "")
+        sym = EVAL_SHARE_SEAL_SYMBOL(ti)
+      end
+    end
+    return col .. "|HEHPF:" .. p.idh .. " 0/1:1|h[" .. sym .. tierName .. "秘籍·" .. nm .. "]|h|r"
+  end
+  local function funHit82(tbl, t, s, sender, p, chan)
     local pool = tbl and tbl[t] and tbl[t][s]
     if type(pool) ~= "table" then return nil end
+    local nameTxt = reactLinkOf82(p)
     for _, sc in ipairs(TEST.runScripts or {}) do
       for k = 1, table.getn(pool) do
-        if string.find(sc, string.format(pool[k], sender, tostring(name)), 1, true)
+        if string.find(sc, string.format(pool[k], sender, nameTxt), 1, true)
            and string.find(sc, '"' .. chan .. '"', 1, true) then
           return sc
         end
@@ -5239,7 +5256,7 @@ do
   eq(p82 ~= nil, true, "前置：别人的公会分享正常弹出")
   TEST.runScripts = nil
   eq(EVAL_TEST_SHARE_CLICK_IGNORE(), true, "★点到了真实的 [忽略] 按钮（走它自己的 OnClick 闭包）")
-  eq(funHit82(L82.SH_FUN_IGN, 2, 1, "彩虹", p82.name, "GUILD") ~= nil, true,
+  eq(funHit82(L82.SH_FUN_IGN, 2, 1, "彩虹", p82, "GUILD") ~= nil, true,
      "★★★[忽略] 按（头衔档 2 × 秘籍档 1）从 **10 条候选**里抽了一句发在公会频道（1.73.64 抽奖式）")
   eq(EVAL_SHARE_PENDING() == nil, true, "★忽略后待导入清空")
 
@@ -5251,9 +5268,18 @@ do
   local before82 = table.getn(EVAL_HELP_CONFIG.war.profiles)
   TEST.runScripts = nil
   eq(EVAL_TEST_SHARE_CLICK_IMPORT(), true, "★点到了真实的 [导入] 按钮")
-  eq(funHit82(L82.SH_FUN_IMP, 2, 1, "彩虹", p82b.name, "GUILD") ~= nil, true,
+  local gotImp82 = funHit82(L82.SH_FUN_IMP, 2, 1, "彩虹", p82b, "GUILD")
+  eq(gotImp82 ~= nil, true,
      "★★★[导入] 也按（头衔档×秘籍档）抽了一句发在公会频道")
   eq(table.getn(EVAL_HELP_CONFIG.war.profiles) > before82, true, "★★反应句不替代导入：方案真的进列表了")
+  -- ⑤b ★★★1.73.65 核心需求：反应句里的方案名是**可点的品阶色链接**，点它 = 打开方案分享接收页
+  eq(string.find(gotImp82 or "", "|HEHPF:", 1, true) ~= nil, true,
+     "⑤b★★反应句里的方案名**真的是链接**（`|HEHPF:` 开头，不是纯名字）")
+  eq(string.find(gotImp82 or "", "|HEHPF:" .. tostring(p82b.idh) .. " ", 1, true) ~= nil, true,
+     "⑤b★★链接里带的是**本次传输 id**（点它才能解析到这份方案）")
+  eq(EVAL_SHARE_CLICK_OPEN("EHPF:" .. tostring(p82b.idh)), true,
+     "⑤b★★★点反应句里的链接 → 真的打开了（EVAL_SHARE_CLICK_OPEN 命中）")
+  eq(EVAL_SHARE_PENDING() ~= nil, true, "⑤b★★★方案分享接收页**真的又弹出来了**（SH.pending 重填）")
 
   -- ⑥ 不在公会里 → 一句都不发（不假装发了）
   --   ★⑤真的把「别人的甲」导进来了，此刻它已经变成「我的方案」→ 必须先把配置还原成只有我自己的那份
@@ -5275,7 +5301,7 @@ do
   eq(p82c ~= nil, true, "前置：队伍来源正常弹窗")
   TEST.runScripts = nil
   EVAL_TEST_SHARE_CLICK_IGNORE()
-  eq(funHit82(L82.SH_FUN_IGN, 2, 1, "彩虹", p82c.name, "PARTY") ~= nil, true,
+  eq(funHit82(L82.SH_FUN_IGN, 2, 1, "彩虹", p82c, "PARTY") ~= nil, true,
      "★★★队伍来源发到**队伍**频道（1.73.64 新增；旧规则是「只认公会」，已被用户改掉）")
   -- ⑦b 说来源 → 发到**说**频道
   EVAL_SHARE_RESET()
@@ -5284,8 +5310,35 @@ do
   eq(p82d ~= nil, true, "前置：说来源正常弹窗")
   TEST.runScripts = nil
   EVAL_TEST_SHARE_CLICK_IGNORE()
-  eq(funHit82(L82.SH_FUN_IGN, 2, 1, "彩虹", p82d.name, "SAY") ~= nil, true,
+  eq(funHit82(L82.SH_FUN_IGN, 2, 1, "彩虹", p82d, "SAY") ~= nil, true,
      "★★★说来源发到**说**频道（1.73.64 新增）")
+  -- ⑦c ★★★1.73.65 长名字方案 → 带链接整条会超上限 ⇒ **退回纯名字**（绝不做丢整条）
+  do
+    local keepP82 = EVAL_HELP_CONFIG.war.profiles
+    local LONG82 = "# 方案: " .. string.rep("长", 60) .. "\n- 甲" -- 60 字方案名 → 链接一上就超 250B
+    EVAL_HELP_CONFIG.war.profiles = { EVAL_PROFILE_FROM_TEXT(LONG82) }
+    EVAL_HELP_CONFIG.war.activeProfile = 1
+    TEST.runScripts = nil
+    EVAL_SHARE_SEND("GUILD")
+    EVAL_TEST_SHARE_DRAIN()
+    local longMsgs = {}
+    for _, sc in ipairs(TEST.runScripts or {}) do
+      local m = string.match(sc, 'SendChatMessage%("(.-)", "GUILD"%)')
+      if m and (string.sub(m, 1, 6) == "[EHPF#" or string.find(m, "|HEHPF:", 1, true)) then table.insert(longMsgs, m) end
+    end
+    EVAL_HELP_CONFIG.war.profiles = keepP82
+    EVAL_SHARE_RESET()
+    TEST.inGuild = true
+    for _, m in ipairs(longMsgs) do EVAL_SHARE_ONMSG(m, "彩虹", "CHAT_MSG_GUILD") end
+    eq(EVAL_SHARE_PENDING() ~= nil, true, "⑦c前置：长名字方案收齐弹出")
+    TEST.runScripts = nil
+    EVAL_TEST_SHARE_CLICK_IGNORE()
+    local any82 = table.concat(TEST.runScripts or {}, "\n")
+    eq(string.find(any82, "|HEHPF:", 1, true), nil,
+       "⑦c★★★整条超上限 → **退回纯名字**（输出里没有 |HEHPF: 链接；守卫真被执行了）")
+    eq(string.find(any82, string.rep("长", 60), 1, true) ~= nil, true, "⑦c★★但纯名字还在（不是整条丢弃）")
+    TEST.inGuild = false
+  end
 
   TEST.inGuild = false
   EVAL_SHARE_RESET()
@@ -13195,10 +13248,15 @@ do
   TEST.runScripts = nil
   EVAL_TEST_SHARE_CLICK_IGNORE()
   local L170 = EVAL_LOCALES.zhCN
+  -- ★1.73.65 起方案名是**可点的品阶色链接**（不是纯名字）⇒ 期望串按同款链接重建
+  local sc170 = EVAL_SHARE_SEAL_SCORE(p170.text)
+  local ti170, tier170 = EVAL_SHARE_SEAL_TIER(sc170)
+  local link170 = (tier170.color or "|cff9ad4ff") .. "|HEHPF:" .. tostring(p170.idh) .. " 0/1:1|h["
+    .. tostring(EVAL_SHARE_SEAL_SYMBOL(ti170)) .. tostring(tier170.name or "") .. "秘籍·" .. tostring(p170.name) .. "]|h|r"
   local hit170 = nil
   for _, sc in ipairs(TEST.runScripts or {}) do
     for k = 1, 10 do
-      if string.find(sc, string.format(L170.SH_FUN_IGN[1][5][k], "彩虹", p170.name), 1, true) then hit170 = sc end
+      if string.find(sc, string.format(L170.SH_FUN_IGN[1][5][k], "彩虹", link170), 1, true) then hit170 = sc end
     end
   end
   eq(hit170 ~= nil, true, "②★★★低头衔收神级 → 命中 [1][5] 那格（秘籍档映射正确，走真实接收+点击路径）")
