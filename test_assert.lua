@@ -7809,7 +7809,7 @@ do
   TEST.runScripts = nil
   EVAL_SHARE_SEND("GUILD")
   -- ④ 发送限频：推进 0.4s（< 0.5s）不许滴出第二片
-  TEST.time = (TEST.time or 1000) + 0.4
+  TEST.time = (TEST.time or 1000) + 0.8 -- ★rate 现在 1.0s：0.8 仍「不到一个间隔」
   EVAL_SHARE_TEST_TICK()
   eq(table.getn(sents107()), 1, "④★★发送间隔 0.5s：0.4s 时不许滴出第二片（不瞬间倾泻）")
   local msgs, guard = sents107(), 0
@@ -7820,7 +7820,7 @@ do
   eq(n >= 3, true, "①前置：长方案分成 ≥3 片（got " .. tostring(n) .. "）")
   while table.getn(msgs) < n and guard < n + 5 do
     guard = guard + 1
-    TEST.time = TEST.time + 0.6
+    TEST.time = TEST.time + 1.1 -- ★rate 现在 1.0s：1.1 才够滴下一片
     EVAL_SHARE_TEST_TICK()
     msgs = sents107()
   end
