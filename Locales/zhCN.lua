@@ -378,6 +378,7 @@ TB_NAMEMENU_WHISPERFAIL = "本客户端没有打开聊天框的接口 → 请手
   TB_NAMEMENU_PARTYOK = "已发出邀请请求：%s（能不能入队看对方：未接受 / 不在线 / 名字不对，服务器会忽略）",
   TB_NAMEMENU_PARTYNOTLEAD = "你不是队长 —— 服务器会忽略这个邀请，所以**没有发出**（让队长来邀请）",
   TB_NAMEMENU_PARTYSCRIPT = "已把邀请请求排队给客户端执行：%s（★无法确认是否真的发出 —— 接口在本客户端不能直调）",
+  TB_NAMEMENU_PARTYSELF = "不能邀请自己（客户端会直接报 invite-self 错，**不会发送**）",
 TB_NAMEMENU_PARTYFAIL = "邀请没发出去（%s）—— 可能对方已在队伍/离线，或接口不可用",
 TB_NAMEMENU_TARGETOK = "已选中目标：%s",
 TB_NAMEMENU_TARGETFAIL = "选不中目标（%s）—— TargetByName 只认附近单位，太远就选不到",

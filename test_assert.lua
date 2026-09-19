@@ -10019,10 +10019,13 @@ do
   EVAL_TEST_TB_NAMEMENU_RESET()
   TEST.partyInvites, TEST.partyInviteCalls = {}, 0
   eq(EVAL_TB_NAME_PARTY("Ionol"), true, "⑤d★★「邀请」发出队伍邀请")
-  eq(TEST.partyInviteCalls, 1, "⑤d★★调的是 InviteToParty")
+  -- ★★★1.73.42t 老判据错了：它把「调 InviteToParty(角色名)」当成正确行为 —— 而客户端 wiki 明确
+  --   `InviteToParty(unit)` 收的是 **UnitID**（喂角色名 = unit 不存在 = 静默 no-op），按名字要用 `InviteByName`。
+  eq(TEST.inviteByNameCalls, 1, "⑤d★★★调的是**按名字**的 InviteByName")
+  eq(TEST.partyInviteCalls, 0, "⑤d★★★绝不再拿角色名去喂 InviteToParty（那只会静默无效）")
   eq(tostring(TEST.partyInvites[1] or ""), "Ionol", "⑤d★名字对")
   eq(EVAL_TB_NAME_PARTY("Ionol"), false, "⑤d★★0.5 秒内连点 → 限频挡下")
-  eq(TEST.partyInviteCalls, 1, "⑤d★★确实只发了一次")
+  eq(TEST.inviteByNameCalls, 1, "⑤d★★确实只发了一次")
   eq(EVAL_TB_NAMEMENU_STATE().throttled >= 1, true, "⑤d★并如实记「限频挡下」次数")
   -- ⑤e 目标（原始功能）：TargetByName
   EVAL_TEST_TB_NAMEMENU_RESET()
@@ -11596,24 +11599,28 @@ do
   eq(TEST.partyInviteCalls, 0, "①★★★真的**一个邀请都没调**（老实现照发，然后被服务器静默忽略 → 假成功）")
   eq(EVAL_TB_NAMEMENU_STATE().partyNotLeader, 1, "①★★记账 +1（不是队长拒发）")
   eq(string.find(tostring(TEST.chat or ""), "不是队长", 1, true) ~= nil, true, "①★★如实说「你不是队长」")
-  -- ② 单人（=队长）→ 直调 InviteToParty，并记下**走的是哪个接口**
+  -- ② 单人（=队长）→ 直调**按名字**的 InviteByName，并记下**走的是哪个接口**
   EVAL_TEST_TB_NAMEMENU_RESET()
   TEST.partyN = 0 TEST.partyLeader = true
-  TEST.partyInvites, TEST.partyInviteCalls = {}, 0
-  TEST.chat = nil
-  eq(EVAL_TB_NAME_PARTY("正常测试"), true, "②★★单人 → 邀请发得出去")
-  eq(TEST.partyInviteCalls, 1, "②★★调的是 InviteToParty")
-  eq(EVAL_TB_NAMEMENU_STATE().partyVia, "InviteToParty", "②★★★记下了**走的是哪个接口**（诊断与判据都读它）")
-  eq(string.find(tostring(TEST.chat or ""), "已发出邀请请求", 1, true) ~= nil, true, "②★★措辞如实（「已发出…请求」，不承诺入队）")
-  -- ③ InviteToParty 不可用 → 退 InviteByName（仍然如实）
-  EVAL_TEST_TB_NAMEMENU_RESET()
-  _G.InviteToParty = nil
   TEST.partyInvites, TEST.partyInviteCalls, TEST.inviteByNameCalls = {}, 0, 0
   TEST.chat = nil
-  eq(EVAL_TB_NAME_PARTY("退回测试"), true, "③★★没有 InviteToParty → 退回 InviteByName")
-  eq(TEST.inviteByNameCalls, 1, "③★★确实走了 InviteByName")
-  eq(EVAL_TB_NAMEMENU_STATE().partyVia, "InviteByName", "③★★记账记的是 InviteByName")
-  _G.InviteToParty = savedITP152
+  eq(EVAL_TB_NAME_PARTY("正常测试"), true, "②★★单人 → 邀请发得出去")
+  eq(TEST.inviteByNameCalls, 1, "②★★★调的是 InviteByName（**按角色名**那个）")
+  eq(TEST.partyInviteCalls, 0, "②★★★没拿名字去喂 InviteToParty（它只认 UnitID）")
+  eq(EVAL_TB_NAMEMENU_STATE().partyVia, "InviteByName", "②★★★记下了**走的是哪个接口**（诊断与判据都读它）")
+  eq(string.find(tostring(TEST.chat or ""), "已发出邀请请求", 1, true) ~= nil, true, "②★★措辞如实（「已发出…请求」，不承诺入队）")
+  -- ③ InviteByName 不可用 **且当前目标正好是这个人** → 这时才用 InviteToParty（★只喂 UnitID，那才是它的用法）
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  _G.InviteByName = nil
+  TEST.curTargetName = "目标测试"
+  TEST.partyInvites, TEST.partyInviteCalls, TEST.inviteByNameCalls = {}, 0, 0
+  TEST.chat = nil
+  eq(EVAL_TB_NAME_PARTY("目标测试"), true, "③★★没有 InviteByName → 目标正好是他 → 用 InviteToParty")
+  eq(TEST.partyInviteCalls, 1, "③★★确实走了 InviteToParty")
+  eq(tostring(TEST.partyInvites[1] or ""), "target", "③★★★喂进去的是 **UnitID「target」**，不是角色名（wiki 语义）")
+  eq(EVAL_TB_NAMEMENU_STATE().partyVia, "InviteToParty(target)", "③★★记账连 UnitID 一起记下")
+  _G.InviteByName = savedIBN152
+  TEST.curTargetName = nil
   -- ④ ★★★两个直调接口都没有 → 只剩 RunScript：**只播报「已排队、无法确认」**，绝不当成邀请成功
   EVAL_TEST_TB_NAMEMENU_RESET()
   _G.InviteToParty, _G.InviteByName = nil, nil
@@ -11624,8 +11631,17 @@ do
   eq(EVAL_TB_NAMEMENU_STATE().party, 0, "④★★★**没有**记成「直调成功」（老实现就是在这里骗人的）")
   eq(string.find(tostring(TEST.chat or ""), "无法确认", 1, true) ~= nil, true, "④★★★如实说「无法确认是否真的发出」")
   eq(string.find(tostring(TEST.chat or ""), "已邀请入队", 1, true) == nil, true, "④★★★绝不再说「已邀请入队」")
-  eq(string.find(tostring(TEST.runScripts[table.getn(TEST.runScripts)] or ""), "InviteToParty", 1, true) ~= nil, true, "④★排队的脚本里是 InviteToParty")
+  eq(string.find(tostring(TEST.runScripts[table.getn(TEST.runScripts)] or ""), "InviteByName", 1, true) ~= nil, true, "④★★排队的脚本里是 **InviteByName**（按名字那个才可能真的发出）")
   _G.InviteToParty, _G.InviteByName = savedITP152, savedIBN152
+  -- ④b 邀请自己：wiki 明确「会报 invite-self 错且**不发送**」→ 我们**先拦下来**，不假装发出
+  EVAL_TEST_TB_NAMEMENU_RESET()
+  TEST.partyN = 0 TEST.partyLeader = true
+  TEST.partyInvites, TEST.partyInviteCalls, TEST.inviteByNameCalls = {}, 0, 0
+  TEST.chat = nil
+  eq(EVAL_TB_NAME_PARTY("测试玩家"), false, "④b★★★点到自己名字 → 不发（返回 false）")
+  eq(TEST.inviteByNameCalls, 0, "④b★★★一个邀请都没调（老实现会发出去、白等服务器报 invite-self）")
+  eq(string.find(tostring(TEST.chat or ""), "不能邀请自己", 1, true) ~= nil, true, "④b★★如实说「不能邀请自己」")
+  eq(EVAL_TB_NAMEMENU_STATE().partySelf, 1, "④b★★记账 +1（诊断可读）")
   -- ⑤ 取证命令：能力 + 记账一次打出，并以**落盘字段**当接线证人
   --   ★先给两条路各留一次痕（不是队长拒发 + 只剩 RunScript 排队），这样探针必须把**三条路**都摊开
   EVAL_TEST_TB_NAMEMENU_RESET()

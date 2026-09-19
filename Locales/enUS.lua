@@ -375,6 +375,7 @@ TB_NAMEMENU_WHISPERFAIL = "This client cannot open the chat box - please type /w
   TB_NAMEMENU_PARTYOK = "Invite request sent: %s (the server ignores it if they are offline, mistyped, or decline)",
   TB_NAMEMENU_PARTYNOTLEAD = "You are not the party leader - the server would ignore the invite, so nothing was sent (ask the leader).",
   TB_NAMEMENU_PARTYSCRIPT = "Invite request queued for the client to run: %s (cannot confirm it was actually sent - the API is not directly callable here)",
+  TB_NAMEMENU_PARTYSELF = "You cannot invite yourself (the client raises an invite-self error and sends nothing).",
 TB_NAMEMENU_PARTYFAIL = "Party invite was not sent (%s) - maybe already grouped/offline, or the API is unavailable",
 TB_NAMEMENU_TARGETOK = "Targeted: %s",
 TB_NAMEMENU_TARGETFAIL = "Could not target (%s) - TargetByName only sees nearby units",

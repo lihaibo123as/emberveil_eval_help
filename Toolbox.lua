@@ -1415,7 +1415,7 @@ function EVAL_TB_NAME_INVITE(name)
   else say(string.format(L("TB_NAMEMENU_INVFAIL"), "GuildInviteByName")) end
   return okd
 end
--- 邀请入队（原始功能「邀请」）：InviteToParty 优先，老客户端退回 InviteByName，再退回 RunScript
+-- 邀请入队（原始功能「邀请」）：**按名字** InviteByName 优先 → 目标/鼠标指向正是他时用 InviteToParty(UnitID) → 最后 RunScript
 -- ★★★1.73.42s 用户真机反馈：「右键邀请触发」——点了邀请、聊天说「已邀请入队」，但实际什么都没发生。
 --   两条**假成功**的来源（本客户端 API 表实测：InviteToParty / InviteByName / IsPartyLeader / GetNumPartyMembers 都有）：
 --     ① **不是队长**时服务器会静默忽略邀请 —— 客户端不报错，我们就当成成功了；
@@ -1440,19 +1440,39 @@ function EVAL_TB_NAME_PARTY(name)
     say(L("TB_NAMEMENU_PARTYNOTLEAD"))
     return false
   end
-  -- ② 直调优先：成功就记下**走的是哪个接口**（诊断与判据都读它）
-  local ok, via = false, nil
-  if type(InviteToParty) == "function" then
-    ok = pcall(InviteToParty, safe)
-    if ok then via = "InviteToParty" end
+  -- ② ★★★1.73.42t **接口语义按客户端官方 wiki 实测**（emberveil.org/wiki/lua/globals/Group）：
+  --     · `InviteByName(Name)` —— **按角色名**邀请（名字 trim；名字为空退回当前目标；邀自己报 invite-self 且不发）；
+  --     · `InviteToParty(unit)` —— 收的是 **UnitID**（target / party1 …），**不是角色名**；「unit 为空或不存在时**什么都不做**」。
+  --   ★老实现先调 `InviteToParty(角色名)` → 等于「unit 不存在」→ **静默 no-op 却返回成功** ⇒
+  --     用户看到「已发出邀请请求」而对方毫无反应（真机截图定案）。
+  --   ⇒ 现在：**先按名字 InviteByName**；`InviteToParty` 只在「目标/鼠标指向正好是这个人」时才用（那才是它的正确用法）。
+  if type(UnitName) == "function" then
+    local okme, me = pcall(UnitName, "player")
+    if okme and type(me) == "string" and me ~= "" and string.lower(me) == string.lower(safe) then
+      TB_NAME_MENU.partySelf = (TB_NAME_MENU.partySelf or 0) + 1
+      say(L("TB_NAMEMENU_PARTYSELF"))
+      return false
+    end
   end
-  if not ok and type(InviteByName) == "function" then
+  local unitTok = nil
+  if type(UnitName) == "function" then
+    for _, u in ipairs({ "target", "mouseover" }) do
+      local oku, un = pcall(UnitName, u)
+      if oku and type(un) == "string" and un ~= "" and string.lower(un) == string.lower(safe) then unitTok = u break end
+    end
+  end
+  local ok, via = false, nil
+  if type(InviteByName) == "function" then
     ok = pcall(InviteByName, safe)
     if ok then via = "InviteByName" end
   end
+  if not ok and unitTok and type(InviteToParty) == "function" then
+    ok = pcall(InviteToParty, unitTok) -- ★只喂 UnitID（喂角色名只会静默无效）
+    if ok then via = "InviteToParty(" .. unitTok .. ")" end
+  end
   if not ok then
-    -- ③ 后路：RunScript 只代表「已排队」——**不当成功**，措辞与计数都分开
-    local okq = pcall(RunScript, "InviteToParty(\"" .. safe .. "\")")
+    -- ③ 后路：RunScript 只代表「已排队」——**不当成功**，措辞与计数都分开；★排的脚本也用**按名字**那个接口
+    local okq = pcall(RunScript, "InviteByName(\"" .. safe .. "\")")
     if okq then
       TB_NAME_MENU.partyScript = (TB_NAME_MENU.partyScript or 0) + 1
       say(string.format(L("TB_NAMEMENU_PARTYSCRIPT"), safe))
@@ -1713,6 +1733,7 @@ function EVAL_TB_NAMEMENU_STATE()
     -- ★1.73.42s 邀请的三条路分开记（不是队长拒发 / 只排队未确认 / 直调失败）+ 最近走的接口
     partyVia = TB_NAME_MENU.partyVia, partyNotLeader = TB_NAME_MENU.partyNotLeader or 0,
     partyScript = TB_NAME_MENU.partyScript or 0, partyFail = TB_NAME_MENU.partyFail or 0,
+    partySelf = TB_NAME_MENU.partySelf or 0,
   }
 end
 -- ★★★1.73.42s 取证命令（用户：「右键邀请触发」= 点了没反应）：**能力 + 记账**一次打出来，一条命令定位
@@ -1765,6 +1786,7 @@ function EVAL_TEST_TB_NAMEMENU_RESET()
   TB_NAME_MENU.said, TB_NAME_MENU.throttled = 0, 0
   -- ★1.73.42s 本轮新增的记账也要清（不是队长拒发 / 只排队未确认 / 直调失败 / 最近走的接口）
   TB_NAME_MENU.partyNotLeader, TB_NAME_MENU.partyScript, TB_NAME_MENU.partyFail = 0, 0, 0
+  TB_NAME_MENU.partySelf = 0
   TB_NAME_MENU.partyVia = nil
   TB_MENU_AT = {}
   EVAL_TB_MENU_HIDE()
