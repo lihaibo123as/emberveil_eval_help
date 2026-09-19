@@ -79,7 +79,7 @@ node test_engine.js  # 逻辑冒烟测试：打桩 WoW API 加载整个插件，
 | 案例模版窗 | `EVAL_HELP_TPL_*`：读 `examples/*.lua` 的数据渲染成**分组分两列 + 组内同行自动换行**（版式由纯函数 `tplTwoColPlan` 算），点击即导入 |
 | 工具箱 Tab3 | `Toolbox.lua`：`EVAL_TB_BUILD(root, page, refreshes)`；商人 / 队伍社交 / 任务三组，动作全部走限频队列（0.3s/笔 + 逐笔核对） |
 | 数据检索 Tab4 | `DataSearch.lua`：`EVAL_DS_BUILD`；逻辑层 `EVAL_DS_SEARCH/DETAIL/SHOWMAP` 与 UI 分离、可 node 直测；地图标注层硬依赖 UnrealQuest |
-| 方案分享 | `Share.lua`：公会 / 队伍 / 说 三频道分片直发直收（`SH_CHANS` 白名单是唯一真值）+ 接收规则（只留最新一笔 + 四道上限） |
+| 方案分享 | `Share.lua`：公会 / 队伍 / 说 三频道分片直发直收（`SH_CHANS` 白名单是唯一真值）+ 接收规则（只留最新一笔 + 四道上限）；1.74.0 起含**品阶封皮**（`[品阶秘籍·名]` 可点链接 + 弹窗确认）+ **品阶评分**（`SH_SEAL_TIERS` 单一来源）+ **头衔抽卡**（`EVAL_TITLE_*`）+ 彩蛋「创世者亲临」+ **角色扮演反应**（`SH_FUN_IMP/IGN` 嵌套表 + `shSendReaction` 按来源频道） |
 | 图标库 Tab5 | `IconBrowser.lua`：读客户端内置宏图标表，按前缀分组 / tooltip 显示路径 / **先过滤再分页** |
 
 ## 本客户端实测配方（踩坑沉淀，新增 UI 必守）

@@ -10,6 +10,7 @@
 | :-- | :-- | :-- |
 | 🗡️ **Universal one-key macro** | macro `/run EVAL_GO()` | Five skill categories: character actions (Attack / Auto Shot / Shoot / Cancel Casting / Stance swap) / skills / pet commands / target selection / item use; unlimited skills per profile (scrollable list); up to ≤12 profiles, each bindable to its own key for direct triggering |
 | ⚙️ **Config window** | minimap EH icon · `/eh cfg` | Fully visual editing of profiles / skills / conditions, plus text import/export for sharing |
+| 📤 **Profile sharing** | `[Share]` on the config "one-click macro" page / chat link | chunked send to guild/party/say (rate-limited), the receiver clicks [Import] to commit; **tier cover** (`[tier manual · name]` clickable link + confirm popup) · **score tiers** (25+ Divine · five colours) · **title gacha** (5×15 · custom title) · the "Genesis" easter egg · the receiver lottery-replies with a role-play line (title tier × manual tier) |
 | 🧩 **Case templates** | config window, one-key macro tab, bottom `[Case Templates]` | **11 groups / 29 entries** ready-made profiles (grouped by class) → **grouped two columns + wrapping within a group**; one click to import, hover to see what's inside |
 | 🧰 **Toolbox** | config window, tab 3 | Merchant assistant (auto-repair / auto-sell grey / buy and discard by name) + party & social (auto-confirm role check / hide guild login notices / **hide "joined·left channel" notices**) + auto quest accept & turn-in (hold Shift to pause temporarily) + quest notification channel |
 | 🗺️ **Data search** | config window, tab 4 | Quest / item / mob·NPC / object search with instant results and unlimited drill-down; a **world-map annotation layer** (16 categories redrawn live as the map changes) and one-click pinning from any row with coordinates (requires UnrealQuest) |
@@ -20,8 +21,11 @@
 
 > 📌 Continuously improving — testing and feedback welcome!　🐞 [Bug reports / suggestions](https://gitee.com/xeval/emberveil_eval_help.git) (Issues)　🤖 Developed with DeepSeek Harness AI assistance (see "Contributing" at the bottom)
 
-## 🏁 Milestones (1.52.0 → 1.73.34)
+## 🏁 Milestones (1.52.0 → 1.74.0)
 
+- **🎉 Sharing system rework: cover line · tiers · titles · easter egg · reactions** (1.73.35 → 1.74.0): 85 commits released at once — share cover line (`[Tier manual · name]` as a clickable link, click opens a confirm popup instead of auto-importing), score-based tiers (25+ = Divine, five colours incl. deep red), **title gacha** (5 tiers × 15 cards, only-up, custom title + colour), the "Genesis" easter egg (3-condition gate) + **role-play reactions** (title tier × manual tier, lottery-picked, guild/say/party, and the scheme name is a clickable link to the receive page).
+- **🧪 Real-client forensics for links/colour codes** (1.73.35 → 1.74.0): whether custom links survive the server, the true 250-byte message cap, hover mechanics, on-disk ledgers — nailed down the "colour-code sending rules" (one colour segment first + **must carry a link**, 1 msg/sec, only `[EHPF#]` is recognised).
+- **🖥 Title-bar badges + tier colouring** (1.73.55 → 1.74.0): combat-HUD / status-UI title bars share one layout — player name → title → tier badge → current profile; profile rows are tier-coloured (HUD + config + templates share one tier computation).
 - **💬 Chat names: coloring + right-click menu** (1.73.12 → 1.73.29): after pinning down that the name lives in `arg2` and the name slot does **not** parse rich text, plan A (swallow the client line, compose our own) finally colors names by class; right-click offers **whisper / invite / target / guild invite / copy name** (copy = **prefill `/s name`, never auto-send**); translucent narrow menu with adaptive height.
 - **🧰 Toolbox dialog spec** (1.73.30 → 1.73.34): frame-level ladder (config 10 · edit 100 · input 220 · toolbox 200 · dropdown 250), drag handles must be Buttons, single-source column geometry, and the **scrollbar** brought up to spec (single-source wheel direction `EVAL_WHEEL_DIR` · dedicated scroll gutter · integer page numbers · arrows hidden at the ends).
 - **🔋 Condition names and the syntax gate** (1.73.27 → 1.73.28): power names are computed **at display time** from `UnitPowerType` (mana / focus / rage / energy, druids follow their form) with the parser accepting every spelling (so exporting and re-importing never drops conditions); `luacheck` now parses **every file** (27 `.lua`) instead of one.
@@ -29,15 +33,13 @@
 
 - **⌨️ Profile hotkeys actually work** (1.71.16 → 1.72.0): after four dead ends, `ACTIONBUTTON<n>` + hooking `ActionButtonDown/Up` — zero cost: no macro slots, no stolen keys, live while the game runs.
 - **🗂 Right-click features merged into one Profile Manager** (1.71.24): profile name + hotkey, one [Save] commits both; ★no aliases for the old entry points.
-- **📤 🔇 Sharing and notifications rewritten** (1.71.3): the "raid" channel dropped (1.12 leader chat uses separate events), four receive caps + a 5s throttle; channel join/leave notices suppressed.
-- **🧑‍🤝‍🧑 🧙 Member picker and conditions** (1.70.45 → 1.71.2): 4 "candidate" conditions + picking by comparison operator; aura remaining-time check, casting conditions unified.
 - **🐾 Pet Helper** (1.73.0): 6th config tab - search pet abilities (icons + ranks) -> detail with intro, pet level and tame sources -> magnifier jumps to Data Search for spawn points.
-- **🧪 Engineering infrastructure** (1.52.0 → 1.72.0): 17 source-level checks + mutation tests every round; the "silent failure family" cleared out.
 
 ## Changelog
 
 | Version | Theme | One-line highlight |
 | :-- | :-- | :-- |
+| **1.74.0** | 🎉 Sharing rework: cover · tiers · titles · easter egg · reactions | Share cover line (clickable tier link, confirm popup) · score tiers (25+ Divine deep red) · title gacha (5×15, custom title) · "Genesis" easter egg (3-condition gate) · role-play reactions (lottery across guild/say/party, name is a clickable link) · title-bar badges (tier/title/profile) |
 | **1.73.34** | 🧰 Toolbox dialog spec + 💬 chat-name right-click menu | Frame-level ladder / drag handle / scrollbar brought up to spec (incl. 6 scrollbar fixes); right-click a chat name: whisper / invite / target / guild invite / copy name (**prefill only, never auto-send**); power names computed live (casters = mana); `luacheck` now parses **every file** |
 | **1.73.0** | 🐾 Pet Helper | 6th tab: search pet abilities (icons + ranks) -> detail with tame sources -> magnifier jumps to Data Search |
 | **1.72.2** | 🔍 Shared-profile aura fix + guide on every load | Unlearned auras now fall back to a name scan and self-heal; the starter guide prints on every load; fixed a frame name shadowing its global function |
@@ -47,7 +49,6 @@
 | **1.71.23** | 🧹 清理四次试错留下的死探针代码 | 快捷派发定案后回头清理：删掉已判死的 go bind2/go bind3/go actbar 三个写入型探针（它们验的是 CLICK / 裸命令名 / Bindings.xml 三条已被证伪的路线，**留着只会误导后人**），go bind 从「写入试验」改为「现状检查」（只读：派发前提 / 接管状态 / 逐方案绑定与占用格）；文件净减 **205 行**；/eh go diag 保留为唯一诊断入口 |
 | **1.71.22** | 🎯 方案快捷键真正生效：接管 ActionButtonUp 派发 | 四次试错后的最终定案 —— ①CLICK 劫持鼠标、②裸命令名不派发、③**Bindings.xml 本客户端根本不读**（把 ArchiTotem 启用后完整重启，它的 CAST_EARTH_TOTEM 依然不在命令表里；unrealUI 源码注释在 2026-08-19 也记录过同一结论「60 commands were absent from a 225-entry binding table」）→ ④**可行路线 = 命令名用客户端自带的 ACTIONBUTTON<n> + 插件接管全局 ActionButtonDown/Up**（/eh go diag 实测四者 	ype=function、SetOverrideBindingClick=nil）。★零成本：不占宏名额、不占动作格、不抢已有键位、**游戏运行中立即生效**；补回 unrealUI 警告的组合键守卫（按住 Alt/Ctrl/Shift 且该组合另有归属时不吞）；格号分配两轮挑（优先「格空 + 命令没人绑键」的完全无主格）；清理解绑时**把格交还客户端**。变异 6/6 全捕获 |
 | **1.71.21** | 📦 Bindings.xml ships with the addon (zero user config) + login self-check | The file ships with the addon (12 commands, zero config), binding happens entirely in the popup (zero manual work), the user only **restarts the client once**; doc evidence: dispatch needs a client-side press/release handler that addons cannot register (`SetConsoleKey` is a documented no-op stub) → the startup command table is the only registration path; `EVAL_BIND_XML_STATUS()` self-check honestly reminds to restart when missing; ★exact-prefix counting assertions, 2/2 mutations caught |
-| **1.71.20** | 🖨 Left-click the "Profiles" label = print current bindings | New left-click on the label: prints "profile = key" line by line (print-only, bindings untouched), or honestly says there are none; tooltip gains a 4th line (3 languages); includes the `/eh go bind3` colon-free CLICK probe (restart-required paths were ruled out per user); ★assertions drive the real left-click/hover, 4/4 mutations caught |
 
 > 📜 Detailed per-version notes live in **[CHANGELOG.md](CHANGELOG.md)**; earlier history is in the git commit log.
 
