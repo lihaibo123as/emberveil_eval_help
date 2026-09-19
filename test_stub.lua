@@ -146,6 +146,36 @@ local function newMock()
     GetVertexColor = function(self)
       return rawget(self, "__vr") or 1, rawget(self, "__vg") or 1, rawget(self, "__vb") or 1, rawget(self, "__va") or 1
     end,
+    -- ★1.73.40 桩保真：backdrop 三兄弟 + GetBackdrop。真客户端**只有** SetBackdrop /
+    --   SetBackdropColor / SetBackdropBorderColor / GetBackdrop —— GetBackdropColor 与
+    --   GetBackdropBorderColor **不存在**（参考插件 Compatibility/ClientAPI.lua:5051 实测记录）
+    --   ⇒ 真机上「边框颜色」根本读不回来，断言只能靠这里的**记账**（谁用什么颜色调的它）。
+    --   GetBackdrop 的返回形态也照实测："WHITE8X8|<边贴图文件名尾段>"，没有边框时尾段是 "-"。
+    SetBackdrop = function(self, cfg)
+      if TEST.failBackdrop then error("stub: 本客户端不支持 backdrop") end
+      rawset(self, "__backdrop", cfg)
+      if type(cfg) == "table" then rawset(self, "__edgeFile", cfg.edgeFile) end
+      TEST.backdropArg = cfg
+      TEST.backdropCalls = (TEST.backdropCalls or 0) + 1
+    end,
+    GetBackdrop = function(self)
+      local e = rawget(self, "__edgeFile")
+      local tail = "-"
+      if type(e) == "string" then
+        local sep = string.char(92)
+        local last, from = nil, 1
+        while true do
+          local a, b = string.find(e, sep, from, true)
+          if not a then break end
+          last = b
+          from = b + 1
+        end
+        if last then tail = string.sub(e, last + 1) else tail = e end
+      end
+      return "WHITE8X8|" .. tail
+    end,
+    SetBackdropColor = function(_, r, g, b, a) TEST.backdropColor = { r, g, b, a } end,
+    SetBackdropBorderColor = function(_, r, g, b, a) TEST.backdropBorderColor = { r, g, b, a } end,
     GetTexture = function() return rawget(m, "__tex") end,
     -- ★1.73.5 CreateFrame 拿到 "EditBox" 类型后调用它，打开「SetText 会再触发 OnTextChanged」的保真开关
     __markEditBox = function() isEditBox = true end,

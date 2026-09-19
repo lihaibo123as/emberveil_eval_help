@@ -689,6 +689,37 @@ function checkIconAssets() {
   }
 
 })();
+// ===== MENU ROUND CHROME CHECK（1.73.40）：右键菜单的「圆角边框」只能走客户端原生圆角边贴图 =====
+// 背景（用户「圆角」）：1.12 没有圆角控件，圆角只能来自客户端的边贴图 Interface\Tooltips\UI-Tooltip-Border
+//   （vanilla 右键菜单/提示框就是 bgFile=UI-Tooltip-Background + edgeFile=UI-Tooltip-Border + edgeSize 16 + insets）。
+// 判据（行为断言照不到「客户端约定」，只能靠源码检查补位）：
+//   ① 必须显式给 edgeFile（参考插件 Agent 实测：backdrop 表里不给 edgeFile，边框贴图会留在表里继续画）；
+//   ② edgeSize 必须是**整数**（实测：小数在本客户端栅格化不可靠）；
+//   ③ 必须 SetBackdropBorderColor 成白色高亮（不给就保持客户端默认色）；
+//   ④ 必须 GetBackdrop 读回确认 + 有「挂不上退回四条平边」的退化路径；
+//   ⑤ 绝不许调 GetBackdropColor / GetBackdropBorderColor（本客户端**没有**这两个读值口 → 调了静默 nil）。
+(function () {
+  const strip = (s) => s.split(/\r?\n/).map(function (l) { const i = l.indexOf('--'); return i >= 0 ? l.slice(0, i) : l; }).join('\n');
+  const tb = strip(fs.readFileSync(path.join(__dirname, 'Toolbox.lua'), 'utf8'));
+  const bad = [];
+  if (tb.indexOf('SetBackdrop') < 0) bad.push('没有用 SetBackdrop（圆角边贴图没处挂）');
+  if (tb.indexOf('UI-Tooltip-Border') < 0) bad.push('没有用客户端的圆角边贴图 UI-Tooltip-Border');
+  if (tb.indexOf('edgeFile') < 0) bad.push('backdrop 表里没给 edgeFile');
+  const me = tb.match(/TB_MENU_EDGE\s*=\s*([0-9.]+)/);
+  if (!me || !/^[0-9]+$/.test(me[1])) bad.push('TB_MENU_EDGE 必须是整数常量（实测小数栅格化不可靠）: ' + (me && me[1]));
+  const m = tb.match(/edgeSize\s*=\s*([A-Za-z0-9_.]+)/);
+  if (!m) bad.push('没有 edgeSize');
+  else if (!/_EDGE$/.test(m[1]) && !/^[0-9]+$/.test(m[1])) bad.push('edgeSize 不是整数常量: ' + m[1]);
+  if (tb.indexOf('SetBackdropBorderColor') < 0) bad.push('没有 SetBackdropBorderColor（边框会保持客户端默认色）');
+  const bw = tb.match(/SetBackdropBorderColor, f, ([0-9.]+), ([0-9.]+), ([0-9.]+), ([0-9.]+)/);
+  if (!bw || Number(bw[1]) < 0.9 || Number(bw[2]) < 0.9 || Number(bw[3]) < 0.9 || Number(bw[4]) < 0.5) bad.push('边框色不是白色高亮: ' + (bw && bw.slice(1).join('/')));
+  if (tb.indexOf('GetBackdrop') < 0) bad.push('没有 GetBackdrop 读回确认（挂没挂上不可知）');
+  if (tb.indexOf('kind = "flat"') < 0 && tb.indexOf('edgeTex') < 0) bad.push('没有「挂不上就退回四条平边」的退化路径');
+  if (/GetBackdropColor|GetBackdropBorderColor/.test(tb)) bad.push('调了本客户端不存在的读值口 GetBackdropColor/GetBackdropBorderColor');
+  if (bad.length) { console.log('MENU ROUND CHROME CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
+  console.log('MENU ROUND CHROME CHECK: 原生圆角边贴图 + 整数 edgeSize + 白色边框色 + 读回确认 + 平边退化');
+})();
+
 // ===== EXAMPLES TOC CHECK（1.71.2）：模版数据文件必须都在 .toc 里，且顺序 = 选单顺序 =====
 // 背景：模版数据从 EvalHelp.lua 拆到 examples/*.lua，靠 EvalHelp.toc 载入（本客户端没有文件读取 API）。
 //   → 「新增一个职业模版」现在要动两处：磁盘上的文件 + .toc 里的一行。

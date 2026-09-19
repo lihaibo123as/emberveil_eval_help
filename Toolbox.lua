@@ -982,13 +982,26 @@ local TB_MENU_GAP = 4
 local TB_MENU_ITEM_H = 15
 local TB_MENU_TOP = -19
 local TB_MENU_PAD = 6
+-- ★★★1.73.40 悬停配色（用户「鼠标获取焦点 增加变色美化」）：常态暗底暗金字；悬停亮金底 + 近白字
+local TB_MENU_HOT = {
+  bg     = { 0.10, 0.09, 0.06, 0.35 },
+  hot    = { 0.55, 0.42, 0.16, 0.85 },
+  txt    = { 0.95, 0.82, 0.35 },
+  txthot = { 1.00, 0.97, 0.80 },
+}
+-- ★原生圆角边的 edgeSize：必须整数（参考插件实测：小数在本客户端栅格化不可靠）
+local TB_MENU_EDGE = 16
 -- 纯函数：条目数 → 宽 / 高 / 行数 / 列数（渲染与断言**共用这一份**）
 function EVAL_TB_MENU_LAYOUT(n)
   n = tonumber(n) or 0
   if n < 1 then n = 1 end
   local rows = math.ceil(n / 2)
   local w = TB_MENU_COL_W * 2 + TB_MENU_GAP
-  local h = -TB_MENU_TOP + (rows - 1) * TB_MENU_ITEM_H + TB_MENU_PAD
+  -- ★★★1.73.40 用户截图「右键框未包含关闭按键」——根因就在这一行：
+  --   原式只算了 (rows-1) 个**行距**，**最后一行的自身高度没算**，
+  --   于是末行按钮吊在窗口底 9px 之外（关闭正好在末行 → 看起来菜单里根本没关闭）。
+  --   ★判据 = 组 130③d 的**包含性**（每条按钮的矩形必须落在窗口矩形内，独立于本函数）。
+  local h = -TB_MENU_TOP + rows * TB_MENU_ITEM_H + TB_MENU_PAD
   return w, h, rows, 2
 end
 function EVAL_TB_MENU_HEIGHT(n) local _, h = EVAL_TB_MENU_LAYOUT(n) return h end
@@ -1029,6 +1042,54 @@ local function tbMenuItems()
   end
   return out
 end
+-- ★★★1.73.40 「圆角」：用客户端**原生**的圆角边框贴图（vanilla 右键菜单/提示框就是这一套：
+--   bgFile = UI-Tooltip-Background + edgeFile = UI-Tooltip-Border + edgeSize 16 + insets）。
+--   参考插件 Compatibility/ClientAPI.lua:2406-2414 有两条**实测**记录，照抄：
+--     ① backdrop 表里**不给 edgeFile**时，边框贴图会留在表里继续画（想要边框就得显式给 edgeFile）；
+--     ② **小数 edgeSize 在本客户端栅格化不可靠** → 一律用整数。
+--   ★读回来确认：GetBackdrop() 的边框段报出这张边贴图才算真挂上；读不到（本客户端可能没这个读值口）按「无法验证」处理，
+--   但**挂不上就退回四条平边**，绝不静默丢掉白色高亮边框。
+local function tbMenuChrome(f, W, H)
+  local kind, edge, border = "flat", nil, {}
+  if type(f.SetBackdrop) == "function" then
+    local ok = pcall(f.SetBackdrop, f, {
+      bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+      edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+      tile = true, tileSize = TB_MENU_EDGE, edgeSize = TB_MENU_EDGE,
+      insets = { left = 4, right = 4, top = 4, bottom = 4 },
+    })
+    if ok then
+      if type(f.SetBackdropColor) == "function" then
+        pcall(f.SetBackdropColor, f, 0.02, 0.02, 0.03, 0.62)
+      end
+      if type(f.SetBackdropBorderColor) == "function" then
+        pcall(f.SetBackdropBorderColor, f, 1, 1, 1, 0.75) -- 白色高亮（1.73.39 的要求）
+      end
+      if type(f.GetBackdrop) == "function" then
+        local oks, str = pcall(f.GetBackdrop, f)
+        if oks and type(str) == "string" then edge = str end
+      end
+      if edge == nil or string.find(edge, "UI-Tooltip-Border", 1, true) ~= nil then
+        kind = "rounded"
+      end
+    end
+  end
+  if kind == "flat" then
+    -- 退化路径 = 1.73.39 的四条 1px 平白边（半透明白，别抢文字）
+    local function edgeTex(name, ax, ay, w2, h2)
+      local t = f:CreateTexture(nil, "BORDER")
+      tbSolid(t, 1, 1, 1, 0.75)
+      t:SetPoint("TOPLEFT", f, "TOPLEFT", ax, ay)
+      t:SetWidth(w2) t:SetHeight(h2)
+      border[name] = t
+    end
+    edgeTex("top", 0, 0, W, 1)
+    edgeTex("bottom", 0, -(H - 1), W, 1)
+    edgeTex("left", 0, 0, 1, H)
+    edgeTex("right", W - 1, 0, 1, H)
+  end
+  return { kind = kind, edge = edge, border = border }
+end
 local function tbMenuBuild()
   if TB.menu then return TB.menu end
   local items = tbMenuItems()
@@ -1046,20 +1107,14 @@ local function tbMenuBuild()
   bg:SetPoint("TOPLEFT", f, "TOPLEFT", 0, 0)
   bg:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
   f.bg = bg
-  -- ★★★1.73.39 用户要求「边框 白色高亮」：四条 1px 白边（半透明白，别抢文字）
-  local border = {}
-  local function edge(name, ax, ay, w2, h2)
-    local t = f:CreateTexture(nil, "BORDER")
-    tbSolid(t, 1, 1, 1, 0.75)
-    t:SetPoint("TOPLEFT", f, "TOPLEFT", ax, ay)
-    t:SetWidth(w2) t:SetHeight(h2)
-    border[name] = t
-  end
-  edge("top", 0, 0, W, 1)
-  edge("bottom", 0, -(H - 1), W, 1)
-  edge("left", 0, 0, 1, H)
-  edge("right", W - 1, 0, 1, H)
-  f.border = border
+  -- ★★★1.73.40 用户「圆角」（1.73.39「边框 白色高亮」继续保留）：能挂上客户端**原生圆角边贴图**就用它，
+  --   挂不上就退回四条 1px 白边（退化路径在 tbMenuChrome 里，两条路都有断言）。
+  local chrome = tbMenuChrome(f, W, H)
+  f.border = chrome.border
+  f.chrome = chrome.kind
+  f.chromeEdge = chrome.edge
+  -- ★圆角时底由 backdrop 自己画（insets 4 → 落在圆角内侧）；再叠一层自己的方形半透明底会发黑
+  if chrome.kind == "rounded" then pcall(bg.Hide, bg) end
   local title = tbText(f, 10, 0.95, 0.82, 0.35)
   title:SetPoint("TOPLEFT", f, "TOPLEFT", 5, -5)
   pcall(title.SetWidth, title, W - 10)
@@ -1073,11 +1128,26 @@ local function tbMenuBuild()
     local x = col * (TB_MENU_COL_W + TB_MENU_GAP) + 1
     local y = TB_MENU_TOP - row * TB_MENU_ITEM_H
     local b = tbBtn(f, x, y, TB_MENU_COL_W - 2, label, fn, nil)
-    if b.bg then pcall(b.bg.SetVertexColor, b.bg, 0.10, 0.09, 0.06, 0.35) end
     if b.text then
       pcall(b.text.SetWidth, b.text, TB_MENU_COL_W - 6)
       pcall(b.text.SetJustifyH, b.text, "LEFT")
     end
+    -- ★★★1.73.40 用户「右键框内操作按键 鼠标获取焦点 增加变色美化」：
+    --   悬停高亮 —— 本项目配方禁用 SetHighlightTexture，一律 OnEnter/OnLeave **改颜色**
+    --   （底色变亮金 + 文字变亮），并挂在**真实 OnEnter/OnLeave 脚本**上（判据走真实脚本触发）。
+    local function paint(hot)
+      local c = hot and TB_MENU_HOT.hot or TB_MENU_HOT.bg
+      if b.bg then pcall(b.bg.SetVertexColor, b.bg, c[1], c[2], c[3], c[4]) end
+      if b.text and type(b.text.SetTextColor) == "function" then
+        local tc = hot and TB_MENU_HOT.txthot or TB_MENU_HOT.txt
+        pcall(b.text.SetTextColor, b.text, tc[1], tc[2], tc[3])
+      end
+      b.hot = hot and true or false
+    end
+    b.paint = paint
+    pcall(b.btn.SetScript, b.btn, "OnEnter", function() paint(true) end)
+    pcall(b.btn.SetScript, b.btn, "OnLeave", function() paint(false) end)
+    paint(false)
     table.insert(f.rows, b)
     return b
   end
@@ -1122,6 +1192,25 @@ function EVAL_TEST_TB_MENU_CLICK(label)
   end
   return false
 end
+-- ★★★1.73.40 测试：按**标签**触发菜单条目的鼠标悬停 —— 走的是按钮**真实的 OnEnter/OnLeave 脚本**
+--   （不是直接调 paint：接线断了这样才会响）。on == false → 触发 OnLeave。
+function EVAL_TEST_TB_MENU_HOVER(label, on)
+  if not TB.menu then return false end
+  local want = tostring(label or "")
+  local ev = (on == false) and "OnLeave" or "OnEnter"
+  for i = 1, table.getn(TB.menu.rows or {}) do
+    local b = TB.menu.rows[i]
+    if b and b.text and b.btn then
+      local ok, t = pcall(b.text.GetText, b.text)
+      if ok and tostring(t or "") == want then
+        local okf, fn = pcall(b.btn.GetScript, b.btn, ev)
+        if okf and type(fn) == "function" then pcall(fn) return true end
+        return false
+      end
+    end
+  end
+  return false
+end
 function EVAL_TB_MENU_GEOM()
   if not TB.menu then return nil end
   local f = TB.menu
@@ -1146,6 +1235,13 @@ function EVAL_TB_MENU_GEOM()
       end
     end
   end
+  -- ★1.73.40 圆角读值口：菜单用的是**原生圆角边**（rounded）还是**四条平边**（flat）退化路径
+  out.chrome = f.chrome
+  out.edge = f.chromeEdge
+  if f.bg and type(f.bg.IsShown) == "function" then
+    local oksh, sh = pcall(f.bg.IsShown, f.bg)
+    if oksh then out.bgShown = sh and true or false end
+  end
   if f.bg and type(f.bg.GetVertexColor) == "function" then
     local ok, r, g, b, a = pcall(f.bg.GetVertexColor, f.bg)
     if ok then out.bg = { r = r, g = g, b = b, a = a } end
@@ -1153,9 +1249,16 @@ function EVAL_TB_MENU_GEOM()
   for i = 1, table.getn(f.rows or {}) do
     local b = f.rows[i]
     local ok, t = pcall(b.text.GetText, b.text)
-    out.items[i] = { label = (ok and tostring(t or "")) or "",
-                     x = num(b.btn.GetLeft, b.btn), y = num(b.btn.GetTop, b.btn),
-                     w = num(b.btn.GetWidth, b.btn), h = num(b.btn.GetHeight, b.btn) }
+    local it = { label = (ok and tostring(t or "")) or "",
+                 x = num(b.btn.GetLeft, b.btn), y = num(b.btn.GetTop, b.btn),
+                 w = num(b.btn.GetWidth, b.btn), h = num(b.btn.GetHeight, b.btn) }
+    -- ★1.73.40 悬停读值口：底色从**真控件读回**（不是回显常量）+ 当前是否高亮
+    if b.bg and type(b.bg.GetVertexColor) == "function" then
+      local okc, cr, cg, cb2b, ca = pcall(b.bg.GetVertexColor, b.bg)
+      if okc then it.r, it.g, it.b, it.a = cr, cg, cb2b, ca end
+    end
+    it.hot = b.hot and true or false
+    out.items[i] = it
   end
   return out
 end
@@ -1180,6 +1283,14 @@ function EVAL_TB_MENU_API_PROBE()
   if type(ChatFrame_OpenChat) ~= "function" and type(ChatEdit_ActivateChat) ~= "function" then
     say("|cffff8080  ⇒ 没有「打开聊天框」的接口：菜单里的「悄悄话」会如实提示请手动 /w（不静默）|r")
   end
+  -- ★★★1.73.40 「圆角」落地状态（取证用：这一条一屏就能区分「客户端挂上了原生圆角边」还是「退回了平边」）——
+  --   用户报「还是没有圆角」时，先看这一行，不要凭猜（本项目取证协议）。
+  local chrome, edgeTxt = "未建（右键点一次名字再看）", "-"
+  if TB.menu then
+    chrome = tostring(TB.menu.chrome or "?")
+    edgeTxt = tostring(TB.menu.chromeEdge or "-")
+  end
+  say("  边框做法 = " .. chrome .. " ｜ GetBackdrop 读回 = " .. edgeTxt)
   return true
 end
 function EVAL_TB_MENU_SHOW(name)

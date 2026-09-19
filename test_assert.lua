@@ -10017,28 +10017,119 @@ do
     eq(it2, EVAL_L("TB_NAMEMENU_SHARE"), "⑥b★★★第 2 条 = 分享方案（对调后；实际 " .. it2 .. "）")
     eq(it5, EVAL_L("TB_NAMEMENU_PARTY"), "⑥b★★★第 5 条 = 邀请（对调后；实际 " .. it5 .. "）")
   end
-  -- 边框：四条白边（r/g/b ≈ 1、alpha 够亮、上边框宽度 == 窗口宽）
-  local bd130 = mg130.border or {}
-  local nb130 = 0
-  for _, k in ipairs({ "top", "bottom", "left", "right" }) do if bd130[k] then nb130 = nb130 + 1 end end
-  eq(nb130, 4, "⑥b★★★四条边框都在（实际 " .. tostring(nb130) .. "）")
-  eq(type(bd130.top and bd130.top.r) == "number" and bd130.top.r >= 0.9 and bd130.top.g >= 0.9 and bd130.top.b >= 0.9,
-     true, "⑥b★★★边框是**白色**（r/g/b = " .. tostring(bd130.top and bd130.top.r) .. "/" ..
-     tostring(bd130.top and bd130.top.g) .. "/" .. tostring(bd130.top and bd130.top.b) .. "）")
-  eq(type(bd130.top and bd130.top.a) == "number" and bd130.top.a >= 0.5, true,
-     "⑥b★★边框够亮（alpha=" .. tostring(bd130.top and bd130.top.a) .. " ≥ 0.5）")
-  eq(bd130.top and bd130.top.w == mg130.w, true, "⑥b★★上边框横跨整窗（" .. tostring(bd130.top and bd130.top.w) ..
-     " == " .. tostring(mg130.w) .. "）")
-  eq(bd130.left and bd130.left.h == mg130.h, true, "⑥b★★左边框竖跨整窗（" .. tostring(bd130.left and bd130.left.h) ..
-     " == " .. tostring(mg130.h) .. "）")
-  eq(type(mg130.bg and mg130.bg.a) == "number" and mg130.bg.a < 0.8, true,
-     "⑥★★背景仍是半透明（alpha=" .. tostring(mg130.bg and mg130.bg.a) .. "）")
+  -- ★★★1.73.40 用户三条：①「圆角」②截图「右键框未包含关闭按键」③「操作按键 鼠标获取焦点 增加变色美化」
+  -- ⑥c 圆角：挂得上客户端**原生圆角边**（UI-Tooltip-Border）就用它，挂不上必须退回四条平白边 ——
+  --   两条路各有一组断言（哪条在跑都要读得到颜色，绿色不许来自「两边都没验」）。
+  eq(type(mg130.chrome) == "string", true, "⑥c★菜单如实报边框做法（实际 " .. tostring(mg130.chrome) .. "）")
+  eq(mg130.chrome, "rounded", "⑥c★★★桩照实测（SetBackdrop 可用 + GetBackdrop 读回边贴图）→ 必须走**原生圆角边**这条正路（实际 " .. tostring(mg130.chrome) .. "）")
+  if mg130.chrome == "rounded" then
+    eq(string.find(tostring(mg130.edge or ""), "UI-Tooltip-Border", 1, true) ~= nil, true,
+       "⑥c★★★圆角：GetBackdrop 读回的边贴图就是 UI-Tooltip-Border（实际 " .. tostring(mg130.edge) .. "）")
+    local bdCfg = TEST.backdropArg or {}
+    eq(type(bdCfg.edgeSize) == "number" and bdCfg.edgeSize == math.floor(bdCfg.edgeSize) and bdCfg.edgeSize >= 8, true,
+       "⑥c★★★edgeSize 是整数（参考插件实测：小数在本客户端栅格化不可靠；实际 " .. tostring(bdCfg.edgeSize) .. "）")
+    local ins = bdCfg.insets or {}
+    eq(type(ins.left) == "number" and ins.left > 0 and type(ins.top) == "number" and ins.top > 0, true,
+       "⑥c★★底要缩进到圆角**内侧**（insets 必须 > 0，否则方角戳出圆角）")
+    local bc = TEST.backdropBorderColor or {}
+    eq((bc[1] or 0) >= 0.9 and (bc[2] or 0) >= 0.9 and (bc[3] or 0) >= 0.9 and (bc[4] or 0) >= 0.5, true,
+       "⑥c★★★圆角边框是**白色高亮**（SetBackdropBorderColor = " .. tostring(bc[1]) .. "/" .. tostring(bc[2]) ..
+       "/" .. tostring(bc[3]) .. "/" .. tostring(bc[4]) .. "）")
+    local bgc = TEST.backdropColor or {}
+    eq(type(bgc[4]) == "number" and bgc[4] < 0.8, true, "⑥c★圆角底仍半透明（alpha=" .. tostring(bgc[4]) .. "）")
+    eq(mg130.bgShown, false, "⑥c★★圆角时不再叠自己的方形底（两层半透明叠加会发黑）")
+  else
+    eq(mg130.chrome, "flat", "⑥c★★退化路径必须是四条平白边（实际 " .. tostring(mg130.chrome) .. "）")
+    local bd130 = mg130.border or {}
+    local nb130 = 0
+    for _, k in ipairs({ "top", "bottom", "left", "right" }) do if bd130[k] then nb130 = nb130 + 1 end end
+    eq(nb130, 4, "⑥c★★四条边框都在（实际 " .. tostring(nb130) .. "）")
+    eq(type(bd130.top and bd130.top.r) == "number" and bd130.top.r >= 0.9 and bd130.top.g >= 0.9 and bd130.top.b >= 0.9,
+       true, "⑥c★★退化边框也是白的")
+    eq(type(bd130.top and bd130.top.a) == "number" and bd130.top.a >= 0.5, true, "⑥c★★退化边框够亮")
+    eq(bd130.top and bd130.top.w == mg130.w, true, "⑥c★★上边框横跨整窗")
+    eq(bd130.left and bd130.left.h == mg130.h, true, "⑥c★★左边框竖跨整窗")
+    eq(type(mg130.bg and mg130.bg.a) == "number" and mg130.bg.a < 0.8, true, "⑥c★背景仍半透明")
+  end
+  -- ⑥c2 ★★★退化路径：把 SetBackdrop 弄成服务端不支持（error）→ 必须如实退回**四条平白边**，
+  --   不允许静默地丢掉白色高亮边框（这正是 1.73.20 那类「看不见的退化」教训）。
+  TEST.failBackdrop = true
+  EVAL_TEST_TB_MENU_DROP()
+  TEST.sirCalls = {}
+  SetItemRef("player:Ionol", "[Ionol]", "RightButton")
+  local mgFB = EVAL_TB_MENU_GEOM()
+  eq(mgFB and mgFB.chrome, "flat", "⑥c2★★★挂不上 backdrop 就必须退回平边（实际 " .. tostring(mgFB and mgFB.chrome) .. "）")
+  local nbFB = 0
+  for _, k in ipairs({ "top", "bottom", "left", "right" }) do if (mgFB.border or {})[k] then nbFB = nbFB + 1 end end
+  eq(nbFB, 4, "⑥c2★★退化路径真的画了四条边（实际 " .. tostring(nbFB) .. "）")
+  eq(type(((mgFB.border or {}).top or {}).r) == "number" and ((mgFB.border or {}).top).r >= 0.9, true,
+     "⑥c2★★退化边也是白的")
+  TEST.failBackdrop = nil
+  EVAL_TEST_TB_MENU_DROP()
+  SetItemRef("player:Ionol", "[Ionol]", "RightButton") -- 恢复：后面 ⑥d/⑥e 还要用菜单
+  -- ⑥d ★★★包含性（独立于高度公式）：每条按钮的矩形必须落在窗口矩形内。
+  --   用户截图「右键框未包含关闭按键」的根因就在这里：高度只算了 (rows-1) 个行距，
+  --   末行（= 关闭）吊在窗口底 9px 之外 —— 背景没画到它 → 看起来「菜单里没有关闭」。
+  local out130 = ""
+  for i = 1, nIt130 do
+    local it = mg130.items[i] or {}
+    local l, t2 = it.x, it.y
+    local r2, bt2 = (it.x or 0) + (it.w or 0), (it.y or 0) - (it.h or 0)
+    if type(l) ~= "number" or type(t2) ~= "number" then
+      out130 = out130 .. i .. ":读不到几何 "
+    elseif l < 0 or t2 > 0 or r2 > (mg130.w or 0) + 0.01 or bt2 < -(mg130.h or 0) - 0.01 then
+      out130 = out130 .. i .. "(" .. tostring(it.label) .. ") "
+    end
+  end
+  eq(out130, "", "⑥d★★★每条（含关闭）都落在窗口矩形内；越界 = " .. out130)
+  eq(tostring((mg130.items[nIt130] or {}).label or ""), EVAL_L("TB_NAMEMENU_CLOSE"),
+     "⑥d★★★「关闭」是**最后一条**（实际 " .. tostring((mg130.items[nIt130] or {}).label) .. "）")
+  -- ⑥e 悬停变色（用户「鼠标获取焦点 增加变色美化」）：全程走**真实 OnEnter/OnLeave 脚本**
+  local hov130 = ""
+  for i = 1, nIt130 do
+    if type((mg130.items[i] or {}).r) ~= "number" then hov130 = hov130 .. i .. " " end
+  end
+  eq(hov130, "", "⑥e★★每条都能从**真控件**读回底色: " .. hov130)
+  local it1 = mg130.items[1] or {}
+  local nrm130 = { it1.r, it1.a }
+  eq(it1.hot, false, "⑥e★默认不是高亮态")
+  eq(EVAL_TEST_TB_MENU_HOVER(it1.label, true), true, "⑥e★★★触发了第 1 条的**真实 OnEnter** 脚本")
+  local itH = (EVAL_TB_MENU_GEOM().items or {})[1] or {}
+  eq(itH.hot, true, "⑥e★★悬停后如实置为高亮态")
+  eq(type(itH.r) == "number" and (itH.r or 0) > (nrm130[1] or 0) and (itH.a or 0) > (nrm130[2] or 0), true,
+     "⑥e★★★悬停**真的变色**（底色 " .. tostring(nrm130[1]) .. "/" .. tostring(nrm130[2]) .. " → " ..
+     tostring(itH.r) .. "/" .. tostring(itH.a) .. "）")
+  eq(EVAL_TEST_TB_MENU_HOVER(it1.label, false), true, "⑥e★★触发了**真实 OnLeave** 脚本")
+  local itL = (EVAL_TB_MENU_GEOM().items or {})[1] or {}
+  eq(itL.hot, false, "⑥e★离开后回到非高亮态")
+  eq(itL.r == nrm130[1] and itL.a == nrm130[2], true, "⑥e★★★离开后**逐值复原**（" .. tostring(itL.r) .. "/" ..
+     tostring(itL.a) .. " == " .. tostring(nrm130[1]) .. "/" .. tostring(nrm130[2]) .. "）")
+  -- ★★★每一条都必须挂上两个脚本（漏挂一条 = 那一条永不变色，而且**不报错**）
+  local mm130 = _G.EVAL_TB_NAMEMENU
+  eq(type(mm130) == "table", true, "⑥e★具名帧 EVAL_TB_NAMEMENU 在全局里（读值口要能拿到它的按钮）")
+  local noScr130 = ""
+  for i = 1, nIt130 do
+    local b = mm130 and mm130.rows and mm130.rows[i]
+    if b and b.btn then
+      local ok1, f1 = pcall(b.btn.GetScript, b.btn, "OnEnter")
+      local ok2, f2 = pcall(b.btn.GetScript, b.btn, "OnLeave")
+      if (not ok1) or type(f1) ~= "function" or (not ok2) or type(f2) ~= "function" then
+        noScr130 = noScr130 .. i .. " "
+      end
+    else
+      noScr130 = noScr130 .. i .. "(读不到按钮) "
+    end
+  end
+  eq(noScr130, "", "⑥e★★★每一条都挂了 OnEnter + OnLeave: " .. noScr130)
   -- ⑦ 接口探针（1.73.28 改）：报这个菜单真正要用的 API
   TEST.chat = ""
   eq(EVAL_TB_MENU_API_PROBE(), true, "⑦★菜单接口探针能跑")
   local c130b = tostring(TEST.chat or "")
   eq(string.find(c130b, "InviteToParty", 1, true) ~= nil, true, "⑦★★探针报了邀请接口")
   eq(string.find(c130b, "ChatFrame_OpenChat", 1, true) ~= nil, true, "⑦★★探针报了「打开聊天框」接口（悄悄话要用）")
+  -- ★1.73.40 探针必须如实报「圆角边框到底挂上了没有」（用户报「还是没有圆角」时靠这一行取证，不靠猜）
+  eq(string.find(c130b, "边框做法 = rounded", 1, true) ~= nil, true,
+     "⑦★★★探针报了圆角边框的落地状态（实际：" .. string.sub(c130b, 1, 120) .. "）")
   -- ⑦ 关掉开关 → 不再接管
   EVAL_HELP_CONFIG.tb.nameMenu = false
   EVAL_TEST_TB_NAMEMENU_RESET()
