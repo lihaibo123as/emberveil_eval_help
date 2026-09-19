@@ -12549,6 +12549,49 @@ do
   TEST.chat = ""
   f161:AddMessage("[谁都没见过的名字]: 在吗")
   eq(string.find(tostring(TEST.chat), "|c", 1, true) == nil, true, "②b★★自愈之后仍未命中 → **照旧不染色**（不猜、不涂默认灰）")
+  -- ④ ★★★1.73.52 用户真机探针显示「公会名册本地条数=0（懒加载）」⇒ 补一发**本会话只发一次**的名册查询，
+  --   并**受「主动查询」开关把关**（关掉它 = 一个查询都不发，退回「等玩家自己开公会窗」的老行为）。
+  EVAL_TB_CHATCOLOR_RESET()
+  EVAL_HELP_CONFIG.tb = { chatColor = true, whoQuery = true }
+  TEST.inGuild = true
+  TEST.guildRows = {} -- 名册还没到位
+  TEST.guildRosterCalls = 0
+  -- ★★名册**一直没回来**（GetNumGuildMembers 恒 0）：这样「只发一次」就**只能靠本会话标记**守住 ——
+  --   否则「本地已有名册就不发」那道闸门会把这条判据顶住（本项目「冗余守卫必须整组拆」的老账）。
+  TEST.guildRosterFills = nil
+  EVAL_TB_NAMECLASS_ENSURE_ROSTER()
+  EVAL_TB_NAMECLASS_ENSURE_ROSTER()
+  EVAL_TB_NAMECLASS_ENSURE_ROSTER()
+  eq(TEST.guildRosterCalls, 1, "④★★★名册查询**整场只发一次**（实际发了 " .. tostring(TEST.guildRosterCalls) .. " 次）")
+  TEST.guildRows = { { name = "名册甲", class = "战士" } } -- 模拟「查询回来、名册到位」
+  EVAL_TB_ONEVENT("GUILD_ROSTER_UPDATE") -- 查询回来 → 走**已有的**采集事件路径
+  eq(EVAL_TB_NAMECLASS_GET("名册甲"), "WARRIOR", "④★★名册回来后公会人名进缓存（→ 不开公会窗也能染色了）")
+  -- ⑤ 四道闸门逐条反向验
+  EVAL_TB_CHATCOLOR_RESET()
+  EVAL_HELP_CONFIG.tb = { chatColor = true, whoQuery = false } -- 关掉「主动查询」
+  TEST.guildRows = {}
+  TEST.guildRosterCalls = 0
+  EVAL_TB_NAMECLASS_ENSURE_ROSTER()
+  eq(TEST.guildRosterCalls, 0, "⑤★★★关掉「主动查询」开关 → **一个查询都不发**（老行为：等你自己开公会窗）")
+  EVAL_TB_CHATCOLOR_RESET()
+  EVAL_HELP_CONFIG.tb = { chatColor = true, whoQuery = true }
+  TEST.guildRows = { { name = "已在本地", class = "法师" } } -- 名册已经在手上
+  TEST.guildRosterCalls = 0
+  EVAL_TB_NAMECLASS_ENSURE_ROSTER()
+  eq(TEST.guildRosterCalls, 0, "⑤b★★本地名册已在手上 → **不发**查询（不做多余的服务器请求）")
+  EVAL_TB_CHATCOLOR_RESET()
+  TEST.inGuild = false
+  TEST.guildRows = {}
+  TEST.guildRosterCalls = 0
+  EVAL_TB_NAMECLASS_ENSURE_ROSTER()
+  eq(TEST.guildRosterCalls, 0, "⑤c★★不在公会里 → 不发名册查询")
+  TEST.inGuild = true
+  TEST.guildRosterFills = nil
+  -- ⑥ 探针必须把**真身入口**（ChatFrame_OnEvent 层）与名册查询计数也打出来 —— 只打 AddMessage 层会误判成「入口全断」
+  TEST.chat = ""
+  EVAL_TB_NAMECLASS_PROBE()
+  eq(string.find(tostring(TEST.chat), "ChatFrame_OnEvent 层", 1, true) ~= nil, true, "⑥★★探针打出真身入口那层")
+  eq(string.find(tostring(TEST.chat), "名册查询", 1, true) ~= nil, true, "⑥★★探针打出名册查询计数（顺便告诉玩家「关掉主动查询就不发」）")
   -- ③ 取证命令能跑（用户真机回报用）
   TEST.chat = ""
   eq(EVAL_TB_NAMECLASS_PROBE(), true, "③★/eh go 名字缓存 探针能跑")

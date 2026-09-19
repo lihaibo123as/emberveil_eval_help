@@ -950,6 +950,13 @@ end
 --   否则生产代码里那条「type(X) == "function"」守卫会让整条采集路径在测试里**从未被走到**
 --   （本项目老坑：桩太宽松 → 断言失明）。条数由上面三张行表驱动。
 GetNumGuildMembers = function() return table.getn(TEST.guildRows or {}) end
+-- ★★★1.73.52 桩保真：`GuildRoster()`（向服务器要名册）—— 名字染色缓存「本地名册=0」那条路要能被测到：
+--   ① 记住**调用了几次**（判据：本会话只许发一次、且受「主动查询」开关把关）；
+--   ② `TEST.guildRosterFills` 可模拟「查询回来、名册到位」（随后由 GUILD_ROSTER_UPDATE 走真实采集路径）。
+GuildRoster = function()
+  TEST.guildRosterCalls = (TEST.guildRosterCalls or 0) + 1
+  if TEST.guildRosterFills then TEST.guildRows = TEST.guildRosterFills end
+end
 GetNumWhoResults = function() return table.getn(TEST.whoRows or {}) end
 -- ★1.73.12 名字主动查询：记录发出的 /who（断言「发了什么 / 发了几次 / 间隔对不对」）
 TEST.whoSent = {}

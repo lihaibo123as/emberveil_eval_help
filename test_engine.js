@@ -536,9 +536,29 @@ function checkIconAssets() {
   //   SendWho 是**服务器查询**，可以存在，但**只允许出现在限频滴出 tbWhoTick 里**——
   //   聊天热路径（AddMessage 包装体）里直接发 = 一句话一发 = 必被服务器反滥用（本项目 1.68.2 被踢线的同族教训）。
   //   并且 tbWhoTick 里四道闸门必须都在：频率下限 / 单飞 / 负缓存 / 队列上限。
-  //   GuildRoster() / ShowFriends() 仍然是**一律禁止**（那不是用户要求的，纯粹白打扰服务器）。
-  const forbidden = tb.match(/\bGuildRoster\s*\(|\bShowFriends\s*\(/g) || [];
+  //   ★★★1.73.52 更新（用户真机取证后开放）：**GuildRoster() 也允许，但只许出现在 `tbNameClassEnsureRoster` 里**，
+  //     且那个函数必须四道闸门齐全：① 受「主动查询」开关把关（EVAL_TB_WHO_ON）② 在公会里（IsInGuild）
+  //     ③ 本地名册确实为空（GetNumGuildMembers 判 >0 就退出）④ 本会话只发一次（TB.rosterAsked）。
+  //     为什么开放：真机探针显示「公会名册本地条数=0（懒加载）」→ 不开公会窗时公会聊天里的人名**任何来源都没有**，
+  //     而那正是玩家最常看到的聊天；一次登录一发的查询开销 ≪ 已有的按名字 /who。
+  //   ShowFriends() 仍然**一律禁止**（不是用户要的，纯粹白打扰服务器）。
+  const forbidden = tb.match(/\bShowFriends\s*\(/g) || [];
   if (forbidden.length) bad.push('出现了未被允许的服务器查询：' + forbidden.join(', '));
+  const iRosterFn = tb.indexOf('local function tbNameClassEnsureRoster()');
+  const iRosterFnEnd = (iRosterFn >= 0) ? tb.indexOf('\nfunction ', iRosterFn + 10) : -1;
+  if (iRosterFn < 0) bad.push('找不到 tbNameClassEnsureRoster（名册查询的唯一入口）');
+  else {
+    const rb = tb.slice(iRosterFn, iRosterFnEnd > 0 ? iRosterFnEnd : iRosterFn + 2000);
+    if (rb.indexOf('GuildRoster') < 0) bad.push('tbNameClassEnsureRoster 里没有 GuildRoster()（那这个函数就没意义了）');
+    const gates = [["主动查询开关", "EVAL_TB_WHO_ON"], ["在公会里", "IsInGuild"],
+                   ["本地名册为空", "GetNumGuildMembers"], ["本会话只发一次", "TB.rosterAsked"]];
+    for (const [label, tok] of gates) if (rb.indexOf(tok) < 0) bad.push('名册查询缺少「' + label + '」这道闸门（' + tok + '）');
+  }
+  // GuildRoster( 只许出现在那一个函数体内（别处一律禁止）
+  for (let p2 = 0; (p2 = tb.indexOf('GuildRoster(', p2)) >= 0; p2++) {
+    if (!(iRosterFn >= 0 && p2 > iRosterFn && (iRosterFnEnd < 0 || p2 < iRosterFnEnd)))
+      bad.push('GuildRoster() 出现在 tbNameClassEnsureRoster 之外');
+  }
   const iTick = tb.indexOf('local function tbWhoTick()');
   const iTickEnd = tb.indexOf('EVAL_TB_WHO_TICK = tbWhoTick');
   const iSend = tb.indexOf('SendWho');

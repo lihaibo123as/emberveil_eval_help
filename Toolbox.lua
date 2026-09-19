@@ -2475,9 +2475,39 @@ EVAL_TB_NAMECLASS_HARVEST_THROTTLED = tbNcHarvest -- 供事件 / 诊断 / 断言
 --   但名册/好友/查询结果一旦到位，这里就能在下一次聊天命中失败时自己补上（配合聊天入口的「当场重判」）。
 --   ★频率：单次最多 3 次 GetTime + 表查找（真正贵的遍历只在窗口到点时发生一次，见 TB_NC_THROTTLE），
 --     所以从聊天热路径调用是安全的。返回本次**新写入**的条数。
+-- ★★★1.73.52 用户真机取证（`/eh go 名字缓存`）：「公会名册 本地条数=0 · 查询=0 · 好友=0 · 缓存只有 2 条」——
+--   所以刚载入时公会聊天里的人名**一条都染不上**：客户端要等**公会窗打开**才把名册拉到本地（懒加载）。
+--   ⇒ 补一发**只发一次**的 `GuildRoster()`（向服务器要名册，与「主动查询」同一个开关、同一套纪律）：
+--     · 只在「主动查询开着 + 在公会里 + 名册还没到位 + 本会话没问过」时才发；
+--     · 结果由已有的 `GUILD_ROSTER_UPDATE` → `tbNcHarvest("guild")` 路径接（不另写一套采集）；
+--     · 关掉「主动查询」开关 → 一个查询都不发（退回老行为：等玩家自己开公会窗）。
+local function tbNameClassEnsureRoster()
+  if TB.rosterAsked then return false end
+  if not EVAL_TB_WHO_ON() then return false end
+  if type(GuildRoster) ~= "function" then return false end
+  if type(IsInGuild) == "function" then
+    local okg, ing = pcall(IsInGuild)
+    if okg and not ing then return false end
+  end
+  local n = 0
+  if type(GetNumGuildMembers) == "function" then
+    local okn, v = pcall(GetNumGuildMembers)
+    if okn and type(v) == "number" then n = v end
+  end
+  if n > 0 then TB.rosterAsked = true return false end -- 本地已有名册：不用问
+  TB.rosterAsked = true
+  local ok2 = pcall(GuildRoster)
+  if ok2 then TB.rosterSent = (TB.rosterSent or 0) + 1 end
+  EVAL_LOGLINE("[名字缓存] 本地名册为空 → 已发一次名册查询（本会话仅此一次；由「主动查询」开关把关）")
+  return ok2
+end
+function EVAL_TB_NAMECLASS_ENSURE_ROSTER() return tbNameClassEnsureRoster() end
+
 function EVAL_TB_NAMECLASS_HEAL()
   if not EVAL_TB_CHATCOLOR_ON() then return 0 end
   local n = 0
+  -- ★1.73.52 顺手补一次「名册查询」（内部自带：只发一次 / 开关把关 / 已有名册就不发）
+  pcall(tbNameClassEnsureRoster)
   n = n + (tbNcHarvest("guild") or 0)
   n = n + (tbNcHarvest("friends") or 0)
   n = n + (tbNcHarvest("who") or 0)
@@ -2694,7 +2724,16 @@ function EVAL_TB_NAMECLASS_PROBE()
   local added = EVAL_TB_NAMECLASS_HARVEST(nil)
   say("  立刻做一次**全量只读采集** → 新增 " .. tostring(added) .. " 条；缓存现在 " .. tostring(EVAL_TB_NAMECLASS_SIZE()) .. " 条")
   local st = EVAL_TB_CHATCOLOR_STATE() or {}
-  say("  聊天入口: 已包装帧=" .. tostring(st.frames) .. " · 经过 " .. tostring(st.seen) .. " 条 · 上色 " .. tostring(st.painted) .. " 条 · 最近上色=" .. tostring(st.last))
+  say("  入口①AddMessage 层（本客户端**写入会被吞**，1.73.12 实测）: 已包装帧=" .. tostring(st.frames) ..
+      " · 经过 " .. tostring(st.seen) .. " 条 · 上色 " .. tostring(st.painted) .. " · 最近上色=" .. tostring(st.last))
+  -- ★★★诊断纪律：**逐个入口分开计数**（上面那层是死的、下面这层才是真身 —— 只看上面会误判成「入口全断」）
+  local ce = (type(EVAL_TB_CHATEVENT_STATE) == "function") and EVAL_TB_CHATEVENT_STATE() or {}
+  say("  入口②ChatFrame_OnEvent 层（**真身**）: 存在=" .. tostring(ce.exists) .. " · 是我们的=" .. tostring(ce.live) ..
+      " · 经过=" .. tostring(ce.seen) .. " · 吞掉(频道通知)=" .. tostring(ce.filtered))
+  say("    认出名字=" .. tostring(ce.named) .. " · 认不出=" .. tostring(ce.nameMiss) ..
+      " · 认出但暂不回写(名字槽不吃富文本)=" .. tostring(ce.held) .. " · 自己拼整行=" .. tostring(ce.replaced))
+  say("  名册查询: 本会话已发 GuildRoster 调用=" .. tostring(TB.rosterSent or 0) .. " 次（主动查询开关=" .. tostring(EVAL_TB_WHO_ON()) ..
+      "；关掉它 = 一个查询都不发，退回「等你自己开公会窗」）")
   local ps = EVAL_TB_PAINT_STATE() or {}
   say("  三个窗口(公会/查询/好友): calls=" .. tostring(ps.calls) .. " · painted=" .. tostring(ps.painted) ..
       "（窗口没打开过就是 0 —— 那也是「缓存为空」的一个来源）")
@@ -2715,6 +2754,7 @@ function EVAL_TB_CHATCOLOR_RESET() -- 测试用：清计数与样本（不还原
   tbNcAt = {}
   TB.ncAdded = 0
   TB.chatHealed = 0
+  TB.rosterAsked, TB.rosterSent = nil, 0 -- ★1.73.52 名册查询的「本会话只发一次」标记也一起清（测试用例要能各自独立）
 end
 -- 勾/取消勾后的即时动作：立刻补一次缓存（勾上就能用）+ 如实回一句，并把**自己的名字**染出来当示例
 -- ===== 未缓存角色的**主动查询**（/who）—— 1.73.12 用户追加要求 =====
@@ -3506,6 +3546,8 @@ function EVAL_TB_ONEVENT(e)
     tbNcHarvest("guild")
     tbNcHarvest("friends")
     tbNcHarvest("who")
+    -- ★1.73.52 名册还没到位（本地条数 0）→ 只发一次 GuildRoster()，回来由 GUILD_ROSTER_UPDATE 接
+    if type(EVAL_TB_NAMECLASS_ENSURE_ROSTER) == "function" then pcall(EVAL_TB_NAMECLASS_ENSURE_ROSTER) end
   end
 end
 
