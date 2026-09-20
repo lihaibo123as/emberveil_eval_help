@@ -258,6 +258,7 @@
   （退队不需权限，与右键的人无关，动作 `LeaveParty()`）。判队长 = `IsPartyLeader()` 或 `IsRaidLeader()`；★助理踢人没有
   `IsRaidAssistant` 接口可判 → 如实接受边界（助理看不到这条，动作里仍有「不是队长」兜底）。成员判定 = `EVAL_TB_NAME_INMYGROUP`
   （UnitInParty/UnitInRaid 反查，party 只扫 1..4）。组 130⑥e/⑥e2/⑥e3 + 组 173 + ⑤b；变异 M564~M567 捕获。
+- ★★★技能格按键分派（1.74.2，用户定）：战斗信息UI 技能小图标 **左键 = 快速切换启用/停用**（写 `r.enabled` **配置真值** + 如实播报 + 双刷新 `EVAL_WAR_TAB_REFRESH`/`EVAL_HELP_UI_TICK`）· **右键 = 技能配置弹窗**（开被点那格、不动状态）；格子必须注册 `RightButtonUp`（光注册左键 = 右键永远到不了分派代码）；读值口 `EVAL_TEST_UI_CLICK_CELL` / `EVAL_TEST_SE_SHOWN`；`UI CELL MOUSE CHECK`；组 174。
 - ★布局总纪律：需求验性质不验数字；相对量验相对量；同一行中线对齐；中文宽度按字符数估；布局常量单一源（`IO_BW/IO_GAP/IO_PAD`、`CLOSE_LEFT/CLOSE_MIDY`）。
 
 
@@ -268,7 +269,7 @@
 - 1370 API 无 aura 专用函数；GetPlayerBuff(i,f)=增益条 0 基下标；无文件读取 API（无 io/os）→载入文件唯一形式=列进 .toc。
 - GetQuestReward 会再触发 QUEST_COMPLETE→须三层防护（同名去重/领取窗口闸门/全局频率上限）；UnitDebuff 第 3 返回=dispel token；UnitMana=主能量且有显示缩放（怒气÷10、幸福÷1000）→判蓝量前先 UnitPowerType(unit)==0。
 - 施法 API 全 Protected（CastSpellByName 仅 onSelf/CastSpell/SpellTargetUnit/SpellStopTargeting/SpellStopCasting）；TargetUnit 非 Protected=唯一路径（切目标→UseAction(slot)→还原）；Targetting 另有 TargetLastTarget/ClearTarget/TargetByName/TargetNearestPartyMember。
-- CHAT_MSG_PARTY_LEADER/CHAT_MSG_RAID_LEADER 独立事件→只注册 CHAT_MSG_PARTY/RAID 收不到（静默）；来源判据=触发事件名，发送侧只留 公会/队伍/说。
+- ★★★`CHAT_MSG_PARTY_LEADER`/`CHAT_MSG_RAID_LEADER` 是**独立事件**（队长/团长发言）：接收帧**必须也注册**这两个——只注册 `CHAT_MSG_PARTY`/`RAID` 时队长一分享**一片都进不来**（接收端静默、发送端照样报「已发送 N 片」；1.74.3 修的正是这个）；来源判据=触发事件名（队长版映射到「队伍/团队」）；发送侧只留 公会/队伍/说；自查 `/eh go 分享事件`；`SHARE RECV EVENTS CHECK`；组 175。
 - 纹理路径=/Game/Interface/Icons/<名>_TEX，写错显 ?；GetNumMacroIcons/GetMacroIconInfo=唯一合法路径入口（1018 条 → doc/图标路径清单.txt）；PET ICON CHECK 校验真存在。
 - IconSem.lua（用户要求：名称+多标签+按名/路径过滤）：基础名须剥 _TEX（组 117①b）；过滤=四命中+分组叠加；纹理字面量须在白名单（PET ICON CHECK）；两反斜杠须按两反斜杠匹配（组 112）。
 - api_*.html=1370 条索引；无：GetDifficultyColor（有垫片）/PlaySoundFile（只有 PlaySound）/hooksecurefunc/UIDropDownMenu_GetSelectedID；有：GetGuildRosterInfo/GetWhoInfo/GetFriendInfo/GetNumGuildMembers/GetNumWhoResults/GetNumFriends/GuildControlGetNumRanks/GetRealZoneText/RemoveChatWindowMessages。
@@ -320,16 +321,8 @@
 - 分享：`/eh go 封皮测`（编号 A/B 变异测，回报「哪些编号出现了」即可定案）· `分享探针`（发送留痕：脚本原文/是否弹出/队列）· `色码测`（别名 `colortest`/`颜色测`/`palette`：把在用色码逐条编号实发；★跑完等 ≥30 秒再跑第二次）· `名号色`（候选逐条预览）· `名号色 <n>`（当场选用并存档）
 - 其它：`/eh ds hud`（`EVAL_DS_HUD`，把状态画屏上）· `/eh ds trace` · `/eh ds rnd` · `/eh go probe` · `/eh go bind`（只读现状）· `/eh go diag` · `/eh logdump` · `/eh guide`
 
-**关键源码检查在守什么（只列一句话判据；全清单见 `test_engine.js`）**
-- `FRAME NAME CLASH CHECK`：21 个具名帧逐个与全部 `function NAME(` 比对
-- `WTT ISOLATION CHECK`：禁 `local WTT = GameTooltip` + 必须自建 + 必须读自家 FontString + 必须有守卫与诊断（★扫描前先摘注释）
-- `CHAT COLOR WIRING CHECK`：挂入口的「读回确认」+「幂等守卫」两条
-- `COLOR CODE LEN CHECK`：禁 `"|c" .. string.sub(` 切码写法 + 职业色表逐项必须 8 位
-- `SHARE MSG SHAPE CHECK`：逐条数字面量形态；`SHARE PALETTE CHECK`：色表逐项 8 位 + 命令必须引用四张色表 + 命令内不许出现字面色码 + 入口接线
-- `MENU ROUND CHROME CHECK`：整数 `edgeSize` / 白色边框色 / 有 `GetBackdrop` 读回 / 有平边退化 / **禁调本客户端不存在的 `GetBackdropColor`**
-- `TEMPLATE COUNT CHECK`：数 `examples/` 里以 `{ name = "` 开头的条目 == 4 处文档里的数字
-- `WHEEL DIRECTION CHECK`：禁止「位移与方向同号」（写反会被断言的正确性掩盖）
-- `EXAMPLES TOC CHECK` 四条 · `STOP ATTACK WIRING CHECK`（`skillNoSlotOk` 名单 7/7 + 接线 ≥3 处）· `PET ICON CHECK`（清单逐条 + `_TEX`）· `LANG KEY CHECK`（`L("字面量")` 三语言齐全）· `DECL ORDER CHECK`（9 个文件）· `PAINT WIRING CHECK` · `DEBUFF DISPLAY CHECK` · `CREATOR GATE CHECK` · `SH FUN CHECK` · `PROF ICON PROBE WIRING CHECK` · `UI TITLE BADGES` / `UI TIER BADGE` / `UI TITLEBAR` / `UI TITLE NAME CHECK`
+**关键源码检查在守什么**（一句话；全清单见 `test_engine.js`）：`FRAME NAME CLASH`（21 具名帧 × 全部 `function NAME(`）· `WTT ISOLATION`（禁 `local WTT = GameTooltip` + 自建 + 读自家 FontString + 守卫/诊断，★扫描前摘注释）· `CHAT COLOR WIRING`（读回确认 + 幂等守卫）· `COLOR CODE LEN`（禁 `"|c"..string.sub(` + 职业色表 8 位）· `SHARE MSG SHAPE`（逐条数字面量）· `SHARE PALETTE`（色表 8 位 + 引用四表 + 无字面色码 + 接线）· `MENU ROUND CHROME`（整数 edgeSize / 白框 / 读回 / 平边退化 / 禁 `GetBackdropColor`）· `TEMPLATE COUNT`（`{ name = "` 条数 == 文档数字）· `WHEEL DIRECTION`（禁位移与方向同号）· `SHARE RECV EVENTS`（接收帧七事件全注册 + 探针接线）· `UI CELL MOUSE`（技能格左右键分派）
+- 其余：`EXAMPLES TOC`（四条）· `STOP ATTACK WIRING`（名单 7/7 + 接线 ≥3）· `PET ICON` · `LANG KEY` · `DECL ORDER`（9 文件）· `PAINT WIRING` · `DEBUFF DISPLAY` · `CREATOR GATE` · `SH FUN` · `PROF ICON PROBE WIRING` · `UI TITLE BADGES`/`UI TIER BADGE`/`UI TITLEBAR`/`UI TITLE NAME`（全清单见 `test_engine.js`）
 
 ## 六、§六 ~ §九 已移到同目录的 `CLAUDE_REFERENCE.md`（参考卷）
 

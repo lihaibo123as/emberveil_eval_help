@@ -498,6 +498,76 @@ function checkIconAssets() {
   console.log('PAINT WIRING CHECK: 三窗口接线 + local 备份 + 无不可用 API + 诊断入口（retry ' + sites + ' 处）');
 })();
 
+// ===== UI CELL MOUSE CHECK（1.74.2）：战斗信息UI 技能格「左键切启用/停用 · 右键开配置弹窗」的接线 =====
+// 背景：按键分派写在构建闭包里 —— 忘注册右键 / 分派写反 / 左键没写 r.enabled，游戏里都不报错，
+//   只是「右键没反应」或「左键没切换」（本项目「行为断言照不到 UI 接线 → 源码检查补位」的纪律）。
+// 判据：
+//   ① 技能带格子注册了 RightButtonUp（光注册左键 = 右键永远到不了分派代码）；
+//   ② 右键分派 → EVAL_HELP_SE_OPEN(prof, ci)；
+//   ③ 左键路径真的写 r.enabled（快速切换启用/停用，写的是配置真值）；
+//   ④ 切换后双刷新：EVAL_WAR_TAB_REFRESH()（配置窗列表同一份真值）+ EVAL_HELP_UI_TICK()（战斗UI 即时重画）。
+(function () {
+  const eh = fs.readFileSync(path.join(__dirname, 'EvalHelp.lua'), 'utf8');
+  const bad = [];
+  // ① 注册右键（锚：技能带那行 RegisterForClicks）
+  if (!/pcall\(cb\.RegisterForClicks, cb, "LeftButtonUp", "RightButtonUp"\)/.test(eh)) {
+    bad.push('技能带格子没注册 RightButtonUp（右键到不了分派代码）');
+  }
+  // ② 右键 → 编辑窗
+  if (!/mbtn == "RightButton" then\s*EVAL_HELP_SE_OPEN\(prof, ci\)/.test(eh)) {
+    bad.push('右键分派没有开 EVAL_HELP_SE_OPEN(prof, ci)');
+  }
+  // ③ 左键写配置真值
+  if (!/local on = r\.enabled ~= false\s*r\.enabled = not on/.test(eh)) {
+    bad.push('左键路径没有写 r.enabled（快速切换启用/停用）');
+  }
+  // ④ 切换后的双刷新（必须出现在写值之后的那段里）
+  const seg = (eh.split('r.enabled = not on')[1] || '').slice(0, 400);
+  if (seg.indexOf('EVAL_WAR_TAB_REFRESH()') < 0) bad.push('切换后没有 EVAL_WAR_TAB_REFRESH()（配置窗列表不会同步真值）');
+  if (seg.indexOf('EVAL_HELP_UI_TICK()') < 0) bad.push('切换后没有 EVAL_HELP_UI_TICK()（战斗UI 要等下个心跳才重画）');
+  if (bad.length) { console.log('UI CELL MOUSE CHECK: FAIL - ' + bad.join(' | ')); process.exit(1); }
+  console.log('UI CELL MOUSE CHECK: 技能格已注册右键 · 右键→编辑窗 · 左键→写 r.enabled 真值 · 切换后双刷新');
+})();
+
+// ===== SHARE RECV EVENTS CHECK（1.74.3）：分享接收帧的**事件注册全套** =====
+// 背景（用户报「队伍频道接收完方案不弹窗」）：
+//   1.12 里**队长/团长**发的队伍/团队消息走独立事件 CHAT_MSG_PARTY_LEADER / CHAT_MSG_RAID_LEADER，
+//   而接收帧原来只注册 CHAT_MSG_PARTY / CHAT_MSG_RAID ⇒ 发送者是队长时分片**一片都进不来**：
+//   接收端静默、发送端照样报「已发送 N 片」。**接线漏接不报错** → 只能靠源码检查守。
+// 判据：
+//   ① 接收帧把七个频道事件都注册上（GUILD / PARTY / PARTY_**LEADER** / RAID / RAID_**LEADER** / SAY / WHISPER）；
+//   ② 单一来源表 SH_EV_ALL 含这七个（诊断命令与检查共用一份口径，加频道只改一处）；
+//   ③ `/eh go 分享事件` 命令真的接上并调用 EVAL_SHARE_RECV_PROBE（命令没接线 = 敲了静默无反应）；
+//   ④ OnEvent 记下「最近真收到的事件名」（探针第③项的证据来源，否则真机发哪个事件无从定案）。
+(function () {
+  const sh = fs.readFileSync(path.join(__dirname, 'Share.lua'), 'utf8');
+  const eh = fs.readFileSync(path.join(__dirname, 'EvalHelp.lua'), 'utf8');
+  const bad = [];
+  const want = ['CHAT_MSG_GUILD', 'CHAT_MSG_PARTY', 'CHAT_MSG_PARTY_LEADER',
+                'CHAT_MSG_RAID', 'CHAT_MSG_RAID_LEADER', 'CHAT_MSG_SAY', 'CHAT_MSG_WHISPER'];
+  const block = (sh.split('local shf = CreateFrame("Frame", "EVAL_SHARE_EVENTS", UIParent)')[1] || '');
+  const reg = (block.split('shf:SetScript("OnEvent"')[0] || '');
+  // ★★★必须是「在 RegisterEvent 那一行」出现，不能只查整段里有没有这个字符串 ——
+  //   本段里就有单一来源表 SH_EV_ALL，它含全部事件名：只查字符串的话，**删掉注册行照样绿**
+  //   （M571 实测：删掉队长版注册，弱判据 SURVIVED）。这就是本项目「含 X 会被同段示例顶住」那一族。
+  const regLines = reg.split(/\r?\n/).filter(l => l.indexOf('RegisterEvent') >= 0);
+  for (const e of want) {
+    if (!regLines.some(l => l.indexOf('"' + e + '"') >= 0)) bad.push('接收帧没注册 ' + e + '（RegisterEvent 行里找不到）');
+  }
+  // ② 单一来源表（供诊断命令列出）
+  const tbl = (sh.match(/local SH_EV_ALL = \{[\s\S]{0,400}?\}/) || [''])[0];
+  for (const e of want) {
+    if (tbl.indexOf('"' + e + '"') < 0) bad.push('SH_EV_ALL 里缺 ' + e);
+  }
+  // ③ 命令接线
+  if (!/go 分享事件/.test(eh)) bad.push('没有 /eh go 分享事件 命令');
+  if (!/EVAL_SHARE_RECV_PROBE\(\)/.test(eh)) bad.push('命令没调用 EVAL_SHARE_RECV_PROBE');
+  // ④ 最近收到的事件名有记账（探针要能如实报「真机发的是哪个事件」）
+  if (sh.indexOf('SH_EV_SEEN = ev') < 0) bad.push('OnEvent 没记 SH_EV_SEEN（探针第③项没有证据）');
+  if (bad.length) { console.log('SHARE RECV EVENTS CHECK: FAIL - ' + bad.join(' | ')); process.exit(1); }
+  console.log('SHARE RECV EVENTS CHECK: 七频道事件全注册（含队长版）· SH_EV_ALL 单一来源 · /eh go 分享事件 已接线 · 记最近事件名');
+})();
+
 // ===== CHAT COLOR WIRING CHECK（1.73.12）：聊天窗名字着色的「接线 + 频率防护」 =====
 // 背景：名字着色与职业着色一样是**静默失败**大户 —— 没接上/格式不认，游戏里就是「没颜色」，不报错不崩。
 //   纯函数写得再好，只要没接在聊天打印入口上，行为断言照样全绿（本项目「源码检查补位 UI 接线」的纪律）。

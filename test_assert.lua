@@ -13590,6 +13590,60 @@ do
 end
 
 
+-- 175) ★★★1.74.3 分享接收：**队长版事件**也必须注册（用户报「队伍频道接收完方案不弹窗」）
+--   【根因】1.12 里队长/团长发的队伍/团队消息走独立事件 CHAT_MSG_PARTY_LEADER / CHAT_MSG_RAID_LEADER，
+--   接收帧原来只注册 CHAT_MSG_PARTY / CHAT_MSG_RAID ⇒ 发送者是队长时**一片分片都进不来**，
+--   接收端静默、发送端照样报「已发送 N 片」。
+--   ★判据分两层：① 七个事件**真的注册上了**（问帧的 IsEventRegistered，这是接线本身）；
+--   ② 每个频道**喂一份真分片**都要弹窗并标对来源（走真实接收路径 EVAL_SHARE_ONMSG）。
+do
+  local evf175 = _G.EVAL_SHARE_EVENTS
+  eq(type(evf175) == "table", true, "①前置：分享事件帧在")
+  local evs175 = { "CHAT_MSG_GUILD", "CHAT_MSG_PARTY", "CHAT_MSG_PARTY_LEADER", "CHAT_MSG_RAID",
+                   "CHAT_MSG_RAID_LEADER", "CHAT_MSG_SAY", "CHAT_MSG_WHISPER" }
+  for i = 1, table.getn(evs175) do
+    local okr, r = pcall(evf175.IsEventRegistered, evf175, evs175[i])
+    eq(okr and r == true, true, "①★★★接收帧注册了 " .. evs175[i])
+  end
+  -- ② 每个频道喂一份真分片 → 都要弹窗（含**队长版**两个事件：用户报的就是队伍频道那条）
+  local function hex175(t)
+    local h = ""
+    for i = 1, string.len(t) do h = h .. string.format("%02x", string.byte(t, i)) end
+    return h
+  end
+  if not (EVAL_SHARE_RECV_ON and EVAL_SHARE_RECV_ON() == true) then EVAL_SHARE_RECV_TOGGLE() end
+  local cases175 = {
+    { "CHAT_MSG_SAY", "SH_CH_SAY" },
+    { "CHAT_MSG_GUILD", "SH_CH_GUILD" },
+    { "CHAT_MSG_PARTY", "SH_CH_PARTY" },
+    { "CHAT_MSG_PARTY_LEADER", "SH_CH_PARTY" }, -- ★★★本次修的那条：队长在队伍里分享
+    { "CHAT_MSG_RAID", "SH_CH_RAID" },
+    { "CHAT_MSG_RAID_LEADER", "SH_CH_RAID" },
+    { "CHAT_MSG_WHISPER", "SH_CH_WHISPER" },
+  }
+  for i = 1, table.getn(cases175) do
+    local ev175, key175 = cases175[i][1], cases175[i][2]
+    local want175 = EVAL_L(key175)
+    EVAL_SHARE_RESET()
+    local txt175 = "# 方案: 队测" .. tostring(i) .. "\n\n- 爪击 | 可攻击"
+    EVAL_SHARE_ONMSG("[EHPF#d" .. tostring(i) .. " 1/1]" .. hex175(txt175), "队长甲", ev175)
+    local pop175 = table.concat(EVAL_TEST_SHARE_POPUP_TEXTS() or {}, " | ")
+    eq(string.find(pop175, "队长甲", 1, true) ~= nil, true, "②★★★" .. ev175 .. " 的分片收到了（弹窗点名发送者）：" .. pop175)
+    eq(string.find(pop175, want175, 1, true) ~= nil, true, "②★★" .. ev175 .. " 来源标成「" .. tostring(want175) .. "」")
+    eq(string.find(pop175, "队测" .. tostring(i), 1, true) ~= nil, true, "②★★" .. ev175 .. " 方案内容也解出来了")
+  end
+  -- ③ 诊断命令：把「接收开关 / 每个事件注册情况 / 最近真收到的事件名」摊开（用户自查用）
+  if not (EVAL_SHARE_RECV_ON and EVAL_SHARE_RECV_ON() == true) then EVAL_SHARE_RECV_TOGGLE() end -- 收尾保持接收开着
+  TEST.chat = nil
+  if SlashCmdList and SlashCmdList["EVALHELP"] then SlashCmdList["EVALHELP"]("go 分享事件") end
+  local said175 = tostring(TEST.chat or "")
+  eq(string.find(said175, "CHAT_MSG_PARTY_LEADER", 1, true) ~= nil, true, "③★★诊断命令 /eh go 分享事件 列出队长版事件")
+  eq(string.find(said175, "接收方案开关", 1, true) ~= nil, true, "③★★诊断命令报接收开关（关着时任何频道都不弹窗）")
+  TEST.chat = nil
+  print("  分享接收事件：七频道逐个注册 + 逐个喂真分片都要弹窗并标对来源（★队长版 CHAT_MSG_PARTY_LEADER 是本次修的静默缺口）")
+end
+
+
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")

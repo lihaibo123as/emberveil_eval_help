@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.74.0"
+local VERSION = "1.74.3"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -706,7 +706,7 @@ function EVAL_HELP_UI_BUILD()
     y = y + rows * (btnH + PGAP) + gap -- 1.56.0 多行高度（行数按名字实宽算，行数变了帧高随之变）
 
     -- 技能图标带（1.46.0 两行合一：内容=激活方案技能，8 格/行超过自动换第二行，最多 16 格；
-    -- 悬停 tooltip 看触发条件；点击开编辑窗；亮金=条件当前满足；动作条技能带冷却倒数）
+    -- 悬停 tooltip 看触发条件；左键=切启用/停用、右键=开编辑窗；亮金=条件当前满足；动作条技能带冷却倒数）
     local profCells = {}
     local pcell = math.floor(24 * z)
     local pgap2 = math.floor(3 * z)
@@ -718,7 +718,7 @@ function EVAL_HELP_UI_BUILD()
       cb:SetWidth(pcell) cb:SetHeight(pcell)
       cb:SetPoint("TOPLEFT", root, "TOPLEFT", px, -(y + row0 * (pcell + pgap2)))
       pcall(cb.EnableMouse, cb, true)
-      pcall(cb.RegisterForClicks, cb, "LeftButtonUp")
+      pcall(cb.RegisterForClicks, cb, "LeftButtonUp", "RightButtonUp") -- ★1.74.2 右键 = 技能配置弹窗（光注册左键 = 右键永远到不了分派代码）
       local cbg = cb:CreateTexture(nil, "BACKGROUND")
       uiSolid(cbg, 0.45, 0.38, 0.15, 1)
       cbg:SetPoint("TOPLEFT", cb, "TOPLEFT", 0, 0)
@@ -751,10 +751,23 @@ function EVAL_HELP_UI_BUILD()
         GameTooltip:Show()
       end)
       cb:SetScript("OnLeave", function() GameTooltip:Hide() end)
-      cb:SetScript("OnClick", function()
+      cb:SetScript("OnClick", function(a, b)
+        local mbtn = (type(a) == "string" and a) or (type(b) == "string" and b) or (type(arg1) == "string" and arg1) or "LeftButton"
         local w2 = uiWarCfg()
-        local p = w2.profiles and w2.profiles[w2.activeProfile or 1]
-        if p and p.skills[ci] then EVAL_HELP_SE_OPEN(w2.activeProfile or 1, ci) end
+        local prof = w2.activeProfile or 1
+        local p = w2.profiles and w2.profiles[prof]
+        local r = p and p.skills and p.skills[ci]
+        if not r then return end
+        -- ★★★1.74.2 右键 = 技能配置弹窗（原左键动作搬家）；左键 = 快速切换启用/停用（用户定）
+        if mbtn == "RightButton" then
+          EVAL_HELP_SE_OPEN(prof, ci)
+          return
+        end
+        local on = r.enabled ~= false
+        r.enabled = not on
+        say("技能 " .. tostring(r.skill) .. (on and (" = " .. L("TIP_OFF")) or (" = " .. L("TIP_ON"))))
+        EVAL_WAR_TAB_REFRESH() -- ★数据变了 → 界面同步刷新（配置窗技能列表的勾选走这份真值；1.71.1 教训：刷新放写入点）
+        EVAL_HELP_UI_TICK()    -- 战斗信息UI 立刻重画（不等下一个 0.15s 心跳，点击反馈要即时）
       end)
       profCells[i] = { btn = cb, bg = cbg, icon = cicon, text = ctext }
     end
@@ -6227,6 +6240,13 @@ function EVAL_TEST_SE_CLEAR()
   return true
 end
 
+-- ★1.74.2 读值口：技能编辑窗**真的显示着**（问帧，不问我们自己的记账——「读自己拼的账 = 测自己」）
+function EVAL_TEST_SE_SHOWN()
+  if not seUI.root then return false end
+  local ok, s = pcall(seUI.root.IsShown, seUI.root)
+  return (ok and s and true) or false
+end
+
 -- ★1.70.45 测试直调：窗口宽度三方对照（来源函数 / 配置窗实际 / 编辑窗实际）。
 --   三者必须一致——「一个宽度两处各写一份」正是本项目反复踩的那类坑。
 function EVAL_TEST_WIN_W()
@@ -6825,6 +6845,17 @@ function EVAL_TEST_UI_CELLS()
     out[i] = { text = (ok and tostring(t or "")) or "", shown = true }
   end
   return out
+end
+
+-- ★★★1.74.2 断言入口：点战斗信息UI 技能带第 i 格（走它**真实的 OnClick 闭包**，可指定按键）。
+--   ★为什么必须走真实闭包：左/右键的分派就写在那一段里，直接调动作函数测不出「接线断了 / 分派写反」
+--   （本项目老判据：UI 接线漏接不报错，只能在真实 OnClick 上点才暴露）。
+function EVAL_TEST_UI_CLICK_CELL(i, button)
+  if not (ui and ui.profCells and ui.profCells[i] and ui.profCells[i].btn) then return false end
+  local ok, fn = pcall(ui.profCells[i].btn.GetScript, ui.profCells[i].btn, "OnClick")
+  if not (ok and type(fn) == "function") then return false end
+  pcall(fn, button or "LeftButton")
+  return true
 end
 
 -- ★★★1.71.12 断言入口：两个子开关（战斗 / 方案）的**真实生效结果**——
@@ -7553,6 +7584,13 @@ if type(SlashCmdList) == "table" then
         EVAL_SHARE_SEND_PROBE()
       else
         say("分享探针：Share 模块未载入（EVAL_SHARE_SEND_PROBE 不存在）")
+      end
+    -- ★★★1.74.3 接收诊断（用户报「队伍频道接收完方案不弹窗」）：接收开关 + 七个事件注册情况 + 最近真收到的事件名
+    elseif msg == "go 分享事件" or msg == "go sharevents" or msg == "go 接收事件" then
+      if type(EVAL_SHARE_RECV_PROBE) == "function" then
+        EVAL_SHARE_RECV_PROBE()
+      else
+        say("分享事件：Share 模块未载入（EVAL_SHARE_RECV_PROBE 不存在）")
       end
     -- ★★★1.73.44 色码测（用户要求「将现在所使用的所有颜色色码都测试下」）：
     --   把分享真正会发到聊天的每一个色码各发一条编号消息（列表**从色表实时生成**，不手抄）——

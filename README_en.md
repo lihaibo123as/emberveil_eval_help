@@ -21,7 +21,7 @@
 
 > 📌 Continuously improving — testing and feedback welcome!　🐞 [Bug reports / suggestions](https://gitee.com/xeval/emberveil_eval_help.git) (Issues)　🤖 Developed with DeepSeek Harness AI assistance (see "Contributing" at the bottom)
 
-## 🏁 Milestones (1.52.0 → 1.74.1)
+## 🏁 Milestones (1.52.0 → 1.74.3)
 
 - **🎉 Sharing system rework: cover line · tiers · titles · easter egg · reactions** (1.73.35 → 1.74.0): 85 commits released at once — share cover line (`[Tier manual · name]` as a clickable link, click opens a confirm popup instead of auto-importing), score-based tiers (25+ = Divine, five colours incl. deep red), **title gacha** (5 tiers × 15 cards, only-up, custom title + colour), the "Genesis" easter egg (3-condition gate) + **role-play reactions** (title tier × manual tier, lottery-picked, guild/say/party, and the scheme name is a clickable link to the receive page).
 - **🧪 Real-client forensics for links/colour codes** (1.73.35 → 1.74.0): whether custom links survive the server, the true 250-byte message cap, hover mechanics, on-disk ledgers — nailed down the "colour-code sending rules" (one colour segment first + **must carry a link**, 1 msg/sec, only `[EHPF#]` is recognised).
@@ -39,7 +39,9 @@
 
 | Version | Theme | One-line highlight |
 | :-- | :-- | :-- |
-| **1.74.1** | 🖱 Party-menu condition fixes + leave party | "Invite to party" now shows when not in a party **or** you're the leader (fix: leader couldn't invite) · "Kick from party" requires leader + the right-clicked one is a teammate · new "Leave party" (shown in a party) · preview screenshots synced (2 outdated removed + pet-helper section) |
+| **1.74.3** | 📥 Fix "party-channel share never pops up" (user report) | In 1.12, party messages from the **leader** fire separate events `CHAT_MSG_PARTY_LEADER`/`CHAT_MSG_RAID_LEADER`; the receiver registered only the plain ones → a leader's share never arrived. Both leader variants now registered |
+| **1.74.2** | 🖱 Combat-UI skill cell: **left = toggle enable/disable · right = open editor** | Was: any click opened the editor → left now toggles in place (writes `r.enabled` truth + double refresh), right opens the config popup |
+| **1.74.1** | 🖱 Party-menu condition fixes + leave party | "Invite" shows when not in a party **or** you're the leader · "Kick" requires leader + teammate target · new "Leave party" (in a party) · preview screenshots synced |
 | **1.74.0** | 🎉 Sharing rework: cover · tiers · titles · easter egg · reactions | Share cover line (clickable tier link, confirm popup) · score tiers (25+ Divine deep red) · title gacha (5×15, custom title) · "Genesis" easter egg (3-condition gate) · role-play reactions (lottery across guild/say/party, name is a clickable link) · title-bar badges (tier/title/profile) |
 | **1.73.34** | 🧰 Toolbox dialog spec + 💬 chat-name right-click menu | Frame-level ladder / drag handle / scrollbar brought up to spec (incl. 6 scrollbar fixes); right-click a chat name: whisper / invite / target / guild invite / copy name (**prefill only, never auto-send**); power names computed live (casters = mana); `luacheck` now parses **every file** |
 | **1.73.0** | 🐾 Pet Helper | 6th tab: search pet abilities (icons + ranks) -> detail with tame sources -> magnifier jumps to Data Search |
@@ -47,8 +49,6 @@
 | **1.72.1** | 🧭 Friendly first-run | Load confirmation + a four-step starter guide on first login (combat UI / first profile / key binding / skill log); replay it from the Global tab or `/eh guide` |
 | **1.72.0** | 🎉 **Profile hotkeys fixed + a batch of UI polish** (spans 1.71.3–1.71.24) | 22 versions shipped at once: **profile hotkeys went from "never fire" to actually working** (four dead ends ruled out: CLICK hijacked the mouse → raw command names are not dispatched → this client does not read addon Bindings.xml → **hooking ActionButtonDown/Up**; zero cost, no macro slots, no stolen keys, live while the game runs); **right-click features merged** into one Profile Manager window (rename + hotkey, one Save commits both); case-template window redesigned three times; Icon Library tab + right-click to set the minimap icon; combat HUD title shows the player name; Stop Attack / Follow / member filtering / share overhaul |
 | **1.71.24** | 🗂 右键功能合并成一个「方案管理」弹窗 | 用户：「将这两个功能合并成一个弹窗管理.都是右键触发.」—— 把此前**两个独立的右键弹窗**（配置窗方案按钮右键=重命名 / 战斗信息UI 方案按钮右键=快捷键绑定）合并成**一个方案管理窗**：窗内两段 ① 方案名称 ② 快捷键，**[保存] 一次提交两段**（改名 + 绑键，互不牵连）；**两处右键都开同一个窗**（左键语义不变，仍是激活方案）；★关键决定 = **不为旧入口留别名**（留别名会让「调用点改回旧名字」的回归悄悄通过——实测变异 M1/M2 正是这样 SURVIVED 的）；组 102 + 变异 **8/8** 全捕获 |
-| **1.71.23** | 🧹 清理四次试错留下的死探针代码 | 快捷派发定案后回头清理：删掉已判死的 go bind2/go bind3/go actbar 三个写入型探针（它们验的是 CLICK / 裸命令名 / Bindings.xml 三条已被证伪的路线，**留着只会误导后人**），go bind 从「写入试验」改为「现状检查」（只读：派发前提 / 接管状态 / 逐方案绑定与占用格）；文件净减 **205 行**；/eh go diag 保留为唯一诊断入口 |
-| **1.71.22** | 🎯 方案快捷键真正生效：接管 ActionButtonUp 派发 | 四次试错后的最终定案 —— ①CLICK 劫持鼠标、②裸命令名不派发、③**Bindings.xml 本客户端根本不读**（把 ArchiTotem 启用后完整重启，它的 CAST_EARTH_TOTEM 依然不在命令表里；unrealUI 源码注释在 2026-08-19 也记录过同一结论「60 commands were absent from a 225-entry binding table」）→ ④**可行路线 = 命令名用客户端自带的 ACTIONBUTTON<n> + 插件接管全局 ActionButtonDown/Up**（/eh go diag 实测四者 	ype=function、SetOverrideBindingClick=nil）。★零成本：不占宏名额、不占动作格、不抢已有键位、**游戏运行中立即生效**；补回 unrealUI 警告的组合键守卫（按住 Alt/Ctrl/Shift 且该组合另有归属时不吞）；格号分配两轮挑（优先「格空 + 命令没人绑键」的完全无主格）；清理解绑时**把格交还客户端**。变异 6/6 全捕获 |
 
 > 📜 Detailed per-version notes live in **[CHANGELOG.md](CHANGELOG.md)**; earlier history is in the git commit log.
 

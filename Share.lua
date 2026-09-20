@@ -2252,10 +2252,50 @@ shf:RegisterEvent("CHAT_MSG_PARTY")
 shf:RegisterEvent("CHAT_MSG_RAID")
 shf:RegisterEvent("CHAT_MSG_SAY")
 shf:RegisterEvent("CHAT_MSG_WHISPER")
+-- ★★★1.74.3 补注册「队长版」事件（用户报：「队伍频道接收完方案不弹窗」）
+--   【根因】1.12 里**队长 / 团长**发的队伍 / 团队消息走**独立事件** CHAT_MSG_PARTY_LEADER / CHAT_MSG_RAID_LEADER，
+--     而接收帧原来只注册了 CHAT_MSG_PARTY / CHAT_MSG_RAID ⇒ 发送者是队长时**一片分片都进不来**：
+--     接收端静默、一个字都不提示，发送端照样报「已发送 N 片」（本族静默失败的经典形态）。
+--   ★★频道名函数（shChanLabel）**早就为这两个事件写了分支**（组 140 还在钉它），只是**注册漏了** ——
+--     这正是本项目「接线漏接不报错」那一族 ⇒ 补注册 + 源码检查 `SHARE RECV EVENTS CHECK` 守全套七事件。
+--   ★用 pcall：万一某客户端不发这个事件，注册失败也只是少收一类消息，绝不能因为一个事件名报错影响整插件载入。
+pcall(shf.RegisterEvent, shf, "CHAT_MSG_PARTY_LEADER")
+pcall(shf.RegisterEvent, shf, "CHAT_MSG_RAID_LEADER")
+
+-- ★★★1.74.3 取证：最近一次**真的收到**的聊天事件名（`/eh go 分享事件` 打印它）。
+--   为什么必须现场记：真机到底发 CHAT_MSG_PARTY 还是 CHAT_MSG_PARTY_LEADER，**不许猜**——
+--   这条命令 10 秒就能定案（队长在队伍里发一句分享 → 看这一行是哪个事件名）。
+local SH_EV_SEEN = nil
+-- 接收侧事件全表（诊断命令与源码检查共用同一份口径：加频道只改这一处）
+local SH_EV_ALL = { "CHAT_MSG_GUILD", "CHAT_MSG_PARTY", "CHAT_MSG_PARTY_LEADER",
+                    "CHAT_MSG_RAID", "CHAT_MSG_RAID_LEADER", "CHAT_MSG_SAY", "CHAT_MSG_WHISPER" }
 shf:SetScript("OnEvent", function()
   local ev, msg, sender = EVAL_SHARE_DISPATCH(event, arg1, arg2, arg3, arg4)
+  if type(ev) == "string" then SH_EV_SEEN = ev end
   shOnMsg(msg, sender, ev)
 end)
+
+-- ★★★1.74.3 取证命令 `/eh go 分享事件`：接收侧一次摊开（本项目纪律：诊断必须**逐个入口分开列**，不许只看一层）
+--   ① 「接收方案」开关（关着时**任何频道**都不会弹窗 —— 用户最容易踩的那条）；
+--   ② 七个事件逐个 `IsEventRegistered`（队长版漏注册 = 队伍频道静默收不到，就是本次修的那个缺口）；
+--   ③ **最近真收到的事件名**（真机发的是 PARTY 还是 PARTY_LEADER，一测定案）；
+--   ④ 待导入 + 接收中缓冲笔数（判断「有没有分片在路上」）。
+function EVAL_SHARE_RECV_PROBE()
+  local recv = "（读不到配置）"
+  local okC, on = pcall(function() return shCfg().recv and true or false end)
+  if okC then recv = on and "开" or "|cffff0000关|r（关着时任何频道都不弹窗：工具箱 → 分享 → 接收方案）" end
+  shSay("===== 分享接收诊断 =====")
+  shSay("① 接收方案开关 = " .. recv)
+  for i = 1, table.getn(SH_EV_ALL) do
+    local e = SH_EV_ALL[i]
+    local okr, r = pcall(shf.IsEventRegistered, shf, e)
+    shSay("② " .. e .. " = " .. (((okr and r == true)) and "已注册" or "|cffff0000未注册|r"))
+  end
+  shSay("③ 最近收到的聊天事件 = " .. tostring(SH_EV_SEEN or "（还没收到过）"))
+  local nb = 0
+  for _ in pairs(SH.buf or {}) do nb = nb + 1 end
+  shSay("④ 待导入 = " .. tostring((SH.pending and SH.pending.sender) or "无") .. " · 接收中缓冲 " .. tostring(nb) .. " 笔")
+end
 
 -- ===== 接收弹窗（自绘；点 [导入] 走 EVAL_IMPORT_TEXT 桥） =====
 local shp = {}
