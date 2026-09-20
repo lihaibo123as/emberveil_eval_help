@@ -10176,38 +10176,37 @@ do
   eq(idxKick130 == nil, true, "⑥d★★★没队伍 → 菜单里**没有**「踢出队伍」")
   eq(idxQuery130 ~= nil and idxParty130 == idxQuery130 - 1, true,
      "⑥d★★★「邀请队伍」就在「查询」上面（" .. tostring(idxParty130) .. " → " .. tostring(idxQuery130) .. "）")
-  -- ⑥e 在队伍里：这一格换成「踢出队伍」，且「邀请队伍」必须消失（用户要求）
+  -- ★★★1.74.2 用户三条新条件（审计）：①「邀请队伍」只在 **不在队伍 或 我是队长** 时显示；
+  --   ②「踢出队伍」只在 **我是队长 且 被右键的是队友** 时显示；③新增「离开队伍」只在 **在队伍内** 时显示。
   local keepN130b, keepL130b, keepTeam130b = TEST.partyN, TEST.partyLeader, TEST.team
+  local function menuIdxOf130(who, wantLabel)
+    EVAL_TEST_TB_MENU_DROP()
+    EVAL_TB_MENU_SHOW(who)
+    local g = EVAL_TB_MENU_GEOM()
+    for i = 1, table.getn((g or {}).items or {}) do
+      if tostring(g.items[i].label or "") == EVAL_L(wantLabel) then return i end
+    end
+    return nil
+  end
+  -- ⑥e 在队伍里 + 我是队长 + 右键**非队友**（Ionol）
   TEST.partyN, TEST.partyLeader = 2, true
   TEST.team = { { unit = "party1", name = "队友甲" } }
-  -- ★★★1.74.1 用户实测 bug 的**回归判据**：「目标不在队伍，却显示踢出队伍」
-  --   可见性判据必须是**被右键的那个人**是不是队友；旧写法（我自己在队伍里）在这里就会误给条目。
-  EVAL_TEST_TB_MENU_DROP()
-  EVAL_TB_MENU_SHOW("Ionol")
-  local mg130b0 = EVAL_TB_MENU_GEOM()
-  local partyB0, kickB0 = false, false
-  for i = 1, table.getn((mg130b0 or {}).items or {}) do
-    local lb = tostring(mg130b0.items[i].label or "")
-    if lb == EVAL_L("TB_NAMEMENU_PARTY") then partyB0 = true end
-    if lb == EVAL_L("TB_NAMEMENU_KICKP") then kickB0 = true end
-  end
-  eq(partyB0, false, "⑥e★★★在队伍里 → 「邀请队伍」**藏掉了**（用户要求）")
-  eq(kickB0, false, "⑥e★★★右键的人**不是**队友 → **不出现**「踢出队伍」（用户实测 bug 的回归判据）")
-  -- ⑥e2 右键**真队友** → 出现「踢出队伍」，且就在「查询」上面
-  EVAL_TEST_TB_MENU_DROP()
-  EVAL_TB_MENU_SHOW("队友甲")
-  local mg130b = EVAL_TB_MENU_GEOM()
-  local partyB130, kickB130, queryB130 = nil, nil, nil
-  for i = 1, table.getn((mg130b or {}).items or {}) do
-    local lb = tostring(mg130b.items[i].label or "")
-    if lb == EVAL_L("TB_NAMEMENU_PARTY") then partyB130 = i end
-    if lb == EVAL_L("TB_NAMEMENU_KICKP") and not kickB130 then kickB130 = i end
-    if lb == EVAL_L("TB_NAMEMENU_QUERY") and not queryB130 then queryB130 = i end
-  end
-  eq(partyB130 == nil, true, "⑥e2★★★在队伍里 → 「邀请队伍」依然藏掉")
-  eq(kickB130 ~= nil, true, "⑥e2★★★右键**真队友** → 有「踢出队伍」")
-  eq(kickB130 == queryB130 - 1, true,
-     "⑥e2★★★「踢出队伍」就在「查询」上面（" .. tostring(kickB130) .. " → " .. tostring(queryB130) .. "）")
+  eq(menuIdxOf130("Ionol", "TB_NAMEMENU_PARTY") ~= nil, true, "⑥e★★★1.74.2 我是队长 → 「邀请队伍」**显示**（队长可再邀；旧判据把它藏了）")
+  eq(menuIdxOf130("Ionol", "TB_NAMEMENU_KICKP") == nil, true, "⑥e★★★右键的人**不是**队友 → **不出现**「踢出队伍」（1.74.1 回归判据）")
+  eq(menuIdxOf130("Ionol", "TB_NAMEMENU_LEAVEP") ~= nil, true, "⑥e★★★在队伍里 → 「离开队伍」**显示**（新条目）")
+  -- ⑥e2 在队伍里 + 我是队长 + 右键**真队友**（队友甲）
+  local kickB130 = menuIdxOf130("队友甲", "TB_NAMEMENU_KICKP")
+  local leaveB130 = menuIdxOf130("队友甲", "TB_NAMEMENU_LEAVEP")
+  local queryB130 = menuIdxOf130("队友甲", "TB_NAMEMENU_QUERY")
+  eq(menuIdxOf130("队友甲", "TB_NAMEMENU_PARTY") ~= nil, true, "⑥e2★★★我是队长 → 「邀请队伍」**显示**")
+  eq(kickB130 ~= nil, true, "⑥e2★★★我是队长 + 右键真队友 → 「踢出队伍」**显示**")
+  eq(kickB130 ~= nil and queryB130 ~= nil and kickB130 < queryB130, true, "⑥e2★★★「踢出队伍」在「查询」上方")
+  eq(leaveB130 ~= nil and queryB130 ~= nil and leaveB130 == queryB130 - 1, true, "⑥e2★★★「离开队伍」紧跟「查询」上方")
+  -- ⑥e3 在队伍里 + 我**不是**队长 + 右键真队友
+  TEST.partyLeader = false
+  eq(menuIdxOf130("队友甲", "TB_NAMEMENU_PARTY") == nil, true, "⑥e3★★★1.74.2 我不是队长 → 「邀请队伍」**藏掉**（非队长不可邀）")
+  eq(menuIdxOf130("队友甲", "TB_NAMEMENU_KICKP") == nil, true, "⑥e3★★★1.74.2 我不是队长 → 「踢出队伍」**藏掉**（非队长不出现这条）")
+  eq(menuIdxOf130("队友甲", "TB_NAMEMENU_LEAVEP") ~= nil, true, "⑥e3★★★在队伍里（非队长）→ 「离开队伍」**显示**（退队不需权限）")
   TEST.partyN, TEST.partyLeader, TEST.team = keepN130b, keepL130b, keepTeam130b
   EVAL_TEST_TB_MENU_DROP()
   -- ★★★1.73.40 用户三条：①「圆角」②截图「右键框未包含关闭按键」③「操作按键 鼠标获取焦点 增加变色美化」
@@ -10593,6 +10592,7 @@ do
   eq(lb1[EVAL_L("TB_NAMEMENU_KICKG")] == true, false, "①★★★没权限 → **不出现**「踢出公会」")
   eq(lb1[EVAL_L("TB_NAMEMENU_KICKP")] == true, false, "①★★★不在队伍 → **不出现**「踢出队伍」")
   TEST.canGuildRemove, TEST.partyN = true, 3
+  TEST.partyLeader = true -- ★1.74.2：「踢出队伍」现在还要求我是队长（下面这条要验 INMYGROUP，先给队长）
   -- ★★★1.74.1：判据已改成「**被右键的人**是不是队友」——右键的是 Ionol，所以把他放进队伍才有这一条
   TEST.team = { { unit = "party1", name = "Ionol" } }
   local lb2 = menuLabels138()
@@ -10644,6 +10644,16 @@ do
   TEST.partyLeader = true
   eq(EVAL_TB_NAME_KICKP("Ionol"), true, "⑤★★★队长 → 踢出队伍")
   eq(tostring(TEST.uninvites[1] or ""), "Ionol", "⑤★★名字对")
+  -- ⑤b ★1.74.2「离开队伍」动作：在队伍里 → 真的调 LeaveParty 离开；不在队伍 → 如实不动
+  TEST.partyLeader = false -- 退队不需要队长
+  TEST.team = { { unit = "party1", name = "Ionol" } }
+  TEST.leavePartyCalls, TEST.leftParty = 0, false
+  eq(EVAL_TB_NAME_LEAVEP("Ionol"), true, "⑤b★★★在队伍里 → 真的调 LeaveParty 离开")
+  eq(TEST.leavePartyCalls, 1, "⑤b★★★LeaveParty 被调了一次")
+  eq(TEST.leftParty, true, "⑤b★★★真的离开了")
+  TEST.team = nil
+  eq(EVAL_TB_NAME_LEAVEP("Ionol"), false, "⑤b★★不在队伍 → 如实不动（返回 false，没碰接口）")
+  eq(TEST.leavePartyCalls, 1, "⑤b★★接口没被多调（还是 1 次）")
   TEST.guildUninvites = {}
   eq(EVAL_TB_NAME_KICKG("Ionol"), true, "⑤★★★「踢出公会」调 GuildUninviteByName")
   eq(tostring(TEST.guildUninvites[1] or ""), "Ionol", "⑤★★名字对")
@@ -13472,8 +13482,10 @@ end
 --         ⑥ 菜单可见性真的跟着「是不是队友」走。
 do
   local savedTeam173, savedRaid173, savedPN173 = TEST.team, TEST.raid, TEST.partyN
+  local savedPL173 = TEST.partyLeader -- ★1.74.2：菜单「踢出队伍」现在要求我是队长 → 夹具先设队长（本组验的是 INMYGROUP，不是队长门）
   local savedUE173, savedUN173 = UnitExists, UnitName
   TEST.partyN, TEST.raid = nil, nil
+  TEST.partyLeader = true
   TEST.team = { { unit = "party1", name = "队友甲" }, { unit = "party2", name = "MyFriend-Frostwolf" } }
   -- ① 名字 → unit 反查
   eq(EVAL_TB_NAME_UNITOF("队友甲"), "party1", "①★★精确名字 → party1")
@@ -13528,8 +13540,53 @@ do
   eq(hasItem173("路人", EVAL_L("TB_NAMEMENU_KICKP")), false, "⑥★★不在任何队伍 → 没有「踢出队伍」")
   EVAL_TEST_TB_MENU_DROP()
   UnitExists, UnitName = savedUE173, savedUN173
-  TEST.team, TEST.raid, TEST.partyN = savedTeam173, savedRaid173, savedPN173
+  TEST.team, TEST.raid, TEST.partyN, TEST.partyLeader = savedTeam173, savedRaid173, savedPN173, savedPL173
   print("  踢出队伍依据：名字→unit 反查（UnitExists+UnitName，大小写/服务器后缀）· party 只扫 1..4 · 团队 raid1..N · 自己不算 · 两条权威接口不可用时如实退化")
+end
+
+
+-- 174) ★★★1.74.2 战斗信息UI 技能格：左键 = 快速切换启用/停用 · 右键 = 技能配置弹窗（用户定）
+--   ★为什么全走真实 OnClick：左/右键的分派就写在那段闭包里 —— 接线断了 / 分派写反了，
+--   直接调动作函数照样全绿（本项目「UI 接线漏接不报错」的老家族，判据必须在真实闭包上点）。
+do
+  local savedP174 = EVAL_HELP_CONFIG.war.profiles
+  local savedA174 = EVAL_HELP_CONFIG.war.activeProfile
+  local savedUi174 = EVAL_HELP_CONFIG.ui
+  local wasShown174 = EVAL_TEST_UI_SHOWN()
+  EVAL_HELP_CONFIG.ui = EVAL_HELP_CONFIG.ui or {}
+  EVAL_HELP_CONFIG.ui.subScheme = true -- 方案区开着才建技能带（子开关关 → profCells 根本没建，见 1.71.12）
+  if wasShown174 then EVAL_HELP_UI_REBUILD_IF_SHOWN() else EVAL_HELP_UI_TOGGLE() end
+  EVAL_HELP_CONFIG.war.profiles = { { name = "T174", skills = {
+    { skill = "测试技能甲", enabled = true, groups = EVAL_PARSE_CONDS("") },
+    { skill = "测试技能乙", enabled = false, groups = EVAL_PARSE_CONDS("") } } } }
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  EVAL_HELP_UI_TICK()
+  -- ① 左键 = 停用（写进配置真值，不是只改显示）
+  eq(EVAL_TEST_UI_CLICK_CELL(1, "LeftButton"), true, "①前置：左键走了第 1 格的真实 OnClick")
+  eq(EVAL_HELP_CONFIG.war.profiles[1].skills[1].enabled, false, "①★★★左键 = 快速停用（写的是配置真值）")
+  -- ② 再左键 = 恢复启用（反复可切）
+  eq(EVAL_TEST_UI_CLICK_CELL(1, "LeftButton"), true, "②前置：再点一次左键")
+  eq(EVAL_HELP_CONFIG.war.profiles[1].skills[1].enabled, true, "②★★再左键 = 恢复启用")
+  -- ③ 原本停用的格，左键 = 恢复启用
+  eq(EVAL_TEST_UI_CLICK_CELL(2, "LeftButton"), true, "③前置：左键第 2 格（原本停用）")
+  eq(EVAL_HELP_CONFIG.war.profiles[1].skills[2].enabled, true, "③★★停用技能左键 = 恢复启用")
+  -- ④ 右键 = 技能配置弹窗真的开了，而且开的是被点的那一格
+  EVAL_TEST_SE_CLEAR()
+  eq(EVAL_TEST_SE_SHOWN(), false, "④前置：编辑窗先关着")
+  eq(EVAL_TEST_UI_CLICK_CELL(1, "RightButton"), true, "④前置：右键走了第 1 格的真实 OnClick")
+  eq(EVAL_TEST_SE_SHOWN(), true, "④★★★右键 = 技能配置弹窗真的开了")
+  eq(EVAL_TEST_SE_SKILL(), "测试技能甲", "④★★弹窗开的是被点那一格的技能（不是新增/别的技能）")
+  -- ⑤ 右键不顺手切换状态（开弹窗的副作用隔离）
+  eq(EVAL_HELP_CONFIG.war.profiles[1].skills[1].enabled, true, "⑤★★右键开弹窗 ≠ 顺手切换（真值一个字没动）")
+  EVAL_TEST_SE_CLEAR()
+  -- 收尾：还原数据与窗口状态
+  EVAL_HELP_CONFIG.war.profiles = savedP174
+  EVAL_HELP_CONFIG.war.activeProfile = savedA174
+  EVAL_HELP_CONFIG.ui = savedUi174
+  EVAL_WAR_TAB_REFRESH()
+  if wasShown174 then EVAL_HELP_UI_REBUILD_IF_SHOWN() end
+  if not wasShown174 and EVAL_TEST_UI_SHOWN() then EVAL_HELP_UI_TOGGLE() end
+  print("  战斗信息UI 技能格：左键 = 切换启用/停用（写配置真值）· 右键 = 技能配置弹窗（开的是被点那格，不改状态）")
 end
 
 

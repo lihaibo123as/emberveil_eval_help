@@ -1342,21 +1342,39 @@ local function tbMenuItems(name)
   -- ★★★1.73.42w 用户要求（三条）：
   --   ① 「邀请」改名 **邀请队伍**；② **只在未在队伍内**时显示（在队伍里藏掉）；
   --   ③ 「踢出队伍」挪到**查询上面**（同一格由队伍状态决定显示哪条：没队伍=邀请队伍，有队伍=取消邀请+踢出队伍）。
-  -- ★★「我在不在队伍里」——**只用来决定「邀请队伍」出不出现**（用户 1.73.42w ②：在队伍里就藏掉邀请）
+  -- ★★「我在不在队伍里」——决定「邀请队伍 / 离开队伍」出不出现（1.73.42w ②：在队伍里就藏掉邀请）
   local tbInParty = false
   if type(GetNumPartyMembers) == "function" then
     local ok, n = pcall(GetNumPartyMembers)
     tbInParty = ok and type(n) == "number" and n > 0
   end
-  if not tbInParty then add(L("TB_NAMEMENU_PARTY"), EVAL_TB_NAME_PARTY) end -- 没队伍才给「邀请队伍」
+  -- ★★★1.74.2「我是不是队长」（用户：「邀请队伍 / 提出队伍 只有队长才显示」）：
+  --   ★「邀请队伍」改判**不在队伍 或 我是队长**（官方「Invite」的可用域：单人可邀、队长可再邀、非队长不可邀）——
+  --     旧写法只在「不在队伍」时显示 ⇒ **队长在队伍里反而邀不了人**（本轮审计出的 bug）。
+  --   ★助理也踢得动人、但本客户端**没有** IsRaidAssistant 接口 ⇒ 队长判定 = `IsPartyLeader()` 或 `IsRaidLeader()`，
+  --     助理看不到这条（如实接受的边界；动作里仍有一道「不是队长」兜底）。
+  local tbIsLeader = false
+  if type(IsPartyLeader) == "function" then
+    local okL, lead = pcall(IsPartyLeader)
+    if okL and lead == true then tbIsLeader = true end
+  end
+  if not tbIsLeader and type(IsRaidLeader) == "function" then
+    local okR, rlead = pcall(IsRaidLeader)
+    if okR and rlead == true then tbIsLeader = true end
+  end
+  if (not tbInParty) or tbIsLeader then add(L("TB_NAMEMENU_PARTY"), EVAL_TB_NAME_PARTY) end -- 没队伍或我是队长才给「邀请队伍」
   -- ★★★1.74.1 修（用户实测：「目标不在队伍，却显示踢出队伍」）：
   --   可见性判据必须是「**被右键的这个人**是不是我的队伍/团队成员」，而不是「我自己在不在队伍里」。
   --   （旧写法用 tbInParty ⇒ 只要自己在队伍里，右键任何人都会冒出「踢出队伍」。）
   --   ★条目只按「是不是成员」给；**队长身份由动作如实报**（不是队长点了会说「你不是队长」）——
   --     因为团队里的**助理**同样能踢人，而本客户端**没有** IsRaidAssistant 这类接口可以判助理。
-  if EVAL_TB_NAME_INMYGROUP(name) then
+  -- ★★★1.74.2 用户：「提出队伍 只有队长才显示」⇒ 条目可见性**也要**求「我是队长」（原来是「是成员就显示、
+  --   点了动作才说『你不是队长』」——用户要的是**非队长根本不出现这条**）。
+  if EVAL_TB_NAME_INMYGROUP(name) and tbIsLeader then
     add(L("TB_NAMEMENU_KICKP"), EVAL_TB_NAME_KICKP)
   end
+  -- ★★★1.74.2 用户：「添加离开队伍，只有在队伍内才显示」⇒ 新增这条（我离开队伍；与右键的人无关）。
+  if tbInParty then add(L("TB_NAMEMENU_LEAVEP"), EVAL_TB_NAME_LEAVEP) end
   add(L("TB_NAMEMENU_QUERY"), EVAL_TB_NAME_QUERY)
   -- ★有权限才显示「踢出公会 / 邀请公会」
   if type(CanGuildRemove) == "function" then
@@ -2116,6 +2134,22 @@ function EVAL_TB_NAME_CANCELINVITE(name)
   TB_NAME_MENU.cancelFail = (TB_NAME_MENU.cancelFail or 0) + 1
   say(string.format(L("TB_NAMEMENU_CANCELFAIL"), "UninviteByName"))
   return false
+end
+-- ★★★1.74.2 用户：「添加离开队伍」—— 我离开当前队伍（与右键的人无关；`LeaveParty` 官方 Group 接口已核存在）。
+--   ★不是队长也能自己退（退队不需要权限）⇒ 只闸「我在队伍里」；`LeaveParty` 与 UninviteByName 同属组管理、可直接调（同 UninviteByName 的写法）。
+function EVAL_TB_NAME_LEAVEP(name)
+  if type(LeaveParty) ~= "function" then
+    say(string.format(L("TB_NAMEMENU_LEAVEPFAIL"), "LeaveParty"))
+    return false
+  end
+  if type(GetNumPartyMembers) == "function" then
+    local ok, n = pcall(GetNumPartyMembers)
+    if ok and (tonumber(n) or 0) <= 0 then say(L("TB_NAMEMENU_LEAVEPNOTIN")) return false end
+  end
+  if not tbMenuThrottle("leave", 0.5) then return false end -- 服务器写动作：0.5 秒一次
+  pcall(LeaveParty)
+  say(L("TB_NAMEMENU_LEAVEPOK"))
+  return true
 end
 function EVAL_TB_NAME_KICKP(name)
   if type(UninviteByName) ~= "function" then

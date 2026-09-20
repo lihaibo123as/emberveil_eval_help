@@ -524,6 +524,10 @@ TB_NAMEMENU_SHARE = "分享方案",
 TB_NAMEMENU_TRADE = "交易",
 TB_NAMEMENU_QUERY = "查询",
 TB_NAMEMENU_KICKP = "踢出队伍",
+  TB_NAMEMENU_LEAVEP = "离开队伍", -- ★1.74.2 用户：新增（只在队伍内显示）
+  TB_NAMEMENU_LEAVEPOK = "已离开队伍",
+  TB_NAMEMENU_LEAVEPFAIL = "离开队伍没做成（%s）",
+  TB_NAMEMENU_LEAVEPNOTIN = "你不在队伍里",
 TB_NAMEMENU_KICKG = "踢出公会",
 TB_NAMEMENU_SHAREOK = "已把「%s」方案密语分享给 %s",
 TB_NAMEMENU_SHAREFAIL = "分享没发出去（没有可分享的激活方案，或分享模块不可用）",
@@ -779,5 +783,5 @@ PM_HINT = "左键方案 = 激活；右键方案 = 开本窗口（改名 + 绑键
   TIP_OFF = "已停用",
   TIP_COND_H = "触发条件（组内全过 · 组间任一）:",
   TIP_NOCOND = "（无条件 = 永远不会自动放）",
-  TIP_CLICK = "点击图标 = 打开编辑窗",
+  TIP_CLICK = "左键 = 启用/停用 · 右键 = 打开编辑窗",
 }

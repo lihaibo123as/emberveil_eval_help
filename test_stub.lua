@@ -437,6 +437,9 @@ end
 GuildUninviteByName = function(n) TEST.guildUninviteCalls = (TEST.guildUninviteCalls or 0) + 1 table.insert(TEST.guildUninvites, tostring(n)) end
 CanGuildRemove = function() return TEST.canGuildRemove and true or false end
 IsPartyLeader = function() return TEST.partyLeader and true or false end
+-- ★1.74.2 补桩（队伍菜单审计）：IsRaidLeader（判团队队长）+ LeaveParty（我离开队伍）
+IsRaidLeader = function() return TEST.raidLeader and true or false end
+LeaveParty = function() TEST.leavePartyCalls = (TEST.leavePartyCalls or 0) + 1 TEST.leftParty = true TEST.team = nil TEST.partyN = 0 TEST.raid = nil end
 GetNumPartyMembers = function()
   if TEST.partyN then return TEST.partyN end
   return TEST.team and table.getn(TEST.team) or 0
