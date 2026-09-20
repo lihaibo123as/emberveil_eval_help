@@ -1842,6 +1842,44 @@ function checkIconAssets() {
 })();
 checkIconAssets();
 
+// ===== CHANKEY WIRING CHECK（1.74.0）：拦截关键字的**配置接线**（用户要的下拉多选 + 输入框） =====
+// 背景：关键字配置是典型的「UI 接线」型功能 —— 行上没按钮、下拉不是多选、输入框没接上回调，
+//   行为断言照样全绿，而用户在界面里**根本配不了**（本项目「漏接不报错、只是显示不对」的老坑）。
+// 判据：
+//   ① 那一行必须是复合行 kw，且值按钮的真实 OnClick 调 EVAL_TB_CHANKEYS_OPEN；
+//   ② 打开时 multi/selected/locked/search/onFreeText 五个参数必须齐（多选 + 输入框的最小充分条件）；
+//   ③ 输入框回调只许走唯一入口 EVAL_TB_CHANKEY_ADD（别处再写一份 = 两处逻辑漂移）；
+//   ④ 文本判据必须读**可配置**的关键字（EVAL_TB_CHAN_KEYS），不许退回硬编码表；
+//   ⑤ 事件名判据必须覆盖用户要的**两种**（自己进出 NOTICE + 玩家进出 JOIN/LEAVE）。
+(function () {
+  const raw = fs.readFileSync(path.join(__dirname, 'Toolbox.lua'), 'utf8');
+  // ★先摘行尾注释：本文件里到处写着这些名字的**说明**，不摘就是假 FAIL（与 CHAT COLOR WIRING 同一条纪律）
+  const tb = raw.split(/\r?\n/).map(function (l) { const i = l.indexOf('--'); return i >= 0 ? l.slice(0, i) : l; }).join('\n');
+  const bad = [];
+  // ① 复合行 + 值按钮接线
+  if (tb.indexOf('{ t = "kw", key = "chanJoin"') < 0) bad.push('行模型里没有复合行 { t = "kw", key = "chanJoin" }');
+  if (tb.indexOf('EVAL_TB_CHANKEYS_OPEN(r.chv.btn)') < 0) bad.push('值按钮的 OnClick 没接 EVAL_TB_CHANKEYS_OPEN');
+  if (tb.indexOf('r.chv.text:SetText((EVAL_TB_CHANKEY_SUMMARY()))') < 0) bad.push('值按钮文案没走 EVAL_TB_CHANKEY_SUMMARY（用户看不到「关键字(N)」）');
+  // ② 多选 + 输入框的五个参数
+  for (const tok of ['multi = true', 'selected = sel', 'locked = locked', 'search = true', 'onFreeText =']) {
+    if (tb.indexOf(tok) < 0) bad.push('EVAL_TB_CHANKEYS_OPEN 缺少「' + tok + '」（多选下拉/输入框的最小充分条件）');
+  }
+  // ③ 加词的唯一入口
+  const addSites = (tb.match(/EVAL_TB_CHANKEY_ADD\(/g) || []).length;
+  if (addSites !== 2) bad.push('EVAL_TB_CHANKEY_ADD 出现 ' + addSites + ' 次（要 2：定义 + onFreeText 回调；多一处就是第二份加词逻辑）');
+  // ④ 判据读可配置关键字
+  if (tb.indexOf('function EVAL_TB_CHAN_KEYS()') < 0) bad.push('没有 EVAL_TB_CHAN_KEYS（可配置关键字的唯一真源）');
+  if (tb.indexOf('local k = EVAL_TB_CHAN_KEYS()') < 0) bad.push('EVAL_TB_CHAN_BLOCK 没有读可配置关键字（退回硬编码表 = 配置无效）');
+  if (tb.indexOf('TB_CHAN_KEY_GROUPS') < 0) bad.push('没有关键字分组表 TB_CHAN_KEY_GROUPS');
+  // ⑤ 两种事件都在判据里
+  for (const ev of ['CHAT_MSG_CHANNEL_NOTICE', 'CHAT_MSG_CHANNEL_JOIN', 'CHAT_MSG_CHANNEL_LEAVE']) {
+    if (tb.indexOf(ev) < 0) bad.push('事件名判据缺少 ' + ev + '（用户要求两种都拦）');
+  }
+  if (bad.length) { console.log('CHANKEY WIRING CHECK: FAIL - ' + bad.join('; ')); process.exitCode = 1; return; }
+  console.log('CHANKEY WIRING CHECK: 复合行 kw + 多选下拉（multi/selected/locked）+ 输入框（search/onFreeText）+ 加词唯一入口 + 判据读可配置词 + 两种事件都拦');
+})();
+
+
 // ★1.73.5 把 doc/图标路径清单.txt（客户端采集的 1018 条**真实路径**）注入成测试素材：
 //   图标库的语义名/关键字过滤必须拿**生产形态**（/Game/Interface/Icons/X_TEX）来验 ——
 //   只喂编出来的短名，会把「_TEX 后缀没剥 / 路径前缀不同」这类**只有真机才犯、且一声不响**的错一起放过。

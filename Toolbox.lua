@@ -215,6 +215,10 @@ local function tbCfg()
   tbMigrateQuest(c.tb)
   -- ★1.71.3 频道进出信息屏蔽：**默认开**（用户要求）。nil 也视为开（见 EVAL_TB_CHAN_ON）。
   if c.tb.chanJoin == nil then c.tb.chanJoin = true end
+  -- ★1.74.0 拦截关键字：chanKeyOff = 被用户**停用**的预设词（默认全开，新预设自动生效）；
+  --   chanKeyCustom = 用户自己输入的关键字（有序数组，可带 `!` 前缀 = 单独生效）
+  if type(c.tb.chanKeyOff) ~= "table" then c.tb.chanKeyOff = {} end
+  if type(c.tb.chanKeyCustom) ~= "table" then c.tb.chanKeyCustom = {} end
   -- ★1.73.10 角色名职业着色：nil 也视为开（用户要求加的功能，装上就生效；取消勾选 = 不叠色）
   if c.tb.colorClass == nil then c.tb.colorClass = true end
   -- ★1.73.12 聊天窗名字着色：同上默认开（引擎侧与窗口着色共用同一份名字缓存）
@@ -250,33 +254,201 @@ end
 --        客户端聊天框靠它打印 → 包一层，命中「频道进出通知」就吞掉。
 --        · 只吞通知、**不动频道聊天本身**；· 开关**在调用时读**（改开关立即生效，不用 /reload）；
 --        · 挂不上（或客户端不走 Lua 打印）→ 什么都不做，`/eh go 频道` 里如实说明「已过滤 0 条」。
-local TB_CHAN_WORDS = { "频道", "頻道", "channel", "канал" } -- ★1.71.3 加繁中「頻道」（与 moves 里的繁中进出词配套）
--- ★判据 = 「频道词」**且**「进出词」同时出现 —— 只匹配「加入/离开」会把玩家聊天里
---   一句 “has left” 也吞掉（误伤真人的消息比不屏蔽更糟）；多要一个频道词，误伤面降到几乎为零。
-local TB_CHAN_MOVES = {
-  -- ★★1.71.3 补「进入」：用户实测截图里的真实文案是「[4. 世界防务] **进入**频道。」
-  --   而旧表只有「加入」→ **进入那一半根本没匹配上**（「离开」那半是命中的）。
-  --   ★教训：判据表要**照着客户端真实文案抄**，差一个字就是半个功能失效。
-  "加入", "进入", "离开", "退出",               -- zhCN
-  "加入", "進入", "離開", "退出",               -- 繁中
-  "joined", "left", "entered", "you have joined", "you have left", -- enUS
-  "joined", "left", "you have joined", "you have left", -- enUS
-  "присоединил", "покинул",                             -- ruRU（尽力而为，靠 /eh go 频道 的样本再校准）
+--   ★★★状态更新（用户实测「我们那套没法实际工作」→ 两次审计定案）：
+--     判据**改为事件名优先**（EVAL_TB_CHAN_EVENT：CHAT_MSG_CHANNEL_NOTICE = 你自己进出的回执，
+--     + CHAT_MSG_CHANNEL_JOIN/LEAVE =「[玩家名] 加入/离开频道」；用户定稿**两种都拦**），
+--     在第二入口 ChatFrame_OnEvent 里**先按事件名拦**；
+--     下面的文本判据（WORDS×MOVES）**降级为兜底**（通知若走自定义事件名，文本还能兜一层）；
+--     官方消息组（1.73.12 的 ① 号路）保留为客户端级另一道。
+-- ★★★1.74.0 起：关键字**用户可配置**（工具箱 → 队伍/社交 → 该行右侧「关键字(N)」按钮 → 多选下拉 + 输入框）。
+--   分组固定为两组（下拉里用**不可点的组标题行**分隔，与地图标注/条件菜单同一范式）：
+--     · 频道词：消息里必须出现其中之一（这是「不误吞玩家聊天」的那道保险）
+--     · 动作词：出现其中之一才算「进出通知」
+--     · 自定义词（用户输入框加进来的）：与动作词同类 —— **同时**要满足频道词；
+--       ★想让某个词**单独生效**（不必带频道词），在它前面加 `!`（例：`!刷屏`）——
+--         这是给用户的"强词"出口，默认不给，免得一句普通聊天被一个宽泛的词吞掉。
+local TB_CHAN_KEY_GROUPS = {
+  { gkey = "TB_CHANKEY_G_CHAN", words = { "频道", "頻道", "channel", "канал" } }, -- ★1.71.3 加繁中「頻道」
+  { gkey = "TB_CHANKEY_G_MOVE", words = {
+    -- ★★1.71.3 补「进入」：真实文案是「[4. 世界防务] **进入**频道。」，旧表只有「加入」→ 那一半根本没匹配上。
+    --   ★教训：判据表要**照着客户端真实文案抄**，差一个字就是半个功能失效（现已可由用户自行增删）。
+    "加入", "进入", "离开", "退出",               -- zhCN
+    "進入", "離開",                                -- 繁中（「加入/退出」繁简同形，不重复列）
+    "joined", "left", "entered", "you have joined", "you have left", -- enUS
+    "присоединил", "покинул",                     -- ruRU（尽力而为，靠 /eh go 频道 的样本再校准）
+  } },
 }
+
+-- 被停用的关键字（cfg.tb.chanKeyOff[词] = true）；**默认全启用**（新加的预设词自动是开的）
+local function tbChanKeyOff()
+  local tb = tbCfg()
+  local off = tb and tb.chanKeyOff
+  if type(off) ~= "table" then return {} end
+  return off
+end
+-- 生效的关键字（分组返回）：UI 摘要、判据、断言共用这一份
+function EVAL_TB_CHAN_KEYS()
+  local off = tbChanKeyOff()
+  local out = { chan = {}, move = {}, custom = {} }
+  for i = 1, table.getn(TB_CHAN_KEY_GROUPS) do
+    local g = TB_CHAN_KEY_GROUPS[i]
+    local dst = (i == 1) and out.chan or out.move
+    for j = 1, table.getn(g.words) do
+      local w = g.words[j]
+      if not off[w] then table.insert(dst, w) end
+    end
+  end
+  local tb = tbCfg()
+  local cu = tb and tb.chanKeyCustom
+  if type(cu) == "table" then
+    for i = 1, table.getn(cu) do
+      local raw = tostring(cu[i] or "")
+      if raw ~= "" and not off[raw] then
+        local alone = (string.sub(raw, 1, 1) == "!")
+        local w = alone and string.sub(raw, 2) or raw
+        if w ~= "" then table.insert(out.custom, { word = w, alone = alone, raw = raw }) end
+      end
+    end
+  end
+  return out
+end
 
 -- 纯函数：这条聊天文本是不是「频道进出通知」（UI、断言、诊断命令共用同一份判据）
 function EVAL_TB_CHAN_BLOCK(msg)
   if type(msg) ~= "string" or msg == "" then return false end
   local lo = string.lower(msg)
-  local hasChan = false
-  for _, w in ipairs(TB_CHAN_WORDS) do
-    if string.find(lo, w, 1, true) ~= nil then hasChan = true break end
+  local k = EVAL_TB_CHAN_KEYS()
+  local function hit(list)
+    for i = 1, table.getn(list) do
+      if string.find(lo, string.lower(list[i]), 1, true) ~= nil then return true end
+    end
+    return false
   end
-  if not hasChan then return false end
-  for _, w in ipairs(TB_CHAN_MOVES) do
-    if string.find(lo, w, 1, true) ~= nil then return true end
+  -- ① 自定义「强词」（`!` 前缀）：命中即拦（用户显式要求这类词单独生效）
+  for i = 1, table.getn(k.custom) do
+    local c = k.custom[i]
+    if c.alone and string.find(lo, string.lower(c.word), 1, true) ~= nil then return true end
+  end
+  -- ② 频道词（保险）：没有频道词 → 不拦（避免把玩家一句普通聊天吞掉）
+  if not hit(k.chan) then return false end
+  -- ③ 动作词 或 自定义词
+  if hit(k.move) then return true end
+  for i = 1, table.getn(k.custom) do
+    local c = k.custom[i]
+    if not c.alone and string.find(lo, string.lower(c.word), 1, true) ~= nil then return true end
   end
   return false
+end
+
+-- ===== 拦截关键字：下拉多选 + 输入框（1.74.0 用户要求）=====
+-- ★控件选型（都用项目已有的全局件，不新造）：
+--   · **多选下拉** = EVAL_DD_OPEN(..., { multi = true, selected = sel, locked = locked })
+--     —— 点一项切换、**面板不关**（地图标注/图标类别就是这么做的）。
+--   · **输入框** = 同一个下拉的 search=true：面板顶部就是输入框（输入即过滤），
+--     列表里出现「✎ 使用输入的文本」那一行 → 点击即把该词加进自定义关键字（onFreeText）。
+--   · 组标题（频道词/动作词/自定义）= locked 行（不画方框、点击无反应）。
+-- 生效词数（行右侧按钮的文字）：三组之和
+function EVAL_TB_CHANKEY_SUMMARY()
+  local k = EVAL_TB_CHAN_KEYS()
+  local n = table.getn(k.chan) + table.getn(k.move) + table.getn(k.custom)
+  return string.format(L("TB_CHANJOIN_KEYS_FMT"), n), n
+end
+-- 下拉内容：items / locked / selected / map（map[序号] 描述该项是什么动作）
+function EVAL_TB_CHANKEYS_MENU()
+  local off = tbChanKeyOff()
+  local items, locked, sel, map = {}, {}, {}, {}
+  for i = 1, table.getn(TB_CHAN_KEY_GROUPS) do
+    local g = TB_CHAN_KEY_GROUPS[i]
+    table.insert(items, L(g.gkey))
+    locked[table.getn(items)] = true
+    for j = 1, table.getn(g.words) do
+      local w = g.words[j]
+      table.insert(items, w)
+      local pi = table.getn(items)
+      map[pi] = { kind = "preset", word = w }
+      if not off[w] then sel[pi] = true end
+    end
+  end
+  local tb = tbCfg()
+  local cu = (tb and tb.chanKeyCustom) or {}
+  if type(cu) == "table" and table.getn(cu) > 0 then
+    table.insert(items, L("TB_CHANKEY_G_CUSTOM"))
+    locked[table.getn(items)] = true
+    for i = 1, table.getn(cu) do
+      local raw = tostring(cu[i] or "")
+      if raw ~= "" then
+        table.insert(items, raw)
+        local pi = table.getn(items)
+        map[pi] = { kind = "custom", word = raw }
+        if not off[raw] then sel[pi] = true end
+      end
+    end
+    table.insert(items, L("TB_CHANKEY_CLEAR"))
+    map[table.getn(items)] = { kind = "clear" }
+  end
+  return items, locked, sel, map
+end
+-- 加一个自定义关键字（输入框那条路；去重、去空白；返回 true = 已加入或已存在）
+function EVAL_TB_CHANKEY_ADD(txt)
+  local word = tostring(txt or "")
+  word = string.gsub(word, "^%s+", "")
+  word = string.gsub(word, "%s+$", "")
+  if word == "" then return false end
+  local tb = tbCfg()
+  if not tb then return false end
+  if type(tb.chanKeyCustom) ~= "table" then tb.chanKeyCustom = {} end
+  if type(tb.chanKeyOff) ~= "table" then tb.chanKeyOff = {} end
+  local low = string.lower(word)
+  for i = 1, table.getn(tb.chanKeyCustom) do
+    if string.lower(tostring(tb.chanKeyCustom[i])) == low then
+      tb.chanKeyOff[word] = nil -- 已存在 → 视为「重新启用」
+      if type(EVAL_TB_REFRESH) == "function" then EVAL_TB_REFRESH() end
+      return true
+    end
+  end
+  table.insert(tb.chanKeyCustom, word)
+  if type(EVAL_TB_REFRESH) == "function" then EVAL_TB_REFRESH() end
+  return true
+end
+-- 清空自定义关键字
+function EVAL_TB_CHANKEY_CLEAR()
+  local tb = tbCfg()
+  if not tb then return false end
+  tb.chanKeyCustom = {}
+  if type(EVAL_TB_REFRESH) == "function" then EVAL_TB_REFRESH() end
+  return true
+end
+-- 打开下拉（多选 + 输入框）
+function EVAL_TB_CHANKEYS_OPEN(anchorBtn)
+  if anchorBtn == nil or type(EVAL_DD_OPEN) ~= "function" then return false end
+  local items, locked, sel, map = EVAL_TB_CHANKEYS_MENU()
+  EVAL_DD_OPEN(anchorBtn, items, function(pi, on)
+    local m = map[pi]
+    if not m then return end
+    local tb = tbCfg()
+    if not tb then return end
+    if m.kind == "clear" then EVAL_TB_CHANKEY_CLEAR() return end
+    if type(tb.chanKeyOff) ~= "table" then tb.chanKeyOff = {} end
+    -- ★★别写 `(on == true) and nil or true` —— Lua 的 and/or 没有布尔语义：on 为 true 时
+    --   `true and nil` = nil，再 `nil or true` = **true**（正好反了）。分两步写（记忆体里记过这个坑）。
+    if on == true then tb.chanKeyOff[m.word] = nil else tb.chanKeyOff[m.word] = true end
+    if type(EVAL_TB_REFRESH) == "function" then EVAL_TB_REFRESH() end
+  end, { multi = true, selected = sel, locked = locked, search = true,
+        onFreeText = function(txt) EVAL_TB_CHANKEY_ADD(txt) end })
+  return true
+end
+
+-- ★★★事件名判据（用户实测后**升级为主判据**；范围 = 用户定的，见下）：
+--   【拦什么】用户截图实证：目标是「[8. Trade] 进入频道。/ 离开频道。」= **你自己**进出频道的回执
+--     = CHAT_MSG_CHANNEL_NOTICE（1.12 的 YOU_JOINED/YOU_LEFT 家族；arg1 多半是英文 token 不是中文文案
+--     —— 这正是旧文本判据「拦不住」的根因之一：token 里既没有「频道」也没有「进入」）。
+--   【也拦】CHAT_MSG_CHANNEL_JOIN/LEAVE =「[玩家名] 加入/离开频道」（参考插件 NoJoinLeaveSpam 拦的就是这一类）
+--     —— ★★用户定稿：「这两个情况都要拦截」。
+--   【不拦】CHAT_MSG_CHANNEL_NOTICE_USER（踢人/换房主）、CHAT_MSG_CHANNEL（频道聊天本身）、
+--     CHAT_MSG_CHANNEL_LIST（/chatlist 点名输出）—— 都不在范围内。
+function EVAL_TB_CHAN_EVENT(ev)
+  return ev == "CHAT_MSG_CHANNEL_NOTICE"
+      or ev == "CHAT_MSG_CHANNEL_JOIN" or ev == "CHAT_MSG_CHANNEL_LEAVE"
 end
 
 -- 开关：**nil 视为开**（用户要求默认打开；老配置里没这个键时同样是开）
@@ -417,12 +589,14 @@ function EVAL_TEST_TB_CHAN_STATE()
   return EVAL_TB_CHAN_ON(), TB.chanHooked and true or false, (TB.chanFiltered or 0), TB.chanSamples,
          (TB.chanWrapper ~= nil and DEFAULT_CHAT_FRAME ~= nil and DEFAULT_CHAT_FRAME.AddMessage == TB.chanWrapper) and true or false,
          (TB.chanSeenAll or 0), (TB.chanTries or 0),
-         (TB.chanFrames or 0), (TB.chatSeen or 0), (TB.chanMiss or 0) -- ★1.73.12 挂上的聊天窗数 / 经过入口的消息数 / 不可用窗口数
+         (TB.chanFrames or 0), (TB.chatSeen or 0), (TB.chanMiss or 0), -- ★1.73.12 挂上的聊天窗数 / 经过入口的消息数 / 不可用窗口数
+         (TB.chanEvtFiltered or 0), (TB.chanEvtLast) -- ★事件名判据的计数与最后一条（第 11/12 个返回值；探针与断言靠它）
 end
 
 function EVAL_TEST_TB_CHAN_RESET() -- 测试用：清计数并允许重新挂载（不还原已包装的入口、不清名字缓存）
   TB.chanHooked = false
   TB.chanFiltered = 0
+  TB.chanEvtFiltered, TB.chanEvtLast = 0, nil
   TB.chanSamples = {}
   TB.chanSeenAll = 0
   TB.chanTryAt = nil
@@ -660,6 +834,32 @@ function EVAL_TB_CHATEVENT_INSTALL()
     TB.ceByEv = TB.ceByEv or {}
     TB.ceByEv[ev] = (TB.ceByEv[ev] or 0) + 1
     if type(msg) ~= "string" or msg == "" then TB.ceNoMsg = (TB.ceNoMsg or 0) + 1 end
+    -- ★★★1.74.1 取证：频道类事件的 **arg8 / arg9 原文**。
+    --   为什么专门记这两个：参考插件 NoJoinLeaveSpam 的 `/njls mute <频道>` 判据输入**就是 arg9**（频道名），
+    --   它只在 CHAT_MSG_CHANNEL_JOIN / _LEAVE 两个事件上生效 ⇒ 「那条命令在**本客户端**到底能不能拦到
+    --   你自己进出的回执」完全取决于：这些回执是不是走 JOIN/LEAVE、且 arg9 里是不是频道名。
+    --   （我们三种事件名都拦，所以不受影响；这一条只为**如实回答**参考插件的机制是否成立。）
+    if type(ev) == "string" and string.find(ev, "CHANNEL", 1, true) ~= nil then
+      TB.chanEvArgs = TB.chanEvArgs or {}
+      table.insert(TB.chanEvArgs, ev .. " ｜ arg8=" .. tostring(arg8) .. " ｜ arg9=" .. tostring(arg9) ..
+        " ｜ arg1=" .. string.sub(tostring(msg or arg1 or ""), 1, 24))
+      while table.getn(TB.chanEvArgs) > 8 do table.remove(TB.chanEvArgs, 1) end
+    end
+    -- ★★★① 频道进出通知：**事件名判据优先**（用户两次审计定案：只吞自己进出的 NOTICE 回执）；
+    --   放在 isChat/文本 两道闸**之前**（arg1 是英文 token 也拦得住），并与文本路**分开计数**（谁拦到一眼看到）。
+    if EVAL_TB_CHAN_ON() and EVAL_TB_CHAN_EVENT(ev) then
+      TB.chanEvtFiltered = (TB.chanEvtFiltered or 0) + 1
+      TB.chanEvtLast = ev .. " ｜ " .. tostring(msg or "")
+      return -- 不调原函数 = 真的不显示（与参考插件同款吞法）
+    end
+    -- ★★★①b 文本兜底（**不要求事件名以 CHAT_MSG 开头**：本客户端通知事件名未必叫 CHAT_MSG_*，
+    --   旧写法把这一闸放在 isChat 之后 → 自定义事件名的通知**永远走不到判据**，白屏）；
+    --   判据本身要求「频道词 + 动作词（或自定义词）」，误伤面很小（见 EVAL_TB_CHAN_BLOCK）。
+    --   ★关键字**用户可配置**（多选下拉 + 输入框），改完立即生效（判据在调用时读配置）。
+    if EVAL_TB_CHAN_ON() and EVAL_TB_CHAN_BLOCK(msg) then
+      TB.ceFiltered = (TB.ceFiltered or 0) + 1
+      return
+    end
     local isChat = (ev == "" or string.find(ev, "CHAT_MSG") ~= nil)
     if isChat and type(msg) == "string" and msg ~= "" then
       -- ★★★1.73.16 取证实录（用户报「角色名还是没染色」）：**样本必须只留玩家聊天**。
@@ -682,12 +882,7 @@ function EVAL_TB_CHATEVENT_INSTALL()
       -- 兼容：老读值口 ceRaw 继续记（但只记前 4 条，避免刷屏把它撑满）
       TB.ceRaw = TB.ceRaw or {}
       if table.getn(TB.ceRaw) < 4 then table.insert(TB.ceRaw, ev .. " ｜ " .. msg) end
-      -- ① 频道进出通知：不调原函数 = 真的不显示
-      if EVAL_TB_CHAN_ON() and EVAL_TB_CHAN_BLOCK(msg) then
-        TB.ceFiltered = (TB.ceFiltered or 0) + 1
-        return
-      end
-      -- ①b ★ChatMOD 的做法：趁事件在手，对 this 帧试一次懒挂载（成败都记账）
+      -- ★ChatMOD 的做法：趁事件在手，对 this 帧试一次懒挂载（成败都记账）
       if this ~= nil then pcall(EVAL_TB_THIS_HOOK, this) end
       -- ★★★1.73.18 真机定案（用户样本）：**arg1 只有正文**（"1" / "你有队"），**arg2 才是发送者名**（"Ionol" / "猎狂"）。
       --   调用形态 = 经典「(event) + 全局 arg1..arg9」（取证里 e=PLAYER_ENTERING_WORLD ｜ a1=nil ｜ arg1=player）。
@@ -936,9 +1131,14 @@ function EVAL_TB_CHATEVENT_STATE()
            -- ★1.73.20 「认得出职业、但按当前结论**暂不回写**」的次数（名字槽不吃富文本）
            held = TB.ceNameHold or 0,
            -- ★1.73.22 方案 A：真的「吞行 + 自己拼」了几行
-           replaced = TB.ceReplaced or 0 }
+           replaced = TB.ceReplaced or 0,
+           -- ★事件名判据（频道进出）的战果：拦了几条 / 最后一条是什么事件
+           evtFiltered = TB.chanEvtFiltered or 0, evtLast = TB.chanEvtLast,
+           chanArgs = TB.chanEvArgs or {} }
 end
 function EVAL_TEST_TB_CHATEVENT_RESET()
+  TB.chanEvtFiltered, TB.chanEvtLast = 0, nil -- 事件名判据的计数（模块级状态必须可重置）
+  TB.chanEvArgs = {} -- 频道事件的 arg8/arg9 取证缓冲
   TB.ceSeen, TB.ceFiltered, TB.cePainted, TB.ceRaw = 0, 0, 0, {}
   TB.ceChat, TB.ceByEv, TB.ceShape, TB.ceNoMsg, TB.ceShapeN = {}, {}, {}, 0, 0
   TB.ceNamed, TB.ceNameMiss, TB.ceNameHold, TB.ceReplaced = 0, 0, 0, 0
@@ -1048,6 +1248,76 @@ end
 
 -- ★1.73.42u 菜单**条目集签名**（前置声明：EVAL_TEST_TB_MENU_DROP 也要清它）——
 --   条目集合变了就重建菜单（好友/队伍/权限是会变的状态，不能只建一次）
+-- ===== 名字 → 单位 / 队伍成员判定（1.74.1 修「踢出队伍」误显示）=====
+-- ★★★用户实测（截图）：「现在是目标不在队伍，但是却显示踢出队伍」。
+--   【根因】条目可见性写的是 `GetNumPartyMembers() > 0` —— 那是「**我**在不在队伍里」，
+--   与「**被右键的那个人**在不在我队伍里」是两件事 ⇒ 只要自己在队伍里，右键**任何人**都会冒出「踢出队伍」。
+--   【正解】照 Heart/C（C_GetUnitID.lua）的机制反查：名字 → unit id 只能**逐个比对**
+--   （先 `UnitExists` 判存在、再 `UnitName` 复核），最后拿**本客户端的权威接口**下结论。
+--   ★本客户端 api 表实测**有** `UnitInParty` / `UnitInRaid`（api_lua.html 类别 Unit）→ 定位到 unit 后再问它们；
+--     两条都读不到时才退回「名字确实出现在 raid/party 名单里」这一步的结论（判不准就**不给条目**的另一半：
+--     这里给的是「在名单里」这个**已核实**的事实，不是猜）。
+--   ★上界纪律（记忆体 F3）：**party 只有 party1..party4**；`GetNumPartyMembers()` 在团队里返回
+--     「raid 人数 - 1」，**绝不能**拿它当 party 循环上界（40 人团会去试 party1..party39）。
+--     raid 直接 raid1..`GetNumRaidMembers()`（**含自己** → 必须显式排除自己）。
+local function tbUnitNameLower(unit)
+  if type(UnitName) ~= "function" then return nil end
+  local ok, n = pcall(UnitName, unit)
+  if not ok or type(n) ~= "string" or n == "" then return nil end
+  return string.lower(n)
+end
+local function tbNameEqUnit(wantLower, unit)
+  if type(UnitExists) ~= "function" then return false end
+  local oke, ex = pcall(UnitExists, unit)
+  if not (oke and ex) then return false end -- ★先判存在：不存在的单位 UnitName 回 nil（别拿 nil 去比）
+  local un = tbUnitNameLower(unit)
+  if un == nil then return false end
+  if un == wantLower then return true end
+  local dash = string.find(un, "-", 1, true)
+  if dash and string.sub(un, 1, dash - 1) == wantLower then return true end -- 「名字-服务器」形态也认
+  return false
+end
+-- 名字 → unit id（找不到返回 nil）。查询顺序：团队（含自己）→ 小队 party1..4
+function EVAL_TB_NAME_UNITOF(name)
+  local want = string.lower(tostring(name or ""))
+  if want == "" then return nil end
+  local rn = 0
+  if type(GetNumRaidMembers) == "function" then
+    local ok, v = pcall(GetNumRaidMembers)
+    if ok and type(v) == "number" and v > 0 then rn = v end
+  end
+  for i = 1, rn do
+    local u = "raid" .. i
+    if tbNameEqUnit(want, u) then return u end
+  end
+  for i = 1, 4 do -- ★party 只有 1..4（见上：不能拿 GetNumPartyMembers 当上界）
+    local u = "party" .. i
+    if tbNameEqUnit(want, u) then return u end
+  end
+  return nil
+end
+-- 被右键的人**是不是我的队伍/团队成员**（★「踢出队伍」条目的唯一可见性判据）
+--   自己不算（踢自己 = 退队，菜单不给这条）
+function EVAL_TB_NAME_INMYGROUP(name)
+  local s = tostring(name or "")
+  if s == "" then return false end
+  local me = tbUnitNameLower("player")
+  if me ~= nil and me == string.lower(s) then return false end
+  local u = EVAL_TB_NAME_UNITOF(s)
+  if u == nil then return false end
+  local known, inGroup = false, false
+  if type(UnitInParty) == "function" then
+    local ok, v = pcall(UnitInParty, u)
+    if ok then known = true if v then inGroup = true end end
+  end
+  if type(UnitInRaid) == "function" then
+    local ok, v = pcall(UnitInRaid, u)
+    if ok then known = true if v then inGroup = true end end
+  end
+  if inGroup then return true end
+  if known then return false end
+  return true -- ★两条 API 都读不到 → 退回「名字确实在 raid/party 名单里」这个已核实的事实
+end
 local TB_MENU_SIG = nil
 -- 条目清单 = 数据（顺序即显示顺序：先读一行、再读一列）；加/删条目只改这里
 -- ★1.73.42u 条目清单现在**按名字**判断（删除好友只在「已是好友」时出现）→ 入参 name；
@@ -1072,17 +1342,20 @@ local function tbMenuItems(name)
   -- ★★★1.73.42w 用户要求（三条）：
   --   ① 「邀请」改名 **邀请队伍**；② **只在未在队伍内**时显示（在队伍里藏掉）；
   --   ③ 「踢出队伍」挪到**查询上面**（同一格由队伍状态决定显示哪条：没队伍=邀请队伍，有队伍=取消邀请+踢出队伍）。
+  -- ★★「我在不在队伍里」——**只用来决定「邀请队伍」出不出现**（用户 1.73.42w ②：在队伍里就藏掉邀请）
   local tbInParty = false
   if type(GetNumPartyMembers) == "function" then
     local ok, n = pcall(GetNumPartyMembers)
     tbInParty = ok and type(n) == "number" and n > 0
   end
   if not tbInParty then add(L("TB_NAMEMENU_PARTY"), EVAL_TB_NAME_PARTY) end -- 没队伍才给「邀请队伍」
-  if tbInParty then
-    -- ★1.73.42y 用户：「取消邀请删除」→ 这一格**只留**「踢出队伍」（取消邀请那条不再进菜单）。
-    --   ★动作函数 EVAL_TB_NAME_CANCELINVITE 保留（它是 `UninviteByName` 的**双结果如实播报**实现，仍有判据在跑），
-    --     只是不再挂条目 —— 要恢复只需把下面那句加回来。
-    add(L("TB_NAMEMENU_KICKP"), EVAL_TB_NAME_KICKP) -- 在队伍里 = 这一格换成踢出队伍
+  -- ★★★1.74.1 修（用户实测：「目标不在队伍，却显示踢出队伍」）：
+  --   可见性判据必须是「**被右键的这个人**是不是我的队伍/团队成员」，而不是「我自己在不在队伍里」。
+  --   （旧写法用 tbInParty ⇒ 只要自己在队伍里，右键任何人都会冒出「踢出队伍」。）
+  --   ★条目只按「是不是成员」给；**队长身份由动作如实报**（不是队长点了会说「你不是队长」）——
+  --     因为团队里的**助理**同样能踢人，而本客户端**没有** IsRaidAssistant 这类接口可以判助理。
+  if EVAL_TB_NAME_INMYGROUP(name) then
+    add(L("TB_NAMEMENU_KICKP"), EVAL_TB_NAME_KICKP)
   end
   add(L("TB_NAMEMENU_QUERY"), EVAL_TB_NAME_QUERY)
   -- ★有权限才显示「踢出公会 / 邀请公会」
@@ -3613,7 +3886,8 @@ local function tbModel()
     { t = "h", label = L("TB_H_SOCIAL") },
     { t = "c", key = "ready", label = L("TB_READY"), tip = L("TB_READY_TIP") },
     -- ★1.71.3 用户要求：屏蔽「XX 加入/离开频道」这类通知（默认开）
-    { t = "c", key = "chanJoin", label = L("TB_CHANJOIN"), tip = L("TB_CHANJOIN_TIP") },
+    -- ★1.74.0 升级为**复合行**：勾选 = 启用/关闭；右侧按钮 = 拦截关键字（多选下拉 + 输入框）
+    { t = "kw", key = "chanJoin", label = L("TB_CHANJOIN"), tip = L("TB_CHANJOIN_TIP") },
     -- ★1.73.10 用户要求：角色名按职业着色（参考 tmp/XGuild 的**需求**，实现见本文件「职业着色」段；默认开）
     { t = "c", key = "colorClass", label = L("TB_COLORCLASS"), tip = L("TB_COLORCLASS_TIP") },
     -- ★1.73.12 用户要求：「聊天窗 内的名字能着色吗?需要走缓存?」→ 聊天文字里的角色名按职业色（默认开）
@@ -3822,6 +4096,14 @@ function EVAL_TB_REFRESH()
               EVAL_TB_REFRESH()
             end)
           end)
+        end
+        if it.t == "kw" then -- ★1.74.0 频道通知屏蔽 + 拦截关键字：勾选=启用，值按钮 = 关键字多选下拉（含输入框）
+          local key = it.key
+          r.get = function() local tb = tbCfg() return tb and tb[key] and true or false end
+          r.set = function(v) local tb = tbCfg() if tb then tb[key] = v and true or false end end
+          r.chv.text:SetText((EVAL_TB_CHANKEY_SUMMARY()))
+          r.chv.btn:Show()
+          r.chv.btn:SetScript("OnClick", function() EVAL_TB_CHANKEYS_OPEN(r.chv.btn) end)
         end
         if it.t == "ch" then -- 1.69.0 频道选择行：勾选=启用（仅自己），值按钮弹频道下拉
           local key = it.key

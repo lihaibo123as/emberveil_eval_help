@@ -4903,7 +4903,8 @@ do
   eq(idxJoin ~= nil, true, "★「屏蔽频道进出信息」这一行存在")
   eq(idxJoin ~= nil and grp79 ~= nil and idxJoin > grp79, true, "★★它挂在该组之内（不是别处）")
   local rowJ = idxJoin and rows79[idxJoin]
-  eq(rowJ ~= nil and rowJ.t == "c", true, "★是复选框（与其它开关一致）")
+  -- ★1.74.0 起这一行升级为**复合行** kw：勾选框（与其它开关同一个自绘勾选框）+ 右侧「关键字(N)」按钮
+  eq(rowJ ~= nil and (rowJ.t == "c" or rowJ.t == "kw"), true, "★是开关行（kw = 勾选 + 关键字按钮；勾选框与其它开关一致）")
   eq(type(rowJ and rowJ.tip) == "string" and rowJ.tip ~= "", true, "★带悬停提示")
   -- ② 默认开（用户要求「默认打开」）
   eq(EVAL_TB_CHAN_ON(), true, "★★默认开启")
@@ -9390,12 +9391,13 @@ do
   eq(EVAL_TB_CHATEVENT_STATE().live, true, "①★★挂完**读回来确认**在位（真机刚吃过「写成功但不生效」的亏）")
   eq(EVAL_TB_CHATEVENT_INSTALL(), true, "①★再挂一次仍返回 true（幂等）")
   eq(ChatFrame_OnEvent == w123, true, "①★★幂等：**没有**重复包装")
-  -- ② 频道通知：命中 → 不调原函数
+  -- ② 频道通知：命中 → 不调原函数（★现在由**事件名判据**先拦：认事件不猜文案，参考 NoJoinLeaveSpam）
   TEST.ceCalls = 0
   arg1 = "[4. 世界防务] 离开频道。"
   ChatFrame_OnEvent("CHAT_MSG_CHANNEL_NOTICE")
   eq(TEST.ceCalls, 0, "②★★★频道进出通知被**真的吞掉**（原函数一次都没被调用）")
-  eq(EVAL_TB_CHATEVENT_STATE().filtered, 1, "②★并且吞掉计数 +1")
+  eq(EVAL_TB_CHATEVENT_STATE().evtFiltered, 1, "②★★事件名判据拦到（用户实测后的新主判据）")
+  eq(EVAL_TB_CHATEVENT_STATE().filtered, 0, "②★★★文本兜底**没轮到**（事件判据在前）——分开计数才能看出谁在干活")
   -- ③ 名字着色：回写全局 arg1
   EVAL_TB_NAMECLASS_PUT("守夜人", "萨满")
   TEST.ceCalls, TEST.ceSeen = 0, {}
@@ -10174,11 +10176,26 @@ do
   eq(idxKick130 == nil, true, "⑥d★★★没队伍 → 菜单里**没有**「踢出队伍」")
   eq(idxQuery130 ~= nil and idxParty130 == idxQuery130 - 1, true,
      "⑥d★★★「邀请队伍」就在「查询」上面（" .. tostring(idxParty130) .. " → " .. tostring(idxQuery130) .. "）")
-  -- ⑥e 在队伍里：这一格换成「取消邀请 + 踢出队伍」，且「邀请队伍」必须消失（用户要求）
-  local keepN130b, keepL130b = TEST.partyN, TEST.partyLeader
+  -- ⑥e 在队伍里：这一格换成「踢出队伍」，且「邀请队伍」必须消失（用户要求）
+  local keepN130b, keepL130b, keepTeam130b = TEST.partyN, TEST.partyLeader, TEST.team
   TEST.partyN, TEST.partyLeader = 2, true
+  TEST.team = { { unit = "party1", name = "队友甲" } }
+  -- ★★★1.74.1 用户实测 bug 的**回归判据**：「目标不在队伍，却显示踢出队伍」
+  --   可见性判据必须是**被右键的那个人**是不是队友；旧写法（我自己在队伍里）在这里就会误给条目。
   EVAL_TEST_TB_MENU_DROP()
   EVAL_TB_MENU_SHOW("Ionol")
+  local mg130b0 = EVAL_TB_MENU_GEOM()
+  local partyB0, kickB0 = false, false
+  for i = 1, table.getn((mg130b0 or {}).items or {}) do
+    local lb = tostring(mg130b0.items[i].label or "")
+    if lb == EVAL_L("TB_NAMEMENU_PARTY") then partyB0 = true end
+    if lb == EVAL_L("TB_NAMEMENU_KICKP") then kickB0 = true end
+  end
+  eq(partyB0, false, "⑥e★★★在队伍里 → 「邀请队伍」**藏掉了**（用户要求）")
+  eq(kickB0, false, "⑥e★★★右键的人**不是**队友 → **不出现**「踢出队伍」（用户实测 bug 的回归判据）")
+  -- ⑥e2 右键**真队友** → 出现「踢出队伍」，且就在「查询」上面
+  EVAL_TEST_TB_MENU_DROP()
+  EVAL_TB_MENU_SHOW("队友甲")
   local mg130b = EVAL_TB_MENU_GEOM()
   local partyB130, kickB130, queryB130 = nil, nil, nil
   for i = 1, table.getn((mg130b or {}).items or {}) do
@@ -10187,11 +10204,11 @@ do
     if lb == EVAL_L("TB_NAMEMENU_KICKP") and not kickB130 then kickB130 = i end
     if lb == EVAL_L("TB_NAMEMENU_QUERY") and not queryB130 then queryB130 = i end
   end
-  eq(partyB130 == nil, true, "⑥e★★★在队伍里 → 「邀请队伍」**藏掉了**（用户要求）")
-  eq(kickB130 ~= nil, true, "⑥e★★★在队伍里 → 有「踢出队伍」")
+  eq(partyB130 == nil, true, "⑥e2★★★在队伍里 → 「邀请队伍」依然藏掉")
+  eq(kickB130 ~= nil, true, "⑥e2★★★右键**真队友** → 有「踢出队伍」")
   eq(kickB130 == queryB130 - 1, true,
-     "⑥e★★★「踢出队伍」就在「查询」上面（" .. tostring(kickB130) .. " → " .. tostring(queryB130) .. "）")
-  TEST.partyN, TEST.partyLeader = keepN130b, keepL130b
+     "⑥e2★★★「踢出队伍」就在「查询」上面（" .. tostring(kickB130) .. " → " .. tostring(queryB130) .. "）")
+  TEST.partyN, TEST.partyLeader, TEST.team = keepN130b, keepL130b, keepTeam130b
   EVAL_TEST_TB_MENU_DROP()
   -- ★★★1.73.40 用户三条：①「圆角」②截图「右键框未包含关闭按键」③「操作按键 鼠标获取焦点 增加变色美化」
   -- ⑥c 圆角：挂得上客户端**原生圆角边**（UI-Tooltip-Border）就用它，挂不上必须退回四条平白边 ——
@@ -10562,7 +10579,7 @@ end
 -- 138) ★★★1.73.35 右键菜单扩展（用户第 2 条）：新动作 + **权限/队伍门** + 载入信息弹窗（用户第 3 条）
 do
   -- ① 权限/队伍门：条目**出现与否**由权限与队伍决定（不是点了才说没权限）
-  local savedCR138, savedPL138, savedPN138 = TEST.canGuildRemove, TEST.partyLeader, TEST.partyN
+  local savedCR138, savedPL138, savedPN138, savedTeam138 = TEST.canGuildRemove, TEST.partyLeader, TEST.partyN, TEST.team
   local function menuLabels138()
     EVAL_TEST_TB_MENU_DROP()
     SetItemRef("player:Ionol", "[Ionol]", "RightButton")
@@ -10576,9 +10593,11 @@ do
   eq(lb1[EVAL_L("TB_NAMEMENU_KICKG")] == true, false, "①★★★没权限 → **不出现**「踢出公会」")
   eq(lb1[EVAL_L("TB_NAMEMENU_KICKP")] == true, false, "①★★★不在队伍 → **不出现**「踢出队伍」")
   TEST.canGuildRemove, TEST.partyN = true, 3
+  -- ★★★1.74.1：判据已改成「**被右键的人**是不是队友」——右键的是 Ionol，所以把他放进队伍才有这一条
+  TEST.team = { { unit = "party1", name = "Ionol" } }
   local lb2 = menuLabels138()
   eq(lb2[EVAL_L("TB_NAMEMENU_KICKG")] == true, true, "①★★★有权限 → 出现「踢出公会」")
-  eq(lb2[EVAL_L("TB_NAMEMENU_KICKP")] == true, true, "①★★★在队伍里 → 出现「踢出队伍」")
+  eq(lb2[EVAL_L("TB_NAMEMENU_KICKP")] == true, true, "①★★★被右键的人是**队友** → 出现「踢出队伍」")
   eq(lb2[EVAL_L("TB_NAMEMENU_SHARE")] == true, true, "①★★「分享方案」常在")
   eq(lb2[EVAL_L("TB_NAMEMENU_TRADE")] == true, true, "①★★「交易」常在")
   eq(lb2[EVAL_L("TB_NAMEMENU_QUERY")] == true, true, "①★★「查询」常在")
@@ -10644,9 +10663,9 @@ do
   eq(EVAL_HELP_CONFIG.loadMsgSeen, false, "⑥★★★关闭 → 恢复「每次载入都展示」")
   EVAL_HELP_CONFIG.loadMsgSeen = savedSeen138
   EVAL_TEST_LOADPOP_CLICK("close")
-  TEST.canGuildRemove, TEST.partyLeader, TEST.partyN = savedCR138, savedPL138, savedPN138
+  TEST.canGuildRemove, TEST.partyLeader, TEST.partyN, TEST.team = savedCR138, savedPL138, savedPN138, savedTeam138
   EVAL_TEST_TB_MENU_DROP()
-  print("  右键菜单扩展：权限/队伍门(不满足就不出现) · 分享方案(激活方案·密语) · 交易/查询(名字→unit) · 踢人(队长/权限) · 载入弹窗(知道了/关闭)")
+  print("  右键菜单扩展：权限/队伍门(不满足就不出现) · 分享方案(激活方案·密语) · 交易/查询(名字→unit) · 踢人(需为队友+队长) · 载入弹窗(知道了/关闭)")
 end
 
 -- 139) ★★★1.73.37 用户报「某些按键无法使用：关闭/悄悄话/目标/查询/邀请/复制名字」——
@@ -13270,6 +13289,249 @@ do
   EVAL_HELP_CONFIG.title = savedTitle170
   print("  彩蛋反应：三语言 50 格 × 10 条齐全 · 头衔档×秘籍档 抽奖式 · 公会/说/队伍三频道 · 每句恰 2 占位符")
 end
+
+-- 171) ★★★频道进出屏蔽：**事件名判据**（用户定稿：「这两个情况都要拦截」）
+--   两种都拦：①「[8. Trade] 进入频道。/ 离开频道。」= **你自己**进出的回执 = CHAT_MSG_CHANNEL_NOTICE；
+--             ②「[玩家名] 加入/离开频道」= CHAT_MSG_CHANNEL_JOIN/LEAVE（参考插件 NoJoinLeaveSpam 的对象）
+--   判据：① 三类事件都被吞且**不依赖 arg1 文本**（arg1 是英文 token 也拦得住 —— 旧文本判据的死因）；
+--         ② NOTICE_USER（踢人/换房主）与频道聊天照常放行（不在用户圈定的范围内）；
+--         ③ 开关关掉就放行（在调用时读）；④ 文本判据降级为**兜底**（通知走自定义事件名时还能兜一层）；
+--         ⑤ 计数分开 + 探针打印「事件判据吞掉」与「频道事件到达计数」。
+do
+  local savedTb171 = EVAL_HELP_CONFIG.tb
+  EVAL_HELP_CONFIG.tb = {}
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  eq(EVAL_TB_CHATEVENT_INSTALL(), true, "①前置：包装在位")
+  -- ① 目标事件：自己进出频道的回执（图片实证的那一类），连文本都没有也吞
+  TEST.ceCalls = 0
+  arg1 = nil
+  ChatFrame_OnEvent("CHAT_MSG_CHANNEL_NOTICE")
+  eq(TEST.ceCalls, 0, "①★★★CHAT_MSG_CHANNEL_NOTICE（自己进出回执）被吞（arg1 是 token 也拦得住）")
+  eq(EVAL_TB_CHATEVENT_STATE().evtFiltered, 1, "①★事件判据计数 = 1")
+  -- ①b 第二种情况：玩家的进入/离开信息（参考插件拦的那一类）也要吞
+  for _, ev171 in ipairs({ "CHAT_MSG_CHANNEL_JOIN", "CHAT_MSG_CHANNEL_LEAVE" }) do
+    TEST.ceCalls = 0
+    arg1 = nil
+    ChatFrame_OnEvent(ev171)
+    eq(TEST.ceCalls, 0, "①b★★★" .. ev171 .. "（[玩家名] 加入/离开频道）也被吞——用户要求两种都拦")
+  end
+  eq(EVAL_TB_CHATEVENT_STATE().evtFiltered, 3, "①b★事件判据计数 = 3（自己进出 + 玩家进出两类）")
+  -- ② 明确不拦：踢人/换房主（NOTICE_USER）+ 频道聊天
+  TEST.ceCalls = 0
+  arg1 = nil
+  ChatFrame_OnEvent("CHAT_MSG_CHANNEL_NOTICE_USER")
+  eq(TEST.ceCalls, 1, "②★★CHAT_MSG_CHANNEL_NOTICE_USER（踢人/换房主）**不拦**——不在用户圈定的两种之内")
+  TEST.ceCalls = 0
+  arg1 = "频道里的普通发言"
+  arg2 = "张三"
+  ChatFrame_OnEvent("CHAT_MSG_CHANNEL")
+  eq(TEST.ceCalls, 1, "②★★CHAT_MSG_CHANNEL（频道聊天）照常放行")
+  eq(EVAL_TB_CHATEVENT_STATE().evtFiltered, 3, "②★只有目标那两类被拦（计数没乱涨）")
+  -- ③ 开关关掉 → 放行
+  EVAL_HELP_CONFIG.tb.chanJoin = false
+  TEST.ceCalls = 0
+  arg1 = nil
+  ChatFrame_OnEvent("CHAT_MSG_CHANNEL_NOTICE")
+  eq(TEST.ceCalls, 1, "③★★关掉屏蔽开关 → 放行（开关在调用时读）")
+  EVAL_HELP_CONFIG.tb.chanJoin = true
+  -- ④ 文本判据 = 兜底：通知若走**自定义事件名**（不是 NOTICE），文本还能兜一层
+  TEST.ceCalls = 0
+  arg1 = "[4. 世界防务] 进入频道。"
+  ChatFrame_OnEvent("CHAT_MSG_SYSTEM")
+  eq(TEST.ceCalls, 0, "④★★非家族事件 + 通知文本 → 文本兜底照样吞（多层防护，不是二选一）")
+  eq(EVAL_TB_CHATEVENT_STATE().filtered, 1, "④★文本路计数 +1（两路分开才看得出谁在干活）")
+  eq(EVAL_TB_CHATEVENT_STATE().evtFiltered, 3, "④★事件路没有误计（走的确实是文本路）")
+  -- ⑤ 诊断：状态口 + 探针打印
+  eq(select(11, EVAL_TEST_TB_CHAN_STATE()), 3, "⑤★★EVAL_TEST_TB_CHAN_STATE 暴露事件判据计数（第 11 个返回值）")
+  local lastEv171 = tostring(select(12, EVAL_TEST_TB_CHAN_STATE()))
+  eq(string.find(lastEv171, "^CHAT_MSG_CHANNEL_") == 1, true, "⑤★最后一条事件名可读（探针显示同一来源：" .. lastEv171 .. "）")
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 频道")
+  local c171 = tostring(TEST.chat or "")
+  eq(string.find(c171, "事件判据吞掉", 1, true) ~= nil, true, "⑤★★探针打印事件判据的计数")
+  eq(string.find(c171, "频道事件到达计数", 1, true) ~= nil, true, "⑤★★探针打印「事件到底发不发」的到达计数（取证口）")
+  eq(string.find(c171, "CHAT_MSG_CHANNEL_NOTICE=", 1, true) ~= nil, true, "⑤★★到达计数里带着 NOTICE（游戏内据此分辨「事件没发 / 判据没拦」）")
+  -- ⑤b ★★参考插件 NoJoinLeaveSpam 的 `/njls mute <频道>` 判据输入 = **arg9（频道名）**——
+  --   我们把这个输入原文记下来并打出来，用来回答「它在本客户端到底成不成立」（它只在 JOIN/LEAVE 上生效）。
+  arg8, arg9 = 5, "寻求组队"
+  TEST.ceCalls = 0
+  ChatFrame_OnEvent("CHAT_MSG_CHANNEL_NOTICE")
+  local cArgs171 = EVAL_TB_CHATEVENT_STATE().chanArgs
+  eq(table.getn(cArgs171) >= 1, true, "⑤b★★频道事件的 arg8/arg9 被记录（一次一条，环形 8 条）")
+  eq(string.find(tostring(cArgs171[table.getn(cArgs171)]), "arg9=寻求组队", 1, true) ~= nil, true,
+     "⑤b★★记录里带着 arg9 原文（这就是 /njls mute 的输入）")
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 频道")
+  eq(string.find(tostring(TEST.chat or ""), "频道事件原文", 1, true) ~= nil, true, "⑤b★★探针打印频道事件原文（一次定案参考插件的机制）")
+  arg8, arg9 = nil, nil
+  arg1, arg2 = nil, nil
+  EVAL_HELP_CONFIG.tb = savedTb171
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  print("  频道进出屏蔽：两种都拦（自己进出 NOTICE + 玩家进出 JOIN/LEAVE，token 也拦得住）· 踢人/换房主与频道聊天放行 · 文本兜底 · 两路计数分开 · 探针打印")
+end
+
+-- 172) ★★★拦截关键字可配置（1.74.0 用户要求：「将拦截关键字在工具箱对应开关配置添加可设置下拉多选，
+--   并且支持输入框用户输入关键字功能」）
+--   判据：① 行 = 复合行 kw（勾选 = 启用/关闭 + 右侧「关键字(N)」按钮），摘要数字 = 生效词数；
+--         ② 默认全启用；多选下拉**走真实 opener**（EVAL_TB_CHANKEYS_OPEN），组标题 locked 不可点；
+--         ③ 点真实行（EVAL_DD_TEST_CLICK 走真实 OnClick）→ 停用/启用**立即**生效到判据；
+--         ④ 输入框那条路（onFreeText → EVAL_TB_CHANKEY_ADD）：加词进自定义组，词前加 ! = 单独命中；
+--         ⑤ 非 ! 自定义词与动作词同类（必须同时含频道词，不误伤玩家聊天）；
+--         ⑥ 「清空自定义关键字」把自定义组整组清掉；⑦ 停用频道词 → 文本判据整体失效。
+do
+  local savedTb172 = EVAL_HELP_CONFIG.tb
+  EVAL_HELP_CONFIG.tb = {}
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  -- ① 行模型 + 按钮文案
+  local rows172 = EVAL_TEST_TB_ROWS()
+  local rowJ172 = nil
+  for i = 1, table.getn(rows172) do
+    if rows172[i].key == "chanJoin" then rowJ172 = rows172[i] end
+  end
+  eq(rowJ172 ~= nil and rowJ172.t == "kw", true, "①★★行是复合行 kw（勾选 + 关键字按钮）")
+  local k172 = EVAL_TB_CHAN_KEYS()
+  local presetN172 = table.getn(k172.chan) + table.getn(k172.move)
+  local sumTxt172, sumN172 = EVAL_TB_CHANKEY_SUMMARY()
+  eq(sumN172, presetN172, "①★★摘要数字 = 生效词数（默认全启用：" .. tostring(presetN172) .. "）")
+  eq(string.find(sumTxt172, tostring(presetN172), 1, true) ~= nil, true, "①★按钮文案带数字：" .. sumTxt172)
+  -- ② 真实 opener：多选模式 + 组标题 locked + 预设全部勾上
+  local items172, locked172, sel172, map172 = EVAL_TB_CHANKEYS_MENU()
+  local nLock172, nSel172 = 0, 0
+  for i = 1, table.getn(items172) do
+    if locked172[i] then nLock172 = nLock172 + 1 end
+    if sel172[i] then nSel172 = nSel172 + 1 end
+  end
+  eq(nLock172, 2, "②★两个组标题（频道词 / 动作词）都是 locked 行（不画方框、点击无反应）")
+  eq(nSel172, presetN172, "②★预设项默认全部勾上")
+  eq(EVAL_TB_CHANKEYS_OPEN(UIParent), true, "②★★真实 opener 能开（锚点=UIParent）")
+  eq(EVAL_DD_TEST_MULTI(), true, "②★★★下拉以**多选**模式打开（点一项不关闭、可连选）")
+  -- ③ 点真实行：停用「进入」→ 该文案不再被文本判据拦（事件判据不受影响，另有断言）
+  local idxJin172 = nil
+  for i = 1, table.getn(items172) do
+    if items172[i] == "进入" then idxJin172 = i end
+  end
+  eq(idxJin172 ~= nil, true, "③前置：菜单里找得到「进入」")
+  eq(EVAL_TB_CHAN_BLOCK("[4. 世界防务] 进入频道。"), true, "③前置：默认「进入」生效")
+  EVAL_DD_TEST_CLICK(idxJin172)
+  eq(EVAL_HELP_CONFIG.tb.chanKeyOff["进入"], true, "③★★点真实行 → 该词被**停用**并落盘")
+  eq(EVAL_TB_CHAN_BLOCK("[4. 世界防务] 进入频道。"), false, "③★★★停用后判据**立即**失效（不用 /reload）")
+  eq(EVAL_TB_CHAN_BLOCK("[4. 世界防务] 离开频道。"), true, "③★没被停用的「离开」照常命中")
+  EVAL_DD_TEST_CLICK(idxJin172)
+  eq(EVAL_HELP_CONFIG.tb.chanKeyOff["进入"], nil, "③★再点一次 → 恢复启用（多选可反复切换）")
+  eq(EVAL_TB_CHAN_BLOCK("[4. 世界防务] 进入频道。"), true, "③★恢复后判据又命中")
+  -- ④ 输入框那条路：加自定义词
+  eq(EVAL_TB_CHANKEY_ADD("  刷屏词  "), true, "④★输入框加词（自动去首尾空白）")
+  eq(EVAL_HELP_CONFIG.tb.chanKeyCustom[1], "刷屏词", "④★落盘的是去掉空白后的词")
+  eq(EVAL_TB_CHAN_BLOCK("刷屏词"), false, "④★★非 ! 自定义词与动作词同类：没有频道词 → 不吞（不误伤玩家聊天）")
+  eq(EVAL_TB_CHAN_BLOCK("频道 刷屏词"), true, "④★★带上频道词 → 吞（★注意「[8. Trade]」里并没有「频道」二字，真实文案是「[8. Trade] 进入频道。」）")
+  eq(EVAL_TB_CHANKEY_ADD("!整句吞"), true, "④★加一个强词（! 前缀 = 单独命中）")
+  eq(EVAL_TB_CHAN_BLOCK("这只是一句 整句吞 的普通话"), true, "④★★★强词单独命中（用户显式要求这类词不要求频道词）")
+  eq(EVAL_TB_CHANKEY_ADD("刷屏词"), true, "④★重复加同一个词 → 去重（不新增）")
+  eq(table.getn(EVAL_HELP_CONFIG.tb.chanKeyCustom), 2, "④★自定义词仍是 2 个（去重生效）")
+  local itemsA172, lockedA172, selA172 = EVAL_TB_CHANKEYS_MENU()
+  local nCustomRow172 = 0
+  local hasClear172 = false
+  for i = 1, table.getn(itemsA172) do
+    if itemsA172[i] == EVAL_L("TB_CHANKEY_G_CUSTOM") then nCustomRow172 = nCustomRow172 + 1 end
+    if itemsA172[i] == EVAL_L("TB_CHANKEY_CLEAR") then hasClear172 = true end
+  end
+  eq(nCustomRow172, 1, "④★菜单里出现「自定义关键字」分组标题")
+  eq(hasClear172, true, "④★菜单里出现「清空自定义关键字」行")
+  local sumTxtB172, sumNB172 = EVAL_TB_CHANKEY_SUMMARY()
+  eq(sumNB172, presetN172 + 2, "④★摘要数字跟着自定义词一起涨（" .. tostring(sumNB172) .. "）")
+  -- ⑥ 清空自定义
+  eq(EVAL_TB_CHANKEY_CLEAR(), true, "⑥★清空自定义关键字")
+  eq(EVAL_HELP_CONFIG.tb.chanKeyCustom ~= nil and table.getn(EVAL_HELP_CONFIG.tb.chanKeyCustom), 0, "⑥★自定义词已清空")
+  eq(EVAL_TB_CHAN_BLOCK("这只是一句 整句吞 的普通话"), false, "⑥★强词清掉后不再单独命中")
+  local itemsC172 = EVAL_TB_CHANKEYS_MENU()
+  local stillClear172 = false
+  for i = 1, table.getn(itemsC172) do
+    if itemsC172[i] == EVAL_L("TB_CHANKEY_CLEAR") then stillClear172 = true end
+  end
+  eq(stillClear172, false, "⑥★没有自定义词时菜单里不再出现「清空」行")
+  -- ⑦ 停用全部频道词 → 文本判据整体失效（这正是「不误伤」的那道保险，可被用户主动关掉）
+  local kChan172 = EVAL_TB_CHAN_KEYS().chan
+  for i = 1, table.getn(kChan172) do EVAL_HELP_CONFIG.tb.chanKeyOff[kChan172[i]] = true end
+  eq(EVAL_TB_CHAN_BLOCK("[4. 世界防务] 离开频道。"), false, "⑦★★频道词全停用 → 文本判据不再拦（用户可自行关掉这道保险）")
+  for i = 1, table.getn(kChan172) do EVAL_HELP_CONFIG.tb.chanKeyOff[kChan172[i]] = nil end
+  eq(EVAL_TB_CHAN_BLOCK("[4. 世界防务] 离开频道。"), true, "⑦★恢复频道词 → 判据恢复")
+  EVAL_DD_HIDE()
+  EVAL_HELP_CONFIG.tb = savedTb172
+  EVAL_TEST_TB_CHATEVENT_RESET()
+  print("  拦截关键字：复合行 kw（勾选+关键字(N)）· 真实多选下拉点选即生效 · 输入框加词（! = 强词单独命中）· 去重 · 清空 · 频道词保险可关")
+end
+
+-- 173) ★★★1.74.1 审计：「踢出队伍」的**状态检测依据**（用户实测：「目标不在队伍，却显示踢出队伍」）
+--   审计结论（本次定案）：
+--     · 旧判据 = \`GetNumPartyMembers() > 0\` = 「**我**在不在队伍里」→ 只要自己在队伍里，右键**任何人**
+--       都会冒出「踢出队伍」（截图里的现象）。
+--     · 正解 = 「**被右键的这个人**是不是我的队伍/团队成员」：名字 → unit 反查（Heart/C 的机制：
+--       UnitExists 判存在 + UnitName 复核）→ 再用本客户端的 UnitInParty / UnitInRaid 下结论。
+--   判据：① 反查正确（精确/大小写/带服务器后缀/查不到回 nil）；② **上界纪律**（party 只扫 1..4，
+--         不拿 GetNumPartyMembers 当上界）；③ 团队同理；④ 自己不算；⑤ 两条权威接口都读不到时的退化；
+--         ⑥ 菜单可见性真的跟着「是不是队友」走。
+do
+  local savedTeam173, savedRaid173, savedPN173 = TEST.team, TEST.raid, TEST.partyN
+  local savedUE173, savedUN173 = UnitExists, UnitName
+  TEST.partyN, TEST.raid = nil, nil
+  TEST.team = { { unit = "party1", name = "队友甲" }, { unit = "party2", name = "MyFriend-Frostwolf" } }
+  -- ① 名字 → unit 反查
+  eq(EVAL_TB_NAME_UNITOF("队友甲"), "party1", "①★★精确名字 → party1")
+  eq(EVAL_TB_NAME_UNITOF("myfriend-frostwolf"), "party2", "①★★大小写不敏感（UnitName 比对前统一 lower）")
+  eq(EVAL_TB_NAME_UNITOF("MyFriend"), "party2", "①★★带服务器后缀（名字-服务器）也认")
+  eq(EVAL_TB_NAME_UNITOF("查无此人"), nil, "①★★名单里没有 → nil（**判不准就不给条目**，绝不猜）")
+  eq(EVAL_TB_NAME_UNITOF(""), nil, "①★空名字 → nil")
+  -- ② 上界纪律：party 只许扫 1..4（★GetNumPartyMembers 在团队里返回 raid-1，拿它当上界会去试 party1..39）
+  local seen173 = {}
+  UnitExists = function(u) table.insert(seen173, tostring(u)) return savedUE173(u) end
+  TEST.partyN = 39 -- 模拟「团队里 GetNumPartyMembers 回 39」
+  EVAL_TB_NAME_UNITOF("查无此人")
+  UnitExists = savedUE173
+  local partyScanned173, maxIdx173 = 0, 0
+  for i = 1, table.getn(seen173) do
+    local k = string.match(seen173[i], "^party(%d+)$")
+    if k then partyScanned173 = partyScanned173 + 1 local v = tonumber(k) if v and v > maxIdx173 then maxIdx173 = v end end
+  end
+  eq(partyScanned173, 4, "②★★★就算 GetNumPartyMembers 回 39，party 也只扫 4 个槽（实际 " .. tostring(partyScanned173) .. "）")
+  eq(maxIdx173 <= 4, true, "②★★最大 party 下标 ≤ 4（实际 " .. tostring(maxIdx173) .. "）")
+  TEST.partyN = nil
+  -- ③ 团队：raid1..N（含自己）也要能反查到
+  TEST.team = nil
+  TEST.raid = { { unit = "raid1", name = "测试玩家" }, { unit = "raid2", name = "团员甲" } }
+  eq(EVAL_TB_NAME_UNITOF("团员甲"), "raid2", "③★★团队里也能反查到（raid2）")
+  eq(EVAL_TB_NAME_INMYGROUP("团员甲"), true, "③★★团队员 = 我队伍里的人（UnitInRaid 认定）")
+  eq(EVAL_TB_NAME_INMYGROUP("路人"), false, "③★★★不在我团队里的人 → false（这就是修掉的那个 bug）")
+  -- ④ 自己不算「队伍成员」——踢自己 = 退队，菜单不给这条
+  eq(EVAL_TB_NAME_INMYGROUP("测试玩家"), false, "④★★★右键自己 → false（不给「踢出队伍」）")
+  -- ⑤ 退化路径：UnitInParty / UnitInRaid 两条都读不到 → 退回「名字确实在 raid/party 名单里」这个已核实的事实
+  TEST.team = { { unit = "party1", name = "队友甲" } }
+  TEST.raid = nil
+  TEST.noUnitInParty, TEST.noUnitInRaid = true, true
+  eq(EVAL_TB_NAME_INMYGROUP("队友甲"), true, "⑤★★两条权威接口都不可用 → 仍认「名单里有他」")
+  eq(EVAL_TB_NAME_INMYGROUP("路人"), false, "⑤★★名单里没有 → 仍 false（不因接口不可用而放宽）")
+  TEST.noUnitInParty, TEST.noUnitInRaid = nil, nil
+  -- ⑥ 菜单可见性跟着「是不是队友」走（真实菜单构建 + 真实几何读值）
+  local function hasItem173(who, wantLabel)
+    EVAL_TEST_TB_MENU_DROP()
+    EVAL_TB_MENU_SHOW(who)
+    local g = EVAL_TB_MENU_GEOM()
+    for i = 1, table.getn((g or {}).items or {}) do
+      if tostring(g.items[i].label or "") == wantLabel then return true end
+    end
+    return false
+  end
+  eq(hasItem173("队友甲", EVAL_L("TB_NAMEMENU_KICKP")), true, "⑥★★★右键队友 → 菜单里有「踢出队伍」")
+  eq(hasItem173("路人", EVAL_L("TB_NAMEMENU_KICKP")), false, "⑥★★★右键路人 → **没有**「踢出队伍」（截图 bug 的定案判据）")
+  eq(hasItem173("测试玩家", EVAL_L("TB_NAMEMENU_KICKP")), false, "⑥★★右键自己 → 没有「踢出队伍」")
+  TEST.team, TEST.raid = nil, nil
+  eq(hasItem173("路人", EVAL_L("TB_NAMEMENU_PARTY")), true, "⑥★★不在任何队伍 → 菜单里有「邀请队伍」")
+  eq(hasItem173("路人", EVAL_L("TB_NAMEMENU_KICKP")), false, "⑥★★不在任何队伍 → 没有「踢出队伍」")
+  EVAL_TEST_TB_MENU_DROP()
+  UnitExists, UnitName = savedUE173, savedUN173
+  TEST.team, TEST.raid, TEST.partyN = savedTeam173, savedRaid173, savedPN173
+  print("  踢出队伍依据：名字→unit 反查（UnitExists+UnitName，大小写/服务器后缀）· party 只扫 1..4 · 团队 raid1..N · 自己不算 · 两条权威接口不可用时如实退化")
+end
+
 
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")

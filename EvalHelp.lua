@@ -8203,9 +8203,10 @@ if type(SlashCmdList) == "table" then
       if table.getn(pl) == 0 and table.getn(names) == 0 then say("（全空——先 /eh go probe immune 并在 30 秒内对免疫怪放技能；若反复全空说明事件系统不可用）") end
     elseif msg == "go 频道" or string.find(msg or "", "^go 频道") == 1 then
       -- ★1.71.3 取证：屏蔽「频道进出信息」到底生效没有；以及有没有更干净的官方入口。
-      --   本机 API 全表（1370 条）里**没有聊天过滤器**（ChatFrame_AddMessageEventFilter 之类不存在），
-      --   现用的是「挂 DEFAULT_CHAT_FRAME:AddMessage」这一层。
-      --   ★若这里显示「已过滤 0 条」而确实有人进出频道 → 说明客户端不走 Lua 打印，需要换方案（把结论发我）。
+      --   本机 API 全表（1370 条）里**没有聊天过滤器**（ChatFrame_AddMessageEventFilter 之类不存在）。
+      --   ★现状（两次审计定案）：判据 = **事件名优先**，只吞 CHAT_MSG_CHANNEL_NOTICE
+      --     （你自己进出频道的回执，即截图里「[8. Trade] 进入频道。」那类；
+      --     「玩家的进入信息」JOIN/LEAVE 不拦），文本判据兜底，官方消息组是客户端级另一道。
       local sarg = string.match(msg or "", "^go 频道%s*(.-)%s*$") or ""
       if string.find(sarg, "^装") == 1 then
         -- ★手动立刻重试挂载（自动重试已由 事件 / 每帧 / 诊断 三处驱动，这里是救急入口）
@@ -8218,12 +8219,37 @@ if type(SlashCmdList) == "table" then
         local hit = (type(EVAL_TB_CHAN_BLOCK) == "function") and EVAL_TB_CHAN_BLOCK(sample)
         say("判据：" .. (hit and "命中（会被吞掉）" or "不命中（会正常显示）"))
       else
-        local on, hooked, cnt, samples, live, seenAll, tries = EVAL_TEST_TB_CHAN_STATE()
+        local on, hooked, cnt, samples, live, seenAll, tries, _fr, _cs, _mi, evtCnt, evtLast = EVAL_TEST_TB_CHAN_STATE()
         say("— 频道进出信息 屏蔽 诊断 —")
         say("开关：屏蔽=" .. (on and "开" or "关") .. "（默认开；配置窗 → 工具箱 → 队伍/社交）")
         say("入口：DEFAULT_CHAT_FRAME=" .. ((DEFAULT_CHAT_FRAME and "有") or "无")
           .. " 已挂载=" .. tostring(hooked) .. " 我们的包装在位=" .. tostring(live) .. "（尝试 " .. tostring(tries) .. " 次）")
         say("经过入口的聊天消息：" .. tostring(seenAll) .. " 条；其中被吞：" .. tostring(cnt) .. " 条")
+        say("事件判据吞掉（自己的进出回执 NOTICE）：" .. tostring(evtCnt) .. " 条；最后：" .. tostring(evtLast or "（无）"))
+        -- ★取证：api 索引里没有事件清单 → 「事件到底发不发」只能靠到达计数（「判据没拦」与「事件没发」一目了然）
+        local evChan = ""
+        if type(EVAL_TB_CHATEVENT_STATE) == "function" then
+          local st = EVAL_TB_CHATEVENT_STATE()
+          if st and type(st.byEv) == "table" then
+            for k, n in pairs(st.byEv) do
+              if string.find(k, "^CHAT_MSG_CHANNEL") then evChan = evChan .. k .. "=" .. tostring(n) .. " " end
+            end
+          end
+        end
+        say("频道事件到达计数：" .. (evChan ~= "" and evChan or "（暂无：进出频道一次后再看）"))
+        -- ★★★参考插件 NoJoinLeaveSpam 的 `/njls mute <频道>` 判据输入 = **arg9（频道名）**，且它只在
+        --   CHAT_MSG_CHANNEL_JOIN / _LEAVE 上生效 —— 这一屏就是「它在本客户端成不成立」的直接证据。
+        local cArgs = {}
+        if type(EVAL_TB_CHATEVENT_STATE) == "function" then
+          local stc = EVAL_TB_CHATEVENT_STATE()
+          if stc and type(stc.chanArgs) == "table" then cArgs = stc.chanArgs end
+        end
+        if table.getn(cArgs) > 0 then
+          say("频道事件原文（事件 ｜ arg8 ｜ arg9 ｜ arg1）—— /njls 的判据就是 arg9：")
+          for _, line in ipairs(cArgs) do say("  " .. tostring(line)) end
+        else
+          say("频道事件原文：暂无（进出频道一次后再看）")
+        end
         if type(samples) == "table" and table.getn(samples) > 0 then
           for _, m in ipairs(samples) do say("  样本：" .. tostring(m)) end
         else
