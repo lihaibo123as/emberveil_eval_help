@@ -799,6 +799,16 @@ local function shSealNote(sender, id)
   SH.sealSeen = (SH.sealSeen or 0) + 1
   SH.sealRecvLast = tostring(sender or "?") .. "#" .. tostring(id or "?") -- ★接收侧自己的字段（不再盖发送侧）
 end
+-- ★★★1.74.4 取证（用户报「某角色分享，对方不弹窗，静态查不出原因」）：把分片/封皮的**原文 + 解析结果**记进
+--   SH.dbgChunks（环形 8 条），`/eh go 分享事件` 摊开 —— 这类「分片到了却不弹」只有看到**真实载荷**才能定案。
+--   ★只记含 EHPF 的消息（分片/封皮），不碰普通聊天；只在分享时才有量。
+local function shDbgChunk(stage, msg, extra)
+  if type(msg) ~= "string" then return end
+  if string.find(msg, "EHPF", 1, true) == nil then return end
+  SH.dbgChunks = SH.dbgChunks or {}
+  table.insert(SH.dbgChunks, tostring(stage) .. " ｜ " .. string.sub(msg, 1, 80) .. (extra and (" ｜ " .. tostring(extra)) or ""))
+  while table.getn(SH.dbgChunks) > 8 do table.remove(SH.dbgChunks, 1) end
+end
 local function shOnMsg(msg, sender, ev)
   if type(msg) ~= "string" then return end
   -- ★1.73.41 探针优先：命中探针标识的消息**只记进探针**，不进正常缓冲
@@ -811,6 +821,7 @@ local function shOnMsg(msg, sender, ev)
     local inner = string.match(msg, "|HEHPF:([^|]*)|h")
     if inner then idh, i, n, payload = string.match(inner, "^(%x+) (%d+)/(%d+):(%x*)$") end
   end
+  shDbgChunk(idh and "解析✓" or "解析✗", msg, idh and (tostring(i) .. "/" .. tostring(n)) or "载荷不含 i/n:hex")
   -- ★★★1.73.43f 分享信息那条的**统一处理**：老式（`|HEHPF:id|h`，无序号）与新式（`<id> 0/1:0`，与分片同款结构）
   --   都从这里进 —— 记「这一笔真的发完了」+ 身份/评语（只有发送端知道的那两样）。
   local function shSealCapture(sid)
@@ -884,6 +895,7 @@ local function shOnMsg(msg, sender, ev)
   if not b.chunks[i] then
     b.chunks[i] = payload
     b.got = b.got + 1
+    shDbgChunk("入缓冲", msg, i .. "/" .. n .. " 已收 " .. b.got)
   end
   if b.got >= b.n then
     SH.buf[key] = nil
@@ -891,9 +903,11 @@ local function shOnMsg(msg, sender, ev)
     shMarkDone(key)
     local parts = {}
     for j = 1, b.n do parts[j] = b.chunks[j] or "" end
+    shDbgChunk("收齐", msg, "共 " .. b.n .. " 片")
     local text = fromHex(table.concat(parts))
-    if not text then return end
+    if not text then shDbgChunk("hex还原失败", msg) return end
     if string.len(text) > SH_MAX_TEXT then -- R5
+      shDbgChunk("过大丢弃", msg, string.len(text) .. "B")
       shWarn(string.format(L("SH_DROP_BIGTEXT"), string.len(text), SH_MAX_TEXT))
       return
     end
@@ -903,11 +917,13 @@ local function shOnMsg(msg, sender, ev)
     --   ★先确认「知道来源」（b.ev 非空）：认不出来时照旧弹出——宁可多弹一次，也不误吞真分享。
     if b.ev and b.ev ~= "CHAT_MSG_SAY" and EVAL_SHARE_IS_MINE(text) then
       SH.selfSkipped = (SH.selfSkipped or 0) + 1
+      shDbgChunk("回声忽略", msg, "IS_MINE=true")
       EVAL_LOGLINE("[分享] 已忽略（自己的方案回声）：来源=" .. tostring(b.ev or "?") .. " 发送者=" .. tostring(sender))
       return
     end
     -- R1：只保留最新一份 —— 弹窗内容换成最新的，并如实说明替换了谁
     local old = SH.pending
+    shDbgChunk("弹窗", msg, "发送者=" .. tostring(sender))
     EVAL_SH_POPUP(sender, text, b.ev, idh) -- ★1.73.42i 带上传输 id（品阶栏要用它取发送端的境界/评语）
     if old then shWarn(string.format(L("SH_POP_REPLACED"), tostring(sender), tostring(old.sender))) end
   end
@@ -2289,12 +2305,15 @@ function EVAL_SHARE_RECV_PROBE()
   for i = 1, table.getn(SH_EV_ALL) do
     local e = SH_EV_ALL[i]
     local okr, r = pcall(shf.IsEventRegistered, shf, e)
-    shSay("② " .. e .. " = " .. (((okr and r == true)) and "已注册" or "|cffff0000未注册|r"))
+    shSay("② " .. e .. " = " .. (((okr and (r == true or r == 1))) and "已注册" or "|cffff0000未注册|r")) -- ★本客户端 IsEventRegistered 返回 1 不是 true（旧判据 == true 全显示「未注册」，假阴性）
   end
   shSay("③ 最近收到的聊天事件 = " .. tostring(SH_EV_SEEN or "（还没收到过）"))
   local nb = 0
   for _ in pairs(SH.buf or {}) do nb = nb + 1 end
   shSay("④ 待导入 = " .. tostring((SH.pending and SH.pending.sender) or "无") .. " · 接收中缓冲 " .. tostring(nb) .. " 笔")
+  shSay("⑤ 最近 EHPF 消息 · 原文+解析（新→旧）：")
+  if table.getn(SH.dbgChunks or {}) == 0 then shSay("   （一条都没有 —— 分享一次再来看）") end
+  for i = table.getn(SH.dbgChunks or {}), 1, -1 do shSay("   " .. SH.dbgChunks[i]) end
 end
 
 -- ===== 接收弹窗（自绘；点 [导入] 走 EVAL_IMPORT_TEXT 桥） =====
