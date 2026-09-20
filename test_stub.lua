@@ -462,9 +462,36 @@ local function teamRec(u)
   return nil
 end
 TEST.teamRec = function(u) return teamRec(u) end
+-- ★★1.74.1 桩：UnitInParty / UnitInRaid（本客户端 api 表实测**都有**，类别 Unit）——
+--   它们是「右键的人是不是我队伍/团队成员」的**权威判据**，桩必须按 TEST.team / TEST.raid 如实回答。
+--   TEST.noUnitInParty / noUnitInRaid = 模拟「这两条接口读不到」（用于验退化路径）。
+UnitInParty = function(u)
+  if TEST.noUnitInParty then error("stub: UnitInParty unavailable") end
+  u = resolveTarget(u)
+  if u == "player" then return (TEST.team ~= nil and table.getn(TEST.team) > 0) and true or false end
+  for _, r in ipairs(TEST.team or {}) do if r.unit == u then return true end end
+  return false
+end
+UnitInRaid = function(u)
+  if TEST.noUnitInRaid then error("stub: UnitInRaid unavailable") end
+  u = resolveTarget(u)
+  if u == "player" then
+    return ((TEST.raid ~= nil and table.getn(TEST.raid) > 0) or (TEST.raidN or 0) > 0) and true or false
+  end
+  for _, r in ipairs(TEST.raid or {}) do if r.unit == u then return true end end
+  return false
+end
 UnitName = function(u)
   local r = teamRec(u)
   if r then return r.name or u end
+  -- ★★1.74.1 桩保真：**不存在的单位要回 nil**（真 API 语义）——否则「名字 → unit 反查」在测试里
+  --   会把 party5 / raid9 这类**不存在**的槽位也当成有效单位（桩有错状态比桩没状态更隐蔽）。
+  --   只对 partyN / raidN / partypetN / raidpetN 这一族生效，其它 unit 保持原行为（既有用例不受影响）。
+  if type(u) == "string" and
+     (string.match(u, "^party%d+$") or string.match(u, "^raid%d+$") or
+      string.match(u, "^partypet%d+$") or string.match(u, "^raidpet%d+$")) then
+    return nil
+  end
   return u == "player" and "测试玩家" or (TEST.curTargetName or "测试怪")
 end
 UnitLevel = function() return 60 end
