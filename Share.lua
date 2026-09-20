@@ -675,6 +675,21 @@ end
 -- msg/sender 来自事件；ev = 触发的事件名（可缺：测试直调时为 nil）
 -- ★1.71.3 这条分享内容是不是**我自己的方案**（用户要求：非「说」来源的自我回声直接忽略）。
 --   判据：解析出来同名 → 把我的那份**序列化后逐字比对**（只比名字会误伤「同名不同内容」）。
+-- ★★★1.74.5 真凶（用户报「盗贼方案分享无弹窗」+ 探针 ⑤ 实锤「收齐 → 回声忽略 IS_MINE=true」）：
+--   旧「回声忽略」看的是**接收方库里有没有这份方案**（EVAL_SHARE_IS_MINE 的文本比对）——
+--   只要接收方**恰好已有**这份方案（同账号共享库 / 以前导入过），就把**别人发的**误判成「自己的回声」吞掉、不弹窗。
+--   ★本意是「忽略**我自己发**的回声」——正确判据 = **发送者是不是本机玩家**：我发的才是我的回声；
+--     别人发的，哪怕我库里有同款，也是**别人的分享**，该弹。
+local function shIsSelfEcho(sender)
+  if type(UnitName) ~= "function" then return false end
+  local okn, me = pcall(UnitName, "player")
+  if not (okn and type(me) == "string" and me ~= "") then return false end
+  local s = tostring(sender or "")
+  s = string.gsub(s, "|c%x%x%x%x%x%x%x%x", "") -- 剥色码（名字可能被着色层包过）
+  s = string.gsub(s, "|r", "")
+  s = string.gsub(s, "%-.*$", "") -- 剥「-服务器」后缀
+  return s == me
+end
 function EVAL_SHARE_IS_MINE(text)
   if type(text) ~= "string" or text == "" then return false end
   if type(EVAL_PROFILE_FROM_TEXT) ~= "function" or type(EVAL_PROFILE_TO_TEXT) ~= "function" then return false end
@@ -915,10 +930,10 @@ local function shOnMsg(msg, sender, ev)
     -- ★1.71.3 用户要求：**不是「说」来源** 且内容就是**我自己的方案** → 直接忽略
     --   （自己往公会/队伍/团队发分享时，客户端会把分片**回声给自己**，不忽略就会自己弹自己的窗）。
     --   ★先确认「知道来源」（b.ev 非空）：认不出来时照旧弹出——宁可多弹一次，也不误吞真分享。
-    if b.ev and b.ev ~= "CHAT_MSG_SAY" and EVAL_SHARE_IS_MINE(text) then
+    if b.ev and b.ev ~= "CHAT_MSG_SAY" and shIsSelfEcho(sender) then
       SH.selfSkipped = (SH.selfSkipped or 0) + 1
-      shDbgChunk("回声忽略", msg, "IS_MINE=true")
-      EVAL_LOGLINE("[分享] 已忽略（自己的方案回声）：来源=" .. tostring(b.ev or "?") .. " 发送者=" .. tostring(sender))
+      shDbgChunk("回声忽略", msg, "发送者=本人")
+      EVAL_LOGLINE("[分享] 已忽略（自己发的回声）：来源=" .. tostring(b.ev or "?") .. " 发送者=" .. tostring(sender))
       return
     end
     -- R1：只保留最新一份 —— 弹窗内容换成最新的，并如实说明替换了谁

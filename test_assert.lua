@@ -5229,12 +5229,19 @@ do
     return nil
   end
 
-  -- ① 公会来源 + 自己的方案 → 忽略（不弹窗、且在观测口上如实 +1）
+  -- ① 公会来源 + **本人**发自己的方案（自我回声）→ 忽略（不弹窗、且在观测口上如实 +1）
+  --   ★1.74.5 判据改成「发送者是不是本机玩家」：本人(测试玩家)发的才是我的回声
   EVAL_SHARE_RESET()
   local base82 = EVAL_TEST_SHARE_SELF_SKIPPED()
-  for _, m in ipairs(msgs82) do EVAL_SHARE_ONMSG(m, "彩虹", "CHAT_MSG_GUILD") end
-  eq(EVAL_SHARE_PENDING() == nil, true, "★★★公会来源的自我回声被忽略（自己不再弹自己的窗）")
+  for _, m in ipairs(msgs82) do EVAL_SHARE_ONMSG(m, "测试玩家", "CHAT_MSG_GUILD") end
+  eq(EVAL_SHARE_PENDING() == nil, true, "★★★本人(测试玩家)发的自我回声被忽略（自己不再弹自己的窗）")
   eq(EVAL_TEST_SHARE_SELF_SKIPPED() == base82 + 1, true, "★★忽略次数如实 +1（可观测，不是静默丢弃）")
+  -- ①b ★★★1.74.5 真凶反转：**非本人**(彩虹)发、但我库里**恰好有**这份方案 → **该弹**（旧 IS_MINE 会误杀）
+  --   = 用户报的「盗贼方案分享无弹窗」：接收方已有盗贼 → 旧判据当成自己的回声吞掉
+  EVAL_SHARE_RESET()
+  for _, m in ipairs(msgs82) do EVAL_SHARE_ONMSG(m, "彩虹", "CHAT_MSG_GUILD") end
+  eq(EVAL_SHARE_PENDING() ~= nil, true, "★★★1.74.5 **非本人**发的、哪怕我库里有同款，也是**别人的分享**，**该弹**（修复 IS_MINE 误杀）")
+  eq(EVAL_TEST_SHARE_SELF_SKIPPED() == base82 + 1, true, "★①b没有误记忽略（别人的分享不该算自我回声）")
 
   -- ② 「说」来源 + 自己的方案 → 照旧弹（用户明确要求：除了说类型的分享）
   EVAL_SHARE_RESET()
@@ -5244,8 +5251,8 @@ do
 
   -- ③ 队伍来源 + 自己的方案 → 同样忽略（规则是「非说来源」，不是只盯公会）
   EVAL_SHARE_RESET()
-  for _, m in ipairs(msgs82) do EVAL_SHARE_ONMSG(m, "彩虹", "CHAT_MSG_PARTY") end
-  eq(EVAL_SHARE_PENDING() == nil, true, "★★队伍来源的自我回声同样忽略")
+  for _, m in ipairs(msgs82) do EVAL_SHARE_ONMSG(m, "测试玩家", "CHAT_MSG_PARTY") end
+  eq(EVAL_SHARE_PENDING() == nil, true, "★★队伍来源的自我回声（本人发）同样忽略")
   eq(EVAL_TEST_SHARE_SELF_SKIPPED() == base82 + 2, true, "★忽略计数又 +1")
 
   -- ④ 公会来源 + 别人的方案 → 点 [忽略] 按（头衔档×秘籍档）在公会频道抽一句
@@ -13643,6 +13650,377 @@ do
   print("  分享接收事件：七频道逐个注册 + 逐个喂真分片都要弹窗并标对来源（★队长版 CHAT_MSG_PARTY_LEADER 是本次修的静默缺口）")
 end
 
+
+-- ===== 组 176（1.74.5）：猎人助手 · 一键喂食（tools/HunterHelper.lua）=====
+-- 覆盖：①懒加载（开关关着不建帧、没喂过不建 tick）②工具箱「猎人助手」分组行
+--   ③下拉候选与排序（条目↔动作一一对应）④★★存名字 → 挪格后仍实时重解析包格
+--   ⑤成功链路（跨帧状态机：限频滴出 → 待选态 → 点包 → 收尾）⑥★★★守卫：没进待选态绝不点包
+--   ⑦★★失败还原（光标被退回 → ClearCursor）⑧找不到食物连技能都不施放 ⑨总闸门关着拒绝 ⑩真实命令入口
+do
+  local tb176 = EVAL_HELP_CONFIG
+  if type(tb176.tb) ~= "table" then tb176.tb = {} end
+  -- 前置：显式建立（不靠别组的残留状态——「桩太宽松」是本项目老坑）
+  tb176.tb.feedPet = false
+  tb176.tb.hhFood, tb176.tb.hhFoodTex, tb176.tb.hhSpell = nil, nil, nil
+  TEST.hasPet, TEST.targeting, TEST.cursorItem = true, nil, false
+  TEST.pickupCalls, TEST.clearCursorCalls = 0, 0
+  TEST.runScripts = {}
+  TEST.petFood = "肉类,鱼类"
+  TEST.spellbook = { { name = "喂食宠物" }, { name = "奥术射击" } }
+  TEST.bags = { [1 * 100 + 1] = { name = "熏熊肉", tex = "texmeat", count = 3 },
+                [0 * 100 + 2] = { name = "魔法泉水", tex = "texwater", count = 2 } }
+  EVAL_HH_TEST_RESET_TIMERS()
+  TEST.chat = nil
+
+  -- ① 懒加载
+  local s176a = EVAL_TEST_HH_STATE()
+  eq(s176a.built, false, "①★★懒加载：开关关着时**连图标帧都没建**（built=false）")
+  eq(s176a.hasTick, false, "①★★没喂过 → 连 OnUpdate 帧都没有（载入期零副作用）")
+  tb176.tb.feedPet = true
+  EVAL_HH_TOGGLE()
+  local s176b = EVAL_TEST_HH_STATE()
+  eq(s176b.built, true, "①★打开开关 → 才建图标帧（懒建）")
+  eq(s176b.shown, true, "①★打开后图标显示（走真实 Show）")
+
+  -- ② 工具箱分组 + 行（读真实 tbModel；不拿语言包当期望值，只查结构与相邻关系）
+  local rows176 = EVAL_TEST_TB_ROWS()
+  local idx176 = nil
+  for i = 1, table.getn(rows176) do
+    if rows176[i].t == "c" and rows176[i].key == "feedPet" then idx176 = i end
+  end
+  eq(idx176 ~= nil, true, "②★★工具箱里有 key=feedPet 的复选框行（一键喂食开关）")
+  eq(idx176 ~= nil and idx176 > 1 and rows176[idx176 - 1].t == "h", true, "②★★它上面紧跟着一个分组标题（猎人助手）")
+  eq(idx176 ~= nil and type(rows176[idx176 - 1].label) == "string" and string.len(rows176[idx176 - 1].label) > 2, true,
+     "②★分组标题有实际文案（不是空串）")
+
+  -- ③ 下拉候选（读**真模型**：条目与动作一一对应，测试不复刻逻辑）
+  local items176, acts176 = EVAL_TEST_HH_DD()
+  local n176 = table.getn(items176)
+  eq(n176 >= 4, true, "③★下拉模型至少含：选技能 + 2 件物品 + 清除（实际 " .. tostring(n176) .. " 项）")
+  eq(acts176[1].k, "spell", "③★第 1 项 = 从法术书选喂食技能")
+  eq(acts176[n176].k, "clear", "③★最后一项 = 清除食物设置")
+  eq(acts176[2].name, "熏熊肉", "③★★「像食物」的（名字含「肉」）排前面 —— 候选排序真的生效")
+  eq(acts176[3].name, "魔法泉水", "③★不像食物的排后面（只排序、不隐藏：吃不吃由客户端判定）")
+  EVAL_HH_DD_APPLY(2, acts176)
+  eq(tb176.tb.hhFood, "熏熊肉", "③★点下拉项 → 食物设置落配置（存的是**名字**）")
+  eq(tb176.tb.hhFoodTex, "texmeat", "③★图标缓存一并记下（图标直接变成该食物）")
+
+  -- ④ ★★★存名字 → 挪格后仍能实时解析（本项目「不许两处真值」纪律）
+  TEST.bags = { [3 * 100 + 2] = { name = "熏熊肉", tex = "texmeat", count = 7 } }
+  local b176, sl176, t176, c176 = EVAL_HH_FIND_FOOD("熏熊肉")
+  eq(b176 == 3 and sl176 == 2 and c176 == 7, true,
+     "④★★★把食物挪到 3 号包第 2 格后仍解析到新包格（" .. tostring(b176) .. "," .. tostring(sl176) ..
+     " ×" .. tostring(c176) .. "）—— 存死包格的话这里就错了")
+
+  -- ⑤ 成功链路
+  TEST.targeting, TEST.cursorItem = nil, false
+  TEST.pickupCalls = 0
+  TEST.runScripts = {}
+  EVAL_HH_TEST_RESET_TIMERS()
+  EVAL_HH_FEED()
+  local s176c = EVAL_TEST_HH_STATE()
+  eq(s176c.qn, 1, "⑤★左键 = 入队（不是当帧硬干：服务器动作要限频）")
+  eq(s176c.hasTick, true, "⑤★入队时才建 OnUpdate 帧（懒建）")
+  EVAL_HH_STEP(1000)
+  local last176 = tostring(TEST.runScripts[table.getn(TEST.runScripts)] or "")
+  eq(string.find(last176, "CastSpellByName", 1, true) ~= nil, true, "⑤★限频滴出后投递了施放脚本：" .. last176)
+  eq(string.find(last176, "喂食宠物", 1, true) ~= nil, true, "⑤★脚本里是自动扫出来的技能名")
+  eq(TEST.pickupCalls, 0, "⑤★★★此刻**还没点背包**（还没进待选目标态）")
+  TEST.targeting = 1
+  EVAL_HH_STEP(1000.5)
+  eq(TEST.pickupCalls, 1, "⑤★★待选态一到 → 点包（把食物当技能目标）")
+  eq(TEST.picked, 3 * 100 + 2, "⑤★★点的是**那一刻实时解析出来的**格子")
+  TEST.targeting = nil
+  EVAL_HH_STEP(1001)
+  local s176d = EVAL_TEST_HH_STATE()
+  eq(s176d.phase, "idle", "⑤★确认结果后回 idle（不悬着）")
+  eq(s176d.hits, 1, "⑤★成功计数 +1")
+  eq(string.find(tostring(TEST.chat or ""), "🍖", 1, true) ~= nil, true, "⑤★如实播报成功")
+
+  -- ⑥ 守卫：没进待选态 → 绝不点背包（点了只会把食物捡到光标上）
+  TEST.chat = nil
+  TEST.targeting, TEST.cursorItem = nil, false
+  TEST.pickupCalls = 0
+  EVAL_HH_TEST_RESET_TIMERS()
+  EVAL_HH_FEED()
+  EVAL_HH_STEP(2000)
+  EVAL_HH_STEP(2000.5)
+  eq(TEST.pickupCalls, 0, "⑥★★★没进「等待选目标」就**绝不点背包**")
+  eq(EVAL_TEST_HH_STATE().phase, "aim", "⑥★此时停在 aim（在等，不是失败）")
+  EVAL_HH_STEP(2001.5)
+  eq(EVAL_TEST_HH_STATE().phase, "idle", "⑥★超过等待上限 → 中止回 idle")
+  eq(string.find(tostring(TEST.chat or ""), "❌", 1, true) ~= nil, true, "⑥★如实报原因（不静默）")
+
+  -- ⑦ 失败还原：客户端没把它当目标 → 物品回到光标 → ClearCursor 放回
+  TEST.chat = nil
+  TEST.targeting, TEST.cursorItem = 1, false
+  TEST.pickupCalls, TEST.clearCursorCalls = 0, 0
+  EVAL_HH_TEST_RESET_TIMERS()
+  EVAL_HH_FEED()
+  EVAL_HH_STEP(3000)
+  EVAL_HH_STEP(3000.2)
+  eq(TEST.pickupCalls, 1, "⑦前置：待选态已到 → 点了一次包")
+  TEST.cursorItem = true
+  TEST.targeting = nil
+  EVAL_HH_STEP(3000.5)
+  eq(TEST.clearCursorCalls, 1, "⑦★★★不是它能吃的 → ClearCursor 放回原格（绝不把玩家食物留在光标上）")
+  eq(EVAL_TEST_HH_STATE().phase, "idle", "⑦★失败后也回 idle")
+  eq(TEST.cursorItem, false, "⑦★桩里物品确实回到包里了（还原不是嘴上说说）")
+
+  -- ⑧ 找不到食物 → 连技能都不施放
+  TEST.chat = nil
+  TEST.bags = {}
+  TEST.runScripts = {}
+  TEST.targeting = nil
+  EVAL_HH_TEST_RESET_TIMERS()
+  EVAL_HH_FEED()
+  EVAL_HH_STEP(4000)
+  eq(table.getn(TEST.runScripts), 0, "⑧★★食物不在背包 → **连技能都不施放**（绝不乱挑一格蒙）")
+  eq(string.find(tostring(TEST.chat or ""), "熏熊肉", 1, true) ~= nil, true, "⑧★报错点名要找的食物（可据此排查）")
+
+  -- ⑨ 总闸门关着 → 拒绝
+  tb176.tb.feedPet = false
+  EVAL_HH_TEST_RESET_TIMERS()
+  eq(EVAL_HH_FEED(), false, "⑨★总闸门关着 → 直接拒绝（返回 false）")
+  tb176.tb.feedPet = true
+
+  -- ⑩ 真实命令入口（走 SlashCmdList；本项目「命令也是接线」的既有判据）
+  TEST.chat = nil
+  if SlashCmdList and SlashCmdList["EVALHELP"] then SlashCmdList["EVALHELP"]("go 喂食 设 魔法泉水") end
+  eq(tb176.tb.hhFood, "魔法泉水", "⑩★/eh go 喂食 设 <食物名> 走真实命令入口能落配置")
+  TEST.chat = nil
+  if SlashCmdList and SlashCmdList["EVALHELP"] then SlashCmdList["EVALHELP"]("go 喂食探针") end
+  local said176 = tostring(TEST.chat or "")
+  eq(string.find(said176, "SpellIsTargeting", 1, true) ~= nil, true, "⑩★探针摊开可用性矩阵（含 SpellIsTargeting）")
+  eq(string.find(said176, "PickupContainerItem", 1, true) ~= nil, true, "⑩★探针列出 PickupContainerItem")
+  eq(string.find(said176, "GetPetFoodTypes", 1, true) ~= nil, true, "⑩★探针列出宠物食谱接口")
+
+  -- ⑪ 图标随食物走
+  tb176.tb.hhFood, tb176.tb.hhFoodTex = "熏熊肉", "texmeat"
+  EVAL_HH_REFRESH()
+  eq(EVAL_TEST_HH_STATE().foodTex, "texmeat", "⑪★食物设置带图标缓存 → 图标变成该食物")
+
+  -- ⑫ 关掉开关 → 图标收起（帧留着，重开不再重建）
+  tb176.tb.feedPet = false
+  EVAL_HH_TOGGLE()
+  eq(EVAL_TEST_HH_STATE().shown, false, "⑫★★关掉开关 → 图标收起")
+  tb176.tb.feedPet = true
+  EVAL_HH_TOGGLE()
+  eq(EVAL_TEST_HH_STATE().shown, true, "⑫★再打开 → 立刻显示（不需要 /reload）")
+
+  -- ⑬ 位置（用户要求：「一键喂食的图标默认打开在窗口中间」）
+  --   桩给 UIParent 一个真实尺寸（1024×768）才量得到几何；本组结束**原值还原**，不给别的组留副作用。
+  local uw176, uh176 = rawget(UIParent, "GetWidth"), rawget(UIParent, "GetHeight")
+  rawset(UIParent, "GetWidth", function() return 1024 end)
+  rawset(UIParent, "GetHeight", function() return 768 end)
+  tb176.tb.feedPet = true
+  -- ① 没有记忆位置 → 正中（独立算式：left = w/2 - 18、top = -(h/2 - 18)，18 = 36/2）
+  tb176.tb.hhX, tb176.tb.hhY = nil, nil
+  EVAL_TEST_HH_RESET_UI()
+  EVAL_HH_TOGGLE()
+  local g13a176 = EVAL_TEST_HH_GEOM()
+  eq(g13a176 ~= nil and g13a176.left == 1024 / 2 - 18 and g13a176.top == -(768 / 2 - 18), true,
+     "⑬★★默认位置 = 窗口**正中**（left=" .. tostring(g13a176 and g13a176.left) ..
+     " top=" .. tostring(g13a176 and g13a176.top) .. "；期望 494 / -366）")
+  -- ② 有记忆位置 → 按「中心偏移」还原（左移/上移都验，防方向写反）
+  tb176.tb.hhX, tb176.tb.hhY = 60, -40
+  EVAL_TEST_HH_RESET_UI()
+  EVAL_HH_TOGGLE()
+  local g13b176 = EVAL_TEST_HH_GEOM()
+  eq(g13b176 ~= nil and g13b176.left == 1024 / 2 + 60 - 18 and g13b176.top == -(768 / 2 - (-40) - 18), true,
+     "⑬★★记住的位置按「中心偏移」还原（left=" .. tostring(g13b176 and g13b176.left) ..
+     " top=" .. tostring(g13b176 and g13b176.top) .. "；期望 554 / -406）")
+  -- ③ 越界回归：离谱的记忆 → 夹回屏幕内（四边都在屏幕里）
+  tb176.tb.hhX, tb176.tb.hhY = 99999, -99999
+  EVAL_TEST_HH_RESET_UI()
+  EVAL_HH_TOGGLE()
+  local g13c176 = EVAL_TEST_HH_GEOM()
+  local inside176 = (g13c176 ~= nil) and g13c176.left and g13c176.top and g13c176.w and g13c176.h
+    and g13c176.left >= 0 and (g13c176.left + g13c176.w) <= 1024
+    and g13c176.top <= 0 and (g13c176.top - g13c176.h) >= -768
+  eq(inside176 == true, true,
+     "⑬★★越界的记忆位置被**夹回屏幕内**（left=" .. tostring(g13c176 and g13c176.left) ..
+     " top=" .. tostring(g13c176 and g13c176.top) .. "）")
+  -- 还原桩 + 回到默认居中状态
+  rawset(UIParent, "GetWidth", uw176)
+  rawset(UIParent, "GetHeight", uh176)
+  tb176.tb.hhX, tb176.tb.hhY = nil, nil
+  EVAL_TEST_HH_RESET_UI()
+  EVAL_HH_TOGGLE()
+
+  -- ⑭ 「待测试」标记（用户要求：工具箱 →「一键喂食」右侧加一个**插件本地**黄感叹号，提示待测试）
+  --   前置：模型里只给本行标 wip；真控件走刷新时记下的映射；贴图路径走单一来源 EVAL_UI_MARK_TEST。
+  local rows14_176 = EVAL_TEST_TB_ROWS()
+  local wipRow176, plainRow176 = nil, nil
+  for i = 1, table.getn(rows14_176) do
+    if rows14_176[i].key == "feedPet" then wipRow176 = rows14_176[i] end
+    if rows14_176[i].key == "repair" then plainRow176 = rows14_176[i] end
+  end
+  eq(wipRow176 ~= nil and type(wipRow176.wip) == "string" and string.len(wipRow176.wip) > 4, true,
+     "⑭★★模型里 feedPet 行带 wip 文案（标记 tooltip 的数据来源）")
+  eq(plainRow176 ~= nil and plainRow176.wip == nil, true, "⑭★别的开关行**没有**这枚标记（只标待测试项）")
+  local savedTab176 = EVAL_HELP_CFG_TAB()
+  EVAL_HELP_CFG_SETTAB(3) -- 真实版式（行控件的显隐走显式清单，不切过来全是 Hide）
+  local wipBtn176, wipTex176 = EVAL_TEST_TB_WIP_FOR("feedPet")
+  eq(wipBtn176 ~= nil, true, "⑭★真实控件拿得到（读值口读的是刷新时的实际映射）")
+  eq(wipBtn176 ~= nil and wipBtn176:IsShown() == true, true, "⑭★★feedPet 行的黄感叹号**确实显示**")
+  local otherBtn176 = EVAL_TEST_TB_WIP_FOR("repair")
+  eq(otherBtn176 == nil or otherBtn176:IsShown() ~= true, true, "⑭★其它行即使有控件也不显示（显式清单没漏）")
+  local texPath176 = wipTex176 and rawget(wipTex176, "__tex") or nil
+  eq(type(texPath176) == "string" and string.find(texPath176, "mark%-test") ~= nil, true,
+     "⑭★★图标 = 本插件 media/icons 里的黄感叹号（读真实贴图路径：" .. tostring(texPath176) .. "）")
+  -- tooltip：走**真实 OnEnter**；首行就是用户点名的那四个字
+  TEST.tipLines = nil
+  local okEnter176, fnEnter176 = pcall(wipBtn176.GetScript, wipBtn176, "OnEnter")
+  eq(okEnter176 and type(fnEnter176) == "function", true, "⑭★标记挂了真实 OnEnter（能出 tooltip）")
+  if okEnter176 and type(fnEnter176) == "function" then fnEnter176() end
+  local tipTxt176 = ""
+  for _, t in ipairs(TEST.tipLines or {}) do tipTxt176 = tipTxt176 .. "|" .. tostring(t.text) end
+  eq(string.find(tipTxt176, "待测试", 1, true) ~= nil, true, "⑭★★tooltip 首行 = 「待测试」：" .. tipTxt176)
+  eq(string.find(tipTxt176, "实测", 1, true) ~= nil, true, "⑭★tooltip 说明里讲清「尚未游戏内实测」")
+  local okLeave176, fnLeave176 = pcall(wipBtn176.GetScript, wipBtn176, "OnLeave")
+  eq(okLeave176 and type(fnLeave176) == "function", true, "⑭★离开时收起 tooltip（OnLeave 在位）")
+  -- 几何：贴**本列右边缘**（全用距左边口径；列右 = colX[col] + colW）
+  local lay176 = EVAL_TB_TEST_LAYOUT()
+  local rowRect176 = nil
+  for k = 1, table.getn(lay176.rows or {}) do
+    local r = lay176.rows[k]
+    if r and r.key == "feedPet" then rowRect176 = r end
+  end
+  eq(rowRect176 ~= nil and rowRect176.wip ~= nil and type(rowRect176.wip.x) == "number", true,
+     "⑭★版式读值口报得出标记的真实矩形")
+  local colRight176 = (rowRect176 and lay176.colX[rowRect176.col] or 0) + (lay176.colW or 0)
+  local wipRight176 = rowRect176 and rowRect176.wip and (rowRect176.wip.x + rowRect176.wip.w) or nil
+  eq(wipRight176 ~= nil and wipRight176 <= colRight176 and wipRight176 >= colRight176 - 1, true,
+     "⑭★★标记贴在本列**右边缘**（标记右端=" .. tostring(wipRight176) .. "，列右端=" .. tostring(colRight176) .. "）")
+  EVAL_HELP_CFG_SETTAB(savedTab176) -- 还原 Tab（不留副作用）
+  TEST.tipLines = nil
+
+  -- ⑮ 左右键分派（★用户报「右键选食物无法触发」→ 本客户端 OnClick 的**参数形态不固定**，
+  --   主程序里实测过的两处都写成「四候选」；这一组把四种形态逐个钉住 + 反向哨兵「左键不许开菜单」）
+  tb176.tb.feedPet = true
+  EVAL_HH_TEST_RESET_TIMERS()
+  EVAL_HH_TOGGLE()
+  -- ① button 在第 1 参 → 开**图标网格**（1.74.5 起「选食物」不再是文本下拉）
+  EVAL_HH_GRID_HIDE()
+  local okC1_176 = EVAL_TEST_HH_CLICK("RightButton")
+  local gC1_176 = EVAL_TEST_HH_GRID()
+  eq(okC1_176 == true and gC1_176 ~= nil and gC1_176.shown == true, true, "⑮★button 在第 1 参 → 打开选食物网格")
+  -- ② 真机形态：第 1 参是 self、button 在第 2 参（技能格 1.74.2 实测写法）
+  --    网格已开时再右键 = 收起（开关语义，避免「点了没反应」）
+  local okC2_176 = EVAL_TEST_HH_CLICK({}, "RightButton")
+  eq(okC2_176 == true and EVAL_TEST_HH_GRID().shown == false, true, "⑮★★self 在前、button 在第 2 参 → 也认（再点一次 = 收起）")
+  -- ③ 只有全局 arg1 的形态（1.12 的事件/脚本全局）
+  arg1 = "RightButton"
+  local okC3_176 = EVAL_TEST_HH_CLICK(nil, nil)
+  arg1 = nil
+  eq(okC3_176 == true and EVAL_TEST_HH_GRID().shown == true, true, "⑮★★只有全局 arg1 = RightButton → 也认（重新打开）")
+  -- ④ 反向哨兵：左键（self + nil）**绝不开**网格，而是走喂食入队
+  --    ★用户看到的「右键选食物无法触发」正是「右键掉进了这条左键分支」
+  EVAL_HH_GRID_HIDE()
+  EVAL_HH_TEST_RESET_TIMERS()
+  local okC4_176 = EVAL_TEST_HH_CLICK({}, nil)
+  eq(EVAL_TEST_HH_GRID().shown == false, true, "⑮★★左键**不开**选食物网格")
+  eq(EVAL_TEST_HH_STATE().qn, 1, "⑮★★左键 = 喂食入队（走限频状态机）")
+  -- ⑤ 降级：网格入口不在（老客户端/异常）→ 仍能开文本下拉（绝不静默无反应，也如实记日志）
+  local realGrid176 = EVAL_HH_GRID_OPEN
+  local realDD176 = EVAL_DD_OPEN
+  local ddCalls176 = 0
+  EVAL_DD_OPEN = function(anchor, items, cb) ddCalls176 = ddCalls176 + 1 return true end
+  EVAL_HH_GRID_OPEN = nil
+  EVAL_HH_GRID_HIDE()
+  local okC5_176 = EVAL_TEST_HH_CLICK("RightButton")
+  eq(okC5_176 == true and ddCalls176 == 1, true, "⑮★网格不可用 → 降级文本下拉（不是静默无反应）")
+  EVAL_DD_OPEN = realDD176
+  EVAL_HH_GRID_OPEN = realGrid176
+  local st15_176 = EVAL_TEST_HH_STATE()
+  eq(st15_176.leftClicks >= 1 and st15_176.rightClicks >= 4, true,
+     "⑮★点击记账分得清（左 " .. tostring(st15_176.leftClicks) .. " / 右 " .. tostring(st15_176.rightClicks) .. "）")
+  eq(type(st15_176.lastArgs) == "string" and string.len(st15_176.lastArgs) > 3, true,
+     "⑮★探针读得到**原始参数形状**（下次不靠猜）：" .. tostring(st15_176.lastArgs))
+  EVAL_HH_GRID_HIDE()
+  EVAL_HH_TEST_RESET_TIMERS()
+  -- ⑤ 探针把这条真相摊开
+  TEST.chat = nil
+  if SlashCmdList and SlashCmdList["EVALHELP"] then SlashCmdList["EVALHELP"]("go 喂食探针") end
+  local said15_176 = tostring(TEST.chat or "")
+  eq(string.find(said15_176, "点击分派", 1, true) ~= nil, true, "⑮★探针输出「点击分派」行（右键计数/参数形状）")
+  eq(string.find(said15_176, "注册右键", 1, true) ~= nil, true, "⑮★探针报 RegisterForClicks 的结果（不静默吞）")
+  TEST.chat = nil
+
+  -- ⑯ 「选食物」= **背包式四方格图标网格**（1.74.5 用户要求：「图标搭配 tooltip，类似背包四方格布局 8×N」）
+  tb176.tb.feedPet = true
+  tb176.tb.hhFood, tb176.tb.hhFoodTex = nil, nil
+  TEST.bags = { [0 * 100 + 1] = { name = "熏熊肉", tex = "texmeat", count = 3 },
+                [1 * 100 + 1] = { name = "魔法泉水", tex = "texwater", count = 2 } }
+  TEST.tipLines = nil
+  EVAL_HH_TOGGLE()
+  EVAL_HH_GRID_HIDE()
+  EVAL_TEST_HH_CLICK("RightButton") -- 右键开网格（真实 OnClick）
+  local g16a_176 = EVAL_TEST_HH_GRID()
+  eq(g16a_176 ~= nil and g16a_176.shown == true, true, "⑯★右键 → 图标网格面板打开")
+  eq(g16a_176.cols == 8 and g16a_176.rows >= 1 and g16a_176.per == g16a_176.cols * g16a_176.rows, true,
+     "⑯★★布局 = **8 列 × N 行**（用户要求 8×N；每页 " .. tostring(g16a_176.per) .. " 格 = 8×" .. tostring(g16a_176.rows) .. "）")
+  eq(g16a_176.total >= 2 and g16a_176.filled == g16a_176.total, true,
+     "⑯★候选全部落格（total=" .. tostring(g16a_176.total) .. " filled=" .. tostring(g16a_176.filled) .. "）")
+  eq(type(g16a_176.first) == "string" and type(g16a_176.firstTex) == "string", true,
+     "⑯★★格子带**真图标 + 名字**：" .. tostring(g16a_176.first) .. " / " .. tostring(g16a_176.firstTex))
+  -- tooltip：走真实 OnEnter（名字 + 数量/包格 + 左键提示）
+  EVAL_TEST_HH_GRID_HOVER(1)
+  local tip16_176 = ""
+  for _, t in ipairs(TEST.tipLines or {}) do tip16_176 = tip16_176 .. "|" .. tostring(t.text) end
+  eq(string.find(tip16_176, tostring(g16a_176.first), 1, true) ~= nil, true, "⑯★★格子 tooltip 含物品名")
+  eq(string.find(tip16_176, "左键", 1, true) ~= nil, true, "⑯★tooltip 里有「左键 = 选为喂食食物」提示")
+  -- 点真实格子 → 设为食物 + 自动收起
+  local okPick16_176 = EVAL_TEST_HH_GRID_CLICK(1)
+  eq(okPick16_176 == true and tb176.tb.hhFood == g16a_176.first, true,
+     "⑯★★点格子 = 设成喂食食物（" .. tostring(tb176.tb.hhFood) .. "）")
+  eq(EVAL_TEST_HH_GRID().shown == false, true, "⑯★选完自动收起（不用再点关闭）")
+  -- 翻页：桩只给 2 格/包 → 临时把主背包放大到 45 格来验「每页 40 + 绝不静默截断」
+  local oldSlots176 = GetContainerNumSlots
+  GetContainerNumSlots = function(bag) if bag == 0 then return 45 end return 0 end
+  local many176 = {}
+  for i = 1, 45 do many176[0 * 100 + i] = { name = "肉" .. tostring(i), tex = "tex" .. tostring(i), count = i } end
+  TEST.bags = many176
+  EVAL_TEST_HH_CLICK("RightButton")
+  local g16b_176 = EVAL_TEST_HH_GRID()
+  eq(g16b_176.total == 45 and g16b_176.filled == 40, true,
+     "⑯★★每页 40 格（8×5），第 1 页装满：" .. tostring(g16b_176.filled) .. "/" .. tostring(g16b_176.total))
+  eq(g16b_176.upShown == false and g16b_176.dnShown == true, true, "⑯★第 1 页：上翻隐藏、下翻可见（到顶藏箭头）")
+  eq(type(g16b_176.countText) == "string" and string.find(g16b_176.countText, "45", 1, true) ~= nil, true,
+     "⑯★★计数写明「1-40 / 45」——**绝不静默截断**：" .. tostring(g16b_176.countText))
+  EVAL_TEST_HH_GRID_PAGE("dn")
+  local g16c_176 = EVAL_TEST_HH_GRID()
+  eq(g16c_176.page == 1 and g16c_176.filled == 5, true,
+     "⑯★下翻到第 2 页只剩 5 件（45-40），空格子隐藏而不是留残影")
+  eq(g16c_176.upShown == true and g16c_176.dnShown == false, true, "⑯★到底：下翻隐藏")
+  EVAL_TEST_HH_GRID_PAGE("up")
+  eq(EVAL_TEST_HH_GRID().page == 0, true, "⑯★上翻回到第 1 页")
+  -- 滚轮：上滚 = 回到前面（方向单一来源 EVAL_WHEEL_DIR；位移与方向**相反**）
+  EVAL_TEST_HH_GRID_PAGE("dn")
+  EVAL_TEST_HH_GRID_WHEEL(1)
+  eq(EVAL_TEST_HH_GRID().page == 0, true, "⑯★★滚轮上滚 = 回到前面（方向单一来源）")
+  -- 空包：如实提示，不留上一页残留
+  TEST.bags = {}
+  EVAL_HH_GRID_REFRESH()
+  local g16d_176 = EVAL_TEST_HH_GRID()
+  eq(g16d_176.total == 0 and g16d_176.filled == 0, true, "⑯★空包：0 条候选（上一页的格子必须清空）")
+  eq(type(g16d_176.countText) == "string" and string.len(g16d_176.countText) > 2, true,
+     "⑯★空包有提示文案：" .. tostring(g16d_176.countText))
+  GetContainerNumSlots = oldSlots176
+  EVAL_HH_GRID_HIDE()
+  TEST.tipLines = nil
+
+  -- 收尾：复位模块与桩，别影响后面的组
+  tb176.tb.feedPet = false
+  tb176.tb.hhFood, tb176.tb.hhFoodTex, tb176.tb.hhSpell = nil, nil, nil
+  EVAL_HH_TEST_RESET_TIMERS()
+  TEST.bags, TEST.targeting, TEST.cursorItem, TEST.hasPet = nil, nil, nil, nil
+  TEST.pickupCalls, TEST.clearCursorCalls = nil, nil
+  TEST.runScripts = nil
+  TEST.chat = nil
+  print("  猎人助手 · 一键喂食：懒加载 / 分组行 / 候选排序 / 名字→包格重解析 / 跨帧状态机 / 守卫不点包 / 失败还原")
+end
 
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")
