@@ -21,7 +21,7 @@
 
 > 📌 Continuously improving — testing and feedback welcome!　🐞 [Bug reports / suggestions](https://gitee.com/xeval/emberveil_eval_help.git) (Issues)　🤖 Developed with DeepSeek Harness AI assistance (see "Contributing" at the bottom)
 
-## 🏁 Milestones (1.52.0 → 1.74.3)
+## 🏁 Milestones (1.52.0 → 1.74.4)
 
 - **🎉 Sharing system rework: cover line · tiers · titles · easter egg · reactions** (1.73.35 → 1.74.0): 85 commits released at once — share cover line (`[Tier manual · name]` as a clickable link, click opens a confirm popup instead of auto-importing), score-based tiers (25+ = Divine, five colours incl. deep red), **title gacha** (5 tiers × 15 cards, only-up, custom title + colour), the "Genesis" easter egg (3-condition gate) + **role-play reactions** (title tier × manual tier, lottery-picked, guild/say/party, and the scheme name is a clickable link to the receive page).
 - **🧪 Real-client forensics for links/colour codes** (1.73.35 → 1.74.0): whether custom links survive the server, the true 250-byte message cap, hover mechanics, on-disk ledgers — nailed down the "colour-code sending rules" (one colour segment first + **must carry a link**, 1 msg/sec, only `[EHPF#]` is recognised).
@@ -39,6 +39,7 @@
 
 | Version | Theme | One-line highlight |
 | :-- | :-- | :-- |
+| **1.74.4** | 🐞 Fix "invite shown for someone already in your party": require the target NOT be in your group | 1.74.1 only checked YOUR state → leader + already-in-party showed both "Invite" and "Kick" (contradiction); now: target not in your group AND (not in a party or you're the leader) |
 | **1.74.3** | 📥 Fix "party-channel share never pops up" (user report) | In 1.12, party messages from the **leader** fire separate events `CHAT_MSG_PARTY_LEADER`/`CHAT_MSG_RAID_LEADER`; the receiver registered only the plain ones → a leader's share never arrived. Both leader variants now registered |
 | **1.74.2** | 🖱 Combat-UI skill cell: **left = toggle enable/disable · right = open editor** | Was: any click opened the editor → left now toggles in place (writes `r.enabled` truth + double refresh), right opens the config popup |
 | **1.74.1** | 🖱 Party-menu condition fixes + leave party | "Invite" shows when not in a party **or** you're the leader · "Kick" requires leader + teammate target · new "Leave party" (in a party) · preview screenshots synced |
@@ -48,7 +49,6 @@
 | **1.72.2** | 🔍 Shared-profile aura fix + guide on every load | Unlearned auras now fall back to a name scan and self-heal; the starter guide prints on every load; fixed a frame name shadowing its global function |
 | **1.72.1** | 🧭 Friendly first-run | Load confirmation + a four-step starter guide on first login (combat UI / first profile / key binding / skill log); replay it from the Global tab or `/eh guide` |
 | **1.72.0** | 🎉 **Profile hotkeys fixed + a batch of UI polish** (spans 1.71.3–1.71.24) | 22 versions shipped at once: **profile hotkeys went from "never fire" to actually working** (four dead ends ruled out: CLICK hijacked the mouse → raw command names are not dispatched → this client does not read addon Bindings.xml → **hooking ActionButtonDown/Up**; zero cost, no macro slots, no stolen keys, live while the game runs); **right-click features merged** into one Profile Manager window (rename + hotkey, one Save commits both); case-template window redesigned three times; Icon Library tab + right-click to set the minimap icon; combat HUD title shows the player name; Stop Attack / Follow / member filtering / share overhaul |
-| **1.71.24** | 🗂 右键功能合并成一个「方案管理」弹窗 | 用户：「将这两个功能合并成一个弹窗管理.都是右键触发.」—— 把此前**两个独立的右键弹窗**（配置窗方案按钮右键=重命名 / 战斗信息UI 方案按钮右键=快捷键绑定）合并成**一个方案管理窗**：窗内两段 ① 方案名称 ② 快捷键，**[保存] 一次提交两段**（改名 + 绑键，互不牵连）；**两处右键都开同一个窗**（左键语义不变，仍是激活方案）；★关键决定 = **不为旧入口留别名**（留别名会让「调用点改回旧名字」的回归悄悄通过——实测变异 M1/M2 正是这样 SURVIVED 的）；组 102 + 变异 **8/8** 全捕获 |
 
 > 📜 Detailed per-version notes live in **[CHANGELOG.md](CHANGELOG.md)**; earlier history is in the git commit log.
 

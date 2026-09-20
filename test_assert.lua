@@ -10198,7 +10198,7 @@ do
   local kickB130 = menuIdxOf130("队友甲", "TB_NAMEMENU_KICKP")
   local leaveB130 = menuIdxOf130("队友甲", "TB_NAMEMENU_LEAVEP")
   local queryB130 = menuIdxOf130("队友甲", "TB_NAMEMENU_QUERY")
-  eq(menuIdxOf130("队友甲", "TB_NAMEMENU_PARTY") ~= nil, true, "⑥e2★★★我是队长 → 「邀请队伍」**显示**")
+  eq(menuIdxOf130("队友甲", "TB_NAMEMENU_PARTY") == nil, true, "⑥e2★★★1.74.4 对方**已入队** → 「邀请队伍」**藏掉**（用户截图 bug：邀请与踢出同屏出现自相矛盾）")
   eq(kickB130 ~= nil, true, "⑥e2★★★我是队长 + 右键真队友 → 「踢出队伍」**显示**")
   eq(kickB130 ~= nil and queryB130 ~= nil and kickB130 < queryB130, true, "⑥e2★★★「踢出队伍」在「查询」上方")
   eq(leaveB130 ~= nil and queryB130 ~= nil and leaveB130 == queryB130 - 1, true, "⑥e2★★★「离开队伍」紧跟「查询」上方")

@@ -1362,7 +1362,9 @@ local function tbMenuItems(name)
     local okR, rlead = pcall(IsRaidLeader)
     if okR and rlead == true then tbIsLeader = true end
   end
-  if (not tbInParty) or tbIsLeader then add(L("TB_NAMEMENU_PARTY"), EVAL_TB_NAME_PARTY) end -- 没队伍或我是队长才给「邀请队伍」
+  -- ★★★1.74.4 用户（截图：对方已入队却仍显示「邀请队伍」）：条件还**漏看「对方是否已在我队伍里」** ——
+  --   已在我队伍/团队里的人**不该再出现**「邀请队伍」（邀了也是无操作）；它只看「我」的状态是 bug。
+  if (not EVAL_TB_NAME_INMYGROUP(name)) and ((not tbInParty) or tbIsLeader) then add(L("TB_NAMEMENU_PARTY"), EVAL_TB_NAME_PARTY) end -- 对方不在我队伍里，且（没队伍或我是队长）才给「邀请队伍」
   -- ★★★1.74.1 修（用户实测：「目标不在队伍，却显示踢出队伍」）：
   --   可见性判据必须是「**被右键的这个人**是不是我的队伍/团队成员」，而不是「我自己在不在队伍里」。
   --   （旧写法用 tbInParty ⇒ 只要自己在队伍里，右键任何人都会冒出「踢出队伍」。）
