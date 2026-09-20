@@ -3857,6 +3857,11 @@ function EVAL_TB_ONEVENT(e)
     tbNcHarvest("who")
     -- ★1.73.52 名册还没到位（本地条数 0）→ 只发一次 GuildRoster()，回来由 GUILD_ROSTER_UPDATE 接
     if type(EVAL_TB_NAMECLASS_ENSURE_ROSTER) == "function" then pcall(EVAL_TB_NAMECLASS_ENSURE_ROSTER) end
+    -- ★1.74.5 猎人助手「一键喂食」：再恢复一次 —— 进世界时 UIParent 尺寸才准，
+    --   用它把图标锚点按真实尺寸重算（EVAL_HH_RESTORE 幂等；开关关着时什么都不建）
+    if type(EVAL_HH_RESTORE) == "function" then pcall(EVAL_HH_RESTORE) end
+    -- ★1.74.5 消耗品助手同样再恢复一次（进世界时 UIParent 尺寸才准）
+    if type(EVAL_CH_RESTORE) == "function" then pcall(EVAL_CH_RESTORE) end
   end
 end
 
@@ -3941,6 +3946,14 @@ local function tbModel()
     { t = "key", key = "holdKey", label = tbHoldLabel(), tip = L("TB_HOLD_TIP") },
     { t = "h", label = L("TB_H_QNOTIFY") },
     { t = "ch", key = "qchan", label = L("TB_QCHAN"), tip = L("TB_QCHAN_TIP") }, -- 频道选择行
+    -- ★1.74.5 用户要求：新增「猎人助手」分组 →「一键喂食」开关（默认关）
+    --   总闸门 = tools/HunterHelper.lua 的 feedPet：勾上才**懒建**屏幕上的喂食图标（未勾 = 一个帧都不建）
+    { t = "h", label = L("TB_H_HUNTER") },
+    --   ★wip = 右侧那枚**黄感叹号（待测试）**的 tooltip 文案（用户要求：还没经过游戏内实测的功能要标出来）
+    { t = "c", key = "feedPet", label = L("TB_FEEDPET"), tip = L("TB_FEEDPET_TIP"), wip = L("TB_WIP_TIP") },
+    -- ★1.74.5 用户要求：「参照喂食助手，添加个消耗品助手」→ 多选 + 主图标旁横排各自点用
+    { t = "h", label = L("TB_CH_GROUP") },
+    { t = "c", key = "consumable", label = L("TB_CONSUMABLE"), tip = L("TB_CONSUMABLE_TIP"), wip = L("TB_WIP_TIP") },
   }
 end
 
@@ -3957,6 +3970,16 @@ function EVAL_TEST_TB_ADD_BTN_FOR(key)
     local r = TB.rows[k]
     -- ★读 r.item（刷新时记下的**实际映射**），不在这里重算（否则变异测不出来）
     if r and r.item and r.item.key == key and r.add then return r.add.btn end
+  end
+  return nil
+end
+-- ★1.74.5 读值口：取某 key 那行的「待测试」标记按钮（走真实控件 + 刷新时记下的实际映射；测试不复刻逻辑）
+function EVAL_TEST_TB_WIP_FOR(key)
+  if not TB.built then return nil end
+  local cols = TB.cols or TB_COLS
+  for k = 1, TB.ROWS * cols do
+    local r = TB.rows[k]
+    if r and r.item and r.item.key == key and r.wip then return r.wip.btn, r.wip.tex end
   end
   return nil
 end
@@ -4071,6 +4094,7 @@ function EVAL_TB_REFRESH()
       r.pi, r.item = okc and pi or nil, it
     end
     r.chk:Hide() r.text:Hide() r.hdr:Hide() r.extra:Hide() r.add.btn:Hide() r.clr.btn:Hide() r.chv.btn:Hide()
+    if r.wip then r.wip.btn:Hide() end -- ★1.74.5 「待测试」标记也在显式清单里（少一处 = 上一页的标记残留）
     r.get, r.set = nil, nil
     r.modelKey = it and it.key or nil -- ★1.73.10 记住这一格当前是哪个 key（勾选后要按 key 做即时副作用）
     if it then
@@ -4163,6 +4187,11 @@ function EVAL_TB_REFRESH()
         r.text:SetText(it.label)
         r.text:Show()
         r.tip = it.tip
+        -- ★1.74.5 用户要求：模型标了 wip 的行 → 右侧显示**插件本地黄感叹号**（待测试）
+        if it.wip and r.wip then
+          r.wip.tip = it.wip
+          r.wip.btn:Show()
+        end
       end
     end
   end
@@ -4242,6 +4271,10 @@ function EVAL_TB_BUILD(root, page, refreshes)
         TB.chanOffLogged = false
         pcall(EVAL_TB_CHAN_OFFICIAL_SYNC)
       end
+      -- ★1.74.5 猎人助手「一键喂食」：勾上 = 立刻懒建并显示喂食图标；取消 = 图标收起（都不需要重载）
+      if row.modelKey == "feedPet" then pcall(EVAL_HH_TOGGLE) end
+      -- ★1.74.5 消耗品助手：同一条纪律 —— 勾上即时建并显示，取消即时收起
+      if row.modelKey == "consumable" then pcall(EVAL_CH_TOGGLE) end
       EVAL_TB_REFRESH()
     end)
     chk:SetScript("OnEnter", function()
@@ -4287,6 +4320,35 @@ function EVAL_TB_BUILD(root, page, refreshes)
     row.add = tbBtn(root, cRight - 96, y, 44, L("TB_ADD"), function() end, widgets)
     row.clr = tbBtn(root, cRight - 48, y, 40, L("TB_CLEAR"), function() end, widgets)
     row.chv = tbBtn(root, cRight - 96, y, 88, "", function() end, widgets) -- 1.69.0 频道值按钮（ch 行）
+    -- ★1.74.5 「待测试」标记（用户要求：一键喂食 右侧 加一个**插件本地图标黄色感叹号**，tooltip=待测试）：
+    --   · 贴**本列右边缘**，且沿用「全用距左边表示」的列几何口径（不用 TOPRIGHT 再算一遍）；
+    --   · 用**独立小 Button** 而不是 Texture —— 纹理不吃鼠标事件，挂不了 OnEnter/tooltip；
+    --   · 路径走单一来源 EVAL_UI_MARK_TEST（EvalHelp.lua 导出；UI ICON CHECK 核它在磁盘上）。
+    local wipBtn = CreateFrame("Button", nil, root)
+    wipBtn:SetWidth(12)
+    wipBtn:SetHeight(12)
+    wipBtn:SetPoint("TOPLEFT", root, "TOPLEFT", cRight - 12, y - 2)
+    pcall(wipBtn.EnableMouse, wipBtn, true)
+    local wipTex = wipBtn:CreateTexture(nil, "OVERLAY")
+    wipTex:SetPoint("TOPLEFT", wipBtn, "TOPLEFT", 0, 0)
+    wipTex:SetPoint("BOTTOMRIGHT", wipBtn, "BOTTOMRIGHT", 0, 0)
+    local wipPath = rawget(_G, "EVAL_UI_MARK_TEST")
+    if type(wipPath) == "string" and wipPath ~= "" then pcall(wipTex.SetTexture, wipTex, wipPath) end
+    wipBtn:Hide()
+    wipBtn:SetScript("OnEnter", function()
+      if type(row.wip) ~= "table" or not row.wip.tip then return end
+      if type(GameTooltip) ~= "table" then return end
+      GameTooltip:SetOwner(wipBtn, "ANCHOR_RIGHT")
+      GameTooltip:ClearLines()
+      GameTooltip:AddLine(L("TB_WIP"), 1, 0.85, 0.25)
+      GameTooltip:AddLine(row.wip.tip, 0.85, 0.85, 0.85, 1)
+      GameTooltip:Show()
+    end)
+    wipBtn:SetScript("OnLeave", function()
+      if type(GameTooltip) == "table" then GameTooltip:Hide() end
+    end)
+    row.wip = { btn = wipBtn, tex = wipTex, tip = nil }
+    table.insert(widgets, wipBtn)
     -- ★★★1.73.25 用户（截图圈出「自动购买指定物 / 自动丢弃指定物」两行）：
     --   「右侧的对应的按键 [要与] 左侧名称**对齐**」。
     --   根因（读代码可证）：标签 FontString 锚在 `y - TB_ROW_TXT_DY`（往下 3px），而按钮锚在同行的 `y`
@@ -4905,7 +4967,8 @@ function EVAL_TB_TEST_LAYOUT()
                       kind = it and it.t or nil, shown = r.chk:IsShown() and true or false,
                       chk = rect(r.chk), text = rect(r.text), extra = rect(r.extra),
                       add = rect(r.add and r.add.btn), clr = rect(r.clr and r.clr.btn),
-                      chv = rect(r.chv and r.chv.btn), hdr = rect(r.hdr) }
+                      chv = rect(r.chv and r.chv.btn), hdr = rect(r.hdr),
+                      wip = rect(r.wip and r.wip.btn), wipTip = (r.wip and r.wip.tip) or nil }
     end
   end
   return out

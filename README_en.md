@@ -21,8 +21,10 @@
 
 > 📌 Continuously improving — testing and feedback welcome!　🐞 [Bug reports / suggestions](https://gitee.com/xeval/emberveil_eval_help.git) (Issues)　🤖 Developed with DeepSeek Harness AI assistance (see "Contributing" at the bottom)
 
-## 🏁 Milestones (1.52.0 → 1.74.4)
+## 🏁 Milestones (1.52.0 → 1.74.6)
 
+- **🎬 Sharing experience loop** (1.74.1 → 1.74.6): 40 scene lines (accept/ignore × with/without target × 3 languages; title coloured by tier, and the measured rule "a colour code must carry a link") · profile **author/source** in 4 kinds + profile-list tooltip (tier · source · skill count) · all **8 "no popup" branches logged** · the easter-egg reaction is **no longer wired** (kept) · fixed the "self-echo" misjudgement (someone else's share was swallowed when you already had the same profile).
+- **🧰 Two toolbox helpers + dispel types** (1.74.5 → 1.74.6): **Hunter → auto-feed** and the **consumable helper** (one 8×N icon grid · multi-select · greyed out when used up; unverified features carry a **yellow "to be tested" mark**) · **self/target debuffs now support "dispel type"** — same semantics as party/candidate debuffs (empty name + type = "any debuff of that type").
 - **🎉 Sharing system rework: cover line · tiers · titles · easter egg · reactions** (1.73.35 → 1.74.0): 85 commits released at once — share cover line (`[Tier manual · name]` as a clickable link, click opens a confirm popup instead of auto-importing), score-based tiers (25+ = Divine, five colours incl. deep red), **title gacha** (5 tiers × 15 cards, only-up, custom title + colour), the "Genesis" easter egg (3-condition gate) + **role-play reactions** (title tier × manual tier, lottery-picked, guild/say/party, and the scheme name is a clickable link to the receive page).
 - **🧪 Real-client forensics for links/colour codes** (1.73.35 → 1.74.0): whether custom links survive the server, the true 250-byte message cap, hover mechanics, on-disk ledgers — nailed down the "colour-code sending rules" (one colour segment first + **must carry a link**, 1 msg/sec, only `[EHPF#]` is recognised).
 - **🖥 Title-bar badges + tier colouring** (1.73.55 → 1.74.0): combat-HUD / status-UI title bars share one layout — player name → title → tier badge → current profile; profile rows are tier-coloured (HUD + config + templates share one tier computation).
@@ -30,15 +32,15 @@
 - **🧰 Toolbox dialog spec** (1.73.30 → 1.73.34): frame-level ladder (config 10 · edit 100 · input 220 · toolbox 200 · dropdown 250), drag handles must be Buttons, single-source column geometry, and the **scrollbar** brought up to spec (single-source wheel direction `EVAL_WHEEL_DIR` · dedicated scroll gutter · integer page numbers · arrows hidden at the ends).
 - **🔋 Condition names and the syntax gate** (1.73.27 → 1.73.28): power names are computed **at display time** from `UnitPowerType` (mana / focus / rage / energy, druids follow their form) with the parser accepting every spelling (so exporting and re-importing never drops conditions); `luacheck` now parses **every file** (27 `.lua`) instead of one.
 - **🔍 Shared-profile aura fix + guide on every load** (1.72.2): when another character never learned a debuff texture, the addon now **falls back to a name scan and self-heals** (a hit learns name→texture, then the fast path); the starter guide prints **on every load**; also fixed the `EVAL_DS_HUD` frame name shadowing its own global function (which made `/eh ds hud` silently dead)
-
 - **⌨️ Profile hotkeys actually work** (1.71.16 → 1.72.0): after four dead ends, `ACTIONBUTTON<n>` + hooking `ActionButtonDown/Up` — zero cost: no macro slots, no stolen keys, live while the game runs.
-- **🗂 Right-click features merged into one Profile Manager** (1.71.24): profile name + hotkey, one [Save] commits both; ★no aliases for the old entry points.
-- **🐾 Pet Helper** (1.73.0): 6th config tab - search pet abilities (icons + ranks) -> detail with intro, pet level and tame sources -> magnifier jumps to Data Search for spawn points.
+
 
 ## Changelog
 
 | Version | Theme | One-line highlight |
 | :-- | :-- | :-- |
+| **1.74.6** | ☠️ **Self/target debuffs support "dispel type"** | Same rules as party/candidate debuffs: parse `name(type)` · filter by type when evaluating (**name matched but type differs = NOT a hit**) · **empty name + type = "any debuff of that type"** · one shared formatter (export tokens / localized display); also restores the type suffix `candDebuff` used to drop |
+| **1.74.5** | 🎬 Share "scene lines" + 🧰 two toolbox helpers (auto-feed / consumables) | 40 scene lines (accept/ignore × with/without target × 3 languages; title coloured by tier, exactly one colour code) · profile author/source in 4 kinds + profile-list tooltip · all 8 "no popup" branches are logged now · the easter-egg reaction is **no longer wired** (kept) · hunter auto-feed & consumable helper share one 8×N icon grid (unverified features are marked "to be tested") |
 | **1.74.4** | 🐞 Fix "invite shown for someone already in your party": require the target NOT be in your group | 1.74.1 only checked YOUR state → leader + already-in-party showed both "Invite" and "Kick" (contradiction); now: target not in your group AND (not in a party or you're the leader) |
 | **1.74.3** | 📥 Fix "party-channel share never pops up" (user report) | In 1.12, party messages from the **leader** fire separate events `CHAT_MSG_PARTY_LEADER`/`CHAT_MSG_RAID_LEADER`; the receiver registered only the plain ones → a leader's share never arrived. Both leader variants now registered |
 | **1.74.2** | 🖱 Combat-UI skill cell: **left = toggle enable/disable · right = open editor** | Was: any click opened the editor → left now toggles in place (writes `r.enabled` truth + double refresh), right opens the config popup |
@@ -47,8 +49,6 @@
 | **1.73.34** | 🧰 Toolbox dialog spec + 💬 chat-name right-click menu | Frame-level ladder / drag handle / scrollbar brought up to spec (incl. 6 scrollbar fixes); right-click a chat name: whisper / invite / target / guild invite / copy name (**prefill only, never auto-send**); power names computed live (casters = mana); `luacheck` now parses **every file** |
 | **1.73.0** | 🐾 Pet Helper | 6th tab: search pet abilities (icons + ranks) -> detail with tame sources -> magnifier jumps to Data Search |
 | **1.72.2** | 🔍 Shared-profile aura fix + guide on every load | Unlearned auras now fall back to a name scan and self-heal; the starter guide prints on every load; fixed a frame name shadowing its global function |
-| **1.72.1** | 🧭 Friendly first-run | Load confirmation + a four-step starter guide on first login (combat UI / first profile / key binding / skill log); replay it from the Global tab or `/eh guide` |
-| **1.72.0** | 🎉 **Profile hotkeys fixed + a batch of UI polish** (spans 1.71.3–1.71.24) | 22 versions shipped at once: **profile hotkeys went from "never fire" to actually working** (four dead ends ruled out: CLICK hijacked the mouse → raw command names are not dispatched → this client does not read addon Bindings.xml → **hooking ActionButtonDown/Up**; zero cost, no macro slots, no stolen keys, live while the game runs); **right-click features merged** into one Profile Manager window (rename + hotkey, one Save commits both); case-template window redesigned three times; Icon Library tab + right-click to set the minimap icon; combat HUD title shows the player name; Stop Attack / Follow / member filtering / share overhaul |
 
 > 📜 Detailed per-version notes live in **[CHANGELOG.md](CHANGELOG.md)**; earlier history is in the git commit log.
 

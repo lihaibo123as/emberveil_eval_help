@@ -68,7 +68,7 @@ function checkIconAssets() {
 //   ② 跳过「同名还有函数内 local 声明」的短名（W / H / x / y 这类）：它们在文件里是**多个不同的变量**，
 //      按名字比对必然误报（首版就误报了 EvalHelp.lua:153 的 local W —— 那是另一个函数里的 W）。
 (function () {
-  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua"];
+  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua"];
   const bad = [];
   let totalLocals = 0;
   const isName = (s) => new RegExp("^[A-Za-z_][A-Za-z0-9_]*$").test(s);
@@ -228,7 +228,7 @@ function checkIconAssets() {
   const used = new Set();
   // ★1.71.3 补上 Share.lua：它此前**不在扫描名单里**（与 DECL ORDER 的已知盲区同源）——
   //   于是「Share 用了某个键、只改了两种语言」永远是盲区（本轮 SH_CH_OFF 正好落在这里）。
-  for (const f of ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua"]) {
+  for (const f of ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua"]) {
     const p = path.join(__dirname, f);
     if (!fs.existsSync(p)) continue;
     const src = fs.readFileSync(p, "utf8");
@@ -263,7 +263,10 @@ function checkIconAssets() {
   // ★★★1.73.42j 扫描面从「两个已知文件」扩成**所有自建 local L(k) 的模块**：
   //   本轮发现 Share.lua 也犯了同一个错（分享模块在英俄客户端恒显示中文）——写死文件名就是盲区，
   //   改成按「谁定义了 L() 就查谁」，新增模块漏改也拦得住。
-  const _lFiles = fs.readdirSync(__dirname).filter(function (f) { return /\.lua$/.test(f); });
+  // ★1.74.5 扫描面含 tools/ 子目录（新增模块放子目录里时，这个「按谁定义 L() 就查谁」的自动发现不能瞎）
+  const _lFiles = fs.readdirSync(__dirname).filter(function (f) { return /\.lua$/.test(f); })
+    .concat((fs.existsSync(path.join(__dirname, 'tools')) ? fs.readdirSync(path.join(__dirname, 'tools')) : [])
+      .filter(function (f) { return /\.lua$/.test(f); }).map(function (f) { return 'tools/' + f; }));
   const _targets = ["DataSearch.lua", "Toolbox.lua"];
   _lFiles.forEach(function (f) {
     const src = fs.readFileSync(path.join(__dirname, f), "utf8");
@@ -324,7 +327,7 @@ function checkIconAssets() {
 //   ★注释里提到 `SomeCall()` 属于正常（本仓库有大量 API 说明注释），故必须要求「方法调用」
 //   （带 `:` / `.`）而不是裸调用，否则误报成片（实测：裸调用规则会命中 test_assert.lua:240）。
 (function () {
-  const files = ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua",
+  const files = ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua",
                  "Locales/zhCN.lua", "Locales/enUS.lua", "Locales/ruRU.lua", "test_assert.lua", "test_stub.lua"];
   const bad = [];
   for (const f of files) {
@@ -963,11 +966,13 @@ function checkIconAssets() {
 })();
 })();
 
-// ===== SH FUN CHECK（1.73.64）：彩蛋「角色扮演反应」的接线 =====
-// ★背景：用户「根据当前秘籍等级 和接收者自身的头衔等级 做出导入/忽略的符合角色扮演语境反应会话」
-//   + 「说/队伍 加入」。最易出的静默错：① 频道映射漏了（说/队伍不发）；② 抽奖写成恒取第 1 条；
-//   ③ 两个按钮传错 op（忽略却发导入的句子）；④ 语气档位算错（秘籍档/头衔档反了）。
-//   行为断言（组 82 + 组 170）能抓大部分，源码检查再钉「接线都在」。
+// ===== SH FUN CHECK（1.73.64 建立 / 1.74.5 改）：彩蛋「角色扮演反应」——**功能保留，当前不接线** =====
+// ★背景：用户「根据当前秘籍等级 和接收者自身的头衔等级 做出导入/忽略的符合角色扮演语境反应会话」+「说/队伍 加入」。
+//   最易出的静默错：① 频道映射漏了（说/队伍不发）；② 抽奖写成恒取第 1 条；③ 两个按钮传错 op；④ 语气档位算错。
+// ★★1.74.5 用户「取消彩蛋」，随后明确「**不是把彩蛋功能删除**」⇒ **这一条流程**（导入/忽略）不再发反应句，改发
+//   「场景描述」（见 SHARE SCENE WIRING CHECK）。机制 / 频道表 / 抽奖 / 名链接 / 三语言 50 格文案**全部保留**，
+//   只把两处调用点摘掉 ⇒ 本检查现在钉的是「**机制都在 且 调用点确实没接**」。
+//   ★要恢复接线：把 shSendReaction("imp"/"ign") 加回按钮回调，并**同步改本检查**（否则它会红 —— 这是故意的）。
 (function () {
   const sh = fs.readFileSync(path.join(__dirname, "Share.lua"), "utf8");
   const noComment = sh.split(/\r?\n/).map(function (l) { const i = l.indexOf("--"); return i >= 0 ? l.slice(0, i) : l; }).join("\n");
@@ -976,19 +981,19 @@ function checkIconAssets() {
   ["CHAT_MSG_GUILD = \"GUILD\"", "CHAT_MSG_PARTY = \"PARTY\"", "CHAT_MSG_SAY = \"SAY\""]
     .forEach(function (k) { if (noComment.indexOf(k) < 0) bad.push("频道映射缺：" + k); });
   if (noComment.indexOf("local function shSendReaction(") < 0) bad.push("找不到反应函数 shSendReaction");
-  if (noComment.indexOf("shSendReaction(\"imp\")") < 0) bad.push("[导入] 没接 shSendReaction(\"imp\")");
-  if (noComment.indexOf("shSendReaction(\"ign\")") < 0) bad.push("[忽略] 没接 shSendReaction(\"ign\")");
   if (noComment.indexOf("math.random(1, table.getn(pool))") < 0) bad.push("反应不是抽奖式随机（应在 10 条候选里随机挑）");
   if (noComment.indexOf('L(op == "ign" and "SH_FUN_IGN" or "SH_FUN_IMP")') < 0) bad.push("反应没按 op 选 SH_FUN_IMP/SH_FUN_IGN 那张表");
   if (noComment.indexOf("EVAL_TITLE_STATE") < 0) bad.push("反应没读接收者头衔档（EVAL_TITLE_STATE）");
   if (noComment.indexOf("EVAL_SHARE_SEAL_SCORE") < 0) bad.push("反应没现算秘籍品阶档（EVAL_SHARE_SEAL_SCORE）");
-  // ★1.73.65 反应句里的方案名 = **可点的品阶色链接**（点它打开方案分享接收页）
   if (noComment.indexOf("local function shReactionNameLink(") < 0) bad.push("找不到反应名链接函数 shReactionNameLink");
   if (noComment.indexOf('.. "|HEHPF:" .. p.idh .. " 0/1:1|h["') < 0) bad.push("反应名没造 |HEHPF:<传输id> 链接（点了打不开接收页）");
   if (noComment.indexOf("shReactionNameLink(p)") < 0) bad.push("反应句没把方案名换成链接（shReactionNameLink(p) 没被调用）");
   if (noComment.indexOf("> SH_MSG_MAX") < 0) bad.push("带链接后没有「超长退回纯名字」守卫（整条可能被客户端吞）");
+  // ★1.74.5：两处调用点必须**不在**（用户要求这条流程改发场景描述）
+  if (noComment.indexOf('shSendReaction("imp")') >= 0) bad.push("[导入] 又接上了 shSendReaction（1.74.5 起改发场景描述；恢复接线请同步改本检查）");
+  if (noComment.indexOf('shSendReaction("ign")') >= 0) bad.push("[忽略] 又接上了 shSendReaction（同上）");
   if (bad.length) { console.log("SH FUN CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
-  console.log("SH FUN CHECK: 公会/说/队伍三频道 · 导入/忽略两路 op · 抽奖式随机 · 头衔档×秘籍档两表决定语气");
+  console.log("SH FUN CHECK: 机制都在（频道映射/两表/抽奖/名链接/超长守卫）· 导入与忽略**未接线**（1.74.5 起改发场景描述）");
 })();
 // ===== SEAL ICON NAMES CHECK（1.73.42l）：品阶图标的**名字**必须是客户端真有的（用户指定的五张） =====
 // 背景：图标由用户点名（截图里是 `.../INV_Misc_ShadowEgg_TEX` 这种**资源名**）——
@@ -1101,7 +1106,7 @@ function checkIconAssets() {
   }
   // ① 模版数据只能住在 examples/：别的生产文件里再出现 cls = " 就是「又搬回去了 / 多了一份」
   //   （同一个东西两份真值，正是本项目反复踩的坑：改一处漏一处、后写的静默获胜）。
-  const prodFiles = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua"];
+  const prodFiles = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua"];
   const leaked = prodFiles.filter(f => { const p = path.join(__dirname, f); return fs.existsSync(p) && /cls\s*=\s*"/.test(fs.readFileSync(p, "utf8")); });
   if (leaked.length) { console.log("EXAMPLES TOC CHECK: FAIL - template data leaked back into " + leaked.join(",")); process.exit(1); }
   // ② 载入顺序：examples 必须排在 EvalHelp.lua 之后（引擎里的初始化先跑）。
@@ -1239,7 +1244,7 @@ function checkIconAssets() {
 //   把反向 bug 一起验过去了。★教训：方向这种「全局约定」必须有单一来源 + 源码检查兜底，
 //   否则每个新列表都会各写一遍、错一个没人发现。
 (function () {
-  const files = ["EvalHelp.lua", "Toolbox.lua", "DataSearch.lua", "IconBrowser.lua", "PetHelper.lua"];
+  const files = ["EvalHelp.lua", "Toolbox.lua", "DataSearch.lua", "IconBrowser.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua"];
   const sites = [];
   const bad = [];
   for (const f of files) {
@@ -1277,7 +1282,7 @@ function checkIconAssets() {
 //     再怎么比也验不到「客户端认不认」；只能把约定写成**源码检查**：禁止 sub(hex,3) 这种切码写法 +
 //     职业色表逐项必须是 8 位。
 (function () {
-  const files = ["EvalHelp.lua", "Toolbox.lua", "Engine.lua", "Core.lua", "Share.lua", "DataSearch.lua", "IconBrowser.lua", "PetHelper.lua"];
+  const files = ["EvalHelp.lua", "Toolbox.lua", "Engine.lua", "Core.lua", "Share.lua", "DataSearch.lua", "IconBrowser.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua"];
   const bad = [];
   let uses = 0;
   for (const f of files) {
@@ -1623,6 +1628,20 @@ function checkIconAssets() {
   const toc = fs.readFileSync(path.join(__dirname, "EvalHelp.toc"), "utf8")
     .split(/\r?\n/).map(s => s.trim()).filter(s => s && s.charAt(0) !== "#");
   const topLua = toc.filter(f => /\.lua$/i.test(f) && f.indexOf("/") < 0 && f.indexOf("\\") < 0);
+  // ★1.74.5 新增：**子目录里的模块**（如 tools/HunterHelper.lua）也必须进包 ——
+  //   旧判据只看「顶层 .lua」，于是把模块放进子目录后本地测试全绿、**出包却缺文件**（用户装了直接报错）。
+  //   判据：toc 里带路径的 .lua，要么被打包行逐个列出，要么它所在目录被 Copy-Item -Recurse 整目录拷。
+  const subLua = toc.filter(f => /\.lua$/i.test(f) && (f.indexOf("/") >= 0 || f.indexOf("\\") >= 0));
+  const dirCopied = dir => new RegExp("Copy-Item[^\\n]*\\$src\\\\" + dir).test(claude);
+  const subMissing = subLua.filter(f => {
+    const dir = f.split(/[\\/]/)[0];
+    return listed.indexOf(f) < 0 && !dirCopied(dir);
+  });
+  if (subMissing.length) {
+    console.log("PACK LIST CHECK: FAIL - 子目录模块没进发布包（打包脚本既没逐个列出、也没整目录拷）：[" + subMissing.join(",") + "]");
+    process.exitCode = 1;
+    return;
+  }
   const missing = topLua.filter(f => listed.indexOf(f) < 0);
   const ghost = listed.filter(f => topLua.indexOf(f) < 0);
   if (missing.length || ghost.length) {
@@ -1647,6 +1666,7 @@ function checkIconAssets() {
   walk(path.join(__dirname, "Locales"), "Locales");
   walk(path.join(__dirname, "examples"), "examples");
   walk(path.join(__dirname, "media"), "media");
+  walk(path.join(__dirname, "tools"), "tools"); // ★1.74.5 子目录模块也计入条目数基准
   const real = set.length;
   const mNum = claude.match(/基准\s*=\s*\*\*(\d+)\s*个\*\*/);
   if (!mNum) {
@@ -1660,6 +1680,89 @@ function checkIconAssets() {
     return;
   }
   console.log("PACK LIST CHECK: 打包清单 " + listed.length + " 个模块与 .toc 一致，条目数基准 " + real + " 个");
+})();
+
+// ===== HH WIRING CHECK（1.74.5）：猎人助手的四处接线，漏一处都**不报错、只是功能没有** =====
+// 背景：新增模块最常见的失败模式是「文件写了但没接上」——
+//   ① 没进 .toc → 运行期这个模块根本不存在（本客户端没有文件读取 API，只能靠 toc）；
+//   ② 工具箱没有那一行 → 用户找不到开关；
+//   ③ 勾选后不调 EVAL_HH_TOGGLE → 图标永远不出现（看着像坏了，且不报错）；
+//   ④ /eh go 喂食* 没接 → 命令静默无反应（本项目 1.73.42 已有同族教训）。
+// 这四类**行为断言照不到**（要么得跑整套 UI），故落成源码检查。
+(function () {
+  const bad = [];
+  const toc = fs.readFileSync(path.join(__dirname, "EvalHelp.toc"), "utf8");
+  if (!/tools[\\/]HunterHelper\.lua/.test(toc)) bad.push("EvalHelp.toc 没列 tools/HunterHelper.lua");
+  if (toc.indexOf("IconGrid.lua") < 0) bad.push("EvalHelp.toc 没列 tools/IconGrid.lua（共用网格件）");
+  if (toc.indexOf("ConsumableHelper.lua") < 0) bad.push("EvalHelp.toc 没列 tools/ConsumableHelper.lua");
+  const tb = fs.readFileSync(path.join(__dirname, "Toolbox.lua"), "utf8");
+  if (!/key\s*=\s*"feedPet"/.test(tb)) bad.push('Toolbox.lua 行模型里没有 key="feedPet" 的开关行');
+  if (!/modelKey\s*==\s*"feedPet"/.test(tb) || tb.indexOf("EVAL_HH_TOGGLE") < 0) {
+    bad.push("Toolbox.lua 勾选后没有调 EVAL_HH_TOGGLE（图标不会出现）");
+  }
+  const eh = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
+  if (eh.indexOf("EVAL_HH_CMD") < 0) bad.push("EvalHelp.lua 没接 /eh go 喂食* 命令");
+  if (bad.length) {
+    console.log("HH WIRING CHECK: FAIL - " + bad.join(" | "));
+    process.exitCode = 1;
+    return;
+  }
+  console.log("HH WIRING CHECK: tools 模块进了 .toc · 工具箱有开关行且勾选接 EVAL_HH_TOGGLE · /eh go 喂食* 已接");
+})();
+
+// ===== SHARE AUTHOR WIRING CHECK（1.74.5）：方案「作者/来源」与「不弹窗原因落日志」的接线 =====
+// 为什么用源码检查：这几处**都是接线** —— 漏了不报错、只是功能悄悄没有（行为断言要跑整套 UI / 接收流程才照得到）：
+//   ① 案例模版选单导入必须盖 author="技能学院"（否则模版方案会被当成「导入」）；
+//   ② 手建方案必须盖玩家名；③ 分享导入必须盖发送者名；
+//   ④ 方案列表 tooltip 必须走**唯一**的作者标签函数（不许在 UI 里另拼一份文案）；
+//   ⑤ 头衔评定必须锚在「自创」（src ~= "text"）；⑥ 「不弹窗」必须走统一日志前缀（否则查不到原因）。
+(function () {
+  const bad = [];
+  const eh = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
+  const sh = fs.readFileSync(path.join(__dirname, "Share.lua"), "utf8");
+  if (eh.indexOf('ioImportText(p.text, "技能学院")') < 0) bad.push("案例模版选单导入没盖 author=技能学院");
+  if (!/author\s*=\s*\(type\(UnitName\)/.test(eh)) bad.push("手建方案没盖作者名（UnitName）");
+  if (sh.indexOf("EVAL_IMPORT_TEXT(p.text, p.sender)") < 0) bad.push("分享导入没盖发送者名");
+  if (eh.indexOf("EVAL_PROF_AUTHOR_LABEL(prof)") < 0) bad.push("方案列表 tooltip 没走 EVAL_PROF_AUTHOR_LABEL（单一来源）");
+  if (sh.indexOf('p.src ~= "text"') < 0) bad.push("头衔评定没锚在「自创」（src ~= text）");
+  if (sh.indexOf('"[分享] 不弹窗："') < 0) bad.push("分享「不弹窗」没有统一日志前缀（查不到原因）");
+  if (sh.indexOf("弹出方案分享窗") < 0) bad.push("分享弹窗成功时没有写日志");
+  if (bad.length) {
+    console.log("SHARE AUTHOR WIRING CHECK: FAIL - " + bad.join(" | "));
+    process.exitCode = 1;
+    return;
+  }
+  console.log("SHARE AUTHOR WIRING CHECK: 三处导入点都盖作者 · tooltip 走单一标签函数 · 头衔只算自创 · 不弹窗原因统一落日志");
+})();
+
+// ===== SHARE SCENE WIRING CHECK（1.74.5）：场景描述（接收/拒绝 × 有/无目标）的接线 =====
+// 这几处漏了**不报错、只是没那句话**（行为断言要跑完整接收+导入流程才照得到）：
+//   ① 两个按钮回调都得调 shSendScene（导入 / 忽略各一组文案）；
+//   ② 四张表必须三语言齐（少一种语言 = 那种语言下抽不到句子）；
+//   ③ 头衔色必须走 EVAL_TITLE_CURRENT()（唯一来源，不许另写色表）；
+//   ④ 场景描述必须**进限频队列**（shTxQ），不许直发 —— 与彩蛋反应同帧倾泻会被客户端吞（实测定案）。
+(function () {
+  const bad = [];
+  const sh = fs.readFileSync(path.join(__dirname, "Share.lua"), "utf8");
+  if (sh.indexOf('shSendScene("imp")') < 0) bad.push("导入回调没接 shSendScene(\"imp\")");
+  if (sh.indexOf('shSendScene("ign")') < 0) bad.push("忽略回调没接 shSendScene(\"ign\")");
+  if (sh.indexOf("EVAL_TITLE_CURRENT") < 0) bad.push("场景描述没走 EVAL_TITLE_CURRENT（头衔色单一来源）");
+  if (sh.indexOf("table.insert(shTxQ, { body = txt, chan = chan })") < 0) {
+    bad.push("场景描述没进限频队列 shTxQ（直发会被客户端吞/刷屏）");
+  }
+  const keys = ["SH_SCENE_IMP_IDLE", "SH_SCENE_IMP_TGT", "SH_SCENE_IGN_IDLE", "SH_SCENE_IGN_TGT", "SH_SCENE_ZONE_FALLBACK"];
+  for (const lf of ["Locales/zhCN.lua", "Locales/enUS.lua", "Locales/ruRU.lua"]) {
+    const src = fs.readFileSync(path.join(__dirname, lf), "utf8");
+    for (const k of keys) {
+      if (src.indexOf(k + " = ") < 0 && src.indexOf(k + " =") < 0) bad.push(lf + " 缺 " + k);
+    }
+  }
+  if (bad.length) {
+    console.log("SHARE SCENE WIRING CHECK: FAIL - " + bad.join(" | "));
+    process.exitCode = 1;
+    return;
+  }
+  console.log("SHARE SCENE WIRING CHECK: 导入/忽略两处已接 · 四表三语言齐 · 头衔色走单一来源 · 场景描述进限频队列");
 })();
 
 // ===== README TABLE CHECK（1.72.0）：版本行必须落在「更新日志」表里，不能落进「模块」表 =====
@@ -1780,7 +1883,7 @@ function checkIconAssets() {
 //   1.72.2 把桩改成真客户端行为（具名帧挂全局）后，组 54 当场报 `attempt to call a table value` —— 这就是暴露途径。
 // 判据：全仓扫描 `CreateFrame(..., "NAME", ...)` 的第二参，不得与任何 `function NAME(` 同名。
 (function () {
-  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua"];
+  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua"];
   const funcs = {}, frames = [];
   for (const f of files) {
     if (!fs.existsSync(path.join(__dirname, f))) continue;
@@ -1966,7 +2069,7 @@ const iconFixture = (function () {
 })();
 const L=lauxlib.luaL_newstate();
 lualib.luaL_openlibs(L);
-for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','examples/priest.lua','examples/druid.lua','examples/warlock.lua','examples/shaman.lua','examples/group.lua','Toolbox.lua','DataSearch.lua','Share.lua','IconSem.lua','IconBrowser.lua','PetData.lua','PetHelper.lua','test_assert.lua']){
+for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','examples/priest.lua','examples/druid.lua','examples/warlock.lua','examples/shaman.lua','examples/group.lua','Toolbox.lua','DataSearch.lua','Share.lua','IconSem.lua','IconBrowser.lua','PetData.lua','PetHelper.lua','tools/IconGrid.lua','tools/HunterHelper.lua','tools/ConsumableHelper.lua','test_assert.lua']){
   if(f==='test_assert.lua' && iconFixture){
     const fx=to_luastring(iconFixture);
     const stx=lauxlib.luaL_loadbuffer(L,fx,fx.length,to_luastring('icon_fixture'));

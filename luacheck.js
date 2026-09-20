@@ -8,7 +8,9 @@ const path = require('path');
 const fengari = require('fengari');
 const { lua, lauxlib, to_luastring } = fengari;
 
-const SKIP_DIRS = { 'node_modules': 1, '.git': 1, 'tmp': 1, 'preview': 1, 'pay': 1 };
+// ★1.74.5 加 '.dsh'：那是**harness 草稿/测试产物**目录（分享探针会把脚本原文落盘成 .dsh/*.lua，
+//   内容是 UTF-16/二进制）—— 旧版会把它当插件源码去解析 → 语法闸门**假红**（本地双绿被一个产物搞失败）。
+const SKIP_DIRS = { 'node_modules': 1, '.git': 1, 'tmp': 1, 'preview': 1, 'pay': 1, '.dsh': 1 };
 
 function listLua(dir, out) {
   let entries = [];

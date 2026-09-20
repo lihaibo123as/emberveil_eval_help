@@ -75,8 +75,10 @@ local function newMock()
     --   用户在**别的弹窗**顶部看到一条黑块就是这个原因；桩若不记录，SetDrawLayer 写错也测不出来。
     SetDrawLayer = function(_, l) layer = l end,
     GetDrawLayer = function() return layer end,
-    SetFrameLevel = function(_, l) level = l end,
-    GetFrameLevel = function() return level end,
+    -- ★1.74.5 桩保真：层号**每帧各存一份**。原先是文件级共享变量 ⇒ 两个帧读到的层永远相等，
+    --   「捕手必须比面板低一级（否则它会把面板的点击也吃掉）」这类断言根本写不出来（写了也恒真）。
+    SetFrameLevel = function(self, l) rawset(self, "__lvl", l) end,
+    GetFrameLevel = function(self) return rawget(self, "__lvl") end,
     -- ★1.73.31 桩保真：鼠标开关要能读回来（「弹窗点击不到」的一半原因是它没吃掉落在自己身上的点击）
     EnableMouse = function(self, v) rawset(self, "__mouse", v and true or false) end,
     -- ★1.73.34 滚轮开关也要能读回来（「列表支不支持滚轮」才可断言；不给默认值 → 漏装当场false）
@@ -624,7 +626,7 @@ IsUsableAction = function() if TEST.usableRet then return TEST.usableRet.u, TEST
 IsCurrentAction = function(slot) return TEST.currentAction == slot end
 IsAutoRepeatAction = function(slot) return TEST.autoRepeat == slot end -- 1.71.3 停止攻击：自动射击/魔杖自动重复判定
 SpellStopCasting = function() TEST.castStoppedDirect = true end -- 1.71.3 ★真机行为：SpellStopCasting 是 Protected，插件**直调静默无效** → 桩必须如实模拟，否则「改回直调」这种回归测不出来（1.49.3 老 bug）
-RunScript = function(code) TEST.runScript = code TEST.runScripts = TEST.runScripts or {} table.insert(TEST.runScripts, code) if code == "SpellStopCasting()" then TEST.castStopped = true end end -- 1.69.0 收集多条
+RunScript = function(code) TEST.runScript = code TEST.runScripts = TEST.runScripts or {} table.insert(TEST.runScripts, code) if code == "SpellStopCasting()" then TEST.castStopped = true end if type(TEST.runScriptHook) == "function" then pcall(TEST.runScriptHook, code) end end -- 1.69.0 收集多条；★1.74.5 加 runScriptHook（模拟「排队通道下一帧才生效」）
 IsInGuild = function() return TEST.inGuild or false end
 -- ★1.73.24 名字右键菜单：SetItemRef（参考 ChatMOD 的包法 —— 普通全局、可写）+ 公会邀请 API 的记录器
 TEST.sirCalls, TEST.invites = {}, {}
@@ -852,7 +854,18 @@ RepairAllItems = function() TEST.repaired = true end
 GetMerchantNumItems = function() return TEST.merchant and table.getn(TEST.merchant) or 0 end
 GetMerchantItemInfo = function(i) local m = TEST.merchant and TEST.merchant[i] if not m then return nil end return m.name, "tex", m.price or 1, 1, m.avail or -1, true end
 BuyMerchantItem = function(i, n) local m = TEST.merchant and TEST.merchant[i] TEST.bought = (TEST.bought or "") .. tostring(m and m.name) .. "x" .. tostring(n) .. ";" end
-PickupContainerItem = function(b, s) TEST.picked = b * 100 + s end
+PickupContainerItem = function(b, s) TEST.picked = b * 100 + s TEST.pickupCalls = (TEST.pickupCalls or 0) + 1 end
+-- ★1.74.5 猎人助手（tools/HunterHelper.lua）桩：**每个都要有状态**，否则「该不该点包 / 失败要不要还原」这类判据全失明
+--   TEST.targeting = 1 表示处于「技能等待选目标」（真客户端 SpellIsTargeting 返回 1 或 nil）
+--   TEST.cursorItem = true 表示物品被捡到光标上（= 客户端没把它当目标）
+SpellIsTargeting = function() return TEST.targeting end
+CursorHasItem = function() return TEST.cursorItem and true or false end
+ClearCursor = function() TEST.clearCursorCalls = (TEST.clearCursorCalls or 0) + 1 TEST.cursorItem = false end
+PickupInventoryItem = function(s) TEST.pickedInv = s end
+DropItemOnUnit = function(u) TEST.droppedOn = tostring(u) end
+GetPetFoodTypes = function() return TEST.petFood or "肉类,鱼类" end
+GetPetHappiness = function() return TEST.happiness or 2, 100, 0 end
+GetPetLoyalty = function() return "忠诚" end
 DeleteCursorItem = function() if TEST.picked then TEST.deleted = TEST.picked TEST.picked = nil end end
 ConfirmReadyCheck = function() TEST.readyChecked = true end
 -- 1.69.0 任务日志扫描桩（TEST.questLog = { {title=, complete=, objs={{txt=,d=,m=}}} }）

@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.74.4"
+local VERSION = "1.74.6"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -68,6 +68,9 @@ local SE_MEDIA_ROOT = "Interface\\AddOns\\EvalHelp\\media\\icons\\"
 local SE_MARK_UNAVAIL = SE_MEDIA_ROOT .. "mark-unavail" -- 白感叹号：不可用
 local SE_MARK_TEST = SE_MEDIA_ROOT .. "mark-test"       -- 黄感叹号：待测试
 -- ★「取消施法」的异常标记用它（用户要求：把行右侧那个问号换成白感叹号）。
+-- ★1.74.5 导出给别的模块用（工具箱要在「一键喂食」行右侧挂**同一枚黄感叹号 = 待测试**）：
+--   路径只在这里写一次 —— 别的模块自己拼路径的话，改名/挪目录只会**静默画空白**（UI ICON CHECK 也照不到）。
+EVAL_UI_MARK_TEST = SE_MARK_TEST
 local SE_WARN_ICON = SE_MARK_UNAVAIL
 local TARGET_SEL, TARGET_SEL_NAME = EVAL_TARGET_SEL, EVAL_TSEL_NAME
 local CLASS_LIST = EVAL_CLASS_LIST
@@ -1548,12 +1551,34 @@ local function cfgBuild()
       if pidx <= table.getn(w2.profiles) then
         w2.activeProfile = pidx
       elseif pidx == table.getn(w2.profiles) + 1 and table.getn(w2.profiles) < MAXPROF then
-        table.insert(w2.profiles, { name = "方案" .. tostring(table.getn(w2.profiles) + 1), skills = {}, src = "manual" }) -- ★1.73.63 手动创建（彩蛋闸门要认）
+        table.insert(w2.profiles, { name = "方案" .. tostring(table.getn(w2.profiles) + 1), skills = {}, src = "manual", author = (type(UnitName) == "function" and UnitName("player")) or nil }) -- ★1.73.63 手动创建（彩蛋闸门要认）★1.74.5 作者=自己名字彩蛋闸门要认）
         w2.activeProfile = table.getn(w2.profiles)
         say("新建方案: " .. tostring(w2.profiles[w2.activeProfile].name))
       end
       EVAL_WAR_TAB_REFRESH()
     end)
+    -- ★1.74.5 方案列表 tooltip：悬停显示**评级（品阶）+ 来源（作者）+ 基本信息**（用户要求）
+    pcall(pb.SetScript, pb, "OnEnter", function()
+      local w2 = warCfg()
+      if pidx > table.getn(w2.profiles) then return end
+      local prof = w2.profiles[pidx]
+      if not prof or type(GameTooltip) ~= "table" then return end
+      pcall(function()
+        GameTooltip:SetOwner(pb, "ANCHOR_RIGHT")
+        GameTooltip:AddLine(tostring(prof.name or "?"), 1, 0.82, 0.2)
+        local sc = (type(EVAL_PROFILE_SCORE) == "function") and EVAL_PROFILE_SCORE(prof) or nil
+        local tier = (sc ~= nil and type(EVAL_SHARE_SEAL_TIER) == "function") and select(2, EVAL_SHARE_SEAL_TIER(sc)) or nil
+        if type(tier) == "table" and tier.color then
+          local r, g, b = 1, 1, 1
+          if type(EVAL_COLOR_RGB) == "function" then local rr, gg, bb = EVAL_COLOR_RGB(tier.color); r, g, b = rr or 1, gg or 1, bb or 1 end
+          GameTooltip:AddLine(L("PROF_TIP_RATING") .. "：" .. tostring(tier.name) .. "（" .. tostring(sc) .. " 分）", r, g, b)
+        end
+        GameTooltip:AddLine(L("PROF_TIP_SOURCE") .. "：" .. tostring(EVAL_PROF_AUTHOR_LABEL(prof)), 0.85, 0.85, 0.85)
+        GameTooltip:AddLine(tostring(table.getn(prof.skills or {})) .. " " .. L("PROF_TIP_SKILLS"), 0.7, 0.7, 0.7)
+        GameTooltip:Show()
+      end)
+    end)
+    pcall(pb.SetScript, pb, "OnLeave", function() pcall(function() GameTooltip:Hide() end) end)
     -- [删] 按钮（二次确认：5 秒内再点一次才删，防误删）
     local delB = CreateFrame("Button", nil, root)
     delB:SetWidth(15) delB:SetHeight(17)
@@ -5033,7 +5058,11 @@ function EVAL_HELP_SE_REFRESH()
       --   ★判据用「解析出来的类型」（td），不用原始 cd.k——队伍行与团队行的 cd.k 都是 teamDebuff，
       --     但类型下拉对**两行**都要出现；只认 cd.k 时团队行会漏掉这个控件。
       --     同时这里也是断言能真正走到的位置：EVAL_TEST_SE_ROW_DT 问的就是这个控件。
-      if (td.base or td.id) == "teamDebuff" or td.id == "candDebuff" then -- ★1.71.3 候选者debuff 也要类型下拉
+      -- ★1.74.6 自身/目标 debuff 也要「负面类型」（用户：「查看自身/目标debuff 条件类型配置项，
+      --   需要参考队伍debuff 配置支持 debuff 负面类型功能」）—— 与 teamDebuff/candDebuff **同一支控件**、同一份 EVAL_DISPEL_LIST 文案。
+      local isDebuffKind181 = ((td.base or td.id) == "teamDebuff") or td.id == "candDebuff"
+                                or td.id == "pDebuff" or td.id == "hasDebuff"
+      if isDebuffKind181 then -- ★1.71.3 候选者debuff 也要类型下拉
         -- ★1.73.2 多选：显示串 = 0 项「任意负面」/ 1 项该类型名 / ≥2 项「A/B…」
         --   窄格（62px）只列得下 2 项，多的用 …；**完整清单走 tooltip**（不因为格子窄就藏信息）
         local ids = EVAL_DISPEL_LIST(cd.dt)
@@ -6405,9 +6434,10 @@ EVAL_IO_TEMPLATES = EVAL_IO_TEMPLATES or {}
 --   ★判据：**「数据变了」与「界面更新」是同一件事，必须在同一个地方做**——
 --     把刷新放在写入点（本函数）而不是散落在各调用点，调用点就再也不可能漏。
 --     （与本项目「A 产出配置、B 消费配置，两边都要断言」是同一类问题。）
-local function ioImportText(text)
+local function ioImportText(text, author)
   local prof, err = EVAL_PROFILE_FROM_TEXT(text)
   if not prof then return false, "导入失败: " .. tostring(err) end
+  if type(author) == "string" and author ~= "" then prof.author = author end -- ★1.74.5 记录方案来源（作者：技能学院=案例模版 / 玩家名=别人分享）
   local w2 = warCfg()
   local msg
   if table.getn(w2.profiles) < 12 then -- 1.44.0 修正：方案上限 1.42.0 已 4→12，此处残留旧值
@@ -6425,6 +6455,22 @@ local function ioImportText(text)
 end
 
 EVAL_IMPORT_TEXT = ioImportText -- 1.69.0 桥：Share.lua 方案分享弹窗的 [导入] 走这里
+
+-- ★★★1.74.5 方案「作者/来源」标签（用户：「给方案增加一个作者类型」）——顶层全局纯函数，供方案列表 tooltip 与断言复用。
+--   四类：自创（src ~= text，**作者值=创建者名，但显示只写「自创」**）· 案例模版（author = 技能学院）·
+--        别人分享（author = 发送者名）· 导入（文本粘贴，无作者记录）。
+--   ★★★用户原话澄清（1.74.5）：「别称的意思就是方案内显示自创（实际值是自己名字）；其他显示类型的显示实际的作者」
+--   ⇒ 自创那一类**只显示「自创」**（自己的名字照旧记进 prof.author 存档，只是不上屏）；
+--     案例模版 / 别人分享 / 导入 三类显示**真实作者**（技能学院 / 玩家名 / 无）。
+function EVAL_PROF_AUTHOR_LABEL(prof)
+  if type(prof) ~= "table" then return "?" end
+  if prof.src ~= "text" then return EVAL_L("PROF_SRC_SELF") end -- ★自创 = 只写「自创」（别称语义，不显示自己的名字）
+  if type(prof.author) == "string" and prof.author ~= "" then
+    if prof.author == "技能学院" then return EVAL_L("PROF_SRC_TEMPLATE") .. "：" .. EVAL_L("PROF_SRC_ACADEMY") end
+    return EVAL_L("PROF_SRC_SHARE") .. "：" .. tostring(prof.author)
+  end
+  return EVAL_L("PROF_SRC_IMPORT")
+end
 
 -- 方案 → md 文本（导出）
 function EVAL_PROFILE_TO_TEXT(idx)
@@ -7267,7 +7313,7 @@ function EVAL_HELP_TPL_BUILD()
         pcall(GameTooltip.Hide, GameTooltip)
       end)
       b:SetScript("OnClick", function()
-        local ok, msg = ioImportText(p.text)
+        local ok, msg = ioImportText(p.text, "技能学院") -- ★1.74.5 案例模版来源
         say(msg)
         if ok then
           pcall(EVAL_WAR_TAB_REFRESH)
@@ -7853,7 +7899,7 @@ if type(SlashCmdList) == "table" then
       local nm = string.match(msg, "^go newprof%s*(.*)$")
       local w2 = warCfg()
       if table.getn(w2.profiles) < 4 then
-        table.insert(w2.profiles, { name = (nm and nm ~= "") and nm or ("方案" .. tostring(table.getn(w2.profiles) + 1)), skills = {}, src = "manual" }) -- ★1.73.63 手动创建（彩蛋闸门要认）
+        table.insert(w2.profiles, { name = (nm and nm ~= "") and nm or ("方案" .. tostring(table.getn(w2.profiles) + 1)), skills = {}, src = "manual", author = (type(UnitName) == "function" and UnitName("player")) or nil }) -- ★1.73.63 手动创建（彩蛋闸门要认）★1.74.5 作者=自己名字
         w2.activeProfile = table.getn(w2.profiles)
         say("新建并切换到: " .. tostring(w2.profiles[w2.activeProfile].name))
         pcall(EVAL_WAR_TAB_REFRESH)
@@ -8153,6 +8199,24 @@ if type(SlashCmdList) == "table" then
         for _ in ipairs(list or {}) do cnt = cnt + 1 end
         say(string.format("%s：读到 %d 个（扫描可信=%s）", g[1], cnt, tostring(okScan == true)))
         for _, d in ipairs(list or {}) do say("    " .. tostring(d.name) .. " = " .. tostring(d.tex)) end
+      end
+    -- ★★1.74.5 实测踩中：string.sub 是**字节**下标，"go 喂食" 是 3+3+3 = **9 字节**（写成 1,5 时前缀永远不等
+    --   → 命令**静默无反应**，正是本项目「前缀写错」那一族）。判据 = 组 176⑩ 走真实 SlashCmdList 入口。
+    elseif string.sub(msg, 1, 9) == "go 喂食" then
+      -- ★1.74.5 猎人助手（tools/HunterHelper.lua）：/eh go 喂食（一键喂食）｜ 喂食 设 <食物> ｜ 喂食 技能 <名>
+      --   以及取证命令 /eh go 喂食探针 [扫书|施放 <名>|喂 <包> <格>|拖|收光标]（用户实测用；见该文件头部）
+      if type(EVAL_HH_CMD) == "function" then
+        EVAL_HH_CMD(msg)
+      else
+        say("猎人助手模块没载入（tools/HunterHelper.lua 是否列进了 EvalHelp.toc？）")
+      end
+    -- ★1.74.5 消耗品助手：/eh go 消耗品（状态）｜ 消耗品 用 <物品名> ｜ 消耗品 清
+    --   "go 消耗品" = 3 + 9 = **12 字节**（string.sub 是字节下标 —— 写错就静默失效，见组 176⑩ 的教训）
+    elseif string.sub(msg, 1, 12) == "go 消耗品" then
+      if type(EVAL_CH_CMD) == "function" then
+        EVAL_CH_CMD(msg)
+      else
+        say("消耗品助手模块没载入（tools/ConsumableHelper.lua 是否列进了 EvalHelp.toc？）")
       end
     elseif msg == "go probe immune" then
       -- 免疫事件探针（1.35.1，免疫学习器前置验证）：30 秒全事件抓取——CHAT_MSG_* 或参数含「免疫/immune」
@@ -8998,6 +9062,12 @@ init:SetScript("OnEvent", function(a, b)
       EVAL_HELP_ST_BUILD()
       if stui.root then stui.root:Show() end
     end
+    -- ★1.74.5 猎人助手「一键喂食」：上次开着的话恢复图标（含拖到的位置）——
+    --   用户实测：开着一键喂食、把图标拖好，/reload 后图标**不见了**；
+    --   根因 = 开关只存状态，而图标帧是「点开关那一下」才懒建的，登录流程里没人重建它。
+    if type(EVAL_HH_RESTORE) == "function" then pcall(EVAL_HH_RESTORE) end
+    -- ★1.74.5 消耗品助手（tools/ConsumableHelper.lua）：同一条纪律 —— 上次开着就恢复
+    if type(EVAL_CH_RESTORE) == "function" then pcall(EVAL_CH_RESTORE) end
     -- 注册进出战斗事件（pcall 防御：事件名若不存在不会崩）
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_REGEN_DISABLED")
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_REGEN_ENABLED")

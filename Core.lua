@@ -546,11 +546,16 @@ function EVAL_HELP_UPDATE_STATE()
     end
   end
   st.targetDebuffs = {} -- 1.31.0 起存层数（数字）：UnitDebuff 第二返回值；非堆叠 debuff 返回 0 → 归一化为 1
+  -- ★1.74.6 「负面类型」支持（用户：「自身/目标debuff 条件要参考队伍debuff 支持 debuff 负面类型」）：
+  --   ★层数表**保持数字**（既有读侧一字不改），类型另存一张 tex→可驱散 token 的**平行表**（UnitDebuff 第 3 返回）。
+  --     队伍/团员的记录本来就是 {t=类型, n=层数}，所以这张表只是把同一条信息补齐到自身/目标身上。
+  st.targetDebuffType = {}
   if UnitExists("target") and type(UnitDebuff) == "function" then
     for i = 1, 16 do
-      local okd, tex, apps = pcall(UnitDebuff, "target", i)
+      local okd, tex, apps, dtype = pcall(UnitDebuff, "target", i)
       if not okd or not tex then break end
       st.targetDebuffs[tex] = (type(apps) == "number" and apps > 0) and apps or 1
+      if type(dtype) == "string" and dtype ~= "" then st.targetDebuffType[tex] = dtype end
     end
   end
   st.targetBuffs = {} -- 1.54.0 目标 buff 纹理集合（UnitBuff 1 基索引）；1.70.1 起存层数
@@ -562,11 +567,13 @@ function EVAL_HELP_UPDATE_STATE()
     end
   end
   st.playerDebuffs = {} -- 1.54.0 自身 debuff 纹理集合；1.70.1 起存层数
+  st.playerDebuffType = {} -- ★1.74.6 同上：自身 debuff 的「负面类型」平行表（层数表仍是数字）
   if type(UnitDebuff) == "function" then
     for i = 1, 16 do
-      local okd, tex, apps = pcall(UnitDebuff, "player", i)
+      local okd, tex, apps, dtype = pcall(UnitDebuff, "player", i)
       if not okd or not tex then break end
       st.playerDebuffs[tex] = (type(apps) == "number" and apps > 0) and apps or 1
+      if type(dtype) == "string" and dtype ~= "" then st.playerDebuffType[tex] = dtype end
     end
   end
 

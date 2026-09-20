@@ -605,7 +605,17 @@ function EVAL_TEST_SHARE_QUEUE_DUMP()
   for q = 1, table.getn(shTxQ) do out[q] = string.sub(tostring(shTxQ[q].body or ""), 1, 34) end
   return out
 end
-function EVAL_SHARE_TEST_QUEUE_LEN() return table.getn(shTxQ) end-- ★★★1.72.3 **收不齐绝不静默**，且**给晚到的分片留冗余窗口**（用户要求：1~2 秒内都可以）。
+function EVAL_SHARE_TEST_QUEUE_LEN() return table.getn(shTxQ) end-- ★★★1.74.5 用户：「现在为弹窗原因在日志内显示」—— 把**每一条**「不弹窗」的分叉都写进调试日志
+--   （EVAL_LOGLINE → /eh logdump / 存档文件）。此前只有「弹窗 / 过大 / 自己的回声」三条落盘，
+--   而最容易踩的「接收开关关着」反而**完全静默** ⇒ 用户报「对方就是不弹窗」时日志里查不到原因。
+--   统一前缀 `[分享] 不弹窗：`（检索词），正文写「原因（发送者=…，细节）」。
+local function shNoPop(reason, sender, extra)
+  if type(EVAL_LOGLINE) ~= "function" then return end
+  pcall(EVAL_LOGLINE, "[分享] 不弹窗：" .. tostring(reason) ..
+        "（发送者=" .. tostring(sender or "?") .. (extra and ("，" .. tostring(extra)) or "") .. "）")
+end
+
+-- ★★★1.72.3 **收不齐绝不静默**，且**给晚到的分片留冗余窗口**（用户要求：1~2 秒内都可以）。
 --   两级判定：
 --     ① 空闲超过 SH_RECV_TOLERANCE(2s) 仍未收齐 → **如实提醒**（点名发送者 + 收了几片），
 --        ★但**不删缓冲**：发送是限频滴出的（每片 0.5s），漏一片时后面几片还会来；
@@ -621,9 +631,11 @@ local function shSweepBuf(now)
       if not b.warned then
         shWarn(string.format(L("SH_RECV_PARTIAL"), tostring(b.from or "?"), b.got or 0, b.n or 0))
       end
+      shNoPop("超时丢弃（" .. tostring(SH_BUF_TIMEOUT) .. " 秒没收齐）", b.from, (b.got or 0) .. "/" .. (b.n or 0))
     elseif idle > SH_RECV_TOLERANCE and not b.warned then
       b.warned = true
       shWarn(string.format(L("SH_RECV_PARTIAL"), tostring(b.from or "?"), b.got or 0, b.n or 0))
+      shNoPop("暂未收齐（还在等冗余窗口）", b.from, (b.got or 0) .. "/" .. (b.n or 0))
     end
   end
 end
@@ -637,6 +649,7 @@ local function shTrimBuf()
   if cnt > SH_MAX_BUF and oldK then
     SH.buf[oldK] = nil
     shWarn(string.format(L("SH_DROP_MANY"), SH_MAX_BUF))
+    shNoPop("在途笔数超上限，丢了最久的一笔", oldK)
   end
 end
 
@@ -710,6 +723,11 @@ function EVAL_SHARE_IS_MINE(text)
   return false
 end
 
+-- ★★★1.74.5 用户：「取消彩蛋」——**这一条流程**（导入/忽略）不再发角色扮演反应，改发下面的「场景描述」。
+--   ★★注意：用户随后明确「不是把彩蛋功能删除」⇒ 下面这套（频道表 / 语气两档 / 抽奖 / 名链接）**原样保留**，
+--     只是**两处调用点已移除**（要恢复就把 shSendReaction("imp"/"ign") 加回按钮回调即可）。
+--     ★别和另一个同名的「彩蛋：创世者亲临 / 自定义头衔」搞混 —— 那是头衔系统，一直在用。
+--     （判据：SH FUN CHECK 现在断言「函数与表都在 **且** 调用点已移除」，恢复接线时同步改那条检查。）
 -- ★★★1.73.64 用户：「根据当前秘籍等级 和接收者自身的头衔 等级 做出导入(接收)/忽略(忽略)的符合角色扮演语境反应会话」
 --   + 「说/队伍 加入」⇒ **公会 / 说 / 队伍** 三个来源都回一句（原来只有公会，键见 SH_FUN_CHAN）。
 --   语气由**两张表**决定：接收者头衔档（EVAL_TITLE_STATE().tier）× 收到的秘籍品阶档（收到的文本现算），
@@ -783,6 +801,104 @@ local function shSendReaction(op)
   if type(RunScript) ~= "function" then return false end
   pcall(RunScript, string.format("SendChatMessage(%q, %q)", txt, chan))
   EVAL_LOGLINE("[分享] 已在" .. chan .. "频道发送：" .. txt)
+  return true
+end
+
+
+-- ★★★1.74.5 用户：「在接收方案完成之后再加一句模版：<头衔> 根据当前所在<地点>、<有无目标> 做场景描述（背景=魔兽世界）」
+--   分派 = op（[导入]=imp / [忽略]=ign）× UnitExists("target") ⇒ **4 张表各 10 条**（三语言各一份）。
+--   ★占位符优先级（用户定，顺序与降级都按它）：
+--     ① 头衔（句首，**按档位染色**；拿不到→玩家名，且**不猜颜色**）
+--     ② 地点（GetRealZoneText；拿不到→「艾泽拉斯」）
+--     ③ 目标（UnitName("target")；只在「有目标」那两张表里出现，目标刚消失就**整条不发**）
+--   ★★客户端会吞「多段色码」的消息（本项目实测定案：分享信息两条各自只许一段色码）
+--     ⇒ 这条**只允许一段**色码（就是头衔那一段），判据里也钉死（数 |c 出现次数 == 1）。
+--   ★防刷屏：进**同一个限频队列**（shTxQ，≥1s 滴一条），绝不与彩蛋反应同帧倾泻。
+-- ★★★1.74.5 用户实测（截图）：「信息没生效」——彩蛋反应有、场景描述**一个字都没出**。
+--   【根因】本项目早有实测定案：**客户端不画「有色码但没有链接」的消息**（只有「一段色码 + 链接」才显示；
+--     参考封皮 A 行 `|c<身份色>|HEHPF:<id> 0/1:0|h[<头衔>]|h|r 名字 分享了` —— 它就是「色码 + 链接」所以看得见）。
+--     我第一版发的是 `|c<档位色>头衔|r 纯文本`（色码但无链接）⇒ 整条被吞。
+--   【修法】头衔一律包成**与封皮 A 行同款的链接**：`|c<档位色>|HEHPF:<传输id> 0/1:0|h[<头衔>]|h|r`；
+--     ★拿不到传输 id（极老格式）或拿不到合法 8 位色码 → **退回纯文本、不上色**（宁可朴素也必须能看见）。
+local function shSceneTitle(p)
+  local t = nil
+  if type(EVAL_TITLE_CURRENT) == "function" then
+    local ok, v = pcall(EVAL_TITLE_CURRENT)
+    if ok then t = v end
+  end
+  local name, col = nil, nil
+  if type(t) == "table" and type(t.name) == "string" and t.name ~= "" then
+    name = tostring(t.name)
+    if type(t.color) == "string" and string.find(t.color, "^|c%x%x%x%x%x%x%x%x$") then col = t.color end
+  else
+    if type(UnitName) == "function" then -- ★没入档 → 玩家名（且不上色）
+      local ok, v = pcall(UnitName, "player")
+      if ok and type(v) == "string" and v ~= "" then name = tostring(v) end
+    end
+    if not name then name = "某位冒险者" end
+  end
+  local idh = (type(p) == "table" and type(p.idh) == "string" and p.idh ~= "") and p.idh or nil
+  if col and idh then
+    return col .. "|HEHPF:" .. idh .. " 0/1:0|h[" .. name .. "]|h|r", true
+  end
+  return name, false
+end
+
+local function shSceneZone()
+  if type(GetRealZoneText) == "function" then
+    local ok, z = pcall(GetRealZoneText)
+    if ok and type(z) == "string" and z ~= "" then return z end
+  end
+  return L("SH_SCENE_ZONE_FALLBACK")
+end
+
+-- 表名（读值口与实现同源，测试按它逐表核条数/占位符）
+function EVAL_TEST_SHARE_SCENE_KEY(op, hasTarget)
+  local key = "SH_SCENE_" .. (op == "ign" and "IGN" or "IMP") .. (hasTarget and "_TGT" or "_IDLE")
+  local tb = L(key)
+  return key, (type(tb) == "table") and table.getn(tb) or 0
+end
+
+function EVAL_TEST_SHARE_SCENE_LAST() return SH.sceneLast end
+
+local function shSendScene(op)
+  local p = SH.pending
+  if not p then return false end
+  local chan = SH_FUN_CHAN[p.ev]
+  if not chan then return false end
+  if chan == "GUILD" and type(IsInGuild) == "function" then
+    local okg, ing = pcall(IsInGuild)
+    if okg and not ing then return false end
+  end
+  local hasTarget = false
+  if type(UnitExists) == "function" then
+    local ok, v = pcall(UnitExists, "target")
+    hasTarget = (ok and v) and true or false
+  end
+  local key, n = EVAL_TEST_SHARE_SCENE_KEY(op, hasTarget)
+  local tb = L(key)
+  if type(tb) ~= "table" or n < 1 then return false end
+  local line = tb[math.random(1, n)]
+  if type(line) ~= "string" or line == "" then return false end
+  local title, zone = shSceneTitle(p), shSceneZone() -- ★把待导入那一份（带 idh）传进去：头衔要包成链接才画得出来
+  local txt = nil
+  if hasTarget then
+    local tn = nil
+    if type(UnitName) == "function" then
+      local ok, v = pcall(UnitName, "target")
+      if ok and type(v) == "string" and v ~= "" then tn = v end
+    end
+    if not tn then return false end -- ★目标刚消失：这条不成立就不发（绝不拿别的名字硬塞）
+    txt = string.format(line, title, zone, tn)
+  else
+    txt = string.format(line, title, zone)
+  end
+  if string.len(txt) > SH_MSG_MAX then return false end
+  if table.getn(shTxQ) >= SH_MAX_QUEUE then return false end
+  SH.sceneLast = txt
+  table.insert(shTxQ, { body = txt, chan = chan })
+  if type(shEnsureTxTicker) == "function" then shEnsureTxTicker() end -- ★走同一队列：≥1s 才滴出
+  EVAL_LOGLINE("[分享] 场景描述入队（" .. tostring(op) .. "/" .. (hasTarget and "有目标" or "无目标") .. "）：" .. txt)
   return true
 end
 
@@ -887,14 +1003,23 @@ local function shOnMsg(msg, sender, ev)
     shSealCapture(string.match(msg, "|HEHPF:(%x+)")) -- 老式封皮：没有序号、链接只带 id
     return
   end
-  if not shCfg().recv then return end
+  if not shCfg().recv then
+    -- ★最容易踩的一条：开关关着时以前**完全静默**（用户报「对方不弹窗」时根本查不到）
+    shNoPop("接收开关关着（工具箱 → 分享 → 接收方案）", sender)
+    return
+  end
   i, n = tonumber(i), tonumber(n)
   if not i or not n or n < 1 or i < 1 or i > n then
     -- ★1.73.43f 新式分享信息（序号 0/1）会走到这里 —— 它**带发送端信息**，顺手记进 meta（接收行为不变）
     if string.find(msg, " 分享了 → ", 1, true) then shSealCapture(idh) end
+    shNoPop("载荷不完整（i/n 非法）", sender, "i=" .. tostring(i) .. " n=" .. tostring(n))
     return
   end
-  if n > SH_MAX_CHUNKS then shWarn(string.format(L("SH_DROP_BIG"), n, SH_MAX_CHUNKS)) return end -- R4
+  if n > SH_MAX_CHUNKS then -- R4
+    shWarn(string.format(L("SH_DROP_BIG"), n, SH_MAX_CHUNKS))
+    shNoPop("分片数超上限", sender, tostring(n) .. " > " .. tostring(SH_MAX_CHUNKS))
+    return
+  end
   sender = tostring(sender or "?")
   local now = shNowT()
   shSweepBuf(now)
@@ -914,15 +1039,23 @@ local function shOnMsg(msg, sender, ev)
   end
   if b.got >= b.n then
     SH.buf[key] = nil
-    if SH.done[key] then return end -- 同一笔重复收齐不重复弹
+    if SH.done[key] then -- 同一笔重复收齐不重复弹（也写日志：否则「少弹了一次」会被误当成丢包）
+      shNoPop("同一笔已弹过（重复收齐）", sender, idh and ("id=" .. tostring(idh)) or nil)
+      return
+    end
     shMarkDone(key)
     local parts = {}
     for j = 1, b.n do parts[j] = b.chunks[j] or "" end
     shDbgChunk("收齐", msg, "共 " .. b.n .. " 片")
     local text = fromHex(table.concat(parts))
-    if not text then shDbgChunk("hex还原失败", msg) return end
+    if not text then
+      shDbgChunk("hex还原失败", msg)
+      shNoPop("hex 还原失败（分片载荷损坏）", sender)
+      return
+    end
     if string.len(text) > SH_MAX_TEXT then -- R5
       shDbgChunk("过大丢弃", msg, string.len(text) .. "B")
+      if type(EVAL_LOGLINE) == "function" then pcall(EVAL_LOGLINE, "[分享] 不弹窗：方案过大（" .. tostring(string.len(text)) .. " 字节，上限 " .. tostring(SH_MAX_TEXT) .. "）来自 " .. tostring(sender)) end
       shWarn(string.format(L("SH_DROP_BIGTEXT"), string.len(text), SH_MAX_TEXT))
       return
     end
@@ -939,6 +1072,10 @@ local function shOnMsg(msg, sender, ev)
     -- R1：只保留最新一份 —— 弹窗内容换成最新的，并如实说明替换了谁
     local old = SH.pending
     shDbgChunk("弹窗", msg, "发送者=" .. tostring(sender))
+    if type(EVAL_LOGLINE) == "function" then
+      local chanT = (type(EVAL_SHARE_CHAN_LABEL) == "function") and EVAL_SHARE_CHAN_LABEL(b.ev) or tostring(b.ev or "?")
+      pcall(EVAL_LOGLINE, "[分享] 弹出方案分享窗：来自 " .. tostring(sender) .. "（频道=" .. tostring(chanT) .. "，" .. tostring(b.n) .. " 片收齐）") -- ★1.74.5 弹窗原因落盘
+    end
     EVAL_SH_POPUP(sender, text, b.ev, idh) -- ★1.73.42i 带上传输 id（品阶栏要用它取发送端的境界/评语）
     if old then shWarn(string.format(L("SH_POP_REPLACED"), tostring(sender), tostring(old.sender))) end
   end
@@ -1172,7 +1309,9 @@ function EVAL_TITLE_COUNTS()
   local profs = cfgT and cfgT.war and cfgT.war.profiles
   if type(profs) ~= "table" then return out end
   for _, p in pairs(profs) do
-    if type(p) == "table" then
+    -- ★★★1.74.5 用户：「角色头衔评定标准是只有自己创建的方案才加入评定分计算」——
+    --   只算**自创**（src ~= "text"：手动创建 + 老存档无 src 都算；导入/案例模版/分享接收来的**不算**）。
+    if type(p) == "table" and p.src ~= "text" then
       local idx = select(1, EVAL_SHARE_SEAL_TIER(EVAL_PROFILE_SCORE(p)))
       if idx >= 1 and idx <= 5 then out[idx] = out[idx] + 1 end
     end
@@ -2560,10 +2699,10 @@ local function shPopupBuild()
     local p = SH.pending
     if not p then shp.root:Hide() return end
     if type(EVAL_IMPORT_TEXT) == "function" then
-      local ok, msg = EVAL_IMPORT_TEXT(p.text)
+      local ok, msg = EVAL_IMPORT_TEXT(p.text, p.sender) -- ★1.74.5 记录来源：别人分享（作者=发送者）
       shSay(tostring(msg))
       if ok then
-        shSendReaction("imp") -- ★1.73.64 导入后按（头衔档×秘籍档）在来源频道抽一句角色扮演反应（公会/说/队伍）
+        shSendScene("imp") -- ★1.74.5 接收成功 → 发**一句**场景描述（彩蛋反应已按用户要求取消；头衔按档位染色 + 当前地点）
         shp.root:Hide()
         SH.pending = nil
       end
@@ -2572,7 +2711,7 @@ local function shPopupBuild()
     end
   end)
   local ignoreBtn = bBtn(btnX2, L("SH_IGNORE"), function()
-    shSendReaction("ign") -- ★1.73.64 忽略时同理（公会/说/队伍）
+    shSendScene("ign") -- ★1.74.5 拒绝时同理：换「拒绝」那一组场景描述（彩蛋反应已取消）
     shp.root:Hide()
     SH.pending = nil
   end)

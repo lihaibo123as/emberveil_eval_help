@@ -271,8 +271,8 @@
 - ★★聊天窗名字着色：一个包装体管两功能（`EVAL_TB_CHAN_INSTALL_ONE`）不叠两层；覆盖所有窗（`ChatFrame1`＝`DEFAULT_CHAT_FRAME`，幂等按入口判、不按名字去重）；缓存唯一 `tbNameClass`；不做自动 /who（`SendWho` 等都是服务器查询）⇒查不到不上色；纯函数 `EVAL_TB_CHAT_COLOR_LINE` 拿不准就不碰；三坑：前 11 字节判富文本会染链接名·字符数≠字节数·`EVAL_SAY` 行不着色；颜色码长度禁写死（`|c%x+`）、诊断分开打（`EVAL_TB_CHATCOLOR_ROUTES`）；`CHAT COLOR WIRING CHECK`（先摘注释）；组 121①⑭。
 - ★主动查询（四道闸门）：`TB_WHO_GAP=5s`、`TB_WHO_PEND=8s`、`TB_WHO_MISS_TTL=1800s`、`TB_WHO_QMAX=20`；查询日志只进调试日志（`EVAL_LOGLINE`⇒`/eh logdump`）；「查谁」更严：只认发送者位置的方括号名；`SendWho` 只许在 `tbWhoTick` 里。
 - ★分享弹窗：摘要行⇒「X 分享的 [品阶秘籍·名]」带品阶色；品阶行只留图标、删重复文字、没连图标一起删（`EVAL_SHARE_SEAL_ROW` 被组 145 等用）；坐标 `SH_SEAL_ROW_Y` -50→-46·`SH_DETAIL_Y1` -74→-66·dPanel 顶 -46→-42；组 145；★改 UI 文案要同步反转旧判据。
-- ★反应句方案名＝可点品阶色链接：`shReactionNameLink(p)` 造回 B 行同款 `<色>|HEHPF:<传输id> 0/1:1|h[<符号><品阶>秘籍·<名>]|h|r`；点它靠 `EVAL_SHARE_CLICK_OPEN("EHPF:<id>")` 在 `SH.recent` 找（用 `SH.pending.idh`）；超 `SH_MSG_MAX`/缺 id⇒退回纯名字；组 82⑤b＋⑦c＋`SH FUN CHECK`。
-- ★彩蛋角色扮演反应：[导入]/[忽略] 按头衔档×收到品阶档从 50 格（5×5）抽奖式挑一句发来源频道（公会/说/队伍，`SH_FUN_CHAN`）；文案用嵌套表 `SH_FUN_IMP`/`SH_FUN_IGN`（每语言一键·前提 `L()` 能返回表）；每条恰 2 个 `%s`（发送者、方案名，顺序不能错）；组 82＋组 170＋`SH FUN CHECK`。
+- ★可点品阶色链接（`|HEHPF:<id>` 形态，封皮 B 行与场景描述头衔同款）：点它靠 `EVAL_SHARE_CLICK_OPEN("EHPF:<id>")` 在 `SH.recent` 找（用 `SH.pending.idh`）⇒ 重填 `SH.pending` 弹出接收页；超 `SH_MSG_MAX`/缺 id ⇒ 退回纯文本；`shReactionNameLink(p)` 现在是**保留但未接线**（彩蛋取消）；判据组 180②（点头衔链接打开接收页）。
+- ★彩蛋角色扮演反应（1.73.64 建 · **1.74.5 起未接线**）：机制/频道表/抽奖/名链接/三语言 50 格文案**全部保留**，但 [导入]/[忽略] **不再发**（改发「场景描述」，见下条）；`SH FUN CHECK` 钉「机制都在 **且** 调用点未接」＋组 170① 仍验每句恰 2 个 `%s`；组 82④⑤ 是**反向哨兵**（点了不发反应句）。
 - ★彩蛋创世者亲临闸门：手动创建的方案有 ≥25 分神级 · 手动方案 ≥3 个 · 头衔满档 5；`src`：手工点写 `"manual"`、文本解析在唯一出口 `EVAL_PROFILE_FROM_TEXT` 盖 `"text"`、老存档无 `src`⇒按手动；堵两条路 `EVAL_TITLE_CREATOR_OPEN` 与 `EVAL_TITLE_CREATOR_TRY`；`EVAL_TITLE_EGG_CHECK()` 挂 `EVAL_WAR_TAB_REFRESH`＋登录、只播一次；组 169＋组 150/150⑥＋`CREATOR GATE CHECK`。
 - ★★★队伍菜单三条条件（1.74.1，审计定案）：**邀请队伍** = 不在队伍 或 我是队长（修「队长反而邀不了人」的旧 bug）；
 - ★1.74.4 邀请队伍再补一刀（用户截图：对方已入队却仍显示邀请队伍）：条件只看「我」的状态是 bug → 改为「**对方不在我队伍/团队里 且 （不在队伍 或 我是队长）**」；队友已入队 → 邀请藏掉（踢出/离开照常）。组 130⑥e2 反转；变异 M568。
@@ -297,7 +297,7 @@
 - api_*.html=1370 条索引；无：GetDifficultyColor（有垫片）/PlaySoundFile（只有 PlaySound）/hooksecurefunc/UIDropDownMenu_GetSelectedID；有：GetGuildRosterInfo/GetWhoInfo/GetFriendInfo/GetNumGuildMembers/GetNumWhoResults/GetNumFriends/GuildControlGetNumRanks/GetRealZoneText/RemoveChatWindowMessages。
 
 ### 5.6 内容 / 数据质量
-- 可驱散类型多选（用户要求：debuff/团队 debuff 多选）：cd.dt=nil/""/"any"/串/集合表，空集=任意；文本多选 (Magic/Poison)、单选 (Magic)；改动只在 dispelMatch+导出/解析（组 114）；互斥项须数据重算+整表重绘（组 114③）。
+- 可驱散「负面类型」多选（1.73.2；**1.74.6 扩到自身/目标 debuff**，用户：「自身/目标debuff 要参考队伍debuff 支持负面类型」）：`cd.dt`=nil/串/集合（空集=任意）；**求值一律走 `dispelMatch` 按类型过滤**（名字对上但类型不符 = **没有**）；**名称留空 + 类型 = 「有任意该类型」**（层数取命中项最大值）；类型存平行表 `st.{player,target}DebuffType`（层数表仍是数字）；格式化同一份 `dtSuffix()`（导出 token / 显示本地化名）；编辑窗类型格四族都有、**buff 行不许有**；组 114＋组 181（变异 M181 捕获）。
 - 指定等级=技能名(等级 3)（与法术书 subtext 逐字相符；跨语言不通用→没该串即如实失败；只有真法术名才拆括号，前缀名括号属名字本身）；下拉按等级数字升序、无 subtext 排最后，table.sort 在 5.1 不稳定须「数字+原下标」装饰排序（组 108①b+组 110②；组 111）。
 - 不占动作条唯一判据 skillNoSlotOk（EVAL_NO_SLOT_OK）（STOP ATTACK WIRING CHECK；组 111⑤）。
 - CLASS_LIST 缺圣骑士→模版 [职业:圣骑士] 静默丢弃；须末尾追加 PALADIN/圣骑士（组 111⑥+组 2）。
