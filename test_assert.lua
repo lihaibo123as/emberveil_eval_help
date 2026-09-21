@@ -15088,28 +15088,77 @@ do
   --   判据必须**先记基线、比增量**——比绝对数的话，前一组喂过一次就会让这里恒红（本轮实测）。
   local hitsBase186 = EVAL_TEST_HH_STATE().hits
   -- ① 限频常量 = 1.0
-  eq(EVAL_TEST_HH_STATE().rate, 1.0, "①★★★HH_RATE 真的是 1.0 秒（不是 0.3）")
+  eq(EVAL_TEST_HH_STATE().rate, 2.0, "①★★★HH_RATE 真的是 2.0 秒（1.5s GCD 之上再留余量）")
   -- ② 连点 5 下：队列上限 3，第 4、5 下被拦
   EVAL_HH_FEED() EVAL_HH_FEED() EVAL_HH_FEED() EVAL_HH_FEED() EVAL_HH_FEED()
   eq(EVAL_TEST_HH_STATE().qn, 3, "②★★连点 5 下只入 3 笔（队列上限还在，第 4/5 下被拦）")
-  -- ③ 1s 内的下一笔不被执行：走一笔，0.9s 后再走 —— 还是只有一笔开始执行
+  -- ③ 2s 内的下一笔不被执行：走一笔，1.9s 后再走 —— 还是只有一笔开始执行
   EVAL_HH_STEP(6000)
   eq(EVAL_TEST_HH_STATE().phase, "aim", "③前置：第一笔开始执行（进入 aim）")
   TEST.targeting = 1 EVAL_HH_STEP(6000.1) TEST.targeting = nil EVAL_HH_STEP(6000.2) -- 喂完第一笔
-  EVAL_HH_STEP(6000.9)
-  eq(EVAL_TEST_HH_STATE().hits, hitsBase186 + 1, "③★★0.9s 时**还是只有一笔**（下一笔没到 1s 不许执行）")
-  -- ④ 过 1s 才放行
-  EVAL_HH_STEP(6001.0)
-  eq(EVAL_TEST_HH_STATE().phase, "aim", "④★★过 1s → 第二笔开始执行（hits=" .. tostring(EVAL_TEST_HH_STATE().hits) .. " 基线=" .. tostring(hitsBase186) .. "）")
+  EVAL_HH_STEP(6001.9)
+  eq(EVAL_TEST_HH_STATE().hits, hitsBase186 + 1, "③★★1.9s 时**还是只有一笔**（下一笔没到 2s 不许执行）")
+  -- ④ 过 2s 才放行
+  EVAL_HH_STEP(6002.0)
+  eq(EVAL_TEST_HH_STATE().phase, "aim", "④★★过 2s → 第二笔开始执行（hits=" .. tostring(EVAL_TEST_HH_STATE().hits) .. " 基线=" .. tostring(hitsBase186) .. "）")
   -- ⑤ 文案写的就是 1 秒
-  eq(string.find(EVAL_L("HH_BUSY"), "1 秒", 1, true) ~= nil, true, "⑤★★文案写「限 1 秒一笔」（不是 0.3）")
+  eq(string.find(EVAL_L("HH_BUSY"), "2 秒", 1, true) ~= nil, true, "⑤★★文案写「限 2 秒一笔」（不是 0.3 也不是 1）")
   eq(string.find(EVAL_L("HH_BUSY"), "0.3", 1, true) == nil, true, "⑤★★文案里**不再有 0.3**（旧文案会让人以为还在 0.3s 限频）")
   -- 收尾
   EVAL_HELP_CONFIG.tb.feedPet = false
   EVAL_HELP_CONFIG.tb.hhFood, EVAL_HELP_CONFIG.tb.hhFoodTex = nil, nil
   EVAL_HH_TEST_RESET_TIMERS()
   TEST.bags, TEST.spellbook, TEST.hasPet, TEST.targeting = nil, nil, nil, nil
-  print("  猎人喂食限频：HH_RATE=1.0 / 连点只入 3 笔 / 1s 内不执行 / 过 1s 放行 / 文案写 1 秒")
+  print("  猎人喂食限频：HH_RATE=2.0 / 连点只入 3 笔 / 2s 内不执行 / 过 2s 放行 / 文案写 2 秒")
+end
+
+-- ===== 组 187（1.74.10）：背包候选 类型过滤（用户：「弹窗选择优先过滤掉物品非可食用的物品.
+--   比如武器,任务道具,装备,灰色物品之类的矿石草药这些」）=====
+-- 覆盖：①武器被剔 ②护甲/装备被剔 ③任务道具被剔 ④灰色品质（矿石/草药）被剔
+--   ⑤食物/消耗品**照常留下** ⑥拿不到类型（未缓存）**不剔**（查不到 ≠ 不是食物）
+--   ⑦总扫描数照旧（剔除只影响候选，不影响 total 计数）
+do
+  -- 夹具：武器 / 护甲 / 任务道具 / 灰色矿石 / 食物 / 未缓存的食物
+  TEST.itemInfo = {
+    ["铁剑"] = { t = "Weapon", st = "单手剑", q = 2 },
+    ["锁甲胸甲"] = { t = "Armor", st = "锁甲", q = 2 },
+    ["任务信件"] = { t = "Quest", st = "任务", q = 1 },
+    ["铜矿石"] = { t = "贸易品", st = "金属与矿石", q = 0 }, -- ★灰色品质（q=0）
+    ["熏熊肉"] = { t = "Consumable", st = "食物", q = 1 },
+    ["神秘食物"] = nil, -- ★未缓存：拿不到类型 → 不剔（查不到 ≠ 不是食物）
+  }
+  TEST.bags = {
+    [0 * 100 + 1] = { name = "铁剑", tex = "texSword", count = 1 },
+    [0 * 100 + 2] = { name = "锁甲胸甲", tex = "texArmor", count = 1 },
+    [0 * 100 + 3] = { name = "任务信件", tex = "texQuest", count = 1 },
+    [0 * 100 + 4] = { name = "铜矿石", tex = "texOre", count = 5, q = 0 }, -- ★品质 q=0 才触发「灰色被剔」
+    [0 * 100 + 5] = { name = "熏熊肉", tex = "texMeat", count = 3 },
+    [0 * 100 + 6] = { name = "神秘食物", tex = "texMystery", count = 2 },
+  }
+  -- ★桩的 GetContainerNumSlots(0) 默认只给 2 格 → 6 件扫不全。临时放宽到 8 格（与组 176 翻页测试同一手法）。
+  local realSlots187 = GetContainerNumSlots
+  GetContainerNumSlots = function(bag) return (bag >= 0 and bag <= 4) and 8 or 0 end
+  local list187, total187 = EVAL_IG_SCAN_BAGS({ 0 })
+  local function has(nm)
+    for _, it in ipairs(list187) do if it.name == nm then return true end end
+    return false
+  end
+  -- ①~④ 非可食用的被剔
+  eq(has("铁剑"), false, "①★★武器被剔出候选")
+  eq(has("锁甲胸甲"), false, "②★★护甲/装备被剔")
+  eq(has("任务信件"), false, "③★★任务道具被剔")
+  eq(has("铜矿石"), false, "④★★灰色品质（矿石）被剔（用户点名的「灰色物品之类的矿石草药」）")
+  -- ⑤ 食物照常留下
+  eq(has("熏熊肉"), true, "⑤★★食物**照常留下**（不能把可吃的也误删了）")
+  -- ⑥ 未缓存 → 不剔（查不到 ≠ 不是食物）
+  eq(has("神秘食物"), true, "⑥★★★拿不到类型（未缓存）**不剔**——查不到 ≠ 不是食物，宁可留着")
+  -- ⑦ total 计数照旧（剔除只影响候选列表，不影响「扫到几件」的口径）
+  eq(total187, 6, "⑦★★总扫描数照旧（6 件都算扫到了，剔除只影响候选）")
+  eq(table.getn(list187), 2, "⑦★★候选只剩 2 件（熏熊肉 + 神秘食物）")
+  -- 收尾
+  GetContainerNumSlots = realSlots187
+  TEST.itemInfo, TEST.bags = nil, nil
+  print("  背包候选 类型过滤：武器/护甲/任务/灰色被剔 · 食物留下 · 未缓存不剔 · total 照旧")
 end
 
 print("ALL TESTS PASS")

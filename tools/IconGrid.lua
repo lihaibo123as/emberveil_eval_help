@@ -164,9 +164,33 @@ function EVAL_IG_SCAN_BAGS(bags)
             tex, cnt, locked, q = t, tonumber(c), (lk and true or false), tonumber(qq)
           end
         end
+        -- ★1.74.10 类型过滤（用户：「弹窗选择优先过滤掉物品非可食用的物品.比如武器,任务道具,装备,
+        --   灰色物品之类的矿石草药这些」）：把「不可能吃/用」的剔出候选。
+        --   · 武器 / 护甲（装备）/ 任务道具：GetItemInfo 第 6 返回 = itype（本地化/英文 token 都可能，
+        --     两种都判，与本项目 dispelMatch 的双向容忍同一纪律）；
+        --   · 灰色品质（q == 0）：矿石/草药/灰色杂物（用户点名的「灰色物品之类的矿石草药」）；
+        --   · ★保守：拿不到类型（GetItemInfo 只读本地缓存，未缓存 → nil）**不剔**——
+        --     查不到 ≠ 不是食物，宁可留着让用户自己看（本项目「查不到 ≠ 没有」铁律）。
+        -- ★主类型取**第 5 返回**（武器/护甲/任务/消耗品 在主类型这一档；第 6 返回是子类型如「单手剑」）。
+        --   与项目 tbItemType/dsItemKind 的 best-effort 同一口径：只读本地缓存，未缓存 → nil → **不剔**。
+        local itype = nil
+        if type(GetItemInfo) == "function" then
+          local okk, _1, _2, _3, _4, it5 = pcall(GetItemInfo, nm)
+          if okk and type(it5) == "string" and it5 ~= "" then itype = it5 end
+        end
+        local function kindHit(one, other)
+          return itype and (itype == one or string.lower(itype) == string.lower(other))
+        end
+        local skip = false
+        if kindHit("Weapon", "Weapon") or kindHit("武器", "Weapon") then skip = true end
+        if kindHit("Armor", "Armor") or kindHit("护甲", "Armor") or kindHit("装备", "Armor") then skip = true end
+        if kindHit("Quest", "Quest") or kindHit("任务", "Quest") then skip = true end
+        if q == 0 then skip = true end -- 灰色品质（矿石/草药/杂物）
         total = total + 1
-        table.insert(out, { name = nm, bag = bag, slot = slot, tex = tex, count = cnt,
-                            locked = locked, q = q, idx = total })
+        if not skip then
+          table.insert(out, { name = nm, bag = bag, slot = slot, tex = tex, count = cnt,
+                              locked = locked, q = q, idx = total })
+        end
       end
     end
   end

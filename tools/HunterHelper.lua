@@ -60,7 +60,7 @@ local HH = {
 --   ⇒ 与小地图/配置入口按钮**同尺寸 26×26**（EvalHelp.lua: `mb:SetWidth(26)`「边长 26（与图标库单格一致；按钮 = 图标，无内缩）」）。
 --   ★位置记忆存的是「中心偏移」（与尺寸无关）⇒ 改尺寸不会让老存档的位置跑偏。
 local HH_SIZE = 26
-local HH_RATE = 1.0        -- ★1.74.10 用户：「喂食频率机制是什么? 设至少1s」—— 喂食间隔放宽到 1s/笔
+local HH_RATE = 2.0        -- ★1.74.10 用户：「公共CD 是1.5s 喂食间隔设置2s」—— 间隔放宽到 2s/笔（给 1.5s GCD 留余量）
 local HH_AIM_WAIT = 1.0
 local HH_SETTLE_WAIT = 0.8
 local HH_QMAX = 3
