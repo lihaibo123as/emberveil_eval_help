@@ -191,7 +191,10 @@ end
 function EVAL_HH_CANDIDATES()
   local list, total = {}, 0
   if type(EVAL_IG_SCAN_BAGS) == "function" then
-    list, total = EVAL_IG_SCAN_BAGS(HH_BAGS)
+    -- ★1.74.28 弹窗候选**开类型过滤**（用户：「喂食助手 弹窗选的物品项目要过滤一下.不要显示武器,装备.
+    --   灰色物品,草药,矿物,任务物品,材料等等非可食用的物品」）：判定在 IconGrid 的共用件里（三级：
+    --   品质 → GetItemInfo(链接) → 自建 tooltip 兜底并顺手把物品写进客户端缓存）。
+    list, total = EVAL_IG_SCAN_BAGS(HH_BAGS, { classify = true })
   end
   local out = {}
   for i = 1, table.getn(list) do
@@ -862,6 +865,11 @@ end
 function EVAL_HH_CMD(msg)
   msg = tostring(msg or "")
   local sub = string.match(msg, "^go 喂食探针%s*(.-)%s*$")
+  -- ★1.74.28 「验证可行性」入口：/eh go 喂食探针 过滤 —— 背包每件物品的类型判定依据一屏摊开
+  if sub == "过滤" then
+    if type(EVAL_IG_FILTER_REPORT) == "function" then return EVAL_IG_FILTER_REPORT(HH_BAGS, hhSay) end
+    return false
+  end
   if sub ~= nil then return EVAL_HH_PROBE(sub) end
   local feedArg = string.match(msg, "^go 喂食%s*(.-)%s*$")
   if feedArg ~= nil then

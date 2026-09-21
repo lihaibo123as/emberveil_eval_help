@@ -15378,7 +15378,10 @@ do
   -- ★桩的 GetContainerNumSlots(0) 默认只给 2 格 → 6 件扫不全。临时放宽到 8 格（与组 176 翻页测试同一手法）。
   local realSlots187 = GetContainerNumSlots
   GetContainerNumSlots = function(bag) return (bag >= 0 and bag <= 4) and 8 or 0 end
-  local list187, total187 = EVAL_IG_SCAN_BAGS({ 0 })
+  -- ★1.74.28 起类型过滤是**调用方显式开**的（`opts.classify`）：只有弹窗候选那条路径开，
+  --   按名字解析包格的路径（EVAL_CH_FIND 等）不开 —— 否则「判错一类 → 用户配置的物品静默找不到」。
+  EVAL_IG_KIND_RESET()
+  local list187, total187 = EVAL_IG_SCAN_BAGS({ 0 }, { classify = true })
   local function has(nm)
     for _, it in ipairs(list187) do if it.name == nm then return true end end
     return false
@@ -15391,14 +15394,93 @@ do
   -- ⑤ 食物照常留下
   eq(has("熏熊肉"), true, "⑤★★食物**照常留下**（不能把可吃的也误删了）")
   -- ⑥ 未缓存 → 不剔（查不到 ≠ 不是食物）
-  eq(has("神秘食物"), true, "⑥★★★拿不到类型（未缓存）**不剔**——查不到 ≠ 不是食物，宁可留着")
+  eq(has("神秘食物"), true, "⑥★★★拿不到类型（未缓存 + tooltip 也读不到）**不剔**——查不到 ≠ 不是食物，宁可留着")
+  eq(EVAL_IG_KIND_STATS().unknown >= 1, true, "⑥★但它**计入 unknown 统计**（探针要如实报「判不出几件」，不静默）")
+
+  -- ⑧ ★★★1.74.28 新增档：**白色材料**（品质 1 ≠ 灰色 ⇒ 旧的「q==0」拦不住）也必须剔 ——
+  --   这正是用户点名却漏掉的一类（草药/矿物多数是白色）：缓存类型 = 贸易品/草药/矿物。
+  TEST.itemInfo["宁神花"] = { t = "Trade Goods", st = "草药", q = 1 }
+  TEST.itemInfo["铜锭"] = { t = "Trade Goods", st = "金属与矿石", q = 1 }
+  TEST.itemInfo["亚麻布"] = { t = "Trade Goods", st = "布料", q = 1 }
+  TEST.itemInfo["任务凭证"] = { t = "Quest", st = "任务", q = 1 }
+  TEST.itemInfo["旅行背包"] = { t = "Container", st = "容器", q = 1 }
+  TEST.itemInfo["粗制箭"] = { t = "Projectile", st = "箭矢", q = 1 }
+  TEST.itemInfo["钥匙串"] = { t = "Key", st = "钥匙", q = 1 }
+  TEST.itemInfo["食谱：烤鱼"] = { t = "Recipe", st = "烹饪配方", q = 1 }
+  TEST.bags[0 * 100 + 1] = { name = "宁神花", tex = "texHerb", count = 3 }
+  TEST.bags[0 * 100 + 2] = { name = "铜锭", tex = "texBar", count = 2 }
+  TEST.bags[0 * 100 + 3] = { name = "亚麻布", tex = "texCloth", count = 5 }
+  TEST.bags[0 * 100 + 4] = { name = "任务凭证", tex = "texQuest2", count = 1 }
+  TEST.bags[0 * 100 + 5] = { name = "旅行背包", tex = "texBag", count = 1 }
+  TEST.bags[0 * 100 + 6] = { name = "粗制箭", tex = "texArrow", count = 20 }
+  TEST.bags[0 * 100 + 7] = { name = "钥匙串", tex = "texKey", count = 1 }
+  TEST.bags[0 * 100 + 8] = { name = "食谱：烤鱼", tex = "texRecipe", count = 1 }
+  EVAL_IG_KIND_RESET()
+  local list187b, total187b = EVAL_IG_SCAN_BAGS({ 0 }, { classify = true })
+  local function hasB(nm)
+    for _, it in ipairs(list187b) do if it.name == nm then return true end end
+    return false
+  end
+  eq(total187b, 8, "⑧前置：第二组 8 件都扫到了（只有 0 号包 8 格）")
+  eq(hasB("宁神花"), false, "⑧★★★白色草药被剔（品质 1，旧的「只剔灰色」漏掉的就是它）")
+  eq(hasB("铜锭"), false, "⑧★★★矿物（金属与矿石）被剔")
+  eq(hasB("亚麻布"), false, "⑧★★布料（材料）被剔")
+  eq(hasB("任务凭证"), false, "⑧★★任务物品被剔（白色品质也拦得住）")
+  eq(hasB("旅行背包"), false, "⑧★容器被剔")
+  eq(hasB("粗制箭"), false, "⑧★箭矢弹药被剔")
+  eq(hasB("钥匙串"), false, "⑧★钥匙被剔")
+  eq(hasB("食谱：烤鱼"), false, "⑧★配方图纸被剔（注意：名字里含「烤鱼」也没被当成食物）")
+  eq(table.getn(list187b), 0, "⑧★★8 件全部被剔（这一档全是不该出现在候选里的东西）")
+  eq(EVAL_IG_KIND_STATS().dropped >= 8, true, "⑧★剔除数记账（探针/状态要如实报）")
+
+  -- ⑨ ★★★tooltip 兜底 + **缓存自愈**（先核 API：SetBagItem 在官方索引里；WTT 是自建隔离 tooltip）
+  --   夹具：一个**完全没进缓存**的物品，只有 tooltip 的类型行能告诉我们它是什么。
+  TEST.itemInfo["未缓存大剑"] = nil
+  TEST.bags[0 * 100 + 9] = { name = "未缓存大剑", tex = "texSword2", count = 1 }
+  local realSlots187b = GetContainerNumSlots
+  GetContainerNumSlots = function(bag) return (bag >= 0 and bag <= 4) and 12 or 0 end
+  rawset(_G, "EVAL_HELP_WTTTextLeft2", { GetText = function() return TEST.wttLine187 end })
+  local wtt187 = rawget(_G, "EVAL_HELP_WTT")
+  local realSetBagItem187 = nil
+  if wtt187 then realSetBagItem187 = wtt187.SetBagItem wtt187.SetBagItem = function(_, b, s) TEST.wttBag187 = b TEST.wttSlot187 = s end end
+  TEST.wttLine187 = "双手剑"
+  EVAL_IG_KIND_RESET()
+  local list187c = EVAL_IG_SCAN_BAGS({ 0 }, { classify = true })
+  local kept187c = false
+  for _, it in ipairs(list187c) do if it.name == "未缓存大剑" then kept187c = true end end
+  eq(TEST.wttSlot187, 9, "⑨★★★缓存为 nil 时**真的去读了 tooltip**（SetBagItem 收到 0,9）")
+  eq(kept187c, false, "⑨★★★tooltip 类型行「双手剑」→ 判成武器 → 被剔（缓存没有也能判出来）")
+  eq(EVAL_IG_KIND_STATS().probed >= 1, true, "⑨★探针次数记账（tooltip 是贵调用，要能看见用了几次）")
+  eq(EVAL_TEST_IG_KIND("未缓存大剑") == "weapon", true, "⑨★★判定也被缓存下来（同一件物品不重复读 tooltip）")
+  -- 缓存自愈：读一次 tooltip 后客户端就有了这件物品 ⇒ 下一次 GetItemInfo 直接命中（不必再读 tooltip）
+  TEST.itemInfo["未缓存大剑"] = { t = "Weapon", st = "双手剑", q = 2 }
+  TEST.wttSlot187 = nil
+  EVAL_IG_KIND_RESET()
+  EVAL_IG_SCAN_BAGS({ 0 }, { classify = true })
+  eq(TEST.wttSlot187, nil, "⑨★★★缓存补齐后**不再读 tooltip**（自愈：越用越快，不是每次都探）")
+  if wtt187 then wtt187.SetBagItem = realSetBagItem187 end
+  rawset(_G, "EVAL_HELP_WTTTextLeft2", nil)
+  TEST.wttLine187 = nil
+
+  -- ⑩ 判不出（tooltip 读不到文本）→ 仍然**不剔**（查不到 ≠ 没有）
+  --   ★格数还原要放到**本段之后**：⑨ 用的是 12 格（第 9 格），还原成 8 格这一格就扫不到了。
+  TEST.itemInfo["神秘玩意儿"] = nil
+  TEST.bags[0 * 100 + 9] = { name = "神秘玩意儿", tex = "texMyst", count = 1 }
+  EVAL_IG_KIND_RESET()
+  local list187d = EVAL_IG_SCAN_BAGS({ 0 }, { classify = true })
+  local kept187d = false
+  for _, it in ipairs(list187d) do if it.name == "神秘玩意儿" then kept187d = true end end
+  eq(kept187d, true, "⑩★★★三条路都判不出来 → **不剔**（宁可多显示一件，也不把真食物藏起来）")
+  eq(EVAL_IG_KIND_STATS().unknown >= 1, true, "⑩★但计入 unknown（探针如实报，不静默）")
+  TEST.bags[0 * 100 + 9] = nil
+  GetContainerNumSlots = realSlots187b
   -- ⑦ total 计数照旧（剔除只影响候选列表，不影响「扫到几件」的口径）
   eq(total187, 6, "⑦★★总扫描数照旧（6 件都算扫到了，剔除只影响候选）")
   eq(table.getn(list187), 2, "⑦★★候选只剩 2 件（熏熊肉 + 神秘食物）")
   -- 收尾
   GetContainerNumSlots = realSlots187
   TEST.itemInfo, TEST.bags = nil, nil
-  print("  背包候选 类型过滤：武器/护甲/任务/灰色被剔 · 食物留下 · 未缓存不剔 · total 照旧")
+  print("  背包候选 类型过滤：三级判定（品质 → GetItemInfo(链接/名字) → 自建 tooltip 兜底并缓存自愈）· 武器/护甲/灰色/材料(草药矿物布料)/任务/容器/箭矢/钥匙/配方 全剔 · 判不出不剔但记账 · 关掉分类时行为不变")
 end
 
 -- ===== 组 188（1.74.11）：悬浮图标 CD 倒计时（用户：「消耗品助手和喂食助手都设置悬浮图标显示CD 实时倒计时特效.

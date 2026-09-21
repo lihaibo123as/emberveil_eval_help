@@ -121,6 +121,7 @@ local function igQualityRGB(q)
   return 0.72, 0.72, 0.72
 end
 
+
 -- ===== 通用纯函数：位置换算（两个助手共用 —— 免得各写一份、方向/尺寸错一个就歪）=====
 -- 存的是「中心偏移」(cx 向右为正、cy 向上为正)，落点用 TOPLEFT 锚点：
 --   x = w/2 + cx - size/2；y = -(h/2 - cy - size/2)（**y 向下为负**）
@@ -136,11 +137,232 @@ function EVAL_IG_TOPLEFT(sw, sh, size, cx, cy)
   return sw / 2 + cx - size / 2, -(sh / 2 - cy - size / 2)
 end
 
--- ===== 通用数据源：扫背包（喂食/消耗品两个助手共用 —— 免得两处各写一份扫描，行为慢慢漂开）=====
--- 返回 list, total；list[i] = { name=, bag=, slot=, tex=, count=, locked=, q=, idx= }
--- ★不做任何「像不像食物/消耗品」的判断：那由调用方排序（本客户端也没有「某物品是不是消耗品」的 API）。
-function EVAL_IG_SCAN_BAGS(bags)
+-- ===== 物品类型判定（1.74.28，两个助手共用）=====================
+-- 用户要求（原话）：「消耗品助手和喂食助手 弹窗选的物品项目要过滤一下.不要显示武器,装备.灰色物品
+--   草药,矿物,任务物品,材料等等非可使用的物品,验证可行性.」
+--
+-- ★★★可行性（先核 API，再动手 —— 铁律 5）：
+--   ① `GetContainerItemInfo` 的**品质**第 5 返回：**完全不依赖任何缓存**，所有背包格都能拿到 ⇒
+--      灰色(q==0) 一律剔，这条最可靠（矿石/草药/灰色杂物多数落在这里）；
+--   ② `GetItemInfo` 的第 5/6/8 返回 = 主类型 / 子类型 / **装备槽**：要看**本地缓存**，未缓存 → nil。
+--      ★传参用**物品链接**（`GetContainerItemLink` 给的 `|Hitem:…|h[名]|h`）——那是客户端的缓存键，
+--      比传裸名字可靠（旧实现传的是名字）；链接拿不到才退回名字。
+--   ③ 缓存为 nil 时的兜底 = **自建隐形 tooltip**（`EVAL_HELP_WTT` + `EVAL_WTT_MAY_READ` 读守卫）：
+--      `SetBagItem(bag, slot)` 读 tooltip 的**类型行**（本客户端第二行就是「材料 / 双手剑 / 食物和饮料 /
+--      任务物品」这一档）。★`SetBagItem` 在**官方 API 索引**里（api_*.html 有它的条目）；
+--      ★★而且这一步会**把该物品写进客户端缓存** ⇒ 下一次 `GetItemInfo` 就有值了：**自愈**，越用越准。
+--      ★这条路在真机上**已经跑通**：骑乘助手（tools/DismountHelper.lua）就是用同一个 tooltip 读光环文本认坐骑的。
+--   ④ 三条都判不出来（tooltip 被守卫挡住 / 读不出文本）→ **不剔**（项目铁律「查不到 ≠ 没有」：
+--      宁可多留一件，也不能把真食物悄悄藏起来），但**计入统计** `EVAL_IG_KIND_STATS().unknown`，探针如实报。
+--
+-- ★判据落在**纯函数**上（可单测）：`EVAL_IG_KIND_FROM_TEXT` / `EVAL_IG_KIND_FROM_INFO`。
+--   ★关键词表按**真机实测的类型行**维护：先跑 `/eh go 消耗品探针 过滤`（或喂食探针 过滤）看真实文案，再补词。
+local IG_KIND_CACHE = {}          -- [物品名] = { kind = , src = }（会话级缓存；tooltip 补齐后也记这里）
+local IG_KIND_STAT = { scanned = 0, kept = 0, dropped = 0, unknown = 0, cached = 0, probed = 0 }
+local IG_KIND_PROBE_MAX = 80      -- ★单次扫描最多探几次 tooltip（频率防护：tooltip 是贵调用）
+-- ★**一律剔出候选**的类型（用户点名的全部落在这里）：
+--   武器 / 护甲(装备) / 灰色 / 材料(草药·矿物·布料·皮革·附魔材料) / 任务物品 / 容器 / 箭矢弹药 / 钥匙 / 配方图纸。
+--   ★不在这里的（消耗品 / 食物 / 杂项 / 判不出）一律**留**：宁可多显示一件，也别把真食物藏起来。
+local IG_KIND_DROP = {
+  weapon = true, armor = true, grey = true, quest = true,
+  material = true, container = true, ammo = true, key = true, recipe = true,
+}
+
+-- 关键字 → 类型（zhCN 与英文都认，与项目其他双语言容忍同一纪律）
+--   ★返回 nil = **判不出**（不剔）；返回 "other" = 明确是「其它可用/杂项」→ 也不剔。
+local IG_KIND_WORDS = {
+  weapon  = { "武器", "单手剑", "双手剑", "单手斧", "双手斧", "匕首", "法杖", "长柄", "弓", "弩", "枪械", "投掷", "拳套", "魔杖", "Weapon", "Sword", "Axe", "Dagger", "Mace", "Staff", "Bow", "Crossbow", "Gun", "Polearm", "Fist" },
+  armor   = { "护甲", "布甲", "皮甲", "锁甲", "板甲", "盾牌", "头盔", "肩", "胸甲", "长袍", "腰带", "护腿", "靴", "护腕", "手套", "披风", "戒指", "饰品", "副手", "Armor", "Shield", "Head", "Chest", "Legs", "Feet", "Hands", "Waist", "Wrist", "Back", "Finger", "Trinket", "Holdable" },
+  quest   = { "任务", "Quest" },
+  material = { "材料", "贸易品", "商品", "草药", "矿物", "金属与矿石", "布料", "皮革", "附魔", "元素", "零件", "其它", "Trade Goods", "Trade", "Herb", "Metal", "Cloth", "Leather", "Enchanting", "Elemental", "Parts", "Devices", "Jewelcrafting" },
+  container = { "容器", "Container", "Bag" },
+  ammo    = { "箭矢", "弹药", "Projectile", "Arrow", "Bullet" },
+  key     = { "钥匙", "Key" },
+  recipe  = { "配方", "图样", "设计图", "结构图", "Recipe", "Pattern", "Schematic" },
+}
+
+-- 纯函数：tooltip 文本 → 类型 token（nil = 判不出）
+function EVAL_IG_KIND_FROM_TEXT(text)
+  if type(text) ~= "string" or text == "" then return nil end
+  local low = string.lower(text)
+  for kind, words in pairs(IG_KIND_WORDS) do
+    for i = 1, table.getn(words) do
+      local w = words[i]
+      if string.find(low, string.lower(w), 1, true) then return kind end
+    end
+  end
+  return nil
+end
+
+-- 纯函数：GetItemInfo 的类型/子类型/装备槽 → 类型 token（nil = 判不出）
+--   ★装备槽非空 = 可穿装备（比类型词更硬的一条：饰品/戒指这类类型名不统一的也拦得住）
+function EVAL_IG_KIND_FROM_INFO(itype, isub, islot)
+  if type(islot) == "string" and islot ~= "" then return "armor" end
+  local t = (type(itype) == "string" and itype ~= "") and itype or nil
+  local s = (type(isub) == "string" and isub ~= "") and isub or nil
+  if not t and not s then return nil end
+  return EVAL_IG_KIND_FROM_TEXT(tostring(t or "") .. " " .. tostring(s or ""))
+end
+
+-- tooltip 兜底：SetBagItem → 读类型行（★同时把物品写进客户端缓存）
+local function igTooltipKind(bag, slot)
+  local may = true
+  if type(EVAL_WTT_MAY_READ) == "function" then may = EVAL_WTT_MAY_READ() and true or false end
+  if not may then return nil, "blocked" end
+  local wtt = rawget(_G, "EVAL_HELP_WTT")
+  if not (wtt and type(wtt.SetBagItem) == "function") then return nil, "noTooltip" end
+  local text = nil
+  local ok = pcall(function()
+    pcall(wtt.ClearLines, wtt)
+    pcall(wtt.SetBagItem, wtt, bag, slot)
+    -- ★★**跳过 TextLeft1（物品名）**：名字里可能含类型词（「草药烤鱼」含「草药」）→ 会污染判定；
+    --   类型行/绑定行在 2 行起（绑定行「灵魂绑定」不含任何类型词，安全）。
+    for _, suffix in ipairs({ "TextLeft2", "TextLeft3", "TextLeft4", "TextRight1" }) do
+      local fs = rawget(_G, "EVAL_HELP_WTT" .. suffix)
+      if fs and type(fs.GetText) == "function" then
+        local t = fs:GetText()
+        if type(t) == "string" and t ~= "" then
+          if text == nil then text = t else text = text .. " " .. t end
+        end
+      end
+    end
+  end)
+  if not ok or not text then return nil, "unreadable" end
+  return text, "tooltip"
+end
+
+-- 主入口：判一件物品的类型。返回 kind（nil = 判不出）, src（quality/cache/tooltip/nil）
+function EVAL_IG_ITEM_KIND(name, link, q, bag, slot, allowProbe)
+  local key = tostring(name or "")
+  if key ~= "" and IG_KIND_CACHE[key] then
+    local c = IG_KIND_CACHE[key]
+    return c.kind, c.src
+  end
+  if q == 0 then
+    IG_KIND_CACHE[key] = { kind = "grey", src = "quality" }
+    return "grey", "quality"
+  end
+  local kind, src = nil, nil
+  if type(GetItemInfo) == "function" then
+    -- ★先试**链接**（客户端的缓存键），nil 再退回**名字**（两种传参在 1.12 都常见；两道保险）
+    local function tryInfo(arg)
+      if type(arg) ~= "string" or arg == "" then return nil end
+      local okk, _n, _l, _q, _lvl, it, sub, _stack, slot8 = pcall(GetItemInfo, arg)
+      if not okk then return nil end
+      return EVAL_IG_KIND_FROM_INFO(it, sub, slot8)
+    end
+    kind = tryInfo(link) or tryInfo(key)
+    if kind then src = "cache" end
+  end
+  if not kind and allowProbe and type(bag) == "number" and type(slot) == "number" then
+    local text, how = igTooltipKind(bag, slot)
+    if text then
+      kind = EVAL_IG_KIND_FROM_TEXT(text)
+      if kind then src = "tooltip" end
+    end
+    IG_KIND_STAT.probed = IG_KIND_STAT.probed + 1
+    if not kind then
+      -- ★tooltip 读到了但认不出类型 → 记原文，供探针回显（补词表用）
+      IG_KIND_CACHE[key] = { kind = nil, src = how, text = text }
+      return nil, how
+    end
+  end
+  if key ~= "" then IG_KIND_CACHE[key] = { kind = kind, src = src } end
+  return kind, src
+end
+
+function EVAL_IG_KIND_STATS() return IG_KIND_STAT end
+function EVAL_IG_KIND_RESET()
+  IG_KIND_CACHE, IG_KIND_STAT = {}, { scanned = 0, kept = 0, dropped = 0, unknown = 0, cached = 0, probed = 0 }
+  return true
+end
+-- 读值口：某物品当前判成了什么（探针与断言用）
+function EVAL_TEST_IG_KIND(name)
+  local c = IG_KIND_CACHE[tostring(name or "")]
+  if not c then return nil end
+  return c.kind, c.src, c.text
+end
+
+-- ★★★1.74.28 过滤体检（用户：「…要过滤一下…验证可行性」）：把**每一件背包物品**的判定依据摊开——
+--   品质 / GetItemInfo 缓存里的主类型·子类型·装备槽 / 自建 tooltip 读到的类型行 / 最终判定（剔 or 留）。
+--   ★为什么必须有它：过滤的关键不确定性是「**物品类型从哪来**」（缓存可能没值），光看结果分不清
+--     「本来该剔、判定对了」和「读不出类型、靠保守策略留下的」。一次全摊开，真机一眼定案。
+--   ★同时它也是**补词表的依据**：tooltip 里读到的真实文案会原样打出来（本客户端是 zhCN，词表按它维护）。
+--   ★打印上限 30 行（超出如实报「还有 N 条未显示」），统计行永远打。
+function EVAL_IG_FILTER_REPORT(bags, sayFn, maxRows)
+  if type(sayFn) ~= "function" then return false end
   bags = bags or { 0, 1, 2, 3, 4 }
+  maxRows = tonumber(maxRows) or 30
+  EVAL_IG_KIND_RESET()
+  local rows, stat = {}, { scanned = 0, kept = 0, dropped = 0, unknown = 0, cached = 0, probed = 0, nocache = 0 }
+  for bi = 1, table.getn(bags) do
+    local bag = bags[bi]
+    local slots = 0
+    if type(GetContainerNumSlots) == "function" then
+      local ok, v = pcall(GetContainerNumSlots, bag)
+      slots = (ok and tonumber(v)) or 0
+    end
+    for slot = 1, slots do
+      local nm, link = nil, nil
+      if type(GetContainerItemLink) == "function" then
+        local okl, lk = pcall(GetContainerItemLink, bag, slot)
+        if okl and type(lk) == "string" and lk ~= "" then link = lk nm = string.match(lk, "%[(.-)%]") end
+      end
+      if nm and nm ~= "" then
+        local q = nil
+        if type(GetContainerItemInfo) == "function" then
+          local oki, _t, _c, _lk, qq = pcall(GetContainerItemInfo, bag, slot)
+          if oki then q = tonumber(qq) end
+        end
+        -- 缓存里的原始字段（不经过判定，原样打给玩家看）
+        local itype, isub, islot = nil, nil, nil
+        if type(GetItemInfo) == "function" then
+          local arg = (link ~= "") and link or nm
+          local okk, _n, _l, _q, _lvl, it, sub, _st, s8 = pcall(GetItemInfo, arg)
+          if okk then itype, isub, islot = it, sub, s8 end
+          if not itype and arg ~= nm then
+            local ok2, _1, _2, _3, _4, it2, sub2, _5, s82 = pcall(GetItemInfo, nm)
+            if ok2 then itype, isub, islot = it2, sub2, s82 end
+          end
+        end
+        local kind, src = EVAL_IG_ITEM_KIND(nm, link, q, bag, slot, true)
+        local drop = (kind ~= nil and IG_KIND_DROP[kind]) and true or false
+        stat.scanned = stat.scanned + 1
+        if itype or isub or (type(islot) == "string" and islot ~= "") then stat.cached = stat.cached + 1 else stat.nocache = stat.nocache + 1 end
+        if src == "tooltip" then stat.probed = stat.probed + 1 end
+        if kind == nil then stat.unknown = stat.unknown + 1 end
+        if drop then stat.dropped = stat.dropped + 1 else stat.kept = stat.kept + 1 end
+        local cacheTxt = (itype or isub) and ((tostring(itype or "?") .. "/" .. tostring(isub or "?")) .. (type(islot) == "string" and islot ~= "" and ("｜装备槽 " .. tostring(islot)) or "")) or "未缓存"
+        local tp = nil
+        local c = IG_KIND_CACHE[nm]
+        if c and c.text then tp = c.text end
+        table.insert(rows, string.format("[%d,%d] %s ｜ 品质 %s ｜ 缓存 %s ｜ tooltip %s ｜ 判定 %s（%s）→ %s",
+          bag, slot, nm, tostring(q or "?"), cacheTxt, tp and ("「" .. tp .. "」") or "—",
+          tostring(kind or "判不出"), tostring(src or "-"), drop and "剔除" or "保留"))
+      end
+    end
+  end
+  sayFn("—— 背包过滤体检（" .. tostring(stat.scanned) .. " 件）——")
+  local n = table.getn(rows)
+  for i = 1, n do
+    if i > maxRows then break end
+    sayFn(rows[i])
+  end
+  if n > maxRows then sayFn("…还有 " .. tostring(n - maxRows) .. " 条未显示（上限 " .. tostring(maxRows) .. " 行）") end
+  sayFn(string.format("统计：剔除 %d ｜ 保留 %d ｜ 判不出 %d ｜ 缓存有类型 %d ｜ 未缓存 %d ｜ tooltip 探了 %d 次",
+    stat.dropped, stat.kept, stat.unknown, stat.cached, stat.nocache, stat.probed))
+  return true
+end
+
+-- ===== 通用数据源：扫背包（喂食/消耗品两个助手共用 —— 免得两处各写一份扫描，行为慢慢漂开）=====
+-- 返回 list, total；list[i] = { name=, bag=, slot=, tex=, count=, locked=, q=, idx=, kind=, ksrc= }
+-- ★不做任何「像不像食物/消耗品」的判断：那由调用方排序（本客户端也没有「某物品是不是消耗品」的 API）。
+-- ★★1.74.28：`opts.classify = true` 时**同时做类型过滤**（武器/护甲/灰色/材料/任务/容器/箭矢/钥匙/配方 一律剔）——
+--   只有**弹窗候选**这条用户点击驱动的路径才传 true（tooltip 兜底是贵调用，别放进热路径）。
+function EVAL_IG_SCAN_BAGS(bags, opts)
+  bags = bags or { 0, 1, 2, 3, 4 }
+  opts = opts or {}
+  local classify = opts.classify and true or false
   local out, total = {}, 0
   for bi = 1, table.getn(bags) do
     local bag = bags[bi]
@@ -150,10 +372,13 @@ function EVAL_IG_SCAN_BAGS(bags)
       slots = (ok and tonumber(v)) or 0
     end
     for slot = 1, slots do
-      local nm = nil
+      local nm, link = nil, nil   -- ★链接要留到下面判类型用（那是 GetItemInfo 的缓存键）
       if type(GetContainerItemLink) == "function" then
-        local okl, link = pcall(GetContainerItemLink, bag, slot)
-        if okl and type(link) == "string" then nm = string.match(link, "%[(.-)%]") end
+        local okl, lk = pcall(GetContainerItemLink, bag, slot)
+        if okl and type(lk) == "string" and lk ~= "" then
+          link = lk
+          nm = string.match(lk, "%[(.-)%]")
+        end
       end
       if nm and nm ~= "" then
         local tex, cnt, locked, q = nil, nil, nil, nil
@@ -164,32 +389,31 @@ function EVAL_IG_SCAN_BAGS(bags)
             tex, cnt, locked, q = t, tonumber(c), (lk and true or false), tonumber(qq)
           end
         end
-        -- ★1.74.10 类型过滤（用户：「弹窗选择优先过滤掉物品非可食用的物品.比如武器,任务道具,装备,
-        --   灰色物品之类的矿石草药这些」）：把「不可能吃/用」的剔出候选。
-        --   · 武器 / 护甲（装备）/ 任务道具：GetItemInfo 第 6 返回 = itype（本地化/英文 token 都可能，
-        --     两种都判，与本项目 dispelMatch 的双向容忍同一纪律）；
-        --   · 灰色品质（q == 0）：矿石/草药/灰色杂物（用户点名的「灰色物品之类的矿石草药」）；
-        --   · ★保守：拿不到类型（GetItemInfo 只读本地缓存，未缓存 → nil）**不剔**——
-        --     查不到 ≠ 不是食物，宁可留着让用户自己看（本项目「查不到 ≠ 没有」铁律）。
-        -- ★主类型取**第 5 返回**（武器/护甲/任务/消耗品 在主类型这一档；第 6 返回是子类型如「单手剑」）。
-        --   与项目 tbItemType/dsItemKind 的 best-effort 同一口径：只读本地缓存，未缓存 → nil → **不剔**。
-        local itype = nil
-        if type(GetItemInfo) == "function" then
-          local okk, _1, _2, _3, _4, it5 = pcall(GetItemInfo, nm)
-          if okk and type(it5) == "string" and it5 ~= "" then itype = it5 end
-        end
-        local function kindHit(one, other)
-          return itype and (itype == one or string.lower(itype) == string.lower(other))
+        -- ★★★1.74.28 类型过滤（用户：「弹窗选的物品项目要过滤一下.不要显示武器,装备.灰色物品
+        --   草药,矿物,任务物品,材料等等非可使用的物品,验证可行性.」）——
+        --   判定逻辑全部收在**共用的 EVAL_IG_ITEM_KIND**（见文件上方那一段：品质 → 缓存 → tooltip 三级，
+        --   tooltip 还会顺手把物品**写进客户端缓存**）。本函数只负责「按判定结果决定留不留 + 记账」。
+        --   ★判不出（nil）**不剔**（查不到 ≠ 没有）；`other` = 明确的杂项/可用 → 也留。
+        total = total + 1
+        IG_KIND_STAT.scanned = IG_KIND_STAT.scanned + 1
+        local kind, ksrc = nil, nil
+        if classify then
+          kind, ksrc = EVAL_IG_ITEM_KIND(nm, link, q, bag, slot,
+            IG_KIND_STAT.probed < IG_KIND_PROBE_MAX)
         end
         local skip = false
-        if kindHit("Weapon", "Weapon") or kindHit("武器", "Weapon") then skip = true end
-        if kindHit("Armor", "Armor") or kindHit("护甲", "Armor") or kindHit("装备", "Armor") then skip = true end
-        if kindHit("Quest", "Quest") or kindHit("任务", "Quest") then skip = true end
-        if q == 0 then skip = true end -- 灰色品质（矿石/草药/杂物）
-        total = total + 1
-        if not skip then
+        if classify and kind then
+          if IG_KIND_DROP[kind] then skip = true end
+          if ksrc == "cache" then IG_KIND_STAT.cached = IG_KIND_STAT.cached + 1 end
+        elseif classify then
+          IG_KIND_STAT.unknown = IG_KIND_STAT.unknown + 1
+        end
+        if skip then
+          IG_KIND_STAT.dropped = IG_KIND_STAT.dropped + 1
+        else
+          IG_KIND_STAT.kept = IG_KIND_STAT.kept + 1
           table.insert(out, { name = nm, bag = bag, slot = slot, tex = tex, count = cnt,
-                              locked = locked, q = q, idx = total })
+                              locked = locked, q = q, idx = total, kind = kind, ksrc = ksrc })
         end
       end
     end

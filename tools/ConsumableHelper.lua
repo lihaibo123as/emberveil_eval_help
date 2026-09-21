@@ -660,7 +660,10 @@ function EVAL_CH_PANEL()
     mode = "multi",
     candidates = function()
       if type(EVAL_IG_SCAN_BAGS) ~= "function" then return {}, 0 end
-      return EVAL_IG_SCAN_BAGS(CH_BAGS)
+      -- ★1.74.28 弹窗候选**开类型过滤**（用户：「弹窗选的物品项目要过滤一下.不要显示武器,装备.
+      --   灰色物品,草药,矿物,任务物品,材料等等非可使用的物品」）—— 只有这条用户点击驱动的路径开，
+      --   因为它会走 tooltip 兜底（贵调用）；`EVAL_CH_FIND` 那种按名字解析包格的路径不受影响。
+      return EVAL_IG_SCAN_BAGS(CH_BAGS, { classify = true })
     end,
     isSelected = function(it) return EVAL_CH_IS_SELECTED(it.name) end,
     onToggle = function(it)
@@ -739,6 +742,11 @@ function EVAL_CH_CMD(msg)
   --   /eh go 消耗品探针 [物品名] —— 实测 UseContainerItem 对堆叠物品**一次真的用几个**
   --   （用前/用后数量差）+ SplitContainerItem(bag,slot,1) 能不能拆出 1 个。
   --   ★判据 = 差值：1 = 正常（和游戏原生一致）；> 1 = 本客户端把 API 改成「用整组」（要绕）。
+  -- ★1.74.28 「验证可行性」入口：/eh go 消耗品探针 过滤 —— 把背包里每件物品的类型判定依据摊开
+  if sub == "探针 过滤" or sub == "过滤" then
+    if type(EVAL_IG_FILTER_REPORT) == "function" then return EVAL_IG_FILTER_REPORT(CH_BAGS, chSay) end
+    return false
+  end
   local probeName = string.match(sub, "^探针%s*(.-)%s*$")
   if probeName ~= nil then
     local target = (probeName ~= "") and probeName or nil
