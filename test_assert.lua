@@ -14255,8 +14255,8 @@ do
   eq(okUse177 == true and TEST.usedItem == 0 * 100 + 1, true,
      "④★★左键点横排第 1 枚 = 用**第 1 个**选中项（UseContainerItem(0,1) 厚皮药水，实测 usedItem=" .. tostring(TEST.usedItem) .. "）")
   eq(EVAL_TEST_CH_STATE().uses == 1, true, "④★成功计数 +1")
-  -- ★★1.74.16 规格变更（用户：「取消第一个图标识使用第一个配置的消耗品的功能」）：
-  --   主图标 = 帮手自己的**特殊图标**，两个键都只负责开/关选择面板；**绝不再代替物品使用**。
+  -- ★★1.74.16 规格变更：主图标 = 帮手自己的**特殊图标**，不代替使用。
+  -- ★★★1.74.30 用户：「消耗品助手图标左键点击弹窗取消」：左键**不再开选择面板**（面板入口收归**右键**）。
   TEST.time = 2000
   TEST.usedItem = nil
   local usesBefore177 = EVAL_TEST_CH_STATE().uses
@@ -14265,7 +14265,7 @@ do
   eq(TEST.usedItem == nil, true,
      "④★★★左键点主图标 **不再使用任何物品**（usedItem=" .. tostring(TEST.usedItem) .. "）")
   eq(EVAL_TEST_CH_STATE().uses == usesBefore177, true, "④★★成功计数没变（一次都没用）")
-  eq(EVAL_IG_IS_SHOWN() == true, true, "④★★左键点主图标 = **打开选择面板**（面板入口）")
+  eq(EVAL_IG_IS_SHOWN() == false, true, "④★★★反向哨兵：左键点主图标 **不弹选择面板**（1.74.30 用户定：左键弹窗取消）")
   EVAL_IG_HIDE()
   eq(EVAL_CH_LIST() and table.getn(EVAL_CH_LIST()) == 2, true, "④★选中列表不变（开面板 ≠ 取消选中）")
   -- ⑤ 限频：0.3 秒内重复点**横排**（服务器写动作不许刷）
@@ -14283,7 +14283,7 @@ do
   EVAL_IG_HIDE()
   EVAL_TEST_CH_CLICK_MAIN("LeftButton")
   eq(EVAL_TEST_CH_STATE().uses == uses177c and TEST.usedItem == nil, true,
-     "⑤★★主图标（开面板）**不触发使用**，所以也不吃使用限频")
+     "⑤★★主图标（左键 = no-op）**不触发使用**，所以也不吃使用限频")
   -- ⑥ 右键点横排 = 取消**被点的那一枚**（横排第 1 枚 = 选中列表第 1 个 = 厚皮药水，见 ③）
   EVAL_TEST_CH_STRIP_CLICK(1, "RightButton")
   local list177b = EVAL_CH_LIST()
@@ -14291,16 +14291,16 @@ do
      "⑥★右键点横排 = 取消选中（剩 " .. table.concat(list177b, ",") .. "）")
   -- ★与 ③ 同一口径：主图标 = **特殊图标**，所以选中项**一律**横排（剩 1 个就画那 1 枚，不再「只剩主图标」）
   eq(EVAL_TEST_CH_STATE().stripShown == 1, true, "⑥★取消到只剩 1 个 → 横排仍画那 1 枚（与 ③ 同口径）")
-  -- ⑥b ★★1.74.16 规格变更（用户：「取消第一个图标识使用第一个配置的消耗品的功能」）：
-  --   主图标 = 帮手自己的**特殊图标**，两个键都只负责**开/关选择面板**。
-  --   ⇒ 空选中时左键**也要能开面板**（那正是空的时候最需要的入口）；物品使用一律走横排各枚。
-  --   （旧的 1.74.5 规矩「左键不触发弹窗选择」是「左键=用物品」时代定的，已随该功能一起取消。）
+  -- ⑥b ★★★1.74.30 用户：「消耗品助手图标左键点击弹窗取消」——
+  --   面板入口**只有右键**（左键留给**拖动图标**：两者原本争用同一个按键 ⇒ 拖动/误点就弹窗）。
+  --   ★旧的 1.74.16 规矩「左键也能开面板」随本次一并撤销；物品使用仍走横排各枚（不变）。
+  --   （现在这条与 1.74.5 的老规矩一致：**左键不弹窗**。）
   tb177.chUse = {}
   EVAL_CH_STRIP_REFRESH()
   if EVAL_IG_IS_SHOWN() then EVAL_IG_HIDE() end
   TEST.chat = nil
   EVAL_TEST_CH_CLICK_MAIN("LeftButton")
-  eq(EVAL_IG_IS_SHOWN() == true, true, "⑥b★★★空选中时左键**也能开面板**（现在的面板入口；空的时候最需要它）")
+  eq(EVAL_IG_IS_SHOWN() == false, true, "⑥b★★★反向哨兵：空选中时左键**也不弹面板**（弹窗入口收归右键）")
   EVAL_IG_HIDE()
   TEST.chat = nil
   EVAL_TEST_CH_CLICK_MAIN("RightButton")
@@ -16690,5 +16690,333 @@ do
   if savedRW199 == nil and EVAL_HELP_CONFIG then EVAL_HELP_CONFIG.rareWatch = nil end
   EVAL_SET_LANG(lang199)
   print("  稀有提醒转播：VARIABLES_LOADED 安装 · 包住 Show（返回值透传/错误照抛）· 兜底轮询（首读立基准+0.5s 节流）· 开关 · 命令入口 · 三语言 · 品阶染色（整条一段码）· 名字链接（点一下 = 选中目标，选不中如实报错）· 目标探针（自检）")
+end
+-- ===== 组 188（1.74.29）：① 战斗UI「激活方案格加边框高亮」② 消耗品助手「看物品详情 / 效果」 =====
+do
+  -- ---------- ① 战斗UI 方案格边框 ----------
+  local fails0 = TESTASSERT_FAILS
+  local w188 = EVAL_HELP_CONFIG.war
+  local keepProf188, keepAct188 = w188.profiles, w188.activeProfile
+  local t2_188 = (EVAL_IO_TEMPLATES[2] or {}).list or {}
+  local t3_188 = (EVAL_IO_TEMPLATES[3] or {}).list or {}
+  local pA188 = t2_188[1] and EVAL_PROFILE_FROM_TEXT(t2_188[1].text or "")
+  local pB188 = t3_188[1] and EVAL_PROFILE_FROM_TEXT(t3_188[1].text or "")
+  w188.profiles = { pA188 or { name = "甲" }, pB188 or { name = "乙" } }
+  w188.activeProfile = 1
+  pcall(EVAL_HELP_UI_BUILD)
+  pcall(EVAL_HELP_UI_TICK)
+  local pr188 = EVAL_TEST_UI_PROF()
+  local b1_188 = pr188 and pr188.btns and pr188.btns[1]
+  local b2_188 = pr188 and pr188.btns and pr188.btns[2]
+  eq(b1_188 ~= nil and b1_188.borderN == 4, true,
+     "①★激活方案格挂着 **4 条**边框纹理（实际 " .. tostring(b1_188 and b1_188.borderN) .. "）")
+  eq(b1_188 ~= nil and b1_188.borderShown == true, true, "①★★激活格 → 边框**显示**")
+  eq(b2_188 ~= nil and b2_188.borderShown == false, true, "①★★反向哨兵：非激活格 → 边框**隐藏**")
+  local bc1_188, tc1_188 = b1_188 and b1_188.borderRGB, b1_188 and b1_188.textRGB
+  eq(type(bc1_188) == "table" and type(tc1_188) == "table"
+     and math.abs((bc1_188[1] or 0) - (tc1_188[1] or 0)) < 0.01
+     and math.abs((bc1_188[2] or 0) - (tc1_188[2] or 0)) < 0.01
+     and math.abs((bc1_188[3] or 0) - (tc1_188[3] or 0)) < 0.01, true,
+     "①★★★边框色 == 文字色（同源品阶色，不另抄一份）："
+     .. tostring(bc1_188 and table.concat(bc1_188, "/")) .. " vs " .. tostring(tc1_188 and table.concat(tc1_188, "/")))
+  eq(b1_188 ~= nil and math.abs((b1_188.borderH or 0) - 1) < 0.01, true,
+     "①★上缘纹理厚 1px（实际 " .. tostring(b1_188 and b1_188.borderH) .. "）")
+  eq(b1_188 ~= nil and math.abs((b1_188.borderVW or 0) - 1) < 0.01, true,
+     "①★左缘纹理厚 1px（实际 " .. tostring(b1_188 and b1_188.borderVW) .. "）")
+  w188.activeProfile = 2
+  pcall(EVAL_HELP_UI_TICK)
+  local pr188b = EVAL_TEST_UI_PROF()
+  eq(pr188b ~= nil and pr188b.btns[1] and pr188b.btns[1].borderShown == false
+     and pr188b.btns[2] and pr188b.btns[2].borderShown == true, true,
+     "①★★★换激活方案 → 边框跟着换到那一格（不是只画第一次）")
+  w188.profiles, w188.activeProfile = keepProf188, keepAct188
+  pcall(EVAL_HELP_UI_TICK)
+
+  -- ---------- ② 消耗品助手：悬停看物品详情 ----------
+  local tb188 = EVAL_TB_CHAR_STORE()
+  local keepUse188, keepOn188 = tb188.chUse, tb188.consumable
+  TEST.bags = { [0 * 100 + 1] = { name = "厚皮药水", tex = "texpotion", count = 3 } }
+  tb188.consumable = true
+  tb188.chUse = {}
+  EVAL_TEST_CH_RESET_UI()
+  EVAL_CH_TOGGLE()
+  EVAL_CH_TOGGLE_SELECT("厚皮药水")
+  EVAL_CH_STRIP_REFRESH()
+  TEST.gtBag, TEST.gtSlot, TEST.tipLines = nil, nil, {}
+  local okE188 = EVAL_TEST_CH_STRIP_ENTER(1)
+  eq(okE188 == true and TEST.gtBag == 0 and TEST.gtSlot == 1, true,
+     "②★★★悬停横排格 → 真的调 SetBagItem(0,1)（客户端原生物品 tooltip = 详情/效果）："
+     .. tostring(TEST.gtBag) .. "," .. tostring(TEST.gtSlot))
+  local cnt188 = false
+  for i = 1, table.getn(TEST.tipLines or {}) do
+    if string.find(tostring(TEST.tipLines[i].text or ""), "厚皮药水 ×3", 1, true) ~= nil then cnt188 = true end
+  end
+  eq(cnt188, true, "②★原生 tooltip 之后仍补上帮手的「名称 ×数量 [包,格]」行")
+  TEST.bags = {}
+  EVAL_CH_STRIP_REFRESH()
+  TEST.gtBag, TEST.gtSlot, TEST.tipLines = nil, nil, {}
+  EVAL_TEST_CH_STRIP_ENTER(1)
+  local gone188 = false
+  for i = 1, table.getn(TEST.tipLines or {}) do
+    if string.find(tostring(TEST.tipLines[i].text or ""), "厚皮药水", 1, true) ~= nil then gone188 = true end
+  end
+  eq(TEST.gtBag == nil and gone188 == true, true,
+     "②★★找不到物品时**不画**原生 tooltip、如实出文本行（查不到 ≠ 没有）")
+  TEST.bags = { [0 * 100 + 1] = { name = "厚皮药水", tex = "texpotion", count = 3 },
+                [0 * 100 + 2] = { name = "面包", tex = "texbread", count = 5 } }
+  EVAL_CH_STRIP_REFRESH()
+  TEST.gtBag, TEST.gtSlot = nil, nil
+  EVAL_TEST_CH_MAIN_ENTER()
+  eq(TEST.gtBag == 0 and TEST.gtSlot == 1, true, "②★★只勾一件 → 主图标也出原生物品 tooltip（看得到效果）")
+  EVAL_CH_TOGGLE_SELECT("面包")
+  EVAL_CH_STRIP_REFRESH()
+  TEST.gtBag, TEST.gtSlot, TEST.tipLines = nil, nil, {}
+  EVAL_TEST_CH_MAIN_ENTER()
+  local nlist188 = table.getn(TEST.tipLines or {})
+  eq(TEST.gtBag == nil and nlist188 >= 2, true,
+     "②★反向哨兵：勾了多件 → 主图标仍是**清单**（不拿一件顶掉整份清单，实际 " .. tostring(nlist188) .. " 行）")
+  -- 反向哨兵③：算不出品阶（EVAL_PROFILE_TIER 不可用）时也要镶**暖金**边框，不许激活格静默没有高亮
+  local keepTier188 = EVAL_PROFILE_TIER
+  EVAL_PROFILE_TIER = nil
+  w188.activeProfile = 1
+  pcall(EVAL_HELP_UI_TICK)
+  local pr188c = EVAL_TEST_UI_PROF()
+  local b1c = pr188c and pr188c.btns and pr188c.btns[1]
+  eq(b1c ~= nil and b1c.borderShown == true and type(b1c.borderRGB) == "table" and (b1c.borderRGB[1] or 0) >= 0.9, true,
+     "①★★算不出品阶 → 退回暖金边框（实际 " .. tostring(b1c and b1c.borderRGB and b1c.borderRGB[1]) .. "）")
+  EVAL_PROFILE_TIER = keepTier188
+  pcall(EVAL_HELP_UI_TICK)
+  tb188.chUse, tb188.consumable = keepUse188, keepOn188
+
+  -- ---------- ③ 弹窗选择物品：候选格悬停也出原生物品 tooltip ----------
+  TEST.bags = { [0 * 100 + 1] = { name = "厚皮药水", tex = "texpotion", count = 3 },
+                [0 * 100 + 2] = { name = "面包", tex = "texbread", count = 5 } }
+  tb188.consumable = true
+  tb188.chUse = {}
+  EVAL_TEST_CH_RESET_UI()
+  EVAL_CH_TOGGLE()
+  EVAL_CH_TOGGLE_SELECT("厚皮药水")
+  pcall(EVAL_CH_PANEL) -- 右键开选择面板（候选 = 扫背包；两个助手共用同一个网格）
+  TEST.gtBag, TEST.gtSlot, TEST.tipLines = nil, nil, {}
+  local okH188 = EVAL_TEST_IG_HOVER(1)
+  eq(okH188 ~= nil and TEST.gtBag ~= nil and TEST.gtSlot ~= nil, true,
+     "③★★★弹窗候选格悬停 → 也走 SetBagItem(bag,slot)（详细物品信息/效果）："
+     .. tostring(TEST.gtBag) .. "," .. tostring(TEST.gtSlot))
+  local tipP188 = ""
+  for i = 1, table.getn(TEST.tipLines or {}) do tipP188 = tipP188 .. "|" .. tostring(TEST.tipLines[i].text) end
+  eq(string.find(tipP188, "左键", 1, true) ~= nil or string.find(tipP188, "厚皮药水", 1, true) ~= nil, true,
+     "③★原生 tooltip 之后仍补上选择器自己的行（名称/数量/提示）")
+  pcall(EVAL_IG_HIDE)
+  tb188.consumable = false
+
+  -- ---------- ④ 喂食助手：快乐度边框高亮（开心 = 亮绿） ----------
+  local tbH188 = EVAL_TB_CHAR_STORE()
+  local keepHH188 = tbH188.feedPet
+  tbH188.feedPet = true
+  TEST.hasPet = true
+  TEST.happiness = 3
+  pcall(EVAL_HH_ENSURE) -- 懒建：建帧那一下就会按快乐度上色
+  EVAL_HH_HAP_BORDER()
+  local hap188 = EVAL_TEST_HH_HAP()
+  eq(hap188.n == 4, true, "④★边框就是主图标既有那 4 条 1px 亮边（实际 " .. tostring(hap188.n) .. "）")
+  eq(type(hap188.rgb) == "table" and (hap188.rgb[2] or 0) >= 0.95 and (hap188.rgb[1] or 1) <= 0.4, true,
+     "④★★★开心（档位 3）→ 边框**亮绿**：g=" .. tostring(hap188.rgb and hap188.rgb[2])
+     .. " r=" .. tostring(hap188.rgb and hap188.rgb[1]))
+  TEST.happiness = 2
+  EVAL_HH_HAP_BORDER()
+  local hap2_188 = EVAL_TEST_HH_HAP()
+  eq(type(hap2_188.rgb) == "table" and (hap2_188.rgb[2] or 0) > 0.6 and (hap2_188.rgb[2] or 0) < 0.95, true,
+     "④★一般（档位 2）→ 金边（与宠物信息行同一档配色）")
+  TEST.happiness = 1
+  EVAL_HH_HAP_BORDER()
+  local hap1_188 = EVAL_TEST_HH_HAP()
+  eq(type(hap1_188.rgb) == "table" and (hap1_188.rgb[1] or 0) >= 0.9 and (hap1_188.rgb[2] or 1) <= 0.6, true,
+     "④★不开心（档位 1）→ 红边")
+  TEST.hasPet = false
+  EVAL_HH_HAP_BORDER()
+  local hap0_188 = EVAL_TEST_HH_HAP()
+  eq(type(hap0_188.rgb) == "table" and (hap0_188.rgb[2] or 0) > 0.6 and (hap0_188.rgb[2] or 0) < 0.95, true,
+     "④★★反向哨兵：没有宠物 → 退回默认金边（不硬编「开心」）")
+  TEST.hasPet, TEST.happiness = nil, nil
+  tbH188.feedPet = keepHH188
+  EVAL_TEST_HH_RESET_UI()
+
+  -- ---------- ⑤ 射击计时探针（取证用；不开则零影响） ----------
+  eq(EVAL_SHOT_PROBE_STATE().on == false, true, "⑤★探针默认**关**（不开启时对正常路径零影响）")
+  TEST.time = 100
+  eq(EVAL_SHOT_PROBE_FEED("CHAT_MSG_COMBAT_SELF_HITS", "你击中木桩造成 10 点伤害。"), false,
+     "⑤★★反向哨兵：没开启 → 喂事件**不记录**")
+  eq(EVAL_SHOT_PROBE("") == true, true, "⑤★/eh go 射击探针 → 打开")
+  TEST.time = 5000
+  eq(EVAL_SHOT_PROBE_FEED("CHAT_MSG_SPELL_SELF_DAMAGE", "你的自动射击击中木桩造成 20 点伤害。"), true,
+     "⑤★开启后记录第 1 条")
+  TEST.time = 102.6
+  EVAL_SHOT_PROBE_FEED("CHAT_MSG_SPELL_SELF_DAMAGE", "你的自动射击击中木桩造成 21 点伤害。")
+  TEST.time = 105.2
+  EVAL_SHOT_PROBE_FEED("CHAT_MSG_COMBAT_SELF_HITS", "你击中木桩造成 5 点伤害。")
+  eq(EVAL_SHOT_PROBE_STATE().n == 3, true, "⑤★记录 3 条（实际 " .. tostring(EVAL_SHOT_PROBE_STATE().n) .. "）")
+  TEST.chat = nil
+  EVAL_SHOT_PROBE("报告")
+  local rep188 = tostring(TEST.chat or "")
+  eq(string.find(rep188, "UnitRangedDamage", 1, true) ~= nil, true,
+     "⑤★★报告里有 ① 远程速度来源（UnitRangedDamage 的全返回值）")
+  eq(string.find(rep188, "UnitAttackSpeed", 1, true) ~= nil, true, "⑤★报告里有 ② 近战对照（UnitAttackSpeed）")
+  eq(string.find(rep188, "IsAutoRepeatAction", 1, true) ~= nil, true,
+     "⑤★★报告里有 ③ 远程槽位 / 「现在是否自动射击中」")
+  eq(string.find(rep188, "Δt=2.60", 1, true) ~= nil, true, "⑤★★★报告真的算了 Δt（两次命中间隔 2.60s）")
+  eq(string.find(rep188, "通道计数", 1, true) ~= nil, true, "⑤★报告按事件通道计数（用来判定锚点走哪条）")
+  eq(EVAL_SHOT_PROBE("清空") == 0 and EVAL_SHOT_PROBE_STATE().n == 0, true, "⑤★清空记录")
+  eq(EVAL_SHOT_PROBE("") == false, true, "⑤★再点一次 → 关闭")
+  -- ★判据打**真实命令入口**（不打自家函数）：`/eh go 射击探针 …` 必须真的到得了探针
+  local cmd188 = SlashCmdList and SlashCmdList["EVALHELP"]
+  if type(cmd188) == "function" then
+    TEST.chat = nil
+    pcall(cmd188, "go 射击探针 清空")
+    eq(string.find(tostring(TEST.chat or ""), "清空", 1, true) ~= nil, true,
+       "⑤★★命令入口通了：/eh go 射击探针 清空 → 探针自己播报（走真实 SlashCmdList）")
+  end
+  local logHit188 = false
+  local buf188 = (type(EVAL_HELP_CONFIG) == "table" and type(EVAL_HELP_CONFIG.log) == "table") and EVAL_HELP_CONFIG.log or {}
+  for i = 1, table.getn(buf188) do
+    if string.find(tostring(buf188[i]), "[射击探针]", 1, true) ~= nil then logHit188 = true end
+  end
+  eq(logHit188, true, "⑤★★探针报告**同时落盘**（EVAL_LOGLINE → SavedVariables 环形缓冲，事后直接读文件、不用截图）")
+
+  -- ---------- ⑥ 射击计时（探针实测定案：锚点=法术频道含「自动射击」、射速=UnitRangedDamage[1]） ----------
+  EVAL_SHOT_TEST_RESET()
+  local keepRanged188, keepRepeat188 = TEST.rangedSpeed, TEST.autoRepeat
+  local keepSlot188 = (type(EVAL_WSLOTS) == "table") and EVAL_WSLOTS["自动射击"] or nil
+  TEST.rangedSpeed = 2.09
+  if type(EVAL_WSLOTS) == "table" then EVAL_WSLOTS["自动射击"] = { slot = 9 } end
+  TEST.autoRepeat = 9 -- 桩：IsAutoRepeatAction(slot) 返回 TEST.autoRepeat == slot
+  local spApi188 = EVAL_SHOT_API_SPEED()
+  eq(spApi188 ~= nil and math.abs(spApi188 - 2.09) < 0.01, true,
+     "⑥★射速来源 = UnitRangedDamage 第 1 返回（实测 2.09，实际 " .. tostring(spApi188) .. "）")
+  eq(EVAL_SHOT_ACTIVE() == true, true, "⑥★正在自动射击 → 状态判据为真（IsAutoRepeatAction(slot 9)）")
+  eq(EVAL_SWING_KIND() == "ranged", true, "⑥★★自动射击中 → 计时器切到**远程那套**")
+  TEST.time = 100
+  eq(EVAL_SHOT_EVENT("你的自动射击击中钢鬃斥候造成17点伤害。") == true, true, "⑥★命中词形锚定成功")
+  TEST.time = 101
+  local remR1 = EVAL_SWING_REMAIN_ACTIVE()
+  eq(remR1 ~= nil and math.abs(remR1 - 1.09) < 0.02, true,
+     "⑥★★★距下次射击 = 锚点 + 射速 − 现在（2.09−1.00=1.09，实际 " .. tostring(remR1) .. "）")
+  TEST.time = 103.5
+  eq(EVAL_SHOT_EVENT("你的自动射击对钢鬃斥候造成30的致命一击伤害。") == true, true,
+     "⑥★★**暴击词形**也认（实测原文「…对X造成30的致命一击伤害。」仍含「自动射击」）")
+  TEST.time = 104
+  local remR2 = EVAL_SWING_REMAIN_ACTIVE()
+  eq(remR2 ~= nil and math.abs(remR2 - 1.59) < 0.02, true, "⑥★新锚点生效（实际 " .. tostring(remR2) .. "）")
+  -- 反向哨兵①：其它法术伤害**不许**当射击锚点（探针实测射击走法术频道 —— 必须靠词形把它和奥术射击分开）
+  TEST.time = 106
+  local beforeR188 = EVAL_SWING_REMAIN_ACTIVE()
+  eq(EVAL_SHOT_EVENT("你的奥术射击击中钢鬃斥候造成40点伤害。") == false, true,
+     "⑥★★反向哨兵：奥术射击**不锚定**（只认「自动射击 / Auto Shot」）")
+  eq(EVAL_SWING_REMAIN_ACTIVE() == beforeR188, true, "⑥★★锚点没被别的法术带跑（剩余时间不变）")
+  -- 自校准①：样本明显偏离（Δt/API=0.87）→ 用中位数修正（= API 未含急速时要能自己修）
+  EVAL_SHOT_TEST_RESET()
+  TEST.time = 100
+  EVAL_SHOT_EVENT("你的自动射击击中木桩造成1点伤害。")
+  for i = 1, 5 do
+    TEST.time = TEST.time + 1.82
+    EVAL_SHOT_EVENT("你的自动射击击中木桩造成1点伤害。")
+  end
+  eq(EVAL_SHOT_TEST_STATE().n >= 4, true, "⑥★自校准样本攒到了（n=" .. tostring(EVAL_SHOT_TEST_STATE().n) .. "）")
+  eq(math.abs(EVAL_SHOT_SPEED() - 2.09 * 0.87) < 0.06, true,
+     "⑥★★明显偏离 → 用中位数修正射速（实际 " .. tostring(EVAL_SHOT_SPEED()) .. "，期望≈1.82）")
+  -- 自校准②（反向哨兵）：客户端计时抖动（比值≈1）**不许**被当成急速
+  EVAL_SHOT_TEST_RESET()
+  TEST.time = 100
+  EVAL_SHOT_EVENT("你的自动射击击中木桩造成1点伤害。")
+  for i = 1, 5 do
+    TEST.time = TEST.time + 2.09 * (1 + ((i == 3) and 0.05 or -0.03))
+    EVAL_SHOT_EVENT("你的自动射击击中木桩造成1点伤害。")
+  end
+  eq(math.abs(EVAL_SHOT_SPEED() - 2.09) < 0.01, true,
+     "⑥★★反向哨兵：抖动（比值≈1）**不修正**（实际 " .. tostring(EVAL_SHOT_SPEED()) .. "）")
+  -- 离群剔除：晚了两个周期的样本不进自校准
+  EVAL_SHOT_TEST_RESET()
+  TEST.time = 100
+  EVAL_SHOT_EVENT("你的自动射击击中木桩造成1点伤害。")
+  TEST.time = 100 + 2.09 * 3
+  EVAL_SHOT_EVENT("你的自动射击击中木桩造成1点伤害。")
+  eq(EVAL_SHOT_TEST_STATE().n == 0, true, "⑥★离群样本（>1.5×API）不进自校准")
+  -- 反向哨兵③：没在自动射击 → 计时器回到近战那套（不硬蹭远程）
+  TEST.autoRepeat = nil
+  eq(EVAL_SWING_KIND() == "melee", true, "⑥★★反向哨兵：不在自动射击 → 走回近战计时")
+  -- 清场
+  EVAL_SHOT_TEST_RESET()
+  TEST.rangedSpeed, TEST.autoRepeat = keepRanged188, keepRepeat188
+  if type(EVAL_WSLOTS) == "table" then EVAL_WSLOTS["自动射击"] = keepSlot188 end
+
+  -- ---------- ⑦ 新条件「距下次射击」（shotLeft；与「距攻击」成对，参数参考它） ----------
+  TEST.slotNames = TEST.slotNames or {} TEST.slotNames[1] = "致死打击" EVAL_GO_RESCAN(true)
+  local keepRng7, keepRep7 = TEST.rangedSpeed, TEST.autoRepeat
+  local keepSlot7 = (type(EVAL_WSLOTS) == "table") and EVAL_WSLOTS["自动射击"] or nil
+  TEST.rangedSpeed = 2.09
+  if type(EVAL_WSLOTS) == "table" then EVAL_WSLOTS["自动射击"] = { slot = 9 } end
+  TEST.autoRepeat = 9
+  EVAL_SHOT_TEST_RESET()
+  -- 端到端判定要一个真在动作条里的技能（不写死名字：后面各组可能重扫过动作条）
+  local anySkill7 = nil
+  for k, v in pairs(EVAL_WSLOTS or {}) do
+    if type(v) == "table" and v.slot and k ~= "" then anySkill7 = k break end
+  end
+  eq(anySkill7 ~= nil, true, "⑦★动作条里取到一个技能做端到端判定（" .. tostring(anySkill7) .. "）")
+  eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("距射击<1")), "距射击<1", "⑦★文本往返：距射击<1 逐字不变（导出/导入同一通道）")
+  local cd7 = EVAL_PARSE_CONDS("距射击<1")[1][1]
+  eq(cd7 ~= nil and cd7.k == "shotLeft", true, "⑦★解析出的是新类型 shotLeft（实际 " .. tostring(cd7 and cd7.k) .. "）")
+  eq(EVAL_TEST_SE_TYPELABEL("shotLeft"), EVAL_L("CT_SHOTLEFT"), "⑦★编辑窗类型名 = 语言包 CT_SHOTLEFT（三语已齐）")
+  eq(EVAL_TEST_SE_TYPE_INIT("shotLeft") == 0, true,
+     "⑦★★用户定：编辑窗**初始值 = 0**（shotLeft 实际 " .. tostring(EVAL_TEST_SE_TYPE_INIT("shotLeft")) .. "）")
+  eq(EVAL_TEST_SE_TYPE_INIT("swingLeft") == 0, true,
+     "⑦★★用户定：距下次攻击**初始值也改成 0**（实际 " .. tostring(EVAL_TEST_SE_TYPE_INIT("swingLeft")) .. "）")
+  -- ① 无锚点 = 无数据 → 条件不满足（同时直接验数据源，避免「技能不在条上」造成的假通过）
+  eq(EVAL_SHOT_REMAIN() == nil, true, "⑦★★无锚点 → EVAL_SHOT_REMAIN() 如实回 nil")
+  eq(EVAL_RULE_RUN({ { skill = anySkill7, why = "x", groups = EVAL_PARSE_CONDS("距射击<1") } }), false,
+     "⑦★★无射击计时数据 → **不满足**")
+  -- ② 有射击锚点、射速 2.09、0.5s 前刚射过 → 剩 1.59s
+  local oldGT7 = GetTime
+  EVAL_SHOT_EVENT("你的自动射击击中木桩造成1点伤害。")
+  GetTime = function() return EVAL_HELP_STATE.lastShot + 0.5 end
+  local rem7 = EVAL_SHOT_REMAIN()
+  eq(rem7 ~= nil and math.abs(rem7 - 1.59) < 0.02, true,
+     "⑦★★★距下次射击 = 射速 2.09 − 已过 0.50 = 1.59（实际 " .. tostring(rem7) .. "）")
+  eq(EVAL_RULE_RUN({ { skill = anySkill7, why = "x", groups = EVAL_PARSE_CONDS("距射击>1") } }), true,
+     "⑦★★端到端：距射击>1 → 满足")
+  eq(EVAL_RULE_RUN({ { skill = anySkill7, why = "x", groups = EVAL_PARSE_CONDS("距射击>2") } }), false,
+     "⑦★反向哨兵：距射击>2 → 不满足")
+  eq(EVAL_RULE_RUN({ { skill = anySkill7, why = "x", groups = EVAL_PARSE_CONDS("距射击<1") } }), false,
+     "⑦★反向哨兵：距射击<1 → 不满足")
+  GetTime = oldGT7
+  -- ③ 反向哨兵：只有近战锚点 → 射击数据仍为 nil（两条锚点互不污染）
+  EVAL_SHOT_TEST_RESET()
+  EVAL_SWING_EVENT("你击中木桩造成10点伤害。")
+  eq(EVAL_SHOT_REMAIN() == nil, true, "⑦★★反向哨兵：只有近战锚点时射击计时**仍无数据**")
+  eq(EVAL_RULE_RUN({ { skill = anySkill7, why = "x", groups = EVAL_PARSE_CONDS("距射击<1") } }), false,
+     "⑦★★近战锚点不给射击条件供数（不满足）")
+  -- 清场
+  if type(TEST.slotNames) == "table" then TEST.slotNames[1] = nil end
+  EVAL_GO_RESCAN(true)
+  EVAL_SHOT_TEST_RESET()
+  TEST.rangedSpeed, TEST.autoRepeat = keepRng7, keepRep7
+  if type(EVAL_WSLOTS) == "table" then EVAL_WSLOTS["自动射击"] = keepSlot7 end
+
+  -- ---------- ⑦b 切换条件类型：**跨参数域不继承旧值**（用户截图：切到「距下次射击」值还是 30.0） ----------
+  local tiShot7 = EVAL_TEST_SE_TYPE_INDEX("shotLeft")
+  eq(tiShot7 ~= nil, true, "⑦b★能按 id 定位到 shotLeft 的类型下标（实际 " .. tostring(tiShot7) .. "）")
+  local sw7 = EVAL_TEST_SE_SWITCH({ k = "power", op = ">", n = 30 }, tiShot7)
+  eq(sw7 ~= nil and sw7.k == "shotLeft", true, "⑦b★切换后类型 = shotLeft")
+  eq(sw7 ~= nil and sw7.op == ">", true, "⑦b★比较符**仍继承**（op 与参数域无关）")
+  eq(sw7 ~= nil and sw7.n == 0, true,
+     "⑦b★★★跨参数域**不继承**旧值：能量(30) → 距下次射击的值 = **0**（实际 " .. tostring(sw7 and sw7.n) .. "）")
+  local sw7b = EVAL_TEST_SE_SWITCH({ k = "swingLeft", op = "<", n = 1.5 }, tiShot7)
+  eq(sw7b ~= nil and sw7b.n == 1.5, true,
+     "⑦b★★同域继承：距下次攻击(1.5) → 距下次射击 保留 1.5（实际 " .. tostring(sw7b and sw7b.n) .. "）")
+  local tiPower7 = EVAL_TEST_SE_TYPE_INDEX("power")
+  local sw7c = EVAL_TEST_SE_SWITCH({ k = "hpPct", op = ">", n = 42 }, tiPower7)
+  eq(sw7c ~= nil and sw7c.n == 42, true,
+     "⑦b★同域（数值→数值）保留 42（不误伤原有的手感）")
+  if fails0 == TESTASSERT_FAILS then print("GROUP 188 (激活方案边框 + 物品详情 tooltip): PASS") end
+  EVAL_TEST_CH_RESET_UI()
 end
 print("ALL TESTS PASS")

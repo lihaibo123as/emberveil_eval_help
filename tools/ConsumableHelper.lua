@@ -524,13 +524,15 @@ function EVAL_CH_ENSURE()
   CH.btn, CH.tex, CH.label = b, tex, label
   b:SetScript("OnClick", function(a, b2)
     if chMouseBtn(a, b2) == "RightButton" then
-      EVAL_CH_PANEL() -- 右键 = 开/关选择面板（用户选择：面板入口在右键）
+      EVAL_CH_PANEL() -- 右键 = 开/关选择面板（**唯一**入口）
       return
     end
-    -- ★★1.74.16 用户：「取消第一个图标识使用第一个配置的消耗品的功能」——
-    --   主图标现在是**帮手自己的特殊图标**（不代表任何一件物品），再让它「用第 1 个」既别扭又容易误点：
-    --   物品的使用一律走**横排各枚**（各自点用）。主图标两个键都只负责**开/关选择面板**。
-    EVAL_CH_PANEL()
+    -- ★★★1.74.30 用户：「消耗品助手图标左键点击弹窗取消」——左键**不再开选择面板**。
+    --   背景：1.74.16 已定「主图标 = 帮手自己的特殊图标、不代表任何物品、不代替使用」⇒ 左键那时只剩开面板这一个作用，
+    --   而它与**左键拖动图标**（RegisterForDrag("LeftButton")）争用同一按键 —— 拖动/误点就会弹窗。
+    --   ⇒ 现在：**面板入口只有右键**；左键 = 只用于拖动，点击**不做任何事**（如实 no-op，不写日志刷屏）。
+    --   物品使用一律走**右侧横排各枚**（各自点用）——这条不变。
+    return
   end)
   b:SetScript("OnDragStart", function()
     pcall(b.StartMoving, b)
@@ -545,20 +547,33 @@ function EVAL_CH_ENSURE()
   b:SetScript("OnEnter", function()
     if type(GameTooltip) ~= "table" then return end
     local list = EVAL_CH_LIST()
-    pcall(GameTooltip.SetOwner, GameTooltip, b, "ANCHOR_LEFT")
-    pcall(GameTooltip.ClearLines, GameTooltip)
-    pcall(GameTooltip.AddLine, GameTooltip, L("TB_CONSUMABLE"), 0.55, 1, 0.70)
     local n = table.getn(list)
-    if n == 0 then
-      pcall(GameTooltip.AddLine, GameTooltip, L("CH_NO_ITEM"), 1, 0.6, 0.4)
-    else
-      for i = 1, n do
-        local nm = list[i]
-        local bag = EVAL_CH_FIND(nm)
-        local col = bag and 0.90 or 1
-        pcall(GameTooltip.AddLine, GameTooltip,
-              string.format("%d. %s%s", i, tostring(nm), bag and "" or ("（" .. L("CH_GONE") .. "）")),
-              col, bag and 0.90 or 0.45, bag and 0.90 or 0.45)
+    pcall(GameTooltip.SetOwner, GameTooltip, b, "ANCHOR_LEFT")
+    -- ★★★1.74.29 用户：「消耗品助手显示下物品的详细信息.物品效果等」——
+    --   只勾了**一件**且它在包里 → 主图标直接出**客户端原生物品 tooltip**（详情 / 效果），帮手提示补在后面；
+    --   勾了多件（或有找不到的）→ 保持原来的**清单**（原生 tooltip 只画得下一件物品，硬画会把整份清单顶掉）。
+    local nativeDrawn = false
+    if n == 1 and type(GameTooltip.SetBagItem) == "function" then
+      local nb, ns = EVAL_CH_FIND(list[1])
+      if nb then
+        local okN = pcall(GameTooltip.SetBagItem, GameTooltip, nb, ns)
+        nativeDrawn = okN and true or false
+      end
+    end
+    if not nativeDrawn then
+      pcall(GameTooltip.ClearLines, GameTooltip)
+      pcall(GameTooltip.AddLine, GameTooltip, L("TB_CONSUMABLE"), 0.55, 1, 0.70)
+      if n == 0 then
+        pcall(GameTooltip.AddLine, GameTooltip, L("CH_NO_ITEM"), 1, 0.6, 0.4)
+      else
+        for i = 1, n do
+          local nm = list[i]
+          local bag = EVAL_CH_FIND(nm)
+          local col = bag and 0.90 or 1
+          pcall(GameTooltip.AddLine, GameTooltip,
+                string.format("%d. %s%s", i, tostring(nm), bag and "" or ("（" .. L("CH_GONE") .. "）")),
+                col, bag and 0.90 or 0.45, bag and 0.90 or 0.45)
+        end
       end
     end
     pcall(GameTooltip.AddLine, GameTooltip, L("CH_MAIN_HINT"), 0.6, 0.85, 1)
@@ -622,8 +637,20 @@ function EVAL_CH_ENSURE()
       pcall(stex.SetVertexColor, stex, 1, 0.92, 0.55)
       local bag, slot, _, cnt = EVAL_CH_FIND(cell.name)
       pcall(GameTooltip.SetOwner, GameTooltip, s, "ANCHOR_RIGHT")
-      pcall(GameTooltip.ClearLines, GameTooltip)
-      pcall(GameTooltip.AddLine, GameTooltip, tostring(cell.name), 0.55, 1, 0.70)
+      -- ★★★1.74.29 用户：「消耗品助手显示下物品的详细信息.物品效果等」——
+      --   找到物品就出**客户端原生物品 tooltip**（`SetBagItem`：名称 / 品质 / 类型 / 「Use:」效果 / 持续时间 / 售价），
+      --   帮手自己的信息（数量 · 包格 · 操作提示）**补在它后面**；找不到物品时退回纯文本（如实说「没了」）。
+      --   ★顺序不能反：`SetBagItem` 会**顶掉已有行** ⇒ 原生那一笔必须先画、AddLine 只能在后。
+      --   ★API 真伪：`SetBagItem` 在官方 API 索引里（tools/IconGrid.lua 的类型过滤同款调用，1.74.28 已实测可用）。
+      local nativeDrawn = false
+      if bag and type(GameTooltip.SetBagItem) == "function" then
+        local okN = pcall(GameTooltip.SetBagItem, GameTooltip, bag, slot)
+        nativeDrawn = okN and true or false
+      end
+      if not nativeDrawn then
+        pcall(GameTooltip.ClearLines, GameTooltip)
+        pcall(GameTooltip.AddLine, GameTooltip, tostring(cell.name), 0.55, 1, 0.70)
+      end
       if bag then
         pcall(GameTooltip.AddLine, GameTooltip,
               string.format("%s ×%s  [%s,%s]", tostring(cell.name), tostring(cnt or 1),
@@ -906,6 +933,23 @@ function EVAL_TEST_CH_CLICK_MAIN(button)
   return okc, err
 end
 
+-- ★1.74.29 断言入口：走**真实的** OnEnter（悬停 = 出物品详情那条路径），不另写一套实现。
+function EVAL_TEST_CH_STRIP_ENTER(i)
+  local c = CH.strip and CH.strip[i]
+  if not (c and c.btn and c.btn.GetScript) then return nil end
+  local f = c.btn:GetScript("OnEnter")
+  if type(f) ~= "function" then return nil end
+  f()
+  return true
+end
+-- ★1.74.29 断言入口：主图标悬停（只勾一件且找得到 → 应出原生物品 tooltip）
+function EVAL_TEST_CH_MAIN_ENTER()
+  if not (CH.btn and CH.btn.GetScript) then return nil end
+  local f = CH.btn:GetScript("OnEnter")
+  if type(f) ~= "function" then return nil end
+  f()
+  return true
+end
 function EVAL_TEST_CH_STRIP_CLICK(i, button)
   local s = CH.strip[i]
   if not (s and s.btn) then return false end

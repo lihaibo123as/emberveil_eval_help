@@ -599,6 +599,30 @@ function EVAL_HH_CD_REFRESH()
   return true
 end
 
+-- ★★★1.74.29 用户：「查看 API LUA 如何获取宠物快乐度，根据不同的快乐度给宠物喂食助手添加个对应颜色的边框高亮：高兴亮绿灯」。
+--   · 快乐度走**官方 Pet API `GetPetHappiness()`**（本机 api_pet.html 索引里 category=Pet，文档 .../globals/Pet#getpethappiness）；
+--     三返回值 = 档位（1 不开心 / 2 一般 / 3 快乐）· 伤害% · 忠诚速率 —— 与「宠物信息行」**同一份读法**（不另抄一套）。
+--   · 边框 = 主图标既有那 **4 条 1px 亮边**的顶点色现算：**3 开心 = 亮绿** · 2 一般 = 金 · 1 不开心 = 红；
+--     **没有宠物 / 接口不可用 / 调失败 → 恢复默认金边**（如实退回，绝不硬编一个「开心」）。
+--   · 频率：只在**已有刷新时机**里现算（建帧、EVAL_HH_REFRESH、CD 每秒 tick、悬停）—— 不新开常驻后台 tick（项目纪律）。
+function EVAL_HH_HAP_BORDER()
+  if not (HH.built and HH.btn and HH.edges) then return false end
+  local r, g, b, a = 0.85, 0.70, 0.20, 0.9 -- 默认金（与建帧时同一组值）
+  if hhHasPet() and type(GetPetHappiness) == "function" then
+    local okh, idx = pcall(GetPetHappiness)
+    if okh and type(idx) == "number" then
+      if idx == 3 then r, g, b = 0.25, 1, 0.35      -- 开心 → 亮绿
+      elseif idx == 1 then r, g, b = 1, 0.45, 0.35  -- 不开心 → 红
+      else r, g, b = 1, 0.82, 0.30 end              -- 一般 → 金
+    end
+  end
+  for i = 1, 4 do
+    local e = HH.edges[i]
+    if e then pcall(e.SetVertexColor, e, r, g, b, a) end
+  end
+  return true
+end
+
 -- 图标贴图：食物图标（实时解析）；解析不到 → 保底文字（不写纹理字面量 → 不碰 ICON 白名单）
 function EVAL_HH_REFRESH()
   if not (HH.built and HH.btn) then return false end
@@ -621,6 +645,7 @@ function EVAL_HH_REFRESH()
     pcall(HH.label.Show, HH.label)
   end
   HH.foodBag = bag
+  EVAL_HH_HAP_BORDER() -- ★1.74.29 刷新时机顺手按快乐度上色（喂完/换食物/开开关都会走到这里）
   return true
 end
 
@@ -661,8 +686,11 @@ function EVAL_HH_ENSURE()
   bg:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
   bg:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
   -- 四边 1px 亮边（项目配方：纯色纹理 WHITE8X8 + 顶点色）
+  -- ★1.74.29 存进 HH.edges：快乐度边框高亮改的就是**这四条边**，不另建一套边框（同一视觉、单一来源）
+  local hhEdges = {}
   for i = 1, 4 do
     local e = b:CreateTexture(nil, "BORDER")
+    hhEdges[i] = e
     hhSolid(e, 0.85, 0.70, 0.20, 0.9)
     if i == 1 then
       e:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
@@ -693,7 +721,8 @@ function EVAL_HH_ENSURE()
   label:SetPoint("CENTER", b, "CENTER", 0, 0)
   pcall(label.SetWidth, label, HH_SIZE)
   label:SetText(HH_TEXT)
-  HH.btn, HH.tex, HH.label, HH.built = b, tex, label, true
+  HH.btn, HH.tex, HH.label, HH.built, HH.edges = b, tex, label, true, hhEdges
+  EVAL_HH_HAP_BORDER() -- ★1.74.29 建好就按当前快乐度上色（不等下一次刷新）
   -- ★★★1.74.5 实测修正（用户报「右键选食物无法触发」）：**本客户端 OnClick 的参数形态不固定**——
   --   主程序里两处已实测的右键分派（技能格 1.74.2 · 方案标签）都写成「四候选」：
   --     mbtn = (type(a)=="string" and a) or (type(b)=="string" and b) or (type(arg1)=="string" and arg1) or "LeftButton"
@@ -723,7 +752,7 @@ function EVAL_HH_ENSURE()
     pcall(b.StopMovingOrSizing, b)
     hhSavePos()
   end)
-  b:SetScript("OnEnter", function() hhTip(b) end)
+  b:SetScript("OnEnter", function() EVAL_HH_HAP_BORDER() hhTip(b) end) -- ★1.74.29 悬停也现算一次（快乐度掉了要立刻看得出来）
   b:SetScript("OnLeave", function() if type(GameTooltip) == "table" then pcall(GameTooltip.Hide, GameTooltip) end end)
   hhLog("图标已建立（懒建：开关打开才建帧）")
   EVAL_HH_REFRESH()
@@ -1012,6 +1041,19 @@ function EVAL_HH_PROBE(sub)
 end
 
 -- ★测试读值口（读**真实状态**，绝不在测试里复刻逻辑）
+-- ★1.74.29 读值口：快乐度边框的**真控件**状态（4 条边 + 边 1 的顶点色 + 当前档位 + 有无宠物）
+function EVAL_TEST_HH_HAP()
+  local out = { n = 0, rgb = nil, tier = nil, pet = (hhHasPet() and true or false) }
+  if not (HH.edges and HH.edges[1]) then return out end
+  out.n = table.getn(HH.edges)
+  local ok, r, g, b = pcall(HH.edges[1].GetVertexColor, HH.edges[1])
+  if ok and type(r) == "number" then out.rgb = { r, g, b } end
+  if out.pet and type(GetPetHappiness) == "function" then
+    local okh, idx = pcall(GetPetHappiness)
+    if okh and type(idx) == "number" then out.tier = idx end
+  end
+  return out
+end
 function EVAL_TEST_HH_STATE()
   local tb = hhCfg() or {}
   local shown = nil

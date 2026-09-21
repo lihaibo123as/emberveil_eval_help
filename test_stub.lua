@@ -401,6 +401,12 @@ GameTooltip = {
   end,
   -- ★1.71.2（第十九轮）记录 AddLine 的文本：断言要验「按钮 tooltip 到底写了什么」，
   --   桩不记录的话，这类**纯提示**需求在测试里完全不可见（本项目「桩太宽松 → 断言失明」的老坑）。
+  -- ★1.74.29 桩保真：`SetBagItem` 是「画某个包格物品的原生 tooltip」的必经之路（消耗品助手 1.74.29 起用它显示物品详情/效果）；
+  --   桩不给它 ⇒「到底有没有真的去画物品 tooltip」在测试里完全不可见（又是「桩太宽松 → 断言失明」）。
+  SetBagItem = function(_, bag, slot)
+    TEST.gtBag = bag TEST.gtSlot = slot
+    return true
+  end,
   AddLine = function(_, text, r, g, b)
     TEST.tipLines = TEST.tipLines or {}
     table.insert(TEST.tipLines, { text = tostring(text), r = r, g = g, b = b })
@@ -677,6 +683,9 @@ GetActionCooldown = function() return 0, 0 end
 IsUsableAction = function() if TEST.usableRet then return TEST.usableRet.u, TEST.usableRet.noMana end return true end
 IsCurrentAction = function(slot) return TEST.currentAction == slot end
 IsAutoRepeatAction = function(slot) return TEST.autoRepeat == slot end -- 1.71.3 停止攻击：自动射击/魔杖自动重复判定
+  -- ★1.74.30 桩保真：`UnitRangedDamage` 是射击计时的速度来源（真机实测：第 1 返回 = 秒/击，[2][3] = 伤害上下限）
+  --   桩不给它 ⇒「射速到底取的是不是第 1 个返回」在测试里完全不可见（又是「桩太宽松 → 断言失明」）
+  UnitRangedDamage = function() return TEST.rangedSpeed or 2.09, 18.59, 21.59, 0, 0, 1 end
 SpellStopCasting = function() TEST.castStoppedDirect = true end -- 1.71.3 ★真机行为：SpellStopCasting 是 Protected，插件**直调静默无效** → 桩必须如实模拟，否则「改回直调」这种回归测不出来（1.49.3 老 bug）
 RunScript = function(code) TEST.runScript = code TEST.runScripts = TEST.runScripts or {} table.insert(TEST.runScripts, code) if code == "SpellStopCasting()" then TEST.castStopped = true end if type(TEST.runScriptHook) == "function" then pcall(TEST.runScriptHook, code) end end -- 1.69.0 收集多条；★1.74.5 加 runScriptHook（模拟「排队通道下一帧才生效」）
 IsInGuild = function() return TEST.inGuild or false end

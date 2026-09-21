@@ -533,8 +533,20 @@ function EVAL_IG_ENSURE()
       if not it or type(GameTooltip) ~= "table" or not IG.spec then return end
       local qr, qg, qb = igQualityRGB(it.q)
       pcall(GameTooltip.SetOwner, GameTooltip, b, "ANCHOR_RIGHT")
-      pcall(GameTooltip.ClearLines, GameTooltip)
-      pcall(GameTooltip.AddLine, GameTooltip, tostring(it.name), qr, qg, qb)
+      -- ★★★1.74.29 用户：「宠物喂食助手/消耗品助手弹窗选择物品也要显示详细物品信息」——
+      --   候选格先出**客户端原生物品 tooltip**（`SetBagItem`：品质/类型/「Use:」效果/持续时间/售价），
+      --   再把选择器自己的行（名称 ×数量 [包,格] + 提示 + 已选角标）补在后面。
+      --   ★顺序不能反：`SetBagItem` 会**顶掉已有行** ⇒ 原生先画、AddLine 只能在后；
+      --   ★拿不到 bag/slot 或接口缺失 → 不画原生、如实退回文本行（查不到 ≠ 没有）。
+      local nativeDrawn = false
+      if type(it.bag) == "number" and type(it.slot) == "number" and type(GameTooltip.SetBagItem) == "function" then
+        local okN = pcall(GameTooltip.SetBagItem, GameTooltip, it.bag, it.slot)
+        nativeDrawn = okN and true or false
+      end
+      if not nativeDrawn then
+        pcall(GameTooltip.ClearLines, GameTooltip)
+        pcall(GameTooltip.AddLine, GameTooltip, tostring(it.name), qr, qg, qb)
+      end
       pcall(GameTooltip.AddLine, GameTooltip,
             string.format("%s ×%s  [%s,%s]", tostring(it.name), tostring(it.count or 1),
                           tostring(it.bag), tostring(it.slot)), 0.85, 0.85, 0.85)

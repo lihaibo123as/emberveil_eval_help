@@ -1986,10 +1986,15 @@ local function condOne(cd, skill, dry, rule)
     if st.pickCand then return candNumPass(cd, st.pickCand.powerPct), "候选能量%:" .. tostring(teamPct(st.pickCand.powerPct)) end
     return condCmp({ cd.op, cd.n }, st.powerPct), "能量%"
   elseif k == "tHpPct" then return condCmp({ cd.op, cd.n }, st.tHpPct), "目标血%"
-  elseif k == "swingLeft" then -- 1.57.0 距下次攻击秒数（挥击计时；无数据=不满足）
-    local rem = EVAL_SWING_REMAIN()
+  elseif k == "swingLeft" then -- 1.57.0 距下次攻击秒数（1.74.30 起**状态感知**：自动射击中 = 距下次射击）
+    local rem = (type(EVAL_SWING_REMAIN_ACTIVE) == "function") and EVAL_SWING_REMAIN_ACTIVE() or EVAL_SWING_REMAIN()
     if rem == nil then return false, "无攻击计时数据" end
     return condCmp({ cd.op, cd.n }, rem), "距攻击"
+  elseif k == "shotLeft" then -- ★1.74.30 距下次**射击**秒数（与「距攻击」并列的显式入口，不走状态感知）
+    --   ★数据源与「距攻击」自动射击态**同一份**（EVAL_SHOT_REMAIN：探针实测锚点=法术频道含「自动射击」、射速=UnitRangedDamage[1]）
+    local remS = (type(EVAL_SHOT_REMAIN) == "function") and EVAL_SHOT_REMAIN() or nil
+    if remS == nil then return false, "无射击计时数据" end
+    return condCmp({ cd.op, cd.n }, remS), "距射击"
   elseif k == "hasTarget" then return ((st.hasTarget and true or false) == cd.v), "目标存在" -- 1.32.1
   elseif k == "canAttack" then return (st.canAttack == cd.v), "可攻击"
   elseif k == "canBleed" then return (st.canBleed == cd.v), "可流血"
@@ -2425,6 +2430,285 @@ function EVAL_SWING_REMAIN()
   return (r > 0) and r or 0
 end
 
+
+-- ===== 射击计时（1.74.30；由 `/eh go 射击探针` 真机实测定案）=====
+-- ★实测（8 发干净样本，见探针报告）：
+--   · **锚点通道 = CHAT_MSG_SPELL_SELF_DAMAGE**，原文含「自动射击」；★暴击原文是「你的自动射击对X造成30的致命一击伤害。」
+--     —— **也含「自动射击」** ⇒ 判据一律**只认「自动射击 / Auto Shot」这个词**，不要去认「击中/爆击」那套词形。
+--   · **速度来源 = UnitRangedDamage("player") 第 1 个返回值**（实测 2.09）；[2][3] 是伤害上下限（差 3.0 = 弹药），[4][5][6] 是噪声。
+--   · 实测 Δt 均值 2.16 vs API 2.09 → **比值 1.03 ≈ 1** ⇒ API 值就是真实间隔（本轮**未观测到**箭袋急速带来的差异）。
+--   · 与近战**互不干扰**：近战走 CHAT_MSG_COMBAT_SELF_HITS + UnitAttackSpeed，两套锚点各自独立（1.55.0 那套一行未改）。
+-- ★自校准（只在**明显偏离**时才修）：留最近几次 (Δt ÷ API) 的中位数；样本 ≥4 且中位数落在 [0.9, 1.1] 之外
+--   （= API 未含急速）才拿它修正，否则一律用 API 原值 —— **不把客户端计时抖动当急速**。
+local SHT = { samples = {}, max = 6 }
+local SHT_CAL_MIN = 4
+local SHT_CAL_LO, SHT_CAL_HI = 0.9, 1.1
+
+-- 这条消息是不是「自动射击」的伤害/命中（命中与暴击两种词形都含「自动射击」）
+function EVAL_SHOT_IS(msg)
+  if type(msg) ~= "string" then return false end
+  if string.find(msg, "自动射击", 1, true) then return true end
+  if string.find(msg, "Auto Shot", 1, true) then return true end
+  return false
+end
+
+-- 远程速度 API 原值（单一口：UPDATE_STATE 与计时/探针都读它，避免两处各调一次）
+function EVAL_SHOT_API_SPEED()
+  if type(UnitRangedDamage) ~= "function" then return nil end
+  local ok, v = pcall(UnitRangedDamage, "player")
+  if ok and type(v) == "number" and v > 0.1 and v < 20 then return v end
+  return nil
+end
+
+-- 自校准中位数（样本不足 → nil，表示「不修正」）
+function EVAL_SHOT_CAL_RATIO()
+  local n = table.getn(SHT.samples)
+  if n < SHT_CAL_MIN then return nil end
+  local sorted = {}
+  for i = 1, n do sorted[i] = SHT.samples[i] end
+  table.sort(sorted)
+  return sorted[math.floor((n + 1) / 2)]
+end
+
+function EVAL_SHOT_SPEED()
+  local api = EVAL_SHOT_API_SPEED()
+  if not api then return nil end
+  local r = EVAL_SHOT_CAL_RATIO()
+  if r and (r < SHT_CAL_LO or r > SHT_CAL_HI) then return api * r end -- ★只在明显偏离时才修（见上）
+  return api
+end
+
+-- 锚点：自动射击命中那一刻（顺手攒一个自校准样本；离群样本丢弃）
+function EVAL_SHOT_EVENT(msg)
+  if not EVAL_SHOT_IS(msg) then return false end
+  local t = GetTime()
+  local api = EVAL_SHOT_API_SPEED()
+  if api and st.lastShot then
+    local dt = t - st.lastShot
+    if dt > api * 0.5 and dt < api * 1.5 then -- ★离群剔除：早了/晚了一整个周期的不当样本
+      table.insert(SHT.samples, dt / api)
+      while table.getn(SHT.samples) > SHT.max do table.remove(SHT.samples, 1) end
+    end
+  end
+  st.lastShot = t
+  return true
+end
+
+-- 现在是不是「自动射击中」（找不到槽位 / 无 API → false，如实回退近战那套）
+function EVAL_SHOT_ACTIVE()
+  if type(IsAutoRepeatAction) ~= "function" or type(wslots) ~= "table" then return false end
+  local names = { "自动射击", "射击", "Auto Shot", "Shoot" }
+  for i = 1, 4 do
+    local rs = wslots[names[i]]
+    if type(rs) == "table" and rs.slot then
+      local ok, v = pcall(IsAutoRepeatAction, rs.slot)
+      if ok and v then return true end
+    end
+  end
+  return false
+end
+
+-- 距下次**射击**秒数（无速度/无锚点 → nil：UI 显「—」、条件不满足，绝不假装有数据）
+function EVAL_SHOT_REMAIN()
+  local spd = EVAL_SHOT_SPEED()
+  if not (spd and spd > 0) then return nil end
+  local anchor = st.lastShot
+  if st.castUntil and st.castUntil > (anchor or 0) then anchor = st.castUntil end -- 施法同样推迟自动射击
+  if not anchor then return nil end
+  local r = anchor + spd - GetTime()
+  return (r > 0) and r or 0
+end
+
+-- ★对外只用这两个**状态感知**入口（UI 与条件都走它）：自动射击中看射击，否则看近战
+function EVAL_SWING_KIND()
+  if EVAL_SHOT_ACTIVE() then return "ranged" end
+  return "melee"
+end
+function EVAL_SWING_SPEED()
+  if EVAL_SWING_KIND() == "ranged" then
+    local s = EVAL_SHOT_SPEED()
+    if s then return s end
+    return nil -- ★自动射击中但拿不到射速 → 如实 nil（不许退回近战速度冒充）
+  end
+  return st.atkSpd
+end
+function EVAL_SWING_REMAIN_ACTIVE()
+  if EVAL_SWING_KIND() == "ranged" then return EVAL_SHOT_REMAIN() end
+  return EVAL_SWING_REMAIN()
+end
+
+-- ★测试读值口：自校准样本数 / 当前中位数 / 最终采用的射速（都读生产真值，不在测试里复刻公式）
+function EVAL_SHOT_TEST_STATE()
+  return { n = table.getn(SHT.samples), ratio = EVAL_SHOT_CAL_RATIO(), speed = EVAL_SHOT_SPEED(), api = EVAL_SHOT_API_SPEED() }
+end
+
+-- ★测试用：清掉自校准样本与锚点（模块级状态，测试必须能整组拆）
+function EVAL_SHOT_TEST_RESET()
+  SHT.samples = {}
+  st.lastShot = nil
+  return true
+end
+
+-- ===== 射击计时探针（1.74.29；用户：「调研猎人自动射击状态下的攻击时间计算 → 按方案实施」）=====
+-- ★只取证、不改任何行为：一次问清三件事 —— ① `UnitRangedDamage` 到底返回什么（哪一个才是「秒/击」）
+--   ② 自动射击的命中落在**哪个事件**（原文长什么样）③ 实测两次命中的 Δt 与 ①② 对不对得上。
+-- ★为什么先探针：本客户端**没有挥击/射击计时 API**（近战那套也是「事件锚点 + UnitAttackSpeed」推出来的），
+--   远程的锚点事件名/速度取值一旦猜错 → 计时**静默不动或系统性偏**（本项目最恨的失败型）。
+-- 用法：`/eh go 射击探针`（开/关）· `/eh go 射击探针 报告`（打印）· `/eh go 射击探针 清空`
+local SHP = { on = false, rows = {}, max = 32, frame = nil }
+local SHP_EV = "CHAT_MSG_COMBAT_SELF_MISSES" -- 未命中通道（只在探针开启期间临时挂，关掉即摘）
+-- ★播报出口：Engine.lua 段没有 EvalHelp 那个 local say —— 走项目统一出口 EVAL_SAY（静默纪律不变）。
+-- ★★1.74.30 **同时落盘**（EVAL_LOGLINE → SavedVariables 环形缓冲，与 Share 探针 1.74.4 同一条纪律）：
+--   探针只打聊天框的话，事后谁读不到（截图/复述都会丢细节）⇒ 每条都进 `[射击探针]` 日志，AI 可直接读存档文件。
+local function shpSay(s)
+  if type(EVAL_LOGLINE) == "function" then pcall(EVAL_LOGLINE, "[射击探针] " .. tostring(s)) end
+  if type(EVAL_SAY) == "function" then pcall(EVAL_SAY, s) else print(s) end
+end
+
+function EVAL_SHOT_PROBE_STATE()
+  return { on = SHP.on, n = table.getn(SHP.rows), max = SHP.max }
+end
+
+-- 事件喂入（命中两条通道由主程序的 OnEvent 派发处调用；未命中那条由探针自己的帧收）
+function EVAL_SHOT_PROBE_FEED(ev, txt)
+  if not SHP.on then return false end
+  if table.getn(SHP.rows) >= SHP.max then return false end
+  table.insert(SHP.rows, { ev = tostring(ev or "?"), txt = tostring(txt or ""), t = GetTime() })
+  return true
+end
+
+-- ① 远程速度来源：把 `UnitRangedDamage` 的**每个返回值**原样交出来（哪个像「秒/击」由人一眼判）
+function EVAL_SHOT_PROBE_SPEEDS()
+  local out = { ranged = {}, melee = {} }
+  if type(UnitRangedDamage) == "function" then
+    local ok, a, b, c, d, e, f = pcall(UnitRangedDamage, "player")
+    out.rangedOk = ok and true or false
+    local vals = { a, b, c, d, e, f }
+    for i = 1, 6 do
+      out.ranged[i] = { v = vals[i], t = type(vals[i]),
+        plausible = (type(vals[i]) == "number" and vals[i] >= 0.4 and vals[i] <= 5.0) and true or false }
+    end
+  else
+    out.rangedOk = false
+  end
+  if type(UnitAttackSpeed) == "function" then
+    local ok2, mh, oh = pcall(UnitAttackSpeed, "player")
+    out.melee.ok = ok2 and true or false
+    out.melee.mh, out.melee.oh = mh, oh
+  end
+  return out
+end
+
+-- ③ 远程动作条槽位 + 「现在是不是自动射击中」（IsAutoRepeatAction，项目已在用同一接口）
+function EVAL_SHOT_PROBE_SLOTS()
+  local out = {}
+  local names = { "自动射击", "射击", "Auto Shot", "Shoot" }
+  for i = 1, 4 do
+    local nm = names[i]
+    local rs = (type(wslots) == "table") and wslots[nm] or nil
+    if type(rs) == "table" and rs.slot then
+      local rep = "no-api"
+      if type(IsAutoRepeatAction) == "function" then
+        local ok, v = pcall(IsAutoRepeatAction, rs.slot)
+        rep = ok and tostring(v) or ("call-fail:" .. tostring(v))
+      end
+      table.insert(out, { name = nm, slot = rs.slot, isRepeat = rep }) -- ★字段名不能叫 repeat（Lua 保留字）
+    end
+  end
+  return out, (type(IsAutoRepeatAction) == "function")
+end
+
+function EVAL_SHOT_PROBE_REPORT()
+  local n = table.getn(SHP.rows)
+  local sp = EVAL_SHOT_PROBE_SPEEDS()
+  shpSay("===== 射击计时探针（记录 " .. n .. "/" .. SHP.max .. " 条）=====")
+  shpSay(string.format("① UnitRangedDamage(player)：可用=%s", tostring(sp.rangedOk)))
+  for i = 1, 6 do
+    local r = sp.ranged[i]
+    if r and r.v ~= nil then
+      shpSay(string.format("   [%d] type=%s 值=%s%s", i, r.t, tostring(r.v), r.plausible and "   ← 像「秒/击」" or ""))
+    end
+  end
+  shpSay(string.format("② UnitAttackSpeed（近战对照）：主手=%s 副手=%s", tostring(sp.melee.mh), tostring(sp.melee.oh)))
+  local slots, hasApi = EVAL_SHOT_PROBE_SLOTS()
+  if table.getn(slots) == 0 then
+    shpSay("③ 动作条里没找到「自动射击/射击」（IsAutoRepeatAction 可用=" .. tostring(hasApi) .. "）")
+  else
+    for i = 1, table.getn(slots) do
+      local s = slots[i]
+      shpSay(string.format("③ 槽位 %s = slot %s ｜ IsAutoRepeatAction=%s（API 可用=%s）",
+          s.name, tostring(s.slot), tostring(s.isRepeat), tostring(hasApi)))
+    end
+  end
+  local last = nil
+  local cnt, dts = {}, {}
+  local patText = nil -- ★1.74.30 锚点文本特征：命中原文里到底出现了「自动射击」还是「Auto Shot」
+  shpSay("④ 事件记录（事件名 ｜ Δt ｜ 原文）")
+  for i = 1, n do
+    local r = SHP.rows[i]
+    cnt[r.ev] = (cnt[r.ev] or 0) + 1
+    if not patText then
+      if string.find(r.txt, "自动射击", 1, true) then patText = "自动射击"
+      elseif string.find(r.txt, "Auto Shot", 1, true) then patText = "Auto Shot" end
+    end
+    local dt = ""
+    if last then dt = string.format("%.2f", r.t - last) table.insert(dts, r.t - last) end
+    last = r.t
+    shpSay(string.format("   %d) %s ｜ Δt=%s ｜ %s", i, r.ev, (dt == "" and "—" or dt), string.sub(r.txt, 1, 70)))
+  end
+  local sum = 0
+  for i = 1, table.getn(dts) do sum = sum + dts[i] end
+  local avg = (table.getn(dts) > 0) and (sum / table.getn(dts)) or nil
+  local ns = table.getn(dts)
+  shpSay(string.format("⑤ Δt 样本=%d 均值=%s", ns, avg and string.format("%.2f", avg) or "—"))
+  for ev, c in pairs(cnt) do shpSay("   通道计数：" .. ev .. " ×" .. tostring(c)) end
+  -- ★★1.74.30 比值表（这一屏就是结论）：Δt ÷ 各候选 —— 比值≈1 的那个才是**真实间隔来源**；
+  --   明显 <1（如 0.85~0.90）= 该候选**未含急速**（箭袋/弹药袋），差值就是急速系数。
+  if avg and avg > 0 then
+    local parts = {}
+    for i = 1, 6 do
+      local rr = sp.ranged[i]
+      if rr and type(rr.v) == "number" and rr.v >= 0.4 and rr.v <= 5.0 then
+        table.insert(parts, string.format("①[%d]%s→%.2f", i, tostring(rr.v), avg / rr.v))
+      end
+    end
+    if type(sp.melee.mh) == "number" and sp.melee.mh > 0 then
+      table.insert(parts, string.format("②主手%s→%.2f", tostring(sp.melee.mh), avg / sp.melee.mh))
+    end
+    if type(sp.melee.oh) == "number" and sp.melee.oh > 0 then
+      table.insert(parts, string.format("②副手%s→%.2f", tostring(sp.melee.oh), avg / sp.melee.oh))
+    end
+    shpSay("⑤b 比值（Δt÷候选）：" .. table.concat(parts, "  "))
+  end
+  shpSay("⑥ 锚点通道 = ④ 里计数>0 的事件名；命中文本特征：" .. tostring(patText or "未出现「自动射击/Auto Shot」字样"))
+  shpSay("⑦ 判定：⑤b 里**比值最接近 1** 的候选 = 真实射击间隔来源；比值明显<1 → 该候选未含急速。")
+  return n
+end
+
+function EVAL_SHOT_PROBE(sub)
+  sub = tostring(sub or "")
+  if string.find(sub, "报告") or string.find(sub, "report") then return EVAL_SHOT_PROBE_REPORT() end
+  if string.find(sub, "清空") or string.find(sub, "clear") then SHP.rows = {} shpSay("射击探针：记录已清空") return 0 end
+  SHP.on = not SHP.on
+  if SHP.on then
+    SHP.rows = {}
+    if not SHP.frame then
+      local f = CreateFrame("Frame")
+      f:SetScript("OnEvent", function()
+        local a1 = (type(arg1) == "string") and arg1 or ""
+        EVAL_SHOT_PROBE_FEED((type(event) == "string") and event or "?", a1)
+      end)
+      SHP.frame = f
+    end
+    pcall(SHP.frame.RegisterEvent, SHP.frame, SHP_EV)
+    shpSay("射击计时探针：|cff00ff00已开启|r —— 现在**开自动射击打几下**（≥5 次），再 /eh go 射击探针 报告")
+  else
+    if SHP.frame then pcall(SHP.frame.UnregisterEvent, SHP.frame, SHP_EV) end
+    shpSay("射击计时探针：已关闭（记录保留，「报告」仍可查看）")
+  end
+  return SHP.on
+end
+
 function EVAL_RULE_RUN(rules)
   local acted = false -- 1.53.0：非 GCD 类型出手也算有动作（但继续评估后续规则）
   for _, r in ipairs(rules) do
@@ -2504,6 +2788,7 @@ local COND_NUM = {
   ["目标施法时间"] = "tCastEl", ["目标施法剩余时间"] = "tCastLeft",
   ["连击"] = "combo", ["连击点"] = "combo", ["combo"] = "combo",
   ["距攻击"] = "swingLeft", ["swingLeft"] = "swingLeft", -- 1.57.0 距下次攻击秒数
+  ["距射击"] = "shotLeft", ["距下次射击"] = "shotLeft", ["shotLeft"] = "shotLeft", -- ★1.74.30 距下次射击秒数（与「距攻击」成对）
   -- ★1.70.47 队伍/团队血量·蓝量百分比（条件自己去队里挑「血最少/蓝最少」的那个人，见 condOne）
   ["队伍血"] = "teamHp", ["队伍血量"] = "teamHp", ["teamHp"] = "teamHp",
   ["队伍蓝"] = "teamMana", ["队伍蓝量"] = "teamMana", ["teamMana"] = "teamMana",
@@ -2909,7 +3194,7 @@ end
 
 -- 条件组 → 显示字符串（列表摘要 / 编辑回显）
 -- 1.49.2 power 显示名动态化（UnitPowerType：法力/怒气/集中值/能量——旧版硬编码「怒气」，法师看着别扭）
-local COND_NUMNAME = { power = (EVAL_POWERLABEL and EVAL_POWERLABEL() or "能量"), tHpPct = "目标血", hpPct = "自身血", swingLeft = "距攻击", powerPct = "能量%", combatTime = "进战", castEl = "施法时间", castLeft = "施法剩余时间", tCastEl = "目标施法时间", tCastLeft = "目标施法剩余时间", combo = "连击" }
+local COND_NUMNAME = { power = (EVAL_POWERLABEL and EVAL_POWERLABEL() or "能量"), tHpPct = "目标血", hpPct = "自身血", swingLeft = "距攻击", shotLeft = "距射击", powerPct = "能量%", combatTime = "进战", castEl = "施法时间", castLeft = "施法剩余时间", tCastEl = "目标施法时间", tCastLeft = "目标施法剩余时间", combo = "连击" }
 -- ★1.71.3 队伍/团员条件的「职业/队伍」过滤后缀（**导出侧**）：空集不写 → 老配置导出后**逐字不变**
 local function teamFilterSuffix(cd)
   local out = ""

@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.74.28"
+local VERSION = "1.74.30"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -206,6 +206,25 @@ end
 -- ★★★1.73.58 **方案按钮配色**（用户：「方案根据品阶染色」）——与**配置窗方案列表 / 案例模版**同一套规则：
 --   文字色 = 品阶色；底色 = 品阶色 ×（当前激活 0.45 / 其余 0.22）。三处共用一张品阶表，**不另抄色**。
 --   ★算不出品阶 → **如实退回**原来的暗金底 + 暖色字（不硬编一个品阶，也不报错）。
+-- ★★★1.74.29 用户：「战斗UI → 方案单元在激活时给加个边框高亮」。
+--   · 边框 = **4 条 1px 纯色纹理**（BORDER 层，与工具箱菜单边框同一做法）；BUILD 建、paint 每次 tick 刷；
+--   · **只有激活那格画**（其余 Hide）；颜色跟**品阶色**（算不出就暖金）——与文字/底色**同一个 rgb 来源**，不另抄色；
+--   · 只做「显隐 + SetVertexColor」两个便宜调用（tick 每 0.15s 跑一次也不量宽、不调客户端 API）。
+local function uiProfBtnBorder(pb, sel, rgb)
+  if not (pb and pb.borders) then return false end
+  local r, g, b = 1, 0.85, 0.30
+  if rgb then r, g, b = rgb.r, rgb.g, rgb.b end
+  local n = 0
+  for i = 1, 4 do
+    local t = pb.borders[i]
+    if t then
+      n = n + 1
+      pcall(t.SetVertexColor, t, r, g, b, 1)
+      if sel then pcall(t.Show, t) else pcall(t.Hide, t) end
+    end
+  end
+  return n == 4
+end
 local function uiProfBtnPaint(pb, prof, sel)
   if not (pb and pb.bg and pb.text) then return false end
   local rgb = uiProfileTierRGB(prof)
@@ -214,10 +233,12 @@ local function uiProfBtnPaint(pb, prof, sel)
     pcall(pb.bg.SetVertexColor, pb.bg, rgb.r * k, rgb.g * k, rgb.b * k, 1)
     pcall(pb.text.SetTextColor, pb.text, rgb.r, rgb.g, rgb.b)
     ui.profTierCalc = (ui.profTierCalc or 0) + 1 -- 记数：判据要能证明「这次真的按品阶算了」
+    uiProfBtnBorder(pb, sel, rgb) -- ★1.74.29 激活 → 同色 1px 边框高亮
     return true
   end
   pcall(pb.bg.SetVertexColor, pb.bg, sel and 0.45 or 0.16, sel and 0.35 or 0.13, sel and 0.10 or 0.08, 1)
   pcall(pb.text.SetTextColor, pb.text, sel and 1 or 0.72, sel and 0.9 or 0.68, sel and 0.4 or 0.55)
+  uiProfBtnBorder(pb, sel, nil) -- ★1.74.29 算不出品阶也照样给激活格镶暖金边框
   return false
 end
 
@@ -714,7 +735,23 @@ function EVAL_HELP_UI_BUILD()
           say("切换到方案: " .. tostring(w2.profiles[pidx].name))
         end
       end)
-      profBtns[i] = { btn = pb, bg = pbg, text = pt }
+      -- ★★★1.74.29 用户：「战斗UI → 方案单元在激活时给加个边框高亮」——
+      --   4 条 1px 纯色纹理（BORDER 层，与工具箱菜单边框同一做法）：横两条钉上下缘、竖两条钉左右缘；
+      --   显隐与颜色交给 uiProfBtnBorder（只有 sel 为真才 Show、颜色跟品阶色）⇒ tick 每 0.15s 刷也只是一次 SetVertexColor。
+      local pbds = {}
+      for bi = 1, 4 do
+        local btex = pb:CreateTexture(nil, "BORDER")
+        uiSolid(btex, 1, 0.85, 0.30, 1)
+        pcall(btex.SetHeight, btex, 1)
+        pcall(btex.SetWidth, btex, 1)
+        btex:Hide()
+        pbds[bi] = btex
+      end
+      pbds[1]:SetPoint("TOPLEFT", pb, "TOPLEFT", 0, 0)       pbds[1]:SetPoint("TOPRIGHT", pb, "TOPRIGHT", 0, 0)             pcall(pbds[1].SetHeight, pbds[1], 1)
+      pbds[2]:SetPoint("BOTTOMLEFT", pb, "BOTTOMLEFT", 0, 0) pbds[2]:SetPoint("BOTTOMRIGHT", pb, "BOTTOMRIGHT", 0, 0)       pcall(pbds[2].SetHeight, pbds[2], 1)
+      pbds[3]:SetPoint("TOPLEFT", pb, "TOPLEFT", 0, 0)       pbds[3]:SetPoint("BOTTOMLEFT", pb, "BOTTOMLEFT", 0, 0)       pcall(pbds[3].SetWidth, pbds[3], 1)
+      pbds[4]:SetPoint("TOPRIGHT", pb, "TOPRIGHT", 0, 0)     pbds[4]:SetPoint("BOTTOMRIGHT", pb, "BOTTOMRIGHT", 0, 0)     pcall(pbds[4].SetWidth, pbds[4], 1)
+      profBtns[i] = { btn = pb, bg = pbg, text = pt, borders = pbds }
       -- ★1.73.58 建出来就按品阶上色（不等 0.15s 后的 tick，免得先闪一下暗金）
       uiProfBtnPaint(profBtns[i], w20.profiles and w20.profiles[i], (w20.activeProfile or 1) == i)
     end
@@ -962,11 +999,15 @@ function EVAL_HELP_UI_TICK()
   end
   -- 1.55.0 挥击计时条：有攻速+锚点数据时显示（进度=已过/攻速，文本=距下次攻击秒数/就绪）
   if ui.swingBar then
-    local rem = EVAL_SWING_REMAIN and EVAL_SWING_REMAIN()
-    if rem and st.atkSpd and st.atkSpd > 0 then
-      local frac = math.max(0, math.min(1, 1 - rem / st.atkSpd))
+    -- ★1.74.30 状态感知：自动射击中这条细条走**射击计时**（锚点/射速都与近战独立），否则仍是近战那套
+    local kind = (type(EVAL_SWING_KIND) == "function") and EVAL_SWING_KIND() or "melee"
+    local rem = (type(EVAL_SWING_REMAIN_ACTIVE) == "function") and EVAL_SWING_REMAIN_ACTIVE()
+      or (EVAL_SWING_REMAIN and EVAL_SWING_REMAIN())
+    local spdBar = (type(EVAL_SWING_SPEED) == "function") and EVAL_SWING_SPEED() or st.atkSpd
+    if rem and spdBar and spdBar > 0 then
+      local frac = math.max(0, math.min(1, 1 - rem / spdBar))
       uiSetBar(ui.swingFill, ui.swingText, ui.swingW, frac, 0.85, 0.70, 0.25,
-        rem > 0.05 and string.format("下次攻击 %.1fs", rem) or "攻击就绪")
+        rem > 0.05 and string.format((kind == "ranged") and "下次射击 %.1fs" or "下次攻击 %.1fs", rem) or ((kind == "ranged") and "射击就绪" or "攻击就绪"))
     else
       uiSetBar(ui.swingFill, ui.swingText, ui.swingW, 0, 0.1, 0.1, 0.1, "")
     end
@@ -3852,11 +3893,17 @@ function EVAL_HELP_ST_TICK()
     st.form or "无姿态"))
   table.insert(lines, string.format("Alt:%s Shift:%s Ctrl:%s 普攻:%s",
     stYesNo(st.alt), stYesNo(st.shift), stYesNo(st.ctrl), stYesNo(st.autoAttack)))
-  if st.atkSpd then -- 1.55.0 挥击计时行：攻速 + 距下次攻击（无锚点数据=—）
-    local rem = EVAL_SWING_REMAIN and EVAL_SWING_REMAIN()
-    table.insert(lines, string.format("攻速 %.1fs · 距下次攻击 %s%s", st.atkSpd,
-      rem and string.format("%.1fs", rem) or "—",
-      st.atkSpdOff and string.format("（副手 %.1fs）", st.atkSpdOff) or ""))
+  if st.atkSpd or st.atkSpdRanged then -- 1.55.0 挥击计时行（1.74.30 起状态感知：自动射击中显示射速）
+    local kindR = (type(EVAL_SWING_KIND) == "function") and EVAL_SWING_KIND() or "melee"
+    local remR = (type(EVAL_SWING_REMAIN_ACTIVE) == "function") and EVAL_SWING_REMAIN_ACTIVE()
+      or (EVAL_SWING_REMAIN and EVAL_SWING_REMAIN())
+    local spdR = (kindR == "ranged") and (st.atkSpdRanged or ((type(EVAL_SHOT_SPEED) == "function") and EVAL_SHOT_SPEED())) or st.atkSpd
+    table.insert(lines, string.format("%s %s · 距下次%s %s%s",
+      (kindR == "ranged") and "射速" or "攻速",
+      spdR and string.format("%.1fs", spdR) or "—",
+      (kindR == "ranged") and "射击" or "攻击",
+      remR and string.format("%.1fs", remR) or "—",
+      (kindR == "melee" and st.atkSpdOff) and string.format("（副手 %.1fs）", st.atkSpdOff) or ""))
   end
   if st.castName then -- 1.38.0 施法中实时显示（含读条剩余秒数）
     table.insert(lines, string.format("施法中: %s%s", tostring(st.castName),
@@ -3989,7 +4036,8 @@ local SE_TYPES = {
   { id = "powerPct",   name = "能量%",       kind = "num",   n = 10 },
   { id = "combatTime", name = "进战秒数",    kind = "num",   n = 3 },
   { id = "combo",      name = "连击点数",    kind = "num",   n = 1 }, -- 1.54.4 初始值 1（域 1-5）
-  { id = "swingLeft",  name = "距下次攻击",  kind = "num",   n = 0.1 }, -- 1.57.0 挥击计时（秒）；1.58.0 时间型初始 0.1
+  { id = "swingLeft",  name = "距下次攻击",  kind = "num",   n = 0 }, -- 1.57.0 挥击计时（秒）；★1.74.30 用户定：初始值 **0**（原 1.58.0 的 0.1）
+  { id = "shotLeft",   name = "距下次射击",  kind = "num",   n = 0 }, -- ★1.74.30 射击计时（秒）；与「距下次攻击」成对，初始值同样 **0**
   { id = "combat",     name = "战斗状态",    kind = "bool" },
   { id = "hasTarget",  name = "目标存在",    kind = "bool" },
   { id = "canAttack",  name = "目标可攻击",  kind = "bool" },
@@ -4103,8 +4151,16 @@ for _, c in ipairs(CREATURE_TYPES) do CREATURE_BY_ID[c.id] = c end
 --   ★为什么权重与大类写在**这张表里**而不是另开一张：条件类型清单只有这样一份 ——
 --     另开一张就要靠人去同步这 44 个类型，而漏配的后果是**静默按 0 分算**（本项目最怕的那种失败）。
 --     写在组上 ⇒ 以后往某个组加类型，权重与大类自动继承；源码检查 COND WEIGHT CHECK 再兜一层。
+-- ★1.74.30 读值口：编辑窗「添加条件」用的**初始值 n**（★必须放在 SE_TYPES **声明之后** —— DECL ORDER CHECK
+--   当场抓过我第一版把它写在前面：那样读到的是**全局 nil**，断言就会「假通过/假失败」。）
+function EVAL_TEST_SE_TYPE_INIT(id)
+  for i = 1, table.getn(SE_TYPES) do
+    if SE_TYPES[i].id == id then return SE_TYPES[i].n end
+  end
+  return nil
+end
 local SE_TYPE_GROUPS = {
-  { label = "CTG_1", w = 1, cov = "A", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "swingLeft", "combat", "autoAttack", "autoShot", "wandShoot", "alt", "shift", "ctrl", "form" } }, -- ★1.71.2（第十五轮）施法族（施法中/施法时间/施法剩余时间）已统一移入 CTG_4
+  { label = "CTG_1", w = 1, cov = "A", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "swingLeft", "shotLeft", "combat", "autoAttack", "autoShot", "wandShoot", "alt", "shift", "ctrl", "form" } }, -- ★1.71.2（第十五轮）施法族（施法中/施法时间/施法剩余时间）已统一移入 CTG_4
   -- ★★★1.74.19 COND WEIGHT CHECK 当场抓到的漏网之鱼：`target`（「选取目标」，1.32.0 起 hidden、下拉不再提供）
   --   仍然在 SE_TYPES 里、**存量方案里还有**、求值也照跑 —— 它却不在任何分组里 ⇒
   --   新口径下会被按 **0 分**算、也不计覆盖（静默少算一截）。归到「目标状态」：它就是选目标那件事。
@@ -4150,6 +4206,12 @@ function EVAL_COND_GROUP_TABLE()
   return out
 end
 
+-- ★★★1.74.30 时间型条件（秒）清单 = **单一来源**（0.0~10.0 · 步进 0.1 · 显示一位小数）。
+--   ★★必须声明在**所有使用者之前**：本项目老账 —— local 在闭包创建之后才声明 ⇒ 闭包只看到**全局 nil**
+--     （1.70.46 就因 seSecKinds 的声明位置踩过「用户一点就红字」的事故）⇒ 从后面的条件行代码**上移到这里**。
+local SE_TIME_K = { swingLeft = true, shotLeft = true, castEl = true, castLeft = true, tCastEl = true, tCastLeft = true }
+local function seIsTimeKind(k) return (type(k) == "string" and SE_TIME_K[k] == true) and true or false end
+
 local seUI = { root = nil, ed = nil, rows = {} }
 
 local function seDefaultCond(ti)
@@ -4182,6 +4244,23 @@ local function seDefaultCond(ti)
   elseif td.kind == "class" then return { k = td.id, cs = {} } -- 1.70.0 去战士化：旧默认预选 WARRIOR（非战士职业新建即错）
   elseif td.kind == "creature" then return { k = td.id, cs = {}, v = true } -- 1.70.28 目标类型：默认「是」+ 空选择（空=永不满足，需用户点选）
   else return { k = td.id } end
+end
+
+-- ★★★1.74.30 切换条件类型时的参数继承（用户截图实测：「距下次射击」的值被带成了 **30.0**）。
+--   【真因】旧写法 `new.op, new.n = old.op, old.n` **无条件**继承 ⇒ 从数值型（如 能量>30）切到**时间型**时，
+--     30 这种**出了时间域**（0.0~10.0）的值被原样带过来，显示与语义都不对。
+--   【修法】只有**同一参数域**才继承：都时间型 / 都非时间型 → 保留旧值；跨域一律用新类型的默认值（td.n，现为 0）。
+--   ★抽成纯函数（可直接断言），下拉回调只调它 —— 本项目「判据要能打到真实调用点」的做法。
+local function seSwitchCond(old, ti)
+  local new = seDefaultCond(ti)
+  if type(old) ~= "table" or type(new) ~= "table" then return new end
+  if old.op and new.op then
+    new.op = old.op
+    if seIsTimeKind(old.k) == seIsTimeKind(new.k) then new.n = old.n end -- ★跨域不继承（同域保留手感）
+  end
+  local oldTd = SE_TYPES[seTypeIndexOf(old.k, old.name)]
+  if old.s and new.s and oldTd and oldTd.kind == SE_TYPES[ti].kind then new.s = old.s end -- s 仅同族保留
+  return new
 end
 
 -- ★★★1.71.3 条件类型的**悬停说明**（用户要求：「支持规则的条件类型」分别加 tooltip，并美化文案）。
@@ -5174,7 +5253,7 @@ function EVAL_HELP_SE_REFRESH()
       if td.kind == "num" then
         row.opBtn.text:SetText(cd.op or ">")
         -- 1.58.0 时间型一位小数显示（步进 0.1；防 0.30000000004 浮点噪音）
-        local isTime = (cd.k == "swingLeft" or cd.k == "castEl" or cd.k == "castLeft" or cd.k == "tCastEl" or cd.k == "tCastLeft")
+        local isTime = seIsTimeKind(cd.k) -- ★1.74.30 走单一来源（原先这里另抄了一份清单）
         row.valText:SetText(isTime and string.format("%.1f", cd.n or 0) or tostring(cd.n or 0))
         pcall(row.opBtn.btn.Show, row.opBtn.btn)
         pcall(row.minus.btn.Show, row.minus.btn)
@@ -5764,11 +5843,7 @@ local function SE_BUILD()
       EVAL_DD_OPEN(row.typeBtn.btn, items, function(ti0)
         local ti = idxMap[ti0]
         if not ti or ti == 0 then return end
-        local old, new = it.cd, seDefaultCond(ti)
-        if old.op and new.op then new.op, new.n = old.op, old.n end -- 同族参数保留
-        local oldTd = SE_TYPES[seTypeIndexOf(old.k, old.name)]
-        if old.s and new.s and oldTd and oldTd.kind == SE_TYPES[ti].kind then new.s = old.s end -- s 仅同族保留
-        it.cd = new
+        it.cd = seSwitchCond(it.cd, ti) -- ★1.74.30 参数继承收敛到纯函数（跨参数域不再把 30.0 带进时间型）
         EVAL_HELP_SE_REFRESH()
       end, { tips = tips, warns = anyWarn and warns or nil })
     end)
@@ -5795,7 +5870,7 @@ local function SE_BUILD()
       return { "|cffffd100" .. L("SE_TIP_RULE_T") .. "|r", L("SE_TIP_RULE") }
     end)
     -- 1.58.0 时间类型（秒）：步进 0.1、区间 0.0-10.0
-    local SE_TIME_K = { swingLeft = true, castEl = true, castLeft = true, tCastEl = true, tCastLeft = true }
+    -- ★1.74.30 SE_TIME_K 已**上移到条件行代码之前**（单一来源；原位置在使用者之后 = 闭包看不到它）
     row.minus = seBtn(root, 180, y, 20, 15, "-", function()
       local it = seUI.ed and seUI.ed.conds[i]
       if it and it.cd.n then
@@ -6222,6 +6297,15 @@ end
 
 -- ★1.70.45 测试直调：剩余时间检查的共用判据 / 步进函数（UI 用的就是这两个）
 function EVAL_TEST_SE_SEC_KINDS(k) return seSecKinds(k) end
+-- ★1.74.30 测试直调：类型切换的参数继承（走**真实**纯函数 seSwitchCond，不在断言里复刻逻辑）
+function EVAL_TEST_SE_SWITCH(old, ti) return seSwitchCond(old, ti) end
+-- ★1.74.30 测试读值口：按 id 取类型下标（断言要能定位到某个类型，而不写死下标）
+function EVAL_TEST_SE_TYPE_INDEX(id)
+  local i = (type(SE_BY_K) == "table") and SE_BY_K[id] or nil
+  if type(i) == "number" and i > 0 then return i end
+  for j = 1, table.getn(SE_TYPES) do if SE_TYPES[j].id == id then return j end end
+  return nil
+end
 function EVAL_TEST_SE_SEC_STEP(cd, delta) seSecStep(cd, delta) return cd and cd.secN end
 
 -- ★1.70.46 测试直调：往编辑器里塞一条条件并跑**真实的**编辑器刷新。
@@ -7140,6 +7224,13 @@ function EVAL_TEST_UI_PROF()
     local ok, v = pcall(f, o)
     return (ok and type(v) == "number") and v or nil
   end
+  -- ★1.74.29 读纹理显隐（桩与真机都要能用：拿不到就 nil，不硬编 false —— 「桩太宽松 → 断言失明」的老账）
+  local function shownT(t)
+    if type(t) ~= "table" then return nil end
+    local ok, v = pcall(t.IsShown, t)
+    if not ok then return nil end
+    return v and true or false
+  end
   local function rgb3(f, o)
     local ok, r, g, b = pcall(f, o)
     if ok and type(r) == "number" then return { r, g, b } end
@@ -7165,6 +7256,12 @@ function EVAL_TEST_UI_PROF()
       -- ★1.73.58 品阶染色：交出**真控件**上的文字色与底色（不读我们自己的记账）
       textRGB = rgb3(pb.text.GetTextColor, pb.text),
       bgRGB = rgb3(pb.bg.GetVertexColor, pb.bg),
+      -- ★1.74.29 激活边框（4 条 1px 纹理）：交出**真控件**上的显隐/色/厚薄（不读我们自己的记账）
+      borderN = (type(pb.borders) == "table") and table.getn(pb.borders) or 0,
+      borderShown = shownT((type(pb.borders) == "table") and pb.borders[1] or nil),
+      borderRGB = (type(pb.borders) == "table" and pb.borders[1]) and rgb3(pb.borders[1].GetVertexColor, pb.borders[1]) or nil,
+      borderH = (type(pb.borders) == "table" and pb.borders[1]) and num(pb.borders[1].GetHeight, pb.borders[1]) or nil,
+      borderVW = (type(pb.borders) == "table" and pb.borders[3]) and num(pb.borders[3].GetWidth, pb.borders[3]) or nil,
     }
   end
   return out
@@ -8107,6 +8204,13 @@ if type(SlashCmdList) == "table" then
       else
         say("秘籍预览：分享模块未载入（EVAL_SHARE_SEAL_INFO 不存在）")
       end
+    elseif string.find(msg, "^go 射击探针") or string.find(msg, "^go shotprobe") then
+      -- ★1.74.29 射击计时取证（见 Engine.lua 的 EVAL_SHOT_PROBE 注释：先问清「速度从哪来 / 锚点落哪个事件」）
+      local subS = string.gsub(msg, "^go%s*", "")
+      subS = string.gsub(subS, "^射击探针%s*", "")
+      subS = string.gsub(subS, "^shotprobe%s*", "")
+      if type(EVAL_SHOT_PROBE) == "function" then EVAL_SHOT_PROBE(subS)
+      else say("射击探针：引擎未载入（EVAL_SHOT_PROBE 不存在）") end
     elseif msg == "go 悬停探针" or msg == "go hovprobe" then
       if type(EVAL_SHARE_HOVER_PROBE) == "function" then
         EVAL_SHARE_HOVER_PROBE("WHISPER")
@@ -9471,10 +9575,13 @@ init:SetScript("OnEvent", function(a, b)
         -- 消息文本取全局 arg1；ea/eb 若承载事件名则不当消息用（三态兼容）
         local msgT = (type(arg1) == "string" and arg1) or ((type(ea) == "string" and ea ~= en) and ea) or (type(eb) == "string" and eb)
         if msgT then EVAL_IMMUNE_LEARN(msgT) end
+        if type(EVAL_SHOT_PROBE_FEED) == "function" then EVAL_SHOT_PROBE_FEED(en, msgT) end -- ★1.74.29 射击探针喂入（未开启时它自己 return false，零影响）
+        if type(EVAL_SHOT_EVENT) == "function" then EVAL_SHOT_EVENT(msgT) end -- ★1.74.30 射击计时锚点（只认含「自动射击/Auto Shot」的原文，见 Engine.lua）
       elseif en == "CHAT_MSG_COMBAT_SELF_HITS" then
         -- 1.55.0 挥击计时：平砍命中锚定 lastSwing（三态兼容取消息文本）
         local msgS = (type(arg1) == "string" and arg1) or ((type(ea) == "string" and ea ~= en) and ea) or (type(eb) == "string" and eb ~= en and eb) or nil
         if msgS then EVAL_SWING_EVENT(msgS) end
+        if type(EVAL_SHOT_PROBE_FEED) == "function" then EVAL_SHOT_PROBE_FEED(en, msgS) end -- ★1.74.29 射击探针喂入
       -- 1.38.0 施法中跟踪：参数顺序做启发式——字符串=技能名、数字=时长ms（CHANNEL_START 的顺序与 START 相反）
       elseif en == "SPELLCAST_START" or en == "SPELLCAST_CHANNEL_START" then
         local a1, a2 = arg1, arg2

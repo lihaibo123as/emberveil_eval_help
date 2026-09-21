@@ -143,7 +143,6 @@
 7. **禁用 `SetScale`**（点击框漂移），缩放 = 按 z 系数**几何重建**；字体链 `FZLBJW→FRIZQT→ARIALN` 全程 `pcall`。
 8. **小地图按钮父级必须是 `UIParent`**（不能是 Minimap）；悬停用 `OnEnter`/`OnLeave` + GameTooltip，**不用 `SetHighlightTexture`**。
 
-
 ## 四、架构要点 + 编辑工具注意事项 + 当前功能地图
 
 ### 4.1 架构要点（改代码前先读这段）
@@ -240,7 +239,6 @@
 - 1.73.40「框增加 padding」= 宽高/标题/条目位置全由同一组常量算：`TB_MENU_PAD`/`TB_MENU_TOP`；判据用独立阈值，不用生产常量自证。
 - 1.73.41 同一内容不要两处各写：入口全走 `EVAL_HELP_GUIDE`，内部优先 `EVAL_LOADPOP_SHOW`、弹窗不可用才退回聊天打印；判据让 force 承重：`cfg.loadMsgSeen=true` 再点「使用引导」仍必须弹。
 
-
 ### 5.3 测试与断言
 - ★桩默认值也属桩（真帧默认显示、桩 `shown=false` ⇒「没 Hide 却断言 `IsShown()==false`」恒真）；隐式前置改显式建立（`pcall(root.Show,root)`、`EVAL_WAR_TAB_REFRESH()`）；桩要记每状态（`TEST.targetUnit`）。组 110①⑧⑨、组 64/93。
 - 测试够不着生产 local ⇒ 加钩子走真实 OnEnter；桩对无效调用要如实无效（`castStoppedDirect`/`castStopped`）、模拟 `SetText` 再触发 `OnTextChanged`；tooltip 桩＝另建对象＋真 GameTooltip 记账＋普通 table。
@@ -261,6 +259,7 @@
   ⑦ 改 UI 文案/样式 ⇒ **同步反转旧判据**（需求会被下一轮推翻，断言跟着改方向）。
 - ★守它们的**源码检查**（改了对应区域必须继续过）：`UI TITLEBAR`/`UI TIER BADGE`/`UI TITLE NAME`/`UI CELL MOUSE`/`WHEEL DIRECTION`/`COVERAGE CAP WIRING`/`COND WEIGHT`/`SAVEDVARS SPLIT`/`SHARE PALETTE`/`PAINT WIRING`/`CHAT COLOR WIRING`/`NAME CACHE PROBE WIRING`/`PROF ICON PROBE WIRING`/`MENU ROUND CHROME`/`CREATOR GATE`。
 
+- ★**1.74.29/30 UI 三处补完**：战斗UI 激活方案格 = **4 条 1px 边框**（颜色跟品阶色、算不出退回暖金，`uiProfBtnBorder`）；两个助手弹窗候选悬停 = **先出客户端原生物品 tooltip（`SetBagItem`）再补帮手的行**（`IconGrid` 共用件）；喂食助手图标边框 = `GetPetHappiness()` 现算（**开心亮绿**/一般金/不开心红/无宠物默认金）；消耗品助手**左键不再弹面板**（右键唯一入口、左键留给拖动）。细节 → 参考卷 **§十二**。
 ### 5.5 API 与客户端事实（★明细已移入**参考卷 §十**；下面几条最常踩，必须常驻）
 
 - 本客户端**无 `UnitCastingInfo`**（打断条件做不了）· **无 SuperWoW**（无精确距离数值/挥击计时）· **无文件读取 API**（无 io/os ⇒ 载入文件唯一形式＝列进 `.toc`；★`LoadAddOn` 是 **Protected** ⇒ **文件级懒加载不可能**，范式＝「toc 预载 + 载入期零副作用 + 首用才建帧」）。
@@ -291,6 +290,8 @@
 - LANG KEY CHECK：菜单标签运行时拼键→须配逐语言无重名/无缺键；文本往返单一通道（EVAL_PARSE_ONE 剥/teamFilterSuffix 写）。
 - 光环判定=两级+三态：①纹理快路径（学习表>动作条）②名字慢路径（auraNameHit 0.5s 缓存、命中即 learnAuraTex 自愈）③两条都不可用才如实失败（查不到≠没有）；扫描可信度三态 true=命中/false=扫描干净确实没有/nil=不可信（组 70③/103①）；诊断 /eh go tex|texdel|texclear|texscan；桩补 SlashCmdList+组 104。
 
+
+- ★★★**1.74.29 / 1.74.30 头条**（细节 → 参考卷 **§十二**）：射击计时（锚点=法术频道含「自动射击/Auto Shot」· 射速=`UnitRangedDamage[1]` · `EVAL_SWING_*` 状态感知）· 新条件「距下次射击」（`shotLeft`、初始值 0；新增条件必进 `SE_TYPE_GROUPS`+`SE_TIME_K`（声明须在前）+三语 `CT_*`；切类型跨域不继承）· 方案格激活品阶色边框 · 弹窗候选原生 `SetBagItem` 详情 · 喂食助手快乐度边框 · 消耗品助手左键不弹窗。判据 = 组 177/188 + M1~M11。
 ### 5.7 流程与纪律
 - 载入提示与新手引导每次加载都打（cfg.guideSeen 已废弃）；组 105：VARIABLES_LOADED 第二次仍须打出引导标题与步骤；/eh guide 可重看。
 - 审计/排查须落成可执行闸门；数据变的刷新放写入点（ioImportText）；组归属是用户偏好，需求一改须钉新归属与顺序。

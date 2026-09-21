@@ -524,6 +524,11 @@ function EVAL_HELP_UPDATE_STATE()
     st.atkSpd = (oks and type(mh) == "number" and mh > 0) and mh or nil
     st.atkSpdOff = (oks and type(oh) == "number" and oh > 0) and oh or nil
   end
+  -- ★1.74.30 远程射速（1.74.30 射击计时）：`UnitRangedDamage("player")` 第 1 返回 = 秒/击（探针真机实测定案）
+  --   与近战 atkSpd **并列**（不覆盖）：到底用哪个由 EVAL_SWING_KIND() 按「是否自动射击中」现算。
+  if type(EVAL_SHOT_API_SPEED) == "function" then
+    st.atkSpdRanged = EVAL_SHOT_API_SPEED()
+  end
 
   -- 光环纹理集合（配置化条件的 hasBuff/noBuff/hasDebuff/noDebuff 用；
   -- 键 = 纹理路径，与「动作条图标 == 光环图标」比对法一致）
