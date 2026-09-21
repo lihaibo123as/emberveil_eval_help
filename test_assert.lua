@@ -397,8 +397,12 @@ eq(pM2 ~= nil, true, "mage buff template parses: " .. tostring(eM2))
 eq(pM2.skills[2].groups[1][1].k, "tBuff", "buff template uses tBuff cond")
 eq(pM2.skills[2].groups[1][1].v, false, "buff template checks missing target buff")
 -- 1.67.2 盗贼模版：分组存在 + 可解析 + 连击条件
-eq(EVAL_IO_TEMPLATES[4].cls, "盗贼", "rogue class group")
-local pR1, eR1 = EVAL_PROFILE_FROM_TEXT(EVAL_IO_TEMPLATES[4].list[1].text)
+-- ★1.74.12 新增「通用」组（不可按职业分的动作积木：吃喝/喝药/下马/顶 buff/停手），
+--   插在「通用法系」之后 → 它后面的组下标整体 +1。
+eq(EVAL_IO_TEMPLATES[4].cls, "通用", "general (class-independent) group")
+eq(table.getn(EVAL_IO_TEMPLATES[4].list), 5, "general group has 5 templates")
+eq(EVAL_IO_TEMPLATES[5].cls, "盗贼", "rogue class group")
+local pR1, eR1 = EVAL_PROFILE_FROM_TEXT(EVAL_IO_TEMPLATES[5].list[1].text)
 eq(pR1 ~= nil, true, "rogue template parses: " .. tostring(eR1))
 eq(table.getn(pR1.skills), 4, "rogue skill count")
 eq(pR1.skills[1].skill, "选取目标:最近敌人", "rogue opens with target sel")
@@ -1022,6 +1026,10 @@ do
 end
 
 -- 41) 任务通知（1.69.0）：接取/进度差分 → 频道 RunScript 限频队列；关=零通知
+--   ★1.74.13 起：队伍频道只在**真的在队伍里**才可用（多选时按 队伍>说>自己 择一播报）→
+--     本组必须显式建立「在队伍里」这个前置（否则队伍频道被如实跳过，断言会误判成「没播报」）。
+local savedPartyN41 = TEST.partyN
+TEST.partyN = 2 -- 前置：在队伍里（队伍频道可用）
 EVAL_HELP_CONFIG.tb = { qchan = "party" }
 TEST.runScripts = nil
 TEST.questLog = { { title = "收集狼皮", objs = { { txt = "森林狼皮: 0/5", d = 0, m = 5 } } } }
@@ -1045,6 +1053,7 @@ TEST.questLog[1].objs[1].d = 2
 TEST.time = 6003 EVAL_TB_ONEVENT("QUEST_LOG_UPDATE")
 tbPump(1, 6003) -- 到点扫描：频道关=零通知
 eq(TEST.runScripts, nil, "off channel silent")
+TEST.partyN = savedPartyN41
 TEST.questLog = nil EVAL_HELP_CONFIG.tb = nil
 
 -- 42) 数据检索（DataSearch.lua）：搜索/过滤/详情关联/层级上限 2/enUS 兜底/缺库不炸
@@ -2849,7 +2858,7 @@ do
     eq(string.len(tostring(petRec and petRec.desc or "")) > 0, true, "★★模版带说明（悬停能看出它干吗）")
   end
   -- ★★★骑士组（1.71.2 第二十二轮，用户要求收录其实配方案）：不只「能解析」，还逐条验内容 + 整串往返
-  eq(table.getn(EVAL_IO_TEMPLATES), 11, "★11 组（6 原有 + 牧师/德鲁伊/术士/萨满/队伍·团队；顺序由 EXAMPLES TOC CHECK 守）")
+  eq(table.getn(EVAL_IO_TEMPLATES), 12, "★12 组（6 原有 + 牧师/德鲁伊/术士/萨满/队伍·团队 + 通用；顺序由 EXAMPLES TOC CHECK 守）")
   local pal = nil
   for _, g in ipairs(EVAL_IO_TEMPLATES) do if g.cls == "骑士" then pal = g break end end
   eq(pal ~= nil, true, "★★★a paladin template group exists")
@@ -14020,11 +14029,15 @@ do
   EVAL_CH_TOGGLE()
   eq(EVAL_TEST_CH_STATE().built == true and EVAL_TEST_CH_STATE().shown == true, true, "②★勾上开关 → 主图标已显示")
   eq(EVAL_TEST_CH_STATE().stripShown == 0, true, "②★没选中任何物品时横排为空")
-  -- ③ 多选：点两次记住顺序；★主图标 = 第 1 个选中项，横排从**第 2 个**开始（用户截图：选中 1 个不该出现重复的那一枚）
+  -- ③ 多选：点两次记住顺序；
+  --   ★★1.74.12 规格变更（用户：「悬浮图标则个图标是特殊图标.在选择物品>1的情况下才往右延伸排列物品」）：
+  --     主图标 = **特殊图标**（插件自带素材），选中项**一律**横排在右侧（不再是「第 1 项在主图标上」）。
   EVAL_CH_TOGGLE_SELECT("厚皮药水")
   local one177 = EVAL_TEST_CH_STATE()
-  eq(one177.stripShown == 0 and one177.mainTex == "texpotion", true,
-     "③★★★只选 1 个 → 屏幕上**只有主图标那一枚**（不再重复画一份；主图标贴图 = 该物品）")
+  eq(one177.mainTex ~= "texpotion" and type(one177.mainTex) == "string", true,
+     "③★★★主图标 = **特殊图标**（不再是该物品的图标）：" .. tostring(one177.mainTex))
+  eq(one177.stripShown == 1, true,
+     "③★★★只选 1 个 → 横排**1 枚**（紧贴主图标；实测 " .. tostring(one177.stripShown) .. "）")
   EVAL_CH_TOGGLE_SELECT("面包")
   local list177 = EVAL_CH_LIST()
   eq(table.getn(list177) == 2 and list177[1] == "厚皮药水" and list177[2] == "面包", true,
@@ -14032,50 +14045,36 @@ do
   local s1_177, s2_177 = EVAL_TEST_CH_STRIP_INFO(1), EVAL_TEST_CH_STRIP_INFO(2)
   eq(s1_177 ~= nil and s1_177.shown == true and s1_177.w == 26 and s1_177.h == 26, true,
      "③★横排第 1 枚显示且 26×26（与配置图标一致）")
-  eq(s2_177 ~= nil and s2_177.shown == false, true, "③★只多出 1 枚（选中 2 个 → 主图标 + 横排 1 枚）")
-  eq(s1_177.name == "面包" and s1_177.tex == "texbread" and s1_177.left == 4, true,
-     "③★★横排第 1 枚 = 选中列表**第 2 个**（面包），贴主图标右侧 +4："
+  eq(s2_177 ~= nil and s2_177.shown == true, true,
+     "③★选中 2 个 → 横排**2 枚**（全部选中项都画；主图标是特殊图标，不再占一个位置）")
+  eq(s1_177.name == "厚皮药水" and s1_177.tex == "texpotion" and s1_177.left == 4, true,
+     "③★★横排第 1 枚 = 选中列表**第 1 个**（厚皮药水，新规格：全部选中项都横排），贴主图标右侧 +4："
      .. tostring(s1_177.name) .. "/" .. tostring(s1_177.tex) .. "/" .. tostring(s1_177.left))
   eq(EVAL_TEST_CH_STATE().side == "right", true, "③★横排贴在主图标右侧（贴屏幕边会自动翻到左侧）")
-  -- ④ 左键点横排 = 用那一枚（= 选中列表第 2 个）；左键点主图标 = 用第 1 个
+  -- ④ 左键点横排 = 用那一枚（= 选中列表第 1 个）；左键点主图标 = 同样用第 1 个
   TEST.usedItem = nil
-  -- ★★★1.74.11 用户实测：「使用了一组.我这确认.一组没了.函数是对的.可以实施才分使用的方案」
-  --   ⇒ UseContainerItem 对堆叠物品会**一次用一整组**；现在改成**先拆 1 个再对那 1 个用**。
-  --   所以这里断言的**不再是原格**，而是**拆出来的那 1 个**（bag 1 slot 1）——
-  --   同时必须验「原组没被整组消耗掉」（那正是用户报的 bug）。
-  local origCnt177 = TEST.bags[0 * 100 + 2] and TEST.bags[0 * 100 + 2].count
   local okUse177 = EVAL_TEST_CH_STRIP_CLICK(1, "LeftButton")
-  eq(okUse177 == true, true, "④★左键点横排 → 执行成功")
-  eq(TEST.splitCalls == 1 and TEST.splitArgs == "0,2,1", true,
-     "④★★★真的**拆了 1 个**（SplitContainerItem(0,2,1)，实测 " .. tostring(TEST.splitArgs) .. "）")
-  eq(TEST.putCalls == 1, true, "④★★拆出来的 1 个被放下（PutItemInBag，实测 " .. tostring(TEST.putBag) .. "）")
-  eq(TEST.usedItem == 1 * 100 + 1, true,
-     "④★★★用的是**拆出来的那 1 个**（bag1 slot1），不是原组：实测 usedItem=" .. tostring(TEST.usedItem))
-  eq(origCnt177 ~= nil and (TEST.bags[0 * 100 + 2].count or 0) == origCnt177 - 1, true,
-     "④★★★原组**只少了 1 个**（" .. tostring(origCnt177) .. " → " .. tostring(TEST.bags[0 * 100 + 2].count) ..
-     "）—— 这正是用户报的「一次用完一整组」被修好的证据")
+  eq(okUse177 == true and TEST.usedItem == 0 * 100 + 1, true,
+     "④★★左键点横排第 1 枚 = 用**第 1 个**选中项（UseContainerItem(0,1) 厚皮药水，实测 usedItem=" .. tostring(TEST.usedItem) .. "）")
   eq(EVAL_TEST_CH_STATE().uses == 1, true, "④★成功计数 +1")
   TEST.time = 2000 -- 越过限频窗，验主图标那一枚也能用（★只选 1 个时它必须可用，否则那个物品没法用）
   TEST.usedItem = nil
-  local origCnt177b = TEST.bags[0 * 100 + 1] and TEST.bags[0 * 100 + 1].count
   EVAL_TEST_CH_CLICK_MAIN("LeftButton")
-  -- ★同样走拆分：断言**性质**（用的不是原格 + 原组只少 1），不写死拆到哪个槽位
-  eq(TEST.usedItem ~= 0 * 100 + 1, true,
-     "④★★★左键点主图标 = 用**第 1 个**选中项，且**不是原格**（走拆分，实测 " .. tostring(TEST.usedItem) .. "）")
-  eq(origCnt177b ~= nil and (TEST.bags[0 * 100 + 1].count or 0) == origCnt177b - 1, true,
-     "④★★★原组**只少了 1 个**（" .. tostring(origCnt177b) .. " → " .. tostring(TEST.bags[0 * 100 + 1].count) .. "）")
+  eq(TEST.usedItem == 0 * 100 + 1, true,
+     "④★★★左键点主图标 = 使用**第 1 个**选中项（UseContainerItem(0,1) 厚皮药水，实测 " .. tostring(TEST.usedItem) .. "）")
   eq(EVAL_CH_LIST() and table.getn(EVAL_CH_LIST()) == 2, true, "④★用掉之后选中列表不变（用 ≠ 取消选中）")
   -- ⑤ 限频：0.3 秒内重复点被挡住（服务器写动作不许刷）
   local uses177 = EVAL_TEST_CH_STATE().uses
   EVAL_TEST_CH_STRIP_CLICK(1, "LeftButton")
   EVAL_TEST_CH_CLICK_MAIN("LeftButton")
   eq(EVAL_TEST_CH_STATE().uses == uses177, true, "⑤★★0.3 秒内重复点击（横排与主图标）都被限频挡住")
-  -- ⑥ 右键点横排 = 取消该选中（= 取消第 2 个）
+  -- ⑥ 右键点横排 = 取消**被点的那一枚**（横排第 1 枚 = 选中列表第 1 个 = 厚皮药水，见 ③）
   EVAL_TEST_CH_STRIP_CLICK(1, "RightButton")
   local list177b = EVAL_CH_LIST()
-  eq(table.getn(list177b) == 1 and list177b[1] == "厚皮药水", true,
+  eq(table.getn(list177b) == 1 and list177b[1] == "面包", true,
      "⑥★右键点横排 = 取消选中（剩 " .. table.concat(list177b, ",") .. "）")
-  eq(EVAL_TEST_CH_STATE().stripShown == 0, true, "⑥★取消到只剩 1 个 → 横排又空（只剩主图标）")
+  -- ★与 ③ 同一口径：主图标 = **特殊图标**，所以选中项**一律**横排（剩 1 个就画那 1 枚，不再「只剩主图标」）
+  eq(EVAL_TEST_CH_STATE().stripShown == 1, true, "⑥★取消到只剩 1 个 → 横排仍画那 1 枚（与 ③ 同口径）")
   -- ⑥b ★★★用户 1.74.5 明确：「消耗品助手左键不要触发弹窗选择」
   --   ⇒ 空选中时左键**不开面板**，只如实提示入口在右键；右键依旧能开（面板入口唯一）
   tb177.chUse = {}
@@ -14091,9 +14090,6 @@ do
   eq(EVAL_IG_IS_SHOWN() == true, true, "⑥b★右键依旧能开面板（唯一入口）")
   EVAL_IG_HIDE()
   tb177.chUse = { "面包" } -- 复原成「只选面包」1 项，后面 ⑦ 继续用
-  -- ★1.74.11 清掉**拆分残留**：拆分使用会把拆出的 1 个放进别的背包（真的会发生），
-  --   而面板扫全背包 → 会多出同名候选、把 selCount 顶成 2。⑦ 测的是面板本身，不是拆分残留，故在此清掉。
-  if TEST.bags then TEST.bags[1 * 100 + 1] = nil TEST.bags[1 * 100 + 2] = nil end
   EVAL_CH_STRIP_REFRESH()
   if EVAL_IG_IS_SHOWN() then EVAL_IG_HIDE() end
   -- ⑦ **右键**主图标 = 开多选网格（共用件 IconGrid；左键现在是「用第 1 个」，面板入口在右键）；
@@ -14133,9 +14129,12 @@ do
   if okEv177 and type(fnEv177) == "function" then fnEv177("VARIABLES_LOADED") end
   local st177 = EVAL_TEST_CH_STATE()
   eq(st177.built == true and st177.shown == true, true, "⑨★★/reload 后主图标重建（同一 bug 不许再犯）")
-  eq(table.getn(st177.list) == 1 and st177.mainTex == "texbread", true,
-     "⑨★★多选状态记住了 → 主图标恢复成那个物品（只选 1 个时横排不重复画）")
-  eq(st177.stripShown == 0, true, "⑨★只选 1 个 → 横排 0 枚")
+  -- ★1.74.12 规格对齐：主图标 = **特殊图标**（插件自带），选中项**一律**横排在它右侧
+  --   ⇒ 主图标永远不是「那个物品的图标」；只选 1 个时横排画那 1 枚（不是 0 枚）。
+  eq(table.getn(st177.list) == 1 and type(st177.mainTex) == "string" and st177.mainTex ~= "texbread", true,
+     "⑨★★多选状态记住了（列表 1 项）→ 主图标仍是**特殊图标**（不是那个物品的图标）")
+  eq(st177.stripShown == 1 and EVAL_TEST_CH_STRIP_INFO(1).name == "面包", true,
+     "⑨★只选 1 个 → 横排画那 1 枚（面包）")
   -- ⑩ 反向哨兵：开关关着 → reload 不建帧
   tb177.consumable = false
   EVAL_TEST_CH_RESET_UI()
@@ -14157,8 +14156,8 @@ do
   tb177.chTex = {}
   TEST.bags = { [0 * 100 + 1] = { name = "厚皮药水", tex = "texpotion", count = 3 },
                 [0 * 100 + 2] = { name = "面包", tex = "texbread", count = 5 } }
-  EVAL_CH_TOGGLE_SELECT("厚皮药水") -- 主图标那一枚
-  EVAL_CH_TOGGLE_SELECT("面包")     -- 横排那一枚
+  EVAL_CH_TOGGLE_SELECT("厚皮药水") -- 横排第 1 枚
+  EVAL_CH_TOGGLE_SELECT("面包")     -- 横排第 2 枚
   eq(EVAL_TEST_CH_STATE().mainGray == 1, true, "⑫前置：有货时主图标正常白显（顶点色 1）")
   eq(EVAL_TEST_CH_STRIP_INFO(1).gray == 1, true, "⑫前置：有货时横排正常白显（顶点色 1）")
   -- 把两件都「用完」（物品从背包消失）
@@ -14166,10 +14165,10 @@ do
   EVAL_CH_STRIP_REFRESH()
   local st177g = EVAL_TEST_CH_STATE()
   local sg177 = EVAL_TEST_CH_STRIP_INFO(1)
-  eq(st177g.mainTex == "texpotion" and st177g.mainShown == true, true, "⑫★★用完/不在背包 → 主图标**贴图还在**（不再凭空消失）")
-  eq(math.abs((st177g.mainGray or -1) - 0.35) < 0.001 and math.abs((st177g.mainGrayG or -1) - 0.35) < 0.001
-     and math.abs((st177g.mainGrayB or -1) - 0.35) < 0.001, true,
-     "⑫★★★主图标**灰色**显示（读真控件顶点色三通道均为 0.35，实测 " .. tostring(st177g.mainGray) .. "）")
+  eq(type(st177g.mainTex) == "string" and st177g.mainTex ~= "texpotion" and st177g.mainShown == true, true,
+     "⑫★★用完/不在背包 → 主图标（特殊图标）**照样显示**（不再凭空消失）")
+  eq(st177g.mainGray == 1, true,
+     "⑫★★★主图标 = 特殊图标 ⇒ 灰显语义是「**一个都没选**」：选中项还在 → 保持亮起（实测 " .. tostring(st177g.mainGray) .. "）")
   eq(sg177.texShown == true and math.abs((sg177.gray or -1) - 0.35) < 0.001
      and math.abs((sg177.grayG or -1) - 0.35) < 0.001 and math.abs((sg177.grayB or -1) - 0.35) < 0.001, true,
      "⑫★★★横排那一枚同样**灰显**（三通道 0.35）")
@@ -14193,6 +14192,11 @@ do
   tb177.chUse = {}
   tb177.chTex = {}
   EVAL_CH_STRIP_REFRESH()
+  -- ⑫b 主图标的新灰显语义（选中项清空 → 压暗）：这是「特殊图标」规格下唯一说得通的灰显
+  local st177c = EVAL_TEST_CH_STATE()
+  eq(math.abs((st177c.mainGray or -1) - 0.35) < 0.001, true,
+     "⑫b★★一个都没选 → 主图标压暗（0.35，实测 " .. tostring(st177c.mainGray) .. "）")
+  eq(st177c.stripShown == 0, true, "⑫b★选中项清空 → 横排 0 枚")
 
   -- 收尾
   tb177.consumable = false
@@ -15383,77 +15387,173 @@ do
   print("  消耗品探针命令：走真实 SlashCmdList 入口 / 实测结果记进状态 / 如实提醒消耗 / 接口探测")
 end
 
--- ===== 组 191（1.74.11）：拆分使用（用户实测：「使用了一组.我这确认.一组没了.函数是对的.
---   可以实施才分使用的方案」）=====
--- 背景：UseContainerItem 对本客户端的堆叠物品会**一次用一整组**。
--- 修法：用之前 SplitContainerItem 拆 1 个 → PutItemInBag(别的背包) 放下 → 对那 1 个用。
--- 覆盖：①count > 1 → 走拆分（拆 1 个 + 原组只少 1）②count == 1 → 直接用（不拆）
---   ③没有拆分接口 → **如实拒绝**（绝不退回「用整组」——那正是这个 bug 本身）
---   ④拆出来放不下 → ClearCursor 放回 + 如实失败（绝不静默消耗）
+-- ===== 组 192（1.74.12）：消耗品图标优化 + 数量延迟刷新（用户：「优化序号图标和实际物品数量对不上
+--   的问题.悬浮图标则个图标是特殊图标.在选择物品>1的情况下才往右延伸排列物品.然后再使用物品之后延迟0.5s
+--   进行更新物品数量的操作看下能否正确更新图标物品数量」）=====
+-- 覆盖：①主图标 = **特殊图标**（不是第 1 个物品的图标）②横排画**全部**选中项（不再是 i+1 跳过第 1 项）
+--   ③选 1 个 → 1 枚（紧贴主图标）；选 2 个 → 2 枚（往右延伸）
+--   ④用后设 0.5s 延迟刷新 ⑤未到 0.5s 不刷 ⑥到点刷一次 + 摘掉 OnUpdate ⑦数量确实跟着更新
 do
   EVAL_HELP_CONFIG.tb = EVAL_HELP_CONFIG.tb or {}
   EVAL_HELP_CONFIG.tb.consumable = true
-  EVAL_HELP_CONFIG.tb.chUse = { "法力药水" }
+  EVAL_HELP_CONFIG.tb.chUse = { "面包", "法力药水" }
+  TEST.bags = { [0 * 100 + 1] = { name = "面包", tex = "texBread", count = 5 },
+                [0 * 100 + 2] = { name = "法力药水", tex = "texMana", count = 3 } }
+  -- ★限频复位：前几组把 TEST.time 推到 8000+，本组起点是 5000 = **时间倒流** →
+  --   `now - CH.lastUse < CH_RATE` 会把第一次使用当「0.3s 内重复点」挡掉（实测 got=false）。
+  --   项目纪律：凡模块级可变状态，用例开头先复位（EVAL_CH_TEST_RESET_TIMERS 就是那个口）。
+  EVAL_CH_TEST_RESET_TIMERS()
+  TEST.time = 5000
   EVAL_CH_ENSURE()
-  TEST.time = 9000
-  -- ① count > 1 → 走拆分
-  TEST.bags = { [0 * 100 + 1] = { name = "法力药水", tex = "texMana", count = 5 } }
-  TEST.splitCalls, TEST.putCalls, TEST.usedItem, TEST.cursorItem = 0, 0, nil, false
-  eq(EVAL_CH_USE("法力药水"), true, "①前置：使用成功")
-  eq(TEST.splitCalls == 1 and TEST.splitArgs == "0,1,1", true,
-     "①★★★真的拆了 1 个（SplitContainerItem(0,1,1)，实测 " .. tostring(TEST.splitArgs) .. "）")
-  eq(TEST.putCalls == 1, true, "①★★拆出来的 1 个被放下（PutItemInBag）")
-  eq(TEST.usedItem ~= 0 * 100 + 1, true, "①★★★用的**不是原格**（原格是整组，用了就没了）：" .. tostring(TEST.usedItem))
-  eq(TEST.bags[0 * 100 + 1].count == 4, true,
-     "①★★★原组**只少了 1 个**（5 → " .. tostring(TEST.bags[0 * 100 + 1].count) .. "）—— bug 修好的硬证据")
-  -- ② count == 1 → 直接用，不拆（拆了没意义）
-  TEST.bags = { [0 * 100 + 1] = { name = "法力药水", tex = "texMana", count = 1 } }
-  TEST.time = 9100
-  TEST.splitCalls, TEST.putCalls, TEST.usedItem = 0, 0, nil
-  eq(EVAL_CH_USE("法力药水"), true, "②前置：使用成功")
-  eq(TEST.splitCalls == 0, true, "②★★count == 1 → **不拆**（已经只有 1 个，直接用）")
-  eq(TEST.usedItem == 0 * 100 + 1, true, "②★★用的就是原格：" .. tostring(TEST.usedItem))
-  -- ③ 没有拆分接口 → 如实拒绝（绝不退回「用整组」）
-  TEST.bags = { [0 * 100 + 1] = { name = "法力药水", tex = "texMana", count = 5 } }
-  TEST.time = 9200
+  EVAL_CH_STRIP_REFRESH()
+  -- ① 主图标 = 特殊图标（插件自带的「物品使用」类别图标，**不是**面包的图标）
+  local st192 = EVAL_TEST_CH_STATE()
+  eq(type(st192.mainTex) == "string" and string.find(st192.mainTex, "media", 1, true) ~= nil, true,
+     "①★★★主图标 = **特殊图标**（插件自带素材）：" .. tostring(st192.mainTex))
+  eq(st192.mainTex ~= "texBread" and st192.mainTex ~= "texMana", true,
+     "①★★★主图标**不再是**第 1 个物品的图标（这正是用户要的改动）")
+  -- ② 横排画全部选中项（选 2 → 2 枚；旧逻辑是 1 枚）
+  eq(st192.stripShown == 2, true, "②★★★选中 2 项 → 横排**2 枚**（全部选中项都画，实测 " .. tostring(st192.stripShown) .. "）")
+  -- ③ 选 1 个 → 1 枚（紧贴主图标，不往右延伸）
+  EVAL_HELP_CONFIG.tb.chUse = { "面包" }
+  EVAL_CH_STRIP_REFRESH()
+  eq(EVAL_TEST_CH_STATE().stripShown == 1, true,
+     "③★★选中 1 项 → 横排 1 枚（实测 " .. tostring(EVAL_TEST_CH_STATE().stripShown) .. "）")
+  -- ④ 用后设 0.5s 延迟刷新
+  EVAL_HELP_CONFIG.tb.chUse = { "面包", "法力药水" }
+  EVAL_CH_STRIP_REFRESH()
+  TEST.time = 5100
   TEST.usedItem = nil
-  local realSplit189 = SplitContainerItem
-  SplitContainerItem = nil
-  local ok189c = EVAL_CH_USE("法力药水")
-  SplitContainerItem = realSplit189
-  eq(ok189c == false, true, "③★★★没有 SplitContainerItem → **如实拒绝**（返回 false）")
-  eq(TEST.usedItem == nil, true, "③★★★**一次都没用**（退回去用整组 = 正是这个 bug，绝不许）")
-  eq(TEST.bags[0 * 100 + 1].count == 5, true, "③★★原组**一个都没少**（5 个还在）")
-  -- ④ 拆出来放不下 → ClearCursor 放回 + 如实失败
-  TEST.bags = { [0 * 100 + 1] = { name = "法力药水", tex = "texMana", count = 5 },
-                [1 * 100 + 1] = { name = "占位", tex = "t1", count = 1 },
-                [1 * 100 + 2] = { name = "占位", tex = "t2", count = 1 },
-                [2 * 100 + 1] = { name = "占位", tex = "t3", count = 1 },
-                [2 * 100 + 2] = { name = "占位", tex = "t4", count = 1 },
-                [3 * 100 + 1] = { name = "占位", tex = "t5", count = 1 },
-                [3 * 100 + 2] = { name = "占位", tex = "t6", count = 1 },
-                [4 * 100 + 1] = { name = "占位", tex = "t7", count = 1 },
-                [4 * 100 + 2] = { name = "占位", tex = "t8", count = 1 } }
-  TEST.time = 9300
-  TEST.usedItem, TEST.clearCursorCalls = nil, 0
-  local ok189d = EVAL_CH_USE("法力药水")
-  eq(ok189d == false, true, "④★★背包满、拆出来放不下 → **如实失败**（返回 false）")
-  eq(TEST.clearCursorCalls >= 1, true, "④★★★已负责地把光标上的那 1 个放回（ClearCursor 调过）")
-  eq(TEST.usedItem == nil, true, "④★★**没用**（放不下就不动，绝不静默消耗）")
-  -- ★★报错原因必须**准**：客户端放不下时**不报错**（物品只留在光标上），
-  --   所以得靠「查光标」才发现失败。少了这道检查会掉进「放下后找不到」那条路 ——
-  --   结果同样是拒绝，但**说的是另一回事**（该说「放不下」却说「找不到」）。
-  local lg191 = table.concat((type(EVAL_HELP_CONFIG.log) == "table") and EVAL_HELP_CONFIG.log or {}, " | ")
-  eq(string.find(lg191, "放不下", 1, true) ~= nil, true,
-     "④★★★报错原因准确（说「放不下」，不是含糊的「找不到」）：" .. string.sub(lg191, -140))
+  eq(EVAL_CH_USE("面包"), true, "④前置：使用成功")
+  local st192b = EVAL_TEST_CH_STATE()
+  eq(st192b.refreshAt == 5100.5, true,
+     "④★★★用后登记 0.5s 延迟刷新（实测 refreshAt=" .. tostring(st192b.refreshAt) .. "）")
+  eq(st192b.refreshTickOn == true, true, "④★延迟刷新帧已建（用完自己摘）")
+  -- ⑤ 未到 0.5s 不刷
+  TEST.time = 5100.3
+  eq(EVAL_CH_REFRESH_TICK_STEP(), false, "⑤★★0.3s 时**不刷**（还没到 0.5s，实测返回 false）")
+  eq(EVAL_TEST_CH_STATE().refreshAt == 5100.5, true, "⑤★refreshAt 仍挂着")
+  -- ⑥ 到点刷一次 + 摘掉 OnUpdate
+  --   ★模拟客户端数量在片刻后才更新（这正是要延迟的原因）：把面包改成 4 个（用掉 1 个后的真实状态）
+  if TEST.bags then TEST.bags[0 * 100 + 1].count = 4 end
+  TEST.time = 5100.6
+  eq(EVAL_CH_REFRESH_TICK_STEP(), true, "⑥★★0.6s 到点 → **刷了一次**（返回 true）")
+  eq(EVAL_TEST_CH_STATE().refreshAt == nil, true, "⑥★刷完清空 refreshAt")
+  eq(EVAL_TEST_CH_STATE().refreshTickOn == false, true, "⑥★★刷完**摘掉 OnUpdate**（不在后台空转）")
+  -- ⑦ 数量确实跟着更新（刷新后横排读到的是**新数量** 4）
+  local num192 = nil
+  for i = 1, 2 do
+    local c = EVAL_TEST_CH_STRIP_INFO(i)
+    if c and c.name == "面包" then num192 = c.num end
+  end
+  eq(num192 == "4", true, "⑦★★★刷新后横排显示**新数量 4**（不再和实际物品数量对不上，实测 " .. tostring(num192) .. "）")
   -- 收尾
   EVAL_HELP_CONFIG.tb.consumable = false
   EVAL_HELP_CONFIG.tb.chUse = nil
-  TEST.bags, TEST.splitCalls, TEST.putCalls, TEST.usedItem = nil, nil, nil, nil
-  TEST.clearCursorCalls, TEST.cursorItem = nil, nil
-  print("  拆分使用：count>1 拆 1 个再对那 1 个用 · 原组只少 1 · count==1 直接用 · 无接口如实拒绝 · 放不下放回")
+  TEST.bags, TEST.usedItem = nil, nil
+  print("  消耗品图标优化：主图标=特殊图标 · 横排=全部选中项 · 用后 0.5s 延迟刷新数量 · 刷完摘 OnUpdate")
 end
 
+-- ===== 组 191（1.74.13）：任务通知频道**多选**（用户：「工具箱->任务通知->下拉需要支持多选，
+--   多选的情况下优先级 队伍>说>自己，每次任务进度仅播报一次」）=====
+-- 覆盖：①旧字符串配置迁移为集合表（只搬一次；off→nil，只留一份真值）
+--   ②择路优先级：队伍>说>仅自己，且只在**已勾选**集合内顺延；只勾队伍却不在队 → 如实跳过
+--   ③行值按钮摘要 = 多选集合拼接；④真实行按钮开出**多选**下拉、关闭互斥、EVAL_DD_SYNC 当场重画
+--   ⑤端到端：多选时每条进度**只播报一次**（去优先级最高的那一个频道）
+do
+  local savedPartyN191 = TEST.partyN
+  -- ① 迁移（走真实 tbCfg：EVAL_TEST_TB_CFG）
+  EVAL_HELP_CONFIG.tb = { qchan = "party" }
+  local tb191 = EVAL_TEST_TB_CFG()
+  eq(type(tb191.qchan) == "table" and tb191.qchan.party == true, true, "①★★旧字符串 party 迁移成集合表")
+  EVAL_HELP_CONFIG.tb = { qchan = "off" }
+  eq(EVAL_TEST_TB_CFG().qchan, nil, "①★off 迁移成 nil（=关闭，只留一份真值）")
+  EVAL_HELP_CONFIG.tb = { qchan = "self" }
+  eq(EVAL_TEST_TB_CFG().qchan.self, true, "①★self 迁移成 { self = true }")
+
+  -- ② 优先级择路（EVAL_TB_QCHAN_PICK 唯一来源）
+  EVAL_HELP_CONFIG.tb = { qchan = { self = true, say = true, party = true } }
+  TEST.partyN = 2
+  eq(EVAL_TB_QCHAN_PICK(), "party", "②★★★三选 + 在队 → 队伍（优先级最高）")
+  TEST.partyN = 0
+  eq(EVAL_TB_QCHAN_PICK(), "say", "②★★★三选但**不在队** → 顺延「说」（只在已勾选集合内）")
+  EVAL_HELP_CONFIG.tb.qchan = { self = true, say = true }
+  eq(EVAL_TB_QCHAN_PICK(), "say", "②★勾 自己+说 → 说（说 > 自己）")
+  EVAL_HELP_CONFIG.tb.qchan = { self = true }
+  eq(EVAL_TB_QCHAN_PICK(), "self", "②★只勾自己 → 仅自己")
+  EVAL_HELP_CONFIG.tb.qchan = { party = true }
+  TEST.partyN = 0
+  eq(EVAL_TB_QCHAN_PICK(), nil, "②★★只勾队伍却不在队 → 如实跳过（绝不降级到没勾的频道）")
+  TEST.partyN = 2
+  eq(EVAL_TB_QCHAN_PICK(), "party", "②★只勾队伍 + 在队 → 队伍")
+  EVAL_HELP_CONFIG.tb.qchan = nil
+  eq(EVAL_TB_QCHAN_PICK(), nil, "②★空集合（关闭）→ nil")
+
+  -- ③ 行值按钮摘要 = 集合拼接
+  EVAL_HELP_CONFIG.tb = { qchan = { say = true, party = true } }
+  local sum191 = EVAL_TB_QCHAN_SUMMARY()
+  eq(string.find(sum191, "说", 1, true) ~= nil and string.find(sum191, "队伍", 1, true) ~= nil, true,
+     "③★多选摘要同时含「说」「队伍」：" .. sum191)
+  EVAL_HELP_CONFIG.tb.qchan = nil
+  eq(EVAL_TB_QCHAN_SUMMARY(), "关闭", "③★空集合摘要 = 关闭")
+
+  -- ④ 真实行按钮 → 多选下拉（面板不关、逐项回调、关闭互斥、SYNC 当场重画标记）
+  EVAL_HELP_CONFIG.tb = { qchan = { self = true } }
+  EVAL_HELP_CFG_SETTAB(3)
+  EVAL_TB_REFRESH()
+  local chvBtn191 = EVAL_TEST_TB_CHV_FOR("qchan")
+  eq(chvBtn191 ~= nil, true, "④★找得到「任务通知频道」行的值按钮（真实控件）")
+  local chvFn191 = chvBtn191 and chvBtn191:GetScript("OnClick")
+  eq(type(chvFn191), "function", "④★值按钮挂了真实 OnClick")
+  EVAL_DD_HIDE()
+  chvFn191()
+  eq(EVAL_DD_TEST_MULTI(), true, "④★★★开出的是**多选**下拉（multi=true）")
+  eq(EVAL_DD_TEST_SELAT(2), true, "④★初始选中 = 仅自己（与配置一致）")
+  eq(EVAL_DD_TEST_SELAT(1) == nil, true, "④★有频道勾选时「关闭」不带勾（互斥）")
+  EVAL_DD_TEST_CLICK(4) -- 勾「队伍」：面板不关、集合变成 { self, party }
+  eq(EVAL_HELP_CONFIG.tb.qchan.party == true and EVAL_HELP_CONFIG.tb.qchan.self == true, true,
+     "④★★多选追加「队伍」：原「仅自己」保留（不是单选替换）")
+  eq(EVAL_DD_TEST_SHOWN(), true, "④★多选面板点完**不收起**（可继续勾）")
+  local row1txt191 = (EVAL_DD_TEST_ROW(1).text:GetText()) or ""
+  eq(string.find(row1txt191, "□", 1, true) ~= nil, true, "④★★SYNC 当场重画：勾频道后「关闭」变空框")
+  EVAL_DD_TEST_CLICK(1) -- 勾「关闭」= 清空集合（互斥）
+  eq(EVAL_TB_QCHAN_ANY(), false, "④★★勾「关闭」→ 集合清空（互斥生效）")
+  local row1btxt191 = (EVAL_DD_TEST_ROW(1).text:GetText()) or ""
+  eq(string.find(row1btxt191, "■", 1, true) ~= nil, true, "④★集合清空后「关闭」带勾（SYNC 重画）")
+  local row4txt191 = (EVAL_DD_TEST_ROW(4).text:GetText()) or ""
+  eq(string.find(row4txt191, "□", 1, true) ~= nil, true, "④★集合清空后「队伍」掉勾")
+  EVAL_DD_HIDE()
+
+  -- ⑤ 端到端：多选时每条进度只播报一次，且去优先级最高的频道
+  EVAL_TB_TEST_RESET_TIMERS()
+  TEST.runScripts = nil
+  TEST.partyN = 2
+  EVAL_HELP_CONFIG.tb = { qchan = { say = true, party = true } }
+  TEST.questLog = { { title = "多选验证", objs = { { txt = "獠牙: 0/3", d = 0, m = 3 } } } }
+  EVAL_TB_TEST_SCAN_DIFF() -- 建档（不刷屏）
+  TEST.questLog[1].objs[1].d = 1 TEST.questLog[1].objs[1].txt = "獠牙: 1/3"
+  EVAL_TB_TEST_SCAN_DIFF()
+  tbPump(2, 20000)
+  eq(TEST.runScripts and table.getn(TEST.runScripts), 1, "⑤★★★多选也只播报**一次**（不是每个频道一条）")
+  eq(TEST.runScripts[1]:find("PARTY") ~= nil, true, "⑤★★★在队 → 去了优先级最高的「队伍」")
+  TEST.partyN = 0 -- 不在队 → 顺延到「说」（已勾选集合内）
+  TEST.runScripts = nil
+  TEST.questLog[1].objs[1].d = 2 TEST.questLog[1].objs[1].txt = "獠牙: 2/3"
+  EVAL_TB_TEST_SCAN_DIFF()
+  tbPump(2, 20010)
+  eq(TEST.runScripts and table.getn(TEST.runScripts), 1, "⑤★★不在队也**只播一次**")
+  eq(TEST.runScripts[1]:find("SAY") ~= nil, true, "⑤★★不在队 → 顺延「说」（SAY 频道）")
+  EVAL_HELP_CONFIG.tb.qchan = { party = true } -- 只勾队伍却不在队 → 本轮跳过
+  TEST.runScripts = nil
+  TEST.questLog[1].objs[1].d = 3 TEST.questLog[1].objs[1].txt = "獠牙: 3/3"
+  EVAL_TB_TEST_SCAN_DIFF()
+  tbPump(2, 20020)
+  eq(TEST.runScripts, nil, "⑤★★只勾队伍却不在队 → 跳过（不吃客户端报错，也不降级乱播）")
+  -- 收尾
+  TEST.partyN = savedPartyN191
+  TEST.questLog = nil EVAL_HELP_CONFIG.tb = nil TEST.runScripts = nil
+  print("  任务通知频道多选：迁移/优先级(队伍>说>自己)/关闭互斥/每次进度仅播一次")
+end
 print("ALL TESTS PASS")
 
   local sd142 = EVAL_HELP_CONFIG.shareSealDemo

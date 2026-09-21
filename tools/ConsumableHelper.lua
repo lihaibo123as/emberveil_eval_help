@@ -203,95 +203,14 @@ function EVAL_CH_USE(name)
     CH.lastMsg = "无 UseContainerItem"
     return false, L("CH_NO_UCI")
   end
-  -- ★1.74.11 拆分使用（用户实测确认：「使用了一组.我这确认.一组没了.函数是对的.可以实施才分使用的方案」）
-  --   UseContainerItem 对本客户端的这类物品会**一次用一整组** → 用之前先**拆 1 个**，再对那 1 个用。
-  --   步骤：① SplitContainerItem(bag,slot,1) 拆 1 个到光标
-  --         ② PutItemInBag(别的背包) 放下（★放**别的背包**：放回原包会和原组**合并**，等于白拆）
-  --         ③ 在目标背包里找 count == 1 的同名物品 → 对**它**用。
-  --   ★关键简化：**用哪个 count==1 的堆叠都行**（它们是同一个物品），
-  --     所以不需要「记下用前的槽位、用后找新增的」那套前后对比。
-  --   ★拆不动就**如实拒绝**，绝不退回「用整组」——那正是用户报的这个 bug。
-  local useBag, useSlot = bag, slot
-  local curCnt = nil
-  if type(GetContainerItemInfo) == "function" then
-    local okc, _t, c = pcall(GetContainerItemInfo, bag, slot)
-    if okc then curCnt = tonumber(c) end
-  end
-  if curCnt and curCnt > 1 then
-    local targetBag = (bag ~= 1) and 1 or 2 -- 挑一个**别的**背包（放回原包会合并）
-    if type(SplitContainerItem) ~= "function" then
-      chSay(L("CH_NO_SPLIT"))
-      CH.fail = CH.fail + 1
-      CH.lastMsg = "无 SplitContainerItem（不敢直接用，会一次用整组）"
-      return false, L("CH_NO_SPLIT")
-    end
-    if type(PutItemInBag) ~= "function" and type(PutItemInBackpack) ~= "function" then
-      chSay(L("CH_NO_SPLIT"))
-      CH.fail = CH.fail + 1
-      CH.lastMsg = "无 PutItemInBag/PutItemInBackpack（拆出来放不下）"
-      return false, L("CH_NO_SPLIT")
-    end
-    local okSplit = pcall(SplitContainerItem, bag, slot, 1)
-    if okSplit then
-      -- 放下：优先别的背包（不会和原组合并）
-      local okPut = false
-      if type(PutItemInBag) == "function" then okPut = pcall(PutItemInBag, targetBag) end
-      if not okPut and type(PutItemInBackpack) == "function" then
-        okPut = pcall(PutItemInBackpack)
-        targetBag = 0
-      end
-      -- ★★放不下时客户端**不报错**（物品只是留在光标上）→ 必须**查光标**才知道真放下了没有。
-      --   不然会掉进「放下后找不到」那条路，报错原因就不准（该说「放不下」却说「找不到」）。
-      if okPut and type(CursorHasItem) == "function" then
-        local okc3, hasIt = pcall(CursorHasItem)
-        if okc3 and hasIt then okPut = false end -- 光标上还有东西 = 没放下
-      end
-      if okPut then
-        -- 在目标背包里找那 1 个（count == 1 的同名物品）
-        local found = nil
-        if type(GetContainerNumSlots) == "function" and type(GetContainerItemLink) == "function" then
-          local okn, n2 = pcall(GetContainerNumSlots, targetBag)
-          if okn and tonumber(n2) then
-            for s2 = 1, tonumber(n2) do
-              local okl, link = pcall(GetContainerItemLink, targetBag, s2)
-              if okl and link then
-                local nm2 = string.match(link, "%[(.-)%]")
-                if nm2 == name then
-                  local okc2, _t2, c2 = pcall(GetContainerItemInfo, targetBag, s2)
-                  if okc2 and tonumber(c2) == 1 then found = s2 break end
-                end
-              end
-            end
-          end
-        end
-        if found then
-          useBag, useSlot = targetBag, found
-          chLog(string.format("拆分使用：%s 从 %d 个拆出 1 个 → @%d,%d", name, curCnt, useBag, useSlot))
-        else
-          if type(ClearCursor) == "function" then pcall(ClearCursor) end
-          CH.fail = CH.fail + 1
-          CH.lastMsg = "拆出的 1 个放下后在背包里找不到"
-          chSay(string.format(L("CH_SPLIT_FAIL"), name))
-          chLog("拆分使用失败：拆出的 1 个放下后找不到（已 ClearCursor 放回）")
-          return false, "拆分后找不到"
-        end
-      else
-        if type(ClearCursor) == "function" then pcall(ClearCursor) end
-        CH.fail = CH.fail + 1
-        CH.lastMsg = "背包没空格，拆出的 1 个放不下"
-        chSay(string.format(L("CH_SPLIT_FAIL"), name))
-        chLog("拆分使用失败：背包没空格，拆出的 1 个放不下（已 ClearCursor 放回）")
-        return false, "背包没空格"
-      end
-    else
-      chLog("拆分使用：SplitContainerItem(1) pcall 失败 → 如实拒绝（不退回「用整组」）")
-      CH.fail = CH.fail + 1
-      CH.lastMsg = "SplitContainerItem 调用失败"
-      chSay(string.format(L("CH_SPLIT_FAIL"), name))
-      return false, "拆分调用失败"
-    end
-  end
-  local ok, err = pcall(UseContainerItem, useBag, useSlot)
+  -- ★★★1.74.12 推翻 1.74.11 的拆分逻辑（用户：「推翻之前的使用物品的逻辑.先分析技能编辑 物品使用的
+  --   逻辑.那边工作是正常的」）。现在与**技能编辑的物品使用路径完全同构**（Engine.lua wuse 的 itemOf 分支）：
+  --     ① 背包定位（EVAL_CH_FIND，与 wFindBagItem 同一口径）
+  --     ② pcall(UseContainerItem, bag, slot) —— **单次调用，不做任何拆分/光标操作**
+  --   ★技能编辑那条路（rule.skill = "物品:名称"）用户实测**正常**，所以这里先与它对齐；
+  --     若仍出现「一次用一整组」，就说明那不是代码路径差异，而是该物品/该 API 在客户端的固有行为
+  --     （届时再用探针取证定案，见 /eh go 消耗品探针）。
+  local ok, err = pcall(UseContainerItem, bag, slot)
   CH.probeUci = tostring(ok) .. (ok and "" or (":" .. tostring(err)))
   CH.lastUse = now
   if not ok then
@@ -301,6 +220,11 @@ function EVAL_CH_USE(name)
     return false, tostring(err)
   end
   CH.uses = CH.uses + 1
+  -- ★★1.74.12 用后**延迟 0.5s** 再刷新数量（用户：「然后再使用物品之后延迟0.5s 进行更新物品数量的操作
+  --   看下能否正确更新图标物品数量」）：客户端的 GetContainerItemInfo 在 UseContainerItem 之后
+  --   **不会立刻更新**（本帧读到的还是旧数量）→ 立刻刷新等于没刷，数量就会「对不上」。
+  CH.refreshAt = now + 0.5
+  EVAL_CH_REFRESH_TICK_ENSURE()
   CH.lastMsg = string.format("用 %s @%d,%d", name, bag, slot)
   chSay(string.format(L("CH_USED"), name))
   chLog(string.format("已使用 %s @%d,%d（UseContainerItem pcall=%s）", name, bag, slot, tostring(ok)))
@@ -440,6 +364,24 @@ function EVAL_CH_CD_REFRESH()
   return true
 end
 
+-- ★1.74.12 延迟刷新 ticker（用后 0.5s 刷一次数量；刷完自己摘掉，不在后台空转）
+-- ★步进体抽成独立函数（项目范式：EVAL_TB_TICK / EVAL_HH_STEP）——
+--   判据可以**直接驱动它**（走真实刷新逻辑，不是复刻一遍），OnUpdate 只是薄壳。
+function EVAL_CH_REFRESH_TICK_STEP()
+  if not CH.refreshAt then return false end
+  if chNow() < CH.refreshAt then return false end
+  CH.refreshAt = nil
+  EVAL_CH_STRIP_REFRESH() -- 重新解析包格 → 数量/灰色状态都跟着更新
+  if CH.refreshTick then pcall(CH.refreshTick.SetScript, CH.refreshTick, "OnUpdate", nil) CH.refreshTick = nil end
+  return true
+end
+function EVAL_CH_REFRESH_TICK_ENSURE()
+  if CH.refreshTick then return end
+  local f = CreateFrame("Frame", nil, UIParent)
+  f:SetScript("OnUpdate", function() EVAL_CH_REFRESH_TICK_STEP() end)
+  CH.refreshTick = f
+end
+
 -- ===== 横排小图标（用户选择：选中项在主图标旁横排，各自点用） =====
 function EVAL_CH_STRIP_REFRESH()
   if not CH.built then return false end
@@ -450,7 +392,7 @@ function EVAL_CH_STRIP_REFRESH()
   --   【根因】主图标**本身就显示第 1 个选中项的图标**，而横排又把第 1 个画了一遍 ⇒ 选 1 个看着像 2 个。
   --   【修法】横排只画**第 2 个往后**（strip 第 i 枚 = 选中列表第 i+1 项）：
   --     选 1 个 → 屏幕上只有主图标 1 枚；选 2 个才多出 1 枚（正是用户要的「选中第二个时才增加」）。
-  local stripCount = n - 1
+  local stripCount = n -- ★1.74.12 = 全部选中项（主图标是特殊图标，不再代表第 1 项）
   if stripCount < 0 then stripCount = 0 end
   -- 横排方向：右侧放不下就整条翻到主图标左侧（夹取，绝不跑出屏幕）
   local sw = chScreen()
@@ -463,7 +405,8 @@ function EVAL_CH_STRIP_REFRESH()
   for i = 1, CH_STRIP_MAX do
     local s = CH.strip[i]
     if s then
-      local name = list[i + 1] -- ★横排第 i 枚 = 选中列表第 i+1 项（第 1 项已在主图标上）
+      -- ★1.74.12 主图标改成**特殊图标**后，横排要画**全部**选中项（不再是 i+1 跳过第 1 项）
+      local name = list[i]
       if name then
         local bag, slot, tex, cnt = EVAL_CH_FIND(name)
         s.name = name
@@ -499,25 +442,19 @@ function EVAL_CH_STRIP_REFRESH()
     end
   end
   CH.stripN = stripCount
-  -- 主图标贴图 = 第一个选中项的图标（没选中 → 保底文字）
-  local first = list[1]
-  local ftex, fFound = nil, false
-  if first then
-    local _, _, t = EVAL_CH_FIND(first)
-    fFound = (t ~= nil)
-    ftex = t or chKnownTex(first) -- ★找不到（用完/卖掉）→ 记住的贴图 + 灰色
+  -- ★★1.74.12 主图标 = **特殊图标**（用户：「悬浮图标则个图标是特殊图标.在选择物品>1的情况下才往右延伸
+  --   排列物品」）：主图标不再是「第 1 个物品的图标」，而是本插件自带的**物品使用**类别图标；
+  --   选中项一律横排在它右侧（N=1 时紧贴 1 枚，N>1 才往右延伸成排）。
+  --   ★图标是**自包含素材**（media/icons/chests，与「物品使用」类别同一张，已过 UI ICON CHECK 白名单）。
+  if not CH.specialTex then
+    CH.specialTex = "Interface\\AddOns\\EvalHelp\\media\\icons\\chests"
   end
-  if ftex then
-    local v = fFound and 1 or CH_GRAY
-    pcall(CH.tex.SetTexture, CH.tex, ftex)
-    pcall(CH.tex.Show, CH.tex)
-    pcall(CH.tex.SetVertexColor, CH.tex, v, v, v)
-    pcall(CH.label.Hide, CH.label)
-  else
-    pcall(CH.tex.Hide, CH.tex)
-    pcall(CH.label.SetText, CH.label, CH_TEXT)
-    pcall(CH.label.Show, CH.label)
-  end
+  pcall(CH.tex.SetTexture, CH.tex, CH.specialTex)
+  pcall(CH.tex.Show, CH.tex)
+  -- 有选中项时亮起（1），一个都没选时压暗（一眼看出「还没选东西」）
+  local v = (n > 0) and 1 or CH_GRAY
+  pcall(CH.tex.SetVertexColor, CH.tex, v, v, v)
+  pcall(CH.label.Hide, CH.label)
   return true
 end
 -- ===== 建 UI（懒建：开关打开时才建主图标与横排池） =====
@@ -814,16 +751,29 @@ function EVAL_CH_CMD(msg)
     chSay(string.format("=== 消耗品探针：%s @%d,%d 数量 %d（⚠️ 会真的用掉 1 个来取证）===", found.name, bag, slot, c0))
     -- ① UseContainerItem 一次用几个？
     local okUse = pcall(UseContainerItem, bag, slot)
-    local c1 = c0
+    -- ★★测准（上一版探针有缺陷）：整组用完后那个格子**变空**，GetContainerItemInfo 返回 nil，
+    --   旧写法把 c1 保持成 c0 → 把「整组用光」误报成「用了 0 个」（两者都是同一个显示）。
+    --   现在**先看格子还在不在**：空 = 整组用光（used = c0）；还在 = 用差值。
+    local c1, gone = nil, false
     if type(GetContainerItemInfo) == "function" then
       local okc, _t, c = pcall(GetContainerItemInfo, bag, slot)
-      if okc and tonumber(c) then c1 = tonumber(c) end
+      if okc and tonumber(c) then c1 = tonumber(c)
+      elseif okc then gone = true end -- 有返回但数量读不出 / 物品没了
     end
-    local used = c0 - c1
+    if c1 == nil then
+      -- 再看 link：link 也没了 = 这个格子空了
+      local okl2, lk2 = pcall(GetContainerItemLink, bag, slot)
+      if okl2 and not lk2 then gone = true end
+    end
+    local used
+    if gone then used = c0 -- 格子空了 = **整组用光**
+    else used = c0 - (c1 or c0) end
     CH.probeUseN = used -- ★实测结果记进状态（判据能读；也是「一次用几个」的唯一权威来源）
-    chSay(string.format("UseContainerItem pcall=%s → 用后数量 %d → **一次用了 %d 个**%s",
-      tostring(okUse), c1, used,
-      (used == 1) and "（正常，和游戏原生一致）" or "（**不是 1 个** → 本客户端把 API 改成「用整组」）"))
+    chSay(string.format("UseContainerItem pcall=%s → 用后：%s → **一次用了 %d 个**%s",
+      tostring(okUse), gone and "格子已空" or ("数量 " .. tostring(c1)), used,
+      (used == 1) and "（正常：一次用一个，和游戏原生一致）"
+        or ((used == 0) and "（**没用**：这次调用什么都没发生）"
+        or ("（**一次用了 " .. used .. " 个** → 不是 1 个）"))))
     -- ② SplitContainerItem 能不能拆 1 个？（如果还有剩）
     if c1 > 1 then
       if type(SplitContainerItem) == "function" then
@@ -907,7 +857,9 @@ function EVAL_TEST_CH_STATE()
            -- ★1.74.11 遮盖读值口（判据要钉「CD 时遮盖显示 / CD 结束遮盖收起」）
            cdMaskShown = (CH.cdMask and CH.cdMask.IsShown and CH.cdMask:IsShown() == true) or false,
            -- ★1.74.11 探针实测结果（「一次用几个」的唯一权威来源）
-           probeUseN = CH.probeUseN }
+           probeUseN = CH.probeUseN,
+           -- ★1.74.12 延迟刷新读值口（用后 0.5s 刷一次数量）
+           refreshAt = CH.refreshAt, refreshTickOn = (CH.refreshTick ~= nil) }
 end
 
 function EVAL_TEST_CH_CLICK_MAIN(button)
@@ -947,8 +899,15 @@ function EVAL_TEST_CH_STRIP_INFO(i)
     end
     if type(s.tex.IsShown) == "function" then texShown = s.tex:IsShown() and true or false end
   end
+  -- ★1.74.13 补「数量文字」读值口：数量刷新（用后 0.5s）唯一的可断言证据就是它，
+  --   测试够不着 local 控件 ⇒ 必须从读值口给（本项目：测试够不着生产 local 就加钩子，别复刻逻辑）。
+  local numTxt = nil
+  if s.num and type(s.num.GetText) == "function" then
+    local okn, nv = pcall(s.num.GetText, s.num)
+    if okn then numTxt = nv end
+  end
   return { shown = shown, name = s.name, found = s.found, left = l, top = t, w = w, h = h, tex = texPath,
-           gray = gr, grayG = gg, grayB = gb, texShown = texShown }
+           gray = gr, grayG = gg, grayB = gb, texShown = texShown, num = numTxt }
 end
 
 function EVAL_TEST_CH_GEOM()
@@ -967,6 +926,11 @@ end
 
 function EVAL_CH_TEST_RESET_TIMERS()
   CH.lastUse = -999
+  -- ★1.74.13 连同 **CD 状态**一起复位：cdUntil 与 lastUse 都是**绝对时刻**口径，
+  --   而各用例的 TEST.time 各自独立（相邻用例常出现「时间倒流」）→ 上一组留下的 CD
+  --   会把下一组的第一次使用当「CD 未转好」挡掉（本轮实测 got=false）。
+  --   ★判据同限频：凡模块级可变状态，用例开头就该有办法复位。
+  CH.cdUntil, CH.cdTotal = 0, 0
 end
 
 

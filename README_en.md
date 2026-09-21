@@ -11,7 +11,7 @@
 | 🗡️ **Universal one-key macro** | macro `/run EVAL_GO()` | Five skill categories: character actions (Attack / Auto Shot / Shoot / Cancel Casting / Stance swap) / skills / pet commands / target selection / item use; unlimited skills per profile (scrollable list); up to ≤12 profiles, each bindable to its own key for direct triggering |
 | ⚙️ **Config window** | minimap EH icon · `/eh cfg` | Fully visual editing of profiles / skills / conditions, plus text import/export for sharing |
 | 📤 **Profile sharing** | `[Share]` on the config "one-click macro" page / chat link | chunked send to guild/party/say (rate-limited), the receiver clicks [Import] to commit; **tier cover** (`[tier manual · name]` clickable link + confirm popup) · **score tiers** (25+ Divine · five colours) · **title gacha** (5×15 · custom title) · the "Genesis" easter egg · the receiver lottery-replies with a role-play line (title tier × manual tier) |
-| 🧩 **Case templates** | config window, one-key macro tab, bottom `[Case Templates]` | **11 groups / 29 entries** ready-made profiles (grouped by class) → **grouped two columns + wrapping within a group**; one click to import, hover to see what's inside |
+| 🧩 **Case templates** | config window, one-key macro tab, bottom `[Case Templates]` | **12 groups / 34 entries** ready-made profiles (grouped by class) → **grouped two columns + wrapping within a group**; one click to import, hover to see what's inside |
 | 🧰 **Toolbox** | config window, tab 3 | Merchant assistant (auto-repair / auto-sell grey / buy and discard by name) + party & social (auto-confirm role check / hide guild login notices / **hide "joined·left channel" notices**) + auto quest accept & turn-in (hold Shift to pause temporarily) + quest notification channel |
 | 🗺️ **Data search** | config window, tab 4 | Quest / item / mob·NPC / object search with instant results and unlimited drill-down; a **world-map annotation layer** (16 categories redrawn live as the map changes) and one-click pinning from any row with coordinates (requires UnrealQuest) |
 | 🖼️ **Icon library** | config window, tab 5 | The client's built-in macro icons grouped by prefix, hover shows the path, searchable and pageable; plus a "used by this addon" group (listing the icons this addon uses) |
@@ -21,7 +21,7 @@
 
 > 📌 Continuously improving — testing and feedback welcome!　🐞 [Bug reports / suggestions](https://gitee.com/xeval/emberveil_eval_help.git) (Issues)　🤖 Developed with DeepSeek Harness AI assistance (see "Contributing" at the bottom)
 
-## 🏁 Milestones (1.52.0 → 1.74.12)
+## 🏁 Milestones (1.52.0 → 1.74.14)
 
 - **🎬 Sharing experience loop** (1.74.1 → 1.74.6): 40 scene lines (accept/ignore × with/without target × 3 languages; title coloured by tier, and the measured rule "a colour code must carry a link") · profile **author/source** in 4 kinds + profile-list tooltip (tier · source · skill count) · all **8 "no popup" branches logged** · the easter-egg reaction is **no longer wired** (kept) · fixed the "self-echo" misjudgement (someone else's share was swallowed when you already had the same profile).
 - **🧰 Two toolbox helpers + dispel types** (1.74.5 → 1.74.6): **Hunter → auto-feed** and the **consumable helper** (one 8×N icon grid · multi-select · greyed out when used up; unverified features carry a **yellow "to be tested" mark**) · **self/target debuffs now support "dispel type"** — same semantics as party/candidate debuffs (empty name + type = "any debuff of that type").
@@ -39,6 +39,8 @@
 
 | Version | Theme | One-line highlight |
 | :-- | :-- | :-- |
+| **1.74.14** | 🧩 New **General** template group (12 groups / 34 entries) + ✂️ split-use reverted + 🎯 consumable icon & counts | ①General templates: 5 **class-independent** building blocks (eat/drink out of combat, emergency potion, dismount, cancel BoP, stop-attack) — first templates to use `物品:name` and `取消自身buff:name`; ②★**split-use from 1.74.12 reverted**: aligned with the skill-editor path (user-verified working) — backpack lookup + a single `UseContainerItem`, no splitting/cursor tricks; ③main icon is now a **special icon** and all selected items line up to the right (extends only when >1); ④**0.5s delayed count refresh** after use (the client's count is not updated immediately — fixes "counts don't match") |
+| **1.74.13** | 🔔 Quest notify channels are now **multi-select** (party > say > self · each progress announced once) | The toolbox → quest notify dropdown is multi-select: off/self/say/party; with several checked only the **highest-priority one** is used (party > say > self) and every progress is announced **exactly once**; while not in a party it falls back inside the checked set (say → self), and party-only with no party is **skipped honestly**; the old single-value config migrates to a set (off = cleared) |
 | **1.74.12** | ✂️ Split-use for consumables (fixes "one click eats the whole stack") + 🔍 probe command | ①This client's `UseContainerItem` consumes the **entire stack** (user-confirmed) → now we `SplitContainerItem` **one** off, `PutItemInBag` (a different bag) it, and use that single item; ★if splitting fails we **refuse honestly** instead of falling back to whole-stack use; ②new probe `/eh go 消耗品探针 [name]` (measures items-per-use, verifies counts, probes split APIs) |
 | **1.74.11** | ⏱️ Feeding interval raised to 2s (above the 1.5s GCD) + 🧹 bag-candidate type filter | ①Feeding rate 1s → **2s** (leaves headroom over the 1.5s global cooldown, so the next feed never fires before the GCD is ready); queue entries are **consumed on dequeue** (no re-execution); ②both helpers' candidates now **drop non-edible items**: weapons / armor / quest items / poor quality (ore, herbs, junk); items whose type can't be read are **kept** (unknown ≠ inedible) |
 | **1.74.10** | ✨ Cancel Self Buff: multi-select + 🐛 fix overlap + ✏️ duration wording | ①The cancel-buff cell becomes a **multi-select panel**: live self-buff scan + recorded auras + custom input, default "Any" = cancel all (stored as `取消自身buff:名1,名2`); ②the self-debuff row no longer overlaps "Any negative" with "Remaining time" (type cell moved to a free slot); ③"剩余" renamed to "时长" throughout |
@@ -47,19 +49,17 @@
 | **1.74.7** | 🐎 Riding · One-click dismount | New toolbox group: on-screen icon, left-click dismount (mount = cancelable aura via CancelPlayerBuff), right-click menu, optional auto-dismount |
 | **1.74.6** | ☠️ **Self/target debuffs support "dispel type"** | Same rules as party/candidate debuffs: parse `name(type)` · filter by type when evaluating (**name matched but type differs = NOT a hit**) · **empty name + type = "any debuff of that type"** · one shared formatter (export tokens / localized display); also restores the type suffix `candDebuff` used to drop |
 | **1.74.5** | 🎬 Share "scene lines" + 🧰 two toolbox helpers (auto-feed / consumables) | 40 scene lines (accept/ignore × with/without target × 3 languages; title coloured by tier, exactly one colour code) · profile author/source in 4 kinds + profile-list tooltip · all 8 "no popup" branches are logged now · the easter-egg reaction is **no longer wired** (kept) · hunter auto-feed & consumable helper share one 8×N icon grid (unverified features are marked "to be tested") |
-| **1.74.4** | 🐞 Fix "invite shown for someone already in your party": require the target NOT be in your group | 1.74.1 only checked YOUR state → leader + already-in-party showed both "Invite" and "Kick" (contradiction); now: target not in your group AND (not in a party or you're the leader) |
-| **1.74.3** | 📥 Fix "party-channel share never pops up" (user report) | In 1.12, party messages from the **leader** fire separate events `CHAT_MSG_PARTY_LEADER`/`CHAT_MSG_RAID_LEADER`; the receiver registered only the plain ones → a leader's share never arrived. Both leader variants now registered |
 
 > 📜 Detailed per-version notes live in **[CHANGELOG.md](CHANGELOG.md)**; earlier history is in the git commit log.
 
-## 🧩 Case Templates (11 groups, 29 ready-made profiles)
+## 🧩 Case Templates (12 groups, 34 ready-made profiles)
 
 > No need to build from scratch. Config window → "One-key macro" tab → **`[Case Templates]`** at the bottom → pick one by class, **click to import**.
 
 | Item | Description |
 | :-- | :-- |
 | **Entry** | Config window, "One-key macro" tab, bottom `[Case Templates]` button |
-| **Contents** | **11 groups / 29 profiles**: 战士 / 法师 / 通用法系 / 盗贼 / 猎人 / 骑士 / 牧师 / 德鲁伊 / 术士 / 萨满 / 队伍·团队 (group headers keep the addon's own names) |
+| **Contents** | **12 groups / 34 profiles**: 战士 / 法师 / 通用法系 / 通用 / 盗贼 / 猎人 / 骑士 / 牧师 / 德鲁伊 / 术士 / 萨满 / 队伍·团队 (group headers keep the addon's own names) |
 | **Layout** | Two columns by group, wrapping inside a group; **hover** a row to see its skills and conditions |
 | **Import** | One click turns it into a profile — then edit, rename and bind a key as usual |
 
@@ -75,7 +75,7 @@ switches target, casts, and restores your original target — **you never click 
 
 ![Config window · Global tab](preview/main.png)
 
-**Case-template window** (bottom of the one-key macro tab, `[Case Templates]`): 11 groups / 29 ready-made profiles grouped by class, laid out as **two columns of groups with wrapping inside each group** — one click imports a profile, hover shows its contents
+**Case-template window** (bottom of the one-key macro tab, `[Case Templates]`): 12 groups / 34 ready-made profiles grouped by class, laid out as **two columns of groups with wrapping inside each group** — one click imports a profile, hover shows its contents
 
 ![Case-template window](preview/skill_tpl.png)
 

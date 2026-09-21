@@ -1031,17 +1031,17 @@ function checkIconAssets() {
   const bad = [];
   if (real < 20) bad.push('模版条数只数出 ' + real + ' 条（扫描口径过时？）');
   const wants = [
-    ['EvalHelp.toc', /11\s*\u7ec4\s*(\d+)\s*\u6761/g],
-    ['README.md', /11\s*\u7ec4\s*(\d+)\s*\u6761/g],
-    ['README_en.md', /11 groups[^0-9]{0,12}(\d+)/g],
-    ['README_ru.md', /11 \u0433\u0440\u0443\u043f\u043f[^0-9]{0,12}(\d+)/g],
+    ['EvalHelp.toc', /12\s*\u7ec4\s*(\d+)\s*\u6761/g],
+    ['README.md', /12\s*\u7ec4\s*(\d+)\s*\u6761/g],
+    ['README_en.md', /12 groups[^0-9]{0,12}(\d+)/g],
+    ['README_ru.md', /12 \u0433\u0440\u0443\u043f\u043f[^0-9]{0,12}(\d+)/g],
   ];
   wants.forEach(function (w) {
     const s = fs.readFileSync(path.join(__dirname, w[0]), 'utf8');
     const nums = [];
     let m;
     while ((m = w[1].exec(s)) !== null) nums.push(Number(m[1]));
-    if (!nums.length) bad.push(w[0] + ' \u91cc\u627e\u4e0d\u5230\u300c11 \u7ec4 N \u6761\u300d\u8fd9\u53e5\u8bdd');
+    if (!nums.length) bad.push(w[0] + ' \u91cc\u627e\u4e0d\u5230\u300c12 \u7ec4 N \u6761\u300d\u8fd9\u53e5\u8bdd');
     nums.forEach(function (n) { if (n !== real) bad.push(w[0] + ' \u5199 ' + n + ' \u6761\uff0c\u5b9e\u9645 ' + real + ' \u6761'); });
   });
   if (bad.length) { console.log('TEMPLATE COUNT CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
@@ -1098,7 +1098,7 @@ function checkIconAssets() {
     process.exit(1);
   }
   // ★1.71.3 新增 4 个职业组（牧师/德鲁伊/术士/萨满）+ 1 个功能组（队伍/团队）。
-  const expect = ["战士", "法师", "通用法系", "盗贼", "猎人", "骑士", "牧师", "德鲁伊", "术士", "萨满", "队伍/团队"];
+  const expect = ["战士", "法师", "通用法系", "通用", "盗贼", "猎人", "骑士", "牧师", "德鲁伊", "术士", "萨满", "队伍/团队"];
   const got = listed.map(f => { const m = fs.readFileSync(path.join(dir, f), "utf8").match(/cls\s*=\s*"([^"]+)"/); return m ? m[1] : "?"; });
   if (got.join(",") !== expect.join(",")) {
     console.log("EXAMPLES TOC CHECK: FAIL - toc order gives [" + got.join("/") + "], expected [" + expect.join("/") + "]");
@@ -2078,7 +2078,7 @@ const iconFixture = (function () {
 })();
 const L=lauxlib.luaL_newstate();
 lualib.luaL_openlibs(L);
-for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','examples/priest.lua','examples/druid.lua','examples/warlock.lua','examples/shaman.lua','examples/group.lua','Toolbox.lua','DataSearch.lua','Share.lua','IconSem.lua','IconBrowser.lua','PetData.lua','PetHelper.lua','tools/IconGrid.lua','tools/HunterHelper.lua','tools/ConsumableHelper.lua','tools/DismountHelper.lua','test_assert.lua']){
+for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/general.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','examples/priest.lua','examples/druid.lua','examples/warlock.lua','examples/shaman.lua','examples/group.lua','Toolbox.lua','DataSearch.lua','Share.lua','IconSem.lua','IconBrowser.lua','PetData.lua','PetHelper.lua','tools/IconGrid.lua','tools/HunterHelper.lua','tools/ConsumableHelper.lua','tools/DismountHelper.lua','test_assert.lua']){
   if(f==='test_assert.lua' && iconFixture){
     const fx=to_luastring(iconFixture);
     const stx=lauxlib.luaL_loadbuffer(L,fx,fx.length,to_luastring('icon_fixture'));

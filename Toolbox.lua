@@ -213,6 +213,13 @@ local function tbCfg()
   if type(c) ~= "table" then return nil end
   if type(c.tb) ~= "table" then c.tb = {} end
   tbMigrateQuest(c.tb)
+  -- ★1.74.13 任务通知频道**多选**（用户要求：「下拉需要支持多选，优先级 队伍>说>自己」）：
+  --   旧格式 qchan = "off"/"self"/"say"/"party" 单值字符串 → 集合表 { self=, say=, party= }（只搬一次）。
+  --   ★只留一份真值（1.71.2 同一纪律）：搬完字符串形态不复存在；nil/空表 = 关闭。
+  if type(c.tb.qchan) == "string" then
+    if c.tb.qchan == "off" then c.tb.qchan = nil
+    else c.tb.qchan = { [c.tb.qchan] = true } end
+  end
   -- ★1.71.3 频道进出信息屏蔽：**默认开**（用户要求）。nil 也视为开（见 EVAL_TB_CHAN_ON）。
   if c.tb.chanJoin == nil then c.tb.chanJoin = true end
   -- ★1.74.0 拦截关键字：chanKeyOff = 被用户**停用**的预设词（默认全开，新预设自动生效）；
@@ -3722,17 +3729,50 @@ local function tbQuestScan()
 end
 
 local TB_CHAN_ORDER = { "off", "self", "say", "party" }
-local function tbNotify(msg)
+-- ★1.74.13 频道多选：qchan 集合表的读取/摘要/择路三个唯一来源（UI 与播报共用，别处不许复刻）
+function EVAL_TB_QCHAN_SET()
   local tb = tbCfg()
-  local ch = (tb and tb.qchan) or "off"
-  if ch == "off" then return end
+  if type(tb) ~= "table" or type(tb.qchan) ~= "table" then return {} end
+  return tb.qchan
+end
+function EVAL_TB_QCHAN_ANY()
+  local s = EVAL_TB_QCHAN_SET()
+  return (s.self or s.say or s.party) and true or false
+end
+function EVAL_TB_QCHAN_SUMMARY()
+  local s = EVAL_TB_QCHAN_SET()
+  local parts = {}
+  if s.self then table.insert(parts, L("TB_CH_SELF")) end
+  if s.say then table.insert(parts, L("TB_CH_SAY")) end
+  if s.party then table.insert(parts, L("TB_CH_PARTY")) end
+  if table.getn(parts) == 0 then return L("TB_CH_OFF") end
+  return table.concat(parts, "、")
+end
+-- 择路（用户定）：多选时按**优先级 队伍 > 说 > 仅自己** 取**一个**频道，每条进度只播报一次。
+-- ★队伍频道只在「真的在队伍里」才可用（不在队伍发 PARTY 只会吃到客户端报错）；
+--   队伍不可用就**在已勾选的集合内**顺延（说→仅自己），绝不降级到用户没勾的频道。
+--   只勾了队伍却不在队伍 → 返回 nil 如实跳过（本轮不播）。
+function EVAL_TB_QCHAN_PICK()
+  local s = EVAL_TB_QCHAN_SET()
+  local inParty = false
+  if type(GetNumPartyMembers) == "function" then
+    local okn, n = pcall(GetNumPartyMembers)
+    inParty = okn and (tonumber(n) or 0) > 0
+  end
+  if s.party and inParty then return "party" end
+  if s.say then return "say" end
+  if s.self then return "self" end
+  return nil
+end
+local function tbNotify(msg)
+  local ch = EVAL_TB_QCHAN_PICK() -- 1.74.13 多选 → 优先级择一，每次进度仅播报一次
+  if not ch then return end
   if ch == "self" then say(msg) return end
   tbQPush({ kind = "chat", text = msg, ctype = (ch == "party") and "PARTY" or "SAY" })
 end
 
 local function tbQuestDiff()
-  local tb = tbCfg()
-  if not (tb and tb.qchan and tb.qchan ~= "off") then return end
+  if not EVAL_TB_QCHAN_ANY() then return end -- 1.74.13 多选集合为空 = 关闭
   local cur = tbQuestScan() -- 0.5s 节流在调度器 tbQuestTick（顺延制不丢最终状态），此处只负责扫+差分
   if not tbQPrev then tbQPrev = cur return end
   for name, q in pairs(cur) do
@@ -3980,6 +4020,16 @@ function EVAL_TEST_TB_ADD_BTN_FOR(key)
   end
   return nil
 end
+-- ★1.74.13 读值口：取某 key 那行的「值按钮」（chv；走真实控件 + 刷新时记下的实际映射）
+function EVAL_TEST_TB_CHV_FOR(key)
+  if not TB.built then return nil end
+  local cols = TB.cols or TB_COLS
+  for k = 1, TB.ROWS * cols do
+    local r = TB.rows[k]
+    if r and r.item and r.item.key == key and r.chv then return r.chv.btn end
+  end
+  return nil
+end
 -- ★1.74.5 读值口：取某 key 那行的「待测试」标记按钮（走真实控件 + 刷新时记下的实际映射；测试不复刻逻辑）
 function EVAL_TEST_TB_WIP_FOR(key)
   if not TB.built then return nil end
@@ -4172,21 +4222,49 @@ function EVAL_TB_REFRESH()
           r.chv.btn:Show()
           r.chv.btn:SetScript("OnClick", function() EVAL_TB_CHANKEYS_OPEN(r.chv.btn) end)
         end
-        if it.t == "ch" then -- 1.69.0 频道选择行：勾选=启用（仅自己），值按钮弹频道下拉
+        if it.t == "ch" then -- 1.69.0 频道选择行；★1.74.13 改**多选下拉**（用户：「下拉需要支持多选，优先级 队伍>说>自己，每次任务进度仅播报一次」）
           local key = it.key
-          r.get = function() local tb = tbCfg() return tb and tb[key] ~= nil and tb[key] ~= "off" and true or false end
-          r.set = function(v) local tb = tbCfg() if tb then tb[key] = v and "self" or "off" end end
-          local cur = (function() local tb = tbCfg() return (tb and tb[key]) or "off" end)()
-          r.chv.text:SetText(L("TB_CH_" .. string.upper(cur)) or cur)
+          -- 勾选框 = 是否启用：勾上（空集合时）默认「仅自己」；取消勾选 = 清空集合（关闭）
+          r.get = function() return EVAL_TB_QCHAN_ANY() end
+          r.set = function(v)
+            local tb = tbCfg()
+            if not tb then return end
+            if v then
+              if not EVAL_TB_QCHAN_ANY() then tb[key] = { self = true } end
+            else
+              tb[key] = nil
+            end
+          end
+          r.chv.text:SetText(EVAL_TB_QCHAN_SUMMARY())
           r.chv.btn:Show()
           r.chv.btn:SetScript("OnClick", function()
-            if type(EVAL_DD_OPEN) == "function" then
-              EVAL_DD_OPEN(r.chv.btn, { L("TB_CH_OFF"), L("TB_CH_SELF"), L("TB_CH_SAY"), L("TB_CH_PARTY") }, function(pi)
-                local tb = tbCfg()
-                if tb then tb[key] = TB_CHAN_ORDER[pi] or "off" end
-                EVAL_TB_REFRESH()
-              end)
+            if type(EVAL_DD_OPEN) ~= "function" then return end
+            -- 关闭 = 互斥项：集合为空时它带勾；点任一频道即隐式离开「关闭」
+            local function curSel()
+              local s, sel = EVAL_TB_QCHAN_SET(), {}
+              if not (s.self or s.say or s.party) then sel[1] = true
+              else
+                if s.self then sel[2] = true end
+                if s.say then sel[3] = true end
+                if s.party then sel[4] = true end
+              end
+              return sel
             end
+            EVAL_DD_OPEN(r.chv.btn, { L("TB_CH_OFF"), L("TB_CH_SELF"), L("TB_CH_SAY"), L("TB_CH_PARTY") }, function(pi, on)
+              local tb = tbCfg()
+              if not tb then return end
+              if pi == 1 then
+                if on == true then tb[key] = nil end -- 勾「关闭」= 清空集合（互斥）
+              else
+                local ch = TB_CHAN_ORDER[pi]
+                if ch then
+                  if type(tb[key]) ~= "table" then tb[key] = {} end
+                  if on == true then tb[key][ch] = true else tb[key][ch] = nil end
+                end
+              end
+              if type(EVAL_DD_SYNC) == "function" then EVAL_DD_SYNC(curSel()) end -- 面板不关 → 互斥后的标记当场重画
+              EVAL_TB_REFRESH()
+            end, { multi = true, selected = curSel() })
           end)
         end
         if r.get and r.get() then r.mark:Show() else r.mark:Hide() end

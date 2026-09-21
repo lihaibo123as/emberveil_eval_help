@@ -90,7 +90,7 @@ Remove-Item "$staging\EvalHelp\media\Textures" -Recurse -Force -ErrorAction Sile
 [System.IO.Compression.ZipFile]::CreateFromDirectory($staging, $out)
 Remove-Item $staging -Recurse -Force
 ```
-★**装完必须核对条目数**（1.74.7 基准 = **67 个**；1.74.6 时是 66、1.73.5 时是 63；1.74.5 陆续加了 `tools/IconGrid.lua` / `tools/HunterHelper.lua` / `tools/ConsumableHelper.lua`，1.74.7 加 `tools/DismountHelper.lua`）：
+★**装完必须核对条目数**（1.74.12 基准 = **68 个**（+`examples/general.lua`）；1.74.6 时是 66、1.73.5 时是 63；1.74.5 陆续加了 `tools/IconGrid.lua` / `tools/HunterHelper.lua` / `tools/ConsumableHelper.lua`，1.74.7 加 `tools/DismountHelper.lua`）：
   少一个就是缺文件，用户装了会**直接报错**。
   ★这一条与上面的模块清单都有源码检查 `PACK LIST CHECK` 守着（清单与 .toc 逐个比对 + 基准数按打包口径现算），过时当场 FAIL。
 ★**不装**：`luacheck.js`/`test_*.lua`/`test_engine.js`（测试）、`preview/`（截图）、`node_modules/`、
