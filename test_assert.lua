@@ -14057,17 +14057,35 @@ do
   eq(okUse177 == true and TEST.usedItem == 0 * 100 + 1, true,
      "④★★左键点横排第 1 枚 = 用**第 1 个**选中项（UseContainerItem(0,1) 厚皮药水，实测 usedItem=" .. tostring(TEST.usedItem) .. "）")
   eq(EVAL_TEST_CH_STATE().uses == 1, true, "④★成功计数 +1")
-  TEST.time = 2000 -- 越过限频窗，验主图标那一枚也能用（★只选 1 个时它必须可用，否则那个物品没法用）
+  -- ★★1.74.16 规格变更（用户：「取消第一个图标识使用第一个配置的消耗品的功能」）：
+  --   主图标 = 帮手自己的**特殊图标**，两个键都只负责开/关选择面板；**绝不再代替物品使用**。
+  TEST.time = 2000
   TEST.usedItem = nil
+  local usesBefore177 = EVAL_TEST_CH_STATE().uses
+  EVAL_IG_HIDE()
   EVAL_TEST_CH_CLICK_MAIN("LeftButton")
-  eq(TEST.usedItem == 0 * 100 + 1, true,
-     "④★★★左键点主图标 = 使用**第 1 个**选中项（UseContainerItem(0,1) 厚皮药水，实测 " .. tostring(TEST.usedItem) .. "）")
-  eq(EVAL_CH_LIST() and table.getn(EVAL_CH_LIST()) == 2, true, "④★用掉之后选中列表不变（用 ≠ 取消选中）")
-  -- ⑤ 限频：0.3 秒内重复点被挡住（服务器写动作不许刷）
+  eq(TEST.usedItem == nil, true,
+     "④★★★左键点主图标 **不再使用任何物品**（usedItem=" .. tostring(TEST.usedItem) .. "）")
+  eq(EVAL_TEST_CH_STATE().uses == usesBefore177, true, "④★★成功计数没变（一次都没用）")
+  eq(EVAL_IG_IS_SHOWN() == true, true, "④★★左键点主图标 = **打开选择面板**（面板入口）")
+  EVAL_IG_HIDE()
+  eq(EVAL_CH_LIST() and table.getn(EVAL_CH_LIST()) == 2, true, "④★选中列表不变（开面板 ≠ 取消选中）")
+  -- ⑤ 限频：0.3 秒内重复点**横排**（服务器写动作不许刷）
+  --   ★1.74.16 起主图标不再使用物品（只开面板）→ 它**不参与**使用限频，故这里只验横排那枚。
+  --   ★自足判据（不依赖前面几次点击恰好吃掉限频窗口）：**紧接着连点两次**，第一次成功、第二次被挡。
   local uses177 = EVAL_TEST_CH_STATE().uses
+  TEST.usedItem = nil
   EVAL_TEST_CH_STRIP_CLICK(1, "LeftButton")
+  eq(EVAL_TEST_CH_STATE().uses == uses177 + 1, true, "⑤前置：横排点一下 → 真的用了一次")
+  local uses177b = EVAL_TEST_CH_STATE().uses
+  EVAL_TEST_CH_STRIP_CLICK(1, "LeftButton")
+  eq(EVAL_TEST_CH_STATE().uses == uses177b, true, "⑤★★0.3 秒内**紧接着再点**横排 → 被限频挡住（服务器写动作不许刷）")
+  local uses177c = EVAL_TEST_CH_STATE().uses
+  TEST.usedItem = nil
+  EVAL_IG_HIDE()
   EVAL_TEST_CH_CLICK_MAIN("LeftButton")
-  eq(EVAL_TEST_CH_STATE().uses == uses177, true, "⑤★★0.3 秒内重复点击（横排与主图标）都被限频挡住")
+  eq(EVAL_TEST_CH_STATE().uses == uses177c and TEST.usedItem == nil, true,
+     "⑤★★主图标（开面板）**不触发使用**，所以也不吃使用限频")
   -- ⑥ 右键点横排 = 取消**被点的那一枚**（横排第 1 枚 = 选中列表第 1 个 = 厚皮药水，见 ③）
   EVAL_TEST_CH_STRIP_CLICK(1, "RightButton")
   local list177b = EVAL_CH_LIST()
@@ -14075,16 +14093,17 @@ do
      "⑥★右键点横排 = 取消选中（剩 " .. table.concat(list177b, ",") .. "）")
   -- ★与 ③ 同一口径：主图标 = **特殊图标**，所以选中项**一律**横排（剩 1 个就画那 1 枚，不再「只剩主图标」）
   eq(EVAL_TEST_CH_STATE().stripShown == 1, true, "⑥★取消到只剩 1 个 → 横排仍画那 1 枚（与 ③ 同口径）")
-  -- ⑥b ★★★用户 1.74.5 明确：「消耗品助手左键不要触发弹窗选择」
-  --   ⇒ 空选中时左键**不开面板**，只如实提示入口在右键；右键依旧能开（面板入口唯一）
+  -- ⑥b ★★1.74.16 规格变更（用户：「取消第一个图标识使用第一个配置的消耗品的功能」）：
+  --   主图标 = 帮手自己的**特殊图标**，两个键都只负责**开/关选择面板**。
+  --   ⇒ 空选中时左键**也要能开面板**（那正是空的时候最需要的入口）；物品使用一律走横排各枚。
+  --   （旧的 1.74.5 规矩「左键不触发弹窗选择」是「左键=用物品」时代定的，已随该功能一起取消。）
   tb177.chUse = {}
   EVAL_CH_STRIP_REFRESH()
   if EVAL_IG_IS_SHOWN() then EVAL_IG_HIDE() end
   TEST.chat = nil
   EVAL_TEST_CH_CLICK_MAIN("LeftButton")
-  eq(EVAL_IG_IS_SHOWN() == false, true, "⑥b★★★空选中时左键**不弹面板**（用户要求：左键不触发弹窗选择）")
-  local said177 = tostring(TEST.chat or "")
-  eq(string.find(said177, "右键", 1, true) ~= nil, true, "⑥b★左键时如实提示「右键主图标打开面板勾选」")
+  eq(EVAL_IG_IS_SHOWN() == true, true, "⑥b★★★空选中时左键**也能开面板**（现在的面板入口；空的时候最需要它）")
+  EVAL_IG_HIDE()
   TEST.chat = nil
   EVAL_TEST_CH_CLICK_MAIN("RightButton")
   eq(EVAL_IG_IS_SHOWN() == true, true, "⑥b★右键依旧能开面板（唯一入口）")
@@ -15316,11 +15335,16 @@ do
   eq(string.find(tostring(why189 or ""), "冷却", 1, true) ~= nil or string.find(tostring(why189 or ""), "CD", 1, true) ~= nil, true,
      "①★如实说「还在冷却」（不静默吞掉点击）：" .. tostring(why189))
   -- ② CD 时遮盖显示、CD 结束遮盖收起
+  --   ★1.74.16：主图标不再代表物品（不显示 CD）→ 遮盖在**这件物品自己那一枚横排图标**上。
+  EVAL_CH_STRIP_REFRESH()
   EVAL_CH_CD_REFRESH()
-  eq(EVAL_TEST_CH_STATE().cdMaskShown, true, "②★★CD 存在 → **遮盖显示**（一眼看出不可点击）")
+  local c189 = EVAL_TEST_CH_STRIP_INFO(1)
+  eq(c189 ~= nil and c189.name == "法力药水" and c189.cdMaskShown == true, true,
+     "②★★CD 存在 → **那一枚显示遮盖**（一眼看出不可点击）")
+  eq(EVAL_TEST_CH_STATE().cdMaskShown, false, "②★主图标不显示 CD 遮盖（它不代表任何物品）")
   TEST.time = 8000 + 61 -- CD 结束
   EVAL_CH_CD_REFRESH()
-  eq(EVAL_TEST_CH_STATE().cdMaskShown, false, "②★★CD 结束 → **遮盖收起**")
+  eq(EVAL_TEST_CH_STRIP_INFO(1).cdMaskShown, false, "②★★CD 结束 → **遮盖收起**")
 
   -- ③ 喂食 CD 时拦截（点了不入队）
   EVAL_HELP_CONFIG.tb.feedPet = true

@@ -880,7 +880,7 @@ PM_HINT = "Left-click a profile = activate; right-click = open this window (rena
   CH_PANEL_TITLE = "Pick consumables (multi-select)",
   CH_HINT = "Left-click = select / unselect (multi, remembered)",
   CH_STRIP_HINT = "Left-click = use | Right-click = unselect",
-  CH_MAIN_HINT = "Left-click = use #1 | Right-click = picker (multi-select)",
+  CH_MAIN_HINT = "Left/Right-click = picker (multi-select) | use items from the row on the right",
   CH_GONE = "used up or not in bags",
   CH_NO_ITEM = "No consumable selected yet: right-click the main icon to pick",
   CH_USED = "Used: %s",

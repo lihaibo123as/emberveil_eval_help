@@ -356,8 +356,11 @@ function EVAL_CH_CD_REFRESH()
   if not (CH.built and CH.btn) then return false end
   local now = chNow()
   local list = EVAL_CH_LIST()
-  -- 主图标：左键用的就是 list[1] → 显示**它**的 CD
-  local any = chApplyCd(CH, CH.btn, CH_SIZE, list[1], now)
+  -- ★1.74.16 主图标不再代表任何物品（不「用第 1 个」）→ **它不显示 CD**；
+  --   每件物品的 CD 只由它**自己那一枚横排图标**显示。
+  local any = false
+  if CH.cdMask then pcall(CH.cdMask.Hide, CH.cdMask) end
+  if CH.cdText then CH.cdText:SetText("") pcall(CH.cdText.Hide, CH.cdText) end
   -- 横排：每枚各自（strip[i] = list[i]）
   for i = 1, CH_STRIP_MAX do
     local cell = CH.strip[i]
@@ -524,15 +527,10 @@ function EVAL_CH_ENSURE()
       EVAL_CH_PANEL() -- 右键 = 开/关选择面板（用户选择：面板入口在右键）
       return
     end
-    -- ★1.74.5：主图标**代表第 1 个选中项**（横排从第 2 个开始，避免重复画一样东西）⇒ 左键用它。
-    --   ★用户随后明确：「消耗品助手左键不要触发弹窗选择」⇒ 没选中任何物品时左键**不开面板**，
-    --     只如实提示「右键主图标打开面板勾选」（面板入口**只在右键**）。
-    local list = EVAL_CH_LIST()
-    if table.getn(list) >= 1 then
-      EVAL_CH_USE(list[1])
-    else
-      chSay(L("CH_NO_ITEM"))
-    end
+    -- ★★1.74.16 用户：「取消第一个图标识使用第一个配置的消耗品的功能」——
+    --   主图标现在是**帮手自己的特殊图标**（不代表任何一件物品），再让它「用第 1 个」既别扭又容易误点：
+    --   物品的使用一律走**横排各枚**（各自点用）。主图标两个键都只负责**开/关选择面板**。
+    EVAL_CH_PANEL()
   end)
   b:SetScript("OnDragStart", function()
     pcall(b.StartMoving, b)
