@@ -913,11 +913,40 @@ PickupContainerItem = function(b, s) TEST.picked = b * 100 + s TEST.pickupCalls 
 SpellIsTargeting = function() return TEST.targeting end
 CursorHasItem = function() return TEST.cursorItem and true or false end
 ClearCursor = function() TEST.clearCursorCalls = (TEST.clearCursorCalls or 0) + 1 TEST.cursorItem = false end
+-- ★1.74.11 拆分使用桩（用户实测：UseContainerItem 对堆叠物品**一次用一整组** → 用之前先拆 1 个）：
+--   SplitContainerItem(bag,slot,n) 把 n 个移到**光标**；PutItemInBag(bagId) 把光标上的放进该背包。
+--   ★桩要**如实建模**（源格减少、目标格出现 count==1 的同名物品），判据才能钉住「用的是拆出来的那 1 个」。
+SplitContainerItem = function(bag, slot, n)
+  TEST.splitCalls = (TEST.splitCalls or 0) + 1
+  TEST.splitArgs = tostring(bag) .. "," .. tostring(slot) .. "," .. tostring(n)
+  local it = TEST.bags and TEST.bags[bag * 100 + slot]
+  if not it then return end
+  n = tonumber(n) or 1
+  it.count = math.max(1, (it.count or 1) - n)
+  TEST.cursorItem, TEST.cursorName, TEST.cursorTex = true, it.name, it.tex
+end
+local function stubPutCursor(bagId)
+  if not TEST.cursorItem then return end
+  TEST.putCalls = (TEST.putCalls or 0) + 1
+  TEST.putBag = bagId
+  -- 放进该背包第一个空格（桩的背包只有 2 格 → 找 1..2）
+  for slot = 1, 2 do
+    if not (TEST.bags and TEST.bags[bagId * 100 + slot]) then
+      TEST.bags[bagId * 100 + slot] = { name = TEST.cursorName, tex = TEST.cursorTex, count = 1 }
+      TEST.cursorItem = false
+      return
+    end
+  end
+  -- 没空格 → 放不下（光标上留着，调用方应 ClearCursor）
+end
+PutItemInBag = function(bagId) stubPutCursor(tonumber(bagId) or 0) end
+PutItemInBackpack = function() stubPutCursor(0) end
 PickupInventoryItem = function(s) TEST.pickedInv = s end
 DropItemOnUnit = function(u) TEST.droppedOn = tostring(u) end
 GetPetFoodTypes = function() return TEST.petFood or "肉类,鱼类" end
 GetPetHappiness = function() return TEST.happiness or 2, 100, 0 end
 GetPetLoyalty = function() return "忠诚" end
+GetPetExperience = function() return TEST.petXP1 or 12345, TEST.petXP2 or 45000 end
 DeleteCursorItem = function() if TEST.picked then TEST.deleted = TEST.picked TEST.picked = nil end end
 ConfirmReadyCheck = function() TEST.readyChecked = true end
 -- 1.69.0 任务日志扫描桩（TEST.questLog = { {title=, complete=, objs={{txt=,d=,m=}}} }）

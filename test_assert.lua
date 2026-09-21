@@ -14039,15 +14039,31 @@ do
   eq(EVAL_TEST_CH_STATE().side == "right", true, "③★横排贴在主图标右侧（贴屏幕边会自动翻到左侧）")
   -- ④ 左键点横排 = 用那一枚（= 选中列表第 2 个）；左键点主图标 = 用第 1 个
   TEST.usedItem = nil
+  -- ★★★1.74.11 用户实测：「使用了一组.我这确认.一组没了.函数是对的.可以实施才分使用的方案」
+  --   ⇒ UseContainerItem 对堆叠物品会**一次用一整组**；现在改成**先拆 1 个再对那 1 个用**。
+  --   所以这里断言的**不再是原格**，而是**拆出来的那 1 个**（bag 1 slot 1）——
+  --   同时必须验「原组没被整组消耗掉」（那正是用户报的 bug）。
+  local origCnt177 = TEST.bags[0 * 100 + 2] and TEST.bags[0 * 100 + 2].count
   local okUse177 = EVAL_TEST_CH_STRIP_CLICK(1, "LeftButton")
-  eq(okUse177 == true and TEST.usedItem == 0 * 100 + 2, true,
-     "④★★左键点横排 = 使用该物品（UseContainerItem(0,2) 面包，实测 usedItem=" .. tostring(TEST.usedItem) .. "）")
+  eq(okUse177 == true, true, "④★左键点横排 → 执行成功")
+  eq(TEST.splitCalls == 1 and TEST.splitArgs == "0,2,1", true,
+     "④★★★真的**拆了 1 个**（SplitContainerItem(0,2,1)，实测 " .. tostring(TEST.splitArgs) .. "）")
+  eq(TEST.putCalls == 1, true, "④★★拆出来的 1 个被放下（PutItemInBag，实测 " .. tostring(TEST.putBag) .. "）")
+  eq(TEST.usedItem == 1 * 100 + 1, true,
+     "④★★★用的是**拆出来的那 1 个**（bag1 slot1），不是原组：实测 usedItem=" .. tostring(TEST.usedItem))
+  eq(origCnt177 ~= nil and (TEST.bags[0 * 100 + 2].count or 0) == origCnt177 - 1, true,
+     "④★★★原组**只少了 1 个**（" .. tostring(origCnt177) .. " → " .. tostring(TEST.bags[0 * 100 + 2].count) ..
+     "）—— 这正是用户报的「一次用完一整组」被修好的证据")
   eq(EVAL_TEST_CH_STATE().uses == 1, true, "④★成功计数 +1")
   TEST.time = 2000 -- 越过限频窗，验主图标那一枚也能用（★只选 1 个时它必须可用，否则那个物品没法用）
   TEST.usedItem = nil
+  local origCnt177b = TEST.bags[0 * 100 + 1] and TEST.bags[0 * 100 + 1].count
   EVAL_TEST_CH_CLICK_MAIN("LeftButton")
-  eq(TEST.usedItem == 0 * 100 + 1, true,
-     "④★★★左键点主图标 = 使用**第 1 个**选中项（UseContainerItem(0,1) 厚皮药水，实测 " .. tostring(TEST.usedItem) .. "）")
+  -- ★同样走拆分：断言**性质**（用的不是原格 + 原组只少 1），不写死拆到哪个槽位
+  eq(TEST.usedItem ~= 0 * 100 + 1, true,
+     "④★★★左键点主图标 = 用**第 1 个**选中项，且**不是原格**（走拆分，实测 " .. tostring(TEST.usedItem) .. "）")
+  eq(origCnt177b ~= nil and (TEST.bags[0 * 100 + 1].count or 0) == origCnt177b - 1, true,
+     "④★★★原组**只少了 1 个**（" .. tostring(origCnt177b) .. " → " .. tostring(TEST.bags[0 * 100 + 1].count) .. "）")
   eq(EVAL_CH_LIST() and table.getn(EVAL_CH_LIST()) == 2, true, "④★用掉之后选中列表不变（用 ≠ 取消选中）")
   -- ⑤ 限频：0.3 秒内重复点被挡住（服务器写动作不许刷）
   local uses177 = EVAL_TEST_CH_STATE().uses
@@ -14075,6 +14091,9 @@ do
   eq(EVAL_IG_IS_SHOWN() == true, true, "⑥b★右键依旧能开面板（唯一入口）")
   EVAL_IG_HIDE()
   tb177.chUse = { "面包" } -- 复原成「只选面包」1 项，后面 ⑦ 继续用
+  -- ★1.74.11 清掉**拆分残留**：拆分使用会把拆出的 1 个放进别的背包（真的会发生），
+  --   而面板扫全背包 → 会多出同名候选、把 selCount 顶成 2。⑦ 测的是面板本身，不是拆分残留，故在此清掉。
+  if TEST.bags then TEST.bags[1 * 100 + 1] = nil TEST.bags[1 * 100 + 2] = nil end
   EVAL_CH_STRIP_REFRESH()
   if EVAL_IG_IS_SHOWN() then EVAL_IG_HIDE() end
   -- ⑦ **右键**主图标 = 开多选网格（共用件 IconGrid；左键现在是「用第 1 个」，面板入口在右键）；
@@ -15335,6 +15354,104 @@ do
   EVAL_HH_TEST_RESET_TIMERS()
   TEST.bags, TEST.spellbook, TEST.hasPet, TEST.targeting = nil, nil, nil, nil
   print("  CD 遮盖+拦截：消耗品拦截/遮盖 · 喂食拦截/遮盖 · CD 结束收起 · CD 过了照常")
+end
+
+-- ===== 组 190（1.74.11）：消耗品探针命令（用户：「创建调试指令.要按照项目的标准来创建」）=====
+-- 覆盖：①命令存在（/eh go 消耗品探针）②走真实 SlashCmdList 入口 ③实测结果记进 CH.probeUseN
+--   ④探针会真的用掉物品（如实提醒）⑤SplitContainerItem 接口探测
+do
+  -- ① 命令存在（EVAL_CH_CMD 认「探针」子命令）
+  EVAL_HELP_CONFIG.tb = EVAL_HELP_CONFIG.tb or {}
+  EVAL_HELP_CONFIG.tb.consumable = true
+  TEST.bags = { [0 * 100 + 1] = { name = "法力药水", tex = "texMana", count = 5 } }
+  TEST.chat = nil
+  -- ② 走真实 SlashCmdList 入口（项目标准：命令也是接线，别只调函数）
+  if SlashCmdList and SlashCmdList["EVALHELP"] then SlashCmdList["EVALHELP"]("go 消耗品探针 法力药水") end
+  local said190 = tostring(TEST.chat or "")
+  eq(string.find(said190, "消耗品探针", 1, true) ~= nil, true, "②★★探针命令真的走了（输出含「消耗品探针」）：" .. string.sub(said190, 1, 80))
+  eq(string.find(said190, "一次用了", 1, true) ~= nil, true, "②★★实测结果输出（「一次用了 N 个」）")
+  -- ③ 实测结果记进 CH.probeUseN（判据能读；也是「一次用几个」的唯一权威来源）
+  eq(EVAL_TEST_CH_STATE().probeUseN ~= nil, true, "③★★实测结果记进状态（probeUseN=" .. tostring(EVAL_TEST_CH_STATE().probeUseN) .. "）")
+  -- ④ 探针会真的用掉物品（如实提醒，不是静默消耗）
+  eq(string.find(said190, "用掉", 1, true) ~= nil, true, "④★★如实提醒「会真的用掉」（不是静默消耗）")
+  -- ⑤ SplitContainerItem 接口探测（绕「用整组」的路通不通）
+  eq(string.find(said190, "SplitContainerItem", 1, true) ~= nil, true, "⑤★★SplitContainerItem 接口探测（绕「用整组」的路通不通）")
+  -- 收尾
+  EVAL_HELP_CONFIG.tb.consumable = false
+  TEST.bags = nil
+  TEST.chat = nil
+  print("  消耗品探针命令：走真实 SlashCmdList 入口 / 实测结果记进状态 / 如实提醒消耗 / 接口探测")
+end
+
+-- ===== 组 191（1.74.11）：拆分使用（用户实测：「使用了一组.我这确认.一组没了.函数是对的.
+--   可以实施才分使用的方案」）=====
+-- 背景：UseContainerItem 对本客户端的堆叠物品会**一次用一整组**。
+-- 修法：用之前 SplitContainerItem 拆 1 个 → PutItemInBag(别的背包) 放下 → 对那 1 个用。
+-- 覆盖：①count > 1 → 走拆分（拆 1 个 + 原组只少 1）②count == 1 → 直接用（不拆）
+--   ③没有拆分接口 → **如实拒绝**（绝不退回「用整组」——那正是这个 bug 本身）
+--   ④拆出来放不下 → ClearCursor 放回 + 如实失败（绝不静默消耗）
+do
+  EVAL_HELP_CONFIG.tb = EVAL_HELP_CONFIG.tb or {}
+  EVAL_HELP_CONFIG.tb.consumable = true
+  EVAL_HELP_CONFIG.tb.chUse = { "法力药水" }
+  EVAL_CH_ENSURE()
+  TEST.time = 9000
+  -- ① count > 1 → 走拆分
+  TEST.bags = { [0 * 100 + 1] = { name = "法力药水", tex = "texMana", count = 5 } }
+  TEST.splitCalls, TEST.putCalls, TEST.usedItem, TEST.cursorItem = 0, 0, nil, false
+  eq(EVAL_CH_USE("法力药水"), true, "①前置：使用成功")
+  eq(TEST.splitCalls == 1 and TEST.splitArgs == "0,1,1", true,
+     "①★★★真的拆了 1 个（SplitContainerItem(0,1,1)，实测 " .. tostring(TEST.splitArgs) .. "）")
+  eq(TEST.putCalls == 1, true, "①★★拆出来的 1 个被放下（PutItemInBag）")
+  eq(TEST.usedItem ~= 0 * 100 + 1, true, "①★★★用的**不是原格**（原格是整组，用了就没了）：" .. tostring(TEST.usedItem))
+  eq(TEST.bags[0 * 100 + 1].count == 4, true,
+     "①★★★原组**只少了 1 个**（5 → " .. tostring(TEST.bags[0 * 100 + 1].count) .. "）—— bug 修好的硬证据")
+  -- ② count == 1 → 直接用，不拆（拆了没意义）
+  TEST.bags = { [0 * 100 + 1] = { name = "法力药水", tex = "texMana", count = 1 } }
+  TEST.time = 9100
+  TEST.splitCalls, TEST.putCalls, TEST.usedItem = 0, 0, nil
+  eq(EVAL_CH_USE("法力药水"), true, "②前置：使用成功")
+  eq(TEST.splitCalls == 0, true, "②★★count == 1 → **不拆**（已经只有 1 个，直接用）")
+  eq(TEST.usedItem == 0 * 100 + 1, true, "②★★用的就是原格：" .. tostring(TEST.usedItem))
+  -- ③ 没有拆分接口 → 如实拒绝（绝不退回「用整组」）
+  TEST.bags = { [0 * 100 + 1] = { name = "法力药水", tex = "texMana", count = 5 } }
+  TEST.time = 9200
+  TEST.usedItem = nil
+  local realSplit189 = SplitContainerItem
+  SplitContainerItem = nil
+  local ok189c = EVAL_CH_USE("法力药水")
+  SplitContainerItem = realSplit189
+  eq(ok189c == false, true, "③★★★没有 SplitContainerItem → **如实拒绝**（返回 false）")
+  eq(TEST.usedItem == nil, true, "③★★★**一次都没用**（退回去用整组 = 正是这个 bug，绝不许）")
+  eq(TEST.bags[0 * 100 + 1].count == 5, true, "③★★原组**一个都没少**（5 个还在）")
+  -- ④ 拆出来放不下 → ClearCursor 放回 + 如实失败
+  TEST.bags = { [0 * 100 + 1] = { name = "法力药水", tex = "texMana", count = 5 },
+                [1 * 100 + 1] = { name = "占位", tex = "t1", count = 1 },
+                [1 * 100 + 2] = { name = "占位", tex = "t2", count = 1 },
+                [2 * 100 + 1] = { name = "占位", tex = "t3", count = 1 },
+                [2 * 100 + 2] = { name = "占位", tex = "t4", count = 1 },
+                [3 * 100 + 1] = { name = "占位", tex = "t5", count = 1 },
+                [3 * 100 + 2] = { name = "占位", tex = "t6", count = 1 },
+                [4 * 100 + 1] = { name = "占位", tex = "t7", count = 1 },
+                [4 * 100 + 2] = { name = "占位", tex = "t8", count = 1 } }
+  TEST.time = 9300
+  TEST.usedItem, TEST.clearCursorCalls = nil, 0
+  local ok189d = EVAL_CH_USE("法力药水")
+  eq(ok189d == false, true, "④★★背包满、拆出来放不下 → **如实失败**（返回 false）")
+  eq(TEST.clearCursorCalls >= 1, true, "④★★★已负责地把光标上的那 1 个放回（ClearCursor 调过）")
+  eq(TEST.usedItem == nil, true, "④★★**没用**（放不下就不动，绝不静默消耗）")
+  -- ★★报错原因必须**准**：客户端放不下时**不报错**（物品只留在光标上），
+  --   所以得靠「查光标」才发现失败。少了这道检查会掉进「放下后找不到」那条路 ——
+  --   结果同样是拒绝，但**说的是另一回事**（该说「放不下」却说「找不到」）。
+  local lg191 = table.concat((type(EVAL_HELP_CONFIG.log) == "table") and EVAL_HELP_CONFIG.log or {}, " | ")
+  eq(string.find(lg191, "放不下", 1, true) ~= nil, true,
+     "④★★★报错原因准确（说「放不下」，不是含糊的「找不到」）：" .. string.sub(lg191, -140))
+  -- 收尾
+  EVAL_HELP_CONFIG.tb.consumable = false
+  EVAL_HELP_CONFIG.tb.chUse = nil
+  TEST.bags, TEST.splitCalls, TEST.putCalls, TEST.usedItem = nil, nil, nil, nil
+  TEST.clearCursorCalls, TEST.cursorItem = nil, nil
+  print("  拆分使用：count>1 拆 1 个再对那 1 个用 · 原组只少 1 · count==1 直接用 · 无接口如实拒绝 · 放不下放回")
 end
 
 print("ALL TESTS PASS")

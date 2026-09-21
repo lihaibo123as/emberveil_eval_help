@@ -203,7 +203,95 @@ function EVAL_CH_USE(name)
     CH.lastMsg = "无 UseContainerItem"
     return false, L("CH_NO_UCI")
   end
-  local ok, err = pcall(UseContainerItem, bag, slot)
+  -- ★1.74.11 拆分使用（用户实测确认：「使用了一组.我这确认.一组没了.函数是对的.可以实施才分使用的方案」）
+  --   UseContainerItem 对本客户端的这类物品会**一次用一整组** → 用之前先**拆 1 个**，再对那 1 个用。
+  --   步骤：① SplitContainerItem(bag,slot,1) 拆 1 个到光标
+  --         ② PutItemInBag(别的背包) 放下（★放**别的背包**：放回原包会和原组**合并**，等于白拆）
+  --         ③ 在目标背包里找 count == 1 的同名物品 → 对**它**用。
+  --   ★关键简化：**用哪个 count==1 的堆叠都行**（它们是同一个物品），
+  --     所以不需要「记下用前的槽位、用后找新增的」那套前后对比。
+  --   ★拆不动就**如实拒绝**，绝不退回「用整组」——那正是用户报的这个 bug。
+  local useBag, useSlot = bag, slot
+  local curCnt = nil
+  if type(GetContainerItemInfo) == "function" then
+    local okc, _t, c = pcall(GetContainerItemInfo, bag, slot)
+    if okc then curCnt = tonumber(c) end
+  end
+  if curCnt and curCnt > 1 then
+    local targetBag = (bag ~= 1) and 1 or 2 -- 挑一个**别的**背包（放回原包会合并）
+    if type(SplitContainerItem) ~= "function" then
+      chSay(L("CH_NO_SPLIT"))
+      CH.fail = CH.fail + 1
+      CH.lastMsg = "无 SplitContainerItem（不敢直接用，会一次用整组）"
+      return false, L("CH_NO_SPLIT")
+    end
+    if type(PutItemInBag) ~= "function" and type(PutItemInBackpack) ~= "function" then
+      chSay(L("CH_NO_SPLIT"))
+      CH.fail = CH.fail + 1
+      CH.lastMsg = "无 PutItemInBag/PutItemInBackpack（拆出来放不下）"
+      return false, L("CH_NO_SPLIT")
+    end
+    local okSplit = pcall(SplitContainerItem, bag, slot, 1)
+    if okSplit then
+      -- 放下：优先别的背包（不会和原组合并）
+      local okPut = false
+      if type(PutItemInBag) == "function" then okPut = pcall(PutItemInBag, targetBag) end
+      if not okPut and type(PutItemInBackpack) == "function" then
+        okPut = pcall(PutItemInBackpack)
+        targetBag = 0
+      end
+      -- ★★放不下时客户端**不报错**（物品只是留在光标上）→ 必须**查光标**才知道真放下了没有。
+      --   不然会掉进「放下后找不到」那条路，报错原因就不准（该说「放不下」却说「找不到」）。
+      if okPut and type(CursorHasItem) == "function" then
+        local okc3, hasIt = pcall(CursorHasItem)
+        if okc3 and hasIt then okPut = false end -- 光标上还有东西 = 没放下
+      end
+      if okPut then
+        -- 在目标背包里找那 1 个（count == 1 的同名物品）
+        local found = nil
+        if type(GetContainerNumSlots) == "function" and type(GetContainerItemLink) == "function" then
+          local okn, n2 = pcall(GetContainerNumSlots, targetBag)
+          if okn and tonumber(n2) then
+            for s2 = 1, tonumber(n2) do
+              local okl, link = pcall(GetContainerItemLink, targetBag, s2)
+              if okl and link then
+                local nm2 = string.match(link, "%[(.-)%]")
+                if nm2 == name then
+                  local okc2, _t2, c2 = pcall(GetContainerItemInfo, targetBag, s2)
+                  if okc2 and tonumber(c2) == 1 then found = s2 break end
+                end
+              end
+            end
+          end
+        end
+        if found then
+          useBag, useSlot = targetBag, found
+          chLog(string.format("拆分使用：%s 从 %d 个拆出 1 个 → @%d,%d", name, curCnt, useBag, useSlot))
+        else
+          if type(ClearCursor) == "function" then pcall(ClearCursor) end
+          CH.fail = CH.fail + 1
+          CH.lastMsg = "拆出的 1 个放下后在背包里找不到"
+          chSay(string.format(L("CH_SPLIT_FAIL"), name))
+          chLog("拆分使用失败：拆出的 1 个放下后找不到（已 ClearCursor 放回）")
+          return false, "拆分后找不到"
+        end
+      else
+        if type(ClearCursor) == "function" then pcall(ClearCursor) end
+        CH.fail = CH.fail + 1
+        CH.lastMsg = "背包没空格，拆出的 1 个放不下"
+        chSay(string.format(L("CH_SPLIT_FAIL"), name))
+        chLog("拆分使用失败：背包没空格，拆出的 1 个放不下（已 ClearCursor 放回）")
+        return false, "背包没空格"
+      end
+    else
+      chLog("拆分使用：SplitContainerItem(1) pcall 失败 → 如实拒绝（不退回「用整组」）")
+      CH.fail = CH.fail + 1
+      CH.lastMsg = "SplitContainerItem 调用失败"
+      chSay(string.format(L("CH_SPLIT_FAIL"), name))
+      return false, "拆分调用失败"
+    end
+  end
+  local ok, err = pcall(UseContainerItem, useBag, useSlot)
   CH.probeUci = tostring(ok) .. (ok and "" or (":" .. tostring(err)))
   CH.lastUse = now
   if not ok then
@@ -680,7 +768,7 @@ function EVAL_CH_CMD(msg)
   msg = tostring(msg or "")
   local sub = string.match(msg, "^go 消耗品%s*(.-)%s*$")
   if sub == nil then
-    chSay("用法：/eh go 消耗品（状态）｜ 消耗品 用 <物品名> ｜ 消耗品 清")
+    chSay("用法：/eh go 消耗品（状态）｜ 消耗品 用 <物品名> ｜ 消耗品 清 ｜ 消耗品探针 [物品名]")
     return false
   end
   local useName = string.match(sub, "^用%s*(.-)%s*$")
@@ -690,6 +778,72 @@ function EVAL_CH_CMD(msg)
   end
   if sub == "清" then
     EVAL_CH_CLEAR()
+    return true
+  end
+  -- ★1.74.11 取证命令（用户：「每次使用物品的时候是使用一个.现在点击会把物品全部使用完.在仔细看下API」）：
+  --   /eh go 消耗品探针 [物品名] —— 实测 UseContainerItem 对堆叠物品**一次真的用几个**
+  --   （用前/用后数量差）+ SplitContainerItem(bag,slot,1) 能不能拆出 1 个。
+  --   ★判据 = 差值：1 = 正常（和游戏原生一致）；> 1 = 本客户端把 API 改成「用整组」（要绕）。
+  local probeName = string.match(sub, "^探针%s*(.-)%s*$")
+  if probeName ~= nil then
+    local target = (probeName ~= "") and probeName or nil
+    local found = nil
+    if target then
+      local bag, slot, _, cnt = EVAL_CH_FIND(target)
+      if bag then found = { name = target, bag = bag, slot = slot, cnt = cnt or 1 } end
+    else
+      for bag = 0, 4 do
+        for slot = 1, 32 do
+          local okl, link = pcall(GetContainerItemLink, bag, slot)
+          if okl and link then
+            local nm = string.match(link, "%[(.-)%]")
+            if nm then
+              local _b, _s, _t, cnt = EVAL_CH_FIND(nm)
+              if (cnt or 1) > 1 then found = { name = nm, bag = bag, slot = slot, cnt = cnt or 1 } break end
+            end
+          end
+        end
+        if found then break end
+      end
+    end
+    if not found then
+      chSay(target and ("探针：背包里找不到「" .. target .. "」") or "探针：背包里没有堆叠 > 1 的物品")
+      return true
+    end
+    local bag, slot, c0 = found.bag, found.slot, found.cnt
+    chSay(string.format("=== 消耗品探针：%s @%d,%d 数量 %d（⚠️ 会真的用掉 1 个来取证）===", found.name, bag, slot, c0))
+    -- ① UseContainerItem 一次用几个？
+    local okUse = pcall(UseContainerItem, bag, slot)
+    local c1 = c0
+    if type(GetContainerItemInfo) == "function" then
+      local okc, _t, c = pcall(GetContainerItemInfo, bag, slot)
+      if okc and tonumber(c) then c1 = tonumber(c) end
+    end
+    local used = c0 - c1
+    CH.probeUseN = used -- ★实测结果记进状态（判据能读；也是「一次用几个」的唯一权威来源）
+    chSay(string.format("UseContainerItem pcall=%s → 用后数量 %d → **一次用了 %d 个**%s",
+      tostring(okUse), c1, used,
+      (used == 1) and "（正常，和游戏原生一致）" or "（**不是 1 个** → 本客户端把 API 改成「用整组」）"))
+    -- ② SplitContainerItem 能不能拆 1 个？（如果还有剩）
+    if c1 > 1 then
+      if type(SplitContainerItem) == "function" then
+        local okSplit = pcall(SplitContainerItem, bag, slot, 1)
+        chSay(string.format("SplitContainerItem(1) pcall=%s（能拆 = 绕「用整组」的路通）", tostring(okSplit)))
+      else
+        chSay("SplitContainerItem **不存在**（绕「用整组」的路断）")
+      end
+    end
+    -- ★1.74.11 数量核对（用户：「主按钮上的数量没有正确显示」）：
+    --   直接读那组物品的真实 count（GetContainerItemInfo 第 2 返回），
+    --   对比 EVAL_CH_FIND 的解析结果 —— 不一致就是「count 被读错」。
+    if type(GetContainerItemInfo) == "function" then
+      local okc, _t, rawCnt, _lk, _q = pcall(GetContainerItemInfo, bag, slot)
+      chSay(string.format("数量核对：GetContainerItemInfo 原始 count=%s ｜ EVAL_CH_FIND 解析 count=%s%s",
+        tostring(rawCnt), tostring(c0),
+        (tonumber(rawCnt) == tonumber(c0)) and "（一致）" or "（**不一致** → count 被读错）"))
+    end
+    chSay(string.format("接口：UseContainerItem=%s ｜ SplitContainerItem=%s",
+      chAvail("UseContainerItem"), chAvail("SplitContainerItem")))
     return true
   end
   -- 状态 / 探针
@@ -751,7 +905,9 @@ function EVAL_TEST_CH_STATE()
            cdTextShown = (CH.cdText and CH.cdText.IsShown and CH.cdText:IsShown() == true) or false,
            cdTickOn = (CH.cdTick ~= nil),
            -- ★1.74.11 遮盖读值口（判据要钉「CD 时遮盖显示 / CD 结束遮盖收起」）
-           cdMaskShown = (CH.cdMask and CH.cdMask.IsShown and CH.cdMask:IsShown() == true) or false }
+           cdMaskShown = (CH.cdMask and CH.cdMask.IsShown and CH.cdMask:IsShown() == true) or false,
+           -- ★1.74.11 探针实测结果（「一次用几个」的唯一权威来源）
+           probeUseN = CH.probeUseN }
 end
 
 function EVAL_TEST_CH_CLICK_MAIN(button)

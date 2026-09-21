@@ -889,7 +889,7 @@ PM_HINT = "Left-click a profile = activate; right-click = open this window (rena
   CH_CLEARED = "Consumable selection cleared",
   CH_STRIP_FULL = "At most %s in the row: unselect one first",
   CH_CLEAR = "Clear",
-  CH_BUSY = "Too fast (using an item is a server action, limited to one per 0.3s)", CH_CD_BUSY = "On cooldown (this item is still on CD)",
+  CH_BUSY = "Too fast (using an item is a server action, limited to one per 0.3s)", CH_CD_BUSY = "On cooldown (this item is still on CD)", CH_NO_SPLIT = "This item is stacked but the client has no split API (not using it: would consume the whole stack)", CH_SPLIT_FAIL = "Split-use failed: %s (returned, stack not consumed)",
   CH_NO_UCI = "This client has no UseContainerItem; items cannot be used";
   -- ★1.74.5 "Pick food" icon grid (bag-style 8xN)
   HH_G_TITLE = "Pick food (click an icon)",
