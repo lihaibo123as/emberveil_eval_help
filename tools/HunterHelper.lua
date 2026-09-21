@@ -60,7 +60,7 @@ local HH = {
 --   ⇒ 与小地图/配置入口按钮**同尺寸 26×26**（EvalHelp.lua: `mb:SetWidth(26)`「边长 26（与图标库单格一致；按钮 = 图标，无内缩）」）。
 --   ★位置记忆存的是「中心偏移」（与尺寸无关）⇒ 改尺寸不会让老存档的位置跑偏。
 local HH_SIZE = 26
-local HH_RATE = 0.3
+local HH_RATE = 1.0        -- ★1.74.10 用户：「喂食频率机制是什么? 设至少1s」—— 喂食间隔放宽到 1s/笔
 local HH_AIM_WAIT = 1.0
 local HH_SETTLE_WAIT = 0.8
 local HH_QMAX = 3
@@ -926,7 +926,8 @@ function EVAL_TEST_HH_STATE()
            leftClicks = HH.leftClicks, rightClicks = HH.rightClicks, lastBtn = HH.lastBtn,
            lastArgs = HH.lastArgs, regClicks = HH.regClicks,
            food = tb.hhFood, foodTex = tb.hhFoodTex, spell = tb.hhSpell,
-           phase = HH.phase, qn = table.getn(HH.q), hasTick = HH.tick and true or false, hits = HH.hits }
+           phase = HH.phase, qn = table.getn(HH.q), hasTick = HH.tick and true or false, hits = HH.hits,
+           rate = HH_RATE, qmax = HH_QMAX, lastRun = HH.lastRun } -- ★1.74.10 限频常量+上次执行时刻也暴露
 end
 
 -- ★1.74.5 测试读值口：用**给定参数**驱动真实 OnClick（本客户端参数形态不固定，四种都要能验）

@@ -812,7 +812,7 @@ PM_HINT = "Left-click a profile = activate; right-click = open this window (rena
   HH_REJECT = "The client did not accept this item as a feeding target (not food it eats) -> put back",
   HH_OK = "🍖 Fed: %s",
   HH_UNCLEAR = "Feed was issued but no clear result - check pet happiness / food count; see /eh go 喂食探针",
-  HH_BUSY = "Too fast (feeding is a server action, limited to one per 0.3s)",
+  HH_BUSY = "Too fast (feeding is a server action, limited to one per 1s)",
   HH_SET_FOOD = "✅ Food set: %s (bags are re-scanned on every feed, so moving it is fine)",
   HH_SET_SPELL = "✅ Feeding spell set: %s",
   HH_CLEARED = "Food setting cleared",

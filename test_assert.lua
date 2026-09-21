@@ -15069,6 +15069,49 @@ do
   print("  取消自身buff 多选：文本↔集合往返 / 候选=实时+已记录 / 只取消名单里的；自身debuff 类型与时长不重叠；剩余→时长")
 end
 
+-- ===== 组 186（1.74.10）：猎人喂食限频 = 1s/笔（用户：「现在喂食频率机制是什么? 设至少1s」）=====
+-- 机制（两道闸门，叠在一起才是全貌）：
+--   ① 入队闸门：HH.q 是 FIFO，HH_QMAX=3；连续点太快 → 队列满 → 报「点太快了（限 1 秒一笔）」
+--   ② 执行闸门：EVAL_HH_STEP 里 (now - HH.lastRun) >= HH_RATE(1.0) 才放行下一笔
+-- 覆盖：①HH_RATE 真的是 1.0（不是 0.3）②连续点 5 下只入 3 笔（队列上限还在）
+--   ③1s 内的下一笔**不被执行**（0.9s 还差一截）④过 1s 才放行 ⑤文案写的就是 1 秒
+do
+  EVAL_HELP_CONFIG.tb = EVAL_HELP_CONFIG.tb or {}
+  EVAL_HELP_CONFIG.tb.feedPet = true
+  EVAL_HELP_CONFIG.tb.hhFood, EVAL_HELP_CONFIG.tb.hhFoodTex = "熏熊肉", "texmeat"
+  TEST.bags = { [0 * 100 + 1] = { name = "熏熊肉", tex = "texmeat", count = 3 } }
+  TEST.spellbook = { { name = "喂食宠物" } }
+  TEST.hasPet = true
+  EVAL_HH_TEST_RESET_TIMERS()
+  TEST.time = 6000
+  -- ★HH.hits 是**累计成功次数**，TEST_RESET_TIMERS 不清它（它清的是队列/相位/时刻）。
+  --   判据必须**先记基线、比增量**——比绝对数的话，前一组喂过一次就会让这里恒红（本轮实测）。
+  local hitsBase186 = EVAL_TEST_HH_STATE().hits
+  -- ① 限频常量 = 1.0
+  eq(EVAL_TEST_HH_STATE().rate, 1.0, "①★★★HH_RATE 真的是 1.0 秒（不是 0.3）")
+  -- ② 连点 5 下：队列上限 3，第 4、5 下被拦
+  EVAL_HH_FEED() EVAL_HH_FEED() EVAL_HH_FEED() EVAL_HH_FEED() EVAL_HH_FEED()
+  eq(EVAL_TEST_HH_STATE().qn, 3, "②★★连点 5 下只入 3 笔（队列上限还在，第 4/5 下被拦）")
+  -- ③ 1s 内的下一笔不被执行：走一笔，0.9s 后再走 —— 还是只有一笔开始执行
+  EVAL_HH_STEP(6000)
+  eq(EVAL_TEST_HH_STATE().phase, "aim", "③前置：第一笔开始执行（进入 aim）")
+  TEST.targeting = 1 EVAL_HH_STEP(6000.1) TEST.targeting = nil EVAL_HH_STEP(6000.2) -- 喂完第一笔
+  EVAL_HH_STEP(6000.9)
+  eq(EVAL_TEST_HH_STATE().hits, hitsBase186 + 1, "③★★0.9s 时**还是只有一笔**（下一笔没到 1s 不许执行）")
+  -- ④ 过 1s 才放行
+  EVAL_HH_STEP(6001.0)
+  eq(EVAL_TEST_HH_STATE().phase, "aim", "④★★过 1s → 第二笔开始执行（hits=" .. tostring(EVAL_TEST_HH_STATE().hits) .. " 基线=" .. tostring(hitsBase186) .. "）")
+  -- ⑤ 文案写的就是 1 秒
+  eq(string.find(EVAL_L("HH_BUSY"), "1 秒", 1, true) ~= nil, true, "⑤★★文案写「限 1 秒一笔」（不是 0.3）")
+  eq(string.find(EVAL_L("HH_BUSY"), "0.3", 1, true) == nil, true, "⑤★★文案里**不再有 0.3**（旧文案会让人以为还在 0.3s 限频）")
+  -- 收尾
+  EVAL_HELP_CONFIG.tb.feedPet = false
+  EVAL_HELP_CONFIG.tb.hhFood, EVAL_HELP_CONFIG.tb.hhFoodTex = nil, nil
+  EVAL_HH_TEST_RESET_TIMERS()
+  TEST.bags, TEST.spellbook, TEST.hasPet, TEST.targeting = nil, nil, nil, nil
+  print("  猎人喂食限频：HH_RATE=1.0 / 连点只入 3 笔 / 1s 内不执行 / 过 1s 放行 / 文案写 1 秒")
+end
+
 print("ALL TESTS PASS")
 
   local sd142 = EVAL_HELP_CONFIG.shareSealDemo
