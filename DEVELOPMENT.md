@@ -11,7 +11,7 @@
   → `DataSearch.lua`（Tab4 数据检索）→ `Share.lua`（方案分享）→ `IconSem.lua`（图标语义表，1.73.5）
   → `IconBrowser.lua`（Tab5 图标库）→ `PetData.lua`/`PetHelper.lua`（Tab6 抓宠帮手，1.73.0）
   → **`tools/IconGrid.lua`（通用图标网格选择器：单选/多选 · 高度自适应 · 分页滚轮夹取，1.74.5）**
-→ **`tools/HunterHelper.lua`（猎人助手 · 一键喂食，1.74.5）** → **`tools/ConsumableHelper.lua`（消耗品助手 · 多选横排各自点用，1.74.5）**。
+→ **`tools/HunterHelper.lua`（猎人助手 · 一键喂食，1.74.5）** → **`tools/ConsumableHelper.lua`（消耗品助手 · 多选横排各自点用，1.74.5）**。 → **`tools/DismountHelper.lua`（骑乘助手 · 一键下马，1.74.7）** → **`tools/RareWatch.lua`（稀有提醒转播独立模块，1.74.27）**
   跨文件共享走全局桥：Core 导出 EVAL_SAY/EVAL_LOGLINE/EVAL_UIOFFSCREEN 等，Engine 导出 EVAL_WSLOTS/EVAL_WICON/EVAL_GROUPS_OK 等，
   UI 层文件顶部别名块本地化；
   ★**新增 .lua 模块要同时改三处**：`EvalHelp.toc`、`test_engine.js` 的装载数组、`DECL ORDER CHECK` 的文件清单；
