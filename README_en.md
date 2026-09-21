@@ -21,7 +21,7 @@
 
 > 📌 Continuously improving — testing and feedback welcome!　🐞 [Bug reports / suggestions](https://gitee.com/xeval/emberveil_eval_help.git) (Issues)　🤖 Developed with DeepSeek Harness AI assistance (see "Contributing" at the bottom)
 
-## 🏁 Milestones (1.52.0 → 1.74.9)
+## 🏁 Milestones (1.52.0 → 1.74.10)
 
 - **🎬 Sharing experience loop** (1.74.1 → 1.74.6): 40 scene lines (accept/ignore × with/without target × 3 languages; title coloured by tier, and the measured rule "a colour code must carry a link") · profile **author/source** in 4 kinds + profile-list tooltip (tier · source · skill count) · all **8 "no popup" branches logged** · the easter-egg reaction is **no longer wired** (kept) · fixed the "self-echo" misjudgement (someone else's share was swallowed when you already had the same profile).
 - **🧰 Two toolbox helpers + dispel types** (1.74.5 → 1.74.6): **Hunter → auto-feed** and the **consumable helper** (one 8×N icon grid · multi-select · greyed out when used up; unverified features carry a **yellow "to be tested" mark**) · **self/target debuffs now support "dispel type"** — same semantics as party/candidate debuffs (empty name + type = "any debuff of that type").
@@ -39,6 +39,7 @@
 
 | Version | Theme | One-line highlight |
 | :-- | :-- | :-- |
+| **1.74.10** | ✨ Cancel Self Buff: multi-select + 🐛 fix overlap + ✏️ duration wording | ①The cancel-buff cell becomes a **multi-select panel**: live self-buff scan + recorded auras + custom input, default "Any" = cancel all (stored as `取消自身buff:名1,名2`); ②the self-debuff row no longer overlaps "Any negative" with "Remaining time" (type cell moved to a free slot); ③"剩余" renamed to "时长" throughout |
 | **1.74.9** | 🐛 Fix: empty entry in the skill dropdown | An action-bar slot whose tooltip read comes back blank passed the old `if name` check (empty string is truthy in Lua), so `wslots[""]` existed and the dropdown's first row was blank; such names are now dropped per the "unknown ≠ absent" rule, and the **slot number is logged** so the unnamed slot can be identified |
 | **1.74.8** | ✂️ New skill action: Cancel Self Buff | In a plan, add `取消自身buff` (cancel every cancelable buff) or `取消自身buff:<aura>` (cancel just that one); a slot-free special skill alongside Cancel Cast / Stop Attack / Follow, always ready, icon borrowed from the aura itself, and it **honestly names** what it skipped instead of cancelling something else |
 | **1.74.7** | 🐎 Riding · One-click dismount | New toolbox group: on-screen icon, left-click dismount (mount = cancelable aura via CancelPlayerBuff), right-click menu, optional auto-dismount |
@@ -48,7 +49,6 @@
 | **1.74.3** | 📥 Fix "party-channel share never pops up" (user report) | In 1.12, party messages from the **leader** fire separate events `CHAT_MSG_PARTY_LEADER`/`CHAT_MSG_RAID_LEADER`; the receiver registered only the plain ones → a leader's share never arrived. Both leader variants now registered |
 | **1.74.2** | 🖱 Combat-UI skill cell: **left = toggle enable/disable · right = open editor** | Was: any click opened the editor → left now toggles in place (writes `r.enabled` truth + double refresh), right opens the config popup |
 | **1.74.1** | 🖱 Party-menu condition fixes + leave party | "Invite" shows when not in a party **or** you're the leader · "Kick" requires leader + teammate target · new "Leave party" (in a party) · preview screenshots synced |
-| **1.74.0** | 🎉 Sharing rework: cover · tiers · titles · easter egg · reactions | Share cover line (clickable tier link, confirm popup) · score tiers (25+ Divine deep red) · title gacha (5×15, custom title) · "Genesis" easter egg (3-condition gate) · role-play reactions (lottery across guild/say/party, name is a clickable link) · title-bar badges (tier/title/profile) |
 
 > 📜 Detailed per-version notes live in **[CHANGELOG.md](CHANGELOG.md)**; earlier history is in the git commit log.
 

@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.74.9"
+local VERSION = "1.74.10"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -5015,8 +5015,12 @@ function EVAL_HELP_SE_REFRESH()
           row.stk.text:SetText(type(cd.n) == "number" and cd.n > 1 and ("层" .. cd.n) or "层")
           pcall(row.stk.btn.Show, row.stk.btn)
         end
-        -- ★1.70.45 剩余时间：只在自身光环上出现（seSecKinds 是 UI/断言共用的判据）；
+        -- ★1.70.45 时长：只在自身光环上出现（seSecKinds 是 UI/断言共用的判据）；
         --   「不限」时只显示那一个按钮，启用后才出现 [-] 值 [+]。
+        -- ★★1.74.9 修「自身debuff 检查 任意负面 与 剩余时长 重叠」（用户截图）：
+        --   dtBtn（类型）与 secOp（时长）**原本同建在一格 x=348**，约定互斥；
+        --   但 1.74.6 把「负面类型」扩到 pDebuff（自身debuff）后，这行**两个判据都成立** → 同屏重叠。
+        --   修法 = **把 dtBtn 挪到 secOp 的右边**（行内 484 那带 pDebuff 空着，正好放），两格都要，不再重叠。
         if seSecKinds(cd.k) then
           local secOn = (type(cd.secN) == "number")
           row.secOp.text:SetText(secOn and L("SE_SEC_FMT", cd.secOp or "<") or L("SE_SEC_UNLIM"))
@@ -5075,6 +5079,14 @@ function EVAL_HELP_SE_REFRESH()
           lbl = table.concat(parts, "/") .. (n > 2 and "…" or "")
         end
         row.dtBtn.text:SetText(lbl)
+        -- ★★1.74.9 渲染期定位（见建行处注释）：自身/目标 debuff 行挪到 484（避开 secOp），
+        --   队伍/团员/候选者行照旧在 348（那边 484 是 clsBtn/grpBtn 的地盘）。
+        local selfDebuff181 = (td.id == "pDebuff" or td.id == "hasDebuff")
+        local dtX181 = selfDebuff181 and 484 or 348
+        pcall(function()
+          row.dtBtn.btn:ClearAllPoints()
+          row.dtBtn.btn:SetPoint("TOPLEFT", row.dtBtn.btn:GetParent(), "TOPLEFT", dtX181, row.dtY or 0)
+        end)
         pcall(row.dtBtn.btn.Show, row.dtBtn.btn)
       end
       -- ★1.71.3 队伍/团员条件的「职业多选 / 小队多选」：
@@ -5236,6 +5248,48 @@ local function SE_BUILD()
     end
     return 1
   end
+  -- ★★1.74.9 取消自身buff 的「多选 buff」面板（用户需求见 SE_PICK_CANCELBUFF 分支注释）。
+  --   · 第一项「不限（取消全部）」= 空集，与具体 buff **互斥**（勾了它就自动清具体项，反之亦然）；
+  --   · 候选 = 实时自身 buff + 已记录（EVAL_CANCELBUFF_CANDIDATES，单一来源）；
+  --   · 「自定义输入…」弹名字框（光环名可能不在任何名单里：自制/未记录/跨版本）；
+  --   · 勾选状态每次由 seUI.ed.skill **重算**后整表重绘（EVAL_DD_SYNC），不靠面板自己那份状态。
+  function EVAL_CANCELBUFF_OPEN_PICK(anchorBtn, curSkill, onPick)
+    if type(EVAL_DD_OPEN) ~= "function" then return false end
+    local set = EVAL_CANCELBUFF_FROM_TEXT(curSkill or "")
+    local cands = EVAL_CANCELBUFF_CANDIDATES()
+    local items = { L("SE_CB_ALL") }
+    for _, nm in ipairs(cands) do table.insert(items, nm) end
+    table.insert(items, L("SE_CB_CUSTOM"))
+    local function selOf(st)
+      local sel = {}
+      if next(st) == nil then sel[1] = true end -- 空集 = 不限
+      for pi = 2, table.getn(items) - 1 do
+        if st[items[pi]] then sel[pi] = true end
+      end
+      return sel
+    end
+    EVAL_DD_OPEN(anchorBtn, items, function(pi, on)
+      if pi == table.getn(items) then -- 「自定义输入…」
+        EVAL_TN_OPEN(L("SE_TN_CANCELBUFF"), "", function(nm)
+          if nm and nm ~= "" then
+            set[nm] = true
+            if onPick then onPick(EVAL_CANCELBUFF_TO_TEXT(set)) end
+          end
+        end)
+        return
+      end
+      if pi == 1 then
+        if on then set = {} end -- 「不限」= 清空全部（互斥）
+      else
+        local nm = items[pi]
+        if on then set[nm] = true else set[nm] = nil end
+      end
+      pcall(EVAL_DD_SYNC, selOf(set))
+      if onPick then onPick(EVAL_CANCELBUFF_TO_TEXT(set)) end
+    end, { multi = true, selected = selOf(set) })
+    return true
+  end
+
   -- 项选中落值（两个下拉共用）：特殊项弹输入框，物品项剥 ×数量 展示后缀
   local function seApplySkillPick(v)
     if not v then return end
@@ -5258,11 +5312,14 @@ local function SE_BUILD()
       end)
       return
     end
-    -- ★1.74.8 取消自身buff：同样弹名字输入（空名不接受 —— 空名会变成「取消全部」，语义完全不同，
-    --   必须让用户显式选那一项，不能靠留空**误**触发「全取消」）
-    if v == L("SE_PICK_CANCELBUFF") then
-      EVAL_TN_OPEN(L("SE_TN_CANCELBUFF"), "", function(nm)
-        if nm and nm ~= "" then seUI.ed.skill = "取消自身buff:" .. nm EVAL_HELP_SE_REFRESH() end
+    -- ★多选面板函数（先声明，再被上面的分支调用 —— Lua 词法作用域，函数引用要等赋值完）
+    -- ★★1.74.9 取消自身buff（用户：「下拉支持 buff 选择.可以自定义输入buff名称.实时扫描自身buff 检查的
+    --   buff 选择弹窗.在未设置指定技能的情况下默认取消所有buff,下拉选择 buff 需要支持多选」）：
+    --   点这项或「取消自身buff」本身 → 打开**多选面板**（实时扫描自身 buff + 已记录 + 自定义输入）。
+    --   「不限」= 空集 = 取消全部；勾了具体 buff 就只取消那几个（存 取消自身buff:名1,名2）。
+    if v == L("SE_PICK_CANCELBUFF") or v == "取消自身buff" then
+      EVAL_CANCELBUFF_OPEN_PICK(seUI.skillBtn, seUI.ed and seUI.ed.skill, function(text)
+        seUI.ed.skill = text EVAL_HELP_SE_REFRESH()
       end)
       return
     end
@@ -5799,6 +5856,12 @@ local function SE_BUILD()
     --   · 「任意负面」= 空集，与具体类型**互斥**（勾了类型就自动取消它，反之亦然）；
     --   · 勾选状态每次由 cd.dt **重算**后整表重绘（EVAL_DD_SYNC）——不靠面板自己那份状态，
     --     否则「先勾任意、再勾魔法」会留下两处勾。
+    -- ★★1.74.9 重叠修复（用户截图：自身debuff 检查 任意负面 与 剩余时长 重叠）：
+    --   dtBtn（类型）与 secOp（时长）**原本同建在一格 x=348**，约定互斥；
+    --   1.74.6 把「负面类型」扩到自身/目标 debuff 后，pDebuff/hasDebuff 这两行**两个判据都成立** → 同屏重叠。
+    --   修法 = 按行类型在**渲染期**定位：队伍/团员行 484 是 clsBtn 的地盘 → dtBtn 照旧在 348；
+    --   自身/目标 debuff 行没有过滤格、那一带空着 → dtBtn 挪到 484（两格都要，不再重叠）。
+    row.dtY = y -- ★1.74.9 行纵坐标（渲染期重定位 dtBtn 要用）
     row.dtBtn = seBtn(root, 348, y, 62, 15, L("DS_T_ANY"), function()
       local it2 = seUI.ed and seUI.ed.conds[i]
       if not it2 then return end
@@ -5988,6 +6051,20 @@ function EVAL_TEST_SE_PREVIEW()
   local ok, t = pcall(function() return seUI.preview:GetText() end)
   return ok and t or nil
 end
+-- ★1.74.9 读值口：某行某控件的**真实 X 坐标**（读真控件，不复刻布局逻辑）。
+--   存在理由＝「类型格与时长格重叠」：两个控件都显示、都在 x=348，肉眼看到「重叠」，
+--   但只断言「显示了没有」是抓不到的 —— 必须读**真实坐标**才能证实「它们分开了」。
+function EVAL_TEST_SE_ROW_GEOM(name, i)
+  i = i or 1
+  local row = seUI.rows and seUI.rows[i]
+  if not row then return nil end
+  local c = row[name]
+  if not (c and c.btn) then return nil end
+  local ok, x = pcall(c.btn.GetLeft, c.btn)
+  if ok and type(x) == "number" then return x end
+  return nil
+end
+
 function EVAL_TEST_SE_ROW_DT(i)
   local row = seUI.rows and seUI.rows[i]
   if not (row and row.dtBtn) then return nil, nil end

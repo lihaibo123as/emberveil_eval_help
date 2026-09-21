@@ -14992,11 +14992,83 @@ do
   -- 收尾：复位
   TEST.actions = keep184.actions
   if wtt184 then wtt184.SetAction = nil end
-  rawset(_G, "EVAL_HELP_WTTTextLeft1", { GetText = function() return nil end })
+  -- ★★还原成桩原有的样子（读 curPlayerBuff）—— 组 184 临时换过它，不还原会污染后面的组
+  --   （组 185 的多选光环名就读 EVAL_PLAYER_BUFF_NAME，靠 curPlayerBuff 那一路）。
+  rawset(_G, "EVAL_HELP_WTTTextLeft1", { GetText = function()
+    if TEST.curPlayerBuff ~= nil then
+      local dsrc = TEST.dhTexts or TEST.dhBuffs
+      return dsrc and dsrc[TEST.curPlayerBuff]
+    end
+    if TEST.curBuff then return TEST.buffs[TEST.curBuff + 1] and TEST.buffs[TEST.curBuff + 1].name end
+    return nil
+  end })
   TEST.curAction = nil
   EVAL_GO_RESCAN(true, "cleanup184")
   print("  角色技能空技能：空名动作剔除 / wslots 无空键 / 如实报槽位 / 正常技能照旧")
 end
+-- ===== 组 185（1.74.9）：取消自身buff 多选 + 自身debuff 时长/类型不再重叠 + 剩余→时长 =====
+do
+  local set185a = EVAL_CANCELBUFF_FROM_TEXT("取消自身buff:保护祝福,奥术智慧")
+  eq(set185a["保护祝福"] == true and set185a["奥术智慧"] == true, true, "①★★文本解析成集合（两个名字都在）")
+  eq(EVAL_CANCELBUFF_TO_TEXT(set185a), "取消自身buff:保护祝福,奥术智慧", "①★★往返逐字相同")
+  eq(EVAL_CANCELBUFF_TO_TEXT({}), "取消自身buff", "①★★空集 = 不限 = 取消全部（无后缀）")
+  eq(next(EVAL_CANCELBUFF_FROM_TEXT("取消自身buff")) == nil, true, "①★★「取消自身buff」（无后缀）解析回空集")
+  eq(EVAL_CANCELBUFF_TO_TEXT({ ["保护祝福"] = true }), "取消自身buff:保护祝福", "①★单名往返照旧")
+  -- ★桩里 EVAL_PLAYER_BUFF_LIST 读名字要走 tooltip（桩给不出真名）；
+  --   候选的**两路**分开验：学习表（已记录）桩里能验；实时那路在真机上验（同一份清单函数）。
+  if type(EVAL_HELP_CONFIG.war.debuffTex) ~= "table" then EVAL_HELP_CONFIG.war.debuffTex = {} end
+  EVAL_HELP_CONFIG.war.debuffTex["奥术智慧"] = "texAI"
+  EVAL_HELP_CONFIG.war.debuffTex["保护祝福"] = "texProt"
+  local cands185 = EVAL_CANCELBUFF_CANDIDATES()
+  local hasProt185, hasAI185 = false, false
+  for _, n in ipairs(cands185) do
+    if n == "保护祝福" then hasProt185 = true end
+    if n == "奥术智慧" then hasAI185 = true end
+  end
+  eq(hasProt185, true, "①★★候选里有**实时**自身 buff（此刻在身上的）")
+  eq(hasAI185, true, "①★★候选里有**已记录**的（此刻不在身上也能选）")
+  if EVAL_HELP_CONFIG.war.debuffTex then EVAL_HELP_CONFIG.war.debuffTex["奥术智慧"] = nil EVAL_HELP_CONFIG.war.debuffTex["保护祝福"] = nil end
+  -- ★桩里 EVAL_PLAYER_BUFF_NAME 读名字要走 dhTexts（隔离 tooltip 的第二行文本）——
+  --   与真机「坐骑/光环名读 tooltip」同一条路；没喂名字就匹配不到 → 多选名单一个都认不出。
+  TEST.dhBuffs = { [1] = "格挡姿态", [3] = "保护祝福", [5] = "奥术智慧" }
+  TEST.dhSlotOf = { [0] = 1, [1] = 3, [2] = 5 }
+  TEST.dhTexts = { [1] = "格挡姿态", [3] = "保护祝福", [5] = "奥术智慧" }
+  TEST.dhCancel = {}
+  EVAL_AURA_TEST_RESET_NAME_CACHE() -- ★前一组改了学习表/光环名，缓存必须一并失效（否则走陈旧结果）
+  TEST.curBuff, TEST.curPlayerBuff = nil, nil -- ★前一组的 tooltip 状态也要清（EVAL_PLAYER_BUFF_NAME 会 ClearLines，但残留的 curBuff 会串）
+  -- ★★组 184 收尾把 EVAL_HELP_WTTTextLeft1 换成了「返回 nil 的桩」（没还原），
+  --   它会读 curBuff/curDebuff 而不读 curPlayerBuff → EVAL_PLAYER_BUFF_NAME 永远读不出名字。
+  --   这里**如实还原**成读 curPlayerBuff 的版本（桩原有的样子），而不是掩盖现象。
+  rawset(_G, "EVAL_HELP_WTTTextLeft1", { GetText = function()
+    if TEST.curPlayerBuff ~= nil then
+      local dsrc = TEST.dhTexts or TEST.dhBuffs
+      return dsrc and dsrc[TEST.curPlayerBuff]
+    end
+    if TEST.curBuff then return TEST.buffs[TEST.curBuff + 1] and TEST.buffs[TEST.curBuff + 1].name end
+    return nil
+  end })
+  eq(EVAL_TEST_WUSE("取消自身buff:保护祝福,奥术智慧"), true, "①★多选执行返回成功")
+  eq(table.getn(TEST.dhCancel), 2, "①★★只取消了**两个**（名单里那两个）")
+  eq(TEST.dhCancel[1] == 3 and TEST.dhCancel[2] == 5, true, "①★★★取消的是保护祝福(3) 和 奥术智慧(5)，**没碰**格挡姿态(1)")
+  EVAL_TEST_SE_CLEAR()
+  eq(EVAL_TEST_SE_PUSH_COND("pDebuff", "减速", nil, nil, "Magic"), true, "②前置：自身debuff 行")
+  local dtX185, secX185 = EVAL_TEST_SE_ROW_GEOM("dtBtn"), EVAL_TEST_SE_ROW_GEOM("secOp")
+  eq(dtX185 ~= nil and secX185 ~= nil, true, "②前置：两个控件都拿得到坐标")
+  eq(dtX185 ~= secX185, true, "②★★★类型格与时长格**不在同一格**（重叠修的就是这个），dt=" .. tostring(dtX185) .. " sec=" .. tostring(secX185))
+  EVAL_TEST_SE_CLEAR()
+  eq(EVAL_TEST_SE_PUSH_COND("teamDebuff", "减速", nil, nil, "Magic", "队伍"), true, "②前置：队伍debuff 行")
+  local dtX185b = EVAL_TEST_SE_ROW_GEOM("dtBtn")
+  eq(dtX185b == 348, true, "②★★队伍/团员行的类型格照旧在 348（484 是过滤格的地盘，不能乱挪）")
+  EVAL_TEST_SE_CLEAR()
+  eq(EVAL_L("SE_SEC_UNLIM"), "时长不限", "③★★「剩余不限」→「时长不限」")
+  eq(EVAL_L("SE_SEC_FMT", "<"), "时长<", "③★★「剩余<」→「时长<」")
+  eq(string.find(EVAL_L("SE_SEC_FMT", "<="), "剩余", 1, true) == nil, true, "③★★文案里**不再出现「剩余」二字**")
+  TEST.buffs = nil
+  TEST.dhBuffs, TEST.dhSlotOf, TEST.dhTexts, TEST.dhCancel = nil, nil, nil, nil
+  EVAL_HELP_UPDATE_STATE()
+  print("  取消自身buff 多选：文本↔集合往返 / 候选=实时+已记录 / 只取消名单里的；自身debuff 类型与时长不重叠；剩余→时长")
+end
+
 print("ALL TESTS PASS")
 
   local sd142 = EVAL_HELP_CONFIG.shareSealDemo

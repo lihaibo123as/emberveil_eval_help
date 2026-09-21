@@ -920,8 +920,22 @@ end
 --   ★不占动作条（见 skillNoSlotOk）。
 local function cancelBuffOf(skill)
   if skill == "取消自身buff" then return true, nil end
+  -- ★1.74.9 多选（用户：「下拉选择 buff 需要支持多选」）：逗号分隔 "取消自身buff:名1,名2"
+  --   → 返回的 nm 是**名单表**（集合 + 保持顺序的列表），执行侧逐个匹配；
+  --   单个名字照旧（集合里就一个）。逗号在光环名里不会出现，用它当分隔符最安全。
   local nm = string.match(colonNorm(skill) or "", "^取消自身buff:(.*)$")
-  if nm then return true, nm end
+  if nm then
+    -- ★集合表（键=名字 → true），有序名单挂在 .list 上（跳过时如实点名用）；
+    --   单个名字时集合里就一个 —— 与旧单名行为逐字一致。
+    local set, list = {}, {}
+    for part in string.gmatch(nm, "([^,]+)") do
+      local one = string.match(part, "^%s*(.-)%s*$")
+      if one ~= "" and not set[one] then set[one] = true table.insert(list, one) end
+    end
+    if table.getn(list) == 0 then return nil end
+    set.list = list
+    return true, set
+  end
   return nil
 end
 
@@ -1044,8 +1058,10 @@ local function wicon(name)
   if followOf(name) then return ACT_FOLLOW_ICON end -- ★1.71.3 跟随：本插件自带的那张（跟着走）
   local _cbOn, cbNm = cancelBuffOf(name) -- ★1.74.8 取消自身buff：借**那个光环自己的图标**（学习表/动作条）；无名退回问号
   if _cbOn then
-    if cbNm and cbNm ~= "" then
-      local ctx = auraTexKnown(cbNm)
+    -- ★1.74.9 多选：cbNm 是**集合表**（键=名字）；图标取名单里**第一个**认得出的光环（多个时显示第一个）
+    local nm0 = (type(cbNm) == "table" and cbNm.list and cbNm.list[1]) or nil
+    if nm0 and nm0 ~= "" then
+      local ctx = auraTexKnown(nm0)
       if ctx then return ctx end
     end
     return "Interface\\Icons\\INV_Misc_QuestionMark"
@@ -1630,14 +1646,20 @@ local function wuse(name, reason, rank)
     for i = 0, 31 do
       local okb, bi = pcall(GetPlayerBuff, i, "HELPFUL|CANCELABLE")
       if not okb or type(bi) ~= "number" or bi < 0 then break end
-      if cbName and cbName ~= "" then
-        if EVAL_PLAYER_BUFF_NAME(bi) == cbName then table.insert(targets, bi) end
+      -- ★1.74.9 多选：cbName 是**名单表**（cancelBuffOf 第二返回）；
+      --   匹配 = 「这个光环的名字在名单里」。名单只存**集合**（cancelBuffOf 返回的表）：
+      --   单个名字时集合里就一个，与旧单名行为逐字一致。
+      local named = (type(cbName) == "table")
+      if named then
+        local bn = EVAL_PLAYER_BUFF_NAME(bi)
+        if bn and cbName[bn] then table.insert(targets, bi) end
       else
         table.insert(targets, bi)
       end
     end
     if table.getn(targets) == 0 then
-      cbskip(cbName and ("身上没有「" .. tostring(cbName) .. "」") or "身上没有可取消的增益")
+      local want = (type(cbName) == "table" and cbName.list) and table.concat(cbName.list, "、") or nil
+      cbskip(want and ("身上没有「" .. want .. "」") or "身上没有可取消的增益")
       return false
     end
     local done = 0
@@ -1645,8 +1667,9 @@ local function wuse(name, reason, rank)
       if pcall(CancelPlayerBuff, bi) then done = done + 1 end
     end
     if done == 0 then cbskip("取消调用全部失败") return false end
+    local wantNames = (type(cbName) == "table" and cbName.list) and table.concat(cbName.list, "、") or nil
     local cline = string.format("→ %s (%s) | 取消 %d 个自身增益%s", name, reason, done,
-      (cbName and cbName ~= "") and ("：" .. cbName) or "")
+      wantNames and ("：" .. wantNames) or "")
     EVAL_LOGLINE(cline)
     if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cff7fff7f" .. cline .. "|r") end
     return true
@@ -3339,6 +3362,57 @@ EVAL_STANCE_OF = stanceOf
 EVAL_CANCELCAST_OF = cancelCastOf
 EVAL_STOPALL_OF = stopAllOf -- 1.71.3 停止攻击特殊行为（UI 层判定「不占动作条」用）
 EVAL_FOLLOW_OF = followOf -- ★1.71.3 跟随特殊行为（UI 层同样按「不占动作条」处理）
+-- ★★★1.74.9 取消自身buff「多选 buff」三个纯函数（UI 只做展示，判据钉这里的逻辑）：
+--   ① 候选列表（实时自身 buff + 已记录，去重排序）；
+--   ② 集合 → 技能文本（逗号分隔，供 seUI.ed.skill）；
+--   ③ 技能文本 → 集合（回读，供多选面板预选）。
+--   ★分隔符用逗号：光环名里不会出现，比空格/顿号安全；多字节名字按字节切不受影响。
+
+-- ① 候选列表：实时自身 buff（EVAL_PLAYER_BUFF_LIST）+ 学习表里已记录的名字（此刻不在也能选）。
+function EVAL_CANCELBUFF_CANDIDATES()
+  local seen, out = {}, {}
+  local list = EVAL_PLAYER_BUFF_LIST() -- 实时（读自家隔离 tooltip；玩家正看提示时如实返回空）
+  for _, d in ipairs(list) do
+    if type(d.name) == "string" and d.name ~= "" and not seen[d.name] then
+      seen[d.name] = true table.insert(out, d.name)
+    end
+  end
+  local lt = (EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war and EVAL_HELP_CONFIG.war.debuffTex) or EVAL_DEBUFF_TEX_LEARN
+  if type(lt) == "table" then
+    for nm in pairs(lt) do
+      if type(nm) == "string" and nm ~= "" and not seen[nm] then
+        seen[nm] = true table.insert(out, nm)
+      end
+    end
+  end
+  table.sort(out)
+  return out
+end
+
+-- ② 集合（键=名字 → true）→ 技能文本："取消自身buff"（空）/ "取消自身buff:名1,名2"
+function EVAL_CANCELBUFF_TO_TEXT(set)
+  if type(set) ~= "table" then return "取消自身buff" end
+  local names = {}
+  for nm in pairs(set) do
+    if type(nm) == "string" and nm ~= "" then table.insert(names, nm) end
+  end
+  if table.getn(names) == 0 then return "取消自身buff" end -- 空集 = 不限 = 取消全部
+  table.sort(names)
+  return "取消自身buff:" .. table.concat(names, ",")
+end
+
+-- ③ 技能文本 → 集合（回读，供多选面板预选）；"取消自身buff"（无后缀）→ 空集（= 取消全部）
+function EVAL_CANCELBUFF_FROM_TEXT(skill)
+  local set = {}
+  local nm = string.match(colonNorm(skill or ""), "^取消自身buff:(.*)$")
+  if not nm then return set end -- 无后缀 = 不限 = 空集
+  for part in string.gmatch(nm, "([^,]+)") do
+    local one = string.match(part, "^%s*(.-)%s*$")
+    if one ~= "" then set[one] = true end
+  end
+  return set
+end
+
 EVAL_CANCELBUFF_OF = cancelBuffOf -- ★1.74.8 取消自身buff 特殊行为（UI 层同样按「不占动作条」处理）
 EVAL_NO_SLOT_OK = skillNoSlotOk -- ★1.72.4 「不占动作条也合法」的单一判据（引擎与战斗信息UI 共用，不许再各写一份名单）
 EVAL_FOLLOW_ICON = ACT_FOLLOW_ICON -- ★1.71.3 跟随的图标（图标库「本插件在用」要列它；单一来源，不另抄路径）
