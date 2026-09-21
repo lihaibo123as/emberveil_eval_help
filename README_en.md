@@ -21,7 +21,7 @@
 
 > 📌 Continuously improving — testing and feedback welcome!　🐞 [Bug reports / suggestions](https://gitee.com/xeval/emberveil_eval_help.git) (Issues)　🤖 Developed with DeepSeek Harness AI assistance (see "Contributing" at the bottom)
 
-## 🏁 Milestones (1.52.0 → 1.74.7)
+## 🏁 Milestones (1.52.0 → 1.74.8)
 
 - **🎬 Sharing experience loop** (1.74.1 → 1.74.6): 40 scene lines (accept/ignore × with/without target × 3 languages; title coloured by tier, and the measured rule "a colour code must carry a link") · profile **author/source** in 4 kinds + profile-list tooltip (tier · source · skill count) · all **8 "no popup" branches logged** · the easter-egg reaction is **no longer wired** (kept) · fixed the "self-echo" misjudgement (someone else's share was swallowed when you already had the same profile).
 - **🧰 Two toolbox helpers + dispel types** (1.74.5 → 1.74.6): **Hunter → auto-feed** and the **consumable helper** (one 8×N icon grid · multi-select · greyed out when used up; unverified features carry a **yellow "to be tested" mark**) · **self/target debuffs now support "dispel type"** — same semantics as party/candidate debuffs (empty name + type = "any debuff of that type").
@@ -39,6 +39,7 @@
 
 | Version | Theme | One-line highlight |
 | :-- | :-- | :-- |
+| **1.74.8** | ✂️ New skill action: Cancel Self Buff | In a plan, add `取消自身buff` (cancel every cancelable buff) or `取消自身buff:<aura>` (cancel just that one); a slot-free special skill alongside Cancel Cast / Stop Attack / Follow, always ready, icon borrowed from the aura itself, and it **honestly names** what it skipped instead of cancelling something else |
 | **1.74.7** | 🐎 Riding · One-click dismount | New toolbox group: on-screen icon, left-click dismount (mount = cancelable aura via CancelPlayerBuff), right-click menu, optional auto-dismount |
 | **1.74.6** | ☠️ **Self/target debuffs support "dispel type"** | Same rules as party/candidate debuffs: parse `name(type)` · filter by type when evaluating (**name matched but type differs = NOT a hit**) · **empty name + type = "any debuff of that type"** · one shared formatter (export tokens / localized display); also restores the type suffix `candDebuff` used to drop |
 | **1.74.5** | 🎬 Share "scene lines" + 🧰 two toolbox helpers (auto-feed / consumables) | 40 scene lines (accept/ignore × with/without target × 3 languages; title coloured by tier, exactly one colour code) · profile author/source in 4 kinds + profile-list tooltip · all 8 "no popup" branches are logged now · the easter-egg reaction is **no longer wired** (kept) · hunter auto-feed & consumable helper share one 8×N icon grid (unverified features are marked "to be tested") |
@@ -48,7 +49,6 @@
 | **1.74.1** | 🖱 Party-menu condition fixes + leave party | "Invite" shows when not in a party **or** you're the leader · "Kick" requires leader + teammate target · new "Leave party" (in a party) · preview screenshots synced |
 | **1.74.0** | 🎉 Sharing rework: cover · tiers · titles · easter egg · reactions | Share cover line (clickable tier link, confirm popup) · score tiers (25+ Divine deep red) · title gacha (5×15, custom title) · "Genesis" easter egg (3-condition gate) · role-play reactions (lottery across guild/say/party, name is a clickable link) · title-bar badges (tier/title/profile) |
 | **1.73.34** | 🧰 Toolbox dialog spec + 💬 chat-name right-click menu | Frame-level ladder / drag handle / scrollbar brought up to spec (incl. 6 scrollbar fixes); right-click a chat name: whisper / invite / target / guild invite / copy name (**prefill only, never auto-send**); power names computed live (casters = mana); `luacheck` now parses **every file** |
-| **1.73.0** | 🐾 Pet Helper | 6th tab: search pet abilities (icons + ranks) -> detail with tame sources -> magnifier jumps to Data Search |
 
 > 📜 Detailed per-version notes live in **[CHANGELOG.md](CHANGELOG.md)**; earlier history is in the git commit log.
 

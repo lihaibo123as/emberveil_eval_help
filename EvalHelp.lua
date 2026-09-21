@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.74.7"
+local VERSION = "1.74.8"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -5255,6 +5255,14 @@ local function SE_BUILD()
     if v == L("SE_PICK_FOLLOW") then
       EVAL_TN_OPEN(L("SE_TN_FOLLOW"), "", function(nm)
         if nm and nm ~= "" then seUI.ed.skill = "跟随:" .. nm EVAL_HELP_SE_REFRESH() end
+      end)
+      return
+    end
+    -- ★1.74.8 取消自身buff：同样弹名字输入（空名不接受 —— 空名会变成「取消全部」，语义完全不同，
+    --   必须让用户显式选那一项，不能靠留空**误**触发「全取消」）
+    if v == L("SE_PICK_CANCELBUFF") then
+      EVAL_TN_OPEN(L("SE_TN_CANCELBUFF"), "", function(nm)
+        if nm and nm ~= "" then seUI.ed.skill = "取消自身buff:" .. nm EVAL_HELP_SE_REFRESH() end
       end)
       return
     end

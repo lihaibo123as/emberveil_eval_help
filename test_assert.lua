@@ -14846,6 +14846,109 @@ do
   print("  骑乘助手 · 一键下马：懒加载 / 内部索引取消 / 查不到不猜（UNREADABLE） / 限频 / 自动下马闸门 / 命令与登录恢复")
 end
 
+-- ===== 组 183（1.74.8）：技能级行为「取消自身buff」（用户要求：「方案->技能->取消自身buff」）=====
+-- ★需求归属：这是**技能**（方案里的一行），与「取消施法 / 停止攻击 / 跟随」同族的**特殊行为技能**，
+--   **不是**条件类型（首版做错层，已按用户更正重做）。
+-- 覆盖：①不占动作条（单一判据 skillNoSlotOk）②恒就绪 ③图标借该光环自己的纹理
+--   ④带名字 → 只取消那一个 ⑤不带名字 → 取消全部可取消增益
+--   ⑥拿不到名字/没有该光环 → **跳过并如实记日志**，绝不瞎取消 ⑦没有 API → 如实失败
+--   ⑧技能选单里有它（用户得能从下拉里选到）
+do
+  local keep183 = { dhBuffs = TEST.dhBuffs, dhSlotOf = TEST.dhSlotOf, dhTexts = TEST.dhTexts, log = EVAL_HELP_CONFIG.log }
+  TEST.dhBuffs = { [1] = "格挡姿态", [3] = "保护祝福" }
+  TEST.dhSlotOf = { [0] = 1, [1] = 3 } -- 槽位0→索引1、槽位1→索引3（不连续，验的是内部索引而非序号）
+  TEST.dhTexts = nil
+  TEST.chat = nil
+
+  -- ① 不占动作条（与「取消施法/停止攻击/跟随」同一条单一判据，三处共用一份）
+  eq(skillNoSlotOk("取消自身buff"), true, "①★★不占动作条（裸写法）")
+  eq(skillNoSlotOk("取消自身buff:保护祝福"), true, "①★★不占动作条（带名字写法）")
+  eq(EVAL_CANCELBUFF_OF ~= nil, true, "①★判据已导出（战斗信息UI 的亮金/缺失判定要共用它）")
+  eq(EVAL_CANCELBUFF_OF("取消施法") == nil, true, "①★反向哨兵：别的特殊技能**不会**被误认成它")
+
+  -- ② 恒就绪（不占动作条、无冷却）
+  eq(EVAL_TEST_READY("取消自身buff"), true, "②★恒就绪（无冷却、与动作条无关）")
+
+  -- ③ 图标：借**那个光环自己的**纹理（学习表里认得出来）
+  if type(EVAL_HELP_CONFIG.war.debuffTex) ~= "table" then EVAL_HELP_CONFIG.war.debuffTex = {} end
+  EVAL_HELP_CONFIG.war.debuffTex["保护祝福"] = "texProt183"
+  eq(EVAL_TEST_ACTION_ICON("取消自身buff:保护祝福"), "texProt183", "③★★图标 = 该光环自己的纹理（用户一眼能认出取消的是哪个）")
+  eq(type(EVAL_TEST_ACTION_ICON("取消自身buff")) == "string", true, "③★裸写法也有图标（认不出光环时如实退回问号，不是 nil）")
+
+  -- ④ 带名字 → **只取消那一个**（按内部索引，槽位0/1 刻意不连续）
+  TEST.dhCancel = {}
+  eq(EVAL_TEST_WUSE("取消自身buff:保护祝福"), true, "④★执行返回成功")
+  eq(table.getn(TEST.dhCancel), 1, "④★★只调了**一次** CancelPlayerBuff")
+  eq(TEST.dhCancel[1], 3, "④★★★取消的是「保护祝福」的**内部索引 3**（不是槽位号 1），实际 " .. tostring(TEST.dhCancel[1]))
+
+  -- ⑤ 不带名字 → 取消**全部**可取消的自身增益
+  TEST.dhCancel = {}
+  eq(EVAL_TEST_WUSE("取消自身buff"), true, "⑤★执行返回成功")
+  eq(table.getn(TEST.dhCancel), 2, "⑤★★两个可取消增益都被取消（GetPlayerBuff 的 CANCELABLE 过滤天然排除不可取消的）")
+  eq(TEST.dhCancel[1] == 1 and TEST.dhCancel[2] == 3, true, "⑤★★取消的正是内部索引 1 与 3")
+
+  -- ⑥ 没有该光环 → **跳过**（不是成功、不是报错），且一次都不调 API
+  TEST.dhCancel = {}
+  eq(EVAL_TEST_WUSE("取消自身buff:不存在的buff"), false, "⑥★★身上没有该光环 → 跳过（返回 false）")
+  eq(table.getn(TEST.dhCancel), 0, "⑥★★★一次 API 都没调（绝不瞎取消别的光环）")
+  --   ★★★日志必须**点名是哪个光环**（这是本守卫存在的真正价值：区分「跳过」与「含糊地没干事」；
+  --     只断言返回值的话，把整段守卫删掉也照样 false —— 实测那是个**等效变异**，判据必须落在日志上）。
+  local lg183 = (type(EVAL_HELP_CONFIG.log) == "table") and EVAL_HELP_CONFIG.log or {}
+  local joined183 = table.concat(lg183, " | ")
+  --   ★只看「日志里有没有这个名字」是**不够**的：技能名本身就叫「取消自身buff:不存在的buff」，
+  --     于是日志里天然就有这几个字 —— 这样的断言在变异下照样绿（实测 M591 存活）。
+  --     必须只看 **"跳过:" 之后的消息体**。
+  local skipMsg183 = string.match(joined183, "跳过:%s*(.-)%s*$") or ""
+  eq(string.find(skipMsg183, "不存在的buff", 1, true) ~= nil, true,
+     "⑥★★★跳过消息**自己点名**没找到的那个光环（只看『跳过:』之后，不蹭技能名）：" .. skipMsg183)
+  --   ★★★而且要**区分两类失败**：删掉「没找到」守卫后，代码会掉进下面的
+  --     「取消调用全部失败」——日志照样有内容、返回照样 false，但**说的是另一回事**
+  --     （实测：只断言返回值/只断言「日志里有名字」都抓不住这个变异）。
+  eq(string.find(joined183, "取消调用全部失败", 1, true) == nil, true,
+     "⑥★★★「没找到该光环」**不许**被报成「取消调用全部失败」（两回事，报告要说实话）")
+  --   整只怪身上一个可取消光环都没有 → 同样跳过
+  local keepBuffs183 = TEST.dhBuffs
+  TEST.dhBuffs = nil
+  TEST.dhCancel = {}
+  eq(EVAL_TEST_WUSE("取消自身buff"), false, "⑥★没有任何可取消光环 → 跳过")
+  eq(table.getn(TEST.dhCancel), 0, "⑥★同样一次都不调")
+  TEST.dhBuffs = keepBuffs183
+
+  -- ⑦ 客户端没有 CancelPlayerBuff → 如实失败（绝不假装做到）
+  local realCancel183 = CancelPlayerBuff
+  CancelPlayerBuff = nil
+  TEST.dhCancel = {}
+  eq(EVAL_TEST_WUSE("取消自身buff:保护祝福"), false, "⑦★★没有 CancelPlayerBuff → 如实失败")
+  CancelPlayerBuff = realCancel183
+  --   GetPlayerBuff 缺失同理
+  local realGPB183 = GetPlayerBuff
+  GetPlayerBuff = nil
+  eq(EVAL_TEST_WUSE("取消自身buff"), false, "⑦★没有 GetPlayerBuff → 如实失败")
+  GetPlayerBuff = realGPB183
+
+  -- ⑧ 技能选单：用户得能从下拉里**选到**它（表里有、选单里没有 = 用户看不见这个功能）
+  local cats183 = EVAL_GO_SKILL_CATEGORIES()
+  local L183_CB = EVAL_L("SE_PICK_CANCELBUFF")
+  local found183, foundNamed183 = false, false
+  for i = 1, table.getn(cats183) do
+    local ok, items = pcall(cats183[i].items)
+    if ok and type(items) == "table" then
+      for _, it in ipairs(items) do
+        if it == "取消自身buff" then found183 = true end
+        if it == L183_CB then foundNamed183 = true end
+      end
+    end
+  end
+  eq(found183, true, "⑧★★技能选单里有「取消自身buff」（用户选得到）")
+  eq(foundNamed183, true, "⑧★还有「指定名字…」那一项（点了弹名字输入框）")
+
+  -- 收尾：复位
+  if EVAL_HELP_CONFIG.war.debuffTex then EVAL_HELP_CONFIG.war.debuffTex["保护祝福"] = nil end
+  TEST.dhBuffs, TEST.dhSlotOf, TEST.dhTexts = keep183.dhBuffs, keep183.dhSlotOf, keep183.dhTexts
+  TEST.dhCancel = nil
+  TEST.chat = nil
+  print("  取消自身buff：不占动作条 / 恒就绪 / 借光环图标 / 带名字只取消一个 / 裸写法全取消 / 没有则跳过不瞎调")
+end
 print("ALL TESTS PASS")
 
   local sd142 = EVAL_HELP_CONFIG.shareSealDemo

@@ -489,6 +489,9 @@ local groupsOK
 --     「顶层 local 声明 vs 使用」，而这里的问题是「使用了下面才声明的东西」——
 --     检查方向需要覆盖「同一文件内、引用点早于声明点」的相互次序，已记入待办）。
 local auraTexOf
+-- ★1.74.8 同理前置声明：图标解析（wactionName 一带，行号 <1121）里要用 auraTexKnown，
+--   而它声明在后面 —— 不前置就是「按到取消自身buff 就红字 attempt to call a nil value」。
+local auraTexKnown
 local function teamPickBest(list, crit, bufTex, bufNeed, debTex, debWant)
   local best, bestKey = nil, nil
   for _, r in ipairs(list) do
@@ -890,6 +893,25 @@ local function followOf(skill)
   return nil
 end
 
+-- 取消自身buff（1.74.8 特殊行为，用户要求：「方案->技能->取消自身buff」）：
+--   rule.skill = "取消自身buff"（取消**全部**可取消的自身光环）
+--              / "取消自身buff:光环名"（只取消那一个）。
+--   ★★★官方 API 核查（本项目铁律：返工/新功能先核 API 本身对不对）：
+--     · 本客户端**没有** Dismount / IsMounted / CancelAura 任何专用函数（1370 条索引零命中）；
+--     · 唯一通道 = `CancelPlayerBuff(buffIndex)`，**not Protected**（可直接调，无需 RunScript）
+--       —— 与 1.74.7 骑乘助手同一结论；
+--     · ★它收的是 **GetPlayerBuff 返回的内部索引**，不是增益条槽位号 —— 喂错会取消**别的**光环。
+--   ★语义取舍（与「取消施法」的「没在读条就静默跳过」同族，别做成静默失败）：
+--     · 指定名字时：身上没有 → **跳过并如实记日志**（不是报错，也不是假装成功）；
+--     · 不指定名字时：取消全部**可取消**的自身增益（GetPlayerBuff 的 CANCELABLE 过滤天然排除不可取消的）。
+--   ★不占动作条（见 skillNoSlotOk）。
+local function cancelBuffOf(skill)
+  if skill == "取消自身buff" then return true, nil end
+  local nm = string.match(colonNorm(skill) or "", "^取消自身buff:(.*)$")
+  if nm then return true, nm end
+  return nil
+end
+
 -- ★★★1.72.4 「不占动作条也合法」的**单一判据**（引擎闸门 + 战斗信息UI 的亮金/缺失判定共用一份）。
 --   为什么必须抽成一份：原来这段 7 个 or 的名单在**三个地方各写了一遍**（引擎跳过判据、
 --   战斗信息UI 亮金白名单、战斗信息UI「缺技能?」白名单）→ 新增一类「不需要动作条」的技能时
@@ -898,7 +920,7 @@ end
 function skillNoSlotOk(skill, rank)
   if rank then return true end
   return (petCmdOf(skill) or targetSelOf(skill) or itemOf(skill) or stanceOf(skill)
-          or cancelCastOf(skill) or stopAllOf(skill) or followOf(skill)) and true or false
+          or cancelCastOf(skill) or stopAllOf(skill) or followOf(skill) or cancelBuffOf(skill)) and true or false
 end
 
 -- ===== 「停读条」通道（1.71.3：**保留原始 SpellStopCasting 方式**；移动脉冲实测无效、已删）=====
@@ -1007,6 +1029,14 @@ local function wicon(name)
     return "Interface\\Icons\\INV_Misc_QuestionMark"
   end
   if followOf(name) then return ACT_FOLLOW_ICON end -- ★1.71.3 跟随：本插件自带的那张（跟着走）
+  local _cbOn, cbNm = cancelBuffOf(name) -- ★1.74.8 取消自身buff：借**那个光环自己的图标**（学习表/动作条）；无名退回问号
+  if _cbOn then
+    if cbNm and cbNm ~= "" then
+      local ctx = auraTexKnown(cbNm)
+      if ctx then return ctx end
+    end
+    return "Interface\\Icons\\INV_Misc_QuestionMark"
+  end
   local stname = stanceOf(name) -- 1.43.0 姿态：GetShapeshiftFormInfo 图标（激活态自动亮纹）
   if stname then
     local _si, stex = wFindStance(stname)
@@ -1091,7 +1121,8 @@ end
 --   → 「否/无」方向被当成**成立** → **规则无限重放**（用户日志里同一条反复刷屏）。
 --   ★判据：**「查不到」与「没有」是两件事**——查不到必须如实报错，不能默认成「没有」。
 --   ★这也是本项目「静默失败族」的又一例：不报错、不崩、行为却错。
-local function auraTexKnown(name)
+-- ★注意：这里是**给上面已前置声明的 local 赋值**（不是新建 local）——同上，改了会断掉引用。
+function auraTexKnown(name)
   if type(name) ~= "string" or name == "" then return nil end
   return auraTexOf(name)
 end
@@ -1229,6 +1260,24 @@ end
 function EVAL_TARGET_BUFF_LIST() local l, ok = wScanAuras("target", false) return l, ok end -- 目标 buff（1.54.0）
 function EVAL_PLAYER_DEBUFF_LIST() local l, ok = wScanAuras("player", true) return l, ok end -- 自身 debuff（1.54.0）
 
+-- ★1.74.8 内部索引 → 光环名（供「取消自身buff:名字」按名匹配用）。
+--   与 EVAL_PLAYER_BUFF_LIST 同源：同一个隔离 tooltip 读名 —— 「清单里显示叫什么」与
+--   「按名字取消时认不认得出」必须是同一面镜子，否则会出现「看得见却取消不掉」。
+--   读不出 → nil（调用方据此**如实跳过**，不猜）。
+function EVAL_PLAYER_BUFF_NAME(bi)
+  if type(bi) ~= "number" or bi < 0 then return nil end
+  if not (WTT and WTT.SetPlayerBuff and EVAL_WTT_MAY_READ()) then return nil end
+  local nm = nil
+  pcall(function()
+    WTT:SetOwner(UIParent, "ANCHOR_NONE")
+    WTT:ClearLines()
+    if WTT.SetPlayerBuff(WTT, bi) then nm = wtText1() end
+    WTT:Hide()
+  end)
+  if type(nm) == "string" and nm ~= "" then return nm end
+  return nil
+end
+
 -- 当前自身 buff 实时清单（GetPlayerBuff 0 起始索引 + SetPlayerBuff 读名）
 function EVAL_PLAYER_BUFF_LIST()
   local list = {}
@@ -1316,6 +1365,9 @@ local function wready(name)
     return true
   end
   if followOf(name) then -- ★1.71.3 跟随：不占动作条、无冷却 → 恒就绪（能否跟上由客户端判定，wuse 里如实记账）
+    return true
+  end
+  if cancelBuffOf(name) then -- ★1.74.8 取消自身buff：不占动作条、无冷却 → 恒就绪（身上有没有由 wuse 里如实记录）
     return true
   end
   local s = wslots[name]
@@ -1545,6 +1597,45 @@ local function wuse(name, reason, rank)
     local sline = string.format("→ %s (%s) | %s", name, reason, did)
     EVAL_LOGLINE(sline)
     if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cff7fff7f" .. sline .. "|r") end
+    return true
+  end
+  local cbOn, cbName = cancelBuffOf(name)
+  if cbOn then
+    -- 取消自身buff（1.74.8）：见 cancelBuffOf 上方的 API 核查注释。
+    -- ★三条硬纪律：① CancelPlayerBuff 收**内部索引**（不是槽位号）；
+    --   ② 拿不到索引 → **如实失败**，绝不瞎猜一个索引去取消别的光环；
+    --   ③ 「身上没有」是**跳过**（不是成功，也不是报错）——与「取消施法」同族的空操作语义。
+    local function cbskip(msg)
+      local sl = name .. "跳过: " .. msg
+      EVAL_LOGLINE(sl)
+      if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cffff8080" .. sl .. "|r") end
+    end
+    if type(GetPlayerBuff) ~= "function" then cbskip("客户端没有 GetPlayerBuff（取消失败）") return false end
+    if type(CancelPlayerBuff) ~= "function" then cbskip("客户端没有 CancelPlayerBuff（不可用）") return false end
+    -- 收集目标：指定名字 → 只有它；不指定 → **全部可取消的自身增益**（CANCELABLE 过滤天然排除不可取消的）
+    local targets = {}
+    for i = 0, 31 do
+      local okb, bi = pcall(GetPlayerBuff, i, "HELPFUL|CANCELABLE")
+      if not okb or type(bi) ~= "number" or bi < 0 then break end
+      if cbName and cbName ~= "" then
+        if EVAL_PLAYER_BUFF_NAME(bi) == cbName then table.insert(targets, bi) end
+      else
+        table.insert(targets, bi)
+      end
+    end
+    if table.getn(targets) == 0 then
+      cbskip(cbName and ("身上没有「" .. tostring(cbName) .. "」") or "身上没有可取消的增益")
+      return false
+    end
+    local done = 0
+    for _, bi in ipairs(targets) do
+      if pcall(CancelPlayerBuff, bi) then done = done + 1 end
+    end
+    if done == 0 then cbskip("取消调用全部失败") return false end
+    local cline = string.format("→ %s (%s) | 取消 %d 个自身增益%s", name, reason, done,
+      (cbName and cbName ~= "") and ("：" .. cbName) or "")
+    EVAL_LOGLINE(cline)
+    if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cff7fff7f" .. cline .. "|r") end
     return true
   end
   local fok2, fname2 = followOf(name)
@@ -2753,6 +2844,11 @@ function EVAL_TEST_COND_EVAL_LIVE(cd, rule) return condOne(cd, nil, false, rule)
 --   是个独立调用点；只测条件路径会漏掉它（本项目「A 产出 / B 消费 两边都要断言」）。
 function EVAL_TEST_WUSE(name) return wuse(name, "test") end
 
+-- ★1.74.8 断言入口：**就绪判定**（不占动作条的特殊技能恒就绪 —— 客户端对它们不报冷却）
+function EVAL_TEST_READY(name) local ok, why = wready(name) return ok and true or false, why end
+-- ★1.74.8 断言入口：**图标解析**（验「取消自身buff:名」借的是那个光环自己的纹理）
+function EVAL_TEST_ACTION_ICON(name) return wicon(name) end
+
 function EVAL_TEST_TEAM_PICK_AUTO(rule, selId)
   teamPickArg.rule = rule
   TARGET_SEL_ARG_LAST = selId or "teamParty"
@@ -3109,7 +3205,10 @@ function EVAL_GO_SKILL_CATEGORIES()
     -- 1.47.0 扩充：自动射击（猎人）/射击（法系魔杖）走动作条通道同「攻击」；取消施法=SpellStopCasting 特殊行为
     -- ★1.71.3 追加「跟随」（不占动作条的特殊行为）：直接「跟随」= 跟当前目标；
     --   `L("SE_PICK_FOLLOW")`（「跟随:指定名字…」）点了会弹名字输入框 → 存成 `跟随:名字`。
-    local l = { "攻击", "自动射击", "射击", "取消施法", "停止攻击", "跟随", L("SE_PICK_FOLLOW") }
+    -- ★1.74.8 追加「取消自身buff」（用户要求：「方案->技能->取消自身buff」）：
+    --   裸写法 = 取消**全部**可取消的自身增益；带名字写法只取消那一个（点了弹名字输入框）。
+    local l = { "攻击", "自动射击", "射击", "取消施法", "停止攻击", "跟随", L("SE_PICK_FOLLOW"),
+                "取消自身buff", L("SE_PICK_CANCELBUFF") }
     if type(GetNumShapeshiftForms) == "function" then
       local okn, n = pcall(GetNumShapeshiftForms)
       if okn and n and n > 0 then
@@ -3227,6 +3326,7 @@ EVAL_STANCE_OF = stanceOf
 EVAL_CANCELCAST_OF = cancelCastOf
 EVAL_STOPALL_OF = stopAllOf -- 1.71.3 停止攻击特殊行为（UI 层判定「不占动作条」用）
 EVAL_FOLLOW_OF = followOf -- ★1.71.3 跟随特殊行为（UI 层同样按「不占动作条」处理）
+EVAL_CANCELBUFF_OF = cancelBuffOf -- ★1.74.8 取消自身buff 特殊行为（UI 层同样按「不占动作条」处理）
 EVAL_NO_SLOT_OK = skillNoSlotOk -- ★1.72.4 「不占动作条也合法」的单一判据（引擎与战斗信息UI 共用，不许再各写一份名单）
 EVAL_FOLLOW_ICON = ACT_FOLLOW_ICON -- ★1.71.3 跟随的图标（图标库「本插件在用」要列它；单一来源，不另抄路径）
 -- 1.71.3 移动脉冲已删（实测无效）→ 对应的两个测试观测口一并删除（不留死状态）
