@@ -15207,15 +15207,16 @@ do
   TEST.bags = { [0 * 100 + 1] = { name = "法力药水", tex = "texMana", count = 3, cd = true } }
   TEST.time = 7000
   eq(EVAL_CH_USE("法力药水"), true, "②前置：使用成功")
-  eq(EVAL_TEST_CH_STATE().cdTotal, 60, "②★★有 CD 的物品按**真实 CD**（桩给 60s）")
-  eq(EVAL_TEST_CH_STATE().cdUntil, 7000 + 60, "②★CD 截止时刻 = 现在 + 60s")
+  -- ★1.74.14 改成**每件物品各自的 CD**：按物品名查（不再是全局一个值）
+  eq(EVAL_TEST_CH_CD_OF("法力药水"), 60, "②★★有 CD 的物品按**真实 CD**（桩给 60s）")
   -- ③ 无 CD 的物品 → 公共 CD 1.5s
   TEST.bags = { [0 * 100 + 1] = { name = "面包", tex = "texBread", count = 3 } } -- 没 cd 字段
   EVAL_HELP_CONFIG.tb.chUse = { "面包" }
   TEST.time = 7100
   eq(EVAL_CH_USE("面包"), true, "③前置：使用成功")
-  eq(EVAL_TEST_CH_STATE().cdTotal, 1.5, "③★★没有 CD 的物品**继承公共 CD 1.5s 默认值**")
-  eq(EVAL_TEST_CH_STATE().cdUntil, 7100 + 1.5, "③★CD 截止时刻 = 现在 + 1.5s")
+  eq(EVAL_TEST_CH_CD_OF("面包"), 1.5, "③★★没有 CD 的物品**继承公共 CD 1.5s 默认值**")
+  -- ★★★本组的核心：CD 是**每件物品各自的** —— 用了面包不该让法力药水也进 CD
+  eq(EVAL_TEST_CH_CD_OF("法力药水"), 0, "③★★★用了「面包」**不影响**「法力药水」的 CD（旧的全局 CD 在这里就错了）")
 
   -- ④ 喂食：成功后显示倒计时（GCD 1.5s）
   EVAL_HELP_CONFIG.tb.feedPet = true
@@ -15554,6 +15555,55 @@ do
   TEST.questLog = nil EVAL_HELP_CONFIG.tb = nil TEST.runScripts = nil
   print("  任务通知频道多选：迁移/优先级(队伍>说>自己)/关闭互斥/每次进度仅播一次")
 end
+-- ===== 组 193（1.74.15）：消耗品 CD 是**每件物品各自的**（用户：「消耗品助手 的CD 是每个物品自身的CD
+--   而不是全局的CD」）=====
+-- 背景：旧实现用**一个全局** CH.cdUntil → 用了 A 就让 B/C/D 一起变灰 + 显示同一个倒计时（错）。
+-- 覆盖：①用 A 后只有 A 进 CD，B 的 CD 仍为 0 ②横排每枚各按**自己**的物品显示遮盖/倒计时
+--   ③A 在 CD 时 B **仍能用** ④A 在 CD 时 A 被拒 ⑤A 的 CD 过后又能用
+do
+  EVAL_HELP_CONFIG.tb = EVAL_HELP_CONFIG.tb or {}
+  EVAL_HELP_CONFIG.tb.consumable = true
+  EVAL_HELP_CONFIG.tb.chUse = { "法力药水", "面包" }
+  TEST.bags = { [0 * 100 + 1] = { name = "法力药水", tex = "texMana", count = 3, cd = true },
+                [0 * 100 + 2] = { name = "面包", tex = "texBread", count = 5 } }
+  TEST.time = 5000
+  EVAL_CH_TEST_RESET_TIMERS() -- ★清掉上一组留下的 CD（绝对时刻口径 + 各组 time 独立 → 不清会把首次使用挡掉）
+  EVAL_CH_ENSURE()
+  EVAL_CH_STRIP_REFRESH()
+  -- ① 用「法力药水」（桩给 60s CD）→ 只有**它自己**进 CD
+  TEST.usedItem = nil
+  eq(EVAL_CH_USE("法力药水"), true, "①前置：用掉一件有 CD 的物品")
+  eq(EVAL_TEST_CH_CD_OF("法力药水"), 60, "①★★★用的是**这件物品自己的 CD**（60s）")
+  eq(EVAL_TEST_CH_CD_OF("面包"), 0, "①★★★别的物品**不受影响**（面包 CD=0）—— 旧的全局 CD 在这里就错了")
+  -- ② 横排每枚各按**自己**的物品显示遮盖/倒计时
+  EVAL_CH_CD_REFRESH()
+  local c1_193, c2_193 = EVAL_TEST_CH_STRIP_INFO(1), EVAL_TEST_CH_STRIP_INFO(2)
+  eq(c1_193.name == "法力药水" and c1_193.cdMaskShown == true, true,
+     "②★★★在 CD 的那一枚**显示遮盖**（" .. tostring(c1_193.name) .. "）")
+  eq(type(c1_193.cdText) == "string" and string.len(c1_193.cdText) > 0, true,
+     "②★★它显示**自己的倒计时**：" .. tostring(c1_193.cdText))
+  eq(c2_193.name == "面包" and c2_193.cdMaskShown == false, true,
+     "②★★★不在 CD 的那一枚**不显示遮盖**（" .. tostring(c2_193.name) .. "）—— 每枚各判各的")
+  -- ③ A 在 CD 时 B **仍能用**
+  TEST.time = 5050 -- 仍在法力药水的 60s CD 内
+  TEST.usedItem = nil
+  eq(EVAL_CH_USE("面包"), true, "③★★★A 在 CD 时 **B 仍然能用**（这正是「每件物品各自 CD」的用户价值）")
+  eq(TEST.usedItem ~= nil, true, "③★★B 真的被用掉了（实测 usedItem=" .. tostring(TEST.usedItem) .. "）")
+  -- ④ A 在 CD 时 A 被拒
+  --   ★时刻要**严格小于** CD 截止（法力药水 = 5000+60 = 5060）：写 5060 就正好到期、判据反过来
+  TEST.time = 5055
+  eq(EVAL_CH_USE("法力药水"), false, "④★★★A 仍在自己的 CD 内 → **被拒**（返回 false）")
+  -- ⑤ A 的 CD 过后又能用
+  TEST.time = 5000 + 61 -- 越过 60s CD
+  TEST.usedItem = nil
+  eq(EVAL_CH_USE("法力药水"), true, "⑤★★A 的 CD 过了 → 又能用（拦截只在**这件物品**的 CD 内生效）")
+  -- 收尾
+  EVAL_HELP_CONFIG.tb.consumable = false
+  EVAL_HELP_CONFIG.tb.chUse = nil
+  TEST.bags, TEST.usedItem = nil, nil
+  print("  消耗品 CD 按物品各自：只有用掉的那件进 CD · 别件不受影响 · 各枚各显示遮盖/倒计时 · CD 内被拒、过了能用")
+end
+
 print("ALL TESTS PASS")
 
   local sd142 = EVAL_HELP_CONFIG.shareSealDemo

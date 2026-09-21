@@ -19,8 +19,11 @@
 local CH = {
   built = false,      -- 主图标/横条是否已建（懒加载读值口）
   btn = nil,          -- 主图标
-  cdUntil = 0,        -- ★1.74.11 CD 截止时刻（GetTime 口径；0 = 没有 CD）
-  cdTotal = 0,        -- ★CD 总时长（秒；刷新/格式化用）
+  -- ★★1.74.14 用户：「消耗品助手 的CD 是每个物品自身的CD 而不是全局的CD」
+  --   旧实现是**一个全局** cdUntil → 用了 A 就让 B/C/D 一起变灰 + 显示同一个倒计时（错）。
+  --   现在每件物品各记各的：cd[物品名] = 该物品自己的 CD 截止时刻（GetTime 口径）。
+  cd = {},            -- ★每件物品各自的 CD 截止时刻表
+  cdTotal = {},       -- ★每件物品各自的 CD 总时长（诊断/判据用）
   cdText = nil,       -- ★倒计时文字控件（懒建）
   strip = {},         -- 横排小图标池
   stripN = 0,         -- 当前显示几枚
@@ -177,10 +180,11 @@ function EVAL_CH_USE(name)
   if not tb or not tb.consumable then return false, L("CH_OFF") end
   if type(name) ~= "string" or name == "" then return false, L("CH_NO_ITEM") end
   -- ★1.74.11 CD 拦截（用户：「在公共cd 存在_的情况下增加透明遮盖.以体现不可点击.并且要正确的拦截点击触发」）：
-  --   CD 还没转好（cdUntil > now）→ **如实拒绝**（不是静默丢，也不是让游戏静默失败）。
+  --   CD 还没转好（**这件物品自己的** CD > now）→ **如实拒绝**（不是静默丢，也不是让游戏静默失败）。
   --   ★放在 0.3s 限频**之前**：CD 是更优先的「不可用」判据。
+  --   ★★1.74.14 按**物品名**判（每件物品各自的 CD，不是全局）—— 用了一瓶药水不该让别的水也变灰。
   local now = chNow()
-  if CH.cdUntil > now then
+  if (CH.cd[name] or 0) > now then
     chSay(L("CH_CD_BUSY"))
     return false, L("CH_CD_BUSY")
   end
@@ -236,8 +240,8 @@ function EVAL_CH_USE(name)
     if okc then start, dur = tonumber(st) or 0, tonumber(du) or 0 end
   end
   local cdSec = (dur and dur > 0) and dur or 1.5
-  CH.cdUntil = now + cdSec
-  CH.cdTotal = cdSec
+  CH.cd[name] = now + cdSec     -- ★只登记**这件物品**的 CD（每件各自）
+  CH.cdTotal[name] = cdSec
   EVAL_CH_CD_REFRESH()
   EVAL_CH_STRIP_REFRESH()
   return true
@@ -307,59 +311,75 @@ local function chSavePos()
 end
 
 -- ===== CD 倒计时（1.74.11 用户要求：悬浮图标显示 CD 实时倒计时特效） =====
--- ★共用格式化 EVAL_IG_CD_TEXT（IconGrid.lua；两个助手同一份）。
---   字体 9pt（用户：「字体可以小一点」），贴在主图标**中心下方**（CD 特效，别遮住物品图标）。
+-- ★共用格式化 EVAL_IG_CD_TEXT（IconGrid.lua；两个助手同一份）。9pt 小字，贴图标中心下方。
+-- ★★1.74.14 **每件物品各自的 CD**（用户：「消耗品助手 的CD 是每个物品自身的CD 而不是全局的CD」）：
+--   主图标按 list[1]（左键用的就是它）显示；横排**每枚各显示自己那件物品的** CD 与遮盖。
+--   每个图标各有自己的遮盖与倒计时文字控件（都懒建）。
+local function chCdWidget(holder, btn, width)
+  if not holder.cdMask then
+    local m = btn:CreateTexture(nil, "OVERLAY")
+    chSolid(m, 0, 0, 0, 0.55) -- 半透明黑：一眼看出「这枚现在点了没用」
+    m:SetPoint("TOPLEFT", btn, "TOPLEFT", 0, 0)
+    m:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", 0, 0)
+    pcall(m.Hide, m)
+    holder.cdMask = m
+  end
+  if not holder.cdText then
+    local fs = chText(btn, 9, 1, 0.85, 0.3) -- 金色，9pt 小字
+    fs:SetPoint("CENTER", btn, "CENTER", 0, -1)
+    pcall(fs.SetWidth, fs, width)
+    pcall(fs.SetJustifyH, fs, "CENTER")
+    holder.cdText = fs
+  end
+  return holder.cdMask, holder.cdText
+end
+
+-- 把一个图标的 CD 显示刷成「name 这件物品」的状态；返回**是否还在 CD 中**（供 tick 管理用）
+local function chApplyCd(holder, btn, width, name, now)
+  local mask, txt = chCdWidget(holder, btn, width)
+  local left = (name and CH.cd[name] or 0) - now
+  local str = nil
+  if left > 0 and type(EVAL_IG_CD_TEXT) == "function" then str = EVAL_IG_CD_TEXT(left) end
+  if str then
+    pcall(mask.Show, mask)
+    txt:SetText(str)
+    pcall(txt.Show, txt)
+    return true
+  end
+  pcall(mask.Hide, mask)
+  txt:SetText("")
+  pcall(txt.Hide, txt)
+  return false
+end
+
 function EVAL_CH_CD_REFRESH()
   if not (CH.built and CH.btn) then return false end
-  -- ★1.74.11 遮盖（用户：「在公共cd 存在_的情况下增加透明遮盖.以体现不可点击」）：
-  --   CD 存在 → 半透明黑遮盖（主图标 + 横排各一枚，懒建）；CD 结束 → 收起。
-  local left = CH.cdUntil - chNow()
-  local onCd = (left > 0)
-  if not CH.cdMask then
-    local m = CH.btn:CreateTexture(nil, "OVERLAY")
-    chSolid(m, 0, 0, 0, 0.55) -- 半透明黑：一眼看出「现在点了没用」
-    m:SetPoint("TOPLEFT", CH.btn, "TOPLEFT", 0, 0)
-    m:SetPoint("BOTTOMRIGHT", CH.btn, "BOTTOMRIGHT", 0, 0)
-    pcall(m.Hide, m)
-    CH.cdMask = m
-  end
-  if onCd then pcall(CH.cdMask.Show, CH.cdMask) else pcall(CH.cdMask.Hide, CH.cdMask) end
-  -- 横排小图标同步遮盖（各自点用，CD 时也都不可点）
+  local now = chNow()
+  local list = EVAL_CH_LIST()
+  -- 主图标：左键用的就是 list[1] → 显示**它**的 CD
+  local any = chApplyCd(CH, CH.btn, CH_SIZE, list[1], now)
+  -- 横排：每枚各自（strip[i] = list[i]）
   for i = 1, CH_STRIP_MAX do
     local cell = CH.strip[i]
     if cell and cell.btn then
-      if not cell.cdMask then
-        local m2 = cell.btn:CreateTexture(nil, "OVERLAY")
-        chSolid(m2, 0, 0, 0, 0.55)
-        m2:SetPoint("TOPLEFT", cell.btn, "TOPLEFT", 0, 0)
-        m2:SetPoint("BOTTOMRIGHT", cell.btn, "BOTTOMRIGHT", 0, 0)
-        pcall(m2.Hide, m2)
-        cell.cdMask = m2
+      if cell.btn:IsShown() then
+        if chApplyCd(cell, cell.btn, CH_STRIP - 4, list[i], now) then any = true end
+      else
+        -- 不显示的格子：把旧状态收起来（免得下次显示时残留旧的遮盖/文字）
+        if cell.cdMask then pcall(cell.cdMask.Hide, cell.cdMask) end
+        if cell.cdText then pcall(cell.cdText.Hide, cell.cdText) end
       end
-      if onCd and cell.btn:IsShown() then pcall(cell.cdMask.Show, cell.cdMask)
-      else pcall(cell.cdMask.Hide, cell.cdMask) end
     end
   end
-  if not CH.cdText then
-    local fs = chText(CH.btn, 9, 1, 0.85, 0.3) -- 金色，9pt 小字
-    fs:SetPoint("CENTER", CH.btn, "CENTER", 0, -1)
-    pcall(fs.SetWidth, fs, CH_SIZE)
-    pcall(fs.SetJustifyH, fs, "CENTER")
-    CH.cdText = fs
-  end
-  local txt = (type(EVAL_IG_CD_TEXT) == "function") and EVAL_IG_CD_TEXT(left) or nil
-  if txt then
-    CH.cdText:SetText(txt)
-    pcall(CH.cdText.Show, CH.cdText)
+  -- tick：只要**还有任何一枚**在 CD 就保持；全没了就摘掉（不在后台空转）
+  if any then
     if not CH.cdTick then
       local f = CreateFrame("Frame", nil, UIParent)
       f:SetScript("OnUpdate", function() EVAL_CH_CD_REFRESH() end)
       CH.cdTick = f
     end
   else
-    CH.cdText:SetText("")
-    pcall(CH.cdText.Hide, CH.cdText)
-    if CH.cdTick then pcall(CH.cdTick.SetScript, CH.cdTick, "OnUpdate", nil) CH.cdTick = nil end -- CD 结束 → 摘掉 OnUpdate
+    if CH.cdTick then pcall(CH.cdTick.SetScript, CH.cdTick, "OnUpdate", nil) CH.cdTick = nil end
   end
   return true
 end
@@ -851,7 +871,8 @@ function EVAL_TEST_CH_STATE()
            side = CH.side, uses = CH.uses, fail = CH.fail, lastMsg = CH.lastMsg,
            hasUci = (type(UseContainerItem) == "function"),
            -- ★1.74.11 CD 倒计时读值口（判据要钉「真实 CD / 无 CD 继承 1.5s / CD 结束摘 OnUpdate」）
-           cdTotal = CH.cdTotal, cdUntil = CH.cdUntil,
+           -- ★1.74.14 **每件物品各自的 CD**（判据要能按物品名查，不是全局一个值）
+           cd = CH.cd, cdTotal = CH.cdTotal,
            cdTextShown = (CH.cdText and CH.cdText.IsShown and CH.cdText:IsShown() == true) or false,
            cdTickOn = (CH.cdTick ~= nil),
            -- ★1.74.11 遮盖读值口（判据要钉「CD 时遮盖显示 / CD 结束遮盖收起」）
@@ -860,6 +881,15 @@ function EVAL_TEST_CH_STATE()
            probeUseN = CH.probeUseN,
            -- ★1.74.12 延迟刷新读值口（用后 0.5s 刷一次数量）
            refreshAt = CH.refreshAt, refreshTickOn = (CH.refreshTick ~= nil) }
+end
+
+-- ★1.74.14 读值口：**按物品名**查该物品自己的 CD 剩余秒数（判据用；不改状态）
+function EVAL_TEST_CH_CD_OF(name)
+  if type(name) ~= "string" then return nil end
+  local until_ = CH.cd[name]
+  if not until_ then return 0 end
+  local left = until_ - chNow()
+  return (left > 0) and left or 0
 end
 
 function EVAL_TEST_CH_CLICK_MAIN(button)
@@ -906,8 +936,17 @@ function EVAL_TEST_CH_STRIP_INFO(i)
     local okn, nv = pcall(s.num.GetText, s.num)
     if okn then numTxt = nv end
   end
+  -- ★1.74.14 补「**这一枚自己的** CD 遮盖/倒计时」读值口（判据要能证明「每件物品各自 CD」：
+  --   A 在 CD → A 那枚有遮盖；B 不在 CD → B 那枚没有遮盖）
+  local maskShown = (s.cdMask and s.cdMask.IsShown and s.cdMask:IsShown() == true) or false
+  local cdTxt = nil
+  if s.cdText and type(s.cdText.GetText) == "function" then
+    local okt, tv = pcall(s.cdText.GetText, s.cdText)
+    if okt then cdTxt = tv end
+  end
   return { shown = shown, name = s.name, found = s.found, left = l, top = t, w = w, h = h, tex = texPath,
-           gray = gr, grayG = gg, grayB = gb, texShown = texShown, num = numTxt }
+           gray = gr, grayG = gg, grayB = gb, texShown = texShown, num = numTxt,
+           cdMaskShown = maskShown, cdText = cdTxt }
 end
 
 function EVAL_TEST_CH_GEOM()
@@ -930,7 +969,7 @@ function EVAL_CH_TEST_RESET_TIMERS()
   --   而各用例的 TEST.time 各自独立（相邻用例常出现「时间倒流」）→ 上一组留下的 CD
   --   会把下一组的第一次使用当「CD 未转好」挡掉（本轮实测 got=false）。
   --   ★判据同限频：凡模块级可变状态，用例开头就该有办法复位。
-  CH.cdUntil, CH.cdTotal = 0, 0
+  CH.cd, CH.cdTotal = {}, {}
 end
 
 

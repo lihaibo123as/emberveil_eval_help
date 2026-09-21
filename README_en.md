@@ -21,7 +21,7 @@
 
 > 📌 Continuously improving — testing and feedback welcome!　🐞 [Bug reports / suggestions](https://gitee.com/xeval/emberveil_eval_help.git) (Issues)　🤖 Developed with DeepSeek Harness AI assistance (see "Contributing" at the bottom)
 
-## 🏁 Milestones (1.52.0 → 1.74.14)
+## 🏁 Milestones (1.52.0 → 1.74.15)
 
 - **🎬 Sharing experience loop** (1.74.1 → 1.74.6): 40 scene lines (accept/ignore × with/without target × 3 languages; title coloured by tier, and the measured rule "a colour code must carry a link") · profile **author/source** in 4 kinds + profile-list tooltip (tier · source · skill count) · all **8 "no popup" branches logged** · the easter-egg reaction is **no longer wired** (kept) · fixed the "self-echo" misjudgement (someone else's share was swallowed when you already had the same profile).
 - **🧰 Two toolbox helpers + dispel types** (1.74.5 → 1.74.6): **Hunter → auto-feed** and the **consumable helper** (one 8×N icon grid · multi-select · greyed out when used up; unverified features carry a **yellow "to be tested" mark**) · **self/target debuffs now support "dispel type"** — same semantics as party/candidate debuffs (empty name + type = "any debuff of that type").
@@ -39,6 +39,7 @@
 
 | Version | Theme | One-line highlight |
 | :-- | :-- | :-- |
+| **1.74.15** | ⏳ Consumable cooldown is now **per item** | The old code kept a **single global** cooldown, so drinking one potion greyed out every consumable and showed the same countdown (wrong); now **only the used item goes on cooldown** and the rest stay usable; each strip icon shows **its own** mask and countdown (the main icon follows the item left-click uses); B stays usable while A is on cooldown |
 | **1.74.14** | 🧩 New **General** template group (12 groups / 34 entries) + ✂️ split-use reverted + 🎯 consumable icon & counts | ①General templates: 5 **class-independent** building blocks (eat/drink out of combat, emergency potion, dismount, cancel BoP, stop-attack) — first templates to use `物品:name` and `取消自身buff:name`; ②★**split-use from 1.74.12 reverted**: aligned with the skill-editor path (user-verified working) — backpack lookup + a single `UseContainerItem`, no splitting/cursor tricks; ③main icon is now a **special icon** and all selected items line up to the right (extends only when >1); ④**0.5s delayed count refresh** after use (the client's count is not updated immediately — fixes "counts don't match") |
 | **1.74.13** | 🔔 Quest notify channels are now **multi-select** (party > say > self · each progress announced once) | The toolbox → quest notify dropdown is multi-select: off/self/say/party; with several checked only the **highest-priority one** is used (party > say > self) and every progress is announced **exactly once**; while not in a party it falls back inside the checked set (say → self), and party-only with no party is **skipped honestly**; the old single-value config migrates to a set (off = cleared) |
 | **1.74.12** | ✂️ Split-use for consumables (fixes "one click eats the whole stack") + 🔍 probe command | ①This client's `UseContainerItem` consumes the **entire stack** (user-confirmed) → now we `SplitContainerItem` **one** off, `PutItemInBag` (a different bag) it, and use that single item; ★if splitting fails we **refuse honestly** instead of falling back to whole-stack use; ②new probe `/eh go 消耗品探针 [name]` (measures items-per-use, verifies counts, probes split APIs) |
@@ -48,7 +49,6 @@
 | **1.74.8** | ✂️ New skill action: Cancel Self Buff | In a plan, add `取消自身buff` (cancel every cancelable buff) or `取消自身buff:<aura>` (cancel just that one); a slot-free special skill alongside Cancel Cast / Stop Attack / Follow, always ready, icon borrowed from the aura itself, and it **honestly names** what it skipped instead of cancelling something else |
 | **1.74.7** | 🐎 Riding · One-click dismount | New toolbox group: on-screen icon, left-click dismount (mount = cancelable aura via CancelPlayerBuff), right-click menu, optional auto-dismount |
 | **1.74.6** | ☠️ **Self/target debuffs support "dispel type"** | Same rules as party/candidate debuffs: parse `name(type)` · filter by type when evaluating (**name matched but type differs = NOT a hit**) · **empty name + type = "any debuff of that type"** · one shared formatter (export tokens / localized display); also restores the type suffix `candDebuff` used to drop |
-| **1.74.5** | 🎬 Share "scene lines" + 🧰 two toolbox helpers (auto-feed / consumables) | 40 scene lines (accept/ignore × with/without target × 3 languages; title coloured by tier, exactly one colour code) · profile author/source in 4 kinds + profile-list tooltip · all 8 "no popup" branches are logged now · the easter-egg reaction is **no longer wired** (kept) · hunter auto-feed & consumable helper share one 8×N icon grid (unverified features are marked "to be tested") |
 
 > 📜 Detailed per-version notes live in **[CHANGELOG.md](CHANGELOG.md)**; earlier history is in the git commit log.
 
