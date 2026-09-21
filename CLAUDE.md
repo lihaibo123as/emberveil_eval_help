@@ -8,6 +8,22 @@
 > ★写入纪律：**先查有没有同类条目——宁可合并改写，不要追加流水账**；★**新条目先判它属「常驻卷」还是「参考卷」**（常驻卷只放必须随时可见的铁律与判据）。
 > ★要查「某个功能/某个坑现在怎么写」→ 先看第五节的判据，再看 `DEVELOPMENT.md` 与源码。
 
+## ★★★改完代码**自动同步到本机游戏目录**（用户 1.74.8 明确要求）
+
+- **用户原话**：「在修改代码完成之后自动将插件相关文件复制到 本机游戏目录：`E:\soft\game\eb\Azeroth\Binaries\Win64\Games\Emberveil\live\Azeroth\Interface\AddOns` 方便真机调试」。
+- **触发条件**：**每次改完插件代码**（.lua / .toc / 素材）之后，**自动**把插件相关文件复制过去 —— 不必等用户开口，也不要在最后才想起来。
+- **目标路径**（本机就绪，目录已存在，同级已有 `UnrealQuest`）：
+  `E:\soft\game\eb\Azeroth\Binaries\Win64\Games\Emberveil\live\Azeroth\Interface\AddOns`
+- **复制口径**：以 `EvalHelp.toc` 现算的模块清单为准（与发布包 PACK LIST 同一口径），落到 `AddOns\EvalHelp\`；
+  ★**连同子目录**（`tools\`、`Locales\`、`examples\`）一起递归复制；★**不要**把仓库里的测试文件
+  （`test_*.lua`、`luacheck.js`、`tmp\`、`preview\`、`doc\`、`.git`）带过去。
+- **次序**：**先跑完两道闸门**（`node luacheck.js` + `node test_engine.js`，都要 exit 0）**再复制** ——
+  否则会把一个**载不进去的插件**同步进游戏目录，真机表现是「整个插件失效」且 UE 日志看不到原因（铁律 1）。
+- **同类判据**：这与「发布包」是**两条独立出口**（发布包出 zip、这个直接进游戏目录），别互相替代；
+  游戏目录那次**不是** release 的一部分，**不需要**打标签/出包/建 Release。
+- ★**注意**：这是**用户主机上的真实游戏目录**（本机即游戏主机，见铁律 3），复制是**覆盖写**；
+  不要删除目标目录里别的东西（那边还有 `UnrealQuest` 与 `.emberveil-addons.json`）。
+
 ## ★★★「提交版本」≠「release」（用户 1.72.1 明确划定）
 
 - **用户原话**：「提交版本不要触发 release。在我明确要求 release 才进入这个环节」。
