@@ -15227,6 +15227,116 @@ do
   print("  悬浮图标 CD 倒计时：格式化（秒/分钟进位/不显示）· 真实 CD · 无 CD 继承 1.5s · CD 结束摘 OnUpdate")
 end
 
+-- 182) ★★★1.74.12 喂食助手 tooltip：有宠物时显示**宠物信息行**（用户：「等级 35 ｜ 快乐度 ｜ 忠诚 ｜ 经验 完善下」）
+--   判据：① 有宠物 → 信息行含 等级/快乐度/忠诚/经验 四段（数据全走已验证 API）；
+--         ② 快乐度**三档**映射（1 不开心/2 一般/3 快乐）+ 对应颜色（红/金/绿）；
+--         ③ 伤害% 原样显示 API 第二返回值；④ 经验 = GetPetExperience 的两个返回值拼「当前/所需」；
+--         ⑤ 没宠物 → 返回 nil（tooltip 走「现在没有宠物」）；⑥ 某个 API 缺失 → 留「?」不崩。
+do
+  local savedHP182, savedHappiness182 = TEST.hasPet, TEST.happiness
+  -- ① 一般档（档位 2）：四段齐全
+  TEST.hasPet, TEST.happiness = true, 2
+  local pi182, r182, g182, b182 = EVAL_HH_PET_INFO()
+  eq(type(pi182) == "string" and pi182 ~= "", true, "①★有宠物 → 有信息行")
+  eq(string.find(pi182, "等级", 1, true) ~= nil, true, "①★含等级段")
+  eq(string.find(pi182, "快乐度", 1, true) ~= nil, true, "①★含快乐度段")
+  eq(string.find(pi182, "忠诚", 1, true) ~= nil, true, "①★含忠诚段")
+  eq(string.find(pi182, "经验", 1, true) ~= nil, true, "①★含经验段")
+  eq(string.find(pi182, "12345/45000", 1, true) ~= nil, true, "①★★经验 = 12345/45000（GetPetExperience 两返回值拼起来）")
+  eq(string.find(pi182, "100", 1, true) ~= nil, true, "①★★伤害% 显示 API 第二返回值（桩 = 100）")
+  -- ② 档位映射 + 颜色
+  TEST.happiness = 3
+  local p3 = EVAL_HH_PET_INFO()
+  eq(string.find(p3, "快乐（伤害", 1, true) ~= nil, true, "②★档位 3 → 「快乐」")
+  local _, r3, g3 = EVAL_HH_PET_INFO()
+  eq(g3 > 0.9 and r3 < 0.6, true, "②★快乐档 → 绿（g 高）")
+  TEST.happiness = 1
+  local p1 = EVAL_HH_PET_INFO()
+  eq(string.find(p1, "不开心（伤害", 1, true) ~= nil, true, "②★档位 1 → 「不开心」")
+  local _, r1, g1 = EVAL_HH_PET_INFO()
+  eq(r1 > 0.9 and g1 < 0.6, true, "②★不开心档 → 红（r 高）")
+  -- ⑤ 没宠物 → nil（tooltip 显示「现在没有宠物」）
+  TEST.hasPet = false
+  eq(EVAL_HH_PET_INFO(), nil, "⑤★★没宠物 → 返回 nil（tooltip 走 HH_TT_NOPET）")
+  TEST.hasPet = true
+  -- ⑥ API 缺失：把 GetPetHappiness / GetPetExperience / GetPetLoyalty 临时拿掉 → 留「?」不崩
+  TEST.happiness = 2
+  local sH, sX, sL = GetPetHappiness, GetPetExperience, GetPetLoyalty
+  GetPetHappiness, GetPetExperience, GetPetLoyalty = nil, nil, nil
+  local p6 = EVAL_HH_PET_INFO()
+  GetPetHappiness, GetPetExperience, GetPetLoyalty = sH, sX, sL
+  eq(type(p6) == "string", true, "⑥★API 缺失也不崩（返回「?」）")
+  eq(string.find(p6, "?", 1, true) ~= nil, true, "⑥★★缺失的字段如实留「?」（绝不虚构数值）")
+  TEST.hasPet, TEST.happiness = savedHP182, savedHappiness182
+  print("  喂食助手 tooltip 宠物信息行：等级/快乐度(三档+颜色)/忠诚/经验 全走已验证 API · 缺接口留? · 没宠物走占位")
+end
+
+-- ===== 组 189（1.74.11）：CD 存在时透明遮盖 + 正确拦截点击（用户：「在公共cd 存在_的情况下增加透明遮盖.
+--   以体现不可点击.并且要正确的拦截点击触发」）=====
+-- 覆盖：①消耗品 CD 时**拦截**（点了不动）②消耗品 CD 时**遮盖显示**、CD 结束遮盖收起
+--   ③喂食 CD 时**拦截**（点了不入队）④喂食 CD 时**遮盖显示** ⑤CD 过了照常能用
+do
+  EVAL_HELP_CONFIG.tb = EVAL_HELP_CONFIG.tb or {}
+  EVAL_HELP_CONFIG.tb.consumable = true
+  EVAL_HELP_CONFIG.tb.chUse = { "法力药水" }
+  TEST.bags = { [0 * 100 + 1] = { name = "法力药水", tex = "texMana", count = 3, cd = true } }
+  TEST.time = 8000
+  EVAL_CH_ENSURE()
+  -- ① 先用一次（60s CD），然后 CD 没转好时再点 → **拦截**
+  eq(EVAL_CH_USE("法力药水"), true, "①前置：第一次使用成功")
+  local usesBase189 = EVAL_TEST_CH_STATE().uses
+  TEST.time = 8001 -- CD 才过 1s（60s CD 才走 1s）
+  local ok189, why189 = EVAL_CH_USE("法力药水")
+  eq(ok189, false, "①★★★CD 没转好时再点 → **拦截**（返回 false）")
+  eq(EVAL_TEST_CH_STATE().uses, usesBase189, "①★★★拦截 = **真的没执行**（uses 没增加，不是静默丢）")
+  eq(string.find(tostring(why189 or ""), "冷却", 1, true) ~= nil or string.find(tostring(why189 or ""), "CD", 1, true) ~= nil, true,
+     "①★如实说「还在冷却」（不静默吞掉点击）：" .. tostring(why189))
+  -- ② CD 时遮盖显示、CD 结束遮盖收起
+  EVAL_CH_CD_REFRESH()
+  eq(EVAL_TEST_CH_STATE().cdMaskShown, true, "②★★CD 存在 → **遮盖显示**（一眼看出不可点击）")
+  TEST.time = 8000 + 61 -- CD 结束
+  EVAL_CH_CD_REFRESH()
+  eq(EVAL_TEST_CH_STATE().cdMaskShown, false, "②★★CD 结束 → **遮盖收起**")
+
+  -- ③ 喂食 CD 时拦截（点了不入队）
+  EVAL_HELP_CONFIG.tb.feedPet = true
+  EVAL_HELP_CONFIG.tb.hhFood, EVAL_HELP_CONFIG.tb.hhFoodTex = "熏熊肉", "texmeat"
+  TEST.bags = { [0 * 100 + 1] = { name = "熏熊肉", tex = "texmeat", count = 3 } }
+  TEST.spellbook = { { name = "喂食宠物" } }
+  TEST.hasPet = true
+  EVAL_HH_TEST_RESET_TIMERS()
+  EVAL_HH_ENSURE()
+  TEST.time = 8100
+  EVAL_HH_FEED()
+  EVAL_HH_STEP(8100)
+  TEST.targeting = 1 EVAL_HH_STEP(8100.1) TEST.targeting = nil EVAL_HH_STEP(8100.2) -- 喂完第一笔（CD 1.5s）
+  local qnBase189 = EVAL_TEST_HH_STATE().qn
+  TEST.time = 8100.5 -- CD 才过 0.3s（1.5s CD 才走 0.3s）
+  local ok189b = EVAL_HH_FEED()
+  eq(ok189b, false, "③★★★喂食 CD 没转好时再点 → **拦截**（返回 false）")
+  eq(EVAL_TEST_HH_STATE().qn, qnBase189, "③★★★拦截 = **没入队**（队列深度没变，不是入队后干等）")
+  -- ④ 喂食 CD 时遮盖显示
+  EVAL_HH_CD_REFRESH()
+  eq(EVAL_TEST_HH_STATE().cdMaskShown, true, "④★★喂食 CD 存在 → **遮盖显示**")
+  TEST.time = 8100.2 + 2.0 -- CD 结束
+  EVAL_HH_CD_REFRESH()
+  eq(EVAL_TEST_HH_STATE().cdMaskShown, false, "④★★喂食 CD 结束 → **遮盖收起**")
+
+  -- ⑤ CD 过了照常能用（拦截不是一刀切）
+  TEST.time = 8110
+  EVAL_HH_TEST_RESET_TIMERS()
+  eq(EVAL_HH_FEED(), true, "⑤★★CD 过了 → 照常能喂（拦截只在 CD 存在时生效）")
+
+  -- 收尾
+  EVAL_HELP_CONFIG.tb.consumable = false
+  EVAL_HELP_CONFIG.tb.feedPet = false
+  EVAL_HELP_CONFIG.tb.chUse = nil
+  EVAL_HELP_CONFIG.tb.hhFood, EVAL_HELP_CONFIG.tb.hhFoodTex = nil, nil
+  EVAL_HH_TEST_RESET_TIMERS()
+  TEST.bags, TEST.spellbook, TEST.hasPet, TEST.targeting = nil, nil, nil, nil
+  print("  CD 遮盖+拦截：消耗品拦截/遮盖 · 喂食拦截/遮盖 · CD 结束收起 · CD 过了照常")
+end
+
 print("ALL TESTS PASS")
 
   local sd142 = EVAL_HELP_CONFIG.shareSealDemo

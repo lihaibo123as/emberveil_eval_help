@@ -176,8 +176,15 @@ function EVAL_CH_USE(name)
   local tb = chCfg()
   if not tb or not tb.consumable then return false, L("CH_OFF") end
   if type(name) ~= "string" or name == "" then return false, L("CH_NO_ITEM") end
-  -- ★限频（服务器写动作）：0.3 秒内重复点击**如实拒绝**（不是静默丢）
+  -- ★1.74.11 CD 拦截（用户：「在公共cd 存在_的情况下增加透明遮盖.以体现不可点击.并且要正确的拦截点击触发」）：
+  --   CD 还没转好（cdUntil > now）→ **如实拒绝**（不是静默丢，也不是让游戏静默失败）。
+  --   ★放在 0.3s 限频**之前**：CD 是更优先的「不可用」判据。
   local now = chNow()
+  if CH.cdUntil > now then
+    chSay(L("CH_CD_BUSY"))
+    return false, L("CH_CD_BUSY")
+  end
+  -- ★限频（服务器写动作）：0.3 秒内重复点击**如实拒绝**（不是静默丢）
   if (now - CH.lastUse) < CH_RATE then
     chSay(L("CH_BUSY"))
     return false, L("CH_BUSY")
@@ -292,6 +299,35 @@ end
 --   字体 9pt（用户：「字体可以小一点」），贴在主图标**中心下方**（CD 特效，别遮住物品图标）。
 function EVAL_CH_CD_REFRESH()
   if not (CH.built and CH.btn) then return false end
+  -- ★1.74.11 遮盖（用户：「在公共cd 存在_的情况下增加透明遮盖.以体现不可点击」）：
+  --   CD 存在 → 半透明黑遮盖（主图标 + 横排各一枚，懒建）；CD 结束 → 收起。
+  local left = CH.cdUntil - chNow()
+  local onCd = (left > 0)
+  if not CH.cdMask then
+    local m = CH.btn:CreateTexture(nil, "OVERLAY")
+    chSolid(m, 0, 0, 0, 0.55) -- 半透明黑：一眼看出「现在点了没用」
+    m:SetPoint("TOPLEFT", CH.btn, "TOPLEFT", 0, 0)
+    m:SetPoint("BOTTOMRIGHT", CH.btn, "BOTTOMRIGHT", 0, 0)
+    pcall(m.Hide, m)
+    CH.cdMask = m
+  end
+  if onCd then pcall(CH.cdMask.Show, CH.cdMask) else pcall(CH.cdMask.Hide, CH.cdMask) end
+  -- 横排小图标同步遮盖（各自点用，CD 时也都不可点）
+  for i = 1, CH_STRIP_MAX do
+    local cell = CH.strip[i]
+    if cell and cell.btn then
+      if not cell.cdMask then
+        local m2 = cell.btn:CreateTexture(nil, "OVERLAY")
+        chSolid(m2, 0, 0, 0, 0.55)
+        m2:SetPoint("TOPLEFT", cell.btn, "TOPLEFT", 0, 0)
+        m2:SetPoint("BOTTOMRIGHT", cell.btn, "BOTTOMRIGHT", 0, 0)
+        pcall(m2.Hide, m2)
+        cell.cdMask = m2
+      end
+      if onCd and cell.btn:IsShown() then pcall(cell.cdMask.Show, cell.cdMask)
+      else pcall(cell.cdMask.Hide, cell.cdMask) end
+    end
+  end
   if not CH.cdText then
     local fs = chText(CH.btn, 9, 1, 0.85, 0.3) -- 金色，9pt 小字
     fs:SetPoint("CENTER", CH.btn, "CENTER", 0, -1)
@@ -299,7 +335,6 @@ function EVAL_CH_CD_REFRESH()
     pcall(fs.SetJustifyH, fs, "CENTER")
     CH.cdText = fs
   end
-  local left = CH.cdUntil - chNow()
   local txt = (type(EVAL_IG_CD_TEXT) == "function") and EVAL_IG_CD_TEXT(left) or nil
   if txt then
     CH.cdText:SetText(txt)
@@ -714,7 +749,9 @@ function EVAL_TEST_CH_STATE()
            -- ★1.74.11 CD 倒计时读值口（判据要钉「真实 CD / 无 CD 继承 1.5s / CD 结束摘 OnUpdate」）
            cdTotal = CH.cdTotal, cdUntil = CH.cdUntil,
            cdTextShown = (CH.cdText and CH.cdText.IsShown and CH.cdText:IsShown() == true) or false,
-           cdTickOn = (CH.cdTick ~= nil) }
+           cdTickOn = (CH.cdTick ~= nil),
+           -- ★1.74.11 遮盖读值口（判据要钉「CD 时遮盖显示 / CD 结束遮盖收起」）
+           cdMaskShown = (CH.cdMask and CH.cdMask.IsShown and CH.cdMask:IsShown() == true) or false }
 end
 
 function EVAL_TEST_CH_CLICK_MAIN(button)

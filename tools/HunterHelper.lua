@@ -442,6 +442,10 @@ end
 -- 一次点击的入口（= 入队；真正的执行在状态机里，受 HH_RATE 限频）
 function EVAL_HH_FEED(req)
   if not hhOn() then return hhFail(L("HH_OFF")) end
+  -- ★1.74.11 CD 拦截（用户：「在公共cd 存在_的情况下增加透明遮盖.以体现不可点击.并且要正确的拦截点击触发」）：
+  --   CD 还没转好（cdUntil > now）→ **如实拒绝**，不入队（入了也会在 1s 限频里干等）。
+  local now0 = hhNow()
+  if HH.cdUntil > now0 then return hhFail(L("HH_CD_BUSY")) end
   if table.getn(HH.q) >= HH_QMAX then return hhFail(L("HH_BUSY")) end
   table.insert(HH.q, req or {})
   hhEnsureTick()
@@ -495,6 +499,34 @@ local function hhSavePos()
   end
 end
 
+-- ===== 宠物信息行（1.74.12 用户要求：tooltip 里有宠物时显示「等级 ｜ 快乐度 ｜ 忠诚 ｜ 经验」）=====
+-- ★全部走已验证 API：UnitLevel("pet") / GetPetHappiness()（三返回值：档位 1不开心/2一般/3快乐、伤害%、忠诚速率）/
+--   GetPetLoyalty() / GetPetExperience()；拿不到就留「?」，**绝不虚构数值**。
+--   ★快乐度是**三档**不是百分比：显示「档位（伤害 N%）」——伤害%来自 API 第二返回值（开心时更高）。
+function EVAL_HH_PET_INFO()
+  if not hhHasPet() then return nil end
+  local lvl = "?"
+  if type(UnitLevel) == "function" then local ok, v = pcall(UnitLevel, "pet") if ok and type(v) == "number" then lvl = tostring(v) end end
+  local hapIdx, hapDmg = 2, nil
+  if type(GetPetHappiness) == "function" then
+    local okh, h1, h2 = pcall(GetPetHappiness)
+    if okh and type(h1) == "number" then hapIdx = h1 end
+    if okh and type(h2) == "number" then hapDmg = h2 end
+  end
+  local hapTxt = L("HH_PET_HAPPY2")
+  if hapIdx == 1 then hapTxt = L("HH_PET_HAPPY1") elseif hapIdx == 3 then hapTxt = L("HH_PET_HAPPY3") end
+  local r, g, b = 1, 0.82, 0.3 -- 一般=金
+  if hapIdx == 1 then r, g, b = 1, 0.5, 0.4 elseif hapIdx == 3 then r, g, b = 0.5, 1, 0.5 end -- 不开心=红 / 快乐=绿
+  local loyal = "?"
+  if type(GetPetLoyalty) == "function" then local okl, v = pcall(GetPetLoyalty) if okl and type(v) == "string" and v ~= "" then loyal = v end end
+  local xpTxt = "?/?"
+  if type(GetPetExperience) == "function" then
+    local okx, x1, x2 = pcall(GetPetExperience)
+    if okx and type(x1) == "number" and type(x2) == "number" then xpTxt = tostring(x1) .. "/" .. tostring(x2) end
+  end
+  return string.format(L("HH_TT_PETINFO"), lvl, hapTxt, tostring(hapDmg or "?"), loyal, xpTxt), r, g, b
+end
+
 local function hhTip(b)
   if type(GameTooltip) ~= "table" then return end
   local tb = hhCfg() or {}
@@ -513,7 +545,10 @@ local function hhTip(b)
   local sp = EVAL_HH_SPELL()
   pcall(GameTooltip.AddLine, GameTooltip,
         string.format(L("HH_TT_SPELL"), tostring(sp or L("HH_TT_SPELL_NONE"))), 0.9, 0.9, 0.9)
-  if not hhHasPet() then pcall(GameTooltip.AddLine, GameTooltip, L("HH_TT_NOPET"), 1, 0.5, 0.4) end
+  -- ★1.74.12 有宠物 → 显示宠物信息行（等级/快乐度/忠诚/经验）；没宠物 → 显示「现在没有宠物」
+  local piTxt, piR, piG, piB = EVAL_HH_PET_INFO()
+  if piTxt then pcall(GameTooltip.AddLine, GameTooltip, piTxt, piR, piG, piB)
+  else pcall(GameTooltip.AddLine, GameTooltip, L("HH_TT_NOPET"), 1, 0.5, 0.4) end
   pcall(GameTooltip.AddLine, GameTooltip, L("HH_TT_LEFT"), 0.6, 1, 0.6)
   pcall(GameTooltip.AddLine, GameTooltip, L("HH_TT_RIGHT"), 0.6, 0.8, 1)
   pcall(GameTooltip.AddLine, GameTooltip, L("HH_TT_DRAG"), 0.7, 0.7, 0.7)
@@ -525,6 +560,18 @@ end
 -- ★共用格式化 EVAL_IG_CD_TEXT（IconGrid.lua；两个助手同一份）。字体 9pt 小字，贴主图标中心下方。
 function EVAL_HH_CD_REFRESH()
   if not (HH.built and HH.btn) then return false end
+  -- ★1.74.11 遮盖（用户：「在公共cd 存在_的情况下增加透明遮盖.以体现不可点击」）
+  local left = HH.cdUntil - hhNow()
+  local onCd = (left > 0)
+  if not HH.cdMask then
+    local m = HH.btn:CreateTexture(nil, "OVERLAY")
+    hhSolid(m, 0, 0, 0, 0.55) -- 半透明黑
+    m:SetPoint("TOPLEFT", HH.btn, "TOPLEFT", 0, 0)
+    m:SetPoint("BOTTOMRIGHT", HH.btn, "BOTTOMRIGHT", 0, 0)
+    pcall(m.Hide, m)
+    HH.cdMask = m
+  end
+  if onCd then pcall(HH.cdMask.Show, HH.cdMask) else pcall(HH.cdMask.Hide, HH.cdMask) end
   if not HH.cdText then
     local fs = hhText(HH.btn, 9, 1, 0.85, 0.3) -- 金色，9pt 小字
     fs:SetPoint("CENTER", HH.btn, "CENTER", 0, -1)
@@ -532,7 +579,6 @@ function EVAL_HH_CD_REFRESH()
     pcall(fs.SetJustifyH, fs, "CENTER")
     HH.cdText = fs
   end
-  local left = HH.cdUntil - hhNow()
   local txt = (type(EVAL_IG_CD_TEXT) == "function") and EVAL_IG_CD_TEXT(left) or nil
   if txt then
     HH.cdText:SetText(txt)
@@ -969,7 +1015,8 @@ function EVAL_TEST_HH_STATE()
            phase = HH.phase, qn = table.getn(HH.q), hasTick = HH.tick and true or false, hits = HH.hits,
            rate = HH_RATE, qmax = HH_QMAX, lastRun = HH.lastRun,
            -- ★1.74.11 CD 倒计时读值口
-           cdTotal = HH.cdTotal, cdUntil = HH.cdUntil }
+           cdTotal = HH.cdTotal, cdUntil = HH.cdUntil,
+           cdMaskShown = (HH.cdMask and HH.cdMask.IsShown and HH.cdMask:IsShown() == true) or false }
 end
 
 -- ★1.74.5 测试读值口：用**给定参数**驱动真实 OnClick（本客户端参数形态不固定，四种都要能验）

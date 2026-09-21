@@ -812,7 +812,7 @@ PM_HINT = "Left-click a profile = activate; right-click = open this window (rena
   HH_REJECT = "The client did not accept this item as a feeding target (not food it eats) -> put back",
   HH_OK = "🍖 Fed: %s",
   HH_UNCLEAR = "Feed was issued but no clear result - check pet happiness / food count; see /eh go 喂食探针",
-  HH_BUSY = "Too fast (feeding is a server action, limited to one per 2s)",
+  HH_BUSY = "Too fast (feeding is a server action, limited to one per 2s)", HH_CD_BUSY = "On cooldown (feeding uses the 1.5s global cooldown)",
   HH_SET_FOOD = "✅ Food set: %s (bags are re-scanned on every feed, so moving it is fine)",
   HH_SET_SPELL = "✅ Feeding spell set: %s",
   HH_CLEARED = "Food setting cleared",
@@ -828,6 +828,10 @@ PM_HINT = "Left-click a profile = activate; right-click = open this window (rena
   HH_TT_SPELL = "Spell: %s",
   HH_TT_SPELL_NONE = "not identified",
   HH_TT_NOPET = "⚠ No pet right now",
+  HH_TT_PETINFO = "Level %s ｜ Happiness: %s (damage %s%%) ｜ Loyalty: %s ｜ XP %s",
+  HH_PET_HAPPY1 = "Unhappy",
+  HH_PET_HAPPY2 = "Content",
+  HH_PET_HAPPY3 = "Happy",
   HH_TT_LEFT = "Left = feed in one click",
   HH_TT_RIGHT = "Right = pick food / spell",
   HH_TT_DRAG = "Hold Left to drag (position is remembered)",
@@ -885,7 +889,7 @@ PM_HINT = "Left-click a profile = activate; right-click = open this window (rena
   CH_CLEARED = "Consumable selection cleared",
   CH_STRIP_FULL = "At most %s in the row: unselect one first",
   CH_CLEAR = "Clear",
-  CH_BUSY = "Too fast (using an item is a server action, limited to one per 0.3s)",
+  CH_BUSY = "Too fast (using an item is a server action, limited to one per 0.3s)", CH_CD_BUSY = "On cooldown (this item is still on CD)",
   CH_NO_UCI = "This client has no UseContainerItem; items cannot be used";
   -- ★1.74.5 "Pick food" icon grid (bag-style 8xN)
   HH_G_TITLE = "Pick food (click an icon)",
