@@ -4,6 +4,7 @@
 > ★★**本文件是「常驻卷」**（要保证 100% 落在工作区指令预算内）——其余整卷在**同目录的 `CLAUDE_REFERENCE.md`（参考卷，不自动载入）**：
 > · 发布 release 流程 **9 步全文 + 打包脚本 + 推送信息** · §六 历史教训汇总 · §七 开源仓库 / 官方 API 文档 / 待开发计划
 > · §八 项目位置与现状（文件结构 · toc 载入顺序 · **新增模块要改哪几处** · 数据检索设计 · **当前版本**）· §九 版本要点汇总
+> · **§十 常驻卷瘦身移出的明细**（§3 的「按问题查哪个文件」对照表 · §5.2 两条长案例 · **§5.4 UI 与布局全部逐条** · **§5.5 API 事实全部逐条**）
 > ★**什么时候必须去读参考卷**：要**发布 release**、要查**项目位置 / 当前版本 / 工作流纪律**、要查**历史教训 / 官方文档 / 待开发计划**时。
 > ★写入纪律：**先查有没有同类条目——宁可合并改写，不要追加流水账**；★**新条目先判它属「常驻卷」还是「参考卷」**（常驻卷只放必须随时可见的铁律与判据）。
 > ★要查「某个功能/某个坑现在怎么写」→ 先看第五节的判据，再看 `DEVELOPMENT.md` 与源码。
@@ -79,30 +80,13 @@
 - **两次代价（都是绕了远路）**：**1.70.17** 自己发明用 `IsShown` 判地图可见性，而对方 `ClientAPI.lua:8664` 早写明这 API 在本客户端**不可靠** → 引入回归；**1.70.39** tick 挂 `UIParent` 导致开图时 OnUpdate 停摆，而对方 `Driver.lua:467-482` 把机理和正确做法全写在注释里——用日志推断**五轮**没找到，**用户一句「可以查看任务插件…」当场破案**。
 
 ### 3. ★★★队伍/团队·血量/蓝量·buff/debuff 检测 → 先读 Heart（及它依赖的 C 库）（用户明确定，1.70.46）
+
 - **用户原话**：「涉及到团队/队伍信息获取，血量，蓝量，buff/debuff 等检测 参考 `D:\game\TurtleWoW\Interface\AddOns\Heart` 插件的实现机制」。
-- **触发条件**：凡涉及 **队伍/团队（party/raid）成员枚举 · 单位解析（名字 ↔ unit id）· 血量/蓝量/资源与百分比 · buff/debuff 检测（有没有 / 层数 / tooltip 文本 / 已持续时长）**，或遇到「**客户端根本没给这个 API**」——第一个动作是去读 Heart 与 C 的对应实现，不要自己从零推。
-- ★**本机就是游戏主机**（用户 1.70.46 明确）：**EmberVeil**（`G:\...\Emberveil\live\Azeroth`）与 **TurtleWoW**（`D:\game\TurtleWoW`）都在本机，**可直接读对方源码、也可直接进游戏实测**——不存在「另一台机器」，不要再拿远端当借口。
-- **读哪里（按问题定位）**：
-
-  | 问题 | 先读 |
-  |---|---|
-  | 名字 → unit id（从聊天/战斗文字里的人名反查单位） | `C\C_GetUnitID.lua`（缓存 `C_player_map` + `UnitExists`/名字复核 + 「慢查」遍历 `raid1..N`/`raidpetN`、`party1..N`/`partypetN`、`player`/`pet`、`target`/`targettarget`/`mouseover`） |
-  | `target`/`mouseover` → 具体队伍成员 | `C\C_AKA.lua`（用 `UnitIsUnit` 逐个比对，返回 `raid3`/`party1` 之类；便于把当前目标当成员查数据） |
-  | buff/debuff 全量采集的数据结构 | `C\C_SetPlayerData.lua`（**16 buff + 16 debuff 槽**扫描 → `C_player_data[名字].Buff[纹理] = {Name,Type,Text,Count,Tick,Time}`） |
-  | 采集驱动 + 多插件共用时的仲裁 | `C\C_UpdatePlayerData.lua`（遍历 raid/party/target/targettarget/mouseover/pet；★**同一轮更新只允许一个调用者**） |
-  | 「某单位有没有某 buff/debuff」 | `C\C_UnitGotBuff.lua` / `C\C_UnitGotDebuff.lua`（按**名字**查 `C_buff_texture_map` → 纹理 → **要求 `Tick == CurrentTick`** 才算「有」，且返回**数据条目**而非布尔） |
-  | **用 tooltip 读客户端没暴露的信息** | `C\C.xml`（隐形 `C_Tooltip`）+ `C_GetBuffData` / `C_GetDebuffData` / `C_GetSpellData` |
-  | 队伍/团队主逻辑、血量优先级与治疗决策 | `Heart\Heart.lua`、`Heart\Heart_Helper.lua`（`UnitHealth`/`UnitHealthMax`/`UnitMana`/`UnitPowerType`；`hpDeficit = UnitHealthMax - UnitHealth`、`priority * (healvalue / UnitHealthMax)` 的权重算法） |
-  | 事件与跨插件通信 | `Heart\Heart_event.lua`（`RegisterEvent` / `SendAddonMessage`）、`Heart\Heart_Hooks.lua` + `Plugins\*_Clicks.lua`（**钩各种单位框插件**） |
-  | 图腾 / 需要 tooltip 扫描的跟踪 | `Heart\Heart_Totem.lua`（31 处 tooltip 调用） |
-
-- **★必抄的五个机制（「实现机制」的干货）**：
-  1. **隐形 tooltip 当 API 用**（`C.xml`）：`<GameTooltip name="C_Tooltip" hidden="true" inherits="GameTooltipTemplate">` + `PLAYER_LOGIN` 时 `SetOwner(UIParent,"ANCHOR_NONE")`（1.10 hack）与 `SetClampedToScreen(0)`（1.11 hack）。读取时**先清要用的行再 Set**（`C_TooltipTextLeft1:SetText()` 无参 = 清空），再 `C_Tooltip:SetUnitBuff(unit, slot)` / `SetUnitDebuff` / `SetSpell` / `SetAction`，然后 `GetText()` 取行——**buff 的名称/类型、第二行文本（常含剩余时长）、法术的耗蓝/射程/施法时间都从这里来**。
-  2. **Tick 新鲜度**：每轮刷新把 `CurrentTick + 1`；查询侧要求 `entry.Tick == CurrentTick` 才算「现在有」——**从结构上杜绝把上一轮/过期数据当成现行状态**（比「加时间戳自己判过期」更简单可靠）。
-  3. **贵调用只在「新出现」时做**：tooltip 调用很贵 → 只有**首次见到**该 buff 才去读；已知且**层数未变**时只刷新 Tick 并累加 `Time`，不做 tooltip；扫描时 **buff 与 debuff 槽都空就提前 return**（正合「频率防护总则」）。
-  4. **名字 ↔ unit 解析与宠物命名约定**：宠物一律 `主人名-宠物名`；反查先走缓存再「慢查」，**缓存命中也要用 `UnitExists` + 名字复核**（unit id 会变）。
-  5. **共用更新函数的单调用者仲裁**：`C_UpdatePlayerData` 用 `C_last_update_player_data_caller == this:GetName()` 判断，**别人正在这一轮更新就直接 return**，并用 `GetTime()` 统计本次耗时——多插件共用一份数据时的去重与自测。
-- **⚠️ 重要边界（别抄错东西）**：Heart/C 是 **TurtleWoW** 客户端插件，本项目跑在 **EmberVeil**；本机的 `C\C.lua` **已被用户改写**成「治疗施法监控（CastingSpeed）」并依赖 **SuperWoW** 扩展（`SUPERWOW_STRING`、`UNIT_CASTEVENT`、`UnitExists(unit)` 第二返回值 = GUID）。→ **参考它的机制与范式，但每个 API 在 EmberVeil 上是否可用必须实测**（本项目另有「EmberVeil 无 SuperWoW / 无 UnitCastingInfo」的记录，别因为 Heart 能用就假定我们也能用）。
+- **触发条件**：涉及 **队伍/团队枚举 · 名字↔unit id 解析 · 血量/蓝量/资源与百分比 · buff/debuff（有没有 / 层数 / tooltip 文本 / 已持续时长）**，或遇到「**客户端根本没给这个 API**」——**第一个动作是去读 Heart 与 C 的对应实现**，不要自己从零推。
+- ★**本机就是游戏主机**：EmberVeil（`G:\...\Emberveil\live\Azeroth`）与 TurtleWoW（`D:\game\TurtleWoW`）都在本机 —— **可直接读对方源码、也可直接进游戏实测**。
+- **★必抄的五个机制**：① **隐形 tooltip 当 API 用**（`C.xml` 的 `C_Tooltip`：先清行再 `SetUnitBuff`/`SetUnitDebuff`/`SetSpell`，再 `GetText()` 取行）；② **Tick 新鲜度**（要求 `Tick == CurrentTick` 才算「现在有」，从结构上杜绝把过期数据当现行状态）；③ **贵调用只在「新出现」时做**（层数未变不重读、buff 与 debuff 槽都空就提前 return）；④ **名字↔unit**：先缓存再慢查、宠物＝`主人名-宠物名`、**缓存命中也要 `UnitExists` + 名字复核**；⑤ **共用更新函数的单调用者仲裁**（`C_UpdatePlayerData`，`GetTime()` 计时）。
+- **⚠️ 边界**：Heart/C 是 **TurtleWoW** 插件，本项目跑 **EmberVeil**；本机 `C\C.lua` 已被用户改写且依赖 **SuperWoW** ⇒ **参考它的机制与范式，但每个 API 在 EmberVeil 上是否可用必须实测**（别因为 Heart 能用就假定我们也能用）。
+- **★「按问题查哪个文件」的完整对照表**（`C_GetUnitID` · `C_AKA` · `C_SetPlayerData` · `C_UpdatePlayerData` · `C_UnitGotBuff|Debuff` · `C.xml` · `Heart`/`Heart_Helper` · `Heart_event` · `Heart_Totem` 共 9 行）→ **参考卷 §十**。
 
 ### 4. ★★★同一个问题**两三轮没解决** → 立刻转「操作日志 + 测试流程」，让用户配合取证（用户明确定，1.70.46）
 - **用户原话**：「碰到两三轮提问都无法解决的，尽快用记录操作日志的方式 + 提供测试流程。我会配合你完成问题排查。」
@@ -210,27 +194,10 @@
 
 ### 5.2 静默失败族（数据 / 序列化 / 开关）
 
-- ★★★1.74.5 **「回声忽略」误判真凶**（用户报「盗贼方案分享无弹窗，其他正常」+ 探针 ⑤ 实锤「收齐 → 回声忽略 IS_MINE=true」）：
-  【根因】旧「自己方案回声忽略」判据 = `EVAL_SHARE_IS_MINE(text)`（**接收方库里有没有这份方案**的文本比对）——
-    只要接收方**恰好已有**这份方案（同账号共享库 / 以前导入过），就把**别人发的**误判成「自己的回声」吞掉、不弹窗。
-    ★本意是「忽略**我自己发**的回声」，但旧判据只看「我有没有」、不看「**是不是我发的**」。
-  【修法】判据改成 **`shIsSelfEcho(sender)`（发送者是不是本机玩家，剥色码/剥「-服务器」后缀）**：我发的才是我的回声；
-    别人发的，哪怕我库里有同款，也是**别人的分享**，该弹。`EVAL_SHARE_IS_MINE` 函数保留（它自身的单测 5193/8182 仍验它，只是不再用于这一刀）。
-  【判据】组 82 ①/①b/③：本人(测试玩家)发 → 忽略；**非本人**(彩虹)发、库里有同款 → **该弹**；说来源照旧弹。
-    端到端复现：iotol 发盗贼（接收方库里有同款）→ 待导入=盗贼（修复前=被吞）；本人自发 → 仍忽略。变异 M569/M570 捕获。
-  ★★两个教训：① 「自我回声」的判据**必须锚在「发送者是我」**，不能锚在「内容像我」—— 内容匹配会把「别人发的同款」误杀；
-    ② 上轮（1.74.4）我按存档日志判「IS_MINE 没触发」是**误判**（日志环缓冲没覆盖到 / 搜索没命中），是探针 ⑤ 一屏定案它其实触发了 ——
-    「能做成命令就别让用户手工复现」的价值又一次实证；★「按日志判没发生」≠ 真没发生，日志是环缓冲会覆盖。
-- ★★1.74.4 **「分片到了却不弹」取证探针**（用户报「某角色(iotol)分享，对方不弹窗，其他角色正常」，静态查不出因）：
-  新增 `SH.dbgChunks`（环形 8 条）+ `shDbgChunk(stage,msg,extra)`，在 `shOnMsg` 的**解析 / 入缓冲 / 收齐 / hex还原失败 / 过大 / 回声忽略 / 弹窗**
-  各分叉点记录**原文+走到哪一步**，`/eh go 分享事件` ⑤ 摊开 —— 只记含 `EHPF` 的消息（低量，不碰普通聊天）。
-  ★价值：把「分片到了却没弹」从「猜」变成「看到真实载荷 + 死在哪一步」（解析✗=载荷格式不对 / 只入缓冲没收齐=丢片 /
-  回声忽略=IS_MINE 误判 / hex还原失败=坏 hex / 过大丢弃 / 弹窗=其实弹了）。
-  ★同案顺手修探针假「未注册」：本客户端 `IsEventRegistered` 返回 **`1` 不是 `true`**，旧探针按 `== true` 判 → 全显示「未注册」，
-  与实际收到事件（③）自相矛盾、把排查带偏；改判 `(r == true or r == 1)`。
-  ★排查过程坐实（排除项）：当前代码对 队伍/队长/私聊 三事件**都能走完弹窗**（harness 复现全过）· IS_MINE 回声忽略**没触发**
-  （存档日志无「已忽略（自己的方案回声）」）· 接收配置 recv=true · 分片载荷 `i/n:hex` 自 `975e6f1` 起就有（带「秘籍传输中」标签即新格式）。
-
+- ★★★**「自己方案回声忽略」的判据必须锚在「发送者是我」**（`shIsSelfEcho(sender)`，剥色码 / 剥「-服务器」后缀），**不能锚在「内容像我」** —— 锚内容时只要接收方库里已有同款（同账号共享库 / 以前导入过），就会把**别人发的**误判成自己的回声吞掉、不弹窗（1.74.5 真凶）。`EVAL_SHARE_IS_MINE` 函数保留但不再用于这一刀；组 82 ①/①b/③；变异 M569/M570。
+  ★**「按日志判没发生」≠ 真没发生**（日志是环缓冲会覆盖）—— 上轮就是据此误判，最后靠探针 ⑤ 一屏定案它其实触发了。
+- ★★**「分片到了却不弹」一律先取证再猜**：`SH.dbgChunks`（环形 8 条）+ `shDbgChunk(stage,…)` 在 `shOnMsg` 的**解析 / 入缓冲 / 收齐 / hex 还原失败 / 过大 / 回声忽略 / 弹窗**各分叉记**原文 + 走到哪一步**，用 `/eh go 分享事件` ⑤ 摊开（只记含 `EHPF` 的低量消息，不碰普通聊天）。
+  ★探针**别用 `== true` 判事件注册**：本客户端 `IsEventRegistered` 返回 **`1` 不是 `true`**，要判 `(r == true or r == 1)`（旧探针全显示「未注册」，与实际收到事件自相矛盾、把排查带偏）。
 - 1.72.2 具名帧顶掉同名全局函数 → `type(X)=="function"` 不成立 → 命令静默失效；桩须把具名帧挂全局；`FRAME NAME CLASH CHECK`；组 54。
 - 1.72.3 分享接收 = 冗余时长 + 只认标识（用户「加冗余时长、只识别特定标识」）：>2s（`SH_RECV_TOLERANCE`）未收齐如实提醒但不删缓冲、晚到补齐仍弹窗；>60s（`SH_BUF_TIMEOUT`）才丢；只认 `[EHPF#<id> i/n]<hex>`；组 106/组 107。
 - 「查不到」≠「没有」：查不到必须如实报错，否则 `cnt=0` → 「否/无」成立 → 规则无限重放刷屏。
@@ -275,80 +242,29 @@
 - 期望值不许用语言包、不许同源自比（`EVAL_SHARE_SEAL_TIER(13).name` vs `EVAL_LOCALES[lg]`）⇒字面/绝对值夹具；颜色断言三通道一起比；弱判据两例：页码夹取替断言把事做掉、递归被 `pcall` 吞⇒让桩计数；夹具走 `EVAL_PROFILE_FROM_TEXT`。
 - 变异：冗余防护整组拆；锚点唯一定位（整行/命中==1/摘 CR/语法合法）；先过 luacheck；还原用运行前内存原文（绝不 `git show HEAD:<file>`）；判捕获看退出码＋文本（`: FAIL`/`ASSERT FAIL`；`LANG KEY CHECK`）；新 CHECK 锚在外层 `})();` 后。
 
-### 5.4 UI 与布局
-- ★★★标题栏（两窗同一实现）＝玩家名→头衔→品阶徽标→方案名＋右侧两开关；两窗各自 BUILD＋tick 刷（只开状态UI 也要跟·组 168⑤）；头衔取 `EVAL_TITLE_CURRENT()`；色码→RGB `EVAL_COLOR_RGB`（8 位）；CHECK `UI TITLE BADGES CHECK`/`UI TIER BADGE CHECK`/`UI TITLEBAR CHECK`/`UI TITLE NAME CHECK`；组 162/163/164/166/168。
-- ★★品阶唯一源 `SH_SEAL_TIERS`：**1.74.21 起** ≤11 普通/12-23 稀有/24-35 珍稀/36-49 绝版/**≥50 神级**（用户定神级 = 50；低四档把 0~49 四等分）；色走 `SH_SEAL_TIERS[].color`（★1.74.22 用户定：**神级 = 亮蓝 |cff00bfff**；配色史 暗金 b87333 → 亮蓝 00bfff → 深红 c00000 → 亮金 ffcc00（试色）→ 亮蓝 00bfff）；`SHARE PALETTE CHECK` 守色码不重复；判据钉边界两侧（11/12 · 23/24 · 35/36 · 49/50）；组 143/146/147/195/196
-- ★★★**评分口径（1.74.19 重做，用户「增加评级难度」）**：`EVAL_PROFILE_SCORE` = Σ(每条技能)[ 有条件 ? 1+Σ条件权重 : 0 ]；
-  **空技能 0 分**（旧口径白送 1 分 ⇒ 25 条空技能就神级，实测复现过）；条件按类加权 **自身/技能 1 · 目标/光环 2 · 队伍/候选 3**（表在 `SE_TYPE_GROUPS` 的 `w`/`cov`，**唯一来源**）；
-  单条上限 12 分；同一行里**完全一样**的条件只算一次；★不占动作条的特殊技能（`EVAL_NO_SLOT_OK`）无条件**保留 1 分**（用户定）。
-- ★★★**覆盖封顶**：覆盖 1/2/3 个大类分别封顶 **23/35/49**（值从 `SH_SEAL_TIERS[n+1].max` **现算**），**≥4 类才不封顶** ⇒ 神级必须跨类写；
-  ★**带方案表的调用点一律走单入口 `EVAL_PROFILE_TIER(p)`**（`EVAL_SHARE_SEAL_TIER(score, coverage)`；**coverage 传 nil = 不封顶**，别把纯分数调用点误伤）；`COVERAGE CAP WIRING CHECK` 守「没人再写 `EVAL_SHARE_SEAL_TIER(EVAL_PROFILE_SCORE(p))`」。
-- ★★★**头衔晋升（1.74.19）**：`SH_TITLE_REQ = { 1, 2, 3, 3, 2 }`（稀有+≥2 · 珍稀+≥3 · 绝版+≥3 · 神级≥2）＋**逐级满足**（断在哪一档就停在哪）；旧口径 2~5 档全是「≥1 个」⇒ 头衔满档只要 1 个方案，连带彩蛋闸门形同虚设。
-  ★命令/闸门/样例的分数**一律现算**（`EVAL_SEAL_GOD_SCORE()` / `EVAL_SEAL_TIER_SAMPLE(i)`），不再写死 25 / {3,9,15,21,26} / {1,4,7,10,13}。
-- ★★★**配置分角色存（1.74.20，用户「消耗品助手 + 喂食助手 + 骑乘助手整块按角色」）**：新增**角色级存档** `EVAL_HELP_CHAR`（toc 里 `## SavedVariablesPerCharacter` —— 本客户端实测支持：UnrealQuest 已在用、磁盘上 `Saved/Account/<账号>/<服务器>/<角色>/SavedVariables/`）；
-  **角色键清单 = `Toolbox.lua` 的 `TB_CHAR_KEYS`（唯一来源，15 个：三个助手的开关/列表/贴图缓存/悬浮件位置）**；`tbCfg()` 返回**路由代理**（`tbMakeRouter()`：角色键落角色表、其余落账号表）⇒ 上百处 `tb.xxx` 调用点**一行未改**；
-  ★★**代理的 `__index` 绝不能写 `at and at[k] or nil`** —— `false or nil` 还是 nil，会让所有值为 false 的账号开关被读成 nil（= 用户关掉的开关自己又开了；组 79 当场抓到）。必须 `if not at then return nil end return at[k]`。
-  三个助手各自改走 `EVAL_TB_CHAR_STORE()`；老存档里那些键**一次性继承**到每个角色（**账号里那份副本保留** = 还没登录过的角色的种子），迁移挂在 `VARIABLES_LOADED`（**账号表没到位时不许标记**，否则从空表继承出空配置、种子永久丢）；方案库/语言/日志/分享开关**仍旧账号级**；
-  `SAVEDVARS SPLIT CHECK`（toc 声明 + 清单唯一来源 + 三助手接线 + **无「按角色键读账号表」的泄漏** + 代理无 and/or）＋组 197（含 false 读回、迁移不覆盖、账号表未就位不标记）。
-- ★**COND WEIGHT CHECK 的实战价值**：它上线当场抓到 `target`（「选取目标」，hidden 存量类型）**不在任何分组**里 ⇒ 新口径下会被按 0 分算、也不计覆盖（静默少算）。★「新增条件类型必须进组」由它兜底。
-- ★★品阶显示现算（不硬编品阶）：文字＝品阶色、底色×（激活 0.45/否则 0.22）；组 160/167。图标＝IconSem 真纹理 13px；★纯黑＝`EVAL_SHARE_SEAL_ICON` 两返回值内联进 `pcall(t.SetTexture,…)`⇒多返回值禁内联进可变参数调用；`PROF ICON PROBE WIRING CHECK`；组 160⑥⑦。★重锚前 `ClearAllPoints`；文字框留富余（`TPL_TEXT_PAD=4`·组 91）。
-- ★★★滚动/翻页/分页标准做法：三段 `[计数]`←8px→`[按钮组]`←10px→`[关闭]`；文字按钮（`IB_PREV/IB_NEXT`、`TB_UP/TB_DN`）、不用 ▲▼；几何唯一源 `EVAL_HELP_CFG_BOTTOM()`（`midY/closeLeft/closeW/rowY/rowH`；拿不到按 `-(H-10-11)`/`W-12-64` 回退）；判据＝中线==关闭中线、按钮组右端 ≤ 关闭左−4、真实 OnClick 能滚；读值口 `EVAL_IB_TEST_BOTTOM()`（组 92）/`EVAL_TB_TEST_SCROLL()`（组 118）。
-- ★★★滚轮方向唯一源 `EVAL_WHEEL_DIR(a,b)`（幅度归一 ±1）；6 处全走它；`WHEEL DIRECTION CHECK`（禁位移与方向同号）＋组 115；★断言把方向写反⇒反向 bug 被「验证」通过。
-- ★★★数据刷新不许改可见性：`EVAL_WAR_TAB_REFRESH()` 又被开配置窗与 `EVAL_PM_APPLY` 调用⇒可见性只由 Tab 切换负责（`EVAL_HELP_CFG_SETTAB` 的清单）；数据照旧每次刷；组 165＋`EVAL_TEST_WAR_ROWS()`。
-- ★★视图切换要把另一视图控件整块隐藏（整表 Show/Hide·组 113②）；`Hide` 过的逐个 `Show`（少一个＝永久不显示·组 113③）；布局审查读真实矩形（`EVAL_PH_TEST_GEOM()`·组 113④）；输入框唯一入口 `EVAL_PH_SET_QUERY`（退回列表）、回写前 `GetText` 比对（否则递归）。
-- ★入口控件永远不许藏（默认文案「不限」）；查不到≠没有⇒如实说明（`SE_RANK_NONE`）、不弹单项下拉（组 110⑨）；「隐藏」＝不画不是 `Hide()`⇒背板＋挪出可视区 `DD_SEARCH_PARK=-4000`；锚点＝邻居哪条边（`Minimap` 是圆的⇒`RIGHT` 对 `LEFT`）。
-- ★分列切点＝允许切点里两列行数差最小；组是不拆的最小单位；版式抽纯函数；组标题不许孤悬行尾；绝不静默截断（`DD_MAX_ROWS=96` 末行「…… 还有 N 项未显示」、`SH_DETAIL_MAX=6`）；不变量读真实几何（本列内/同 y 两列各自成行/不跨列/行数差 ≤2）。
-- ★★类别独立一行＝标题独占一行＋本组按钮从下一行排、放不下换行；窗高变高（660×240→660×340）；`rowsOf` 与摆放循环必须逐字一致，用「自报 `rowsL/rowsR` vs 真实控件行数」钉住（组 91）。
-- ★工具箱两列（按组边界切、取两列行数差最小）：列宽＝(可用宽−列缝×(列数−1))/列数、< 200 退单列；列不相交要几何断言（每控件显式限宽·组 120③）；★★★读值口绝不许复刻映射逻辑（`EVAL_TB_TEST_LAYOUT` 又算一遍⇒变异存活）。
-- ★弹窗高度自适应条目：唯一源 `EVAL_TB_MENU_HEIGHT(条数)`；判据要换一组条目再比；同一行 y 单一源⇒`TB_ROW_TXT_DY`；判据读真实控件顶边；★别用 FontString 高度算中心⇒配反向哨兵。
-- ★自绘风格两步：① 先问能否借用官方件（`UnitPopupMenus`/`UnitPopupButtons`）但必须先取证；② 不成则半透明底、宽度上限 ≤4 汉字＝62px、条目 ≤4 字、保留原有入口。
-- ★多段一行居中（弹窗「接收方案」勾选）：与配置窗同一开关同一真值＋弹出时刷新；判据两段（生产数字验居中＋真实控件验落地）；标签宽实测优先 `GetStringWidth`、拿不到按字符数估（`string.len` 是字节）。
-- ★导出 token、界面本地化＝同一份格式化＋一个开关：`EVAL_COND_STR(cd,disp)`/`EVAL_GROUP_STR(groups,disp)` 让界面走语言包、导出与往返一律 false⇒英文 token 逐字不变；读值口 `EVAL_TEST_SE_PREVIEW()`＋反向哨兵；组 125＋`DEBUFF DISPLAY CHECK`。
-- ★职业着色＝描述表 `TB_PAINT_LISTS`＋painter＋三纯函数；包装＝先调原函数再叠色＋幂等守卫＋备份存 local；开关关掉＝不再叠色＋立刻重刷；禁用 `hooksecurefunc`；拿不到就不猜；组 119＋`PAINT WIRING CHECK`。
-- ★★聊天窗名字着色：一个包装体管两功能（`EVAL_TB_CHAN_INSTALL_ONE`）不叠两层；覆盖所有窗（`ChatFrame1`＝`DEFAULT_CHAT_FRAME`，幂等按入口判、不按名字去重）；缓存唯一 `tbNameClass`；不做自动 /who（`SendWho` 等都是服务器查询）⇒查不到不上色；纯函数 `EVAL_TB_CHAT_COLOR_LINE` 拿不准就不碰；三坑：前 11 字节判富文本会染链接名·字符数≠字节数·`EVAL_SAY` 行不着色；颜色码长度禁写死（`|c%x+`）、诊断分开打（`EVAL_TB_CHATCOLOR_ROUTES`）；`CHAT COLOR WIRING CHECK`（先摘注释）；组 121①⑭。
-- ★主动查询（四道闸门）：`TB_WHO_GAP=5s`、`TB_WHO_PEND=8s`、`TB_WHO_MISS_TTL=1800s`、`TB_WHO_QMAX=20`；查询日志只进调试日志（`EVAL_LOGLINE`⇒`/eh logdump`）；「查谁」更严：只认发送者位置的方括号名；`SendWho` 只许在 `tbWhoTick` 里。
-- ★分享弹窗：摘要行⇒「X 分享的 [品阶秘籍·名]」带品阶色；品阶行只留图标、删重复文字、没连图标一起删（`EVAL_SHARE_SEAL_ROW` 被组 145 等用）；坐标 `SH_SEAL_ROW_Y` -50→-46·`SH_DETAIL_Y1` -74→-66·dPanel 顶 -46→-42；组 145；★改 UI 文案要同步反转旧判据。
-- ★可点品阶色链接（`|HEHPF:<id>` 形态，封皮 B 行与场景描述头衔同款）：点它靠 `EVAL_SHARE_CLICK_OPEN("EHPF:<id>")` 在 `SH.recent` 找（用 `SH.pending.idh`）⇒ 重填 `SH.pending` 弹出接收页；超 `SH_MSG_MAX`/缺 id ⇒ 退回纯文本；`shReactionNameLink(p)` 现在是**保留但未接线**（彩蛋取消）；判据组 180②（点头衔链接打开接收页）。
-- ★彩蛋角色扮演反应（1.73.64 建 · **1.74.5 起未接线**）：机制/频道表/抽奖/名链接/三语言 50 格文案**全部保留**，但 [导入]/[忽略] **不再发**（改发「场景描述」，见下条）；`SH FUN CHECK` 钉「机制都在 **且** 调用点未接」＋组 170① 仍验每句恰 2 个 `%s`；组 82④⑤ 是**反向哨兵**（点了不发反应句）。
-- ★彩蛋创世者亲临闸门：手动创建的方案有**神级**（1.74.19 起 = 封顶后有效分 ≥50，读 `EVAL_SEAL_GOD_SCORE()` 现算，不写死）· 手动方案 **≥3 个**（1.74.19 用户定：不变）· 头衔满档 5；`src`：手工点写 `"manual"`、文本解析在唯一出口 `EVAL_PROFILE_FROM_TEXT` 盖 `"text"`、老存档无 `src`⇒按手动；堵两条路 `EVAL_TITLE_CREATOR_OPEN` 与 `EVAL_TITLE_CREATOR_TRY`；`EVAL_TITLE_EGG_CHECK()` 挂 `EVAL_WAR_TAB_REFRESH`＋登录、只播一次；组 169＋组 150/150⑥＋`CREATOR GATE CHECK`。
-- ★★★队伍菜单三条条件（1.74.1，审计定案）：**邀请队伍** = 不在队伍 或 我是队长（修「队长反而邀不了人」的旧 bug）；
-- ★1.74.4 邀请队伍再补一刀（用户截图：对方已入队却仍显示邀请队伍）：条件只看「我」的状态是 bug → 改为「**对方不在我队伍/团队里 且 （不在队伍 或 我是队长）**」；队友已入队 → 邀请藏掉（踢出/离开照常）。组 130⑥e2 反转；变异 M568。
-  **踢出队伍** = 我是队长 且 被右键的是队友（非队长根本不出现这条，不再是「点了才说不是队长」）；**离开队伍** = 在队伍内显示
-  （退队不需权限，与右键的人无关，动作 `LeaveParty()`）。判队长 = `IsPartyLeader()` 或 `IsRaidLeader()`；★助理踢人没有
-  `IsRaidAssistant` 接口可判 → 如实接受边界（助理看不到这条，动作里仍有「不是队长」兜底）。成员判定 = `EVAL_TB_NAME_INMYGROUP`
-  （UnitInParty/UnitInRaid 反查，party 只扫 1..4）。组 130⑥e/⑥e2/⑥e3 + 组 173 + ⑤b；变异 M564~M567 捕获。
-- ★★★技能格按键分派（1.74.2，用户定）：战斗信息UI 技能小图标 **左键 = 快速切换启用/停用**（写 `r.enabled` **配置真值** + 如实播报 + 双刷新 `EVAL_WAR_TAB_REFRESH`/`EVAL_HELP_UI_TICK`）· **右键 = 技能配置弹窗**（开被点那格、不动状态）；格子必须注册 `RightButtonUp`（光注册左键 = 右键永远到不了分派代码）；读值口 `EVAL_TEST_UI_CLICK_CELL` / `EVAL_TEST_SE_SHOWN`；`UI CELL MOUSE CHECK`；组 174。
-- ★布局总纪律：需求验性质不验数字；相对量验相对量；同一行中线对齐；中文宽度按字符数估；布局常量单一源（`IO_BW/IO_GAP/IO_PAD`、`CLOSE_LEFT/CLOSE_MIDY`）。
+### 5.4 UI 与布局（★逐条明细已移入**参考卷 §十**；这里只留「动手前必看」的索引与铁律）
 
+- ★★★**动手前先查参考卷 §十**（按标题搜）：标题栏（两窗同一实现）· 品阶色与显示 · **评分口径** · **覆盖封顶** · **头衔晋升** · **配置分角色存档** · 滚动/翻页/分页 · 滚轮方向 · 视图切换 · 弹窗层级/位置/高度 · 分列与换行 · 悬停高亮 · 导出 token 与本地化 · 聊天窗名字着色 · 主动查询四道闸门 · 彩蛋与创世者闸门 · 队伍菜单三条 · 技能格按键分派。
+- ★★★**这几条是铁律（改 UI/布局前必须记住）**：
+  ① **布局常量单一来源**；判据**验性质不验数字**、相对量验相对量、同一行中线对齐、中文宽度按字符数估（`string.len` 是字节）。
+  ② **滚轮方向唯一源** `EVAL_WHEEL_DIR(a,b)`（禁位移与方向同号）；滚动/分页几何唯一源 `EVAL_HELP_CFG_BOTTOM()`。
+  ③ **数据刷新不许改可见性**（可见性只由 Tab 切换的清单负责）；视图切换要把另一视图控件**整块** Show/Hide，`Hide` 过的要**逐个** `Show`。
+  ④ **读值口绝不许复刻映射逻辑**（复刻一遍 ⇒ 变异存活＝自证）。
+  ⑤ 弹窗层级全 `DIALOG`（10~250 八级）；**子弹窗必须高于父弹窗**，只设 strata 不设 frameLevel ＝点不到。
+  ⑥ 「隐藏」＝**不画**（背板 + 挪出可视区），不是 `Hide()`；入口控件永远不许藏。
+  ⑦ 改 UI 文案/样式 ⇒ **同步反转旧判据**（需求会被下一轮推翻，断言跟着改方向）。
+- ★守它们的**源码检查**（改了对应区域必须继续过）：`UI TITLEBAR`/`UI TIER BADGE`/`UI TITLE NAME`/`UI CELL MOUSE`/`WHEEL DIRECTION`/`COVERAGE CAP WIRING`/`COND WEIGHT`/`SAVEDVARS SPLIT`/`SHARE PALETTE`/`PAINT WIRING`/`CHAT COLOR WIRING`/`NAME CACHE PROBE WIRING`/`PROF ICON PROBE WIRING`/`MENU ROUND CHROME`/`CREATOR GATE`。
 
-### 5.5 API 与客户端事实
-- SpellStopCasting()：读条/自动射击/魔杖三类全覆；Protected→须 RunScript（直调无效）；「进度条没了」≠取消。
-- AttackTarget()=Toggles 须 IsCurrentAction(攻击格)；Movement 仅 FollowByName/FollowUnit 非 Protected（MoveForwardStart/Stop、TurnLeftStart 是）；FollowByName 空名=当前目标、只搜已知玩家、无返回值、不走 RunScript。
-- GetRaidRosterInfo(i) 九返回；越界/非团队只回 nil。
-- 1370 API 无 aura 专用函数；GetPlayerBuff(i,f)=增益条 0 基下标；无文件读取 API（无 io/os）→载入文件唯一形式=列进 .toc；★`LoadAddOn` 是 **Protected**（全表仅 13 个）⇒ **文件级懒加载不可能**，只能「toc 预载 + 载入期零副作用 + 首用才建帧」（范式：`tools/HunterHelper.lua`）。
-- GetQuestReward 会再触发 QUEST_COMPLETE→须三层防护（同名去重/领取窗口闸门/全局频率上限）；UnitDebuff 第 3 返回=dispel token；UnitMana=主能量且有显示缩放（怒气÷10、幸福÷1000）→判蓝量前先 UnitPowerType(unit)==0。
-- 施法 API 全 Protected（CastSpellByName 仅 onSelf/CastSpell/SpellTargetUnit/SpellStopTargeting/SpellStopCasting）；TargetUnit 非 Protected=唯一路径（切目标→UseAction(slot)→还原）；Targetting 另有 TargetLastTarget/ClearTarget/TargetByName/TargetNearestPartyMember。
-- ★★★`CHAT_MSG_PARTY_LEADER`/`CHAT_MSG_RAID_LEADER` 是**独立事件**（队长/团长发言）：接收帧**必须也注册**这两个——只注册 `CHAT_MSG_PARTY`/`RAID` 时队长一分享**一片都进不来**（接收端静默、发送端照样报「已发送 N 片」；1.74.3 修的正是这个）；来源判据=触发事件名（队长版映射到「队伍/团队」）；发送侧只留 公会/队伍/说；自查 `/eh go 分享事件`；`SHARE RECV EVENTS CHECK`；组 175。
-- 纹理路径=/Game/Interface/Icons/<名>_TEX，写错显 ?；GetNumMacroIcons/GetMacroIconInfo=唯一合法路径入口（1018 条 → doc/图标路径清单.txt）；PET ICON CHECK 校验真存在。
-- IconSem.lua（用户要求：名称+多标签+按名/路径过滤）：基础名须剥 _TEX（组 117①b）；过滤=四命中+分组叠加；纹理字面量须在白名单（PET ICON CHECK）；两反斜杠须按两反斜杠匹配（组 112）。
-- api_*.html=1370 条索引；无：GetDifficultyColor（有垫片）/PlaySoundFile（只有 PlaySound）/hooksecurefunc/UIDropDownMenu_GetSelectedID；有：GetGuildRosterInfo/GetWhoInfo/GetFriendInfo/GetNumGuildMembers/GetNumWhoResults/GetNumFriends/GuildControlGetNumRanks/GetRealZoneText/RemoveChatWindowMessages。
+### 5.5 API 与客户端事实（★明细已移入**参考卷 §十**；下面几条最常踩，必须常驻）
 
-- ★★★**跨插件：捕获 UnrealQuest 的稀有提醒**（1.74.23，用户「只要知道他发现稀有的那一时刻，在对话框内输出一段文字」）：
-  弹窗唯一出口 = `World/RareAlert.lua` 的 `RareAlert:Show(entry, distance, dx, dy, others)`（内部 `SetAlertWindowText → UpdateArrow → Client.ShowObject → shownUntil → 音 → 聊天 → 计数`）
-  ⇒ **包住它、在返回后回调 = 卡片已经在屏幕上的那一刻**。模块注册表是**公开**的：全局 `UnrealQuest`（`Core/Namespace.lua:17`）+ `UnrealQuest:GetModule("RareAlert")`（就是 `UQ.modules[name]` 那张**普通表**，`NewModule` 只塞 name/enabled、无元表保护）；
-  ★**安装必须等 VARIABLES_LOADED**（AddOns 按目录名排序，**EvalHelp(E) 先于 UnrealQuest(U)**，载入期拿不到对方 —— 与 DataSearch 的 `dsUQModule` 同因；那个是文件内 local，本处提成全局 `EVAL_UQ_MODULE`）；
-  ★包装纪律 = **返回值逐个透传 + 原函数抛错照原样 `error(a,0)` 抛出**（吞掉别人的错 = 把别人的 bug 藏起来），只在抛错时如实计数；
-  兜底 = `Show` 不可包时轮询对方**公开读值口** `RareAlert:GetStatus().alerts`（单调累计计数；**首读只立基准**，否则会把本次登录前的历史计数当成刚弹过）；兜底 tick 父级必须是 **WorldFrame**（挂 UIParent 开全屏地图会停摆，见 1.70.39）；
-  载荷：名字走 `Database:GetUnitName(entry.unitId)`、品阶 `entry.rank`（1 精英/2 稀有精英/3 首领/4 稀有）、`distance` 已是整码、`others` = 同刻另有几只；频率上对方自带「同怪 180s 冷却 + inRange 抖动带」，不会刷屏；
-  命令 `/eh go 稀有`（状态/开/关/试；`试` 直接调对方 `TestNearest` 走完整链路自证）；判据 = 组 199 + 源码检查 `RARE WATCH WIRING CHECK`（安装点 / 命令前缀字节数 / 包装透传与照抛 / 兜底 tick 父级）
-  染色（**1.74.24** 用户「对稀有精英染色」）：名字按品阶上色（精英 银 c0c0c0 · 稀有 蓝 0070dd · 稀有精英 紫 a335ee · 首领 橙 ff8000 —— 物品品质那套玩家一眼就懂；与「方案品阶」五色是**两个维度**，项目纪律要求错开，故最低档用银不用白）；★**整条消息只许一段 8 位色码**（一条多段会整条不画）⇒ 色码由调用方按品阶给，语言包里不再写死金。
-  可点（**1.74.24 → 1.74.26** 用户「点击他可以定位目标」＋「点击头像相当于目标切换到稀有精英目标」＋定案原话「点击名字逻辑很简单.不要和那边插件的机制管理.需求只要是调用类似目标函数选中目标就可以了.如果目标不存在就报错.」）：名字做成链接 `|c..|HEHRW:<名字>|h[名]|h|r`（形态照抄分享封皮那条真机配方：色码在外、链接在里）⇒ **点名字 = 一次 `TargetByName(名字)`**，选中报「已选中目标：X」、选不中报「选不中目标：X」—— **就这一个动作，没有第二动作、没有退路**。★1.74.26 按用户定案**删掉**了所有与那边插件机制的耦合：不再有坐标 / 最近刷新点 / 地图投影 / `EVAL_DS_SHOWMAP` 开图；token 从 `EHRW:areaId:x:y:unitId` 收成 `EHRW:<名字>`（名字是唯一需要的东西）—— 源码检查现在**反向守**：稀有转播里出现 `EVAL_DS_SHOWMAP`/`EVAL_RW_NEAREST_LOC`/`GetCurrentZoneView` 即 FAIL。
-  ★★★**1.74.27 提取为独立模块 + 工具箱开关**（用户：「将以上功能提取到独立文件内 ./tools 然后再工具箱内设置开关.」）：整块搬到 `tools/RareWatch.lua`（**主文件只留两个接线点**：VARIABLES_LOADED 的 `pcall(EVAL_RW_INSTALL)`、命令分支 `/eh go 稀有`）；新模块只走**全局桥**（`EVAL_SAY`/`EVAL_LOGLINE`/`EVAL_L`/`rawget(_G,"EVAL_HELP_CONFIG")`），绝不引用主程序文件内 local；工具箱新增「稀有提醒」组 + 开关（Toolbox 的 `t="rw"` 行型）——★**读写走实现自己的单一来源** `EVAL_RW_ENABLED`/`EVAL_RW_SET`，不另存 `tb.rareWatch`（两处真值必然打架）；★工具箱模型 28 条 > 每页容量 26 ⇒ **第 2 页**，判据必须翻页后取控件（`EVAL_TB_TEST_SCROLL_CLICK("dn")` + 新读值口 `EVAL_TEST_TB_CHK_FOR`）；★**新增文件要同步 7 处清单**：toc / 测试载入清单 / DECL ORDER / LANG KEY / COMMENT SWALLOW / WHEEL / COLOR CODE LEN / FRAME NAME CLASH（漏一处就是「新文件永远不被检查」的静默盲区），打包基准 68 → 69（参考卷）；`RARE WATCH WIRING CHECK` 改成**分两段扫**（接线点看主文件、实现模式看两份并集）。判据 = 组 120⑥ + 组 199。
-  ★`TargetByName`：**官方 API 索引里有**（category=Targetting），且**不是 Protected**（参考卷 §F3:138 逐条核过）；但它在「附近没有这只」时**静默失败**（官方文档明文「只认附近单位」，`Engine.lua:735-736` 早已记过）⇒ **必须核对结果**：调用后读一次 `UnitName("target")`（否则「点了没反应」会被报成成功）。★对方 RareAlert **明确不做**这件事（自动扫描会抢玩家目标，RareAlert.lua:23-27 有明文），我们只在**玩家主动点一下**时做。
-  ★★★**1.74.25 实锤（用户截图，这是本条最重要的事实）**：截图上任务插件导航箭头显示那只稀有在 **556 码**外，而我们写的文案是「它没刷 / 它不在这儿」→ **真因是客户端限制**：`TargetByName` **只认客户端附近的单位**，远处**静默失败**（官方文档 `Targetting#targetbyname` 明文；本项目 `Engine.lua:735-736`、参考卷 §F3 早已记过；参考卷 §F3:138 还确认它**不是** Protected —— 所以「切不到」≠「调用非法」）。
-  ★★教训 = **「把自己的限制说成对方/世界的状态」是造谣**：`选不到「X」` 必须**同时报出距离**（`约 N 码`，取转播时对方给的那个数）+ 给出下一步（走近再点 / 右键地图定位），并且**一句话说完**（上一版太长，被聊天框折成两行 —— 截图可见）。反向哨兵：文案里绝不许再出现「它没刷」。
-  ★取证命令 `/eh go 稀有 目标探针`：拿**当前目标自己的名字**（必然存在且必然在附近）——先 `ClearTarget()` 再按名字选回来，报 4 步判定。**这是唯一能区分**「客户端只认附近」与「TargetByName 对本插件是空操作」的实验（两者从结果上长得一模一样）；顺带打印库里那份名字与**字节数**，排掉「库名 ≠ 客户端名」这第三种可能。判据 = 组 199⑫（含「它没刷」反向哨兵 + 距离必须出现）与 ⑯。
-  ★链接的失败模式是「**整条不画**」⇒ 留了 `稀有 链接` 开关，一键退回**已验证的「只有色码」形态**；命令 `/eh go 稀有 目标|链接|目标探针`；判据 = 组 199⑩~⑯ + `RARE WATCH WIRING CHECK`（4 色逐项 8 位 · 链接**只带名字** · Toolbox 的 `EHRW:` 分派**必须以该语句开头** —— 只查「文件里出现过这串」会被 `if false and …` 骗过，本轮变异测当场撞到 · **反向守**不许再耦合地图机制）。
+- 本客户端**无 `UnitCastingInfo`**（打断条件做不了）· **无 SuperWoW**（无精确距离数值/挥击计时）· **无文件读取 API**（无 io/os ⇒ 载入文件唯一形式＝列进 `.toc`；★`LoadAddOn` 是 **Protected** ⇒ **文件级懒加载不可能**，范式＝「toc 预载 + 载入期零副作用 + 首用才建帧」）。
+- 施法 API **全 Protected**（`CastSpellByName` 等 ⇒ 一律 `RunScript` 兜；`SpellStopCasting` 直调无效）；`TargetUnit` 非 Protected，是「切目标→`UseAction(slot)`→还原」的唯一路径。
+- ★★★`CHAT_MSG_PARTY_LEADER`/`CHAT_MSG_RAID_LEADER` 是**独立事件**（只注册 `PARTY`/`RAID` ⇒ 队长一分享**一片都进不来**，接收端静默、发送端照样报「已发送 N 片」）。
+- `UnitDebuff` 第 3 返回＝dispel token；`UnitMana` 是主能量且有显示缩放（怒气÷10、幸福÷1000）⇒ **判蓝量前先 `UnitPowerType(unit)==0`**。
+- `GetQuestReward` 会再触发 `QUEST_COMPLETE` ⇒ 须三层防护（同名去重 / 领取窗口闸门 / 全局频率上限）。
+- 1370 条 API 里**无 aura 专用函数**；`GetPlayerBuff(i,f)` 是增益条 **0 基**下标。
+- **要查就来这里翻参考卷 §十**：`IsActionInRange`/`ActionHasRange`/`CheckInteractDistance` 的语义 · 物品 API 全签名 · 纹理路径与 `IconSem` 白名单 · `api_*.html` 索引的「有/无」清单 · Movement 族 Protected 边界 · `GetRaidRosterInfo` 九返回 · `AttackTarget`/`FollowByName` 细节。
+
 ### 5.6 内容 / 数据质量
 - ★★★**两个助手的弹窗候选按物品类型过滤**（1.74.28，用户「弹窗选的物品项目要过滤一下.不要显示武器,装备.灰色物品,草药,矿物,任务物品,材料等等非可使用的物品,验证可行性.」）：判定收在**共用件 `EVAL_IG_ITEM_KIND`**（tools/IconGrid.lua），**三级**按「便宜→贵」早停 ——
   ① **品质**（`GetContainerItemInfo` 第 5 返回，**完全不依赖缓存**）⇒ 灰色一律剔；② **`GetItemInfo`**：★传参**先用物品链接**（`GetContainerItemLink` 给的 `|Hitem:…|h[名]|h` = 客户端的**缓存键**），nil 再退回名字；读第 5/6/8 返回 = 主类型/子类型/**装备槽**（装备槽非空 ⇒ 算护甲，比类型词更硬）；③ 缓存为 nil ⇒ **自建隐形 tooltip** `EVAL_HELP_WTT` + 读守卫 `EVAL_WTT_MAY_READ` + **`SetBagItem`**（已核在官方 API 索引里）读**类型行** —— ★★这一步会**把物品写进客户端缓存** ⇒ 下次 `GetItemInfo` 直接命中 = **自愈**（`probed` 计数会掉下来）。
@@ -411,10 +327,12 @@
 
 > ★**为什么**：工作区指令预算只有 **65,536 字节**，超出的部分 AI **完全读不到**（截断点落在文档中段）——
 > 所以把「历史教训 / 仓库与文档 / 项目位置与现状 / 版本要点」这四节整卷移出去，本文件只留铁律与判据。
+> ★**1.74.9 又做了一次瘦身**（86,364 → 约 62,000 字节）：把**明细整段**搬到参考卷 **§十**（原文照存、一字未改），本文件只留索引 + 铁律 —— 因为超预算的部分 AI **完全读不到**。
 > ★**什么时候必须去读 `CLAUDE_REFERENCE.md`**：
 > · **项目位置 / 文件结构 / 新增 .lua 模块要改哪几处 / toc 载入顺序 / 数据检索 Tab 设计** → 它的 §八
 > · **工作流纪律**（默认不发版不推送 · 本地测试双绿可直接 commit · 推送需明确要求） → 它的 §八 末段
 > · **历史教训**（local 作用域、合并冲突静默获胜、桩太宽松、对齐、API 真伪清单、官方文档核对） → 它的 §六
 > · **官方 API 文档地址 / 待开发计划（免疫学习器等）/ 开源仓库内容清单** → 它的 §七
 > · **某个版本做了什么（最近 10 版，一行一条）** → 它的 §九（完整历史看 `CHANGELOG.md`）
+> · **§3 的「按问题查哪个文件」9 行对照表 / §5.4 UI 与布局全部逐条（品阶色·评分口径·覆盖封顶·头衔晋升·分角色存档·滚动分页·滚轮·弹窗·菜单·技能格）/ §5.5 API 事实全部逐条 / §5.2 的两条长案例** → 它的 **§十**（1.74.9 瘦身时移出，原文照存）
 > · **当前版本**：以源码为唯一真值 —— `EvalHelp.lua` 的 `local VERSION` == `EvalHelp.toc` 的 `## Version`（搬移时 = **1.74.0**）。
