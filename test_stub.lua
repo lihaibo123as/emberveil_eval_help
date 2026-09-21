@@ -270,16 +270,37 @@ local function mkTooltipFrame(name)
   rawset(f, "Hide", function() end)
   rawset(f, "Show", function() end)
   rawset(f, "IsShown", function() return false end)
-  rawset(f, "ClearLines", function() TEST.curSlot = nil TEST.curDebuff = nil TEST.curBuff = nil end)
+  rawset(f, "ClearLines", function() TEST.curSlot = nil TEST.curDebuff = nil TEST.curBuff = nil TEST.curPlayerBuff = nil end)
   rawset(f, "SetAction", function(_, slot) TEST.curSlot = slot return true end)
   rawset(f, "SetUnitDebuff", function(_, _, i) TEST.curDebuff = i return TEST.debuffs[i] ~= nil end)
   rawset(f, "SetUnitBuff", function(_, _, i) TEST.curBuff = i return TEST.buffs[i] ~= nil end)
-  rawset(f, "SetPlayerBuff", function(_, bi) TEST.curBuff = bi return TEST.buffs[bi + 1] ~= nil end)
+  -- ★1.74.7 骑乘助手：SetPlayerBuff(bi) 后文本从 TEST.dhTexts[bi+1] 取（没设 dhTexts 就用 TEST.dhBuffs），
+  --   绝不回落到 TEST.buffs 的「名字」——真坐骑的描述是**第二行文本**，不是光环名。
+  --   ★用**专用字段 curPlayerBuff**，不复用 curBuff：curBuff 被 SetUnitBuff/SetPlayerBuff 共写，
+  --   隔离 tooltip 上残留的上一次调用会把文本串到别的索引（本轮实测：SetPlayerBuff(3) 读出索引 4 的文本）。
+  --   ★★只有**骑乘助手态**（TEST.dhBuffs 有值）才走 dh 口径；其余情况**一字不动**照旧走 TEST.buffs
+  --   —— EVAL_PLAYER_BUFF_LIST 等老路径要的是 TEST.buffs[bi+1].name，改口径会把它们当场打断（本轮实测）。
+  rawset(f, "SetPlayerBuff", function(_, bi)
+    if TEST.dhBuffs ~= nil then
+      TEST.curBuff, TEST.curPlayerBuff = nil, bi
+      local src = TEST.dhTexts or TEST.dhBuffs
+      return src[bi] ~= nil
+    end
+    TEST.curBuff, TEST.curPlayerBuff = bi, nil
+    return TEST.buffs[bi + 1] ~= nil
+  end)
   rawset(f, "SetSpell", function() return true end)
   rawset(f, "AddLine", function() end)
   rawset(_G, name .. "TextLeft1", { GetText = function()
     TEST.ttReadFrom = name .. "TextLeft1"
-    if TEST.curBuff then return TEST.buffs[TEST.curBuff + 1] and TEST.buffs[TEST.curBuff + 1].name end
+    if TEST.curPlayerBuff ~= nil then
+      local dsrc = TEST.dhTexts or TEST.dhBuffs
+      return dsrc and dsrc[TEST.curPlayerBuff]
+    end
+    if TEST.curBuff then
+      if TEST.dhBuffs ~= nil then return (TEST.dhTexts or TEST.dhBuffs)[TEST.curBuff] end
+      return TEST.buffs[TEST.curBuff + 1] and TEST.buffs[TEST.curBuff + 1].name
+    end
     if TEST.curDebuff then return TEST.debuffs[TEST.curDebuff] and TEST.debuffs[TEST.curDebuff].name end
     return TEST.slotNames and TEST.slotNames[TEST.curSlot or 0]
   end })
@@ -564,11 +585,42 @@ GetShapeshiftFormCooldown = function() return 0, 0, 1 end
 CastShapeshiftForm = function(i) TEST.stanceCast = i local f = TEST.stances and TEST.stances[i] if f then f.active = 1 end end
 -- ★1.70.45 桩改为 filter 感知：HELPFUL 走 TEST.buffs、HARMFUL 走 TEST.pDebuffs（默认 nil → -1 立即停）。
 --   原因是新功能要分别为「自身buff / 自身debuff」取剩余秒数，两个列表必须是不同的（真 API 亦然）。
+-- ★1.74.7 骑乘助手：再补一路 **CANCELABLE 过滤**（真 API 语义 —— api 索引已核对）：
+--   · 返回的是**内部索引**（0 基槽位 ≠ 内部索引；CancelPlayerBuff 收的正是内部索引）；
+--   · 过滤器 HELPFUL|CANCELABLE 只回**可取消的有益光环**，没有就返回 -1, 0（与真机一致）；
+--   · TEST.dhBuffs[内部索引+1] = 该光环的 tooltip 文本（nil 项 = 该内部索引不是可取消光环）。
 GetPlayerBuff = function(i, filter)
+  if type(filter) == "string" and string.find(filter, "CANCELABLE") then
+    -- ★语义必须与真机一致：**按槽位 i 逐个问**，返回该槽位光环的内部索引（没有就 -1 停）。
+    --   TEST.dhSlotOf[槽位+1] = 该槽位光环的内部索引；省事时用 TEST.dhBuffs[内部索引+1] 直接给出。
+    -- ★口径：TEST.dhBuffs[**内部索引**] = 该光环的文本（不开 +1，免得两处换算对不上）
+    local list = TEST.dhBuffs
+    if not list then return -1, 0 end
+    local slotMap = TEST.dhSlotOf
+    if slotMap then
+      return slotMap[i] or -1
+    end
+    for bi = i, 31 do
+      if list[bi] ~= nil then return bi end
+    end
+    return -1, 0
+  end
   local list = (filter == "HARMFUL") and TEST.pDebuffs or TEST.buffs
   return (list and list[i + 1]) and i or -1
 end
+-- ★真 API 非 Protected，收**内部索引**；桩如实记账（组 182 靠它验「传的是内部索引不是槽位号」）
+CancelPlayerBuff = function(bi)
+  TEST.dhCancel = TEST.dhCancel or {}
+  table.insert(TEST.dhCancel, bi)
+  return true
+end
 local function stubBuffAt(bi)
+  -- ★1.74.7 骑乘助手态（TEST.dhBuffs 有值）优先：那时索引是**坐骑光环的内部索引**，
+  --   纹理要回该光环自己的图标（EVAL_DH_REFRESH 用它把图标换成坐骑图标）。
+  if TEST.dhBuffs ~= nil then
+    if TEST.dhBuffs[bi] ~= nil then return { tex = "Interface\\Icons\\Ability_Mount_RidingHorse" } end
+    return nil
+  end
   return TEST.buffs[bi + 1] or (TEST.pDebuffs and TEST.pDebuffs[bi + 1])
 end
 GetPlayerBuffTexture = function(bi) local b = stubBuffAt(bi) return b and b.tex or nil end

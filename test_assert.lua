@@ -14645,6 +14645,207 @@ do
   print("  自身/目标debuff 负面类型：解析「名(类型)」/类型单独写 · 求值按类型过滤（不符=没有）· 名称留空=任意该类型 · 导出 token/显示本地化 · 编辑窗类型格")
 end
 
+-- ===== 组 182（1.74.7）：骑乘助手 · 一键下马（tools/DismountHelper.lua）=====
+-- 覆盖：①懒加载（开关关着不建帧）②工具箱「骑乘助手」分组行 + 两枚开关 ③文本判据纯函数（四种真坐骑描述 + 反向哨兵）
+--   ④检测：过滤器 + **内部索引** + tooltip 识别（多条可取消光环里挑出坐骑）⑤不猜：tooltip 不可信 → UNREADABLE，绝不误下马
+--   ⑥一键下马：真的调 CancelPlayerBuff(内部索引) ⑦限频 ⑧自动下马闸门（关着不发 / 开着发 / 冷却内不重发）
+--   ⑨真实命令入口 /eh go 下马 ⑩reload 恢复（开关关着不建帧）
+do
+  local tb182 = EVAL_HELP_CONFIG
+  if type(tb182.tb) ~= "table" then tb182.tb = {} end
+  -- 前置：显式建立（「桩太宽松」是本项目老坑：不靠别组的残留状态）
+  tb182.tb.dismount, tb182.tb.dismountAuto = false, false
+  tb182.tb.dhX, tb182.tb.dhY = nil, nil
+  TEST.dhBuffs, TEST.dhTexts, TEST.dhCancel = nil, nil, {}
+  -- ★限频要用**单调递增的假时钟**驱动（桩 GetTime 读 TEST.time）——否则第一次成功之后
+  --   时间原地不动，后面每一步都会被 0.5s 限频挡下（本轮实测：⑥ 恒 false）。
+  local t0_182 = TEST.time
+  TEST.time = 9000
+  TEST.chat = nil
+  EVAL_DH_TEST_RESET_UI()
+  EVAL_DH_TEST_RESET()
+
+  -- ① 懒加载：开关关着 → 一个帧都不建（与猎人助手/消耗品助手同一契约）
+  eq(EVAL_DH_TEST_STATE().built, false, "①★★懒加载：开关关着时**连图标帧都没建**（built=false）")
+  eq(EVAL_DH_RESTORE(), false, "①★关着时登录恢复直接返回 false（不建帧）")
+  eq(EVAL_DH_TEST_STATE().built, false, "①★★恢复函数也没有偷偷建帧（懒加载成立）")
+
+  -- ② 工具箱分组行 + 两枚开关（读真实模型；期望值不拿语言包自证，只查结构与相邻关系）
+  local rows182 = EVAL_TEST_TB_ROWS()
+  local idxOff182, idxAuto182 = nil, nil
+  for i = 1, table.getn(rows182) do
+    if rows182[i].t == "c" and rows182[i].key == "dismount" then idxOff182 = i end
+    if rows182[i].t == "c" and rows182[i].key == "dismountAuto" then idxAuto182 = i end
+  end
+  eq(idxOff182 ~= nil, true, "②★★工具箱里有 key=dismount 的复选框行（一键下马总闸门）")
+  eq(idxOff182 ~= nil and idxOff182 > 1 and rows182[idxOff182 - 1].t == "h", true, "②★★它上面紧跟着一个分组标题（骑乘助手）")
+  eq(idxOff182 ~= nil and type(rows182[idxOff182 - 1].label) == "string" and string.len(rows182[idxOff182 - 1].label) > 2, true,
+     "②★分组标题有实际文案（不是空串）")
+  eq(idxAuto182 ~= nil and idxAuto182 == idxOff182 + 1, true, "②★★自动下马开关紧随其后（同一分组内）")
+  eq(type(EVAL_DH_TEST_STATE) == "function", true, "②★脚手架哨兵：下面的读值口名字写错会立刻红")
+
+  -- ③ 文本判据（纯函数；四种真坐骑描述 + 反向哨兵「普通增益不许误判成坐骑」）
+  eq(EVAL_DH_IS_MOUNT_TEXT("速度提高60%"), true, "③★「速度提高60%」（中文坐骑描述）")
+  eq(EVAL_DH_IS_MOUNT_TEXT("速度提高100%"), true, "③★百分比数字变了照样命中（模式容忍数字）")
+  eq(EVAL_DH_IS_MOUNT_TEXT("Increases speed by 60%. Mount"), true, "③★英文 Mount")
+  eq(EVAL_DH_IS_MOUNT_TEXT("坐骑"), true, "③★中文「坐骑」")
+  eq(EVAL_DH_IS_MOUNT_TEXT("增加移动速度 50%"), true, "③★「增加移动速度」")
+  eq(EVAL_DH_IS_MOUNT_TEXT("战斗怒吼"), false, "③★★反向哨兵：普通增益**不许**判成坐骑")
+  eq(EVAL_DH_IS_MOUNT_TEXT(""), false, "③★空串 → 假")
+  eq(EVAL_DH_IS_MOUNT_TEXT(nil), false, "③★nil → 假（不炸）")
+
+  TEST.time = 9000
+  -- ④ 检测：CANCELABLE 过滤器 + **内部索引** + tooltip 识别（无关光环里有坐骑，必须挑出来）
+  --   TEST.dhBuffs[**内部索引**] = 该光环的 tooltip 文本；TEST.dhSlotOf[槽位] = 该槽位的内部索引。
+  --   ★内部索引刻意**不连续**（1、3、4）：这样「转发的是内部索引而不是第几个候选」才验得出来
+  --   —— 若实现把内部索引当成序号转发，这里就会返回 2。
+  TEST.dhBuffs = { [1] = "格挡姿态 提高护甲", [3] = "坐骑（速度提高60%）", [4] = "战斗怒吼" }
+  TEST.dhSlotOf = { [0] = 1, [1] = 3, [2] = 4 } -- 槽位0→索引1、槽位1→索引3、槽位2→索引4
+  TEST.dhTexts = nil
+  local bi4, why4, text4 = EVAL_DH_FIND_MOUNT()
+  eq(why4, "FOUND", "④★★识别结论 = FOUND（真的找到了）")
+  eq(bi4, 3, "④★★★返回的是**内部索引 3**（不是「第 2 个候选」—— CancelPlayerBuff 要内部索引），实际 " .. tostring(bi4))
+  eq(type(text4) == "string" and string.find(text4, "坐骑", 1, true) ~= nil, true, "④★附带命中文本（可据此排查）：" .. tostring(text4))
+
+  -- ⑤ 不猜：可见的可取消光环但 tooltip 一条都读不出来 → UNREADABLE（不是 NONE！）
+  TEST.dhBuffs = { [1] = "怒吼", [2] = "姿态" }
+  TEST.dhSlotOf = { [0] = 1, [1] = 2 }
+  TEST.dhTexts = { [1] = "", [2] = "" }
+  local bi5, why5 = EVAL_DH_FIND_MOUNT()
+  eq(bi5 == nil and why5 == "UNREADABLE", true, "⑤★★★查不到 ≠ 没有：读不出文本时如实报 UNREADABLE（原因 " .. tostring(why5) .. "）")
+  --   反向哨兵：一个光环都没有 = 确实没骑 → NONE
+  TEST.dhBuffs = nil
+  TEST.dhTexts = nil
+  local bi5b, why5b = EVAL_DH_FIND_MOUNT()
+  eq(bi5b == nil and why5b == "NONE", true, "⑤★★干净扫描 = NONE（与 UNREADABLE 分得清：" .. tostring(why5b) .. "）")
+  --   反向哨兵：API 不在 → NO_API（绝不静默说「没骑」）
+  local realGPB182 = GetPlayerBuff
+  GetPlayerBuff = nil
+  local bi5c, why5c = EVAL_DH_FIND_MOUNT()
+  GetPlayerBuff = realGPB182
+  eq(bi5c == nil and why5c == "NO_API", true, "⑤★★API 不在 → NO_API（不猜、不糊弄）")
+
+  -- ⑥ 一键下马：真的按**内部索引**调 CancelPlayerBuff（不是槽位号）
+  TEST.dhBuffs = { [1] = "格挡姿态", [3] = "坐骑（速度提高60%）" }
+  TEST.dhSlotOf = { [0] = 1, [1] = 3 }
+  TEST.dhCancel = {}
+  EVAL_DH_TEST_RESET()
+  TEST.time = 9100 -- ★比上一次成功晚 100s，确保不被 0.5s 限频挡下
+  TEST.chat = nil
+  eq(EVAL_DH_DISMOUNT(), true, "⑥★下马成功返回 true")
+  eq(table.getn(TEST.dhCancel), 1, "⑥★★真的调了 CancelPlayerBuff（且只调一次）")
+  eq(TEST.dhCancel[1], 3, "⑥★★★传的是**坐骑自己的内部索引 3**（喂成序号 2 会在骑着非首个光环时取消错目标），实际 " .. tostring(TEST.dhCancel[1]))
+  eq(string.find(tostring(TEST.chat or ""), "下马", 1, true) ~= nil, true, "⑥★如实播报：" .. tostring(TEST.chat))
+  eq(EVAL_DH_TEST_STATE().hits, 1, "⑥★成功计数 +1")
+
+  -- ⑦ 没骑 → 不调 API + 如实报「没在马背上」；限频窗口内再点 → 不重复调
+  TEST.dhBuffs = nil
+  TEST.dhCancel = {}
+  EVAL_DH_TEST_RESET()
+  TEST.time = 9200
+  TEST.chat = nil
+  eq(EVAL_DH_DISMOUNT(), false, "⑦★没骑 → 返回 false")
+  eq(table.getn(TEST.dhCancel), 0, "⑦★★没骑时**一点都不调** CancelPlayerBuff")
+  eq(string.find(tostring(TEST.chat or ""), EVAL_L("DH_NOT_MOUNTED"), 1, true) ~= nil, true, "⑦★如实说「没在马背上」（不静默）")
+  TEST.dhBuffs = { [1] = "坐骑（速度提高60%）" }
+  TEST.dhSlotOf = { [0] = 1 }
+  TEST.dhCancel = {}
+  TEST.time = 9300
+  TEST.chat = nil
+  eq(EVAL_DH_DISMOUNT(), true, "⑦前置：换回骑乘态 → 成功")
+  TEST.chat = nil
+  eq(EVAL_DH_DISMOUNT(), false, "⑦★★0.5s 内的第二次点击被限频挡下（返回 false）")
+  eq(table.getn(TEST.dhCancel), 1, "⑦★★限频真的生效：两次点击只发出**一次**取消")
+  eq(EVAL_DH_TEST_STATE().lastReason, "RATE", "⑦★拦下时的原因写进状态（可诊断），实际 " .. tostring(EVAL_DH_TEST_STATE().lastReason))
+  eq(string.find(tostring(TEST.chat or ""), EVAL_L("DH_RATE"), 1, true) ~= nil, true, "⑦★如实说「太快了」（不静默吞掉用户点击）")
+
+  -- ⑧ 自动下马（可选开关）：闸门在 EVAL_DH_SHOULD_AUTO 里，三种分支逐个钉
+  eq(EVAL_DH_SHOULD_AUTO("你正在骑乘", false, 100, -999), false, "⑧★★开关关着 → 绝不自动下马（用户没开就不许动他的手）")
+  eq(EVAL_DH_SHOULD_AUTO("你正在骑乘", true, 100, -999), true, "⑧★★被「你正在骑乘」挡住 + 开着 → 动手")
+  eq(EVAL_DH_SHOULD_AUTO("无法在骑乘状态下使用", true, 100, -999), true, "⑧★「无法在…」也算（LazyPig 同款词表）")
+  eq(EVAL_DH_SHOULD_AUTO("这个法术还没有准备好", true, 100, -999), false, "⑧★★★反向哨兵：**普通报错不许**触发自动下马（否则一进战斗就乱下马）")
+  eq(EVAL_DH_SHOULD_AUTO("你正在骑乘", true, 101, 100), false, "⑧★★冷却内（2s）不重发 —— 同类报错连发只处理一次")
+  eq(EVAL_DH_SHOULD_AUTO("你正在骑乘", true, 103, 100), true, "⑧★超过冷却 → 再次生效")
+  --   真实事件入口：骑乘态下 UI_ERROR_MESSAGE 进来会真的下马；关着则一动不动
+  TEST.dhBuffs = { [1] = "姿态", [3] = "坐骑（速度提高60%）" }
+  TEST.dhSlotOf = { [0] = 1, [1] = 3 }
+  TEST.dhCancel = {}
+  EVAL_DH_TEST_RESET()
+  TEST.time = 9500
+  tb182.tb.dismountAuto = true
+  eq(EVAL_DH_ON_UIMSG("你正在骑乘。"), true, "⑧★★自动路径：报错触发 → 真的下马")
+  eq(table.getn(TEST.dhCancel), 1, "⑧★★自动路径调的是真 API（一次）")
+  eq(EVAL_DH_ON_UIMSG("你正在骑乘。"), false, "⑧★★同类报错连发 → 冷却挡下，不刷屏不重复取消")
+  eq(table.getn(TEST.dhCancel), 1, "⑧★★第二次真的没发（不是嘴上说挡下了）")
+  tb182.tb.dismountAuto = false
+  TEST.dhCancel = {}
+  EVAL_DH_TEST_RESET()
+  TEST.time = 9700
+  eq(EVAL_DH_ON_UIMSG("你正在骑乘。"), false, "⑧★★开关关着 → 事件进来也不动手")
+  eq(table.getn(TEST.dhCancel), 0, "⑧★★★关着时**零 API 调用**（默认关闭 = 零副作用）")
+
+  -- ⑨ 真实命令入口（走 SlashCmdList；「命令也是接线」的既有判据）
+  tb182.tb.dismount = true
+  EVAL_DH_ENSURE()
+  TEST.dhBuffs = { [1] = "坐骑（速度提高60%）" }
+  TEST.dhSlotOf = { [0] = 1 }
+  TEST.dhCancel = {}
+  EVAL_DH_TEST_RESET()
+  TEST.time = 9900
+  TEST.chat = nil
+  if SlashCmdList and SlashCmdList["EVALHELP"] then SlashCmdList["EVALHELP"]("go 下马") end
+  eq(table.getn(TEST.dhCancel) == 1, true, "⑨★★/eh go 下马 走真实命令入口能真的下马")
+  TEST.chat = nil
+  if SlashCmdList and SlashCmdList["EVALHELP"] then SlashCmdList["EVALHELP"]("go 下马 状态") end
+  local said182 = tostring(TEST.chat or "")
+  eq(string.find(said182, "FOUND", 1, true) ~= nil, true, "⑨★探针摊开检测结论（FOUND/NONE/UNREADABLE）：" .. said182)
+  eq(string.len(said182) > 8, true, "⑨★探针有实际内容")
+  TEST.chat = nil
+
+  -- ⑩ 开关与登录恢复（模拟 /reload：帧丢弃后由真实初始化帧的 VARIABLES_LOADED 重建）
+  EVAL_DH_TEST_RESET_UI()
+  eq(EVAL_DH_TEST_STATE().built, false, "⑩前置：模拟 /reload 后帧确实不存在（懒建的前提）")
+  local initF182 = rawget(_G, "EVAL_HELPInitFrame")
+  local okEv182, fnEv182 = pcall(initF182.GetScript, initF182, "OnEvent")
+  eq(okEv182 and type(fnEv182) == "function", true, "⑩前置：init 帧挂了 OnEvent")
+  if okEv182 and type(fnEv182) == "function" then fnEv182("VARIABLES_LOADED") end
+  local st10a182 = EVAL_DH_TEST_STATE()
+  eq(st10a182.built, true, "⑩★★★VARIABLES_LOADED 之后图标**重建**了（修的就是「reload 后图标丢失」）")
+  eq(st10a182.shown, true, "⑩★★重建后图标是**显示**的")
+  eq(string.find(tostring(st10a182.regClicks or ""), "true", 1, true) ~= nil, true,
+     "⑩★注册左右键都成功了（" .. tostring(st10a182.regClicks) .. "）—— 只注册左键的话右键永远到不了分派代码")
+  --   真实 OnClick：左键 = 下马、右键 = 开菜单（参数形态不固定，逐个试）
+  TEST.dhBuffs = { [1] = "坐骑（速度提高60%）" }
+  TEST.dhCancel = {}
+  EVAL_DH_TEST_RESET()
+  local dhBtn182 = rawget(_G, "EVAL_DH_EVENTS") and EVAL_DH_TEST_STATE()
+  eq(EVAL_TEST_DH_CLICK ~= nil, true, "⑩★★点击分派读值口在位")
+  eq(EVAL_TEST_DH_CLICK("LeftButton"), true, "⑩★★左键走真实 OnClick → 下马")
+  eq(table.getn(TEST.dhCancel), 1, "⑩★★左键真的取消了坐骑光环")
+  eq(EVAL_TEST_DH_CLICK({}, "RightButton"), true, "⑩★self 在前、button 在第 2 参 → 也认")
+  local st10b182 = EVAL_DH_TEST_STATE()
+  eq(st10b182.rightClicks >= 1 and st10b182.leftClicks >= 1, true,
+     "⑩★点击记账分得清（左 " .. tostring(st10b182.leftClicks) .. " / 右 " .. tostring(st10b182.rightClicks) .. "）")
+  eq(type(st10b182.lastArgs) == "string" and string.len(st10b182.lastArgs) > 3, true,
+     "⑩★探针读得到**原始参数形状**（下次不靠猜）：" .. tostring(st10b182.lastArgs))
+  EVAL_DD_HIDE()
+  --   反向哨兵：开关关掉 → 图标收起、恢复函数不再建帧
+  tb182.tb.dismount, tb182.tb.dismountAuto = false, false
+  EVAL_DH_TOGGLE()
+  eq(EVAL_DH_TEST_STATE().shown, false, "⑩★★关掉总闸门 → 图标收起")
+  eq(EVAL_DH_RESTORE(), false, "⑩★★关着时再走一次登录恢复 → 仍不建帧")
+
+  -- 收尾：复位模块与桩，别影响后面的组
+  tb182.tb.dismount, tb182.tb.dismountAuto = false, false
+  tb182.tb.dhX, tb182.tb.dhY = nil, nil
+  TEST.dhBuffs, TEST.dhTexts, TEST.dhCancel, TEST.dhSlotOf = nil, nil, nil, nil
+  TEST.time = t0_182 -- 还原假时钟（不给后面的组留下副作用）
+  TEST.chat = nil
+  EVAL_DH_TEST_RESET_UI()
+  EVAL_DH_TEST_RESET()
+  print("  骑乘助手 · 一键下马：懒加载 / 内部索引取消 / 查不到不猜（UNREADABLE） / 限频 / 自动下马闸门 / 命令与登录恢复")
+end
+
 print("ALL TESTS PASS")
 
   local sd142 = EVAL_HELP_CONFIG.shareSealDemo

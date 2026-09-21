@@ -3954,6 +3954,13 @@ local function tbModel()
     -- ★1.74.5 用户要求：「参照喂食助手，添加个消耗品助手」→ 多选 + 主图标旁横排各自点用
     { t = "h", label = L("TB_CH_GROUP") },
     { t = "c", key = "consumable", label = L("TB_CONSUMABLE"), tip = L("TB_CONSUMABLE_TIP"), wip = L("TB_WIP_TIP") },
+    -- ★1.74.7 用户要求：「按照推荐的在工具箱内添加个一键下马功能」→ 骑乘助手分组
+    --   总闸门 = tools/DismountHelper.lua 的 dismount：勾上才懒建屏幕上的下马图标（未勾 = 一个帧都不建）
+    --   ★实现依据：本客户端无 Dismount/IsMounted API；坐骑=可取消的有益光环（tooltip 描述含「速度提高X%」）
+    --     → CancelPlayerBuff（非 Protected）取消它。自动下马 = 被系统以「你正在/无法在/骑乘」拒绝时顺手下马。
+    { t = "h", label = L("TB_H_RIDE") },
+    { t = "c", key = "dismount", label = L("TB_DISMOUNT"), tip = L("TB_DISMOUNT_TIP"), wip = L("TB_WIP_TIP") },
+    { t = "c", key = "dismountAuto", label = L("TB_DISMOUNT_AUTO"), tip = L("TB_DISMOUNT_AUTO_TIP"), wip = L("TB_WIP_TIP") },
   }
 end
 
@@ -4275,6 +4282,16 @@ function EVAL_TB_BUILD(root, page, refreshes)
       if row.modelKey == "feedPet" then pcall(EVAL_HH_TOGGLE) end
       -- ★1.74.5 消耗品助手：同一条纪律 —— 勾上即时建并显示，取消即时收起
       if row.modelKey == "consumable" then pcall(EVAL_CH_TOGGLE) end
+      -- ★1.74.7 骑乘助手「一键下马」：勾上 = 懒建并显示下马图标（并挂上自动下马事件帧）
+      if row.modelKey == "dismount" then
+        if type(EVAL_DH_TOGGLE) == "function" then pcall(EVAL_DH_TOGGLE) end
+        if type(EVAL_DH_EVENTS_ENSURE) == "function" then pcall(EVAL_DH_EVENTS_ENSURE) end
+      end
+      -- 「自动下马」是**行为开关**（不需要图标），改完立刻生效：确保事件帧在、并如实播报
+      if row.modelKey == "dismountAuto" then
+        if type(EVAL_DH_EVENTS_ENSURE) == "function" then pcall(EVAL_DH_EVENTS_ENSURE) end
+        if type(EVAL_TB_REFRESH) == "function" then pcall(EVAL_TB_REFRESH) end
+      end
       EVAL_TB_REFRESH()
     end)
     chk:SetScript("OnEnter", function()

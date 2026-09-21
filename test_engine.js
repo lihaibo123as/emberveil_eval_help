@@ -68,7 +68,7 @@ function checkIconAssets() {
 //   ② 跳过「同名还有函数内 local 声明」的短名（W / H / x / y 这类）：它们在文件里是**多个不同的变量**，
 //      按名字比对必然误报（首版就误报了 EvalHelp.lua:153 的 local W —— 那是另一个函数里的 W）。
 (function () {
-  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua"];
+  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/DismountHelper.lua"];
   const bad = [];
   let totalLocals = 0;
   const isName = (s) => new RegExp("^[A-Za-z_][A-Za-z0-9_]*$").test(s);
@@ -1702,12 +1702,21 @@ function checkIconAssets() {
   }
   const eh = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
   if (eh.indexOf("EVAL_HH_CMD") < 0) bad.push("EvalHelp.lua 没接 /eh go 喂食* 命令");
+  // ★1.74.7 骑乘助手（tools/DismountHelper.lua）同四条接线：toc / 工具箱开关行 / 勾选副作用 / 命令 + 登录恢复
+  if (!/tools[\\/]DismountHelper\.lua/.test(toc)) bad.push("EvalHelp.toc 没列 tools/DismountHelper.lua");
+  if (!/key\s*=\s*"dismount"/.test(tb)) bad.push('Toolbox.lua 行模型里没有 key="dismount" 的开关行');
+  if (!/modelKey\s*==\s*"dismount"/.test(tb) || tb.indexOf("EVAL_DH_TOGGLE") < 0) {
+    bad.push("Toolbox.lua 勾选后没有调 EVAL_DH_TOGGLE（下马图标不会出现）");
+  }
+  if (!/modelKey\s*==\s*"dismountAuto"/.test(tb)) bad.push('Toolbox.lua 缺「自动下马」开关行（key="dismountAuto"）');
+  if (eh.indexOf("EVAL_DH_CMD") < 0) bad.push("EvalHelp.lua 没接 /eh go 下马* 命令");
+  if (eh.indexOf("EVAL_DH_RESTORE") < 0) bad.push("EvalHelp.lua 登录时没恢复骑乘助手图标（/reload 后图标会消失）");
   if (bad.length) {
     console.log("HH WIRING CHECK: FAIL - " + bad.join(" | "));
     process.exitCode = 1;
     return;
   }
-  console.log("HH WIRING CHECK: tools 模块进了 .toc · 工具箱有开关行且勾选接 EVAL_HH_TOGGLE · /eh go 喂食* 已接");
+  console.log("HH WIRING CHECK: tools 模块进了 .toc · 工具箱有开关行且勾选接 EVAL_HH_TOGGLE/EVAL_DH_TOGGLE · /eh go 喂食*/下马* 已接 · 两个助手都接了登录恢复");
 })();
 
 // ===== SHARE AUTHOR WIRING CHECK（1.74.5）：方案「作者/来源」与「不弹窗原因落日志」的接线 =====
@@ -2069,7 +2078,7 @@ const iconFixture = (function () {
 })();
 const L=lauxlib.luaL_newstate();
 lualib.luaL_openlibs(L);
-for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','examples/priest.lua','examples/druid.lua','examples/warlock.lua','examples/shaman.lua','examples/group.lua','Toolbox.lua','DataSearch.lua','Share.lua','IconSem.lua','IconBrowser.lua','PetData.lua','PetHelper.lua','tools/IconGrid.lua','tools/HunterHelper.lua','tools/ConsumableHelper.lua','test_assert.lua']){
+for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','examples/priest.lua','examples/druid.lua','examples/warlock.lua','examples/shaman.lua','examples/group.lua','Toolbox.lua','DataSearch.lua','Share.lua','IconSem.lua','IconBrowser.lua','PetData.lua','PetHelper.lua','tools/IconGrid.lua','tools/HunterHelper.lua','tools/ConsumableHelper.lua','tools/DismountHelper.lua','test_assert.lua']){
   if(f==='test_assert.lua' && iconFixture){
     const fx=to_luastring(iconFixture);
     const stx=lauxlib.luaL_loadbuffer(L,fx,fx.length,to_luastring('icon_fixture'));

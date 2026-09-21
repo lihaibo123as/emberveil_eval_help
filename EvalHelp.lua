@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.74.6"
+local VERSION = "1.74.7"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -8218,6 +8218,14 @@ if type(SlashCmdList) == "table" then
       else
         say("消耗品助手模块没载入（tools/ConsumableHelper.lua 是否列进了 EvalHelp.toc？）")
       end
+    -- ★1.74.7 骑乘助手（tools/DismountHelper.lua）：/eh go 下马（立即下马）｜ 下马 状态（探针）
+    --   "go 下马" = 3 + 6 = **9 字节**（string.sub 是字节下标；两个汉字各 3 字节）
+    elseif string.sub(msg, 1, 9) == "go 下马" then
+      if type(EVAL_DH_CMD) == "function" then
+        EVAL_DH_CMD(msg)
+      else
+        say("骑乘助手模块没载入（tools/DismountHelper.lua 是否列进了 EvalHelp.toc？）")
+      end
     elseif msg == "go probe immune" then
       -- 免疫事件探针（1.35.1，免疫学习器前置验证）：30 秒全事件抓取——CHAT_MSG_* 或参数含「免疫/immune」
       -- 的写调试日志；对免疫怪放技能后翻日志拿真实事件名+文本格式，再写解析器（事件 wiki 无文档页）
@@ -9068,6 +9076,10 @@ init:SetScript("OnEvent", function(a, b)
     if type(EVAL_HH_RESTORE) == "function" then pcall(EVAL_HH_RESTORE) end
     -- ★1.74.5 消耗品助手（tools/ConsumableHelper.lua）：同一条纪律 —— 上次开着就恢复
     if type(EVAL_CH_RESTORE) == "function" then pcall(EVAL_CH_RESTORE) end
+    -- ★1.74.7 骑乘助手（tools/DismountHelper.lua）：开关开着就重建下马图标（仍懒：关着一个帧都不建）；
+    --   顺带确保自动下马的事件帧在（它在模块内自查开关，关着不注册）
+    if type(EVAL_DH_RESTORE) == "function" then pcall(EVAL_DH_RESTORE) end
+    if type(EVAL_DH_EVENTS_ENSURE) == "function" then pcall(EVAL_DH_EVENTS_ENSURE) end
     -- 注册进出战斗事件（pcall 防御：事件名若不存在不会崩）
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_REGEN_DISABLED")
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_REGEN_ENABLED")
