@@ -8211,6 +8211,23 @@ if type(SlashCmdList) == "table" then
       subS = string.gsub(subS, "^shotprobe%s*", "")
       if type(EVAL_SHOT_PROBE) == "function" then EVAL_SHOT_PROBE(subS)
       else say("射击探针：引擎未载入（EVAL_SHOT_PROBE 不存在）") end
+    elseif string.find(msg, "^go 追踪探针") or string.find(msg, "^go trackprobe") then
+      -- ★1.74.31 追踪取证（见 Engine.lua 的 EVAL_TRACK_PROBE 注释：本客户端只有 GetTrackingTexture / CancelTrackingBuff）
+      local subT = string.gsub(msg, "^go%s*", "")
+      subT = string.gsub(subT, "^追踪探针%s*", "")
+      subT = string.gsub(subT, "^trackprobe%s*", "")
+      if type(EVAL_TRACK_PROBE) == "function" then EVAL_TRACK_PROBE(subT)
+      else say("追踪探针：引擎未载入（EVAL_TRACK_PROBE 不存在）") end
+    elseif msg == "存档清理" or msg == "savescrub" then
+      -- ★1.74.31 手动清全部探针残渣（iconDump / shProbe / shVariantProbe / probeEvents）
+      if type(EVAL_LOAD_CLEANUP) == "function" then
+        local kk, bb = EVAL_LOAD_CLEANUP(true)
+        say(string.format("存档清理：删掉 %d 个探针/调试残渣键（约 %.1f KB）；/reload 后落盘生效", kk, bb / 1024))
+      else say("存档清理：Core 未载入") end
+    elseif msg == "载入报告" or msg == "loadreport" then
+      -- ★1.74.31 随时重打载入报告（不必 /reload；取证命令化）
+      if type(EVAL_LOAD_REPORT) == "function" then EVAL_LOAD_REPORT(EVAL_SAY, true) -- ★完整取证（登录默认只打 1 行摘要）
+      else say("载入报告：Core 未载入") end
     elseif msg == "go 悬停探针" or msg == "go hovprobe" then
       if type(EVAL_SHARE_HOVER_PROBE) == "function" then
         EVAL_SHARE_HOVER_PROBE("WHISPER")
@@ -9473,6 +9490,28 @@ init:SetScript("OnEvent", function(a, b)
   elseif type(event) == "string" then eventName = event end
 
   if eventName == "VARIABLES_LOADED" then
+        -- ★1.74.31 载入审计：SavedVariables 已恢复 → 记 vars、清残渣、**一帧后**打报告（不新增事件注册）
+        if type(EVAL_LOAD_MARK) == "function" then EVAL_LOAD_MARK("vars") end
+        if type(EVAL_LOAD_CLEANUP) == "function" then pcall(EVAL_LOAD_CLEANUP) end
+        if not EVAL_LOAD_RPT_FRAME and type(CreateFrame) == "function" then
+          -- ★1.74.31 本客户端 OnUpdate 回调**不传参**（传进来的不是帧本身，实测为 nil）⇒ 帧引用必须用外层 local 捕获，
+          --   不许写成 function(f) 再 f:SetScript —— 那会当场 "attempt to index local 'f' (a nil value)"（真机已炸过）。
+          local lf = CreateFrame("Frame")
+          EVAL_LOAD_RPT_FRAME = lf
+          -- ★★★1.74.31 阶段 0 第二版：**载入期 GetTime() 恒 0**（真机实测）⇒ 报告不能在载入期就打（那时读数全是 0，打出来的是假数）。
+          --   改成：**等时钟可用（≈ 进世界）的第一帧**再记 init 并报告；万一一直不可用（停在角色选择界面），
+          --   最多等 120 秒（用 time() 秒级墙钟做期限）再如实报告（不许永久空转）。
+          local lfT0 = (type(time) == "function") and time() or nil
+          lf:SetScript("OnUpdate", function()
+            local now = (type(GetTime) == "function") and GetTime() or 0
+            local late = false
+            if lfT0 and type(time) == "function" then late = (time() - lfT0) > 120 end
+            if (type(now) ~= "number" or now <= 0) and not late then return end -- ★时钟还没启动：等（不摘钩）
+            pcall(lf.SetScript, lf, "OnUpdate", nil) -- ★一次性：报完即摘（不常驻空转）
+            if type(EVAL_LOAD_MARK) == "function" then EVAL_LOAD_MARK("init") end
+            if type(EVAL_LOAD_REPORT) == "function" then EVAL_LOAD_REPORT(EVAL_SAY) end
+          end)
+        end
     cfg = EVAL_HELP_CONFIG or {}
     EVAL_HELP_CONFIG = cfg
     -- ★★★1.74.20 角色级存档（三个助手）的**一次性迁移**：
@@ -9545,6 +9584,7 @@ init:SetScript("OnEvent", function(a, b)
     --   载入期全局 UnrealQuest 还不存在）；对方缺席时如实记 mode=absent，不报错、不静默。
     if type(EVAL_RW_INSTALL) == "function" then pcall(EVAL_RW_INSTALL) end
     -- 注册进出战斗事件（pcall 防御：事件名若不存在不会崩）
+    pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_ENTERING_WORLD") -- ★1.74.31 进世界（载入期时钟到这里才开始走 ⇒ world 打点）
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_REGEN_DISABLED")
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_REGEN_ENABLED")
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_TARGET_CHANGED") -- Cat：目标切换时刷新可流血等状态
@@ -9569,6 +9609,9 @@ init:SetScript("OnEvent", function(a, b)
       elseif en == "PLAYER_REGEN_ENABLED" then
         EVAL_HELP_STATE.combatStart = nil
         onCombatEvent(false)
+      elseif en == "PLAYER_ENTERING_WORLD" then
+        -- ★1.74.31 记下进世界打点（报告用它算「进世界→插件首帧」）
+        if type(EVAL_LOAD_MARK) == "function" then EVAL_LOAD_MARK("world") end
       elseif en == "PLAYER_TARGET_CHANGED" then
         EVAL_HELP_UPDATE_STATE()
       elseif en == "CHAT_MSG_SPELL_SELF_DAMAGE" then

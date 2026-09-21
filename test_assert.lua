@@ -17019,4 +17019,239 @@ do
   if fails0 == TESTASSERT_FAILS then print("GROUP 188 (激活方案边框 + 物品详情 tooltip): PASS") end
   EVAL_TEST_CH_RESET_UI()
 end
+
+-- ===== 组 189（1.74.31）：追踪探针（用户：「调用 API 如何获得角色追踪状态：采矿/采药/野兽追踪」）=====
+do
+  local fails0 = TESTASSERT_FAILS
+  local keepTex189 = TEST.trackTex
+  local keepSlot189 = (type(EVAL_WSLOTS) == "table") and EVAL_WSLOTS["寻找矿物"] or nil
+  TEST.trackTex = "Interface/Icons/Ability_Tracking"
+  if type(EVAL_WSLOTS) == "table" then EVAL_WSLOTS["寻找矿物"] = { slot = 7, tex = "Interface/Icons/Ability_Tracking" } end
+  EVAL_TRACK_PROBE("清空")
+  TEST.chat = nil
+  EVAL_TRACK_PROBE("")
+  local rep189 = tostring(TEST.chat or "")
+  eq(string.find(rep189, "GetTrackingTexture", 1, true) ~= nil, true, "①★报告含**主路** API（GetTrackingTexture）")
+  eq(string.find(rep189, "本次=Interface/Icons/Ability_Tracking", 1, true) ~= nil, true, "①★★报告「本次」栏打出**当前追踪纹理**（读真机返回值，不猜）")
+  eq(string.find(rep189, "CancelTrackingBuff", 1, true) ~= nil, true, "②★报告含取消接口可用性")
+  eq(string.find(rep189, "增益条光环", 1, true) ~= nil, true, "③★报告含**光环辅路**（用来判「追踪占不占增益条」）")
+  eq(string.find(rep189, "寻找矿物", 1, true) ~= nil, true, "④★纹理↔名字对照：动作条里的追踪技能被列出来")
+  eq(string.find(rep189, "上次", 1, true) ~= nil, true, "⑥★有「上次 vs 本次」对照（开/关各跑一次即可定判据）")
+  -- 反向哨兵：没追踪时如实报「空/无追踪」，且「上次」栏保留上一次读数（这正是判定式）
+  TEST.trackTex = nil
+  TEST.chat = nil
+  EVAL_TRACK_PROBE("")
+  local rep189b = tostring(TEST.chat or "")
+  eq(string.find(rep189b, "无追踪", 1, true) ~= nil, true, "★反向哨兵：无追踪时如实报「（空/无追踪）」")
+  eq(string.find(rep189b, "上次=Interface/Icons/Ability_Tracking", 1, true) ~= nil, true, "★★「上次」栏保留上一次读数（★只认「上次=」这一栏，避免被 ④ 行的同名纹理蒙混过关）")
+  -- 探针必须**同时落盘**（与射击探针同一条纪律：事后读文件，不用截图）
+  local hit189 = false
+  local buf189 = (type(EVAL_HELP_CONFIG) == "table" and type(EVAL_HELP_CONFIG.log) == "table") and EVAL_HELP_CONFIG.log or {}
+  for i = 1, table.getn(buf189) do
+    if string.find(tostring(buf189[i]), "[追踪探针]", 1, true) ~= nil then hit189 = true end
+  end
+  eq(hit189, true, "★★报告**同时落盘**（[追踪探针] → SavedVariables）")
+  -- 走真实命令入口
+  local cmd189 = SlashCmdList and SlashCmdList["EVALHELP"]
+  if type(cmd189) == "function" then
+    TEST.chat = nil
+    pcall(cmd189, "go 追踪探针 清空")
+    eq(string.find(tostring(TEST.chat or ""), "清空", 1, true) ~= nil, true, "★★命令入口通了：/eh go 追踪探针 清空")
+  end
+  EVAL_TRACK_PROBE("清空")
+  TEST.trackTex = keepTex189
+  if type(EVAL_WSLOTS) == "table" then EVAL_WSLOTS["寻找矿物"] = keepSlot189 end
+  if fails0 == TESTASSERT_FAILS then print("GROUP 189 (追踪探针): PASS") end
+end
+
+-- ===== 组 190（1.74.31）：载入耗时探针 + 存档残渣清理（用户：「审计下载入速度有点慢」→ 取证 + 零清理）=====
+do
+  local fails0 = TESTASSERT_FAILS
+  -- ① 探针键清单（唯一来源）
+  local ks190 = EVAL_LOAD_PROBE_KEYS()
+  local n190 = table.getn(ks190)
+  local hasIcon, hasProbe = false, false
+  for i = 1, n190 do
+    if ks190[i] == "iconDump" then hasIcon = true end
+    if ks190[i] == "shProbe" then hasProbe = true end
+  end
+  eq(n190 == 4 and hasIcon and hasProbe, true, "①★探针键清单 = 4 个（含 iconDump / shProbe，实际 " .. tostring(n190) .. "）")
+  -- ①b ★1.74.31 第三版：起点的原始读数在**第一个文件**（zhCN 第 1 行）就采好，经 Core.lua 桥接进读值口。
+  --   ★必须在这里断言：②会调 EVAL_LOAD_MARK("t0") 覆写 t0 的原始读数 ⇒ 放后面就变成「测自己」的假判据（M20 实测存活）。
+  eq(type(EVAL_LOAD_STATE().t0EP) == "number" and type(EVAL_LOAD_STATE().t0WALL) == "string", true,
+     "①b★起点原始读数在第一个文件就采好了（经 Core 桥接；真机实证：载入期只有 time() 在走）")
+  -- ② 三段计时：T0 → files → vars → init（用 TEST.time 造确定性时间轴）
+  local T0 = 5000
+  EVAL_LOAD_T0 = T0
+  EVAL_LOAD_MARK("t0") -- ★显式重读起点，避免沿用载入期那个 T0
+  TEST.time = T0; EVAL_LOAD_MARK("files")
+  TEST.time = T0 + 0.05; EVAL_LOAD_MARK("vars")
+  TEST.time = T0 + 0.08; EVAL_LOAD_MARK("init")
+  local cap190 = {}
+  EVAL_LOAD_REPORT(function(s) table.insert(cap190, tostring(s)) end, true) -- ★取证模式（登录默认只打 1 行）
+  local rep190 = table.concat(cap190, "\n")
+  eq(string.find(rep190, "SavedVariables 恢复 50ms", 1, true) ~= nil, true, "②★★SavedVariables 恢复段 = 50ms（实际：" .. string.sub(rep190, 1, 70) .. "）")
+  eq(string.find(rep190, "合计 80ms", 1, true) ~= nil, true, "②★★合计 = 80ms")
+  eq(string.find(rep190, "SavedVariables 顶层键", 1, true) ~= nil, true, "②★报告含存档键数与最大键（下次登录可对比）")
+  -- ③ 强制全清（手动命令路径）
+  EVAL_HELP_CONFIG.iconDump = { got = 1 }
+  EVAL_HELP_CONFIG.shProbe = { n = 1 }
+  EVAL_HELP_CONFIG.shVariantProbe = { n = 1 }
+  EVAL_HELP_CONFIG.probeEvents = { ["CHAT_MSG_X"] = 1 }
+  local k190, b190 = EVAL_LOAD_CLEANUP(true)
+  eq(k190 >= 4 and EVAL_HELP_CONFIG.iconDump == nil and EVAL_HELP_CONFIG.shProbe == nil
+     and EVAL_HELP_CONFIG.shVariantProbe == nil and EVAL_HELP_CONFIG.probeEvents == nil, true,
+     "③★★强制清理：4 个探针键全清 （★force 现在连调试残渣键一并清 ⇒ 数量取 >=4，实际 " .. tostring(k190) .. "）")
+  eq(type(b190) == "number" and b190 > 0, true, "③★如实报出估算释放量（" .. tostring(b190) .. " 字节）")
+  -- ④ 过期规则（非强制）：iconDump 一律清；其余**当天不算过期**要保留
+  EVAL_HELP_CONFIG.iconDump = { got = 1 }
+  EVAL_HELP_CONFIG.shProbe = { n = 1 }
+  EVAL_HELP_CONFIG.probeAt = "2000-01-01" -- 老日期 ⇒ 应被判过期
+  local k190b = EVAL_LOAD_CLEANUP()
+  eq(EVAL_HELP_CONFIG.iconDump == nil and EVAL_HELP_CONFIG.shProbe == nil and k190b == 2, true,
+     "④★★过期（非当天）自动清：iconDump + shProbe 都被清（实际 " .. tostring(k190b) .. "）")
+  EVAL_HELP_CONFIG.iconDump = { got = 1 }
+  EVAL_HELP_CONFIG.shProbe = { n = 1 }
+  EVAL_HELP_CONFIG.probeAt = (type(date) == "function") and date("%Y-%m-%d") or "2000-01-01"
+  local k190c = EVAL_LOAD_CLEANUP()
+  eq(EVAL_HELP_CONFIG.iconDump == nil and EVAL_HELP_CONFIG.shProbe ~= nil and k190c == 1, true,
+     "④★★反向哨兵：**当天**写的探针数据要**留着**（只清 iconDump），实际清了 " .. tostring(k190c) .. " 个")
+  -- ⑤ 日志环上限 = 100（本轮把 300 降下来）
+  for i = 1, 150 do
+    if type(EVAL_LOGLINE) == "function" then pcall(EVAL_LOGLINE, "组190 灌日志 " .. tostring(i)) end
+  end
+  eq(EVAL_LOG_COUNT() <= 100 and EVAL_LOG_COUNT() > 0, true, "⑤★★日志环上限 100（灌 150 条后实际 " .. tostring(EVAL_LOG_COUNT()) .. "）")
+  -- ⑥ 走真实命令入口
+  local cmd190 = SlashCmdList and SlashCmdList["EVALHELP"]
+  if type(cmd190) == "function" then
+    EVAL_HELP_CONFIG.shProbe = { n = 1 }
+    TEST.chat = nil
+    pcall(cmd190, "存档清理")
+    eq(string.find(tostring(TEST.chat or ""), "存档清理", 1, true) ~= nil, true, "⑥★★命令入口通了：/eh 存档清理")
+  end
+  -- ⑦ ★★★1.74.31 真机接线：报告帧的 OnUpdate 回调必须能**零参数**调用
+  --   （真机事故：写成 function(f) 再 f:SetScript ⇒ 本客户端调 OnUpdate 时**不传参** ⇒ f=nil ⇒
+  --    "attempt to index local 'f' (a nil value)" 红字弹窗）。★必须走**真实回调**（GetScript 取出来自己调）——
+  --   直调 EVAL_LOAD_REPORT 永远照不到「接线」这一层（②就是这样，所以它照不到本轮的炸）。
+  local rpt190 = rawget(_G, "EVAL_LOAD_RPT_FRAME")
+  if rpt190 == nil then
+    local if190 = rawget(_G, "EVAL_HELPInitFrame")
+    local okE190, fnE190 = false, nil
+    if if190 ~= nil and type(if190.GetScript) == "function" then
+      okE190, fnE190 = pcall(if190.GetScript, if190, "OnEvent")
+    end
+    if okE190 and type(fnE190) == "function" then pcall(fnE190, "VARIABLES_LOADED", nil) end
+    rpt190 = rawget(_G, "EVAL_LOAD_RPT_FRAME")
+  end
+  eq(rpt190 ~= nil, true, "⑦★载入报告帧已建（VARIABLES_LOADED 真的跑到建帧那一步）")
+  if rpt190 ~= nil then
+    local okG190, fnG190 = pcall(rpt190.GetScript, rpt190, "OnUpdate")
+    eq(okG190 and type(fnG190) == "function", true, "⑦★报告帧挂着 OnUpdate 回调")
+    if okG190 and type(fnG190) == "function" then
+      TEST.chat = nil
+      local okC190, errC190 = pcall(fnG190) -- ★零参数：真机就是这么调的（自己补参数 = 假判据）
+      eq(okC190, true, "⑦★★★零参数调用不许报错（真机 f=nil 那一炸就死在这里；err=" .. tostring(errC190) .. "）")
+      eq(string.find(tostring(TEST.chat or ""), "[载入]", 1, true) ~= nil, true, "⑦★★零参数调用真的打出了 [载入] 报告")
+      eq(rpt190.GetScript(rpt190, "OnUpdate") == nil, true, "⑦★报完即摘（不许每帧空转）")
+    end
+  end
+  -- ⑧ ★★★1.74.31 阶段 0 第二版：**时钟没启动就不许编数字**（真机两次 /reload 的读数就是证据：
+  --   载入期 GetTime() 恒 0 ⇒ 旧报告把「游戏运行时长 390444014ms」当成了「初始化耗时」）
+  local keepTime190 = TEST.time
+  local keepEpoch190 = TEST.epoch
+  local keepGameTime190 = TEST.gameTime
+  TEST.gameTime = 6 -- ★真机读数：GetGameTime 在 files/vars/init 三处都是 6（恒定 ⇒ 不能当时钟）
+  TEST.time = 0
+  EVAL_LOAD_T0 = 0
+  TEST.epoch = 1761000000
+  EVAL_LOAD_MARK("t0")
+  EVAL_LOAD_MARK("files")
+  TEST.epoch = 1761000001 -- ★真机实证：files→vars 会跨秒 ⇒ 只有跨秒时才会打出「跨秒」文案，那条反向哨兵才照得到
+  EVAL_LOAD_MARK("vars")
+  TEST.time = 390444.014 -- 进世界后的真实时钟（旧报告就是拿它减 0 打出 390444014ms）
+  EVAL_LOAD_MARK("world")
+  TEST.time = 390444.02
+  EVAL_LOAD_MARK("init")
+  eq(EVAL_LOAD_STATE().varsGT == 0, true, "⑧★读值口能看到载入期原始读数 GetTime=0（实际 " .. tostring(EVAL_LOAD_STATE().varsGT) .. "）")
+  local cap190b = {}
+  EVAL_LOAD_REPORT(function(s) table.insert(cap190b, tostring(s)) end, true)
+  local rep190b = table.concat(cap190b, "\n")
+  eq(string.find(rep190b, "390444014", 1, true) == nil, true, "⑧★★★不再把游戏运行时长当成「初始化耗时」（假的 390444014ms 必须消失）")
+  eq(string.find(rep190b, "时钟未启动", 1, true) ~= nil, true, "⑧★★如实写「载入期时钟未启动 ⇒ 测不出」")
+  eq(string.find(rep190b, "进世界→首帧 6ms", 1, true) ~= nil, true, "⑧★进世界→首帧可测（390444.02 - 390444.014 = 6ms）")
+  eq(string.find(rep190b, "原始读数", 1, true) ~= nil, true, "⑧★★摊开原始读数（GetTime/GetGameTime/time 一处看，下一版据此换时间源）")
+  eq(string.find(rep190b, "GetGameTime", 1, true) ~= nil, true, "⑧★原始读数含 GetGameTime（判断它能否顶替 GetTime）")
+  eq(string.find(rep190b, "墙钟（秒级旁证）", 1, true) ~= nil, true, "⑧★毫秒不可用时给墙钟旁证（两点同秒 ⇒ 整段载入 <1s）")
+  eq(string.find(rep190b, "秒级窗口", 1, true) ~= nil, true, "⑧★给出秒级窗口（time() 差）")
+  eq(string.find(rep190b, "秒级窗口：time() 差 1 秒", 1, true) ~= nil, true, "⑧★秒级窗口如实报出 time() 差 1 秒（夹具照真机：files→vars 跨秒）")
+  eq(string.find(rep190b, "GetGameTime 恒 6", 1, true) ~= nil, true, "⑧★实测 GetGameTime 恒定 ⇒ 报告如实标注「不能当时钟」（真机 = 6/6/6）")
+  eq(string.find(rep190b, "time(秒)", 1, true) ~= nil, true, "⑧★原始读数里 time(秒) 必须留着（它是「载入期只有它真的在走」的唯一证据）")
+  -- ⑧b ★★秒级抽样：把 1 秒分辨率的钟变成可用尺子（平均秒差 = 该段真实时长的无偏估计）
+  local ls190 = (type(EVAL_HELP_CONFIG) == "table") and EVAL_HELP_CONFIG.loadStat or nil
+  eq(type(ls190) == "table" and (ls190.n or 0) >= 1, true, "⑧b★抽样写进存档（loadStat.n 在涨，实际 " .. tostring(type(ls190) == "table" and ls190.n or "nil") .. "）")
+  eq(string.find(rep190b, "秒级抽样", 1, true) ~= nil, true, "⑧b★报告给出抽样行（n / 源码段均值 / 存档段均值）")
+  eq(string.find(rep190b, "单次定不了量", 1, true) ~= nil, true, "⑧b★跨秒时如实写「单次定不了量，看抽样平均」")
+  eq(string.find(rep190b, "至少 1 秒", 1, true) == nil, true, "⑧b★★不许写「跨秒 ⇒ 至少 1 秒」（跨秒不构成下界——边界前 1ms 采样也跨秒）")
+  -- ⑨ ★★★「等时钟启动再报」的接线语义：载入期**不许**提前报告（那时全是假数）
+  EVAL_LOAD_RPT_FRAME = nil -- 让 VARIABLES_LOADED 重新建一个报告帧（真实入口，不直调解构）
+  TEST.time = 0
+  local ifr190 = rawget(_G, "EVAL_HELPInitFrame")
+  local okE190, onEv190 = false, nil
+  if ifr190 ~= nil and type(ifr190.GetScript) == "function" then okE190, onEv190 = pcall(ifr190.GetScript, ifr190, "OnEvent") end
+  if okE190 and type(onEv190) == "function" then pcall(onEv190, "VARIABLES_LOADED", nil) end
+  local f190 = rawget(_G, "EVAL_LOAD_RPT_FRAME")
+  local okG190b, cb190 = false, nil
+  if f190 ~= nil then okG190b, cb190 = pcall(f190.GetScript, f190, "OnUpdate") end
+  eq(okG190b and type(cb190) == "function", true, "⑨★报告帧重新建好并挂上 OnUpdate")
+  if okG190b and type(cb190) == "function" then
+    TEST.chat = nil
+    local okw190, errw190 = pcall(cb190) -- ★零参数（真机形态）
+    eq(okw190, true, "⑨★时钟未启动时调用不许报错（err=" .. tostring(errw190) .. "）")
+    eq(string.find(tostring(TEST.chat or ""), "[载入]", 1, true) == nil, true, "⑨★★时钟没启动 ⇒ **不许**提前报告（那时打出来的全是假数）")
+    eq(f190.GetScript(f190, "OnUpdate") ~= nil, true, "⑨★帧继续等（不摘钩，最多等 120 秒）")
+    TEST.time = 500
+    local okw190b, errw190b = pcall(cb190)
+    eq(okw190b, true, "⑨★时钟可用后再调不许报错（err=" .. tostring(errw190b) .. "）")
+    eq(string.find(tostring(TEST.chat or ""), "[载入]", 1, true) ~= nil, true, "⑨★★时钟可用后打出报告")
+    eq(f190.GetScript(f190, "OnUpdate") == nil, true, "⑨★报完即摘（不常驻空转）")
+  end
+  -- ⑩ 取证命令入口（不用 /reload 也能重打报告）
+  local cmd190c = SlashCmdList and SlashCmdList["EVALHELP"]
+  if type(cmd190c) == "function" then
+    TEST.chat = nil
+    pcall(cmd190c, "载入报告")
+    eq(string.find(tostring(TEST.chat or ""), "[载入]", 1, true) ~= nil, true, "⑩★★命令入口通了：/eh 载入报告")
+  end
+  TEST.time = keepTime190
+  TEST.gameTime = keepGameTime190
+  TEST.epoch = keepEpoch190
+  -- ⑩ ★收尾：**登录只打 1 行摘要**（取证期 6~8 行刷屏 ⇒ 定案后收起来）；完整取证走 /eh 载入报告
+  local cap190e = {}
+  EVAL_LOAD_REPORT(function(s) table.insert(cap190e, tostring(s)) end)
+  eq(table.getn(cap190e), 1, "⑩★★默认（登录）只打 1 行（实际 " .. tostring(table.getn(cap190e)) .. "）")
+  local sum190 = tostring(cap190e[1] or "")
+  eq(string.find(sum190, "[载入]", 1, true) ~= nil, true, "⑩★那一行是 [载入] 摘要")
+  eq(string.find(sum190, "存档", 1, true) ~= nil, true, "⑩★摘要含存档键数/最大键（一眼看得出存档有没有变胖）")
+  eq(string.find(sum190, "样本", 1, true) ~= nil, true, "⑩★摘要含抽样样本数（秒级均值的可信度）")
+  local cap190f = {}
+  EVAL_LOAD_REPORT(function(s) table.insert(cap190f, tostring(s)) end, true)
+  eq(table.getn(cap190f) > 3, true, "⑩★★full=true 仍给完整取证（行数 " .. tostring(table.getn(cap190f)) .. "）")
+  -- ⑪ ★收尾：调试残渣键**只有 force 才清**（它们是判据的「落盘证人」；自动清 = 事后读不回来）
+  EVAL_HELP_CONFIG.iconDump = nil EVAL_HELP_CONFIG.shProbe = nil EVAL_HELP_CONFIG.shVariantProbe = nil EVAL_HELP_CONFIG.probeEvents = nil
+  EVAL_HELP_CONFIG.probeLog = { a = 1 }
+  EVAL_HELP_CONFIG.shareProbeHover = { b = 1 }
+  EVAL_HELP_CONFIG.guideSeen = true
+  EVAL_HELP_CONFIG.loadStat = { n = 1 }
+  local k190f = EVAL_LOAD_CLEANUP() -- 非强制：一个都不许动
+  eq(k190f == 0 and EVAL_HELP_CONFIG.probeLog ~= nil and EVAL_HELP_CONFIG.shareProbeHover ~= nil
+     and EVAL_HELP_CONFIG.guideSeen ~= nil and EVAL_HELP_CONFIG.loadStat ~= nil, true,
+     "⑪★★非强制清理**不碰**调试残渣键（实际清了 " .. tostring(k190f) .. " 个）")
+  local k190g = EVAL_LOAD_CLEANUP(true)
+  eq(EVAL_HELP_CONFIG.probeLog == nil and EVAL_HELP_CONFIG.shareProbeHover == nil
+     and EVAL_HELP_CONFIG.guideSeen == nil and EVAL_HELP_CONFIG.loadStat == nil and k190g >= 4, true,
+     "⑪★★/e h 存档清理（force）一次清干净调试残渣（实际 " .. tostring(k190g) .. " 个）")
+  eq(table.getn(EVAL_LOAD_RESIDUE_KEYS()) >= 8, true, "⑪★残渣清单是新的唯一来源（" .. tostring(table.getn(EVAL_LOAD_RESIDUE_KEYS())) .. " 个）")
+  EVAL_HELP_CONFIG.shProbe = nil EVAL_HELP_CONFIG.shVariantProbe = nil EVAL_HELP_CONFIG.probeEvents = nil EVAL_HELP_CONFIG.iconDump = nil
+  if fails0 == TESTASSERT_FAILS then print("GROUP 190 (载入审计与存档清理): PASS") end
+end
 print("ALL TESTS PASS")

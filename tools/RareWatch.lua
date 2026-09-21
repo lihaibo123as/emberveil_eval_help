@@ -432,3 +432,5 @@ function EVAL_TEST_RW_STATE()
   }
 end
 
+
+if type(EVAL_LOAD_MARK) == "function" then EVAL_LOAD_MARK("files") end -- ★1.74.31 全部源码加载完毕

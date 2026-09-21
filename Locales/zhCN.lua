@@ -1,3 +1,9 @@
+EVAL_LOAD_T0 = (type(GetTime) == "function") and GetTime() or 0 -- ★1.74.31 载入计时起点（toc 第一个文件）
+-- ★★★1.74.31 第二版：真机实测**载入期 GetTime() 恒 0**（进世界才开始走）⇒ 起点必须把另外三个时间源一并采下来，
+--   报告才能判「哪个时间源在载入期真的在走」（本客户端只有 GetTime / GetGameTime / time / date；Core.lua 会把它们归入 EVAL_LOAD_STATE）。
+EVAL_LOAD_T0_GGT = (type(GetGameTime) == "function") and GetGameTime() or nil
+EVAL_LOAD_T0_EP = (type(time) == "function") and time() or nil
+EVAL_LOAD_T0_WALL = (type(date) == "function") and date("%H:%M:%S") or nil
 -- EvalHelp 语言包：简体中文（基准——其他语言缺失键回退到此）
 EVAL_LOCALES = EVAL_LOCALES or {}
 EVAL_LOCALES["zhCN"] = {

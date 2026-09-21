@@ -89,7 +89,7 @@ end
 --   开发侧直接读 %LOCALAPPDATA%\Azeroth\Saved\Account\<账号>\SavedVariables\EvalHelp.lua；
 --   ② 兜底 = 聊天框输出（/eh logdump 打印）。
 --   落盘时机：/reload、小退、退出（SavedVariables 固有语义，无法更早）。
-local EH_LOG_MAX = 300
+local EH_LOG_MAX = 100 -- ★1.74.31 载入审计：300 → 100（落盘体积 25.6KB → 约 8KB）
 -- 是否记录：默认开；显式关过就尊重用户选择。用 rawget 读，避免被测试桩的元表干扰。
 -- 兼容三种历史形态：nil（默认开）/ false 布尔（旧 UELog 开关关）/ 表（新缓冲，看 .on）
 local function logEnabled()
@@ -717,3 +717,247 @@ EVAL_RESOLVE_LANG = ehResolveLang
 function EVAL_GO()
   EVAL_SAY("|cffff0000EvalHelp 引擎未加载完整|r（宏走了兜底）：请 /reload 一次；反复出现 → 检查角色选择界面的插件列表是否对当前角色启用了 EvalHelp")
 end
+
+-- ===== 载入耗时探针 + 存档残渣清理（1.74.31；用户：「审计下载入速度有点慢 → 先取证 + 零风险清理」）=====
+-- ★★★1.74.31（阶段 0）载入审计：把「登录/重载慢」拆成可量化的段 ——
+--   ① `EVAL_LOAD_T0`（Locales/zhCN.lua **第 1 行**）= 整个插件开始加载；
+--   ② `EVAL_LOAD_MARK("files")`（toc **最后一个模块** tools/RareWatch.lua 末尾）= 全部源码编译+执行完；
+--   ③ `EVAL_LOAD_MARK("vars")`（VARIABLES_LOADED）= SavedVariables 已恢复；
+--   ④ `EVAL_LOAD_MARK("world")`（PLAYER_ENTERING_WORLD）= 进世界；
+--   ⑤ `EVAL_LOAD_MARK("init")`（进世界后**时钟可用**的第一帧）+ 打印报告（不新增事件注册，用一次性 OnUpdate）。
+-- ★★★真机定案（用户两次 /reload 的报告）：**本客户端在插件加载阶段 GetTime() 恒 0** ——
+--   旧报告因此打出「源码加载 0ms ｜ SavedVariables 恢复 0ms ｜ 初始化 390444014ms」，那个 39 万秒
+--   = 游戏运行时长（t0/files/vars 三点读数都是 0，init 是进世界后的真实时钟）⇒ **载入期毫秒数根本量不出来**。
+--   ⇒ 现在的规矩：**时钟没启动就如实写「测不出」**（绝不拿 0 当「很快」、也绝不把运行时长当「初始化耗时」），
+--     并摊开原始读数（GetTime / GetGameTime / time / 墙钟秒）——本客户端只有这几个时间源，
+--     下一版要靠这些读数判断 GetGameTime 或 time() 能否顶替（★一次只验一个假设）。
+local LOADM = { t0 = nil, files = nil, vars = nil, world = nil, init = nil, reported = false }
+local LOAD_RAW = { t0 = {}, files = {}, vars = {}, world = {}, init = {} } -- ★每个打点的原始读数（取证）
+local LOAD_PROBE_KEYS = { "iconDump", "shProbe", "shVariantProbe", "probeEvents" } -- ★唯一来源（清理/断言都读它）
+-- ★★★1.74.31 收尾：**调试残渣键**（探针的「落盘证人」）：**只有 /eh 存档清理（force）才清**。
+--   ★为什么不自动清：它们是某些判据的证人，留着才有「事后读回来」的能力；但它们**全是调试产物**、不进任何功能逻辑。
+--   ★★**不许把真状态键写进来**（ds/tb/war/ui/title/share/log/st … 那些删了就是丢用户配置）。
+local LOAD_RESIDUE_KEYS = {
+  "probeLog", "shColorProbe", "shTitleColorProbe", "shareIconProbe",
+  "shareProbe", "shareProbeHover", "shareProbeRaw", "shareProbeVerdicts",
+  "shareSealDemo", "shareCreatorOpen", "loadStat", "guideSeen",
+}
+
+function EVAL_LOAD_PROBE_KEYS() return LOAD_PROBE_KEYS end
+function EVAL_LOAD_RESIDUE_KEYS() return LOAD_RESIDUE_KEYS end
+
+local function loadRawRead()
+  local o = {}
+  o.gt = (type(GetTime) == "function") and GetTime() or nil
+  o.ggt = (type(GetGameTime) == "function") and GetGameTime() or nil
+  o.ep = (type(time) == "function") and time() or nil
+  o.wall = (type(date) == "function") and date("%H:%M:%S") or nil
+  return o
+end
+
+function EVAL_LOAD_MARK(what)
+  local k = tostring(what or "?")
+  local r = loadRawRead()
+  LOAD_RAW[k] = r
+  local t = (type(r.gt) == "number") and r.gt or 0
+  if k == "t0" then LOADM.t0 = rawget(_G, "EVAL_LOAD_T0") -- ★显式重读起点（断言要造确定时间轴）
+  elseif not LOADM.t0 then LOADM.t0 = rawget(_G, "EVAL_LOAD_T0") end
+  if k == "files" then LOADM.files = t
+  elseif k == "vars" then LOADM.vars = t
+  elseif k == "world" then LOADM.world = t
+  elseif k == "init" then LOADM.init = t end
+  return t
+end
+
+-- ★t0 的原始读数在**第一个文件**（Locales/zhCN.lua 第 1 行）就采好了（那时 Core.lua 还没载入，调不了函数）
+-- ⇒ 这里把它并入 LOAD_RAW.t0；读值口才能把「起点的四个时间源」一并打出来。
+if not LOAD_RAW.t0.ep then
+  LOAD_RAW.t0 = { gt = rawget(_G, "EVAL_LOAD_T0"), ggt = rawget(_G, "EVAL_LOAD_T0_GGT"),
+                  ep = rawget(_G, "EVAL_LOAD_T0_EP"), wall = rawget(_G, "EVAL_LOAD_T0_WALL") }
+end
+
+-- 读值口（断言 / 诊断用；**不改状态**）
+function EVAL_LOAD_STATE()
+  local function p(k)
+    local r = LOAD_RAW[k] or {}
+    return r.gt, r.ggt, r.ep, r.wall
+  end
+  local a1, a2, a3, a4 = p("t0")
+  local b1, b2, b3, b4 = p("files")
+  local c1, c2, c3, c4 = p("vars")
+  local d1, d2, d3, d4 = p("world")
+  local e1, e2, e3, e4 = p("init")
+  return { t0 = LOADM.t0, files = LOADM.files, vars = LOADM.vars, world = LOADM.world, init = LOADM.init,
+           t0GT = a1, t0GGT = a2, t0EP = a3, t0WALL = a4,
+           filesGT = b1, filesGGT = b2, filesEP = b3, filesWALL = b4,
+           varsGT = c1, varsGGT = c2, varsEP = c3, varsWALL = c4,
+           worldGT = d1, worldGGT = d2, worldEP = d3, worldWALL = d4,
+           initGT = e1, initGGT = e2, initEP = e3, initWALL = e4 }
+end
+
+-- 探针写结果时打日期戳（清理按它判过期）
+function EVAL_PROBE_STAMP()
+  local c = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(c) ~= "table" then return nil end
+  c.probeAt = (type(date) == "function") and date("%Y-%m-%d") or "?" -- 本客户端有 date（os.date 的全局别名）
+  return c.probeAt
+end
+
+-- 清理探针残渣：force=true 全清（手动命令）；否则「iconDump 一律清 + 其余只清过期（非当天）」
+function EVAL_LOAD_CLEANUP(force)
+  local c = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(c) ~= "table" then return 0, 0 end
+  local today = (type(date) == "function") and date("%Y-%m-%d") or nil
+  local stamp = tostring(c.probeAt or "")
+  local killed, approxBytes = 0, 0
+  -- ① 探针数据键：iconDump 一律清；其余「过期（非当天）」才清
+  for i = 1, table.getn(LOAD_PROBE_KEYS) do
+    local k = LOAD_PROBE_KEYS[i]
+    if c[k] ~= nil then
+      local kill = force and true or false
+      if not kill then
+        if k == "iconDump" then kill = true -- ★一次性采集：AI 读完就不需要
+        elseif today ~= nil and (stamp == "" or stamp < today) then kill = true end -- 过期（非当天）
+      end
+      if kill then
+        if type(c[k]) == "table" then
+          local m = 0 for _ in pairs(c[k]) do m = m + 1 end
+          approxBytes = approxBytes + m * 20
+        end
+        c[k] = nil
+        killed = killed + 1
+      end
+    end
+  end
+  -- ② 调试残渣键：**只有 force**（/eh 存档清理）才清 —— 它们是判据的「落盘证人」，
+  --    自动清会让「事后读回来」的能力无声消失；真状态键不在这个清单里（见 LOAD_RESIDUE_KEYS 注释）。
+  if force then
+    for i = 1, table.getn(LOAD_RESIDUE_KEYS) do
+      local k = LOAD_RESIDUE_KEYS[i]
+      if c[k] ~= nil then
+        if type(c[k]) == "table" then
+          local m = 0 for _ in pairs(c[k]) do m = m + 1 end
+          approxBytes = approxBytes + m * 20
+        elseif type(c[k]) == "string" then
+          approxBytes = approxBytes + string.len(c[k])
+        end
+        c[k] = nil
+        killed = killed + 1
+      end
+    end
+  end
+  if killed > 0 and type(EVAL_LOGLINE) == "function" then
+    pcall(EVAL_LOGLINE, string.format("[载入] 已清理存档残渣 %d 个键（估算 %.1f KB）", killed, approxBytes / 1024))
+  end
+  return killed, approxBytes
+end
+
+-- 报告：一般 **3 行**；★载入期时钟不可用时**如实改写第 1 行并追加原始读数行**（取证），
+--   绝不打出「0ms」这种假读数、也绝不把游戏运行时长当成「初始化耗时」。
+-- 报告：**默认 1 行摘要**（登录不再刷屏）；full=true = 完整取证（/eh 载入报告）。
+--   ★完整取证**始终写进调试日志**（聊天只给摘要）⇒ 深挖时 /eh logdump 或 /eh 载入报告 随时拿得到。
+--   ★读数规矩不变：毫秒时钟没启动就如实写「测不出」，绝不拿 0 或游戏运行时长冒充。
+function EVAL_LOAD_REPORT(sayFn, full)
+  local S = EVAL_LOAD_STATE()
+  local t0 = S.t0 or rawget(_G, "EVAL_LOAD_T0")
+  local function ms(a, b)
+    if not (a and b) then return "—" end
+    return string.format("%.0fms", (b - a) * 1000)
+  end
+  -- ★判据：t0 / files / vars 三点的 **GetTime 原始读数** 任一缺失或为 0 ⇒ 载入期时钟没启动 ⇒ 毫秒测不出
+  local dead = false
+  if type(S.t0GT) ~= "number" or S.t0GT == 0 then dead = true end
+  if type(S.filesGT) ~= "number" or S.filesGT == 0 then dead = true end
+  if type(S.varsGT) ~= "number" or S.varsGT == 0 then dead = true end
+  local c = rawget(_G, "EVAL_HELP_CONFIG")
+  local n, topK, topB = 0, nil, 0
+  if type(c) == "table" then
+    for k, v in pairs(c) do
+      n = n + 1
+      local s = 0
+      if type(v) == "table" then local m = 0 for _ in pairs(v) do m = m + 1 end s = m * 20
+      elseif type(v) == "string" then s = string.len(v) end
+      if s > topB then topB, topK = s, tostring(k) end
+    end
+  end
+  local killed, bytes = EVAL_LOAD_CLEANUP()
+  -- ★★抽样累计（写进存档）：源码段 = t0→files，存档段 = files→vars。
+  --   平均秒差就是该段真实时长的**无偏估计** ⇒ 把 1 秒分辨率的钟变成可用尺子（参考卷 §13.5）。
+  local dA = (type(S.t0EP) == "number" and type(S.filesEP) == "number") and (S.filesEP - S.t0EP) or nil
+  local dB = (type(S.filesEP) == "number" and type(S.varsEP) == "number") and (S.varsEP - S.filesEP) or nil
+  local stat = nil
+  if type(c) == "table" and (dA or dB) then
+    stat = c.loadStat
+    if type(stat) ~= "table" then stat = { n = 0, a = 0, b = 0, ta = 0, tb = 0 } c.loadStat = stat end
+    stat.n = (stat.n or 0) + 1
+    if dA then stat.ta = (stat.ta or 0) + dA if dA > 0 then stat.a = (stat.a or 0) + 1 end end
+    if dB then stat.tb = (stat.tb or 0) + dB if dB > 0 then stat.b = (stat.b or 0) + 1 end end
+  end
+  local sA, sB, sn = nil, nil, 0
+  if type(stat) == "table" and (stat.n or 0) > 0 then
+    sn = stat.n
+    sA = (tonumber(stat.ta) or 0) / sn
+    sB = (tonumber(stat.tb) or 0) / sn
+  end
+  -- ① 摘要行（登录只打它）
+  local sum
+  if sA then
+    sum = string.format("[载入] 源码段均 %.2f 秒 ｜ 存档段均 %.2f 秒（样本 %d）", sA, sB, sn)
+  else
+    sum = "[载入] 秒级样本不足（本客户端载入期只有 1 秒分辨率的 time()）"
+  end
+  sum = sum .. string.format(" ｜ 存档 %d 键 / 最大 %s（估算 %.1f KB） ｜ 本次清残渣 %d 个", n, tostring(topK or "—"), topB / 1024, killed)
+  -- ② 完整取证（始终进日志）
+  local detail = { sum }
+  if dead then
+    table.insert(detail, string.format("[载入] 载入期时钟未启动（GetTime() 原始读数 = 0，实测）⇒ 源码/存档两段毫秒级**测不出**；进世界→首帧 %s",
+      ms(S.world, S.init)))
+  else
+    table.insert(detail, string.format("[载入] 源码加载 %s ｜ SavedVariables 恢复 %s ｜ 初始化 %s ｜ 合计 %s",
+      ms(t0, S.files), ms(S.files, S.vars), ms(S.vars, S.init), ms(t0, S.init)))
+  end
+  table.insert(detail, string.format("[载入] SavedVariables 顶层键 %d 个；最大键 %s（估算 %.1f KB）", n, tostring(topK or "—"), topB / 1024))
+  -- ★秒级时钟（time()，1 秒分辨率）的正确用法：同秒 ⇒ 这一段 <1 秒（上界，可用）；
+  --   跨秒 ⇒ **不构成下界**（边界前 1ms 采样也会跨秒）⇒ 绝不写「至少 1 秒」；真值靠上面的抽样平均。
+  --   ★起点的原始读数可能缺 ⇒ 三种组合逐一尝试，能给多少给多少（不许因为缺一个读数就一行不打）。
+  local w0, w1, e0, e1 = S.t0WALL, S.varsWALL, S.t0EP, S.varsEP
+  if not (w0 and w1) then w0, w1 = S.filesWALL, S.varsWALL end
+  if not (w0 and w1) then w0, w1 = S.t0WALL, S.filesWALL end
+  if not (e0 and e1) then e0, e1 = S.filesEP, S.varsEP end
+  if not (e0 and e1) then e0, e1 = S.t0EP, S.filesEP end
+  if w0 and w1 then
+    table.insert(detail, string.format("[载入] 墙钟（秒级旁证）：%s → %s", tostring(w0), tostring(w1)))
+  end
+  if type(e0) == "number" and type(e1) == "number" then
+    local d = e1 - e0
+    table.insert(detail, string.format("[载入] 秒级窗口：time() 差 %d 秒（%s）", d,
+      (d == 0) and "同秒 ⇒ 这一段 <1 秒" or "跨秒 ⇒ 单次定不了量，看下面的抽样平均"))
+  end
+  if sA then
+    table.insert(detail, string.format("[载入] 秒级抽样 n=%d：源码段均 %.2f 秒（跨秒 %d）｜ 存档段均 %.2f 秒（跨秒 %d）",
+      sn, sA, stat.a or 0, sB, stat.b or 0))
+  end
+  table.insert(detail, string.format("[载入] 本次清理探针残渣 %d 个键（约 %.1f KB）⇒ 下次登录可对比", killed, bytes / 1024))
+  if dead then
+    local function j(a1, a2, a3, a4, a5)
+      return table.concat({ tostring(a1), tostring(a2), tostring(a3), tostring(a4), tostring(a5) }, "/")
+    end
+    table.insert(detail, "[载入] 原始读数 t0/f/v/w/i ｜ GetTime " .. j(S.t0GT, S.filesGT, S.varsGT, S.worldGT, S.initGT))
+    local extra = ""
+    if type(S.filesGGT) == "number" and S.filesGGT == S.varsGGT and S.varsGGT == S.initGGT then
+      extra = string.format("（GetGameTime 恒 %s，不随时间走 ⇒ 不能当时钟）", tostring(S.filesGGT))
+    end
+    table.insert(detail, "[载入] 　同序 ｜ GetGameTime " .. j(S.t0GGT, S.filesGGT, S.varsGGT, S.worldGGT, S.initGGT)
+      .. " ｜ time(秒) " .. j(S.t0EP, S.filesEP, S.varsEP, S.worldEP, S.initEP) .. extra)
+  end
+  local lines = full and detail or { sum }
+  LOADM.reported = true
+  for i = 1, table.getn(detail) do
+    if type(EVAL_LOGLINE) == "function" then pcall(EVAL_LOGLINE, detail[i]) end
+  end
+  for i = 1, table.getn(lines) do
+    if type(sayFn) == "function" then pcall(sayFn, lines[i]) end
+  end
+  return lines, detail
+end
+

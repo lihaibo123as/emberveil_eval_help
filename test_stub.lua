@@ -423,6 +423,8 @@ DEFAULT_CHAT_FRAME = { AddMessage = function(_, msg) TEST.chat = (TEST.chat or "
 SlashCmdList = {}
 
 GetTime = function() return TEST.time or 1000 end
+GetGameTime = function() return TEST.gameTime or TEST.time or 0 end -- ★1.74.31 载入探针的第二个时间源（真机实测：载入期恒 6，不随时间走）
+-- ★1.74.31 载入探针要把三个时间源摆在一起比（GetTime 载入期恒 0）：GetGameTime / time() 都要有桩
 -- ★1.72.4 法术书桩（「释放指定等级」用）：TEST.spellbook = { {name="火球术", sub="等级 3"}, ... }
 --   真客户端：GetNumSpellTabs / GetSpellTabInfo(返回 name,tex,offset,num) / GetSpellName(i,"spell") 的第二返回就是等级 subtext
 GetNumSpellTabs = function() return TEST.spellTabs or 1 end
@@ -954,6 +956,16 @@ PickupInventoryItem = function(s) TEST.pickedInv = s end
 DropItemOnUnit = function(u) TEST.droppedOn = tostring(u) end
 GetPetFoodTypes = function() return TEST.petFood or "肉类,鱼类" end
 GetPetHappiness = function() return TEST.happiness or 2, 100, 0 end
+  -- ★1.74.31 桩保真：追踪（真机索引：GetTrackingTexture = Mapping / CancelTrackingBuff = Buff）
+  GetTrackingTexture = function() return TEST.trackTex end
+  -- ★1.74.31 桩保真：date（os.date 的全局别名；探针日期戳与过期清理都要它）
+  date = function(fmt)
+    if type(fmt) == "string" and string.find(fmt, ":", 1, true) ~= nil then return TEST.clockStr or "12:00:00" end
+    return TEST.dateStr or "2026-09-21"
+  end
+  -- ★1.74.31 time()（os.time 的全局别名）：秒级墙钟，载入期可用 ⇒ 报告用它做「等多久」的期限
+  time = function() return TEST.epoch or 1761000000 end
+  CancelTrackingBuff = function() TEST.trackCancelled = true return true end
 GetPetLoyalty = function() return "忠诚" end
 GetPetExperience = function() return TEST.petXP1 or 12345, TEST.petXP2 or 45000 end
 DeleteCursorItem = function() if TEST.picked then TEST.deleted = TEST.picked TEST.picked = nil end end

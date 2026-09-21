@@ -2709,6 +2709,116 @@ function EVAL_SHOT_PROBE(sub)
   return SHP.on
 end
 
+-- ===== 追踪探针（1.74.31；用户：「调用 API 如何获得角色追踪状态（采矿/采药/野兽追踪）」）=====
+-- ★本客户端**没有**经典版那套追踪枚举 API —— 本机 `api_*.html` 索引里 `GetNumTrackingTypes` / `GetTrackingInfo` /
+--   `SetTracking` **都不存在**；存在的只有两个：
+--   · **`GetTrackingTexture()`**（category **Mapping**）= 当前追踪技能的**图标纹理**（没追踪时为空）→ **主路**；
+--   · **`CancelTrackingBuff()`**（category **Buff**）= 取消当前追踪。
+-- ★「是哪一种追踪」**没有 API 直接给名字** ⇒ 必须靠**纹理 ↔ 技能名对照**（动作条 `wslots[名].tex` + 法术书扫一遍）。
+-- ★官方文档另一条已知空洞：「Hidden or tracking auras are skipped」⇒ 追踪**可能不占增益条槽位**，
+--   所以光环（`GetPlayerBuff`）只能当**辅助证据**；本探针把两条路一起打出来对照。
+-- 用法：`/eh go 追踪探针`（打印一次；**开/关追踪各跑一次**，第二次会显示「上次 → 本次」对照）
+local TRK = { lastTex = nil }
+
+function EVAL_TRACK_PROBE_STATE()
+  return { lastTex = TRK.lastTex }
+end
+
+-- 纹理 → 技能名（先在动作条里找；找不到返回 nil，**不猜**）
+function EVAL_TRACK_WHO(tex)
+  if type(tex) ~= "string" or tex == "" or type(wslots) ~= "table" then return nil end
+  local hit = nil
+  for nm, v in pairs(wslots) do
+    if type(v) == "table" and v.tex == tex then hit = tostring(nm) break end
+  end
+  return hit
+end
+
+-- 光环纹理清单（辅助证据：追踪到底占不占增益条）
+local function trkBuffs()
+  local out = {}
+  if type(GetPlayerBuff) ~= "function" or type(GetPlayerBuffTexture) ~= "function" then return out, false end
+  for i = 0, 31 do
+    local okb, bi = pcall(GetPlayerBuff, i, "HELPFUL")
+    if not okb or type(bi) ~= "number" or bi < 0 then break end
+    local okt, tex = pcall(GetPlayerBuffTexture, bi)
+    if okt and type(tex) == "string" and tex ~= "" then table.insert(out, { i = i, tex = tex }) end
+  end
+  return out, true
+end
+
+local function trkSay(s)
+  if type(EVAL_LOGLINE) == "function" then pcall(EVAL_LOGLINE, "[追踪探针] " .. tostring(s)) end
+  if type(EVAL_SAY) == "function" then pcall(EVAL_SAY, s) else print(s) end
+end
+
+function EVAL_TRACK_PROBE(sub)
+  sub = tostring(sub or "")
+  if string.find(sub, "清空") or string.find(sub, "clear") then
+    TRK.lastTex = nil
+    trkSay("追踪探针：上次读数已清空")
+    return 0
+  end
+  trkSay("===== 追踪探针 =====")
+  -- ① 当前追踪（主路）
+  local hasApi = (type(GetTrackingTexture) == "function")
+  local cur = nil
+  if hasApi then
+    local ok, v = pcall(GetTrackingTexture)
+    if ok and type(v) == "string" and v ~= "" then cur = v end
+  end
+  trkSay(string.format("① GetTrackingTexture：可用=%s ｜ 本次=%s ｜ 上次=%s",
+    tostring(hasApi), tostring(cur or "（空/无追踪）"), tostring(TRK.lastTex or "（还没读过）")))
+  if cur and TRK.lastTex and cur ~= TRK.lastTex then
+    trkSay("   ★两次读数**不同** → 中间那一步改变了追踪（开/关或换种类）；对照两次报告即可定判据")
+  end
+  trkSay("② CancelTrackingBuff：可用=" .. tostring(type(CancelTrackingBuff) == "function"))
+  -- ③ 光环（辅助）
+  local bl, bOk = trkBuffs()
+  trkSay(string.format("③ 增益条光环：接口可用=%s 共 %d 个", tostring(bOk), table.getn(bl)))
+  local seen = false
+  for i = 1, table.getn(bl) do
+    local b = bl[i]
+    local who = EVAL_TRACK_WHO(b.tex)
+    if cur and b.tex == cur then seen = true end
+    trkSay(string.format("   [槽 %d] %s%s", b.i, tostring(b.tex), who and ("  ← 动作条：" .. who) or ""))
+  end
+  if cur then
+    trkSay("   ★①的纹理" .. (seen and "**在**增益条里出现 ⇒ 追踪占槽位（光环路线可用）"
+      or "**没**出现在增益条 ⇒ 追踪不占槽位（必须走 GetTrackingTexture 主路）"))
+  end
+  -- ④ 动作条里的追踪类技能（建纹理↔名字对照表）
+  local nT = 0
+  if type(wslots) == "table" then
+    for nm, v in pairs(wslots) do
+      if type(v) == "table" and type(v.tex) == "string" then
+        local s = tostring(nm)
+        if string.find(s, "追踪") or string.find(s, "寻找") or string.find(s, "Track") or string.find(s, "Find") then
+          nT = nT + 1
+          trkSay(string.format("   [动作条] %s ｜ slot=%s ｜ 纹理=%s", s, tostring(v.slot), tostring(v.tex)))
+        end
+      end
+    end
+  end
+  trkSay(string.format("④ 动作条里的追踪类技能：%d 个（名字含「追踪/寻找/Track/Find」）", nT))
+  -- ⑤ 法术书（接口未必有 → 如实报可用性）
+  local sbOk = (type(GetSpellName) == "function")
+  trkSay("⑤ 法术书扫描：接口可用=" .. tostring(sbOk))
+  if sbOk and type(GetSpellTexture) == "function" then
+    for i = 1, 400 do
+      local okn, nm = pcall(GetSpellName, i, "spell")
+      if not okn or type(nm) ~= "string" or nm == "" then break end
+      if string.find(nm, "追踪") or string.find(nm, "寻找") or string.find(nm, "Track") or string.find(nm, "Find") then
+        local okt, tex = pcall(GetSpellTexture, i, "spell")
+        trkSay(string.format("   [法术书 %d] %s ｜ 纹理=%s", i, tostring(nm), tostring(okt and tex or "?")))
+      end
+    end
+  end
+  if cur then TRK.lastTex = cur end
+  trkSay("⑥ 判定：开/关追踪各跑一次 —— ①「上次 vs 本次」就是**追踪状态**；④/⑤ 给出「纹理 ↔ 名字」⇒ 以后「GetTrackingTexture」查表即得「在采矿/采药/野兽追踪」")
+  return 1
+end
+
 function EVAL_RULE_RUN(rules)
   local acted = false -- 1.53.0：非 GCD 类型出手也算有动作（但继续评估后续规则）
   for _, r in ipairs(rules) do

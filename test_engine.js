@@ -2295,6 +2295,68 @@ checkIconAssets();
   }
   console.log("RARE WATCH WIRING CHECK: 安装点(VARIABLES_LOADED) · 命令前缀 9 字节 · Show 包装(透传+照抛) · 兜底 tick 父级=WorldFrame · 品阶 4 色 8 位 · 名字链接形态 · SetItemRef 分派");
 })();
+// ===== ONUPDATE ARG CHECK（1.74.31）：OnUpdate 回调**一个参数都不传** —— 绝不许拿参数当帧用 =====
+// 背景（真机事故）：载入报告帧写成 `frame:SetScript("OnUpdate", function(f) pcall(f.SetScript, f, "OnUpdate", nil) end)`
+//   ⇒ 本客户端调 OnUpdate 时**不传任何参数** ⇒ f = nil ⇒ 当场
+//   `EvalHelp.lua:9495: attempt to index local 'f' (a nil value)`（用户截图，红字弹窗）。
+//   ★为什么行为断言照不到：测试里从来没有人**按真机的方式**去调那个回调（要么直调被调函数、
+//     要么调用点自己把帧传进去）——「接线对不对」这一类只有源码检查 + 一条「零参数调用」的行为断言能补位。
+//   ★同类风险：全项目十几处 OnUpdate 注册点，只要有一处收参数并按参数用，就是同一个 bug 的下一次复发。
+//   判据：① 匿名回调 `function(<非空参数>)` → FAIL；② 具名回调（`SetScript("OnUpdate", name)`）在
+//   本项目里 `function name(<非空参数>)` → FAIL；③ 注册点数量下限（少于 10 处 = 正则已失效 ⇒ 必须 FAIL，
+//   一条永远为 PASS 的死检查比没有更糟）。
+(function () {
+  const toc = fs.readFileSync(path.join(__dirname, "EvalHelp.toc"), "utf8");
+  const mods = toc.split(/\r?\n/)
+    .map(function (l) { return l.trim(); })
+    .filter(function (l) { return l && l.charAt(0) !== "#" && /\.lua$/i.test(l); })
+    .map(function (l) { return l.replace(/\\/g, "/"); });
+  const bad = [];
+  if (mods.length < 30) bad.push("从 toc 解出的模块太少（" + mods.length + "）—— 锚点变了？");
+  const nocomment = function (s) {
+    return s.split(/\r?\n/).map(function (l) { const i = l.indexOf("--"); return i >= 0 ? l.slice(0, i) : l; }).join("\n");
+  };
+  const named = {};
+  const anon = [];
+  const regs = [];
+  mods.forEach(function (rel) {
+    const p = path.join(__dirname, rel);
+    if (!fs.existsSync(p)) { bad.push("toc 里列了但磁盘上没有：" + rel); return; }
+    nocomment(fs.readFileSync(p, "utf8")).split("\n").forEach(function (l, i) {
+      const mDef = l.match(/function\s+([A-Za-z_][\w.:]*)\s*\(([^)]*)\)/);
+      if (mDef) named[mDef[1].split(/[.:]/).pop()] = mDef[2];
+      const mReg = l.match(/SetScript\s*\(\s*["']OnUpdate["']\s*,\s*(function\s*\(([^)]*)\)|[A-Za-z_][\w.:]*)/);
+      if (!mReg) return;
+      regs.push({ file: rel, line: i + 1, handler: mReg[1], params: mReg[2] });
+      if (mReg[2] !== undefined && mReg[2].trim() !== "") {
+        anon.push({ file: rel, line: i + 1, params: mReg[2].trim() });
+      }
+    });
+  });
+  anon.forEach(function (a) {
+    bad.push(a.file + ":" + a.line + " 匿名 OnUpdate 回调收了参数（" + a.params + "）—— 本客户端不传参，索引它必炸");
+  });
+  regs.forEach(function (r) {
+    if (r.params !== undefined) return;
+    const nm = r.handler.split(/[.:]/).pop();
+    if (nm === "nil" || nm === "true" || nm === "false") return; // 摘钩子（SetScript("OnUpdate", nil)）
+    if (!(nm in named)) {
+      bad.push(r.file + ":" + r.line + " 具名回调 " + nm + " 在本项目里找不到 function 定义（无法核对参数）");
+      return;
+    }
+    if (String(named[nm]).trim() !== "") {
+      bad.push(r.file + ":" + r.line + " 具名回调 " + nm + "(" + named[nm] + ") 收了参数 —— 本客户端不传参");
+    }
+  });
+  if (regs.length < 10) bad.push("全项目只找到 " + regs.length + " 处 OnUpdate 注册（判据锚点失效 ⇒ 拒绝放行）");
+  if (bad.length) {
+    console.log("ONUPDATE ARG CHECK: FAIL - " + bad.slice(0, 6).join(" | "));
+    process.exitCode = 1;
+    return;
+  }
+  console.log("ONUPDATE ARG CHECK: " + regs.length + " 处 OnUpdate 回调全部零参数（本客户端不传帧，禁 function(x) 形态）");
+})();
+
 // ★1.73.5 把 doc/图标路径清单.txt（客户端采集的 1018 条**真实路径**）注入成测试素材：
 //   图标库的语义名/关键字过滤必须拿**生产形态**（/Game/Interface/Icons/X_TEX）来验 ——
 //   只喂编出来的短名，会把「_TEX 后缀没剥 / 路径前缀不同」这类**只有真机才犯、且一声不响**的错一起放过。

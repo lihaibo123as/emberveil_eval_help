@@ -259,10 +259,10 @@
   ⑦ 改 UI 文案/样式 ⇒ **同步反转旧判据**（需求会被下一轮推翻，断言跟着改方向）。
 - ★守它们的**源码检查**（改了对应区域必须继续过）：`UI TITLEBAR`/`UI TIER BADGE`/`UI TITLE NAME`/`UI CELL MOUSE`/`WHEEL DIRECTION`/`COVERAGE CAP WIRING`/`COND WEIGHT`/`SAVEDVARS SPLIT`/`SHARE PALETTE`/`PAINT WIRING`/`CHAT COLOR WIRING`/`NAME CACHE PROBE WIRING`/`PROF ICON PROBE WIRING`/`MENU ROUND CHROME`/`CREATOR GATE`。
 
-- ★**1.74.29/30 UI 三处补完**：战斗UI 激活方案格 = **4 条 1px 边框**（颜色跟品阶色、算不出退回暖金，`uiProfBtnBorder`）；两个助手弹窗候选悬停 = **先出客户端原生物品 tooltip（`SetBagItem`）再补帮手的行**（`IconGrid` 共用件）；喂食助手图标边框 = `GetPetHappiness()` 现算（**开心亮绿**/一般金/不开心红/无宠物默认金）；消耗品助手**左键不再弹面板**（右键唯一入口、左键留给拖动）。细节 → 参考卷 **§十二**。
 ### 5.5 API 与客户端事实（★明细已移入**参考卷 §十**；下面几条最常踩，必须常驻）
 
 - 本客户端**无 `UnitCastingInfo`**（打断条件做不了）· **无 SuperWoW**（无精确距离数值/挥击计时）· **无文件读取 API**（无 io/os ⇒ 载入文件唯一形式＝列进 `.toc`；★`LoadAddOn` 是 **Protected** ⇒ **文件级懒加载不可能**，范式＝「toc 预载 + 载入期零副作用 + 首用才建帧」）。
+- ★★★**1.74.31 本客户端 `OnUpdate` 回调一个参数都不传**（写成 `function(f)` 再 `f:SetScript` ⇒ f=nil ⇒ 当场红字弹窗 `attempt to index local 'f'`；帧引用必须用**外层 local 捕获**）；`OnEvent` 参数三态（第1参/第2参/全局 `event`）能兼容、`OnUpdate` 不能 —— 守它的是 `ONUPDATE ARG CHECK` + 组 190⑦。 ★同族：**载入期 `GetTime()` 恒 0**（进世界才开始走）⇒ 载入耗时只能靠 `time()` / `GetGameTime()` / 墙钟旁证，不许拿运行时长当耗时（组 190⑧⑨）。
 - 施法 API **全 Protected**（`CastSpellByName` 等 ⇒ 一律 `RunScript` 兜；`SpellStopCasting` 直调无效）；`TargetUnit` 非 Protected，是「切目标→`UseAction(slot)`→还原」的唯一路径。
 - ★★★`CHAT_MSG_PARTY_LEADER`/`CHAT_MSG_RAID_LEADER` 是**独立事件**（只注册 `PARTY`/`RAID` ⇒ 队长一分享**一片都进不来**，接收端静默、发送端照样报「已发送 N 片」）。
 - `UnitDebuff` 第 3 返回＝dispel token；`UnitMana` 是主能量且有显示缩放（怒气÷10、幸福÷1000）⇒ **判蓝量前先 `UnitPowerType(unit)==0`**。
@@ -291,7 +291,7 @@
 - 光环判定=两级+三态：①纹理快路径（学习表>动作条）②名字慢路径（auraNameHit 0.5s 缓存、命中即 learnAuraTex 自愈）③两条都不可用才如实失败（查不到≠没有）；扫描可信度三态 true=命中/false=扫描干净确实没有/nil=不可信（组 70③/103①）；诊断 /eh go tex|texdel|texclear|texscan；桩补 SlashCmdList+组 104。
 
 
-- ★★★**1.74.29 / 1.74.30 头条**（细节 → 参考卷 **§十二**）：射击计时（锚点=法术频道含「自动射击/Auto Shot」· 射速=`UnitRangedDamage[1]` · `EVAL_SWING_*` 状态感知）· 新条件「距下次射击」（`shotLeft`、初始值 0；新增条件必进 `SE_TYPE_GROUPS`+`SE_TIME_K`（声明须在前）+三语 `CT_*`；切类型跨域不继承）· 方案格激活品阶色边框 · 弹窗候选原生 `SetBagItem` 详情 · 喂食助手快乐度边框 · 消耗品助手左键不弹窗。判据 = 组 177/188 + M1~M11。
+- ★★★1.74.29 / 1.74.30 / 1.74.31 头条（细节 → 参考卷 **§十二 / §十三**）：射击计时（锚点=法术频道含「自动射击」·射速=`UnitRangedDamage[1]`）· 新条件「距下次射击」（新增条件必进 `SE_TYPE_GROUPS`+`SE_TIME_K`（声明須在前）+三语 `CT_*`；切类型跨域不继承）· 战斗UI 方案格品阶色边框· 弹窗候选原生 `SetBagItem` 详情· 喂食德康边框· 消耗品左键不弹窗；载入审计探针与残渣清理。判据 = 组 177/188/190 + M1~M19。
 ### 5.7 流程与纪律
 - 载入提示与新手引导每次加载都打（cfg.guideSeen 已废弃）；组 105：VARIABLES_LOADED 第二次仍须打出引导标题与步骤；/eh guide 可重看。
 - 审计/排查须落成可执行闸门；数据变的刷新放写入点（ioImportText）；组归属是用户偏好，需求一改须钉新归属与顺序。
@@ -325,7 +325,7 @@
 - 光环：`/eh go tex`（看学习表）· `texdel 名字`（大小写不敏感；删完下次判定会自动扫描学回来）· `texclear` · `texscan`
 - 名字着色：`/eh go 名字缓存`（`EVAL_TB_NAMECLASS_PROBE`：每个来源的 API 有无 / 本地条数 / 首条职业原文→token · 缓存条数 · 聊天入口包装帧数与上色计数一次摊开）· `/eh go 聊天 色测`（5 种名字写法让客户端自己渲染 + 打印客户端格式串）
 - 分享：`/eh go 封皮测`（编号 A/B 变异测，回报「哪些编号出现了」即可定案）· `分享探针`（发送留痕：脚本原文/是否弹出/队列）· `色码测`（别名 `colortest`/`颜色测`/`palette`：把在用色码逐条编号实发；★跑完等 ≥30 秒再跑第二次）· `名号色`（候选逐条预览）· `名号色 <n>`（当场选用并存档）
-- 其它：`/eh ds hud`（`EVAL_DS_HUD`，把状态画屏上）· `/eh ds trace` · `/eh ds rnd` · `/eh go probe` · `/eh go bind`（只读现状）· `/eh go diag` · `/eh logdump` · `/eh guide`
+- 其它：`/eh ds hud`（`EVAL_DS_HUD`，把状态画屏上）· `/eh ds trace` · `/eh ds rnd` · `/eh go probe` · `/eh go bind`（只读现状）· `/eh go diag` · `/eh logdump` · `/eh guide` · `/eh 载入报告`（完整载入取证；登录只打 1 行摘要）· `/eh 存档清理`（清探针+调试残渣键）
 
 **关键源码检查在守什么**（一句话；全清单见 `test_engine.js`）：`FRAME NAME CLASH`（21 具名帧 × 全部 `function NAME(`）· `WTT ISOLATION`（禁 `local WTT = GameTooltip` + 自建 + 读自家 FontString + 守卫/诊断，★扫描前摘注释）· `CHAT COLOR WIRING`（读回确认 + 幂等守卫）· `COLOR CODE LEN`（禁 `"|c"..string.sub(` + 职业色表 8 位）· `SHARE MSG SHAPE`（逐条数字面量）· `SHARE PALETTE`（色表 8 位 + 引用四表 + 无字面色码 + 接线）· `MENU ROUND CHROME`（整数 edgeSize / 白框 / 读回 / 平边退化 / 禁 `GetBackdropColor`）· `TEMPLATE COUNT`（`{ name = "` 条数 == 文档数字）· `WHEEL DIRECTION`（禁位移与方向同号）· `SHARE RECV EVENTS`（接收帧七事件全注册 + 探针接线）· `UI CELL MOUSE`（技能格左右键分派）
 - 其余：`EXAMPLES TOC`（四条）· `STOP ATTACK WIRING`（名单 7/7 + 接线 ≥3）· `PET ICON` · `LANG KEY` · `DECL ORDER`（9 文件）· `PAINT WIRING` · `DEBUFF DISPLAY` · `CREATOR GATE` · `SH FUN` · `PROF ICON PROBE WIRING` · `UI TITLE BADGES`/`UI TIER BADGE`/`UI TITLEBAR`/`UI TITLE NAME`（全清单见 `test_engine.js`）

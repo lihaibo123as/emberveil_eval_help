@@ -292,6 +292,7 @@ function EVAL_SHARE_SEND_PROBE()
                   rate = SH_SEND_RATE, max = SH_MSG_MAX }
   local cfgP = rawget(_G, "EVAL_HELP_CONFIG")
   if type(cfgP) == "table" then cfgP.shProbe = probe end -- ★落盘证人（判据不玩聊天含子串）
+  if type(EVAL_PROBE_STAMP) == "function" then pcall(EVAL_PROBE_STAMP) end -- ★1.74.31 日期戳（过期自动清）
   shSay("===== 分享发送 · 取证 =====")
   shSay("  身份行：长度 " .. tostring(string.len(sealA2)) .. " 字节 · " .. shRawForPrint(string.sub(sealA2, 1, 90)))
   shSay("  品阶行：长度 " .. tostring(probe.sealLen) .. " 字节" ..
@@ -558,6 +559,7 @@ function EVAL_SHARE_SEAL_VARIANT_PROBE()
   local cfgP = rawget(_G, "EVAL_HELP_CONFIG")
   local probe = { n = n, list = vs, at = shNowT(), idh = idh }
   if type(cfgP) == "table" then cfgP.shVariantProbe = probe end -- ★落盘证人
+  if type(EVAL_PROBE_STAMP) == "function" then pcall(EVAL_PROBE_STAMP) end -- ★1.74.31 日期戳（过期自动清）
   shSay("===== 封皮变异测 v2（10 条，已排队到「说」）=====")
   shSay("  每条间隔 1 秒（★跑完请**等 30 秒以上**再跑第二次，期间别再分享 —— 短时间多条会被客户端/服务器吞，第二轮结果不可信）")
   shSay("  请把**实际出现的编号**告诉我（没出现的同样重要）")
