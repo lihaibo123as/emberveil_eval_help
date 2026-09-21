@@ -68,7 +68,7 @@ function checkIconAssets() {
 //   ② 跳过「同名还有函数内 local 声明」的短名（W / H / x / y 这类）：它们在文件里是**多个不同的变量**，
 //      按名字比对必然误报（首版就误报了 EvalHelp.lua:153 的 local W —— 那是另一个函数里的 W）。
 (function () {
-  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/DismountHelper.lua"];
+  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/DismountHelper.lua", "tools/RareWatch.lua"];
   const bad = [];
   let totalLocals = 0;
   const isName = (s) => new RegExp("^[A-Za-z_][A-Za-z0-9_]*$").test(s);
@@ -228,7 +228,7 @@ function checkIconAssets() {
   const used = new Set();
   // ★1.71.3 补上 Share.lua：它此前**不在扫描名单里**（与 DECL ORDER 的已知盲区同源）——
   //   于是「Share 用了某个键、只改了两种语言」永远是盲区（本轮 SH_CH_OFF 正好落在这里）。
-  for (const f of ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua"]) {
+  for (const f of ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/RareWatch.lua"]) {
     const p = path.join(__dirname, f);
     if (!fs.existsSync(p)) continue;
     const src = fs.readFileSync(p, "utf8");
@@ -794,12 +794,15 @@ function checkIconAssets() {
 // ===== TPL TIER ICON CHECK（1.73.42e）：案例模版窗每个方案必须按**同一套品阶判定**显示图标 =====
 // 背景（用户要求）：「案例模版内的方案根据以上方案等级配置对应的图标显示」。
 //   行为断言照不到「模版窗到底有没有画图标」（那是 UI 接线：漏了不报错、只是没图标）→ 源码检查补位：
-//   ① 模版窗必须调用 EVAL_SHARE_SEAL_SCORE（评分）与 EVAL_SHARE_SEAL_ICON（取图标）；
+//   ① 模版窗必须调用 EVAL_SHARE_SEAL_PARTS（评分 **+ 覆盖大类数**）与 EVAL_SHARE_SEAL_ICON（取图标）；
+//      ★1.74.19 改成 PARTS：只看分数会把**覆盖封顶**漏掉（模版窗里的品阶会与分享行不一致，且是静默的）；
 //   ② tooltip 必须给出品阶（不然用户不知道为什么是这个图标）。
 (function () {
   const t = fs.readFileSync(path.join(__dirname, 'EvalHelp.lua'), 'utf8');
   const bad = [];
-  if (t.indexOf('EVAL_SHARE_SEAL_SCORE(p.text)') < 0) bad.push('模版窗没有按品阶评分（EVAL_SHARE_SEAL_SCORE(p.text)）');
+  // ★1.74.19：模版窗必须走 PARTS（拿得到覆盖数）→ 档位判定才能带上覆盖封顶
+  if (t.indexOf('EVAL_SHARE_SEAL_PARTS(p.text)') < 0) bad.push('模版窗没有按品阶评分（EVAL_SHARE_SEAL_PARTS(p.text)）');
+  if (t.indexOf('EVAL_SHARE_SEAL_TIER(sScore, sParts.nClasses)') < 0) bad.push('模版窗的档位判定没带覆盖数（★覆盖封顶会静默失效）');
   if (t.indexOf('EVAL_SHARE_SEAL_ICON(tiIdx)') < 0) bad.push('模版窗没有取品阶图标（EVAL_SHARE_SEAL_ICON）');
   if (t.indexOf('品阶：') < 0) bad.push('模版 tooltip 没有给出品阶说明');
   // ★★★1.73.42l 用户：「名称和颜色背景都要符合以上规则」——名称文字色与行背景色的接线也必须守着
@@ -832,9 +835,12 @@ function checkIconAssets() {
   const rfEnd = t.indexOf('\nfunction ', rfStart + 10);
   const rf = (rfStart >= 0 && rfEnd > rfStart) ? t.slice(rfStart, rfEnd) : '';
   if (!rf) bad.push('找不到 EVAL_SHARE_SEAL_ROW 实现');
-  ['EVAL_SHARE_SEAL_SCORE(', 'EVAL_SHARE_SEAL_TIER(', 'EVAL_SHARE_SEAL_ICON(', 'EVAL_SHARE_SEAL_SYMBOL('].forEach(function (k) {
+  // ★1.74.19 改成 PARTS：品阶栏也必须拿**覆盖大类数**（否则覆盖封顶在接收端静默失效）
+  ['EVAL_SHARE_SEAL_PARTS(', 'EVAL_SHARE_SEAL_TIER(', 'EVAL_SHARE_SEAL_ICON(', 'EVAL_SHARE_SEAL_SYMBOL('].forEach(function (k) {
     if (rf && rf.indexOf(k) < 0) bad.push('品阶栏读值口没有复用 ' + k);
   });
+  if (rf && rf.indexOf('EVAL_SHARE_SEAL_TIER(score, parts.nClasses)') < 0)
+    bad.push('品阶栏的档位判定没带覆盖数（★覆盖封顶会静默失效）');
   if (rf && rf.indexOf('未知') < 0) bad.push('品阶栏没有「未知」兜底（拿不到封皮行时会编数据）');
   if (t.indexOf('SH.sealMeta[sid]') < 0) bad.push('封皮行没有解析出发送端信息（SH.sealMeta）');
   if (bad.length) { console.log('SHARE SEAL ROW CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
@@ -863,6 +869,138 @@ function checkIconAssets() {
   if (bad.length) { console.log('SEAL SYMBOL CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
   console.log('SEAL SYMBOL CHECK: 5 个符号都是单字形且不在 Dingbats 块（' + syms.join(' ') + '）');
 })();
+// ===== SAVEDVARS SPLIT CHECK（1.74.20）：三个助手的配置**按角色存**，且只有一份真值 =====
+// 背景（用户：「消耗品助手 + 喂食助手 + 骑乘助手整块按角色。配置按照角色存储」）：
+//   新增角色级存档 EVAL_HELP_CHAR + tbCfg() 的**路由代理**之后，最容易出的静默错有三种：
+//     ① toc 忘了声明 SavedVariablesPerCharacter → 运行期 EVAL_HELP_CHAR 恒 nil（配置**每次都丢**，不报错）；
+//     ② 哪个生产文件直接读 EVAL_HELP_CONFIG.tb.<角色键> → 读到的是**账号表**（老值/空值），两份真值；
+//     ③ 三个助手没接上角色表（还是读写账号表）→ 用户以为按角色存了、其实还是共用。
+(function () {
+  const bad = [];
+  const toc = fs.readFileSync(path.join(__dirname, "EvalHelp.toc"), "utf8");
+  if (!/^##\s*SavedVariablesPerCharacter:\s*EVAL_HELP_CHAR\b/m.test(toc))
+    bad.push("EvalHelp.toc 没有声明 ## SavedVariablesPerCharacter: EVAL_HELP_CHAR（角色级存档会恒为 nil）");
+  const tb = fs.readFileSync(path.join(__dirname, "Toolbox.lua"), "utf8");
+  if (tb.indexOf("local TB_CHAR_KEYS = {") < 0) bad.push("找不到角色键清单 TB_CHAR_KEYS（唯一来源）");
+  if (tb.indexOf("return tbMakeRouter()") < 0) bad.push("tbCfg() 没有返回路由代理（角色键会落回账号表）");
+  ["function EVAL_TB_CHAR_STORE(", "function EVAL_TB_CHAR_MIGRATE(", "function EVAL_TB_IS_CHAR_KEY(",
+   "function EVAL_TB_CHAR_KEY_LIST(", "function EVAL_TB_CHAR_RESET("].forEach(function (k) {
+    if (tb.indexOf(k) < 0) bad.push("Toolbox.lua 缺读值口/入口：" + k);
+  });
+  // ★router 的 __index 里绝不许出现「and at[k] or ...」（false or nil 还是 nil → 用户关掉的开关自己又开）
+  const ri = tb.indexOf("__index = function(_, k)");
+  const rj = tb.indexOf("__newindex", ri);
+  // ★判据必须**先摘注释**：本轮那次事故的注释里就写着那个错误写法（`at and at[k] or nil`），
+  //   不摘注释会让检查**假红**（本项目 DECL ORDER / CHAT COLOR WIRING 等都踩过同一坑）。
+  const nocomment = function (s) { return s.split(/\r?\n/).map(function (l) { const i = l.indexOf("--"); return i >= 0 ? l.slice(0, i) : l; }).join("\n"); };
+  const seg = (ri >= 0 && rj > ri) ? nocomment(tb.slice(ri, rj)) : "";
+  if (!seg) bad.push("取不到路由代理的 __index 段");
+  if (/and\s+at\s*\[\s*k\s*\]\s*or/.test(seg)) bad.push("路由代理的 __index 用了 and/or 的写法（false 会被吞成 nil）");
+  // 三个助手必须走角色存档
+  [["ConsumableHelper.lua", "消耗品助手"], ["HunterHelper.lua", "喂食助手"], ["DismountHelper.lua", "骑乘助手"]]
+    .forEach(function (pair) {
+      const p = path.join(__dirname, "tools", pair[0]);
+      if (!fs.existsSync(p)) { bad.push("找不到 " + p); return; }
+      const src = nocomment(fs.readFileSync(p, "utf8")); // ★摘注释（文件头注释里就写着这个键名）
+      if (src.indexOf("EVAL_TB_CHAR_STORE()") < 0) bad.push(pair[1] + " 没接角色存档（EVAL_TB_CHAR_STORE）");
+      if (/EVAL_HELP_CONFIG\s*\.\s*tb/.test(src)) bad.push(pair[1] + " 还在直接读 EVAL_HELP_CONFIG.tb（会读到账号表）");
+    });
+  // 生产文件里不许直接按角色键读账号表
+  const m = tb.match(/local TB_CHAR_KEYS = \{([\s\S]*?)\n\}/);
+  const charKeys = m ? ((m[1].match(/([A-Za-z_][A-Za-z0-9_]*)\s*=\s*true/g) || []).map(function (x) { return x.split("=")[0].trim(); })) : [];
+  if (charKeys.length < 10) bad.push("角色键清单解出来太少（" + charKeys.length + "）—— 锚点变了？");
+  const prodFiles = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua",
+                     "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua",
+                     "tools/ConsumableHelper.lua", "tools/HunterHelper.lua", "tools/DismountHelper.lua", "tools/IconGrid.lua", "tools/RareWatch.lua"];
+  const leaks = [];
+  prodFiles.forEach(function (f) {
+    const p = path.join(__dirname, f);
+    if (!fs.existsSync(p)) return;
+    const src = fs.readFileSync(p, "utf8").split(/\r?\n/).map(function (l) { const i = l.indexOf("--"); return i >= 0 ? l.slice(0, i) : l; }).join("\n");
+    charKeys.forEach(function (k) {
+      const re = new RegExp("EVAL_HELP_CONFIG\\s*\\.\\s*tb\\s*\\.\\s*" + k + "\\b");
+      if (re.test(src)) leaks.push(f + ":" + k);
+    });
+  });
+  if (leaks.length) bad.push("这些地方直接按角色键读了**账号表**（会读到老值/空值，两份真值）：" + leaks.join(","));
+  // 迁移必须挂在 VARIABLES_LOADED（早调会从空表继承出空配置、还把标志立上）
+  const eh = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
+  if (eh.indexOf("EVAL_TB_CHAR_MIGRATE") < 0) bad.push("EvalHelp.lua 没在 VARIABLES_LOADED 里触发角色配置迁移");
+  if (bad.length) { console.log("SAVEDVARS SPLIT CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
+  console.log("SAVEDVARS SPLIT CHECK: toc 声明角色级存档 · 角色键清单 " + charKeys.length + " 个（唯一来源）· tbCfg 走路由代理（无 and/or 吞 false）· 三个助手都接角色存档 · 无「按角色键读账号表」的泄漏 · 迁移挂在 VARIABLES_LOADED");
+})();
+// ===== COND WEIGHT CHECK（1.74.19）：评分用的「条件权重 / 覆盖大类」**只有一个来源** =====
+// 背景（用户：「审计方案的评级标准…增加评级难度」）：评分口径重做成「空技能不计分 + 条件按类加权 +
+//   覆盖封顶」后，权重表成了判定的核心。最容易出的静默错有两种：
+//     ① 另开一张「条件→权重」表 → 以后往 SE_TYPES 加条件类型时**漏配 = 静默按 0 分算**（也不计覆盖）；
+//     ② Share.lua 自己抄一份权重（两份真值迟早漂移）。
+//   ⇒ 判据：① SE_TYPES 里的**每一个** id 都出现在 SE_TYPE_GROUPS 的某个分组里；
+//     ② 每个分组都配了 w（权重）与 cov（覆盖大类）且 5 个大类都非空；
+//     ③ 权重表**由分组表派生**（SE_COND_W[id] = grp.w），Share.lua 只走读值口。
+(function () {
+  const eh = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
+  const sh = fs.readFileSync(path.join(__dirname, "Share.lua"), "utf8");
+  const bad = [];
+  const ti = eh.indexOf("local SE_TYPES = {");
+  const tj = eh.indexOf("\n}", ti);
+  const typesSeg = (ti >= 0 && tj > ti) ? eh.slice(ti, tj) : "";
+  const ids = (typesSeg.match(/id\s*=\s*"([A-Za-z]+)"/g) || []).map(function (x) { return x.match(/"([A-Za-z]+)"/)[1]; });
+  if (ids.length < 50) bad.push("SE_TYPES 解出来的条件类型太少（" + ids.length + "）—— 锚点变了？");
+  const gi = eh.indexOf("local SE_TYPE_GROUPS = {");
+  const gj = eh.indexOf("\n}", gi);
+  const grpSeg = (gi >= 0 && gj > gi) ? eh.slice(gi, gj) : "";
+  if (!grpSeg) bad.push("找不到 SE_TYPE_GROUPS");
+  // ★按**条目整块**解析（不按行切）：一组写成多行也照样查得出来（写成一行的也行）
+  const entryRe = /\{\s*label\s*=\s*"(CTG_\d+)"[\s\S]*?ids\s*=\s*\{([\s\S]*?)\}\s*\}/g;
+  const classes = {};
+  const covered = {};
+  let em, grpN = 0;
+  while ((em = entryRe.exec(grpSeg)) !== null) {
+    grpN++;
+    const whole = em[0];
+    if (!/w\s*=\s*\d+/.test(whole)) bad.push("分组 " + em[1] + " 没配权重 w");
+    const c = whole.match(/cov\s*=\s*"([A-E])"/);
+    if (!c) bad.push("分组 " + em[1] + " 没配覆盖大类 cov");
+    else classes[c[1]] = true;
+    (em[2].match(/"[A-Za-z]+"/g) || []).forEach(function (q) { covered[q.slice(1, -1)] = true; });
+  }
+  if (grpN !== 6) bad.push("条件分组不是 6 组（实际 " + grpN + "）—— 下拉分组被改坏了");
+  ["A", "B", "C", "D", "E"].forEach(function (k) { if (!classes[k]) bad.push("覆盖大类 " + k + " 是空的（没有任何条件类型）"); });
+  const miss = ids.filter(function (k) { return !covered[k]; });
+  if (miss.length) bad.push("这些条件类型**没进任何分组**（⇒ 评分按 0 分、也不计覆盖）：" + miss.join(","));
+  if (eh.indexOf("SE_COND_W[id] = grp.w") < 0) bad.push("权重不是从分组表派生的（SE_COND_W[id] = grp.w 不见了）");
+  if (eh.indexOf("function EVAL_COND_WEIGHT(") < 0 || eh.indexOf("function EVAL_COND_CLASS(") < 0) bad.push("缺 EVAL_COND_WEIGHT / EVAL_COND_CLASS 读值口");
+  if (sh.indexOf("EVAL_COND_WEIGHT(") < 0 || sh.indexOf("EVAL_COND_CLASS(") < 0) bad.push("Share.lua 的评分没走权重/大类读值口（自己抄了一份？）");
+  if (bad.length) { console.log("COND WEIGHT CHECK: FAIL - " + bad.join("; ")); process.exitCode = 1; return; }
+  console.log("COND WEIGHT CHECK: " + ids.length + " 个条件类型全部归组 · " + grpN + " 组各配权重与覆盖大类 · 权重由分组表派生（单一来源）");
+})();
+// ===== COVERAGE CAP WIRING CHECK（1.74.19）：覆盖封顶必须**真的接上** =====
+// 为什么要有它：封顶是「带 coverage 参数才生效」的 —— 有人写成
+//   EVAL_SHARE_SEAL_TIER(EVAL_PROFILE_SCORE(p)) 就会把封顶整个漏掉，
+//   而**分数与档位看起来都正常**（只是天花板没生效）= 典型的静默失败。
+//   判据：① 单一入口 EVAL_PROFILE_TIER 与 shCoverCap 在；② 没人在方案表上直接调「只传分数」的老写法；
+//     ③ 晋升统计与 UI 品阶读值口都走单入口。
+(function () {
+  const eh = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
+  const sh = fs.readFileSync(path.join(__dirname, "Share.lua"), "utf8");
+  const bad = [];
+  const nocomment = function (s) { return s.split(/\r?\n/).map(function (l) { const i = l.indexOf("--"); return i >= 0 ? l.slice(0, i) : l; }).join("\n"); };
+  const ehNo = nocomment(eh), shNo = nocomment(sh);
+  if (shNo.indexOf("function EVAL_PROFILE_TIER(") < 0) bad.push("找不到单入口 EVAL_PROFILE_TIER");
+  if (shNo.indexOf("local function shCoverCap(") < 0) bad.push("找不到封顶函数 shCoverCap");
+  if (shNo.indexOf("EVAL_PROFILE_TIER(p)") < 0) bad.push("晋升统计没走单入口（EVAL_TITLE_COUNTS 会把封顶漏掉）");
+  if (ehNo.indexOf("EVAL_PROFILE_TIER, prof") < 0) bad.push("品阶读值口没走单入口（uiProfileTierRGB）");
+  const offenders = [];
+  [["EvalHelp.lua", ehNo], ["Share.lua", shNo]].forEach(function (pair) {
+    const re = /EVAL_SHARE_SEAL_TIER\(\s*EVAL_PROFILE_SCORE\(/g;
+    let m;
+    while ((m = re.exec(pair[1])) !== null) offenders.push(pair[0]);
+  });
+  if (offenders.length) bad.push("还在用「只传分数」的老写法（★封顶会静默失效）：" + offenders.join(","));
+  if (bad.length) { console.log("COVERAGE CAP WIRING CHECK: FAIL - " + bad.join("; ")); process.exitCode = 1; return; }
+  console.log("COVERAGE CAP WIRING CHECK: 单入口 EVAL_PROFILE_TIER + shCoverCap 在位 · 无「只传分数」的老写法 · 晋升统计与 UI 读值口都走单入口");
+})();
+
 // ===== TITLE GACHA CHECK（1.73.42n）：头衔抽卡的**结构与单一来源**必须钉死 =====
 // 背景（用户定稿）：「5 档（= 方案稀有度档数）× 每档 15 张」「每档只抽一次、不重复、唯一不变」「只升不降」
 //   + 彩蛋预留：自定义头衔优先度最高、**只有一次**修改机会。
@@ -894,7 +1032,8 @@ function checkIconAssets() {
     if (miss.length) bad.push(lg + ' 缺 ' + miss.length + ' 个头衔键（如 ' + miss[0] + '）');
   }
   // ② 评分单一来源：品阶评分与晋升统计都得走 EVAL_PROFILE_SCORE
-  if (shr.indexOf('return EVAL_PROFILE_SCORE(p)') < 0) bad.push('文本评分没有复用 EVAL_PROFILE_SCORE（会各算一套）');
+  // ★1.74.19 文本路径改走 PARTS（分数 + 覆盖数同源）—— 仍然只此一份评分实现，且档位判定带得上覆盖封顶
+  if (shr.indexOf('return EVAL_PROFILE_PARTS(p)') < 0) bad.push('文本评分没有复用 EVAL_PROFILE_PARTS（会各算一套）');
   if (shr.indexOf('EVAL_SHARE_SEAL_TIER(EVAL_PROFILE_SCORE(p))') < 0) bad.push('晋升统计没有用同一个评分函数');
   // ③ 每档只抽一次
   if (shr.indexOf('if t.draws[k] == nil then') < 0) bad.push('没有「已抽过就不重抽」的守卫（每档只抽一次）');
@@ -1046,6 +1185,31 @@ function checkIconAssets() {
   });
   if (bad.length) { console.log('TEMPLATE COUNT CHECK: FAIL - ' + bad.join('; ')); process.exit(1); }
   console.log('TEMPLATE COUNT CHECK: \u771f\u5b9e ' + real + ' \u6761 == toc Notes + \u4e09\u8bed\u8a00 README \u7684\u5199\u6cd5');
+// ===== TPL AUTHOR WIRING CHECK（1.74.22）：模版条目的「作者/备注」必须真的显示 + 导入时真的带上署名 =====
+// 背景（用户「作者备注: Rainbow / 案例备注: 来自龙之国度的LM-Rainbow-骑士无私分享」）：
+//   数据字段进 examples 只完成了「存下来」；**能不能显示出来、导入时带不带**是 UI 接线——
+//   漏接不报错、只是悬停少两行 / 方案来源记成「技能学院」（静默）⇒ 源码检查补位。
+(function () {
+  const t = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
+  const bad = [];
+  if (t.indexOf('type(p.author) == "string"') < 0) bad.push("模版 tooltip 没有读 p.author（作者备注不会显示）");
+  if (t.indexOf('type(p.note) == "string"') < 0) bad.push("模版 tooltip 没有读 p.note（案例备注不会显示）");
+  if (t.indexOf('L("TPL_AUTHOR")') < 0 || t.indexOf('L("TPL_NOTE")') < 0) bad.push("作者/备注两行没走语言包（L(TPL_AUTHOR)/L(TPL_NOTE)）");
+  if (t.indexOf('ioImportText(p.text, p.author or "技能学院")') < 0) bad.push("导入没带上模版署名（作者备注形同虚设）");
+  for (const lg of ["zhCN", "enUS", "ruRU"]) {
+    const loc = fs.readFileSync(path.join(__dirname, "Locales", lg + ".lua"), "utf8");
+    if (loc.indexOf("TPL_AUTHOR") < 0 || loc.indexOf("TPL_NOTE") < 0) bad.push(lg + " 缺 TPL_AUTHOR / TPL_NOTE");
+  }
+  const dir = path.join(__dirname, "examples");
+  let withAuthor = 0;
+  for (const f of fs.readdirSync(dir).filter(function (f) { return /\.lua$/.test(f); })) {
+    const s = fs.readFileSync(path.join(dir, f), "utf8");
+    withAuthor += (s.match(/^\s*\{\s*name\s*=\s*"[^"]*",\s*author\s*=\s*"/gm) || []).length;
+  }
+  if (withAuthor < 1) bad.push("examples 里没有任何带 author 的模版条目（这条通道没有数据在走）");
+  if (bad.length) { console.log("TPL AUTHOR WIRING CHECK: FAIL - " + bad.join("; ")); process.exitCode = 1; return; }
+  console.log("TPL AUTHOR WIRING CHECK: 作者/备注显示 + 导入署名 + 三语言标签 + " + withAuthor + " 条带 author 的模版");
+})();
 })();
 // ===== MENU ROUND CHROME CHECK（1.73.40）：右键菜单的「圆角边框」只能走客户端原生圆角边贴图 =====
 // 背景（用户「圆角」）：1.12 没有圆角控件，圆角只能来自客户端的边贴图 Interface\Tooltips\UI-Tooltip-Border
@@ -1106,7 +1270,7 @@ function checkIconAssets() {
   }
   // ① 模版数据只能住在 examples/：别的生产文件里再出现 cls = " 就是「又搬回去了 / 多了一份」
   //   （同一个东西两份真值，正是本项目反复踩的坑：改一处漏一处、后写的静默获胜）。
-  const prodFiles = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua"];
+  const prodFiles = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/RareWatch.lua"];
   const leaked = prodFiles.filter(f => { const p = path.join(__dirname, f); return fs.existsSync(p) && /cls\s*=\s*"/.test(fs.readFileSync(p, "utf8")); });
   if (leaked.length) { console.log("EXAMPLES TOC CHECK: FAIL - template data leaked back into " + leaked.join(",")); process.exit(1); }
   // ② 载入顺序：examples 必须排在 EvalHelp.lua 之后（引擎里的初始化先跑）。
@@ -1244,7 +1408,7 @@ function checkIconAssets() {
 //   把反向 bug 一起验过去了。★教训：方向这种「全局约定」必须有单一来源 + 源码检查兜底，
 //   否则每个新列表都会各写一遍、错一个没人发现。
 (function () {
-  const files = ["EvalHelp.lua", "Toolbox.lua", "DataSearch.lua", "IconBrowser.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua"];
+  const files = ["EvalHelp.lua", "Toolbox.lua", "DataSearch.lua", "IconBrowser.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/RareWatch.lua"];
   const sites = [];
   const bad = [];
   for (const f of files) {
@@ -1282,7 +1446,7 @@ function checkIconAssets() {
 //     再怎么比也验不到「客户端认不认」；只能把约定写成**源码检查**：禁止 sub(hex,3) 这种切码写法 +
 //     职业色表逐项必须是 8 位。
 (function () {
-  const files = ["EvalHelp.lua", "Toolbox.lua", "Engine.lua", "Core.lua", "Share.lua", "DataSearch.lua", "IconBrowser.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua"];
+  const files = ["EvalHelp.lua", "Toolbox.lua", "Engine.lua", "Core.lua", "Share.lua", "DataSearch.lua", "IconBrowser.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/RareWatch.lua"];
   const bad = [];
   let uses = 0;
   for (const f of files) {
@@ -1428,9 +1592,13 @@ function checkIconAssets() {
   const i1 = noComment.indexOf("local function uiTitleToggle(");
   const seg = (i0 >= 0 && i1 > i0) ? noComment.slice(i0, i1) : "";
   if (seg === "") bad.push("取不到徽标代码段（函数被改名或被挪走？）");
-  ["EVAL_PROFILE_SCORE", "EVAL_SHARE_SEAL_TIER", "EVAL_SHARE_SEAL_SYMBOL", "EVAL_SHARE_SEAL_TIER_RGB",
+  // ★1.74.19 档位改走**单一入口** EVAL_PROFILE_TIER（它自带覆盖封顶）——旧写法只认 EVAL_PROFILE_SCORE，
+  //   而「只取分数」正是封顶静默失效的入口，必须由检查挡住。
+  ["EVAL_PROFILE_TIER", "EVAL_SHARE_SEAL_TIER", "EVAL_SHARE_SEAL_SYMBOL", "EVAL_SHARE_SEAL_TIER_RGB",
    "EVAL_TITLE_CURRENT", "EVAL_COLOR_RGB"]
     .forEach(function (k) { if (seg.indexOf(k) < 0) bad.push("档位/头衔没走 " + k + "（徽标段内找不到）"); });
+  if (seg.indexOf("EVAL_SHARE_SEAL_TIER(EVAL_PROFILE_SCORE(") >= 0)
+    bad.push("徽标段内还在用「只传分数」的旧写法（★会把覆盖封顶整个漏掉）");
   if (/SH_SEAL_TIERS\s*=/.test(noComment)) bad.push("EvalHelp.lua 里又声明了一张品阶表（品阶表只许 Share.lua 一张）");
   if (/SH_TITLES\s*=/.test(noComment)) bad.push("EvalHelp.lua 里又声明了一张头衔卡池（卡池只许 Share.lua 一张）");
   if (/\|c[0-9a-fA-F]{8}/.test(seg)) bad.push("徽标色码写死在 UI 侧（应取自 EVAL_SHARE_SEAL_TIER_RGB / EVAL_COLOR_RGB）");
@@ -1721,7 +1889,8 @@ function checkIconAssets() {
 
 // ===== SHARE AUTHOR WIRING CHECK（1.74.5）：方案「作者/来源」与「不弹窗原因落日志」的接线 =====
 // 为什么用源码检查：这几处**都是接线** —— 漏了不报错、只是功能悄悄没有（行为断言要跑整套 UI / 接收流程才照得到）：
-//   ① 案例模版选单导入必须盖 author="技能学院"（否则模版方案会被当成「导入」）；
+//   ① 案例模版选单导入必须盖作者 —— ★1.74.22 起：条目自带 `author`（玩家贡献的模版）就用它署名，
+//      没带才退回 "技能学院"（否则模版方案会被当成「导入」）；两种写法都必须存在，缺一个就是静默丢来源；
 //   ② 手建方案必须盖玩家名；③ 分享导入必须盖发送者名；
 //   ④ 方案列表 tooltip 必须走**唯一**的作者标签函数（不许在 UI 里另拼一份文案）；
 //   ⑤ 头衔评定必须锚在「自创」（src ~= "text"）；⑥ 「不弹窗」必须走统一日志前缀（否则查不到原因）。
@@ -1729,7 +1898,7 @@ function checkIconAssets() {
   const bad = [];
   const eh = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
   const sh = fs.readFileSync(path.join(__dirname, "Share.lua"), "utf8");
-  if (eh.indexOf('ioImportText(p.text, "技能学院")') < 0) bad.push("案例模版选单导入没盖 author=技能学院");
+  if (eh.indexOf('ioImportText(p.text, p.author or "技能学院")') < 0) bad.push("案例模版选单导入没盖作者（应是 p.author or 技能学院 —— 缺 author 的模版才退回技能学院）");
   if (!/author\s*=\s*\(type\(UnitName\)/.test(eh)) bad.push("手建方案没盖作者名（UnitName）");
   if (sh.indexOf("EVAL_IMPORT_TEXT(p.text, p.sender)") < 0) bad.push("分享导入没盖发送者名");
   if (eh.indexOf("EVAL_PROF_AUTHOR_LABEL(prof)") < 0) bad.push("方案列表 tooltip 没走 EVAL_PROF_AUTHOR_LABEL（单一来源）");
@@ -1892,7 +2061,7 @@ function checkIconAssets() {
 //   1.72.2 把桩改成真客户端行为（具名帧挂全局）后，组 54 当场报 `attempt to call a table value` —— 这就是暴露途径。
 // 判据：全仓扫描 `CreateFrame(..., "NAME", ...)` 的第二参，不得与任何 `function NAME(` 同名。
 (function () {
-  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua"];
+  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/RareWatch.lua"];
   const funcs = {}, frames = [];
   for (const f of files) {
     if (!fs.existsSync(path.join(__dirname, f))) continue;
@@ -2062,6 +2231,70 @@ checkIconAssets();
 })();
 
 
+// ===== RARE WATCH WIRING CHECK（1.74.23）：稀有提醒转播的四处接线，漏一处都是**静默**失效 =====
+// ★为什么必须源码级（行为断言照不到「没接上」）：
+//   ① 安装调用点若不在 VARIABLES_LOADED 分支里 → 载入期全局 UnrealQuest 还不存在（目录名排序
+//      EvalHelp(E) 先于 UnrealQuest(U)）→ 功能永远不装，且**不报错**；
+//   ② 命令前缀必须按**字节**写对（string.sub 是字节下标 —— 1.74.5 在「go 喂食」上正是栽在这里）；
+//   ③ 包装 Show 必须**透传返回值**且**照原样抛出对方的错误**（吞掉别人的错 = 把别人的 bug 藏起来）；
+//   ④ 兜底轮询帧的父级必须是 WorldFrame（挂 UIParent 时开全屏世界地图会整个停摆 —— 1.70.39 的坑）。
+(function () {
+  // ★1.74.27 稀有提醒转播**已提取到 tools/RareWatch.lua**（用户：「将以上功能提取到独立文件内 ./tools」）⇒
+  //   本检查分两段扫：**接线点**（安装调用 / 命令前缀 / SetItemRef 分派）仍在主文件与 Toolbox.lua；
+  //   **实现模式**（包装 / 透传 / 照抛 / 兜底父级 / 色表 / 链接形态）搬到了新模块 —— 两段都必须扫到，
+  //   否则「文件搬走了、检查却还只看老文件」会变成一条永远为 FAIL 或永远为 PASS 的死检查。
+  const main = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
+  const rwRel = "tools/RareWatch.lua";
+  const rwAbs = path.join(__dirname, rwRel);
+  const bad = [];
+  if (!fs.existsSync(rwAbs)) bad.push("找不到 " + rwRel + "（稀有提醒转播应住在这里）");
+  const src = main + "\n" + (fs.existsSync(rwAbs) ? fs.readFileSync(rwAbs, "utf8") : "");
+  const atInit = main.indexOf("EVAL_HELPInitFrame");
+  const atInstall = src.indexOf("pcall(EVAL_RW_INSTALL)");
+  const atAuto = src.indexOf('pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_REGEN_DISABLED")');
+  if (atInit < 0) bad.push("找不到初始化帧 EVAL_HELPInitFrame");
+  else if (atInstall < 0) bad.push("VARIABLES_LOADED 处理里没有 pcall(EVAL_RW_INSTALL)（功能永远不装）");
+  else if (atAuto > 0 && atInstall > atAuto) bad.push("EVAL_RW_INSTALL 不在 VARIABLES_LOADED 分支里（跑到注册事件之后了）");
+  const wantPrefix = 'string.sub(msg, 1, 9) == "go 稀有"'; // 命令分支仍留在主文件（命令表在那里）
+  if (src.indexOf(wantPrefix) < 0) {
+    bad.push("命令分支不是 " + wantPrefix + "（字节数写错 = 命令静默无反应）");
+  } else if (Buffer.byteLength("go 稀有", "utf8") !== 9) {
+    bad.push("前缀字节数基准漂了：实际 " + Buffer.byteLength("go 稀有", "utf8"));
+  }
+  if (src.indexOf("RA.Show = function") < 0) bad.push("没有包装 RA.Show（主路缺失）");
+  if (src.indexOf("return a, b, c, d") < 0) bad.push("包装没有透传原函数返回值");
+  if (src.indexOf("error(a, 0)") < 0) bad.push("包装没有按原语义抛出对方错误（会吞掉别人的 bug）");
+  if (src.indexOf('rawget(_G, "WorldFrame")') < 0) bad.push("兜底 tick 的父级不是 WorldFrame（开全屏地图会停摆）");
+  // ⑤ 1.74.24：品阶染色（4 档 · 每档 |c + 8 位）+ 名字链接（色码在外、链接在里）
+  const colorBlock = src.match(/EVAL_RW_RANK_COLOR_MAP = \{[\s\S]*?\n\}/);
+  if (!colorBlock) {
+    bad.push("找不到 EVAL_RW_RANK_COLOR_MAP（品阶染色表）");
+  } else {
+    const cols = (colorBlock[0].match(/\|c[0-9a-fA-F]+/g) || []);
+    if (cols.length !== 4) bad.push("品阶色表应为 4 档，实际 " + cols.length + " 项");
+    const badLen = cols.filter(function (c) { return c.length !== 10; }); // "|c" + 8 位
+    if (badLen.length) bad.push("品阶色码不是 8 位（6 位不解析 / 7 位吞整条）：" + badLen.join(","));
+  }
+  if (src.indexOf('color .. "|H" .. token .. "|h["') < 0) bad.push("名字链接形态不是「色码在外 + 链接在里」（|c..|H..|h[名]|h|r）");
+  if (src.indexOf("function EVAL_RW_LINK_CLICK") < 0) bad.push("没有 EVAL_RW_LINK_CLICK（SetItemRef 分派入口）");
+  // ★1.74.26 用户定案「不要和那边插件的机制管理」：稀有转播里**不许**再出现地图/坐标耦合
+  if (src.indexOf("EVAL_DS_SHOWMAP") >= 0 || src.indexOf("EVAL_RW_NEAREST_LOC") >= 0 || src.indexOf("GetCurrentZoneView") >= 0) {
+    bad.push("稀有转播又跟那边插件的地图机制耦合了（EVAL_DS_SHOWMAP / NEAREST_LOC / GetCurrentZoneView）");
+  }
+  if (src.indexOf("function EVAL_RW_TARGET(") < 0) bad.push("没有 EVAL_RW_TARGET（左键 = 切目标）");
+  const tb = fs.readFileSync(path.join(__dirname, "Toolbox.lua"), "utf8");
+  // ★必须要求「语句**以**它开头」：只查「文件里出现过这串」的话，把整行改成 `if false and string.find(...)`
+  //   照样能骗过检查（本轮变异测当场撞到）—— 一个能自欺的守卫等于没有守卫。
+  const ehrwStmt = 'if string.find(link, "^EHRW:") then';
+  const hasEhrw = tb.split(/\r?\n/).some(function (l) { return l.trim().indexOf(ehrwStmt) === 0; });
+  if (!hasEhrw) bad.push("Toolbox 的 SetItemRef 分派里没有 EHRW: 分支（语句必须直接以它开头；点了名字什么都不会发生）");
+  if (bad.length) {
+    console.log("RARE WATCH WIRING CHECK: FAIL - " + bad.join(" | "));
+    process.exitCode = 1;
+    return;
+  }
+  console.log("RARE WATCH WIRING CHECK: 安装点(VARIABLES_LOADED) · 命令前缀 9 字节 · Show 包装(透传+照抛) · 兜底 tick 父级=WorldFrame · 品阶 4 色 8 位 · 名字链接形态 · SetItemRef 分派");
+})();
 // ★1.73.5 把 doc/图标路径清单.txt（客户端采集的 1018 条**真实路径**）注入成测试素材：
 //   图标库的语义名/关键字过滤必须拿**生产形态**（/Game/Interface/Icons/X_TEX）来验 ——
 //   只喂编出来的短名，会把「_TEX 后缀没剥 / 路径前缀不同」这类**只有真机才犯、且一声不响**的错一起放过。
@@ -2078,7 +2311,7 @@ const iconFixture = (function () {
 })();
 const L=lauxlib.luaL_newstate();
 lualib.luaL_openlibs(L);
-for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/general.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','examples/priest.lua','examples/druid.lua','examples/warlock.lua','examples/shaman.lua','examples/group.lua','Toolbox.lua','DataSearch.lua','Share.lua','IconSem.lua','IconBrowser.lua','PetData.lua','PetHelper.lua','tools/IconGrid.lua','tools/HunterHelper.lua','tools/ConsumableHelper.lua','tools/DismountHelper.lua','test_assert.lua']){
+for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/general.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','examples/priest.lua','examples/druid.lua','examples/warlock.lua','examples/shaman.lua','examples/group.lua','Toolbox.lua','DataSearch.lua','Share.lua','IconSem.lua','IconBrowser.lua','PetData.lua','PetHelper.lua','tools/IconGrid.lua','tools/HunterHelper.lua','tools/ConsumableHelper.lua','tools/DismountHelper.lua','tools/RareWatch.lua','test_assert.lua']){
   if(f==='test_assert.lua' && iconFixture){
     const fx=to_luastring(iconFixture);
     const stx=lauxlib.luaL_loadbuffer(L,fx,fx.length,to_luastring('icon_fixture'));

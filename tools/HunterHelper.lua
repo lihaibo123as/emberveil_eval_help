@@ -84,10 +84,10 @@ local HH_BSLASH = string.char(92)
 
 -- ===== 配置与输出（唯一真值 = EVAL_HELP_CONFIG.tb，与工具箱同一张表） =====
 local function hhCfg()
-  local c = EVAL_HELP_CONFIG
-  if type(c) ~= "table" then return nil end
-  if type(c.tb) ~= "table" then c.tb = {} end
-  return c.tb
+  -- ★★★1.74.20 用户：「喂食助手…整块按角色」——食物/喂食技能/开关/图标位置都存**角色级存档**。
+  --   （猎人的宠物与食物本来就各角色各囤各的；共用一份会在换号时错乱。）
+  if type(EVAL_TB_CHAR_STORE) ~= "function" then return nil end
+  return EVAL_TB_CHAR_STORE()
 end
 
 local function L(k, ...)

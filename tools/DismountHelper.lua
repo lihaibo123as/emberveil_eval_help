@@ -57,10 +57,9 @@ local DH_BLOCK_WORDS = { "你正在", "无法在", "骑乘", "骑在", "下马" 
 
 -- ===== 配置与输出（唯一真值 = EVAL_HELP_CONFIG.tb） =====
 local function dhCfg()
-  local c = EVAL_HELP_CONFIG
-  if type(c) ~= "table" then return nil end
-  if type(c.tb) ~= "table" then c.tb = {} end
-  return c.tb
+  -- ★★★1.74.20 用户：「骑乘助手…整块按角色」——两个开关与图标位置都存**角色级存档**。
+  if type(EVAL_TB_CHAR_STORE) ~= "function" then return nil end
+  return EVAL_TB_CHAR_STORE()
 end
 
 local function L(k, ...)

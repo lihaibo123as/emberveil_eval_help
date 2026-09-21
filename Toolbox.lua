@@ -200,6 +200,105 @@ local function tbMigrateBuy(t)
   end
 end
 
+-- ★★★1.74.20 「哪些键**按角色存**」——**唯一来源**（用户：「消耗品助手 + 喂食助手 + 骑乘助手整块按角色）。
+--   背景（本轮审计定案）：三个助手的配置原先都躺在**账号级**的 `EVAL_HELP_CONFIG.tb` 里 ——
+--   同一账号下所有角色共用一份「带什么食物 / 选哪些消耗品 / 图标摆哪」，换个号就得重设一遍。
+--   本机客户端实测支持 `## SavedVariablesPerCharacter`（UnrealQuest 已在用，磁盘上三个角色三个文件），
+--   故新增角色级存档 `EVAL_HELP_CHAR`，把这三个助手**整块**（含各自的悬浮件位置与贴图缓存）搬过去。
+--   ★为什么整块搬（连开关 `consumable`/`feedPet`/`dismount` 一起）：用户要的是「这些配置区分角色」，
+--     只搬一半会出现「角色 A 关掉喂食、角色 B 也被关掉」这种自相矛盾的状态。
+--   ★**方案库 `cfg.war.profiles` 不搬**（它是资产、要跨角色复用与分享）；语言/日志/分享开关也不搬。
+--   ★怎么生效：`tbCfg()` 返回一个**路由代理**（见下），读/写角色键自动落到 `EVAL_HELP_CHAR.tb`，
+--     账号键照旧落 `EVAL_HELP_CONFIG.tb` —— 于是**所有既有调用点一个字都不用改**。
+--     （验过全项目没有 `pairs(配置表)` 遍历：代理表唯一的已知短板用不上。）
+local TB_CHAR_KEYS = {
+  -- 消耗品助手（选中列表 / 贴图缓存 / 总开关 / 悬浮件位置）
+  chUse = true, chTex = true, consumable = true, chX = true, chY = true,
+  -- 猎人助手 · 一键喂食
+  feedPet = true, hhFood = true, hhFoodTex = true, hhSpell = true, hhX = true, hhY = true,
+  -- 骑乘助手 · 一键下马
+  dismount = true, dismountAuto = true, dhX = true, dhY = true,
+}
+-- 读值口：这个键是不是角色级（断言与源码检查读它，不另抄一份名单）
+function EVAL_TB_IS_CHAR_KEY(k) return TB_CHAR_KEYS[k] == true end
+-- 读值口：整张角色键清单（按名字排序，便于断言逐个核对）
+function EVAL_TB_CHAR_KEY_LIST()
+  local out = {}
+  for k in pairs(TB_CHAR_KEYS) do out[#out + 1] = k end
+  table.sort(out)
+  return out
+end
+-- ★角色级存档的访问口（三个助手与路由代理都走它）——**它只管建表，不管迁移**（迁移见 EVAL_TB_CHAR_MIGRATE）
+function EVAL_TB_CHAR_STORE()
+  local cc = rawget(_G, "EVAL_HELP_CHAR")
+  if type(cc) ~= "table" then cc = {} EVAL_HELP_CHAR = cc end
+  if type(cc.tb) ~= "table" then cc.tb = {} end
+  return cc.tb
+end
+-- ★★★迁移（**每个角色只做一次**）：老存档里这些键在账号表 `cfg.tb` 里，第一次登录时**继承一次**当起点。
+--   ★账号里那份副本**不删**：它是「升级前那份共享配置」的种子 —— 删了，还没登录过的角色就什么都没有了
+--     （UnrealQuest 的 per-character 迁移也是这么做的，并写明了同样的理由）。
+--   ★迁移**只在 VARIABLES_LOADED 之后调**（EvalHelp.lua 的事件里）：那时账号表才真的读进来；
+--     提前调用会从一张还没加载的空表「继承」出空配置、却把 migrated 标志立上，seed 就永久丢了。
+function EVAL_TB_CHAR_MIGRATE()
+  local cc = rawget(_G, "EVAL_HELP_CHAR")
+  local acct = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(acct) ~= "table" then return false end -- 账号配置还没到位 → **不标记**，等下次（VARIABLES_LOADED）再来
+  if type(cc) ~= "table" then cc = {} EVAL_HELP_CHAR = cc end
+  if type(cc.tb) ~= "table" then cc.tb = {} end
+  if cc.tbMigrated then return false end
+  cc.tbMigrated = true
+  local at = acct.tb
+  if type(at) == "table" then
+    for k in pairs(TB_CHAR_KEYS) do
+      if cc.tb[k] == nil and at[k] ~= nil then cc.tb[k] = at[k] end
+    end
+  end
+  return true
+end
+-- 清空角色级配置（诊断/测试用；**不给玩家入口**）
+function EVAL_TB_CHAR_RESET()
+  local cc = rawget(_G, "EVAL_HELP_CHAR")
+  if type(cc) ~= "table" then return false end
+  cc.tb = {}
+  return true
+end
+-- ★★★路由代理：`tbCfg()` 的返回值。读/写**角色键**落到 EVAL_HELP_CHAR.tb，其余落账号表。
+--   ★为什么要代理而不是「把每个调用点都改一遍」：生产里 tb.* 的读写有上百处（UI 渲染、行模型、
+--     拖拽记忆…），逐处改既容易漏又必然引入回归；代理让**调用点一个字不动**，路由只有一份实现。
+--   ★代理表**绝不进存档**（它只是读写入口，真正落盘的是那两个普通表）。
+local tbRouter
+local function tbCfgAccount()
+  local c = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(c) ~= "table" then return nil end
+  if type(c.tb) ~= "table" then c.tb = {} end
+  return c.tb
+end
+local function tbMakeRouter()
+  if tbRouter then return tbRouter end
+  tbRouter = setmetatable({}, {
+    __index = function(_, k)
+      if TB_CHAR_KEYS[k] then return EVAL_TB_CHAR_STORE()[k] end
+      local at = tbCfgAccount()
+      if not at then return nil end
+      -- ★★绝不能写 `return at and at[k] or nil`：Lua 里 `false or nil` **还是 nil** ——
+      --   于是所有「值本身就是 false」的账号开关（chanJoin / colorClass / wdebug…）经代理读出来全变成 nil，
+      --   调用方一律按默认值处理 → **用户关掉的开关自己又开了**。
+      --   本轮实测：组 79 的「开关关掉后判据读到的就是关」当场 got=true（这正是本项目
+      --   「`cond and f() or fallback` 在 f() 返 false 时恒取 fallback」那条老坑的同一个形状）。
+      return at[k]
+    end,
+    __newindex = function(_, k, v)
+      if TB_CHAR_KEYS[k] then EVAL_TB_CHAR_STORE()[k] = v return end
+      local at = tbCfgAccount()
+      if at then at[k] = v end
+    end,
+  })
+  return tbRouter
+end
+-- 读值口：路由代理本体（断言用它验证「同一个键写到哪张表」）
+function EVAL_TB_ROUTER() return tbMakeRouter() end
+
 local function tbMigrateQuest(t)
   if type(t) ~= "table" then return end
   if t.questAccept == nil and t.questTurnIn == nil and t.quest ~= nil then
@@ -235,7 +334,10 @@ local function tbCfg()
 -- ★1.73.24 用户要求：右键聊天名字 → 公会邀请 / 复制名字 / /s 说出名字（默认开）
 if c.tb.nameMenu == nil then c.tb.nameMenu = true end
   tbMigrateBuy(c.tb) -- ★1.71.3 自动购买：老条目补 每次数量/启用 字段
-  return c.tb
+  -- ★★★1.74.20 返回**路由代理**（不是 c.tb 本身）：角色键（三个助手）自动落到 EVAL_HELP_CHAR.tb，
+  --   账号键落上面这张 c.tb —— 于是上百处 `tb.xxx` 的既有调用点**一个字都不用改**。
+  --   ★注意：上面这一串迁移只动**账号**键，与角色键无关（别把 c.tb 当成了全部配置）。
+  return tbMakeRouter()
 end
 -- ★1.73.12 聊天窗挂载点清单（「频道进出屏蔽」与「聊天名字着色」**共用**同一个包装体）：
 --   · 真客户端里 DEFAULT_CHAT_FRAME 与 ChatFrame1 常常是**同一个对象** → 不能按名字去重，
@@ -2208,6 +2310,13 @@ end
 
 function EVAL_TB_SIR_HANDLE(link, button)
   if type(link) ~= "string" then return false end
+  -- ★1.74.24 稀有提醒转播的名字链接（EHRW:<名字>）：点它 = **选中那只稀有**（分派在 EVAL_RW_LINK_CLICK，
+  --   里面就是一次 TargetByName；选不中由它自己如实报错）。★1.74.26 起链接只带名字、不带坐标。
+  --   ★无论哪个键都**吃掉**（return true）：绝不把自家 token 丢给客户端的物品处理函数。
+  if string.find(link, "^EHRW:") then
+    if type(EVAL_RW_LINK_CLICK) == "function" then pcall(EVAL_RW_LINK_CLICK, link, button) end
+    return true
+  end
   -- ★★★1.73.46 分享封皮链接：点它 = **弹出「方案分享」窗让玩家自己确认**（用户：「不要自动导入」）；
   --   只认 EHPF: 前缀，其余原样放行。★旧行为是直接导入 —— 一个没有确认的写操作，已按用户要求改掉。
   if string.find(tostring(link or ""), "^EHPF:") then
@@ -4001,6 +4110,11 @@ local function tbModel()
     { t = "h", label = L("TB_H_RIDE") },
     { t = "c", key = "dismount", label = L("TB_DISMOUNT"), tip = L("TB_DISMOUNT_TIP"), wip = L("TB_WIP_TIP") },
     { t = "c", key = "dismountAuto", label = L("TB_DISMOUNT_AUTO"), tip = L("TB_DISMOUNT_AUTO_TIP"), wip = L("TB_WIP_TIP") },
+    -- ★1.74.27 用户要求：「将以上功能提取到独立文件内 ./tools 然后再工具箱内设置开关.」
+    --   稀有提醒转播（tools/RareWatch.lua）的**总开关**放这里；★读写走实现自己的单一来源
+    --   （EVAL_RW_ENABLED / EVAL_RW_SET），**不另开一个配置键** —— 免得开关与实现两处真值打架。
+    { t = "h", label = L("TB_H_RAREWATCH") },
+    { t = "rw", key = "rareWatch", label = L("TB_RAREWATCH"), tip = L("TB_RAREWATCH_TIP") },
   }
 end
 
@@ -4027,6 +4141,17 @@ function EVAL_TEST_TB_CHV_FOR(key)
   for k = 1, TB.ROWS * cols do
     local r = TB.rows[k]
     if r and r.item and r.item.key == key and r.chv then return r.chv.btn end
+  end
+  return nil
+end
+-- ★1.74.27 读值口：取某 key 那行的**勾选框 + 勾号**（走真实控件 + 刷新时记下的实际映射）——
+--   稀有提醒开关的判据要能走**真实 OnClick**（不是直调 EVAL_RW_SET，那等于测自己）。
+function EVAL_TEST_TB_CHK_FOR(key)
+  if not TB.built then return nil end
+  local cols = TB.cols or TB_COLS
+  for k = 1, TB.ROWS * cols do
+    local r = TB.rows[k]
+    if r and r.item and r.item.key == key and r.chk then return r.chk, r.mark end
   end
   return nil
 end
@@ -4164,6 +4289,11 @@ function EVAL_TB_REFRESH()
           local key = it.key
           r.get = function() local tb = tbCfg() return tb and tb[key] and true or false end
           r.set = function(v) local tb = tbCfg() if tb then tb[key] = v and true or false end end
+        elseif it.t == "rw" then
+          -- ★1.74.27 稀有提醒转播：开关真值在 tools/RareWatch.lua（EVAL_RW_ENABLED/EVAL_RW_SET），
+          --   这里只是**它的一个面板**，不存第二份配置（改一处即改全局；`/eh go 稀有 开|关` 与它同源）
+          r.get = function() return (type(EVAL_RW_ENABLED) == "function") and EVAL_RW_ENABLED() or false end
+          r.set = function(v) if type(EVAL_RW_SET) == "function" then EVAL_RW_SET(v) end end
         elseif it.t == "g" then -- CVar 直读型（公会上下线提示）
           r.get = function() return type(GetCVar) == "function" and GetCVar("guildMemberNotify") == "0" end
           r.set = function(v) if type(SetCVar) == "function" then SetCVar("guildMemberNotify", v and 0 or 1) end end
@@ -4369,6 +4499,11 @@ function EVAL_TB_BUILD(root, page, refreshes)
       if row.modelKey == "dismountAuto" then
         if type(EVAL_DH_EVENTS_ENSURE) == "function" then pcall(EVAL_DH_EVENTS_ENSURE) end
         if type(EVAL_TB_REFRESH) == "function" then pcall(EVAL_TB_REFRESH) end
+      end
+      -- ★1.74.27 稀有提醒转播：开关**即时生效**（转播/点击时各自查开关）→ 顺手把状态报一遍，
+      --   玩家立刻看到「开了/关了 + 挂上了没 + 已转播几次」（不必再去敲命令确认）
+      if row.modelKey == "rareWatch" then
+        if type(EVAL_RW_CMD) == "function" then pcall(EVAL_RW_CMD, "go 稀有") end
       end
       EVAL_TB_REFRESH()
     end)

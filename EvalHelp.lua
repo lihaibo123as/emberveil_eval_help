@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.74.16"
+local VERSION = "1.74.27"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -84,6 +84,19 @@ local CLASS_LIST = EVAL_CLASS_LIST
 local ui = { root = nil }
 local UI_TICK = 0.15
 local uiLastTick = 0
+
+-- ★★★1.74.17 战斗信息UI 技能图标带的**列数与行数**（用户：「每行8个.超过2行的时候更多的就不显示了.
+--   需求是需要能自动换行.自适应高度换行图标」）。
+--   ★为什么抽成文件级纯函数：行数现在有**两个**消费者 —— BUILD 用它定池子与帧高、tick 用它判断
+--     「要不要重建」。两处各写一遍公式，只要有一天不相等，就会变成**每 0.15s 重建一次的无限循环**
+--     （这一轮做变异测试时当场撞到：把池子写成常量 16 而公式仍算 1 行 → 每帧重建、界面乱掉）。
+--   ★单一来源之后，「BUILD 算的」与「tick 算的」在结构上**不可能**不一致。
+local UI_CELL_COLS = 8
+local function uiCellRows(n)
+  local v = tonumber(n) or 0
+  if v < 0 then v = 0 end
+  return math.max(1, math.ceil(v / UI_CELL_COLS))
+end
 
 local function uiCfg()
   if not cfg then cfg = EVAL_HELP_CONFIG or {}; EVAL_HELP_CONFIG = cfg end
@@ -176,17 +189,18 @@ end
 --   调用方各自退回原有配色，**绝不硬编一个品阶**（本项目「查不到与没有是两件事」的老账）。
 --   ★**现算不缓存**（用户 1.73.49：「品阶每次打开方案自动计算完善」）：EVAL_PROFILE_SCORE 只做 table.getn 级
 --     累加、不调任何客户端 API ⇒ 放在 0.15s 的 tick 里也是安全的。
+-- ★★★1.74.19 改成走**单一入口** EVAL_PROFILE_TIER（它自带覆盖封顶）：
+--   旧写法 `EVAL_SHARE_SEAL_TIER(EVAL_PROFILE_SCORE(p))` 只传分数 ⇒ 封顶整个失效，而且**看不出来**
+--   （分数与档位都正常，只是天花板没生效）—— 源码检查 COVERAGE CAP WIRING CHECK 守这条。
+--   返回值多两个：覆盖大类数、档位表（含 capped/cap/eff，透明度文案要用）。
 local function uiProfileTierRGB(prof)
   if type(prof) ~= "table" then return nil end
-  if type(EVAL_PROFILE_SCORE) ~= "function" or type(EVAL_SHARE_SEAL_TIER) ~= "function"
-     or type(EVAL_SHARE_SEAL_TIER_RGB) ~= "function" then return nil end
-  local okS, sc = pcall(EVAL_PROFILE_SCORE, prof)
-  if not okS or type(sc) ~= "number" then return nil end
-  local okT, ti = pcall(EVAL_SHARE_SEAL_TIER, sc)
-  if not okT or type(ti) ~= "number" then return nil end
+  if type(EVAL_PROFILE_TIER) ~= "function" or type(EVAL_SHARE_SEAL_TIER_RGB) ~= "function" then return nil end
+  local okT, ti, tierTbl, sc, nCls = pcall(EVAL_PROFILE_TIER, prof)
+  if not okT or type(ti) ~= "number" or type(sc) ~= "number" then return nil end
   local okR, rgb = pcall(EVAL_SHARE_SEAL_TIER_RGB, ti)
   if not okR or type(rgb) ~= "table" then return nil end
-  return rgb, ti, sc
+  return rgb, ti, sc, nCls, tierTbl
 end
 
 -- ★★★1.73.58 **方案按钮配色**（用户：「方案根据品阶染色」）——与**配置窗方案列表 / 案例模版**同一套规则：
@@ -220,19 +234,19 @@ local function uiProfileTierText()
   local w2 = uiWarCfg()
   local prof = w2.profiles and w2.profiles[w2.activeProfile or 1]
   if type(prof) ~= "table" then return nil end
-  local rgb, ti, sc = uiProfileTierRGB(prof) -- ★1.73.58 与方案行/方案列表共用同一个读值口
-  if not rgb then return nil end
-  -- ★★注意 pcall 的返回：`EVAL_SHARE_SEAL_TIER` 返回 **档位序号 + 品阶表** 两个值 ⇒
-  --   pcall 之后是 ok, 序号, 品阶表 —— 写成 `local okT, tier = pcall(...)` 拿到的是**序号**（number），
-  --   于是 `type(tier) ~= "table"` 恒成立 → 整个徽标恒为 nil（1.73.59 实踩，组 164 当场报 got=nil）。
-  local okT, _pick, tier = pcall(EVAL_SHARE_SEAL_TIER, sc)
-  if not okT or type(tier) ~= "table" then return nil end
+  local rgb, ti, sc, nCls, tier = uiProfileTierRGB(prof) -- ★1.73.58 与方案行/方案列表共用同一个读值口
+  if not rgb or type(tier) ~= "table" then return nil end
+  -- ★★1.74.19 档位表**由 uiProfileTierRGB 一并交出来**（它内部走单入口 EVAL_PROFILE_TIER）——
+  --   旧写法在这里又 pcall 了一次 EVAL_SHARE_SEAL_TIER(纯分数)：既重复、又会**把覆盖封顶漏掉**。
+  --   （历史坑留着：pcall 多返回值的解包必须写在一条本地语句里，别用 `local okT, tier = pcall(...)`）
   local sym = ""
   if type(EVAL_SHARE_SEAL_SYMBOL) == "function" then
     local okY, sy = pcall(EVAL_SHARE_SEAL_SYMBOL, ti)
     if okY and type(sy) == "string" then sym = sy end
   end
-  return { tier = ti, score = sc, text = "[" .. sym .. tostring(tier.name or "") .. "]", rgb = rgb }
+  -- ★1.74.19 一并交出覆盖数与封顶状态：标题栏 tooltip / 取证命令要用它说明「为什么分高却档低」
+  return { tier = ti, score = sc, coverage = nCls, capped = tier.capped and true or false, cap = tier.cap,
+           text = "[" .. sym .. tostring(tier.name or "") .. "]", rgb = rgb }
 end
 
 -- ★★★1.73.57 标题栏的**玩家头衔**（用户：「显示玩家的头衔」）。
@@ -298,7 +312,12 @@ local function uiTitleBadgePaint(set)
   local function put(fs, txt, rgb, r2, g2, b2)
     if not fs then return end
     local okc, cur = pcall(fs.GetText, fs)
-    if not (okc and tostring(cur or "") == txt) then pcall(fs.SetText, fs, txt) end
+    -- ★★1.74.19 判据必须是「**当前是个字符串**且与目标相同」才跳过写入：
+    --   只写 `tostring(cur or "") == txt` 时，**刚建出来、从没写过字的 FontString**（GetText 返回 nil）
+    --   会被判成「已经是空串了」→ 跳过 SetText → 它永远是 nil。
+    --   本轮实测：技能带行数自适应加了「重建」之后，重建出来的新帧正好落进这个洞 ——
+    --     档位徽标该显示空串时的断言读到 nil（组 164 ④ got=nil want=""），界面表现是**这一格根本没字**。
+    if not (okc and type(cur) == "string" and cur == txt) then pcall(fs.SetText, fs, txt) end
     if rgb then
       pcall(fs.SetTextColor, fs, rgb.r, rgb.g, rgb.b)
     else
@@ -402,6 +421,7 @@ function EVAL_HELP_UI_BUILD()
   ui.swingBar, ui.swingFill, ui.swingText, ui.swingW = nil, nil, nil, nil
   ui.profBtns, ui.profCells = nil, nil
   ui.profRows, ui.profNeed, ui.profAvail, ui.profPad, ui.profCap, ui.profSig = nil, nil, nil, nil, nil, nil
+  ui.cellCols, ui.cellRows, ui.cellCount = nil, nil, nil -- ★1.74.17 技能带行/列/格数（同上：不清会把「这一轮没建」盖掉）
   ui.tierText, ui.tierShown, ui.tierScore, ui.tierIdx = nil, nil, nil, nil -- ★1.73.55 标题栏档位徽标（同上：不清会写成幽灵控件）
   ui.titleText, ui.titleShown, ui.titleCustom = nil, nil, nil -- ★1.73.57 标题栏玩家头衔（同上）
   ui.planText, ui.planShown = nil, nil -- ★1.73.62 标题栏当前方案名（同上）
@@ -708,14 +728,29 @@ function EVAL_HELP_UI_BUILD()
     ui.profSig = sig0
     y = y + rows * (btnH + PGAP) + gap -- 1.56.0 多行高度（行数按名字实宽算，行数变了帧高随之变）
 
-    -- 技能图标带（1.46.0 两行合一：内容=激活方案技能，8 格/行超过自动换第二行，最多 16 格；
-    -- 悬停 tooltip 看触发条件；左键=切启用/停用、右键=开编辑窗；亮金=条件当前满足；动作条技能带冷却倒数）
+    -- 技能图标带（内容 = 激活方案技能；悬停 tooltip 看触发条件；左键=切启用/停用、右键=开编辑窗；
+    -- 亮金=条件当前满足；动作条技能带冷却倒数）
+    -- ★★★1.74.17 用户（截图）：「战斗UI 每行8个.超过2行的时候更多的就不显示了.需求是需要能自动换行.
+    --   自适应高度换行图标」——旧实现是**写死的 2 行 16 格**（for i = 1, 16 + 帧高按两行预留），
+    --   第 17 条技能起**连格子都没有**、静默消失（正是用户截图里看到的「超过 2 行就不显示」）。
+    --   ⇒ 改成**按当前激活方案的技能数现算行数**：
+    --     · 每行 CELL_COLS 格（用户定的列数）→ 池子 = ceil(n/8)*8 格（至少 1 行）；
+    --     · 帧高 = 行数 × 行距 + 底部内边距（**自适应高度**，下面的内容跟着往下挪）；
+    --     · 行数变了（配置窗增删技能 / 换方案 / 导入分享）→ tick 触发**整体重建**（见 EVAL_HELP_UI_TICK）。
+    --   ★为什么必须重建而不是「多建一批空格子再 Hide」：帧高只在 BUILD 里算，
+    --     Hide 做不到「把下面的内容收上来」——本文件「隐藏 = 不画」的既有判据（1.71.12 同一理由）。
     local profCells = {}
     local pcell = math.floor(24 * z)
     local pgap2 = math.floor(3 * z)
-    for i = 1, 16 do
-      local row0 = math.floor((i - 1) / 8)
-      local col0 = (i - 1) - row0 * 8
+    local CELL_COLS = UI_CELL_COLS -- ★每行格数唯一来源（文件级常量；这里只取个短名）
+    local actP0 = w20.profiles and w20.profiles[w20.activeProfile or 1]
+    local nSkill0 = (actP0 and actP0.skills) and table.getn(actP0.skills) or 0
+    -- ★行数走**同一个** uiCellRows（tick 的重建判据也调它）→ 两处结构上不可能算出不同答案
+    local cellRows = uiCellRows(nSkill0)
+    local cellCount = cellRows * CELL_COLS -- 池子补齐到整行（最后一行的空格子在刷新时隐藏）
+    for i = 1, cellCount do
+      local row0 = math.floor((i - 1) / CELL_COLS)
+      local col0 = (i - 1) - row0 * CELL_COLS
       local px = pad + col0 * (pcell + pgap2)
       local cb = CreateFrame("Button", nil, root)
       cb:SetWidth(pcell) cb:SetHeight(pcell)
@@ -775,8 +810,11 @@ function EVAL_HELP_UI_BUILD()
       profCells[i] = { btn = cb, bg = cbg, icon = cicon, text = ctext }
     end
     -- ★1.71.12 同上：块内赋值（子开关「方案」= 关时既没有方案按钮也没有图标格）
-    ui.profBtns, ui.profCells = profBtns, profCells -- 1.46.0 技能带=profCells（两行合一，ui.cells 已废）
-    y = y + 2 * (pcell + pgap2) + pad -- 固定预留两行高度（空位刷新时整格隐藏，窗口尺寸稳定）
+    ui.profBtns, ui.profCells = profBtns, profCells -- 1.46.0 技能带=profCells（ui.cells 已废）
+    -- ★1.74.17 交出行/列/格数与行距：tick 的重建判据与断言读值口都读它（**单一来源**，别处不再各算一份）
+    ui.cellCols, ui.cellRows, ui.cellCount = CELL_COLS, cellRows, cellCount
+    ui.cellSize, ui.cellGap = pcell, pgap2
+    y = y + cellRows * (pcell + pgap2) + pad -- ★1.74.17 高度**跟着行数走**（原来写死预留两行）
   else
     y = y + pad -- 方案块不画时只留底部内边距（否则内容贴着标题栏下缘）
   end
@@ -851,6 +889,25 @@ end
 -- 每个心跳刷新（窗口隐藏时直接返回——Cat 同款）
 function EVAL_HELP_UI_TICK()
   if not ui.root or not ui.root:IsVisible() then return end
+
+  -- ★★★1.74.17 技能带**行数自适应**的重建判据（用户：「超过2行的时候更多的就不显示了.需求是需要能自动换行.
+  --   自适应高度换行图标」）：帧高只在 BUILD 里算，所以技能数一变就必须**整体重建**。
+  --   ★放这里（tick 最前面、状态刷新之前）的理由：三条改技能数的路都会经过它，一个判据全覆盖——
+  --     ①配置窗增删技能 ②左键切方案/一键宏换套路 ③导入分享替换方案；都不必各自记得去调 BUILD。
+  --   ★代价可控：只比一个整数（table.getn），**不量宽、不扫动作条**；不等才重建，重建后立刻 return
+  --     （本轮拿到的 ui.* 全是旧引用，继续往下画就是写幽灵控件——文件开头那条老坑）。
+  --   ★拿不到技能数（方案还没建）时 needRows 兜底 1，与 BUILD 的最小池子一致，不会来回抖。
+  if ui.schemeOn and ui.cellRows then
+    local wT = uiWarCfg()
+    local pT = wT.profiles and wT.profiles[wT.activeProfile or 1]
+    local nT = (pT and pT.skills) and table.getn(pT.skills) or 0
+    local needRows = uiCellRows(nT) -- ★与 BUILD **同一个**函数（各写一份 = 迟早不一致 = 每帧重建）
+    if needRows ~= ui.cellRows then
+      EVAL_HELP_UI_BUILD()
+      if ui.root then pcall(ui.root.Show, ui.root) end
+      return
+    end
+  end
 
   -- 统一走角色状态表（每次心跳刷新一次，之后只读变量——Cat 思路）
   EVAL_HELP_UPDATE_STATE()
@@ -1566,12 +1623,26 @@ local function cfgBuild()
       pcall(function()
         GameTooltip:SetOwner(pb, "ANCHOR_RIGHT")
         GameTooltip:AddLine(tostring(prof.name or "?"), 1, 0.82, 0.2)
-        local sc = (type(EVAL_PROFILE_SCORE) == "function") and EVAL_PROFILE_SCORE(prof) or nil
-        local tier = (sc ~= nil and type(EVAL_SHARE_SEAL_TIER) == "function") and select(2, EVAL_SHARE_SEAL_TIER(sc)) or nil
+        -- ★★★1.74.19 走**单一入口** EVAL_PROFILE_TIER：评分口径重做后，品阶不只是分数 ——
+        --   还要看**覆盖大类数**（覆盖 1/2/3 类分别封顶 34/69/119，≥4 类才不封顶）。
+        --   ★透明度是硬要求：「125 分却是稀有」必须在 tooltip 里当场说清，否则玩家只会当成 bug。
+        local parts = (type(EVAL_PROFILE_PARTS) == "function") and EVAL_PROFILE_PARTS(prof) or nil
+        local sc = parts and parts.score or nil
+        local tier = (sc ~= nil and type(EVAL_SHARE_SEAL_TIER) == "function")
+          and select(2, EVAL_SHARE_SEAL_TIER(sc, parts and parts.nClasses)) or nil
         if type(tier) == "table" and tier.color then
           local r, g, b = 1, 1, 1
           if type(EVAL_COLOR_RGB) == "function" then local rr, gg, bb = EVAL_COLOR_RGB(tier.color); r, g, b = rr or 1, gg or 1, bb or 1 end
-          GameTooltip:AddLine(L("PROF_TIP_RATING") .. "：" .. tostring(tier.name) .. "（" .. tostring(sc) .. " 分）", r, g, b)
+          local scoreTxt = tostring(sc) .. " 分"
+          if type(EVAL_SHARE_SEAL_SCORE_TEXT) == "function" then
+            scoreTxt = EVAL_SHARE_SEAL_SCORE_TEXT(sc, parts and parts.nClasses, tier)
+          end
+          GameTooltip:AddLine(L("PROF_TIP_RATING") .. "：" .. tostring(tier.name) .. "（" .. scoreTxt .. "）", r, g, b)
+          if tier.capped then
+            -- ★封顶时**如实说明原因**（差几类才解封也算出来：差 4 类是神级门槛）
+            GameTooltip:AddLine(string.format(L("PROF_TIP_CAPPED"), tostring(parts and parts.nClasses or 0)),
+              0.95, 0.75, 0.45)
+          end
         end
         GameTooltip:AddLine(L("PROF_TIP_SOURCE") .. "：" .. tostring(EVAL_PROF_AUTHOR_LABEL(prof)), 0.85, 0.85, 0.85)
         GameTooltip:AddLine(tostring(table.getn(prof.skills or {})) .. " " .. L("PROF_TIP_SKILLS"), 0.7, 0.7, 0.7)
@@ -1804,6 +1875,11 @@ local function cfgBuild()
     function(v)
       if type(EVAL_SHARE_RECV_TOGGLE) == "function" then pcall(EVAL_SHARE_RECV_TOGGLE) end
     end, L("SH_RECV_SW_TIP"))
+  -- ★★1.74.17 把**开关横排的右缘**交出去（本行也是底部同一行，会与新的翻页按钮组抢地方）。
+  --   swItem 每次推进 swX 时**多加**了一个 SW_ITEM_GAP → 最后一项的真实右缘 = swX − SW_ITEM_GAP。
+  --   ★为什么必须暴露：断言要能证「开关横排与翻页按钮组不重叠」；读不到就只能靠眼看截图
+  --     （本项目 1.71.2 加 EVAL_TEST_CFG_NAV 的起因正是这个）。
+  if cfgWin.layout then cfgWin.layout.swRight = swX - SW_ITEM_GAP end
 
   -- 右侧：技能规则列表（顺序=优先级；勾选=技能配置开关）
   local RX2 = 128
@@ -1957,17 +2033,54 @@ local function cfgBuild()
     warUI.rows[ri] = row
   end
 
-  -- 滚动条（1.33.0：技能数取消上限后的超高滚动）：▲ 上翻 / ▼ 下翻 + 滚轮；仅超出可见行数时显示
-  --   ★1.71.9 与调序按钮一起换成三角（原先的 ^ 像横线、v 是字母）。
+  -- ★★★1.74.17 用户（截图）：「查看系统记忆和图标库的滚动条实现方式，将技能列表的滚动条方式调整下。
+  --   在有滚动条的时候上一页和下一页按钮放置在底部案例模版按钮左侧、右对齐。」
+  --   → 与工具箱 1.73.9 的同款改法（**图标库范式**）：撤掉列表右栏那两个 ▲/▼，
+  --     改成**底部导航行**上的两个**文字按钮** [上翻][下翻]，整组右缘停在 [案例模版] 左边。
+  --   ★几何单一来源：NAV_X0（案例模版左边缘）/ NAV_ROW_Y（导航行顶边）/ NAV_H（导航行高）
+  --     全部来自上方 navBtn 那一组常量 —— **不另写一份「关闭左边缘 − N」**：
+  --     两份真值迟早漂移（CLAUDE.md §5.4「同一行中线对齐」「布局常量单一来源」）。
+  --   ★为什么高用 NAV_H 而不是图标库那种 15：本按钮与 [案例模版][分享][关闭] **同一行**，
+  --     同一行里混用不同高度就必然要靠中线对齐补救 → 直接同高同顶边，两个方向都对得上。
+  --   ★为什么是**整页**步进：与工具箱/图标库同一语义（用户说的是「上一页/下一页」）；
+  --     滚轮仍是 ±1 行（细调），两条粒度各司其职。
+  --   ★文案复用 TB_UP/TB_DN（「上翻/下翻」）—— 同一个概念不写第二套字（三语言已齐，LANG KEY CHECK 守）。
+  local SW_BW, SW_GAP, SW_TAIL = 52, 6, 6
+  local swRight = NAV_X0 - SW_TAIL          -- 按钮组右缘（停在 [案例模版] 左边）
+  local swX = swRight - (SW_BW * 2 + SW_GAP) -- 按钮组左端
+  local function swBtn(x, label, fn)
+    local b = CreateFrame("Button", nil, root)
+    b:SetWidth(SW_BW) b:SetHeight(NAV_H)
+    b:SetPoint("TOPLEFT", root, "TOPLEFT", x, NAV_ROW_Y)
+    pcall(b.EnableMouse, b, true)
+    pcall(b.RegisterForClicks, b, "LeftButtonUp")
+    local bb = b:CreateTexture(nil, "BACKGROUND")
+    uiSolid(bb, 0.16, 0.13, 0.08, 1)
+    bb:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+    bb:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+    local bt = uiText(b, 9, 0.95, 0.82, 0.35)
+    bt:SetPoint("CENTER", b, "CENTER", 0, 0)
+    pcall(bt.SetWidth, bt, SW_BW - 4) -- 限宽+不折行（不限宽会溢出压到邻居）
+    pcall(bt.SetNonSpaceWrap, bt, false)
+    bt:SetText(label)
+    b:SetScript("OnClick", fn)
+    -- ★两个都登记进 Wp：显隐契约要求**显式清单**（文本是按钮的子件，但仍按本文件惯例显式登记）
+    table.insert(Wp, b)
+    table.insert(Wp, bt)
+    return b, bt
+  end
   warUI.offset = warUI.offset or 0
-  warUI.scrollUp, warUI.scrollUpText = mkSmall(94, -74, 14, "▲", function()
-    warUI.offset = math.max(0, (warUI.offset or 0) - 1)
+  warUI.scrollUp, warUI.scrollUpText = swBtn(swX, L("TB_UP"), function()
+    warUI.offset = math.max(0, (warUI.offset or 0) - ROWS) -- 整页
     EVAL_WAR_TAB_REFRESH()
-  end, nil, true)
-  warUI.scrollDn, warUI.scrollDnText = mkSmall(94, -74 - (ROWS - 1) * 24, 14, "▼", function() -- 1.60.0 跟随动态行数（旧硬编码 -242）
-    warUI.offset = (warUI.offset or 0) + 1
-    EVAL_WAR_TAB_REFRESH() -- 上限在刷新里收敛
-  end, nil, true)
+  end)
+  warUI.scrollDn, warUI.scrollDnText = swBtn(swX + SW_BW + SW_GAP, L("TB_DN"), function()
+    warUI.offset = (warUI.offset or 0) + ROWS -- 整页；上限在刷新里收敛
+    EVAL_WAR_TAB_REFRESH()
+  end)
+  -- ★交给断言的真实几何（左端/右缘/顶边/高）——断言也可以直接读控件，这里只是省一次反算
+  warUI.scrollX, warUI.scrollRight, warUI.scrollTop, warUI.scrollH = swX, swRight, NAV_ROW_Y, NAV_H
+  warUI.scrollTailGap = SW_TAIL -- 按钮组右缘与 [案例模版] 左边缘之间的间隙（断言读它，不另写一份数）
   local okWheel = pcall(root.EnableMouseWheel, root, true)
   if okWheel then
     root:SetScript("OnMouseWheel", function(a, b)
@@ -2576,7 +2689,7 @@ local warRefreshCount = 0
 local function warRefreshTick() warRefreshCount = warRefreshCount + 1 end
 -- ★1.73.49 方案列表「品阶重算」次数（每次刷新按方案内容重算一次；判据读它证明「打开就算」）
 local warProfTierCalc = 0
--- ★1.71.9 断言入口：技能列表「调序 ▲▼」与「滚动 ▲▼」四个按钮的**真实文本**。
+-- ★1.71.9 断言入口：技能列表「调序 ▲▼」（★1.74.17 起滚动改文字按钮，只剩调序用三角）的**真实文本**。
 --   ★为什么必须读控件：用户看到的是控件上的字，生产代码里的那份常量只是副本 ——
 --     读常量 = 测自己（本项目「断言里写死布局常量」的老坑）。
 function EVAL_TEST_WAR_ARROWS()
@@ -2592,6 +2705,50 @@ function EVAL_TEST_WAR_ARROWS()
   local r1 = w.rows and w.rows[1]
   if r1 then out.rowUp = txt(r1.upText) out.rowDn = txt(r1.dnText) end
   return out
+end
+-- ★★★1.74.17 断言入口：技能列表底部「上一页/下一页」两个**文字按钮**的**真实几何 + 真实状态**。
+--   为什么必须有它：这次的原始诉求就是**位置**（「放置在底部案例模版按钮左侧、右对齐」）与
+--   **出现条件**（「在有滚动条的时候」）——这两条都只能读真控件：
+--     写死坐标 = 测自己；只验「按钮存在」挡不住「还在列表右栏里 / 平台一直挂着」。
+--   ★与 EVAL_TEST_CFG_NAV() 配对使用：[案例模版] 的左边缘从那边读，这里不另算一份。
+function EVAL_TEST_WAR_SCROLL()
+  local w = cfgWin.warUI or {}
+  local function txt(fs)
+    if not fs then return nil end
+    local ok, v = pcall(fs.GetText, fs)
+    return ok and v or nil
+  end
+  local function geo(b, fs)
+    if not b then return nil end
+    local okp, p, _r, _rp, ox, oy = pcall(b.GetPoint, b, 1)
+    local okw, aw = pcall(b.GetWidth, b)
+    local okh, ah = pcall(b.GetHeight, b)
+    local oks, sh = pcall(b.IsShown, b)
+    local okc, fn = pcall(b.GetScript, b, "OnClick")
+    return {
+      x = (okp and type(ox) == "number") and ox or nil,
+      y = (okp and type(oy) == "number") and oy or nil,
+      point = okp and p or nil,
+      w = (okw and type(aw) == "number") and aw or nil,
+      h = (okh and type(ah) == "number") and ah or nil,
+      shown = (oks and sh) and true or false,
+      hasClick = (okc and type(fn) == "function") and true or false,
+      label = txt(fs),
+      btn = b,
+      text = fs,
+    }
+  end
+  return {
+    up = geo(w.scrollUp, w.scrollUpText),
+    dn = geo(w.scrollDn, w.scrollDnText),
+    on = w.scrollOn and true or false, -- 生产自报的「有滚动条」状态（不靠 IsShown 反推）
+    tailGap = w.scrollTailGap,
+    groupX = w.scrollX,       -- 按钮组左端（生产自报，与真控件对读）
+    groupRight = w.scrollRight,
+    offset = w.offset or 0,   -- 当前滚动偏移（「整页步进」的判据读它）
+    rowsN = w.rowsN,          -- 可见行数（一页 = rowsN 行）
+    maxOff = w.maxOff,
+  }
 end
 function EVAL_TEST_WAR_REFRESH_COUNT() return warRefreshCount end
 -- ★★★1.73.49 品阶重算计数（用户：「品阶每次打开方案自动计算完善」）——「打开了就重算」这件事必须**可断言**
@@ -2733,11 +2890,21 @@ function EVAL_WAR_TAB_REFRESH()
   local rowsN = table.getn(warUI.rows) -- 1.33.3 修：ROWS 是 cfgBuild 内 local，本函数拿不到（nil 算术报错）
   local maxOff = math.max(0, cnt - rowsN)
   warUI.offset = math.max(0, math.min(warUI.offset or 0, maxOff))
+  warUI.maxOff, warUI.rowsN = maxOff, rowsN -- ★1.74.17 交给断言（「整页步进」要能读到真实行数与上限）
+  -- ★★★1.74.17 「有滚动条才显示上一页/下一页」：判据 = **技能数超出可见行数**（cnt > rowsN）。
+  --   ★按钮与它的文字**都要显式 Show/Hide**（本文件的可见性契约是「显式控件清单」，
+  --     不靠父子传播）——少一处 = 按钮没了但字还挂在底部（本项目「Hide 过的逐个 Show」同族坑）。
   if warUI.scrollUp then
-    if cnt > rowsN then
-      if warTabOn then pcall(warUI.scrollUp.Show, warUI.scrollUp) pcall(warUI.scrollDn.Show, warUI.scrollDn) end
-    else
-      if warTabOn then pcall(warUI.scrollUp.Hide, warUI.scrollUp) pcall(warUI.scrollDn.Hide, warUI.scrollDn) end
+    local need = (cnt > rowsN)
+    warUI.scrollOn = need -- 交给断言/探针的真实状态（不靠 IsShown 反推）
+    if warTabOn then
+      local swList = { warUI.scrollUp, warUI.scrollUpText, warUI.scrollDn, warUI.scrollDnText }
+      for i = 1, 4 do
+        local wgt = swList[i]
+        if wgt then
+          if need then pcall(wgt.Show, wgt) else pcall(wgt.Hide, wgt) end
+        end
+      end
     end
   end
   for ri, row in ipairs(warUI.rows) do
@@ -3928,23 +4095,60 @@ local CREATURE_BY_ID = {}
 for _, c in ipairs(CREATURE_TYPES) do CREATURE_BY_ID[c.id] = c end
 
 -- 条件类型分组（1.32.5 下拉美化）：金色组标题行不可选；SE_TYPES 本体顺序不动，仅展示层分组
+-- ★★★1.74.19 每组再加两个字段，供**品阶评分**用（用户：「审计方案的评级标准…增加评级难度」）：
+--   · w   = 该组条件的**权重**（写出它需要多少判断；越依赖场上信息越值钱）
+--   · cov = 该组归属的**覆盖大类**（A 自身 / B 目标 / C 光环 / D 技能 / E 队伍·候选）
+--     ★字段名**不能叫 cls**：examples/*.lua 的模版数据用的是「cls 等于一个带引号的职业名」，
+--       而 EXAMPLES TOC CHECK 会在全部生产文件里搜那个写法来抓「模版数据搬回来了」—— 撞名会让那道闸门**假红**。
+--   ★为什么权重与大类写在**这张表里**而不是另开一张：条件类型清单只有这样一份 ——
+--     另开一张就要靠人去同步这 44 个类型，而漏配的后果是**静默按 0 分算**（本项目最怕的那种失败）。
+--     写在组上 ⇒ 以后往某个组加类型，权重与大类自动继承；源码检查 COND WEIGHT CHECK 再兜一层。
 local SE_TYPE_GROUPS = {
-  { label = "CTG_1", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "swingLeft", "combat", "autoAttack", "autoShot", "wandShoot", "alt", "shift", "ctrl", "form" } }, -- ★1.71.2（第十五轮）施法族（施法中/施法时间/施法剩余时间）已统一移入 CTG_4
-  { label = "CTG_2", ids = { "tHpPct", "hasTarget", "canAttack", "canBleed", "tFriendly", "tHostile", "tNeutral", "isElite", "isBoss", "tInCombat", "tClass", "tCreature", "immune" } }, -- ★1.71.2（第十五轮）目标施法族（目标施法中/目标施法时间/目标施法剩余时间）已统一移入 CTG_4
-  { label = "CTG_3", ids = { "hasBuff", "pDebuff", "hasDebuff", "tBuff" } }, -- 1.54.0 光环检查四型
+  { label = "CTG_1", w = 1, cov = "A", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "swingLeft", "combat", "autoAttack", "autoShot", "wandShoot", "alt", "shift", "ctrl", "form" } }, -- ★1.71.2（第十五轮）施法族（施法中/施法时间/施法剩余时间）已统一移入 CTG_4
+  -- ★★★1.74.19 COND WEIGHT CHECK 当场抓到的漏网之鱼：`target`（「选取目标」，1.32.0 起 hidden、下拉不再提供）
+  --   仍然在 SE_TYPES 里、**存量方案里还有**、求值也照跑 —— 它却不在任何分组里 ⇒
+  --   新口径下会被按 **0 分**算、也不计覆盖（静默少算一截）。归到「目标状态」：它就是选目标那件事。
+  --   ★hidden = true ⇒ 不会因此出现在条件下拉里（下拉那侧自己会跳过 hidden）。
+  { label = "CTG_2", w = 2, cov = "B", ids = { "tHpPct", "hasTarget", "canAttack", "canBleed", "tFriendly", "tHostile", "tNeutral", "isElite", "isBoss", "tInCombat", "tClass", "tCreature", "immune", "target" } }, -- ★1.71.2（第十五轮）目标施法族（目标施法中/目标施法时间/目标施法剩余时间）已统一移入 CTG_4
+  { label = "CTG_3", w = 2, cov = "C", ids = { "hasBuff", "pDebuff", "hasDebuff", "tBuff" } }, -- 1.54.0 光环检查四型
   -- ★1.70.47 队伍/团队条件单列一组：**队伍与团队各列一份**（用户要求：
   --   「条件类型: 队伍debuff / 队伍buff / 团队debuff / 团队buff」——直接作为可选类型出现，不用范围下拉）
-  { label = "CTG_5", ids = { "teamHp", "teamMana", "teamBuff", "teamDebuff", "teamRaidHp", "teamRaidMana", "teamRaidBuff", "teamRaidDebuff" } },
+  { label = "CTG_5", w = 3, cov = "E", ids = { "teamHp", "teamMana", "teamBuff", "teamDebuff", "teamRaidHp", "teamRaidMana", "teamRaidBuff", "teamRaidDebuff" } },
   -- ★1.71.3 候选者条件组：**只在成员选取器那一行**的下拉里显示（见 typeBtn 的过滤），普通行不出现
-  { label = "CTG_6", ids = { "candHp", "candPower", "candBuff", "candDebuff" } },
+  { label = "CTG_6", w = 3, cov = "E", ids = { "candHp", "candPower", "candBuff", "candDebuff" } },
   -- ★★★1.71.2（第十五轮）施法族归并（用户要求）：「自身施法相关 + 目标施法相关」全部并进本组。
   --   顺序 = 用户选定的 A 方案：**技能本身的状态 → 我的施法 → 目标的施法**（两段名字互为镜像：
   --   施法中/施法时间/施法剩余时间 ↔ 目标施法中/目标施法时间/目标施法剩余时间）。
   --   ★顺序本身就是需求，断言必须**钉住顺序**而不只钉成员（只钉成员时打乱排序照样全绿）。
   --   ★是「移」而不是「复制」：菜单里出现两条同名（例如两个「施法中」）用户根本没法分辨 →
   --     断言同时钉「本组必须有」与「原组必须没有」两条，只钉前者时复制也照样通过。
-  { label = "CTG_4", ids = { "ready", "usable", "notQueued", "inRange", "casting", "castEl", "castLeft", "tCasting", "tCastEl", "tCastLeft" } },
+  { label = "CTG_4", w = 1, cov = "D", ids = { "ready", "usable", "notQueued", "inRange", "casting", "castEl", "castLeft", "tCasting", "tCastEl", "tCastLeft" } },
 }
+
+-- ★★★1.74.19 评分侧的两个读值口（**唯一来源 = 上面那张分组表**，不另抄一份 44 项的清单）：
+--   Share.lua 的 EVAL_PROFILE_SCORE 在**另一个文件**，看不到这里的 local ⇒ 只能走全局函数。
+--   ★拿不到（kind 不在任何组）→ **如实返回 nil**：调用方按 0 分 / 不计覆盖，
+--     而源码检查 COND WEIGHT CHECK 会保证「44 个类型一个不漏」——不让它静默变成 0 分。
+local SE_COND_W, SE_COND_COV = {}, {}
+for _, grp in ipairs(SE_TYPE_GROUPS) do
+  for _, id in ipairs(grp.ids) do
+    SE_COND_W[id] = grp.w or 0
+    SE_COND_COV[id] = grp.cov
+  end
+end
+function EVAL_COND_WEIGHT(kind) return SE_COND_W[kind] end
+function EVAL_COND_CLASS(kind) return SE_COND_COV[kind] end
+-- 读值口：整张「分组 → 权重/大类/成员」清单（源码检查与断言读它，不必去猜那 44 个类型）
+function EVAL_COND_GROUP_TABLE()
+  local out = {}
+  for gi = 1, table.getn(SE_TYPE_GROUPS) do
+    local grp = SE_TYPE_GROUPS[gi]
+    local ids = {}
+    for i = 1, table.getn(grp.ids) do ids[i] = grp.ids[i] end
+    out[gi] = { label = grp.label, w = grp.w, cov = grp.cov, ids = ids }
+  end
+  return out
+end
 
 local seUI = { root = nil, ed = nil, rows = {} }
 
@@ -6977,6 +7181,37 @@ function EVAL_TEST_UI_CELLS()
   end
   return out
 end
+-- ★★★1.74.17 断言入口：战斗信息UI「技能图标带」的**真实网格几何**（每格坐标 / 共几格 / 帧高）。
+--   为什么必须有它：用户这次的诉求就是**自动换行 + 自适应高度**（原话：「每行8个.超过2行的时候更多的
+--   就不显示了.需求是需要能自动换行.自适应高度换行图标」）——而「第 17 格到底有没有 / 在第几行」
+--   只能从**真控件的坐标**看出来：读 ui.cellRows 那种生产常量等于**测自己**（本项目老坑）。
+--   ★故这里一律 pc.btn:GetPoint 现读；cols/rows/count 只作**交叉核对**（两者不一致就是生产算错了）。
+function EVAL_TEST_UI_GRID()
+  if not (ui and ui.profCells and ui.root) then return nil end
+  local out = { cols = ui.cellCols, rows = ui.cellRows, count = ui.cellCount,
+                cell = ui.cellSize, gap = ui.cellGap, cells = {} }
+  local okh, wh = pcall(ui.root.GetHeight, ui.root)
+  out.height = (okh and type(wh) == "number") and wh or nil
+  local okw, ww = pcall(ui.root.GetWidth, ui.root)
+  out.width = (okw and type(ww) == "number") and ww or nil
+  for i, pc in ipairs(ui.profCells) do
+    local btn = pc.btn
+    local okp, p, _r, _rp, ox, oy = pcall(btn.GetPoint, btn, 1)
+    local okwd, aw = pcall(btn.GetWidth, btn)
+    local okht, ah = pcall(btn.GetHeight, btn)
+    local oks, sv = pcall(btn.IsShown, btn)
+    out.cells[i] = {
+      x = (okp and type(ox) == "number") and ox or nil,
+      y = (okp and type(oy) == "number") and oy or nil,
+      point = okp and p or nil,
+      w = (okwd and type(aw) == "number") and aw or nil,
+      h = (okht and type(ah) == "number") and ah or nil,
+      shown = (oks and sv) and true or false,
+      btn = btn,
+    }
+  end
+  return out
+end
 
 -- ★★★1.74.2 断言入口：点战斗信息UI 技能带第 i 格（走它**真实的 OnClick 闭包**，可指定按键）。
 --   ★为什么必须走真实闭包：左/右键的分派就写在那一段里，直接调动作函数测不出「接线断了 / 分派写反」
@@ -7338,16 +7573,18 @@ function EVAL_HELP_TPL_BUILD()
       -- ★★★1.73.42e 用户要求：「案例模版内的方案根据以上方案等级配置对应的图标显示」
       --   品阶 = 技能条数 + 条件数（**与分享显示行同一套判定** EVAL_SHARE_SEAL_*）；图标来自 IconSem 语义表；
       --   ★按钮几何一律不动（免得破坏「分列/不重叠/不越界」那几条判据）——只把**文字让出图标位**。
-      local sScore = (type(EVAL_SHARE_SEAL_SCORE) == "function") and EVAL_SHARE_SEAL_SCORE(p.text) or nil
+      -- ★1.74.19 走 EVAL_SHARE_SEAL_PARTS：**封顶要用覆盖数**，只取分数会把封顶漏掉
+      local sParts = (type(EVAL_SHARE_SEAL_PARTS) == "function") and EVAL_SHARE_SEAL_PARTS(p.text) or nil
+      local sScore = sParts and sParts.score or nil
       if sScore then
-        local tiIdx = select(1, EVAL_SHARE_SEAL_TIER(sScore))
+        local tiIdx = select(1, EVAL_SHARE_SEAL_TIER(sScore, sParts.nClasses))
         local tiPath = EVAL_SHARE_SEAL_ICON(tiIdx)
         local tiTex = b:CreateTexture(nil, "ARTWORK")
         pcall(tiTex.SetTexture, tiTex, tiPath)
         tiTex:SetPoint("LEFT", b, "LEFT", 3, 0)
         tiTex:SetWidth(13)
         tiTex:SetHeight(13)
-        b.tierIcon, b.tierIdx, b.tierScore = tiTex, tiIdx, sScore
+        b.tierIcon, b.tierIdx, b.tierScore, b.tierCov = tiTex, tiIdx, sScore, sParts.nClasses
         -- ★1.73.42z 文字区 = 按钮宽 − 内边距 − 图标位（与 tplTwoColPlan 的测量**同源**）→ 名字放得下、不再被裁。
         --   ★★★1.73.47 **「居中」已作废**（1.73.42z 那条「名称没居中」是上一轮的要求；用户现在要「左对齐·垂直居中」）
         --     ⇒ 对齐统一在建控件时设一次（LEFT + MIDDLE），这里**只让位、不动对齐**。
@@ -7380,10 +7617,22 @@ function EVAL_HELP_TPL_BUILD()
           GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
           GameTooltip:AddLine(tostring(p.name), 1, 0.85, 0.3)
           if b.tierScore then
-            local _, ti = EVAL_SHARE_SEAL_TIER(b.tierScore)
+            local _, ti = EVAL_SHARE_SEAL_TIER(b.tierScore, b.tierCov) -- ★1.74.19 带覆盖数（封顶生效）
             -- ★1.73.42l tooltip 里的品阶行也用**该品阶的颜色**（与行内名称、分享行一致）
-            GameTooltip:AddLine("品阶：" .. tostring(ti.name) .. "（评分 " .. tostring(b.tierScore) .. "）",
+            local stxt = tostring(b.tierScore) .. " 分"
+            if type(EVAL_SHARE_SEAL_SCORE_TEXT) == "function" then
+              stxt = EVAL_SHARE_SEAL_SCORE_TEXT(b.tierScore, b.tierCov, ti)
+            end
+            GameTooltip:AddLine("品阶：" .. tostring(ti.name) .. "（" .. stxt .. "）",
               b.tierTextR or 1, b.tierTextG or 0.9, b.tierTextB or 0.5)
+          end
+          -- ★1.74.22 作者备注 / 案例备注（用户要求：收录 Rainbow 的神圣风暴时写明作者与来源）
+          --   ★两条都是**可选字段**：老模版没写就不画这一行（不是空行、不是占位符）。
+          if type(p.author) == "string" and p.author ~= "" then
+            GameTooltip:AddLine(L("TPL_AUTHOR") .. "：" .. tostring(p.author), 0.55, 0.90, 1)
+          end
+          if type(p.note) == "string" and p.note ~= "" then
+            GameTooltip:AddLine(L("TPL_NOTE") .. "：" .. tostring(p.note), 0.60, 1, 0.70, true)
           end
           if p.desc then GameTooltip:AddLine(tostring(p.desc), 0.85, 0.85, 0.85, true) end
           for ln2 in string.gmatch(tostring(p.text or ""), "([^\n]+)") do
@@ -7398,7 +7647,8 @@ function EVAL_HELP_TPL_BUILD()
         pcall(GameTooltip.Hide, GameTooltip)
       end)
       b:SetScript("OnClick", function()
-        local ok, msg = ioImportText(p.text, "技能学院") -- ★1.74.5 案例模版来源
+        -- ★1.74.22 模版条目可带 `author`（玩家贡献的模版用它署名）：带上就记该署名，没带才是「技能学院」。
+        local ok, msg = ioImportText(p.text, p.author or "技能学院") -- ★1.74.5 案例模版来源
         say(msg)
         if ok then
           pcall(EVAL_WAR_TAB_REFRESH)
@@ -7817,7 +8067,9 @@ if type(SlashCmdList) == "table" then
         local st = (type(EVAL_TITLE_STATE) == "function") and EVAL_TITLE_STATE() or nil
         local draws = (st and st.draws) or {}
         for i = 1, 5 do
-          local cname = (type(EVAL_SHARE_SEAL_TIER) == "function") and select(2, EVAL_SHARE_SEAL_TIER(({ 1, 4, 7, 10, 13 })[i])).name or ("档" .. i)
+          -- ★1.74.19 取档名用的代表分**现算**（原来写死 {1,4,7,10,13}：阈值一改就串档，还不报错）
+          local cname = (type(EVAL_SEAL_TIER_SAMPLE) == "function" and type(EVAL_SHARE_SEAL_TIER) == "function")
+            and select(2, EVAL_SHARE_SEAL_TIER(EVAL_SEAL_TIER_SAMPLE(i))).name or ("档" .. i)
           local d = tonumber(draws[i])
           if d then
             say("  第 " .. i .. " 档（" .. cname .. "）：已抽到 " .. tostring(EVAL_L(EVAL_TITLE_KEY(i, d))))
@@ -8310,6 +8562,14 @@ if type(SlashCmdList) == "table" then
         EVAL_DH_CMD(msg)
       else
         say("骑乘助手模块没载入（tools/DismountHelper.lua 是否列进了 EvalHelp.toc？）")
+      end
+    -- ★1.74.23 稀有提醒转播（UnrealQuest 发现稀有那一刻 → 聊天框一行）：/eh go 稀有 [状态|开|关|试]
+    --   "go 稀有" = 3 + 6 = **9 字节**（string.sub 是字节下标 —— 1.74.5 在「go 喂食」上正是栽在这里）。
+    elseif string.sub(msg, 1, 9) == "go 稀有" then
+      if type(EVAL_RW_CMD) == "function" then
+        EVAL_RW_CMD(msg)
+      else
+        say("稀有转播模块没载入（EvalHelp.lua 里的 EVAL_RW_CMD）")
       end
     elseif msg == "go probe immune" then
       -- 免疫事件探针（1.35.1，免疫学习器前置验证）：30 秒全事件抓取——CHAT_MSG_* 或参数含「免疫/immune」
@@ -8931,6 +9191,8 @@ if type(SlashCmdList) == "table" then
       say("图标路径采集: /eh go icons —— 把客户端宏图标表全表路径写入存档（/reload 后落盘）")
       say("数据检索诊断: /eh ds | /eh ds hud 地图诊断浮层(推荐) | /eh ds snap 一键快照 | /eh ds rnd 随机点测试 + rndstat 统计 | /eh ds trace 轨迹日志 | /eh ds probe 详情行几何")
       say("地图标注: 一个「地图标注(N)」按钮即可——点开勾选类别（=开关）；/eh ds cat <类别> on|off 命令行等价 | /eh ds clear 清空")
+      say("稀有提醒转播: /eh go 稀有（状态）｜ 稀有 开 ｜ 稀有 关 ｜ 稀有 试 ｜ 稀有 目标 ｜ 稀有 目标探针 ｜ 稀有 链接")
+      say("　任务插件发现稀有的那一刻在聊天框报一行（名字按品阶染色 + 品阶 + 码数）；**点名字 = 选中它**（选不中如实报错）")
     else
       EVAL_HELP()
     end
@@ -9091,6 +9353,10 @@ function EVAL_TEST_LOADPOP_CLICK(which)
   return false
 end
 
+-- ★★★1.74.27 稀有提醒转播已**提取到独立文件** tools/RareWatch.lua（用户：「将以上功能提取到独立文件内 ./tools 然后
+--   再工具箱内设置开关.」）⇒ 本文件只留两个接线点：① VARIABLES_LOADED 里的 `pcall(EVAL_RW_INSTALL)`；
+--   ② 命令 `/eh go 稀有 …` 分支调 `EVAL_RW_CMD(msg)`。开关（工具箱 Tab）与实现**同源**：`EVAL_RW_ENABLED()` / `EVAL_RW_SET()`。
+
 -- ============ 初始化（SavedVariables 要等 VARIABLES_LOADED 才恢复） ============
 
 local init = CreateFrame("Frame", "EVAL_HELPInitFrame", UIParent)
@@ -9105,6 +9371,12 @@ init:SetScript("OnEvent", function(a, b)
   if eventName == "VARIABLES_LOADED" then
     cfg = EVAL_HELP_CONFIG or {}
     EVAL_HELP_CONFIG = cfg
+    -- ★★★1.74.20 角色级存档（三个助手）的**一次性迁移**：
+    --   老存档里 消耗品/喂食/骑乘 三个助手的配置在**账号表** cfg.tb 里；新增了角色级 EVAL_HELP_CHAR 之后，
+    --   每个角色第一次登录时从账号表**继承一次**当起点（账号里那份副本不删，作为还没登录过的角色的种子）。
+    --   ★必须放在这里：只有 VARIABLES_LOADED 之后账号表才真的读进来 —— 提前调会从空表「继承」出空配置、
+    --     却把 migrated 标志立上（种子就永久丢了）。Toolbox.lua 比本文件后载入 → 走全局函数调。
+    if type(EVAL_TB_CHAR_MIGRATE) == "function" then pcall(EVAL_TB_CHAR_MIGRATE) end
     ehResolveLang() -- 1.34.0 语言解析：cfg.lang 优先 → 客户端语言自动检测
     if cfg.log  == nil then cfg.log  = {} end -- 1.70.12 日志缓冲（旧存档里的 true/false 会在首次写入时自动转成表）
     -- 1.70.16：数据检索的取证开关恢复。必须在 VARIABLES_LOADED 再确认一次——
@@ -9165,6 +9437,9 @@ init:SetScript("OnEvent", function(a, b)
     --   顺带确保自动下马的事件帧在（它在模块内自查开关，关着不注册）
     if type(EVAL_DH_RESTORE) == "function" then pcall(EVAL_DH_RESTORE) end
     if type(EVAL_DH_EVENTS_ENSURE) == "function" then pcall(EVAL_DH_EVENTS_ENSURE) end
+    -- ★1.74.23 稀有提醒转播：**必须在这里装**（AddOns 按目录名排序，EvalHelp(E) 先于 UnrealQuest(U)，
+    --   载入期全局 UnrealQuest 还不存在）；对方缺席时如实记 mode=absent，不报错、不静默。
+    if type(EVAL_RW_INSTALL) == "function" then pcall(EVAL_RW_INSTALL) end
     -- 注册进出战斗事件（pcall 防御：事件名若不存在不会崩）
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_REGEN_DISABLED")
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_REGEN_ENABLED")

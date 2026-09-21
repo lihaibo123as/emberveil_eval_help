@@ -55,10 +55,10 @@ local CH_TEXT = "耗"         -- 没选中任何物品时的保底文字（不�
 local CH_GRAY = 0.35        -- 用完/不在背包时的灰度（三通道同值 = 纯灰）
 
 local function chCfg()
-  local c = EVAL_HELP_CONFIG
-  if type(c) ~= "table" then return nil end
-  if type(c.tb) ~= "table" then c.tb = {} end
-  return c.tb
+  -- ★★★1.74.20 用户：「消耗品助手…整块按角色」——本助手的所有配置（选中列表/贴图缓存/开关/图标位置）
+  --   现在存在**角色级存档** EVAL_HELP_CHAR.tb 里（唯一入口 EVAL_TB_CHAR_STORE，由 Toolbox.lua 提供）。
+  if type(EVAL_TB_CHAR_STORE) ~= "function" then return nil end
+  return EVAL_TB_CHAR_STORE()
 end
 
 -- ★贴图缓存（用完/卖掉后靠它把图标灰着留在原地）：必须声明在 chCfg **之后** ——

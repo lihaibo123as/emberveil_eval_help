@@ -497,7 +497,7 @@ function EVAL_SHARE_SEAL_VARIANT_PROBE()
   local TITLE_COL = "|cffffd700"   -- 彩蛋自定义头衔色（8 位；★1.73.45 起默认=帝王金，实际选用色见 shTitleCustomColor()）
   --   ★这里保留**字面量快照**（不变色）：本命令测的是**消息形态**（哪个结构会被客户端吞），颜色取哪个都一样；
   --     且本函数声明在 shTitleCustomColor() 之前，直接调用会踩「local 声明晚于使用」的铁律（DECL ORDER 守着）。
-  local TIER_COL  = "|cffc00000"   -- 神级档品阶色（8 位；★1.73.60 起 = **深红**，取自 SH_SEAL_TIERS）
+  local TIER_COL  = "|cff00bfff"   -- 神级档品阶色（8 位；★1.74.22 起 = **亮蓝**，取自 SH_SEAL_TIERS）
   local who, plan, cmt, sym, title = "Ionol", "武器战", "看懂？", "★", "阿凡提"
   if type(UnitName) == "function" then
     local ok, v = pcall(UnitName, "player")
@@ -1206,20 +1206,39 @@ end
 --     ② 晋升依据 = **方案库里各稀有度的数量**（达要求即晋升），**只升不降**；
 --     ③ 每档 15 张卡池，**每档只抽一次**、不重复抽、抽到**唯一不变**（写进存档）；
 --     ④ 预留彩蛋「创世神的关注」：可**一次性**自定义头衔，优先度最高（触发机制以后再接）。
---   品阶 = **技能条数 + 每条技能里的条件数**（评分制）：≤6 普通 / 7-12 稀有 / 13-18 珍稀 / 19-24 绝版 / **≥25 神级**；
---   ★★★1.73.61 用户：「品阶计算 25 以上算神级，其他依次调整下」——原来的四档都是 3 分宽（≤3/6/9/12），
---     神级门槛只比绝版高 1 分（13）⇒ 现在按**同一个宽度**重排（每档 6 分宽，24 封顶）再留 25+ 给神级；
---     ★判据把**每一个边界的两侧**都钉死（6/7 · 12/13 · 18/19 · 24/25），改阈值时漏一处当场响。
---   颜色：白 |cffffffff · 绿 |cff1eff00 · 紫 |cffa335ee · 橙 |cffff8000 · **深红 |cffc00000**（用户 1.73.60 定的 —— 原为亮蓝 00bfff，再之前是暗金 b87333）；
+--   品阶评分：★★★1.74.19 **重做**（用户：「审计方案的评级标准…增加评级难度」）。
+--     旧口径「技能条数 + 条件数」有三个漏洞（空技能白给分 / 条件不分轻重 / 25 条空技能 = 神级），
+--     新口径见下方 EVAL_PROFILE_SCORE 的整段说明（空技能 0 分 + 条件按类加权 + 单条上限 + 覆盖封顶）。
+--   新档位（★1.74.21 用户定：**神级 = 50**；四个低档把 0~49 分四等分 —— 沿用 1.73.61 定的「同宽重排」审美）：
+--     ≤11 普通 / 12-23 稀有 / 24-35 珍稀 / 36-49 绝版 / **≥50 神级**；
+--   ★判据把**每一个边界的两侧**都钉死（11/12 · 23/24 · 35/36 · 49/50），改阈值时漏一处当场响。
+--   ★★封顶值从**这张表**现算（shCoverCap 取 SH_SEAL_TIERS[n+1].max）—— 调阈值不必再改第二处。
+--   颜色：白 |cffffffff · 绿 |cff1eff00 · 紫 |cffa335ee · 橙 |cffff8000 · **亮蓝 |cff00bfff**（★1.74.22 用户定：「那换亮蓝的看看」；配色史 深红 c00000 → 亮金 ffcc00（试色）→ 亮蓝 00bfff，再之前是暗金 b87333）；
 --   评语：每档 **10 条**（用户要求），分享时**随机抽一条**。
 -- ★★★1.73.42j 这些表只存**结构 + 键**，文案一律走 Locales（L()）：文案散在源码里 = 换语言时不生效。
 local SH_SEAL_TIERS = {
-  { max = 6,  key = "SEAL_TIER_1", color = "|cffffffff" }, -- ★1.73.61 用户定：神级 = 25+，其余四档按同一宽度重排（每档 6 分）
-  { max = 12,  key = "SEAL_TIER_2", color = "|cff1eff00" },
-  { max = 18,  key = "SEAL_TIER_3", color = "|cffa335ee" },
-  { max = 24,  key = "SEAL_TIER_4", color = "|cffff8000" },
-  { max = 9999, key = "SEAL_TIER_5", color = "|cffc00000" }, -- ★★★1.73.60 用户：「方案品阶: 源代码 调整->神级 颜色深红」（亮蓝 00bfff → 深红 c00000）
+  { max = 11,  key = "SEAL_TIER_1", color = "|cffffffff" }, -- ★1.74.21 用户定：神级 = 50+（低四档把 0~49 四等分）
+  { max = 23,  key = "SEAL_TIER_2", color = "|cff1eff00" },
+  { max = 35,  key = "SEAL_TIER_3", color = "|cffa335ee" },
+  { max = 49,  key = "SEAL_TIER_4", color = "|cffff8000" },
+  { max = 9999, key = "SEAL_TIER_5", color = "|cff00bfff" }, -- ★★★1.74.22 用户：「那换亮蓝的看看」（亮金 ffcc00 → **亮蓝 00bfff**；配色史：暗金 b87333 → 亮蓝 00bfff → 深红 c00000 → 亮金 ffcc00（试色）→ 亮蓝 00bfff）
 }
+-- ★★★1.74.19 两个**从档位表现算**的读值口（命令、闸门、演示样例三处共用，改阈值不必再改第二处）：
+--   · EVAL_SEAL_GOD_SCORE() = 神级门槛（= 最后一个有上沿的档 +1）；
+--   · EVAL_SEAL_TIER_SAMPLE(i) = 第 i 档的**代表分**（档内中点；最高档无上沿 → 下沿 +20）。
+--   ★为什么必须现算：旧代码把 `需要 25 分`、`{3,9,15,21,26}`、`{1,4,7,10,13}` 三处**写死**在三个文件里，
+--     调一次阈值就得追着改三处 —— 漏一处的后果是「样例串档 / 提示说错门槛」这种静默错误。
+function EVAL_SEAL_GOD_SCORE() return SH_SEAL_TIERS[table.getn(SH_SEAL_TIERS) - 1].max + 1 end
+function EVAL_SEAL_TIER_SAMPLE(i)
+  local n = table.getn(SH_SEAL_TIERS)
+  local ti = tonumber(i) or 1
+  if ti < 1 then ti = 1 end
+  if ti > n then ti = n end
+  local lo = (ti == 1) and 1 or (SH_SEAL_TIERS[ti - 1].max + 1)
+  local hi = SH_SEAL_TIERS[ti].max
+  if hi > 9998 then hi = lo + 20 end -- 最高档无上沿：取下沿 +20 当代表
+  return math.floor((lo + hi) / 2 + 0.5)
+end
 local SH_SEAL_COMMENTS = {
   { "SEAL_C1_1", "SEAL_C1_2", "SEAL_C1_3", "SEAL_C1_4", "SEAL_C1_5", "SEAL_C1_6", "SEAL_C1_7", "SEAL_C1_8", "SEAL_C1_9", "SEAL_C1_10" },
   { "SEAL_C2_1", "SEAL_C2_2", "SEAL_C2_3", "SEAL_C2_4", "SEAL_C2_5", "SEAL_C2_6", "SEAL_C2_7", "SEAL_C2_8", "SEAL_C2_9", "SEAL_C2_10" },
@@ -1292,15 +1311,121 @@ function EVAL_TITLE_KEY(tier, idx)
   if k > n then k = n end
   return list[k], ti, k
 end
--- 方案表 → 评分（技能条数 + 条件数）：与品阶判定**同一套**（品阶与晋升档都用它，绝不各写一遍）
-function EVAL_PROFILE_SCORE(prof)
-  if type(prof) ~= "table" or type(prof.skills) ~= "table" then return 0 end
-  local score = table.getn(prof.skills)
-  for i = 1, table.getn(prof.skills) do
-    local gs = prof.skills[i] and prof.skills[i].groups
-    for g = 1, table.getn(gs or {}) do score = score + table.getn(gs[g] or {}) end
+-- ★★★1.74.19 **方案评分（重做）** —— 用户：「审计方案的评级标准…增加评级难度」。
+--   旧口径 = `技能条数 + 条件总数`，三个漏洞：
+--     ① **空技能白给分**：一条没有任何条件的技能也算 1 分 ⇒ **25 条空「攻击」= 25 分 = 神级**（实测复现过）；
+--     ② **条件不分轻重**：`战斗中` 与 `队友血量%<30 & 目标debuff:魔法` 同价；
+--     ③ 结论：用户真机数据里「合欢宗宝典」18 条技能**有 13 条是空的**，靠这 13 分从「珍稀」被抬成「神级」。
+--   新口径：
+--     score = Σ(每条技能) [ 有条件 ? (1 + Σ条件权重) : 0 ]   —— **空技能 0 分**
+--             ★例外（用户 1.74.19 定，保留 1 分）：**不占动作条的特殊技能**（取消施法/停止攻击/跟随/选取目标/
+--               `物品:`/`取消自身buff`/`宠物:攻击` …）本来就没有条件可配，按 0 分会把合法规则白抹掉；
+--               判据走项目唯一来源 EVAL_NO_SLOT_OK，**不在这里另抄一份名单**。
+--     · 条件权重与大类 = EvalHelp.lua 那张 `SE_TYPE_GROUPS`（每组 w/cls），走读值口取，**不另抄 44 项**；
+--     · 单条技能**上限 SH_SKILL_CAP 分**（防「一条技能堆 30 个条件」）；
+--     · 同一行里**完全一样**的条件只算一次（去重键 = 条件自身字段的稳定拼接）。
+--   ★**同一个遍历**同时产出「分数」与「覆盖大类集合」—— 分两处走一遍迟早漏改一处。
+local SH_SKILL_CAP = 12
+-- 不占动作条的特殊技能判据（唯一来源 = 引擎的 EVAL_NO_SLOT_OK；拿不到就如实按普通技能算）
+local function shNoSlotSkill(skill, rank)
+  if type(EVAL_NO_SLOT_OK) ~= "function" then return false end
+  local ok, v = pcall(EVAL_NO_SLOT_OK, skill, rank)
+  return (ok and v) and true or false
+end
+-- 条件去重键：把条件自己的字段**全部**拼进来（参数不同 = 不同条件）。
+--   ★不用 EVAL_COND_STR：那是**显示/导出**用的（会调 EVAL_POWERLABEL 等客户端 API），
+--     而本函数会被遍历整个方案库、还会在 0.15s 的 tick 上跑（标题栏徽标现算）—— 纯本地字段足够且不碰客户端。
+--   ★集合型字段（职业集 cs / 队伍集 gs / 负面类型 dt）按键名**排序后**拼接：pairs 顺序不稳定，
+--     不排序会让同一个条件算出两个不同的键（去重失效 = 白送分）。
+local function shCondKey(cd)
+  local parts = {}
+  for k2, v2 in pairs(cd) do
+    local t2 = type(v2)
+    if t2 == "string" or t2 == "number" or t2 == "boolean" then
+      parts[#parts + 1] = tostring(k2) .. "=" .. tostring(v2)
+    elseif t2 == "table" then
+      local ks = {}
+      for k3 in pairs(v2) do ks[#ks + 1] = tostring(k3) end
+      table.sort(ks)
+      parts[#parts + 1] = tostring(k2) .. "={" .. table.concat(ks, ",") .. "}"
+    end
   end
-  return score
+  table.sort(parts)
+  return table.concat(parts, "&")
+end
+-- 一次遍历产出：分数 / 覆盖大类集合 / 覆盖数 / 计到分的技能数
+local function shScoreParts(prof)
+  local out = { score = 0, classes = {}, nClasses = 0, skillsScored = 0, skillsEmpty = 0 }
+  if type(prof) ~= "table" or type(prof.skills) ~= "table" then return out end
+  for i = 1, table.getn(prof.skills) do
+    local row = prof.skills[i]
+    if type(row) == "table" then
+      local seen, w, nCond = {}, 0, 0
+      local gs = row.groups
+      for g = 1, table.getn(gs or {}) do
+        local grp = gs[g]
+        for c = 1, table.getn(grp or {}) do
+          local cd = grp[c]
+          local kk = (type(cd) == "table") and cd.k or nil
+          if kk then
+            local key = tostring(kk) .. "\1" .. shCondKey(cd)
+            if not seen[key] then
+              seen[key] = true
+              nCond = nCond + 1
+              if type(EVAL_COND_WEIGHT) == "function" then
+                w = w + (tonumber(EVAL_COND_WEIGHT(kk)) or 0)
+              end
+              if type(EVAL_COND_CLASS) == "function" then
+                local cls = EVAL_COND_CLASS(kk)
+                if cls and not out.classes[cls] then out.classes[cls] = true out.nClasses = out.nClasses + 1 end
+              end
+            end
+          end
+        end
+      end
+      if nCond > 0 then
+        if w > SH_SKILL_CAP then w = SH_SKILL_CAP end
+        out.score = out.score + 1 + w
+        out.skillsScored = out.skillsScored + 1
+      elseif shNoSlotSkill(row.skill, row.rank) then
+        out.score = out.score + 1 -- ★特殊技能无条件也保留 1 分（用户 1.74.19 定）
+        out.skillsScored = out.skillsScored + 1
+      else
+        out.skillsEmpty = out.skillsEmpty + 1 -- 空技能：0 分（★旧口径在这里白送 1 分）
+      end
+    end
+  end
+  return out
+end
+-- 读值口（签名不变：调用点很多）：方案表 → 分数
+function EVAL_PROFILE_SCORE(prof) return shScoreParts(prof).score end
+-- 读值口：方案表 → 覆盖大类数（1..5）
+function EVAL_PROFILE_COVERAGE(prof) return shScoreParts(prof).nClasses end
+-- 读值口：一次拿全（分数 / 覆盖数 / 覆盖集合 / 计分技能数 / 空技能数）—— 供 tooltip、命令、断言与档位入口用
+function EVAL_PROFILE_PARTS(prof) return shScoreParts(prof) end
+-- ★★★1.74.19 **覆盖封顶**：「每多覆盖一个大类，天花板抬高一档」。
+--   覆盖 1 类 → 封到「稀有」上沿 · 2 类 → 「珍稀」上沿 · 3 类 → 「绝版」上沿 · **≥SH_COVER_FREE 类 → 不封顶**（才有资格冲神级）。
+--   ★为什么要有它（加分式做不到的事）：加分是**胡萝卜**，封顶才是**闸门** ——
+--     只加奖励的话，「25 条技能每条塞 4 个自身状态条件」照样堆到神级（实测 126 分）；
+--     封顶之后同样这份方案被压在「稀有」，想上顶就必须真的跨类写（自身/目标/光环/技能 至少四类）。
+--   ★封顶值**从档位表现算**（不写死数字）：以后调阈值，封顶自动跟着走（写死必然漂移，本项目的老账）。
+local SH_COVER_FREE = 4 -- 覆盖到这么多类就不再封顶（神级的实际门槛）
+local function shCoverCap(nClasses)
+  if nClasses == nil then return nil end -- ★nil = 「没有覆盖信息」（纯分数映射）→ **不封顶**，别把旧调用点误伤
+  local n = tonumber(nClasses) or 0
+  if n < 1 then n = 1 end
+  if n >= SH_COVER_FREE then return nil end
+  return SH_SEAL_TIERS[n + 1].max -- 覆盖 n 类 → 封到第 (n+1) 档的上沿
+end
+function EVAL_PROFILE_COVERAGE_CAP(nClasses) return shCoverCap(nClasses) end
+-- ★★★1.74.19 **单一入口**：给一个方案表，把「档位序号 / 档位表 / 原始分 / 覆盖大类数」一次算齐。
+--   ★**所有带方案表的调用点都必须走它**（源码检查 COVERAGE CAP WIRING CHECK 守这条）：
+--     写成 EVAL_SHARE_SEAL_TIER(EVAL_PROFILE_SCORE(p)) 会把封顶整个漏掉，而且是**静默**的
+--     —— 分数与档位看起来都正常，只是天花板没生效（本项目最怕的那类失败）。
+function EVAL_PROFILE_TIER(prof)
+  local parts = shScoreParts(prof)
+  local pi, tier = EVAL_SHARE_SEAL_TIER(parts.score, parts.nClasses)
+  return pi, tier, parts.score, parts.nClasses
 end
 -- 方案库 → 各稀有度数量（{ 普通, 稀有, 珍稀, 绝版, 神级 }）
 function EVAL_TITLE_COUNTS()
@@ -1312,7 +1437,9 @@ function EVAL_TITLE_COUNTS()
     -- ★★★1.74.5 用户：「角色头衔评定标准是只有自己创建的方案才加入评定分计算」——
     --   只算**自创**（src ~= "text"：手动创建 + 老存档无 src 都算；导入/案例模版/分享接收来的**不算**）。
     if type(p) == "table" and p.src ~= "text" then
-      local idx = select(1, EVAL_SHARE_SEAL_TIER(EVAL_PROFILE_SCORE(p)))
+      -- ★1.74.19 走**单一入口** EVAL_PROFILE_TIER（自带覆盖封顶）—— 不能只取分数：
+      --   否则「堆一类条件」的方案照样被算成神级，头衔晋升这道闸门就白加了。
+      local idx = select(1, EVAL_PROFILE_TIER(p))
       if idx >= 1 and idx <= 5 then out[idx] = out[idx] + 1 end
     end
   end
@@ -1325,14 +1452,24 @@ function EVAL_TITLE_GE(counts, k)
   for i = tonumber(k) or 1, 5 do ge = ge + (tonumber(counts[i]) or 0) end
   return ge
 end
--- ★晋升判定（纯函数，判据直接喂数量进来看结果）：
---   1 档 = 有 ≥1 个方案；2 档 = 稀有及以上 ≥1；3 档 = 珍稀及以上 ≥1；4 档 = 绝版及以上 ≥1；5 档 = 神级 ≥1。
+-- ★★★1.74.19 晋升门槛表（用户定 · **推荐档**）：「稀有度 ≥ k 的方案至少几个」
+--   1 档 ≥1 ｜ 2 档 稀有+ ≥2 ｜ 3 档 珍稀+ ≥3 ｜ 4 档 绝版+ ≥3 ｜ 5 档 神级 ≥2
+--   ★这张表就是**全部真值**：改难度只改这一行（「还差多少」的命令提示也读它，不另写一份 1）。
+local SH_TITLE_REQ = { 1, 2, 3, 3, 2 }
+function EVAL_TITLE_REQ(tier) return SH_TITLE_REQ[tonumber(tier) or 0] end
+-- ★★晋升判定（纯函数，判据直接喂数量进来看结果）：
+--   1 档 = 有 ≥1 个方案；第 k 档 = 同时满足 1..k 每一档的数量要求（**逐级满足**）。
+--   ★为什么改成逐级 + 数量（用户：「增加评级难度」）：
+--     旧口径从 2 档到 5 档全是「稀有度 ≥ k 的方案 **≥1 个**」⇒
+--     头衔满档的最短路径 = **造 1 个神级方案**，而神级又只要 25 条空技能（约 1 分钟），
+--     连带让「创世者亲临」彩蛋的闸门形同虚设（它的三条里有两条其实是同一条）。
 --   只升不降 ⇒ 调用方只往**更高**记（见 EVAL_TITLE_REFRESH）。
 function EVAL_TITLE_TIER_FROM_COUNTS(counts)
   if EVAL_TITLE_GE(counts, 1) < 1 then return 0 end -- 一个方案都没有 → 还没入档
   local at = 1
   for i = 2, 5 do
-    if EVAL_TITLE_GE(counts, i) >= 1 then at = i end
+    if EVAL_TITLE_GE(counts, i) < (SH_TITLE_REQ[i] or 1) then break end -- ★逐级：断在哪一档就停在哪
+    at = i
   end
   return at
 end
@@ -1410,7 +1547,7 @@ function EVAL_TITLE_PROGRESS()
   if saved < table.getn(SH_TITLES) then
     out.nextTier = saved + 1
     out.have = EVAL_TITLE_GE(counts, out.nextTier)
-    out.need = 1
+    out.need = SH_TITLE_REQ[out.nextTier] or 1 -- ★1.74.19 门槛从表里取（原来写死 1，改难度后会提示错数字）
   end
   return out
 end
@@ -1465,21 +1602,49 @@ function EVAL_TITLE_DEMO_LINES()
 end
 -- 评分 = 技能条数 + 技能内每个条件（★复用项目**同一个**导入解析器与**同一个**评分函数，不另写一套）
 function EVAL_SHARE_SEAL_SCORE(text)
+  local parts = EVAL_SHARE_SEAL_PARTS(text)
+  if parts == nil then return nil end
+  return parts.score
+end
+-- ★1.74.19 文本路径的**全量**读值口（分数 + 覆盖大类数）：
+--   封顶要用覆盖数 ⇒ 分享行/详情弹窗都走这个，不再只取一个分数（否则封顶静默失效）。
+function EVAL_SHARE_SEAL_PARTS(text)
   if type(EVAL_PROFILE_FROM_TEXT) ~= "function" then return nil end -- 解析器不在 → 如实返回 nil（不假装算得出）
   local p = EVAL_PROFILE_FROM_TEXT(tostring(text or ""))
   if type(p) ~= "table" or type(p.skills) ~= "table" then return nil end
-  return EVAL_PROFILE_SCORE(p)
+  return EVAL_PROFILE_PARTS(p)
 end
-function EVAL_SHARE_SEAL_TIER(score)
-  score = tonumber(score) or 0
+-- ★★★1.74.19 **透明度文案的唯一来源**（分享详情弹窗 / 方案列表 tooltip / `/eh go 头衔` 三处共用）：
+--   为什么要它：加了覆盖封顶之后，「125 分却是稀有」这件事必须**当场解释清楚**，
+--   否则玩家只会当成 bug（本项目「改了规则就要在玩家看得到的地方说明白」）。
+function EVAL_SHARE_SEAL_SCORE_TEXT(score, nClasses, tier)
+  local s = "评分 " .. tostring(score)
+  if type(nClasses) == "number" then s = s .. " · 覆盖 " .. tostring(nClasses) .. "/5 类" end
+  if type(tier) == "table" and tier.capped then s = s .. " → 封顶 " .. tostring(tier.cap) end
+  return s
+end
+-- ★★★1.74.19 档位判定：`score` 仍是纯分数映射；**多带一个 coverage（覆盖大类数）时才启用封顶**。
+--   ★coverage 传 nil = 「这次没有覆盖信息」（合成分/演示/老调用点）→ **不封顶**，
+--     绝不能把 nil 当成「覆盖 1 类」——那会把所有纯分数调用点悄悄压到「稀有」。
+--   ★带方案表的调用点**一律走 EVAL_PROFILE_TIER**（它自己算 coverage 并传进来）；
+--     手写 EVAL_SHARE_SEAL_TIER(EVAL_PROFILE_SCORE(p)) 会把封顶整个漏掉，而且是**静默**的
+--     —— 分数与档位看起来都正常，只是天花板没生效（源码检查 COVERAGE CAP WIRING CHECK 守这条）。
+function EVAL_SHARE_SEAL_TIER(score, coverage)
+  local raw = tonumber(score) or 0
+  local cap = shCoverCap(coverage)
+  local eff, capped = raw, false
+  if cap and eff > cap then eff = cap capped = true end
   local pick = table.getn(SH_SEAL_TIERS)
   for i = 1, table.getn(SH_SEAL_TIERS) do
-    if score <= SH_SEAL_TIERS[i].max then pick = i break end
+    if eff <= SH_SEAL_TIERS[i].max then pick = i break end
   end
   local t = SH_SEAL_TIERS[pick]
   -- ★返回**当场按当前语言解析**的副本：调用方（分享行/弹窗品阶栏/模版 tooltip）照旧读 .name/.color/.max，
   --   而语言在配置窗里能随时切 —— 缓存一份 name 会出现「切了语言还是旧文案」的静默不一致。
-  return pick, { max = t.max, key = t.key, color = t.color, name = L(t.key) }
+  -- ★1.74.19 额外交出 raw/eff/capped/cap/coverage：**透明度是硬要求** ——
+  --   玩家看到「125 分却是稀有」时必须能读到「覆盖 1 类 → 封顶 34」，否则只会当成 bug。
+  return pick, { max = t.max, key = t.key, color = t.color, name = L(t.key),
+                 raw = raw, eff = eff, capped = capped, cap = cap, coverage = coverage }
 end
 function EVAL_SHARE_SEAL_COMMENT(tierIdx, forced)
   local list = SH_SEAL_COMMENTS[tierIdx]
@@ -1497,9 +1662,10 @@ end
 --     ③ 评语：只有发送端知道（封皮行解析来的 meta）→ 拿不到就如实写「未知（未收到封皮行）」。
 --   ★返回 nil 的唯一情形：文本解析不出方案（那就别画品阶栏，而不是随便给一档）。
 function EVAL_SHARE_SEAL_ROW(text, meta)
-  local score = EVAL_SHARE_SEAL_SCORE(text)
-  if score == nil then return nil end
-  local idx, tier = EVAL_SHARE_SEAL_TIER(score)
+  local parts = EVAL_SHARE_SEAL_PARTS(text)
+  if parts == nil then return nil end
+  local score = parts.score
+  local idx, tier = EVAL_SHARE_SEAL_TIER(score, parts.nClasses) -- ★1.74.19 带覆盖数 → 封顶生效
   local icon = EVAL_SHARE_SEAL_ICON(idx)
   local sym = EVAL_SHARE_SEAL_SYMBOL(idx)
   local plan = shSealName(text or "")
@@ -1527,15 +1693,16 @@ function EVAL_SHARE_SEAL_ROW(text, meta)
     icon = icon, plan = plan, comment = comment,
     rank = rank, rankColor = rankColor, rankFrom = rankFrom,
     head = tier.color .. sym .. "[" .. tier.name .. "秘籍·" .. plan .. "]|r",
-    meta = "品阶：" .. tier.name .. "（评分 " .. tostring(score) .. "）· 身份：" .. rankTxt,
+    meta = "品阶：" .. tier.name .. "（" .. EVAL_SHARE_SEAL_SCORE_TEXT(score, parts.nClasses, tier) .. "）· 身份：" .. rankTxt,
     commentLine = "评语：" .. cmtTxt,
   }
 end
 -- 读值口：把一行显示内容算出来（测试与 /eh go 秘籍 预览共用；forcedIdx 只给测试用）
 function EVAL_SHARE_SEAL_INFO(text, level, forcedIdx)
-  local score = EVAL_SHARE_SEAL_SCORE(text)
-  if score == nil then return nil end -- 算不出就如实 nil
-  local idx, tier = EVAL_SHARE_SEAL_TIER(score)
+  local parts = EVAL_SHARE_SEAL_PARTS(text)
+  if parts == nil then return nil end -- 算不出就如实 nil
+  local score = parts.score
+  local idx, tier = EVAL_SHARE_SEAL_TIER(score, parts.nClasses) -- ★1.74.19 带覆盖数 → 封顶生效
   local comment, ci = EVAL_SHARE_SEAL_COMMENT(idx, forcedIdx)
   -- ★★★1.73.42n 头衔（抽卡身份）：先**按方案库重新统计 + 抽卡**（只升不降；已抽过的档绝不重抽），
   --   再取当前最高档的头衔。★头衔是**私人收藏** → 接收端复现不了，对面看到的以封皮行为准。
@@ -1552,6 +1719,7 @@ function EVAL_SHARE_SEAL_INFO(text, level, forcedIdx)
   local line = idPart .. tostring(who) .. " 分享了 → " .. tier.color .. sym ..
                "[" .. tier.name .. "秘籍·" .. name .. "]|r  " .. comment
   return { score = score, tier = idx, tierName = tier.name, color = tier.color,
+           coverage = parts.nClasses, capped = tier.capped, cap = tier.cap,
            title = tt, titleTier = tt and tt.tier or 0, titleName = tt and tt.name or nil,
            titleCustom = tt and tt.custom or false,
            comment = comment, commentIdx = ci, plan = name, line = line, symbol = sym }
@@ -1562,18 +1730,38 @@ end
 function EVAL_SHARE_SEAL_DEMO()
   local plan = (type(EVAL_PROFILE_TO_TEXT) == "function") and EVAL_PROFILE_TO_TEXT() or "# 方案: 样例"
   local base = "# 方案: " .. shSealName(plan)
-  -- ★★★1.73.42k 等级**写进方案文本**（`- 技能1(60)`）：境界现在取自「方案里最大的技能等级」，
-  --   所以在形参里传 level 已经不作数了——样例要能让 7 档境界真的各出现一次，就必须把等级写进方案。
-  local function mk(n, lv)
-    local s = base
-    for k = 1, n do s = s .. "\n- 技能" .. k .. (lv and ("(" .. tostring(lv) .. ")") or "") end
-    return s
+  -- ★★★1.74.19 样例**必须真的落在那一档**（原来「几条技能」就直接当几分 —— 新口径下不成立了：
+  --   空技能 0 分、条件按类加权、覆盖不足还要封顶）。做法：
+  --     · 每条技能带**一套固定的跨类条件**（自身 战斗中 / 目标 可攻击 / 技能 施法中 / 队伍 团队蓝量<30）
+  --       ⇒ 单条 = 1 + (1+2+1+3) = **8 分**，覆盖 4 个大类（⇒ 不封顶，够得着神级）；
+  --     · 按代表分折算条数，再**回读档位自证**：不在目标档就加一条重试 ——
+  --       样例串档是**静默**错误（画出来还是五档颜色，只是含义错了），必须让它自己发现自己。
+  --   ★每档代表分也**现算**（EVAL_SEAL_TIER_SAMPLE = 档内中点），不再写死 { 3, 9, 15, 21, 26 }。
+  local function mkForScore(target)
+    local function build(nS)
+      local s = base
+      for k = 1, nS do
+        s = s .. "\n- 技能" .. k .. " | 战斗中 & 可攻击 & 施法中 & 团队蓝量<30"
+      end
+      return s
+    end
+    local tgt = tonumber(target) or 1
+    local nS = math.max(1, math.ceil(tgt / 8))
+    local text = build(nS)
+    local want = select(1, EVAL_SHARE_SEAL_TIER(tgt))
+    for _ = 1, 40 do
+      local parts = EVAL_SHARE_SEAL_PARTS(text)
+      if parts and select(1, EVAL_SHARE_SEAL_TIER(parts.score, parts.nClasses)) == want then break end
+      nS = nS + 1
+      text = build(nS)
+    end
+    return text
   end
-  -- ★1.73.61 每档取**档内中点**（≤6 / 7-12 / 13-18 / 19-24 / ≥25）——阈值改了这一行必须跟着改（否则样例串档）
-  local reps = { 3, 9, 15, 21, 26 }
+  local reps = {}
+  for i = 1, table.getn(SH_SEAL_TIERS) do reps[i] = EVAL_SEAL_TIER_SAMPLE(i) end
   local lines = {}
   for i = 1, table.getn(reps) do -- 5 品阶的分享行（身份就是**你当前的头衔**）
-    local info = EVAL_SHARE_SEAL_INFO(mk(reps[i], 60), 60, i)
+    local info = EVAL_SHARE_SEAL_INFO(mkForScore(reps[i]), 60, i)
     if info then table.insert(lines, info.line) end
   end
   -- ★1.73.42n 再给 5 档头衔示意（每档第 1 张卡；不碰存档）——原来那 7 行「境界」是等级派生的，已下线
@@ -1658,7 +1846,10 @@ end
 --     在唯一解析出口盖 "text"（见 EVAL_PROFILE_FROM_TEXT）。**老存档没有 src ⇒ 按手动算**
 --     （不能让老玩家因为升级一次就永远够不到自己的彩蛋）。
 function EVAL_TITLE_CREATOR_GATE()
-  local out = { ok = false, manualN = 0, godN = 0, godName = "", titleTier = 0, needN = 3, needScore = 25, needTier = 5 }
+  -- ★★★1.74.19 `needN` 用户定：**保持 3 不变**；`needScore` 不再写死 25 ——
+  --   改为从档位表现算（EVAL_SEAL_GOD_SCORE 现算），否则以后一调阈值，闸门提示的就不是真门槛了。
+  local out = { ok = false, manualN = 0, godN = 0, godName = "", titleTier = 0, needN = 3,
+                needScore = EVAL_SEAL_GOD_SCORE(), needTier = 5 }
   local cfgGT = rawget(_G, "EVAL_HELP_CONFIG")
   local profs = (type(cfgGT) == "table" and type(cfgGT.war) == "table") and cfgGT.war.profiles or nil
   if type(profs) == "table" then
@@ -1666,7 +1857,10 @@ function EVAL_TITLE_CREATOR_GATE()
       local p = profs[i]
       if type(p) == "table" and p.src ~= "text" then -- nil（老存档）/ "manual" 都算手动
         out.manualN = out.manualN + 1
-        if out.godN == 0 and EVAL_PROFILE_SCORE(p) >= out.needScore then
+        -- ★1.74.19 用**封顶后**的有效分（tier.eff）而不是原始分：
+        --   否则「只堆一类条件、125 分但被压在稀有」的方案会被闸门误判成「到神级了」。
+        local _pi, gTier = EVAL_PROFILE_TIER(p)
+        if out.godN == 0 and gTier and gTier.eff >= out.needScore then
           out.godN, out.godName = 1, tostring(p.name or "")
         end
       end
