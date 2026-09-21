@@ -90,7 +90,7 @@ Remove-Item "$staging\EvalHelp\media\Textures" -Recurse -Force -ErrorAction Sile
 [System.IO.Compression.ZipFile]::CreateFromDirectory($staging, $out)
 Remove-Item $staging -Recurse -Force
 ```
-★**装完必须核对条目数**（1.74.27 基准 = **69 个**（+`tools/RareWatch.lua`）；1.74.12 时是 68、1.74.6 时是 66、1.73.5 时是 63；1.74.5 陆续加了 `tools/IconGrid.lua` / `tools/HunterHelper.lua` / `tools/ConsumableHelper.lua`，1.74.7 加 `tools/DismountHelper.lua`，1.74.27 加 `tools/RareWatch.lua`）：
+★**装完必须核对条目数**（1.74.28 基准 = **69 个**（+`tools/RareWatch.lua`）；1.74.12 时是 68、1.74.6 时是 66、1.73.5 时是 63；1.74.5 陆续加了 `tools/IconGrid.lua` / `tools/HunterHelper.lua` / `tools/ConsumableHelper.lua`，1.74.7 加 `tools/DismountHelper.lua`，1.74.27 加 `tools/RareWatch.lua`）：
   少一个就是缺文件，用户装了会**直接报错**。
   ★这一条与上面的模块清单都有源码检查 `PACK LIST CHECK` 守着（清单与 .toc 逐个比对 + 基准数按打包口径现算），过时当场 FAIL。
 ★**不装**：`luacheck.js`/`test_*.lua`/`test_engine.js`（测试）、`preview/`（截图）、`node_modules/`、
@@ -263,8 +263,10 @@ Remove-Item $staging -Recurse -Force
     默认**关**（`tb.feedPet` 空 = 关）+ 载入期零副作用 ⇒ **放着不影响任何现有功能**。
     回来继续时：读 `.dsh/reports/hunter-helper-impl.md`（实现说明 + 16 步真机测试流程 + 四个待实测项）。
 - **当前版本（源码唯一真值）**：`EvalHelp.lua` 的 `local VERSION` == `EvalHelp.toc` 的 `## Version` = **1.74.28**（v1.74.27 已发布）
-  （已发布；`CHANGELOG.md` 最新小节 v1.74.0 已把 **1.73.35 ~ 1.74.0**（85 个提交）归纳成 7 条里程碑）。
+  （**v1.74.27 已发布**；`CHANGELOG.md` 的 `## 详情小节` 最新到 **v1.74.6**，`v1.74.7 ~ v1.74.28` 只保留**顶部速览表**一行一版（1.74.28 = 两个助手弹窗候选按物品类型过滤）。
+  ★`CHANGELOG.md` 的 `## 🎯 v1.74.0` 小节已把 **1.73.35 ~ 1.74.0**（85 个提交）归纳成 7 条里程碑）。
   ★1.73.35~1.73.67 那批工作（分享封皮/品阶评分/头衔抽卡/彩蛋/角色扮演反应/标题栏徽标/取证探针）已随 **v1.74.0** 一起发布。
+- **1.74.9 记忆体瘦身（本机会话）**：常驻卷 `CLAUDE.md` **86,364 → 63,984 字节**（回落到 65,536 预算内，尾部不再被截断）：§3 对照表 / §5.2 两条长案例 / §5.4 UI 全量 / §5.5 API 全量 → 参考卷 **§十**（原文照存）；新增常驻卷「**记忆体写入纪律**」+ 参考卷 **§十一**（上下文成本实测 · 度量法 · 搬迁套路）；`sync_game.js` 加「本机无需同步」自检。
   ★**逐版本流水一律不进本文件**（见文件头写作纪律）——要点查源码注释 / `CHANGELOG.md` / `git log`；
   本节只保留**在途专题的结论**（下面那条方案分享）。
 - ★★★**方案分享「隐藏载荷 + 信息行」**（1.73.41~1.73.67，分支 `probe/share-hide-link`）→ **已随 v1.74.0 发布**，
