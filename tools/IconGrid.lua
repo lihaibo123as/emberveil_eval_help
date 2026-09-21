@@ -197,6 +197,24 @@ function EVAL_IG_SCAN_BAGS(bags)
   return out, total
 end
 
+-- ★★★1.74.11 悬浮图标 CD 倒计时（用户：「消耗品助手和喂食助手都设置悬浮图标显示CD 实时倒计时特效.」）
+--   共用的**格式化纯函数**（两个助手共用同一份，UI 只做展示 —— 判据钉这里的逻辑）。
+--   · 剩余 < 60s  → 纯秒数（如 "8"、"1.5"——小数只留 1 位，别刷屏）；
+--   · 剩余 ≥ 60s  → 分钟进位（如 "1min"、"2min"——用户原话「超过分钟的进位分钟时间:1min」）；
+--   · 剩余 ≤ 0    → nil（没有 CD，不显示）。
+--   ★返回值是**显示串或 nil**：nil = 没有倒计时，UI 据此把倒计时文字藏掉。
+function EVAL_IG_CD_TEXT(leftSec)
+  local n = tonumber(leftSec)
+  if not (type(n) == "number" and n > 0) then return nil end
+  if n >= 60 then
+    return string.format("%dmin", math.floor(n / 60 + 0.5)) -- 分钟进位（1.5min → 2min，别显示 1min）
+  end
+  if n < 10 and n ~= math.floor(n) then
+    return string.format("%.1f", n) -- 小数秒只留 1 位（1.5s GCD 这种）
+  end
+  return string.format("%d", math.floor(n + 0.5))
+end
+
 -- ===== 面板（懒建；只建一次，spec 每次打开时换） =====
 function EVAL_IG_ENSURE()
   if IG.built and IG.frame then return IG end

@@ -15161,6 +15161,72 @@ do
   print("  背包候选 类型过滤：武器/护甲/任务/灰色被剔 · 食物留下 · 未缓存不剔 · total 照旧")
 end
 
+-- ===== 组 188（1.74.11）：悬浮图标 CD 倒计时（用户：「消耗品助手和喂食助手都设置悬浮图标显示CD 实时倒计时特效.
+--   消耗品在针对有cd 的物品使用后要能根据正确的cd 显示倒计时(注意好格式化.超过分钟的进位分钟时间:1min ,
+--   字体可以小一点.),对没有cd 的物品使用则继承公共cd 1.5默认值」）=====
+-- 覆盖：①格式化：秒 < 60 纯秒数 / ≥60 分钟进位（1min）/ ≤0 不显示
+--   ②消耗品：有 CD 的物品按**真实 CD**（GetContainerItemCooldown）③无 CD → 公共 CD 1.5s
+--   ④喂食：成功后显示倒计时（GCD 1.5s）⑤CD 结束 → 文字消失 + OnUpdate 摘掉
+do
+  -- ① 格式化（纯函数，两个助手共用同一份）
+  eq(EVAL_IG_CD_TEXT(8), "8", "①★8 秒 → 纯秒数")
+  eq(EVAL_IG_CD_TEXT(1.5), "1.5", "①★1.5 秒 → 小数 1 位（GCD 这种）")
+  eq(EVAL_IG_CD_TEXT(60), "1min", "①★★60 秒 → 分钟进位（用户点名的「1min」）")
+  eq(EVAL_IG_CD_TEXT(90), "2min", "①★★90 秒 → 2min（1.5min 进位成 2min，别显示 1min）")
+  eq(EVAL_IG_CD_TEXT(0), nil, "①★0 秒 → 不显示（没有 CD）")
+  eq(EVAL_IG_CD_TEXT(-3), nil, "①★负数 → 不显示（CD 已过）")
+  eq(EVAL_IG_CD_TEXT(nil), nil, "①★nil → 不显示（没给值）")
+
+  -- ② 消耗品：有 CD 的物品按真实 CD
+  EVAL_HELP_CONFIG.tb = EVAL_HELP_CONFIG.tb or {}
+  EVAL_HELP_CONFIG.tb.consumable = true
+  EVAL_HELP_CONFIG.tb.chUse = { "法力药水" }
+  TEST.bags = { [0 * 100 + 1] = { name = "法力药水", tex = "texMana", count = 3, cd = true } }
+  TEST.time = 7000
+  eq(EVAL_CH_USE("法力药水"), true, "②前置：使用成功")
+  eq(EVAL_TEST_CH_STATE().cdTotal, 60, "②★★有 CD 的物品按**真实 CD**（桩给 60s）")
+  eq(EVAL_TEST_CH_STATE().cdUntil, 7000 + 60, "②★CD 截止时刻 = 现在 + 60s")
+  -- ③ 无 CD 的物品 → 公共 CD 1.5s
+  TEST.bags = { [0 * 100 + 1] = { name = "面包", tex = "texBread", count = 3 } } -- 没 cd 字段
+  EVAL_HELP_CONFIG.tb.chUse = { "面包" }
+  TEST.time = 7100
+  eq(EVAL_CH_USE("面包"), true, "③前置：使用成功")
+  eq(EVAL_TEST_CH_STATE().cdTotal, 1.5, "③★★没有 CD 的物品**继承公共 CD 1.5s 默认值**")
+  eq(EVAL_TEST_CH_STATE().cdUntil, 7100 + 1.5, "③★CD 截止时刻 = 现在 + 1.5s")
+
+  -- ④ 喂食：成功后显示倒计时（GCD 1.5s）
+  EVAL_HELP_CONFIG.tb.feedPet = true
+  EVAL_HELP_CONFIG.tb.hhFood, EVAL_HELP_CONFIG.tb.hhFoodTex = "熏熊肉", "texmeat"
+  TEST.bags = { [0 * 100 + 1] = { name = "熏熊肉", tex = "texmeat", count = 3 } }
+  TEST.spellbook = { { name = "喂食宠物" } }
+  TEST.hasPet = true
+  EVAL_HH_TEST_RESET_TIMERS()
+  TEST.time = 7200
+  EVAL_HH_FEED()
+  EVAL_HH_STEP(7200)
+  TEST.targeting = 1 EVAL_HH_STEP(7200.1) TEST.targeting = nil EVAL_HH_STEP(7200.2)
+  eq(EVAL_TEST_HH_STATE().cdTotal, 1.5, "④★★喂食成功后显示倒计时（GCD 1.5s）")
+  eq(EVAL_TEST_HH_STATE().cdUntil, 7200.2 + 1.5, "④★CD 截止时刻 = 喂完那一刻 + 1.5s")
+
+  -- ⑤ CD 结束 → 文字消失 + OnUpdate 摘掉
+  --   ★主图标得先建起来（CD 文字挂在主图标上；开关是开的，EVAL_CH_ENSURE 才会建）。
+  --   前一组留下的 cdText 状态也要清（它可能还指着旧的控件）。
+  EVAL_CH_ENSURE()
+  TEST.time = 7210 -- 远超 7200.2 + 1.5 = 7201.7
+  EVAL_CH_CD_REFRESH()
+  eq(EVAL_TEST_CH_STATE().cdTextShown, false, "⑤★★CD 结束 → 倒计时文字消失")
+  eq(EVAL_TEST_CH_STATE().cdTickOn, false, "⑤★★CD 结束 → OnUpdate 摘掉（不在后台空转）")
+
+  -- 收尾
+  EVAL_HELP_CONFIG.tb.consumable = false
+  EVAL_HELP_CONFIG.tb.feedPet = false
+  EVAL_HELP_CONFIG.tb.chUse = nil
+  EVAL_HELP_CONFIG.tb.hhFood, EVAL_HELP_CONFIG.tb.hhFoodTex = nil, nil
+  EVAL_HH_TEST_RESET_TIMERS()
+  TEST.bags, TEST.spellbook, TEST.hasPet, TEST.targeting = nil, nil, nil, nil
+  print("  悬浮图标 CD 倒计时：格式化（秒/分钟进位/不显示）· 真实 CD · 无 CD 继承 1.5s · CD 结束摘 OnUpdate")
+end
+
 print("ALL TESTS PASS")
 
   local sd142 = EVAL_HELP_CONFIG.shareSealDemo

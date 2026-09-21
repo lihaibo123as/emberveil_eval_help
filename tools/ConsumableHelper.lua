@@ -19,6 +19,9 @@
 local CH = {
   built = false,      -- 主图标/横条是否已建（懒加载读值口）
   btn = nil,          -- 主图标
+  cdUntil = 0,        -- ★1.74.11 CD 截止时刻（GetTime 口径；0 = 没有 CD）
+  cdTotal = 0,        -- ★CD 总时长（秒；刷新/格式化用）
+  cdText = nil,       -- ★倒计时文字控件（懒建）
   strip = {},         -- 横排小图标池
   stripN = 0,         -- 当前显示几枚
   side = "right",     -- 横排方向（贴屏幕右缘会翻到左侧）
@@ -206,6 +209,17 @@ function EVAL_CH_USE(name)
   CH.lastMsg = string.format("用 %s @%d,%d", name, bag, slot)
   chSay(string.format(L("CH_USED"), name))
   chLog(string.format("已使用 %s @%d,%d（UseContainerItem pcall=%s）", name, bag, slot, tostring(ok)))
+  -- ★1.74.11 CD 倒计时：有 CD 的物品按**真实 CD**（GetContainerItemCooldown）；
+  --   没有 CD 的物品**继承公共 CD 1.5s 默认值**（用户原话）。
+  local start, dur = 0, 0
+  if type(GetContainerItemCooldown) == "function" then
+    local okc, st, du = pcall(GetContainerItemCooldown, bag, slot)
+    if okc then start, dur = tonumber(st) or 0, tonumber(du) or 0 end
+  end
+  local cdSec = (dur and dur > 0) and dur or 1.5
+  CH.cdUntil = now + cdSec
+  CH.cdTotal = cdSec
+  EVAL_CH_CD_REFRESH()
   EVAL_CH_STRIP_REFRESH()
   return true
 end
@@ -271,6 +285,36 @@ local function chSavePos()
   local sw, sh = chScreen()
   tb.chX = (l + CH_SIZE / 2 - sw / 2) / s
   tb.chY = (t - CH_SIZE / 2 - sh / 2) / s
+end
+
+-- ===== CD 倒计时（1.74.11 用户要求：悬浮图标显示 CD 实时倒计时特效） =====
+-- ★共用格式化 EVAL_IG_CD_TEXT（IconGrid.lua；两个助手同一份）。
+--   字体 9pt（用户：「字体可以小一点」），贴在主图标**中心下方**（CD 特效，别遮住物品图标）。
+function EVAL_CH_CD_REFRESH()
+  if not (CH.built and CH.btn) then return false end
+  if not CH.cdText then
+    local fs = chText(CH.btn, 9, 1, 0.85, 0.3) -- 金色，9pt 小字
+    fs:SetPoint("CENTER", CH.btn, "CENTER", 0, -1)
+    pcall(fs.SetWidth, fs, CH_SIZE)
+    pcall(fs.SetJustifyH, fs, "CENTER")
+    CH.cdText = fs
+  end
+  local left = CH.cdUntil - chNow()
+  local txt = (type(EVAL_IG_CD_TEXT) == "function") and EVAL_IG_CD_TEXT(left) or nil
+  if txt then
+    CH.cdText:SetText(txt)
+    pcall(CH.cdText.Show, CH.cdText)
+    if not CH.cdTick then
+      local f = CreateFrame("Frame", nil, UIParent)
+      f:SetScript("OnUpdate", function() EVAL_CH_CD_REFRESH() end)
+      CH.cdTick = f
+    end
+  else
+    CH.cdText:SetText("")
+    pcall(CH.cdText.Hide, CH.cdText)
+    if CH.cdTick then pcall(CH.cdTick.SetScript, CH.cdTick, "OnUpdate", nil) CH.cdTick = nil end -- CD 结束 → 摘掉 OnUpdate
+  end
+  return true
 end
 
 -- ===== 横排小图标（用户选择：选中项在主图标旁横排，各自点用） =====
@@ -666,7 +710,11 @@ function EVAL_TEST_CH_STATE()
            mainGray = mg, mainGrayG = mgg, mainGrayB = mgb, mainShown = mshown,
            list = list, count = table.getn(list), stripN = CH.stripN, stripShown = stripShown,
            side = CH.side, uses = CH.uses, fail = CH.fail, lastMsg = CH.lastMsg,
-           hasUci = (type(UseContainerItem) == "function") }
+           hasUci = (type(UseContainerItem) == "function"),
+           -- ★1.74.11 CD 倒计时读值口（判据要钉「真实 CD / 无 CD 继承 1.5s / CD 结束摘 OnUpdate」）
+           cdTotal = CH.cdTotal, cdUntil = CH.cdUntil,
+           cdTextShown = (CH.cdText and CH.cdText.IsShown and CH.cdText:IsShown() == true) or false,
+           cdTickOn = (CH.cdTick ~= nil) }
 end
 
 function EVAL_TEST_CH_CLICK_MAIN(button)

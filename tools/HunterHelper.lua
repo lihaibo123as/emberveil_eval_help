@@ -42,6 +42,10 @@ local HH = {
   settleAt = 0,
   lastRun = -999,    -- 上一次真正执行的时间（限频）
   food = nil,        -- 本次喂的食物名（点包那一刻按名字**重新解析**包格）
+  cdUntil = 0,       -- ★1.74.11 CD 截止时刻（喂食施法走 GCD 1.5s）
+  cdTotal = 0,       -- ★CD 总时长
+  cdText = nil,      -- ★倒计时文字控件（懒建）
+  cdTick = nil,      -- ★CD 刷新 OnUpdate 帧（CD 结束即摘）
   spellCache = nil,  -- 自动识别到的喂食技能名（只缓存命中结果）
   spellIndex = nil,
   spellAt = -999,
@@ -329,11 +333,18 @@ local function hhFail(msg)
   return false
 end
 
-local function hhOk()
+local function hhOk(now)
   HH.hits = HH.hits + 1
   hhSay(string.format(L("HH_OK"), tostring(HH.food or "?")))
   hhLog("喂食完成：食物=" .. tostring(HH.food))
   HH.food = nil
+  -- ★1.74.11 CD 倒计时：喂食施法走**公共 CD 1.5s**（GCD 默认值；
+  --   食物本身没单独 CD 可查，公共 CD 是真实约束）。
+  --   ★截止时刻用**喂完那一刻的真实时间**（step 的 now 参数），不是 hhNow()（GetTime 可能滞后）。
+  local t = tonumber(now) or hhNow()
+  HH.cdUntil = t + 1.5
+  HH.cdTotal = 1.5
+  EVAL_HH_CD_REFRESH()
   hhRelease()
   EVAL_HH_REFRESH()
   return true
@@ -413,7 +424,7 @@ function EVAL_HH_STEP(now)
     if cur == true then
       hhRestore(L("HH_REJECT"))
     elseif cur == false and hhIsTargeting() ~= true then
-      hhOk()
+      hhOk(now)
     elseif (now - HH.settleAt) > HH_SETTLE_WAIT then
       hhFailUnclear()
     end
@@ -508,6 +519,35 @@ local function hhTip(b)
   pcall(GameTooltip.AddLine, GameTooltip, L("HH_TT_DRAG"), 0.7, 0.7, 0.7)
   pcall(GameTooltip.AddLine, GameTooltip, string.format(L("HH_TT_CNT"), tostring(HH.hits or 0)), 0.7, 0.7, 0.7)
   pcall(GameTooltip.Show, GameTooltip)
+end
+
+-- ===== CD 倒计时（1.74.11 用户要求：悬浮图标显示 CD 实时倒计时特效） =====
+-- ★共用格式化 EVAL_IG_CD_TEXT（IconGrid.lua；两个助手同一份）。字体 9pt 小字，贴主图标中心下方。
+function EVAL_HH_CD_REFRESH()
+  if not (HH.built and HH.btn) then return false end
+  if not HH.cdText then
+    local fs = hhText(HH.btn, 9, 1, 0.85, 0.3) -- 金色，9pt 小字
+    fs:SetPoint("CENTER", HH.btn, "CENTER", 0, -1)
+    pcall(fs.SetWidth, fs, HH_SIZE)
+    pcall(fs.SetJustifyH, fs, "CENTER")
+    HH.cdText = fs
+  end
+  local left = HH.cdUntil - hhNow()
+  local txt = (type(EVAL_IG_CD_TEXT) == "function") and EVAL_IG_CD_TEXT(left) or nil
+  if txt then
+    HH.cdText:SetText(txt)
+    pcall(HH.cdText.Show, HH.cdText)
+    if not HH.cdTick then
+      local f = CreateFrame("Frame", nil, UIParent)
+      f:SetScript("OnUpdate", function() EVAL_HH_CD_REFRESH() end)
+      HH.cdTick = f
+    end
+  else
+    HH.cdText:SetText("")
+    pcall(HH.cdText.Hide, HH.cdText)
+    if HH.cdTick then pcall(HH.cdTick.SetScript, HH.cdTick, "OnUpdate", nil) HH.cdTick = nil end -- CD 结束 → 摘掉 OnUpdate
+  end
+  return true
 end
 
 -- 图标贴图：食物图标（实时解析）；解析不到 → 保底文字（不写纹理字面量 → 不碰 ICON 白名单）
@@ -927,7 +967,9 @@ function EVAL_TEST_HH_STATE()
            lastArgs = HH.lastArgs, regClicks = HH.regClicks,
            food = tb.hhFood, foodTex = tb.hhFoodTex, spell = tb.hhSpell,
            phase = HH.phase, qn = table.getn(HH.q), hasTick = HH.tick and true or false, hits = HH.hits,
-           rate = HH_RATE, qmax = HH_QMAX, lastRun = HH.lastRun } -- ★1.74.10 限频常量+上次执行时刻也暴露
+           rate = HH_RATE, qmax = HH_QMAX, lastRun = HH.lastRun,
+           -- ★1.74.11 CD 倒计时读值口
+           cdTotal = HH.cdTotal, cdUntil = HH.cdUntil }
 end
 
 -- ★1.74.5 测试读值口：用**给定参数**驱动真实 OnClick（本客户端参数形态不固定，四种都要能验）
