@@ -20,6 +20,8 @@
 - **触发条件**：**每次改完插件代码**（.lua / .toc / 素材）之后，**自动**把插件相关文件复制过去 —— 不必等用户开口，也不要在最后才想起来。
 - **目标路径**（本机就绪，目录已存在，同级已有 `UnrealQuest`）：
   `E:\soft\game\eb\Azeroth\Binaries\Win64\Games\Emberveil\live\Azeroth\Interface\AddOns`
+- ★**路径随机器而异（两台电脑 · 1.74.9）**：上面这个 `E:\soft\game\eb\Azeroth\Binaries\Win64\Games\Emberveil\live\Azeroth\Interface\AddOns` 是**另一台**的路径；本工作区那台的仓库**本身就在游戏的 `AddOns\EvalHelp` 里** —— 那里 `git pull` / 就地改文件**即等于**同步，**不需要**再复制。
+  ★判据：**目标目录不存在 ≠ 出错**（`sync_game.js` 会自检仓库是否已在某个 `AddOns\EvalHelp` 内、如实打「本机无需同步」，exit 0）；换机器只改脚本里那一行 `DST`。
 - **复制口径**：以 `EvalHelp.toc` 现算的模块清单为准（与发布包 PACK LIST 同一口径），落到 `AddOns\EvalHelp\`；
   ★**连同子目录**（`tools\`、`Locales\`、`examples\`）一起递归复制；★**不要**把仓库里的测试文件
   （`test_*.lua`、`luacheck.js`、`tmp\`、`preview\`、`doc\`、`.git`）带过去。

@@ -7,10 +7,18 @@ const fs = require('fs');
 const path = require('path');
 
 const SRC = __dirname;
+// ★下面这个 DST 是**另一台电脑**上的游戏目录（用户 1.74.9 说明）——本机没有它属正常，不是出错。
+//   本机那一台的仓库**本身就放在游戏的 AddOns\EvalHelp 里**，git pull 即等于同步到游戏、无需再复制；
+//   所以路径不存在时只如实报告并退出（不报错、不动任何文件）。换机器时改这一行即可。
 const DST = 'E:\\soft\\game\\eb\\Azeroth\\Binaries\\Win64\\Games\\Emberveil\\live\\Azeroth\\Interface\\AddOns\\EvalHelp';
 
 if (!fs.existsSync(path.dirname(DST))) {
-  console.log('SKIP: 游戏 AddOns 目录不存在 -> ' + path.dirname(DST));
+  // 自检：本仓库自己是不是已经躺在某个游戏 AddOns\EvalHelp 里（本机正是这种情形）
+  const selfInAddons = /[\\/]Interface[\\/]AddOns[\\/]EvalHelp$/i.test(SRC);
+  console.log('SKIP: 目标游戏 AddOns 目录不存在 -> ' + path.dirname(DST));
+  console.log(selfInAddons
+    ? '  本机无需同步：仓库本址已在游戏 AddOns 内（' + SRC + '）—— git pull 即等于同步到游戏。'
+    : '  本仓库不在任何游戏 AddOns 内：若本机确有游戏安装在别处，请改上面的 DST。');
   process.exit(0);
 }
 
@@ -20,7 +28,7 @@ const mods = [];
 for (const raw of toc.split(/\r?\n/)) {
   const line = raw.trim();
   if (!line || line.startsWith('#')) continue;
-  mods.push(line.replace(/\\/g, path.sep)); // toc 里是 反斜杠 路径
+  mods.push(line.replace(/[\\]/g, path.sep)); // toc 里是 反斜杠 路径
 }
 mods.push('EvalHelp.toc'); // toc 自己也要（原名，不替换分隔符）
 
