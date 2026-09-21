@@ -14949,6 +14949,54 @@ do
   TEST.chat = nil
   print("  取消自身buff：不占动作条 / 恒就绪 / 借光环图标 / 带名字只取消一个 / 裸写法全取消 / 没有则跳过不瞎调")
 end
+-- ===== 组 184（1.74.9）：角色技能下拉不应出现「空技能」（用户截图：下拉第一项没图标没名字）=====
+-- 根因：动作条扫描里 Lua 的 "" 是**真值**，旧判据 if name 会放过空名 → wslots[""] 成立，
+--   下拉第一项就是那个空行（1.74.8 起「全部非宏格子」全列出来才暴露）。
+-- 覆盖：①空名动作**不进**选择列表 ②wslots 里没有空键 ③剔除时如实记日志（点名是哪个槽位）
+--   ④正常名字照旧进去 ⑤反向哨兵：退回旧判据时这里确实会红（变异捕获）。
+do
+  local keep184 = { actions = TEST.actions }
+  -- ★空名两种形态都要："" 与「纯空白」（Lua 的 "" 是真值；只剔 "" 不剔空白 = 变异 M600 存活）
+  TEST.actions = { [7] = { name = "", tex = "texEmpty" }, [8] = { name = "致死打击", tex = "texMS" },
+                    [9] = { name = "   ", tex = "texWS" } }
+  HasAction = function() return true end
+  GetActionText = function() return nil end
+  GetActionTexture = function(s) return (TEST.actions[s] and TEST.actions[s].tex) or "texX" end
+  rawset(_G, "EVAL_HELP_WTTTextLeft1", { GetText = function() return TEST.curAction and (TEST.actions[TEST.curAction] and TEST.actions[TEST.curAction].name) or "" end })
+  local realSet = nil
+  -- 让 WTT.SetAction 记住当前读的槽位（与真机读 tooltip 同源）
+  local wtt184 = rawget(_G, "EVAL_HELP_WTT")
+  if wtt184 then wtt184.SetAction = function(_, s) TEST.curAction = s return true end end
+  EVAL_GO_RESCAN(true, "probe184")
+
+  -- ① 空名动作**不进**选择列表（修的就是那个空行）
+  local ch184 = EVAL_GO_SKILL_CHOICES()
+  local empty184 = 0
+  for _, n in ipairs(ch184) do if n == nil or n == "" then empty184 = empty184 + 1 end end
+  eq(empty184, 0, "①★★★选择列表里**一个空名字都没有**（修的就是下拉第一项那个空技能）")
+  -- ② wslots 里也没有空键（两条路都剔）
+  eq(EVAL_WSLOTS[""], nil, "②★★wslots 里没有空键（下拉的真正来源）")
+  eq(EVAL_WSLOTS["   "], nil, "②★★wslots 里也没有**纯空白键**（只剔空串、不剔空白的变异会被这一项当场抓住）")
+  -- ④ 正常名字照旧进去
+  local okMS184 = false
+  for _, n in ipairs(ch184) do if n == "致死打击" then okMS184 = true end end
+  eq(okMS184, true, "④★正常技能照旧进列表（不能把好技能也误删了）")
+  eq(EVAL_WSLOTS["致死打击"] ~= nil, true, "④★wslots 里也有它")
+  -- ③ 剔除时如实记日志（点名是哪个槽位；本客户端下拉里那个空行**没有名字**，
+  --   用户排查时唯一线索就是「哪个槽位」——所以日志必须报槽位号）
+  local lg184 = (type(EVAL_HELP_CONFIG.log) == "table") and EVAL_HELP_CONFIG.log or {}
+  local joined184 = table.concat(lg184, " | ")
+  eq(string.find(joined184, "读不出技能名", 1, true) ~= nil, true, "③★★日志如实说明「有格子读不出技能名」")
+  eq(string.find(joined184, "7", 1, true) ~= nil, true, "③★日志点名**是哪个槽位**（用户排查的唯一线索）：" .. string.sub(joined184, -120))
+
+  -- 收尾：复位
+  TEST.actions = keep184.actions
+  if wtt184 then wtt184.SetAction = nil end
+  rawset(_G, "EVAL_HELP_WTTTextLeft1", { GetText = function() return nil end })
+  TEST.curAction = nil
+  EVAL_GO_RESCAN(true, "cleanup184")
+  print("  角色技能空技能：空名动作剔除 / wslots 无空键 / 如实报槽位 / 正常技能照旧")
+end
 print("ALL TESTS PASS")
 
   local sd142 = EVAL_HELP_CONFIG.shareSealDemo

@@ -141,10 +141,18 @@ function EVAL_GO_RESCAN(quiet, why)
       end
     end
   end
+  local unnamed = {} -- ★1.74.9 读不出名字的槽位（如实记录，便于排查是哪个格子）
   for slot = 1, WAR_MAX_SLOT do
     if HasAction(slot) and not GetActionText(slot) then -- GetActionText 非空 = 宏格子，跳过
       local name = wactionName(slot)
-      if name and not wslots[name] then
+      -- ★1.74.9 修「角色技能下拉里出现一个空技能」（用户截图：列表第一项没图标没名字）：
+      --   空名/纯空白名也是「读不出来」—— Lua 里 "" 是真值，旧判据 if name 会放过它，
+      --   于是 wslots[""] 成立、下拉第一项就是那个空行（1.74.8 起「全部非宏格子」全列出来才暴露）。
+      --   这里按本项目的同一纪律处理：查不到 ≠ 没有，宁可不进表（下方探针能如实看见它）。
+      if type(name) == "string" then name = string.match(name, "^%s*(.-)%s*$") end
+      if not (name and name ~= "") then
+        table.insert(unnamed, slot)
+      elseif not wslots[name] then
         local tex
         local okt, t = pcall(GetActionTexture, slot)
         if okt then tex = t end
@@ -161,6 +169,11 @@ function EVAL_GO_RESCAN(quiet, why)
   --     quiet=true 的调用点（打开配置窗）本就不该刷屏。
   --   ★看门狗式调用点（if not wscanned then RESCAN(true) end，1.32.9/1.46 自愈）不写日志：
   --     它可能每帧触发，会把环形缓冲刷满，把用户真正关心的日志挤掉。
+  -- ★1.74.9 如实记录「读不出名字的格子」（上面把它们剔出了，用户得看得见这条因果）
+  if table.getn(unnamed) > 0 and type(EVAL_LOGLINE) == "function" then
+    EVAL_LOGLINE(string.format("[扫:%s] 有 %d 个格子读不出技能名（已剔除）：%s",
+      tostring(why or "quiet"), table.getn(unnamed), table.concat(unnamed, ",")))
+  end
   if quiet and type(EVAL_LOGLINE) == "function" then
     local total = 0
     for _ in pairs(wslots) do total = total + 1 end
