@@ -4011,6 +4011,8 @@ function EVAL_TB_ONEVENT(e)
     if type(EVAL_HH_RESTORE) == "function" then pcall(EVAL_HH_RESTORE) end
     -- ★1.74.5 消耗品助手同样再恢复一次（进世界时 UIParent 尺寸才准）
     if type(EVAL_CH_RESTORE) == "function" then pcall(EVAL_CH_RESTORE) end
+    -- ★probe/worldmap-minimap 分支：EH_SimpleMap「不启用不载入」对账（没开过就压回禁用）
+    if type(EVAL_SMAP_RECONCILE) == "function" then pcall(EVAL_SMAP_RECONCILE) end
   end
 end
 
@@ -4054,6 +4056,122 @@ qf:SetScript("OnUpdate", function()
   tbQuestTick() tbQPump() -- 1.69.2 任务延迟扫描 + 队列滴出
   tbWhoTick() -- ★1.73.12 名字主动查询的滴出（频率下限/单飞都在它里面；队列空时只有几次判断）
 end)
+
+-- ===== 简易地图插件（addons/EH_SimpleMap，独立插件）总开关 =====
+-- ★probe/worldmap-minimap 分支：真值 = tbCfg().simpleMap（账号级配置，一处真值）。
+--   「不启用不载入」= 走客户端原生插件管理：勾选 → EnableAddOn + SaveAddOns + 提示 /reload；
+--   载入期 EVAL_SMAP_RECONCILE 把「没开过的」压回禁用（WoW 对新插件默认启用，不压就会先跑起来）。
+--   EnableAddOn/DisableAddOn/SaveAddOns/GetAddOnEnableState/IsAddOnLoaded 均在本客户端官方索引内。
+local SMAP_ADDON = "EH_SimpleMap"
+function EVAL_SMAP_ENABLED()
+  local tb = tbCfg()
+  return (tb and tb.simpleMap == true) and true or false
+end
+function EVAL_SMAP_SET(v)
+  local tb = tbCfg()
+  if not tb then return false end
+  tb.simpleMap = v and true or false
+  if v then
+    if type(EnableAddOn) == "function" then pcall(EnableAddOn, SMAP_ADDON) end
+    if type(SaveAddOns) == "function" then pcall(SaveAddOns) end
+    -- ★用户要求：启用时**一律**弹窗确认「现在重载吗」（确定 = 自动 ReloadUI）。
+    --   首版只在「未载入」时弹 → 用户实测「没弹」：插件已在 AddOns.json 启用态时
+    --   走了「已载入」分支，期望的弹窗链路根本没触发 → 改为无条件弹。
+    EVAL_SMAP_RELOAD_ASK()
+  else
+    if type(DisableAddOn) == "function" then pcall(DisableAddOn, SMAP_ADDON) end
+    if type(SaveAddOns) == "function" then pcall(SaveAddOns) end
+    say(L("TB_SMAP_OFF"))
+  end
+  return true
+end
+function EVAL_SMAP_RECONCILE()
+  local tb = tbCfg()
+  if tb and tb.simpleMap == true then return end -- 用户开过：不动
+  if type(DisableAddOn) == "function" then pcall(DisableAddOn, SMAP_ADDON) end
+end
+
+-- ★用户要求（probe/worldmap-minimap 分支）：插件类开关启用时**弹窗确认是否 reload，确认即自动执行**。
+--   弹窗极简自绘（DIALOG/220 层级范式）；不依赖 tbSolid/tbBtn（它们在本文本序之后声明，闭包捕获不到）。
+local smapCf = nil
+local function smapCfSolid(t, r, g, b, a)
+  if not t then return end
+  if type(t.SetTexture) == "function" then pcall(t.SetTexture, t, "Interface\\Buttons\\WHITE8X8") end
+  if type(t.SetVertexColor) == "function" then pcall(t.SetVertexColor, t, r, g, b, a) end
+end
+local function smapCfText(parent, dy, txt, r, g, b, w)
+  local fs = parent:CreateFontString(nil, "OVERLAY")
+  if type(fs.SetFontObject) == "function" and type(GameFontNormal) ~= "nil" then pcall(fs.SetFontObject, fs, GameFontNormal) end
+  pcall(fs.SetPoint, fs, "TOP", parent, "TOP", 0, dy)
+  if w and type(fs.SetWidth) == "function" then pcall(fs.SetWidth, fs, w) end
+  if type(fs.SetJustifyH) == "function" then pcall(fs.SetJustifyH, fs, "CENTER") end
+  if type(fs.SetTextColor) == "function" then pcall(fs.SetTextColor, fs, r, g, b) end
+  if type(fs.SetText) == "function" then pcall(fs.SetText, fs, txt) end
+  return fs
+end
+local function smapCfBuild()
+  if smapCf then return true end
+  if type(CreateFrame) ~= "function" then return false end
+  local W, H = 380, 130
+  local root = CreateFrame("Frame", "EVAL_TB_SMAP_CONFIRM", UIParent)
+  root:SetWidth(W) root:SetHeight(H)
+  root:SetPoint("CENTER", UIParent, "CENTER", 0, 130)
+  pcall(root.SetFrameStrata, root, "DIALOG")
+  pcall(root.SetFrameLevel, root, 220) -- 高于工具箱弹窗(200)、低于全局下拉(250)
+  pcall(root.EnableMouse, root, true)
+  local bg = root:CreateTexture(nil, "BACKGROUND")
+  smapCfSolid(bg, 0.06, 0.05, 0.04, 0.98)
+  bg:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
+  bg:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", 0, 0)
+  for _, e in ipairs({ "TOP", "BOTTOM" }) do
+    local t = root:CreateTexture(nil, "BORDER")
+    smapCfSolid(t, 0.85, 0.70, 0.20, 1)
+    t:SetPoint(e .. "LEFT", root, e .. "LEFT", 0, 0)
+    t:SetPoint(e .. "RIGHT", root, e .. "RIGHT", 0, 0)
+    t:SetHeight(1)
+  end
+  for _, side in ipairs({ "LEFT", "RIGHT" }) do
+    local t = root:CreateTexture(nil, "BORDER")
+    smapCfSolid(t, 0.85, 0.70, 0.20, 1)
+    t:SetPoint("TOP" .. side, root, "TOP" .. side, 0, 0)
+    t:SetPoint("BOTTOM" .. side, root, "BOTTOM" .. side, 0, 0)
+    t:SetWidth(1)
+  end
+  smapCfText(root, -10, L("TB_SIMPLEMAP"), 0.95, 0.82, 0.35)
+  smapCfText(root, -36, L("TB_SMAP_ASK"), 0.90, 0.90, 0.90, W - 40)
+  local function mkBtn(txt, x, onClick)
+    local b = CreateFrame("Button", nil, root)
+    b:SetWidth(90) b:SetHeight(22)
+    b:SetPoint("BOTTOM", root, "BOTTOM", x, 14)
+    if type(b.EnableMouse) == "function" then pcall(b.EnableMouse, b, true) end
+    if type(b.RegisterForClicks) == "function" then pcall(b.RegisterForClicks, b, "LeftButtonUp") end
+    local bb = b:CreateTexture(nil, "BACKGROUND")
+    smapCfSolid(bb, 0.20, 0.16, 0.08, 1)
+    bb:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+    bb:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+    local bl = b:CreateFontString(nil, "OVERLAY")
+    if type(bl.SetFontObject) == "function" and type(GameFontNormal) ~= "nil" then pcall(bl.SetFontObject, bl, GameFontNormal) end
+    pcall(bl.SetPoint, bl, "CENTER", b, "CENTER", 0, 0)
+    if type(bl.SetText) == "function" then pcall(bl.SetText, bl, txt) end
+    b:SetScript("OnClick", onClick)
+    return b
+  end
+  mkBtn(L("BTN_OK"), -55, function()
+    pcall(root.Hide, root)
+    if type(ReloadUI) == "function" then pcall(ReloadUI) end -- ★确认 = 自动执行 /reload
+  end)
+  mkBtn(L("BTN_CANCEL"), 55, function() pcall(root.Hide, root) end)
+  root:Hide()
+  smapCf = root
+  return true
+end
+function EVAL_SMAP_RELOAD_ASK()
+  if smapCfBuild() then
+    pcall(smapCf.Show, smapCf)
+  else
+    say(L("TB_SMAP_RELOAD")) -- 弹窗建不起来就退回纯文字提示
+  end
+end
 
 -- ===== Tab 内容模型（分组归类；列表行动态展开） =====
 -- 标签里带上当前按键名（如「按住[Shift]临时停止」）——用户一眼看到现在挂的是哪个键。
@@ -4115,6 +4233,10 @@ local function tbModel()
     --   （EVAL_RW_ENABLED / EVAL_RW_SET），**不另开一个配置键** —— 免得开关与实现两处真值打架。
     { t = "h", label = L("TB_H_RAREWATCH") },
     { t = "rw", key = "rareWatch", label = L("TB_RAREWATCH"), tip = L("TB_RAREWATCH_TIP") },
+    -- ★probe/worldmap-minimap 分支：独立插件 EH_SimpleMap（addons/ 目录，探针版）的总开关。
+    --   不启用不载入 + 勾选后提示 /reload（get/set 走上方 EVAL_SMAP_*，单一真值 tb.simpleMap）。
+    { t = "h", label = L("TB_H_SIMPLEMAP") },
+    { t = "smap", key = "simpleMap", label = L("TB_SIMPLEMAP"), tip = L("TB_SIMPLEMAP_TIP"), wip = L("TB_SMAP_WIP") },
   }
 end
 
@@ -4294,6 +4416,10 @@ function EVAL_TB_REFRESH()
           --   这里只是**它的一个面板**，不存第二份配置（改一处即改全局；`/eh go 稀有 开|关` 与它同源）
           r.get = function() return (type(EVAL_RW_ENABLED) == "function") and EVAL_RW_ENABLED() or false end
           r.set = function(v) if type(EVAL_RW_SET) == "function" then EVAL_RW_SET(v) end end
+        elseif it.t == "smap" then
+          -- ★probe/worldmap-minimap 分支：EH_SimpleMap 独立插件开关（EnableAddOn + 提示 /reload）
+          r.get = function() return (type(EVAL_SMAP_ENABLED) == "function") and EVAL_SMAP_ENABLED() or false end
+          r.set = function(v) if type(EVAL_SMAP_SET) == "function" then EVAL_SMAP_SET(v) end end
         elseif it.t == "g" then -- CVar 直读型（公会上下线提示）
           r.get = function() return type(GetCVar) == "function" and GetCVar("guildMemberNotify") == "0" end
           r.set = function(v) if type(SetCVar) == "function" then SetCVar("guildMemberNotify", v and 0 or 1) end end

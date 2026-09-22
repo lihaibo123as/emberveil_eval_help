@@ -8424,6 +8424,23 @@ if type(SlashCmdList) == "table" then
       EVAL_HELP_CONFIG.bindDiag = out
       for _, s in ipairs(out) do say("DIAG " .. s) end
       say("★已写入 SavedVariables —— 请 /reload，然后我直接读文件（聊天框内容已存底）")
+    elseif msg == "go mapdbg" or msg == "go mapdbg pop" then
+      -- ★probe/worldmap-minimap 分支：地图插件开关链路诊断（弹窗未弹的取证）
+      say("— 地图插件开关诊断 —")
+      say("① 开关真值 EVAL_SMAP_ENABLED=" .. tostring(type(EVAL_SMAP_ENABLED) == "function" and EVAL_SMAP_ENABLED()))
+      say("② IsAddOnLoaded(EH_SimpleMap)="
+        .. tostring(type(IsAddOnLoaded) == "function" and IsAddOnLoaded("EH_SimpleMap")))
+      local okES, es = pcall(GetAddOnEnableState, "player", "EH_SimpleMap")
+      say("③ GetAddOnEnableState: ok=" .. tostring(okES) .. " v=" .. tostring(es))
+      say("④ 弹窗函数 EVAL_SMAP_RELOAD_ASK=" .. type(EVAL_SMAP_RELOAD_ASK))
+      if msg == "go mapdbg pop" then
+        if type(EVAL_SMAP_RELOAD_ASK) == "function" then
+          EVAL_SMAP_RELOAD_ASK()
+          say("⑤ 已试弹确认窗（屏幕上应出现「现在重载吗」弹窗；确定=自动 /reload）")
+        else
+          say("⑤ 弹窗函数不存在（Toolbox.lua 没载入新版？）")
+        end
+      end
     elseif msg == "go bind" then
       -- ★1.71.22 现状检查（**诊断用，不再做写入试验**）：派发链路现在是
       --   SetBinding(键, "ACTIONBUTTON<格>") + 接管 ActionButtonUp，所以这里只报「这条链路各环的现状」。
