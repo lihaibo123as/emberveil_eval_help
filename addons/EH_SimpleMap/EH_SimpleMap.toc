@@ -1,0 +1,10 @@
+## Interface: 11200
+## Title: EH_SimpleMap 简易世界地图（透明度可调）
+## Notes: 简易世界地图：开图自动藏黑幕透出游戏世界；Shift+滚轮=透明度 · Ctrl+滚轮=缩放 · 金色条=拖动 · 底部坐标 · 键盘不占用。诊断：/ehm
+## Notes-zhCN: 同 Notes
+## Author: DSH
+## Version: 0.2.0
+## X-Category: Map
+## SavedVariables: EH_SIMPLEMAP_CFG
+
+EH_SimpleMap.lua

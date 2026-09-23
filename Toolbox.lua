@@ -4180,6 +4180,17 @@ local function subSet(a, v)
   EVAL_SUBADDONS_REFRESH()
 end
 
+-- ★通用 setter（工具箱快捷行与「子插件」Tab 共用，单一真值）
+function EVAL_PLUGIN_SET(key, v)
+  for _, a in ipairs(SUBADDONS) do
+    if a.key == key then
+      subSet(a, v and true or false)
+      return true
+    end
+  end
+  return false
+end
+
 function EVAL_PLUGIN_RECONCILE()
   local tb = tbCfg()
   if not tb then return end
@@ -4461,6 +4472,9 @@ local function tbModel()
     -- ★1.74.27 用户要求：「将以上功能提取到独立文件内 ./tools 然后再工具箱内设置开关.」
     --   稀有提醒转播（tools/RareWatch.lua）的**总开关**放这里；★读写走实现自己的单一来源
     --   （EVAL_RW_ENABLED / EVAL_RW_SET），**不另开一个配置键** —— 免得开关与实现两处真值打架。
+    -- ★merge 适配：独立子插件在工具箱也给一个快捷开关行（与配置窗「子插件」Tab 同源，单一真值）
+    { t = "h", label = L("TB_H_SIMPLEMAP") },
+    { t = "smap", key = "simpleMap", label = L("TB_SIMPLEMAP"), tip = L("TB_SIMPLEMAP_TIP") },
     { t = "h", label = L("TB_H_RAREWATCH") },
     { t = "rw", key = "rareWatch", label = L("TB_RAREWATCH"), tip = L("TB_RAREWATCH_TIP") },
   }
@@ -4637,6 +4651,10 @@ function EVAL_TB_REFRESH()
           local key = it.key
           r.get = function() local tb = tbCfg() return tb and tb[key] and true or false end
           r.set = function(v) local tb = tbCfg() if tb then tb[key] = v and true or false end end
+        elseif it.t == "smap" then
+          -- ★merge 适配：走**子插件注册表**（同一真值；启用时同样弹「现在重载吗」确认窗）
+          r.get = function() return (type(EVAL_PLUGIN_ENABLED) == "function") and EVAL_PLUGIN_ENABLED("simpleMap") or false end
+          r.set = function(v) if type(EVAL_PLUGIN_SET) == "function" then EVAL_PLUGIN_SET("simpleMap", v) end end
         elseif it.t == "rw" then
           -- ★1.74.27 稀有提醒转播：开关真值在 tools/RareWatch.lua（EVAL_RW_ENABLED/EVAL_RW_SET），
           --   这里只是**它的一个面板**，不存第二份配置（改一处即改全局；`/eh go 稀有 开|关` 与它同源）
