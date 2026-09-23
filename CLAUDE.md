@@ -54,7 +54,7 @@
   fengari 已装在工作区 node_modules（npm 走代理 `127.0.0.1:10809`）。
 - ★★**判据必须同时看「退出码」与「输出文本」**：源码检查失败走 `process.exitCode = 1` 而**脚本照跑到底**，于是 `ALL TESTS PASS` **照样打印**——只看这句话会**漏报**。
   行为断言失败打的是 **`ASSERT FAIL`**，源码检查失败打的是 **`: FAIL`**（两者都要在输出里找）。
-- **源码级检查**（`test_engine.js` 内，**改了对应区域就必须让它们继续通过**）：`WIN WIDTH`（窗口宽度单一来源）· `DECL ORDER`（**9 个文件**的顶层 local 声明早于使用——1.73.0 起含 PetData/PetHelper）· `LAYOUT`（`EVAL_DS_BUILD` 布局常量）· `VERSION`（源码 VERSION == toc）· `LANG KEY`（`L("字面量")` 三语言齐全）· `LANG SOURCE`（取语言只认 `EVAL_GET_LANG`）· `WINDOW SIZE`（自建窗真的设了宽与高）· `COMMENT SWALLOW`（语句没被行尾注释吞掉）· `ICON`（图标素材真实存在）。
+- **源码级检查**（`test_engine.js` 内，**改了对应区域就必须让它们继续通过**）：`WIN WIDTH`（窗口宽度单一来源）· `DECL ORDER`（**15 个文件**的顶层 local 声明早于使用——1.73.0 起含 PetData/PetHelper）· **`ADDON DECL ORDER`**（★同款检查覆盖 `addons/**/*.lua` 独立插件目录，1.74.29 补——见 §5.1「local 声明顺序」条）· `LAYOUT`（`EVAL_DS_BUILD` 布局常量）· `VERSION`（源码 VERSION == toc）· `LANG KEY`（`L("字面量")` 三语言齐全）· `LANG SOURCE`（取语言只认 `EVAL_GET_LANG`）· `WINDOW SIZE`（自建窗真的设了宽与高）· `COMMENT SWALLOW`（语句没被行尾注释吞掉）· `ICON`（图标素材真实存在）。
   后续又加到 **18 道以上**：`STOP ATTACK WIRING`（第 13 道：`stopAllOf`/`followOf` 那 7 个站点接线）· `UI ICON`（第 14 道：纹理路径逐个核到磁盘 + 类别图标不许撞图）· `CHAN RETRY WIRING`（第 15 道：`tbChanRetry()` ≥3 处接线 + 手动重试入口）· `EXAMPLES TOC`（磁盘 ↔ .toc 双向一致 + 顺序 = 选单顺序 + 数据不许搬回生产文件）· `README TABLE`（第 16 道：3 个 README 的版本行必须全在「更新日志」表里、恰好 10 行；CHANGELOG 保留完整历史 —— 守「发版脚本把版本行插错表」这类**不报错只是位置不对**的事故）· `MILESTONE`（第 17 道：3 个 README 都有 🏁 板块 + **里程碑在更新日志之上** + 标题范围末端 == 当前 VERSION + **板块正文 1..10 行**（10 个点、一条一行）+ **每条都是 `- ` 列表项**—— 守「顺序反了 / 里程碑又写成版本流水账 / 只更新了 CHANGELOG 忘了里程碑范围 / 排版被合并成一大段」）。
   ★判据：**行为断言照不到 UI 接线（漏接不报错、只是显示不对）→ 必须用源码检查补位**；两类检查互补，缺一就有盲区。
 - **断言组 1~66+**：覆盖解析/引擎/UI/布局/语言/标注层；**新增功能请顺带加组**（写在 `test_assert.lua` 末尾 `print("ALL TESTS PASS")` 之前）。
@@ -199,6 +199,10 @@
 
 ### 5.1 Lua / 解析
 
+- ★★★**local 声明顺序 = 词法作用域，不是调用顺序**（1.74.29 用户：「频繁遇到这个坑就要记住」）：把**新代码段插到旧段之后**、却调用了旧段后面才声明的 `local` → 那个名字在闭包里**绑成全局 nil**，运行时 `attempt to call global 'X' (a nil value)`（**不是**语法错误：`luacheck` 照样 SYNTAX OK）。
+  本轮在 `addons/` 独立插件上**连踩三次**：`pb8Start`→`autoEnsureLabel`、`pb9SetAll`→`featWm`、`uiRefresh`→`hlApplySelected`。
+  【判据】① 插入新段前先问「它用到的东西声明在哪」；② 跨段共享件（`*Wm`/`*Big`/`*Ensure*`/`*Apply*`）**一律放在所有使用方之前**，或改成 `_G[...]` 直取；③ **闸门兜底 = `ADDON DECL ORDER CHECK`**（`test_engine.js`，扫 `addons/**/*.lua`，与主仓 `DECL ORDER CHECK` 同算法）——**检查存在 ≠ 覆盖到位**：旧检查只扫 15 个生产文件，独立插件目录是盲区（1.70.46 的老教训重演）。
+  ★该检查首版**误报**过 `TOP`（`SetPoint(fs,"TOP",...)` 里的字符串字面量）→ 用法比对前**必须先剥字符串字面量**；新增检查一律先做变异验证（临时造一个「先用后声明」的文件，确认它真报 FAIL 再删）。
 - 多字节字符禁入 Lua `[...]`（按字节匹配）、`|` 非交替：`[:：]` 吃「：」首字节 → 目标/物品/宠物/姿态/条件解析全线静默失效；`colonNorm()` 入口归一。★`string.sub` 同样按**字节**取（`"go 喂食"`=9 字节 → 前缀判据写 `1,5` 恒不等 = 命令静默失效；1.74.5 实踩）。
 - 模式里 `%` 是转义符：`%.`字面点、`%%`字面百分号（写错则分支永死）；plain 模式找 `%` 写 `"%"`，`"%%"` 找不到。
 - 方括号组成对解析（`(.-)` 吞 `[职业:术士][队伍:2]`）→ 用 `[^%]]-`、半/全角分匹配；空集 ≠ 没写。

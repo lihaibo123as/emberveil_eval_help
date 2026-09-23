@@ -5549,11 +5549,12 @@ do
   eq(stEm.state, "empty", "★★接口在但一枚都没有 → empty")
   EVAL_IB_REFRESH()
   eq(EVAL_IB_TEST_STATUS_TEXT(), L84["IB_EMPTY"], "★★状态行如实说明「接口在但没取到」")
-  -- ★Tab 名单：必须真的有 6 个（1.73.0 起新增「抓宠帮手」），标签读**真实按钮文本**
+  -- ★Tab 名单：必须真的有 7 个（1.73.0 起新增「抓宠帮手」；1.74.29 起新增「子插件」），标签读**真实按钮文本**
   local names84 = EVAL_TEST_CFG_TAB_NAMES()
-  eq(table.getn(names84), 6, "★★配置窗现在有 6 个 Tab")
+  eq(table.getn(names84), 7, "★★配置窗现在有 7 个 Tab（1.74.29 新增「子插件」）")
   eq(names84[5], L84["TAB_ICONS"], "★★第 5 个 Tab 的标签 = 语言包 TAB_ICONS")
   eq(names84[6], L84["TAB_PET"], "★★第 6 个 Tab 的标签 = 语言包 TAB_PET（抓宠帮手）")
+  eq(names84[7], L84["TAB_PLUGINS"], "★★第 7 个 Tab 的标签 = 语言包 TAB_PLUGINS（子插件）")
   -- ★「取失败」要如实记账（不是静默当 0）：第 2 项给个非字符串 → 桩按取失败处理
   TEST.macroIcons = { "Spell_Fire_One", false, "Spell_Fire_Three" }
   EVAL_IB_TEST_RESET()

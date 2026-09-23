@@ -841,6 +841,23 @@ PROF_TIP_CAPPED = "Covers %s/5 condition groups → score capped (God tier needs
   -- ★1.74.5 Toolbox "pending test" mark (yellow exclamation; tooltip)
   TB_WIP = "Pending test",
   TB_WIP_TIP = "Not verified in game yet: the API and interaction may still change (/eh go 喂食探针 is the evidence entry point)",
+  -- ★1.74.29 配置窗「子插件」Tab（分组：调试 → 图层调试）
+  TAB_PLUGINS = "Sub-addons",
+  SUB_GROUP_DEBUG = "—— Debug ——",
+  SUB_GROUP_MAP = "—— Map ——",
+  SUB_LAYERDEBUG = "Layer debug (EH_DebugBox)",
+  SUB_LAYERDEBUG_TIP = "Standalone sub-addon: layer debug panel (list/filter/scroll/multi-select of every map layer; set scale, alpha, width/height, coordinates; custom settings saved + one-click restore). Tick to enable, then reload the UI — OK reloads automatically.",
+  SUB_SIMPLEMAP = "Simple map (EH_SimpleMap)",
+  SUB_SIMPLEMAP_TIP = "Standalone sub-addon: simple world map (hides the blackout so the world shows through, opacity and keyboard). Tick to enable, then reload the UI.",
+  SUB_OPEN = "Open panel",
+  SUB_NEEDLOAD = "This sub-addon is not loaded: tick it to enable, then reload the UI",
+  SUB_OPEN_FAIL = "Cannot open: the sub-addon registered no command (version mismatch?)",
+  SUB_ASK_RELOAD = "Sub-addon enabled. A UI reload (/reload) is required to load it. Reload now?",
+  SUB_RELOAD_HINT = "Enabled (confirm dialog unavailable): please /reload manually",
+  SUB_OFF_STATE = "Disabled (not loaded)",
+  SUB_LOADED_STATE = "Loaded (available this session)",
+  SUB_RELOAD_STATE = "Enabled · waiting for /reload",
+  SUB_NOTE = "Sub-addons are standalone AddOns (own folder and toc): ticked = enabled in the client addon list; unticked = never loaded (its files are not even read).",
   -- ★1.74.5 shared icon grid (tools/IconGrid.lua; used by both helpers)
   IG_EMPTY = "No items in bags",
   IG_SELECTED = "Selected (click again to unselect)",

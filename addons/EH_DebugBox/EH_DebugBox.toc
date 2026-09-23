@@ -1,0 +1,10 @@
+## Interface: 11200
+## Title: EH_DebugBox 子插件·调试工具箱
+## Notes: 子插件（调试分类）：图层调试面板 —— 图层列表/过滤/滚动/多选，可设缩放·透明度·宽高·坐标，自定义存档 + 一键还原。命令 /edb（旧 /ems 仍可用）
+## Notes-zhCN: 同上：/edb ui 打开面板 · /edb 查看全部命令
+## Author: DSH
+## Version: 0.3.0
+## X-Category: Map
+## SavedVariables: EH_DEBUGBOX_CFG
+
+EH_DebugBox.lua

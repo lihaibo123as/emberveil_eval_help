@@ -4055,6 +4055,354 @@ qf:SetScript("OnUpdate", function()
   tbWhoTick() -- ★1.73.12 名字主动查询的滴出（频率下限/单飞都在它里面；队列空时只有几次判断）
 end)
 
+-- ============================================================
+-- ★1.74.29 子插件（独立 AddOn）管理 + 确认重载弹窗
+-- 用户要求：把独立子插件归类进配置窗「子插件」Tab，分组 调试 → 图层调试。
+-- 机制（官方索引已确认）：EnableAddOn / DisableAddOn / SaveAddOns / IsAddOnLoaded / ReloadUI；
+--   真值走 tbCfg()（账号级）；「不启用不载入」由载入期 EVAL_PLUGIN_RECONCILE 保证。
+-- ============================================================
+local SUBADDONS = {
+  { key = "debugBox", id = "EH_DebugBox", group = "debug", name = L("SUB_LAYERDEBUG"),
+    tip = L("SUB_LAYERDEBUG_TIP"), slash = "EHDEBUGBOX", slashArg = "ui", hasUI = true },
+  { key = "simpleMap", id = "EH_SimpleMap", group = "map", name = L("SUB_SIMPLEMAP"), tip = L("SUB_SIMPLEMAP_TIP") },
+}
+
+local subUI = { rows = {}, built = false, confirm = nil }
+
+local function subFont(parent)
+  local fs = parent:CreateFontString(nil, "OVERLAY")
+  if type(GameFontNormal) ~= "nil" then pcall(fs.SetFontObject, fs, GameFontNormal) end
+  return fs
+end
+
+local function subSolid(t, r, g, b, a)
+  if type(t.SetTexture) == "function" then pcall(t.SetTexture, t, "Interface\\Buttons\\WHITE8X8") end
+  pcall(t.SetVertexColor, t, r, g, b, a)
+end
+
+local function subConfirmBuild()
+  if subUI.confirm then return true end
+  if type(CreateFrame) ~= "function" then return false end
+  local W, H = 380, 132
+  local root = CreateFrame("Frame", "EVAL_TB_PLUGIN_CONFIRM", UIParent)
+  root:SetWidth(W) root:SetHeight(H)
+  root:SetPoint("CENTER", UIParent, "CENTER", 0, 130)
+  pcall(root.SetFrameStrata, root, "DIALOG")
+  pcall(root.SetFrameLevel, root, 230)
+  if type(root.EnableMouse) == "function" then pcall(root.EnableMouse, root, true) end
+  local bg = root:CreateTexture(nil, "BACKGROUND")
+  bg:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
+  bg:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", 0, 0)
+  subSolid(bg, 0.04, 0.04, 0.04, 0.96)
+  for _, e in ipairs({ "TOP", "BOTTOM" }) do
+    local t = root:CreateTexture(nil, "BORDER")
+    subSolid(t, 0.85, 0.70, 0.20, 1)
+    t:SetPoint(e .. "LEFT", root, e .. "LEFT", 0, 0)
+    t:SetPoint(e .. "RIGHT", root, e .. "RIGHT", 0, 0)
+    t:SetHeight(1)
+  end
+  for _, s in ipairs({ "LEFT", "RIGHT" }) do
+    local t = root:CreateTexture(nil, "BORDER")
+    subSolid(t, 0.85, 0.70, 0.20, 1)
+    t:SetPoint("TOP" .. s, root, "TOP" .. s, 0, 0)
+    t:SetPoint("BOTTOM" .. s, root, "BOTTOM" .. s, 0, 0)
+    t:SetWidth(1)
+  end
+  local title = subFont(root)
+  pcall(title.SetPoint, title, "TOP", root, "TOP", 0, -12)
+  pcall(title.SetTextColor, title, 0.95, 0.82, 0.35)
+  local body = subFont(root)
+  pcall(body.SetPoint, body, "TOP", root, "TOP", 0, -38)
+  pcall(body.SetWidth, body, W - 40)
+  pcall(body.SetJustifyH, body, "CENTER")
+  pcall(body.SetTextColor, body, 0.90, 0.90, 0.90)
+  local function mkBtn(txt, x, onClick)
+    local b = CreateFrame("Button", nil, root)
+    b:SetWidth(90) b:SetHeight(22)
+    b:SetPoint("BOTTOM", root, "BOTTOM", x, 14)
+    if type(b.EnableMouse) == "function" then pcall(b.EnableMouse, b, true) end
+    if type(b.RegisterForClicks) == "function" then pcall(b.RegisterForClicks, b, "LeftButtonUp") end
+    local bb = b:CreateTexture(nil, "BACKGROUND")
+    bb:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+    bb:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+    subSolid(bb, 0.22, 0.17, 0.07, 1)
+    local bl = subFont(b)
+    pcall(bl.SetPoint, bl, "CENTER", b, "CENTER", 0, 0)
+    pcall(bl.SetText, bl, txt)
+    b:SetScript("OnClick", onClick)
+  end
+  mkBtn(L("BTN_OK"), -55, function()
+    pcall(root.Hide, root)
+    if type(ReloadUI) == "function" then pcall(ReloadUI) end -- ★确定 = 自动 /reload
+  end)
+  mkBtn(L("BTN_CANCEL"), 55, function() pcall(root.Hide, root) end)
+  root:Hide()
+  subUI.confirm = { root = root, title = title, body = body }
+  return true
+end
+
+function EVAL_PLUGIN_RELOAD_ASK(addonName)
+  if not subConfirmBuild() then
+    say(L("SUB_RELOAD_HINT"))
+    return
+  end
+  pcall(subUI.confirm.title.SetText, subUI.confirm.title, tostring(addonName or ""))
+  pcall(subUI.confirm.body.SetText, subUI.confirm.body, L("SUB_ASK_RELOAD"))
+  pcall(subUI.confirm.root.Show, subUI.confirm.root)
+end
+
+function EVAL_PLUGIN_ENABLED(key)
+  local tb = tbCfg()
+  return (tb and tb[key] == true) and true or false
+end
+
+local function subLoaded(a)
+  return (type(IsAddOnLoaded) == "function") and IsAddOnLoaded(a.id) and true or false
+end
+
+local function subSet(a, v)
+  local tb = tbCfg()
+  if not tb then return end
+  tb[a.key] = v and true or false
+  if v then
+    if type(EnableAddOn) == "function" then pcall(EnableAddOn, a.id) end
+    if type(SaveAddOns) == "function" then pcall(SaveAddOns) end
+    if subLoaded(a) then
+      say(a.id .. " 已处于载入状态（本会话直接可用）")
+    else
+      EVAL_PLUGIN_RELOAD_ASK(a.id)
+    end
+  else
+    if type(DisableAddOn) == "function" then pcall(DisableAddOn, a.id) end
+    if type(SaveAddOns) == "function" then pcall(SaveAddOns) end
+    say(a.id .. " 已停用：/reload 后不再载入")
+  end
+  EVAL_SUBADDONS_REFRESH()
+end
+
+function EVAL_PLUGIN_RECONCILE()
+  local tb = tbCfg()
+  if not tb then return end
+  for _, a in ipairs(SUBADDONS) do
+    if tb[a.key] ~= true and type(DisableAddOn) == "function" then pcall(DisableAddOn, a.id) end
+  end
+end
+
+-- ★子插件行 tooltip 用：按**字符**折行（中文 3 字节/字 → 绝不能按字节切，
+--   否则会出现「半个汉字」的乱码；这里以 UTF-8 首字节为界计数）
+local function subWrapLine(text, perLine)
+  text = tostring(text or "")
+  local out, chars = {}, 0
+  local cur = {}
+  for i = 1, string.len(text) do
+    local b = string.byte(text, i)
+    if b and b >= 128 and b < 192 then
+      -- 续字节：追加到当前字符
+      table.insert(cur, string.sub(text, i, i))
+    else
+      -- 新字符起始：先结算上一个字符的计数
+      if chars >= perLine and table.getn(cur) > 0 then
+        table.insert(out, table.concat(cur))
+        cur, chars = {}, 0
+      end
+      chars = chars + 1
+      table.insert(cur, string.sub(text, i, i))
+    end
+  end
+  if table.getn(cur) > 0 then table.insert(out, table.concat(cur)) end
+  return out
+end
+
+local function subShowTip(owner, a)
+  local tip = _G["GameTooltip"]
+  if not tip or type(tip.SetOwner) ~= "function" then return end
+  pcall(tip.SetOwner, tip, owner, "ANCHOR_RIGHT")
+  if type(tip.ClearLines) == "function" then pcall(tip.ClearLines, tip) end
+  if type(tip.AddLine) ~= "function" then return end
+  pcall(tip.AddLine, tip, a.name, 1, 0.85, 0.30)                 -- 标题：子插件名
+  pcall(tip.AddLine, tip, a.id .. "（独立 AddOn，独立文件夹与 toc）", 0.75, 0.75, 0.75)
+  for _, ln in ipairs(subWrapLine(a.tip or "", 34)) do           -- 详细功能描述（分行）
+    pcall(tip.AddLine, tip, ln, 0.90, 0.90, 0.90)
+  end
+  local on = EVAL_PLUGIN_ENABLED(a.key)
+  local loaded = subLoaded(a)
+  local state = (not on) and "未启用（不载入）" or (loaded and "已载入（本会话可用）" or "已启用 · 待 /reload 载入")
+  pcall(tip.AddLine, tip, "状态：" .. state, 0.80, 0.90, 0.80)
+  pcall(tip.AddLine, tip, "勾选 = 启用并写入客户端插件清单；未勾选 = 不载入（连文件都不读）", 0.70, 0.70, 0.70)
+  if a.slash then
+    pcall(tip.AddLine, tip, "命令：/" .. string.lower(a.slash == "EHDEBUGBOX" and "edb" or a.slash)
+      .. (a.slashArg and (" " .. a.slashArg) or "") .. "（打开面板）", 0.70, 0.85, 1.00)
+  end
+  pcall(tip.Show, tip)
+end
+
+local function subHideTip()
+  local tip = _G["GameTooltip"]
+  if tip and type(tip.Hide) == "function" then pcall(tip.Hide, tip) end
+end
+
+local function subMakeRow(root, y, a, page)
+  -- ★行几何在每个函数里各自算（LX 是 EVAL_SUBADDONS_BUILD 的**局部**，跨函数读不到 → 之前读到全局 nil 直接报错）
+  local LX, ROWH = 18, 24 -- ★ROWH 也必须在本函数里声明（跨函数读不到 → 之前报 global 'ROWH' nil）
+  local RW = (type(root.GetWidth) == "function") and root:GetWidth() or 660
+  local COL_RIGHT = RW - LX
+  local chk = CreateFrame("Button", nil, root)
+  chk:SetWidth(16) chk:SetHeight(16)
+  chk:SetPoint("TOPLEFT", root, "TOPLEFT", LX, y)
+  if type(chk.EnableMouse) == "function" then pcall(chk.EnableMouse, chk, true) end
+  if type(chk.RegisterForClicks) == "function" then pcall(chk.RegisterForClicks, chk, "LeftButtonUp") end
+  local outer = chk:CreateTexture(nil, "BACKGROUND")
+  outer:SetPoint("TOPLEFT", chk, "TOPLEFT", 0, 0)
+  outer:SetPoint("BOTTOMRIGHT", chk, "BOTTOMRIGHT", 0, 0)
+  subSolid(outer, 0.85, 0.70, 0.20, 1) -- ★与工具箱同款：金边
+  local bg = chk:CreateTexture(nil, "ARTWORK")
+  bg:SetPoint("TOPLEFT", chk, "TOPLEFT", 1, -1)
+  bg:SetPoint("BOTTOMRIGHT", chk, "BOTTOMRIGHT", -1, 1)
+  subSolid(bg, 0.10, 0.09, 0.06, 1)
+  local mk = chk:CreateTexture(nil, "OVERLAY")
+  mk:SetPoint("TOPLEFT", chk, "TOPLEFT", 3, -3)
+  mk:SetPoint("BOTTOMRIGHT", chk, "BOTTOMRIGHT", -3, 3)
+  subSolid(mk, 0.95, 0.80, 0.25, 1)
+  mk:Hide()
+  chk:SetScript("OnClick", function() subSet(a, not EVAL_PLUGIN_ENABLED(a.key)) end)
+  -- ★用户要求：每个子插件行加 tooltip（详细功能描述）
+  chk:SetScript("OnEnter", function() subShowTip(chk, a) end)
+  chk:SetScript("OnLeave", function() subHideTip() end)
+  local nm = subFont(root)
+  pcall(nm.SetPoint, nm, "TOPLEFT", root, "TOPLEFT", LX + 24, y + 1) -- ★与工具箱一致：勾选框右侧固定偏移
+  pcall(nm.SetWidth, nm, 210)
+  pcall(nm.SetJustifyH, nm, "LEFT")
+  pcall(nm.SetText, nm, a.name)
+  pcall(nm.SetTextColor, nm, 0.92, 0.88, 0.80)
+  -- 名称与状态文字也挂同一 tooltip（悬停整行都有说明）
+  local hover = CreateFrame("Button", nil, root)
+  hover:SetWidth(1) hover:SetHeight(1)
+  hover:SetPoint("TOPLEFT", root, "TOPLEFT", LX, y)
+  local hn = subFont(root)
+  pcall(hn.SetPoint, hn, "TOPLEFT", root, "TOPLEFT", LX, y)
+  pcall(hn.SetWidth, hn, 200)
+  pcall(hn.SetHeight, hn, ROWH - 4)
+  if type(hn.SetJustifyH) == "function" then pcall(hn.SetJustifyH, hn, "LEFT") end
+  -- 用不可见的大热区覆盖整个行（含名称/状态/按钮左侧），统一出 tooltip
+  local hot = CreateFrame("Frame", nil, root)
+  hot:SetWidth(math.max(120, COL_RIGHT - LX))
+  hot:SetHeight(ROWH - 4)
+  hot:SetPoint("TOPLEFT", root, "TOPLEFT", LX, y)
+  if type(hot.EnableMouse) == "function" then pcall(hot.EnableMouse, hot, true) end
+  if type(hot.SetFrameLevel) == "function" then pcall(hot.SetFrameLevel, hot, 1) end
+  hot:SetScript("OnEnter", function() subShowTip(chk, a) end)
+  hot:SetScript("OnLeave", function() subHideTip() end)
+  local st = subFont(root)
+  pcall(st.SetPoint, st, "TOPLEFT", root, "TOPLEFT", LX + 244, y + 1) -- 状态列起点固定（不再跟着名字宽度漂）
+  pcall(st.SetWidth, st, math.max(120, COL_RIGHT - (LX + 244) - 100))
+  pcall(st.SetJustifyH, st, "LEFT")
+  local wg = { chk, nm, st, hot }
+  local row = { chk = chk, mk = mk, status = st, addon = a }
+  if a.hasUI then
+    local ob = CreateFrame("Button", nil, root)
+    ob:SetWidth(84) ob:SetHeight(18)
+    ob:SetPoint("TOPLEFT", root, "TOPLEFT", COL_RIGHT - 84, y - 1) -- ★右对齐列右边界（工具箱口径）
+    if type(ob.EnableMouse) == "function" then pcall(ob.EnableMouse, ob, true) end
+    if type(ob.RegisterForClicks) == "function" then pcall(ob.RegisterForClicks, ob, "LeftButtonUp") end
+    local obg = ob:CreateTexture(nil, "BACKGROUND")
+    obg:SetPoint("TOPLEFT", ob, "TOPLEFT", 0, 0)
+    obg:SetPoint("BOTTOMRIGHT", ob, "BOTTOMRIGHT", 0, 0)
+    subSolid(obg, 0.22, 0.17, 0.07, 1)
+    local ot = subFont(ob)
+    pcall(ot.SetPoint, ot, "CENTER", ob, "CENTER", 0, 0)
+    pcall(ot.SetText, ot, L("SUB_OPEN"))
+    ob:SetScript("OnClick", function()
+      if not subLoaded(a) then
+        say(L("SUB_NEEDLOAD"))
+        return
+      end
+      local fn = (a.slash and type(SlashCmdList) == "table") and SlashCmdList[a.slash] or nil
+      if type(fn) == "function" then
+        pcall(fn, a.slashArg or "")
+      else
+        say(L("SUB_OPEN_FAIL"))
+      end
+    end)
+    ob:Hide() -- 初始隐藏；REFRESH 里「已载入」才 Show
+    row.openBtn = ob
+    table.insert(wg, ob)
+  end
+  row.widgets = wg
+  return row
+end
+
+function EVAL_SUBADDONS_BUILD(root, page, refreshes)
+  subUI.rows = {}
+  -- ★★行几何必须**先声明再用**：head() 是闭包，Lua 词法作用域 ⇒ 声明在它之后的话，
+  --   里面读到的 LX 是**全局 nil**，SetPoint(x=nil) 被 pcall 静默吞掉 → 标题根本没锚上（用户报「样式异常」的真凶）。
+  local LX, ROWH = 18, 24
+  local RW = (type(root.GetWidth) == "function") and root:GetWidth() or 660
+  local COL_RIGHT = RW - LX -- 列右边界（工具箱口径：右侧按钮贴列右边缘，而不是跟在文字后面飘）
+  local function head(txt, y)
+    local fs = subFont(root)
+    pcall(fs.SetPoint, fs, "TOPLEFT", root, "TOPLEFT", LX, y)
+    pcall(fs.SetTextColor, fs, 0.95, 0.80, 0.30)
+    pcall(fs.SetText, fs, txt)
+    table.insert(page.widgets, fs)
+  end
+  local y = -56
+  head(L("SUB_GROUP_DEBUG"), y)
+  y = y - ROWH
+  for _, a in ipairs(SUBADDONS) do
+    if a.group == "debug" then
+      local row = subMakeRow(root, y, a, page)
+      for _, f in ipairs(row.widgets) do table.insert(page.widgets, f) end
+      table.insert(subUI.rows, row)
+      y = y - ROWH
+    end
+  end
+  head(L("SUB_GROUP_MAP"), y - 12)
+  y = y - ROWH - 8
+  for _, a in ipairs(SUBADDONS) do
+    if a.group == "map" then
+      local row = subMakeRow(root, y, a, page)
+      for _, f in ipairs(row.widgets) do table.insert(page.widgets, f) end
+      table.insert(subUI.rows, row)
+      y = y - ROWH
+    end
+  end
+  local note = subFont(root)
+  pcall(note.SetPoint, note, "TOPLEFT", root, "TOPLEFT", 16, y - 12)
+  pcall(note.SetWidth, note, 560)
+  pcall(note.SetJustifyH, note, "LEFT")
+  pcall(note.SetTextColor, note, 0.80, 0.80, 0.80)
+  pcall(note.SetText, note, L("SUB_NOTE"))
+  table.insert(page.widgets, note)
+  subUI.built = true
+  EVAL_SUBADDONS_REFRESH()
+end
+
+function EVAL_SUBADDONS_REFRESH()
+  if not subUI.built then return end
+  for _, row in ipairs(subUI.rows) do
+    local a = row.addon
+    local on = EVAL_PLUGIN_ENABLED(a.key)
+    local loaded = subLoaded(a)
+    if on then pcall(row.mk.Show, row.mk) else pcall(row.mk.Hide, row.mk) end
+    local txt, r, g, b
+    if not on then
+      txt, r, g, b = L("SUB_OFF_STATE"), 0.70, 0.70, 0.70
+    elseif loaded then
+      txt, r, g, b = L("SUB_LOADED_STATE"), 0.55, 0.95, 0.55
+    else
+      txt, r, g, b = L("SUB_RELOAD_STATE"), 0.95, 0.75, 0.30
+    end
+    pcall(row.status.SetText, row.status, txt)
+    pcall(row.status.SetTextColor, row.status, r, g, b)
+    -- ★用户要求：**已载入**才在右侧显示「打开」按钮（未载入显示它没意义）
+    if row.openBtn then
+      if on and loaded then pcall(row.openBtn.Show, row.openBtn) else pcall(row.openBtn.Hide, row.openBtn) end
+    end
+  end
+end
+
+function EVAL_TEST_SUBADDONS() return SUBADDONS end
+
 -- ===== Tab 内容模型（分组归类；列表行动态展开） =====
 -- 标签里带上当前按键名（如「按住[Shift]临时停止」）——用户一眼看到现在挂的是哪个键。
 -- ★用 label 生成而不是在 UI 渲染时现拼：保持「模型出内容、UI 只渲染」的既有分工，

@@ -1386,11 +1386,12 @@ local function cfgBuild()
   -- Tab 按钮行（全局 / 一键宏设置；选中=金底亮字，未选=暗底灰字——参考 UnrealQuest 标签页风格）
   local pages = {}
   cfgWin.pages = pages
-  local tabNames = { L("TAB_GLOBAL"), L("TAB_MACRO"), L("TAB_TOOLBOX"), L("TAB_DS"), L("TAB_ICONS"), L("TAB_PET") } -- ★1.73.0 第 6 个 Tab：抓宠帮手（PetHelper.lua 独立载入）
+  local tabNames = { L("TAB_GLOBAL"), L("TAB_MACRO"), L("TAB_TOOLBOX"), L("TAB_DS"), L("TAB_ICONS"), L("TAB_PET"), L("TAB_PLUGINS") } -- ★1.74.29 第 7 个 Tab：子插件（独立载入的调试类插件）
   for i, name in ipairs(tabNames) do
     local tb = CreateFrame("Button", nil, root)
-    tb:SetWidth(90) tb:SetHeight(18)
-    tb:SetPoint("TOPLEFT", root, "TOPLEFT", 12 + (i - 1) * 96, -26)
+    -- ★1.74.29 用户要求「缩小所有 tab 宽度」：90/96 → 74/78（7 个 Tab 仍在一行内，末尾留 ≥80px 余量）
+    tb:SetWidth(74) tb:SetHeight(18)
+    tb:SetPoint("TOPLEFT", root, "TOPLEFT", 12 + (i - 1) * 78, -26)
     pcall(tb.EnableMouse, tb, true)
     pcall(tb.RegisterForClicks, tb, "LeftButtonUp")
     local tbg = tb:CreateTexture(nil, "BACKGROUND")
@@ -2126,6 +2127,7 @@ local function cfgBuild()
   if type(EVAL_DS_BUILD) == "function" then EVAL_DS_BUILD(root, pages[4], refreshes) end -- 数据检索 Tab（DataSearch.lua 独立载入，基于 UnrealQuest 数据库）
   if type(EVAL_IB_BUILD) == "function" then EVAL_IB_BUILD(root, pages[5], refreshes) end -- 图标库 Tab（IconBrowser.lua 独立载入）
   if type(EVAL_PH_BUILD) == "function" then EVAL_PH_BUILD(root, pages[6], refreshes) end -- 抓宠帮手 Tab（PetHelper.lua 独立载入）
+  if type(EVAL_SUBADDONS_BUILD) == "function" then EVAL_SUBADDONS_BUILD(root, pages[7], refreshes) end -- ★1.74.29 子插件 Tab（调试类独立插件）
   EVAL_HELP_CFG_SETTAB(c().cfgTab or 1)
   return root
 end
@@ -2974,6 +2976,7 @@ function EVAL_HELP_CFG_SETTAB(idx)
   if idx == 4 and type(EVAL_DS_REFRESH) == "function" then pcall(EVAL_DS_REFRESH) end -- 数据检索
   if idx == 5 and type(EVAL_IB_REFRESH) == "function" then pcall(EVAL_IB_REFRESH) end -- 图标库
   if idx == 6 and type(EVAL_PH_REFRESH) == "function" then pcall(EVAL_PH_REFRESH) end -- 抓宠帮手
+  if idx == 7 and type(EVAL_SUBADDONS_REFRESH) == "function" then pcall(EVAL_SUBADDONS_REFRESH) end -- ★子插件（调试类）
 end
 
 -- ★1.71.2 测试钩子：配置窗底部导航按钮（模版/分享/接收）的几何。

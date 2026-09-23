@@ -862,6 +862,23 @@ PROF_TIP_CAPPED = "覆盖 %s/5 类条件 → 分数封顶（神级需覆盖 4 �
   -- ★1.74.5 工具箱「待测试」标记（黄感叹号；tooltip）
   TB_WIP = "待测试",
   TB_WIP_TIP = "此功能尚未经过游戏内实测：接口与交互可能还要改（/eh go 喂食探针 是取证入口）",
+  -- ★1.74.29 配置窗「子插件」Tab（分组：调试 → 图层调试）
+  TAB_PLUGINS = "子插件",
+  SUB_GROUP_DEBUG = "—— 调试 ——",
+  SUB_GROUP_MAP = "—— 地图 ——",
+  SUB_LAYERDEBUG = "图层调试（EH_DebugBox）",
+  SUB_LAYERDEBUG_TIP = "独立子插件：图层调试面板（地图全部图层列表/过滤/滚动/多选；可设缩放·透明度·宽高·坐标；自定义存档 + 一键还原）。勾选启用后需重载界面，点确定即自动 /reload。",
+  SUB_SIMPLEMAP = "简易地图（EH_SimpleMap）",
+  SUB_SIMPLEMAP_TIP = "独立子插件：简易世界地图（开图藏黑幕透出世界 + 透明度/键盘）。勾选启用后需重载界面。",
+  SUB_OPEN = "打开面板",
+  SUB_NEEDLOAD = "该子插件当前未载入：先勾选启用并重载界面",
+  SUB_OPEN_FAIL = "打开失败：该子插件未注册命令（可能版本不符）",
+  SUB_ASK_RELOAD = "已启用该子插件。需要重载界面（/reload）才会载入。现在重载吗？",
+  SUB_RELOAD_HINT = "已启用（弹窗不可用时）：请手动 /reload 生效",
+  SUB_OFF_STATE = "未启用（不载入）",
+  SUB_LOADED_STATE = "已载入（本会话可用）",
+  SUB_RELOAD_STATE = "已启用 · 待 /reload 载入",
+  SUB_NOTE = "子插件是独立 AddOn（独立文件夹与 toc）：勾选 = 启用并写入客户端插件清单，未勾选 = 不载入（连文件都不读）。",
   -- ★1.74.5 共用图标网格（tools/IconGrid.lua 被喂食助手与消耗品助手共用）
   IG_EMPTY = "背包里没有物品",
   IG_SELECTED = "已选中（再点一次取消）",

@@ -67,14 +67,14 @@ function checkIconAssets() {
 //      **检查存在 ≠ 覆盖到位**：一个只保护一个文件的检查，对其它文件等于没有。
 //   ② 跳过「同名还有函数内 local 声明」的短名（W / H / x / y 这类）：它们在文件里是**多个不同的变量**，
 //      按名字比对必然误报（首版就误报了 EvalHelp.lua:153 的 local W —— 那是另一个函数里的 W）。
-(function () {
-  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/DismountHelper.lua", "tools/RareWatch.lua"];
+function declOrderScanFiles(files) {
   const bad = [];
   let totalLocals = 0;
   const isName = (s) => new RegExp("^[A-Za-z_][A-Za-z0-9_]*$").test(s);
   for (const f of files) {
-    const p = path.join(__dirname, f);
+    const p = path.isAbsolute(f) ? f : path.join(__dirname, f);
     if (!fs.existsSync(p)) continue;
+    const label = path.isAbsolute(f) ? path.relative(__dirname, f).replace(/\\/g, "/") : f;
     const lines = fs.readFileSync(p, "utf8").split(String.fromCharCode(10));
     // ★1.70.47 本仓库是 **CRLF** 文件：按 "\n" 切行后行尾还留一个 "\r"。
     //   对 `local x` 这种「整行都是模式」的匹配来说，`(.+)$` 会把 "\r" 一起抓进名字里 →
@@ -118,15 +118,27 @@ function checkIconAssets() {
       }
     }
     totalLocals += Object.keys(decls).length;
+    // ★用法比对前要**先剥字符串字面量**：`SetPoint(fs,"TOP",...)` 里的 "TOP" 不是变量用法
+    //   （首版没剥 → 当场误报 addons/EH_MapScale 的 TOP 变量；检查器的假红同样浪费轮次）
+    const stripUse = (l) => strip(l)
+      .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+      .replace(/'(?:[^'\\]|\\.)*'/g, "''");
     for (const nm of Object.keys(decls)) {
       if (inner.has(nm)) continue; // 名字在文件内有多个绑定 → 无法按名字判定，跳过
       const d = decls[nm];
       const re = new RegExp("(^|[^A-Za-z0-9_])" + nm + "([^A-Za-z0-9_]|$)");
       for (let i = 0; i < d - 1; i++) {
-        if (re.test(strip(lines[i]))) { bad.push(f + ": " + nm + " used at " + (i + 1) + " but declared at " + d); break; }
+        if (re.test(stripUse(lines[i]))) { bad.push(label + ": " + nm + " used at " + (i + 1) + " but declared at " + d); break; }
       }
     }
   }
+  return { bad: bad, totalLocals: totalLocals };
+}
+
+(function () {
+  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/DismountHelper.lua", "tools/RareWatch.lua"];
+  const r = declOrderScanFiles(files);
+  const bad = r.bad, totalLocals = r.totalLocals;
   if (bad.length) {
     for (const b of bad.slice(0, 12)) console.log("DECL ORDER CHECK: FAIL - " + b);
     if (bad.length > 12) console.log("DECL ORDER CHECK: FAIL - ... and " + (bad.length - 12) + " more");
@@ -134,6 +146,37 @@ function checkIconAssets() {
     return;
   }
   console.log("DECL ORDER CHECK: " + totalLocals + " top-level locals declare before use (" + files.length + " files)");
+})();
+
+// ===== ADDON DECL ORDER CHECK: 独立插件目录 addons/**/*.lua 同款检查 =====
+// ★★★1.74.29（probe/map-scale 分支）用户原话：「频繁遇到这个坑就要记住」——
+//   本轮在 addons/EH_SimpleMap 与 addons/EH_MapScale 上**连踩三次**同一个坑：
+//     ① pb8Start 调 autoEnsureLabel（声明在文件后半）→ attempt to call global 'autoEnsureLabel'
+//     ② pb9SetAll 调 featWm（同上）→ attempt to call global 'featWm'
+//     ③ uiRefresh 调 hlApplySelected（高亮段被插到 ui 段之后）→ attempt to call global 'hlApplySelected'
+//   共同点：**新段插到旧段之后**，却调用了旧段后面才声明的 local。luacheck 只查语法、查不出它；
+//   而本项目原有的 DECL ORDER CHECK 只扫 EvalHelp 的 15 个生产文件，**独立插件目录完全没覆盖**
+//   → 检查存在 ≠ 覆盖到位（1.70.46 的老教训）。这里补齐：addons/ 下每个 .lua 都扫。
+(function () {
+  const addonDir = path.join(__dirname, "addons");
+  if (!fs.existsSync(addonDir)) { console.log("ADDON DECL ORDER CHECK: (无 addons/ 目录，跳过)"); return; }
+  const files = [];
+  (function walk(d) {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.slice(-4) === ".lua") files.push(p);
+    }
+  })(addonDir);
+  if (!files.length) { console.log("ADDON DECL ORDER CHECK: (无 addons/**/*.lua，跳过)"); return; }
+  const r = declOrderScanFiles(files);
+  if (r.bad.length) {
+    for (const b of r.bad.slice(0, 12)) console.log("ADDON DECL ORDER CHECK: FAIL - " + b);
+    if (r.bad.length > 12) console.log("ADDON DECL ORDER CHECK: FAIL - ... and " + (r.bad.length - 12) + " more");
+    process.exitCode = 1;
+    return;
+  }
+  console.log("ADDON DECL ORDER CHECK: " + r.totalLocals + " top-level locals declare before use (" + files.length + " addon files)");
 })();
 
 // ===== LAYOUT CHECK: a local must be declared before the code that reads it =====
