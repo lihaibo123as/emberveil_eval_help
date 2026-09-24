@@ -1,7 +1,7 @@
 # EVAL_HELP 插件项目记忆（EmberVeil 全职业工具）
 
 > 本文件只记**铁律 / 判据 / 关键注意项**：逐版本细节在 `CHANGELOG.md` 与 git 提交历史，不进这里。
-> ★★★**指令预算实况（2026-09-25）**：限值在 **agent 平面 preset** —— `dsh-agent-presets/presets/<id>/agent.cordis.yml` 的 `agent-instructions.config.maxBytes`（host 项 `agent-presets.default = standard`）；★**host 的 cordis.patch.yml / profile 补丁改不到它**（实测都写 1048576、重启仍报 65536），该层无 patch 语义 ⇒ 只能改 preset 本体。**已把 standard/ptc/cordis 改成 1048576，重启生效**。
+> ★★★**指令预算实况（2026-09-25）**：限值在 **agent 平面 preset**（`dsh-agent-presets/presets/<id>/agent.cordis.yml` 的 `agent-instructions.config.maxBytes`）；★host 的 cordis.patch.yml / profile 补丁**改不到它**（无 patch 语义）⇒ 只能改 preset 本体。**已把 standard/ptc/cordis 改成 1048576**。
 > 　★**生效前**：算整段渲染文本，软上限 ≈ 65,240 字节，超了从尾部截断（尾部铁律 AI 看不到）⇒ 本文件暂 ≤ 65,200 字节。
 > ★★**本文件是「常驻卷」**——其余整卷在**同目录的 `CLAUDE_REFERENCE.md`（参考卷，不自动载入）**：
 > · 发布 release 流程 **9 步全文 + 打包脚本 + 推送信息** · §六 历史教训汇总 · §七 开源仓库 / 官方 API 文档 / 待开发计划
@@ -63,7 +63,7 @@
   行为断言失败打的是 **`ASSERT FAIL`**，源码检查失败打的是 **`: FAIL`**（两者都要在输出里找）。
 - **源码级检查**（`test_engine.js` 内，**改了对应区域就必须让它们继续通过**，共 20 道以上；逐条清单见参考卷附录 R13）：`WIN WIDTH` · `DECL ORDER`（顶层 local 声明早于使用）· **`ADDON DECL ORDER`**（同款覆盖 `addons/**/*.lua`）· `LAYOUT` · `VERSION`（源码 == toc）· `LANG KEY` · `WINDOW SIZE` · `COMMENT SWALLOW` · `ICON` · `EXAMPLES TOC` · `README TABLE` · `MILESTONE` 等。
   ★判据：**行为断言照不到 UI 接线（漏接不报错、只是显示不对）→ 必须用源码检查补位**；两类检查互补，缺一就有盲区。
-- **断言组 1~200+**：覆盖解析/引擎/UI/布局/语言/标注层；**新增功能请顺带加组**（写在 `test_assert.lua` 末尾 `print("ALL TESTS PASS")` 之前）。
+- **断言组 1~200+**：覆盖解析/引擎/UI/布局/语言/标注层；**新增功能请顺带加组**（写在 `test_assert.lua` 末尾）。
 
 ### 2. ★★★任务/地图类问题 → 先读 UnrealQuest 对应流程代码（用户明确定，1.70.40）
 - **用户原话**：「记住下次碰到任务地图相关的问题优先排查任务插件的对应流程代码」。
@@ -142,7 +142,7 @@
 - **状态表 `st`（`EVAL_HELP_STATE`）**：所有判定数据走 `UPDATE_STATE()` **一次刷新、各处只读**（Cat 思路）；含 `playerBuffs`/`targetDebuffs` 纹理集合、`castLog`（近 5 条带条件 trace）。
 - **规则引擎**：规则 = `{ skill, enabled, groups }`；`groups` = 组内 `&`、组间 `|`；`EVAL_RULE_RUN` 顺序执行第一条全过的；兼容旧 `when={}` 格式；`condOne`/`groupsOK`/`EVAL_PARSE_CONDS`/`EVAL_COND_STR`/`EVAL_GROUP_STR` 是核心。
 - **方案数据**：`cfg.war.profiles` + `activeProfile`；`EVAL_WAR_ENSURE_PROFILES` 做缺省迁移；SavedVariables 自动持久化。
-- **方案切换**：配置窗侧栏按钮 / 激活方案 `[<][>]` 选择器 / 战斗信息UI 方案行 / **Shift+按宏**（★Shift 已被切换占用，**方案条件里别用 Shift**，用 Alt/Ctrl）。
+- **方案切换**：配置窗侧栏按钮 / 激活方案 `[<][>]` 选择器 / 战斗信息UI 方案行 / **Shift+按宏**（★Shift 已被切换占用，方案条件里用 Alt/Ctrl）。
 - **文本格式**（导入导出 / `zs_wq.md`）：`# 方案: 名` + `- 技能 | 条件` 行；技能名前 `!` = 停用；解析容忍 md 杂物行。
 - **函数作用域陷阱**：`warCfg`/`c()` 是配置段 local，战斗信息UI 段在其之前 → UI 段用 `uiWarCfg()`（直接走 `EVAL_HELP_CONFIG` 全局）；`wslots`/`WAR_SKILLS` 是战士段 local，配置段在其后可用。
 - 受保护函数（`CastSpellByName` 等）插件**不能调**，施法一律 `UseAction(slot)` + `pcall`；谓词返回 `true/false/nil`，**绝不 `==1`**。
@@ -175,7 +175,7 @@
 ## 五、关键判据汇总（按主题）
 
 > ★本节是**判据总表**：每条 = 一句规则 + 追溯锚点（判据组号 / 源码检查名 / 关键标识符）。
-> 各条的踩坑经过与逐版本流水一律在 `CHANGELOG.md` 与 `CLAUDE_REFERENCE.md`（参考卷，含附录 R）。
+> 各条踩坑经过与逐版本流水见 `CHANGELOG.md` 与参考卷（含附录 R）。
 
 ### 5.1 Lua / 解析
 
@@ -201,7 +201,7 @@
 - ★★分享分片取证探针：`SH.dbgChunks`（环形 8 条）在 `shOnMsg` 各分叉点记原文+走到哪一步，`/eh go 分享事件` ⑤ 摊开。★本客户端 `IsEventRegistered` 返 **`1` 不是 `true`**，判据写 `(r == true or r == 1)`。全案见 R1。
 
 - 具名帧顶掉同名全局函数 → `type(X)=="function"` 不成立 → 命令静默失效；桩须把具名帧挂全局；`FRAME NAME CLASH CHECK`；组 54。
-- 分享接收 = 冗余时长 + 只认标识（1.72.3）：>2s 未收齐如实提醒但不删缓冲、晚到补齐仍弹窗；>60s 才丢；只认 `[EHPF#<id> i/n]<hex>`；组 106/107。
+- 分享接收 = 冗余时长 + 只认标识（1.72.3）：>2s 未收齐如实提醒但不删缓冲；>60s 才丢；只认 `[EHPF#<id> i/n]<hex>`；组 106/107。
 - 「查不到」≠「没有」：查不到必须如实报错，否则 `cnt=0` → 「否/无」成立 → 规则无限重放刷屏。
 - 静默丢弃 = 那行变无条件施法 → 写几条成员条件、解析后就必须几条；数据类错误全静默。
 - 导出形态与解析侧必须成对验（读不回 = 导入即丢条件）；「有过滤」≠「过滤得住」（`itemOf(n)` 只认「物品:名」）。
@@ -215,7 +215,7 @@
   【判据】读原值 → 写新值 → 读回自证，**顺序不许换**；原值缺失时**如实说「无法还原」并保留字段**（绝不拿当前值冒充）；组 206 的 3 个变异全部被捕获。
 - 深入 API + 参考插件：`GetChatWindowMessages`/`RemoveChatWindowMessages`/`AddChatWindowMessages` = 官方「某类消息不显示」开关（组名不许猜）。
 - 分享行形态（1.73.43）：只有「一段色码 + 链接」能画 ⇒ 色码打头 + 带链接 + 每条一段 8 位码 + 间隔 ≥1s；色清单从 `SH_CHUNK_COLOR`/`SH_SEAL_TIERS`/`SH_TITLE_COLORS` 现取；组 144/158/159。
-- ★1.73.24~1.73.41 弹窗/右键菜单/滚动条/布局细则见参考卷 R11。
+- ★1.73.24~41 弹窗/右键菜单/滚动条细则见 R11。
 
 
 ### 5.3 测试与断言
@@ -234,8 +234,8 @@
 - ★★★**harness 载入清单里 `test_assert.lua` 必须排在所有 `tools/*.lua` 之后**（1.75.1 合并两支时踩到）：工具模块在**载入期**自登记 `EVAL_TB_MOD_ROWS`，而 `test_assert.lua` 的工具箱断言（组 200）走**真实渲染路径**去取它 ⇒ 顺序反了就出现「组 200 `got=false want=true` 而模块完全正常」（toc 无此问题，只有 harness 清单会踩）。判据 = **`TEST LOAD ORDER CHECK`**（含「含 test_stub.lua 的清单必须唯一」的锚点自检）。
   ★★**同一机制的第二个后果**：`test_assert.lua` 里**任何一条**断言抛错，harness 立刻 `process.exit(1)` ⇒ 排在它后面的 **`tests/tools/*.lua` 整批不跑**（表现为「修好一个红点就冒出下一批红点」——那不是新 bug，是被挡住的老红点）。
 ### 5.4 UI 与布局
-- ★★★标题栏（两窗同一实现）＝玩家名→头衔→品阶徽标→方案名＋右侧两开关；两窗各自 BUILD＋tick 刷（只开状态UI 也要跟·组 168⑤）；头衔取 `EVAL_TITLE_CURRENT()`；色码→RGB `EVAL_COLOR_RGB`（8 位）；CHECK `UI TITLE BADGES CHECK`/`UI TIER BADGE CHECK`/`UI TITLEBAR CHECK`/`UI TITLE NAME CHECK`；组 162/163/164/166/168。
-- ★★品阶唯一源 `SH_SEAL_TIERS`：≤11 普通/12-23 稀有/24-35 珍稀/36-49 绝版/**≥50 神级**（低四档 0~49 四等分）；色走 `SH_SEAL_TIERS[].color`（**神级 = 亮蓝 |cff00bfff**）；`SHARE PALETTE CHECK` 守色码不重复；组 143/146/147/195/196。
+- ★★★标题栏（两窗同一实现）＝玩家名→头衔→品阶徽标→方案名＋右侧两开关；两窗各自 BUILD＋tick 刷（只开状态UI 也要跟·组 168⑤）；头衔取 `EVAL_TITLE_CURRENT()`；色码→RGB `EVAL_COLOR_RGB`（8 位）；CHECK `UI TITLE*` 四道；组 162/163/164/166/168。
+- ★★品阶唯一源 `SH_SEAL_TIERS`：≤11 普通/12-23 稀有/24-35 珍稀/36-49 绝版/**≥50 神级**；色走 `SH_SEAL_TIERS[].color`（**神级 = 亮蓝 |cff00bfff**）；`SHARE PALETTE CHECK` 守色码不重复；组 143/146/147/195/196。
 - ★★★**评分口径（1.74.19 重做）**：`EVAL_PROFILE_SCORE` = Σ(每条技能)[ 有条件 ? 1+Σ条件权重 : 0 ]；**空技能 0 分**；条件按类加权 **自身/技能 1 · 目标/光环 2 · 队伍/候选 3**（`SE_TYPE_GROUPS` 的 `w`/`cov` 是**唯一来源**）；单条上限 12 分；同一行里**完全一样**的条件只算一次；★`EVAL_NO_SLOT_OK` 的技能无条件**保留 1 分**。
 - ★★★**覆盖封顶**：覆盖 1/2/3 个大类分别封顶 **23/35/49**（值从 `SH_SEAL_TIERS[n+1].max` **现算**），**≥4 类才不封顶** ⇒ 神级必须跨类写；★带方案表的调用点一律走单入口 `EVAL_PROFILE_TIER(p)`（**coverage 传 nil = 不封顶**）；`COVERAGE CAP WIRING CHECK` 守「没人再写 `EVAL_SHARE_SEAL_TIER(EVAL_PROFILE_SCORE(p))`」。
 - ★★★**头衔晋升（1.74.19）**：`SH_TITLE_REQ = { 1, 2, 3, 3, 2 }`（稀有+≥2 · 珍稀+≥3 · 绝版+≥3 · 神级≥2）＋**逐级满足**；★命令/闸门/样例的分数**一律现算**（`EVAL_SEAL_GOD_SCORE()` / `EVAL_SEAL_TIER_SAMPLE(i)`），不写死（旧口径见 R3）。
@@ -280,7 +280,7 @@
 - ★★★**跨插件：捕获 UnrealQuest 稀有提醒 → 独立模块 `tools/RareWatch.lua`**（主文件只两处接线：VARIABLES_LOADED 的 `pcall(EVAL_RW_INSTALL)` + 命令 `/eh go 稀有`；开关单一来源 `EVAL_RW_ENABLED/SET`）：捕获点 = 包住对方弹窗唯一出口 `RareAlert:Show(...)`（**安装必须等 VARIABLES_LOADED**）、返回值逐个透传 + 抛错照原样 `error(a,0)`、兜底轮询 `GetStatus().alerts`（tick 父级必须 **WorldFrame**）；名字按品阶染色 + 整条**只许一段 8 位色码**，点名字 = 一次 `TargetByName` **并核对**（`UnitName("target")` 只认附近单位、远了静默失败），「选不到」要同时报距离+下一步。判据 = 组 199 + `RARE WATCH WIRING CHECK`（反向守「不许再耦合地图机制」）；**新增文件要同步 9 处清单**；全案见 R4。
 
 
-- ★★★**任务线线（1.75.0~1.75.21，明细 → 参考卷 §十四）**：数据以 `database.emberveil.org/quests` 为准、`quest/QuestData.lua` 是**生成物**（改 `chains.js` → `node quest/build.js` 重建，**绝不手改**）；列表 **cap=0 全量 + 跨块统一排序**、系列记录单一来源 `qcSeriesRec`、等级档 **L6=60+**、缺图占位 = **宏 961**（点击插队优先）、请求队列**按列排** + 请求泵**常驻开启**（弹窗 Hide ⇒ OnUpdate 停摆）；判据 = `QUEST TOC CHECK` + 组 191/192；**闸门 = `node check.js`**（`--full` 另加 `quest/audit.js`）。
+- ★★★**任务线线（1.75.0~1.75.21，明细 → 参考卷 §十四）**：数据以 `database.emberveil.org/quests` 为准、`quest/QuestData.lua` 是**生成物**（改 `chains.js` → `node quest/build.js` 重建，**绝不手改**）；列表 **cap=0 全量 + 跨块统一排序**、系列记录单一来源 `qcSeriesRec`、等级档 **L6=60+**、缺图占位 = **宏 961**（点击插队优先）、请求队列**按列排** + 请求泵**常驻开启**（弹窗 Hide ⇒ OnUpdate 停摆）；判据 = `QUEST TOC CHECK` + 组 191/192；**闸门 = `node check.js`**（`--full` 另加 `quest/audit.js`）。★**步骤名判据 = 不在「进包任务表」**（不是「列表页」）—— 反了会把「有页但无装备奖励」的步骤名丢光（退化成 `#id` ⇒ 按步骤名搜不到；1.75.1「爱与家庭」实测 1585/1834 步无名）；闸门 = **audit H 段**（解析**生成物**，阈值 0）★先确认表形态（`s` 是**序列**无 `[n]=`，按错形态 ⇒ 0 条 = **假绿**）。
 ### 5.6 内容 / 数据质量
 - ★★★**两个助手的弹窗候选按物品类型过滤**（1.74.28）：判定收在共用件 `EVAL_IG_ITEM_KIND`（三级早停）；★**判不出就不剔**；★★**只在「弹窗候选」路径开**（按名解析包格那条路**绝不过滤** = 判错一类就静默找不到）；判据 = 组 187；细则见 R15 ⑥f。
 - ★★★**可驱散「负面类型」多选**（1.73.2；1.74.6 扩到自身/目标 debuff）：`cd.dt` 空集 = 任意；求值**一律走 `dispelMatch`**（名字对上但类型不符 = **没有**）；**名称留空 + 类型 = 「有任意该类型」**；**buff 行不许有类型格**；组 114/181；细则见 R15 ⑥i。
@@ -295,7 +295,7 @@
 - 光环判定=两级+三态：①纹理快路径（学习表>动作条）②名字慢路径（auraNameHit 0.5s 缓存、命中即 learnAuraTex 自愈）③两条都不可用才如实失败（查不到≠没有）；扫描可信度三态 true=命中/false=扫描干净确实没有/nil=不可信（组 70③/103①）；诊断 /eh go tex|texdel|texclear|texscan；桩补 SlashCmdList+组 104。
 
 ### 5.7 流程与纪律
-- 载入提示与新手引导每次加载都打（cfg.guideSeen 已废弃）；组 105：VARIABLES_LOADED 第二次仍须打出引导标题与步骤；/eh guide 可重看。
+- 载入提示与新手引导每次加载都打（cfg.guideSeen 已废弃）；组 105：VARIABLES_LOADED 第二次仍须打出引导标题与步骤。
 - 审计/排查须落成可执行闸门；数据变的刷新放写入点（ioImportText）；组归属是用户偏好，需求一改须钉新归属与顺序。
 - 只有 quiet=true 且带 why 写日志；接收端只有同一发送者开新的一笔才作废旧缓冲；四道上限超限整笔拒收、提示限频 5s。
 

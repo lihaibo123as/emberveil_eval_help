@@ -284,12 +284,59 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     }
   }
 
+  // ---------- H：生成物体检 —— 自动任务线的**步骤名**（1.75.1 用户实测「爱与家庭」搜不到） ----------
+  // ★背景：全量数据只装「**带装备奖励**」的任务（751 / 站点 4018 页），系列行 `s[n]` 只存**步骤 id**；
+  //   步骤名靠运行时 `(q and q.n) or sn[id] or ("#"..id)` 补。生成脚本曾用「**列表页**里有没有」当收集判据
+  //   ⇒ 「在列表页、但没有装备奖励」的步骤名字**整批丢掉** ⇒ 退化成 `#5742`，而搜索匹配的是
+  //   「线名 + 步骤名」⇒ 那条线**连搜都搜不到**（实测 1834 个步骤里 1585 个没名字，604/611 条线受影响）。
+  //   ★站点详情页的系列块**本来就带名字** ⇒ 名字纯粹丢在生成阶段。这里直接盯**生成物**：
+  //   任何系列步骤既不在 q 表、也不在 sn 表 ⇒ 硬错误（阈值 0）。
+  const genPath = path.join(__dirname, 'QuestBulk.lua');
+  let genBytes = 0, genSnN = 0, genSeriesN = 0, genStepN = 0;
+  const unnamedSteps = [];
+  if (!fs.existsSync(genPath)) {
+    hard.push('找不到生成物 quest/QuestBulk.lua（先跑 node quest/build_bulk.js）');
+  } else {
+    const txt = fs.readFileSync(genPath, 'utf8');
+    genBytes = Buffer.byteLength(txt, 'utf8');
+    const cut = (a, b) => {
+      const i = txt.indexOf(a + '={');
+      if (i < 0) return '';
+      const j = b ? txt.indexOf(b + '={') : -1;
+      return txt.slice(i, j < 0 ? txt.length : j);
+    };
+    const idsOf = (sec) => new Set([...sec.matchAll(/\[(\d+)\]=/g)].map(m => +m[1]));
+    const qIds = idsOf(cut('q', 's'));
+    const snIds = idsOf(cut('sn', null));
+    genSnN = snIds.size;
+    const sTxt = cut('s', 'sn');
+    // ★★s 表是**序列**（`s={ "系列名|lo|hi|地区|档位|开门|步骤id,id", … }`）—— **没有 `[n]=` 键**，
+    //   绝不许按 q/i 那种键值行去解析（1.75.1 当场踩到：解析出 0 条 ⇒ 闸门恒绿 = 假绿）。
+    for (const line of sTxt.split(/\r?\n/)) {
+      const m = line.match(/^\s*"([^"]*)",?\s*$/);
+      if (!m) continue;
+      const parts = m[1].split('|');
+      const steps = (parts[6] || '').split(',').filter(Boolean).map(Number);
+      genSeriesN++;
+      for (const id of steps) {
+        genStepN++;
+        if (!qIds.has(id) && !snIds.has(id)) unnamedSteps.push('s#' + genSeriesN + ':' + parts[0] + '#' + id);
+      }
+    }
+    if (unnamedSteps.length) {
+      hard.push(`自动任务线的步骤名缺失 ${unnamedSteps.length} 个（运行时退化成 #id ⇒ 按步骤名搜不到那条线；`
+        + `收集判据必须是「**不在进包任务表**里」而不是「不在列表页里」）—— 样例：${unnamedSteps.slice(0, 5).join('、')}`);
+    }
+  }
+
   // ---------- 报告 ----------
   for (const h of curHard) hard.push(h);   // ★必须先并入再写报告（否则打印的硬错误数比报告里多 —— 实测踩到）
   const out = {
     at: new Date().toISOString(),
     counts: { quests: shipped.length, equip: Object.keys(eq).length, series: serN, bigSeries: bigN, detailCompared: cmpN,
-              curated: curated.length, curatedMismatch: curBad.length, questCaches: Object.keys(seriesOf).length },
+              curated: curated.length, curatedMismatch: curBad.length, questCaches: Object.keys(seriesOf).length,
+              genKB: +(genBytes / 1024).toFixed(1), snNames: genSnN, genSeries: genSeriesN, genSteps: genStepN,
+              unnamedSteps: unnamedSteps.length },
     hard, soft, seriesIssues: serBad, listVsDetail: cmpDiff, online,
     curatedCheck: curReport, curatedSoft: curSoft, itemQuestLinkDiff: linkDiff, missingClassic, inventory, zoneInventory: zoneLines,
     notAChain: NOT_A_CHAIN,
@@ -304,6 +351,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   for (const r of curReport.filter(r => /站点更长/.test(r))) console.log('   ' + r);
   for (const r of curSoft.slice(0, 6)) console.log('   · ' + r);
   console.log('F 装备↔任务链接：物品页「奖励来自」与我们的来源不一致', linkDiff.length, '条');
+  console.log('H 生成物体检：自动任务线', genSeriesN, '条 · 步骤', genStepN, '个 · sn 补名', genSnN, '个 · **无名步骤**',
+    unnamedSteps.length, '个（阈值 0 = 硬错误）· QuestBulk.lua', (genBytes / 1024).toFixed(1), 'KB');
   if (linkDiff.length) console.log('   样例:', linkDiff.slice(0, 4).join('\n         '));
   console.log('G 任务线清单：共', inventory.length, '条 · 其中开门/史诗', inventory.filter(x => x.open).length, '条');
   console.log('   最长 12 条:', inventory.slice(0, 12).map(x => `${x.name}(${x.steps}步·Lv${x.lo}-${x.hi}${x.open ? '·开门/史诗' : ''})`).join(' · '));

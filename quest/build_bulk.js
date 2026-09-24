@@ -181,13 +181,20 @@ console.log('系列体检：采信', finalSeries.length, '条 · 丢弃', droppe
 const seriesRows = [];
 const seriesList = [];
 let bigN = 0, openN = 0, unresolved = 0;
+// ★★★步骤名要按「**进包任务表**」判，不能按「列表页里有没有」判（1.75.1 修，用户实测「爱与家庭」搜不到）：
+//   进包的 q 表**只装带装备奖励的 751 条**，而站点列表页有 4008 条 ⇒ 用 `sweepById`（列表页）当判据时，
+//   「在列表页、但**没有装备奖励**」的步骤名字会被整批丢掉：运行时 `(q and q.n) or sn[id] or "#"..id`
+//   退化成 `#5742`，而搜索匹配的是「线名 + 步骤名」⇒ 那条线**连搜都搜不到**（实测 1834 个步骤里 1585 个没名字）。
+//   ★站点详情页的系列块**是带名字的**（`quest_5845.json` 的 7 步全有名字），名字纯粹丢在这一行。
+const shippedIds = {};
+for (const q of wanted) shippedIds[q.id] = 1;
 for (const rec of finalSeries) {
   const steps = rec.steps.filter(s => s.id).sort((a, b) => a.n - b.n);
   const ids = steps.map(s => s.id);
   const names = steps.map(s => s.name || '');
-  const unresolvedHere = ids.filter((id, i) => !sweepById[id] && !names[i]);
+  const unresolvedHere = ids.filter((id, i) => !shippedIds[id] && !names[i]);
   unresolved += unresolvedHere.length;
-  for (let i = 0; i < ids.length; i++) if (!sweepById[ids[i]] && names[i]) stepNames[ids[i]] = names[i];
+  for (let i = 0; i < ids.length; i++) if (!shippedIds[ids[i]] && names[i]) stepNames[ids[i]] = names[i];
   // 等级区间：能从任务表/列表行/详情缓存读到的步骤里取
   const lvs = ids.map(id => lvlOf[id] || 0).filter(v => v > 0);
   const lo = lvs.length ? Math.min(...lvs) : 0, hi = lvs.length ? Math.max(...lvs) : 0;
