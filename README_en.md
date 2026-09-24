@@ -34,7 +34,6 @@
 - **💬 Chat names: coloring + right-click menu** (1.73.12 → 1.73.29): after pinning down that the name lives in `arg2` and the name slot does **not** parse rich text, plan A (swallow the client line, compose our own) finally colors names by class; right-click offers **whisper / invite / target / guild invite / copy name** (copy = **prefill `/s name`, never auto-send**); translucent narrow menu with adaptive height.
 - **🧰 Toolbox dialog spec** (1.73.30 → 1.73.34): frame-level ladder (config 10 · edit 100 · input 220 · toolbox 200 · dropdown 250), drag handles must be Buttons, single-source column geometry, and the **scrollbar** brought up to spec (single-source wheel direction `EVAL_WHEEL_DIR` · dedicated scroll gutter · integer page numbers · arrows hidden at the ends).
 
-
 ## Changelog
 
 | Version | Theme | One-line highlight |
@@ -94,8 +93,6 @@ switches target, casts, and restores your original target — **you never click 
 
 **Combat info UI + Status info UI** (`/eh ui` / `/eh st`): HP / power / target bars + profile switcher row + skill icon row (hover tooltip shows trigger conditions, lit gold = conditions currently met, click an icon to open its editor); the status window shows all state variables live + the recent-cast log (per-cast skill / target / per-condition √/× verdicts)
 
-![Combat info UI and status info UI](preview/info.png)
-
 **Toolbox (Tab3)**: merchant assistant (auto-repair equipment / auto-sell grey items / auto-buy and auto-discard specified items) + party & social (auto-confirm role check / hide guild member login notifications / **hide "joined·left channel" notices**) + auto quest accept & turn-in (optionally paused while holding Shift) + quest notification channel (off / self / say / party)
 
 ![Toolbox](preview/tools.png)
@@ -106,17 +103,15 @@ switches target, casts, and restores your original target — **you never click 
 
 **Data search · details and drill-down**: quest / item / mob details — objectives and description, start / end NPC, required items; every link can be clicked to drill further, and rows with coordinates carry a map icon at the end
 
-![Data search · quest details](preview/dataset_search.png)
+![Data search · quest-line gear](preview/quests_item.png)
 
 **Data search · map annotations**: the "Map annotations (N)" control = master toggle + category multi-select (16 categories: 5 gathering nodes + 11 town services, with all-on / all-off shortcuts); checked categories are drawn live as the map changes
 
-![Data search · map annotation categories](preview/dataset.png)
+![Data search · quest-line steps](preview/quests_line.png)
 
 **Pet helper (Tab 6)**: search pet abilities (icon + per-rank list) → the detail page lists the description / required level / **taming source** (which mob, where) → the magnifier jumps to Data Search for spawn points — from "which pet learns this ability" to "where to tame it", end to end
 
-![Pet helper · search abilities](preview/pet_skill_search.png)
-
-![Pet helper · taming source](preview/pet_skill_info.png)
+![Pet helper · taming source](preview/pet_skill.png)
 
 ## Quick Start
 
