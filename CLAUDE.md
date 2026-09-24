@@ -9,7 +9,7 @@
 > · **附录 R：各判据的踩坑全案 / 版本经过**（清理时从本文件迁入；条目里写「全案见参考卷附录 Rx」的就是它）。
 > ★**什么时候必须去读参考卷**：要**发布 release**、要查**项目位置 / 当前版本 / 工作流纪律**、要查**历史教训 / 官方文档 / 待开发计划 / 某条判据的完整经过**时。
 > ★写入纪律：**先查有没有同类条目——宁可合并改写，不要追加流水账**；★**新条目先判它属「常驻卷」还是「参考卷」**（常驻卷只放必须随时可见的铁律与判据；**踩坑经过、版本叙事、截图佐证一律进参考卷附录 R**）。
-> ★要查「某个功能/某个坑现在怎么写」→ 先看第五节的判据，再看 `DEVELOPMENT.md` 与源码。
+> ★查「某功能/坑现在怎么写」→ 先看第五节判据，再看源码。
 
 ## ★★★**不许用子代理处理本项目任务**（用户 1.74.31 明确：「记住不要使用子代理模式处理任务」）
 
@@ -243,12 +243,12 @@
 - ★★★**图层树的层级只能来自「扫描时写下的层号」，不许数路径里的 `/`**（1.74.31）：`scanTree` 写层号进节点 ⇒ 缩进与「层深」过滤**同一口径**；折叠 `ui.treeCollapsed[路径]` 落存档；层深唯一写入点 `uiDepthApply`（`0` = 一个标记都不清）。判据 `DBX TREE WIRING CHECK` ＋ **组 205**（详见 R15 ④）。
 - ★★★**「算出来却写进一个从没被创建过的控件」= 静默死代码**（1.74.31 实测）：`uiRefresh` 一直算状态行却写进从未创建的 `ui.pageLbl` ⇒ 永远空写，用户看不到「为什么列表变少了」。
   【纪律】① 写完 UI 文案要问「**这个控件存在吗**」——`if ui.X then` 守卫会让「控件名写错」与「条件不满足」长得一模一样；② 这类坑行为断言照不到（有守卫就不报错）⇒ 用源码检查钉住（`ui.pageLbl` 出现即 FAIL + `ui.statLbl`/`ui.filterLbl` 必须各有**创建点**）；③ 通用形态 = **凡是被写入的 UI 句柄，都必须有一个赋值点**。
-- ★**COND WEIGHT CHECK** 上线当场抓到 `target` 漏组；★`/eh go` 别名不许两家共用（`GO ALIAS UNIQUE CHECK` 守，`go icons` 曾撞车）；品阶显示现算等细则见 R15 ⑦⑧。
+- ★`COND WEIGHT CHECK`（条件权重漏组）· `/eh go` 别名不许两家共用（`GO ALIAS UNIQUE CHECK` 守，`go icons` 曾撞车）；品阶显示现算等细则见 R15 ⑦⑧。
 - ★★★**滚动模式唯一标准（连续窗口）**（用户 1.74.30 定）：范式 = `PetHelper.lua` 约 566~595。① `off` = **行偏移**、双侧夹 `0..max(0, n-cap)`；② 滚轮**逐行**（≠ 页容量）；③ 滚轮**链式接管**（存原脚本，本 Tab 才消费）；④ 按钮一屏但**夹到 `maxOff`**；⑤ 容量 `cap` **恒定**（绝不因「组不拆」收缩）；⑥ 计数器常显；⑦ 切分优先组边界。**禁止**：整页跳 / 变长页 / 覆盖式接管滚轮。判据 = 组 120 + **组 201**；读值口 `EVAL_TB_TEST_WHEEL/WHEEL_PREV/LAYOUT`（**不许复刻映射逻辑**）。
-- ★**滚动/翻页/分页三段布局细则**（计数器 ←8px→ 按钮组 ←10px→ 关闭 · 几何唯一源 `EVAL_HELP_CFG_BOTTOM()` · 组 92/118）**已整批迁到参考卷 R15 ⑥l**。
+- ★**滚动/翻页/分页三段布局细则**（计数器 ←8px→ 按钮组 ←10px→ 关闭 · 几何唯一源 `EVAL_HELP_CFG_BOTTOM()` · 组 92/118）→ 参考卷 R15 ⑥l。
 - ★★★滚轮方向唯一源 `EVAL_WHEEL_DIR(a,b)`（幅度归一 ±1）；6 处全走它；`WHEEL DIRECTION CHECK`（禁位移与方向同号）＋组 115；★断言把方向写反⇒反向 bug 被「验证」通过。
 - ★★★数据刷新不许改可见性：`EVAL_WAR_TAB_REFRESH()` 又被开配置窗与 `EVAL_PM_APPLY` 调用⇒可见性只由 Tab 切换负责（`EVAL_HELP_CFG_SETTAB` 的清单）；数据照旧每次刷；组 165＋`EVAL_TEST_WAR_ROWS()`。
-- ★**视图切换 / 入口控件 / 分列切点 / 工具箱两列 / 弹窗高度自适应 / 职业着色 / 聊天窗名字着色（组 129b/161）/ 主动查询四闸门 等细则已整批移到参考卷 R12/R15**（判据仍有效）。
+- ★**视图切换 / 入口控件 / 分列切点 / 工具箱两列 / 弹窗高度自适应 / 职业着色 / 聊天窗名字着色（组 129b/161）/ 主动查询四闸门 等细则 → 参考卷 R12/R15**。
 - ★★★**索引「任意全局」/ 走父子链的扫描，动手前先看参考卷 R15 ⑥k**（1.74.32 真机栽过一整轮）：① 索引前先过守卫（不可索引的 userdata 会抛错、**打断整个探针**；只收 `GetObjectType()` 报 Frame 的）；② **匿名窗口 `_G` 扫描永远看不到** ⇒ 只能靠 `GetChildren()` 父子链 + **具名子件当指纹**；③ 真机存档**带 BOM**、`a and f()` **只保留第一个返回值**、桩里 `unpack` 在 fengari **不存在** —— 都表现为「静默取不到值」。判据 = `DF GLOBAL SCAN GUARD CHECK` + 组 209/211/213。
 - ★★**判定「别人的帧」时用对象身份、别用名字**（1.74.32 实测栽过）：`GetName()` 可能返回 nil（桩里 `UIParent` 就是匿名帧）⇒ 按父级**名字**筛会一条都匹配不上；判据 = 比对象（`p == rawget(_G,"UIParent")`）；组 209⑤ + `DF BARS WIRING CHECK`。★同族哨兵做法见参考卷 R15 ⑤。
 - ★★★**框拖拽（`tools/DragFrames.lua`）/ 图层工具（`tools/LayerFix.lua`）判据总表**（★**原文已整批迁参考卷 §十六**，要查踩坑经过/完整写法去那里）：
@@ -275,7 +275,7 @@
 - 纹理路径=/Game/Interface/Icons/<名>_TEX，写错显 ?；GetNumMacroIcons/GetMacroIconInfo=唯一合法路径入口（1018 条 → doc/图标路径清单.txt）；PET ICON CHECK 校验真存在。
 - IconSem.lua：基础名须剥 _TEX（组 117①b）；过滤=四命中+分组叠加；纹理字面量须在白名单（PET ICON CHECK）；两反斜杠须按两反斜杠匹配（组 112）。
 - api_*.html=1370 条索引；无：PlaySoundFile（只有 `PlaySound`）/hooksecurefunc/**`Frame:HookScript`**/UIDropDownMenu_GetSelectedID（`GetDifficultyColor` 有垫片）；有：GuildRoster/Who/Friend/NumGuildMembers/NumWhoResults/NumFriends/GuildControlGetNumRanks/GetRealZoneText/RemoveChatWindowMessages/`GameTooltip:SetMinimumWidth`。★`GetWidth`/`GetHeight` **含缩放**（384×512+0.7 ⇒ 268.8×358.4）⇒ 与未缩放配置值直接比会假报不符（R15 ⑥d）。
-- ★★★**帧名未知的层（候选名解析 + 探针）与「按需出现」的层**（1.74.31/32）：帧名只能**现场探**（UI 编译在 pak 里）⇒ `cands` 候选表 + 唯一解析口 `dfTargetFrame` + 探针 `/edb bars`（别名 `frames`，**先报队友/团员数**；单人时「候选全不在」是正常的）；候选全落空就**如实缺席**（`DF BARS WIRING CHECK` + 组 207）。★**解析到 ≠ 补上了**：队伍/团队框「按需出现」，只做候选解析会**永远不出现**且存档位置**静默不生效** ⇒ 配**事件驱动**跟随 `DF_ROSTER_EVENTS`（★`GROUP_ROSTER_UPDATE` 不许当注册依据）→ 出现即 `dfApplyOne` + 重贴柄；**有界** `DF_ROSTER_TRIES`（不做常驻轮询）；判据 `DF ROSTER WIRING CHECK` + 组 208。细节全案见参考卷 R15 ⑤/⑥d。
+- ★★★**帧名未知的层（候选名解析 + 探针）与「按需出现」的层**（1.74.31/32）：帧名只能**现场探**（UI 编译在 pak 里）⇒ `cands` 候选表 + 唯一解析口 `dfTargetFrame` + 探针 `/edb bars`（别名 `frames`，**先报队友/团员数**；单人时「候选全不在」是正常的）；候选全落空就**如实缺席**（`DF BARS WIRING CHECK` + 组 207）。★**解析到 ≠ 补上了**：队伍/团队框「按需出现」，只做候选解析会**永远不出现**且存档位置**静默不生效** ⇒ 配**事件驱动**跟随 `DF_ROSTER_EVENTS`（★`GROUP_ROSTER_UPDATE` 不许当注册依据；★1.75.1 起队伍/团队 **+ 宠物动作条** · 事件 `UNIT_PET`）→ 出现即 `dfApplyOne` + 重贴柄；**有界** `DF_ROSTER_TRIES`（不做常驻轮询）；判据 `DF ROSTER WIRING CHECK` + 组 208。细节全案见参考卷 R15 ⑤/⑥d。
 
 - ★★★**跨插件：捕获 UnrealQuest 稀有提醒 → 独立模块 `tools/RareWatch.lua`**（主文件只两处接线：VARIABLES_LOADED 的 `pcall(EVAL_RW_INSTALL)` + 命令 `/eh go 稀有`；开关单一来源 `EVAL_RW_ENABLED/SET`）：捕获点 = 包住对方弹窗唯一出口 `RareAlert:Show(...)`（**安装必须等 VARIABLES_LOADED**）、返回值逐个透传 + 抛错照原样 `error(a,0)`、兜底轮询 `GetStatus().alerts`（tick 父级必须 **WorldFrame**）；名字按品阶染色 + 整条**只许一段 8 位色码**，点名字 = 一次 `TargetByName` **并核对**（`UnitName("target")` 只认附近单位、远了静默失败），「选不到」要同时报距离+下一步。判据 = 组 199 + `RARE WATCH WIRING CHECK`（反向守「不许再耦合地图机制」）；**新增文件要同步 9 处清单**；全案见 R4。
 
