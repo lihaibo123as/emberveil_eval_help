@@ -1,20 +1,22 @@
-# EvalHelp — All-Class Casting Helper
+# EvalHelp — All-Class Toolkit
 
 > 🌍 Languages: [中文](README.md) · **English** · [Русский](README_ru.md) (in-game language: flag switcher at the top-right of the config window)
 
 > 🗣️ Note: rule text (skill names / condition keywords / import-export snippets) stays in the client language (Chinese) — the rule data layer is never translated.
 
-> EmberVeil (1.12.1 / Lua 5.1) **all-class casting helper addon**: a one-line macro body `/run EVAL_GO()`, driven by a rule engine — **five skill categories** (character actions / character skills / pet commands / target selection / item use) × **49 condition types** (grouped dropdowns; the member-picker row additionally offers 4 "candidate" conditions) × multiple key-bound profiles, all configured visually, for any class. Three more built-in pages: a **Toolbox** (merchant / social / quest automation), **Data search** (quests / items / mobs·NPC + a world-map annotation layer, requires UnrealQuest) and an **Icon library** (the client-built-in macro icons: grouped, hover shows the path, searchable and pageable).
+> EmberVeil (1.12.1 / Lua 5.1) **all-class toolkit addon**: a one-line macro body `/run EVAL_GO()`, driven by a rule engine — **five skill categories** (character actions / character skills / pet commands / target selection / item use) × **49 condition types** (grouped dropdowns; the member-picker row additionally offers 4 "candidate" conditions) × multiple key-bound profiles, all configured visually, for any class. Six more built-in pages: a **Toolbox** (merchant / social / quest automation / three helpers / rare alert relay), **Quests & Gear** (chains · gear · four search kinds + a world-map annotation layer, requires UnrealQuest), an **Icon library** (the client-built-in macro icons: grouped, hover shows the path, searchable and pageable), a **Pet helper** (pet abilities → taming source → spawn-point lookup) and **Sub-addons** (enable/disable optional sub-addons).
 
 | Module | Entry | At a glance |
 | :-- | :-- | :-- |
 | 🗡️ **Universal one-key macro** | macro `/run EVAL_GO()` | Five skill categories: character actions (Attack / Auto Shot / Shoot / Cancel Casting / Stance swap) / skills / pet commands / target selection / item use; unlimited skills per profile (scrollable list); up to ≤12 profiles, each bindable to its own key for direct triggering |
-| ⚙️ **Config window** | minimap EH icon · `/eh cfg` | Fully visual editing of profiles / skills / conditions, plus text import/export for sharing |
+| ⚙️ **Config window** | minimap EH icon · `/eh cfg` | Fully visual editing of profiles / skills / conditions, plus text import/export for sharing; **seven tabs**: General · Macro Setup · Toolbox · Quests & Gear · Icon library · Pet Helper · Sub-addons |
 | 📤 **Profile sharing** | `[Share]` on the config "one-click macro" page / chat link | chunked send to guild/party/say (rate-limited), the receiver clicks [Import] to commit; **tier cover** (`[tier manual · name]` clickable link + confirm popup) · **score tiers** (since 1.74.21: ≥50 points **and** 4+ of the 5 condition groups covered for Divine · five colours) · **title gacha** (5×15 · custom title) · the "Genesis" easter egg · the receiver lottery-replies with a role-play line (title tier × manual tier) |
 | 🧩 **Case templates** | config window, one-key macro tab, bottom `[Case Templates]` | **12 groups / 35 entries** ready-made profiles (grouped by class) → **grouped two columns + wrapping within a group**; one click to import, hover to see what's inside |
-| 🧰 **Toolbox** | config window, tab 3 | Merchant assistant (auto-repair / auto-sell grey / buy and discard by name) + party & social (auto-confirm role check / hide guild login notices / **hide "joined·left channel" notices**) + auto quest accept & turn-in (hold Shift to pause temporarily) + quest notification channel |
-| 🗺️ **Data search** | config window, tab 4 | Quest / item / mob·NPC / object search with instant results and unlimited drill-down; a **world-map annotation layer** (16 categories redrawn live as the map changes) and one-click pinning from any row with coordinates (requires UnrealQuest) |
+| 🧰 **Toolbox** | config window, tab 3 | **UI tools** (map zoom / drag handles / per-layer tweaks) · merchant assistant (auto-repair / auto-sell grey / buy & discard by name) · party & social (auto-confirm role check / hide guild login notices / **hide "joined·left channel" notices** (multi-select keywords) / class-colored names in chat / right-click name menu / on-demand /who lookup) · quests (auto accept & turn-in, hold Shift to pause / notification channel) · **three helpers** (one-click feed · hunter / consumables / one-click & auto dismount) · **rare alert relay** (a chat line the moment the quest addon spots a rare — click the name to target it) |
+| 🧭 **Quests & Gear** | config window, tab 4 | **Chain view**: one chain laid out node by node (quest · level · reward, each node with a magnifier); **Gear view**: obtainable gear listed by level (weapons first · kind multi-select · placeholder for missing icons); **four search kinds**: quest / item / mob·NPC / object (instant, unlimited drill-down); **world-map annotation layer** (16 categories redrawn live, requires UnrealQuest) |
 | 🖼️ **Icon library** | config window, tab 5 | The client's built-in macro icons grouped by prefix, hover shows the path, searchable and pageable; plus a "used by this addon" group (listing the icons this addon uses) |
+| 🐾 **Pet helper** | config window, tab 6 | Search pet abilities (icon + per-rank list) → detail page: description / required level / **taming source** (which mob, where) → the magnifier jumps to Quests & Gear for spawn points |
+| 🧩 **Sub-addons** | config window, tab 7 | Enable / disable optional sub-addons and open their UI (currently **Layer Debug** EH_DebugBox); the simple map and friends became main-addon toolbox modules |
 | 📊 **Combat info UI** | `/eh ui` | HP / power / target bars + profile switcher row + skill icon row (lit gold = conditions met, click to edit) |
 | 🔍 **Status info UI** | `/eh st` | Live overview of all state variables + per-condition √/× verdicts for the most recent casts |
 | 📝 **Status log** | `/eh` | Written to both the chat frame and the log file |
@@ -93,23 +95,23 @@ switches target, casts, and restores your original target — **you never click 
 
 **Combat info UI + Status info UI** (`/eh ui` / `/eh st`): HP / power / target bars + profile switcher row + skill icon row (hover tooltip shows trigger conditions, lit gold = conditions currently met, click an icon to open its editor); the status window shows all state variables live + the recent-cast log (per-cast skill / target / per-condition √/× verdicts)
 
-**Toolbox (Tab3)**: merchant assistant (auto-repair equipment / auto-sell grey items / auto-buy and auto-discard specified items) + party & social (auto-confirm role check / hide guild member login notifications / **hide "joined·left channel" notices**) + auto quest accept & turn-in (optionally paused while holding Shift) + quest notification channel (off / self / say / party)
+**Toolbox (Tab3)**: **UI tools** (map zoom / drag handles / per-layer tweaks) · merchant assistant (auto-repair / auto-sell grey / buy & discard by name) · party & social (auto-confirm role check / hide guild login notices / **hide "joined·left channel" notices** (multi-select keywords) / class-colored names / right-click name menu / on-demand /who) · auto quest accept & turn-in plus notification channel (off / self / say / party; hold Shift to pause) · **three helpers** (one-click feed · hunter / consumables / one-click & auto dismount) · **rare alert relay**
 
 ![Toolbox](preview/tools.png)
 
 > ⚠️ **Requires** the **UnrealQuest** addon — every record shown here (quests / items / mobs / NPCs) comes from its database. If it is missing or disabled, this tab shows an installation guide instead and hides the controls.
 
-**Data search (Tab4)**: four search kinds — quest / item / mob·NPC / object; type to search (top 10 matches); unlimited drill-down, and hovering an item row shows the in-game item tooltip
+**Quests & Gear (Tab4)**: **chain view** (one chain from start to end, node by node: quest · level · reward, magnifier on every node) + **gear view** (obtainable gear by level, weapons first, kind multi-select) + **four search kinds** (quest / item / mob·NPC / object; instant, top 10 matches, unlimited drill-down, hovering an item row shows the in-game item tooltip); **world-map annotation layer** (16 categories redrawn live as the map changes) tooltip
 
-**Data search · details and drill-down**: quest / item / mob details — objectives and description, start / end NPC, required items; every link can be clicked to drill further, and rows with coordinates carry a map icon at the end
+**Gear view**: obtainable **gear listed by level** (weapons first) — click an entry to see which chain grants it and which quests are required; gear whose icon is not in the local cache yet is drawn as a **placeholder**, and clicking it queues that item first rows with coordinates carry a map icon at the end
 
-![Data search · quest-line gear](preview/quests_item.png)
+![Quests & Gear · gear view](preview/quests_item.png)
 
-**Data search · map annotations**: the "Map annotations (N)" control = master toggle + category multi-select (16 categories: 5 gathering nodes + 11 town services, with all-on / all-off shortcuts); checked categories are drawn live as the map changes
+**Chain view**: from start to end, node by node — every node carries a **magnifier** (look the quest up by name) and a level badge; the "Map annotations (N)" control = category multi-select (5 gathering nodes + 11 town services, with all-on / all-off shortcuts), drawn live as the map changes-off shortcuts); checked categories are drawn live as the map changes
 
-![Data search · quest-line steps](preview/quests_line.png)
+![Quests & Gear · chain view](preview/quests_line.png)
 
-**Pet helper (Tab 6)**: search pet abilities (icon + per-rank list) → the detail page lists the description / required level / **taming source** (which mob, where) → the magnifier jumps to Data Search for spawn points — from "which pet learns this ability" to "where to tame it", end to end
+**Pet helper (Tab 6)**: search pet abilities (icon + per-rank list) → the detail page lists the description / required level / **taming source** (which mob, where) → the magnifier jumps to Quests & Gear for spawn points — from "which pet learns this ability" to "where to tame it", end to end
 
 ![Pet helper · taming source](preview/pet_skill.png)
 

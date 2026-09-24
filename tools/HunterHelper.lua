@@ -753,32 +753,49 @@ function EVAL_HH_PET_INFO()
   return string.format(L("HH_TT_PETINFO_NODMG"), lvl, hapTxt, loyal, xpTxt), r, g, b
 end
 
-local function hhTip(b)
-  if type(GameTooltip) ~= "table" then return end
+-- ★★★提示行的**唯一来源**（读值口 + 渲染源）：只在这里拼一次 ——
+--   ① 悬浮提示照它渲染；② 断言直接读它（不必跟桩里的 GameTooltip 记账，也不会两处各拼一份而漂移）。
+-- ★用户要求（工具→宠物助手）：没选喂养技能时，把那一行换成**明确提示语**（HH_TT_SPELL_NONE）并用警示色
+--   —— 与「食物：未设置」同一形态，不再显示含糊的「未识别」。
+function EVAL_HH_TIP_LINES()
+  local out = {}
+  local function put(t, r, g, b) table.insert(out, { t = t, r = r, g = g, b = b }) end
   local tb = hhCfg() or {}
-  pcall(GameTooltip.SetOwner, GameTooltip, b, "ANCHOR_RIGHT")
-  pcall(GameTooltip.ClearLines, GameTooltip)
-  pcall(GameTooltip.AddLine, GameTooltip, L("HH_TT_TITLE"), 1, 0.82, 0.3)
+  put(L("HH_TT_TITLE"), 1, 0.82, 0.3)
   local food = tb.hhFood
   local bag, slot, _, cnt = nil, nil, nil, nil
   if type(food) == "string" and food ~= "" then bag, slot, _, cnt = EVAL_HH_FIND_FOOD(food) end
   if bag then
-    pcall(GameTooltip.AddLine, GameTooltip,
-          string.format(L("HH_TT_FOOD"), food, tostring(bag), tostring(slot), tostring(cnt or 1)), 0.9, 0.9, 0.9)
+    put(string.format(L("HH_TT_FOOD"), food, tostring(bag), tostring(slot), tostring(cnt or 1)), 0.9, 0.9, 0.9)
   else
-    pcall(GameTooltip.AddLine, GameTooltip, L("HH_TT_NOFOOD"), 1, 0.5, 0.4)
+    put(L("HH_TT_NOFOOD"), 1, 0.5, 0.4)
   end
+  -- ★没选喂养技能 = 明确提示（警示色）；选了 = 技能名（常规色）
   local sp = EVAL_HH_SPELL()
-  pcall(GameTooltip.AddLine, GameTooltip,
-        string.format(L("HH_TT_SPELL"), tostring(sp or L("HH_TT_SPELL_NONE"))), 0.9, 0.9, 0.9)
+  if sp then
+    put(string.format(L("HH_TT_SPELL"), tostring(sp)), 0.9, 0.9, 0.9)
+  else
+    put(string.format(L("HH_TT_SPELL"), L("HH_TT_SPELL_NONE")), 1, 0.5, 0.4)
+  end
   -- ★1.74.12 有宠物 → 显示宠物信息行（等级/快乐度/忠诚/经验）；没宠物 → 显示「现在没有宠物」
   local piTxt, piR, piG, piB = EVAL_HH_PET_INFO()
-  if piTxt then pcall(GameTooltip.AddLine, GameTooltip, piTxt, piR, piG, piB)
-  else pcall(GameTooltip.AddLine, GameTooltip, L("HH_TT_NOPET"), 1, 0.5, 0.4) end
-  pcall(GameTooltip.AddLine, GameTooltip, L("HH_TT_LEFT"), 0.6, 1, 0.6)
-  pcall(GameTooltip.AddLine, GameTooltip, L("HH_TT_RIGHT"), 0.6, 0.8, 1)
-  pcall(GameTooltip.AddLine, GameTooltip, L("HH_TT_DRAG"), 0.7, 0.7, 0.7)
-  pcall(GameTooltip.AddLine, GameTooltip, string.format(L("HH_TT_CNT"), tostring(HH.hits or 0)), 0.7, 0.7, 0.7)
+  if piTxt then put(piTxt, piR, piG, piB) else put(L("HH_TT_NOPET"), 1, 0.5, 0.4) end
+  put(L("HH_TT_LEFT"), 0.6, 1, 0.6)
+  put(L("HH_TT_RIGHT"), 0.6, 0.8, 1)
+  put(L("HH_TT_DRAG"), 0.7, 0.7, 0.7)
+  put(string.format(L("HH_TT_CNT"), tostring(HH.hits or 0)), 0.7, 0.7, 0.7)
+  return out
+end
+
+local function hhTip(b)
+  if type(GameTooltip) ~= "table" then return end
+  pcall(GameTooltip.SetOwner, GameTooltip, b, "ANCHOR_RIGHT")
+  pcall(GameTooltip.ClearLines, GameTooltip)
+  local lines = EVAL_HH_TIP_LINES()
+  for i = 1, table.getn(lines) do
+    local ln = lines[i]
+    pcall(GameTooltip.AddLine, GameTooltip, ln.t, ln.r, ln.g, ln.b)
+  end
   pcall(GameTooltip.Show, GameTooltip)
 end
 

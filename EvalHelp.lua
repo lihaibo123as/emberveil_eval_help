@@ -1,6 +1,6 @@
--- EvalHelp —— EmberVeil（1.12.1 / Lua 5.1）全职业施法工具
+-- EvalHelp —— EmberVeil（1.12.1 / Lua 5.1）全职业工具
 --   通用一键宏（条件规则引擎）+ 案例模版 + 方案分享 + 状态日志 + 战斗信息UI + 配置窗口
---   （配置窗内嵌 工具箱 / 数据检索 / 图标库 三个 Tab）。
+--   （配置窗内嵌 一键宏设置 / 工具箱 / 任务线 & 装备 / 图标库 / 抓宠帮手 / 子插件 六个 Tab）。
 --   ★版本号只有**两处**：本文件的 local VERSION 与 EvalHelp.toc 的 ## Version ——
 --     由 test_engine.js 的 VERSION CHECK 守着（两侧必须一致）。
 --     ★文件头**不再写版本号**：旧写法（「-- EvalHelp 1.70.44」）实际漂移了十几个版本都没人发现，
@@ -1430,9 +1430,10 @@ local function cfgBuild()
   local tabNames = { L("TAB_GLOBAL"), L("TAB_MACRO"), L("TAB_TOOLBOX"), L("TAB_DS"), L("TAB_ICONS"), L("TAB_PET"), L("TAB_PLUGINS") } -- ★1.74.29 第 7 个 Tab：子插件（独立载入的调试类插件）
   for i, name in ipairs(tabNames) do
     local tb = CreateFrame("Button", nil, root)
-    -- ★1.74.29 用户要求「缩小所有 tab 宽度」：90/96 → 74/78（7 个 Tab 仍在一行内，末尾留 ≥80px 余量）
-    tb:SetWidth(74) tb:SetHeight(18)
-    tb:SetPoint("TOPLEFT", root, "TOPLEFT", 12 + (i - 1) * 78, -26)
+    -- ★1.75.x 用户要求 Tab4 改名「任务线 & 装备」（比旧名长）⇒ 74/78 → 84/88：
+    --   7 个 Tab 仍在一行内（12 + 6*88 + 84 = 624 ≤ 660 中文窗宽），既不换行也不压右边缘。
+    tb:SetWidth(84) tb:SetHeight(18)
+    tb:SetPoint("TOPLEFT", root, "TOPLEFT", 12 + (i - 1) * 88, -26)
     pcall(tb.EnableMouse, tb, true)
     pcall(tb.RegisterForClicks, tb, "LeftButtonUp")
     local tbg = tb:CreateTexture(nil, "BACKGROUND")
@@ -2038,7 +2039,7 @@ local function cfgBuild()
     row.conds = cds
     table.insert(Wp, cds)
     -- 1.61.0 调序按钮改为箭头 + 新增下移；★1.71.9 用户截图反馈：「^ 看着像一条横线、v 是字母」
-    --   → 换成真正的三角 **▲/▼**（与本插件「工具箱」「数据检索」的滚动按钮同一套字形，已验证能显示）。
+    --   → 换成真正的三角 **▲/▼**（与本插件「工具箱」「任务线 & 装备」的滚动按钮同一套字形，已验证能显示）。
     row.up, row.upText = mkSmall(88, y, 16, "▲", function()
       local p = warCfg().profiles[warCfg().activeProfile or 1]
       local idx = ri + (warUI.offset or 0)
@@ -2165,7 +2166,7 @@ local function cfgBuild()
   root:SetScript("OnHide", function() EVAL_DD_HIDE() end) -- 关窗收起下拉（1.19.0）
   cfgWin.refresh = function() for _, r in ipairs(refreshes) do pcall(r) end end
   if type(EVAL_TB_BUILD) == "function" then EVAL_TB_BUILD(root, pages[3], refreshes) end -- 工具箱 Tab（1.68.0 Toolbox.lua 独立载入）
-  if type(EVAL_DS_BUILD) == "function" then EVAL_DS_BUILD(root, pages[4], refreshes) end -- 数据检索 Tab（DataSearch.lua 独立载入，基于 UnrealQuest 数据库）
+  if type(EVAL_DS_BUILD) == "function" then EVAL_DS_BUILD(root, pages[4], refreshes) end -- 任务线 & 装备 Tab（DataSearch.lua 独立载入，基于 UnrealQuest 数据库）
   if type(EVAL_IB_BUILD) == "function" then EVAL_IB_BUILD(root, pages[5], refreshes) end -- 图标库 Tab（IconBrowser.lua 独立载入）
   if type(EVAL_PH_BUILD) == "function" then EVAL_PH_BUILD(root, pages[6], refreshes) end -- 抓宠帮手 Tab（PetHelper.lua 独立载入）
   if type(EVAL_SUBADDONS_BUILD) == "function" then EVAL_SUBADDONS_BUILD(root, pages[7], refreshes) end -- ★1.74.29 子插件 Tab（调试类独立插件）
@@ -3014,7 +3015,7 @@ function EVAL_HELP_CFG_SETTAB(idx)
   end
   if idx == 2 then pcall(EVAL_WAR_TAB_REFRESH) end
   if idx == 3 and type(EVAL_TB_REFRESH) == "function" then pcall(EVAL_TB_REFRESH) end -- 工具箱
-  if idx == 4 and type(EVAL_DS_REFRESH) == "function" then pcall(EVAL_DS_REFRESH) end -- 数据检索
+  if idx == 4 and type(EVAL_DS_REFRESH) == "function" then pcall(EVAL_DS_REFRESH) end -- 任务线 & 装备
   if idx == 5 and type(EVAL_IB_REFRESH) == "function" then pcall(EVAL_IB_REFRESH) end -- 图标库
   if idx == 6 and type(EVAL_PH_REFRESH) == "function" then pcall(EVAL_PH_REFRESH) end -- 抓宠帮手
   if idx == 7 and type(EVAL_SUBADDONS_REFRESH) == "function" then pcall(EVAL_SUBADDONS_REFRESH) end -- ★子插件（调试类）
@@ -8339,39 +8340,39 @@ if type(SlashCmdList) == "table" then
       EVAL_HELP_GUIDE(true)
     elseif msg == "st" or msg == "state" or msg == "info" then
       EVAL_HELP_ST_TOGGLE()
-    elseif msg == "ds" then -- 数据检索诊断：采集点标注层的当前状态（切换区域不生效时用它取证）
+    elseif msg == "ds" then -- 任务线 & 装备诊断：采集点标注层的当前状态（切换区域不生效时用它取证）
       if type(EVAL_DS_NODE_DIAG) == "function" then
         say(EVAL_DS_NODE_DIAG())
       else
-        say("数据检索模块未载入")
+        say("任务线 & 装备模块未载入")
       end
     elseif msg == "ds trace" then -- 开/关采集点标注层的轨迹日志（默认关；取证时开，别长期开）
       if type(EVAL_DS_TRACE) == "function" then
         local on = EVAL_DS_TRACE()
-        say("数据检索轨迹日志: " .. (on and "|cff00ff00开|r（切换地图后 /eh logdump 查看）" or "|cffff0000关|r"))
+        say("任务线 & 装备轨迹日志: " .. (on and "|cff00ff00开|r（切换地图后 /eh logdump 查看）" or "|cffff0000关|r"))
       else
-        say("数据检索模块未载入")
+        say("任务线 & 装备模块未载入")
       end
     elseif msg == "ds clear" or msg == "ds clean" then -- 清理地图标注（按钮已删除，命令保留作快捷方式）
       if type(EVAL_DS_ANN_CLEAR) == "function" then
         EVAL_DS_ANN_CLEAR()
         say("地图标注已清理（类别全关 = 图层关闭；用 /eh ds cat <类别> on 重新显示）")
       else
-        say("数据检索模块未载入")
+        say("任务线 & 装备模块未载入")
       end
     elseif msg == "ds on" then
       if type(EVAL_DS_TOGGLE_NODES) == "function" then
         EVAL_DS_TOGGLE_NODES(true)
         say("地图标注层: |cff00ff00开|r（随地图切换自动更新；与类别勾选联动）")
       else
-        say("数据检索模块未载入")
+        say("任务线 & 装备模块未载入")
       end
     elseif msg == "ds off" then
       if type(EVAL_DS_TOGGLE_NODES) == "function" then
         EVAL_DS_TOGGLE_NODES(false)
         say("地图标注层: |cffff0000关|r")
       else
-        say("数据检索模块未载入")
+        say("任务线 & 装备模块未载入")
       end
     elseif msg == "ds 任务线 种类" or msg == "ds 任务线 类型" or msg == "ds qc kinds" then
       -- ★1.75.21 取证：任务线「类型（种类）」筛选为何对列表无效（用户实测）
@@ -8379,7 +8380,7 @@ if type(SlashCmdList) == "table" then
         local lines = EVAL_QP_KIND_DIAG()
         for i = 1, table.getn(lines) do EVAL_SAY(lines[i]) end
       else
-        EVAL_SAY("种类诊断不可用：EVAL_QP_KIND_DIAG 未定义（先打开一次「数据检索」Tab 再试）")
+        EVAL_SAY("种类诊断不可用：EVAL_QP_KIND_DIAG 未定义（先打开一次「任务线 & 装备」Tab 再试）")
       end
     elseif msg == "ds 任务线 审计" or msg == "ds 装备审计" or msg == "ds qc audit" then
       -- ★1.75.9 用户要求：任务完成后审计装备链接是否正确（**以游戏内信息为准**）
@@ -8407,7 +8408,7 @@ if type(SlashCmdList) == "table" then
           say("未知类别: " .. tostring(k) .. "（可用：herbs mines chests fish rares flight innkeeper mailbox banker auctioneer vendor repair stablemaster spirithealer meetingstone battlemaster）")
         end
       else
-        say("数据检索模块未载入")
+        say("任务线 & 装备模块未载入")
       end
     elseif msg == "ds hud" then
       -- ★1.70.38 地图诊断浮层（用户建议）：把诊断信息直接画在世界地图上。
@@ -8416,7 +8417,7 @@ if type(SlashCmdList) == "table" then
         local on = EVAL_DS_HUD()
         say("地图诊断浮层: " .. (on and "|cff00ff00开|r（开图后左上角显示诊断文本）" or "|cffff0000关|r"))
       else
-        say("数据检索模块未载入")
+        say("任务线 & 装备模块未载入")
       end
     elseif msg == "ds rnd" then
       -- ★1.70.35 随机点测试（用户建议）：验证「地图打开之后还能不能继续画」。
@@ -8425,10 +8426,10 @@ if type(SlashCmdList) == "table" then
         local on = EVAL_DS_RND()
         say("随机点测试: " .. (on and "|cff00ff00开|r（每2秒8点，随机位置；看地图上有没有随机彩点）" or "|cffff0000关|r"))
       else
-        say("数据检索模块未载入")
+        say("任务线 & 装备模块未载入")
       end
     elseif msg == "ds rndstat" then
-      if type(EVAL_DS_RND_DIAG) == "function" then say(EVAL_DS_RND_DIAG()) else say("数据检索模块未载入") end
+      if type(EVAL_DS_RND_DIAG) == "function" then say(EVAL_DS_RND_DIAG()) else say("任务线 & 装备模块未载入") end
     elseif msg == "ds snap" then
       -- ★1.70.34 一键快照：请在「看到错误标注的那一刻」执行，然后立刻 /reload 落盘。
       -- 它同时记录「客户端报告的区域」「画布实际贴图路径」「我们画的区域与钉子样本」，
@@ -8437,13 +8438,13 @@ if type(SlashCmdList) == "table" then
         say(EVAL_DS_SNAP())
         if type(EVAL_LOGLINE) == "function" then EVAL_LOGLINE("[DS][SNAP] " .. EVAL_DS_SNAP()) end
       else
-        say("数据检索模块未载入")
+        say("任务线 & 装备模块未载入")
       end
     elseif msg == "ds probe" then
       if type(EVAL_DS_PROBE) == "function" then
         for _, s in ipairs({ EVAL_DS_PROBE() }) do say(s) end
       else
-        say("数据检索模块未载入")
+        say("任务线 & 装备模块未载入")
       end
     elseif string.find(msg, "^go add ") then
       -- 兜底添加: /eh go add 技能名 条件串（如 /eh go add 压制 可用 & 就绪）
@@ -9423,7 +9424,7 @@ if type(SlashCmdList) == "table" then
       cfg.wdebug = not cfg.wdebug
       say("调试日志: " .. (cfg.wdebug and "|cff00ff00开|r" or "|cffff0000关|r"))
     elseif msg == "help" then
-      say("—— EVAL_HELP 全职业施法工具（通用一键宏） ——")
+      say("—— EVAL_HELP 全职业工具（通用一键宏） ——")
       say("|cffffff00快速上手:|r ① 技能拖上动作条 ② /eh go rescan ③ 新建宏正文 /run EVAL_GO() 拖上按键连按")
       say("|cffffff00命令:|r /eh 输出状态 | /eh log 写日志开关 | /eh auto 进出战斗自动输出")
       say("/eh ui 战斗信息UI | /eh st 状态信息UI | /eh cfg 设置窗口（小地图旁 EH 图标同效）")
@@ -9440,7 +9441,7 @@ if type(SlashCmdList) == "table" then
       say("|cffffff00问题反馈:|r https://gitee.com/xeval/emberveil_eval_help.git —— 插件持续优化中，欢迎测试并留下宝贵意见")
       say("调试日志: /eh logdump 查看（存 SavedVariables，随 /reload 落盘）| /eh log 开关 | /eh logclear 清空")
       say("图标路径采集: /eh go icons —— 把客户端宏图标表全表路径写入存档（/reload 后落盘）")
-      say("数据检索诊断: /eh ds | /eh ds hud 地图诊断浮层(推荐) | /eh ds snap 一键快照 | /eh ds rnd 随机点测试 + rndstat 统计 | /eh ds trace 轨迹日志 | /eh ds probe 详情行几何")
+      say("任务线 & 装备诊断: /eh ds | /eh ds hud 地图诊断浮层(推荐) | /eh ds snap 一键快照 | /eh ds rnd 随机点测试 + rndstat 统计 | /eh ds trace 轨迹日志 | /eh ds probe 详情行几何")
       say("地图标注: 一个「地图标注(N)」按钮即可——点开勾选类别（=开关）；/eh ds cat <类别> on|off 命令行等价 | /eh ds clear 清空")
       say("稀有提醒转播: /eh go 稀有（状态）｜ 稀有 开 ｜ 稀有 关 ｜ 稀有 试 ｜ 稀有 目标 ｜ 稀有 目标探针 ｜ 稀有 链接")
       say("　任务插件发现稀有的那一刻在聊天框报一行（名字按品阶染色 + 品阶 + 码数）；**点名字 = 选中它**（选不中如实报错）")

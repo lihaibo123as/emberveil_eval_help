@@ -996,6 +996,30 @@ do
   EVAL_DF_TEST_TARGETS_RESET()
   if type(cfg7) == "table" then cfg7.dragBars = nil end
 
+  -- ⑧ ★★★1.75.x 用户要求：「工具→图层拖拽→设置. 常驻层缺少宠物动作条」
+  --   三件都是**接线**（漏了不报错，只是那一项在界面上不存在、或落错分组）：
+  --   ① 目标表里有它 + 带候选名表（帧名未知，不许写死一个）；② 读值口交出 pet 标记、且**不带 roster/icon**；
+  --   ③ [设置] 菜单里它落在**常驻层标题之后、下一个分组标题之前**。
+  local pet207 = nil
+  for _, t in ipairs(EVAL_DF_TARGETS()) do if t.label == "宠物动作条" then pet207 = t end end
+  eq(pet207 ~= nil, true, "组207⑧★★★目标表里有「宠物动作条」（用户点名的项）")
+  eq(pet207 ~= nil and pet207.pet == true and pet207.roster == false and pet207.icon == false, true,
+     "组207⑧★★它是 pet 标记（按需出现跟随）且不落 roster/icon 组")
+  local petRaw207 = nil
+  for _, t in ipairs(EVAL_DF_TEST_TARGETS_RAW()) do if t.label == "宠物动作条" then petRaw207 = t end end
+  eq(petRaw207 ~= nil and type(petRaw207.cands) == "table" and table.getn(petRaw207.cands) >= 3, true,
+     "组207⑧★★带候选名表 ≥3（本客户端真名未知，走候选解析不写死）")
+  local items207, locked207, _, names207 = EVAL_DF_PICK_MENU()
+  local iPet207, iG1_207, iG2_207 = nil, nil, nil
+  for i = 1, table.getn(items207) do
+    if items207[i] == "宠物动作条" then iPet207 = i end
+    if locked207[i] and names207[i] == nil then
+      if iG1_207 == nil then iG1_207 = i elseif iG2_207 == nil then iG2_207 = i end
+    end
+  end
+  eq(iPet207 ~= nil and iG1_207 ~= nil and iG2_207 ~= nil and iG1_207 < iPet207 and iPet207 < iG2_207, true,
+     "组207⑧★★★[设置] 菜单里它落在**常驻层**组内（位置 " .. tostring(iG1_207) .. " < " .. tostring(iPet207) ..
+     " < " .. tostring(iG2_207) .. "）")
   print(string.format("  框拖拽动作条目标：目标表 %d 项（其中动作条 4）· 干净状态缺帧 %d 且末行仍为合计 · " ..
     "造 MultiBar1 ⇒ 动作条1 命中（resolved=%s，存档键 %s）· 清单读桩宽 300 · 面板按真名列出 · " ..
     "撞同一帧时第二槽跳过 %s · 探针扫到 %d 个（落档 found %d 条）· /edb bars 已接 %s",

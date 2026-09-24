@@ -125,7 +125,8 @@ local DF_XY_NUDGE = 10                    -- [−][+] 每次 ±10 像素
 local DF_XY_NUDGE_FINE = 1                -- 按住 Shift 时 ±1（对缝用）
 local DF_XY_MIN, DF_XY_MAX = -400, 1700    -- 允许把窗口推出屏幕边缘（合法需求），但不许无界
 
--- ★★固定目标表（与地图扫描源无关）：用户明确「动作类只要 MainMenuBar」（副/侧/宠物/姿态条都不列）。
+-- ★★固定目标表（与地图扫描源无关）。★口径已两次放宽：动作条1~4（1.74.31）· **宠物动作条**（1.75.x）已补进；
+--   姿态条仍不列（用户没点名）。
 local DF_TARGETS = {
   { name = "PlayerFrame", label = "用户头像" },
   { name = "TargetFrame", label = "目标头像" },
@@ -149,6 +150,15 @@ local DF_TARGETS = {
     cands = { "MultiBarRight", "MultiBar3", "ActionBar3", "RightActionBar", "RightActionBar1", "MultiActionBar3", "ActionBarFrame3" } },
   { name = "MultiBarLeft", label = "动作条4",
     cands = { "MultiBarLeft", "MultiBar4", "ActionBar4", "RightActionBar2", "MultiActionBar4", "ActionBarFrame4" } },
+  -- ★★★1.75.x 用户要求：「工具→图层拖拽→设置. 常驻层缺少宠物动作条」⇒ 补进**常驻层**。
+  --   ★不带 roster/icon 标记 ⇒ 自然归第 1 组「常驻层（拖拽柄）」（分组由 EVAL_DF_PICK_MENU 现算，标签不写死）。
+  --   ★帧名同动作条1~4：本客户端 UI 编译在 pak 里（磁盘无 FrameXML、别的插件零引用 PetActionBar*）
+  --     ⇒ 走候选名解析；一个候选都没命中就**如实缺席**（不画柄），用 `/edb bars` 探真名（探针已加 pet 关键词组）。
+  --   ★★宠物动作条是**按需出现**的（没宠物时不显示）⇒ 与队伍/团队同族，带 `pet = true` 进**有界跟随**：
+  --     事件 `UNIT_PET` 有本地证据（本项目 addons/EH_DebugBox/EH_DebugBox.lua 正在注册它）；
+  --     ★`PET_BAR_UPDATE` **不注册**——本地零证据（铁律 5④：探测名单不算注册依据）。
+  { name = "PetActionBarFrame", label = "宠物动作条", pet = true,
+    cands = { "PetActionBarFrame", "PetActionBar", "PetBarFrame", "PetActionButtonsFrame", "PetBar" } },
   -- ★★★1.74.32 用户要求：「拖拽图层再增加队伍层,团队层如果存在的话」。
   --   ★「如果存在的话」是**两层**意思，都要如实处理，不许假装：
   --     ① **帧名**同动作条1~4：本客户端 UI 编译在 pak 里（磁盘无 FrameXML、别的插件零引用）
@@ -971,7 +981,10 @@ end
 --     不等于客户端认识它）⇒ **不注册**（不许把探测名单当注册依据）。
 -- ★有界：事件之后只跟 `DF_ROSTER_TRIES` 次（帧可能在事件之后才建出来），跟完即停 ——
 --   **不做常驻轮询**（与「有界复查窗口」同一纪律：不做没人叫停的后台周期任务）。
-local DF_ROSTER_EVENTS = { "PARTY_MEMBERS_CHANGED", "RAID_ROSTER_UPDATE", "PLAYER_ENTERING_WORLD" }
+--   ★1.75.x：同一套「按需出现」跟随也覆盖**宠物动作条**（`pet = true`）——
+--     `UNIT_PET` 有本地证据（本项目 `addons/EH_DebugBox/EH_DebugBox.lua` 正在注册它）；
+--     ★`PET_BAR_UPDATE` 本地零证据 ⇒ **不注册**（铁律 5④）。
+local DF_ROSTER_EVENTS = { "PARTY_MEMBERS_CHANGED", "RAID_ROSTER_UPDATE", "UNIT_PET", "PLAYER_ENTERING_WORLD" }
 local DF_ROSTER_PERIOD = 0.5
 local DF_ROSTER_TRIES = 4
 
@@ -1214,7 +1227,7 @@ local function dfOpenHooksSync(on)
 end
 DF.onShowBoss = dfOnShowBoss   -- ★读值口/判据要比对「现在挂的是不是我们这条链」，得有个稳定的引用
 
--- 一次结算：**只碰带 `roster` 标记的目标**（队伍/团队），不重锚别的目标
+-- 一次结算：**只碰带 `roster` / `pet` 标记的目标**（队伍/团队/宠物动作条），不重锚别的目标
 --   （别的目标的位置由「有界复查窗口」负责 —— 两处各管一段，免得这里偷偷变成常驻重锚）
 local function dfRosterPass(quiet)
   if not DF.on then return 0 end
@@ -1222,7 +1235,7 @@ local function dfRosterPass(quiet)
   for i = 1, table.getn(DF_TARGETS) do
     local tgt = DF_TARGETS[i]
     -- ★1.74.33 未勾选的队伍/团队帧**连记账都不做**（记了 applied 之后再勾上就不会补恢复 —— 那是个静默漏做）
-    if tgt.roster and dfPicked(tgt.name) then
+    if (tgt.roster or tgt.pet) and dfPicked(tgt.name) then
       local fr = dfTargetFrame(tgt)
       -- ★按**帧对象**记账：帧被重建 ⇒ 重新恢复一次（这正是「按需出现」要的效果）
       if fr and not DF.rosterApplied[fr] then
@@ -1235,7 +1248,7 @@ local function dfRosterPass(quiet)
   if n > 0 then
     if type(dfRefresh) == "function" then pcall(dfRefresh) end
     if not quiet then
-      say("框拖拽：队伍/团队帧出现了 " .. tostring(n) .. " 个 → 已按存档恢复，拖拽柄也补上了")
+      say("框拖拽：队伍/团队/宠物帧出现了 " .. tostring(n) .. " 个 → 已按存档恢复，拖拽柄也补上了")
     end
   end
   return n
@@ -2893,6 +2906,8 @@ function EVAL_DF_TARGETS()
     --   面板/测试不必再自己 `_G[名字]`（候选名解析后「名字」可能不是 t.name）。
     table.insert(out, { name = t.name, label = t.label, frame = f, resolved = f and t.__hitName or nil,
       roster = t.roster and true or false,
+      -- ★1.75.x：「按需出现」的**宠物动作条**标记（与 roster 同族，但触发事件不同）
+      pet = t.pet and true or false,
       -- ★1.74.32：图标形态标记（被动打开层；面板/断言据此区分「整条透明柄」与「小图标」）
       icon = t.icon and true or false })
   end
@@ -3103,6 +3118,9 @@ function EVAL_DF_MIGRATE() return dfMigrate(false) end
 local function dfFrameLikeGroup(n)
   if type(n) ~= "string" then return nil end
   local s = string.lower(n)
+  -- ★1.75.x 宠物动作条：**必须在 bar 之前判** —— `PetActionBarFrame` 里含 "actionbar"，
+  --   顺序反了会被判成 "bar" 组（探针分组里就看不到宠物条，取证时误判「帧名不对」）。
+  if string.find(s, "petaction", 1, true) or string.find(s, "petbar", 1, true) then return "pet" end
   if string.find(s, "multibar", 1, true) or string.find(s, "actionbar", 1, true)
     or string.find(s, "actionbutton", 1, true) or string.find(s, "multiaction", 1, true)
     or string.find(s, "mainmenubar", 1, true) then return "bar" end
@@ -3305,7 +3323,7 @@ function EVAL_DF_PROBE_SAFE()
 end
 
 -- ★分组表**必须与 `dfFrameLikeGroup` 的返回值一一对应**（少一个组名 ⇒ 该组结果静默丢掉，本项目最恨的那种）
-local DF_PROBE_GROUPS = { "bar", "party", "raid", "guild", "char", "auction", "mail", "quest",
+local DF_PROBE_GROUPS = { "bar", "pet", "party", "raid", "guild", "char", "auction", "mail", "quest",
   "spell", "trainer", "trade", "merchant", "friend" }
 local DF_PROBE_TOP_MAX = 80  -- 顶层大帧清单上限（够用即可，避免存档被灌成大文件）
 -- ★★上限（1.74.32 真机实测补）：关键词会命中**几千个同名子件**（ActionButton* 的贴图/文字/冷却圈…），

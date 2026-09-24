@@ -2617,12 +2617,28 @@ console.log("QUEST TOC CHECK: quest/ 三文件在 toc 且顺序 Data→Bulk→Ch
   if (!/modelKey\s*==\s*"dismountAuto"/.test(tb)) bad.push('Toolbox.lua 缺「自动下马」开关行（key="dismountAuto"）');
   if (eh.indexOf("EVAL_DH_CMD") < 0) bad.push("EvalHelp.lua 没接 /eh go 下马* 命令");
   if (eh.indexOf("EVAL_DH_RESTORE") < 0) bad.push("EvalHelp.lua 登录时没恢复骑乘助手图标（/reload 后图标会消失）");
+  // ★1.75.x 用户要求：「工具→宠物助手→ 内的信息提示调整成未选择喂养宠物技能的提示」
+  //   提示行现在是**唯一来源** `EVAL_HH_TIP_LINES()`（悬浮提示照它渲染、断言直接读它）——
+  //   源码级守三条（漏了都不报错，只是提示又变回含糊的「未识别」/ 或两处文本悄悄漂移）：
+  //     ① 读值口存在；② `hhTip` 必须走读值口；③ 三语的 HH_TT_SPELL_NONE 都不许是旧文案。
+  const hhSrc = fs.readFileSync(path.join(__dirname, "tools", "HunterHelper.lua"), "utf8");
+  if (hhSrc.indexOf("function EVAL_HH_TIP_LINES(") < 0) bad.push("HunterHelper 缺提示行读值口 EVAL_HH_TIP_LINES（渲染与断言会各拼一份）");
+  if (hhSrc.indexOf("local lines = EVAL_HH_TIP_LINES()") < 0) bad.push("hhTip 没走读值口 EVAL_HH_TIP_LINES（两处各拼一份 ⇒ 迟早漂移）");
+  if (hhSrc.indexOf("HH_TT_SPELL_NONE") < 0) bad.push("没选喂养技能那条分支没用 HH_TT_SPELL_NONE（用户点名的提示语没了）");
+  ["zhCN", "enUS", "ruRU"].forEach(function (lg) {
+    const p = path.join(__dirname, "Locales", lg + ".lua");
+    const s = fs.readFileSync(p, "utf8");
+    const m = s.match(/HH_TT_SPELL_NONE\s*=\s*"([^"]*)"/);
+    if (!m) { bad.push(lg + " 缺 HH_TT_SPELL_NONE"); return; }
+    const stale = ["未识别", "not identified", "не определено"];
+    if (stale.indexOf(m[1]) >= 0) bad.push(lg + " 的 HH_TT_SPELL_NONE 还是旧文案（" + m[1] + "）—— 用户要的是「未选择喂养宠物技能」的提示");
+  });
   if (bad.length) {
     console.log("HH WIRING CHECK: FAIL - " + bad.join(" | "));
     process.exitCode = 1;
     return;
   }
-  console.log("HH WIRING CHECK: tools 模块进了 .toc · 工具箱有开关行且勾选接 EVAL_HH_TOGGLE/EVAL_DH_TOGGLE · /eh go 喂食*/下马* 已接 · 两个助手都接了登录恢复");
+  console.log("HH WIRING CHECK: tools 模块进了 .toc · 工具箱有开关行且勾选接 EVAL_HH_TOGGLE/EVAL_DH_TOGGLE · /eh go 喂食*/下马* 已接 · 两个助手都接了登录恢复 · 喂食提示行走单一来源且三语提示语已更新");
 })();
 
 // ===== 拖拽模块（tools/DragFrames.lua）自带的源码检查：已迁到 tests/checks/DragFrames.js =====

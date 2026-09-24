@@ -8,7 +8,7 @@
 - **多文件架构**（1.39.0 起模块化；**真实载入顺序 = `EvalHelp.toc` 的顺序，以 .toc 为唯一真值**）：
   `Locales/{zhCN,enUS,ruRU}` → `Core.lua`（输出/i18n/状态采集+UPDATE_STATE/UI 越界助手）→ `Engine.lua`（一键宏引擎：扫描/五分类/规则引擎/解析/免疫/光环/距离/队伍扫描）
   → `EvalHelp.lua`（全部 UI 窗口+斜杠+初始化）→ `examples/*.lua`（11 个案例模版数据文件）→ `Toolbox.lua`（Tab3 工具箱）
-  → `DataSearch.lua`（Tab4 数据检索）→ `Share.lua`（方案分享）→ `IconSem.lua`（图标语义表，1.73.5）
+  → `DataSearch.lua`（Tab4 任务线 & 装备）→ `Share.lua`（方案分享）→ `IconSem.lua`（图标语义表，1.73.5）
   → `IconBrowser.lua`（Tab5 图标库）→ `PetData.lua`/`PetHelper.lua`（Tab6 抓宠帮手，1.73.0）
   → **`tools/IconGrid.lua`（通用图标网格选择器：单选/多选 · 高度自适应 · 分页滚轮夹取，1.74.5）**
 → **`tools/HunterHelper.lua`（猎人助手 · 一键喂食，1.74.5）** → **`tools/ConsumableHelper.lua`（消耗品助手 · 多选横排各自点用，1.74.5）**。 → **`tools/DismountHelper.lua`（骑乘助手 · 一键下马，1.74.7）** → **`tools/RareWatch.lua`（稀有提醒转播独立模块，1.74.27）**
@@ -81,7 +81,7 @@ node test_engine.js  # 逻辑冒烟测试：打桩 WoW API 加载整个插件，
 | IO | `EVAL_PROFILE_TO_TEXT/FROM_TEXT` md 文本互转；`EVAL_HELP_IO_*` 窗口（FontString 保底预览区） |
 | 案例模版窗 | `EVAL_HELP_TPL_*`：读 `examples/*.lua` 的数据渲染成**分组分两列 + 组内同行自动换行**（版式由纯函数 `tplTwoColPlan` 算），点击即导入 |
 | 工具箱 Tab3 | `Toolbox.lua`：`EVAL_TB_BUILD(root, page, refreshes)`；商人 / 队伍社交 / 任务三组，动作全部走限频队列（0.3s/笔 + 逐笔核对） |
-| 数据检索 Tab4 | `DataSearch.lua`：`EVAL_DS_BUILD`；逻辑层 `EVAL_DS_SEARCH/DETAIL/SHOWMAP` 与 UI 分离、可 node 直测；地图标注层硬依赖 UnrealQuest |
+| 任务线 & 装备 Tab4 | `DataSearch.lua`：`EVAL_DS_BUILD`；逻辑层 `EVAL_DS_SEARCH/DETAIL/SHOWMAP` 与 UI 分离、可 node 直测；**任务线视图 + 装备视图**（装备优先 → 反查任务线）与四类检索同页；地图标注层硬依赖 UnrealQuest |
 | 方案分享 | `Share.lua`：公会 / 队伍 / 说 三频道分片直发直收（`SH_CHANS` 白名单是唯一真值）+ 接收规则（只留最新一笔 + 四道上限）；1.74.0 起含**品阶封皮**（`[品阶秘籍·名]` 可点链接 + 弹窗确认）+ **品阶评分**（`SH_SEAL_TIERS` 单一来源）+ **头衔抽卡**（`EVAL_TITLE_*`）+ 彩蛋「创世者亲临」+ **角色扮演反应**（`SH_FUN_IMP/IGN` 嵌套表 + `shSendReaction` 按来源频道） |
 | 图标库 Tab5 | `IconBrowser.lua`：读客户端内置宏图标表，按前缀分组 / tooltip 显示路径 / **先过滤再分页** |
 

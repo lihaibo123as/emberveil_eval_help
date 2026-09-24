@@ -84,6 +84,25 @@ module.exports = function (root) {
       for (const lb of barLabels) if (body.indexOf('label = "' + lb + '"') < 0) bad.push("DF_TARGETS 里没有「" + lb + "」目标");
       const nCands = (body.match(/cands = \{/g) || []).length;
       if (nCands < 6) bad.push("带候选名表的目标只有 " + nCands + " 个（至少 6：动作条1~4 + 队伍成员 + 团队层）");
+      // ★1.75.x 用户要求：「工具→图层拖拽→设置. 常驻层缺少宠物动作条」
+      //   判据：它在目标表里 + 带候选名表（帧名未知，不许写死）+ **不带 roster/icon**
+      //   （带了就会落进「队伍/团队层」或图标层组，而用户要的是**常驻层**）。
+      const iPetT = body.indexOf('label = "宠物动作条"');
+      if (iPetT < 0) bad.push("DF_TARGETS 里没有「宠物动作条」（用户点名要它进常驻层）");
+      else {
+        const win0 = body.slice(iPetT, iPetT + 400);
+        const cStart = win0.indexOf("cands = {");
+        const cEnd = win0.indexOf("},", cStart);
+        // ★窗口必须**切到本条目的 `},` 为止**：源码检查里注释已被剥掉，固定 400 字符会越界到
+        //   下一条（队伍成员1 带 roster = true）⇒ 假 FAIL（首版就是这么红的）。
+        const win = (cStart >= 0 && cEnd > cStart) ? win0.slice(0, cEnd + 2) : win0;
+        const candSeg = (cStart >= 0 && cEnd > cStart) ? win0.slice(cStart, cEnd) : "";
+        const nPetCands = (candSeg.match(/"[A-Za-z][A-Za-z0-9_]*"/g) || []).length;
+        if (cStart < 0) bad.push("宠物动作条没给候选名表（本客户端帧名未知，写死一个 = 猜）");
+        else if (nPetCands < 3) bad.push("宠物动作条的候选名少于 3 个（实测 " + nPetCands + "）");
+        if (win.indexOf("roster = true") >= 0) bad.push("宠物动作条带了 roster = true —— 会落进「队伍/团队层」组（用户要常驻层）");
+        if (win.indexOf("icon = true") >= 0) bad.push("宠物动作条带了 icon = true —— 会落进图标层组（用户要常驻层）");
+      }
     }
     // ④ 柄池上限派生
     if (!/DF_POOL_MAX\s*=\s*table\.getn\(DF_TARGETS\)/.test(joined)) bad.push("柄池上限没由目标数派生（写死值会在目标变多时悄悄少贴柄）");
@@ -99,8 +118,17 @@ module.exports = function (root) {
     for (const lb of ["公会", "属性", "拍卖", "邮箱", "任务", "技能树"]) {
       if (joined.indexOf('label = "' + lb + '"') < 0) bad.push("DF_WIN_CANDS 里缺用户点名的「" + lb + "」");
     }
-    for (const kw of ['"guild"', '"paperdoll"', '"auction"', '"mail"', '"quest"', '"spellbook"', '"trainer"', '"tradeskill"', '"merchant"', '"friend"']) {
+    for (const kw of ['"petaction"', '"guild"', '"paperdoll"', '"auction"', '"mail"', '"quest"', '"spellbook"', '"trainer"', '"tradeskill"', '"merchant"', '"friend"']) {
       if (joined.indexOf("string.find(s, " + kw) < 0) bad.push("dfFrameLikeGroup 缺关键词 " + kw + "（该组窗口永远扫不到）");
+    // ★1.75.x 宠物动作条：关键词必须在 **bar 之前**判（`PetActionBarFrame` 里也含 "actionbar"），
+    //   且 `DF_PROBE_GROUPS` 必须有 pet 组 —— 分组表与 dfFrameLikeGroup 必须一一对应，少一个 ⇒ 结果静默丢掉。
+    {
+      const iPetKw = joined.indexOf('string.find(s, "petaction"');
+      const iBarKw = joined.indexOf('string.find(s, "multibar"');
+      if (iPetKw < 0) bad.push("dfFrameLikeGroup 缺宠物条关键词 petaction（/edb bars 扫不到宠物条）");
+      else if (iBarKw >= 0 && iPetKw > iBarKw) bad.push("宠物条关键词判在动作条**之后**（PetActionBarFrame 含 actionbar ⇒ 会被判成 bar 组）");
+      if (joined.indexOf('"bar", "pet"') < 0) bad.push("DF_PROBE_GROUPS 缺 pet 组（宠物条探针结果会被静默丢掉）");
+    }
     }
     // ★★临时哨兵**已按计划撤除**（1.74.32 第 2 步）：第 1 步要求「被动层候选不许进 DF_TARGETS」，
     //   第 2 步（图标形态）正是要把探到的真名接进去 ⇒ 改成**反向**守「探到的真名确实接进去了」：
@@ -145,8 +173,8 @@ module.exports = function (root) {
       process.exitCode = 1;
       return;
     }
-    console.log("DF BARS WIRING CHECK: dfTargetFrame 在 dfFrameOf 之后 · 目标循环全走解析口 · 4 个动作条各带候选名 · " +
-      "柄池上限派生 · 撞同帧去重 · 探针与 /edb bars 已接 · 面板按命中帧名列");
+    console.log("DF BARS WIRING CHECK: dfTargetFrame 在 dfFrameOf 之后 · 目标循环全走解析口 · 4 个动作条 + 宠物动作条各带候选名 · " +
+      "（宠物条不许落 roster/icon 组）· 柄池上限派生 · 撞同帧去重 · 探针与 /edb bars 已接（含 pet 关键词组）· 面板按命中帧名列");
   })();
 
 
@@ -199,8 +227,13 @@ module.exports = function (root) {
       if (nRoster !== 5) bad.push("带 `roster = true` 的目标有 " + nRoster + " 个（应恰好 5：队伍成员1~4 + 团队层）");
     }
     // ③ 事件名（只许有本地证据的；探测名单里的名字不许当注册依据）
-    for (const ev of ["PARTY_MEMBERS_CHANGED", "RAID_ROSTER_UPDATE", "PLAYER_ENTERING_WORLD"]) {
+    for (const ev of ["PARTY_MEMBERS_CHANGED", "RAID_ROSTER_UPDATE", "UNIT_PET", "PLAYER_ENTERING_WORLD"]) {
       if (joined.indexOf('"' + ev + '"') < 0) bad.push("注册名单里缺 " + ev + "（有本地证据的事件，别漏）");
+    }
+    // ★1.75.x：宠物动作条同族（`pet = true`）—— `UNIT_PET` 有本地证据（本项目 EH_DebugBox 注册它），
+    //   `PET_BAR_UPDATE` **本地零证据** ⇒ 不许当注册依据（与下面 GROUP_ROSTER_UPDATE 同一条铁律）。
+    if (joined.indexOf("PET_BAR_UPDATE") >= 0) {
+      bad.push("出现了 PET_BAR_UPDATE —— 本地零证据（只有探测名单提过它）⇒ 不许当注册依据（铁律 5④）");
     }
     if (joined.indexOf("GROUP_ROSTER_UPDATE") >= 0) {
       bad.push("出现了 GROUP_ROSTER_UPDATE —— 它只在子插件的事件**探测名单**里，没有本地证据 ⇒ 不许当注册依据（铁律 5④）");
@@ -262,8 +295,9 @@ module.exports = function (root) {
       process.exitCode = 1;
       return;
     }
-    console.log("DF ROSTER WIRING CHECK: 前向声明在 ensure 之前 · 队伍/团队各带 roster+cands · " +
-      "只注册有证据的 3 个事件 · 跟随有界且关闭清零 · install/enable 双路径已接 · 结算走 dfApplyOne · 探针报组队状态");
+    console.log("DF ROSTER WIRING CHECK: 前向声明在 ensure 之前 · 队伍/团队带 roster、宠物条带 pet 且各带 cands · " +
+      "只注册有本地证据的 4 个事件（PARTY_MEMBERS_CHANGED / RAID_ROSTER_UPDATE / UNIT_PET / PLAYER_ENTERING_WORLD；PET_BAR_UPDATE 不许）· " +
+      "跟随有界且关闭清零 · install/enable 双路径已接 · 结算走 dfApplyOne · 探针报组队状态");
   })();
 
 
@@ -737,7 +771,8 @@ module.exports = function (root) {
       dfApplyAll: "local fr = dfPicked(tgt.name) and dfTargetFrame(tgt) or nil",
       dfKeepTick: "local fr = dfPicked(tgt.name) and dfTargetFrame(tgt) or nil",
       dfApplyOne: "if not dfPicked(tgt.name) then return false end",
-      dfRosterPass: "tgt.roster and dfPicked(tgt.name)",
+      // ★1.75.x：宠物动作条同族（`pet = true`）⇒ 这道门也必须覆盖它（否则未勾选的宠物条照样被重锚）
+      dfRosterPass: "(tgt.roster or tgt.pet) and dfPicked(tgt.name)",
       EVAL_DF_RESET: "not dfPicked(tgt.name)",
     };
     for (const n of Object.keys(GATES)) {

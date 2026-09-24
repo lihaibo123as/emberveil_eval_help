@@ -19840,4 +19840,47 @@ end
 
 -- （组 222 已迁到 tests/tools/DragFrames.lua；1.74.33）：属性配置的 **X/Y 坐标**（用户第二次澄清要的就是这一项）=====）
 
+-- ===== 组 227（1.75.x）：一键喂食提示行 —— 没选喂养技能 = **明确提示**（用户点名）=====
+-- 用户原话：「工具->宠物助手-> 内的信息提示调整成未选择喂养宠物技能的提示.」
+-- ★判据为什么这么写：那一行原来把「没选技能」显示成含糊的「未识别」；现在它是**提示语 + 警示色**
+--   （与「食物：未设置」同一形态）。提示行抽成了唯一来源 `EVAL_HH_TIP_LINES()` ⇒ 断言直接读它，
+--   不必去跟桩里的 GameTooltip 记账，也保证「渲染的」与「断言的」永远是同一份文本。
+do
+  local fails0 = TESTASSERT_FAILS
+  local cs227 = EVAL_TB_CHAR_STORE()
+  local keepSp227, keepFood227, keepTex227 = cs227.hhSpell, cs227.hhFood, cs227.hhFoodTex
+  local function row227(lines, prefix)
+    for i = 1, table.getn(lines) do
+      if type(lines[i].t) == "string" and string.find(lines[i].t, prefix, 1, true) == 1 then return lines[i] end
+    end
+    return nil
+  end
+  -- ① 没选技能（也没设食物）→ 明确提示 + 警示色
+  cs227.hhSpell, cs227.hhFood, cs227.hhFoodTex = nil, nil, nil
+  if type(EVAL_HH_SET_SPELL) == "function" then EVAL_HH_SET_SPELL(nil) end
+  local L227 = EVAL_HH_TIP_LINES()
+  eq(type(L227) == "table" and table.getn(L227) >= 6, true,
+     "组227①★提示行读值口可用（" .. tostring(type(L227) == "table" and table.getn(L227) or -1) .. " 行）")
+  local sp227 = row227(L227, "技能：")
+  eq(sp227 ~= nil and sp227.t == "技能：未选择喂养宠物技能（右键从法术书挑）", true,
+     "组227①★★★没选技能 → 那一行是**明确提示**（实测：" .. tostring(sp227 and sp227.t) .. "）")
+  eq(sp227 ~= nil and string.find(sp227.t, "未识别", 1, true) == nil, true,
+     "组227①★★反向哨兵：不再是含糊的「未识别」")
+  eq(sp227 ~= nil and sp227.r == 1 and sp227.g == 0.5 and sp227.b == 0.4, true,
+     "组227①★★提示行用警示色（与「食物：未设置」同一形态；实测 " ..
+     tostring(sp227 and (sp227.r .. "/" .. sp227.g .. "/" .. sp227.b)) .. "）")
+  -- ② 选了技能 → 技能名 + 常规色
+  cs227.hhSpell = "喂养宠物"
+  local L227b = EVAL_HH_TIP_LINES()
+  local sp227b = row227(L227b, "技能：")
+  eq(sp227b ~= nil and sp227b.t == "技能：喂养宠物", true,
+     "组227②★选了技能 → 那一行是技能名（实测：" .. tostring(sp227b and sp227b.t) .. "）")
+  eq(sp227b ~= nil and sp227b.r == 0.9 and sp227b.g == 0.9 and sp227b.b == 0.9, true,
+     "组227②★技能名用常规色（不再是警示色）")
+  -- 还原
+  cs227.hhSpell, cs227.hhFood, cs227.hhFoodTex = keepSp227, keepFood227, keepTex227
+  if type(EVAL_HH_SET_SPELL) == "function" then EVAL_HH_SET_SPELL(keepSp227) end
+  if fails0 == TESTASSERT_FAILS then print("GROUP 227 (一键喂食提示行：没选技能 = 明确提示): PASS") end
+end
+
 print("ALL TESTS PASS")
