@@ -8,6 +8,13 @@ local TB = { off = 0, rows = {}, ROWS = 13 }
 --   本轮实测：一开始放在刷新段旁边 → 被 CHECK 当场挡下，这就是那条检查的价值）
 local TB_COLS = 2        -- 列数（用户要求两列；将来加第三列只需改这里，列宽/切点算法都是通用的）
 local TB_COL_GAP = 24    -- 两列之间的缝
+-- ★★★1.74.31 用户要求：「工具箱 → 重置属性 → 信息展示也要将层高度/宽度信息显示。**信息框宽度大一点**」。
+--   这一行 tooltip 用的是真 GameTooltip ⇒ 宽度靠它自己的 `SetMinimumWidth`（本客户端有：api 索引 category = GameTooltip (widget)）。
+--   460 = 一行「宽 300 · 高 200 · 缩放 0.35 · 透明度 0.62 · 显示 · 位置 +100,-50（有自定义记录）」量出来的余量值。
+-- ★★★1.74.30 本 Tab 在配置窗里的**序号**（与 EvalHelp.lua 的 tabNames / pages 顺序一一对应：3 = 工具箱）。
+--   滚轮处理器靠**它**判「本 Tab 是否激活」（与 PetHelper 的 PH_TAB 同一范式）——
+--   不再用「首行组标题可见」这种**间接**判据（那是显隐契约的副作用，判错就是「滚了别的 Tab 的列表」）。
+local TB_TAB = 3
 -- ★1.73.16 「玩家聊天」事件白名单（取证缓冲只留这些：战斗/法术刷屏会把真实聊天挤出去）
 local TB_CHAT_EV_KEYS = {
   "SAY", "YELL", "PARTY", "RAID", "GUILD", "OFFICER", "CHANNEL", "WHISPER", "EMOTE", "TEXT_EMOTE",
@@ -142,6 +149,19 @@ function EVAL_TEST_TB_HDR_TEXT(label)
     if r and r.hdr and r.item and r.item.t == "h" and tostring(r.item.label) == want then
       local ok, t = pcall(r.hdr.GetText, r.hdr)
       return (ok and tostring(t or "")) or ""
+    end
+  end
+  -- ★★★1.74.30 修一处**死代码**（本任务要求「这些读值口改造后要继续可用」）：这里原本写的是
+  --   `EVAL_TB_TEST_GOTO(lab)` —— `lab` 是个**不存在**的全局（恒 nil → GOTO 直接返回 false），
+  --   于是「找不到就自动翻页」这条兜底从来没生效过（只有目标恰好在当前窗口里才读得到）。
+  --   改用上面已经归一好的 `want`（本函数唯一的参数名）。
+  if EVAL_TB_TEST_GOTO(want) then
+    for k = 1, (TB.ROWS * (TB.cols or TB_COLS)) do
+      local r = TB.rows[k]
+      if r and r.item and r.item.label == want and r.hdr then
+        local okT, t = pcall(r.hdr.GetText, r.hdr)
+        return okT and t or nil
+      end
     end
   end
   return nil
@@ -339,6 +359,14 @@ if c.tb.nameMenu == nil then c.tb.nameMenu = true end
   --   ★注意：上面这一串迁移只动**账号**键，与角色键无关（别把 c.tb 当成了全部配置）。
   return tbMakeRouter()
 end
+
+-- ★★★1.74.36-2：工具箱配置真值的**只读出口**（给 tools/ 下的工具模块用）。
+--   ★为什么必须有：`tbCfg` 是**本文件的 local** —— 模块里裸调 `tbCfg()` 得到的是**全局 nil**，
+--     于是「读永远 false、写一次都不生效」，而界面/聊天框照样播报成功（最阴的一类静默失效）。
+--     真机实况：工具箱→缩放大地图的勾选框点了不会勾上，每次点击都只打印一句「已启用」。
+--   ★同类还有 `say` / `logLine`（Core.lua 与 Toolbox.lua 的 local）⇒ 模块必须用全局桥
+--     `EVAL_SAY` / `EVAL_LOGLINE`（Core.lua 末尾 `EVAL_SAY = say` 就是为此）；判据 = `MODULE HOST LOCAL CHECK`。
+function EVAL_TB_CFG() return tbCfg() end
 -- ★1.73.12 聊天窗挂载点清单（「频道进出屏蔽」与「聊天名字着色」**共用**同一个包装体）：
 --   · 真客户端里 DEFAULT_CHAT_FRAME 与 ChatFrame1 常常是**同一个对象** → 不能按名字去重，
 --     只能按「当前入口是不是我们挂的那一层」判幂等（见 EVAL_TB_CHAN_INSTALL_ONE）；
@@ -4011,6 +4039,8 @@ function EVAL_TB_ONEVENT(e)
     if type(EVAL_HH_RESTORE) == "function" then pcall(EVAL_HH_RESTORE) end
     -- ★1.74.5 消耗品助手同样再恢复一次（进世界时 UIParent 尺寸才准）
     if type(EVAL_CH_RESTORE) == "function" then pcall(EVAL_CH_RESTORE) end
+    -- ★子插件「不启用不载入」对账（图层调试仍为独立插件）
+    if type(EVAL_PLUGIN_RECONCILE) == "function" then pcall(EVAL_PLUGIN_RECONCILE) end
   end
 end
 
@@ -4055,6 +4085,11 @@ qf:SetScript("OnUpdate", function()
   tbWhoTick() -- ★1.73.12 名字主动查询的滴出（频率下限/单飞都在它里面；队列空时只有几次判断）
 end)
 
+-- ★★★1.74.29 用户决定：两个地图子插件**改为主插件的工具模块**（tools/LayerDebug.lua、tools/SimpleMap.lua），
+--   由 EvalHelp.toc 载入、开关放在下方「工具箱 → 地图工具」组里 ⇒
+--   原先那套「独立 AddOn 管理」（SUBADDONS 注册表 / EnableAddOn / DisableAddOn / SaveAddOns / 确认重载弹窗 /
+--   EVAL_PLUGIN_ENABLED/SET/RECONCILE / EVAL_SUBADDONS_BUILD/REFRESH）**整块删除**（不再需要）。
+
 -- ===== Tab 内容模型（分组归类；列表行动态展开） =====
 -- 标签里带上当前按键名（如「按住[Shift]临时停止」）——用户一眼看到现在挂的是哪个键。
 -- ★用 label 生成而不是在 UI 渲染时现拼：保持「模型出内容、UI 只渲染」的既有分工，
@@ -4066,8 +4101,386 @@ local function tbHoldLabel()
   return string.format(L("TB_HOLD_FMT"), TB_HOLD_LABEL[cur] or "Shift")
 end
 
+-- ★★★1.74.29 用户指定：**从备份还原子插件的完整实现**（含配置弹窗与触发）
+--   原因：简化版把按钮标签建成 root:CreateFontString（挂根上、无字体兜底）→ 空框；
+--   备份用 subFont(ob)（FontString 直接挂按钮上 + 字体链兜底）= 验证过能显示的写法。
+local SUBADDONS = {
+  { key = "debugBox", id = "EH_DebugBox", group = "debug", name = L("SUB_LAYERDEBUG"),
+    tip = L("SUB_LAYERDEBUG_TIP"), slash = "EHDEBUGBOX", slashArg = "ui", hasUI = true },
+  -- ★★★1.74.29 用户要求：简易地图**已移到工具箱（工具模块）** → 从本 Tab 移除，不再在这里列出
+}
+
+local subUI = { rows = {}, built = false, confirm = nil }
+
+local function subFont(parent)
+  local fs = parent:CreateFontString(nil, "OVERLAY")
+  if type(GameFontNormal) ~= "nil" then pcall(fs.SetFontObject, fs, GameFontNormal) end
+  return fs
+end
+
+local function subSolid(t, r, g, b, a)
+  if type(t.SetTexture) == "function" then pcall(t.SetTexture, t, "Interface\\Buttons\\WHITE8X8") end
+  pcall(t.SetVertexColor, t, r, g, b, a)
+end
+
+local function subConfirmBuild()
+  if subUI.confirm then return true end
+  if type(CreateFrame) ~= "function" then return false end
+  local W, H = 380, 132
+  local root = CreateFrame("Frame", "EVAL_TB_PLUGIN_CONFIRM", UIParent)
+  root:SetWidth(W) root:SetHeight(H)
+  root:SetPoint("CENTER", UIParent, "CENTER", 0, 130)
+  pcall(root.SetFrameStrata, root, "DIALOG")
+  pcall(root.SetFrameLevel, root, 230)
+  if type(root.EnableMouse) == "function" then pcall(root.EnableMouse, root, true) end
+  local bg = root:CreateTexture(nil, "BACKGROUND")
+  bg:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
+  bg:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", 0, 0)
+  subSolid(bg, 0.04, 0.04, 0.04, 0.96)
+  for _, e in ipairs({ "TOP", "BOTTOM" }) do
+    local t = root:CreateTexture(nil, "BORDER")
+    subSolid(t, 0.85, 0.70, 0.20, 1)
+    t:SetPoint(e .. "LEFT", root, e .. "LEFT", 0, 0)
+    t:SetPoint(e .. "RIGHT", root, e .. "RIGHT", 0, 0)
+    t:SetHeight(1)
+  end
+  for _, s in ipairs({ "LEFT", "RIGHT" }) do
+    local t = root:CreateTexture(nil, "BORDER")
+    subSolid(t, 0.85, 0.70, 0.20, 1)
+    t:SetPoint("TOP" .. s, root, "TOP" .. s, 0, 0)
+    t:SetPoint("BOTTOM" .. s, root, "BOTTOM" .. s, 0, 0)
+    t:SetWidth(1)
+  end
+  local title = subFont(root)
+  pcall(title.SetPoint, title, "TOP", root, "TOP", 0, -12)
+  pcall(title.SetTextColor, title, 0.95, 0.82, 0.35)
+  local body = subFont(root)
+  pcall(body.SetPoint, body, "TOP", root, "TOP", 0, -38)
+  pcall(body.SetWidth, body, W - 40)
+  pcall(body.SetJustifyH, body, "CENTER")
+  pcall(body.SetTextColor, body, 0.90, 0.90, 0.90)
+  local function mkBtn(txt, x, onClick)
+    local b = CreateFrame("Button", nil, root)
+    b:SetWidth(90) b:SetHeight(22)
+    b:SetPoint("BOTTOM", root, "BOTTOM", x, 14)
+    if type(b.EnableMouse) == "function" then pcall(b.EnableMouse, b, true) end
+    if type(b.RegisterForClicks) == "function" then pcall(b.RegisterForClicks, b, "LeftButtonUp") end
+    local bb = b:CreateTexture(nil, "BACKGROUND")
+    bb:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+    bb:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+    subSolid(bb, 0.22, 0.17, 0.07, 1)
+    local bl = subFont(b)
+    pcall(bl.SetPoint, bl, "CENTER", b, "CENTER", 0, 0)
+    pcall(bl.SetText, bl, txt)
+    b:SetScript("OnClick", onClick)
+  end
+  mkBtn(L("BTN_OK"), -55, function()
+    pcall(root.Hide, root)
+    if type(ReloadUI) == "function" then pcall(ReloadUI) end -- ★确定 = 自动 /reload
+  end)
+  mkBtn(L("BTN_CANCEL"), 55, function() pcall(root.Hide, root) end)
+  root:Hide()
+  subUI.confirm = { root = root, title = title, body = body }
+  return true
+end
+
+function EVAL_PLUGIN_RELOAD_ASK(addonName)
+  if not subConfirmBuild() then
+    say(L("SUB_RELOAD_HINT"))
+    return
+  end
+  pcall(subUI.confirm.title.SetText, subUI.confirm.title, tostring(addonName or ""))
+  pcall(subUI.confirm.body.SetText, subUI.confirm.body, L("SUB_ASK_RELOAD"))
+  pcall(subUI.confirm.root.Show, subUI.confirm.root)
+end
+
+function EVAL_PLUGIN_ENABLED(key)
+  local tb = tbCfg()
+  return (tb and tb[key] == true) and true or false
+end
+
+local function subLoaded(a)
+  return (type(IsAddOnLoaded) == "function") and IsAddOnLoaded(a.id) and true or false
+end
+
+local function subSet(a, v)
+  local tb = tbCfg()
+  if not tb then return end
+  tb[a.key] = v and true or false
+  if v then
+    if type(EnableAddOn) == "function" then pcall(EnableAddOn, a.id) end
+    if type(SaveAddOns) == "function" then pcall(SaveAddOns) end
+    if subLoaded(a) then
+      say(a.id .. " 已处于载入状态（本会话直接可用）")
+    else
+      EVAL_PLUGIN_RELOAD_ASK(a.id)
+    end
+  else
+    if type(DisableAddOn) == "function" then pcall(DisableAddOn, a.id) end
+    if type(SaveAddOns) == "function" then pcall(SaveAddOns) end
+    say(a.id .. " 已停用：/reload 后不再载入")
+  end
+  EVAL_SUBADDONS_REFRESH()
+end
+
+-- ★通用 setter（工具箱快捷行与「子插件」Tab 共用，单一真值）
+function EVAL_PLUGIN_SET(key, v)
+  for _, a in ipairs(SUBADDONS) do
+    if a.key == key then
+      subSet(a, v and true or false)
+      return true
+    end
+  end
+  return false
+end
+
+function EVAL_PLUGIN_RECONCILE()
+  local tb = tbCfg()
+  if not tb then return end
+  for _, a in ipairs(SUBADDONS) do
+    if tb[a.key] ~= true and type(DisableAddOn) == "function" then pcall(DisableAddOn, a.id) end
+  end
+end
+
+-- ★子插件行 tooltip 用：按**字符**折行（中文 3 字节/字 → 绝不能按字节切，
+--   否则会出现「半个汉字」的乱码；这里以 UTF-8 首字节为界计数）
+local function subWrapLine(text, perLine)
+  text = tostring(text or "")
+  local out, chars = {}, 0
+  local cur = {}
+  for i = 1, string.len(text) do
+    local b = string.byte(text, i)
+    if b and b >= 128 and b < 192 then
+      -- 续字节：追加到当前字符
+      table.insert(cur, string.sub(text, i, i))
+    else
+      -- 新字符起始：先结算上一个字符的计数
+      if chars >= perLine and table.getn(cur) > 0 then
+        table.insert(out, table.concat(cur))
+        cur, chars = {}, 0
+      end
+      chars = chars + 1
+      table.insert(cur, string.sub(text, i, i))
+    end
+  end
+  if table.getn(cur) > 0 then table.insert(out, table.concat(cur)) end
+  return out
+end
+
+local function subShowTip(owner, a)
+  local tip = _G["GameTooltip"]
+  if not tip or type(tip.SetOwner) ~= "function" then return end
+  pcall(tip.SetOwner, tip, owner, "ANCHOR_RIGHT")
+  if type(tip.ClearLines) == "function" then pcall(tip.ClearLines, tip) end
+  if type(tip.AddLine) ~= "function" then return end
+  pcall(tip.AddLine, tip, a.name, 1, 0.85, 0.30)                 -- 标题：子插件名
+  pcall(tip.AddLine, tip, a.id .. "（独立 AddOn，独立文件夹与 toc）", 0.75, 0.75, 0.75)
+  for _, ln in ipairs(subWrapLine(a.tip or "", 34)) do           -- 详细功能描述（分行）
+    pcall(tip.AddLine, tip, ln, 0.90, 0.90, 0.90)
+  end
+  local on = EVAL_PLUGIN_ENABLED(a.key)
+  local loaded = subLoaded(a)
+  local state = (not on) and "未启用（不载入）" or (loaded and "已载入（本会话可用）" or "已启用 · 待 /reload 载入")
+  pcall(tip.AddLine, tip, "状态：" .. state, 0.80, 0.90, 0.80)
+  pcall(tip.AddLine, tip, "勾选 = 启用并写入客户端插件清单；未勾选 = 不载入（连文件都不读）", 0.70, 0.70, 0.70)
+  if a.slash then
+    pcall(tip.AddLine, tip, "命令：/" .. string.lower(a.slash == "EHDEBUGBOX" and "edb" or a.slash)
+      .. (a.slashArg and (" " .. a.slashArg) or "") .. "（打开面板）", 0.70, 0.85, 1.00)
+  end
+  pcall(tip.Show, tip)
+end
+
+local function subHideTip()
+  local tip = _G["GameTooltip"]
+  if tip and type(tip.Hide) == "function" then pcall(tip.Hide, tip) end
+end
+
+local function subMakeRow(root, y, a, page)
+  -- ★行几何在每个函数里各自算（LX 是 EVAL_SUBADDONS_BUILD 的**局部**，跨函数读不到 → 之前读到全局 nil 直接报错）
+  local LX, ROWH = 18, 24 -- ★ROWH 也必须在本函数里声明（跨函数读不到 → 之前报 global 'ROWH' nil）
+  local RW = (type(root.GetWidth) == "function") and root:GetWidth() or 660
+  local COL_RIGHT = RW - LX
+  local chk = CreateFrame("Button", nil, root)
+  chk:SetWidth(16) chk:SetHeight(16)
+  chk:SetPoint("TOPLEFT", root, "TOPLEFT", LX, y)
+  if type(chk.EnableMouse) == "function" then pcall(chk.EnableMouse, chk, true) end
+  if type(chk.RegisterForClicks) == "function" then pcall(chk.RegisterForClicks, chk, "LeftButtonUp") end
+  local outer = chk:CreateTexture(nil, "BACKGROUND")
+  outer:SetPoint("TOPLEFT", chk, "TOPLEFT", 0, 0)
+  outer:SetPoint("BOTTOMRIGHT", chk, "BOTTOMRIGHT", 0, 0)
+  subSolid(outer, 0.85, 0.70, 0.20, 1) -- ★与工具箱同款：金边
+  local bg = chk:CreateTexture(nil, "ARTWORK")
+  bg:SetPoint("TOPLEFT", chk, "TOPLEFT", 1, -1)
+  bg:SetPoint("BOTTOMRIGHT", chk, "BOTTOMRIGHT", -1, 1)
+  subSolid(bg, 0.10, 0.09, 0.06, 1)
+  local mk = chk:CreateTexture(nil, "OVERLAY")
+  mk:SetPoint("TOPLEFT", chk, "TOPLEFT", 3, -3)
+  mk:SetPoint("BOTTOMRIGHT", chk, "BOTTOMRIGHT", -3, 3)
+  subSolid(mk, 0.95, 0.80, 0.25, 1)
+  mk:Hide()
+  chk:SetScript("OnClick", function() subSet(a, not EVAL_PLUGIN_ENABLED(a.key)) end)
+  -- ★用户要求：每个子插件行加 tooltip（详细功能描述）
+  chk:SetScript("OnEnter", function() subShowTip(chk, a) end)
+  chk:SetScript("OnLeave", function() subHideTip() end)
+  local nm = subFont(root)
+  pcall(nm.SetPoint, nm, "TOPLEFT", root, "TOPLEFT", LX + 24, y + 1) -- ★与工具箱一致：勾选框右侧固定偏移
+  pcall(nm.SetWidth, nm, 210)
+  pcall(nm.SetJustifyH, nm, "LEFT")
+  pcall(nm.SetText, nm, a.name)
+  pcall(nm.SetTextColor, nm, 0.92, 0.88, 0.80)
+  -- 名称与状态文字也挂同一 tooltip（悬停整行都有说明）
+  local hover = CreateFrame("Button", nil, root)
+  hover:SetWidth(1) hover:SetHeight(1)
+  hover:SetPoint("TOPLEFT", root, "TOPLEFT", LX, y)
+  local hn = subFont(root)
+  pcall(hn.SetPoint, hn, "TOPLEFT", root, "TOPLEFT", LX, y)
+  pcall(hn.SetWidth, hn, 200)
+  pcall(hn.SetHeight, hn, ROWH - 4)
+  if type(hn.SetJustifyH) == "function" then pcall(hn.SetJustifyH, hn, "LEFT") end
+  -- 用不可见的大热区覆盖整个行（含名称/状态/按钮左侧），统一出 tooltip
+  local hot = CreateFrame("Frame", nil, root)
+  hot:SetWidth(math.max(120, COL_RIGHT - LX))
+  hot:SetHeight(ROWH - 4)
+  hot:SetPoint("TOPLEFT", root, "TOPLEFT", LX, y)
+  if type(hot.EnableMouse) == "function" then pcall(hot.EnableMouse, hot, true) end
+  if type(hot.SetFrameLevel) == "function" then pcall(hot.SetFrameLevel, hot, 1) end
+  hot:SetScript("OnEnter", function() subShowTip(chk, a) end)
+  hot:SetScript("OnLeave", function() subHideTip() end)
+  local st = subFont(root)
+  pcall(st.SetPoint, st, "TOPLEFT", root, "TOPLEFT", LX + 244, y + 1) -- 状态列起点固定（不再跟着名字宽度漂）
+  pcall(st.SetWidth, st, math.max(120, COL_RIGHT - (LX + 244) - 100))
+  pcall(st.SetJustifyH, st, "LEFT")
+  local wg = { chk, nm, st, hot }
+  local row = { chk = chk, mk = mk, status = st, addon = a }
+  if a.hasUI then
+    local ob = CreateFrame("Button", nil, root)
+    ob:SetWidth(84) ob:SetHeight(18)
+    ob:SetPoint("TOPLEFT", root, "TOPLEFT", COL_RIGHT - 84, y - 1) -- ★右对齐列右边界（工具箱口径）
+    if type(ob.EnableMouse) == "function" then pcall(ob.EnableMouse, ob, true) end
+    if type(ob.RegisterForClicks) == "function" then pcall(ob.RegisterForClicks, ob, "LeftButtonUp") end
+    local obg = ob:CreateTexture(nil, "BACKGROUND")
+    obg:SetPoint("TOPLEFT", ob, "TOPLEFT", 0, 0)
+    obg:SetPoint("BOTTOMRIGHT", ob, "BOTTOMRIGHT", 0, 0)
+    subSolid(obg, 0.22, 0.17, 0.07, 1)
+    local ot = subFont(ob)
+    pcall(ot.SetPoint, ot, "CENTER", ob, "CENTER", 0, 0)
+    pcall(ot.SetText, ot, L("SUB_OPEN"))
+    ob:SetScript("OnClick", function()
+      if not subLoaded(a) then
+        say(L("SUB_NEEDLOAD"))
+        return
+      end
+      local fn = (a.slash and type(SlashCmdList) == "table") and SlashCmdList[a.slash] or nil
+      if type(fn) == "function" then
+        pcall(fn, a.slashArg or "")
+      else
+        say(L("SUB_OPEN_FAIL"))
+      end
+    end)
+    ob:Hide() -- 初始隐藏；REFRESH 里「已载入」才 Show
+    row.openBtn = ob
+    table.insert(wg, ob)
+  end
+  row.widgets = wg
+  return row
+end
+
+function EVAL_SUBADDONS_BUILD(root, page, refreshes)
+  subUI.rows = {}
+  -- ★★行几何必须**先声明再用**：head() 是闭包，Lua 词法作用域 ⇒ 声明在它之后的话，
+  --   里面读到的 LX 是**全局 nil**，SetPoint(x=nil) 被 pcall 静默吞掉 → 标题根本没锚上（用户报「样式异常」的真凶）。
+  local LX, ROWH = 18, 24
+  local RW = (type(root.GetWidth) == "function") and root:GetWidth() or 660
+  local COL_RIGHT = RW - LX -- 列右边界（工具箱口径：右侧按钮贴列右边缘，而不是跟在文字后面飘）
+  local function head(txt, y)
+    local fs = subFont(root)
+    pcall(fs.SetPoint, fs, "TOPLEFT", root, "TOPLEFT", LX, y)
+    pcall(fs.SetTextColor, fs, 0.95, 0.80, 0.30)
+    pcall(fs.SetText, fs, txt)
+    table.insert(page.widgets, fs)
+  end
+  local y = -56
+  head(L("SUB_GROUP_DEBUG"), y)
+  y = y - ROWH
+  for _, a in ipairs(SUBADDONS) do
+    if a.group == "debug" then
+      local row = subMakeRow(root, y, a, page)
+      for _, f in ipairs(row.widgets) do table.insert(page.widgets, f) end
+      table.insert(subUI.rows, row)
+      y = y - ROWH
+    end
+  end
+  -- ★只有该组**真有条目**时才画表头（简易地图已移到工具箱 → 「地图」组整块不出现）
+  local hasMap = false
+  for _, a in ipairs(SUBADDONS) do if a.group == "map" then hasMap = true break end end
+  if hasMap then head(L("SUB_GROUP_MAP"), y - 12) y = y - ROWH - 8 end
+  for _, a in ipairs(SUBADDONS) do
+    if a.group == "map" then
+      local row = subMakeRow(root, y, a, page)
+      for _, f in ipairs(row.widgets) do table.insert(page.widgets, f) end
+      table.insert(subUI.rows, row)
+      y = y - ROWH
+    end
+  end
+  local note = subFont(root)
+  pcall(note.SetPoint, note, "TOPLEFT", root, "TOPLEFT", 16, y - 12)
+  pcall(note.SetWidth, note, 560)
+  pcall(note.SetJustifyH, note, "LEFT")
+  pcall(note.SetTextColor, note, 0.80, 0.80, 0.80)
+  pcall(note.SetText, note, L("SUB_NOTE"))
+  table.insert(page.widgets, note)
+  subUI.built = true
+  EVAL_SUBADDONS_REFRESH()
+end
+
+function EVAL_SUBADDONS_REFRESH()
+  if not subUI.built then return end
+  for _, row in ipairs(subUI.rows) do
+    local a = row.addon
+    local on = EVAL_PLUGIN_ENABLED(a.key)
+    local loaded = subLoaded(a)
+    if on then pcall(row.mk.Show, row.mk) else pcall(row.mk.Hide, row.mk) end
+    local txt, r, g, b
+    if not on then
+      txt, r, g, b = L("SUB_OFF_STATE"), 0.70, 0.70, 0.70
+    elseif loaded then
+      txt, r, g, b = L("SUB_LOADED_STATE"), 0.55, 0.95, 0.55
+    else
+      txt, r, g, b = L("SUB_RELOAD_STATE"), 0.95, 0.75, 0.30
+    end
+    pcall(row.status.SetText, row.status, txt)
+    pcall(row.status.SetTextColor, row.status, r, g, b)
+    -- ★用户要求：**已载入**才在右侧显示「打开」按钮（未载入显示它没意义）
+    if row.openBtn then
+      if on and loaded then pcall(row.openBtn.Show, row.openBtn) else pcall(row.openBtn.Hide, row.openBtn) end
+    end
+  end
+end
+
+function EVAL_TEST_SUBADDONS() return SUBADDONS end
+
+
+-- （已删：临时版的 EVAL_TB_ADDON_RELOAD_ASK/SET/RECONCILE —— 子插件已回到备份的 EVAL_PLUGIN_* 实现）
+
 local function tbModel()
   return {
+    -- ★★★1.74.29 用户要求：本组重命名为**「UI 工具」**并**移到第一组**
+    { t = "h", label = L("TB_H_UITOOLS") },
+    -- ★★★1.74.35-3 用户要求（「缩放大地图右侧添加个设置」）⇒ 这一行也改成**模块行**：
+  --   右侧 [设置] 下拉（多选）与勾选框的接线**全在 tools/SimpleMap.lua 的 smRow 里**（与图层拖拽/图层特殊处理同一套）。
+  --   ★不写 `noChk` ⇒ 保留主开关勾选框（真值 = `tbCfg().simpleMap`，读写都走模块的 EVAL_SM_ENABLED/SET）。
+  { t = "mod", mod = "simpleMap", key = "simpleMap", label = L("TB_SIMPLEMAP"), tip = L("TB_SIMPLEMAP_TIP") },
+    -- ★★★1.74.34 用户要求：「审查下 图层拖拽的功能.在Toolbox.lua 内的代码修改.参考以上也进行./tools 的代码文件归类」
+    --   ⇒ 这一行现在也只是**一行数据**（原先那 128 行界面接线搬进了 `tools/DragFrames.lua` 的 `dfRow`，
+    --     由模块载入期登记进 `EVAL_TB_MOD_ROWS`）。★**不写 `noChk`** ⇒ 保留主开关勾选框（真值 `dragFrames.on`）。
+    --   ★`mod` 名字必须与模块登记的名字一致（"dragFrames"）；对不上时渲染段会如实说一句，不静默。
+    { t = "mod", mod = "dragFrames", key = "dbgDrag", label = L("TB_DBGDRAG"), tip = L("TB_DBGDRAG_TIP") },
+    -- ★★★1.74.34 用户要求：「能否将以上功能提取到./tools 独立文件脚本管理.尽量少的在ToolBox文件内修改.
+    --   只要加入嵌入点进行函数调用?」⇒ 这一行现在只是**一行数据**：控件、tooltip、下拉、结算**全在模块里**
+    --   （`tools/LayerFix.lua` 的 `lfRow`，由模块在载入期登记进全局注册表 `EVAL_TB_MOD_ROWS`）。
+    --   ★`mod` 的名字必须与模块登记的名字一致（"layerFix"）—— 对不上时**不静默**：渲染段会如实说一句。
+    --   ★`noChk = true`：真值就是模块多选里勾了哪几条，多挂一个总开关只会多一份真值。
+    { t = "mod", mod = "layerFix", key = "layerFix", label = L("TB_DFFIX"), tip = L("TB_DFFIX_TIP"), noChk = true },
     { t = "h", label = L("TB_H_MERCHANT") },
     { t = "c", key = "repair", label = L("TB_REPAIR"), tip = L("TB_REPAIR_TIP") },
     { t = "c", key = "sell", label = L("TB_SELL"), tip = L("TB_SELL_TIP") },
@@ -4099,10 +4512,12 @@ local function tbModel()
     --   总闸门 = tools/HunterHelper.lua 的 feedPet：勾上才**懒建**屏幕上的喂食图标（未勾 = 一个帧都不建）
     { t = "h", label = L("TB_H_HUNTER") },
     --   ★wip = 右侧那枚**黄感叹号（待测试）**的 tooltip 文案（用户要求：还没经过游戏内实测的功能要标出来）
-    { t = "c", key = "feedPet", label = L("TB_FEEDPET"), tip = L("TB_FEEDPET_TIP"), wip = L("TB_WIP_TIP") },
+    { t = "c", key = "feedPet", label = L("TB_FEEDPET"), tip = L("TB_FEEDPET_TIP"), wip = L("TB_WIP_TIP"),
+      posReset = true }, -- ★用户要求：右侧加「重设位置」按钮（图标回屏幕正中）
     -- ★1.74.5 用户要求：「参照喂食助手，添加个消耗品助手」→ 多选 + 主图标旁横排各自点用
     { t = "h", label = L("TB_CH_GROUP") },
-    { t = "c", key = "consumable", label = L("TB_CONSUMABLE"), tip = L("TB_CONSUMABLE_TIP"), wip = L("TB_WIP_TIP") },
+    { t = "c", key = "consumable", label = L("TB_CONSUMABLE"), tip = L("TB_CONSUMABLE_TIP"), wip = L("TB_WIP_TIP"),
+      posReset = true }, -- ★同上：右侧「重设位置」
     -- ★1.74.7 用户要求：「按照推荐的在工具箱内添加个一键下马功能」→ 骑乘助手分组
     --   总闸门 = tools/DismountHelper.lua 的 dismount：勾上才懒建屏幕上的下马图标（未勾 = 一个帧都不建）
     --   ★实现依据：本客户端无 Dismount/IsMounted API；坐骑=可取消的有益光环（tooltip 描述含「速度提高X%」）
@@ -4113,6 +4528,7 @@ local function tbModel()
     -- ★1.74.27 用户要求：「将以上功能提取到独立文件内 ./tools 然后再工具箱内设置开关.」
     --   稀有提醒转播（tools/RareWatch.lua）的**总开关**放这里；★读写走实现自己的单一来源
     --   （EVAL_RW_ENABLED / EVAL_RW_SET），**不另开一个配置键** —— 免得开关与实现两处真值打架。
+    -- ★merge 适配：独立子插件在工具箱也给一个快捷开关行（与配置窗「子插件」Tab 同源，单一真值）
     { t = "h", label = L("TB_H_RAREWATCH") },
     { t = "rw", key = "rareWatch", label = L("TB_RAREWATCH"), tip = L("TB_RAREWATCH_TIP") },
   }
@@ -4132,7 +4548,59 @@ function EVAL_TEST_TB_ADD_BTN_FOR(key)
     -- ★读 r.item（刷新时记下的**实际映射**），不在这里重算（否则变异测不出来）
     if r and r.item and r.item.key == key and r.add then return r.add.btn end
   end
+  -- ★找不到 → 自动翻页再试
+  if EVAL_TB_TEST_GOTO(key) then
+    for k = 1, TB.ROWS * cols do
+      local r = TB.rows[k]
+      if r and r.item and r.item.key == key and r.add then return r.add.btn end
+    end
+  end
   return nil
+end
+-- ★1.74.33 读值口：取某 key 那行的**清空槽按钮**（clr；走真实控件 + 刷新时记下的实际映射）。
+--   ★为什么需要它：图层拖拽行现在有**两个**右侧按钮（[设置]=add 槽 / [重置]=clr 槽）——
+--     [重置] 从 chv 槽换到了 clr 槽，因为 chv（88 宽、起点 cRight−96）与 add（44 宽、同起点）**完全重叠**。
+function EVAL_TEST_TB_CLR_FOR(key)
+  if not TB.built then return nil end
+  local cols = TB.cols or TB_COLS
+  for k = 1, TB.ROWS * cols do
+    local r = TB.rows[k]
+    if r and r.item and r.item.key == key and r.clr then return r.clr.btn end
+  end
+  if EVAL_TB_TEST_GOTO(key) then
+    for k = 1, TB.ROWS * cols do
+      local r = TB.rows[k]
+      if r and r.item and r.item.key == key and r.clr then return r.clr.btn end
+    end
+  end
+  return nil
+end
+-- ★★★1.74.33 读值口：某行的**两个右侧按钮几何**（x/宽/是否显示）——用来钉「[设置] 与 [重置] 不许重叠」。
+--   为什么必须源码/几何级守：两个按钮叠在一起时，**行为断言全绿**（按钮存在、OnClick 也挂上了），
+--   真机上却是「上面那个把点击全吃掉、另一个永远点不到」——遮挡是测试照不到的盲区。
+function EVAL_TB_TEST_ROW_BTNS(key)
+  if not TB.built then return nil end
+  local cols = TB.cols or TB_COLS
+  local function rect(b)
+    if not b then return nil end
+    local L, W = nil, nil
+    if type(b.GetLeft) == "function" then local ok, v = pcall(b.GetLeft, b) if ok then L = v end end
+    if type(b.GetWidth) == "function" then local ok, v = pcall(b.GetWidth, b) if ok then W = v end end
+    local sh = (type(b.IsShown) == "function") and (pcall(b.IsShown, b) and b:IsShown() or false) or false
+    return { left = L, width = W, shown = sh and true or false }
+  end
+  local function scan()
+    for k = 1, TB.ROWS * cols do
+      local r = TB.rows[k]
+      if r and r.item and r.item.key == key then
+        return { add = rect(r.add and r.add.btn), clr = rect(r.clr and r.clr.btn), chv = rect(r.chv and r.chv.btn) }
+      end
+    end
+    return nil
+  end
+  local out = scan()
+  if not out and EVAL_TB_TEST_GOTO(key) then out = scan() end
+  return out
 end
 -- ★1.74.13 读值口：取某 key 那行的「值按钮」（chv；走真实控件 + 刷新时记下的实际映射）
 function EVAL_TEST_TB_CHV_FOR(key)
@@ -4141,6 +4609,13 @@ function EVAL_TEST_TB_CHV_FOR(key)
   for k = 1, TB.ROWS * cols do
     local r = TB.rows[k]
     if r and r.item and r.item.key == key and r.chv then return r.chv.btn end
+  end
+  -- ★找不到 → 自动翻到它所在的那一页再试一次
+  if EVAL_TB_TEST_GOTO(key) then
+    for k = 1, TB.ROWS * cols do
+      local r = TB.rows[k]
+      if r and r.item and r.item.key == key and r.chv then return r.chv.btn end
+    end
   end
   return nil
 end
@@ -4162,6 +4637,14 @@ function EVAL_TEST_TB_WIP_FOR(key)
   for k = 1, TB.ROWS * cols do
     local r = TB.rows[k]
     if r and r.item and r.item.key == key and r.wip then return r.wip.btn, r.wip.tex end
+  end
+  -- ★找不到 → 自动翻到它所在的那一页再试
+  if EVAL_TB_TEST_GOTO(key) then
+    local cols2 = TB.cols or TB_COLS
+    for k = 1, TB.ROWS * cols2 do
+      local r = TB.rows[k]
+      if r and r.item and r.item.key == key and r.wip then return r.wip.btn, r.wip.tex end
+    end
   end
   return nil
 end
@@ -4212,68 +4695,110 @@ end
 --   否则右列开头孤零零几行看着像「少了一组 / 多了一组」），切点取**两列行数差最小**。
 -- ★与分类模版窗的差别：这里每行都是**可交互控件行**（勾选框 / 文案 / 摘要 / 按钮），行高列宽固定 →
 --   不需要量宽；但「列不相交」必须能断言（右列控件的左边缘 > 左列控件的右边缘）。
--- 纯函数：在**本页**的条目里找一个「组边界」切点，使两列行数差最小
---   items = 全模型（含组标题行 t="h"）；off = 本页起始下标（0 基）；rows = 每列行数上限；cols = 列数
---   返回：cut（本页左列占几条）、rowsL、rowsR、pageN（本页实际显示几条）
+-- 纯函数：把**一屏窗口**切成左右两列（切点优先落在「组边界」上）
+--   items = 全模型（含组标题行 t="h"）；off = **行偏移**（窗口起点，0 基）；rows = 每列行数上限；cols = 列数
+--   窗口 = items[off+1 .. min(n, off + rows×cols)]（★连续窗口：起点逐行移动 ⇒ 相邻两屏**重叠**）
+--   返回：cut（本窗口左列占几条）、rowsL、rowsR、pageN（本窗口实际显示几条）
+-- ★★★1.74.30 语义改写（用户要求：照抓宠助手的**连续窗口滚动**范式）：
+--   旧版 off 是「整页倍数」、并且**选不出组边界切点就把本页收缩到最近的组边界**（页容量可变）——
+--   「整页跳」不流畅，而「页容量可变 + 步长夹取」两处口径一旦不一致就会**整页丢条目**。
+--   现在窗口容量恒为 rows×cols（**不再收缩**），切点规则只有两条（顺序即优先级）：
+--     ① **窗口内若有合法组边界**（i 处使 items[off+i+1] 是组标题，且两列都不超过 rows）→ 取两列行数差最小者；
+--     ② 否则**硬切在 TB.ROWS**（左列装满、右列接上）。
+--   ★注释：连续窗口滚动下**组可以跨列边界**（窗口起点逐行移动，任何切法都会撞上「组边界不在窗口正中」），
+--     这是**有意为之**——「组不被拆」在分页语义下才可能永远成立，而分页语义正是丢数据与跳页的来源。
 function EVAL_TB_COL_CUT(items, off, rows, cols)
   local n = table.getn(items or {})
   local c = tonumber(cols) or TB_COLS
-  local per = (tonumber(rows) or TB.ROWS) * c
-  local pageN = n - (tonumber(off) or 0)
-  if pageN > per then pageN = per end
+  local rr = tonumber(rows) or TB.ROWS
+  local o = tonumber(off) or 0
+  if o < 0 then o = 0 end
+  local cap = rr * c
+  local pageN = n - o
+  if pageN > cap then pageN = cap end
   if pageN < 0 then pageN = 0 end
   if pageN == 0 then return 0, 0, 0, 0 end
   if c < 2 then return pageN, pageN, 0, pageN end
-  -- 允许的切点 = 本页内「下一个条目是组标题」的位置，以及末尾
-  --   ★组边界切点保证右列**从组标题开头**（不会把某组的后半截甩到右列）
-  local cands = { pageN }
-  for i = 1, pageN - 1 do
-    local nxt = items[(tonumber(off) or 0) + i + 1]
-    if type(nxt) == "table" and nxt.t == "h" then table.insert(cands, i) end
-  end
+  -- ① 优先在**组边界**处切：窗口内「下一个条目是组标题」的位置，且两列都不超过每列行数
   local bestCut, bestDiff = nil, nil
-  for i = 1, table.getn(cands) do
-    local cc = cands[i]
-    local l, r = cc, pageN - cc
-    if l <= (tonumber(rows) or TB.ROWS) and r <= (tonumber(rows) or TB.ROWS) then
-      local d = math.abs(l - r)
-      if bestDiff == nil or d < bestDiff then bestDiff, bestCut = d, cc end
+  for i = 1, pageN - 1 do
+    local nxt = items[o + i + 1]
+    if type(nxt) == "table" and nxt.t == "h" then
+      local l, r = i, pageN - i
+      if l <= rr and r <= rr then
+        local d = math.abs(l - r)
+        if bestDiff == nil or d < bestDiff then bestDiff, bestCut = d, i end
+      end
     end
   end
-  if bestCut == nil then bestCut = math.min(tonumber(rows) or TB.ROWS, pageN) end -- 兜底：单个组太长时硬切（不至于溢出）
+  -- ② 窗口内没有合法组边界 → **硬切在每列行数**（绝不收缩页容量 —— 那是跳条/丢条目的来源）
+  if bestCut == nil then
+    bestCut = (pageN < rr) and pageN or rr
+  end
   return bestCut, bestCut, pageN - bestCut, pageN
 end
 
--- ===== 刷新（滚动窗口切片：可见性走显式 Show/Hide 契约） =====
+-- ★★★1.74.30 窗口容量 / 上界（**单一来源**，刷新与滚轮/按钮共用同一份口径）：
+--   cap    = 每列行数 × 列数（一屏能放几条）——这是**恒定值**，不再因「组不拆」而收缩；
+--   maxOff = max(0, n − cap)（窗口起点的最大合法值）。
+--   ★为什么要抽出来：旧版刷新用「TB.pageN（上一次的实际页大小）」算 maxOff，而滚轮又用另一个步长 ——
+--     两处口径只要错开一次，就会跳过条目（本任务要修的两个问题之一）。
+local function tbWinCap() return TB.ROWS * (TB.cols or TB_COLS) end
+local function tbWinMaxOff(n)
+  if n == nil then n = table.getn(tbModel()) end
+  local cap = tbWinCap()
+  if n <= cap then return 0 end
+  return n - cap
+end
+
+-- ★★★1.74.30 计数器文本（**纯函数 / 单一来源**）：刷新用它渲染，断言也读它（不在测试里复刻格式）。
+--   窗口语义：起 = off+1（1 基）、止 = min(n, off+cap)（夹取后恒等于 off + pageN）。
+--   ★空列表（n ≤ 0）：沿用**既有文案键** L("DS_NORESULT")（三语言齐全的「（无匹配结果）」），
+--     不为这一行新造键（LANG KEY CHECK 守「L 的字面量三语言齐全」，新键要三处同加才有意义）。
+function EVAL_TB_PAGE_TEXT(off, cap, n)
+  local n0 = tonumber(n) or 0
+  if n0 <= 0 then return L("DS_NORESULT") end
+  local o0 = tonumber(off) or 0
+  local toN = o0 + (tonumber(cap) or 0)
+  if toN > n0 then toN = n0 end
+  return string.format("%d-%d / %d", o0 + 1, toN, n0)
+end
+
+-- ===== 刷新（**连续窗口**切片：可见性走显式 Show/Hide 契约） =====
 function EVAL_TB_REFRESH()
   if not TB.built then return end
   local m = tbModel()
   local n = table.getn(m)
-  -- ★1.73.11 两列：每页 = 每列行数 × 列数；页码按**整页**推进（与图标库的「上页/下页」同语义）
   local cols = TB.cols or TB_COLS
-  local per = TB.ROWS * cols
-  local pages = math.max(1, math.ceil(n / per))
-  local maxOff = (pages - 1) * per
+  -- ★★★1.74.30 窗口语义（取代旧的「整页 + 收缩页容量」）：
+  --   TB.off = **行偏移**（窗口起点，0 基），合法范围 [0, max(0, n − cap)]。
+  --   ⇒ 逐行滚动时窗口**重叠**，任何条目都能到达、绝不跳过（旧版「整页跳 + 页容量可变」会丢条目）。
+  local cap = tbWinCap()
+  local maxOff = tbWinMaxOff(n)
+  TB.cap, TB.maxOff = cap, maxOff
   if TB.off > maxOff then TB.off = maxOff end
   if TB.off < 0 then TB.off = 0 end
-  -- 本页按「组边界」切成左右两段（切点是纯函数，见 EVAL_TB_COL_CUT）
+  -- 本窗口按「组边界优先、否则硬切」切成左右两段（切点是纯函数，见 EVAL_TB_COL_CUT）
   local cut, rowsL, rowsR, pageN = EVAL_TB_COL_CUT(m, TB.off, TB.ROWS, cols)
   TB.cut, TB.rowsL, TB.rowsR, TB.pageN = cut, rowsL, rowsR, pageN
   local LX = 18
   for k = 1, TB.ROWS * cols do
     local r = TB.rows[k]
-    -- 第 1 列取本页第 slot 条；第 2 列取本页第 (cut + slot) 条（超出本页 → 这一格空着）
-    -- ★★左列只放本页前 cut 条、右列只放第 cut+1..pageN 条 —— 两边都越界就会**同一条出现两次**
+    -- 第 1 列取本窗口第 slot 条；第 2 列取本窗口第 (cut + slot) 条（超出窗口 → 这一格空着）
+    -- ★★左列只放本窗口前 cut 条、右列只放第 cut+1..pageN 条 —— 两边都越界就会**同一条出现两次**
     --   （本轮实测：漏了「左列也要受 cut 约束」→ 组 120 的「条目不重不漏」当场抓到）
     local it = nil
     if r then
       local pi = (r.col == 2) and (cut + r.slot) or r.slot
       local okc = (r.col == 2) and (pi > cut and pi <= pageN) or (pi >= 1 and pi <= cut)
       if okc then it = m[TB.off + pi] end
-      -- ★★把**实际映射**记在行上（r.pi / r.item）：读值口与 [添加] 查找都从这里读 ——
+      -- ★★把**实际映射**记在行上（r.pi / r.item / r.idx）：读值口与 [添加] 查找都从这里读 ——
       --   绝不在别处再实现一遍。本轮实测：读值口自己复刻了一遍映射 → M106（左列不受 cut 约束）的变异
       --   **照样存活**，因为测试读到的是读值口那份"正确版本"，不是刷新真正用的那份。
+      --   ★1.74.30 补 r.idx = **绝对条目下标**（窗口起点 + 窗口内偏移）——「不丢数据」那条判据要能
+      --     直接读**本次刷新真正铺上去的**条目下标，而不是在测试里用 off 与 pi 自己拼一遍。
       r.pi, r.item = okc and pi or nil, it
+      r.idx = okc and (TB.off + pi) or nil
     end
     r.chk:Hide() r.text:Hide() r.hdr:Hide() r.extra:Hide() r.add.btn:Hide() r.clr.btn:Hide() r.chv.btn:Hide()
     if r.wip then r.wip.btn:Hide() end -- ★1.74.5 「待测试」标记也在显式清单里（少一处 = 上一页的标记残留）
@@ -4289,6 +4814,59 @@ function EVAL_TB_REFRESH()
           local key = it.key
           r.get = function() local tb = tbCfg() return tb and tb[key] and true or false end
           r.set = function(v) local tb = tbCfg() if tb then tb[key] = v and true or false end end
+          -- ★工具行的「打开面板」按钮：直接执行模块命令（工具模块恒可用）
+          if it.openCmd then
+            r.chv.text:SetText(L("SUB_OPEN"))
+            r.chv.btn:Show()
+            r.chv.btn:SetScript("OnClick", function()
+              local cmd = string.gsub(tostring(it.openCmd), "^/", "")
+              local cmdfn = (type(SlashCmdList) == "table") and SlashCmdList["EHDEBUGBOX"] or nil
+              if type(cmdfn) == "function" then
+                pcall(cmdfn, "ui")
+              elseif type(EVAL_SAY) == "function" then
+                pcall(EVAL_SAY, "打开失败：图层调试模块未载入（请确认 tools/LayerDebug.lua 在 toc 里）")
+              end
+            end)
+          end
+          -- ★★1.74.29 用户要求：这两行右侧加「重设位置」按钮（点它 = 对应图标回到屏幕正中）
+          if it.posReset then
+            r.chv.text:SetText(L("TB_RESETPOS"))
+            r.chv.btn:Show()
+            r.chv.btn:SetScript("OnClick", function()
+              local ok = false
+              if key == "feedPet" and type(EVAL_HH_RESET_POS) == "function" then
+                ok = EVAL_HH_RESET_POS() and true or false
+              elseif key == "consumable" and type(EVAL_CH_RESET_POS) == "function" then
+                ok = EVAL_CH_RESET_POS() and true or false
+              end
+              if not ok and type(EVAL_SAY) == "function" then
+                pcall(EVAL_SAY, "重设位置失败：对应助手的重设函数不可用（可能插件未载入）")
+              end
+            end)
+          end
+        -- ★1.74.35-3：原 `t = "smap"` 分支已删（模型里从来没有这种行 = 死代码，且它走的是已废弃的子插件注册表）。
+        elseif it.t == "mod" then
+          -- ★★★1.74.34 **模块行嵌入点（唯一）**：`t = "mod"` 的行把右侧控件、tooltip、下拉、结算**全权交给模块**。
+          --   模块在**自己的文件里**把渲染函数登记进全局注册表 `EVAL_TB_MOD_ROWS[mod]`（载入期就登记，早于任何一次面板构建）。
+          --   ⇒ Toolbox 侧**一行都不知道**模块内部长什么样（用户要求：「尽量少的在 ToolBox 文件内修改，只要加入嵌入点进行函数调用」）。
+          --   ★注册表由**模块自己**在载入期建/写（模块那侧是「没有就现建一个全局表」）⇒ toc 里谁先谁后都成立；
+          --     Toolbox 侧只在渲染时按名字取一次，绝不持有任何一个模块的清单（也不会替它建表）。
+          --   ★模块没登记（未载入 / 名字写错 / 漏进 toc）⇒ **如实说一句**，绝不静默留一行空白：
+          --     那种「面板上有个行，点它什么都不发生」正是本项目最恨的静默失败。
+          local reg = rawget(_G, "EVAL_TB_MOD_ROWS")
+          local fn = (type(reg) == "table") and reg[it.mod] or nil
+          if type(fn) == "function" then
+            -- ★★不许静默：模块行渲染**必须**如实报错（旧写法裸 pcall ⇒ 渲染中途出错时
+            --   「按钮文案没设上 / OnEnter 没挂」而面板看着正常 —— 本项目最恨的静默族）。
+            local okm, errm = pcall(fn, r, it)
+            if not okm then
+              if type(EVAL_SAY) == "function" then
+                pcall(EVAL_SAY, "工具箱：模块行渲染出错（mod=" .. tostring(it.mod) .. "）：" .. tostring(errm))
+              end
+            end
+          elseif type(EVAL_SAY) == "function" then
+            pcall(EVAL_SAY, "工具箱：这一行要的模块没载入（mod=" .. tostring(it.mod) .. "）—— 检查 EvalHelp.toc 里对应的 tools\\*.lua")
+          end
         elseif it.t == "rw" then
           -- ★1.74.27 稀有提醒转播：开关真值在 tools/RareWatch.lua（EVAL_RW_ENABLED/EVAL_RW_SET），
           --   这里只是**它的一个面板**，不存第二份配置（改一处即改全局；`/eh go 稀有 开|关` 与它同源）
@@ -4398,7 +4976,9 @@ function EVAL_TB_REFRESH()
           end)
         end
         if r.get and r.get() then r.mark:Show() else r.mark:Hide() end
-        r.chk:Show()
+        -- ★★★1.74.34：有的行**没有开关**（`it.noChk`，如「图层特殊处理」—— 它的真值就是多选下拉里勾了哪几条）
+        --   ⇒ 不留一个点了没反应的勾选框（死控件）；这类行的说明文字挂在它自己的按钮 tooltip 上。
+        if not it.noChk then r.chk:Show() end
         r.text:SetText(it.label)
         r.text:Show()
         r.tip = it.tip
@@ -4411,15 +4991,14 @@ function EVAL_TB_REFRESH()
     end
   end
   if TB.indicator then
-    -- ★1.73.11 计数按**本页实际显示**的区间报（两列时每页 = 每列行数 × 列数）
-    if n > per then
-      TB.indicator:SetText(string.format("%d-%d / %d", TB.off + 1, TB.off + pageN, n))
-      TB.indicator:Show()
-    else
-      TB.indicator:Hide()
-    end
+    -- ★★★1.74.30 计数器 = `起–止 / 总数`（窗口语义，文本走纯函数 EVAL_TB_PAGE_TEXT 单一来源）：
+    --   起 = off+1、止 = min(n, off+cap)；★与旧版的差别：旧版「一屏装得下就 Hide」——
+    --   连续窗口下**位置任何时候都有意义**（窗口起点是行偏移，用户要看到自己在 31 条里的哪一段）⇒ 常显。
+    TB.indicator:SetText(EVAL_TB_PAGE_TEXT(TB.off, cap, n))
+    TB.indicator:Show()
   end
   if TB.scrollUp then
+    -- ★1.74.30 保留既有语义：到顶/到底就把箭头藏起来（点击本身另有夹取，见 tbScrollBy）
     if TB.off > 0 then TB.scrollUp.btn:Show() else TB.scrollUp.btn:Hide() end
     if TB.off < maxOff then TB.scrollDn.btn:Show() else TB.scrollDn.btn:Hide() end
   end
@@ -4486,6 +5065,8 @@ function EVAL_TB_BUILD(root, page, refreshes)
         TB.chanOffLogged = false
         pcall(EVAL_TB_CHAN_OFFICIAL_SYNC)
       end
+      -- ★★★1.74.35-3 地图工具那行已改成**模块行**：勾上/取消由模块自己的写入口完成
+      --   （模块的 r.set 会写 tbCfg() 并立刻应用/复位）⇒ 这里不再需要按 modelKey 打特例。
       -- ★1.74.5 猎人助手「一键喂食」：勾上 = 立刻懒建并显示喂食图标；取消 = 图标收起（都不需要重载）
       if row.modelKey == "feedPet" then pcall(EVAL_HH_TOGGLE) end
       -- ★1.74.5 消耗品助手：同一条纪律 —— 勾上即时建并显示，取消即时收起
@@ -4614,15 +5195,21 @@ function EVAL_TB_BUILD(root, page, refreshes)
   TB.botMidY, TB.closeLeft = botMidY, closeLeft
   local bx = closeLeft - TB_TAIL_GAP - (TB_BTN_W * 2 + TB_BTN_GAP) -- 按钮组左端（右端 = closeLeft - TB_TAIL_GAP）
   local btnTop = botMidY + 7.5 -- tbBtn 高 15 → 中线对齐关闭的中线
-  -- ★1.73.11 两列后翻页按**整页**推进（与图标库「上页/下页」同语义；原来每次 ±1 行）
-  local function tbPageStep() return TB.ROWS * (TB.cols or TB_COLS) end
-  TB.scrollUp = tbBtn(root, bx, btnTop, TB_BTN_W, L("TB_UP"), function()
-    TB.off = math.max(0, TB.off - tbPageStep())
+  -- ★★★1.74.30 [上翻]/[下翻]：步长 = **一屏容量**（cap = 每列行数 × 列数），但一律**夹取**到 [0, maxOff]：
+  --   到顶/到底再点也不越界（旧的「整页倍数」口径与夹取一旦错开就会跳过条目）；
+  --   到顶/到底「隐藏箭头」的既有语义保留（见刷新末尾的显隐）。
+  local function tbScrollBy(step)
+    local mx = tbWinMaxOff()
+    TB.off = (TB.off or 0) + step
+    if TB.off < 0 then TB.off = 0 end
+    if TB.off > mx then TB.off = mx end
     EVAL_TB_REFRESH()
+  end
+  TB.scrollUp = tbBtn(root, bx, btnTop, TB_BTN_W, L("TB_UP"), function()
+    tbScrollBy(-tbWinCap())
   end, widgets)
   TB.scrollDn = tbBtn(root, bx + TB_BTN_W + TB_BTN_GAP, btnTop, TB_BTN_W, L("TB_DN"), function()
-    TB.off = TB.off + tbPageStep()
-    EVAL_TB_REFRESH()
+    tbScrollBy(tbWinCap())
   end, widgets)
   local ind = tbText(root, 10, 0.65, 0.62, 0.50)
   ind:SetPoint("TOPLEFT", root, "TOPLEFT", LX, botMidY + 5)
@@ -4633,15 +5220,36 @@ function EVAL_TB_BUILD(root, page, refreshes)
   TB.indicator = ind
   table.insert(widgets, ind)
   pcall(root.EnableMouseWheel, root, true)
+  -- ★★★1.74.30 滚轮 = **逐行**（照 PetHelper 的范式）：先取出原脚本、再链式接管，**不吞别人的事件**。
+  --   ① 只有**本 Tab 激活**时才消费（判据 = EVAL_HELP_CFG_TAB() == TB_TAB）；
+  --   ② 非本 Tab / 不是滚轮事件（dir == 0）→ 原样转发给 prevWheel；
+  --   ③ 位移**逐行**（dir 已被 EVAL_WHEEL_DIR 归一成 ±1）+ 双侧夹取到 [0, maxOff]。
+  --   ★处理器**就地**写在 SetScript 调用上（不抽成外部 local 函数）：源码检查 WHEEL DIRECTION CHECK
+  --     要求「SetScript("OnMouseWheel") 起 14 行内出现 EVAL_WHEEL_DIR(」——挪走会让它 FAIL。
+  TB.prevWheel = nil
+  if type(root.GetScript) == "function" then
+    local okg, g = pcall(root.GetScript, root, "OnMouseWheel")
+    if okg and type(g) == "function" then TB.prevWheel = g end
+  end
   root:SetScript("OnMouseWheel", function(a, b)
-    -- 仅 Tab3 可见时响应（widgets 显隐契约：非本 Tab 全部 Hide，首行组标题必然隐藏）
-    if not (TB.rows[1] and TB.rows[1].hdr:IsVisible()) then return end
-    -- ★1.73.3 方向单一来源（原来只读全局 arg1；现在 a/b/arg1 三种写法都认）
-    local dir = EVAL_WHEEL_DIR(a, b)
-    if dir == 0 then return end
-    TB.off = math.max(0, TB.off - dir * TB.ROWS * (TB.cols or TB_COLS)) -- 上滚 = 回到前面（两列后按整页）
-    EVAL_TB_REFRESH()
+    if (type(EVAL_HELP_CFG_TAB) ~= "function") or (EVAL_HELP_CFG_TAB() == TB_TAB) then
+      -- ★1.73.3 方向单一来源（上滚 = 回到前面；幅度归一 ±1 ⇒ 一次滚轮 = 一行）
+      local dir = EVAL_WHEEL_DIR(a, b)
+      if dir ~= 0 then
+        local mx = tbWinMaxOff()
+        TB.off = (TB.off or 0) - dir
+        if TB.off < 0 then TB.off = 0 end
+        if TB.off > mx then TB.off = mx end
+        EVAL_TB_REFRESH()
+        return
+      end
+    end
+    if type(TB.prevWheel) == "function" then pcall(TB.prevWheel, a, b) end
   end)
+  -- 读回**刚装上的**这一个处理器（此刻链上还没有别的 Tab → GetScript 拿到的就是本 Tab 的）
+  --   供读值口单独调用：验「本 Tab 未激活时**转发**给原脚本」必须能绕开外层链（否则永远被别人的 Tab 先消费）。
+  local okWG, wG = pcall(root.GetScript, root, "OnMouseWheel")
+  if okWG and type(wG) == "function" then TB.wheel = wG end
 
   TB.built = true
   EVAL_TB_REFRESH()
@@ -5168,9 +5776,83 @@ function EVAL_TB_TEST_SCROLL()
            firstRowY = (TB.rows[1] and num(TB.rows[1].chk.GetTop, TB.rows[1].chk)) or nil }
 end
 function EVAL_TB_TEST_OFF() return TB.off end
+-- ★★★1.74.30 断言入口：走**本 Tab 自己的**滚轮处理器（不是 root 链上最外层那个），可单独点火。
+--   为什么必须：root 的 OnMouseWheel 是**链式**的（war ← 工具箱 ← 数据检索 ← 图标库 ← 抓宠），
+--   从最外层点火永远先被别的 Tab 消费掉 ⇒ 验不到「本 Tab **未激活时把事件转发给原脚本**」这条。
+function EVAL_TB_TEST_WHEEL(a, b)
+  if type(TB.wheel) ~= "function" then return false end
+  TB.wheel(a, b)
+  return true
+end
+-- ★1.74.30 断言入口：读/换「转发目标」（链上的前一个脚本）。换它是为了放一个探针进去，
+--   证明「未激活时真的转发了」——用完由测试**原值还回**（跨用例状态残留是本项目老坑）。
+function EVAL_TB_TEST_WHEEL_PREV(newFn)
+  local old = TB.prevWheel
+  if newFn ~= nil then TB.prevWheel = newFn end
+  return old
+end
+-- ★1.74.30 断言入口：把转发目标**原样写回**（含写回 nil）——探针用完必须还原值，不留副作用。
+function EVAL_TB_TEST_WHEEL_SET(fn)
+  TB.prevWheel = fn
+  return true
+end
 -- ★★★1.73.11 断言入口：两列版式的**真实几何**（每行控件的 x/宽 + 列几何 + 切点/两列行数）
 --   判据要能验「列不相交」（右列控件左边缘 > 左列控件右边缘）——所以读的是**控件自身**的坐标，
 --   不是我们算出来的常量（本项目「不写死布局常量」的纪律）。
+-- ★★★1.74.29：模型重排（UI 工具组置顶）后，不少被测的行被挤到第 2 页 →
+--   按 key 找控件的读值口要能**先翻到那一页**再取（这是测试导航，不改生产 UI）。
+-- ★★★1.74.30：off 改成**行偏移**后，「翻到那一页」= 把窗口起点放到 `idx-1`（再夹取到 maxOff）——
+--   窗口必然覆盖 idx（off ≤ idx−1 < idx ≤ off+cap），所以不再是「一页一页往前翻」的循环。
+function EVAL_TB_TEST_GOTO(keyOrLabel)
+  if type(keyOrLabel) ~= "string" then return false end
+  local m = tbModel()
+  local n = table.getn(m)
+  local idx = nil
+  for i2 = 1, n do
+    local it = m[i2]
+    if type(it) == "table" and (it.key == keyOrLabel or it.label == keyOrLabel) then idx = i2 break end
+  end
+  if not idx then return false end
+  local maxOff = tbWinMaxOff(n)
+  local off = idx - 1
+  if off > maxOff then off = maxOff end
+  if off < 0 then off = 0 end
+  TB.off = off
+  EVAL_TB_REFRESH()
+  return true
+end
+-- ★★★1.74.34 读值口：某一行**渲染出来的文本**（标签 + 行内摘要）。
+--   为什么需要它：「图层特殊处理」那行的摘要是 `已生效 n/m 项…` / `当前没有启用任何特殊处理`，
+--   断言必须读到**真控件里那串字**（`r.text` / `r.extra` 的 GetText），而不是在测试里把
+--   `EVAL_LF_SUMMARY()`（tools/LayerFix.lua）再算一遍 —— 那就成了「测自己」，标签写错/没刷新照样绿。
+function EVAL_TB_TEST_ROW_TEXT(key)
+  if not TB.built then return nil end
+  local cols = TB.cols or TB_COLS
+  local function scan()
+    for k = 1, TB.ROWS * cols do
+      local r = TB.rows[k]
+      if r and r.item and r.item.key == key then
+        local lab, ext = nil, nil
+        if r.text and type(r.text.GetText) == "function" then
+          local ok, v = pcall(r.text.GetText, r.text) if ok then lab = v end
+        end
+        if r.extra and type(r.extra.GetText) == "function" then
+          local ok, v = pcall(r.extra.GetText, r.extra) if ok then ext = v end
+        end
+        -- ★1.74.36：还要能断言「这一行**没有**在行上重复显示配置项」（用户要求配置项只留在 tooltip 里）
+        local extShown = nil
+        if r.extra and type(r.extra.IsShown) == "function" then
+          local ok, v = pcall(r.extra.IsShown, r.extra) if ok then extShown = (v and true or false) end
+        end
+        return { label = lab, extra = ext, extraShown = extShown }
+      end
+    end
+    return nil
+  end
+  local out = scan()
+  if not out and EVAL_TB_TEST_GOTO(key) then out = scan() end
+  return out
+end
 function EVAL_TB_TEST_LAYOUT()
   local function rect(o)
     if not o then return nil end
@@ -5183,17 +5865,25 @@ function EVAL_TB_TEST_LAYOUT()
     return { x = okx and x or nil, w = okw and w or nil, y = oky and y or nil, h = okh and h or nil,
              shown = (oks and sh) and true or false }
   end
+  local indText = nil
+  if TB.indicator and type(TB.indicator.GetText) == "function" then
+    local okt, t = pcall(TB.indicator.GetText, TB.indicator)
+    indText = okt and tostring(t or "") or nil
+  end
   local out = { cols = TB.cols, colW = TB.colW, colGap = TB.colGap, colX = TB.colX,
                 rowsPerCol = TB.ROWS, off = TB.off, cut = TB.cut, rowsL = TB.rowsL, rowsR = TB.rowsR,
-                pageN = TB.pageN, pool = table.getn(TB.rows or {}), rows = {} }
+                pageN = TB.pageN, pool = table.getn(TB.rows or {}), rows = {},
+                -- ★1.74.30 窗口语义的两个**生产值**（断言直接读它们，不多算一份）：
+                --   capN = 一屏容量、maxOff = 窗口起点上界、n = 模型条数、indicatorText = 计数行真文本
+                capN = TB.cap, maxOff = TB.maxOff, n = table.getn(tbModel()), indicatorText = indText }
   local m = tbModel()
   local cols = TB.cols or TB_COLS
   for k = 1, TB.ROWS * cols do
     local r = TB.rows[k]
     if r then
-      -- ★读刷新时记下的**实际映射**（r.item / r.pi）——本读值口**不重算**（重算 = 测试验的是读值口自己）
+      -- ★读刷新时记下的**实际映射**（r.item / r.pi / r.idx）——本读值口**不重算**（重算 = 测试验的是读值口自己）
       local it = r.item
-      out.rows[k] = { col = r.col, slot = r.slot, pi = r.pi, key = it and it.key or nil,
+      out.rows[k] = { col = r.col, slot = r.slot, pi = r.pi, idx = r.idx, key = it and it.key or nil,
                       kind = it and it.t or nil, shown = r.chk:IsShown() and true or false,
                       chk = rect(r.chk), text = rect(r.text), extra = rect(r.extra),
                       add = rect(r.add and r.add.btn), clr = rect(r.clr and r.clr.btn),

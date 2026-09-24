@@ -68,6 +68,11 @@ local HH_RATE = 2.0        -- ★1.74.10 用户：「公共CD 是1.5s 喂食间�
 local HH_AIM_WAIT = 1.0
 local HH_SETTLE_WAIT = 0.8
 local HH_QMAX = 3
+-- ★★★1.74.29 新增：**服务器动作闸门 + 审计**（用户：「某些情况下点喂食会被提下线」）
+--   根据：本项目已实测「一帧 24 次 UseContainerItem 被服务器反滥用踢线」——所以只靠「每笔 2 秒」不够，
+--   还要保证：任意两次服务器动作**不同帧**、且间隔 ≥ HH_ACT_GAP；1 秒内 ≥ HH_BURST_MAX 次则硬停。
+local HH_ACT_GAP = 0.2       -- ★★用户明确：「固定 0.2s 的延迟都可以」——两次服务器动作的最小间隔（**延迟，不拒绝**）
+local HH_BURST_MAX = 8       -- ★仅作记账用（不再硬停）：一秒窗口内超过就记一笔，供探针查看
 local HH_MAX_CAND = 96
 local HH_BAGS = { 0, 1, 2, 3, 4 }
 local HH_DEF_W, HH_DEF_H = 1024, 768   -- UIParent 尺寸拿不到时的兜底（与项目其它位置换算同口径）
@@ -194,7 +199,12 @@ function EVAL_HH_CANDIDATES()
     -- ★1.74.28 弹窗候选**开类型过滤**（用户：「喂食助手 弹窗选的物品项目要过滤一下.不要显示武器,装备.
     --   灰色物品,草药,矿物,任务物品,材料等等非可食用的物品」）：判定在 IconGrid 的共用件里（三级：
     --   品质 → GetItemInfo(链接) → 自建 tooltip 兜底并顺手把物品写进客户端缓存）。
-    list, total = EVAL_IG_SCAN_BAGS(HH_BAGS, { classify = true })
+    -- ★★1.74.29：加 keepNames 例外 —— 「像食物」的物品即使被判为**材料/贸易品**也保留
+    --   （肉类正属于这一类；不加这条，大块野猪肉这类真食物会被类型过滤整个剔掉）
+    list, total = EVAL_IG_SCAN_BAGS(HH_BAGS, {
+      classify = true,
+      keepNames = function(nm) return hhIsLikelyFood(nm) end,
+    })
   end
   local out = {}
   for i = 1, table.getn(list) do
@@ -362,7 +372,77 @@ local function hhFailUnclear()
   return false
 end
 
+-- ★服务器动作闸门（统一入口）：返回 true = 放行；false = 本帧/本刻不该发
+local HH_ACT = { last = -999, lastFrame = -1, log = {}, sec = 0, secCount = 0, secNo = 0, maxBurst = 0, blocked = 0 }
+
+-- ★★★1.74.29 用户实测「第一下就被拦」后重构：**去掉拒绝，只留延迟**。
+--   · hhActReady(now) = 现在能不能发动作（距上一次 ≥ HH_ACT_GAP）；不能就**等下一帧再来**（状态机每帧都跑），**不会吃掉玩家的点击**。
+--   · hhActMark(kind, now) = 真正发出动作后记时间 + 审计。
+local function hhActReady(now)
+  now = tonumber(now) or hhNow()
+  if (now - HH_ACT.last) < HH_ACT_GAP then
+    HH_ACT.deferred = (HH_ACT.deferred or 0) + 1
+    return false
+  end
+  return true
+end
+
+local function hhActMark(kind, now)
+  now = tonumber(now) or hhNow()
+  HH_ACT.last, HH_ACT.lastKind = now, kind
+  local sec = math.floor(now)
+  if sec ~= HH_ACT.sec then
+    if HH_ACT.secCount > HH_ACT.maxBurst then HH_ACT.maxBurst = HH_ACT.secCount end
+    HH_ACT.sec, HH_ACT.secCount = sec, 0
+  end
+  HH_ACT.secCount = HH_ACT.secCount + 1
+  HH_ACT.log[table.getn(HH_ACT.log) + 1] = string.format("%.2f %s", now, tostring(kind))
+  while table.getn(HH_ACT.log) > 40 do table.remove(HH_ACT.log, 1) end
+end
+-- 读值口（探针/日志用）
+function EVAL_HH_TEST_ACTS()
+  return { last = HH_ACT.last, sec = HH_ACT.sec, secCount = HH_ACT.secCount, gap = HH_ACT_GAP,
+           maxBurst = HH_ACT.maxBurst, blocked = HH_ACT.blocked, deferred = HH_ACT.deferred or 0, log = HH_ACT.log }
+end
 -- ① 施放：进入待选目标态（受保护函数走 RunScript —— 项目既有通道，Engine.lua 指定等级同款）
+-- ★找「喂食宠物」在动作条的格号（优先用 UseAction；找不到返回 nil）
+--   手段：依次读每格的 tooltip 文本（本项目已验证的读法：GameTooltip:SetAction(slot) → TextLeft1）。
+--   ★只在首次需要时扫一次（缓存），避免高频 tooltip 调用。
+local HH_SLOT_CACHE = nil
+local function hhFindSpellSlot(spellName)
+  if HH_SLOT_CACHE ~= nil then return HH_SLOT_CACHE or nil end
+  if type(spellName) ~= "string" or spellName == "" then return nil end
+  if type(GetActionTexture) ~= "function" or type(GameTooltip) ~= "table" then HH_SLOT_CACHE = false return nil end
+  local tip = GameTooltip
+  local found = false
+  for slot = 1, 120 do
+    local ok, tex = pcall(GetActionTexture, slot)
+    if ok and tex then
+      local okS = pcall(tip.SetOwner, tip, UIParent, "ANCHOR_NONE")
+      if okS then
+        pcall(tip.ClearLines, tip)
+        local okA = pcall(tip.SetAction, tip, slot)
+        if okA then
+          local tl = _G["GameTooltipTextLeft1"]
+          if tl and type(tl.GetText) == "function" then
+            local okT, t = pcall(tl.GetText, tl)
+            if okT and type(t) == "string" and t ~= "" and string.find(t, spellName, 1, true) then found = true end
+          end
+        end
+      end
+    end
+    if found then
+      pcall(tip.Hide, tip)
+      HH_SLOT_CACHE = slot
+      hhLog("找到喂食技能在动作条第 " .. tostring(slot) .. " 格")
+      return slot
+    end
+  end
+  pcall(tip.Hide, tip)
+  HH_SLOT_CACHE = false -- 没在条上（缓存否，不反复扫）
+  return nil
+end
+
 local function hhBegin(now, req)
   local tb = hhCfg()
   if not tb or not tb.feedPet then return hhFail(L("HH_OFF")) end
@@ -373,10 +453,27 @@ local function hhBegin(now, req)
   if not bag then return hhFail(string.format(L("HH_FOOD_MISSING"), foodName)) end
   local spell = EVAL_HH_SPELL()
   if not spell then return hhFail(L("HH_NO_SPELL")) end
+  -- ★★★1.74.29 （用户：「某些情况下点喂食会被提下线」）：**优先走动作条**。
+  --   理由：RunScript + CastSpellByName 是「绕过受保护函数」的非常规通道，而 UseAction(格号) 是客户端
+  --   认可的正规动作 → 被反作弊标记的概率大大降低。找不到格号才退回 RunScript。
+  local slot = hhFindSpellSlot(spell)
+  if slot then
+    -- （门控已改为「调用方先判 hhActReady」：不在这里拒绝，避免吃掉玩家点击）
+    local okA = pcall(UseAction, slot)
+    if okA then
+      HH.lastRun, HH.phase, HH.aimAt = now, "aim", now
+      HH.food = foodName
+      hhActMark("cast", now) -- ★记账（已实际发出）
+      hhLog("动作条施放泡点 " .. tostring(slot) .. "（避开 RunScript 绕行）→ 等待选目标态")
+      return true
+    end
+    hhLog("动作条 UseAction(" .. tostring(slot) .. ") 失败 → 退回 RunScript")
+  end
   if type(RunScript) ~= "function" then return hhFail(L("HH_NO_RUNSCRIPT")) end
   local script = "CastSpellByName(" .. HH_QUOTE .. hhEsc(spell) .. HH_QUOTE .. ")"
   local ok = pcall(RunScript, script)
   if not ok then return hhFail(L("HH_CAST_FAIL")) end
+  hhActMark("cast", now) -- ★记账
   HH.lastRun, HH.phase, HH.aimAt = now, "aim", now
   HH.food = foodName
   hhLog("施放 " .. tostring(spell) .. " → 等待选目标态（食物 " .. tostring(foodName) ..
@@ -391,6 +488,7 @@ local function hhPick(now)
   if not bag then return hhFail(string.format(L("HH_FOOD_MISSING"), tostring(HH.food))) end
   local ok = pcall(PickupContainerItem, bag, slot)
   if not ok then return hhFail(L("HH_PICK_FAIL")) end
+  hhActMark("pick", now) -- ★记账
   HH.phase, HH.settleAt = "settle", now
   hhLog("已点食物 @" .. tostring(bag) .. "," .. tostring(slot) .. " → 等结果")
   return true
@@ -398,14 +496,18 @@ end
 
 -- ③ 收尾：光标上有东西 = 客户端没把它当目标（不是它的食物）→ **放回原格**并如实报
 local function hhRestore(msg)
-  if type(ClearCursor) == "function" then pcall(ClearCursor) end
+  if type(ClearCursor) == "function" then
+    hhActMark("cursor", hhNow()) -- ★只记账：收尾动作必须执行（否则食物留在光标上）
+    pcall(ClearCursor)
+  end
   return hhFail(msg)
 end
 
 function EVAL_HH_STEP(now)
   now = tonumber(now) or hhNow()
   if HH.phase == "idle" then
-    if table.getn(HH.q) > 0 and (now - HH.lastRun) >= HH_RATE then
+    -- ★先判「现在能发动作吗」**再**取队列：否则一旦被拒，这一次点击就被吃掉了（审核发现的设计缺陷）
+    if table.getn(HH.q) > 0 and (now - HH.lastRun) >= HH_RATE and hhActReady(now) then
       local req = table.remove(HH.q, 1)
       hhBegin(now, req)
     end
@@ -415,7 +517,7 @@ function EVAL_HH_STEP(now)
     return
   end
   if HH.phase == "aim" then
-    if hhIsTargeting() == true then
+    if hhIsTargeting() == true and hhActReady(now) then -- ★等 0.2s 间隔（延迟，不拒绝）
       hhPick(now)
     elseif (now - HH.aimAt) > HH_AIM_WAIT then
       hhFail(L("HH_AIM_FAIL"))
@@ -435,7 +537,22 @@ function EVAL_HH_STEP(now)
 end
 
 local function hhEnsureTick()
-  if HH.tick then return HH.tick end
+  -- ★★★1.74.29 修（用户报「首次喂食成功后按钮点不动」）：
+  --   旧实现「已有 tick 就直接 return」——而 hhRelease() 在队列清空时会
+  --   HH.tick:SetScript("OnUpdate", nil) **摘掉心跳** ⇒ 之后点击只入队、状态机永不执行。
+  --   正解：每次调用都**保证 OnUpdate 已挂**（幂等重挂，成本可忽略）。
+  if HH.tick then
+    local has = nil
+    if type(HH.tick.GetScript) == "function" then
+      local ok, fn = pcall(HH.tick.GetScript, HH.tick, "OnUpdate")
+      has = ok and type(fn) == "function"
+    end
+    if not has and type(HH.tick.SetScript) == "function" then
+      pcall(HH.tick.SetScript, HH.tick, "OnUpdate", function() EVAL_HH_STEP(hhNow()) end)
+      hhLog("心跳已重新挂上（此前被 hhRelease 摘掉 —— 这正是「点不动」的根因）")
+    end
+    return HH.tick
+  end
   local f = CreateFrame("Frame", nil, UIParent) -- ★不具名：具名帧会占用同名全局（FRAME NAME CLASH 教训）
   f:SetScript("OnUpdate", function() EVAL_HH_STEP(hhNow()) end)
   HH.tick = f
@@ -448,13 +565,80 @@ function EVAL_HH_FEED(req)
   -- ★1.74.11 CD 拦截（用户：「在公共cd 存在_的情况下增加透明遮盖.以体现不可点击.并且要正确的拦截点击触发」）：
   --   CD 还没转好（cdUntil > now）→ **如实拒绝**，不入队（入了也会在 1s 限频里干等）。
   local now0 = hhNow()
-  if HH.cdUntil > now0 then return hhFail(L("HH_CD_BUSY")) end
-  if table.getn(HH.q) >= HH_QMAX then return hhFail(L("HH_BUSY")) end
+  -- ★「无法喂食」原因日志（用户要求）：每一次点击都先记一行「为什么能/不能」，
+  --   必要时给出可读原因 —— 不再出现「点了没反应且没有任何线索」。
+  local function why(ok2, reason)
+    hhLog(string.format("喂食判定：%s · %s（phase=%s 队列=%d CD剩余=%.2fs 心跳=%s）",
+      ok2 and "允许" or "拒绝", reason, tostring(HH.phase), table.getn(HH.q),
+      math.max(0, (HH.cdUntil or 0) - now0),
+      tostring(HH.tick and (function()
+        if type(HH.tick.GetScript) ~= "function" then return "?" end
+        local okk, fn = pcall(HH.tick.GetScript, HH.tick, "OnUpdate")
+        return (okk and type(fn) == "function") and "在" or "已摘"
+      end)() or "无")))
+  end
+  if HH.cdUntil > now0 then
+    why(false, string.format("公共CD未转好（还剩 %.2fs）", math.max(0, HH.cdUntil - now0)))
+    return hhFail(L("HH_CD_BUSY"))
+  end
+  if table.getn(HH.q) >= HH_QMAX then
+    why(false, "队列已满（" .. tostring(HH_QMAX) .. "）")
+    return hhFail(L("HH_BUSY"))
+  end
+  if HH.phase ~= "idle" and table.getn(HH.q) > 0 then
+    why(true, "状态机正忙，本次排到队尾")
+  else
+    why(true, "入队")
+  end
   table.insert(HH.q, req or {})
   hhEnsureTick()
   hhLog("喂食请求入队（队列 " .. tostring(table.getn(HH.q)) .. "）")
+  -- ★看门狗（1s）：入队后状态机若一直没动（典型=OnUpdate 没挂上/被摘），如实记一条，
+  --   否则这种现象在日志里完全不可见（正是本轮「点不动」当初查不出的原因）。
+  local wd = CreateFrame("Frame", nil, UIParent)
+  local wacc = 0
+  local cfgW = hhCfg() or {}
+  local markFood = tostring(HH.food or cfgW.hhFood or "?") -- ★读配置要走 hhCfg()（tb 是别处的局部，直接写会绑全局 nil）
+  local qAt = table.getn(HH.q)
+  wd:SetScript("OnUpdate", function()
+    wacc = wacc + (tonumber(arg1) or 0.05)
+    if wacc < 1.0 then return end
+    wd:SetScript("OnUpdate", nil)
+    if HH.phase == "idle" and table.getn(HH.q) >= qAt then
+      hhLog("⚠ 看门狗：入队 1 秒后状态机仍未执行（phase=idle / 队列=" .. tostring(table.getn(HH.q))
+        .. " / 食物=" .. markFood .. "）—— 多为 OnUpdate 未挂或被摘、或 EVAL_HH_STEP 未派发")
+    end
+  end)
   return true
 end
+-- ★★1.74.29 用户要求：工具箱「喂食助手」行加「重设位置」按钮 → 图标回到**屏幕正中**。
+--   口径与项目其它记忆位置一致：位置 = 「中心偏移」（hhX 向右为正、hhY 向上为正），
+--   正中 = 偏移 (0,0)；写配置后**立刻**按同一套换算重新落位（hhTopLeft 是唯一来源）。
+function EVAL_HH_RESET_POS()
+  local cfg = hhCfg()
+  if not cfg then return false end
+  cfg.hhX, cfg.hhY = 0, 0
+  if HH.btn then
+    local okc, w2 = pcall(UIParent.GetWidth, UIParent)
+    local okh, h2 = pcall(UIParent.GetHeight, UIParent)
+    if not (okc and type(w2) == "number" and w2 > 0) then w2 = HH_DEF_W end
+    if not (okh and type(h2) == "number" and h2 > 0) then h2 = HH_DEF_H end
+    -- ★不用 hhTopLeft（那是本函数**之后**才声明的 local → 会绑全局 nil，见 CLAUDE.md §5.1）；
+    --   这里用同一套换算（若 EVAL_IG_TOPLEFT 可用则走共用件）
+    local x, y
+    if type(EVAL_IG_TOPLEFT) == "function" then
+      x, y = EVAL_IG_TOPLEFT(w2, h2, HH_SIZE, 0, 0)
+    else
+      x, y = w2 / 2 - HH_SIZE / 2, -(h2 / 2 - HH_SIZE / 2)
+    end
+    pcall(HH.btn.ClearAllPoints, HH.btn)
+    pcall(HH.btn.SetPoint, HH.btn, "TOPLEFT", UIParent, "TOPLEFT", x, y)
+  end
+  hhSay("喂食图标位置已重设为屏幕正中（偏移 0,0）")
+  hhLog("重设位置：hhX/hhY = 0,0（按钮=" .. tostring(HH.btn ~= nil) .. "）")
+  return true
+end
+
 -- ===== UI（懒建：只有开关打开时才会走到 EVAL_HH_ENSURE） =====
 local function hhSolid(tex, r, g, b, a)
   pcall(tex.SetTexture, tex, "Interface\\Buttons\\WHITE8X8")
@@ -506,28 +690,67 @@ end
 -- ★全部走已验证 API：UnitLevel("pet") / GetPetHappiness()（三返回值：档位 1不开心/2一般/3快乐、伤害%、忠诚速率）/
 --   GetPetLoyalty() / GetPetExperience()；拿不到就留「?」，**绝不虚构数值**。
 --   ★快乐度是**三档**不是百分比：显示「档位（伤害 N%）」——伤害%来自 API 第二返回值（开心时更高）。
+-- ★★★1.74.29 用户明确定：伤害% **按快乐度三档固定文字显示** ——
+--   1 不开心 → 75% ｜ 2 一般 → 100% ｜ 3 快乐 → 125%（这是宠物伤害修正的固定三档）。
+--   ★不再读 GetPetHappiness() 的第 2 返回值：本客户端实测给出**坏值**（-1258291200 = 0x4B000000 位模式），
+--     与其做「形态猜测」不如按三档固定 —— 这也是唯一稳定、可断言的口径。
+local HH_HAPPY_DMG = { 75, 100, 125 }
+
+-- 读值口（断言/探针共用同一份表；不改任何状态）
+function EVAL_HH_TEST_HAPPYDMG(idx)
+  if type(idx) ~= "number" then return nil end
+  return HH_HAPPY_DMG[idx]
+end
+
 function EVAL_HH_PET_INFO()
   if not hhHasPet() then return nil end
   local lvl = "?"
   if type(UnitLevel) == "function" then local ok, v = pcall(UnitLevel, "pet") if ok and type(v) == "number" then lvl = tostring(v) end end
-  local hapIdx, hapDmg = 2, nil
+  local hapIdx = 2
   if type(GetPetHappiness) == "function" then
-    local okh, h1, h2 = pcall(GetPetHappiness)
-    if okh and type(h1) == "number" then hapIdx = h1 end
-    if okh and type(h2) == "number" then hapDmg = h2 end
+    local okh, h1 = pcall(GetPetHappiness) -- ★只取第 1 返回值（档位）；第 2 返回值是本客户端的坏值，不用
+    if okh and type(h1) == "number" and h1 >= 1 and h1 <= 3 then hapIdx = h1 end
   end
+  local hapDmg = HH_HAPPY_DMG[hapIdx] -- 固定三档：75 / 100 / 125
+  -- ★★1.74.29 修（用户截图：伤害显示 -1258291200%）：GetPetHappiness 的第 2 返回值在本客户端
+  --   并非「百分数」，实测给出的是**原始浮点/位模式**（-1258291200 = 0x4B000000 这种天文数字）。
+  --   ⇒ 加**合理性闸门**：NaN / inf / 负数 / >300 一律作废（显示「?」，绝不把垃圾值画给用户）；
+  --     合法的两种形态都认：分数（0.75/1.0/1.25 → ×100）与百分数（75/100/125）。
   local hapTxt = L("HH_PET_HAPPY2")
   if hapIdx == 1 then hapTxt = L("HH_PET_HAPPY1") elseif hapIdx == 3 then hapTxt = L("HH_PET_HAPPY3") end
   local r, g, b = 1, 0.82, 0.3 -- 一般=金
   if hapIdx == 1 then r, g, b = 1, 0.5, 0.4 elseif hapIdx == 3 then r, g, b = 0.5, 1, 0.5 end -- 不开心=红 / 快乐=绿
+  -- ★★1.74.29 修（用户截图：(Loyalty Level 1) Rebellious 原样堆了进去）：本客户端返回的是
+  --   **未本地化英文串**（含档位数字）→ 解析出数字后用**本地化档名**显示；解析不出数字就退化显示
+  --   去括号后的首段文本（仍如实，但不堆整串英文）。
+  local LOYAL_NAME = { L("HH_PET_LOYAL1"), L("HH_PET_LOYAL2"), L("HH_PET_LOYAL3"),
+                       L("HH_PET_LOYAL4"), L("HH_PET_LOYAL5"), L("HH_PET_LOYAL6") }
   local loyal = "?"
-  if type(GetPetLoyalty) == "function" then local okl, v = pcall(GetPetLoyalty) if okl and type(v) == "string" and v ~= "" then loyal = v end end
+  if type(GetPetLoyalty) == "function" then
+    local okl, v = pcall(GetPetLoyalty)
+    if okl and type(v) == "string" and v ~= "" then
+      local n = tonumber(string.match(v, "(%d+)"))
+      if n and n >= 1 and n <= 6 then
+        loyal = tostring(n) .. " " .. tostring(LOYAL_NAME[n])
+      else
+        local plain = string.gsub(v, "%b()", "")            -- 去掉 "(Loyalty Level N)" 这类括号段
+        plain = string.gsub(plain, "^%s+", "")
+        plain = string.gsub(plain, "%s+$", "")
+        if plain == "" then plain = v end
+        loyal = plain
+      end
+    end
+  end
   local xpTxt = "?/?"
   if type(GetPetExperience) == "function" then
     local okx, x1, x2 = pcall(GetPetExperience)
     if okx and type(x1) == "number" and type(x2) == "number" then xpTxt = tostring(x1) .. "/" .. tostring(x2) end
   end
-  return string.format(L("HH_TT_PETINFO"), lvl, hapTxt, tostring(hapDmg or "?"), loyal, xpTxt), r, g, b
+  -- ★有合法伤害% → 用带伤害的整句；没有 → 用不带伤害的整句（不再出现「伤害 ?%」这种半截话）
+  if hapDmg then
+    return string.format(L("HH_TT_PETINFO"), lvl, hapTxt, tostring(hapDmg), loyal, xpTxt), r, g, b
+  end
+  return string.format(L("HH_TT_PETINFO_NODMG"), lvl, hapTxt, loyal, xpTxt), r, g, b
 end
 
 local function hhTip(b)
@@ -599,33 +822,76 @@ function EVAL_HH_CD_REFRESH()
   return true
 end
 
--- ★★★1.74.29 用户：「查看 API LUA 如何获取宠物快乐度，根据不同的快乐度给宠物喂食助手添加个对应颜色的边框高亮：高兴亮绿灯」。
---   · 快乐度走**官方 Pet API `GetPetHappiness()`**（本机 api_pet.html 索引里 category=Pet，文档 .../globals/Pet#getpethappiness）；
---     三返回值 = 档位（1 不开心 / 2 一般 / 3 快乐）· 伤害% · 忠诚速率 —— 与「宠物信息行」**同一份读法**（不另抄一套）。
---   · 边框 = 主图标既有那 **4 条 1px 亮边**的顶点色现算：**3 开心 = 亮绿** · 2 一般 = 金 · 1 不开心 = 红；
---     **没有宠物 / 接口不可用 / 调失败 → 恢复默认金边**（如实退回，绝不硬编一个「开心」）。
---   · 频率：只在**已有刷新时机**里现算（建帧、EVAL_HH_REFRESH、CD 每秒 tick、悬停）—— 不新开常驻后台 tick（项目纪律）。
-function EVAL_HH_HAP_BORDER()
-  if not (HH.built and HH.btn and HH.edges) then return false end
-  local r, g, b, a = 0.85, 0.70, 0.20, 0.9 -- 默认金（与建帧时同一组值）
+-- 图标贴图：食物图标（实时解析）；解析不到 → 保底文字（不写纹理字面量 → 不碰 ICON 白名单）
+-- ★★★1.74.29 （用户要求）：
+--   ① 按宠物**快乐度**给按钮换高亮边框：1 不开心=红 / 2 一般=金 / 3 快乐=绿；
+--   ② 顶部蓝色进度条 = 宠物**经验百分比**（GetPetExperience 的 当前/上限）。
+--   拿不到宠物/拿不到经验（或已满）→ 进度条隐藏；边框回到默认金色。**绝不编数据**。
+function EVAL_HH_PETDECOR()
+  if not (HH.built and HH.btn) then return false end
+  -- 边框：按快乐度档位取色
+  -- ★★1.75.1 补门（合并两支时抓到）：**没有宠物 ⇒ 一律默认金**，一个快乐度读数都不读。
+  --   理由 = 本函数上方那条承诺（「拿不到宠物/拿不到快乐度 ⇒ 边框回到默认金色，**绝不编数据**」）：
+  --   `GetPetHappiness()` **没有「无宠物」这个返回值语义**（桩里它就照读 `TEST.happiness`；真机上取值也不该被当成
+  --   「这只有宠物的快乐度」）⇒ 少了这道门，宠物刚消失时会**沿用上一档颜色**（宠物没了却还亮着红/绿边）。
+  --   判据 = 组 188 ④ 的**反向哨兵**「没有宠物 → 退回默认金边（不硬编『开心』）」（head 线原有，合并后当场抓到）。
+  local idx = nil
   if hhHasPet() and type(GetPetHappiness) == "function" then
-    local okh, idx = pcall(GetPetHappiness)
-    if okh and type(idx) == "number" then
-      if idx == 3 then r, g, b = 0.25, 1, 0.35      -- 开心 → 亮绿
-      elseif idx == 1 then r, g, b = 1, 0.45, 0.35  -- 不开心 → 红
-      else r, g, b = 1, 0.82, 0.30 end              -- 一般 → 金
+    local ok, v = pcall(GetPetHappiness)
+    if ok and tonumber(v) then idx = tonumber(v) end
+  end
+  local r, g, b = 0.85, 0.70, 0.20 -- 默认金（无宠物/拿不到快乐度）
+  if idx == 1 then r, g, b = 1.00, 0.35, 0.30
+  elseif idx == 2 then r, g, b = 0.95, 0.80, 0.25
+  elseif idx == 3 then r, g, b = 0.45, 1.00, 0.45 end
+  if type(HH.edges) == "table" then
+    for i = 1, 4 do
+      local e = HH.edges[i]
+      if e then pcall(e.SetVertexColor, e, r, g, b, 0.95) end
     end
   end
-  for i = 1, 4 do
-    local e = HH.edges[i]
-    if e then pcall(e.SetVertexColor, e, r, g, b, a) end
+  -- 经验条：宽度 = （按钮内宽）× 百分比
+  -- ★同上：**没有宠物 ⇒ 不读经验、进度条隐藏**（同一道门、同一份承诺，避免两处条件写法漂移）
+  local cur, max = nil, nil
+  if hhHasPet() and type(GetPetExperience) == "function" then
+    local ok, c, m = pcall(GetPetExperience)
+    if ok and tonumber(c) and tonumber(m) then cur, max = tonumber(c), tonumber(m) end
+  end
+  if HH.xpFill and HH.xpBg then
+    if cur and max and max > 0 then
+      local pct = cur / max
+      if pct < 0 then pct = 0 elseif pct > 1 then pct = 1 end
+      local inner = HH_SIZE - 2
+      pcall(HH.xpBg.Show, HH.xpBg)
+      pcall(HH.xpFill.Show, HH.xpFill)
+      pcall(HH.xpFill.SetWidth, HH.xpFill, inner * pct)
+    else
+      pcall(HH.xpFill.Hide, HH.xpFill)
+      pcall(HH.xpBg.Hide, HH.xpBg)
+    end
   end
   return true
 end
 
--- 图标贴图：食物图标（实时解析）；解析不到 → 保底文字（不写纹理字面量 → 不碰 ICON 白名单）
+-- ★低频心跳（2s）：快乐度会随喂食变化、经验会随战斗增长 → 定期刷新（只在按钮存在时）
+do
+  if type(CreateFrame) == "function" then
+    local parent = _G["WorldFrame"]
+    if not (type(parent) == "table" or type(parent) == "userdata") then parent = _G["UIParent"] end
+    local tf = CreateFrame("Frame", "EH_HH_DECOR", parent)
+    local acc = 0
+    tf:SetScript("OnUpdate", function()
+      acc = acc + (tonumber(arg1) or 0.05)
+      if acc < 2.0 then return end
+      acc = 0
+      if HH.built and HH.btn then pcall(EVAL_HH_PETDECOR) end
+    end)
+  end
+end
+
 function EVAL_HH_REFRESH()
   if not (HH.built and HH.btn) then return false end
+  if type(EVAL_HH_PETDECOR) == "function" then pcall(EVAL_HH_PETDECOR) end -- ★快乐度边框 + 经验条一并刷
   local tb = hhCfg() or {}
   local food = tb.hhFood
   local tex, bag = nil, nil
@@ -645,7 +911,6 @@ function EVAL_HH_REFRESH()
     pcall(HH.label.Show, HH.label)
   end
   HH.foodBag = bag
-  EVAL_HH_HAP_BORDER() -- ★1.74.29 刷新时机顺手按快乐度上色（喂完/换食物/开开关都会走到这里）
   return true
 end
 
@@ -686,11 +951,11 @@ function EVAL_HH_ENSURE()
   bg:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
   bg:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
   -- 四边 1px 亮边（项目配方：纯色纹理 WHITE8X8 + 顶点色）
-  -- ★1.74.29 存进 HH.edges：快乐度边框高亮改的就是**这四条边**，不另建一套边框（同一视觉、单一来源）
-  local hhEdges = {}
+  -- ★★1.74.29 用户要求：边框颜色随**宠物快乐度**变化 → 四条收进 HH.edges，由 EVAL_HH_PETDECOR 统一改色
+  HH.edges = {}
   for i = 1, 4 do
     local e = b:CreateTexture(nil, "BORDER")
-    hhEdges[i] = e
+    HH.edges[i] = e
     hhSolid(e, 0.85, 0.70, 0.20, 0.9)
     if i == 1 then
       e:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
@@ -717,12 +982,23 @@ function EVAL_HH_ENSURE()
   tex:SetPoint("TOPLEFT", b, "TOPLEFT", 2, -2)
   tex:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", -2, 2)
   tex:Hide()
+  -- ★★1.74.29 用户要求：按钮**顶部一条小小的蓝色进度条**（宠物经验百分比）
+  local xpBg = b:CreateTexture(nil, "OVERLAY")
+  hhSolid(xpBg, 0, 0, 0, 0.75)
+  xpBg:SetPoint("TOPLEFT", b, "TOPLEFT", 1, -1)
+  xpBg:SetPoint("TOPRIGHT", b, "TOPRIGHT", -1, -1)
+  xpBg:SetHeight(3)
+  local xpFill = b:CreateTexture(nil, "OVERLAY")
+  hhSolid(xpFill, 0.25, 0.55, 1.0, 1) -- 蓝色
+  xpFill:SetPoint("TOPLEFT", b, "TOPLEFT", 1, -1)
+  xpFill:SetHeight(3)
+  xpFill:SetWidth(0)
+  HH.xpBg, HH.xpFill = xpBg, xpFill
   local label = hhText(b, 12, 0.95, 0.80, 0.30) -- 26px 里 12pt 才不挤（原 36px 用 14pt）
   label:SetPoint("CENTER", b, "CENTER", 0, 0)
   pcall(label.SetWidth, label, HH_SIZE)
   label:SetText(HH_TEXT)
-  HH.btn, HH.tex, HH.label, HH.built, HH.edges = b, tex, label, true, hhEdges
-  EVAL_HH_HAP_BORDER() -- ★1.74.29 建好就按当前快乐度上色（不等下一次刷新）
+  HH.btn, HH.tex, HH.label, HH.built = b, tex, label, true
   -- ★★★1.74.5 实测修正（用户报「右键选食物无法触发」）：**本客户端 OnClick 的参数形态不固定**——
   --   主程序里两处已实测的右键分派（技能格 1.74.2 · 方案标签）都写成「四候选」：
   --     mbtn = (type(a)=="string" and a) or (type(b)=="string" and b) or (type(arg1)=="string" and arg1) or "LeftButton"
@@ -752,7 +1028,7 @@ function EVAL_HH_ENSURE()
     pcall(b.StopMovingOrSizing, b)
     hhSavePos()
   end)
-  b:SetScript("OnEnter", function() EVAL_HH_HAP_BORDER() hhTip(b) end) -- ★1.74.29 悬停也现算一次（快乐度掉了要立刻看得出来）
+  b:SetScript("OnEnter", function() hhTip(b) end)
   b:SetScript("OnLeave", function() if type(GameTooltip) == "table" then pcall(GameTooltip.Hide, GameTooltip) end end)
   hhLog("图标已建立（懒建：开关打开才建帧）")
   EVAL_HH_REFRESH()
@@ -760,16 +1036,70 @@ function EVAL_HH_ENSURE()
 end
 
 -- 下拉模型：条目与动作**一一对应**（测试读值口读同一份模型，绝不在测试里复刻逻辑）
+-- ★用户要求（1.74.29）：下拉里加入**食品类别**（肉类/鱼类/面包/水果/蘑菇/奶酪/蛋/其他）。
+--   本客户端**没有**「某物品属于哪类食物」的 API（只有 GetPetFoodTypes 给宠物食谱名），
+--   所以类别只能按**物品名关键词**判定（与 hhIsLikelyFood 同一份词表，单一来源）。
+local HH_CATS = {
+  { k = "肉类", words = { "肉", "肋排", "肠", "禽", "腿", "熊", "野猪", "狼" } },
+  { k = "鱼类", words = { "鱼", "鲈", "鲑", "鳕", "鳗", "鳟" } },
+  { k = "面包", words = { "面包", "饼干", "薄饼", "麦", "面", "糕" } },
+  { k = "水果", words = { "水果", "苹果", "香蕉", "芒果", "瓜", "莓", "桃" } },
+  { k = "蘑菇", words = { "蘑菇", "菌" } },
+  { k = "奶酪", words = { "奶酪", "干酪", "奶" } },
+  { k = "蛋", words = { "蛋" } },
+}
+local function hhFoodCat(name)
+  local low = string.lower(tostring(name or ""))
+  for _, cat in ipairs(HH_CATS) do
+    for _, w in ipairs(cat.words) do
+      if string.find(low, string.lower(w), 1, true) then return cat.k end
+    end
+  end
+  return "其他"
+end
+local function hhCatOrder(k)
+  for i, cat in ipairs(HH_CATS) do if cat.k == k then return i end end
+  return table.getn(HH_CATS) + 1
+end
+-- 公开读值口（测试/探针用）
+function EVAL_HH_FOOD_CAT(name) return hhFoodCat(name) end
+
 function EVAL_HH_MENU_MODEL()
   local items, acts = {}, {}
   local function add(text, act) table.insert(items, text) table.insert(acts, act) end
   add(L("HH_DD_SETSPELL"), { k = "spell" })
   local cand, total = EVAL_HH_CANDIDATES()
   local n = table.getn(cand)
+  -- ★给每个候选打上类别（按名字关键词判定；这是本客户端唯一可行的判据）
+  local byCat, catSeen = {}, {}
   for i = 1, n do
     local c = cand[i]
-    add(string.format(L("HH_DD_ITEM"), tostring(c.name), tostring(c.count or 1), tostring(c.bag), tostring(c.slot)),
-        { k = "food", name = c.name, tex = c.tex })
+    c.cat = hhFoodCat(c.name)
+    byCat[c.cat] = byCat[c.cat] or {}
+    table.insert(byCat[c.cat], c)
+    catSeen[c.cat] = true
+  end
+  -- ★类别快捷条目：点它 = 选该类**第一件**（列表已按食物相似度排序 → 通常是包里的主粮）
+  local cats = {}
+  for ck in pairs(catSeen) do table.insert(cats, ck) end
+  table.sort(cats, function(a, b) return hhCatOrder(a) < hhCatOrder(b) end)
+  for _, ck in ipairs(cats) do
+    local first = byCat[ck][1]
+    if first then
+      add(string.format("★类别·%s（选：%s）", ck, tostring(first.name)),
+          { k = "food", name = first.name, tex = first.tex })
+    end
+  end
+  -- 明细：按类别分组排序，条目带 [类别] 前缀
+  local sorted = {}
+  for _, ck in ipairs(cats) do
+    for _, c in ipairs(byCat[ck]) do table.insert(sorted, c) end
+  end
+  for i = 1, table.getn(sorted) do
+    local c = sorted[i]
+    add(string.format("[%s] ", tostring(c.cat))
+        .. string.format(L("HH_DD_ITEM"), tostring(c.name), tostring(c.count or 1), tostring(c.bag), tostring(c.slot)),
+        { k = "food", name = c.name, tex = c.tex, cat = c.cat })
   end
   if total > n then add(string.format(L("HH_DD_MORE"), tostring(total - n)), { k = "none" }) end
   add(L("HH_DD_CLEAR"), { k = "clear" })
@@ -881,6 +1211,9 @@ end
 -- ===== 模块级状态复位（测试用；★放在文件**末尾**，否则 DECL ORDER 会抓「用在前、声明在后」） =====
 function EVAL_HH_TEST_RESET_TIMERS()
   HH.q, HH.phase, HH.lastRun, HH.aimAt, HH.settleAt = {}, "idle", -999, 0, 0
+  -- ★★1.74.29：防踢线闸门的状态也要清（否则前一组测试的时间线会把后一组卡住）
+  HH_ACT.last, HH_ACT.lastFrame, HH_ACT.lastKind, HH_ACT.lastSay = -999, -1, nil, -999
+  HH_ACT.sec, HH_ACT.secCount, HH_ACT.blocked, HH_ACT.log = 0, 0, 0, {}
   if HH.tick then pcall(HH.tick.SetScript, HH.tick, "OnUpdate", nil) end
 end
 
@@ -914,13 +1247,52 @@ function EVAL_HH_CMD(msg)
     local spName = string.match(feedArg, "^技能%s*(.-)%s*$")
     if spName and spName ~= "" then return EVAL_HH_SET_SPELL(spName) end
     if feedArg == "状态" then return EVAL_HH_PROBE("") end
+    if feedArg == "频率" or feedArg == "freq" then
+      local a = EVAL_HH_TEST_ACTS()
+      hhSay("--- 喂食服务器动作审计 ---")
+      hhSay(string.format("最大 1 秒窗口动作数=%d · 被闸门拦下=%d 次 · 当前秒已发=%d",
+        a.maxBurst or 0, a.blocked or 0, a.secCount or 0))
+      hhSay("最近动作（时间 类型）：" .. table.concat(a.log or {}, " · "))
+      hhSay("判读：正常喂食应是「每 2 秒 1 次 cast + 1 次 pick」；若最大窗口动作数接近 4 或被拦很多，说明原来确实在短时间内连发。")
+      return true
+    end
     return false
   end
   hhSay("用法：/eh go 喂食（一键喂食）｜ 喂食 设 <食物名> ｜ 喂食 技能 <名> ｜ 喂食探针 [扫书|施放 <名>|喂 <包> <格>|拖|收光标]")
   return false
 end
 
+-- ★★1.74.29 取证分支（用户截图「伤害 -1258291200%」）：
+--   把宠物相关 API 的**原始返回值**按顺序摊开 —— 类型 + 值，绝不加工。
+--   判读：若第 2 返回值是 0.75/1.0/1.25 → 分数形态（我们乘 100 显示）；
+--         若是 75/100/125 → 百分数；若是天文数字/负数 → 本客户端就是坏值，我们如实不显示。
+local function hhProbePet()
+  hhSay("— 猎人助手 · 宠物信息探针（原始返回值）—")
+  local function dump(label, fn, ...)
+    if type(fn) ~= "function" then hhSay(label .. "：本客户端没有这个 API") return end
+    local args = { ... }
+    local r = { pcall(fn, unpack(args)) }
+    if not r[1] then hhSay(label .. "：调用失败（" .. tostring(r[2]) .. "）") return end
+    local parts = {}
+    for i = 2, table.getn(r) do
+      local v = r[i]
+      parts[i - 1] = "#" .. tostring(i - 1) .. "=" .. tostring(v) .. "(" .. type(v) .. ")"
+    end
+    if table.getn(parts) == 0 then parts[1] = "（无返回值）" end
+    hhSay(label .. "：" .. table.concat(parts, " · "))
+  end
+  dump("UnitLevel('pet')", UnitLevel, "pet")
+  dump("GetPetHappiness()", GetPetHappiness)
+  dump("GetPetLoyalty()", GetPetLoyalty)
+  dump("GetPetExperience()", GetPetExperience)
+  local pi = EVAL_HH_PET_INFO()
+  hhSay("当前 tooltip 实际显示：" .. tostring(pi or "（无宠物 → 显示「现在没有宠物」）"))
+  hhSay("★把上面几行发我即可定案伤害%的形态（分数/百分数/坏值）")
+  return true
+end
+
 function EVAL_HH_PROBE(sub)
+  if sub == "宠物" or sub == "pet" then return hhProbePet() end
   sub = tostring(sub or "")
   if sub == "" then
     hhSay("— 猎人助手 · 喂食探针（可用性矩阵）—")
@@ -963,6 +1335,20 @@ function EVAL_HH_PROBE(sub)
           "（参数形状 a/b/arg1 = " .. tostring(HH.lastArgs) .. "）")
     hhSay("下拉件：EVAL_DD_OPEN=" .. hhAvail("EVAL_DD_OPEN") ..
           " ｜ 候选 " .. tostring(table.getn(cand)) .. "/" .. tostring(total) .. " 项会进菜单")
+      -- ★被剔名单（取证）：有名字像食物却被剔的，直接点名 —— 免得再出现「真食物看不见」而无从下手
+      local drops = (type(EVAL_IG_KIND_DROPS) == "function") and EVAL_IG_KIND_DROPS() or nil
+      if type(drops) == "table" and table.getn(drops) > 0 then
+        local line = {}
+        for i = 1, table.getn(drops) do
+          local d = drops[i]
+          if hhIsLikelyFood(d.name) then
+            table.insert(line, tostring(d.name) .. "(" .. tostring(d.kind) .. ")")
+          end
+        end
+        if table.getn(line) > 0 then
+          hhSay("⚠ 被类型过滤剔掉、但名字像食物的：" .. table.concat(line, "、") .. "（已修：keepNames 例外会保它们）")
+        end
+      end
     return true
   end
   if sub == "扫书" then
@@ -1041,7 +1427,8 @@ function EVAL_HH_PROBE(sub)
 end
 
 -- ★测试读值口（读**真实状态**，绝不在测试里复刻逻辑）
--- ★1.74.29 读值口：快乐度边框的**真控件**状态（4 条边 + 边 1 的顶点色 + 当前档位 + 有无宠物）
+-- ★★合并自 master 线（1.74.29）：快乐度边框的读值口 —— 本模块实现改由 EVAL_HH_PETDECOR 上色，
+--   本口只**读**四条边的真实顶点色（测试用；不改变任何行为）。
 function EVAL_TEST_HH_HAP()
   local out = { n = 0, rgb = nil, tier = nil, pet = (hhHasPet() and true or false) }
   if not (HH.edges and HH.edges[1]) then return out end

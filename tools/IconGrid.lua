@@ -359,6 +359,9 @@ end
 -- ★不做任何「像不像食物/消耗品」的判断：那由调用方排序（本客户端也没有「某物品是不是消耗品」的 API）。
 -- ★★1.74.28：`opts.classify = true` 时**同时做类型过滤**（武器/护甲/灰色/材料/任务/容器/箭矢/钥匙/配方 一律剔）——
 --   只有**弹窗候选**这条用户点击驱动的路径才传 true（tooltip 兜底是贵调用，别放进热路径）。
+-- ★读值口：最近一次扫描的「被类型过滤剔掉」名单（探针/取证用）
+function EVAL_IG_KIND_DROPS() return IG_KIND_STAT.dropLog or {} end
+
 function EVAL_IG_SCAN_BAGS(bags, opts)
   bags = bags or { 0, 1, 2, 3, 4 }
   opts = opts or {}
@@ -402,14 +405,30 @@ function EVAL_IG_SCAN_BAGS(bags, opts)
             IG_KIND_STAT.probed < IG_KIND_PROBE_MAX)
         end
         local skip = false
+        local keptByCaller = false
         if classify and kind then
           if IG_KIND_DROP[kind] then skip = true end
+          -- ★★1.74.29 用户实测「大块野猪肉在下拉里看不到」的根因：肉类在客户端类型行属于
+          --   **材料/贸易品**（IG_KIND_DROP.material 里就有「材料/贸易品/Trade Goods」）→ 被整类剔掉。
+          --   ⇒ 调用方可传 opts.keepNames(name) 做**例外白名单**：命中就保留（喂食助手用它兜食物）。
+          if skip and type(opts.keepNames) == "function" then
+            local okk, keep = pcall(opts.keepNames, nm)
+            if okk and keep then
+              skip = false
+              keptByCaller = true
+              IG_KIND_STAT.keptByCaller = (IG_KIND_STAT.keptByCaller or 0) + 1
+            end
+          end
           if ksrc == "cache" then IG_KIND_STAT.cached = IG_KIND_STAT.cached + 1 end
         elseif classify then
           IG_KIND_STAT.unknown = IG_KIND_STAT.unknown + 1
         end
         if skip then
           IG_KIND_STAT.dropped = IG_KIND_STAT.dropped + 1
+          -- ★留一份「被剔名单」（环形 20 条）：探针据此如实报「谁被剔、什么类型剔的」
+          IG_KIND_STAT.dropLog = IG_KIND_STAT.dropLog or {}
+          table.insert(IG_KIND_STAT.dropLog, { name = nm, kind = tostring(kind), src = tostring(ksrc) })
+          while table.getn(IG_KIND_STAT.dropLog) > 20 do table.remove(IG_KIND_STAT.dropLog, 1) end
         else
           IG_KIND_STAT.kept = IG_KIND_STAT.kept + 1
           table.insert(out, { name = nm, bag = bag, slot = slot, tex = tex, count = cnt,
@@ -418,7 +437,7 @@ function EVAL_IG_SCAN_BAGS(bags, opts)
       end
     end
   end
-  return out, total
+  return out, total, IG_KIND_STAT.dropLog
 end
 
 -- ★★★1.74.11 悬浮图标 CD 倒计时（用户：「消耗品助手和喂食助手都设置悬浮图标显示CD 实时倒计时特效.」）

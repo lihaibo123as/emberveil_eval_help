@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.75.0"
+local VERSION = "1.75.1"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -1427,11 +1427,12 @@ local function cfgBuild()
   -- Tab 按钮行（全局 / 一键宏设置；选中=金底亮字，未选=暗底灰字——参考 UnrealQuest 标签页风格）
   local pages = {}
   cfgWin.pages = pages
-  local tabNames = { L("TAB_GLOBAL"), L("TAB_MACRO"), L("TAB_TOOLBOX"), L("TAB_DS"), L("TAB_ICONS"), L("TAB_PET") } -- ★1.73.0 第 6 个 Tab：抓宠帮手（PetHelper.lua 独立载入）
+  local tabNames = { L("TAB_GLOBAL"), L("TAB_MACRO"), L("TAB_TOOLBOX"), L("TAB_DS"), L("TAB_ICONS"), L("TAB_PET"), L("TAB_PLUGINS") } -- ★1.74.29 第 7 个 Tab：子插件（独立载入的调试类插件）
   for i, name in ipairs(tabNames) do
     local tb = CreateFrame("Button", nil, root)
-    tb:SetWidth(90) tb:SetHeight(18)
-    tb:SetPoint("TOPLEFT", root, "TOPLEFT", 12 + (i - 1) * 96, -26)
+    -- ★1.74.29 用户要求「缩小所有 tab 宽度」：90/96 → 74/78（7 个 Tab 仍在一行内，末尾留 ≥80px 余量）
+    tb:SetWidth(74) tb:SetHeight(18)
+    tb:SetPoint("TOPLEFT", root, "TOPLEFT", 12 + (i - 1) * 78, -26)
     pcall(tb.EnableMouse, tb, true)
     pcall(tb.RegisterForClicks, tb, "LeftButtonUp")
     local tbg = tb:CreateTexture(nil, "BACKGROUND")
@@ -2167,6 +2168,7 @@ local function cfgBuild()
   if type(EVAL_DS_BUILD) == "function" then EVAL_DS_BUILD(root, pages[4], refreshes) end -- 数据检索 Tab（DataSearch.lua 独立载入，基于 UnrealQuest 数据库）
   if type(EVAL_IB_BUILD) == "function" then EVAL_IB_BUILD(root, pages[5], refreshes) end -- 图标库 Tab（IconBrowser.lua 独立载入）
   if type(EVAL_PH_BUILD) == "function" then EVAL_PH_BUILD(root, pages[6], refreshes) end -- 抓宠帮手 Tab（PetHelper.lua 独立载入）
+  if type(EVAL_SUBADDONS_BUILD) == "function" then EVAL_SUBADDONS_BUILD(root, pages[7], refreshes) end -- ★1.74.29 子插件 Tab（调试类独立插件）
   EVAL_HELP_CFG_SETTAB(c().cfgTab or 1)
   return root
 end
@@ -3015,6 +3017,7 @@ function EVAL_HELP_CFG_SETTAB(idx)
   if idx == 4 and type(EVAL_DS_REFRESH) == "function" then pcall(EVAL_DS_REFRESH) end -- 数据检索
   if idx == 5 and type(EVAL_IB_REFRESH) == "function" then pcall(EVAL_IB_REFRESH) end -- 图标库
   if idx == 6 and type(EVAL_PH_REFRESH) == "function" then pcall(EVAL_PH_REFRESH) end -- 抓宠帮手
+  if idx == 7 and type(EVAL_SUBADDONS_REFRESH) == "function" then pcall(EVAL_SUBADDONS_REFRESH) end -- ★子插件（调试类）
 end
 
 -- ★1.71.2 测试钩子：配置窗底部导航按钮（模版/分享/接收）的几何。
@@ -3228,6 +3231,7 @@ EVAL_TEST_RECT_HITS_CIRCLE_G = EVAL_TEST_RECT_HITS_CIRCLE -- 全局导出桥（�
 --     **不许留空白按钮**（图标拿不到时，打开配置窗的入口不能跟着消失）。
 local minimapBtn = nil
 local mbDragMoved = false
+local mbDownX, mbDownY = nil, nil
 local mbIconTex = nil             -- 唯一的常驻视觉件：图标纹理（占满按钮）
 local mbIconPath = nil            -- 已贴上的图标路径（nil = 还没贴上）
 local mbRing, mbText = nil, nil   -- 兜底样式（仅图标拿不到时才建；悬停变色与「清空 EH 字」要引用）
@@ -3273,8 +3277,16 @@ do
   pcall(iconTex.SetTexture, iconTex, "Interface\\Buttons\\WHITE8X8")
   pcall(iconTex.SetVertexColor, iconTex, 0.12, 0.10, 0.06, 1)
   mbIconTex = iconTex
+  -- ★★★1.74.29 修（用户：「图标每次启动第一下点击无法打开配置」）：
+  --   本客户端注册了 RegisterForDrag 后，**普通单击也会触发 OnDragStart/OnDragStop** →
+  --   旧写法在 OnDragStop 里无条件置 mbDragMoved = true，紧接着的 OnClick 就被当成「拖动后的抬起」吞掉了。
+  --   正解：按下时记光标位置，松手时比位移；位移 ≤ 阈值 = 单击（不吞）。
   mb:SetScript("OnDragStart", function()
     mbDragMoved = false
+    if type(GetCursorPosition) == "function" then
+      local ok, cx, cy = pcall(GetCursorPosition)
+      if ok then mbDownX, mbDownY = cx, cy end
+    end
     pcall(mb.SetMovable, mb, true)
     pcall(mb.StartMoving, mb)              -- warm-up 两步（实测配方）
     pcall(mb.StopMovingOrSizing, mb)
@@ -3282,7 +3294,16 @@ do
   end)
   mb:SetScript("OnDragStop", function()
     pcall(mb.StopMovingOrSizing, mb)
-    mbDragMoved = true
+    local moved = false
+    if type(GetCursorPosition) == "function" and mbDownX and mbDownY then
+      local ok, cx, cy = pcall(GetCursorPosition)
+      if ok and tonumber(cx) and tonumber(cy) then
+        local dx, dy = cx - mbDownX, cy - mbDownY
+        if (dx * dx + dy * dy) > 16 then moved = true end
+      end
+    end
+    mbDragMoved = moved
+    if not moved then return end
     local ok, point, _, relPoint, x, y = pcall(mb.GetPoint, mb, 1)
     if ok and type(point) == "string" then
       c().mbPos = {
@@ -8070,6 +8091,67 @@ if type(SlashCmdList) == "table" then
       else
         say("分享探针：Share 模块未载入（EVAL_SHARE_SEND_PROBE 不存在）")
       end
+    -- ★★★1.74.32 框体探针（动作条1~4 / 队伍层·团队层 的真实帧名 + **被动打开层**：
+    --   公会/属性/拍卖/邮箱/任务/技能树 等）。★为什么在主插件里也开一条入口：
+    --   原来只有子插件 `/edb bars` 一条路，而子插件那句 `pcall` 会把错误**静默吞掉** ——
+    --   真机上就出现过「跑了命令、聊天框什么都不打、存档里也没痕迹」（无法判断是没跑还是跑挂了）。
+    --   这里的入口走 `EVAL_DF_PROBE_SAFE`（记录开始/错误阶段 + 播报错误原文），且不依赖子插件是否载入。
+    elseif msg == "go 框体探针" or msg == "go frames" or msg == "go 被动层探针" or msg == "go 动作条探针" then
+      -- ★先打一行**即时回显**再干活：它的唯一作用是让「命令到底跑到没有」一眼可判 ——
+      --   看到这行 = 命令到达了（结果要么打出来、要么出错留档）；看不到这行 = 命令压根没到
+      --   （插件没载入 / 打错字 / 分派没接上）—— 这与「跑了一半死了」是完全不同的两件事，
+      --   本轮真机就卡在这个无法区分上（子插件的裸 pcall 把错误吞了）。
+      say("框体探针：命令已收到，开始扫描（约 1 秒，别急）…")
+      if type(EVAL_DF_PROBE_SAFE) == "function" then
+        EVAL_DF_PROBE_SAFE()
+      elseif type(EVAL_DF_PROBE_BARS) == "function" then
+        local ok, err = pcall(EVAL_DF_PROBE_BARS)
+        if not ok then say("|cffff6060框体探针出错|r：" .. tostring(err)) end
+      else
+        say("框体探针：框拖拽模块未载入（tools/DragFrames.lua 没进 .toc？）")
+      end
+    -- ★★★1.74.33 开窗探针（**只读取证**）：被动窗口「打开时/定时重设自定义属性」的可行性。
+    --   要回答的是：客户端会不会在**开窗那一刻**把我们写进去的缩放/宽高覆盖掉（＝这功能是不是必需），
+    --   以及每个目标**原生有没有** OnShow 脚本（决定「链式接管 OnShow」可行还是得包 Show / 轮询）。
+    --   ★纪律同「框体探针」：即时回显 + 只读（组 218① 用写接口计数器钉住）+ 有界 60 秒（到点自停并摘脚本）。
+    --   ★英文别名 `go attrprobe` 是新的（`GO ALIAS UNIQUE CHECK` 会守住不被静默顶掉）。
+    elseif msg == "go 开窗探针" or msg == "go attrprobe" or string.find(msg or "", "^go 开窗探针%s") == 1 then
+      say("开窗探针：命令已收到")
+      if type(EVAL_DF_PROBE_ATTR) ~= "function" then
+        say("开窗探针：框拖拽模块未载入（tools/DragFrames.lua 没进 .toc？）")
+      elseif string.find(msg or "", "停", 1, true) ~= nil then
+        EVAL_DF_PROBE_ATTR_STOP("manual")
+      elseif string.find(msg or "", "看", 1, true) ~= nil then
+        EVAL_DF_PROBE_ATTR_SHOW()
+      else
+        EVAL_DF_PROBE_ATTR()
+      end
+    -- ★★★1.74.32 被动窗口的「小图标」（默认开）：`/eh go 框体图标` 开/关，加「状态」只报状态。
+    --   ★为什么要有这条：图标是默认开的，总得给用户一个关掉它的入口（否则只能改存档）。
+    --   ★★英文别名**绝不能用 `go icons`** —— 那个名字早就被组 116 的「图标路径采集」占了
+    --     （`/eh go icons` = 把客户端真实图标路径采集进存档）。本轮第一版就是撞了它，
+    --     被断言组 116 当场抓到；现在另有 `GO ALIAS UNIQUE CHECK` 在源码层守这件事。
+    elseif msg == "go 框体图标" or msg == "go frameicons" or string.find(msg or "", "^go 框体图标%s") == 1 then
+      if type(EVAL_DF_ICONS_SET) ~= "function" then
+        say("框体图标：框拖拽模块未载入（EVAL_DF_ICONS_SET 不存在）")
+      elseif string.find(msg or "", "状态", 1, true) ~= nil then
+        say("被动窗口图标 = " .. (EVAL_DF_ICONS_ENABLED() and "开" or "关") ..
+          "（本客户端实测：这族窗口统一 384×512，图标贴右上角内侧、随窗口显隐）")
+        -- ★★★1.74.33 用户要求「窗口的拖拽使用图标 346 号宏图标」⇒ 状态里**如实报出解析结果**：
+        --   号 → 纹理路径（取不到 -> 退回文字「配」）。★这条是**唯一**能让用户核对
+        --   「346 号是不是他想要的那枚图」的地方（宏图标号与画面对不上时，只能靠这一行定位）。
+        if type(EVAL_DF_TEST_MACRO_TEX) == "function" then
+          local okIcon, tex = pcall(EVAL_DF_TEST_MACRO_TEX, 346)
+          if okIcon and type(tex) == "string" and tex ~= "" then
+            say("图标画法：346 号宏图标 → " .. tex)
+          else
+            say("图标画法：**346 号取不到**（接口不在/越界）⇒ 已退回文字「配」；可用 /eh go icons 采集真实图标清单核对")
+          end
+        end
+        say("左键 = 拖动窗口（不再弹属性窗）· 右键 = 打开该层属性配置")
+      else
+        EVAL_DF_ICONS_SET(not EVAL_DF_ICONS_ENABLED())
+      end
     -- ★★★1.74.3 接收诊断（用户报「队伍频道接收完方案不弹窗」）：接收开关 + 七个事件注册情况 + 最近真收到的事件名
     elseif msg == "go 分享事件" or msg == "go sharevents" or msg == "go 接收事件" then
       if type(EVAL_SHARE_RECV_PROBE) == "function" then
@@ -8576,6 +8658,23 @@ if type(SlashCmdList) == "table" then
       EVAL_HELP_CONFIG.bindDiag = out
       for _, s in ipairs(out) do say("DIAG " .. s) end
       say("★已写入 SavedVariables —— 请 /reload，然后我直接读文件（聊天框内容已存底）")
+    elseif msg == "go mapdbg" or msg == "go mapdbg pop" then
+      -- ★probe/worldmap-minimap 分支：地图插件开关链路诊断（弹窗未弹的取证）
+      say("— 地图插件开关诊断 —")
+      say("① 开关真值 EVAL_SMAP_ENABLED=" .. tostring(type(EVAL_SMAP_ENABLED) == "function" and EVAL_SMAP_ENABLED()))
+      say("② IsAddOnLoaded(EH_SimpleMap)="
+        .. tostring(type(IsAddOnLoaded) == "function" and IsAddOnLoaded("EH_SimpleMap")))
+      local okES, es = pcall(GetAddOnEnableState, "player", "EH_SimpleMap")
+      say("③ GetAddOnEnableState: ok=" .. tostring(okES) .. " v=" .. tostring(es))
+      say("④ 弹窗函数 EVAL_SMAP_RELOAD_ASK=" .. type(EVAL_SMAP_RELOAD_ASK))
+      if msg == "go mapdbg pop" then
+        if type(EVAL_SMAP_RELOAD_ASK) == "function" then
+          EVAL_SMAP_RELOAD_ASK()
+          say("⑤ 已试弹确认窗（屏幕上应出现「现在重载吗」弹窗；确定=自动 /reload）")
+        else
+          say("⑤ 弹窗函数不存在（Toolbox.lua 没载入新版？）")
+        end
+      end
     elseif msg == "go bind" then
       -- ★1.71.22 现状检查（**诊断用，不再做写入试验**）：派发链路现在是
       --   SetBinding(键, "ACTIONBUTTON<格>") + 接管 ActionButtonUp，所以这里只报「这条链路各环的现状」。
@@ -9614,6 +9713,16 @@ init:SetScript("OnEvent", function(a, b)
     -- ★1.74.23 稀有提醒转播：**必须在这里装**（AddOns 按目录名排序，EvalHelp(E) 先于 UnrealQuest(U)，
     --   载入期全局 UnrealQuest 还不存在）；对方缺席时如实记 mode=absent，不报错、不静默。
     if type(EVAL_RW_INSTALL) == "function" then pcall(EVAL_RW_INSTALL) end
+    -- ★★★1.74.30 框拖拽（tools/DragFrames.lua —— 从子插件整块搬进主插件工具模块）：
+    --   开关真值 = `EVAL_HELP_CONFIG.dragFrames.on` ⇒ **必须在这里**读（SavedVariables 要等 VARIABLES_LOADED）；
+    --   同时做：老存档（子插件 EH_DEBUGBOX_CFG.cust["[全局] 名"] 的 dx/dy/scale/alpha/hidden）一次性迁移、
+    --   建 2 秒定时复查 tick、按存档恢复 5 个目标的位置与属性。
+    if type(EVAL_DF_INSTALL) == "function" then pcall(EVAL_DF_INSTALL) end
+    -- ★★★1.74.34 图层特殊处理（tools/LayerFix.lua —— **独立工具模块**）：
+    --   这里是它与主插件之间**唯一**的接线点（用户要求：「只要加入嵌入点进行函数调用」）：
+    --   模块自己读存档子树 `EVAL_HELP_CONFIG.layerFix`、自己应用一次、自己武装**有界**复查窗口，
+    --   主插件只知道「有这么个安装入口」。★它**不受**框拖拽开关（dragFrames.on）影响，是独立的一条口径。
+    if type(EVAL_LF_INSTALL) == "function" then pcall(EVAL_LF_INSTALL) end
     -- 注册进出战斗事件（pcall 防御：事件名若不存在不会崩）
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_ENTERING_WORLD") -- ★1.74.31 进世界（载入期时钟到这里才开始走 ⇒ world 打点）
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_REGEN_DISABLED")

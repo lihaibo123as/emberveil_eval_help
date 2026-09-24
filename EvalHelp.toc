@@ -3,7 +3,7 @@
 ## Notes: 全职业施法工具：通用一键宏（/run EVAL_GO() 条件规则引擎）、案例模版（12 组 35 条）、方案分享、工具箱 / 数据检索 / 图标库、战斗信息UI、配置面板。
 ## Notes-zhCN: 同 Notes：通用一键宏（/run EVAL_GO()）、案例模版、方案分享、工具箱 / 数据检索 / 图标库、战斗信息UI、配置面板。
 ## Author: DSH
-## Version: 1.75.0
+## Version: 1.75.1
 ## X-Category: Class Tools
 ## SavedVariables: EVAL_HELP_CONFIG
 ## SavedVariablesPerCharacter: EVAL_HELP_CHAR
@@ -36,8 +36,11 @@ IconSem.lua
 IconBrowser.lua
 PetData.lua
 PetHelper.lua
+tools\SimpleMap.lua
 tools\IconGrid.lua
 tools\HunterHelper.lua
 tools\ConsumableHelper.lua
 tools\DismountHelper.lua
 tools\RareWatch.lua
+tools\DragFrames.lua
+tools\LayerFix.lua

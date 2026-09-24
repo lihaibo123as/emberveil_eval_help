@@ -1,5 +1,25 @@
 --[[ EvalHelp / tools/RareWatch.lua
 
+-- ★★★模块必须**自带**本地化取词（同 ConsumableHelper/DismountHelper/HunterHelper 写法）；
+--   项目里没有全局 `L`，裸调 `L(...)` 会被调用方的 pcall 吞掉（静默失效）。★1.74.35-3 MODULE L SCOPE CHECK 抓到的第 4 个文件。
+-- ★★★1.74.36-2：模块**必须自带** `say` / `logLine` —— 项目里这两个名字**只在 Core.lua / Toolbox.lua 里是 local**，
+--   模块里裸调得到的是全局 nil：轻则「如实播报」全部静默消失，重则整段代码在 pcall 里直接报错退出。
+--   走 Core.lua 末尾的全局桥：`EVAL_SAY = say` / `EVAL_LOGLINE = logLine`（与 ConsumableHelper 的 chSay 同一写法）。
+local function say(msg)
+  if type(EVAL_SAY) == "function" then pcall(EVAL_SAY, msg) return end
+  if type(DEFAULT_CHAT_FRAME) == "table" and DEFAULT_CHAT_FRAME.AddMessage then
+    pcall(DEFAULT_CHAT_FRAME.AddMessage, DEFAULT_CHAT_FRAME, tostring(msg))
+  end
+end
+local function logLine(msg)
+  if type(EVAL_LOGLINE) == "function" then pcall(EVAL_LOGLINE, tostring(msg)) end
+end
+
+local function L(k, ...)
+  if type(EVAL_L) == "function" then return EVAL_L(k, ...) end
+  return k
+end
+
 稀有提醒转播（**独立模块**，1.74.27 从 EvalHelp.lua 提取）：任务插件 UnrealQuest 发现稀有那一刻，
 在聊天框报一行（名字按品阶染色 + 可点）；点名字 = 一次 TargetByName 选中它，选不中**就报错**。
 

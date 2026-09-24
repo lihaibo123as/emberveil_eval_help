@@ -1,0 +1,9 @@
+## Interface: 11200
+## Title: EH_DebugBox |cff66ccff图层调试子插件|r
+## Notes: 独立子插件：图层调试面板（扫描/过滤/多选、缩放·透明·宽高·坐标、自定义存档）。
+## Author: DSH
+## Version: 0.4.0
+## X-Category: Map Tools
+## SavedVariables: EH_DEBUGBOX_CFG
+
+EH_DebugBox.lua

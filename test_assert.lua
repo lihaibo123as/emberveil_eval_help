@@ -2,6 +2,17 @@
 local function eq(a, b, msg)
   if a ~= b then error(("ASSERT FAIL [%s]: got=%s want=%s"):format(msg, tostring(a), tostring(b)), 2) end
 end
+-- ★★★1.74.34 工具模块自带的断言文件（tests/tools/*.lua）要用的**同一个** eq：
+--   把它挂到全局桥上一份 —— 兄弟文件里 `local eq = EVAL_TEST_EQ` 即可，失败格式与其它组**逐字一致**
+--   （各写一套判定 = 两套口径，早晚打架；这也是「测试代码随模块走」这条规范能成立的前提）。
+EVAL_TEST_EQ = eq
+-- 工具模块测试文件的「跑到底」握手（详见 tests/tools/*.lua 文件头 ③）：
+--   harness（test_engine.js）在加载完所有 tests/tools/*.lua 后，用它和文件数对账 —— 少跑一个文件就是**整组断言静默消失**。
+EVAL_TEST_MOD_N, EVAL_TEST_MOD_NAMES = 0, {}
+function EVAL_TEST_MOD_DONE(name)
+  EVAL_TEST_MOD_N = EVAL_TEST_MOD_N + 1
+  table.insert(EVAL_TEST_MOD_NAMES, tostring(name))
+end
 
 -- 1) 文本解析
 local g = EVAL_PARSE_CONDS("目标职业:战士/法师")
@@ -5549,11 +5560,12 @@ do
   eq(stEm.state, "empty", "★★接口在但一枚都没有 → empty")
   EVAL_IB_REFRESH()
   eq(EVAL_IB_TEST_STATUS_TEXT(), L84["IB_EMPTY"], "★★状态行如实说明「接口在但没取到」")
-  -- ★Tab 名单：必须真的有 6 个（1.73.0 起新增「抓宠帮手」），标签读**真实按钮文本**
+  -- ★Tab 名单：必须真的有 7 个（1.73.0 起新增「抓宠帮手」；1.74.29 起新增「子插件」），标签读**真实按钮文本**
   local names84 = EVAL_TEST_CFG_TAB_NAMES()
-  eq(table.getn(names84), 6, "★★配置窗现在有 6 个 Tab")
+  eq(table.getn(names84), 7, "★★配置窗现在有 7 个 Tab（1.74.29 新增「子插件」）")
   eq(names84[5], L84["TAB_ICONS"], "★★第 5 个 Tab 的标签 = 语言包 TAB_ICONS")
   eq(names84[6], L84["TAB_PET"], "★★第 6 个 Tab 的标签 = 语言包 TAB_PET（抓宠帮手）")
+  eq(names84[7], L84["TAB_PLUGINS"], "★★第 7 个 Tab 的标签 = 语言包 TAB_PLUGINS（子插件）")
   -- ★「取失败」要如实记账（不是静默当 0）：第 2 项给个非字符串 → 桩按取失败处理
   TEST.macroIcons = { "Spell_Fire_One", false, "Spell_Fire_Three" }
   EVAL_IB_TEST_RESET()
@@ -8787,8 +8799,32 @@ do
   eq(lay120.colX[2], lay120.colX[1] + lay120.colW + lay120.colGap, "②右列起点 = 左列右边界 + 列缝")
   eq(lay120.pool, lay120.rowsPerCol * 2, "②行池 = 每列行数 × 列数（" .. tostring(lay120.pool) .. "）")
   eq(lay120.rowsL > 0 and lay120.rowsR > 0, true, "②★★两列都真的有内容（" .. tostring(lay120.rowsL) .. "+" .. tostring(lay120.rowsR) .. "）")
-  eq(lay120.rows[lay120.rowsPerCol + 1] ~= nil and lay120.rows[lay120.rowsPerCol + 1].kind == "h", true,
-     "②★★★右列第一格是**组标题**（组不被拆到两列）")
+  -- ★★★1.74.30 需求改向（滚动改成**连续窗口**）：切点规则从「永远落在组边界」改成
+  --   「**窗口内有合法组边界 → 优先落边界**；没有 → 硬切在每列行数」——
+  --   旧断言写死「右列第一格必是组标题」属**分页语义**，在窗口语义下必然失败：
+  --   本窗口（off=0、容量 26）里合法的组边界只有正中间 i=13 这一处，而模型第 14 条是普通行
+  --   ⇒ 这里只能硬切。按新语义改写为「切点要么是合法组边界、要么正好是每列行数」，并给出**哪一类**的实测。
+  local mB120 = EVAL_TEST_TB_ROWS()
+  local legalB120 = {}
+  for i = 1, lay120.pageN - 1 do
+    local nxtB = mB120[lay120.off + i + 1]
+    if type(nxtB) == "table" and nxtB.t == "h"
+       and i <= lay120.rowsPerCol and (lay120.pageN - i) <= lay120.rowsPerCol then
+      table.insert(legalB120, i)
+    end
+  end
+  local hitBound120 = false
+  for _, cc in ipairs(legalB120) do if cc == lay120.cut then hitBound120 = true end end
+  if table.getn(legalB120) > 0 then
+    eq(hitBound120, true, "②★★★窗口内有合法组边界 ⇒ 切点**优先落在组边界**（候选 " ..
+       table.concat(legalB120, ",") .. "，实际 cut=" .. tostring(lay120.cut) .. "）")
+  else
+    eq(lay120.cut, lay120.rowsPerCol,
+       "②★★★窗口内没有合法组边界 ⇒ **硬切在每列行数**（cut=" .. tostring(lay120.cut) ..
+       " == rowsPerCol=" .. tostring(lay120.rowsPerCol) .. "；连续窗口滚动下组允许跨列边界）")
+    eq(lay120.rows[lay120.rowsPerCol + 1] ~= nil and lay120.rows[lay120.rowsPerCol + 1].kind ~= nil, true,
+       "②★★★硬切也必须是「右列第一格真的有内容」（不是空一列）")
+  end
   -- ③ 列不相交 + 每个控件在本列内 + 条目不重不漏
   local bad120, seen120, cnt120 = "", {}, 0
   local function rightOf(rect)
@@ -8842,22 +8878,31 @@ do
   eq(badAli120, "", "③b★★★右侧按键与**左侧名称同顶边**（容差 1px）: " .. badAli120)
   --  ★反向哨兵：这条判据必须**真的量到控件**（一个都没量到就是空跑——本项目「写了钩子没人调用等于没有」）
   eq(nAli120 >= 2, true, "③b★对齐判据真的量到了行内按键（量到 " .. tostring(nAli120) .. " 个）")
-  eq(cnt120, lay120.pageN, "③★★两列显示的条目数 = 本页条数（" .. tostring(cnt120) .. "）")
-  -- ★1.74.27 起工具箱模型 28 条 > 每页容量 26（新增「稀有提醒」组两行）→ 分页**真的生效**：
-  --   「一页装下」这类断言不能再写死，改成按**容量**（每列行数 × 列数，读真实版式）动态判。
+  eq(cnt120, lay120.pageN, "③★★两列显示的条目数 = 本窗口条数（" .. tostring(cnt120) .. "）")
+  -- ★1.74.27 起工具箱模型 31 条 > 一屏容量 26（新增「稀有提醒」组两行）→ 滚动**真的生效**：
+  --   「一屏装下」这类断言不能再写死，改成按**容量**（每列行数 × 列数，读真实版式）动态判。
   local cap120 = lay120.rowsPerCol * lay120.cols
   local allN120 = table.getn(EVAL_TEST_TB_ROWS())
-  eq(lay120.pageN, math.min(allN120, cap120),
-     "③★本页条目数 = min(模型总数, 每页容量)（" .. tostring(allN120) .. " / 容量 " .. tostring(cap120) .. "）")
+  -- ★★★1.74.30 窗口语义（取代 1.74.29 的「在组边界处收缩」）：窗口容量是**恒定值** ——
+  --   本窗口条数 = min(n − off, cap)，不再为了「组不拆」少装几行（那正是丢数据/跳页的来源）。
+  eq(lay120.pageN == math.min(allN120 - lay120.off, cap120), true,
+     "③★本窗口条数 = min(n − off, 一屏容量)（" .. tostring(lay120.pageN) .. " = min(" ..
+     tostring(allN120 - lay120.off) .. ", " .. tostring(cap120) .. ")；容量不再收缩）")
+  -- ③a★旧断言「本页末尾必在组边界上」是**分页语义**，连续窗口下不再成立（组允许跨列/跨屏边界）。
+  --   按新语义改写：**窗口起点是行偏移 ⇒ 相邻两屏重叠**（下一屏从 off+1 起，绝不跳过条目）——
+  --   这条与组 201 的「不丢数据」判据同源，这里只钉「off 的语义与上界」。
+  eq(lay120.off <= lay120.maxOff, true,
+     "③a★★窗口起点在合法范围内（off=" .. tostring(lay120.off) .. " ≤ maxOff=" .. tostring(lay120.maxOff) .. "）")
+  eq(lay120.maxOff, math.max(0, allN120 - cap120), true,
+     "③a★★maxOff = max(0, n − cap)（不丢数据的必要条件：末尾也能整屏对齐）")
   local tbs120 = EVAL_TB_TEST_SCROLL()
-  if allN120 > cap120 then
-    eq(tbs120.indicator ~= nil and tbs120.indicator.shown == true, true,
-       "④★★模型超过一页（" .. tostring(allN120) .. " > " .. tostring(cap120) .. "）→ 计数行显示（分页真的生效）")
-  else
-    eq(tbs120.indicator == nil or tbs120.indicator.shown == false, true,
-       "④★★全部装得下 → 计数行隐藏（退回单列会变成 13/页、这行就会冒出来）")
-  end
-  eq(EVAL_TB_TEST_OFF(), 0, "④停在第 1 页（只有一页）")
+  -- ★1.74.30 计数器改成**常显**（窗口语义下位置任何时候都有意义）：不再「一屏装得下就 Hide」
+  eq(tbs120.indicator ~= nil and tbs120.indicator.shown == true, true,
+     "④★★计数行常显（窗口语义：起–止 / 总数，位置在任何时候都有意义）")
+  eq(tbs120.indicator ~= nil and tostring(tbs120.indicator.text) ==
+       string.format("%d-%d / %d", lay120.off + 1, math.min(allN120, lay120.off + cap120), allN120), true,
+     "④★★计数文本 = `起–止 / 总数`（实测「" .. tostring(tbs120.indicator and tbs120.indicator.text) .. "」）")
+  eq(EVAL_TB_TEST_OFF(), 0, "④停在窗口起点（off=0）")
   -- ⑤ 勾选行仍然可用：拿真实 [添加] 按钮（两列映射没错位）
   local m120 = EVAL_TEST_TB_ROWS()
   local buyKey, buyShown = nil, 0
@@ -8870,11 +8915,13 @@ do
   --    ① 装饰剥干净（标题只出现一次）；② 估算宽度**填满本列但不溢出**；③ 列宽变大 → 分隔条更长；
   --    ④ 渲染出的真文本 == 纯函数输出（UI 与断言同源，且确实被重写过）。
   do
-    local hdrLab133 = EVAL_L("TB_H_QNOTIFY")
+    -- ★★★1.74.29：模型重排后（UI 工具组置顶）原来那个组已在第 2 页 → 改用**首页第一组**的标题（判据意图不变：UI 与断言同源）
+    local hdrLab133 = EVAL_L("TB_H_UITOOLS")
+    local hdrName133 = "UI 工具" -- ★纯函数判据用的字面（不用语言包自证）
     local h300 = EVAL_TB_HDR_TEXT(hdrLab133, 300)
     local h400 = EVAL_TB_HDR_TEXT(hdrLab133, 400)
-    eq(string.find(h300, "任务·通知", 1, true) ~= nil, true, "⑨★★★标题栏里有标题（装饰剥掉后只剩一份）：" .. tostring(h300))
-    local _, cntT133 = string.gsub(h300, "任务·通知", "")
+    eq(string.find(h300, hdrName133, 1, true) ~= nil, true, "⑨★★★标题栏里有标题（装饰剥掉后只剩一份）：" .. tostring(h300))
+    local _, cntT133 = string.gsub(h300, hdrName133, "")
     eq(cntT133, 1, "⑨★★标题在分隔条里只出现一次（没有叠成两份）")
     eq(EVAL_TEST_TB_HDR_EST(h300) <= 300, true,
        "⑨★★★分隔条**不溢出**列宽（估算 " .. tostring(EVAL_TEST_TB_HDR_EST(h300)) .. " ≤ 300）")
@@ -8885,7 +8932,7 @@ do
     eq(string.len(h400) > string.len(h300), true, "⑨★★★列宽变大 → 分隔条更长（宽度自适应）")
     --  ★「剥装饰」必须**承重**：带装饰的标签（语言包原串）与纯标题必须算出**同一条**分隔条 ——
     --    只比「含标题」的话，不剥装饰（标题里再套一层破折号）也能过（M246 实测就是这种漏网）。
-    eq(EVAL_TB_HDR_TEXT("任务·通知", 300), h300, "⑨★★★带装饰的标签与纯标题算出**同一条**分隔条（剥装饰承重）")
+    eq(EVAL_TB_HDR_TEXT("——— " .. hdrName133 .. " ———", 300), h300, "⑨★★★带装饰的标签与纯标题算出**同一条**分隔条（剥装饰承重）")
     --  渲染侧同源：真实控件的文本 == 纯函数按**同一列宽**算出来的那份
     local rendered133 = EVAL_TEST_TB_HDR_TEXT(hdrLab133)
     eq(rendered133, EVAL_TB_HDR_TEXT(hdrLab133, lay120.colW),
@@ -8935,8 +8982,9 @@ do
   end
 
   EVAL_HELP_CFG_SETTAB(savedTab120) -- 还原 Tab（跨用例状态残留是本项目老坑）
-  print(string.format("  工具箱两列：%d 列 / 列宽 %d / 列缝 %d / 本页 %d 条 = 左 %d + 右 %d（右列从组标题起）",
-    lay120.cols, lay120.colW, lay120.colGap, lay120.pageN, lay120.rowsL, lay120.rowsR))
+  -- ★1.74.30 打印文案跟着语义改：off 是**行偏移**、窗口容量恒定；切点「有组边界则优先、否则硬切」
+  print(string.format("  工具箱两列（连续窗口）：%d 列 / 列宽 %d / 列缝 %d / 窗口起点 off=%d / 本窗口 %d 条 = 左 %d + 右 %d",
+    lay120.cols, lay120.colW, lay120.colGap, lay120.off, lay120.pageN, lay120.rowsL, lay120.rowsR))
 end
 
 -- 134) ★★★1.73.31 用户报「自动购买的弹窗点击不到」（截图里工具箱行文字/按钮压在弹窗上）——
@@ -13861,15 +13909,37 @@ do
   EVAL_HH_TEST_RESET_TIMERS()
   EVAL_HH_FEED()
   EVAL_HH_STEP(3000)
-  EVAL_HH_STEP(3000.2)
-  eq(TEST.pickupCalls, 1, "⑦前置：待选态已到 → 点了一次包")
+  -- ★★1.74.29：新增防踢线闸门要求「两次服务器动作不同帧且间隔 ≥ 0.35s」→ 测试推进 0.6s
+  EVAL_HH_STEP(3000.6)
+  eq(TEST.pickupCalls, 1, "⑦前置：待选态已到 → 点了一次包（隔离足够，闸门放行）")
   TEST.cursorItem = true
   TEST.targeting = nil
-  EVAL_HH_STEP(3000.5)
+  EVAL_HH_STEP(3000.9)
   eq(TEST.clearCursorCalls, 1, "⑦★★★不是它能吃的 → ClearCursor 放回原格（绝不把玩家食物留在光标上）")
   eq(EVAL_TEST_HH_STATE().phase, "idle", "⑦★失败后也回 idle")
   eq(TEST.cursorItem, false, "⑦★桩里物品确实回到包里了（还原不是嘴上说说）")
 
+  -- ★★1.74.29 新增组：防踢线闸门的**正确语义**（用户实测「一直被拦截」后修正）
+  --   a) 同一帧两个动作 → 拦（反踢线核心）
+  --   b) 同一笔的 pick 紧跟自己的 cast（**不同帧**、间隔很小）→ **放行**（否则正常喂食次次被拦）
+  TEST.chat = nil
+  TEST.targeting, TEST.cursorItem = 1, false
+  TEST.pickupCalls, TEST.clearCursorCalls = 0, 0
+  EVAL_HH_TEST_RESET_TIMERS()
+  EVAL_HH_FEED()
+  EVAL_HH_STEP(5000)
+  EVAL_HH_STEP(5000) -- ★同一刻（同帧）→ pick 被拦
+  eq(TEST.pickupCalls, 0, "★★延迟 a：同一刻点包 → 先不发（等 0.2s），不拒绝")
+  local actsA = EVAL_HH_TEST_ACTS()
+  eq((actsA.deferred or 0) >= 1, true, "★审计：延迟次数已记账（新语义：不凍结、只延迟）")
+  TEST.chat = nil
+  TEST.targeting, TEST.cursorItem = 1, false
+  TEST.pickupCalls = 0
+  EVAL_HH_TEST_RESET_TIMERS()
+  EVAL_HH_FEED()
+  EVAL_HH_STEP(6000)
+  EVAL_HH_STEP(6000.3) -- ★过了 0.2s 间隔 → 同一笔的 pick 发出
+  eq(TEST.pickupCalls, 1, "★★延迟 b：过了 0.2s 间隔 → pick 正常发出（不再拦死喂食）")
   -- ⑧ 找不到食物 → 连技能都不施放
   TEST.chat = nil
   TEST.bags = {}
@@ -13985,6 +14055,7 @@ do
   local okLeave176, fnLeave176 = pcall(wipBtn176.GetScript, wipBtn176, "OnLeave")
   eq(okLeave176 and type(fnLeave176) == "function", true, "⑭★离开时收起 tooltip（OnLeave 在位）")
   -- 几何：贴**本列右边缘**（全用距左边口径；列右 = colX[col] + colW）
+  EVAL_TB_TEST_GOTO("feedPet") -- ★★1.74.29：模型重排后 feedPet 在第 2 页 → 快照前先翻页（像用户一样）
   local lay176 = EVAL_TB_TEST_LAYOUT()
   local rowRect176 = nil
   for k = 1, table.getn(lay176.rows or {}) do
@@ -14803,6 +14874,31 @@ do
   if fails0 == TESTASSERT_FAILS then print("GROUP 180 (分享场景描述): PASS") end
 end
 end
+-- ===== 组 200（1.74.29）：工具箱 [重置] 的悬停 tooltip 必须**真的出内容** =====
+-- 背景：用户报「自定义信息没显示」——原写的 subTipDraw/subTipHide 不存在，被 type() 守卫**静默跳过**。
+do
+  EVAL_HELP_CFG_SETTAB(3)
+  EVAL_TB_TEST_GOTO("dbgDrag")
+  local btn200 = EVAL_TEST_TB_CLR_FOR("dbgDrag")
+  eq(btn200 ~= nil, true, "组200前置：拿到「图层拖拽柄」行的右侧 [重置] 按钮")
+  if btn200 then
+    local fn200 = btn200:GetScript("OnEnter")
+    eq(type(fn200) == "function", true, "组200★★[重置] 真的挂了 OnEnter 脚本")
+    TEST.tipLines = nil
+    if type(fn200) == "function" then pcall(fn200) end
+    local txt200 = ""
+    for _, ln in ipairs(TEST.tipLines or {}) do txt200 = txt200 .. tostring(ln.text or "") .. "\n" end
+    eq(string.len(txt200) > 0, true, "组200★★★悬停后 tooltip 真的有行（而不是静默什么都没有）")
+    eq(string.find(txt200, EVAL_L("TB_LDDRAG_RESET_TIP"), 1, true) ~= nil, true,
+       "组200★★tooltip 第一行 = 重置说明（与语言包同源）")
+    eq(string.find(txt200, "子插件未载入", 1, true) ~= nil
+       or string.find(txt200, "自定义", 1, true) ~= nil, true,
+       "组200★★有「自定义清单」或「子插件未载入」的如实说明（不空转）")
+    eq(type(btn200:GetScript("OnLeave")) == "function", true, "组200★离开时收起 tooltip（OnLeave 在位）")
+  end
+  print("  [重置] tooltip：真实 OnEnter → GameTooltip 出行 + 与语言包同源 + OnLeave 在位（组 200）")
+end
+
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")
 print("ALL TESTS PASS")
@@ -15335,7 +15431,8 @@ do
   -- ③ 2s 内的下一笔不被执行：走一笔，1.9s 后再走 —— 还是只有一笔开始执行
   EVAL_HH_STEP(6000)
   eq(EVAL_TEST_HH_STATE().phase, "aim", "③前置：第一笔开始执行（进入 aim）")
-  TEST.targeting = 1 EVAL_HH_STEP(6000.1) TEST.targeting = nil EVAL_HH_STEP(6000.2) -- 喂完第一笔
+  -- ★★1.74.29：防踢线闸门要求两次动作间隔 ≥ 0.35s → 点包改到 6000.5（仍 < 2s，后面的「下一笔不许执行」照样成立）
+  TEST.targeting = 1 EVAL_HH_STEP(6000.5) TEST.targeting = nil EVAL_HH_STEP(6000.6) -- 喂完第一笔
   EVAL_HH_STEP(6001.9)
   eq(EVAL_TEST_HH_STATE().hits, hitsBase186 + 1, "③★★1.9s 时**还是只有一笔**（下一笔没到 2s 不许执行）")
   -- ④ 过 2s 才放行
@@ -15527,9 +15624,10 @@ do
   TEST.time = 7200
   EVAL_HH_FEED()
   EVAL_HH_STEP(7200)
-  TEST.targeting = 1 EVAL_HH_STEP(7200.1) TEST.targeting = nil EVAL_HH_STEP(7200.2)
+  -- ★★1.74.29：闸门要求两次动作间隔 ≥ 0.35s → 点包改到 7200.5
+  TEST.targeting = 1 EVAL_HH_STEP(7200.5) TEST.targeting = nil EVAL_HH_STEP(7200.6)
   eq(EVAL_TEST_HH_STATE().cdTotal, 1.5, "④★★喂食成功后显示倒计时（GCD 1.5s）")
-  eq(EVAL_TEST_HH_STATE().cdUntil, 7200.2 + 1.5, "④★CD 截止时刻 = 喂完那一刻 + 1.5s")
+  eq(EVAL_TEST_HH_STATE().cdUntil, 7200.6 + 1.5, "④★CD 截止时刻 = 喂完那一刻 + 1.5s")
 
   -- ⑤ CD 结束 → 文字消失 + OnUpdate 摘掉
   --   ★主图标得先建起来（CD 文字挂在主图标上；开关是开的，EVAL_CH_ENSURE 才会建）。
@@ -15637,16 +15735,17 @@ do
   TEST.time = 8100
   EVAL_HH_FEED()
   EVAL_HH_STEP(8100)
-  TEST.targeting = 1 EVAL_HH_STEP(8100.1) TEST.targeting = nil EVAL_HH_STEP(8100.2) -- 喂完第一笔（CD 1.5s）
+  -- ★★1.74.29：闸门要求两次动作间隔 ≥ 0.35s → 点包改到 8100.5（喂完刻 = 8100.6，CD 截止 8102.1）
+  TEST.targeting = 1 EVAL_HH_STEP(8100.5) TEST.targeting = nil EVAL_HH_STEP(8100.6) -- 喂完第一笔（CD 1.5s）
   local qnBase189 = EVAL_TEST_HH_STATE().qn
-  TEST.time = 8100.5 -- CD 才过 0.3s（1.5s CD 才走 0.3s）
+  TEST.time = 8101.0 -- ★CD 只过 0.4s（< 1.5s）→ 应被拦
   local ok189b = EVAL_HH_FEED()
   eq(ok189b, false, "③★★★喂食 CD 没转好时再点 → **拦截**（返回 false）")
   eq(EVAL_TEST_HH_STATE().qn, qnBase189, "③★★★拦截 = **没入队**（队列深度没变，不是入队后干等）")
   -- ④ 喂食 CD 时遮盖显示
   EVAL_HH_CD_REFRESH()
   eq(EVAL_TEST_HH_STATE().cdMaskShown, true, "④★★喂食 CD 存在 → **遮盖显示**")
-  TEST.time = 8100.2 + 2.0 -- CD 结束
+  TEST.time = 8100.6 + 2.0 -- CD 结束
   EVAL_HH_CD_REFRESH()
   eq(EVAL_TEST_HH_STATE().cdMaskShown, false, "④★★喂食 CD 结束 → **遮盖收起**")
 
@@ -16816,24 +16915,24 @@ do
   TEST.hasPet = true
   TEST.happiness = 3
   pcall(EVAL_HH_ENSURE) -- 懒建：建帧那一下就会按快乐度上色
-  EVAL_HH_HAP_BORDER()
+  EVAL_HH_PETDECOR()
   local hap188 = EVAL_TEST_HH_HAP()
   eq(hap188.n == 4, true, "④★边框就是主图标既有那 4 条 1px 亮边（实际 " .. tostring(hap188.n) .. "）")
-  eq(type(hap188.rgb) == "table" and (hap188.rgb[2] or 0) >= 0.95 and (hap188.rgb[1] or 1) <= 0.4, true,
+  eq(type(hap188.rgb) == "table" and (hap188.rgb[2] or 0) >= 0.95 and (hap188.rgb[1] or 1) <= 0.5, true,
      "④★★★开心（档位 3）→ 边框**亮绿**：g=" .. tostring(hap188.rgb and hap188.rgb[2])
      .. " r=" .. tostring(hap188.rgb and hap188.rgb[1]))
   TEST.happiness = 2
-  EVAL_HH_HAP_BORDER()
+  EVAL_HH_PETDECOR()
   local hap2_188 = EVAL_TEST_HH_HAP()
   eq(type(hap2_188.rgb) == "table" and (hap2_188.rgb[2] or 0) > 0.6 and (hap2_188.rgb[2] or 0) < 0.95, true,
      "④★一般（档位 2）→ 金边（与宠物信息行同一档配色）")
   TEST.happiness = 1
-  EVAL_HH_HAP_BORDER()
+  EVAL_HH_PETDECOR()
   local hap1_188 = EVAL_TEST_HH_HAP()
   eq(type(hap1_188.rgb) == "table" and (hap1_188.rgb[1] or 0) >= 0.9 and (hap1_188.rgb[2] or 1) <= 0.6, true,
      "④★不开心（档位 1）→ 红边")
   TEST.hasPet = false
-  EVAL_HH_HAP_BORDER()
+  EVAL_HH_PETDECOR()
   local hap0_188 = EVAL_TEST_HH_HAP()
   eq(type(hap0_188.rgb) == "table" and (hap0_188.rgb[2] or 0) > 0.6 and (hap0_188.rgb[2] or 0) < 0.95, true,
      "④★★反向哨兵：没有宠物 → 退回默认金边（不硬编「开心」）")
@@ -18778,4 +18877,967 @@ do
   eq(EVAL_DS_DETAIL("chain", 9999), nil, "⑦越界详情如实 nil")
   if fails0 == TESTASSERT_FAILS then print("GROUP 191 (任务线检索): PASS") end
 end
+-- ===== 组 198（1.74.29）：宠物伤害% = 快乐度三档**固定文字** =====
+-- 用户明确定：「直接三个类型固定文字显示 75/100/125%」——
+-- 不再读 GetPetHappiness 第 2 返回值（本客户端实测是坏值 -1258291200），改按档位映射。
+do
+  local H = EVAL_HH_TEST_HAPPYDMG
+  eq(H(1), 75, "★不开心(1) → 75%")
+  eq(H(2), 100, "★一般(2) → 100%")
+  eq(H(3), 125, "★快乐(3) → 125%")
+  eq(H(0), nil, "★档位 0（越界）→ nil（不编数）")
+  eq(H(4), nil, "★档位 4（越界）→ nil")
+  eq(H(nil), nil, "★nil → nil")
+  eq(H("3"), nil, "★字符串 → nil（不靠隐式转换）")
+  print("  宠物伤害%：按快乐度三档固定 75/100/125（越界/nil 一律不显示）（组 198）")
+end
+
+-- ===== 组 201（1.74.30）：工具箱滚动 = **连续窗口**（照抓宠助手 PetHelper 的范式）=====
+-- 用户要求（原话要点）：「把工具箱 Tab 的列表滚动从『整页跳 + 变长页』改成抓宠助手那种**连续窗口滚动**」——
+--   要修两件事：① 滚动体验不流畅（当前是整页跳）；② **会整页丢失数据**（分页在步长/夹取不一致时会跳过条目）。
+-- 新语义（生产实现 = Toolbox.lua）：
+--   · `TB.off` = **行偏移**（窗口起点，0 基），合法范围 `0 ≤ off ≤ max(0, n − cap)`，`cap` = 每列行数 × 列数；
+--   · 滚轮 = **逐行**（方向走唯一来源 EVAL_WHEEL_DIR，幅度已被归一成 ±1）+ 双侧夹取；只有**本 Tab 激活**才消费，
+--     否则把事件**链式转发**给原脚本（不吞别人的事件）；
+--   · [上翻]/[下翻] 步长 = 一屏容量 cap，但一律**夹取**到 maxOff（到顶/到底再点也不越界）；
+--   · 两列切分：窗口内有合法组边界 → 取两列行数差最小者；没有 → **硬切在每列行数**（不再收缩页容量）；
+--   · 计数器 = `起–止 / 总数`（起 = off+1、止 = min(n, off+cap)），空列表走**既有**语言键。
+-- ★★核心判据 = ②「不丢数据」：从 off=0 **逐行**滚到 maxOff，把每一步**真正铺在行控件上**的条目下标取并集，
+--   必须恰好 == 1..n。★读的是刷新记在行上的 `r.idx`（生产真值），**不在测试里**用 off/pi 自己拼一遍
+--   （本项目铁律：读值口复刻映射逻辑 = 变异存活）。
+do
+  local savedTab201 = EVAL_HELP_CFG_TAB()
+  EVAL_HELP_CFG_SETTAB(3) -- 工具箱 Tab（滚轮链式分派按 Tab 序号判，见 Toolbox 的 TB_TAB）
+  local m201 = EVAL_TEST_TB_ROWS()
+  local n201 = table.getn(m201)
+  local firstLab201 = m201[1] and m201[1].label or nil
+  eq(type(firstLab201) == "string" and string.len(firstLab201) > 0, true, "①前置：读得到模型第一行（组标题）的标签")
+  eq(EVAL_TB_TEST_GOTO(firstLab201), true, "①前置：把窗口起点复位到模型开头")
+  local layA201 = EVAL_TB_TEST_LAYOUT()
+  eq(layA201.off, 0, "①前置：窗口起点 off = 0（实测 " .. tostring(layA201.off) .. "）")
+  eq(layA201.capN, layA201.rowsPerCol * layA201.cols, "①前置：一屏容量 cap = 每列行数 × 列数（" ..
+     tostring(layA201.capN) .. "）")
+
+  -- ① 逐行滚动：一次滚轮只走一格，且**紧邻的下一条**立刻进入窗口（无跳条）
+  eq(EVAL_TB_TEST_WHEEL(nil, -1), true,
+     "①前置：点火**本 Tab 自己的**滚轮处理器（不是 root 链上最外层那个 —— 那个会被别的 Tab 先消费）")
+  local layB201 = EVAL_TB_TEST_LAYOUT()
+  eq(layB201.off, layA201.off + 1, "①★★下滚一格 → 窗口起点 **+1**（逐行，不是整页跳）：" ..
+     tostring(layA201.off) .. " → " .. tostring(layB201.off))
+  local newly201 = layA201.off + layA201.capN + 1 -- 上窗口末尾的**下一条**
+  local newSeen201 = false
+  for k = 1, table.getn(layB201.rows or {}) do
+    local rr = layB201.rows[k]
+    if rr and rr.idx == newly201 then newSeen201 = true end
+  end
+  eq((newly201 > n201) or newSeen201, true, "①★★★窗口起点 +1 后，**紧邻的下一条**（#" .. tostring(newly201) ..
+     "）立刻进入窗口（这是「连续」的定义：每一步都能到达下一条）")
+  EVAL_TB_TEST_WHEEL(nil, 1) -- 反向也要验（只验一个方向 ⇒ 方向写反照样绿）
+  eq(EVAL_TB_TEST_OFF(), layA201.off, "①★★上滚一格 → 回到原起点（双向都逐行）")
+
+  -- ② 核心判据·不丢数据（滚轮路径）
+  local maxOff201, cap201 = layA201.maxOff, layA201.capN
+  eq(maxOff201 > 0, true, "②前置：模型 " .. tostring(n201) .. " 条 > 一屏容量 " .. tostring(cap201) ..
+     " ⇒ maxOff = " .. tostring(maxOff201) .. " > 0（否则本判据会空跑）")
+  local seen201, badStep201 = {}, ""
+  local function harvest201(target)
+    local L = EVAL_TB_TEST_LAYOUT()
+    for k = 1, table.getn(L.rows or {}) do
+      local rr = L.rows[k]
+      if rr and rr.idx then target[rr.idx] = true end
+    end
+    return L
+  end
+  harvest201(seen201) -- 起点窗口也收进并集
+  local steps201 = 0
+  for i = 1, maxOff201 + 4 do
+    local before = EVAL_TB_TEST_OFF()
+    EVAL_TB_TEST_WHEEL(nil, -1)
+    local L = harvest201(seen201)
+    steps201 = steps201 + 1
+    local want = before + 1
+    if want > maxOff201 then want = maxOff201 end
+    if L.off ~= want then
+      badStep201 = badStep201 .. "第" .. tostring(i) .. "步 " .. tostring(before) .. "→" .. tostring(L.off) ..
+                    "（应 " .. tostring(want) .. "） "
+    end
+  end
+  eq(badStep201, "", "②★★每一步都「逐行 + 夹取」（到 maxOff 后不再前进）: " .. badStep201)
+  eq(EVAL_TB_TEST_OFF(), maxOff201, "②★下滚到底 → 停在 maxOff（" .. tostring(maxOff201) .. "）")
+  local union201, over201, missing201 = 0, 0, ""
+  for k in pairs(seen201) do
+    if k > n201 then over201 = over201 + 1 else union201 = union201 + 1 end
+  end
+  for i = 1, n201 do if not seen201[i] then missing201 = missing201 .. tostring(i) .. " " end end
+  eq(over201, 0, "②★★反向哨兵：并集里没有 idx > n 的越界条目（越界 " .. tostring(over201) .. " 条）")
+  eq(union201, n201, "②★★★【核心判据·不丢数据】从 off=0 逐行滚到 maxOff（" .. tostring(steps201) ..
+     " 步），出现过的条目下标并集 = 1..n（实测 " .. tostring(union201) .. "/" .. tostring(n201) ..
+     "；缺：" .. (missing201 == "" and "无" or missing201) .. "）")
+
+  -- ②c 按钮路径同样不丢数据（步长 = cap + 夹取 ⇒ 窗口仍然重叠）
+  eq(EVAL_TB_TEST_GOTO(firstLab201), true, "②c前置：窗口起点复位 0")
+  local seenBtn201, clicks201 = {}, 0
+  harvest201(seenBtn201)
+  for _ = 1, 20 do
+    local before = EVAL_TB_TEST_OFF()
+    eq(EVAL_TB_TEST_SCROLL_CLICK("dn"), true, "②c★点 [下翻]（真实 OnClick）")
+    harvest201(seenBtn201)
+    clicks201 = clicks201 + 1
+    if EVAL_TB_TEST_OFF() == before then break end
+  end
+  local unionBtn201 = 0
+  for k in pairs(seenBtn201) do if k <= n201 then unionBtn201 = unionBtn201 + 1 end end
+  eq(unionBtn201, n201, "②c★★【按钮路径也不丢数据】连点 [下翻] 得到的窗口并集 = 1..n（实测 " ..
+     tostring(unionBtn201) .. "/" .. tostring(n201) .. "，点了 " .. tostring(clicks201) .. " 次）")
+
+  -- ③ 越界夹取（两侧都不越界）+ 末尾可达
+  for _ = 1, 60 do EVAL_TB_TEST_WHEEL(nil, 1) end
+  eq(EVAL_TB_TEST_OFF(), 0, "③★★一直上滚 → 夹取在 0（不越界、不出现负数）")
+  for _ = 1, 60 do EVAL_TB_TEST_WHEEL(nil, -1) end
+  eq(EVAL_TB_TEST_OFF(), maxOff201, "③★★一直下滚 → 夹取在 maxOff（= n − cap = " .. tostring(maxOff201) .. "）")
+  local layTail201 = EVAL_TB_TEST_LAYOUT()
+  eq(layTail201.off + layTail201.pageN, n201, "③★★★末尾窗口恰好停在最后一条（尾部能整屏对齐 ⇒ 最后一条真的到得了）")
+  -- ③b 按钮：步长 = 一屏容量、夹取到 maxOff；到顶/到底再点仍可用但不越界
+  eq(EVAL_TB_TEST_GOTO(firstLab201), true, "③b前置：窗口起点复位 0")
+  eq(EVAL_TB_TEST_SCROLL_CLICK("dn"), true, "③b★点 [下翻]")
+  eq(EVAL_TB_TEST_OFF(), math.min(cap201, maxOff201), "③b★★[下翻] 步长 = 一屏容量并**夹取**（实测 " ..
+     tostring(EVAL_TB_TEST_OFF()) .. "，cap =" .. tostring(cap201) .. "、n − cap =" .. tostring(maxOff201) .. "）")
+  EVAL_TB_TEST_SCROLL_CLICK("dn") -- 到底再点一次
+  eq(EVAL_TB_TEST_OFF(), maxOff201, "③b★★到底再点 [下翻] 不越界（仍停在 maxOff）")
+  eq(EVAL_TB_TEST_SCROLL_CLICK("up"), true, "③b★点 [上翻]")
+  eq(EVAL_TB_TEST_OFF(), 0, "③b★★[上翻] 步长 = 一屏容量并夹取到 0")
+  EVAL_TB_TEST_SCROLL_CLICK("up") -- 到顶再点一次
+  eq(EVAL_TB_TEST_OFF(), 0, "③b★到顶再点 [上翻] 不越界")
+
+  -- ④ 切点规则：**有则优先**落在组边界（不是「永远」）；没有就硬切在每列行数
+  --   ④a 合成模型：第 13/14 条之间正好是组标题（窗口 26 条、每列 13 ⇒ 正中间那个边界）
+  local fake201a = { { t = "h", label = "组A" } }
+  for i = 2, 13 do fake201a[i] = { t = "c", key = "a" .. tostring(i) } end
+  fake201a[14] = { t = "h", label = "组B" }
+  for i = 15, 26 do fake201a[i] = { t = "c", key = "b" .. tostring(i) } end
+  local cutA201, lA201, rA201, pnA201 = EVAL_TB_COL_CUT(fake201a, 0, 13, 2)
+  eq(pnA201, 26, "④a前置：合成模型 26 条 = 一屏容量（" .. tostring(pnA201) .. "）")
+  eq(cutA201, 13, "④a★★★窗口内有合法组边界 ⇒ 切点落在组边界上（cut=" .. tostring(cutA201) .. "）")
+  eq(fake201a[cutA201 + 1] and fake201a[cutA201 + 1].t, "h", "④a★★右列第一格就是**组标题**（" ..
+     tostring(fake201a[cutA201 + 1] and fake201a[cutA201 + 1].label) .. "）")
+  eq(lA201 + rA201, pnA201, "④a★两列之和 = 窗口条数（不重不漏）")
+  --   ★切点跟着**窗口**走（不是写死 13）：起点 +1 ⇒ 组边界在窗口里的位置 −1
+  eq(EVAL_TB_COL_CUT(fake201a, 1, 13, 2), 12, "④a★★窗口起点 +1 ⇒ 切点跟着窗口走（12，不是写死的 13）")
+  --   ④b 多个合法组边界 → 取两列行数差**最小**者（不是「第一个」）
+  local fake201b = { { t = "h", label = "D1" } }
+  for i = 2, 8 do fake201b[i] = { t = "c", key = "d" .. tostring(i) } end
+  fake201b[9] = { t = "h", label = "D2" }
+  for i = 10, 13 do fake201b[i] = { t = "c", key = "d" .. tostring(i) } end
+  fake201b[14] = { t = "h", label = "D3" }
+  for i = 15, 20 do fake201b[i] = { t = "c", key = "d" .. tostring(i) } end
+  eq(EVAL_TB_COL_CUT(fake201b, 0, 13, 2), 8,
+     "④b★★多个合法组边界 → 取两列行数差最小者（8/12 差 4 优于 13/7 差 6）")
+  --   ④c 窗口内**没有**合法组边界 → 硬切在每列行数，且容量**不收缩**（收缩正是丢数据/跳页的来源）
+  local fake201c = {}
+  for i = 1, 26 do fake201c[i] = { t = "c", key = "c" .. tostring(i) } end
+  local cutC201, lC201, rC201, pnC201 = EVAL_TB_COL_CUT(fake201c, 0, 13, 2)
+  eq(pnC201, 26, "④c★★没有组边界时窗口容量**不收缩**（仍是一屏 " .. tostring(pnC201) ..
+     " 条 —— 旧实现在这种模型上没有合法切点可选，会把 bestCut 留成 nil 再去参与减法（直接报错））")
+  eq(cutC201, 13, "④c★★硬切在每列行数（cut = rows = " .. tostring(cutC201) .. "）")
+  eq(lC201, 13, "④c★左列 13 条")
+  eq(rC201, 13, "④c★右列 13 条（硬切没有把任何条目丢掉）")
+  eq(EVAL_TB_COL_CUT(fake201c, 0, 99, 1), 26, "④d★单列（cols=1）不切：整窗口都在左列")
+  local e0, e1, e2, e3 = EVAL_TB_COL_CUT(fake201c, 26, 13, 2)
+  eq(e0 == 0 and e1 == 0 and e2 == 0 and e3 == 0, true,
+     "④e★越界 off（= n）→ 空窗口返回 0,0,0,0（不炸、不返回 nil —— 旧实现这里会算成 nil 参与运算）")
+  --   ④f ★★★**不丢数据的结构性前提**：窗口容量恒为 min(n − off, cap)，任何 off 都不收缩。
+  --     用一个**会长成收缩形状**的合成模型（50 条、组边界与真实模型同形）把每个 off 都扫一遍。
+  --     ★旧实现正是在这里出事的（同形模型上实测：off=0 → 窗口缩到 20、off=20 → 9、off=26 → **3**、
+  --       off=47 直接**报错**（bestCut 为 nil 参与运算）；按旧口径走一遍，**21..26 与 30..50 永远显示不出来**
+  --       —— 这就是用户说的「整页丢数据」）。
+  --     ★★为什么必须补这一条：真实模型只有 31 条，旧口径的夹取恰好把尾部窗口盖住了整段尾巴
+  --       （同一段探针实测旧实现并集 = 31/31，**不丢**）—— 也就是说「不丢数据」这条判据在**今天的 31 条**上
+  --       抓不到旧实现的病；真正抓得住它的是**这条结构判据**（窗口容量）+ 本组 ①（逐行）+ ⑤（链式接管）。
+  local fake201f = { { t = "h", label = "F1" } }
+  local hdr201f = { [4] = true, [9] = true, [17] = true, [21] = true, [23] = true, [25] = true, [27] = true, [30] = true }
+  for i = 2, 50 do
+    if hdr201f[i] then fake201f[i] = { t = "h", label = "F" .. tostring(i) }
+    else fake201f[i] = { t = "c", key = "f" .. tostring(i) } end
+  end
+  local badF201 = ""
+  for off = 0, 50 - 26 do
+    local okF, _, _, _, pnF = pcall(EVAL_TB_COL_CUT, fake201f, off, 13, 2)
+    local wantF = 50 - off
+    if wantF > 26 then wantF = 26 end
+    if (not okF) or pnF ~= wantF then
+      badF201 = badF201 .. "off=" .. tostring(off) .. " got=" .. tostring(okF and pnF or "ERROR") ..
+                "(应 " .. tostring(wantF) .. ") "
+    end
+  end
+  eq(badF201, "", "④f★★★50 条同形模型逐 off 扫：窗口容量恒为 min(n − off, cap)、任何 off 都不收缩: " .. badF201)
+
+  -- ⑤ 链式接管（PetHelper 范式）：取原脚本 → 未激活时**转发**、激活时消费（不吞别人的事件）
+  local spyN201 = 0
+  local oldPrev201 = EVAL_TB_TEST_WHEEL_PREV(function() spyN201 = spyN201 + 1 end)
+  eq(type(oldPrev201) == "function", true,
+     "⑤前置：接管时**真的取到了链上的原脚本**（war 页那一个）—— 这是「链式」而不是「覆盖」的证据")
+  local offPre201 = EVAL_TB_TEST_OFF()
+  EVAL_HELP_CFG_SETTAB(1) -- 切到别的 Tab（本 Tab 未激活）
+  EVAL_TB_TEST_WHEEL(nil, -1)
+  eq(spyN201, 1, "⑤★★★本 Tab **未激活** ⇒ 把滚轮事件**转发**给原脚本（不吞别人的事件）")
+  eq(EVAL_TB_TEST_OFF(), offPre201, "⑤★★未激活时不动本列表（不抢别的 Tab 的滚轮）")
+  spyN201 = 0
+  EVAL_HELP_CFG_SETTAB(3)
+  local offAct201 = EVAL_TB_TEST_OFF()
+  EVAL_TB_TEST_WHEEL(nil, -1)
+  eq(spyN201, 0, "⑤★★本 Tab 激活 ⇒ 自己消费、**不再**转发（否则一次滚轮会被处理两遍）")
+  eq(EVAL_TB_TEST_OFF(), offAct201 + 1, "⑤★★激活时逐行下滚一格（" .. tostring(offAct201) .. " → " ..
+     tostring(EVAL_TB_TEST_OFF()) .. "）")
+  spyN201 = 0
+  EVAL_TB_TEST_WHEEL(nil, "x") -- 不是滚轮事件（EVAL_WHEEL_DIR 返回 0）
+  eq(spyN201, 1, "⑤★非滚轮事件（dir=0）照样转发（只有真滚轮才被消费）")
+  eq(EVAL_TB_TEST_OFF(), offAct201 + 1, "⑤★非滚轮事件不动位移")
+  EVAL_TB_TEST_WHEEL_SET(oldPrev201) -- 探针原值还回（不留副作用）
+
+  -- ⑥ 走**真实链**（配置窗 root 的 OnMouseWheel，最外层）点火：处理器真的装上 + Tab 判据生效
+  local wheel201 = EVAL_CFG_WHEEL_SCRIPT()
+  eq(type(wheel201) == "function", true, "⑥前置：拿到配置窗的滚轮脚本（各 Tab 链式接管的那一个）")
+  eq(EVAL_TB_TEST_GOTO(firstLab201), true, "⑥前置：窗口起点复位 0")
+  EVAL_HELP_CFG_SETTAB(3)
+  local offChain201 = EVAL_TB_TEST_OFF()
+  wheel201(nil, -1)
+  eq(EVAL_TB_TEST_OFF(), offChain201 + 1, "⑥★★★从最外层真实链点火，本 Tab 照样**逐行**下滚一格（处理器真的在链上）")
+  EVAL_HELP_CFG_SETTAB(1)
+  local offIdle201 = EVAL_TB_TEST_OFF()
+  wheel201(nil, -1)
+  eq(EVAL_TB_TEST_OFF(), offIdle201, "⑥★★切到别的 Tab 后本列表不响应（判据是 Tab 序号，不是「首行是否可见」猜的）")
+
+  -- ⑦ 计数器：`起–止 / 总数`（纯函数字面夹具 + 真实渲染两条路）
+  eq(EVAL_TB_PAGE_TEXT(0, 26, 31), "1-26 / 31", "⑦★★字面夹具：起 = off+1、止 = min(n, off+cap)")
+  eq(EVAL_TB_PAGE_TEXT(5, 26, 31), "6-31 / 31", "⑦★★末尾窗口：止被夹到 n（不是 off+cap 的越界值）")
+  eq(EVAL_TB_PAGE_TEXT(3, 26, 4), "4-4 / 4", "⑦★窗口只剩最后一条时也对（止 = n）")
+  eq(EVAL_TB_PAGE_TEXT(0, 26, 0), EVAL_L("DS_NORESULT"), "⑦★★空列表 ⇒ 沿用**既有**语言键（DS_NORESULT），不为这一行新造键")
+  eq(string.len(tostring((EVAL_LOCALES.zhCN or {}).DS_NORESULT or "")) > 0, true,
+     "⑦★该键在中文包里确有文案（LANG KEY CHECK 另守三语言齐全）")
+  eq(EVAL_TB_TEST_GOTO(firstLab201), true, "⑦前置：窗口起点复位 0")
+  local L0_201 = EVAL_TB_TEST_LAYOUT()
+  eq(L0_201.indicatorText, string.format("%d-%d / %d", L0_201.off + 1, math.min(n201, L0_201.off + L0_201.capN), n201),
+     "⑦★★真实渲染的计数文本 == 窗口语义公式（实测「" .. tostring(L0_201.indicatorText) .. "」）")
+  EVAL_HELP_CFG_SETTAB(3) -- ★⑥ 末尾停在别的 Tab（那是上一条判据的收尾）→ 这里必须切回工具箱才滚得动
+  for _ = 1, 60 do EVAL_TB_TEST_WHEEL(nil, -1) end
+  local LT_201 = EVAL_TB_TEST_LAYOUT()
+  eq(LT_201.indicatorText, string.format("%d-%d / %d", maxOff201 + 1, n201, n201),
+     "⑦★★末尾窗口真实渲染 == `maxOff+1 – n / n`（实测「" .. tostring(LT_201.indicatorText) .. "」）")
+
+  -- ⑧ 既有读值口继续可用（GOTO 改成「窗口起点 = idx−1 并夹取」⇒ 远端的行也能一次铺进窗口）
+  local lastKey201 = nil
+  for i = n201, 1, -1 do
+    if m201[i] and m201[i].key then lastKey201 = m201[i].key break end
+  end
+  eq(type(lastKey201) == "string", true, "⑧前置：模型最后一条带 key 的条目 = 「" .. tostring(lastKey201) .. "」")
+  eq(EVAL_TB_TEST_GOTO(lastKey201), true, "⑧★★GOTO 到最后一条（窗口语义下不必再一页页往前翻）")
+  local Lg201, found201 = EVAL_TB_TEST_LAYOUT(), false
+  for k = 1, table.getn(Lg201.rows or {}) do
+    local rr = Lg201.rows[k]
+    if rr and rr.key == lastKey201 then found201 = true end
+  end
+  eq(found201, true, "⑧★★★GOTO 后该行**真的铺在窗口里**（读值口 CHK/CHV/WIP 因此继续可用）")
+  eq(EVAL_TEST_TB_CHK_FOR(lastKey201) ~= nil, true, "⑧★CHK_FOR 仍拿得到远端行的勾选框")
+  eq(EVAL_TB_TEST_GOTO("qchan"), true, "⑧★GOTO 到带「值按钮」的行（频道选择）")
+  eq(EVAL_TEST_TB_CHV_FOR("qchan") ~= nil, true, "⑧★CHV_FOR 仍拿得到值按钮")
+  eq(EVAL_TB_TEST_GOTO("dismount"), true, "⑧★GOTO 到带「待测试标记」的行")
+  eq(EVAL_TEST_TB_WIP_FOR("dismount") ~= nil, true, "⑧★WIP_FOR 仍拿得到待测试标记")
+  eq(EVAL_TEST_TB_ADD_BTN_FOR("buy") ~= nil, true, "⑧★ADD_BTN_FOR 仍拿得到 [添加] 按钮")
+  -- ⑧b 组标题读值口的**自动翻页兜底**：目标标题不在窗口里时也要读得到。
+  --   ★原来那里写的是 `EVAL_TB_TEST_GOTO(lab)` —— `lab` 是个**不存在**的全局（恒 nil）⇒ 兜底从来没生效过
+  --   （只有目标恰好在当前窗口才读得到）；本轮改成归一好的 `want`。这条判据就是钉它的。
+  local farIdx201, farHdr201 = nil, nil
+  for i = n201, 1, -1 do
+    if m201[i] and m201[i].t == "h" then farIdx201 = i farHdr201 = m201[i].label break end
+  end
+  eq(type(farHdr201) == "string" and string.len(farHdr201) > 0, true,
+     "⑧b前置：模型最后一个组标题（#" .. tostring(farIdx201) .. "）=「" .. tostring(farHdr201) .. "」")
+  eq(EVAL_TB_TEST_GOTO(firstLab201), true, "⑧b前置：把窗口挪回开头（让目标标题**离开**窗口）")
+  local Lb201, inWin201 = EVAL_TB_TEST_LAYOUT(), false
+  for k = 1, table.getn(Lb201.rows or {}) do
+    local rr = Lb201.rows[k]
+    if rr and rr.idx == farIdx201 then inWin201 = true end
+  end
+  eq(inWin201, false, "⑧b前置：目标组标题此刻**不在**窗口里（否则这条判据空跑）")
+  local hdrTxt201 = EVAL_TEST_TB_HDR_TEXT(farHdr201)
+  eq(type(hdrTxt201) == "string" and string.len(hdrTxt201) > 0, true,
+     "⑧b★★★组标题读值口的**自动翻页兜底**真的生效（不在窗口也读得到 —— 原来写的是不存在的全局 `lab`，是死代码）")
+  local Lc201, back201 = EVAL_TB_TEST_LAYOUT(), false
+  for k = 1, table.getn(Lc201.rows or {}) do
+    local rr = Lc201.rows[k]
+    if rr and rr.idx == farIdx201 then back201 = true end
+  end
+  eq(back201, true, "⑧b★★兜底**真的把窗口挪过去了**（目标组标题 #" .. tostring(farIdx201) .. " 现在在窗口里）")
+
+  EVAL_HELP_CFG_SETTAB(savedTab201) -- 还原 Tab（跨用例状态残留是本项目老坑）
+  print(string.format("  工具箱连续窗口滚动：off=行偏移（0..%d）· 逐行滚轮 + 链式转发 · 按钮步长 %d 夹取 · " ..
+    "并集 %d/%d 覆盖 1..n（无跳条/无丢条）", maxOff201, cap201, union201, n201))
+end
+
+-- （组 202 已迁到 tests/tools/DragFrames.lua；1.74.30）：框拖拽 = **独立工具模块** tools/DragFrames.lua =====）
+
+-- ===== 组 203（1.74.31）：图层调试面板「只显示有名」开关的**真机路径**复现 =====
+-- 为什么必须有这组：独立子插件 `addons/EH_DebugBox/EH_DebugBox.lua` 此前**不在测试桩的载入清单里**
+--   （载入清单与源码检查照不到「哪条真被列出来」）⇒「面板列表到底列了什么」这条行为一次都没被跑过，
+--   用户截图的现象（开关=开，列表里却列着一片 `#3 [显]不可缩 纹理:Texture 179x179 父=WorldMapFrame`）
+--   正是从这个盲区里出来的。
+-- 本组走**真实入口**：① /edb ui（SlashCmdList["EHDEBUGBOX"] → uiToggle → uiBuild + uiRefresh）
+--   ② 真实 OnClick（ui.namedBtn 的 OnClick 脚本）③ 真实刷新链（uiRefresh → uiScanState → uiFiltered → 逐行填）
+--   ④ 真实诊断命令 /edb named（读它打印出来的 uiNamedCounts 数字，与列表条数对齐）。
+-- 夹具照本客户端实况造：`Texture:GetName()` 会给无名纹理编出
+--   `Interface/WorldMap/UI-WorldMap-Top2_0x000026D5551750`（**贴图路径 + 内存地址**）这种合成名。
+do
+  local hook = EVAL_DBX_TEST_UI()
+  eq(type(hook) == "table" and type(hook.ui) == "table", true,
+     "组203① 子插件没交读值口 EVAL_DBX_TEST_UI（面板状态 ui 读不到，本组无法成立）")
+  local u = hook.ui
+  local function labelText()
+    local fs = u.namedBtn and u.namedBtn.label
+    if not fs then return nil end
+    local ok, t = pcall(fs.GetText, fs)
+    return ok and tostring(t or "") or nil
+  end
+  -- 读值：**只读一行一行的真实结果**（uiRefresh 填进 row.entry 的那条）+ 那行渲染出来的文字
+  -- ★必须用 rawget 读 row.entry：桩的宽容 mock 对任何未知键都会**返回一个函数**，
+  --   于是「这一行没有条目（entry = nil）」与「entry 存在」在测试里长得一样 ——
+  --   本组首版就因此把 25 行全当成有数据（真值 14 条），还把被 Hide 的行的**陈旧文字**当成了证据。
+  local function readRows()
+    local out = {}
+    for r = 1, (u.rows or 0) do
+      local row = u.rowW and u.rowW[r]
+      local e = row and rawget(row, "entry") or nil
+      if e then
+        local txt = ""
+        if row.txt then local ok, t = pcall(row.txt.GetText, row.txt) if ok then txt = tostring(t or "") end end
+        table.insert(out, { e = e, txt = txt })
+      end
+    end
+    return out
+  end
+  -- ★比的是**帧对象身份**（r.e 是「条目」表，条目里的 .f 才是帧）：拿条目去比帧必然恒 false
+  --   （本组首版就写错成 r.e == obj →「有真名的帧在不在列表里」这条正向哨兵当场误报）
+  local function hasObj(rows, obj)
+    for _, r in ipairs(rows) do if r.e and r.e.f == obj then return true end end
+    return false
+  end
+  local function rowsText(rows)
+    local s = ""
+    for _, r in ipairs(rows) do s = s .. r.txt .. "\n" end
+    return s
+  end
+  -- 「不该出现在列表里」的**可判特征**（就是用户截图里的文字）
+  -- ★判据用 `_0x`（合成名一律是「贴图路径_0x地址」）而不是裸 `0x`：
+  --   行里还有尺寸（如 `800x600`、`300x200`）——那里面**真的含子串 `0x`** ⇒ 裸 `0x` 会把正常帧误判成合成名
+  --   （本组首版就踩了：4 条里混进一条 EHTestNamedFrame，其实就是它的尺寸 800x600）。
+  -- ★★★1.74.34-24 改判据（用户报「加了可见性之后一些图层纹理信息看不见了」）：**「是区域层」不再是隐藏理由** ——
+  --   有真名的纹理（WorldMapDetailTile1 / WorldMapOverlay1 这类）必须能看见。真正该藏的只有两类：
+  --   ① GetName 为空 ⇒ 叶子名是本客户端给的**通用名**（`纹理:Texture` / `字体串:FontString`）
+  --   ② 合成名（贴图路径_0x地址）
+  local function badRows(rows)
+    local bad = {}
+    for _, r in ipairs(rows) do
+      local t = r.txt
+      if string.find(t, "纹理:Texture", 1, true) or string.find(t, "字体串:FontString", 1, true)
+        or string.find(t, "_0x", 1, true) then
+        table.insert(bad, tostring(r.e.name or r.e.path))
+      end
+    end
+    return bad
+  end
+
+  -- ① 夹具：地图树 = 3 个区域层（合成名 / 无名 / 有真名）+ 3 个子帧（有真名 / 合成名 / 无名）
+  local FAKE_TEX = "Interface/WorldMap/UI-WorldMap-Top2_0x000026D5551750" -- 用户实机报的那个形态
+  local FAKE_FRM = "Interface/WorldMap/UI-WorldMap-Top2_0x0000ABCDEF"
+  local function mkRegion(name)
+    local t = {}
+    t.GetObjectType = function() return "Texture" end
+    t.GetName = function() return name end
+    t.IsShown = function() return true end
+    t.GetWidth = function() return 179 end
+    t.GetHeight = function() return 179 end
+    t.GetParent = function() return _G["WorldMapFrame"] end
+    t.GetVertexColor = function() return 1, 1, 1, 1 end
+    return t -- ★区域没有 SetScale/SetAlpha（本客户端实测）⇒ e.scaleable == false
+  end
+  local function mkChildFrame(name)
+    local f = {}
+    f.GetObjectType = function() return "Frame" end
+    f.GetName = function() return name end
+    f.IsShown = function() return true end
+    f.GetWidth = function() return 800 end
+    f.GetHeight = function() return 600 end
+    f.GetParent = function() return _G["WorldMapFrame"] end
+    f.GetFrameLevel = function() return 3 end
+    f.SetScale = function() end
+    f.GetScale = function() return 1 end
+    f.SetAlpha = function() end
+    f.GetAlpha = function() return 1 end
+    return f
+  end
+  local texFake, texUnnamed, texReal = mkRegion(FAKE_TEX), mkRegion(nil), mkRegion("EHTestRealTexture")
+  local frmNamed, frmFake, frmUnnamed = mkChildFrame("EHTestNamedFrame"), mkChildFrame(FAKE_FRM), mkChildFrame(nil)
+  local FIX = {
+    { obj = texFake, label = "区域·合成名(路径+内存地址)", named = false },
+    { obj = texUnnamed, label = "区域·GetName 为空", named = false },
+    -- ★★★1.74.34-24：**有真名的区域层 = 有名**（用户报的正是它被藏掉：「一些图层纹理信息看不见了」）
+    { obj = texReal, label = "区域·有真名（1.74.34-24 起算有名）", named = true },
+    { obj = frmNamed, label = "帧·有真名", named = true },
+    { obj = frmFake, label = "帧·合成名(路径+内存地址)", named = false },
+    { obj = frmUnnamed, label = "帧·GetName 为空", named = false },
+  }
+  local wm = _G["WorldMapFrame"]
+  local oldReg, oldChi = wm.GetRegions, wm.GetChildren
+  local oldMapShown, oldCfg = TEST.mapShown, EH_DEBUGBOX_CFG
+  rawset(wm, "GetRegions", function() return texFake, texUnnamed, texReal end)
+  rawset(wm, "GetChildren", function() return frmNamed, frmFake, frmUnnamed end)
+  TEST.mapShown = true -- 「仅显示中」（默认开）要能过：地图开着 + 夹具全部 IsShown=true
+  EH_DEBUGBOX_CFG = nil -- 全新安装：面板打开时读不到存档 ⇒ 走默认（hideUnnamed = true）
+  eq(u.hideUnnamed, true, "组203①「只显示有名」默认就是开（与用户截图「开」一致）")
+
+  -- ② 真实命令入口打开面板 = 用户第一次打开那一刻（顺带验「首次刷新列表就有数据」）
+  local CMD = (type(SlashCmdList) == "table") and SlashCmdList["EHDEBUGBOX"] or nil
+  eq(type(CMD) == "function", true, "组203② /edb 命令入口没注册（SlashCmdList 里没有 EHDEBUGBOX）")
+  -- ★★1.74.31：本组只测「只显示有名」判据 → **开面板之前就关掉新增的「层深」限制**
+  --   （默认 1 会把深层条目藏掉；那是新默认值，不是被测判据的错）
+  u.depthMax = 0
+  CMD("ui")
+  local okShow, shownNow = pcall(u.root.IsShown, u.root)
+  eq(okShow and shownNow == true, true, "组203② /edb ui 之后面板真的打开了")
+  eq(table.getn(u.entries or {}) > 0, true, "组203②★首次刷新就扫到了条目（不是空列表）")
+  eq(table.getn(readRows()) > 0, true, "组203②★首次刷新的列表里就有行（此前修过「首次刷新列表全空」）")
+  eq(u.hideUnnamed, true, "组203②开关真值 = 开")
+  eq(labelText(), EVAL_L("DBX_NAMED_ON"), "组203②顶栏文案与真值一致（语言包「只显示有名:开」）")
+
+  -- ③④⑤ 采集（开 → 关 → 再开）：**先采完再断言** —— 断言红在第一处 eq 时进程就 abort，
+  --   若把采集放在断言之后，「混进来几条、列表多少条」这些数字就只能靠猜；
+  --   本组要求红/绿两次都有数字，所以先把两轮观测全采下来、当场打印，再开始断言。
+  local lblOn = labelText()
+  local rowsOn = readRows()
+  local cntOn = hook.namedCounts()
+  local badOn = badRows(rowsOn)
+
+  local onClick = nil
+  if u.namedBtn then
+    local okg, fn = pcall(u.namedBtn.GetScript, u.namedBtn, "OnClick")
+    if okg then onClick = fn end
+  end
+
+  local lblOff, rowsOff, cntOff = nil, {}, hook.namedCounts()
+  local lblOn2, rowsOn2, badOn2 = nil, {}, {}
+  if type(onClick) == "function" then
+    onClick() -- 真实点击 ①：关
+    lblOff = labelText()
+    rowsOff = readRows()
+    cntOff = hook.namedCounts()
+    onClick() -- 真实点击 ②：再开
+    lblOn2 = labelText()
+    rowsOn2 = readRows()
+    badOn2 = badRows(rowsOn2)
+  end
+
+  print(string.format("  图层调试面板「只显示有名」：开关=开 → 列表 %d 条（区域/合成名混入 %d 条：%s）· " ..
+    "开关=关 → 列表 %d 条 · 再开 → 列表 %d 条（混入 %d 条）· 条目总数 %d（有名 %d · 无名 %d）· 夹具 6 条（区域 3 + 帧 3）",
+    table.getn(rowsOn), table.getn(badOn), (table.getn(badOn) > 0 and table.concat(badOn, " | ") or "无"),
+    table.getn(rowsOff), table.getn(rowsOn2), table.getn(badOn2),
+    cntOn.total, cntOn.named, cntOn.unnamed))
+
+  -- ⑥ 断言（开关=开）：**无名/合成名**一律不许出现在列表里（有真名的区域层则**必须**在，见上面正向哨兵）
+  eq(table.getn(badOn), 0, "组203③★★★开关=开：列表里不许有无名/合成名条目（实测混进来 "
+    .. table.getn(badOn) .. " 条：" .. table.concat(badOn, " | ") .. "）")
+  eq(table.getn(rowsOn), cntOn.shown, "组203③列表条数 == uiNamedCounts().shown（同一份判据）")
+  eq(cntOn.on, true, "组203③uiNamedCounts().on 如实反映开关=开")
+  eq(hasObj(rowsOn, frmNamed), true, "组203③★正向哨兵：有真名的帧必须在列表里（不是把什么都藏了）")
+  -- ★★★1.74.34-24 显示侧：有真名的纹理，行里要**显示它的真名**，不能只写「纹理:Texture#n」
+  --   （用户报「纹理信息看不见了」的另一半：旧路径段一律用对象类型拼，所有纹理行长得一模一样）
+  eq(string.find(rowsText(rowsOn), "EHTestRealTexture", 1, true) ~= nil, true,
+    "组203③★★★有真名的纹理行显示的是它的真名（实测行文本：" .. rowsText(rowsOn) .. "）")
+  eq(lblOn, EVAL_L("DBX_NAMED_ON"), "组203③顶栏文案与真值一致（语言包「只显示有名:开」）")
+  -- ★文案**绝对值**夹具（不拿语言包自证）：用户截图里那一句就是 zhCN 的 DBX_NAMED_ON，
+  --   改了这个字面量就等于改了用户看到的东西 —— 用独立夹具钉住，改文案必须同时改这里（有意为之的哨兵）。
+  eq(EVAL_LOCALES.zhCN.DBX_NAMED_ON, "只显示有名:开", "组203③zhCN 开态文案 == 用户截图那一句")
+  eq(EVAL_LOCALES.zhCN.DBX_NAMED_OFF, "只显示有名:关", "组203③zhCN 关态文案")
+  -- 夹具逐条判据（★按**对象身份**取条目：三条区域层的 path 完全相同，按路径会张冠李戴）
+  local function entryOf(obj)
+    for _, e in ipairs(u.entries or {}) do if e.f == obj then return e end end
+    return nil
+  end
+  for _, fx in ipairs(FIX) do
+    local e = entryOf(fx.obj)
+    eq(e ~= nil, true, "组203③夹具条目在地图树里被扫到（" .. fx.label .. "）")
+    if e then
+      eq(hook.entryNamed(e), fx.named, "组203③判据：「" .. fx.label .. "」应当 named=" .. tostring(fx.named))
+    end
+    if not fx.named then
+      eq(hasObj(rowsOn, fx.obj), false, "组203③开关=开：这条不该出现在列表里（" .. fx.label .. "）")
+    else
+      -- ★★★1.74.34-24 正向哨兵：**有真名的层（含纹理/字体串这类区域层）必须在列表里**
+      eq(hasObj(rowsOn, fx.obj), true, "组203③★★★开关=开：有真名的层必须在列表里（" .. fx.label .. "）")
+    end
+  end
+  -- ★填行路径唯一性：填进列表的行**逐条同对象同顺序**就是 uiFiltered() 的前 N 条
+  --   （证明填行走的就是 uiFiltered，没有第二条绕过 okNamed 的填行路径 —— 这是本次排查的核心问题）
+  local flt = hook.filtered()
+  local need = math.min(u.rows or 0, table.getn(flt))
+  local samePath = (table.getn(rowsOn) == need)
+  if samePath then
+    for i = 1, need do if rowsOn[i].e ~= flt[i] then samePath = false break end end
+  end
+  eq(samePath, true, "组203③★填行唯一路径 = uiFiltered()（逐条同对象同顺序，无第二条填行路径）")
+
+  -- ⑦ 断言（开关=关）：真实 OnClick 之后区域层/合成名**全部回来**（顶栏文案同步）
+  eq(type(onClick) == "function", true, "组203④开关按钮真的挂了 OnClick（走真实点击，不直接改字段）")
+  eq(lblOff, EVAL_L("DBX_NAMED_OFF"), "组203④顶栏文案同步成「只显示有名:关」")
+  eq(cntOff.on, false, "组203④uiNamedCounts().on 如实反映开关=关")
+  eq(table.getn(rowsOff), cntOff.shown, "组203④关掉后列表条数 == uiNamedCounts().shown")
+  eq(cntOn.named, cntOff.named, "组203④★计数不受开关影响（有名数恒定）")
+  eq(cntOn.unnamed, cntOff.unnamed, "组203④★计数不受开关影响（无名数恒定）")
+  eq(cntOff.named + cntOff.unnamed, cntOff.total, "组203④有名 + 无名 = 条目总数")
+  -- ★1.74.34-24：无名条目 = 1 个无名区域 + 1 个合成名区域 + 1 个合成名帧 + 1 个无名帧 = 4（有真名的区域起算有名）
+  eq(cntOn.unnamed >= 4, true, "组203④★无名条目至少含夹具那 4 条（实测 " .. tostring(cntOn.unnamed) .. "）")
+  for _, fx in ipairs(FIX) do
+    eq(hasObj(rowsOff, fx.obj), true, "组203④★开关=关：这条全部回来（" .. fx.label .. "）")
+  end
+  eq(string.find(rowsText(rowsOff), "纹理:", 1, true) ~= nil, true,
+     "组203④★关掉后列表里真的又出现「纹理:」行（= 用户截图那一片回来了）")
+  eq(table.getn(rowsOff) > table.getn(rowsOn), true, "组203④关掉后列表变长（实证开关真的起作用）")
+
+  -- ⑧ 断言（再开）：双向可逆，不是一次性的
+  eq(u.hideUnnamed, true, "组203⑤再点一次回到「开」")
+  eq(lblOn2, EVAL_L("DBX_NAMED_ON"), "组203⑤顶栏文案回到「只显示有名:开」")
+  eq(table.getn(badOn2), 0, "组203⑤★★★再开一次：无名/合成名又不见了（可逆）")
+  eq(table.getn(rowsOn2), cntOn.shown, "组203⑤再开后的条数与首次「开」一致")
+
+  -- ⑨ 真实诊断命令 /edb named：它打印的 uiNamedCounts 数字必须与读值口一致（用户在游戏里就是这么自查的）
+  TEST.chat = ""
+  CMD("named")
+  local chat = tostring(TEST.chat or "")
+  eq(string.find(chat, "条目总数 " .. cntOn.total, 1, true) ~= nil, true,
+     "组203⑥ /edb named 打印的条目总数 == 读值口（" .. tostring(cntOn.total) .. "）")
+  eq(string.find(chat, "无名 " .. cntOn.unnamed, 1, true) ~= nil, true,
+     "组203⑥ /edb named 打印的无名数一致（" .. tostring(cntOn.unnamed) .. "）")
+  eq(string.find(chat, "当前列表显示 " .. cntOn.shown .. " 条", 1, true) ~= nil, true,
+     "组203⑥ /edb named 打印的列表显示数一致（" .. tostring(cntOn.shown) .. "）")
+
+  -- ⑨b ★★★1.74.34-26 真机红字的回归哨兵：**一个不能被索引的对象，不许打断整次刷新**
+  --   实况：`EH_DebugBox.lua:2377: attempt to index field 'f' (a userdata value)`（那行是 `type(e.f.IsShown)`）
+  --   —— 一个对象连 `IsShown` 都索引不了，`uiScanState` 当场抛错 ⇒ 列表停更 + 红字弹窗。
+  --   本客户端 frame/region 的 userdata 并非都有 `__index` 元表（`type()` 还骗人说 "table"）⇒
+  --   夹具造一个「索引即抛错」的对象放进地图树，要求：① 刷新照常跑完（本组不 RUNTIME ERROR = 这一条）
+  --   ② 坏条目**如实记名**上报（`ui.badEntries`，不静默）③ 其余条目照旧刷新。
+  local badObj = setmetatable({}, { __index = function() error("attempt to index field 'f' (a userdata value)") end })
+  local okRegs = pcall(function() rawset(wm, "GetRegions", function() return texFake, texUnnamed, texReal, badObj end) end)
+  eq(okRegs, true, "组203⑦前置：把「索引即抛错」的对象塞进地图树")
+  TEST.chat = ""
+  local okScan, scanErr = pcall(CMD, "scan") -- 强制重扫：真入口、真刷新链（uiRefresh → uiScanState → uiScanOne）
+  eq(okScan, true, "组203⑦★★★坏对象**不许**把扫描打断（面板不炸、列表照常刷；实测错误：" .. tostring(scanErr) .. "）")
+  local badList = (type(u.badEntries) == "table") and u.badEntries or {}
+  local badHit = 0
+  for _, s in ipairs(badList) do
+    if string.find(tostring(s), "不能索引", 1, true) ~= nil then badHit = badHit + 1 end
+  end
+  eq(badHit >= 1, true, "组203⑦★★★坏条目被**如实记名**上报（ui.badEntries 里带「不能索引」的 " .. tostring(badHit)
+    .. " 条：" .. table.concat(badList, " / ") .. "）")
+  eq(type(hook.namedCounts) == "function" and hook.namedCounts().total > 0, true,
+    "组203⑦其余条目照旧刷新（条目总数 " .. tostring(hook.namedCounts().total) .. " > 0）")
+  rawset(wm, "GetRegions", oldReg) -- 立刻还原，别让坏对象影响后面的断言
+
+  -- ⑩ 收尾：夹具与存档还原（不留残留状态；面板收起）
+  rawset(wm, "GetRegions", oldReg)
+  rawset(wm, "GetChildren", oldChi)
+  TEST.mapShown = oldMapShown
+  EH_DEBUGBOX_CFG = oldCfg
+  u.hideUnnamed = true
+  pcall(u.root.Hide, u.root)
+end
+
+-- （组 204 已迁到 tests/tools/DragFrames.lua；1.74.31）：框拖拽「启动期有界复查」+ 重置还原属性 + 清单读真值 =====）
+
+-- ===== 组 205（1.74.31 第二步）：图层调试面板的**可折叠树** =====
+-- 用户要求（原话）：「图层调试 图层列表能否有树的方式。现在量太大。有点卡」
+--   第一步做了「层深」过滤；这一步做**真正的树**：
+--     ① 每行左侧 ▼/▶ 折叠开关（**只有父节点才画**）② 缩进按层级
+--     ③ 折叠状态落存档、跨 reload 保持 ④ 点「层深」= 一次展开到第 N 层（并把更浅的折叠标记清掉）。
+-- 本组走**真实入口**：/edb ui（开面板）· /edb scan（强制重扫 —— 树才有夹具）· 顶栏「层深」按钮的真实 OnClick ·
+--   行上折叠开关的真实 OnClick · 真实刷新链（uiRefresh → uiScanState → uiFiltered → 逐行填 + 缩进）。
+-- 读值口 EVAL_DBX_TEST_UI() 交出来的是**真函数本身**（treePass/treeToggle/entryDepth/save/load），不是复刻逻辑。
+-- ★几何/字形夹具用**绝对字面量**（42/30/10 与 ▼/▶）：它们是用户看得见的东西，改了就必须改这里（不许同源自比）。
+do
+  local hook = EVAL_DBX_TEST_UI()
+  eq(type(hook) == "table" and type(hook.ui) == "table", true, "组205① 子插件没交读值口 EVAL_DBX_TEST_UI")
+  local u = hook.ui
+  eq(type(hook.treeToggle) == "function" and type(hook.treePass) == "function"
+    and type(hook.entryDepth) == "function" and type(hook.depthApply) == "function",
+     true, "组205① 树的读值口不齐（treeToggle/treePass/entryDepth/depthApply 至少缺一个）")
+  local CMD = (type(SlashCmdList) == "table") and SlashCmdList["EHDEBUGBOX"] or nil
+  eq(type(CMD) == "function", true, "组205① /edb 命令入口不在（SlashCmdList.EHDEBUGBOX）")
+  -- ★1.74.33 与生产对齐：EH_DebugBox 里 `UI_TREE_SHUT = ">"`（**不是**文档/旧判据写的 `▶`）。
+  --   判据的作用是「验生产真的这么画」，所以夹具必须跟**生产现值**一致；不要为了对齐文档去改夹具
+  --   （那样会把「生产与文档不一致」这件事藏起来）。★这一条已在会话里如实向用户报备：
+  --   若他其实要 `▶`（文档口径），改生产那一行即可，届时这里跟着改回去。
+  local TREE_OPEN, TREE_SHUT = "▼", ">"
+  local TX0, TWX0, STEP = 42, 30, 10       -- 文字左起点（第 1 层）/ 开关左起点（第 1 层）/ 每层缩进
+
+  -- ① 夹具：三层嵌套 + 一个叶子兄弟 —— WorldMapFrame → A → A1 → A1a（A 还有二儿子 A2），B 是叶子
+  local wm = _G["WorldMapFrame"]
+  local oldReg, oldChi = rawget(wm, "GetRegions"), rawget(wm, "GetChildren")
+  local oldMapShown205, oldCfg205 = TEST.mapShown, EH_DEBUGBOX_CFG
+  local function mkTF(name)
+    local f = {}
+    f.GetObjectType = function() return "Frame" end
+    f.GetName = function() return name end
+    f.IsShown = function() return rawget(f, "__shown") ~= false end
+    f.GetWidth = function() return 900 end
+    f.GetHeight = function() return 900 end
+    f.GetParent = function() return wm end
+    f.GetFrameLevel = function() return 3 end
+    f.GetScale = function() return 1 end
+    f.SetScale = function() end
+    f.GetAlpha = function() return 1 end
+    f.SetAlpha = function() end
+    return f
+  end
+  local A1a, A1, A2, B, A = mkTF("EHTreeA1a"), mkTF("EHTreeA1"), mkTF("EHTreeA2"), mkTF("EHTreeB"), mkTF("EHTreeA")
+  rawset(A1, "GetChildren", function() return A1a end)
+  rawset(A, "GetChildren", function() return A1, A2 end)
+  rawset(wm, "GetChildren", function() return A, B end)
+  rawset(wm, "GetRegions", function() return end) -- 本组只按帧核对，不要区域（层号不受影响）
+  TEST.mapShown = true -- 「仅显示中」（默认开）要过：地图本身 + 夹具全部 IsShown=true
+
+  -- 面板状态归一到「干净的全展开」（本组只测树，不受别的过滤干扰）
+  u.depthMax = 0 u.hideUnnamed = false u.onlyShown = true u.bigOnly = false
+  u.filter = "" u.cat = 0 u.scriptFilter = {} u.treeCollapsed = {} u.off = 0
+  if not (pcall(u.root.IsShown, u.root) and u.root:IsShown()) then CMD("ui") end -- 真机路径：面板要真的打开着
+  CMD("scan") -- ★强制重扫（uiScanAll：nodes/entries 作废 + 重建 + 刷状态）——不然条目还是上一组的树
+
+  -- ★★★读值口一律按**夹具帧对象**（稳定）去找条目，**不缓存「条目对象」**：
+  --   每次 /edb scan 都会重建 ui.entries（新表），缓存下来的条目引用随即失效 ——
+  --   本组首版就是缓存了条目对象，于是重扫之后「列表里有没有它」恒为 false、
+  --   连「点树根的 ▶」都点空（rowOf 找不到行）→ 采集到的全是假数字（实测栽过一次）。
+  local function entryOf(obj)
+    for _, e in ipairs(u.entries or {}) do if e.f == obj then return e end end
+    return nil
+  end
+  local function entryByPath(p)
+    for _, e in ipairs(u.entries or {}) do if e.path == p then return e end end
+    return nil
+  end
+  -- ★行要按「行里的条目指向哪个帧」来找（rawget：桩对未知键返回 mock 函数，直接读 row.entry 会把空行当成有数据）
+  local function rowOf(obj)
+    for r = 1, (u.rows or 0) do
+      local row = u.rowW and u.rowW[r]
+      local en = row and rawget(row, "entry")
+      if en and en.f == obj then return row end
+    end
+    return nil
+  end
+  -- 按**条目对象**找行（用于树根：同一个帧在列表里出现两次 —— 树根 + `[顶层] WorldMapFrame`）
+  local function rowOfEntry(e)
+    if not e then return nil end
+    for r = 1, (u.rows or 0) do
+      local row = u.rowW and u.rowW[r]
+      if row and rawget(row, "entry") == e then return row end
+    end
+    return nil
+  end
+  local function shownInList(obj)
+    for _, x in ipairs(hook.filtered()) do if x.f == obj then return true end end
+    return false
+  end
+  local function pathOf(obj)
+    local e = entryOf(obj)
+    return e and e.path or ("<没扫到:" .. tostring(obj) .. ">")
+  end
+  local function markOf(obj)
+    local p = pathOf(obj)
+    return (u.treeCollapsed and u.treeCollapsed[p]) and true or false
+  end
+  local function ctrlText(fs)
+    if not fs then return nil end
+    local ok, t = pcall(fs.GetText, fs)
+    return ok and tostring(t or "") or nil
+  end
+  local function twistText(row)
+    return (row and row.tw) and ctrlText(row.tw.label) or nil
+  end
+  local function twistOn(row)
+    if not (row and row.tw) then return nil end
+    local ok, v = pcall(row.tw.IsShown, row.tw)
+    return (ok and v) and true or false
+  end
+  local function clickTwist(row)
+    if not (row and row.tw) then return false end
+    local ok, fn = pcall(row.tw.GetScript, row.tw, "OnClick")
+    if not (ok and type(fn) == "function") then return false end
+    fn()
+    return true
+  end
+  local function geoX(region)
+    if not region then return nil end
+    local ok, _, _, _, x = pcall(region.GetPoint, region)
+    return ok and tonumber(x) or nil
+  end
+
+  -- ===== 采集（先把各阶段的数字全采下来，再开始断言：红了也能看到数字）=====
+  local S = {}
+  -- 阶段 A：全展开时的结构 + 缩进 + 开关可见性（读**真实控件**的锚点偏移）
+  local eRoot, eA, eA1, eA1a, eA2, eB = entryByPath("WorldMapFrame(本体)"), entryOf(A), entryOf(A1), entryOf(A1a), entryOf(A2), entryOf(B)
+  eq(eRoot ~= nil and eA ~= nil and eA1 ~= nil and eA1a ~= nil and eA2 ~= nil and eB ~= nil, true,
+     "组205① 夹具六条（树根/A/A1/A1a/A2/B）都进了条目表（/edb scan 真的重扫了）")
+  S.depth = {
+    root = eRoot and hook.entryDepth(eRoot) or nil, a = eA and hook.entryDepth(eA) or nil,
+    a1 = eA1 and hook.entryDepth(eA1) or nil, a1a = eA1a and hook.entryDepth(eA1a) or nil,
+  }
+  S.par = {
+    a = (eA and eA.tpar) or nil, a1 = (eA1 and eA1.tpar) or nil,
+    a1a = (eA1a and eA1a.tpar) or nil, a2 = (eA2 and eA2.tpar) or nil, b = (eB and eB.tpar) or nil,
+  }
+  S.kids = { root = eRoot and eRoot.kids or nil, a = eA and eA.kids or nil, a1 = eA1 and eA1.kids or nil,
+    a1a = eA1a and eA1a.kids or nil, b = eB and eB.kids or nil }
+  local rowRoot, rowA, rowA1, rowA1a, rowB = rowOfEntry(eRoot), rowOf(A), rowOf(A1), rowOf(A1a), rowOf(B)
+  S.geo = {
+    rootTx = geoX(rowRoot and rowRoot.txt), rootTw = geoX(rowRoot and rowRoot.tw),
+    aTx = geoX(rowA and rowA.txt), a1Tx = geoX(rowA1 and rowA1.txt), a1aTx = geoX(rowA1a and rowA1a.txt),
+    a1Tw = geoX(rowA1 and rowA1.tw), a1aTw = geoX(rowA1a and rowA1a.tw),
+  }
+  S.sw = { a = twistOn(rowA), a1 = twistOn(rowA1), a1a = twistOn(rowA1a), b = twistOn(rowB),
+    root = twistOn(rowRoot), aTxt = twistText(rowA), a1Txt = twistText(rowA1) }
+
+  -- 阶段 B：折叠 A（真实 OnClick）→ 子层/孙层消失；再点一次 → 全回来
+  local clickedFold = clickTwist(rowOf(A))
+  S.fold = {
+    hasA = shownInList(A), hasA1 = shownInList(A1), hasA1a = shownInList(A1a),
+    hasA2 = shownInList(A2), hasB = shownInList(B),
+    mark = markOf(A), txt = twistText(rowOf(A)), a1Row = rowOf(A1) ~= nil,
+  }
+  local clickedOpen = clickTwist(rowOf(A))
+  S.open = {
+    hasA1 = shownInList(A1), hasA1a = shownInList(A1a), hasA2 = shownInList(A2),
+    mark = markOf(A), txt = twistText(rowOf(A)),
+  }
+
+  -- 阶段 C：折叠第 3 层的 A1 → 孙层 A1a 消失；模拟 /reload（清内存 + 走真实载入）→ 状态还在、也真的生效
+  clickTwist(rowOf(A1))
+  local pA1 = pathOf(A1)
+  local savedCfg = EH_DEBUGBOX_CFG and EH_DEBUGBOX_CFG.ui and EH_DEBUGBOX_CFG.ui.treeCollapsed
+  S.save = {
+    key = (savedCfg and savedCfg[pA1]) and true or false,
+    hasA1a = shownInList(A1a),
+  }
+  u.treeCollapsed = {} -- 模拟 /reload：内存真值清空
+  S.reload0 = { memAfterClear = (u.treeCollapsed[pA1]) and true or false }
+  hook.load() -- 真实载入函数
+  CMD("scan") -- 真实刷新
+  S.reload1 = {
+    mem = (u.treeCollapsed[pA1]) and true or false,
+    hasA1a = shownInList(A1a), hasA1 = shownInList(A1),
+    txt = twistText(rowOf(A1)),
+  }
+  u.treeCollapsed = {} -- 收拾干净，进入「层深」阶段
+  CMD("scan")
+
+  -- 阶段 D：与「层深」配合（真实按钮 OnClick；层深:1 时点第一层的 ▶ = 往下钻一层）
+  local depthClick = nil
+  if u.depthBtn then
+    local okg, fn = pcall(u.depthBtn.GetScript, u.depthBtn, "OnClick")
+    if okg then depthClick = fn end
+  end
+  hook.depthApply(1) -- 「层深:1」（默认档）
+  local eR = entryByPath("WorldMapFrame(本体)")
+  S.cap1 = { cap = u.depthMax, hasA = shownInList(A), rowTw = twistOn(rowOfEntry(eR)), txt = twistText(rowOfEntry(eR)),
+    label = ctrlText(u.depthBtn and u.depthBtn.label) }
+  clickTwist(rowOfEntry(eR)) -- 点树根的 ▶ = 展开（把上限抬到第 2 层）
+  S.cap2 = { cap = u.depthMax, hasA = shownInList(A), hasB = shownInList(B),
+    label = ctrlText(u.depthBtn and u.depthBtn.label), txt = twistText(rowOfEntry(entryByPath("WorldMapFrame(本体)"))) }
+  if type(depthClick) == "function" then depthClick() end -- 真实按钮：2 → 3
+  S.cap3 = { cap = u.depthMax, label = ctrlText(u.depthBtn and u.depthBtn.label),
+    hasA1 = shownInList(A1), hasA2 = shownInList(A2), hasA1a = shownInList(A1a) }
+  clickTwist(rowOf(A1)) -- 第 3 层的 ▶ = 再钻一层（上限 → 4）
+  S.cap4 = { cap = u.depthMax, hasA1a = shownInList(A1a) }
+
+  -- 阶段 E：「层深」= 展开到第 N 层（比 N 浅的折叠标记要被清掉）；0=全部**不动**手工折叠
+  clickTwist(rowOf(A)) -- 手工折叠 A（此时上限 4，A 在第 2 层）
+  S.manualFold = { hasA1 = shownInList(A1), mark = markOf(A) }
+  if type(depthClick) == "function" then depthClick() end -- 4 → 全部(0)
+  S.capAll = { cap = u.depthMax, hasA1 = shownInList(A1), mark = markOf(A) }
+  if type(depthClick) == "function" then depthClick() end -- 0 → 1
+  if type(depthClick) == "function" then depthClick() end -- 1 → 2
+  if type(depthClick) == "function" then depthClick() end -- 2 → 3
+  S.cap3b = {
+    cap = u.depthMax, label = ctrlText(u.depthBtn and u.depthBtn.label),
+    mark = markOf(A),
+    hasA1 = shownInList(A1), hasA2 = shownInList(A2), hasA1a = shownInList(A1a),
+    page = ctrlText(u.filterLbl),
+  }
+
+  -- 阶段 F：假开关守卫 —— 父节点的子层被别的过滤全藏起来时，**不许**给它画折叠开关
+  rawset(A1, "__shown", false) rawset(A2, "__shown", false) rawset(A1a, "__shown", false)
+  CMD("scan")
+  S.fake = { rowA = rowOf(A) ~= nil, twOn = twistOn(rowOf(A)), hasA1 = shownInList(A1) }
+  rawset(A1, "__shown", nil) rawset(A2, "__shown", nil) rawset(A1a, "__shown", nil)
+
+  print(string.format("  图层树：层号 根%d/A%d/A1%d/A1a%d · 缩进 文字 根%s→A%s→A1%s→A1a%s（开关 %s/%s/%s）· " ..
+    "折叠 A ⇒ 子层 %s 孙层 %s（A 本身在 %s）· 展开 ⇒ A1 %s/A1a %s · 存档键 %s（模拟 reload 后 %s、列表里 A1a %s）· " ..
+    "层深 1→%s（A 在 %s）→点根▶→%s（label %s）· 再点按钮→%s（A1 %s/A1a %s）· 手工折叠后档位 全部=%s（A1 %s）/%s=%s（标记清掉 %s）",
+    S.depth.root or -1, S.depth.a or -1, S.depth.a1 or -1, S.depth.a1a or -1,
+    tostring(S.geo.rootTx), tostring(S.geo.aTx), tostring(S.geo.a1Tx), tostring(S.geo.a1aTx),
+    tostring(S.geo.rootTw), tostring(S.geo.a1Tw), tostring(S.sw.a1a),
+    tostring(S.fold.hasA1), tostring(S.fold.hasA1a), tostring(S.fold.hasA),
+    tostring(S.open.hasA1), tostring(S.open.hasA1a),
+    tostring(S.save.key), tostring(S.reload1.mem), tostring(S.reload1.hasA1a),
+    tostring(S.cap1.cap), tostring(S.cap1.hasA), tostring(S.cap2.cap), tostring(S.cap2.label),
+    tostring(S.cap3.cap), tostring(S.cap3.hasA1), tostring(S.cap3.hasA1a),
+    tostring(S.capAll.cap), tostring(S.capAll.hasA1), tostring(S.cap3b.cap), tostring(S.cap3b.label),
+    tostring(S.cap3b.mark == false)))
+
+  -- ===== 断言 ①结构（父子关系来自扫描层级 + DFS 相邻性，不按路径字符串猜）=====
+  eq(S.depth.root, 1, "组205①★★树根 = 第 1 层（层号来自扫描，不是数路径里的 '/'）")
+  eq(S.depth.a, 2, "组205① A 在第 2 层（WorldMapFrame 的子件）")
+  eq(S.depth.a1, 3, "组205① A1 在第 3 层")
+  eq(S.depth.a1a, 4, "组205① A1a 在第 4 层（三层嵌套）")
+  eq(S.par.a, eRoot, "组205①★A 的父 = 树根")
+  eq(S.par.a1, eA, "组205①★★A1 的父 = A")
+  eq(S.par.a1a, eA1, "组205①★★A1a 的父 = A1")
+  eq(S.par.a2, eA, "组205①★★弹栈正确：A1 那一支闭合后，A2 仍挂在 A 上（不是挂在 A1 上）")
+  eq(S.par.b, eRoot, "组205① B 的父 = 树根")
+  eq(S.kids.root, 2, "组205① 树根的子层数 = 2（A、B）")
+  eq(S.kids.a, 2, "组205① A 的子层数 = 2（A1、A2）")
+  eq(S.kids.a1, 1, "组205① A1 的子层数 = 1（A1a）")
+  eq(S.kids.a1a, 0, "组205① A1a 是叶子（子层数 0）")
+  eq(S.kids.b, 0, "组205① B 是叶子（子层数 0）")
+
+  -- 断言 ②缩进按层级（读真实控件的锚点偏移：文字 42/52/62/72、开关 30/…/50/60）
+  eq(S.geo.rootTx, TX0, "组205②★第 1 层文字左起点 = " .. TX0 .. "（实测 " .. tostring(S.geo.rootTx) .. "）")
+  eq(S.geo.aTx, TX0 + STEP, "组205②★第 2 层文字左起点 = " .. (TX0 + STEP) .. "（实测 " .. tostring(S.geo.aTx) .. "）")
+  eq(S.geo.a1Tx, TX0 + 2 * STEP, "组205②★第 3 层文字左起点 = " .. (TX0 + 2 * STEP) .. "（实测 " .. tostring(S.geo.a1Tx) .. "）")
+  eq(S.geo.a1aTx, TX0 + 3 * STEP, "组205②★★第 4 层文字左起点 = " .. (TX0 + 3 * STEP) .. "（实测 " ..
+     tostring(S.geo.a1aTx) .. "）")
+  eq(S.geo.rootTw, TWX0, "组205②★第 1 层折叠开关左边缘 = " .. TWX0 .. "（实测 " .. tostring(S.geo.rootTw) .. "）")
+  eq(S.geo.a1Tw, TWX0 + 2 * STEP, "组205②★第 3 层折叠开关跟着缩进（实测 " .. tostring(S.geo.a1Tw) .. "）")
+  eq((S.geo.a1aTx or 0) > (S.geo.a1Tx or 0), true, "组205②★第 4 层比第 3 层更靠右（缩进逐层累加）：" ..
+     tostring(S.geo.a1aTx) .. " > " .. tostring(S.geo.a1Tx))
+
+  -- 断言 ③折叠开关只给父节点画 + 字形
+  eq(S.sw.a, true, "组205③★有子层的 A 行上画了折叠开关")
+  eq(S.sw.a1, true, "组205③★有子层的 A1 行上也画了（不是只画第 1 层）")
+  eq(S.sw.b, false, "组205③★★叶子 B 行上**不画**开关（用户要求「父节点才显示」）")
+  eq(S.sw.a1a, false, "组205③★★叶子 A1a 行上也不画开关")
+  eq(S.sw.aTxt, TREE_OPEN, "组205③ 展开态的开关字形 = ▼（实测 " .. tostring(S.sw.aTxt) .. "）")
+
+  -- 断言 ④折叠 ⇒ 整棵子树消失；展开 ⇒ 回来
+  eq(clickedFold, true, "组205④ 折叠开关真的挂了 OnClick（走真实点击，不直接改字段）")
+  eq(S.fold.hasA1, false, "组205④★★★折叠 A ⇒ 子层 A1 从列表消失")
+  eq(S.fold.hasA2, false, "组205④★★★子层 A2 也消失")
+  eq(S.fold.hasA1a, false, "组205④★★★孙层 A1a 一起消失（整棵子树收起，不是只收一层）")
+  eq(S.fold.hasA, true, "组205④★被折叠的节点本身仍在列表里（收子层，不收自己）")
+  eq(S.fold.hasB, true, "组205④★兄弟分支 B 不受影响")
+  eq(S.fold.a1Row, false, "组205④★收起来的那一行不再渲染（列表里没有它的行）")
+  eq(S.fold.mark, true, "组205④ 折叠状态写进内存真值 ui.treeCollapsed（不是只改了画面）")
+  eq(S.fold.txt, TREE_SHUT, "组205④★该行开关字形变成生产那个收折字形（实测 " .. tostring(S.fold.txt) .. "）")
+  eq(clickedOpen, true, "组205④ 再点一次（展开）也走真实 OnClick")
+  eq(S.open.hasA1, true, "组205④★★★再点一次 ⇒ A1 回来")
+  eq(S.open.hasA2, true, "组205④★★★A2 回来")
+  eq(S.open.hasA1a, true, "组205④★★★A1a 回来（可逆）")
+  eq(S.open.mark, false, "组205④ 折叠标记被清掉（不是留个 true 在那儿）")
+  eq(S.open.txt, TREE_OPEN, "组205④ 字形回到 ▼（实测 " .. tostring(S.open.txt) .. "）")
+
+  -- 断言 ⑤折叠状态跨 reload 保持（落存档 + 真实载入 + 真的生效）
+  eq(S.save.key, true, "组205⑤★★折叠状态当场落存档 EH_DEBUGBOX_CFG.ui.treeCollapsed[路径]")
+  eq(S.save.hasA1a, false, "组205⑤ 折叠第 3 层的 A1 ⇒ 孙层 A1a 消失（第 3 层也能折）")
+  eq(S.reload0.memAfterClear, false, "组205⑤前置：清空内存真值后确实读不到标记（模拟 /reload 的起点）")
+  eq(S.reload1.mem, true, "组205⑤★★★模拟 /reload（真实 uiLoadSettings）后折叠状态回来了")
+  eq(S.reload1.hasA1a, false, "组205⑤★★★reload 之后列表仍然是收起的（状态不只是记在表里，也真的生效）")
+  eq(S.reload1.hasA1, true, "组205⑤ reload 之后被折叠的那个节点仍在（收的是它的子层）")
+  eq(S.reload1.txt, TREE_SHUT, "组205⑤ reload 之后那行还是收折字形（实测 " .. tostring(S.reload1.txt) .. "）")
+
+  -- 断言 ⑥与「层深」配合（真实按钮 + 点开第一层的 ▶ = 往下钻一层）
+  eq(type(depthClick) == "function", true, "组205⑥ 顶栏「层深」按钮真的挂了 OnClick（走真实点击）")
+  eq(S.cap1.cap, 1, "组205⑥前置：层深 = 1")
+  eq(S.cap1.hasA, false, "组205⑥★层深:1 ⇒ 第 2 层的 A 不显示（上限真的在挡）")
+  eq(S.cap1.txt, TREE_SHUT, "组205⑥★层深:1 时树根那行画的是收折字形（子层被上限挡着 = 视觉上也是收起的，实测 " ..
+     tostring(S.cap1.txt) .. "）")
+  eq(S.cap1.label, "层深:1", "组205⑥ 按钮文案按真值现算（实测 " .. tostring(S.cap1.label) .. "）")
+  eq(S.cap2.cap, 2, "组205⑥★★点树根的 ▶ ⇒ 层深自动抬到 2（点了就必须看得到东西，否则是假开关）")
+  eq(S.cap2.hasA, true, "组205⑥★★子层 A 当场出现")
+  eq(S.cap2.hasB, true, "组205⑥ A 的兄弟 B 也出现")
+  eq(S.cap2.label, "层深:2", "组205⑥★按钮文案跟着变（用户能看出「为什么多了一层」）")
+  eq(S.cap2.txt, TREE_OPEN, "组205⑥ 树根那行变回 ▼（实测 " .. tostring(S.cap2.txt) .. "）")
+  eq(S.cap3.cap, 3, "组205⑥ 真实按钮循环：2 → 3")
+  eq(S.cap3.label, "层深:3", "组205⑥ 文案 = 层深:3（实测 " .. tostring(S.cap3.label) .. "）")
+  eq(S.cap3.hasA1, true, "组205⑥★★层深:3 ⇒ 第 3 层的 A1 显示")
+  eq(S.cap3.hasA2, true, "组205⑥★★第 3 层的 A2 也显示")
+  eq(S.cap3.hasA1a, false, "组205⑥★第 4 层仍被挡住（「层深:3」就是只到第 3 层）")
+  eq(S.cap4.cap, 4, "组205⑥★★点第 3 层 A1 的 ▶ ⇒ 上限抬到 4（逐层往下钻）")
+  eq(S.cap4.hasA1a, true, "组205⑥★★孙层 A1a 出现")
+
+  -- 断言 ⑦「层深」= 展开到第 N 层（清掉更浅的折叠标记）；0 = 全部，不碰手工折叠
+  eq(S.manualFold.mark, true, "组205⑦前置：手工折叠 A 写下了标记")
+  eq(S.manualFold.hasA1, false, "组205⑦前置：手工折叠后 A1 消失")
+  eq(S.capAll.cap, 0, "组205⑦ 真实按钮循环到「全部」（4 → 0）")
+  eq(S.capAll.mark, true, "组205⑦★★「层深=全部」**不动**手工折叠（用户的折叠不许被悄悄清掉）")
+  eq(S.capAll.hasA1, false, "组205⑦★★ 所以 A1 仍然是收起的")
+  eq(S.cap3b.cap, 3, "组205⑦ 连点三次到「层深:3」")
+  eq(S.cap3b.mark, false, "组205⑦★★★「层深:3」把更浅（第 2 层）的折叠标记清掉了 = 一键展开到第 3 层")
+  eq(S.cap3b.hasA1, true, "组205⑦★★★结果：A1 出现（不用一层层手点）")
+  eq(S.cap3b.hasA2, true, "组205⑦★★★A2 也出现")
+  eq(S.cap3b.hasA1a, false, "组205⑦★第 4 层依旧被上限挡住（展开到第 3 层 ≠ 全展开）")
+  eq(S.cap3b.label, "层深:3", "组205⑦ 文案 = 层深:3（实测 " .. tostring(S.cap3b.label) .. "）")
+  eq(type(S.cap3b.page) == "string" and string.find(S.cap3b.page, "层深:3", 1, true) ~= nil, true,
+     "组205⑦★状态行里也写明了「层深:3」（列表变少的原因要看得见）：" .. tostring(S.cap3b.page))
+
+  -- 断言 ⑧假开关守卫：父节点的子层被别的过滤全藏起来时，不许给它画折叠开关
+  eq(S.fake.rowA, true, "组205⑧前置：A 自己仍在列表里（只是它的子层全被藏了）")
+  eq(S.fake.hasA1, false, "组205⑧前置：A1 确实被「仅显示中」藏掉了")
+  eq(S.fake.twOn, false, "组205⑧★★★子层一个都显示不出来时，A 行上**不画**折叠开关（不许给假开关）")
+
+  -- ===== 收尾：夹具与存档还原（本组是最后一组，仍不留残留）=====
+  rawset(wm, "GetRegions", oldReg)
+  rawset(wm, "GetChildren", oldChi)
+  TEST.mapShown = oldMapShown205
+  u.treeCollapsed = {}
+  u.depthMax = 1
+  u.hideUnnamed = true
+  if hook.save then pcall(hook.save) end
+  EH_DEBUGBOX_CFG = oldCfg205
+  pcall(u.root.Hide, u.root)
+  print("GROUP 205 (图层树：折叠/缩进/跨 reload/与层深配合): PASS")
+end
+
+-- （组 206 已迁到 tests/tools/DragFrames.lua；1.74.33 **改口径**）：宽/高对**所有窗口停用**（原「新增宽度/高度」需求被用户第二次澄清推翻）=====）
+
+-- （组 207 已迁到 tests/tools/DragFrames.lua；1.74.31）：框拖拽新增「动作条1~4」= 候选名解析 + 去重 + 探针 =====）
+
+-- （组 208 已迁到 tests/tools/DragFrames.lua；1.74.32）：框拖拽新增「队伍层 / 团队层」= 候选名解析 + **按需出现的事件跟随** =====）
+
+-- （组 209 已迁到 tests/tools/DragFrames.lua；1.74.32）：框体探针扩「被动打开层」= **只读取证**（第 1 步，行为零变化）=====）
+
+-- （组 210 已迁到 tests/tools/DragFrames.lua；1.74.32）：框体探针的**安全入口** = 取证命令绝不许静默 =====）
+
+-- （组 211 已迁到 tests/tools/DragFrames.lua；1.74.32）：全 _G 扫描的**安全守卫**（真机 bug：索引到不可索引的 userdata）=====）
+
+-- （组 212 已迁到 tests/tools/DragFrames.lua；1.74.32 第 2 步）：被动窗口的**图标形态** =====）
+
+-- （组 213 已迁到 tests/tools/DragFrames.lua；1.74.32）：**匿名窗口**取证（父子链走两层 + 具名子件当身份指纹）=====）
+
+
+-- （组 214 已迁到 tests/tools/DragFrames.lua；1.74.33）：图层**选中名单**（工具箱 [设置] 多选下拉）=====）
+
+
+-- （组 215 已迁到 tests/tools/DragFrames.lua；1.74.33）：窗口的**头部拖拽带**（用户：「窗口拖拽的区域能否定位到 窗体头部红色部分?」）=====）
+
+
+-- （组 216 已迁到 tests/tools/DragFrames.lua；1.74.33）：鼠标键分派的**真机参数形态**（用户报「右键点图标打不开配置」的复现与钉子）=====）
+
+
+
+-- （组 217 已迁到 tests/tools/DragFrames.lua；1.74.33）：拖拽**位移叠加漂移**（用户：「窗口拖拽有些会有位移叠加漂移，比如角色」）=====）
+
+-- （组 218 已迁到 tests/tools/DragFrames.lua；1.74.33）：开窗探针 —— 被动窗口「打开时重设属性」的可行性取证工具 =====）
+
+
+-- （组 220 已迁到 tests/tools/DragFrames.lua；1.74.33）：被动窗口「不许改宽高」+ 方案 A（链式 OnShow）+ 方案 C（开窗后短复查）=====）
+
+-- （组 221 已迁到 tests/tools/DragFrames.lua；1.74.33）：老记录缺屏幕基准（用户报「拖住移动窗口之后下次打开位置没有正确生效」）=====）
+
+-- （组 222 已迁到 tests/tools/DragFrames.lua；1.74.33）：属性配置的 **X/Y 坐标**（用户第二次澄清要的就是这一项）=====）
+
 print("ALL TESTS PASS")
