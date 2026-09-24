@@ -75,6 +75,12 @@ function EVAL_WTT_MAY_READ()
   return may
 end
 function EVAL_TEST_WTT() return WTT end -- ★测试用：读出**真正在用的**那个隐性 tooltip（断言要改它、别再改 GameTooltip）
+-- ★1.75.16 **正式**读值口（不是测试专用）：凡是要拿这个隐形 tooltip「向服务器要数据」的功能
+--   （数据检索里给未缓存装备补缓存）都必须走这里 —— `rawget(_G, "EVAL_HELP_WTT")` 在
+--   「自建失败 → 退化用 GameTooltip」那条路上**恒为 nil**，于是调用方静默什么也做不了
+--   （1.75.16 真机事故：任务线当前页不再检索装备，就是读全局名读出了 nil）。
+function EVAL_WTT_HANDLE() return WTT end
+function EVAL_WTT_IS_SELF() return WTTSELF end
 function EVAL_WTT_STATE()
   return { self = WTTSELF, name = (WTTSELF and "EVAL_HELP_WTT" or "GameTooltip"),
            why = WTT_WHY, touches = WTT_TOUCH, hasWtt = (WTT ~= nil) }

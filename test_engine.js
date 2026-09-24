@@ -1393,7 +1393,12 @@ console.log("QUEST TOC CHECK: quest/ 三文件在 toc 且顺序 Data→Bulk→Ch
   if (!/local sorted = EVAL_QC_LIST\(filter\)/.test(qc)) bad.push("搜索没走 EVAL_QC_LIST(filter)（与详情不同序 → 点进去是另一条链）");
   if (!/return qcDetailOf\(qcChainAt\(key\)\)/.test(qc)) bad.push("详情没走 qcChainAt（位次↔键两条路会分叉）");
   // ★1.75.8 种类**多选**过滤：判定只准有一处（数据层），界面传集合、不复刻
-  if (!/qcKindPass\(f\.kinds, EVAL_QC_ITEM_KIND\(it\)\)/.test(qc)) bad.push("数据层没按 kinds 集合过滤（界面传了也白传）");
+  // ★1.75.18 装备视图走 EVAL_QC_KIND_PASS（全局单一来源），任务线视图走 qcRecKindsOK → 同一个 PASS
+  if (!/EVAL_QC_KIND_PASS\(f\.kinds, EVAL_QC_ITEM_KIND\(it\)\)/.test(qc)) bad.push("装备视图没按 kinds 集合过滤（界面传了也白传）");
+  if (!/local function qcRecKindsOK\(c, kset\)/.test(qc)) bad.push("缺 qcRecKindsOK（任务线的种类筛选没落数据层）");
+  if (!/if hit and lvOK\(c\) and qcRecKindsOK\(c, kinds\) then/.test(qc)) bad.push("策展链搜索没接种类筛选");
+  if (!/if qcRecKindsOK\(rec, kinds\) then/.test(qc)) bad.push("自报系列搜索没接种类筛选");
+  if (!/function EVAL_QC_KIND_PASS\(set, k\)/.test(qc)) bad.push("kinds 判定没抽成全局单一来源 EVAL_QC_KIND_PASS");
   if (!/return set\[k\] and true or false/.test(qc)) bad.push("kinds 集合判定没写成显式布尔（会返回 nil/true 混值）");
   if (!/if not any then return true end/.test(qc)) bad.push("kinds 空集没当成「不过滤」（一个都没勾会变成什么都不显示）");
   // ★1.75.9 全量数据层（QuestBulk.lua）：读取接口 + 统一入口 + 全量优先/策展兜底
@@ -1413,6 +1418,41 @@ console.log("QUEST TOC CHECK: quest/ 三文件在 toc 且顺序 Data→Bulk→Ch
   if (!/local b = \(type\(EVAL_QC_BULK_ITEM\) == "function"\) and EVAL_QC_BULK_ITEM\(id\) or nil/.test(qc)) {
     bad.push("EVAL_QC_ITEM 没有「策展表没有 → 退回全量物品表」的兜底（30-60 装备详情会查不到）");
   }
+  // ★1.75.10 稀有度（魔兽品质色）+ 按等级排序：判定与颜色都在数据层，界面只准读
+  {
+    const pal = { LEG: [1.00, 0.50, 0.00], EPIC: [0.64, 0.21, 0.93], RARE: [0.00, 0.44, 0.87],
+      UNCOMMON: [0.12, 1.00, 0.00], COMMON: [1.00, 1.00, 1.00], POOR: [0.62, 0.62, 0.62] };
+    for (const k of Object.keys(pal)) {
+      const re = new RegExp("(?<![A-Z_])" + k + "\\s*=\\s*\\{\\s*([\\d.]+)\\s*,\\s*([\\d.]+)\\s*,\\s*([\\d.]+)\\s*\\}");
+      const m = qc.match(re);
+      if (!m) { bad.push("稀有度调色板缺 " + k); continue; }
+      const got = [Number(m[1]), Number(m[2]), Number(m[3])];
+      if (got.some((v, i) => Math.abs(v - pal[k][i]) > 0.005)) {
+        bad.push("稀有度 " + k + " 不是魔兽品质色（实际 " + got.join(",") + "，应为 " + pal[k].join(",") + "）");
+      }
+    }
+    if (!/function EVAL_QC_RARITY\(rec\)/.test(qc)) bad.push("缺 EVAL_QC_RARITY（稀有度单一来源）");
+    if (!/function EVAL_QC_RARITY_RGB\(token\)/.test(qc)) bad.push("缺 EVAL_QC_RARITY_RGB 读值口");
+    if (!/local QC_LEG_KEYS = \{ "雷霆之怒"/.test(qc)) bad.push("传说关键词表没了（橙色档会全灭 —— 用户点名「史诗风剑之类」）");
+    if (!/local function qcHasAny\(hay, keys\)/.test(qc)) bad.push("稀有度关键词匹配没走 qcHasAny（Lua 模式里 | 不是交替，必须 plain 逐词）");
+    // 排序：等级第一键（列表与自动任务线两处都要）；旧「开门优先」写法已被用户反转
+    if (!/if a\.lo ~= b\.lo then return a\.lo < b\.lo end\r?\n\s*if a\.r ~= b\.r then return a\.r < b\.r end/.test(qc)) {
+      bad.push("EVAL_QC_LIST 不是「等级 → 稀有度」排序（用户要求任务线也按等级排序）");
+    }
+    // ★只看**自动任务线**那一段的排序（装备行的「武器优先」排序是另一回事，别误伤）
+    {
+      const serFn = qc.match(/function EVAL_QC_SERIES_LIST\(\)([\s\S]*?)\r?\nend\r?\n/);
+      if (!serFn) bad.push("找不到 EVAL_QC_SERIES_LIST");
+      else {
+        if (!/if a\.lo ~= b\.lo then return a\.lo < b\.lo end/.test(serFn[1])) bad.push("自动任务线没按等级排序");
+        if (/open and 0 or 1/.test(serFn[1]) || /a\.t ~= b\.t then return a\.t < b\.t/.test(serFn[1])) {
+          bad.push("自动任务线排序退回「开门优先 / 档位优先」（已被用户「按等级排序」反转）");
+        }
+      }
+    }
+    if (!/qs = sids, open = s\.open/.test(qc)) bad.push("EVAL_QC_SEARCH 的系列行没带 qs/open（稀有度会判成普通）");
+    if (!/open = \(p\[6\] == "1"\), steps = steps, qs = sids,/.test(qc)) bad.push("EVAL_QC_SERIES_LIST 的记录没带 qs（稀有度拿不到步骤数）");
+  }
   // 运行时拼键的四个语言键：LANG KEY CHECK 只看字面量，扫不到这些
   for (const lg of ["zhCN", "enUS", "ruRU"]) {
     const p = path.join(__dirname, "Locales", lg + ".lua");
@@ -1427,7 +1467,7 @@ console.log("QUEST TOC CHECK: quest/ 三文件在 toc 且顺序 Data→Bulk→Ch
     process.exitCode = 1;
     return;
   }
-  console.log("QUEST WIRING CHECK: chain 两分支 + 空查询放行 + 数字位次 id + 过滤/语言四键 + 搜索详情同序 + 不依赖 UnrealQuest + 种类多选只判定一处");
+  console.log("QUEST WIRING CHECK: chain 两分支 + 空查询放行 + 数字位次 id + 过滤/语言四键 + 搜索详情同序 + 不依赖 UnrealQuest + 种类多选只判定一处 + 稀有度调色板/按等级排序");
 })();
 
 // ===== QUEST PANEL CHECK（1.75.1）：任务线推荐弹窗的接线/规程/布局，漏一处都是**静默失效** =====
@@ -1478,7 +1518,7 @@ console.log("QUEST TOC CHECK: quest/ 三文件在 toc 且顺序 Data→Bulk→Ch
     if (!/DS\.qp\.hint/.test(ds)) bad.push("放大镜没给「已送数据检索」回执");
   }
   if (!/EVAL_DS_SEARCH_NAME\(word\)/.test(ds)) bad.push("放大镜点击没走 EVAL_DS_SEARCH_NAME（按任务名检索）");
-  if (!/st\.detZoom\[n\] = qn/.test(ds)) bad.push("步骤行没记任务名（放大镜会查错词）");
+  if (!/zoom = \(qn and qn ~= ""\) and qn or nil/.test(ds)) bad.push("步骤行没带任务名（放大镜会查错词）");
   if (!/faction = DS\.qpFact/.test(ds)) bad.push("装备视图没把阵营传进筛选");
   // ★1.75.8 用户要求：「装备筛选种类细分,支持种类子类型.武器子类型支持.并且支持多选.」
   //   ① 选项**由数据现算**（写死种类表＝与数据脱节）② 多选走 multi 下拉 ③ 分组标题 locked ④ 空集=全部
@@ -1499,11 +1539,50 @@ console.log("QUEST TOC CHECK: quest/ 三文件在 toc 且顺序 Data→Bulk→Ch
     if (!lv) bad.push("找不到 QP_LV 等级档表");
     else {
       const bands = (lv[1].match(/\{ k = "L\d"/g) || []).length;
-      if (bands < 5) bad.push("等级档只有 " + bands + " 档（用户要求覆盖到 30-60，应 ≥5 档）");
-      if (!/"L5", lo = 50, hi = 999/.test(lv[1])) bad.push("最高档不是 50+（hi=999 才装得下 60-69 的团本/开门任务）");
+      // ★1.75.15 用户要求「等级过滤增加个独立档位 60」⇒ 6 档（L1..L6），50-59 与 60+ 分开
+      if (bands < 6) bad.push("等级档只有 " + bands + " 档（用户要求 60 独立成档，应 ≥6 档：L1..L6）");
+      if (!/"L5", lo = 50, hi = 59/.test(lv[1])) bad.push("L5 不是 50-59（60 档拆出来就得把 50+ 收成 50-59）");
+      if (!/"L6", lo = 60, hi = 999/.test(lv[1])) bad.push("缺独立的 60+ 档（hi=999 才装得下 60-69 的团本/开门任务）");
     }
     if (!/for i = 1, table\.getn\(QP_LV\) do labels\[i\] = L\("DS_QP_LV_" \.\. QP_LV\[i\]\.k\) end/.test(ds)) {
       bad.push("等级下拉没由 QP_LV 现算（写死标签会在加档时漏掉新档）");
+    }
+    // ★1.75.18 任务线视图的按钮位次 = **F1 等级 · F2 类型（与装备视图同一份种类多选）· F3 阵营**
+    //   （用户：「等级筛选按钮移动到最左侧」+「档位过滤使用装备那边的种类过滤」）
+    if (!/st\.f1\.text:SetText\(L\("DS_QP_F1_CHAIN"\) \.\. ": " \.\. L\("DS_QP_LV_" \.\. qpLvEntry\(\)\.k\)\)/.test(ds)) {
+      bad.push("任务线视图的等级标签没现算（写死档位 = 加档必漏一处）");
+    }
+    if (!/st\.f2\.text:SetText\(L\("DS_QP_F2_CHAIN"\) \.\. ": " \.\. qpKindLabel\(\)\)/.test(ds)) {
+      bad.push("任务线视图的「类型」标签没走种类单一来源 qpKindLabel（档位筛选应已被种类取代）");
+    }
+    // ★扫描前**摘注释**：上面的说明注释里就写着 `QP_TIER / DS.qpTier`、`local labels` 这些字面量，
+    //   不摘会把注释当代码（本项目已因同类问题误报过两次）。
+    const dsNoC = ds.replace(/--[^\n]*/g, "");
+    if (/QP_TIER|DS\.qpTier/.test(dsNoC)) bad.push("档位筛选（QP_TIER / DS.qpTier）已被种类取代，源码里还有残留");
+    if (!/if isList then st\.f3\.btn:Show\(/.test(ds)) {
+      bad.push("第三个过滤按钮没在两个视图都显示（任务线视图的阵营过滤点不到）");
+    }
+    // 等级下拉：F1 在**两个视图共用**（不再按 tab 分支）⇒ 处理段里必须只出现一次 QP_LV 标签循环
+    {
+      const f1m = dsNoC.match(/qpF1\.btn:SetScript\("OnClick"[\s\S]{0,1200}?\n  end\)/);
+      if (!f1m) bad.push("找不到 F1（等级筛选）处理段");
+      else if (!/for i = 1, table\.getn\(QP_LV\) do labels\[i\] = L\("DS_QP_LV_" \.\. QP_LV\[i\]\.k\) end/.test(f1m[0])) {
+        bad.push("F1 处理段没由 QP_LV 现算等级档");
+      } else if (!/DS\.qpLv = QP_LV\[pi\]/.test(f1m[0])) {
+        bad.push("F1 处理段没把选择写回 DS.qpLv（点了不生效）");
+      }
+    }
+    if (!/EVAL_QC_SEARCH\(q, QP_CHAIN_MAX, \{ faction = DS\.qpFact, kinds = DS\.qpKinds, loMin = lv\.lo, loMax = lv\.hi \}\)/.test(ds)) {
+      bad.push("任务线搜索没把等级区间 + 种类集合传进数据层（过滤只改了显示）");
+    }
+    // 种类菜单**两个视图共用**（不再按 tab 分支）：F2 处理段里应只有一处 EVAL_DD_OPEN
+    {
+      const f2m = dsNoC.match(/qpF2\.btn:SetScript\("OnClick"[\s\S]{0,1600}?\n  end\)/);
+      if (!f2m) bad.push("找不到 F2（类型筛选）处理段");
+      else {
+        const nDrop = (f2m[0].match(/EVAL_DD_OPEN\(/g) || []).length;
+        if (nDrop !== 1) bad.push("F2 处理段里有 " + nDrop + " 个下拉（任务线应共用装备那份种类菜单）");
+      }
     }
     if (/labels = \{ L\("DS_F_ALL"\), L\("DS_QP_LV_L1"\)/.test(ds)) bad.push("等级下拉还写着硬编码的四项标签");
     if (!/local nSrc = table\.getn\(h\.quests or \{\}\)/.test(ds)) bad.push("装备行没按「全量任务来源」写来源（用户要求单任务也算来源）");
@@ -1511,11 +1590,172 @@ console.log("QUEST TOC CHECK: quest/ 三文件在 toc 且顺序 Data→Bulk→Ch
       bad.push("装备搜索没命中「来源任务名」（按任务名找装备会查不到）");
     }
     if (!/EVAL_QC_BULK_SOURCES\(id\)/.test(ds)) bad.push("装备详情没列全量来源任务（由装备反查要做哪些任务这条主线断了）");
-    if (!/st\.detZoom\[n\] = \(sq\.n ~= ""\) and sq\.n or nil/.test(ds)) bad.push("来源任务行没挂放大镜（点它应该按任务名直达数据检索）");
+    if (!/zoom = \(sq\.n ~= ""\) and sq\.n or nil/.test(ds)) bad.push("来源任务行没挂放大镜（点它应该按任务名直达数据检索）");
     if (!/function EVAL_DS_QC_AUDIT\(limit, quiet\)/.test(ds)) bad.push("缺装备审计 EVAL_DS_QC_AUDIT（用户要求审计装备链接是否与游戏内一致）");
     if (!/if tostring\(nm\) == tostring\(e\.it\.n\) then st\.nameOK = st\.nameOK \+ 1/.test(ds)) bad.push("审计没做「游戏内名字 vs 数据名字」对账");
     const ehSrc2 = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
     if (!/ds 任务线 审计/.test(ehSrc2)) bad.push("/eh ds 任务线 审计 命令没接线");
+  }
+  // ★1.75.10 用户要求：① 任务线按稀有度染色（橙=传说风剑之类）② 奖励行配图标 + 链接 tooltip
+  {
+    // ① 列表行：稀有度必须来自数据层（界面写死颜色 = 变异存活）
+    const chainRow = ds.match(/else\r?\n\s*local c = h\.c or \{\}[\s\S]{0,900}?pcall\(row\.icon\.Hide, row\.icon\)/);
+    if (!chainRow) bad.push("找不到任务线列表行的渲染段");
+    else {
+      if (!/local rt, rr, rg, rb = EVAL_QC_RARITY\(c\)/.test(chainRow[0])) bad.push("任务线行没读数据层稀有度（EVAL_QC_RARITY）");
+      if (!/L\("DS_QP_RAR_" \.\. rt\)/.test(chainRow[0])) bad.push("任务线行没打稀有度标签（[档位·稀有度]）");
+      if (!/if type\(rr\) == "number" then row\.text:SetTextColor\(rr, rg, rb\)/.test(chainRow[0])) {
+        bad.push("任务线行没用稀有度三通道上色（写死颜色 = 用户要的染色机制失效）");
+      }
+      if (/row\.text:SetTextColor\(0\.92, 0\.88, 0\.76\)\r?\n\s*pcall\(row\.icon\.Hide/.test(chainRow[0])) {
+        bad.push("任务线行还留着旧的写死颜色");
+      }
+    }
+    // ①b 详情标题也要按稀有度染色
+    if (!/local rt, rr, rg, rb = EVAL_QC_RARITY\(rec and rec\.c or nil\)/.test(ds)) bad.push("任务线详情标题没按稀有度染色");
+    // ② 奖励行：图标与热区控件 + 同源图标函数 + tooltip/点击接线
+    if (!/local qpDetIcons, qpDetHover = \{\}, \{\}/.test(ds)) bad.push("详情行没有图标/热区控件池");
+    // ② 奖励行/来源行/步骤行**统一**由 qpDrawDetailBody 绘制（1.75.11 起——两处各写一份会漂移）
+    if (!/local function qpDrawDetailBody\(body\)/.test(ds)) bad.push("缺详情正文统一绘制件 qpDrawDetailBody（两视图各写一份必然漂移）");
+    const drawer = ds.match(/local function qpDrawDetailBody\(body\)([\s\S]*?)\n  end\r?\n/);
+    if (!drawer) bad.push("找不到 qpDrawDetailBody 函数体");
+    else {
+      if (!/local tex, isPh = qpItemTexPh\(e\.item\)/.test(drawer[1])) bad.push("奖励行没走 qpItemTexPh（与武器列表同一套图标 + 未扫描时占位）");
+      if (!/st\.detItem\[i\] = e\.item/.test(drawer[1])) bad.push("奖励行没记装备 id（tooltip/点击都拿不到）");
+      if (!/st\.detZoom\[i\] = e\.zoom/.test(drawer[1])) bad.push("任务名没记进 detZoom（放大镜会查错词）");
+      if (!/st\.detPh\[i\] = true/.test(drawer[1])) bad.push("奖励行没记「这是占位图」标记（点击优先刷新会失效）");
+      if (!/if e\.item then/.test(drawer[1])) bad.push("绘制件没按「有装备 id」分支上图标/热区");
+    }
+    // 两个 builder 必须把 item/zoom 填进 body 条目
+    if (!/body\[table\.getn\(body\) \+ 1\] = \{ text = txt, r = r, g = g, b = b, item = src\.id \}/.test(ds)) {
+      bad.push("任务线详情的奖励条目没带 item（图标/链接 tooltip 都拿不到）");
+    }
+    if (!/if DS\.qp\.detPh\[zi\] then qpShowLoadingTip\(hb\) else qpItemTooltip\(hb, id\) end/.test(ds)) {
+      bad.push("奖励行悬停没分「占位（数据更新中）/ 已扫到（物品链接）」两支");
+    }
+    if (!/if DS\.qp\.detPh\[zi\] then qpReqPriority\(id\) else EVAL_QP_ITEM_DETAIL\(id\) end/.test(ds)) {
+      bad.push("奖励行点击没分「占位→优先刷新 / 已扫到→装备详情」两支");
+    }
+    if (!/pcall\(st\.detIcons\[i\]\.Hide, st\.detIcons\[i\]\)/.test(ds)) bad.push("qpClearDet 没逐行清图标（行池复用会残留）");
+    if (!/pcall\(st\.detHover\[i\]\.Hide, st\.detHover\[i\]\)/.test(ds)) bad.push("qpClearDet 没逐行清热区（行池复用会残留）");
+  }
+  // ★1.75.11 用户要求：「装备和任务线滚动机制参考抓宠助手的滚动方式，顺滑滚动」
+  {
+    if (!/if dir ~= 0 then EVAL_QP_SCROLL\(-dir\) end/.test(ds)) bad.push("滚轮没走「1 行/格」的 EVAL_QP_SCROLL（旧实现一格跳整页）");
+    if (/OnMouseWheel[\s\S]{0,300}?EVAL_QP_PAGE\(-dir\)/.test(ds)) bad.push("滚轮还挂在整页跳上（用户要求顺滑滚动）");
+    if (!/function EVAL_QP_SCROLL\(step\)/.test(ds)) bad.push("缺 EVAL_QP_SCROLL");
+    if (!/local QP_ANIM_DECAY, QP_ANIM_SNAP = /.test(ds)) bad.push("缺滑动动画常量（QP_ANIM_DECAY/QP_ANIM_SNAP）");
+    if (!/local function qpLayoutRows\(\)/.test(ds)) bad.push("缺 qpLayoutRows（像素错位靠它摆行）");
+    if (!/pcall\(qpAnimFrame\.SetScript, qpAnimFrame, "OnUpdate", qpAnimTick\)/.test(ds)) bad.push("动画 tick 没挂上");
+    if (!/pcall\(qpAnimFrame\.SetScript, qpAnimFrame, "OnUpdate", nil\)/.test(ds)) bad.push("动画到零没摘钩（会常驻空转）");
+    // ★OnUpdate 零参数（1.74.31 实测）：tick 函数**不许带参数**，也绝不许拿参当帧用
+    if (!/local function qpAnimTick\(\)/.test(ds)) {
+      bad.push("动画 tick 带参数了（本客户端 OnUpdate 不传参 ⇒ 参数恒 nil，绝不能拿它当帧用）");
+    }
+    if (/SetScript\("OnUpdate", function\(f\)/.test(ds)) bad.push("动画 tick 写成 function(f) 再索引 f（真机 f=nil 当场红字）");
+    if (!/pcall\(btn\.ClearAllPoints, btn\)/.test(ds)) bad.push("qpLayoutRows 没有 ClearAllPoints（每帧追加锚点 = 布局漂移）");
+    if (!/DS\.qpOff = new\r?\n    qpFillList\(\)\r?\n    qpAnimKick\(\(new - old\) \* QP_ROW_H\)/.test(ds)) {
+      bad.push("列表滚动没有「换行 + 像素动画」两件套");
+    }
+    // 夹取必须**两条分支各一次**（列表 + 详情）：详情那条若丢了，滚过头只能靠绘制件兜底（掩盖问题）
+    {
+      const sc = ds.match(/function EVAL_QP_SCROLL\(step\)([\s\S]*?)\n  end\r?\n/);
+      if (!sc) bad.push("找不到 EVAL_QP_SCROLL 函数体");
+      else {
+        const clamps = (sc[1].match(/if new > maxOff then new = maxOff end/g) || []).length;
+        if (clamps < 2) bad.push("EVAL_QP_SCROLL 的越界夹取只在 " + clamps + " 条分支里（列表/详情各要一次）");
+      }
+    }
+    if (!/if DS\.qpMode == "detail" then/.test(ds)) bad.push("详情视图没接滚轮滚动");
+  }
+  // ★1.75.12 用户四条：任务等级+黄色感叹号 / 放大镜不红字 / 放大镜自动切 tab / 只检索可见项 + 限频
+  {
+    const ehSrc3 = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
+    const qcSrc3 = fs.readFileSync(path.join(__dirname, "quest", "QuestChains.lua"), "utf8");
+    // ② 红字兜底：两处 nil 守卫（真机 `bad argument #1 to 'getn'`）
+    if (!/if type\(items\) ~= "table" then return end/.test(ehSrc3)) bad.push("EVAL_DD_OPEN 没有 nil 条目守卫（真机红字兜底）");
+    if (!/if type\(items\) ~= "table" then return \{\} end/.test(ehSrc3)) bad.push("DD_FILTER 没有 nil 守卫（getn(nil) 会糊屏）");
+    // ① 任务行：黄色感叹号 + 等级
+    if (!/local QP_QUEST_ICON = DS_ICON_ROOT \.\. "questIcon"/.test(ds)) bad.push("任务行没定义黄色感叹号素材（照数据检索列表同一张图）");
+    if (!/elseif e\.quest then/.test(ds)) bad.push("详情绘制件没有「任务行」分支（感叹号画不出来）");
+    if (!/pcall\(st\.detIcons\[i\]\.SetTexture, st\.detIcons\[i\], QP_QUEST_ICON\)/.test(ds)) bad.push("任务行没把感叹号贴到左侧图标槽");
+    {
+      const questMarks = (ds.match(/quest = true/g) || []).length;
+      if (questMarks < 3) bad.push("标记为任务行的只有 " + questMarks + " 处（来源行/链步骤行/任务线步骤行都要）");
+    }
+    if (!/if lv then txt = txt \.\. "  Lv" \.\. tostring\(lv\) end/.test(ds)) bad.push("步骤行没拼上任务等级（Lv）");
+    if (!/function EVAL_QC_QUEST_LEVEL\(id\)/.test(qcSrc3)) bad.push("数据层缺 EVAL_QC_QUEST_LEVEL（拿不到任务等级）");
+    // ③ 放大镜 → 自动切到数据检索 tab（照抓宠帮手 EVAL_PH_JUMP 范式）
+    if (!/pcall\(EVAL_HELP_CFG_SETTAB, 4\)/.test(ds)) bad.push("放大镜点击没切到数据检索 tab（用户要求自动打开）");
+    // ④ 只检索可见项 + 限频
+    if (!/DS\.qcReq\.q = \{\}/.test(ds)) bad.push("请求队列没有被**重建**（会累积成「把所有装备顺序问一遍」）");
+    if (!/qpReqBegin\(\)          -- ★1\.75\.12 只让「这一屏要画的装备」进请求队列/.test(ds)) bad.push("列表重绘没重置请求队列");
+    if (!/qpReqBegin\(\)          -- ★1\.75\.12 详情同理/.test(ds)) bad.push("详情重绘没重置请求队列");
+    if (!/local QP_REQ_RATE, QP_REQ_MAX = 2\.0, \d+/.test(ds)) bad.push("请求限频不是 ≥2.0 秒/件（用户要求「不要太频繁」）");
+    if (!/function EVAL_QP_REQ_STATE\(\)/.test(ds)) bad.push("缺 EVAL_QP_REQ_STATE 读值口（缓存/队列状态看不到）");
+  }
+  // ★1.75.10 追加要求：「同个任务线多个装备奖励就都显示，并排在任务标题右边、左对齐」+ 悬停预览链接
+  {
+    // 这一段在 QUEST PANEL CHECK 里（作用域只有 ds）⇒ 数据层那两个断言要**自己读** QuestChains.lua
+    const qcSrc2 = fs.readFileSync(path.join(__dirname, "quest", "QuestChains.lua"), "utf8");
+    if (!/function EVAL_QC_CHAIN_REWARDS\(key, max\)/.test(qcSrc2)) bad.push("数据层缺 EVAL_QC_CHAIN_REWARDS（行尾奖励图标拿不到数据）");
+    if (!/local QP_RW_MAX, QP_RW_STEP = \d+, \d+/.test(ds)) bad.push("缺奖励图标带常量 QP_RW_MAX/QP_RW_STEP");
+    if (!/local rw = \{\}/.test(ds) || !/table\.insert\(qpListWidgets, bj\)/.test(ds)) {
+      bad.push("奖励图标槽没建/没进列表显隐清单（切视图会留在屏上）");
+    }
+    if (!/pcall\(row\.rw\[j\]\.tex\.Hide, row\.rw\[j\]\.tex\)/.test(ds)) bad.push("行填充没逐槽清奖励图标（上一页残留）");
+    if (!/row\.rwIds\[j\] = nil/.test(ds)) bad.push("行填充没清 rwIds（装备行会带着旧奖励 id 出 tooltip）");
+    if (!/local ids, total = EVAL_QC_CHAIN_REWARDS\(c\.k, QP_RW_MAX\)/.test(ds)) bad.push("任务线行没取奖励列表");
+    if (!/local tex, isPh = qpItemTexPh\(ids\[j\]\)/.test(ds)) bad.push("奖励图标没走 qpItemTexPh（与武器列表不同套 ⇒ 用户要的「相同效果」做不到）");
+    // ★1.75.18 占位图标（宏 961）：未扫描出的装备不许「什么都不画」
+    if (!/local QP_PH_MACRO_ICON = 961/.test(ds)) bad.push("缺占位图标常量（用户指定**宏 961**）");
+    if (!/GetMacroIconInfo, QP_PH_MACRO_ICON/.test(ds)) bad.push("占位图标没走游戏内宏图标 API（GetMacroIconInfo(961)）");
+    if (!/if isPh then row\.rwPh\[shown\] = true end/.test(ds)) bad.push("行上没记「这一格是占位图」（点击优先刷新会失效）");
+    if (!/if isPh then pcall\(row\.rw\[shown\]\.tex\.SetVertexColor, row\.rw\[shown\]\.tex, 0\.55, 0\.55, 0\.55\)/.test(ds)) {
+      bad.push("占位图没置灰（与已扫到的图标分不开）");
+    }
+    if (!/pcall\(row\.rw\[shown\]\.tex\.SetPoint, row\.rw\[shown\]\.tex, "LEFT", row\.btn, "LEFT", px, 0\)/.test(ds)) {
+      bad.push("奖励图标没做成「紧跟标题、左对齐」（必须 LEFT 锚 + 现算 px）");
+    }
+    if (!/local x0 = 22 \+ qpTextWidth\(row\.text, label, 9\) \+ 8/.test(ds)) {
+      bad.push("奖励图标起点没按文本宽度现算（会盖住标题或离得太远）");
+    }
+    if (!/local function qpTextWidth\(fs, label, perChar\)/.test(ds)) bad.push("缺文本宽度单一来源 qpTextWidth");
+    if (!/elseif b >= 192 then i = i \+ 2 w = w \+ pc/.test(ds)) bad.push("qpTextWidth 没按 UTF-8 逐字节判宽（中文会被按字节算成 3 倍）");
+    if (!/row\.rwMore, "\+" \.\. tostring\(total - shown\)/.test(ds)) bad.push("装不下的奖励没给「+N」如实提示");
+    if (!/if row\.rwPh\[slot\] then qpShowLoadingTip\(bj\) else qpItemTooltip\(bj, id\) end/.test(ds)) {
+      bad.push("奖励图标悬停没分「占位（数据更新中）/ 已扫到（物品链接）」两支");
+    }
+    if (!/if row\.rwPh\[slot\] then qpReqPriority\(id\) else EVAL_QP_ITEM_DETAIL\(id\) end/.test(ds)) {
+      bad.push("奖励图标点击没分「占位→优先刷新 / 已扫到→装备详情」两支");
+    }
+    if (!/local function qpReqPriority\(id\)[\s\S]{0,600}?table\.insert\(q, 1, id\)/.test(ds)) {
+      bad.push("优先刷新没把装备插到**队首**（用户要求「加入检索队列最前面、优先扫描」）");
+    }
+  }
+  // ★1.75.11 实测事故：「等级筛选点不动」= 处理函数里写了 `local labels`，遮蔽外层 labels ⇒
+  //   EVAL_DD_OPEN 收到 nil（下拉建不出来、点了毫无反应）。静态守住这个形状。
+  {
+    const f1 = ds.replace(/--[^\n]*/g, "").match(/qpF1\.btn:SetScript\("OnClick"[\s\S]{0,2000}?\n  end\)/);
+    if (!f1) bad.push("找不到等级筛选的 OnClick 处理段");
+    else {
+      const block = f1[0];
+      // ★1.75.11 实测的「点不动」= 内层 `local labels` 遮蔽外层 ⇒ 这里数**声明次数**：
+      //   1 次 = 正常（本段自己建表）；≥2 次 = 遮蔽事故（EVAL_DD_OPEN 收到 nil）。
+      const nDecl = (block.match(/local labels/g) || []).length;
+      if (nDecl < 1) bad.push("等级筛选处理段没有 `local labels`（标签表没建）");
+      if (nDecl > 1) bad.push("等级筛选处理段里 `local labels` 出现 " + nDecl + " 次（内层遮蔽外层 ⇒ 点了没反应）");
+      if (!/labels = \{\}/.test(block)) bad.push("等级标签没走「由 QP_LV 现算」的 labels = {}");
+    }
+  }
+  // 稀有度语言键（运行时拼键：LANG KEY CHECK 只看字面量，扫不到 DS_QP_RAR_ .. token）
+  for (const lg of ["zhCN", "enUS", "ruRU"]) {
+    const p = path.join(__dirname, "Locales", lg + ".lua");
+    if (!fs.existsSync(p)) { bad.push("缺语言包 " + lg); continue; }
+    const loc = fs.readFileSync(p, "utf8");
+    for (const t of ["LEG", "EPIC", "RARE", "UNCOMMON", "COMMON", "POOR"]) {
+      if (!(new RegExp("\\bDS_QP_RAR_" + t + "\\s*=")).test(loc)) bad.push(lg + " 缺稀有度语言键 DS_QP_RAR_" + t);
+    }
   }
   // ★★★1.75.9 用户实测「图片内的输入框无法输入」：弹窗 EditBox 必须照**主搜索框已验证配方**三件套
   //   ① EnableMouse（本客户端不显式开鼠标 = 收不到点击 = 拿不到焦点 = 一个字都打不进 —— 本次真凶）
@@ -1590,7 +1830,31 @@ console.log("QUEST TOC CHECK: quest/ 三文件在 toc 且顺序 Data→Bulk→Ch
     if (!/faction and f\.faction ~= "ALL" and c\.f ~= f\.faction then facOK = false end/.test(qcSrc)) bad.push("装备视图没有按阵营过滤链");
     if (!/function EVAL_QC_KIND_LIST/.test(qcSrc)) bad.push("数据层缺种类清单现算 EVAL_QC_KIND_LIST（写死种类表＝与数据脱节）");
     if (!/function EVAL_QC_KIND_GROUPS/.test(qcSrc)) bad.push("数据层缺分组单一来源 EVAL_QC_KIND_GROUPS");
-    if (!/return rec\.k/.test(qcSrc)) bad.push("种类没从生成数据的 k 字段取（唯一来源）");
+    // ★1.75.17/18 种类唯一来源仍是生成数据的 `k`，但「其它/空」时按**部位**补细分
+    //   （用户：「其它 能否细分为 戒指/项链/饰品」）；映射表 + 落回 k 两处都要在。
+    if (!/local QC_SLOT_KIND = \{ \["手指"\] = "戒指", \["颈部"\] = "项链", \["饰品"\] = "饰品" \}/.test(qcSrc)) {
+      bad.push("缺部位→种类映射 QC_SLOT_KIND（戒指/项链/饰品 细分不了）");
+    }
+    if (!/local s = QC_SLOT_KIND\[rec\.s or ""\]/.test(qcSrc)) bad.push("种类推导没按部位细分（其它 里仍混着戒指/项链/饰品）");
+    if (!/return k\r?\nend/.test(qcSrc)) bad.push("种类没在最后落回生成数据的 k（唯一来源）");
+    // ★1.75.15 等级过滤落在数据层，且必须是**区间重叠**（写「lo 落在档内」会让跨档长线在 40-49 档整条消失）
+    if (!/local function lvOK\(c\)/.test(qcSrc) || !/\(hi >= lvLo\) and \(lo <= \(lvHi or 999\)\)/.test(qcSrc)) {
+      bad.push("EVAL_QC_SEARCH 没按「区间重叠」过滤等级（跨档长线会查不到）");
+    }
+    // ★1.75.14 用户问「任务线有按照任务最低等级排序吗?」：搜索结果是**两个来源拼接**的，
+    //   必须**跨块统一排序**（旧实现两个块各自排好直接拼 ⇒ 第 22/23 条之间 30 → 4 的回头）。
+    //   判据 = ① 有统一排序件（装饰排序 dec + 等级键）② **不许**再出现「各自早截断」的旧形状。
+    if (!/table\.sort\(dec, function\(a, b\)[\s\S]{0,120}if a\.lo ~= b\.lo then return a\.lo < b\.lo end/.test(qcSrc)) {
+      bad.push("EVAL_QC_SEARCH 没有跨块统一排序（两块拼接会 30 → 4 回头）");
+    }
+    if (/if table\.getn\(out\) < max then\r?\n\s*table\.insert\(out,/.test(qcSrc)) {
+      bad.push("EVAL_QC_SEARCH 又变成「边收边截断」（截断必须在统一排序**之后**）");
+    }
+    // ★1.75.14 自动任务线记录**单一来源**：列表行与详情必须走同一个 qcSeriesRec
+    //   （旧实现详情少给 qs ⇒ 同一条线「列表行色 ≠ 详情色」，组 192 ⑦ 抓到）
+    if (!/c = qcSeriesRec\(s, i\)/.test(qcSrc) || !/c = qcSeriesRec\(s, idx\)/.test(qcSrc)) {
+      bad.push("自动任务线记录不是单一来源（列表行 / 详情各拼一份 ⇒ 行色 ≠ 详情色）");
+    }
   }
   // ⑦ 布局：详情最后一行必须在底部按钮之上（用生产常量独立验算，不复刻坐标公式）
   const num = (re) => { const m = ds.match(re); return m ? Number(m[1]) : null; }; // 仍用于读窗口高
@@ -1611,14 +1875,95 @@ console.log("QUEST TOC CHECK: quest/ 三文件在 toc 且顺序 Data→Bulk→Ch
     if (!fs.existsSync(p)) { bad.push("缺语言包 " + lg); continue; }
     const loc = fs.readFileSync(p, "utf8");
     for (const k of ["DS_QP_TITLE", "DS_QP_TAB_ITEM", "DS_QP_TAB_CHAIN", "DS_QP_GOTO_DS", "DS_QP_SRC",
-                     "DS_QP_LV_ALL", "DS_QP_LV_L1", "DS_QP_LV_L2", "DS_QP_LV_L3",
+                     "DS_QP_LV_ALL", "DS_QP_LV_L1", "DS_QP_LV_L2", "DS_QP_LV_L3", "DS_QP_LV_L4",
+                     "DS_QP_LV_L5", "DS_QP_LV_L6", "DS_QP_F3_CHAIN",
                      "DS_QP_KIND_ALL", "DS_QP_KIND_WP", "DS_QP_KIND_OT", "DS_QP_F3_ITEM", "DS_QP_ZOOM_TIP"]) {
       if (!(new RegExp("\\b" + k + "\\s*=")).test(loc)) bad.push(lg + " 缺语言键 " + k);
     }
   }
+  // ★1.75.13 用户实测报了两件事，两件都属「不报错的静默事故」，只能用源码检查守：
+  //   ① 看装备时红字 `attempt to call global 'qpFillList' (a nil value)` → 根因是「局部函数**声明位置**即契约」
+  //      （EVAL_QP_SCROLL 排在 `local function qpFillList` 之前 ⇒ 那里捕获的是全局 nil）⇒ 改前向声明。
+  //   ② 「任务线最高只有 30 级」→ 根因是列表写死条数上限 × 等级升序 ⇒ 高等级线被整段截掉。
+  {
+    const qcSrc2 = fs.readFileSync(path.join(__dirname, "quest", "QuestChains.lua"), "utf8");
+    // ★扫描前**摘注释**：上面那段修复说明的注释里本身就写着 `local function qpFillList()` 与 `qpFillList()`，
+    //   不摘就会把「注释里的字面量」当成代码（本 CHECK 首轮就是这么误报的）。
+    const dsNC = ds.replace(/--[^\n]*/g, "");
+    const decl = dsNC.search(/local qpFillList\b/);
+    const def = dsNC.search(/\r?\n  qpFillList = function\(\)/);
+    const scroll = dsNC.search(/function EVAL_QP_SCROLL\(step\)/);
+    if (decl < 0) bad.push("缺 qpFillList 前向声明（声明位置一错就抓全局 nil）");
+    if (def < 0) bad.push("qpFillList 不是「先声明后赋值」的写法（写回 local function 即回到顺序敏感）");
+    if (/local function qpFillList\(\)/.test(dsNC)) bad.push("qpFillList 又写回 local function（前向声明失效）");
+    if (decl >= 0 && scroll >= 0 && decl > scroll) bad.push("qpFillList 声明排在 EVAL_QP_SCROLL 之后（真机抓 nil）");
+    {
+      let m, nBad = 0;
+      const re = /qpFillList\(\)/g;
+      while ((m = re.exec(dsNC))) { if (decl < 0 || m.index < decl) nBad++; }
+      if (nBad > 0) bad.push("有 " + nBad + " 处 qpFillList() 出现在声明之前（真机抓 nil）");
+    }
+    if (/EVAL_QC_SEARCH\(q, \d/.test(dsNC)) bad.push("任务线列表又写死条数上限（等级升序 ⇒ 高等级线被静默截掉）");
+    if (!/EVAL_QC_SEARCH\(q, QP_CHAIN_MAX, /.test(dsNC)) bad.push("任务线列表没走 QP_CHAIN_MAX 单一来源");
+    if (!/local QP_CHAIN_MAX = 0\b/.test(dsNC)) bad.push("QP_CHAIN_MAX 必须是 0（不限条数 = 全量浏览）");
+    if (!/if max <= 0 then max = math\.huge end/.test(qcSrc2)) bad.push("EVAL_QC_SEARCH 不认 cap≤0=不限（QuestChains 侧）");
+  }
+  // ★1.75.16 用户实测「任务线当前页**不再检索装备**了」：根因是**请求泵**这一环，
+  //   而旧判据只断言「队列 ≤ 一页 / 限频 ≥2s」——泵即使彻底停摆也照样全绿。
+  //   四条硬要求：① 泵挂 UIParent（挂弹窗子级时，OnUpdate 只在帧可见时触发 ⇒ 弹窗显隐一异常泵就静静死掉）
+  //   ② 工具柄走 Engine 单一来源（读全局名 `EVAL_HELP_WTT` 在「自建失败退化用 GameTooltip」那条路上恒 nil）
+  //   ③ 取柄失败**不许消费队列**（旧写法先 remove 再取柄 ⇒ 静默丢件）
+  //   ④ 读值口 / 探针必须能看出「泵到底有没有在要」。
+  {
+    const engSrc = fs.readFileSync(path.join(__dirname, "Engine.lua"), "utf8");
+    if (!/function EVAL_WTT_HANDLE\(\)/.test(engSrc)) bad.push("Engine 没导出 EVAL_WTT_HANDLE（工具柄没有单一来源）");
+    if (!/local qpPump = CreateFrame\("Frame", nil, UIParent\)/.test(ds)) {
+      bad.push("请求泵没挂 UIParent（挂弹窗子级 ⇒ OnUpdate 随弹窗显隐静默停摆）");
+    }
+    if (/type\(EVAL_WTT_HANDLE\) == "function"\) and EVAL_WTT_HANDLE\(\) or rawget/.test(ds)) {
+      bad.push("工具柄用了 `A and f() or 全局`（f() 返 nil 时 Lua 会静默回落，1.73.15 记过这个形状）");
+    }
+    if (!/if type\(EVAL_WTT_HANDLE\) == "function" then wtt = EVAL_WTT_HANDLE\(\)/.test(ds)) {
+      bad.push("工具柄没走 EVAL_WTT_HANDLE（读全局名在「退化用 GameTooltip」时恒 nil ⇒ 泵静默什么也不做）");
+    }
+    if (!/if not wtt or not may[\s\S]{0,300}?table\.remove\(st\.q, idx\)/.test(ds)) {
+      bad.push("取柄失败时仍然消费队列（静默丢件：用户看到「不再检索装备」却查不出原因）");
+    }
+    if (!/\[请求泵\] 已请求 %d 件/.test(ds)) bad.push("探针没报「请求泵」状态（分不清泵在抽还是泵死了）");
+    if (!/req = st\.req or 0, blocked = st\.blocked or 0/.test(ds)) bad.push("读值口没暴露 req/blocked（泵活性不可观测）");
+    if (!/pcall\(qpPump\.Show, qpPump\)/.test(ds)) bad.push("请求泵没常驻开启（帧一 Hide，OnUpdate 就不触发 ⇒ 泵可能永远停摆）");
+    if (/st\.qcPump:Hide\(\)/.test(ds)) bad.push("EVAL_QP_HIDE 又去 Hide 请求泵（弹窗显隐一漏，泵就静静死掉）");
+  }
   if (bad.length) { console.log("QUEST PANEL CHECK: FAIL - " + bad.join("；")); process.exitCode = 1; return; }
-  console.log("QUEST PANEL CHECK: 按钮位/清单 + DIALOG&level + 拖动三件套 + OnHide 收下拉 + 两视图整块显隐 + 无空白按钮 + 无自引用 + 装备主线(反查/直连) + 种类多选(数据现算/multi/locked 分组/空集=全部) + 布局不重叠 + 拼键语言键齐");
+  console.log("QUEST PANEL CHECK: 按钮位/清单 + DIALOG&level + 拖动三件套 + OnHide 收下拉 + 两视图整块显隐 + 无空白按钮 + 无自引用 + 装备主线(反查/直连) + 种类多选(数据现算/multi/locked 分组/空集=全部) + 稀有度染色(数据层配色/标签/六语言键) + 奖励行图标与链接 tooltip + 布局不重叠 + 拼键语言键齐");
 })();
+
+// ===== LOCAL ORDER CHECK（1.75.13）：局部量「先引用后声明」=====================
+// 背景：1.75.12 真机红字 `attempt to call global 'qpFillList' (a nil value)` —— 局部函数的**声明位置**即契约
+//   （EVAL_QP_SCROLL 排在 `local function qpFillList` 之前 ⇒ 里面捕获的是全局 nil）。
+//   这类事故**不报错**，只在用户面前弹红字；行为断言也照不到「另一种写法同样能跑」的形状
+//   ⇒ 用词法作用域分析静态扫**所有载入的 .lua**（审计器自带 --selftest，并已用真实事故形状验证过）。
+{
+  const { scan } = require("./probe_localorder.js");
+  const luaFiles = fs.readFileSync(path.join(__dirname, "EvalHelp.toc"), "utf8")
+    .split(/\r?\n/).map(s => s.trim())
+    .filter(s => s && s.charAt(0) !== "#" && /\.lua$/i.test(s))
+    .map(s => s.replace(/\\/g, "/"));
+  const bad = [];
+  for (const f of luaFiles) {
+    const p = path.join(__dirname, f);
+    if (!fs.existsSync(p)) continue;
+    for (const b of scan(fs.readFileSync(p, "utf8"))) {
+      bad.push(f + ":" + b.useLine + " " + b.n + "（声明@第 " + b.declLine + " 行）");
+    }
+  }
+  if (bad.length) {
+    console.log("LOCAL ORDER CHECK: FAIL - " + bad.slice(0, 6).join("；"));
+    process.exitCode = 1;
+  } else {
+    console.log("LOCAL ORDER CHECK: 无「先引用后声明」的局部量（作用域分析扫 " + luaFiles.length + " 个 .lua）");
+  }
+}
 
 // ===== STOP ATTACK WIRING CHECK（1.71.3）：新增「特殊行为」时它的判定必须与「取消施法」逐处同列 =====
 // ★背景：1.71.3 新增「停止攻击」（与 取消施法 同族：不占动作条的特殊行为）。这类行为要在 7 处接线：
@@ -2715,6 +3060,17 @@ const iconFixture = (function () {
 })();
 const L=lauxlib.luaL_newstate();
 lualib.luaL_openlibs(L);
+// ★★省时模式（1.75.21）：组 192（任务线推荐弹窗，约 1300 行）独占全套 28s 里的 ~22s
+//   （每次刷新都要在 fengari 里跑一遍 673 条全量检索 + 17 行重绘）。
+//   日常小改用 --quick 或 EVAL_TEST_QUICK=1 跳过它；发版前 / 改动任务线·弹窗·数据层时跑全量。
+//   ★跳过的组会**如实打印 SKIPPED**（绝不静默变绿）。
+const QUICK_MODE = process.argv.includes("--quick") || process.env.EVAL_TEST_QUICK === "1";
+if (QUICK_MODE) {
+  console.log("★ 省时模式（--quick）：跳过 GROUP 192（任务线推荐弹窗）—— 改动任务线/弹窗/数据层时请跑全量 node test_engine.js");
+  if (lauxlib.luaL_dostring(L, to_luastring("EVAL_TEST_SKIP_HEAVY = true")) !== lua.LUA_OK) {
+    console.log("LOAD ERROR [quick flag]: " + lua.lua_tojsstring(L, -1)); process.exit(1);
+  }
+}
 for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/general.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','examples/priest.lua','examples/druid.lua','examples/warlock.lua','examples/shaman.lua','examples/group.lua','Toolbox.lua','quest/QuestData.lua',"quest/QuestBulk.lua", 'quest/QuestChains.lua','DataSearch.lua','Share.lua','IconSem.lua','IconBrowser.lua','PetData.lua','PetHelper.lua','tools/IconGrid.lua','tools/HunterHelper.lua','tools/ConsumableHelper.lua','tools/DismountHelper.lua','tools/RareWatch.lua','test_assert.lua']){
   if(f==='test_assert.lua' && iconFixture){
     const fx=to_luastring(iconFixture);

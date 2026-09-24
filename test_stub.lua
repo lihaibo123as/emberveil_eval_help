@@ -271,6 +271,16 @@ local function mkTooltipFrame(name)
   rawset(f, "Show", function() end)
   rawset(f, "IsShown", function() return false end)
   rawset(f, "ClearLines", function() TEST.curSlot = nil TEST.curDebuff = nil TEST.curBuff = nil TEST.curPlayerBuff = nil end)
+  -- ★1.75.16 隐形 tooltip 的「向服务器要数据」入口：真机 GameTooltip 必有 SetHyperlink，
+  --   桩缺它 ⇒ 「数据检索的请求泵到底有没有在要」根本测不出来（旧判据全绿而泵可以是死的）。
+  --   记进 TEST.wttHyper（第 n 条链接），断言直接读它。
+  rawset(f, "SetHyperlink", function(_, link)
+    local n = (TEST.wttHyperN or 0) + 1
+    TEST.wttHyperN = n
+    TEST.wttHyper = TEST.wttHyper or {}
+    TEST.wttHyper[n] = tostring(link)
+    return true
+  end)
   rawset(f, "SetAction", function(_, slot) TEST.curSlot = slot return true end)
   rawset(f, "SetUnitDebuff", function(_, _, i) TEST.curDebuff = i return TEST.debuffs[i] ~= nil end)
   rawset(f, "SetUnitBuff", function(_, _, i) TEST.curBuff = i return TEST.buffs[i] ~= nil end)

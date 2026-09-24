@@ -4534,6 +4534,9 @@ end
 --   · 当关键字非空、启用自由文本、且表中没有与关键字完全同名的项时，
 --     在末尾追加哨兵 -1（渲染为「✎ 使用输入的名称」）——满足「没有检索信息时让用户自己输入名称」
 function DD_FILTER(items, locked, kw, allowFree)
+  -- ★1.75.12 防御：调用方把 items 传成 nil（真机实测事故：处理函数里 `local labels` 遮蔽外层，
+  --   EVAL_DD_OPEN 收到 nil → 这里 `getn(nil)` 当场红字）。宁可**如实返回空表**也不炸界面。
+  if type(items) ~= "table" then return {} end
   local out = {}
   local key = (kw ~= nil) and string.lower(tostring(kw)) or ""
   -- ★★1.71.2 两遍扫描（用户截图「顶部空白区域」）：
@@ -4923,6 +4926,10 @@ end
 -- opts.multi=true 多选模式（1.26.0）：点按切换选中（√ 金标）不关面板，onPick(序号, 是否选中) 逐项回调；
 -- opts.selected = { [序号]=true } 初始选中集（面板重开时重建传入）。收起走 EVAL_DD_HIDE()/宿主窗 OnHide。
 function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
+  -- ★1.75.12 防御（真机红字事故的兜底）：条目表必须是真表 —— 调用方给 nil 时**静默不开**，
+  --   而不是让 DD_FILTER 里 `getn(nil)` 把整屏糊上错误框（根因在调用方，见 QUEST PANEL CHECK 的静态守卫）。
+  if type(items) ~= "table" then return end
+  if anchorBtn == nil then return end
   DD_BUILD()
   local dd = ddUI.root
   if not dd then return end
@@ -8283,6 +8290,14 @@ if type(SlashCmdList) == "table" then
         say("地图标注层: |cffff0000关|r")
       else
         say("数据检索模块未载入")
+      end
+    elseif msg == "ds 任务线 种类" or msg == "ds 任务线 类型" or msg == "ds qc kinds" then
+      -- ★1.75.21 取证：任务线「类型（种类）」筛选为何对列表无效（用户实测）
+      if type(EVAL_QP_KIND_DIAG) == "function" then
+        local lines = EVAL_QP_KIND_DIAG()
+        for i = 1, table.getn(lines) do EVAL_SAY(lines[i]) end
+      else
+        EVAL_SAY("种类诊断不可用：EVAL_QP_KIND_DIAG 未定义（先打开一次「数据检索」Tab 再试）")
       end
     elseif msg == "ds 任务线 审计" or msg == "ds 装备审计" or msg == "ds qc audit" then
       -- ★1.75.9 用户要求：任务完成后审计装备链接是否正确（**以游戏内信息为准**）

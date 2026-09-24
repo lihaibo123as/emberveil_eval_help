@@ -58,8 +58,10 @@
 ### 1. ★★★改完必须跑语法检查 + 测试（本项目因它白丢过好几个版本的功能）
 - **Lua 整文件编译**：任何一处语法错误 → **整个插件无法载入**，且 UE 日志里**看不到**（`%LOCALAPPDATA%\Azeroth\Saved\Logs` 是空目录——本客户端落盘日志通道全废）。
   1.9.0 曾有两处 `local function` 误用 `end)` 收尾（多一个右括号），导致 **1.9.0~1.11.0 全部功能实际未生效**；旧的 balance 脚本（数 function/end 配对）**拦不住多余符号**，只能当辅助。
-- **每次改完 .lua 必跑两条，两条都要 exit 0**：`node luacheck.js`（fengari 真实 Lua 解析，报错带行号，显示 **SYNTAX OK** 才算完）+ `node test_engine.js`（`test_stub.lua` 打桩 WoW API/UI mock + 5.1 垫片，加载整个 `EvalHelp.lua` 后跑 `test_assert.lua`，显示 **ALL TESTS PASS**）。
-  fengari 已装在工作区 node_modules（npm 走代理 `127.0.0.1:10809`）。
+- ★★★**改完跑一条命令**：`node check.js`（= luacheck + test_engine **并行**跑，末尾给「闸门/结论/耗时」表，exit≠0 即失败）。
+  · 日常小改 → `node check.js --quick`（**6.5s**：跳过独占 22s 的组192「任务线弹窗」断言，输出**如实打 `SKIPPED`**）；改任务线/弹窗/数据层、发版前 → `node check.js --full`（追加 `quest/audit.js`）。
+  · 子闸门单跑：`node luacheck.js`（fengari 真实解析，**SYNTAX OK**）· `node test_engine.js`（打桩 + 全量断言，**ALL TESTS PASS**）；fengari 在 node_modules（npm 代理 `127.0.0.1:10809`）。
+  · ★**`mutate.js` 不在闸门里**（「验判据能否抓到 bug」的一次性工具）：加判据**只跑那一条**（`node mutate.js M80`）、`--check` 1 秒自检锚点；26 条全量只在发版前/大改后跑。★中断会自动还原（本轮实测：全量跑被中断在 M72 ⇒ 源码留在变异态，已修）。
 - ★★**判据必须同时看「退出码」与「输出文本」**：源码检查失败走 `process.exitCode = 1` 而**脚本照跑到底**，于是 `ALL TESTS PASS` **照样打印**——只看这句话会**漏报**。
   行为断言失败打的是 **`ASSERT FAIL`**，源码检查失败打的是 **`: FAIL`**（两者都要在输出里找）。
 - **源码级检查**（`test_engine.js` 内，**改了对应区域就必须让它们继续通过**）：`WIN WIDTH`（窗口宽度单一来源）· `DECL ORDER`（**9 个文件**的顶层 local 声明早于使用——1.73.0 起含 PetData/PetHelper）· `LAYOUT`（`EVAL_DS_BUILD` 布局常量）· `VERSION`（源码 VERSION == toc）· `LANG KEY`（`L("字面量")` 三语言齐全）· `LANG SOURCE`（取语言只认 `EVAL_GET_LANG`）· `WINDOW SIZE`（自建窗真的设了宽与高）· `COMMENT SWALLOW`（语句没被行尾注释吞掉）· `ICON`（图标素材真实存在）。
@@ -167,10 +169,8 @@
 - 大块插入用「写块文件 + node 边界替换脚本」，小改动用 `edit` 工具逐处替换。
 - ★**省上下文**：大段脚本写进文件再 `node xx.js`（**别塞进 `run_code` 的 `code`**）；长输出先筛（`Select-String`/只取尾部）再打印。
 - 写文件若报 `file no longer exists`：换文件名重建（fs-observation 缓存）。
-- ★★★1.73.28 **别在 Lua 源码里手写转义**（本轮代价）：想写「引号 + 反斜杠」时手写 `"` / `\\` 极易写坏
-  （实测把 `string.gsub(name, "[\"\\\\]", "")` 写成了 `"["\]"`）→ 而且 **luacheck 当时只查主文件、照样报 SYNTAX OK**，
-  直到运行时 load 才炸（LOAD ERROR ... expected ')' near backslash）。正解 = 用 `string.char(34)` / `string.char(92)` 构造这类字符，
-  抽成一个小函数（`tbSafeName`）复用；★同时把 `luacheck.js` 改成**逐个文件**检查（27 个 .lua），语法错误再也漏不过去。
+- ★★★1.73.28 **别在 Lua 源码里手写转义**（实测把 `string.gsub(name,"[\"\\\\]","")` 写成 `"["\]"`，且 luacheck 只查主文件时照样报 OK、到运行时 load 才炸）⇒ 用 `string.char(34)`/`string.char(92)` 构造（抽成 `tbSafeName` 复用）；`luacheck.js` 必须**逐个文件**查。
+- ★★★**别用 PowerShell `Get-Content`/`Set-Content` 往返含中文的文件**（本机 PS 按 ANSI 解码 ⇒ 中文连同相邻换行一起被吃：实测把 `quest/probe_chainlist.js` 写坏、103 处 U+FFFD **不可逆**）⇒ 改文件只用 `edit`/`write` 工具或 node 脚本；`>` 重定向是 UTF-16LE，写日志用 `| Out-File -Encoding utf8`。
 - DSH 策略 danger-full-access、审批关闭 → **可直接写游戏 AddOns 目录**。
 - **SavedVariables 落盘路径已实测**：`%LOCALAPPDATA%\Azeroth\Saved\Account\LIHAIBOAS1\SavedVariables\EvalHelp.lua`（★**文件名是 `EvalHelp.lua` 不是 `EVAL_HELP.lua`**，1.29.0 改名后旧文件 `EVAL_HELP.lua` 是历史残留；小退/reload 时客户端写入）——**这也是现在读调试日志的地方**。
 
@@ -201,8 +201,8 @@
 
 - ★★★**「自己方案回声忽略」的判据必须锚在「发送者是我」**（`shIsSelfEcho(sender)`，剥色码 / 剥「-服务器」后缀），**不能锚在「内容像我」** —— 锚内容时只要接收方库里已有同款（同账号共享库 / 以前导入过），就会把**别人发的**误判成自己的回声吞掉、不弹窗（1.74.5 真凶）。`EVAL_SHARE_IS_MINE` 函数保留但不再用于这一刀；组 82 ①/①b/③；变异 M569/M570。
   ★**「按日志判没发生」≠ 真没发生**（日志是环缓冲会覆盖）—— 上轮就是据此误判，最后靠探针 ⑤ 一屏定案它其实触发了。
-- ★★**「分片到了却不弹」一律先取证再猜**：`SH.dbgChunks`（环形 8 条）+ `shDbgChunk(stage,…)` 在 `shOnMsg` 的**解析 / 入缓冲 / 收齐 / hex 还原失败 / 过大 / 回声忽略 / 弹窗**各分叉记**原文 + 走到哪一步**，用 `/eh go 分享事件` ⑤ 摊开（只记含 `EHPF` 的低量消息，不碰普通聊天）。
-  ★探针**别用 `== true` 判事件注册**：本客户端 `IsEventRegistered` 返回 **`1` 不是 `true`**，要判 `(r == true or r == 1)`（旧探针全显示「未注册」，与实际收到事件自相矛盾、把排查带偏）。
+- ★★**「分片到了却不弹」先取证再猜**：`SH.dbgChunks`（环 8 条）+ `shDbgChunk(阶段,…)` 在 `shOnMsg` 各分叉记「原文 + 走到哪一步」，用 `/eh go 分享事件` 摊开。
+  ★探针**别用 `== true` 判事件注册**（本客户端返回 **`1`**）⇒ 判 `(r == true or r == 1)`。
 - 1.72.2 具名帧顶掉同名全局函数 → `type(X)=="function"` 不成立 → 命令静默失效；桩须把具名帧挂全局；`FRAME NAME CLASH CHECK`；组 54。
 - 1.72.3 分享接收 = 冗余时长 + 只认标识（用户「加冗余时长、只识别特定标识」）：>2s（`SH_RECV_TOLERANCE`）未收齐如实提醒但不删缓冲、晚到补齐仍弹窗；>60s（`SH_BUF_TIMEOUT`）才丢；只认 `[EHPF#<id> i/n]<hex>`；组 106/组 107。
 - 「查不到」≠「没有」：查不到必须如实报错，否则 `cnt=0` → 「否/无」成立 → 规则无限重放刷屏。
@@ -214,9 +214,8 @@
 - function 不是 table（身份判定用 `cur == TB.chanWrapper`）；标记只加显示串（`[物]` 只改显示、取值裸名）；「还原/撤回」≠ 回退到有 bug 状态。
 - 1.73.14 借别人的 UI 对象 = 静默破坏界面：`local WTT = GameTooltip` 读数会清空玩家 tooltip → 自建 `EVAL_HELP_WTT`、读自家 `TextLeft1`、守卫 `EVAL_WTT_MAY_READ_PURE`；`WTT ISOLATION CHECK`；组 126；桩不加 `__index`（连带组 70 失效）。
 - 1.73.12「写成功」≠「写进去生效」：`frame.AddMessage=wrapper` 写入被吞 → 必须写完读回确认（`_G.ChatFrame_OnEvent ~= wrapper`）+ 改挂普通全局函数入口（新文本回写全局 `arg1`）+ 非聊天事件放行；`CHAT COLOR WIRING CHECK`；组 123/组 124⑧。
-- 深入 API + 参考插件（用户「深入分析 API 与参考插件」）：`GetChatWindowMessages`/`RemoveChatWindowMessages`/`AddChatWindowMessages` = 官方「某类消息不显示」开关（组名不许猜）；`ChatMOD.lua:514-517` 对 `this` 懒挂载 + 记账。
-- 名字着色族（1.73.18~23/51）：名字在 `arg2`；名字槽不吃富文本 → 吞行自拼；色码必须 8 位 → `COLOR CODE LEN CHECK`；缓存 = 名字→职业 token（`tbNameClassPut`）；四来源 = 白拿 / `EVAL_TB_NAMECLASS_HARVEST(kind)` / /who / 事件；名册懒加载（`GetNumGuildMembers()` 恒 0）→ 自愈 `EVAL_TB_NAMECLASS_HEAL()` + 一发 `GuildRoster()`（四门）；`TB_NAMECOLOR_WRITE=false`；组 129b/组 129d③/组 161/组 161④⑤ + `NAME CACHE PROBE WIRING CHECK`。
-- 1.73.43 分享行形态：只有「一段色码 + 链接」能画；色码无链接 / 链接打头无色码整条不画；6 位码画出原文、7 位整条被吞 → 色码打头 + 带链接 + 每条一段 8 位码 + 间隔 ≥1s（`SH_SEND_RATE=1.0`）；身份只在 A 行；组 144/组 144① + `SHARE MSG SHAPE CHECK`；色清单从 `SH_CHUNK_COLOR`/`SH_SEAL_TIERS`/`SH_TITLE_COLORS`/`SH_TITLE_CUSTOM_COLOR` 现取 → 组 158 + `SHARE PALETTE CHECK`；名号色默认 = 候选第 1 项、只认 8 位 `shTitleCustomColor()`；组 159。
+- 1.73.43 分享行形态：只有「一段色码 + 链接」能画（色码无链接 / 链接打头无色码整条不画；6 位码画原文、7 位被吞）⇒ 色码打头 + 带链接 + 每条一段 8 位码 + 间隔 ≥1s（`SH_SEND_RATE=1.0`）；身份只在 A 行；组 144/组 158/组 159 + `SHARE MSG SHAPE`/`SHARE PALETTE CHECK`。
+- 名字着色族（1.73.18~23/51）：名字在 `arg2`、名字槽不吃富文本（吞行自拼）、色码必须 8 位；缓存=名字→职业 token；名册懒加载（`GetNumGuildMembers()` 恒 0）⇒ 自愈 `EVAL_TB_NAMECLASS_HEAL()` + 一发 `GuildRoster()`；组 129b/组 161 + `NAME CACHE PROBE WIRING CHECK`（明细 → 参考卷 §十）。
 - 1.73.24 右键菜单：有 `GuildInviteByName`/`CanGuildInvite`；无剪贴板接口、无 `UIDropDownMenu`；`SetItemRef` 可写 → 包它 + 读回确认 + 幂等，只认 `player:` 右键；`/s` 走 `RunScript` + 0.5s 去抖；组 130。
 - 1.73.27 资源名必须显示时现算：`UnitPowerType` 0 法力/1 怒气/2 集中值/3 能量、随形态变 → 写死在表（`COND_NUMNAME.powerPct`）即错；显示名一律 `EVAL_POWERLABEL()`、四处同源；改显示名＝改导出文本 → 解析侧同时认新写法；组 132。
 - 1.73.29「填进输入框」≠「替用户发送」（用户「只打开输入框，不要打印出去」）：只预填不回车、不碰 `SendChatMessage`/`RunScript`；判据双向：内容对 + 一个字都没发；共用 `tbMenuPrefill`。
@@ -271,7 +270,7 @@
 - **要查就来这里翻参考卷 §十**：`IsActionInRange`/`ActionHasRange`/`CheckInteractDistance` 的语义 · 物品 API 全签名 · 纹理路径与 `IconSem` 白名单 · `api_*.html` 索引的「有/无」清单 · Movement 族 Protected 边界 · `GetRaidRosterInfo` 九返回 · `AttackTarget`/`FollowByName` 细节。
 
 ### 5.6 内容 / 数据质量
-- ★★★**任务线数据以 `https://database.emberveil.org/quests` 为准**（用户 1.75.1 明确「记住任务线的检索依据…数据为准」）：`quest/QuestData.lua` 是**生成物**（`node quest/build.js [--force]` 抓取生成）—— **绝不许手改**；要改内容＝改策展清单 `quest/chains.js` 后重跑。判据 = `QUEST TOC CHECK` + 组 191/192。★**装备种类多选**（1.75.8）：种类清单**现算**（`EVAL_QC_KIND_LIST`，禁写死种类表）、多选集合**只判定一处**（`EVAL_QC_ITEM_ROWS` 的 `kinds`，空集=全部）。★**全量采集 + 审计**（1.75.9）：装备视图**全量优先/策展兜底**（`QuestBulk.lua` = 10-60+ 所有带装备奖励的任务，单任务也算来源）；任务线含**站点自报系列**（自动拼出，覆盖 30-60 与大型/开门线）；审计 = `node quest/audit.js` + 游戏内 `/eh ds 任务线 审计`（**以游戏内名字/图标为准**）。**明细 → 参考卷 §十四（含 §14.3/§14.4）**。
+- ★★★**任务线数据以 `https://database.emberveil.org/quests` 为准**（用户 1.75.1 明确「记住任务线的检索依据…数据为准」）：`quest/QuestData.lua` 是**生成物**（`node quest/build.js [--force]` 抓取生成）—— **绝不许手改**；要改内容＝改策展清单 `quest/chains.js` 后重跑。判据 = `QUEST TOC CHECK` + 组 191/192。★**装备种类多选**（1.75.8）：种类清单**现算**（`EVAL_QC_KIND_LIST`，禁写死种类表）、多选集合**只判定一处**（`EVAL_QC_ITEM_ROWS` 的 `kinds`，空集=全部）。★**全量采集 + 审计**（1.75.9）：装备视图**全量优先/策展兜底**（`QuestBulk.lua` = 10-60+ 所有带装备奖励的任务，单任务也算来源）；任务线含**站点自报系列**；审计 = `node quest/audit.js` + 游戏内 `/eh ds 任务线 审计`（**以游戏内名字/图标为准**）。**明细 → 参考卷 §十四（含 §14.3/§14.4/§14.5）**。★**任务线展示**（1.75.10）：排序 = **等级→稀有度**、稀有度 6 档 = **魔兽品质色**（`EVAL_QC_RARITY` 单一来源；橙=传说：风剑/橙杖/安其拉）、行尾**奖励图标**紧跟标题左对齐 + 悬停链接 tooltip。★**滚动与下拉**（1.75.11）：滚轮 **1 行/格 + 像素缓动**（tick 无参！）、填充层**禁**把 `qpOff` 拍回页边界；下拉拿到 nil = 多半是 `local` 同名**遮蔽**（「等级筛选点不动」的真凶）。★**任务行与请求范围**（1.75.12）：任务行左侧用**黄色感叹号** + 文本带 **LvNN**（`EVAL_QC_QUEST_LEVEL`）；放大镜 = 送词 + **`EVAL_HELP_CFG_SETTAB(4)`**；请求**只针对当前可见项**（每次重绘 `qpReqBegin()` 重建队列）、限频 **2.0s/件**。★**1.75.13/14**：任务线列表 **cap=0 全量**（写死 200 ⇒ 高等级线被截光）+ **跨块统一排序**（合并后按**最低等级**→稀有度；两块拼接 ⇒ 30 → 4 回头）+ 系列记录**单一来源** `qcSeriesRec`（否则行色 ≠ 详情色）；新增 **`LOCAL ORDER CHECK`**（`probe_localorder.js` 扫全部 .lua：局部量「先引用后声明」＝真机 `attempt to call global 'X'` ⇒ 前向声明）。★**1.75.15**：**策展链扩到 30-60 经典线**（`quest/curate_classic.js` 从站点系列整理 → 62 链，档位按武器品质重算、非节日、**有装备奖励**；跑完必重跑 `node quest/build.js`）+ **策展↔系列去重**（同名或步骤重合 ≥60% ⇒ 系列 688→611，列表里同一条线只出一行）+ 等级档**独立 60 档**（L5=50-59 / **L6=60+**；口径 = **区间重叠**）。★**1.75.16 请求泵**：判据驱动**真泵体** `EVAL_QP_TEST_PUMP_TICK`——泵随弹窗 Hide ⇒ OnUpdate 不触发 ⇒ **静静死掉**（改**常驻开启**）；工具柄走 **`EVAL_WTT_HANDLE()`**（全局名在退化路径**恒 nil**）；**取柄失败不许消费队列**；`req/blocked` 才分得清「在抽/死了」。★**1.75.17/18/19**：种类按**部位**细分（戒指/项链/饰品站点全写「其它」⇒ `QC_SLOT_KIND`）· 等级筛选挪**最左**（任务线 F1 等级/F2 类型/F3 阵营，`DS.qpTier`+`QP_TIER` 删除）· 任务线「类型」**共用装备那份种类多选**（`EVAL_QC_KIND_PASS` 全局 + `qcRecKindsOK` 按奖励筛，声明须在 `EVAL_QC_SEARCH` 前）· 未扫出装备画**宏 961 占位图**（`GetMacroIconInfo(961)`、置灰、**点击 = 插队首优先扫描**）· 请求队列**按列排**（每行第一件先排；任务线一行最多 6 图标而装备视图 1 个 ⇒ 行序会让后面的行等好几轮）。★**任务线图标少 ≠ 没抓**（`probe_chainlist.js`：10-19 首屏 17 行只 2 行有奖励）。
 - ★★**两个助手的弹窗候选按物品类型过滤**（1.74.28）：三级判定收在共用件 `EVAL_IG_ITEM_KIND`（品质 → `GetItemInfo(链接)` → 自建 tooltip `SetBagItem` 兜底并**自愈缓存**）；剔武器/护甲/灰色/材料/任务/容器/箭矢/钥匙/配方，**判不出就不剔**；**过滤只在弹窗候选路径开**（按名字解析包格那条路绝不过滤）；验证入口 `/eh go 消耗品探针 过滤` ｜ `喂食探针 过滤`；判据 = 组 187。**明细 → 参考卷 §十四**。
 - 可驱散「负面类型」多选（1.73.2；**1.74.6 扩到自身/目标 debuff**，用户：「自身/目标debuff 要参考队伍debuff 支持负面类型」）：`cd.dt`=nil/串/集合（空集=任意）；**求值一律走 `dispelMatch` 按类型过滤**（名字对上但类型不符 = **没有**）；**名称留空 + 类型 = 「有任意该类型」**（层数取命中项最大值）；类型存平行表 `st.{player,target}DebuffType`（层数表仍是数字）；格式化同一份 `dtSuffix()`（导出 token / 显示本地化名）；编辑窗类型格四族都有、**buff 行不许有**；组 114＋组 181（变异 M181 捕获）。
 - 指定等级=技能名(等级 3)（与法术书 subtext 逐字相符；跨语言不通用→没该串即如实失败；只有真法术名才拆括号，前缀名括号属名字本身）；下拉按等级数字升序、无 subtext 排最后，table.sort 在 5.1 不稳定须「数字+原下标」装饰排序（组 108①b+组 110②；组 111）。
@@ -321,19 +320,10 @@
 - 分享：`/eh go 封皮测`（编号 A/B 变异测，回报「哪些编号出现了」即可定案）· `分享探针`（发送留痕：脚本原文/是否弹出/队列）· `色码测`（别名 `colortest`/`颜色测`/`palette`：把在用色码逐条编号实发；★跑完等 ≥30 秒再跑第二次）· `名号色`（候选逐条预览）· `名号色 <n>`（当场选用并存档）
 - 其它：`/eh ds hud`（`EVAL_DS_HUD`，把状态画屏上）· `/eh ds trace` · `/eh ds rnd` · `/eh go probe` · `/eh go bind`（只读现状）· `/eh go diag` · `/eh logdump` · `/eh guide` · `/eh 载入报告`（完整载入取证；登录只打 1 行摘要）· `/eh 存档清理`（清探针+调试残渣键）
 
-**关键源码检查在守什么**（一句话；全清单见 `test_engine.js`）：`FRAME NAME CLASH`（21 具名帧 × 全部 `function NAME(`）· `WTT ISOLATION`（禁 `local WTT = GameTooltip` + 自建 + 读自家 FontString + 守卫/诊断，★扫描前摘注释）· `CHAT COLOR WIRING`（读回确认 + 幂等守卫）· `COLOR CODE LEN`（禁 `"|c"..string.sub(` + 职业色表 8 位）· `SHARE MSG SHAPE`（逐条数字面量）· `SHARE PALETTE`（色表 8 位 + 引用四表 + 无字面色码 + 接线）· `MENU ROUND CHROME`（整数 edgeSize / 白框 / 读回 / 平边退化 / 禁 `GetBackdropColor`）· `TEMPLATE COUNT`（`{ name = "` 条数 == 文档数字）· `WHEEL DIRECTION`（禁位移与方向同号）· `SHARE RECV EVENTS`（接收帧七事件全注册 + 探针接线）· `UI CELL MOUSE`（技能格左右键分派）
+**关键源码检查在守什么**（一句话；全清单见 `test_engine.js`）：`FRAME NAME CLASH`（21 具名帧 × 全部 `function NAME(`）· `WTT ISOLATION`（禁 `local WTT = GameTooltip` + 自建 + 读自家 FontString + 守卫/诊断，★扫描前摘注释）· `CHAT COLOR WIRING`（读回确认 + 幂等守卫）· `COLOR CODE LEN`（禁 `"|c"..string.sub(` + 职业色表 8 位）· `SHARE MSG SHAPE`（逐条数字面量）· `SHARE PALETTE`（色表 8 位 + 引用四表 + 无字面色码 + 接线）· `MENU ROUND CHROME`（整数 edgeSize / 白框 / 读回 / 平边退化 / 禁 `GetBackdropColor`）· `TEMPLATE COUNT`（`{ name = "` 条数 == 文档数字）· `WHEEL DIRECTION`（禁位移与方向同号）· `SHARE RECV EVENTS`（接收帧七事件全注册 + 探针接线）· `UI CELL MOUSE`（技能格左右键分派）· `LOCAL ORDER CHECK`（局部量先引用后声明 → 真机抓全局 nil）
 - 其余：`EXAMPLES TOC`（四条）· `STOP ATTACK WIRING`（名单 7/7 + 接线 ≥3）· `PET ICON` · `LANG KEY` · `DECL ORDER`（9 文件）· `PAINT WIRING` · `DEBUFF DISPLAY` · `CREATOR GATE` · `SH FUN` · `PROF ICON PROBE WIRING` · `UI TITLE BADGES`/`UI TIER BADGE`/`UI TITLEBAR`/`UI TITLE NAME`（全清单见 `test_engine.js`）
 
 ## 六、§六 ~ §九 已移到同目录的 `CLAUDE_REFERENCE.md`（参考卷）
 
-> ★**为什么**：工作区指令预算只有 **65,536 字节**，超出的部分 AI **完全读不到**（截断点落在文档中段）——
-> 所以把「历史教训 / 仓库与文档 / 项目位置与现状 / 版本要点」这四节整卷移出去，本文件只留铁律与判据。
-> ★**1.74.9 又做了一次瘦身**（86,364 → 约 62,000 字节）：把**明细整段**搬到参考卷 **§十**（原文照存、一字未改），本文件只留索引 + 铁律 —— 因为超预算的部分 AI **完全读不到**。
-> ★**什么时候必须去读 `CLAUDE_REFERENCE.md`**：
-> · **项目位置 / 文件结构 / 新增 .lua 模块要改哪几处 / toc 载入顺序 / 数据检索 Tab 设计** → 它的 §八
-> · **工作流纪律**（默认不发版不推送 · 本地测试双绿可直接 commit · 推送需明确要求） → 它的 §八 末段
-> · **历史教训**（local 作用域、合并冲突静默获胜、桩太宽松、对齐、API 真伪清单、官方文档核对） → 它的 §六
-> · **官方 API 文档地址 / 待开发计划（免疫学习器等）/ 开源仓库内容清单** → 它的 §七
-> · **某个版本做了什么（最近 10 版，一行一条）** → 它的 §九（完整历史看 `CHANGELOG.md`）
-> · **§3 的「按问题查哪个文件」9 行对照表 / §5.4 UI 与布局全部逐条（品阶色·评分口径·覆盖封顶·头衔晋升·分角色存档·滚动分页·滚轮·弹窗·菜单·技能格）/ §5.5 API 事实全部逐条 / §5.2 的两条长案例** → 它的 **§十**（1.74.9 瘦身时移出，原文照存）
-> · **当前版本**：以源码为唯一真值 —— `EvalHelp.lua` 的 `local VERSION` == `EvalHelp.toc` 的 `## Version`（搬移时 = **1.74.0**）。
+> ★**为什么**：工作区指令预算约 **65.5 KB**，超出部分 AI **完全读不到** ⇒ 本文件只留铁律与判据；「历史教训 / 仓库与文档 / 项目位置与现状 / 版本要点」整卷 + **§十**（§3 对照表 · §5.4 UI 逐条 · §5.5 API 逐条 · §5.2 两条长案例）+ **§十四**（任务线数据明细）都在参考卷。
+> ★**四种必读时机**：**发布 release** · 查**项目位置 / 当前版本（唯一真值 = 源码 `local VERSION` == toc `## Version`）/ 工作流纪律** · 查**历史教训 / 官方 API 文档 / 待开发计划** · 查**某功能某坑的写法明细**（§十 / §十一 / §十四）。

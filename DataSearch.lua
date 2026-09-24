@@ -2750,6 +2750,9 @@ function EVAL_DS_BUILD(root, page, refreshes)
   local QP_PAD = 12
   local QP_ROW_H = 19
   local QP_LIST_TOP = -58
+  -- ★1.75.10 任务线行右侧的**奖励图标带**（用户要求：装备奖励**并排摆在任务标题右边、左对齐**，
+  --   有多个就都显示；能悬停预览**物品链接** tooltip）。位置在填充时**按文本宽度现算**（见 qpTextWidth）。
+  local QP_RW_MAX, QP_RW_STEP = 6, 17      -- 槽位池上限 · 图标步进（15px 图标 + 2px 间隙）
   local QP_PAGE_H = 24                                     -- 分页行占高
   local QP_BOTTOM = -(QP_H - 32)                           -- 底部按钮行（固定，不随行数漂）
   -- ★用户要求（1.75.3）：**滚动区铺满窗口**，不许下半部空着（图标库那种写死 IB_ROWS=9 的做法照搬会留白）。
@@ -2892,7 +2895,26 @@ function EVAL_DS_BUILD(root, page, refreshes)
     t:SetPoint("LEFT", b, "LEFT", 22, 0)
     pcall(t.SetWidth, t, QP_W - QP_PAD * 2 - 26)
     pcall(t.SetJustifyH, t, "LEFT")
-    qpRows[i] = { btn = b, bg = bg, text = t, icon = ic, key = nil, item = nil }
+    -- ★1.75.10 用户要求：「任务线同行后面添加对应的装备奖励图标展示，可以预览链接」；
+    --   追加要求：「多个奖励就都并排显示在任务标题右边，左对齐」⇒ 图标带**紧跟文本**排（位置填充时现算）。
+    local rw = {}
+    for j = 1, QP_RW_MAX do
+      local rj = b:CreateTexture(nil, "ARTWORK")
+      pcall(rj.SetWidth, rj, 15) pcall(rj.SetHeight, rj, 15)
+      rj:Hide()
+      local bj = CreateFrame("Button", nil, b)
+      bj:SetWidth(15) bj:SetHeight(15)
+      pcall(bj.EnableMouse, bj, true)
+      pcall(bj.RegisterForClicks, bj, "LeftButtonUp")
+      bj:Hide()
+      rw[j] = { tex = rj, btn = bj }
+      table.insert(qpListWidgets, bj)
+    end
+    local rwMore = dsText(b, 8, 0.66, 0.62, 0.50)
+    pcall(rwMore.SetWidth, rwMore, 26)
+    pcall(rwMore.SetJustifyH, rwMore, "LEFT")
+    rwMore:SetText("")
+    qpRows[i] = { btn = b, bg = bg, text = t, icon = ic, key = nil, item = nil, rw = rw, rwMore = rwMore, rwIds = {}, rwPh = {} }
     table.insert(qpListWidgets, b)
   end
 
@@ -2945,6 +2967,7 @@ function EVAL_DS_BUILD(root, page, refreshes)
   pcall(qpDetSub.SetJustifyH, qpDetSub, "LEFT")
   DS.qpDetIcon, DS.qpDetTitle, DS.qpDetSub = qpDetIcon, qpDetTitle, qpDetSub
   local qpDetRows, qpDetWidgets, qpZoomBtns = {}, {}, {}
+  local qpDetIcons, qpDetHover = {}, {}
   for i = 1, QP_DET_ROWS do
     local t = dsText(qp, 9, 0.9, 0.87, 0.78)
     t:SetPoint("TOPLEFT", qp, "TOPLEFT", QP_PAD + 16, QP_DET_TOP + 2 - (i - 1) * QP_ROW_H)
@@ -2952,6 +2975,23 @@ function EVAL_DS_BUILD(root, page, refreshes)
     pcall(t.SetJustifyH, t, "LEFT")
     qpDetRows[i] = t
     table.insert(qpDetWidgets, t)
+    -- ★用户要求（1.75.10）：「任务线的奖励要和武器那边的图标**相同效果**配上图标，和链接 tooltip」
+    --   奖励行左侧留的就是**放大镜那个槽位**（文本已固定缩进 16）⇒ 图标放同一槽位即可，文本不必挪。
+    local ic = qp:CreateTexture(nil, "ARTWORK")
+    ic:SetPoint("TOPLEFT", qp, "TOPLEFT", QP_PAD, QP_DET_TOP - (i - 1) * QP_ROW_H)
+    pcall(ic.SetWidth, ic, 14) pcall(ic.SetHeight, ic, 14)
+    ic:Hide()
+    qpDetIcons[i] = ic
+    table.insert(qpDetWidgets, ic)
+    -- 悬停/点击热区：盖住整行文本区（左侧槽位留给放大镜/图标，互不遮挡）
+    local hb = CreateFrame("Button", nil, qp)
+    hb:SetWidth(QP_W - QP_PAD * 2 - 16) hb:SetHeight(QP_ROW_H - 2)
+    hb:SetPoint("TOPLEFT", qp, "TOPLEFT", QP_PAD + 16, QP_DET_TOP + 2 - (i - 1) * QP_ROW_H)
+    pcall(hb.EnableMouse, hb, true)
+    pcall(hb.RegisterForClicks, hb, "LeftButtonUp")
+    hb:Hide()
+    qpDetHover[i] = hb
+    table.insert(qpDetWidgets, hb)
     -- ★用户要求：任务链的**每个任务节点**左侧一个放大镜 —— 点了按**任务名**去数据检索查
     local zb = CreateFrame("Button", nil, qp)
     zb:SetWidth(14) zb:SetHeight(14)
@@ -2985,7 +3025,8 @@ function EVAL_DS_BUILD(root, page, refreshes)
     pageTxt = qpPageTxt, ph = qpPh, eb = qpEb, echoNeeded = false,
     tabItem = qpTabItem, tabChain = qpTabChain, f1 = qpF1, f2 = qpF2, f3 = qpF3,
     back = qpBack, goDs = qpGoDs, bar = qpBar,
-    zoomBtns = qpZoomBtns, detZoom = {}, navPrev = qpUp, navNext = qpDn,
+    zoomBtns = qpZoomBtns, detIcons = qpDetIcons, detHover = qpDetHover, detItem = {}, detZoom = {}, detPh = {},
+    navPrev = qpUp, navNext = qpDn,
     detIcon = qpDetIcon, detIconBtn = qpDetIconBtn, detTitle = qpDetTitle, detSub = qpDetSub, hint = qpHint,
   }
   DS.qpMode, DS.qpTab = "list", "item"
@@ -2993,7 +3034,7 @@ function EVAL_DS_BUILD(root, page, refreshes)
   DS.qpKey, DS.qpItem = nil, nil
   DS.qpLv, DS.qpKind = "ALL", "ALL"      -- 装备视图筛选（qpKind 只作旧三态 token 的入口，见 qpApplyKindToken）
   DS.qpKinds = {}                        -- ★1.75.8 种类**多选集合** { [种类名]=true }；空集 = 全部
-  DS.qpTier, DS.qpFact = "ALL", "ALL"    -- 任务线视图筛选
+  DS.qpFact = "ALL"    -- 任务线视图的阵营筛选（等级/类型两个筛选与装备视图共用 DS.qpLv / DS.qpKinds）
   qp:Hide() -- 默认关
 
   -- ===== 弹窗行为 v2（与上面的构建段同作用域）=====
@@ -3002,13 +3043,19 @@ function EVAL_DS_BUILD(root, page, refreshes)
     [0] = { 0.62, 0.62, 0.62 }, [1] = { 1.00, 1.00, 1.00 }, [2] = { 0.12, 1.00, 0.00 },
     [3] = { 0.00, 0.44, 0.87 }, [4] = { 0.64, 0.21, 0.93 },
   }
-  -- ★1.75.9 用户要求「经典任务线衍生到 30-60 范围」：等级档扩到五档（10-19/20-29/30-39/40-49/50+）
-  --   末档 hi=999 是**故意**的：站点在 60-69 还有带装备奖励的任务（团本/开门线），不能把它们漏掉。
+  -- ★1.75.9 等级档覆盖到 30-60；★1.75.15 用户要求「等级过滤增加个独立档位 60」：
+  --   拆成 **50-59** 与 **60+**（末档 hi=999 是故意的：站点在 60-69 还有带装备奖励的团本/开门任务）。
   local QP_LV = {
     { k = "ALL", lo = 0, hi = 999 }, { k = "L1", lo = 10, hi = 19 }, { k = "L2", lo = 20, hi = 29 },
-    { k = "L3", lo = 30, hi = 39 }, { k = "L4", lo = 40, hi = 49 }, { k = "L5", lo = 50, hi = 999 },
+    { k = "L3", lo = 30, hi = 39 }, { k = "L4", lo = 40, hi = 49 }, { k = "L5", lo = 50, hi = 59 },
+    { k = "L6", lo = 60, hi = 999 },
   }
-  local QP_TIER = { "ALL", "S", "A", "B" }
+  -- ★1.75.13 任务线列表**条数上限**：0 = 不限（浏览要全量）。旧实现写死 200，而任务线是「等级升序」
+  --   排列的 ⇒ 30 级以上的线**全被截掉** —— 用户实测「任务线最高只有 30 级，是不是没收集齐」的真凶
+  --   （数据层实际有 688 条自报系列，覆盖到 60 级）。搜索也走同一上限（查询本来就会收窄）。
+  local QP_CHAIN_MAX = 0
+  -- ★1.75.18 「档位」筛选已被**种类筛选**取代（用户：「任务线->档位过滤使用装备那边的种类过滤」）
+  --   ⇒ QP_TIER 表与 DS.qpTier 一并删除（留着就是死代码，下一轮必然漂移）；数据层仍兼容 tier 参数。
   local QP_FACT = { "ALL", "A", "H", "B" }
 
   -- ===== 种类筛选（1.75.8 用户：「装备筛选种类细分,支持种类子类型.武器子类型支持.并且支持多选.」）=====
@@ -3086,6 +3133,30 @@ function EVAL_DS_BUILD(root, page, refreshes)
     return QP_LV[1]
   end
 
+  -- ★1.75.12 用户要求：装备→任务线信息里**任务行左侧显示黄色感叹号**（照数据检索列表那张同一张图）
+  local QP_QUEST_ICON = DS_ICON_ROOT .. "questIcon"
+  -- ★文本宽度（单一来源，1.75.10 任务线奖励图标「紧跟标题左对齐」要用）：
+  --   ① 实测优先 FontString:GetStringWidth()（项目既有范式，EvalHelp.lua 同款）；
+  --   ② 本机 API 表里不保证有它 ⇒ 兜底**逐字节判 UTF-8**：中文按 1 字（宽 = perChar）、
+  --      ASCII 按半宽（perChar/2）累计；★绝不用 string.len 当宽度（那是字节数，中文高估 3 倍）。
+  local function qpTextWidth(fs, label, perChar)
+    if fs and fs.GetStringWidth then
+      local ok, w = pcall(fs.GetStringWidth, fs)
+      if ok and type(w) == "number" and w > 0 then return w end
+    end
+    local pc = tonumber(perChar) or 9
+    local s = tostring(label or "")
+    local w, i, len = 0, 1, string.len(s)
+    while i <= len do
+      local b = string.byte(s, i) or 0
+      if b >= 240 then i = i + 4 w = w + pc
+      elseif b >= 224 then i = i + 3 w = w + pc
+      elseif b >= 192 then i = i + 2 w = w + pc
+      else i = i + 1 w = w + math.floor(pc / 2) end
+    end
+    return w
+  end
+
   local function qpSyncFilterLabels()
     local st = DS.qp
     if not st then return end
@@ -3094,8 +3165,11 @@ function EVAL_DS_BUILD(root, page, refreshes)
       st.f2.text:SetText(L("DS_QP_F2_ITEM") .. ": " .. qpKindLabel())
       st.f3.text:SetText(L("DS_QP_F3_ITEM") .. ": " .. ((DS.qpFact == "ALL") and L("DS_F_ALL") or L("DS_QL_F_" .. DS.qpFact)))
     else
-      st.f1.text:SetText(L("DS_QP_F1_CHAIN") .. ": " .. ((DS.qpTier == "ALL") and L("DS_F_ALL") or DS.qpTier))
-      st.f2.text:SetText(L("DS_QP_F2_CHAIN") .. ": " .. ((DS.qpFact == "ALL") and L("DS_F_ALL") or L("DS_QL_F_" .. DS.qpFact)))
+      -- ★1.75.18 用户要求「任务线->等级筛选按钮移动到最左侧」+「档位过滤使用装备那边的种类过滤」⇒
+      --   任务线视图的按钮位次 = **F1 等级 · F2 类型（与装备视图同一份种类多选）· F3 阵营**。
+      st.f1.text:SetText(L("DS_QP_F1_CHAIN") .. ": " .. L("DS_QP_LV_" .. qpLvEntry().k))
+      st.f2.text:SetText(L("DS_QP_F2_CHAIN") .. ": " .. qpKindLabel())
+      st.f3.text:SetText(L("DS_QP_F3_CHAIN") .. ": " .. ((DS.qpFact == "ALL") and L("DS_F_ALL") or L("DS_QL_F_" .. DS.qpFact)))
     end
     st.tabItem.text:SetTextColor(DS.qpTab == "item" and 0.98 or 0.72, DS.qpTab == "item" and 0.86 or 0.66, DS.qpTab == "item" and 0.45 or 0.50)
     st.tabChain.text:SetTextColor(DS.qpTab == "chain" and 0.98 or 0.72, DS.qpTab == "chain" and 0.86 or 0.66, DS.qpTab == "chain" and 0.45 or 0.50)
@@ -3119,9 +3193,9 @@ function EVAL_DS_BUILD(root, page, refreshes)
     -- ★翻页按钮：两个视图都显示 ⇒ 必须在两次整块显隐**之后**显式 Show（1.75.5 事故：进了两份清单被吃掉）
     if st.navPrev then pcall(st.navPrev.btn.Show, st.navPrev.btn) end
     if st.navNext then pcall(st.navNext.btn.Show, st.navNext.btn) end
-    -- 第三个下拉（阵营）只服务「装备」视图；任务线视图已有阵营下拉，避免重复
+    -- ★1.75.15 第三个下拉在**两个视图都常显**：装备视图 = 阵营；任务线视图 = **等级过滤**（用户新要求）
     pcall(function()
-      if isList and DS.qpTab == "item" then st.f3.btn:Show() else st.f3.btn:Hide() end
+      if isList then st.f3.btn:Show() else st.f3.btn:Hide() end
     end)
     if not isList then pcall(st.pageTxt.Show, st.pageTxt) end
   end
@@ -3131,10 +3205,13 @@ function EVAL_DS_BUILD(root, page, refreshes)
   --   ① `GetItemInfo(id)` 给 9 值元组，**第 9 = 图标路径**（形如 Interface/Icons/INV_Sword_04，正斜杠）；
   --      位置并不固定 ⇒ **第 9 优先，再扫 2..11** 里第一个 "interface[/\\]" 开头的字符串（照抄那份配方，别自己猜）。
   --   ② **未缓存的 id 什么都返回不了** —— 这才是截图里几行没图标的真因（不是 ID 不对）。
-  --   ③ 要让未缓存物品进缓存：在**隐藏 tooltip** 上 `SetHyperlink("item:<id>:0:0:0")` 向服务器要；
+  -- ③ 要让未缓存物品进缓存：在**隐藏 tooltip** 上 `SetHyperlink("item:<id>:0:0:0")` 向服务器要；
   --      实测批量 4 件只回 1 件（2s 内）、3 件 6s 都没回 ⇒ **必须限频 + 逐个重试**，不许一次轰。
   --   ④ 拿不到就**不画图标**（绝不退回自定义/推断图标）；等缓存回来由 tick 自动补画 = 越用越全。
-  local QP_REQ_RATE, QP_REQ_MAX = 1.5, 24 -- 秒/件（服务器读请求也要限频）· 单次最多排队件数
+  --   ★★1.75.12 用户要求：「不要顺序检索所有装备，添加检索频率、不要太频繁；只在当前看得见的装备进行检索」
+  --     ⇒ 队列**每次重绘重建**（只装当前页/当前详情里真正画出来的那几件），间隔 1.5 → **2.0 秒/件**，
+  --       并把「上一页遗留的排队」一并丢掉（滚回去时会重新排队）—— 绝不累积成「把 994 件顺序问一遍」。
+  local QP_REQ_RATE, QP_REQ_MAX = 2.0, 24 -- 秒/件（限频）· 队列上限（★1.75.20 与 qpReqTrim 成对：**排序后**才截断）
   local function qpItemInfo(id)
     if type(GetItemInfo) ~= "function" or type(id) ~= "number" then return nil end
     local ok, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11 = pcall(GetItemInfo, id)
@@ -3156,28 +3233,158 @@ function EVAL_DS_BUILD(root, page, refreshes)
   -- 拿图标：命中就用游戏内真实路径；未命中则排队去要（本次先不画）
   local function qpItemTex(id)
     local nm, tex = qpItemInfo(id)
+    local req = DS.qcReq
+    if req then req.vis = (req.vis or 0) + 1 end          -- 记「这一屏画了几件」，供探针/判据读
     if tex then return tex end
     local st = DS.qcReq
-    if st and table.getn(st.q) < QP_REQ_MAX then
+    if st then
+      -- ★1.75.20 **入队时不再截断**（旧写法 `table.getn(st.q) < QP_REQ_MAX` 是按「遇到顺序」= **行序**
+      --   先占满 24 格；任务线一行最多 6 个奖励 ⇒ 排在后面的行**永远排不上**，这正是用户报
+      --   「装备视图能及时显示图标，任务线这边不能」的结构性原因 —— 事后重排只能救「已经挤进 24 格」的那几行）。
+      --   上限改由整页收尾的 `qpReqTrim()` 在**按列排序之后**施加。
       local dup = false
       for i = 1, table.getn(st.q) do if st.q[i] == id then dup = true break end end
       if not dup then table.insert(st.q, id) end
     end
     return nil
   end
-  DS.qcReq = { q = {}, at = 0 }
+  DS.qcReq = { q = {}, at = 0, vis = 0 }   -- q=当前可见项的待请求队列 · vis=本次重绘画了几件
   DS.qcRetry = {}
+  -- ===== ★1.75.18 占位图标（宏 961）+ 点击优先刷新（用户要求）=====
+  --   「未扫描出装备时用**宏 961 图标**占位，提示『数据更新中』；**主动点击**就把这件装备插到
+  --     检索队列**最前面**优先扫描；扫到之后自动换成真图标与链接信息。」
+  --   ★图标也以**游戏内**为准：先问 `GetMacroIconInfo(961)`（宏图标选择器里那个编号），
+  --     拿不到（API 缺席 / 该编号越界）才退回游戏内既有的问号图标 —— 绝不自造素材。
+  local QP_PH_MACRO_ICON = 961
+  local qpPhTexCache = nil
+  local function qpPlaceholderTex()
+    if qpPhTexCache ~= nil then return qpPhTexCache end
+    qpPhTexCache = ""
+    if type(GetMacroIconInfo) == "function" then
+      local ok, t = pcall(GetMacroIconInfo, QP_PH_MACRO_ICON)
+      if ok and type(t) == "string" and t ~= "" then qpPhTexCache = t end
+    end
+    if qpPhTexCache == "" then qpPhTexCache = "Interface\\Icons\\INV_Misc_QuestionMark" end
+    return qpPhTexCache
+  end
+  -- 「数据更新中…（点击优先刷新）」的悬停提示（原生 tooltip：与物品 tooltip 同一条通道，不抢玩家那个）
+  local function qpShowLoadingTip(anchor)
+    if type(GameTooltip) == "nil" then return end
+    pcall(GameTooltip.ClearLines, GameTooltip)
+    if type(GameTooltip.SetOwner) == "function" then pcall(GameTooltip.SetOwner, GameTooltip, anchor, "ANCHOR_RIGHT") end
+    pcall(GameTooltip.AddLine, GameTooltip, L("DS_QP_LOADING"), 0.92, 0.88, 0.76)
+    pcall(GameTooltip.Show, GameTooltip)
+  end
+  -- 优先刷新：插到**队首** + 清掉限频时间戳与退避记录（下一次 tick 立刻抽它）
+  local function qpReqPriority(id)
+    local st = DS.qcReq
+    if not st or type(id) ~= "number" then return false end
+    local q = st.q or {}
+    for i = table.getn(q), 1, -1 do if q[i] == id then table.remove(q, i) end end
+    table.insert(q, 1, id)
+    st.q = q
+    st.at = 0                                    -- 让下一次 tick 立刻满足限频条件（不等 2s）
+    if st.tried then st.tried[id] = nil end      -- 之前试过也不等退避窗
+    st.pri = (st.pri or 0) + 1
+    return true
+  end
+  -- 取图标（带占位）：返回 tex, isPh —— isPh=true = 这件还没扫出来（画的是占位图）
+  local function qpItemTexPh(id)
+    local tex = qpItemTex(id)
+    if tex then return tex, false end
+    local ph = qpPlaceholderTex()
+    if ph ~= "" then return ph, true end
+    return nil, true
+  end
+  -- ★1.75.12 每次重绘**重建**队列（只留这一屏真正要画的那些）——用户要求「只在当前看得见的装备检索」
+  local function qpReqBegin()
+    DS.qcReq = DS.qcReq or {}
+    DS.qcReq.q = {}
+    DS.qcReq.vis = 0
+  end
+  -- ★1.75.20 队列上限**在整页按列排完序之后**才截断（与 qpItemTex 里「入队不截断」是一对）：
+  --   先全收当前页所有未缓存件 → 按列排序 → 再截到 QP_REQ_MAX ⇒ **每一行都先出第一件**。
+  --   纯截断既有队列（不新增请求、不改限频 2.0s/件）。
+  local function qpReqTrim()
+    local q = DS.qcReq and DS.qcReq.q
+    if not q then return end
+    for i = table.getn(q), QP_REQ_MAX + 1, -1 do table.remove(q, i) end
+  end
+  function EVAL_QP_REQ_STATE()
+    local st = DS.qcReq or { q = {} }
+    -- ★1.75.16 加可观测字段：光看「队列几条」分不清「泵在抽」还是「泵死了」——
+    --   真机事故就是队列一直堆着、`req` 恒 0（泵没跑 / 拿不到工具柄），而旧读值口看不出来。
+    local okp, shown = false, false
+    local pump = DS.qcPump
+    if pump and pump.IsShown then okp, shown = pcall(pump.IsShown, pump) end
+    return { queued = table.getn(st.q or {}), visible = st.vis or 0, rate = QP_REQ_RATE, cap = QP_REQ_MAX,
+             req = st.req or 0, blocked = st.blocked or 0, tried = table.getn(st.tried or {}),
+             pri = st.pri or 0, pumpShown = (okp and shown == true) }
+  end
+  -- ★1.75.18 读值口：当前待请求队列（断言要验「点占位 → 该 id 在**队首**」）
+  function EVAL_QP_REQ_QUEUE()
+    local st = DS.qcReq or {}
+    local q = st.q or {}
+    local out = {}
+    for i = 1, table.getn(q) do out[i] = q[i] end
+    return out
+  end
 
-  local function qpFillList()
+  -- ===== 顺滑滚动（1.75.11 用户要求：「装备和任务线滚动机制参考抓宠助手的滚动方式，顺滑滚动」）=====
+  -- 抓宠帮手 / 工具箱的范式 = **滚轮一格滚 1 行**（细调），不是整页硬跳；这里再加一层**像素滑动动画**：
+  --   每滚一格，先把内容按 1 行高度「错位」画出来，再由 tick 缓动归零 ⇒ 视觉上是滑动而非跳变。
+  --   ★★OnUpdate 回调在本客户端**一个参数都不传**（1.74.31 实测）⇒ 帧引用必须用**外层 local 捕获**，
+  --     绝不能写成 `function(f)` 再 `f:SetScript`（那样 f=nil，当场红字）。
+  local QP_ANIM_DECAY, QP_ANIM_SNAP = 0.55, 0.6
+  local qpAnimFrame = CreateFrame("Frame", nil, qp)
+  -- ★1.75.13 **前向声明**（顺序事故的结构性修复）：EVAL_QP_SCROLL（本段末尾）要调 qpFillList。
+  --   原先写 `local function qpFillList()` ⇒「声明位置」变成契约：一旦 EVAL_QP_SCROLL 排到它前面，
+  --   那里捕获的是**全局 nil**，真机红字 `attempt to call global 'qpFillList' (a nil value)`。
+  --   先声明、后赋值 ⇒ 谁在前面都抓得到同一个 upvalue。
+  local qpFillList
+  local function qpLayoutRows()
     local st = DS.qp
     if not st then return end
+    local anim = DS.qpAnim or 0
+    for i = 1, QP_ROWS do
+      local btn = st.rows[i].btn
+      pcall(btn.ClearAllPoints, btn)
+      pcall(btn.SetPoint, btn, "TOPLEFT", qp, "TOPLEFT", QP_PAD, QP_LIST_TOP - (i - 1) * QP_ROW_H + anim)
+    end
+  end
+  local function qpAnimStop()
+    DS.qpAnim = 0
+    pcall(qpAnimFrame.SetScript, qpAnimFrame, "OnUpdate", nil)
+    qpLayoutRows()
+    -- ★1.75.12 对齐：动画结束后按实际像素偏移算出「当前首行」，与逻辑行号取得一致
+    if DS.qpScrollPx and DS.qpScrollPx > 0 then DS.qpScrollPx = 0 end
+  end
+  local function qpAnimTick()
+    local a = (DS.qpAnim or 0) * QP_ANIM_DECAY
+    if math.abs(a) < QP_ANIM_SNAP then qpAnimStop() return end
+    DS.qpAnim = a
+    qpLayoutRows()
+  end
+  local function qpAnimKick(px)
+    local cap = QP_ROW_H * 3                     -- 起始偏移最多 3 行：整页跳也变成短促滑动
+    if px > cap then px = cap elseif px < -cap then px = -cap end
+    DS.qpAnim = (DS.qpAnim or 0) + px
+    pcall(qpAnimFrame.SetScript, qpAnimFrame, "OnUpdate", qpAnimTick)
+    qpLayoutRows()
+  end
+  DS.qpAnim, DS.qpAnimFrame = 0, qpAnimFrame
+
+  qpFillList = function()
+    local st = DS.qp
+    if not st then return end
+    qpReqBegin()          -- ★1.75.12 只让「这一屏要画的装备」进请求队列（用户要求：不做全量顺序检索）
     qpSyncFilterLabels()
     local hits, total = {}, 0
     local q = DS.qpQuery or ""
     local ql = string.lower(q)
     local function hitName(s) return (ql == "") or (string.find(string.lower(tostring(s or "")), ql, 1, true) ~= nil) end
+    local lv = qpLvEntry()   -- ★1.75.15 **两个视图共用**一份等级档：装备按来源任务等级、任务线按区间重叠
     if DS.qpTab == "item" then
-      local lv = qpLvEntry()
       -- ★种类多选在**数据层**过滤（EVAL_QC_ITEM_ROWS 的 kinds）——界面不再复刻一遍判定
       local rows = EVAL_QC_ITEM_ROWS({ loMin = lv.lo, loMax = lv.hi, faction = DS.qpFact, kinds = DS.qpKinds })
       for i = 1, table.getn(rows) do
@@ -3194,21 +3401,36 @@ function EVAL_DS_BUILD(root, page, refreshes)
       end
       DS.qpItemHits = hits
     else
-      local s = EVAL_QC_SEARCH(q, 200, { faction = DS.qpFact, tier = DS.qpTier }) or {}
+      -- ★1.75.13 上限走 QP_CHAIN_MAX（0 = 不限）：写死条数会在「等级升序」下静默砍掉高等级线
+      -- ★1.75.15 等级过滤也进数据层（loMin/loMax）：任务线视图此前**完全没有**等级过滤
+      -- ★1.75.18 种类筛选也进数据层（kinds）：任务线视图的「类型」与装备视图**共用 DS.qpKinds**；
+      --   档位（tier）筛选已被种类取代（数据层仍兼容 tier 参数，界面上不再有入口）。
+      local s = EVAL_QC_SEARCH(q, QP_CHAIN_MAX, { faction = DS.qpFact, kinds = DS.qpKinds, loMin = lv.lo, loMax = lv.hi }) or {}
       for i = 1, table.getn(s) do hits[table.getn(hits) + 1] = s[i] end
       DS.qpChainHits = hits
     end
     total = table.getn(hits)
-    local pages = math.max(1, math.ceil(total / QP_ROWS))
-    local page = math.floor((DS.qpOff or 0) / QP_ROWS) + 1
-    if page > pages then page = pages end
-    if page < 1 then page = 1 end
-    DS.qpOff = (page - 1) * QP_ROWS
+    -- ★1.75.11 滚轮改成**按行**滚动后，这里**不能再把 off 对齐到页边界**（那会把刚滚一行又拍回页首 ——
+    --   实测「滚轮一格只滚 1 行」当场失败）。只做夹取；[上页][下页] 自己按页算位（EVAL_QP_PAGE）。
+    local maxOff = total - QP_ROWS
+    if maxOff < 0 then maxOff = 0 end
+    if (DS.qpOff or 0) > maxOff then DS.qpOff = maxOff end
+    if (DS.qpOff or 0) < 0 then DS.qpOff = 0 end
     for i = 1, QP_ROWS do
       local row = st.rows[i]
       local h = hits[DS.qpOff + i]
       row.key, row.item = nil, nil
       row.bg:SetAlpha(0)
+      -- ★行池复用（1.75.10）：奖励图标带**每行每次都必须重设**，否则上一页的图标会残留在别的行上
+      for j = 1, QP_RW_MAX do
+        row.rwIds[j] = nil
+        row.rwPh[j] = nil
+        pcall(row.rw[j].tex.Hide, row.rw[j].tex)
+        pcall(row.rw[j].btn.Hide, row.rw[j].btn)
+      end
+      pcall(row.rwMore.SetText, row.rwMore, "")
+      -- 文本宽度：默认用满宽；任务线**有奖励图标**时给图标带让位（避免压字）
+      pcall(row.text.SetWidth, row.text, QP_W - QP_PAD * 2 - 26)
       if not h then
         row.text:SetText("")
         row.text:SetTextColor(0.92, 0.88, 0.76)
@@ -3224,8 +3446,10 @@ function EVAL_DS_BUILD(root, page, refreshes)
         else
           srcName = tostring(((h.chains or {})[1] or {}).n or "")
         end
+        -- ★1.75.17 类型列走**同一种类来源**（`EVAL_QC_ITEM_KIND`）：站点把戒指/项链/饰品的类型写成
+        --   「其它」，只有那里会按**部位**细分 ⇒ 列表文字与筛选菜单必须同一口径（否则筛「戒指」却显示「其它」）。
         row.text:SetText(string.format("Lv%s · %s · %s%s · %s%s", tostring(h.lo), tostring(h.it.n),
-          tostring(h.it.s or ""), tostring(h.it.k or ""),
+          tostring(h.it.s or ""), tostring(EVAL_QC_ITEM_KIND(h.it) or ""),
           h.it.dps and (string.format("DPS%.1f · ", h.it.dps)) or "",
           L("DS_QP_SRC") .. srcName))
         local col = QP_QCOL[tonumber(h.it.q) or 1] or QP_QCOL[1]
@@ -3235,17 +3459,121 @@ function EVAL_DS_BUILD(root, page, refreshes)
       else
         local c = h.c or {}
         row.key = c.k
-        row.text:SetText(string.format("[%s] %s · %s · %s-%s", tostring(c.t or "?"), tostring(h.name or ""),
-          tostring(c.z or ""), tostring(c.lo or "?"), tostring(c.hi or "?")))
-        row.text:SetTextColor(0.92, 0.88, 0.76)
+        -- ★1.75.10 用户要求：任务线按**稀有度**用魔兽品质色染色（橙=传说：风剑/橙杖/安其拉开门…）
+        local rt, rr, rg, rb = EVAL_QC_RARITY(c)
+        row.text:SetText(string.format("[%s·%s] %s · %s · %s-%s", tostring(c.t or "?"), L("DS_QP_RAR_" .. rt),
+          tostring(h.name or ""), tostring(c.z or ""), tostring(c.lo or "?"), tostring(c.hi or "?")))
+        if type(rr) == "number" then row.text:SetTextColor(rr, rg, rb)
+        else row.text:SetTextColor(0.92, 0.88, 0.76) end
         pcall(row.icon.Hide, row.icon)
+        -- 行尾奖励图标带：与武器列表同一套图标（qpItemTex），**紧跟标题左对齐**排开；
+        -- 多个奖励就都显示；行宽装不下的部分用「+N」如实提示（详情页列全）。
+        local ids, total = EVAL_QC_CHAIN_REWARDS(c.k, QP_RW_MAX)
+        local label = row.text:GetText() or ""
+        local x0 = 22 + qpTextWidth(row.text, label, 9) + 8          -- 文本起点 22 + 文本宽 + 间距
+        local limit = QP_W - QP_PAD - 6
+        local shown = 0
+        for j = 1, table.getn(ids) do
+          if x0 + (shown + 1) * QP_RW_STEP > limit then break end
+          shown = shown + 1
+          row.rwIds[shown] = ids[j]
+          -- ★1.75.18 没扫出来的装备**画占位图（宏 961）并置灰**（不再「什么都不画」——用户看到的
+          --   是「这行明明有奖励却空着」，无从判断是没扫到还是真没有）；点它 = 插队优先扫描。
+          local tex, isPh = qpItemTexPh(ids[j])
+          if tex then
+            pcall(row.rw[shown].tex.SetTexture, row.rw[shown].tex, tex)
+            if isPh then pcall(row.rw[shown].tex.SetVertexColor, row.rw[shown].tex, 0.55, 0.55, 0.55)
+            else pcall(row.rw[shown].tex.SetVertexColor, row.rw[shown].tex, 1, 1, 1) end
+            pcall(row.rw[shown].tex.Show, row.rw[shown].tex)
+            pcall(row.rw[shown].btn.Show, row.rw[shown].btn)
+          end
+          if isPh then row.rwPh[shown] = true end
+          local px = x0 + (shown - 1) * QP_RW_STEP
+          pcall(row.rw[shown].tex.ClearAllPoints, row.rw[shown].tex)
+          pcall(row.rw[shown].tex.SetPoint, row.rw[shown].tex, "LEFT", row.btn, "LEFT", px, 0)
+          pcall(row.rw[shown].btn.ClearAllPoints, row.rw[shown].btn)
+          pcall(row.rw[shown].btn.SetPoint, row.rw[shown].btn, "LEFT", row.btn, "LEFT", px, 0)
+        end
+        if (total or 0) > shown then
+          pcall(row.rwMore.ClearAllPoints, row.rwMore)
+          pcall(row.rwMore.SetPoint, row.rwMore, "LEFT", row.btn, "LEFT", x0 + shown * QP_RW_STEP + 2, 0)
+          pcall(row.rwMore.SetText, row.rwMore, "+" .. tostring(total - shown))
+        end
       end
     end
+    -- ★1.75.19/1.75.20 队列改成**按列排队**（所有行的第 1 件 → 所有行的第 2 件 …），**整页重排一次**，
+    --   并且 24 格上限**挪到这里（排序之后）**才施加 —— 两件事是一体的：
+    --   起因（用户实测）：「装备视图能及时显示图标，任务线这边不能」—— 任务线**一行最多 6 个图标**
+    --   （装备视图每行只有 1 个）⇒ ① 按行排队时前几行就把 24 格队列占满；② 若上限还在**入队时**
+    --   施加（1.75.20 之前的 `qpItemTex`），后面那些行**连排队资格都没有**，重排也无从救起。
+    --   现在先全收 → 按列排序 → 截到 24 ⇒ **每一行都先出第一件**（60+ 档首屏 9 行、共 66 件，
+    --   第一轮就把 9 行的首件全部要到，其余按列补齐；按行序则要 2 分钟才轮到后面的行）。
+    --   纯**重排 + 截断**既有队列（不新增请求、不改限频），被截掉的件下一次重绘会重新入队。
+    --   ★必须真的 `table.sort`（首版只写了「按 rank 过滤」= 顺序仍是原样，白改一场 —— 判据 ⑧aa 当场抓到）。
+    do
+      local q = DS.qcReq and DS.qcReq.q
+      if q and table.getn(q) > 1 then
+        local rank, n = {}, 0
+        for j = 1, QP_RW_MAX do
+          for i = 1, QP_ROWS do
+            local cell = st.rows[i]
+            local id = cell and cell.rwIds[j]
+            if type(id) == "number" and not rank[id] then n = n + 1 rank[id] = n end
+          end
+        end
+        local dec = {}
+        for i = 1, table.getn(q) do
+          local r = rank[q[i]]
+          if type(r) == "number" then dec[table.getn(dec) + 1] = { id = q[i], r = r } end
+        end
+        table.sort(dec, function(a, b) return a.r < b.r end)
+        local out = {}
+        for i = 1, table.getn(dec) do out[table.getn(out) + 1] = dec[i].id end
+        for i = 1, table.getn(q) do if not rank[q[i]] then out[table.getn(out) + 1] = q[i] end end
+        DS.qcReq.q = out
+      end
+    end
+    qpReqTrim()   -- ★1.75.20 截断在**排序之后**（挪到排序之前 = 变异 M81：后面的行照样排不上）
     if total == 0 then
       st.pageTxt:SetText(L("DS_QL_NORESULT"))
     else
       st.pageTxt:SetText(string.format("%d-%d / %d", DS.qpOff + 1, math.min(DS.qpOff + QP_ROWS, total), total))
     end
+    -- ★1.75.11 重绘后立刻按当前像素偏移摆位（顺滑滚动的「错位帧」不能等下一 tick 才出现）
+    qpLayoutRows()
+
+  -- 滚轮细调：**1 行/格**（与抓宠助手同语义）；到顶/到底就如实不动（不重复渲染、不越界）
+  function EVAL_QP_SCROLL(step)
+    local st = DS.qp
+    if not st then return end
+    local n = tonumber(step) or 0
+    if n == 0 then return end
+    if DS.qpMode == "detail" then
+      -- 详情视图也按行滚（长任务线/多来源装备都能看全）；行数由绘制段夹取
+      local maxOff = DS.qpDetMax or 0
+      local old = DS.qpDetOff or 0
+      local new = old + n
+      if new < 0 then new = 0 end
+      if new > maxOff then new = maxOff end
+      if new == old then return end
+      DS.qpDetOff = new
+      EVAL_QP_REFRESH()
+      return
+    end
+    local hits = (DS.qpTab == "item") and (DS.qpItemHits or {}) or (DS.qpChainHits or {})
+    local total = table.getn(hits)
+    local maxOff = total - QP_ROWS
+    if maxOff < 0 then maxOff = 0 end
+    local old = DS.qpOff or 0
+    local new = old + n
+    if new < 0 then new = 0 end
+    if new > maxOff then new = maxOff end
+    if new == old then return end
+    DS.qpOff = new
+    qpFillList()
+    qpAnimKick((new - old) * QP_ROW_H)
+  end
+
   end
 
   local function qpClearDet()
@@ -3257,7 +3585,69 @@ function EVAL_DS_BUILD(root, page, refreshes)
       st.detRows[i]:SetText("")
       st.detRows[i]:SetTextColor(0.9, 0.87, 0.78)
       st.detZoom[i] = nil
+      st.detItem[i] = nil
       pcall(st.zoomBtns[i].Hide, st.zoomBtns[i])
+      pcall(st.detIcons[i].Hide, st.detIcons[i])   -- ★行池复用：图标/热区必须逐行清（否则残留在别的行上）
+      pcall(st.detHover[i].Hide, st.detHover[i])
+    end
+  end
+
+  -- ★1.75.11 详情正文**统一绘制 + 按行滚动**（用户要求顺滑滚动；长任务线/多来源装备都要能看全）
+  --   body = { { text=, r=, g=, b=, zoom=任务名, item=装备id }, … }；滚动量 DS.qpDetOff（行）
+  local function qpDrawDetailBody(body)
+    local st = DS.qp
+    if not st then return end
+    qpReqBegin()          -- ★1.75.12 详情同理：只请求**当前看得见**的那几行奖励
+    local total = table.getn(body or {})
+    local off = tonumber(DS.qpDetOff) or 0
+    local maxOff = total - QP_DET_ROWS
+    if maxOff < 0 then maxOff = 0 end
+    if off > maxOff then off = maxOff end
+    if off < 0 then off = 0 end
+    DS.qpDetOff, DS.qpDetMax = off, maxOff
+    for i = 1, QP_DET_ROWS do
+      local e = (body and total > 0) and body[off + i] or nil
+      local fs = st.detRows[i]
+      st.detZoom[i], st.detItem[i], st.detPh[i] = nil, nil, nil
+      pcall(st.zoomBtns[i].Hide, st.zoomBtns[i])
+      pcall(st.detIcons[i].Hide, st.detIcons[i])
+      pcall(st.detHover[i].Hide, st.detHover[i])
+      if not e then
+        fs:SetText("")
+        fs:SetTextColor(0.9, 0.87, 0.78)
+      else
+        fs:SetText(tostring(e.text or ""))
+        fs:SetTextColor(e.r or 0.9, e.g or 0.87, e.b or 0.78)
+        if e.zoom and e.zoom ~= "" then
+          st.detZoom[i] = e.zoom
+          pcall(st.zoomBtns[i].Show, st.zoomBtns[i])
+        end
+        if e.item then
+          st.detItem[i] = e.item
+          -- ★1.75.18 与列表同一套：没扫出来就画**占位图（宏 961）**并置灰，点它 = 插队优先扫描
+          local tex, isPh = qpItemTexPh(e.item)
+          if tex then
+            pcall(st.detIcons[i].SetTexture, st.detIcons[i], tex)
+            if isPh then pcall(st.detIcons[i].SetVertexColor, st.detIcons[i], 0.55, 0.55, 0.55)
+            else pcall(st.detIcons[i].SetVertexColor, st.detIcons[i], 1, 1, 1) end
+            pcall(st.detIcons[i].Show, st.detIcons[i])
+          end
+          if isPh then st.detPh[i] = true end
+          pcall(st.detHover[i].Show, st.detHover[i])
+        elseif e.quest then
+          -- ★1.75.12 任务行：左侧**黄色感叹号**（照数据检索列表同一张图），行照样挂放大镜按钮
+          pcall(st.detIcons[i].SetTexture, st.detIcons[i], QP_QUEST_ICON)
+          pcall(st.detIcons[i].Show, st.detIcons[i])
+        end
+      end
+    end
+    qpReqTrim()   -- ★1.75.20 详情同理走同一个上限口（可见行数本就不多，但上限必须是**单一来源**）
+    if st.pageTxt then
+      if total > 0 then
+        st.pageTxt:SetText(string.format("%d-%d / %d", off + 1, math.min(off + QP_DET_ROWS, total), total))
+      else
+        st.pageTxt:SetText(L("DS_QL_NORESULT"))
+      end
     end
   end
 
@@ -3267,7 +3657,7 @@ function EVAL_DS_BUILD(root, page, refreshes)
     qpClearDet()
     local it = id and EVAL_QC_ITEM(id) or nil
     if not it then
-      st.detRows[1]:SetText(L("DS_QL_NORESULT"))
+      qpDrawDetailBody({ { text = L("DS_QL_NORESULT"), r = 0.9, g = 0.87, b = 0.78 } })
       return
     end
     local q = tonumber(it.q) or 1
@@ -3282,7 +3672,6 @@ function EVAL_DS_BUILD(root, page, refreshes)
     end
     st.detTitle:SetText(tostring(it.n or ""))
     st.detTitle:SetTextColor(col[1], col[2], col[3])
-    local n = 0
     local parts = {}
     if it.s and it.k then parts[table.getn(parts) + 1] = tostring(it.s) .. tostring(it.k) end
     if it.dps then parts[table.getn(parts) + 1] = string.format("DPS%.1f", it.dps) end
@@ -3290,84 +3679,83 @@ function EVAL_DS_BUILD(root, page, refreshes)
     if it.ilvl then parts[table.getn(parts) + 1] = "iLv" .. tostring(it.ilvl) end
     if it.st and it.st ~= "" then parts[table.getn(parts) + 1] = it.st end
     if st.detSub then st.detSub:SetText(table.concat(parts, " · ")) end
+    local body = {}
     -- ★1.75.9（用户要求：任务奖励只要有装备/武器的都采集，单任务也算）：
     --   **来源任务**排在最前 —— 每行带放大镜（按任务名直达数据检索），这是「由装备反查要做哪些任务」的主线。
     local srcs = (type(EVAL_QC_BULK_SOURCES) == "function") and EVAL_QC_BULK_SOURCES(id) or nil
     if srcs then
       for si = 1, table.getn(srcs) do
-        if n + 1 > QP_DET_ROWS then break end
         local sq = srcs[si]
-        n = n + 1
-        st.detRows[n]:SetText(string.format("%s%s  (Lv%s · %s)", L("DS_QP_SRC"), tostring(sq.n),
-          tostring(sq.lv), tostring(sq.z or "")))
-        st.detRows[n]:SetTextColor(0.55, 0.88, 0.58)
-        st.detZoom[n] = (sq.n ~= "") and sq.n or nil
-        if st.detZoom[n] then pcall(st.zoomBtns[n].Show, st.zoomBtns[n]) end
+        body[table.getn(body) + 1] = {
+          text = string.format("%s%s  (Lv%s · %s)", L("DS_QP_SRC"), tostring(sq.n), tostring(sq.lv), tostring(sq.z or "")),
+          r = 0.55, g = 0.88, b = 0.58, zoom = (sq.n ~= "") and sq.n or nil, quest = true,
+        }
       end
     end
     local chains = EVAL_QC_ITEM_CHAINS(id) or {}
     for ci = 1, table.getn(chains) do
       local c = chains[ci]
-      if n + 1 > QP_DET_ROWS then break end
-      n = n + 1
-      st.detRows[n]:SetText(string.format("%s%s  (%s · %s-%s)", L("DS_QP_SRC"), tostring(c.n), tostring(c.z), tostring(c.lo), tostring(c.hi)))
-      st.detRows[n]:SetTextColor(0.45, 0.85, 1.00)
+      body[table.getn(body) + 1] = {
+        text = string.format("%s%s  (%s · %s-%s)", L("DS_QP_SRC"), tostring(c.n), tostring(c.z), tostring(c.lo), tostring(c.hi)),
+        r = 0.45, g = 0.85, b = 1.00,
+      }
       local qs = c.qs or {}
       for j = 1, table.getn(qs) do
-        if n + 1 > QP_DET_ROWS then break end
-        n = n + 1
         local qn = EVAL_QC_QUEST_NAME(qs[j]) or ("#" .. tostring(qs[j]))
-        st.detRows[n]:SetText(string.format("%d. %s", j, tostring(qn)))
-        st.detRows[n]:SetTextColor(0.88, 0.84, 0.62)
-        st.detZoom[n] = (qn and qn ~= "") and qn or nil
-        if st.detZoom[n] then pcall(st.zoomBtns[n].Show, st.zoomBtns[n]) end
+        local lv = EVAL_QC_QUEST_LEVEL(qs[j])
+        -- ★1.75.12 用户要求：任务行要带**任务等级**（LvNN），并配黄色感叹号
+        local txt = string.format("%d. %s", j, tostring(qn))
+        if lv then txt = txt .. "  Lv" .. tostring(lv) end
+        body[table.getn(body) + 1] = {
+          text = txt, r = 0.88, g = 0.84, b = 0.62,
+          zoom = (qn and qn ~= "") and qn or nil, quest = true,
+        }
       end
     end
+    qpDrawDetailBody(body)
   end
 
-  -- 任务线详情：奖励（武器优先）→ 完整上下级链 → 点评
+  -- 任务线详情：奖励（武器优先）→ 完整上下级链 → 点评（★正文走统一绘制件，支持按行滚动）
   local function qpFillChainDetail()
     local st = DS.qp
     qpClearDet()
     local lines = EVAL_QC_LINES(DS.qpKey)
     if type(lines) ~= "table" then
-      st.detRows[1]:SetText(L("DS_QL_NORESULT"))
+      qpDrawDetailBody({ { text = L("DS_QL_NORESULT"), r = 0.9, g = 0.87, b = 0.78 } })
       return
     end
-    local n = 0
+    local body = {}
     for i = 1, table.getn(lines) do
-      if n >= QP_DET_ROWS then break end
       local src = lines[i]
       local k, txt = src.kind, tostring(src.text or "")
-      if k == "sec_reward" then txt = L("DS_CHAIN_REWARD")
-      elseif k == "sec_steps" then txt = L("DS_CHAIN_STEPS") end
       if k == "title" then
+        -- ★1.75.10：标题按**任务线稀有度**染色（与列表行同一来源：EVAL_QC_RARITY）
+        local rec = DS.qpKey and EVAL_QC_DETAIL(DS.qpKey)
+        local rt, rr, rg, rb = EVAL_QC_RARITY(rec and rec.c or nil)
+        if type(rr) == "number" then st.detTitle:SetTextColor(rr, rg, rb)
+        else st.detTitle:SetTextColor(0.98, 0.86, 0.45) end
         st.detTitle:SetText(txt)
-        st.detTitle:SetTextColor(0.98, 0.86, 0.45)
-        do n = n + 1 end
+        DS.qpRarity = rt
       elseif k == "sub" then
         if st.detSub then st.detSub:SetText(txt) end
-        do n = n + 1 end
-      else
-      n = n + 1
-      local fs = st.detRows[n]
-      fs:SetText(txt)
-      if k == "title" then fs:SetTextColor(0.98, 0.86, 0.45)
-      elseif k == "sec_reward" or k == "sec_steps" then fs:SetTextColor(0.45, 0.85, 1.00)
+      elseif k == "sec_reward" then
+        body[table.getn(body) + 1] = { text = L("DS_CHAIN_REWARD"), r = 0.45, g = 0.85, b = 1.00 }
+      elseif k == "sec_steps" then
+        body[table.getn(body) + 1] = { text = L("DS_CHAIN_STEPS"), r = 0.45, g = 0.85, b = 1.00 }
       elseif k == "reward" then
+        -- ★1.75.10 用户要求：奖励行**与武器列表同一套图标**（走 qpItemTex）+ 悬停出物品链接 tooltip + 点击进装备详情
         local it = (src.id and EVAL_QC_ITEM(src.id)) or nil
-        if it and EVAL_QC_IS_WEAPON(it) then fs:SetTextColor(1.00, 0.72, 0.25)
-        else fs:SetTextColor(0.92, 0.90, 0.80) end
+        local r, g, b = 0.92, 0.90, 0.80
+        if it and EVAL_QC_IS_WEAPON(it) then r, g, b = 1.00, 0.72, 0.25 end
+        body[table.getn(body) + 1] = { text = txt, r = r, g = g, b = b, item = src.id }
       elseif k == "step" then
-        fs:SetTextColor(0.88, 0.84, 0.62)
         local qn = (src.id and EVAL_QC_QUEST_NAME(src.id)) or nil
-        if qn and qn ~= "" then
-          st.detZoom[n] = qn
-          pcall(st.zoomBtns[n].Show, st.zoomBtns[n])
-        end
-      else fs:SetTextColor(0.66, 0.62, 0.50) end
+        body[table.getn(body) + 1] = { text = txt, r = 0.88, g = 0.84, b = 0.62, zoom = qn, quest = true }
+      else
+        body[table.getn(body) + 1] = { text = txt, r = 0.66, g = 0.62, b = 0.50 }
       end
     end
+    qpDrawDetailBody(body)
   end
 
   -- ===== 对外入口 =====
@@ -3399,6 +3787,7 @@ function EVAL_DS_BUILD(root, page, refreshes)
     if type(key) ~= "string" or key == "" then return end
     if not EVAL_QC_DETAIL(key) then return end
     DS.qpKey, DS.qpItem = key, nil
+    DS.qpDetOff = 0                    -- ★换条链回到顶部（滚动静默留在上一条的偏移上会看着像「少了内容」）
     pcall(function() DS.qp.goDs.btn:Hide() end)
     qpShowView("detail")
     qpFillChainDetail()
@@ -3409,6 +3798,7 @@ function EVAL_DS_BUILD(root, page, refreshes)
     if type(itemId) ~= "number" then return end
     if not EVAL_QC_ITEM(itemId) then return end
     DS.qpItem, DS.qpKey = itemId, nil
+    DS.qpDetOff = 0
     qpShowView("detail")
     pcall(function() DS.qp.goDs.btn:Show() end)
     qpFillItemDetail()
@@ -3421,8 +3811,10 @@ function EVAL_DS_BUILD(root, page, refreshes)
     local page = math.floor((DS.qpOff or 0) / QP_ROWS) + 1 + (tonumber(step) or 0)
     if page < 1 then page = 1 end
     if page > pages then page = pages end
+    local old = DS.qpOff or 0
     DS.qpOff = (page - 1) * QP_ROWS
     qpFillList()
+    if DS.qpOff ~= old then qpAnimKick((DS.qpOff - old) * QP_ROW_H) end   -- 整页跳也走一段短促滑动
   end
 
   -- ★用户需求：装备直连数据检索（复用抓宠帮手「放大镜」那条已验证的入口）
@@ -3450,7 +3842,9 @@ function EVAL_DS_BUILD(root, page, refreshes)
     local st = DS.qp
     if not st then return end
     if type(EVAL_DD_HIDE) == "function" then EVAL_DD_HIDE() end
-    if st.qcPump then st.qcPump:Hide() end
+    -- ★1.75.16 **故意不 Hide 请求泵**：帧一 Hide，OnUpdate 就不触发 ⇒ 显隐管线漏一处 = 泵永远停摆
+    --   （表现是「装备图标再也不出现」却查不出原因）。泵体内部按「弹窗是否显示」自行把关，
+    --   弹窗关着时它一件都不请求 ⇒ 「只在当前看得见的装备检索」照样成立。
     st.frame:Hide()
   end
 
@@ -3493,34 +3887,83 @@ function EVAL_DS_BUILD(root, page, refreshes)
     pcall(GameTooltip.Show, GameTooltip)
   end
 
-  -- ===== 未缓存物品的「向服务器要」泵：限频 1.5s/件 + 2s 后复查自愈 =====
+  -- ===== 未缓存物品的「向服务器要」泵（★1.75.16 结构性修复）=====
   --   ★OnUpdate 回调**一个参数都不传**（1.74.31 实测）⇒ 这里不接参数，帧引用靠外层 local。
-  local qpPump = CreateFrame("Frame", nil, qp)
-  qpPump:SetScript("OnUpdate", function()
+  --   ★★为什么挂 **UIParent** 而不是弹窗：OnUpdate **只在帧可见时**才触发。挂在弹窗子级时，
+  --     弹窗的显隐稍有不对（或被子级整块 Hide 逻辑波及），泵就**静静停摆** ——
+  --     表现正是用户报的「任务线当前页不再检索装备了」（队列一直堆着没人抽，
+  --     而旧判据只断言了「队列 ≤ 一页」「限频 ≥2s」，**从没断言泵真会把队列抽走**，于是漏网）。
+  --   ★工具柄走 Engine 的**单一来源** `EVAL_WTT_HANDLE()`；拿不到柄（或退化到玩家那个 tooltip
+  --     且它正显示）就**不消费队列**、只记一笔 `blocked` —— 绝不静默丢件（1.75.16 之前的写法是
+  --     「先 table.remove 再取柄」，柄为 nil 时那一件就白丢了，用户端完全看不出来）。
+  local QP_REQ_BACKOFF = 30 -- 同一件物品两次请求的最小间隔（秒）：避免对着没回音的 id 反复轰
+  local qpPump = CreateFrame("Frame", nil, UIParent)
+  qpPump:Hide()
+  local function qpPumpTick()
     local st = DS.qcReq
-    if not st then return end
+    if not st or table.getn(st.q) == 0 then return end
+    -- 只在弹窗**真的显示着**时干活（「只在当前看得见的装备检索」）
+    local stq = DS.qp
+    if not (stq and stq.frame) then return end
+    local oks, shown = pcall(stq.frame.IsShown, stq.frame)
+    if not (oks and shown == true) then return end
     local now = (type(GetTime) == "function") and GetTime() or 0
     if now == 0 then return end -- 载入期 GetTime() 恒 0（1.74.31 教训）→ 不进循环
-    if table.getn(st.q) > 0 and (now - (st.at or 0)) >= QP_REQ_RATE then
-      st.at = now
-      local id = table.remove(st.q, 1)
-      local wtt = rawget(_G, "EVAL_HELP_WTT")
-      if wtt and type(wtt.SetHyperlink) == "function" then
-        pcall(function() pcall(wtt.ClearLines, wtt) pcall(wtt.SetHyperlink, wtt, "item:" .. tostring(id) .. ":0:0:0") end)
+    if (now - (st.at or 0)) < QP_REQ_RATE then return end
+    local tried = st.tried or {}
+    st.tried = tried
+    local pick, idx = nil, nil
+    for i = 1, table.getn(st.q) do
+      local id = st.q[i]
+      if not qpItemInfo(id) and (not tried[id] or (now - tried[id]) >= QP_REQ_BACKOFF) then
+        pick, idx = id, i
+        break
       end
-      table.insert(DS.qcRetry, { id = id, at = now + 2 })
     end
+    if not pick then return end
+    -- ★绝不用 `type(F)=="function" and F() or 全局` —— Lua 里 `f()` 返 nil 时会**静默回落**到全局
+    --   （本项目 1.73.15 记过这个形状；本轮又踩：桩把 handle 换成「返回 nil」后仍然取到了全局名）
+    local wtt = nil
+    if type(EVAL_WTT_HANDLE) == "function" then wtt = EVAL_WTT_HANDLE()
+    else wtt = rawget(_G, "EVAL_HELP_WTT") end
+    local may = (type(EVAL_WTT_MAY_READ) ~= "function") or (EVAL_WTT_MAY_READ() and true or false)
+    if not wtt or not may or type(wtt.SetHyperlink) ~= "function" then
+      st.blocked = (st.blocked or 0) + 1          -- 如实记「这次没法要」；队列**不动**
+      st.at = now                                  -- 这条路径也限频，别每帧刷
+      return
+    end
+    table.remove(st.q, idx)
+    st.at = now
+    st.req = (st.req or 0) + 1
+    tried[pick] = now
+    pcall(function() pcall(wtt.ClearLines, wtt) pcall(wtt.SetHyperlink, wtt, "item:" .. tostring(pick) .. ":0:0:0") end)
+    table.insert(DS.qcRetry, { id = pick, at = now + 2 })
+  end
+  -- 复查自愈（泵体只负责「要」，复查单独一段）：缓存回来了就补画当前页
+  local function qpPumpRetry()
+    local now = (type(GetTime) == "function") and GetTime() or 0
+    if now == 0 then return end
     local rt = DS.qcRetry
     for i = table.getn(rt), 1, -1 do
       local e = rt[i]
       if now >= (e.at or 0) then
         table.remove(rt, i)
-        local nm, tex = qpItemInfo(e.id)
+        local nm = qpItemInfo(e.id)
         if nm and DS.qpMode == "list" and DS.qp then qpFillList() end -- 缓存回来了 → 补画
       end
     end
-  end)
+  end
+  -- ★OnUpdate 两句都要跑：**要**（qpPumpTick）+ **复查自愈**（qpPumpRetry）——首版把复查漏在泵体外，
+  --   会变成「请求发了但永远不补画」（图标要等下一次重绘才出现）。
+  local function qpPumpOnUpdate() qpPumpTick() qpPumpRetry() end
+  qpPump:SetScript("OnUpdate", qpPumpOnUpdate)
+  -- ★★1.75.16 **常驻开启**（不再随弹窗 Show/Hide）：帧被 Hide 时 OnUpdate **根本不触发**，
+  --   于是「显隐管线里漏了泵」＝泵永远不跑，而任何断言都看不出来（这正是用户报的事故形态）。
+  --   代价 = 每帧一次空表长度判断 + 一次 IsShown；要花的活由**内部**的「弹窗可见 + 队列非空」把关。
+  pcall(qpPump.Show, qpPump)
   DS.qcPump = qpPump
+  function EVAL_QP_TEST_PUMP() return qpPump end        -- 读值口：断言要驱动真 tick
+  function EVAL_QP_TEST_PUMP_TICK() qpPumpOnUpdate() end -- 断言直接跑**真**的泵体（不复制逻辑）
 
   -- ===== 探针（用户要求「优先排查有没有 API 接口获取装备信息」）：一条命令摊开结论 =====
   -- 用法：/eh ds 任务线   → 打印若干 id 的客户端返回；未缓存的自动排队请求（限频），
@@ -3540,6 +3983,44 @@ function EVAL_DS_BUILD(root, page, refreshes)
     end
     table.insert(out, "说明：本客户端**没有**「按 id 直取物品」的独立 API（api_item 索引里只有包装备栏/商店/训练师等场景专用的那几个）；")
     table.insert(out, "      唯一入口是 GetItemInfo(id)，**只读本地缓存** —— 未缓存就是没名字没图标（UnrealQuest 已实测并记录该行为）。")
+    -- ★1.75.12 用户问「装备链接缓存是否生效?」+「只在当前看得见的装备检索」：把**当前这一屏**的
+    --   缓存命中与待请求队列摊开（含限频），一眼看出缓存有没有自愈、有没有在乱轰服务器。
+    local hits = (DS.qpTab == "item") and (DS.qpItemHits or {}) or (DS.qpChainHits or {})
+    local visN, cachedN = 0, 0
+    for i = 1, QP_ROWS do
+      local h = hits[(DS.qpOff or 0) + i]
+      local id = h and h.id or nil
+      if type(id) == "number" then
+        visN = visN + 1
+        if qpItemInfo(id) then cachedN = cachedN + 1 end
+      end
+    end
+    local st = EVAL_QP_REQ_STATE()
+    table.insert(out, string.format("[当前页缓存] 本页装备 %d 件 · 客户端已缓存 %d · 待请求 %d 件（限频 %.1fs/件 · 队列上限 %d）",
+      visN, cachedN, st.queued, st.rate, st.cap))
+    -- ★1.75.16 「泵到底有没有在要」也要能一眼看出来（旧版只有队列长度，泵死了也显示得像正常）；
+    --   顺带把**工具柄状态**摊开（自建 / 退化用 GameTooltip / 无）—— 泵拿不到柄时靠它定位。
+    local wttState = "?"
+    if type(EVAL_WTT_STATE) == "function" then
+      local ws = EVAL_WTT_STATE()
+      wttState = ws.hasWtt and (ws.self and "自建" or "退化(GameTooltip)") or "无"
+    end
+    table.insert(out, string.format("[请求泵] 已请求 %d 件 · 因拿不到工具柄挡下 %d 次 · 泵帧=%s · 已试过 %d 件 · 工具柄=%s · 手动优先 %d 次",
+      st.req, st.blocked, (st.pumpShown and "开" or "关"), st.tried, wttState, st.pri))
+    table.insert(out, "      ★只对**当前看得见**的装备排队请求（每次重绘重建队列，绝不顺序检索全部装备）；整页都命中缓存时队列为 0。")
+    -- ★1.75.13 「载入的是哪一版」自查行：任务线**全量条数**是最好认的派生事实 ——
+    --   旧实现在 DataSearch 里写死 `EVAL_QC_SEARCH(q, 200, …)`，而列表按等级升序 ⇒ 只出 200 条、最高 hi≈40，
+    --   于是用户看到「任务线最高只有 30 级」误以为数据没收集齐（修好后 = 全量 710 条 · 最高 hi=60）。
+    local qAll = EVAL_QC_SEARCH("", 0, nil) or {}
+    local qTop, qSer = 0, 0
+    for i = 1, table.getn(qAll) do
+      local hi = tonumber(qAll[i] and qAll[i].c and qAll[i].c.hi) or 0
+      if hi > qTop then qTop = hi end
+    end
+    if type(EVAL_QC_SERIES_COUNT) == "function" then qSer = EVAL_QC_SERIES_COUNT() end
+    table.insert(out, string.format("[任务线列表] 全量 %d 条（策展 %d + 自报系列 %d）· 最高 hi=%d",
+      table.getn(qAll), table.getn(EVAL_QC_LIST() or {}), qSer, qTop))
+    table.insert(out, "      ★若这一行只有 200 条、最高 hi≈40 ⇒ **载入的是旧副本**，请 /reload 后再看（新副本是全量、最高 60）。")
     return out
   end
 
@@ -3627,20 +4108,20 @@ function EVAL_DS_BUILD(root, page, refreshes)
   qpDn.btn:SetScript("OnClick", function() EVAL_QP_PAGE(1) end)
   qpF1.btn:SetScript("OnClick", function()
     if type(EVAL_DD_OPEN) ~= "function" then return end
-    local labels, cb
-    if DS.qpTab == "item" then
-      -- ★1.75.9 等级档**由 QP_LV 现算**（写死四项 = 加档必漏一处；1.75.8 加档时就踩过这个形状）
-      local labels = {}
-      for i = 1, table.getn(QP_LV) do labels[i] = L("DS_QP_LV_" .. QP_LV[i].k) end
-      cb = function(pi) DS.qpLv = QP_LV[pi] and QP_LV[pi].k or "ALL" DS.qpOff = 0 EVAL_QP_LIST() end
-    else
-      labels = { L("DS_F_ALL"), "S", "A", "B" }
-      cb = function(pi) DS.qpTier = QP_TIER[pi] or "ALL" DS.qpOff = 0 EVAL_QP_LIST() end
-    end
-    EVAL_DD_OPEN(DS.qp.f1.btn, labels, cb)
+    -- ★1.75.18 用户要求「任务线->等级筛选按钮移动到最左侧」：**等级筛选两个视图都在最左（F1 位）**
+    --   ⇒ 这里不再按 tab 分支（装备 / 任务线都是等级档）；档位挪到 F2、阵营留在 F3。
+    --   ★1.75.11 的教训仍然有效：这里**绝不能**写成遮蔽外层的 `local labels` —— 本段现在只有这一处 labels。
+    local labels = {}
+    for i = 1, table.getn(QP_LV) do labels[i] = L("DS_QP_LV_" .. QP_LV[i].k) end
+    EVAL_DD_OPEN(DS.qp.f1.btn, labels, function(pi)
+      DS.qpLv = QP_LV[pi] and QP_LV[pi].k or "ALL"
+      DS.qpOff = 0
+      EVAL_QP_LIST()
+    end)
   end)
   qpF3.btn:SetScript("OnClick", function()
     if type(EVAL_DD_OPEN) ~= "function" then return end
+    -- ★1.75.18 阵营两个视图共用（装备 F3 / 任务线 F3）⇒ 同样不再按 tab 分支
     EVAL_DD_OPEN(DS.qp.f3.btn, { L("DS_F_ALL"), L("DS_QL_F_A"), L("DS_QL_F_H"), L("DS_QL_F_B") }, function(pi)
       DS.qpFact = QP_FACT[pi] or "ALL"
       DS.qpOff = 0
@@ -3648,11 +4129,31 @@ function EVAL_DS_BUILD(root, page, refreshes)
     end)
   end)
   for zi = 1, QP_DET_ROWS do
+    -- ★1.75.10 奖励行的**链接 tooltip**：悬停按装备 id 出原生物品详情（客户端认识就用客户端的，
+    --   不认识就用站点数据自绘 —— 与武器列表行同一个 qpItemTooltip），点击直接进该装备详情。
+    local hb = qpDetHover[zi]
+    hb:SetScript("OnEnter", function()
+      local id = DS.qp and DS.qp.detItem[zi]
+      if type(id) ~= "number" then return end
+      -- ★1.75.18 详情页奖励行同理：占位 → 「数据更新中…（点击优先刷新）」；扫到了才出物品链接
+      if DS.qp.detPh[zi] then qpShowLoadingTip(hb) else qpItemTooltip(hb, id) end
+    end)
+    hb:SetScript("OnLeave", function()
+      if type(GameTooltip) ~= "nil" then pcall(GameTooltip.Hide, GameTooltip) end
+    end)
+    hb:SetScript("OnClick", function()
+      local id = DS.qp and DS.qp.detItem[zi]
+      if type(id) ~= "number" then return end
+      if DS.qp.detPh[zi] then qpReqPriority(id) else EVAL_QP_ITEM_DETAIL(id) end
+    end)
     local zb = qpZoomBtns[zi]
     zb:SetScript("OnClick", function()
       local word = DS.qp.detZoom[zi]
       if type(word) == "string" and word ~= "" and type(EVAL_DS_SEARCH_NAME) == "function" then
         EVAL_DS_SEARCH_NAME(word) -- ★按**任务名**检索（用户要求：节点放大镜直达数据检索）
+        -- ★1.75.12 用户要求：「点击任务放大镜**自动打开数据检索 tab** 进行对应任务的搜索」
+        --   照抓宠帮手那条已验证范式（EVAL_PH_JUMP）：先送检索词，再切到第 4 个 Tab（数据检索）。
+        if type(EVAL_HELP_CFG_SETTAB) == "function" then pcall(EVAL_HELP_CFG_SETTAB, 4) end
         -- ★用户要求（1.75.3）：**不关窗** —— 只把结果送过去，并在这里给一行回执；
         --   要看检索结果把本窗拖开即可（本窗可拖动，不与数据检索抢焦点）。
         if DS.qp and DS.qp.hint then
@@ -3670,30 +4171,24 @@ function EVAL_DS_BUILD(root, page, refreshes)
   end
   qpF2.btn:SetScript("OnClick", function()
     if type(EVAL_DD_OPEN) ~= "function" then return end
-    if DS.qpTab == "item" then
-      -- ★1.75.8 用户要求：种类细分 + 武器子类型 + **多选**（走 1.26.0 的 multi 下拉：点按切换、不关面板）
-      local items, locked, sel, map = qpKindMenu()
-      EVAL_DD_OPEN(DS.qp.f2.btn, items, function(pi, on)
-        local m = map[pi]
-        if not m then return end
-        if m.clear then
-          DS.qpKinds = {} -- 一键清空（= 全部）
-        elseif m.kind then
-          -- ★别写 `on and true or DS.qpKinds[k]` —— Lua 的 and/or 没有布尔语义（记忆体里记过这个坑）
-          if on == true then DS.qpKinds[m.kind] = true else DS.qpKinds[m.kind] = nil end
-        else
-          return
-        end
-        DS.qpOff = 0
-        EVAL_QP_LIST()
-      end, { multi = true, selected = sel, locked = locked })
-      return
-    end
-    EVAL_DD_OPEN(DS.qp.f2.btn, { L("DS_F_ALL"), L("DS_QL_F_A"), L("DS_QL_F_H"), L("DS_QL_F_B") }, function(pi)
-      DS.qpFact = QP_FACT[pi] or "ALL"
+    -- ★1.75.8 用户要求：种类细分 + 武器子类型 + **多选**（走 1.26.0 的 multi 下拉：点按切换、不关面板）
+    -- ★1.75.18 用户要求「任务线->档位过滤使用装备那边的种类过滤」⇒ **两个视图同一份菜单、同一份状态**
+    --   （DS.qpKinds）：任务线按「这条线的奖励里有没有勾选的种类」筛（判据在数据层 EVAL_QC_SEARCH）。
+    local items, locked, sel, map = qpKindMenu()
+    EVAL_DD_OPEN(DS.qp.f2.btn, items, function(pi, on)
+      local m = map[pi]
+      if not m then return end
+      if m.clear then
+        DS.qpKinds = {} -- 一键清空（= 全部）
+      elseif m.kind then
+        -- ★别写 `on and true or DS.qpKinds[k]` —— Lua 的 and/or 没有布尔语义（记忆体里记过这个坑）
+        if on == true then DS.qpKinds[m.kind] = true else DS.qpKinds[m.kind] = nil end
+      else
+        return
+      end
       DS.qpOff = 0
       EVAL_QP_LIST()
-    end)
+    end, { multi = true, selected = sel, locked = locked })
   end)
   for i = 1, QP_ROWS do
     local row = qpRows[i]
@@ -3710,6 +4205,25 @@ function EVAL_DS_BUILD(root, page, refreshes)
       if DS.qpTab == "item" and row.item then EVAL_QP_ITEM_DETAIL(row.item)
       elseif row.key then EVAL_QP_DETAIL(row.key) end
     end)
+    -- ★1.75.10 奖励图标：悬停出**物品链接 tooltip**（原生物品详情优先），点击进该装备详情
+    for j = 1, QP_RW_MAX do
+      local slot = j
+      local bj = row.rw[j].btn
+      bj:SetScript("OnEnter", function()
+        local id = row.rwIds[slot]
+        if type(id) ~= "number" then return end
+        -- ★1.75.18 占位（还没扫出来）→ 出「数据更新中…（点击优先刷新）」；扫到了才出物品链接
+        if row.rwPh[slot] then qpShowLoadingTip(bj) else qpItemTooltip(bj, id) end
+      end)
+      bj:SetScript("OnLeave", function()
+        if type(GameTooltip) ~= "nil" then pcall(GameTooltip.Hide, GameTooltip) end
+      end)
+      bj:SetScript("OnClick", function()
+        local id = row.rwIds[slot]
+        if type(id) ~= "number" then return end
+        if row.rwPh[slot] then qpReqPriority(id) else EVAL_QP_ITEM_DETAIL(id) end
+      end)
+    end
   end
   qpEb:SetScript("OnTextChanged", function()
     local ok, t = pcall(qpEb.GetText, qpEb)
@@ -3720,9 +4234,10 @@ function EVAL_DS_BUILD(root, page, refreshes)
     if type(EVAL_QP_REFRESH) == "function" then EVAL_QP_REFRESH() end
   end)
   qp:SetScript("OnMouseWheel", function(a, b)
-    if DS.qpMode ~= "list" then return end
     local dir = EVAL_WHEEL_DIR(a, b)
-    if dir ~= 0 then EVAL_QP_PAGE(-dir) end
+    -- ★1.75.11 用户要求：滚轮**细调 1 行/格**（照抓宠帮手那条范式）+ 像素滑动动画；
+    --   旧实现一格跳一整页（用户原话：「参考抓宠助手的滚动方式，顺滑滚动」）。
+    if dir ~= 0 then EVAL_QP_SCROLL(-dir) end
   end)
   qp:SetScript("OnHide", function() if type(EVAL_DD_HIDE) == "function" then EVAL_DD_HIDE() end end)
   qp:SetScript("OnShow", function() EVAL_QP_REFRESH() end)
@@ -3754,13 +4269,84 @@ function EVAL_DS_BUILD(root, page, refreshes)
     local st = DS.qp
     if not st or type(i) ~= "number" or not st.rows[i] then return nil end
     local r = st.rows[i]
-    return { btn = r.btn, text = r.text, icon = r.icon, key = r.key, item = r.item, bg = r.bg }
+    return { btn = r.btn, text = r.text, icon = r.icon, key = r.key, item = r.item, bg = r.bg,
+             rw = r.rw, rwMore = r.rwMore, rwIds = r.rwIds }
+  end
+  -- ★1.75.10 读值口：任务线行的奖励图标（第 j 槽）与其物品 id；以及文本宽度估算纯函数
+  function EVAL_QP_TEST_ROW_RW(i, j)
+    local st = DS.qp
+    if not st or type(i) ~= "number" or type(j) ~= "number" or not st.rows[i] then return nil end
+    local rw = st.rows[i].rw
+    return rw and rw[j] or nil
+  end
+  function EVAL_QP_ROW_RW_ID(i, j)
+    local st = DS.qp
+    if not st or type(i) ~= "number" or type(j) ~= "number" or not st.rows[i] then return nil end
+    return st.rows[i].rwIds[j]
+  end
+  -- ★1.75.18 读值口：这一格的奖励图标是不是**占位图**（未扫描出装备）+ 画出来的贴图路径
+  function EVAL_QP_TEST_ROWPH(i, j)
+    local st = DS.qp
+    if not st or type(i) ~= "number" or type(j) ~= "number" or not st.rows[i] then return nil end
+    local row = st.rows[i]
+    local tex = nil
+    if row.rw[j] and row.rw[j].tex and row.rw[j].tex.GetTexture then
+      local ok, t = pcall(row.rw[j].tex.GetTexture, row.rw[j].tex)
+      if ok then tex = t end
+    end
+    return (row.rwPh[j] and true or false), tex
+  end
+  function EVAL_QP_TEST_DETPH(i)
+    local st = DS.qp
+    if not st or type(i) ~= "number" then return nil end
+    return (st.detPh[i] and true or false)
+  end
+  -- ★1.75.18 读值口：某一格奖励图标的**按钮**（断言要跑它真实的 OnEnter/OnClick）
+  function EVAL_QP_TEST_ROWPHBTN(i, j)
+    local st = DS.qp
+    if not st or type(i) ~= "number" or type(j) ~= "number" or not st.rows[i] then return nil end
+    return st.rows[i].rw[j] and st.rows[i].rw[j].btn or nil
+  end
+  function EVAL_QP_TEXT_W(label, perChar) return qpTextWidth(nil, label, perChar) end
+  -- ★1.75.11 顺滑滚动读值口：当前像素错位 / 动画帧（测试直接跑它的 OnUpdate，零参数）/ 详情滚动量
+  function EVAL_QP_ANIM() return DS.qpAnim or 0 end
+  function EVAL_QP_TEST_ANIMFRAME() return qpAnimFrame end
+  function EVAL_QP_DET_OFF() return DS.qpDetOff or 0 end
+  function EVAL_QP_DET_MAX() return DS.qpDetMax or 0 end
+  function EVAL_QP_TEST_ROW_TOP(i)
+    local st = DS.qp
+    if not st or type(i) ~= "number" or not st.rows[i] then return nil end
+    local okv, v = pcall(st.rows[i].btn.GetTop, st.rows[i].btn)
+    if okv then return v end
+    return nil
   end
   function EVAL_QP_TEST_DET(i)
     local st = DS.qp
     if not st or type(i) ~= "number" then return nil end
     return st.detRows[i]
   end
+  -- ★1.75.10 读值口：详情奖励行的图标 / 悬停热区 / 该行的装备 id / 详情标题的稀有度
+  function EVAL_QP_TEST_DETICONROW(i)
+    local st = DS.qp
+    if not st or type(i) ~= "number" then return nil end
+    return st.detIcons[i]
+  end
+  function EVAL_QP_TEST_DETHOVER(i)
+    local st = DS.qp
+    if not st or type(i) ~= "number" then return nil end
+    return st.detHover[i]
+  end
+  function EVAL_QP_DET_ITEM(i)
+    local st = DS.qp
+    if not st or type(i) ~= "number" then return nil end
+    return st.detItem[i]
+  end
+  function EVAL_QP_RARITY_OF(key)
+    if type(EVAL_QC_DETAIL) ~= "function" then return nil end
+    local d = EVAL_QC_DETAIL(key)
+    return EVAL_QC_RARITY(d and d.c or nil)
+  end
+  function EVAL_QP_DET_TITLE_RARITY() return DS.qpRarity end
   function EVAL_QP_TEST_BTN() return DS.qlBtn and DS.qlBtn.btn or nil end
   function EVAL_QP_TEST_ZOOM(i)
     local st = DS.qp
@@ -3828,7 +4414,9 @@ function EVAL_DS_BUILD(root, page, refreshes)
       if b and b ~= "" then qpApplyKindToken(b) end -- 类型（旧 token ALL/WP/OT 或种类名，可 "剑,斧"）
       if c and c ~= "" then DS.qpFact = c end      -- 阵营（装备视图也有第三个筛选）
     else
-      if a and a ~= "" then DS.qpTier = a end   -- 档位
+      -- ★1.75.18 任务线视图：档位筛选已被**种类**取代 ⇒ 第 1 参（旧档位）**忽略**、第 2 参仍是阵营
+      --   （读值口的旧用法 EVAL_QP_SET_FILTER("ALL","A") 与重置 ("ALL","ALL") 全部照旧有效）；
+      --   种类请走 EVAL_QP_SET_KINDS（两个视图共用同一份 DS.qpKinds）。
       if b and b ~= "" then DS.qpFact = b end   -- 阵营
     end
     DS.qpOff = 0
@@ -3856,7 +4444,60 @@ function EVAL_DS_BUILD(root, page, refreshes)
     EVAL_QP_REFRESH()
     return true
   end
-  function EVAL_QP_TEST_F2() return DS.qp and DS.qp.f2 and DS.qp.f2.btn or nil end
+  -- ★1.75.21 取证口（用户实测「任务线 → 类型筛选 对当前列表无效」）：把「界面状态 / 数据层命中 /
+  --   界面命中 / 页码」四件事一次摊开，并**在同一命令里走一遍真实点击路径**（F2 按钮的真 OnClick →
+  --   多选下拉行的真 OnClick），从而把三种可能分开：①集合没写进去（点击没生效）②写入但没重绘
+  --   ③重绘了但数据层不认（越界）。判据：点击后「数据层条数」必须等于「界面条数」且都 < 全部。
+  function EVAL_QP_KIND_DIAG()
+    local out = {}
+    local function snap(tag)
+      local sel = {}
+      local s = DS.qpKinds or {}
+      for k, v in pairs(s) do if v then sel[table.getn(sel) + 1] = tostring(k) end end
+      table.sort(sel)
+      local page = "?"
+      local st = DS.qp
+      if st and st.pageTxt and st.pageTxt.GetText then
+        local ok, t = pcall(st.pageTxt.GetText, st.pageTxt)
+        if ok then page = tostring(t) end
+      end
+      local n = table.getn(EVAL_QC_SEARCH("", 0, { kinds = DS.qpKinds }) or {})
+      local hits = EVAL_QP_HITS() or {}
+      table.insert(out, string.format("%s 视图=%s · 集合={%s} · 按钮=\"%s\" · 数据层=%d条 · 界面=%d条 · 页码=\"%s\"",
+        tostring(tag), tostring(DS.qpTab), table.concat(sel, ","), tostring(qpKindLabel()), n,
+        table.getn(hits), page))
+    end
+    snap("[点击前]")
+    local btn = DS.qp and DS.qp.f2 and DS.qp.f2.btn
+    local on = (btn and btn.GetScript) and btn:GetScript("OnClick") or nil
+    if type(on) ~= "function" then
+      table.insert(out, "  F2 按钮没有 OnClick（弹窗还没建好？先打开一次数据检索 Tab）")
+      return out
+    end
+    on()
+    local pick, txt = nil, nil
+    if type(EVAL_DD_TEST_VISIBLE_TEXTS) == "function" then
+      local vis = EVAL_DD_TEST_VISIBLE_TEXTS() or {}
+      for i = 1, table.getn(vis) do
+        local t = tostring(vis[i])
+        -- 可点行 = 带方框（色码 + 方框 + |r + 空格 + 名字）；分组标题没有方框，「全部」是清空行
+        if string.find(t, "|r ", 1, true) and not string.find(t, L("DS_F_ALL"), 1, true) then
+          pick, txt = i, t
+          break
+        end
+      end
+    end
+    if not pick then
+      table.insert(out, "  下拉里没找到可点种类行（应有一排带方框的种类）")
+      return out
+    end
+    table.insert(out, "  模拟点下拉第 " .. tostring(pick) .. " 行：" .. tostring(txt))
+    if type(EVAL_DD_TEST_CLICK) == "function" then EVAL_DD_TEST_CLICK(pick) end
+    snap("[点击后]")
+    table.insert(out, "  ★两者应相等且明显小于「点击前」；界面=全部 ⇒ 点选没触发重绘；都=全部 ⇒ 集合没写进去")
+    return out
+  end
+  function EVAL_QP_TEST_F2() return DS.qp and DS.qp.f2 and DS.qp.f2.btn or nil end  function EVAL_QP_TEST_F1() return DS.qp and DS.qp.f1 and DS.qp.f1.btn or nil end
   -- ★1.75.9 输入框三件套读值口（用户实测「输入框无法输入」）：焦点按钮 / EditBox / 是否已聚焦
   function EVAL_QP_TEST_EBBTN() return qpEbFocus end
   function EVAL_QP_TEST_EB() return qpEb end
