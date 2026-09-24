@@ -19883,4 +19883,48 @@ do
   if fails0 == TESTASSERT_FAILS then print("GROUP 227 (一键喂食提示行：没选技能 = 明确提示): PASS") end
 end
 
+-- ===== 组 228（1.75.1）：自动任务线的**步骤名**不许退化成 `#id`（用户截图：某经典线 7 行全是 #5742）=====
+-- 用户原话（附截图）：「魔兽60 经典的任务线: 爱与家庭怎么没有」—— 那条线**在包里**（自动线「救赎」·
+--   7 步 · 56-60 · 东瘟疫之地），但步骤行显示成一串 `#5742 #5781 …`、按步骤名也搜不到。
+-- ★名字在**两个地方**同时丢（只修一处不算修好）：
+--   ① 生成期：`build_bulk.js` 的步骤名收集判据写成「不在**列表页**里」而不是「不在**进包任务表**里」
+--      ⇒ 「有页但没装备奖励」的步骤名字整批丢掉（sn 只补了 25 条；已修 → 1575 条，闸门 = audit H 段）；
+--   ② 运行期（★截图里的真凶）：`EVAL_QC_SERIES_DETAIL` 把系列步骤名 `n` **覆盖成序号**，
+--      而 `EVAL_QC_LINES` 取名字**只认 q 表** ⇒ 即使 `sn` 有名字也读不到。
+-- 本组守的正是 ②：搜索 → 详情 → 行模型这一整条**真实渲染数据链**。
+do
+  local fails228 = TESTASSERT_FAILS
+  -- ① 按**步骤名**能搜到那条线（搜索路径：自动线分支要匹配 s.steps[].n）
+  local res228 = EVAL_QC_SEARCH("爱与家庭", 0, nil)
+  eq(type(res228) == "table" and table.getn(res228) >= 1, true,
+     "组228①★★按步骤名「爱与家庭」能搜到那条线（实测命中 " .. tostring(type(res228) == "table" and table.getn(res228) or -1) .. "）")
+  local key228 = (type(res228) == "table" and res228[1] and res228[1].key) or nil
+  eq(type(key228) == "string", true, "组228①★结果是 series 且带 key（实测 " .. tostring(key228) .. "）")
+  -- ② 详情 → 行模型：步骤行必须是**真名**，一行 `#` 都不许有
+  local lines228 = EVAL_QC_LINES(key228)
+  eq(type(lines228) == "table", true, "组228②详情行模型可用")
+  local nStep228, nHash228, nLove228, firstStep228 = 0, 0, 0, nil
+  for i = 1, table.getn(lines228 or {}) do
+    local ln = lines228[i]
+    if ln.kind == "step" then
+      nStep228 = nStep228 + 1
+      if not firstStep228 then firstStep228 = tostring(ln.text) end
+      if string.find(tostring(ln.text), "#", 1, true) then nHash228 = nHash228 + 1 end
+      if string.find(tostring(ln.text), "爱与家庭", 1, true) then nLove228 = nLove228 + 1 end
+    end
+  end
+  eq(nStep228, 7, "组228②★★该线 7 个步骤行都在（实测 " .. tostring(nStep228) .. "）")
+  eq(nHash228, 0, "组228②★★★**没有任何步骤行带 `#id`**（截图里 7 行全 `#5742` 的那种；实测带 # " .. tostring(nHash228) .. " 行）")
+  eq(nLove228, 2, "组228②★★★「爱与家庭」这一步显示**真名**（该链出现 2 次；实测 " .. tostring(nLove228) .. " 次）")
+  -- ③ 反向哨兵：序号列还在（`s.n` 必须是**序号**，别被名字顶掉 ⇒ 「1. 1.」那种错位）
+  eq(string.sub(tostring(firstStep228 or ""), 1, 3) == "1. ", true,
+     "组228③★序号仍是 `1. `（字段没被名字顶掉；实测首行「" .. tostring(firstStep228) .. "」）")
+  eq(string.find(tostring(firstStep228 or ""), "救赎", 1, true) ~= nil, true,
+     "组228③★★首步显示「救赎」（站点系列块抄来的名字）")
+  -- ④ 读值口存在（`sn` 表 → 名字，单一来源）
+  eq(type(EVAL_QC_STEP_NAME) == "function", true, "组228④★`EVAL_QC_STEP_NAME` 读值口存在")
+  eq(EVAL_QC_STEP_NAME(5846), "爱与家庭", "组228④★★`sn` 里 5846 的名字 = 爱与家庭（实测 " .. tostring(EVAL_QC_STEP_NAME(5846)) .. "）")
+  if fails228 == TESTASSERT_FAILS then print("GROUP 228 (自动任务线步骤名：不许退化成 #id): PASS") end
+end
+
 print("ALL TESTS PASS")

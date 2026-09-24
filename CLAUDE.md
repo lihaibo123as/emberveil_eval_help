@@ -141,14 +141,14 @@
 - ★★★**工具模块的测试三件套也归模块自己管**（1.74.34 用户：「test 相关的搬迁到对应工具类子文件内自身管理」）：**读值口**在 `tools/<模块>.lua`（`EVAL_LF_TEST_*` 样式）· **断言组**在 `tests/tools/<模块>.lua` · **源码检查**在 `tests/checks/<模块>.js`（`module.exports = function (root) {…}`，harness 里一行 `require("./tests/checks/X.js")(__dirname);`）；`test_engine.js` **自动加载** `tests/tools/*.lua` 并与磁盘文件数**当场对账**；`tests/` **绝不进 toc / 发布清单**。判据 = `TOOL TEST FILES CHECK`；实例 = LayerFix（组 223）· DragFrames（18 组 + 9 道 DF 检查）· 地图工具（`tools/SimpleMap.lua`：「缩放大地图」行 = 模块行 + `[设置]` 多选下拉「GUI重开」，★默认关）；全案见 R15 ⑥j/⑥n。
 - **状态表 `st`（`EVAL_HELP_STATE`）**：所有判定数据走 `UPDATE_STATE()` **一次刷新、各处只读**（Cat 思路）；含 `playerBuffs`/`targetDebuffs` 纹理集合、`castLog`（近 5 条带条件 trace）。
 - **规则引擎**：规则 = `{ skill, enabled, groups }`；`groups` = 组内 `&`、组间 `|`；`EVAL_RULE_RUN` 顺序执行第一条全过的；兼容旧 `when={}` 格式；`condOne`/`groupsOK`/`EVAL_PARSE_CONDS`/`EVAL_COND_STR`/`EVAL_GROUP_STR` 是核心。
-- **方案数据**：`cfg.war.profiles` + `activeProfile`；`EVAL_WAR_ENSURE_PROFILES` 做缺省迁移；SavedVariables 自动持久化。
+- **方案数据**：`cfg.war.profiles` + `activeProfile`；`EVAL_WAR_ENSURE_PROFILES` 做缺省迁移。
 - **方案切换**：配置窗侧栏按钮 / 激活方案 `[<][>]` 选择器 / 战斗信息UI 方案行 / **Shift+按宏**（★Shift 已被切换占用，方案条件里用 Alt/Ctrl）。
 - **文本格式**（导入导出 / `zs_wq.md`）：`# 方案: 名` + `- 技能 | 条件` 行；技能名前 `!` = 停用；解析容忍 md 杂物行。
 - **函数作用域陷阱**：`warCfg`/`c()` 是配置段 local，战斗信息UI 段在其之前 → UI 段用 `uiWarCfg()`（直接走 `EVAL_HELP_CONFIG` 全局）；`wslots`/`WAR_SKILLS` 是战士段 local，配置段在其后可用。
 - 受保护函数（`CastSpellByName` 等）插件**不能调**，施法一律 `UseAction(slot)` + `pcall`；谓词返回 `true/false/nil`，**绝不 `==1`**。
 - **`EVAL_GO` 目标门槛教训（1.21.7）**：规则引擎化后**不能有**「无可攻击目标就 return」的全局前置——是否需目标交给**每条规则的条件**；否则纯自身 buff 方案（如只有战斗怒吼）永远执行不到。
 - 本客户端**无 `UnitCastingInfo`**（打断条件做不了）、**无 SuperWoW**（无精确距离数值/挥击计时）。
-- **射程检测已有官方 API**（emberveil.org/wiki/lua 确认）：`IsActionInRange(slot)`→`true`/`0`（超程）/`1`（自动攻击不测距）/`nil`；`ActionHasRange(slot)`；`CheckInteractDistance(unit,idx)` 不分档码数（`idx<4` 统一交互距离）。
+- **射程 API**（wiki 确认）：`IsActionInRange(slot)`→`true`/`0`（超程）/`1`（自动攻击不测距）/`nil`；`ActionHasRange(slot)`；`CheckInteractDistance(unit,idx)` 不分档码数（`idx<4` 统一交互距离）。
 - **物品 API**（wiki 已确认签名、实测待做）：`UseContainerItem(bag,slot)` 直接用/自动穿；`GetContainerItemInfo`→texture,count,locked,quality,readable；`GetContainerItemLink`；`GetContainerItemCooldown`；`GetItemInfo` 第 9 返回 = 纹理（只读本地缓存）。**无 `EquipItemByName`/`UseItemByName`**。★保护清单未文档化，`UseContainerItem` 是否被禁需实测——被禁会**静默失败**（`pcall` 兜住）。
 - **`seBtn` 返回包裹表 `{btn,bg,text}` 不是按钮本体**：锚下拉/加 FontString 必须用 `.btn`（`mkSmall` 相反：直接返回 `b,bt`）——曾把包裹表当按钮用导致 `uiText` 炸 CreateFontString。
 - **Lua local 作用域从声明语句【之后】开始**：RHS 里的闭包**捕获不到正在声明的 local 自己** → `local b = mk(..., function() ...引用b... end)` 的 `b` 是**全局 nil**！OnClick 要等赋值完再单独 `SetScript` 挂。
@@ -201,7 +201,7 @@
 - ★★分享分片取证探针：`SH.dbgChunks`（环形 8 条）在 `shOnMsg` 各分叉点记原文+走到哪一步，`/eh go 分享事件` ⑤ 摊开。★本客户端 `IsEventRegistered` 返 **`1` 不是 `true`**，判据写 `(r == true or r == 1)`。全案见 R1。
 
 - 具名帧顶掉同名全局函数 → `type(X)=="function"` 不成立 → 命令静默失效；桩须把具名帧挂全局；`FRAME NAME CLASH CHECK`；组 54。
-- 分享接收 = 冗余时长 + 只认标识（1.72.3）：>2s 未收齐如实提醒但不删缓冲；>60s 才丢；只认 `[EHPF#<id> i/n]<hex>`；组 106/107。
+- 分享接收（1.72.3）：>2s 未收齐如实提醒但不删缓冲；>60s 才丢；只认 `[EHPF#<id> i/n]<hex>`；组 106/107。
 - 「查不到」≠「没有」：查不到必须如实报错，否则 `cnt=0` → 「否/无」成立 → 规则无限重放刷屏。
 - 静默丢弃 = 那行变无条件施法 → 写几条成员条件、解析后就必须几条；数据类错误全静默。
 - 导出形态与解析侧必须成对验（读不回 = 导入即丢条件）；「有过滤」≠「过滤得住」（`itemOf(n)` 只认「物品:名」）。
@@ -213,13 +213,13 @@
 - 「写成功」≠「写进去生效」（1.73.12）：`frame.AddMessage=wrapper` 写入被吞 → 必须写完读回确认（`_G.ChatFrame_OnEvent ~= wrapper`）+ 改挂普通全局函数入口（新文本回写全局 `arg1`）+ 非聊天事件放行；`CHAT COLOR WIRING CHECK`；组 123/组 124⑧。
 - ★★★**改属性前必须先把「原始值」读下来**（1.74.31 组 206 当场抓到）：宽/高这类**没有「系统默认值」可退回**的属性，重置只能靠「第一次改之前记下的原值」（`rec.ow/oh`）⇒ 在 `SetWidth` **之后**才读，记下的是刚设进去的新值，重置就「还原成用户刚设的值」= 等于没还原（且看起来一切正常）。
   【判据】读原值 → 写新值 → 读回自证，**顺序不许换**；原值缺失时**如实说「无法还原」并保留字段**（绝不拿当前值冒充）；组 206 的 3 个变异全部被捕获。
-- 深入 API + 参考插件：`GetChatWindowMessages`/`RemoveChatWindowMessages`/`AddChatWindowMessages` = 官方「某类消息不显示」开关（组名不许猜）。
+- 深入 API：`GetChatWindowMessages`/`Remove`/`AddChatWindowMessages` = 官方「某类消息不显示」开关（组名不许猜）。
 - 分享行形态（1.73.43）：只有「一段色码 + 链接」能画 ⇒ 色码打头 + 带链接 + 每条一段 8 位码 + 间隔 ≥1s；色清单从 `SH_CHUNK_COLOR`/`SH_SEAL_TIERS`/`SH_TITLE_COLORS` 现取；组 144/158/159。
-- ★1.73.24~41 弹窗/右键菜单/滚动条细则见 R11。
+- ★1.73.24~41 弹窗/菜单/滚动条细则见 R11。
 
 
 ### 5.3 测试与断言
-- ★桩默认值也属桩（真帧默认显示、桩 `shown=false` ⇒「没 Hide 却断言 `IsShown()==false`」恒真）；隐式前置改显式建立（`pcall(root.Show,root)`、`EVAL_WAR_TAB_REFRESH()`）；桩要记每状态。组 110①⑧⑨、组 64/93。
+- ★桩默认值也属桩（真帧默认显示、桩 `shown=false` ⇒「没 Hide 却断言 `IsShown()==false`」恒真）；隐式前置改显式建立（`pcall(root.Show,root)`）；桩要记每状态。组 110①⑧⑨、组 64/93。
   ★★**桩的帧 mock 对未知键返回函数**（truthy）⇒ 判「是不是我们的控件」必须写 `字段 == true` / `rawget`（真值判断会把**每条普通柄**误判成图标；1.74.33 实测：普通柄「拖完该弹属性窗」那条断言当场变红）。
 - 测试够不着生产 local ⇒ 加钩子走真实 OnEnter；桩对无效调用要如实无效（`castStoppedDirect`/`castStopped`）、模拟 `SetText` 再触发 `OnTextChanged`；tooltip 桩＝另建对象＋真 GameTooltip 记账＋普通 table。
 - 断言打真实调用点/入口＋反向哨兵；模块级状态入 `EVAL_TB_TEST_RESET_TIMERS`（文件末尾，否则 `DECL ORDER CHECK` 抓 FAIL）；「没执行」≠「没入队」⇒`EVAL_TB_TEST_QUEUED_QUESTS()`；写死布局常量＝测自己⇒`EVAL_TEST_CFG_LAYOUT()`。
@@ -246,7 +246,7 @@
 - ★`COND WEIGHT CHECK`（条件权重漏组）· `/eh go` 别名不许两家共用（`GO ALIAS UNIQUE CHECK` 守，`go icons` 曾撞车）；品阶显示现算等细则见 R15 ⑦⑧。
 - ★★★**滚动模式唯一标准（连续窗口）**（用户 1.74.30 定）：范式 = `PetHelper.lua` 约 566~595。① `off` = **行偏移**、双侧夹 `0..max(0, n-cap)`；② 滚轮**逐行**（≠ 页容量）；③ 滚轮**链式接管**（存原脚本，本 Tab 才消费）；④ 按钮一屏但**夹到 `maxOff`**；⑤ 容量 `cap` **恒定**（绝不因「组不拆」收缩）；⑥ 计数器常显；⑦ 切分优先组边界。**禁止**：整页跳 / 变长页 / 覆盖式接管滚轮。判据 = 组 120 + **组 201**；读值口 `EVAL_TB_TEST_WHEEL/WHEEL_PREV/LAYOUT`（**不许复刻映射逻辑**）。
 - ★**滚动/翻页/分页三段布局细则**（计数器 ←8px→ 按钮组 ←10px→ 关闭 · 几何唯一源 `EVAL_HELP_CFG_BOTTOM()` · 组 92/118）→ 参考卷 R15 ⑥l。
-- ★★★滚轮方向唯一源 `EVAL_WHEEL_DIR(a,b)`（幅度归一 ±1）；6 处全走它；`WHEEL DIRECTION CHECK`（禁位移与方向同号）＋组 115；★断言把方向写反⇒反向 bug 被「验证」通过。
+- ★★★滚轮方向唯一源 `EVAL_WHEEL_DIR(a,b)`（归一 ±1）；6 处全走它；`WHEEL DIRECTION CHECK`（禁位移与方向同号）＋组 115；★断言把方向写反⇒反向 bug 被「验证」通过。
 - ★★★数据刷新不许改可见性：`EVAL_WAR_TAB_REFRESH()` 又被开配置窗与 `EVAL_PM_APPLY` 调用⇒可见性只由 Tab 切换负责（`EVAL_HELP_CFG_SETTAB` 的清单）；数据照旧每次刷；组 165＋`EVAL_TEST_WAR_ROWS()`。
 - ★**视图切换 / 入口控件 / 分列切点 / 工具箱两列 / 弹窗高度自适应 / 职业着色 / 聊天窗名字着色（组 129b/161）/ 主动查询四闸门 等细则 → 参考卷 R12/R15**。
 - ★★★**索引「任意全局」/ 走父子链的扫描，动手前先看参考卷 R15 ⑥k**（1.74.32 真机栽过一整轮）：① 索引前先过守卫（不可索引的 userdata 会抛错、**打断整个探针**；只收 `GetObjectType()` 报 Frame 的）；② **匿名窗口 `_G` 扫描永远看不到** ⇒ 只能靠 `GetChildren()` 父子链 + **具名子件当指纹**；③ 真机存档**带 BOM**、`a and f()` **只保留第一个返回值**、桩里 `unpack` 在 fengari **不存在** —— 都表现为「静默取不到值」。判据 = `DF GLOBAL SCAN GUARD CHECK` + 组 209/211/213。
@@ -261,7 +261,7 @@
   ⑦ ★**「柄」按池位号复用** ⇒ 验「某目标有没有柄」要按**目标名**查当前**显示中**的那条；★**同一带上的两个控件 = 遮挡（断言盲区）**。
 - ★★★队伍菜单三条条件（1.74.1/1.74.4 定案）：**邀请队伍** = 对方不在我队伍/团队里 且（我不在队伍 或 我是队长）· **踢出队伍** = 我是队长 且 被右键的是队友 · **离开队伍** = 在队伍内显示（`LeaveParty()`）；判队长 = `IsPartyLeader()` 或 `IsRaidLeader()`（助理踢人无 `IsRaidAssistant` 可判 → 如实接受边界）；成员判定 `EVAL_TB_NAME_INMYGROUP`（party 只扫 1..4）。组 130⑥e/⑥e3 + 组 173；变异 M564~M568；定案经过见参考卷附录 R5。
 - ★★★技能格按键分派（1.74.2 用户定）：战斗信息UI 技能小图标 **左键 = 切换启用/停用**（写 `r.enabled` **配置真值** + 如实播报 + 双刷新）· **右键 = 技能配置弹窗**（开被点那格、不动状态）；格子必须注册 `RightButtonUp`（光注册左键 = 右键永远到不了分派代码）；读值口 `EVAL_TEST_UI_CLICK_CELL`/`EVAL_TEST_SE_SHOWN`；`UI CELL MOUSE CHECK`；组 174。
-- ★布局总纪律：需求验性质不验数字；相对量验相对量；同一行中线对齐；中文宽度按字符数估；布局常量单一源（`IO_BW/IO_GAP/IO_PAD`、`CLOSE_LEFT/CLOSE_MIDY`）。
+- ★布局总纪律：需求验性质不验数字；同一行中线对齐；中文宽度按字符数估；布局常量单一源（`IO_BW/IO_GAP/IO_PAD`、`CLOSE_LEFT/CLOSE_MIDY`）。
 
 
 ### 5.5 API 与客户端事实
@@ -280,7 +280,7 @@
 - ★★★**跨插件：捕获 UnrealQuest 稀有提醒 → 独立模块 `tools/RareWatch.lua`**（主文件只两处接线：VARIABLES_LOADED 的 `pcall(EVAL_RW_INSTALL)` + 命令 `/eh go 稀有`；开关单一来源 `EVAL_RW_ENABLED/SET`）：捕获点 = 包住对方弹窗唯一出口 `RareAlert:Show(...)`（**安装必须等 VARIABLES_LOADED**）、返回值逐个透传 + 抛错照原样 `error(a,0)`、兜底轮询 `GetStatus().alerts`（tick 父级必须 **WorldFrame**）；名字按品阶染色 + 整条**只许一段 8 位色码**，点名字 = 一次 `TargetByName` **并核对**（`UnitName("target")` 只认附近单位、远了静默失败），「选不到」要同时报距离+下一步。判据 = 组 199 + `RARE WATCH WIRING CHECK`（反向守「不许再耦合地图机制」）；**新增文件要同步 9 处清单**；全案见 R4。
 
 
-- ★★★**任务线线（1.75.0~1.75.21，明细 → 参考卷 §十四）**：数据以 `database.emberveil.org/quests` 为准、`quest/QuestData.lua` 是**生成物**（改 `chains.js` → `node quest/build.js` 重建，**绝不手改**）；列表 **cap=0 全量 + 跨块统一排序**、系列记录单一来源 `qcSeriesRec`、等级档 **L6=60+**、缺图占位 = **宏 961**（点击插队优先）、请求队列**按列排** + 请求泵**常驻开启**（弹窗 Hide ⇒ OnUpdate 停摆）；判据 = `QUEST TOC CHECK` + 组 191/192；**闸门 = `node check.js`**（`--full` 另加 `quest/audit.js`）。★**步骤名判据 = 不在「进包任务表」**（不是「列表页」）—— 反了会把「有页但无装备奖励」的步骤名丢光（退化成 `#id` ⇒ 按步骤名搜不到；1.75.1「爱与家庭」实测 1585/1834 步无名）；闸门 = **audit H 段**（解析**生成物**，阈值 0）★先确认表形态（`s` 是**序列**无 `[n]=`，按错形态 ⇒ 0 条 = **假绿**）。
+- ★★★**任务线线（1.75.0~1.75.21，明细 → 参考卷 §十四）**：数据以 `database.emberveil.org/quests` 为准、`quest/QuestData.lua` 是**生成物**（改 `chains.js` → `node quest/build.js` 重建，**绝不手改**）；列表 **cap=0 全量 + 跨块统一排序**、系列记录单一来源 `qcSeriesRec`、等级档 **L6=60+**、缺图占位 = **宏 961**（点击插队优先）、请求队列**按列排** + 请求泵**常驻开启**（弹窗 Hide ⇒ OnUpdate 停摆）；判据 = `QUEST TOC CHECK` + 组 191/192；**闸门 = `node check.js`**（`--full` 另加 `quest/audit.js`）。★**步骤名判据 = 不在「进包任务表」**（不是「列表页」）—— 反了会把「有页但无装备奖励」的步骤名丢光（退化成 `#id` ⇒ 按步骤名搜不到；1.75.1「爱与家庭」实测 1585/1834 步无名）；闸门 = **audit H 段**（解析**生成物**，阈值 0）★先确认表形态（`s` 是**序列**无 `[n]=`，按错形态 ⇒ 0 条 = **假绿**）。★**同一个名字坑有两层**：生成期按「进包任务表」判 + **运行期必须把名字传下去**（详情/行模型别只认 q 表）—— 修一处不算修好；判据 = **组 228**。
 ### 5.6 内容 / 数据质量
 - ★★★**两个助手的弹窗候选按物品类型过滤**（1.74.28）：判定收在共用件 `EVAL_IG_ITEM_KIND`（三级早停）；★**判不出就不剔**；★★**只在「弹窗候选」路径开**（按名解析包格那条路**绝不过滤** = 判错一类就静默找不到）；判据 = 组 187；细则见 R15 ⑥f。
 - ★★★**可驱散「负面类型」多选**（1.73.2；1.74.6 扩到自身/目标 debuff）：`cd.dt` 空集 = 任意；求值**一律走 `dispelMatch`**（名字对上但类型不符 = **没有**）；**名称留空 + 类型 = 「有任意该类型」**；**buff 行不许有类型格**；组 114/181；细则见 R15 ⑥i。
@@ -305,7 +305,7 @@
 - 成员选取器跳过常规条件预判（TARGET_SEL_TEAMSEL，不经 condOne→两处都要测）；UPDATE_STATE 只丢缓存不扫描，真扫描在 EVAL_HELP_TEAM_ENSURE（缓存复用）；诚实失败。
 
 ### 5.9 / 5.10 已整段迁参考卷
-- **关键标识符索引** → §十七（完整清单见 `test_engine.js` 与 `test_assert.lua`）；**分享消息模板 / 取证命令全表 / 关键源码检查清单** → §十五。
+- **关键标识符索引** → §十七；**分享消息模板 / 取证命令全表 / 关键源码检查清单** → §十五。
 ## 六、§六 ~ §九 已移到同目录的 `CLAUDE_REFERENCE.md`（参考卷）
 
 > ★**何时必须去读它**：项目位置/文件结构/新增模块/toc 顺序/工作流纪律 → §八；历史教训 / API 真伪 → §六；官方文档 / 待开发计划 / 开源仓库 → §七；某版本做了什么 → §九；判据踩坑全案 → 附录 R；各 CHECK 守什么 → 附录 R13。

@@ -3701,7 +3701,10 @@ function EVAL_DS_BUILD(root, page, refreshes)
       }
       local qs = c.qs or {}
       for j = 1, table.getn(qs) do
-        local qn = EVAL_QC_QUEST_NAME(qs[j]) or ("#" .. tostring(qs[j]))
+        -- ★1.75.1：名字三级来源 —— 赏金任务名 → 生成数据的系列步骤名（`sn`，覆盖无装备奖励的步骤）→ 如实 `#id`
+        local qn = EVAL_QC_QUEST_NAME(qs[j])
+          or ((type(EVAL_QC_STEP_NAME) == "function") and EVAL_QC_STEP_NAME(qs[j]))
+          or ("#" .. tostring(qs[j]))
         local lv = EVAL_QC_QUEST_LEVEL(qs[j])
         -- ★1.75.12 用户要求：任务行要带**任务等级**（LvNN），并配黄色感叹号
         local txt = string.format("%d. %s", j, tostring(qn))
@@ -3749,7 +3752,9 @@ function EVAL_DS_BUILD(root, page, refreshes)
         if it and EVAL_QC_IS_WEAPON(it) then r, g, b = 1.00, 0.72, 0.25 end
         body[table.getn(body) + 1] = { text = txt, r = r, g = g, b = b, item = src.id }
       elseif k == "step" then
-        local qn = (src.id and EVAL_QC_QUEST_NAME(src.id)) or nil
+        -- ★1.75.1：放大镜的词优先用**行模型给的真名**（`src.name`）—— 只查 q 表时，没有装备奖励的步骤
+        --   （如「爱与家庭」）会拿到 nil ⇒ 放大镜空转（点了没反应）。行模型的名字已含「系列块 → q 表 → sn」三级。
+        local qn = (src.id and EVAL_QC_QUEST_NAME(src.id)) or src.name or nil
         body[table.getn(body) + 1] = { text = txt, r = 0.88, g = 0.84, b = 0.62, zoom = qn, quest = true }
       else
         body[table.getn(body) + 1] = { text = txt, r = 0.66, g = 0.62, b = 0.50 }

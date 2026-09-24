@@ -441,7 +441,10 @@ function EVAL_QC_SERIES_DETAIL(key)
   local rewards, steps = {}, {}
   for i = 1, table.getn(s.steps) do
     local q = EVAL_QC_BULK_QUEST(s.steps[i].id)
-    steps[i] = { n = i, id = s.steps[i].id, q = q }
+    -- ★★★1.75.1：这里**绝不能再把系列步骤名覆盖掉** —— 原写 `n = i` 把站点系列块抄来的**名字**顶掉成**序号**，
+    --   于是 `EVAL_QC_LINES` 只能退回去查 q 表 ⇒ 没有装备奖励的步骤全显示成 `#5742`（用户截图里的真凶之一）。
+    --   现约定：`n` = 序号（渲染 "1. " 用）· **`nm` = 名字**（站点系列块 → sn 兜底）。
+    steps[i] = { n = i, id = s.steps[i].id, nm = s.steps[i].n, q = q }
     for k = 1, table.getn((q and q.rw) or {}) do
       local iid = q.rw[k]
       local it = EVAL_QC_BULK_ITEM(iid)
@@ -578,9 +581,12 @@ function EVAL_QC_LINES(key)
   table.insert(out, { text = "", kind = "sec_steps" })
   for i = 1, table.getn(d.steps) do
     local s = d.steps[i]
-    local nm = (s.q and s.q.n) or ("#" .. tostring(s.id))
+    -- ★★★1.75.1 名字四级来源（**别只认 q 表**）：系列步骤名（站点系列块抄来的 `nm`）→ q 表 → `sn` → 如实 `#id`。
+    --   旧写法 `(s.q and s.q.n) or ("#"..id)` 对**没有装备奖励**的步骤必然退化（用户截图：7 行全 `#5742`）。
+    local nm = (type(s.nm) == "string" and s.nm ~= "" and s.nm)
+      or (s.q and s.q.n) or EVAL_QC_STEP_NAME(s.id) or ("#" .. tostring(s.id))
     local lv = (s.q and s.q.lv) and ("(" .. tostring(s.q.lv) .. ")") or ""
-    table.insert(out, { text = string.format("%d. %s%s", s.n, nm, lv), kind = "step", id = s.id })
+    table.insert(out, { text = string.format("%d. %s%s", s.n, nm, lv), kind = "step", id = s.id, name = nm })
   end
   if c.note and c.note ~= "" then
     table.insert(out, { text = tostring(c.note), kind = "note" })
@@ -719,6 +725,20 @@ function EVAL_QC_BULK_META()
   local b = qcBulk()
   if type(b) ~= "table" then return nil end
   return b.meta
+end
+
+-- ★★★1.75.1（用户实测「爱与家庭」搜到却显示成一串 `#5742`）：系列步骤名的**唯一补充来源** = 生成数据的 `sn` 表。
+--   背景：进包 q 表**只装带装备奖励的任务**（751 / 站点 4018 页），而站点自报系列里大量步骤**没有装备奖励**
+--   ⇒ 它们的名字既不在 q 表、也不在策展表 —— **只在 `sn`**（生成期从站点系列块抄下来的）。
+--   ★任何「按 id 反查任务名」的地方都要过这里，否则退化成 `#5742`：步骤行（`EVAL_QC_LINES`）·
+--   放大镜（DataSearch 的 step 分支）· 装备→来源任务线（`EVAL_QC_ITEM_CHAINS` 那一路）。
+function EVAL_QC_STEP_NAME(id)
+  local b = qcBulk()
+  local sn = (type(b) == "table") and b.sn or nil
+  if type(sn) ~= "table" then return nil end
+  local nm = sn[id]
+  if type(nm) == "string" and nm ~= "" then return nm end
+  return nil
 end
 
 -- 全量任务行 → { id, n, lv, z, f(阵营 A/H/""), rw={物品id} }；查不到如实 nil
