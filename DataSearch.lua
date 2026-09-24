@@ -453,14 +453,43 @@ local function dsScanTable(out, db, kind, base, tbl, ql, skip)
   end
 end
 
+-- ===== 任务线检索源（1.75.0 · 数据检索专用）=====
+-- 数据自带（quest/QuestData.lua + quest/QuestChains.lua），**不依赖 UnrealQuest**：
+-- 对方缺席时任务线照样查得到（这是「解耦」的落点）。这里只做「并进结果行」的适配层。
+-- ★chain 的 id 用**数字位次**（EVAL_QC_LIST 的位次）：全局排序里 a.id < b.id 不许混类型（会运行时报错）。
+local function dsChainInto(out, ql)
+  if type(EVAL_QC_SEARCH) ~= "function" then return end
+  local hits = EVAL_QC_SEARCH(ql)
+  if type(hits) ~= "table" then return end
+  for i = 1, table.getn(hits) do
+    local h = hits[i]
+    local nm = tostring(h.name or "")
+    local p = (ql ~= "") and string.find(string.lower(nm), ql, 1, true) or nil
+    table.insert(out, { kind = "chain", id = h.idx, name = nm, score = (p == 1) and 2 or 1, sub = h.sub or "" })
+  end
+end
+
 function EVAL_DS_SEARCH(query, ftype)
   local out = {}
   if type(query) ~= "string" then return out end
   query = string.gsub(query, "^%s*(.-)%s*$", "%1")
-  if query == "" then return out end
-  local db = dsDb()
-  if not db then return out end
   local ql = string.lower(query)
+  -- ★「任务线」过滤：自带数据源，先接且不依赖 UnrealQuest；空关键词 = 列出全部链（首屏）
+  if ftype == "chain" then
+    if ql == "" then
+      local all = (type(EVAL_QC_LIST) == "function") and EVAL_QC_LIST() or {}
+      for i = 1, table.getn(all) do
+        table.insert(out, { kind = "chain", id = i, name = tostring(all[i].n or ""), score = 1, sub = all[i].z or "" })
+      end
+      return out
+    end
+    dsChainInto(out, ql)
+    return out
+  end
+  if query == "" then return out end
+  if ftype == nil or ftype == "all" then dsChainInto(out, ql) end -- 「全部」时任务线也并入
+  local db = dsDb()
+  if not db then return out end -- ★对方缺席时仍能返回上面的任务线结果
   local lang = dsLang()
   local types = (ftype and DS_BASE[ftype]) and { ftype } or DS_TYPES
   for _, kind in ipairs(types) do
@@ -665,7 +694,35 @@ DS_DETAIL.object = function(db, id, depth, d)
   end
 end
 
+-- 任务线详情模型（奖励优先 → 完整上下级链 → 点评）—— 1.75.0，数据检索专用
+-- 奖励行挂 hoverItem（悬停看物品 tooltip）；步骤行挂 link（点击进任务详情，UnrealQuest 有数据时生效）
+local function dsChainDetail(id)
+  if type(EVAL_QC_LINES) ~= "function" then return nil end
+  local lines = EVAL_QC_LINES(id)
+  if type(lines) ~= "table" then return nil end
+  local d = { kind = "chain", id = id, title = "", subtitle = "", lines = {} }
+  for i = 1, table.getn(lines) do
+    local src = lines[i]
+    local k = src.kind
+    if k == "title" then
+      d.title = tostring(src.text or "")
+    elseif k == "sub" then
+      d.subtitle = tostring(src.text or "")
+    else
+      local ln = { text = "" }
+      if k == "sec_reward" then ln.text = L("DS_CHAIN_REWARD")
+      elseif k == "sec_steps" then ln.text = L("DS_CHAIN_STEPS")
+      elseif k == "reward" then ln.text = tostring(src.text or "") ln.hoverItem = src.id
+      elseif k == "step" then ln.text = tostring(src.text or "") ln.link = { kind = "quest", id = src.id }
+      else ln.text = tostring(src.text or "") end
+      table.insert(d.lines, ln)
+    end
+  end
+  return d
+end
+
 function EVAL_DS_DETAIL(kind, id, depth)
+  if kind == "chain" then return dsChainDetail(id) end
   local db = dsDb()
   if not db then return nil end
   if type(DS_BASE[kind]) ~= "string" then return nil end
@@ -2204,7 +2261,7 @@ local function dsDoSearch()
   end
   q = string.gsub(q, "^%s*(.-)%s*$", "%1")
   DS.lastQuery = q
-  DS.results = (q ~= "") and EVAL_DS_SEARCH(q, DS.filter) or {}
+  DS.results = ((q ~= "") or (DS.filter == "chain")) and EVAL_DS_SEARCH(q, DS.filter) or {}
   if DS.ph then DS.ph:SetText((q == "") and L("DS_PH") or "") end -- 有输入则收起占位提示
   if dsMode() == "search" then EVAL_DS_REFRESH() end
 end
@@ -2547,11 +2604,15 @@ function EVAL_DS_BUILD(root, page, refreshes)
   DS.filterBtn = dsBtn(root, LX, DSL_ROW_BTN_Y, 96, "", function()
     if type(EVAL_DD_OPEN) ~= "function" then return end
     EVAL_DD_OPEN(DS.filterBtn.btn, {
-      L("DS_F_ALL"), L("DS_F_QUEST"), L("DS_F_ITEM"), L("DS_F_UNIT"), L("DS_F_OBJECT"),
+      L("DS_F_ALL"), L("DS_F_QUEST"), L("DS_F_ITEM"), L("DS_F_UNIT"), L("DS_F_OBJECT"), L("DS_F_CHAIN"),
     }, function(pi)
-      DS.filter = ({ "all", "quest", "item", "unit", "object" })[pi] or "all"
-      DS.filterBtn.text:SetText(L("DS_FILTER") .. ": " .. ({ L("DS_F_ALL"), L("DS_F_QUEST"), L("DS_F_ITEM"), L("DS_F_UNIT"), L("DS_F_OBJECT") })[pi])
-      if DS.lastQuery and DS.lastQuery ~= "" then DS.due = ((type(GetTime) == "function") and GetTime() or 0) + 0.05 end
+      DS.filter = ({ "all", "quest", "item", "unit", "object", "chain" })[pi] or "all"
+      DS.filterBtn.text:SetText(L("DS_FILTER") .. ": " .. ({ L("DS_F_ALL"), L("DS_F_QUEST"), L("DS_F_ITEM"), L("DS_F_UNIT"), L("DS_F_OBJECT"), L("DS_F_CHAIN") })[pi])
+      if DS.lastQuery and DS.lastQuery ~= "" then
+        DS.due = ((type(GetTime) == "function") and GetTime() or 0) + 0.05
+      elseif DS.filter == "chain" then
+        dsDoSearch() -- ★任务线：空关键词也要出首屏（全部链按档位排序）
+      end
     end)
   end, widgets)
   DS.filterBtn.text:SetText(L("DS_FILTER") .. ": " .. L("DS_F_ALL"))
@@ -2669,6 +2730,1150 @@ function EVAL_DS_BUILD(root, page, refreshes)
   DS.searchWidgets = { DS.filterBtn.btn, ebBg, eb, ph, focusBtn, DS.catBtn.btn }
   table.insert(DS.searchWidgets, echo)
 
+  DS.qlBtn = dsBtn(root, LX + 310 + 214 + 8, DSL_ROW_BTN_Y,
+    math.max(88, math.min(140, LX + RW - (LX + 310 + 214 + 8))), L("DS_QL_BTN"),
+    function() EVAL_QP_TOGGLE() end, widgets)
+  table.insert(DS.searchWidgets, DS.qlBtn.btn) -- Tab 显隐清单：漏加 = 切页后按钮留在屏上
+  table.insert(DS.controlRow.buttons, { name = "任务线推荐", center = DSL_ROW_BTN_Y - DSL_BTN_H / 2 })
+
+  -- ==========================================================================
+  -- 任务线推荐弹窗 v2（1.75.1）—— 数据检索 ·「地图标注」右侧
+  --   ★用户需求：①练级要装备 ⇒ **先按等级列可获取装备**，再反查「要做哪些任务」
+  --              ②装备**直连数据检索**（点一下就查这件装备）
+  --              ③按钮要有字、布局不重叠、能点；④美化
+  --   ★v1 报错根因（务必记住）：`local b = dsBtn(..., function() b.btn ... end)` 里的 b 是**全局 nil**
+  --     —— Lua local 作用域从声明语句之后开始，RHS 里的闭包捕获不到它自己（本项目 1.21.4 已记过一次）。
+  --     ⇒ 本段一律「先建控件 → 再单独 SetScript」，绝不把控件用进它自己的构造参数。
+  --   ★层级：DIALOG + 父级 level+100（只设 strata = 点不到）；仍低于全局下拉 250。
+  -- ==========================================================================
+  local QP_W, QP_H = 560, 430
+  local QP_PAD = 12
+  local QP_ROW_H = 19
+  local QP_LIST_TOP = -58
+  local QP_PAGE_H = 24                                     -- 分页行占高
+  local QP_BOTTOM = -(QP_H - 32)                           -- 底部按钮行（固定，不随行数漂）
+  -- ★用户要求（1.75.3）：**滚动区铺满窗口**，不许下半部空着（图标库那种写死 IB_ROWS=9 的做法照搬会留白）。
+  --   行数 = 按可用高度**现算**：可用高 = 窗口高 − 列表顶边(58) − 尾部预留(tail)。
+  --   抽成**纯函数**：判据可用字面夹具直调它，也能读真控件几何验「铺满」。
+  function EVAL_QP_ROWS_FOR(h, top, rowH, tail)
+    local usable = (tonumber(h) or 0) + (tonumber(top) or 0) - (tonumber(tail) or 0)
+    local n = math.floor(usable / (tonumber(rowH) or 19))
+    if n < 6 then n = 6 end
+    return n
+  end
+  local QP_TAIL_LIST = 32                                  -- 列表视图尾部（分页行）
+  local QP_TAIL_DET = 84                                   -- 详情视图尾部（大图标 44 + 底部按钮区 40）
+  local QP_ROWS = EVAL_QP_ROWS_FOR(QP_H, QP_LIST_TOP, QP_ROW_H, QP_TAIL_LIST)
+  local QP_DET_ROWS = EVAL_QP_ROWS_FOR(QP_H, QP_LIST_TOP, QP_ROW_H, QP_TAIL_DET)
+  local QP_DET_TOP = QP_LIST_TOP - 44                      -- 详情文字行起点（让开大图标与标题）
+  local QP_PAGE_Y = QP_LIST_TOP - QP_ROWS * QP_ROW_H - 3   -- 分页行（紧贴列表底边）
+
+  local qp = CreateFrame("Frame", nil, root)
+  qp:SetWidth(QP_W) qp:SetHeight(QP_H)
+  qp:SetPoint("CENTER", root, "CENTER", 0, 0)
+  pcall(qp.SetFrameStrata, qp, "DIALOG")
+  pcall(function() qp:SetFrameLevel((root:GetFrameLevel() or 1) + 100) end)
+  pcall(qp.EnableMouse, qp, true) -- 吃掉窗内点击，不穿透到底下的复选框/按钮
+
+  local qpBg = qp:CreateTexture(nil, "BACKGROUND")
+  dsSolid(qpBg, 0.05, 0.045, 0.035, 0.97)
+  qpBg:SetPoint("TOPLEFT", qp, "TOPLEFT", 0, 0)
+  qpBg:SetPoint("BOTTOMRIGHT", qp, "BOTTOMRIGHT", 0, 0)
+  local qpHeadBg = qp:CreateTexture(nil, "BACKGROUND")
+  dsSolid(qpHeadBg, 0.17, 0.14, 0.07, 1)
+  qpHeadBg:SetPoint("TOPLEFT", qp, "TOPLEFT", 0, 0)
+  qpHeadBg:SetPoint("TOPRIGHT", qp, "TOPRIGHT", 0, 0)
+  qpHeadBg:SetHeight(24)
+  local qpEdgeT = qp:CreateTexture(nil, "BORDER") dsSolid(qpEdgeT, 1, 1, 1, 0.6)
+  qpEdgeT:SetPoint("TOPLEFT", qp, "TOPLEFT", 0, 0) qpEdgeT:SetPoint("TOPRIGHT", qp, "TOPRIGHT", 0, 0) qpEdgeT:SetHeight(1)
+  local qpEdgeB = qp:CreateTexture(nil, "BORDER") dsSolid(qpEdgeB, 1, 1, 1, 0.6)
+  qpEdgeB:SetPoint("BOTTOMLEFT", qp, "BOTTOMLEFT", 0, 0) qpEdgeB:SetPoint("BOTTOMRIGHT", qp, "BOTTOMRIGHT", 0, 0) qpEdgeB:SetHeight(1)
+  local qpEdgeL = qp:CreateTexture(nil, "BORDER") dsSolid(qpEdgeL, 1, 1, 1, 0.6)
+  qpEdgeL:SetPoint("TOPLEFT", qp, "TOPLEFT", 0, 0) qpEdgeL:SetPoint("BOTTOMLEFT", qp, "BOTTOMLEFT", 0, 0) qpEdgeL:SetWidth(1)
+  local qpEdgeR = qp:CreateTexture(nil, "BORDER") dsSolid(qpEdgeR, 1, 1, 1, 0.6)
+  qpEdgeR:SetPoint("TOPRIGHT", qp, "TOPRIGHT", 0, 0) qpEdgeR:SetPoint("BOTTOMRIGHT", qp, "BOTTOMRIGHT", 0, 0) qpEdgeR:SetWidth(1)
+
+  -- 拖动柄（必须是 Button：Frame 收不到 OnDragStart）+ warm-up 两步
+  local qpBar = CreateFrame("Button", nil, qp)
+  qpBar:SetPoint("TOPLEFT", qp, "TOPLEFT", 0, 0)
+  qpBar:SetPoint("TOPRIGHT", qp, "TOPRIGHT", 0, 0)
+  qpBar:SetHeight(24)
+  pcall(function() qpBar:SetFrameLevel((qp:GetFrameLevel() or 1) + 1) end)
+  pcall(qpBar.EnableMouse, qpBar, true)
+  pcall(qpBar.RegisterForClicks, qpBar, "LeftButtonUp")
+  pcall(qpBar.RegisterForDrag, qpBar, "LeftButton")
+  pcall(qpBar.SetMovable, qpBar, true)
+  local qpTitle = dsText(qpBar, 10, 0.98, 0.86, 0.45)
+  qpTitle:SetPoint("LEFT", qpBar, "LEFT", QP_PAD, 0)
+  qpTitle:SetText(L("DS_QP_TITLE"))
+  DS.qpTitle = qpTitle
+
+  -- 标题栏按钮：两个视图切换 + 关闭（都有文字，不许空白）
+  local qpTabItem = dsBtn(qp, QP_W - 202, -4, 62, L("DS_QP_TAB_ITEM"), nil, nil)
+  local qpTabChain = dsBtn(qp, QP_W - 136, -4, 68, L("DS_QP_TAB_CHAIN"), nil, nil)
+  local qpClose = dsBtn(qp, QP_W - 64, -4, 52, L("DS_QP_CLOSE"), nil, nil)
+  pcall(function()
+    qpTabItem.btn:SetFrameLevel(qp:GetFrameLevel() + 2)
+    qpTabChain.btn:SetFrameLevel(qp:GetFrameLevel() + 2)
+    qpClose.btn:SetFrameLevel(qp:GetFrameLevel() + 2)
+  end)
+
+  -- 搜索行：EditBox（+ 占位 + 回声保底）
+  local qpEbBg = qp:CreateTexture(nil, "BACKGROUND")
+  dsSolid(qpEbBg, 0.14, 0.12, 0.08, 1)
+  qpEbBg:SetPoint("TOPLEFT", qp, "TOPLEFT", QP_PAD, -30)
+  pcall(qpEbBg.SetWidth, qpEbBg, 180)
+  pcall(qpEbBg.SetHeight, qpEbBg, 20)
+  local qpEb = CreateFrame("EditBox", nil, qp)
+  qpEb:SetWidth(176) qpEb:SetHeight(20)
+  qpEb:SetPoint("TOPLEFT", qp, "TOPLEFT", QP_PAD + 2, -30)
+  -- ★★★1.75.9 用户实测「图片内的输入框无法输入」——照**主搜索框那条已验证配方**逐条补齐：
+  --   ① 显式 EnableMouse：本客户端 EditBox 不显式开鼠标就等于收不到点击 ⇒ 拿不到焦点 ⇒ 一个字都打不进
+  --      （主框 eb 有 EnableMouse，弹窗这只当初漏了 —— 这就是本次真凶）
+  --   ② 再盖一层「点击即聚焦」的焦点按钮（1.70.x 主框就是这么修的；兜住「点框沿/点空隙」那几下）
+  --   ③ 文字左对齐（本客户端 EditBox 默认居中偏右）④ 字体链三级兜底（全失败才启用回声行）
+  pcall(qpEb.EnableMouse, qpEb, true)
+  pcall(qpEb.SetAutoFocus, qpEb, false)
+  pcall(qpEb.SetJustifyH, qpEb, "LEFT")
+  pcall(qpEb.SetJustifyV, qpEb, "MIDDLE")
+  pcall(qpEb.SetTextInsets, qpEb, 2, 2, 0, 0)
+  pcall(qpEb.SetAltArrowKeyMode, qpEb, false)
+  local qpEbFont = false
+  for _, fo in ipairs({ "GameFontHighlightSmall", "ChatFontNormal", "GameFontNormal" }) do
+    if pcall(qpEb.SetFontObject, qpEb, fo) then qpEbFont = true break end
+  end
+  if not qpEbFont then
+    for _, fp in ipairs({ "Fonts\\FZLBJW.TTF", "Fonts\\FRIZQT__.TTF", "Fonts\\ARIALN.TTF" }) do
+      local okF, ok2 = pcall(qpEb.SetFont, qpEb, fp, 11, "")
+      if okF and ok2 then qpEbFont = true break end
+    end
+  end
+  local qpPh = dsText(qp, 9, 0.62, 0.58, 0.46)
+  qpPh:SetPoint("LEFT", qp, "TOPLEFT", QP_PAD + 6, -40)
+  pcall(qpPh.SetWidth, qpPh, 172)
+  pcall(qpPh.SetJustifyH, qpPh, "LEFT")
+  qpPh:SetText(L("DS_QP_PH"))
+  local qpEcho = dsText(qp, 9, 0.9, 0.87, 0.78)
+  qpEcho:SetPoint("LEFT", qp, "TOPLEFT", QP_PAD + 6, -40)
+  pcall(qpEcho.SetWidth, qpEcho, 172)
+  pcall(qpEcho.SetJustifyH, qpEcho, "LEFT")
+  qpEcho:Hide()
+  -- ★1.75.9 「点击输入区 = 聚焦」的兜底按钮（照主搜索框 focusBtn）：垫在输入框上、只做 SetFocus
+  local qpEbFocus = CreateFrame("Button", nil, qp)
+  qpEbFocus:SetWidth(180) qpEbFocus:SetHeight(20)
+  qpEbFocus:SetPoint("TOPLEFT", qp, "TOPLEFT", QP_PAD, -30)
+  pcall(qpEbFocus.EnableMouse, qpEbFocus, true)
+  pcall(qpEbFocus.RegisterForClicks, qpEbFocus, "LeftButtonUp")
+  qpEbFocus:SetScript("OnClick", function() pcall(qpEb.SetFocus, qpEb) end)
+
+  -- 两个筛选下拉（内容随当前视图切换：装备=等级/类型 · 任务线=档位/阵营）
+  local qpF1 = dsBtn(qp, QP_W - 324, -30, 98, L("DS_QP_F1_ITEM"), nil, nil)
+  local qpF2 = dsBtn(qp, QP_W - 222, -30, 96, L("DS_QP_F2_ITEM"), nil, nil)
+  local qpF3 = dsBtn(qp, QP_W - 122, -30, 110, L("DS_QP_F3_ITEM"), nil, nil)
+
+  -- 列表（9 行）：图标槽 + 文本（装备行显示真实图标；任务线行不显示图标）
+  local qpRows, qpListWidgets = {}, {}
+  for i = 1, QP_ROWS do
+    local b = CreateFrame("Button", nil, qp)
+    b:SetWidth(QP_W - QP_PAD * 2)
+    b:SetHeight(QP_ROW_H - 2)
+    b:SetPoint("TOPLEFT", qp, "TOPLEFT", QP_PAD, QP_LIST_TOP - (i - 1) * QP_ROW_H)
+    pcall(b.EnableMouse, b, true)
+    pcall(b.RegisterForClicks, b, "LeftButtonUp")
+    local bg = b:CreateTexture(nil, "BACKGROUND")
+    dsSolid(bg, 0.18, 0.15, 0.09, 1)
+    bg:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+    bg:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+    bg:SetAlpha(0)
+    local ic = b:CreateTexture(nil, "ARTWORK")
+    ic:SetPoint("LEFT", b, "LEFT", 2, 0)
+    pcall(ic.SetWidth, ic, 15) pcall(ic.SetHeight, ic, 15)
+    local t = dsText(b, 9, 0.92, 0.88, 0.76)
+    t:SetPoint("LEFT", b, "LEFT", 22, 0)
+    pcall(t.SetWidth, t, QP_W - QP_PAD * 2 - 26)
+    pcall(t.SetJustifyH, t, "LEFT")
+    qpRows[i] = { btn = b, bg = bg, text = t, icon = ic, key = nil, item = nil }
+    table.insert(qpListWidgets, b)
+  end
+
+  -- 分页行（▲▼ 靠右；计数在左）
+  -- ★用户要求（1.75.4）：翻页**不用图标**，改成文字按钮 [上一页][下一页]（照图标库的 IB_PREV/IB_NEXT），
+  --   放在底部 [返回] **旁边、左对齐**（三个按钮同排：返回 / 上一页 / 下一页，位置与宽度都由常量算）。
+  local QP_BTN_W, QP_BTN_GAP = 62, 6
+  -- ★1.75.7 用户要求：**三个按钮整体左对齐**，顺序 [上页] [下页] [← 返回]（返回放**下一页右边**）
+  local QP_NAV_X = QP_PAD                                 -- 最左起点 = 内边距（整体左对齐）
+  local qpUp = dsBtn(qp, QP_NAV_X, QP_BOTTOM, QP_BTN_W, L("IB_PREV"), nil, nil)
+  local qpDn = dsBtn(qp, QP_NAV_X + QP_BTN_W + QP_BTN_GAP, QP_BOTTOM, QP_BTN_W, L("IB_NEXT"), nil, nil)
+  local qpPageTxt = dsText(qp, 9, 0.70, 0.66, 0.55)
+  qpPageTxt:SetPoint("LEFT", qp, "TOPLEFT", QP_PAD, QP_PAGE_Y - 8)
+  pcall(qpPageTxt.SetWidth, qpPageTxt, 220)
+  pcall(qpPageTxt.SetJustifyH, qpPageTxt, "LEFT")
+  local qpHint = dsText(qp, 9, 0.60, 0.56, 0.44)
+  qpHint:SetPoint("LEFT", qp, "TOPLEFT", QP_PAD + 230, QP_PAGE_Y - 8)
+  pcall(qpHint.SetWidth, qpHint, 240)
+  pcall(qpHint.SetJustifyH, qpHint, "RIGHT")
+  qpHint:SetText(L("DS_QP_HINT"))
+  table.insert(qpListWidgets, qpPageTxt) table.insert(qpListWidgets, qpHint)
+  -- ★同理：翻页按钮不在这里登记（见上），它由 qpShowView 末尾显式 Show
+  pcall(qp.EnableMouseWheel, qp, true)
+
+  -- 详情视图：12 行 FontString（逐行上色） + 底部两个动作按钮
+  -- ★放大镜素材：与 PetHelper 同一份**客户端真实资产**（INV_Misc_Spyglass_01；
+  --   `_02` 在客户端里不存在 —— PetHelper 踩过，画出来是引擎的问号占位）。
+  -- ★用户要求（1.75.3）：放大镜改用**本插件自带素材**（与图标库、数据检索同一个 database 图标；
+  --   自带 .tga 路径**不带扩展名**，这是本客户端实测要求）。点击后**不关窗**（见事件挂载）。
+  local QP_ZOOM_ICON = "Interface\\AddOns\\EvalHelp\\media\\icons\\database"
+  -- 详情页大图标 + 大标题（用户要求「大图标搭配标题」）
+  local qpDetIcon = qp:CreateTexture(nil, "ARTWORK")
+  qpDetIcon:SetPoint("TOPLEFT", qp, "TOPLEFT", QP_PAD, QP_LIST_TOP + 2)
+  pcall(qpDetIcon.SetWidth, qpDetIcon, 36)
+  pcall(qpDetIcon.SetHeight, qpDetIcon, 36)
+  local qpDetIconBtn = CreateFrame("Button", nil, qp)
+  qpDetIconBtn:SetWidth(36) qpDetIconBtn:SetHeight(36)
+  qpDetIconBtn:SetPoint("TOPLEFT", qp, "TOPLEFT", QP_PAD, QP_LIST_TOP + 2)
+  pcall(qpDetIconBtn.EnableMouse, qpDetIconBtn, true)
+  local qpDetTitle = dsText(qp, 12, 0.98, 0.86, 0.45)
+  -- ★1.75.6 修「标题/副标题重叠」（用户截图：DPS 行压在标题上）：标题原先用 LEFT 锚在 **36 高**的图标上
+  --   = **垂直居中**于图标（≈ y −74），而副标题正好也在那一行 ⇒ 必然重叠。
+  --   现在两者都以**图标右上角**为锚、垂直依次排（标题 −2 / 副标题 −20），字号/语言变了也不会压。
+  qpDetTitle:SetPoint("TOPLEFT", qpDetIcon, "TOPRIGHT", 8, -2)
+  pcall(qpDetTitle.SetWidth, qpDetTitle, QP_W - QP_PAD * 2 - 44)
+  pcall(qpDetTitle.SetJustifyH, qpDetTitle, "LEFT")
+  local qpDetSub = dsText(qp, 9, 0.72, 0.68, 0.56)
+  qpDetSub:SetPoint("TOPLEFT", qpDetIcon, "TOPRIGHT", 8, -20)
+  pcall(qpDetSub.SetWidth, qpDetSub, QP_W - QP_PAD * 2 - 44)
+  pcall(qpDetSub.SetJustifyH, qpDetSub, "LEFT")
+  DS.qpDetIcon, DS.qpDetTitle, DS.qpDetSub = qpDetIcon, qpDetTitle, qpDetSub
+  local qpDetRows, qpDetWidgets, qpZoomBtns = {}, {}, {}
+  for i = 1, QP_DET_ROWS do
+    local t = dsText(qp, 9, 0.9, 0.87, 0.78)
+    t:SetPoint("TOPLEFT", qp, "TOPLEFT", QP_PAD + 16, QP_DET_TOP + 2 - (i - 1) * QP_ROW_H)
+    pcall(t.SetWidth, t, QP_W - QP_PAD * 2 - 16)
+    pcall(t.SetJustifyH, t, "LEFT")
+    qpDetRows[i] = t
+    table.insert(qpDetWidgets, t)
+    -- ★用户要求：任务链的**每个任务节点**左侧一个放大镜 —— 点了按**任务名**去数据检索查
+    local zb = CreateFrame("Button", nil, qp)
+    zb:SetWidth(14) zb:SetHeight(14)
+    zb:SetPoint("TOPLEFT", qp, "TOPLEFT", QP_PAD, QP_DET_TOP - (i - 1) * QP_ROW_H)
+    local zt = zb:CreateTexture(nil, "ARTWORK")
+    pcall(zt.SetTexture, zt, QP_ZOOM_ICON)
+    zt:SetPoint("TOPLEFT", zb, "TOPLEFT", 0, 0)
+    zt:SetPoint("BOTTOMRIGHT", zb, "BOTTOMRIGHT", 0, 0)
+    pcall(zb.EnableMouse, zb, true)
+    pcall(zb.RegisterForClicks, zb, "LeftButtonUp")
+    zb:Hide()
+    qpZoomBtns[i] = zb
+    table.insert(qpDetWidgets, zb)
+  end
+  -- ★翻页按钮**不进任何互斥清单**：同时进两份会被后处理的 detWidgets「Hide 掉」（1.75.5 实测：
+  --   列表视图里翻页按钮整个消失，用户截图圈出）。改成由 qpShowView **末尾显式 Show**（两视图都显示）。
+  -- ★1.75.7：返回按钮放**下一页右边**（第三位），与两个翻页按钮同排、整体左对齐
+  local qpBack = dsBtn(qp, QP_NAV_X + (QP_BTN_W + QP_BTN_GAP) * 2, QP_BOTTOM, 64, L("DS_BACK"), nil, nil)
+  local qpGoDs = dsBtn(qp, QP_W - 132, QP_BOTTOM, 120, L("DS_QP_GOTO_DS"), nil, nil)
+  table.insert(qpDetWidgets, qpBack.btn)
+  table.insert(qpDetWidgets, qpGoDs.btn)
+  table.insert(qpDetWidgets, qpDetIcon)
+  table.insert(qpDetWidgets, qpDetIconBtn)
+  table.insert(qpDetWidgets, qpDetTitle)
+  table.insert(qpDetWidgets, qpDetSub)
+  DS.qpGoDs = qpGoDs
+
+  DS.qp = {
+    frame = qp, rows = qpRows, detRows = qpDetRows,
+    listWidgets = qpListWidgets, detWidgets = qpDetWidgets,
+    pageTxt = qpPageTxt, ph = qpPh, eb = qpEb, echoNeeded = false,
+    tabItem = qpTabItem, tabChain = qpTabChain, f1 = qpF1, f2 = qpF2, f3 = qpF3,
+    back = qpBack, goDs = qpGoDs, bar = qpBar,
+    zoomBtns = qpZoomBtns, detZoom = {}, navPrev = qpUp, navNext = qpDn,
+    detIcon = qpDetIcon, detIconBtn = qpDetIconBtn, detTitle = qpDetTitle, detSub = qpDetSub, hint = qpHint,
+  }
+  DS.qpMode, DS.qpTab = "list", "item"
+  DS.qpQuery, DS.qpOff = "", 0
+  DS.qpKey, DS.qpItem = nil, nil
+  DS.qpLv, DS.qpKind = "ALL", "ALL"      -- 装备视图筛选（qpKind 只作旧三态 token 的入口，见 qpApplyKindToken）
+  DS.qpKinds = {}                        -- ★1.75.8 种类**多选集合** { [种类名]=true }；空集 = 全部
+  DS.qpTier, DS.qpFact = "ALL", "ALL"    -- 任务线视图筛选
+  qp:Hide() -- 默认关
+
+  -- ===== 弹窗行为 v2（与上面的构建段同作用域）=====
+  -- 单一来源：品质色 / 等级档 / 类型档 / 档位 / 阵营 都只写在这里；数据一律走 EVAL_QC_*。
+  local QP_QCOL = {
+    [0] = { 0.62, 0.62, 0.62 }, [1] = { 1.00, 1.00, 1.00 }, [2] = { 0.12, 1.00, 0.00 },
+    [3] = { 0.00, 0.44, 0.87 }, [4] = { 0.64, 0.21, 0.93 },
+  }
+  -- ★1.75.9 用户要求「经典任务线衍生到 30-60 范围」：等级档扩到五档（10-19/20-29/30-39/40-49/50+）
+  --   末档 hi=999 是**故意**的：站点在 60-69 还有带装备奖励的任务（团本/开门线），不能把它们漏掉。
+  local QP_LV = {
+    { k = "ALL", lo = 0, hi = 999 }, { k = "L1", lo = 10, hi = 19 }, { k = "L2", lo = 20, hi = 29 },
+    { k = "L3", lo = 30, hi = 39 }, { k = "L4", lo = 40, hi = 49 }, { k = "L5", lo = 50, hi = 999 },
+  }
+  local QP_TIER = { "ALL", "S", "A", "B" }
+  local QP_FACT = { "ALL", "A", "H", "B" }
+
+  -- ===== 种类筛选（1.75.8 用户：「装备筛选种类细分,支持种类子类型.武器子类型支持.并且支持多选.」）=====
+  -- 选项一律**由数据现算**（EVAL_QC_KIND_GROUPS）——写死种类表＝与数据脱节；
+  -- 武器子类型 / 其它种类各挂一个**分组标题**（locked 行：画纯文本、不画方框、点击无回调）。
+  local function qpKindMenu()
+    local items, locked, sel, map = {}, {}, {}, {}
+    local function put(label, isLocked, kind, on)
+      local i = table.getn(items) + 1
+      items[i] = label
+      locked[i] = isLocked and true or false
+      map[i] = { kind = kind }
+      sel[i] = on and true or false
+    end
+    local wp, ot = {}, {}
+    if type(EVAL_QC_KIND_GROUPS) == "function" then wp, ot = EVAL_QC_KIND_GROUPS() end
+    if table.getn(wp) > 0 then
+      put(L("DS_QP_KIND_WP"), true)
+      for i = 1, table.getn(wp) do put(wp[i], false, wp[i], DS.qpKinds and DS.qpKinds[wp[i]]) end
+    end
+    if table.getn(ot) > 0 then
+      put(L("DS_QP_KIND_OT"), true)
+      for i = 1, table.getn(ot) do put(ot[i], false, ot[i], DS.qpKinds and DS.qpKinds[ot[i]]) end
+    end
+    -- 末行 = 一键清空（多选下拉的常规出口；与工具箱关键字菜单的 clear 行同范式）
+    put(L("DS_F_ALL"), false, nil)
+    map[table.getn(items)] = { clear = true }
+    return items, locked, sel, map
+  end
+
+  -- 已选种类（按数据清单顺序 → 文案稳定，不随点击先后变）
+  local function qpSelKinds()
+    local out = {}
+    local list = (type(EVAL_QC_KIND_LIST) == "function") and EVAL_QC_KIND_LIST() or {}
+    for i = 1, table.getn(list) do
+      local k = list[i].k
+      if DS.qpKinds and DS.qpKinds[k] then out[table.getn(out) + 1] = k end
+    end
+    return out
+  end
+
+  -- 按钮文字（多选）：空集 = 全部；1 项 = 名字；2 项 = 名字、名字；更多 = 首项…(N)
+  local function qpKindLabel()
+    local sel = qpSelKinds()
+    local n = table.getn(sel)
+    if n == 0 then return L("DS_QP_KIND_ALL") end
+    if n == 1 then return sel[1] end
+    if n == 2 then return sel[1] .. "、" .. sel[2] end
+    return sel[1] .. "…(" .. tostring(n) .. ")"
+  end
+
+  -- 旧三态 token / 种类名 → 多选集合：ALL(或空) = 清空；WP = 全部武器子类型；OT = 全部其它种类；
+  -- 其余按种类名（支持 "剑,斧" 这种多选写法，逗号分隔）
+  local function qpApplyKindToken(tok)
+    local t = tostring(tok or "")
+    DS.qpKind = t
+    if t == "" or t == "ALL" then DS.qpKinds = {} return true end
+    local wp, ot = {}, {}
+    if type(EVAL_QC_KIND_GROUPS) == "function" then wp, ot = EVAL_QC_KIND_GROUPS() end
+    if t == "WP" or t == "OT" then
+      local src = (t == "WP") and wp or ot
+      local s = {}
+      for i = 1, table.getn(src) do s[src[i]] = true end
+      DS.qpKinds = s
+      return true
+    end
+    local s = {}
+    for name in string.gmatch(t .. ",", "([^,]+)") do s[name] = true end
+    DS.qpKinds = s
+    return true
+  end
+
+  local function qpLvEntry()
+    for i = 1, table.getn(QP_LV) do if QP_LV[i].k == DS.qpLv then return QP_LV[i] end end
+    return QP_LV[1]
+  end
+
+  local function qpSyncFilterLabels()
+    local st = DS.qp
+    if not st then return end
+    if DS.qpTab == "item" then
+      st.f1.text:SetText(L("DS_QP_F1_ITEM") .. ": " .. L("DS_QP_LV_" .. qpLvEntry().k))
+      st.f2.text:SetText(L("DS_QP_F2_ITEM") .. ": " .. qpKindLabel())
+      st.f3.text:SetText(L("DS_QP_F3_ITEM") .. ": " .. ((DS.qpFact == "ALL") and L("DS_F_ALL") or L("DS_QL_F_" .. DS.qpFact)))
+    else
+      st.f1.text:SetText(L("DS_QP_F1_CHAIN") .. ": " .. ((DS.qpTier == "ALL") and L("DS_F_ALL") or DS.qpTier))
+      st.f2.text:SetText(L("DS_QP_F2_CHAIN") .. ": " .. ((DS.qpFact == "ALL") and L("DS_F_ALL") or L("DS_QL_F_" .. DS.qpFact)))
+    end
+    st.tabItem.text:SetTextColor(DS.qpTab == "item" and 0.98 or 0.72, DS.qpTab == "item" and 0.86 or 0.66, DS.qpTab == "item" and 0.45 or 0.50)
+    st.tabChain.text:SetTextColor(DS.qpTab == "chain" and 0.98 or 0.72, DS.qpTab == "chain" and 0.86 or 0.66, DS.qpTab == "chain" and 0.45 or 0.50)
+  end
+
+  local function qpShowView(view)
+    local st = DS.qp
+    if not st then return end
+    DS.qpMode = view or "list"
+    local isList = (DS.qpMode == "list")
+    for i = 1, table.getn(st.listWidgets) do
+      if isList then pcall(st.listWidgets[i].Show, st.listWidgets[i]) else pcall(st.listWidgets[i].Hide, st.listWidgets[i]) end
+    end
+    for i = 1, table.getn(st.detWidgets) do
+      if isList then pcall(st.detWidgets[i].Hide, st.detWidgets[i]) else pcall(st.detWidgets[i].Show, st.detWidgets[i]) end
+    end
+    for i = 1, QP_ROWS do
+      if isList then st.rows[i].btn:Show() else st.rows[i].btn:Hide() end
+    end
+    if isList then pcall(st.goDs.btn.Hide, st.goDs.btn) end
+    -- ★翻页按钮：两个视图都显示 ⇒ 必须在两次整块显隐**之后**显式 Show（1.75.5 事故：进了两份清单被吃掉）
+    if st.navPrev then pcall(st.navPrev.btn.Show, st.navPrev.btn) end
+    if st.navNext then pcall(st.navNext.btn.Show, st.navNext.btn) end
+    -- 第三个下拉（阵营）只服务「装备」视图；任务线视图已有阵营下拉，避免重复
+    pcall(function()
+      if isList and DS.qpTab == "item" then st.f3.btn:Show() else st.f3.btn:Hide() end
+    end)
+    if not isList then pcall(st.pageTxt.Show, st.pageTxt) end
+  end
+
+  -- ===== 物品信息：**只走客户端 API**（用户要求：图标以游戏内链为准、减少自定义图标）=====
+  -- ★配方出处 = UnrealQuest `Compatibility/ClientAPI.lua`（实测 2026-09-18，items.getiteminfo_tuple_and_cache_fill.v1）：
+  --   ① `GetItemInfo(id)` 给 9 值元组，**第 9 = 图标路径**（形如 Interface/Icons/INV_Sword_04，正斜杠）；
+  --      位置并不固定 ⇒ **第 9 优先，再扫 2..11** 里第一个 "interface[/\\]" 开头的字符串（照抄那份配方，别自己猜）。
+  --   ② **未缓存的 id 什么都返回不了** —— 这才是截图里几行没图标的真因（不是 ID 不对）。
+  --   ③ 要让未缓存物品进缓存：在**隐藏 tooltip** 上 `SetHyperlink("item:<id>:0:0:0")` 向服务器要；
+  --      实测批量 4 件只回 1 件（2s 内）、3 件 6s 都没回 ⇒ **必须限频 + 逐个重试**，不许一次轰。
+  --   ④ 拿不到就**不画图标**（绝不退回自定义/推断图标）；等缓存回来由 tick 自动补画 = 越用越全。
+  local QP_REQ_RATE, QP_REQ_MAX = 1.5, 24 -- 秒/件（服务器读请求也要限频）· 单次最多排队件数
+  local function qpItemInfo(id)
+    if type(GetItemInfo) ~= "function" or type(id) ~= "number" then return nil end
+    local ok, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11 = pcall(GetItemInfo, id)
+    if not ok or type(v1) ~= "string" or v1 == "" then return nil end
+    local icon = (type(v9) == "string" and v9 ~= "") and v9 or nil
+    if not icon then
+      local vals = { v2, v3, v4, v5, v6, v7, v8, v9, v10, v11 }
+      for i = 1, table.getn(vals) do
+        local s = vals[i]
+        if type(s) == "string" and string.find(string.lower(s), "^interface[/\\]") then
+          icon = s
+          break
+        end
+      end
+    end
+    local q = (type(v3) == "number" and v3 >= 0 and v3 <= 7) and v3 or nil
+    return v1, icon, q
+  end
+  -- 拿图标：命中就用游戏内真实路径；未命中则排队去要（本次先不画）
+  local function qpItemTex(id)
+    local nm, tex = qpItemInfo(id)
+    if tex then return tex end
+    local st = DS.qcReq
+    if st and table.getn(st.q) < QP_REQ_MAX then
+      local dup = false
+      for i = 1, table.getn(st.q) do if st.q[i] == id then dup = true break end end
+      if not dup then table.insert(st.q, id) end
+    end
+    return nil
+  end
+  DS.qcReq = { q = {}, at = 0 }
+  DS.qcRetry = {}
+
+  local function qpFillList()
+    local st = DS.qp
+    if not st then return end
+    qpSyncFilterLabels()
+    local hits, total = {}, 0
+    local q = DS.qpQuery or ""
+    local ql = string.lower(q)
+    local function hitName(s) return (ql == "") or (string.find(string.lower(tostring(s or "")), ql, 1, true) ~= nil) end
+    if DS.qpTab == "item" then
+      local lv = qpLvEntry()
+      -- ★种类多选在**数据层**过滤（EVAL_QC_ITEM_ROWS 的 kinds）——界面不再复刻一遍判定
+      local rows = EVAL_QC_ITEM_ROWS({ loMin = lv.lo, loMax = lv.hi, faction = DS.qpFact, kinds = DS.qpKinds })
+      for i = 1, table.getn(rows) do
+        local e = rows[i]
+        -- ★1.75.9：来源改成**全量任务**（单任务也算），策展链名只作补充 —— 搜索三种词都能命中
+        local hit = hitName(e.it.n)
+        if not hit then
+          for j = 1, table.getn(e.quests or {}) do if hitName(e.quests[j].n) then hit = true break end end
+        end
+        if not hit then
+          for j = 1, table.getn(e.chains or {}) do if hitName(e.chains[j].n) then hit = true break end end
+        end
+        if hit then hits[table.getn(hits) + 1] = e end
+      end
+      DS.qpItemHits = hits
+    else
+      local s = EVAL_QC_SEARCH(q, 200, { faction = DS.qpFact, tier = DS.qpTier }) or {}
+      for i = 1, table.getn(s) do hits[table.getn(hits) + 1] = s[i] end
+      DS.qpChainHits = hits
+    end
+    total = table.getn(hits)
+    local pages = math.max(1, math.ceil(total / QP_ROWS))
+    local page = math.floor((DS.qpOff or 0) / QP_ROWS) + 1
+    if page > pages then page = pages end
+    if page < 1 then page = 1 end
+    DS.qpOff = (page - 1) * QP_ROWS
+    for i = 1, QP_ROWS do
+      local row = st.rows[i]
+      local h = hits[DS.qpOff + i]
+      row.key, row.item = nil, nil
+      row.bg:SetAlpha(0)
+      if not h then
+        row.text:SetText("")
+        row.text:SetTextColor(0.92, 0.88, 0.76)
+        pcall(row.icon.Hide, row.icon)
+      elseif DS.qpTab == "item" then
+        row.item = h.id
+        -- ★1.75.9：来源 = **任务名**（全量；多条则写「第一个 +n」），没有任务来源才退回策展链名
+        local srcName = ""
+        local nSrc = table.getn(h.quests or {})
+        if nSrc > 0 then
+          srcName = tostring(h.quests[1].n or "")
+          if nSrc > 1 then srcName = srcName .. "+" .. tostring(nSrc - 1) end
+        else
+          srcName = tostring(((h.chains or {})[1] or {}).n or "")
+        end
+        row.text:SetText(string.format("Lv%s · %s · %s%s · %s%s", tostring(h.lo), tostring(h.it.n),
+          tostring(h.it.s or ""), tostring(h.it.k or ""),
+          h.it.dps and (string.format("DPS%.1f · ", h.it.dps)) or "",
+          L("DS_QP_SRC") .. srcName))
+        local col = QP_QCOL[tonumber(h.it.q) or 1] or QP_QCOL[1]
+        row.text:SetTextColor(col[1], col[2], col[3])
+        local tex = qpItemTex(h.id)
+        if tex then pcall(row.icon.SetTexture, row.icon, tex) row.icon:Show() else pcall(row.icon.Hide, row.icon) end
+      else
+        local c = h.c or {}
+        row.key = c.k
+        row.text:SetText(string.format("[%s] %s · %s · %s-%s", tostring(c.t or "?"), tostring(h.name or ""),
+          tostring(c.z or ""), tostring(c.lo or "?"), tostring(c.hi or "?")))
+        row.text:SetTextColor(0.92, 0.88, 0.76)
+        pcall(row.icon.Hide, row.icon)
+      end
+    end
+    if total == 0 then
+      st.pageTxt:SetText(L("DS_QL_NORESULT"))
+    else
+      st.pageTxt:SetText(string.format("%d-%d / %d", DS.qpOff + 1, math.min(DS.qpOff + QP_ROWS, total), total))
+    end
+  end
+
+  local function qpClearDet()
+    local st = DS.qp
+    pcall(st.detIcon.Hide, st.detIcon)
+    pcall(st.detTitle.SetText, st.detTitle, "")
+    pcall(st.detSub.SetText, st.detSub, "")
+    for i = 1, QP_DET_ROWS do
+      st.detRows[i]:SetText("")
+      st.detRows[i]:SetTextColor(0.9, 0.87, 0.78)
+      st.detZoom[i] = nil
+      pcall(st.zoomBtns[i].Hide, st.zoomBtns[i])
+    end
+  end
+
+  -- 装备详情：属性 → **来源任务线（用户需求：由装备反查要做哪些任务）** → 该链完整步骤
+  local function qpFillItemDetail()
+    local st, id = DS.qp, DS.qpItem
+    qpClearDet()
+    local it = id and EVAL_QC_ITEM(id) or nil
+    if not it then
+      st.detRows[1]:SetText(L("DS_QL_NORESULT"))
+      return
+    end
+    local q = tonumber(it.q) or 1
+    local col = QP_QCOL[q] or QP_QCOL[1]
+    -- ★大图标 + 大标题（用户要求）：图标来自客户端 GetItemInfo（未缓存就不画，绝不用自定义图标）
+    local _, tex = qpItemInfo(id)
+    if tex then
+      pcall(st.detIcon.SetTexture, st.detIcon, tex)
+      st.detIcon:Show()
+    else
+      pcall(st.detIcon.Hide, st.detIcon)
+    end
+    st.detTitle:SetText(tostring(it.n or ""))
+    st.detTitle:SetTextColor(col[1], col[2], col[3])
+    local n = 0
+    local parts = {}
+    if it.s and it.k then parts[table.getn(parts) + 1] = tostring(it.s) .. tostring(it.k) end
+    if it.dps then parts[table.getn(parts) + 1] = string.format("DPS%.1f", it.dps) end
+    if it.sp then parts[table.getn(parts) + 1] = "spd" .. tostring(it.sp) end
+    if it.ilvl then parts[table.getn(parts) + 1] = "iLv" .. tostring(it.ilvl) end
+    if it.st and it.st ~= "" then parts[table.getn(parts) + 1] = it.st end
+    if st.detSub then st.detSub:SetText(table.concat(parts, " · ")) end
+    -- ★1.75.9（用户要求：任务奖励只要有装备/武器的都采集，单任务也算）：
+    --   **来源任务**排在最前 —— 每行带放大镜（按任务名直达数据检索），这是「由装备反查要做哪些任务」的主线。
+    local srcs = (type(EVAL_QC_BULK_SOURCES) == "function") and EVAL_QC_BULK_SOURCES(id) or nil
+    if srcs then
+      for si = 1, table.getn(srcs) do
+        if n + 1 > QP_DET_ROWS then break end
+        local sq = srcs[si]
+        n = n + 1
+        st.detRows[n]:SetText(string.format("%s%s  (Lv%s · %s)", L("DS_QP_SRC"), tostring(sq.n),
+          tostring(sq.lv), tostring(sq.z or "")))
+        st.detRows[n]:SetTextColor(0.55, 0.88, 0.58)
+        st.detZoom[n] = (sq.n ~= "") and sq.n or nil
+        if st.detZoom[n] then pcall(st.zoomBtns[n].Show, st.zoomBtns[n]) end
+      end
+    end
+    local chains = EVAL_QC_ITEM_CHAINS(id) or {}
+    for ci = 1, table.getn(chains) do
+      local c = chains[ci]
+      if n + 1 > QP_DET_ROWS then break end
+      n = n + 1
+      st.detRows[n]:SetText(string.format("%s%s  (%s · %s-%s)", L("DS_QP_SRC"), tostring(c.n), tostring(c.z), tostring(c.lo), tostring(c.hi)))
+      st.detRows[n]:SetTextColor(0.45, 0.85, 1.00)
+      local qs = c.qs or {}
+      for j = 1, table.getn(qs) do
+        if n + 1 > QP_DET_ROWS then break end
+        n = n + 1
+        local qn = EVAL_QC_QUEST_NAME(qs[j]) or ("#" .. tostring(qs[j]))
+        st.detRows[n]:SetText(string.format("%d. %s", j, tostring(qn)))
+        st.detRows[n]:SetTextColor(0.88, 0.84, 0.62)
+        st.detZoom[n] = (qn and qn ~= "") and qn or nil
+        if st.detZoom[n] then pcall(st.zoomBtns[n].Show, st.zoomBtns[n]) end
+      end
+    end
+  end
+
+  -- 任务线详情：奖励（武器优先）→ 完整上下级链 → 点评
+  local function qpFillChainDetail()
+    local st = DS.qp
+    qpClearDet()
+    local lines = EVAL_QC_LINES(DS.qpKey)
+    if type(lines) ~= "table" then
+      st.detRows[1]:SetText(L("DS_QL_NORESULT"))
+      return
+    end
+    local n = 0
+    for i = 1, table.getn(lines) do
+      if n >= QP_DET_ROWS then break end
+      local src = lines[i]
+      local k, txt = src.kind, tostring(src.text or "")
+      if k == "sec_reward" then txt = L("DS_CHAIN_REWARD")
+      elseif k == "sec_steps" then txt = L("DS_CHAIN_STEPS") end
+      if k == "title" then
+        st.detTitle:SetText(txt)
+        st.detTitle:SetTextColor(0.98, 0.86, 0.45)
+        do n = n + 1 end
+      elseif k == "sub" then
+        if st.detSub then st.detSub:SetText(txt) end
+        do n = n + 1 end
+      else
+      n = n + 1
+      local fs = st.detRows[n]
+      fs:SetText(txt)
+      if k == "title" then fs:SetTextColor(0.98, 0.86, 0.45)
+      elseif k == "sec_reward" or k == "sec_steps" then fs:SetTextColor(0.45, 0.85, 1.00)
+      elseif k == "reward" then
+        local it = (src.id and EVAL_QC_ITEM(src.id)) or nil
+        if it and EVAL_QC_IS_WEAPON(it) then fs:SetTextColor(1.00, 0.72, 0.25)
+        else fs:SetTextColor(0.92, 0.90, 0.80) end
+      elseif k == "step" then
+        fs:SetTextColor(0.88, 0.84, 0.62)
+        local qn = (src.id and EVAL_QC_QUEST_NAME(src.id)) or nil
+        if qn and qn ~= "" then
+          st.detZoom[n] = qn
+          pcall(st.zoomBtns[n].Show, st.zoomBtns[n])
+        end
+      else fs:SetTextColor(0.66, 0.62, 0.50) end
+      end
+    end
+  end
+
+  -- ===== 对外入口 =====
+  function EVAL_QP_REFRESH()
+    if DS.qpMode == "detail" then
+      if DS.qpTab == "item" then qpFillItemDetail() else qpFillChainDetail() end
+    else
+      qpFillList()
+    end
+  end
+
+  function EVAL_QP_LIST()
+    DS.qpKey, DS.qpItem = nil, nil
+    qpShowView("list")
+    qpFillList()
+  end
+
+  function EVAL_QP_SET_TAB(tab)
+    if tab ~= "item" and tab ~= "chain" then return end
+    DS.qpTab = tab
+    DS.qpOff, DS.qpQuery = 0, ""
+    local st = DS.qp
+    if st and st.eb then pcall(st.eb.SetText, st.eb, "") end
+    if st and st.ph then pcall(st.ph.Show, st.ph) end
+    EVAL_QP_LIST()
+  end
+
+  function EVAL_QP_DETAIL(key)
+    if type(key) ~= "string" or key == "" then return end
+    if not EVAL_QC_DETAIL(key) then return end
+    DS.qpKey, DS.qpItem = key, nil
+    pcall(function() DS.qp.goDs.btn:Hide() end)
+    qpShowView("detail")
+    qpFillChainDetail()
+  end
+
+  -- 装备详情（用户需求：由装备反查任务线）；同时露出 [在数据检索中查询]
+  function EVAL_QP_ITEM_DETAIL(itemId)
+    if type(itemId) ~= "number" then return end
+    if not EVAL_QC_ITEM(itemId) then return end
+    DS.qpItem, DS.qpKey = itemId, nil
+    qpShowView("detail")
+    pcall(function() DS.qp.goDs.btn:Show() end)
+    qpFillItemDetail()
+  end
+
+  function EVAL_QP_PAGE(step)
+    local hits = (DS.qpTab == "item") and (DS.qpItemHits or {}) or (DS.qpChainHits or {})
+    local total = table.getn(hits)
+    local pages = math.max(1, math.ceil(total / QP_ROWS))
+    local page = math.floor((DS.qpOff or 0) / QP_ROWS) + 1 + (tonumber(step) or 0)
+    if page < 1 then page = 1 end
+    if page > pages then page = pages end
+    DS.qpOff = (page - 1) * QP_ROWS
+    qpFillList()
+  end
+
+  -- ★用户需求：装备直连数据检索（复用抓宠帮手「放大镜」那条已验证的入口）
+  function EVAL_QP_GOTO_DS()
+    local it = DS.qpItem and EVAL_QC_ITEM(DS.qpItem) or nil
+    if not it then return end
+    if type(EVAL_DS_SEARCH_NAME) == "function" then
+      EVAL_DS_SEARCH_NAME(it.n)
+      EVAL_QP_HIDE()
+    end
+  end
+
+  function EVAL_QP_SHOW()
+    local st = DS.qp
+    if not st then return end
+    st.frame:Show()
+    if st.qcPump then st.qcPump:Show() end
+    -- ★1.75.4 修：**首次打开也要按视图显隐**（旧实现只刷新数据、从不调 qpShowView ⇒
+    --   详情专用控件（返回/大图标/数据检索钮）在列表视图里一直露着 —— 用户截图里看到的正是这个）
+    qpShowView(DS.qpMode or "list")
+    EVAL_QP_REFRESH()
+  end
+
+  function EVAL_QP_HIDE()
+    local st = DS.qp
+    if not st then return end
+    if type(EVAL_DD_HIDE) == "function" then EVAL_DD_HIDE() end
+    if st.qcPump then st.qcPump:Hide() end
+    st.frame:Hide()
+  end
+
+  function EVAL_QP_TOGGLE()
+    local st = DS.qp
+    if not st then return end
+    if st.frame:IsShown() then EVAL_QP_HIDE() else EVAL_QP_SHOW() end
+  end
+
+  -- ===== 装备详情 tooltip：客户端认识就用原生，不认识才用我们的数据自绘 =====
+  --   ★「显示」用 GameTooltip 是允许的（WTT ISOLATION 禁的是**借它读数**）；读数一律走自建 EVAL_HELP_WTT。
+  local function qpItemTooltip(owner, id)
+    if type(GameTooltip) == "nil" or type(id) ~= "number" then return end
+    local nm, tex, q = qpItemInfo(id)
+    pcall(GameTooltip.SetOwner, GameTooltip, owner, "ANCHOR_RIGHT")
+    if nm then
+      -- 客户端有这件装备的数据 → 出客户端原生详情（最准、含套装/使用效果等）
+      pcall(GameTooltip.SetHyperlink, GameTooltip, "item:" .. tostring(id) .. ":0:0:0")
+      pcall(GameTooltip.Show, GameTooltip)
+      return
+    end
+    local it = EVAL_QC_ITEM and EVAL_QC_ITEM(id) or nil
+    if not it then return end
+    -- 未缓存：用 database.emberveil.org 抓来的字段自绘（**数据**不是图标，符合「图标以游戏内为准」）
+    local COL = { [0] = { 0.62, 0.62, 0.62 }, [1] = { 1, 1, 1 }, [2] = { 0.12, 1, 0 }, [3] = { 0, 0.44, 0.87 }, [4] = { 0.64, 0.21, 0.93 } }
+    local col = COL[tonumber(it.q) or 1] or COL[1]
+    pcall(GameTooltip.ClearLines, GameTooltip)
+    pcall(GameTooltip.AddLine, GameTooltip, tostring(it.n or ("#" .. tostring(id))), col[1], col[2], col[3])
+    local parts = {}
+    if it.s and it.k then parts[table.getn(parts) + 1] = tostring(it.s) .. tostring(it.k) end
+    if it.dps then parts[table.getn(parts) + 1] = string.format("DPS%.1f", it.dps) end
+    if it.sp then parts[table.getn(parts) + 1] = "spd" .. tostring(it.sp) end
+    if it.ilvl then parts[table.getn(parts) + 1] = "iLv" .. tostring(it.ilvl) end
+    pcall(GameTooltip.AddLine, GameTooltip, table.concat(parts, " · "), 0.9, 0.88, 0.78)
+    if it.st and it.st ~= "" then pcall(GameTooltip.AddLine, GameTooltip, it.st, 0.9, 0.88, 0.78) end
+    local ch = EVAL_QC_ITEM_CHAINS and EVAL_QC_ITEM_CHAINS(id) or {}
+    local c1 = ch[1]
+    if c1 then pcall(GameTooltip.AddLine, GameTooltip, L("DS_QP_SRC") .. tostring(c1.n), 0.45, 0.85, 1.0) end
+    pcall(GameTooltip.AddLine, GameTooltip, L("DS_QP_CACHE_HINT"), 0.6, 0.56, 0.44)
+    pcall(GameTooltip.Show, GameTooltip)
+  end
+
+  -- ===== 未缓存物品的「向服务器要」泵：限频 1.5s/件 + 2s 后复查自愈 =====
+  --   ★OnUpdate 回调**一个参数都不传**（1.74.31 实测）⇒ 这里不接参数，帧引用靠外层 local。
+  local qpPump = CreateFrame("Frame", nil, qp)
+  qpPump:SetScript("OnUpdate", function()
+    local st = DS.qcReq
+    if not st then return end
+    local now = (type(GetTime) == "function") and GetTime() or 0
+    if now == 0 then return end -- 载入期 GetTime() 恒 0（1.74.31 教训）→ 不进循环
+    if table.getn(st.q) > 0 and (now - (st.at or 0)) >= QP_REQ_RATE then
+      st.at = now
+      local id = table.remove(st.q, 1)
+      local wtt = rawget(_G, "EVAL_HELP_WTT")
+      if wtt and type(wtt.SetHyperlink) == "function" then
+        pcall(function() pcall(wtt.ClearLines, wtt) pcall(wtt.SetHyperlink, wtt, "item:" .. tostring(id) .. ":0:0:0") end)
+      end
+      table.insert(DS.qcRetry, { id = id, at = now + 2 })
+    end
+    local rt = DS.qcRetry
+    for i = table.getn(rt), 1, -1 do
+      local e = rt[i]
+      if now >= (e.at or 0) then
+        table.remove(rt, i)
+        local nm, tex = qpItemInfo(e.id)
+        if nm and DS.qpMode == "list" and DS.qp then qpFillList() end -- 缓存回来了 → 补画
+      end
+    end
+  end)
+  DS.qcPump = qpPump
+
+  -- ===== 探针（用户要求「优先排查有没有 API 接口获取装备信息」）：一条命令摊开结论 =====
+  -- 用法：/eh ds 任务线   → 打印若干 id 的客户端返回；未缓存的自动排队请求（限频），
+  --       等 5 秒再跑一次即可看到「自愈」效果（回来了就有名字与游戏内图标路径）。
+  function EVAL_DS_QC_PROBE(ids)
+    local out = {}
+    local list = ids or { 2042, 2506, 1264, 6087, 2041, 1712 }
+    for i = 1, table.getn(list) do
+      local id = list[i]
+      local nm, tex, q = qpItemInfo(id)
+      table.insert(out, string.format("#%d 名字=%s | 图标=%s | 品质=%s", id,
+        tostring(nm or "nil"), tostring(tex or "nil"), tostring(q or "nil")))
+      if not nm then
+        if DS.qcReq and table.getn(DS.qcReq.q) < QP_REQ_MAX then table.insert(DS.qcReq.q, id) end
+        table.insert(out, "      ↑ 客户端未缓存 → 已排队向服务器请求（限频 " .. tostring(QP_REQ_RATE) .. "s/件）；等 5 秒再跑一次本命令看是否自愈")
+      end
+    end
+    table.insert(out, "说明：本客户端**没有**「按 id 直取物品」的独立 API（api_item 索引里只有包装备栏/商店/训练师等场景专用的那几个）；")
+    table.insert(out, "      唯一入口是 GetItemInfo(id)，**只读本地缓存** —— 未缓存就是没名字没图标（UnrealQuest 已实测并记录该行为）。")
+    return out
+  end
+
+  -- ===== 全量数据审计（用户 1.75.9：「任务完成之后要审计装备链接是否正确…装备链接都以游戏内信息为准」）=====
+  -- 逐件把**数据里的装备**与**客户端认识的信息**对账：
+  --   · 未缓存 = 客户端还没这件物品（图标/属性暂时没有，已排队限频请求，稍后自愈）
+  --   · 名称不符 = 站点名字 ≠ 客户端名字（**以游戏内为准**，这类要记下来改数据）
+  --   · 图标不符 = 站点图标名 ≠ 客户端返回的图标贴图名（同样报出来，便于核对）
+  function EVAL_DS_QC_AUDIT(limit, quiet)
+    local rows = EVAL_QC_ITEM_ROWS(nil)
+    local st = { total = 0, cached = 0, unknown = 0, nameOK = 0, nameBad = 0, iconOK = 0, iconBad = 0, queued = 0 }
+    local badName, badIcon, unknownIds = {}, {}, {}
+    local cap = tonumber(limit) or table.getn(rows)
+    for i = 1, table.getn(rows) do
+      if i > cap then break end
+      local e = rows[i]
+      st.total = st.total + 1
+      local nm, tex = qpItemInfo(e.id)
+      if nm == nil then
+        st.unknown = st.unknown + 1
+        if table.getn(unknownIds) < 5 then table.insert(unknownIds, e.id) end
+        -- 未缓存的**排队补缓存**（qpItemInfo 自带限频与上限：QP_REQ_RATE / QP_REQ_MAX）
+        if DS.qcReq and table.getn(DS.qcReq.q) < QP_REQ_MAX then
+          local dup = false
+          for k = 1, table.getn(DS.qcReq.q) do if DS.qcReq.q[k] == e.id then dup = true break end end
+          if not dup then table.insert(DS.qcReq.q, e.id) st.queued = st.queued + 1 end
+        end
+      else
+        st.cached = st.cached + 1
+        if tostring(nm) == tostring(e.it.n) then st.nameOK = st.nameOK + 1
+        else
+          st.nameBad = st.nameBad + 1
+          if table.getn(badName) < 8 then
+            table.insert(badName, string.format("#%d 游戏内「%s」≠ 数据「%s」", e.id, tostring(nm), tostring(e.it.n)))
+          end
+        end
+        -- 图标：两边都取**文件名**比（大小写无关；路径形式可能不同）
+        local want = string.lower(tostring(e.it.icon or ""))
+        if want ~= "" then
+          local got = string.lower(tostring(tex or ""))
+          got = string.match(got, "([^\\/]+)$") or got
+          want = string.match(want, "([^\\/]+)$") or want
+          got = string.gsub(got, "%.blp$", "")
+          if got == want then st.iconOK = st.iconOK + 1
+          else
+            st.iconBad = st.iconBad + 1
+            if table.getn(badIcon) < 8 then
+              table.insert(badIcon, string.format("#%d %s 游戏内=%s ≠ 数据=%s", e.id, tostring(e.it.n), tostring(tex or "nil"), tostring(e.it.icon)))
+            end
+          end
+        end
+      end
+    end
+    if quiet then return st, badName, badIcon, unknownIds end
+    local out = {}
+    table.insert(out, string.format("[任务线审计] 数据里的装备 %d 件：客户端已缓存 %d · 未缓存 %d（已排队 %d 件补缓存）",
+      st.total, st.cached, st.unknown, st.queued))
+    table.insert(out, string.format("  名称对账：一致 %d · **不一致 %d**（不一致以游戏内为准，要改数据）；图标对账：一致 %d · 不一致 %d（数据里没有图标名的不计）",
+      st.nameOK, st.nameBad, st.iconOK, st.iconBad))
+    for i = 1, table.getn(badName) do table.insert(out, "  名称不符 " .. badName[i]) end
+    for i = 1, table.getn(badIcon) do table.insert(out, "  图标不符 " .. badIcon[i]) end
+    if st.unknown > 0 then
+      table.insert(out, "  未缓存样例: " .. table.concat(unknownIds, ",") .. " —— 这些是客户端还没见过的物品，")
+      table.insert(out, "  已按限频排队请求；等几秒再跑一次本命令即可看到「自愈」（名字/图标回来了就是对的）。")
+    end
+    return out
+  end
+
+  -- ===== 事件挂载（★先建控件、再单独 SetScript —— 绝不在构造参数里引用控件自己）=====
+  qpBar:SetScript("OnDragStart", function()
+    pcall(qp.StartMoving, qp) pcall(qp.StopMovingOrSizing, qp) pcall(qp.StartMoving, qp)
+  end)
+  qpBar:SetScript("OnDragStop", function() pcall(qp.StopMovingOrSizing, qp) end)
+  qpTabItem.btn:SetScript("OnClick", function() EVAL_QP_SET_TAB("item") end)
+  qpTabChain.btn:SetScript("OnClick", function() EVAL_QP_SET_TAB("chain") end)
+  qpClose.btn:SetScript("OnClick", function() EVAL_QP_HIDE() end)
+  -- ★用户要求（1.75.4）：**详情页装备获取焦点时也要显示装备信息**（大图标可悬停）
+  qpDetIconBtn:SetScript("OnEnter", function() if DS.qpItem then qpItemTooltip(qpDetIconBtn, DS.qpItem) end end)
+  qpDetIconBtn:SetScript("OnLeave", function()
+    if type(GameTooltip) ~= "nil" then pcall(GameTooltip.Hide, GameTooltip) end
+  end)
+  qpBack.btn:SetScript("OnClick", function() EVAL_QP_LIST() end)
+  qpGoDs.btn:SetScript("OnClick", function() EVAL_QP_GOTO_DS() end)
+  qpUp.btn:SetScript("OnClick", function() EVAL_QP_PAGE(-1) end)
+  qpDn.btn:SetScript("OnClick", function() EVAL_QP_PAGE(1) end)
+  qpF1.btn:SetScript("OnClick", function()
+    if type(EVAL_DD_OPEN) ~= "function" then return end
+    local labels, cb
+    if DS.qpTab == "item" then
+      -- ★1.75.9 等级档**由 QP_LV 现算**（写死四项 = 加档必漏一处；1.75.8 加档时就踩过这个形状）
+      local labels = {}
+      for i = 1, table.getn(QP_LV) do labels[i] = L("DS_QP_LV_" .. QP_LV[i].k) end
+      cb = function(pi) DS.qpLv = QP_LV[pi] and QP_LV[pi].k or "ALL" DS.qpOff = 0 EVAL_QP_LIST() end
+    else
+      labels = { L("DS_F_ALL"), "S", "A", "B" }
+      cb = function(pi) DS.qpTier = QP_TIER[pi] or "ALL" DS.qpOff = 0 EVAL_QP_LIST() end
+    end
+    EVAL_DD_OPEN(DS.qp.f1.btn, labels, cb)
+  end)
+  qpF3.btn:SetScript("OnClick", function()
+    if type(EVAL_DD_OPEN) ~= "function" then return end
+    EVAL_DD_OPEN(DS.qp.f3.btn, { L("DS_F_ALL"), L("DS_QL_F_A"), L("DS_QL_F_H"), L("DS_QL_F_B") }, function(pi)
+      DS.qpFact = QP_FACT[pi] or "ALL"
+      DS.qpOff = 0
+      EVAL_QP_LIST()
+    end)
+  end)
+  for zi = 1, QP_DET_ROWS do
+    local zb = qpZoomBtns[zi]
+    zb:SetScript("OnClick", function()
+      local word = DS.qp.detZoom[zi]
+      if type(word) == "string" and word ~= "" and type(EVAL_DS_SEARCH_NAME) == "function" then
+        EVAL_DS_SEARCH_NAME(word) -- ★按**任务名**检索（用户要求：节点放大镜直达数据检索）
+        -- ★用户要求（1.75.3）：**不关窗** —— 只把结果送过去，并在这里给一行回执；
+        --   要看检索结果把本窗拖开即可（本窗可拖动，不与数据检索抢焦点）。
+        if DS.qp and DS.qp.hint then
+          pcall(DS.qp.hint.SetText, DS.qp.hint, L("DS_QP_SENT") .. tostring(word))
+        end
+      end
+    end)
+    zb:SetScript("OnEnter", function()
+      if type(GameTooltip) == "nil" then return end
+      pcall(GameTooltip.SetOwner, GameTooltip, zb, "ANCHOR_RIGHT")
+      pcall(GameTooltip.SetText, GameTooltip, L("DS_QP_ZOOM_TIP"))
+      pcall(GameTooltip.Show, GameTooltip)
+    end)
+    zb:SetScript("OnLeave", function() if type(GameTooltip) ~= "nil" then pcall(GameTooltip.Hide, GameTooltip) end end)
+  end
+  qpF2.btn:SetScript("OnClick", function()
+    if type(EVAL_DD_OPEN) ~= "function" then return end
+    if DS.qpTab == "item" then
+      -- ★1.75.8 用户要求：种类细分 + 武器子类型 + **多选**（走 1.26.0 的 multi 下拉：点按切换、不关面板）
+      local items, locked, sel, map = qpKindMenu()
+      EVAL_DD_OPEN(DS.qp.f2.btn, items, function(pi, on)
+        local m = map[pi]
+        if not m then return end
+        if m.clear then
+          DS.qpKinds = {} -- 一键清空（= 全部）
+        elseif m.kind then
+          -- ★别写 `on and true or DS.qpKinds[k]` —— Lua 的 and/or 没有布尔语义（记忆体里记过这个坑）
+          if on == true then DS.qpKinds[m.kind] = true else DS.qpKinds[m.kind] = nil end
+        else
+          return
+        end
+        DS.qpOff = 0
+        EVAL_QP_LIST()
+      end, { multi = true, selected = sel, locked = locked })
+      return
+    end
+    EVAL_DD_OPEN(DS.qp.f2.btn, { L("DS_F_ALL"), L("DS_QL_F_A"), L("DS_QL_F_H"), L("DS_QL_F_B") }, function(pi)
+      DS.qpFact = QP_FACT[pi] or "ALL"
+      DS.qpOff = 0
+      EVAL_QP_LIST()
+    end)
+  end)
+  for i = 1, QP_ROWS do
+    local row = qpRows[i]
+    row.btn:SetScript("OnEnter", function()
+      if row.key or row.item then row.bg:SetAlpha(0.45) end
+      if row.item then qpItemTooltip(row.btn, row.item) end -- 悬停出装备详情（原生优先）
+    end)
+    row.btn:SetScript("OnLeave", function()
+      row.bg:SetAlpha(0)
+      -- ★用户要求（1.75.4）：**拾取焦点离开后装备信息必须正确隐藏**（旧实现只复原底色，tooltip 会残留）
+      if type(GameTooltip) ~= "nil" then pcall(GameTooltip.Hide, GameTooltip) end
+    end)
+    row.btn:SetScript("OnClick", function()
+      if DS.qpTab == "item" and row.item then EVAL_QP_ITEM_DETAIL(row.item)
+      elseif row.key then EVAL_QP_DETAIL(row.key) end
+    end)
+  end
+  qpEb:SetScript("OnTextChanged", function()
+    local ok, t = pcall(qpEb.GetText, qpEb)
+    t = (ok and type(t) == "string") and t or ""
+    if DS.qp.echoNeeded then qpEcho:SetText(t) end
+    if t == "" then qpPh:Show() else qpPh:Hide() end
+    DS.qpQuery, DS.qpOff = t, 0
+    if type(EVAL_QP_REFRESH) == "function" then EVAL_QP_REFRESH() end
+  end)
+  qp:SetScript("OnMouseWheel", function(a, b)
+    if DS.qpMode ~= "list" then return end
+    local dir = EVAL_WHEEL_DIR(a, b)
+    if dir ~= 0 then EVAL_QP_PAGE(-dir) end
+  end)
+  qp:SetScript("OnHide", function() if type(EVAL_DD_HIDE) == "function" then EVAL_DD_HIDE() end end)
+  qp:SetScript("OnShow", function() EVAL_QP_REFRESH() end)
+  qpEb:SetScript("OnEnterPressed", function()
+    pcall(qpEb.ClearFocus, qpEb)
+    if type(EVAL_QP_REFRESH) == "function" then EVAL_QP_REFRESH() end
+  end)
+  qpEb:SetScript("OnEscapePressed", function() pcall(qpEb.ClearFocus, qpEb) end)
+  -- 回声兜底：写进 EditBox 后读回，读不回才启用回声行（★字体链全失败也启用，与主搜索框同口径）
+  pcall(qpEb.SetText, qpEb, "x")
+  local okEcho, rb = pcall(qpEb.GetText, qpEb)
+  if not (okEcho and rb == "x") or not qpEbFont then DS.qp.echoNeeded = true
+    qpEcho:Show() end
+  pcall(qpEb.SetText, qpEb, "")
+
+  -- ===== 测试读值口 =====
+  function EVAL_QP_IS_SHOWN() return (DS.qp and DS.qp.frame and DS.qp.frame:IsShown()) and true or false end
+  function EVAL_QP_MODE() return DS.qpMode end
+  function EVAL_QP_TAB() return DS.qpTab end
+  function EVAL_QP_KEY() return DS.qpKey end
+  function EVAL_QP_ITEM_ID() return DS.qpItem end
+  function EVAL_QP_QUERY() return DS.qpQuery end
+  function EVAL_QP_OFF() return DS.qpOff or 0 end
+  function EVAL_QP_HITS()
+    if DS.qpTab == "item" then return DS.qpItemHits or {} end
+    return DS.qpChainHits or {}
+  end
+  function EVAL_QP_TEST_ROW(i)
+    local st = DS.qp
+    if not st or type(i) ~= "number" or not st.rows[i] then return nil end
+    local r = st.rows[i]
+    return { btn = r.btn, text = r.text, icon = r.icon, key = r.key, item = r.item, bg = r.bg }
+  end
+  function EVAL_QP_TEST_DET(i)
+    local st = DS.qp
+    if not st or type(i) ~= "number" then return nil end
+    return st.detRows[i]
+  end
+  function EVAL_QP_TEST_BTN() return DS.qlBtn and DS.qlBtn.btn or nil end
+  function EVAL_QP_TEST_ZOOM(i)
+    local st = DS.qp
+    if not st or type(i) ~= "number" or not st.zoomBtns[i] then return nil end
+    return st.zoomBtns[i]
+  end
+  function EVAL_QP_ZOOM_WORD(i)
+    local st = DS.qp
+    if not st then return nil end
+    return st.detZoom[i]
+  end
+  function EVAL_QP_TEST_F3() return DS.qp and DS.qp.f3 and DS.qp.f3.btn or nil end
+  -- 读值口：行数/几何（判据用它验「滚动区铺满窗口、末行不压分页行」——读真控件）
+  function EVAL_QP_GEOM()
+    local st = DS.qp
+    if not st then return nil end
+    local last = st.rows[QP_ROWS]
+    local out = {
+      rows = QP_ROWS, detRows = QP_DET_ROWS, rowH = QP_ROW_H,
+      listTop = QP_LIST_TOP, pageY = QP_PAGE_Y, winH = QP_H, detTop = QP_DET_TOP,
+    }
+    if last and last.btn and last.btn.GetTop then
+      local ok, top = pcall(last.btn.GetTop, last.btn)
+      if ok and type(top) == "number" then out.lastRowTop = top end
+    end
+    return out
+  end
+  function EVAL_QP_ROWS() return QP_ROWS, QP_DET_ROWS end
+  function EVAL_QP_TEST_DETTITLE() return DS.qp and DS.qp.detTitle or nil end
+  function EVAL_QP_TEST_DETSUB() return DS.qp and DS.qp.detSub or nil end
+  function EVAL_QP_TEST_DETICON() return DS.qp and DS.qp.detIcon or nil end
+  function EVAL_QP_TEST_PREV() return DS.qp and DS.qp.frame and nil end
+  function EVAL_QP_TEST_NAV()
+    local st = DS.qp
+    if not st then return nil end
+    -- 返回**包裹表**（dsBtn 给的是 {btn,text}）——文字在 .text 上，按钮本体只有 GetScript
+    return st.navPrev, st.navNext
+  end
+  function EVAL_QP_TEST_ICONBTN() return DS.qp and DS.qp.detIconBtn or nil end
+  function EVAL_QP_TEST_NAV_SHOWN()
+    local st = DS.qp
+    if not st or not st.navPrev or not st.navNext then return false end
+    return (st.navPrev.btn:IsShown() and st.navNext.btn:IsShown()) and true or false
+  end
+  function EVAL_QP_ITEM_INFO(id) return qpItemInfo(id) end -- 读值口：走 GetItemInfo（游戏内为准）
+  function EVAL_QP_TEST_TAB(name)
+    local st = DS.qp
+    if not st then return nil end
+    if name == "chain" then return st.tabChain.btn end
+    return st.tabItem.btn
+  end
+  function EVAL_QP_TEST_CLOSE() return DS.qp and DS.qp.frame and nil end
+  function EVAL_QP_TEST_GODS() return DS.qp and DS.qp.goDs and DS.qp.goDs.btn or nil end
+  function EVAL_QP_TEST_BACK() return DS.qp and DS.qp.back and DS.qp.back.btn or nil end
+  function EVAL_QP_SET_QUERY(q)
+    DS.qpQuery = tostring(q or "")
+    DS.qpOff = 0
+    local st = DS.qp
+    if st and st.eb then pcall(st.eb.SetText, st.eb, DS.qpQuery) end
+    EVAL_QP_REFRESH()
+  end
+  function EVAL_QP_SET_FILTER(a, b, c)
+    if DS.qpTab == "item" then
+      if a and a ~= "" then DS.qpLv = a end        -- 等级
+      if b and b ~= "" then qpApplyKindToken(b) end -- 类型（旧 token ALL/WP/OT 或种类名，可 "剑,斧"）
+      if c and c ~= "" then DS.qpFact = c end      -- 阵营（装备视图也有第三个筛选）
+    else
+      if a and a ~= "" then DS.qpTier = a end   -- 档位
+      if b and b ~= "" then DS.qpFact = b end   -- 阵营
+    end
+    DS.qpOff = 0
+    EVAL_QP_REFRESH()
+  end
+  -- ★1.75.8 种类多选读值口：集合直接给（测试/探针按种类验越界）；SET 走真实刷新路径
+  function EVAL_QP_KINDS()
+    local out = {}
+    local src = DS.qpKinds or {}
+    for k, v in pairs(src) do if v then out[k] = true end end
+    return out
+  end
+  function EVAL_QP_KIND_LABEL() return qpKindLabel() end
+  function EVAL_QP_KIND_MENU()
+    local items, locked, sel, map = qpKindMenu()
+    return { items = items, locked = locked, selected = sel, map = map }
+  end
+  function EVAL_QP_SET_KINDS(set)
+    local s = {}
+    if type(set) == "table" then
+      for k, v in pairs(set) do if v and type(k) == "string" then s[k] = true end end
+    end
+    DS.qpKinds = s
+    DS.qpOff = 0
+    EVAL_QP_REFRESH()
+    return true
+  end
+  function EVAL_QP_TEST_F2() return DS.qp and DS.qp.f2 and DS.qp.f2.btn or nil end
+  -- ★1.75.9 输入框三件套读值口（用户实测「输入框无法输入」）：焦点按钮 / EditBox / 是否已聚焦
+  function EVAL_QP_TEST_EBBTN() return qpEbFocus end
+  function EVAL_QP_TEST_EB() return qpEb end
+  function EVAL_QP_PH_SHOWN()
+    if not qpPh then return nil end
+    local ok, v = pcall(qpPh.IsShown, qpPh)
+    if ok then return v and true or false end
+    return nil
+  end
+  function EVAL_QP_EB_FOCUSED()
+    if not qpEb then return nil end
+    local ok, v = pcall(qpEb.HasFocus, qpEb)
+    if ok then return v and true or false end
+    return nil
+  end
+  -- 读值口：类型按钮上**真控件的文字**（文字的宿主是 FontString，不是按钮本体）
+  function EVAL_QP_F2_TEXT() return (DS.qp and DS.qp.f2 and DS.qp.f2.text and DS.qp.f2.text:GetText()) or "" end
   -- ===== UnrealQuest 缺失引导面板（1.70.46，用户要求「未安装时给友好的依赖提示」）=====
   -- 旧实现只有一行黄字。改为一块面板，回答用户的四个问题：
   --   ① 缺什么（标题）② 为什么需要它（数据来源）③ 我该做什么（按**探测到的真实状态**分叉）

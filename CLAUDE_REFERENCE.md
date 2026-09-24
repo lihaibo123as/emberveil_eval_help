@@ -86,11 +86,14 @@ New-Item -ItemType Directory -Path "$staging\EvalHelp" | Out-Null
 Copy-Item "$src\EvalHelp.toc","$src\Core.lua","$src\Engine.lua","$src\EvalHelp.lua","$src\Toolbox.lua","$src\DataSearch.lua","$src\Share.lua","$src\IconSem.lua","$src\IconBrowser.lua","$src\PetData.lua","$src\PetHelper.lua" "$staging\EvalHelp\"
 Copy-Item "$src\README.md","$src\README_en.md","$src\README_ru.md","$src\CHANGELOG.md","$src\DEVELOPMENT.md" "$staging\EvalHelp\"
 Copy-Item "$src\Locales","$src\examples","$src\media","$src\tools" "$staging\EvalHelp\" -Recurse
+# quest/ 只拷插件要用的三个 .lua（fetch.js/sweep*.js/build*.js/audit.js/chains.js 是开发脚本、cache/ 是抓取缓存，都不进包）
+New-Item -ItemType Directory -Force "$staging\EvalHelp\quest" | Out-Null
+Copy-Item "$src\quest\QuestData.lua","$src\quest\QuestBulk.lua","$src\quest\QuestChains.lua" "$staging\EvalHelp\quest\"
 Remove-Item "$staging\EvalHelp\media\Textures" -Recurse -Force -ErrorAction SilentlyContinue  # 主题素材不进包
 [System.IO.Compression.ZipFile]::CreateFromDirectory($staging, $out)
 Remove-Item $staging -Recurse -Force
 ```
-★**装完必须核对条目数**（1.74.30 基准 = **69 个**（+`tools/RareWatch.lua`）；1.74.12 时是 68、1.74.6 时是 66、1.73.5 时是 63；1.74.5 陆续加了 `tools/IconGrid.lua` / `tools/HunterHelper.lua` / `tools/ConsumableHelper.lua`，1.74.7 加 `tools/DismountHelper.lua`，1.74.27 加 `tools/RareWatch.lua`）：
+★**装完必须核对条目数**（1.75.0 基准 = **72 个**（+`quest/QuestData.lua`、`quest/QuestBulk.lua`、`quest/QuestChains.lua`；1.75.9 新增 QuestBulk = 全量任务/装备数据）；1.74.30 时是 69（+`tools/RareWatch.lua`）；1.74.12 时是 68、1.74.6 时是 66、1.73.5 时是 63；1.74.5 陆续加了 `tools/IconGrid.lua` / `tools/HunterHelper.lua` / `tools/ConsumableHelper.lua`，1.74.7 加 `tools/DismountHelper.lua`，1.74.27 加 `tools/RareWatch.lua`）：
   少一个就是缺文件，用户装了会**直接报错**。
   ★这一条与上面的模块清单都有源码检查 `PACK LIST CHECK` 守着（清单与 .toc 逐个比对 + 基准数按打包口径现算），过时当场 FAIL。
 ★**不装**：`luacheck.js`/`test_*.lua`/`test_engine.js`（测试）、`preview/`（截图）、`node_modules/`、
@@ -175,15 +178,16 @@ Remove-Item $staging -Recurse -Force
 - **插件目录**：`G:\game\u5wow\Azeroth\Binaries\Win64\Games\Emberveil\live\Azeroth\Interface\AddOns\EvalHelp\`（1.21 后由 EVAL_HELP 改名 **EvalHelp**；★**目录名 == toc 基名**才加载；改名时游戏必须关闭，否则 Access denied）。
 - **文件结构（1.39.0 起模块化，不是单文件）**：`EvalHelp.toc` + `Locales/{zhCN,enUS,ruRU}.lua` + `Core.lua`（输出/i18n/状态采集）+ `Engine.lua`（规则引擎）+ `EvalHelp.lua`（UI/斜杠命令/init）+ `Toolbox.lua`（工具箱 Tab3）+ `DataSearch.lua`（数据检索 Tab4）+ `Share.lua`（方案分享，1.71.0）+ `IconBrowser.lua`（图标库 Tab5）+ `PetData.lua`/`PetHelper.lua`（抓宠 Tab6，1.73.0）+ `IconSem.lua`（**图标语义表**，1.73.5）+ **`tools/IconGrid.lua`（通用图标网格选择器，1.74.5：单选/多选、高度自适应、分页、滚轮、夹取） + `tools/HunterHelper.lua`（猎人助手 · 一键喂食） + `tools/ConsumableHelper.lua`（消耗品助手 · 多选横排各自点用）—— 都在 `tools/` 子目录里**
   + `examples/*.lua`（**11 个数据文件**）；文档 `README.md`/`README_en.md`/`README_ru.md`/`CHANGELOG.md`/`DEVELOPMENT.md`/`CLAUDE.md`；测试 `luacheck.js`/`test_engine.js`/`test_stub.lua`/`test_assert.lua`。**行数随开发变化，别当固定值引用**。
-- ★**toc 载入顺序（以 `EvalHelp.toc` 为唯一真值）**：`Locales/{zhCN,enUS,ruRU}` → `Core` → `Engine` → `EvalHelp` → **`examples/*`（11 个数据文件，必须排在 EvalHelp.lua 之后）** → `Toolbox` → `DataSearch` → `Share` → **`IconSem`** → `IconBrowser` → `PetData` → `PetHelper` → **`tools\IconGrid.lua`（共用网格件，必须在两个助手之前）** → **`tools\HunterHelper.lua`** → **`tools\ConsumableHelper.lua`**（★`EXAMPLES TOC CHECK` 守着「磁盘 ↔ .toc 双向一致 + 顺序 = 选单顺序」；`IconSem` 必须在 `IconBrowser` **之前**——后者读它的 `EVAL_ICON_SEM`）。
+- ★**toc 载入顺序（以 `EvalHelp.toc` 为唯一真值）**：`Locales/{zhCN,enUS,ruRU}` → `Core` → `Engine` → `EvalHelp` → **`examples/*`（11 个数据文件，必须排在 EvalHelp.lua 之后）** → `Toolbox` → **`quest\QuestData.lua` → `quest\QuestChains.lua`（★1.75.0 任务线：数据 → 逻辑，**必须排在 DataSearch 之前**——后者读 `EVAL_QC_*`；同目录的 `fetch.js`/`chains.js`/`build.js` 是**开发脚本、不进发布包**）** → `DataSearch` → `Share` → **`IconSem`** → `IconBrowser` → `PetData` → `PetHelper` → **`tools\IconGrid.lua`（共用网格件，必须在两个助手之前）** → **`tools\HunterHelper.lua`** → **`tools\ConsumableHelper.lua`**（★`EXAMPLES TOC CHECK` 守着「磁盘 ↔ .toc 双向一致 + 顺序 = 选单顺序」；`IconSem` 必须在 `IconBrowser` **之前**——后者读它的 `EVAL_ICON_SEM`）。
   ★子目录模块（`tools/`）在 toc 里写 **`tools\HunterHelper.lua`**；它们**载入期零副作用**（只定义函数与常量），图标帧在用户打开开关时才建。
   ★**共用件纪律**：喂食与消耗品助手共用 `tools/IconGrid.lua`（网格 + `EVAL_IG_SCAN_BAGS` 扫背包 + `EVAL_IG_TOPLEFT` 位置换算）——
     同一内容不许两处各写（本项目铁律）；1.74.5 实踩一次「`IG.pages` 一名两义」（页号表被总页数覆盖 → 选完食物点格子报错且不收起），已拆成 `pageOf`/`pages`。
 - ★**新增 .lua 模块要同时改四处**：① `EvalHelp.toc` 载入列表；② `test_engine.js` 的加载数组
   （**7 处清单**：DECL ORDER / LANG KEY / LANG SOURCE（自动发现，已含 `tools/`）/ COMMENT SWALLOW /
   FRAME NAME CLASH / COLOR CODE LEN / 主加载循环 —— 漏一处就是那一类检查的盲区，本项目踩过）；
-  ③ `DECL ORDER CHECK` 的文件清单（**目前 13 个**：EvalHelp/Core/Engine/Toolbox/DataSearch/Share/IconSem/
-  IconBrowser/PetData/PetHelper/**tools/IconGrid**/**tools/HunterHelper**/**tools/ConsumableHelper**）；④ ★**发布包清单**（第 9 步的 Copy-Item 行）——
+  ③ `DECL ORDER CHECK` 的文件清单（**目前 17 个**：EvalHelp/Core/Engine/Toolbox/DataSearch/Share/IconSem/
+  IconBrowser/PetData/PetHelper/**tools/IconGrid**/**tools/HunterHelper**/**tools/ConsumableHelper**/
+  **tools/DismountHelper**/**tools/RareWatch**/**quest/QuestData**/**quest/QuestChains**）；④ ★**发布包清单**（第 9 步的 Copy-Item 行）——
   **放进子目录时尤其容易漏**：1.74.5 实事故预警 = `PACK LIST CHECK` 旧判据只看「顶层 .lua」，
   子目录模块被静默漏掉（本地测试全绿、出包缺文件、用户装了报错）
   → 判据已扩成「toc 里带路径的 `.lua`：要么逐个列出、要么所在目录被 `Copy-Item -Recurse` 整拷」，基准数也把 `tools/` 数进去。★1.73.5 实事故：新增 `IconSem.lua` 后**主加载循环**漏加 → `EVAL_ICON_SEM` 在测试里是 nil，图标库语义/过滤整组断言**全红**（这正是「检查存在 ≠ 覆盖到位」）。
@@ -262,7 +266,7 @@ Remove-Item $staging -Recurse -Force
   · ★**状态（用户决定）**：用户说「这个工具先放着以后测试」→ **停在「已实现 + 双闸门绿 + 未提交/未实测」**；
     默认**关**（`tb.feedPet` 空 = 关）+ 载入期零副作用 ⇒ **放着不影响任何现有功能**。
     回来继续时：读 `.dsh/reports/hunter-helper-impl.md`（实现说明 + 16 步真机测试流程 + 四个待实测项）。
-- **当前版本（源码唯一真值）**：`EvalHelp.lua` 的 `local VERSION` == `EvalHelp.toc` 的 `## Version` = **1.74.30**（v1.74.28 已发布）
+- **当前版本（源码唯一真值）**：`EvalHelp.lua` 的 `local VERSION` == `EvalHelp.toc` 的 `## Version` = **1.75.0**（未发布；v1.74.27 是最后一个 tag）
   （**v1.74.27 已发布**；`CHANGELOG.md` 的 `## 详情小节` 最新到 **v1.74.6**，`v1.74.7 ~ v1.74.28` 只保留**顶部速览表**一行一版（1.74.28 = 两个助手弹窗候选按物品类型过滤）。
   ★`CHANGELOG.md` 的 `## 🎯 v1.74.0` 小节已把 **1.73.35 ~ 1.74.0**（85 个提交）归纳成 7 条里程碑）。
   ★1.73.35~1.73.67 那批工作（分享封皮/品阶评分/头衔抽卡/彩蛋/角色扮演反应/标题栏徽标/取证探针）已随 **v1.74.0** 一起发布。
@@ -290,16 +294,23 @@ Remove-Item $staging -Recurse -Force
 - **自查清单**：任何 .lua 改完必跑 `node luacheck.js` + `node test_engine.js`（见第一节铁律 1），**两条都要 exit 0**。
 
 ## 九、版本要点汇总（最近 10 版，每版一行；完整记录见 CHANGELOG.md 与 git log）
-1. **1.74.30** — ⏱️ **射击计时 + 条件「距下次射击」**：探针真机定案（法术频道含「自动射击」的原文 = 锚点、`UnitRangedDamage[1]` = 射速 2.09s，与近战**双锚点互不干扰**）；数值条件 `shotLeft`（文本 `距射击<0.5`、初始值 0）；修「切换条件类型把 30.0 带进时间型」；消耗品助手左键不再弹窗。
-2. **1.74.29** — 🖼️ 战斗UI **激活方案格品阶色边框** + 两个助手弹窗候选**原生物品详情** + 喂食助手 `GetPetHappiness()` **快乐度边框**（开心亮绿 / 一般金 / 不开心红 / 无宠物默认金）。
-3. **1.74.28** — 🧺 两个助手弹窗候选**按物品类型过滤**（品质 → `GetItemInfo(链接)` → **自建 tooltip 兜底并自愈客户端缓存**；药草矿物材料等全剔，判不出不剔）+ 验证命令。
-4. **1.74.27** — 🧹 稀有提醒转播**提取为独立模块** `tools/RareWatch.lua`（主程序只留两个接线点）+ **工具箱开关**（打包基准 69）。
-5. **1.74.26** — 🧹 点名字**只做一件事**：`TargetByName(名字)` 选中它，选不中**就报错**；删掉所有与任务插件机制的耦合。
-6. **1.74.25** — 📏 切目标文案纠错（真因 = 客户端只认附近单位）+ 目标探针。
-7. **1.74.24** — 🎨 稀有提醒名字按**品阶染色** + 可点链接。
-8. **1.74.23** — 🔔 **稀有提醒转播**：包住 UnrealQuest 弹窗唯一出口 `RareAlert:Show`。
-9. **1.74.22** — 🧩 模版收录「神圣风暴」+ 模版按品阶重命名 + 作者/备注 + 神级改亮蓝。
-10. **1.74.21** — 🎯 神级门槛 120 → **50**（封顶与示例全部现算）。
+1. **1.75.0** — 🧭 **数据检索新增「任务线」+ 地图标注右侧的「任务线推荐」弹窗**（`quest/` 独立目录）：10-30 级 **22 条经典链 / 88 任务 / 62 奖励（39 武器）**逐条抓自 `database.emberveil.org`；**奖励优先**（精良武器排最前）+ **完整上下级步骤**；奖励行悬停出原生物品详情、步骤行点击进任务详情；抓取脚本（`fetch.js`/`chains.js`/`build.js`）**与插件零耦合**；数据自带 ⇒ **UnrealQuest 缺席照样能查**；★**弹窗 v2**（数据检索 · 地图标注右侧）：**装备优先**（按可获得等级列装备 + 真实物品图标 → 点装备**反查来源任务线**与完整步骤 → **[在数据检索中查询]** 直连 `EVAL_DS_SEARCH_NAME`）+ 两个视图 Tab（装备/任务线）+ 9 行分页列表 + ▲▼/滚轮 + 四档筛选（等级/类型/档位/阵营）+ 拖动柄；默认关、OnHide 收下拉。
+  ★1.75.7 调（用户要求「将返回放置在下一页右边 · 整体按钮左对齐」）：底部按钮顺序改为 **[上页] [下页] [← 返回]** —— 按钮组起点 `QP_NAV_X = QP_PAD`（整体左对齐），返回按钮 x = `QP_NAV_X + (QP_BTN_W + QP_BTN_GAP) * 2`（第三位）。判据 = CHECK（按钮组起点 = 内边距 + 返回必须在第三位）+ 组 192 ⑧h（读真控件 `GetLeft` 验 x 递增；桩不返回几何就如实降级由 CHECK 守）。变异 M14 捕获。
+★1.75.6 修（用户截图「样式有点重叠」）：详情**标题压住副标题** —— 根因 = 标题用 `SetPoint("LEFT", qpDetIcon, "RIGHT")` 锚在 **36 高**的大图标上 = **垂直居中**（≈ y −74），而副标题正好也在 −74 ⇒ 必然压字。正解 = 两者都以**图标右上角**为锚、**垂直依次排**（标题 −2 · 副标题 −20），字号/语言变化都不会再压。判据 = `QUEST PANEL CHECK`（钉锚点写法 + **禁**旧的 `LEFT` 写法）+ 组 192 ⑧i（读 `GetTop` 验几何；**桩不支持就如实降级**，绝不假红）。
+★1.75.5 修（用户截图「底部按钮不见了」）：翻页按钮**同时进了 listWidgets 与 detWidgets 两份互斥清单** ⇒ `qpShowView` 先 Show（list）后 Hide（det），列表视图下**整个消失**。正解 = **不进任何互斥清单**，由 `qpShowView` **末尾显式 Show**（两视图都常显、位置不跳）。★★可见性契约的又一实例：**同一控件只能属于一份显隐清单**；判据补 CHECK（禁进互斥清单 + 必须显式 Show）与组 192 ⑧h（**两视图下翻页按钮都必须可见** —— 这正是漏过的那条：只验了「详情控件在列表视图要隐藏」，没验「列表自己的按钮要显示」）。变异 M13 捕获。
+★1.75.4 追加（用户要求，三条）：① 翻页**不用图标**，改**文字按钮 [上一页][下一页]**（复用图标库 `IB_PREV`/`IB_NEXT` 键），放**底部 [返回] 旁边左对齐**（位置由 `QP_NAV_X = QP_PAD + 64 + QP_BTN_GAP` 单一来源算）；② **焦点离开必须隐藏装备信息**（旧实现 `OnLeave` 只复原底色 ⇒ 原生 tooltip 残留）；③ **详情大图标可获取焦点并显示装备信息**（Texture 收不到鼠标 ⇒ 加了 36×36 的覆盖 Button）。★顺带修：`EVAL_QP_SHOW` 从不调 `qpShowView` ⇒ **首次打开**时详情专用控件（返回/大图标/数据检索钮）在列表视图里露着（用户截图里正是这个）。变异 M12（翻页改回图标式）被 CHECK 捕获。
+★1.75.3 追加（用户要求，三条）：① **滚动区铺满窗口** —— 行数**按窗口高度现算**（纯函数 `EVAL_QP_ROWS_FOR(h, top, rowH, tail)`，17 行/页），**禁写死**（图标库那种 `IB_ROWS = 9` 照搬会留白，用户在图 3 圈出）；② 装备详情 **36×36 大图标 + 12 号大标题（品质色）+ 副标题（属性）**，图标仍只取 `GetItemInfo`；③ 放大镜素材换成**本插件自带** `Interface\AddOns\EvalHelp\media\icons\database`（与图标库同款），点击后**不关窗**，只回执一行「已送数据检索：<任务名>」（★旧判据「点完应收起」已按要求**反转**成「必须仍在显示」）。变异 M10（又关窗）/M11（行数写死）均捕获。
+★1.75.1 追加（用户要求）：**阵营严格三分类**（联盟/部落/共有 —— 旧写法把「共有」并进联盟/部落，`c.f ~= "B"` 那半句已删）；**每个任务节点左侧放大镜**（素材 `INV_Misc_Spyglass_01_TEX`，与 PetHelper 同源；点了按**任务名**（不是链名）走 `EVAL_DS_SEARCH_NAME` 直达数据检索）；装备视图三个筛选（等级/类型/阵营）⇒ 读值口 `EVAL_QP_SET_FILTER(a,b,c)` 三参。
+  ★v1 事故（务必记住）：`local b = dsBtn(..., function() b.btn ... end)` 里的 b 是**全局 nil**（local 作用域从声明之后开始）→ 点按钮当场红字；另有「label 传空串 = 空白按钮」「详情行压住底部按钮」两处 UI 事故 —— 判据分别落在 `QUEST PANEL CHECK`（自引用检测/空白按钮检测/**布局重叠独立验算**）与组 192。变异 M3/M4/M5/M7 全捕获。
+2. **1.74.30** — ⏱️ **射击计时 + 条件「距下次射击」**：探针真机定案（法术频道含「自动射击」的原文 = 锚点、`UnitRangedDamage[1]` = 射速 2.09s，与近战**双锚点互不干扰**）；数值条件 `shotLeft`（文本 `距射击<0.5`、初始值 0）；修「切换条件类型把 30.0 带进时间型」；消耗品助手左键不再弹窗。
+3. **1.74.29** — 🖼️ 战斗UI **激活方案格品阶色边框** + 两个助手弹窗候选**原生物品详情** + 喂食助手 `GetPetHappiness()` **快乐度边框**（开心亮绿 / 一般金 / 不开心红 / 无宠物默认金）。
+4. **1.74.28** — 🧺 两个助手弹窗候选**按物品类型过滤**（品质 → `GetItemInfo(链接)` → **自建 tooltip 兜底并自愈客户端缓存**；药草矿物材料等全剔，判不出不剔）+ 验证命令。
+5. **1.74.27** — 🧹 稀有提醒转播**提取为独立模块** `tools/RareWatch.lua`（主程序只留两个接线点）+ **工具箱开关**（打包基准 69）。
+6. **1.74.26** — 🧹 点名字**只做一件事**：`TargetByName(名字)` 选中它，选不中**就报错**；删掉所有与任务插件机制的耦合。
+7. **1.74.25** — 📏 切目标文案纠错（真因 = 客户端只认附近单位）+ 目标探针。
+8. **1.74.24** — 🎨 稀有提醒名字按**品阶染色** + 可点链接。
+9. **1.74.23** — 🔔 **稀有提醒转播**：包住 UnrealQuest 弹窗唯一出口 `RareAlert:Show`。
+10. **1.74.22** — 🧩 模版收录「神圣风暴」+ 模版按品阶重命名 + 作者/备注 + 神级改亮蓝。
 
 ## 十、常驻卷瘦身移出（1.74.9 审计 · 原文照存）
 
@@ -612,3 +623,63 @@ Remove-Item $staging -Recurse -Force
 - **工作区清理**：仓库根目录的 `dbg_*.lua`（10 个，历史遗留的一次性调试脚本）与 `CLAUDE.md.bak` 已**搬进 `.dsh/debug-residue-20260922/`**
   （`.dsh/` 在 `.gitignore` 里）——游戏 AddOns 目录因此干净，且随时可翻回来。
 - **用户机上还需执行一次**：`/eh 存档清理`（清掉当前存档里已存在的残渣键；`loadStat` 会随之清零，下次登录继续累计）。
+
+## 十四、任务线数据来源（1.75.1）与物品类型过滤明细（1.74.28 原文照存）
+
+### 14.1 ★任务线检索依据 = `https://database.emberveil.org/quests`（用户 1.75.1 明确「记住任务线的检索依据…数据为准」）
+
+- **唯一真值来源**：EmberVeil 官方数据库 `https://database.emberveil.org/quests`。任务线、任务节点、等级、阵营、奖励物品**全部以该站页面为准** —— 不凭记忆、不引别家数据库。
+- `quest/QuestData.lua` 是**生成物**（纯数据、无函数）：`node quest/build.js` 用缓存生成、`--force` 全量重抓。★**手改会在下次生成时被覆盖** ⇒「改数据」＝改策展清单 `quest/chains.js`（任务 ID 序列 / 阵营 / 档位 / 等级 / 地区 / 点评）后重跑生成。
+- 抓取器 `quest/fetch.js`：自带本地代理自举（`127.0.0.1:10809`，无第三方依赖）、限速 200ms、失败重试 3 次、缓存落 `quest/cache/`（已在 `.gitignore`）。站点要点：Next.js SSR，任务列表 GET 参数 `name/min_level/max_level/type/page`（50 条/页），详情页自带「本系列第 N/M 部分」链信息，`Cookie: lang=zhCN` 全站中文，物品品质取 RSC 的 `qualityColor`。
+- **判据**：`QUEST TOC CHECK`（两文件在 toc 且在 DataSearch 之前 + 磁盘↔toc 双向一致 + 数据文件不许出现 function）· 组 191（22 条链**逐条**查字段齐 + 任务/物品都在表里 + 档位排序 + 武器优先 + 诚实失败）· 组 192（弹窗：装备优先 / 反查任务线 / 直连数据检索 / **阵营严格三分类** / **任务节点放大镜**）。
+- **加新任务线**：往 `quest/chains.js` 加一条（key / 名称 / 阵营 A|H|B / 档位 S|A|B / 等级区间 / 地区 / `quests` 完整 ID 序列 / 一句 note）→ `node quest/build.js` → 跑 `node luacheck.js` + `node test_engine.js`（都要 exit 0）。
+- 弹窗行为（1.75.0~1.75.8 五轮）：数据检索 ·「地图标注」右侧 [任务线推荐]；两视图（装备优先 / 任务线）+ 三个筛选（等级 / **类型（种类子类型多选）** / 阵营）+ **行数按窗高现算**（`EVAL_QP_ROWS_FOR`，铺满不留白）+ 滚轮 + 拖动柄；装备行带真实图标（`GetItemInfo` 第 9 返回）与品质色；详情里**每个任务节点左侧放大镜** → 按**任务名**走 `EVAL_DS_SEARCH_NAME` 直达数据检索（★**不关窗**）。
+
+### 14.3 装备「种类细分 + 子类型多选」明细（1.75.8，用户「装备筛选种类细分,支持种类子类型.武器子类型支持.并且支持多选.」）
+
+- **种类唯一来源 = 生成数据的 `k` 字段**（类型：剑/斧/锤/匕首/法杖/弓/盾牌/布甲/皮甲/锁甲/其它），部位在 `s`，**武器与否由 `EVAL_QC_IS_WEAPON`（dps>0）现判** —— 不另立种类表（写死＝与数据脱节，下一批数据就漂移）。
+- **数据层**（`quest/QuestChains.lua`）：`EVAL_QC_ITEM_KIND(rec)`（取 `rec.k`）· `EVAL_QC_KIND_LIST()`（**现算**，只列数据里真有的种类；排序 = 武器子类型在前 → 件数降序 → 名字升序 → 首见序，`table.sort` 在 5.1 不稳定故末项兜底）· `EVAL_QC_KIND_GROUPS()`（返回 武器子类型名数组, 其它种类名数组 —— 界面**不自己分组**）· `qcKindPass(set, k)`（非表/空集 = 不过滤）· `EVAL_QC_ITEM_ROWS{..., kinds={[种类]=true}}`。
+- **界面**（`DataSearch.lua` 弹窗）：类型筛选按钮 = **`EVAL_DD_OPEN` 的 multi 下拉**（`{ multi = true, selected = sel, locked = locked }`；`onPick(pi, on)` → **两步布尔** `if on == true then ... = true else ... = nil end`，禁用 `on and true or nil` 这种 and/or 写法）· 分组标题（武器/其它）走 `locked[序号]=true`（画纯文本、不画方框、点击无回调）· **末行 = 「全部」一键清空**（`map[末行] = { clear = true }`，与工具箱关键字菜单的 clear 行同范式）· 选项来自 `qpKindMenu()`（数据现算）· 按钮文字 `qpKindLabel()`（空 = 全部 · 1 = 名字 · 2 = 名字、名字 · 更多 = 首项…(N)）· `DS.qpKinds` 是**唯一**选中态（旧三态 token 只作入口：`qpApplyKindToken` 把 `ALL/WP/OT` 或种类名（可 `"剑,斧"`）翻成集合）。
+- **读值口**：`EVAL_QP_KINDS()` · `EVAL_QP_SET_KINDS(set)` · `EVAL_QP_KIND_MENU()` · `EVAL_QP_KIND_LABEL()` · `EVAL_QP_F2_TEXT()`（按钮上**真 FontString** 的文字 —— 按钮本体没有文字）。
+- **判据**：`QUEST WIRING CHECK`（kinds 判定只准有一处 + 显式布尔 + 空集放行）· `QUEST PANEL CHECK`（无 QP_KIND 三态表 + 传 `kinds=DS.qpKinds` + multi/locked/两步布尔/空集文案/两个 locked 分组标题/走 `EVAL_QC_KIND_GROUPS`）· 组 192 ⑧j（每个武器子类型单独筛只出该子类型 · 多选并集 · 空集=全部 · 真实按钮→真实 multi 下拉→分组标题不可点→真实点行→列表按子类型过滤→按钮文字同步）。
+- **变异（全部 CAPTURED）**：M20 数据层忽略 kinds · M21 退回单选 · M22 空集当「什么都不显示」· M23 未勾选时按钮留空 · M24 分组标题可点 · M25 回调写成 and/or 单行。
+
+### 14.4 全量采集（10-60+ 全部任务奖励）+ 审计 + 输入框修复（1.75.9）
+
+**用户原话**：「1. 现在验证可行想.开始进行数据抓取.将任务奖励:只要有装备/武器的都可以进行数据采集.单任务也可以加入采集. 2. 经典任务线衍生到30-60范围.包含大型任务线.各种开门任务线等. 3. 图片内的输入框无法输入 … 任务完成之后要审计装备链接是否正确.任务链接是否正确,任务线是否完整.以上所有数据来源都以 https://database.emberveil.org/quests 为准.装备链接都游戏内信息为准.」
+
+- **可行性实证（先探规模，再动手）**：`/quests?min_level=..&max_level=..&page=N` 每页 50 条、页内有「第 N / M 页」可读总页数；**列表页本身就带奖励物品** —— 每条 `<img src="/icons/small/<图标名>.png" style="border-color:#<品质色>" data-tooltip-entry="<物品id>">` ⇒ 任务→装备的对应关系**不必逐条拉详情页**。10-60 共 **81 页 / 4008 条**任务；有奖励 470、带绿装+ 422、奖励物品 923（绿 637 / 蓝 148 / 紫 49 / 白 89）。
+- ★★★**三个必须记住的站点事实（1.75.9 全部实测踩过，每条都对应一次返工）**：
+  1. **列表页的奖励图标是「截断显示」**：一行的奖励区只画前几枚（实测 #451 列表只有 `2458`，任务详情页的「选择一件/直接给予」还有 `2459`）⇒ **奖励的权威来源 = 任务详情页**；生成器取「列表 ∪ 详情」并集。★只看列表页时审计 C 检查报了 88 条「仅详情页有」——那就是漏掉的奖励。
+  2. **站点搜索 `?name=<词>` 是「任务标题（英文原文）子串」匹配**：`name=Onyxia` → 3 条 ✓；`name=安其拉` → **0 条**（中文只是 `lang=zhCN` 的显示层，不参与检索）；多词短语（`Scepter of the Shifting Sands`）→ 0 条（不是全文检索）⇒ 名人任务线种子必须用**英文单词**（Naxxramas / Onyxia / Quel'Serrar / Thunderfury / Linker / Eranikus…）。
+  3. **「本系列第 N/M 部分」必须用结构性解析**：整条系列除「你在这里」那一步外每步都是 `<a href="/quest/ID">名字</a>` ⇒ 按**文档顺序**取块内任务链接、当前页那一步按 `part` 号插回。★旧实现按可见行「数字 / 名字」对齐，在部分页面整块错位（实测 #8949 把 24 步全读成同一个名字、只解出 1 个 id；#1170 奥妮克希亚同样）⇒ 生成出一堆**假任务线**。修好后 id 覆盖率 100%。
+- **可抓取规模修正**（修好列表解析后重扫）：有奖励 **1683** 条任务、奖励物品 **1882**（绿装+ 1509）· 装备（部位或 DPS）**994** 件；**发货口径**（进 `QuestBulk.lua`）= 奖励里有装备的 **751** 条任务 + 它们引用到的 **1262** 件物品 + **688** 条自动任务线（≥8 步 36 条 · 开门/史诗 19 条 · 含 30-60 与 55-60 的大线）· 文件 **186 KB**。
+  ★30-60 的线是**补抓**出来的：先按「有装备奖励」抓只能拿到 10-31 的小线 ⇒ `sweep_quests.js 1 70`（**全部 4008 条**任务详情，1888 条带系列）+ `refetch_series.js`（解析器每改一次都必须重抓：缓存里存的是**解析结果**）才把整库的线补全。
+- ★★★**系列解析第三次返工（1.75.9 收尾）**：站点的「本系列第 N/M 部分」块有三种形态 —— ① 全是链接 ② **全是纯文本（没有链接）** ③ 混合。只按链接解析时，形态②的页面会退化成「只剩你在这里那一步」（实测：迪菲亚兄弟会 1/5、莱恩的净化 1/9、大地之冠 0/7）⇒ 经典线整条消失。**正解 = 链接 + 可见文本「数字→名字」双来源**：名字从可见文本取、id 从链接取（名字与链接对齐），再用 `quest/resolve.js` 的「任务名 → id」补缺（候选要过候选自己那页的 `part/total` 交叉验证）。修好后这些线全部拿到 5/5、9/9、7/7。
+- **审计结论（`node quest/audit.js`，现 0 硬错误）**：A 装备 994 件全部有名字且品质合法 · B 任务 751 条（奖励 id 全在物品表、无孤立装备）· C 列表页↔详情页 **93 条不一致（全部是「仅详情页有」= 列表页截断，属于站点显示行为，数据已取并集）** · **E 策展 22 条链全部「与站点一致」**（本轮按站点把 10 条链补全：维里甘之拳 +1650、尖牙德鲁伊 +880、莱恩的净化 +1023、健忘的勘察员 +729、奥萨拉克斯之塔 +965/966/967、与血色十字军的战争 +383、大地之冠 +917、死亡矿井散件 +2041、诺莫瑞根 +2931、主动式负载平衡器 +3922）· **F 装备↔任务链接不一致 0 条** · D/G 任务线 **769 条**（≥10 步 21 条 · 开门/史诗 19 条：斯塔文的传说、埃提耶什之杖、奥妮克希亚的血脉、基尔卡克的钥匙、安斯雷姆的钥匙、圣光节杖、梦魇的缠绕…）。
+- **经典覆盖清点（审计 G 段）**：按区域自动清点 —— 黑石塔 27 条线 · 东瘟疫之地 27 · 希利苏斯 20 · 黑石深渊 19 · 斯坦索姆 17 · 奥达曼 13 · 通灵学院 13 · 厄运之槌 13 · 诺莫瑞根 10 · 沉没的神庙 8 · 祖尔法拉克 6 · 黑暗深渊 4 · 死亡矿井 3 · 哀嚎洞穴 2 · 剃刀高地/沼泽/血色/熔火之心/纳克萨玛斯/奥妮克希亚/安其拉各 1-2 条。★唯一「未命中关键词」= **灰烬使者**，原因如实写进报告：1.12 灰烬使者只有纳克萨玛斯掉落、**没有任务线**（黑翼/祖尔格拉布同理：前者进本靠 UBRS 流程、后者只有硬币与声望重复任务）。
+
+- **数据质量三道补丁（都写进生成器，不许回退）**：① 奖励 = 列表 ∪ 详情；② 系列 `trusted`（id 覆盖 <50% 不采信）+ 步骤数与站点自报 `total` 不等的不采信；③ 物品名两份来源兜底（白/灰物品无「拾取后绑定」行 ⇒ 物品页拿不到名字，用任务页奖励链接文本补）。
+
+
+- **抓取三层**：`sweep.js`（列表页 → `cache/sweep_10_60.json`，行含 等级/名称/地区/阵营标签/类型/经验/奖励物品）→ `sweep_details.js`（物品页：名称/品质/物品等级/DPS/速度/部位/类型/属性/图标 + 装备判定；任务详情页：`rec.series` = 站点自报「本系列第 N/M 部分」+ 步骤 id/名）→ `build_bulk.js`（→ `quest/QuestBulk.lua`）。
+- **`QuestBulk.lua` 记法（紧凑串，分隔符 `|`；生成器**先证明**任何名字都不含它，否则拒绝写出）**：
+  `q[id]="名|等级|地区|阵营A/H/空|奖励id,id"` · `i[id]="名|品质|ilvl|dps|speed|部位|类型|属性|图标名|是否装备"` · `s[n]="系列名|lo|hi|地区|档位(长度≥10=S,≥6=A,否则B)|是否开门/史诗|步骤id,id"` · `sn[id]="步骤名"`（步骤任务本身没装备奖励、不在 q 表时用）。
+- **自动任务线**：按详情页的 series 步骤 id 集合去重 → 排序 → 等级区间取已知步骤的 min/max → 阵营由成员任务的 A/H 标签推（拿不准按「共有」）→ 开门/史诗靠关键词（之门/节杖/流沙/纳克萨玛斯/黑翼/熔火/安其拉/奥妮克希亚/克尔苏加德/泰坦/奎尔塞拉/雷霆之怒…）。
+- **逻辑层**（`QuestChains.lua`）：`EVAL_QC_BULK_READY/META/QUEST/ITEM/ITEM_ROWS/SOURCES` + `EVAL_QC_SERIES_LIST/COUNT/DETAIL/FACTION`；★`EVAL_QC_ITEM_ROWS` = **全量优先、策展兜底**（`qcChainItemRows` 保留旧实现，全量缺席时界面照常可用）；★`EVAL_QC_ITEM/ITEM_NAME` 策展表查不到 → 退回全量；★`EVAL_QC_ITEM_CHAINS` 走**反向索引**（禁借道 `EVAL_QC_ITEM_ROWS`：全量行与策展行形状不同，借道＝静默 nil）；★`EVAL_QC_SEARCH` 追加一遍 **series**（`kind="series"`、键 `"s:<位次>"`），`EVAL_QC_DETAIL("s:n")` 走 `EVAL_QC_SERIES_DETAIL`（详情形状与策展链**完全一致** ⇒ 文案行/界面不分叉）。
+- **审计双层**：① **离线** `node quest/audit.js [--online]` —— A 装备（id↔名/品质/部位自洽；列表页 vs 物品页品质交叉验）· B 任务（id↔名/等级；奖励 id 必须在物品表；**装备不许孤立**）· C **双向一致**（列表页奖励 vs 任务详情页「选择一件/直接给予」，站点自己不一致也抓）· D 任务线完整性（步骤 1..M 连续、成员任务自报 total 与系列自洽）；有硬错误 `exit 1`，报告落 `cache/audit_report.json`。② **游戏内** `/eh ds 任务线 审计`（`EVAL_DS_QC_AUDIT`）——逐件对账**游戏内名字/图标**（★以游戏内为准），未缓存的按 `QP_REQ_RATE/QP_REQ_MAX` **排队补缓存**（跑第二次看自愈）。
+- **输入框无法输入（用户截图）＝ 真凶是 `EnableMouse`**：主搜索框 `eb` 有 `pcall(eb.EnableMouse, eb, true)`，弹窗 `qpEb` 当初漏了 —— 本客户端 EditBox **不显式开鼠标就收不到点击 ⇒ 拿不到焦点 ⇒ 一个字都打不进**。修法 = 照主框那条已验证配方补齐四件：`EnableMouse` + **点击即聚焦兜底按钮**（`qpEbFocus`，`OnClick → SetFocus`）+ `SetJustifyH("LEFT")`（本客户端默认居中偏右）+ 字体链三级兜底（全失败才启用回声行）+ `OnEnterPressed`/`OnEscapePressed`。判据 = `QUEST PANEL CHECK` 五条 + 组 192 ⑧k（真实点输入区 → `HasFocus` 为真 → 敲字进查询词 → 占位消失）。
+- **等级档扩到 10-60**：`QP_LV` = ALL / 10-19 / 20-29 / 30-39 / 40-49 / **50+（hi=999，因为站点在 60-69 还有带装备奖励的团本/开门任务）**；★下拉标签**由 `QP_LV` 现算**（写死四项＝加档必漏一处）；三语言新增 `DS_QP_LV_L4/L5`。
+- **判据**：`QUEST TOC CHECK`（三文件顺序 QuestData→QuestBulk→QuestChains、磁盘↔toc 双向、生成物纯数据、**任务行≥200/物品行≥300/系列≥20**、任务行恰好 4 个分隔符）· `QUEST WIRING CHECK`（全量八个接口 + 统一入口「全量优先/策展兜底」+ 反向索引 + 不借道 + plain 查找 + 物品兜底）· `QUEST PANEL CHECK`（等级档 ≥5 档且含 50+、下拉现算、来源=任务名、来源任务可搜、详情来源行挂放大镜、审计函数与命令接线）· 组 192 ⑧l/⑧m/⑧n。
+- **变异（1.75.9 新增）**：M27 审计名字对账写反 · M28 `EVAL_QC_ITEM_ROWS` 去掉全量分派 · M29 搜索丢掉 series · M30 审计图标对账不跑。
+
+### 14.2 两个助手的弹窗候选「按物品类型过滤」明细（1.74.28 · 常驻卷瘦身移出，原文照存）
+
+- ★★★**两个助手的弹窗候选按物品类型过滤**（1.74.28，用户「弹窗选的物品项目要过滤一下.不要显示武器,装备.灰色物品,草药,矿物,任务物品,材料等等非可使用的物品,验证可行性.」）：判定收在**共用件 `EVAL_IG_ITEM_KIND`**（tools/IconGrid.lua），**三级**按「便宜→贵」早停 ——
+  ① **品质**（`GetContainerItemInfo` 第 5 返回，**完全不依赖缓存**）⇒ 灰色一律剔；② **`GetItemInfo`**：★传参**先用物品链接**（`GetContainerItemLink` 给的 `|Hitem:…|h[名]|h` = 客户端的**缓存键**），nil 再退回名字；读第 5/6/8 返回 = 主类型/子类型/**装备槽**（装备槽非空 ⇒ 算护甲，比类型词更硬）；③ 缓存为 nil ⇒ **自建隐形 tooltip** `EVAL_HELP_WTT` + 读守卫 `EVAL_WTT_MAY_READ` + **`SetBagItem`**（已核在官方 API 索引里）读**类型行** —— ★★这一步会**把物品写进客户端缓存** ⇒ 下次 `GetItemInfo` 直接命中 = **自愈**（`probed` 计数会掉下来）。
+  ★**剔除表** `IG_KIND_DROP`：武器 · 护甲(装备) · 灰色 · **材料（草药/矿物/布料/皮革/附魔材料）** · 任务物品 · 容器 · 箭矢弹药 · 钥匙 · 配方图纸；★**判不出就不剔**（铁律「查不到 ≠ 没有」：宁可多显示一件，也不把真食物藏起来）+ 计入 `EVAL_IG_KIND_STATS().unknown` 如实报。
+  ★★**过滤只在「弹窗候选」这条路径开**（`EVAL_IG_SCAN_BAGS(bags, { classify = true })`）——按名字解析包格那条路（`EVAL_CH_FIND` / `EVAL_HH_FIND_FOOD`）**绝不过滤**：判错一类 → 用户已配置的物品会**静默找不到**（本项目最恨的失败型）。
+  ★★**tooltip 只读 TextLeft2 起**（**跳过 TextLeft1 = 物品名**）：名字里可能含类型词（「草药烤鱼」含「草药」）会污染判定；词表 `IG_KIND_WORDS` 按**真机实测文案**维护（本客户端 zhCN）。
+  ★**验证入口**（「验证可行性」= 一条命令）：`/eh go 消耗品探针 过滤` ｜ `/eh go 喂食探针 过滤` → 逐件打出**判定依据**（品质 / 缓存主类型·子类型·装备槽 / tooltip 读到的真实类型行 / 最终判定）+ 统计行（剔除/保留/判不出/缓存命中/未缓存/tooltip 探了几次），上限 30 行并如实报「还有 N 条未显示」；★它同时是**补词表的依据**。
+  ★**新增文件/新代码要同步的清单**（本轮 `DECL ORDER` 当场抓到）：报告函数被插到 `IG_KIND_*` **local 声明之前** → 真机上读到**全局 nil**；★凡是新函数引用文件内 local，一律确认声明在前（`DECL ORDER CHECK` 扫全部 14 个生产 .lua）。
+  判据 = 组 187（旧档 ①~⑥ + 新档 ⑦~⑩：白色**材料**/任务/容器/箭矢/钥匙/配方逐项剔、tooltip 兜底真的收到 `SetBagItem(bag,slot)`、**缓存自愈后不再探**、判不出不剔但记账、关掉 `classify` 行为不变）。

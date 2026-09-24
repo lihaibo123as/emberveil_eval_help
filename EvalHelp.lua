@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.74.30"
+local VERSION = "1.75.0"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -8284,7 +8284,23 @@ if type(SlashCmdList) == "table" then
       else
         say("数据检索模块未载入")
       end
-    elseif string.find(msg, "^ds cat ") then -- /eh ds cat herbs on|off
+    elseif msg == "ds 任务线 审计" or msg == "ds 装备审计" or msg == "ds qc audit" then
+      -- ★1.75.9 用户要求：任务完成后审计装备链接是否正确（**以游戏内信息为准**）
+      if type(EVAL_DS_QC_AUDIT) == "function" then
+        local lines = EVAL_DS_QC_AUDIT()
+        for i = 1, table.getn(lines) do EVAL_SAY(lines[i]) end
+      else
+        EVAL_SAY("审计不可用：EVAL_DS_QC_AUDIT 未定义（DataSearch 未载入？）")
+      end
+    elseif msg == "ds 任务线" or msg == "ds 装备" or msg == "ds qc" then
+    -- 任务线装备的「客户端 API 能力」探针（用户要求优先排查有无 API）
+    if type(EVAL_DS_QC_PROBE) == "function" then
+      local lines = EVAL_DS_QC_PROBE()
+      for i = 1, table.getn(lines) do EVAL_SAY(lines[i]) end
+    else
+      EVAL_SAY("探针不可用：EVAL_DS_QC_PROBE 未定义（DataSearch 未载入？）")
+    end
+  elseif string.find(msg, "^ds cat ") then -- /eh ds cat herbs on|off
       local k, v = string.match(msg, "^ds cat%s+(%S+)%s*(%S*)$")
       if type(EVAL_DS_SET_CAT) == "function" and k then
         local want = (v ~= "off" and v ~= "0" and v ~= "false")

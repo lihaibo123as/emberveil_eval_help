@@ -17254,4 +17254,643 @@ do
   EVAL_HELP_CONFIG.shProbe = nil EVAL_HELP_CONFIG.shVariantProbe = nil EVAL_HELP_CONFIG.probeEvents = nil EVAL_HELP_CONFIG.iconDump = nil
   if fails0 == TESTASSERT_FAILS then print("GROUP 190 (载入审计与存档清理): PASS") end
 end
+
+
+
+-- 1.75.8/1.75.9：种类多选（⑧j）+ 输入框聚焦（⑧k）单独成函数（主 chunk 的 200 local 配额）
+function EVAL_TEST_192_KINDS_EB()
+-- ⑧j ★1.75.8 用户要求：「装备筛选种类细分,支持种类子类型.武器子类型支持.并且支持多选.」
+--   ① 种类清单**由数据现算**（武器子类型 / 其它两份都在；每个子类型单独筛都成立）
+--   ② 多选 = 并集（比单选多、且只出勾选的种类）③ 空集 = 全部（「一个都没勾」≠「什么都不显示」）
+--   ④ 真实按钮 → 真实多选下拉（multi）→ 分组标题不可点 → 真实点行 → 列表真的按子类型过滤
+--   ⑤ 按钮文字随选择变（空 = 全部 / 单选 = 种类名）
+local kwp, kot = EVAL_QC_KIND_GROUPS()
+local klist = EVAL_QC_KIND_LIST()
+eq(table.getn(kwp) >= 2, true, "⑧j武器子类型至少两种（实际 " .. tostring(table.getn(kwp)) .. "）")
+eq(table.getn(kot) >= 1, true, "⑧j其它种类也在（实际 " .. tostring(table.getn(kot)) .. "：盾/甲类）")
+local kwBad = {}
+for i = 1, table.getn(klist) do
+  if klist[i].w then
+    local kk = klist[i].k
+    local rows = EVAL_QC_ITEM_ROWS({ kinds = { [kk] = true } })
+    local nb = 0
+    for j = 1, table.getn(rows) do
+      if (not EVAL_QC_IS_WEAPON(rows[j].it)) or EVAL_QC_ITEM_KIND(rows[j].it) ~= kk then nb = nb + 1 end
+    end
+    if nb > 0 or table.getn(rows) < 1 then table.insert(kwBad, kk .. ":" .. tostring(nb)) end
+  end
+end
+eq(table.getn(kwBad) == 0, true, "⑧j★每个武器子类型单独筛都只出该子类型（越界 " .. table.concat(kwBad, ",") .. "）")
+EVAL_QP_SET_TAB("item")
+local kA, kB = kwp[1], kwp[2]
+EVAL_QP_SET_KINDS({ [kA] = true })
+local nA = table.getn(EVAL_QP_HITS())
+EVAL_QP_SET_KINDS({ [kB] = true })
+local nB = table.getn(EVAL_QP_HITS())
+EVAL_QP_SET_KINDS({ [kA] = true, [kB] = true })
+local hAB, kABBad = EVAL_QP_HITS(), 0
+for i = 1, table.getn(hAB) do
+  local kk = EVAL_QC_ITEM_KIND(hAB[i].it)
+  if kk ~= kA and kk ~= kB then kABBad = kABBad + 1 end
+end
+eq(kABBad == 0 and table.getn(hAB) >= 1, true, "⑧j★多选并集只出勾选的 " .. tostring(kA) .. "/" .. tostring(kB) .. "（越界 " .. tostring(kABBad) .. "）")
+eq(table.getn(hAB) >= nA and table.getn(hAB) >= nB, true,
+  "⑧j★多选比任一单选更多（" .. tostring(nA) .. "+" .. tostring(nB) .. " → " .. tostring(table.getn(hAB)) .. "）")
+local kSelN = 0
+for _ in pairs(EVAL_QP_KINDS()) do kSelN = kSelN + 1 end
+eq(kSelN == 2, true, "⑧j读值口能看到两个已勾种类（实际 " .. tostring(kSelN) .. "）")
+EVAL_QP_SET_KINDS({})
+local nAll = table.getn(EVAL_QP_HITS())
+eq(nAll > table.getn(hAB), true, "⑧j★空集 = 全部（" .. tostring(nAll) .. " > " .. tostring(table.getn(hAB)) .. "）")
+eq(EVAL_QP_KIND_LABEL(), EVAL_L("DS_QP_KIND_ALL"), "⑧j按钮文字：未勾 = 全部")
+EVAL_QP_SET_KINDS({ [kA] = true })
+eq(EVAL_QP_KIND_LABEL(), kA, "⑧j按钮文字：单选 = 种类名（" .. tostring(kA) .. "）")
+-- ④ 真实入口：点按钮 → 多选下拉 → locked 分组标题不可点 → 点子类型行
+EVAL_QP_SET_KINDS({})
+local kf2Btn = EVAL_QP_TEST_F2()
+eq(kf2Btn ~= nil, true, "⑧j类型筛选按钮存在")
+local kF2On = (kf2Btn and kf2Btn.GetScript) and kf2Btn:GetScript("OnClick") or nil
+eq(type(kF2On) == "function", true, "⑧j类型筛选挂了 OnClick")
+EVAL_DD_TEST_RESET_ANCHOR()
+if type(kF2On) == "function" then kF2On() end
+eq(EVAL_DD_TEST_MULTI(), true, "⑧j★★点开的是**多选**下拉（用户要求支持多选）")
+local kMenu = EVAL_QP_KIND_MENU()
+local kHdr, kKinds = 0, 0
+for i = 1, table.getn(kMenu.items) do
+  if kMenu.locked[i] then kHdr = kHdr + 1
+  elseif kMenu.map[i] and kMenu.map[i].kind then kKinds = kKinds + 1 end
+end
+eq(kHdr == 2, true, "⑧j下拉有武器/其它两个分组标题（实际 " .. tostring(kHdr) .. "）")
+eq(kKinds == table.getn(klist), true, "⑧j下拉里种类数与数据一致（" .. tostring(kKinds) .. "/" .. tostring(table.getn(klist)) .. "）")
+local kRow1 = EVAL_DD_TEST_ROW(1)
+eq((kRow1 and kRow1.btn) ~= nil, true, "⑧j下拉第一行是真控件")
+eq((kRow1 and kRow1.btn and kRow1.btn:GetScript("OnClick")) == nil, true,
+  "⑧j★★分组标题行**不可点**（点标题不会凭空多出一个勾）")
+local kRow2Kind = (kMenu.map[2] or {}).kind
+eq(type(kRow2Kind) == "string" and kRow2Kind ~= "", true, "⑧j第二行是武器子类型（" .. tostring(kRow2Kind) .. "）")
+EVAL_DD_TEST_CLICK(2)
+eq(EVAL_QP_KINDS()[kRow2Kind] == true, true, "⑧j★真实点行 → 该种类被勾上")
+local hClick, kClickBad = EVAL_QP_HITS(), 0
+for i = 1, table.getn(hClick) do
+  if EVAL_QC_ITEM_KIND(hClick[i].it) ~= kRow2Kind then kClickBad = kClickBad + 1 end
+end
+eq(table.getn(hClick) >= 1 and kClickBad == 0, true,
+  "⑧j★点了子类型 → 列表只出该子类型（越界 " .. tostring(kClickBad) .. "）")
+local kf2Text = tostring(EVAL_QP_F2_TEXT() or "")
+eq(string.find(tostring(kf2Text), tostring(kRow2Kind), 1, true) ~= nil, true,
+  "⑧j★按钮文字写的是已勾子类型（" .. tostring(kf2Text) .. "）")
+-- 末行 = 一键清空（真实点它 → 回到「全部」）
+local kClearIdx = table.getn(kMenu.items)
+eq((kMenu.map[kClearIdx] or {}).clear == true, true, "⑧j末行是「全部」清空行（多选要有出口）")
+EVAL_DD_TEST_CLICK(kClearIdx)
+local kClearedN = 0
+for _ in pairs(EVAL_QP_KINDS()) do kClearedN = kClearedN + 1 end
+eq(kClearedN == 0, true, "⑧j★点「全部」→ 勾选清空（实际剩 " .. tostring(kClearedN) .. "）")
+eq(table.getn(EVAL_QP_HITS()) == nAll, true, "⑧j★清空后回到全部（" .. tostring(table.getn(EVAL_QP_HITS())) .. " = " .. tostring(nAll) .. "）")
+eq(EVAL_QP_KIND_LABEL(), EVAL_L("DS_QP_KIND_ALL"), "⑧j★清空后按钮文字回到「全部」")
+EVAL_DD_HIDE()
+EVAL_QP_SET_KINDS({})
+EVAL_QP_SET_TAB("item")
+EVAL_QP_SET_QUERY("")
+
+-- ⑧k ★1.75.9 用户实测「图片内的输入框无法输入」——输入框必须能拿到焦点（照主搜索框配方）
+local kEbBtn = EVAL_QP_TEST_EBBTN()
+local kEb = EVAL_QP_TEST_EB()
+eq(kEb ~= nil, true, "⑧k搜索输入框存在")
+eq(kEbBtn ~= nil, true, "⑧k★★输入框上有「点击即聚焦」兜底按钮（主搜索框同款）")
+local kEbOn = (kEbBtn and kEbBtn.GetScript) and kEbBtn:GetScript("OnClick") or nil
+eq(type(kEbOn) == "function", true, "⑧k★★聚焦按钮挂了 OnClick（漏挂＝点了没反应）")
+pcall(kEb.ClearFocus, kEb)
+eq(EVAL_QP_EB_FOCUSED(), false, "⑧k前置：先清焦点")
+if type(kEbOn) == "function" then kEbOn() end
+eq(EVAL_QP_EB_FOCUSED(), true, "⑧k★★真实点输入区 → EditBox 真的拿到焦点（打不了字的根因就是这一步拿不到）")
+eq(type(kEb:GetScript("OnEnterPressed")) == "function", true, "⑧k回车有处理（回车的聚焦状态要收掉）")
+eq(type(kEb:GetScript("OnEscapePressed")) == "function", true, "⑧k Esc 有处理（能退出输入）")
+-- 打进字：文字进查询、占位消失、列表按它过滤
+EVAL_QP_SET_QUERY("")
+pcall(kEb.SetText, kEb, "法杖")
+eq(EVAL_QP_QUERY(), "法杖", "⑧k★真敲进输入框 → 查询词跟着走（实际 " .. tostring(EVAL_QP_QUERY()) .. "）")
+eq(EVAL_QP_PH_SHOWN(), false, "⑧k★有字时占位提示隐藏")
+pcall(kEb.SetText, kEb, "")
+EVAL_QP_SET_QUERY("")
+
+end
+
+-- 1.75.9：等级档覆盖 40-49 / 50+（⑧l）单独成函数
+function EVAL_TEST_192_BANDS()
+-- ★1.75.9 用户要求「经典任务线衍生到 30-60 范围」：等级档必须真的覆盖到 40-49 与 50+
+local kBand = { { "L4", 40, 49 }, { "L5", 50, 999 } }
+local kBandBad = {}
+for bi = 1, 2 do
+  EVAL_QP_SET_FILTER(kBand[bi][1], "ALL")
+  local hb = EVAL_QP_HITS()
+  local bad = 0
+  for i = 1, table.getn(hb) do
+    local lo = hb[i].lo or 0
+    if lo < kBand[bi][2] or lo > kBand[bi][3] then bad = bad + 1 end
+  end
+  if bad > 0 or table.getn(hb) < 1 then
+    table.insert(kBandBad, kBand[bi][1] .. "(n=" .. tostring(table.getn(hb)) .. ",bad=" .. tostring(bad) .. ",q=" .. tostring(EVAL_QP_QUERY()) .. ",tab=" .. tostring(EVAL_QP_TAB()) .. ")")
+  end
+end
+eq(table.getn(kBandBad) == 0, true, "⑧l★★等级档覆盖到 40-49 / 50+（用户要求 30-60 段都有货；异常 " .. table.concat(kBandBad, ",") .. "）")
+EVAL_QP_SET_FILTER("ALL", "ALL")
+EVAL_QP_SET_FILTER("ALL", "WP")
+local h5, kBadKind = EVAL_QP_HITS(), 0
+for i = 1, table.getn(h5) do
+  if not EVAL_QC_IS_WEAPON(h5[i].it) then kBadKind = kBadKind + 1 end
+end
+eq(kBadKind == 0 and table.getn(h5) >= 5, true, "⑧「仅武器」只留武器（越界 " .. tostring(kBadKind) .. "）")
+EVAL_QP_SET_FILTER("ALL", "ALL")
+EVAL_QP_SET_QUERY("")
+
+end
+
+-- ★1.75.9：⑧m/⑧n（全量数据 / 自动任务线 / 装备审计）搬进独立函数 ——
+--   原因：**Lua 5.1 每个函数上限 200 个 local**，组 192 本体已经贴顶（实测 "too many local variables"），
+--   新断言必须自带函数作用域；断言计数走全局 TESTASSERT_FAILS，分组 PASS/FAIL 判定不受影响。
+function EVAL_TEST_192_BULK()
+-- ⑧m ★1.75.9 用户要求：「任务奖励只要有装备/武器的都可以进行数据采集，单任务也可以加入采集」+
+  --      「经典任务线衍生到 30-60 范围，包含大型任务线、各种开门任务线」
+  --   ★本段与 ⑧n 一起放进 do…end：**Lua 5.1 每函数上限 200 个 local**，本组已经贴顶（实测踩到
+  --     "too many local variables (limit is 200)"）—— 新加的断言必须自己开作用域，别往本组累加。
+  eq(EVAL_QC_BULK_READY(), true, "⑧m★★全量数据已载入（QuestBulk.lua 在 toc 里）")
+  local km = EVAL_QC_BULK_META()
+  eq(type(km) == "table" and (km.quests or 0) >= 200, true, "⑧m全量任务 ≥200（实际 " .. tostring(km and km.quests) .. "）")
+  eq(type(km) == "table" and (km.equip or 0) >= 300, true, "⑧m全量装备 ≥300（实际 " .. tostring(km and km.equip) .. "）")
+  local kAllRows = EVAL_QC_ITEM_ROWS(nil)
+  eq(table.getn(kAllRows) >= 300, true, "⑧m★★装备行 ≥300 件（实际 " .. tostring(table.getn(kAllRows)) .. "）")
+  local kOrphan, kNoLv = 0, 0
+  for i = 1, table.getn(kAllRows) do
+    if table.getn(kAllRows[i].quests or {}) == 0 then kOrphan = kOrphan + 1 end
+    if not (type(kAllRows[i].lo) == "number" and kAllRows[i].lo > 0) then kNoLv = kNoLv + 1 end
+  end
+  eq(kOrphan == 0, true, "⑧m★★每件装备都有**来源任务**（孤立 " .. tostring(kOrphan) .. " 件 —— 单任务来源也算）")
+  eq(kNoLv == 0, true, "⑧m每件装备带可获得等级（缺 " .. tostring(kNoLv) .. " 件）")
+  local kQ1 = (kAllRows[1].quests or {})[1]
+  eq(kQ1 ~= nil and type(kQ1.n) == "string" and kQ1.n ~= "", true, "⑧m来源任务带名字（" .. tostring(kQ1 and kQ1.n) .. "）")
+  EVAL_QP_SHOW()
+  EVAL_QP_SET_TAB("item")
+  EVAL_QP_SET_QUERY(tostring(kQ1.n))
+  local kNameHits = EVAL_QP_HITS()
+  eq(table.getn(kNameHits) >= 1, true, "⑧m★★按**任务名**能搜到它给的装备（" .. tostring(kQ1.n) .. " → " .. tostring(table.getn(kNameHits)) .. " 件）")
+  EVAL_QP_SET_QUERY("")
+  -- 自动任务线（站点「本系列第 N/M 部分」拼出）
+  local kSer = EVAL_QC_SERIES_LIST()
+  eq(table.getn(kSer) >= 20, true, "⑧m★自动任务线 ≥20 条（实际 " .. tostring(table.getn(kSer)) .. "）")
+  local kBig, kOpen, kSerBad = 0, 0, 0
+  for i = 1, table.getn(kSer) do
+    local s = kSer[i]
+    if table.getn(s.steps) >= 10 then kBig = kBig + 1 end
+    if s.open then kOpen = kOpen + 1 end
+    local seen = {}
+    for j = 1, table.getn(s.steps) do
+      local stp = s.steps[j]
+      if type(stp.n) ~= "string" or stp.n == "" then kSerBad = kSerBad + 1 end
+      if seen[stp.id] then kSerBad = kSerBad + 1 end
+      seen[stp.id] = true
+    end
+    if (s.lo or 0) > (s.hi or 0) or (s.hi or 0) <= 0 then kSerBad = kSerBad + 1 end
+  end
+  eq(kBig >= 1, true, "⑧m★★大型任务线（≥10 步）在数据里（实际 " .. tostring(kBig) .. " 条）")
+  eq(kOpen >= 1, true, "⑧m★★开门/史诗任务线在数据里（实际 " .. tostring(kOpen) .. " 条）")
+  eq(kSerBad == 0, true, "⑧m★任务线自洽：步骤不重复、都有名字、等级区间不倒挂（异常 " .. tostring(kSerBad) .. "）")
+  local kd = EVAL_QC_DETAIL("s:1")
+  eq(type(kd) == "table" and kd.c and kd.c.n ~= "" and table.getn(kd.steps) >= 2, true, "⑧m★自动任务线能开详情（点进去不空）")
+  local kdLines = EVAL_QC_LINES("s:1")
+  eq(type(kdLines) == "table" and table.getn(kdLines) >= 3, true, "⑧m★自动任务线文案行可用（标题/奖励/步骤）")
+  -- 任务线视图里能**搜到**自动任务线（不是只躺在数据里）
+  EVAL_QP_SET_TAB("chain")
+  EVAL_QP_SET_QUERY(tostring(kSer[1].n))
+  local kSerHits = EVAL_QP_HITS()
+  eq(table.getn(kSerHits) >= 1, true, "⑧m★★任务线视图能搜到自动任务线（" .. tostring(kSer[1].n) .. " → " .. tostring(table.getn(kSerHits)) .. " 条）")
+  EVAL_QP_SET_QUERY("")
+
+  -- ⑧n ★1.75.9 审计：装备链接以**游戏内信息为准**（游戏内名字/图标 vs 数据）
+  local kRows8 = EVAL_QC_ITEM_ROWS(nil)
+  local kIdA, kNameA = kRows8[1].id, kRows8[1].it.n
+  local kIdB = kRows8[2].id
+  TEST.itemInfo = TEST.itemInfo or {}
+  TEST.itemInfo[kIdA] = { name = kNameA, q = 2, t = "护甲", st = "布甲" }
+  TEST.itemInfo[kIdB] = { name = "肯定不对的名字", q = 2, t = "护甲", st = "布甲" }
+  local ka2, kBadName2, kBadIcon2 = EVAL_DS_QC_AUDIT(2, true)
+  eq(type(ka2) == "table" and ka2.total == 2, true, "⑧n★审计跑满 2 件（实际 " .. tostring(ka2 and ka2.total) .. "）")
+  eq(ka2.nameOK >= 1, true, "⑧n★★游戏内名字与数据一致 → 记 nameOK（实际 " .. tostring(ka2.nameOK) .. "）")
+  eq(ka2.nameBad >= 1, true, "⑧n★★游戏内名字与数据不符 → 记 nameBad（实际 " .. tostring(ka2.nameBad) .. "）")
+  eq(type(kBadName2) == "table" and table.getn(kBadName2) >= 1, true, "⑧n★不符条目留证据（" .. tostring(kBadName2 and kBadName2[1]) .. "）")
+  eq(ka2.iconOK + ka2.iconBad >= 1, true, "⑧n★图标也对账了（一致 " .. tostring(ka2.iconOK) .. " · 不一致 " .. tostring(ka2.iconBad) .. "）")
+  TEST.itemInfo[kIdA] = nil TEST.itemInfo[kIdB] = nil
+  local kaLines = EVAL_DS_QC_AUDIT(4)
+  eq(type(kaLines) == "table" and string.find(tostring(kaLines[1]), "任务线审计", 1, true) ~= nil, true, "⑧n★审计有可读报告（首行标题）")
+  eq(string.find(tostring(kaLines[2] or ""), "名称对账", 1, true) ~= nil, true, "⑧n★报告里有名称/图标对账行")
+
+
+end
+
+-- ===== 组 192：任务线推荐弹窗（1.75.1 · 装备优先 + 反查任务线 + 直连数据检索）=====
+-- 全部走真实入口（按钮 OnClick / EVAL_QP_* / EVAL_DS_*）；查不到一律要求如实（不切视图）。
+do
+  local fails0 = TESTASSERT_FAILS
+  eq(EVAL_QP_IS_SHOWN(), false, "①默认关闭")
+  local qb = EVAL_QP_TEST_BTN()
+  eq(qb ~= nil, true, "②主按钮存在（地图标注右侧）")
+  local onC = (qb and qb.GetScript) and qb:GetScript("OnClick") or nil
+  eq(type(onC) == "function", true, "②按钮挂了 OnClick")
+  if type(onC) == "function" then onC() end
+  eq(EVAL_QP_IS_SHOWN(), true, "②点按钮打开")
+  eq(EVAL_QP_MODE(), "list", "②打开即列表")
+  eq(EVAL_QP_TAB(), "item", "②默认「装备」视图（练级要装备是主场景）")
+
+  -- ③ 装备优先：以「可获得等级」排序，行必须带物品 ID（可直连、可进详情）
+  local h = EVAL_QP_HITS()
+  eq(table.getn(h) >= 30, true, "③装备列表 >= 30 件（实际 " .. tostring(table.getn(h)) .. "）")
+  local r1 = EVAL_QP_TEST_ROW(1)
+  eq(type(r1 and r1.item) == "number", true, "③首行带物品 ID")
+  local t1 = (r1 and r1.text and r1.text.GetText) and select(1, r1.text:GetText()) or ""
+  eq(string.find(t1, "Lv", 1, true) == 1, true, "③首行以等级开头（" .. tostring(t1) .. "）")
+  local kSorted = true
+  for i = 2, math.min(6, table.getn(h)) do
+    if (h[i - 1].lo or 0) > (h[i].lo or 0) then kSorted = false end
+  end
+  eq(kSorted, true, "③按可获得等级不降序（前 6 条）")
+
+  -- ④ 按装备名检索
+  EVAL_QP_SET_QUERY("西部荒野法杖")
+  local h2 = EVAL_QP_HITS()
+  eq(table.getn(h2) >= 1 and h2[1].id == 2042, true, "④按装备名搜到（西部荒野法杖 #2042）")
+
+  -- ⑤ 装备详情 = 属性 + **来源任务线** + 该链步骤（用户核心需求：由装备反查要做哪些任务）
+  EVAL_QP_ITEM_DETAIL(2042)
+  eq(EVAL_QP_MODE(), "detail", "⑤点装备进详情")
+  eq(EVAL_QP_ITEM_ID(), 2042, "⑤详情记住当前装备")
+  -- ★1.75.3 结构升级：装备名 → **大标题**、属性 → **副标题**、步骤/来源仍在正文行池
+  local kTitle = EVAL_QP_TEST_DETTITLE()
+  local kT5 = (kTitle and kTitle.GetText) and select(1, kTitle:GetText()) or ""
+  eq(kT5, "西部荒野法杖", "⑤大标题 = 装备名（" .. tostring(kT5) .. "）")
+  local kSub = EVAL_QP_TEST_DETSUB()
+  local kS5 = (kSub and kSub.GetText) and select(1, kSub:GetText()) or ""
+  eq(type(kS5) == "string" and string.find(kS5, "DPS", 1, true) ~= nil, true, "⑤副标题含属性（" .. tostring(kS5) .. "）")
+  local kSrc, kStep, kDps = false, false, kS5 ~= nil and string.find(kS5, "DPS", 1, true) ~= nil
+  for i = 1, 20 do
+    local fs = EVAL_QP_TEST_DET(i)
+    local s = (fs and fs.GetText) and select(1, fs:GetText()) or ""
+    if type(s) == "string" then
+      if string.find(s, "1.", 1, true) == 1 then kStep = true end
+      if string.find(s, "14-22", 1, true) then kSrc = true end
+    end
+  end
+  eq(kDps, true, "⑤详情有装备属性（副标题 DPS）")
+  eq(kSrc, true, "⑤详情列出来源任务线（含等级区间 14-22）")
+  eq(kStep, true, "⑤详情列出该链完整步骤（1. 开头）")
+
+  -- ⑥ 装备直连数据检索（复用抓宠帮手放大镜那条已验证入口）
+  local gb = EVAL_QP_TEST_GODS()
+  eq(gb ~= nil, true, "⑥直连按钮存在")
+  local gOn = (gb and gb.GetScript) and gb:GetScript("OnClick") or nil
+  eq(type(gOn) == "function", true, "⑥直连按钮挂了 OnClick")
+  if type(gOn) == "function" then gOn() end
+  eq(EVAL_QP_IS_SHOWN(), false, "⑥直连后弹窗收起（让位给数据检索）")
+  eq(EVAL_DS_LAST_QUERY(), "西部荒野法杖", "⑥数据检索真的收到了这件装备")
+
+  -- ⑦ 「任务线」视图（原有能力保留）
+  EVAL_QP_SHOW()
+  EVAL_QP_SET_TAB("chain")
+  eq(EVAL_QP_TAB(), "chain", "⑦切到任务线视图")
+  local h3 = EVAL_QP_HITS()
+  eq(table.getn(h3) >= 20, true, "⑦任务线列表 >= 20（" .. tostring(table.getn(h3)) .. "）")
+  local r3 = EVAL_QP_TEST_ROW(1)
+  local t3 = (r3 and r3.text and r3.text.GetText) and select(1, r3.text:GetText()) or ""
+  eq(string.find(t3, "[S]", 1, true) ~= nil, true, "⑦任务线首行 S 档（" .. tostring(t3) .. "）")
+  eq(type(r3 and r3.key) == "string", true, "⑦任务线行带链键")
+  EVAL_QP_DETAIL(r3.key)
+  eq(EVAL_QP_MODE(), "detail", "⑦点任务线进详情")
+  EVAL_QP_LIST()
+  eq(EVAL_QP_MODE(), "list", "⑦返回列表")
+
+  -- ⑧ 翻页与筛选（装备视图：等级档 / 仅武器）
+  -- ★行数自 1.75.3 起**按窗口高度现算**（铺满）⇒ 旧的「9 行/页」字面夹具反转成动态值
+  local kRows = select(1, EVAL_QP_ROWS())
+  EVAL_QP_PAGE(1)
+  eq(EVAL_QP_OFF(), kRows, "⑧下一页 off=一页行数（动态 " .. tostring(kRows) .. " 行/页）")
+  EVAL_QP_PAGE(-99)
+  eq(EVAL_QP_OFF(), 0, "⑧上页夹在 0")
+  EVAL_QP_SET_TAB("item")
+  EVAL_QP_SET_FILTER("L3", "ALL")
+  local h4, kBad = EVAL_QP_HITS(), 0
+  for i = 1, table.getn(h4) do
+    local lo = h4[i].lo or 0
+    if lo < 30 or lo > 39 then kBad = kBad + 1 end
+  end
+  eq(kBad == 0 and table.getn(h4) >= 1, true, "⑧等级档 30-39 只留该区间（越界 " .. tostring(kBad) .. "）")
+  EVAL_TEST_192_BANDS()
+
+  -- ⑧b ★阵营**严格三分类**（用户要求：联盟 / 部落 / 共有）——选联盟就只出联盟，不再把「共有」并进来
+  EVAL_QP_SET_TAB("chain")
+  local kFacBad = {}
+  for fi = 1, 3 do
+    local code = ({ "A", "H", "B" })[fi]
+    EVAL_QP_SET_FILTER("ALL", code)
+    local hf = EVAL_QP_HITS()
+    local bad = 0
+    for i = 1, table.getn(hf) do
+      local f = (hf[i].c or {}).f
+      if f ~= code then bad = bad + 1 end
+    end
+    if bad > 0 then table.insert(kFacBad, code .. ":" .. tostring(bad)) end
+    eq(table.getn(hf) >= 1, true, "⑧b阵营「" .. code .. "」有结果（" .. tostring(table.getn(hf)) .. " 条）")
+  end
+  eq(table.getn(kFacBad) == 0, true, "⑧b阵营严格三分类（越界 " .. table.concat(kFacBad, ",") .. "）")
+  EVAL_QP_SET_FILTER("ALL", "ALL")
+
+  -- ⑧c 装备视图也吃阵营筛选
+  -- ★1.75.9：装备来源改成**全量任务**（单任务也算）⇒ 阵营判据跟着换成「来源任务」那一侧：
+  --   来源里有联盟任务、或来源没标阵营（站点没标 = 不作为限定，宁可多显示）都算通过。
+  EVAL_QP_SET_TAB("item")
+  EVAL_QP_SET_FILTER("ALL", "ALL", "A") -- 装备视图三个筛选：等级 / 类型 / 阵营
+  local hi, kBadItemFac = EVAL_QP_HITS(), 0
+  for i = 1, table.getn(hi) do
+    local okFac = false
+    local sq = hi[i].quests or {}
+    for j = 1, table.getn(sq) do
+      if sq[j].f == "A" or sq[j].f == "" then okFac = true end
+    end
+    if table.getn(sq) == 0 then okFac = true end -- 全量数据缺席（降级到策展链）时不误杀
+    if not okFac then kBadItemFac = kBadItemFac + 1 end
+  end
+  eq(kBadItemFac == 0 and table.getn(hi) >= 1, true, "⑧c装备按阵营筛（越界 " .. tostring(kBadItemFac) .. "）")
+  EVAL_QP_SET_FILTER("ALL", "ALL", "ALL") -- ★三个筛选一起重置：两参写法会把阵营留在 "A"（本组实测踩到）
+
+
+  EVAL_TEST_192_KINDS_EB()
+
+  -- ⑧d ★任务节点放大镜：按**任务名**（不是链名）直达数据检索
+  EVAL_QP_SET_TAB("chain")
+  EVAL_QP_SET_QUERY("尖牙德鲁伊")
+  local hz = EVAL_QP_HITS()
+  eq(table.getn(hz) >= 1, true, "⑧d找到目标链（尖牙德鲁伊）")
+  EVAL_QP_DETAIL(hz[1].c.k)
+  local kZoomWord, kZoomBtn = nil, nil
+  for i = 1, 12 do
+    local w = EVAL_QP_ZOOM_WORD(i)
+    if type(w) == "string" and w ~= "" and w ~= hz[1].c.n then kZoomWord, kZoomBtn = w, EVAL_QP_TEST_ZOOM(i) end
+  end
+  eq(type(kZoomWord) == "string", true, "⑧d步骤行有放大镜且词是**任务名**（" .. tostring(kZoomWord) .. "）")
+  eq(kZoomBtn ~= nil, true, "⑧d放大镜按钮存在")
+  -- ★只查「存在」会让「把它 Hide 掉」这种变异逃逸（M9 实测逃逸）⇒ 必须查**真的显示**
+  eq((kZoomBtn and kZoomBtn.IsShown and kZoomBtn:IsShown()) and true or false, true, "⑧d放大镜真的显示出来")
+  local kZ0 = EVAL_QP_TEST_ZOOM(1)
+  eq((kZ0 and kZ0.IsShown and kZ0:IsShown()) and true or false, false, "⑧d非步骤行不显示放大镜（反向哨兵）")
+  eq(EVAL_QP_ZOOM_WORD(1), nil, "⑧d非步骤行没有跳转词")
+  local zOn = (kZoomBtn and kZoomBtn.GetScript) and kZoomBtn:GetScript("OnClick") or nil
+  eq(type(zOn) == "function", true, "⑧d放大镜挂了 OnClick")
+  if type(zOn) == "function" then zOn() end
+  eq(EVAL_DS_LAST_QUERY(), kZoomWord, "⑧d数据检索收到的是任务名（不是链名）")
+  -- ★需求反转旧判据（1.75.3 用户：「调用数据检索对应任务，但当前任务线窗口**不要关闭**」）
+  eq(EVAL_QP_IS_SHOWN(), true, "⑧d点完放大镜**弹窗不关**（旧判据要求关窗，已按用户新要求反转）")
+  EVAL_QP_SHOW()
+  EVAL_QP_SET_QUERY("")
+
+  -- ⑧e ★客户端 API 能力探针（用户要求「优先排查有没有 API 接口获取装备信息」）
+  local probe = EVAL_DS_QC_PROBE({ 2042 })
+  eq(type(probe) == "table" and table.getn(probe) >= 2, true, "⑧e API 探针有输出（" .. tostring(probe and table.getn(probe) or 0) .. " 行）")
+  eq(type(EVAL_QP_ITEM_INFO), "function", true, "⑧e 装备信息读值口存在（走 GetItemInfo）")
+
+  -- ⑧f ★图标只认**游戏内真实路径**：客户端给了才画，没给就不画（不许自定义/推断图标）
+  local kIco = select(2, EVAL_QP_ITEM_INFO(2042))
+  eq(kIco == nil or (type(kIco) == "string" and string.find(kIco, "nterface", 1, true) ~= nil), true,
+     "⑧f 图标要么 nil 要么是游戏内路径（实际 " .. tostring(kIco) .. "）")
+
+  -- ⑧g ★滚动区**铺满窗口**（用户 1.75.3）：纯函数字面夹具 + 真几何
+  eq(EVAL_QP_ROWS_FOR(386, -58, 19, 32), 15, "⑧g 行数纯函数（386 高 → 15 行，字面夹具）")
+  eq(EVAL_QP_ROWS_FOR(430, -58, 19, 32), 17, "⑧g 行数纯函数（430 高 → 17 行）")
+  eq(EVAL_QP_ROWS_FOR(200, -58, 19, 32), 6, "⑧g 窗口太矮时兜底 6 行（不许出现 0/负数）")
+  local kG = EVAL_QP_GEOM()
+  eq(type(kG) == "table" and kG.rows >= 12, true, "⑧g 列表行数够多（实际 " .. tostring(kG and kG.rows) .. "）")
+  eq(kG and kG.detRows >= 10, true, "⑧g 详情行数够（" .. tostring(kG and kG.detRows) .. "）")
+  eq(kG and (kG.pageY < kG.listTop + kG.rows * kG.rowH) or false, true, "⑧g 分页行在列表下方（不重叠）")
+  eq(type(EVAL_QP_TEST_DETICON()) ~= "nil", true, "⑧g 详情大图标控件存在")
+  -- ⑧i ★1.75.6：详情标题与副标题**不许重叠**（用户截图「样式有点重叠」）
+  --   桩不支持 GetTop/GetBottom 时**如实降级**（几何重叠由 CHECK 的锚点写法静态守），绝不假红
+  do
+    local kT, kS = EVAL_QP_TEST_DETTITLE(), EVAL_QP_TEST_DETSUB()
+    local okT, tTop = pcall(kT.GetTop, kT)
+    local okS, sTop = pcall(kS.GetTop, kS)
+    if okT and okS and type(tTop) == "number" and type(sTop) == "number" then
+      eq(sTop < tTop, true, "⑧i 副标题在标题下方（" .. tostring(sTop) .. " < " .. tostring(tTop) .. "）")
+    else
+      eq(true, true, "⑧i 桩不支持 GetTop ⇒ 几何重叠改由 CHECK 静态守（锚点写法）")
+    end
+  end
+
+  -- ⑧h ★1.75.4（用户三条）：翻页=文字按钮且走真实 OnClick · 焦点离开隐藏装备信息 ·
+  --     详情大图标获取焦点显示装备信息 · 首次打开按视图显隐（旧实现首次打开会露着详情控件）
+  local kPrev, kNext = EVAL_QP_TEST_NAV()
+  eq(kPrev ~= nil and kNext ~= nil, true, "⑧h 底部有 [上一页][下一页] 两个按钮")
+  local kpText = (kPrev and kPrev.text and kPrev.text.GetText) and select(1, kPrev.text:GetText()) or ""
+  eq(type(kpText) == "string" and string.len(kpText) > 0, true, "⑧h 翻页是**文字**按钮（" .. tostring(kpText) .. "）")
+  eq(string.find(tostring(kpText), "^", 1, true), nil, "⑧h 翻页不再是图标字符（旧实现是 ^ / v）")
+  EVAL_QP_SET_TAB("item")
+  EVAL_QP_PAGE(0)
+  local kOff0 = EVAL_QP_OFF()
+  local kOnNext = (kNext and kNext.btn and kNext.btn.GetScript) and kNext.btn:GetScript("OnClick") or nil
+  eq(type(kOnNext) == "function", true, "⑧h 下一页挂了 OnClick")
+  if type(kOnNext) == "function" then kOnNext() end
+  eq(EVAL_QP_OFF() > kOff0, true, "⑧h 真实点下一页 → 页码前进（" .. tostring(kOff0) .. " → " .. tostring(EVAL_QP_OFF()) .. "）")
+  local kOnPrev = (kPrev and kPrev.btn and kPrev.btn.GetScript) and kPrev.btn:GetScript("OnClick") or nil
+  if type(kOnPrev) == "function" then kOnPrev() end
+  eq(EVAL_QP_OFF(), 0, "⑧h 真实点上一页 → 回到第 1 页")
+  -- 详情大图标：获取焦点显示 / 离开隐藏（读真控件脚本）
+  EVAL_QP_ITEM_DETAIL(2042)
+  local kIb = EVAL_QP_TEST_ICONBTN()
+  eq(kIb ~= nil, true, "⑧h 详情大图标有可悬停控件")
+  local kEnter = (kIb and kIb.GetScript) and kIb:GetScript("OnEnter") or nil
+  local kLeave = (kIb and kIb.GetScript) and kIb:GetScript("OnLeave") or nil
+  eq(type(kEnter) == "function" and type(kLeave) == "function", true, "⑧h 大图标挂了 Enter/Leave（获取焦点显示 · 离开隐藏）")
+  local kRow = EVAL_QP_TEST_ROW(1)
+  local kRowLeave = (kRow and kRow.btn and kRow.btn.GetScript) and kRow.btn:GetScript("OnLeave") or nil
+  eq(type(kRowLeave) == "function", true, "⑧h 列表行挂了 OnLeave（焦点离开）")
+  -- 首次打开按视图显隐（旧 bug：EVAL_QP_SHOW 从不调 qpShowView ⇒ 详情专用控件在列表视图里露着）
+  -- ★这里验的是**性质**「显隐必须与当前视图一致」，不是「重开应回列表」（那是我臆测，保持上次视图才对）
+  -- ★可见性判据只能拿**可交互控件**验：图标纹理的内容取决于客户端缓存（桩里没有 ⇒ 本来就该不画），
+  --   拿「图标有没有内容」当可见性判据必然误判（本轮实测踩到）。
+  local kDetBtn = EVAL_QP_TEST_ICONBTN()
+  eq(kDetBtn ~= nil, true, "⑧h 详情大图标挂着可交互控件")
+  EVAL_QP_HIDE()
+  EVAL_QP_SHOW()
+  local kMode = EVAL_QP_MODE()
+  local kShownReopen = (kDetBtn and kDetBtn.IsShown and kDetBtn:IsShown()) and true or false
+  eq(kShownReopen == (kMode == "detail"), true,
+     "⑧h 重开后显隐与视图一致（mode=" .. tostring(kMode) .. " · 控件显示=" .. tostring(kShownReopen) .. "）")
+  EVAL_QP_LIST()
+  eq(EVAL_QP_MODE(), "list", "⑧h 切回列表视图")
+  eq((kDetBtn and kDetBtn.IsShown and kDetBtn:IsShown()) and true or false, false,
+     "⑧h 列表视图下详情专用控件必须隐藏（旧实现首次打开会露着）")
+  -- ★1.75.5（用户截图「底部按钮不见了」）：翻页按钮**两个视图都必须可见**
+  --   旧实现把它塞进两份互斥清单 ⇒ 被后处理的那份 Hide 掉、列表视图里整个消失。
+  eq(EVAL_QP_TEST_NAV_SHOWN(), true, "⑧h 列表视图下 [上一页][下一页] 必须可见（1.75.5 事故的反向哨兵）")
+  EVAL_QP_ITEM_DETAIL(2042)
+  eq(EVAL_QP_MODE(), "detail", "⑧h 进详情视图")
+  eq(EVAL_QP_TEST_NAV_SHOWN(), true, "⑧h 详情视图下翻页按钮也在（同位置，避免跳位）")
+  -- ★1.75.7 用户要求：**返回放在下一页右边**，三个按钮整体左对齐（读真控件 x）
+  do
+    local kBack = EVAL_QP_TEST_BACK()
+    local okU, ux = pcall(kPrev.btn.GetLeft, kPrev.btn)
+    local okN, nx = pcall(kNext.btn.GetLeft, kNext.btn)
+    local okB, bx = kBack and pcall(kBack.GetLeft, kBack) or false, nil
+    if kBack and okU and okN and type(ux) == "number" and type(nx) == "number" then
+      eq(nx > ux, true, "⑧h [下页] 在 [上页] 右边（" .. tostring(nx) .. " > " .. tostring(ux) .. "）")
+      local okB2, bx2 = pcall(kBack.GetLeft, kBack)
+      if okB2 and type(bx2) == "number" then
+        eq(bx2 > nx, true, "⑧h [返回] 在 [下页] 右边（" .. tostring(bx2) .. " > " .. tostring(nx) .. "）")
+      else
+        eq(true, true, "⑧h 桩不返回 GetLeft ⇒ 位置由 CHECK 的常量表达式守")
+      end
+    else
+      eq(true, true, "⑧h 桩不返回 GetLeft ⇒ 位置由 CHECK 的常量表达式守")
+    end
+  end
+  EVAL_QP_LIST()
+
+  EVAL_TEST_192_BULK()
+
+  -- ⑨ 诚实失败 + 关闭
+  EVAL_QP_LIST()
+  EVAL_QP_ITEM_DETAIL(99999999)
+  eq(EVAL_QP_MODE(), "list", "⑨不存在的装备不切视图（如实失败）")
+  EVAL_QP_DETAIL("no-such-chain")
+  eq(EVAL_QP_MODE(), "list", "⑨不存在的任务线不切视图")
+  EVAL_QP_HIDE()
+  eq(EVAL_QP_IS_SHOWN(), false, "⑨能关闭")
+  if fails0 == TESTASSERT_FAILS then print("GROUP 192 (任务线推荐弹窗): PASS") end
+end
+
+-- ===== 组 191：任务线检索（1.75.0 · quest/ 独立目录）=====
+-- 数据自带 + 只在「数据检索」里用；本组全部走**真实入口**（EVAL_QC_* / EVAL_DS_SEARCH / EVAL_DS_DETAIL），
+-- 不直接翻 EVAL_QC_CHAINS 的内部字段自证；查不到一律要求如实（空表 / nil），不许瞎猜。
+do
+  local fails0 = TESTASSERT_FAILS
+  -- ① 数据可用 + 单一来源
+  eq(EVAL_QC_READY(), true, "①数据可用（QuestData 已载入）")
+  eq(EVAL_QC_COUNT() >= 20, true, "①链数够（实际 " .. tostring(EVAL_QC_COUNT()) .. "）")
+  eq(select(1, EVAL_QC_SOURCE()), "database.emberveil.org", "①数据来源单一（database.emberveil.org）")
+
+  -- ② 数据完整性：逐条链查字段齐 + 每个任务/物品都能在表里查到（全部查，不抽样）
+  local kBadChain, kBadQuest, kBadItem, kNoReward, kNoStep = {}, 0, 0, 0, 0
+  local kList = EVAL_QC_LIST(nil)
+  for i = 1, table.getn(kList) do
+    local c = kList[i]
+    if type(c.k) ~= "string" or type(c.n) ~= "string" or c.n == ""
+      or type(c.f) ~= "string" or type(c.t) ~= "string" or type(c.z) ~= "string" or c.z == "" then
+      table.insert(kBadChain, tostring(i))
+    end
+    local qs, rw = c.qs or {}, c.rw or {}
+    if table.getn(qs) == 0 then kNoStep = kNoStep + 1 end
+    if table.getn(rw) == 0 then kNoReward = kNoReward + 1 end
+    for j = 1, table.getn(qs) do
+      if EVAL_QC_QUEST_NAME(qs[j]) == nil then kBadQuest = kBadQuest + 1 end
+    end
+    for j = 1, table.getn(rw) do
+      if EVAL_QC_ITEM_NAME(rw[j]) == nil then kBadItem = kBadItem + 1 end
+    end
+  end
+  eq(table.getn(kBadChain), 0, "②每条链字段齐全（缺: " .. table.concat(kBadChain, ",") .. "）")
+  eq(kNoStep, 0, "②每条链都有任务步骤")
+  eq(kNoReward, 0, "②每条链都有奖励物品")
+  eq(kBadQuest, 0, "②每个步骤任务都在任务表里（缺 " .. tostring(kBadQuest) .. " 个）")
+  eq(kBadItem, 0, "②每件奖励物品都在物品表里（缺 " .. tostring(kBadItem) .. " 个）")
+
+  -- ③ 排序：档位单调不降（S→A→B），榜首是 S
+  local kOrder, kPrev = true, nil
+  local kTierW = { S = 1, A = 2, B = 3 }
+  for i = 1, table.getn(kList) do
+    local w = kTierW[kList[i].t] or 9
+    if kPrev and w < kPrev then kOrder = false end
+    kPrev = w
+  end
+  eq(kOrder, true, "③链按档位排序（S→A→B 单调不降）")
+  eq(kList[1] and kList[1].t, "S", "③榜首是 S 级链")
+
+  -- ④ 武器优先：每条 S 级链详情的第一条奖励必须是武器
+  local kS, kNotWeapon = 0, {}
+  for i = 1, table.getn(kList) do
+    if kList[i].t == "S" then
+      kS = kS + 1
+      local d = EVAL_QC_DETAIL(i)
+      local it = d and d.rewards and d.rewards[1] and d.rewards[1].it
+      if not (it and EVAL_QC_IS_WEAPON(it)) then table.insert(kNotWeapon, kList[i].k) end
+    end
+  end
+  eq(kS >= 6, true, "④S 级链至少 6 条（实际 " .. tostring(kS) .. "）")
+  eq(table.getn(kNotWeapon), 0, "④S 级链首条奖励都是武器（不是: " .. table.concat(kNotWeapon, ",") .. "）")
+
+  -- ⑤ 搜索：链名 / 任务名 / 物品名三种命中 + 空查询列全部 + 查不到如实空表
+  local s1 = EVAL_QC_SEARCH("迪菲亚")
+  eq(type(s1) == "table" and table.getn(s1) >= 1, true, "⑤按链名搜到（迪菲亚）")
+  eq(s1 and s1[1] and s1[1].kind, "chain", "⑤按链名命中 kind=chain")
+  local s2 = EVAL_QC_SEARCH("尖牙德鲁伊")
+  eq(s2 and s2[1] and (s2[1].kind == "quest" or s2[1].kind == "chain"), true, "⑤按任务名搜到（尖牙德鲁伊）")
+  local s3 = EVAL_QC_SEARCH("西部荒野法杖")
+  eq(s3 and s3[1] and s3[1].kind, "item", "⑤按奖励物品名搜到且 kind=item")
+  local s4 = EVAL_QC_SEARCH("", 500)
+  -- ★1.75.9 需求反转：空查询现在**同时列出策展链与自动任务线**（站点系列，覆盖 30-60 与大型/开门线）
+  --   ⇒ 旧判据「条数 == 策展链数」必然不成立；新判据 = 策展链一条不少 + 自动任务线也在里面。
+  local kSerInS4, kChainInS4 = 0, 0
+  for i = 1, table.getn(s4) do
+    if s4[i].kind == "series" then kSerInS4 = kSerInS4 + 1 else kChainInS4 = kChainInS4 + 1 end
+  end
+  eq(kChainInS4 >= table.getn(kList), true, "⑤空查询列出全部策展链（" .. tostring(kChainInS4) .. " >= " .. tostring(table.getn(kList)) .. "）")
+  eq(kSerInS4 >= 1, true, "⑤★空查询也列出自动任务线（" .. tostring(kSerInS4) .. " 条系列）")
+  local s5 = EVAL_QC_SEARCH("绝无此物绝无此链")
+  eq(type(s5) == "table" and table.getn(s5) == 0, true, "⑤查不到如实返回空表（不是 nil、不瞎猜）")
+  -- ⑤b ★位次必须与详情**同源**：拿搜索结果给的位次去查详情，链名必须对得上。
+  --     守的是「搜索与详情走了两套顺序」——那种错不报错，只是点进去打开**另一条链**（M1 变异实测会漏）。
+  --     ★1.75.9：自动任务线的键是 "s:<位次>"（字符串），必须走 `row.key` 而不是数字位次 —— 两种行分开验。
+  local kMismatch, kSerChecked = 0, 0
+  for i = 1, table.getn(s4) do
+    local row = s4[i]
+    local drow = (row.kind == "series") and EVAL_QC_DETAIL(row.key) or EVAL_QC_DETAIL(row.idx)
+    if row.kind == "series" then kSerChecked = kSerChecked + 1 end
+    if not (drow and drow.c and drow.c.n == row.name) then kMismatch = kMismatch + 1 end
+  end
+  eq(kMismatch, 0, "⑤b搜索位次与详情同源（不一致 " .. tostring(kMismatch) .. " 条 · 含系列 " .. tostring(kSerChecked) .. " 条）")
+
+  -- ⑥ 详情：数字位次与字符串键两条路一致；越界/不存在如实 nil
+  local kOne = kList[1]
+  local d1 = EVAL_QC_DETAIL(1)
+  eq(d1 and d1.c and d1.c.k, kOne.k, "⑥位次→详情（与列表同一条）")
+  local d2 = EVAL_QC_DETAIL(kOne.k)
+  eq(d2 and d2.c and d2.c.n, kOne.n, "⑥字符串键→详情（与位次同一条）")
+  eq(EVAL_QC_DETAIL(9999), nil, "⑥越界位次如实 nil")
+  eq(EVAL_QC_DETAIL("no-such-key"), nil, "⑥不存在的键如实 nil")
+  local kLines = EVAL_QC_LINES(1)
+  eq(type(kLines) == "table" and table.getn(kLines) > 3, true, "⑥文案行非空（" .. tostring(kLines and table.getn(kLines) or 0) .. " 行）")
+  eq(kLines and kLines[1] and kLines[1].kind, "title", "⑥首行是标题")
+
+  -- ⑦ 数据检索接线（真实入口）
+  local r1 = EVAL_DS_SEARCH("迪菲亚", "chain")
+  eq(type(r1) == "table" and table.getn(r1) >= 1, true, "⑦任务线过滤：搜到（迪菲亚）")
+  eq(r1 and r1[1] and r1[1].kind, "chain", "⑦结果行 kind=chain")
+  eq(type(r1 and r1[1] and r1[1].id), "number", "⑦结果行 id 是数字位次（排序不混类型）")
+  local r2 = EVAL_DS_SEARCH("", "chain")
+  eq(table.getn(r2) == table.getn(kList), true, "⑦任务线空关键词出首屏全部（" .. tostring(table.getn(r2)) .. "）")
+  local r3 = EVAL_DS_SEARCH("西部荒野法杖")
+  local kHasChain = false
+  for i = 1, table.getn(r3) do if r3[i].kind == "chain" then kHasChain = true end end
+  eq(kHasChain, true, "⑦「全部」过滤下任务线也并入搜索结果")
+  local dd = EVAL_DS_DETAIL("chain", 1)
+  eq(dd and dd.title, kOne.n, "⑦真实详情入口：标题 = 链名（" .. tostring(dd and dd.title) .. "）")
+  eq(type(dd and dd.lines) == "table" and table.getn(dd.lines) > 0, true, "⑦详情有文案行")
+  local kStepLink, kRewardHover = 0, 0
+  if dd and dd.lines then
+    for i = 1, table.getn(dd.lines) do
+      local l = dd.lines[i]
+      if l.link and l.link.kind == "quest" then kStepLink = kStepLink + 1 end
+      if l.hoverItem then kRewardHover = kRewardHover + 1 end
+    end
+  end
+  eq(kStepLink >= 1, true, "⑦步骤行挂任务链接（" .. tostring(kStepLink) .. " 条）")
+  eq(kRewardHover >= 1, true, "⑦奖励行挂物品悬停（" .. tostring(kRewardHover) .. " 条）")
+  eq(EVAL_DS_DETAIL("chain", 9999), nil, "⑦越界详情如实 nil")
+  if fails0 == TESTASSERT_FAILS then print("GROUP 191 (任务线检索): PASS") end
+end
 print("ALL TESTS PASS")

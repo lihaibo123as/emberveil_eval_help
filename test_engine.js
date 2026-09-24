@@ -68,7 +68,7 @@ function checkIconAssets() {
 //   ② 跳过「同名还有函数内 local 声明」的短名（W / H / x / y 这类）：它们在文件里是**多个不同的变量**，
 //      按名字比对必然误报（首版就误报了 EvalHelp.lua:153 的 local W —— 那是另一个函数里的 W）。
 (function () {
-  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/DismountHelper.lua", "tools/RareWatch.lua"];
+  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "quest/QuestData.lua", "quest/QuestBulk.lua", "quest/QuestChains.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/DismountHelper.lua", "tools/RareWatch.lua"];
   const bad = [];
   let totalLocals = 0;
   const isName = (s) => new RegExp("^[A-Za-z_][A-Za-z0-9_]*$").test(s);
@@ -228,7 +228,7 @@ function checkIconAssets() {
   const used = new Set();
   // ★1.71.3 补上 Share.lua：它此前**不在扫描名单里**（与 DECL ORDER 的已知盲区同源）——
   //   于是「Share 用了某个键、只改了两种语言」永远是盲区（本轮 SH_CH_OFF 正好落在这里）。
-  for (const f of ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/RareWatch.lua"]) {
+  for (const f of ["EvalHelp.lua", "quest/QuestData.lua", "quest/QuestBulk.lua", "quest/QuestChains.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/RareWatch.lua"]) {
     const p = path.join(__dirname, f);
     if (!fs.existsSync(p)) continue;
     const src = fs.readFileSync(p, "utf8");
@@ -327,7 +327,7 @@ function checkIconAssets() {
 //   ★注释里提到 `SomeCall()` 属于正常（本仓库有大量 API 说明注释），故必须要求「方法调用」
 //   （带 `:` / `.`）而不是裸调用，否则误报成片（实测：裸调用规则会命中 test_assert.lua:240）。
 (function () {
-  const files = ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua",
+  const files = ["EvalHelp.lua", "quest/QuestData.lua", "quest/QuestBulk.lua", "quest/QuestChains.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua",
                  "Locales/zhCN.lua", "Locales/enUS.lua", "Locales/ruRU.lua", "test_assert.lua", "test_stub.lua"];
   const bad = [];
   for (const f of files) {
@@ -1285,6 +1285,341 @@ function checkIconAssets() {
   console.log("EXAMPLES TOC CHECK: " + listed.length + " example data files, order = " + got.join(" / "));
 })();
 
+// ===== QUEST TOC CHECK（1.75.0 / 1.75.9）：任务线数据/逻辑文件必须在 .toc 里、且在 DataSearch 之前 =====
+// 背景：quest/ 是**独立目录**（脚本 + 数据 + 逻辑），插件只靠 .toc 载入（本客户端没有文件读取 API）。
+//   漏 .toc = 任务线检索永远查不到（不报错，静默失效）；顺序错 = DataSearch 里 EVAL_QC_* 还是 nil（同样静默）。
+//   旧判据只看 examples/，quest/ 是新目录 —— 不补这一道就是「检查存在 ≠ 覆盖到位」的老坑。
+//   ★1.75.9 新增 QuestBulk.lua（全量 10-60+ 任务/装备），漏它 = 装备视图静默退回只有策展链那几十件。
+(function () {
+const toc = fs.readFileSync(path.join(__dirname, "EvalHelp.toc"), "utf8").split(/\r?\n/).map(s => s.trim());
+const need = ["quest\\QuestData.lua", "quest\\QuestBulk.lua", "quest\\QuestChains.lua"];
+const pos = [];
+for (const f of need) {
+  const i = toc.indexOf(f);
+  if (i < 0) { console.log("QUEST TOC CHECK: FAIL - EvalHelp.toc 没列 " + f); process.exitCode = 1; return; }
+  pos.push(i);
+}
+const ds = toc.indexOf("DataSearch.lua");
+if (ds < 0) { console.log("QUEST TOC CHECK: FAIL - EvalHelp.toc 没列 DataSearch.lua"); process.exitCode = 1; return; }
+if (!pos.every(p => p < ds)) {
+  console.log("QUEST TOC CHECK: FAIL - quest/ 数据与逻辑必须排在 DataSearch.lua 之前（否则检索逻辑读到 nil）");
+  process.exitCode = 1; return;
+}
+if (!(pos[0] < pos[1] && pos[1] < pos[2])) {
+  console.log("QUEST TOC CHECK: FAIL - quest/ 顺序必须是 QuestData → QuestBulk → QuestChains（数据→逻辑）");
+  process.exitCode = 1; return;
+}
+// 磁盘 ↔ .toc 双向一致（quest/ 下的 .lua 全部要列；列出的必须真在磁盘）
+const qdir = path.join(__dirname, "quest");
+if (!fs.existsSync(qdir)) { console.log("QUEST TOC CHECK: FAIL - quest/ 目录缺失"); process.exitCode = 1; return; }
+const onDisk = fs.readdirSync(qdir).filter(f => f.slice(-4) === ".lua").map(f => "quest\\" + f);
+const listed = toc.filter(l => /^quest[\\/].+\.lua$/.test(l));
+const missing = onDisk.filter(f => listed.indexOf(f) < 0);
+const ghost = listed.filter(f => onDisk.indexOf(f) < 0);
+if (missing.length) { console.log("QUEST TOC CHECK: FAIL - 磁盘有但 .toc 没列: [" + missing.join(",") + "]"); process.exitCode = 1; return; }
+if (ghost.length) { console.log("QUEST TOC CHECK: FAIL - .toc 列了但磁盘没有: [" + ghost.join(",") + "]"); process.exitCode = 1; return; }
+// 生成物必须是**纯数据**（解耦约定：脚本产物只放表，逻辑在 QuestChains.lua）
+for (const f of ["QuestData.lua", "QuestBulk.lua"]) {
+  const dataSrc = fs.readFileSync(path.join(__dirname, "quest", f), "utf8").replace(/--[^\n]*/g, "");
+  if (/\bfunction\b/.test(dataSrc)) {
+    console.log("QUEST TOC CHECK: FAIL - " + f + " 里出现 function（生成物必须是纯数据）");
+    process.exitCode = 1; return;
+  }
+}
+// 全量数据必须真的有货（空表 = 界面看着像坏了，且没有任何报错）
+{
+  const bulk = fs.readFileSync(path.join(__dirname, "quest", "QuestBulk.lua"), "utf8");
+  const sect = (name) => {
+    const m = bulk.match(new RegExp("\\n" + name + "=\\{\\r?\\n([\\s\\S]*?)\\r?\\n\\},"));
+    return m ? m[1] : "";
+  };
+  const qRows = (sect("q").match(/^\s*\[\d+\]=/gm) || []).length;
+  const iRows = (sect("i").match(/^\s*\[\d+\]=/gm) || []).length;
+  const sRows = (sect("s").match(/^\s*"/gm) || []).length;
+  if (qRows < 200) { console.log("QUEST TOC CHECK: FAIL - QuestBulk 任务行只有 " + qRows + " 条（10-60 带装备奖励的任务应 ≥200）"); process.exitCode = 1; return; }
+  if (iRows < 300) { console.log("QUEST TOC CHECK: FAIL - QuestBulk 物品行只有 " + iRows + " 条（绿装+奖励物品应 ≥300）"); process.exitCode = 1; return; }
+  if (sRows < 20) { console.log("QUEST TOC CHECK: FAIL - QuestBulk 自动任务线只有 " + sRows + " 条（站点系列应 ≥20，含 30-60 与开门线）"); process.exitCode = 1; return; }
+  if (!/EVAL_QC_BULK\s*=/.test(bulk) || !/meta=\{/.test(bulk)) { console.log("QUEST TOC CHECK: FAIL - QuestBulk 缺 EVAL_QC_BULK/meta"); process.exitCode = 1; return; }
+  // 分隔符纪律：生成器保证名字里没有 '|'，但**判定要独立**（自己再扫一遍 s/q/i 的字段数）
+  const badLine = (sect("q").match(/^\s*\[\d+\]="([^"]*)"/gm) || []).find(l => (l.match(/\|/g) || []).length !== 4);
+  if (badLine) { console.log("QUEST TOC CHECK: FAIL - QuestBulk 任务行字段数不对（应 4 个分隔符）: " + badLine); process.exitCode = 1; return; }
+}
+// ★1.75.9 实测踩到的坑：test_engine.js 里有 **5 处硬编码载入清单**，新增 quest/QuestBulk.lua 时
+//   一处没加 → 测试环境里「全量数据」恒为 nil（界面退回策展兜底），断言看着像**数据不对**。
+//   把「每处清单都必须与 toc 的 quest/ 逐个一致（含顺序）」变成判据。
+{
+  const eng = fs.readFileSync(path.join(__dirname, "test_engine.js"), "utf8");
+  const tocQuest = toc.filter(l => /^quest[\\/].+\.lua$/.test(l)).map(l => l.replace(/\\/g, "/"));
+  const listRe = /\[((?:['"][^'"]*['"]\s*,\s*)*['"]quest\/QuestData\.lua['"][^\]]*)\]/g;
+  let m, checked = 0;
+  while ((m = listRe.exec(eng)) !== null) {
+    const order = (m[1].match(/['"]quest\/[^'"]+\.lua['"]/g) || []).map(s => s.replace(/['"]/g, ""));
+    checked++;
+    if (order.join(",") !== tocQuest.join(",")) {
+      console.log("QUEST TOC CHECK: FAIL - test_engine.js 第 " + checked + " 处硬编码清单与 toc 的 quest/ 不一致：清单=[" +
+        order.join(",") + "] toc=[" + tocQuest.join(",") + "]（新增模块必须**每处**都加）");
+      process.exitCode = 1; return;
+    }
+  }
+  if (checked < 5) { console.log("QUEST TOC CHECK: FAIL - 只找到 " + checked + " 处 quest/ 载入清单（应为 5 处，形状变了要人工核对）"); process.exitCode = 1; return; }
+}
+console.log("QUEST TOC CHECK: quest/ 三文件在 toc 且顺序 Data→Bulk→Chains 且在 DataSearch 之前 + 磁盘双向一致 + 生成物纯数据且有货");
+})();
+
+// ===== QUEST WIRING CHECK（1.75.0）：任务线检索的接线点，漏一处都**不报错、只是查不到** =====
+// 背景：任务线是「自带数据 + 只在数据检索里用」的解耦设计 —— 数据进了 toc 不代表能用：
+//   ① DataSearch 没有 chain 分支 → 选「任务线」过滤永远空（不报错）
+//   ② 空查询没放行 → 首屏永远空白（用户以为坏了）
+//   ③ 结果行 id 用字符串键 → 与数字 id 在排序里混比（attempt to compare number with string）
+//   ④ 语言键是**运行时拼**的（"DS_T_"..kind）→ LANG KEY CHECK 扫不到，缺键时界面直接显示键名
+//   ⑤ 搜索与详情走了两套顺序 → 点进去打开的是**另一条链**（最阴的一种错）
+//   ⑥ dsChainInto 一旦依赖 dsDb()，UnrealQuest 缺席时任务线也一起失效（解耦白做）
+(function () {
+  const ds = fs.readFileSync(path.join(__dirname, "DataSearch.lua"), "utf8");
+  const qcPath = path.join(__dirname, "quest", "QuestChains.lua");
+  if (!fs.existsSync(qcPath)) { console.log("QUEST WIRING CHECK: FAIL - quest/QuestChains.lua 缺失"); process.exitCode = 1; return; }
+  const qc = fs.readFileSync(qcPath, "utf8");
+  const bad = [];
+  if (!/if ftype == "chain" then/.test(ds)) bad.push("DataSearch 没有 ftype==chain 分支");
+  if (!/if kind == "chain" then return dsChainDetail\(id\) end/.test(ds)) bad.push("EVAL_DS_DETAIL 没有 chain 分支");
+  if (!/\(DS\.filter == "chain"\)/.test(ds)) bad.push("空查询没给任务线放行（首屏会永远空白）");
+  if (!/if ql == "" then/.test(ds)) bad.push("chain 分支没有「空查询=列全部」处理");
+  if (!/id = h\.idx/.test(ds)) bad.push("chain 结果行没用数字位次 h.idx（会与数字 id 混排比较）");
+  if (!/if DS\.filter == "chain" then/.test(ds)) bad.push("切换过滤到任务线后没有立即出首屏");
+  if (!/DS_F_CHAIN/.test(ds)) bad.push("过滤下拉没接任务线（DS_F_CHAIN）");
+  const fn = ds.match(/local function dsChainInto\(out, ql\)([\s\S]*?)\r?\nend\r?\n/);
+  if (!fn) bad.push("找不到 dsChainInto");
+  else if (/dsDb\(\)/.test(fn[1])) bad.push("dsChainInto 依赖 dsDb（UnrealQuest 缺席时任务线会一起失效）");
+  if (!/local sorted = EVAL_QC_LIST\(filter\)/.test(qc)) bad.push("搜索没走 EVAL_QC_LIST(filter)（与详情不同序 → 点进去是另一条链）");
+  if (!/return qcDetailOf\(qcChainAt\(key\)\)/.test(qc)) bad.push("详情没走 qcChainAt（位次↔键两条路会分叉）");
+  // ★1.75.8 种类**多选**过滤：判定只准有一处（数据层），界面传集合、不复刻
+  if (!/qcKindPass\(f\.kinds, EVAL_QC_ITEM_KIND\(it\)\)/.test(qc)) bad.push("数据层没按 kinds 集合过滤（界面传了也白传）");
+  if (!/return set\[k\] and true or false/.test(qc)) bad.push("kinds 集合判定没写成显式布尔（会返回 nil/true 混值）");
+  if (!/if not any then return true end/.test(qc)) bad.push("kinds 空集没当成「不过滤」（一个都没勾会变成什么都不显示）");
+  // ★1.75.9 全量数据层（QuestBulk.lua）：读取接口 + 统一入口 + 全量优先/策展兜底
+  for (const fn of ["EVAL_QC_BULK_READY", "EVAL_QC_BULK_QUEST", "EVAL_QC_BULK_ITEM", "EVAL_QC_BULK_ITEM_ROWS",
+                    "EVAL_QC_BULK_SOURCES", "EVAL_QC_SERIES_LIST", "EVAL_QC_SERIES_DETAIL", "EVAL_QC_SERIES_FACTION"]) {
+    if (!(new RegExp("function " + fn + "\\(")).test(qc)) bad.push("数据层缺 " + fn + "（全量数据/自动任务线接口）");
+  }
+  if (!/function EVAL_QC_ITEM_ROWS\(filter\)\r?\n\s*if EVAL_QC_BULK_READY\(\) then return EVAL_QC_BULK_ITEM_ROWS\(filter\) end\r?\n\s*return qcChainItemRows\(filter\)/.test(qc)) {
+    bad.push("EVAL_QC_ITEM_ROWS 没写成「全量优先 + 策展兜底」（两处各写一份判定迟早漂移）");
+  }
+  if (!/local function qcChainItemRows\(filter\)/.test(qc)) bad.push("策展派生的兜底函数没保留（全量缺席时界面会空白）");
+  if (!/local function qcCurItemIndex\(\)/.test(qc)) bad.push("策展链反查没走反向索引（EVAL_QC_ITEM_CHAINS 会退回慢路径/形状不符）");
+  if (/function EVAL_QC_ITEM_CHAINS\(itemId\)\r?\n\s*local rows = EVAL_QC_ITEM_ROWS/.test(qc)) {
+    bad.push("EVAL_QC_ITEM_CHAINS 又借道 EVAL_QC_ITEM_ROWS（全量行形状不同 → 静默 nil）");
+  }
+  if (!/string.find\(s, "\|", p, true\)/.test(qc)) bad.push("紧凑串解析没用 plain 查找（'|' 在模式里不是普通字符）");
+  if (!/local b = \(type\(EVAL_QC_BULK_ITEM\) == "function"\) and EVAL_QC_BULK_ITEM\(id\) or nil/.test(qc)) {
+    bad.push("EVAL_QC_ITEM 没有「策展表没有 → 退回全量物品表」的兜底（30-60 装备详情会查不到）");
+  }
+  // 运行时拼键的四个语言键：LANG KEY CHECK 只看字面量，扫不到这些
+  for (const lg of ["zhCN", "enUS", "ruRU"]) {
+    const p = path.join(__dirname, "Locales", lg + ".lua");
+    if (!fs.existsSync(p)) { bad.push("缺语言包 " + lg); continue; }
+    const loc = fs.readFileSync(p, "utf8");
+    for (const k of ["DS_F_CHAIN", "DS_T_CHAIN", "DS_CHAIN_REWARD", "DS_CHAIN_STEPS"]) {
+      if (!(new RegExp("\\b" + k + "\\s*=")).test(loc)) bad.push(lg + " 缺语言键 " + k);
+    }
+  }
+  if (bad.length) {
+    console.log("QUEST WIRING CHECK: FAIL - " + bad.join("；"));
+    process.exitCode = 1;
+    return;
+  }
+  console.log("QUEST WIRING CHECK: chain 两分支 + 空查询放行 + 数字位次 id + 过滤/语言四键 + 搜索详情同序 + 不依赖 UnrealQuest + 种类多选只判定一处");
+})();
+
+// ===== QUEST PANEL CHECK（1.75.1）：任务线推荐弹窗的接线/规程/布局，漏一处都是**静默失效** =====
+// 背景（v1 的真实事故，逐条对应下面的判据）：
+//   ① 控件用进它自己的构造参数 → 闭包读到**全局 nil** → 点按钮当场红字（DataSearch:2840）
+//   ② 按钮 label 传空串 → 界面上一排**空白按钮**（用户截图）
+//   ③ 只设 strata 不设 frameLevel → 被父窗行按钮盖住、点不到
+//   ④ 弹窗 OnHide 不收全局下拉 → 孤儿下拉浮在别处
+//   ⑤ 两视图没整块 Show/Hide → 切详情后列表还叠着；⑥ 默认不 Hide → 载入就弹
+//   ⑦ 底部按钮与详情行重叠 → 末行按钮被文字压住（用户截图）
+//   ⑧ 装备条目没带 item id / 直连没走已验证入口 → 「装备↔任务」这条主线断掉
+(function () {
+  const ds = fs.readFileSync(path.join(__dirname, "DataSearch.lua"), "utf8");
+  const bad = [];
+  if (!/DS\.qlBtn = dsBtn\(root, LX \+ 310 \+ 214 \+ 8/.test(ds)) bad.push("任务线推荐按钮不在「地图标注」右侧（应为 LX+310+214+8）");
+  if (!/table\.insert\(DS\.searchWidgets, DS\.qlBtn\.btn\)/.test(ds)) bad.push("按钮没进 Tab 显隐清单（切页后会留在屏上）");
+  if (!/table\.insert\(DS\.controlRow\.buttons, \{ name = "任务线推荐"/.test(ds)) bad.push("按钮没登记到控制行几何表");
+  if (!/SetFrameStrata, qp, "DIALOG"/.test(ds)) bad.push("弹窗没设 DIALOG strata");
+  if (!/qp:SetFrameLevel\(\(root:GetFrameLevel\(\) or 1\) \+ 100\)/.test(ds)) bad.push("弹窗没显式抬 frameLevel（只设 strata = 点不到）");
+  if (!/RegisterForDrag, qpBar, "LeftButton"/.test(ds)) bad.push("拖动柄没注册 RegisterForDrag");
+  if (!/RegisterForClicks, qpBar, "LeftButtonUp"/.test(ds)) bad.push("拖动柄没注册 RegisterForClicks");
+  if (!/OnDragStart[\s\S]{0,260}?StartMoving[\s\S]{0,120}?StopMovingOrSizing[\s\S]{0,120}?StartMoving/.test(ds)) bad.push("拖动没走 warm-up 两步");
+  if (!/SetScript\("OnHide"[\s\S]{0,200}?EVAL_DD_HIDE/.test(ds)) bad.push("弹窗 OnHide 没收起全局下拉");
+  if (!/listWidgets[\s\S]{0,200}?detWidgets/.test(ds)) bad.push("两视图没走整块显隐清单");
+  if (!/qp:Hide\(\) -- 默认关/.test(ds)) bad.push("弹窗默认没隐藏");
+  if (!/if not EVAL_QC_ITEM\(itemId\) then return end/.test(ds)) bad.push("装备详情没做诚实失败（查不到也切视图）");
+  if (!/if not EVAL_QC_DETAIL\(key\) then return end/.test(ds)) bad.push("任务线详情没做诚实失败");
+  if (!/EVAL_WHEEL_DIR\(a, b\)/.test(ds)) bad.push("弹窗滚轮没走方向单一来源 EVAL_WHEEL_DIR");
+  // ② 不许有空白按钮：dsBtn(qp, ..., "") 一律 FAIL
+  if (/dsBtn\(qp, [^\n]*?,\s*""/.test(ds)) bad.push("弹窗里有空白按钮（label 传了空串）");
+  // ① 控件不许用进它自己的构造参数（v1 事故：闭包读到全局 nil）
+  const selfRef = ds.match(/local (\w+) = dsBtn\(qp[^\n]*\b\1\b/);
+  if (selfRef) bad.push("控件 " + selfRef[1] + " 被用进了自己的构造参数（闭包会读到全局 nil —— v1 红字事故）");
+  // ⑧ 装备主线：行带 item、点击进装备详情、直连走 EVAL_DS_SEARCH_NAME
+  if (!/row\.item = h\.id/.test(ds)) bad.push("装备行没带物品 ID");
+  if (!/EVAL_QP_ITEM_DETAIL\(row\.item\)/.test(ds)) bad.push("装备行点击没进装备详情");
+  const goDs = ds.match(/function EVAL_QP_GOTO_DS\(\)([\s\S]*?)\n  end/);
+  if (!goDs || !/EVAL_DS_SEARCH_NAME/.test(goDs[1])) bad.push("直连数据检索没走 EVAL_DS_SEARCH_NAME（已验证入口）");
+  if (!/EVAL_QC_ITEM_CHAINS/.test(ds)) bad.push("装备详情没反查来源任务线（用户核心需求）");
+  // 用户要求：任务节点放大镜（按任务名直达数据检索）+ 阵营严格三分类
+  // ★1.75.3 用户指定：放大镜用**本插件自带**素材（图标库/数据检索同一个 database 图标）
+  if (!/media\\\\icons\\\\database/.test(ds)) bad.push("放大镜没用本插件自带的 database 素材");
+  if (!/QP_ZOOM_ICON/.test(ds)) bad.push("放大镜素材没走常量");
+  // ★反向哨兵：放大镜点击**不许关窗**（用户要求保留任务线窗口）
+  {
+    const zc = ds.match(/zb:SetScript\("OnClick"[\s\S]{0,700}?\n    \}\)/);
+    if (zc && /EVAL_QP_HIDE\(\)/.test(zc[0])) bad.push("放大镜点击把弹窗关了（用户要求不关窗）");
+    if (!/DS\.qp\.hint/.test(ds)) bad.push("放大镜没给「已送数据检索」回执");
+  }
+  if (!/EVAL_DS_SEARCH_NAME\(word\)/.test(ds)) bad.push("放大镜点击没走 EVAL_DS_SEARCH_NAME（按任务名检索）");
+  if (!/st\.detZoom\[n\] = qn/.test(ds)) bad.push("步骤行没记任务名（放大镜会查错词）");
+  if (!/faction = DS\.qpFact/.test(ds)) bad.push("装备视图没把阵营传进筛选");
+  // ★1.75.8 用户要求：「装备筛选种类细分,支持种类子类型.武器子类型支持.并且支持多选.」
+  //   ① 选项**由数据现算**（写死种类表＝与数据脱节）② 多选走 multi 下拉 ③ 分组标题 locked ④ 空集=全部
+  if (/local QP_KIND = \{ "ALL"/.test(ds)) bad.push("还残留类型三态单选表 QP_KIND（用户要求细分到子类型 + 多选）");
+  if (!/kinds = DS\.qpKinds/.test(ds)) bad.push("装备列表没把种类多选集合交给数据层（界面自己复刻判定＝两处漂移）");
+  if (!/EVAL_DD_OPEN\(DS\.qp\.f2\.btn, items, function\(pi, on\)/.test(ds)) bad.push("类型筛选没走多选回调 onPick(序号, 是否勾选)");
+  if (!/\{ multi = true, selected = sel, locked = locked \}/.test(ds)) bad.push("类型筛选没开 multi 多选（分组标题也会变成可勾行）");
+  if (!/if on == true then DS\.qpKinds\[m\.kind\] = true else DS\.qpKinds\[m\.kind\] = nil end/.test(ds)) {
+    bad.push("多选回调没写成两步布尔（`on and true or nil` 这类 and/or 写法会把它写反 —— 项目记过这个坑）");
+  }
+  if (!/if n == 0 then return L\("DS_QP_KIND_ALL"\) end/.test(ds)) bad.push("类型按钮文字没处理「一个都没勾」（会显示空白按钮）");
+  // ★1.75.9 用户要求「经典任务线衍生到 30-60 范围」+「任务奖励只要有装备/武器的都采集（单任务也算）」：
+  //   ① 等级档到 50+（≥5 档）且**由 QP_LV 现算**（写死四项 = 加档必漏一处）
+  //   ② 装备行来源 = **任务名**（全量任务的来源），不再是「策展链名」
+  //   ③ 装备详情里来源任务是可跳转行（放大镜）④ 审计入口（以游戏内信息为准）
+  {
+    const lv = ds.match(/local QP_LV = \{([\s\S]{0,400}?)\n  \}/);
+    if (!lv) bad.push("找不到 QP_LV 等级档表");
+    else {
+      const bands = (lv[1].match(/\{ k = "L\d"/g) || []).length;
+      if (bands < 5) bad.push("等级档只有 " + bands + " 档（用户要求覆盖到 30-60，应 ≥5 档）");
+      if (!/"L5", lo = 50, hi = 999/.test(lv[1])) bad.push("最高档不是 50+（hi=999 才装得下 60-69 的团本/开门任务）");
+    }
+    if (!/for i = 1, table\.getn\(QP_LV\) do labels\[i\] = L\("DS_QP_LV_" \.\. QP_LV\[i\]\.k\) end/.test(ds)) {
+      bad.push("等级下拉没由 QP_LV 现算（写死标签会在加档时漏掉新档）");
+    }
+    if (/labels = \{ L\("DS_F_ALL"\), L\("DS_QP_LV_L1"\)/.test(ds)) bad.push("等级下拉还写着硬编码的四项标签");
+    if (!/local nSrc = table\.getn\(h\.quests or \{\}\)/.test(ds)) bad.push("装备行没按「全量任务来源」写来源（用户要求单任务也算来源）");
+    if (!/for j = 1, table\.getn\(e\.quests or \{\}\) do if hitName\(e\.quests\[j\]\.n\) then hit = true break end end/.test(ds)) {
+      bad.push("装备搜索没命中「来源任务名」（按任务名找装备会查不到）");
+    }
+    if (!/EVAL_QC_BULK_SOURCES\(id\)/.test(ds)) bad.push("装备详情没列全量来源任务（由装备反查要做哪些任务这条主线断了）");
+    if (!/st\.detZoom\[n\] = \(sq\.n ~= ""\) and sq\.n or nil/.test(ds)) bad.push("来源任务行没挂放大镜（点它应该按任务名直达数据检索）");
+    if (!/function EVAL_DS_QC_AUDIT\(limit, quiet\)/.test(ds)) bad.push("缺装备审计 EVAL_DS_QC_AUDIT（用户要求审计装备链接是否与游戏内一致）");
+    if (!/if tostring\(nm\) == tostring\(e\.it\.n\) then st\.nameOK = st\.nameOK \+ 1/.test(ds)) bad.push("审计没做「游戏内名字 vs 数据名字」对账");
+    const ehSrc2 = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
+    if (!/ds 任务线 审计/.test(ehSrc2)) bad.push("/eh ds 任务线 审计 命令没接线");
+  }
+  // ★★★1.75.9 用户实测「图片内的输入框无法输入」：弹窗 EditBox 必须照**主搜索框已验证配方**三件套
+  //   ① EnableMouse（本客户端不显式开鼠标 = 收不到点击 = 拿不到焦点 = 一个字都打不进 —— 本次真凶）
+  //   ② 点击即聚焦的兜底按钮 ③ 左对齐 + 字体链三级兜底（全失败才启用回声行）
+  {
+    const ebBlock = ds.match(/local qpEb = CreateFrame\("EditBox"[\s\S]{0,1800}?local qpEbFocus = CreateFrame/);
+    if (!ebBlock) bad.push("找不到弹窗 EditBox 的构建段（输入框配方无从校验）");
+    else {
+      if (!/pcall\(qpEb\.EnableMouse, qpEb, true\)/.test(ebBlock[0])) bad.push("弹窗 EditBox 没显式 EnableMouse（本客户端 = 收不到点击、打不了字）");
+      if (!/pcall\(qpEb\.SetJustifyH, qpEb, "LEFT"\)/.test(ebBlock[0])) bad.push("弹窗 EditBox 没左对齐（本客户端默认居中偏右）");
+      if (!/Fonts\\\\FZLBJW\.TTF/.test(ebBlock[0])) bad.push("弹窗 EditBox 没有字体链兜底（疑似不渲染时没有回声依据）");
+    }
+    if (!/local qpEbFocus = CreateFrame\("Button", nil, qp\)/.test(ds)) bad.push("缺「点击即聚焦」兜底按钮（主搜索框同款；没有它点框沿拿不到焦点）");
+    if (!/qpEbFocus:SetScript\("OnClick", function\(\) pcall\(qpEb\.SetFocus, qpEb\) end\)/.test(ds)) bad.push("聚焦按钮没挂 SetFocus（点了没反应）");
+    if (!/qpEb:SetScript\("OnEnterPressed"/.test(ds)) bad.push("弹窗输入框没有 OnEnterPressed");
+    if (!/qpEb:SetScript\("OnEscapePressed"/.test(ds)) bad.push("弹窗输入框没有 OnEscapePressed");
+  }
+  if (!/put\(L\("DS_QP_KIND_WP"\), true\)/.test(ds) || !/put\(L\("DS_QP_KIND_OT"\), true\)/.test(ds)) {
+    bad.push("类型菜单没挂「武器/其它」两个 locked 分组标题");
+  }
+  if (!/local wp, ot = EVAL_QC_KIND_GROUPS\(\)|if type\(EVAL_QC_KIND_GROUPS\) == "function" then wp, ot = EVAL_QC_KIND_GROUPS\(\) end/.test(ds)) {
+    bad.push("类型菜单没走数据层分组的单一来源 EVAL_QC_KIND_GROUPS");
+  }
+  // ★用户要求（1.75.2）：装备信息只走客户端 API；图标以**游戏内链**为准、少用自定义图标
+  if (!/local function qpItemInfo\(id\)/.test(ds)) bad.push("缺 qpItemInfo（应走 GetItemInfo 实测配方）");
+  if (!/interface\[\/\\\\\]/.test(ds)) bad.push("图标没按实测配方扫描 interface[/\\] 路径");
+  if (/EVAL_ICON_SEM/.test(ds)) bad.push("弹窗里出现 ICON SEM 自造图标（用户要求减少自定义图标）");
+  if (!/if tex then return tex end/.test(ds)) bad.push("图标命中判断缺失");
+  // ★正则要容忍多变量赋值行（`local QP_REQ_RATE, QP_REQ_MAX = 1.5, 24` 里 QP_REQ_RATE 后面是逗号）——本类坑第二次踩
+  if (!/QP_REQ_RATE\s*[,=]/.test(ds)) bad.push("缺限频常量 QP_REQ_RATE（向服务器要物品必须限频）");
+  if (!/rawget\(_G, "EVAL_HELP_WTT"\)/.test(ds)) bad.push("请求没走自建隐藏 tooltip（WTT ISOLATION 禁借 GameTooltip 读数）");
+  if (!/function EVAL_DS_QC_PROBE/.test(ds)) bad.push("缺 API 探针 EVAL_DS_QC_PROBE");
+  if (!/if nm then[\s\S]{0,240}?SetHyperlink/.test(ds)) bad.push("tooltip 没做「客户端认识就用原生详情」");
+  if (!/qpItemTooltip\(row\.btn, row\.item\)/.test(ds)) bad.push("装备行悬停没挂装备详情");
+  // ★1.75.4 用户要求：翻页=文字按钮（照图标库 IB_PREV/IB_NEXT），放底部 [返回] 旁边左对齐
+  if (!/dsBtn\(qp, QP_NAV_X, QP_BOTTOM, QP_BTN_W, L\("IB_PREV"\)/.test(ds)) bad.push("上一页不是「底部左对齐的文字按钮」");
+  if (!/dsBtn\(qp, QP_NAV_X \+ QP_BTN_W \+ QP_BTN_GAP, QP_BOTTOM, QP_BTN_W, L\("IB_NEXT"\)/.test(ds)) bad.push("下一页不是「底部左对齐的文字按钮」");
+  if (/dsBtn\(qp, QP_W - 48, QP_PAGE_Y, 18, "\^"/.test(ds)) bad.push("还残留图标式翻页按钮（用户要求换文字按钮）");
+  // ★1.75.7 用户要求：三个按钮**整体左对齐**，顺序 [上页][下页][← 返回]（返回在下一页右边）
+  if (!/local QP_NAV_X = QP_PAD\b/.test(ds)) bad.push("按钮组起点不是内边距（整体左对齐会漂）");
+  if (!/local qpBack = dsBtn\(qp, QP_NAV_X \+ \(QP_BTN_W \+ QP_BTN_GAP\) \* 2, QP_BOTTOM/.test(ds)) {
+    bad.push("返回按钮没放在「下一页右边」（用户要求顺序 上页·下页·返回）");
+  }
+  // ★1.75.5 事故：翻页按钮同时进两份互斥清单 ⇒ 被后处理的 detWidgets「Hide」掉、列表视图里整个消失
+  if (/table\.insert\(qpListWidgets, qpUp\.btn\)/.test(ds) || /table\.insert\(qpDetWidgets, qpUp\.btn\)/.test(ds)) {
+    bad.push("翻页按钮被塞进互斥显隐清单（会被后处理那份 Hide 掉 —— 1.75.5 实测翻页按钮消失）");
+  }
+  if (!/if st\.navPrev then pcall\(st\.navPrev\.btn\.Show/.test(ds)) bad.push("qpShowView 末尾没显式 Show 翻页按钮");
+  if (!/if st\.navNext then pcall\(st\.navNext\.btn\.Show/.test(ds)) bad.push("qpShowView 末尾没显式 Show 下一个翻页按钮");
+  // ★1.75.6 用户截图「样式有点重叠」：详情标题/副标题必须**以图标右上为锚、垂直依次排**
+  //   （旧写法标题 LEFT 锚在 36 高图标上 = 垂直居中，与副标题同一行 ⇒ 必然压字）
+  if (!/qpDetTitle:SetPoint\("TOPLEFT", qpDetIcon, "TOPRIGHT"/.test(ds)) bad.push("详情标题没以图标右上为锚（会垂直居中压住副标题）");
+  if (!/qpDetSub:SetPoint\("TOPLEFT", qpDetIcon, "TOPRIGHT"/.test(ds)) bad.push("详情副标题没以图标右上为锚");
+  if (/qpDetTitle:SetPoint\("LEFT", qpDetIcon/.test(ds)) bad.push("详情标题又写回「LEFT 锚图标」的旧写法（与副标题重叠）");
+  // ★焦点移开必须隐藏装备信息（只复原底色＝残留）
+  {
+    const lv = ds.match(/row\.btn:SetScript\("OnLeave"[\s\S]{0,700}?\n    end\)/);
+    if (!lv || !/GameTooltip\.Hide/.test(lv[0])) bad.push("列表行移开焦点没隐藏装备信息（tooltip 会残留）");
+    const ib = ds.match(/qpDetIconBtn:SetScript\("OnEnter"[\s\S]{0,220}?\n  end\)/);
+    if (!ib || !/qpItemTooltip/.test(ib[0])) bad.push("详情大图标获取焦点没显示装备信息");
+    if (!/qpDetIconBtn:SetScript\("OnLeave"/.test(ds)) bad.push("详情大图标离开没隐藏装备信息");
+  }
+  if (!/qpShowView\(DS\.qpMode or "list"\)/.test(ds)) bad.push("首次打开没走视图显隐（详情专用控件会在列表视图露着）");
+  {
+    const ehSrc = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
+    if (!/ds 任务线|ds qc/.test(ehSrc)) bad.push("/eh ds 任务线 探针命令没接线");
+  }
+  {
+    const qcSrc = fs.readFileSync(path.join(__dirname, "quest", "QuestChains.lua"), "utf8");
+    if (/c\.f ~= f\.faction and c\.f ~= "B"/.test(qcSrc)) bad.push("阵营筛选退回宽松写法（把「共有」并进联盟/部落）");
+    if (!/c\.f ~= f\.faction then ok = false end/.test(qcSrc)) bad.push("EVAL_QC_LIST 没有严格阵营筛选");
+    if (!/faction and f\.faction ~= "ALL" and c\.f ~= f\.faction then facOK = false end/.test(qcSrc)) bad.push("装备视图没有按阵营过滤链");
+    if (!/function EVAL_QC_KIND_LIST/.test(qcSrc)) bad.push("数据层缺种类清单现算 EVAL_QC_KIND_LIST（写死种类表＝与数据脱节）");
+    if (!/function EVAL_QC_KIND_GROUPS/.test(qcSrc)) bad.push("数据层缺分组单一来源 EVAL_QC_KIND_GROUPS");
+    if (!/return rec\.k/.test(qcSrc)) bad.push("种类没从生成数据的 k 字段取（唯一来源）");
+  }
+  // ⑦ 布局：详情最后一行必须在底部按钮之上（用生产常量独立验算，不复刻坐标公式）
+  const num = (re) => { const m = ds.match(re); return m ? Number(m[1]) : null; }; // 仍用于读窗口高
+  // ★1.75.3 用户要求「滚动区铺满窗口」⇒ 行数**按窗口高度现算**（图标库那种写死 IB_ROWS=9 会留白）
+  if (!/function EVAL_QP_ROWS_FOR\(h, top, rowH, tail\)/.test(ds)) bad.push("缺 EVAL_QP_ROWS_FOR（行数必须按窗口高度现算）");
+  if (!/local QP_ROWS = EVAL_QP_ROWS_FOR\(/.test(ds)) bad.push("QP_ROWS 没走 EVAL_QP_ROWS_FOR（写死会留白）");
+  if (!/local QP_DET_ROWS = EVAL_QP_ROWS_FOR\(/.test(ds)) bad.push("QP_DET_ROWS 没走 EVAL_QP_ROWS_FOR");
+  if (/local QP_ROWS = \d+/.test(ds)) bad.push("QP_ROWS 被写死（应现算）");
+  const ROWH = num(/local QP_ROW_H = (\d+)/);
+  const TOP = num(/local QP_LIST_TOP = (-?\d+)/);
+  const H = num(/QP_H = \d+,\s*(\d+)/) || num(/local QP_H = (\d+)/); // ★多变量赋值行：别把 QP_H 读成前一个数
+  if (!ROWH || !TOP || !H) bad.push("读不到弹窗布局常量（窗口高/行高/列表顶边）");
+  // ★行数自 1.75.3 起**按窗口高度现算**（用户要求铺满）⇒「末行不压底部按钮」改由
+  //   组 192 ⑧g 读**真几何**（EVAL_QP_GEOM）负责；静态这边只保证「现算」已接线（见上面的检查）。
+  // 运行时拼键的语言键（LANG KEY CHECK 只看字面量，扫不到这些）
+  for (const lg of ["zhCN", "enUS", "ruRU"]) {
+    const p = path.join(__dirname, "Locales", lg + ".lua");
+    if (!fs.existsSync(p)) { bad.push("缺语言包 " + lg); continue; }
+    const loc = fs.readFileSync(p, "utf8");
+    for (const k of ["DS_QP_TITLE", "DS_QP_TAB_ITEM", "DS_QP_TAB_CHAIN", "DS_QP_GOTO_DS", "DS_QP_SRC",
+                     "DS_QP_LV_ALL", "DS_QP_LV_L1", "DS_QP_LV_L2", "DS_QP_LV_L3",
+                     "DS_QP_KIND_ALL", "DS_QP_KIND_WP", "DS_QP_KIND_OT", "DS_QP_F3_ITEM", "DS_QP_ZOOM_TIP"]) {
+      if (!(new RegExp("\\b" + k + "\\s*=")).test(loc)) bad.push(lg + " 缺语言键 " + k);
+    }
+  }
+  if (bad.length) { console.log("QUEST PANEL CHECK: FAIL - " + bad.join("；")); process.exitCode = 1; return; }
+  console.log("QUEST PANEL CHECK: 按钮位/清单 + DIALOG&level + 拖动三件套 + OnHide 收下拉 + 两视图整块显隐 + 无空白按钮 + 无自引用 + 装备主线(反查/直连) + 种类多选(数据现算/multi/locked 分组/空集=全部) + 布局不重叠 + 拼键语言键齐");
+})();
+
 // ===== STOP ATTACK WIRING CHECK（1.71.3）：新增「特殊行为」时它的判定必须与「取消施法」逐处同列 =====
 // ★背景：1.71.3 新增「停止攻击」（与 取消施法 同族：不占动作条的特殊行为）。这类行为要在 7 处接线：
 //   引擎 2 处（规则预判 / /eh war 状态总览）+ UI 5 处（亮金 / 缺技能问号 / 光环候选 / 分类标签 ×2）。
@@ -1835,6 +2170,13 @@ function checkIconAssets() {
   walk(path.join(__dirname, "examples"), "examples");
   walk(path.join(__dirname, "media"), "media");
   walk(path.join(__dirname, "tools"), "tools"); // ★1.74.5 子目录模块也计入条目数基准
+  // ★1.75.0 quest/ 只把两个 .lua 打进发布包（抓取脚本与 cache 是开发工具，不进包 —— 故不用 walk 全目录）
+  const qDir = path.join(__dirname, "quest");
+  if (fs.existsSync(qDir)) {
+    for (const e of fs.readdirSync(qDir, { withFileTypes: true })) {
+      if (!e.isDirectory() && /\.lua$/i.test(e.name)) push("quest/" + e.name);
+    }
+  }
   const real = set.length;
   const mNum = claude.match(/基准\s*=\s*\*\*(\d+)\s*个\*\*/);
   if (!mNum) {
@@ -2061,7 +2403,7 @@ function checkIconAssets() {
 //   1.72.2 把桩改成真客户端行为（具名帧挂全局）后，组 54 当场报 `attempt to call a table value` —— 这就是暴露途径。
 // 判据：全仓扫描 `CreateFrame(..., "NAME", ...)` 的第二参，不得与任何 `function NAME(` 同名。
 (function () {
-  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/RareWatch.lua"];
+  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "quest/QuestData.lua", "quest/QuestBulk.lua", "quest/QuestChains.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/RareWatch.lua"];
   const funcs = {}, frames = [];
   for (const f of files) {
     if (!fs.existsSync(path.join(__dirname, f))) continue;
@@ -2373,7 +2715,7 @@ const iconFixture = (function () {
 })();
 const L=lauxlib.luaL_newstate();
 lualib.luaL_openlibs(L);
-for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/general.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','examples/priest.lua','examples/druid.lua','examples/warlock.lua','examples/shaman.lua','examples/group.lua','Toolbox.lua','DataSearch.lua','Share.lua','IconSem.lua','IconBrowser.lua','PetData.lua','PetHelper.lua','tools/IconGrid.lua','tools/HunterHelper.lua','tools/ConsumableHelper.lua','tools/DismountHelper.lua','tools/RareWatch.lua','test_assert.lua']){
+for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/general.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','examples/priest.lua','examples/druid.lua','examples/warlock.lua','examples/shaman.lua','examples/group.lua','Toolbox.lua','quest/QuestData.lua',"quest/QuestBulk.lua", 'quest/QuestChains.lua','DataSearch.lua','Share.lua','IconSem.lua','IconBrowser.lua','PetData.lua','PetHelper.lua','tools/IconGrid.lua','tools/HunterHelper.lua','tools/ConsumableHelper.lua','tools/DismountHelper.lua','tools/RareWatch.lua','test_assert.lua']){
   if(f==='test_assert.lua' && iconFixture){
     const fx=to_luastring(iconFixture);
     const stx=lauxlib.luaL_loadbuffer(L,fx,fx.length,to_luastring('icon_fixture'));

@@ -2,3 +2,5 @@ node_modules/
 api_*.html
 .dsh/
 /tmp
+# quest/ 抓取缓存（几百个抓下来的页面 JSON；数据真值是 quest/QuestData.lua，缓存可随时重建）
+quest/cache/
