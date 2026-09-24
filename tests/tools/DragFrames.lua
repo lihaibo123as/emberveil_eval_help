@@ -605,78 +605,112 @@ do
   if fails204 == TESTASSERT_FAILS then print("GROUP 204 (框拖拽有界复查/重置还原/清单真值): PASS") end
 end
 
--- ===== 组 206（1.74.33 **改口径**）：宽/高对**所有窗口停用**（原「新增宽度/高度」需求被用户第二次澄清推翻）=====
--- 用户原话（1.74.31）：「图层拖拽 完成弹窗属性设置还要增加当前层宽度/高度设置」
--- 用户第二次澄清（1.74.33）：「图层拖拽功能.是所有窗口都不能调整宽高.会把内部原始撕裂.是我之前的需求说错了
---   属性配置需要支持调整的是窗口的 x,y 坐标值」
--- ⇒ 本组从「验宽高能改」**翻转为验宽高改不了**（旧的 5 行 / 选 500×200 / 还原 那套断言全部作废 ——
---   留着它们就会在改口径之后一直红，而「判据照需求改」是本项目纪律）：
---   ① 弹窗**不创建**宽/高行（普通目标与图标目标都一样），说明行常显，另外三行照旧在
---   ② 真实下拉 → 真实 [保存] 走一遍：缩放照写，但**一个宽高写调用都没发**、存档里不留 w/h/ow/oh、播报不出现「宽 N」
---   ③ 老记录（w/h + 原始值 ow/oh）⇒ 清理时**还原原尺寸**并如实播报
---   ④ 只有 w/h、没有原始值 ⇒ 清记录但**不动目标**（不猜一个「默认尺寸」）
---   ⑤ 存档里塞着宽高时，应用存档也**一个宽高写调用都不发**
+-- ===== 组 206（1.75.1 **第三次改口径**）：宽/高**只对聊天窗**开放，且落存档持久化 =====
+-- 用户原话（1.75.1，附截图）：「工具箱->图层拖拽->只有针对聊天窗才支持长宽设置.并且持久化」
+-- ⇒ 口径从「所有窗口都不给」（1.74.33）收窄为「**只给聊天窗**」（ChatFrame1 综合 / ChatFrame2 战斗记录）：
+--   ① 白名单唯一真值 = dfSizeOK ⇒ 目标表项 noSize（聊天窗 false、其余 true；不复刻到测试里，问读值口）
+--   ② 弹窗：聊天窗**有**宽/高两行且**真的显示**、窗高加高到 280；非聊天窗两行**藏起来**、窗高收回 224
+--   ③ 聊天窗：真实下拉选宽 → 真实 [保存] ⇒ 宽真的被写 + **先抓原始值再写**（rec.ow = 改动前的值）+ 入库
+--   ④ 持久化：应用存档把宽写回（重登/换会话走的就是这条路）
+--   ⑤ 非聊天窗：保存 / 应用**一个宽高写调用都不发**、存档不留 w/h（就算有人硬塞值也不写）
+--   ⑥ 启动清理**只清不许改宽高的目标**；聊天窗的 w/h 一个字段都不许动（「并且持久化」的反面保证）
+--   ⑦ [重置] 把聊天窗还原到 rec.ow
 do
-  local pf = _G["PlayerFrame"]
-  eq(pf ~= nil, true, "组206前置：PlayerFrame 在位")
+  local cf = rawget(_G, "ChatFrame1")
+  if not (type(cf) == "table" or type(cf) == "userdata") then cf = CreateFrame("Frame", "ChatFrame1", UIParent) end
+  local pf = rawget(_G, "PlayerFrame")
+  if not (type(pf) == "table" or type(pf) == "userdata") then pf = CreateFrame("Frame", "PlayerFrame", UIParent) end
+  eq(cf ~= nil and pf ~= nil, true, "组206前置：ChatFrame1 / PlayerFrame 在位（夹具沿用客户端桩）")
   TEST.inCombat = nil
+
+  -- ① 白名单是唯一真值（★直接问读值口，不在测试里复刻正则）
+  eq(EVAL_DF_TEST_SIZE_OK("ChatFrame1") == true and EVAL_DF_TEST_SIZE_OK("ChatFrame2") == true
+    and EVAL_DF_TEST_SIZE_OK("ChatFrame7") == true, true,
+    "组206①★★★ 白名单认聊天窗（ChatFrame1/2/7 —— 按名字现算，不写死条数）")
+  eq(EVAL_DF_TEST_SIZE_OK("PlayerFrame") == false and EVAL_DF_TEST_SIZE_OK("GuildFrame") == false
+    and EVAL_DF_TEST_SIZE_OK("MultiBarBottomLeft") == false and EVAL_DF_TEST_SIZE_OK("") == false
+    and EVAL_DF_TEST_SIZE_OK(nil) == false, true,
+    "组206①★★★ 反向哨兵：非聊天窗 / 空名 / nil 都不在白名单（头像·图标层·动作条一律不给）")
+  local rawN206, chatN206, chatNoSize206 = 0, 0, 0
+  for _, tg in ipairs(EVAL_DF_TEST_TARGETS_RAW()) do
+    rawN206 = rawN206 + 1
+    if tg.name == "ChatFrame1" or tg.name == "ChatFrame2" then
+      chatN206 = chatN206 + 1
+      if tg.noSize == true then chatNoSize206 = chatNoSize206 + 1 end
+    end
+  end
+  eq(rawN206 > 20 and chatN206 == 2 and chatNoSize206 == 0, true,
+    "组206①★★★ 目标表 noSize 由白名单现算：聊天窗带 noSize 的 " .. tostring(chatNoSize206) .. "/" .. tostring(chatN206) .. " 个")
+
   local store206 = EVAL_DF_TEST_STORE()
   eq(type(store206) == "table", true, "组206前置：拖拽存档表在位（EVAL_HELP_CONFIG.dragFrames）")
-  -- 存档隔离：本组只留自己造的记录，收尾原样放回
   local saved206 = {}
-  for _, t in ipairs(EVAL_DF_TARGETS()) do
-    saved206[t.name] = store206[t.name]
-    store206[t.name] = nil
+  for _, tg in ipairs(EVAL_DF_TARGETS()) do
+    saved206[tg.name] = store206[tg.name]
+    store206[tg.name] = nil
   end
   local function readNum206(fr, fn)
+    if type(fr) ~= "table" and type(fr) ~= "userdata" then return nil end
     if type(fr[fn]) ~= "function" then return nil end
-    local ok, v = pcall(fr[fn], fr)
-    if ok and tonumber(v) then return tonumber(v) end
+    local okv, v = pcall(fr[fn], fr)
+    if okv and tonumber(v) then return tonumber(v) end
     return nil
   end
-  -- 写接口计数器：把「有没有偷偷写宽高」变成可数的东西（本项目「行为零变化」要用哨兵钉住的纪律）
-  local WR206 = { w = 0, h = 0, scale = 0 }
+  local function shown206(c)
+    if not c or type(c.IsShown) ~= "function" then return nil end
+    local okv, v = pcall(c.IsShown, c)
+    if not okv then return nil end
+    return v and true or false
+  end
+  local WR206 = { w = 0, h = 0, w2 = 0, h2 = 0 }
   local OG206 = {}
-  local function wrap206(k, tag)
-    OG206[tag] = pf[k]
-    rawset(pf, k, function(self, ...)
+  local function wrap206(fr, k, tag)
+    OG206[tag] = fr[k]
+    rawset(fr, k, function(self, ...)
       WR206[tag] = WR206[tag] + 1
       local f = OG206[tag]
       if type(f) == "function" then return f(self, ...) end
       return nil
     end)
   end
-  wrap206("SetWidth", "w") wrap206("SetHeight", "h") wrap206("SetScale", "scale")
+  wrap206(cf, "SetWidth", "w") wrap206(cf, "SetHeight", "h")
+  wrap206(pf, "SetWidth", "w2") wrap206(pf, "SetHeight", "h2")
   local wasOn206 = EVAL_DF_ENABLED()
   EVAL_DF_SET(true)
 
-  -- ① 弹窗**不再创建**宽/高行（走真实入口 dfCommitPop）
-  eq(EVAL_DF_TEST_POP_FOR("PlayerFrame"), true, "组206① 真实入口打开弹窗（dfCommitPop）")
-  local pop206 = EVAL_DF_TEST_POP()
-  eq(pop206 ~= nil and pop206.rowBy ~= nil, true, "组206①前置：弹窗读值口在位（按 key 找行）")
-  eq(pop206 and pop206.rowBy and pop206.rowBy.w == nil and pop206.rowBy.h == nil, true,
-    "组206①★★★ 弹窗里**没有**宽/高两行（用户第二次澄清：所有窗口都不能改宽高）")
-  eq(pop206 ~= nil and table.getn(pop206.rows) == 5, true,
-    "组206①★★ 弹窗 5 行 = 显隐/缩放/透明度 + **X/Y 坐标**（宽/高两行已删），实测 " ..
-    tostring(pop206 and table.getn(pop206.rows)))
-  eq(pop206 and pop206.rowBy and pop206.rowBy.x ~= nil and pop206.rowBy.y ~= nil, true,
-    "组206①★★★ X/Y 两行在位（用户第二次澄清：属性配置要支持调整的是窗口的 x,y 坐标值）")
-  -- ★★★1.74.33 用户（截图：那行说明与底部 取消/保存 **叠在一起**）：
-  --   「属性配置信息重叠,可以将信息在外部触发图标tooltip 内展示」⇒ 弹窗里**不再有说明控件**，
-  --   信息改挂**图标 tooltip**（从结构上杜绝重叠：弹窗只管控件本身）。
-  eq(pop206 == nil or pop206.note == nil, true,
-    "组206①★★★ 弹窗里**没有**说明文字控件（说明已搬去图标 tooltip —— 结构上不可能再重叠）")
+  -- ② 弹窗：聊天窗给两行且真显示 + 窗高加高；非聊天窗藏起来 + 窗高收回
+  eq(EVAL_DF_TEST_POP_FOR("ChatFrame1"), true, "组206② 真实入口打开聊天窗弹窗（dfCommitPop）")
+  local popC206 = EVAL_DF_TEST_POP()
+  eq(popC206 ~= nil and popC206.rowBy ~= nil, true, "组206②前置：弹窗读值口在位（按 key 找行）")
+  eq(popC206 and popC206.allowSize == true, true, "组206②★★★ 读值口如实交出 allowSize=true（聊天窗）")
+  eq(popC206 and type(popC206.rowBy.w) == "table" and type(popC206.rowBy.h) == "table", true,
+    "组206②★★★ 聊天窗弹窗**有**宽/高两行（用户 1.75.1：只有聊天窗才支持长宽设置）")
+  eq(shown206(popC206 and popC206.rowBy.w and popC206.rowBy.w.btn) == true
+    and shown206(popC206 and popC206.rowBy.h and popC206.rowBy.h.btn) == true, true,
+    "组206②★★★ 两行**真的显示出来**（建了却藏着 = 用户照样点不到）")
+  eq(readNum206(popC206 and popC206.root, "GetHeight") == 280, true,
+    "组206②★★ 窗高加高到 280（不加高两行会压到底部 取消/保存 上；实测 " ..
+    tostring(readNum206(popC206 and popC206.root, "GetHeight")) .. "）")
+  EVAL_DF_TEST_POP_FOR("PlayerFrame")
+  local popP206 = EVAL_DF_TEST_POP()
+  eq(popP206 and popP206.allowSize == false, true, "组206②★★★ 非聊天窗 allowSize=false")
+  eq(shown206(popP206 and popP206.rowBy.w and popP206.rowBy.w.btn) == false
+    and shown206(popP206 and popP206.rowBy.h and popP206.rowBy.h.btn) == false, true,
+    "组206②★★★ 非聊天窗那两行**藏起来**（不是灰掉 —— 灰掉仍可能被点到）")
+  eq(readNum206(popP206 and popP206.root, "GetHeight") == 224, true,
+    "组206②★★ 非聊天窗窗高收回 224（不留两块空行）")
+  eq((popP206 == nil or popP206.note == nil) and (popC206 == nil or popC206.note == nil), true,
+    "组206②★★ 弹窗里仍然**没有**说明控件（说明挂图标 tooltip —— 结构上不可能重叠）")
+  -- ★说明信息确实挂在**图标 tooltip** 上，而且说的是**新口径**（用户看不到「怎么回事」就会以为功能没了）
   if type(store206) == "table" then store206.GuildFrame = { scale = 0.8 } end
-  local gf206 = CreateFrame("Frame", "GuildFrame", UIParent)
+  local gf206 = rawget(_G, "GuildFrame")
+  if not (type(gf206) == "table" or type(gf206) == "userdata") then
+    gf206 = CreateFrame("Frame", "GuildFrame", UIParent)
+  end
   EVAL_DF_TEST_TARGETS_RESET()
-  eq(EVAL_DF_TEST_POP_FOR("GuildFrame"), true, "组206① 图标目标的弹窗也能打开")
-  local popG206 = EVAL_DF_TEST_POP()
-  eq(popG206 and popG206.rowBy and popG206.rowBy.w == nil and popG206.rowBy.h == nil, true,
-    "组206①★★★ 图标目标同样没有宽/高行（口径 = **所有窗口**）")
-  -- ★说明信息确实挂在**图标 tooltip** 上（走真实 OnEnter 点火，读桩记下来的 AddLine 文本）
-  EVAL_DF_REFRESH()   -- 刷新一次 ⇒ 给 GuildFrame 挂上图标（tooltip 在它身上）
+  EVAL_DF_REFRESH()
   local icon206 = (type(EVAL_DF_TEST_ICON) == "function") and EVAL_DF_TEST_ICON("GuildFrame") or nil
-  eq(icon206 ~= nil, true, "组206①前置：拿到 GuildFrame 的图标（说明文字挂在它身上）")
+  eq(icon206 ~= nil, true, "组206②前置：拿到 GuildFrame 的图标（说明文字挂在它身上）")
   TEST.tipLines = nil
   if icon206 then
     local okE, fnE = pcall(icon206.GetScript, icon206, "OnEnter")
@@ -684,56 +718,89 @@ do
   end
   local tipTxt206 = ""
   for _, ln in ipairs(TEST.tipLines or {}) do tipTxt206 = tipTxt206 .. tostring(ln.text) .. "\n" end
-  eq(string.find(tipTxt206, "宽/高已停用", 1, true) ~= nil, true,
-    "组206①★★★ 图标 tooltip 里说明了「宽/高已停用」（实测：\n" .. tipTxt206 .. "）")
+  eq(string.find(tipTxt206, "聊天窗", 1, true) ~= nil, true,
+    "组206②★★★ 图标 tooltip 里说明了**新口径**（「宽/高只给聊天窗」；实测：\n" .. tipTxt206 .. "）")
   eq(string.find(tipTxt206, "X/Y", 1, true) ~= nil, true,
-    "组206①★★★ 图标 tooltip 里也说明了位置怎么调（X/Y 语义 + 微调步长）")
+    "组206②★★★ 图标 tooltip 里也说明了位置怎么调（X/Y 语义 + 微调步长）")
+  if type(store206) == "table" then store206.GuildFrame = nil end
+  EVAL_DF_TEST_TARGETS_RESET()
 
-  -- ② 真实下拉 → 真实 [保存]：缩放照写，宽高一个写调用都没发
+  -- ③ 聊天窗：真实下拉选宽 → 真实 [保存] ⇒ 真写 + 先抓原值 + 入库
   if type(store206) == "table" then
-    store206.PlayerFrame = { base = { { "TOPLEFT", "UIParent", "TOPLEFT", 0, 0 } }, dx = 0, dy = 0 }
+    store206.ChatFrame1 = { base = { { "TOPLEFT", "UIParent", "TOPLEFT", 0, 0 } }, dx = 0, dy = 0 }
   end
-  eq(EVAL_DF_TEST_POP_FOR("PlayerFrame"), true, "组206② 重新打开普通目标的弹窗")
-  pop206 = EVAL_DF_TEST_POP()
-  local rowScale206 = pop206 and pop206.rowBy and pop206.rowBy.scale
-  eq(type(rowScale206) == "table" and rowScale206.btn ~= nil, true, "组206②前置：缩放行在位（按 key 找得到）")
-  local chosen206 = nil
-  if rowScale206 then
-    local okb, fn = pcall(rowScale206.btn.GetScript, rowScale206.btn, "OnClick")
+  pcall(cf.SetWidth, cf, 384) pcall(cf.SetHeight, cf, 120)
+  WR206.w, WR206.h = 0, 0
+  eq(EVAL_DF_TEST_POP_FOR("ChatFrame1"), true, "组206③ 重新打开聊天窗弹窗")
+  local popC2 = EVAL_DF_TEST_POP()
+  local rowW206 = popC2 and popC2.rowBy and popC2.rowBy.w
+  eq(type(rowW206) == "table" and rowW206.btn ~= nil, true, "组206③前置：宽度行按 key 找得到")
+  local chosenW206 = nil
+  if rowW206 then
+    local okb, fn = pcall(rowW206.btn.GetScript, rowW206.btn, "OnClick")
     if okb and type(fn) == "function" then
-      fn()   -- 打开下拉（顺带按 opts 填好条目文字）
-      for _, rb in ipairs(pop206.list and pop206.list.rows or {}) do
-        local shown = false
-        if type(rb.IsShown) == "function" then
-          local oks, v = pcall(rb.IsShown, rb) shown = (oks and v) and true or false
-        end
-        if shown then
+      fn()
+      for _, rb in ipairs(popC2.list and popC2.list.rows or {}) do
+        if shown206(rb) == true then
           local okr, fn2 = pcall(rb.GetScript, rb, "OnClick")
-          if okr and type(fn2) == "function" then fn2() chosen206 = rowScale206.value break end
+          if okr and type(fn2) == "function" then fn2() chosenW206 = rowW206.value break end
         end
       end
     end
   end
-  eq(chosen206 ~= nil, true, "组206②★ 通过**真实下拉**选了一个缩放值（实测 " .. tostring(chosen206) .. "）")
-  WR206.w, WR206.h, WR206.scale = 0, 0, 0     -- 清零：下面 [保存] 那一下的写调用才算数
-  local saved206ok = false
-  if pop206 and pop206.save then
-    local oks, fn = pcall(pop206.save.GetScript, pop206.save, "OnClick")
-    if oks and type(fn) == "function" then pcall(fn) saved206ok = true end
+  eq(chosenW206 ~= nil, true, "组206③★ 通过**真实下拉**选了宽度（实测 " .. tostring(chosenW206) .. "）")
+  WR206.w, WR206.h = 0, 0
+  local savedOK206 = false
+  if popC2 and popC2.save then
+    local oks, fn = pcall(popC2.save.GetScript, popC2.save, "OnClick")
+    if oks and type(fn) == "function" then pcall(fn) savedOK206 = true end
   end
-  eq(saved206ok, true, "组206②前置：走了真实 [保存] OnClick")
-  eq(WR206.w == 0 and WR206.h == 0, true,
-    "组206②★★★ [保存] **一个宽高写调用都没发**（实测 SetWidth " .. tostring(WR206.w) .. " / SetHeight " .. tostring(WR206.h) .. "）")
-  eq(WR206.scale >= 1, true,
-    "组206②★★ 缩放照写（实测 " .. tostring(WR206.scale) .. " 次）—— 证明不是「整段没干活」的假绿")
-  local recP206 = (type(store206) == "table") and store206.PlayerFrame or nil
-  eq(type(recP206) == "table" and recP206.w == nil and recP206.h == nil and recP206.ow == nil and recP206.oh == nil, true,
-    "组206②★★★ 存档里**不留** w/h/ow/oh（宽高已停用）")
-  eq(type(recP206) == "table" and recP206.scale ~= nil, true, "组206②★★ 缩放照旧入库")
-  local chat206 = tostring(TEST.chat or "")
-  eq(string.find(chat206, "宽 ", 1, true) == nil, true, "组206②★★ 播报里**不出现**「宽 N」（宽高已停用）")
+  eq(savedOK206, true, "组206③前置：走了真实 [保存] OnClick")
+  eq(WR206.w >= 1, true, "组206③★★★ 聊天窗 [保存] **真的写了宽**（实测 " .. tostring(WR206.w) .. " 次）")
+  eq(readNum206(cf, "GetWidth") == chosenW206, true,
+    "组206③★★★ 目标宽度真的变了（实测 " .. tostring(readNum206(cf, "GetWidth")) .. "）")
+  local recC206 = (type(store206) == "table") and store206.ChatFrame1 or nil
+  eq(type(recC206) == "table" and recC206.w == chosenW206, true,
+    "组206③★★★ 宽**落存档**（用户要的「并且持久化」）")
+  eq(type(recC206) == "table" and recC206.ow == 384, true,
+    "组206③★★★ **原始值 = 改动前的 384**（先抓原值再写新值 —— 反了就等于没还原，1.74.31 抓到过）")
 
-  -- ③ 老记录（有原始值）⇒ 清理 + 还原 + 如实播报
+  -- ④ 持久化：应用存档把宽写回
+  pcall(cf.SetWidth, cf, 111)
+  WR206.w, WR206.h = 0, 0
+  EVAL_DF_APPLYALL(true)
+  eq(WR206.w >= 1 and readNum206(cf, "GetWidth") == chosenW206, true,
+    "组206④★★★ 应用存档把聊天窗宽写回（写 " .. tostring(WR206.w) .. " 次 / 现宽 " ..
+    tostring(readNum206(cf, "GetWidth")) .. "）—— 这就是持久化生效")
+
+  -- ⑤ 非聊天窗：保存 / 应用一个宽高写调用都不发
+  if type(store206) == "table" then
+    store206.PlayerFrame = { base = { { "TOPLEFT", "UIParent", "TOPLEFT", 0, 0 } }, dx = 0, dy = 0 }
+  end
+  pcall(pf.SetWidth, pf, 300) pcall(pf.SetHeight, pf, 60)
+  WR206.w2, WR206.h2 = 0, 0
+  EVAL_DF_TEST_POP_FOR("PlayerFrame")
+  local popP2 = EVAL_DF_TEST_POP()
+  local rowWp = popP2 and popP2.rowBy and popP2.rowBy.w
+  if rowWp then rowWp.value = 900 end   -- ★就算有人硬塞一个值，也**不许**被写出去
+  if popP2 and popP2.save then
+    local oks, fn = pcall(popP2.save.GetScript, popP2.save, "OnClick")
+    if oks and type(fn) == "function" then pcall(fn) end
+  end
+  eq(WR206.w2 + WR206.h2 == 0, true,
+    "组206⑤★★★ 非聊天窗 [保存] **一个宽高写调用都没发**（实测 " .. tostring(WR206.w2 + WR206.h2) .. "）")
+  eq(readNum206(pf, "GetWidth") == 300, true, "组206⑤★★ 非聊天窗宽度没被动过（仍是 300）")
+  local recP206 = (type(store206) == "table") and store206.PlayerFrame or nil
+  eq(type(recP206) == "table" and recP206.w == nil and recP206.h == nil, true,
+    "组206⑤★★★ 非聊天窗存档里**不留** w/h")
+  WR206.w2, WR206.h2 = 0, 0
+  EVAL_DF_APPLYALL(true)
+  eq(WR206.w2 + WR206.h2 == 0, true,
+    "组206⑤★★★ 非聊天窗**应用存档**同样一个宽高写调用都不发（实测 " .. tostring(WR206.w2 + WR206.h2) .. "）")
+  -- ★快照：下面 ⑥ 的清理会调 SetWidth/SetHeight **还原原尺寸** ⇒ 别让汇总把那次写算成「保存写了宽高」（不诚实）
+  local wrNonChat206 = WR206.w2 + WR206.h2
+
+  -- ⑥ 启动清理：只清不许改宽高的目标；聊天窗的持久化数据一个字段都不许动
   if type(store206) == "table" then
     store206.PlayerFrame = { base = { { "TOPLEFT", "UIParent", "TOPLEFT", 0, 0 } }, dx = 0, dy = 0,
       w = 500, h = 200, ow = 300, oh = 60 }
@@ -742,54 +809,41 @@ do
   TEST.chat = nil
   local nClean206, restored206 = EVAL_DF_SIZE_CLEAN(true)
   eq(nClean206 >= 1 and restored206 >= 2, true,
-    "组206③★★★ 清理老记录并还原原尺寸（目标 " .. tostring(nClean206) .. " 个 / 还原 " .. tostring(restored206) .. " 项）")
+    "组206⑥★★★ 清理老记录并还原原尺寸（目标 " .. tostring(nClean206) .. " 个 / 还原 " .. tostring(restored206) .. " 项）")
   eq(readNum206(pf, "GetWidth") == 300 and readNum206(pf, "GetHeight") == 60, true,
-    "组206③★★★ 宽高真的回到原始值 300×60（实测 " .. tostring(readNum206(pf, "GetWidth")) .. "×" ..
+    "组206⑥★★★ 不许改宽高的目标真的回到原始值 300×60（实测 " .. tostring(readNum206(pf, "GetWidth")) .. "×" ..
     tostring(readNum206(pf, "GetHeight")) .. "）")
-  local rec3_206 = (type(store206) == "table") and store206.PlayerFrame or nil
-  eq(type(rec3_206) == "table" and rec3_206.w == nil and rec3_206.h == nil and rec3_206.ow == nil and rec3_206.oh == nil, true,
-    "组206③★★ 记录里的宽高与原始值都被清掉（不留「早已停用」的字段）")
+  local recP3 = (type(store206) == "table") and store206.PlayerFrame or nil
+  eq(type(recP3) == "table" and recP3.w == nil and recP3.h == nil and recP3.ow == nil and recP3.oh == nil, true,
+    "组206⑥★★ 该目标的宽高与原始值都清干净")
+  local recC2 = (type(store206) == "table") and store206.ChatFrame1 or nil
+  eq(type(recC2) == "table" and recC2.w == chosenW206, true,
+    "组206⑥★★★ **聊天窗的宽没被清理**（持久化数据一个字段都不许动）")
   eq(string.find(tostring(TEST.chat or ""), "宽高", 1, true) ~= nil, true,
-    "组206③★★ 播报如实说明清了宽高（" .. tostring(TEST.chat) .. "）")
-  -- ★X/Y 行的两个微调按钮也要在（用户选定「下拉预设 + [−][+] 微调」）
-  eq(type(pop206) == "table" and pop206.rowBy and type(pop206.rowBy.x) == "table"
-    and pop206.rowBy.x.nudgeMinus ~= nil and pop206.rowBy.x.nudgePlus ~= nil, true,
-    "组206③★★ X 行带 [−][+] 两个微调按钮（真实控件，不是画上去的字）")
+    "组206⑥★★ 播报如实说明清了宽高（" .. tostring(TEST.chat) .. "）")
 
-  -- ④ 只有 w/h、没有原始值 ⇒ 清记录但**不动目标**
-  if type(store206) == "table" then
-    store206.PlayerFrame = { base = { { "TOPLEFT", "UIParent", "TOPLEFT", 0, 0 } }, dx = 0, dy = 0, w = 400 }
-  end
-  pcall(pf.SetWidth, pf, 250)
-  TEST.chat = nil
-  EVAL_DF_SIZE_CLEAN(true)
-  eq(readNum206(pf, "GetWidth") == 250, true,
-    "组206④★★★ 没有原始值 ⇒ **不去猜、不改目标**（宽仍是 250，实测 " .. tostring(readNum206(pf, "GetWidth")) .. "）")
-  local rec4_206 = (type(store206) == "table") and store206.PlayerFrame or nil
-  eq(type(rec4_206) == "table" and rec4_206.w == nil, true, "组206④★★ 记录里的 w 被清掉")
-
-  -- ⑤ 应用存档：存档里塞着宽高也一个写调用都不发
-  if type(store206) == "table" then
-    store206.PlayerFrame = { base = { { "TOPLEFT", "UIParent", "TOPLEFT", 0, 0 } }, dx = 0, dy = 0,
-      w = 600, h = 180, scale = 1 }
-  end
+  -- ⑦ [重置]：聊天窗还原到改动前的原始值
   WR206.w, WR206.h = 0, 0
-  EVAL_DF_APPLYALL(true)
-  eq(WR206.w == 0 and WR206.h == 0, true,
-    "组206⑤★★★ 应用存档**不写宽高**（实测 SetWidth " .. tostring(WR206.w) .. " / SetHeight " .. tostring(WR206.h) .. "）")
+  TEST.chat = nil
+  EVAL_DF_RESET()
+  eq(readNum206(cf, "GetWidth") == 384, true,
+    "组206⑦★★★ [重置] 把聊天窗宽还原到改动前的 384（实测 " .. tostring(readNum206(cf, "GetWidth")) .. "）")
 
   -- 收尾
-  rawset(pf, "SetWidth", OG206.w) rawset(pf, "SetHeight", OG206.h) rawset(pf, "SetScale", OG206.scale)
-  for name, rec in pairs(saved206) do store206[name] = rec end
+  rawset(cf, "SetWidth", OG206.w) rawset(cf, "SetHeight", OG206.h)
+  rawset(pf, "SetWidth", OG206.w2) rawset(pf, "SetHeight", OG206.h2)
+  for nm, rec in pairs(saved206) do store206[nm] = rec end
   EVAL_DF_SET(wasOn206)
   EVAL_DF_TEST_RESET_TIMERS()
-  _G["GuildFrame"] = nil
   EVAL_DF_TEST_TARGETS_RESET()
-  print(string.format("  宽高整体停用：弹窗 %s 行（宽/高行=%s）· 保存写宽高 %d 次 · 清理 %s 个/还原 %s 项 · 应用存档写宽高 %d 次",
-    tostring(pop206 and table.getn(pop206.rows)), tostring(pop206 and pop206.rowBy and pop206.rowBy.w == nil),
-    WR206.w + WR206.h, tostring(nClean206), tostring(restored206), WR206.w + WR206.h))
-  print("GROUP 206 (宽/高对所有窗口停用：弹窗不建行 + 保存/应用都不写 + 老记录清理还原 + 不猜默认尺寸): PASS")
+  print(string.format("  宽高只给聊天窗：白名单 chat=%s/player=%s · 弹窗 %s 行 allowSize=%s · 保存写宽 %d 次 · " ..
+    "非聊天窗保存+应用共写 %d 次 · 清理 %s 个/还原 %s 项",
+    tostring(EVAL_DF_TEST_SIZE_OK("ChatFrame1")), tostring(EVAL_DF_TEST_SIZE_OK("PlayerFrame")),
+    tostring(popC206 and table.getn(popC206.rows)), tostring(popC206 and popC206.allowSize),
+    WR206.w, wrNonChat206, tostring(nClean206), tostring(restored206)))
+  print("GROUP 206 (宽/高只对聊天窗开放 + 持久化：白名单唯一真值 / 两行按目标显隐+窗高 / 先抓原值再写 / 应用写回 / 清理只清不许改的): PASS")
 end
+
 
 -- ===== 组 207（1.74.31）：框拖拽新增「动作条1~4」= 候选名解析 + 去重 + 探针 =====
 -- 用户要求：「图层拖拽 将 动作条1,2,3,4 也加入可拖拽项」。
@@ -2556,15 +2610,15 @@ do
   print("GROUP 218 (开窗探针：只读哨兵 + 显隐跳变/属性变化如实记录 + 有界自停摘脚本 + 三态落档 + 命令停/看): PASS")
 end
 
--- ===== 组 220（1.74.33）：被动窗口「不许改宽高」+ 方案 A（链式 OnShow）+ 方案 C（开窗后短复查）=====
+-- ===== 组 220（1.74.33 立 · **1.75.1 改口径**）：不许改宽高的窗口 + 方案 A（链式 OnShow）+ 方案 C（开窗后短复查）=====
 -- 用户两条明确要求：
 --   ① 「被动类型窗口不能设置宽度.会破坏内部布局.不能同时设置缩放和宽度.UI 会撕裂」（附截图：法术书撕裂）
 --   ② 「A+C 分析实施」
--- ★这一组钉的是「被动窗口不许被改坏」这条**硬约束**与 A/C 两条新机制的真实行为：
---   ① noSize 唯一真值（icon 目标全有、非 icon 目标没有）
---   ② 属性弹窗对被动窗口**藏起宽/高两行**并显示说明（对非被动目标是 5 行）
---   ③ `dfAttrsApply` 对被动窗口**一个宽高写调用都不发**（写接口计数器；同时证明它没「整段不干活」）
---   ④ 老记录里的宽高被**清理并还原原尺寸**（用户撕裂的根因就是存档里还留着 w/h）
+-- ★这一组钉的是「不许改宽高的窗口不许被改坏」这条**硬约束**与 A/C 两条新机制的真实行为：
+--   ① noSize 唯一真值（★1.75.1：只有聊天窗那 2 个 noSize=false，其余**全部** true）
+--   ② 属性弹窗：宽/高两行**按目标显隐**（聊天窗显示 / 其余藏起来）——正反两面都在本组里验
+--   ③ `dfAttrsApply` 对不许改宽高的目标**一个宽高写调用都不发**（写接口计数器；同时证明它没「整段不干活」）
+--   ④ 老记录里的宽高被**清理并还原原尺寸**（用户撕裂的根因就是存档里还留着 w/h；★聊天窗的持久化数据不动）
 --   ⑤ A：链式 OnShow —— **原生脚本必须被先调用**（用「原生把 scale 设成 1.0 / 我们再设回 0.8」验顺序）
 --   ⑥ A：幂等 + 被换掉后重新链（链的是**最新那个**原生脚本）
 --   ⑦ 关掉功能 ⇒ OnShow **完全还回原生**（不留我们的钩子）
@@ -2606,22 +2660,27 @@ do
   pcall(gf219.SetAlpha, gf219, 1)
   EVAL_DF_SET(true)
 
-  -- ① noSize 唯一真值（★1.74.33 用户第二次澄清：**所有窗口**都不能改宽高 ⇒ 现在每个目标都带）
+  -- ① noSize 唯一真值（★1.75.1 口径反转：**只有聊天窗**能改宽高 ⇒ 只有白名单里的目标 noSize=false）
   local raw219 = EVAL_DF_TEST_TARGETS_RAW()
-  local allN219, allNoSize219, iconN219, iconNoSize219 = 0, 0, 0, 0
+  local allN219, allNoSize219, iconN219, iconNoSize219, freeN219, freeBad219 = 0, 0, 0, 0, 0, 0
   for _, t in ipairs(raw219) do
     allN219 = allN219 + 1
-    if t.noSize == true then allNoSize219 = allNoSize219 + 1 end
+    if t.noSize == true then allNoSize219 = allNoSize219 + 1 else
+      freeN219 = freeN219 + 1
+      if EVAL_DF_TEST_SIZE_OK(t.name) ~= true then freeBad219 = freeBad219 + 1 end
+    end
     if t.icon == true then
       iconN219 = iconN219 + 1
       if t.noSize == true then iconNoSize219 = iconNoSize219 + 1 end
     end
   end
-  eq(allN219 > 20 and allNoSize219 == allN219, true,
-    "组220①★★★ **每个**目标都带 noSize（" .. tostring(allNoSize219) .. "/" .. tostring(allN219) ..
-    "）—— 用户第二次澄清：所有窗口都不能改宽高")
+  eq(allN219 > 20 and allNoSize219 == allN219 - freeN219, true,
+    "组220①★★★ 每个目标都带 noSize，且允许改宽高的**正好是白名单里的那些**（不许 " ..
+    tostring(allNoSize219) .. " / 允许 " .. tostring(freeN219) .. "，白名单外却允许 " .. tostring(freeBad219) .. "）")
+  eq(freeN219 == 2 and freeBad219 == 0, true,
+    "组220①★★★ **只有聊天窗**（ChatFrame1 综合 / ChatFrame2 战斗记录 = 2 个）允许改宽高")
   eq(iconN219 > 15 and iconNoSize219 == iconN219, true,
-    "组220①★★ 被动窗口那批也在其中（" .. tostring(iconNoSize219) .. "/" .. tostring(iconN219) .. "）")
+    "组220①★★ 被动窗口那批**全部**在不许改宽高的行列里（" .. tostring(iconNoSize219) .. "/" .. tostring(iconN219) .. "）")
 
   -- ② 属性弹窗：被动窗口藏宽/高行、显示说明；普通目标 5 行全在
   local storeN219 = EVAL_DF_TEST_STORE()
@@ -2635,9 +2694,18 @@ do
   local rowH219 = pop219 and pop219.rowBy and pop219.rowBy.h
   -- ★★★1.74.33 用户第二次澄清后：宽/高两行**根本不创建**（不是藏起来）——「所有窗口都不能调整宽高」
   eq(pop219 ~= nil and pop219.rowBy ~= nil, true, "组220②前置：弹窗有按 key 的行表（读值口在）")
-  local hid220 = (rowW219 == nil and rowH219 == nil) and true or false
-  eq(hid220, true, "组220②★★★ 属性弹窗**不再创建**宽/高两行（实测 rowBy.w=" .. tostring(rowW219) ..
-    " rowBy.h=" .. tostring(rowH219) .. "）")
+  -- ★★★1.75.1：宽/高两行**建出来但按目标显隐**（只给聊天窗）—— 被动窗口是**藏起来**，不是建了就能点
+  local function shown220(c)
+    if not c or type(c.IsShown) ~= "function" then return nil end
+    local okv, v = pcall(c.IsShown, c)
+    if not okv then return nil end
+    return v and true or false
+  end
+  eq(pop219 and pop219.allowSize == false, true, "组220②★★★ 被动窗口 allowSize=false（不许改宽高）")
+  eq(type(rowW219) == "table" and type(rowH219) == "table", true,
+    "组220②★★★ 宽/高两行**在行表里**（聊天窗用的就是同一份控件 —— 只有一套）")
+  eq(shown220(rowW219 and rowW219.btn) == false and shown220(rowH219 and rowH219.btn) == false, true,
+    "组220②★★★ 被动窗口把这两行**藏起来**（藏 = 点不到；这是「不许改宽高」的落点）")
   eq(pop219 and pop219.rowBy and pop219.rowBy.scale ~= nil and pop219.rowBy.alpha ~= nil
     and pop219.rowBy.show ~= nil, true,
     "组220②★★ 只砍宽/高：显隐/缩放/透明度三行照旧在（别把别的也砍了）")
@@ -2647,11 +2715,22 @@ do
     "组220②★★★ 弹窗里**没有**说明文字控件（说明已搬到图标 tooltip ⇒ 不会与底部按钮重叠）")
   EVAL_DF_TEST_POP_FOR("PlayerFrame")
   local pop2_219 = EVAL_DF_TEST_POP()
-  eq(pop2_219 and pop2_219.rowBy and pop2_219.rowBy.w == nil and pop2_219.rowBy.h == nil, true,
-    "组220②★★★ 普通目标（非被动窗口）**也没有**宽/高行（口径已收窄到所有窗口）")
+  eq(pop2_219 and pop2_219.allowSize == false, true, "组220②★★★ 普通目标同样 allowSize=false")
+  eq(shown220(pop2_219 and pop2_219.rowBy and pop2_219.rowBy.w and pop2_219.rowBy.w.btn) == false, true,
+    "组220②★★★ 普通目标那两行也是藏起来的（口径 = 只给聊天窗）")
+  -- ★对照（正反两面都要验）：聊天窗**显示**这两行 —— 缺了这一面，「只有聊天窗才支持」这条需求本身没被验到
+  if not (type(rawget(_G, "ChatFrame1")) == "table" or type(rawget(_G, "ChatFrame1")) == "userdata") then
+    CreateFrame("Frame", "ChatFrame1", UIParent)
+  end
+  EVAL_DF_TEST_TARGETS_RESET()
+  EVAL_DF_TEST_POP_FOR("ChatFrame1")
+  local popC220 = EVAL_DF_TEST_POP()
+  eq(popC220 and popC220.allowSize == true, true, "组220②★★★ 聊天窗 allowSize=true")
+  eq(shown220(popC220 and popC220.rowBy and popC220.rowBy.w and popC220.rowBy.w.btn) == true, true,
+    "组220②★★★ 聊天窗那两行**显示出来**（与上面「藏起来」互为反面）")
   popHide219()
 
-  -- ③ dfAttrsApply **对任何目标**都不写宽/高（不是只对被动窗口）；但缩放照写（不是「整段不干活」）
+  -- ③ dfAttrsApply 对**不许改宽高的目标**都不写宽/高；但缩放照写（不是「整段不干活」）
   local W219 = { w = 0, h = 0, scale = 0 }
   local ORIG219 = {}
   local function wrap219(fr, k, tag)
@@ -2678,22 +2757,22 @@ do
   local sizeH = W219.h + W219.h2
   eq(sizeW == 0 and sizeH == 0, true,
     "组220③★★★ 应用存档**一个宽高写调用都不发**（图标目标 " .. tostring(W219.w) .. "+" .. tostring(W219.h) ..
-    " · 普通目标 " .. tostring(W219.w2) .. "+" .. tostring(W219.h2) .. "）—— 所有窗口都不许改宽高")
+    " · 普通目标 " .. tostring(W219.w2) .. "+" .. tostring(W219.h2) .. "）—— 这些窗口不许改宽高")
   eq(W219.scale >= 1 and W219.scale2 >= 1, true,
     "组220③★★ 同一轮里缩放照写（" .. tostring(W219.scale) .. "/" .. tostring(W219.scale2) ..
     "）—— 证明不是「整段没干活」的假绿")
   local sizeWrites220 = sizeW + sizeH   -- ★也在这一刻取（后面的清理会调 SetWidth/SetHeight 还原原尺寸）
 
-  -- ④ 老记录的宽高被清理 + 原尺寸还原（**所有目标**，不只是被动窗口）
+  -- ④ 老记录的宽高被清理 + 原尺寸还原（★1.75.1：清理**只覆盖不许改宽高的目标**，聊天窗的持久化数据不动）
   local nClean219, restored219 = EVAL_DF_SIZE_CLEAN(true)
   local recG219 = (type(storeN219) == "table") and storeN219.GuildFrame or nil
   local recP219 = (type(storeN219) == "table") and storeN219.PlayerFrame or nil
-  eq(nClean219 >= 2, true, "组220④★★★ 清理覆盖**所有**留着宽高的窗口（实测 " .. tostring(nClean219) .. " 个）")
+  eq(nClean219 >= 2, true, "组220④★★★ 清理覆盖留着老宽高的**不许改宽高的**窗口（实测 " .. tostring(nClean219) .. " 个）")
   eq(restored219 >= 4, true, "组220④★★★ 有原始值 ⇒ 每个目标宽高都还原（实测 " .. tostring(restored219) .. " 项）")
   eq(type(recG219) == "table" and recG219.w == nil and recG219.h == nil and recG219.ow == nil and recG219.oh == nil, true,
     "组220④★★★ 图标目标的宽/高/原始值都清干净（留着只会有「以为设了其实被停用」的静默状态）")
   eq(type(recP219) == "table" and recP219.w == nil and recP219.h == nil and recP219.ow == nil and recP219.oh == nil, true,
-    "组220④★★★ 普通目标同样被清干净（口径是「所有窗口」）")
+    "组220④★★★ 普通目标同样被清干净（口径 = 不许改宽高的窗口）")
   eq(numOf219(gf219, "GetWidth") == 384, true,
     "组220④★★ 帧宽真的回到原始值 384（实测 " .. tostring(numOf219(gf219, "GetWidth")) .. "）")
   rawset(gf219, "SetWidth", ORIG219.w) rawset(gf219, "SetHeight", ORIG219.h) rawset(gf219, "SetScale", ORIG219.scale)
@@ -2785,12 +2864,12 @@ do
   _G["PlayerFrame"] = nil
   EVAL_DF_TEST_TARGETS_RESET()
 
-  print(string.format("  宽高整体停用 + A+C：noSize %s/%s · 弹窗不再建宽高行 %s · 应用存档写宽高 %d 次 · 清理 %s 个目标 · " ..
-    "链式 OnShow 原生先调 %s 次 · 复查修回 %s 个 · 自停 %s · 战斗中跳过 %s 次",
-    tostring(allNoSize219), tostring(allN219), tostring(hid220),
+  print(string.format("  宽高只给聊天窗 + A+C：noSize %s/%s（只有聊天窗那 2 个不带）· 弹窗 allowSize 聊天窗=%s/非聊天窗=%s · " ..
+    "应用存档写宽高 %d 次 · 清理 %s 个目标 · 链式 OnShow 原生先调 %s 次 · 复查修回 %s 个 · 自停 %s · 战斗中跳过 %s 次",
+    tostring(allNoSize219), tostring(allN219), tostring(popC220 and popC220.allowSize), tostring(pop219 and pop219.allowSize),
     tostring(sizeWrites220), tostring(nClean219), tostring(origCalls220), tostring(fixedStep),
     tostring(not stC2_219.on), tostring(skips9)))
-  print("GROUP 220 (宽高对所有窗口整体停用 + A 链式 OnShow（原生先调·幂等·可重链·可还原）+ C 开窗后短复查（能修回·有界自停·战斗跳过）): PASS")
+  print("GROUP 220 (宽高只给聊天窗（其余窗口仍整体不许改）+ A 链式 OnShow（原生先调·幂等·可重链·可还原）+ C 开窗后短复查（能修回·有界自停·战斗跳过）): PASS")
 end
 
 -- ===== 组 221（1.74.33）：老记录缺屏幕基准（用户报「拖住移动窗口之后下次打开位置没有正确生效」）=====

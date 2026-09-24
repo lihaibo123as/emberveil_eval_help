@@ -923,7 +923,7 @@ PROF_TIP_CAPPED = "Covers %s/5 condition groups → score capped (God tier needs
   TB_LD_X = "X coord",
   TB_LD_Y = "Y coord",
   -- Passive windows: width/height rows are hidden, this note explains why
-  TB_LD_NOSIZE_TIP = "Width/height disabled: resizing tears the layout (all windows)",
+  TB_LD_NOSIZE_TIP = "Width/height only for CHAT frames: chat windows can be resized and the size is remembered; other windows would tear their layout, so they stay locked",
   TB_LD_XY_TIP_LINE1 = "Position: drag, or right-click -> X/Y in attributes (= absolute screen coords: X left edge / Y bottom edge; [-][+] = 10px, Shift = 1px)",
   -- ★★★1.74.34 layer fixes (defined in the DF_FIXES table in tools/DragFrames.lua)
   TB_DFFIX = "Layer fixes",

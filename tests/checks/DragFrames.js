@@ -318,23 +318,47 @@ module.exports = function (root) {
     const iRem = idxOf("local function dfOpenHookRemove(");
     if (iRem < 0) bad.push("找不到 dfOpenHookRemove（关掉功能后钩子摘不掉）");
     else if (bodyOf(iRem).indexOf('"OnShow", orig') < 0) bad.push("卸链没把 OnShow 还回原生那一个（orig）");
-    // ④ 宽高门（唯一真值 noSize）
+    // ④ 宽高门（★1.75.1 口径反转：**只有聊天窗**能改宽高 + 持久化；唯一真值 = dfSizeOK）
+    const dfSrc = fs.readFileSync(path.join(__dirname, "tools", "DragFrames.lua"), "utf8");
     const iAttrs = idxOf("local function dfAttrsApply(");
     if (iAttrs < 0) bad.push("找不到 dfAttrsApply");
     else {
       const body = bodyOf(iAttrs);
-      if (body.indexOf("local allowSize") < 0 || body.indexOf("DF_NO_SIZE") < 0) {
-        bad.push("dfAttrsApply 的 allowSize 门没接 DF_NO_SIZE（宽高又能被写 ⇒ 撕裂回来）");
+      if (body.indexOf("local allowSize") < 0 || body.indexOf("tgt.noSize") < 0) {
+        bad.push("dfAttrsApply 的 allowSize 门没接目标表项的 noSize（宽高又会无差别被写 ⇒ 撕裂回来）");
       }
       if (body.indexOf("if allowSize and type(rec.w)") < 0) bad.push("宽度写入没被 allowSize 守住");
       if (body.indexOf("if allowSize and type(rec.h)") < 0) bad.push("高度写入没被 allowSize 守住");
     }
-    if (joined.indexOf("local DF_NO_SIZE = true") < 0) bad.push("没有 DF_NO_SIZE 常量（「所有窗口不许改宽高」的唯一真值）");
-    if (joined.indexOf("DF_TARGETS[i].noSize = DF_NO_SIZE") < 0) bad.push("目标表没挂 noSize 标记（读值口/判据要读它）");
-    if (joined.indexOf('addRow(-118, "w"') >= 0 || joined.indexOf('addRow(-146, "h"') >= 0) {
-      bad.push("属性弹窗又在创建宽/高行了 —— 用户明确：所有窗口都不能改宽高（会撕裂内部布局）");
+    // ★「哪些名字算聊天窗」必须只有一处真值：dfSizeOK + DF_SIZE_PAT，且正则只许出现一次
+    if (dfSrc.indexOf("local function dfSizeOK(") < 0) bad.push("没有 dfSizeOK（白名单唯一真值）");
+    if (dfSrc.indexOf('local DF_SIZE_PAT = "^ChatFrame%d+$"') < 0) bad.push("没有聊天窗白名单 DF_SIZE_PAT");
+    const chatHits = (dfSrc.match(/ChatFrame%d\+/g) || []).length;
+    if (chatHits !== 1) bad.push("聊天窗白名单正则出现 " + chatHits + " 次（唯一真值，必须恰好 1 次）");
+    if (dfSrc.indexOf("DF_TARGETS[i].noSize = not dfSizeOK(") < 0) bad.push("目标表没按 dfSizeOK 挂 noSize（读值口/判据要读它）");
+    if (dfSrc.indexOf("local DF_NO_SIZE = true") >= 0) bad.push("又出现了旧真值 DF_NO_SIZE（口径已改成「只给聊天窗」）");
+    if (dfSrc.indexOf('addRow(-174, "w"') < 0 || dfSrc.indexOf('addRow(-202, "h"') < 0) bad.push("属性弹窗缺宽/高两行（聊天窗要给这两行）");
+    if (dfSrc.indexOf("local DF_POP_H_SIZE = DF_POP_H + 56") < 0) bad.push("聊天窗弹窗没有加高常量（宽/高两行会压到底部按钮上）");
+    if (dfSrc.indexOf("pcall(p.root.SetHeight, p.root, allowSize and DF_POP_H_SIZE or DF_POP_H)") < 0) {
+      bad.push("弹窗没按目标能力切窗高（非聊天窗会留两块空行）");
     }
-    if (joined.indexOf("function EVAL_DF_SIZE_CLEAN(") < 0) bad.push("没有老记录宽高清理（撕裂会一直跟着老用户）");
+    if (dfSrc.indexOf("if allowSize then pcall(c.Show, c) else pcall(c.Hide, c) end") < 0) {
+      bad.push("宽/高两行没按目标能力显隐（建了不藏 = 非聊天窗也能点到）");
+    }
+    // ★持久化：只对允许的目标入库；不许改宽高的目标要走「自愈清掉」那一支
+    if (dfSrc.indexOf("if p2.allowSize then") < 0 || dfSrc.indexOf("if vW then rec.w = vW end") < 0) {
+      bad.push("聊天窗宽高没入库（用户要的「并且持久化」落不了地）");
+    }
+    // ★顺序哨兵（1.74.31 的教训）：抓原始值必须在 SetWidth **之前**
+    const iCap = dfSrc.indexOf("rec0.ow = curW");
+    const iSetW = dfSrc.indexOf("pcall(tgt.SetWidth, tgt, vW)");
+    if (iCap < 0 || iSetW < 0 || iCap > iSetW) bad.push("抓原始值的顺序不对（写在 SetWidth 之后 = 记下的是新值，重置等于没还原）");
+    // 清理必须**只清不许改宽高的目标**：聊天窗的 w/h 是持久化数据
+    const iClean = idxOf("function EVAL_DF_SIZE_CLEAN(");
+    if (iClean < 0) bad.push("没有老记录宽高清理（撕裂会一直跟着老用户）");
+    else if (bodyOf(iClean).indexOf("tgt.noSize == true and type(rec)") < 0) {
+      bad.push("宽高清理没按 noSize 过滤（会把聊天窗要持久化的宽高一起清掉）");
+    }
     // ⑥ X/Y 坐标（用户第二次澄清要的就是它）：两行必须在、必须带 [−][+] 微调按钮、落锚必须走 dfPlaceFrom
     if (joined.indexOf("addXYRow(-118, \"x\", DF_X_PRESETS)") < 0
       || joined.indexOf("addXYRow(-146, \"y\", DF_Y_PRESETS)") < 0) {

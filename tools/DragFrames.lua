@@ -95,11 +95,17 @@ local DF_KEEP_WALL = 15.0       -- 绝对墙钟上限（秒）：从「武装」
 local DF_DRAG_IDLE_END = 2.0    -- 指针连续 N 秒没动 → 自动结束拖拽（最后一道兜底）
 local DF_DRAG_MAX = 120         -- 单次拖拽绝对上限（秒）
 local DF_POP_W, DF_POP_H = 250, 224
+-- ★★★1.75.1 聊天窗的弹窗多出「宽/高」两行（每行 28px 行距）⇒ 窗高要跟着加，否则两行会压到底部 取消/保存 上。
+--   ★底部两个按钮锚在 **BOTTOM** ⇒ 窗高一变自动跟着走，不需要重排任何控件。
+local DF_POP_H_SIZE = DF_POP_H + 56
 -- ★1.74.31：柄池上限**由目标数派生**（原来写死 8、注释写着「目标表最多也就 5 个」——
 --   加了战斗记录与 4 个动作条之后目标到 10 个，写死值会在最坏情况下悄悄少贴几条柄）
 local DF_POOL_MAX
 local DF_SCALE_PRESETS = { 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3 }
 local DF_ALPHA_PRESETS = { 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0 }
+-- ★★★1.75.1 宽/高预设（**只给聊天窗**用）：与共用下拉同一条约束 —— 项数 ≤ 10（列表只有 10 行、没有滚动）
+local DF_W_PRESETS = { 200, 300, 384, 450, 512, 600, 700, 800, 900, 1000 }
+local DF_H_PRESETS = { 100, 120, 150, 180, 200, 250, 300, 400, 512, 600 }
 -- ★★★1.74.31 用户要求：「图层拖拽 完成弹窗属性设置还要增加当前层宽度/高度设置」
 --   预设表按「这 6 个目标的实际尺寸量级」选：头像/小地图偏小、聊天框与动作条偏宽。
 --   ★张数必须 ≤ 共用下拉列表的行数（列表行数按 DF_ALPHA_PRESETS 建 = 10 行）。
@@ -208,12 +214,22 @@ local DF_TARGETS = {
 --     ③ 老记录里的宽高在启动时**清理并还原原尺寸**。位置继续由**拖窗口**负责。
 --   ★为什么不是「禁止同时设缩放+宽度」而是「干脆不给宽度」：宽度会**撕裂窗口内部布局**（截图里法术书左边技能列表与
 --     右边那条各画各的），而缩放在真机上实测安全（属性窗口缩放 0.7 一直好用）⇒ 宁可少一个能力，也不要一个会把界面搞坏的能力。
---   ★`DF_NO_SIZE` 是这一条的**唯一真值**：`dfAttrsApply` 的门、弹窗、清理三处都读它（不许别处再各判一次）。
-local DF_NO_SIZE = true
--- 每个目标仍保留 `noSize` 字段（**恒为 true**）：读值口与判据直接读它，不必去够模块内的 local；
--- 将来真要放开某个特殊层，也只改这一行。
+--   ★★★1.75.1 用户**第三次**改口径（附截图）：「工具箱->图层拖拽->只有针对聊天窗才支持长宽设置.并且持久化」：
+--     宽/高从「所有窗口都不给」收窄为「**只给聊天窗**」——
+--     聊天窗（`ChatFrame1` 综合 / `ChatFrame2` 战斗记录，同一个聊天窗的两个分页）**可以**改宽高，
+--     且**落存档持久化**（重登/应用存档都写回去）；其余窗口（头像/小地图/动作条/队伍・团队层/被动打开层）
+--     **照旧一个宽高写调用都不发**（会撕裂窗口内部布局 —— 这条理由一个字都没变）。
+--   ★★**唯一真值 = `dfSizeOK(name)`**：`dfAttrsApply` 的门、属性弹窗、启动清理三处都读**目标表项的 `noSize`**，
+--     而 `noSize` 由它现算 ⇒ 全项目只有这一处知道「哪些名字算聊天窗」
+--     （别处再判一次 = 两处真值迟早打架，这正是本项目反复栽过的坑）。
+local DF_SIZE_PAT = "^ChatFrame%d+$"
+local function dfSizeOK(name)
+  if type(name) ~= "string" or name == "" then return false end
+  return string.find(name, DF_SIZE_PAT) ~= nil
+end
+-- 每个目标挂 `noSize`（读值口与判据直接读它，不必去够模块内的 local）
 for i = 1, table.getn(DF_TARGETS) do
-  DF_TARGETS[i].noSize = DF_NO_SIZE
+  DF_TARGETS[i].noSize = not dfSizeOK(DF_TARGETS[i].name)
 end
 DF_POOL_MAX = table.getn(DF_TARGETS) + 2
 
@@ -726,8 +742,10 @@ end
 --   ★`tgt` = 目标表项（可选）：被动窗口（`noSize = true`）**绝不写宽/高** —— 用户明确「宽度会破坏内部布局」。
 local function dfAttrsApply(fr, rec, quiet, tgt)
   if not fr or type(rec) ~= "table" then return 0 end
-  -- ★1.74.33：宽/高**整体停用**（用户第二次澄清：所有窗口都不许改宽高）⇒ 不看 tgt 也照样判得出来
-  local allowSize = (not DF_NO_SIZE) and not (type(tgt) == "table" and tgt.noSize == true)
+  -- ★★★1.75.1：宽/高**只对聊天窗**开放（真值 = 目标表项的 `noSize`，由 `dfSizeOK` 现算）。
+  --   ★没给 `tgt` 时**按不允许处理**（保守）：判不出来就不写 —— 宁可少一个能力，
+  --     也不要「不知道是什么窗口就去改它尺寸」。
+  local allowSize = (type(tgt) == "table") and (tgt.noSize ~= true)
   local n = 0
   if type(rec.scale) == "number" and type(fr.SetScale) == "function" then
     pcall(fr.SetScale, fr, rec.scale) n = n + 1
@@ -1712,10 +1730,14 @@ local function dfPopBuild()
   addRow(-34, "show", L("TB_LD_SHOWHIDE"), { "show", "hide" }, "%s")
   addRow(-62, "scale", L("TB_LD_UISCALE"), DF_SCALE_PRESETS, "%.2f")
   addRow(-90, "alpha", L("TB_LD_ALPHA"), DF_ALPHA_PRESETS, "%.2f")
-  -- ★★★1.74.33 宽/高两行**已整体删除**（所有窗口都不能改宽高 —— 会撕裂内部布局）；
-  --   原来的位置换成 **X/Y 坐标行**（绝对屏幕坐标 + 下拉预设 + [−][+] 微调，见 DF_X_PRESETS 那段说明）。
   addXYRow(-118, "x", DF_X_PRESETS)
   addXYRow(-146, "y", DF_Y_PRESETS)
+  -- ★★★1.75.1 宽/高两行**回来了**，但**只对聊天窗显示**（用户：「只有针对聊天窗才支持长宽设置」）：
+  --   ① 放在 X/Y **下面** ⇒ 前五行位置一个都不动（不需要重排已有行，避开「改一处崩三处」）；
+  --   ② 非聊天窗由 dfCommitPop `Hide` 掉这两行并把窗高收回 `DF_POP_H`（**不是灰掉**：灰掉仍可能被点到）；
+  --   ③ 聊天窗时窗高 = `DF_POP_H_SIZE`（见它的注释：不加高会压到底部按钮上）。
+  addRow(-174, "w", L("TB_LD_WIDTH"), DF_W_PRESETS, "%.0f")
+  addRow(-202, "h", L("TB_LD_HEIGHT"), DF_H_PRESETS, "%.0f")
   -- ★★★1.74.33 用户（附截图：那行说明与底部 取消/保存 **叠在一起**）：
   --   「属性配置信息重叠,可以将信息在外部触发图标tooltip 内展示」
   --   ⇒ 弹窗里**不再放任何说明文字**（224 高的窗里五行已经排到底，再塞文字必然与按钮抢位置）；
@@ -1779,11 +1801,15 @@ local function dfPopBuild()
       local row = p2.rowBy and p2.rowBy[k]
       return row and row.value or nil
     end
-    -- ★★★1.74.33 宽/高**整体停用**（用户第二次澄清：所有窗口都不能改宽高）⇒ 弹窗里根本没有这两行，
-    --   这里**连读都不读**（读了才去写，是这条约束的反面）。
     local vShow = pick("show")
     local vScale = pick("scale")
     local vAlpha = pick("alpha")
+    -- ★★★1.75.1 宽/高**只对聊天窗**：非聊天窗**连读都不读**（「读了才去写」是这条约束的反面）；
+    --   聊天窗读出来交给下面「先抓原始值 → 写新值 → 读回自证」那一段（与缩放/透明度同一口径）。
+    local vW = p2.allowSize and pick("w") or nil
+    local vH = p2.allowSize and pick("h") or nil
+    if type(vW) ~= "number" then vW = nil end
+    if type(vH) ~= "number" then vH = nil end
     -- X/Y = **绝对屏幕坐标**（用户选定）；没动过就保持 nil（不写、不固化）
     local vX = pick("x")
     local vY = pick("y")
@@ -1837,6 +1863,24 @@ local function dfPopBuild()
       end
     end
 
+    -- ★★★1.75.1 宽/高（只对聊天窗）：**先抓原始值 → 再写新值 → 读回自证**；★顺序不许换 ——
+    --   1.74.31 组 206 抓到过「在 SetWidth **之后**才读原值」⇒ 记下的是刚设进去的新值，重置等于没还原。
+    if (vW or vH) and type(tgt) == "table" then
+      local _, _, _, curW, curH = dfReadAttrs(tgt)
+      local st0 = dfStore(true)
+      local rec0 = (type(st0) == "table" and type(name) == "string") and st0[name] or nil
+      if type(rec0) == "table" then
+        if vW and type(rec0.ow) ~= "number" and type(curW) == "number" then rec0.ow = curW end
+        if vH and type(rec0.oh) ~= "number" and type(curH) == "number" then rec0.oh = curH end
+      end
+      local okw = true
+      if vW then okw = (type(tgt.SetWidth) == "function") and pcall(tgt.SetWidth, tgt, vW) end
+      local okh = true
+      if vH then okh = (type(tgt.SetHeight) == "function") and pcall(tgt.SetHeight, tgt, vH) end
+      if vW and okw then table.insert(done, string.format("宽 %.0f", vW)) end
+      if vH and okh then table.insert(done, string.format("高 %.0f", vH)) end
+    end
+
     -- 写新存档（★只写用户真的选了的项）
     local store = dfStore(true)
     if store and type(name) == "string" and name ~= "" then
@@ -1845,11 +1889,15 @@ local function dfPopBuild()
       if vScale then rec.scale = vScale end
       if vAlpha then rec.alpha = vAlpha end
       if vShow then rec.hidden = (vShow == "hide") end
-      -- ★1.74.33 宽/高已停用：老记录里若还留着（用户截图里法术书撕裂就是这么来的）⇒ 顺手清掉（自愈）并如实说明。
-      --   留着它们只会让「用户以为设了、其实早被停用」这种静默状态一直挂着。
-      if rec.w ~= nil or rec.h ~= nil or rec.ow ~= nil or rec.oh ~= nil then
+      -- ★★★1.75.1 宽/高只对聊天窗：允许的目标**入库持久化**（用户要的「并且持久化」就是这个字段）；
+      --   不允许的目标若老记录里还留着 w/h（1.74.33 之前存下的）⇒ **顺手清掉（自愈）并如实说明**，
+      --   否则会一直挂着「用户以为设了、其实早被停用」的静默状态。
+      if p2.allowSize then
+        if vW then rec.w = vW end
+        if vH then rec.h = vH end
+      elseif rec.w ~= nil or rec.h ~= nil or rec.ow ~= nil or rec.oh ~= nil then
         rec.w, rec.h, rec.ow, rec.oh = nil, nil, nil, nil
-        table.insert(done, "已清掉老的宽高设置（宽高已停用）")
+        table.insert(done, "已清掉老的宽高设置（该窗口不许改宽高）")
       end
       dfLog("属性已保存 " .. name .. "：" .. table.concat(done, "/"))
     end
@@ -1884,9 +1932,25 @@ dfCommitPop = function(target, label, name)
   al = al or 1
   -- ★★★1.74.33 按 **key** 回填（不再按下标）；被动窗口**藏起「宽/高」两行**，改显示一行说明
   -- ★1.74.33 宽/高已经**整体停用**（行都不再创建）⇒ 弹窗 = 显隐 / 缩放 / 透明度 + **X/Y 坐标** 五行 + 一行说明
-  p.noSize = true
+  -- ★★★1.75.1 宽/高：**只对聊天窗**给出这两行（真值 = 目标表项 `noSize`，由 `dfSizeOK` 现算）
   local tgtRow = dfTgtOfName(name)
   if type(tgtRow) == "table" then p.label2 = tgtRow.label end
+  local allowSize = (type(tgtRow) == "table") and (tgtRow.noSize ~= true)
+  p.allowSize = allowSize and true or false
+  p.noSize = not allowSize
+  for _, k in ipairs({ "w", "h" }) do
+    local row = p.rowBy[k]
+    if row then
+      local cs = { row.btn, row.label }
+      for ci = 1, table.getn(cs) do
+        local c = cs[ci]
+        if c then
+          if allowSize then pcall(c.Show, c) else pcall(c.Hide, c) end
+        end
+      end
+    end
+  end
+  pcall(p.root.SetHeight, p.root, allowSize and DF_POP_H_SIZE or DF_POP_H)
   -- X/Y 回填 = 目标**当前实测的屏幕位置**（X=左边缘、Y=下边缘）；★只回填显示、**不写 row.value**
   --   （写了就等于「用户没动过也会被保存」，那会把「客户端刚把它摆回去的错误位置」静默固化下来）
   local xNow, yNow = dfMeasure(target)
@@ -2980,8 +3044,10 @@ function EVAL_DF_TOGGLE()
   return EVAL_DF_SET(not EVAL_DF_ENABLED())
 end
 
--- ★★★1.74.33 「被动窗口不许改宽高」的**清理**（用户截图里法术书撕裂 = 老记录里存着 w/h）：
---   在册的被动窗口若存档里有 w/h ⇒ ① 有原始值（rec.ow/oh）就**还原** ② 清掉 w/h/ow/oh ③ 如实报数。
+-- ★★★1.74.33 「不许改宽高的窗口」的**清理**（用户截图里法术书撕裂 = 老记录里存着 w/h）：
+--   在册的**不许改宽高的**窗口若存档里有 w/h ⇒ ① 有原始值（rec.ow/oh）就**还原** ② 清掉 w/h/ow/oh ③ 如实报数。
+--   ★★★1.75.1：口径改成「**只给聊天窗**」之后，本函数**只清 `noSize == true` 的目标** ——
+--     聊天窗的 w/h 是**用户要的持久化数据**，一个字段都不许动（这是「并且持久化」的反面保证）。
 --   ★不是「静默清掉」：清了几项要打出来（用户得知道插件动了他的存档，以及为什么动）。
 --   ★独立于 `store.mig` 那道迁移（老用户那次早就打过标记了，再挂在那下面等于永不执行）。
 function EVAL_DF_SIZE_CLEAN(quiet)
@@ -2991,8 +3057,8 @@ function EVAL_DF_SIZE_CLEAN(quiet)
   for i = 1, table.getn(DF_TARGETS) do
     local tgt = DF_TARGETS[i]
     local rec = store[tgt.name]
-    -- ★1.74.33 宽/高对**所有窗口**都停用 ⇒ 这里不再按 noSize 过滤，凡是存档里留着宽高的一律清掉
-    if type(rec) == "table" and (rec.w ~= nil or rec.h ~= nil) then
+    -- ★★★1.75.1 只清「不许改宽高」的目标（`noSize == true`）；**聊天窗的宽高绝不动**（那是要持久化的数据）
+    if tgt.noSize == true and type(rec) == "table" and (rec.w ~= nil or rec.h ~= nil) then
       local fr = dfTargetFrame(tgt)
       if fr then
         if rec.ow ~= nil and type(fr.SetWidth) == "function" then
@@ -3007,8 +3073,8 @@ function EVAL_DF_SIZE_CLEAN(quiet)
     end
   end
   if n > 0 then
-    say(string.format("框拖拽：已清掉 %d 个窗口的宽高设置（所有窗口都不许改宽高：会撕裂内部布局）· 还原原尺寸 %d 项；" ..
-      "位置继续用**拖窗口**调（宽高按用户要求整体停用）", n, restored))
+    say(string.format("框拖拽：已清掉 %d 个窗口的老宽高设置（这些窗口不许改宽高：会撕裂内部布局）· 还原原尺寸 %d 项；" ..
+      "聊天窗的宽高**保留不动**（那是你要的持久化）", n, restored))
   elseif not quiet then
     say("框拖拽：存档里没有宽高设置（无需清理）")
   end
@@ -4166,7 +4232,9 @@ function EVAL_DF_TEST_POP()
   return { root = DF.pop.root, cover = DF.pop.cover, list = DF.pop.list, rows = DF.pop.rows,
            save = DF.pop.save, cancel = DF.pop.cancel,
            -- ★1.74.33 起读值口也要交出「按 key 找行」与说明行：判据要能验「被动窗口藏了宽/高行、显示了说明」
-           rowBy = DF.pop.rowBy, note = DF.pop.note, target = DF.pop.target, name = DF.pop.name }
+           -- ★1.75.1 加 `allowSize`：判据据此验「聊天窗才给宽/高行 + 窗高加高」，**不复刻**白名单判断
+           rowBy = DF.pop.rowBy, note = DF.pop.note, target = DF.pop.target, name = DF.pop.name,
+           allowSize = (DF.pop.allowSize == true) }
 end
 
 function EVAL_DF_TEST_STORE()
@@ -4183,6 +4251,8 @@ end
 
 -- ★1.74.31 测试口（动作条候选名解析）：
 --   ① 交出**原表**（唯一入口；测试要临时改候选以验「两槽撞同一帧时去重」）
+-- ★1.75.1 读值口：白名单本体（判据直接问它，**不复刻**「哪些名字算聊天窗」的正则）
+function EVAL_DF_TEST_SIZE_OK(name) return dfSizeOK(name) end
 function EVAL_DF_TEST_TARGETS_RAW() return DF_TARGETS end
 --   ★1.74.32 同款：交出「被动打开层候选清单」原表（第 1 步只取证 ⇒ 断言要钉住「它没混进 DF_TARGETS」）
 function EVAL_DF_TEST_WIN_CANDS() return DF_WIN_CANDS end
