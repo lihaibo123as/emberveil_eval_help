@@ -122,7 +122,10 @@ function declOrderScanFiles(files) {
     //   （首版没剥 → 当场误报 addons/EH_MapScale 的 TOP 变量；检查器的假红同样浪费轮次）
     const stripUse = (l) => strip(l)
       .replace(/"(?:[^"\\]|\\.)*"/g, '""')
-      .replace(/'(?:[^'\\]|\\.)*'/g, "''");
+      .replace(/'(?:[^'\\]|\\.)*'/g, "''")
+      // ★剔除「赋值目标」：表字段 `name = v` / 普通赋值 `name = v` 都不是「读取该名字」
+      //   （本轮误报：ui 表里的 `tipDbg = false,` 被当成 tipDbg 的用法）
+      .replace(/(^|[,({\[])\s*[A-Za-z_][A-Za-z0-9_]*(\s*=[^=])/g, "$1$2");
     for (const nm of Object.keys(decls)) {
       if (inner.has(nm)) continue; // 名字在文件内有多个绑定 → 无法按名字判定，跳过
       const d = decls[nm];
@@ -136,7 +139,7 @@ function declOrderScanFiles(files) {
 }
 
 (function () {
-  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/DismountHelper.lua", "tools/RareWatch.lua"];
+  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/DismountHelper.lua", "tools/RareWatch.lua", "tools/DragFrames.lua", "tools/LayerFix.lua"];
   const r = declOrderScanFiles(files);
   const bad = r.bad, totalLocals = r.totalLocals;
   if (bad.length) {
@@ -271,7 +274,11 @@ function declOrderScanFiles(files) {
   const used = new Set();
   // ★1.71.3 补上 Share.lua：它此前**不在扫描名单里**（与 DECL ORDER 的已知盲区同源）——
   //   于是「Share 用了某个键、只改了两种语言」永远是盲区（本轮 SH_CH_OFF 正好落在这里）。
-  for (const f of ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/RareWatch.lua"]) {
+  // ★★★1.74.31 补上 addons/EH_DebugBox/EH_DebugBox.lua：该子插件本轮**开始用 L("键")**（图层调试面板的
+  //   「只显示有名」开关），不在名单里 = 新键只有两种语言的静默失败**永远不会红**（同 Share 那次盲区）。
+  //   ★子插件不加载 Locales/*.lua（那是主插件的模块），运行期走全局 EVAL_L —— 键仍取自同一份三语包，
+  //     所以「必须三语齐全」这条对它同样成立，必须进闸门。
+  for (const f of ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/RareWatch.lua", "tools/DragFrames.lua", "tools/LayerFix.lua", "addons/EH_DebugBox/EH_DebugBox.lua"]) {
     const p = path.join(__dirname, f);
     if (!fs.existsSync(p)) continue;
     const src = fs.readFileSync(p, "utf8");
@@ -370,7 +377,7 @@ function declOrderScanFiles(files) {
 //   ★注释里提到 `SomeCall()` 属于正常（本仓库有大量 API 说明注释），故必须要求「方法调用」
 //   （带 `:` / `.`）而不是裸调用，否则误报成片（实测：裸调用规则会命中 test_assert.lua:240）。
 (function () {
-  const files = ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua",
+  const files = ["EvalHelp.lua", "DataSearch.lua", "Toolbox.lua", "Core.lua", "Engine.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/DragFrames.lua", "tools/LayerFix.lua",
                  "Locales/zhCN.lua", "Locales/enUS.lua", "Locales/ruRU.lua", "test_assert.lua", "test_stub.lua"];
   const bad = [];
   for (const f of files) {
@@ -954,7 +961,7 @@ function declOrderScanFiles(files) {
   if (charKeys.length < 10) bad.push("角色键清单解出来太少（" + charKeys.length + "）—— 锚点变了？");
   const prodFiles = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua",
                      "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua",
-                     "tools/ConsumableHelper.lua", "tools/HunterHelper.lua", "tools/DismountHelper.lua", "tools/IconGrid.lua", "tools/RareWatch.lua"];
+                     "tools/ConsumableHelper.lua", "tools/HunterHelper.lua", "tools/DismountHelper.lua", "tools/IconGrid.lua", "tools/RareWatch.lua", "tools/DragFrames.lua", "tools/LayerFix.lua"];
   const leaks = [];
   prodFiles.forEach(function (f) {
     const p = path.join(__dirname, f);
@@ -1313,7 +1320,7 @@ function declOrderScanFiles(files) {
   }
   // ① 模版数据只能住在 examples/：别的生产文件里再出现 cls = " 就是「又搬回去了 / 多了一份」
   //   （同一个东西两份真值，正是本项目反复踩的坑：改一处漏一处、后写的静默获胜）。
-  const prodFiles = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/RareWatch.lua"];
+  const prodFiles = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/RareWatch.lua", "tools/DragFrames.lua", "tools/LayerFix.lua"];
   const leaked = prodFiles.filter(f => { const p = path.join(__dirname, f); return fs.existsSync(p) && /cls\s*=\s*"/.test(fs.readFileSync(p, "utf8")); });
   if (leaked.length) { console.log("EXAMPLES TOC CHECK: FAIL - template data leaked back into " + leaked.join(",")); process.exit(1); }
   // ② 载入顺序：examples 必须排在 EvalHelp.lua 之后（引擎里的初始化先跑）。
@@ -1451,7 +1458,7 @@ function declOrderScanFiles(files) {
 //   把反向 bug 一起验过去了。★教训：方向这种「全局约定」必须有单一来源 + 源码检查兜底，
 //   否则每个新列表都会各写一遍、错一个没人发现。
 (function () {
-  const files = ["EvalHelp.lua", "Toolbox.lua", "DataSearch.lua", "IconBrowser.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/RareWatch.lua"];
+  const files = ["EvalHelp.lua", "Toolbox.lua", "DataSearch.lua", "IconBrowser.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/RareWatch.lua", "tools/DragFrames.lua", "tools/LayerFix.lua"];
   const sites = [];
   const bad = [];
   for (const f of files) {
@@ -1489,7 +1496,7 @@ function declOrderScanFiles(files) {
 //     再怎么比也验不到「客户端认不认」；只能把约定写成**源码检查**：禁止 sub(hex,3) 这种切码写法 +
 //     职业色表逐项必须是 8 位。
 (function () {
-  const files = ["EvalHelp.lua", "Toolbox.lua", "Engine.lua", "Core.lua", "Share.lua", "DataSearch.lua", "IconBrowser.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/RareWatch.lua"];
+  const files = ["EvalHelp.lua", "Toolbox.lua", "Engine.lua", "Core.lua", "Share.lua", "DataSearch.lua", "IconBrowser.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/RareWatch.lua", "tools/DragFrames.lua", "tools/LayerFix.lua"];
   const bad = [];
   let uses = 0;
   for (const f of files) {
@@ -1930,6 +1937,290 @@ function declOrderScanFiles(files) {
   console.log("HH WIRING CHECK: tools 模块进了 .toc · 工具箱有开关行且勾选接 EVAL_HH_TOGGLE/EVAL_DH_TOGGLE · /eh go 喂食*/下马* 已接 · 两个助手都接了登录恢复");
 })();
 
+// ===== 拖拽模块（tools/DragFrames.lua）自带的源码检查：已迁到 tests/checks/DragFrames.js =====
+// 用户 1.74.34：「拖拽图层模块（DragFrames）代码也排查下归类到自身文件内。」
+//   9 道 DF/DRAG 检查（ANCHOR ID / BARS / ROSTER / OPEN HOOK / PROBE SAFE / GLOBAL SCAN GUARD /
+//   DRAG FRAMES WIRING / PICK WIRING / ICON ART）全部搬进 tests/checks/DragFrames.js，harness 只留这一行。
+// ★TB MOD ROW CHECK 仍在本文件：它是「工具箱模块行」的**框架契约**（服务所有工具模块），不属于某一个模块。
+require("./tests/checks/DragFrames.js")(__dirname);
+
+// ===== 地图工具（tools/SimpleMap.lua）自带的源码检查（1.74.35-3）=====
+// 用户 1.74.35-3：「缩放大地图右侧添加个设置 设置点击下拉->GUI重开 然后提示这个功能会有导致地图
+//   切换到其他地图后自动刷新到当前地图,,默认关闭.」
+//   两道：SM GUIREOPEN WIRING CHECK（默认关是否真的是默认关 / 提示是否还在 / 开图门是否先判据后动作）
+//        + SM GROUP ROSTER CHECK（本模块组号清单，防「整组被删」）。
+require("./tests/checks/SimpleMap.js")(__dirname);
+
+// ===== MODULE HOST LOCAL CHECK（1.74.36-2）：模块不许调用「宿主文件的文件局部」名字 =====
+// ★真机 bug 起因：`tbCfg` 是 Toolbox.lua 的 **local**，模块里裸调 ⇒ 全局 nil ⇒ 读永远 false、写一次都不生效，
+//   而界面/聊天框照样播报「已启用」⇒ 用户看到「勾选框点了不会勾上」。同族还有 `say` / `logLine`（Core/Toolbox 的 local）：
+//   模块里它们全是 nil，于是**所有「如实播报」静默消失**（DragFrames 80 处 / RareWatch 30 处 …）。
+//   三个闸门此前全绿：Lua 语法没问题、行为断言测的是模块自己的纯函数、源码检查只查接线名字 ⇒ 谁都没排到这一层。
+// 判据：把宿主文件（Toolbox/EvalHelp/Core/Engine）里 `local function X` / `local X =` 的名字收集起来，
+//   模块自己**没定义同名 local** 却调用了 `X(` ⇒ FAIL（跨文件它们只能是全局 nil）。
+(function () {
+  const dir = path.join(__dirname, "tools");
+  if (!fs.existsSync(dir)) { console.log("MODULE HOST LOCAL CHECK: (无 tools/，跳过)"); return; }
+  const strip = t => t.split(/\r?\n/).map(l => { const i = l.indexOf("--"); return i >= 0 ? l.slice(0, i) : l; }).join("\n");
+  const hosts = ["Toolbox.lua", "EvalHelp.lua", "Core.lua", "Engine.lua"].filter(f => fs.existsSync(path.join(__dirname, f)));
+  const hostLocals = new Map();
+  for (const h of hosts) {
+    const code = strip(fs.readFileSync(path.join(__dirname, h), "utf8"));
+    for (const m of code.matchAll(/^local\s+function\s+([A-Za-z_][A-Za-z0-9_]*)/gm)) if (!hostLocals.has(m[1])) hostLocals.set(m[1], h);
+    for (const m of code.matchAll(/^local\s+([A-Za-z_][A-Za-z0-9_]*)\s*=/gm)) if (!hostLocals.has(m[1])) hostLocals.set(m[1], h);
+  }
+  const bad = [];
+  let checked = 0;
+  for (const f of fs.readdirSync(dir).filter(x => /\.lua$/.test(x)).sort()) {
+    const code = strip(fs.readFileSync(path.join(dir, f), "utf8"));
+    const own = new Set();
+    for (const m of code.matchAll(/^local\s+function\s+([A-Za-z_][A-Za-z0-9_]*)/gm)) own.add(m[1]);
+    for (const m of code.matchAll(/^local\s+([A-Za-z_][A-Za-z0-9_]*)\s*=/gm)) own.add(m[1]);
+    checked++;
+    for (const [name, host] of hostLocals) {
+      if (own.has(name) || name.length < 3) continue;
+      if (new RegExp("(^|[^A-Za-z0-9_.:])" + name + "\\s*\\(", "m").test(code)) {
+        bad.push(f + " 调用了 " + name + "(（它是 " + host + " 的**文件局部** ⇒ 跨文件是全局 nil）");
+      }
+    }
+  }
+  if (bad.length) {
+    console.log("MODULE HOST LOCAL CHECK: FAIL - " + bad.join(" · ") +
+      " ⇒ 这些调用在真机上是 nil（读永远失败/播报静默消失）；改用全局桥（EVAL_TB_CFG / EVAL_SAY / EVAL_LOGLINE）或自带同名 local");
+    process.exitCode = 1;
+    return;
+  }
+  console.log("MODULE HOST LOCAL CHECK: " + checked + " 个模块都没有引用宿主文件的 local（" + hostLocals.size +
+    " 个宿主 local 名逐个比对；跨模块只认全局桥 EVAL_*）");
+})();
+
+// ===== MODULE L SCOPE CHECK（1.74.35-3）：工具模块的本地化取词必须**自带**（不许裸调全局 L）=====
+// 本轮实测抓到的静默失效：tools/LayerFix.lua 与 tools/DragFrames.lua 的行渲染直接调 `L("TB_…")`，
+//   但项目里 `L` **一律是文件局部**（9 处全是 `local function L`），全仓与游戏目录其它插件都**没有全局 L**。
+//   ⇒ 这些调用要么当场报错、要么靠一个外部全局（铁律 5：不许猜 API 存在）。更糟的是它在工具箱里被
+//     `pcall(fn, r, it)` **吞掉** —— 表现是「按钮文案没设上 / 点击处理器没挂」而那一行看着完全正常。
+// 判据：tools/ 下任何模块只要出现 `L(` 调用，就必须有 `local function L(`，且**必须走全局 EVAL_L**。
+(function () {
+  const dir = path.join(__dirname, "tools");
+  if (!fs.existsSync(dir)) { console.log("MODULE L SCOPE CHECK: (无 tools/，跳过)"); return; }
+  const bad = [];
+  let checked = 0;
+  for (const f of fs.readdirSync(dir).filter(x => /\.lua$/.test(x)).sort()) {
+    const src = fs.readFileSync(path.join(dir, f), "utf8");
+    // 剥注释（只看真代码）
+    const code = src.split(/\r?\n/).map(l => { const i = l.indexOf("--"); return i >= 0 ? l.slice(0, i) : l; }).join("\n");
+    const calls = [...code.matchAll(/(^|[^A-Za-z_.])L\s*\(/g)].length;
+    if (!calls) continue;
+    checked++;
+    if (!/^local function L\(/m.test(code)) {
+      bad.push(f + " 调用了 L( " + calls + " 次，但没有自带的 `local function L(`（裸调全局 L ⇒ 被 pcall 吞掉的静默失效）");
+      continue;
+    }
+    if (!/EVAL_L/.test(code)) bad.push(f + " 自带的 L 没有走全局 EVAL_L（本地化取词必须单一来源）");
+  }
+  if (bad.length) { console.log("MODULE L SCOPE CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
+  console.log("MODULE L SCOPE CHECK: " + checked + " 个用到 L( 的工具模块都自带了局部 L 且走全局 EVAL_L（不再裸调全局 L）");
+})();
+// （DF BARS WIRING CHECK（1.74.31）：动作条1~4 的**候选名解析* … 已迁到 tests/checks/DragFrames.js）
+// （DF ROSTER WIRING CHECK（1.74.32）：队伍层/团队层「按需出现」的 … 已迁到 tests/checks/DragFrames.js）
+// （DF OPEN HOOK CHECK（1.74.33）：方案 A/C 的四条**源码级**契 … 已迁到 tests/checks/DragFrames.js）
+// （DF PROBE SAFE CHECK（1.74.32）：取证命令**绝不许静默** === … 已迁到 tests/checks/DragFrames.js）
+// （DF GLOBAL SCAN GUARD CHECK（1.74.32）：全 `_G` 扫描必 … 已迁到 tests/checks/DragFrames.js）
+// ===== GO ALIAS UNIQUE CHECK（1.74.32）：`/eh go <别名>` 的别名**不许两家共用** =====
+// 真机实案（本轮自己踩的）：新加的「被动窗口图标」分支写了 `msg == "go icons"` 当英文别名 ——
+//   而 `go icons` **早就被组 116 的「图标路径采集」占了**（`/eh go icons` = 把客户端真实图标路径采集进存档）。
+//   后果：那条命令被**静默顶掉**（分派是 elseif 链，先命中的赢），用户跑 `/eh go icons` 会得到完全不相干的行为。
+// ★为什么用源码检查：这类冲突**不报错**，只是"跑到另一家去了"（本项目最恨的静默冲突族）；
+//   断言只在"正好有人测了那条命令"时才照得到，源码检查则能覆盖**全部**别名。
+// 判据：把 `/eh go` 分派链里所有 `msg == "go XXX"` 的字面量收集起来，**跨分支**重复即 FAIL。
+//   ★★注意「同一分支内」不算冲突：一个分支常写成 `msg == "go mbicon reset" or string.find(msg, "^go mbicon reset ") == 1`
+//     —— 同一个别名在**同一条分支**里出现两次是正常写法（第一版没按分支分组，把这两句误报成冲突）。
+(function () {
+  const p = path.join(__dirname, "EvalHelp.lua");
+  if (!fs.existsSync(p)) { console.log("GO ALIAS UNIQUE CHECK: (无 EvalHelp.lua，跳过)"); return; }
+  const code = fs.readFileSync(p, "utf8").split(/\r?\n/)
+    .map(function (l) { const i = l.indexOf("--"); return i >= 0 ? l.slice(0, i) : l; });
+  // ★★怎么算「一条分支」：只看**分派链那一层**的 if/elseif（缩进最浅的那些），
+  //   同一分支里的**嵌套 if**（缩进更深）算同一分支 —— 第一版没区分，把
+  //   `elseif msg == "go mbicon" or msg == "go mbicon reset"` 与它内部的
+  //   `if msg == "go mbicon reset"`（同一分支的子情形）误报成两家冲突。
+  const starts = [];
+  for (let i = 0; i < code.length; i++) {
+    const m = /^(\s*)(if|elseif)\b/.exec(code[i]);
+    if (m && /msg\s*==/.test(code[i]) && /"[^"]*\bgo [^"]*"/.test(code[i])) {
+      starts.push({ line: i, indent: m[1].length });
+    }
+  }
+  if (!starts.length) { console.log("GO ALIAS UNIQUE CHECK: 没找到 /eh go 分派链（跳过）"); return; }
+  const minIndent = Math.min.apply(null, starts.map(function (s) { return s.indent; }));
+  const chain = starts.filter(function (s) { return s.indent === minIndent; });
+  const seen = new Map(); // alias -> 分支序号
+  const dup = [];
+  for (let b = 0; b < chain.length; b++) {
+    const from = chain[b].line;
+    const to = (b + 1 < chain.length) ? chain[b + 1].line : code.length;
+    for (let i = from; i < to; i++) {
+      const re = /"(go [^"]*)"/g;
+      let m;
+      while ((m = re.exec(code[i]))) {
+        const alias = m[1];
+        if (seen.has(alias) && seen.get(alias) !== b) {
+          dup.push(alias + "（分支 #" + (seen.get(alias) + 1) + " 第 " + (chain[seen.get(alias)].line + 1) +
+            " 行 与 分支 #" + (b + 1) + " 第 " + (from + 1) + " 行）");
+        } else if (!seen.has(alias)) seen.set(alias, b);
+      }
+    }
+  }
+  if (dup.length) {
+    console.log("GO ALIAS UNIQUE CHECK: FAIL - 别名被两家共用（elseif 链先命中的赢，另一家被**静默顶掉**）：" + dup.join(" · "));
+    process.exitCode = 1;
+    return;
+  }
+  console.log("GO ALIAS UNIQUE CHECK: /eh go 分派链 " + chain.length + " 条分支 · 别名 " + seen.size +
+    " 个跨分支无重复（不再有「命令被静默顶掉」）");
+})();
+
+// （DRAG FRAMES WIRING CHECK（1.74.30）：框拖拽抽成 tools/ … 已迁到 tests/checks/DragFrames.js）
+// ===== DBX NAMED FILTER CHECK（1.74.31）：子插件的「只显示有名」判据必须是**唯一来源** =====
+// 为什么必须用源码检查：这个开关的判据有**两条路径**能写 `e.named`（uiScanState 的实时刷新 / uiEntryNamed 的懒算），
+//   而 uiEntryNamed 只在 `e.named == nil` 时才计算 ⇒ 只要 uiScanState 那侧先写下一个**更弱的**判据
+//   （历史写法 `e.named = (uiFrameName(e.f) ~= nil)`：不看区域层、也不看合成名），
+//   uiEntryNamed 里那两条判据就**永远不会被走到** —— 开关看着生效（真值/文案/播报全对），
+//   实际只藏住了「GetName 真返回空」的那些，用户截图里那一片 `纹理:Texture` 照旧列出来。
+//   用户为此连报**三次**（第三次带截图）。这类「第二份判据静默短路唯一来源」行为断言很难守住
+//   （要看具体条目才判得出来）⇒ 用源码检查钉住「写入点恰好一处、且在 uiEntryNamed 体内」。
+(function () {
+  const p = path.join(__dirname, "addons", "EH_DebugBox", "EH_DebugBox.lua");
+  if (!fs.existsSync(p)) { console.log("DBX NAMED FILTER CHECK: (无 addons/EH_DebugBox/EH_DebugBox.lua，跳过)"); return; }
+  const lines = fs.readFileSync(p, "utf8").split(/\r?\n/);
+  const code = lines.map(function (l) { const i = l.indexOf("--"); return i >= 0 ? l.slice(0, i) : l; });
+  const bad = [];
+  let decl = -1;
+  for (let i = 0; i < code.length; i++) { if (code[i].indexOf("local function uiEntryNamed(") >= 0) { decl = i; break; } }
+  if (decl < 0) {
+    bad.push("找不到 local function uiEntryNamed（判据的唯一来源没了）");
+  } else {
+    let endAt = -1;
+    for (let i = decl + 1; i < code.length; i++) { if (code[i] === "end") { endAt = i; break; } }
+    const writers = [];
+    // ★负向环视排除 `== nil`（否则「读」会被当成「写」，检查器自己先假红）
+    for (let i = 0; i < code.length; i++) { if (/\be\.named\s*=(?!=)/.test(code[i])) writers.push(i); }
+    if (writers.length !== 1) {
+      bad.push("e.named 的写入点有 " + writers.length + " 处（应恰好 1 处 —— 多出来的那份判据会短路唯一来源）");
+    } else if (!(writers[0] > decl && writers[0] < endAt)) {
+      bad.push("e.named 被写在 uiEntryNamed 之外（行 " + (writers[0] + 1) + "）");
+    }
+  }
+  if (!code.some(function (l) { return /e\.named,\s*e\.isRegion,\s*e\.fakeName\s*=\s*nil,\s*nil,\s*nil/.test(l); })) {
+    bad.push("uiScanState 没有把 e.named 置 nil（改回「自己判一次」= 用户报过三次的那个 bug 复发）");
+  }
+  if (!code.some(function (l) { return l.indexOf("uiEntryNamed(e)") >= 0; })) {
+    bad.push("uiFiltered 的 okNamed 没走 uiEntryNamed（过滤可能绕开了唯一判据）");
+  }
+  const te = fs.readFileSync(path.join(__dirname, "test_engine.js"), "utf8");
+  // ★判据要盯「**运行器的载入清单**」那一段，而不是「文件里出现过这个路径」：
+  //   本文件里 EH_DebugBox 的路径还出现在 LANG KEY CHECK 的扫描清单里 ⇒ 全文子串匹配等于没查
+  //   （把它从运行器清单里删掉，检查照样绿 = 假绿，比没有更坏）。
+  //   ★★★锚点必须**拼出来**（"for(const f of" + " ["）：直接写完整字面量的话，
+  //   这段检查自己的源码里就含那个字面量 ⇒ indexOf 会命中**自己**，而那个窗口里又必然含有
+  //   "test_stub.lua" 与 "EH_DebugBox.lua" 两个关键字 ⇒ 这条检查永远绿。
+  //   （本检查首版就是这样假绿的，被「删掉运行器条目应当报 FAIL」的变异验证当场抓住。）
+  const anchor = "for(const f of" + " [";
+  const ri = te.indexOf(anchor);
+  const runner = ri >= 0 ? te.slice(ri, ri + 5000) : "";
+  if (ri < 0 || runner.indexOf("test_stub.lua") < 0 || runner.indexOf("EH_DebugBox.lua") < 0) {
+    bad.push("子插件没进测试桩运行器的载入清单（行为断言根本跑不到它 —— 组 203 会静默变成空转）");
+  }
+  // ⑤ 顶栏文案必须**按真值现算**（用户截图问的那件事：文案写「开」，真值就必须是 true）：
+  //   ① 文案函数要暴露给「恢复存档」流程；② 恢复存档时必须按真值重写一次（否则存档里是关、文案停在开）；
+  //   ③ 不许硬编码「只显示有名:」—— 硬编码就会出现「存档里是关、文案却写着开」这种自相矛盾（「两处真值」老族）。
+  //   ★不数 `namedLabel()` 的出现次数：函数声明 `local function namedLabel()` 本身也算一次，
+  //   数出来的是「声明 + 调用」的混合量 —— 那样的阈值连「建按钮那处被硬编码」都拦不住（实测放过过一次）。
+  const joined = code.join("\n");
+  if (joined.indexOf("ui.namedLabel = namedLabel") < 0) {
+    bad.push("按钮文案没暴露给「恢复存档」流程（缺 ui.namedLabel = namedLabel）");
+  }
+  if (joined.indexOf("ui.namedLabel()") < 0) {
+    bad.push("恢复存档时没按真值重写按钮文案（ui.namedLabel() 缺席 ⇒ 存档里是关、文案会停在开）");
+  }
+  if (code.some(function (l) { return /只显示有名:/.test(l); })) {
+    bad.push("按钮文案被硬编码（应走语言包 L(\"DBX_NAMED_ON\") / L(\"DBX_NAMED_OFF\")）");
+  }
+  if (bad.length) {
+    console.log("DBX NAMED FILTER CHECK: FAIL - " + bad.join(" | "));
+    process.exitCode = 1;
+    return;
+  }
+  console.log("DBX NAMED FILTER CHECK: 判据唯一来源 uiEntryNamed（写入点恰好 1 处）· uiScanState 只失效不判定 · " +
+    "过滤行接了它 · 子插件在桩的载入清单里");
+})();
+
+// ===== DBX TREE WIRING CHECK（1.74.31 第二步）：图层列表的**可折叠树**接线 =====
+// 为什么用源码检查：这一批几乎全是**接线**，漏了不报错、只是功能悄悄没有（行为断言也要跑完整面板才照得到）：
+//   ① 扫描时必须写下**层号**（`d = depth + 1`）—— 没有它，缩进/父子就只能靠「数路径里的 '/'」猜，
+//      而带前缀的扫描源（`[界面] UIParent/（本体）`）会被多算一层（层深:1 在那些源上什么都显示不出来）；
+//   ② 条目必须把层号带过来（uiBuildEntries 的 `depth = tonumber(nd.d)`）；
+//   ③ 父子关系必须由 uiTreePass（扫描层号 + DFS 相邻性）算，且 uiFiltered **真的要按折叠过滤**；
+//   ④ 行上必须真的有折叠控件（create + row.tw + OnClick 走 uiTreeToggle + 每次刷新按层号缩进）；
+//   ⑤ 叶子层不许有开关（条件里必须有 `(e.kids or 0) > 0`）；
+//   ⑥ 折叠状态必须**落存档 + 读回**（用户要求「折叠状态跨 reload 保持」）；
+//   ⑦ 「层深」必须**只有一个写入点**（uiDepthApply）—— 否则「展开到第 N 层」这种联动会有一半路径不生效；
+//   ⑧ 状态行不许是**死代码**：uiRefresh 一直在算那行状态却写进一个从没被创建过的 `ui.pageLbl`
+//      （老坑：那句话永远是空写 ⇒ 用户看不到「为什么列表变少了」）。
+(function () {
+  const p = path.join(__dirname, "addons", "EH_DebugBox", "EH_DebugBox.lua");
+  if (!fs.existsSync(p)) { console.log("DBX TREE WIRING CHECK: (无 addons/EH_DebugBox/EH_DebugBox.lua，跳过)"); return; }
+  const lines = fs.readFileSync(p, "utf8").split(/\r?\n/);
+  const code = lines.map(function (l) { const i = l.indexOf("--"); return i >= 0 ? l.slice(0, i) : l; });
+  const joined = code.join("\n");
+  const bad = [];
+  const count = function (re) { let n = 0; for (const l of code) if (re.test(l)) n++; return n; };
+
+  // ① 层号写在扫描里
+  const dInc = count(/\bd\s*=\s*depth\s*\+\s*1\b/);
+  if (dInc !== 2) bad.push("扫描时写层号的地方有 " + dInc + " 处（区域 + 子件应恰好 2 处 `d = depth + 1`）");
+  const dRoot = count(/src\s*=\s*src\.k,\s*d\s*=\s*1|\bsrc\s*=\s*"map",\s*d\s*=\s*1/);
+  if (dRoot !== 2) bad.push("根节点的层号有 " + dRoot + " 处（两个建根的分支都该写 `d = 1`）");
+  // ② 条目带层号
+  if (joined.indexOf("depth = tonumber(nd.d)") < 0) bad.push("uiBuildEntries 没把扫描层号带进条目（缩进与层深就失去唯一口径）");
+  // ③ 树 pass + 过滤
+  if (joined.indexOf("local function uiTreePass(") < 0) bad.push("没有 uiTreePass（父子关系没地方算）");
+  if (!/uiEntryDepth\(stack\[table\.getn\(stack\)\]\)\s*>=\s*d/.test(joined)) bad.push("uiTreePass 没有「弹栈」步骤（父子关系会算错）");
+  if (joined.indexOf("if not ui.treeDone then uiTreePass() end") < 0) bad.push("uiFiltered 没有懒调 uiTreePass（列表可能按没算过的父子关系过滤）");
+  if (joined.indexOf("if not uiTreeHidden(e) then table.insert(out, e) end") < 0) bad.push("uiFiltered 没有按树折叠过滤（折叠点了不会少东西）");
+  if (joined.indexOf("p.visKid = true") < 0) bad.push("uiFiltered 没给祖先记「有能显示的子层」（会出现点了没反应的假开关）");
+  // ④ 行上的折叠控件
+  if (joined.indexOf("local tw = uiBtn(row, 12, 15, UI_TREE_OPEN)") < 0) bad.push("行上没有创建折叠开关控件");
+  if (joined.indexOf("row.tw = ") < 0) bad.push("折叠开关没挂到 row.tw（刷新时找不到它）");
+  if (joined.indexOf("uiTreeToggle(e)") < 0) bad.push("折叠开关的 OnClick 没走 uiTreeToggle");
+  if (joined.indexOf("UI_TREE_TX + ind") < 0) bad.push("行文字没有按层号缩进");
+  if (joined.indexOf("UI_TREE_X0 + ind") < 0) bad.push("折叠开关没有跟着缩进");
+  // ⑤ 只给有子层的行画
+  if (joined.indexOf("((e.kids or 0) > 0) and (shut or e.visKid)") < 0) bad.push("折叠开关没按「有子层」判断（叶子层会冒出个假开关）");
+  // ⑥ 落存档 + 读回
+  if (!/treeCollapsed\s*=\s*ui\.treeCollapsed\b/.test(joined)) bad.push("uiSaveSettings 没存 treeCollapsed（折叠状态跨 reload 会丢）");
+  if (joined.indexOf("if type(c.treeCollapsed) == \"table\" then") < 0) bad.push("uiLoadSettings 没读 treeCollapsed");
+  // ⑦ 层深单一入口
+  const dWrites = count(/\bui\.depthMax\s*=(?!=)/);
+  if (dWrites !== 2) bad.push("ui.depthMax 的写入点有 " + dWrites + " 处（应恰好 2 处：读存档 + uiDepthApply 单入口）");
+  const dApply = count(/uiDepthApply\(/);
+  if (dApply < 3) bad.push("uiDepthApply 的调用点只有 " + dApply + " 处（顶栏按钮 + 折叠展开两条路都要走它）");
+  if (joined.indexOf("ui.depthSync = depthSync") < 0) bad.push("层深按钮文案没暴露给「恢复存档」流程（缺 ui.depthSync = depthSync）");
+  if (count(/pcall\(ui\.depthSync\)/) < 2) bad.push("ui.depthSync 只在建按钮时调过（存档读回来的层深会让文案停在旧值）");
+  // ⑧ 状态行不许是死代码
+  if (count(/\bui\.pageLbl\b/) !== 0) bad.push("又出现了 ui.pageLbl（那个控件从来没被创建过 = 状态行是死代码）");
+  if (count(/ui\.statLbl\s*=\s*uiFont\(/) !== 1) bad.push("状态行（计数/地图状态）没有真的被创建");
+  if (count(/ui\.filterLbl\s*=\s*uiFont\(/) !== 1) bad.push("过滤条件行（层深/树折叠/无名过滤）没有真的被创建");
+
+  if (bad.length) {
+    console.log("DBX TREE WIRING CHECK: FAIL - " + bad.join(" | "));
+    process.exitCode = 1;
+    return;
+  }
+  console.log("DBX TREE WIRING CHECK: 扫描层号 2+2 处 · 条目带层号 · uiTreePass(弹栈)+uiFiltered(折叠/记账) · " +
+    "行控件与缩进接线齐 · 叶子无开关 · 折叠落存档并读回 · 层深单入口(2 写/3 调) · 状态行真的画出来（无 pageLbl 死代码）");
+})();
+
 // ===== SHARE AUTHOR WIRING CHECK（1.74.5）：方案「作者/来源」与「不弹窗原因落日志」的接线 =====
 // 为什么用源码检查：这几处**都是接线** —— 漏了不报错、只是功能悄悄没有（行为断言要跑整套 UI / 接收流程才照得到）：
 //   ① 案例模版选单导入必须盖作者 —— ★1.74.22 起：条目自带 `author`（玩家贡献的模版）就用它署名，
@@ -2104,7 +2395,7 @@ function declOrderScanFiles(files) {
 //   1.72.2 把桩改成真客户端行为（具名帧挂全局）后，组 54 当场报 `attempt to call a table value` —— 这就是暴露途径。
 // 判据：全仓扫描 `CreateFrame(..., "NAME", ...)` 的第二参，不得与任何 `function NAME(` 同名。
 (function () {
-  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/RareWatch.lua"];
+  const files = ["EvalHelp.lua", "Core.lua", "Engine.lua", "Toolbox.lua", "DataSearch.lua", "Share.lua", "IconSem.lua", "IconBrowser.lua", "PetData.lua", "PetHelper.lua", "tools/IconGrid.lua", "tools/HunterHelper.lua", "tools/ConsumableHelper.lua", "tools/RareWatch.lua", "tools/DragFrames.lua", "tools/LayerFix.lua"];
   const funcs = {}, frames = [];
   for (const f of files) {
     if (!fs.existsSync(path.join(__dirname, f))) continue;
@@ -2354,7 +2645,11 @@ const iconFixture = (function () {
 })();
 const L=lauxlib.luaL_newstate();
 lualib.luaL_openlibs(L);
-for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/general.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','examples/priest.lua','examples/druid.lua','examples/warlock.lua','examples/shaman.lua','examples/group.lua','Toolbox.lua','DataSearch.lua','Share.lua','IconSem.lua','IconBrowser.lua','PetData.lua','PetHelper.lua','tools/IconGrid.lua','tools/HunterHelper.lua','tools/ConsumableHelper.lua','tools/DismountHelper.lua','tools/RareWatch.lua','test_assert.lua']){
+for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/general.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','examples/priest.lua','examples/druid.lua','examples/warlock.lua','examples/shaman.lua','examples/group.lua','Toolbox.lua','DataSearch.lua','Share.lua','IconSem.lua','IconBrowser.lua','PetData.lua','PetHelper.lua','tools/IconGrid.lua','tools/HunterHelper.lua','tools/ConsumableHelper.lua','tools/DismountHelper.lua','tools/RareWatch.lua','tools/DragFrames.lua','tools/LayerFix.lua','tools/SimpleMap.lua',
+  // ★★★1.74.31 把独立子插件 EH_DebugBox **真的载入桩**（此前只做源码检查、行为断言完全照不到它）：
+  //   用户截图「只显示有名:开，列表里却有一片 `纹理:Texture`」正是从这个盲区里出来的
+  //   —— 面板列表到底列了什么，以前**一次都没被跑过**（组 203 就是补这一课）。
+  'addons/EH_DebugBox/EH_DebugBox.lua','test_assert.lua']){
   if(f==='test_assert.lua' && iconFixture){
     const fx=to_luastring(iconFixture);
     const stx=lauxlib.luaL_loadbuffer(L,fx,fx.length,to_luastring('icon_fixture'));
@@ -2366,4 +2661,206 @@ for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/r
   if(st!==lua.LUA_OK){ console.log('LOAD ERROR ['+f+']:',lua.lua_tojsstring(L,-1)); process.exit(1); }
   if(lua.lua_pcall(L,0,0,0)!==lua.LUA_OK){ console.log('RUNTIME ERROR ['+f+']:',lua.lua_tojsstring(L,-1)); process.exit(1); }
 }
+
+// ===== 工具模块自带的断言组（tests/tools/*.lua，1.74.34）=====
+// 用户 1.74.34：「test 相关的搬迁到对应工具类子文件内自身管理。」
+//   ⇒ 每个工具模块的断言组收在 tests/tools/<模块>.lua，在 test_assert.lua **之后**加载（要用它暴露的 EVAL_TEST_EQ）。
+// ★★「少跑一个文件 = 整组断言静默消失」必须能抓：每个测试文件**最后一行**调 EVAL_TEST_MOD_DONE("<模块名>")，
+//   这里把「实际跑到底的文件数」与「磁盘上的文件数」**当场对账** —— 对不上就打 FAIL 并以退出码 1 结束，
+//   绝不允许「整组没跑」却照样打印 ALL TESTS PASS。
+const modTestDir = path.join(__dirname, 'tests', 'tools');
+const modTests = fs.existsSync(modTestDir)
+  ? fs.readdirSync(modTestDir).filter(f => /\.lua$/.test(f)).sort() : [];
+for (const mf of modTests) {
+  const rel = 'tests/tools/' + mf;
+  const msrc = fs.readFileSync(path.join(modTestDir, mf));
+  const mst = lauxlib.luaL_loadbuffer(L, msrc, msrc.length, to_luastring(rel));
+  if (mst !== lua.LUA_OK) { console.log('LOAD ERROR [' + rel + ']:', lua.lua_tojsstring(L, -1)); process.exit(1); }
+  if (lua.lua_pcall(L, 0, 0, 0) !== lua.LUA_OK) { console.log('RUNTIME ERROR [' + rel + ']:', lua.lua_tojsstring(L, -1)); process.exit(1); }
+}
+{
+  const summary = 'print(string.format("MODULE TESTS: %d/%d（%s）", EVAL_TEST_MOD_N or -1, ' + modTests.length +
+    ', table.concat(EVAL_TEST_MOD_NAMES or {}, ", ")))';
+  const st1 = lauxlib.luaL_loadbuffer(L, to_luastring(summary), summary.length, to_luastring('mod_test_summary'));
+  if (st1 !== lua.LUA_OK || lua.lua_pcall(L, 0, 0, 0) !== lua.LUA_OK) {
+    console.log('RUNTIME ERROR [mod_test_summary]:', lua.lua_tojsstring(L, -1)); process.exit(1);
+  }
+  const hand = 'local n = ' + modTests.length +
+    ' if (EVAL_TEST_MOD_N or -1) ~= n then error(string.format(' +
+    ' "工具测试文件少跑了：磁盘 %d 个，实际跑到底 %d 个（跑到底的：%s）", n, EVAL_TEST_MOD_N or -1, ' +
+    ' table.concat(EVAL_TEST_MOD_NAMES or {}, ", ")), 0) end';
+  const st2 = lauxlib.luaL_loadbuffer(L, to_luastring(hand), hand.length, to_luastring('mod_test_handshake'));
+  if (st2 !== lua.LUA_OK || lua.lua_pcall(L, 0, 0, 0) !== lua.LUA_OK) {
+    console.log('TOOL TEST FILES CHECK: FAIL - ' + lua.lua_tojsstring(L, -1),
+      '⇒ 有整组断言**静默消失**了（文件没被加载，或文件中途 return／报错被吞）');
+    process.exit(1);
+  }
+}
 console.log('DONE');
+
+// ===== TOOL TEST FILES CHECK（1.74.34）：工具模块自带测试的**接线** ===== 
+// 用户 1.74.34：「test 相关的搬迁到对应工具类子文件内自身管理。」
+// 为什么必须用源码检查：这类「文件存在但没人跑」全是**静默**失效 ——
+//   ① tests/tools/*.lua 没被 harness 加载 ⇒ 整组断言消失，套件照样打印 ALL TESTS PASS；
+//   ② tests/checks/*.js 没被 require ⇒ 源码检查消失，同样不报错；
+//   ③ 测试文件自造一套断言（不用 EVAL_TEST_EQ）⇒ 失败格式与其它组不一致，读日志的人会误判；
+//   ④ tests/ 被列进 .toc 或发布清单 ⇒ **测试代码随包发给用户**（发布包里不该有它）。
+(function () {
+  const bad = [];
+  const tdir = path.join(__dirname, 'tests');
+  const dirTools = path.join(tdir, 'tools');
+  const dirChecks = path.join(tdir, 'checks');
+  const list = d => fs.existsSync(d) ? fs.readdirSync(d).sort() : [];
+  const te = fs.readFileSync(path.join(__dirname, 'test_engine.js'), 'utf8');
+  const toc = fs.readFileSync(path.join(__dirname, 'EvalHelp.toc'), 'utf8');
+  // ① 断言文件：必须用共用 eq、必须有「跑到底」握手、必须有 PASS 收尾行
+  const luaFiles = list(dirTools).filter(f => /\.lua$/.test(f));
+  if (!luaFiles.length) bad.push('tests/tools/ 里一个断言文件都没有（工具模块的测试都塞回 test_assert.lua 了？）');
+  for (const f of luaFiles) {
+    const s = fs.readFileSync(path.join(dirTools, f), 'utf8');
+    if (s.indexOf('local eq = EVAL_TEST_EQ') < 0) bad.push(f + ' 没有用共用的 EVAL_TEST_EQ（自造判定 = 两套口径）');
+    if (!/EVAL_TEST_MOD_DONE\("/.test(s)) bad.push(f + ' 缺 EVAL_TEST_MOD_DONE("模块名") 握手（少跑一个文件就没人发现）');
+    if (!/GROUP /.test(s)) bad.push(f + ' 没有 GROUP ...: PASS 收尾行（跑没跑到底看不出来）');
+  }
+  // ② 源码检查文件：必须导出函数、且 harness 里必须有一行 require+调用
+  const jsFiles = list(dirChecks).filter(f => /\.js$/.test(f));
+  for (const f of jsFiles) {
+    const s = fs.readFileSync(path.join(dirChecks, f), 'utf8');
+    if (s.indexOf('module.exports = function') < 0) bad.push(f + ' 没有 module.exports = function（harness 调不动它）');
+    // ★★1.74.36 实测抓到的死代码：导出函数里写 `return (function () {…})();` 之后，**再追加的检查永不执行**
+    //   —— 文件里看得到、日志里从不打印（LF ROW SUMMARY CHECK 就这么被吞了一整轮）。判据：导出函数体内不许有
+    //   顶层 `return`（缩进 ≤4 且形如 `return (` / `return;` / `return (`）；要早退就写进 IIFE 里。
+    //   ★1.74.36 修（当场踩到自己的误报）：**导出函数体的缩进就是 2 空格**，而 IIFE 里的 `return;` 是 4 空格
+    //     （LayerFix.js 的 `if (bad.length) { … return; }` 就在 IIFE 内，是**合法**早退）⇒ 只认 2 空格那档；
+    //     写成 `{2,4}` 会把所有检查文件里合法的 IIFE 早退全判成死代码（真死代码反而看不出来）。
+    const dead = s.split(/\r?\n/).findIndex(l => /^ {2}return\s*(\(|;|$)/.test(l) && l.trim().indexOf('//') !== 0);
+    if (dead >= 0) {
+      bad.push(f + " 第 " + (dead + 1) + " 行有顶层 return（它后面的检查全是**死代码**，永不执行）");
+    }
+    // ★必须**按行**精确匹配：注释掉那一行后，行文本里**照样**含这串子串（indexOf 会假阳性，
+    //   变异 M5 当场漏网过一次）⇒ 只认「独立成行、且不是注释」的那一行。
+    const need = 'require("./tests/checks/' + f + '")(__dirname)';
+    const teLines = te.split(/\r?\n/).map(l => l.trim());
+    if (!teLines.some(l => l.indexOf(need) === 0 && l.indexOf('//') !== 0)) {
+      bad.push(f + ' 在 test_engine.js 里**没有被 require+调用** ⇒ 这条检查静默缺席');
+    }
+  }
+  // ③ 反向哨兵：测试代码**不进包**（.toc 与发布清单里不许出现 tests/）
+  if (/^tests[\\/]/m.test(toc)) bad.push('EvalHelp.toc 里出现了 tests/（测试代码会被当成插件模块载入！）');
+  const refPath = path.join(__dirname, 'CLAUDE_REFERENCE.md');
+  const ref = fs.existsSync(refPath) ? fs.readFileSync(refPath, 'utf8') : '';
+  const packLine = ref.split(/\r?\n/).find(l => /EvalHelp\.toc/.test(l) && /Copy-Item/.test(l)) || '';
+  if (/tests/.test(packLine)) bad.push('发布打包行里出现了 tests（测试代码不该随包发给用户）');
+  if (bad.length) {
+    console.log('TOOL TEST FILES CHECK: FAIL - ' + bad.join(' | '));
+    process.exitCode = 1;
+    return;
+  }
+  console.log('TOOL TEST FILES CHECK: ' + luaFiles.length + ' 个工具断言文件（共用 EVAL_TEST_EQ + 跑到底握手 + PASS 行）· ' +
+    jsFiles.length + ' 个工具源码检查都在 harness 里被 require+调用 · tests/ 不在 .toc 与发布清单里');
+})();
+
+// ===== PCALL CALL CHECK：禁止「把方法调用写在 pcall 里面」 =====
+// ★★★1.74.29 事故（用户截图红字）：`pcall(lbl.SetWidth(240))` —— 这是**先调用**再交给 pcall，
+//   等效于 SetWidth(nil)，运行期报 `sol: received nil for 'self' argument`（pcall 完全没兜住，
+//   因为它兜的是「这次调用」，而方法早已被无 self 调过一次）。正解 = 方法与 self 都当参数传：
+//   `pcall(lbl.SetWidth, lbl, 240)`。此类写法**语法合法、luacheck 也过**，只能靠源码检查拦。
+(function () {
+  const SKIP = { "node_modules": 1, ".git": 1, "tmp": 1, "preview": 1, "pay": 1, ".dsh": 1 };
+  function listLua(dir, out) {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return out; }
+    for (const e of entries) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) { if (!SKIP[e.name]) listLua(p, out); }
+      else if (e.name.slice(-4) === ".lua" && e.name.indexOf("test_") !== 0) out.push(p);
+    }
+    return out;
+  }
+  const files = listLua(__dirname, []);
+  const re = /pcall\s*\(\s*[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\s*\(/;
+  const bad = [];
+  for (const f of files) {
+    const lines = fs.readFileSync(f, "utf8").split(String.fromCharCode(10));
+    for (let i = 0; i < lines.length; i++) {
+      const ci = lines[i].indexOf("--");
+      const code = (ci >= 0 ? lines[i].slice(0, ci) : lines[i]).replace(/\r+$/, "");
+      if (re.test(code)) {
+        bad.push(path.relative(__dirname, f).replace(/\\/g, "/") + ":" + (i + 1) + " - " + code.trim().slice(0, 80));
+      }
+    }
+  }
+  if (bad.length) {
+    for (const b of bad.slice(0, 10)) console.log("PCALL CALL CHECK: FAIL - " + b);
+    if (bad.length > 10) console.log("PCALL CALL CHECK: FAIL - ... and " + (bad.length - 10) + " more");
+    process.exitCode = 1;
+    return;
+  }
+  console.log("PCALL CALL CHECK: " + files.length + " files, no method-call-inside-pcall");
+})();
+
+// （DF PICK WIRING CHECK（1.74.33）：图层**选中名单**（工具箱 [ … 已迁到 tests/checks/DragFrames.js）
+// ===== TB MOD ROW CHECK（1.74.34）：工具箱「模块行」（`t = "mod"`）的通用契约 =====
+// 用户要求（两次同款）：「尽量少的在 ToolBox 文件内修改.只要加入嵌入点进行函数调用」
+//   ⇒ 工具箱侧只留**一行数据 + 一个通用分支**，模块自己把渲染函数登记进 `EVAL_TB_MOD_ROWS[mod]`。
+// 为什么必须用源码检查：这类「名字/嵌入点对不上」全是**静默**失效 ——
+//   ① 模型写 `mod = "x"`、模块登记 `["y"]` ⇒ 那一行**点不动**，且不报错；
+//   ② 通用分支没真调模块函数 ⇒ 行还在、按钮没有（看着像「这功能没做」）；
+//   ③ 行数据没有 `key` ⇒ 读值口（`EVAL_TB_TEST_*_FOR(key)`）找不到那一行，**断言会静默跳过**（绿得可疑）。
+(function () {
+  const tbPath = path.join(__dirname, "Toolbox.lua");
+  if (!fs.existsSync(tbPath)) { console.log("TB MOD ROW CHECK: (无 Toolbox.lua，跳过)"); return; }
+  const bad = [];
+  const strip = t => t.split(/\r?\n/).map(l => { const i = l.indexOf("--"); return i >= 0 ? l.slice(0, i) : l; }).join("\n");
+  const tbRaw = fs.readFileSync(tbPath, "utf8");
+  const tb = strip(tbRaw);
+  // ① 通用嵌入点（唯一）必须在，且真的调用、且未登记时如实上报
+  const iS = tbRaw.indexOf('elseif it.t == "mod" then');
+  const iE = tbRaw.indexOf('elseif it.t == "rw" then');
+  const seg = (iS >= 0 && iE > iS) ? strip(tbRaw.slice(iS, iE)) : "";
+  if (!seg) bad.push('找不到模块行通用分支（elseif it.t == "mod" then …）');
+  else {
+    if (seg.indexOf("EVAL_TB_MOD_ROWS") < 0) bad.push("通用分支没从注册表 EVAL_TB_MOD_ROWS 取渲染函数");
+    if (!/pcall\(fn, r, it\)/.test(seg)) bad.push("通用分支没有真的调用模块的渲染函数（pcall(fn, r, it) 缺席）");
+    if (seg.indexOf("EVAL_SAY") < 0) bad.push("通用分支没有「模块没登记」时的如实上报（会静默留一行空白）");
+  }
+  // ② 模型里每个模块行：必须有 key；`mod` 必须在 tools/*.lua 里有**同名登记**
+  const rows = [...tb.matchAll(/t = "mod",\s*mod = "([^"]+)"([^\n]*)/g)].map(m => ({ mod: m[1], rest: m[2] }));
+  if (!rows.length) bad.push('模型里一个模块行都没有（t = "mod"）');
+  const toolDir = path.join(__dirname, "tools");
+  const srcAll = fs.readdirSync(toolDir).filter(f => /\.lua$/.test(f))
+    .map(f => fs.readFileSync(path.join(toolDir, f), "utf8")).join("\n");
+  const seen = new Set();
+  for (const r of rows) {
+    if (seen.has(r.mod)) bad.push("模块行 mod 重复：" + r.mod);
+    seen.add(r.mod);
+    if (!/key\s*=/.test(r.rest)) bad.push("模块行 " + r.mod + " 没有 key（读值口按 key 找行 ⇒ 断言会静默跳过）");
+    if (srcAll.indexOf('["' + r.mod + '"] =') < 0) {
+      bad.push("模块行 " + r.mod + " 在 tools/*.lua 里找不到同名登记（名字对不上 ⇒ 那一行点不动且不报错）");
+    }
+  }
+  // ④ 行上不许再重复显示「配置项摘要」（用户 1.74.36：「配置项不需要再外部显示，已经在 tooltip 设置内显示了」）
+  //   判据：tools/*.lua 里不许出现 `extra:SetText` —— 那一格是**工具箱自己的列表行**（t="l"，如喂食物品）在用的；
+  //   模块行必须把配置项收进 [设置]/[重置] 的悬停说明（`tip.AddLine`），否则行上会出现两处同源文本、早晚打架。
+  if (/extra\s*:\s*SetText/.test(srcAll)) {
+    bad.push('tools/*.lua 里出现 `extra:SetText`（模块行不许把配置项写到行上 —— 配置项只在 [设置] 悬停说明里显示）');
+  }
+  // ③ 反向哨兵：工具箱里不许再认识任何模块内部件（「搬干净」的判据）
+  for (const n of ["EVAL_DF_", "LF_FIXES", "EVAL_LF_", "EVAL_SM_"]) {
+    if (tb.indexOf(n) >= 0) bad.push("Toolbox.lua 里出现了模块内部件 " + n + "（模块行只留一行数据 + 一个通用分支）");
+  }
+  if (bad.length) {
+    console.log("TB MOD ROW CHECK: FAIL - " + bad.join(" | "));
+    process.exitCode = 1;
+    return;
+  }
+  console.log("TB MOD ROW CHECK: 通用嵌入点（注册表取值 + 真调用 + 未登记时如实上报）· " + rows.length +
+    " 个模块行都有 key 且名字在 tools/*.lua 里有同名登记 · 工具箱不认识模块内部件");
+})();
+
+// ===== 工具模块自带的源码检查（tests/checks/*.js，1.74.34）=====
+// 用户 1.74.34：「test 相关的搬迁到对应工具类子文件内自身管理。」
+//   ⇒ 每个工具模块的检查收在 tests/checks/<模块>.js；harness 只负责 require + 调用（一行一个）——
+//     **漏一个**由 `TOOL TEST FILES CHECK` 对账抓到。★新增工具模块时：这里加一行 + tests/checks/ 建同名文件。
+require("./tests/checks/LayerFix.js")(__dirname);
+// （DF ICON ART CHECK（1.74.33）：窗口图标「画法 + 左键/右键分工」的 … 已迁到 tests/checks/DragFrames.js）

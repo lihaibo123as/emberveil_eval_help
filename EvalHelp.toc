@@ -33,8 +33,11 @@ IconSem.lua
 IconBrowser.lua
 PetData.lua
 PetHelper.lua
+tools\SimpleMap.lua
 tools\IconGrid.lua
 tools\HunterHelper.lua
 tools\ConsumableHelper.lua
 tools\DismountHelper.lua
 tools\RareWatch.lua
+tools\DragFrames.lua
+tools\LayerFix.lua

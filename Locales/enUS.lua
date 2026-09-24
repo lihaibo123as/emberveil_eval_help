@@ -808,6 +808,7 @@ PROF_TIP_CAPPED = "Covers %s/5 condition groups → score capped (God tier needs
   HH_FOOD_MISSING = "'%s' is no longer in your bags (bags are re-scanned before each feed - please pick again)",
   HH_NO_SPELL = "Cannot identify the Feed Pet spell: right-click the icon -> pick feeding spell from the spellbook, or /eh go 喂食 技能 <name> (/eh go 喂食探针 扫书 lists candidates)",
   HH_NO_RUNSCRIPT = "This client has no RunScript; protected spells cannot be cast (feeding is impossible)",
+  HH_ACT_GATED = "Action blocked by the anti-kick gate (try again shortly)", -- ★1.74.29 防踢线闸门
   HH_CAST_FAIL = "Cast failed (not usable: unknown / on cooldown / not usable in combat)",
   HH_AIM_FAIL = "Never entered 'waiting for a target' -> aborted, bags are NOT clicked (that would only pick the food onto the cursor)",
   HH_PICK_FAIL = "Clicking the bag slot failed",
@@ -834,6 +835,14 @@ PROF_TIP_CAPPED = "Covers %s/5 condition groups → score capped (God tier needs
   HH_PET_HAPPY1 = "Unhappy",
   HH_PET_HAPPY2 = "Content",
   HH_PET_HAPPY3 = "Happy",
+  -- ★1.74.29 宠物信息行：伤害缺失时的整句 + 忠诚档位本地化名（客户端只给英文串，我们译）
+  HH_TT_PETINFO_NODMG = "Level %s | Happiness: %s | Loyalty: %s | XP %s",
+  HH_PET_LOYAL1 = "Rebellious",
+  HH_PET_LOYAL2 = "Unruly",
+  HH_PET_LOYAL3 = "Submissive",
+  HH_PET_LOYAL4 = "Dependable",
+  HH_PET_LOYAL5 = "Faithful",
+  HH_PET_LOYAL6 = "Best Friend",
   HH_TT_LEFT = "Left = feed in one click",
   HH_TT_RIGHT = "Right = pick food / spell",
   HH_TT_DRAG = "Hold Left to drag (position is remembered)",
@@ -841,6 +850,7 @@ PROF_TIP_CAPPED = "Covers %s/5 condition groups → score capped (God tier needs
   -- ★1.74.5 Toolbox "pending test" mark (yellow exclamation; tooltip)
   TB_WIP = "Pending test",
   TB_WIP_TIP = "Not verified in game yet: the API and interaction may still change (/eh go 喂食探针 is the evidence entry point)",
+  TB_RESETPOS = "Reset position", -- ★1.74.29 喂食/消耗品助手行右侧按钮
   -- ★1.74.29 配置窗「子插件」Tab（分组：调试 → 图层调试）
   TAB_PLUGINS = "Sub-addons",
   SUB_GROUP_DEBUG = "—— Debug ——",
@@ -875,8 +885,66 @@ PROF_TIP_CAPPED = "Covers %s/5 condition groups → score capped (God tier needs
   TB_RAREWATCH_TIP = "One chat line the moment the quest addon spots a rare: name (coloured by rank) + rank + yards to the nearest recorded spawn; clicking the name selects it (a miss is reported as an error). On by default.",
   -- probe/worldmap-minimap branch: standalone addon EH_SimpleMap (addons/ dir, probe build)
   TB_H_SIMPLEMAP = "—— Map addon ——",
-  TB_SIMPLEMAP = "Simple map (EH_SimpleMap)",
-  TB_SIMPLEMAP_TIP = "Standalone addon: simple world map (adjustable opacity) + simple minimap. Not loaded unless enabled — tick = enable and prompt for /reload; untick = not loaded after /reload. Off by default.",
+  TB_DBGDRAG = "Layer drag handles",
+  TB_LDDRAG_RESET = "Reset", -- ★1.74.29 框拖拽行右侧重置
+  TB_LDDRAG_RESET_TIP = "Reset: restores each layer's scale/opacity/visibility and clears positioning data",
+  -- ★1.74.33 图层选择（多选下拉）
+  TB_LDDRAG_SET = "Setup",
+  TB_LDDRAG_SET_TIP = "Layer selection: tick which layers support dragging and attribute editing. Unticked layers get no drag handle, no config icon, and their saved position/scale/alpha/visibility is not applied.",
+  TB_LD_PICK_SUM_FMT = "%d/%d layers ticked",
+  TB_LD_PICK_NONE = "No layer ticked: dragging and attribute editing are off for every layer",
+  TB_LD_PICK_G1 = "—— Always-on layers (drag handle) ——",
+  TB_LD_PICK_G2 = "—— Party / raid layers ——",
+  TB_LD_PICK_G3 = "—— Passive windows (click icon = attrs, drag icon = move) ——",
+  TB_LD_ICON_TIP_LINE1 = "Left-drag moves this window",
+  TB_LD_ICON_TIP_LINE2 = "Right-click the icon = open attribute settings (scale/alpha/size/visibility)",
+  TB_LD_UISCALE = "UI scale",
+  TB_LD_SHOWHIDE = "Show/Hide",
+  TB_LD_SHOW = "Show",
+  TB_LD_HIDE = "Hide",
+  TB_LD_ALPHA = "Opacity",
+  TB_LD_WIDTH = "Width",
+  TB_LD_HEIGHT = "Height",
+  TB_LD_X = "X coord",
+  TB_LD_Y = "Y coord",
+  -- Passive windows: width/height rows are hidden, this note explains why
+  TB_LD_NOSIZE_TIP = "Width/height disabled: resizing tears the layout (all windows)",
+  TB_LD_XY_TIP_LINE1 = "Position: drag, or right-click -> X/Y in attributes (= absolute screen coords: X left edge / Y bottom edge; [-][+] = 10px, Shift = 1px)",
+  -- ★★★1.74.34 layer fixes (defined in the DF_FIXES table in tools/DragFrames.lua)
+  TB_DFFIX = "Layer fixes",
+  TB_DFFIX_TIP = "Applies special fixes to individual elements INSIDE certain layers (currently one: \"Action bar gryphons\" = hides the two gryphon textures at both ends of the action bar). Use Setup on the right to multi-select: ticked fixes take effect at once, unticking restores immediately; Reset restores everything and clears the ticks. Nothing is ticked by default (your UI is not touched unless you ask). The fixes are defined in the DF_FIXES table in tools/DragFrames.lua.",
+  TB_DFFIX_SET_TIP = "Fix selection: tick which fixes are active (multi-select, the panel stays open). Ticking applies at once, unticking restores at once.",
+  TB_DFFIX_RESET_TIP = "Reset: restores every active fix (shows the hidden textures again) and clears the ticks.",
+  TB_DFFIX_SUM_FMT = "%d/%d fixes active",
+  TB_DFFIX_NONE = "No fix is active right now",
+  TB_FIX_G1 = "—— Action bar / main UI ——",
+  TB_FIX_GRYPHON = "Action bar gryphons",
+  TB_FIX_GRYPHON_TIP = "Hides the two gryphon textures at both ends of the action bar (layer = MainMenuBarArtFrame, taking the LAST 2 textures of its GetRegions()). Ticking hides them at once, unticking shows them again.",
+  TB_LD_SAVE = "Save",
+  -- ★★本轮（用户：「重置也要重置 缩放、透明度、显示隐藏」+「重置信息显示要显示 缩放、透明度、显示/隐藏」）：
+  --   清单（[重置] 悬停 tooltip）逐目标读**当前真值**用的槽位名 + 状态标记 + 合计行（含 %d 两个数字）
+  TB_LD_SUM_SCALE = "Scale",
+  TB_LD_SUM_W = "W",
+  TB_LD_SUM_H = "H",
+  TB_LD_SUM_ALPHA = "Opacity",
+  TB_LD_SUM_SHOWN = "Shown",
+  TB_LD_SUM_HIDDEN = "Hidden",
+  TB_LD_SUM_POS = "Position",
+  TB_LD_SUM_DEF = "default values",
+  TB_LD_SUM_CUSTOM = "customized",
+  TB_LD_SUM_PICKOFF = "not ticked - unmanaged",
+  TB_LD_SUM_ODD = "no record - currently non-default",
+  TB_LD_SUM_NOFRAME = "frame missing - current values unreadable",
+  TB_LD_SUM_TOTAL = "Total: %d targets - %d custom records",
+  TB_LD_SUM_MISS = "%d more target(s) have no matching frame on this client (action bars / party / raid are matched by candidate names; party and raid are absent while you are not grouped) - /edb bars lists the available names",
+  TB_DBGDRAG_TIP = "Adds a transparent drag bar to player / target / minimap / chat / combat log / action bar / action bars 1-4 / party / raid - width = frame width, 20px tall, aligned to the frame top-left, with a label. Dragging it moves that frame; the position is saved to your config and checked periodically. Clicking it also sets that frame's scale / alpha / visibility / width / height; the Reset button restores those attributes. Off by default: the bar captures the mouse. Party and raid are absent while you are not grouped (reported honestly) and appear as soon as you join.",
+  TB_H_UITOOLS = "UI tools", -- ★★1.74.29 由「地图工具」改名（并移到第一组）
+  TB_SIMPLEMAP = "Zoom world map", -- ★1.74.30 用户：改叫「缩放大地图」
+  TB_SIMPLEMAP_TIP = "Tool module of the main addon (tools/SimpleMap.lua): world map scale + opacity + blackout hiding + position memory, applied automatically when the map opens (no /reload needed). Shift+wheel=opacity · Ctrl+wheel=scale · gold bar=drag · GUI reopen lives in [Setup] on the right. Off by default.",
+  TB_SM_GUIREOPEN = "GUI reopen",
+  TB_SM_GUIREOPEN_TIP1 = "On map open, re-show the outermost GUI once (the client hides it while the map is open).",
+  TB_SM_GUIREOPEN_TIP2 = "Side effect: the map addon then believes the map is CLOSED - once you zoom out to a continent/world layer the map is auto-refreshed back to your current zone (every 2s).",
+  TB_SM_GUIREOPEN_TIP3 = "Off by default. Tick it only if you want the minimap/action bars visible while the map is open.",
   TB_SMAP_WIP = "Probe build: enable + /reload, then /ehm probe for client support; /ehm probe2 for write tests (reverted by /reload).",
   TB_SMAP_RELOAD = "EH_SimpleMap (simple map) enabled: /reload to load it",
   TB_SMAP_ASK = "Enabled. A UI reload (/reload) is required to load it. Reload now?",
@@ -962,4 +1030,12 @@ PROF_TIP_CAPPED = "Covers %s/5 condition groups → score capped (God tier needs
   RW_TP_OK = "(6) verdict: the API **works** (it selects when nearby) => earlier failures were a **distance/line-of-sight** matter (a client limit, not a wrong message)",
   RW_TP_FAIL = "(6) verdict: it cannot even re-select the target in front of you => TargetByName is a **no-op** for addons on this client => send me this line, the left-click targeting needs another implementation",
   RW_TGT_NOAPI = "This client has no TargetByName, so targeting is not possible (the alert itself is unaffected)",
+
+  -- ===== EH_DebugBox (layer debug sub-addon) top bar: unnamed-layer filter (1.74.31) =====
+  -- Single criterion source = the sub-addon's uiFrameName (empty GetName() = unnamed)
+  --   ★1.74.34-24: the criterion is the NAME only — regions with a real name (WorldMapDetailTile1,
+  --   WorldMapOverlay1 ...) are listed as before; hidden are empty GetName() **and** synthetic names.
+  DBX_NAMED_ON = "Named only: ON",
+  DBX_NAMED_OFF = "Named only: OFF",
+  DBX_NAMED_TIP = "Show only named layers: textures/fontstrings with an empty GetName() (the \"Texture\" rows) and synthetic names (texturepath_0xaddr) are hidden; **textures with a real name stay listed**. ON by default; click once to turn it off and bring all unnamed layers back.",
 }

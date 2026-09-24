@@ -679,6 +679,20 @@ function EVAL_CH_PANEL()
 end
 
 -- ===== 总闸门（工具箱开关的即时副作用） =====
+-- ★★1.74.29 用户要求：工具箱「消耗品助手」行加「重设位置」按钮 → 图标回到**屏幕正中**。
+--   位置口径 = 中心偏移（chX/chY），正中 = (0,0)，落位走本文件既有的 chApplyPos（唯一来源）。
+function EVAL_CH_RESET_POS()
+  local tb = chCfg()
+  if not tb then return false end
+  tb.chX, tb.chY = 0, 0
+  if CH.btn then chApplyPos(CH.btn, CH_SIZE, 0, 0) end
+  if type(EVAL_SAY) == "function" then
+    pcall(EVAL_SAY, "消耗品助手图标位置已重设为屏幕正中（偏移 0,0）")
+  end
+  chLog("重设位置：chX/chY = 0,0（按钮=" .. tostring(CH.btn ~= nil) .. "）")
+  return true
+end
+
 function EVAL_CH_TOGGLE()
   if not chOn() then
     if CH.btn then pcall(CH.btn.Hide, CH.btn) end

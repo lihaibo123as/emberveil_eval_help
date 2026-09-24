@@ -49,4 +49,27 @@ for (const rel of mods) {
   copied++;
 }
 console.log('SYNC OK: ' + copied + ' 个文件 -> ' + DST);
+
+// ④ 独立子插件目录 addons\<名>\ → Interface\AddOns\<名>\（1.74.30 补）
+//   ★为什么必须有这一步：`.toc` 只覆盖主插件的模块清单，而本仓库**还有子插件**（addons/EH_DebugBox）。
+//   1.74.30 把框拖拽整块搬进主插件、子插件那侧改成瘦转发 —— 若只同步主插件，游戏里跑的就是
+//   「新模块 + 老实现」两套逻辑同时改锚点（正是本次要修的那类「两处真值打架」）。
+const addonsRoot = path.join(SRC, 'addons');
+const addonsDst = path.dirname(DST);
+let addonCopied = 0;
+const addonNames = [];
+if (fs.existsSync(addonsRoot)) {
+  for (const e of fs.readdirSync(addonsRoot, { withFileTypes: true })) {
+    if (!e.isDirectory()) continue;
+    addonNames.push(e.name);
+    const from = path.join(addonsRoot, e.name);
+    for (const f of walk(from, [])) {
+      const to = path.join(addonsDst, e.name, path.relative(from, f));
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.copyFileSync(f, to);
+      addonCopied++;
+    }
+  }
+  console.log('SYNC OK: ' + addonCopied + ' 个文件 -> ' + addonsDst + '\\[' + addonNames.join(', ') + ']\\');
+}
 if (missing.length) console.log('MISSING (' + missing.length + '): ' + missing.join(', '));

@@ -4,7 +4,51 @@
 -- 全部能力经 probe 系列实测定案（见「正式版功能」段注释）；探针保留为诊断命令。
 -- ============================================================
 
-EH_SIMPLEMAP_CFG = EH_SIMPLEMAP_CFG or {}
+-- ★★★1.74.29 修：本客户端每个 `## SavedVariables:` 行**只认一个变量名**
+--   （UnrealQuest/OneBag/OneBank 都是一行一名）。之前写成「A B -- 注释」被整串当成一个名字 →
+--   存档被写成 `A B -- 注释 = nil` → 下次载入直接报错 「'=' expected」且**把账号配置覆盖掉了**。
+--   现在：本工具的设置挂到主配置表 **EVAL_HELP_CONFIG.simpleMapCfg** 下（单一 SavedVariables = 稳）。
+-- ★★★模块必须**自带**本地化取词：项目里 `L` 一律是**文件局部**（没有全局 L），
+--   裸调 `L(...)` 在工具箱里会被 `pcall(fn, r, it)` 吞掉 ⇒ 表现是「按钮文案没设上 / 点了没反应」而面板正常。
+--   写法与 tools/ConsumableHelper.lua / DismountHelper.lua / HunterHelper.lua 完全一致（走全局 EVAL_L）。
+-- ★★★1.74.36-2：模块**必须自带** `say` / `logLine` —— 项目里这两个名字**只在 Core.lua / Toolbox.lua 里是 local**，
+--   模块里裸调得到的是全局 nil：轻则「如实播报」全部静默消失，重则整段代码在 pcall 里直接报错退出。
+--   走 Core.lua 末尾的全局桥：`EVAL_SAY = say` / `EVAL_LOGLINE = logLine`（与 ConsumableHelper 的 chSay 同一写法）。
+local function say(msg)
+  if type(EVAL_SAY) == "function" then pcall(EVAL_SAY, msg) return end
+  if type(DEFAULT_CHAT_FRAME) == "table" and DEFAULT_CHAT_FRAME.AddMessage then
+    pcall(DEFAULT_CHAT_FRAME.AddMessage, DEFAULT_CHAT_FRAME, tostring(msg))
+  end
+end
+local function logLine(msg)
+  if type(EVAL_LOGLINE) == "function" then pcall(EVAL_LOGLINE, tostring(msg)) end
+end
+
+-- ★配置真值的读取口（**唯一入口**）：走工具箱导出的全局 `EVAL_TB_CFG()`。
+--   读不到就**如实播报一次**（绝不静默地把「开关不落存档」藏起来 —— 那正是本次真机 bug 的形态）。
+local SM_CFG_WARNED = false
+local function smTbCfg(quiet)
+  if type(EVAL_TB_CFG) == "function" then
+    local ok, tb = pcall(EVAL_TB_CFG)
+    if ok and type(tb) == "table" then return tb end
+  end
+  if not quiet and not SM_CFG_WARNED then
+    SM_CFG_WARNED = true
+    say("简易地图：读不到工具箱配置（EVAL_TB_CFG 不可用）⇒ 这个开关不会落存档（本条只报一次）")
+  end
+  return nil
+end
+
+local function L(k, ...)
+  if type(EVAL_L) == "function" then return EVAL_L(k, ...) end
+  return k
+end
+
+EH_SIMPLEMAP_CFG = (function()
+  EVAL_HELP_CONFIG = EVAL_HELP_CONFIG or {}
+  EVAL_HELP_CONFIG.simpleMapCfg = EVAL_HELP_CONFIG.simpleMapCfg or {}
+  return EVAL_HELP_CONFIG.simpleMapCfg
+end)()
 
 local SM = { lines = {} }
 
@@ -1021,12 +1065,100 @@ end
 -- ============================================================
 
 local SM_CFG = EH_SIMPLEMAP_CFG
-SM_CFG.alpha = tonumber(SM_CFG.alpha) or 0.75 -- 透明度（Shift+滚轮；1=不透明）★用户定：默认 0.75
-SM_CFG.scale = tonumber(SM_CFG.scale) or 0.7  -- 缩放（Ctrl+滚轮；只缩外框）★用户定：默认 0.7
 
-local FEAT = { applied = false, built = false }
+-- ============================================================
+-- ★★★1.74.36-3 用户要求（原话）：「工具箱 →『缩放大地图』 开启之后默认值设置 0.7缩放 0.7 透明度 不启用GUI」
+--   ⇒ **默认档**（唯一来源：下面所有地方都取这三个常量，不许再散写字面量）：
+--       缩放 0.7 · 透明度 0.7 · GUI重开 **不启用**（false）
+--   ★语义（与 [关闭] 严格对称，两边都不留「上一轮的临时值」）：
+--       · [关闭] = 视觉复位到 1/1 + 位置回屏幕中央（featReset，已有行为）；
+--       · **[开启] = 回到这套默认档**（`smApplyDefaults`，本版新增）——每次从关到开都写回默认并立刻应用。
+--   ★开了之后当然还能随便调（地图设置面板 [−][+] / Shift+滚轮透明度 / Ctrl+滚轮缩放），
+--     调出来的值在「保持开启」期间一直有效；只有**重新开启**才会回到默认档。
+-- ============================================================
+local SM_DEF_ALPHA, SM_DEF_SCALE, SM_DEF_GUIREOPEN = 0.7, 0.7, false
+
+-- ★★1.74.29 用户定：工具箱→地图功能默认 **缩放 0.7 / 透明 0.7**（原透明默认是 0.75）
+SM_CFG.alpha = tonumber(SM_CFG.alpha) or SM_DEF_ALPHA -- 透明度（Shift+滚轮；1=不透明）
+-- 一次性迁移：老存档里写着的旧默认 0.75 → 0.7（**只改“恰好等于旧默认”的值**，改过的值不动）
+if tonumber(SM_CFG.alpha) == 0.75 and SM_CFG.alphaDefMigrated ~= true then
+  SM_CFG.alpha = SM_DEF_ALPHA
+  SM_CFG.alphaDefMigrated = true
+end
+SM_CFG.scale = tonumber(SM_CFG.scale) or SM_DEF_SCALE -- 缩放（Ctrl+滚轮；只缩外框）
+
+
+-- ★1.74.35-3：FEAT 必须声明在 `featShowGUI` **之前**（里面要给它计数）；
+--   `guiCalls` = 真正发出「重显最外层 GUI」的次数 —— 用来钉「关掉时一次都不发」（行为断言照得到的那种事实）。
+local FEAT = { applied = false, built = false, guiCalls = 0 }
+
+-- ============================================================
+-- ★★★1.74.35-3 用户要求（工具箱 → 缩放大地图 右侧 [设置]）：
+--   「缩放大地图右侧添加个设置 设置点击下拉->GUI重开 然后提示这个功能会有导致地图切换到其他地图后
+--     自动刷新到当前地图,,默认关闭.」
+--   ⇒ ① 这一行改成**模块行**（`t = "mod"`）：主开关勾选框 + `[设置]` 多选下拉，界面全在本文件里；
+--     ② 设置里唯一条目 **「GUI重开」**，★**默认不勾 = 关**；
+--     ③ 提示必须**如实写副作用**（见 TB_SM_GUIREOPEN_TIP*）：地图切到大洲/世界层后会被自动刷新回当前地图；
+--     ④ 真值 = `SM_CFG.guiReopen`（nil/false = 关 = 默认；true = 开）。
+--
+--   ★这个副作用的机制（读 UnrealQuest 的实测注释得到，铁律 2）：
+--     `Map/MapContext.lua` 的 `InspectPrimed()` 把 `Client.IsGameUIHidden() == false` 当作
+--     「地图是**关着的**」信号，然后每 `RECENTER_SECONDS=2s` 调一次 `SetMapToCurrentZone()`，
+--     把大洲/世界层视图拉回当前地图（原文：「A player browsing a continent has the map open and
+--     is never overruled」）。我们在地图打开时把 UIParent 重新显示 ⇒ 那条信号被打破 ⇒ 它以为地图关着
+--     ⇒ 你浏览大洲时每 2 秒被拉回当前地图。**这就是用户说的那个现象**，所以默认关 + 必须提示。
+--   ★历史：1.74.29 曾因「与客户端互抢 UIParent 显隐」整块删过同款功能；1.74.35 用户又要回来（改成可选）。
+-- ============================================================
+-- 真值读取（**唯一判据入口**）：nil/false = 关（默认关）；true = 开。
+--   ★老存档一次性迁移：1.74.35-2 的 `SM_CFG.showGUI`（true/非空表 ⇒ 开；false/空表 ⇒ 关），
+--     迁移完**清掉老键**（不留没人读的配置 —— 与 1.74.29 清 keepUI 同一纪律）。
+-- ★写入点：本模块的写入点是**白名单**的 5 处（源码检查 SM GUIREOPEN WIRING CHECK 逐条钉住写法与写入的值）：
+--   迁移 3 处（true / false / 表值折算）+ `EVAL_SM_GUIREOPEN_SET` 1 处 + 地图设置面板那个开关 1 处。
+--   ★任何**新增**写口都要同时在检查里登记 —— 不登记就是「真值多了一份分叉」的静默风险。
+local function smMigrateReopen()
+  if SM_CFG.guiReopen ~= nil then return end
+  local old = SM_CFG.showGUI
+  if old == true then
+    SM_CFG.guiReopen = true
+  elseif old == false then
+    SM_CFG.guiReopen = false
+  elseif type(old) == "table" then
+    local any = false
+    for _ in pairs(old) do any = true break end
+    SM_CFG.guiReopen = any
+  end
+end
+smMigrateReopen()
+SM_CFG.showGUI = nil
+
+local function smReopenOn()
+  return SM_CFG.guiReopen == true
+end
+
+-- 开图期间把**最外层 GUI**重新显示出来（只 Show UIParent，不碰任何子窗口；读回自证如实报告）
+--   返回 可见?, 被隐藏?（true = 客户端又把它藏回去了）
+local function featShowGUI()
+  FEAT.guiCalls = (FEAT.guiCalls or 0) + 1 -- ★真正发出「重显最外层 GUI」的次数（关掉时必须一次都不涨）
+  local up = _G["UIParent"]
+  if not (type(up) == "table" or type(up) == "userdata") then return false, false end
+  if type(up.Show) == "function" then pcall(up.Show, up) end
+  local vis = false
+  if type(up.IsShown) == "function" then
+    local ok, v = pcall(up.IsShown, up)
+    vis = (ok and v) and true or false
+  end
+  return vis, (not vis)
+end
+
 local featDrag = nil
 local featReset = nil -- ★前向声明（配置面板的[复位]要引用；定义在后面）
+-- ★前向声明：地图设置面板的「值标签 + GUI重开按钮文案」刷新口（featBuild 里赋值）。
+--   为什么要有它：默认档（smApplyDefaults）在**面板之外**写 SM_CFG，面板若是已经建好的，
+--   不刷就会显示上一轮的旧数字（看着像没生效 —— 本项目最恨的静默族）。
+local smPanelSync = nil
+-- ★面板件引用（只为**读值口**留的；不参与任何判据）：值标签的落地文字要能被测试读到，
+--   否则「默认档刷新了面板」这件事只能靠肉眼看真机（本项目纪律：能被断言的就别靠看）。
+local SM_PANEL = { valA = nil, valS = nil }
 
 local function featWm()
   local w = _G["WorldMapFrame"]
@@ -1181,7 +1313,7 @@ local function featBuild(wm)
 
   local cfgPanel = CreateFrame("Frame", "EH_SM_CFGP", wm)
   cfgPanel:SetWidth(190)
-  cfgPanel:SetHeight(112)
+  cfgPanel:SetHeight(132) -- ★1.74.35 多一行「显示GUI」（原 112 会与 [复位] 叠）
   cfgPanel:SetPoint("TOPRIGHT", wm, "TOPRIGHT", -30, -48)
   local plv = 10
   if type(wm.GetFrameLevel) == "function" then
@@ -1255,12 +1387,57 @@ local function featBuild(wm)
     end, 0.5, 1, 0.05)
   pcall(valA.SetText, valA, string.format("%.2f", tonumber(SM_CFG.alpha) or 1))
   pcall(valS.SetText, valS, string.format("%.2f", tonumber(SM_CFG.scale) or 1))
+  -- ★★★1.74.35-2 用户更正：「不需要控制到每个子窗口，**只要最外层 GUI 控制就可以**」
+  --   ⇒ 这一行 = **一个开关**（开/关），开 = 开图时把最外层 GUI（UIParent）重新显示出来；关 = 一个动作都不做。
+  local guiLbl = cfgPanel:CreateFontString(nil, "OVERLAY")
+  pcall(guiLbl.SetFontObject, guiLbl, GameFontNormal)
+  pcall(guiLbl.SetPoint, guiLbl, "TOPLEFT", cfgPanel, "TOPLEFT", 10, -76)
+  pcall(guiLbl.SetText, guiLbl, L("TB_SM_GUIREOPEN"))
+  local guiBtn = goldBar(cfgPanel, 60, 16, smReopenOn() and "开" or "关")
+  guiBtn:SetPoint("TOPLEFT", cfgPanel, "TOPLEFT", 76, -74)
+  local function guiSyncLabel()
+    local fsl = nil
+    if type(guiBtn.GetFontString) == "function" then
+      local ok, v = pcall(guiBtn.GetFontString, guiBtn)
+      if ok then fsl = v end
+    end
+    if fsl then pcall(fsl.SetText, fsl, smReopenOn() and "开" or "关") end
+  end
+  -- ★默认档 / [复位] 之后的刷新口（前向声明的 smPanelSync 在这里落地）：
+  --   值标签取**配置真值现算**（不复刻一份），GUI重开按钮文案走同一个 guiSyncLabel。
+  smPanelSync = function()
+    pcall(valA.SetText, valA, string.format("%.2f", tonumber(SM_CFG.alpha) or SM_DEF_ALPHA))
+    pcall(valS.SetText, valS, string.format("%.2f", tonumber(SM_CFG.scale) or SM_DEF_SCALE))
+    guiSyncLabel()
+  end
+  SM_PANEL.valA = valA -- 读值口用（真实控件引用）
+  SM_PANEL.valS = valS
+  pcall(guiBtn.SetScript, guiBtn, "OnEnter", function()
+    local tip = _G["GameTooltip"]
+    if not tip then return end
+    pcall(tip.SetOwner, tip, guiBtn, "ANCHOR_RIGHT")
+    if type(tip.ClearLines) == "function" then pcall(tip.ClearLines, tip) end
+    if type(tip.AddLine) == "function" then
+      pcall(tip.AddLine, tip, L("TB_SM_GUIREOPEN_TIP1"))
+      pcall(tip.AddLine, tip, L("TB_SM_GUIREOPEN_TIP2"), 1, 0.85, 0.4)
+    end
+    pcall(tip.Show, tip)
+  end)
+  pcall(guiBtn.SetScript, guiBtn, "OnLeave", function()
+    local tip = _G["GameTooltip"]
+    if tip then pcall(tip.Hide, tip) end
+  end)
+  guiBtn:SetScript("OnClick", function()
+    SM_CFG.guiReopen = (not smReopenOn()) -- 写**布尔**（老存档的表值在写入时被替换掉）
+    guiSyncLabel()
+    P("GUI重开 = " .. (smReopenOn() and "开（开图时重显最外层 GUI）" or "关（不做任何额外 GUI 动作）"))
+  end)
   local rst = goldBar(cfgPanel, 60, 18, "复位")
   rst:SetPoint("BOTTOM", cfgPanel, "BOTTOM", 0, 8)
   rst:SetScript("OnClick", function()
     if type(featReset) == "function" then featReset() end
-    pcall(valA.SetText, valA, "1.00")
-    pcall(valS.SetText, valS, "1.00")
+    -- ★标签刷新走**同一个** smPanelSync（原先在这里硬写 "1.00" 两份字面量 = 第二份真值）
+    if type(smPanelSync) == "function" then pcall(smPanelSync) end
   end)
   cfgPanel:Hide()
 
@@ -1346,6 +1523,12 @@ local function featApply()
   if type(wm.EnableKeyboard) == "function" then pcall(wm.EnableKeyboard, wm, false) end
   featApplyAlpha(tonumber(SM_CFG.alpha) or 1)
   featApplyScale(tonumber(SM_CFG.scale) or 1)
+  -- ★1.74.35-2：按「显示GUI」开关把**最外层 GUI**重新显示（关 ⇒ 一个动作都不做，不做额外动态重现）
+  if smReopenOn() then
+    local vis, blocked = featShowGUI()
+    SM_CFG.guiLast = "开图 GUI重开：" .. (vis and "最外层 GUI 已重新显示" or "仍被隐藏（客户端又藏回去了）")
+    P(SM_CFG.guiLast)
+  end
   if tonumber(SM_CFG.px) and tonumber(SM_CFG.py)
     and type(wm.ClearAllPoints) == "function" and type(wm.SetPoint) == "function" then
     pcall(wm.ClearAllPoints, wm)
@@ -1372,6 +1555,175 @@ local function featKeep()
   local s = tonumber(SM_CFG.scale) or 1
   local okS, curs = pcall(wm.GetScale, wm)
   if okS and tonumber(curs) and math.abs(curs - s) > 0.001 then featApplyScale(s) end
+  -- ★1.74.35-2：开图期间持续保持**最外层 GUI** 可见（客户端自己的开图流程会再藏回去 ⇒ 每 tick 幂等重显）
+  --   ★关掉 ⇒ 直接跳过（用户明确：不做额外 GUI 动态重现的操作）
+  if smReopenOn() then pcall(featShowGUI) end
+end
+
+-- ===== ★★★1.74.35-4 地图探索叠加层「跟随地图缩放」自动适配（用户定：**属缩放大地图**，默认启动）=====
+--   用户原话（1.74.35-4）：「开图 / es 变化后 0.1s 高频爆发期（持续 2 秒，感知上无缝）＋之后就降到 0.3 稳态巡检
+--     （兜换区域的重排）」；「以上的功能是工具箱→大地图缩放要默认启动的功能，不是给图层调试工具内使用的」。
+--   ⇒ 功能从 EH_DebugBox（调试工具，只留只读/手动探针）**搬到这里**，默认开。
+--
+--   ★为什么需要（真机定案；1.74.34-18b 探针 27 行 + 用户实测 `/edb maptile fit s` 有效）：
+--     · WorldMapDetailFrame 下 12 张底瓦片 `WorldMapDetailTile*`：**互相锚 + 偏移全 0** ⇒ 对缩放免疫，本功能**不碰**；
+--     · 9 张 `WorldMapOverlayN` + `WorldMapHighlight`：锚父帧 TOPLEFT 且**偏移非零**（本客户端 Lua 侧几何一律逻辑口径）
+--       ⇒ 地图一缩放就错位。对齐口径 = 按父帧**有效缩放 es** 把「锚点偏移 + 宽高」整体 **×es**（÷es 实测无效）。
+--
+--   ★节奏（用户定稿）：开图 / es 变化 → **0.1s 爆发期（持续 2s）** → 之后 **0.3s 稳态巡检**。
+--     过渡检测在每帧做（两次廉价 pcall：IsShown + GetEffectiveScale），命中就把节拍顶满 ⇒ **下一帧就动手**。
+--
+--   ★幂等判据：当前值 ≈ 原值 ×es 就跳过（客户端重排会把我们写的冲掉，下一拍自动补回；es 回到 1 时自动还原）。
+--     **原值在首次应用时记下**（/reload 之后叠加层是客户端原始布局）——★顺序不许换：读原值 → 写新值（1.74.31 组 206 的教训）。
+--   ★默认**开**（用户：「要默认启动的功能」）；`/ehm mapfit off` 关、`/ehm mapfit diag` 取证、`restore` 还原原始几何。
+local SMFIT = { open = false, es = nil, burst = 0, rec = {} }
+local SMFIT_BURST_GAP, SMFIT_BURST_SEC, SMFIT_IDLE_GAP = 0.1, 2.0, 0.3
+local smFitMsgAt = -99
+
+-- 开关真值：`SM_CFG.mapFit`，**nil = 默认开**（只有显式 false 才算关 —— 「默认启动」是用户明确要求）
+local function smFitOn()
+  return SM_CFG.mapFit ~= false
+end
+
+-- 相对锚的**名字**（存档里只能存名字；内存里保留对象引用，见 SMFIT.rec）
+local function smRelName(rel)
+  if not rel then return nil end
+  local n = frameName(rel)
+  if type(n) == "string" and n ~= "?" then return n end
+  return nil
+end
+
+-- 目标 = 父帧下的**非瓦片纹理**（底瓦片跟着地图走，动它反而错）
+local function smFitTargets()
+  local fr = _G["WorldMapDetailFrame"]
+  if not (type(fr) == "table" or type(fr) == "userdata") then return {} end
+  local list = {}
+  if type(fr.GetRegions) ~= "function" then return list end
+  local ok, regs = pcall(function() return { fr:GetRegions() } end)
+  if not ok then return list end
+  local idx = 0
+  for _, o in ipairs(regs) do
+    local usable = o and type(o.GetWidth) == "function" and type(o.SetPoint) == "function"
+    if usable then
+      local isTex = true
+      if type(o.GetObjectType) == "function" then
+        local okt, t = pcall(o.GetObjectType, o)
+        isTex = (okt and tostring(t) == "Texture")
+      end
+      if isTex then
+        idx = idx + 1
+        local nm = frameName(o)
+        if not (type(nm) == "string" and string.sub(nm, 1, 18) == "WorldMapDetailTile") then
+          table.insert(list, { o = o, key = "tex" .. tostring(idx), name = nm })
+        end
+      end
+    end
+  end
+  return list
+end
+
+-- 应用适配：返回 改动数, 已适配数, 本次记到的原值数
+local function smFitApply(es, quiet)
+  local fr = _G["WorldMapDetailFrame"]
+  if not (type(fr) == "table" or type(fr) == "userdata") then return 0, 0, 0 end
+  es = tonumber(es) or 1
+  if es <= 0 then es = 1 end
+  SM_CFG.mapFitOrig = SM_CFG.mapFitOrig or {}
+  local saved = SM_CFG.mapFitOrig -- 落存档那份（只给「/reload 之后还原」用：对象引用过不了 reload）
+  local list = smFitTargets()
+  local changed, ready, rec = 0, 0, 0
+  for _, it in ipairs(list) do
+    local o = it.o
+    local okp, p, rel, rp, x, y = pcall(o.GetPoint, o, 1)
+    local okw, w = pcall(o.GetWidth, o)
+    local okh, h = pcall(o.GetHeight, o)
+    if okp and p and okw and okh and tonumber(x) and tonumber(y) and tonumber(w) and tonumber(h) then
+      local r = SMFIT.rec[it.key]
+      if not r then
+        -- ★首次见到就记**原值**（本进程内我们只在这之后才写 ⇒ 记下的一定是客户端原始布局）
+        r = { o = o, rel = rel, rp = rp, p = tostring(p),
+              x = tonumber(x), y = tonumber(y), w = tonumber(w), h = tonumber(h) }
+        SMFIT.rec[it.key] = r
+        saved[it.key] = { idx = it.key, name = it.name, p = r.p,
+          rel = smRelName(rel), rp = smRelName(rp),
+          x = r.x, y = r.y, w = r.w, h = r.h }
+        rec = rec + 1
+      end
+      local wantX, wantY = r.x * es, r.y * es
+      local wantW, wantH = r.w * es, r.h * es
+      if math.abs((tonumber(x) or 0) - wantX) <= 0.5 and math.abs((tonumber(y) or 0) - wantY) <= 0.5
+        and math.abs((tonumber(w) or 0) - wantW) <= 0.5 and math.abs((tonumber(h) or 0) - wantH) <= 0.5 then
+        ready = ready + 1
+      else
+        pcall(o.ClearAllPoints, o)
+        pcall(o.SetPoint, o, r.p, r.rel, r.rp, wantX, wantY)
+        pcall(o.SetWidth, o, wantW)
+        pcall(o.SetHeight, o, wantH)
+        changed = changed + 1
+      end
+    end
+  end
+  if changed > 0 then
+    SM_CFG.mapFitAt = (type(GetTime) == "function") and string.format("%.1f", GetTime()) or "?"
+    SM_CFG.mapFitLast = { es = es, changed = changed, total = table.getn(list) }
+    local now = (type(GetTime) == "function") and GetTime() or 0
+    -- 同一波重排只播报一次（3s 节流），不然每拍刷屏
+    if (not quiet) and (now - (smFitMsgAt or -99) > 3) then
+      smFitMsgAt = now
+      P(string.format("叠加层适配：按缩放 %.2f 折算 %d 个（非瓦片纹理共 %d 个；底瓦片不动）", es, changed, table.getn(list)))
+    end
+  end
+  return changed, ready, rec
+end
+
+-- 还原到存档里的原始几何（/reload 之后对象引用失效 ⇒ 按**名字**解析锚点、按 key 配对目标）
+local function smFitRestore(quiet)
+  SM_CFG.mapFitOrig = SM_CFG.mapFitOrig or {}
+  local list = smFitTargets()
+  local n, miss = 0, 0
+  for _, it in ipairs(list) do
+    local r = SM_CFG.mapFitOrig[it.key]
+    if r and tonumber(r.x) and tonumber(r.y) and tonumber(r.w) and tonumber(r.h) then
+      local o = it.o
+      local rel = nil
+      if type(r.rel) == "string" and r.rel ~= "" then rel = _G[r.rel] end
+      if not rel then rel = _G["WorldMapDetailFrame"] end -- 原值记的就是「锚父帧 TOPLEFT」（探针 27 行定案）
+      local rp = (type(r.rp) == "string" and r.rp ~= "") and r.rp or "TOPLEFT"
+      pcall(o.ClearAllPoints, o)
+      local ok = pcall(o.SetPoint, o, tostring(r.p), rel, rp, tonumber(r.x), tonumber(r.y))
+      pcall(o.SetWidth, o, tonumber(r.w))
+      pcall(o.SetHeight, o, tonumber(r.h))
+      if ok then n = n + 1 else miss = miss + 1 end
+    else
+      miss = miss + 1
+    end
+  end
+  SMFIT.rec = {}
+  if not quiet then
+    P("叠加层还原：按存档原始值还原 " .. n .. " 个"
+      .. (miss > 0 and ("；" .. miss .. " 个没有原值或锚点解析失败 ⇒ **如实跳过**（没动它们）") or ""))
+  end
+  return n, miss
+end
+
+-- 取证：开关 / 地图开没开 / es / 目标数 / 原值条数 / 本次改动 / burst 剩余
+local function smFitDiag()
+  local fr = _G["WorldMapDetailFrame"]
+  local es = nil
+  if (type(fr) == "table" or type(fr) == "userdata") and type(fr.GetEffectiveScale) == "function" then
+    local ok, v = pcall(fr.GetEffectiveScale, fr)
+    if ok and tonumber(v) then es = tonumber(v) end
+  end
+  local nList = table.getn(smFitTargets())
+  local nOrig = 0
+  for _ in pairs(SM_CFG.mapFitOrig or {}) do nOrig = nOrig + 1 end
+  local changed, ready = 0, 0
+  if smFitOn() and es and es > 0.01 then changed, ready = smFitApply(es, true) end
+  P(string.format("叠加层适配：开关=%s（默认开） · 地图开=%s · es=%s · 非瓦片纹理 %d 个 · 原值 %d 条 · 本次改 %d / 已适配 %d · burst 剩余 %.1fs",
+    smFitOn() and "开" or "关", tostring(featOpenNow()),
+    es and string.format("%.3f", es) or "?", nList, nOrig, changed, ready, tonumber(SMFIT.burst) or 0))
+  P("节奏：开图/es 变化 → 0.1s 爆发 2 秒 → 0.3s 稳态巡检；口径 = 锚点偏移与宽高 ×es（真机定案：×es 有效、÷es 无效）")
+  return changed
 end
 
 -- 开图侦测 tick（0.2s 节流；★挂 WorldFrame 不挂 UIParent）
@@ -1380,21 +1732,48 @@ do
   if not (type(parent) == "table" or type(parent) == "userdata") then parent = _G["UIParent"] end
   if type(CreateFrame) == "function" and parent then
     local f = CreateFrame("Frame", "EH_SM_FEAT", parent)
-    local acc = 0
+    local acc = 0        -- 「开图保持」节拍（0.2s，行为不变）
+    local accFit = 0     -- 叠加层适配节拍（爆发 0.1s / 稳态 0.3s）
+    local esCache = nil
     f:SetScript("OnUpdate", function()
-      acc = acc + (tonumber(arg1) or 0.05)
-      if acc < 0.2 then return end
-      acc = 0
+      local dt = tonumber(arg1) or 0.05
+      acc = acc + dt
+      accFit = accFit + dt
+      -- ① 每帧廉价探测：地图开没开 + 父帧有效缩放（各一次 pcall，别做几何扫描）
       local open = featOpenNow()
-      if open then
-        if not FEAT.applied then
-          featApply()
-          FEAT.applied = true
-        end
-        featKeep() -- ★开图期间持续保持（黑幕重藏 + 透明度/缩放漂移校准）
-      elseif FEAT.applied then
-        FEAT.applied = false
+      local fr = _G["WorldMapDetailFrame"]
+      local es = nil
+      if (type(fr) == "table" or type(fr) == "userdata") and type(fr.GetEffectiveScale) == "function" then
+        local ok, v = pcall(fr.GetEffectiveScale, fr)
+        if ok and tonumber(v) then es = tonumber(v) end
       end
+      -- ② 过渡（开图 / es 变化）⇒ 进爆发期，并把节拍**顶满**（下一帧就动手，不等 0.1s）
+      if open and not SMFIT.open then SMFIT.burst = SMFIT_BURST_SEC accFit = 1e9 end
+      if es and esCache and math.abs(es - esCache) > 0.001 then SMFIT.burst = SMFIT_BURST_SEC accFit = 1e9 end
+      if not open then SMFIT.burst = 0 end
+      SMFIT.open, SMFIT.es = open, (es or SMFIT.es)
+      esCache = es or esCache
+      if (tonumber(SMFIT.burst) or 0) > 0 then SMFIT.burst = math.max(0, SMFIT.burst - dt) end
+      -- ③ 既有的「开图保持」节拍（0.2s；★保持原行为不动）
+      if acc >= 0.2 then
+        acc = 0
+        if open then
+          if not FEAT.applied then
+            featApply()
+            FEAT.applied = true
+          end
+          featKeep() -- ★开图期间持续保持（黑幕重藏 + 透明度/缩放漂移校准）
+        elseif FEAT.applied then
+          FEAT.applied = false
+        end
+      end
+      -- ④ 叠加层适配：**只受 smFitOn() 管**（不看工具箱那个总开关 —— 否则模块一关，我们已经乘过 es 的几何就没人还原了）
+      if not smFitOn() then return end
+      if not open or not es or es <= 0 then return end
+      local gap = ((tonumber(SMFIT.burst) or 0) > 0) and SMFIT_BURST_GAP or SMFIT_IDLE_GAP
+      if accFit < gap then return end
+      accFit = 0
+      smFitApply(es, false) -- 成功了才播报（内部 3s 节流）
     end)
   end
 end
@@ -1417,7 +1796,63 @@ function featReset()
   P("已复位：透明度 1 / 缩放 1 / 位置回屏幕中央")
 end
 
+-- ★★★默认档的执行口（用户 1.74.36-3；三个常量在文件上方 SM_DEF_* 处 = 单一来源）：
+--   **开启「缩放大地图」时套用** —— 缩放 0.7 · 透明度 0.7 · GUI重开 **不启用**。
+--   ★写的是**配置真值**（SM_CFG，落存档），并立刻应用视觉效果；面板已建好就顺带刷新它的标签
+--     （否则面板显示上一轮的旧数字，看着像「默认值没生效」）。
+--   ★顺序固定：先写三处真值 → 再应用（应用读的就是刚写进去的值）→ 最后刷面板。
+local function smApplyDefaults()
+  SM_CFG.alpha = SM_DEF_ALPHA
+  SM_CFG.scale = SM_DEF_SCALE
+  SM_CFG.guiReopen = SM_DEF_GUIREOPEN and true or false -- ★写布尔（老存档的表值在这里被替换掉）
+  featApplyAlpha(SM_DEF_ALPHA)
+  featApplyScale(SM_DEF_SCALE)
+  if type(smPanelSync) == "function" then pcall(smPanelSync) end
+  return SM_DEF_ALPHA, SM_DEF_SCALE
+end
+
 -- ===== 斜杠命令 =====
+-- ★★★1.74.29 用户决定：**放弃对 UIParent 的显示操作** —— 原「开图保持界面」(keepui) 功能**整块删除**。
+-- 原因（已定案）：本客户端开图时会把 UIParent 隐藏；我们反复 UIParent:Show() 顶回会与客户端
+--   形成**互抢**，表现就是「地图间隔地自动重新打开」（用户实测确认）。⇒ 从此**不再碰 UIParent 的显隐**。
+-- 若将来还想要「开图时看到小地图/动作条」，走**不操作 UIParent** 的路线（改挂子件，见 EH_DebugBox 的 /edb uikids 实验）。
+do
+  -- 顺手清掉旧存档里的相关键（避免留一份没人读的配置）
+  EH_SIMPLEMAP_CFG = EH_SIMPLEMAP_CFG or {}
+  EH_SIMPLEMAP_CFG.keepUI = nil
+  EH_SIMPLEMAP_CFG.keepUIStat = nil
+  EH_SIMPLEMAP_CFG.keepUIMode = nil
+end
+
+-- ★★★1.74.29 用户决定：本模块从**独立子插件**改为**主插件的工具模块**（tools/SimpleMap.lua）。
+--   工具箱「地图工具 → 简易地图」开关 = 应用 / 复位简易地图效果（藏黑幕 + 透明 + 键盘 + 位置）。
+function EVAL_SM_ENABLED()
+  local tb = smTbCfg(true) -- 读口静默（写口/面板会如实报一次）
+  return (tb and tb.simpleMap) and true or false
+end
+
+function EVAL_SM_SET(on)
+  -- ★写**配置真值**（与 EVAL_SM_ENABLED() 读的同一处）：1.74.29 之后 simpleMap 不是子插件了，
+  --   旧接线走 EVAL_PLUGIN_SET("simpleMap") 在 SUBADDONS 里查不到 ⇒ 一次都没写进去（勾选框点了不生效，静默）。
+  -- ★★1.74.36-2：`tbCfg` 是 Toolbox 的**文件局部**（模块里是 nil）⇒ 必须走它的全局出口 EVAL_TB_CFG()；
+  --   读不到时 smTbCfg(false) 会**如实播报**，绝不假装写成功。
+  local tb = smTbCfg(false)
+  if tb then tb.simpleMap = on and true or false end
+  if on then
+    -- ★★★1.74.36-3：**开启即套默认档**（缩放 0.7 / 透明度 0.7 / GUI重开 不启用）——用户原话
+    --   「开启之后默认值设置 0.7缩放 0.7 透明度 不启用GUI」；先套默认值，再应用/就位。
+    local a, s = smApplyDefaults()
+    pcall(featKeep)   -- 事件帧就位（开图时自动应用）
+    pcall(featApply)  -- 立刻应用一次
+    P(string.format("简易地图：已启用（默认档：缩放 %.2f / 透明度 %.2f / GUI重开 %s；面板或 Shift/Ctrl+滚轮可再调）",
+      s, a, smReopenOn() and "开" or "关"))
+  else
+    pcall(featReset)  -- 透明/缩放/位置复位
+    P("简易地图：已停用（已复位：透明度 1 / 缩放 1 / 位置回屏幕中央）")
+  end
+  return true
+end
+
 if type(SlashCmdList) == "table" then
   SLASH_EHSIMPLEMAP1 = "/ehm"
   SLASH_EHSIMPLEMAP2 = "/ehsimplemap"
@@ -1463,8 +1898,48 @@ if type(SlashCmdList) == "table" then
       pb9Start()
     elseif msg == "probe9stop" then
       pb9Stop()
+    elseif msg == "gui" or msg == "重开" or msg == "显示gui" or string.find(msg, "^gui%s") == 1 or string.find(msg, "^重开%s") == 1 then
+      -- ★1.74.35-3 改名：「显示GUI」→「GUI重开」（`gui` 旧别名保留，别名不冲突由 GO ALIAS UNIQUE CHECK 守的是 /eh go，这里是 /ehm）
+      --   用法：/ehm gui [on|off|show]（или/或 /ehm 重开 …）
+      local sub = string.lower(string.match(msg, "^%S+%s+(.+)$") or "")
+      if sub == "on" or sub == "开" then
+        EVAL_SM_GUIREOPEN_SET(true)
+      elseif sub == "off" or sub == "关" then
+        EVAL_SM_GUIREOPEN_SET(false)
+      elseif sub == "show" or sub == "试" then
+        if not smReopenOn() then
+          P("GUI重开 当前为关 ⇒ **按你的要求不执行**任何重显操作")
+        else
+          local vis, blocked = featShowGUI()
+          P("GUI重开：手动重显最外层 → " .. (vis and "已可见" or ("仍被隐藏" .. (blocked and "（客户端又藏回去了）" or ""))))
+        end
+      end
+      P("GUI重开 当前 = " .. (smReopenOn() and "开" or "关") .. "（真值 SM_CFG.guiReopen=" .. tostring(SM_CFG.guiReopen) .. "；nil/false=关【默认】，true=开）")
+      for _, ln in ipairs(EVAL_SM_GUIREOPEN_TIPS()) do P(ln) end
+      if SM_CFG.guiLast then P("上次开图结果：" .. tostring(SM_CFG.guiLast)) end
+      P("用法：/ehm gui on | off | show（也认 重开 开|关|试）")
+    elseif msg == "mapfit" or msg == "叠加层" or string.find(msg, "^mapfit%s") == 1 or string.find(msg, "^叠加层%s") == 1 then
+      -- ★1.74.35-4：地图探索叠加层随缩放自动适配（默认开）；本命令用于关掉 / 取证 / 还原
+      local sub = string.lower(string.match(msg, "^%S+%s+(.+)$") or "")
+      if sub == "on" or sub == "开" then
+        EVAL_SM_MAPFIT_SET(true)
+      elseif sub == "off" or sub == "关" then
+        EVAL_SM_MAPFIT_SET(false)
+      elseif sub == "restore" or sub == "还原" then
+        smFitRestore(false)
+      else
+        smFitDiag()
+      end
+      P("用法：/ehm mapfit on | off | restore | diag（不给子命令 = diag）")
     elseif msg == "reset" or msg == "复位" then
       featReset()
+    elseif msg == "default" or msg == "默认" or msg == "默认档" then
+      -- ★1.74.36-3 取证/手动口：把默认档（0.7 / 0.7 / GUI不启用）重新套一遍并如实报出来。
+      --   与「工具箱开关从关→开」走的是**同一个**函数（smApplyDefaults），所以这里能证明真机行为。
+      local a, s = smApplyDefaults()
+      P(string.format("默认档已套用：缩放 %.2f / 透明度 %.2f / GUI重开 %s", s, a, smReopenOn() and "开" or "关"))
+      P(string.format("当前真值：alpha=%s scale=%s guiReopen=%s（面板/滚轮可再调）",
+        tostring(SM_CFG.alpha), tostring(SM_CFG.scale), tostring(SM_CFG.guiReopen)))
     elseif msg == "fix" then
       -- ★手动补救+状态报告：正式版没生效时跑这个（报告侦测信号/黑幕显隐/配置值）
       P("fix：开图信号=" .. tostring(featOpenNow())
@@ -1483,7 +1958,7 @@ if type(SlashCmdList) == "table" then
       featKeep()
       P("fix：已手动重应用一遍（开着图跑才有效）")
     else
-      P("正式版已生效：开图自动生效（藏黑幕/透明/键盘）；Shift+滚轮=透明度 · Ctrl+滚轮=缩放 · 金色条=拖动 · /ehm reset=复位")
+      P("正式版已生效：开图自动生效（藏黑幕/透明/键盘）；Shift+滚轮=透明度 · Ctrl+滚轮=缩放 · 金色条=拖动 · /ehm reset=复位 · /ehm default=套默认档(0.7/0.7/GUI关)")
       P("—— 诊断探针 ——")
       P("/ehm probe = 只读取证 · probe2 写入试验 · probe3/4 窗口化 · probe5 黑幕深挖 · probe6 通缉 · auto 自动巡检 · probe7 一刀切 · probe8 反向排查")
     end
@@ -1501,4 +1976,235 @@ do
       pcall(bf.UnregisterEvent, bf, "PLAYER_ENTERING_WORLD")
     end)
   end
+end
+
+-- ============ 工具箱那一行（**嵌入点的被调方**）============
+-- 工具箱只做两件事：模型数据里写一行 `{ t = "mod", mod = "simpleMap", … }`，渲染段按名字取这里的函数调一次。
+--   控件、几何、tooltip、下拉、结算**全在本文件里**（与 LayerFix / DragFrames 同一套规矩）。
+--   ★这一行**有**勾选框（模型里不写 `noChk`）：勾选框 = 本工具开/关（真值 = `tbCfg().simpleMap`，
+--     与 `EVAL_SM_ENABLED()` 同源、与「子插件」Tab 无关 —— 本模块 1.74.29 起就是主插件的工具模块）。
+--   ★`[设置]` = **多选下拉**（`EVAL_DD_OPEN` 的 multi 模式），目前唯一条目 = 「GUI重开」，
+--     默认**不勾**（关）；勾上 = 开图时重显最外层 GUI（副作用见 TB_SM_GUIREOPEN_TIP*）。
+local SM_TIP_W = 460
+
+-- 真值读写（**唯一入口**）：读走 `EVAL_SM_ENABLED()`，写走 `EVAL_SM_SET()`（它同时把 tbCfg() 写进去 + 立刻应用/复位）
+function EVAL_SM_GUIREOPEN_ON() return smReopenOn() end
+
+function EVAL_SM_GUIREOPEN_SET(on)
+  SM_CFG.guiReopen = on and true or false
+  P("GUI重开 = " .. (smReopenOn() and "开（开图时重显最外层 GUI）" or "关（开图时不做任何额外 GUI 动作）"))
+  return true
+end
+
+-- 行内摘要（**现算**，不缓存：勾选/滚轮改完立刻重画）
+--   ★1.74.36-3：末尾带上「默认档」三个值（都从 SM_DEF_* 现取，绝不写第二份字面量）——
+--     用户看悬停就知道「关掉再开回来会回到什么档位」，不用猜。
+function EVAL_SM_SUMMARY()
+  return string.format("缩放 %.2f · 透明 %.2f · GUI重开 %s（默认档 %.2f / %.2f / %s）",
+    tonumber(SM_CFG.scale) or SM_DEF_SCALE, tonumber(SM_CFG.alpha) or SM_DEF_ALPHA,
+    smReopenOn() and "开" or "关",
+    SM_DEF_SCALE, SM_DEF_ALPHA, SM_DEF_GUIREOPEN and "开" or "关")
+end
+
+-- 默认档那一句（在悬停里**独立成行**；与真值同源 = SM_DEF_*，不许另拼文案）
+function EVAL_SM_DEF_TIP()
+  return string.format("开启默认档：缩放 %.2f · 透明度 %.2f · GUI重开 %s（每次开启都套用；开着时可随时再调）",
+    SM_DEF_SCALE, SM_DEF_ALPHA, SM_DEF_GUIREOPEN and "开" or "关")
+end
+
+-- ===== 叠加层适配（1.74.35-4）：读写口 + 读值口 =====
+-- 真值 `SM_CFG.mapFit`：nil = 默认开（用户：「要默认启动的功能」），只有显式 false = 关
+function EVAL_SM_MAPFIT_ON() return smFitOn() end
+
+function EVAL_SM_MAPFIT_SET(on)
+  SM_CFG.mapFit = on and true or false
+  P("叠加层适配 = " .. (smFitOn() and "开（随地图缩放自动对齐探索层）" or "关（不再碰叠加层几何）"))
+  return true
+end
+
+-- 行 tooltip 里那句（与真值同源；行渲染处取它，别处不许再拼一遍文案）
+function EVAL_SM_MAPFIT_TIP()
+  return "叠加层适配：" .. (smFitOn() and "开" or "关")
+    .. "（WorldMapOverlay/Highlight 按地图缩放 ×es 折算，底瓦片不动；/ehm mapfit 可关或取证）"
+end
+
+-- 提示行（★用户原话里的副作用必须**如实写出来**，不许只写「可能有影响」）
+function EVAL_SM_GUIREOPEN_TIPS()
+  return { L("TB_SM_GUIREOPEN_TIP1"), L("TB_SM_GUIREOPEN_TIP2"), L("TB_SM_GUIREOPEN_TIP3") }
+end
+
+-- 菜单内容（与行渲染**同源**：勾选态 = 真值现算，唯一来源 = SM_CFG.guiReopen）
+--   返回 items, locked, tips, sel, keys —— 与 EVAL_DD_OPEN(…, {multi=true, selected=sel, …}) 同口径
+function EVAL_SM_MENU()
+  local items = { L("TB_SM_GUIREOPEN") }
+  local locked = {}
+  local tips = { EVAL_SM_GUIREOPEN_TIPS() }
+  local keys = { "guiReopen" }
+  local sel = {}
+  if smReopenOn() then sel[1] = true end
+  return items, locked, tips, sel, keys
+end
+
+-- ★★★`pcall` **只保留被调函数的第一个返回值**（本客户端实测坑，1.74.35-3 当场踩到）：
+--   想「既 pcall 兜住、又拿到多返回」必须包一层函数 —— `pcall(EVAL_SM_MENU)` 只会吐出 items，
+--   keys/locked/tips/sel 全变 nil ⇒ 下拉弹不出来，还会被那句「模块没交回菜单内容」误报成「没有可选的项」。
+local function smMenuAll()
+  local items, locked, tips, sel, keys = EVAL_SM_MENU()
+  return items, locked, tips, sel, keys
+end
+
+local function smRow(r, it)
+  if type(r) ~= "table" then return false end
+  -- 主开关：读=EVAL_SM_ENABLED（tbCfg().simpleMap），写=EVAL_SM_SET（配置 + 应用/复位一起做）
+  r.get = function() return EVAL_SM_ENABLED() end
+  r.set = function(v) pcall(EVAL_SM_SET, v and true or false) end
+  -- ★1.74.36 用户：「工具箱->以上UI工具的配置项.不需要再外部显示,已经在tooltip设置内显示了」
+  --   ⇒ 行上不显示 `缩放 0.70 · 透明 0.70 · GUI重开 关` 这串摘要；它只在 [设置] 的悬停说明里现读（见下面 EVAL_SM_SUMMARY()）。
+  r.extra:Hide()
+  r.add.text:SetText(L("TB_LDDRAG_SET"))
+  r.add.btn:Show()
+  r.add.btn:SetScript("OnEnter", function()
+    local tip = _G["GameTooltip"]
+    if not tip or type(tip.SetOwner) ~= "function" or type(tip.AddLine) ~= "function" then return end
+    pcall(tip.SetMinimumWidth, tip, SM_TIP_W)
+    pcall(tip.SetOwner, tip, r.add.btn, "ANCHOR_RIGHT")
+    if type(tip.ClearLines) == "function" then pcall(tip.ClearLines, tip) end
+    pcall(tip.AddLine, tip, (type(it) == "table" and it.tip) or L("TB_SIMPLEMAP_TIP"), 1, 0.85, 0.30)
+    for _, ln in ipairs(EVAL_SM_GUIREOPEN_TIPS()) do pcall(tip.AddLine, tip, ln, 0.88, 0.88, 0.88) end
+    pcall(tip.AddLine, tip, EVAL_SM_MAPFIT_TIP(), 0.72, 0.92, 0.72) -- ★1.74.35-4 叠加层适配状态（默认开）
+    pcall(tip.AddLine, tip, EVAL_SM_DEF_TIP(), 0.92, 0.82, 0.55) -- ★1.74.36-3 开启默认档 0.7/0.7/GUI不启用
+    pcall(tip.AddLine, tip, EVAL_SM_SUMMARY(), 0.75, 0.95, 0.75)
+    pcall(tip.Show, tip)
+  end)
+  r.add.btn:SetScript("OnLeave", function()
+    local tip = _G["GameTooltip"]
+    if tip and type(tip.Hide) == "function" then pcall(tip.Hide, tip) end
+  end)
+  r.add.btn:SetScript("OnClick", function()
+    if type(EVAL_DD_OPEN) ~= "function" then
+      say("打开地图设置失败：下拉控件未载入")
+      return
+    end
+    local ok, items, locked, tips, sel, keys = pcall(smMenuAll)
+    if not ok or type(items) ~= "table" or type(keys) ~= "table" then
+      say("打开地图设置失败：模块没交回菜单内容（这次没弹出来，不是「没有可选的项」）")
+      return
+    end
+    EVAL_DD_OPEN(r.add.btn, items, function(pi, on)
+      -- 分组标题行 keys[pi] 为空（locked 行也点不到；这里再兜一层，绝不拿它去写配置）
+      local key = keys[pi]
+      if type(key) ~= "string" or key == "" then return end
+      if key == "guiReopen" then pcall(EVAL_SM_GUIREOPEN_SET, on == true) end
+      if type(EVAL_TB_REFRESH) == "function" then pcall(EVAL_TB_REFRESH) end
+    end, { multi = true, selected = sel, locked = locked, tips = tips })
+  end)
+  return true
+end
+
+-- 登记进**模块行注册表**（工具箱渲染段按 `it.mod` 取它）。
+--   ★两边谁先载入都成立：表不存在就现建（同一个全局表），绝不依赖 toc 顺序。
+local SM_TB_ROWS = rawget(_G, "EVAL_TB_MOD_ROWS")
+if type(SM_TB_ROWS) ~= "table" then
+  SM_TB_ROWS = {}
+  rawset(_G, "EVAL_TB_MOD_ROWS", SM_TB_ROWS)
+end
+SM_TB_ROWS["simpleMap"] = smRow
+function EVAL_SM_TB_REGISTER()
+  local t = rawget(_G, "EVAL_TB_MOD_ROWS")
+  if type(t) ~= "table" then
+    t = {}
+    rawset(_G, "EVAL_TB_MOD_ROWS", t)
+  end
+  t["simpleMap"] = smRow
+  return true
+end
+
+-- ============ 读值口（测试/诊断用；★不复刻逻辑：真值直给字段，动作走真实入口）============
+function EVAL_SM_TEST_GUIREOPEN() return SM_CFG.guiReopen, smReopenOn() end
+function EVAL_SM_TEST_GUI_CALLS() return FEAT.guiCalls or 0 end
+function EVAL_SM_TEST_GUI_CALLS_RESET() FEAT.guiCalls = 0 return true end
+
+-- ★开图路径触发器（读值口）：只跑 `featKeep` + `featApply`（= 真实开图时走的那两条路径），
+--   **不改任何配置**。为什么必须有它：1.74.36-3 起 `EVAL_SM_SET(true)` 会先**套默认档**（含
+--   「GUI重开 不启用」）⇒ 想验「用户在下拉里勾上 GUI重开 之后开图到底会不会重显」，
+--   就不能再用 SET 间接触发（那会把刚勾上的开关又关掉）。真实用户流程也正是这个顺序：
+--   先开模块 → 再在 [设置] 里勾 GUI重开 → 然后开图。
+function EVAL_SM_TEST_APPLY()
+  pcall(featKeep)
+  pcall(featApply)
+  return true
+end
+
+-- ★1.74.36-3 默认档读值口：先 3 个**常量**、再 3 个**当前真值**。
+--   ★断言一律从这里取（不许在测试里复刻 0.7/0.7/false 三个字面量 = 同源自比）。
+function EVAL_SM_TEST_DEFAULTS()
+  return SM_DEF_ALPHA, SM_DEF_SCALE, SM_DEF_GUIREOPEN,
+    tonumber(SM_CFG.alpha), tonumber(SM_CFG.scale), SM_CFG.guiReopen
+end
+
+-- ★地图设置面板：刷新口是否已落地 + 两个值标签**实际显示的文字**（面板没建过 ⇒ nil）。
+--   ★这也是「默认档有没有真的落到界面上」的唯一可断言证据（真机上就是看那两个数字）。
+function EVAL_SM_TEST_PANEL()
+  local okSync = (type(smPanelSync) == "function")
+  local a, s = nil, nil
+  local fsA, fsS = SM_PANEL.valA, SM_PANEL.valS
+  if fsA and type(fsA.GetText) == "function" then
+    local ok, v = pcall(fsA.GetText, fsA)
+    if ok then a = v end
+  end
+  if fsS and type(fsS.GetText) == "function" then
+    local ok, v = pcall(fsS.GetText, fsS)
+    if ok then s = v end
+  end
+  return okSync, a, s
+end
+-- 迁移四态（★走**真实**的 smMigrateReopen，不在测试里复刻一遍判据）：
+--   返回 迁移后的真值, 判据结果, 迁移后是否还留着老键（应当恒为 nil）
+function EVAL_SM_TEST_MIGRATE(old)
+  SM_CFG.guiReopen = nil
+  SM_CFG.showGUI = old
+  smMigrateReopen()
+  local v = SM_CFG.guiReopen
+  local on = smReopenOn()
+  local legacy = SM_CFG.showGUI
+  SM_CFG.showGUI = nil -- 模拟「载入期清老键」那一步，避免污染其它用例
+  return v, on, legacy
+end
+function EVAL_SM_TEST_LEGACY_KEYS() return SM_CFG.showGUI, SM_CFG.keepUI, SM_CFG.keepUIStat, SM_CFG.keepUIMode end
+function EVAL_SM_TEST_ROW() return smRow end
+
+-- ===== 叠加层适配（1.74.35-4）的读值口 =====
+function EVAL_SM_TEST_MAPFIT() return smFitOn(), SM_CFG.mapFit, SMFIT.burst, SMFIT.es end
+function EVAL_SM_TEST_MAPFIT_GAPS() return SMFIT_BURST_GAP, SMFIT_BURST_SEC, SMFIT_IDLE_GAP end
+function EVAL_SM_TEST_MAPFIT_TARGETS() return table.getn(smFitTargets()) end
+function EVAL_SM_TEST_MAPFIT_APPLY(es) local c, r, rec = smFitApply(tonumber(es) or 1, true) return c, r, rec end
+function EVAL_SM_TEST_MAPFIT_ORIG() local n = 0 for _ in pairs(SM_CFG.mapFitOrig or {}) do n = n + 1 end return n end
+function EVAL_SM_TEST_MAPFIT_REC() local n = 0 for _ in pairs(SMFIT.rec or {}) do n = n + 1 end return n end
+function EVAL_SM_TEST_MAPFIT_BURST(sec) SMFIT.burst = tonumber(sec) or 0 return SMFIT.burst end
+function EVAL_SM_TEST_MAPFIT_RESTORE() return smFitRestore(true) end
+-- 夹具自清（测试换过 `_G.WorldMapDetailFrame` 的假帧之后必须还原：内存记录 + 存档原值 + 开关一起复位）
+function EVAL_SM_TEST_MAPFIT_RESET()
+  SMFIT.rec = {}
+  SMFIT.open, SMFIT.es, SMFIT.burst = false, nil, 0
+  SM_CFG.mapFitOrig = nil
+  SM_CFG.mapFit = nil
+  return true
+end
+-- ★「一次过渡」的可测入口：复刻 tick 里那两行过渡判据（burst 期开始 = 顶满节拍），供断言直接验节奏
+function EVAL_SM_TEST_MAPFIT_TRANSITION(open, es)
+  SMFIT.burst = 0
+  if open then SMFIT.burst = SMFIT_BURST_SEC end
+  if es and SMFIT.es and math.abs(tonumber(es) - SMFIT.es) > 0.001 then SMFIT.burst = SMFIT_BURST_SEC end
+  SMFIT.open, SMFIT.es = (open and true or false), (tonumber(es) or SMFIT.es)
+  return SMFIT.burst
+end
+function EVAL_SM_TEST_MENU_RAW()
+  -- ★必须走 smMenuAll（包一层）：`pcall(EVAL_SM_MENU)` 只留第一个返回值 ⇒ keys 恒 nil、这里会恒返回 nil
+  local ok, items, locked, tips, sel, keys = pcall(smMenuAll)
+  if not ok or type(items) ~= "table" or type(keys) ~= "table" then return nil end
+  local nSel = 0
+  for _ = 1, table.getn(sel or {}) do nSel = nSel + 1 end
+  local nTips = 0
+  if type(tips) == "table" and type(tips[1]) == "table" then nTips = table.getn(tips[1]) end
+  return { items = items, keys = keys, selN = nSel, tipLines = nTips, summary = EVAL_SM_SUMMARY() }
 end

@@ -2,6 +2,10 @@
 table.getn = table.getn or function(t) return #t end
 math.mod = math.mod or math.fmod
 getglobal = getglobal or function(n) return _G[n] end
+-- ★★1.74.32 垫片：测试跑在 **fengari（Lua 5.3+）** 上，5.1 的全局 `unpack` **不存在**（5.2 起改名 `table.unpack`）
+--   ⇒ 用到「多值返回」的地方忘垫就会**报错**；而调用方往往套着 pcall ⇒ 表现为「什么都取不到」而不是报错
+--     （本轮实测：桩里新加的 `GetChildren` 用 `unpack(children)` → 匿名窗口父子链永远空列表，查了半天）。
+unpack = unpack or table.unpack
 
 TEST = { used = {}, targetClass = "WARRIOR", hasTarget = true, slotNames = { [1] = "致死打击", [2] = "冲锋" }, debuffs = {}, buffs = {} }
 
@@ -19,6 +23,8 @@ local function newMock()
   --   ★只对 EditBox 生效（其余控件 SetText 不触发任何脚本），并由下方 CreateFrame 打开开关。
   local isEditBox, txtDepth = false, 0
   local w, h = nil, nil -- ★1.70.46 帧必须记得自己的尺寸（见下方 SetWidth/SetHeight 说明）
+  -- ★★★本轮桩保真：缩放/透明度必须是**每帧各自记住**的状态（见下方 SetScale/GetAlpha 说明）
+  local scale, alpha = 1, 1
   local layer, level = nil, nil -- ★1.71.2 层（见下方 SetDrawLayer 说明）
   local focused = false -- ★1.71.2（第七轮）焦点状态（见下方 SetFocus 说明）
   local point, relTo, relPoint = nil, nil, nil -- ★1.71.2 锚点语义（见下方 SetPoint 说明）
@@ -66,6 +72,15 @@ local function newMock()
     SetHeight = function(_, v) h = v end,
     GetWidth = function() return w end,
     GetHeight = function() return h end,
+    -- ★★★本轮桩保真：真客户端的帧有 SetScale/GetScale 与 SetAlpha/GetAlpha（默认 1）。
+    --   旧桩让这四个走 __index 兜底（GetScale/GetAlpha 返回 nil）⇒ 框拖拽清单里那句「读的是目标**当前**真值」
+    --   在测试里**根本立不起来**（读回来永远是 nil = 只能写「?」，反向哨兵也无从下手）。
+    --   同族老坑：「桩不记状态 = 断言失明」（本项目已发作过 N 次）。
+    --   ★默认值必须是 **1**（= 真机语义）：给 nil 会把「从没设过」与「设成 nil」混成一样。
+    SetScale = function(_, v) scale = tonumber(v) or 1 end,
+    GetScale = function() return scale end,
+    SetAlpha = function(_, v) alpha = tonumber(v) or 1 end,
+    GetAlpha = function() return alpha end,
     -- ★1.71.2：桩必须记录锚点。原桩把 SetPoint/ClearAllPoints 当空操作、GetLeft 返回 nil，
     --   于是「搜索框被挪到屏幕外」这种**位置语义**的修复在测试里完全不可见——
     --   而这次的真 bug 恰恰是一个位置问题（EditBox 用 Hide() 后仍会画底条，
@@ -108,6 +123,11 @@ local function newMock()
       if type(a1) == "string" then anchors[a1] = true end -- ★1.73.48 同名覆盖、不同名累加（真机语义）
     end,
     GetPoint = function() return point, relTo, relPoint, x, y end,
+    -- ★★★1.74.30 桩保真：真客户端有 `Region:GetNumPoints()`（官方 wiki：返回该区域上**不同锚点的个数**；
+    --   SetAllPoints 算两个）。框拖拽模块的「弹窗定位读回自证」正是靠它判「锚点到底落上了没有」——
+    --   旧桩没有这个方法 → 走 __index 兜底返回 nil → 「SetPoint 没生效」与「桩不支持」在测试里**长得一样**，
+    --   那条判据等于失明（本项目第 N 次「桩不记状态 = 断言失明」）。
+    GetNumPoints = function() local n = 0 for _ in pairs(anchors) do n = n + 1 end return n end,
     GetAnchorCount = function() local n = 0 for _ in pairs(anchors) do n = n + 1 end return n end,
     GetAnchorNames = function() local t = {} for k in pairs(anchors) do table.insert(t, tostring(k)) end table.sort(t) return table.concat(t, ",") end,
     GetLeft = function() return x end,
@@ -221,6 +241,12 @@ local function newMock()
       rawset(self, "__font", tostring(fp) .. "|" .. tostring(size) .. "|" .. tostring(flags))
     end,
     GetTexture = function() return rawget(m, "__tex") end,
+    -- ★★★1.74.31 桩保真：真客户端里 `GetName()` 回答的就是 CreateFrame 的第二参
+    --   （具名帧 → 名字字符串；匿名帧 → nil）。旧桩让 GetName 走「未知键 → 返回 nil 的函数」兜底，
+    --   于是**所有帧在测试里都成了无名帧** ——「只显示有名」这类**完全建立在 GetName 之上**的功能
+    --   在测试里根本立不起来（组 203 的「开态列表」会只剩 1 条，看着像把什么都藏了）。
+    --   这与「具名帧要挂全局」「子帧 frame level = 父 + 1」同族：桩的状态错了，断言就是瞎的。
+    GetName = function(self) return rawget(self, "__name") end,
     -- ★1.73.5 CreateFrame 拿到 "EditBox" 类型后调用它，打开「SetText 会再触发 OnTextChanged」的保真开关
     __markEditBox = function() isEditBox = true end,
   }
@@ -255,6 +281,22 @@ local function newFrame(parent)
     if ok and type(pl) == "number" then lvl = pl + 1 end
   end
   if type(m.SetFrameLevel) == "function" then pcall(m.SetFrameLevel, m, lvl) end
+  -- ★★★1.74.32 桩保真：补 `GetChildren`（真客户端有且可用 —— 子插件的整棵图层树就靠它走）。
+  --   旧桩没有这个方法 ⇒ 走 `__index` 宽容兜底拿到一个「返回 nil 的函数」⇒ 任何父子链遍历
+  --   在测试里都**遍历不到任何子件**（本次实测：探针新增的「匿名窗口父子链取证」在桩里永远是空列表，
+  --   而它恰恰是唯一能认出**匿名窗口**（如拍卖行）的手段 —— 桩不保真 ⇒ 断言失明，第 N 次）。
+  --   ★真机语义：`GetChildren()` 返回**多值**（不是表）⇒ 桩也按多值返回；调用方必须 `{ pcall(...) }`。
+  local children = {}
+  rawset(m, "__children", children)
+  rawset(m, "GetChildren", function(_, n)
+    -- 真机允许传下标取第 n 个孩子；不传则全给
+    if type(n) == "number" then return children[n] end
+    return unpack(children)
+  end)
+  local par = rawget(m, "__parent")
+  if par and type(par) == "table" and type(rawget(par, "__children")) == "table" then
+    table.insert(rawget(par, "__children"), m)
+  end
   return m
 end
 -- ★1.73.14 造一个「独立 tooltip」：自己的文本 + 自己的 tooltip API（真机里 CreateFrame("GameTooltip", ...) 就是这个）
