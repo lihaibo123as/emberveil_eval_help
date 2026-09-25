@@ -269,7 +269,7 @@ Remove-Item $staging -Recurse -Force
   · ★**状态（用户决定）**：用户说「这个工具先放着以后测试」→ **停在「已实现 + 双闸门绿 + 未提交/未实测」**；
     默认**关**（`tb.feedPet` 空 = 关）+ 载入期零副作用 ⇒ **放着不影响任何现有功能**。
     回来继续时：读 `.dsh/reports/hunter-helper-impl.md`（实现说明 + 16 步真机测试流程 + 四个待实测项）。
-- **当前版本（源码唯一真值）**：`EvalHelp.lua` 的 `local VERSION` == `EvalHelp.toc` 的 `## Version` = **1.74.28**（v1.74.27 已发布）
+- **当前版本（源码唯一真值）**：`EvalHelp.lua` 的 `local VERSION` == `EvalHelp.toc` 的 `## Version` = **1.75.2**（v1.75.1 已发布）
   （已发布；`CHANGELOG.md` 最新小节 v1.74.0 已把 **1.73.35 ~ 1.74.0**（85 个提交）归纳成 7 条里程碑）。
   ★1.73.35~1.73.67 那批工作（分享封皮/品阶评分/头衔抽卡/彩蛋/角色扮演反应/标题栏徽标/取证探针）已随 **v1.74.0** 一起发布。
   ★**逐版本流水一律不进本文件**（见文件头写作纪律）——要点查源码注释 / `CHANGELOG.md` / `git log`；
@@ -1555,6 +1555,39 @@ V8 profile 显示时间全在 fengari 的 `luaV_execute`/`adjust_top`/`moveresul
 - **测试纪律（用户同时定的，已进常驻卷）**：改完**默认只跑 `node luacheck.js`（<1s）**；`test_engine.js` **整轮实测 32 秒**，只在**碰到异常 / 改动接线**时跑。
   ★配套教训：语法闸门**照不到接线**——本轮就是 luacheck 全绿而勾选框点不动；所以「动了模块↔宿主接线 / UI 渲染 / 存档读写」时必须补跑一次测试台。
 
+
+**⑥q 排查「未开启缩放大地图时还在不在监听探索层缩放」（1.75.7 全案）**
+
+**用户原话**：「排查缩放大地图功能.在未开启的情况下会不会监听探索层的缩放操作」
+
+**一、结论：会，而且不只是监听（实测证据）**
+- 探针（真机通道：`EVAL_TEST_FIRE_UPDATE(rawget(_G, "EH_SM_FEAT"), 0.05)` 点 10 拍）+ 记账假帧（`WorldMapDetailFrame` 与两张叠加层）：
+  `模块开关 EVAL_SM_ENABLED=false ｜ 点了 10 次 tick（0.5s）⇒ 叠加层几何调用 8 次 · ovA=(248.5,-224.0,150.5x150.5) · 记到原值 2 条`。
+  ⇒ 关闭状态下：每帧读 `IsShown` + `GetEffectiveScale`（**这就是「监听探索层缩放」**），并且**把叠加层几何折了 ×0.7**。
+- 根因两条：
+  ① `EH_SM_FEAT` 的 tick 是**载入期无条件建**的（`CreateFrame("Frame","EH_SM_FEAT", WorldFrame)`），与工具箱开关无关；
+  ② tick 里 ④ 只看 `smFitOn()`（`SM_CFG.mapFit ~= false`，**nil = 默认开**），③「开图保持」那一段**压根没看总开关**。
+  旧注释甚至把这件事写成了**设计**：「只受 smFitOn() 管 —— 否则模块一关，我们已经乘过 es 的几何就没人还原了」——
+  也就是说，为了「有人还原」，代价是关掉以后一直跑。
+
+**二、修法（两条，缺一不可）**
+1. **tick 免打扰闸门**（放在 `local dt = tonumber(arg1)` **之前**）：`if not EVAL_SM_ENABLED() then FEAT.applied = false
+   SMFIT.open/es/burst 清零 return end` —— 关闭时**连读都不读**（IsShown / GetEffectiveScale 各 0 次）。
+2. **关闭即还原**：`EVAL_SM_SET(false)` 的 else 分支先 `pcall(smFitRestore, true)`（按首次折算时记下的原值还原），
+   再 `featReset()` 复位透明度/缩放/位置，最后**如实播报还原了几项**（没原值的如实说跳过）。
+   ⇒ 这样「还原」不再依赖常驻 tick，第 1 条才成立。
+
+**三、修后实测**
+`点了 10 次 tick（0.50s）⇒ 叠加层几何调用 0 次 · ovA=(355.0,-320.0,215.0x215.0) · 记到原值 0 条`（读计数也是 0）。
+
+**四、闸门（都做过变异验证）**
+- **组 230**（`tests/tools/SimpleMap.lua`，模块自带）：① 关闭 ⇒ `IsShown`/`GetEffectiveScale` 各 **0 次** + 几何 0 次 + 原值 0 条；
+  ② 开启 ⇒ 照读照折算（**反向哨兵**：别把功能关死）；③ `EVAL_SM_SET(false)` ⇒ 几何回到原值，之后再点 10 拍依旧全 0。
+- **`SM OFF SILENT CHECK`**（`tests/checks/SimpleMap.js`）：源码级钉「闸门在探测之前 + 有 `return` + 清 `FEAT.applied`
+  + 关闭路径**真的调用** `pcall(smFitRestore…`」；变异 5/5 捕获（删闸门 / 闸门后移 / 去掉 return / 去掉还原调用 / 基线）。
+  ★收紧那一刀值得记：第一版只查「段里出现 `smFitRestore`」⇒ 去掉调用后残留的 `type(smFitRestore)` 仍能骗过检查（M5 漏网）⇒
+  判据改成**必须出现调用形态** `pcall(smFitRestore`。
+- `SM GROUP ROSTER CHECK` 的 `WANT` 同步为 `[224, 225, 226, 230]`（少一个组 = 整组断言静默消失，这条就是防它的）。
 ### R16. 铁律 3「先读 Heart / C」的完整对照表（1.74.36-2 从常驻卷 §一.3 迁入）
 
 > 常驻卷只留「一行一入口」的速查；**要动手改队伍/血量/buff 相关代码时回来看这张表**。
@@ -1574,6 +1607,299 @@ V8 profile 显示时间全在 fengari 的 `luaV_execute`/`adjust_top`/`moveresul
 **怎么读**：重点是**大段注释**——对方把踩过的坑、API 的真假、为什么这么写全留在注释里，这是整个仓库**信息密度最高**的内容。
 
 
+### R17. 「记忆体 65k 上线问题」全案：DSH 换版后限值搬家 + 三条死路（2026-09-25）
+
+> 背景：常驻卷预算被 `dsh-agent-instructions` 的 `maxBytes` 卡在 65536（超了从尾部截断）。2026-09-25 上午在 0.1.5-rc.x 上改好、实证生效；随后 DSH 升级到 **0.1.7-rc.2**，截断又回来了。**排查一上午的结论：问题不在 preset 文件，而在「跑的是哪一份安装 + 限值在哪一层」两头都判断错了。**
+
+**一、判定「现在跑的是哪一份安装 / 哪一版」（★这一条是本轮最贵的教训）**
+- 旧判据（看 `_npx\<hash>` 命令行 / 看 `profiles\node_modules` 的 junction）**会骗人**：升级后 junction 仍指着旧的 npx hash（8:23:06 留下的痕迹），而真正在服务 3080 的是全局安装。
+- ★**可靠指纹 = 看自己手里有哪些工具**：`dsh` 0.1.7-rc.2 的 `preset-standard`/`preset-ptc` 把 `tool-ralph` 设成 `disabled: true`，而 0.1.5-rc.x 的 standard/ptc **开着它** ⇒ **没有 `ralph` 工具 = 0.1.7-rc.2**（本轮据此判定 = 全局 `%APPDATA%\npm\node_modules\@deepseek-ai\dsh`）。
+- 沙箱里 `Get-CimInstance`/`tasklist`/`wmic` 全被拒、`Get-Process` 也看不到宿主 `node.exe` ⇒ **不要指望从进程查命令行**，改用「工具指纹 + `dsh_memory_budget.js status` 列候选安装」。
+
+**二、65536 在 0.1.7-rc.2 里的真实出处（`--dump-config` 实证）**
+- preset 不再是 `dsh-agent-presets\presets\<id>\agent.cordis.yml` 目录，而是 **bundle 补丁里的声明行**：`dsh-web-app\presets\<id>.patch.yml` 中 `- id: preset-standard`（`name: @deepseek-ai/dsh-agent-preset`）的 `config.plugins` 里那条 `agent-instructions.config.maxBytes: 65536`。
+- 同一份 dump 还显示：宿主（host 平面）那条 `agent-instructions` 是 **`disabled: true`**（被 `dsh-web-app` 的 bundle 补丁关掉）——**这就是「改了等于没改」的根源**。
+
+**三、三条死路（都实测过，别再走）**
+| 改法 | 结果 |
+|---|---|
+| 改 `_npx\<hash>\…\dsh-agent-presets\presets\<id>\agent.cordis.yml`（0.1.5 布局） | 0.1.7 **根本不读这个路径** ⇒ 无效（0.1.5 上升级/换 hash 也会被覆盖） |
+| 改安装内 `dsh-web-app\presets\<id>.patch.yml` | **有效但一次性**：`npm i -g` / 换 npx hash 即回 65536 |
+| profile 补丁里只写**单层** `- id: agent-instructions` + `config.maxBytes` | dump 里能看到它被应用，但那一行是 **disabled** ⇒ 仍然 65536 |
+
+**四、正解（官方机制）**
+- 官方 `dsh-agent-preset` 的 `skills/editing-cordis-compositions` 明确：**按 Loader 行 id 覆盖**，且★**覆盖会替换整个 `config`** ⇒ 必须完整重述 `id`/`order`/`plugins`。写法：
+  `- id: preset-standard` + `name: '@deepseek-ai/dsh-agent-preset'` + 完整 `config`（`plugins` 里把 `maxBytes` 改成 1048576）。
+- 落点 = **profile 补丁层** `%USERPROFILE%\.dsh\profiles\web\cordis.patch.yml`（覆盖顺序 bundle → **本文件** → home patch → `--patch`）⇒ **升级 dsh / 换 npx hash 都不会丢**。
+- ★**不完整重述 = preset 激活失败**：2026-09-25 早上 GUI 崩（「3 个 preset 激活失败」+ 图片识别模型选不到）就是上一轮手工写「两级 id」造成的 —— 所以本轮一律**脚本生成**：仓库根目录 **`dsh_memory_budget.js`**（`apply` 从当前安装重生成 + 先备份；`check` 闸门；`status` 诊断）。
+- 代价（须知情）：覆盖块**冻结**了 preset 内容，上游若改 preset（增删行）会被遮住 ⇒ `check` 里的**漂移检测**会在两边行 id 不一致时报警，那时重跑 `apply` 即可。
+
+**五、闸门（免重启、不碰真实 profile）**
+- 手法：把真实 profile 的 5 个小配置文件复制进工作区内的**临时 `DSH_HOME`**，用**官方 CLI** 跑
+  `node <install>\lib\bin.js --profile web --dump-config`，断言每个 preset 的 `agent-instructions.maxBytes`；
+  残留的非目标值**只允许出现在 `disabled` 行**里。
+- ★两个沙箱坑：① **node 输出走管道（`| Select-Object`）会被拒**（`Access is denied`）⇒ 改用 `spawnSync` + **文件描述符**落盘再读；② dump 会**重写 profile 的 `cordis.yml`**（`prepareProfile`），所以必须指向临时 `DSH_HOME`。
+- `--dump-config` 顺带解释了一件旧事：临时 HOME 里 `dsh-builtin-browser` 解析不到会打警告但不影响 dump（那是 profile 级安装的包）。
+
+**六、生效条件与验证**
+- `patchReload = startup` ⇒ **必须重启 GUI**；preset 修订**只影响新开会话**（旧会话保持原预算）。
+- 验证仍用老办法：把常驻卷撑过 65,536，看下一次注入有没有 `Workspace instruction budget … truncated`。
+- 旧上限下软上限 ≈ 65,240 字节；本轮排查期间常驻卷已被撑到 66,841 ⇒ 截断到 65,244（尾部铁律 AI 看不到）——所以**改完记忆要尽快重启验证**。
+
+**七、自己脚本踩的坑（同族纪律：幂等性必须当场验）**
+- 临时脚本用标记注释 `# >>> … dsh_preset_fix.js 生成 …` 写入，正式脚本换了标记文字 ⇒ 剥离正则匹配不到旧块，`apply` 把覆盖块**又追加了一份**（22503 → 43552 字节）。修法 = 剥离用**通用正则**（`^# >>>…常驻指令预算覆盖[\s\S]*?^# <<<`）不认死某一版文字，并在写入后**自检块数 == 1**；★`apply` 连跑两次必须**字节完全相同**（本轮实测 YES）。
+- 闸门自身也踩过一次：按「上一个顶层行」划 preset 块 ⇒ 串块（`preset-minimal` 居然“读到” 1048576）。修法 = 块范围从**preset 行自己**起算到下一个顶层行。
+
+**八、复核命令（照抄）**
+```
+node dsh_memory_budget.js status   # 候选安装 + 采用哪一份
+node dsh_memory_budget.js check    # 闸门（exit 0 = 三个 preset 都 1 MiB）
+node dsh_memory_budget.js apply    # 升级 dsh 后重新生成覆盖块（先备份，再自证）
+```
+
+
+### R18. 「玩家追踪效果（草药 / 采矿 / 野兽…）」API 调研 + 实证候选表全案（1.75.3）
+
+> 用户原话：「分析API 排查 玩家追踪效果.草药,采矿,野兽之类的.」
+> 一句话结论：本客户端**只有三条追踪 API**（读状态 / 读名字 / 取消），**没有枚举**，**小地图圆点读不回来**，
+> **事件名官方没公开** ⇒ 实时刷新的事件判据只能真机实测；而「是哪一种追踪」靠**纹理解析**（13 条实证表）
+> ＋**名字备用路**两条独立路互证。
+
+**一、API 面（本地 1370 条 `api_*.html` 索引 + 官方 wiki 逐页核对）**
+
+| 目的 | API | 类别 | 官方要点 | Protected |
+|---|---|---|---|---|
+| 在不在追踪 / 图标 | `GetTrackingTexture()` | Mapping | 返回当前追踪法术的**图标纹理**；没有追踪 = `nil` | 无 Protected 行 ⇒ 可直调 |
+| 是**哪一种**（本地化名字） | `GameTooltip:SetTrackingSpell()` | GameTooltip(widget) | 「Fills an aura tooltip from the player's current tracking spell. **Clears lines first. Does nothing if no tracking spell is active.**」 | 同上 |
+| 关掉追踪 | `CancelTrackingBuff()` | Buff | 「Cancels the player's current tracking aura (Find Herbs, Track Beasts, and similar)… **Buff-bar auras are unchanged**」 | 同上 |
+
+- **不存在**：`GetNumTrackingTypes` / `GetTrackingInfo` / `SetTracking`（1.12 那套枚举在本客户端没有）。
+- **开追踪**：`CastSpell`/`CastSpellByName` 是 Protected ⇒ 插件只能 `UseAction(slot)`（追踪法术得先在动作条上）。
+- **小地图圆点**：Minimap 官方页只有 `SetBlipTexture`（队友点）/ `SetIconTexture`（**追踪图标**：生物 / 资源 / 任务 / 宠物）
+  两个**纯外观** setter —— **没有任何 blip 列表读口** ⇒ 「图上看到了什么」不能反读。
+- **增益条不是追踪的家**：官方明文 `GetPlayerBuff` 会 **skip** hidden/tracking auras，Buff 页也写
+  「Tracking auras are **not** listed here」⇒ 光环路线只能当旁证（探针⑤就是拿它做旁证）。
+- **事件名**：wiki `/wiki/lua/Events` = **404**，索引里也没有事件表（只有 UIObject 的 `RegisterEvent`）
+  ⇒ pfUI 用的 `PLAYER_AURAS_CHANGED` **只是 TurtleWoW 的值**，本客户端**必须实测**（探针⑧）。
+
+**二、候选表怎么从「抄来的」变成「实证的」**
+
+1. 官方数据库 `database.emberveil.org/spell/<id>` 逐条取**英文名 + 图标 png 名**；
+2. 拿 png 名去**本机图标清单**（`doc/图标路径清单.txt`，`/eh go icons` 从真机采的 1018 条，形态
+   `/Game/Interface/Icons/<基础名>_TEX`）**逐条核对存在性** —— 两条独立证据都对上才写进表；
+3. 13 条（pfUI 那张表只覆盖前四条，其余 9 条是本轮补的）：
+
+| 种类（标签） | 客户端图标基础名 | enUS | zhCN | ID |
+|---|---|---|---|---|
+| 采药 | `INV_Misc_Flower_02` | Find Herbs | 寻找草药 | 2383 |
+| 采矿 | `Spell_Nature_Earthquake` | Find Minerals | 寻找矿物 | 2580 |
+| 寻找宝藏 | `Racial_Dwarf_FindTreasure` | Find Treasure | 寻找宝藏 | 2481（矮人种族） |
+| 追踪野兽 | `Ability_Tracking` | Track Beasts | 追踪野兽 | 1494 |
+| 追踪人型生物 | `Spell_Holy_PrayerOfHealing` | Track Humanoids | 追踪人型生物 | 19883 |
+| 追踪恶魔 | `Spell_Shadow_SummonFelHunter` | Track Demons | 追踪恶魔 | 19878 |
+| 追踪龙类 | `INV_Misc_Head_Dragon_01` | Track Dragonkin | 追踪龙类 | 19879 |
+| 追踪元素生物 | `Spell_Frost_SummonWaterElemental` | Track Elementals | 追踪元素生物 | 19880 |
+| 追踪巨人 | `Ability_Racial_Avatar` | Track Giants | 追踪巨人 | 19882 |
+| 追踪亡灵 | `Spell_Shadow_DarkSummoning` | Track Undead | 追踪亡灵 | 19884 |
+| 追踪隐藏生物 | `Ability_Stealth` | Track Hidden | 追踪隐藏生物 | 19885 |
+| 感知恶魔 | `Spell_Shadow_Metamorphosis` | Sense Demons | 感知恶魔 | 5500（★算不算「追踪」待真机验） |
+| 感知亡灵 | `Spell_Holy_SenseUndead` | Sense Undead | 感知亡灵 | 5502（★同上） |
+
+★**ID 不能照 1.12 抄**：实测 19881 在本客户端是 `Shoot (TEST)`（1.12 里那一档是 Track Elementals 一类的追踪），
+ID 全部现取自数据库；★`ruRU` 在数据库里**回落到英文** ⇒ 名字备用路只收 zhCN/enUS（认不出就 nil，不猜）。
+★盘点方法可复用：`database.emberveil.org` 的 `/spells` 列表页是服务端渲染的分页（每页 50、搜索框是客户端的），
+所以**按已知 ID 逐条取详情页**比爬列表快；详情页图标 png 名 = 客户端图标基础名（小写）。
+
+**三、落地到代码（都带判据）**
+
+- `EVAL_TRACK_BASE(tex)`：剥反斜杠目录（**`string.char(92)`，源码里不手写转义**）/ 取末段 / 剥扩展名 / 剥 `_TEX` / 转小写。
+- `EVAL_TRACK_KIND(tex)`：**基础名全等**比对 `TRK.hint`（子串匹配会误报；组 189 有 `..._02_Copy` 变异哨兵钉住）。
+- `EVAL_TRACK_KIND_BY_NAME(nm)`：名字备用路（zhCN/enUS）；探针③把两条路**互证 / 不一致**都如实打出来
+  （静默取一路 = 候选表某一格写错了用户永远看不到）。
+- ⑦ 法术书扫描改按**纹理**判：连「感知亡灵」这种名字里没有「追踪/寻找」的也抓得到；名字像而纹理没命中的**单独列**（= 补表候选）。
+- 子命令 `/eh go 追踪探针 表` 把 13 条摊开（回传对照用）。
+- 闸门：**`TRACK ICON CHECK`**（`tests/checks/Track.js`：4 列 / 13 条 / 基础名不重复 / 逐条在本机图标清单里存在 /
+  表里不许写路径与 `_TEX`）＋ **组 189**（走真实命令入口与真实调用链）。
+
+**四、真机取证流程（本轮还没跑完的那一步）** —— 事件名与「客户端返回的纹理串形态」只能真机拿：
+
+1. 干净状态：`/reload`；
+2. **不开追踪**跑 `/eh go 追踪探针` → 看①「本次=（空/无追踪）」、②「当前没追踪」；
+3. 用小地图按钮**开草药追踪**再跑一次 → ①应有纹理、②应是「寻找草药」、③应「基础名=inv_misc_flower_02… 两条路互证」；
+4. 换**采矿**、再换**野兽**各跑一次（对照「上次 → 本次」）；
+5. 开 `追踪探针 监听` → 用按钮切换 3 次（开 → 关 → 换种类）→ 再关掉监听，看**哪条事件计数真的涨**（那就是实时刷新要注册的事件）；
+6. `/reload` → 我这边直接读 `%LOCALAPPDATA%\Azeroth\Saved\Account\LIHAIBOAS1\SavedVariables\EvalHelp.lua` 的 `trkProbe`
+   （★探针读数另存 40 行小环：`[DS]` 心跳 ~10 秒一行、调试日志环只有 100 条 ⇒ 约 17 分钟就被冲干净）。
+
+
+**五、真机首轮读数（2026-09-25 用户跑完流程）与本轮探针升级（1.75.4）**
+
+- 存档 `trkProbe` 里只有**两份报告**，且**完全一样**：① `GetTrackingTexture：可用=true ｜ 本次=（空/无追踪）`、
+  ② `当前没追踪`；同时 ⑥ 动作条读到 2 个追踪技能（寻找矿物 slot 26 / 追踪野兽 slot 38）、⑦ 法术书 2 条、
+  ⑤ 增益条 1 个光环（`Spell_Nature_RavenForm_TEX`）。⇒ **API 与 UI 都活着，但没有任何一条能说明「当前追踪是什么」**。
+- ★旧探针的三条**静默路**（这就是「两次都读不到」不能当结论的原因）：
+  1. `GetTrackingTexture` 的返回**不是字符串**时被 `type(v)` 等于 string 的判断直接丢掉，报告照写「没追踪」；
+  2. ② 的判定挂在 `cur == nil` 上 ⇒ **有追踪也永远走「当前没追踪」那一支**（名字路读了也不给看）；
+  3. 事件名靠**猜 4 条候选**，猜不中就永远看不见那条真事件（用户那次也没跑 `监听`，所以事件仍是空白）。
+- 1.75.4 的修法（判据全部落在**组 189**）：
+  · ① 打「类型 + 原文」；② why 四态（ok / empty / noguard / noapi）+ tooltip 两行原文；
+  · ⑤ 光环读名字（`EVAL_PLAYER_BUFF_NAME`），若其中一条命中候选表或名字像追踪 ⇒ 点名「本客户端追踪**占增益条槽位**」；
+  · ⑩ **第三条独立路**：默认 UI 追踪按钮（候选名 + 有界 `_G` 扫描名字含 Track/追踪 的对象，报类型 / 纹理 / IsShown），
+    ＋ ⑪ 一行快照（开/关各跑一次直接比这一行）；环形读数上限 **40 → 80** 行（装得下 3 份报告）；
+  · ⑧ `监听` = `RegisterAllEvents` **全事件抓取**（handler 只计数，关掉时按**次数升序**列全部事件名；
+    没有该接口时如实退回 4 条候选并点名）。
+  · ★踩到的判据坑：**`pcall` 的第一个返回是成功标志**，而 `RegisterAllEvents` 真机不返回值
+    ⇒ `pcall(...) and true or false` 恒为真（退化路永远走不到）；正解 = 「接口在不在 + 抛没抛错」。
+
+**六、真机第二轮读数（1.75.4 探针）= 可行性结论（2026-09-25，追踪野兽 开着）**
+
+- ① `GetTrackingTexture()` = `/Game/Interface/Icons/Ability_Tracking_TEX.Ability_Tracking_TEX`
+  ⇒ **确实返回字符串**；形态 = **资产路径 `_TEX` + 「.」 + 对象名 `_TEX`**
+  （第一轮读数之所以是「没追踪」，是因为那时**确实没开追踪** —— 探针没错，是状态问题）。
+- ② `SetTrackingSpell` 读到 `追踪野兽`（TextLeft1=追踪野兽 ／ TextLeft2=正在追踪野兽。）⇒ 名字主路可用。
+- ③ 老 `EVAL_TRACK_BASE` 把上面那条归一成 `ability_tracking_tex.ability_tracking` ⇒ **永远命中不了候选表**
+  （报告里 ③ 写「没命中」而 ② 是对的）。**1.75.5 修**：取最后一段后只认第一个「.」之前 ⇒ 归一到 `ability_tracking`。
+- ⑤ 增益条只有 1 条别的光环（`Spell_Nature_RavenForm_TEX`，名字读不出，与本主题无关）
+  ⇒ **追踪不占增益条**（官方那句 Tracking auras are not listed here 对本客户端**成立**）。
+- ⑩ `MiniMapTrackingIcon`（Texture，纹理与①**完全相同**，`IsShown=true`）+ `MiniMapTrackingFrame` / `MiniMapTrackingBorder`
+  ⇒ 默认 UI 的追踪按钮可以作为**第三条独立路**（不依赖那两个 API 也能知道「现在在追踪什么」）。
+- ⑪ 快照：`纹理类型=string ｜ 纹理=...Ability_Tracking_TEX ｜ 名字=追踪野兽（why=ok） ｜ 光环=1 个 ｜ 追踪按钮命中=2 ｜ 扫描=24 条`。
+- ⇒ **可行性结论**：判「在不在追踪」= ① 非 nil；判「是哪一种」= ② 名字 + ① 纹理对候选表（两条路互证）；
+  兜底 = ⑩ 追踪按钮图标；**事件名仍未实测**（这轮监听输出被 80 行环挤掉了）
+  ⇒ 实时刷新用 **1s 轮询纹理 + 纹理变了才读名字** 即可，不必依赖官方未公开的事件名。
+
+**七、1.75.6 落地：把它做成条件类型（「自身状态 → 追踪类型」单选下拉）**
+
+- 数据流：`TRK.hint`（**id/基础名/en/zh 四列**，第 1 列是语言无关的**稳定 id**）→ `EVAL_TRACK_KIND(tex)` 返回 id →
+  `EVAL_TRACK_LABEL(id)` = `L("TRK_"..ID)`（三语，由 TRACK ICON CHECK 守）→ 下拉清单 `EVAL_TRACK_LIST()`（任意 + 13 条）。
+- 求值：`EVAL_TRACK_NOW()`（**按纹理缓存**：纹理没变就不读 tooltip）→ `EVAL_TRACK_MATCH(id)` → `condOne` 的
+  `k == "tracking"` 分支（`cd.v == false` = 反向）。新加一条的默认值 = 追踪/任意/正向（`seDefaultCond`）。
+- 文本：「导出走 id」`EVAL_COND_STR` → `追踪:beast` / 反向 `未追踪:beast`；`disp=true` 显示本地化标签；
+  `EVAL_PARSE_ONE` 认 `追踪[:id]` / `tracking[=id]` / `未追踪[[:id]]` / 前置 `!`，id 认「稳定 id / 图标基础名 / enUS / zhCN / 本地化标签」，
+  **认不出整条丢弃**（与其它条件的写法错误同口径）。
+- 编辑器：类型归 **CTG_1（自身状态）**；点文字格 → 单选下拉，**第 1 行 locked =「当前追踪：X」**（实时，仅参考、点不动），
+  当前值用**金色圆点**标出；右侧 是/否 = 正向/反向。
+- ★坑 1（当场踩到、且是 `LANG KEY CHECK` 的老脾气）：它的正则是 `L\(\s*"KEY"` 的**子串**匹配，不看前一个标识符 ⇒
+  `EVAL_TRACK_LABEL("any")` 会被当成语言键 `any`（三语都缺 → 假红）。→ 走局部变量 `local anyId = "any"`。
+- ★坑 2：`EVAL_DD_OPEN(..., { selected = ... })` 的选中标记**只在 `multi = true` 时生效**（`ddUI.sel` 只在 multi 分支赋值）
+  ⇒ 单选下拉的「当前值」必须自己在条目文案上加标记（本项目「单选列表」第一次这么做，别再浪费一轮）。
+- ★坑 3：TRACK ICON CHECK 查语言键时必须**先剥注释**再匹配（`-- TRK_HERB = "…"` 注释掉照样算有键 ⇒ 变异 M3 当场漏网）。
+- 闸门：**组 229**（① id/标签/清单 ② 求值 + 缓存（第二次不再读 tooltip）③ 文本往返 ④ 真实 `condOne` 链
+  ⑤ 归组/权重/类型名三语 ⑥ 真实渲染 + 真下拉面板 + 单选落值）+ `TRACK ICON CHECK`（变异 6/6 捕获）。
+
+### R19. 「聊天输出总闸门」全案：`say`/`EVAL_SAY` 联动「调试日志」+ 标签改名（1.75.8）
+
+> 用户原话：「say 函数能否在 根据全局配置->记录调试日志状态开关要不要打印.? 记录调试日志重命名->调试日志」
+> 一句话结论：`say`（= `EVAL_SAY`）= 插件往聊天框说话的**唯一出口**，跟「全局 → 日志 → **调试日志**」（`cfg.log.on`）联动；
+> 该开关同时是**数据层**闸门（`logLine`）与**输出层**闸门（`say`）；关掉后仍看得见的两类行走**常开出口** `EVAL_SAY_FORCE`。
+
+**一、改造前的形态与三个隐患**
+
+| 位置 | 改造前 | 隐患 |
+|---|---|---|
+| `Core.lua` 的 `say` | 无条件 `DEFAULT_CHAT_FRAME:AddMessage` | 任何模块的播报都躲不开开关 |
+| `cfg.log.on`（配置项「记录调试日志」） | 只门控 `logLine`（写不写日志环） | 「写不写」与「说不说」是两条互不相干的轨 |
+| 配置项取名 | 「记录调试日志」 vs 「方案技能日志」 | 并排显示几乎同名（1.71.2 那次排查就是被这个歧义引起的） |
+
+**二、落地（三处生产改动 + 改名）**
+
+1. `Core.lua`：`logEnabled()` **上移到 `say` 之前**；拆成 `chatOut`（裸输出）/ `say`（`if not logEnabled() then return end` → `chatOut`）；
+   导出 **`EVAL_SAY_FORCE = chatOut`**（常开）与 **`EVAL_CHAT_ON = logEnabled`**（给自建打印口的模块读）。
+   ★声明顺序是硬要求：`logEnabled` 写在 `say` 之后 = 闭包绑成全局 nil，运行时才炸（本项目老坑，`DECL ORDER` 的同族盲区）。
+2. `EvalHelp.lua`：新增 `local fsay = EVAL_SAY_FORCE or say`（Core 没载入时退回门控版，绝不 nil 调用）；
+   **只有三类行走 fsay** —— `/eh log`（+ `/eh logdump`/`logclear` 的命令反馈）、`/eh wdebug`（同一族日志开关）、`/eh help` 全清单；
+   其余（含 `/eh go probe|ds …` 诊断）**一律受门控**。
+   ★`/eh log` **关掉那一刻**额外打一行「关掉后插件不再往聊天框说话；/eh log 可随时开回来」= **看得见的回头路**。
+   ★`/eh wdebug`/`/eh debug` 文案同步改名「**方案技能日志**」（与总闸门不再撞名）。
+3. `tools/SimpleMap.lua`：模块自建打印口 `P`（全仓**唯一**直接写 `DEFAULT_CHAT_FRAME` 的模块口）加 `EVAL_CHAT_ON()` 门控；
+   ★`SM.lines`（模块自己的探针读数环）**照记** —— 数据层与输出层分开。
+   · 全仓审计：其余模块（`LayerFix`/`DragFrames`/`RareWatch`/`HunterHelper`/`ConsumableHelper`/`DismountHelper`/`Toolbox`/`Share`/`PetHelper`/`IconBrowser`）
+     的 say 全是「**优先 `EVAL_SAY`，取不到才直写**」⇒ **委托即门控**，一处生效。
+   · **有意例外**：子插件 `addons/EH_DebugBox`（独立 `.toc`、本身就是调试盒子）仍直写聊天框。
+4. 三语标签 `G_LOG_FILE`：「调试日志（/eh logdump 查看）」/「Debug log (/eh logdump to view)」/「Журнал отладки (/eh logdump)」；
+   代码注释里的「记录调试日志」同步改名（`test_assert.lua` 留一句历史说明）。
+
+**三、判据与变异**
+
+- **组 231**（`test_assert.lua` 末尾）：① 两出口在位 · 关 ⇒ `EVAL_SAY` 一个字都不刷 + `EVAL_SAY_FORCE` 照刷（反向哨兵） ·
+  ② 开 ⇒ 照常刷 · ③ 历史三态（nil/false/表）+ 同一判据管数据层（关掉连日志环都不写） · ④ 三语标签改名且与「方案技能日志」不再同名 ·
+  ⑤ **真实命令入口** `/eh log`（确认行仍可见 + 说清怎么开回来 + 关后 `EVAL_SAY` 静默） · ⑥ 模块播报（`EVAL_SM_SET`）同样静默。
+- **`CHAT GATE CHECK`**（`tests/checks/ChatGate.js`，harness 里一行 require）：`say` 先门控再输出 · 两出口导出 ·
+  `logEnabled` 声明在 `say` 之前 · `/eh log` 走常开出口且分支内无受门控 `say` · 模块 `P` 读 `EVAL_CHAT_ON` · 三语 `G_LOG_FILE` 在位且 zhCN 无旧名。
+- **变异 6/6**：M1 去掉 `say` 门控（组 231① + CHECK 双响）· M2 删 `EVAL_SAY_FORCE` 导出（组 231①）· M3 `logEnabled` 挪到 `say` 之后（引擎直接炸 = 捕获）·
+  M4 `/eh log` 改回受门控 `say`（组 231⑤）· M5 SimpleMap `P` 去掉门控（组 231⑥）· M6 zhCN 标签改回旧名（组 231④）。文件全部由内存原文还原。
+
+**四、纪律（与老判据的关系）**
+
+- 常驻卷 §5.2 那条「两个日志开关不能合并」**已按新口径改写**：`cfg.log.on`（「调试日志」）= **总闸门**（数据 + 输出同一判据），
+  `cfg.wdebug`（「方案技能日志」）= 更细的一层（Engine 里那批决策原因同步刷屏）——两条分工仍在，但总闸门现在**同时管「说不说话」**。
+- 与 §5.1「关掉零动作」同族：**闸门必须在第一次输出之前**；**关掉时必须留一条看得见的回头路**（否则「怎么开回来」无从得知）。
+
+### R20. 「探索层纹理被缩两遍」全案：客户端自己会级联 ⇒ 折算前必须先探测（1.75.9）
+
+> 用户原话（三轮递进）：「地图缩放 探索层纹理缩放是否操作了两遍?」→「发现问题了: 是在关闭一次大地图缩放.
+>   
+> 然后重新再打开大地图缩放 就进行了2遍纹理缩放」→「我说的纹理缩放是 WordMapDetailFrame 下面 12 之后的纹理缩放逻辑」→
+>   「在开启/关闭.大地图缩放要做好探索层纹理的事件清理. 现在确定是在未开启插件载入..的情况下打开大地图缩放,
+>   和在开启插件载入之后重新关闭,又打开 ,这两种情况都会发生.纹理渲染层被缩放两次的问题」。
+> 一句话结论：**本客户端自己会把父帧缩放级联到那批纹理上**（几何读回也含缩放）⇒ 我们那套「按 es 折算」是**第二遍**；
+>   正确做法 = 先只读探测、只有判定「不会级联」才折算；另外两件必修：**原值只在自然档抓一次**、**开启/关闭都要收钩子**。
+
+**一、真机证据（用户 DebugBox 截图 + 存档）**
+
+| 观测 | 数值 | 说明 |
+|---|---|---|
+| `WorldMapFrame → WorldMapDetailFrame` | `701×468`（锚 -351,-48） | 该帧自然尺寸 `1002×668` ⇒ **读回 = 自然 × 0.7** |
+| `WorldMapOverlay1` | `105×105`（锚 174,-157） | = 我们写的 `150.5／248.5` **再 × 0.7** ⇒ 显示 = 原值 × **0.49** |
+| `WorldMapDetailTile1..12` | `179×179`（锚 0,-0） | 互相锚 + 偏移全 0 ⇒ 对缩放免疫（本功能按设计**不碰**） |
+| SavedVariables | `tb.simpleMap = true` 在、**`simpleMapCfg` 整块不存在** | 模块的设置与「原值记录」**一个都没落盘** ⇒ 见根因④ |
+
+**二、三条根因（全都属「静默」族）**
+
+1. **方向判反**：`smFitApply` 无条件按 `es` 折算。只有在「客户端**不会**级联」的客户端上这才正确；
+   本客户端会级联 ⇒ 我们是第二遍。1.74.34-18b 的老探针（`/edb maptile fit s`，眼看对齐）当年测的是**另一种施加方式**
+   （直接缩画布/尺寸），不能外推到今天这条「缩外框 + 折算纹理」的组合 —— ★**旧结论要连条件一起继承**。
+2. **原值口径错**：开启路径先 `smApplyDefaults()`（立刻 `SetScale(0.7)`），**之后**才在 tick 里记「原值」；
+   本客户端读回含缩放 ⇒ 记下的 `r.w` 已是缩过的值，再折一次 = 第二遍（**违反**「读原值 → 写新值」的顺序铁律）。
+3. **关→开连乘**：`smFitRestore` 结尾 `SMFIT.rec = {}`，重开时 `smFitApply` 把**当前（已折的）值**当原值重记 ⇒
+   每关开一轮多乘一次（用户第二种情形）。
+4. **配置是孤儿表**（同一案附带挖出）：模块在**文件执行期** `return EVAL_HELP_CONFIG.simpleMapCfg`（本项目已定案：
+   那时 `EVAL_HELP_CONFIG` 还是**空表**；DragFrames 有明文纪律）⇒ 客户端稍后把全局换成存档那份，本模块此后全写进**没人保存的表**。
+
+**三、修法（六条，全部落成判据）**
+
+1. **配置改懒代理** `EH_SIMPLEMAP_CFG = setmetatable({}, {__index/__newindex → smCfgLive()})`（每次现取 `rawget(_G,"EVAL_HELP_CONFIG").simpleMapCfg`）。
+2. **折算前先探测** `smFitDetect()`（只读）：外框缩放在 `1 → 0.7` 走一档，读纹理**屏幕几何**（`GetLeft/GetTop/GetWidth`，本客户端含缩放）——
+   跟着变 ⇒ `needFold = false`（**一个几何都不碰**）；不变 ⇒ `true`；读不到 ⇒ `nil`（**按不折算处理**，因为用户实测的两次都发生在会级联这一侧）。
+3. **闸门 + 策略三档**：`SM_CFG.mapFitMode` = `nil`/`"fold"`（**默认：照旧折算**，探测结论只进提示/取证）/ `"auto"`（听探测）/ `"nofold"`（一个几何都不碰），
+   判定收在唯一入口 `smFitNeedFold()`；`smFitApply` 与 tick **各一道门** —— ★只放一道时变异 M1 当场漏网（见下）。
+   ★★**别把默认改成「听探测」**：那一版上线后用户立刻报「**现在正常开启都无法生效缩放修正**」——
+   用户看到的是「功能没了」，而真正的 bug 是**原值被污染**。策略口 = `/ehm mapfit mode fold|auto|nofold`（给真机 A/B 定档用）。
+   ★**判「显示对不对」要分模型**：级联客户端（读回含缩放）正解 = **显示 = 原值×es 且一个逻辑写都不发**（幂等判据直接跳过）；
+   不级联客户端正解 = 逻辑值折一次。把「逻辑值」直接与 `原值×es` 比 = **测错了模型**（级联侧逻辑值永远是原值）。
+   ★**「真写过」标记 `SMFIT.wrote`**：本会话一次几何都没写过 ⇒ 关闭时**连还原都不写**（否则级联客户端上会白写 4 次几何）。
+4. **原值只在自然档抓** `smFitCapture()`：临时 `SetScale(wm, 1)` 读几何（读完立刻恢复），且**只补没记过的目标**；
+   `smFitApply` **不再记原值**（只采纳 `SMFIT.rec` / 带版本戳的存档），`smFitRestore` **不再清 `SMFIT.rec`**（并在有活对象时优先用活对象、写完**读回自证**）。
+5. **记录键用纹理名**（`WorldMapOverlay1`…）而不是枚举序号 `tex13`（序号会随换区/重建漂移 ⇒ 还原写到别的纹理上）。
+6. **关闭收钩子** `featTeardown()`：摘 `EH_SM_COORDS` 的 OnUpdate + Hide、Hide `EH_SM_DRAG`、把 `UISpecialFrames` 里**我们插的那项**拿掉（`FEAT.escAdded` 记账）；
+   滚轮处理器与坐标行各加一道 `EVAL_SM_ENABLED()` 门（不摘链 = 不弄丢客户端原生滚轮）。
+   另加 `featApplyScale` **读回自证**（同档不重写；设置累乘的客户端上「一次开启写两遍」也会缩两遍）。
+   旧存档迁移：`mapFitVer ~= 2` 的原值**整块丢弃**（旧版可能已被污染）—— 用户那份存档的自愈路径 = `/reload` 后客户端重新布版 + 自然档重抓。
+
+**四、判据与变异**
+
+- **组 232**（`tests/tools/SimpleMap.lua`）：① 会级联客户端 ⇒ 开启后 10 拍 **零几何调用**（含**直接入口** `EVAL_SM_TEST_MAPFIT_APPLY`）；
+  ② 不级联客户端 ⇒ 折一次 = `原值×es`，且**关一次再开仍是 `原值×es`**（旧版连乘成 `原值×es²`）；③ 原值取自自然档（`215／355`）且键 = 纹理名；
+  ④ 关闭收钩子（坐标行 OnUpdate 摘掉 + Hide、ESC 列项拿掉且**别人的项一个没动**）；⑤ 旧存档无版本戳 ⇒ 整块丢弃；⑥ 同 es 第二拍 `changed = 0`（幂等）。
+- **`SM FIT CASCADE CHECK`**（`tests/checks/SimpleMap.js`）：探测存在 · **两道**策略门 · 策略三档齐全且**默认分支必须是 fold**（用户实测的回归）+
+  策略写口存在 · apply 不写原值 · 原值取自自然档 · 还原不清记录 · 开启先准备后缩放 · 关闭调 `featTeardown` · 缩放读回自证 · 滚轮/坐标行各一道门。
+- **折算取证环**（用户：「可以开启日志.在何种情况下会进行双次缩放操作.」）：`SM_CFG.mapFitTrace`（60 行小环，随 SavedVariables 落盘，**不受「调试日志」开关管**），
+  记探测/抓原值/折算/还原/开关五处的**实数**；`/ehm mapfit trace`（走常开出口）随时打出来，`traceclear` 清空。
+  ★为什么另存一份：`EVAL_LOGLINE` 走「调试日志」总闸门，关掉就一个字都不记 ⇒ 取证不能挂在它上面。
+- **变异 10/10**：M1a 去 apply 的门 · M1b 去 tick 的门 · M2 apply 又写原值 · M3 还原又清 `SMFIT.rec` · M4 先缩放后准备 · M5 缩放不读回自证 ·
+  M6 关闭不收钩子 · M7 滚轮去门 · M8 tick 不懒探测 · M9 探测恒「会级联」 · M10 迁移不丢旧值。
+  ★**M1 第一轮漏网**（检查只匹配到一处门）⇒ 已补「apply 段内单独钉一道」+ 组 232① 加直接入口断言 —— **变异验证必须跑，而且要看它到底抓没抓到**。
+- 另外把 `SM OFF SILENT CHECK` 的闸门定位改成「**从 `EH_SM_FEAT` 创建处往后找**」：新增两道门后，全文件 `indexOf` 会命中前面那些门，顺序判据当场假红。
 ---
 
 ## 十五、速查：分享消息模板 / 取证命令 / 关键 CHECK 明细（1.75.1 从常驻卷 §5.10 整段迁入）

@@ -223,7 +223,7 @@ if (!/\nsmMigrateReopen\(\)\r?\nSM_CFG\.showGUI = nil\r?\n/.test(sm)) {
 
   // ===== SM GROUP ROSTER CHECK：本模块测试文件的**组号清单**不许静默少一个（与 DF 那套同族）=====
   (function () {
-    const WANT = [224, 225, 226];
+    const WANT = [224, 225, 226, 230, 232];
     const p = path.join(__dirname, "tests", "tools", "SimpleMap.lua");
     if (!fs.existsSync(p)) { console.log("SM GROUP ROSTER CHECK: FAIL - 找不到 tests/tools/SimpleMap.lua"); process.exitCode = 1; return; }
     const s = fs.readFileSync(p, "utf8");
@@ -259,5 +259,148 @@ if (!/\nsmMigrateReopen\(\)\r?\nSM_CFG\.showGUI = nil\r?\n/.test(sm)) {
     if (tips < 1) bad.push("悬停说明里没有「GUI重开」的副作用提示（提示不许只在菜单里）");
     if (bad.length) { console.log("SM ROW SUMMARY CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
     console.log("SM ROW SUMMARY CHECK: 行上不写配置（extra 只 Hide）· 悬停里带当前配置 + GUI重开副作用提示");
+  })();
+
+  // ===== SM OFF SILENT CHECK（1.75.7）：「未开启缩放大地图」时**不许再监听探索层** ===== 
+  // 用户排查原话：「排查缩放大地图功能.在未开启的情况下会不会监听探索层的缩放操作」
+  // ★为什么必须用源码检查：这是**接线顺序**的性质（闸门必须在任何读/写之前），断言只能证明「这一次没动」，
+  //   而源码检查能钉住「闸门就在最前面」——以后有人把探测挪到闸门之前，真机上就会每帧白读 GetEffectiveScale、
+  //   甚至（像修前那样）在关闭状态下把叠加层几何折了（实测 8 次写入 + 2 条原值），而测试未必照得到。
+  // 判据三条：
+  //   ① EH_SM_FEAT 的 OnUpdate 里，`if not EVAL_SM_ENABLED() then … return end` 必须出现在
+  //      **第一次 `featOpenNow()` / `GetEffectiveScale` 读取之前**（顺序即判据）；
+  //   ② 该闸门块里必须有 `return`（漏了 return = 闸门形同虚设）；
+  //   ③ 关闭路径（EVAL_SM_SET 的 else 分支）必须**当场还原**叠加层几何（`smFitRestore`）——
+  //      旧设计把还原寄托在常驻 tick 上，正是「关掉还在跑」的根源。
+  (function () {
+    const p = path.join(__dirname, "tools", "SimpleMap.lua");
+    if (!fs.existsSync(p)) { console.log("SM OFF SILENT CHECK: (无 tools/SimpleMap.lua，跳过)"); return; }
+    const sm = fs.readFileSync(p, "utf8");
+    const bad = [];
+    const iCreate = sm.indexOf("\"EH_SM_FEAT\"");
+    // ★★★1.75.9：门控文本现在在文件里**出现多处**（滚轮处理器 / 坐标行 / tick 各一道门）⇒
+    //   必须**从 tick 帧创建处往后**找；旧版的全文件 indexOf 会命中前面那两道门，
+    //   于是「闸门在探测之前」这条顺序判据直接失效（本轮实测就是这个假红）。
+    const iGuard = iCreate >= 0 ? sm.indexOf("if not EVAL_SM_ENABLED() then", iCreate) : -1;
+    const iProbe = iCreate >= 0 ? sm.indexOf("local open = featOpenNow()", iCreate) : -1;
+    if (iCreate < 0) bad.push("找不到 EH_SM_FEAT 那个 tick 帧（改名字了？本检查锚点是它）");
+    if (iGuard < 0) bad.push("tick 里没有 `if not EVAL_SM_ENABLED() then` 免打扰闸门 ⇒ 关闭时照跑（修前实测：10 拍写 8 次几何）");
+    if (iProbe < 0) bad.push("找不到 `local open = featOpenNow()`（tick 的探测入口被改名？本检查要钉住「闸门在探测之前」）");
+    if (iCreate >= 0 && iGuard >= 0 && iGuard < iCreate) bad.push("闸门出现在 tick 帧创建**之前**（那是另一个函数里的？顺序判据失效）");
+    if (iGuard >= 0 && iProbe >= 0 && iGuard > iProbe) bad.push("闸门排在**探测之后** ⇒ 关闭时照样每帧读 IsShown/GetEffectiveScale（= 用户问的那件事）");
+    if (iGuard >= 0) {
+      const seg = sm.slice(iGuard, iGuard + 400);
+      if (seg.indexOf("return") < 0) bad.push("闸门块里没有 `return` ⇒ 闸门形同虚设（后面照样跑）");
+      if (seg.indexOf("FEAT.applied") < 0) bad.push("闸门里没清 `FEAT.applied` ⇒ 重新开启时可能不重新应用");
+    }
+    // ③ 关闭路径必须当场还原几何
+    const iSet = sm.indexOf("function EVAL_SM_SET(");
+    const iNext = iSet >= 0 ? sm.indexOf("\nfunction ", iSet + 10) : -1;
+    const setSeg = (iSet >= 0) ? sm.slice(iSet, iNext > iSet ? iNext : iSet + 2000) : "";
+    if (iSet < 0) bad.push("找不到 EVAL_SM_SET（本检查要验关闭路径）");
+    else if (setSeg.indexOf("pcall(smFitRestore") < 0) bad.push("关闭路径没有**真的调用** smFitRestore（只写 type() 探测不算）⇒ 关掉后叠加层永远停在被折算过的位置");
+    if (bad.length) { console.log("SM OFF SILENT CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
+    console.log("SM OFF SILENT CHECK: 关闭即免打扰（闸门在探测之前 + 有 return + 清 applied）· 关闭路径当场还原叠加层几何");
+  })();
+  // ===== SM FIT CASCADE CHECK（1.75.9）：「探索层纹理被缩两遍」的源码级判据 =====
+  // 用户实测原话：「现在确定是在未开启插件载入..的情况下打开大地图缩放, 和在开启插件载入之后重新关闭,又打开 ,
+  //   这两种情况都会发生.纹理渲染层被缩放两次的问题」＋「在开启/关闭.大地图缩放要做好探索层纹理的事件清理」。
+  // 真机证据（用户 DebugBox 截图）：WorldMapOverlay1 = 105×105／锚 174,-157 = 我们写的 150.5×0.7／248.5×0.7，
+  //   DetailFrame 701×468 = 1002×668×0.7 ⇒ **几何读回含父帧缩放**，而客户端**自己会级联**。
+  // ★为什么必须源码级钉：这一案的三条根因全是**静默**的 ——
+  //   ① 在「会级联」的客户端上照样折算（第二遍，行为看着正常、只是位置尺寸不对）；
+  //   ② 原值在**已缩过的状态**下记（读原值/写新值顺序反了）⇒ 每关开一轮连乘一次；
+  //   ③ 关闭时不收钩子（坐标行 OnUpdate / 拖拽柄 / ESC 列表项）⇒ 关掉后照跑。
+  (function () {
+    const p = path.join(__dirname, "tools", "SimpleMap.lua");
+    if (!fs.existsSync(p)) { console.log("SM FIT CASCADE CHECK: (无 tools/SimpleMap.lua，跳过)"); return; }
+    const raw = fs.readFileSync(p, "utf8");
+    const sm = strip(raw);
+    const bad = [];
+    // ① 折算前必须先探测，且只在 needFold == true 时动手
+    if (sm.indexOf("local function smFitDetect()") < 0) bad.push("没有探测函数 smFitDetect ⇒ 无从判断客户端会不会级联");
+    if (!/if not smFitNeedFold\(\) then return end/.test(sm)) bad.push("tick 里没有「折算策略闸门」（`if not smFitNeedFold() then return end`）");
+    // ★★1.75.9 变异 M1 当场抓到：只匹配**一处**不够 —— `smFitApply` 还有**直接入口**（`/ehm mapfit diag`
+    //   与读值口 `EVAL_SM_TEST_MAPFIT_APPLY`），那道门也必须独立钉住，否则「去掉 apply 里的门」会漏网。
+    if (!/if not smFitNeedFold\(\) then return 0, 0, 0 end/.test(sm)) bad.push("smFitApply **自己**没有策略闸门 ⇒ 直接入口（diag / 读值口）会绕过");
+    // ★★★1.75.9 回归：**默认档必须是 fold**（用户实测：「现在正常开启都无法生效缩放修正」= 把默认改成听探测引起的）
+    //   ★注意本检查用的是**剥注释后**的文本（`strip`）⇒ 这里必须按**结构**断言，别指望注释里的字样。
+    const iNF = sm.indexOf("local function smFitNeedFold()");
+    const iNFend = iNF >= 0 ? sm.indexOf("\nend", iNF) : -1;
+    const nfSeg = (iNF >= 0 && iNFend > iNF) ? sm.slice(iNF, iNFend) : "";
+    if (!nfSeg) bad.push("找不到 smFitNeedFold（折算策略的唯一判据）");
+    else {
+      if (nfSeg.indexOf("if m == \"nofold\" then return false end") < 0) bad.push("smFitNeedFold 缺 nofold 分支（策略不能只做两档）");
+      if (nfSeg.indexOf("return (SMFIT.needFold == true)") < 0) bad.push("smFitNeedFold 缺 auto 分支（听探测）");
+      const lastLine = nfSeg.split("\n").map(l => l.trim()).filter(l => l !== "").pop() || "";
+      if (lastLine !== "return true") bad.push("smFitNeedFold 默认分支不是「折算」（实测 " + lastLine + "）⇒ 正常开启会完全不生效（用户实测过的回归）");
+    }
+    if (sm.indexOf("function EVAL_SM_MAPFIT_MODE_SET(") < 0) bad.push("没有策略写口 EVAL_SM_MAPFIT_MODE_SET（用户就没法 A/B 定档）");
+    if (sm.indexOf("SMFIT.needFold == nil then SMFIT.needFold = smFitDetect()") < 0) bad.push("tick 里没有「没探测过就先探一次」⇒ 开图后才开的功能永远不折算");
+    // ② apply 里不许再记原值（记录统一归自然档抓）
+    const iApply = sm.indexOf("local function smFitApply(");
+    const iApplyEnd = iApply >= 0 ? sm.indexOf("\nlocal function ", iApply + 10) : -1;
+    const applySeg = (iApply >= 0 && iApplyEnd > iApply) ? sm.slice(iApply, iApplyEnd) : "";
+    if (!applySeg) bad.push("找不到 smFitApply 的函数体（本检查要验它不再记原值）");
+    else {
+      if (/saved\[it\.key\]\s*=/.test(applySeg)) bad.push("smFitApply 里仍在**写原值**（`saved[it.key] = …`）⇒ 又会把已折过的值当原值记下来（关一次开一次连乘）");
+      if (applySeg.indexOf("SMFIT.rec[it.key] = r") < 0) bad.push("smFitApply 没有「采纳已有原值」的那条路（只有它，才不会再记）");
+    }
+    // ③ 抓原值必须在自然档（临时把外框缩放置 1）
+    const iCap = sm.indexOf("local function smFitCapture()");
+    const iCapEnd = iCap >= 0 ? sm.indexOf("\nlocal function ", iCap + 10) : -1;
+    const capSeg = (iCap >= 0 && iCapEnd > iCap) ? sm.slice(iCap, iCapEnd) : "";
+    if (!capSeg) bad.push("没有 smFitCapture（原值必须在自然档抓一次）");
+    else if (capSeg.indexOf("SetScale, wm, 1") < 0) bad.push("smFitCapture 没有「临时把外框缩放置 1」⇒ 抓到的原值可能已经是缩过的值（读回含缩放的客户端）");
+    // ④ 还原里不许清记录（清了就等于允许重记）
+    const iRes = sm.indexOf("local function smFitRestore(");
+    const iResEnd = iRes >= 0 ? sm.indexOf("\nlocal function ", iRes + 10) : -1;
+    const resSeg = (iRes >= 0 && iResEnd > iRes) ? sm.slice(iRes, iResEnd) : "";
+    if (!resSeg) bad.push("找不到 smFitRestore");
+    else if (resSeg.indexOf("SMFIT.rec = {}") >= 0) bad.push("smFitRestore 里清了 `SMFIT.rec` ⇒ 下次开启会把已折过的值当原值重记（旧版「缩两遍」的根因）");
+    // ⑤ 开启路径：先准备（探测 + 抓原值）再套缩放
+    const iSet = sm.indexOf("function EVAL_SM_SET(");
+    const iSetEnd = iSet >= 0 ? sm.indexOf("\nfunction ", iSet + 10) : -1;
+    const setSeg = (iSet >= 0 && iSetEnd > iSet) ? sm.slice(iSet, iSetEnd) : (iSet >= 0 ? sm.slice(iSet, iSet + 2600) : "");
+    if (!setSeg) bad.push("找不到 EVAL_SM_SET");
+    else {
+      const iPrep = setSeg.indexOf("pcall(smFitPrepare)");
+      const iDef = setSeg.indexOf("smApplyDefaults()");
+      if (iPrep < 0) bad.push("开启路径没有调 smFitPrepare（探测 + 自然档抓原值）");
+      if (iPrep >= 0 && iDef >= 0 && iPrep > iDef) bad.push("smFitPrepare 排在 smApplyDefaults **之后** ⇒ 又变成「先缩放再记原值」（顺序铁律反了）");
+      if (setSeg.indexOf("SMFIT.needFold = nil") < 0) bad.push("开启时没有重置 SMFIT.needFold ⇒ 上一轮的探测结论会一直沿用");
+      if (setSeg.indexOf("pcall(featTeardown)") < 0) bad.push("关闭路径没有调 featTeardown（用户要求：开启/关闭要做好事件清理）");
+    }
+    // ⑥b ★★★1.75.9 真机回归（用户：「这个界面在世界地图拖拽移动功能失效」）：**收钩子必须配「再武装」** ——
+    //   关闭时 Hide 了拖拽柄/坐标行，而 featBuild 有一次性守卫 ⇒ 只收不还 = 永久消失。判据两条。
+    // ★1.75.9：`featRearm` 必须是**前向声明 + 赋值**（`local featRearm = nil` … `featRearm = function()`）——
+    //   写成定义在后的 `local function featRearm()` 时，`featApply` 里那句 `pcall(featRearm)` 调的是全局 nil，
+    //   静默不做事（组 232⑥ 实测抓到）。两条都要钉：声明在位 + 赋值形态。
+    if (sm.indexOf("local featRearm = nil") < 0) bad.push("featRearm 没有前向声明（定义在 featApply 之后 ⇒ 那里 pcall 到的是全局 nil，再武装静默失效）");
+    if (sm.indexOf("featRearm = function()") < 0) bad.push("没有 featRearm 的函数体（关闭时藏起来的件再也回不来 ⇒ 拖拽移动失效）");
+    const iAp = sm.indexOf("local function featApply()");
+    const apSeg = iAp >= 0 ? sm.slice(iAp, iAp + 900) : "";
+    if (apSeg.indexOf("featRearm") < 0) bad.push("featApply 里没调 featRearm ⇒ 再开启时拖拽柄/坐标行不会回来");
+    const iTd = sm.indexOf("local function featTeardown()");
+    const tdSeg = iTd >= 0 ? sm.slice(iTd, iTd + 900) : "";
+    if (tdSeg.indexOf("OnUpdate") >= 0 && tdSeg.indexOf(", nil)") >= 0) bad.push("featTeardown 仍把 OnUpdate 摘成 nil（摘了就装不回来；「关掉零动作」应由处理器开头的 enabled 门保证）");
+    // ⑥ 缩放只许按同一档写一次 + 两道 enabled 门（滚轮 / 坐标行）
+    const iScale = sm.indexOf("local function featApplyScale(");
+    const iScaleEnd = iScale >= 0 ? sm.indexOf("\nend", iScale) : -1;
+    const scaleSeg = (iScale >= 0 && iScaleEnd > iScale) ? sm.slice(iScale, iScaleEnd) : "";
+    if (!scaleSeg) bad.push("找不到 featApplyScale");
+    else if (scaleSeg.indexOf("GetScale") < 0) bad.push("featApplyScale 没有读回自证（同一档会重复写；设置累乘的客户端上就是缩两遍）");
+    const iWheel = sm.indexOf("OnMouseWheel");
+    const iCoords = sm.indexOf("EH_SM_COORDS");
+    if (iWheel < 0 || iCoords < 0) bad.push("找不到滚轮处理器或坐标行（清理判据的锚点）");
+    else {
+      const wheelSeg = sm.slice(iWheel, iWheel + 700);
+      if (wheelSeg.indexOf("EVAL_SM_ENABLED()") < 0) bad.push("滚轮处理器没有 enabled 门 ⇒ 关掉后滚轮还在改透明度/缩放");
+      const coordsSeg = sm.slice(iCoords, iCoords + 1500);
+      if (coordsSeg.indexOf("EVAL_SM_ENABLED()") < 0) bad.push("坐标行的 OnUpdate 没有 enabled 门 ⇒ 关掉后每 0.1s 还在算");
+    }
+    if (bad.length) { console.log("SM FIT CASCADE CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
+    console.log("SM FIT CASCADE CHECK: 折算前先探测（needFold==true 才动手）· apply 不记原值 · 原值取自自然档 · 还原不清记录 · " +
+      "开启先准备后缩放 · 关闭收钩子（featTeardown）· 缩放读回自证 · 滚轮/坐标行各一道 enabled 门");
   })();
 };

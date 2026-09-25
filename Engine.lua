@@ -2012,6 +2012,14 @@ local function condOne(cd, skill, dry, rule)
   elseif k == "tNeutral" then return (st.tNeutral == cd.v), "中立"
   elseif k == "form" then return (st.formIndex == cd.n), "姿态"
   elseif k == "formNot" then return (st.formIndex ~= cd.n), "姿态"
+  elseif k == "tracking" then
+    -- ★1.75.6 追踪类型条件（用户：「条件类型 → 自身状态 → 追踪类型，下拉单选」）：
+    --   判据唯一入口 = EVAL_TRACK_MATCH（内部按纹理缓存 ⇒ 贵调用只在追踪真的变了时做一次）；
+    --   cd.v ~= false = 正向（正在追踪 X）；cd.v == false = 反向（「未追踪:野兽」= 不是野兽，
+    --   含「完全没在追踪」）。★认不出种类时**如实失败**（不当成「不是 X」——那会变成静默误判）。
+    local okT229, whyT229 = EVAL_TRACK_MATCH(cd.s)
+    return (okT229 == (cd.v ~= false)), whyT229
+
   elseif k == "alt" then return (st.alt == cd.v), "Alt"
   elseif k == "shift" then return (st.shift == cd.v), "Shift"
   elseif k == "ctrl" then return (st.ctrl == cd.v), "Ctrl"
@@ -2723,13 +2731,99 @@ end
 -- ★「是哪一种追踪」**没有 API 直接给名字** ⇒ 必须靠**纹理 ↔ 技能名对照**（动作条 `wslots[名].tex` + 法术书扫一遍）。
 -- ★官方文档另一条已知空洞：「Hidden or tracking auras are skipped」⇒ 追踪**可能不占增益条槽位**，
 --   所以光环（`GetPlayerBuff`）只能当**辅助证据**；本探针把两条路一起打出来对照。
+-- ★★1.75.2 补两条路（本次调研结论；官方文档原文见下）：
+--   · **`GameTooltip:SetTrackingSpell()`**（widgets/GameTooltip，索引里有）——官方原文
+--     「Fills an aura tooltip from the player's current tracking spell (minimap tracking). Clears lines first.
+--      Does nothing if no tracking spell is active.」⇒ **「是哪一种追踪」只有这里能拿到本地化名字**
+--     （纹理表要按语言+客户端维护，名字不用）→ **名字主路**；读它必须走**自建隐形 tooltip**
+--     （`EVAL_HELP_WTT` + `EVAL_WTT_MAY_READ` 守卫），绝不碰玩家正看着的 `GameTooltip`（1.73.14 铁律）。
+--   · 官方对**增益条**那条路的硬事实（别再去绕）：「Tracking auras are **not** listed here」
+--     （Buff 页）+「Hidden or tracking auras are **skipped**」（`GetPlayerBuff`）⇒ 光环只能当**辅助证据**。
+-- ★参考实现（本机 `D:\game\TurtleWoW\Interface\AddOns\S_MiniMap\Modules\pftrackingUI.lua`，pfUI 小地图追踪）：
+--   判状态 = `GetTrackingTexture()`；出名字 = `GameTooltip:SetTrackingSpell()`；开追踪 =
+--   `CastSpell(spellIndex, BOOKTYPE_SPELL)`（法术书索引；Protected ⇒ 本插件只能走动作条 `UseAction`）；
+--   关 = `CancelTrackingBuff()`；刷新事件 = `PLAYER_ENTERING_WORLD` / `PLAYER_AURAS_CHANGED` /
+--   `SPELLS_CHANGED` / `UPDATE_SHAPESHIFT_FORMS`。
+--   ★它那张「图标名 → 追踪种类」表（`INV_Misc_Flower_02`=采药 · `Spell_Nature_Earthquake`=采矿 ·
+--     `Ability_Tracking`=追踪野兽 · `Racial_Dwarf_FindTreasure`=寻找宝藏）**是 TurtleWoW 的实测值**；
+--     EmberVeil 的纹理串形态**未实测**（本项目已知形态是 `/Game/Interface/Icons/<名>_TEX`）
+--     ⇒ 探针只当**候选**打印，**绝不写死判据**。
+-- ★★1.75.3 本轮（用户：「分析API 排查 玩家追踪效果.草药,采矿,野兽之类的」）四条实证结论，先看这四条再动代码：
+--   ① **接口面到此为止**：本地 1370 条官方索引里跟追踪有关的**只有三条** ——
+--      GetTrackingTexture()（Mapping：当前追踪的**图标纹理**，没追踪 = nil）、
+--      GameTooltip:SetTrackingSpell()（widget：**唯一**能拿到「是哪种追踪」本地化名字的入口）、
+--      CancelTrackingBuff()（Buff：取消当前追踪）。三条的官方页**都没有 Protected 行** ⇒ 插件可直接调；
+--      对照 CastSpell / CastSpellByName 是 Protected ⇒ **开追踪**只能走动作条 UseAction(slot)。
+--      **没有**枚举/查询「有哪些追踪种类」的 API（GetNumTrackingTypes / GetTrackingInfo / SetTracking
+--      在本客户端**不存在**，别照 1.12 的写法抄）。
+--   ② **小地图上的追踪圆点无法枚举**：Minimap 官方页只给 SetBlipTexture（队友点）/ SetIconTexture
+--      （**追踪图标**：生物 / 资源 / 任务 / 宠物）两个**纯外观** setter，没有任何 blip 列表读口
+--      ⇒ 「玩家追踪效果」只能从**状态**判定，不能从图上读回来。
+--   ③ **候选图标表已实证**（见下面 TRK.hint）：13 条追踪法术来自官方数据库逐条核对，且逐条在本机
+--      图标清单里存在 ⇒ 表里不再有「TurtleWoW 抄来的未验证值」；判据 = TRACK ICON CHECK（tests/checks/Track.js）。
+--   ④ **事件名无处可查**：wiki 的 /wiki/lua/Events 是 **404**，索引里也没有事件表（只有 UIObject 的
+--      RegisterEvent 说明）⇒ 「切换追踪时哪条事件会来」**只能靠⑧监听实测**（别照抄 pfUI 的
+--      PLAYER_AURAS_CHANGED：那是 TurtleWoW 的值，本客户端**未实测**）。
+-- ★★1.75.4 真机首轮读数（用户跑完了取证流程）暴露两件事，本版据此改探针：
+--   ① 两次读数**完全一样**、都是「① 本次=（空/无追踪）」+「② 当前没追踪」⇒ 但旧探针**分不清**这三种情况：
+--      (a) 真的没追踪；(b) 有追踪、但 GetTrackingTexture 返回的**不是字符串**（旧版 type(v)=="string" 直接丢）；
+--      (c) 有追踪、但接口就是不给（返回 nil）。⇒ ① 改成**类型 + 原文一起打**，② 改成**独立于①** + why 三态。
+--   ② 那一轮「动作条 2 个追踪技能」「法术书 2 条」都读到了（说明 API/UI 基本可用），
+--      却没有一条能说明**当前追踪是什么** ⇒ 补第三条路：**默认 UI 的追踪按钮图标**（⑩）。
+--   ③ `监听` 从「猜 4 条候选事件」升级成 **RegisterAllEvents 全事件抓取**（事件名官方没公开：
+--      与其猜，不如全收下来**按次数升序**排 —— 切换追踪只会给真正相关的那条 + 几次）。
 -- 用法：`/eh go 追踪探针`（打印一次；**开/关追踪各跑一次**，第二次会显示「上次 → 本次」对照）
-local TRK = { lastTex = nil }
+--       `/eh go 追踪探针 监听`（开关事件监听：切换几次追踪 → 打出「哪条事件真的跟着走」，退出时给计数）
+--       `/eh go 追踪探针 表`（打印候选图标表：13 条追踪法术 ↔ 客户端图标基础名；回传时对照用）
+--       `/eh go 追踪探针 清空`（清「上次」读数 + 专属读数）
+--       `/eh go 追踪探针 存档`（把**专属读数**（最近 40 行，落存档、不被 [DS] 刷掉）打回聊天框）
+local TRK = {
+  lastTex = nil,
+  ev = false,          -- 事件监听开关
+  frame = nil,
+  evHit = {},          -- 每个事件命中次数（关监听时打印 = 哪条事件真的会跟着追踪走）
+  evLastTex = nil,     -- 事件里「纹理变了才打一行」（PLAYER_AURAS_CHANGED 在战斗中很密，不能刷屏）
+  -- ★1.75.4 两条新路（真机首轮读数暴露的问题：两次读数都是「（空/无追踪）」，而旧探针**分不清**
+  --   「真的没追踪」与「有追踪但 GetTrackingTexture 返回的不是字符串」——正是「查不到≠没有」）
+  allEv = false,       -- true = RegisterAllEvents 全事件抓取（handler 里**只计数**，一个 API 都不调）
+  evTotal = 0,         -- 本次抓取的总事件次数（关掉时打印）
+  now = nil,           -- ★1.75.6 「现在的追踪」缓存（按纹理缓存 ⇒ 贵调用只在追踪真的变了时做一次）
 
-function EVAL_TRACK_PROBE_STATE()
-  return { lastTex = TRK.lastTex }
-end
+  -- ★★★候选图标表（1.75.3 实证值；1.75.6 起第 1 列由中文标签换成 **稳定 id**）：
+  --   ① 官方数据库 database.emberveil.org 的 13 条追踪法术页：法术 ID → 英文名 + 图标 png 名；
+  --   ② **本客户端**图标清单 doc 目录的「图标路径清单.txt」（/eh go icons 从真机采的 1018 条）：
+  --      这 13 个基础名**逐条都在**（形态 = /Game/Interface/Icons/<基础名>_TEX）⇒ 不是抄来的、是核过的。
+  --   ★匹配一律走**基础名全等**（EVAL_TRACK_BASE）⇒ Interface/Icons/X、/Game/Interface/Icons/X_TEX、
+  --     ★真机形态 /Game/Interface/Icons/X_TEX.X_TEX（1.75.5 实测）、大小写任意组合都成立；
+  --     **绝不做子串匹配**（子串会误报：INV_Misc_Flower_02 也是 INV_Misc_Flower_02_Copy 的前缀）。
+  --   ★仍**绝不写死判据**：没命中 = 如实 nil（「没命中候选表」≠「不是追踪」）。
+  --   列 = { **id**, 客户端图标基础名, 英文法术名, 中文法术名 }；行尾注释 = 官方数据库的法术 ID。
+  --   ★id 是**语言无关的稳定键**：条件值（cd.s）、导出文本（追踪:beast）都用它；
+  --     界面标签走 EVAL_TRACK_LABEL(id) = L("TRK_"..ID)（三语齐全由 TRACK ICON CHECK 守）。
+  hint = {
+    { "herb",         "INV_Misc_Flower_02",               "Find Herbs",       "寻找草药" },     -- 2383
+    { "mining",       "Spell_Nature_Earthquake",          "Find Minerals",    "寻找矿物" },     -- 2580
+    { "treasure",     "Racial_Dwarf_FindTreasure",        "Find Treasure",    "寻找宝藏" },     -- 2481 矮人种族
+    { "beast",        "Ability_Tracking",                 "Track Beasts",     "追踪野兽" },     -- 1494
+    { "humanoid",     "Spell_Holy_PrayerOfHealing",       "Track Humanoids",  "追踪人型生物" }, -- 19883
+    { "demon",        "Spell_Shadow_SummonFelHunter",     "Track Demons",     "追踪恶魔" },     -- 19878
+    { "dragonkin",    "INV_Misc_Head_Dragon_01",          "Track Dragonkin",  "追踪龙类" },     -- 19879
+    { "elemental",    "Spell_Frost_SummonWaterElemental", "Track Elementals", "追踪元素生物" }, -- 19880
+    { "giant",        "Ability_Racial_Avatar",            "Track Giants",     "追踪巨人" },     -- 19882
+    { "undead",       "Spell_Shadow_DarkSummoning",       "Track Undead",     "追踪亡灵" },     -- 19884
+    { "hidden",       "Ability_Stealth",                  "Track Hidden",     "追踪隐藏生物" }, -- 19885
+    { "sensedemon",   "Spell_Shadow_Metamorphosis",       "Sense Demons",     "感知恶魔" },     -- 5500 ★算不算「追踪」待真机验
+    { "senseundead",  "Spell_Holy_SenseUndead",           "Sense Undead",     "感知亡灵" },     -- 5502 ★同上
+  },
+  -- 追踪变化要跟的事件（pfUI 的清单；注册失败的那几个在报告里如实点名 = 本客户端没这个事件）
+  evNames = { "PLAYER_AURAS_CHANGED", "SPELLS_CHANGED", "PLAYER_ENTERING_WORLD", "UPDATE_SHAPESHIFT_FORMS" },
+  -- ★1.75.4 第三条独立路：**默认 UI 的追踪按钮/图标**（= 游戏自己认为当前追踪是什么）
+  --   本客户端 UI 编译在 pak 里 ⇒ 帧名只能现场探：候选表 + 有界 `_G` 扫描；全落空就**如实缺席**。
+  btnCands = { "MiniMapTrackingIcon", "MiniMapTrackingButtonIcon", "MiniMapTrackingTexture",
+               "MiniMapTracking", "MiniMapTrackingButton", "MiniMapTrackingFrame" },
+}
 
+-- （EVAL_TRACK_PROBE_STATE 1.75.4 起移到本段末尾：与测试驱动口放在一起）
 -- 纹理 → 技能名（先在动作条里找；找不到返回 nil，**不猜**）
 function EVAL_TRACK_WHO(tex)
   if type(tex) ~= "string" or tex == "" or type(wslots) ~= "table" then return nil end
@@ -2740,7 +2834,202 @@ function EVAL_TRACK_WHO(tex)
   return hit
 end
 
--- 光环纹理清单（辅助证据：追踪到底占不占增益条）
+-- 纯函数（可单测）：纹理串 → **基础名**（剥目录 / 扩展名 / _TEX 后缀；转小写）
+--   ★反斜杠一律用 string.char(92) 构造 —— 项目铁律：Lua 源码里不手写转义（写坏过好几次）
+--   ★★★1.75.5 真机实测形态（本项目**唯一**实测过的那条，别再按 1.12 的形态想）：
+--     /Game/Interface/Icons/Ability_Tracking_TEX.Ability_Tracking_TEX
+--     = **资产路径 _TEX + 「.」 + 对象名 _TEX**，两段都带后缀 ⇒ 老实现整段归一得到
+--     ability_tracking_tex.ability_tracking，**永远命中不了候选表**（③ 一直报「没命中」，
+--     全靠名字备用路兜着 —— 真机首轮读数的 ③ 就是这么错的）。
+--   ★修法：取最后一段后**只认第一个「.」之前**（图标基础名里不含点）；扩展名 / _TEX 仍是兜底。
+function EVAL_TRACK_BASE(tex)
+  if type(tex) ~= "string" or tex == "" then return nil end
+  local s = string.lower(tex)
+  s = string.gsub(s, string.char(92), "/")   -- 反斜杠 → 斜杠
+  s = string.match(s, "([^/]*)$") or s       -- 取最后一段（目录全丢）
+  local seg = string.match(s, "^([^%.]*)")    -- ★只取第一个「.」之前（真机形态里的「资产名.对象名」）
+  if seg ~= nil and seg ~= "" then s = seg end
+  s = string.gsub(s, "%.[%a%d]+$", "")       -- 去扩展名（.png / .tex / .tga …；上面已切点，属兜底）
+  s = string.gsub(s, "_tex$", "")            -- 去客户端后缀 _TEX
+  if s == "" then return nil end
+  return s
+end
+
+-- 纹理 → 追踪**种类 id**（候选图标表对照；★「没命中」≠「不是追踪」⇒ 只作对照，不写死判据）
+--   ★按**基础名全等**比对（不是子串）：子串匹配会误报（INV_Misc_Flower_02 是 ..._02_Copy 的前缀）
+--   ★返回**稳定 id**（herb/beast/…，语言无关）——界面名走 EVAL_TRACK_LABEL(id)
+--   ★按**基础名全等**比对（不是子串）：子串匹配会误报（INV_Misc_Flower_02 是 ..._02_Copy 的前缀）
+function EVAL_TRACK_KIND(tex)
+  local base = EVAL_TRACK_BASE(tex)
+  if base == nil then return nil end
+  for i = 1, table.getn(TRK.hint) do
+    if base == string.lower(TRK.hint[i][2]) then return TRK.hint[i][1] end
+  end
+  return nil
+end
+
+-- 本地化名字 → 追踪**种类 id**（备用路：纹理没命中候选表时，名字还能认出种类）
+--   ★只收官方数据库确有译名的两种语言（zhCN / enUS；ruRU 在库里回落到英文 ⇒ 不收，如实 nil）
+--   ★同样「认不出就 nil」，**不猜**
+--   ★只收官方数据库确有译名的两种语言（zhCN / enUS；ruRU 在库里回落到英文 ⇒ 不收，如实 nil）
+--   ★同样「认不出就 nil」，**不猜**
+function EVAL_TRACK_KIND_BY_NAME(nm)
+  if type(nm) ~= "string" then return nil end
+  local n = string.lower(nm)
+  n = string.gsub(n, "^%s+", "")
+  n = string.gsub(n, "%s+$", "")
+  if n == "" then return nil end
+  for i = 1, table.getn(TRK.hint) do
+    local h = TRK.hint[i]
+    if n == string.lower(tostring(h[3] or "")) or n == string.lower(tostring(h[4] or "")) then return h[1] end
+  end
+  return nil
+end
+
+-- 纯函数（可单测）：从 tooltip 的行文本里挑法术名（第一行非空即名字）
+function EVAL_TRACK_NAME_FROM_LINES(l1, l2)
+  if type(l1) == "string" and l1 ~= "" then return l1 end
+  if type(l2) == "string" and l2 ~= "" then return l2 end
+  return nil
+end
+
+-- ★★★1.75.2 为什么探针要**另存一份专属读数**（实测教训，别删）：调试日志环 `EH_LOG_MAX = 100` 条，
+--   而 `cfg.ds.trace` 开着时 `[DS]` 心跳/地图行**每 ~10 秒一行** ⇒ **约 17 分钟就把探针读数冲干净**——
+--   1.75.2 实测：用户做完 5 步、过了约 19 分钟才 `/reload`，存档里**一条 `[追踪探针]` 都读不到**（白跑一趟）。
+--   ⇒ 探针每行同时落一个小环（最近 40 行）到存档 `EVAL_HELP_CONFIG.trkProbe`：
+--     我这边**直接读 SavedVariables 文件**即可，用户侧也能用 `/eh go 追踪探针 存档` 把它打回聊天框。
+--   ★它只是调试产物 ⇒ 已登记进 Core 的「调试残渣键」清单（`/eh 存档清理` 可清）。
+-- ★1.75.4 40 → 80：报告变长了（多了「原文+类型 / 名字三态 / 光环名字 / 追踪按钮 / 快照」），
+--   40 行只装得下 2 份报告 ⇒ 「开 → 关 → 换种类」三份对照会被冲掉 ⇒ 提到 80 行（仍是**有界**环）。
+local TRK_OUT_MAX = 80
+local function trkOut(s)
+  local cfg = (type(EVAL_HELP_CONFIG) == "table") and EVAL_HELP_CONFIG or nil
+  if cfg == nil then return end
+  local box = cfg.trkProbe
+  if type(box) ~= "table" then box = { out = {} } cfg.trkProbe = box end
+  if type(box.out) ~= "table" then box.out = {} end
+  table.insert(box.out, tostring(s))
+  while table.getn(box.out) > TRK_OUT_MAX do table.remove(box.out, 1) end
+  box.t = (type(date) == "function") and date("%H:%M:%S") or nil
+end
+
+local function trkSay(s)
+  if type(EVAL_LOGLINE) == "function" then pcall(EVAL_LOGLINE, "[追踪探针] " .. tostring(s)) end
+  pcall(trkOut, s) -- ★专属持久读数（不被 [DS] 冲掉）
+  if type(EVAL_SAY) == "function" then pcall(EVAL_SAY, s) else print(s) end
+end
+
+
+-- 纯函数（可单测）：把**任意返回值**打成能看懂的一行（nil / 字符串 / 非字符串都如实说）
+--   ★tostring 对 userdata 可能抛错 ⇒ 一律 `pcall(tostring, v)`（★不许写 `pcall(tostring(v))`：那是先调用再交给 pcall）
+function EVAL_TRACK_STR(v)
+  if v == nil then return "nil" end
+  local ok, s = pcall(tostring, v)
+  if ok and type(s) == "string" then return s end
+  return "（tostring 失败：" .. type(v) .. "）"
+end
+
+-- 纯函数：数一个表有几个键（打印「本次共 N 个不同事件名」用）
+local function trkCountKeys(t)
+  local n = 0
+  for _ in pairs(t or {}) do n = n + 1 end
+  return n
+end
+
+-- 第三条路（有界探针）：扫 `_G` 里名字含 Track/追踪 的对象，报「类型 + 纹理 + IsShown」
+--   ★守卫照铁律：索引前先 `pcall(v.GetObjectType, v)` 探类型；方法一律 `pcall(obj.M, obj)` 形态
+--   ★匿名窗口在 `_G` 里**看不到**（参考卷 R15 ⑥k）⇒ 扫不到是**如实缺席**，不等于「没有追踪按钮」
+--   返回 out, okAll（okAll=false = 扫描中途抛错 ⇒ 结果不可信，报告里如实说）
+function EVAL_TRACK_SCAN_GLOBALS()
+  local out, okAll = {}, false
+  pcall(function()
+    for k, v in pairs(_G) do
+      if type(k) == "string" and (string.find(k, "Track") or string.find(k, "追踪")) then
+        local tv = type(v)
+        if tv == "table" or tv == "userdata" then
+          local okg, gt = pcall(v.GetObjectType, v)
+          if okg and type(gt) == "string" then
+            local tex, shown = nil, nil
+            if type(v.GetTexture) == "function" then local okt, t = pcall(v.GetTexture, v) if okt then tex = t end end
+            if type(v.IsShown) == "function" then local oks, s = pcall(v.IsShown, v) if oks then shown = s end end
+            table.insert(out, string.format("%s（%s）%s%s", k, gt,
+              (tex ~= nil) and (" ｜ 纹理=" .. tostring(tex)) or "",
+              (shown ~= nil) and (" ｜ IsShown=" .. tostring(shown)) or ""))
+          end
+        end
+      end
+    end
+    okAll = true
+  end)
+  table.sort(out)
+  return out, okAll
+end
+-- 名字主路：**自建隐形 tooltip** + `SetTrackingSpell`
+--   ★1.75.4 返回值扩成 name, ok, why, l1, l2 —— **why 必须分三态**：
+--     旧版一律在报告里写「当前没追踪」，正好踩中项目最恨的「查不到 ≠ 没有」（真机首轮读数就是这么来的）。
+--       why="noapi"   = 自建 tooltip 上没有 SetTrackingSpell（接口不存在）
+--       why="noguard" = EVAL_WTT_MAY_READ 守卫不让读（玩家正看 tooltip / 退化到真 GameTooltip）
+--       why="empty"   = 真调了 SetTrackingSpell，但两行**都是空**（= 客户端认为没有追踪）
+--       why="ok"      = 读到名字
+local function trkName()
+  if type(EVAL_WTT_MAY_READ) ~= "function" or not EVAL_WTT_MAY_READ() then return nil, false, "noguard" end
+  local wtt = nil
+  if type(EVAL_WTT_HANDLE) == "function" then wtt = EVAL_WTT_HANDLE() end
+  if wtt == nil then return nil, false, "noapi" end
+  if type(wtt.SetTrackingSpell) ~= "function" then return nil, false, "noapi" end
+  local base = "GameTooltip"
+  if type(EVAL_WTT_STATE) == "function" then
+    local oks, st = pcall(EVAL_WTT_STATE)
+    if oks and type(st) == "table" and type(st.name) == "string" and st.name ~= "" then base = st.name end
+  end
+  pcall(function()
+    pcall(wtt.ClearLines, wtt)
+    pcall(wtt.SetOwner, wtt, UIParent, "ANCHOR_NONE")
+    wtt:SetTrackingSpell()
+  end)
+  local l1, l2
+  local fs1 = rawget(_G, base .. "TextLeft1")
+  if fs1 and fs1.GetText then local ok1, t = pcall(fs1.GetText, fs1) if ok1 then l1 = t end end
+  local fs2 = rawget(_G, base .. "TextLeft2")
+  if fs2 and fs2.GetText then local ok2, t = pcall(fs2.GetText, fs2) if ok2 then l2 = t end end
+  pcall(wtt.Hide, wtt)
+  local nm = EVAL_TRACK_NAME_FROM_LINES(l1, l2)
+  if nm == nil then return nil, false, "empty", l1, l2 end
+  return nm, true, "ok", l1, l2
+end
+-- 纯函数（可单测）：这次事件要不要**打一行**？—— 只在**纹理变了**时打
+--   ★为什么不按「事件来了就打」：PLAYER_AURAS_CHANGED 在战斗中**很密**（每次光环变化都来），
+--   那样监听一开就刷屏、把真正的切换淹掉；★计数照记（关监听时打印）⇒「哪条事件真的会来」照样有据。
+function EVAL_TRACK_EV_SHOULD_LOG(tex, lastTex)
+  if (tex or nil) == (lastTex or nil) then return false end
+  return true
+end
+
+-- 事件路线：切换追踪时**哪条事件**真的会来？
+--   ★1.75.4 全事件模式下**只计数**：RegisterAllEvents 收所有事件，handler 里调一次 API 都是浪费/风险，
+--     纹理与名字一律等到「关掉监听」那一刻由报告路去读（那时状态已定）。
+--   ★退化模式（本客户端没有 RegisterAllEvents）保留旧行为：**纹理变了才打一行**（否则 PLAYER_AURAS_CHANGED 刷屏）。
+--   ★真机 OnEvent 回调**零形参**（事件名走全局 `event`；本项目 ONUPDATE ARG 那条铁律同族）
+local function trkOnEvent()
+  local ev = tostring(event or "?")
+  TRK.evHit[ev] = (TRK.evHit[ev] or 0) + 1
+  TRK.evTotal = (TRK.evTotal or 0) + 1
+  if TRK.allEv then return end
+  local tex = nil
+  if type(GetTrackingTexture) == "function" then
+    local okv, v = pcall(GetTrackingTexture)
+    if okv and type(v) == "string" and v ~= "" then tex = v end
+  end
+  if EVAL_TRACK_EV_SHOULD_LOG(tex, TRK.evLastTex) then
+    TRK.evLastTex = tex
+    local nm, nmOk = trkName()
+    trkSay(string.format("[事件] %s ｜ 纹理=%s ｜ 名字=%s", ev, tostring(tex or "（空/无追踪）"),
+      (nmOk and nm) and ("「" .. tostring(nm) .. "」") or "（读不出）"))
+  end
+end
+-- 光环清单（辅助证据：追踪到底占不占增益条）—— ★1.75.4 连**名字**一起读：
+--   真机首轮读数里增益条只有 1 个光环（`Spell_Nature_RavenForm_TEX`）——**它到底是什么**必须读名字才知道，
+--   否则「追踪是不是就藏在增益条里」永远只能猜。名字走共用件 `EVAL_PLAYER_BUFF_NAME`（自建隔离 tooltip，1.74.8 起就在）。
 local function trkBuffs()
   local out = {}
   if type(GetPlayerBuff) ~= "function" or type(GetPlayerBuffTexture) ~= "function" then return out, false end
@@ -2748,80 +3037,395 @@ local function trkBuffs()
     local okb, bi = pcall(GetPlayerBuff, i, "HELPFUL")
     if not okb or type(bi) ~= "number" or bi < 0 then break end
     local okt, tex = pcall(GetPlayerBuffTexture, bi)
-    if okt and type(tex) == "string" and tex ~= "" then table.insert(out, { i = i, tex = tex }) end
+    local nm = nil
+    if type(EVAL_PLAYER_BUFF_NAME) == "function" then
+      local okn, v = pcall(EVAL_PLAYER_BUFF_NAME, bi)
+      if okn and type(v) == "string" and v ~= "" then nm = v end
+    end
+    if okt and type(tex) == "string" and tex ~= "" then
+      table.insert(out, { i = i, bi = bi, tex = tex, name = nm })
+    end
   end
   return out, true
 end
 
-local function trkSay(s)
-  if type(EVAL_LOGLINE) == "function" then pcall(EVAL_LOGLINE, "[追踪探针] " .. tostring(s)) end
-  if type(EVAL_SAY) == "function" then pcall(EVAL_SAY, s) else print(s) end
+-- 读值口（测试/诊断）：探针状态（★1.75.4 补 allEv / evTotal）
+function EVAL_TRACK_PROBE_STATE()
+  return { lastTex = TRK.lastTex, listening = TRK.ev, allEv = TRK.allEv,
+           evHit = TRK.evHit, evTotal = TRK.evTotal }
 end
+
+-- ★★★测试驱动口（1.75.4）：把「事件来了」**按真机通道**打进去（设全局 event → 调 frame 的 OnEvent → 还原）
+--   ★绝不直接调 trkOnEvent —— 那会绕过真实注册链路（项目纪律：断言打真实入口）；★真机回调**零形参**
+function EVAL_TRACK_TEST_FIRE_EVENT(evName)
+  if TRK.frame == nil then return false end
+  local okS, sc = pcall(TRK.frame.GetScript, TRK.frame, "OnEvent")
+  if not okS or type(sc) ~= "function" then return false end
+  local keep = event
+  event = tostring(evName or "?")
+  local okc = pcall(sc)
+  event = keep
+  return okc and true or false
+end
+
+-- 读值口：每个事件命中次数（关监听时报告打印的就是同一份）
+function EVAL_TRACK_TEST_HITS() return TRK.evHit end
+-- ===== 1.75.6 追踪条件（用户：「一键宏 → 技能编辑 → 条件类型 → 自身状态 → 添加一个追踪类型，下拉单选」）=====
+-- 三条 API 的实测结论见上面 1.75.3~1.75.5 的注释；这里只做「把状态变成可判定的东西」这件事。
+
+-- id → 本地化标签（★**运行时拼键** L("TRK_"..ID)：LANG KEY CHECK 只看字面量、扫不到它
+--   ⇒ 三语齐全由 TRACK ICON CHECK 逐条核对；★认不出的 id 退回候选表中文名，绝不编造）
+function EVAL_TRACK_LABEL(id)
+  local key = "TRK_" .. string.upper(tostring(id or ""))
+  local s = (type(EVAL_L) == "function") and EVAL_L(key) or nil
+  if type(s) == "string" and s ~= "" and s ~= key then return s end
+  for i = 1, table.getn(TRK.hint) do
+    if TRK.hint[i][1] == id then return tostring(TRK.hint[i][4]) end
+  end
+  return tostring(id or "?")
+end
+
+-- 下拉/文档的唯一清单：首项 = 任意追踪，其后 = 候选表顺序（★UI 与断言都读它，不另抄一份）
+function EVAL_TRACK_LIST()
+  -- ★别写成 EVAL_TRACK_LABEL("any")：**函数名以 L 结尾 + 字面量参数**会被 LANG KEY CHECK 的正则
+  --   当成语言键 "any"（它按 L("KEY") 子串扫，不看前面是不是标识符）⇒ 假红。走局部变量最省事。
+  local anyId = "any"
+  local out = { { id = anyId, label = EVAL_TRACK_LABEL(anyId) } }
+  for i = 1, table.getn(TRK.hint) do
+    table.insert(out, { id = TRK.hint[i][1], label = EVAL_TRACK_LABEL(TRK.hint[i][1]) })
+  end
+  return out
+end
+
+-- id / 基础名 / 英中文法术名 / 本地化标签 → **规范 id**（认不出 = nil，**不猜**）
+--   ★文本往返用得上：导出写 id（追踪:beast），用户手打「追踪:追踪野兽」也要认。
+function EVAL_TRACK_PARSE_ID(txt)
+  if type(txt) ~= "string" then return nil end
+  local t = string.lower(txt)
+  t = string.gsub(t, "^%s+", "")
+  t = string.gsub(t, "%s+$", "")
+  if t == "" then return nil end
+  if t == "any" or t == "任意" or t == "任意追踪" then return "any" end
+  for i = 1, table.getn(TRK.hint) do
+    local h = TRK.hint[i]
+    if t == string.lower(tostring(h[1])) then return h[1] end
+    if t == string.lower(tostring(h[2])) then return h[1] end
+    if t == string.lower(tostring(h[3] or "")) then return h[1] end
+    if t == string.lower(tostring(h[4] or "")) then return h[1] end
+    local lbl = EVAL_TRACK_LABEL(h[1])
+    if type(lbl) == "string" and t == string.lower(lbl) then return h[1] end
+  end
+  return nil
+end
+
+-- 「现在的追踪」（★**按纹理缓存**）：纹理没变就直接复用上一次结果 ——
+--   贵调用（SetTrackingSpell 走 tooltip）**只在追踪真的变了**时做一次（项目纪律：贵调用只在变化时做）。
+--   返回 { on=bool, tex=..., base=..., id=..., name=..., why=... }；id 没命中候选表时 = nil（**不猜**）
+function EVAL_TRACK_NOW()
+  local tex = nil
+  if type(GetTrackingTexture) == "function" then
+    local ok, v = pcall(GetTrackingTexture)
+    if ok and type(v) == "string" and v ~= "" then tex = v end
+  end
+  local c = TRK.now
+  if c ~= nil and c.tex == tex then return c end
+  local now = { tex = tex, on = (tex ~= nil), base = EVAL_TRACK_BASE(tex), id = nil, name = nil, why = nil }
+  if tex ~= nil then
+    now.id = EVAL_TRACK_KIND(tex)           -- 纹理路（语言无关，首选）
+    local nm, _ok, why = trkName()          -- 名字路（贵；只在变化时读一次）
+    now.name, now.why = nm, why
+    if now.id == nil then now.id = EVAL_TRACK_KIND_BY_NAME(nm) end
+  end
+  TRK.now = now
+  return now
+end
+
+-- 条件求值入口（condOne 用的唯一判据）：id = 候选表 id 或 "any"
+--   返回 ok, why（why 与别的条件同口径：进调试日志与条件 trace）
+function EVAL_TRACK_MATCH(id)
+  local now = EVAL_TRACK_NOW()
+  if now.on ~= true then return false, "没有追踪" end
+  local cur = now.id or now.name or now.base or "?"
+  if id == nil or id == "" or id == "any" then return true, "追踪:" .. tostring(cur) end
+  local want = EVAL_TRACK_PARSE_ID(id) or tostring(id)
+  if now.id == nil then return false, "追踪:" .. tostring(cur) .. "（本客户端没能认出种类）" end
+  return (now.id == want), "追踪:" .. tostring(cur) .. "／要 " .. tostring(EVAL_TRACK_LABEL(want))
+end
+
+-- 读值口（测试/诊断）：缓存本身与清缓存（断言要能验「第二次不再读 tooltip」）
+function EVAL_TEST_TRACK_CACHE() return TRK.now end
+function EVAL_TEST_TRACK_CACHE_CLEAR() TRK.now = nil end
 
 function EVAL_TRACK_PROBE(sub)
   sub = tostring(sub or "")
   if string.find(sub, "清空") or string.find(sub, "clear") then
     TRK.lastTex = nil
-    trkSay("追踪探针：上次读数已清空")
+    local cfgC = (type(EVAL_HELP_CONFIG) == "table") and EVAL_HELP_CONFIG or nil
+    if cfgC ~= nil then cfgC.trkProbe = { out = {} } end
+    trkSay("追踪探针：上次读数 + 专属读数（存档 trkProbe）已清空")
     return 0
   end
+  -- ★专属读数的读回入口（配合 `/eh 存档清理` 的残渣清单；我这边也能直接读 SavedVariables 文件）
+  if string.find(sub, "存档") or string.find(sub, "dump") then
+    local cfgD = (type(EVAL_HELP_CONFIG) == "table") and EVAL_HELP_CONFIG or nil
+    local boxD = cfgD and cfgD.trkProbe
+    local lstD = (type(boxD) == "table" and type(boxD.out) == "table") and boxD.out or {}
+    local nD = table.getn(lstD)
+    trkSay(string.format("===== 追踪探针 · 专属读数（存档 trkProbe；上限 %d 行）｜现有 %d 行 =====", TRK_OUT_MAX, nD))
+    if nD == 0 then
+      trkSay("（空）—— 还没跑过 `追踪探针`，或刚 `清空` 过。★这一份**不会被 [DS] 心跳刷掉**：跑完探针直接 /reload 即可回传")
+    end
+    for i = 1, nD do trkSay(string.format("[%d] %s", i, tostring(lstD[i]))) end
+    return nD
+  end
+  -- ★候选图标表（1.75.3）：把「什么基础名算哪种追踪」摊开 —— 用户回传时可直接对照
+  if string.find(sub, "表") or string.find(sub, "roster") then
+    local nR = table.getn(TRK.hint)
+    trkSay(string.format("===== 追踪探针 · 候选图标表（%d 条；来源 database.emberveil.org + 本机图标清单）=====", nR))
+    for i = 1, nR do
+      local h = TRK.hint[i]
+      trkSay(string.format("   %d. %s（id=%s） ｜ %s / %s ｜ /Game/Interface/Icons/%s_TEX",
+        i, tostring(EVAL_TRACK_LABEL(h[1])), tostring(h[1]), tostring(h[3] or "?"), tostring(h[4] or "?"), tostring(h[2])))
+    end
+    trkSay("   用法：开着追踪跑一次 `追踪探针` → ③ 的「基础名」**不在**上表 → 把 ①③ 两行原文回传，我据此补表")
+    return nR
+  end
+  -- ★事件监听（开关）：追踪切换时**哪条事件**真的会来 —— 这是「实时检测」要用的事件判据取证
+  --   ★1.75.4 改成**全事件抓取**（`RegisterAllEvents`，wiki widgets/Frame 索引里确有）：事件名官方没公开
+  --     （wiki /wiki/lua/Events = 404）⇒ 「猜 4 条候选」不如「全收下来按次数排」：
+  --     切换追踪只会给真正相关的那条 + 几次，噪音事件（战斗/聊天/地图）在这段时间里的次数明显不同。
+  --   ★抓取期间 handler **只计数**；★RegisterAllEvents 不可用 ⇒ 如实退回 4 条候选并点名谁没注册上。
+  if string.find(sub, "监听") or string.find(sub, "listen") then
+    if not TRK.frame then
+      local f = CreateFrame("Frame")
+      f:SetScript("OnEvent", function() trkOnEvent() end) -- ★真机回调**零形参**
+      TRK.frame = f
+    end
+    if TRK.ev then
+      for i = 1, table.getn(TRK.evNames) do
+        pcall(TRK.frame.UnregisterEvent, TRK.frame, TRK.evNames[i])
+      end
+      local hadAll = TRK.allEv
+      if hadAll then pcall(TRK.frame.UnregisterAllEvents, TRK.frame) end
+      TRK.ev, TRK.allEv = false, false
+      trkSay(string.format("事件监听：已关闭（%s）。本次共 %d 次事件、%d 个不同事件名；下面按**次数升序**（少的前面 = 候选）：",
+        hadAll and "全事件抓取" or "4 条候选事件", tonumber(TRK.evTotal) or 0, trkCountKeys(TRK.evHit)))
+      local list = {}
+      for k, v in pairs(TRK.evHit) do table.insert(list, { k = tostring(k), n = tonumber(v) or 0 }) end
+      table.sort(list, function(a, b) if a.n ~= b.n then return a.n < b.n end return a.k < b.k end)
+      local cap = 60
+      for i = 1, table.getn(list) do
+        if i > cap then
+          trkSay(string.format("   …（还有 %d 个事件名没列；按次数升序，越靠前越可疑）", table.getn(list) - cap))
+          break
+        end
+        trkSay(string.format("   %s = %d 次", list[i].k, list[i].n))
+      end
+      trkSay("   pfUI 那 4 条候选（TurtleWoW 的值，仅供参考）：")
+      for i = 1, table.getn(TRK.evNames) do
+        local ev = TRK.evNames[i]
+        trkSay(string.format("      %s = %d 次", ev, tonumber(TRK.evHit[ev]) or 0))
+      end
+      return 0
+    end
+    TRK.ev, TRK.evHit, TRK.evLastTex, TRK.evTotal = true, {}, nil, 0
+    TRK.allEv = false
+    -- ★判据 = **接口在不在**（存在就调、抛错才算不可用）——绝不用「返回值真假」判：
+    --   pcall 的第一个返回是**成功标志**，真客户端 RegisterAllEvents 本来就**不返回值**（同 RegisterEvent）
+    --   ⇒ 写成 `pcall(...) and true or false` 会把「调用成功但没返回」也算成 true，判据就废了（1.75.4 当场踩到）。
+    local allOk, allWhy = false, "本客户端没有 RegisterAllEvents"
+    if type(TRK.frame.RegisterAllEvents) == "function" then
+      local okc, err = pcall(TRK.frame.RegisterAllEvents, TRK.frame)
+      if okc then allOk, allWhy = true, "" else allWhy = tostring(err) end
+    end
+    if allOk then
+      TRK.allEv = true
+      trkSay("事件监听：|cff00ff00全事件抓取已开启|r（RegisterAllEvents）")
+      trkSay("   现在**只做一件事**：用小地图追踪按钮切换 3 次（开 → 关 → 换种类），别的什么都别做；")
+      trkSay("   做完再跑一次 `/eh go 追踪探针 监听` 关掉 → 会**按次数**列出所有事件名（少的就是候选）。")
+      return 1
+    end
+    local reg, bad = {}, {}
+    for i = 1, table.getn(TRK.evNames) do
+      local ev = TRK.evNames[i]
+      if pcall(TRK.frame.RegisterEvent, TRK.frame, ev) then table.insert(reg, ev) else table.insert(bad, ev) end
+    end
+    trkSay("事件监听：|cff00ff00已开启|r（★退回 4 条候选事件：" .. tostring(allWhy) .. "）")
+    trkSay("   注册成功：" .. ((table.getn(reg) > 0) and table.concat(reg, " ／ ") or "（一个都没有）"))
+    if table.getn(bad) > 0 then
+      trkSay("   ★注册失败（本客户端**没有**这个事件）：" .. table.concat(bad, " ／ "))
+    end
+    trkSay("   现在切换几次追踪（开 → 关 → 换种类），每次变化会打一行 [事件]；做完再跑一次 `监听` 关掉")
+    return 1
+  end
   trkSay("===== 追踪探针 =====")
-  -- ① 当前追踪（主路）
+  -- ① 当前追踪（主路）：★1.75.4 **类型 + 原文一起打**，不再用「字符串才算」把非字符串值静默丢掉
+  --   （旧版就是这么把「有追踪但返回值不是字符串」误报成「没追踪」的 —— 查不到≠没有）
   local hasApi = (type(GetTrackingTexture) == "function")
-  local cur = nil
+  local raw, rawType = nil, "（接口不存在）"
   if hasApi then
     local ok, v = pcall(GetTrackingTexture)
-    if ok and type(v) == "string" and v ~= "" then cur = v end
+    if ok then raw, rawType = v, type(v) end
   end
-  trkSay(string.format("① GetTrackingTexture：可用=%s ｜ 本次=%s ｜ 上次=%s",
-    tostring(hasApi), tostring(cur or "（空/无追踪）"), tostring(TRK.lastTex or "（还没读过）")))
+  local cur = (rawType == "string" and raw ~= "") and raw or nil
+  trkSay(string.format("① GetTrackingTexture：可用=%s ｜ 类型=%s ｜ 原文=%s ｜ 上次=%s",
+    tostring(hasApi), tostring(rawType), EVAL_TRACK_STR(raw), tostring(TRK.lastTex or "（还没读过）")))
+  if hasApi and rawType ~= "string" and raw ~= nil then
+    trkSay("   ★返回的**不是字符串** ⇒ 本探针按「没追踪」处理，但这**可能是假象**（把上面「原文」回传给我）")
+  end
   if cur and TRK.lastTex and cur ~= TRK.lastTex then
     trkSay("   ★两次读数**不同** → 中间那一步改变了追踪（开/关或换种类）；对照两次报告即可定判据")
   end
-  trkSay("② CancelTrackingBuff：可用=" .. tostring(type(CancelTrackingBuff) == "function"))
-  -- ③ 光环（辅助）
+  -- ② 名字（主路）——「是哪一种追踪」的**唯一本地化名字来源**
+  --   ★1.75.4 **独立于①**：只要接口在就调，why 三态 + tooltip 两行原文全打出来
+  --   （旧版 cur==nil 就直接写「当前没追踪」，把「名字路读空」与「真没追踪」混成一句 = 静默族）
+  local nm, nmOk, nmWhy, nmL1, nmL2
+  if hasApi then
+    local okn2, n2, okf, w2, l1, l2 = pcall(trkName)
+    if okn2 then nm, nmOk, nmWhy, nmL1, nmL2 = n2, okf, w2, l1, l2 end
+  end
+  local nmTxt
+  if not hasApi then nmTxt = "（GetTrackingTexture 不可用 → 本条免谈）"
+  elseif nmWhy == "ok" and nm then nmTxt = "「" .. tostring(nm) .. "」（名字路**有值**）"
+  elseif nmWhy == "empty" then nmTxt = "★调了 SetTrackingSpell，但 tooltip **两行都是空**（= 客户端认为没有追踪）"
+  elseif nmWhy == "noguard" then nmTxt = "★**守卫不让读**（玩家正看 tooltip / 退化到真 GameTooltip）"
+  elseif nmWhy == "noapi" then nmTxt = "★自建 tooltip 上**没有 SetTrackingSpell**（接口不存在）"
+  else nmTxt = "★**读不出来**（pcall 抛错）—— 别当成「没追踪」" end
+  trkSay("② 名字（主路）GameTooltip:SetTrackingSpell：读到=" .. nmTxt)
+  trkSay(string.format("   tooltip 原文：TextLeft1=%s ｜ TextLeft2=%s", EVAL_TRACK_STR(nmL1), EVAL_TRACK_STR(nmL2)))
+  -- ③ 种类：纹理主路（基础名对候选表）+ 名字备用路（本地化名字对候选表）—— 两条路互相印证
+  --   ★两条路**打架**时如实点出「不一致」：静默取某一路 = 候选表写错了用户也看不到
+  --   ★1.75.6 起 id 与本地化标签一起打（id 是稳定键、也是条件值；标签是给人看的）
+  local kindTex = EVAL_TRACK_KIND(cur)
+  local kindNm = ((nmOk == true) and type(nm) == "string") and EVAL_TRACK_KIND_BY_NAME(nm) or nil
+  local function trkBoth(id)
+    if id == nil then return nil end
+    return tostring(id) .. "（" .. tostring(EVAL_TRACK_LABEL(id)) .. "）"
+  end
+  trkSay(string.format("③ 种类：基础名=%s ｜ 候选图标表=%s ｜ 动作条名字=%s",
+    tostring(EVAL_TRACK_BASE(cur) or "（无）"),
+    trkBoth(kindTex) or "（没命中候选表 —— 按①的纹理原文回传，我据此补表）",
+    tostring(EVAL_TRACK_WHO(cur) or "（动作条里没有这个纹理的技能）")))
+  local nmTxt3
+  if kindNm == nil then
+    nmTxt3 = "（名字认不出种类，或名字路读不出 —— 不猜）"
+  elseif kindTex == nil then
+    nmTxt3 = "「" .. tostring(trkBoth(kindNm)) .. "」（纹理没命中候选表，名字认出来了 ⇒ 两条路互补）"
+  elseif kindTex == kindNm then
+    nmTxt3 = "「" .. tostring(trkBoth(kindNm)) .. "」（与纹理路**一致** ⇒ 两条路互证）"
+  else
+    nmTxt3 = "★「" .. tostring(trkBoth(kindNm)) .. "」与纹理路「" .. tostring(trkBoth(kindTex)) .. "」**不一致** ⇒ 把这两行原文回传，我核表"
+  end
+  trkSay("   名字备用路：" .. nmTxt3)
+
+  trkSay("④ 取消 CancelTrackingBuff：可用=" .. tostring(type(CancelTrackingBuff) == "function"))
+  -- ⑤ 光环（辅助）—— ★1.75.4 连**名字 / 种类**一起打：真机上「追踪到底占不占增益条」靠这一行定案
   local bl, bOk = trkBuffs()
-  trkSay(string.format("③ 增益条光环：接口可用=%s 共 %d 个", tostring(bOk), table.getn(bl)))
-  local seen = false
+  trkSay(string.format("⑤ 增益条光环（辅路）：接口可用=%s 共 %d 个", tostring(bOk), table.getn(bl)))
+  local seen, auraKind = false, nil
   for i = 1, table.getn(bl) do
     local b = bl[i]
     local who = EVAL_TRACK_WHO(b.tex)
+    local kAura = EVAL_TRACK_KIND(b.tex)
+    local kNm = (type(b.name) == "string") and EVAL_TRACK_KIND_BY_NAME(b.name) or nil
     if cur and b.tex == cur then seen = true end
-    trkSay(string.format("   [槽 %d] %s%s", b.i, tostring(b.tex), who and ("  ← 动作条：" .. who) or ""))
+    if kAura ~= nil or kNm ~= nil then auraKind = kAura or kNm end
+    trkSay(string.format("   [槽 %d] %s ｜ 名字=%s%s%s", b.i, tostring(b.tex), EVAL_TRACK_STR(b.name),
+      (kAura ~= nil) and (" ｜ 种类=" .. tostring(kAura) .. "（" .. tostring(EVAL_TRACK_LABEL(kAura)) .. "）")
+        or ((kNm ~= nil) and (" ｜ 名字像=" .. tostring(kNm) .. "（" .. tostring(EVAL_TRACK_LABEL(kNm)) .. "）") or ""),
+      who and (" ← 动作条：" .. who) or ""))
   end
+  if auraKind ~= nil then
+    trkSay("   ★★增益条里**有一条像追踪**（" .. tostring(auraKind) .. "（" .. tostring(EVAL_TRACK_LABEL(auraKind))
+      .. "））⇒ 本客户端的追踪**占增益条槽位**（官方那句「not listed here」对本客户端不成立）")
+  end
+
   if cur then
     trkSay("   ★①的纹理" .. (seen and "**在**增益条里出现 ⇒ 追踪占槽位（光环路线可用）"
-      or "**没**出现在增益条 ⇒ 追踪不占槽位（必须走 GetTrackingTexture 主路）"))
+      or "**没**出现在增益条 ⇒ 纹理这条路读不到追踪的信息"))
   end
-  -- ④ 动作条里的追踪类技能（建纹理↔名字对照表）
+  -- ⑥ 动作条里的追踪类技能（建纹理↔名字对照表）
   local nT = 0
   if type(wslots) == "table" then
     for nm, v in pairs(wslots) do
       if type(v) == "table" and type(v.tex) == "string" then
         local s = tostring(nm)
-        if string.find(s, "追踪") or string.find(s, "寻找") or string.find(s, "Track") or string.find(s, "Find") then
+        local k2 = EVAL_TRACK_KIND(v.tex)
+        -- 判据 = 纹理命中候选表 **或** 名字含关键字（前者语言无关；后者兜住候选表还没覆盖的）
+        if k2 ~= nil or string.find(s, "追踪") or string.find(s, "寻找") or string.find(s, "Track") or string.find(s, "Find") then
           nT = nT + 1
-          trkSay(string.format("   [动作条] %s ｜ slot=%s ｜ 纹理=%s", s, tostring(v.slot), tostring(v.tex)))
+          trkSay(string.format("   [动作条] %s ｜ slot=%s ｜ 种类=%s ｜ 纹理=%s", s, tostring(v.slot),
+            (k2 ~= nil) and (tostring(k2) .. "（" .. tostring(EVAL_TRACK_LABEL(k2)) .. "）") or "（纹理没命中）", tostring(v.tex)))
         end
       end
     end
   end
-  trkSay(string.format("④ 动作条里的追踪类技能：%d 个（名字含「追踪/寻找/Track/Find」）", nT))
-  -- ⑤ 法术书（接口未必有 → 如实报可用性）
+  trkSay(string.format("⑥ 动作条里的追踪类技能：%d 个（纹理命中候选表 或 名字含「追踪/寻找/Track/Find」）", nT))
+  -- ⑦ 法术书扫描（★1.75.3：判据从「名字含追踪/寻找」换成**纹理命中候选表** —— 名字判据会漏掉
+  --   「感知恶魔 / 感知亡灵」这类名字里没有「追踪/寻找」的，且跨语言不可靠；纹理命中与③同一口径）
+  --   ★两条都打：纹理命中的（= 这个角色已学的追踪）+ 仅名字命中的（= 我该补表的候选）
   local sbOk = (type(GetSpellName) == "function")
-  trkSay("⑤ 法术书扫描：接口可用=" .. tostring(sbOk))
+  trkSay("⑦ 法术书扫描：接口可用=" .. tostring(sbOk))
   if sbOk and type(GetSpellTexture) == "function" then
+    local nSb, nSbName = 0, 0
     for i = 1, 400 do
-      local okn, nm = pcall(GetSpellName, i, "spell")
-      if not okn or type(nm) ~= "string" or nm == "" then break end
-      if string.find(nm, "追踪") or string.find(nm, "寻找") or string.find(nm, "Track") or string.find(nm, "Find") then
-        local okt, tex = pcall(GetSpellTexture, i, "spell")
-        trkSay(string.format("   [法术书 %d] %s ｜ 纹理=%s", i, tostring(nm), tostring(okt and tex or "?")))
+      local okn, nm2 = pcall(GetSpellName, i, "spell")
+      if not okn or type(nm2) ~= "string" or nm2 == "" then break end
+      local tex2 = nil
+      local okt, tv = pcall(GetSpellTexture, i, "spell")
+      if okt and type(tv) == "string" then tex2 = tv end
+      local k3 = EVAL_TRACK_KIND(tex2)
+      if k3 ~= nil then
+        nSb = nSb + 1
+        trkSay(string.format("   [法术书 %d] %s ｜ 种类=%s ｜ 纹理=%s", i, tostring(nm2),
+          tostring(k3) .. "（" .. tostring(EVAL_TRACK_LABEL(k3)) .. "）", tostring(tex2)))
+      elseif string.find(nm2, "追踪") or string.find(nm2, "寻找") or string.find(nm2, "Track") or string.find(nm2, "Find") then
+        nSbName = nSbName + 1
+        trkSay(string.format("   [法术书 %d] %s ｜ ★纹理没命中候选表 ｜ 纹理=%s", i, tostring(nm2), tostring(tex2 or "?")))
       end
     end
+    trkSay(string.format("   ↑ 纹理命中 %d 条 ／ 仅名字命中 %d 条（后者请把纹理原文回传，我据此补表）", nSb, nSbName))
   end
+  trkSay("⑧ 事件监听：" .. (TRK.ev and "|cff00ff00开着|r（再跑一次 `监听` 关掉并看计数）"
+    or "关（用 `/eh go 追踪探针 监听` 开；开完切换几次追踪再关，就能看出**哪条事件**真的跟着走）"))
   if cur then TRK.lastTex = cur end
-  trkSay("⑥ 判定：开/关追踪各跑一次 —— ①「上次 vs 本次」就是**追踪状态**；④/⑤ 给出「纹理 ↔ 名字」⇒ 以后「GetTrackingTexture」查表即得「在采矿/采药/野兽追踪」")
+  trkSay("⑨ 判定：① = **在不在追踪**（nil 就是没追踪）；② = **是哪一种**（本地化名字，采药/采矿/追踪野兽）；")
+  trkSay("   ③ 纹理主路（基础名对候选表）+ 名字备用路（两条路**互证**，打架就报「不一致」）；")
+  trkSay("   ⑤ 光环是**旁证**（若增益条里真有一条像追踪，报告会点出来 ⇒ 那就是本客户端追踪占槽位）；")
+  trkSay("   ⑥⑦ 是「这个角色都学了哪些追踪」的旁证；⑧ 给「实时刷新」的事件判据（全事件抓取实测）；")
+  -- ⑩ 默认 UI 的追踪按钮/图标（★1.75.4 第三条独立路：**游戏自己**认为当前追踪是什么）
+  --   候选名 + 有界 `_G` 扫描（名字含 Track/追踪）；一个都没命中就**如实缺席**（UI 编译在 pak 里）
+  trkSay("⑩ 默认 UI 追踪按钮（第三条独立路）：")
+  local foundBtn, btnTxt = 0, {}
+  for i = 1, table.getn(TRK.btnCands) do
+    local nm2 = TRK.btnCands[i]
+    local obj = rawget(_G, nm2)
+    if obj ~= nil then
+      foundBtn = foundBtn + 1
+      local tex, shown, ot = nil, nil, nil
+      if type(obj.GetTexture) == "function" then local okt, t = pcall(obj.GetTexture, obj) if okt then tex = t end end
+      if type(obj.IsShown) == "function" then local oks, s = pcall(obj.IsShown, obj) if oks then shown = s end end
+      local okg, g = pcall(obj.GetObjectType, obj)
+      if okg then ot = g end
+      table.insert(btnTxt, string.format("   [候选] %s ｜ 类型=%s ｜ 纹理=%s ｜ IsShown=%s",
+        nm2, EVAL_TRACK_STR(ot), EVAL_TRACK_STR(tex), EVAL_TRACK_STR(shown)))
+    end
+  end
+  for i = 1, table.getn(btnTxt) do trkSay(btnTxt[i]) end
+  local gHits, gOk = EVAL_TRACK_SCAN_GLOBALS()
+  trkSay(string.format("   `_G` 扫名字含 Track/追踪 的对象：扫描可信=%s 共 %d 条", tostring(gOk), table.getn(gHits)))
+  local gCap = 20
+  for i = 1, table.getn(gHits) do
+    if i > gCap then trkSay(string.format("      …（还有 %d 条没列）", table.getn(gHits) - gCap)) break end
+    trkSay("      " .. tostring(gHits[i]))
+  end
+  if foundBtn == 0 and table.getn(gHits) == 0 then
+    trkSay("   （候选全不在 + 扫描 0 条 ⇒ 本客户端没有这些全局名，或追踪按钮不叫这个 ⇒ 把线索回传）")
+  end
+  -- ⑪ 一行快照：开/关各跑一次，**直接比这一行**就够了（不用逐行对照）
+  trkSay(string.format("⑪ 一行快照：纹理类型=%s ｜ 纹理=%s ｜ 名字=%s（why=%s） ｜ 光环=%d 个 ｜ 追踪按钮命中=%d ｜ 扫描=%d 条",
+    tostring(rawType), EVAL_TRACK_STR(raw), EVAL_TRACK_STR(nm), tostring(nmWhy or "?"),
+    table.getn(bl), foundBtn, table.getn(gHits)))
   return 1
 end
 
@@ -3133,6 +3737,25 @@ local function parseOneRaw(token)
   if irg then return { k = "inRange", s = condTrim(irg), v = not neg } end
   local irn = string.match(token, "^范围外[:：](.+)$") or string.match(token, "^notinrange[:=](.+)$")
   if irn then return { k = "inRange", s = condTrim(irn), v = false } end
+  -- ★1.75.6 追踪类型条件（用户新增）：追踪[:id] / tracking[=id]；裸形式 = 任意追踪；
+  --   未追踪 / nottracking / 前置 ! = 反向。★id 认「稳定 id / 图标基础名 / enUS / zhCN / 本地化标签」，
+  --   认不出**返回 nil**（与其它条件的写法错误同口径：如实丢弃，不静默留半个条件）。
+  local tk = string.match(token, "^追踪[:：]?(.*)$") or string.match(token, "^tracking[:=]?(.*)$")
+  if tk ~= nil then
+    local tidTxt = condTrim(tk)
+    if tidTxt == "" then return { k = "tracking", s = "any", v = not neg } end
+    local pid = EVAL_TRACK_PARSE_ID(tidTxt)
+    if pid == nil then return nil end
+    return { k = "tracking", s = pid, v = not neg }
+  end
+  local tnk = string.match(token, "^未追踪[:：]?(.*)$") or string.match(token, "^nottracking[:=]?(.*)$")
+  if tnk ~= nil then
+    local tidTxt2 = condTrim(tnk)
+    if tidTxt2 == "" then return { k = "tracking", s = "any", v = false } end
+    local pid2 = EVAL_TRACK_PARSE_ID(tidTxt2)
+    if pid2 == nil then return nil end
+    return { k = "tracking", s = pid2, v = false }
+  end
   local tg = string.match(token, "^选取目标[:：](.+)$") or string.match(token, "^target[:=](.+)$")
   -- ★1.71.2 冒号可省：导出侧的**裸形式**「施法中」（不指定技能名）以前解析不回（配合 EVAL_COND_STR 的空名修复）
   local cst = string.match(token, "^施法中[:：]?(.*)$") or string.match(token, "^casting[:=]?(.*)$") -- 1.38.0 施法中条件
@@ -3351,6 +3974,12 @@ function EVAL_COND_STR(cd, disp)
   if k == "combat" then return cd.v and "战斗中" or "非战斗" end
   if k == "form" then return "姿态" .. tostring(cd.n) end
   if k == "formNot" then return "非姿态" .. tostring(cd.n) end
+  if k == "tracking" then
+    -- ★1.75.6 追踪类型：导出/存档走**稳定 id**（追踪:beast，语言无关）；界面显示走本地化标签（追踪野兽）
+    local id = tostring(cd.s or "any")
+    return (cd.v == false and "未追踪:" or "追踪:") .. (disp and tostring(EVAL_TRACK_LABEL(id)) or id)
+  end
+
   if k == "hasTarget" then return cd.v and "目标存在" or "无目标" end
   if k == "canAttack" then return cd.v and "可攻击" or "不可攻击" end
   if k == "canBleed" then return cd.v and "可流血" or "不可流血" end

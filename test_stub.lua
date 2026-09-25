@@ -49,6 +49,16 @@ local function newMock()
     -- ★1.73.38 桩保真：注册了哪些事件要能读回来（「接收方支持私聊」这条契约才可断言）
     RegisterEvent = function(self, ev) rawset(self, "__ev_" .. tostring(ev), true) end,
     IsEventRegistered = function(self, ev) return rawget(self, "__ev_" .. tostring(ev)) and true or false end,
+    -- ★1.75.4 追踪探针的「全事件抓取」：真客户端有 RegisterAllEvents/UnregisterAllEvents
+    --   （wiki widgets/Frame 索引里确有这两条）；桩里**显式**给出来，否则会走 __index 兜底 = 永远成功，
+    --   「本客户端没有这个接口」的退化分支就永远测不到（本项目「桩太宽松 → 断言失明」老坑）。
+    --   ★TEST.noAllEvents = true ⇒ 模拟没有它 ⇒ 探针应退回 4 条候选事件并如实点名。
+    RegisterAllEvents = function(self)
+      if TEST.noAllEvents then error("模拟：本客户端没有 RegisterAllEvents") end
+      rawset(self, "__allEv", true)
+    end,
+    UnregisterAllEvents = function(self) rawset(self, "__allEv", nil) end,
+
     GetScript = function(_, ev) return scripts[ev] end,
     SetText = function(_, t)
       texts.t = t
@@ -312,7 +322,7 @@ local function mkTooltipFrame(name)
   rawset(f, "Hide", function() end)
   rawset(f, "Show", function() end)
   rawset(f, "IsShown", function() return false end)
-  rawset(f, "ClearLines", function() TEST.curSlot = nil TEST.curDebuff = nil TEST.curBuff = nil TEST.curPlayerBuff = nil end)
+  rawset(f, "ClearLines", function() TEST.curSlot = nil TEST.curDebuff = nil TEST.curBuff = nil TEST.curPlayerBuff = nil TEST.curTrackSpell = nil end)
   -- ★1.75.16 隐形 tooltip 的「向服务器要数据」入口：真机 GameTooltip 必有 SetHyperlink，
   --   桩缺它 ⇒ 「数据检索的请求泵到底有没有在要」根本测不出来（旧判据全绿而泵可以是死的）。
   --   记进 TEST.wttHyper（第 n 条链接），断言直接读它。
@@ -342,9 +352,15 @@ local function mkTooltipFrame(name)
     return TEST.buffs[bi + 1] ~= nil
   end)
   rawset(f, "SetSpell", function() return true end)
+  -- ★1.75.2 桩保真：**追踪名字主路**（真机 GameTooltip 必有 `SetTrackingSpell`；官方文档：
+  --   「Fills an aura tooltip from the player's current tracking spell… Does nothing if no tracking spell is active.」）
+  --   桩不给它 ⇒「追踪探针到底有没有读名字」在测试里完全不可见（又是「桩太宽松 → 断言失明」）。
+  --   文本从 TEST.trackWho 取（与 SetPlayerBuff 同款：ClearLines 会把 curTrackSpell 清掉）。
+  rawset(f, "SetTrackingSpell", function() TEST.curTrackSpell = true TEST.trackSpellRead = true TEST.trackSpellReads = (TEST.trackSpellReads or 0) + 1 return true end)
   rawset(f, "AddLine", function() end)
   rawset(_G, name .. "TextLeft1", { GetText = function()
     TEST.ttReadFrom = name .. "TextLeft1"
+    if TEST.curTrackSpell then return TEST.trackWho end -- ★1.75.2 追踪名字主路（SetTrackingSpell）
     if TEST.curPlayerBuff ~= nil then
       local dsrc = TEST.dhTexts or TEST.dhBuffs
       return dsrc and dsrc[TEST.curPlayerBuff]
@@ -434,6 +450,7 @@ TEST.gtCalls = { setOwner = 0, clear = 0, hide = 0, show = 0 }
 TEST.ttReadFrom = nil
 GameTooltipTextLeft1 = { GetText = function()
   TEST.ttReadFrom = "GameTooltipTextLeft1"
+  if TEST.curTrackSpell then return TEST.trackWho end -- ★1.75.2 追踪名字主路
   if TEST.curBuff then return TEST.buffs[TEST.curBuff + 1] and TEST.buffs[TEST.curBuff + 1].name end
   if TEST.curDebuff then return TEST.debuffs[TEST.curDebuff] and TEST.debuffs[TEST.curDebuff].name end
   return TEST.slotNames and TEST.slotNames[TEST.curSlot or 0]
@@ -459,11 +476,14 @@ GameTooltip = {
     TEST.gtBag = bag TEST.gtSlot = slot
     return true
   end,
+  -- ★1.75.2 桩保真：追踪名字主路（真机的**单例** GameTooltip 同样有 `SetTrackingSpell`；
+  --   退化路径（自建 tooltip 建不出来）下探针读的就是它 ⇒ 桩必须也有，否则退化路径测不出来）
+  SetTrackingSpell = function() TEST.gtTrackSpell = true TEST.curTrackSpell = true TEST.trackSpellReads = (TEST.trackSpellReads or 0) + 1 return true end,
   AddLine = function(_, text, r, g, b)
     TEST.tipLines = TEST.tipLines or {}
     table.insert(TEST.tipLines, { text = tostring(text), r = r, g = g, b = b })
   end,
-  ClearLines = function() TEST.gtCalls.clear = TEST.gtCalls.clear + 1 TEST.curSlot = nil TEST.curDebuff = nil TEST.curBuff = nil end,
+  ClearLines = function() TEST.gtCalls.clear = TEST.gtCalls.clear + 1 TEST.curSlot = nil TEST.curDebuff = nil TEST.curBuff = nil TEST.curTrackSpell = nil end,
   SetAction = function(_, slot) TEST.curSlot = slot return true end,
   SetUnitDebuff = function(_, _, i) TEST.curDebuff = i return TEST.debuffs[i] ~= nil end,
   SetPlayerBuff = function(_, bi) TEST.curBuff = bi return TEST.buffs[bi + 1] ~= nil end,
@@ -488,6 +508,13 @@ GetSpellName = function(i, book)
   local e = (TEST.spellbook or {})[i]
   if not e then return nil end
   return e.name, e.sub
+end
+-- ★1.75.3 法术书图标桩（追踪探针的 ⑦ 改成按**纹理**判「这个角色学了哪些追踪」，需要它）：
+--   TEST.spellbook = { {name=, sub=, tex=}, ... }；未设 tex 的条目返回 nil ⇒ 既有用例行为不变
+GetSpellTexture = function(i, book)
+  local e = (TEST.spellbook or {})[i]
+  if not e then return nil end
+  return e.tex
 end
 -- ★1.70.47 队伍/团队成员桩（用户要求：一键扫描队伍 → 血/蓝/buff/debuff 条件）：
 --   TEST.team = { { unit="party1", name=, hp=, hpMax=, mana=, manaMax=, powerType=,
@@ -1009,7 +1036,13 @@ DropItemOnUnit = function(u) TEST.droppedOn = tostring(u) end
 GetPetFoodTypes = function() return TEST.petFood or "肉类,鱼类" end
 GetPetHappiness = function() return TEST.happiness or 2, 100, 0 end
   -- ★1.74.31 桩保真：追踪（真机索引：GetTrackingTexture = Mapping / CancelTrackingBuff = Buff）
-  GetTrackingTexture = function() return TEST.trackTex end
+    -- ★1.74.31 桩保真：追踪（真机索引：GetTrackingTexture = Mapping / CancelTrackingBuff = Buff）
+  --   ★1.75.4 补：真机可能返回**非字符串**（组件/表）⇒ TEST.trackTexObj 让桩如实回一个表，
+  --     否则「返回值不是字符串」这条分支在测试里根本建不起来（旧版会把它静默当「没追踪」）。
+  GetTrackingTexture = function()
+    if TEST.trackTexObj then return { fake = "texture-widget" } end
+    return TEST.trackTex
+  end
   -- ★1.74.31 桩保真：date（os.date 的全局别名；探针日期戳与过期清理都要它）
   date = function(fmt)
     if type(fmt) == "string" and string.find(fmt, ":", 1, true) ~= nil then return TEST.clockStr or "12:00:00" end

@@ -3682,4 +3682,6 @@ console.log('DONE');
 //   ⇒ 每个工具模块的检查收在 tests/checks/<模块>.js；harness 只负责 require + 调用（一行一个）——
 //     **漏一个**由 `TOOL TEST FILES CHECK` 对账抓到。★新增工具模块时：这里加一行 + tests/checks/ 建同名文件。
 require("./tests/checks/LayerFix.js")(__dirname);
+require("./tests/checks/Track.js")(__dirname);
+require("./tests/checks/ChatGate.js")(__dirname);
 // （DF ICON ART CHECK（1.74.33）：窗口图标「画法 + 左键/右键分工」的 … 已迁到 tests/checks/DragFrames.js）

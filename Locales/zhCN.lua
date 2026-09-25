@@ -634,7 +634,7 @@ TB_BUY_UI_TIP = "点格子改数量/每次；勾选框控制该条目是否参�
   CLOSE = "关闭",
   DD_MORE_FMT = "…… 还有 %d 项未显示（请用搜索缩小范围）",
   G_LOG_H = "日志",
-  G_LOG_FILE = "记录调试日志（/eh logdump 查看）",
+  G_LOG_FILE = "调试日志（/eh logdump 查看）",
   G_LOG_AUTO = "进出战斗自动输出",
   G_UI_H = "界面",
   G_UI_COMBAT = "战斗信息UI（/eh ui）",
@@ -794,6 +794,17 @@ PROF_TIP_CAPPED = "覆盖 %s/5 类条件 → 分数封顶（神级需覆盖 4 �
   CRE_ANY = "任意类型",
   CRE_OTHER = "其他（未列出）",
   CT_IMMUNE = "目标免疫技能",
+  -- ★1.75.6 追踪类型条件（用户新增）：类型名 + 14 项下拉标签（id 见 Engine 的 TRK.hint）
+  --   ★TRK_<ID> 是**运行时拼键**（L("TRK_"..ID)）⇒ LANG KEY CHECK 扫不到，由 TRACK ICON CHECK 核三语齐全。
+  CT_TRACKING = "追踪类型",
+  TRK_ANY = "任意追踪",
+  TRK_HERB = "采药", TRK_MINING = "采矿", TRK_TREASURE = "寻找宝藏",
+  TRK_BEAST = "追踪野兽", TRK_HUMANOID = "追踪人型生物", TRK_DEMON = "追踪恶魔",
+  TRK_DRAGONKIN = "追踪龙类", TRK_ELEMENTAL = "追踪元素生物", TRK_GIANT = "追踪巨人",
+  TRK_UNDEAD = "追踪亡灵", TRK_HIDDEN = "追踪隐藏生物",
+  TRK_SENSEDEMON = "感知恶魔", TRK_SENSEUNDEAD = "感知亡灵",
+  TRK_LIVE_FMT = "当前追踪：%s", TRK_NONE = "当前没有追踪",
+
   CT_INRANGE = "施法范围内",
   CT_CASTING = "施法中",
   CT_CASTEL = "施法时间",

@@ -1,8 +1,13 @@
 # EVAL_HELP 插件项目记忆（EmberVeil 全职业工具）
 
 > 本文件只记**铁律 / 判据 / 关键注意项**：逐版本细节在 `CHANGELOG.md` 与 git 提交历史，不进这里。
-> ★★★**指令预算实况（2026-09-25）**：限值在 **agent 平面 preset**（`dsh-agent-presets/presets/<id>/agent.cordis.yml` 的 `agent-instructions.config.maxBytes`）；★host 的 cordis.patch.yml / profile 补丁**改不到它**（无 patch 语义）⇒ 只能改 preset 本体。**已把 standard/ptc/cordis 改成 1048576**。
-> 　★**生效前**：算整段渲染文本，软上限 ≈ 65,240 字节，超了从尾部截断（尾部铁律 AI 看不到）⇒ 本文件暂 ≤ 65,200 字节。
+> ★★★**指令预算 = 1 MiB**：唯一有效修法 = **web profile 补丁层按 id 覆盖 preset 声明行** —— `%USERPROFILE%\.dsh\profiles\web\cordis.patch.yml` 里的 `- id: preset-standard / preset-ptc / preset-cordis` 覆盖块（完整重述 `config`，其 `plugins` 内 `agent-instructions.config.maxBytes: 1048576`）。
+> 　· **谁生成 / 谁验证**：仓库根目录 **`dsh_memory_budget.js`**（`apply` = 按当前安装内 shipped preset 重生成 + 先备份；`check` = 闸门；`status` = 列候选安装）。★`check` 用「**临时 `DSH_HOME` + 官方 `dsh --profile web --dump-config`**」自证，纯读、不起服务、不碰真实 profile。
+> 　· ★★**两条死路（2026-09-25 都白花过时间）**：① 改安装内的 `dsh-web-app\presets\<id>.patch.yml`（0.1.7 的 preset 就声明在这里）—— 升级 / 换 `_npx` hash 即回 65536；② profile 补丁里只写**单层** `- id: agent-instructions` —— 宿主那一行被 web-app bundle 补丁 `disabled: true` 关掉了，`dump-config` 实证**写了也不生效**。
+> 　· ★**覆盖会替换整个 `config`**（官方 `dsh-agent-preset` 的 `skills/editing-cordis-compositions`）：**少写字段 = preset 激活失败**（2026-09-25 早上 GUI 崩过一次就是这个）⇒ 一律脚本生成，别手改。
+> 　· **判定「现在跑的是哪一份安装」别猜 `_npx` hash**：★指纹 = **自己有没有 `ralph` 工具**（0.1.5 的 standard preset 开着 `tool-ralph`，0.1.7-rc.2 的 standard/ptc **关着**）⇒ 2026-09-25 实测 = **全局 `%APPDATA%\npm\node_modules\@deepseek-ai\dsh`（0.1.7-rc.2）**；`profiles\node_modules` 里指向 `_npx\<hash>` 的 junction 只是旧痕迹。
+> 　· **生效时机**：`patchReload = startup` ⇒ **必须重启 GUI**，且只对**新开会话**生效（旧会话保持原预算）。
+> 　· **验证**：把本文件临时撑过旧上限（>65,536），看下一次注入有没有 `Workspace instruction budget … truncated`、尾部标记是否还在（只看「没报错」不算）；旧上限下软上限 ≈ **65,240 字节**（超了从尾部截断，尾部铁律 AI 看不到）。全案见参考卷 **附录 R17**。
 > ★★**本文件是「常驻卷」**——其余整卷在**同目录的 `CLAUDE_REFERENCE.md`（参考卷，不自动载入）**：
 > · 发布 release 流程 **9 步全文 + 打包脚本 + 推送信息** · §六 历史教训汇总 · §七 开源仓库 / 官方 API 文档 / 待开发计划
 > · §八 项目位置与现状（文件结构 · toc 载入顺序 · **新增模块要改哪几处** · 任务线 & 装备设计 · **当前版本**）· §九 版本要点汇总
@@ -26,8 +31,15 @@
 ## ★★★改完代码**自动同步到本机游戏目录**（用户 1.74.8 明确要求）
 
 - **触发条件**：**每次改完插件代码**（.lua / .toc / 素材）之后，**自动**把插件相关文件复制过去 —— 不必等用户开口。
-- **目标路径**（本机就绪，目录已存在，同级已有 `UnrealQuest`）：
-  `E:\soft\game\eb\Azeroth\Binaries\Win64\Games\Emberveil\live\Azeroth\Interface\AddOns`
+- **本机形态（★2026-09-25 实测修正）**：全盘只有一份安装，**工作区就在它里面**
+  （`G:\game\u5wow\Azeroth\Binaries\Win64\Games\Emberveil\live\Azeroth\Interface\AddOns\EvalHelp`）
+  ⇒ **主插件不用复制**（改完 `/reload` 即生效）；旧记忆里的 `E:\soft\game\eb\...` 本机**不存在**。
+- ★★★**但 `addons\` 里的子插件必须复制到「当前插件同级目录」**（用户 2026-09-25 明确）：
+  仓库的 `addons\<名>\`（现 `EH_DebugBox`，自带 `.toc`、独立载入）要落到 `Interface\AddOns\<名>\`
+  （= 当前插件的**同级**）；否则游戏里跑的是**老的那份子插件**（新模块 + 老实现两套逻辑同时改锚点
+  = 1.74.30 修过的那类「两处真值打架」事故）。
+  ⇒ **本机也照样跑 `node sync_game.js`**：本机分支 = 主插件跳过 + 子插件复制到同级，并如实报数
+  （只复制**内容变了**的文件，可反复跑、幂等；2026-09-25 实测第二次 = 改 0 / 同 4）。
 - **复制口径**：以 `EvalHelp.toc` 现算的模块清单为准（与发布包 PACK LIST 同一口径），落到 `AddOns\EvalHelp\`；
   ★**连同子目录**（`tools\`、`Locales\`、`examples\`）一起递归复制；★**不要**把仓库里的测试文件
   （`test_*.lua`、`luacheck.js`、`tmp\`、`preview\`、`doc\`、`.git`）带过去。
@@ -57,7 +69,13 @@
   曾因两处 `local function` 误用 `end)` 收尾导致**连续多个版本全部功能实际未生效**（全案见参考卷附录 R6）；旧的 balance 脚本（数 function/end 配对）**拦不住多余符号**，只能当辅助。
 - **每次改完 .lua 必跑两条，两条都要 exit 0**：`node luacheck.js`（fengari 真实 Lua 解析，报错带行号，显示 **SYNTAX OK** 才算完）+ `node test_engine.js`（`test_stub.lua` 打桩 WoW API/UI mock + 5.1 垫片，加载整个 `EvalHelp.lua` 后跑 `test_assert.lua`，显示 **ALL TESTS PASS**）。
   fengari 已装在工作区 node_modules（npm 走代理 `127.0.0.1:10809`）。
-- ★★★**测试纪律（用户 1.74.36-2 明确）**：改完代码**默认只跑 `node luacheck.js`**（<1 秒）；`node test_engine.js` **整轮约 32 秒**，**只在「碰到异常 / 改动涉及接线」时才跑**（用户原话：「不用测试，在碰到异常的时候再测试」「检查语法就可以，或者减少测试等待时间」）。
+- ★★★**测试纪律（用户 1.74.36-2 明确，2026-09-25 再次收紧）**：
+  · 用户原话（1.74.36-2）：「不用测试，在碰到异常的时候再测试」「检查语法就可以，或者减少测试等待时间」。
+  · ★★★用户原话（2026-09-25）：「**每次任务能否不要进行编译测试.等发现问题了再进行测试.现在每次测试太影响任务处理速度了**。」
+  ⇒ **默认什么都不跑**（连 `luacheck.js` 也不必每次跑）：只在「改动跨文件 / 动的是**载入期**代码 / 我自己判断语法风险高」时跑一次 luacheck（<1 秒）。
+  ⇒ **`test_engine.js`（整轮约 32 秒）一律等到「发现问题」再跑**：用户报障、我自己看到异常、或改动**直接动了接线/存档读写**。
+  ⇒ **变异验证不再例行做**：只在**新增或改写一条判据**时做一次，且**能跑单项检查就别跑整套**（`node -e "require(./tests/checks/X.js)(process.cwd())"` 是秒级的）。
+  ★代价要认：语法闸门照不到接线/渲染/存档这类**静默失效**（1.74.36-2 的真机 bug 就是 luacheck 全绿）；所以这几类改动收尾仍要补一次 test_engine。
   ★**但必须记住语法闸门照不到什么**：本次真机 bug（勾选框点了不勾）就是 **luacheck 全绿**、而模块↔宿主接线是坏的 ⇒ 凡是**动了模块/宿主的接线、UI 渲染、存档读写、路径**，收尾补跑一次 test_engine（或至少想想哪条断言会照到它）。
 - ★★**判据必须同时看「退出码」与「输出文本」**：源码检查失败走 `process.exitCode = 1` 而**脚本照跑到底**，于是 `ALL TESTS PASS` **照样打印**——只看这句话会**漏报**。
   行为断言失败打的是 **`ASSERT FAIL`**，源码检查失败打的是 **`: FAIL`**（两者都要在输出里找）。
@@ -185,6 +203,27 @@
   【纪律】① 别在函数体里用可能与别处同名的短名助手（`add`/`txt`/`row`），要么换名、要么定义在最前；② 同名收集器/助手一律**先声明再用**；③ 用法比对前**必须先剥字符串字面量**（首版误报过 `SetPoint(fs,"TOP",...)`）；④ 新增检查一律先做变异验证（临时造一个「先用后声明」的文件，确认真报 FAIL 再删）。连踩实例见参考卷附录 R2。
 - ★★★**工具模块必须自带 `local function L(k)`（走全局 `EVAL_L`）**（1.74.35-3 实测抓到）：项目里 `L` **一律是文件局部**（9 处 `local function L`），全仓与游戏目录其它插件都**没有全局 `L`**；`tools/LayerFix.lua`/`DragFrames.lua`/`RareWatch.lua`/`SimpleMap.lua` 曾裸调 `L("TB_…")` ⇒ 在工具箱里被 `pcall(fn, r, it)` **吞掉**，表现是「按钮文案没设上 / 点击处理器没挂」而那一行看着完全正常（本项目最恨的静默族）。判据 = **`MODULE L SCOPE CHECK`**（`tools/*.lua` 只要调 `L(` 就必须自带局部 L 且走 `EVAL_L`）；写法照 `tools/ConsumableHelper.lua` 抄。
 - ★★★**模块只准调「全局桥」，绝不许调宿主文件的 local**（1.74.36-2 真机 bug 的根因）：`tbCfg`（Toolbox 的 local）/`say`/`logLine`（Core 与 Toolbox 的 local）在模块里全是**全局 nil** ⇒ 「读永远 false、写一次不生效、播报静默消失」，而界面照样说成功（**本次症状 = 工具箱→缩放大地图的勾选框点了不勾**；`say` 那一族的死法是 DragFrames 80 处 / RareWatch 30 处的「如实播报」全哑）。⇒ 跨文件一律走 `EVAL_*` 全局桥（`EVAL_TB_CFG`/`EVAL_SAY`/`EVAL_LOGLINE`/`EVAL_L`），或在模块里**自带同名 local**；判据 = **`MODULE HOST LOCAL CHECK`**（把宿主 367 个 local 名逐个比对模块里的调用）。
+- ★★★**「关掉零动作」= 总开关必须闸在**任何探测/读写之前**（1.75.7 用户排查：「缩放大地图未开启时，会不会还在监听探索层的缩放操作」）**：
+  修前实测（关闭状态 + 点 10 拍 tick）：读了 10 次 `IsShown` + 10 次 `GetEffectiveScale`，还把叠加层几何**折了 8 次**
+  （355/-320/215×215 → ×0.7 的 248.5/-224/150.5×150.5）、记下 2 条原值 —— **不只是监听，是在动手**。
+  根因两条（这类事故的通式）：① **tick 是载入期无条件建的** ⇒ 与开关无关地一直跑；② 子开关（`mapFit`，**nil = 默认开**）
+  被当成了判据，真正的总开关压根没参与。
+  【判据】① 闸门放在**第一次读/写之前**，且闸门块要**清「已应用」标记 + `return`**；
+  ② 「关掉时把改过的几何还回去」必须**当场做**（寄托在常驻 tick 上 = 关掉还在跑的来源）；
+  ③ 闸门 = **组 230**（关闭：读 0 次 / 几何 0 次 / 关闭即还原；开启：照常监听折算 —— 反向哨兵不许把功能关死）
+  ＋ **`SM OFF SILENT CHECK`**（源码级钉「闸门在探测之前 + 有 return + 清 applied + 关闭路径真的调 `pcall(smFitRestore…`」；变异 5/5）。
+- ★★★**「探索层/叠加层纹理」折算前必须先探测「客户端自己会不会跟随缩放」**（1.75.9 用户实测：**两种情形都会把那批纹理缩两遍** ——
+  ① 载入时未开、点开启；② 开着载入、关掉再开；「WorldMapDetailFrame 下 **12 号之后**的纹理」= `smFitTargets()` 那批）：
+  真机证据（用户 DebugBox 截图）：`WorldMapOverlay1 = 105×105／锚 174,-157` = 我们写的 `150.5／248.5` **再 ×0.7**
+  （`WorldMapDetailFrame 701×468` = `1002×668×0.7` 同理）⇒ **本客户端几何读回含父帧缩放，且客户端自己会级联**。
+  【判据】① 动手前先**只读探测**（`smFitDetect`：外框缩放在 `1→0.7` 走一档，看屏幕几何跟不跟）；
+  ② 只有结论 `true`（需要我们折）才折算，**`nil`/`false` 一律一个几何都不碰**；③ 原值**只在自然档抓一次**
+  （`smFitCapture` 临时 `SetScale 1` 读）；**`smFitApply` 里绝不记原值**、**`smFitRestore` 绝不清 `SMFIT.rec`**；
+  ④ 记录键用**纹理名**（枚举序号会随换区重建漂移 ⇒ 还原写到别的纹理上）；⑤ `featApplyScale` **读回自证**（同档不重写）；
+  ⑥ **开启/关闭都要收钩子**（`featTeardown`：坐标行 OnUpdate / 拖拽柄 / `UISpecialFrames` 里我们插的那项；滚轮与坐标行各一道 enabled 门）。
+  闸门 = **组 232** ＋ **`SM FIT CASCADE CHECK`**（变异 10/10，含「检查只匹配到一处门」那次当场漏网的补洞）；全案见参考卷 **R20**。
+  · ★同一案附带修掉的一颗雷：模块在**文件执行期**缓存了 `EVAL_HELP_CONFIG.simpleMapCfg`（本项目已定案：那时它还是**空表**）
+    ⇒ 设置与「原值记录」**一个都没落盘**（真机证据：存档里 `tb.simpleMap = true` 在、`simpleMapCfg` **整块不存在**）⇒ 已改**懒代理**。
 - 多字节字符禁入 Lua `[...]`（按字节匹配）、`|` 非交替：`[:：]` 吃「：」首字节 → 目标/物品/宠物/姿态/条件解析全线静默失效；`colonNorm()` 入口归一。★`string.sub` 同样按**字节**取（`"go 喂食"`=9 字节 → 前缀判据写 `1,5` 恒不等 = 命令静默失效；1.74.5 实踩）。
 - 模式里 `%` 是转义符：`%.`字面点、`%%`字面百分号（写错则分支永死）；plain 模式找 `%` 写 `"%"`，`"%%"` 找不到。
 - 方括号组成对解析（`(.-)` 吞 `[职业:术士][队伍:2]`）→ 用 `[^%]]-`、半/全角分匹配；空集 ≠ 没写。
@@ -205,7 +244,13 @@
 - 「查不到」≠「没有」：查不到必须如实报错，否则 `cnt=0` → 「否/无」成立 → 规则无限重放刷屏。
 - 静默丢弃 = 那行变无条件施法 → 写几条成员条件、解析后就必须几条；数据类错误全静默。
 - 导出形态与解析侧必须成对验（读不回 = 导入即丢条件）；「有过滤」≠「过滤得住」（`itemOf(n)` 只认「物品:名」）。
-- 两个日志开关不能合并（`cfg.log.on` 数据层 / `cfg.wdebug` 输出层）；静默 = 只进日志、不上屏、不走 `EVAL_SAY`。
+- ★★★**聊天输出总闸门 = 配置项「调试日志」(`cfg.log.on`)，`say`/`EVAL_SAY` 跟它联动**（用户 1.75.8：「say 函数能否根据全局配置->调试日志状态开关要不要打印」＋「记录调试日志重命名->调试日志」）：
+  关掉 ⇒ **整个插件一个字都不往聊天框刷**（模块自带的 say 全部委托 `EVAL_SAY` ⇒ 一处门控全生效）；★**同一判据也是数据层闸门**（`logLine` 一个字都不记）。
+  ★**闸门必须放在第一次输出之前**（与 §5.1「关掉零动作」同族）；★**关掉时必须留一条看得见的回头路** ——
+  日志开关**自己**的确认行 + 「引擎未加载完整」兜底走 **`EVAL_SAY_FORCE`**（常开），否则用户再也看不到「怎么开回来」（静默族）。
+  · `cfg.wdebug`（配置项**「方案技能日志」**）＝更细的一层（Engine 里那批决策原因同步刷屏），**不是**总闸门；两条分工仍在，但总闸门现在**同时管「说不说话」**。
+  · 自建打印口的模块（`tools/SimpleMap.lua` 的 `P`）读 **`EVAL_CHAT_ON()`**；其余模块的 say 早已「优先 EVAL_SAY」⇒ 委托即门控（有意例外：子插件 `EH_DebugBox`）。
+  · 判据 = **组 231** ＋ **`CHAT GATE CHECK`**（变异 6/6；全案见参考卷 **R19**）。
 - 判据表照客户端真实文案抄（「进入频道。」vs「加入」）；「尝试过」≠「挂上了」→ 载入即挂必须失败重试。
 - 按序号做键的表删中间项要整体左移（1.73.25）：`bindKeys`/`bindSlots` 解绑 + idx 之后左移一格 + `SaveBindings`；组 131。
 - function 不是 table（身份判定用 `cur == TB.chanWrapper`）；标记只加显示串（`[物]` 只改显示、取值裸名）；「还原/撤回」≠ 回退到有 bug 状态。
@@ -281,6 +326,47 @@
 
 
 - ★★★**任务线线（1.75.0~1.75.21，明细 → 参考卷 §十四）**：数据以 `database.emberveil.org/quests` 为准、`quest/QuestData.lua` 是**生成物**（改 `chains.js` → `node quest/build.js` 重建，**绝不手改**）；列表 **cap=0 全量 + 跨块统一排序**、系列记录单一来源 `qcSeriesRec`、等级档 **L6=60+**、缺图占位 = **宏 961**（点击插队优先）、请求队列**按列排** + 请求泵**常驻开启**（弹窗 Hide ⇒ OnUpdate 停摆）；判据 = `QUEST TOC CHECK` + 组 191/192；**闸门 = `node check.js`**（`--full` 另加 `quest/audit.js`）。★**步骤名判据 = 不在「进包任务表」**（不是「列表页」）—— 反了会把「有页但无装备奖励」的步骤名丢光（退化成 `#id` ⇒ 按步骤名搜不到；1.75.1「爱与家庭」实测 1585/1834 步无名）；闸门 = **audit H 段**（解析**生成物**，阈值 0）★先确认表形态（`s` 是**序列**无 `[n]=`，按错形态 ⇒ 0 条 = **假绿**）。★**同一个名字坑有两层**：生成期按「进包任务表」判 + **运行期必须把名字传下去**（详情/行模型别只认 q 表）—— 修一处不算修好；判据 = **组 228**。
+- ★★★**追踪状态（草药 / 采矿 / 野兽 / 人型…）只有三条 API，没有枚举接口**（1.75.3 实证；全案见参考卷 R18）：
+  ① `GetTrackingTexture()`（Mapping）= 当前追踪的**图标纹理**，什么都没追踪 = `nil` ⇒ 判「在不在追踪」；
+  ② `GameTooltip:SetTrackingSpell()`（widget；读它走**自建隐形 tooltip** `EVAL_HELP_WTT`）= **唯一**能拿到「是哪种追踪」**本地化名字**的入口；
+  ③ `CancelTrackingBuff()`（Buff）= 取消当前追踪。★三条官方页**都没有 Protected 行** ⇒ 插件可直接调；
+  而 `CastSpell`/`CastSpellByName` 是 Protected ⇒ **开追踪只能走动作条 `UseAction(slot)`**。
+  · **不存在**：`GetNumTrackingTypes`/`GetTrackingInfo`/`SetTracking`（别照 1.12 抄）；**小地图圆点无法枚举**
+    （Minimap 只有 `SetBlipTexture`/`SetIconTexture` 两个纯外观 setter）；**事件名官方未公开**（wiki `/wiki/lua/Events` = 404）
+    ⇒ 「切换追踪时哪条事件会来」**只能实测**（别抄 pfUI 的 `PLAYER_AURAS_CHANGED`，那是 TurtleWoW 的值）。
+  · 官方另两条硬事实（别再绕）：`GetPlayerBuff` **skip** hidden/tracking auras、Buff 页明文
+    「Tracking auras are **not** listed here」⇒ **光环路线只能当旁证**，不能当判据。
+  · **纹理 → 种类一律走 `EVAL_TRACK_BASE`（剥目录/扩展名/`_TEX`、转小写）+ 全等比对 `TRK.hint`**（13 条实证表）
+    —— **不许子串匹配**（`INV_Misc_Flower_02` 会假命中 `..._02_Copy`）；表逐条由 **`TRACK ICON CHECK`** 钉在
+    `doc/图标路径清单.txt` 上（本机图标清单里没有的图标 = 真机永远匹配不上）；名字备用路
+    `EVAL_TRACK_KIND_BY_NAME`（zhCN/enUS，认不出就 nil，**不猜**）。
+  · ★★**1.75.4 真机首轮读数的教训：报告必须「分三态」，否则就是误报** ——
+    ① 打「**类型 + 原文**」（`GetTrackingTexture` 返回非字符串时**不许**静默当「没追踪」）；
+    ② 名字路**独立于①**（why = `ok`/`empty`/`noguard`/`noapi` 四态，tooltip 两行原文一起打）；
+    ⑤ 增益条光环**连名字一起读**（`EVAL_PLAYER_BUFF_NAME`）；另加**第三条独立路** ⑩ 默认 UI 追踪按钮
+    （候选名 + 有界 `_G` 扫描 + ⑪ 一行快照）；`监听` 升级为 **`RegisterAllEvents` 全事件抓取**（关掉时**按次数升序**列出，
+    少的就是候选 —— 事件名官方没公开，猜 4 条不如全收）。
+    ★判据（当场踩到）：**`pcall` 的第一个返回是「成功标志」**，而 `RegisterAllEvents` 真机**不返回值** ⇒
+    一律按「**接口在不在** + **抛没抛错**」判，**绝不写** `pcall(f.RegisterAllEvents, f) and true or false`。
+  · ★★★**1.75.5 真机实测形态（本项目实测值，别再按 1.12 的形态想）**：`GetTrackingTexture()` 返回
+    `/Game/Interface/Icons/<Base>_TEX.<Base>_TEX`（**资产路径 _TEX + 「.」 + 对象名 _TEX**）⇒ `EVAL_TRACK_BASE`
+    取最后一段后**只认第一个「.」之前**（否则归一成 `x_tex.x` 永远命中不了候选表）。
+    真机三条路都通：① 纹理（`GetTrackingTexture`）· ② 本地化名字（`SetTrackingSpell`：读到「追踪野兽」+ 第二行「正在追踪野兽。」）·
+    ⑩ 默认 UI 追踪按钮 `MiniMapTrackingIcon`（Texture，纹理与①相同、`IsShown=true`；`MiniMapTrackingFrame`/`MiniMapTrackingBorder` 也在）。
+    ★**追踪不占增益条**（开了追踪时增益条里只有别的光环）⇒ 光环那条路只能当旁证；
+    ★**事件名仍未实测出**（监听输出没留下）⇒ 实时刷新**不必依赖事件**：1s 轮询纹理、**变了才读名字**（贵调用只在变化时做）。
+  · ★★★**1.75.6 落地成条件类型**（用户：「一键宏 → 技能编辑 → 条件类型 → 自身状态 → 追踪类型，下拉单选」）：
+    `SE_TYPES` 新增 `{ id = "tracking", kind = "track", s = "any" }`（**单选下拉**，值 = 候选表 id），归 **CTG_1「自身状态」**；
+    求值唯一入口 `EVAL_TRACK_MATCH(id)`（内部 `EVAL_TRACK_NOW()` **按纹理缓存** ⇒ 贵调用只在追踪变化时做一次），
+    分支在 `condOne`（`cd.v == false` = 反向「未追踪:X」）；文本 **导出走 id**（`追踪:beast` / `未追踪:beast`）、
+    **界面走本地化标签**；解析认 id / 基础名 / en / zh / 标签（认不出**整条丢弃**，不静默留半个条件）。
+    ★★两个当场踩到的坑：① **函数名以 `L` 结尾 + 字面量参数**（`EVAL_TRACK_LABEL("any")`）会被 `LANG KEY CHECK`
+    的正则当成语言键 `any`（它按 `L("KEY")` **子串**扫，不看前一个标识符）⇒ 改成走局部变量；
+    ② `EVAL_DD_OPEN` 的 `opts.selected` **只在 `multi = true` 时生效** ⇒ 单选下拉的「当前值」得自己加标记（金色圆点）。
+    闸门 = **组 229**（id/标签/清单 · 求值+缓存 · 文本往返 · 真实 condOne · 归组权重 · 真控件单选下拉）
+    ＋ `TRACK ICON CHECK`（候选表 4 列 + **17 个 TRK 语言键三语齐全**；查键前**必须先剥注释**，否则注释掉一个键照样算有 —— 变异 M3 实测）。
+  【取证】`/eh go 追踪探针`（读一次）·`监听`（事件实测）·`表`（13 条摊开）·`存档`（专属持久读数 `cfg.trkProbe`，不被 [DS] 冲掉）；断言 = **组 189**。
+
 ### 5.6 内容 / 数据质量
 - ★★★**两个助手的弹窗候选按物品类型过滤**（1.74.28）：判定收在共用件 `EVAL_IG_ITEM_KIND`（三级早停）；★**判不出就不剔**；★★**只在「弹窗候选」路径开**（按名解析包格那条路**绝不过滤** = 判错一类就静默找不到）；判据 = 组 187；细则见 R15 ⑥f。
 - ★★★**可驱散「负面类型」多选**（1.73.2；1.74.6 扩到自身/目标 debuff）：`cd.dt` 空集 = 任意；求值**一律走 `dispelMatch`**（名字对上但类型不符 = **没有**）；**名称留空 + 类型 = 「有任意该类型」**；**buff 行不许有类型格**；组 114/181；细则见 R15 ⑥i。
@@ -309,5 +395,4 @@
 ## 六、§六 ~ §九 已移到同目录的 `CLAUDE_REFERENCE.md`（参考卷）
 
 > ★**何时必须去读它**：项目位置/文件结构/新增模块/toc 顺序/工作流纪律 → §八；历史教训 / API 真伪 → §六；官方文档 / 待开发计划 / 开源仓库 → §七；某版本做了什么 → §九；判据踩坑全案 → 附录 R；各 CHECK 守什么 → 附录 R13。
-
 

@@ -29,11 +29,15 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.75.1"
+local VERSION = "1.75.2"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
 local say, logLine = EVAL_SAY, EVAL_LOGLINE
+-- ★★★1.75.8：**常开出口**（不受「调试日志」总闸门管）—— 只给两类行用：
+--   ① 日志开关自己的确认行（关掉后要让人看得到「怎么开回来」）；② 崩溃兜底红字。
+--   ★Core 没载入时退回门控版（EVAL_SAY），绝不变成 nil 调用。
+local fsay = EVAL_SAY_FORCE or say
 local L = EVAL_L
 local st = EVAL_HELP_STATE
 local uiOffscreen = EVAL_UIOFFSCREEN
@@ -1477,9 +1481,10 @@ local function cfgBuild()
   cfgWin.logRows = cfgWin.logRows or {}
   table.insert(cfgWin.logRows, { key = "G_LOG_FILE", y = LOG_Y_FILE })
   -- ★★★1.71.2（第四轮）用户要求：把方案列表的「方案技能日志」开关移到这里（日志分组内）。
-  --   它与上面「记录调试日志」**不是同一功能**（排查记录见开关组处）：
-  --     上面 = 总闸门（写不写日志）；本行 = 只把每次按键的决策原因同步刷到聊天框（说不说）。
-  --   ★位置紧跟「记录调试日志」下方：两者同属日志输出，放一起才好对照理解。
+  --   它与上面「调试日志」**不是同一功能**（排查记录见开关组处）：
+  --     上面 = 日志**总闸门**（★1.75.8 起**同时管「说不说话」**：关掉后整个插件不刷聊天框）；
+  --     本行 = 只把每次按键的**决策原因**同步刷到聊天框（更细的一层）。
+  --   ★位置紧跟上行：两者同属日志输出，放一起才好对照理解。
   -- ★★★注册到测试可见的行表 —— **必须直接用真实的读写器**，
   --   不能再手写一份：我第一版就是手写的（另写一个 get/set 包一层），
   --   结果把上面 cfgCheck 的字段改成 c().auto，**断言照样全绿**（本轮变异实测 SURVIVED）——
@@ -1897,14 +1902,16 @@ local function cfgBuild()
     function() return warCfg().attack ~= false end,
     function(v) warCfg().attack = v end, L("W_AUTOATK_TIP"))
   -- ★★★1.71.2（第四轮）用户要求：「将方案列表的调试信息开关移动到全局配置内的日志分组」。
-  --   排查结论（先查后动，本轮实测确认）：它与全局→日志的「记录调试日志」**不是同一个功能**，故**不合并**：
-  --     · 「记录调试日志」= cfg.log.on = **总闸门**，Core.logLine 开头就是 if not logEnabled() then return end
+  --   排查结论（先查后动，本轮实测确认）：它与全局→日志的「调试日志」**不是同一个功能**，故**不合并**：
+  --     · 「调试日志」= cfg.log.on = **总闸门**：Core.logLine 开头就是 if not logEnabled() then return end
   --       → 关掉后 EVAL_LOGLINE **一个字都不记**（数据层「写不写」）
+  --       ★1.75.8（用户要求）：**同一个判据**现在也门控 `say`/EVAL_SAY —— 关掉 = 整个插件不往聊天框说话；
+  --         例外只有走 EVAL_SAY_FORCE 的两类（日志开关自己的确认行 + 「引擎未加载完整」兜底）。
   --     · 本开关 = cfg.wdebug → 只控制 Engine 里那一批 if ... wdebug then EVAL_SAY(...) end
   --       → **日志照写**，只是不把决策原因同步刷到聊天框（输出层「说不说」）
   --   ★为什么原来放在「开关」组是错的：本组其余三项（启用一键宏/自动攻击/接收方案）都是**功能开关**，
   --     惟独它是**日志输出开关**，语义不属于这一组 → 移到「全局 → 日志」分组。
-  --   ★用户定名：**「方案技能日志」**（原名「调试日志」与「记录调试日志」几乎同名，
+  --   ★用户定名：**「方案技能日志」**（原名「调试日志」曾与总闸门「记录调试日志」几乎同名，
   --     并排显示时会被误认成重复项——本次排查正是由这个歧义引起的）。
   -- ★第 4 项：接收方案开关并入本组（用户要求）。
   --   它原来在 IO 窗的分享第二排；这里是**同一个开关的常驻入口**（读写同一个 cfg.share.recv，单一真值）。
@@ -4077,6 +4084,11 @@ local SE_TYPES = {
   { id = "shift",      name = "Shift按住",   kind = "bool" },
   { id = "ctrl",       name = "Ctrl按住",    kind = "bool" },
   { id = "form",       name = "当前姿态",    kind = "form" },
+  -- ★1.75.6 追踪类型（用户：「一键宏 → 技能编辑 → 条件类型 → 自身状态 → 添加一个追踪类型，下拉单选」）：
+  --   kind = "track" = **单选下拉**（值 = Engine 候选表 id：any/herb/mining/beast/…，语言无关）；
+  --   s = 默认值（any = 任意追踪）；配 是/否 = 正向（正在追踪 X）/ 反向（未追踪 X，含完全没在追踪）。
+  { id = "tracking",   name = "追踪类型",    kind = "track", s = "any" },
+
   { id = "hasBuff",    name = "自身buff检查",   kind = "skill", s = "" }, -- 1.54.0 合并（是/否切换）；1.70.0 去战士化：默认空需用户选（旧默认 战斗怒吼）
   { id = "pDebuff",    name = "自身debuff检查", kind = "skill", s = "" },          -- 1.54.0 新增
   { id = "hasDebuff",  name = "目标debuff检查", kind = "skill", s = "" },      -- 1.54.0 合并（是/否切换）；1.70.0 去战士化：默认空（旧默认 断筋）
@@ -4182,7 +4194,7 @@ function EVAL_TEST_SE_TYPE_INIT(id)
   return nil
 end
 local SE_TYPE_GROUPS = {
-  { label = "CTG_1", w = 1, cov = "A", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "swingLeft", "shotLeft", "combat", "autoAttack", "autoShot", "wandShoot", "alt", "shift", "ctrl", "form" } }, -- ★1.71.2（第十五轮）施法族（施法中/施法时间/施法剩余时间）已统一移入 CTG_4
+  { label = "CTG_1", w = 1, cov = "A", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "swingLeft", "shotLeft", "combat", "autoAttack", "autoShot", "wandShoot", "alt", "shift", "ctrl", "form", "tracking" } }, -- ★1.71.2（第十五轮）施法族（施法中/施法时间/施法剩余时间）已统一移入 CTG_4；★1.75.6 补 tracking（自身状态，用户指定）
   -- ★★★1.74.19 COND WEIGHT CHECK 当场抓到的漏网之鱼：`target`（「选取目标」，1.32.0 起 hidden、下拉不再提供）
   --   仍然在 SE_TYPES 里、**存量方案里还有**、求值也照跑 —— 它却不在任何分组里 ⇒
   --   新口径下会被按 **0 分**算、也不计覆盖（静默少算一截）。归到「目标状态」：它就是选目标那件事。
@@ -4265,6 +4277,9 @@ local function seDefaultCond(ti)
   elseif td.kind == "target" then return { k = td.id, s = td.s }
   elseif td.kind == "class" then return { k = td.id, cs = {} } -- 1.70.0 去战士化：旧默认预选 WARRIOR（非战士职业新建即错）
   elseif td.kind == "creature" then return { k = td.id, cs = {}, v = true } -- 1.70.28 目标类型：默认「是」+ 空选择（空=永不满足，需用户点选）
+  -- ★1.75.6 追踪类型：值 = 候选表 id（默认 any = 任意追踪），是/否 = 正向/反向
+  elseif td.kind == "track" then return { k = td.id, s = td.s or "any", v = true }
+
   else return { k = td.id } end
 end
 
@@ -5368,6 +5383,14 @@ function EVAL_HELP_SE_REFRESH()
         pcall(row.skillText.Show, row.skillText)
         row.immBtn.text:SetText((cd.v == false) and L("SE_NO") or L("SE_YES"))
         pcall(row.immBtn.btn.Show, row.immBtn.btn)
+      elseif td.kind == "track" then
+        -- ★1.75.6 追踪类型：显示选中项的**本地化标签**；点文字格 = 打开单选下拉；是/否 = 正向/反向
+        local tid = tostring(cd.s or "any")
+        row.skillText:SetText((type(EVAL_TRACK_LABEL) == "function") and EVAL_TRACK_LABEL(tid) or tid)
+        pcall(row.sHit.Show, row.sHit)
+        pcall(row.skillText.Show, row.skillText)
+        row.immBtn.text:SetText((cd.v == false) and L("SE_NO") or L("SE_YES"))
+        pcall(row.immBtn.btn.Show, row.immBtn.btn)
       end
       -- ★1.70.47 队伍debuff：类型下拉（魔法/诅咒/毒/疾病/任意）。
       --   显示名走 L("DS_T_*")，与 Engine 的 dispelMatch 共用同一套 id（Magic/Curse/…）。
@@ -5991,6 +6014,33 @@ local function SE_BUILD()
       local it = seUI.ed and seUI.ed.conds[i]
       if not it then return end
       local tdi = SE_TYPES[seTypeIndexOf(it.cd.k, it.cd.name)]
+      if tdi and tdi.kind == "track" then
+        -- ★1.75.6 追踪类型 = **单选**下拉：
+        --   第 1 行 = 此刻实际的追踪（locked，仅参考，点不动 —— 与「目标类型」那行「当前目标: X」同款做法）；
+        --   其后 = 任意追踪 + 候选表全部（顺序与文案的唯一来源 = EVAL_TRACK_LIST / EVAL_TRACK_LABEL）。
+        local liveTxt = L("TRK_NONE")
+        if type(EVAL_TRACK_NOW) == "function" then
+          local okn, now = pcall(EVAL_TRACK_NOW)
+          if okn and type(now) == "table" and now.on == true then
+            liveTxt = L("TRK_LIVE_FMT", tostring(EVAL_TRACK_LABEL(now.id or now.name or "?")))
+          end
+        end
+        local items, sel, lock = { liveTxt }, {}, { true }
+        local list = (type(EVAL_TRACK_LIST) == "function") and EVAL_TRACK_LIST() or {}
+        for _, e in ipairs(list) do
+          -- ★当前值加「金色圆点」前缀：EVAL_DD 的 selected 只在 multi 模式生效，单选列表得自己标
+          local lbl = e.label
+          if tostring(it.cd.s or "any") == e.id then lbl = "|cffffd100" .. string.char(226, 128, 162) .. "|r " .. lbl end
+          table.insert(items, lbl)
+        end
+        EVAL_DD_OPEN(row.sHit, items, function(pi)
+          if pi <= 1 then return end -- 首行是「当前」参考行（locked 已挡，这里再兜一层）
+          local e2 = list[pi - 1]
+          if e2 then it.cd.s = e2.id EVAL_HELP_SE_REFRESH() end
+        end, { selected = sel, locked = lock })
+        return
+      end
+
       if tdi and tdi.kind == "class" then
         -- 目标职业：多选下拉（或关系），点按切换 √ 不关面板（1.26.0）
         it.cd.cs = it.cd.cs or {}
@@ -6466,6 +6516,13 @@ function EVAL_TEST_SE_COND_K(i)
   local it = ed and ed.conds and ed.conds[i]
   return it and it.cd and it.cd.k or nil
 end
+-- ★1.75.6 读第 i 行条件的**参数值**（追踪类型读它；与 COND_K / COND_DT 同族：原样交出，不加工）
+function EVAL_TEST_SE_COND_S(i)
+  local ed = seUI and seUI.ed
+  local it = ed and ed.conds and ed.conds[i]
+  return it and it.cd and it.cd.s or nil
+end
+
 function EVAL_TEST_SE_SKILL() -- ★1.71.3 编辑器当前技能名（验「名字落值」用）
   return (seUI and seUI.ed and seUI.ed.skill) or nil
 end
@@ -8014,14 +8071,19 @@ if type(SlashCmdList) == "table" then
       local on = not (type(cfg.log) == "table" and cfg.log.on == false)
       cfg.log = type(cfg.log) == "table" and cfg.log or {}
       cfg.log.on = not on
-      say("日志记录: " .. ((not cfg.log.on) and "|cff00ff00开|r" or "|cffff0000关|r")
+      -- ★★★1.75.8（用户要求）：本开关 = **整个插件往聊天框说话的总闸门**（`say`/EVAL_SAY 跟它联动）
+      --   ⇒ 关掉那一刻的确认行**必须走常开出口**，否则「怎么开回来」无从得知（静默族事故）。
+      --   文案与配置项同名（「调试日志」）。
+      fsay("调试日志: " .. ((not cfg.log.on) and "|cff00ff00开|r" or "|cffff0000关|r")
         .. "（缓冲 " .. EVAL_LOG_COUNT() .. " 条；/eh logdump 查看 /eh logclear 清空）")
+      if not cfg.log.on then fsay("　（关掉后插件不再往聊天框说话；/eh log 可随时开回来）") end
     elseif msg == "logdump" or string.find(msg, "^logdump%s") then
       local n = EVAL_LOG_DUMP(tonumber(string.sub(msg, 9)))
-      if n == 0 then say("日志缓冲为空") else say("已打印 " .. n .. " 条日志（最新的在最后）") end
+      -- 命令自身的反馈也走常开出口（是用户明确要的东西）
+      if n == 0 then fsay("日志缓冲为空") else fsay("已打印 " .. n .. " 条日志（最新的在最后）") end
     elseif msg == "logclear" then
       EVAL_LOG_CLEAR()
-      say("日志缓冲已清空")
+      fsay("日志缓冲已清空")
     elseif msg == "auto" then
       cfg.auto = not cfg.auto
       say("进出战斗自动输出: " .. (cfg.auto and "|cff00ff00开|r" or "|cffff0000关|r"))
@@ -8302,7 +8364,8 @@ if type(SlashCmdList) == "table" then
       if type(EVAL_SHOT_PROBE) == "function" then EVAL_SHOT_PROBE(subS)
       else say("射击探针：引擎未载入（EVAL_SHOT_PROBE 不存在）") end
     elseif string.find(msg, "^go 追踪探针") or string.find(msg, "^go trackprobe") then
-      -- ★1.74.31 追踪取证（见 Engine.lua 的 EVAL_TRACK_PROBE 注释：本客户端只有 GetTrackingTexture / CancelTrackingBuff）
+      -- ★1.74.31 追踪取证；★1.75.2 补名字主路（GameTooltip:SetTrackingSpell）+ 事件监听
+      --   （见 Engine.lua 的 EVAL_TRACK_PROBE 注释：本客户端只有 GetTrackingTexture / SetTrackingSpell / CancelTrackingBuff）
       local subT = string.gsub(msg, "^go%s*", "")
       subT = string.gsub(subT, "^追踪探针%s*", "")
       subT = string.gsub(subT, "^trackprobe%s*", "")
@@ -9422,29 +9485,31 @@ if type(SlashCmdList) == "table" then
       end
     elseif msg == "wdebug" or msg == "debug" then
       cfg.wdebug = not cfg.wdebug
-      say("调试日志: " .. (cfg.wdebug and "|cff00ff00开|r" or "|cffff0000关|r"))
+      -- ★1.75.8：按用户定名改成「方案技能日志」（原名「调试日志」与总闸门同名 ⇒ 并排显示会被误认成重复项），
+      --   并走常开出口（它自己也是日志开关，确认行必须看得见）。
+      fsay("方案技能日志: " .. (cfg.wdebug and "|cff00ff00开|r" or "|cffff0000关|r"))
     elseif msg == "help" then
-      say("—— EVAL_HELP 全职业工具（通用一键宏） ——")
-      say("|cffffff00快速上手:|r ① 技能拖上动作条 ② /eh go rescan ③ 新建宏正文 /run EVAL_GO() 拖上按键连按")
-      say("|cffffff00命令:|r /eh 输出状态 | /eh log 写日志开关 | /eh auto 进出战斗自动输出")
-      say("/eh ui 战斗信息UI | /eh st 状态信息UI | /eh cfg 设置窗口（小地图旁 EH 图标同效）")
-      say("/eh go 一键宏状态 | /eh go rescan 重扫动作条 | /eh debug 调试日志（/eh war 旧命令仍兼容）")
-      say("/eh go probe 增益探针（逐条枚举自身 buff） | /eh go 光环 [名字] 光环定向探查 | /eh go diag 绑定链路一键取证（写盘，需 /reload）")
-      say("/eh go 停施法 1|2|3 停读法取证（本客户端停读条 API 只有 Protected 的 SpellStopCasting）")
-      say("方案命令：/eh go list 查看 | go add 技能 条件 | go del N | go newprof 名 | go prof N | go rename 新名 | go delprof N")
-      say("方案导入导出（md 文本复制粘贴）：/eh go io，内置案例模版按职业直接导入")
-      say("方案切换：Shift+按一键宏 | /eh go next | 战斗信息UI 方案按钮")
-      say("|cffffff00执行指定方案:|r 新建宏正文 /run EVAL_GO(参数) —— 不传或0=当前激活方案；方案号1~4 或 \"方案名\" = 只跑该方案（不切激活）")
-      say("　例：/run EVAL_GO(2) 跑2号方案 | /run EVAL_GO(\"测试\") 跑名为测试的方案 | /run EVAL_GO1()~GO4() 同效快捷写法；不同方案各绑一个按键即可多套输出")
-      say("|cffffff00提示:|r 猛击需按住 Alt 按宏键；宏入口 /run EVAL_HELP() 输出状态日志")
-      say("|cffffff00异常自救:|r 技能不识别/界面异常/刚更新过插件 → 先 /reload 重载（配置已存盘不会丢）；重扫动作条 /eh go rescan")
-      say("|cffffff00问题反馈:|r https://gitee.com/xeval/emberveil_eval_help.git —— 插件持续优化中，欢迎测试并留下宝贵意见")
-      say("调试日志: /eh logdump 查看（存 SavedVariables，随 /reload 落盘）| /eh log 开关 | /eh logclear 清空")
-      say("图标路径采集: /eh go icons —— 把客户端宏图标表全表路径写入存档（/reload 后落盘）")
-      say("任务线 & 装备诊断: /eh ds | /eh ds hud 地图诊断浮层(推荐) | /eh ds snap 一键快照 | /eh ds rnd 随机点测试 + rndstat 统计 | /eh ds trace 轨迹日志 | /eh ds probe 详情行几何")
-      say("地图标注: 一个「地图标注(N)」按钮即可——点开勾选类别（=开关）；/eh ds cat <类别> on|off 命令行等价 | /eh ds clear 清空")
-      say("稀有提醒转播: /eh go 稀有（状态）｜ 稀有 开 ｜ 稀有 关 ｜ 稀有 试 ｜ 稀有 目标 ｜ 稀有 目标探针 ｜ 稀有 链接")
-      say("　任务插件发现稀有的那一刻在聊天框报一行（名字按品阶染色 + 品阶 + 码数）；**点名字 = 选中它**（选不中如实报错）")
+      fsay("—— EVAL_HELP 全职业工具（通用一键宏） ——")
+      fsay("|cffffff00快速上手:|r ① 技能拖上动作条 ② /eh go rescan ③ 新建宏正文 /run EVAL_GO() 拖上按键连按")
+      fsay("|cffffff00命令:|r /eh 输出状态 | /eh log 写日志开关 | /eh auto 进出战斗自动输出")
+      fsay("/eh ui 战斗信息UI | /eh st 状态信息UI | /eh cfg 设置窗口（小地图旁 EH 图标同效）")
+      fsay("/eh go 一键宏状态 | /eh go rescan 重扫动作条 | /eh debug 方案技能日志（/eh war 旧命令仍兼容）")
+      fsay("/eh go probe 增益探针（逐条枚举自身 buff） | /eh go 光环 [名字] 光环定向探查 | /eh go diag 绑定链路一键取证（写盘，需 /reload）")
+      fsay("/eh go 停施法 1|2|3 停读法取证（本客户端停读条 API 只有 Protected 的 SpellStopCasting）")
+      fsay("方案命令：/eh go list 查看 | go add 技能 条件 | go del N | go newprof 名 | go prof N | go rename 新名 | go delprof N")
+      fsay("方案导入导出（md 文本复制粘贴）：/eh go io，内置案例模版按职业直接导入")
+      fsay("方案切换：Shift+按一键宏 | /eh go next | 战斗信息UI 方案按钮")
+      fsay("|cffffff00执行指定方案:|r 新建宏正文 /run EVAL_GO(参数) —— 不传或0=当前激活方案；方案号1~4 或 \"方案名\" = 只跑该方案（不切激活）")
+      fsay("　例：/run EVAL_GO(2) 跑2号方案 | /run EVAL_GO(\"测试\") 跑名为测试的方案 | /run EVAL_GO1()~GO4() 同效快捷写法；不同方案各绑一个按键即可多套输出")
+      fsay("|cffffff00提示:|r 猛击需按住 Alt 按宏键；宏入口 /run EVAL_HELP() 输出状态日志")
+      fsay("|cffffff00异常自救:|r 技能不识别/界面异常/刚更新过插件 → 先 /reload 重载（配置已存盘不会丢）；重扫动作条 /eh go rescan")
+      fsay("|cffffff00问题反馈:|r https://gitee.com/xeval/emberveil_eval_help.git —— 插件持续优化中，欢迎测试并留下宝贵意见")
+      fsay("调试日志（★总闸门: 关掉后整个插件不往聊天框说话）: /eh log 开关 | /eh logdump 查看 | /eh logclear 清空")
+      fsay("图标路径采集: /eh go icons —— 把客户端宏图标表全表路径写入存档（/reload 后落盘）")
+      fsay("任务线 & 装备诊断: /eh ds | /eh ds hud 地图诊断浮层(推荐) | /eh ds snap 一键快照 | /eh ds rnd 随机点测试 + rndstat 统计 | /eh ds trace 轨迹日志 | /eh ds probe 详情行几何")
+      fsay("地图标注: 一个「地图标注(N)」按钮即可——点开勾选类别（=开关）；/eh ds cat <类别> on|off 命令行等价 | /eh ds clear 清空")
+      fsay("稀有提醒转播: /eh go 稀有（状态）｜ 稀有 开 ｜ 稀有 关 ｜ 稀有 试 ｜ 稀有 目标 ｜ 稀有 目标探针 ｜ 稀有 链接")
+      fsay("　任务插件发现稀有的那一刻在聊天框报一行（名字按品阶染色 + 品阶 + 码数）；**点名字 = 选中它**（选不中如实报错）")
     else
       EVAL_HELP()
     end

@@ -168,6 +168,9 @@ do
     t.GetPoint = function() return "TOPLEFT", FR, "TOPLEFT", t.x, t.y end
     t.GetWidth = function() return t.w end
     t.GetHeight = function() return t.h end
+    -- ★1.75.9：屏幕几何（`smFitDetect` 探测用）；给**常量** = 「不会级联」模型 ⇒ 结论「需要我们折算」。
+    t.GetLeft = function() return t.x end
+    t.GetTop = function() return t.y end
     t.ClearAllPoints = function() t.nclear = t.nclear + 1 end
     t.SetPoint = function(_, p, rel, rp, nx, ny) t.np = t.np + 1 t.x = nx t.y = ny return true end
     t.SetWidth = function(_, v) t.nw = t.nw + 1 t.w = v return true end
@@ -182,6 +185,15 @@ do
   for _, t in ipairs(tiles) do table.insert(FR.regs, t) end
   table.insert(FR.regs, ovA) table.insert(FR.regs, ovB)
   rawset(_G, "WorldMapDetailFrame", FR)
+  -- ★1.75.9：探测要读外框的 GetScale/SetScale ⇒ 给一个最小假帧（本组是「不会级联」模型）
+  local savedWm226 = rawget(_G, "WorldMapFrame")
+  local sc226 = 1
+  local WMF226 = {}
+  WMF226.GetScale = function() return sc226 end
+  WMF226.SetScale = function(_, v) sc226 = tonumber(v) or sc226 return true end
+  WMF226.GetAlpha = function() return 1 end
+  WMF226.SetAlpha = function() return true end
+  rawset(_G, "WorldMapFrame", WMF226)
   pcall(EVAL_SM_TEST_MAPFIT_RESET)
 
   -- ① 前置：读值口/写口全部在位（缺一个 ⇒ 后面的断言会静默跳过）
@@ -219,10 +231,13 @@ do
   eq(EVAL_SM_TEST_MAPFIT_TARGETS(), 2, "⑤★目标 = 非瓦片纹理 2 个（12 张底瓦片被跳过）")
 
   -- ⑥ 应用 = 偏移与宽高 **×es**（真机定案的方向，反了就是错的）；底瓦片一个几何调用都不许发
+  -- ★1.75.9：折算的**前提** = 探测判定「需要我们折算」，**原值** = 在自然档抓（apply 自己不再记原值）。
+  eq(EVAL_SM_TEST_MAPFIT_PREPARE(), true, "⑥前置：探测判定「不会级联」⇒ 需要我们折算")
+  eq(EVAL_SM_TEST_MAPFIT_NEEDFOLD(), true, "⑥前置：needFold = true（tick 只在此时才动手）")
+  eq(EVAL_SM_TEST_MAPFIT_ORIG(), 2, "⑥原值在**自然档**抓了 2 条，进了存档子树 SM_CFG.mapFitOrig（/reload 后还原靠它）")
   local c1, r1, rec1 = EVAL_SM_TEST_MAPFIT_APPLY(0.7)
   eq(c1 == 2, true, "⑥两张叠加层都被折算（实测 " .. tostring(c1) .. "）")
-  eq(rec1 == 2, true, "⑥首次应用记下 2 条原值（还原的唯一依据）")
-  eq(EVAL_SM_TEST_MAPFIT_ORIG(), 2, "⑥原值进了存档子树 SM_CFG.mapFitOrig（/reload 后还原靠它）")
+  eq(rec1 == 0, true, "⑥★apply **不再记原值**（`rec` 现在是「等原值」计数；实测 " .. tostring(rec1) .. "）")
   eq(math.abs(ovA.x - 355 * 0.7) < 0.01 and math.abs(ovA.y - (-320) * 0.7) < 0.01, true,
     string.format("⑥★偏移 ×es（实测 %.1f,%.1f，期望 %.1f,%.1f）", ovA.x, ovA.y, 355 * 0.7, -320 * 0.7))
   eq(math.abs(ovA.w - 215 * 0.7) < 0.01 and math.abs(ovA.h - 215 * 0.7) < 0.01, true, "⑥★宽高也 ×es")
@@ -255,6 +270,7 @@ do
   pcall(EVAL_SM_TEST_MAPFIT_RESET)
   eq(EVAL_SM_MAPFIT_ON(), true, "⑩清掉真值（nil）⇒ 回到默认开")
   rawset(_G, "WorldMapDetailFrame", savedFr)
+  rawset(_G, "WorldMapFrame", savedWm226) -- ★1.75.9：探测用的假外框也还原
 
   print(string.format("  叠加层适配：默认开（nil⇒开）· 节奏 0.1/2.0/0.3 · 过渡进爆发期 · 目标 2（跳过 12 张底瓦片）· ×es 折算 %d 个 · 幂等 0 改动 · es=1 自动还原 %d 个",
     c1, c3))
@@ -337,4 +353,361 @@ do
   print("GROUP 226 (缩放大地图·开启即套默认档：★用户定 0.7缩放/0.7透明度/**不启用GUI** · 写配置+应用+刷面板三步齐全 · 关掉仍复位 1/1 · 不碰叠加层适配): PASS")
 end
 
+-- ===== 组 230（1.75.7）：「缩放大地图」**未开启**时，模块不许再监听探索层的缩放（用户排查）=====
+-- 用户原话：「排查缩放大地图功能.在未开启的情况下会不会监听探索层的缩放操作」
+-- ★修前实测（本组就是它的永久化）：模块关闭 + 点 10 拍 tick ⇒ 叠加层被写 **8 次**、355/-320/215×215 被折成
+--   248.5/-224/150.5×150.5（×0.7）、还记下 2 条原值。根因：① tick 是**载入期无条件建**的；
+--   ② ④ 只看 mapFit（**默认开**）、③「开图保持」压根没看总开关。
+-- 本组钉住四条：① 关闭 ⇒ **连读都不读**（IsShown / GetEffectiveScale 各 0 次 = 不再监听）；
+--   ② 关闭 ⇒ 几何**零调用**（关掉零动作）；③ 开启 ⇒ 照常监听并折算（反向哨兵：别把功能关死）；
+--   ④ 关闭那一刻把之前折过的几何**当场还原**（旧设计把还原寄托在常驻 tick 上，代价就是关掉照跑）。
+do
+  local savedFr230 = rawget(_G, "WorldMapDetailFrame")
+  local savedWm230 = rawget(_G, "WorldMapFrame")
+  local cfg230 = rawget(_G, "EVAL_HELP_CONFIG")
+  local savedTb230 = cfg230.tb
+  -- 假地图画布：**每一次读都记账**（IsShown / 父链 GetScale）——「有没有在监听」就靠这两个计数说话
+  -- ★1.75.9：折算系数改走**父链连乘**（自身 1.00 × 外框 0.70 = 0.70），所以计数对象从会滞后的
+  --   `GetEffectiveScale` 换成了 `GetScale`；`GetEffectiveScale` 只留一个不计数的兼容桩。
+  local FR230 = { regs = {}, nShown = 0, nEs = 0 }
+  FR230.GetName = function() return "WorldMapDetailFrame" end
+  FR230.IsShown = function() FR230.nShown = FR230.nShown + 1 return true end
+  FR230.GetScale = function() FR230.nEs = FR230.nEs + 1 return 1 end
+  FR230.GetParent = function() return rawget(_G, "WorldMapFrame") end
+  FR230.GetEffectiveScale = function() return 0.7 end
+  local function mkTex230(nm, x, y, w, h)
+    local t = { nm = nm, x = x, y = y, w = w, h = h, np = 0, nclear = 0, nw = 0, nh = 0 }
+    t.GetObjectType = function() return "Texture" end
+    t.GetName = function() return t.nm end
+    t.GetPoint = function() return "TOPLEFT", FR230, "TOPLEFT", t.x, t.y end
+    t.GetWidth = function() return t.w end
+    t.GetHeight = function() return t.h end
+    -- ★1.75.9：屏幕几何（探测用）。本夹具给**常量**（不随外框缩放走）= 「不会级联」模型。
+    t.GetLeft = function() return t.x end
+    t.GetTop = function() return t.y end
+    t.ClearAllPoints = function() t.nclear = t.nclear + 1 end
+    t.SetPoint = function(_, p, rel, rp, nx, ny) t.np = t.np + 1 t.x = nx t.y = ny return true end
+    t.SetWidth = function(_, v) t.nw = t.nw + 1 t.w = v return true end
+    t.SetHeight = function(_, v) t.nh = t.nh + 1 t.h = v return true end
+    return t
+  end
+  local ovA230 = mkTex230("WorldMapOverlay1", 355, -320, 215, 215)
+  local ovB230 = mkTex230("WorldMapHighlight", 10, -20, 40, 40)
+  FR230.regs = { ovA230, ovB230 }
+  FR230.GetRegions = function() return FR230.regs[1], FR230.regs[2] end
+  rawset(_G, "WorldMapDetailFrame", FR230)
+  -- ★1.75.9：探测（`smFitDetect`）要读外框的 GetScale/SetScale ⇒ 给一个最小假帧。
+  --   ★本夹具的纹理屏幕几何**不随外框缩放变**（= 「不会级联」模型）⇒ 探测结论 = **需要我们折算**，
+  --     与 1.74.34-18b 那套老口径一致；「会级联」模型见组 232。
+  local sc230 = 0.7
+  local WMF230 = {}
+  WMF230.GetScale = function() return sc230 end
+  WMF230.SetScale = function(_, v) sc230 = tonumber(v) or sc230 return true end
+  WMF230.GetAlpha = function() return 1 end
+  WMF230.SetAlpha = function() return true end
+  rawset(_G, "WorldMapFrame", WMF230)
+  local function geomCalls230()
+    return ovA230.np + ovA230.nclear + ovA230.nw + ovA230.nh + ovB230.np + ovB230.nclear + ovB230.nw + ovB230.nh
+  end
+  local tickF230 = rawget(_G, "EH_SM_FEAT")
+  eq(type(tickF230) == "table" or type(tickF230) == "userdata", true, "组230①前置：tick 帧存在（具名 EH_SM_FEAT —— 没有它这一组就是空转）")
+  eq(type(EVAL_TEST_FIRE_UPDATE) == "function", true, "组230①前置：EVAL_TEST_FIRE_UPDATE 在位（走真机 OnUpdate 通道）")
+
+  -- ① 关闭：连读都不许读（IsShown / GetEffectiveScale = 「监听探索层」的两条实锤）
+  cfg230.tb = { simpleMap = false }
+  pcall(EVAL_SM_TEST_MAPFIT_RESET)
+  FR230.nShown, FR230.nEs = 0, 0
+  local fired230 = 0
+  for _ = 1, 10 do if EVAL_TEST_FIRE_UPDATE(tickF230, 0.05) then fired230 = fired230 + 1 end end
+  eq(fired230, 10, "组230①前置：tick 真的跑了 10 次（0.5s；实测 " .. tostring(fired230) .. "）")
+  eq(FR230.nShown, 0, "组230①★★★未开启 ⇒ **不读地图开没开**（IsShown 0 次，实测 " .. tostring(FR230.nShown) .. "）")
+  eq(FR230.nEs, 0, "组230①★★★未开启 ⇒ **不读探索层的缩放**（父链 GetScale 0 次 = 不再监听，实测 " .. tostring(FR230.nEs) .. "）")
+  eq(geomCalls230(), 0, "组230②★★★未开启 ⇒ 几何**零调用**（实测 " .. tostring(geomCalls230()) .. "）")
+  eq(EVAL_SM_TEST_MAPFIT_ORIG(), 0, "组230②★★未开启 ⇒ 一条原值都不许记（实测 " .. tostring(EVAL_SM_TEST_MAPFIT_ORIG()) .. "）")
+  eq(math.abs(ovA230.x - 355) < 0.01 and math.abs(ovA230.w - 215) < 0.01, true, "组230②★几何保持原状（没被动过）")
+
+  -- ③ 反向哨兵：开启 ⇒ 照常监听并折算（别把功能关死）
+  cfg230.tb = { simpleMap = true }
+  pcall(EVAL_SM_TEST_MAPFIT_RESET)
+  pcall(EVAL_SM_SET, true)   -- ★1.75.9：开一次 ⇒ 走 smFitPrepare（探测 + 自然档抓原值）
+  eq(EVAL_SM_TEST_MAPFIT_NEEDFOLD(), true, "组230③★探测结论 = 本夹具「不会级联」⇒ **需要我们折算**（这才是折算的前提）")
+  FR230.nShown, FR230.nEs = 0, 0
+  for _ = 1, 10 do EVAL_TEST_FIRE_UPDATE(tickF230, 0.05) end
+  eq(FR230.nEs > 0, true, "组230③★★反向哨兵：开启 ⇒ **在读**探索层缩放（父链 GetScale " .. tostring(FR230.nEs) .. " 次）")
+  eq(geomCalls230() > 0, true, "组230③★★反向哨兵：开启 ⇒ 几何被折算（实测 " .. tostring(geomCalls230()) .. " 次调用）")
+  eq(math.abs(ovA230.x - 355 * 0.7) < 0.01, true,
+    string.format("组230③★方向仍是 ×es（实测 %.1f，期望 %.1f）", ovA230.x, 355 * 0.7))
+
+  -- ④ 关闭那一刻**当场还原**（旧设计靠常驻 tick 兜还原 ⇒ 代价是关掉照折）
+  local nR230 = 0
+  pcall(function() local a = select(1, EVAL_SM_TEST_MAPFIT_RESTORE()) nR230 = tonumber(a) or 0 end)
+  local okSet230 = pcall(EVAL_SM_SET, false)
+  eq(okSet230, true, "组230④前置：EVAL_SM_SET(false) 走得通")
+  eq(EVAL_SM_ENABLED(), false, "组230④主开关真值 = 关")
+  eq(math.abs(ovA230.x - 355) < 0.01 and math.abs(ovA230.y + 320) < 0.01, true,
+    string.format("组230④★★★关闭后几何**回到原值**（实测 %.1f,%.1f）", ovA230.x, ovA230.y))
+  eq(math.abs(ovA230.w - 215) < 0.01 and math.abs(ovB230.x - 10) < 0.01, true, "组230④★两个叠加层都还原（宽高与第二个一起核）")
+  -- 关闭之后再来 10 拍：仍然一个调用都不许发（还原完就彻底安静）
+  FR230.nShown, FR230.nEs = 0, 0
+  local g0 = geomCalls230()
+  for _ = 1, 10 do EVAL_TEST_FIRE_UPDATE(tickF230, 0.05) end
+  eq(FR230.nShown + FR230.nEs, 0, "组230④★★关闭后依旧不读（IsShown+es 合计 0，实测 " .. tostring(FR230.nShown + FR230.nEs) .. "）")
+  eq(geomCalls230() - g0, 0, "组230④★★关闭后依旧零动作（实测多出 " .. tostring(geomCalls230() - g0) .. " 次）")
+
+  -- 夹具自清
+  rawset(_G, "WorldMapDetailFrame", savedFr230)
+  rawset(_G, "WorldMapFrame", savedWm230)
+  cfg230.tb = savedTb230
+  pcall(EVAL_SM_TEST_MAPFIT_RESET)
+  -- ⑤ ★★★1.75.7 用户要求：「未开启地图缩放功能不需要进行任务纹理的操作」——连**关闭那一刻**也不许碰：
+  --   **从未启用过**（FEAT.applied=false 且没有原值记录）⇒ 一个地图纹理/帧操作都不发。
+  local WM230 = { nA = 0, nS = 0, nK = 0, nClear = 0, nPt = 0, sc = 1 }
+  WM230.SetAlpha = function(_, v) WM230.nA = WM230.nA + 1 return true end
+  -- ★★★1.75.9：缩放**必须是有状态的假帧** —— `featApplyScale` 现在会「读回自证、同档不重写」，
+  --   常量型 GetScale 会让「关闭时写回 1」这条被当成重复写而跳过（断言随之假红）。
+  WM230.SetScale = function(_, v) WM230.nS = WM230.nS + 1 WM230.sc = tonumber(v) or WM230.sc return true end
+  WM230.GetAlpha = function() return 1 end
+  WM230.GetScale = function() return WM230.sc end
+  WM230.EnableKeyboard = function(_, v) WM230.nK = WM230.nK + 1 return true end
+  WM230.ClearAllPoints = function() WM230.nClear = WM230.nClear + 1 end
+  WM230.SetPoint = function() WM230.nPt = WM230.nPt + 1 return true end
+  rawset(_G, "WorldMapFrame", WM230)
+  local sA230, sS230, sG230 = EH_SIMPLEMAP_CFG.alpha, EH_SIMPLEMAP_CFG.scale, EH_SIMPLEMAP_CFG.guiReopen
+  cfg230.tb = { simpleMap = false }
+  pcall(EVAL_SM_TEST_MAPFIT_RESET) -- 清掉原值记录（= 从没动过）
+  local g0b = geomCalls230()
+  TEST.chat = nil
+  EVAL_SM_SET(false)
+  local wmCalls = WM230.nA + WM230.nS + WM230.nK + WM230.nClear + WM230.nPt
+  eq(wmCalls, 0, "组230⑤★★★从未启用过 ⇒ 关闭路径**一个地图纹理/帧操作都不发**（实测 " .. tostring(wmCalls) .. " 次）")
+  eq(geomCalls230() - g0b, 0, "组230⑤★★从未启用过 ⇒ 叠加层同样零调用")
+  eq(string.find(tostring(TEST.chat or ""), "没动过任何地图纹理", 1, true) ~= nil, true, "组230⑤★如实播报「本就没启用过 ⇒ 没动过任何地图纹理」")
+  -- ⑥ 反向哨兵：**开启过** ⇒ 关闭那一刻必须真的复位（别把 ⑤ 的闸门做成「关了就什么都不做」）
+  cfg230.tb = { simpleMap = true }
+  EVAL_SM_SET(true)
+  local afterA, afterS = WM230.nA, WM230.nS
+  eq(afterA > 0 and afterS > 0, true,
+    "组230⑥★开启 ⇒ 立刻把默认档**写进地图帧**（SetAlpha " .. tostring(afterA) .. " / SetScale " .. tostring(afterS) .. "）")
+  TEST.chat = nil
+  EVAL_SM_SET(false)
+  -- ★分开数：226 读的是**配置真值**（把 alpha 写回 1 就算过），这里数的是**真的写到帧上**
+  --   ⇒ 「只改配置不碰帧」这种回归只有本组抓得住。
+  eq(WM230.nA > afterA, true, "组230⑥★★开启过 ⇒ 关闭时**真的把透明度写回地图帧**（SetAlpha +" .. tostring(WM230.nA - afterA) .. "）")
+  eq(WM230.nS > afterS, true, "组230⑥★★同样把缩放写回地图帧（SetScale +" .. tostring(WM230.nS - afterS) .. "）")
+  eq(string.find(tostring(TEST.chat or ""), "已复位", 1, true) ~= nil, true, "组230⑥★如实播报已复位（与 ⑤ 的另一种话术区分开）")
+  EH_SIMPLEMAP_CFG.alpha, EH_SIMPLEMAP_CFG.scale, EH_SIMPLEMAP_CFG.guiReopen = sA230, sS230, sG230
+  cfg230.tb = savedTb230
+  pcall(EVAL_SM_TEST_MAPFIT_RESET)
+  print("  关闭态：IsShown/es 读取 0 次 · 几何 0 次 · 原值 0 条（修前 = 8 次几何写入 + 2 条原值）")
+  print("GROUP 230 (缩放大地图·未开启时不再监听探索层缩放：读 0 次/几何 0 次/关闭即还原 · 开启仍照常工作): PASS")
+end
+
+
+-- ===== 组 232（1.75.9）：「探索层纹理缩两遍 / 正常开启不生效」全案 =====
+-- 用户原话：「我说的纹理缩放是 WordMapDetailFrame 下面 12 之后的纹理缩放逻辑」→「未开启插件载入..的情况下打开大地图缩放,
+--   和开着载入之后关闭又打开, 这两种情况都会发生.纹理渲染层被缩放两次」→「在开启/关闭要做好事件清理」
+--   →「现在正常开启都无法生效缩放修正」（= 把默认档改成「听探测」引起的回归）。
+-- ★两种客户端模型必须分开断言（本组最重要的方法论）：
+--   · **会级联**（真机：几何读回 = 逻辑×es）⇒ 正确行为 = **显示 = 原值×es，且一个逻辑写都不发**
+--     （我们算出的目标与读回值相等 ⇒ 幂等判据直接跳过；旧版的「连乘」来自把已缩值当原值重记）；
+--   · **不会级联**（老探针模型：读回 = 逻辑）⇒ 正确行为 = 按 es **折一次**（逻辑值 355 → 248.5）。
+--   ★把「逻辑值」直接与 355×0.7 比是**测错了模型**（级联侧永远 355 而显示已经对了）。
+do
+  local fails0 = TESTASSERT_FAILS
+  local savedFr = rawget(_G, "WorldMapDetailFrame")
+  local savedWm = rawget(_G, "WorldMapFrame")
+  local savedEsc = rawget(_G, "UISpecialFrames")
+  local cfg = rawget(_G, "EVAL_HELP_CONFIG")
+  local savedTb = cfg.tb
+  local tick = rawget(_G, "EH_SM_FEAT")
+  local function ticks(n) for _ = 1, n do EVAL_TEST_FIRE_UPDATE(tick, 0.05) end end
+  local function build(cascade)
+    local st = { sc = 1, geom = 0 }
+    local W = {}
+    W.GetScale = function() return st.sc end
+    W.SetScale = function(_, v) st.sc = tonumber(v) or st.sc return true end
+    W.GetAlpha = function() return 1 end
+    W.SetAlpha = function() return true end
+    W.ClearAllPoints = function() return true end
+    W.SetPoint = function() return true end
+    W.GetEffectiveScale = function() return st.sc end
+    local FR = {}
+    FR.IsShown = function() return true end
+    -- ★1.75.9：折算系数走**父链连乘**（自身 1.00 × 外框 st.sc）⇒ 夹具必须给出这条层级，
+    --   否则连乘恒为 1（等于不折算），「照旧折算一次」那类断言会假红。
+    FR.GetScale = function() return 1 end
+    FR.GetParent = function() return W end
+    FR.GetEffectiveScale = function() return st.sc end
+    local function mk(nm, x, y, w, h)
+      local t = { nm = nm, x = x, y = y, w = w, h = h }
+      t.GetObjectType = function() return "Texture" end
+      t.GetName = function() return t.nm end
+      if cascade then
+        t.GetPoint = function() return "TOPLEFT", FR, "TOPLEFT", t.x * st.sc, t.y * st.sc end
+        t.GetWidth = function() return t.w * st.sc end
+        t.GetHeight = function() return t.h * st.sc end
+        t.GetLeft = function() return t.x * st.sc end
+        t.GetTop = function() return t.y * st.sc end
+      else
+        t.GetPoint = function() return "TOPLEFT", FR, "TOPLEFT", t.x, t.y end
+        t.GetWidth = function() return t.w end
+        t.GetHeight = function() return t.h end
+        t.GetLeft = function() return t.x end
+        t.GetTop = function() return t.y end
+      end
+      t.ClearAllPoints = function() st.geom = st.geom + 1 end
+      t.SetPoint = function(_, p, rel, rp, nx, ny) st.geom = st.geom + 1 t.x = nx t.y = ny return true end
+      t.SetWidth = function(_, v) st.geom = st.geom + 1 t.w = v return true end
+      t.SetHeight = function(_, v) st.geom = st.geom + 1 t.h = v return true end
+      return t
+    end
+    local A = mk("WorldMapOverlay1", 355, -320, 215, 215)
+    FR.GetRegions = function() return A end
+    rawset(_G, "WorldMapDetailFrame", FR)
+    rawset(_G, "WorldMapFrame", W)
+    return A, st
+  end
+  local function openWith(cascade, mode)
+    local A, st = build(cascade)
+    cfg.tb = { simpleMap = false }
+    pcall(EVAL_SM_TEST_MAPFIT_RESET)
+    if mode then EH_SIMPLEMAP_CFG.mapFitMode = mode end
+    cfg.tb = { simpleMap = true }
+    pcall(EVAL_SM_SET, true)
+    return A, st
+  end
+  local function closeAndReopen(mode)
+    pcall(EVAL_SM_SET, false)
+    if mode then EH_SIMPLEMAP_CFG.mapFitMode = mode end
+    cfg.tb = { simpleMap = true }
+    pcall(EVAL_SM_SET, true)
+    ticks(10)
+  end
+  -- ① 默认档 = fold（用户实测：改成「听探测」⇒ 正常开启完全不生效）
+  local A1, st1 = openWith(true)
+  local n1 = st1.geom
+  ticks(10)
+  eq(EVAL_SM_MAPFIT_MODE(), "fold", "①★★默认策略 = fold（保住「开启即生效」）")
+  eq(EVAL_SM_TEST_MAPFIT_NEEDFOLD(), false, "①★探测仍如实报「本客户端会自动级联」（结论只进提示/取证）")
+  eq(math.abs(A1.x * st1.sc - 355 * 0.7) < 0.01, true,
+     "①★★★级联客户端：**显示 = 原值×es**（实测 " .. tostring(A1.x * st1.sc) .. "，期望 " .. tostring(355 * 0.7) .. "）")
+  eq(st1.geom - n1, 0, "①★★★级联客户端：**一个逻辑写都不发**（读回已含缩放 ⇒ 与目标相等 ⇒ 幂等跳过；实测 " .. tostring(st1.geom - n1) .. " 次）")
+  closeAndReopen()
+  eq(math.abs(A1.x * st1.sc - 355 * 0.7) < 0.01, true, "①★★★关一次再开：显示仍是原值×es（旧版把已缩值重记成原值 ⇒ 连乘）")
+  eq(st1.geom - n1, 0, "①★★关→开也没有任何逻辑写（实测 " .. tostring(st1.geom - n1) .. " 次）")
+  -- ② 不级联客户端（老探针模型）：默认档必须**真的折一次**（= 用户要的「生效」）
+  local A2, st2 = openWith(false)
+  local n2 = st2.geom
+  ticks(10)
+  eq(math.abs(A2.x - 355 * 0.7) < 0.01, true,
+     "②★★★不级联客户端：照旧折算一次（逻辑值 实测 " .. tostring(A2.x) .. "，期望 " .. tostring(355 * 0.7) .. "）")
+  eq(st2.geom - n2 > 0, true, "②★★确实写了几何（实测 " .. tostring(st2.geom - n2) .. " 次）")
+  closeAndReopen()
+  eq(math.abs(A2.x - 355 * 0.7) < 0.01, true,
+     "②★★★关一次再开仍是原值×es（实测 " .. tostring(A2.x) .. "；旧版连乘成 " .. tostring(355 * 0.7 * 0.7) .. "）")
+  -- ③ 策略 nofold：一个几何都不碰（不级联客户端上最明显：逻辑值保持 355）
+  local A3, st3 = openWith(false, "nofold")
+  local n3 = st3.geom
+  ticks(10)
+  eq(EVAL_SM_MAPFIT_MODE(), "nofold", "③★策略切到 nofold")
+  eq(st3.geom - n3, 0, "③★★nofold ⇒ 零几何调用（实测 " .. tostring(st3.geom - n3) .. " 次）")
+  eq(math.abs(A3.x - 355) < 0.01, true, "③★几何保持原样（该模式下就是要这个）")
+  -- ④ 策略 auto = 听探测：不级联 ⇒ 折；级联 ⇒ 不折（两条腿都验，别把 auto 做成「永远不折」）
+  local A4 = openWith(false, "auto")
+  ticks(10)
+  eq(EVAL_SM_MAPFIT_MODE(), "auto", "④★策略切到 auto")
+  eq(EVAL_SM_TEST_MAPFIT_NEEDFOLD(), true, "④★auto + 不级联 ⇒ 探测判定需要折算")
+  eq(math.abs(A4.x - 355 * 0.7) < 0.01, true, "④★★auto 在不级联客户端上照旧折算（实测 " .. tostring(A4.x) .. "）")
+  local A4b, st4b = openWith(true, "auto")
+  local n4b = st4b.geom
+  ticks(10)
+  eq(st4b.geom - n4b, 0, "④b★★auto + 会级联 ⇒ 零几何调用（实测 " .. tostring(st4b.geom - n4b) .. " 次）")
+  eq(math.abs(A4b.x * st4b.sc - 355 * 0.7) < 0.01, true, "④b★显示仍是原值×es")
+  -- ⑤ 原值只在**自然档**抓（宽 215 而不是已缩过的 150.5）+ 记录键 = 纹理名
+  --   ★用**会折算**的夹具现跑一次再读记录（上一段 ④b 是「不折算」档，那一档**不抓原值**，记录是空的）
+  local A5 = openWith(false)
+  ticks(3)
+  local key5, _f5, rx5, ry5, rw5 = EVAL_SM_TEST_MAPFIT_FROM(1)
+  eq(rw5, 215, "⑤★★原值取自自然档（宽 = 215；实测 " .. tostring(rw5) .. "）")
+  eq(rx5, 355, "⑤★★锚点偏移也取自然档（355；实测 " .. tostring(rx5) .. "）")
+  eq(type(key5) == "string" and string.find(key5, "WorldMapOverlay", 1, true) == 1, true,
+     "⑤★记录键 = **纹理名**（不用会漂移的枚举序号；实测 " .. tostring(key5) .. "）")
+  -- ⑥ 关闭时的清理（用户要求「做好探索层纹理的事件清理」）
+  local fc = { shown = true, script = "OnUpdate_handler" }
+  fc.SetScript = function(_, ev, fn) if ev == "OnUpdate" then fc.script = fn end return true end
+  fc.GetScript = function(_, ev) return fc.script end
+  fc.Hide = function() fc.shown = false return true end
+  fc.Show = function() fc.shown = true return true end
+  fc.IsShown = function() return fc.shown end
+  rawset(_G, "EH_SM_COORDS", fc)
+  local fd = { shown = true }
+  fd.Hide = function() fd.shown = false return true end
+  fd.Show = function() fd.shown = true return true end
+  fd.IsShown = function() return fd.shown end
+  rawset(_G, "EH_SM_DRAG", fd)
+  rawset(_G, "UISpecialFrames", { "ChatFrame1", "WorldMapFrame" })
+  EVAL_SM_TEST_ESC_ADDED_SET(true)
+  pcall(EVAL_SM_SET, false)
+  eq(fc.script ~= nil, true, "⑥★★关闭**不摘**坐标行的 OnUpdate（摘了就再也装不回来；「关掉零动作」由处理器开头的 enabled 门保证）")
+  eq(fc.shown, false, "⑥★★关闭：坐标行 Hide")
+  eq(fd.shown, false, "⑥★关闭：拖拽柄 Hide")
+  local torn1, escAfter = EVAL_SM_TEST_FEAT_TORN()
+  eq(torn1, true, "⑥★★关闭时确实走了「收钩子」这条路（FEAT.torn）")
+  eq(escAfter, false, "⑥★★`FEAT.escAdded` 已复位")
+  local hasEsc, keptEsc = false, false
+  for _, v in ipairs(rawget(_G, "UISpecialFrames") or {}) do
+    if v == "WorldMapFrame" then hasEsc = true end
+    if v == "ChatFrame1" then keptEsc = true end
+  end
+  eq(hasEsc, false, "⑥★★★我们插进 ESC 列表的那一项**已拿掉**")
+  eq(keptEsc, true, "⑥★★别人（客户端自己）的项一个没动")
+  -- ★★★1.75.9 真机回归（用户报障：「这个界面在世界地图拖拽移动功能失效」）：**收钩子必须配「再武装」**
+  --   旧写法关闭时把坐标行 OnUpdate 摘了 + `featBuild` 一次性守卫 ⇒ 再开启时拖拽柄永久消失。
+  cfg.tb = { simpleMap = true }
+  pcall(EVAL_SM_SET, true)
+  eq(fd.shown, true, "⑥★★★再开启：**拖拽柄重新出现**（拖拽移动必须恢复；实测 " .. tostring(fd.shown) .. "）")
+  eq(fc.shown, true, "⑥★★再开启：坐标行也重新出现（实测 " .. tostring(fc.shown) .. "）")
+  local hasEsc2 = false
+  for _, v in ipairs(rawget(_G, "UISpecialFrames") or {}) do if v == "WorldMapFrame" then hasEsc2 = true end end
+  eq(hasEsc2, true, "⑥★再开启：ESC 列表那一项也补回来了")
+  pcall(EVAL_SM_SET, false)
+  -- ⑦ 旧存档迁移：没有 `mapFitVer` 戳的原值一律丢弃（旧版可能已被污染成「折过的值」）
+  pcall(EVAL_SM_TEST_MAPFIT_RESET)
+  cfg.tb = { simpleMap = false }
+  EH_SIMPLEMAP_CFG.mapFitOrig = { tex13 = { x = 105, y = -157, w = 105, h = 105 } }
+  EH_SIMPLEMAP_CFG.mapFitVer = nil
+  eq(EVAL_SM_TEST_MAPFIT_MIGRATE(), true, "⑦★迁移认出「没有版本戳的旧原值」")
+  eq(EVAL_SM_TEST_MAPFIT_ORIG(), 0, "⑦★★旧原值整块丢弃（实测剩 " .. tostring(EVAL_SM_TEST_MAPFIT_ORIG()) .. " 条）")
+  -- ⑧ 幂等：同一 es 再折一拍必须 changed = 0
+  local A6 = openWith(false)
+  ticks(3)
+  local c8 = select(1, EVAL_SM_TEST_MAPFIT_APPLY(0.7))
+  eq(c8, 0, "⑧★★第二拍 changed = 0（幂等；实测 " .. tostring(c8) .. "）")
+  eq(math.abs(A6.w - 215 * 0.7) < 0.01, true, "⑧★宽也按 es 折算（实测 " .. tostring(A6.w) .. "）")
+  -- ⑨ 取证环（用户：「可以开启日志.在何种情况下会进行双次缩放操作.」）
+  eq(EVAL_SM_TEST_MAPFIT_TRACE_CLEAR(), true, "⑨前置：清空取证环")
+  local A7 = openWith(true)
+  ticks(10)
+  local trN = EVAL_SM_TEST_MAPFIT_TRACE_N()
+  local trAll = EVAL_SM_TEST_MAPFIT_TRACE_ALL()
+  eq(trN > 0, true, "⑨★折算取证环有记录（实测 " .. tostring(trN) .. " 条）")
+  eq(string.find(trAll, "探测：", 1, true) ~= nil, true, "⑨★★记下了「探测」（缩放 1 vs 0.7 各读到多少屏幕宽）")
+  eq(string.find(trAll, "抓原值：", 1, true) ~= nil, true, "⑨★★记下了「抓原值」（含读时外框缩放 ⇒ 自证自然档）")
+  eq(trN <= 60, true, "⑨★取证环有界（≤60 行；实测 " .. tostring(trN) .. "）")
+  pcall(EVAL_SM_SET, false)
+  eq(string.find(EVAL_SM_TEST_MAPFIT_TRACE_ALL(), "开关 OFF：", 1, true) ~= nil, true, "⑨★★记下了「开关 OFF」（策略/动过没/原值条数）")
+  eq(type(A7) == "table", true, "⑨夹具在位（A7 = 那批纹理里的第一个）")
+  -- 收尾
+  pcall(EVAL_SM_SET, false)
+  rawset(_G, "WorldMapDetailFrame", savedFr)
+  rawset(_G, "WorldMapFrame", savedWm)
+  rawset(_G, "UISpecialFrames", savedEsc)
+  rawset(_G, "EH_SM_COORDS", nil)
+  rawset(_G, "EH_SM_DRAG", nil)
+  cfg.tb = savedTb
+  pcall(EVAL_SM_TEST_MAPFIT_RESET)
+  if fails0 == TESTASSERT_FAILS then
+    print("GROUP 232 (探索层纹理：两种客户端模型各自正确（显示=原值×es / 逻辑折一次）· 关再开不连乘 · 策略三档 · 原值自然档 · 关闭收钩子 · 取证环): PASS")
+  end
+end
 EVAL_TEST_MOD_DONE("SimpleMap") -- ★跑到底的握手（见文件头 ③）：TOOL TEST FILES CHECK 拿它对账

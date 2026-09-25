@@ -74,10 +74,34 @@ function EVAL_WHEEL_DIR(a, b)
   return (d > 0) and 1 or -1
 end
 
-local function say(msg)
+-- ★是否记录 = 默认开；显式关过就尊重用户选择。用 rawget 读，避免被测试桩的元表干扰。
+--   兼容三种历史形态：nil（默认开）/ false 布尔（旧 UELog 开关关）/ 表（新缓冲，看 .on）
+-- ★★★1.75.8（用户要求）：「调试日志」升级为**整个插件往聊天框说话的总闸门** ——
+--   `say`（= EVAL_SAY）跟它联动：关掉 ⇒ 一个字都不刷（命令回复 / 模块如实播报 / 探针输出 / 载入报告全静默）。
+--   ★必须声明在 say **之前**：say 要读它（DECL ORDER：引用点写在 local 之前 = 绑成全局 nil，运行时才炸）。
+local function logEnabled()
+  local c = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(c) ~= "table" then return true end
+  local lg = c.log
+  if lg == false then return false end
+  if type(lg) == "table" then return lg.on ~= false end
+  return true
+end
+
+-- 裸输出（**不门控**）：只给 EVAL_SAY_FORCE 用
+local function chatOut(msg)
   if DEFAULT_CHAT_FRAME and DEFAULT_CHAT_FRAME.AddMessage then
     DEFAULT_CHAT_FRAME:AddMessage("|cff66ccffEVAL_HELP:|r " .. tostring(msg))
   end
+end
+
+-- 常规出口（**受门控**）。★两个例外必须走 EVAL_SAY_FORCE，否则关掉开关后就再也看不到反馈：
+--   ① 日志开关自己的确认行（要让人看得到「怎么开回来」）；
+--   ② 「引擎未加载完整」兜底红字（插件坏掉时恰恰最需要出声）。
+--   ★与 cfg.wdebug（「方案技能日志」）分工不同：那个只管「说不说决策原因」，本闸门管「说不说话」。
+local function say(msg)
+  if not logEnabled() then return end
+  chatOut(msg)
 end
 
 -- ============ 日志通道（1.70.12 重做）============
@@ -90,16 +114,8 @@ end
 --   ② 兜底 = 聊天框输出（/eh logdump 打印）。
 --   落盘时机：/reload、小退、退出（SavedVariables 固有语义，无法更早）。
 local EH_LOG_MAX = 100 -- ★1.74.31 载入审计：300 → 100（落盘体积 25.6KB → 约 8KB）
--- 是否记录：默认开；显式关过就尊重用户选择。用 rawget 读，避免被测试桩的元表干扰。
--- 兼容三种历史形态：nil（默认开）/ false 布尔（旧 UELog 开关关）/ 表（新缓冲，看 .on）
-local function logEnabled()
-  local c = rawget(_G, "EVAL_HELP_CONFIG")
-  if type(c) ~= "table" then return true end
-  local lg = c.log
-  if lg == false then return false end
-  if type(lg) == "table" then return lg.on ~= false end
-  return true
-end
+-- logEnabled() 已上移到本文件「输出：聊天」段之前 —— 那里的 say 要门控它
+--   （DECL ORDER：引用点必须写在 local 之后，否则绑成全局 nil）。
 -- 追加一行（带相对时间戳，便于把「我切了图」和日志对上时间轴）
 local function logLine(msg)
   local c = rawget(_G, "EVAL_HELP_CONFIG")
@@ -701,6 +717,9 @@ end
 
 -- ===== 跨模块导出（Engine/EvalHelp 用；toc 加载顺序保证先注册） =====
 EVAL_SAY = say
+-- ★★★1.75.8：**门控版 + 常开版两个出口**（模块自带的 say 全部委托 EVAL_SAY ⇒ 一处门控、全插件生效）
+EVAL_SAY_FORCE = chatOut  -- 不受「调试日志」管：只给开关自身的反馈 + 崩溃兜底用
+EVAL_CHAT_ON = logEnabled -- 给「自己直接写聊天框」的模块读总闸门（如 tools/SimpleMap.lua 的 P）
 EVAL_LOGLINE = logLine
 EVAL_UIOFFSCREEN = uiOffscreen
 EVAL_POWERLABEL = powerLabel
@@ -715,7 +734,7 @@ EVAL_RESOLVE_LANG = ehResolveLang
 -- /run EVAL_GO() 不再弹「nil value」红框，改聊天框给出可操作的排查指引。
 -- 正常加载时 Engine.lua 末尾的正式 EVAL_GO 会覆盖本兜底；EVAL_ENGINE_OK 是加载哨兵。
 function EVAL_GO()
-  EVAL_SAY("|cffff0000EvalHelp 引擎未加载完整|r（宏走了兜底）：请 /reload 一次；反复出现 → 检查角色选择界面的插件列表是否对当前角色启用了 EvalHelp")
+  EVAL_SAY_FORCE("|cffff0000EvalHelp 引擎未加载完整|r（宏走了兜底）：请 /reload 一次；反复出现 → 检查角色选择界面的插件列表是否对当前角色启用了 EvalHelp")
 end
 
 -- ===== 载入耗时探针 + 存档残渣清理（1.74.31；用户：「审计下载入速度有点慢 → 先取证 + 零风险清理」）=====
@@ -741,6 +760,9 @@ local LOAD_RESIDUE_KEYS = {
   "probeLog", "shColorProbe", "shTitleColorProbe", "shareIconProbe",
   "shareProbe", "shareProbeHover", "shareProbeRaw", "shareProbeVerdicts",
   "shareSealDemo", "shareCreatorOpen", "loadStat", "guideSeen",
+  -- ★1.75.2 追踪探针的**专属持久读数**（最近 40 行；存在的理由见 Engine.lua 的 TRK_OUT_MAX 注释：
+  --   调试日志环只有 100 条 + `[DS]` 每 ~10 秒一行 ⇒ 探针读数 ~17 分钟就被冲掉，必须另存一份）
+  "trkProbe",
 }
 
 function EVAL_LOAD_PROBE_KEYS() return LOAD_PROBE_KEYS end

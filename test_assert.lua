@@ -17131,18 +17131,239 @@ do
   EVAL_TRACK_PROBE("")
   local rep189 = tostring(TEST.chat or "")
   eq(string.find(rep189, "GetTrackingTexture", 1, true) ~= nil, true, "①★报告含**主路** API（GetTrackingTexture）")
-  eq(string.find(rep189, "本次=Interface/Icons/Ability_Tracking", 1, true) ~= nil, true, "①★★报告「本次」栏打出**当前追踪纹理**（读真机返回值，不猜）")
+  eq(string.find(rep189, "原文=Interface/Icons/Ability_Tracking", 1, true) ~= nil, true, "①★★报告打出**当前追踪纹理原文**（1.75.4 起还带「类型=」，读真机返回值，不猜）")
   eq(string.find(rep189, "CancelTrackingBuff", 1, true) ~= nil, true, "②★报告含取消接口可用性")
   eq(string.find(rep189, "增益条光环", 1, true) ~= nil, true, "③★报告含**光环辅路**（用来判「追踪占不占增益条」）")
   eq(string.find(rep189, "寻找矿物", 1, true) ~= nil, true, "④★纹理↔名字对照：动作条里的追踪技能被列出来")
   eq(string.find(rep189, "上次", 1, true) ~= nil, true, "⑥★有「上次 vs 本次」对照（开/关各跑一次即可定判据）")
-  -- 反向哨兵：没追踪时如实报「空/无追踪」，且「上次」栏保留上一次读数（这正是判定式）
+  -- 反向哨兵：没追踪时如实报「原文=nil / 类型=nil」，且「上次」栏保留上一次读数（这正是判定式）
   TEST.trackTex = nil
   TEST.chat = nil
   EVAL_TRACK_PROBE("")
   local rep189b = tostring(TEST.chat or "")
-  eq(string.find(rep189b, "无追踪", 1, true) ~= nil, true, "★反向哨兵：无追踪时如实报「（空/无追踪）」")
+  eq(string.find(rep189b, "原文=nil", 1, true) ~= nil, true, "★反向哨兵：无追踪时如实报「原文=nil ｜ 类型=nil」（1.75.4 口径；不编造）")
   eq(string.find(rep189b, "上次=Interface/Icons/Ability_Tracking", 1, true) ~= nil, true, "★★「上次」栏保留上一次读数（★只认「上次=」这一栏，避免被 ④ 行的同名纹理蒙混过关）")
+  -- ===== 1.75.2 新增：名字主路（GameTooltip:SetTrackingSpell）+ 候选图标对照 + 事件监听 =====
+  -- ③纯函数先验（不依赖桩）：名字取值 / 种类对照 / 未命中不硬猜
+  eq(EVAL_TRACK_NAME_FROM_LINES("X", nil), "X", "②★纯函数：第一行非空即名字")
+  eq(EVAL_TRACK_NAME_FROM_LINES(nil, "Y"), "Y", "②★纯函数：第一行为空时取第二行")
+  eq(EVAL_TRACK_NAME_FROM_LINES(nil, nil), nil, "②★★两行都空 → nil（= **读不出来**，与「没追踪」是两件事）")
+  -- ③a 基础名归一（1.75.3）：两种形态 + 大小写 + 扩展名 + 反斜杠路径都要吃下来
+  eq(EVAL_TRACK_BASE("/Game/Interface/Icons/Spell_Shadow_SummonFelHunter_TEX"), "spell_shadow_summonfelhunter",
+     "③★基础名：剥目录 / 剥 _TEX / 转小写（SummonFelHunter 的**大写 H** 与数据库 png 名不同也能对上）")
+  eq(EVAL_TRACK_BASE("Interface" .. string.char(92) .. "Icons" .. string.char(92) .. "INV_Misc_Flower_02"),
+     "inv_misc_flower_02", "③★基础名：Windows 反斜杠形态也能吃（源码里反斜杠用 string.char(92) 构造）")
+  eq(EVAL_TRACK_BASE("/Game/Interface/Icons/Ability_Tracking_TEX.png"), "ability_tracking",
+     "③★基础名：连扩展名一起给也吃（.png）")
+  -- ★★★1.75.5 真机实测形态（用户 2026-09-25 回传的原文，见参考卷 R18）：资产路径 _TEX + 「.」 + 对象名 _TEX
+  eq(EVAL_TRACK_BASE("/Game/Interface/Icons/Ability_Tracking_TEX.Ability_Tracking_TEX"), "ability_tracking",
+     "③★★★真机那条串 → 只认第一个点之前（旧实现得到 ability_tracking_tex.ability_tracking，永远命中不了表）")
+  eq(EVAL_TRACK_KIND("/Game/Interface/Icons/Ability_Tracking_TEX.Ability_Tracking_TEX"), "beast",
+     "③★★★真机那条串**必须命中候选表** ⇒ 纹理路与名字路互证（真机首轮就栽在这里：③ 报「没命中」而 ② 是对的）")
+  eq(EVAL_TRACK_KIND("/Game/Interface/Icons/Spell_Nature_Earthquake_TEX.Spell_Nature_Earthquake_TEX"), "mining",
+     "③★★真机形态对采矿也成立（形式统一，不是特例）")
+  eq(EVAL_TRACK_BASE(nil), nil, "③★反向哨兵：nil → nil（不猜）")
+  eq(EVAL_TRACK_BASE(""), nil, "③★反向哨兵：空串 → nil（不猜）")
+  eq(EVAL_TRACK_KIND(nil), nil, "③★反向哨兵：没有纹理 → 不猜种类")
+  eq(EVAL_TRACK_KIND("Interface/Icons/Ability_Tracking"), "beast", "③★追踪野兽纹理 → 追踪野兽")
+  eq(EVAL_TRACK_KIND("Interface/Icons/INV_Misc_Flower_02"), "herb", "③★采药纹理 → 采药")
+  eq(EVAL_TRACK_KIND("Interface/Icons/Spell_Nature_Earthquake"), "mining", "③★采矿纹理 → 采矿")
+  eq(EVAL_TRACK_KIND("/Game/Interface/Icons/INV_Misc_Flower_02_TEX"), "herb",
+     "③★★EmberVeil 纹理形态（/Game/..._TEX）命中 ⇒ 两种形态同一口径")
+  eq(EVAL_TRACK_KIND("/game/interface/icons/inv_misc_flower_02_tex"), "herb",
+     "③★★大小写任意组合也命中（真机返回的串大小写不保证与表一致）")
+  eq(EVAL_TRACK_KIND("Interface/Icons/INV_Misc_Flower_02_Copy"), nil,
+     "③★★★**全等**匹配的变异哨兵：前缀相同的别的图标**不许**被判成采药（旧版子串匹配会在这里假命中）")
+  -- ③a2 候选表实证（1.75.3）：13 条追踪法术逐个对上（含 pfUI 那张表里没有的那 9 条）
+  eq(EVAL_TRACK_KIND("/Game/Interface/Icons/Ability_Stealth_TEX"), "hidden", "③★追踪隐藏生物（19885）")
+  eq(EVAL_TRACK_KIND("/Game/Interface/Icons/Spell_Shadow_DarkSummoning_TEX"), "undead", "③★追踪亡灵（19884）")
+  eq(EVAL_TRACK_KIND("/Game/Interface/Icons/Ability_Racial_Avatar_TEX"), "giant", "③★追踪巨人（19882）")
+  eq(EVAL_TRACK_KIND("/Game/Interface/Icons/Spell_Holy_SenseUndead_TEX"), "senseundead", "③★感知亡灵（5502）")
+  eq(EVAL_TRACK_KIND("Interface/Icons/SomeUnknownIcon"), nil, "③★未命中候选表 → 如实 nil（绝不硬猜成某一类）")
+  -- ③a3 名字备用路（本地化名字 ↔ 种类；只收库里确有译名的两种语言，认不出就 nil）
+  eq(EVAL_TRACK_KIND_BY_NAME("寻找草药"), "herb", "③★名字备用路：中文名 → 采药")
+  eq(EVAL_TRACK_KIND_BY_NAME("Find Herbs"), "herb", "③★名字备用路：英文名 → 采药")
+  eq(EVAL_TRACK_KIND_BY_NAME("  Track Beasts  "), "beast", "③★名字备用路：两侧空白要容忍（真机 tooltip 串可能有空白）")
+  eq(EVAL_TRACK_KIND_BY_NAME("追踪传说"), nil, "③★反向哨兵：认不出的名字 → nil（不猜）")
+  eq(EVAL_TRACK_KIND_BY_NAME(nil), nil, "③★反向哨兵：nil → nil")
+  -- ③b 名字主路走**真实调用链**：探针 → trkName → 自建隔离 tooltip 的 SetTrackingSpell → 读 TextLeft1
+  --   ★组 185/187 各自换过 EVAL_HELP_WTTTextLeft1（旧版认不得 curTrackSpell）⇒ 这里按**桩真身**
+  --   （mkTooltipFrame）如实补上追踪分支（不是掩盖现象：真机的这一行文本就是 SetTrackingSpell 填的）。
+  local fsT189 = rawget(_G, "EVAL_HELP_WTTTextLeft1")
+  local keepGetT189 = fsT189 and fsT189.GetText or nil
+  rawset(_G, "EVAL_HELP_WTTTextLeft1", { GetText = function()
+    if TEST.curTrackSpell then return TEST.trackWho end
+    if keepGetT189 then return keepGetT189() end
+    return nil
+  end })
+  TEST.trackTex = "Interface/Icons/Ability_Tracking"
+  TEST.trackWho = "追踪野兽"
+  TEST.trackSpellRead = nil
+  TEST.chat = nil
+  EVAL_TRACK_PROBE("")
+  local rep189c = tostring(TEST.chat or "")
+  eq(TEST.trackSpellRead == true, true, "②★名字是走 `SetTrackingSpell` 读的（桩记账：真的调了那个入口）")
+  eq(string.find(rep189c, "「追踪野兽」", 1, true) ~= nil, true, "②★★名字主路读到了**本地化名字**（「追踪野兽」）")
+  eq(string.find(rep189c, "候选图标表=beast", 1, true) ~= nil, true, "③★候选图标表把这条纹理对上了「追踪野兽」（两条路交叉印证）")
+  eq(string.find(rep189c, "名字（主路）", 1, true) ~= nil, true, "②★报告里有名字主路这一行")
+  eq(string.find(rep189c, "基础名=ability_tracking", 1, true) ~= nil, true, "③★报告打出**基础名**（回传这一行就能补表）")
+  eq(string.find(rep189c, "两条路互证", 1, true) ~= nil, true, "③★★纹理路与名字路**一致**时照实说「互证」")
+  -- ③b2 ★★★两条路**打架**时必须报「不一致」（专门抓「候选表某一格写错」；静默取一路 = 用户永远看不到错）
+  TEST.trackWho = "寻找草药"
+  TEST.chat = nil
+  EVAL_TRACK_PROBE("")
+  eq(string.find(tostring(TEST.chat or ""), "不一致", 1, true) ~= nil, true,
+     "③★★★纹理（追踪野兽）与名字（寻找草药）打架 → 必须点出「不一致」（不许静默取一路）")
+  TEST.trackWho = "追踪野兽"
+  -- ③c 没追踪时**不许**把「名字读不出来」说成有事（如实：本条免谈）
+  TEST.trackTex = nil
+  TEST.trackWho = nil
+  TEST.chat = nil
+  EVAL_TRACK_PROBE("")
+  eq(string.find(tostring(TEST.chat or ""), "两行都是空", 1, true) ~= nil, true,
+     "②★★没追踪时如实说「调了 SetTrackingSpell 但两行都是空」（1.75.4 起分三态；旧版一律写成「当前没追踪」= 静默）")
+  TEST.trackTex = "Interface/Icons/Ability_Tracking"
+  -- ③c2（1.75.3）候选图标表子命令：13 条要全打出来（含**客户端图标基础名**），否则用户没法对照回传
+  TEST.chat = nil
+  local nRoster189 = EVAL_TRACK_PROBE("表")
+  local repRoster189 = tostring(TEST.chat or "")
+  eq(nRoster189, 13, "③★★候选表子命令返回条数 = 13（官方数据库实证的追踪法术总数）")
+  eq(string.find(repRoster189, "候选图标表", 1, true) ~= nil, true, "③★打出候选表标题")
+  eq(string.find(repRoster189, "INV_Misc_Flower_02", 1, true) ~= nil, true, "③★表里有采药（INV_Misc_Flower_02）")
+  eq(string.find(repRoster189, "Ability_Stealth", 1, true) ~= nil, true, "③★表里有 1.75.3 新补的追踪隐藏生物（Ability_Stealth）")
+  -- ③c3（1.75.3）法术书扫描改按**纹理**判：连「感知亡灵」这种名字里没有「追踪/寻找」的也抓到；
+  --   名字命中而纹理没命中的**单独列**（那正是「我该补表」的候选）
+  local keepBook189 = TEST.spellbook
+  TEST.spellbook = {
+    { name = "追踪隐藏生物", tex = "/Game/Interface/Icons/Ability_Stealth_TEX" },
+    { name = "火球术",       sub = "等级 3", tex = "/Game/Interface/Icons/Spell_Fire_FlameBolt_TEX" },
+    { name = "感知亡灵",     tex = "/Game/Interface/Icons/Spell_Holy_SenseUndead_TEX" },
+    { name = "追踪传说",     tex = "/Game/Interface/Icons/SomeNewTrackingIcon_TEX" },
+  }
+  TEST.trackTex = nil
+  TEST.chat = nil
+  EVAL_TRACK_PROBE("")
+  local repSb189 = tostring(TEST.chat or "")
+  eq(string.find(repSb189, "种类=hidden", 1, true) ~= nil, true, "⑦★★法术书：按**纹理**认出「追踪隐藏生物」（不再依赖名字关键字）")
+  eq(string.find(repSb189, "种类=senseundead", 1, true) ~= nil, true, "⑦★★法术书：名字不含「追踪/寻找」的「感知亡灵」也被认出（名字判据的漏网被堵上）")
+  eq(string.find(repSb189, "纹理命中 2 条", 1, true) ~= nil, true, "⑦★纹理命中计数 = 2（火球术不在候选表里，不该算）")
+  eq(string.find(repSb189, "仅名字命中 1 条", 1, true) ~= nil, true, "⑦★★「名字像追踪但纹理没对上候选表」单独列出（= 我该补表的候选）")
+  eq(string.find(repSb189, "SomeNewTrackingIcon", 1, true) ~= nil, true, "⑦★★那条未命中候选表的纹理**原文**要打出来（回传即可补表）")
+  TEST.spellbook = keepBook189
+  TEST.trackTex = "Interface/Icons/Ability_Tracking"
+  -- ③d ★1.75.4 报告三态之一：① 必须打「类型 + 原文」——**非字符串返回值不许被静默当成「没追踪」**
+  TEST.trackTex, TEST.trackWho, TEST.trackTexObj = nil, nil, true
+  TEST.chat = nil
+  EVAL_TRACK_PROBE("")
+  local repObj189 = tostring(TEST.chat or "")
+  eq(string.find(repObj189, "类型=table", 1, true) ~= nil, true, "①★★GetTrackingTexture 的**类型**如实打出（table）")
+  eq(string.find(repObj189, "★返回的**不是字符串**", 1, true) ~= nil, true,
+     "①★★★非字符串返回值**不许**被静默当成「没追踪」——真机首轮读数最可能就是栽在这条静默路上")
+  TEST.trackTexObj = nil
+  -- ③d2 ★1.75.4 报告三态之二：② 名字路**独立于①**，「调了但读空」与「读到名字」必须分得开
+  TEST.trackTex, TEST.trackWho, TEST.curTrackSpell = "Interface/Icons/Ability_Tracking", nil, nil
+  TEST.chat = nil
+  EVAL_TRACK_PROBE("")
+  local repEmpty189 = tostring(TEST.chat or "")
+  eq(string.find(repEmpty189, "两行都是空", 1, true) ~= nil, true,
+     "②★★SetTrackingSpell 调了但 tooltip 读空 → 如实说「两行都是空」（旧版写成「当前没追踪」= 静默）")
+  eq(string.find(repEmpty189, "tooltip 原文：", 1, true) ~= nil, true, "②★tooltip 两行**原文**要打出来（回传即可定案）")
+  TEST.trackWho = "追踪野兽"
+  TEST.chat = nil
+  EVAL_TRACK_PROBE("")
+  eq(string.find(tostring(TEST.chat or ""), "名字路**有值**", 1, true) ~= nil, true, "②★★名字读到时报「名字路有值」")
+  -- ③d3 ★1.75.4 报告三态之三：⑤ 增益条光环的**名字**要读出来（真机上那个神秘光环就靠这一行定案）
+  local keepBuffs189 = TEST.buffs
+  TEST.buffs = { { name = "追踪野兽", tex = "Interface/Icons/Ability_Tracking" },
+                 { name = "别的光环", tex = "TEX_OTHER_B" } }
+  TEST.chat = nil
+  EVAL_TRACK_PROBE("")
+  local repBuf189 = tostring(TEST.chat or "")
+  eq(string.find(repBuf189, "名字=追踪野兽", 1, true) ~= nil, true, "⑤★★增益条光环的**名字**读出来了（含动作条纹理时还要给种类）")
+  eq(string.find(repBuf189, "增益条里**有一条像追踪**", 1, true) ~= nil, true,
+     "⑤★★★光环里有一条像追踪 ⇒ 点名「本客户端追踪占增益条槽位」（官方那句 not listed here 对本客户端不成立）")
+  TEST.buffs = keepBuffs189
+  -- ③d4 ★1.75.4 第三条独立路（⑩ 默认 UI 追踪按钮）+ ⑪ 一行快照
+  local keepBtn189 = rawget(_G, "MiniMapTrackingIcon")
+  rawset(_G, "MiniMapTrackingIcon", {
+    GetObjectType = function() return "Texture" end,
+    GetTexture = function() return "/Game/Interface/Icons/Ability_Tracking_TEX" end,
+    IsShown = function() return true end,
+  })
+  TEST.chat = nil
+  EVAL_TRACK_PROBE("")
+  local repBtn189 = tostring(TEST.chat or "")
+  eq(string.find(repBtn189, "[候选] MiniMapTrackingIcon", 1, true) ~= nil, true, "⑩★★候选帧命中时要**点名**打出")
+  eq(string.find(repBtn189, "Ability_Tracking_TEX", 1, true) ~= nil, true, "⑩★★追踪按钮的**纹理**读出来了（第三条独立路）")
+  eq(string.find(repBtn189, "⑪ 一行快照：", 1, true) ~= nil, true, "⑪★一行快照在（开/关各跑一次直接比这一行）")
+  rawset(_G, "MiniMapTrackingIcon", keepBtn189)
+  -- ③d5 事件监听开关：★1.75.4 全事件抓取（RegisterAllEvents）→ 关掉时**按次数升序**列全部事件名
+  TEST.trackTex, TEST.trackWho = nil, nil
+  eq(EVAL_TRACK_PROBE_STATE().listening, false, "⑧★监听默认**关**（探针不常驻偷事件）")
+  TEST.chat = nil
+  EVAL_TRACK_PROBE("监听")
+  local repEv189 = tostring(TEST.chat or "")
+  eq(string.find(repEv189, "全事件抓取已开启", 1, true) ~= nil, true, "⑧★★有 RegisterAllEvents 时走**全事件抓取**（不再猜 4 条候选）")
+  eq(EVAL_TRACK_PROBE_STATE().listening, true, "⑧★状态真值跟着翻")
+  eq(EVAL_TRACK_PROBE_STATE().allEv, true, "⑧★allEv 真值 = true")
+  -- ★用**真机通道**把事件打进去（设全局 event → frame 的 OnEvent；★回调零形参）
+  local fire189 = 0
+  for _ = 1, 2 do if EVAL_TRACK_TEST_FIRE_EVENT("PLAYER_AURAS_CHANGED") then fire189 = fire189 + 1 end end
+  if EVAL_TRACK_TEST_FIRE_EVENT("SPELLS_CHANGED") then fire189 = fire189 + 1 end
+  eq(fire189, 3, "⑧★事件真的经真实 OnEvent 打进去了（3 次）")
+  eq(tonumber(EVAL_TRACK_TEST_HITS()["PLAYER_AURAS_CHANGED"]), 2, "⑧★命中计数按事件名记（PLAYER_AURAS_CHANGED = 2）")
+  TEST.chat = nil
+  EVAL_TRACK_PROBE("监听")
+  local repEv189b = tostring(TEST.chat or "")
+  eq(string.find(repEv189b, "已关闭（全事件抓取）", 1, true) ~= nil, true, "⑧★关掉时如实说走的是哪条路")
+  eq(string.find(repEv189b, "本次共 3 次事件、2 个不同事件名", 1, true) ~= nil, true, "⑧★★总次数 / 不同事件名如实统计")
+  eq(string.find(repEv189b, "PLAYER_AURAS_CHANGED = 2 次", 1, true) ~= nil, true, "⑧★★按次数列出每个事件名（次数就是判据）")
+  eq(EVAL_TRACK_PROBE_STATE().listening, false, "⑧★关掉后状态 = false")
+  -- ③d6 ★退化路：本客户端**没有** RegisterAllEvents ⇒ 退回 4 条候选并**如实点名**（不许假装成功）
+  TEST.noAllEvents = true
+  TEST.chat = nil
+  EVAL_TRACK_PROBE("监听")
+  local repEv189c = tostring(TEST.chat or "")
+  eq(string.find(repEv189c, "退回 4 条候选事件", 1, true) ~= nil, true, "⑧★★RegisterAllEvents 不可用时**如实**退回 4 条候选")
+  eq(string.find(repEv189c, "注册成功：PLAYER_AURAS_CHANGED", 1, true) ~= nil, true, "⑧★★退回路：pfUI 那条真的注册上了")
+  eq(EVAL_TRACK_PROBE_STATE().allEv, false, "⑧★退回路 allEv = false")
+  TEST.chat = nil
+  EVAL_TRACK_PROBE("监听")
+  eq(string.find(tostring(TEST.chat or ""), "已关闭（4 条候选事件）", 1, true) ~= nil, true, "⑧★退回路关掉时也如实标注是哪条路")
+  TEST.noAllEvents = nil
+  -- ③e 「要不要打行」是**纯函数**（唯一判据）：只在纹理变了时打 —— PLAYER_AURAS_CHANGED 在战斗中很密，绝不能刷屏
+  eq(EVAL_TRACK_EV_SHOULD_LOG("a", nil), true, "⑧★纹理从无到有 → 打一行")
+  eq(EVAL_TRACK_EV_SHOULD_LOG(nil, "a"), true, "⑧★追踪被关掉（有→无）也要打一行（关掉同样是状态变化）")
+  eq(EVAL_TRACK_EV_SHOULD_LOG("a", "a"), false, "⑧★★纹理没变 → **不打行**（只计数，否则一开监听就刷屏）")
+  eq(EVAL_TRACK_EV_SHOULD_LOG(nil, nil), false, "⑧★无 → 无 → 不打行")
+  -- ③f ★★★专属持久读数（1.75.2 实测教训：调试日志环只有 100 条、`[DS]` 每 ~10 秒一行
+  --   ⇒ 探针读数约 17 分钟就被冲干净，用户那次 /reload 我一条都读不到）
+  local box189 = EVAL_HELP_CONFIG.trkProbe
+  eq(type(box189) == "table" and type(box189.out) == "table", true, "⑩★专属读数已落存档（cfg.trkProbe.out）")
+  local nOut189 = table.getn(box189.out)
+  eq(nOut189 > 0, true, "⑩★有内容（现有 " .. tostring(nOut189) .. " 行）")
+  eq(string.find(table.concat(box189.out, "\n"), "GetTrackingTexture", 1, true) ~= nil, true,
+     "⑩★★报告真的进了专属读数（★这一份**不会被 [DS] 刷掉** → 跑完直接 /reload 就能事后读文件取证）")
+  for _ = 1, 10 do EVAL_TRACK_PROBE("") end
+  eq(table.getn(EVAL_HELP_CONFIG.trkProbe.out) == 80, true,
+     "⑩★★专属读数是**有界**环（1.75.4 起上限 80；实测 " .. tostring(table.getn(EVAL_HELP_CONFIG.trkProbe.out)) .. " 行）")
+  TEST.chat = nil
+  EVAL_TRACK_PROBE("存档")
+  eq(string.find(tostring(TEST.chat or ""), "专属读数", 1, true) ~= nil, true, "⑩★`存档` 子命令能把它打回聊天框")
+  local hasRes189 = false
+  for _, k in ipairs(EVAL_LOAD_RESIDUE_KEYS()) do if k == "trkProbe" then hasRes189 = true end end
+  eq(hasRes189, true, "⑩★★登记进 Core 的调试残渣清单（`/eh 存档清理` 清得掉，不留垃圾）")
+  TEST.chat = nil
+  EVAL_TRACK_PROBE("清空")
+  -- ★清空前是 80 行（上面刚断言过）⇒ 清空后只该剩**一条「已清空」标记**（留标记是为了事后对齐时间轴）
+  local nAfter189 = table.getn(EVAL_HELP_CONFIG.trkProbe.out)
+  eq(nAfter189 == 1, true, "⑩★`清空` 把专属读数一并清掉（清空前 80 行 → 清空后 " .. tostring(nAfter189) .. " 行）")
+  eq(string.find(tostring(EVAL_HELP_CONFIG.trkProbe.out[1] or ""), "清空", 1, true) ~= nil, true,
+     "⑩★清空后只留一条「已清空」标记（不是把旧报告留在里面）")
+  rawset(_G, "EVAL_HELP_WTTTextLeft1", fsT189 or { GetText = function() return nil end })
+  TEST.curTrackSpell = nil
+  TEST.trackWho = nil
+  TEST.trackSpellRead = nil
   -- 探针必须**同时落盘**（与射击探针同一条纪律：事后读文件，不用截图）
   local hit189 = false
   local buf189 = (type(EVAL_HELP_CONFIG) == "table" and type(EVAL_HELP_CONFIG.log) == "table") and EVAL_HELP_CONFIG.log or {}
@@ -19925,6 +20146,177 @@ do
   eq(type(EVAL_QC_STEP_NAME) == "function", true, "组228④★`EVAL_QC_STEP_NAME` 读值口存在")
   eq(EVAL_QC_STEP_NAME(5846), "爱与家庭", "组228④★★`sn` 里 5846 的名字 = 爱与家庭（实测 " .. tostring(EVAL_QC_STEP_NAME(5846)) .. "）")
   if fails228 == TESTASSERT_FAILS then print("GROUP 228 (自动任务线步骤名：不许退化成 #id): PASS") end
+end
+
+-- ===== 组 229（1.75.6）：追踪条件类型（用户：「一键宏 → 技能编辑 → 条件类型 → 自身状态 → 追踪类型，下拉单选」）=====
+-- 需求链：① 引擎能认出「现在的追踪」（1.75.4/1.75.5 的探针实证）→ ② 做成可判定的条件（condOne）
+--   → ③ 在编辑窗「自身状态」组里作为**单选下拉**出现 → ④ 文本（导出/导入）能往返。
+-- 本组就守这四段，外加一条纪律判据：**贵调用只在变化时做**（纹理没变就不许再读 tooltip）。
+do
+  local fails0 = TESTASSERT_FAILS
+  local keepTex229, keepWho229 = TEST.trackTex, TEST.trackWho
+  -- ① 候选表 id 列 + 本地化标签 + 下拉清单（唯一来源 = Engine 的 TRK.hint / EVAL_TRACK_LIST）
+  eq(EVAL_TRACK_KIND("/Game/Interface/Icons/Ability_Tracking_TEX.Ability_Tracking_TEX"), "beast",
+     "①★候选表第 1 列已是**稳定 id**（真机那条串 → beast）")
+  eq(EVAL_TRACK_LABEL("beast"), EVAL_L("TRK_BEAST"), "①★★标签走语言包（三语齐全由 TRACK ICON CHECK 守）")
+  eq(EVAL_TRACK_LABEL("any"), EVAL_L("TRK_ANY"), "①★「任意追踪」也有标签")
+  local lst229 = EVAL_TRACK_LIST()
+  eq(table.getn(lst229), 14, "①★★下拉清单 = 14 项（任意 + 13 条候选表；实际 " .. tostring(table.getn(lst229)) .. "）")
+  eq(lst229[1].id, "any", "①★★首项是「任意追踪」（顺序 = 单一来源）")
+  eq(EVAL_TRACK_PARSE_ID("追踪野兽"), "beast", "①★解析：中文法术名 → id")
+  eq(EVAL_TRACK_PARSE_ID("Ability_Tracking"), "beast", "①★解析：图标基础名 → id（大小写不敏感）")
+  eq(EVAL_TRACK_PARSE_ID("beast"), "beast", "①★解析：id 本身")
+  eq(EVAL_TRACK_PARSE_ID(EVAL_L("TRK_BEAST")), "beast", "①★★解析：本地化标签（界面回显能读回）")
+  eq(EVAL_TRACK_PARSE_ID("任意"), "any", "①★解析：任意 → any")
+  eq(EVAL_TRACK_PARSE_ID("胡说八道"), nil, "①★反向哨兵：认不出 → nil（不猜）")
+  -- ② 条件求值（唯一入口 EVAL_TRACK_MATCH）+ **按纹理缓存**（贵调用只在变化时做）
+  TEST.trackTex, TEST.trackWho = "/Game/Interface/Icons/Ability_Tracking_TEX.Ability_Tracking_TEX", nil
+  EVAL_TEST_TRACK_CACHE_CLEAR()
+  eq(EVAL_TRACK_MATCH("beast"), true, "②★★正在追踪野兽 → 追踪:beast 命中")
+  eq(EVAL_TRACK_MATCH("herb"), false, "②★要的是采药 → 不命中")
+  eq(EVAL_TRACK_MATCH("any"), true, "②★「任意追踪」→ 有追踪就命中")
+  eq(EVAL_TRACK_MATCH(nil), true, "②★id 为空按「任意」处理（与默认值一致）")
+  local reads229a = tonumber(TEST.trackSpellReads) or 0
+  local now229 = EVAL_TRACK_NOW()
+  eq(now229.on, true, "②★EVAL_TRACK_NOW：在追踪")
+  eq(now229.id, "beast", "②★EVAL_TRACK_NOW：认出 id（纹理路）")
+  eq(tonumber(TEST.trackSpellReads) or 0, reads229a, "②★★★纹理没变 ⇒ **不再读 tooltip**（缓存生效 = 贵调用只在变化时做）")
+  TEST.trackTex = "/Game/Interface/Icons/Spell_Nature_Earthquake_TEX.Spell_Nature_Earthquake_TEX"
+  EVAL_TRACK_MATCH("mining")
+  eq((tonumber(TEST.trackSpellReads) or 0) > reads229a, true, "②★★纹理变了 ⇒ 重新读一次（缓存不是永久）")
+  TEST.trackTex, TEST.trackWho = nil, nil
+  EVAL_TEST_TRACK_CACHE_CLEAR()
+  eq(EVAL_TRACK_MATCH("any"), false, "②★★没追踪时**任意追踪也不成立**（不是「查不到就算有」）")
+  eq(EVAL_TRACK_MATCH("beast"), false, "②★没追踪时「要野兽」不成立")
+  eq(EVAL_TRACK_NOW().on, false, "②★EVAL_TRACK_NOW：on=false")
+  -- ③ 条件文本往返：导出走 id（语言无关）、界面走本地化名
+  eq(EVAL_COND_STR({ k = "tracking", s = "beast", v = true }), "追踪:beast", "③★导出形态 = 追踪:beast")
+  eq(EVAL_COND_STR({ k = "tracking", s = "beast", v = false }), "未追踪:beast", "③★反向 = 未追踪:beast")
+  eq(string.find(EVAL_COND_STR({ k = "tracking", s = "beast", v = true }, true), EVAL_L("TRK_BEAST"), 1, true) ~= nil, true,
+     "③★★界面显示走本地化标签（同一份格式化 + 一个显示开关）")
+  local g229 = EVAL_PARSE_CONDS("追踪:beast")
+  eq(table.getn(g229) == 1 and table.getn(g229[1]) == 1 and g229[1][1].k == "tracking" and g229[1][1].s == "beast", true,
+     "③★★解析「追踪:beast」→ k=tracking / s=beast")
+  local g229b = EVAL_PARSE_CONDS("未追踪")
+  eq(g229b[1][1].k == "tracking" and g229b[1][1].s == "any" and g229b[1][1].v == false, true, "③★裸「未追踪」= 任意 + 取反")
+  local g229c = EVAL_PARSE_CONDS("追踪:" .. EVAL_L("TRK_HERB"))
+  eq(g229c[1][1].s, "herb", "③★★本地化标签也能解析回（用户手打中文也行）")
+  eq(table.getn(EVAL_PARSE_CONDS("追踪:胡说八道")), 0, "③★反向哨兵：认不出的种类 → 整条如实丢弃（不静默留半个条件）")
+  -- ④ 走**真实条件求值链**（EVAL_COND_EVAL → condOne → EVAL_TRACK_MATCH）
+  TEST.trackTex = "/Game/Interface/Icons/Ability_Tracking_TEX.Ability_Tracking_TEX"
+  EVAL_TEST_TRACK_CACHE_CLEAR()
+  eq(EVAL_COND_EVAL({ k = "tracking", s = "beast", v = true }), true, "④★★condOne 正向命中（走真实求值入口）")
+  eq(EVAL_COND_EVAL({ k = "tracking", s = "beast", v = false }), false, "④★condOne 反向不命中")
+  eq(EVAL_COND_EVAL({ k = "tracking", s = "herb", v = true }), false, "④★要采药 → false")
+  eq(EVAL_COND_EVAL({ k = "tracking", s = "any", v = true }), true, "④★任意追踪 → true")
+  -- ⑤ 编辑器侧：归「自身状态」组 + 权重/覆盖（评分口径）+ 类型名三语
+  eq(EVAL_COND_WEIGHT("tracking"), 1, "⑤★权重 = 自身状态组（w=1）")
+  eq(EVAL_COND_CLASS("tracking"), "A", "⑤★覆盖大类 = A（自身）")
+  local inCtg229 = false
+  for _, grp in ipairs(EVAL_COND_GROUP_TABLE()) do
+    if grp.label == "CTG_1" then
+      for _, id in ipairs(grp.ids) do if id == "tracking" then inCtg229 = true end end
+    end
+  end
+  eq(inCtg229, true, "⑤★★归组 CTG_1（自身状态）—— 用户指定的位置")
+  eq(EVAL_TEST_SE_TYPELABEL("tracking"), EVAL_L("CT_TRACKING"), "⑤★类型名 = 语言包 CT_TRACKING（三语）")
+  -- ★初始值不是 n（那是数值型的），而是 s="any"：走**真实默认值函数** seSwitchCond(nil, ti) 读它
+  local d229 = EVAL_TEST_SE_SWITCH(nil, EVAL_TEST_SE_TYPE_INDEX("tracking"))
+  eq(type(d229) == "table" and d229.k == "tracking" and d229.s == "any" and d229.v == true, true,
+     "⑤★★新加一条追踪条件的默认值 = 追踪/任意/正向（走真实默认值路径）")
+  -- ⑥ 真实渲染 + 单选下拉（读真控件 / 真下拉面板）
+  TEST.trackTex = "/Game/Interface/Icons/Ability_Tracking_TEX.Ability_Tracking_TEX"
+  EVAL_TEST_TRACK_CACHE_CLEAR()
+  EVAL_TEST_SE_PUSH_COND("tracking", "beast")
+  eq(EVAL_TEST_SE_ROW_TYPE(1), EVAL_L("CT_TRACKING"), "⑥★行首条件类型 = 追踪类型")
+  eq(EVAL_TEST_SE_COND_S(1), "beast", "⑥★数据侧参数 = beast")
+  eq(EVAL_TEST_SE_ROW_PREVIEW(1), true, "⑥★行内预览要显示（这不是队伍/团员那 8 行）")
+  EVAL_DD_TEST_RESET_ANCHOR()
+  EVAL_TEST_SE_CLICK_CELL(1) -- 走 sHit 的**真实 OnClick** = 开下拉
+  eq(EVAL_DD_TEST_SHOWN(), true, "⑥★★点文字格真的开了下拉")
+  local vis229 = EVAL_DD_TEST_VISIBLE_TEXTS() or {}
+  eq(table.getn(vis229) >= 15, true, "⑥★★下拉至少 15 行（1 行「当前追踪」+ 14 项；实际 " .. tostring(table.getn(vis229)) .. "）")
+  eq(tostring(vis229[1] or ""), EVAL_L("TRK_LIVE_FMT", EVAL_L("TRK_BEAST")), "⑥★★首行如实报「当前追踪：追踪野兽」（读真控件）")
+  eq(tostring(vis229[2] or ""), EVAL_L("TRK_ANY"), "⑥★第 2 行 = 任意追踪")
+  eq(EVAL_DD_TEST_LOCKED_SUPPORTED(), true, "⑥★首行是 locked 参考行（点不动）")
+  -- ★单选列表的「当前值」标记走**条目文案**里的金色圆点（EVAL_DD 的 selected 只在多选模式生效）
+  eq(string.find(tostring(vis229[6] or ""), string.char(226, 128, 162), 1, true) ~= nil, true, "⑥★★当前值那一行有金色圆点标记（•）")
+  eq(string.find(tostring(vis229[6] or ""), EVAL_L("TRK_BEAST"), 1, true) ~= nil, true, "⑥★★圆点那一行就是「追踪野兽」（行序 = 单一来源）")
+  EVAL_DD_TEST_CLICK(4) -- 第 4 行 = mining（items = 当前行 + [any, herb, mining, …]）
+  eq(EVAL_TEST_SE_COND_S(1), "mining", "⑥★★★点一下就把参数写成 mining（单选、不叠加）")
+  EVAL_DD_HIDE()
+  if type(EVAL_DD_HIDE) == "function" then EVAL_DD_HIDE() end
+  TEST.trackTex, TEST.trackWho = keepTex229, keepWho229
+  EVAL_TEST_TRACK_CACHE_CLEAR()
+  if fails0 == TESTASSERT_FAILS then print("GROUP 229 (追踪条件类型：单选下拉 + 求值 + 文本往返): PASS") end
+end
+
+-- ===== 组 231（1.75.8）：`say`/EVAL_SAY = 插件往聊天框说话的**唯一出口**，跟「全局 → 调试日志」(cfg.log.on) 联动 =====
+-- 用户原话：「say 函数能否在 根据全局配置->记录调试日志状态开关要不要打印.? 记录调试日志重命名->调试日志」
+-- 需求两件：① 关掉总闸门 ⇒ **整个插件一个字都不刷**（模块自带的 say 全部委托 EVAL_SAY ⇒ 一处门控全生效）；
+--   ② 标签改名「调试日志」（旧名与「方案技能日志」几乎同名 —— 1.71.2 那次歧义就是它引起的）。
+-- ★例外（**必须常开**）：日志开关自己的确认行 + 崩溃兜底 ⇒ 走 EVAL_SAY_FORCE；
+--   否则关掉那一刻连「怎么开回来」都看不到（本项目最恨的静默族）。
+do
+  local fails0 = TESTASSERT_FAILS
+  local cfg231 = EVAL_HELP_CONFIG
+  local keep231 = cfg231.log
+  local ok231, tb231 = pcall(EVAL_TB_CFG)
+  if not (ok231 and type(tb231) == "table") then tb231 = nil end
+  local keepSM231 = tb231 and tb231.simpleMap
+  local function has231(t) return string.find(tostring(TEST.chat or ""), t, 1, true) ~= nil end
+  eq(type(EVAL_SAY_FORCE) == "function", true, "①★常开出口 EVAL_SAY_FORCE 已在位（Core 导出）")
+  eq(type(EVAL_CHAT_ON) == "function", true, "①★总闸门读值口 EVAL_CHAT_ON 已在位（给自建打印口的模块读）")
+  -- ① 关：EVAL_SAY 一个字都不刷；EVAL_SAY_FORCE 照刷（反向哨兵）
+  cfg231.log = { on = false }
+  eq(EVAL_CHAT_ON(), false, "①★★EVAL_CHAT_ON() 与 cfg.log.on 同源（关）")
+  TEST.chat = ""
+  EVAL_SAY("__SAY231__")
+  eq(has231("__SAY231__"), false, "①★★★调试日志=关 ⇒ EVAL_SAY **一个字都不刷**（实测聊天框：「" .. tostring(TEST.chat) .. "」）")
+  EVAL_SAY_FORCE("__FORCE231__")
+  eq(has231("__FORCE231__"), true, "①★★反向哨兵：EVAL_SAY_FORCE 不受门控（关掉后仍报得出「怎么开回来」）")
+  -- ② 开：照常出声（别把功能关死）
+  cfg231.log = { on = true }
+  eq(EVAL_CHAT_ON(), true, "②★EVAL_CHAT_ON() 与 cfg.log.on 同源（开）")
+  TEST.chat = ""
+  EVAL_SAY("__SAY231B__")
+  eq(has231("__SAY231B__"), true, "②★★调试日志=开 ⇒ 照常刷（反向哨兵）")
+  -- ③ 历史三态兼容 + 同一闸门管**数据层**（关掉 = 既不刷也不记）
+  cfg231.log = nil
+  eq(EVAL_CHAT_ON(), true, "③★log 表不存在（老存档）⇒ 默认开")
+  cfg231.log = false
+  eq(EVAL_CHAT_ON(), false, "③★日志本体是 false（旧 UELog 形态）⇒ 关")
+  cfg231.log = { on = false }
+  local nBefore231 = EVAL_LOG_COUNT()
+  EVAL_LOGLINE("__LOG231__")
+  eq(EVAL_LOG_COUNT(), nBefore231, "③★★同一个开关也是**数据层**闸门：关掉 ⇒ 连日志环都不写（实测 " .. tostring(EVAL_LOG_COUNT()) .. " 条）")
+  -- ④ 标签改名 + 三语 + 不再与「方案技能日志」撞名
+  local z231, e231, r231 = EVAL_LOCALES.zhCN, EVAL_LOCALES.enUS, EVAL_LOCALES.ruRU
+  eq(string.find(tostring(z231.G_LOG_FILE), "调试日志", 1, true) ~= nil, true, "④★zhCN 标签 = 「调试日志」（用户要求改名）")
+  eq(string.find(tostring(z231.G_LOG_FILE), "记录调试日志", 1, true) == nil, true, "④★★旧名「记录调试日志」已不存在")
+  eq(z231.G_LOG_FILE ~= z231.W_DEBUG_LOG, true, "④★与「方案技能日志」不同名（1.71.2 那次歧义的根因）")
+  eq(type(e231.G_LOG_FILE) == "string" and string.find(string.lower(e231.G_LOG_FILE), "debug", 1, true) ~= nil, true, "④★enUS 同步（Debug log）")
+  eq(type(r231.G_LOG_FILE) == "string" and string.len(r231.G_LOG_FILE) > 0, true, "④★ruRU 同步")
+  -- ⑤ 走**真实命令入口** /eh log：关掉那一刻的确认行必须还能看到 + 顺带告知怎么开回来
+  cfg231.log = { on = true }
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("log")
+  eq(cfg231.log.on, false, "⑤★/eh log 真的把总闸门关了")
+  eq(has231("调试日志: "), true, "⑤★★关掉那一刻的确认行走常开出口（看得到，不静默）")
+  eq(has231("/eh log 可随时开回来"), true, "⑤★顺带说清怎么开回来")
+  TEST.chat = ""
+  EVAL_SAY("__SAY231C__")
+  eq(has231("__SAY231C__"), false, "⑤★★关掉之后普通 EVAL_SAY 确实静默（一条命令把两件事一起验）")
+  -- ⑥ 模块自己的播报口也读同一闸门（SimpleMap 的 P 走 EVAL_CHAT_ON）
+  TEST.chat = ""
+  pcall(EVAL_SM_SET, false)
+  eq(string.find(tostring(TEST.chat or ""), "简易地图", 1, true) == nil, true,
+     "⑥★★关掉总闸门 ⇒ 模块播报同样静默（实测聊天框：「" .. tostring(TEST.chat) .. "」）")
+  -- 夹具自清：总闸门 + 模块开关都还原（后面的组 230 还要用 SimpleMap）
+  cfg231.log = keep231
+  if tb231 then tb231.simpleMap = keepSM231 end
+  TEST.chat = ""
+  if fails0 == TESTASSERT_FAILS then print("GROUP 231 (调试日志总闸门：say/EVAL_SAY 联动 + 常开出口 + 标签改名): PASS") end
 end
 
 print("ALL TESTS PASS")
