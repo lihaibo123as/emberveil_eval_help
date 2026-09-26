@@ -1732,20 +1732,103 @@ end
 --   ★幂等判据：当前值 ≈ 原值 ×es 就跳过（客户端重排会把我们写的冲掉，下一拍自动补回；es 回到 1 时自动还原）。
 --     **原值在首次应用时记下**（/reload 之后叠加层是客户端原始布局）——★顺序不许换：读原值 → 写新值（1.74.31 组 206 的教训）。
 --   ★默认**开**（用户：「要默认启动的功能」）；`/ehm mapfit off` 关、`/ehm mapfit diag` 取证、`restore` 还原原始几何。
-local SMFIT = { open = false, es = nil, burst = 0, rec = {}, captured = false, needFold = nil, wrote = false, pendingApply = false }
+-- ★★★1.75.13：`rec` = **本图**（当前地图身份）的原值；`wroteKeys[纹理名] = 地图身份` = 本图我们真写过哪些层
+--   （还原只还我们写过的，绝不去动没碰过的层）；`mapKey` = 当前地图身份；`mapAge` = 本图已开多少秒（等版式稳定）
+local SMFIT = { open = false, es = nil, burst = 0, rec = {}, captured = false, needFold = nil, wrote = false,
+  pendingApply = false, mapKey = nil, mapAge = 0, wroteKeys = {} }
 -- ★★★1.75.9 存档迁移：**旧版（无 `mapFitVer` 戳）的原值记录一律不可信** —— 旧代码会把它污染成
 --   「已经折过的值」（关闭时清 rec、重开时把当前值当原值）。⇒ 整块丢弃，下一次在**自然档**重新抓：
 --   客户端每个进程都会重新布一次地图版式，抓到的一定是真原值（这也是用户当前那份存档的自愈路径）。
+-- ★★★1.75.13（版本戳 2 → 3）：**旧存档里的原值一律不可信**，这次的理由不是「折过没折过」而是**跨地图污染** ——
+--   旧 schema 把原值**只按纹理名**存一份（`mapFitOrig[纹理名]`），而 `WorldMapOverlay1..N` 是**逐图复用**的：
+--   真机存档（用户报障「某些地图打开之后探索层的坐标丢失、全部图层集中在左下区域重叠」）里 8 条原值有 **6 条完全相同**
+--   （155,-403 240×185），而任何真实版式都是**互不相同的矩形** ⇒ 那是「客户端还没布局 / 本图不用」的纹理几何被记下来了。
+--   ⇒ 3 起改成 `mapFitOrig[地图身份][纹理名]`，并且**换图就作废内存记录**（见 smFitNewMap）。
 local function smFitMigrate()
-  if SM_CFG.mapFitVer == 2 then return false end
+  if SM_CFG.mapFitVer == 3 then return false end
   local had = (type(SM_CFG.mapFitOrig) == "table") and (next(SM_CFG.mapFitOrig) ~= nil)
   SM_CFG.mapFitOrig = {}
   SMFIT.rec = {}
   SMFIT.captured = false
-  SM_CFG.mapFitVer = 2
+  SM_CFG.mapFitVer = 3
   return had
 end
 local SMFIT_BURST_GAP, SMFIT_BURST_SEC, SMFIT_IDLE_GAP = 0.1, 2.0, 0.3
+-- ★1.75.13：等客户端把**本图**的版式摆稳再抓原值（开图那一瞬抓到的可能还是上一张图/未布局的几何）
+local SMFIT_SETTLE = 0.4
+-- ★1.75.13：存档有界 —— 每张地图一份原值（≤9 条），最多留这么多张地图的
+local SMFIT_MAPS_MAX = 24
+
+-- ★★★1.75.13 新增：**地图身份**（这是本轮修法的地基）。
+--   为什么必须：`WorldMapOverlay1..N` 这批纹理是**按序号逐图复用**的 —— 客户端每次 `WorldMapFrame_Update`
+--   按当前地图的叠加层列表重新分配它们（本机 S_WorldMap 同源代码：`CreateTexture("WorldMapOverlay"..j)` → 每图重摆），
+--   **本图用不到的会被 `:Hide()` 且不清几何**。⇒ 同一个名字在不同地图上代表**完全不同的矩形**，
+--   把「原值」按名字记一次就永久沿用（旧 schema）必然把那套矩形盖到别的图上。
+local function smMapInfo()
+  if type(GetMapInfo) ~= "function" then return nil end
+  -- ★本项目铁律：`pcall` 只保留被调函数的**第一个**返回值 ⇒ 想拿多返回必须**包一层函数**
+  local ok, a, b, c = pcall(function() return GetMapInfo() end)
+  if not ok then return nil end
+  return a, b, c
+end
+
+-- 地图身份 = 文件名 + 纹理尺寸（尺寸变了版式也会变 ⇒ 同样要重新抓原值）；读不到返回 nil（如实三态，绝不猜）
+local function smMapKey()
+  local a, b, c = smMapInfo()
+  if a == nil and b == nil and c == nil then return nil end
+  return string.format("%s:%sx%s", tostring(a), tostring(b), tostring(c))
+end
+
+-- 当前地图的叠加层条数（客户端自己的数据）；读不到 = nil（不猜）
+local function smNumOverlays()
+  if type(GetNumMapOverlays) ~= "function" then return nil end
+  local ok, n = pcall(GetNumMapOverlays)
+  if not ok or not tonumber(n) then return nil end
+  return tonumber(n)
+end
+
+-- ★★★1.75.13：**本图*真正在用*的叠加层**判定（只读；读不到一律**放行** —— 判不出就不拦，绝不把功能判死）。
+--   · `IsShown() == false` ⇒ 客户端本图不用它（它留着上一张图的几何，写它就是制造错位）；
+--   · `GetTexture()` 读得到且为空 ⇒ 客户端这一轮根本没往它上面贴图（同上）。
+local function smFitInUse(o)
+  if type(o.IsShown) == "function" then
+    local ok, v = pcall(o.IsShown, o)
+    if ok and v == false then return false end
+  end
+  if type(o.GetTexture) == "function" then
+    local ok, v = pcall(o.GetTexture, o)
+    if ok and (v == nil or v == "") then return false end
+  end
+  return true
+end
+
+-- ★1.75.13：原值总条数（**跨地图分桶**合计；只数真正的记录 = 桶里的子表，平表老数据一律不算）
+local function smFitOrigCount()
+  local t = SM_CFG.mapFitOrig
+  if type(t) ~= "table" then return 0 end
+  local n = 0
+  for _, bucket in pairs(t) do
+    if type(bucket) == "table" then
+      for _, v in pairs(bucket) do if type(v) == "table" then n = n + 1 end end
+    end
+  end
+  return n
+end
+
+-- 存档有界：桶数超上限时丢掉**不是本图**的那些（有界检查，不当场修别的图）
+local function smFitPruneMaps(keep)
+  local t = SM_CFG.mapFitOrig
+  if type(t) ~= "table" then return end
+  local keys, n = {}, 0
+  for k, v in pairs(t) do
+    if type(v) == "table" then n = n + 1 table.insert(keys, k) end
+  end
+  if n <= SMFIT_MAPS_MAX then return end
+  for _, k in ipairs(keys) do
+    if n <= SMFIT_MAPS_MAX then break end
+    if k ~= keep then t[k] = nil n = n - 1 end
+  end
+end
 local smFitMsgAt = -99
 
 -- 开关真值：`SM_CFG.mapFit`，**nil = 默认开**（只有显式 false 才算关 —— 「默认启动」是用户明确要求）
@@ -1915,16 +1998,27 @@ local function smFitApply(es, quiet)
   if not (type(fr) == "table" or type(fr) == "userdata") then return 0, 0, 0 end
   es = tonumber(es) or 1
   if es <= 0 then es = 1 end
+  -- ★★★1.75.13：原值**按地图身份存**（`mapFitOrig[地图身份][纹理名]`）—— 同一批纹理名在不同地图上是不同矩形
+  local mk = smMapKey() or SMFIT.mapKey or "?"
+  SMFIT.mapKey = mk
+  -- ★本图客户端自己说「零条叠加层」⇒ 一个几何都不该碰（旧写法照样把那批残留几何写一遍）
+  if smNumOverlays() == 0 then return 0, 0, 0 end
   SM_CFG.mapFitOrig = SM_CFG.mapFitOrig or {}
-  local saved = SM_CFG.mapFitOrig -- 落存档那份（只给「/reload 之后还原」用：对象引用过不了 reload）
+  local savedMap = SM_CFG.mapFitOrig[mk] -- 落存档那份（只给「/reload 之后还原」用：对象引用过不了 reload）
+  if type(savedMap) ~= "table" then savedMap = {} SM_CFG.mapFitOrig[mk] = savedMap end
+  smFitPruneMaps(mk) -- 存档有界（每图一份、只留 SMFIT_MAPS_MAX 张图）
   local list = smFitTargets()
-  local changed, ready, rec = 0, 0, 0
+  local changed, ready, rec, skipped = 0, 0, 0, 0
   for _, it in ipairs(list) do
     local o = it.o
+    -- ★★★1.75.13：**本图不用的层一个几何都不碰**（隐藏 / 没贴图 ⇒ 它身上是别的图的残留几何；
+    --   旧写法对它们照写 = 真机看到的那批「全部挤在同一处」）
+    local use = smFitInUse(o)
+    if not use then skipped = skipped + 1 end
     local okp, p, rel, rp, x, y = pcall(o.GetPoint, o, 1)
     local okw, w = pcall(o.GetWidth, o)
     local okh, h = pcall(o.GetHeight, o)
-    if okp and p and okw and okh and tonumber(x) and tonumber(y) and tonumber(w) and tonumber(h) then
+    if use and okp and p and okw and okh and tonumber(x) and tonumber(y) and tonumber(w) and tonumber(h) then
       local r = SMFIT.rec[it.key]
       if not r then
         -- ★★★1.75.9：「关一次再开 ⇒ 折两遍」的根因就是**在这里当场记原值**：
@@ -1932,7 +2026,7 @@ local function smFitApply(es, quiet)
         --   每关开一轮还多乘一次。⇒ 现在这里**只采纳、不记录**：
         --     ① 本进程记过的（上一行的 `if not r`）→ ② 存档里那份（带 `mapFitVer` 版本戳，跨 /reload 的唯一兜底）
         --     ③ 两样都没有 ⇒ 本轮**跳过该目标**（只计数），交给 `smFitCapture()` 在**自然档**抓（下一拍就补上）。
-        local sv = saved[it.key]
+        local sv = savedMap[it.key]
         if type(sv) == "table" and tonumber(sv.x) and tonumber(sv.y) and tonumber(sv.w) and tonumber(sv.h) then
           r = { o = o, rel = rel, rp = rp, p = tostring(p), from = "saved",
                 x = tonumber(sv.x), y = tonumber(sv.y), w = tonumber(sv.w), h = tonumber(sv.h) }
@@ -1957,6 +2051,8 @@ local function smFitApply(es, quiet)
           pcall(o.SetHeight, o, wantH)
           changed = changed + 1
           SMFIT.wrote = true -- ★1.75.9：记下「本会话**真的写过**几何」⇒ 关闭时才需要还原（没写过就一个写都不发）
+          -- ★1.75.13：**逐层记账**（还原只还我们写过的、且只还**本图**写过的）
+          SMFIT.wroteKeys[it.key] = mk
           mfLog("折算：es=%.3f %s 原值(%.1f,%.1f %.1f×%.1f,来自%s) → 写入(%.1f,%.1f %.1f×%.1f)",
             es, tostring(it.key), r.x, r.y, r.w, r.h, tostring(r.from or "rec"),
             wantX, wantY, wantW, wantH)
@@ -1966,7 +2062,7 @@ local function smFitApply(es, quiet)
   end
   if changed > 0 then
     SM_CFG.mapFitAt = (type(GetTime) == "function") and string.format("%.1f", GetTime()) or "?"
-    SM_CFG.mapFitLast = { es = es, changed = changed, total = table.getn(list) }
+    SM_CFG.mapFitLast = { es = es, changed = changed, total = table.getn(list), skipped = skipped, map = mk }
     local now = (type(GetTime) == "function") and GetTime() or 0
     -- 同一波重排只播报一次（3s 节流），不然每拍刷屏
     if (not quiet) and (now - (smFitMsgAt or -99) > 3) then
@@ -1974,8 +2070,9 @@ local function smFitApply(es, quiet)
       local eff = smEffScale(fr)
       mfLog("折算口径：读回 es=%.3f ｜ 父链真有效缩放=%.3f ｜ 设置值 scale=%s", es, eff, tostring(SM_CFG.scale))
       local same = (math.abs(eff - es) < 0.01)
-      P(string.format("叠加层适配：按读回口径 %.2f 对齐 %d 个（非瓦片纹理共 %d 个；底瓦片不动）%s",
+      P(string.format("叠加层适配：按读回口径 %.2f 对齐 %d 个（非瓦片纹理共 %d 个%s；底瓦片不动）%s",
         es, changed, table.getn(list),
+        (skipped > 0) and ("，本图不用的 " .. skipped .. " 个已跳过") or "",
         same and "" or string.format("｜★真有效缩放(父链连乘)=%.2f，读回口径=%.2f（本客户端 `GetEffectiveScale` 报的是**自身** scale，两个量不同）", eff, es)))
     end
   end
@@ -1989,8 +2086,13 @@ end
 --     抓原值时把外框缩放**临时置 1**（自然档）读一次，读完立刻恢复原缩放（同一帧内，不会闪）。
 --   ★只补「还没记过」的目标（**绝不覆盖**已有记录）；成功抓到就把版本戳写进存档。
 local function smFitCapture()
+  -- ★★★1.75.13：原值**按地图身份存**，且只抓**本图真正在用**的层（见 smFitInUse / smMapKey 的注释）
+  local mk = smMapKey() or SMFIT.mapKey or "?"
+  SMFIT.mapKey = mk
+  if smNumOverlays() == 0 then return 0 end
   SM_CFG.mapFitOrig = SM_CFG.mapFitOrig or {}
-  local saved = SM_CFG.mapFitOrig
+  local saved = SM_CFG.mapFitOrig[mk]
+  if type(saved) ~= "table" then saved = {} SM_CFG.mapFitOrig[mk] = saved end
   local list = smFitTargets()
   if table.getn(list) == 0 then return 0 end
   local wm = featWm()
@@ -2000,9 +2102,11 @@ local function smFitCapture()
     if oks and tonumber(v) then keepScale = tonumber(v) end
     pcall(wm.SetScale, wm, 1)
   end
-  local n = 0
+  local n, skipUse = 0, 0
   for _, it in ipairs(list) do
-    if not SMFIT.rec[it.key] and type(saved[it.key]) ~= "table" then
+    if not smFitInUse(it.o) then
+      skipUse = skipUse + 1 -- 本图不用的层：既不抓也不写（它身上是别的图的残留几何）
+    elseif not SMFIT.rec[it.key] and type(saved[it.key]) ~= "table" then
       local o = it.o
       local okp, p, rel, rp, x, y = pcall(o.GetPoint, o, 1)
       local okw, w = pcall(o.GetWidth, o)
@@ -2010,18 +2114,21 @@ local function smFitCapture()
       if okp and p and okw and okh and tonumber(x) and tonumber(y) and tonumber(w) and tonumber(h) then
         saved[it.key] = { idx = it.key, name = it.name, p = tostring(p),
           rel = smRelName(rel), rp = smRelName(rp),
-          x = tonumber(x), y = tonumber(y), w = tonumber(w), h = tonumber(h) }
+          x = tonumber(x), y = tonumber(y), w = tonumber(w), h = tonumber(h), map = mk }
         n = n + 1
-        mfLog("抓原值：%s %s x=%.1f y=%.1f w=%.1f h=%.1f（读时外框缩放=%s ⇒ 自然档）",
+        mfLog("抓原值：%s %s x=%.1f y=%.1f w=%.1f h=%.1f（读时外框缩放=%s ⇒ 自然档；地图=%s）",
           tostring(it.key), tostring(p), tonumber(x), tonumber(y), tonumber(w), tonumber(h),
-          keepScale and string.format("%.2f", keepScale) or "?")
+          keepScale and string.format("%.2f", keepScale) or "?", tostring(mk))
       end
     end
   end
   if wm and keepScale then pcall(wm.SetScale, wm, keepScale) end
   if n > 0 then
-    SM_CFG.mapFitVer = 2
+    SM_CFG.mapFitVer = 3
     SMFIT.captured = true
+  end
+  if skipUse > 0 then
+    mfLog("抓原值：本图不用的 %d 个叠加层已跳过（隐藏/没贴图 ⇒ 旧写法抓到的是别的图的残留几何）", skipUse)
   end
   return n
 end
@@ -2029,14 +2136,23 @@ end
 -- 还原到存档里的原始几何（/reload 之后对象引用失效 ⇒ 按**名字**解析锚点、按 key 配对目标）
 local function smFitRestore(quiet)
   smFitMigrate()
+  -- ★★★1.75.13：还原同样**按地图身份**取原值（旧写法按纹理名取平表 ⇒ 拿到的是别的图的矩形）
+  local mk = smMapKey() or SMFIT.mapKey or "?"
+  SMFIT.mapKey = mk
   SM_CFG.mapFitOrig = SM_CFG.mapFitOrig or {}
+  local savedMap = SM_CFG.mapFitOrig[mk]
+  if type(savedMap) ~= "table" then savedMap = {} end
   local list = smFitTargets()
-  local n, miss, bad = 0, 0, 0
+  local n, miss, bad, untouched = 0, 0, 0, 0
   for _, it in ipairs(list) do
     -- ★1.75.9：**优先用本进程的记录**（`SMFIT.rec` 带着活对象引用，最可信）；存档那份只在没有活引用时兜底。
     local live = SMFIT.rec[it.key]
-    local r = (type(live) == "table" and live.o == it.o) and live or SM_CFG.mapFitOrig[it.key]
-    if r and tonumber(r.x) and tonumber(r.y) and tonumber(r.w) and tonumber(r.h) then
+    local r = (type(live) == "table" and live.o == it.o) and live or savedMap[it.key]
+    -- ★★★1.75.13：**只还「本图我们真写过的」层** —— 没写过的层一个几何都不碰（「关掉零动作」的同族；
+    --   旧写法会把「有记录但本次没写过」的层也写一遍，在跨图场景里等于又制造一次错位）
+    if SMFIT.wroteKeys[it.key] ~= mk then
+      untouched = untouched + 1
+    elseif r and tonumber(r.x) and tonumber(r.y) and tonumber(r.w) and tonumber(r.h) then
       local o = it.o
       local rel = nil
       if type(r.rel) == "string" and r.rel ~= "" then rel = _G[r.rel] end
@@ -2090,9 +2206,25 @@ local function smFitRestore(quiet)
   if not quiet then
     P("叠加层还原：按原值还原 " .. n .. " 个"
       .. (miss > 0 and ("；" .. miss .. " 个没有原值或锚点解析失败 ⇒ **如实跳过**（没动它们）") or "")
-      .. (bad > 0 and ("；" .. bad .. " 个写回后读回对不上 ⇒ **如实报出**（可能被客户端布局盖掉）") or ""))
+      .. (bad > 0 and ("；" .. bad .. " 个写回后读回对不上 ⇒ **如实报出**（可能被客户端布局盖掉）") or "")
+      .. (untouched > 0 and ("；" .. untouched .. " 个本图我们没写过 ⇒ **一个几何都不碰**") or ""))
   end
   return n, miss, bad
+end
+
+-- ★★★1.75.13 新增：**换图 = 当场作废旧原值**（绝不跨图复用那批矩形）。
+--   为什么必须有它：`WorldMapOverlay1..N` 是按序号逐图复用的，同一个名字在不同地图上代表不同矩形
+--   （真机存档里 6 条原值完全相同 = 「客户端还没布局 / 本图不用」的纹理几何被记下来了）。
+--   旧写法把「按名字记的那一份」跨图沿用 ⇒ 开另一张图时无条件把那套矩形盖回去 = 用户报的「坐标丢失 + 全挤在左下」。
+--   ★只丢**内存**记录：存档那份是**按地图身份分桶**的（`mapFitOrig[地图身份]`），别的图的原值照旧留着。
+local function smFitNewMap(mk)
+  SMFIT.mapKey = tostring(mk or "?")
+  SMFIT.rec = {}
+  SMFIT.captured = false
+  SMFIT.mapAge = 0
+  mfLog("换图：%s ⇒ 上一张图的原值记录**当场作废**（本图会在自然档重新抓一次；跨图沿用就是「坐标丢失/全挤在左下」的根因）",
+    tostring(SMFIT.mapKey))
+  return true
 end
 
 -- ★★★1.75.9：**开启时的叠加层准备**（顺序铁律：先探测/抓原值，再改缩放）。
@@ -2101,6 +2233,13 @@ end
 --   ④ 需要折算 ⇒ 此刻还没套默认缩放，正好在**自然档**抓原值（见 smFitCapture）。
 local function smFitPrepare()
   smFitMigrate()
+  -- ★1.75.13：先把**地图身份**对齐（换了图 ⇒ 旧记录当场作废；随后抓到的才是**本图**的几何）
+  local mk0 = smMapKey()
+  if mk0 and SMFIT.mapKey and mk0 ~= SMFIT.mapKey then
+    pcall(smFitNewMap, mk0)
+  elseif mk0 then
+    SMFIT.mapKey = mk0
+  end
   SMFIT.needFold = smFitDetect() -- 两种档都探一次（提示 / 取证 / auto 档的判据）
   if not smFitNeedFold() then
     -- ★只有**本会话真写过**才需要还回去（否则还原也是一次无谓的几何写 —— 「关掉零动作」的同族）
@@ -2125,8 +2264,16 @@ local function smFitDiag()
     end
   end
   local nList = table.getn(smFitTargets())
-  local nOrig = 0
-  for _ in pairs(SM_CFG.mapFitOrig or {}) do nOrig = nOrig + 1 end
+  local nOrig = smFitOrigCount()
+  -- ★1.75.13：**地图身份 / 客户端叠加层条数 / 本图在用几个 / 本图我们写过几个**都要摊出来 ——
+  --   「坐标丢失 + 全挤在左下」这一案的核心事实就是「原值属于哪张图、这张图到底用哪几个层」。
+  local mkDiag = smMapKey() or SMFIT.mapKey or "?"
+  local nOvDiag = smNumOverlays()
+  local nUseDiag, nWroteDiag = 0, 0
+  for _, it in ipairs(smFitTargets()) do if smFitInUse(it.o) then nUseDiag = nUseDiag + 1 end end
+  for _, v in pairs(SMFIT.wroteKeys or {}) do if v == mkDiag then nWroteDiag = nWroteDiag + 1 end end
+  P(string.format("地图身份=%s ｜ 客户端叠加层=%s ｜ 本图在用 %d / 非瓦片 %d ｜ 本图已写 %d 个 ｜ 原值共 %d 条（按地图分桶）｜ 等抓原值=%d",
+    tostring(mkDiag), (nOvDiag ~= nil) and tostring(nOvDiag) or "读不到", nUseDiag, nList, nWroteDiag, nOrig, ready))
   if (type(fr) == "table" or type(fr) == "userdata") then
     P(string.format("缩放量对照：**采用值(父链连乘)**=%.3f ｜ 旧 API 读回=%s ｜ 配置里的设置值 scale=%.3f",
       tonumber(es) or 0, (esApi and string.format("%.3f", esApi)) or "?", tonumber(SM_CFG.scale) or 1))
@@ -2149,6 +2296,59 @@ local function smFitDiag()
     .. " ｜ 取证行数 = " .. tostring((type(SM_CFG.mapFitTrace) == "table") and table.getn(SM_CFG.mapFitTrace) or 0)
     .. "（/ehm mapfit trace 可打出来）")
   return changed
+end
+
+-- ★★★1.75.13 新增（用户：「排查工具箱->缩放大地图->探索层额外处理异常…**先别修改**，分析问题」⇒ 先给只读取证口）：
+--   `/ehm mapfit dump` 的**内容生成口**（命令与测试同源；测试直接读它，不必解析聊天框）。
+--   每行都是**只读**读数：本模块的判定（显示 / 贴图 / 本图在用）+ 我们记过/写过什么 + **客户端自己的叠加层真值**
+--   （`GetMapInfo` / `GetNumMapOverlays` / `GetMapOverlayInfo`）⇒「谁写的、该是多少」一眼可判。
+local function smFitDumpLines()
+  local out = {}
+  local function add(s) table.insert(out, s) end
+  local mk = smMapKey() or SMFIT.mapKey or "?"
+  local a, b, c = smMapInfo()
+  local nOv = smNumOverlays()
+  add(string.format("清单：地图身份=%s（GetMapInfo=%s / %s / %s）｜ 客户端叠加层=%s ｜ 策略=%s ｜ es=%s ｜ 本图已开 %.2fs",
+    tostring(mk), tostring(a), tostring(b), tostring(c),
+    (nOv ~= nil) and tostring(nOv) or "读不到", smFitModeLabel(),
+    tostring(SMFIT.es), tonumber(SMFIT.mapAge) or 0))
+  local list = smFitTargets()
+  for i, it in ipairs(list) do
+    local o = it.o
+    local shown, tex = "读不到", "读不到"
+    if type(o.IsShown) == "function" then
+      local ok, v = pcall(o.IsShown, o)
+      if ok then shown = v and "显示" or "隐藏" end
+    end
+    if type(o.GetTexture) == "function" then
+      local ok, v = pcall(o.GetTexture, o)
+      if ok then tex = (v == nil or v == "") and "空" or tostring(v) end
+    end
+    local r = SMFIT.rec[it.key]
+    local rtxt = "无"
+    if type(r) == "table" then rtxt = string.format("(%.0f,%.0f) %.0fx%.0f", r.x, r.y, r.w, r.h) end
+    add(string.format("  %d) %s：%s ｜ 贴图=%s ｜ 本图在用=%s ｜ 记录=%s ｜ 本图已写=%s",
+      i, tostring(it.key), shown, tex, smFitInUse(o) and "是" or "否", rtxt,
+      (SMFIT.wroteKeys[it.key] == mk) and "是" or "否"))
+  end
+  if table.getn(list) == 0 then
+    add("  （WorldMapDetailFrame 下没有非瓦片纹理：地图没开，或客户端还没建这批纹理）")
+  end
+  if nOv and nOv > 0 and type(GetMapOverlayInfo) == "function" then
+    for i = 1, nOv do
+      local ok, tn, w, h, ox, oy = pcall(function() return GetMapOverlayInfo(i) end)
+      if not ok then
+        add(string.format("  客户端第 %d 条叠加层：读不到（GetMapOverlayInfo 失败）", i))
+        break
+      end
+      add(string.format("  客户端叠加层 %d：%s %sx%s @(%s,%s)", i, tostring(tn), tostring(w), tostring(h), tostring(ox), tostring(oy)))
+    end
+  else
+    add("  客户端叠加层清单：读不到（GetNumMapOverlays/GetMapOverlayInfo 不可用，或本图 0 条）")
+  end
+  add("  口径：显示/贴图/在用 = 本模块的**只读**判定（「本图在用=否」的层我们一个几何都不碰）；"
+    .. "记录 = 本图（地图身份分桶）下的原值；本图已写 = 本次会话我们真写过的层")
+  return out
 end
 
 -- 开图侦测 tick（0.2s 节流；★挂 WorldFrame 不挂 UIParent）
@@ -2226,12 +2426,21 @@ do
       -- ④ 叠加层适配：走到这里说明**总开关是开的**（本函数开头已闸）⇒ 这里只需看子开关 mapFit（nil = 默认开）。
       --   ★关闭时的几何还原由 EVAL_SM_SET(false) 当场做（不再靠本 tick 兜）。
       if not smFitOn() then return end
-      if not open or not es or es <= 0 then return end
+      if not open or not es or es <= 0 then
+        SMFIT.mapAge = 0 -- 地图关着 ⇒ 计时归零（下次开图重新等版式稳定）
+        return
+      end
+      -- ★★★1.75.13：**换图 ⇒ 原值当场作废**（地图身份一变就必须重抓本图的几何；跨图沿用就是「坐标丢失」的根因）
+      local mkNow = smMapKey()
+      if mkNow and mkNow ~= SMFIT.mapKey then pcall(smFitNewMap, mkNow) end
+      SMFIT.mapAge = (tonumber(SMFIT.mapAge) or 0) + dt
       -- ★★★1.75.9：折算策略（默认折算；`auto` 才先探测）。探测结论只读、只影响 auto 档。
       if smFitMode() == "auto" and SMFIT.needFold == nil then SMFIT.needFold = smFitDetect() end
       if not smFitNeedFold() then return end
       -- ★原值必须在**自然档**抓一次（见 smFitCapture），绝不能拿已折过的值当原值。
-      if not SMFIT.captured then pcall(smFitCapture) end
+      --   ★★★1.75.13：还要**等客户端把本图版式摆稳**（SMFIT_SETTLE）—— 开图那一瞬抓到的往往是
+      --   「还没布局 / 本图不用」的残留几何（真机存档里 6 条原值完全相同就是这么来的）。
+      if (not SMFIT.captured) and SMFIT.mapAge >= SMFIT_SETTLE then pcall(smFitCapture) end
       local gap = ((tonumber(SMFIT.burst) or 0) > 0) and SMFIT_BURST_GAP or SMFIT_IDLE_GAP
       if accFit < gap then return end
       accFit = 0
@@ -2312,7 +2521,7 @@ function EVAL_SM_SET(on)
     pcall(smFitPrepare)
     mfLog("开关 ON：策略=%s 探测=%s 抓原值=%d 条 缓存记录=%d 条", smFitMode(),
       (SMFIT.needFold == nil) and "未判定" or tostring(SMFIT.needFold ~= false),
-      (function() local k = 0 for _ in pairs(SM_CFG.mapFitOrig or {}) do k = k + 1 end return k end)(),
+      smFitOrigCount(),
       (function() local k = 0 for _ in pairs(SMFIT.rec or {}) do k = k + 1 end return k end)())
     -- ★★★1.74.36-3：**开启即套默认档**（缩放 0.7 / 透明度 0.7 / GUI重开 不启用）——用户原话
     --   「开启之后默认值设置 0.7缩放 0.7 透明度 不启用GUI」；先套默认值，再应用/就位。
@@ -2331,8 +2540,7 @@ function EVAL_SM_SET(on)
     --   ★★判据 = **确实动过**才写：FEAT.applied（我们应用过）或 SM_CFG.mapFitOrig 里还留着原值记录。
     --     从未开启过 ⇒ **一个地图纹理都不碰**（连透明/缩放都不写 1 —— 它们本来就没被我们改过）。
     --   顺序：先还原叠加层几何（读首次折算时记下的原值）→ 再复位透明度/缩放/位置 → 最后如实播报。
-    local nOrig230 = 0
-    for _ in pairs(SM_CFG.mapFitOrig or {}) do nOrig230 = nOrig230 + 1 end
+    local nOrig230 = smFitOrigCount()
     local touched230 = (FEAT.applied == true) or (nOrig230 > 0)
     mfLog("开关 OFF：策略=%s 动过=%s（applied=%s 原值=%d 条）", smFitMode(), tostring(touched230),
       tostring(FEAT.applied == true), nOrig230)
@@ -2442,6 +2650,10 @@ if type(SlashCmdList) == "table" then
         SM_CFG.mapFitTrace = {}
         local out = (type(EVAL_SAY_FORCE) == "function") and EVAL_SAY_FORCE or P
         out("[简易地图] 折算取证已清空")
+      elseif sub == "dump" or sub == "探针" or sub == "清单" then
+        -- ★★★1.75.13：只读清单（地图身份 / 客户端叠加层真值 / 每个层的在用判定与记录）——「谁写的、该是多少」一眼可判
+        local out2 = (type(EVAL_SAY_FORCE) == "function") and EVAL_SAY_FORCE or P
+        for _, ln in ipairs(smFitDumpLines()) do out2("[简易地图] " .. tostring(ln)) end
       elseif string.find(sub, "^mode") then
         EVAL_SM_MAPFIT_MODE_SET(string.match(sub, "^mode%s+(%S+)") or "")
       elseif sub == "on" or sub == "开" then
@@ -2453,7 +2665,7 @@ if type(SlashCmdList) == "table" then
       else
         smFitDiag()
       end
-      P("用法：/ehm mapfit on | off | restore | diag | trace | traceclear | mode fold|auto|nofold（不给子命令 = diag）")
+      P("用法：/ehm mapfit on | off | restore | diag | dump（只读清单）| trace | traceclear | mode fold|auto|nofold（不给子命令 = diag）")
     elseif msg == "reset" or msg == "复位" then
       featReset()
     elseif msg == "default" or msg == "默认" or msg == "默认档" then
@@ -2746,7 +2958,8 @@ function EVAL_SM_TEST_MAPFIT() return smFitOn(), SM_CFG.mapFit, SMFIT.burst, SMF
 function EVAL_SM_TEST_MAPFIT_GAPS() return SMFIT_BURST_GAP, SMFIT_BURST_SEC, SMFIT_IDLE_GAP end
 function EVAL_SM_TEST_MAPFIT_TARGETS() return table.getn(smFitTargets()) end
 function EVAL_SM_TEST_MAPFIT_APPLY(es) local c, r, rec = smFitApply(tonumber(es) or 1, true) return c, r, rec end
-function EVAL_SM_TEST_MAPFIT_ORIG() local n = 0 for _ in pairs(SM_CFG.mapFitOrig or {}) do n = n + 1 end return n end
+-- ★1.75.13：原值条数 = **跨地图分桶**合计（只数真记录；平表老数据不算 —— 见 smFitOrigCount）
+function EVAL_SM_TEST_MAPFIT_ORIG() return smFitOrigCount() end
 function EVAL_SM_TEST_MAPFIT_REC() local n = 0 for _ in pairs(SMFIT.rec or {}) do n = n + 1 end return n end
 function EVAL_SM_TEST_MAPFIT_BURST(sec) SMFIT.burst = tonumber(sec) or 0 return SMFIT.burst end
 function EVAL_SM_TEST_MAPFIT_RESTORE() return smFitRestore(true) end
@@ -2756,11 +2969,35 @@ function EVAL_SM_TEST_MAPFIT_RESET()
   SMFIT.open, SMFIT.es, SMFIT.burst = false, nil, 0
   SMFIT.captured, SMFIT.needFold = false, nil
   SMFIT.wrote = false
+  -- ★1.75.13：地图身份 / 版式计时 / 逐层记账也要复位（否则上一段夹具的图会串到下一段）
+  SMFIT.mapKey, SMFIT.mapAge, SMFIT.wroteKeys = nil, 0, {}
   SM_CFG.mapFitOrig = nil
   SM_CFG.mapFitVer = nil
   SM_CFG.mapFit = nil
   SM_CFG.mapFitMode = nil -- ★1.75.9：策略也要回到默认（否则上一档会**串到下一段夹具**：实测 ⑨ 因此抓不到原值）
   return true
+end
+-- ★★★1.75.13 新读值口（「坐标丢失 / 全挤在左下」那一案的判据挂在这几个口上）
+function EVAL_SM_TEST_MAPFIT_MAPKEY() return SMFIT.mapKey, tonumber(SMFIT.mapAge) or 0, table.getn(smFitTargets()) end
+function EVAL_SM_TEST_MAPFIT_INUSE(i)
+  local it = smFitTargets()[tonumber(i) or 1]
+  if not it then return nil end
+  return smFitInUse(it.o), it.key
+end
+function EVAL_SM_TEST_MAPFIT_WROTE(name) return SMFIT.wroteKeys[tostring(name or "")] end
+function EVAL_SM_TEST_MAPFIT_DUMP() return smFitDumpLines() end
+function EVAL_SM_TEST_MAPFIT_CAPTURE_RAW() return smFitCapture() end
+function EVAL_SM_TEST_MAPFIT_NEWMAP(mk) return smFitNewMap(mk) end
+-- 存档分桶的**直读**口：返回 桶数, 指定桶里的记录数（桶不存在 = 0）
+function EVAL_SM_TEST_MAPFIT_BUCKET(mk)
+  local t = SM_CFG.mapFitOrig
+  if type(t) ~= "table" then return 0, 0 end
+  local nb = 0
+  for _ in pairs(t) do nb = nb + 1 end
+  local b = (mk ~= nil) and t[tostring(mk)] or nil
+  local n = 0
+  if type(b) == "table" then for _, v in pairs(b) do if type(v) == "table" then n = n + 1 end end end
+  return nb, n
 end
 -- ★★★1.75.9 新读值口（「缩两遍」那一案的判据都挂在这几个口上）
 function EVAL_SM_TEST_MAPFIT_NEEDFOLD() return SMFIT.needFold, SMFIT.captured == true end

@@ -16700,14 +16700,16 @@ do
   local keys199 = { "RW_LINE", "RW_LINE_ND", "RW_MORE", "RW_RANK_ELITE", "RW_RANK_RARE_ELITE",
     "RW_RANK_BOSS", "RW_RANK_RARE", "RW_RANK_MOB", "RW_UNKNOWN", "RW_STATE", "RW_MODE_HOOK",
     "RW_MODE_POLL", "RW_MODE_NONE", "RW_MODE_ABSENT", "RW_LAST", "RW_NOLAST", "RW_USAGE",
-    "RW_TEST_OK", "RW_TEST_FAIL" }
+    "RW_TEST_OK", "RW_TEST_FAIL",
+    -- ★1.75.12 新增 6 键（总闸门读数 / 接线自检 / 异常计数）—— 少一个 L() 就会把键名打到聊天框
+    "RW_GATE", "RW_HOOKSTATE", "RW_HOOK_OK", "RW_HOOK_GONE", "RW_HOOK_MISS", "RW_ERRLINE" }
   local miss199 = 0
   for _, lg in ipairs({ "zhCN", "enUS", "ruRU" }) do
     for _, k in ipairs(keys199) do
       if type((EVAL_LOCALES[lg] or {})[k]) ~= "string" then miss199 = miss199 + 1 end
     end
   end
-  eq(miss199, 0, "⑨★★19 个键 × 3 语言全齐（缺一个 L() 就把键名本身打到聊天框）")
+  eq(miss199, 0, "⑨★★25 个键 × 3 语言全齐（缺一个 L() 就把键名本身打到聊天框）")
   eq((EVAL_LOCALES.zhCN or {}).RW_RANK_RARE_ELITE, "稀有精英", "⑨★中文品阶文本逐字")
   eq(EVAL_L("RW_MORE", 3) == "，同刻另有 3 只也进了范围", true, "⑨★带参数的键格式正确（%d 落位）")
 
@@ -22143,6 +22145,126 @@ do
   pcall(EVAL_HELP_UPDATE_STATE)
   if fails251 == TESTASSERT_FAILS then
     print("GROUP 251 (补自动攻击：目标守卫(尸体/无目标/不可攻击不按) · 挪到规则之后(顺序即判据) · 实时 API 而非过期 st · 开关仍有效): PASS")
+  end
+end
+
+-- ===== 组 252（1.75.12）：稀有转播是**通知**，不受「调试日志」总闸门控制 =====
+--   用户报障：「查看任务插件,稀有JY 通知的机制是否调整.现在插件无法检测到通知稀有通知了」。
+--   真机取证（读存档 LIHAIBOAS2）：rareWatch = true（转播自己的开关开着）但 log.on = false
+--   （「调试日志」= 整个插件往聊天框说话的**总闸门**）⇒ EVAL_SAY 与 logLine 一起静音
+--   ⇒ 转播一行都不出、日志环里也查不到任何证据（看着就像「功能失效」）。
+--   ★任务插件那边**机制没变**：RareAlert:Show 仍在（World/RareAlert.lua:621）、签名未变、
+--     RARE_ALERT_CHAT 仍在 Show 体内（:657）—— 不是对方改实现。
+--   修法：转播改走**不门控**的 EVAL_SAY_FORCE；总闸门对其余 say 照旧生效（① 有反向哨兵钉死）。
+--   判据：① 闸门关着时普通 say 静音、但转播照旧出声（读值口 + 专属取证环如实记账）；
+--        ② 老核心没有 EVAL_SAY_FORCE ⇒ 如实退回受门控出口（不假装）；③ 「稀有 试」认对方新入口 Test；
+--        ④ 回调异常**如实计数 + 落盘**（原来被 pcall 吞掉 = 排查盲区），且绝不影响任务插件；
+--        ⑤ 状态命令报总闸门 + 接线自检（被改回去 ⇒ 当场重装）；⑥ cfg.rareProbe 已进 Core 残渣键清单。
+do
+  local fails252 = TESTASSERT_FAILS
+  local cfg252 = EVAL_HELP_CONFIG
+  local savedLog252 = cfg252.log
+  local savedUQ252 = rawget(_G, "UnrealQuest")
+  local savedForce252 = rawget(_G, "EVAL_SAY_FORCE")
+  local savedMod252 = rawget(_G, "EVAL_UQ_MODULE")
+  local savedLang252 = EVAL_GET_LANG()
+  EVAL_SET_LANG("zhCN")
+  local mods252 = {}
+  local function mkRA252()
+    local ra = { stats = { alerts = 0 } }
+    ra.Show = function(self, entry, distance, dx, dy, others)
+      self.stats.alerts = self.stats.alerts + 1
+      return true
+    end
+    -- ★只给**新名** Test（旧名 TestNearest 故意不给）：旧实现只认旧名 ⇒ 这条自证命令静默失效
+    ra.Test = function(self)
+      self:Show({ unitId = 7, rank = 4, coords = {} }, 42, 0, 0, 0)
+      return "雪盲石腭怪", nil
+    end
+    return ra
+  end
+  rawset(_G, "UnrealQuest", { GetModule = function(_, name) return mods252[name] end })
+  mods252.Database = { GetUnitName = function(_, id) return (id == 7) and "雪盲石腭怪" or nil end }
+  cfg252.rareProbe = nil
+
+  -- ① 总闸门关掉：常规出口静音，但**稀有转播照旧出声**（这一条就是用户报障的修复）
+  cfg252.log = { on = false }
+  EVAL_TEST_RW_RESET()
+  local ra252 = mkRA252()
+  mods252.RareAlert = ra252
+  eq(EVAL_RW_INSTALL(), "hook", "①前置：转播装上（包住 Show）")
+  eq(EVAL_TEST_RW_STATE().gate, false, "①前置：总闸门确实是**关**的（cfg.log.on=false）")
+  TEST.chat = nil
+  EVAL_SAY("常规出口：应该被总闸门吃掉")
+  eq(TEST.chat, nil, "①★★反向哨兵：总闸门关着时**常规 say 一个字都不出**（没把闸门拆掉）")
+  TEST.chat = nil
+  ra252:Show({ unitId = 7, rank = 4, coords = {} }, 118, 0, 0, 0)
+  local chat252 = tostring(TEST.chat or "")
+  eq(string.find(chat252, "稀有提醒", 1, true) ~= nil, true, "①★★★闸门关着也照样转播（走强制出口）：" .. chat252)
+  eq(string.find(chat252, "雪盲石腭怪", 1, true) ~= nil, true, "①★★行里有名字（从对方 Database:GetUnitName 取）")
+  eq(EVAL_TEST_RW_STATE().notifyForce, true, "①★★如实记着这次走的是**强制出口**")
+  local box252 = cfg252.rareProbe
+  eq(type(box252) == "table" and type(box252.out) == "table" and table.getn(box252.out) > 0, true, "①★★专属取证环 cfg.rareProbe 有落盘（★不门控 ⇒ 闸门关着也留得下证据）")
+  eq(string.find(tostring(box252.out[table.getn(box252.out)]), "强制", 1, true) ~= nil, true, "①★末条如实写着出口=强制")
+
+  -- ② 老核心没有 EVAL_SAY_FORCE ⇒ 退回受门控出口（如实退化，不假装成功）
+  rawset(_G, "EVAL_SAY_FORCE", nil)
+  TEST.chat = nil
+  ra252:Show({ unitId = 7, rank = 4, coords = {} }, 20, 0, 0, 0)
+  eq(TEST.chat, nil, "②★★没有强制出口时退回 say ⇒ 闸门关着就不出声（如实退化，不假装）")
+  eq(EVAL_TEST_RW_STATE().notifyForce, false, "②★读值口如实记 notifyForce=false")
+  rawset(_G, "EVAL_SAY_FORCE", savedForce252)
+
+  -- ③ 「稀有 试」认对方**新入口 Test**（stub 故意不给旧名 TestNearest）
+  TEST.chat = nil
+  SlashCmdList["EVALHELP"]("go 稀有 试")
+  local chat3 = tostring(TEST.chat or "")
+  -- ★闸门关着 ⇒ 命令自己的回复（say）本来就该静音；能看见的是**转播行**（强制出口）——
+  --   它出现就证明「稀有 试 → 对方 Test → Show → 我们的转播」这条链真的通了。
+  eq(string.find(chat3, "稀有提醒", 1, true) ~= nil, true, "③★★「稀有 试」认新入口 Test 并真的转播了一行：" .. chat3)
+  eq(string.find(tostring(cfg252.rareProbe.out[table.getn(cfg252.rareProbe.out)] or ""), "Test", 1, true) ~= nil, true, "③★自证读数里记着用的是 Test")
+
+  -- ④ 回调异常：如实计数 + 落盘；且**不影响任务插件**（原函数照旧正常返回）
+  local savedSeen252 = EVAL_RW.seen
+  local savedFails252 = EVAL_RW.fails
+  rawset(_G, "EVAL_UQ_MODULE", function() error("boom252") end)
+  local okP252, retP252 = pcall(ra252.Show, ra252, { unitId = 7, rank = 4, coords = {} }, 30, 0, 0, 0)
+  eq(okP252 and retP252 == true, true, "④★★任务插件的 Show 照旧正常返回（我们的回调出错绝不外溢）")
+  eq(EVAL_RW.fails > savedFails252, true, "④★★回调异常**如实计数**（原来被 pcall 静默吞掉 ⇒ 排查盲区）")
+  eq(string.find(tostring(EVAL_TEST_RW_STATE().lastErr or ""), "boom252", 1, true) ~= nil, true, "④★记账里有原始错误文本")
+  eq(string.find(tostring(cfg252.rareProbe.out[table.getn(cfg252.rareProbe.out)] or ""), "回调抛错", 1, true) ~= nil, true, "④★★异常也落进专属取证环（闸门关着时唯一的证据）")
+  rawset(_G, "EVAL_UQ_MODULE", savedMod252)
+  EVAL_RW.seen, EVAL_RW.fails = savedSeen252, savedFails252
+
+  -- ⑤ 状态命令：报总闸门 + 接线自检；被改回去 ⇒ 当场重装（自检不止是报，还要修）
+  TEST.chat = nil
+  SlashCmdList["EVALHELP"]("go 稀有")
+  local chat5 = tostring(TEST.chat or "")
+  eq(string.find(chat5, "调试日志总闸门", 1, true) ~= nil, true, "⑤★★状态命令把总闸门摆到明面上：" .. chat5)
+  eq(string.find(chat5, "还挂着", 1, true) ~= nil, true, "⑤★★接线自检 = 还挂着")
+  eq(EVAL_TEST_RW_STATE().showIsOurs, true, "⑤★读值口 showIsOurs=true")
+  ra252.Show = function() return true end -- 模拟「被改回去」（对方重载 / 别人又包了一层）
+  TEST.chat = nil
+  SlashCmdList["EVALHELP"]("go 稀有")
+  eq(string.find(tostring(TEST.chat or ""), "已被改回去", 1, true) ~= nil, true, "⑤★★★发现接线被改回去 ⇒ 如实播报")
+  eq(EVAL_TEST_RW_STATE().showIsOurs, true, "⑤★★★并且**当场重装**（自检逻辑真的修了，不只是报）")
+
+  -- ⑥ 专属取证环进了 Core 残渣键清单（只有 /eh 存档清理才清）
+  local keys252 = EVAL_LOAD_RESIDUE_KEYS()
+  local has252 = false
+  for i = 1, table.getn(keys252) do if keys252[i] == "rareProbe" then has252 = true end end
+  eq(has252, true, "⑥★cfg.rareProbe 在 Core 的调试残渣键清单里")
+
+  print("  稀有转播：调试日志关着也出声（强制出口）· 常规 say 仍被闸门管 · 认新入口 Test · 回调异常落盘 · 接线自检自愈")
+  cfg252.log = savedLog252
+  cfg252.rareProbe = nil
+  rawset(_G, "UnrealQuest", savedUQ252)
+  rawset(_G, "EVAL_SAY_FORCE", savedForce252)
+  rawset(_G, "EVAL_UQ_MODULE", savedMod252)
+  EVAL_SET_LANG(savedLang252)
+  pcall(EVAL_TEST_RW_RESET)
+  if fails252 == TESTASSERT_FAILS then
+    print("GROUP 252 (稀有转播不受「调试日志」总闸门控制：通知走强制出口 · 常规出口仍受控 · 认新入口 Test · 回调异常落盘 · 接线自检自愈): PASS")
   end
 end
 

@@ -198,7 +198,9 @@ if (!/\nsmMigrateReopen\(\)\r?\nSM_CFG\.showGUI = nil\r?\n/.test(sm)) {
     // ⑦ 读值口齐全（测试靠它们；缺一个 = 断言静默跳过）
     for (const f of ["EVAL_SM_MAPFIT_ON", "EVAL_SM_MAPFIT_SET", "EVAL_SM_MAPFIT_TIP",
                      "EVAL_SM_TEST_MAPFIT", "EVAL_SM_TEST_MAPFIT_GAPS", "EVAL_SM_TEST_MAPFIT_TARGETS",
-                     "EVAL_SM_TEST_MAPFIT_APPLY", "EVAL_SM_TEST_MAPFIT_ORIG", "EVAL_SM_TEST_MAPFIT_RESET"]) {
+                     "EVAL_SM_TEST_MAPFIT_APPLY", "EVAL_SM_TEST_MAPFIT_ORIG", "EVAL_SM_TEST_MAPFIT_RESET",
+                     "EVAL_SM_TEST_MAPFIT_MAPKEY", "EVAL_SM_TEST_MAPFIT_INUSE", "EVAL_SM_TEST_MAPFIT_WROTE",
+                     "EVAL_SM_TEST_MAPFIT_DUMP", "EVAL_SM_TEST_MAPFIT_BUCKET"]) {
       if (sm.indexOf("function " + f) < 0) bad.push("缺读值口 " + f);
     }
     // ⑧ ★反向哨兵：**调试工具不许再把自动适配做回去**（用户：「图层调试工具只是个调试工具，不需要」）
@@ -309,9 +311,101 @@ if (!/\nsmMigrateReopen\(\)\r?\nSM_CFG\.showGUI = nil\r?\n/.test(sm)) {
     console.log("SM POS CENTER CHECK: 载入期 posArmed=true（首次开图必居中）· 清掉跨会话历史偏移 · 有界窗口期重申 + 拖拽即让位 · 复位同口径 · 读值口齐");
   })();
 
+  // ===== SM MAP KEY CHECK（1.75.13）：「探索层坐标丢失 / 全部图层挤在左下重叠」的源码级判据 =====
+  // 用户报障原话：「排查工具箱->缩放大地图->探索层额外处理异常: 某些地图打开之后会将探索层的坐标丢失.
+  //   全部图层都集中在左下区域重叠」。
+  // 真机存档实证（LIHAIBOAS2 / `simpleMapCfg.mapFitOrig`）：8 条原值里 **6 条完全相同**（155,-403 240×185），
+  //   而 `WorldMapOverlay1..N` 是客户端**按序号逐图复用**的（一图一套矩形，用不到的 `:Hide()` 且不清几何）
+  //   ⇒ 任何真实版式都不可能是「6 条同一矩形」；那批值就是「客户端还没布局 / 本图不用」的残留几何。
+  // ★为什么必须源码级钉（这一案全是静默的）：
+  //   ① 原值只按**纹理名**存一份（平表）⇒ 同一个名字在别的图上代表别的矩形，开别的图就把那套盖回去；
+  //   ② 换图不作废记录 ⇒ 新图刚摆好的坐标 0.3s 内被顶掉（用户看到的「坐标丢失」）；
+  //   ③ 对隐藏/没贴图的层照写 ⇒ 本图不用的层全停在同一个坐标（用户看到的「全部重叠」）；
+  //   ④ 抓原值不等版式稳定 ⇒ 抓到的就是残留几何（① 的来源）；
+  //   ⑤ 还原不区分「我们写过的」⇒ 关掉/还原时又写一遍别的图的矩形（用户自己救不回来）。
+  (function () {
+    const bad = [];
+    const p = path.join(__dirname, "tools", "SimpleMap.lua");
+    if (!fs.existsSync(p)) { console.log("SM MAP KEY CHECK: (无 tools/SimpleMap.lua，跳过)"); return; }
+    const raw = fs.readFileSync(p, "utf8");
+    const sm = strip(raw);
+    const seg = function (start, nextRe) {
+      const i = sm.indexOf(start);
+      if (i < 0) return "";
+      const j = sm.indexOf(nextRe, i + start.length);
+      return sm.slice(i, j > i ? j : i + 4000);
+    };
+    // ① 地图身份：必须走「包一层函数」的 pcall（本项目铁律：pcall 只留第一个返回值）
+    if (sm.indexOf("local function smMapInfo()") < 0) bad.push("没有 smMapInfo（地图身份读取口）");
+    if (sm.indexOf("pcall(function() return GetMapInfo() end)") < 0) {
+      bad.push("读 GetMapInfo 不是「包一层函数」的 pcall ⇒ 多返回被截断，地图身份恒为 nil（跨图复用照旧）");
+    }
+    if (sm.indexOf("local function smMapKey()") < 0) bad.push("没有 smMapKey（地图身份 = 文件名 + 纹理尺寸）");
+    if (sm.indexOf("local function smNumOverlays()") < 0) bad.push("没有 smNumOverlays（客户端自己的叠加层条数）");
+    // ② 原值必须**按地图分桶**存：桶头出现 ≥2（apply + capture），且绝不出现旧的平表写法
+    const buckets = (sm.match(/SM_CFG\.mapFitOrig\[mk\]/g) || []).length;
+    if (buckets < 2) bad.push("按地图分桶取原值只出现 " + buckets + " 处（apply 与 capture 各要一处：`SM_CFG.mapFitOrig[mk]`）");
+    if (/local saved = SM_CFG\.mapFitOrig(?!\[)/.test(sm)) bad.push("仍有「平表原值」写法 `local saved = SM_CFG.mapFitOrig` ⇒ 跨图复用（本轮的根因）会回来");
+    // ③ 版本戳 3（旧 schema 一律丢弃自愈）+ 迁移里真的改戳
+    if (sm.indexOf("SM_CFG.mapFitVer == 3") < 0) bad.push("迁移判据不是 `mapFitVer == 3` ⇒ 旧版（跨图污染）的原值不会被丢弃（用户修好代码也照样错）");
+    if (sm.indexOf("SM_CFG.mapFitVer = 3") < 0) bad.push("迁移里没有把版本戳写成 3");
+    if (sm.indexOf("SM_CFG.mapFitVer = 2") >= 0 || sm.indexOf("mapFitVer == 2") >= 0) bad.push("文件里还留着版本 2 的痕迹（旧 schema 又被认成有效）");
+    // ④ 换图 = 当场作废（tick 里按 smMapKey 比较后调 smFitNewMap；prepare 也要对齐）
+    if (sm.indexOf("local function smFitNewMap(") < 0) bad.push("没有 smFitNewMap（换图作废内存原值）");
+    else {
+      const nseg = seg("local function smFitNewMap(", "\nlocal function ");
+      if (nseg.indexOf("SMFIT.rec = {}") < 0) bad.push("smFitNewMap 没有丢掉旧图的内存记录（`SMFIT.rec = {}`）");
+      if (nseg.indexOf("SMFIT.captured = false") < 0) bad.push("smFitNewMap 没有重置 captured ⇒ 本图不会再抓原值（用的还是上一张图的）");
+    }
+    if (sm.indexOf("pcall(smFitNewMap, mkNow)") < 0) bad.push("tick 里没有「地图身份变了 ⇒ 作废旧原值」（跨图沿用照旧）");
+    if (sm.indexOf("local mkNow = smMapKey()") < 0) bad.push("tick 里没有取当前地图身份（换图检测形同虚设）");
+    if (sm.indexOf("pcall(smFitNewMap, mk0)") < 0) bad.push("开启路径（smFitPrepare）没有对齐地图身份");
+    // ⑤ 本图*在用*判定：IsShown + GetTexture 两条，且 apply / capture **各**要过它
+    if (sm.indexOf("local function smFitInUse(o)") < 0) bad.push("没有 smFitInUse（本图在用的层判定）");
+    else {
+      const use = seg("local function smFitInUse(o)", "\nlocal function ");
+      if (use.indexOf("IsShown") < 0) bad.push("smFitInUse 没看 IsShown（客户端本图不用的层会被我们改）");
+      if (use.indexOf("GetTexture") < 0) bad.push("smFitInUse 没看 GetTexture（没贴图的层会被我们改）");
+    }
+    const applySeg = seg("local function smFitApply(", "\nlocal function ");
+    const capSeg = seg("local function smFitCapture(", "\n" + "local function ");
+    if (applySeg.indexOf("smFitInUse(") < 0) bad.push("smFitApply 没有过「本图在用」闸门 ⇒ 隐藏/本图不用的层照写（= 用户看到的重叠）");
+    // ★★★变异 M1 实测教训：只验「调了这个函数」不够 —— 它必须**真的闸住写路径**（`if use and …` 这一行）。
+    //   去掉 `use and` 时 `smFitInUse(` 还在（`local use = smFitInUse(o)` 那行）⇒ 只查调用会漏网（本项目 M8 同型）。
+    if (!/if use and okp and p and okw and okh/.test(applySeg)) {
+      bad.push("smFitApply 里「本图在用」没有闸住读写块（缺 `if use and okp and p and okw and okh`）⇒ 隐藏/本图不用的层照样被处理");
+    }
+    if (capSeg.indexOf("smFitInUse(") < 0) bad.push("smFitCapture 没有过「本图在用」闸门 ⇒ 抓原值会把别的图的残留几何记下来");
+    // ⑥ 客户端说「本图 0 条叠加层」⇒ 一个几何都不碰（apply / capture 各一道）
+    const zeroGates = (sm.match(/smNumOverlays\(\) == 0/g) || []).length;
+    if (zeroGates < 2) bad.push("`smNumOverlays() == 0` 闸门只有 " + zeroGates + " 处（apply 与 capture 各要一处：零条叠加层的地图一个几何都不该碰）");
+    // ⑦ 抓原值要**等版式稳定**（否则抓到的还是残留几何）
+    if (!/local SMFIT_SETTLE = [0-9.]+/.test(sm)) bad.push("没有版式稳定等待常量 SMFIT_SETTLE");
+    if (sm.indexOf("SMFIT.mapAge >= SMFIT_SETTLE") < 0) bad.push("tick 抓原值前没有等版式稳定（`SMFIT.mapAge >= SMFIT_SETTLE`）");
+    if (sm.indexOf("SMFIT.mapAge = (tonumber(SMFIT.mapAge) or 0) + dt") < 0) bad.push("版式计时没有累加（等稳定形同虚设）");
+    if (sm.indexOf("SMFIT.mapAge = 0") < 0) bad.push("地图关着/换图时没有把版式计时归零");
+    // ⑧ 还原只还**本图我们写过的**层（逐层记账）
+    if (sm.indexOf("SMFIT.wroteKeys[it.key] = mk") < 0) bad.push("折算时没有逐层记账（`SMFIT.wroteKeys[it.key] = mk`）⇒ 还原会去动没写过的层");
+    const resSeg = seg("local function smFitRestore(", "\nlocal function ");
+    if (resSeg.indexOf("SMFIT.wroteKeys[it.key] ~= mk") < 0) bad.push("smFitRestore 没有「只还本图写过的层」判据");
+    // ⑨ 取证清单（只读）+ 命令 + 用法
+    if (sm.indexOf("local function smFitDumpLines()") < 0) bad.push("没有 smFitDumpLines（取证清单的内容生成口）");
+    else {
+      const dseg = seg("local function smFitDumpLines()", "\nlocal function ");
+      for (const k of ["GetNumMapOverlays", "GetMapOverlayInfo", "本图在用", "本图已写"]) {
+        if (dseg.indexOf(k) < 0) bad.push("取证清单里缺关键读数 " + k + "（「谁写的、该是多少」判不出来）");
+      }
+    }
+    if (!/sub == "dump"/.test(sm)) bad.push("`/ehm mapfit` 没有 dump 子命令（真机没法取证）");
+    if (sm.indexOf("| dump（只读清单）|") < 0) bad.push("mapfit 用法说明里没有 dump（用户不知道有这个口）");
+    if (bad.length) { console.log("SM MAP KEY CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
+    console.log("SM MAP KEY CHECK: 原值按**地图身份**分桶（无平表复用）· 版本戳 3 丢弃旧污染 · 换图当场作废 · " +
+      "只碰本图在用的层（IsShown/GetTexture）· 零叠加层不动手 · 抓原值等版式稳定 · 还原只还写过的层 · 取证清单+命令在位");
+  })();
+
   // ===== SM GROUP ROSTER CHECK：本模块测试文件的**组号清单**不许静默少一个（与 DF 那套同族）=====
   (function () {
-    const WANT = [224, 225, 226, 230, 232, 237];
+    const WANT = [224, 225, 226, 230, 232, 237, 253];
     const p = path.join(__dirname, "tests", "tools", "SimpleMap.lua");
     if (!fs.existsSync(p)) { console.log("SM GROUP ROSTER CHECK: FAIL - 找不到 tests/tools/SimpleMap.lua"); process.exitCode = 1; return; }
     const s = fs.readFileSync(p, "utf8");

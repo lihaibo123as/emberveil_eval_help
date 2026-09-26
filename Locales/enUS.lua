@@ -1083,6 +1083,14 @@ PROF_TIP_CAPPED = "Covers %s/5 condition groups → score capped (God tier needs
   RW_USAGE = "Usage: /eh go 稀有 (status) | 稀有 开 | 稀有 关 | 稀有 链接 | 稀有 试 (fire one test alert) | 稀有 目标 (target the last one) | 稀有 目标探针 (self-check)",
   RW_TEST_OK = "Fired the quest addon's test card (%s); a 'Rare nearby' line above means the wiring works",
   RW_TEST_FAIL = "The test card did not fire: %s",
+  -- 1.75.12 The rare relay is a NOTIFICATION, not debug logging: it uses the forced output
+  --   (the debug-log master gate does not silence it).
+  RW_GATE = "Debug-log master gate: %s (the rare relay is NOT controlled by it -- it uses the forced output)",
+  RW_HOOKSTATE = "Wiring self-check: %s",
+  RW_HOOK_OK = "still wrapped (we hold RareAlert:Show)",
+  RW_HOOK_GONE = "replaced -> re-installed on the spot",
+  RW_HOOK_MISS = "the RareAlert module/Show is unavailable right now (not loaded yet, or the implementation changed)",
+  RW_ERRLINE = "relay callback raised %d time(s) | last: %s",
   RW_LINK_SET = "Rare-alert name link: %s (when off the name is only coloured, not clickable)",
   RW_LINK_STATE = "Name link: %s | target attempts: %s",
   RW_NO_LAST = "Nothing captured yet: meet a rare first, or run /eh go 稀有 试 to fire one",

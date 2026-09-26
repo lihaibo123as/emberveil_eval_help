@@ -156,6 +156,51 @@ function EVAL_RW_RANKTEXT(rank)
   return L(key)
 end
 
+-- ═══════════ 1.75.12 取证环 + 通知出口（用户报障「无法检测到稀有通知」的定案与修法）═══════════
+-- ★真因（2026-09-26 读存档实证）：转播自己的开关是开的（配置 rareWatch=true）、而「调试日志」= 整个插件
+--   往聊天框说话的**总闸门** EVAL_HELP_CONFIG.log.on = **false** ⇒ EVAL_SAY 与 logLine 双双静音
+--   ⇒ 转播一行都不出、日志环里也没有 [稀有转播]（两个证据同时消失 ⇒ 看着像「插件失效」）。
+--   ★而任务插件那边**机制没变**：World/RareAlert.lua 的 RareAlert:Show(entry,distance,dx,dy,others) 仍在、
+--   签名未变、聊天行 RARE_ALERT_CHAT 仍在 Show 体内（RareAlert.lua:621/657）—— 不是对方改实现。
+-- ★★修法：**稀有转播是通知、不是调试日志** ⇒ 改走 EVAL_SAY_FORCE（Core.lua:746 的**不门控**出口，
+--   与「日志开关自己的确认行 / 引擎未加载兜底」同一族），并受它**自己的开关** cfg.rareWatch 管。
+--   ★总闸门语义一个字都不改：其余所有 say 照旧被 cfg.log.on 静音（组 251① 有反向哨兵钉死）。
+-- ★再补一个排查盲区：原来回调是 pcall(EVAL_RW_ON_SHOW, …)（**异常被静默吞掉**）⇒ 现在如实计数 + 落盘。
+local RW_OUT_MAX = 30
+local function rwOut(s)
+  local c = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(c) ~= "table" then return end
+  local box = c.rareProbe
+  if type(box) ~= "table" then box = { out = {} } c.rareProbe = box end
+  if type(box.out) ~= "table" then box.out = {} end
+  table.insert(box.out, tostring(s))
+  while table.getn(box.out) > RW_OUT_MAX do table.remove(box.out, 1) end
+  box.t = (type(date) == "function") and date("%H:%M:%S") or nil
+end
+
+-- 通知出口：优先**不门控**的 EVAL_SAY_FORCE；老核心没有它 ⇒ 退回受门控的 say（至少开关开着能出声）
+local function rwNotify(msg)
+  local f = rawget(_G, "EVAL_SAY_FORCE")
+  if type(f) == "function" then
+    pcall(f, msg)
+    EVAL_RW.notifyForce = true
+    return true
+  end
+  EVAL_RW.notifyForce = false
+  say(msg)
+  return false
+end
+
+-- 「调试日志」总闸门当前状态（与 Core 的 logEnabled 同一口径：nil=开 / false=关 / 表看 .on）
+function EVAL_RW_GATE_ON()
+  local c = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(c) ~= "table" then return true end
+  local lg = c.log
+  if lg == false then return false end
+  if type(lg) == "table" then return lg.on ~= false end
+  return true
+end
+
 -- 输出一行（两条路径共用）。rankText / rank / distance 允许缺（兜底路径只有对方给的本地化品阶文本）。
 --   名字**带链接**（开关见 EVAL_RW_LINK_ON）：点它 = 一次 TargetByName（见 EVAL_RW_DO_TARGET）。
 function EVAL_RW_SAY(name, rankText, rank, distance, others)
@@ -179,9 +224,12 @@ function EVAL_RW_SAY(name, rankText, rank, distance, others)
     line = L("RW_LINE_ND", shown, rk)
   end
   if type(others) == "number" and others > 0 then line = line .. L("RW_MORE", others) end
-  say(line)
-  -- 日志里留一份**去色码的纯文本**，便于 /eh logdump 事后对齐时间轴
+  rwNotify(line) -- ★1.75.12 走**不门控**的通知出口（调试日志关着也要出声；见文件头 1.75.12 段）
+  EVAL_RW.lastLine = line
+  -- 日志里留一份**去色码的纯文本**，便于 /eh logdump 事后对齐时间轴（★它受总闸门管：关着不记 ⇒ 故另有 rwOut）
   logLine(string.format("[稀有转播] %s / %s / %s", nm, rk, tostring(distance)))
+  rwOut(string.format("[转播] %s / %s / %s ｜ 出口=%s ｜ gate=%s", nm, rk, tostring(distance),
+    EVAL_RW.notifyForce and "强制(不门控)" or "say(受门控)", EVAL_RW_GATE_ON() and "on" or "off"))
   EVAL_RW.seen = EVAL_RW.seen + 1
   EVAL_RW.lastName, EVAL_RW.lastRankText, EVAL_RW.lastDistance = nm, rk, distance
   EVAL_RW.lastRank = rank
@@ -264,7 +312,14 @@ function EVAL_RW_INSTALL()
     RA.Show = function(self, entry, distance, dx, dy, others)
       local ok, a, b, c, d = pcall(orig, self, entry, distance, dx, dy, others)
       if ok then
-        pcall(EVAL_RW_ON_SHOW, entry, distance, others)
+        -- ★1.75.12 回调异常**如实计数 + 落盘**（原来被 pcall 静默吞掉 = 排查盲区；绝不影响任务插件）
+        local okC, errC = pcall(EVAL_RW_ON_SHOW, entry, distance, others)
+        if not okC then
+          EVAL_RW.fails = EVAL_RW.fails + 1
+          EVAL_RW.lastErr = tostring(errC)
+          logLine("[稀有转播] 回调抛错（已计数，不影响任务插件）：" .. tostring(errC))
+          pcall(rwOut, "[回调抛错] " .. tostring(errC))
+        end
       else
         EVAL_RW.fails = EVAL_RW.fails + 1
         logLine("[稀有转播] 原 RareAlert:Show 抛错（已按其原语义抛出）：" .. tostring(a))
@@ -272,6 +327,7 @@ function EVAL_RW_INSTALL()
       end
       return a, b, c, d
     end
+    EVAL_RW.showRef = RA.Show -- ★接线自检的比对基准（状态命令里读回自证：还是不是我们这一层）
     EVAL_RW.mode = "hook"
     return EVAL_RW.mode
   end
@@ -306,10 +362,19 @@ function EVAL_RW_CMD(msg)
   elseif rest == "试" then
     -- 走对方的测试弹窗（/uq rare test 同一条路）→ 完整链路自证：它会调 Show → 我们的回调必须转播一行
     local RA = EVAL_RW.module
-    if type(RA) ~= "table" or type(RA.TestNearest) ~= "function" then
+    -- ★1.75.12 对方把测试入口改名为 Test（旧名 TestNearest 已不存在）⇒ **两个都认**，并如实说用的是哪个：
+    --   原来只认旧名 ⇒ 这条自证命令静默失效（用户排障时被它误导 —— 「/eh go 稀有 试」说测试没触发）。
+    local fnName, fn = nil, nil
+    if type(RA) == "table" then
+      if type(RA.Test) == "function" then fnName, fn = "Test", RA.Test
+      elseif type(RA.TestNearest) == "function" then fnName, fn = "TestNearest", RA.TestNearest end
+    end
+    if fn == nil then
       say(L("RW_TEST_FAIL", EVAL_RW_MODETEXT()))
+      rwOut("[自证] 取不到测试入口（Test / TestNearest 都没有）")
     else
-      local ok, nm, why = pcall(RA.TestNearest, RA)
+      local ok, nm, why = pcall(fn, RA)
+      rwOut(string.format("[自证] %s ⇒ ok=%s ret=%s", fnName, tostring(ok), tostring(nm or why)))
       if ok and type(nm) == "string" and nm ~= "" then
         say(L("RW_TEST_OK", nm))
       else
@@ -330,6 +395,25 @@ function EVAL_RW_CMD(msg)
     say(L("RW_STATE", EVAL_RW_ENABLED() and L("SH_ON") or L("SH_OFF"), EVAL_RW_MODETEXT(), EVAL_RW.seen))
     say(L("RW_LINK_STATE", EVAL_RW_LINK_ON() and L("SH_ON") or L("SH_OFF"),
       tostring(EVAL_RW.tgtTries or 0)))
+    -- ★1.75.12 把「总闸门」摆到明面上：转播**不受它控制**（走强制出口）—— 用户排障第一眼要看的就是这条
+    -- ★★★这条走**通知出口**（不门控）：它回答的正是「为什么没通知」，总闸门关着也必须看得见
+    rwNotify(L("RW_GATE", EVAL_RW_GATE_ON() and L("SH_ON") or L("SH_OFF")))
+    -- 接线自检：还挂着吗？被改回去（对方重载/别人又包了一层）⇒ **当场重装**并如实播报
+    local RAst = EVAL_RW.module
+    if type(RAst) == "table" and type(RAst.Show) == "function" then
+      if EVAL_RW.showRef ~= nil and RAst.Show == EVAL_RW.showRef then
+        rwNotify(L("RW_HOOKSTATE", L("RW_HOOK_OK")))
+      else
+        EVAL_RW.installed = false
+        local m2 = EVAL_RW_INSTALL()
+        rwNotify(L("RW_HOOKSTATE", L("RW_HOOK_GONE") .. "（" .. tostring(m2) .. "）"))
+      end
+    else
+      rwNotify(L("RW_HOOKSTATE", L("RW_HOOK_MISS")))
+    end
+    if (EVAL_RW.fails or 0) > 0 then
+      rwNotify(L("RW_ERRLINE", EVAL_RW.fails, tostring(EVAL_RW.lastErr or "-")))
+    end
     if EVAL_RW.lastName then
       local d = (type(EVAL_RW.lastDistance) == "number")
         and tostring(math.floor(EVAL_RW.lastDistance + 0.5)) or "?"
@@ -438,6 +522,7 @@ function EVAL_TEST_RW_RESET()
   if EVAL_RW.tick then pcall(EVAL_RW.tick.SetScript, EVAL_RW.tick, "OnUpdate", nil) end
   EVAL_RW.installed, EVAL_RW.mode, EVAL_RW.module, EVAL_RW.alerts = false, nil, nil, nil
   EVAL_RW.tgtTries = 0
+  EVAL_RW.showRef, EVAL_RW.lastErr, EVAL_RW.lastLine, EVAL_RW.notifyForce = nil, nil, nil, nil
   return true
 end
 
@@ -449,6 +534,10 @@ function EVAL_TEST_RW_STATE()
     lastRankText = EVAL_RW.lastRankText, lastDistance = EVAL_RW.lastDistance,
     lastRank = EVAL_RW.lastRank, linkOn = EVAL_RW_LINK_ON(),
     tgtTries = EVAL_RW.tgtTries or 0,
+    -- ★1.75.12：闸门/出口/接线自检/异常（读值口只**如实回读**，不复刻判据）
+    gate = EVAL_RW_GATE_ON(), notifyForce = EVAL_RW.notifyForce,
+    lastErr = EVAL_RW.lastErr, lastLine = EVAL_RW.lastLine,
+    showIsOurs = (EVAL_RW.module ~= nil and EVAL_RW.showRef ~= nil and EVAL_RW.module.Show == EVAL_RW.showRef) and true or false,
   }
 end
 

@@ -815,6 +815,11 @@ local LOAD_RESIDUE_KEYS = {
   --   没有定时器切目标 ⇒ 必须读**调用点**才知道调用在不在来（队列余震 vs 键连发）；
   --   而聊天框读数（say）不落日志环，必须自带专属落盘（同 tselProbe/mbProbe 的教训）。
   "selProbe",
+  -- ★1.75.12 稀有提醒转播的取证环（最近 30 行，tools/RareWatch.lua 的 RW_OUT_MAX）：
+  --   用户报障「无法检测到稀有通知」——真因是**调试日志总闸门**（cfg.log.on=false）把 say/logLine 一起静音，
+  --   而 logLine 也受门控 ⇒ 日志环里查不到任何证据。转播改走不门控的 EVAL_SAY_FORCE 之后，
+  --   这里留一份**不门控**的转播/异常读数，AI 侧读存档即可判「有没有转、走的哪个出口、回调有没有抛错」。
+  "rareProbe",
 }
 
 function EVAL_LOAD_PROBE_KEYS() return LOAD_PROBE_KEYS end

@@ -819,4 +819,236 @@ do
     print("GROUP 237 (世界地图初始位置：每次载入首次开图一律居中 · 清跨会话脏偏移 · 有界窗口期重申 · 拖拽即让位 · 会话内记忆照旧): PASS")
   end
 end
+-- ===== 组 253（1.75.13）：「探索层坐标丢失 / 全部图层挤在左下重叠」全案 =====
+-- 用户报障原话：「排查工具箱->缩放大地图->探索层额外处理异常: 某些地图打开之后会将探索层的坐标丢失.
+--   全部图层都集中在左下区域重叠,图2,图3就是这个问题,排查一下原因.」
+-- 真机存档实证（`LIHAIBOAS2` 的 `simpleMapCfg.mapFitOrig`）：8 条原值里 **6 条完全相同**（155,-403 240×185），
+--   而 `WorldMapOverlay1..N` 是客户端**按序号逐图复用**的（一图一套矩形、用不到的 `:Hide()` 且不清几何）
+--   ⇒ 任何真实版式都不可能是「6 条同一矩形」。那批值 = 「客户端还没布局 / 本图不用」的残留几何。
+-- ★本组钉五条（缺一条，用户那个现象就会回来）：
+--   ① 原值**按地图身份分桶**（`mapFitOrig[地图身份][纹理名]`），换图**当场作废**内存记录并重抓；
+--   ② 折算用的是**本图**的矩形，绝不是上一张图的（= 用户看到的「坐标丢失」）；
+--   ③ 只碰**本图在用**的层（IsShown / GetTexture），隐藏与没贴图的层一个几何都不碰（= 「全部重叠」）；
+--   ④ 抓原值要**等版式稳定**（开图那一瞬抓到的是残留几何 = ① 里那批脏值的来源）；
+--   ⑤ 还原**只还本图写过的层**（旧写法会把别的图的矩形又写一遍，用户自己救不回来）。
+do
+  local fails253 = TESTASSERT_FAILS
+  local cfg = rawget(_G, "EVAL_HELP_CONFIG")
+  local savedTb = cfg.tb
+  local savedFr = rawget(_G, "WorldMapDetailFrame")
+  local savedWm = rawget(_G, "WorldMapFrame")
+  local savedGMI, savedGNMO, savedGMOI = rawget(_G, "GetMapInfo"), rawget(_G, "GetNumMapOverlays"), rawget(_G, "GetMapOverlayInfo")
+  local savedPx, savedPy = EH_SIMPLEMAP_CFG.px, EH_SIMPLEMAP_CFG.py
+  local tick = rawget(_G, "EH_SM_FEAT")
+  local function ticks(n) for _ = 1, n do EVAL_TEST_FIRE_UPDATE(tick, 0.05) end end
+
+  -- ① 客户端假数据：两张地图 + 一张「零叠加层」的图；三张图的矩形**互不相同**（真机就是这样）
+  local CUR = "MapA"
+  local CLIENT = {
+    MapA = { { "OverlayA1", 240, 185, 155, 403 }, { "OverlayA2", 150, 128, 295, 385 }, { "OverlayA3", 128, 165, 502, 221 } },
+    MapB = { { "OverlayB1", 300, 200, 10, 20 }, { "OverlayB2", 215, 215, 355, 320 } },
+  }
+  -- 假画布上 5 个非瓦片纹理：1~3 = 本图在用的（不提供 IsShown/GetTexture = 「判不出」⇒ 放行）；
+  --   4 = 客户端**隐藏**的（IsShown=false）；5 = **没贴图**的（GetTexture=nil）—— 这两个正是旧版被写坏的那批。
+  local FIX = {
+    A = { { 155, -403, 240, 185 }, { 295, -385, 150, 128 }, { 502, -221, 128, 165 }, { 999, -999, 50, 50 }, { 111, -222, 33, 44 } },
+    B = { { 10, -20, 300, 200 }, { 355, -320, 215, 215 }, { 7, -9, 40, 30 }, { 999, -999, 50, 50 }, { 111, -222, 33, 44 } },
+    Z = { { 5, -5, 20, 20 }, { 6, -6, 21, 21 }, { 7, -7, 22, 22 }, { 999, -999, 50, 50 }, { 111, -222, 33, 44 } },
+  }
+  local W = {}
+  local sc = 1
+  W.GetScale = function() return sc end
+  W.SetScale = function(_, v) sc = tonumber(v) or sc return true end
+  W.GetAlpha = function() return 1 end
+  W.SetAlpha = function() return true end
+  W.ClearAllPoints = function() return true end
+  W.SetPoint = function() return true end
+  W.GetEffectiveScale = function() return sc end
+  W.GetPoint = function() return nil end
+  local FR = { R = {} }
+  FR.GetName = function() return "WorldMapDetailFrame" end
+  FR.IsShown = function() return true end
+  FR.GetScale = function() return 1 end
+  FR.GetParent = function() return W end
+  FR.GetEffectiveScale = function() return sc end
+  FR.GetRegions = function() local r = FR.R return r[1], r[2], r[3], r[4], r[5] end
+  local T = {}
+  for i = 1, 5 do
+    local t = { nm = "MapOverlay" .. i, idx = i, x = 0, y = 0, w = 0, h = 0, ngeom = 0 }
+    t.GetObjectType = function() return "Texture" end
+    t.GetName = function() return t.nm end
+    t.GetPoint = function() return "TOPLEFT", FR, "TOPLEFT", t.x, t.y end
+    t.GetWidth = function() return t.w end
+    t.GetHeight = function() return t.h end
+    t.GetLeft = function() return t.x end
+    t.GetTop = function() return t.y end
+    if i == 4 then t.IsShown = function() return false end end          -- 客户端隐藏（本图不用）
+    if i == 5 then t.GetTexture = function() return nil end end         -- 客户端没贴图（本图不用）
+    t.ClearAllPoints = function() t.ngeom = t.ngeom + 1 end
+    t.SetPoint = function(_, p, rel, rp, nx, ny) t.ngeom = t.ngeom + 1 t.x = nx t.y = ny return true end
+    t.SetWidth = function(_, v) t.ngeom = t.ngeom + 1 t.w = v return true end
+    t.SetHeight = function(_, v) t.ngeom = t.ngeom + 1 t.h = v return true end
+    T[i] = t
+  end
+  FR.R = { T[1], T[2], T[3], T[4], T[5] }
+  local function applyFix(setName)
+    local g = FIX[setName] or {}
+    for i = 1, 5 do
+      local e = g[i]
+      if e then T[i].x, T[i].y, T[i].w, T[i].h = e[1], e[2], e[3], e[4] end
+      T[i].ngeom = 0
+    end
+  end
+  local function geomSum() local n = 0 for i = 1, 5 do n = n + T[i].ngeom end return n end
+  rawset(_G, "WorldMapDetailFrame", FR)
+  rawset(_G, "WorldMapFrame", W)
+  rawset(_G, "GetMapInfo", function() return CUR, 668, 1002 end)
+  rawset(_G, "GetNumMapOverlays", function() return table.getn(CLIENT[CUR] or {}) end)
+  rawset(_G, "GetMapOverlayInfo", function(i)
+    local e = (CLIENT[CUR] or {})[tonumber(i) or 0]
+    if not e then return nil end
+    return e[1], e[2], e[3], e[4], e[5], 0, 0
+  end)
+
+  -- 前置：新读值口全部在位（缺一个 ⇒ 后面的断言会静默跳过）
+  local ports253 = { "EVAL_SM_TEST_MAPFIT_MAPKEY", "EVAL_SM_TEST_MAPFIT_INUSE", "EVAL_SM_TEST_MAPFIT_WROTE",
+                     "EVAL_SM_TEST_MAPFIT_DUMP", "EVAL_SM_TEST_MAPFIT_BUCKET", "EVAL_SM_TEST_MAPFIT_NEWMAP" }
+  local miss253 = 0
+  for i = 1, table.getn(ports253) do if type(_G[ports253[i]]) ~= "function" then miss253 = miss253 + 1 end end
+  eq(miss253, 0, "组253前置：地图身份/在用判定/清单的读值口全部在位（缺 " .. miss253 .. " 个）")
+  eq(type(tick) == "table" or type(tick) == "userdata", true, "组253前置：tick 帧在位（走真机 OnUpdate 通道）")
+
+  -- ② 第一张图：开启 ⇒ 抓原值必须落在**本图**的桶里
+  cfg.tb = { simpleMap = false }
+  pcall(EVAL_SM_TEST_MAPFIT_RESET)
+  CUR = "MapA"
+  applyFix("A")
+  cfg.tb = { simpleMap = true }
+  pcall(EVAL_SM_SET, true)
+  local mkA, ageA = EVAL_SM_TEST_MAPFIT_MAPKEY()
+  eq(mkA, "MapA:668x1002", "②★★地图身份按 GetMapInfo 现算（文件名 + 纹理尺寸；实测 " .. tostring(mkA) .. "）")
+  eq(ageA, 0, "②★版式计时从 0 起（开图/换图那一刻）")
+  local nbA0, naA = EVAL_SM_TEST_MAPFIT_BUCKET("MapA:668x1002")
+  eq(naA, 3, "②★★原值落在**本图**的桶里 3 条（实测 " .. tostring(naA) .. "；隐藏/没贴图的 2 个不算）")
+  eq(nbA0 >= 1, true, "②★存档按地图分桶（实测 " .. tostring(nbA0) .. " 个桶）")
+  -- ②b ★★★让 MapA **真的折算一次**（`SMFIT.rec` 采纳 = 后面「换图必须作废」的前提）：
+  --   不先采纳就测不出「跨图复用」—— 变异 M2（smFitNewMap 不清 rec）第一版就是这么漏网的。
+  ticks(8)
+  eq(EVAL_SM_TEST_MAPFIT_REC(), 3, "②b★本图记录已被采纳（实测 " .. tostring(EVAL_SM_TEST_MAPFIT_REC()) .. " 条）")
+  eq(math.abs(T[1].x - 155 * 0.7) < 0.01, true,
+    string.format("②b★MapA 这一轮真的折了一次（T1 实测 %.1f，期望 %.1f）", T[1].x, 155 * 0.7))
+
+  -- ③ 换到 MapB：客户端把同一批纹理重摆成 B 的矩形（真机行为）⇒ 旧记录当场作废 + 等版式稳定
+  CUR = "MapB"
+  applyFix("B")
+  ticks(3) -- 0.15s < 0.4s
+  eq(select(2, EVAL_SM_TEST_MAPFIT_NEEDFOLD()), false,
+    "③★★换图后**先等版式稳定**（0.15s 时还没抓原值 —— 旧写法开图那一瞬就抓，抓到的正是「还没布局」的残留几何）")
+  eq(EVAL_SM_TEST_MAPFIT_MAPKEY(), "MapB:668x1002", "③★★换图 ⇒ 地图身份当场更新（旧记录已作废）")
+  ticks(8) -- 累计 0.55s ≥ 0.4s
+  eq(select(2, EVAL_SM_TEST_MAPFIT_NEEDFOLD()), true, "③★满 0.4s 之后才抓原值（累计 0.55s）")
+  local nb2, nbB = EVAL_SM_TEST_MAPFIT_BUCKET("MapB:668x1002")
+  eq(nbB, 3, "③★★原值记进**新图的桶**（实测 " .. tostring(nbB) .. " 条）")
+  eq(nb2 >= 2, true, "③★两张地图各自一个桶、互不覆盖（实测 " .. tostring(nb2) .. " 个桶）")
+  local _k1, fr1, rx1, ry1, rw1 = EVAL_SM_TEST_MAPFIT_FROM(1)
+  eq(rw1 == 300 or rw1 == 215 or rw1 == 40, true,
+    "③★★★本图的记录 = **本图**的几何（宽 " .. tostring(rw1) .. "；若是 240/150/128 就说明还在用上一张图的）")
+
+  -- ④ 折算用的是**本图**矩形（用户现象的直接回归哨兵）
+  ticks(6)
+  local sumB = {}
+  for i = 1, 3 do sumB[i] = T[i].x end
+  eq(math.abs(T[1].x - 10 * 0.7) < 0.01 and math.abs(T[1].w - 300 * 0.7) < 0.01, true,
+    string.format("④★★★折算用**本图**矩形（T1 实测 %.1f/%.1f，期望 %.1f/%.1f；旧写法会用上一张图的 155/240×0.7=%.1f/%.1f）",
+      T[1].x, T[1].w, 10 * 0.7, 300 * 0.7, 155 * 0.7, 240 * 0.7))
+  eq(math.abs(T[2].x - 355 * 0.7) < 0.01, true,
+    string.format("④★★T2 也是本图矩形（实测 %.1f，期望 %.1f）", T[2].x, 355 * 0.7))
+  eq(sumB[1] ~= sumB[2] and sumB[2] ~= sumB[3], true,
+    "④★★三个层**各在各的位置**（不再全都挤到同一格 —— 用户报的「全部图层集中在左下区域重叠」）")
+
+  -- ⑤ 只碰本图在用的层（隐藏 / 没贴图的一个几何都不碰）
+  local use4 = EVAL_SM_TEST_MAPFIT_INUSE(4)
+  local use5 = EVAL_SM_TEST_MAPFIT_INUSE(5)
+  local use1 = EVAL_SM_TEST_MAPFIT_INUSE(1)
+  eq(use4, false, "⑤★★★客户端**隐藏**的层判为「本图不用」⇒ 一个几何都不碰")
+  eq(use5, false, "⑤★★★**没贴图**的层同样跳过（旧写法对它们照写 = 那批「挤在同一处」的层）")
+  eq(use1, true, "⑤★反向哨兵：读不到 IsShown/GetTexture 的层**照旧处理**（判不出就不拦，别把功能判死）")
+  eq(T[4].ngeom == 0 and T[5].ngeom == 0, true,
+    "⑤★★隐藏/没贴图层**零几何调用**（实测 " .. tostring(T[4].ngeom) .. "/" .. tostring(T[5].ngeom) .. "）")
+  eq(T[1].ngeom > 0, true, "⑤★反向哨兵：在用的层确实被折算过（实测 " .. tostring(T[1].ngeom) .. " 次）")
+  -- ⑤b ★★★**脏存档复现**（用户那台机器就是这个状态）：给「本图不用」的两个层**种一条旧记录**，再跑几拍 ——
+  --   有闸门 ⇒ 一个几何都不发；把「本图在用」这条判据去掉（变异 M1）⇒ 立刻照写 = 用户看到的「全部重叠」现场。
+  --   ★为什么必须有这一条：不种记录时它们本来就没记录、也就不会被写 ⇒ 断言只能证明「没记录所以没写」，
+  --     证明不了「有记录也不会写」（变异 M1 实测正是这么漏网的）。
+  EH_SIMPLEMAP_CFG.mapFitOrig["MapB:668x1002"]["MapOverlay4"] =
+    { x = 1, y = -2, w = 30, h = 40, p = "TOPLEFT", rel = "WorldMapDetailFrame", rp = "TOPLEFT" }
+  EH_SIMPLEMAP_CFG.mapFitOrig["MapB:668x1002"]["MapOverlay5"] =
+    { x = 3, y = -4, w = 50, h = 60, p = "TOPLEFT", rel = "WorldMapDetailFrame", rp = "TOPLEFT" }
+  T[4].ngeom, T[5].ngeom = 0, 0
+  local x4b, x5b = T[4].x, T[5].x
+  ticks(6)
+  eq(T[4].ngeom + T[5].ngeom, 0,
+    "⑤b★★★存档里**种着**这两个层的旧记录，本图不用 ⇒ 仍然一个几何都不发（实测 " .. tostring(T[4].ngeom + T[5].ngeom) .. " 次）")
+  eq(T[4].x == x4b and T[5].x == x5b, true, "⑤b★★几何也没被写走（旧写法就是拿这份脏记录把它们全写成一格）")
+
+  -- ⑥ 客户端说「本图 0 条叠加层」⇒ 一个几何都不该碰
+  CUR = "MapZ"
+  applyFix("Z")
+  ticks(14)
+  eq(select(2, EVAL_SM_TEST_MAPFIT_BUCKET("MapZ:668x1002")), 0, "⑥★零叠加层的地图不抓原值")
+  eq(geomSum(), 0, "⑥★★零叠加层 ⇒ 几何**零调用**（实测 " .. tostring(geomSum()) .. "）")
+  eq((EVAL_SM_TEST_MAPFIT_MAPKEY()), "MapZ:668x1002", "⑥★地图身份已跟到本图")
+
+  -- ⑦ 还原**只还本图我们写过的层**（换图之后调还原 = 一个几何都不该发）
+  CUR = "MapB"
+  applyFix("B")
+  ticks(14) -- 重新抓 MapB + 折算一次（逐层记账）
+  eq(EVAL_SM_TEST_MAPFIT_WROTE(T[1].nm), "MapB:668x1002",
+    "⑦★折算时逐层记账 = 本图身份（实测 " .. tostring(EVAL_SM_TEST_MAPFIT_WROTE(T[1].nm)) .. "）")
+  CUR = "MapA" -- 换一张图（wroteKeys 里还是 MapB）⇒ 还原必须**什么都不做**
+  applyFix("A")
+  local gA = geomSum()
+  local nRA = select(1, EVAL_SM_TEST_MAPFIT_RESTORE())
+  eq(nRA, 0, "⑦★★★换图后还原：本图一个都没写过 ⇒ 还原 0 个（旧写法会把 MapB 的矩形写到 MapA 上）")
+  eq(geomSum() - gA, 0, "⑦★★而且几何零调用（实测 " .. tostring(geomSum() - gA) .. "）")
+  CUR = "MapB" -- 回到写过的那张图 ⇒ 这次才真的还回去
+  local nRB = select(1, EVAL_SM_TEST_MAPFIT_RESTORE())
+  eq(nRB > 0, true, "⑦★回到写过的那张图 ⇒ 还原真的发生（实测 " .. tostring(nRB) .. " 个）")
+  eq(math.abs(T[1].x - 10) < 0.01 and math.abs(T[1].w - 300) < 0.01, true,
+    string.format("⑦★★几何回到**本图**原值（实测 %.1f/%.1f，期望 10/300）", T[1].x, T[1].w))
+
+  -- ⑧ 只读取证清单（用户要求「排查原因」⇒ 得能一眼看出谁写的、该是多少）
+  local lines253 = EVAL_SM_TEST_MAPFIT_DUMP()
+  eq(type(lines253) == "table" and table.getn(lines253) >= 5, true,
+    "⑧★清单有多行（实测 " .. tostring(type(lines253) == "table" and table.getn(lines253) or "非表") .. " 行）")
+  local dump253 = table.concat(lines253 or {}, "\n")
+  for _, needle in ipairs({ "地图身份=MapB:668x1002", "客户端叠加层=2", "本图在用=", "本图已写=",
+                            "MapOverlay1", "客户端叠加层 1：OverlayB1 300x200 @(10,20)" }) do
+    eq(string.find(dump253, needle, 1, true) ~= nil, true, "⑧★★清单里有「" .. needle .. "」")
+  end
+  eq(string.find(dump253, "本图在用=否", 1, true) ~= nil, true, "⑧★★清单把「本图不用」的层如实标出来（那批层我们一个几何都不碰）")
+
+  -- ⑨ 旧存档自愈：版本戳 2（跨图污染的那一代）必须整块丢弃
+  EH_SIMPLEMAP_CFG.mapFitVer = 2
+  EH_SIMPLEMAP_CFG.mapFitOrig = { MapA = { MapOverlay1 = { x = 1, y = 2, w = 3, h = 4 } } }
+  eq(EVAL_SM_TEST_MAPFIT_MIGRATE(), true, "⑨★版本戳 2 的旧原值被认成「不可信」")
+  eq(EVAL_SM_TEST_MAPFIT_ORIG(), 0, "⑨★★整块丢弃（实测剩 " .. tostring(EVAL_SM_TEST_MAPFIT_ORIG()) .. " 条）")
+  eq(EH_SIMPLEMAP_CFG.mapFitVer, 3, "⑨★迁移后版本戳 = 3（下一次载入不再重复丢弃）")
+
+  -- 夹具自清
+  pcall(EVAL_SM_SET, false)
+  rawset(_G, "WorldMapDetailFrame", savedFr)
+  rawset(_G, "WorldMapFrame", savedWm)
+  rawset(_G, "GetMapInfo", savedGMI)
+  rawset(_G, "GetNumMapOverlays", savedGNMO)
+  rawset(_G, "GetMapOverlayInfo", savedGMOI)
+  cfg.tb = savedTb
+  EH_SIMPLEMAP_CFG.px, EH_SIMPLEMAP_CFG.py = savedPx, savedPy
+  pcall(EVAL_SM_TEST_POS_REARM)
+  pcall(EVAL_SM_TEST_MAPFIT_RESET)
+  if fails253 == TESTASSERT_FAILS then
+    print("  原值按地图身份分桶 · 换图当场作废 · 只碰本图在用的层 · 抓原值等版式稳定 · 还原只还写过的层 · 零叠加层零动作")
+    print("GROUP 253 (探索层·原值按地图身份分桶：换图作废+重抓 · 折算用本图矩形 · 隐藏/没贴图的层零几何 · 零叠加层零动作 · 还原只还写过的层 · 只读清单): PASS")
+  end
+end
 EVAL_TEST_MOD_DONE("SimpleMap") -- ★跑到底的握手（见文件头 ③）：TOOL TEST FILES CHECK 拿它对账
