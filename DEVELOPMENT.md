@@ -61,7 +61,9 @@ node luacheck.js     # fengari 逐文件全量 Lua 解析；SYNTAX OK 才算完�
    ★★**两个库一律走 SSH（`git@xxx`）+ 本机默认密钥**（用户定）：不用 HTTPS/token、不用 `-i` 另指密钥；
    推送前先 `git remote -v` 确认两个远端都是 `git@` 形式（`origin`=gitee、`github`=github），可用 `ssh -T` 双端验签；
 9. **出发布包 + 建 Release 页**：打包 `EvalHelp-vX.Y.Z.zip`（放 `Interface/AddOns/` 下，顶层一个 `EvalHelp\`，内容 = `.toc` 实际清单，
-   ★装完核对条目数）→ 在 gitee / github 网页建 Release（**需要 API token，AI 做不了** → 如实告知用户去建，并给全 URL/标题/说明/附件）。
+   ★装完核对条目数）→ ★★**再复制一份不带版本号的 `EvalHelp.zip`**（同一目录、**内容逐字节相同**）——
+   用户定：「**9 出包还要对应复制一个没有版本号的包 EvalHelp.zip**」＝ 固定名字的下载口 → 在 gitee / github 网页建 Release
+   （**需要 API token，AI 做不了** → 如实告知用户去建，并给全 URL/标题/说明/附件）。
 
 > ★发布前必跑：`node luacheck.js`（`SYNTAX OK`）—— ★测试框架已于 2026-09-26 删除，**再没有第二道闸门**；提交用 `git add <明确路径>`（**不要** `git add -A`）。
 > ★推送：分支 `master`；远端 `origin`=gitee、`github`=github（用默认密钥 `~/.ssh/id_rsa`，别指定 `gitee_id_rsa`）。

@@ -57,6 +57,9 @@
    `git push origin --tags && git push github --tags`（★只推分支不推标签 = Release 页找不到 tag）。
 9. **出发布包 + 建 Release 页**：
    - **发布包** `EvalHelp-vX.Y.Z.zip`（放在 `Interface/AddOns/` 下，与仓库同级——**不要放进仓库**）：
+     ★★**同时复制一份不带版本号的 `EvalHelp.zip`**（同一目录、**内容逐字节相同**）—— 用户定（1.75.13）：
+     「**9 出包还要对应复制一个没有版本号的包 EvalHelp.zip**」⇒ 固定名字 = 稳定的下载口（网页/启动器指向它
+     不会随版本号失效）；两条都要出，别只出带版本号那个。
      顶层一个 `EvalHelp\` 文件夹，内容 = `.toc` 实际清单（**必须按 toc 逐个核对**：
      1.72.0 发现随包的 `EvalHelp-v1.71.2.zip` **只有 25 个文件、缺 `IconBrowser.lua` + 5 个 examples** →
      用户装那个包会**直接报错**；正确包是 **60 个文件**）。打包脚本见下方「发布包怎么打」。
@@ -91,6 +94,7 @@ New-Item -ItemType Directory -Force "$staging\EvalHelp\quest" | Out-Null
 Copy-Item "$src\quest\QuestData.lua","$src\quest\QuestBulk.lua","$src\quest\QuestChains.lua" "$staging\EvalHelp\quest\"
 Remove-Item "$staging\EvalHelp\media\Textures" -Recurse -Force -ErrorAction SilentlyContinue  # 主题素材不进包
 [System.IO.Compression.ZipFile]::CreateFromDirectory($staging, $out)
+Copy-Item $out "$PWD\EvalHelp.zip" -Force   # ★不带版本号的固定名副本（第 9 步硬要求；两份逐字节相同）
 Remove-Item $staging -Recurse -Force
 ```
 ★**装完必须核对条目数**（1.75.1 基准 = **75 个**：+`quest/QuestData.lua`、`quest/QuestBulk.lua`、`quest/QuestChains.lua`（1.75.9 新增 QuestBulk = 全量任务/装备数据）；1.74.34 时是 72（+`tools/LayerFix.lua` 图层特殊处理独立模块）；1.74.30 时是 71（+`tools/DragFrames.lua` 框拖拽从子插件搬进工具模块）；1.74.29 时是 70；1.74.27 时是 69（+`tools/RareWatch.lua`）；1.74.12 时是 68、1.74.6 时是 66、1.73.5 时是 63；1.74.5 陆续加了 `tools/IconGrid.lua` / `tools/HunterHelper.lua` / `tools/ConsumableHelper.lua`，1.74.7 加 `tools/DismountHelper.lua`）：
