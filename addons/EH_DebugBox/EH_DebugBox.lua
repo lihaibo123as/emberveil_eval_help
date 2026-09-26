@@ -27,7 +27,7 @@ end
 
 -- ★构建标记（唯一来源）：每次改本文件顺手 +1 —— 探针第一行就打它，
 --   「跑的是不是最新版」一眼可辨（真机出现过「修了还报错」= 客户端还在跑旧构建）。
-local DBX_BUILD = "1.74.34-26"
+local DBX_BUILD = "1.74.34-28"
 
 -- ===== 语言包（1.74.31）=====
 -- 用户要求：新开关的**文案与 tooltip 走三语语言包**（Locales/zhCN|enUS|ruRU.lua 里 L("键") 三语齐全）。
@@ -633,7 +633,9 @@ ui = { -- ★★不能再写 local：前面已有 local ui（前向声明），�
   -- ★1.74.35-4：`mapFit`（本面板曾有的「地图叠加层自动适配」开关）**已删除** —— 该功能搬到工具箱→缩放大地图
   --   （`tools/SimpleMap.lua`，真值 `simpleMapCfg.mapFit`，nil = 默认开）。老存档里那个键由 uiLoadSettings 一次性清掉。
   bigOnly = false,  -- ★默认**关闭**（1.74.29 修：默认替用户过滤会让人以为「层变少了」；≥500 仍是可选筛选）
-  depthMax = 1,      -- 层深过滤（默认 1 = 只显示第一层）
+  -- ★★★1.75.13 用户定稿：**默认 1 = 只显示第一层**（先要 0，随后改口「默认1」）。
+  --   （语义见 uiDepthApply：0 = 不做层深过滤（全部层级），1..4 = 只显示前 N 层；按钮循环 1→2→3→4→全部(0)。）
+  depthMax = 1,
   hideUnnamed = true, -- ★★★1.74.31 用户要求：**默认隐藏没有名字的层**（开关文案/tooltip 走语言包；存档键 ui.hideUnnamed）
   scriptFilter = {}, -- ★事件/脚本过滤（多选）：只显示挂了所选脚本之一的层（空 = 不过滤）
   scanSrc = nil,     -- ★扫描源（多选）：nil = 只扫地图（与旧行为一致）；{ui=true} = 追加 UIParent 等
@@ -827,6 +829,22 @@ function uiLoadSettings()
   EH_DEBUGBOX_CFG.mapFitLast = nil
   EH_DEBUGBOX_CFG.mapFitAt = nil
   if tonumber(c.depthMax) then ui.depthMax = math.max(0, math.min(9, tonumber(c.depthMax))) end
+  -- ★★★1.75.13 层深默认值 = **1**（用户先要 0、随后改口「默认1」）——老存档里已经存过 0/2/3/4 的
+  --   必须**一次性**归 1，否则「改了默认值」在用户机器上根本看不出来（默认值只在**没有**存档键时生效）。
+  --   ★标记键用**值版本号**（放 EH_DEBUGBOX_CFG 顶层，不是 .ui 里）：存档函数（uiSaveSettings）是
+  --     **整表重建** .ui 的 ⇒ 写在 .ui 里的标记会被下一次存盘丢掉，迁移就会每开一次面板重跑一遍、
+  --     把用户自己的选择反复抹掉。版本号便于以后再改默认值时再往前走一格。
+  --   ★只做一次：之后用户点「层深」按钮选的档位**不再被覆盖**；改配置**如实播报**（不静默）。
+  EH_DEBUGBOX_CFG.depthDefaultZero = nil -- 上一版的标记键：一次性清掉（不留没人读的配置）
+  if (tonumber(EH_DEBUGBOX_CFG.depthDefaultVer) or 0) < 2 then
+    local was = tonumber(c.depthMax)
+    ui.depthMax = 1
+    EH_DEBUGBOX_CFG.ui.depthMax = 1
+    EH_DEBUGBOX_CFG.depthDefaultVer = 2
+    if was ~= nil and was ~= 1 then
+      P("层深默认值 = 1（只显示第一层）；原存档值 " .. tostring(was) .. " 已一次性重置（再点「层深」按钮可自行调回）")
+    end
+  end
   -- ★分类：已删分类（1/2/4）或坏值一律归一到「全部」（0）—— 已删分类不能再被选中
   if type(c.cat) == "number" then ui.cat = uiCatNormalize(c.cat) end
   if type(c.filter) == "string" then ui.filter = c.filter end
@@ -3014,7 +3032,7 @@ local function uiBuild()
       (ui.hideUnnamed and "开（只显示有名字的层）" or "关（无名层也一并显示）"),
       cnt.shown, cnt.total, cnt.named, cnt.unnamed))
   end)
-  -- ★★层深按钮：点一下循环 1→2→3→4→全部(0)（默认 1 = 只显示第一层；用户：「列表量太大、有点卡」）
+  -- ★★层深按钮：点一下循环 1→2→3→4→全部(0)（★1.75.13 用户定稿默认 **1 = 只显示第一层**）
   --   ★★★1.74.31 第二步：它同时是**树的「展开到第 N 层」** —— 走唯一入口 uiDepthApply（写值 + 清掉更浅的折叠标记 + 存盘 + 刷新）。
   --   ★★★1.74.34 修（用户截图：「层深:3」压在底部「扫描」按钮上）：旧代码 `pcall(uiTopTake, depthBtn, 78)`
   --     把**按钮本体**当宽度传给游标 ⇒ `x + 帧 + 4` 算术炸在 pcall 里 ⇒ depthBtn **从没 SetPoint**（无锚点帧
@@ -3023,7 +3041,7 @@ local function uiBuild()
   local depthBtn = uiBtn(root, 72, 18, "")
   depthBtn:SetPoint("BOTTOMLEFT", root, "BOTTOMLEFT", 76, 8) -- 第四排：扫描(8..68) 右侧
   local function depthLabel()
-    local d = tonumber(ui.depthMax) or 1
+    local d = tonumber(ui.depthMax) or 1 -- ★兜底 = 默认值（1 = 只显示第一层）
     return "层深:" .. ((d == 0) and "全部" or tostring(d))
   end
   local function depthSync()
@@ -3033,7 +3051,7 @@ local function uiBuild()
   ui.depthBtn = depthBtn
   ui.depthSync = depthSync -- ★文案按真值现算、且暴露给「恢复存档」与「折叠自动抬高」两条路径（与 ui.namedLabel 同款）
   depthBtn:SetScript("OnClick", function()
-    local d = tonumber(ui.depthMax) or 1
+    local d = tonumber(ui.depthMax) or 1 -- ★同上：兜底 = 默认 1（点一下 → 2 → 3 → 4 → 全部 → 1）
     if d == 1 then d = 2 elseif d == 2 then d = 3 elseif d == 3 then d = 4 elseif d == 4 then d = 0 else d = 1 end
     local _, un = uiDepthApply(d)
     P("层深：" .. ((d == 0) and "全部层级都显示" or ("只显示前 " .. d .. " 层"))
