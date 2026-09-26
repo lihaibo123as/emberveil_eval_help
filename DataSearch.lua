@@ -1161,11 +1161,15 @@ end
 -- 「地图不在了」：隐藏 + 清签名（下次 tick 会认为需要重建）。
 -- ★注意与 dsAnnHidePins 的区别：dsAnnDraw 内部若误用本函数，会把调用方刚设好的 dsAnnSig 清成 nil，
 -- 表现为「画了但签名丢失 → 每 tick 都重绘」或「状态查询返回 nil」（1.70.19 实际踩到）。
+-- ★前向声明：小地图层定义在下面（dsMmHidePins），而本函数在上面 ⇒ 不先声明就会绑成全局 nil
+--   （「层关掉/地图不在」必须把小地图那批钉子一起收，否则它们会留在小地图上）。
+local dsMmHide = nil
 local function dsAnnHideAll()
   dsAnnHidePins()
   dsAnnSig = nil
   dsAnnLastDrawn = 0 -- 层已收：自愈机制不得再拿旧的「打算画 N 点」去救一个已清空的层
   dsAnnShown = {}
+  if dsMmHide then dsMmHide() end -- 小地图层（下面定义；前向声明见上）
 end
 
 -- 取一枚池内钉子（按序号复用；鼠标只在新造时设一次）。
@@ -1417,6 +1421,202 @@ local function dsAnnDraw(areaId)
   return idx
 end
 
+-- ===== 小地图标注层（1.75.13）=====
+-- 用户问：「查看任务插件,地图标注的内容如何在小地图上也显示」。
+-- ★做法 = 照抄**任务插件自己的**小地图配方（Map/NpcPins.lua:1458 DrawMinimap），全部走它的公开 API，
+--   不自己发明常数 —— 本客户端的小地图尺度是实测出来的，写错就是「点跟着人跑」：
+--     · 图钉 = Client.CreateMinimapPin(索引, 尺寸, r,g,b)：钉子是 Minimap 的**子件**
+--       ⇒ 开大地图时随小地图一起藏，不必我们自己判「地图开着就别画」。
+--       ★索引用**字符串前缀** "EvalDsMM"：对方两个池都用数字序号（MinimapPins / NpcPins），
+--         字符串不会与任何数字撞名 —— 撞名的后果是拿到**对方的钉子**去改贴图。
+--     · 位置 = 玩家在该区域的百分比 → 码 → 像素：
+--         yardsPerPixel = span / width
+--         offsetX = ((x/100) - playerX) * zoneYardsX / yardsPerPixel
+--         offsetY = -(((y/100) - playerY) * zoneYardsY) / yardsPerPixel
+--       span 取 MinimapPins:GetSpanForZoom(zoom, areaId) —— 它内部按 zoom 档 + **室内/室外**分表，
+--         是本机实测过的唯一来源；areaId/playerX/playerY 取 MapContext:GetCurrentZoneView()；
+--         区域尺度取 Database:GetZoneYards(areaId)。三者任一拿不到 ⇒ **一个点都不画**（不猜）。
+--     · 只画**落在小地图圆内**的点（节点类用小一圈的半径，同对方 NODE_MINIMAP_PIN_SIZE 的做法）。
+--     · 旋转小地图 ⇒ 整层不画（Client.IsMinimapRotating：本机拿不到朝向，对方明文「not guess north」）。
+--   ★开关：cfg.ds.mm（nil = 开）；「地图标注」菜单的「快捷」栏多一行「小地图也显示」。
+local DS_MM_MAX = 80            -- 单区**绘制**上限（小地图只看眼前一圈，用不着 500）
+local DS_MM_CACHE_MAX = 500     -- 单区**候选缓存**上限（同大地图层的 DS_ANN_MAX：查询结果先全部收下，
+                                --   距离过滤每拍现算 —— 只缓存圈内那批的话，玩家一走就过期）
+local DS_MM_PIN_SIZE = 14       -- 同对方 MINIMAP_PIN_SIZE
+local DS_MM_NODE_SIZE = 7       -- 同对方 NODE_MINIMAP_PIN_SIZE
+local DS_MM_MARGIN = 2          -- 同对方 MINIMAP_MARGIN
+local dsMmPins = {}             -- 小地图钉子池（与大地图池分开：父级不同）
+local dsMmOn = true             -- 小地图也显示（cfg.ds.mm；nil = 开）
+local dsMmTargets = nil         -- 本区目标缓存（签名不变就复用，省掉每次查库）
+local dsMmSig = nil
+local dsMmShown, dsMmFail, dsMmWhy = 0, 0, "init"
+-- dsMmHide 的前向声明在 dsAnnHideAll 之前（这里**绝不能再 local 一次**：会遮蔽那一份，
+
+local function dsMmCfgOn()
+  local c = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(c) ~= "table" or type(c.ds) ~= "table" then return true end
+  return c.ds.mm ~= false
+end
+function EVAL_DS_MM_ON() return dsMmCfgOn() end
+-- 开关（写 cfg.ds.mm；★这里直接写配置，不走 dsPersist —— 那个函数声明在上面，引用下面的 local 会绑成全局 nil）
+function EVAL_DS_MM_SET(on)
+  local c = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(c) == "table" then
+    if type(c.ds) ~= "table" then c.ds = {} end
+    c.ds.mm = on and true or false
+  end
+  dsMmOn = on and true or false
+  dsMmSig = nil -- 开关一变就重算目标缓存
+  if type(EVAL_DS_ANN_REFRESH) == "function" then EVAL_DS_ANN_REFRESH() end
+  return dsMmOn
+end
+-- 读值口（/eh ds 的诊断与真机取证用：一眼看出「画了几个、为什么没画」）
+function EVAL_DS_MM_STATE()
+  return EVAL_DS_MM_ON(), dsMmWhy, dsMmShown, dsMmFail, table.getn(dsMmPins),
+    (dsMmTargets and table.getn(dsMmTargets)) or 0
+end
+
+local function dsMmPin(idx)
+  local f = dsMmPins[idx]
+  if f then return f end
+  local client = dsUQClient()
+  if not client or type(client.CreateMinimapPin) ~= "function" then return nil end
+  local ok, nf = pcall(client.CreateMinimapPin, "EvalDsMM" .. idx, DS_MM_PIN_SIZE, 1, 1, 1)
+  if not ok or not nf then return nil end
+  dsMmPins[idx] = nf
+  return nf
+end
+
+local function dsMmHidePins()
+  for _, f in ipairs(dsMmPins) do pcall(f.Hide, f) end
+  dsMmShown = 0
+end
+dsMmHide = dsMmHidePins -- 交给 dsAnnHideAll（层关掉/地图不在时一起收）
+
+-- 摆一枚钉子；成功返回 true。★定位失败就不 Show（1.70.35「静默放置失败」同一条纪律）
+local function dsMmPlace(client, idx, ox, oy, r, g, b, icon, size)
+  local f = dsMmPin(idx)
+  if not f then return false end
+  if type(client.SetMinimapPinSize) == "function" then
+    pcall(client.SetMinimapPinSize, f, size, size)
+  end
+  if type(client.SetMinimapPinTexture) == "function" then
+    if icon then
+      pcall(client.SetMinimapPinTexture, f, DS_ANN_ICON_ROOT .. icon)
+    else
+      pcall(client.SetMinimapPinTexture, f, DS_NODE_DOT_TEXTURE)
+    end
+  end
+  if type(client.SetMinimapPinColor) == "function" then
+    -- 有图标不染色（图标自带配色），圆点才用类别色 —— 与大地图层同一口径
+    if icon then
+      pcall(client.SetMinimapPinColor, f, 1, 1, 1)
+    else
+      pcall(client.SetMinimapPinColor, f, r or 1, g or 1, b or 1)
+    end
+  end
+  local okPos, placed = pcall(client.PositionMinimapPin, f, ox, oy)
+  if not okPos or placed == false then
+    pcall(f.Hide, f)
+    return false
+  end
+  pcall(f.Show, f)
+  return true
+end
+
+-- 类别集签名（16 位 0/1；共用同一个数据源 dsCatOn ⇒ 与菜单/大地图层不可能不一致）
+local function dsMmCatStr()
+  local s = ""
+  for _, d in ipairs(DS_ANN_CATS) do s = s .. (dsCatOn(d.k) and "1" or "0") end
+  return s
+end
+
+-- 每次心跳走一遍（节流由调用方 dsAnnTickFn 保证，0.25s）
+local function dsMmStep(now)
+  local client = dsUQClient()
+  if not client then dsMmWhy = "noClient" dsMmHidePins() return end
+  if not dsMmOn then dsMmWhy = "off" dsMmHidePins() return end
+  if not dsAnnOn then dsMmWhy = "layerOff" dsMmHidePins() return end
+  local okRot, rotating = pcall(client.IsMinimapRotating)
+  if okRot and rotating then dsMmWhy = "rotating" dsMmHidePins() return end
+  local mc = dsUQModule("MapContext")
+  local mmMod = dsUQModule("MinimapPins")
+  local dbMod = dsUQModule("Database")
+  if type(mc) ~= "table" or type(mc.GetCurrentZoneView) ~= "function"
+    or type(mmMod) ~= "table" or type(mmMod.GetSpanForZoom) ~= "function"
+    or type(dbMod) ~= "table" or type(dbMod.GetAreaServiceLocations) ~= "function"
+    or type(client.GetMinimapGeometry) ~= "function"
+    or type(client.CreateMinimapPin) ~= "function" then
+    dsMmWhy = "noModules" dsMmHidePins() return
+  end
+  local okv, areaId, report = pcall(mc.GetCurrentZoneView, mc)
+  if not okv or type(areaId) ~= "number" or type(report) ~= "table"
+    or type(report.playerX) ~= "number" or type(report.playerY) ~= "number" then
+    dsMmWhy = "noPlayerView" dsMmHidePins() return
+  end
+  local okg, width, height, zoom = pcall(client.GetMinimapGeometry)
+  if not okg or type(width) ~= "number" or type(height) ~= "number" or width <= 0 then
+    dsMmWhy = "noGeometry" dsMmHidePins() return
+  end
+  local oks, span = pcall(mmMod.GetSpanForZoom, mmMod, zoom, areaId)
+  if not oks or type(span) ~= "number" or span <= 0 then
+    dsMmWhy = "noSpan" dsMmHidePins() return
+  end
+  local okz, yards = pcall(dbMod.GetZoneYards, dbMod, areaId)
+  if not okz or type(yards) ~= "table" or type(yards[1]) ~= "number" or type(yards[2]) ~= "number" then
+    dsMmWhy = "noYards" dsMmHidePins() return
+  end
+  local yardsPerPixel = span / width
+  local shortest = width
+  if height < shortest then shortest = height end
+  local limit = shortest / 2 - DS_MM_PIN_SIZE / 2 - DS_MM_MARGIN
+  if limit < 0 then limit = 0 end
+  local nodeLimit = shortest / 2 - DS_MM_NODE_SIZE / 2 - DS_MM_MARGIN
+  if nodeLimit < 0 then nodeLimit = 0 end
+  -- 目标缓存：区域 / zoom / 宽度 / 尺度（含室内室外） / 类别集 变了才重查库（查库是贵调用）。
+  -- ★缓存的是**整区候选**（上限 DS_MM_CACHE_MAX），不是「当前在小地图圈内的那批」：
+  --   玩家一走，圈内的集合就变了 ⇒ 距离过滤必须**每拍现算**（算术很便宜，查库才是贵的）。
+  local sig = tostring(areaId) .. "|" .. tostring(zoom) .. "|" .. tostring(math.floor(width))
+    .. "|" .. tostring(math.floor(span)) .. "|" .. dsMmCatStr()
+  if sig ~= dsMmSig then dsMmSig, dsMmTargets = sig, nil end
+  if not dsMmTargets then
+    local list = {}
+    local okd, locs = pcall(dbMod.GetAreaServiceLocations, dbMod, areaId, nil, nil, dsAnnWanted())
+    if okd and type(locs) == "table" then
+      for _, l in ipairs(locs) do
+        if l and type(l.x) == "number" and type(l.y) == "number" and dsAnnAccept(l.category) then
+          table.insert(list, l)
+          if table.getn(list) >= DS_MM_CACHE_MAX then break end
+        end
+      end
+    end
+    dsMmTargets = list
+  end
+  local visible, fails, idx = 0, 0, 0
+  for i = 1, table.getn(dsMmTargets) do
+    local l = dsMmTargets[i]
+    local def = DS_ANN_BYKEY[l.category]
+    local small = def and def.small
+    local ox = ((l.x / 100) - report.playerX) * yards[1] / yardsPerPixel
+    local oy = -(((l.y / 100) - report.playerY) * yards[2]) / yardsPerPixel
+    local reach = small and nodeLimit or limit
+    if (ox * ox + oy * oy) <= (reach * reach) then
+      if idx >= DS_MM_MAX then break end -- 小地图只画眼前一圈：再近也封顶
+      idx = idx + 1
+      local col = DS_ANN_COLOR[l.category] or DS_ANN_DEFCOLOR
+      local size = small and DS_MM_NODE_SIZE or DS_MM_PIN_SIZE
+      if dsMmPlace(client, idx, ox, oy, col[1], col[2], col[3], dsAnnIconFor(l), size) then
+        visible = visible + 1
+      else
+        fails = fails + 1
+      end
+    end
+  end
+  for i = idx + 1, table.getn(dsMmPins) do pcall(dsMmPins[i].Hide, dsMmPins[i]) end
+  dsMmShown, dsMmFail = visible, fails
+  dsMmWhy = (visible > 0) and "drawn" or "none"
+end
+
 -- 用户可读的本次显示摘要（诊断/日志用）
 local function dsAnnSummary()
   local parts, n = {}, 0
@@ -1586,6 +1786,8 @@ local function dsAnnHeartbeat(now, areaId)
     dsAnnHb = now
     dsLog("心跳：tick 运行中 分类层=" .. tostring(dsAnnOn) .. " 当前地图=" .. tostring(areaId)
       .. " 钉子池=" .. table.getn(dsAnnPins) .. " 本层=" .. dsAnnSummary()
+      -- ★1.75.13 小地图层读数：画了几个 + 为什么没画（旋转/无几何/无尺度/层关）
+      .. " ｜ 小地图=" .. tostring(dsMmShown) .. "(" .. tostring(dsMmWhy) .. "/池" .. table.getn(dsMmPins) .. ")"
       .. "（IsShown=" .. tostring(dsMapShown()) .. " 仅参考）")
   end
 end
@@ -1600,6 +1802,9 @@ local function dsAnnTickFn()
   local now = (type(GetTime) == "function") and GetTime() or 0
   if now - dsAnnTick < DS_ANN_INTERVAL then return end
   dsAnnTick = now
+  -- ★1.75.13 小地图标注层：**放在地图状态判断之前** —— 它靠玩家自己的位置作原点，
+  --   与「大地图在看哪张图」无关（关着大地图时小地图才真正可见，那正是它的主场）。
+  dsMmStep(now)
 
   -- 地图没开：整层隐藏（切走/关图 → 标注跟着走，这是用户明确要求的「绑定地图」）
   local mc = dsUQModule("MapContext")
@@ -1919,6 +2124,9 @@ dsHudTick = function(areaId, sig)
     "打算画=" .. tostring(dsAnnLastDrawn) .. " 失败=" .. tostring(dsAnnLastFail) .. " 已画=" .. tostring(dsAnnSig ~= nil),
     dsOverlayStr(),
     "图层=" .. tostring(dsAnnOn) .. " 随机点=" .. tostring(dsRndOn),
+    -- ★1.75.13 小地图层：开关 / 已画几个 / 为什么没画（rotating·noGeometry·noSpan·off…）
+    "小地图标注=" .. tostring(dsMmShown) .. "个 状态=" .. tostring(dsMmWhy)
+      .. " 开关=" .. tostring(EVAL_DS_MM_ON()) .. " 池=" .. table.getn(dsMmPins),
   }
   local text = table.concat(lines, "\n")
   -- ★把「最后组装的文本」存在模块变量里：这既是 HUD 的真实输出，也让测试能独立断言它，
@@ -2035,6 +2243,11 @@ function EVAL_DS_SNAP()
   add("=== DS SNAP ===")
   add("图层=" .. tostring(dsAnnOn) .. " trace=" .. tostring(dsTrace)
     .. " 已绘签名=" .. tostring(dsAnnSig))
+  -- ★1.75.13 小地图标注层（同一套类别、画在 Minimap 上）：开关/状态/已画/失败/池/本区目标数
+  add("小地图层：开关=" .. tostring(EVAL_DS_MM_ON()) .. " 状态=" .. tostring(dsMmWhy)
+    .. " 已画=" .. tostring(dsMmShown) .. " 失败=" .. tostring(dsMmFail)
+    .. " 池=" .. tostring(table.getn(dsMmPins))
+    .. " 本区目标=" .. tostring(dsMmTargets and table.getn(dsMmTargets) or 0) .. "（签名=" .. tostring(dsMmSig) .. "）")
   add("钉子池=" .. tostring(table.getn(dsAnnPins)) .. " 可见=" .. tostring(dsAnnShownCount())
     .. " 打算画=" .. tostring(dsAnnLastDrawn) .. " 失败=" .. tostring(dsAnnLastFail))
   add(dsOverlayStr()) -- 1.70.42：覆盖层是「点定位后地图空白」排障的第一现场
@@ -2108,6 +2321,9 @@ function EVAL_DS_RESTORE()
   end
   dsAnnOn = anyOn
   c.ds.nodes = anyOn -- mirror back for backward compatibility
+  -- ★1.75.13 小地图层开关（cfg.ds.mm；nil = 开 ⇒ 老存档默认就有小地图标注）
+  dsMmOn = (c.ds.mm ~= false)
+  dsMmSig = nil
   if c.ds.trace ~= nil then dsTrace = c.ds.trace and true or false end
   if dsTrace then
     dsLog("（恢复取证开关：trace=开 图层=" .. tostring(dsAnnOn) .. "）")
@@ -2349,6 +2565,7 @@ function dsCatMenu()
   add("|cffaaaaaa— 快捷 —|r", nil, true)
   add("|cffffd200全部开启|r", "__all_on__")
   add("|cffffd200全部关闭|r", "__all_off__")
+  add("小地图也显示", "__mm__") -- ★1.75.13 同一套类别，也画在小地图上（用户问「如何在小地图上也显示」）
   return { items = items, keys = keys, locked = locked, sel = dsCatMenuSel(keys, table.getn(items)) }
 end
 
@@ -2362,6 +2579,8 @@ function dsCatMenuSel(keys, n)
       s[i] = (cnt > 0) and true or nil
     elseif k == "__all_off__" then
       s[i] = (cnt == 0) and true or nil
+    elseif k == "__mm__" then
+      s[i] = EVAL_DS_MM_ON() and true or nil
     elseif k then
       s[i] = EVAL_DS_CAT_ON(k) and true or nil
     end
@@ -2372,6 +2591,13 @@ end
 -- 下拉项被点：k=类别键 或 "__all_on__"/"__all_off__"；nowOn=面板回传的新状态。
 function dsCatMenuPick(k, nowOn)
   if not k then return end -- 分组标题行：不可点（已在 opts.locked 里声明，双保险）
+  if k == "__mm__" then
+    -- ★1.75.13 单行开关（小地图也显示）：切完按真实状态重画面板，避免只重绘被点那行
+    EVAL_DS_MM_SET(not EVAL_DS_MM_ON())
+    local mm = dsCatMenu()
+    if type(EVAL_DD_SYNC) == "function" then EVAL_DD_SYNC(mm.sel) end
+    return
+  end
   if k == "__all_on__" or k == "__all_off__" then
     local on = (k == "__all_on__")
     for _, d in ipairs(DS_ANN_CATS) do EVAL_DS_SET_CAT(d.k, on) end
