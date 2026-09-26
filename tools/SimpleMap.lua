@@ -1564,6 +1564,42 @@ local function featBuild(wm)
   end)
   cfgPanel:Hide()
 
+  -- ★★★1.75.6（用户两轮要求：「点击[面板]外任意位置自动关闭」→「**需要点击地图以外也能触发关闭**」）：
+  --   **全屏 click-catcher**（本项目既有范式，见 DragFrames）：
+  --     · 父级挂地图帧（strata 与面板**同一档** ⇒ 不会因为 strata 更高反而盖住面板自己；关图时自动消失）；
+  --     · **锚点是 UIParent 的两个角** ⇒ 铺满**整个屏幕**（不只是地图帧）⇒ 点地图以外也能关；
+  --       ★锚点用 UIParent 的坐标空间（偏移 0,0），所以外框被缩放到 0.7 时它照样铺满屏幕。
+  --     · 层级 = 面板 − 5（`SetFrameLevel`，本项目铁律：用 strata 抬高的做法在案是失败法）；
+  --     · 与面板**同生共死**：`smCfgShow` 是唯一出口 + 面板 `OnHide` 兜底 ⇒ 绝不常驻吃点击。
+  local cfgCatch = CreateFrame("Button", "EH_SM_CFGCATCH", wm)
+  pcall(cfgCatch.SetPoint, cfgCatch, "TOPLEFT", UIParent, "TOPLEFT", 0, 0)
+  pcall(cfgCatch.SetPoint, cfgCatch, "BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", 0, 0)
+  pcall(cfgCatch.SetFrameLevel, cfgCatch, plv + 105) -- 面板 = plv+110 ⇒ catcher 低 5 级
+  pcall(cfgCatch.EnableMouse, cfgCatch, true)
+  if type(cfgCatch.RegisterForClicks) == "function" then
+    pcall(cfgCatch.RegisterForClicks, cfgCatch, "LeftButtonUp", "RightButtonUp")
+  end
+  pcall(cfgCatch.Hide, cfgCatch)
+  -- 面板显示/隐藏的**唯一出口**（点按钮、点外面、关功能三条路都走它）
+  local function smCfgShow(show)
+    if show then
+      pcall(cfgPanel.Show, cfgPanel)
+      pcall(cfgCatch.Show, cfgCatch)
+    else
+      pcall(cfgPanel.Hide, cfgPanel)
+      pcall(cfgCatch.Hide, cfgCatch)
+    end
+  end
+  pcall(cfgCatch.SetScript, cfgCatch, "OnClick", function()
+    smCfgShow(false) -- ★点面板外任意位置 = 关面板（含右键）
+  end)
+  -- ★兜底：面板因**任何**原因隐藏（关图 / ESC 关图 / 收尾 / 客户端重排）时，catcher 必须跟着收 ——
+  --   它是铺满屏幕的 Button，留着会吃掉所有点击（本项目在案的事故类型）。
+  pcall(cfgPanel.SetScript, cfgPanel, "OnHide", function()
+    pcall(cfgCatch.Hide, cfgCatch)
+  end)
+  FEAT.cfgShow = smCfgShow -- 读值口/收尾用（关功能时把面板与 catcher 一起收）
+
   -- ★用户定：设置按钮 = 宏图标 454、正常技能图标尺寸 26×26（与图标库单格一致），无边框无底色
   local cfgBtn = CreateFrame("Button", "EH_SM_CFG", wm)
   cfgBtn:SetWidth(26)
@@ -1582,7 +1618,8 @@ local function featBuild(wm)
   if not ipath then ipath = "/Game/Interface/Icons/INV_Gizmo_02_TEX" end
   pcall(ic.SetTexture, ic, ipath)
   cfgBtn:SetScript("OnClick", function()
-    if cfgPanel:IsShown() then cfgPanel:Hide() else cfgPanel:Show() end
+    -- ★走唯一出口（面板与 catcher 同生共死）；点按钮本身也由 catcher 兜一层，行为一致
+    if cfgPanel:IsShown() then smCfgShow(false) else smCfgShow(true) end
   end)
 
 
@@ -1812,6 +1849,9 @@ local function featTeardown()
     FEAT.escAdded = false
   end
   FEAT.blackoutUntil, FEAT.blackoutAt, FEAT.blackoutLogged = 0, 0, false -- 瞬时窗口也收掉
+  -- ★★★1.75.6：地图设置面板 + 它的 click-catcher 一起收 —— 关功能 = 零动作，
+  --   ★catcher 绝不能留着（它是全屏 Button，留着会吃地图上的所有点击）。
+  if type(FEAT.cfgShow) == "function" then pcall(FEAT.cfgShow, false) end
   mfLog("关闭收尾：黑幕透明度还原 %d 层（原 alpha 由 featBlackoutRestore 写回）", nAlpha)
 end
 

@@ -1797,6 +1797,9 @@ end
 local dsRndStep
 -- ★同样前置声明：dsHudTick 定义在文件更后面（诊断浮层段）
 local dsHudTick
+-- ★★★1.75.6 前向声明：**地图右上角的「地图标注」图标**（本文件后面的独立段）——
+--   tick 在它之前调用它 ⇒ 不前置声明就会绑全局 nil（本项目最常见的静默报错）。
+local dsMapIconStep
 
 local function dsAnnTickFn()
   local now = (type(GetTime) == "function") and GetTime() or 0
@@ -1812,6 +1815,9 @@ local function dsAnnTickFn()
   dsAnnHeartbeat(now, areaId)
   -- ★1.70.38 诊断浮层：即便 areaId 为 nil 也要刷新（用户要能看到「客户端报 nil」这件事本身）
   if dsHudTick then dsHudTick(areaId, sig) end
+  -- ★★★1.75.6（用户要求）：地图右上角的「地图标注」放大镜图标 —— 用 tick 拿到的 **areaId** 当开图信号
+  --   （★不许用 `WorldMapFrame:IsShown()` —— 本项目 1.70.17 定案：本客户端两个方向都不可靠）
+  if dsMapIconStep then dsMapIconStep(areaId) end
 
   if not areaId then
     if dsAnnSig ~= nil then
@@ -2614,6 +2620,242 @@ function dsCatMenuPick(k, nowOn)
     -- 读数据源做「取反」在状态与面板不一致时会连续同向翻转（典型表现=点 A 却像点了 B）。
     EVAL_DS_SET_CAT(k, nowOn and true or false)
   end
+end
+
+-- ===== ★★★1.75.6 地图右上角「地图标注」放大镜图标（用户要求：「在地图右上角位置使用放大镜图标
+--   (只在任务插件可用的情况下,采用任务插件那边的放大镜图标.).左键点击 弹出地图标注的下拉选项.
+--   点这个下拉窗之外的任意位置都可以关闭下拉窗」）=====
+-- 五条口径（照抄本项目的既有判据，别自己发挥）：
+--   ① **只在任务插件可用时出现**：判据 = 本文件既有的依赖探测 `dsDepState() == DS_DEP_OK`
+--      （数据表就绪才算「可用」；装了没启用/没就绪 ⇒ 不显示，并把原因记一条日志，不静默）。
+--   ② **图标就用任务插件那张放大镜**：路径与 UnrealQuest 自己一致（`ClientAPI.lua:5634` 的
+--      `TRACKER_NPC_FINDER_ICON_TEXTURE = "Interface\\AddOns\\unrealQuest\\media\\search-icon"`）。
+--      ★贴图口**读回自证**（本项目纪律：写成功 ≠ 看得见）：读不回来就退回**文字「标」**，绝不留空格子。
+--   ③ **开图才显示**：开图信号用 tick 给的 `areaId`（nil = 关图/大陆视图）—— 绝不读 `WorldMapFrame:IsShown()`。
+--   ④ **左键**打开下拉：复用 `dsCatMenu()` / `dsCatMenuPick()`（**单一来源**，与配置窗那个「地图标注(N)」按钮同一个菜单）。
+--   ⑤ **点外面关**：由通用下拉的全屏 click-catcher 负责（EvalHelp.lua 的 `ddUI.catch`）。
+--   层级：FULLSCREEN_DIALOG + 动态层级（地图自身的件都在 FULLSCREEN 层 ⇒ strata 上就压住了；再读回自证）。
+local DS_MAPICON_TEX = "Interface\\AddOns\\unrealQuest\\media\\search-icon"
+local DS_MAPICON_SIZE = 22
+local DS_MAPICON_W = 136 -- 图标 + 描述文字整条的宽度（★整条都是按钮：点文字也能开菜单，热区更大）
+-- ★★★位置参数（**唯一来源**，用户按像素调就是改这两个数）：
+--   ★★★用户要求（1.75.6）：「不能直接右对齐吗?」⇒ **直接右对齐地图窗口**（不挂任何参照件）：
+--     `TOPRIGHT(我们的条) ← TOPRIGHT(WorldMapFrame) + (DX, DY)`，条内是「文字在左、图标在右」+ 右对齐
+--     ⇒ 视觉上就是贴着地图右缘的一条。
+--   DX 负 = 往左留边距（别顶到窗口边框）；DY 负 = 往下（让开顶部那排「大陆 / 地区 / 缩小」）。
+--   单位 = WorldMapFrame 的坐标空间（UI 缩放 100% 时 1 ≈ 1 屏幕像素）。**要挪就只改这两个数**：
+--   ★用户 1.75.6 微调：「往上移动 40px、左移动 200px」⇒ DY: −110 → **−70**（往上 = 加正数方向）、
+--     DX: −12 → **−212**（往左 = 更负）。
+local DS_MAPICON_DX, DS_MAPICON_DY = -50, -80
+local dsMapIcon = { fr = nil, shown = false, why = "未建", lastRaise = -99, logged = false, lastLabel = "",
+  clickUntil = 0, clickMsg = nil }
+
+-- ★★★真机事故（用户：「位置设置好了，但是现在无法点击」）—— 这是本项目的老坑：
+--   `SetFrameLevel` 只保证「画得出来」，而**点击命中也是按层级判的**；地图里有一张**看不见的点击画布**
+--   `WorldMapButton`（它盖满整幅地图、没有贴图）—— 它的层级若比我们高，我们**看得见却收不到点击**。
+--   ⇒ 层级必须 = `max(500, **地图里所有件的最高层级** + 40)`（内层缩放那轮为同一个坑做的 `misTopLevel` 同款）。
+--   ★读不到层级的、以及区域（Texture/FontString）一律跳过（判不出就不碰，本项目 §5.4 的守卫纪律）。
+local DS_MAPICON_LEVEL_NAMES = { "WorldMapFrame", "WorldMapDetailFrame", "WorldMapButton",
+  "WorldMapPositioningGuide", "WorldMapHighlight", "WorldMapFrameAreaFrame", "WorldMapTooltip",
+  "WorldMapZoomOutButton", "WorldMapMagnifyingGlassButton", "WorldMapFrameAreaLabel", "BlackoutWorld",
+  "WorldMapBlackout" }
+local function dsMapIconTopLevel()
+  local maxLv = 1
+  for _, nm in ipairs(DS_MAPICON_LEVEL_NAMES) do
+    local f = rawget(_G, nm)
+    if (type(f) == "table" or type(f) == "userdata") and type(f.GetFrameLevel) == "function" then
+      local isRegion = false
+      if type(f.GetObjectType) == "function" then
+        local okT, t = pcall(f.GetObjectType, f)
+        if okT and (t == "Texture" or t == "FontString") then isRegion = true end
+      end
+      if not isRegion then
+        local ok, v = pcall(f.GetFrameLevel, f)
+        if ok and tonumber(v) and tonumber(v) > maxLv then maxLv = tonumber(v) end
+      end
+    end
+  end
+  return maxLv
+end
+
+-- 层级/strata：现算 + 读回自证（写死的话在客户端换版/换图后就可能被压住/点不到 —— 内层缩放那轮已实证）
+local function dsMapIconRaise(fr)
+  if not fr then return nil end
+  local lv = 500 -- EH_DebugBox 的面板用它压过地图（FULLSCREEN 层）⇒ 本机已知可用
+  local top = dsMapIconTopLevel() + 40
+  if top > lv then lv = top end
+  pcall(fr.SetFrameStrata, fr, "FULLSCREEN_DIALOG")
+  pcall(fr.SetFrameLevel, fr, lv)
+  local got = nil
+  if type(fr.GetFrameStrata) == "function" then
+    local ok, v = pcall(fr.GetFrameStrata, fr)
+    if ok then got = tostring(v) end
+  end
+  return got, lv, top
+end
+
+-- ★描述文字的唯一刷新口（图标左侧那行）：**一句人话**（用户：「添加一些描述信息」）——
+--   风格照客户端自己那句提示（「右键点击可以缩小地图」）：小图标 + 一行说明，而不是只有名字和数字。
+--   尾部仍带 (N) = 已开启类别数（与配置窗那个按钮**同一个计数口径** EVAL_DS_CAT_COUNT，两处永远一致）。
+--   只在文本**真的变了**才 SetText（0.25s 心跳里很便宜）。
+local function dsMapIconLabel()
+  local b = dsMapIcon.fr
+  if not (b and b.label) then return end
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  local txt
+  if (tonumber(dsMapIcon.clickUntil) or 0) > now and dsMapIcon.clickMsg then
+    -- ★点击回执（3 秒）：开图时聊天框是藏着的 ⇒ 「点了没反应」必须在这行字里看得见
+    txt = "点击回执：" .. tostring(dsMapIcon.clickMsg)
+  else
+    txt = L("DS_MAPICON_LABEL") .. " (" .. tostring(EVAL_DS_CAT_COUNT()) .. ")"
+  end
+  if dsMapIcon.lastLabel == txt then return end
+  dsMapIcon.lastLabel = txt
+  pcall(b.label.SetText, b.label, txt)
+end
+
+local function dsMapIconBuild()
+  if dsMapIcon.fr then return dsMapIcon.fr end
+  if type(CreateFrame) ~= "function" then return nil end
+  local wm = rawget(_G, "WorldMapFrame")
+  if not (type(wm) == "table" or type(wm) == "userdata") then return nil end
+  local b = CreateFrame("Button", "EH_DS_MAPICON", wm)
+  pcall(b.SetWidth, b, DS_MAPICON_W)
+  pcall(b.SetHeight, b, DS_MAPICON_SIZE)
+  -- ★★★位置（用户要求：「不能直接右对齐吗?」）：**直接右对齐地图窗口**，不挂任何参照件 ——
+  --   `TOPRIGHT(条) ← TOPRIGHT(WorldMapFrame) + (DX, DY)`；条内「文字在左、图标在右」+ 右对齐
+  --   ⇒ 贴着地图右缘的一条。要上下挪只改 `DS_MAPICON_DY` 一个数。
+  pcall(b.SetPoint, b, "TOPRIGHT", wm, "TOPRIGHT", DS_MAPICON_DX, DS_MAPICON_DY)
+  dsMapIcon.refName = "WorldMapFrame 右上角右对齐 +(" .. tostring(DS_MAPICON_DX) .. "," .. tostring(DS_MAPICON_DY) .. ")"
+  pcall(b.EnableMouse, b, true)
+  if type(b.RegisterForClicks) == "function" then pcall(b.RegisterForClicks, b, "LeftButtonUp") end
+  -- ★描述信息（用户：「添加一些描述信息」）：图标 + 一行文字，整条都是按钮（点哪儿都能开菜单）
+  local lb = b:CreateFontString(nil, "OVERLAY")
+  for _, fo in ipairs({ "GameFontNormalSmall", "ChatFontNormal", "GameFontNormal" }) do
+    if pcall(lb.SetFontObject, lb, fo) then break end
+  end
+  pcall(lb.SetPoint, lb, "RIGHT", b, "RIGHT", -DS_MAPICON_SIZE - 4, 0)
+  pcall(lb.SetJustifyH, lb, "RIGHT")
+  pcall(lb.SetTextColor, lb, 1, 0.85, 0.30)
+  b.label = lb
+  local ic = b:CreateTexture(nil, "ARTWORK")
+  pcall(ic.SetWidth, ic, DS_MAPICON_SIZE)
+  pcall(ic.SetHeight, ic, DS_MAPICON_SIZE)
+  pcall(ic.SetPoint, ic, "RIGHT", b, "RIGHT", 0, 0)
+  local ok = pcall(ic.SetTexture, ic, DS_MAPICON_TEX)
+  local back = nil
+  if ok and type(ic.GetTexture) == "function" then
+    local okg, v = pcall(ic.GetTexture, ic)
+    if okg then back = v end
+  end
+  if type(back) ~= "string" or back == "" then
+    -- ★兜底必须**真的看得见**：贴不上就用文字顶上（不留空格子），并如实记一条
+    pcall(ic.Hide, ic)
+    local fs = b:CreateFontString(nil, "OVERLAY")
+    for _, fo in ipairs({ "GameFontNormalSmall", "ChatFontNormal", "GameFontNormal" }) do
+      if pcall(fs.SetFontObject, fs, fo) then break end
+    end
+    pcall(fs.SetPoint, fs, "RIGHT", b, "RIGHT", 0, 0)
+    pcall(fs.SetText, fs, "放大镜")
+    pcall(fs.SetTextColor, fs, 1, 0.85, 0.30)
+    b.iconText = fs
+    dsLogAlways("地图标注图标：任务插件的放大镜贴图**读回为空**（" .. tostring(DS_MAPICON_TEX) .. "）⇒ 退回文字")
+  else
+    dsLogAlways("地图标注图标：已用任务插件的放大镜（读回 " .. tostring(back) .. "）")
+  end
+  -- 悬停给说明（图标是纯贴图，不吃鼠标 ⇒ 悬停必须挂在**按钮**上，本项目 §3.9）
+  pcall(b.SetScript, b, "OnEnter", function()
+    local tip = _G["GameTooltip"]
+    if not tip or type(tip.SetOwner) ~= "function" or type(tip.AddLine) ~= "function" then return end
+    pcall(tip.SetOwner, tip, b, "ANCHOR_RIGHT")
+    if type(tip.ClearLines) == "function" then pcall(tip.ClearLines, tip) end
+    pcall(tip.AddLine, tip, L("DS_NODES") .. "(" .. tostring(EVAL_DS_CAT_COUNT()) .. ")", 1, 0.85, 0.30)
+    pcall(tip.AddLine, tip, L("DS_MAPICON_TIP"), 0.88, 0.88, 0.88)
+    pcall(tip.Show, tip)
+  end)
+  pcall(b.SetScript, b, "OnLeave", function()
+    local tip = _G["GameTooltip"]
+    if tip and type(tip.Hide) == "function" then pcall(tip.Hide, tip) end
+  end)
+  -- ★左键 = 打开地图标注下拉（与配置窗那个按钮**同一个菜单**：dsCatMenu/dsCatMenuPick 是文件作用域单一来源）
+  pcall(b.SetScript, b, "OnClick", function()
+    if type(EVAL_DD_OPEN) ~= "function" then
+      dsLogAlways("地图标注图标：通用下拉控件未载入（EVAL_DD_OPEN 不可用）⇒ 这次没打开")
+      return
+    end
+    local m = dsCatMenu()
+    EVAL_DD_OPEN(b, m.items, function(pi, nowOn)
+      dsCatMenuPick(m.keys[pi], nowOn)
+      dsMapIconLabel() -- 勾选后就地刷新文字里的 (N)（与配置窗那个按钮同一个计数口径）
+    end, { multi = true, selected = m.sel, locked = m.locked, strata = "FULLSCREEN_DIALOG", level = 620 })
+    dsLogAlways("地图标注图标：已打开下拉（" .. tostring(table.getn(m.items)) .. " 行；点面板外任意位置关闭）")
+  end)
+  pcall(b.Hide, b)
+  dsMapIcon.fr = b
+  dsMapIconLabel()
+  return b
+end
+
+-- ★★★1.75.6（用户截图：我们那行「地图标注：左键点这里选类别」**压在了「地图设置」面板上**）
+--   ⇒ **面板打开时让位**：读 SimpleMap 那个具名帧（`EH_SM_CFGP`）的 IsShown，
+--     显示中就先把我们这一条收起来（关掉面板后 0.25s 内自动回来）。
+--   ★只读对方的**帧状态**（不读它的配置、不调它的函数）⇒ 与「模块之间不互相管配置」的纪律不冲突。
+local function dsMapIconYield()
+  local p = rawget(_G, "EH_SM_CFGP")
+  if type(p) == "table" or type(p) == "userdata" then
+    if type(p.IsShown) == "function" then
+      local ok, v = pcall(p.IsShown, p)
+      if ok and (v == true or v == 1) then return "地图设置面板打开中（让位，免得文字压在面板上）" end
+    end
+  end
+  return nil
+end
+
+-- tick 口：开图才显示；只在「任务插件可用」时显示；层级每 ~1s 重申一次（客户端可能重排）
+dsMapIconStep = function(areaId)
+  local dep = dsDepState()
+  local want = (areaId ~= nil) and (dep == DS_DEP_OK)
+  local yield = want and dsMapIconYield() or nil
+  if yield then want = false end
+  if not want then
+    if dsMapIcon.shown then
+      dsMapIcon.shown = false
+      if dsMapIcon.fr then pcall(dsMapIcon.fr.Hide, dsMapIcon.fr) end
+    end
+    -- 如实说明**为什么没显示**（各只记一次，不刷屏）
+    local why = yield or ((areaId == nil) and "地图没开" or ("任务插件不可用（依赖状态=" .. tostring(dep) .. "）"))
+    if dsMapIcon.why ~= why then
+      dsMapIcon.why = why
+      dsLogAlways("地图标注图标：隐藏 —— " .. why)
+    end
+    return
+  end
+  local b = dsMapIconBuild()
+  if not b then
+    if dsMapIcon.why ~= "WorldMapFrame 不可用" then
+      dsMapIcon.why = "WorldMapFrame 不可用"
+      dsLogAlways("地图标注图标：建不出来（WorldMapFrame 不在）")
+    end
+    return
+  end
+  if not dsMapIcon.shown then
+    dsMapIcon.shown = true
+    dsMapIcon.why = "显示中"
+    dsMapIcon.logged = false
+    pcall(b.Show, b)
+    dsLogAlways("地图标注图标：显示（任务插件可用，地图已开）")
+  end
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  if now - (tonumber(dsMapIcon.lastRaise) or -99) > 1 then
+    dsMapIcon.lastRaise = now
+    local z, lv = dsMapIconRaise(b)
+    if not dsMapIcon.logged then
+      dsMapIcon.logged = true
+      dsLogAlways("地图标注图标：strata=" .. tostring(z) .. " level=" .. tostring(lv) .. "（读回自证）｜ 位置="
+        .. tostring(dsMapIcon.refName))
+    end
+  end
+  dsMapIconLabel() -- 描述文字就地刷新（计数变了才 SetText）
 end
 
 -- 测试直调（不建真实 UI 也能断言菜单结构与勾选一致性）

@@ -4803,9 +4803,27 @@ local function DD_BUILD()
   end
   dd:Hide()
   ddUI.root = dd
+  -- ★★★1.75.6（用户要求：「点这个下拉窗之外的任意位置都可以关闭下拉窗」）：
+  --   **全屏 click-catcher**（本项目既有范式，见 DragFrames 的「全屏 click-catcher」）——
+  --   压在 DD **下面**、其余界面**上面**（同 strata、层级 = DD−5，见 EVAL_DD_OPEN）
+  --   ⇒ 菜单打开期间点任何地方都先落到它身上 = 关菜单（标准菜单语义）。
+  --   ★它是**菜单期间**才显示（EVAL_DD_HIDE 一并收起），不会常驻吃点击。
+  local cat = CreateFrame("Button", "EVAL_HELP_DD_CATCH", UIParent)
+  pcall(cat.SetAllPoints, cat, UIParent)
+  pcall(cat.EnableMouse, cat, true)
+  if type(cat.RegisterForClicks) == "function" then
+    pcall(cat.RegisterForClicks, cat, "LeftButtonUp", "RightButtonUp")
+  end
+  pcall(cat.SetScript, cat, "OnClick", function() EVAL_DD_HIDE() end)
+  pcall(cat.Hide, cat)
+  ddUI.catch = cat
 end
 
-function EVAL_DD_HIDE() if ddUI.root then ddUI.root:Hide() end ddUI.anchor = nil end
+function EVAL_DD_HIDE()
+  if ddUI.root then ddUI.root:Hide() end
+  if ddUI.catch then pcall(ddUI.catch.Hide, ddUI.catch) end -- ★catcher 与菜单同生共死
+  ddUI.anchor = nil
+end
 
 -- ★1.71.2 供**宿主控件**（条件行里的光环名输入框）驱动的重过滤入口。
 --   设计意图（用户要求）：把「输入关键字」放在**宿主那边**、而不是下拉面板内部，
@@ -5228,6 +5246,32 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
   DD_BUILD()
   local dd = ddUI.root
   if not dd then return end
+  -- ★★★1.75.6：**宿主层高过地图时**（世界地图是 FULLSCREEN 层 ⇒ DIALOG 的下拉会被它整个压住 =
+  --   「下拉打开了却看不见」）⇒ 允许调用方指定 `opts.strata` / `opts.level`。
+  --   ★不传 = 老行为（DIALOG / 250）；每次打开都写一次 ⇒ 换宿主、换档都不会串档。
+  local wantStrata = (opts and opts.strata) or "DIALOG"
+  local wantLevel = tonumber(opts and opts.level) or 250
+  pcall(dd.SetFrameStrata, dd, wantStrata)
+  pcall(dd.SetFrameLevel, dd, wantLevel)
+  -- ★★★1.75.6 真机事故（用户截图：下拉只剩**一个黑框、一行都看不见**）：
+  --   `SetFrameLevel` 只抬**面板自己**（背景是它的纹理 ⇒ 跟着上去），而**行是独立帧**、保留构建时的层级
+  --   ⇒ 面板背景反而盖住了自己的行。**层级是绝对值、子件不会跟着父件走**（与内层缩放那轮同一个坑）。
+  --   ⇒ 父件抬完，**子件一起抬**：行 = wantLevel+10+i（文本/图标是行的子件，自然跟着），搜索框再高一点。
+  if type(ddUI.rows) == "table" then
+    for i = 1, table.getn(ddUI.rows) do
+      local rb = ddUI.rows[i] and ddUI.rows[i].btn
+      if rb then pcall(rb.SetFrameLevel, rb, wantLevel + 10 + i) end
+    end
+  end
+  if ddUI.search then pcall(ddUI.search.SetFrameLevel, ddUI.search, wantLevel + 40) end
+  if ddUI.searchBg then pcall(ddUI.searchBg.SetDrawLayer, ddUI.searchBg, "BACKGROUND") end
+  -- ★1.75.6 全屏 click-catcher（点面板外任意位置 = 关菜单）：压在 DD **下面**、其余界面**上面**
+  --   ⇒ 同 strata、层级 = DD − 5（太低会被别的窗口压住吃不到点击，太高又会盖住菜单本身）。
+  if ddUI.catch then
+    pcall(ddUI.catch.SetFrameStrata, ddUI.catch, wantStrata)
+    pcall(ddUI.catch.SetFrameLevel, ddUI.catch, wantLevel - 5)
+    pcall(ddUI.catch.Show, ddUI.catch)
+  end
   -- 1.32.5 重复点击同一触发按钮 = 收起下拉（toggle）
   -- ★1.70.29：搜索框的「输入即过滤」会重入本函数（ddUI.reentrant=true），
   --   此时**绝不能走 toggle 分支**——否则用户每打一个字，下拉就被当成「再次点击锚点」而关闭。
