@@ -625,8 +625,10 @@ do
   eq(math.abs(A4b.x * st4b.sc - 355 * 0.7) < 0.01, true, "④b★显示仍是原值×es")
   -- ⑤ 原值只在**自然档**抓（宽 215 而不是已缩过的 150.5）+ 记录键 = 纹理名
   --   ★用**会折算**的夹具现跑一次再读记录（上一段 ④b 是「不折算」档，那一档**不抓原值**，记录是空的）
+  --   ★1.75.5 起默认「每次开图都当第一次打开」⇒ 开图那一拍会**作废旧记录并重抓**（先还自然档再读），
+  --     读原值要等版式稳定 0.4s ⇒ 跑 12 拍（0.6s）再读，才拿得到重抓后的记录。
   local A5 = openWith(false)
-  ticks(3)
+  ticks(12)
   local key5, _f5, rx5, ry5, rw5 = EVAL_SM_TEST_MAPFIT_FROM(1)
   eq(rw5, 215, "⑤★★原值取自自然档（宽 = 215；实测 " .. tostring(rw5) .. "）")
   eq(rx5, 355, "⑤★★锚点偏移也取自然档（355；实测 " .. tostring(rx5) .. "）")
@@ -679,8 +681,10 @@ do
   eq(EVAL_SM_TEST_MAPFIT_MIGRATE(), true, "⑦★迁移认出「没有版本戳的旧原值」")
   eq(EVAL_SM_TEST_MAPFIT_ORIG(), 0, "⑦★★旧原值整块丢弃（实测剩 " .. tostring(EVAL_SM_TEST_MAPFIT_ORIG()) .. " 条）")
   -- ⑧ 幂等：同一 es 再折一拍必须 changed = 0
+  --   ★1.75.5：开图那一拍会按「每次开图都当第一次打开」重抓（先还自然档再读，读要等 0.4s）
+  --     ⇒ 先跑 12 拍把「重抓 + 折算」走完，再验幂等（跑 3 拍时记录还是空的，等于什么都没折）。
   local A6 = openWith(false)
-  ticks(3)
+  ticks(12)
   local c8 = select(1, EVAL_SM_TEST_MAPFIT_APPLY(0.7))
   eq(c8, 0, "⑧★★第二拍 changed = 0（幂等；实测 " .. tostring(c8) .. "）")
   eq(math.abs(A6.w - 215 * 0.7) < 0.01, true, "⑧★宽也按 es 折算（实测 " .. tostring(A6.w) .. "）")
@@ -933,7 +937,9 @@ do
   eq(nbA0 >= 1, true, "②★存档按地图分桶（实测 " .. tostring(nbA0) .. " 个桶）")
   -- ②b ★★★让 MapA **真的折算一次**（`SMFIT.rec` 采纳 = 后面「换图必须作废」的前提）：
   --   不先采纳就测不出「跨图复用」—— 变异 M2（smFitNewMap 不清 rec）第一版就是这么漏网的。
-  ticks(8)
+  --   ★1.75.5：开图那一拍起默认「每次开图都当第一次打开」⇒ 记录会被**作废后重抓**（读要等版式稳定 0.4s）
+  --     ⇒ 必须跑够 0.6s（12 拍）才谈得上「已采纳 + 已折算」；8 拍正好压在 0.4s 边界上（浮点累加不稳）。
+  ticks(12)
   eq(EVAL_SM_TEST_MAPFIT_REC(), 3, "②b★本图记录已被采纳（实测 " .. tostring(EVAL_SM_TEST_MAPFIT_REC()) .. " 条）")
   eq(math.abs(T[1].x - 155 * 0.7) < 0.01, true,
     string.format("②b★MapA 这一轮真的折了一次（T1 实测 %.1f，期望 %.1f）", T[1].x, 155 * 0.7))
@@ -976,14 +982,12 @@ do
   eq(T[4].ngeom == 0 and T[5].ngeom == 0, true,
     "⑤★★隐藏/没贴图层**零几何调用**（实测 " .. tostring(T[4].ngeom) .. "/" .. tostring(T[5].ngeom) .. "）")
   eq(T[1].ngeom > 0, true, "⑤★反向哨兵：在用的层确实被折算过（实测 " .. tostring(T[1].ngeom) .. " 次）")
-  -- ⑤b ★★★**脏存档复现**（用户那台机器就是这个状态）：给「本图不用」的两个层**种一条旧记录**，再跑几拍 ——
-  --   有闸门 ⇒ 一个几何都不发；把「本图在用」这条判据去掉（变异 M1）⇒ 立刻照写 = 用户看到的「全部重叠」现场。
-  --   ★为什么必须有这一条：不种记录时它们本来就没记录、也就不会被写 ⇒ 断言只能证明「没记录所以没写」，
-  --     证明不了「有记录也不会写」（变异 M1 实测正是这么漏网的）。
-  EH_SIMPLEMAP_CFG.mapFitOrig["MapB:668x1002"]["MapOverlay4"] =
-    { x = 1, y = -2, w = 30, h = 40, p = "TOPLEFT", rel = "WorldMapDetailFrame", rp = "TOPLEFT" }
-  EH_SIMPLEMAP_CFG.mapFitOrig["MapB:668x1002"]["MapOverlay5"] =
-    { x = 3, y = -4, w = 50, h = 60, p = "TOPLEFT", rel = "WorldMapDetailFrame", rp = "TOPLEFT" }
+  -- ⑤b ★★★**「有记录也不写」**（用户那台机器的现场就是「本图不用的层身上还留着记录」）：
+  --   给这两个层各**种一条记录**，再跑几拍 —— 有闸门 ⇒ 一个几何都不发；去掉「本图在用」这条判据（变异 M1）⇒ 立刻照写。
+  --   ★1.75.5 起记录在**会话内存**里（不再落存档）⇒ 种记录改走 `EVAL_SM_TEST_MAPFIT_PLANT`（等价物，语义完全相同）。
+  --   ★为什么必须有这一条：不种记录时它们本来就没记录、也就不会被写 ⇒ 断言只能证明「没记录所以没写」。
+  pcall(EVAL_SM_TEST_MAPFIT_PLANT, T[4].nm, 1, -2, 30, 40)
+  pcall(EVAL_SM_TEST_MAPFIT_PLANT, T[5].nm, 3, -4, 50, 60)
   T[4].ngeom, T[5].ngeom = 0, 0
   local x4b, x5b = T[4].x, T[5].x
   ticks(6)
@@ -1028,12 +1032,14 @@ do
   end
   eq(string.find(dump253, "本图在用=否", 1, true) ~= nil, true, "⑧★★清单把「本图不用」的层如实标出来（那批层我们一个几何都不碰）")
 
-  -- ⑨ 旧存档自愈：版本戳 2（跨图污染的那一代）必须整块丢弃
+  -- ⑨ ★★★1.75.5 定案：**定位信息不再落存档** ⇒ 老存档里那份 `mapFitOrig`/`mapFitVer` 一次性清掉，且不再写版本戳
   EH_SIMPLEMAP_CFG.mapFitVer = 2
   EH_SIMPLEMAP_CFG.mapFitOrig = { MapA = { MapOverlay1 = { x = 1, y = 2, w = 3, h = 4 } } }
-  eq(EVAL_SM_TEST_MAPFIT_MIGRATE(), true, "⑨★版本戳 2 的旧原值被认成「不可信」")
+  eq(EVAL_SM_TEST_MAPFIT_MIGRATE(), true, "⑨★老存档里的旧缓存被认成「该丢」")
   eq(EVAL_SM_TEST_MAPFIT_ORIG(), 0, "⑨★★整块丢弃（实测剩 " .. tostring(EVAL_SM_TEST_MAPFIT_ORIG()) .. " 条）")
-  eq(EH_SIMPLEMAP_CFG.mapFitVer, 3, "⑨★迁移后版本戳 = 3（下一次载入不再重复丢弃）")
+  eq(EH_SIMPLEMAP_CFG.mapFitOrig == nil and EH_SIMPLEMAP_CFG.mapFitVer == nil, true,
+    "⑨★★两个老键都清成 nil（不再写版本戳 ⇒ 天然幂等、少一个会过期的字段）")
+  eq(EVAL_SM_TEST_MAPFIT_MIGRATE(), false, "⑨★再清一次是空操作（幂等）")
 
   -- 夹具自清
   pcall(EVAL_SM_SET, false)
@@ -1051,4 +1057,632 @@ do
     print("GROUP 253 (探索层·原值按地图身份分桶：换图作废+重抓 · 折算用本图矩形 · 隐藏/没贴图的层零几何 · 零叠加层零动作 · 还原只还写过的层 · 只读清单): PASS")
   end
 end
+-- ===== 组 254（1.75.5）：抓原值「每帧重跑 ⇒ 缩放每帧抖」事故（用户：「换了一个账号之后…地图缩放不正常了」）=====
+-- 真机证据（`LIHAIBOAS2` 存档，2026-09-26 15:28）：
+--   · `mapFitTrace` 60 条环在 **1 秒内**被刷满（3920753.09 → 3920754.08），全是同一条「抓原值：本图不用的 1 个…已跳过」
+--     ⇒ `smFitCapture()` 被**每帧**调用（≈55–60 次/秒）；
+--   · 而该函数内部会把世界地图缩放**临时按 1 再放回** ⇒ 缩放每帧抖一次（面板 0.70、地图却像没缩放）+ 取证环被挤爆；
+--   · 折算口径被搅成 `es=1.000`（设置值 0.7）⇒ 8 个叠加层被反复重写（聊天每 3 秒一条「叠加层适配」刷屏）。
+-- 根因两条（本组各钉一条）：① `captured` 只在 `n > 0` 时落闩 ⇒ 存档原值已齐（每次 /reload 必然）时**永不落闩**；
+--   ② `SetScale(1)` 排在「筛候选」之前 + 没有有界重试门 ⇒ 每帧都动缩放。另加两条硬化：瞬态 es 不折算 + 两种读回口径都认。
+do
+  local fails254 = TESTASSERT_FAILS
+  local cfg = rawget(_G, "EVAL_HELP_CONFIG")
+  local savedTb = cfg.tb
+  local savedFr = rawget(_G, "WorldMapDetailFrame")
+  local savedWm = rawget(_G, "WorldMapFrame")
+  local savedGMI, savedGNMO, savedGMOI = rawget(_G, "GetMapInfo"), rawget(_G, "GetNumMapOverlays"), rawget(_G, "GetMapOverlayInfo")
+  local savedPx, savedPy = EH_SIMPLEMAP_CFG.px, EH_SIMPLEMAP_CFG.py
+  local tick = rawget(_G, "EH_SM_FEAT")
+  local function ticks(n) for _ = 1, n do EVAL_TEST_FIRE_UPDATE(tick, 0.05) end end
+
+  -- 假客户端：一张图两条叠加层；纹理几何可切「读回=逻辑」与「读回=逻辑×es（本客户端实测口径）」两种模型
+  local CUR = "MapA"
+  rawset(_G, "GetMapInfo", function() return CUR, 668, 1002 end)
+  rawset(_G, "GetNumMapOverlays", function() return 2 end)
+  rawset(_G, "GetMapOverlayInfo", function(i)
+    local t = { { "A1", 300, 150, 100, 200 }, { "A2", 120, 90, 250, 100 } }
+    local e = t[tonumber(i) or 0]
+    if not e then return nil end
+    return e[1], e[2], e[3], e[4], e[5], 0, 0
+  end)
+  local MODE = "plain"
+  local W = { nSet = 0, sc = 1 }
+  W.GetScale = function() return W.sc end
+  W.SetScale = function(_, v) W.nSet = W.nSet + 1 W.sc = tonumber(v) or W.sc return true end
+  W.GetAlpha = function() return 1 end
+  W.SetAlpha = function() return true end
+  W.ClearAllPoints = function() return true end
+  W.SetPoint = function() return true end
+  W.GetEffectiveScale = function() return W.sc end
+  W.GetPoint = function() return nil end
+  local FR = { R = {} }
+  FR.GetName = function() return "WorldMapDetailFrame" end
+  FR.IsShown = function() return true end
+  FR.GetScale = function() return 1 end
+  FR.GetParent = function() return W end
+  FR.GetEffectiveScale = function() return W.sc end
+  FR.GetRegions = function() local r = FR.R return r[1], r[2] end
+  local T = {}
+  for i = 1, 2 do
+    local t = { nm = "Ov" .. i, idx = i, x = 0, y = 0, w = 0, h = 0, ngeom = 0, noPoint = false }
+    t.GetObjectType = function() return "Texture" end
+    t.GetName = function() return t.nm end
+    t.GetPoint = function()
+      if t.noPoint then return nil end
+      local k = (MODE == "cascade") and W.sc or 1
+      return "TOPLEFT", FR, "TOPLEFT", t.x * k, t.y * k
+    end
+    t.GetWidth = function() local k = (MODE == "cascade") and W.sc or 1 return t.w * k end
+    t.GetHeight = function() local k = (MODE == "cascade") and W.sc or 1 return t.h * k end
+    t.GetLeft = function() return t.x end
+    t.GetTop = function() return t.y end
+    t.ClearAllPoints = function() t.ngeom = t.ngeom + 1 end
+    t.SetPoint = function(_, p, rel, rp, nx, ny) t.ngeom = t.ngeom + 1 t.x = nx t.y = ny return true end
+    t.SetWidth = function(_, v) t.ngeom = t.ngeom + 1 t.w = v return true end
+    t.SetHeight = function(_, v) t.ngeom = t.ngeom + 1 t.h = v return true end
+    T[i] = t
+  end
+  FR.R = { T[1], T[2] }
+  rawset(_G, "WorldMapDetailFrame", FR)
+  rawset(_G, "WorldMapFrame", W)
+  local function geom() return T[1].ngeom + T[2].ngeom end
+  local function setup(mode, g1, g2, noPoint)
+    MODE = mode
+    W.sc, W.nSet = 1, 0
+    T[1].x, T[1].y, T[1].w, T[1].h = g1[1], g1[2], g1[3], g1[4]
+    T[1].ngeom, T[1].noPoint = 0, noPoint and true or false
+    T[2].x, T[2].y, T[2].w, T[2].h = g2[1], g2[2], g2[3], g2[4]
+    T[2].ngeom, T[2].noPoint = 0, false
+  end
+  local function openFix()
+    cfg.tb = { simpleMap = false }
+    pcall(EVAL_SM_TEST_MAPFIT_RESET)
+    -- ★★★1.75.5：本组验的是**稳态**（抓原值一次落闩后不再重跑、缩放不再每帧抖）⇒ 夹具里关掉
+    --   「每次开图都当第一次打开」（默认是**开**，见 smFitRecapFresh）：否则开图那一拍会作废记录并重抓一次，
+    --   把「稳态零重抓 / 零缩放写」这两条最要紧的回归哨兵搅浑。
+    --   ★「每次开图重抓」本身由**组 256** 单独验（那边夹具里显式打开它）。
+    EH_SIMPLEMAP_CFG.mapFitFresh = false
+    cfg.tb = { simpleMap = true }
+    pcall(EVAL_SM_SET, true)
+  end
+
+  -- 前置：新读值口在位
+  eq(type(EVAL_SM_TEST_MAPFIT_CAPSTATE), "function", "组254前置：抓原值状态读值口在位（缺了下面的断言会静默跳过）")
+  eq(type(EVAL_SM_TEST_MAPFIT_SOFT_RESET), "function", "组254前置：SOFT_RESET（模拟 /reload）读值口在位")
+  eq(type(tick) == "table" or type(tick) == "userdata", true, "组254前置：tick 帧在位")
+
+  -- ① 一次抓齐就**落闩**
+  setup("plain", { 100, -200, 300, 150 }, { 250, -100, 120, 90 })
+  openFix()
+  local c0, _, latch0 = EVAL_SM_TEST_MAPFIT_CAPSTATE()
+  eq(c0, 1, "①★开一次功能 ⇒ 抓原值只尝试 1 次（实测 " .. tostring(c0) .. "）")
+  eq(latch0, true, "①★★★已落闩（`captured = true`）—— 没落闩就是 1.75.4「每帧重跑」那场事故的根因")
+  eq(select(2, EVAL_SM_TEST_MAPFIT_BUCKET("MapA:668x1002")), 2, "①原值 2 条落进本图桶里")
+
+  -- ② 连跑 30 拍：抓原值**不再尝试** + 世界地图缩放**一次都不动**
+  W.nSet = 0
+  ticks(30)
+  local c1 = EVAL_SM_TEST_MAPFIT_CAPSTATE()
+  eq(c1, c0, "②★★★30 拍（1.5s）里抓原值**一次都没再尝试**（实测 " .. tostring(c1) .. "；事故时每帧一次 ≈ 30 次）")
+  eq(W.nSet, 0, "②★★★世界地图缩放的 SetScale = 0 次（实测 " .. tostring(W.nSet) ..
+    "；事故时每帧「按 1 再放回」= 地图缩放每帧抖一次 ⇒ 用户看到的「缩放不正常」）")
+
+  -- ③ 瞬态（设置值 0.7 而读回 es=1.000）⇒ 不折算（否则会先写一遍未折几何、下一拍再写一遍）
+  local g0 = geom()
+  local c30 = select(1, EVAL_SM_TEST_MAPFIT_APPLY(1.0))
+  eq(c30, 0, "③★★瞬态 es=1.000 ⇒ 不折算（实测改 " .. tostring(c30) .. " 个）")
+  eq(geom() - g0, 0, "③★★而且几何零调用（旧写法会按未折几何写一遍）")
+  eq(string.find(EVAL_SM_TEST_MAPFIT_TRACE_ALL(), "折算暂缓", 1, true) ~= nil, true, "③★取证环记下「折算暂缓」（有界节流，不刷屏）")
+
+  -- ④ 级联模型（读回 = 逻辑×es，本客户端实测口径）：
+  --    ★必须先让「客户端逻辑值 ≠ 原值」逼出**一次**折算，再验第二拍 —— 否则两种口径在「没写过」时是同一个数
+  --      （live = 逻辑×es = 原值×es = want），变异 M4（删掉 okB）会漏网。
+  setup("cascade", { 100, -200, 300, 150 }, { 250, -100, 120, 90 })
+  openFix()
+  ticks(6)
+  T[1].x, T[1].w = 999, 999 -- 模拟「客户端自己重排/别的写者改过」
+  local cA = select(1, EVAL_SM_TEST_MAPFIT_APPLY(0.7))
+  eq(cA > 0, true, "④前置：逻辑值被改过 ⇒ 确实折了一次（实测改 " .. tostring(cA) .. " 个）")
+  eq(math.abs(T[1].x - 100 * 0.7) < 0.5, true,
+    "④★写入的是「原值×es」（实测 " .. tostring(T[1].x) .. "，期望 " .. tostring(100 * 0.7) .. "）")
+  local gB = geom()
+  local cB = select(1, EVAL_SM_TEST_MAPFIT_APPLY(0.7))
+  eq(cB, 0,
+    "④★★★写过之后再折：**判「已对齐」、不再重写**（实测 " .. tostring(cB) ..
+    "；只认一种读回口径时这里会一直判「要改」⇒ 8 个纹理每拍重写、聊天刷屏）")
+  eq(geom() - gB, 0, "④★★而且零几何调用（第二拍一次都没写）")
+
+  -- ⑤ 有目标读不出来（客户端还没布局）⇒ 不落闩，但重试**有界**（1 秒一次），绝不每帧
+  setup("plain", { 100, -200, 300, 150 }, { 250, -100, 120, 90 }, true) -- T1 的 GetPoint 返回 nil
+  openFix()
+  local cc0, _, latch1 = EVAL_SM_TEST_MAPFIT_CAPSTATE()
+  eq(latch1, false, "⑤★有目标读不出来 ⇒ **不落闩**（等它可读时补上，不静默丢）")
+  ticks(30)
+  local cc1 = EVAL_SM_TEST_MAPFIT_CAPSTATE()
+  eq(cc1 - cc0 <= 3, true, "⑤★★★1.5 秒里重试 ≤3 次（实测 " .. tostring(cc1 - cc0) .. " 次；事故时是每帧 ≈30 次）")
+  eq(cc1 - cc0 >= 1, true, "⑤★★反向哨兵：真的还会重试（实测 " .. tostring(cc1 - cc0) .. " 次 —— 别把「不落闩」修成「永不重试」）")
+
+  -- ⑧ ★★★1.75.5（**用户设计**）：「地图 /reload 时是不开的 ⇒ 要监测地图打开状态；完整打开之后再取原值，取完再缩放」
+  --   夹具：清掉会话内存（= /reload）并把外框放回自然档 1.00 ⇒ 开图应当**先开窗、不缩放**，抓到原值后立刻缩放。
+  setup("plain", { 100, -200, 300, 150 }, { 250, -100, 120, 90 })
+  pcall(EVAL_SM_SET, true)
+  pcall(EVAL_SM_TEST_MAPFIT_SOFT_RESET) -- = /reload：内存清空（外框由下一行放回自然档）
+  W.sc, W.nSet = 1, 0
+  ticks(3)
+  eq(W.nSet, 0, "⑧★★★本图还没有原值 ⇒ **取原值期间一个缩放都不写**（地图先停在自然档；实测写 " .. tostring(W.nSet) .. " 次）")
+  eq(type(EVAL_SM_TEST_MAPFIT_MAPKEY()) == "string", true, "⑧前置：地图身份已绑定（窗口与取原值都靠它）")
+  ticks(12) -- 版式稳定 0.4s 之后取原值 ⇒ 取到 ⇒ 收窗并套缩放
+  eq(math.abs(W.sc - 0.7) < 0.001, true, "⑧★★★取到原值后**立刻套缩放**（实测 W.sc=" .. tostring(W.sc) .. "，期望 0.7）")
+  eq(W.nSet > 0, true, "⑧★确实写了一次缩放（实测 " .. tostring(W.nSet) .. " 次）")
+  eq(select(1, EVAL_SM_TEST_MAPFIT_CAPSTATE()) > 0, true, "⑧★取原值真的尝试过（实测 " .. tostring(select(1, EVAL_SM_TEST_MAPFIT_CAPSTATE())) .. " 次）")
+  -- ⑨ 反向哨兵：**读不到原值也必须把缩放套上**（绝不把地图卡在满尺寸）+ 如实播报「超时」
+  setup("plain", { 100, -200, 300, 150 }, { 250, -100, 120, 90 }, true) -- T1 永远读不到
+  pcall(EVAL_SM_SET, true)
+  pcall(EVAL_SM_TEST_MAPFIT_SOFT_RESET)
+  W.sc, W.nSet = 1, 0
+  ticks(60) -- 2s 窗口（约 40 拍）+ 余量
+  eq(math.abs(W.sc - 0.7) < 0.001, true, "⑨★★★窗口到点仍套上缩放（实测 W.sc=" .. tostring(W.sc) .. "）—— 绝不把地图卡在满尺寸")
+  eq(string.find(EVAL_SM_TEST_MAPFIT_TRACE_ALL(), "抓原值窗口结束", 1, true) ~= nil, true, "⑨★取证环记下「抓原值窗口结束」")
+
+  -- ⑥ ★★★**「空候选」路径**（事故的根因就在这里）：1.75.5 起没有存档缓存了，空候选只剩一种来法 ——
+  --   **切回本会话已经记过的那张图**（`recMap` 里有记录 ⇒ 不必重抓）。这一条同时钉住两件事：
+  --   ① 空候选必须**当场落闩**（旧写法不落闩 ⇒ tick 每帧重跑）；② 空候选**一个 SetScale 都不发**（缩放不再抖）。
+  setup("plain", { 100, -200, 300, 150 }, { 250, -100, 120, 90 })
+  openFix() -- 第一轮：MapA 的 2 条记录进会话内存
+  eq(select(2, EVAL_SM_TEST_MAPFIT_BUCKET("MapA:668x1002")), 2, "⑥前置：本图记录已在**会话内存**里（2 条）")
+  pcall(EVAL_SM_TEST_MAPFIT_NEWMAP, "MapB:668x1002") -- 切走（换图）
+  pcall(EVAL_SM_TEST_MAPFIT_NEWMAP, "MapA:668x1002") -- 切回（记录应当被取回）
+  eq(select(2, EVAL_SM_TEST_MAPFIT_BUCKET("MapA:668x1002")), 2, "⑥前置：切回后本图记录**被取回**（不必重抓）")
+  W.nSet = 0
+  local nEmpty = EVAL_SM_TEST_MAPFIT_CAPTURE_RAW() -- 空候选：直接调抓原值
+  eq(nEmpty, 0, "⑥★空候选 ⇒ 抓原值返回 0 条（本图不需要再抓）")
+  eq(W.nSet, 0, "⑥★★★空候选 ⇒ **一个 SetScale 都不发**（事故根因：旧写法「先按 1 再放回」每帧一次）")
+  local latch6 = select(3, EVAL_SM_TEST_MAPFIT_CAPSTATE())
+  eq(latch6, true, "⑥★★★空候选 ⇒ **当场落闩**（1.75.4 就是这里不落闩 ⇒ tick 每帧重跑、缩放每帧抖）")
+  W.nSet = 0
+  local cBefore = select(1, EVAL_SM_TEST_MAPFIT_CAPSTATE())
+  ticks(30) -- 1.5s 稳态
+  eq(select(1, EVAL_SM_TEST_MAPFIT_CAPSTATE()), cBefore,
+    "⑥★★★稳态 30 拍：抓原值**一次都不再尝试**（实测 " .. tostring(select(1, EVAL_SM_TEST_MAPFIT_CAPSTATE())) .. "）")
+  eq(W.nSet, 0, "⑥★★★稳态 30 拍：世界地图缩放 SetScale = 0 次（实测 " .. tostring(W.nSet) .. "；事故时每帧一次）")
+
+  -- ⑦ ★★★`/reload` 语义（用户提问定案的落地）：**内存全清、也没有存档缓存** ⇒ 重新从客户端读一次
+  --   （不再是「存档已齐 ⇒ 空转」那条路径 —— 那条路径整个消失了），并且**一个字节都不落存档**。
+  pcall(EVAL_SM_TEST_MAPFIT_SOFT_RESET)
+  eq(select(1, EVAL_SM_TEST_MAPFIT_CAPSTATE()), 0, "⑦前置：soft-reset（= /reload）后尝试计数归零")
+  local nRe = EVAL_SM_TEST_MAPFIT_CAPTURE_RAW()
+  eq(nRe, 2, "⑦★★★/reload 后重新抓一次（实测 " .. tostring(nRe) ..
+    " 条 —— 客户端每次开图都会自己重摆，读到的就是原值，不需要跨会话缓存）")
+  eq(EH_SIMPLEMAP_CFG.mapFitOrig == nil and EH_SIMPLEMAP_CFG.mapFitVer == nil, true,
+    "⑦★★★抓完**一个字节都不落存档**（定位信息只在会话内存里）")
+
+  -- 夹具自清
+  pcall(EVAL_SM_SET, false)
+  rawset(_G, "WorldMapDetailFrame", savedFr)
+  rawset(_G, "WorldMapFrame", savedWm)
+  rawset(_G, "GetMapInfo", savedGMI)
+  rawset(_G, "GetNumMapOverlays", savedGNMO)
+  rawset(_G, "GetMapOverlayInfo", savedGMOI)
+  cfg.tb = savedTb
+  EH_SIMPLEMAP_CFG.px, EH_SIMPLEMAP_CFG.py = savedPx, savedPy
+  pcall(EVAL_SM_TEST_POS_REARM)
+  pcall(EVAL_SM_TEST_MAPFIT_RESET)
+  if fails254 == TESTASSERT_FAILS then
+    print("  抓原值落闩 · 稳态零 SetScale（缩放不再抖）· 瞬态 es 不折算 · 两种读回口径都认（写过之后不再重写）· 读不出时有界重试（1s）· 存档已齐时零缩放写")
+    print("GROUP 254 (抓原值不再每帧重跑：一次抓齐即落闩 · 30 拍零缩放写 · 瞬态 es 不折算 · 读回含缩放不重写 · 有界重试 · 存档已齐场景 · 取原值窗口「无记录先不缩放/取到立刻缩放/超时也缩放」): PASS")
+  end
+end
+-- ===== 组 255（1.75.5，**用户指定「本办法」**）：手动适配命令 `/ehm fitnow` 的五步与逐步打印 =====
+-- 用户原话：「缩放功能开启的情况下, 游戏首次载入, 可以做个调试命令执行. 打开地图, 等待2s, 获取原值.
+--   打印原值, 应用缩放. 打印缩放信息. 这样的调整过程.」
+-- ★为什么这条命令的**打印**必须被断言：出问题时用户就是靠这一整段回放送 —— 五步少任何一步，我读回来时就断链。
+--   ★顺带钉死两个「自己关死自己」的失效形态：① 让位期间主 tick 必须**一条取证都不记**（否则手动过程被抢写缩放）；
+--   ② 跑完/出错都必须**放掉让位**（不放掉 = 探索层适配永久静默停摆，看着像功能坏了）。
+-- 真机背景：1.75.4 那场事故里，用户看到的现象是「地图没按 0.70 缩小（还是满屏大）」+ 探索层贴图画到游戏画面上；
+--   自动时序依赖客户端开图时机 ⇒ 用一条**完全确定**的手动过程把「开图 → 自然档 → 等 2s → 读原值 → 套缩放 → 折算」摊开。
+do
+  local fails255 = TESTASSERT_FAILS
+  local cfg = rawget(_G, "EVAL_HELP_CONFIG")
+  local savedTb = cfg.tb
+  local savedFr = rawget(_G, "WorldMapDetailFrame")
+  local savedWm = rawget(_G, "WorldMapFrame")
+  local savedGMI, savedGNMO = rawget(_G, "GetMapInfo"), rawget(_G, "GetNumMapOverlays")
+  local savedGMOI = rawget(_G, "GetMapOverlayInfo")
+  local tick = rawget(_G, "EH_SM_FEAT")
+  local savedChat255 = TEST.chat
+
+  local CUR = "FixMap"
+  rawset(_G, "GetMapInfo", function() return CUR, 668, 1002 end)
+  rawset(_G, "GetNumMapOverlays", function() return 2 end)
+  rawset(_G, "GetMapOverlayInfo", function() return nil end)
+  local W = { nSet = 0, sc = 1 }
+  W.GetScale = function() return W.sc end
+  W.SetScale = function(_, v) W.nSet = W.nSet + 1 W.sc = tonumber(v) or W.sc return true end
+  W.GetAlpha = function() return 1 end
+  W.SetAlpha = function() return true end
+  W.ClearAllPoints = function() return true end
+  W.SetPoint = function() return true end
+  W.GetEffectiveScale = function() return W.sc end
+  W.GetPoint = function() return nil end
+  local FR = { R = {} }
+  FR.GetName = function() return "WorldMapDetailFrame" end
+  FR.IsShown = function() return true end
+  FR.GetScale = function() return 1 end
+  FR.GetParent = function() return W end
+  FR.GetEffectiveScale = function() return W.sc end
+  local T = {}
+  for i = 1, 2 do
+    local t = { nm = "Ov" .. i, x = 0, y = 0, w = 0, h = 0, ngeom = 0 }
+    t.GetObjectType = function() return "Texture" end
+    t.GetName = function() return t.nm end
+    t.GetPoint = function() return "TOPLEFT", FR, "TOPLEFT", t.x, t.y end
+    t.GetWidth = function() return t.w end
+    t.GetHeight = function() return t.h end
+    t.GetTexture = function() return "Interface\\Icons\\X" end
+    t.ClearAllPoints = function() t.ngeom = t.ngeom + 1 end
+    t.SetPoint = function(_, p, rel, rp, nx, ny) t.ngeom = t.ngeom + 1 t.x = nx t.y = ny return true end
+    t.SetWidth = function(_, v) t.ngeom = t.ngeom + 1 t.w = v return true end
+    t.SetHeight = function(_, v) t.ngeom = t.ngeom + 1 t.h = v return true end
+    T[i] = t
+  end
+  T[1].x, T[1].y, T[1].w, T[1].h = 100, -200, 300, 150
+  T[2].x, T[2].y, T[2].w, T[2].h = 250, -100, 120, 90
+  FR.GetRegions = function() return T[1], T[2] end
+  rawset(_G, "WorldMapDetailFrame", FR)
+  rawset(_G, "WorldMapFrame", W)
+  local function geom() return T[1].ngeom + T[2].ngeom end
+
+  -- 前置（★不许跳过分支：读值口缺了就红）
+  eq(type(EVAL_SM_TEST_FIX_STATE), "function", "组255前置：手动适配读值口在位（缺了下面的断言会静默跳过）")
+  eq(type(EVAL_SM_TEST_FIX_RUN), "function", "组255前置：手动适配入口读值口在位")
+  eq(type(tick) == "table" or type(tick) == "userdata", true, "组255前置：主 tick 帧在位")
+
+  -- ① 开跑前：没有让位、没跑过、计时归零
+  local _, t0, act0, done0 = EVAL_SM_TEST_FIX_STATE()
+  eq(act0, false, "①开跑前：自动逻辑**没有**被让位")
+  eq(done0, false, "①开跑前：本趟完成标记为 false")
+  eq(tonumber(t0) or 0, 0, "①开跑前：等待计时归零")
+
+  -- ② 开跑：模块开着 + 起手故意停在缩放档 0.70（命令必须自己把它放回自然档）
+  cfg.tb = { simpleMap = false }
+  pcall(EVAL_SM_TEST_MAPFIT_RESET)
+  cfg.tb = { simpleMap = true }
+  pcall(EVAL_SM_SET, true)
+  -- ★取证环要先清空：它是**有界环**（60 行），上一组留下的 60 行会让「行数没变」这类判据**假通过**
+  pcall(EVAL_SM_TEST_MAPFIT_TRACE_CLEAR)
+  W.sc, W.nSet = 0.7, 0
+  local okRun = EVAL_SM_TEST_FIX_RUN()
+  eq(okRun, true, "②模块开着 ⇒ 命令开跑（返回 true）")
+  local has1, _, act1, done1 = EVAL_SM_TEST_FIX_STATE()
+  eq(has1, true, "②★★计时帧 EH_SM_FITFIX 已建（2 秒等待靠它；建不出来就会当场跑完 = 版式没稳定就抓）")
+  eq(act1, true, "②★★已让位（自动逻辑整段停手）")
+  eq(done1, false, "②★还没跑完（第 3~5 步要等满 2 秒）")
+  eq(math.abs(W.sc - 1) < 0.001, true, "②★★★第2步已把外框置回**自然档 1.00**（实测 W.sc=" .. tostring(W.sc) ..
+    "）—— 在缩放档里读原值就是用户报的「坐标不对」")
+  eq(string.find(EVAL_SM_TEST_MAPFIT_TRACE_ALL(), "第2步 已把外框缩放置回", 1, true) ~= nil, true, "②第2步的打印在位")
+
+  -- ③ 让位为真：让位期间**主 tick 一个动作都不做**
+  --   探针用「换图」这条**只可能由 tick 触发**的取证行（身份一变，没让位的 tick 会立刻调 smFitNewMap）
+  --   ★此时取证环刚清空（见②）⇒ 行数判据是可信的（手动命令自己写的那 2~3 行先记下来当基线）；
+  --     有界环写满时行数不变 = 假通过，所以②的清空是这条判据的前提。
+  local tr0 = EVAL_SM_TEST_MAPFIT_TRACE_N()
+  CUR = "FixMapB"
+  local capBefore = select(1, EVAL_SM_TEST_MAPFIT_CAPSTATE())
+  local g0 = geom()
+  for _ = 1, 10 do EVAL_TEST_FIRE_UPDATE(tick, 0.05) end
+  eq(EVAL_SM_TEST_MAPFIT_TRACE_N(), tr0, "③★★★让位期间主 tick **一条取证都不记**（换图/抓原值/折算全停；实测 " ..
+    tostring(EVAL_SM_TEST_MAPFIT_TRACE_N()) .. " vs 基线 " .. tostring(tr0) .. "）")
+  eq(select(1, EVAL_SM_TEST_MAPFIT_CAPSTATE()), capBefore, "③★★让位期间抓原值一次都没尝试")
+  eq(geom() - g0, 0, "③★★让位期间几何零调用")
+
+  -- ④ 「等待 2s」是用户点名要的：**不到 2 秒不许读原值**，到点立刻读、读完立刻放掉让位
+  local ff = rawget(_G, "EH_SM_FITFIX")
+  eq(type(ff) == "table" or type(ff) == "userdata", true, "④前置：计时帧可取到（否则第 3~5 步会当场跑完）")
+  eq(EVAL_TEST_FIRE_UPDATE(ff, 1.0), true, "④前置：计时帧的 OnUpdate 真的挂着（走真机零形参通道）")
+  eq(string.find(EVAL_SM_TEST_MAPFIT_TRACE_ALL(), "第3步", 1, true) == nil, true,
+    "④★★★只等了 1.0 秒 ⇒ **还没读原值**（用户明确要求等满 2 秒，客户端版式才稳定）")
+  eq(select(3, EVAL_SM_TEST_FIX_STATE()), true, "④★1.0s 时还在让位中")
+  EVAL_TEST_FIRE_UPDATE(ff, 1.0)
+  local trAll = EVAL_SM_TEST_MAPFIT_TRACE_ALL()
+  eq(string.find(trAll, "第3步", 1, true) ~= nil, true, "④★★★等满 2.0 秒 ⇒ 读原值这一步真的跑了")
+  eq(select(3, EVAL_SM_TEST_FIX_STATE()), false, "④★★★跑完**放掉让位**（不放掉 = 探索层适配永久静默停摆）")
+  eq(select(4, EVAL_SM_TEST_FIX_STATE()), true, "④完成标记 done=true（计时帧与兜底两条路只走一条）")
+
+  -- ⑤ 第3步：**逐条打印原值**（绝对值夹具；用户要的就是这一串）
+  --   ★失败时把**实测那一行**一起印出来 —— 打印口径（空格/小数位/锚点名）漂了要一眼看得出，而不是只报 got=false。
+  local tr3 = tostring(string.match(trAll, "第3步  原值 Ov1[^|]*") or string.match(trAll, "第3步 读原值[^|]*") or "（没有第3步原值行）")
+  local tr4 = tostring(string.match(trAll, "第4步 已套缩放[^|]*") or "（没有第4步行）")
+  local tr5 = tostring(string.match(trAll, "第5步   Ov1[^|]*") or string.match(trAll, "第5步 折算[^|]*") or "（没有第5步行）")
+  eq(string.find(trAll, "第3步  原值 Ov1 = (100.0,-200.0) 300.0×150.0 ｜ 锚 TOPLEFT/WorldMapDetailFrame/-", 1, true) ~= nil,
+    true, "⑤★★★第3步**逐条打印原值**（含锚点三件套；相对**点**字符串打印成 `-`）；实测=" .. tr3)
+  eq(string.find(trAll, "第3步  原值 Ov2 = (250.0,-100.0) 120.0×90.0", 1, true) ~= nil, true, "⑤★第二条原值也打印了")
+  eq(string.find(trAll, "第3步 完成：原值 2 条（读不到 0 条）", 1, true) ~= nil, true, "⑤★第3步有小结（原值/读不到 条数）")
+
+  -- ⑥ 第4步：**三个读数一起打印**（设置值 / 自身 GetScale / 父链连乘）—— 分不清「没写进去」与「读不回来」
+  eq(string.find(trAll, "第4步 已套缩放：设置值=0.70 ｜ 自身 GetScale=0.700 ｜ 父链连乘=0.700", 1, true) ~= nil, true,
+    "⑥★★★第4步把「设置值 / 自身 GetScale / 父链连乘」一起打印；实测=" .. tr4)
+
+  -- ⑦ 第5步：折算小结 + **逐条打印「原值 → 写入」** + 几何真的写进去
+  eq(string.find(trAll, "第5步 折算：es=0.700 ⇒ 写入 2 个 / 已对齐 0 个", 1, true) ~= nil, true, "⑦★第5步小结（写入数/已对齐数）")
+  eq(string.find(trAll, "第5步   Ov1 原值(100.0,-200.0 300.0×150.0) → 写入(70.0,-140.0 210.0×105.0) ★本次已写", 1, true) ~= nil,
+    true, "⑦★★★第5步**逐条打印「原值 → 写入」**；实测=" .. tr5)
+  eq(math.abs(T[1].x - 70) < 0.5 and math.abs(T[1].w - 210) < 0.5, true,
+    "⑦★几何真的写进去了（实测 x=" .. tostring(T[1].x) .. " w=" .. tostring(T[1].w) .. "，期望 70 / 210）")
+  eq(string.find(trAll, "手动适配**结束**", 1, true) ~= nil, true, "⑦★收尾行在位（用户要照这一段贴回来）")
+
+  -- ⑧ 反向哨兵：跑完之后主 tick **恢复工作**（让位是「暂停」不是「关死」）
+  --   ★判据用**内容**（换图到 FixMapC 的取证行）而不是行数 —— 有界环写满后行数不再增加，行数判据会假通过。
+  CUR = "FixMapC"
+  for _ = 1, 3 do EVAL_TEST_FIRE_UPDATE(tick, 0.05) end
+  eq(string.find(EVAL_SM_TEST_MAPFIT_TRACE_ALL(), "FixMapC", 1, true) ~= nil, true,
+    "⑧★★反向哨兵：跑完之后主 tick 恢复工作（又记下了 FixMapC 的换图取证行）")
+
+  -- ⑩ ★★★1.75.5（用户先要「获取原值的地方添加日志信息，打印出来」，随后又说「好的功能正常了.清理下这些调试日志」）：
+  --   最终口径 = **安静档（默认）+ 详细档开关**。这里两条腿都验，判据用 `TEST.chat`（= 客户端聊天框收到的原文）：
+  --     · 安静档：**看不到**逐条原值 / 第 N 次尝试 / 小结，但**必须**看得到「已读到 N 条」这一条；
+  --     · 详细档（`/ehm mapfit verbose on`）：那一整串都回来。
+  cfg.tb = { simpleMap = false }
+  pcall(EVAL_SM_TEST_MAPFIT_RESET)
+  CUR = "FixMapD"
+  T[1].x, T[1].y, T[1].w, T[1].h = 100, -200, 300, 150
+  T[2].x, T[2].y, T[2].w, T[2].h = 250, -100, 120, 90
+  cfg.tb = { simpleMap = true }
+  pcall(EVAL_SM_SET, true)
+  -- ★关键：`EVAL_SM_SET(true)` 自己就会抓一次原值（`smFitPrepare`）⇒ 不清内存的话 tick 里那一整条
+  --   「开窗 → 等版式 → 读原值」**根本不会走**（真机「重开后没重开地图」正是这条路径的对照）。
+  --   `SOFT_RESET` = 模拟 /reload（只清内存、不碰开关）⇒ 把抓原值留给 tick 走。
+  pcall(EVAL_SM_TEST_MAPFIT_SOFT_RESET)
+  W.sc, W.nSet = 1, 0
+  TEST.chat = ""
+  for _ = 1, 40 do EVAL_TEST_FIRE_UPDATE(tick, 0.05) end -- 2s：开窗 → 等版式稳定 → 读原值 → 套缩放
+  local chatFix = tostring(TEST.chat or "")
+  -- ★失败时把「聊天框尾巴 + 取证环尾巴 + 抓原值尝试次数」一起印出来：这三样就能区分
+  --   「tick 没跑」「跑到了但没抓」「抓了但没播报」三种情况（否则只报 got=false 又要多跑一轮）。
+  local diag = "｜尝试次数=" .. tostring(select(1, EVAL_SM_TEST_MAPFIT_CAPSTATE())) ..
+    " ｜聊天框=" .. tostring(chatFix) ..
+    " ｜取证环尾=" .. tostring(string.sub(EVAL_SM_TEST_MAPFIT_TRACE_ALL(), -260))
+  eq(string.find(chatFix, "抓原值：已读到", 1, true) ~= nil, true,
+    "⑩★★★安静档：成功那条「已读到 N 条原值 ⇒ 落闩」必须上屏（否则用户以为压根没抓）；实测=" .. diag)
+  eq(string.find(chatFix, "第1次尝试", 1, true) == nil, true,
+    "⑩★★★安静档：**不再**逐次报「第 N 次尝试」")
+  eq(string.find(chatFix, "抓原值小结", 1, true) == nil, true, "⑩★★安静档：**不再**每次打小结")
+  eq(string.find(chatFix, "⇒ 原值", 1, true) == nil, true, "⑩★★★安静档：**不再**逐条打印原值（8~18 行 = 刷屏）")
+  eq(string.find(EVAL_SM_TEST_MAPFIT_TRACE_ALL(), "抓原值小结", 1, true) ~= nil, true,
+    "⑩★★安静档只是**不上屏**：取证环里仍然记全（`/ehm mapfit trace` 事后查得到）")
+  -- 详细档：那一整串回来（用户排查时用 `/ehm mapfit verbose on`）
+  EH_SIMPLEMAP_CFG.mapFitVerbose = true
+  eq(select(1, EVAL_SM_TEST_MAPFIT_VERBOSE()), true, "⑩前置：详细档真值 = 开")
+  pcall(EVAL_SM_TEST_MAPFIT_SOFT_RESET)
+  TEST.chat = ""
+  for _ = 1, 40 do EVAL_TEST_FIRE_UPDATE(tick, 0.05) end
+  local chatV = tostring(TEST.chat or "")
+  eq(string.find(chatV, "第1次尝试", 1, true) ~= nil, true,
+    "⑩★★详细档：逐次尝试行回来了（实测=" .. tostring(string.sub(chatV, 1, 200)) .. "）")
+  eq(string.find(chatV, "抓原值小结", 1, true) ~= nil, true, "⑩★详细档：小结行回来了")
+  eq(string.find(chatV, "⇒ 原值", 1, true) ~= nil, true, "⑩★详细档：逐条原值行回来了")
+  EH_SIMPLEMAP_CFG.mapFitVerbose = nil
+  eq(select(1, EVAL_SM_TEST_MAPFIT_VERBOSE()), false, "⑩★关掉详细档 ⇒ 回到安静档")
+
+  -- ⑨ 反向哨兵：模块关着 ⇒ 命令**不开跑、不让位**
+  pcall(EVAL_SM_SET, false)
+  eq(EVAL_SM_TEST_FIX_RUN(), false, "⑨★★模块关着 ⇒ 命令不开跑（返回 false）")
+  eq(select(3, EVAL_SM_TEST_FIX_STATE()), false, "⑨★关着时也不会让位（让位了就等于把自动逻辑关死）")
+
+  -- 夹具自清
+  rawset(_G, "WorldMapDetailFrame", savedFr)
+  rawset(_G, "WorldMapFrame", savedWm)
+  rawset(_G, "GetMapInfo", savedGMI)
+  rawset(_G, "GetNumMapOverlays", savedGNMO)
+  rawset(_G, "GetMapOverlayInfo", savedGMOI)
+  cfg.tb = savedTb
+  TEST.chat = savedChat255
+  pcall(EVAL_SM_TEST_MAPFIT_RESET)
+  if fails255 == TESTASSERT_FAILS then
+    print("  手动适配五步：自然档等待 2s（1.0s 不读原值）· 逐条打印原值 · 三个缩放读数 · 逐条「原值→写入」· 让位期间 tick 零动作 · 跑完放掉让位")
+    print("  抓原值播报（用户要求「打印出来」）：自动路径也进聊天框（入口行/逐条原值/小结）· 换图归零后前 5 次为限")
+    print("GROUP 255 (手动适配命令 /ehm fitnow（别名 适配/修正）：开图 → 置自然档 1.00 → 等满 2s 才读原值 → 逐条打印原值 → 套缩放并打印三个读数 → 折算并逐条打印「原值→写入」；让位期间主 tick 零动作、跑完必放掉让位、模块关着不开跑；抓原值关键分叉**打进聊天框**): PASS")
+  end
+end
+
+-- ===== 组 256（1.75.5，**用户要求**）：每次开图都当第一次打开（先还原 → 作废 → 重读原值 → 再折算） =====
+-- 用户原话：「打开缩放大地图流程,每次打开地图都当做初始设置启用状态走一遍抓原值过程?,每次打开都当做是第一次打开?」
+--   +「每次 reload 插件载入.都当做第一次设置缩放大地图地图开启?」
+-- ★「/reload 也当第一次」这条路**本来就是这样**（原值只在会话内存、绝不落存档 ⇒ 载入后第一次开图必然重读一遍），
+--   判据在组 254⑦⑧；本组专门钉**每次开图**这条路（`SM_CFG.mapFitFresh ~= false`，nil = 默认开）。
+-- ★本组最重要的判据是 ②：夹具**故意不重摆几何**（= 最坏情况：客户端没重排、纹理上还留着我们折后的值）。
+--   这时若少了「先还原」这一步，重抓会把**折后的值**当原值 ⇒ 再折一次 = 折两遍（49 而不是 70）。
+do
+  local fails256 = TESTASSERT_FAILS
+  local cfg = rawget(_G, "EVAL_HELP_CONFIG")
+  local savedTb = cfg.tb
+  local savedFr = rawget(_G, "WorldMapDetailFrame")
+  local savedWm = rawget(_G, "WorldMapFrame")
+  local savedGMI, savedGNMO = rawget(_G, "GetMapInfo"), rawget(_G, "GetNumMapOverlays")
+  local savedGMOI = rawget(_G, "GetMapOverlayInfo")
+  local savedMode256, savedFresh256 = EH_SIMPLEMAP_CFG.mapFitMode, EH_SIMPLEMAP_CFG.mapFitFresh
+  local tick = rawget(_G, "EH_SM_FEAT")
+  local function ticks(n) for _ = 1, n do EVAL_TEST_FIRE_UPDATE(tick, 0.05) end end
+
+  local CUR = "FreshMap"
+  rawset(_G, "GetMapInfo", function() return CUR, 668, 1002 end)
+  rawset(_G, "GetNumMapOverlays", function() return 2 end)
+  rawset(_G, "GetMapOverlayInfo", function() return nil end)
+  local SB = { open = true, frozen = false } -- open = 地图开没开；frozen = 「写进去不生效」（模拟客户端把我们的写盖掉）
+  local ST = { geom = 0 }
+  local W = { nSet = 0, sc = 1 }
+  W.GetScale = function() return W.sc end
+  W.SetScale = function(_, v) W.nSet = W.nSet + 1 W.sc = tonumber(v) or W.sc return true end
+  W.GetAlpha = function() return 1 end
+  W.SetAlpha = function() return true end
+  W.ClearAllPoints = function() return true end
+  W.SetPoint = function() return true end
+  W.GetEffectiveScale = function() return W.sc end
+  W.GetPoint = function() return nil end
+  local FR = { R = {} }
+  FR.GetName = function() return "WorldMapDetailFrame" end
+  FR.IsShown = function() return SB.open end -- ★开/关由夹具控制（验「关→开」那一下）
+  FR.GetScale = function() return 1 end
+  FR.GetParent = function() return W end
+  FR.GetEffectiveScale = function() return W.sc end
+  local T = {}
+  for i = 1, 2 do
+    local t = { nm = "Ov" .. i, x = 0, y = 0, w = 0, h = 0 }
+    t.GetObjectType = function() return "Texture" end
+    t.GetName = function() return t.nm end
+    t.GetPoint = function() return "TOPLEFT", FR, "TOPLEFT", t.x, t.y end
+    t.GetWidth = function() return t.w end
+    t.GetHeight = function() return t.h end
+    t.GetTexture = function() return "Interface\\Icons\\X" end
+    t.ClearAllPoints = function() ST.geom = ST.geom + 1 end
+    t.SetPoint = function(_, p, rel, rp, nx, ny)
+      ST.geom = ST.geom + 1
+      if not SB.frozen then t.x = nx t.y = ny end
+      return true
+    end
+    t.SetWidth = function(_, v) ST.geom = ST.geom + 1 if not SB.frozen then t.w = v end return true end
+    t.SetHeight = function(_, v) ST.geom = ST.geom + 1 if not SB.frozen then t.h = v end return true end
+    T[i] = t
+  end
+  T[1].x, T[1].y, T[1].w, T[1].h = 100, -200, 300, 150
+  T[2].x, T[2].y, T[2].w, T[2].h = 250, -100, 120, 90
+  FR.GetRegions = function() return T[1], T[2] end
+  rawset(_G, "WorldMapDetailFrame", FR)
+  rawset(_G, "WorldMapFrame", W)
+  -- 记录里那条的**宽**（原值 300/120；折后是 210/84）——顺序无关，pairs 先遍历到谁都能判
+  local function recW()
+    local _k, _f, _x, _y, w = EVAL_SM_TEST_MAPFIT_FROM(1)
+    return tonumber(w)
+  end
+
+  eq(type(EVAL_SM_TEST_MAPFIT_FRESH), "function", "组256前置：「关图即清空原值」读值口在位（缺了下面的断言会静默跳过）")
+  eq(type(EVAL_SM_TEST_MAPFIT_REC), "function", "组256前置：本图记录条数读值口在位")
+  eq(type(EVAL_SM_TEST_MAPFIT_VERBOSE), "function", "组256前置：详细档读值口在位")
+
+  -- ① 默认 = 开（nil 也算开 —— 用户要的行为就是默认行为）
+  cfg.tb = { simpleMap = false }
+  pcall(EVAL_SM_TEST_MAPFIT_RESET)
+  EH_SIMPLEMAP_CFG.mapFitFresh = nil
+  eq(select(1, EVAL_SM_TEST_MAPFIT_FRESH()), true, "①★★真值 nil ⇒ **默认开**（用户要求「关图即清空、开图重新读」）")
+  cfg.tb = { simpleMap = true }
+  pcall(EVAL_SM_SET, true)
+  ticks(12)
+  eq(EVAL_SM_TEST_MAPFIT_REC(), 2, "①前置：第一次开图抓到 2 条原值（实测 " .. tostring(EVAL_SM_TEST_MAPFIT_REC()) .. "）")
+  eq(math.abs(T[1].x - 100 * 0.7) < 0.01, true, "①前置：已折算（实测 " .. tostring(T[1].x) .. "，期望 70）")
+  eq(recW() == 300 or recW() == 120, true, "①前置：记录里是**原值**宽（实测 " .. tostring(recW()) .. "，折后会是 210/84）")
+
+  -- ② ★★★**关图即清空**（用户原话：「每次地图关闭都把原值数据清理，不要保存这个值」）：
+  --   ★夹具故意**不重摆几何**（最坏情况：客户端没重排、纹理上还留着我们折后的值）
+  --   ⇒ 「先还回自然档」这一步若少了，开图重读会把 70 当原值 ⇒ 再折一次 = 49（折两遍）。
+  local nGeom0 = ST.geom
+  pcall(EVAL_SM_TEST_MAPFIT_TRACE_CLEAR)
+  SB.open = false
+  ticks(2)
+  eq(EVAL_SM_TEST_MAPFIT_REC(), 0, "②★★★关图那一刻本图原值**被清空**（实测 " .. tostring(EVAL_SM_TEST_MAPFIT_REC()) .. " 条）")
+  eq(math.abs(T[1].x - 100) < 0.01, true,
+    "②★★★关图时折过的几何已**还回自然档**（实测 " .. tostring(T[1].x) .. "，期望 100 —— 顺序铁律：先还回、再清空）")
+  eq(string.find(EVAL_SM_TEST_MAPFIT_TRACE_ALL(), "关图即清空原值", 1, true) ~= nil, true,
+    "②★如实播报「关图即清空原值 ⇒ 下次开图重新读一遍再缩放」")
+  -- 再开图：重新读一遍 + 重新缩放（折出来仍是 70，不是 49）
+  SB.open = true
+  ticks(12)
+  eq(recW() == 300 or recW() == 120, true,
+    "②★★★开图后重读到的仍是**原值宽**（实测 " .. tostring(recW()) .. "；若是 210/84 就说明少了「先还回」这一步）")
+  eq(math.abs(T[1].x - 100 * 0.7) < 0.01, true,
+    "②★★★重新缩放后仍是 70（实测 " .. tostring(T[1].x) .. "；若变成 49 就是拿折后的值当原值又折了一次 = 折两遍）")
+  eq(ST.geom - nGeom0 > 0, true, "②★关→开过程中确实写过几何（还回 + 重折；实测 " .. tostring(ST.geom - nGeom0) .. " 次）")
+
+  -- ③ 反向哨兵：真值关掉 ⇒ 关图**不清、不还回**，开图也不重读（老行为：本会话内按图记住）
+  EH_SIMPLEMAP_CFG.mapFitFresh = false
+  eq(select(1, EVAL_SM_TEST_MAPFIT_FRESH()), false, "③★真值 false ⇒ 关")
+  pcall(EVAL_SM_TEST_MAPFIT_TRACE_CLEAR)
+  local nGeom1 = ST.geom
+  SB.open = false
+  ticks(2)
+  eq(EVAL_SM_TEST_MAPFIT_REC(), 2, "③★★关掉后：关图**不清空**（记录仍是 " .. tostring(EVAL_SM_TEST_MAPFIT_REC()) .. " 条）")
+  SB.open = true
+  ticks(12)
+  eq(ST.geom - nGeom1, 0, "③★★关掉后：关→开**一个几何都不写**（实测 " .. tostring(ST.geom - nGeom1) .. " 次）")
+  eq(string.find(EVAL_SM_TEST_MAPFIT_TRACE_ALL(), "关图即清空原值", 1, true) == nil, true, "③★也没有清空的取证行")
+
+  -- ④ 反向哨兵：**不折算的档**（nofold）关图不还回、开图也不被「抓原值窗口」按在自然档上白等 ——
+  --   不读原值就不该开那个窗口（这条同时是 232④b 那个回归的正面判据）
+  EH_SIMPLEMAP_CFG.mapFitFresh = nil
+  cfg.tb = { simpleMap = false }
+  pcall(EVAL_SM_TEST_MAPFIT_RESET)
+  EH_SIMPLEMAP_CFG.mapFitMode = "nofold"
+  cfg.tb = { simpleMap = true }
+  pcall(EVAL_SM_SET, true)
+  W.sc, W.nSet = 0.7, 0
+  local nGeom2 = ST.geom
+  SB.open = false
+  ticks(2)
+  SB.open = true
+  ticks(12)
+  eq(math.abs(W.sc - 0.7) < 0.001, true,
+    "④★★nofold：开图后缩放仍是 0.7（实测 " .. tostring(W.sc) .. "）—— 不折算就不许开「先不缩放」的窗口")
+  eq(ST.geom - nGeom2, 0, "④★nofold：一个几何都不写（实测 " .. tostring(ST.geom - nGeom2) .. " 次）")
+
+  -- ⑤ ★★★安全阀：**还回自然档失败**（写回后读回对不上）⇒ **不许清空记录** ——
+  --   否则下次开图会把**折后的值**当原值读进来 ⇒ 折两遍（这正是用户报过的「越弄越不对」）
+  EH_SIMPLEMAP_CFG.mapFitMode = nil
+  cfg.tb = { simpleMap = false }
+  pcall(EVAL_SM_TEST_MAPFIT_RESET)
+  EH_SIMPLEMAP_CFG.mapFitFresh = nil
+  cfg.tb = { simpleMap = true }
+  pcall(EVAL_SM_SET, true)
+  ticks(12)
+  eq(math.abs(T[1].x - 100 * 0.7) < 0.01, true, "⑤前置：先正常折算一次（实测 " .. tostring(T[1].x) .. "）")
+  pcall(EVAL_SM_TEST_MAPFIT_TRACE_CLEAR)
+  SB.frozen = true -- ★写进去不生效 ⇒ 还回的读回自证必然对不上
+  SB.open = false
+  ticks(2)
+  eq(EVAL_SM_TEST_MAPFIT_REC(), 2, "⑤★★★还回失败 ⇒ **保留原值记录、不清空**（实测 " .. tostring(EVAL_SM_TEST_MAPFIT_REC()) .. " 条）")
+  eq(string.find(EVAL_SM_TEST_MAPFIT_TRACE_ALL(), "没能还回自然档", 1, true) ~= nil, true, "⑤★★并如实播报「没能还回自然档」")
+  SB.open = true
+  ticks(12)
+  eq(math.abs(T[1].x - 100 * 0.7) < 0.01, true,
+    "⑤★★★开图也不会把折后的值当原值（实测 " .. tostring(T[1].x) .. "；若变成 49 就是安全阀失效）")
+  SB.frozen = false
+
+  -- ⑥ ★★★真机报障的正面判据（用户：「/reload 载入时为什么原值为 0 也定义为原值抓取完成?这个流程本身就不对」）：
+  --   客户端还没把叠加层摆出来（候选**一个都不在用**）时 ⇒ **不许落闩**，必须 1 秒一次重试到真的读到。
+  EH_SIMPLEMAP_CFG.mapFitMode = nil
+  cfg.tb = { simpleMap = false }
+  pcall(EVAL_SM_TEST_MAPFIT_RESET)
+  EH_SIMPLEMAP_CFG.mapFitFresh = nil
+  cfg.tb = { simpleMap = true }
+  pcall(EVAL_SM_SET, true)
+  pcall(EVAL_SM_TEST_MAPFIT_SOFT_RESET) -- = /reload：内存清空（这一次开图必然要重读）
+  T[1].GetTexture = function() return nil end -- ★还没贴图 ⇒ smFitInUse 判「本图不用」⇒ todo 空、记录 0 条
+  T[2].GetTexture = function() return nil end
+  ST.geom = 0
+  ticks(12)
+  eq(EVAL_SM_TEST_MAPFIT_REC(), 0, "⑥前置：客户端还没贴图 ⇒ 一条原值都读不到")
+  eq(select(3, EVAL_SM_TEST_MAPFIT_CAPSTATE()), false,
+    "⑥★★★「0 条」**不算抓到**（不落闩；实测落闩=" .. tostring(select(3, EVAL_SM_TEST_MAPFIT_CAPSTATE())) .. "）")
+  eq(string.find(EVAL_SM_TEST_MAPFIT_TRACE_ALL(), "不算抓到原值", 1, true) ~= nil, true,
+    "⑥★★并如实说明「一个候选都不在用 ⇒ 不算抓到原值、不落闩、1 秒后重试」")
+  -- 客户端摆好了 ⇒ 自动补抓（不需要任何手动操作）；有界重试是 1 秒一次 ⇒ 跑 2.0s 留足余量
+  T[1].GetTexture = function() return "Interface\\Icons\\X" end
+  T[2].GetTexture = function() return "Interface\\Icons\\X" end
+  ticks(40)
+  eq(EVAL_SM_TEST_MAPFIT_REC(), 2, "⑥★★★客户端摆好后**自动补抓到 2 条**（实测 " .. tostring(EVAL_SM_TEST_MAPFIT_REC()) .. " 条）")
+  eq(select(3, EVAL_SM_TEST_MAPFIT_CAPSTATE()), true, "⑥★这时才落闩")
+
+  -- 夹具自清
+  rawset(_G, "WorldMapDetailFrame", savedFr)
+  rawset(_G, "WorldMapFrame", savedWm)
+  rawset(_G, "GetMapInfo", savedGMI)
+  rawset(_G, "GetNumMapOverlays", savedGNMO)
+  rawset(_G, "GetMapOverlayInfo", savedGMOI)
+  cfg.tb = savedTb
+  EH_SIMPLEMAP_CFG.mapFitMode, EH_SIMPLEMAP_CFG.mapFitFresh = savedMode256, savedFresh256
+  pcall(EVAL_SM_TEST_MAPFIT_RESET)
+  if fails256 == TESTASSERT_FAILS then
+    print("  关图即清空原值：关图先还回自然档再清空（顺序铁律）· 开图重新读+重新缩放（折出 70 而非 49）· 关掉即老行为 · nofold 不还回 · 还回失败则保留记录 · **0 条不算抓到、自动补抓**")
+    print("GROUP 256 (关图即清空原值 / 开图重新获取并重新缩放（用户要求）：关图先还回再清空 · 开图重读仍折出 70 而非 49 · 默认开可关 · nofold 不动 · 还回失败安全阀 · 0 条不算抓到+自动补抓（/reload 真机报障）): PASS")
+  end
+end
+
 EVAL_TEST_MOD_DONE("SimpleMap") -- ★跑到底的握手（见文件头 ③）：TOOL TEST FILES CHECK 拿它对账

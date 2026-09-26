@@ -200,7 +200,8 @@ if (!/\nsmMigrateReopen\(\)\r?\nSM_CFG\.showGUI = nil\r?\n/.test(sm)) {
                      "EVAL_SM_TEST_MAPFIT", "EVAL_SM_TEST_MAPFIT_GAPS", "EVAL_SM_TEST_MAPFIT_TARGETS",
                      "EVAL_SM_TEST_MAPFIT_APPLY", "EVAL_SM_TEST_MAPFIT_ORIG", "EVAL_SM_TEST_MAPFIT_RESET",
                      "EVAL_SM_TEST_MAPFIT_MAPKEY", "EVAL_SM_TEST_MAPFIT_INUSE", "EVAL_SM_TEST_MAPFIT_WROTE",
-                     "EVAL_SM_TEST_MAPFIT_DUMP", "EVAL_SM_TEST_MAPFIT_BUCKET"]) {
+                     "EVAL_SM_TEST_MAPFIT_DUMP", "EVAL_SM_TEST_MAPFIT_BUCKET",
+                     "EVAL_SM_TEST_MAPFIT_CAPSTATE", "EVAL_SM_TEST_MAPFIT_SOFT_RESET"]) {
       if (sm.indexOf("function " + f) < 0) bad.push("缺读值口 " + f);
     }
     // ⑧ ★反向哨兵：**调试工具不许再把自动适配做回去**（用户：「图层调试工具只是个调试工具，不需要」）
@@ -342,19 +343,37 @@ if (!/\nsmMigrateReopen\(\)\r?\nSM_CFG\.showGUI = nil\r?\n/.test(sm)) {
     }
     if (sm.indexOf("local function smMapKey()") < 0) bad.push("没有 smMapKey（地图身份 = 文件名 + 纹理尺寸）");
     if (sm.indexOf("local function smNumOverlays()") < 0) bad.push("没有 smNumOverlays（客户端自己的叠加层条数）");
-    // ② 原值必须**按地图分桶**存：桶头出现 ≥2（apply + capture），且绝不出现旧的平表写法
-    const buckets = (sm.match(/SM_CFG\.mapFitOrig\[mk\]/g) || []).length;
-    if (buckets < 2) bad.push("按地图分桶取原值只出现 " + buckets + " 处（apply 与 capture 各要一处：`SM_CFG.mapFitOrig[mk]`）");
-    if (/local saved = SM_CFG\.mapFitOrig(?!\[)/.test(sm)) bad.push("仍有「平表原值」写法 `local saved = SM_CFG.mapFitOrig` ⇒ 跨图复用（本轮的根因）会回来");
-    // ③ 版本戳 3（旧 schema 一律丢弃自愈）+ 迁移里真的改戳
-    if (sm.indexOf("SM_CFG.mapFitVer == 3") < 0) bad.push("迁移判据不是 `mapFitVer == 3` ⇒ 旧版（跨图污染）的原值不会被丢弃（用户修好代码也照样错）");
-    if (sm.indexOf("SM_CFG.mapFitVer = 3") < 0) bad.push("迁移里没有把版本戳写成 3");
-    if (sm.indexOf("SM_CFG.mapFitVer = 2") >= 0 || sm.indexOf("mapFitVer == 2") >= 0) bad.push("文件里还留着版本 2 的痕迹（旧 schema 又被认成有效）");
-    // ④ 换图 = 当场作废（tick 里按 smMapKey 比较后调 smFitNewMap；prepare 也要对齐）
-    if (sm.indexOf("local function smFitNewMap(") < 0) bad.push("没有 smFitNewMap（换图作废内存原值）");
+    // ② ★★★1.75.5 定案（用户提问）：「定位信息**不落存档**」—— 客户端每次开图都会自己重摆这批纹理，
+    //   存盘只会带来跨会话脏值（旧 schema 的跨图污染、版本戳迁移、以及 1.75.4 那场「存档已齐 ⇒ 每帧抖缩放」）。
+    //   判据：① 文件里**不许**再出现把记录写进 `SM_CFG.mapFitOrig` 的代码（只在一次性清理里可以出现）；
+    //        ② 记录只能落在**会话内存** `SMFIT.rec` / `SMFIT.recMap`；
+    //        ③ 迁移只剩「老键还在就丢」这一条（天然幂等，不写版本戳 ⇒ 少一个会过期的字段）。
+    const origUse = (sm.match(/SM_CFG\.mapFitOrig/g) || []).length;
+    // ★只许出现「一次性清理」那种形态：读一次判空 + 置 nil（外加测试读值口里的清空）——
+    //   任何**建表/写桶**的形态都是「定位信息又开始落存档」。
+    if (/SM_CFG\.mapFitOrig\s*=\s*(\{|SM_CFG)/.test(sm)) bad.push("又把 `mapFitOrig` 建表/赋值（定位信息又开始落存档）");
+    if (/SM_CFG\.mapFitOrig\[[^\]]*\]\s*=/.test(sm)) bad.push("又往 `mapFitOrig[...]` 写桶（跨会话缓存回来了）");
+    if (origUse > 3) bad.push("`SM_CFG.mapFitOrig` 出现 " + origUse + " 处（应当只在一次性清理 + 测试清空里出现 ≤3 处）");
+    if (!/SM_CFG\.mapFitOrig = nil/.test(sm)) bad.push("没有把老存档里那份 `mapFitOrig` **一次性清掉**（会留一份没人再读的缓存）");
+    // ★正则陷阱：`~=` 里也含 `=`、`\s*` 会回溯 ⇒ 先把合法的 `= nil` 全部抹掉，再看还有没有赋值（本检查第一版就这么假红过）
+    const mvLeft = sm.replace(/SM_CFG\.mapFitVer\s*=\s*nil/g, "");
+    if (/SM_CFG\.mapFitVer\s*=/.test(mvLeft)) bad.push("还在写版本戳 `mapFitVer`（定位信息已不落存档 ⇒ 版本戳没有存在意义）");
+    if (!/SM_CFG\.mapFitVer = nil/.test(sm)) bad.push("没有把老存档里那份 `mapFitVer` 一并清掉");
+    if (sm.indexOf("local function smFitMigrate()") < 0) bad.push("没有 smFitMigrate（老存档键的一次性清理口）");
+    if (sm.indexOf("SMFIT.recMap") < 0) bad.push("没有会话内存按图缓存 `SMFIT.recMap`（切回同一张图时会把折后值当原值再折一遍）");
+    const applies = seg("local function smFitApply(", "\nlocal function ");
+    if (applies.indexOf("SMFIT.recMap") < 0 && sm.indexOf("smFitBindMap(mk)") < 0) {
+      bad.push("apply 没有把本图记录绑到会话内存（缺 `smFitBindMap(mk)`）");
+    }
+    // ③ 记录的唯一写入点是**抓原值**（apply 只读、绝不记原值）
+    if (/SMFIT\.rec\[it\.key\]\s*=\s*\{/.test(applies)) bad.push("smFitApply 里又在写原值（`SMFIT.rec[it.key] = {`）⇒ 「折过的值被当原值」那类坑会回来");
+    if (sm.indexOf("SMFIT.rec[it.key] = { o = o, idx = it.key") < 0) bad.push("smFitCapture 没有把记录写进 `SMFIT.rec`（唯一写入点）");
+    // ④ 换图 = 换一套记录（会话内存按图：切走存回、切回取出）
+    if (sm.indexOf("local function smFitNewMap(") < 0) bad.push("没有 smFitNewMap（换图换一套原值）");
     else {
       const nseg = seg("local function smFitNewMap(", "\nlocal function ");
-      if (nseg.indexOf("SMFIT.rec = {}") < 0) bad.push("smFitNewMap 没有丢掉旧图的内存记录（`SMFIT.rec = {}`）");
+      if (nseg.indexOf("SMFIT.recMap[old] = SMFIT.rec") < 0) bad.push("smFitNewMap 没有把旧图的记录**存回** recMap（切回来时会被迫重抓）");
+      if (nseg.indexOf("SMFIT.rec = SMFIT.recMap[mk] or {}") < 0) bad.push("smFitNewMap 没有从 recMap **取回**本图的记录");
       if (nseg.indexOf("SMFIT.captured = false") < 0) bad.push("smFitNewMap 没有重置 captured ⇒ 本图不会再抓原值（用的还是上一张图的）");
     }
     if (sm.indexOf("pcall(smFitNewMap, mkNow)") < 0) bad.push("tick 里没有「地图身份变了 ⇒ 作废旧原值」（跨图沿用照旧）");
@@ -398,14 +417,314 @@ if (!/\nsmMigrateReopen\(\)\r?\nSM_CFG\.showGUI = nil\r?\n/.test(sm)) {
     }
     if (!/sub == "dump"/.test(sm)) bad.push("`/ehm mapfit` 没有 dump 子命令（真机没法取证）");
     if (sm.indexOf("| dump（只读清单）|") < 0) bad.push("mapfit 用法说明里没有 dump（用户不知道有这个口）");
+    // ⑩ ★★★1.75.5 事故（用户：「换了一个账号之后…地图缩放不正常了」＋「/reload 后探索层不生效、关/开一次才正常」）：
+    //   ① 抓原值**不许每帧重跑**（真机证据：trace 60 条环 1 秒被刷满 ⇒ 每帧 ≈55 次/秒）；
+    //   ② ★★★抓原值**绝不许翻转外框缩放** —— 旧写法「同一帧 SetScale(1) → 立刻读 → 放回」在外框已是 0.70 时
+    //      是一次**真改动** ⇒ 客户端立刻重排/清锚点 ⇒ 紧接着的读**全部读不到**（且静默）= 用户「/reload 后探索层不生效」；
+    //      关/开之所以能成，是因为关的时候 `featReset` 已把外框复位成真 1.00 ⇒ 那句 SetScale(1) 是空操作。
+    //      ⇒ 正解 = **不翻转，按 es 归一**（本客户端实测「读回 = 逻辑×es」）。
+    if (capSeg.indexOf("local todo, skipUse = {}, 0") < 0) bad.push("smFitCapture 没有「先筛候选」的 todo 列表（顺序判据的锚点）");
+    else {
+      const iTodo = capSeg.indexOf("if table.getn(todo) == 0 then");
+      if (iTodo < 0) bad.push("smFitCapture 没有「候选为空 ⇒ 当场返回」的判据");
+      const seg2 = iTodo >= 0 ? capSeg.slice(iTodo, iTodo + 320) : "";
+      if (seg2.indexOf("SMFIT.captured = true") < 0) bad.push("候选为空时没有**落闩**（`SMFIT.captured = true`）⇒ tick 每帧重跑");
+      if (capSeg.indexOf("if n >= table.getn(todo) then SMFIT.captured = true end") < 0) {
+        bad.push("落闩判据不是「本轮目标**全部**拿到」（`n >= table.getn(todo)`）⇒ 要么永不落闩、要么读不出也当抓完");
+      }
+      // ★不许翻转 + 必须按 es 归一 + 读失败必须计数并如实播报
+      if (/SetScale\s*,\s*\w+\s*,\s*1\b/.test(capSeg)) {
+        bad.push("smFitCapture 里又在「临时把外框缩放置 1」⇒ 外框已是 0.70 时这句会惊动客户端、紧接着的读全读不到（1.75.5 实案）");
+      }
+      if (capSeg.indexOf("/ norm") < 0 || capSeg.indexOf('(SMFIT.needFold == true) and 1 or esC') < 0) {
+        bad.push("smFitCapture 没有「按读回口径归一」（`norm`：needFold==true ⇒ 1，否则 ÷es）");
+      }
+      if (capSeg.indexOf("抓原值读不到") < 0 || capSeg.indexOf("SMFIT.capFails") < 0) {
+        bad.push("smFitCapture 读不到时仍然**静默**（缺「抓原值读不到」日志 / `SMFIT.capFails` 计数）⇒ 下次再出问题又要靠猜");
+      }
+    }
+    if (!/local SMFIT_CAP_GAP = [0-9.]+/.test(sm)) bad.push("没有抓原值的**有界重试**间隔常量 SMFIT_CAP_GAP");
+    if (sm.indexOf("SMFIT.capAge >= SMFIT_CAP_GAP") < 0) bad.push("tick 里没有有界重试门（`SMFIT.capAge >= SMFIT_CAP_GAP`）⇒ 抓不出来时会每帧重试");
+    // ⑪ ★★★1.75.5 另外两条硬化：瞬态 es 暂缓 + 两种读回口径都认（否则「每拍重写」的刷屏会回来）
+    if (sm.indexOf("折算暂缓：读回 es=1.000 而设置值 scale=%s") < 0) {
+      bad.push("缺「瞬态 es=1.000 而设置值≠1 ⇒ 暂缓折算」的判据 ⇒ 同一次开图会写两遍不同值");
+    }
+    // ★1.75.5 追加（真机日志：7 分钟内反复出现该瞬态）⇒ 暂缓这一拍要**主动把缩放掰回去**（下一拍就恢复），
+    //   并且取证行要摊出「自身 GetScale / 父帧有没有」——那是区分「客户端重置缩放」与「父链一时读不到」的唯一证据。
+    if (!/if math\.abs\(es - 1\) <= 0\.001[\s\S]{0,500}?pcall\(featApplyScale/.test(sm)) {
+      bad.push("瞬态 es=1.000 时没有主动掰回缩放（`pcall(featApplyScale, …)`）⇒ 瞬态会拖很多拍");
+    }
+    if (sm.indexOf("自身 GetScale=%s ｜ 父帧=%s") < 0) bad.push("瞬态暂缓的取证行没摊出「自身 GetScale / 父帧」⇒ 分不清是哪一种瞬态");
+    // ★★★1.75.5 追加（真机日志实证 `自身 GetScale=1.000 ｜ 父帧=有`）：**客户端会自己把地图帧缩放重置回 1.0**
+    //   ⇒ 光靠 0.2s 节拍守不住（开图/换图后有一段「没缩放」窗口 = 用户报的「载入时缩放异常」）⇒ tick 里必须**每帧守**。
+    if (!/if open then pcall\(featApplyScale, tonumber\(SM_CFG\.scale\) or 1\) end/.test(sm)) {
+      bad.push("tick 里没有**每帧守缩放**（`if open then pcall(featApplyScale, …) end`）⇒ 客户端重置缩放后要等 0.2s 才掰回，用户会看到「载入时缩放异常」");
+    }
+    // ★★★顺序即判据（1.75.5 第二次修）：守缩放必须排在**读 es 之前** —— 先读后守 ⇒ 开图第一拍必读到客户端重置的
+    //   1.000 ⇒ 触发「折算暂缓」、折算晚一拍；客户端若每帧重置就**一直晚**（用户现象：载入后要关开一次才正常）。
+    const iGuard2 = sm.indexOf("if open then pcall(featApplyScale, tonumber(SM_CFG.scale) or 1) end");
+    // ★`local eff = smEffScale(fr)` 在 `smFitApply` 的折算口径日志里也有一处 ⇒ 必须取**最后一次**出现（= tick 里那次），
+    //   否则会拿 apply 里那处的下标去比 ⇒ 假红（本检查第一版就这么红了，别再用 indexOf）。
+    const iEsRead = sm.lastIndexOf("local eff = smEffScale(fr)");
+    if (iGuard2 >= 0 && iEsRead >= 0 && iGuard2 > iEsRead) {
+      bad.push("tick 里「先读 es、后守缩放」顺序反了 ⇒ 开图第一拍必读到 1.000、折算晚一拍（客户端每帧重置时一直晚）");
+    }
+    if (applySeg.indexOf("local okB = near(x, wantX * es)") < 0) {
+      bad.push("smFitApply 没有「读回 = 逻辑×es」这一种口径的接受判据（`okB`）⇒ 本客户端上每一拍都判「要改」而反复重写");
+    }
+    if (applySeg.indexOf("local okA = near(x, wantX)") < 0) bad.push("smFitApply 缺「读回 = 逻辑值」那一侧的接受判据（`okA`）");
+    // ⑫ ★★★1.75.5 实案（用户跑 `/ehm mapfit diag` 当场弹红字）：`smFitDiag` 里在 `local changed, ready = 0, 0`
+    //   **之前**引用了 `ready` ⇒ 绑成**全局 nil** ⇒ `string.format("…%d", nil)` 抛 bad argument（正是本项目头号杀手）。
+    //   ★`DECL ORDER CHECK` 抓不到它：它按**顶层 local** 比对，函数内缩进的同名局部会被整名跳过（记忆里写明的盲区）
+    //   ⇒ 这里按「首次出现」钉住这一条。
+    const diagSeg = seg("local function smFitDiag(", "\nlocal function ");
+    if (!diagSeg) bad.push("找不到 smFitDiag（本检查要验「local 之前不许引用」）");
+    else {
+      const iDecl = diagSeg.indexOf("local changed, ready");
+      if (iDecl < 0) bad.push("smFitDiag 里找不到 `local changed, ready` 声明行（本检查的锚点）");
+      else if (/\bready\b/.test(diagSeg.slice(0, iDecl))) {
+        bad.push("smFitDiag 在声明 `local changed, ready` **之前**就用了 `ready` ⇒ 绑全局 nil，`%d` 会收到 nil 当场报错");
+      }
+    }
+    // ⑬ ★★★1.75.5 实案修复：折算策略（诊断档）**不跨会话** —— 必须挂 `VARIABLES_LOADED` 把上一会话遗留的那份清掉，
+    //   否则 `nofold` 会永久留在存档里（而主开关「关→开」只写 mapFit、**从不复位策略**）⇒ 用户「关闭/开启 缩放始终不生效」。
+    //   ★为什么挂事件而不是文件执行期：文件执行期存档表还是空的（本项目既有教训）⇒ 清了也白清。
+    const iMg = sm.indexOf('CreateFrame("Frame", "EH_SM_MODEGUARD"');
+    if (iMg < 0) bad.push("没有策略守卫帧 EH_SM_MODEGUARD（诊断档会跨会话 ⇒ 功能可能被永久关死）");
+    else {
+      const mgSeg = sm.slice(iMg, iMg + 900);
+      if (mgSeg.indexOf('RegisterEvent("VARIABLES_LOADED")') < 0) bad.push("策略守卫帧没挂 VARIABLES_LOADED（执行期读不到存档 ⇒ 清了也白清）");
+      if (mgSeg.indexOf("SM_CFG.mapFitMode = nil") < 0) bad.push("策略守卫帧没有把 `SM_CFG.mapFitMode` 清成 nil（诊断档仍会跨会话）");
+    }
+    // 切到 nofold / 开启时**必须如实播报**（否则用户只会看到「开关坏了」，实案就是这样被误导的）
+    if (sm.indexOf("这就是「关开都不生效」的原因") < 0) {
+      bad.push("切到 nofold（或开启时）没有如实播报「一个几何都不碰」⇒ 用户会以为开关坏了");
+    }
+    // ⑭ ★★★1.75.5 真机定案（用户截图：**探索层贴图跑到游戏画面里**，右下角拼出一块丹莫罗地图）：
+    //   写锚点**必须传帧对象** —— 本客户端把「字符串 / nil 相对帧」当成**锚到屏幕（UIParent）** ⇒ 纹理逃出地图窗口。
+    //   （`smFitRestore` 一直是解析成对象的 ⇒ 两边行为不一致，这正是「关功能能救回来、开着就画到世界上」的真因。）
+    if (/SetPoint,\s*o,\s*r\.p,\s*r\.rel,/.test(sm) || /SetPoint,\s*o,\s*r\.p,\s*r\.rel\b/.test(sm)) {
+      bad.push("写锚点时把相对帧**名字/表字段 `r.rel` 直接**传给 SetPoint ⇒ 本客户端会锚到屏幕（探索层画到游戏画面上）");
+    }
+    if (sm.indexOf("local relObj = nil") < 0 || sm.indexOf("pcall(o.SetPoint, o, r.p, relObj, r.rp, wantX, wantY)") < 0) {
+      bad.push("写锚点没有「先解析成帧对象再 SetPoint」（缺 `relObj` 那条路）");
+    }
+    // 捕获时要把**活对象**一起记下来（`relObj`），否则只能靠字符串（危险）
+    if (sm.indexOf("relObj = rel") < 0) bad.push("抓原值没有把**活相对帧对象**记进记录（`relObj = rel`）⇒ 写回时只能靠字符串");
+    // ⑮ ★★★1.75.5（**用户设计**，采纳）：「探索层不加缓存是否可以在 /reload 的时候不进行缩放,以获取原值,
+    //   获取完成之后再进行缩放操作?」⇒ **本图还没有原值 ⇒ 先不缩放**（在自然档读原值），抓到立刻缩放；
+    //   窗口必须**有界**（超时就先缩放，绝不把地图卡在满尺寸）。
+    if (!/local SMFIT_HOLD_SEC = [0-9.]+/.test(sm)) bad.push("没有抓原值窗口上限常量 SMFIT_HOLD_SEC（窗口必须有界）");
+    if (sm.indexOf("smFitHold") < 0) bad.push("没有 `smFitHold`（抓原值窗口；★必须是**提前声明的文件级 local**，放进 SMFIT 会绑全局 nil —— LOCAL ORDER CHECK 抓得到）");
+    const iFs = sm.indexOf("local function featApplyScale(s)");
+    const fsSeg = iFs >= 0 ? sm.slice(iFs, iFs + 1200) : "";
+    if (!/if \(tonumber\(smFitHold\) or 0\) > 0 and math\.abs\(s - 1\) > 0\.001 then return end/.test(fsSeg)) {
+      bad.push("featApplyScale 没有「抓原值窗口内先不缩放」的让位（缺 smFitHold 判据）⇒ 抓原值又要在缩放档里读了");
+    }
+    if (sm.indexOf("抓原值窗口开启") < 0 || sm.indexOf("抓原值窗口结束") < 0) bad.push("抓原值窗口没有「开/收」的取证行（用户看不到也就没法判）");
+    if (sm.indexOf("**超时/没抓全**（先缩放，稍后由 1 秒一次的有界重试继续补抓）") < 0) {
+      bad.push("抓原值窗口超时没有如实播报（少了它就可能把地图卡在满尺寸）");
+    }
+    // ⑰ ★★★1.75.5（用户先要「获取原值的地方添加日志信息,打印出来」，随后又要求「好的功能正常了.清理下这些调试日志」）：
+    //   最终口径 = **安静档默认 + 详细档开关**：
+    //   ① 抓原值必须**看得见**（走常开出口 `smFitSay` → `EVAL_SAY_FORCE`，不受「调试日志」闸门管；同时进 `mapFitTrace`）；
+    //   ② 安静档每次开图只留**两条**（「已读到 N 条 ⇒ 落闩」+ 首次「折算已对齐」）、关图**一条**（清空）；真出问题（读不到 / 还回失败 / 没还回）**必须出声**；
+    //   ③ 逐条原值 / 第 N 次尝试 / 每次重试 / 窗口开关 / 每次小结 / 每次折算 = **详细档**（`/ehm mapfit verbose on`，`SM_CFG.mapFitVerbose == true`，**nil = 关**）；
+    //   ④ 无论哪档都进 `mapFitTrace` 取证环（安静档只是不上屏）。
+    if (sm.indexOf("local function smFitSay(fmt, ...)") < 0) {
+      bad.push("没有常开播报口 smFitSay（抓原值只用 mfLog ⇒ 关掉「调试日志」就一个字都不出声）");
+    } else {
+      const iSay = sm.indexOf("local function smFitSay(fmt, ...)");
+      const saySeg = sm.slice(iSay, iSay + 700);
+      if (saySeg.indexOf("EVAL_SAY_FORCE") < 0) bad.push("smFitSay 没走常开出口 EVAL_SAY_FORCE（等于还是被闸门管）");
+      if (saySeg.indexOf("mfLog(") < 0) bad.push("smFitSay 没进取证环 mfLog（聊天框刷过去就再也查不到）");
+    }
+    // ③ 详细档口（默认关）
+    if (!/local function smFitVerboseOn\(\)\s*\n\s*return SM_CFG\.mapFitVerbose == true/.test(sm)) {
+      bad.push("没有 `smFitVerboseOn()`（真值只认 SM_CFG.mapFitVerbose == true ⇒ nil 必须是关）");
+    }
+    const iSayV = sm.indexOf("local function smFitSayV(fmt, ...)");
+    if (iSayV < 0) bad.push("没有详细档出口 smFitSayV");
+    else {
+      const vSeg = sm.slice(iSayV, iSayV + 500);
+      if (vSeg.indexOf("smFitVerboseOn()") < 0) bad.push("smFitSayV 没有过详细档开关（等于两个口子没区别）");
+      if (vSeg.indexOf("mfLog(") < 0) bad.push("smFitSayV 没进取证环 mfLog（详细档关着时连取证都没了）");
+    }
+    const iCap2 = sm.indexOf("local function smFitCapture()");
+    const iCapEnd2 = sm.indexOf("local function smFitRestore(");
+    if (iCap2 < 0 || iCapEnd2 <= iCap2) bad.push("找不到 smFitCapture 的区间（抓原值播报判据无从检查）");
+    else {
+      const cap = sm.slice(iCap2, iCapEnd2);
+      // ② 安静档必须留的两条（成功 + 关图由 dropOnClose 负责）
+      if (cap.indexOf('smFitSay("抓原值：已读到 **%d 条**原值') < 0) {
+        bad.push("安静档没有「已读到 N 条原值 ⇒ 落闩」那条成功播报（用户会以为压根没抓）");
+      }
+      // ①③ 详细行必须走 smFitSayV，不许占用安静档口子（反向哨兵：刷屏就是从这里回来的）
+      for (const [lit, why] of [
+        ["smFitSayV(\"抓原值 第%d次尝试", "「第 N 次尝试」必须走详细档（否则每次重试都上屏）"],
+        ["smFitSayV(\"抓原值：%s 读回", "逐条原值必须走详细档（8~18 条一行一个 = 刷屏）"],
+        ["smFitSayV(\"抓原值小结", "逐次小结必须走详细档"],
+        ["smFitSayV(\"抓原值：本图 %d 个候选", "「候选都还没在用」的重试提示必须走详细档"],
+      ]) {
+        if (cap.indexOf(lit) < 0) bad.push(why);
+      }
+      if (/smFitSay\("抓原值 第%d次尝试/.test(cap)) bad.push("「第 N 次尝试」仍走安静档口子 ⇒ 又刷屏了");
+      if (/smFitSay\("抓原值：%s 读回/.test(cap)) bad.push("逐条原值仍走安静档口子 ⇒ 又刷屏了");
+      // 真出问题必须出声（读不到 / 一个都没读到时的最终结论）
+      if (cap.indexOf('smFitSay("抓原值**读不到**') < 0) bad.push("抓原值**读不到**时没有安静档播报（真出问题就静默了）");
+      if (cap.indexOf("SMFIT.saidFail") < 0) bad.push("「读不到」的播报没有一次门（每次重试都会再报一遍）");
+    }
+    // ② 折算那条「叠加层适配：对齐 N 个」必须**每次开图只报一次**（真机实测会重复 6 次以上）
+    if (sm.indexOf("local firstFold = (not SMFIT.saidFold)") < 0) {
+      bad.push("折算播报没有「每次开图只报一次」的门（真机实测重复 6 次以上）");
+    }
+    if (sm.indexOf("SMFIT.saidLatch, SMFIT.saidFail, SMFIT.saidEmpty, SMFIT.saidFold = false, false, false, false") < 0) {
+      bad.push("「每次开图只报一次」的标记没有在换图/关图时归零（要么不报、要么一路刷）");
+    }
+    // ④ 命令口 + 读值口（用户要能自己开关详细档）
+    if (sm.indexOf('string.find(sub, "^verbose")') < 0) bad.push("没有 `/ehm mapfit verbose on|off` 分支");
+    if (sm.indexOf("SM_CFG.mapFitVerbose = true") < 0 || sm.indexOf("SM_CFG.mapFitVerbose = nil") < 0) {
+      bad.push("详细档真值缺少读写点（on 写 true / off 写 nil）");
+    }
+    // ⑤ 详细档**不跨会话**（同 mapFitMode 的理由：它是排查用的，忘了关就一直刷屏）
+    const iMg2 = sm.indexOf('CreateFrame("Frame", "EH_SM_MODEGUARD"');
+    if (iMg2 > 0 && sm.slice(iMg2, iMg2 + 1800).indexOf("SM_CFG.mapFitVerbose = nil") < 0) {
+      bad.push("策略守卫帧没有一起清 `mapFitVerbose`（详细档会跨会话 ⇒ 忘了关就一直刷屏）");
+    }
+    // 地图**没开**时，必须把「抓原值要等开图」说清楚（用户报的「重开后没重开地图」那一次，这就是唯一原因）
+    if (sm.indexOf("**要等你把地图打开**才读得到") < 0) {
+      bad.push("启用时没有说明「地图没开 ⇒ 抓原值要等开图」（用户看不到原因就只能猜）");
+    }
+    // ⑱ ★★★1.75.5（**用户要求**）：「每次地图关闭都把原值数据清理、不要保存这个值；每次打开地图都重新获取原值、重新缩放大地图」
+    //   （+「每次 reload 载入也当第一次」—— 那条本来就成立：原值只在会话内存）。
+    //   判据五条：① 真值唯一且**默认开**（只认 `mapFitFresh ~= false`，nil ⇒ 开）；
+    //   ② 清空发生在**关图那一刻**（`closedNow`，不是每帧、也不是开图时）；③ 只动**本图**（别的分桶不许碰）；
+    //   ④ **先还回自然档并严格自验，验不过就绝不清**（否则把折后的值当原值 = 折两遍）；⑤ 折算档门（nofold 不清）。
+    if (!/local function smFitFreshOn\(\)\s*\n\s*return SM_CFG\.mapFitFresh ~= false/.test(sm)) {
+      bad.push("没有 `smFitFreshOn()`（真值只认 SM_CFG.mapFitFresh ~= false，nil ⇒ 开）");
+    }
+    const iDrop = sm.indexOf("local function smFitDropOnClose(mk)");
+    if (iDrop < 0) bad.push("没有 smFitDropOnClose（「关图即清空原值」无处落地）");
+    else {
+      const drop = sm.slice(iDrop, iDrop + 2800);
+      const iBack = drop.indexOf("pcall(smFitRestore, true)");
+      const iWipe = drop.indexOf("SMFIT.rec = {}");
+      if (iBack < 0) bad.push("smFitDropOnClose 没有「先把折过的几何还回自然档」");
+      else if (iWipe < 0 || iBack > iWipe) bad.push("smFitDropOnClose 的顺序错了：**先还回、再清空**（反过来就是把折后的值当原值）");
+      if (drop.indexOf("没能还回自然档") < 0) bad.push("还回失败时没有安全阀（**保留**记录；清了下次开图会把折后的值当原值）");
+      if (drop.indexOf("math.abs(tonumber(vx) - tonumber(r.x)) <= 0.75") < 0) {
+        bad.push("还回后没有**按本档口径严格自验**（两种读回口径在数值上长得一样 ⇒ 只信 smFitRestore 的宽松判定会漏）");
+      }
+      if (drop.indexOf("SMFIT.recMap[mk] = {}") < 0) bad.push("smFitDropOnClose 没有只清**本图**分桶（`SMFIT.recMap[mk] = {}`）");
+    }
+    if (sm.indexOf("local closedNow = (not open) and SMFIT.open") < 0) bad.push("没有 closedNow（关图那一下；不许每帧清）");
+    const iCloseGate = sm.indexOf("if closedNow and smFitOn() and smFitFreshOn() and smFitNeedFold() then");
+    if (iCloseGate < 0) bad.push("tick 里没有「关图 + 适配开 + 折算档」的清空门");
+    const iWin2 = sm.indexOf('smFitSay("抓原值窗口开启');
+    if (iWin2 > 0 && iCloseGate > iWin2) bad.push("清空门排在「抓原值窗口」之后 ⇒ 开图那一拍窗口会按旧记录判成「已齐」而不开");
+    // ★★「0 条也算已齐」那个真机 bug 的判据：todo 空的落闩必须**以「确有记录」为前提**
+    if (sm.indexOf("if smFitRecCount() > 0 then") < 0) {
+      bad.push("空候选仍然无条件落闩（真机 bug：0 条也报「已抓到原值」⇒ 之后再也不会抓）");
+    }
+    if (sm.indexOf("**不算抓到原值**") < 0) bad.push("「一个候选都不在用」时没有如实说明「不算抓到、不落闩、1 秒后重试」");
+    if (sm.indexOf('string.format("**已抓到原值 %d 条**", nRecWin)') < 0) {
+      bad.push("窗口收口的措辞没有与实际条数挂钩（0 条也报「已抓到原值」就是被这条坑的）");
+    }
+    // 抓原值窗口也必须只在**折算档**开（否则 nofold 的地图会白白满尺寸 2 秒）
+    if (sm.indexOf("elseif smFitNeedFold() and (not SMFIT.captured) and next(SMFIT.rec or {}) == nil then") < 0) {
+      bad.push("抓原值窗口没带 smFitNeedFold() 门（nofold 档会被按在自然档白等 2 秒）");
+    }
+    // 命令口 + 读值口（用户要能开关它做 A/B）
+    if (sm.indexOf('string.find(sub, "^fresh")') < 0) bad.push("没有 `/ehm mapfit fresh on|off` 分支");
+    if (sm.indexOf("function EVAL_SM_TEST_MAPFIT_FRESH()") < 0) bad.push("没有真值读值口 EVAL_SM_TEST_MAPFIT_FRESH");
     if (bad.length) { console.log("SM MAP KEY CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
-    console.log("SM MAP KEY CHECK: 原值按**地图身份**分桶（无平表复用）· 版本戳 3 丢弃旧污染 · 换图当场作废 · " +
-      "只碰本图在用的层（IsShown/GetTexture）· 零叠加层不动手 · 抓原值等版式稳定 · 还原只还写过的层 · 取证清单+命令在位");
+    // ⑯ ★★★1.75.5（**用户指定「本办法」**）：手动适配一条命令走完五步并**逐步打印**。
+    //   用户原话：「缩放功能开启的情况下, 游戏首次载入, 可以做个调试命令执行. 打开地图, 等待2s, 获取原值.
+    //   打印原值, 应用缩放. 打印缩放信息. 这样的调整过程.」
+    //   ★为什么必须钉住：这是「出问题时看不出卡在哪一步」的唯一解 —— 五步缺任何一步，用户回传的那段日志就断链。
+    const iFix = sm.indexOf("local function smFixDoCapture()");
+    const iFixNow = sm.indexOf("local function smFixNow()");
+    if (iFix < 0 || iFixNow < 0 || iFixNow <= iFix) {
+      bad.push("没有手动适配的两个函数 smFixDoCapture / smFixNow（/ehm fitnow）");
+    } else {
+      const seg = sm.slice(iFix, iFixNow);
+      // ① 第1步开图**只许 ShowUIPanel**（Toggle 会把已经开着的地图关掉 —— 本项目既有纪律）
+      const segNow = sm.slice(iFixNow, iFixNow + 2200);
+      if (segNow.indexOf("pcall(ShowUIPanel, wm)") < 0) bad.push("第1步没有用 `ShowUIPanel` 开图");
+      if (/Toggle/i.test(segNow)) bad.push("第1步用了 Toggle 开图（会把握在手上的地图关掉）⇒ 必须只用 ShowUIPanel");
+      // ② 第2步 = 置自然档 1.00 并等 2 秒（等的是客户端版式，别抢读）
+      if (segNow.indexOf("pcall(featApplyScale, 1)") < 0) bad.push("第2步没有把外框放回**自然档 1.00**（不置回就会在缩放档里读原值）");
+      if (!/>= 2\.0 then/.test(segNow)) bad.push("第2步没有「等满 2 秒」的计时判据（等不到版式稳定就抓，读数必错）");
+      if (segNow.indexOf('EH_SM_FITFIX') < 0) bad.push("没有计时帧 EH_SM_FITFIX（2 秒等待无从实现）");
+      // ③ 第3步读原值：**不翻转、不归一**（本段一个 SetScale 都不该有 —— 外框已是自然档，读回即原值）
+      if (seg.indexOf("不翻转、不归一") < 0) bad.push("第3步没有写明「不翻转、不归一」的口径");
+      if (/SetScale/.test(seg)) bad.push("第3步（读原值）里出现了 SetScale ⇒ 又变成「读的时候翻转外框」= 读不到");
+      if (seg.indexOf('from = "fixnow"') < 0) bad.push("第3步写的记录没有打 `from = \"fixnow\"` 标记（事后分不清这份原值是谁抓的）");
+      if (seg.indexOf("原值 %s = (%.1f,%.1f) %.1f×%.1f") < 0) bad.push("第3步没有**逐条打印原值**");
+      // ④ 第4步套缩放并打印三个读数（设置值 / 自身 GetScale / 父链连乘）
+      if (seg.indexOf("设置值=%.2f") < 0 || seg.indexOf("自身 GetScale=") < 0 || seg.indexOf("父链连乘=") < 0) {
+        bad.push("第4步没有把「设置值 / 自身 GetScale / 父链连乘」三个读数一起打印（分不清是没写进去还是读不回来）");
+      }
+      // ⑤ 第5步折算并逐条打印「原值 → 写入」
+      if (seg.indexOf("原值(%.1f,%.1f %.1f×%.1f) → 写入(") < 0) bad.push("第5步没有逐条打印「原值 → 写入」");
+      // ⑥ **必须收尾把让位标记放掉**，否则自动逻辑被永久让位 = 新故障
+      if (seg.indexOf("smFixActive = false") < 0) bad.push("手动适配结束时没有把 `smFixActive` 放掉（自动逻辑会被永久让位）");
+      if (seg.indexOf("if SM_FIX.done then return 0 end") < 0) bad.push("手动适配没有重入闸 `SM_FIX.done`（计时帧 + 兜底两条路会各跑一遍）");
+    }
+    // ⑦ 自动 tick 必须**整段让位**（挡在最前面，连「每帧守缩放」「抓原值窗口」都不参与），且排在取 dt 之前
+    const iLet = sm.indexOf("if smFixActive then return end");
+    const iTkDt = sm.lastIndexOf("local dt = tonumber(arg1) or 0.05");
+    if (iLet < 0) bad.push("自动 tick 没有「手动适配进行中 ⇒ 让位」的判据（手动过程会被自动逻辑抢写缩放）");
+    else if (iTkDt >= 0 && iLet > iTkDt) bad.push("让位判据排在取 dt 之后（必须挡在 tick 最前面）");
+    // ⑧ 命令入口 + 读值口（用户敲的就是它；没有入口 = 用户根本用不上）
+    if (sm.indexOf('msg == "fitnow"') < 0) bad.push("没有 `/ehm fitnow` 分支（别名 适配 / 修正）");
+    if (sm.indexOf("function EVAL_SM_TEST_FIX_STATE()") < 0 || sm.indexOf("function EVAL_SM_TEST_FIX_DO()") < 0) {
+      bad.push("手动适配缺读值口 EVAL_SM_TEST_FIX_STATE / EVAL_SM_TEST_FIX_DO");
+    }
+    // ⑨ 夹具自清必须把让位标记放掉（否则上一段夹具会把**后面所有组**的 tick 关掉 —— 静默、且看着像功能坏了）
+    if (!/smFixActive, SM_FIX\.t, SM_FIX\.done = false, 0, false/.test(sm)) {
+      bad.push("夹具自清没有复位 `smFixActive`（上一段夹具会把后面所有组的自动 tick 关掉）");
+    }
+    if (bad.length) { console.log("SM MAP KEY CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
+    console.log("SM MAP KEY CHECK: 定位信息**不落存档**（会话内存按图）· 老缓存一次性清掉且不再写版本戳 · 换图换一套记录 · " +
+      "只碰本图在用的层（IsShown/GetTexture）· 零叠加层不动手 · 抓原值等版式稳定 + **先筛候选再动缩放/落闩/有界重试** · " +
+      "瞬态 es 不折算 · 两种读回口径都认 · 还原只还写过的层 · 取证清单+命令在位 · **手动适配（/ehm fitnow）五步齐**");
+  })();
+
+  // ===== SM PANEL SYNC CHECK（1.75.5）：地图设置面板的值 ↔ 快捷键（滚轮）**双向同步**、且只有一个刷新口 =====
+  // 用户原话：「缩放大地图.在使用快捷键设置地图缩放和透明度之后,地图设置内的值要能同步更新.双向同步更新.根源数据保持统一」
+  // ★为什么必须源码级钉：这属于**接线**（漏接不报错、只是界面数字不动），而真值本身没坏 ⇒ 行为断言照不到「滚轮那条路忘了刷面板」。
+  (function () {
+    const p = path.join(__dirname, "tools", "SimpleMap.lua");
+    if (!fs.existsSync(p)) { console.log("SM PANEL SYNC CHECK: (无 tools/SimpleMap.lua，跳过)"); return; }
+    const sm = strip(fs.readFileSync(p, "utf8"));
+    const bad = [];
+    // ① 前向声明：`smPanelSync` 定义在面板构造里（滚轮之后）⇒ 不先声明成 local，滚轮里就会绑到全局 nil（同步静默失效）
+    if (sm.indexOf("local smPanelSync = nil") < 0) {
+      bad.push("smPanelSync 没有前向声明（缺 `local smPanelSync = nil`）⇒ 滚轮里那句绑全局 nil，同步会静默失效");
+    }
+    // ② 滚轮两个分支（Shift=透明度 / Ctrl=缩放）各要刷一次 —— 切片口径：从 featWheelOn 到 featBuild（期间不含面板构造）
+    const iW = sm.indexOf("local function featWheelOn(");
+    const iB = sm.indexOf("local function featBuild(");
+    const wheelSeg = (iW >= 0 && iB > iW) ? sm.slice(iW, iB) : "";
+    if (!wheelSeg) bad.push("找不到 featWheelOn 段（本检查要验「滚轮 → 面板同步」）");
+    else {
+      const n = (wheelSeg.match(/pcall\(smPanelSync\)/g) || []).length;
+      if (n < 2) bad.push("滚轮处理器里只有 " + n + " 处刷新面板（Shift 透明度 / Ctrl 缩放 **各**要一处）");
+    }
+    // ③ 面板 [-] / [+] 也走同一个刷新口（单一来源）；总数 ≥4（滚轮 2 + 面板 2）
+    const total = (sm.match(/pcall\(smPanelSync\)/g) || []).length;
+    if (total < 4) bad.push("`pcall(smPanelSync)` 全文件只有 " + total + " 处（滚轮 2 + 面板 [-] / [+] 2）⇒ 有一侧没走统一刷新口");
+    // ④ 反向哨兵：真值只认 `SM_CFG.alpha` / `SM_CFG.scale`（面板与滚轮写同一份），不许出现第二份「面板自己的值」
+    if (/local\s+panelAlpha|local\s+panelScale/.test(sm)) bad.push("出现了面板自己的值副本（panelAlpha/panelScale）⇒ 真值分叉");
+    if (bad.length) { console.log("SM PANEL SYNC CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
+    console.log("SM PANEL SYNC CHECK: 面板值 ↔ 滚轮**双向同步**（滚轮 2 处 + 面板 [-] / [+] 2 处都走统一刷新口 `smPanelSync`）· " +
+      "前向声明在位（否则绑定全局 nil）· 真值唯一（SM_CFG.alpha / SM_CFG.scale）");
   })();
 
   // ===== SM GROUP ROSTER CHECK：本模块测试文件的**组号清单**不许静默少一个（与 DF 那套同族）=====
   (function () {
-    const WANT = [224, 225, 226, 230, 232, 237, 253];
+    const WANT = [224, 225, 226, 230, 232, 237, 253, 254, 255, 256];
     const p = path.join(__dirname, "tests", "tools", "SimpleMap.lua");
     if (!fs.existsSync(p)) { console.log("SM GROUP ROSTER CHECK: FAIL - 找不到 tests/tools/SimpleMap.lua"); process.exitCode = 1; return; }
     const s = fs.readFileSync(p, "utf8");
@@ -525,15 +844,21 @@ if (!/\nsmMigrateReopen\(\)\r?\nSM_CFG\.showGUI = nil\r?\n/.test(sm)) {
     const applySeg = (iApply >= 0 && iApplyEnd > iApply) ? sm.slice(iApply, iApplyEnd) : "";
     if (!applySeg) bad.push("找不到 smFitApply 的函数体（本检查要验它不再记原值）");
     else {
+      // ★1.75.5：记录**只由抓原值写**（不再有「从存档采纳」那条路）⇒ apply 里既不许写存档、也不许新建记录
       if (/saved\[it\.key\]\s*=/.test(applySeg)) bad.push("smFitApply 里仍在**写原值**（`saved[it.key] = …`）⇒ 又会把已折过的值当原值记下来（关一次开一次连乘）");
-      if (applySeg.indexOf("SMFIT.rec[it.key] = r") < 0) bad.push("smFitApply 没有「采纳已有原值」的那条路（只有它，才不会再记）");
+      if (/SMFIT\.rec\[it\.key\]\s*=\s*\{/.test(applySeg)) bad.push("smFitApply 里在**新建原值记录**（`SMFIT.rec[it.key] = {`）—— 唯一写入点必须是 smFitCapture");
+      if (applySeg.indexOf("local r = SMFIT.rec[it.key]") < 0) bad.push("smFitApply 没有「读已有记录」的那条路（`local r = SMFIT.rec[it.key]`）");
     }
-    // ③ 抓原值必须在自然档（临时把外框缩放置 1）
+    // ③ ★★★1.75.5 反向（本条判据已**反转**）：抓原值**绝不许**「临时把外框缩放置 1」——
+    //   外框已是 0.70 时那句是真改动 ⇒ 客户端重排/清锚点 ⇒ 紧接着的读全读不到（用户「/reload 后探索层不生效」的真因）；
+    //   正解 = 不翻转、按读回口径归一（详见 `SM MAP KEY CHECK ⑩`）。
     const iCap = sm.indexOf("local function smFitCapture()");
     const iCapEnd = iCap >= 0 ? sm.indexOf("\nlocal function ", iCap + 10) : -1;
     const capSeg = (iCap >= 0 && iCapEnd > iCap) ? sm.slice(iCap, iCapEnd) : "";
-    if (!capSeg) bad.push("没有 smFitCapture（原值必须在自然档抓一次）");
-    else if (capSeg.indexOf("SetScale, wm, 1") < 0) bad.push("smFitCapture 没有「临时把外框缩放置 1」⇒ 抓到的原值可能已经是缩过的值（读回含缩放的客户端）");
+    if (!capSeg) bad.push("没有 smFitCapture（原值必须在会话内存里记一次）");
+    else if (/SetScale\s*,\s*\w+\s*,\s*1\b/.test(capSeg)) {
+      bad.push("smFitCapture 又在翻转外框缩放（`SetScale …, 1`）⇒ 「/reload 后探索层不生效」会复发");
+    }
     // ④ 还原里不许清记录（清了就等于允许重记）
     const iRes = sm.indexOf("local function smFitRestore(");
     const iResEnd = iRes >= 0 ? sm.indexOf("\nlocal function ", iRes + 10) : -1;
