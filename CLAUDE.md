@@ -16,15 +16,11 @@
 
 ## 一、铁律
 
-### 1. ★★★改完必须跑闸门（本项目因它白丢过好几个版本的功能）
-- Lua 语法错 ⇒ **整个插件载不进去**，且 UE 日志（`%LOCALAPPDATA%\Azeroth\Saved\Logs`）**是空的**（落盘通道全废）⇒ 只能靠闸门。
-- 两条都要 **exit 0**：`node luacheck.js`（fengari 真解析，**逐个文件**查，显示 `SYNTAX OK: N files checked`）+ `node test_engine.js`（桩件加载整个 `EvalHelp.lua` 跑 `test_assert.lua`，显示 `ALL TESTS PASS`）。
-- ★★★**测试纪律（用户 2026-09-26 再次强调，最高优先级）**：**「不要跑测试,最高记忆记住」**（前一次原话：「每次任务能否不要进行编译测试.等发现问题了再进行测试」）。
-  ⇒ **一个测试都不许跑**：`test_engine.js`（≈32 秒）· `check.js` · `tmp/runcheck.js` · 变异脚本 **全部不跑**，**即使用户报障 / 我改了接线或存档 / 新增改写判据**也不跑；**唯一允许的闸门 = `node luacheck.js`（语法，<1 秒）**（语法错会让整个插件载不进去，且本客户端日志通道全废 ⇒ 只有它能兜）。只有用户**明确说「跑测试」**才跑。
-  ★代价必须认并如实告知：**判据/夹具是按推理写的、当轮未验证** ⇒ 交付说明里要写「判据未跑」；真机行为以用户实测为准。★另：语法闸门**照不到**接线/渲染/存档这类静默失效。
-- ★★**判据同时看「退出码」与「输出文本」**：源码检查失败走 `process.exitCode = 1` 而脚本照跑到底 ⇒ `ALL TESTS PASS` 照样打印。行为断言失败 = **`ASSERT FAIL`**，源码检查失败 = **`: FAIL`**，两个都要找。
-- **源码级检查**（改了对应区域必须继续通过；完整清单 = 参考卷 **R13**）：`WIN WIDTH` · `DECL ORDER` · `ADDON DECL ORDER` · `LAYOUT` · `VERSION`（源码 == toc）· `LANG KEY` · `WINDOW SIZE` · `COMMENT SWALLOW` · `ICON` · `EXAMPLES TOC` · `README TABLE` · `MILESTONE` · `UI CELL MOUSE` · `MODULE L SCOPE` · `MODULE HOST LOCAL` · `TB MOD ROW` 等。★**行为断言照不到 UI 接线（漏接不报错、只是显示不对）⇒ 必须源码检查补位**。
-- **断言组**：新增功能顺带加组（写在 `test_assert.lua` 末尾，编号递增）。
+### 1. ★★★改完必须跑闸门 = **只有 `node luacheck.js`**（本项目因语法错白丢过好几个版本的功能）
+- Lua 语法错 ⇒ **整个插件载不进去**，且 UE 日志（`%LOCALAPPDATA%\Azeroth\Saved\Logs`）**是空的**（落盘通道全废）⇒ 只有它能兜。判据 = 输出 `SYNTAX OK: N files checked`（fengari 真解析、**逐个文件**）。
+- ★★★**本项目没有测试**（用户 2026-09-26 定案：「**删除tests/下的文件.也不需要测试**」）：`tests/`（7 个源码检查 + 3 个断言组文件）· `test_assert.lua` · `test_engine.js` · `check.js` · `mutate.js` · `tmp/runcheck.js` **已全部删除**（历史仍在 git 里，要考古用 `git show <rev>:<path>`）。
+  ⇒ 以前那套「**断言组 / 源码检查 / 变异验证 / 双闸门 exit 0**」**一律不再维护、也不再跑**；`STATUS`/`CHECK`/变异编号在旧文档与注释里仍会出现 —— 那是**历史记录**，不是现行要求。
+  ★★**代价必须认并如实告知**：行为/接线/渲染/存档/清单结构这类**静默失效不再有自动判据兜底** ⇒ ① 改完**先自查调用点与数据流**（尤其 UI 接线、存档键、事件注册）；② 交付说明里写清「**本轮只过了语法闸门**」；③ 真机实测才是最终判据。★唯一留下的静态助手：`luacheck.js`（语法）+ `scan_dangling.js`/`probe_localorder.js`（文件内 local 顺序，按需手动跑）。
 
 ### 2. ★★★任务/地图类问题 → 先读 UnrealQuest 流程代码（用户 1.70.40：「碰到任务地图相关的问题优先排查任务插件的对应流程代码」）
 - 按问题定位读：定时/生命周期 → `Core/Driver.lua`；当前看哪张图 → `Map/MapContext.lua`（`GetViewedZone`/`Inspect`）；怎么画/何时重绘 → `Map/WorldMapPins.lua`（`ViewSignature`/`Refresh`）；**某 API 能不能用** → `Compatibility/ClientAPI.lua`（实测配方库）；图标素材 → `Map/NpcPins.lua`。
@@ -66,7 +62,7 @@
 
 ### 4.1 架构要点
 - ★★★**工具类功能一律独立文件，`Toolbox.lua` 只做开启/配置入口**（用户 1.74.34）：`tools/<模块>.lua` 自包含（真值 + 自己的存档子树 + 界面控件 + 读值口 + 自己的**有界**计时器）；Toolbox 里只允许「模块行数据 `t="mod", mod=, key=`」与「入口按钮」；机制 = **模块行注册表 `EVAL_TB_MOD_ROWS[mod]`**（模块载入期自登记 ⇒ 与 toc 顺序无关）；判据 = `TB MOD ROW CHECK`。现有：`LayerFix` / `DragFrames` / `SimpleMap` / `RareWatch` 等。
-- ★★★**工具模块的测试三件套归模块自己管**：读值口在 `tools/<模块>.lua`（`EVAL_XX_TEST_*`）· 断言组在 `tests/tools/<模块>.lua` · 源码检查在 `tests/checks/<模块>.js`（`module.exports = function (root) {…}`，harness 里 `require(...)(__dirname)`）；`test_engine.js` **自动加载** `tests/tools/*.lua` 并与磁盘文件数对账；`tests/` **绝不进 toc/发布清单**；判据 = `TOOL TEST FILES CHECK`。
+- ★★★**工具模块的读值口留在模块自己文件里**（`EVAL_XX_TEST_*`）—— 名字带 TEST，但它们是**生产诊断口**（`/eh go …` 探针与真机取证都走它们）⇒ **保留**。★原先配套的「断言组 `tests/tools/<模块>.lua` + 源码检查 `tests/checks/<模块>.js` + `test_engine.js` 载入对账」**已随 `tests/` 一并删除**（用户 2026-09-26：「删除tests/下的文件.也不需要测试」；全清单见铁律 1）。
 - **状态表 `st`（`EVAL_HELP_STATE`）**：所有判定数据 `UPDATE_STATE()` **一次刷新、各处只读**；含 `playerBuffs`/`targetDebuffs`、`castLog`。
 - **规则引擎**：规则 `{ skill, enabled, groups }`，组内 `&`、组间 `|`；`EVAL_RULE_RUN` 顺序执行第一条全过的；核心 = `condOne`/`groupsOK`/`EVAL_PARSE_CONDS`/`EVAL_COND_STR`/`EVAL_GROUP_STR`。
 - **方案数据**：`cfg.war.profiles` + `activeProfile`；`EVAL_WAR_ENSURE_PROFILES` 做缺省迁移。方案切换 = 侧栏/激活选择器/战斗UI 方案行/**Shift+按宏**（Shift 已被占用 ⇒ 方案条件里用 Alt/Ctrl）。
@@ -114,7 +110,7 @@
   · ★两档都走**同一个出口族**：`smFitSay`（常开档：`EVAL_SAY_FORCE`，**不受「调试日志」闸门管**）/ `smFitSayV`（详细档）；**两档都进 `mapFitTrace` 取证环**（安静档只是不上屏 ⇒ `/ehm mapfit trace`、`mapFitCapLog` 事后一律查得到）。
   · ★窗口收口措辞**必须与实际条数挂钩**（0 条时改说「还没读到」——真机出过「0 条也报『已抓到原值』」）。
   · ★同族：`/ehm fitnow`（别名 适配/修正）= 手动适配全过程五步逐步打印（`ShowUIPanel` 开图 → 置自然档 1.00 → **等满 2s** 才读原值 → 逐条打印原值 → 套缩放并打印「设置值/自身 GetScale/父链连乘」→ 折算并逐条打印「原值→写入」），期间 `smFixActive` 让自动逻辑**整段让位**、跑完（**出错也**）必放掉 —— 它属于**用户主动触发**，不受安静档限制（只在敲命令时打）。
-  判据 = 组 253 **+ 组 254 + 组 255 + 组 256** + `SM MAP KEY CHECK`（⑯⑰⑱）；取证 = `/ehm mapfit dump`、`/ehm fitnow`、`/ehm mapfit fresh on|off`。全案 **R20c/R20d**。
+  ★判据/断言组（组 253~256、`SM MAP KEY CHECK` ⑯⑰⑱）**已随 tests/ 删除** ⇒ 现在靠**取证命令**：`/ehm mapfit dump`（只读清单 + 最近 10 次抓原值小结）· `/ehm fitnow`（手动五步）· `/ehm mapfit verbose on|off`。全案 **R20c/R20d**。
 - 多字节字符禁入 Lua `[...]`（按字节匹配）、`|` 非交替：`[:：]` 会吃掉「：」首字节 ⇒ 解析全线静默失效 ⇒ 入口 `colonNorm()` 归一。★`string.sub` 也按**字节**取（前缀判据写错 = 命令静默失效）。
 - 模式里 `%` 是转义符（`%.`/`%%`）；plain 模式找 `%` 写 `"%"`。方括号成对解析用 `[^%]]-`（半/全角分匹配）；空集 ≠ 没写。
 - 主 chunk ≤200 局部队变量；`do...end` 不开函数作用域；`ipairs` 遇 nil 即停。
@@ -144,6 +140,7 @@
 - ★1.73.24~41 弹窗/菜单/滚动条细则 → **R11**。
 
 ### 5.3 测试与断言
+> ⚠️ **本节整体作废（2026-09-26）**：用户定案「**删除tests/下的文件.也不需要测试**」⇒ `tests/` · `test_assert.lua` · `test_engine.js` · `check.js` · `mutate.js` 已全部删除，**以下内容只作历史记录**：当年设计判据的思路（桩的坑、夹具自清、变异验证、载入顺序、握手对账…）仍然值得一读，但**这些文件已经不存在、也没有任何自动判据在跑**。现行的唯一闸门 = `node luacheck.js`（语法），其余靠自查 + 真机实测（见铁律 1）。
 - ★桩默认值也属桩（真帧默认显示、桩 `shown=false` ⇒「没 Hide 却断言 `IsShown()==false`」恒真）；隐式前置改显式建立；桩要记每状态。★★**桩的帧 mock 对未知键返回函数**（truthy）⇒ 判「是不是我们的控件」必须 `字段 == true` / `rawget`。
 - 测试够不着生产 local ⇒ 加钩子走**真实** OnEnter；桩对无效调用要如实无效；tooltip 桩 = 另建对象 + 真 GameTooltip 记账 + 普通 table。
 - ★★★**改了夹具 `TEST.*` 之后必须 `EVAL_HELP_UPDATE_STATE()` 再用**：`condOne` 读**状态表 `st`**（一次刷新各处只读）⇒ 只改 `TEST.*` 不刷新 = 断言看旧值（组 240 第一版即此）。判据 = 「被测代码读的是 `st` 还是桩」。
@@ -186,6 +183,13 @@
 - `GetQuestReward` 会再触发 `QUEST_COMPLETE` ⇒ 三层防护（同名去重/领取窗口闸门/全局频率上限）；`UnitDebuff` 第 3 返回 = dispel token；`UnitMana` 有显示缩放（怒气÷10、幸福÷1000）⇒ 判蓝量前先 `UnitPowerType(unit)==0`。
 - **施法 API 全 Protected**（`CastSpellByName` 仅 onSelf/CastSpell/SpellTargetUnit/SpellStopTargeting/SpellStopCasting）；**`TargetUnit` 非 Protected = 唯一安全路径**（切目标 → `UseAction(slot)` → 还原）。
 - ★★★`CHAT_MSG_PARTY_LEADER`/`CHAT_MSG_RAID_LEADER` 是**独立事件**：接收帧**必须也注册**（只注册 `CHAT_MSG_PARTY`/`RAID` ⇒ 队长一分享**一片都进不来**，且静默）；来源判据 = 触发事件名；发送侧只留 公会/队伍/说；自查 `/eh go 分享事件`；`SHARE RECV EVENTS CHECK`；组 175。
+- ★★★**黑幕（`WorldMapBlackout` / `BlackoutWorld`）遮蔽要两手，缺一不可**（缩放大地图，1.75.5 用户三连： 「地图每次打开.会闪烁一次背景黑幕?这个如何避免?」→「能否直接设置黑幕透明度是0」→「然后关闭地图不要恢复这个背景的透明度」）：
+  ① **`SetAlpha(0)` = 硬抗闪**（客户端每次开图都会自己 `Show` 它、而且**在我们之后** ⇒ 只 `Hide` 的话「开图→藏住」最多空 0.2s = 那一下黑闪；alpha 已 0 则即使被 Show 出来也是全透明）；
+  ② **`Hide()` 必须保留 = 保鼠标** —— ★「**显示着但透明的全屏帧照样吃点击/悬停**」⇒ 只归零 alpha 会让**地图点不动**（比黑闪更糟；源码检查有反向哨兵）；
+  ③ **有界瞬时窗口**：开图那一拍起 `SM_BLACKOUT_SEC`(**0.6s**) 内**逐帧**重申（与「开图后逐拍重申居中」同一手法）⇒ 窗口一过回 0.2s 节拍；
+  ④ **关图不还原**（用户明确要求）：关图只失效窗口，**不写** alpha、不写地图帧的透明度/缩放/位置（客户端下次开图自己 Show，而它保持 alpha=0 ⇒ 下次也不闪）；
+  ⑤ **只有关功能才还原**：`featBlackoutRestore` 唯一调用点 = `featTeardown`；★**改属性前先抓原 alpha**（`FEAT.boA[帧名]`），读不到就记 `false`（关功能时如实说「无法还原、保留现状」，**绝不拿 0 冒充原值**）+ 归零后**读回自证**；
+  ⑥ 动作**单一出口** `featHideBlackout`（featApply / featKeep / tick 瞬时窗口三处调用）；取证行 = 「黑幕遮蔽：开图后 N ms 藏住 M 层」（进 `mapFitTrace`，详细档上屏 ⇒ 不闪了可量化确认）。★原先的 `SM BLACKOUT CHECK` **已随 tests/ 删除** ⇒ 只剩真机看「开图还会不会闪」+ 那条耗时取证行。
 - 纹理路径 = `/Game/Interface/Icons/<名>_TEX`（写错显 ?）；`GetNumMacroIcons`/`GetMacroIconInfo` = 唯一合法路径入口（本机 1033 枚，`doc/图标路径清单.txt` 1018 条且**按字母排序 ⇒ 行号 ≠ 宏图标号**）；`PET ICON CHECK` 校验真存在。★IconSem.lua：基础名须剥 `_TEX`；纹理字面量须在白名单；两反斜杠须按两反斜杠匹配。
 - `api_*.html` = 1370 条索引；**无**：`PlaySoundFile`（只有 `PlaySound`）/`hooksecurefunc`/`Frame:HookScript`/`UIDropDownMenu_GetSelectedID`；**有**：GuildRoster/Who/Friend/NumGuildMembers/NumWhoResults/NumFriends/GuildControlGetNumRanks/GetRealZoneText/RemoveChatWindowMessages/`GameTooltip:SetMinimumWidth`。★`GetWidth`/`GetHeight` **含缩放**（384×512 + 0.7 ⇒ 268.8×358.4）⇒ 与未缩放配置值直接比会假报不符（**R15 ⑥d**）。
 - ★★★**帧名未知的层（候选名解析 + 探针）与「按需出现」的层**：帧名只能**现场探**（UI 编译在 pak 里）⇒ `cands` 候选表 + 唯一解析口 `dfTargetFrame` + 探针 `/edb bars`（先报队友/团员数；单人时候选全不在是正常的）；候选全落空就**如实缺席**（`DF BARS WIRING CHECK` + 组 207）。★**解析到 ≠ 补上了**：队伍/团队框「按需出现」⇒ 配**事件驱动**跟随 `DF_ROSTER_EVENTS`（★`GROUP_ROSTER_UPDATE` 不许当注册依据；1.75.1 起 + 宠物动作条 · 事件 `UNIT_PET`）→ 出现即 `dfApplyOne` + 重贴柄；**有界** `DF_ROSTER_TRIES`（不做常驻轮询）；判据 `DF ROSTER WIRING CHECK` + 组 208；细节 **R15 ⑤/⑥d**。

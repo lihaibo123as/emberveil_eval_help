@@ -1110,6 +1110,15 @@ local SM_DEF_ALPHA, SM_DEF_SCALE, SM_DEF_GUIREOPEN = 0.7, 0.7, false
 --     ★有界（25 拍 ≈ 开图后 5 秒，`featKeep` 的节拍是 0.2s），不是常驻轮询。
 local SM_RECENTER_TICKS = 25
 
+-- ★★★1.75.5（用户报障：「地图每次打开.会闪烁一次背景黑幕?这个如何避免?」）：
+--   **开图瞬时遮蔽窗口**。成因：藏黑幕原来只挂在两个地方 —— `featApply`（在 tick 的 **0.2s 节拍块**里）
+--   与 `featKeep`（同 0.2s 节拍）；而客户端**每次开图都会自己把黑幕 `Show` 出来**（而且是**在我们之后**，见
+--   featKeep 的竞态注释）⇒ 从「开图」到「我们藏住」最多空 0.2 秒 ⇒ 用户看到的就是**黑闪一下**。
+--   修法：开图那一拍起，在下面这个**有界**窗口内**逐帧**重申藏黑幕（`Hide` 对已隐藏的帧是空操作，`IsShown` 极廉价），
+--   窗口一过就回到 0.2s 节拍（不给常驻每帧加负担）。★与「开图后逐拍重申居中」（SM_RECENTER_TICKS）是同一套手法。
+--   取证：`featHideBlackout` 会记一条「开图后 N ms 藏住」（进 mapFitTrace；详细档还会上屏）。
+local SM_BLACKOUT_SEC = 0.6
+
 -- ★★1.74.29 用户定：工具箱→地图功能默认 **缩放 0.7 / 透明 0.7**（原透明默认是 0.75）
 SM_CFG.alpha = tonumber(SM_CFG.alpha) or SM_DEF_ALPHA -- 透明度（Shift+滚轮；1=不透明）
 -- 一次性迁移：老存档里写着的旧默认 0.75 → 0.7（**只改“恰好等于旧默认”的值**，改过的值不动）
@@ -1630,16 +1639,80 @@ local function featBuild(wm)
   end)
 end
 
+-- ★★★1.75.5（用户报障：「地图每次打开.会闪烁一次背景黑幕?这个如何避免?」+ 用户提议：「能否直接设置黑幕透明度是0」）：
+--   **唯一出口** —— 遮蔽那两层黑幕（真凶 `WorldMapBlackout`，`BlackoutWorld` 顺手一起处理；probe8 反向排查定案）。
+--   ★**两手一起做，缺一不可**：
+--     ① `SetAlpha(0)` = **硬抗闪**：即使客户端把黑幕 `Show` 出来，它画出来的也是**完全透明**（不闪）；
+--     ② `Hide()` = **保鼠标**：一个「显示着但透明」的全屏帧**照样会吃掉点击与悬停**（地图点不动 = 比黑闪更糟的 bug）
+--        ⇒ 绝不能用「只归零 alpha 不 Hide」换那点性能（源码检查里有反向哨兵钉这条）。
+--   ★改属性前**先抓原值**（本项目铁律）：原 alpha 记在 `FEAT.boA[帧名]`，关功能时由 `featBlackoutRestore` 还回去；
+--     **读不到原值就不写 alpha**（宁可只 Hide —— 我们已经在用的那条路），绝不拿 0 冒充原值害用户还原不回。
+--   ★为什么要抽成一个函数：原来这段在 `featApply` 与 `featKeep` 各写一份，现在再加上「开图瞬时窗口」就是**第三处** ——
+--     三份循环迟早漂移（本项目铁律：判据/动作单一来源）。
+--   返回：本次真遮住的层数（>=1 才算「遮住过」；0 = 本来就既透明又隐藏）
+local function featHideBlackout()
+  local hid = 0
+  if type(FEAT.boA) ~= "table" then FEAT.boA = {} end -- 原 alpha 记账（每帧名一份）
+  for _, bn in ipairs({ "BlackoutWorld", "WorldMapBlackout" }) do
+    local b = _G[bn]
+    if (type(b) == "table" or type(b) == "userdata") and type(b.Hide) == "function" then
+      local touched = false
+      -- ① alpha 归零（**先抓原值**；读不到就跳过这一步，只做 Hide）
+      if type(b.SetAlpha) == "function" and type(b.GetAlpha) == "function" then
+        if FEAT.boA[bn] == nil then
+          local oka, av = pcall(b.GetAlpha, b)
+          -- 读到了就记下原值；读不到记 `false`（= 已知「无法还原」，关功能时如实说明并保留字段）
+          FEAT.boA[bn] = (oka and tonumber(av)) and tonumber(av) or false
+        end
+        if type(FEAT.boA[bn]) == "number" then
+          local okc, cur = pcall(b.GetAlpha, b)
+          if not okc or tonumber(cur) ~= 0 then
+            pcall(b.SetAlpha, b, 0)
+            touched = true
+          end
+        end
+      end
+      -- ② Hide（保鼠标；★只对「现在显示着」的动手 —— `IsShown` 读不到就照藏，判不出不拦，与 smFitInUse 同口径）
+      local shown = true
+      if type(b.IsShown) == "function" then
+        local ok, v = pcall(b.IsShown, b)
+        if ok then shown = (v == true or v == 1) end
+      end
+      if shown then
+        pcall(b.Hide, b)
+        touched = true
+      end
+      -- ③ **读回自证**（本项目纪律：写成功 ≠ 写进去生效）：alpha 没归零就如实记一笔（不静默）
+      if type(FEAT.boA[bn]) == "number" and type(b.GetAlpha) == "function" then
+        local okv, v = pcall(b.GetAlpha, b)
+        if not okv or tonumber(v) ~= 0 then
+          mfLog("黑幕：%s 的 alpha 归零**没生效**（读回 %s）⇒ 只靠 Hide 顶（客户端可能自己改回不透明）",
+            tostring(bn), tostring(v))
+        end
+      end
+      if touched then hid = hid + 1 end
+    end
+  end
+  -- ★★开图瞬时遮蔽的**耗时取证**（治「开图闪一下黑幕」这条必须能量化：
+      --   开图那一刻起，到我们第一次成功藏住它，中间隔了多少毫秒 —— 这就是用户看到的那一闪）
+  if hid > 0 and (tonumber(FEAT.blackoutAt) or 0) > 0 and not FEAT.blackoutLogged then
+    FEAT.blackoutLogged = true
+    local dtms = ((type(GetTime) == "function") and GetTime() or 0) - tonumber(FEAT.blackoutAt)
+    mfLog("黑幕遮蔽：开图后 %.0f ms 藏住 %d 层（瞬时窗口 %.1fs 内逐帧重申；0.2s 节拍那条路以前最坏要等 200ms）",
+      dtms * 1000, hid, tonumber(SM_BLACKOUT_SEC) or 0)
+    smFitSayV("黑幕遮蔽：开图后 %.0f ms 藏住 %d 层（这一闪就是这么来的；瞬时窗口 = %.1fs）",
+      dtms * 1000, hid, tonumber(SM_BLACKOUT_SEC) or 0)
+  end
+  return hid
+end
+
 -- 开图时应用（幂等）：藏两层黑幕 + 键盘还给游戏 + 透明度/缩放/位置记忆
 local function featApply()
   local wm = featWm()
   if not wm then return end
   featBuild(wm)
   pcall(featRearm) -- ★1.75.9：把关闭时藏起来的拖拽柄/坐标行**重新武装**（否则拖拽移动永久失效）
-  for _, bn in ipairs({ "BlackoutWorld", "WorldMapBlackout" }) do
-    local b = _G[bn]
-    if (type(b) == "table" or type(b) == "userdata") and type(b.Hide) == "function" then pcall(b.Hide, b) end
-  end
+  pcall(featHideBlackout)
   if type(wm.EnableKeyboard) == "function" then pcall(wm.EnableKeyboard, wm, false) end
   featApplyAlpha(tonumber(SM_CFG.alpha) or 1)
   featApplyScale(tonumber(SM_CFG.scale) or 1)
@@ -1666,14 +1739,8 @@ end
 local function featKeep()
   local wm = featWm()
   if not wm then return end
-  for _, bn in ipairs({ "BlackoutWorld", "WorldMapBlackout" }) do
-    local b = _G[bn]
-    if (type(b) == "table" or type(b) == "userdata")
-      and type(b.IsShown) == "function" and type(b.Hide) == "function" then
-      local ok, v = pcall(b.IsShown, b)
-      if ok and v then pcall(b.Hide, b) end
-    end
-  end
+  -- ★1.75.5：与 featApply 共用一个出口（藏黑幕 = 单一来源；开图瞬时窗口见 tick 里的 SM_BLACKOUT_SEC）
+  pcall(featHideBlackout)
   local a = tonumber(SM_CFG.alpha) or 1
   local okA, cur = pcall(wm.GetAlpha, wm)
   if okA and tonumber(cur) and cur ~= a then featApplyAlpha(a) end
@@ -1693,6 +1760,29 @@ local function featKeep()
   if smReopenOn() then pcall(featShowGUI) end
 end
 
+-- ★★★1.75.5（用户提议「能否直接设置黑幕透明度是0」的收尾）：**把黑幕的原 alpha 还回去**。
+--   ★为什么必须有：我们为了抗闪把 `WorldMapBlackout`/`BlackoutWorld` 的 alpha 写成 0（见 featHideBlackout），
+--     那是**改了别人的属性** ⇒ 关功能时必须还原（本项目铁律：改属性前先抓原值，用完还回去）。
+--   ★**读不到原值**（`FEAT.boA[名] == false`）时**不猜**：如实播报「无法还原、保留现状」，绝不拿当前值冒充原值。
+local function featBlackoutRestore()
+  if type(FEAT.boA) ~= "table" then return 0 end
+  local back = 0
+  for _, bn in ipairs({ "BlackoutWorld", "WorldMapBlackout" }) do
+    local b = _G[bn]
+    local orig = FEAT.boA[bn]
+    if (type(b) == "table" or type(b) == "userdata") and type(b.SetAlpha) == "function" then
+      if type(orig) == "number" then
+        pcall(b.SetAlpha, b, orig)
+        back = back + 1
+      elseif orig == false then
+        P("黑幕 " .. tostring(bn) .. "：当初**读不到原始透明度** ⇒ 不猜、保留现状（可能仍是我设的 0）")
+      end
+    end
+  end
+  FEAT.boA = {} -- 释放记账（下次开启重新抓原值）
+  return back
+end
+
 -- ★★★1.75.9 新增（用户要求：「在开启/关闭大地图缩放要做好探索层纹理的事件清理」）：
 --   **关闭时把自己装上去的东西收干净** —— 这是「关掉零动作」最容易漏掉的一半：
 --     · 坐标行的 OnUpdate：摘掉 + 清空文本 + Hide（它挂在地图帧下，旧版关掉后照样每 0.1s 算一次）；
@@ -1700,8 +1790,13 @@ end
 --     · `UISpecialFrames`：**只有我们自己插进去的那一项**才拿掉（`FEAT.escAdded` 记账）；
 --     · 滚轮处理器：**不摘链**（摘链会连客户端原生滚轮一起弄丢），而是在处理器开头加 enabled 门（见 featWheelOn）。
 --   ★**不清 `SMFIT.rec` / 存档原值** —— 那是「真原值」，留着才能在下次开启时把几何还原（见 smFitApply 的注释）。
+--   ★1.75.5 追加：**黑幕的原 alpha 也要还回去**（featBlackoutRestore）—— 跟几何原值同一个道理。
 local function featTeardown()
   FEAT.torn = true
+  -- ★1.75.5：先还黑幕透明度（它是「我们改过的别人的属性」）
+  local nAlpha = 0
+  local okA, na = pcall(featBlackoutRestore)
+  if okA then nAlpha = tonumber(na) or 0 end
   -- ★★★1.75.9 修（用户报障：「这个界面在世界地图拖拽移动功能失效」）：**只 Hide，不摘 OnUpdate**。
   --   旧写法在这里把坐标行的 OnUpdate 摘了，而 `featBuild` 有一次性守卫（`FEAT.built`）⇒ 再开启时既不再建、
   --   也不会 Show ⇒ **拖拽柄/坐标行永久消失**（拖拽移动直接失效）。
@@ -1716,6 +1811,8 @@ local function featTeardown()
     end
     FEAT.escAdded = false
   end
+  FEAT.blackoutUntil, FEAT.blackoutAt, FEAT.blackoutLogged = 0, 0, false -- 瞬时窗口也收掉
+  mfLog("关闭收尾：黑幕透明度还原 %d 层（原 alpha 由 featBlackoutRestore 写回）", nAlpha)
 end
 
 -- ★★★1.75.9 新增：**再武装**（关闭时藏起来的件，开启时必须回来）—— 与 featTeardown 成对，缺一半就是上面那个真机 bug。
@@ -2903,6 +3000,27 @@ do
       accFit = accFit + dt
       -- ① 每帧廉价探测：地图开没开 + **真有效缩放**（各一次 pcall，别做几何扫描）
       local open = featOpenNow()
+      -- ★★★1.75.5（用户报障：「地图每次打开.会闪烁一次背景黑幕?这个如何避免?」）：**开图瞬时遮蔽窗口**。
+      --   成因：藏黑幕原来只挂 0.2s 节拍，而客户端**每次开图都会自己把黑幕 Show 出来、而且是在我们之后**
+      --   ⇒ 从「开图」到「藏住」最多空 0.2 秒 = 用户看到的那一闪。
+      --   修法：开图那一拍起，在 `SM_BLACKOUT_SEC` 窗口内**逐帧**重申藏黑幕（已隐藏时是空操作、`IsShown` 极廉价）；
+      --   窗口一过就回到 0.2s 节拍（不常驻每帧）。★与「开图后逐拍重申居中」同一套手法、同样**有界**。
+      do
+        local nowT = (type(GetTime) == "function") and GetTime() or 0
+        if open and not SMFIT.open then
+          -- 刚开图：开窗 + 记起点（`featHideBlackout` 用它算「开图后多少毫秒才藏住」并记进取证环）
+          FEAT.blackoutUntil, FEAT.blackoutAt, FEAT.blackoutLogged = nowT + SM_BLACKOUT_SEC, nowT, false
+          pcall(featHideBlackout)
+        elseif open and (tonumber(FEAT.blackoutUntil) or 0) > nowT then
+          pcall(featHideBlackout) -- 窗口期内逐帧重申（客户端可能在我们上一拍之后又 Show 出来）
+        elseif not open then
+          -- ★★★1.75.5（**用户明确要求**：「然后关闭地图不要恢复这个背景的透明度」）：
+          --   关图**只失效瞬时窗口**，**绝不**去还原黑幕的 alpha（也不还原地图帧的透明度/缩放/位置）——
+          --   客户端下次开图会自己 Show 黑幕，而它保持 alpha=0 ⇒ **下次开图也不会闪**（这正是这一步的意义）。
+          --   ★原 alpha 只在**关掉功能**那条路还回去（`featTeardown` → `featBlackoutRestore`，唯一调用点）。
+          FEAT.blackoutUntil, FEAT.blackoutAt, FEAT.blackoutLogged = 0, 0, false
+        end
+      end
       -- ★★★1.75.5：**地图身份对齐必须排在「抓原值窗口」之前** —— `smFitNewMap` 会把窗口清零（换图要重新判定），
       --   若它排在窗口块之后，就会在**同一拍**把刚开的窗关掉、紧接着的折算分支又会去写缩放
       --   （组 254⑧「取原值期间一个缩放都不写」实测抓到过这一次写入）。

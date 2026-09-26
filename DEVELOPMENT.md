@@ -14,18 +14,20 @@
 → **`tools/HunterHelper.lua`（猎人助手 · 一键喂食，1.74.5）** → **`tools/ConsumableHelper.lua`（消耗品助手 · 多选横排各自点用，1.74.5）**。 → **`tools/DismountHelper.lua`（骑乘助手 · 一键下马，1.74.7）** → **`tools/RareWatch.lua`（稀有提醒转播独立模块，1.74.27）**
   跨文件共享走全局桥：Core 导出 EVAL_SAY/EVAL_LOGLINE/EVAL_UIOFFSCREEN 等，Engine 导出 EVAL_WSLOTS/EVAL_WICON/EVAL_GROUPS_OK 等，
   UI 层文件顶部别名块本地化；
-  ★**新增 .lua 模块要同时改三处**：`EvalHelp.toc`、`test_engine.js` 的装载数组、`DECL ORDER CHECK` 的文件清单；
-  ★**新增 `examples/*.lua` 只需两处**：`EvalHelp.toc` + `test_engine.js` 装载数组（它们没有顶层 local）。
-  ★**改动后两个命令全跑**：`node luacheck.js`（只做 EvalHelp.lua 的整文件语法编译）+ `node test_engine.js`
-  （打桩加载**整棵树**并跑断言 —— 其它文件的语法错误也在这一步暴露）。
+  ★**新增 .lua 模块要同时改两处**：`EvalHelp.toc`（顺序 = 载入顺序，共用件放前面）+ **发布包清单**（参考卷打包脚本的 Copy-Item 行；子目录模块尤其容易漏）。
+  ★**新增 `examples/*.lua` 只需一处**：`EvalHelp.toc`（它们没有顶层 local）。
+  ★**改动后只跑一个命令**：`node luacheck.js`（fengari 逐文件真解析 —— **唯一的语法闸门**）。
+  ★★**本项目没有测试**（用户 2026-09-26 定案：「删除tests/下的文件.也不需要测试」）：`tests/`、`test_assert.lua`、`test_engine.js`、`check.js`、`mutate.js` 已全部删除
+  ⇒ 行为/接线/渲染/存档这类**静默失效没有自动判据兜底**，改完请**自查调用点**并**进游戏实测**。
 -  SavedVariables：`EVAL_HELP_CONFIG`（落盘于 `%LOCALAPPDATA%\Azeroth\Saved\Account\<账号>\SavedVariables\EVAL_HELP.lua`，小退/重载时写入）。
 
 ## ⚠️ 提交前必做
 
 ```
-node luacheck.js     # fengari 全量 Lua 解析；SYNTAX OK 才算完（报错带行号）
-node test_engine.js  # 逻辑冒烟测试：打桩 WoW API 加载整个插件，跑 test_assert.lua 断言；ALL TESTS PASS 才算完
+node luacheck.js     # fengari 逐文件全量 Lua 解析；SYNTAX OK 才算完（报错带文件名 + 行号）
 ```
+★**测试已于 2026-09-26 全部删除**（用户定案「删除tests/下的文件.也不需要测试」）——原先的 `node test_engine.js`（打桩加载整棵树 + 断言 + 源码检查）**不再存在**；
+所以除语法外的失效（接线漏接、渲染不对、存档键写错、清单过时）**只能靠自查 + 真机实测**，请务必在 `/reload` 后按改动点自己走一遍。
 
 **Lua 整文件编译**：一处语法错误 = 整个插件静默不载入，游戏日志看不到。曾有两处 `end)` 多括号导致三个版本白发。
 **版本号只有两处**：`EvalHelp.lua` 的 `local VERSION` + `EvalHelp.toc` 的 `## Version`（`VERSION CHECK` 守着两侧一致）。
@@ -61,7 +63,7 @@ node test_engine.js  # 逻辑冒烟测试：打桩 WoW API 加载整个插件，
 9. **出发布包 + 建 Release 页**：打包 `EvalHelp-vX.Y.Z.zip`（放 `Interface/AddOns/` 下，顶层一个 `EvalHelp\`，内容 = `.toc` 实际清单，
    ★装完核对条目数）→ 在 gitee / github 网页建 Release（**需要 API token，AI 做不了** → 如实告知用户去建，并给全 URL/标题/说明/附件）。
 
-> ★发布前必跑：`node luacheck.js` + `node test_engine.js` 双绿；提交用 `git add <明确路径>`（**不要** `git add -A`）。
+> ★发布前必跑：`node luacheck.js`（`SYNTAX OK`）—— ★测试框架已于 2026-09-26 删除，**再没有第二道闸门**；提交用 `git add <明确路径>`（**不要** `git add -A`）。
 > ★推送：分支 `master`；远端 `origin`=gitee、`github`=github（用默认密钥 `~/.ssh/id_rsa`，别指定 `gitee_id_rsa`）。
 
 ## 架构地图（`EvalHelp.lua` 段落顺序）

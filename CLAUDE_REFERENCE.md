@@ -95,9 +95,9 @@ Remove-Item $staging -Recurse -Force
 ```
 ★**装完必须核对条目数**（1.75.1 基准 = **75 个**：+`quest/QuestData.lua`、`quest/QuestBulk.lua`、`quest/QuestChains.lua`（1.75.9 新增 QuestBulk = 全量任务/装备数据）；1.74.34 时是 72（+`tools/LayerFix.lua` 图层特殊处理独立模块）；1.74.30 时是 71（+`tools/DragFrames.lua` 框拖拽从子插件搬进工具模块）；1.74.29 时是 70；1.74.27 时是 69（+`tools/RareWatch.lua`）；1.74.12 时是 68、1.74.6 时是 66、1.73.5 时是 63；1.74.5 陆续加了 `tools/IconGrid.lua` / `tools/HunterHelper.lua` / `tools/ConsumableHelper.lua`，1.74.7 加 `tools/DismountHelper.lua`）：
   少一个就是缺文件，用户装了会**直接报错**。
-  ★这一条与上面的模块清单都有源码检查 `PACK LIST CHECK` 守着（清单与 .toc 逐个比对 + 基准数按打包口径现算），过时当场 FAIL。
-★**不装**：`luacheck.js`/`test_*.lua`/`test_engine.js`（测试）、`preview/`（截图）、`node_modules/`、
-`api_*.html`、`.git/`、`bindings/`、`_icons_scan/`、`pay/`。
+  ★这一条与上面的模块清单原先都有源码检查 `PACK LIST CHECK` 守着（清单与 .toc 逐个比对 + 基准数按打包口径现算）—— ★**该检查随 `tests/` 一起删除了**（2026-09-26）⇒ 现在**出包必须人工核对**：先数 `Add-Type … OpenRead($out).Entries.Count`（应为 **75**），再用上面那条「允许反斜杠」的正则把 toc 里 36 个模块逐个比一遍（两条都打印结果，别只看 75）。
+★**不装**（2026-09-26 更新：测试文件已全部删除，下面这份「不装清单」里只剩与**发布**有关的项）：`preview/`（截图）、`node_modules/`、
+`api_*.html`、`.git/`、`bindings/`、`_icons_scan/`、`pay/`、`luacheck.js`/`test_stub.lua`/`tmp/`（开发用，不随包）。
 ★★**出包实测两个坑（1.75.5，务必照做）**：
   ① **别把脚本存成 `.ps1` 再 `& 文件`** —— 本机执行策略会拦（`… is not digitally signed … PSSecurityException`）
      ⇒ 用 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "tmp\pack_x.ps1"`，或**把脚本内联**进命令（内联不受策略管）。
@@ -169,13 +169,14 @@ Remove-Item $staging -Recurse -Force
 ## 七、开源仓库 / 官方 API 文档 / 待开发计划
 
 ### 7.1 开源仓库（1.21.0 起）
-- 库内含：`README.md`（开源门面 + `preview/` 界面图）、`CHANGELOG.md`（更新日志详情）、`DEVELOPMENT.md`（开发者指南）、`CLAUDE.md`（AI 记忆体副本，改主记忆后同步过去）、`luacheck.js`、`test_engine.js`/`test_stub.lua`/`test_assert.lua`（冒烟测试）、`example/zs_wq.md`。
+- 库内含：`README.md`（开源门面 + `preview/` 界面图）、`CHANGELOG.md`（更新日志详情）、`DEVELOPMENT.md`（开发者指南）、`CLAUDE.md`（AI 记忆体副本，改主记忆后同步过去）、`luacheck.js`（**唯一的语法闸门**）、`test_stub.lua`（本客户端 WoW API 桩，`quest/probe_*.js` 离线数据探针用）、`example/zs_wq.md`。
+  ★★**2026-09-26 用户定案「删除tests/下的文件.也不需要测试」**⇒ 原先随库的 `test_engine.js`/`test_assert.lua`/`tests/`（7 个源码检查 + 3 个断言组）/`check.js`/`mutate.js` **已全部删除**（git 历史里还在，`git show <rev>:<path>` 可取）。
 - **更新日志维护规则（1.28.0 起，用户定）**：① 详情写 `CHANGELOG.md` 的 `## 🎯 vX.Y.Z — 主题` 小节（要点/典型用法/设计亮点，配一个 emoji）；② README 顶部「更新日志」速览表加一行（`| **X.Y.Z** | emoji 主题 | 一句话亮点 |`，**最新在上**）；③ **README 不再放版本详情**（保持精简）。
 - **`preview/` 图片只用用户提供的**（当前 main.png=全局页 / cfg.png=一键宏设置页 / skill_cfg.png=技能编辑窗 / info.png=战斗信息UI+状态信息UI）；我加的截图已被用户要求删除——**别再自行往里放图**。
 
 ### 7.2 官方 API 文档（用户提供 2026）
 - **Lua API 清单：https://emberveil.org/wiki/lua**（1370 条目，页面内嵌**全量 JSON 索引可脚本解析**；分类页如 `/wiki/lua/globals/Action` 有签名 + 返回值文档）。
-- ★**本机就是游戏主机**：EmberVeil 与 TurtleWoW 都在本机，改码 → `node luacheck.js`/`test_engine.js` → `/reload` 实测都在同一台机器上完成（推送 gitee 仅为备份/发布）。
+- ★**本机就是游戏主机**：EmberVeil 与 TurtleWoW 都在本机，改码 → `node luacheck.js`（**唯一闸门**；测试已删，见 §7.1）→ `/reload` 实测都在同一台机器上完成（推送 gitee 仅为备份/发布）。
 
 ### 7.3 待开发计划（搁置项）
 - **免疫学习器**（✅ 1.36.0 已完成实装：探针验证 → 事件解析 → 学习表 → 引擎跳过；探针 `/eh go probe immune/dump` 保留作诊断工具）：
@@ -188,20 +189,15 @@ Remove-Item $staging -Recurse -Force
 
 - **插件目录**：`G:\game\u5wow\Azeroth\Binaries\Win64\Games\Emberveil\live\Azeroth\Interface\AddOns\EvalHelp\`（1.21 后由 EVAL_HELP 改名 **EvalHelp**；★**目录名 == toc 基名**才加载；改名时游戏必须关闭，否则 Access denied）。
 - **文件结构（1.39.0 起模块化，不是单文件）**：`EvalHelp.toc` + `Locales/{zhCN,enUS,ruRU}.lua` + `Core.lua`（输出/i18n/状态采集）+ `Engine.lua`（规则引擎）+ `EvalHelp.lua`（UI/斜杠命令/init）+ `Toolbox.lua`（工具箱 Tab3）+ `DataSearch.lua`（数据检索 Tab4）+ `Share.lua`（方案分享，1.71.0）+ `IconBrowser.lua`（图标库 Tab5）+ `PetData.lua`/`PetHelper.lua`（抓宠 Tab6，1.73.0）+ `IconSem.lua`（**图标语义表**，1.73.5）+ **`tools/IconGrid.lua`（通用图标网格选择器，1.74.5：单选/多选、高度自适应、分页、滚轮、夹取） + `tools/HunterHelper.lua`（猎人助手 · 一键喂食） + `tools/ConsumableHelper.lua`（消耗品助手 · 多选横排各自点用）—— 都在 `tools/` 子目录里**
-  + `examples/*.lua`（**11 个数据文件**）；文档 `README.md`/`README_en.md`/`README_ru.md`/`CHANGELOG.md`/`DEVELOPMENT.md`/`CLAUDE.md`；测试 `luacheck.js`/`test_engine.js`/`test_stub.lua`/`test_assert.lua`。**行数随开发变化，别当固定值引用**。
+  + `examples/*.lua`（**11 个数据文件**）；文档 `README.md`/`README_en.md`/`README_ru.md`/`CHANGELOG.md`/`DEVELOPMENT.md`/`CLAUDE.md`；开发用 `luacheck.js`（语法闸门）+ `test_stub.lua`（API 桩）+ `tmp/`（草稿，gitignore）。★**测试文件已全部删除**（2026-09-26）。**行数随开发变化，别当固定值引用**。
 - ★**toc 载入顺序（以 `EvalHelp.toc` 为唯一真值）**：`Locales/{zhCN,enUS,ruRU}` → `Core` → `Engine` → `EvalHelp` → **`examples/*`（11 个数据文件，必须排在 EvalHelp.lua 之后）** → `Toolbox` → `DataSearch` → `Share` → **`IconSem`** → `IconBrowser` → `PetData` → `PetHelper` → **`tools\IconGrid.lua`（共用网格件，必须在两个助手之前）** → **`tools\HunterHelper.lua`** → **`tools\ConsumableHelper.lua`**（★`EXAMPLES TOC CHECK` 守着「磁盘 ↔ .toc 双向一致 + 顺序 = 选单顺序」；`IconSem` 必须在 `IconBrowser` **之前**——后者读它的 `EVAL_ICON_SEM`）。
   ★子目录模块（`tools/`）在 toc 里写 **`tools\HunterHelper.lua`**；它们**载入期零副作用**（只定义函数与常量），图标帧在用户打开开关时才建。
   ★**共用件纪律**：喂食与消耗品助手共用 `tools/IconGrid.lua`（网格 + `EVAL_IG_SCAN_BAGS` 扫背包 + `EVAL_IG_TOPLEFT` 位置换算）——
     同一内容不许两处各写（本项目铁律）；1.74.5 实踩一次「`IG.pages` 一名两义」（页号表被总页数覆盖 → 选完食物点格子报错且不收起），已拆成 `pageOf`/`pages`。
-- ★**新增 .lua 模块要同时改四处**：① `EvalHelp.toc` 载入列表；② `test_engine.js` 的加载数组
-  （**7 处清单**：DECL ORDER / LANG KEY / LANG SOURCE（自动发现，已含 `tools/`）/ COMMENT SWALLOW /
-  FRAME NAME CLASH / COLOR CODE LEN / 主加载循环 —— 漏一处就是那一类检查的盲区，本项目踩过）；
-  ③ `DECL ORDER CHECK` 的文件清单（**目前 13 个**：EvalHelp/Core/Engine/Toolbox/DataSearch/Share/IconSem/
-  IconBrowser/PetData/PetHelper/**tools/IconGrid**/**tools/HunterHelper**/**tools/ConsumableHelper**）；④ ★**发布包清单**（第 9 步的 Copy-Item 行）——
-  **放进子目录时尤其容易漏**：1.74.5 实事故预警 = `PACK LIST CHECK` 旧判据只看「顶层 .lua」，
-  子目录模块被静默漏掉（本地测试全绿、出包缺文件、用户装了报错）
-  → 判据已扩成「toc 里带路径的 `.lua`：要么逐个列出、要么所在目录被 `Copy-Item -Recurse` 整拷」，基准数也把 `tools/` 数进去。★1.73.5 实事故：新增 `IconSem.lua` 后**主加载循环**漏加 → `EVAL_ICON_SEM` 在测试里是 nil，图标库语义/过滤整组断言**全红**（这正是「检查存在 ≠ 覆盖到位」）。
-- ★**案例模版数据文件（1.71.2 新增 `examples/*.lua`）只需改两处**：`EvalHelp.toc` + `test_engine.js` 加载数组（它们没有顶层 local，故不进 DECL ORDER 清单）。
+- ★**新增 .lua 模块要同时改两处**（2026-09-26 起；原先的「四处」里有三处属于已删除的测试框架）：① `EvalHelp.toc` 载入列表（**顺序有意义**：共用件在被用者之前）；② ★**发布包清单**（第 9 步的 Copy-Item 行 / 参考卷打包脚本）——
+  **放进子目录时尤其容易漏**：1.74.5 实事故 = 旧判据只看「顶层 .lua」，子目录模块被静默漏掉（本地全绿、出包缺文件、用户装了报错）⇒ 打包脚本对 `tools/`/`quest/` 是**整目录拷或逐个列**，出包后人工核对 75 条目 + toc 36 模块（见上文出包两坑）。
+  ★原「② test_engine.js 加载数组 / ③ DECL ORDER 清单」随测试框架删除而作废 —— 但**别因此忘了 `EvalHelp.toc`**：漏一个模块 = 那个文件根本不载入（真机表现为功能静默缺失）。
+- ★**案例模版数据文件（1.71.2 新增 `examples/*.lua`）只需改一处**：`EvalHelp.toc`（它们没有顶层 local，故也无所谓声明顺序；★原先还要同步 `test_engine.js` 加载数组，那份已删）。
 - ★**在途（未发版）**：**1.74.5 猎人助手 · 一键喂食**（`tools/HunterHelper.lua` + 工具箱「猎人助手」分组）：
   · 交互 = 图标**左键一键喂食** / **右键选背包食物**（选完图标变该食物）；食物**只存名字**，每次实时重解析包格。
   · 「选食物」= **背包式图标网格**（用户要求「图标搭配 tooltip，类似背包四方格布局 8×N」）：8 列 × 5 行 = 40 格/页，
@@ -298,8 +294,8 @@ Remove-Item $staging -Recurse -Force
   - **硬依赖**：地图/图钉/坐标/tooltip 全部复用 UnrealQuest API（1.70.9 用户拍板，自实现回退已删）；引用它的素材必须**原样抄它的路径常量**。
   - **分层**：`EVAL_DS_SEARCH`/`DETAIL`/`SHOWMAP` 逻辑层与 UI 分离，可 node 直测；反查索引懒构建 + 会话缓存。
   - **标注层**：统一单池 + 16 类别 + 地图绑定（`DS_ANN_MAX=500`）；**tick 帧必须挂 `WorldFrame`**（挂 `UIParent` 会因全屏地图隐藏 UI 而整个停摆）。
-  - **测试**：组 42 系列（搜索/详情/地图/标注层/日志通道）+ 组 61~65（窗口尺寸/剩余时间/依赖提示/真实接线）。
-- **自查清单**：任何 .lua 改完必跑 `node luacheck.js` + `node test_engine.js`（见第一节铁律 1），**两条都要 exit 0**。
+  - **测试**：原先有组 42 系列 + 组 61~65（窗口尺寸/剩余时间/依赖提示/真实接线）—— ★**测试框架已于 2026-09-26 删除**，这些组不再存在（历史见 git）。
+- **自查清单（2026-09-26 起）**：任何 .lua 改完**只跑 `node luacheck.js`**（语法闸门，必须 `SYNTAX OK`）；★**没有测试了**（用户定案「删除tests/下的文件.也不需要测试」）⇒ 接线/渲染/存档/清单这类静默失效**没有自动判据兜底**，只能靠**改完自查调用点 + 真机实测**（详见常驻卷铁律 1）。
 
 ## 九、版本要点汇总（最近 10 版，每版一行；完整记录见 CHANGELOG.md 与 git log）
 1. **1.75.5** — 🗺 **探索层原值只在会话内存 · 关图即清空 · 每次开图重新读并重新缩**（用户提问 + 用户要求三连定案）：
@@ -364,7 +360,7 @@ Remove-Item $staging -Recurse -Force
 2. node 脚本按**标题锚点**取整段（`findOne` 断言命中唯一、`secEnd` 找下一个标题），**原文照存**追加到参考卷新编号节（§十），常驻卷原地换成「索引 + 铁律 + CHECK 名」。
 3. 锚点命中数 ≠1 直接 `exit 2`；替换**从后往前**做，行号不漂移。
 4. 常驻卷补**指向新节的索引**（顶部导览 + 末节「什么时候必须去读参考卷」）。
-5. 跑 `node luacheck.js` + `node test_engine.js`：★`PACK LIST CHECK` 从**参考卷**读第 9 步打包清单 ⇒ 新节必须**追加在它之后**（本次追加在 §九、§十 之后，检查仍绿）。
+5. ~~跑 `node luacheck.js` + `node test_engine.js`~~ → **2026-09-26 起只跑 `node luacheck.js`**（测试框架已删除）：出包前**人工核对**第 9 步的打包清单（75 条目 + toc 36 模块，见上文「出包实测两个坑」）。
 6. **一次 commit**（别边改边提交，避免整卷被反复注入）。
 
 ### 11.4 ★★★2026-09-25 大压缩（用户：「先压缩下记忆体.整理流水账的版本记录.提取关键的最终有价值的记忆保存」）
@@ -445,7 +441,7 @@ Remove-Item $staging -Recurse -Force
 - **首屏「空着」是数据事实**（`quest/probe_chainlist.js`）：任务线一行最多 6 个奖励图标（装备视图每行 1 个）⇒ 同屏待抓件数最多 4 倍；10-19 档 17 行只有 2 行有奖励。★量「第几轮才轮到」**必须逐轮模拟**（拿「行序位次 × 2s」当等待时间是错的）。
 - **顺滑/交互杂项**：`EnableMouse` 是 EditBox 能聚焦的前提（**漏了 ⇒ 一个字都打不进**，用户报的「输入框无法输入」就是这个）；修法四件套 = `EnableMouse` + 点击聚焦兜底按钮 + `SetJustifyH("LEFT")` + 字体链三级兜底；渲染层双 nil 守卫（`EVAL_DD_OPEN`/`DD_FILTER` 收到非表不许报错）；放大镜 = `EVAL_DS_SEARCH_NAME(词)` → `pcall(EVAL_HELP_CFG_SETTAB, 4)` → 回执行（**先送词再切 tab**，照抄 `EVAL_PH_JUMP`）；任务行左侧贴**黄色感叹号**（与数据检索列表同一张图）+ 拼 `LvNN`（`EVAL_QC_QUEST_LEVEL(id)`，查不到如实 nil）。
 - ★★★**`local function` 的声明位置即契约**：`EVAL_QP_SCROLL` 用了声明在其后的 `qpFillList` ⇒ 真机 `attempt to call global 'qpFillList' (a nil value)`。**结构性修法** = 前向声明 `local qpFillList` + 定义写 `qpFillList = function()`；★配套新闸门 **`LOCAL ORDER CHECK`**（`probe_localorder.js` 做真词法分析：块栈收支平衡 · 字段名/方法名不算引用 · `--selftest` 7 条夹具 · 扫 toc 全部 .lua）。★**扫描判据前必须先摘注释**（首轮就是被自己注释里的 `` `local function qpFillList()` `` 字面量误报）。
-- **闸门**：`QUEST TOC CHECK`（三文件顺序 QuestData→QuestBulk→QuestChains · 磁盘↔toc 双向 · 生成物纯数据 · 行数/系列数下限 · 任务行分隔符个数）+ `QUEST WIRING CHECK` + `QUEST PANEL CHECK` + 组 191/192/228；**省时闸门** `node check.js`（luacheck + test_engine 并行 28s / `--quick` 6.5s 跳过组 192 并**如实打 SKIPPED** / `--full` 追加 audit / `--selftest`）—— ★实测**组 192 独占 22s**（1300 行断言 × 每次刷新跑 673 条全量检索 + 17 行重绘）。`mutate.js` 默认不再全量且**中断自动还原**。
+- **闸门**（2026-09-26 更新：原先那套 `*CHECK` + 组 191/192/228 已随测试框架删除）：**数据侧** = `node quest/audit.js`（生成物/装备↔任务/任务线完整性，硬错误阈值 0；★含 **H 段**：解析生成物，任何系列步骤既不在 q 表也不在 sn 表即硬错）+ **语法侧** = `node luacheck.js`；★任务线改动**必须人工抽查**：搜一条经典线（如「爱与家庭」→ 应命中「救赎」第 4/5 步、**行里不许出现 `#id`**）。`mutate.js`/`check.js` 已删除。
 - **变异编号**（全部 CAPTURED）：M20~M81（数据层 kinds / 单选 / 截断位置 / 排队顺序 / 排序键 / 前向声明 / 审计对账 / 泵挂载与限频…）。
 - ★★**工具坑**：`node xx.js > log.txt` 在 PowerShell 里写出 **UTF-16LE**（node 读回中文全乱码）⇒ 写日志用 `| Out-File -Encoding utf8`；★`Get-Content`/`Set-Content` 往返改含中文源码**不可逆写坏**（103 处 U+FFFD）⇒ 只用 edit/write 工具或 node 脚本。
 ## 附录 R：从常驻卷（CLAUDE.md）清理迁入的判据详案（不自动载入）
