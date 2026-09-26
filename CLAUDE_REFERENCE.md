@@ -98,6 +98,13 @@ Remove-Item $staging -Recurse -Force
   ★这一条与上面的模块清单都有源码检查 `PACK LIST CHECK` 守着（清单与 .toc 逐个比对 + 基准数按打包口径现算），过时当场 FAIL。
 ★**不装**：`luacheck.js`/`test_*.lua`/`test_engine.js`（测试）、`preview/`（截图）、`node_modules/`、
 `api_*.html`、`.git/`、`bindings/`、`_icons_scan/`、`pay/`。
+★★**出包实测两个坑（1.75.5，务必照做）**：
+  ① **别把脚本存成 `.ps1` 再 `& 文件`** —— 本机执行策略会拦（`… is not digitally signed … PSSecurityException`）
+     ⇒ 用 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "tmp\pack_x.ps1"`，或**把脚本内联**进命令（内联不受策略管）。
+     ★另：`pwsh` 写进 `.ps1` 的**中文注释**在 Windows PowerShell 5.1 下会按 GBK 读成乱码（无 BOM 的 UTF-8）⇒ 检查脚本**只写 ASCII**最稳。
+  ② **核对条目数必须是真判据**：toc 里的模块路径用的是**反斜杠**（`Locales\zhCN.lua` / `quest\QuestData.lua` / `tools\SimpleMap.lua`），
+     比对正则只写正斜杠 ⇒ 匹配 **0 条** ⇒ 「0 条没缺文件」= **假绿**（1.75.5 出包当场撞到）。
+     正解 = `'^([A-Za-z0-9_\-\\/]+\.lua)\s*$'` + 把 toc 名里的 `\` 归一成 `/` 再比 zip 条目；**先打印「比到几条」**（1.75.5 = 36 个 toc 模块 / 75 条目）。
 
 **推送信息**：分支 `master`；远端 `origin`=gitee（`git@gitee.com:xeval/emberveil_eval_help.git`）、`github`=`git@github.com:lihaibo123as/emberveil_eval_help.git`（1.29.0 起双远程，每次**两端都推**：`git push origin master && git push github master`；本地仓库 = 插件目录本身）；★推送用**默认密钥 `~/.ssh/id_rsa`**（`gitee_id_rsa` 未被授权，别用 `-i` 指定它）。
 ★★**两个库一律走 SSH（`git@xxx` 形式）+ 本机默认密钥** —— 用户 1.72.0 明确：「发布两个库，记住都走 git@xxx 本地密钥形式」。
