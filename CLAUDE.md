@@ -51,7 +51,7 @@
 1. **拖动柄必须用 Button**（Frame 的 `OnDragStart` 不触发）；`SetFrameLevel(父+10)` 抬高（**用 strata 抬高是在案的失败法**）；`EnableMouse` + `RegisterForClicks` + `RegisterForDrag`；`StartMoving` 前 warm-up 两步。
 2. **strata 陷阱**：配置窗是 DIALOG；其上方弹窗（技能编辑窗/导入导出窗）必须**同 DIALOG + `SetFrameLevel(90~100)`**（MEDIUM/HIGH 会被盖住）；弹窗也要 `uiOffscreen` 越界回归。
 3. **纯色纹理**只有 `Interface\Buttons\WHITE8X8` + `SetVertexColor` 可靠。
-4. **无原生 Slider / 无下拉控件**：滑条 = 自制轨道 + 拇指；**下拉一律 `EVAL_DD_OPEN(锚点, 选项, 回调)`**（UIParent+DIALOG+level250，多列 12 行/列，贴屏底自动上翻；宿主窗口 `OnHide` 里调 `EVAL_DD_HIDE()`）。
+4. **无原生 Slider / 无下拉控件**：滑条 = 自制轨道 + 拇指；**下拉一律 `EVAL_DD_OPEN(锚点, 选项, 回调)`**（UIParent+DIALOG+level250，多列 12 行/列，贴屏底自动上翻；宿主窗口 `OnHide` 里调 `EVAL_DD_HIDE()`）。★**弹出层两条硬事实（1.75.13）**：① **抬高父帧不带动子件** —— 行与搜索框都是绝对层帧，必须**逐个 `SetFrameLevel`**（不抬 = 背景盖住行「黑框」/ 行被埋「点不动」，本项目已踩两次）；② **「点弹窗外即关」= 宿主自建全屏捕获 Button**（挂 `UIParent`、level = 弹窗 − 5、点了 → **唯一隐藏出口**），该出口必须把它一起隐藏（否则留一个吃点击的空层）。
 5. **可见性契约**：显隐走**显式控件清单** Show/Hide，不靠父子传播（容器 `EnableMouse(false)`，交互件单独 `EnableMouse(true)`）。
 6. **位置记忆**：`GetCenter`/`GetLeft` **含缩放**，存取要除 `GetEffectiveScale`；每个记忆位置的窗口都要 `uiOffscreen` 回归。
 7. **禁用 `SetScale`**（点击框漂移）⇒ 缩放 = 按 z 系数**几何重建**；字体链 `FZLBJW→FRIZQT→ARIALN` 全程 `pcall`。
@@ -78,6 +78,7 @@
 
 ### 4.2 编辑工具注意事项
 - `run_code` 里**没有 `require`**；node 脚本一律写 `tmp/*.js` 再 `pwsh node tmp/x.js`（内联 `-e` 引号必被 PowerShell 拆坏）；`pwsh` 加 `2>&1 | Out-String`。
+- ★★★**pwsh 的 `workdir` 必须逐字正确**：cwd 不存在时报的是 `spawn …powershell.exe ENOENT` —— **看起来像 shell 挂了**（曾把 `u5wow` 打成 `u_wow`，连试十几次都「挂」）⇒ 见到 ENOENT 先按字符核 workdir；「推不上去」也要分清**命令根本没跑起来**与**认证/网络失败**（`ssh -T git@gitee.com`、`git@github.com` 双端验签一次就能分）。
 - `edit` 工具：本会话内须先 `read`；`old_string` 要精确（失败先 `grep` 核对）；**node 外部改过文件后必须重新 read**。大块插入 = 写块文件 + node 边界替换脚本。
 - ★★★**绝不用 PowerShell 读/写文本**：`Get-Content` 把无 BOM UTF-8 读成 GBK（乱码），`Set-Content`/`>` 写成 UTF-16LE+BOM（node 读全是乱码），**含中文往返不可逆写坏**。⇒ 一律走 node（`fs.readFileSync(p,"utf8")`）或 `read`/`edit`；看 git 某版本用 `execSync("git show rev:file")`。
 - **SavedVariables 路径**：`%LOCALAPPDATA%\Azeroth\Saved\Account\LIHAIBOAS1\SavedVariables\EvalHelp.lua`（★文件名是 `EvalHelp.lua`）；**只在 `/reload`/小退/退出时写盘**。
@@ -190,7 +191,7 @@
   ④ **关图不还原**（用户明确要求）：关图只失效窗口，**不写** alpha、不写地图帧的透明度/缩放/位置（客户端下次开图自己 Show，而它保持 alpha=0 ⇒ 下次也不闪）；
   ⑤ **只有关功能才还原**：`featBlackoutRestore` 唯一调用点 = `featTeardown`；★**改属性前先抓原 alpha**（`FEAT.boA[帧名]`），读不到就记 `false`（关功能时如实说「无法还原、保留现状」，**绝不拿 0 冒充原值**）+ 归零后**读回自证**；
   ⑥ 动作**单一出口** `featHideBlackout`（featApply / featKeep / tick 瞬时窗口三处调用）；取证行 = 「黑幕遮蔽：开图后 N ms 藏住 M 层」（进 `mapFitTrace`，详细档上屏 ⇒ 不闪了可量化确认）。★原先的 `SM BLACKOUT CHECK` **已随 tests/ 删除** ⇒ 只剩真机看「开图还会不会闪」+ 那条耗时取证行。
-- 纹理路径 = `/Game/Interface/Icons/<名>_TEX`（写错显 ?）；`GetNumMacroIcons`/`GetMacroIconInfo` = 唯一合法路径入口（本机 1033 枚，`doc/图标路径清单.txt` 1018 条且**按字母排序 ⇒ 行号 ≠ 宏图标号**）；`PET ICON CHECK` 校验真存在。★IconSem.lua：基础名须剥 `_TEX`；纹理字面量须在白名单；两反斜杠须按两反斜杠匹配。
+- 纹理路径 = `/Game/Interface/Icons/<名>_TEX`（写错显 ?）；`GetNumMacroIcons`/`GetMacroIconInfo` = 唯一合法路径入口（本机 1033 枚，`doc/图标路径清单.txt` 1018 条且**按字母排序 ⇒ 行号 ≠ 宏图标号**）；`PET ICON CHECK` 校验真存在。★任务插件素材 = `Interface\AddOns\unrealQuest\media\search-icon`（地图右侧放大镜用它；对方缺席退回文字兜底）。★IconSem.lua：基础名须剥 `_TEX`；纹理字面量须在白名单；两反斜杠须按两反斜杠匹配。
 - `api_*.html` = 1370 条索引；**无**：`PlaySoundFile`（只有 `PlaySound`）/`hooksecurefunc`/`Frame:HookScript`/`UIDropDownMenu_GetSelectedID`；**有**：GuildRoster/Who/Friend/NumGuildMembers/NumWhoResults/NumFriends/GuildControlGetNumRanks/GetRealZoneText/RemoveChatWindowMessages/`GameTooltip:SetMinimumWidth`。★`GetWidth`/`GetHeight` **含缩放**（384×512 + 0.7 ⇒ 268.8×358.4）⇒ 与未缩放配置值直接比会假报不符（**R15 ⑥d**）。
 - ★★★**帧名未知的层（候选名解析 + 探针）与「按需出现」的层**：帧名只能**现场探**（UI 编译在 pak 里）⇒ `cands` 候选表 + 唯一解析口 `dfTargetFrame` + 探针 `/edb bars`（先报队友/团员数；单人时候选全不在是正常的）；候选全落空就**如实缺席**（`DF BARS WIRING CHECK` + 组 207）。★**解析到 ≠ 补上了**：队伍/团队框「按需出现」⇒ 配**事件驱动**跟随 `DF_ROSTER_EVENTS`（★`GROUP_ROSTER_UPDATE` 不许当注册依据；1.75.1 起 + 宠物动作条 · 事件 `UNIT_PET`）→ 出现即 `dfApplyOne` + 重贴柄；**有界** `DF_ROSTER_TRIES`（不做常驻轮询）；判据 `DF ROSTER WIRING CHECK` + 组 208；细节 **R15 ⑤/⑥d**。
 - ★★★**跨插件：捕获 UnrealQuest 稀有提醒 → `tools/RareWatch.lua`**（主文件只两处接线：VARIABLES_LOADED 的 `pcall(EVAL_RW_INSTALL)` + `/eh go 稀有`；开关单一来源 `EVAL_RW_ENABLED/SET`）：捕获点 = 包住对方弹窗唯一出口 `RareAlert:Show(...)`（**安装必须等 VARIABLES_LOADED**）、返回值逐个透传 + 抛错照原样 `error(a,0)`、兜底轮询 `GetStatus().alerts`（tick 父级必须 **WorldFrame**）；名字按品阶染色且整条**只许一段 8 位色码**；点名字 = 一次 `TargetByName` **并核对**，「选不到」要同时报距离+下一步。判据 = 组 199 + `RARE WATCH WIRING CHECK`（反向守「不许再耦合地图机制」）；**新增文件要同步 9 处清单**；全案 **R4**。
