@@ -710,4 +710,113 @@ do
     print("GROUP 232 (探索层纹理：两种客户端模型各自正确（显示=原值×es / 逻辑折一次）· 关再开不连乘 · 策略三档 · 原值自然档 · 关闭收钩子 · 取证环): PASS")
   end
 end
+-- ===== 组 237（1.75.10）：世界地图的**初始位置** = 每次载入的第一次开图**一律居中** =====
+-- 用户原话：「世界地图缩放开启之后,每次插件重载的初始位置能否居中.现在他有时候会乱跳到左下角位置」
+-- ★为什么必须行为级验（不只是源码检查）：这一案的真值在**存档**里 —— `SM_CFG.px/py` 是跨会话继承的
+--   屏幕中心偏移，本客户端几何读回含缩放 ⇒ 那个值一旦算歪就会被永久沿用（每次开图都按它摆）。
+--   源码检查只能证明「代码里有清」，行为断言才能证明「脏值真的清掉了、而且真的摆到正中了」。
+do
+  local fails0 = TESTASSERT_FAILS
+  local cfg = rawget(_G, "EVAL_HELP_CONFIG")
+  local savedTb = cfg.tb
+  local savedPx, savedPy = EH_SIMPLEMAP_CFG.px, EH_SIMPLEMAP_CFG.py
+  -- 前置：读值口在位（缺了下面的断言会静默跳过 = 组 224 那次的教训）
+  local n237 = 0
+  for _, f in ipairs({ "EVAL_SM_TEST_POS_STATE", "EVAL_SM_TEST_POS_REARM", "EVAL_SM_TEST_DRAG" }) do
+    if type(_G[f]) ~= "function" then n237 = n237 + 1 end
+  end
+  eq(n237, 0, "组237前置：位置读值口全部在位（缺 " .. n237 .. " 个）")
+  local function posOf(w)
+    local ok, p, rel, rp, x, y = pcall(w.GetPoint, w)
+    if not ok then return "读取失败:" .. tostring(p) end
+    return tostring(p) .. "/" .. tostring(rel == UIParent and "UIParent" or rel) .. "/" .. tostring(rp)
+      .. " " .. tostring(x) .. "," .. tostring(y)
+  end
+  -- ★★★夹具必须**自建**一个有状态的 WorldMapFrame：组 230 的假外框（WM230）**没有还原**，
+  --   而本组排在它后面 ⇒ 直接读 `_G.WorldMapFrame` 拿到的是那个**没有 GetPoint** 的假件
+  --   （第一版就是这么红的：`pcall(w.GetPoint, w)` 报 attempt to call a nil value ⇒ 判据恒失效）。
+  local savedWm237 = rawget(_G, "WorldMapFrame")
+  local WM237 = { nClear = 0, nPt = 0, sc = 1, p = nil, rel = nil, rp = nil, x = 0, y = 0 }
+  WM237.SetAlpha = function() return true end
+  WM237.GetAlpha = function() return 1 end
+  WM237.GetScale = function() return WM237.sc end
+  WM237.SetScale = function(_, v) WM237.sc = tonumber(v) or WM237.sc return true end
+  WM237.EnableKeyboard = function() return true end
+  WM237.ClearAllPoints = function()
+    WM237.nClear = WM237.nClear + 1
+    WM237.p, WM237.rel, WM237.rp, WM237.x, WM237.y = nil, nil, nil, 0, 0
+  end
+  WM237.SetPoint = function(_, p, rel, rp, x, y)
+    WM237.nPt = WM237.nPt + 1
+    WM237.p, WM237.rel, WM237.rp = p, rel, rp
+    WM237.x, WM237.y = tonumber(x) or 0, tonumber(y) or 0
+    return true
+  end
+  WM237.GetPoint = function() return WM237.p, WM237.rel, WM237.rp, WM237.x, WM237.y end
+  rawset(_G, "WorldMapFrame", WM237)
+  local wm237 = WM237
+  eq(type(wm237.GetPoint) == "function", true, "组237前置：夹具外框带 GetPoint（假件没有它 ⇒ 位置判据会静默失效）")
+  -- ① ★★★载入期这一位就是 true（= 「本次会话还没居中过」）；rearm 之后必须能回到这个状态
+  eq(EVAL_SM_TEST_POS_REARM(), true, "组237①★rearm 后 posArmed = true（= /reload 后的初始状态）")
+  local armed1, rc1 = EVAL_SM_TEST_POS_STATE()
+  eq(armed1, true, "组237①★本次会话还没居中过（真值 = 载入期那位）")
+  eq(rc1, 0, "组237①窗口期起点 = 0（还没开）")
+
+  -- ② ★★★脏存档：塞一个「左下角」的历史偏移（正是用户报的现象）⇒ 第一次开图必须**居中**并把它清掉
+  cfg.tb = { simpleMap = true }
+  EH_SIMPLEMAP_CFG.px, EH_SIMPLEMAP_CFG.py = -700, -300
+  pcall(EVAL_SM_TEST_APPLY) -- = 真实开图路径（featKeep + featApply），不碰其它配置
+  eq(posOf(wm237), "CENTER/UIParent/CENTER 0,0",
+    "组237②★★★第一次开图**居中**（旧偏移 -700/-300 不许生效；实测 " .. posOf(wm237) .. "）")
+  local armed2, rc2, px2, py2 = EVAL_SM_TEST_POS_STATE()
+  eq(px2 == nil and py2 == nil, true,
+    "组237②★★★存档里的历史偏移**已清**（实测 " .. tostring(px2) .. "/" .. tostring(py2) .. "）—— 不清就会被永久继承")
+  eq(armed2, false, "组237②本次会话只做一次（这位关掉了）")
+  eq(rc2 > 0, true, "组237②居中窗口期已开（实测剩 " .. tostring(rc2) .. " 拍）")
+
+  -- ③ ★★窗口期保护：客户端自己的开图流程在**我们之后**又摆了一次位置（与黑幕那条竞态同族）⇒ 重申居中
+  pcall(wm237.SetPoint, wm237, "BOTTOMLEFT", UIParent, "BOTTOMLEFT", 0, 0)
+  eq(posOf(wm237), "BOTTOMLEFT/UIParent/BOTTOMLEFT 0,0", "组237③前置：确实被摆到左下角了")
+  pcall(EVAL_SM_TEST_APPLY)
+  eq(posOf(wm237), "CENTER/UIParent/CENTER 0,0",
+    "组237③★★窗口期内**重申居中**（这才治得了用户说的「有时候」；实测 " .. posOf(wm237) .. "）")
+
+  -- ④ 窗口期**有界**（不是常驻重申）
+  local guard = 0
+  while select(2, EVAL_SM_TEST_POS_STATE()) > 0 and guard < 200 do EVAL_SM_TEST_APPLY() guard = guard + 1 end
+  eq(select(2, EVAL_SM_TEST_POS_STATE()), 0, "组237④★窗口期会走完（用 " .. tostring(guard) .. " 拍；有界）")
+  eq(guard < 200, true, "组237④★★窗口期**有界**（不许变成常驻重申 —— 那会跟用户/客户端抢位置）")
+  pcall(wm237.SetPoint, wm237, "BOTTOMLEFT", UIParent, "BOTTOMLEFT", 0, 0)
+  pcall(EVAL_SM_TEST_APPLY)
+  eq(posOf(wm237), "BOTTOMLEFT/UIParent/BOTTOMLEFT 0,0",
+    "组237④★窗口期过后**不再插手**（实测 " .. posOf(wm237) .. "）")
+
+  -- ⑤ 用户一拖拽 ⇒ 立刻让出窗口期（否则刚拖到位就被拉回正中）
+  pcall(EVAL_SM_TEST_POS_REARM)
+  pcall(EVAL_SM_TEST_APPLY)
+  eq(select(2, EVAL_SM_TEST_POS_STATE()) > 0, true, "组237⑤前置：窗口期已开")
+  local dg = EVAL_SM_TEST_DRAG()
+  eq(type(dg) == "table" or type(dg) == "userdata", true, "组237⑤拖拽柄读值口拿得到真身（实测 " .. tostring(dg) .. "）")
+  local okg, h = pcall(dg.GetScript, dg, "OnDragStart")
+  eq(okg and type(h) == "function", true, "组237⑤★★拖拽柄上真的挂着 OnDragStart（脚本能点火）")
+  if okg and type(h) == "function" then pcall(h) end
+  eq(select(2, EVAL_SM_TEST_POS_STATE()), 0, "组237⑤★★★用户一开始拖 ⇒ 窗口期立刻清 0（不跟用户抢位置）")
+
+  -- ⑥ 本会话内的位置记忆照旧生效（口径 = 「会话内有效」，不是「位置功能没了」）
+  pcall(EVAL_SM_TEST_POS_REARM)
+  pcall(EVAL_SM_TEST_APPLY) -- 用掉「首次」那一次（会清 px/py）
+  EH_SIMPLEMAP_CFG.px, EH_SIMPLEMAP_CFG.py = 123, -45
+  pcall(EVAL_SM_TEST_APPLY)
+  eq(posOf(wm237), "CENTER/UIParent/CENTER 123,-45",
+    "组237⑥★★本会话内拖过之后：位置记忆照旧（实测 " .. posOf(wm237) .. "）")
+
+  -- 收尾（夹具自清 + 把位置口径还原成「本次会话还没居中过」，别影响后面的组）
+  rawset(_G, "WorldMapFrame", savedWm237)
+  cfg.tb = savedTb
+  EH_SIMPLEMAP_CFG.px, EH_SIMPLEMAP_CFG.py = savedPx, savedPy
+  pcall(EVAL_SM_TEST_POS_REARM)
+  if fails0 == TESTASSERT_FAILS then
+    print("GROUP 237 (世界地图初始位置：每次载入首次开图一律居中 · 清跨会话脏偏移 · 有界窗口期重申 · 拖拽即让位 · 会话内记忆照旧): PASS")
+  end
+end
 EVAL_TEST_MOD_DONE("SimpleMap") -- ★跑到底的握手（见文件头 ③）：TOOL TEST FILES CHECK 拿它对账

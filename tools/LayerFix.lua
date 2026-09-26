@@ -1,6 +1,6 @@
 -- EvalHelp / tools/LayerFix.lua
 --
--- 图层特殊处理（Layer Fixes）—— **独立工具模块**。
+-- 图层隐藏（Layer Hiding，1.75.x 由「图层特殊处理」改名；内部名仍叫 LayerFix）—— **独立工具模块**。
 -- 用户要求（1.74.34 原话）：
 --   ① 「能否对固定的某个层内的最后2个纹理做特殊处理.比如隐藏这2个纹理」；
 --   ② 「可以在工具箱->UI 工具->添加个图层特处理->设置/重置 ,设置功能支持下拉,
@@ -290,7 +290,7 @@ local function lfMsg(fix, st)
   local n = table.getn(st.objs)
   local p = {}
   for i = 1, n do p[i] = tostring(st.paths[i] or "（读不到贴图路径）") end
-  return string.format("图层特殊处理[%s]：已隐藏 %d 个纹理（层=%s%s）｜贴图：%s",
+  return string.format("图层隐藏[%s]：已隐藏 %d 个纹理（层=%s%s）｜贴图：%s",
     lfFixWord(fix, "label"), n, tostring(st.layer),
     (lfNum(st.already, 0) > 0) and ("，其中 " .. tostring(st.already) .. " 个本来就是隐藏的") or "",
     table.concat(p, " · "))
@@ -339,7 +339,7 @@ local function lfResetOne(fix, quiet)
   end
   LF.fixState[fix.key] = nil
   if not quiet then
-    say(string.format("图层特殊处理[%s]：已还原 %d 个纹理（层=%s）",
+    say(string.format("图层隐藏[%s]：已还原 %d 个纹理（层=%s）",
       lfFixWord(fix, "label"), n, tostring(st.layer)))
   end
   return n
@@ -365,7 +365,7 @@ local function lfSync(quiet)
     end
   end
   if type(failed) == "table" and not quiet then
-    say("图层特殊处理：勾选了 " .. tostring(table.getn(failed)) .. " 条这次没做成 —— " .. table.concat(failed, " · ") ..
+    say("图层隐藏：勾选了 " .. tostring(table.getn(failed)) .. " 条这次没做成 —— " .. table.concat(failed, " · ") ..
       "｜**没有对界面做任何改动**（层不在或对象数不够时绝不猜着改）；启动后 5 秒内还会自动补一次")
   end
   return applied, restored
@@ -383,7 +383,7 @@ local function lfStop(why)
     pcall(kf.SetScript, kf, "OnUpdate", nil) -- ★永久停：脚本被摘掉 ⇒ 不再有常驻 tick
   end
   if LF.keepLate > 0 or LF.keepRe > 0 then
-    say(string.format("图层特殊处理：启动期复查结束（%s）—— 补生效 %d 条（层晚出现）· 又把 %d 个被显示回来的纹理藏了回去（守护）",
+    say(string.format("图层隐藏：启动期复查结束（%s）—— 补生效 %d 条（层晚出现）· 又把 %d 个被显示回来的纹理藏了回去（守护）",
       tostring(LF.keepWhy), LF.keepLate, LF.keepRe))
   end
   lfLog("KEEP STOP why=" .. tostring(LF.keepWhy) .. " runs=" .. tostring(LF.keepRuns) ..
@@ -430,7 +430,7 @@ local function lfTick()
   LF.keepRe = lfNum(LF.keepRe, 0) + reN
   -- ★只在**真的做了事**的时候当场播报一句（这个窗口 5 秒结束即停，不会刷屏；「没做事」也绝不虚报）
   if lateN > 0 or reN > 0 then
-    say(string.format("图层特殊处理：启动期复查 —— 补生效 %d 条（层晚出现）· 又把 %d 个被显示回来的纹理藏了回去（守护）",
+    say(string.format("图层隐藏：启动期复查 —— 补生效 %d 条（层晚出现）· 又把 %d 个被显示回来的纹理藏了回去（守护）",
       lateN, reN))
   end
   return lateN + reN
@@ -497,7 +497,7 @@ local function lfMigrate(quiet)
   end
   df.fix = nil -- ★搬完即清（唯一真值 = layerFix.fix）
   if not quiet then
-    say(string.format("图层特殊处理：已把 %d 条勾选从旧位置（dragFrames.fix）搬到本模块自己的存档（layerFix.fix）", n))
+    say(string.format("图层隐藏：已把 %d 条勾选从旧位置（dragFrames.fix）搬到本模块自己的存档（layerFix.fix）", n))
   end
   lfLog("MIGRATE n=" .. tostring(n))
   return n
@@ -524,7 +524,7 @@ function EVAL_LF_INSTALL()
           pcall(rf.SetScript, rf, "OnUpdate", nil)
           LF.retryFrame = nil
         elseif tries >= 20 then
-          say("图层特殊处理：存档重试 20 次仍未就位（期间未写入，不会抹数据）；下次 /reload 再试")
+          say("图层隐藏：存档重试 20 次仍未就位（期间未写入，不会抹数据）；下次 /reload 再试")
           pcall(rf.SetScript, rf, "OnUpdate", nil)
           LF.retryFrame = nil
         end
@@ -613,7 +613,7 @@ function EVAL_LF_RESET()
     restored = restored + lfResetOne(f, false)
     if lfFixOn(f.key) then lfSet(f.key, false) end
   end
-  say(string.format("图层特殊处理：重置完成 —— 还原 %d 个纹理 · 已清空 %d 条处理的勾选（要再启用请点 [设置]）",
+  say(string.format("图层隐藏：重置完成 —— 还原 %d 个纹理 · 已清空 %d 条处理的勾选（要再启用请点 [设置]）",
     restored, n))
   return restored
 end

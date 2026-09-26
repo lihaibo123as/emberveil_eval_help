@@ -324,6 +324,17 @@ local TARGET_SEL = {
   { id = "lastTarget",   name = "上一目标",   fn = "TargetLastTarget" },
   { id = "targetTarget", name = "目标的目标", fn = "TargetUnit", arg = "targettarget" },
   { id = "byName",       name = "指定名称",   fn = "TargetByName", needsName = true },
+  -- ★★★1.75.10 「玩家的目标」（用户：「技能编辑->目标选择->增加选取目标:**玩家的目标**（参考选取目标:指定名称的
+  --   编辑方式，但是选择的是**指定玩家的目标**），分析可行性」）：
+  --   实现 = **`AssistByName(名字)`** —— 官方 Targetting 页明文：「Assists a nearby player: sets the target to that
+  --   player's target.」（协助**附近**的一名玩家：把目标设成他的目标）；该页表格**没有 Protected 行**
+  --   ⇒ 与 TargetUnit 同族，插件可直调（核对口径见铁律 5）。
+  --   名字存 **cd.nm**（与「指定名称」同一字段）；`needsName = true` ⇒ 编辑方式（名字下拉 + 自定义输入）完全复用。
+  --   ★与「指定名称」的差别只在**客户端函数**：byName = TargetByName（按名选**那个人**），
+  --     playerTarget = AssistByName（选**那个人的目标**）。
+  --   ★★已知边界（如实告知 + 真机探针定案，见 /eh go assist）：官方只承诺**附近**的玩家；名字不存在/不在附近时的
+  --     确切表现（是否清掉当前目标）**文档没写** ⇒ 求值侧按「调用后没有目标 = 如实失败」兜底。
+  { id = "playerTarget", name = "玩家的目标", fn = "AssistByName", needsName = true, needTgt = true },
   { id = "clear",        name = "清除目标",   fn = "ClearTarget" },
   -- ★★1.70.47 队伍/团队**自动扫描**选取（用户需求定案，原话）：
   --   「新增行为类型 选取目标: - 队伍成员 - 团队成员」，自动实施扫描。
@@ -342,6 +353,15 @@ local TARGET_SEL = {
   { id = "teamRaid",  name = "团队成员", fn = "EVAL_TEAM_PICK", arg = "auto", teamSel = "raid" },
 }
 local TARGET_SEL_NAME, TARGET_SEL_ID, TARGET_SEL_FN, TARGET_SEL_ARG = {}, {}, {}, {}
+-- ★1.75.10 `TARGET_SEL_NM` = 「这一条选取**需要名字参数**」（当前：指定名称 byName / 玩家的目标 playerTarget）——
+--   单一来源：求值（两个调用点）、编辑器（名字格与输入弹窗）、导出文本都读它，
+--   免得「又在三处各写一遍 `cd.s == "byName"`」（漏一处就是「选了不生效」或「名字不显示」）。
+local TARGET_SEL_NM = {}
+-- ★1.75.10 `TARGET_SEL_NEEDTGT` = 「调用之后**必须有目标**，否则这次选取**没生效**」。
+--   为什么只有「玩家的目标」需要：AssistByName 的失败形态**官方没写**（不像 AssistUnit 明文「清目标」），
+--   而它是**副作用条件（求值恒 true）**——不判就会出现「没协助到 → 规则照样放行 → 后面那手打在旧目标上」
+--   且日志还写着成功（本项目最恨的静默）。⇒ 用 `UnitExists("target")` 兜底，如实失败（见 /eh go assist 探针）。
+local TARGET_SEL_NEEDTGT = {}
 local TARGET_SEL_TEAMSEL = {} -- 扫描范围（"party"/"raid"）；非成员选取器为 nil
 for _, t in ipairs(TARGET_SEL) do
   TARGET_SEL_NAME[t.id] = t.name
@@ -349,7 +369,146 @@ for _, t in ipairs(TARGET_SEL) do
   TARGET_SEL_ID[t.id] = t.id
   TARGET_SEL_FN[t.id] = t.fn
   TARGET_SEL_ARG[t.id] = t.arg
+  if t.needsName then TARGET_SEL_NM[t.id] = true end
+  if t.needTgt then TARGET_SEL_NEEDTGT[t.id] = true end
   if t.teamSel then TARGET_SEL_TEAMSEL[t.id] = t.teamSel end
+end
+
+-- ===== 选取目标取证（1.75.12）：**每一次真的调客户端选取函数**都记一条 =================
+-- 用户报障（1.75.11）：「选取目标:最近敌人 + 冲锋：选中一个**死亡**目标后按键，某些时候会在另一个目标
+--   和死亡目标之间**来回切换、无限循环**，过一会儿才停」；而且**没按键时目标也会跳**。
+--   ⇒ 静态审计（Engine/EvalHelp/Core 全文）结论：插件里**没有任何定时器**会调选取目标 ——
+--     能切目标的只有 5 类调用点（技能行 / 条件 / 队伍扫描·命中 / 队伍扫描·还原 / 名字枚举 + 探针），
+--     而它们的唯一入口是 `EVAL_GO`（宏或动作格接管）和你显式敲的命令。
+--     **"没按键却在跳" ⇒ 调用在源源不断地来**：`/run` 宏在本客户端走 RunScript pending 队列，
+--     松手后陈旧调用仍被客户端按**它自己的节奏**一发发冲刷；而去抖窗只是「两次被接受调用的最小间隔」，
+--     当冲刷节奏**大于**窗口时**每一发都被放行**（CHANGELOG 1.54.2 自己写了这条局限）。
+--   ⇒ 判据必须落在**调用点**上。每条记：① 第几发被接受的 EVAL_GO（`p` 号；同一发的多次调用同号，
+--     `p-` = 不在按键那一轮里，如编辑窗下拉/探针）· ② 谁调的（技能行/条件/队伍扫描/名字枚举）·
+--     ③ 调用**前 → 后**的目标快照（名字 + 血量% + 是否尸体）⇒「切了没有 / 切到谁 / 尸体有没有参与」
+--     一眼可判；④ 另配「接受发数 / 被去抖丢弃发数」两条腿的计数与间隔 ⇒ 区分
+--     **队列余震**（接受多、丢弃少、间隔≈冲刷节奏）与**键连发**（丢弃多）。
+-- ★★单一来源：所有调用点一律走 `tselInvoke`，**不许再各自写 `pcall(fn, …)`** ——
+--   漏一处就少一条证据，而这正是本项目「静默失效」的高发区（源码检查 `SEL TRACE WIRING CHECK` 守它）。
+-- ★落盘 `cfg.selProbe`（有界 40 行）：日志环只有 100 条、会被 [DS]/mapfit 冲掉，而 `say` **不落日志环**
+--   ⇒ 必须自带专属落盘（同 tselProbe/mbProbe/meleeProbe 的教训）；已在 Core 的调试残渣键清单里
+--   （只有 `/eh 存档清理` 才清）。读它：`/eh go tsel log`（命令走读值口 EVAL_TSEL_PROBE）。
+-- ★零足迹：**从没调用过选取目标就一个字节都不写**（连「去抖丢弃」也不记）⇒ 不用选取目标的用户无感。
+local TSEL_OUT_MAX = 40
+local tselPass, tselSeq = 0, 0              -- 第几发被接受的 EVAL_GO / 累计调用号
+local tselAcc, tselSkip = 0, 0              -- 接受发数 / 被去抖丢弃发数
+local tselLastAcc, tselLastSkip = nil, nil  -- 距上一发的毫秒（nil = 第一发）
+local tselHdrPending = false                -- 本发还没写表头（懒写：只有真发生选取才写）
+local tselLastWasSkip = false               -- 上一条写的是「丢弃中」说明（连续丢弃不重复刷屏）
+local tselInGo = nil                        -- 当前正在跑的按键轮号（nil = 不在按键那一轮里）
+
+local function tselBox()
+  local cfg = (type(EVAL_HELP_CONFIG) == "table") and EVAL_HELP_CONFIG or nil
+  if cfg == nil then return nil end
+  local box = cfg.selProbe
+  if type(box) ~= "table" then box = {} cfg.selProbe = box end
+  if type(box.out) ~= "table" then box.out = {} end
+  return box
+end
+
+local function tselPush(s)
+  local box = tselBox()
+  if box == nil then return end
+  local out = box.out
+  table.insert(out, s)
+  while table.getn(out) > TSEL_OUT_MAX do table.remove(out, 1) end
+  box.nAcc, box.nSkip, box.pass, box.seq = tselAcc, tselSkip, tselPass, tselSeq
+  box.lastAcc, box.lastSkip = tselLastAcc, tselLastSkip
+  box.t = (type(date) == "function") and date("%H:%M:%S") or nil
+end
+
+-- 目标快照：「名(血40%·尸体)」/「无目标」。★客户端读不到 GUID ⇒ 同名怪只能靠**血量%**区分，
+--   所以「快照相同」只能说**可能**是同一只（日志里如实写成「没变(快照相同=可能同一只)」，不冒充身份判定）。
+local function tselSnap()
+  if type(UnitExists) ~= "function" then return "?" end
+  local okE, has = pcall(UnitExists, "target")
+  if not (okE and has) then return "无目标" end
+  local nm = "?"
+  if type(UnitName) == "function" then
+    local okN, v = pcall(UnitName, "target")
+    if okN and type(v) == "string" and v ~= "" then nm = v end
+  end
+  local pct = "?"
+  if type(UnitHealth) == "function" and type(UnitHealthMax) == "function" then
+    local ok1, hp = pcall(UnitHealth, "target")
+    local ok2, hm = pcall(UnitHealthMax, "target")
+    if ok1 and ok2 and tonumber(hm) and tonumber(hm) > 0 then
+      pct = tostring(math.floor(tonumber(hp) / tonumber(hm) * 100 + 0.5))
+    end
+  end
+  local dead = false
+  if type(UnitIsDeadOrGhost) == "function" then
+    local okD, v = pcall(UnitIsDeadOrGhost, "target")
+    dead = (okD and v) and true or false
+  end
+  return string.format("%s(血%s%%%s)", nm, pct, dead and "·尸体" or "")
+end
+
+-- ★唯一调用口：调客户端选取函数 + 记一条取证。返回值与 `pcall` **完全一致**（ok, ret）；
+--   「参数是不是 nil」决定 `pcall(fn, a1)` 还是 `pcall(fn)` —— 不许给无参函数硬塞个 nil（保行为不变）。
+local function tselInvoke(how, fname, fn, arg1)
+  if type(fn) ~= "function" then return false, "无该函数" end
+  local before = tselSnap()
+  local ok, r
+  if arg1 ~= nil then ok, r = pcall(fn, arg1) else ok, r = pcall(fn) end
+  local after = tselSnap()
+  tselSeq = tselSeq + 1
+  if tselHdrPending then
+    tselHdrPending, tselLastWasSkip = false, false
+    tselPush(string.format("[选取] === 第%d发（距上一发接受 +%sms；累计执行%d / 丢弃%d）===",
+      tselPass, tostring(tselLastAcc or 0), tselAcc, tselSkip))
+  end
+  local pLab = (tselInGo ~= nil and tselInGo == tselPass) and ("p" .. tostring(tselPass)) or "p-"
+  local call = tostring(fname) .. ((arg1 ~= nil) and ("(" .. tostring(arg1) .. ")") or "()")
+  local line = string.format("[选取] #%d %s %s %s %s ⇒ %s%s%s",
+    tselSeq, pLab, tostring(how), call, before, after,
+    (before == after) and " 没变(快照相同=可能同一只)" or " **变了**",
+    ok and "" or " ★调用抛错")
+  tselLastWasSkip = false
+  tselPush(line)
+  if type(EVAL_LOGLINE) == "function" then pcall(EVAL_LOGLINE, line) end
+  if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug and type(EVAL_SAY) == "function" then
+    pcall(EVAL_SAY, "|cffb0d0ff" .. line .. "|r")
+  end
+  return ok, r
+end
+
+-- EVAL_GO 入口每次调用都报一次「接受 / 被去抖丢弃」（本轮是「调用在不在来」的直接证据）
+local function tselNoteGo(skip, gapMs)
+  if skip then
+    tselSkip = tselSkip + 1
+    tselLastSkip = gapMs
+    -- ★没调用过选取目标就什么都不写；连续丢弃只留**一条**说明（否则快速连发会把环刷爆）
+    if (tselSeq > 0 or tselPass > 0) and not tselLastWasSkip then
+      tselLastWasSkip = true
+      tselPush(string.format("[选取] --- 去抖丢弃（距上一发接受 +%sms；累计执行%d / 丢弃%d）---",
+        tostring(tselLastAcc or "?"), tselAcc, tselSkip))
+    end
+  else
+    tselAcc = tselAcc + 1
+    tselLastAcc = gapMs
+    tselPass = tselPass + 1
+    tselHdrPending = true
+    tselLastWasSkip = false
+  end
+end
+
+-- ★读值口（命令与断言共用同一份；**不解析中文文本**）：计数 + 环行数 + 最后一条
+function EVAL_TSEL_PROBE()
+  local box = tselBox()
+  local out = (box and type(box.out) == "table") and box.out or {}
+  local n = table.getn(out)
+  return {
+    seq = tselSeq, acc = tselAcc, skip = tselSkip, pass = tselPass,
+    lines = n, last = (n > 0) and out[n] or nil,
+    lastAcc = tselLastAcc, lastSkip = tselLastSkip, inGo = tselInGo,
+    boxT = box and box.t or nil, max = TSEL_OUT_MAX,
+  }
 end
 
 -- ★1.70.47 dispel（可驱散）类型表：id 是**入库/文本用的稳定英文 token**（来自客户端 UnitDebuff 第三返回的同一套），
@@ -624,7 +783,7 @@ end
 local function teamSelect(rec)
   st.allyUnit = rec and rec.unit or nil
   st.teamCur = rec
-  if rec and type(TargetUnit) == "function" then pcall(TargetUnit, rec.unit) end
+  if rec and type(TargetUnit) == "function" then tselInvoke("队伍选取:命中", "TargetUnit", TargetUnit, rec.unit) end
   return rec and rec.unit or nil
 end
 
@@ -755,7 +914,7 @@ function EVAL_TEAM_PICK(crit)
       -- ★★候选上下文：这一行的「候选者血%/能量%」以及兼容写法的「自身血%/能量%」都读**这个候选者**
       --   （用户定案：扫描集含自己，一视同仁）
       st.pickCand = rec
-      if type(TargetUnit) == "function" then pcall(TargetUnit, rec.unit) end
+      if type(TargetUnit) == "function" then tselInvoke("队伍扫描:候选", "TargetUnit", TargetUnit, rec.unit) end
       if EVAL_HELP_UPDATE_STATE then pcall(EVAL_HELP_UPDATE_STATE) end
       -- ★捕捉第三个返回值 trace = 满足的那组条件的**逐项判定明细**（"目标血%<40√"），写进日志
       --   （旧版把它丢掉了 → 日志里看不出按哪条条件选中的人）
@@ -771,12 +930,12 @@ function EVAL_TEAM_PICK(crit)
     st.pickCand, teamPickArg.driverCd = nil, nil -- ★无论命中与否都要清掉：绝不让上下文漏到别的行
     -- 全员都不满足 → **还原原目标**（诚实：不把目标丢在最后一个候选身上就算完）
     if origUnit then
-      pcall(TargetUnit, origUnit) -- 精确还原（原目标就是某个队友/自己）
+      tselInvoke("队伍扫描:还原", "TargetUnit", TargetUnit, origUnit) -- 精确还原（原目标就是某个队友/自己）
     elseif origName then
-      pcall(TargetByName, origName) -- 仅对附近单位有效；失败时下面这条日志会如实说明
+      tselInvoke("队伍扫描:还原", "TargetByName", TargetByName, origName) -- 仅对附近单位有效；失败时下面这条日志会如实说明
       wlog("队伍选取: 没选到成员；已尝试按名字还原目标「" .. tostring(origName) .. "」(TargetByName 只认附近单位)")
     else
-      pcall(ClearTarget) -- 本来就没有目标 → 还原成「无目标」
+      tselInvoke("队伍扫描:还原", "ClearTarget", ClearTarget) -- 本来就没有目标 → 还原成「无目标」
     end
     if EVAL_HELP_UPDATE_STATE then pcall(EVAL_HELP_UPDATE_STATE) end
     st.teamCur, st.allyUnit = nil, nil
@@ -814,6 +973,9 @@ local function targetSelOf(skill)
   if not tg then return nil end
   local nm = string.match(tg, "^指定名称[:：](.+)$")
   if nm then return "byName", nm end
+  -- ★1.75.10 玩家的目标（协助某玩家）："选取目标:玩家的目标:嗜血者" → "playerTarget","嗜血者"
+  local nmP = string.match(tg, "^玩家的目标[:：](.+)$")
+  if nmP then return "playerTarget", nmP end
   -- ★1.71.3 分类下拉里那一项的文案就是 L("SE_PICK_TGT")=「指定名称…」（**带省略号**）：
   --   原先直接拿它查表查不到 → wicon 一路落空 → 这一行**一个图标都没有**（用户截图红线圈出的正是它）。
   --   → 查表前先剥掉结尾的省略号（… / ...），让**同一份 TARGET_SEL 表**既管文案又管图标（单一真值）。
@@ -997,6 +1159,7 @@ local TARGET_SEL_ICON = {
   lastTarget   = TSE_ICON_ROOT .. "flight",        -- 上一目标（回头）
   targetTarget = TSE_ICON_ROOT .. "quest-marker",  -- 目标的目标（跟随）
   byName       = TSE_ICON_ROOT .. "database",      -- 指定名称（查找）
+  playerTarget = TSE_ICON_ROOT .. "trainer",       -- ★1.75.10 玩家的目标（协助某玩家 → 看他的目标；借「训练师」那张人像表示"一名玩家"）
   clear        = TSE_ICON_ROOT .. "repair",        -- 清除目标
   teamParty    = TSE_ICON_ROOT .. "battlemaster",  -- 队伍成员
   teamRaid     = TSE_ICON_ROOT .. "raid-entrance", -- 团队成员
@@ -1523,18 +1686,30 @@ local function wuse(name, reason, rank)
     local fn = getglobal(TARGET_SEL_FN[ts])
     if type(fn) ~= "function" then wlog(name .. ": 无选取函数") return false end
     local okc, ret
-    if ts == "byName" then
-      okc, ret = pcall(fn, tsnm)
+    -- ★1.75.10 带名字参数的选取器（指定名称 / 玩家的目标）统一走这一支
+    -- ★1.75.12 三条一律走**唯一调用口** tselInvoke（取证：谁调的 + 调用前后的目标快照）
+    local tHow = "技能行:" .. tostring(name)
+    if TARGET_SEL_NM[ts] then
+      okc, ret = tselInvoke(tHow, TARGET_SEL_FN[ts], fn, tsnm)
     elseif TARGET_SEL_ARG[ts] then
       -- ★1.70.47 技能行也可以直接是「选取目标:队伍成员/团队成员」：teamPickArg.rule 由**调用方**塞入
       --   （那一行自己的条件列表 = 候选过滤条件）。这里**绝不能清掉它**——清掉 = 过滤器失效且**静默**。
       TARGET_SEL_ARG_LAST = ts
-      okc, ret = pcall(fn, TARGET_SEL_ARG[ts])
+      okc, ret = tselInvoke(tHow, TARGET_SEL_FN[ts], fn, TARGET_SEL_ARG[ts])
       TARGET_SEL_ARG_LAST = nil
     else
-      okc, ret = pcall(fn)
+      okc, ret = tselInvoke(tHow, TARGET_SEL_FN[ts], fn)
     end
     if not okc then wlog(name .. " 选取目标调用失败（pcall 捕获）") return false end
+    -- ★★1.75.10「玩家的目标」如实报账：AssistByName 之后**没有目标** = 这次选取**没生效**
+    --   （该玩家不在附近 / 他自己没有目标）。若照旧写「→ … | 当前目标:无」并 return true，
+    --   日志看着像成功，后面的技能却打在**旧目标**上（与 1.71.3 成员选取器那次同族）。
+    if TARGET_SEL_NEEDTGT[ts] and not UnitExists("target") then
+      local fline = string.format("%s 未生效：协助 %s 之后没有目标（该玩家不在附近或他自己没有目标）", name, tostring(tsnm or "?"))
+      EVAL_LOGLINE(fline)
+      if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cffff8080" .. fline .. "|r") end
+      return false
+    end
     -- ★★1.71.3 成员选取器（队伍/团队成员）**如实报账**：旧版无论选没选到人都写「→ … | 当前目标:X」
     --   并返回 true —— 用户看到日志像成功了，实际目标没换、后面的技能打在旧目标上，
     --   于是「功能不工作」却查不出原因（本轮用户实测报回）。
@@ -1832,18 +2007,45 @@ end
 -- 附近敌人名称枚举（1.29.0，编辑窗「指定名称」下拉用）：客户端无附近单位枚举 API，
 -- 用 TargetNearestEnemy 循环选取特性边切边收集，完事恢复原目标（无原目标则清除）。
 -- 代价：调用瞬间目标快速切换一轮；同名怪多时 TargetByName 还原的可能不是同一只（可接受）。
-function EVAL_NEARBY_ENEMY_NAMES(maxN)
+-- 1.75.11 加了可选第二参 traceFn：每轮原样回调一次读到的目标名（nil 也回调）。
+--   用途 = 近战探针的 /eh go melee 周围 要看清循环是不是在两只怪之间来回跳 ——
+--   只在去重后回调的话，同名来回跳会被抹平，数出来的只数会假装更多。
+--   既有调用方（编辑窗指定名称下拉）只传 1 个参数，行为完全不变。
+function EVAL_NEARBY_ENEMY_NAMES(maxN, traceFn)
   local names, seen = {}, {}
   local orig = UnitName("target")
   for _ = 1, (maxN or 5) do
-    pcall(TargetNearestEnemy)
+    tselInvoke("名字枚举", "TargetNearestEnemy", TargetNearestEnemy)
     local n = UnitName("target")
+    if type(traceFn) == 'function' then pcall(traceFn, n) end
     if not n or seen[n] then break end
     seen[n] = true
     table.insert(names, n)
   end
-  if orig then pcall(TargetByName, orig) else pcall(ClearTarget) end
+  if orig then tselInvoke("名字枚举:还原", "TargetByName", TargetByName, orig)
+  else tselInvoke("名字枚举:还原", "ClearTarget", ClearTarget) end
   return names
+end
+
+-- ★1.75.10 玩家名候选（编辑窗「选取目标:玩家的目标」的名字下拉用）：**纯只读**枚举，零副作用
+--   —— 与上面那条「边切边收集」**相反**：绝不能为了列几个名字去动用户当前的目标
+--   （那条是给「指定名称 = 找怪」用的，切一轮可以接受；这条是「协助某人」，切目标本身就是我们要避免的副作用）。
+--   顺序 = 自己 → party1..4 → raid1..N；去重 + 按 maxN 截断（默认 12）。
+function EVAL_PLAYER_NAMES(maxN)
+  local out, seen = {}, {}
+  local cap = maxN or 12
+  local function push(u)
+    if table.getn(out) >= cap then return end
+    local ok, n = pcall(UnitName, u)
+    if not ok or type(n) ~= "string" or n == "" then return end
+    if seen[n] then return end
+    seen[n] = true
+    table.insert(out, n)
+  end
+  push("player")
+  for i = 1, 4 do push("party" .. i) end
+  for i = 1, 40 do push("raid" .. i) end
+  return out
 end
 
 -- ===== 目标职业条件（1.26.0）：UnitClass 第二返回值（英文 token）比对；多选 = 或关系 =====
@@ -1991,6 +2193,19 @@ local function condOne(cd, skill, dry, rule)
   elseif k == "powerPct" then
     if st.pickCand then return candNumPass(cd, st.pickCand.powerPct), "候选能量%:" .. tostring(teamPct(st.pickCand.powerPct)) end
     return condCmp({ cd.op, cd.n }, st.powerPct), "能量%"
+  -- ★★★1.75.11 近战围攻数 / 交战人数（用户：「…自身状态->10s交战人数N数量 比较类型,围攻自身N数量 比较类型」）
+  --   ★★值一律读**全局战斗数据 st**（Core 的 UPDATE_STATE 每拍只算一次；用户口径：「围攻数量归入战斗数据
+  --     全局可被使用,不多个地方各自计算」）—— 这里**绝不再调 EVAL_MW_ACTIVE_N**（同一份数据两处算，迟早打架，
+  --     而且同名怪的合并/估算口径只在 EVAL_MW_ACTIVE_INFO 一处维护）。
+  --     两个数**只统计战斗状态**（非战斗恒 0），且都是**纯聊天正文口径、零切目标**：
+  --       围攻数 = max(近战窗口内「在打我」的不同怪名数, 6s 挥击累加估算)；交战数 = 10s 内跟我有过来往的怪名数。
+  --   ★查不到（Core/Engine 未载入 ⇒ 字段 nil）时如实按 0 算，不许假装满足。
+  elseif k == "mwSiege" then
+    local nS = tonumber(st.mwSiege) or 0
+    return condCmp({ cd.op, cd.n }, nS), "围攻数"
+  elseif k == "mwEngaged" then
+    local nE = tonumber(st.mwEngaged) or 0
+    return condCmp({ cd.op, cd.n }, nE), "交战数"
   elseif k == "tHpPct" then return condCmp({ cd.op, cd.n }, st.tHpPct), "目标血%"
   elseif k == "swingLeft" then -- 1.57.0 距下次攻击秒数（1.74.30 起**状态感知**：自动射击中 = 距下次射击）
     local rem = (type(EVAL_SWING_REMAIN_ACTIVE) == "function") and EVAL_SWING_REMAIN_ACTIVE() or EVAL_SWING_REMAIN()
@@ -2004,6 +2219,10 @@ local function condOne(cd, skill, dry, rule)
   elseif k == "hasTarget" then return ((st.hasTarget and true or false) == cd.v), "目标存在" -- 1.32.1
   elseif k == "canAttack" then return (st.canAttack == cd.v), "可攻击"
   elseif k == "canBleed" then return (st.canBleed == cd.v), "可流血"
+  -- ★1.75.10 目标死亡（用户：「条件类型 → 目标状态 → 目标死亡 是/否」）：
+  --   取值 = `st.tDead`（Core 的 UPDATE_STATE 用 `UnitIsDeadOrGhost("target")` 填）。
+  --   ★与「目标存在/可攻击/可流血…」**同一口径**：直接与 cd.v 比较（没有目标时 st.tDead = false ⇒ 「否」成立）。
+  elseif k == "tDead" then return ((st.tDead and true or false) == cd.v), "目标死亡"
   elseif k == "isBoss" then return (st.isBoss == cd.v), "Boss"
   elseif k == "isElite" then return (st.isElite == cd.v), "精英"
   elseif k == "tInCombat" then return (st.tInCombat == cd.v), "目标战斗"
@@ -2163,22 +2382,56 @@ local function condOne(cd, skill, dry, rule)
     local hit = (id ~= nil and cd.cs and cd.cs[id]) and true or false
     local pass = (hit == (cd.v ~= false))
     return pass, "目标类型:" .. tostring(raw or "?") .. (cd.v == false and "(否)" or "")
+  elseif k == "tPlayer" then
+    -- ★★★1.75.10 目标玩家（用户：「技能编辑->目标状态->添加个判断: 目标玩家:xxx名（名称支持自定义输入） 是/否」）。
+    --   语义：当前目标**是 / 不是**名为 X 的**玩家**。三条判据缺一不可，缺哪条都**如实失败**（绝不静默通过）：
+    --     ① 名字填了（没填 = 用户还没配好 → 不能当「不是 X」放行）；
+    --     ② 有目标（没目标时**两个方向都不算过** —— 本项目「查不到 ≠ 没有」纪律）；
+    --     ③ 名字相符（**大小写不敏感**，与 tbUnitOf 的名字比对同一口径）+ 目标**确实是玩家**
+    --        （UnitIsPlayer；NPC 恰好重名不算「目标玩家」）。
+    --   ★★这里**绝不能**调 `condTrim` —— 它是本文件**后面**（约 3506 行）才声明的 local，
+    --     而 condOne 在 2173 行 ⇒ 按 Lua 词法作用域，这里绑到的是**全局 nil**（真机红字、闸门当场抓到：
+    --     `DECL ORDER CHECK` + 运行时 `attempt to call a nil value (global 'condTrim')`）。
+    --     走全局桥 `EVAL_COND_TRIM`（= 同一个函数，单一来源；调用发生在载入完成后，一定已赋值）。
+    local nmP = tostring(cd.nm or "")
+    if type(EVAL_COND_TRIM) == "function" then nmP = EVAL_COND_TRIM(nmP) end
+    if nmP == "" then return false, "目标玩家:未填名称" end
+    if not st.hasTarget then return false, "目标玩家:无目标" end
+    if type(UnitIsPlayer) ~= "function" then return false, "目标玩家:本客户端没有 UnitIsPlayer" end
+    local okIP, isP = pcall(UnitIsPlayer, "target")
+    if not okIP then return false, "目标玩家:UnitIsPlayer 调用失败" end
+    isP = isP and true or false
+    local same = (type(st.targetName) == "string" and string.lower(st.targetName) == string.lower(nmP)) or false
+    local hit = (isP and same)
+    return (hit == (cd.v ~= false)), "目标玩家:" .. nmP .. ((hit and isP) and "(是玩家)" or "")
   elseif k == "target" then
     -- 副作用条件：切换当前目标（战斗信息UI 亮金预览 dry 时不执行，防止刷新误切目标）
     local gfn = TARGET_SEL_FN[cd.s]
     local fn = gfn and getglobal(gfn)
     if type(fn) ~= "function" then return false, "无选取函数:" .. tostring(cd.s) end
-    if cd.s == "byName" and not (cd.nm and cd.nm ~= "") then return false, "未设目标名称" end
+    if TARGET_SEL_NM[cd.s] and not (cd.nm and cd.nm ~= "") then
+      -- ★1.75.10 名字参数缺失 ⇒ 如实失败（两种带名选取器都走这里；文案指明是哪一种）
+      return false, "未设名称:" .. tostring(TARGET_SEL_NAME[cd.s] or cd.s)
+    end
     if not dry then
-      if cd.s == "byName" then pcall(fn, cd.nm)
+      -- ★1.75.12 取证标签：条件形态的选取目标（谁的行 + 是条件）—— 与技能行那一处区分开
+      local cHow = "条件:" .. tostring((type(rule) == "table" and rule.skill) or "?")
+      if TARGET_SEL_NM[cd.s] then
+        tselInvoke(cHow, gfn, fn, cd.nm)
+        -- ★★1.75.10「玩家的目标」：调用之后**没有目标** ⇒ 如实失败（该玩家不在附近 / 他自己没有目标）。
+        --   这条是**副作用条件（求值恒 true）**——不判就会「没协助到也放行」，后面那手打在旧目标上。
+        --   ★dry（战斗信息UI 每 0.15s 的预览）**不切也不判**，与其它选取器一致（绝不能预览时误切/误报）。
+        if TARGET_SEL_NEEDTGT[cd.s] and not UnitExists("target") then
+          return false, "选取目标:" .. tostring(TARGET_SEL_NAME[cd.s] or cd.s) .. "未生效（没协助到目标）"
+        end
       elseif TARGET_SEL_ARG[cd.s] then
         -- ★1.70.47 队伍/团队选取：把「规则」与「队伍 or 团队」传给 EVAL_TEAM_PICK，
         --   让它按同规则里的队伍条件反推选人判据（选血最少 / 蓝最少 / 中魔法的那个）。
         teamPickArg.rule = rule
         TARGET_SEL_ARG_LAST = cd.s
-        pcall(fn, TARGET_SEL_ARG[cd.s])
+        tselInvoke(cHow, gfn, fn, TARGET_SEL_ARG[cd.s])
         teamPickArg.rule, TARGET_SEL_ARG_LAST = nil, nil
-      else pcall(fn) end
+      else tselInvoke(cHow, gfn, fn) end
     end
     return true, "选取目标:" .. tostring(TARGET_SEL_NAME[cd.s] or cd.s)
   end
@@ -3509,6 +3762,11 @@ local COND_NUM = {
   ["连击"] = "combo", ["连击点"] = "combo", ["combo"] = "combo",
   ["距攻击"] = "swingLeft", ["swingLeft"] = "swingLeft", -- 1.57.0 距下次攻击秒数
   ["距射击"] = "shotLeft", ["距下次射击"] = "shotLeft", ["shotLeft"] = "shotLeft", -- ★1.74.30 距下次射击秒数（与「距攻击」成对）
+  -- ★★★1.75.11 近战围攻 / 交战人数（条件类型 → 自身状态；数值比较：步进 1 / 默认 1 / 上限 10）
+  --   用户原话：「技能编辑->添加条件类型->自身状态->10s交战人数N数量 比较类型,围攻自身N数量 比较类型.递步1 默认1 <10」
+  --   ★导出走这两个中文名（摘要/回显同一份）；导入两种写法都认（中文名 + 英文 id）
+  ["围攻"] = "mwSiege", ["围攻数"] = "mwSiege", ["围攻自身"] = "mwSiege", ["围攻自身数量"] = "mwSiege", ["mwSiege"] = "mwSiege",
+  ["交战"] = "mwEngaged", ["交战数"] = "mwEngaged", ["交战人数"] = "mwEngaged", ["mwEngaged"] = "mwEngaged",
   -- ★1.70.47 队伍/团队血量·蓝量百分比（条件自己去队里挑「血最少/蓝最少」的那个人，见 condOne）
   ["队伍血"] = "teamHp", ["队伍血量"] = "teamHp", ["teamHp"] = "teamHp",
   ["队伍蓝"] = "teamMana", ["队伍蓝量"] = "teamMana", ["teamMana"] = "teamMana",
@@ -3532,6 +3790,9 @@ local COND_BOOL = {
   ["不可攻击"] = { "canAttack", false },
   ["可流血"] = { "canBleed", true }, ["canBleed"] = { "canBleed", true },
   ["不可流血"] = { "canBleed", false },
+  -- ★1.75.10 目标死亡（导出侧写「目标死亡/目标未死亡」，解析侧必须成对认；缺一半 = 导入即丢条件）
+  ["目标死亡"] = { "tDead", true }, ["tDead"] = { "tDead", true },
+  ["目标未死亡"] = { "tDead", false }, ["目标没死"] = { "tDead", false },
   ["精英"] = { "isElite", true }, ["isElite"] = { "isElite", true },
   ["非精英"] = { "isElite", false },
   ["Boss"] = { "isBoss", true }, ["首领"] = { "isBoss", true }, ["isBoss"] = { "isBoss", true },
@@ -3712,6 +3973,20 @@ local function parseOneRaw(token)
     if any then return { k = "tCreature", cs = cs } end
     return nil
   end
+  -- ★★★1.75.10 目标玩家（导入/文本编辑）：目标玩家:X / tPlayer=X ；目标不是玩家:X / notplayer=X ；前置 ! 也认。
+  --   ★空名 = 写法错误 → 返回 nil **如实丢弃**（与其它条件同口径：宁可整条不要，也不静默留半个条件）。
+  local tpl = string.match(token, "^目标玩家[:：](.+)$") or string.match(token, "^tPlayer[:=](.+)$")
+  if tpl then
+    local nmP = condTrim(tpl)
+    if nmP == "" then return nil end
+    return { k = "tPlayer", nm = nmP, v = not neg }
+  end
+  local tpln = string.match(token, "^目标不是玩家[:：](.+)$") or string.match(token, "^notplayer[:=](.+)$")
+  if tpln then
+    local nmP2 = condTrim(tpln)
+    if nmP2 == "" then return nil end
+    return { k = "tPlayer", nm = nmP2, v = false }
+  end
   local tc = string.match(token, "^目标职业[:：](.+)$") or string.match(token, "^tClass[:=](.+)$")
   if tc then
     -- 分隔统一成 / 再切：顿号/中文逗号是多字节，直接进字符类会按字节误切汉字（如"猎"含 ，的字节）
@@ -3757,6 +4032,21 @@ local function parseOneRaw(token)
     return { k = "tracking", s = pid2, v = false }
   end
   local tg = string.match(token, "^选取目标[:：](.+)$") or string.match(token, "^target[:=](.+)$")
+  -- ★★1.75.10 英文 id 形态（byName=名 / playerTarget=名 / assistbyname=名）必须在**入口**归一：
+  --   下面 `if tg then` 里那两条 `^byName[:=]` 分支，因为入口的 tg 只认「选取目标:/target:」，
+  --   实际上是**死代码**（"byName=嗜血者" 连门都进不来）。这里补入口归一，一次救活两种带名选取器；
+  --   裸 id（"playerTarget" / "byName"）也一并认（与「目标玩家」的 tPlayer= 同族的英文写法）。
+  if not tg then
+    local idEn, nmEn = string.match(token, "^(byName)[:=](.+)$")
+    if not idEn then idEn, nmEn = string.match(token, "^(playerTarget)[:=](.+)$") end
+    if not idEn then idEn, nmEn = string.match(token, "^(assistbyname)[:=](.+)$") end
+    if not idEn then idEn, nmEn = string.match(token, "^(byName|playerTarget)$") end
+    if idEn then
+      if idEn == "assistbyname" then idEn = "playerTarget" end -- 函数名写法 = 同一个选取器
+      local dispEn = TARGET_SEL_NAME[idEn] or idEn
+      tg = nmEn and (dispEn .. ":" .. nmEn) or dispEn
+    end
+  end
   -- ★1.71.2 冒号可省：导出侧的**裸形式**「施法中」（不指定技能名）以前解析不回（配合 EVAL_COND_STR 的空名修复）
   local cst = string.match(token, "^施法中[:：]?(.*)$") or string.match(token, "^casting[:=]?(.*)$") -- 1.38.0 施法中条件
   -- ★1.71.2 空前缀（裸「施法中」）归一成 s=nil——与 tCasting 完全一致；「空串」和「nil」在求值里等价，
@@ -3770,6 +4060,10 @@ local function parseOneRaw(token)
     -- 指定名称:嗜血者 / byName=嗜血者（1.29.0：名称存 cd.nm）
     local nm = string.match(tg, "^指定名称[:：](.+)$") or string.match(tg, "^byName[:=](.+)$")
     if nm then nm = condTrim(nm) if nm ~= "" then return { k = "target", s = "byName", nm = nm } end return nil end
+    -- ★1.75.10 玩家的目标:嗜血者 / playerTarget=嗜血者 / assistbyname=嗜血者（名称同样存 cd.nm）
+    local nmA = string.match(tg, "^玩家的目标[:：](.+)$") or string.match(tg, "^playerTarget[:=](.+)$")
+      or string.match(tg, "^assistbyname[:=](.+)$")
+    if nmA then nmA = condTrim(nmA) if nmA ~= "" then return { k = "target", s = "playerTarget", nm = nmA } end return nil end
     local id = TARGET_SEL_ID[condTrim(tg)]
     if id then return { k = "target", s = id } end
     return nil
@@ -3933,7 +4227,7 @@ end
 
 -- 条件组 → 显示字符串（列表摘要 / 编辑回显）
 -- 1.49.2 power 显示名动态化（UnitPowerType：法力/怒气/集中值/能量——旧版硬编码「怒气」，法师看着别扭）
-local COND_NUMNAME = { power = (EVAL_POWERLABEL and EVAL_POWERLABEL() or "能量"), tHpPct = "目标血", hpPct = "自身血", swingLeft = "距攻击", shotLeft = "距射击", powerPct = "能量%", combatTime = "进战", castEl = "施法时间", castLeft = "施法剩余时间", tCastEl = "目标施法时间", tCastLeft = "目标施法剩余时间", combo = "连击" }
+local COND_NUMNAME = { power = (EVAL_POWERLABEL and EVAL_POWERLABEL() or "能量"), tHpPct = "目标血", hpPct = "自身血", swingLeft = "距攻击", shotLeft = "距射击", powerPct = "能量%", combatTime = "进战", castEl = "施法时间", castLeft = "施法剩余时间", tCastEl = "目标施法时间", tCastLeft = "目标施法剩余时间", combo = "连击", mwSiege = "围攻", mwEngaged = "交战" }
 -- ★1.71.3 队伍/团员条件的「职业/队伍」过滤后缀（**导出侧**）：空集不写 → 老配置导出后**逐字不变**
 local function teamFilterSuffix(cd)
   local out = ""
@@ -3983,6 +4277,7 @@ function EVAL_COND_STR(cd, disp)
   if k == "hasTarget" then return cd.v and "目标存在" or "无目标" end
   if k == "canAttack" then return cd.v and "可攻击" or "不可攻击" end
   if k == "canBleed" then return cd.v and "可流血" or "不可流血" end
+  if k == "tDead" then return cd.v and "目标死亡" or "目标未死亡" end -- ★1.75.10 目标死亡
   if k == "isElite" then return cd.v and "精英" or "非精英" end
   if k == "isBoss" then return cd.v and "Boss" or "非Boss" end
   if k == "tInCombat" then return cd.v and "目标战斗中" or "目标非战斗" end
@@ -4043,7 +4338,9 @@ function EVAL_COND_STR(cd, disp)
   if k == "usable" then return cd.inv and "不可用" or "可用" end
   if k == "notQueued" then return cd.inv and "已排队" or "未排队" end
   if k == "target" then
-    if cd.s == "byName" then return "选取目标:指定名称:" .. tostring(cd.nm or "?") end
+    -- ★1.75.10 带名称的选取器（指定名称 / 玩家的目标）统一走「选取目标:<显示名>:<名称>」——
+    --   与解析侧（targetSelOf / parseOneRaw）同一口径；漏一种就是「导出能看、导入即丢条件」。
+    if TARGET_SEL_NM[cd.s] then return "选取目标:" .. tostring(TARGET_SEL_NAME[cd.s] or cd.s) .. ":" .. tostring(cd.nm or "?") end
     return "选取目标:" .. tostring(TARGET_SEL_NAME[cd.s] or cd.s)
   end
       -- ★★★1.71.2 修：技能名为 nil / 空串时**不再拼冒号**。旧写法输出「施法中:nil」「施法中:」，
@@ -4062,6 +4359,13 @@ if k == "immune" then return (cd.v == false and "未免疫:" or "免疫:") .. to
     for _, c in ipairs(CREATURE_TYPES) do if cd.cs and cd.cs[c.id] then table.insert(ns, c.loc) end end
     local body = (table.getn(ns) > 0 and table.concat(ns, "/") or "未选")
     return ((cd.v == false) and "目标类型非:" or "目标类型:") .. body
+  end
+  if k == "tPlayer" then
+    -- ★★★1.75.10 目标玩家（导出/回显）：是 = 目标玩家:X ；否 = 目标不是玩家:X。
+    --   ★与解析侧**成对**（parseOneRaw 的 目标玩家/tPlayer 与 目标不是玩家/notplayer）——导出读不回 = 导入即丢条件。
+    local nmP = tostring(cd.nm or "")
+    if nmP == "" then nmP = "未填" end -- 空名在界面上/导出里如实写「未填」，不显示成空白
+    return ((cd.v == false) and "目标不是玩家:" or "目标玩家:") .. nmP
   end
   return tostring(k)
 end
@@ -4110,6 +4414,11 @@ function EVAL_GO(profSel)
   local goNow = GetTime()
   local goWin = tonumber(EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.goDebounce) or 0.3
   local goSkip = (goWin > 0) and (goNow - (EVAL_GO_LAST or 0) < goWin) or false
+  -- ★1.75.12 选取目标取证：每次调用都报一次「接受 / 被去抖丢弃」+ 距上一发的毫秒
+  --   —— 这是「调用到底在不在来」的直接证据（见文件上方「选取目标取证」段）：
+  --     接受多+间隔≈冲刷节奏 ⇒ 队列余震；丢弃多 ⇒ 键/宏在连发。
+  local goGapMs = (EVAL_GO_LAST and EVAL_GO_LAST > 0) and math.floor((goNow - EVAL_GO_LAST) * 1000 + 0.5) or nil
+  tselNoteGo(goSkip, goGapMs)
   EVAL_GO_TRACE = EVAL_GO_TRACE or {}
   table.insert(EVAL_GO_TRACE, 1, { t = goNow, skip = goSkip })
   while table.getn(EVAL_GO_TRACE) > 12 do table.remove(EVAL_GO_TRACE) end
@@ -4192,18 +4501,19 @@ function EVAL_GO(profSel)
     pickAtk("攻击", function() AttackTarget() end) -- 近战兜底（不查可用，自动攻击恒可开）
   end
   st.autoAttack = false
+  -- ★★1.75.12【修复·第 1 步】「补自动攻击」从规则评估之前**挪到之后**（真正按下去在下面 `tselInGo` 那一段）：
+  --   · `st.autoAttack` 仍然在这里采（规则里的「自动攻击」条件读它；采集与接管开关解耦 = 1.47.0 的纪律）；
+  --   · 这里只记下「当前没在自动攻击」这个**事实**（atkOff），不再当场按。
+  --   ★为什么挪（用户 1.75.12 报障 + 真机取证 `/eh go tsel log`）：旧位置在**规则之前**（"先调用"），
+  --     而本客户端的「攻击」= `AttackTarget()` **会顺带切目标**（官方文档只写 Toggles，实测会切）——
+  --     于是每一发成了「先被它把目标切走 → 再被 选取目标:最近敌人 切回来」，
+  --     用户看到的就是目标在**尸体与活怪之间无限来回跳**。
+  --   ★★别再挪回规则之前：1.62.0 曾挪到之后、1.65.0 又撤销，**那次是误诊**（真凶是 1.64.0 修的 pcall 多返回截断）；
+  --     1.75.12 是有真机证据的（组 251 + `/eh go tsel log` 里 `[攻击]`/`[选取]` 的先后与目标快照）。
+  local atkOff = false -- 「当前没在自动攻击」= 本发需要补
   if atkSlot and type(IsCurrentAction) == "function" then
     local okc, cur = pcall(IsCurrentAction, atkSlot)
-    if okc and cur then st.autoAttack = true end
-    -- 1.65.0 接管动作【还原】到规则评估之前（撤销 1.62.0 后移）：当时的「时序污染」是误诊——
-    -- 真凶是 1.64.0 修掉的 s and pcall 多返回截断（u/noMana 恒 nil 致可用性恒 false）。
-    -- 可用性现只信 noMana 资源信号，开弓/进战不再误杀冲锋类脱战技能；每次按键先补自动攻击（旧行为回归）。
-    if w.attack ~= false and okc and not cur and GetTime() - wLastAttackTry >= 2 then
-      wLastAttackTry = GetTime()
-      atkUse()
-      EVAL_LOGLINE("→ 开启自动攻击（" .. atkName .. "）")
-      wlog("开启自动攻击（" .. atkName .. "）")
-    end
+    if okc and cur then st.autoAttack = true else atkOff = (okc == true) end
   end
 
   -- 4~10) 输出循环 = 指定方案（profSel 参数）或当前激活方案的技能规则表
@@ -4229,7 +4539,52 @@ function EVAL_GO(profSel)
   else
     prof = w.profiles[w.activeProfile or 1]
   end
-  if prof and EVAL_RULE_RUN(prof.skills) then return end
+  -- ★1.75.12 取证用「按键轮号」：这一轮里的选取目标调用都会带上同一个 `p<N>`（见 tselInvoke）
+  tselInGo = tselPass
+  local acted = prof and EVAL_RULE_RUN(prof.skills)
+  -- ★★★1.75.12【修复·第 2 步】补自动攻击挪到**规则评估之后**，且**只在目标真的能打时**才按（理由见上一步的长注释）：
+  --   ① 目标是尸体 / 无目标 / 不可攻击（友方等）⇒ **一次都不按** —— 这正是用户报障的那个口子：
+  --      旧版只看「攻击格没在自动攻击」+ 2 秒节流，目标是尸体也照按，而本客户端的 `AttackTarget()` 会顺带切目标；
+  --   ② 判定用**实时 API**（UnitExists / UnitIsDeadOrGhost / UnitCanAttack），**不用 `st.canAttack`**——
+  --      规则可能刚切过目标，`st` 是这一轮开头采的、已经过期（本项目「读真值，不读缓存」纪律）；实时 API 缺失才退回它；
+  --   ③ 放在 `if acted then return end` **之前** ⇒ 规则出手了也照样补（"保持自动攻击"的意图不变）；
+  --   ④ 按之前/之后各拍一张目标快照写进取证环（`[攻击] … 前 ⇒ 后`）——本客户端的 AttackTarget 会不会切目标，
+  --      下一轮真机测试一眼可判（不必再靠"关掉开关再试"这种猜法）。
+  local function atkTargetAttackable()
+    if type(UnitExists) ~= "function" then return (st.canAttack == true) end
+    local okE, has = pcall(UnitExists, "target")
+    if not (okE and has) then return false end
+    if type(UnitIsDeadOrGhost) == "function" then
+      local okD, dead = pcall(UnitIsDeadOrGhost, "target")
+      if okD and dead then return false end
+    end
+    if type(UnitCanAttack) == "function" then
+      local okC, can = pcall(UnitCanAttack, "player", "target")
+      if okC and not can then return false end
+    end
+    return true
+  end
+  if atkOff and w.attack ~= false and GetTime() - wLastAttackTry >= 2 then
+    if not atkTargetAttackable() then
+      -- 如实留证：这是**故意不按**（尸体/无目标/不可攻击），不是"忘了" —— 否则下次排查还得靠猜
+      wlog("跳过补自动攻击（" .. tostring(atkName) .. "）：目标是尸体/不存在/不可攻击")
+    else
+      wLastAttackTry = GetTime()
+      local aBefore = tselSnap()
+      atkUse()
+      local aAfter = tselSnap()
+      local aline = string.format("[攻击] %s() p%s %s ⇒ %s%s", tostring(atkName),
+        (tselInGo ~= nil) and tostring(tselPass) or "-", aBefore, aAfter,
+        (aBefore == aAfter) and " 没变" or " **变了**")
+      tselPush(aline)
+      if type(EVAL_LOGLINE) == "function" then pcall(EVAL_LOGLINE, aline) end
+      if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug and type(EVAL_SAY) == "function" then
+        pcall(EVAL_SAY, "|cffffd080" .. aline .. "|r")
+      end
+    end
+  end
+  tselInGo = nil
+  if acted then return end
 
   -- 本次按键无动作：打一条状态行，方便对照调阈值
   -- ★1.71.2（第十八轮）小数值保留 1 位：目标血% 原为 %.0f —— 0.4% 会显示成「0%」，
@@ -4306,7 +4661,10 @@ function EVAL_GO_SKILL_CATEGORIES()
   table.insert(cats, { label = L("SK_CAT_4"), icon = CAT_ICON_ROOT .. "database", items = function()
     local l = {}
     for _, t in ipairs(TARGET_SEL) do
-      if t.needsName then table.insert(l, L("SE_PICK_TGT"))
+      -- ★1.75.10 两个「需要名字」的选取器必须给**不同**的菜单文案：选完要按文案串回查 id
+      --   （`targetSelOf` 剥掉尾部省略号再查 `TARGET_SEL_ID`）——同串 = 两行分不清，选了也分不出是哪种。
+      if t.id == "playerTarget" then table.insert(l, L("SE_PICK_TGT_PLAYER"))
+      elseif t.needsName then table.insert(l, L("SE_PICK_TGT"))
       else table.insert(l, "选取目标:" .. t.name) end
     end
     return l
@@ -4449,9 +4807,1282 @@ EVAL_FOLLOW_ICON = ACT_FOLLOW_ICON -- ★1.71.3 跟随的图标（图标库「�
 -- 1.71.3 移动脉冲已删（实测无效）→ 对应的两个测试观测口一并删除（不留死状态）
 EVAL_TARGET_SEL = TARGET_SEL
 EVAL_TSEL_NAME = TARGET_SEL_NAME
+-- ★1.75.10 追加两个读值口（用户问「选取目标:目标的目标 可行性」时要能**离线断言**这条选取走的是哪个函数）：
+--   `EVAL_TSEL_ID[名字或 id] = id`（内置双向映射）· `EVAL_TSEL_FN[id] = 客户端函数名`。
+--   ★判据价值：`targetTarget` 必须走 **TargetUnit**（解析不到=什么都不做），**绝不许**被改成 AssistUnit
+--     （后者对解析不到的 UnitID 会**清掉当前目标** —— 官方 Targetting 页明文）。
+EVAL_TSEL_ID = TARGET_SEL_ID
+EVAL_TSEL_FN = TARGET_SEL_FN
+-- ★1.75.10 `EVAL_TSEL_NM[id] = true` = 「这一条选取需要名字参数」（指定名称 / 玩家的目标）——
+--   宿主（EvalHelp.lua）编辑器与技能级下拉读它，别再各写一份 `cd.s == "byName"`（漏一处就是静默）。
+EVAL_TSEL_NM = TARGET_SEL_NM
+EVAL_TSEL_NEEDTGT = TARGET_SEL_NEEDTGT -- 调用后必须有目标（当前只有 playerTarget；如实失败判据）
 EVAL_CLASS_LIST = CLASS_LIST
 EVAL_COND_TRIM = condTrim
 EVAL_COLON_NORM = colonNorm -- ★1.71.3 全角冒号归一（EvalHelp 解析导入文本时同样要用）
 EVAL_P_HASBUFF = wPlayerHasBuff
 EVAL_T_HASDEBUFF = wTargetHasDebuff
 EVAL_IS_SCANNED = function() return wscanned end
+
+-- ===== 近战围攻探针（1.75.11）：战斗中「有几只怪在近战打我」+「周围有几只敌人」的可行性取证 =====
+-- ★用户需求（原话）：「排查能否战斗中多少个怪同时近战攻击你.然后统计出周围怪数量的条件机制?先排查出命令我测试」
+-- ★官方事实（本机 doc/api_*.html 全表 1370 条 + tmp\wiki\functions.txt 逐条核过，不是印象）：
+--   · **没有任何「附近敌人枚举」API**（没有 GetNumEnemyUnits / UnitInRange 之类）⇒ 真值只能靠
+--     TargetNearestEnemy 循环选取边切边数（既有实现 = EVAL_NEARBY_ENEMY_NAMES，1.29.0 起就在用）；
+--     ★★但用户 1.75.11 定了口径：「**非战斗也不要切目标**」⇒ 自动路径**一个目标都不切**
+--       （状态UI 上的「交战数」走纯消息口径，见文件末尾的临时测试挂接）；
+--       TargetNearestEnemy 那条降级成手工命令：只有显式敲 `/eh go melee 周围 切目标` 才切一次。
+--   · 有 UnitIsEnemy / UnitIsFriend / UnitAffectingCombat / UnitIsVisible / CheckInteractDistance 可用。
+--   · **事件名在官方索引里查不到**（functions.txt 只有函数，没有 Events 页）⇒「哪条聊天事件承载『X 击中你』」
+--     **不许猜**（CLAUDE.md 铁律 5 第 ④ 条）。本探针走两条正规取证路：
+--       ① GetChatWindowMessages(1) —— 本客户端返回**逗号分隔的组名串**（Toolbox.lua 1.73.12 实测形态）
+--          ⇒ 把含 COMBAT 的组名全列出来（这是**客户端自己认的**组名，不是我猜的）；
+--       ② 挂一组候选事件并**统计每个事件实际触发了几次** ⇒ 谁真的跟着走一目了然（0 次 = 本客户端没有这个事件名）。
+--   · 攻击者名字**从消息正文认**（不是 arg2）：1.12 的 CHAT_MSG_COMBAT_* 里 arg2 多半是空串，
+--     而本客户端的参数布局只能实测 ⇒ 探针把 arg1/arg2/arg3 **原样**记下来，认不出也留证（绝不静默丢）。
+-- ★读数专属落盘 cfg.meleeProbe（有界 40 行，已进 Core 调试残渣键清单）：
+--   say 只进聊天框、**不落日志环**（1.75.9 教训），且存档只在 /reload/退出时写盘 ⇒ 不自己存一份我这边读不到。
+-- ★「关掉零动作」：不跑「开始」就**一个事件都不挂、一个字节都不读**（默认零动作）。
+
+local MW = {
+  on = false, frame = nil, win = 4, t0 = nil, n = 0, -- win = 报告/默认统计窗口（★1.75.11 6 → 4，与 MW_UIWIN 同步）
+  counts = {},  -- 事件名 -> 触发次数（★取证核心读数：0 次 = 本客户端没有这个事件名）
+  atk = {},     -- 攻击者名 -> { last = 最近一次命中时间, n = 次数, first = 首次 }
+  hits = {},    -- ★1.75.11 被围攻估算：最近若干次「怪近战挥击」{ t = 时刻, nm = 怪名 }（有界 MW_HITS_MAX）
+  ivl = {},     -- ★1.75.11 自学习的「怪名 -> 攻速档位」（只在**可证单只**的窗口里学；跨战斗保留=知识）
+  ivlN = {},    -- ★每个名字**档位更新过几次**（真的变了才 +1；首次学到算 1 次）
+  ivlSeen = {}, -- ★每个名字被**确认单只**过几次（监测证据：一直在盯，只是档位没变而已）
+  ivlLog = {},  -- ★档位**变更日志**（有界 12 条：旧档→新档 + 实测中位间隔），报告里打出来自证「及时更新」
+  raw = {},     -- 最近 8 条原始样本（事件名 + arg1/2/3 原样）
+  miss = {},    -- 最近 6 条「认不出攻击者」的原文（★不许静默丢，认不出也要留证）
+  seen = {},    -- 交战过的怪名（它打我 / 我打它）-> { last, n, dir }：★「周围怪数」的消息口径，零切目标
+  -- ★全事件抓取（RegisterAllEvents 模式）：事件名官方**没有索引** ⇒ 只能把真机来过的事件读出来
+  all = false, allCounts = {}, allSample = {}, seq = {},
+  reg = {}, bad = {},
+}
+local MW_OUT_MAX = 120 -- ★1.75.11 40 → 120：真机实测一次完整报告就 ~40 行，把上一轮读数全冲掉了（战斗窗口/全事件读数就是这么丢的）
+-- ★★★1.75.11 统计窗口 = **4s**（用户口径：「根据攻速统计怪个数的统计时间调整到4s 内,离开战斗重置」）
+local MW_UIWIN = 4   -- 状态UI/战斗UI「围攻」窗口（秒）
+local MW_UIENG = 10  -- 状态UI「交战」窗口（秒；消息口径，零切目标）
+-- ★★★1.75.11 被围攻估算 —— 全部建立在**用户给的领域约束**上（这轮自学习/灵敏度的根据，别改回去）：
+--   ① 怪的攻速只可能是 **1.5 / 2.0 / 2.5** 三档 ⇒ 学到的间隔一律**吸附到档位**（不再存 1.8 这种中间值）；
+--   ② 单只怪的真实间隔 ≥1.5，而两只怪错相时的最小间隔 ≤ 2.5/2 = 1.25
+--      ⇒ ★**观测到的相邻两条间隔 ≥1.4 ⇒ 必然是同一只怪**（可证，不是估算）；反之出现 ≤1.3 的间隔 ⇒ 至少 2 只。
+--   ⇒ 「这是几只」在单只那一档从**估算**升级成**定理**：独苗永远是 1 只，绝不四舍五入成 2 只；
+--     多只那一档才用「窗口内条数 ÷ 档位间隔」+ 跨度反推（两条估计取大 ⇒ 更灵敏）。
+--   怪的一次挥击（命中/未命中/被闪避招架格挡）**恰好一条消息** ⇒ 到达率 ∝ 攻击者数 ÷ 档位间隔。
+--   ★必须**窗口化**（不能用 atk[nm].n 那个「进战以来累计」）：先单挑 A 60s、B/C 最后 4s 才来，
+--     累计次数 ÷ 累计时长照样算出 1 只 —— 那是「平均」不是「现在有几只」。
+--   ★与名字无关 ⇒ 认不出名字的挥击也照计（「名字认不出」和「这次挥击没发生」是两件事）。
+local MW_ESTI = 2.0    -- 默认档（还没学到该怪名字的档位时用它）
+local MW_ESTCAP = 8    -- 估算上限（★有界：技能连击/异常不许把数顶飞 —— 这个数会驱逐一键宏，宁保守）
+local MW_HITS_MAX = 64 -- 挥击时间环上限（★有界数组：绝不无界增长）
+local MW_TIERS = { 1.5, 2.0, 2.5 } -- ★用户给的攻速档位（唯一合法取值；吸附/反推都只在这三档里挑）
+local MW_GAP_SINGLE = 1.4 -- 相邻间隔 ≥ 它 ⇒ **可证**这只怪是独苗（单只 ≥1.5；两只 ≤1.25）
+local MW_GAP_MULTI = 1.3  -- 相邻间隔 ≤ 它 ⇒ 至少 2 只（同上，两个数不许互换）
+local MW_TIER_TOL = 0.25  -- 吸附到档位的容差（离三档都超过它 ⇒ 如实**不学**，不硬套）
+local MW_FIT_MIN_N = 4    -- 「没学过档位」时按到达节奏反推档位所需的最小样本数
+local MW_FIT_MIN_SPAN = 3.0 -- 反推档位所需的最小跨度（秒）：跨度太短时相位聚集会把档位判歪
+local MW_FIT_TOL = 0.25   -- 反推档位的拟合容差
+local MW_IVLLOG_MAX = 12  -- 档位变更日志条数上限（★有界）
+-- 候选事件（1.12 家族的经典命名；★真伪由「触发次数」+ 组名串定案，这里只是候选，不当作事实）
+local MW_EVENTS = {
+  "CHAT_MSG_COMBAT_CREATURE_VS_SELF_HITS",
+  "CHAT_MSG_COMBAT_CREATURE_VS_SELF_MISSES",
+  "CHAT_MSG_COMBAT_CREATURE_VS_PARTY_HITS",
+  "CHAT_MSG_COMBAT_CREATURE_VS_PARTY_MISSES",
+  "CHAT_MSG_COMBAT_CREATURE_VS_CREATURE_HITS",
+  "CHAT_MSG_COMBAT_HOSTILEPLAYER_HITS",
+  "CHAT_MSG_COMBAT_HOSTILEPLAYER_MISSES",
+  "CHAT_MSG_COMBAT_SELF_HITS",              -- 对照：1.55.0 挥击计时已在用的那条（本插件确定在用）
+  "CHAT_MSG_SPELL_CREATURE_VS_SELF_DAMAGE", -- 对照：法术/远程打你（用来把「近战」与「法术」分开）
+  -- ★★★1.75.11 真机实测追加（LIHAIBOAS2 一轮战斗的读数，见 cfg.meleeProbe）：
+  --   ① 我方持续伤害（撕裂/毒等）走**这条**，不是 SELF_HITS：
+  --      「你的撕裂使大峭壁野猪受到了5点物理伤害。」⇒ CHAT_MSG_SPELL_PERIODIC_CREATURE_DAMAGE
+  "CHAT_MSG_SPELL_PERIODIC_CREATURE_DAMAGE", -- 实测：我方 DoT 打怪（归 out = 交战数）
+  --   ② 击杀：CHAT_MSG_COMBAT_HOSTILE_DEATH（实测两种文案「你杀死了X！」/「X死亡了。」）
+  --      ⇒ 用来把死掉的怪**踢出围攻桶**（尸体不该继续算「还在打我」）
+  "CHAT_MSG_COMBAT_HOSTILE_DEATH",          -- 实测：击杀（归 kill）
+  -- ★★★1.75.11 真机 `全事件` 读数（LIHAIBOAS2，398s）逼出来的**反查项**：那 398s 里只来过
+  --   CHAT_MSG_ADDON / CURSOR_UPDATE / CHAT_MSG_CHANNEL_LEAVE / GUILD_ROSTER_UPDATE / UPDATE_MOUSEOVER_UNIT
+  --   —— **没有 PLAYER_REGEN_* / PLAYER_TARGET_CHANGED / 任何 UNIT_***。
+  --   若属实 ⇒ 主插件的「进出战斗输出」（PLAYER_REGEN_*）与「切目标刷新状态」（PLAYER_TARGET_CHANGED）
+  --   在本客户端**静默失效**（状态UI 仍对，是因为 st.inCombat 走的是轮询 UnitAffectingCombat）。
+  --   ⇒ 这 4 条挂成候选（kind=meta：**只计数**，不进任何桶）把这件事**钉死**：0 次 = 客户端真的不发。
+  "PLAYER_REGEN_DISABLED",                   -- meta：主插件用它记「进战时刻」/ 进出战斗输出
+  "PLAYER_REGEN_ENABLED",                    -- meta：同上（脱战）
+  "PLAYER_TARGET_CHANGED",                   -- meta：主插件用它切目标刷新状态
+  -- ★★★1.75.11 全事件抓取（229.8s / 55 个事件名）抓出来的**结构化战斗信息**候选 ——
+  --   这几条**之前完全不知道存在**（事件名官方无索引 ⇒ 只有全收才能发现）：
+  "UNIT_COMBAT",              -- 实测 107 次：arg1=target | arg2=WOUND | arg3=空 ⇒ 结构化「受伤」
+  "COMBAT_TEXT_UPDATE",       -- 实测  56 次：arg1=DAMAGE | arg2=4 ⇒ 浮动战斗文字（类型+数值）
+  "PLAYER_ENTER_COMBAT",      -- 实测  11 次：另有进战事件（比 PLAYER_REGEN_* 更频繁，11/11 成对）
+  "PLAYER_LEAVE_COMBAT",      -- 实测  11 次
+  "PLAYER_AURAS_CHANGED",     -- 实测  47 次：光环变化（buff/debuff 实时刷新的省事路）
+  "CURRENT_SPELL_CAST_CHANGED", -- 实测 38 次：施法变化（本客户端无 UnitCastingInfo 的替代信号）
+  "UNIT_HEALTH",                             -- meta：对照 —— 看本客户端到底发不发 UNIT_* 系列
+}
+local MW_ISEV = {}
+for _, e in ipairs(MW_EVENTS) do MW_ISEV[e] = true end
+-- 每条候选通道的语义分类（决定它进不进「围攻我的怪数」）：
+--   in    = 怪用近战打我（★唯一进围攻统计的通道）
+--   party = 怪打队友（旁证：说明这条事件名存在，但不是打我）
+--   pvp   = 敌对玩家打我（1.12 有些客户端把 PvP 分出来）
+--   other = 怪打怪/别的
+--   out   = 对照：我打别人（1.55.0 已在用，确认存在的锚）
+--   spell = 对照：法术/远程打我（正文里带技能名，不能当近战名用）
+local MW_KIND = {
+  ["CHAT_MSG_COMBAT_CREATURE_VS_SELF_HITS"] = "in",
+  ["CHAT_MSG_COMBAT_CREATURE_VS_SELF_MISSES"] = "in",
+  ["CHAT_MSG_COMBAT_CREATURE_VS_PARTY_HITS"] = "party",
+  ["CHAT_MSG_COMBAT_CREATURE_VS_PARTY_MISSES"] = "party",
+  ["CHAT_MSG_COMBAT_CREATURE_VS_CREATURE_HITS"] = "other",
+  ["CHAT_MSG_COMBAT_HOSTILEPLAYER_HITS"] = "pvp",
+  ["CHAT_MSG_COMBAT_HOSTILEPLAYER_MISSES"] = "pvp",
+  ["CHAT_MSG_COMBAT_SELF_HITS"] = "out",
+  ["CHAT_MSG_SPELL_CREATURE_VS_SELF_DAMAGE"] = "spell",
+  ["CHAT_MSG_SPELL_PERIODIC_CREATURE_DAMAGE"] = "out", -- 实测：我方 DoT
+  ["CHAT_MSG_COMBAT_HOSTILE_DEATH"] = "kill",           -- 实测：击杀 ⇒ 把该怪踢出桶
+  ["PLAYER_REGEN_DISABLED"] = "meta",  -- 只计数（反查主插件的进战事件到底有没有来）
+  ["PLAYER_REGEN_ENABLED"] = "meta",
+  ["PLAYER_TARGET_CHANGED"] = "meta",
+  ["UNIT_HEALTH"] = "meta",
+  ["UNIT_COMBAT"] = "meta",                 -- ★只计数 + 进 ⑨ 参数序列（语义待下一轮定案）
+  ["COMBAT_TEXT_UPDATE"] = "meta",          -- ★同上（可能是「不解析文本就能拿伤害」的那条路）
+  ["PLAYER_ENTER_COMBAT"] = "meta",
+  ["PLAYER_LEAVE_COMBAT"] = "meta",
+  ["PLAYER_AURAS_CHANGED"] = "meta",
+  ["CURRENT_SPELL_CAST_CHANGED"] = "meta",
+-- ★⑨ 段专用：这几条要看**不止首次**参数（要看清 arg1 会不会出现 player、arg3 是什么）
+}
+
+local MW_SEQ_EV = {
+  ["UNIT_COMBAT"] = true,
+  ["COMBAT_TEXT_UPDATE"] = true,
+  ["PLAYER_ENTER_COMBAT"] = true,
+  ["PLAYER_LEAVE_COMBAT"] = true,
+}
+
+-- 名字清洗：多字节禁入 Lua [...]（CLAUDE.md 5.1）⇒ 标点判断只看**首字节**（UTF-8：。=E3 80 82 ／ ，！？：=EF BC xx）
+local function mwClean(nm)
+  if type(nm) ~= "string" then return nil end
+  nm = string.gsub(nm, "^%s+", "")
+  nm = string.gsub(nm, "%s+$", "")
+  if nm == "" or nm == "你" then return nil end
+  if string.len(nm) > 40 then return nil end
+  local b = string.byte(nm, 1)
+  -- ★★本客户端聊天文本是 **UTF-8**（不是 GBK！）：CJK 表意字 = E4~E9 打头（雪=E9、黑=E9、幼=E5…）；
+  --   CJK 标点 = E3 80 xx（。、）· 全角标点 = EF BC xx（，！？：）· 通用标点/符号 = E2 80/87 xx（… ⇒）。
+  --   ⇒ 首字节是 E2/E3/EF 的一律**不是怪名**（是标点/符号）—— 离线实测：旧写法按 GBK 的 A1/A3 判断，
+  --     「你闪避了。」会被认成攻击者名叫「。」（UTF-8 的 。= E3 80 82）⇒ 这条是那次离线测试抓出来的真 bug。
+  if b == 0xE2 or b == 0xE3 or b == 0xEF then return nil end
+  local c1 = string.sub(nm, 1, 1)
+  if c1 == "." or c1 == "," or c1 == "!" or c1 == "?" or c1 == ":" or c1 == ";" then return nil end
+  return nm
+end
+
+-- 「X的Y击中你…」（怪的技能/毒素打你）⇒ 攻击者是**的**之前那段，否则同一只怪会以
+--   「雪豹幼崽」和「雪豹幼崽的撕咬」两个名字各记一笔 ⇒ 围攻数**虚高**（这种假数据最难发现）。
+--   ★怪名通常不含「的」；归一只改计数键，原文照样留在 ④ 原始样本里可回溯。
+local function mwBase(nm)
+  if type(nm) ~= "string" then return nm end
+  local b = string.match(nm, "^(.-)的")
+  if b ~= nil and b ~= "" then return b end
+  return nm
+end
+
+-- 从战斗消息原文里认出「攻击者名字」（纯函数，可断言）。返回 名字 或 nil + 原因
+local MW_NAME_FIRST = { -- 名字在动词**前**：「野猪击中你造成12点伤害。」
+  -- ★★★1.75.11 真机存档抓到的**幽灵名**：「峭壁野猪没有击中你。」按「最早出现的动词」切会切在「击中你」上
+  --   ⇒ 名字段成了「峭壁野猪没有」⇒ 同一只怪在桶里**多出一个假攻击者**（存档 ③ 段真出现过「峭壁野猪没有」）。
+  --   修法 = 把带「没有」的**完整短语也放进动词表**：它起点更早 ⇒ 切点自动落到「没有」之前，名字正好是怪名。
+  "没有击中你", "没有命中你", "没有打中你",
+  "击中你", "攻击你", "命中你", "对你造成", "打中你", "拍击你", "撕咬你",
+  -- ★1.75.11 实测补：「X发起了攻击。你招架住了。」= CREATURE_VS_SELF_MISSES 的真实文案
+  --   （旧表认不出 ⇒ 那条未命中被记进 ⑤；这是 ④⑤ 留证设计当场抓到的第一个真缺陷）
+  "发起了攻击",
+  " hits you", " misses you", " attacks you", " hit you",
+}
+local MW_NAME_AFTER = { -- 名字在动词**后**：「你闪避了野猪的攻击。」/ "You dodge Wolf's attack."
+  "闪避了", "招架了", "格挡了", "躲开了", " dodge ", " parry ", " block ", " resist ",
+}
+function EVAL_MELEE_ATTACKER(txt)
+  if type(txt) ~= "string" or txt == "" then return nil, "empty" end
+  -- ① 名字在前：取**最早**出现的那个动词之前的整段
+  local cut = nil
+  for _, v in ipairs(MW_NAME_FIRST) do
+    local s = string.find(txt, v, 1, true)
+    if s ~= nil and (cut == nil or s < cut) then cut = s end
+  end
+  if cut ~= nil and cut > 1 then
+    local nm = mwBase(mwClean(string.sub(txt, 1, cut - 1)))
+    if nm ~= nil then return nm, "first" end
+  end
+  -- ② 名字在动词之后
+  for _, v in ipairs(MW_NAME_AFTER) do
+    local _, e = string.find(txt, v, 1, true)
+    if e ~= nil then
+      local rest = string.sub(txt, e + 1)
+      local p = string.find(rest, "的", 1, true)
+      if p == nil then p = string.find(rest, "'", 1, true) end
+      local nm2 = mwClean((p ~= nil) and string.sub(rest, 1, p - 1) or rest)
+      if nm2 ~= nil then return nm2, "after" end
+    end
+  end
+  return nil, "nomatch"
+end
+
+-- 「我打它」方向的名字（**只用于交战数**，绝不进「围攻我的怪数」）：
+--   中文「你击中X造成…」/「你爆击X造成…」· 宠物技能「你的撕咬使X受到了…」· 英文 "You hit X for …"。
+--   认不出就返回 nil（不猜；原文照样留在 ④ 原始样本里可回溯）。
+local function mwVictim(txt)
+  if type(txt) ~= "string" or txt == "" then return nil end
+  for _, v in ipairs({ "你击中", "你爆击" }) do
+    local _, e = string.find(txt, v, 1, true)
+    if e ~= nil then
+      local rest = string.sub(txt, e + 1)
+      local p = string.find(rest, "造成", 1, true)
+      local nm = mwClean((p ~= nil) and string.sub(rest, 1, p - 1) or rest)
+      if nm ~= nil then return nm end
+    end
+  end
+  do
+    local _, e = string.find(txt, "使", 1, true)
+    if e ~= nil then
+      local rest = string.sub(txt, e + 1)
+      local p = string.find(rest, "受到了", 1, true)
+      if p ~= nil then
+        local nm = mwClean(string.sub(rest, 1, p - 1))
+        if nm ~= nil then return nm end
+      end
+    end
+  end
+  -- ★1.75.11 实测补：「你没有击中大峭壁野猪。」（我方未命中）也带受害者名 ⇒ 归 out
+  do
+    local _, eM = string.find(txt, "你没有击中", 1, true)
+    if eM ~= nil then
+      local restM = string.sub(txt, eM + 1)
+      local pM = string.find(restM, "。", 1, true)
+      local nmM = mwClean((pM ~= nil) and string.sub(restM, 1, pM - 1) or restM)
+      if nmM ~= nil then return nmM end
+    end
+  end
+  for _, v in ipairs({ "You hit ", "You crit " }) do
+    local _, e = string.find(txt, v, 1, true)
+    if e ~= nil then
+      local rest = string.sub(txt, e + 1)
+      local p = string.find(rest, " for", 1, true)
+      local nm = mwClean((p ~= nil) and string.sub(rest, 1, p - 1) or rest)
+      if nm ~= nil then return nm end
+    end
+  end
+  return nil
+end
+
+-- 记一笔「这个怪名最近跟我有过来往」（它打我 = dir in ／ 我打它 = dir out）
+local function mwSee(nm, t, dir)
+  if type(nm) ~= "string" or nm == "" then return end
+  local r = MW.seen[nm]
+  if r == nil then r = { last = t, n = 0, dir = dir } MW.seen[nm] = r end
+  r.last = t
+  r.n = r.n + 1
+  r.dir = dir
+end
+-- 战斗状态闸门（★用户 1.75.11 口径：「周围怪统计只计算战斗状态.非战斗状态不需要统计」）：
+--   · 闸门放在**桶写入之前**（与「关掉零动作」同族）：非战斗时只计数 + 落原始样本，
+--     **不进** MW.atk / MW.seen（不进桶 = 那个数根本不会被算出来）；
+--   · **进战清桶**：上一场的怪绝不许带进新一场（否则「刚打完那只」会在下一场开头冒充围攻数）；
+--   · **脱战也清桶**（★1.75.11 用户口径「离开战斗重置」）：清之前先留一行「上一场快照」进读数环，
+--     取证不丢（用户往往打完才敲 报告），但显示与条件一律按战斗状态给值（见 EVAL_MW_ACTIVE_INFO / EVAL_MW_UI_LINES）。
+local function mwInCombat()
+  if type(UnitAffectingCombat) ~= "function" then return false end
+  local ok, v = pcall(UnitAffectingCombat, "player")
+  return (ok and v) and true or false
+end
+local function mwCombatSync()
+  local inC = mwInCombat()
+  if inC ~= MW.inC then
+    MW.inC = inC
+    local t = (type(GetTime) == "function") and GetTime() or 0
+    if inC then
+      MW.atk, MW.seen = {}, {}   -- ★进战 = 新一场：清空上一场的桶
+      MW.hits = {}               -- ★同理：上一场的挥击时刻不许带进新一场（否则开场第一拍就虚高）
+      MW.cStart = t
+    else
+      MW.cEnd = t
+      -- ★★★1.75.11 用户口径：「离开战斗重置」⇒ 脱战把**计数用的桶**清空（下一场从零开始；
+      --   脱战后读值口/两个 UI 都是 0，不会拿上一场的残留冒充现状）。
+      --   ★保留的三样：① 学到的攻速档位 MW.ivl（那是「这类怪多久挥一下」的知识，跨战斗才有用）；
+      --     ② 取证计数（MW.counts/kills/peak —— 报告要看得见上一场）；③ 一行「上一场快照」。
+      --   ★清 **之前** 先留快照：否则脱战后敲 报告 只剩 0 只，真机取证被这次重置吃掉（1.75.9 的老教训）。
+      if next(MW.atk) ~= nil then
+        local lst = {}
+        for nmL, rL in pairs(MW.atk) do table.insert(lst, string.format("%s×%d", tostring(nmL), rL.n or 0)) end
+        table.sort(lst)
+        MW.lastSum = string.format("上一场（脱战即重置）：围攻过我的 %d 种 ｜ 本场峰值 %d 只 ｜ %s",
+          table.getn(lst), MW.peak or 0, table.concat(lst, " "))
+      end
+      MW.atk, MW.seen, MW.hits = {}, {}, {}
+    end
+  end
+  return inC
+end
+-- 击杀文案（★真机实测两种）：「你杀死了大峭壁野猪！」「大峭壁野猪死亡了。」
+function EVAL_MELEE_KILLNAME(txt)
+  if type(txt) ~= "string" or txt == "" then return nil end
+  local _, eK = string.find(txt, "你杀死了", 1, true)
+  if eK ~= nil then
+    local restK = string.sub(txt, eK + 1)
+    local pK = string.find(restK, "！", 1, true)
+    if pK == nil then pK = string.find(restK, "!", 1, true) end
+    local nmK = mwClean((pK ~= nil) and string.sub(restK, 1, pK - 1) or restK)
+    if nmK ~= nil then return nmK end
+  end
+  local pK2 = string.find(txt, "死亡了", 1, true)
+  if pK2 ~= nil and pK2 > 1 then
+    local nmK2 = mwClean(string.sub(txt, 1, pK2 - 1))
+    if nmK2 ~= nil then return nmK2 end
+  end
+  return nil
+end
+-- 喂入一条事件（探针关闭时**什么都不做**，返回 false）
+-- 喂入一条事件（探针关闭时**什么都不做**，返回 false）
+function EVAL_MW_FEED(ev, a1, a2, a3)
+  if not MW.on then return false end
+  local inC = mwCombatSync() -- ★先同步战斗状态（进战清桶 / 脱战只标记）
+  local t = (type(GetTime) == "function") and GetTime() or 0
+  MW.n = MW.n + 1
+  if type(ev) == "string" then MW.counts[ev] = (MW.counts[ev] or 0) + 1 end
+  local kind = MW_KIND[ev] or "?"
+  -- ★⑨ 结构化通道的参数**序列**（有界 16 条）：UNIT_COMBAT / COMBAT_TEXT_UPDATE 这类要看清
+  --   「arg1 会不会出现 player / arg2 有哪些类型 / arg3 是什么」——只看首次样本定不了案。
+  if MW_SEQ_EV[ev] then
+    table.insert(MW.seq, string.format("%s | arg1=%s | arg2=%s | arg3=%s", tostring(ev), tostring(a1), tostring(a2), tostring(a3)))
+    while table.getn(MW.seq) > 16 do table.remove(MW.seq, 1) end
+  end
+  -- ★★meta 事件不进原始样本（真机实测：PLAYER_TARGET_CHANGED = **624 次/60s**、UNIT_HEALTH = 176 次）
+  --   实测它们把 ④ 段 8 个名额全占了、战斗原文一条都留不下（样本池的设计缺陷，当场修）。
+  if kind ~= "meta" then
+    table.insert(MW.raw, string.format("%s | arg1=%s | arg2=%s | arg3=%s", tostring(ev), tostring(a1), tostring(a2), tostring(a3)))
+    while table.getn(MW.raw) > 8 do table.remove(MW.raw, 1) end
+  end
+  if not inC then return true end
+  -- ★击杀（实测 CHAT_MSG_COMBAT_HOSTILE_DEATH）：同一只怪会发**两条**死亡文案
+  --   （「你杀死了X！」+「X死亡了。」）⇒ 1 秒内同名只计一次（否则击杀数直接翻倍，实测 12 次 = 6 只）
+  if kind == "kill" then
+    local kn = EVAL_MELEE_KILLNAME(a1)
+    if kn ~= nil then
+      MW.killLast = MW.killLast or {}
+      local lastK = MW.killLast[kn]
+      if lastK == nil or (t - lastK) > 1.0 then
+        MW.kills = (MW.kills or 0) + 1
+        MW.killLast[kn] = t
+      end
+      MW.atk[kn], MW.seen[kn] = nil, nil -- 死了就踢出两个桶（尸体不许继续算「还在围攻我」）
+    end
+    return true
+  end
+  -- ★只有「怪用近战打我」这条通道进「围攻我的怪数」（kind=in）；其它通道只计数 + 已落 ④ 原始样本。
+  --   理由：法术通道正文是「X的冰霜箭击中你…」（名字里带技能名）、怪打队友根本不是打我 ⇒
+  --   混进来会把「近战围攻我的怪数」读假（假读数最难发现，因为看着很像真数据）。
+  if kind == "in" then
+    local nm = EVAL_MELEE_ATTACKER(a1) -- ★只认正文；认不出留证
+    -- ★★★1.75.11 记进时间环（★每条**只记一次** —— 早先这里先插了个裸时间戳、再插一次表，
+    --   于是环里一半是垃圾、实际只装得下一半样本）。放在认名字的判空**之前**是判据：
+    --   认不出的挥击也是挥击（名字记 "?"），漏掉它估算就偏低（组 249⑥ 有哨兵）。
+    table.insert(MW.hits, { t = t, nm = nm or "?" })
+    while table.getn(MW.hits) > MW_HITS_MAX do table.remove(MW.hits, 1) end
+    if nm == nil then
+      table.insert(MW.miss, tostring(ev) .. " → " .. tostring(a1))
+      while table.getn(MW.miss) > 6 do table.remove(MW.miss, 1) end
+      return true
+    end
+    local rec = MW.atk[nm]
+    if rec == nil then rec = { last = t, n = 0, first = t } MW.atk[nm] = rec end
+    rec.last = t
+    rec.n = rec.n + 1
+    mwSee(nm, t, "in")
+    -- ★本场峰值：脱战后仍能看「这一场最多几只同时打我」（用户口径：只统计战斗状态）
+    --   ★1.75.11 改用**估算**（按怪名分组 + 定档规则）—— 名字口径对同名怪只会数成 1，峰值也跟着虚低。
+    local okP, nEst = pcall(EVAL_MW_EST_N, MW.win, t)
+    if not (okP and type(nEst) == "number") then nEst = table.getn(EVAL_MW_ATTACKERS(MW.win, t)) end
+    if nEst > (MW.peak or 0) then MW.peak = nEst end
+    return true
+  end
+  -- ★「我打它」方向**只喂交战数**，绝不进 MW.atk：那会让「我在打它」也算成「它在打我」⇒ 围攻数虚高。
+  if kind == "out" then
+    local nm2 = mwVictim(a1)
+    if nm2 ~= nil then mwSee(nm2, t, "out") end
+  end
+  return true
+end
+
+-- 窗口内「还在打我」的攻击者清单（按距上次命中升序）；win/now 可注入（便于断言）
+function EVAL_MW_ATTACKERS(win, now)
+  local w = tonumber(win) or MW.win
+  local tn = tonumber(now) or ((type(GetTime) == "function") and GetTime() or 0)
+  local list = {}
+  for nm, r in pairs(MW.atk) do
+    local age = tn - (r.last or 0)
+    if age <= w then table.insert(list, { nm = nm, age = age, n = r.n, out = false }) end
+  end
+  table.sort(list, function(a, b) return (a.age or 0) < (b.age or 0) end)
+  return list
+end
+
+-- ★1.75.11 攻速**定档吸附**（用户给的约束：只可能是 1.5 / 2.0 / 2.5 三档）：
+--   把观测到的间隔吸附到最近的档位；离三档都超过容差 MW_TIER_TOL ⇒ 返回 nil（如实**不学**，绝不硬套）。
+local function mwTierOf(g)
+  if type(g) ~= "number" then return nil end
+  local best, bd = nil, nil
+  for i = 1, table.getn(MW_TIERS) do
+    local d = math.abs(g - MW_TIERS[i])
+    if bd == nil or d < bd then best, bd = MW_TIERS[i], d end
+  end
+  if best == nil or bd == nil or bd > MW_TIER_TOL then return nil end
+  return best
+end
+-- 相邻两条间隔的**中位数**（抗单次异常；n<2 ⇒ nil）
+local function mwMedianGap(ts)
+  local n = table.getn(ts)
+  if n < 2 then return nil end
+  local gaps = {}
+  for i = 2, n do table.insert(gaps, ts[i] - ts[i - 1]) end
+  table.sort(gaps)
+  local m = table.getn(gaps)
+  if m <= 0 then return nil end
+  return (m % 2 == 1) and gaps[(m + 1) / 2] or ((gaps[m / 2] + gaps[m / 2 + 1]) / 2)
+end
+-- ★「没学过档位」时按到达节奏**反推档位**：N 只怪均匀错相时 平均间隔 = I/N ⇒ I/g 应接近整数。
+--   三档各算一次拟合误差，取最小的；误差超过容差 ⇒ nil（宁可用默认档，也不硬套）。
+--   ★只在样本够密（n≥4）且跨度够长（≥3s）时用：开战那一下「齐射」相位挤在一起，跨度短会把档位判歪。
+local function mwFitTier(meanGap)
+  if type(meanGap) ~= "number" or meanGap <= 0 then return nil end
+  local best, bs = nil, nil
+  for i = 1, table.getn(MW_TIERS) do
+    local I = MW_TIERS[i]
+    local k = I / meanGap
+    local r = math.floor(k + 0.5)
+    if r < 2 then r = 2 end
+    local d = math.abs(k - r)
+    if bs == nil or d < bs then best, bs = I, d end
+  end
+  if best == nil or bs == nil or bs > MW_FIT_TOL then return nil end
+  return best
+end
+
+-- ★★★1.75.11 被围攻**估算明细**（纯函数：win/now 可注入 ⇒ 可断言；**唯一实现** —— EVAL_MW_EST_N 只做求和，
+--   断言读值口 EVAL_MW_TEST_DETAIL 也读它 ⇒ 不存在「读值口复刻一份逻辑」那种假绿）。
+--   返回：明细数组（每项一个名字分组）, 窗口内条数。每项字段 = { nm, n, minGap, N, src, I, tier, span }
+--   **按怪名分组**，每组独立判定（这才是「同类怪」场景的正解：名字相同也分得开几只）：
+--   ① n == 1（窗口内只看到一条）⇒ 1 只。
+--   ② **最小间隔 ≥ MW_GAP_SINGLE(1.4) ⇒ 可证只有 1 只**（单只 ≥1.5；两只错相 ≤1.25）——
+--      ★这是定理不是估计 ⇒ 独苗永远算 1，绝不因为「窗口里条数多」被算成 2 只。
+--   ③ 否则（出现 ≤1.3 的间隔）⇒ **至少 2 只**（可证），再由两条估计**取大**：
+--      · 窗口法：floor(n × I ÷ 窗口)
+--      · 跨度法：round(I × (n−1) ÷ 跨度)（跨度 = 末次 − 首次；对窗口边界不敏感，通常更准）
+--      I = 学到的档位 → 否则反推档位（够样本时）→ 否则**默认 2.0**。
+--   ④ 合计后封顶 MW_ESTCAP。
+-- ★★★自学习（用户 1.75.11 追加口径：「自学习成功的怪并不是就一直保持不变…如果同名怪攻速达到 1.4 以上
+--   则这个怪攻速必然是单只怪的攻速，要**及时学习更新**这个怪的攻速，未学习的怪攻速默认 2.0」）：
+--   · **每次**出现「可证单只」的窗口都把中位间隔吸附到档位并**覆盖**旧值（不是学一次就冻结）；
+--   · 覆盖时记一笔变更日志 MW.ivlLog（旧档→新档，有界 12 条，报告里打出来）与学习次数 MW.ivlN（真机可核：
+--     「学到过几次、什么时候改的档」一眼可见）；
+--   · 多只窗口里**绝不学**（那里学到的是 I/怪数）—— 组 249①d 用哨兵钉死；
+--   · 从没学过该名字 ⇒ I 走默认 MW_ESTI(2.0)，明细里 src = "default"（组 249⑨ 有哨兵）。
+function EVAL_MW_EST_DETAIL(win, now)
+  local w = tonumber(win) or MW_UIWIN
+  local tn = tonumber(now) or ((type(GetTime) == "function") and GetTime() or 0)
+  local byName, order, nTotal = {}, {}, 0
+  for i = 1, table.getn(MW.hits) do
+    local h = MW.hits[i]
+    if type(h) == "table" and h.t ~= nil and (tn - h.t) <= w then
+      local nm = h.nm or "?"
+      local arr = byName[nm]
+      if arr == nil then arr = {} byName[nm] = arr table.insert(order, nm) end
+      table.insert(arr, h.t)
+      nTotal = nTotal + 1
+    end
+  end
+  local det = {}
+  for k = 1, table.getn(order) do
+    local nm = order[k]
+    local ts = byName[nm]
+    local n = table.getn(ts)
+    local minGap = nil
+    for i = 2, n do
+      local d = ts[i] - ts[i - 1]
+      if minGap == nil or d < minGap then minGap = d end
+    end
+    local row = { nm = nm, n = n, minGap = minGap, N = 1, src = "one", I = nil, tier = nil, span = 0 }
+    if n >= 2 then
+      if minGap ~= nil and minGap >= MW_GAP_SINGLE then
+        -- ★可证单只 ⇒ 恰好 1 只；并且**每次都重新学**（用户口径：不是一直保持不变，要及时更新）
+        row.N, row.src = 1, "single"
+        local med = mwMedianGap(ts)
+        local tier = mwTierOf(med)
+        row.tier = tier
+        if tier ~= nil then
+          local old = MW.ivl[nm]
+          MW.ivlSeen[nm] = (MW.ivlSeen[nm] or 0) + 1 -- ★监测计数：又确认了一次「这只怪是单只」（档位没变也记）
+          if old ~= tier then
+            MW.ivlN[nm] = (MW.ivlN[nm] or 0) + 1      -- ★更新计数：档位**真的变了**才 +1（首次学到也算 1 次）
+            if old == nil then
+              table.insert(MW.ivlLog, string.format("%s 首次学到 %.1fs（实测中位 %.2fs）", tostring(nm), tier, med))
+            else
+              table.insert(MW.ivlLog, string.format("%s %.1fs→%.1fs（实测中位 %.2fs）", tostring(nm), old, tier, med))
+            end
+            while table.getn(MW.ivlLog) > MW_IVLLOG_MAX do table.remove(MW.ivlLog, 1) end
+          end
+          MW.ivl[nm] = tier
+        end
+        row.I = MW.ivl[nm] or MW_ESTI
+      else
+        local span = ts[n] - ts[1]
+        row.span = span
+        local I = MW.ivl[nm]
+        local src = "learned"
+        if I == nil and n >= MW_FIT_MIN_N and span >= MW_FIT_MIN_SPAN then
+          I = mwFitTier(span / (n - 1)) -- 反推档位（样本够密才敢用）
+          if I ~= nil then src = "fit" end
+        end
+        if I == nil then I = MW_ESTI src = "default" end -- ★未学习 ⇒ 默认 2.0
+        row.I, row.src = I, src
+        local nWin = math.floor((n * I) / w)
+        if nWin < 2 then nWin = 2 end
+        local nSpr = 2
+        if span >= MW_GAP_SINGLE then
+          nSpr = math.floor((I * (n - 1)) / span + 0.5)
+          if nSpr < 2 then nSpr = 2 end
+        end
+        row.N = (nSpr > nWin) and nSpr or nWin
+      end
+    end
+    table.insert(det, row)
+  end
+  return det, nTotal
+end
+
+-- ★★★1.75.11 被围攻**估算**（对外的数）：求和 + 封顶。返回：估算只数, 窗口内条数, 名字分组数
+function EVAL_MW_EST_N(win, now)
+  local det, nTotal = EVAL_MW_EST_DETAIL(win, now)
+  local nGroups = table.getn(det)
+  if nTotal <= 0 then return 0, 0, 0 end
+  local est = 0
+  for i = 1, nGroups do est = est + (det[i].N or 0) end
+  if est > MW_ESTCAP then est = MW_ESTCAP end
+  return est, nTotal, nGroups
+end
+
+-- 「最近跟我交战过的怪」清单（它打我 **或** 我打它；★纯消息口径、**零切目标**）
+function EVAL_MW_ENGAGED(win, now)
+  local w = tonumber(win) or MW_UIENG
+  local tn = tonumber(now) or ((type(GetTime) == "function") and GetTime() or 0)
+  local list = {}
+  for nm, r in pairs(MW.seen) do
+    local age = tn - (r.last or 0)
+    if age <= w then table.insert(list, { nm = nm, age = age, n = r.n, dir = r.dir }) end
+  end
+  table.sort(list, function(a, b) return (a.age or 0) < (b.age or 0) end)
+  return list
+end
+-- 全事件抓取的名字清单（供报告/命令计数）
+local function mwAllNames()
+  local out = {}
+  for k in pairs(MW.allCounts) do table.insert(out, k) end
+  return out
+end
+-- 采集帧（**懒建**：不跑「开始」就一个帧都不建）
+-- 事件名形状过滤：WoW 事件名一律「大写字母 + 数字 + 下划线」⇒ 用它把「正文文本被当成事件名」挡掉
+--   （本客户端参数布局不确定：可能 ea=事件名，也可能只传参数、事件名走全局 event）
+local function mwEvName(s)
+  if type(s) ~= "string" then return nil end
+  if string.match(s, "^[A-Z][A-Z0-9_]*$") == nil then return nil end
+  return s
+end
+
+local function mwFrame()
+  if MW.frame ~= nil then return MW.frame end
+  if type(CreateFrame) ~= "function" then return nil end
+  local ok, f = pcall(CreateFrame, "Frame", "EVAL_HELP_MELEE_PROBE", UIParent)
+  if not ok or f == nil then return nil end
+  pcall(f.SetScript, f, "OnEvent", function(ea, eb)
+    local ev = mwEvName(ea) or mwEvName(eb) or ((type(event) == "string") and mwEvName(event) or nil)
+    if ev ~= nil and MW_ISEV[ev] then
+      -- ★参数布局不猜：三态取正文（谁像消息就用谁），三个原值一起喂进去留证
+      local txt = nil
+      if type(arg1) == "string" and not MW_ISEV[arg1] then txt = arg1
+      elseif type(ea) == "string" and not MW_ISEV[ea] then txt = ea
+      elseif type(eb) == "string" and not MW_ISEV[eb] then txt = eb end
+      EVAL_MW_FEED(ev, txt, arg2, arg3)
+      return
+    end
+    -- ★全事件抓取（1.75.11）：事件名**官方索引里根本没有**（85 个分类里没有 Events）⇒
+    --   只能把「这一战真正来过的事件」读出来（照搬追踪探针 /eh go 追踪探针 监听 的实证做法）。
+    if MW.all and ev ~= nil then
+      MW.allCounts[ev] = (MW.allCounts[ev] or 0) + 1
+      if MW.allSample[ev] == nil then
+        MW.allSample[ev] = string.format("arg1=%s | arg2=%s | arg3=%s", tostring(arg1), tostring(arg2), tostring(arg3))
+      end
+    end
+  end)
+  MW.frame = f
+  return f
+end
+
+-- 专属落盘的写入口（有界 40 行；同 trkProbe 的形态 { out = {…} } ⇒ 清残渣/读存档同一套）
+local function mwOut(s)
+  local cfg = (type(EVAL_HELP_CONFIG) == "table") and EVAL_HELP_CONFIG or nil
+  if cfg == nil then return end
+  local box = cfg.meleeProbe
+  if type(box) ~= "table" then box = { out = {} } cfg.meleeProbe = box end
+  if type(box.out) ~= "table" then box.out = {} end
+  table.insert(box.out, tostring(s))
+  while table.getn(box.out) > MW_OUT_MAX do table.remove(box.out, 1) end
+  box.t = (type(date) == "function") and date("%H:%M:%S") or nil
+end
+local function mwSay(s)
+  if type(EVAL_LOGLINE) == "function" then pcall(EVAL_LOGLINE, "[近战探针] " .. tostring(s)) end
+  pcall(mwOut, s) -- ★专属持久读数（不被 [DS] 心跳冲掉）
+  if type(EVAL_SAY) == "function" then pcall(EVAL_SAY, s) else print(s) end
+end
+
+-- ① 读客户端自己认的聊天消息组（返回 组名表 或 nil+原因）
+function EVAL_MW_CHANNELS()
+  if type(GetChatWindowMessages) ~= "function" then return nil, "noapi" end
+  local ok, s = pcall(GetChatWindowMessages, 1)
+  if not ok then return nil, "error" end
+  if type(s) ~= "string" then return nil, "notstr（读到 " .. type(s) .. "）" end
+  local out = {}
+  for part in string.gmatch(s, "[^,%s]+") do table.insert(out, part) end
+  return out, nil
+end
+
+-- ③ 周围敌人数量：走既有的 EVAL_NEARBY_ENEMY_NAMES（带轨迹回调，量回自证切了哪些目标）
+function EVAL_MW_NEARBY(maxN)
+  local trace = {}
+  local names = {}
+  if type(EVAL_NEARBY_ENEMY_NAMES) == "function" then
+    local okn, res = pcall(EVAL_NEARBY_ENEMY_NAMES, maxN or 12, function(nm) table.insert(trace, tostring(nm)) end)
+    if okn and type(res) == "table" then names = res end
+  end
+  return names, trace
+end
+
+function EVAL_MW_START(byUI)
+  -- ★byUI=true = 由状态信息UI 自动拉起（UI 关掉时它负责停）；命令手动开始 = 不由 UI 管
+  MW.uiStarted = byUI and true or false
+  local f = mwFrame()
+  if f == nil then return false, "CreateFrame 不可用（建不了采集帧）" end
+  local reg, bad = {}, {}
+  for _, ev in ipairs(MW_EVENTS) do
+    local ok = pcall(f.RegisterEvent, f, ev)
+    if ok then table.insert(reg, ev) else table.insert(bad, ev) end
+  end
+  MW.reg, MW.bad = reg, bad
+  MW.on = true
+  MW.t0 = (type(GetTime) == "function") and GetTime() or 0
+  MW.n = 0
+MW.counts, MW.atk, MW.raw, MW.miss, MW.seen, MW.allCounts, MW.allSample, MW.kills = {}, {}, {}, {}, {}, {}, {}, 0
+  MW.hits, MW.ivl, MW.ivlN, MW.ivlSeen, MW.ivlLog = {}, {}, {}, {}, {} -- ★1.75.11 时间环 + 档位/更新次数/监测次数/变更日志一并归零
+                             --   ★进战/脱战都**不**清 ivl：学到的档位是「这类怪多久挥一下」的知识，跨战斗才有用
+  MW.peak, MW.killLast, MW.seq = 0, {}, {}
+  pcall(EVAL_MW_CHAT_RESET) -- ★截获计数一并归零（全局查表：本函数定义在它之前，写 local 会绑成 nil）
+  return true, reg, bad
+end
+
+function EVAL_MW_STOP()
+  if MW.frame ~= nil then
+    -- ★全事件抓取是**重量级**（所有事件都会进来）⇒ 停采集时必须一起摘掉（「关掉零动作」纪律）
+    if MW.all and type(MW.frame.UnregisterAllEvents) == "function" then
+      pcall(MW.frame.UnregisterAllEvents, MW.frame)
+      MW.all = false
+    end
+    for _, ev in ipairs(MW_EVENTS) do pcall(MW.frame.UnregisterEvent, MW.frame, ev) end
+  end
+  MW.on = false
+  pcall(EVAL_MW_CHAT_OFF) -- ★关掉零动作：截获层也一起摘（它挂在全局 ChatFrame_OnEvent 上）
+  return true
+end
+
+function EVAL_MW_REPORT(win)
+  local w = tonumber(win) or MW.win
+  MW.win = w
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  local dur = (MW.t0 ~= nil) and (now - MW.t0) or 0
+  mwSay("===== 近战围攻探针（1.75.11）=====")
+  mwSay(string.format("采集状态：%s ｜ 已跑 %.1fs ｜ 收到候选事件 %d 次 ｜ 判定窗口 %ds",
+    MW.on and "开启" or "已停", dur, MW.n, w))
+  -- ① 客户端自己认的消息组：★1.75.11 改成**扫所有聊天窗**（真机实测：战斗文字不在窗口1，
+  --   窗口1 一个 COMBAT 组都没有 ⇒ 只看窗口1 会得出「战斗文字不走消息组」的错误结论）
+  if type(GetChatWindowMessages) == "function" then
+    local nWin = (type(NUM_CHAT_WINDOWS) == "number" and NUM_CHAT_WINDOWS > 0) and NUM_CHAT_WINDOWS or 7
+    mwSay(string.format("① 各聊天窗的战斗消息组（NUM_CHAT_WINDOWS=%d；事件名 = CHAT_MSG_ + 组名）:", nWin))
+    local anyWin = 0
+    for w = 1, nWin do
+      local okw, sw = pcall(GetChatWindowMessages, w)
+      if okw and type(sw) == "string" and sw ~= "" then
+        local tot, hit = 0, {}
+        for part in string.gmatch(sw, "[^,%s]+") do
+          tot = tot + 1
+          if string.find(string.upper(part), "COMBAT", 1, true) ~= nil then table.insert(hit, part) end
+        end
+        if table.getn(hit) > 0 then
+          anyWin = anyWin + 1
+          mwSay(string.format("    窗口%d：共 %d 组 ｜ 含 COMBAT %d 组：%s", w, tot, table.getn(hit), table.concat(hit, " ／ ")))
+        end
+      end
+    end
+    if anyWin == 0 then
+      mwSay("    ★所有窗口都没有含 COMBAT 的组 ⇒ 战斗文字不走聊天窗口消息组（那就只看 ② 的实际次数）")
+    else
+      mwSay(string.format("    ★有 %d 个窗口带战斗消息组（战斗记录页通常是窗口2 = ChatFrame2）", anyWin))
+    end
+  else
+    mwSay("① 战斗消息组：本客户端没有 GetChatWindowMessages（只看 ② 的实际次数）")
+  end
+  -- ② 每个候选事件实际来了几次（★0 次才是关键读数）
+  local cnt = {}
+  for _, ev in ipairs(MW_EVENTS) do table.insert(cnt, { ev = ev, n = MW.counts[ev] or 0, k = MW_KIND[ev] or "?" }) end
+  table.sort(cnt, function(a, b) return (a.n or 0) > (b.n or 0) end)
+  mwSay("② 候选事件触发次数（★0 次 = 本客户端没有这个事件名；[in]=怪近战打我·进围攻数，其它=对照旁证）:")
+  for i = 1, table.getn(cnt) do
+    mwSay(string.format("    [%s] %s = %d 次%s", cnt[i].k, cnt[i].ev, cnt[i].n, (cnt[i].n == 0) and "  ← 没来" or ""))
+  end
+  if MW.frame ~= nil and type(IsEventRegistered) == "function" then
+    local yes = 0
+    for _, ev in ipairs(MW_EVENTS) do
+      local okr, r = pcall(IsEventRegistered, ev)
+      if okr and (r == true or r == 1) then yes = yes + 1 end
+    end
+    mwSay(string.format("②b IsEventRegistered 报「已注册」%d/%d 条（★本客户端返 1 不是 true，判据写 (r==true or r==1)）",
+      yes, table.getn(MW_EVENTS)))
+  end
+  -- ③ 窗口内「还在近战打我」的怪
+  local list = EVAL_MW_ATTACKERS(w, now)
+  -- ★③b 交战口径（它打我 或 我打它；纯消息、零切目标）
+  local engL = EVAL_MW_ENGAGED(MW_UIENG, now)
+  local engS = {}
+  for i = 1, table.getn(engL) do table.insert(engS, engL[i].nm) end
+  mwSay(string.format("③b 交战过的怪（打我 或 我打它，最近 %ds）：%d 只%s", MW_UIENG, table.getn(engL),
+    (table.getn(engS) > 0) and ("：" .. table.concat(engS, "、")) or ""))
+  mwSay(string.format("③ 口径=只统计战斗状态（当前 %s）｜窗口 %ds 内「在近战打我」的怪：%d 只",
+    (MW.inC and "战斗中" or "非战斗（下面是最近一场的残留读数，仅供取证）"), w, table.getn(list)))
+  for i = 1, table.getn(list) do
+    mwSay(string.format("    %d. %s ｜ 距上次命中 %.1fs ｜ 累计 %d 次", i, list[i].nm, list[i].age, list[i].n))
+  end
+  local out, nOut = {}, 0
+  for nm, r in pairs(MW.atk) do
+    local age = now - (r.last or 0)
+    if age > w then nOut = nOut + 1 table.insert(out, { nm = nm, age = age }) end
+  end
+  if nOut > 0 then
+    table.sort(out, function(a, b) return (a.age or 0) < (b.age or 0) end)
+    mwSay(string.format("    （窗口外历史攻击者 %d 只，最近一只 %s 在 %.1fs 前停手）", nOut, out[1].nm, out[1].age))
+  end
+  if (MW.kills or 0) > 0 then
+    mwSay(string.format("③c 本场击杀（实测通道 CHAT_MSG_COMBAT_HOSTILE_DEATH）：%d 只 —— 击杀的怪已从围攻桶里踢掉", MW.kills or 0))
+  end
+  if (MW.peak or 0) > 0 then
+    mwSay(string.format("③d 本场峰值：同时有 %d 只怪在近战打我（★脱战后仍看得到）", MW.peak))
+  end
+  -- ★1.75.11 ③e 估算读数（用户口径：4s 窗口、按怪名分组、攻速定档 1.5/2.0/2.5；与名字数取大）
+  --   ★这里**不**走读值口的战斗闸门，脱战后也要看得见（取证口径），终值按「取大」现算。
+  do
+    local nN = table.getn(list)
+    local eE, nE, gE = EVAL_MW_EST_N(w, now)
+    mwSay(string.format("③e 围攻估算（%ds 窗口·档位 %.1f/%.1f/%.1f）：窗口内挥击 %d 次 ｜ 名字分组 %d 类 ｜ 估算 %d 只 ｜ 名字数 %d ｜ 终值（取大）%d",
+      w, MW_TIERS[1], MW_TIERS[2], MW_TIERS[3], nE, gE, eE, nN, (eE > nN) and eE or nN))
+    -- ★学到的攻速档位（键 = 怪名）：真机复核用 —— 看吸附到哪一档对不对（单只怪打一轮就能学下来）
+    local ivlT = {}
+    for nmI, vI in pairs(MW.ivl) do
+      table.insert(ivlT, string.format("%s=%.1fs（更新%d次/确认单只%d次）", tostring(nmI), vI, MW.ivlN[nmI] or 0, MW.ivlSeen[nmI] or 0))
+    end
+    if table.getn(ivlT) > 0 then
+      table.sort(ivlT)
+      mwSay("     已学到的攻速档位（自学习·吸附到档位，" .. table.getn(ivlT) .. " 种）：" .. table.concat(ivlT, " ｜ "))
+    else
+      mwSay(string.format("     还没学到任何档位（★未学习的怪一律按默认 %.1fs 估算）", MW_ESTI))
+    end
+    -- ★★档位**变更日志**（用户口径：「不是一直保持不变…要及时学习更新」）——真机一眼看有没有在更新
+    if table.getn(MW.ivlLog) > 0 then
+      mwSay("     档位更新记录（最近 " .. table.getn(MW.ivlLog) .. " 次变更；★学过的怪一直在监测，变了就覆盖）：")
+      for i = 1, table.getn(MW.ivlLog) do mwSay("        " .. MW.ivlLog[i]) end
+    end
+    if type(MW.lastSum) == "string" then mwSay("③f " .. MW.lastSum) end
+  end
+  -- ④⑤ 原始样本 + 认不出的原文（取证）
+  if table.getn(MW.raw) > 0 then
+    mwSay("④ 原始样本（最近 " .. table.getn(MW.raw) .. " 条，原样）:")
+    for i = 1, table.getn(MW.raw) do mwSay("    " .. MW.raw[i]) end
+  end
+  if table.getn(MW.miss) > 0 then
+    mwSay("⑤ 认不出攻击者的原文（最近 " .. table.getn(MW.miss) .. " 条；★认不出也要留证，不许静默丢）:")
+    for i = 1, table.getn(MW.miss) do mwSay("    " .. MW.miss[i]) end
+  end
+  mwSay("   ★周围怪数：/eh go melee 周围 = 消息口径（零副作用，不切目标）；要看真值才加 切目标")
+  -- ⑥ 全事件抓取：事件名官方无索引 ⇒ 这是「战斗信息到底有哪些通道」的实证清单
+  if MW.all or next(MW.allCounts) ~= nil then
+    local aNames = mwAllNames()
+    table.sort(aNames, function(a, b) return (MW.allCounts[a] or 0) < (MW.allCounts[b] or 0) end)
+    mwSay(string.format("⑥ 全事件抓取%s：共 %d 个不同事件名（★按次数升序，少的在前 = 可疑候选）",
+      MW.all and "（进行中）" or "", table.getn(aNames)))
+    local capA = 60 -- ★1.75.11 30 → 60：真机一轮就有 **53 个**不同事件名，30 条装不下（"还有 23 个没列"）
+    for i = 1, table.getn(aNames) do
+      if i > capA then mwSay(string.format("    …（还有 %d 个没列完；先关掉落盘再报告就能看全）", table.getn(aNames) - capA)) break end
+      mwSay(string.format("    %s = %d 次 ｜ 首次 %s", aNames[i], MW.allCounts[aNames[i]] or 0, tostring(MW.allSample[aNames[i]] or "")))
+    end
+  end
+  -- ⑦ 聊天入口截获读数（★不依赖事件名的那条路）
+  local okC, cst = pcall(EVAL_MW_CHAT_STATE)
+  if okC and type(cst) == "table" and (cst.n or 0) > 0 then
+    mwSay(string.format("⑦ 聊天入口截获：经过 %d 条 ｜ 取不到文本 %d 条 ｜ 最近原文：", cst.n, cst.noMsg))
+    for i = 1, table.getn(cst.raw) do mwSay("    " .. cst.raw[i]) end
+  end
+  -- ⑨ 结构化战斗通道的参数序列（★UNIT_COMBAT / COMBAT_TEXT_UPDATE 语义定案用）
+  if table.getn(MW.seq) > 0 then
+    mwSay(string.format("⑨ 结构化通道参数序列（最近 %d 条；重点看 arg1 有没有 player / arg2 有哪些类型）:", table.getn(MW.seq)))
+    for i = 1, table.getn(MW.seq) do mwSay("    " .. MW.seq[i]) end
+  end
+  mwSay("读数已落存档 cfg.meleeProbe（上限 " .. MW_OUT_MAX .. " 行）⇒ /reload 后即可读存档")
+end
+
+function EVAL_MW_CMD(sub)
+  local s = tostring(sub or "")
+  s = string.gsub(s, "^%s+", "")
+  s = string.gsub(s, "%s+$", "")
+  local word, restArg = string.match(s, "^(%S+)%s*(.*)$")
+  local cmd = word or ""
+  -- ★总闸门（调试日志）关着时的**看得见的回头路**：读数照常落盘，但要告诉用户怎么开回来
+  if type(EVAL_CHAT_ON) == "function" then
+    local okc, on = pcall(EVAL_CHAT_ON)
+    if okc and on ~= true and type(EVAL_SAY_FORCE) == "function" then
+      pcall(EVAL_SAY_FORCE, "近战探针：聊天输出总闸门（调试日志）关着 —— 读数照常落存档 cfg.meleeProbe，/reload 后可读；想看聊天框请打开「调试日志」")
+    end
+  end
+  if cmd == "" or cmd == "状态" or cmd == "status" then
+    mwSay(string.format("近战围攻探针：%s ｜ 窗口 %ds ｜ 收到候选事件 %d 次 ｜ 窗口内攻击者 %d 只",
+      MW.on and "正在采集" or "未采集", MW.win, MW.n, table.getn(EVAL_MW_ATTACKERS(MW.win))))
+    mwSay("用法：/eh go melee 开始 | 停 | 报告 [窗口秒] | 周围 [切目标] | 通道 | 战斗窗口 | 截获 | 全事件 | 清")
+    mwSay("  ★开始 = 去拉 3~5 只近战怪打你，十几秒后 报告；跑完 /reload 我读存档")
+  elseif cmd == "开始" or cmd == "start" then
+    local ok, reg, bad = EVAL_MW_START()
+    if not ok then mwSay("近战探针：开始失败 —— " .. tostring(reg)) return end
+    mwSay(string.format("近战探针：采集已开始（挂上 %d 条候选事件；%d 条注册时抛错）",
+      table.getn(reg), table.getn(bad)))
+    mwSay("   现在去拉 3~5 只**近战**怪打你（让它们真的打到你），十几秒后敲 /eh go melee 报告")
+    mwSay("   ★报告前不用停；跑完 /reload，我直接读存档 cfg.meleeProbe")
+  elseif cmd == "停" or cmd == "stop" then
+    EVAL_MW_STOP()
+    mwSay("近战探针：已停（候选事件全部摘掉；再敲 开始 才会重新采集）")
+  elseif cmd == "报告" or cmd == "report" then
+    EVAL_MW_REPORT(tonumber(restArg))
+  elseif cmd == "周围" or cmd == "nearby" then
+    -- ★★用户口径「非战斗也不要切目标」⇒ 默认 一个目标都不切，只报消息口径的交战数。
+    if restArg == "切目标" or restArg == "force" then
+      -- ★双重要求才切：用户显式要「真值」时才动目标，读完立刻按原名还原（没原目标则清除）
+      local names, trace = EVAL_MW_NEARBY(12)
+      mwSay(string.format("周围可选中敌人（TargetNearestEnemy 循环）：%d 只", table.getn(names)))
+      if table.getn(trace) > 0 then mwSay("    循环轨迹：" .. table.concat(trace, " → ")) end
+      if table.getn(names) > 0 then mwSay("    名单：" .. table.concat(names, "、")) end
+      mwSay("    ★口径：同名怪按名字去重、循环回到见过的名字即停 ⇒ 真怪数可能更多。")
+      mwSay("    ★副作用：过程中确实切了目标，结束已按原名还原（这是你自己敲了 切目标 才做的）。")
+    else
+      local now = (type(GetTime) == "function") and GetTime() or 0
+      local eng = EVAL_MW_ENGAGED(MW_UIENG, now)
+      local names = {}
+      for i = 1, table.getn(eng) do table.insert(names, eng[i].nm) end
+      mwSay(string.format("周围怪数（消息口径·最近 %ds 跟我有过来往的）：%d 只 ｜ 口径=只统计战斗状态（当前 %s）",
+        MW_UIENG, table.getn(eng), (MW.inC == true) and "战斗中" or "非战斗"))
+      if table.getn(names) > 0 then mwSay("    名单：" .. table.concat(names, "、")) end
+      mwSay("    ★零副作用：这条 一个目标都不切（它打我 / 我打它 都从聊天正文里认名字）。")
+      mwSay("    ★数不到「还没交过手、也没打过我的怪」—— 客户端没有附近敌人枚举 API。")
+      mwSay("    ★要看真值（能被 TargetNearestEnemy 选中的敌人数）请显式敲：/eh go melee 周围 切目标")
+    end
+  elseif cmd == "全事件" or cmd == "all" then
+    -- ★★事件名官方**没有索引**（85 个分类里没有 Events）⇒「战斗信息有哪些通道」只能真机读出来：
+    --   这条 = RegisterAllEvents 全事件抓取（与 /eh go 追踪探针 监听 同一套实证做法）。
+    local fAll = mwFrame()
+    if fAll == nil then
+      mwSay("全事件抓取：建不了采集帧（CreateFrame 不可用）")
+    elseif MW.all then
+      MW.all = false
+      if type(fAll.UnregisterAllEvents) == "function" then pcall(fAll.UnregisterAllEvents, fAll) end
+      for _, ev in ipairs(MW_EVENTS) do pcall(fAll.RegisterEvent, fAll, ev) end -- ★候选事件挂回来（UnregisterAllEvents 把它们也摘了）
+      mwSay(string.format("全事件抓取：已关 ｜ 本次共 %d 个不同事件名 ｜ 候选事件已重新挂回", table.getn(mwAllNames())))
+    elseif type(fAll.RegisterAllEvents) ~= "function" then
+      mwSay("全事件抓取：本客户端没有 RegisterAllEvents（官方索引里列着，实测却缺 ⇒ 如实报告，不假装）")
+    else
+      if not MW.on then pcall(EVAL_MW_START, true) end
+      MW.allCounts, MW.allSample = {}, {}
+      local okRA = pcall(fAll.RegisterAllEvents, fAll)
+      MW.all = true
+      mwSay(okRA and "全事件抓取：已开（RegisterAllEvents）—— 现在去打一场，打完敲 /eh go melee 报告"
+        or "全事件抓取：RegisterAllEvents 调用抛错（如实报告，不假装开着）")
+      mwSay("   ★报告会按**次数升序**列出这一战真正来过的事件名（少的在前 = 候选通道），并附首次样本 arg1/2/3")
+    end
+  elseif cmd == "战斗窗口" or cmd == "cf2" or cmd == "chatframe" then
+    EVAL_MW_COMBAT_WINDOW(tonumber(restArg))
+  elseif cmd == "截获" or cmd == "chat" then
+    -- ★读全局读值口，不碰模块 local（本函数定义在 u_chat 段之前：直接索引那个 local 会绑成全局 nil）
+    local cst = EVAL_MW_CHAT_STATE()
+    if cst.on == true then
+      local okc, why = EVAL_MW_CHAT_OFF()
+      mwSay(okc and string.format("截获：已关（共经过 %d 条；取不到文本 %d 条）", cst.n, cst.noMsg)
+        or ("截获：关时未硬还原（" .. tostring(why) .. "）—— 别人后来又包了一层，硬还原会打掉别人的层（如实报告）"))
+    else
+      if not MW.on then pcall(EVAL_MW_START, true) end
+      local okc, why = EVAL_MW_CHAT_ON()
+      mwSay(okc and "截获：已开（包住 ChatFrame_OnEvent，读回确认过）—— 现在去打一场，打完敲 /eh go melee 报告"
+        or ("截获：没挂上（" .. tostring(why) .. "）⇒ 如实报告，不假装挂着"))
+      if okc then mwSay("   ★这条**不依赖事件名**：凡是进聊天窗的战斗文字都会过这里（战斗记录页 = ChatFrame2）") end
+    end
+  elseif cmd == "通道" or cmd == "channels" then
+    local grp, why = EVAL_MW_CHANNELS()
+    if grp == nil then
+      mwSay("通道：读不到（原因=" .. tostring(why) .. "）")
+    else
+      local hit = {}
+      for i = 1, table.getn(grp) do
+        if string.find(string.upper(grp[i]), "COMBAT", 1, true) ~= nil then table.insert(hit, grp[i]) end
+      end
+      mwSay(string.format("通道：GetChatWindowMessages(1) 共 %d 组；含 COMBAT 的 %d 组：", table.getn(grp), table.getn(hit)))
+      if table.getn(hit) > 0 then mwSay("    " .. table.concat(hit, " ／ ")) end
+      mwSay("    全量组名（便于我核对）：" .. table.concat(grp, ","))
+    end
+  elseif cmd == "清" or cmd == "clear" then
+    EVAL_MW_STOP()
+    MW.counts, MW.atk, MW.raw, MW.miss, MW.seen, MW.allCounts, MW.allSample, MW.kills, MW.n, MW.t0 = {}, {}, {}, {}, {}, {}, {}, 0, 0, nil
+    local cfg = (type(EVAL_HELP_CONFIG) == "table") and EVAL_HELP_CONFIG or nil
+    if cfg ~= nil then cfg.meleeProbe = { out = {} } end
+    mwSay("近战探针：内存读数与专属存档已清空（存档那份要 /reload 才落盘）")
+  else
+    mwSay("近战探针：不认识的子命令「" .. tostring(cmd) .. "」")
+    mwSay("用法：/eh go melee 开始 | 停 | 报告 [窗口秒] | 周围 [切目标] | 通道 | 战斗窗口 | 截获 | 全事件 | 清")
+  end
+end
+
+-- ===== 临时测试挂接（1.75.11）：状态信息UI 里显示「围攻我的怪数」+「周围怪数」 =====
+-- ★用户原话：「可以进入战斗..离开战斗. 临时添加个战斗状态,周围怪物数量的状态值.在战斗UI状态Ui 内测试」
+--   · 战斗状态：状态UI 本来就有那一行（collectStats 的 s.incombat → 战斗中 x.xs / 非战斗），无需新增；
+--   · 新增两个状态值 = 「围攻我的怪数」+「周围怪数（交战口径）」。
+-- ★★★两条用户口径（1.75.11，别改回去）：
+--   ① 「非战斗也不要切目标」⇒ 自动路径一个目标都不切：周围怪数 = 纯消息口径
+--      （最近 MW_UIENG 秒跟我有过来往的怪名：它打我 / 我打它），TargetNearestEnemy 循环降级为手工命令
+--      `/eh go melee 周围 切目标`；
+--   ② 「周围怪统计只计算战斗状态.非战斗状态不需要统计」⇒ 闸门在桶写入之前（见 mwCombatSync），
+--      这里的显示也按战斗状态给值：非战斗一律显示「——（非战斗·不统计）」，一个数都不报。
+-- ★代价要认：客户端没有附近敌人枚举 API ⇒ 消息口径数不到「还没交过手、也没打过我的怪」。
+-- ★另两条纪律：① 采集只在状态UI 打开期间进行（UI 关掉立刻 EVAL_MW_UI_OFF = 零动作）；
+--   ② UI 关掉时自动往专属读数环留一条紧凑快照（用户不必记得敲 报告，否则我这边读不到）。
+function EVAL_MW_UI_ON()
+  if not MW.on then pcall(EVAL_MW_START, true) end
+  MW.uiOpen = true -- ★1.75.11 「状态UI 现在开着」标记（UI_OFF 靠它决定要不要留快照；见下）
+  mwCombatSync() -- ★每拍同步战斗状态（进战清桶 / 脱战标记）—— 显示与条件都按它给值
+  return true
+end
+function EVAL_MW_UI_OFF()
+  -- ★★★1.75.11 快照与「停采集」**拆开**：
+  --   · 采集现在由**全局战斗数据**常驻驱动（Core 每拍取一次 st）⇒ UI 打开时 MW.on 早就 true、
+  --     MW.uiStarted 永远是 false ⇒ 老写法（整个函数被 MW.on and MW.uiStarted 包住）会让
+  --     「关掉状态UI 自动留快照」**静默失效** —— 我这边就再也读不到真机读数了（1.75.9 的教训）。
+  --   · 所以：快照看 MW.uiOpen（UI 开过就打一条，打完清掉 ⇒ 本函数每拍都被调用也不会刷屏）；
+  --     停采集仍然只看 uiStarted（条件驱动的采集不许被 UI 关掉）。
+  --   · 代价如实说：探针现在等价于常开（14 条候选事件、每条几次表操作）—— 这是「随时可用」的代价。
+  if MW.on and MW.n > 0 and MW.uiOpen then
+    MW.uiOpen = false -- ★一次性标记：UI 关掉只留一条快照（否则每拍一条，把 120 行读数环冲爆）
+    local chans, atk, eng = {}, {}, {}
+    for _, ev in ipairs(MW_EVENTS) do
+      local c = MW.counts[ev] or 0
+      if c > 0 then table.insert(chans, string.format("%s=%d", ev, c)) end
+    end
+    for nm, r in pairs(MW.atk) do table.insert(atk, string.format("%s×%d", nm, r.n)) end
+    for nm, r in pairs(MW.seen) do table.insert(eng, string.format("%s[%s]×%d", nm, tostring(r.dir or "?"), r.n)) end
+    table.sort(chans)
+    table.sort(atk)
+    table.sort(eng)
+    pcall(mwOut, string.format("[状态UI快照] 口径=只统计战斗状态 ｜ 候选事件 %d 次 ｜ 有信号的通道：%s", MW.n,
+      (table.getn(chans) > 0) and table.concat(chans, " ") or "（一条都没来）"))
+    pcall(mwOut, string.format("   围攻过我的：%s ｜ 交战过的：%s",
+      (table.getn(atk) > 0) and table.concat(atk, " ") or "（无）",
+      (table.getn(eng) > 0) and table.concat(eng, " ") or "（无）"))
+    pcall(mwOut, "   ★细节看 /eh go melee 报告（每个事件次数 / 原始样本 / 没认出的原文）")
+  end
+  if MW.on and MW.uiStarted then pcall(EVAL_MW_STOP) end
+end
+-- ★★★将来「一键宏条件」的唯一读值口：**只统计战斗状态**（非战斗恒 0）——
+--   条件加进来时只准读它，别再去碰 MW.atk（否则「非战斗不统计」就有两处口径，迟早打架）。
+-- ★★★1.75.11 懒启动：**条件在用这两个读值口 ⇒ 采集必须开着**。
+--   为什么非加不可（真机语义问题）：采集默认**只在状态信息UI 打开期间**进行（「关掉零动作」纪律），
+--   而这两个条件是要**驱逐一键宏**的 —— 用户不会为了按宏一直开着状态UI ⇒ 不懒启动的话条件恒 0，
+--   功能形同废（而且不报错，最难看出来的那种失败）。
+--   ★不带 byUI ⇒ `MW.uiStarted = false`：状态UI 关掉时**不会**把条件驱动的采集停掉（两套开关互不误伤）。
+--   ★开销很小：只挂 14 条候选事件（不含 all-events 与聊天截获那种重量级）。
+-- ★★★1.75.11 围攻数据的**唯一计算入口**（用户口径：「围攻数量归入战斗数据全局可被使用,不多个地方各自计算」）：
+--   一次调用把三个值一起算出来 ⇒ Core 的 UPDATE_STATE 每拍取一次写进状态表（st.mwSiege / mwSiegeNm / mwSiegeEst），
+--   **条件（condOne）与两个 UI 一律读 st，谁也不许自己再算一遍**（这就是「不多个地方各自计算」的落点）。
+--   返回：终值（取大）, 名字口径数, 估算数
+function EVAL_MW_ACTIVE_INFO(win)
+  if not MW.on then pcall(EVAL_MW_START) end -- 条件在用 ⇒ 懒启动（见上）
+  if MW.inC ~= true then return 0, 0, 0 end
+  local w = tonumber(win) or MW_UIWIN
+  local nmN = table.getn(EVAL_MW_ATTACKERS(w))
+  -- ★★★与旧口径（名字数）**取最大值**（用户原话：「然后兼容之前的方案取最大值」）：
+  --   同名怪在名字桶里永远只有 1 个键（3 只「峭壁野猪」= 1）⇒ 估算补灵敏度；两边都低时也绝不被拉低。
+  --   ★估算失败（pcall 兜底）就当 0：宁可用旧口径，也不许因为估算出错让条件整个失灵。
+  local estN = 0
+  local okE, e = pcall(EVAL_MW_EST_N, w)
+  if okE and type(e) == "number" then estN = e end
+  local fin = (estN > nmN) and estN or nmN
+  return fin, nmN, estN
+end
+-- 旧入口（兼容既有调用点与历史断言）：值 = 同一份计算（★新代码请读 st.mwSiege）
+function EVAL_MW_ACTIVE_N(win)
+  local fin = EVAL_MW_ACTIVE_INFO(win)
+  return fin
+end
+function EVAL_MW_ENGAGED_N()
+  if not MW.on then pcall(EVAL_MW_START) end
+  if MW.inC ~= true then return 0 end
+  return table.getn(EVAL_MW_ENGAGED(MW_UIENG))
+end
+-- 状态UI 的两行（纯读：不挂事件、不切目标 —— 副作用只剩 开始/停 采集）
+function EVAL_MW_UI_LINES()
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  mwCombatSync()
+  if MW.inC ~= true then
+    -- ★用户口径：非战斗状态**不需要统计** ⇒ 一个数都不报（显示破折号，不留旧值冒充现状）
+    return "围攻 ——（非战斗·不统计）", "交战 ——（非战斗·不统计）"
+  end
+  local list = EVAL_MW_ATTACKERS(MW_UIWIN, now)
+  -- ★★★1.75.11 显示的数走**全局战斗数据 st**（Core 的 UPDATE_STATE 每拍算一次；用户口径：「不多个地方各自计算」）——
+  --   本窗只做展示（名单仍来自桶），st 还没算过时（直接调本函数的测试路径）退回桶计数。
+  local stG = (type(EVAL_HELP_STATE) == "table") and EVAL_HELP_STATE or nil
+  local nA = (stG and tonumber(stG.mwSiege)) or table.getn(list)
+  local shown = {}
+  for i = 1, table.getn(list) do
+    if i > 3 then break end
+    table.insert(shown, list[i].nm)
+  end
+  local estA = (stG and tonumber(stG.mwSiegeEst)) or 0
+  local nmA = (stG and tonumber(stG.mwSiegeNm)) or table.getn(list)
+  local lineA = string.format("围攻 %d只（近战窗口%ds%s）%s", nA, MW_UIWIN,
+    (estA > nmA) and "·含估算" or "",
+    (table.getn(shown) > 0) and (": " .. table.concat(shown, "·")) or "")
+  local eng = EVAL_MW_ENGAGED(MW_UIENG, now)
+  local nE = (stG and tonumber(stG.mwEngaged)) or table.getn(eng)
+  local lineB
+  if MW.nearN ~= nil and MW.nearT ~= nil then
+    lineB = string.format("交战 %d只（%ds·峰值%d）｜可选中 %d只（%.0fs前·手工）",
+      nE, MW_UIENG, MW.peak or 0, MW.nearN, now - MW.nearT)
+  else
+    lineB = string.format("交战 %d只（%ds·峰值%d）", nE, MW_UIENG, MW.peak or 0)
+  end
+  return lineA, lineB
+end
+-- 读值口（断言/离线自证用）
+function EVAL_MW_TEST_UI()
+  local a, b = EVAL_MW_UI_LINES()
+  return { nearN = MW.nearN, nearT = MW.nearT, lineA = a, lineB = b, on = MW.on, inC = MW.inC,
+           activeN = EVAL_MW_ACTIVE_N(), engagedN = EVAL_MW_ENGAGED_N() }
+end
+-- ===== ChatFrame2（战斗记录页）取证（1.75.11；用户：「战斗信息层是ChatFrame2 排查下」）=====
+-- ★官方索引核过（doc/api_*.html 1370 条 · [ScrollingMessageFrame (widget)] 共 16 条方法）：
+--   AddMessage / AtBottom / AtTop / ScrollDown|Up|ToBottom|ToTop / SetFading / SetFont / SetFontObject /
+--   SetJustifyH|V / SetMaxLines / SetTimeVisible / UpdateColorByID
+--   ⇒ **没有 GetMessageText / GetNumMessages** ⇒ ChatFrame2 的内容**读不回来**（不能轮询它的行）。
+-- ★★所以「战斗信息层」只有三条路，本段全给：
+--   ① GetChatWindowMessages(2) = 该窗口**订阅的消息组名**（= 战斗信息类型清单）；
+--      组名前缀 CHAT_MSG_ 就是事件名（本仓库既有实证：Toolbox 找含 NOTICE 的组 = CHAT_MSG_CHANNEL_NOTICE）。
+--   ② IsEventRegistered(ChatFrame2, "CHAT_MSG_"..组名) ⇒ 反过来问客户端「这事件你注册了吗」——
+--      **零副作用、零触发**验证事件名真伪（★返 1 不是 true，判据写 (r==true or r==1)；
+--      该函数**不在官方索引里**但实测可用，见 EH_DebugBox.lua:1075/1092）。
+--   ③ 截入口 ChatFrame_OnEvent（普通全局函数）⇒ **一网打尽**所有真正进战斗记录页的文本，
+--      **不依赖事件名**（1.73.12 实测：frame.AddMessage 写进去不生效，只有这个入口能拦到）。
+local MW_CHAT = { orig = nil, wrap = nil, n = 0, noMsg = 0, raw = {} }
+
+-- ①+② 战斗窗口读数（纯只读：一个副作用都没有）
+function EVAL_MW_COMBAT_WINDOW(win)
+  local w = tonumber(win) or 2
+  local n = (type(NUM_CHAT_WINDOWS) == "number" and NUM_CHAT_WINDOWS > 0) and NUM_CHAT_WINDOWS or 7
+  mwSay(string.format("⑧ 战斗信息层排查：NUM_CHAT_WINDOWS=%d（目标 = ChatFrame%d）", n, w))
+  local fr = rawget(_G, "ChatFrame" .. w)
+  if fr == nil then
+    mwSay(string.format("   ★ChatFrame%d 现在**不存在**（本客户端聊天窗由 FrameXML 懒建）⇒ 先在游戏里点开一次「战斗记录」页再跑这条", w))
+  else
+    local okv, vis = pcall(fr.IsVisible, fr)
+    mwSay(string.format("   ChatFrame%d：存在 ｜ 可见=%s ｜ IsEventRegistered=%s",
+      w, tostring(okv and vis or "?"), (type(fr.IsEventRegistered) == "function") and "有" or "**没有**"))
+  end
+  if type(GetChatWindowMessages) ~= "function" then
+    mwSay("   组名清单：本客户端没有 GetChatWindowMessages ⇒ 这条路走不通（只剩 ③ 截获）")
+    return
+  end
+  local okg, s = pcall(GetChatWindowMessages, w)
+  if not okg or type(s) ~= "string" then
+    mwSay("   组名清单：读不到（返回类型 = " .. type(s) .. "）")
+    return
+  end
+  local grp = {}
+  for part in string.gmatch(s, "[^,%s]+") do table.insert(grp, part) end
+  mwSay(string.format("   该窗口订阅消息组 %d 个（事件名 = CHAT_MSG_ + 组名）：", table.getn(grp)))
+  local probed, reg = 0, {}
+  for i = 1, table.getn(grp) do
+    local ev = "CHAT_MSG_" .. grp[i]
+    local mark = ""
+    if fr ~= nil and type(fr.IsEventRegistered) == "function" then
+      local okr, r = pcall(fr.IsEventRegistered, fr, ev)
+      probed = probed + 1
+      if okr and (r == true or r == 1) then mark = "  ★已注册" table.insert(reg, ev) end
+    end
+    mwSay(string.format("      %s%s", ev, mark))
+  end
+  if probed > 0 then
+    mwSay(string.format("   ★② IsEventRegistered 探测 %d 条，客户端承认已注册 %d 条（这批事件名就是真的）", probed, table.getn(reg)))
+    if table.getn(reg) > 0 then mwSay("      " .. table.concat(reg, " ／ ")) end
+  end
+  if fr ~= nil and type(fr.IsEventRegistered) == "function" then
+    local hit = {}
+    for _, ev in ipairs(MW_EVENTS) do
+      local okr, r = pcall(fr.IsEventRegistered, fr, ev)
+      if okr and (r == true or r == 1) then table.insert(hit, ev) end
+    end
+    mwSay(string.format("   ★候选通道交叉核对：ChatFrame%d 注册了其中 %d/%d 条%s", w, table.getn(hit), table.getn(MW_EVENTS),
+      (table.getn(hit) > 0) and ("：" .. table.concat(hit, " ／ ")) or "（0 条 ⇒ 战斗信息可能不走该窗口，看 ③ 截获）"))
+  end
+end
+
+-- ③ 截入口：包住全局 ChatFrame_OnEvent（保存原函数 → 包一层 → **读回确认** → 停用时按记账还原）
+function EVAL_MW_CHAT_ON()
+  if MW_CHAT.orig ~= nil then return false, "already" end
+  local cur = rawget(_G, "ChatFrame_OnEvent")
+  if type(cur) ~= "function" then return false, "noapi" end
+  MW_CHAT.orig = cur
+  local function wrapper(a1, ...)
+    -- ★取参兼容三形态（照 Toolbox tbCeArgs 的教训）：事件名 = 以 CHAT_MSG 开头那个；文本 = 下一个字符串
+    local cand = { a1 }
+    local nv = select("#", ...)
+    for i = 1, nv do cand[i + 1] = select(i, ...) end
+    local ev, txt, snd = nil, nil, nil
+    for i = 1, table.getn(cand) do
+      local v = cand[i]
+      if type(v) == "string" then
+        if ev == nil and string.find(v, "^CHAT_MSG") ~= nil then ev = v
+        elseif txt == nil then txt = v
+        elseif snd == nil then snd = v end
+      end
+    end
+    if txt == nil then
+      local g1 = arg1
+      if type(g1) == "string" and string.find(g1, "^CHAT_MSG") == nil then txt = g1 end
+    end
+    MW_CHAT.n = MW_CHAT.n + 1
+    if type(txt) == "string" and txt ~= "" then
+      pcall(EVAL_MW_CHAT_FEED, ev, txt, snd)
+    else
+      MW_CHAT.noMsg = MW_CHAT.noMsg + 1 -- ★取不到文本也**如实计数**（不许静默跳过）
+    end
+    return MW_CHAT.orig(a1, ...)
+  end
+  rawset(_G, "ChatFrame_OnEvent", wrapper)
+  local back = rawget(_G, "ChatFrame_OnEvent")
+  if back ~= wrapper then
+    rawset(_G, "ChatFrame_OnEvent", cur)
+    MW_CHAT.orig = nil
+    return false, "writefail" -- ★「写成功 ≠ 写进去生效」（1.73.12 的教训）：读回不是我们的层就当场回退
+  end
+  MW_CHAT.wrap = wrapper
+  return true
+end
+function EVAL_MW_CHAT_OFF()
+  if MW_CHAT.orig == nil then return false, "noton" end
+  local cur = rawget(_G, "ChatFrame_OnEvent")
+  if cur ~= MW_CHAT.wrap then
+    -- ★别人后来又包了一层 ⇒ **不许硬还原**（那会把别人的层打掉）：只清我们的记账并如实说
+    MW_CHAT.orig, MW_CHAT.wrap = nil, nil
+    return false, "changed"
+  end
+  rawset(_G, "ChatFrame_OnEvent", MW_CHAT.orig)
+  MW_CHAT.orig, MW_CHAT.wrap = nil, nil
+  return true
+end
+-- 喂入一条「经聊天入口进来的文本」（★不依赖事件名：候选通道之外的文本照样参与统计）
+function EVAL_MW_CHAT_FEED(ev, txt, snd)
+  if type(txt) ~= "string" or txt == "" then return false end
+  table.insert(MW_CHAT.raw, string.format("%s ｜ %s", tostring(ev), txt))
+  while table.getn(MW_CHAT.raw) > 12 do table.remove(MW_CHAT.raw, 1) end
+  if ev ~= nil and MW_ISEV[ev] then return true end -- ★候选事件已由探针帧处理，避免同一条算两次
+  local inC = mwCombatSync()
+  if inC ~= true then return true end -- ★只统计战斗状态（用户口径）
+  local t = (type(GetTime) == "function") and GetTime() or 0
+  local nm = EVAL_MELEE_ATTACKER(txt)
+  if nm ~= nil then
+    local rec = MW.atk[nm]
+    if rec == nil then rec = { last = t, n = 0, first = t } MW.atk[nm] = rec end
+    -- ★同一条消息可能同时喂给多个聊天窗（FrameXML 逐帧派发）⇒ 0.2s 内的重复不算「又一次命中」
+    if (t - (rec.last or 0)) > 0.2 then rec.n = rec.n + 1 end
+    rec.last = t
+    mwSee(nm, t, "in")
+    return true
+  end
+  local nm2 = mwVictim(txt)
+  if nm2 ~= nil then mwSee(nm2, t, "out") end
+  return true
+end
+function EVAL_MW_CHAT_STATE()
+  return { on = (MW_CHAT.orig ~= nil), n = MW_CHAT.n, noMsg = MW_CHAT.noMsg,
+           rawN = table.getn(MW_CHAT.raw), raw = MW_CHAT.raw }
+end
+function EVAL_MW_CHAT_RESET()
+  MW_CHAT.n, MW_CHAT.noMsg, MW_CHAT.raw = 0, 0, {}
+  return true
+end
+-- ===== 读值口（供断言/离线自证；生产路径一个都不调）=====
+function EVAL_MW_TEST_STATE()
+  local cnt, nAtk = {}, 0
+  for k, v in pairs(MW.counts) do cnt[k] = v end
+  for _ in pairs(MW.atk) do nAtk = nAtk + 1 end
+  return { on = MW.on, n = MW.n, win = MW.win, t0 = MW.t0, counts = cnt, atkN = nAtk, hitsN = table.getn(MW.hits),
+           rawN = table.getn(MW.raw), missN = table.getn(MW.miss), allN = table.getn(mwAllNames()),
+           regN = table.getn(MW.reg), badN = table.getn(MW.bad) }
+end
+function EVAL_MW_TEST_EVENTS() return MW_EVENTS end
+function EVAL_MW_TEST_FEED(ev, a1, a2, a3)
+  local was = MW.on
+  MW.on = true
+  local r = EVAL_MW_FEED(ev, a1, a2, a3)
+  MW.on = was
+  return r
+end
+function EVAL_MW_TEST_COUNT(win, now) return table.getn(EVAL_MW_ATTACKERS(win, now)) end
+function EVAL_MW_TEST_SETWIN(w) MW.win = tonumber(w) or MW.win return MW.win end
+function EVAL_MW_TEST_RESET()
+  EVAL_MW_STOP()
+  MW.counts, MW.atk, MW.raw, MW.miss, MW.seen, MW.allCounts, MW.allSample, MW.kills, MW.n, MW.t0 = {}, {}, {}, {}, {}, {}, {}, 0, 0, nil
+  MW.hits = {} -- ★1.75.11 估算的时间环也一起清（否则夹具之间互相污染）
+  MW.ivl, MW.ivlN, MW.ivlSeen, MW.ivlLog = {}, {}, {}, {} -- ★档位/更新次数/监测次数/变更日志也清（夹具要能复现「没学过」初态）
+  MW.lastSum, MW.peak, MW.uiOpen = nil, 0, false
+  return true
+end
+-- ★1.75.11 估算读值口（返回表：估算/窗口内条数/名字分组数/环内总数）——生产路径一个都不调
+function EVAL_MW_TEST_EST(win, now)
+  local e, n, g = EVAL_MW_EST_N(win, now)
+  return { est = e, n = n, groups = g, hitsN = table.getn(MW.hits) }
+end
+-- ★1.75.11 自学习读数：某怪名学到的**档位**（nil = 还没学过 ⇒ 用默认档 MW_ESTI）
+function EVAL_MW_TEST_IVL(nm) return MW.ivl[nm] end
+-- 常量/档位读值口（★断言不许写死数字：窗口、档位、阈值都从这里现取）
+function EVAL_MW_TEST_ESTI() return MW_ESTI, MW_UIWIN, MW_ESTCAP end
+function EVAL_MW_TEST_WIN() return MW_UIWIN end
+function EVAL_MW_TEST_TIERS() return MW_TIERS[1], MW_TIERS[2], MW_TIERS[3] end
+function EVAL_MW_TEST_GAPS() return MW_GAP_SINGLE, MW_GAP_MULTI end
+function EVAL_MW_TEST_TIEROF(g) return mwTierOf(g) end
+-- ★估算**明细**（读值口与生产**同一份实现** EVAL_MW_EST_DETAIL ⇒ 不会出现「读值口复刻逻辑」的假绿）
+function EVAL_MW_TEST_DETAIL(win, now)
+  local det = EVAL_MW_EST_DETAIL(win, now)
+  return det
+end
+function EVAL_MW_TEST_IVLN(nm) return MW.ivlN[nm] end
+function EVAL_MW_TEST_IVLSEEN(nm) return MW.ivlSeen[nm] end
+function EVAL_MW_TEST_IVLLOG() return MW.ivlLog end
+function EVAL_MW_TEST_LASTSUM() return MW.lastSum end

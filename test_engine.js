@@ -1313,7 +1313,7 @@ function declOrderScanFiles(files) {
     process.exit(1);
   }
   // ★1.71.3 新增 4 个职业组（牧师/德鲁伊/术士/萨满）+ 1 个功能组（队伍/团队）。
-  const expect = ["战士", "法师", "通用法系", "通用", "盗贼", "猎人", "骑士", "牧师", "德鲁伊", "术士", "萨满", "队伍/团队"];
+  const expect = ["战士","骑士","猎人","盗贼","牧师","萨满","法师","术士","德鲁伊","通用法系","通用","队伍/团队"];
   const got = listed.map(f => { const m = fs.readFileSync(path.join(dir, f), "utf8").match(/cls\s*=\s*"([^"]+)"/); return m ? m[1] : "?"; });
   if (got.join(",") !== expect.join(",")) {
     console.log("EXAMPLES TOC CHECK: FAIL - toc order gives [" + got.join("/") + "], expected [" + expect.join("/") + "]");
@@ -3464,7 +3464,7 @@ if (QUICK_MODE) {
   console.log("TEST LOAD ORDER CHECK: " + toolsIdx.length + " 个 tools/*.lua 全部排在 test_assert.lua（第 " + (iAssert + 1) + " 项）之前");
 })();
 
-for(const f of ['test_stub.lua','Locales/zhCN.lua','Locales/enUS.lua','Locales/ruRU.lua','Core.lua','Engine.lua','EvalHelp.lua','examples/warrior.lua','examples/mage.lua','examples/caster.lua','examples/general.lua','examples/rogue.lua','examples/hunter.lua','examples/paladin.lua','examples/priest.lua','examples/druid.lua','examples/warlock.lua','examples/shaman.lua','examples/group.lua','Toolbox.lua','quest/QuestData.lua','quest/QuestBulk.lua','quest/QuestChains.lua','DataSearch.lua','Share.lua','IconSem.lua','IconBrowser.lua','PetData.lua','PetHelper.lua','tools/IconGrid.lua','tools/HunterHelper.lua','tools/ConsumableHelper.lua','tools/DismountHelper.lua','tools/RareWatch.lua','tools/DragFrames.lua','tools/LayerFix.lua','tools/SimpleMap.lua','addons/EH_DebugBox/EH_DebugBox.lua','test_assert.lua']){
+for(const f of ['test_stub.lua', 'Locales/zhCN.lua', 'Locales/enUS.lua', 'Locales/ruRU.lua', 'Core.lua', 'Engine.lua', 'EvalHelp.lua', 'examples/warrior.lua', 'examples/paladin.lua', 'examples/hunter.lua', 'examples/rogue.lua', 'examples/priest.lua', 'examples/shaman.lua', 'examples/mage.lua', 'examples/warlock.lua', 'examples/druid.lua', 'examples/caster.lua', 'examples/general.lua', 'examples/group.lua', 'Toolbox.lua', 'quest/QuestData.lua', 'quest/QuestBulk.lua', 'quest/QuestChains.lua', 'DataSearch.lua', 'Share.lua', 'IconSem.lua', 'IconBrowser.lua', 'PetData.lua', 'PetHelper.lua', 'tools/IconGrid.lua', 'tools/HunterHelper.lua', 'tools/ConsumableHelper.lua', 'tools/DismountHelper.lua', 'tools/RareWatch.lua', 'tools/DragFrames.lua', 'tools/LayerFix.lua', 'tools/SimpleMap.lua', 'addons/EH_DebugBox/EH_DebugBox.lua', 'test_assert.lua']){
   if(f==='test_assert.lua' && iconFixture){
     const fx=to_luastring(iconFixture);
     const stx=lauxlib.luaL_loadbuffer(L,fx,fx.length,to_luastring('icon_fixture'));
@@ -3677,6 +3677,46 @@ console.log('DONE');
     " 个模块行都有 key 且名字在 tools/*.lua 里有同名登记 · 工具箱不认识模块内部件");
 })();
 
+// ===== SEL TRACE WIRING CHECK（1.75.12）：选取目标**调用点取证**的接线 =====
+// 用户报障（1.75.11）：「选取目标:最近敌人 + 冲锋：不按键时目标也在尸体与活怪之间来回跳」。
+//   静态审计已证明插件里**没有定时器**会切目标 ⇒ 唯一能定罪/洗清的办法是**读调用点**：
+//   每次真的调客户端选取函数都记一条（谁调的 + 调用前后的目标快照 + 第几发按键轮）。
+// 判据（这类坑行为断言照不到 ⇒ 必须源码检查）：
+//   ① **唯一调用口** `tselInvoke` 存在，且 5 类调用点全走它 —— Engine.lua 里**不许**再有裸
+//      `pcall(fn…)` / `pcall(TargetUnit…)` / `pcall(TargetNearestEnemy)` / …（漏一处就少一条证据）；
+//   ② 读值口 `EVAL_TSEL_PROBE` 存在（命令与断言共用同一份，**不解析中文文本**）；
+//   ③ 命令 `/eh go tsel log|clear` 存在且走读值口（在 EvalHelp.lua）；
+//   ④ `cfg.selProbe` 进了 Core 的**调试残渣键清单**（否则 `/eh 存档清理` 清不掉它）。
+(function () {
+  const bad = [];
+  const eng = fs.readFileSync(path.join(__dirname, "Engine.lua"), "utf8");
+  if (eng.indexOf("local function tselInvoke(") < 0) bad.push("Engine.lua 缺唯一调用口 tselInvoke");
+  if (eng.indexOf("function EVAL_TSEL_PROBE()") < 0) bad.push("Engine.lua 缺读值口 EVAL_TSEL_PROBE");
+  const nUse = (eng.match(/tselInvoke\(/g) || []).length;
+  if (nUse < 8) bad.push("tselInvoke 的调用点只有 " + nUse + " 处（定义 1 + 技能行/条件/队伍命中/队伍候选/队伍还原/名字枚举/名字枚举还原 ≥ 8）");
+  const bare = [
+    "pcall(TargetNearestEnemy)", "pcall(TargetUnit,", "pcall(TargetByName,", "pcall(ClearTarget)",
+    "pcall(fn, tsnm)", "pcall(fn, cd.nm)", "pcall(fn, TARGET_SEL_ARG[ts])", "pcall(fn, TARGET_SEL_ARG[cd.s])",
+    "okc, ret = pcall(fn)",
+  ];
+  for (const n of bare) {
+    if (eng.indexOf(n) >= 0) bad.push("Engine.lua 里还有裸调用 `" + n + "`（选取目标必须一律走 tselInvoke，否则取证会漏）");
+  }
+  const eh = fs.readFileSync(path.join(__dirname, "EvalHelp.lua"), "utf8");
+  if (eh.indexOf("^go tsel%s") < 0) bad.push("EvalHelp.lua 缺 `/eh go tsel log|clear` 子命令（取证环没法读）");
+  if (eh.indexOf("EVAL_TSEL_PROBE") < 0) bad.push("EvalHelp.lua 的取证命令没走读值口 EVAL_TSEL_PROBE（会去解析中文文本）");
+  const core = fs.readFileSync(path.join(__dirname, "Core.lua"), "utf8");
+  const resid = /local LOAD_RESIDUE_KEYS = \{[\s\S]*?\n\}/.exec(core);
+  if (!resid || resid[0].indexOf('"selProbe"') < 0) bad.push("Core.lua 的调试残渣键清单里没有 selProbe（/eh 存档清理 清不掉它）");
+  if (bad.length) {
+    for (const b of bad) console.log("SEL TRACE WIRING CHECK: FAIL - " + b);
+    process.exitCode = 1;
+    return;
+  }
+  console.log("SEL TRACE WIRING CHECK: 唯一调用口 tselInvoke（" + nUse + " 处调用点，无裸 pcall）· 读值口 EVAL_TSEL_PROBE · " +
+    "/eh go tsel log|clear · cfg.selProbe 在残渣键清单");
+})();
+
 // ===== 工具模块自带的源码检查（tests/checks/*.js，1.74.34）=====
 // 用户 1.74.34：「test 相关的搬迁到对应工具类子文件内自身管理。」
 //   ⇒ 每个工具模块的检查收在 tests/checks/<模块>.js；harness 只负责 require + 调用（一行一个）——
@@ -3684,4 +3724,6 @@ console.log('DONE');
 require("./tests/checks/LayerFix.js")(__dirname);
 require("./tests/checks/Track.js")(__dirname);
 require("./tests/checks/ChatGate.js")(__dirname);
+require("./tests/checks/PetFamily.js")(__dirname);
+require("./tests/checks/MinimapBtn.js")(__dirname);
 // （DF ICON ART CHECK（1.74.33）：窗口图标「画法 + 左键/右键分工」的 … 已迁到 tests/checks/DragFrames.js）

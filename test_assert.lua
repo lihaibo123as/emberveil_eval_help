@@ -395,30 +395,39 @@ eq(table.getn(prof26.skills[3].groups), 1, "charge has one condition group")
 eq(table.getn(prof26.skills[3].groups[1]), 5, "charge conditions = 5")
 eq(table.getn(prof26.skills[7].groups[1]), 6, "row7 conditions = 6")
 -- 1.56.1 法师案例×2：分组存在 + 全部可解析 + 新条件类型可用
-eq(EVAL_IO_TEMPLATES[2].cls, "法师", "mage class group")
-eq(table.getn(EVAL_IO_TEMPLATES[2].list), 1, "mage has one template (buff moved out)")
-local pM1, eM1 = EVAL_PROFILE_FROM_TEXT(EVAL_IO_TEMPLATES[2].list[1].text)
+-- ★1.75.11 分组顺序已整理（按客户端建号职业顺序 + 功能组殿后）⇒ 以下**一律按 cls 查，不写死下标**
+--   （写死下标的话，整理一次顺序就会静默指到别的组 —— 「按名字找、不按下标找」的老纪律）
+local mageG380 = nil
+for _, gg380 in ipairs(EVAL_IO_TEMPLATES) do if gg380.cls == "法师" then mageG380 = gg380 break end end
+eq(mageG380 ~= nil, true, "mage class group（按 cls 查）")
+eq(table.getn(mageG380.list), 1, "mage has one template (buff moved out)")
+local pM1, eM1 = EVAL_PROFILE_FROM_TEXT(mageG380.list[1].text)
 eq(pM1 ~= nil, true, "mage dps template parses: " .. tostring(eM1))
 eq(pM1.skills[1].skill, "选取目标:最近敌人", "mage dps opens with target sel")
 eq(table.getn(pM1.skills), 5, "mage dps skill count")
--- 1.67.5 通用法系独立分组：随军法师 从法师组拆出（索引：1战士 2法师 3通用法系 4盗贼）
-eq(EVAL_IO_TEMPLATES[3].cls, "通用法系", "universal caster group")
-local pM2, eM2 = EVAL_PROFILE_FROM_TEXT(EVAL_IO_TEMPLATES[3].list[1].text)
+-- 1.67.5 通用法系独立分组：随军法师 从法师组拆出
+local casterG380 = nil
+for _, gg380 in ipairs(EVAL_IO_TEMPLATES) do if gg380.cls == "通用法系" then casterG380 = gg380 break end end
+eq(casterG380 ~= nil, true, "universal caster group（按 cls 查）")
+local pM2, eM2 = EVAL_PROFILE_FROM_TEXT(casterG380.list[1].text)
 eq(pM2 ~= nil, true, "mage buff template parses: " .. tostring(eM2))
 eq(pM2.skills[2].groups[1][1].k, "tBuff", "buff template uses tBuff cond")
 eq(pM2.skills[2].groups[1][1].v, false, "buff template checks missing target buff")
 -- 1.67.2 盗贼模版：分组存在 + 可解析 + 连击条件
--- ★1.74.12 新增「通用」组（不可按职业分的动作积木：吃喝/喝药/下马/顶 buff/停手），
---   插在「通用法系」之后 → 它后面的组下标整体 +1。
-eq(EVAL_IO_TEMPLATES[4].cls, "通用", "general (class-independent) group")
-eq(table.getn(EVAL_IO_TEMPLATES[4].list), 5, "general group has 5 templates")
-eq(EVAL_IO_TEMPLATES[5].cls, "盗贼", "rogue class group")
-local pR1, eR1 = EVAL_PROFILE_FROM_TEXT(EVAL_IO_TEMPLATES[5].list[1].text)
+local rogueG380 = nil
+for _, gg380 in ipairs(EVAL_IO_TEMPLATES) do if gg380.cls == "盗贼" then rogueG380 = gg380 break end end
+eq(rogueG380 ~= nil, true, "rogue class group（按 cls 查）")
+local pR1, eR1 = EVAL_PROFILE_FROM_TEXT(rogueG380.list[1].text)
 eq(pR1 ~= nil, true, "rogue template parses: " .. tostring(eR1))
 eq(table.getn(pR1.skills), 4, "rogue skill count")
 eq(pR1.skills[1].skill, "选取目标:最近敌人", "rogue opens with target sel")
 eq(pR1.skills[4].groups[1][2].k, "combo", "rogue finisher uses combo cond")
 eq(pR1.skills[3].groups[1][2].op .. tostring(pR1.skills[3].groups[1][2].n), ">=4", "rogue execute threshold >=4")
+-- ★1.74.12「通用」组（不可按职业分的动作积木）+ ★1.75.11 收录用户方案「一身守护」
+local genG380 = nil
+for _, gg380 in ipairs(EVAL_IO_TEMPLATES) do if gg380.cls == "通用" then genG380 = gg380 break end end
+eq(genG380 ~= nil, true, "general (class-independent) group（按 cls 查）")
+eq(table.getn(genG380.list), 6, "general group has 6 templates（用户「一身守护」已收录）")
 
 -- 27) 重扫报告/状态总览以激活方案为准（1.45.0）：混合技能方案下非静默调用不报错
 EVAL_HELP_CONFIG.war.profiles = { { name = "混合", skills = {
@@ -507,7 +516,7 @@ local oldProf29 = EVAL_HELP_CONFIG.war.profiles
 EVAL_HELP_CONFIG.war.profiles = { { name = "接管", skills = {} } } EVAL_HELP_CONFIG.war.activeProfile = 1
 TEST.slotNames[3] = "自动射击" EVAL_GO_RESCAN(true)
 TEST.used = {} EVAL_HELP_CONFIG.war.attack = true
-TEST.curTargetName = nil EVAL_HELP_UPDATE_STATE()
+TEST.curTargetName = nil TEST.hasTarget = true EVAL_HELP_UPDATE_STATE() -- ★1.75.12 显式前置：补自动攻击现在**只在目标可攻击时**才按（隐式前置改显式）
 EVAL_GO_LAST = 0 EVAL_GO()
 local usedSlot3 = false
 for _, u in ipairs(TEST.used) do if u == 3 then usedSlot3 = true end end
@@ -552,6 +561,7 @@ local oldProf32 = EVAL_HELP_CONFIG.war.profiles
 EVAL_HELP_CONFIG.war.profiles = { { name = "接管", skills = {} } } EVAL_HELP_CONFIG.war.activeProfile = 1
 TEST.slotNames[1] = "攻击" TEST.slotNames[2] = "自动射击" EVAL_GO_RESCAN(true)
 EVAL_HELP_CONFIG.war.attack = true
+TEST.hasTarget = true EVAL_HELP_UPDATE_STATE() -- ★1.75.12 显式前置：目标可攻击才补自动攻击（见组 251）
 -- 接管有 2s 节流（wLastAttackTry 是 Engine local 测试无法直清）：桩 GetTime 恒定 1000，前移 3s 绕过
 local oldGetTime32 = GetTime
 GetTime = function() return 1003 end
@@ -3859,7 +3869,12 @@ do
   end
   eq(table.concat(broken, " | "), "", "★★★四种队友/团员条件都能往返（含扫描范围）")
   -- 行为类型只有两条：队伍成员 / 团队成员
-  eq(table.getn(EVAL_TARGET_SEL), 11, "★★★选取目标只增加了 2 条成员扫描器")
+  -- ★1.75.10 规模从 11 → 12（新增「玩家的目标」= AssistByName）；★这里改成**按标记数**，
+  --   让「只增加了 2 条成员扫描器」这条原始意图不再被「总条数」绑架（新增普通选取器不会误报）。
+  eq(table.getn(EVAL_TARGET_SEL), 12, "★★★选取目标表共 12 条（1.75.10：+ 玩家的目标）")
+  local nTeamSel = 0
+  for _, t in ipairs(EVAL_TARGET_SEL) do if t.teamSel then nTeamSel = nTeamSel + 1 end end
+  eq(nTeamSel, 2, "★★★其中成员扫描器**只有** 2 条（队伍成员 / 团队成员）")
   for _, id in ipairs({ "teamParty", "teamRaid" }) do
     local s2 = EVAL_COND_STR({ k = "target", s = id })
     local b2 = EVAL_PARSE_ONE(s2)
@@ -5980,7 +5995,12 @@ do
   if type(catFn88) == "function" then catFn88() end
   eq(EVAL_DD_TEST_ROW_TEX(idxName88) ~= nil, true, "①★★★「指定名称…」这一行现在**真的有图标**（原先整行空白）")
   eq(EVAL_DD_TEST_ROW_TEX(idxName88), EVAL_TARGET_SEL_ICON("byName"), "①★★图标 = 生产表里 byName 那枚（同一份真值）")
-  eq(EVAL_DD_TEST_ROW_TEX(9) ~= EVAL_TARGET_SEL_ICON("byName"), true, "①反向：清除目标那行仍是它自己那枚（没有整列串成同一张图）")
+  --   ★1.75.10 反向哨兵**按名字找行**，不许写死下标：新插了一项（玩家的目标）后，「清除目标」从 9 挪到 10，
+  --     写死 9 的断言会**悄悄指向别人的图标**（还照样通过 —— 这类「下标漂移」是静默盲区）。
+  local idxClear88 = nil
+  for i = 1, table.getn(items88) do if items88[i] == "选取目标:清除目标" then idxClear88 = i end end
+  eq(idxClear88 ~= nil, true, "①前置：目标选取类别里有「选取目标:清除目标」（反向哨兵按名字定位，不写死下标）")
+  eq(EVAL_DD_TEST_ROW_TEX(idxClear88) ~= EVAL_TARGET_SEL_ICON("byName"), true, "①反向：清除目标那行仍是它自己那枚（没有整列串成同一张图）")
   eq(EVAL_WICON("选取目标:指定名称..."), EVAL_TARGET_SEL_ICON("byName"), "①★省略号写成三个点也认得（两种写法都归一）")
   EVAL_DD_HIDE()
   -- ② 取消施法：左图标取客户端宏图标表；取不到**如实**退回问号
@@ -6664,8 +6684,10 @@ do
           for _, sk in ipairs((prof and prof.skills) or {}) do
             -- 每一条技能行都必须**自己带**成员条件：整行没有 = 那一行会**无条件施法**（不看人、不看血）
             local rowHas = false
+            local condCnt380 = 0
             for _, cg in ipairs(sk.groups or {}) do
               for _, cd in ipairs(cg) do
+                condCnt380 = condCnt380 + 1
                 local k2 = cd.k
                 if k2 == "teamHp" or k2 == "teamMana" or k2 == "teamBuff" or k2 == "teamDebuff" then
                   got = got + 1
@@ -6673,7 +6695,19 @@ do
                 end
               end
             end
-            if not rowHas then badRow = badRow .. key91 .. "#" .. tostring(sk.skill) .. " " end
+            -- ★1.75.11 用户把自己实战方案收进「通用」组后本条当场报红 ⇒ 把**前提**写准：
+            --   本条立条理由 = 「条件被静默丢成**无条件施法**」，前提是**整份模板都是成员施法模板**；
+            --   而「通用」组收的是**混合型**方案（守护队友 + 顺手输出），里面天然有不「对人施法」的行：
+            --     ① **不施法的动作行**（选取目标:* / 跟随:* / 停止攻击 / 取消施法 / 宠物:*）—— 它们本来就不该带成员条件；
+            --     ② **已带自身条件的输出行**（它们有条件，不是无条件施法——与本条立条理由一致）。
+            --   ★没松的部分（三处一个字没动）：**条件为空的行在成员模板里照样报**、
+            --     `badDrop`（文本写了 N 条成员条件就必须解析出 N 条）、`badPick`/`badOrder`（不许再回选取器行 + 成员条件必须在行首）。
+            local act380 = string.match(tostring(EVAL_COLON_NORM(sk.skill or "")), "^([^:]+)") or tostring(sk.skill or "")
+            local specialAct380 = (act380 == "选取目标" or act380 == "跟随" or act380 == "停止攻击"
+              or act380 == "取消施法" or act380 == "宠物")
+            if (not rowHas) and (not specialAct380) and condCnt380 == 0 then
+              badRow = badRow .. key91 .. "#" .. tostring(sk.skill) .. " "
+            end
           end
           if got ~= exp then
             badDrop = badDrop .. key91 .. "(" .. exp .. "→" .. got .. ") "
@@ -7026,9 +7060,18 @@ do
   local function enumOf95(t) return function(i) return t[i] end end
   eq(EVAL_HELP_MB_PICKICON(3, enumOf95({ "Interface\\Icons\\Spell_Fire_Fireball", "Interface\\Icons\\INV_Misc_Gear_01", "Interface\\Icons\\INV_Misc_Wrench_01" })),
     "Interface\\Icons\\INV_Misc_Wrench_01", "①★扳手优先于齿轮（候选优先级 > 宏图标表的表序）")
-  -- ★1.71.17 用户定稿：初始图标 = 力量祝福（她在图标库亲自挑的那枚）→ 候选里排最前，压过扳手
+  -- ★★★1.75.10 用户定稿（原话「头龙 配置为插件默认图标」）：初始默认 = **头龙**（INV_Misc_Head_Dragon_01，
+  --   宏图标序号 670）→ 候选表排最前，**压过** 1.71.17 的「力量祝福」（后者退居第二顺位）。
+  eq(EVAL_HELP_MB_PICKICON(2, enumOf95({ "/Game/Interface/Icons/Spell_Holy_BlessingOfStrength_TEX",
+                                          "/Game/Interface/Icons/INV_Misc_Head_Dragon_01_TEX" })),
+    "/Game/Interface/Icons/INV_Misc_Head_Dragon_01_TEX",
+    "①★★★默认图标 = 头龙（用户 2026-09-25 定稿；即使力量祝福在表里也挑头龙）")
+  -- ★反向哨兵：`_01` 是判据的一部分 —— 头龙的 Black/Blue/… 那几枚**不算**命中（否则挑了张别的龙）
+  eq(EVAL_HELP_MB_PICKICON(1, enumOf95({ "/Game/Interface/Icons/INV_Misc_Head_Dragon_Black_TEX" })), nil,
+    "①★★反向哨兵：`INV_Misc_Head_Dragon_Black` **不算**默认图标（尾号 _01 是判据的一部分）")
+  -- ★1.71.17 定的力量祝福**仍在候选表里**（第二顺位）：没有头龙那枚的客户端不至于掉到扳手
   eq(EVAL_HELP_MB_PICKICON(3, enumOf95({ "Interface\\Icons\\INV_Misc_Wrench_01", "Interface\\Icons\\Spell_Fire_Fireball", "/Game/Interface/Icons/Spell_Holy_BlessingOfStrength_TEX" })),
-    "/Game/Interface/Icons/Spell_Holy_BlessingOfStrength_TEX", "①★★初始图标 = 力量祝福（用户定稿，压过扳手；本客户端 /Game/..._TEX 形态也认得）")
+    "/Game/Interface/Icons/Spell_Holy_BlessingOfStrength_TEX", "①★★头龙缺席 ⇒ 退到力量祝福（仍压过扳手；本客户端 /Game/..._TEX 形态也认得）")
   eq(EVAL_HELP_MB_PICKICON(2, enumOf95({ "Interface\\Icons\\INV_Misc_Gear_01", "Interface\\Icons\\Spell_Fire_Fireball" })),
     "Interface\\Icons\\INV_Misc_Gear_01", "①没有扳手时退到齿轮")
   eq(EVAL_HELP_MB_PICKICON(1, enumOf95({ "Interface\\Icons\\Spell_Fire_Fireball" })), nil,
@@ -20317,6 +20360,1790 @@ do
   if tb231 then tb231.simpleMap = keepSM231 end
   TEST.chat = ""
   if fails0 == TESTASSERT_FAILS then print("GROUP 231 (调试日志总闸门：say/EVAL_SAY 联动 + 常开出口 + 标签改名): PASS") end
+end
+
+-- ===== 组 233（1.75.3）：宠物家族属性表 + 真机探针 =====
+-- 用户原话：「查看 ./doc 下面的那个图片. 分析下数据.看下如何整合到现在的抓宠助手内」
+--   → 落地 = ① 家族卡（三加成/食物/天生技能，由 gen_petdata.js 生成进 PetData.families）
+--            ② `/eh go 宠物家族`（别名 `/eh pet fam`）探针：读客户端 UnitCreatureFamily/GetPetFoodTypes 与本表对账。
+-- ★判据为什么这么写：
+--   · 家族卡是**纯数据** ⇒ 断言打**图片绝对值夹具**（不同源自比：不拿 PetData 自己的值比自己）；
+--   · 探针的用处是「权威定案 280 条驯服来源里那 64 条 fam 标注冲突」⇒ 必须验它**真读了客户端**，
+--     且四种「读不到」分开报（接口不存在 / 返回空 / 抛错 / 非字符串）——「查不到 ≠ 没有」是本项目头号静默族；
+--   · 名字对账必须**精确匹配**：子串匹配会把「猫头」判成猫科 —— 那正是把数据判错、且不报错的那类 bug。
+do
+  local fails0 = TESTASSERT_FAILS
+  local cfg233 = EVAL_HELP_CONFIG
+  local keepProbe233 = cfg233.petProbe
+  local keepLog233 = cfg233.log
+  local keepHasPet233, keepPetName233, keepFam233 = TEST.hasPet, TEST.petName, TEST.creatureFamily
+  local keepUCF233 = UnitCreatureFamily
+  cfg233.log = { on = true } -- 探针走 EVAL_SAY ⇒ 总闸门开着聊天框才收得到（与组 231 互为正反哨兵）
+
+  -- ① 家族卡：17 条 + 图片行序 + 不含 other
+  local cards233 = EVAL_PH_FAM_CARDS()
+  eq(table.getn(cards233), 17, "组233①★家族卡 17 条（实测 " .. tostring(table.getn(cards233)) .. "）")
+  eq(cards233[1] and cards233[1].id, "cat", "组233①★第 1 条 = 猫科（图片行序，不是字母序）")
+  eq(cards233[2] and cards233[2].id, "raptor", "组233①★第 2 条 = 迅猛龙（图片第 2 行；旧数据里根本没有这个家族）")
+  eq(cards233[17] and cards233[17].id, "wolf", "组233①★第 17 条 = 狼")
+  local hasOther233 = false
+  for i = 1, table.getn(cards233) do if cards233[i].id == "other" then hasOther233 = true end end
+  eq(hasOther233, false, "组233①★★反向哨兵：「其他」桶不许进家族卡（它没有属性，会显示成 0）")
+  local function card233(id)
+    for i = 1, table.getn(cards233) do if cards233[i].id == id then return cards233[i] end end
+    return nil
+  end
+
+  -- ② 三加成 = 图片夹具（绝对值，逐格）
+  local cat233 = card233("cat")
+  eq(cat233 and cat233.dmg == 10 and cat233.armor == 0 and cat233.hp == -2, true,
+     "组233②★猫科 10/0/-2（图片第 1 行；实测 " .. tostring(cat233 and (cat233.dmg .. "/" .. cat233.armor .. "/" .. cat233.hp)) .. "）")
+  local tur233 = card233("turtle")
+  eq(tur233 and tur233.dmg == -10 and tur233.armor == 13 and tur233.hp == 0, true, "组233②★乌龟 -10/+13/0（护甲最高那一档）")
+  local wolf233 = card233("wolf")
+  eq(wolf233 and wolf233.dmg == 0 and wolf233.armor == 5 and wolf233.hp == 0, true,
+     "组233②★狼 0/+5/0（图里「-」= 无加成 = 0，不是「读不到」）")
+  eq(wolf233 and wolf233.sk and wolf233.sk.sp and wolf233.sk.sp[1] == "嚎叫", true,
+     "组233②★狼的特殊技 = 本表用名「嚎叫」（图片写作「狂怒之嚎」，差异已登记待真机定案）")
+
+  -- ③ 名字对账：精确匹配 + 别名 + 大小写 + 认不出就 nil
+  eq(EVAL_PH_FAM_BY_NAME("猫科"), "cat", "组233③★label 命中")
+  eq(EVAL_PH_FAM_BY_NAME("猫"), "cat", "组233③★cname 别名命中（客户端家族名候选）")
+  eq(EVAL_PH_FAM_BY_NAME("Cat"), "cat", "组233③★大小写不敏感（客户端可能给英文名）")
+  eq(EVAL_PH_FAM_BY_NAME("  猫科  "), "cat", "组233③★首尾空白容忍")
+  eq(EVAL_PH_FAM_BY_NAME("土狼"), "hyena", "组233③★土狼是独立家族（旧数据里它被并进狼）")
+  eq(EVAL_PH_FAM_BY_NAME("迅猛龙"), "raptor", "组233③★迅猛龙")
+  eq(EVAL_PH_FAM_BY_NAME("喵喵"), nil, "组233③★认不出的名字 → nil（不猜）")
+  eq(EVAL_PH_FAM_BY_NAME("猫头"), nil, "组233③★★反向哨兵：不许**子串**匹配（「猫头」不是「猫科」）")
+  eq(EVAL_PH_FAM_BY_NAME(nil), nil, "组233③★非字符串 → nil")
+
+  -- ③b 按图片重标的家族（用户 2026-09-25 定案：「64 条 fam 冲突逐条定案 → **以最新的图片为准**」）
+  --   ★这组是**数据质量**断言：图片三列技能 ⇒ 定案家族；名字只在候选内消歧、且最长匹配优先。
+  eq(EVAL_PH_TEST_BEAST_FAM("撕咬", 7, "死亡狼蛛"), "spider",
+     "组233③b★★「狼蛛」不再被 '狼' 抢走（1.73.0 老 bug：标成 wolf）")
+  eq(EVAL_PH_TEST_BEAST_FAM("突进", 1, "骨爪土狼"), "hyena", "组233③b★★土狼系独立成族（旧标 wolf）")
+  eq(EVAL_PH_TEST_BEAST_FAM("闪电吐息", 1, "变异刺喉蛇"), "windserpent", "组233③b★★教闪电吐息 ⇒ 图片判为风蛇（旧标 other）")
+  eq(EVAL_PH_TEST_BEAST_FAM("嚎叫", 1, "山狗首领"), "wolf", "组233③b★教嚎叫 ⇒ 图片判为狼（旧标 other）")
+  eq(EVAL_PH_TEST_BEAST_FAM("撕咬", 8, "冬泉鸣枭"), "bird",
+     "组233③b★★图片优先的直接结果：名字带「枭」但猫头鹰列没有撕咬 ⇒ 判食腐鸟（已记进复核清单）")
+  eq(EVAL_PH_TEST_BEAST_FAM("爪击", 3, "猎行蛛"), "spider", "组233③b★名字硬证据（…蛛）优先 —— 已记进 image-exception")
+  --   ★用户 2026-09-25 逐只点名定案的 10 只（`FAM_USER`，生成器里优先级最高）；抽 3 只钉住
+  eq(EVAL_PH_TEST_BEAST_FAM("撕咬", 1, "邪恶的基塞伊斯"), "cat", "组233③b★★用户定案：邪恶的基塞伊斯 = 猫科")
+  eq(EVAL_PH_TEST_BEAST_FAM("爪击", 3, "癞爪"), "wolf",
+     "组233③b★★用户定案：癞爪 = 狼（★它教爪击3，与图片的狼列冲突 ⇒ 已记进第 3 条 image-exception）")
+  eq(EVAL_PH_TEST_BEAST_FAM("撕咬", 2, "森林潜伏者"), "spider", "组233③b★用户定案：森林潜伏者 = 蜘蛛")
+
+  -- ④ 探针真的读客户端（桩造「有宠物 + 客户端给出家族名」）
+  TEST.hasPet, TEST.petName, TEST.creatureFamily = true, "测试宠", "猫科"
+  local rep233 = EVAL_PH_FAM_PROBE()
+  eq(type(rep233) == "table" and table.getn(rep233.matched) >= 1 and rep233.matched[1] == "cat", true,
+     "组233④★★探针把客户端家族名对回本表 id（实测 " .. tostring(rep233 and rep233.matched and rep233.matched[1]) .. "）")
+  eq(rep233.units[1] and rep233.units[1].unit == "pet" and rep233.units[1].exists == true, true, "组233④★pet 单位存在被如实读到")
+  eq(rep233.units[1] and rep233.units[1].raw, "猫科", "组233④★家族原文一并带出（认不出时靠它定案）")
+  eq(string.find(table.concat(rep233.lines, "\n"), "cat", 1, true) ~= nil, true, "组233④★报告里真的打出了命中的家族 id")
+
+  -- ⑤ 四种「读不到」分开报（查不到 ≠ 没有）
+  TEST.creatureFamily = nil
+  local repA233 = EVAL_PH_FAM_PROBE()
+  eq(repA233.units[1].why, "empty", "组233⑤★客户端返回空 → why=empty（不是「没有家族」）")
+  eq(table.getn(repA233.unknown), 0, "组233⑤★返回空时**不记** unknown（空 ≠ 认不出的名字）")
+  TEST.creatureFamily = 123
+  local repB233 = EVAL_PH_FAM_PROBE()
+  eq(repB233.units[1].why, "notstr", "组233⑤★返回非字符串 → why=notstr，原文带出（raw=" .. tostring(repB233.units[1].raw) .. "）")
+  UnitCreatureFamily = nil
+  local repC233 = EVAL_PH_FAM_PROBE()
+  eq(repC233.units[1].why, "noapi", "组233⑤★★接口不存在 → why=noapi（如实说「本客户端没有」，绝不冒充「没家族」）")
+  UnitCreatureFamily = keepUCF233
+  TEST.creatureFamily = "不存在的家族名"
+  local repD233 = EVAL_PH_FAM_PROBE()
+  eq(table.getn(repD233.unknown) >= 1 and repD233.unknown[1] == "不存在的家族名", true, "组233⑤★★认不出的名字 → 记进 unknown 并原样报出")
+  eq(table.getn(repD233.matched), 0, "组233⑤★反向哨兵：认不出时**不许**硬塞一个 id")
+
+  -- ⑥ 没宠物/没目标 → 不存在 ≠ 没有家族信息（★刻意不对账：不拿一次「单位不存在」当家族证据）
+  TEST.hasPet, TEST.creatureFamily = false, "猫科"
+  local repE233 = EVAL_PH_FAM_PROBE()
+  eq(repE233.units[1].exists, false, "组233⑥★没宠物时 exists=false")
+  eq(repE233.units[1].why, "ok", "组233⑥★★读数函数照读（why=ok）—— 探针不因「没宠物」就跳过读数")
+  eq(table.getn(repE233.matched), 0, "组233⑥★★单位不存在 ⇒ **不做对账**（不拿一次读不到的东西去改数据判断）")
+
+  -- ⑦ 专属读数是有界环 + 已登记进残渣键
+  local box233 = cfg233.petProbe
+  eq(type(box233) == "table" and type(box233.out) == "table", true, "组233⑦★读数落存档 cfg.petProbe.out")
+  -- ★灌环时把总闸门关掉：既不刷聊天框、也不写调试日志环（有界性只看 cfg.petProbe）
+  cfg233.log = { on = false }
+  for _ = 1, 50 do EVAL_PH_FAM_PROBE() end
+  cfg233.log = { on = true }
+  eq(table.getn(cfg233.petProbe.out) <= 40, true,
+     "组233⑦★★有界环（上限 40；灌了 50 次后实测 " .. tostring(table.getn(cfg233.petProbe.out)) .. " 行）")
+  local hasRes233 = false
+  for _, k in ipairs(EVAL_LOAD_RESIDUE_KEYS()) do if k == "petProbe" then hasRes233 = true end end
+  eq(hasRes233, true, "组233⑦★petProbe 在调试残渣键清单里（/eh 存档清理清得掉）")
+
+  -- ⑧ 命令入口（★走真实 SlashCmdList：前缀写错/别名漏接在这里当场红）
+  TEST.hasPet, TEST.petName, TEST.creatureFamily = true, "测试宠", "猫科"
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 宠物家族")
+  eq(string.find(tostring(TEST.chat or ""), "宠物家族探针", 1, true) ~= nil, true,
+     "组233⑧★/eh go 宠物家族 走真实命令入口有报告输出")
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("pet fam")
+  eq(string.find(tostring(TEST.chat or ""), "宠物家族探针", 1, true) ~= nil, true, "组233⑧★别名 /eh pet fam 同样接上")
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 宠物家族 表")
+  local tbl233 = tostring(TEST.chat or "")
+  eq(string.find(tbl233, "家族属性表", 1, true) ~= nil, true, "组233⑧★「表」打标题")
+  eq(string.find(tbl233, "猫科", 1, true) ~= nil and string.find(tbl233, "土狼", 1, true) ~= nil, true,
+     "组233⑧★「表」逐行列出家族（含新增的土狼）")
+  eq(string.find(tbl233, "其他", 1, true) == nil, true, "组233⑧★★反向哨兵：「表」里不许出现没有属性的「其他」桶")
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 宠物家族 存档")
+  eq(string.find(tostring(TEST.chat or ""), "petProbe", 1, true) ~= nil, true, "组233⑧★「存档」把专属读数打回聊天框")
+  SlashCmdList["EVALHELP"]("go 宠物家族 清")
+  local left233 = (cfg233.petProbe and cfg233.petProbe.out) or {}
+  eq(string.find(table.concat(left233, "\n"), "家族属性表", 1, true) == nil, true, "组233⑧★「清」把之前的读数清掉了")
+  eq(table.getn(left233) <= 1, true, "组233⑧★清完后环里只剩确认行（实测 " .. tostring(table.getn(left233)) .. " 行）")
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 宠物家族 乱写")
+  eq(string.find(tostring(TEST.chat or ""), "用法", 1, true) ~= nil, true, "组233⑧★无法识别的子命令 → 打用法（不静默）")
+
+  -- 夹具自清（含桩与存档：跨用例状态残留是本项目的老坑）
+  cfg233.petProbe = keepProbe233
+  cfg233.log = keepLog233
+  TEST.hasPet, TEST.petName, TEST.creatureFamily = keepHasPet233, keepPetName233, keepFam233
+  UnitCreatureFamily = keepUCF233
+  TEST.chat = ""
+  if fails0 == TESTASSERT_FAILS then print("GROUP 233 (宠物家族属性表 + 真机探针): PASS") end
+end
+
+-- ===== 组 234（1.75.3）：技能详情页「家族图标 tooltip」= 该宠物的家族属性（用户截图需求）=====
+-- 用户原话：「能否在技能详情页的宠物列表.宠物图标tooltip 显示这个宠物的详情.信息来源以上统计信息」
+-- ★判据为什么这么写：
+--   · 内容是**纯数据渲染** ⇒ 断言读 **`EVAL_PH_FAM_TIP_LINES`**（唯一来源）+ 走**真实 OnEnter** 看桩记下的
+--     tooltip 文本（「函数写好了」≠「悬停真的出提示」—— 本项目「接线漏接不报错」的老坑）；
+--   · ★**纹理不吃鼠标事件**（本项目实测结论）⇒ 必须是**覆盖图标的 Button** ⇒ 还要验按钮可见 + **几何上真盖住图标**
+--     （不重叠 = 用户永远悬停不到），且不侵占名字格（不抢点击）；
+--   · ★空行必须清 `beast`（否则 tooltip 报的是**别人家的家族** —— 数据残留）；
+--   · `other`（未归类）**如实说「未收录」**，绝不显示成 0 加成。
+do
+  local fails234 = TESTASSERT_FAILS
+  local cfg234 = EVAL_HELP_CONFIG
+  local keepProbe234 = cfg234.petProbe
+  local keepLog234 = cfg234.log
+  cfg234.log = { on = true }
+
+  -- ① 内容唯一来源：行表（宠物名 + 家族名/id + 三加成 + 食物 + 天生技能 + 来源说明）
+  local lines234 = EVAL_PH_FAM_TIP_LINES("wolf", { name = "雪狼", level = "6-7", zone = "丹莫罗", fam = "wolf" })
+  eq(type(lines234) == "table" and table.getn(lines234) >= 5, true,
+     "组234①★提示行 ≥5 行（实测 " .. tostring(type(lines234) == "table" and table.getn(lines234) or -1) .. "）")
+  local all234 = ""
+  for i = 1, table.getn(lines234) do all234 = all234 .. "|" .. tostring(lines234[i].t) end
+  eq(string.find(all234, "雪狼", 1, true) ~= nil, true, "组234①★首行带宠物名")
+  eq(string.find(all234, "丹莫罗", 1, true) ~= nil, true, "组234①★带刷新区域（用户从这一格才知道去哪抓）")
+  eq(string.find(all234, "wolf", 1, true) ~= nil, true, "组234①★带家族 id（探针/闸门的稳定键）")
+  eq(string.find(all234, "+5%", 1, true) ~= nil, true, "组234①★★三加成是**真实数字**（狼 护甲 +5%）：" .. all234)
+  eq(string.find(all234, "肉", 1, true) ~= nil, true, "组234①★食物列（喂食助手用得上）")
+  eq(string.find(all234, "撕咬", 1, true) ~= nil and string.find(all234, "嚎叫", 1, true) ~= nil, true, "组234①★天生技能三列")
+  eq(string.find(all234, "家族属性表", 1, true) ~= nil, true, "组234①★末行讲清数据来源（可 `/eh go 宠物家族 表` 摊开）")
+
+  -- ② 未归类（other）如实说「未收录」，不显示成 0
+  local linesO = EVAL_PH_FAM_TIP_LINES("other", { name = "邪恶的基塞伊斯", level = "5", zone = "泰达希尔", fam = "other" })
+  local allO = ""
+  for i = 1, table.getn(linesO) do allO = allO .. "|" .. tostring(linesO[i].t) end
+  eq(string.find(allO, "未收录", 1, true) ~= nil, true, "组234②★★没属性的家族如实说「未收录」，绝不显示成 0 加成：" .. allO)
+  eq(string.find(allO, "+0%", 1, true) == nil, true, "组234②★反向哨兵：不许出现 +0% 这种「假装有数据」的写法")
+
+  -- ③ 真实接线：真实详情页 → 图标按钮可见 + 真盖住图标 + 走真实 OnEnter 出 tooltip
+  EVAL_PH_TEST_RESET()
+  EVAL_PH_SET_QUERY("撕咬")
+  eq(EVAL_PH_OPEN(1), true, "组234③前置：打开「撕咬 等级1」详情")
+  local g234 = EVAL_PH_TEST_GEOM()
+  local row234 = g234.det[1]
+  eq(row234.iconBtnShown, true, "组234③★★家族图标按钮**可见**（纹理不吃鼠标事件 ⇒ 必须靠它兜住悬停）")
+  eq(row234.hasBeast, true, "组234③★该行有宠物数据（悬停读的就是这一格）")
+  eq(row234.iconBtn ~= nil and row234.icon ~= nil, true, "组234③★图标与按钮的矩形都可读")
+  eq(row234.iconBtn.x <= row234.icon.x and (row234.iconBtn.x + row234.iconBtn.w) >= (row234.icon.x + row234.icon.w), true,
+     "组234③★★按钮**盖住**家族图标（不重叠 = 用户永远悬停不到）")
+  eq((row234.iconBtn.x + row234.iconBtn.w) <= row234.nameBtn.x, true, "组234③★按钮不侵占名字格（不抢点击）")
+  TEST.tipLines = nil
+  local hov234 = EVAL_PH_TEST_FAM_HOVER(1)
+  eq(hov234 and hov234.wired, true, "组234③★★图标按钮挂了真实 OnEnter")
+  eq(hov234 and hov234.called, true, "组234③★真实点火不抛错")
+  local tip234 = ""
+  for _, t in ipairs(TEST.tipLines or {}) do tip234 = tip234 .. "|" .. tostring(t.text) end
+  local b234 = EVAL_PH_TEST_DETAIL().beasts[1]
+  eq(string.find(tip234, tostring(b234.name), 1, true) ~= nil, true,
+     "组234③★★真实 tooltip 带上了这一行那只宠物（" .. tostring(b234.name) .. "）")
+  eq(string.find(tip234, "家族", 1, true) ~= nil, true, "组234③★真实 tooltip 里有家族行：" .. tip234)
+  eq(table.getn(TEST.tipLines or {}) >= 5, true, "组234③★真实 tooltip 行数 ≥5（与唯一来源一致）")
+
+  -- ④ 空行不许残留（否则 tooltip 报的是上一屏那只宠物）
+  EVAL_PH_SET_QUERY("雷霆践踏")
+  eq(EVAL_PH_OPEN(1), true, "组234④前置：打开「雷霆践踏 等级1」（只有 2 个来源 ⇒ 后面的行必然是空的）")
+  local gb234 = EVAL_PH_TEST_GEOM()
+  eq(gb234.det[1].hasBeast, true, "组234④★有数据的行 hasBeast=true")
+  eq(gb234.det[3].hasBeast, false, "组234④★★没有数据的行 hasBeast=false（不许残留上一屏的宠物）")
+  eq(gb234.det[3].iconBtnShown, false, "组234④★空行的图标按钮也隐藏（显式清单没漏）")
+
+  -- 收尾（夹具自清：存档/闸门/桩记账）
+  EVAL_PH_TEST_RESET()
+  cfg234.petProbe = keepProbe234
+  cfg234.log = keepLog234
+  TEST.tipLines = nil
+  if fails234 == TESTASSERT_FAILS then print("GROUP 234 (技能详情页家族图标 tooltip = 宠物家族属性): PASS") end
+end
+
+-- ===== 组 235（1.75.3）：宠物技能图标 = **宏图标号**（运行期解析 + 兜底 + 缓存 + 真实渲染接线）=====
+-- 用户原话：「宠物技能图标调整: 撕咬->宏图标139 · 爪击->255 · 嚎叫->695 · 冲锋->700 · 甲壳护盾->710 · 暗影抗性->133」
+--   （「夹克护盾」按上下文 = **甲壳护盾**；号来自**图标库 Tab5 悬停的「宏图标序号：N」**= 运行期宏图标表下标）。
+-- ★判据为什么这么写：
+--   · 号**绝不能离线翻成路径**：`doc/图标路径清单.txt` 是**按字母排序**的白名单，行号 ≠ 号
+--     （先例：DF 的 346 号在客户端是 `INV_Misc_Fish_20`，清单第 342 条才是它、第 346 条是 `INV_Misc_Flower_02`）
+--     ⇒ 只能运行期 `GetMacroIconInfo(号)`；
+--   · 取不到必须**退回** PetData 里那条语义路径（绝不编路径、也绝不显示成空白）；
+--   · 解析要**按号缓存**（列表 15 行 × 每次刷新都问一遍 = 白问上千次）；
+--   · 还要验**渲染真的走这个口**（只验函数算得对 = 漏接也全绿）。
+do
+  local fails235 = TESTASSERT_FAILS
+  local savedMI235 = TEST.macroIcons
+  local REAL235 = "/Game/Interface/Icons/Ability_Suffocate_TEX" -- 用清单里的**真实形态**当素材（桩原样返回）
+
+  -- ① 数据：6 个技能带 iconIdx（= 用户给的号），其余技能一个都不许带
+  local WANT235 = { ["撕咬"] = 139, ["爪击"] = 255, ["嚎叫"] = 695, ["冲锋"] = 700, ["甲壳护盾"] = 710, ["暗影抗性"] = 133 }
+  for nm, want in pairs(WANT235) do
+    eq(EVAL_PH_TEST_SKILL_ICON_IDX(nm), want, "组235①★" .. nm .. " 的宏图标号 = " .. want)
+    eq(type(EVAL_PH_TEST_SKILL_ICON_STATIC(nm)) == "string", true, "组235①★" .. nm .. " 仍保留兜底语义路径")
+  end
+  eq(EVAL_PH_TEST_SKILL_ICON_IDX("突进"), nil, "组235①★反向哨兵：没被指定的技能不许带 iconIdx（别顺手给全套编号）")
+
+  -- ② 运行期解析：号 → 真实纹理（桩表按号喂）
+  local mi235 = {}
+  for i = 1, 720 do mi235[i] = "Placeholder" end
+  mi235[139], mi235[255], mi235[695], mi235[700], mi235[710], mi235[133] = REAL235, REAL235, REAL235, REAL235, REAL235, REAL235
+  TEST.macroIcons = mi235
+  EVAL_PH_TEST_ICON_CACHE_CLEAR()
+  eq(EVAL_PH_TEST_SKILL_ICON("冲锋"), REAL235, "组235②★★有号 ⇒ 纹理来自 GetMacroIconInfo(号)（实测 " .. tostring(EVAL_PH_TEST_SKILL_ICON("冲锋")) .. "）")
+  eq(EVAL_PH_TEST_SKILL_ICON("冲锋") ~= EVAL_PH_TEST_SKILL_ICON_STATIC("冲锋"), true,
+     "组235②★★解析结果 ≠ 兜底路径（说明号真的生效，不是直接读静态路径）")
+
+  -- ③ 兜底：接口在但表空 / 号越界 / 接口缺失 —— 三种都退回语义路径（不许 nil、不许编路径）
+  TEST.macroIcons = nil
+  EVAL_PH_TEST_ICON_CACHE_CLEAR()
+  eq(EVAL_PH_TEST_SKILL_ICON("冲锋"), EVAL_PH_TEST_SKILL_ICON_STATIC("冲锋"), "组235③★接口在但表空 ⇒ 退回兜底路径")
+  TEST.macroIcons = { "OnlyOne" }
+  EVAL_PH_TEST_ICON_CACHE_CLEAR()
+  eq(EVAL_PH_TEST_SKILL_ICON("冲锋"), EVAL_PH_TEST_SKILL_ICON_STATIC("冲锋"), "组235③★号越界 ⇒ 退回兜底路径（不报错、不留空白）")
+  local savedGMII235 = GetMacroIconInfo
+  GetMacroIconInfo = nil
+  EVAL_PH_TEST_ICON_CACHE_CLEAR()
+  eq(EVAL_PH_TEST_SKILL_ICON("冲锋"), EVAL_PH_TEST_SKILL_ICON_STATIC("冲锋"), "组235③★接口缺失 ⇒ 退回兜底路径")
+  GetMacroIconInfo = savedGMII235
+
+  -- ④ 缓存：按号缓存（换掉桩表不重解析）；清缓存后才跟着变
+  TEST.macroIcons = mi235
+  EVAL_PH_TEST_ICON_CACHE_CLEAR()
+  eq(EVAL_PH_TEST_SKILL_ICON("撕咬"), REAL235, "组235④前置：先解析一次（进缓存）")
+  TEST.macroIcons = { [139] = "/Game/Interface/Icons/INV_Food_Egg_02_TEX" }
+  eq(EVAL_PH_TEST_SKILL_ICON("撕咬"), REAL235, "组235④★★缓存生效：桩表换了也不重解析（实测 " .. tostring(EVAL_PH_TEST_SKILL_ICON("撕咬")) .. "）")
+  EVAL_PH_TEST_ICON_CACHE_CLEAR()
+  eq(EVAL_PH_TEST_SKILL_ICON("撕咬"), "/Game/Interface/Icons/INV_Food_Egg_02_TEX",
+     "组235④★清缓存后跟着桩表走（证明④那条是缓存、不是写死）")
+
+  -- ⑤ 真实渲染接线：列表行与详情大图标**真的贴上了解析结果**
+  TEST.macroIcons = mi235
+  EVAL_PH_TEST_ICON_CACHE_CLEAR()
+  EVAL_PH_TEST_RESET()
+  EVAL_PH_SET_QUERY("撕咬")
+  local rowTex235 = EVAL_PH_TEST_ICON_TEX("row")
+  eq(rowTex235, REAL235, "组235⑤★★列表行图标 = 解析结果（实测 " .. tostring(rowTex235) .. "）")
+  eq(EVAL_PH_OPEN(1), true, "组235⑤前置：打开详情")
+  local detTex235 = EVAL_PH_TEST_ICON_TEX("detail")
+  eq(detTex235, REAL235, "组235⑤★★详情大图标 = 解析结果（实测 " .. tostring(detTex235) .. "）")
+  -- 兜底也要在**真实渲染**上生效（接口缺失时列表不许空白）
+  local savedGMII235b = GetMacroIconInfo
+  GetMacroIconInfo = nil
+  EVAL_PH_TEST_ICON_CACHE_CLEAR()
+  EVAL_PH_SET_QUERY("爪击")
+  eq(EVAL_PH_TEST_ICON_TEX("row"), EVAL_PH_TEST_SKILL_ICON_STATIC("爪击"), "组235⑤★接口缺失时列表行退回兜底路径（不空白）")
+  GetMacroIconInfo = savedGMII235b
+
+  -- ⑥ 兜底纹理 = **真机读数就是那一张**（2026-09-25 用户跑 `/eh go 图标号`，读数落 `cfg.iconIdxProbe`）：
+  --    号解析不到时退回的就是这张 ⇒ 兜底写错 = 界面显示**别的图**且不报错；夹具走**绝对值**（不是同源自比）
+  local STATIC235 = {
+    ["撕咬"] = "/Game/Interface/Icons/Ability_Racial_Cannibalize_TEX",
+    ["爪击"] = "/Game/Interface/Icons/Ability_Druid_Rake_TEX",
+    ["嚎叫"] = "/Game/Interface/Icons/Ability_Hunter_Pet_Wolf_TEX",
+    ["冲锋"] = "/Game/Interface/Icons/Ability_Hunter_Pet_Boar_TEX",
+    ["甲壳护盾"] = "/Game/Interface/Icons/Ability_Hunter_Pet_Turtle_TEX",
+    ["暗影抗性"] = "/Game/Interface/Icons/Spell_Shadow_SealOfKings_TEX",
+  }
+  for nm, want in pairs(STATIC235) do
+    eq(EVAL_PH_TEST_SKILL_ICON_STATIC(nm), want, "组235⑥★" .. nm .. " 的兜底纹理 = 真机读数那一张")
+  end
+
+  -- 收尾（夹具自清）
+  TEST.macroIcons = savedMI235
+  EVAL_PH_TEST_ICON_CACHE_CLEAR()
+  EVAL_PH_TEST_RESET()
+  if fails235 == TESTASSERT_FAILS then print("GROUP 235 (宠物技能图标 = 宏图标号：运行期解析/兜底/缓存/真实渲染): PASS") end
+end
+
+-- ===== 组 236（1.75.3）：取证命令 `/eh go 图标号`（宏图标号 → 图标）=====
+-- 用户原话：「以下数字对应的编号.编号对应着图标**可以自己写命令我配合你扫一下**」
+-- ★为什么必须有这条命令：那些号是**运行期宏图标表下标**，而 `doc/图标路径清单.txt` 是**按字母排序**的白名单
+--   （行号 ≠ 号）⇒ 「139 号是哪枚图」**离线查不出来**，只能在真机读；这条命令就是读数口，且默认报的
+--   **宠物技能在用的那几个号**（读 PetData 的 iconIdx、走与界面**同一个解析口**）。
+-- ★判据要点：① 默认口 = 技能名 + 号 + 纹理（**与渲染同源**）；② 任意号可查；③ 号越界/接口缺失**如实说**；
+--   ④ 上限 12 个（防刷屏）；⑤ **不能把原来的 `/eh go icons`（整表采集）吃掉**（反向哨兵）。
+do
+  local fails236 = TESTASSERT_FAILS
+  local savedMI236 = TEST.macroIcons
+  local savedDump236 = EVAL_HELP_CONFIG.iconDump
+  local A236 = "/Game/Interface/Icons/Ability_Suffocate_TEX"
+  local B236 = "/Game/Interface/Icons/Spell_Fire_SunKey_TEX"
+  local mi236 = {}
+  for i = 1, 720 do mi236[i] = "Placeholder" end
+  mi236[139], mi236[700] = A236, B236
+  TEST.macroIcons = mi236
+  EVAL_PH_TEST_ICON_CACHE_CLEAR()
+
+  -- ① 默认口：宠物技能在用的号（技能名 + 号 + 纹理）
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 图标号")
+  local c236 = tostring(TEST.chat or "")
+  eq(string.find(c236, "撕咬", 1, true) ~= nil, true, "组236①★默认口列出宠物技能（含技能名）")
+  eq(string.find(c236, "139", 1, true) ~= nil and string.find(c236, A236, 1, true) ~= nil, true,
+     "组236①★★报出「139 → 真实纹理」（与界面渲染同一个解析口）")
+  eq(string.find(c236, "700", 1, true) ~= nil and string.find(c236, B236, 1, true) ~= nil, true, "组236①★冲锋 700 → 另一枚纹理")
+  eq(string.find(c236, "接口：GetMacroIconInfo=true", 1, true) ~= nil, true, "组236①★先把接口与总数如实报出来")
+
+  -- ② 任意号 + 越界号：拿到 / 取不到 分三态
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 图标号 700 999")
+  local c236b = tostring(TEST.chat or "")
+  eq(string.find(c236b, B236, 1, true) ~= nil, true, "组236②★任意号可查（700 → 纹理）")
+  eq(string.find(c236b, "999", 1, true) ~= nil and string.find(c236b, "取不到", 1, true) ~= nil, true,
+     "组236②★★号越界**如实说「取不到」**（不冒充「没有这枚图」）")
+
+  -- ③ 另一种写法（带参数的 go icons）也走这里；★不带参数的 go icons 必须仍是整表采集
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go icons 139")
+  eq(string.find(tostring(TEST.chat or ""), A236, 1, true) ~= nil, true, "组236③★`go icons 139` 同义（带参数）")
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go icons")
+  eq(string.find(tostring(TEST.chat or ""), "图标路径采集", 1, true) ~= nil, true,
+     "组236③★★反向哨兵：不带参数的 `/eh go icons` 仍是**整表采集**（没被新分支吃掉）")
+
+  -- ④ 上限 12（防刷屏）
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 图标号 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15")
+  eq(string.find(tostring(TEST.chat or ""), "只报前 12 个", 1, true) ~= nil, true, "组236④★给太多号 ⇒ 如实截断到 12 个")
+  eq(string.find(tostring(TEST.chat or ""), "15 →", 1, true) == nil, true, "组236④★第 15 个确实没打（截断真的生效）")
+
+  -- ⑤ 接口缺失：如实说「接口不存在」（不许静默、不许假装成功）
+  local savedGMII236 = GetMacroIconInfo
+  GetMacroIconInfo = nil
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 图标号 139")
+  eq(string.find(tostring(TEST.chat or ""), "接口不存在", 1, true) ~= nil, true, "组236⑤★接口缺失 ⇒ 如实报「接口不存在」")
+  GetMacroIconInfo = savedGMII236
+
+  -- ⑥ ★★★读数必须**专属落盘**（1.75.9 实测教训：`say` 只进聊天框、**不落日志环** ⇒
+  --   用户跑完我只读存档的话一个字节都读不到）⇒ 有界环 `cfg.iconIdxProbe` + 进残渣键清单
+  GetMacroIconInfo = savedGMII236
+  TEST.macroIcons = mi236
+  EVAL_PH_TEST_ICON_CACHE_CLEAR()
+  EVAL_HELP_CONFIG.iconIdxProbe = nil
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go 图标号 700")
+  local box236 = EVAL_HELP_CONFIG.iconIdxProbe
+  eq(type(box236) == "table" and type(box236.out) == "table" and table.getn(box236.out) >= 2, true,
+     "组236⑥★★读数落存档 cfg.iconIdxProbe（实测 " .. tostring(type(box236) == "table" and table.getn((box236 or {}).out or {}) or -1) .. " 行）")
+  local all236 = table.concat((box236 or {}).out or {}, "\n")
+  eq(string.find(all236, B236, 1, true) ~= nil, true, "组236⑥★★落盘的那份里**有真实纹理**（我读存档就能拿到答案）")
+  for _ = 1, 30 do SlashCmdList["EVALHELP"]("go 图标号 700") end
+  eq(table.getn(EVAL_HELP_CONFIG.iconIdxProbe.out) <= 40, true,
+     "组236⑥★★有界环（上限 40；灌 30 次后实测 " .. tostring(table.getn(EVAL_HELP_CONFIG.iconIdxProbe.out)) .. " 行）")
+  local hasRes236 = false
+  for _, k in ipairs(EVAL_LOAD_RESIDUE_KEYS()) do if k == "iconIdxProbe" then hasRes236 = true end end
+  eq(hasRes236, true, "组236⑥★iconIdxProbe 在调试残渣键清单里（/eh 存档清理清得掉）")
+
+  -- 收尾（夹具自清）
+  TEST.macroIcons = savedMI236
+  EVAL_HELP_CONFIG.iconDump = savedDump236
+  EVAL_HELP_CONFIG.iconIdxProbe = nil
+  EVAL_PH_TEST_ICON_CACHE_CLEAR()
+  TEST.chat = ""
+  if fails236 == TESTASSERT_FAILS then print("GROUP 236 (取证命令 /eh go 图标号：默认口/任意号/截断/接口缺失 + 专属落盘 + 不吃掉整表采集): PASS") end
+end
+
+-- ===== 组 238（1.75.10）：小地图配置按钮的图标（用户报障：「插件配置的图标初始使用: 现在是黑色的没有图标」）=====
+-- 用户原话：「插件配置的图标初始使用: 现在是黑色的没有图标.」
+-- ★真机症状**已用截图定案**（不是猜）：那块方块取色 #1D180E ≈ 按钮创建时的 `WHITE8X8 × (0.12,0.10,0.06)`
+--   （#181808 一色占 95% 像素、**没有**「EH」字、**没有**金框）⇒ 那是「**一次都没贴上过图标**」的暗底，
+--   不是「贴了一张黑图」。而这条链路的失败全是**静默**的（pcall 吞错 / `if` 守卫一挡就什么都不发生）。
+-- ★所以判据盯四件事（少一件这族就还会复发）：
+--   ① **读回**（客户端认没认这张纹理）＋**判定原因**（custom/auto/pickfail/noapi/noframe/fallback）；
+--   ② 兜底样式**真的看得见** —— 旧写法金框画在 BACKGROUND，被**不透明、同尺寸**的暗底 100% 盖住
+--     ⇒ 图标拿不到时用户看到的还是一块黑方块（「不许留空白按钮」的意图根本没落地）；
+--   ③ 自愈接线：载入那一次没贴上（宏图标表/存档还没就绪）时，**进世界**与**悬停**要能补上；
+--   ④ 取证命令 `/eh go mbicon`（读数摊开 + 按宏图标号设 + 专属落盘，`say` 不落日志环的教训）。
+do
+  local fails238 = TESTASSERT_FAILS
+  local savedMI238 = TEST.macroIcons
+  local savedIcon238 = EVAL_HELP_CONFIG.mbIcon
+  local savedProbe238 = EVAL_HELP_CONFIG.mbProbe
+  local CAND238 = "/Game/Interface/Icons/Spell_Holy_BlessingOfStrength_TEX"
+  local WRENCH238 = "/Game/Interface/Icons/INV_Misc_Wrench_01_TEX"
+  EVAL_HELP_CONFIG.mbIcon = nil
+  EVAL_HELP_CONFIG.mbProbe = nil
+
+  -- 前置：读值口齐（缺了下面会静默走空）
+  local n238 = 0
+  for _, f in ipairs({ "EVAL_TEST_MB_VISUAL", "EVAL_HELP_MB_SETICON", "EVAL_HELP_MB_SETCUSTOM",
+                       "EVAL_HELP_MB_RETRY", "EVAL_TEST_MB_BTN", "EVAL_TEST_MB_ICON_RESET" }) do
+    if type(_G[f]) ~= "function" then n238 = n238 + 1 end
+  end
+  eq(n238, 0, "组238前置：图标相关读值口/入口全部在位（缺 " .. n238 .. " 个）")
+
+  -- ① ★★★兜底必须**看得见**：接口在但一枚都挑不到 ⇒ 金框 + EH，且那块暗底要被透明掉
+  EVAL_TEST_MB_ICON_RESET()
+  TEST.macroIcons = nil
+  local okF238 = EVAL_HELP_MB_SETICON()
+  local vF238 = EVAL_TEST_MB_VISUAL()
+  eq(okF238, false, "组238①拿不到图标 ⇒ 如实返回 false")
+  eq(vF238.hasFallback, true, "组238①兜底样式建出来了（金框 + EH）")
+  eq(vF238.plateAlpha, 0,
+     "组238①★★★暗底被整块透明掉（实测 alpha=" .. tostring(vF238.plateAlpha) .. "）—— 不透明就是「金框被 100% 盖住」= 真机上还是一块黑方块")
+  eq(vF238.ehText, "EH", "组238①★「EH」字在位（兜底样式的可见部分）")
+  eq(vF238.icon, nil, "组238①没挑到 ⇒ 已贴值如实为 nil（不冒充贴上）")
+  eq(type(vF238.why) == "string" and vF238.why ~= "", true, "组238①★★判定原因非空（实测 " .. tostring(vF238.why) .. "）")
+
+  -- ② ★★贴上了：读回 = 客户端认的纹理；暗底 alpha 从兜底切回 **1**（否则换了花样的透明）
+  TEST.macroIcons = { CAND238 }
+  eq(EVAL_HELP_MB_SETICON(), true, "组238②宏图标表里有力量祝福 ⇒ 贴上成功")
+  local vA238 = EVAL_TEST_MB_VISUAL()
+  eq(vA238.icon, CAND238, "组238②★已贴值 = 挑到的那枚（实测 " .. tostring(vA238.icon) .. "）")
+  eq(vA238.back, CAND238, "组238②★★客户端**读回** = 同一枚（实测 " .. tostring(vA238.back) .. "）—— 读回是「贴上没贴上」的唯一凭据")
+  eq(vA238.plateAlpha, 1, "组238②★★从兜底切回图标时暗底 alpha 还原成 1（实测 " .. tostring(vA238.plateAlpha) .. "）")
+  eq(vA238.ehText, "", "组238②★贴上图标后「EH」字被清空（否则压在图标上穿帮）")
+  eq(string.find(tostring(vA238.why), "auto:", 1, true) == 1, true, "组238②判定原因 = auto:<路径>（实测 " .. tostring(vA238.why) .. "）")
+
+  -- ③ ★★★自愈口：未贴时才动手；已贴上**一次都不动作**（幂等，正常路径零动作）
+  EVAL_TEST_MB_ICON_RESET()
+  TEST.macroIcons = nil
+  EVAL_HELP_MB_SETICON() -- 走到兜底（未贴）
+  eq(EVAL_TEST_MB_VISUAL().icon, nil, "组238③前置：现在处于「未贴」态")
+  TEST.macroIcons = { CAND238 }
+  eq(EVAL_HELP_MB_RETRY(), true, "组238③★★自愈口：未贴 ⇒ 真的补一次并成功")
+  eq(EVAL_TEST_MB_VISUAL().icon, CAND238, "组238③★★补上了（实测 " .. tostring(EVAL_TEST_MB_VISUAL().icon) .. "）")
+  TEST.macroIcons = { WRENCH238 } -- 表换了：若 RETRY 不早退，就会把已贴的换成扳手
+  eq(EVAL_HELP_MB_RETRY(), true, "组238③已贴上 ⇒ 自愈口仍返回 true")
+  eq(EVAL_TEST_MB_VISUAL().icon, CAND238, "组238③★★已贴上就**零动作**（表换了也不重贴；实测 " .. tostring(EVAL_TEST_MB_VISUAL().icon) .. "）")
+
+  -- ④ ★★悬停自愈是**接线**（点真实的 OnEnter 脚本，不只是函数存在）
+  EVAL_TEST_MB_ICON_RESET()
+  TEST.macroIcons = nil
+  EVAL_HELP_MB_SETICON()
+  TEST.macroIcons = { CAND238 }
+  local btn238 = EVAL_TEST_MB_BTN()
+  eq(type(btn238) == "table" or type(btn238) == "userdata", true, "组238④拿得到真按钮")
+  local okg238, hEnter238 = pcall(btn238.GetScript, btn238, "OnEnter")
+  eq(okg238 and type(hEnter238) == "function", true, "组238④★★按钮 OnEnter 脚本在位")
+  if okg238 and type(hEnter238) == "function" then pcall(hEnter238) end
+  eq(EVAL_TEST_MB_VISUAL().icon, CAND238,
+     "组238④★★★悬停**真的会补图**（实测 " .. tostring(EVAL_TEST_MB_VISUAL().icon) .. "）—— 载入那次没贴上时，用户把鼠标放上去就自己好了")
+
+  -- ⑤ ★★进世界自愈也是接线（点火真实的 PLAYER_ENTERING_WORLD 分支）
+  EVAL_TEST_MB_ICON_RESET()
+  TEST.macroIcons = nil
+  EVAL_HELP_MB_SETICON()
+  TEST.macroIcons = { WRENCH238 }
+  local af238 = rawget(_G, "EVAL_AUTOFRAME")
+  eq(type(af238) == "table" or type(af238) == "userdata", true, "组238⑤拿得到 autoFrame（事件帧）")
+  local okE238, hEv238 = pcall(af238.GetScript, af238, "OnEvent")
+  eq(okE238 and type(hEv238) == "function", true, "组238⑤★★autoFrame 的 OnEvent 脚本在位")
+  if okE238 and type(hEv238) == "function" then pcall(hEv238, "PLAYER_ENTERING_WORLD") end
+  eq(EVAL_TEST_MB_VISUAL().icon, WRENCH238,
+     "组238⑤★★★进世界**真的会补图**（实测 " .. tostring(EVAL_TEST_MB_VISUAL().icon) .. "）")
+
+  -- ⑥ ★★取证命令：读数摊开 + 专属落盘（有界）+ 残渣键 + 按宏图标号设定
+  local mi238 = {}
+  for i = 1, 720 do mi238[i] = "Placeholder" end
+  mi238[670] = "/Game/Interface/Icons/INV_Misc_Head_Dragon_01_TEX" -- 用户截图里那枚（头龙）
+  TEST.macroIcons = mi238
+  EVAL_HELP_CONFIG.mbIcon = nil
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go mbicon")
+  local c238 = tostring(TEST.chat or "")
+  eq(string.find(c238, "存档=", 1, true) ~= nil and string.find(c238, "读回=", 1, true) ~= nil
+     and string.find(c238, "判定=", 1, true) ~= nil and string.find(c238, "自动挑=", 1, true) ~= nil, true,
+     "组238⑥★★`/eh go mbicon` 把「存档/已贴/读回/判定/自动挑」摊开（真机上出错时一眼看得出是哪一环）")
+  local box238 = EVAL_HELP_CONFIG.mbProbe
+  eq(type(box238) == "table" and type(box238.out) == "table" and table.getn(box238.out) >= 1, true,
+     "组238⑥★★读数落存档 cfg.mbProbe（实测 " .. tostring(type(box238) == "table" and table.getn((box238 or {}).out or {}) or -1) .. " 行）")
+  eq(string.find(table.concat(box238.out, "\n"), "读回=", 1, true) ~= nil, true, "组238⑥★落盘那份里有**读回**（我读存档就能断案）")
+  for _ = 1, 20 do SlashCmdList["EVALHELP"]("go mbicon") end
+  eq(table.getn(EVAL_HELP_CONFIG.mbProbe.out) <= 12, true,
+     "组238⑥★有界环（上限 12；灌 20 次后实测 " .. tostring(table.getn(EVAL_HELP_CONFIG.mbProbe.out)) .. " 行）")
+  local hasRes238 = false
+  for _, k in ipairs(EVAL_LOAD_RESIDUE_KEYS()) do if k == "mbProbe" then hasRes238 = true end end
+  eq(hasRes238, true, "组238⑥★mbProbe 在调试残渣键清单里")
+  -- 按宏图标号设定（用户截图里的 670 = 头龙）
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go mbicon 670")
+  eq(EVAL_HELP_CONFIG.mbIcon, mi238[670], "组238⑥★★`go mbicon 670` 按宏图标号设上了（存档值 = 头龙那枚）")
+  eq(EVAL_TEST_MB_VISUAL().icon, mi238[670], "组238⑥★★按钮当场换成它（实测 " .. tostring(EVAL_TEST_MB_VISUAL().icon) .. "）")
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go mbicon 99999")
+  eq(string.find(tostring(TEST.chat or ""), "取不到", 1, true) ~= nil, true, "组238⑥★号越界**如实说取不到**（不静默、不冒充设上了）")
+
+  -- 收尾（夹具自清：配置真值、宏图标表、探针环都还原）
+  TEST.macroIcons = savedMI238
+  EVAL_HELP_CONFIG.mbIcon = savedIcon238
+  EVAL_HELP_CONFIG.mbProbe = savedProbe238
+  EVAL_TEST_MB_ICON_RESET()
+  if type(EVAL_HELP_MB_SETICON) == "function" then pcall(EVAL_HELP_MB_SETICON) end -- 按还原后的存档重贴一次
+  TEST.chat = ""
+  if fails238 == TESTASSERT_FAILS then
+    print("GROUP 238 (小地图配置按钮图标：兜底可见 / 读回自证 / 悬停+进世界自愈 / 取证命令与专属落盘): PASS")
+  end
+end
+
+-- ===== 组 239（1.75.10）：选取目标「目标的目标」的**取证探针** `/eh go tsel` =====
+-- 用户原话：「分析接口.验证选取目标的目标.可行性?」
+-- ★离线能核的都核完了（官方文档 + 本仓实现 + 断言），剩下**只有真机能答**的一件事：
+--   「本客户端 targettarget 这个 UnitID 真的解析得出来吗」。⇒ 给一键探针，不许让用户手工试十遍。
+-- ★API 事实（逐条有出处，进记忆 §5.8）：
+--   · conventions#unit-ids：`targettarget` = 当前目标的目标（合法 UnitID，大小写不敏感）；
+--   · Targetting 页 TargetUnit：「**Does nothing if that UnitID does not resolve.**」⇒ 解析不到时**什么都不做**；
+--     而 AssistUnit 对解析不到的 UnitID 会**清掉当前目标** ⇒ 本插件选 TargetUnit 是对的（Engine.lua 1.29.0 注释同结论）。
+-- ★探针纪律（组 239 就验这三条）：**没有目标的目标时一次都不切**（不留副作用）· 三态如实 · 专属有界落盘。
+do
+  local fails239 = TESTASSERT_FAILS
+  local savedHas239 = TEST.hasTarget
+  local savedName239 = TEST.curTargetName
+  local savedTT239 = TEST.targetTargetName
+  local savedProbe239 = EVAL_HELP_CONFIG.tselProbe
+  EVAL_HELP_CONFIG.tselProbe = nil
+
+  eq(type(TargetUnit) == "function", true, "组239前置：本桩有 TargetUnit（真机由命令里的 type 判定如实报）")
+  eq(EVAL_TSEL_ID["目标的目标"], "targetTarget", "组239①离线已核：选取目标表里有「目标的目标」这一项")
+  eq(EVAL_TSEL_FN["targetTarget"], "TargetUnit", "组239①★它走的就是 TargetUnit（不是 AssistUnit —— 后者解析不到会**清目标**）")
+
+  -- ② 没有目标 ⇒ 只报不切（**零副作用**：连 TargetUnit 都不许调）
+  TEST.hasTarget = false
+  TEST.targetTargetName = nil
+  TEST.targetSel = nil
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go tsel")
+  local c239a = tostring(TEST.chat or "")
+  eq(string.find(c239a, "不试切换", 1, true) ~= nil, true, "组239②★★没有目标 ⇒ 如实说「不试切换」（实测：" .. string.sub(c239a, 1, 60) .. "…）")
+  -- ★★★措辞必须是**该分支独有**的：第一版只查「没有目标」，而状态二那句「这个目标**自己没有目标**」里
+  --   也含同样的子串 ⇒ 变异 M1（去掉「没有目标就不切」那道门）照样通过 = **假绿**（实测漏网）。
+  --   ⇒ 判据一律认「不试切换」（只有状态一才打），并反向哨兵「状态一**不许**报成空操作」。
+  eq(string.find(c239a, "空操作", 1, true) == nil, true, "组239②★★状态一不许被误报成「空操作」（那是状态二的说法；混用=用户分不清是哪种）")
+  eq(TEST.targetSel, nil, "组239②★★★零副作用：**一次都没调 TargetUnit**（没目标时切换是白切/有风险）")
+
+  -- ③ 有目标、但目标自己没有目标 ⇒ 如实说「会是空操作」，同样**不切**
+  TEST.hasTarget = true
+  TEST.curTargetName = "测试怪"
+  TEST.targetTargetName = nil
+  TEST.targetSel = nil
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go tsel")
+  local c239b = tostring(TEST.chat or "")
+  eq(string.find(c239b, "空操作", 1, true) ~= nil, true, "组239③★★目标没有目标 ⇒ 如实说「会是空操作」（TargetUnit 文档：解析不到就什么都不做）")
+  eq(TEST.targetSel, nil, "组239③★★★同样零副作用（不留「切了个寂寞」的状态）")
+
+  -- ④ 目标有目标 ⇒ 真执行一次 TargetUnit("targettarget")，并报出切换后的目标名
+  TEST.targetTargetName = "首领的护卫"
+  TEST.targetSel = nil
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go tsel")
+  local c239c = tostring(TEST.chat or "")
+  eq(TEST.targetSel, "unit:targettarget", "组239④★★★真的调了 TargetUnit(\"targettarget\")（实测 " .. tostring(TEST.targetSel) .. "）")
+  eq(string.find(c239c, "首领的护卫", 1, true) ~= nil, true, "组239④★★读数里有「目标的目标」的名字（真机上就是拿它对账）")
+  eq(string.find(c239c, "TargetUnit=\"有\"", 1, true) ~= nil or string.find(c239c, "TargetUnit=有", 1, true) ~= nil, true,
+     "组239④★先把接口在不在报出来（接口缺失与「切不动」要分得开）")
+
+  -- ⑤ 专属落盘（有界 12）+ 残渣键（`say` 不落日志环的教训：不自己存一份 AI 侧读不到）
+  local box239 = EVAL_HELP_CONFIG.tselProbe
+  eq(type(box239) == "table" and type(box239.out) == "table" and table.getn(box239.out) >= 1, true,
+     "组239⑤★★读数落存档 cfg.tselProbe（实测 " .. tostring(type(box239) == "table" and table.getn((box239 or {}).out or {}) or -1) .. " 行）")
+  for _ = 1, 20 do SlashCmdList["EVALHELP"]("go tsel") end
+  eq(table.getn(EVAL_HELP_CONFIG.tselProbe.out) <= 12, true,
+     "组239⑤★有界环（上限 12；灌 20 次后实测 " .. tostring(table.getn(EVAL_HELP_CONFIG.tselProbe.out)) .. " 行）")
+  local hasRes239 = false
+  for _, k in ipairs(EVAL_LOAD_RESIDUE_KEYS()) do if k == "tselProbe" then hasRes239 = true end end
+  eq(hasRes239, true, "组239⑤★tselProbe 在调试残渣键清单里（/eh 存档清理清得掉）")
+  -- 反向哨兵：探针**不许**顺手改配置/清目标（它是取证工具，不是功能）
+  eq(EVAL_HELP_CONFIG.targetSel, nil, "组239⑤★反向哨兵：探针没往配置里塞任何键（取证工具不许有副作用）")
+
+  -- 收尾（夹具自清）
+  TEST.hasTarget, TEST.curTargetName, TEST.targetTargetName = savedHas239, savedName239, savedTT239
+  TEST.targetSel = nil
+  EVAL_HELP_CONFIG.tselProbe = savedProbe239
+  EVAL_HELP_CONFIG.targetSel = nil
+  TEST.chat = ""
+  if fails239 == TESTASSERT_FAILS then
+    print("GROUP 239 (选取目标「目标的目标」：离线已核 TargetUnit 路线 + 真机探针三态与零副作用 + 专属落盘): PASS")
+  end
+end
+
+-- ===== 组 240（1.75.10）：条件类型「目标状态 → 目标玩家」（用户截图 + 原话）=====
+-- 用户原话：「技能编辑->目标状态->添加个判断: 目标玩家:xxx名（名称支持自定义输入） 是/否」
+-- ★四条链路一处不漏（少一处就是「界面上选了、求值不生效」或「导出的读不回」）：
+--   ① 类型进表 + 进 CTG_2 分组 + 三语标签（标签是**运行时拼键** CT_TPLAYER，静态 LANG KEY CHECK 扫不到）；
+--   ② 编辑器：默认条件 / 名字格（点它弹**自定义输入**框）/ 是/否；
+--   ③ 引擎求值：是 = 目标正是名为 X 的**玩家**；否 = 不是；**未填名 / 无目标 / 无 UnitIsPlayer 一律如实失败**；
+--   ④ 文本往返：`目标玩家:X` / `目标不是玩家:X`（导出读不回 = 导入即丢条件）。
+do
+  local fails240 = TESTASSERT_FAILS
+  local savedHas240, savedName240, savedIsP240 = TEST.hasTarget, TEST.curTargetName, TEST.targetIsPlayer
+  local savedTN240 = EVAL_TN_OPEN
+  local savedUIP240 = UnitIsPlayer
+
+  -- ① 类型 / 分组 / 三语标签 / 菜单真的列出来
+  eq(EVAL_TEST_SE_DEFAULT_COND("tPlayer") ~= nil, true, "组240①类型表里有 tPlayer（下拉才列得出来）")
+  local ids240 = EVAL_TEST_SE_TYPE_GROUP_IDS("CTG_2")
+  eq(type(ids240) == "table", true, "组240①前置：取到 CTG_2 分组（取不到时下面的「在组里」会恒真）")
+  local inG240 = false
+  for _, id in ipairs(ids240 or {}) do if id == "tPlayer" then inG240 = true end end
+  eq(inG240, true, "组240①★tPlayer 在「目标状态」(CTG_2) 分组里（不进组 = 权重检查与菜单都漏它）")
+  local menu240 = EVAL_TEST_SE_TYPE_MENU()
+  local hasMenu240 = false
+  for _, s in ipairs(menu240 or {}) do if s == EVAL_L("CT_TPLAYER") then hasMenu240 = true end end
+  eq(hasMenu240, true, "组240①★★下拉菜单里真列出来了（表里有、菜单没有 = 用户根本选不到）")
+  eq(type(EVAL_L("CT_TPLAYER")) == "string" and EVAL_L("CT_TPLAYER") ~= "", true,
+     "组240①★三语标签 CT_TPLAYER 现读非空（逐语言无缺键/无重名由既有的类型菜单断言把关）")
+
+  -- ② 默认条件 + 编辑器（名字格 / 是/否 / 点名字弹自定义输入）
+  local d240 = EVAL_TEST_SE_DEFAULT_COND("tPlayer")
+  eq(type(d240) == "table" and d240.k == "tPlayer" and d240.v == true, true, "组240②默认 = {k=tPlayer, v=是}")
+  eq(d240.nm, "", "组240②★名字留空起步（未填 = 求值如实失败，绝不静默通过）")
+  EVAL_TEST_SE_PUSH_COND("tPlayer", nil, nil, nil, nil, nil)
+  eq(EVAL_TEST_SE_ROW_TYPE(1), EVAL_L("CT_TPLAYER"), "组240②行首类型按钮文案 = 目标玩家")
+  local rowTxt240 = EVAL_TEST_SE_ROW_TEXT(1)
+  eq(type(rowTxt240) == "string" and string.find(rowTxt240, "未填写", 1, true) ~= nil, true,
+     "组240②★★名字格如实显示「未填写（点此输入）」（实测 " .. tostring(rowTxt240) .. "）")
+  local shown240, txt240 = EVAL_TEST_SE_ROW_IMM(1)
+  eq(shown240, true, "组240②★是/否按钮**真的显示了**（只 Hide 不 Show 是 1.73.1 那族事故）")
+  eq(txt240, EVAL_L("SE_YES"), "组240②★默认为「是」（实测 " .. tostring(txt240) .. "）")
+  --   点名字格 → 真实 sHit OnClick → EVAL_TN_OPEN（输入框）→ 回调提交名字
+  local tnTitle240, tnCb240 = nil, nil
+  EVAL_TN_OPEN = function(title, cur, cb) tnTitle240, tnCb240 = title, cb end
+  eq(EVAL_TEST_SE_CLICK_CELL(1), true, "组240②点名字格走了真实 OnClick")
+  eq(tnTitle240, EVAL_L("SE_TN_PLAYER"), "组240②★★弹出的是**玩家名输入框**（标题取语言键，不是别的弹窗）")
+  eq(type(tnCb240) == "function", true, "组240②前置：拿到输入回调")
+  if type(tnCb240) == "function" then tnCb240("嗜血者") end
+  eq(EVAL_TEST_SE_COND_NM(1), "嗜血者", "组240②★★自定义输入真的落进 cd.nm（实测 " .. tostring(EVAL_TEST_SE_COND_NM(1)) .. "）")
+  local rowTxt240b = EVAL_TEST_SE_ROW_TEXT(1)
+  eq(type(rowTxt240b) == "string" and string.find(rowTxt240b, "嗜血者", 1, true) ~= nil, true,
+     "组240②★★名字格同步显示它（实测 " .. tostring(rowTxt240b) .. "）")
+  EVAL_TN_OPEN = savedTN240
+
+  -- ③ 求值（走真实 condOne）
+  --   ★★夹具改完**必须** EVAL_HELP_UPDATE_STATE()：condOne 读的是状态表 st（一次刷新、各处只读），
+  --     只改 TEST.* 不刷新 ⇒ st 还是上一组留下的旧值（本组第一版就是漏了这句，断言当场变红）。
+  TEST.hasTarget, TEST.curTargetName, TEST.targetIsPlayer = true, "嗜血者", true
+  EVAL_HELP_UPDATE_STATE()
+  eq(EVAL_COND_EVAL({ k = "tPlayer", nm = "嗜血者", v = true }), true, "组240③★★目标正是那名玩家 ⇒ 「是」通过")
+  eq(EVAL_COND_EVAL({ k = "tPlayer", nm = "其他人", v = true }), false, "组240③★名字不符 ⇒ 「是」不过")
+  eq(EVAL_COND_EVAL({ k = "tPlayer", nm = "嗜血者", v = false }), false, "组240③★名字相符 ⇒ 「否」不过")
+  eq(EVAL_COND_EVAL({ k = "tPlayer", nm = "其他人", v = false }), true, "组240③★★名字不符 ⇒ 「否」通过")
+  TEST.curTargetName = "BLOODSEEKER" -- 大小写不敏感：英文名换个大小写仍算同一人
+  EVAL_HELP_UPDATE_STATE()
+  eq(EVAL_COND_EVAL({ k = "tPlayer", nm = "bloodseeker", v = true }), true, "组240③★名字比对**大小写不敏感**")
+  --   ★NPC 重名不算「目标玩家」（UnitIsPlayer 返 nil）
+  TEST.curTargetName, TEST.targetIsPlayer = "嗜血者", false
+  EVAL_HELP_UPDATE_STATE()
+  eq(EVAL_COND_EVAL({ k = "tPlayer", nm = "嗜血者", v = true }), false,
+     "组240③★★目标**不是玩家**（NPC 恰好重名）⇒ 「是」不过")
+  eq(EVAL_COND_EVAL({ k = "tPlayer", nm = "嗜血者", v = false }), true, "组240③★同上（不是玩家）⇒ 「否」通过")
+  TEST.targetIsPlayer = true
+  --   ★未填名 / 无目标 / 接口缺失：**两个方向都如实失败**（不许静默放行）
+  eq(EVAL_COND_EVAL({ k = "tPlayer", nm = "", v = true }), false, "组240③★★未填名称 ⇒ 「是」如实失败（不静默通过）")
+  eq(EVAL_COND_EVAL({ k = "tPlayer", nm = "", v = false }), false, "组240③★★未填名称 ⇒ 「否」也失败（不静默当作「不是」）")
+  eq(EVAL_COND_EVAL({ k = "tPlayer", v = true }), false, "组240③★nm 缺失（老存档/半条数据）同样如实失败")
+  TEST.hasTarget = false
+  EVAL_HELP_UPDATE_STATE()
+  eq(EVAL_COND_EVAL({ k = "tPlayer", nm = "嗜血者", v = true }), false, "组240③★★无目标 ⇒ 「是」如实失败")
+  eq(EVAL_COND_EVAL({ k = "tPlayer", nm = "嗜血者", v = false }), false, "组240③★★无目标 ⇒ 「否」也失败（查不到 ≠ 没有）")
+  TEST.hasTarget = true
+  EVAL_HELP_UPDATE_STATE()
+  UnitIsPlayer = nil
+  eq(EVAL_COND_EVAL({ k = "tPlayer", nm = "嗜血者", v = true }), false, "组240③★接口缺失 ⇒ 「是」失败")
+  eq(EVAL_COND_EVAL({ k = "tPlayer", nm = "嗜血者", v = false }), false,
+     "组240③★★接口缺失 ⇒ 「否」**也**失败（不把「查不到」当「没有」）")
+  UnitIsPlayer = savedUIP240
+
+  -- ④ 文本往返（导出 → 导入逐字一致）
+  local g240 = EVAL_PARSE_CONDS("目标玩家:嗜血者")
+  eq(table.getn(g240) == 1 and table.getn(g240[1]) == 1 and g240[1][1].k == "tPlayer"
+     and g240[1][1].nm == "嗜血者" and g240[1][1].v == true, true,
+     "组240④★`目标玩家:嗜血者` 解析成 {k=tPlayer, nm=嗜血者, v=是}")
+  eq(EVAL_GROUP_STR(g240), "目标玩家:嗜血者", "组240④★★导出回同一串（读不回 = 导入即丢条件）")
+  local g240b = EVAL_PARSE_CONDS("目标不是玩家:嗜血者")
+  eq(table.getn(g240b) == 1 and table.getn(g240b[1]) == 1 and g240b[1][1].v == false, true,
+     "组240④★`目标不是玩家:嗜血者` ⇒ 否方向")
+  eq(EVAL_GROUP_STR(g240b), "目标不是玩家:嗜血者", "组240④★★否方向也往返一致")
+  eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("!目标玩家:嗜血者")), "目标不是玩家:嗜血者", "组240④★前置 `!` 也认（解析成否方向）")
+  eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("tPlayer=嗜血者")), "目标玩家:嗜血者", "组240④★英文 id 写法也认")
+  eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("notplayer=嗜血者")), "目标不是玩家:嗜血者", "组240④★英文反向 id 也认")
+  eq(table.getn(EVAL_PARSE_CONDS("目标玩家:")), 0, "组240④★★空名 = 写法错误 ⇒ **整条丢弃**（不静默留半个条件）")
+
+  -- 收尾（夹具自清）
+  TEST.hasTarget, TEST.curTargetName, TEST.targetIsPlayer = savedHas240, savedName240, savedIsP240
+  UnitIsPlayer, EVAL_TN_OPEN = savedUIP240, savedTN240
+  if fails240 == TESTASSERT_FAILS then
+    print("GROUP 240 (条件「目标玩家」：类型/分组/三语标签 + 编辑器输入与是/否 + 求值四态 + 文本往返): PASS")
+  end
+end
+
+-- ===== 组 241（1.75.10）：条件类型「目标状态 → 目标死亡」（用户原话 + 是/否）=====
+-- 用户原话：「技能编辑->目标状态->添加个判断: 目标死亡 是/否」
+-- ★这条是**布尔类**（kind = "bool"）：是/否由既有布尔分支渲染 ⇒ 不需要任何新 UI；
+--   但「界面上有」与「求值对」是两回事，本组两边都钉：
+--   ① 类型进表 + 进 CTG_2 + 三语标签 + 菜单真的列出来；② 默认条件与真控件是/否（含真实点击翻转）；
+--   ③ 求值四态（目标活/死 × 是/否）+ **无目标时的口径**；④ 文本往返（目标死亡 / 目标未死亡 / ! / 英文 id）。
+do
+  local fails241 = TESTASSERT_FAILS
+  local savedHas241, savedDead241 = TEST.hasTarget, TEST.targetDead
+
+  -- ① 类型 / 分组 / 三语 / 菜单
+  eq(EVAL_TEST_SE_DEFAULT_COND("tDead") ~= nil, true, "组241①类型表里有 tDead（下拉才列得出来）")
+  local ids241 = EVAL_TEST_SE_TYPE_GROUP_IDS("CTG_2")
+  eq(type(ids241) == "table", true, "组241①前置：取到 CTG_2 分组（取不到时下面的「在组里」会恒真）")
+  local inG241 = false
+  for _, id in ipairs(ids241 or {}) do if id == "tDead" then inG241 = true end end
+  eq(inG241, true, "组241①★tDead 在「目标状态」(CTG_2) 分组里")
+  local menu241 = EVAL_TEST_SE_TYPE_MENU()
+  local hasMenu241 = false
+  for _, s in ipairs(menu241 or {}) do if s == EVAL_L("CT_TDEAD") then hasMenu241 = true end end
+  eq(hasMenu241, true, "组241①★★下拉菜单里真列出来了（表里有、菜单没有 = 用户选不到）")
+  eq(type(EVAL_L("CT_TDEAD")) == "string" and EVAL_L("CT_TDEAD") ~= "", true, "组241①★三语标签 CT_TDEAD 现读非空")
+
+  -- ② 默认条件 + 编辑器真控件（是/否 + 真实点击翻转）
+  local d241 = EVAL_TEST_SE_DEFAULT_COND("tDead")
+  eq(type(d241) == "table" and d241.k == "tDead" and d241.v == true, true, "组241②默认 = {k=tDead, v=是}")
+  EVAL_TEST_SE_PUSH_COND("tDead", nil, nil, nil, nil, nil)
+  eq(EVAL_TEST_SE_ROW_TYPE(1), EVAL_L("CT_TDEAD"), "组241②行首类型按钮文案 = 目标死亡")
+  local shown241, txt241 = EVAL_TEST_SE_ROW_VAL(1)
+  eq(shown241, true, "组241②★★是/否那一格**真的显示了**（只 Hide 不 Show 是 1.73.1 那族事故）")
+  eq(txt241, EVAL_L("SE_YES"), "组241②★默认为「是」（实测 " .. tostring(txt241) .. "）")
+  eq(EVAL_TEST_SE_CLICK_VAL(1), true, "组241②点这一格走了**真实** OnClick")
+  eq(EVAL_TEST_SE_COND_K(1), "tDead", "组241②点击不改类型（仍是 tDead）")
+  local _s2, txt241b = EVAL_TEST_SE_ROW_VAL(1)
+  eq(txt241b, EVAL_L("SE_NO"), "组241②★★点一下翻成「否」（实测 " .. tostring(txt241b) .. "）")
+
+  -- ③ 求值（走真实 condOne；夹具改完**必须**刷新状态表 st）
+  TEST.hasTarget, TEST.targetDead = true, true
+  EVAL_HELP_UPDATE_STATE()
+  eq(EVAL_COND_EVAL({ k = "tDead", v = true }), true, "组241③★★目标已死 ⇒ 「是」通过")
+  eq(EVAL_COND_EVAL({ k = "tDead", v = false }), false, "组241③★目标已死 ⇒ 「否」不过")
+  TEST.targetDead = false
+  EVAL_HELP_UPDATE_STATE()
+  eq(EVAL_COND_EVAL({ k = "tDead", v = true }), false, "组241③★★目标活着 ⇒ 「是」不过")
+  eq(EVAL_COND_EVAL({ k = "tDead", v = false }), true, "组241③★目标活着 ⇒ 「否」通过")
+  --   ★无目标口径（与「目标存在/可攻击/可流血…」同族：直接比较 ⇒ 没有目标时「否」成立）
+  TEST.hasTarget = false
+  EVAL_HELP_UPDATE_STATE()
+  eq(EVAL_COND_EVAL({ k = "tDead", v = true }), false, "组241③★★无目标 ⇒ 「目标死亡=是」不过")
+  eq(EVAL_COND_EVAL({ k = "tDead", v = false }), true,
+     "组241③★★无目标 ⇒ 「目标死亡=否」**通过**（与 目标存在/可攻击 同一条口径；要必须有目标请再配「目标存在=是」）")
+
+  -- ④ 文本往返
+  eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("目标死亡")), "目标死亡", "组241④★`目标死亡` 解析并原样导出")
+  eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("目标未死亡")), "目标未死亡", "组241④★★`目标未死亡` 也成对（缺一半 = 导入即丢条件）")
+  eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("!目标死亡")), "目标未死亡", "组241④★前置 `!` 同样认")
+  eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("tDead")), "目标死亡", "组241④★英文 id 写法也认")
+
+  -- 收尾（夹具自清）
+  TEST.hasTarget, TEST.targetDead = savedHas241, savedDead241
+  EVAL_HELP_UPDATE_STATE()
+  if fails241 == TESTASSERT_FAILS then
+    print("GROUP 241 (条件「目标死亡」：类型/分组/三语/菜单 + 真控件是/否与点击 + 求值四态 + 文本往返): PASS")
+  end
+end
+
+-- ===== 组 242（1.75.10）：选取目标「玩家的目标」（= AssistByName，协助某玩家 = 选他的目标）=====
+-- 用户原话：「技能编辑->目标选择->增加选取目标:**玩家的目标**（参考选取目标:**指定名称**的编辑方式，
+--   但是选择的是**指定玩家的目标**）分析可行性」。
+-- ★实现 = 与「指定名称」同族（名字存 cd.nm / needsName / 同一个下拉与输入弹窗），**只差客户端函数**：
+--   byName = TargetByName（按名选那个人），playerTarget = AssistByName（选那个人的目标）。
+-- ★官方只承诺「协助**附近**的玩家」；名字不在附近/不存在时**是否清掉当前目标**文档没写
+--   ⇒ 插件侧用 `UnitExists("target")` 兜底**如实失败**（若放任，规则会拿旧目标继续出手且日志写着成功）。
+-- 本组钉四件事：① 表项/函数/两个标记/图标；② 菜单文案两项**不同串**且都能查回（同一份真值表）；
+--   ③ 两个调用点（条件级 EVAL_TEST_COND_EVAL_LIVE / 技能级 EVAL_TEST_WUSE）的成功/失败/零动作；
+--   ④ 文本往返（含「指定名称」逐字不变的反向哨兵）。
+do
+  local fails242 = TESTASSERT_FAILS
+  local savedHas242, savedName242 = TEST.hasTarget, TEST.curTargetName
+  local savedTgts242, savedClr242, savedCalls242 = TEST.assistTargets, TEST.assistClears, TEST.assistCalls
+  local savedSel242 = TEST.targetSel
+
+  -- ① 离线钉（表项 / 客户端函数 / 两个标记 / 图标）
+  eq(EVAL_TSEL_ID["玩家的目标"], "playerTarget", "组242①★选取目标表里有「玩家的目标」")
+  eq(EVAL_TSEL_FN["playerTarget"], "AssistByName", "组242①★★它走的就是 AssistByName（协助某玩家=选他的目标）")
+  eq(EVAL_TSEL_NM["playerTarget"], true, "组242①★标为「需要名字参数」（编辑器才给名字格与输入弹窗）")
+  eq(EVAL_TSEL_NM["byName"], true, "组242①反向哨兵：指定名称仍在这一族里（没被这次改动漏掉）")
+  eq(EVAL_TSEL_NEEDTGT["playerTarget"], true, "组242①★★标为「调用后必须有目标」（如实失败判据的前提）")
+  eq(EVAL_TSEL_NEEDTGT["byName"] ~= true, true, "组242①反向：指定名称不吃这条兜底（TargetByName 的既有行为不许被顺手改掉）")
+  eq(EVAL_TARGET_SEL_ICON("playerTarget") ~= nil, true, "组242①★有专属图标（选取目标那族一排问号分不清）")
+  eq(EVAL_TARGET_SEL_ICON("playerTarget") ~= EVAL_TARGET_SEL_ICON("byName"), true, "组242①★与「指定名称」不是同一枚（两行要分得开）")
+
+  -- ② 菜单文案（两个「需要名字」的项必须不同串，且都能查回图标）
+  local items242 = EVAL_GO_SKILL_CATEGORIES()[4].items()
+  local labelBy242, labelPl242 = EVAL_L("SE_PICK_TGT"), EVAL_L("SE_PICK_TGT_PLAYER")
+  eq(type(labelPl242) == "string" and labelPl242 ~= "", true, "组242②前置：三语键 SE_PICK_TGT_PLAYER 现读非空")
+  eq(labelPl242 ~= labelBy242, true, "组242②★★两项文案不同串（同串 = 选完分不出是哪种，回查 id 也不可靠）")
+  local idxBy242, idxPl242 = nil, nil
+  for i = 1, table.getn(items242) do
+    if items242[i] == labelBy242 then idxBy242 = i end
+    if items242[i] == labelPl242 then idxPl242 = i end
+  end
+  eq(idxPl242 ~= nil, true, "组242②★「选取目标:玩家的目标…」真的列在目标选取类别里（表里有、菜单没有 = 用户选不到）")
+  eq(idxBy242 ~= nil, true, "组242②前置：指定名称那项也在（否则下面的图标比对失去意义）")
+  eq(EVAL_WICON(labelPl242), EVAL_TARGET_SEL_ICON("playerTarget"), "组242②★★它的图标走同一份真值表（省略号被剥掉后查得到）")
+  eq(EVAL_WICON(labelPl242) ~= EVAL_WICON(labelBy242), true, "组242②★两行图标不同（没有整列串成同一张图）")
+  --   ★候选名枚举必须**纯只读**：它给的是「玩家的目标」的名字候选，绝不能为了列名字去切目标
+  --     （敌名那套 EVAL_NEARBY_ENEMY_NAMES 是「边切边收集」，切一轮可接受 —— 这两条不许混用）。
+  TEST.targetSel = nil
+  local names242 = EVAL_PLAYER_NAMES(12)
+  eq(type(names242) == "table" and table.getn(names242) >= 1, true, "组242②前置：候选名枚举拿到至少一个名字")
+  eq(TEST.targetSel, nil, "组242②★★候选名枚举**零副作用**（一次目标都没切）")
+  local hasMe242 = false
+  for _, n in ipairs(names242 or {}) do if n == "测试玩家" then hasMe242 = true end end
+  eq(hasMe242, true, "组242②★候选名里有自己（真机单人时也能填自己的名字）")
+  --   编辑器那一格：带名字却还没填名时，如实显示「选取器名:未设」（不是静默只剩选取器名）
+  eq(EVAL_TEST_SE_PUSH_COND("target", "playerTarget", nil, nil, nil, nil), true, "组242②前置：编辑器渲染一条 target 行")
+  local rowT242 = EVAL_TEST_SE_ROW_TEXT(1)
+  eq(type(rowT242) == "string" and string.find(rowT242, "玩家的目标", 1, true) ~= nil, true,
+     "组242②★那一格显示的是这个选取器的名字（实测 " .. tostring(rowT242) .. "）")
+  eq(type(rowT242) == "string" and string.find(rowT242, "未设", 1, true) ~= nil, true,
+     "组242②★★名字缺失时如实标「未设」（只剩选取器名 = 用户看不出没填名）")
+  --   点名字格 → 真实 OnClick → 名字下拉：候选必须是**玩家名**（自己/队友/团员），**不许**拿敌名来凑
+  --   （两条枚举同族但副作用相反：敌名那套会切一轮目标 —— 用错就是把用户的目标搅了）。
+  EVAL_DD_HIDE()
+  EVAL_DD_TEST_RESET_ANCHOR()
+  eq(EVAL_TEST_SE_CLICK_CELL(1), true, "组242②点名字格走了真实 OnClick")
+  local vis242 = EVAL_DD_TEST_VISIBLE_TEXTS()
+  EVAL_DD_HIDE()
+  local gotNames242, rowCnt242 = 0, table.getn(vis242 or {})
+  for _, n in ipairs(names242 or {}) do
+    for i = 1, rowCnt242 do if tostring(vis242[i] or "") == n then gotNames242 = gotNames242 + 1 end end
+  end
+  eq(gotNames242, table.getn(names242 or {}), "组242②★★下拉里逐条就是玩家名候选（" .. tostring(gotNames242) .. "/" .. tostring(table.getn(names242 or {})) .. "）")
+  eq(rowCnt242, table.getn(names242 or {}) + 1, "组242②★而且**只有**这些 + 一行「自定义名称」（多出来的行 = 混进了别的东西）")
+
+  -- ②c 技能级入口（编辑器菜单）：点「选取目标:玩家的目标…」→ **真的弹名字输入框** → 落值
+  --   ★这一条与条件类型那两处是**各自独立**的入口：菜单文案对不上时，用户点下去会「什么都不发生」（静默族）。
+  EVAL_HELP_SE_OPEN(1, nil, "攻击")
+  EVAL_DD_HIDE()
+  EVAL_DD_TEST_RESET_ANCHOR()
+  eq(EVAL_TEST_SE_CLICK_CAT(), true, "组242②c前置：点开类别下拉")
+  local rowCat242 = EVAL_DD_TEST_ROW(4) -- 第 4 类 = 目标选取
+  local fnCat242 = rowCat242 and rowCat242.btn and rowCat242.btn:GetScript("OnClick")
+  eq(type(fnCat242) == "function", true, "组242②c前置：目标选取类别行有真实 OnClick")
+  if type(fnCat242) == "function" then fnCat242() end
+  local idxPl242c = nil
+  local vis242c = EVAL_DD_TEST_VISIBLE_TEXTS()
+  for i = 1, table.getn(vis242c) do if tostring(vis242c[i]) == labelPl242 then idxPl242c = i end end
+  eq(idxPl242c ~= nil, true, "组242②c前置：项列表里有这一项")
+  local rowPl242 = idxPl242c and EVAL_DD_TEST_ROW(idxPl242c)
+  local fnPl242 = rowPl242 and rowPl242.btn and rowPl242.btn:GetScript("OnClick")
+  eq(type(fnPl242) == "function", true, "组242②c前置：那一行有真实 OnClick")
+  if type(fnPl242) == "function" then fnPl242() end
+  eq(EVAL_TEST_TN_SHOWN(), true, "组242②c★★点它**真的弹出名字输入框**（不是静默什么都不做）")
+  eq(EVAL_TEST_TN_TITLE(), EVAL_L("SE_TN_PLAYER_TGT"), "组242②c★弹窗标题就是这个用途（按语言包取）")
+  eq(EVAL_TEST_TN_COMMIT("嗜血者"), true, "组242②c★走真实输入框 + 真实回车处理器")
+  eq(EVAL_TEST_SE_SKILL(), "选取目标:玩家的目标:嗜血者", "组242②c★★★落值 = 选取目标:玩家的目标:嗜血者")
+  eq(EVAL_WICON(EVAL_TEST_SE_SKILL()) ~= "Interface\\Icons\\INV_Misc_QuestionMark", true,
+     "组242②c★★引擎认得这串（生成的技能能直接跑，图标不是问号兜底）")
+
+  -- ③ 两个调用点（条件级 / 技能级）
+  TEST.assistTargets = { ["嗜血者"] = "冰霜巨魔" } -- 他（嗜血者）的目标 = 冰霜巨魔
+  TEST.assistClears, TEST.assistCalls = nil, 0
+  TEST.hasTarget, TEST.curTargetName = true, "石头人"
+  EVAL_HELP_UPDATE_STATE()
+  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "target", s = "playerTarget", nm = "嗜血者" }), true, "组242③★★条件级：协助到人 ⇒ 通过")
+  eq(TEST.targetSel, "assist:嗜血者", "组242③★★真的调了 AssistByName（参数就是那句话里的名字）")
+  eq(TEST.curTargetName, "冰霜巨魔", "组242③★★当前目标变成**他的目标**")
+  --   未设名称 ⇒ 如实失败 + **零动作**
+  TEST.assistCalls, TEST.targetSel = 0, nil
+  local okN242, whyN242 = EVAL_TEST_COND_EVAL_LIVE({ k = "target", s = "playerTarget", nm = "" })
+  eq(okN242, false, "组242③★★未设名称 ⇒ 如实失败（不静默通过、更不许瞎切目标）")
+  eq(TEST.assistCalls, 0, "组242③★★未设名称时**一次都没调**（零动作）")
+  eq(type(whyN242) == "string" and string.find(whyN242, "未设名称", 1, true) ~= nil, true,
+     "组242③★失败原因指明「未设名称」（实测 " .. tostring(whyN242) .. "）")
+  --   协助不到（调用后没有目标）⇒ 如实失败
+  TEST.assistTargets, TEST.assistClears = nil, true
+  local okF242, whyF242 = EVAL_TEST_COND_EVAL_LIVE({ k = "target", s = "playerTarget", nm = "路上的人" })
+  eq(okF242, false, "组242③★★协助不到（调用后没有目标）⇒ 如实失败，**不许**当成功放行（后面那手会打在旧目标上）")
+  eq(type(whyF242) == "string" and string.find(whyF242, "未生效", 1, true) ~= nil, true,
+     "组242③★原因说清「未生效」（实测 " .. tostring(whyF242) .. "）")
+  --   dry 预览（战斗信息UI 每 0.15s 求值）⇒ 不切也不判
+  TEST.assistTargets, TEST.assistClears = { ["嗜血者"] = "冰霜巨魔" }, nil
+  TEST.assistCalls = 0
+  eq(EVAL_COND_EVAL({ k = "target", s = "playerTarget", nm = "嗜血者" }), true, "组242③★dry 预览仍恒真（副作用条件求值恒 true，与其它选取器一致）")
+  eq(TEST.assistCalls, 0, "组242③★★dry 时**一次都没调**（预览绝不切目标）")
+  --   技能级（wuse 是**另一个**调用点，两边都要钉）
+  TEST.assistCalls = 0
+  TEST.hasTarget, TEST.curTargetName = true, "石头人"
+  eq(EVAL_TEST_WUSE("选取目标:玩家的目标:嗜血者"), true, "组242③★★技能级：这一行真的出手")
+  eq(TEST.assistCalls, 1, "组242③★技能级调了一次 AssistByName")
+  eq(TEST.curTargetName, "冰霜巨魔", "组242③★技能级也把当前目标设成他的目标")
+  TEST.assistTargets, TEST.assistClears = nil, true
+  eq(EVAL_TEST_WUSE("选取目标:玩家的目标:路上的人"), false,
+     "组242③★★技能级协助不到 ⇒ 如实失败（旧写法会写「→ … 当前目标:无」并 return true）")
+
+  -- ④ 文本往返
+  local g242 = EVAL_PARSE_CONDS("选取目标:玩家的目标:嗜血者")
+  eq(table.getn(g242) == 1 and table.getn(g242[1]) == 1 and g242[1][1].k == "target"
+     and g242[1][1].s == "playerTarget" and g242[1][1].nm == "嗜血者", true,
+     "组242④★`选取目标:玩家的目标:嗜血者` 解析成 {k=target, s=playerTarget, nm=嗜血者}")
+  eq(EVAL_GROUP_STR(g242), "选取目标:玩家的目标:嗜血者", "组242④★★导出回同一串（读不回 = 导入即丢条件）")
+  eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("选取目标:指定名称:嗜血者")), "选取目标:指定名称:嗜血者",
+     "组242④★★「指定名称」往返**逐字不变**（这次泛化没有把它串味）")
+  eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("playerTarget=嗜血者")), "选取目标:玩家的目标:嗜血者", "组242④★英文 id 写法也认")
+  eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("assistbyname=嗜血者")), "选取目标:玩家的目标:嗜血者", "组242④★函数名写法 assistbyname 也认")
+  eq(table.getn(EVAL_PARSE_CONDS("选取目标:玩家的目标:")), 0, "组242④★★空名 = 写法错误 ⇒ **整条丢弃**（不静默留半个条件）")
+  eq(EVAL_TSEL_NEEDTGT["playerTarget"] and EVAL_TSEL_NM["playerTarget"], true, "组242④收尾哨兵：两个标记都还在（下面自清夹具）")
+
+  -- 收尾（夹具自清）
+  TEST.hasTarget, TEST.curTargetName = savedHas242, savedName242
+  TEST.assistTargets, TEST.assistClears, TEST.assistCalls = savedTgts242, savedClr242, savedCalls242
+  TEST.targetSel = savedSel242
+  EVAL_HELP_UPDATE_STATE()
+  if fails242 == TESTASSERT_FAILS then
+    print("GROUP 242 (选取目标「玩家的目标」=AssistByName：表项/函数/菜单文案 + 条件级与技能级 + 如实失败 + 文本往返): PASS")
+  end
+end
+
+-- ===== 组 243（1.75.10）：取证命令 `/eh go assist <玩家名>`（选取目标「玩家的目标」的真机读数）=====
+-- 为什么要它：AssistByName 的**失败形态**（名字不在附近/不存在时是否清掉当前目标）官方文档没写，
+--   只能真机读；而真机读数必须（a）零副作用地分三态报出来、（b）自带专属有界落盘（`say` 只进聊天框、
+--   不落日志环 ⇒ 不自己存一份 AI 侧读不到）。本组就是钉这两件事 + 命令真的挂上去了。
+do
+  local fails243 = TESTASSERT_FAILS
+  local savedHas243, savedName243, savedSel243 = TEST.hasTarget, TEST.curTargetName, TEST.targetSel
+  local savedTgts243, savedClr243, savedCalls243 = TEST.assistTargets, TEST.assistClears, TEST.assistCalls
+  local savedProbe243, savedAn243 = EVAL_HELP_CONFIG.assistProbe, AssistByName
+
+  EVAL_HELP_CONFIG.assistProbe = nil
+  TEST.hasTarget, TEST.curTargetName = true, "石头人"
+  TEST.assistTargets, TEST.assistClears, TEST.assistCalls = { ["嗜血者"] = "冰霜巨魔" }, nil, 0
+  TEST.targetSel, TEST.chat = nil, ""
+  EVAL_HELP_UPDATE_STATE()
+
+  -- ① 不带名字 = 只读现状（**一次都不许调** AssistByName —— 取证命令没有用户点过谁）
+  SlashCmdList["EVALHELP"]("go assist")
+  local c243a = tostring(TEST.chat or "")
+  eq(string.find(c243a, "AssistByName=有", 1, true) ~= nil, true, "组243①★先把接口在不在报出来（缺失与「切不动」要分得开）")
+  eq(string.find(c243a, "用法", 1, true) ~= nil, true, "组243①★并告诉用户怎么跑（不带名字只报现状）")
+  eq(TEST.assistCalls, 0, "组243①★★★零副作用：不带名字时**一次都没调**")
+
+  -- ② 成功形态：切换后目标 = 他的目标
+  TEST.targetSel, TEST.chat = nil, ""
+  SlashCmdList["EVALHELP"]("go assist 嗜血者")
+  local c243b = tostring(TEST.chat or "")
+  eq(TEST.assistCalls, 1, "组243②带名字时真的调了一次")
+  eq(TEST.targetSel, "assist:嗜血者", "组243②★参数就是敲进去的那个名字")
+  eq(string.find(c243b, "切换成功", 1, true) ~= nil, true, "组243②★★成功形态如实报「切换成功」")
+  eq(string.find(c243b, "失败形态", 1, true) == nil, true, "组243②★反向哨兵：成功那次**不许**报成失败形态（混用=读数没法判）")
+  eq(string.find(c243b, "冰霜巨魔", 1, true) ~= nil, true, "组243②★读数里摊开「切换后」的目标名（真机上就是拿它对账）")
+
+  -- ③ 失败形态（调用后没有目标）⇒ 点名「清掉了当前目标」这条假设，并说清插件侧怎么兜底
+  TEST.assistTargets, TEST.assistClears = nil, true
+  TEST.targetSel, TEST.chat = nil, ""
+  SlashCmdList["EVALHELP"]("go assist 路上的人")
+  local c243c = tostring(TEST.chat or "")
+  eq(string.find(c243c, "失败形态", 1, true) ~= nil, true, "组243③★★调用后没有目标 ⇒ 如实报「失败形态」（这正是插件侧 needTgt 兜底要防的）")
+  eq(string.find(c243c, "如实失败", 1, true) ~= nil, true, "组243③★把「插件会如实失败」一并说清（读数要能直接指导判据）")
+
+  -- ④ 接口缺失 ⇒ 如实报，不许假装成功
+  TEST.hasTarget = true
+  AssistByName = nil
+  TEST.chat = ""
+  SlashCmdList["EVALHELP"]("go assist 嗜血者")
+  eq(string.find(tostring(TEST.chat or ""), "没有 AssistByName", 1, true) ~= nil, true, "组243④★本客户端没有这个函数时如实报（不装成功）")
+  AssistByName = savedAn243
+
+  -- ⑤ 专属落盘（有界 12）+ 残渣键 + 反向哨兵
+  local box243 = EVAL_HELP_CONFIG.assistProbe
+  eq(type(box243) == "table" and type(box243.out) == "table" and table.getn(box243.out) >= 1, true,
+     "组243⑤★★读数落存档 cfg.assistProbe（实测 " .. tostring(type(box243) == "table" and table.getn((box243 or {}).out or {}) or -1) .. " 行）")
+  for _ = 1, 20 do SlashCmdList["EVALHELP"]("go assist") end
+  eq(table.getn(EVAL_HELP_CONFIG.assistProbe.out) <= 12, true,
+     "组243⑤★有界环（上限 12；灌 20 次后实测 " .. tostring(table.getn(EVAL_HELP_CONFIG.assistProbe.out)) .. " 行）")
+  local hasRes243 = false
+  for _, k in ipairs(EVAL_LOAD_RESIDUE_KEYS()) do if k == "assistProbe" then hasRes243 = true end end
+  eq(hasRes243, true, "组243⑤★assistProbe 在调试残渣键清单里（/eh 存档清理清得掉）")
+  eq(EVAL_HELP_CONFIG.assistTargets, nil, "组243⑤★反向哨兵：探针没往配置里塞别的键（取证工具不许有副作用）")
+
+  -- 收尾（夹具自清）
+  EVAL_HELP_CONFIG.assistProbe = savedProbe243
+  TEST.hasTarget, TEST.curTargetName, TEST.targetSel = savedHas243, savedName243, savedSel243
+  TEST.assistTargets, TEST.assistClears, TEST.assistCalls = savedTgts243, savedClr243, savedCalls243
+  AssistByName = savedAn243
+  EVAL_HELP_UPDATE_STATE()
+  if fails243 == TESTASSERT_FAILS then
+    print("GROUP 243 (/eh go assist 取证：三态读数 + 零副作用 + 专属有界落盘 + 残渣键): PASS")
+  end
+end
+
+-- ===== 组 244（1.75.10）：一键宏技能列表「名字列加宽 + 悬停显示完整条件」=====
+-- 用户原话（截图）：「方案技能列表可以适当增加标题的宽度。然后鼠标提示显示完整的条件信息。」
+-- 截图症状：技能名（亮色）与条件列（灰色）**叠在同一格**成一串糊字（「选取目标:目标的目标」+「玩家:ioiol」）——
+--   根因 = 名字格**从来没设过宽度**（按文本自动伸展），条件列却固定在 RX2+102 ⇒ 名字一长就压过去。
+-- 本组钉四件事（全部读**真控件/真事件**，不在断言里复刻布局）：
+--   ① 两列几何**真的分开**且条件列右缘不压行内按钮带（▲）；② 超长名字/条件**按格宽截断**（带 …）；
+--   ③ 悬停提示走**真实 OnEnter** 给**完整**信息（完整技能名含等级 / 启停 / 逐组条件全文 / 无条件说明 / 操作提示）；
+--   ④ 反向哨兵：空行悬停一个字都不写 · 停用行报 TIP_OFF · 切走 Tab 时热区必须 Hide（它盖在文字上，不 Hide 会吃鼠标）。
+do
+  local fails244 = TESTASSERT_FAILS
+  local savedP244, savedA244 = EVAL_HELP_CONFIG.war.profiles, EVAL_HELP_CONFIG.war.activeProfile
+  local savedTips244 = TEST.tipLines
+  local cfgWas244 = EVAL_TEST_CFG_VISIBLE()
+  if not (EVAL_HELP_CFGWIN and EVAL_HELP_CFGWIN.warUI) then EVAL_HELP_CFG_TOGGLE() end
+  -- 夹具：① 超长技能名 + 一条**长到必然超格**的条件串；② 停用 + 无条件；③ 不存在的空行
+  local LONG244 = "选取目标:玩家的目标:超长玩家名字甲乙丙丁戊己庚辛壬癸子丑"
+  local CONDS244 = "目标玩家:甲一 & 目标玩家:乙二 & 目标玩家:丙三 & 目标玩家:丁四 & 目标玩家:戊五 & 目标死亡"
+  local G244 = EVAL_PARSE_CONDS(CONDS244)
+  local FULL244 = EVAL_GROUP_STR(G244, true)
+  eq(FULL244, CONDS244, "组244前置：夹具条件串解析后可原样导出（下面的截断/提示断言才有意义）")
+  EVAL_HELP_CONFIG.war.profiles = { { name = "组244", skills = {
+    { skill = LONG244, rank = "等级 3", enabled = true, why = "x", groups = G244 },
+    { skill = "跟随:某人", enabled = false, why = "y", groups = {} },
+  } } }
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  EVAL_HELP_CFG_SETTAB(2)
+  EVAL_WAR_TAB_REFRESH()
+  local r244 = EVAL_TEST_WAR_ROWS()
+  local cw244 = EVAL_HELP_CFGWIN
+  local row1_244 = cw244 and cw244.warUI and cw244.warUI.rows and cw244.warUI.rows[1]
+  eq(type(row1_244) == "table", true, "组244前置：拿到技能列表第 1 行的真控件")
+
+  -- ① 几何：名字格与条件格**真的分开**，且条件格不压行内按钮带（▲）
+  eq(type(r244.nameX[1]) == "number" and type(r244.nameW[1]) == "number"
+     and type(r244.condX[1]) == "number" and type(r244.condW[1]) == "number", true,
+     "组244①前置：读到两格的**真实**左缘与宽度（读真控件，不复刻布局）")
+  eq(r244.nameX[1] + r244.nameW[1] <= r244.condX[1], true,
+     "组244①★★★名字格右缘**不越过**条件格左缘（截图那串糊字的根因；实测 "
+     .. tostring(r244.nameX[1]) .. "+" .. tostring(r244.nameW[1]) .. " ≤ " .. tostring(r244.condX[1]) .. "）")
+  local okp244, pt244, _r244, _rp244, px244 = pcall(row1_244.up.GetPoint, row1_244.up, 1)
+  local okw244, uw244 = pcall(row1_244.up.GetWidth, row1_244.up)
+  eq(okp244 and pt244 == "TOPRIGHT" and type(px244) == "number" and okw244 and type(uw244) == "number", true,
+     "组244①前置：▲ 是**右缘锚定**的真按钮，能读到它的偏移与宽度（不然下面的「不重叠」算不出来）")
+  local stripLeft244 = (cw244.W or 0) - math.abs(px244) - uw244
+  eq(r244.condX[1] + r244.condW[1] <= stripLeft244, true,
+     "组244①★★条件格右缘停在 ▲ 按钮带左边（实测 " .. tostring(r244.condX[1] + r244.condW[1])
+     .. " ≤ " .. tostring(stripLeft244) .. "）——否则条件字会盖住调序/编辑/删除按钮")
+
+  -- ② 超长文本**按格宽截断**（带 …），且截断后仍放得下（不是靠溢出糊过去）
+  local shownName244 = tostring(r244.names[1] or "")
+  eq(string.len(shownName244) < string.len(LONG244 .. "(等级 3)"), true,
+     "组244②★★超长技能名被截断（实测 " .. tostring(string.len(shownName244)) .. " 字节 < 原文 "
+     .. tostring(string.len(LONG244 .. "(等级 3)")) .. "）")
+  eq(string.find(shownName244, "…", 1, true) ~= nil, true, "组244②★截断补的是省略号（实测 " .. shownName244 .. "）")
+  --   ★「取的是原串开头」判据要**先剥掉省略号**再比（省略号本身不在原文里，直接 find 必然为 nil）
+  local prefix244 = string.sub(shownName244, 1, string.len(shownName244) - 3) -- "…" 是 3 字节
+  eq(string.len(prefix244) > 0 and string.find(LONG244 .. "(等级 3)", prefix244, 1, true) == 1, true,
+     "组244②★★截断必须取**原串开头**（不是从中间截；实测前缀 " .. prefix244 .. "）")
+  local shownCond244 = tostring(r244.conds[1] or "")
+  eq(string.len(shownCond244) < string.len(FULL244), true, "组244②★★超长条件串同样被截断")
+  eq(string.find(shownCond244, "…", 1, true) ~= nil, true, "组244②★条件格也补省略号")
+  local cprefix244 = string.sub(shownCond244, 1, string.len(shownCond244) - 3)
+  eq(string.len(cprefix244) > 0 and string.find(FULL244, cprefix244, 1, true) == 1, true,
+     "组244②★同样取原串开头（实测前缀 " .. cprefix244 .. "）")
+  --   ★短文本**不许**被加省略号（截断只在真的放不下时发生 —— 否则每行都挂个 … 像坏了一样）
+  eq(r244.names[2], "跟随:某人", "组244②★★反向：短名字逐字不变（没被无脑加省略号）")
+
+  -- ③ 悬停提示：走**真实 OnEnter**，给出**完整**信息（列表中已截断的那些必须在这里给全）
+  eq(r244.hov[1] ~= nil and r244.hovFrom[1] and r244.hovFrom[1].enter and r244.hovFrom[1].leave, true,
+     "组244③★★行上有悬停热区，且 OnEnter/OnLeave **都真的挂了脚本**")
+  eq(r244.hovFrom[1].mouse, true, "组244③★热区真的收鼠标（不收 = 悬停事件永远不来，静默不工作）")
+  TEST.tipLines = nil
+  eq(EVAL_TEST_WAR_HOVER(1), true, "组244③走了**真实**行悬停 OnEnter")
+  local tips244 = TEST.tipLines or {}
+  eq(table.getn(tips244) >= 4, true, "组244③悬停提示真的写了几行（实测 " .. tostring(table.getn(tips244)) .. " 行）")
+  eq(tostring(tips244[1] and tips244[1].text), LONG244 .. "(等级 3)",
+     "组244③★★★第一行 = **完整技能名 + 等级**（列表那格被截断了，这里必须给全）")
+  eq(string.find(tostring(tips244[1] and tips244[1].text), "…", 1, true) == nil, true, "组244③★★提示里**没有**省略号（完整）")
+  eq(tips244[2] and string.find(tostring(tips244[2].text), EVAL_L("TIP_ON"), 1, true) ~= nil, true,
+     "组244③第二行 = 启用状态（复用既有 TIP_ON 键，不另编文案）")
+  eq(tips244[3] and tostring(tips244[3].text), EVAL_L("TIP_COND_H"), "组244③第三行 = 条件标题（TIP_COND_H）")
+  eq(tostring(tips244[4] and tips244[4].text), "1. " .. CONDS244,
+     "组244③★★★逐组条件**全文**（组号 + 组内 & 连接；实测 " .. tostring(tips244[4] and tips244[4].text) .. "）")
+  eq(tostring(tips244[table.getn(tips244)] and tips244[table.getn(tips244)].text), EVAL_L("W_ROW_TIP"),
+     "组244③★末行 = 操作提示（三语键 W_ROW_TIP）")
+  --   停用 + 无条件那条：TIP_OFF 与 TIP_NOCOND 各出现一次
+  TEST.tipLines = nil
+  eq(EVAL_TEST_WAR_HOVER(2), true, "组244③停用行也走真实 OnEnter")
+  local tips244b = TEST.tipLines or {}
+  local hasOff244, hasNoCond244 = false, false
+  for i = 1, table.getn(tips244b) do
+    local tx = tostring(tips244b[i].text or "")
+    if string.find(tx, EVAL_L("TIP_OFF"), 1, true) then hasOff244 = true end
+    if string.find(tx, EVAL_L("TIP_NOCOND"), 1, true) then hasNoCond244 = true end
+  end
+  eq(hasOff244, true, "组244③★★停用的技能行如实报「已停用」（不报成启用）")
+  eq(hasNoCond244, true, "组244③★★无条件行如实说明「无条件 = 永远不会自动放」（不留空白让人以为读不到）")
+  --   移开：走真实 OnLeave（不许把 tooltip 留在屏幕上）
+  TEST.gtCalls.hide = 0
+  eq(EVAL_TEST_WAR_HOVER_LEAVE(1), true, "组244③走了真实 OnLeave")
+  eq(TEST.gtCalls.hide > 0, true, "组244③★移开真的把 tooltip 收起来了")
+
+  -- ④ 反向哨兵：空行悬停**一个字都不许写**；切走 Tab 时热区必须 Hide（它盖在文字上）
+  TEST.tipLines = nil
+  eq(EVAL_TEST_WAR_HOVER(3), true, "组244④空行也能走一遍 OnEnter（脚本在，数据不在）")
+  eq(table.getn(TEST.tipLines or {}), 0, "组244④★★空行悬停**一个字都不写**（否则会弹出上一行/空内容的 tooltip）")
+  eq(r244.hov[3] ~= nil, true, "组244④前置：空行同样建了热区（要在空行时 Hide 掉）")
+  local oksh244, sh244 = pcall(row1_244.hov.IsShown, row1_244.hov)
+  eq(oksh244 and sh244 == true, true, "组244④前置：一键宏 Tab 激活时第 1 行热区是显示的")
+  EVAL_HELP_CFG_SETTAB(1)
+  local oksh2, sh2 = pcall(row1_244.hov.IsShown, row1_244.hov)
+  eq(oksh2 and sh2 == false, true, "组244④★★★切到别的 Tab 后热区**被 Hide**（它盖在文字上，不 Hide = 在别的页面上吃鼠标）")
+  EVAL_HELP_CFG_SETTAB(2)
+  EVAL_WAR_TAB_REFRESH()
+  local oksh3, sh3 = pcall(row1_244.hov.IsShown, row1_244.hov)
+  eq(sh3 == true, true, "组244④反向：切回一键宏 Tab 又显示（没被 Hide 死）")
+  local row3_244 = cw244.warUI.rows[3]
+  local okh4, sh4 = false, nil
+  if row3_244 and row3_244.hov then okh4, sh4 = pcall(row3_244.hov.IsShown, row3_244.hov) end
+  eq(okh4 and sh4 == false, true, "组244④★没有技能的空行，热区是 Hide 的（空行不许吃鼠标）")
+
+  -- 收尾（夹具自清）
+  TEST.tipLines = savedTips244
+  EVAL_HELP_CONFIG.war.profiles = savedP244
+  EVAL_HELP_CONFIG.war.activeProfile = savedA244
+  EVAL_WAR_TAB_REFRESH()
+  if not cfgWas244 and EVAL_TEST_CFG_VISIBLE() then EVAL_HELP_CFG_TOGGLE() end
+  if fails244 == TESTASSERT_FAILS then
+    print("GROUP 244 (技能列表：名字/条件两列几何分离 + 超长截断 + 悬停给完整条件 + 热区随 Tab 显隐): PASS")
+  end
+end
+
+-- ===== 组 245（1.75.11）：两个新数值条件「围攻自身数量」「10s交战人数」=====
+--   用户原话：「技能编辑->添加条件类型->自身状态->10s交战人数N数量 比较类型,围攻自身N数量 比较类型.递步1 默认1 <10」
+--   ★这两条的值来自 Engine 近战围攻探针的**唯一读值口**（EVAL_MW_ACTIVE_N / EVAL_MW_ENGAGED_N）：
+--     只统计战斗状态（非战斗恒 0）· 纯聊天正文口径 · 零切目标。
+--   ★本组的「非战斗恒 0」哨兵是关键的：用户口径就是「非战斗不统计」，不许拿上一场的残留数据糊弄。
+do
+  local fails245 = TESTASSERT_FAILS
+  -- ① 类型注册 / 语言包标签（走 UI 同一份读值口）/ 初值
+  eq(EVAL_TEST_SE_TYPELABEL("mwSiege"), EVAL_L("CT_MWSIEGE"), "组245①★围攻自身数量：标签 = 语言包 CT_MWSIEGE（UI 与断言同一份）")
+  eq(EVAL_TEST_SE_TYPELABEL("mwEngaged"), EVAL_L("CT_MWENGAGED"), "组245①★10s交战人数：标签 = 语言包 CT_MWENGAGED")
+  eq(EVAL_TEST_SE_TYPE_INIT("mwSiege"), 1, "组245①★初始值 = 1（用户定：默认1）")
+  eq(EVAL_TEST_SE_TYPE_INIT("mwEngaged"), 1, "组245①★初始值 = 1")
+  -- ② 文本往返（导出↔导入同一通道；少一处就会「导出→导入丢条件」）+ 摘要显示名
+  eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("围攻>1")), "围攻>1", "组245②★「围攻>1」文本往返")
+  eq(EVAL_GROUP_STR(EVAL_PARSE_CONDS("交战>=2")), "交战>=2", "组245②★「交战>=2」文本往返")
+  eq(EVAL_PARSE_CONDS("围攻>1")[1][1].k, "mwSiege", "组245②解析出的 k = mwSiege")
+  eq(EVAL_PARSE_CONDS("交战>2")[1][1].k, "mwEngaged", "组245②解析出的 k = mwEngaged")
+  eq(EVAL_COND_STR({ k = "mwSiege", op = ">", n = 1 }), "围攻>1", "组245②★摘要导出 = 围攻>1（显示名走 COND_NUMNAME）")
+  eq(EVAL_TEST_COND_NUMNAME("mwSiege"), "围攻", "组245②读值口 COND_NUMNAME[mwSiege]")
+  eq(EVAL_TEST_COND_NUMNAME("mwEngaged"), "交战", "组245②读值口 COND_NUMNAME[mwEngaged]")
+  -- ③ 真实求值（走 condOne 的真实入口）
+  --   ★★★1.75.11 更新：值不再由 condOne 直接调探针，而是走**全局战斗数据 st**（用户口径：「围攻数量归入
+  --     战斗数据全局可被使用,不多个地方各自计算」）⇒ 夹具必须「改桩 + EVAL_HELP_UPDATE_STATE() 刷状态」两步，
+  --     只改桩不刷状态 = condOne 读到的是上一拍的旧值（本项目老坑，判据写在这里）。
+  local savedInfo245, savedEngaged245 = EVAL_MW_ACTIVE_INFO, EVAL_MW_ENGAGED_N
+  eq(type(savedInfo245), "function", "组245③前置：唯一计算入口 EVAL_MW_ACTIVE_INFO 存在")
+  eq(type(savedEngaged245), "function", "组245③前置：读值口 EVAL_MW_ENGAGED_N 存在")
+  EVAL_MW_ACTIVE_INFO = function() return 3, 1, 3 end
+  EVAL_MW_ENGAGED_N = function() return 5 end
+  EVAL_HELP_UPDATE_STATE()
+  eq(tonumber(EVAL_HELP_STATE.mwSiege), 3, "组245③★★全局战斗数据 st.mwSiege 由 UPDATE_STATE 填好（一处算、各处只读）")
+  eq(tonumber(EVAL_HELP_STATE.mwSiegeNm), 1, "组245③★两个分腿也进状态表：名字口径 1")
+  eq(tonumber(EVAL_HELP_STATE.mwSiegeEst), 3, "组245③★估算腿 3（战斗UI 用它判「要不要加 ~ 标记」）")
+  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "mwSiege", op = ">=", n = 3 }), true, "组245③★★战斗中实测 3 只 ⇒「围攻>=3」满足")
+  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "mwSiege", op = ">", n = 3 }), false, "组245③★★实测 3 只 ⇒「围攻>3」不满足（边界如实，不许四舍五入）")
+  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "mwEngaged", op = ">=", n = 5 }), true, "组245③★★实测 5 只 ⇒「交战>=5」满足")
+  EVAL_MW_ACTIVE_INFO = function() return 0, 0, 0 end
+  EVAL_MW_ENGAGED_N = function() return 0 end
+  EVAL_HELP_UPDATE_STATE()
+  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "mwSiege", op = ">", n = 0 }), false, "组245③★★★非战斗（全局数据恒 0）⇒「围攻>0」不成立 —— 非战斗一律不统计")
+  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "mwEngaged", op = ">", n = 0 }), false, "组245③★★★非战斗 ⇒「交战>0」不成立")
+  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "mwSiege", op = "<=", n = 0 }), true, "组245③反向哨兵：非战斗时「围攻<=0」成立（不是把条件整个变哑）")
+  EVAL_MW_ACTIVE_INFO, EVAL_MW_ENGAGED_N = savedInfo245, savedEngaged245
+  pcall(EVAL_HELP_UPDATE_STATE)
+  eq(type(EVAL_MW_ACTIVE_INFO) == "function" and type(EVAL_MW_ENGAGED_N) == "function", true, "组245③收尾：两个入口都已还原（不留夹具）")
+  -- ④ ★★★懒启动（功能真的能用之前提）：条件被求值 ⇒ 采集必须开 —— 否则关着状态UI 时恒 0
+  pcall(EVAL_MW_STOP)
+  eq(EVAL_MW_TEST_STATE().on, false, "组245④前置：先把手动采集停掉")
+  EVAL_MW_ACTIVE_N()
+  eq(EVAL_MW_TEST_STATE().on, true, "组245④★★★求值「围攻数」会**懒启动采集**（不懒启动 = 关着状态UI 时条件恒 0，功能形同废）")
+  pcall(EVAL_MW_STOP)
+  EVAL_MW_ENGAGED_N()
+  eq(EVAL_MW_TEST_STATE().on, true, "组245④★★★求值「交战数」同样懒启动")
+  pcall(EVAL_MW_STOP)
+  if fails245 == TESTASSERT_FAILS then
+    print("GROUP 245 (新条件「围攻自身数量」/「10s交战人数」：语言包标签 · 初值1 · 文本往返 · 真实求值 · 非战斗恒0 哨兵): PASS")
+  end
+end
+
+-- ===== 组 246（1.75.11）：HUD 标题栏快捷开关**不许**把别的 Tab 的控件 Show 出来 =====
+--   用户真机 bug：「战斗UI 点击图片内的按钮切换的时候, 会导致已经打开的插件配置UI 内抓宠助手的tab 内容异常显示重叠」。
+--   根因（本机 4 轮诊断 + 断言复现定案）：HUD 那两个快捷开关的 OnClick 里调了 `cfgWin.refresh()`
+--     = **所有页刷新的总闸**（`for _, r in ipairs(refreshes)`），而「抓宠帮手」的刷新函数里带 Show 控件 ——
+--     当前不在本 Tab 时就把本页内容盖到当前那一页上（实测：停在「工具箱」页点开关 ⇒ 抓宠帮手页 21 个控件全亮）。
+--   修法：① 总闸这条路上注册**带 Tab 门的包装**（PetHelper 注册处，直接调用行为不变）；
+--         ② HUD 开关只同步那两个勾选框（不再跑整张刷新表）。
+--   ★判据 = 「停在别的 Tab 点开关 ⇒ 本页可见控件数必须仍是 0」；反向哨兵 = 切到本页必须 > 0（别把功能关死）。
+do
+  local fails246 = TESTASSERT_FAILS
+  if not EVAL_TEST_CFG_VISIBLE() then pcall(EVAL_HELP_CFG_TOGGLE) end
+  local function visOf246(page)
+    local box = EVAL_TEST_CFG_PAGE_VIS()
+    return table.getn(box[page] or {})
+  end
+  -- 先把每个 Tab 过一遍（页面都被构建/刷新过 —— 真实使用就是这个状态）
+  for i = 1, 7 do pcall(EVAL_HELP_CFG_SETTAB, i) end
+  EVAL_HELP_CFG_SETTAB(3)
+  eq(visOf246(6), 0, "组246①前置：停在「工具箱」页时抓宠帮手页一个控件都不该显示")
+  eq(EVAL_TEST_UI_TITLEBAR_CLICK("combat"), true, "组246①点得到 HUD 的「战斗区」快捷开关（走真实 OnClick）")
+  eq(EVAL_HELP_CFG_TAB(), 3, "组246①点开关不改当前 Tab（停在哪就还在哪）")
+  eq(visOf246(6), 0, "组246①★★★点开关不许把抓宠帮手页的控件 Show 出来（修复前实测 21 个全亮 = 用户看到的「内容重叠」）")
+  eq(visOf246(3) > 0, true, "组246①反向哨兵：当前页（工具箱）自己仍然正常显示（" .. tostring(visOf246(3)) .. " 个）")
+  -- ② 另一个开关（方案区）同样不许泄漏
+  EVAL_HELP_CFG_SETTAB(1)
+  eq(EVAL_TEST_UI_TITLEBAR_CLICK("scheme"), true, "组246②点得到「方案区」快捷开关")
+  eq(visOf246(6), 0, "组246②★★★方案区开关同样不许把抓宠帮手页控件 Show 出来")
+  -- ③ 反向哨兵：切到抓宠帮手页必须真的显示（别把功能关死）
+  EVAL_HELP_CFG_SETTAB(6)
+  eq(visOf246(6) > 0, true, "组246③★★★切到抓宠帮手页 ⇒ 本页控件正常显示（" .. tostring(visOf246(6)) .. " 个；修复没把功能关死）")
+  -- ④ 开关的配置真值仍然翻转（两个入口一份真值，别把原意一起修掉）
+  local v0_246 = EVAL_HELP_CONFIG.ui and EVAL_HELP_CONFIG.ui.subCombat
+  EVAL_TEST_UI_TITLEBAR_CLICK("combat")
+  eq((EVAL_HELP_CONFIG.ui and EVAL_HELP_CONFIG.ui.subCombat) ~= v0_246, true, "组246④★点开关照旧翻转同一份配置 ui.subCombat（原意没被一起修掉）")
+  EVAL_HELP_CONFIG.ui.subCombat = v0_246 -- 夹具自清（★开关 nil=开 的语义：往返一次会落到 true，不能靠再点一次还原）
+  EVAL_HELP_CFG_SETTAB(6)
+  if fails246 == TESTASSERT_FAILS then
+    print("GROUP 246 (HUD 快捷开关不许把别的 Tab 的控件 Show 出来（真机「抓宠帮手内容重叠」）· 反向哨兵 · 配置真值仍同步): PASS")
+  end
+end
+
+
+
+
+
+-- ===== 组 247（1.75.11）：战斗UI 的「被围攻人数」=====
+--   用户三轮口径：①「战斗UI 图片内位置增加被围攻人数日志」；②「围攻数量统计移动到非战斗那一行右边对齐」；
+--   ③ 真机截图报「信息重叠.是宽度不够吗?」⇒ ③ 的根因 = 锚在**状态行 FontString 自己文字的右缘**上
+--   （状态行是自适应宽控件，它的 RIGHT 就是自己文字的右缘 ⇒ 围攻文字倒着长回「重殴:关」的尾巴上，糊成一团）。
+--   ⇒ 终态 = **与状态行同一行、贴根帧右缘右对齐**（-pad 内缩，与三条状态条右缘同一条线）；文案跟唯一读值口走。
+--   判据（读真控件，不比常量）：① 存在；② 锚 TOPRIGHT 于**根帧**（反向哨兵：绝不许锚回状态行）+ 与状态行**同顶** + 文字右对齐；
+--   ③ 文案跟读值口（战斗中 N 只 / 非战斗「—」）；④ 反向哨兵：方案块关掉仍在（不跟方案行走）· 战斗块关掉随状态行一起消失（整块语义）。
+do
+  local fails247 = TESTASSERT_FAILS
+  local savedUi247 = EVAL_HELP_CONFIG.ui
+  local savedInfo247 = EVAL_MW_ACTIVE_INFO
+  local savedIC247 = TEST.inCombat
+  EVAL_HELP_CONFIG.ui = { enabled = true, subCombat = true, subScheme = true, scale = 1 }
+  EVAL_HELP_UI_BUILD()
+  local sec247 = EVAL_TEST_UI_SECTIONS()
+  if sec247.rootFs then pcall(sec247.rootFs.Show, sec247.rootFs) end -- 心跳只在窗口可见时跑
+  eq(sec247.siegeFs ~= nil, true, "组247①★★HUD 有「被围攻人数」控件（真控件交出）")
+  eq(sec247.statusFs ~= nil, true, "组247①前置：状态行也在（同行右对齐靠它）")
+  eq(sec247.siegePoint, "TOPRIGHT", "组247②★★★它贴**窗口右缘**（锚点 TOPRIGHT —— 用户：「移动到非战斗那一行右边对齐」）")
+  eq(sec247.siegeRelTo == sec247.rootFs, true, "组247②★★★相对对象 = HUD 根帧（比对象，不比名字）")
+  eq(sec247.siegeRelTo ~= sec247.statusFs, true, "组247②★★★反向哨兵：**绝不许锚回状态行**（它自适应宽 ⇒ RIGHT = 自己文字的右缘 = 真机「信息重叠」的根因）")
+  eq(sec247.siegeRelPoint, "TOPRIGHT", "组247②★相对点 TOPRIGHT（右缘对齐）")
+  eq(sec247.siegeY, sec247.statusY, "组247②★★与状态行**同顶**（同行 = 偏移量与状态行现算值相等，不写死常量）：siegeY=" .. tostring(sec247.siegeY) .. " statusY=" .. tostring(sec247.statusY))
+  eq(((type(sec247.siegeX) == "number") and sec247.siegeX < 0) == true, true, "组247②★右缘**内缩**（x 为负 ⇒ 不越出窗口）：" .. tostring(sec247.siegeX))
+  eq(sec247.siegeJustify, "RIGHT", "组247②★文字自身也右对齐（不然会从右缘往右长）")
+  local function text247()
+    local ok, tv = pcall(sec247.siegeFs.GetText, sec247.siegeFs)
+    return (ok and type(tv) == "string") and tv or ""
+  end
+  TEST.inCombat = true
+  -- ★★★1.75.11 更新：文案读的是**全局战斗数据 st**（Core 的 UPDATE_STATE 每拍算一次）⇒ 夹具 = 桩 + 刷状态。
+  EVAL_MW_ACTIVE_INFO = function() return 2, 2, 2 end -- 名字口径就给到 2（est == nm ⇒ 不带 ~）
+  EVAL_HELP_UPDATE_STATE()
+  EVAL_HELP_UI_TICK()
+  local tA247 = text247()
+  eq(string.find(tA247, "围攻", 1, true) ~= nil, true, "组247③★★战斗中显示「围攻 …」：" .. tA247)
+  eq(string.find(tA247, "2只", 1, true) ~= nil, true, "组247③★★只数跟全局战斗数据（给 2 就显示 2）：" .. tA247)
+  -- ③b ★估算来的值带 ~ 标记（用户定：「HUD 显示形态：围攻 ~3只」）
+  EVAL_MW_ACTIVE_INFO = function() return 3, 1, 3 end -- 终值 3 = 估算(3) > 名字(1)
+  EVAL_HELP_UPDATE_STATE()
+  EVAL_HELP_UI_TICK()
+  eq(string.find(text247(), "围攻 ~3只", 1, true) ~= nil, true, "组247③b★★★估算来的值带 ~ 标记（用户定的形态）：" .. text247())
+  EVAL_MW_ACTIVE_INFO = function() return 3, 3, 1 end -- 终值 3 来自名字数（估算只给 1）
+  EVAL_HELP_UPDATE_STATE()
+  EVAL_HELP_UI_TICK()
+  eq(string.find(text247(), "~", 1, true) == nil, true, "组247③b★★反向哨兵：名字口径就够时**不加** ~：" .. text247())
+  EVAL_MW_ACTIVE_INFO = function() return 0, 0, 0 end
+  EVAL_HELP_UPDATE_STATE()
+  EVAL_HELP_UI_TICK()
+  eq(string.find(text247(), "0只", 1, true) ~= nil, true, "组247③★战斗中 0 只也如实显示「0只」：" .. text247())
+  TEST.inCombat = false
+  EVAL_HELP_UPDATE_STATE()
+  EVAL_HELP_UI_TICK()
+  eq(string.find(text247(), "—", 1, true) ~= nil, true, "组247③★★★非战斗如实显示「—」（不拿 0 冒充现状）：" .. text247())
+  -- ④a 方案块关掉：它仍在（不跟方案行走）
+  EVAL_HELP_CONFIG.ui.subScheme = false
+  EVAL_HELP_UI_BUILD()
+  local sA247 = EVAL_TEST_UI_SECTIONS()
+  eq(sA247.hasScheme, false, "组247④前置：方案块确实关了")
+  eq(sA247.siegeFs ~= nil, true, "组247④★★方案块关掉 ⇒ 被围攻行**仍在**（它跟状态行一伙，不跟方案行）")
+  -- ④b 战斗块关掉：随状态行一起不画（整块语义）
+  EVAL_HELP_CONFIG.ui.subScheme = true
+  EVAL_HELP_CONFIG.ui.subCombat = false
+  EVAL_HELP_UI_BUILD()
+  local sB247 = EVAL_TEST_UI_SECTIONS()
+  eq(sB247.statusFs == nil and sB247.siegeFs == nil, true, "组247④★★战斗区关掉 ⇒ 状态行与它一起不画（整块语义）")
+  -- 收尾（夹具自清）
+  EVAL_MW_ACTIVE_INFO = savedInfo247
+  eq(type(EVAL_MW_ACTIVE_INFO) == "function", true, "组247收尾前置：计算入口已还原")
+  TEST.inCombat = savedIC247
+  EVAL_HELP_CONFIG.ui = savedUi247
+  pcall(EVAL_HELP_UPDATE_STATE)
+  pcall(EVAL_HELP_UI_BUILD)
+  if fails247 == TESTASSERT_FAILS then
+    print("GROUP 247 (战斗UI「被围攻人数」：与状态行同一行贴右 · 文案跟唯一读值口 · 非战斗「—」 · 方案块关掉仍在/战斗块关掉随行消失): PASS")
+  end
+end
+
+
+-- ===== 组 248（1.75.11）：合并方案「万法归宗」=====
+--   用户原话：「模版案例 理论上上面两个分类的方案可以合并在同个方案内.取个响亮的名字.」
+--   = 把「队伍/团队」+「通用法系」两组方案的**行**合并成一条（去重、按急迫度排序：救护 → 驱邪 → 祝福 → 兜底）。
+--   判据：① 在「队伍/团队」组里且**置顶**；② 12 行；③ 行序（先救命、再解负面、最后增益）；
+--        ④ 前 10 行（成员施法行）的**第一条条件必须是成员条件**（它负责切目标）+ 没有无条件行。
+do
+  local fails248 = TESTASSERT_FAILS
+  local grp248 = nil
+  for _, g in ipairs(EVAL_IO_TEMPLATES) do if g.cls == "队伍/团队" then grp248 = g end end
+  eq(grp248 ~= nil, true, "组248①前置：「队伍/团队」组在")
+  local tpl248 = nil
+  for _, t in ipairs(grp248.list or {}) do if tostring(t.name) == "万法归宗" then tpl248 = t end end
+  eq(tpl248 ~= nil, true, "组248①★★合并方案「万法归宗」在「队伍/团队」组里（按名字找，不写死下标）")
+  eq(tostring(grp248.list[1].name), "万法归宗", "组248①★★★它**置顶**（合并方案要一眼看到）")
+  local prof248 = EVAL_PROFILE_FROM_TEXT(tpl248.text or "")
+  eq(prof248 ~= nil, true, "组248②★★合并方案解析得出来")
+  eq(table.getn(prof248.skills), 12, "组248②★★12 行（救护/驱邪 6 + 祝福 4 + 兜底 2；实际 " .. tostring(table.getn(prof248.skills)) .. "）")
+  eq(prof248.skills[1].skill, "快速治疗", "组248③★★第 1 行 = 救护（先救命）")
+  eq(prof248.skills[3].skill, "驱散魔法", "组248③★★第 3 行 = 驱散（救命之后解负面）")
+  eq(prof248.skills[7].skill, "奥术智慧", "组248③★★第 7 行 = 补奥术智慧（增益放最后）")
+  eq(prof248.skills[12].skill, "奥术智慧", "组248③★★最后一行 = 兜底（给最近友方补）")
+  local memK248 = { teamHp = true, teamMana = true, teamBuff = true, teamDebuff = true }
+  local badFirst248, noCond248 = "", ""
+  for i = 1, table.getn(prof248.skills) do
+    local sk = prof248.skills[i]
+    local cnt = 0
+    for _, cg in ipairs(sk.groups or {}) do for _ in ipairs(cg) do cnt = cnt + 1 end end
+    if cnt == 0 then noCond248 = noCond248 .. i .. " " end
+    if i <= 10 then
+      local first = sk.groups[1] and sk.groups[1][1]
+      if not (first and memK248[first.k]) then
+        badFirst248 = badFirst248 .. i .. "(" .. tostring(first and first.k) .. ") "
+      end
+    end
+  end
+  eq(noCond248, "", "组248④★★没有无条件行（合并方案不许出现「按一下就放」的行）: " .. noCond248)
+  eq(badFirst248, "", "组248④★★前 10 行的**第一条条件必须是成员条件**（它负责切目标，写后面就是拿旧目标求值）: " .. badFirst248)
+  print("  合并方案：12 行（救护→驱邪→祝福→兜底）· 置顶于「队伍/团队」· 每行都带条件")
+  if fails248 == TESTASSERT_FAILS then
+    print("GROUP 248 (合并方案「万法归宗」：队伍/团队 + 通用法系 合成一条 · 置顶 · 12 行 · 行序与条件纪律): PASS")
+  end
+end
+
+-- ===== 组 249（1.75.11）：被围攻**估算 v2**（4s 窗口 · 攻速定档 1.5/2.0/2.5 · 与名字数取最大）=====
+--   用户三轮口径（逐字）：
+--     ①「怪攻击间隔一般 2s 左右…单位时间内查过多少次攻击自动估算」「兼容之前的方案取最大值」；
+--     ②「攻速定档 1.5,2,2.5 这几档.只可能是这几档位」「单只怪攻速必然在 1.4 以上 ⇒ 2 只怪同时攻击间隔必然在 1.3 以下」；
+--     ③「统计时间调整到 4s 内,离开战斗重置」。
+--   ⇒ 实现（计算只在 EVAL_MW_ACTIVE_INFO 一处；Core 每拍写 st，条件/两个 UI 只读 st）：
+--     · 按**怪名分组**；最小间隔 ≥1.4 ⇒ **可证只有 1 只**（单只 ≥1.5、两只错相 ≤1.25）；
+--       出现 ≤1.3 ⇒ 至少 2 只，再拿「窗口法 floor(n×I/窗口)」与「跨度法 round(I×(n−1)/跨度)」两条估计取大；
+--       档位 I 只在 1.5/2.0/2.5 三档里取（学到的 → 反推的 → 默认 2.0）。
+--     · 自学习：只在**可证单只**的窗口里把中位间隔**吸附到档位**（多只窗口学到的是 I/怪数，绝不要）。
+--     ④（1.75.11 追加）「自学习成功的怪并不是就一直保持不变…如果同名怪攻速达到 1.4 以上则必然是单只怪的攻速，
+--       要**及时学习更新**，未学习的怪攻速默认 2.0」⇒ 每次可证单只的窗口都**覆盖**档位；档位变更记日志与计数
+--       （更新次数 / 确认单只次数），报告里打出来自证；没学过的名字走默认 2.0（明细 src=default）。
+--   判据（合成时间戳序列，走**真实**事件入口 EVAL_MW_FEED + 真读值口；窗口/档位/阈值全从读值口现取，不写死）：
+do
+  local fails249 = TESTASSERT_FAILS
+  local savedIC249 = TEST.inCombat
+  local savedT249 = TEST.time
+  local EV249 = "CHAT_MSG_COMBAT_CREATURE_VS_SELF_HITS"
+  local SELF249 = "CHAT_MSG_COMBAT_SELF_HITS"
+  local W249 = EVAL_MW_TEST_WIN()
+  local T1, T2, T3 = EVAL_MW_TEST_TIERS()
+  local G1, G2 = EVAL_MW_TEST_GAPS()
+  local function feed249(t, txt, ev)
+    TEST.time = t
+    EVAL_MW_TEST_FEED(ev or EV249, txt)
+  end
+  -- 换一场：进战那一刻清桶（★采集必须先开着 —— 懒启动同样会清桶）
+  local function newFight249()
+    TEST.inCombat = false
+    feed249(1000, "你击中峭壁野猪造成15点伤害。", SELF249) -- 让探针同步到「非战斗」（顺带清桶）
+    TEST.inCombat = true
+  end
+  pcall(EVAL_MW_TEST_RESET)
+  pcall(EVAL_MW_STOP)
+  pcall(EVAL_MW_START)
+  eq(EVAL_MW_TEST_STATE().on, true, "组249⓪前置：采集已开（★懒启动在第一次求值时清桶 ⇒ 必须**先启动再喂**）")
+  -- ⓪ 领域约束本身（用户给的三个数：窗口 4s / 档位 1.5-2.0-2.5 / 两条间隔阈值 1.4-1.3）
+  eq(W249, 4, "组249⓪★★统计窗口 = 4s（用户：「统计时间调整到4s 内」）")
+  eq(T1 == 1.5 and T2 == 2.0 and T3 == 2.5, true, "组249⓪★★★攻速只有三档：1.5 / 2.0 / 2.5（用户给的领域约束）")
+  eq(G1 == 1.4 and G2 == 1.3, true, "组249⓪★★★两条可证阈值：间隔 ≥1.4 ⇒ 单只；≤1.3 ⇒ 至少 2 只")
+  eq(EVAL_MW_TEST_TIEROF(1.5), 1.5, "组249⓪★吸附：1.5 ⇒ 1.5")
+  eq(EVAL_MW_TEST_TIEROF(1.9), 2.0, "组249⓪★吸附：1.9 ⇒ 2.0（吸附到最近档）")
+  eq(EVAL_MW_TEST_TIEROF(2.42), 2.5, "组249⓪★吸附：2.42 ⇒ 2.5")
+  eq(EVAL_MW_TEST_TIEROF(3.0), nil, "组249⓪★★反向哨兵：3.0 离三档都超过容差 ⇒ **如实不学**（绝不硬套成 2.5）")
+  -- ① 3 只同名 2.0s 怪（相位 0/0.667/1.333 ⇒ 每 0.667 一条）：名字口径只有 1，估算必须到 3
+  newFight249()
+  for i = 0, 5 do feed249(1000 + i * 0.6667, "峭壁野猪击中你造成4点伤害。") end
+  eq(EVAL_MW_TEST_COUNT(W249, 1003.3335), 1, "组249①★★名字口径只有 1（3 只同名怪 = 1 个键 —— 用户说的「不灵敏」）")
+  eq(EVAL_MW_TEST_EST(W249, 1003.3335).n, 6, "组249①前置：4s 窗口内 6 条挥击")
+  eq(EVAL_MW_TEST_EST(W249, 1003.3335).est, 3, "组249①★★★估算 = 3（反推档位 2.0 ⇒ 6×2÷4）")
+  eq(EVAL_MW_TEST_IVL("峭壁野猪"), nil, "组249①★★多只窗口**绝不**参与自学习（学到的是 I/怪数 = 0.667s）")
+  eq(EVAL_MW_ACTIVE_N(), 3, "组249①★★★唯一计算入口 = max(名字1, 估算3) = 3")
+  -- ①b 单只 2.0s 怪（可证单只）⇒ 恰好 1 只 + 学到档位 2.0
+  newFight249()
+  for i = 0, 2 do feed249(1000 + i * 2, "峭壁野猪击中你造成4点伤害。") end
+  eq(EVAL_MW_TEST_EST(W249, 1004).n, 3, "组249①b前置：窗口内 3 条（最老的正好 4.0s）")
+  eq(EVAL_MW_TEST_EST(W249, 1004).est, 1, "组249①b★★★最小间隔 2.0 ≥1.4 ⇒ 可证**只有 1 只**（定理，不是估计）")
+  eq(EVAL_MW_ACTIVE_N(), 1, "组249①b★★★读值口也 = 1 —— 独苗永远不会被算成群殴")
+  eq(EVAL_MW_TEST_IVL("峭壁野猪"), 2.0, "组249①b★★自学习：吸附到档位 2.0（实测 " .. tostring(EVAL_MW_TEST_IVL("峭壁野猪")) .. "）")
+  -- ①c 单只 2.5s 怪（4s 窗口里只有 2 条，也够学）⇒ 1 只 + 学到 2.5
+  newFight249()
+  feed249(1600, "厚皮野猪击中你造成4点伤害。")
+  feed249(1602.5, "厚皮野猪击中你造成4点伤害。")
+  eq(EVAL_MW_TEST_EST(W249, 1602.5).n, 2, "组249①c前置：慢速怪在 4s 窗口里只有 2 条（所以「学」不能要求 3 条以上）")
+  eq(EVAL_MW_TEST_EST(W249, 1602.5).est, 1, "组249①c★★单只 2.5s 怪 ⇒ 1 只（★这一档在 4s 窗口内永远只出现 2 条）")
+  eq(EVAL_MW_TEST_IVL("厚皮野猪"), 2.5, "组249①c★★自学习：2 条也学得到，吸附到 2.5（实测 " .. tostring(EVAL_MW_TEST_IVL("厚皮野猪")) .. "）")
+  -- ①d 2 只同名 2.5s 怪（相位 0/1.25 ⇒ 间隔 1.25 ≤1.3）⇒ 名字 1、估算 2（「更灵敏」的关键一档）
+  newFight249()
+  for i = 0, 3 do feed249(1700 + i * 1.25, "厚皮野猪击中你造成4点伤害。") end
+  eq(EVAL_MW_TEST_COUNT(W249, 1703.75), 1, "组249①d前置：2 只同名怪 ⇒ 名字口径仍只有 1")
+  eq(EVAL_MW_TEST_EST(W249, 1703.75).est, 2, "组249①d★★★间隔 1.25 ≤1.3 ⇒ 至少 2 只；学到档位 2.5 ⇒ 估算 = 2")
+  eq(EVAL_MW_ACTIVE_N(), 2, "组249①d★★★读值口 = 2（这一档以前会被算成名字数 1）")
+  eq(EVAL_MW_TEST_IVL("厚皮野猪"), 2.5, "组249①d★★★自学习不被多只窗口污染：档位仍是 2.5（若在这里学，中位间隔 1.25 会吸附成 1.5）")
+  -- ①e 单只 1.5s 快怪 ⇒ 学到 1.5；随后打它的**同类怪群**才算得准（这正是用户说的「同类怪」）
+  newFight249()
+  for i = 0, 2 do feed249(1900 + i * 1.5, "迅猛龙击中你造成4点伤害。") end
+  eq(EVAL_MW_TEST_EST(W249, 1903).est, 1, "组249①e前置：单只 1.5s 快怪 ⇒ 1 只")
+  eq(EVAL_MW_TEST_IVL("迅猛龙"), 1.5, "组249①e★★自学习：吸附到 1.5（实测 " .. tostring(EVAL_MW_TEST_IVL("迅猛龙")) .. "）")
+  newFight249()
+  for i = 0, 7 do feed249(2000 + i * 0.5, "迅猛龙击中你造成4点伤害。") end
+  eq(EVAL_MW_TEST_COUNT(W249, 2003.5), 1, "组249①e前置：8 条全是同名（名字口径仍只有 1）")
+  eq(EVAL_MW_TEST_EST(W249, 2003.5).est, 3, "组249①e★★★学到的档位立刻生效：8×1.5÷4 ⇒ 3 只（照默认 2.0 会算成 4）")
+  -- ② 我打怪（out 通道）绝不进估算窗口
+  local nB249 = EVAL_MW_TEST_EST(W249, 2003.5).n
+  for i = 0, 2 do feed249(2003.5 + i * 0.2, "你击中峭壁野猪造成15点伤害。", SELF249) end
+  eq(EVAL_MW_TEST_EST(W249, 2003.5).n, nB249, "组249②★★我打怪一条都不进估算窗口（进了就是把「我在打它」算成「它在打我」）")
+  eq(EVAL_MW_TEST_EST(W249, 2003.5).est, 3, "组249②★估算也没被我自己的挥击抬高")
+  -- ③ 离开战斗重置（用户：「离开战斗重置」）+ 非战斗恒 0
+  TEST.inCombat = false
+  feed249(2005, "你击中峭壁野猪造成15点伤害。", SELF249) -- 触发脱战同步
+  eq(EVAL_MW_ACTIVE_N(), 0, "组249③★★★非战斗 ⇒ 读值口恒 0（用户口径：非战斗不统计）")
+  eq(EVAL_MW_TEST_EST(W249, 2005).n, 0, "组249③★★★离开战斗重置：挥击时间环清空（窗口内 0 条，不拿上一场残留冒充现状）")
+  eq(EVAL_MW_TEST_COUNT(W249, 2005), 0, "组249③★★★离开战斗重置：攻击者桶也清空")
+  eq(EVAL_MW_TEST_IVL("峭壁野猪") ~= nil, true, "组249③★★反向哨兵：学到的**攻速档位**跨战斗保留（那是知识，不是本场计数）")
+  eq(type(EVAL_MW_TEST_LASTSUM()) == "string", true, "组249③★★脱战时留了一行「上一场快照」（否则报告只剩 0 只，真机取证被重置吃掉）：" .. tostring(EVAL_MW_TEST_LASTSUM()))
+  -- ④ 封顶：30 条挤在 1.45s 内 ⇒ 窗口法算出 15，取上限
+  newFight249()
+  for i = 0, 29 do feed249(2200 + i * 0.05, "峭壁野猪击中你造成4点伤害。") end
+  eq(EVAL_MW_TEST_EST(W249, 2201.5).n, 30, "组249④前置：30 条挥击挤在 1.45s 内")
+  eq(EVAL_MW_TEST_EST(W249, 2201.5).est, 8, "组249④★★封顶 8（算出 15 ⇒ 取上限；这个数会驱逐一键宏，宁保守）")
+  -- ⑤ 三个不同名字各 1 条 ⇒ 3（每个名字至少 1 只；估算天然 ≥ 名字数）
+  newFight249()
+  feed249(2300, "峭壁野猪击中你造成4点伤害。")
+  feed249(2300.2, "厚皮野猪击中你造成4点伤害。")
+  feed249(2300.4, "迅猛龙击中你造成4点伤害。")
+  eq(EVAL_MW_TEST_COUNT(W249, 2300.4), 3, "组249⑤前置：三个不同名字")
+  eq(EVAL_MW_TEST_EST(W249, 2300.4).est, 3, "组249⑤★★每个名字至少算 1 只 ⇒ 估算 = 3（不比旧口径低）")
+  eq(EVAL_MW_ACTIVE_N(), 3, "组249⑤★★终值 = 3（名字口径的 3 只一只不少）")
+  local savedEst249 = EVAL_MW_EST_N
+  EVAL_MW_EST_N = function() return 0, 0, 0 end
+  local fin249, nmN249, estN249 = EVAL_MW_ACTIVE_INFO()
+  eq(fin249, 3, "组249⑤★★★取**最大**值：把估算腿压成 0 后终值仍 = 名字数 3（不是取小值）")
+  eq(nmN249, 3, "组249⑤★名字腿 = 3（夹具只动估算腿）")
+  eq(estN249, 0, "组249⑤★估算腿 = 0（夹具自证真的生效了）")
+  EVAL_MW_EST_N = savedEst249
+  pcall(EVAL_HELP_UPDATE_STATE) -- 还原后把全局战斗数据刷回来（后面几条读真值）
+  -- ⑥ 认不出名字的挥击**照样**进估算（它确实是一次挥击）
+  local n6 = EVAL_MW_TEST_EST(W249, 2300.4).n
+  local miss6 = EVAL_MW_TEST_STATE().missN
+  feed249(2300.6, "你被什么东西撞了一下。")
+  eq(EVAL_MW_TEST_STATE().missN >= miss6, true, "组249⑥★认不出的挥击照旧留证（miss 计数不减少）")
+  eq(EVAL_MW_TEST_EST(W249, 2300.6).n, n6 + 1, "组249⑥★★认不出的挥击**照样进估算窗口**（名字认不出与「这次挥击没发生」是两件事）")
+  -- ⑦ 幽灵名修复（真机存档 ③ 段出现过「峭壁野猪没有」这个假攻击者）
+  eq(EVAL_MELEE_ATTACKER("峭壁野猪没有击中你。"), "峭壁野猪", "组249⑦★★★幽灵名修复：未命中的名字 = 「峭壁野猪」，不是「峭壁野猪没有」")
+  eq(EVAL_MELEE_ATTACKER("峭壁野猪击中你造成4点伤害。"), "峭壁野猪", "组249⑦★命中形态不受影响（反向哨兵）")
+  newFight249()
+  feed249(1000, "峭壁野猪击中你造成4点伤害。")
+  feed249(1000.5, "峭壁野猪没有击中你。")
+  eq(EVAL_MW_TEST_COUNT(W249, 1000.5), 1, "组249⑦★★修复后同一只怪（命中+未命中）在桶里仍是 1 个名字（修复前是 2 ⇒ 围攻数虚高 1）")
+  local names7, list7 = {}, EVAL_MW_ATTACKERS(W249, 1000.5)
+  for i = 1, table.getn(list7) do names7[list7[i].nm] = true end
+  eq(names7["峭壁野猪没有"] == nil, true, "组249⑦★★桶里没有假名字「峭壁野猪没有」")
+  eq(names7["峭壁野猪"] == true, true, "组249⑦★桶里是「峭壁野猪」")
+  -- ⑧ 时间环有界（灌 100 条 ⇒ 正好停在 64）
+  newFight249()
+  for i = 0, 99 do feed249(3000 + i * 0.05, "峭壁野猪击中你造成4点伤害。") end
+  eq(EVAL_MW_TEST_EST(W249, 3005).hitsN, 64, "组249⑧★★挥击时间环封顶 64 条（灌 100 条后正好 64：有界，绝不无界增长）")
+  -- ⑨ 自学习是**持续监测 + 及时更新**（用户：自学习成功的怪不是一直保持不变），未学习的怪默认 2.0
+  local DEFAULT_I = select(1, EVAL_MW_TEST_ESTI())
+  eq(DEFAULT_I, 2.0, "组249⑨★★未学习的怪攻速默认 2.0（读值口现取：" .. tostring(DEFAULT_I) .. "）")
+  newFight249()
+  for i = 0, 2 do feed249(4000 + i * 2, "灰狼击中你造成4点伤害。") end
+  eq(EVAL_MW_TEST_IVL("灰狼"), 2.0, "组249⑨★首次学到 2.0（可证单只窗口）")
+  eq(EVAL_MW_TEST_IVLN("灰狼"), 1, "组249⑨★更新次数 = 1（首次学到算一次）")
+  -- 同名怪出现 1.5s 的**单只**样本 ⇒ 必须覆盖更新（用户：「不是一直保持不变，要及时学习更新」）
+  newFight249()
+  for i = 0, 2 do feed249(4100 + i * 1.5, "灰狼击中你造成4点伤害。") end
+  eq(EVAL_MW_TEST_IVL("灰狼"), 1.5, "组249⑨★★★已学过的名字被新样本**覆盖**：2.0 → 1.5（不冻结）")
+  eq(EVAL_MW_TEST_IVLN("灰狼"), 2, "组249⑨★★更新次数 = 2")
+  eq((EVAL_MW_TEST_IVLSEEN("灰狼") or 0) >= 2, true, "组249⑨★★监测计数 ≥2（★档位没变也在盯：「确认单只」的次数）")
+  -- 再出现 2.5s 的单只样本 ⇒ 再更新
+  newFight249()
+  feed249(4200, "灰狼击中你造成4点伤害。")
+  feed249(4202.5, "灰狼击中你造成4点伤害。")
+  eq(EVAL_MW_TEST_IVL("灰狼"), 2.5, "组249⑨★★★再更新：1.5 → 2.5（每次都覆盖；2 条样本也够）")
+  eq(EVAL_MW_TEST_IVLN("灰狼"), 3, "组249⑨★★更新次数 = 3")
+  local log9 = EVAL_MW_TEST_IVLLOG()
+  eq(table.getn(log9) >= 3, true, "组249⑨★★档位变更日志记下了这 3 次（实际的 " .. tostring(table.getn(log9)) .. " 条）")
+  eq(string.find(tostring(log9[table.getn(log9)]), "1.5s→2.5s", 1, true) ~= nil, true, "组249⑨★★日志末条 = 「1.5s→2.5s」：" .. tostring(log9[table.getn(log9)]))
+  -- 没学到档位的名字（多只窗口 + 样本不够反推）⇒ 明细里如实标 src=default 且 I=2.0
+  newFight249()
+  feed249(4300, "暗影狼击中你造成4点伤害。")
+  feed249(4300.5, "暗影狼击中你造成4点伤害。")
+  local det9 = EVAL_MW_TEST_DETAIL(W249, 4300.5)
+  eq(table.getn(det9), 1, "组249⑨前置：明细只有 1 个名字分组")
+  eq(det9[1].src, "default", "组249⑨★★没学到档位的名字 ⇒ src=default（★不硬套某一档）")
+  eq(det9[1].I, 2.0, "组249⑨★★★未学习的怪攻速默认 2.0（实测用到 " .. tostring(det9[1].I) .. "）")
+  eq(det9[1].N, 2, "组249⑨★两条 0.5s 内的挥击（间隔 ≤1.3）⇒ 至少 2 只")
+  eq(EVAL_MW_TEST_EST(W249, 4300.5).est, 2, "组249⑨★★明细求和 = 估算总数（读值口与生产**同一份实现**，不是复刻）")
+  eq(EVAL_MW_TEST_IVL("暗影狼"), nil, "组249⑨★★反向哨兵：多只窗口**不学** ⇒ 暗影狼仍无档位")
+  print("  围攻估算 v2：4s 窗口 · 档位 1.5/2.0/2.5 · 单只可证(间隔≥1.4) · 多只取大 · 与名字数取大 · 自学习持续更新 · 未学默认 2.0 · 封顶 8")
+  TEST.inCombat = savedIC249
+  TEST.time = savedT249
+  pcall(EVAL_MW_TEST_RESET)
+  pcall(EVAL_MW_STOP)
+  if fails249 == TESTASSERT_FAILS then
+    print("GROUP 249 (被围攻估算 v2：4s 窗口 · 攻速定档吸附 + 可证单只/多只 · 自学习持续监测并及时更新 · 未学默认2.0 · 与名字数取大 · 离开战斗重置 · 环有界 · 幽灵名修复): PASS")
+  end
+end
+
+-- ===== 组 250（1.75.12）：选取目标**调用点取证**（每次真调客户端选取函数都记一条）=====
+--   用户报障（1.75.11）：「选取目标:最近敌人 + 冲锋：选中一个**死亡**目标后按键，某些时候会在另一个目标
+--     和死亡目标之间来回切换、无限循环；而且**没按键时目标也会跳**」。
+--   ⇒ 静态审计已证明插件里**没有定时器**会切目标（两条 0.15s 心跳全走 dry）⇒ 唯一能定案的是**读调用点**：
+--     ① 每次调用记「谁调的 + 前 ⇒ 后 目标快照（名字/血量%/是否尸体）+ 第几发按键轮」；
+--     ② 另配「接受发数 / 被去抖丢弃发数」两条腿 ⇒ 区分**队列余震**（接受多、丢弃少、间隔≈冲刷节奏）
+--        与**键连发**（丢弃多）。
+--   判据（一律走读值口 EVAL_TSEL_PROBE，**不解析中文文本**；行为 + 有界 + 残渣键）：
+do
+  local fails250 = TESTASSERT_FAILS
+  local savedProbe250 = EVAL_HELP_CONFIG.selProbe
+  local savedT250, savedHas250, savedNm250, savedDead250 = TEST.time, TEST.hasTarget, TEST.curTargetName, TEST.targetDead
+  local savedW250, savedAct250 = EVAL_HELP_CONFIG.war.profiles, EVAL_HELP_CONFIG.war.activeProfile
+  local savedDeb250, savedGOL250 = EVAL_HELP_CONFIG.goDebounce, EVAL_GO_LAST
+
+  eq(type(EVAL_TSEL_PROBE), "function", "组250①前置：读值口 EVAL_TSEL_PROBE 存在（命令与断言共用同一份）")
+  EVAL_HELP_CONFIG.selProbe = { out = {} }
+  TEST.hasTarget, TEST.curTargetName, TEST.targetDead = true, "测试怪甲", false
+  TEST.time = 5000
+  pcall(EVAL_HELP_UPDATE_STATE)
+  local pBase = EVAL_TSEL_PROBE()
+  eq(pBase.lines, 0, "组250①前置：取证环已清空（从 0 行开始数）")
+
+  -- ① 技能行：真执行一次 ⇒ 记一条（谁调的 + 函数名 + 前后快照）
+  local okW250 = EVAL_TEST_WUSE("选取目标:最近敌人")
+  local pW = EVAL_TSEL_PROBE()
+  eq(okW250, true, "组250②前置：技能行选取目标执行成功（走真实技能级入口）")
+  eq(pW.seq, pBase.seq + 1, "组250②★★ 真调一次 ⇒ 累计调用号恰好 +1（唯一调用口：不漏记也不重复记）")
+  eq(pW.lines > pBase.lines, true, "组250②★ 环里真的多了一条")
+  eq(string.find(tostring(pW.last), "技能行:选取目标:最近敌人", 1, true) ~= nil, true,
+    "组250②★★★ 那条写清了**谁调的**（技能行:<技能名>）：" .. tostring(pW.last))
+  eq(string.find(tostring(pW.last), "TargetNearestEnemy", 1, true) ~= nil, true, "组250②★ 记了真实客户端函数名")
+  eq(string.find(tostring(pW.last), "(血", 1, true) ~= nil, true,
+    "组250②★★ 目标快照带血量%（同名怪只能靠它区分）：" .. tostring(pW.last))
+  eq(string.find(tostring(pW.last), "⇒", 1, true) ~= nil, true, "组250②★★ 记了调用**前 ⇒ 后**两个快照（切没切一眼可判）")
+
+  -- ② dry（战斗信息UI 每 0.15s 的预览求值）**不调也不记**
+  local pA = EVAL_TSEL_PROBE()
+  eq(EVAL_COND_EVAL({ k = "target", s = "nearEnemy" }), true, "组250③前置：dry 求值同样恒真（副作用条件）")
+  local pB = EVAL_TSEL_PROBE()
+  eq(pB.seq, pA.seq, "组250③★★★ dry 预览**一次都不调**（seq 不变）")
+  eq(pB.lines, pA.lines, "组250③★ dry 也不写环（行数不变）")
+
+  -- ③ 条件形态：标签与技能行**区分开**（条件:<所属技能行>）
+  eq(EVAL_TEST_COND_EVAL_LIVE({ k = "target", s = "nearEnemy" }, { skill = "组250行", groups = {} }), true,
+    "组250④前置：条件形态执行成功（走真实条件级入口）")
+  local pC = EVAL_TSEL_PROBE()
+  eq(pC.seq, pB.seq + 1, "组250④★★ 条件形态也记账（同一口径，不另立一份实现）")
+  eq(string.find(tostring(pC.last), "条件:组250行", 1, true) ~= nil, true,
+    "组250④★★★ 条件形态的标签是「条件:<所属行>」（与技能行分得清）：" .. tostring(pC.last))
+
+  -- ④ 按键轮号：真跑一次 EVAL_GO（方案里只有这条选取目标）⇒ 那一发带 p<N>，不是 p-
+  EVAL_HELP_CONFIG.war.profiles = { { name = "组250", skills = { { skill = "选取目标:最近敌人", enabled = true, groups = {} } } } }
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  EVAL_HELP_CONFIG.goDebounce = 0
+  EVAL_GO_LAST = 0
+  EVAL_GO()
+  local pGo = EVAL_TSEL_PROBE()
+  eq(pGo.acc >= 1, true, "组250⑤前置：这一发被算作「接受」（acc ≥ 1）")
+  eq(string.find(tostring(pGo.last), " p" .. tostring(pGo.pass) .. " ", 1, true) ~= nil, true,
+    "组250⑤★★★ 按键那一轮里的调用带**轮号** p<N>（同一发里的多次调用同号）：" .. tostring(pGo.last))
+
+  -- ⑤ 去抖丢弃也是证据（「键连发 vs 队列余震」的另一条腿）
+  EVAL_HELP_CONFIG.goDebounce = 5
+  EVAL_GO_LAST = 0
+  EVAL_GO() -- 距 0 → 5000s，不在窗里 ⇒ 接受
+  local pS1 = EVAL_TSEL_PROBE()
+  EVAL_GO() -- 同一时刻再按 ⇒ 落在 5s 窗里 ⇒ 丢弃
+  local pS2 = EVAL_TSEL_PROBE()
+  eq(pS2.skip, pS1.skip + 1, "组250⑥★★ 被去抖丢弃的那一发也记账（skip +1）")
+  eq(pS2.acc, pS1.acc, "组250⑥★ 丢弃**不算接受**（acc 不变）")
+
+  -- ⑥ 有界：再灌 60 次 ⇒ 环停在 40 行（绝不无界增长撑爆 SavedVariables）
+  for _ = 1, 60 do pcall(EVAL_TEST_WUSE, "选取目标:最近敌人") end
+  local pMax = EVAL_TSEL_PROBE()
+  eq(pMax.lines, pMax.max, "组250⑦★★ 环有界：灌满后正好停在 " .. tostring(pMax.max) .. " 行（实测 " .. tostring(pMax.lines) .. "）")
+  eq(pMax.seq, pS2.seq + 60, "组250⑦★★ 累计调用号 = 丢弃后的计数 + 60（读值口与记账同源，不是各算一遍）")
+
+  -- ⑦ 残渣键登记：调试产物必须进清单（否则 /eh 存档清理 清不掉它）
+  local hasRes250 = false
+  for _, k in ipairs(EVAL_LOAD_RESIDUE_KEYS()) do if k == "selProbe" then hasRes250 = true end end
+  eq(hasRes250, true, "组250⑧★★★ cfg.selProbe 在 Core 的调试残渣键清单里（可被 /eh 存档清理 清掉）")
+
+  print("  选取目标取证：唯一调用口 tselInvoke · 技能行/条件两种标签 · 前后快照(名+血%+尸体) · 按键轮号 p<N> · 接受/丢弃两条腿 · 有界 40 行")
+  -- 还原（测试替换全局必须还原）
+  EVAL_HELP_CONFIG.selProbe = savedProbe250
+  EVAL_HELP_CONFIG.war.profiles, EVAL_HELP_CONFIG.war.activeProfile = savedW250, savedAct250
+  EVAL_HELP_CONFIG.goDebounce, EVAL_GO_LAST = savedDeb250, savedGOL250
+  TEST.time, TEST.hasTarget, TEST.curTargetName, TEST.targetDead = savedT250, savedHas250, savedNm250, savedDead250
+  pcall(EVAL_HELP_UPDATE_STATE)
+  if fails250 == TESTASSERT_FAILS then
+    print("GROUP 250 (选取目标调用点取证：唯一调用口 · 技能行/条件标签 · 前后目标快照 · dry 不调不记 · 按键轮号 · 接受/丢弃两条腿 · 有界 40 行 · 残渣键): PASS")
+  end
+end
+
+-- ===== 组 251（1.75.12）：补自动攻击的**目标守卫 + 挪到规则之后**（用户报障的修复）=====
+--   用户报障（1.75.12）：「选取目标:最近敌人 + 冲锋：目标是尸体时按键，目标在尸体与活怪之间无限来回跳」，
+--   并**已确认是「自动攻击」这一支**（关掉它就不跳）。
+--   根因（两条，缺一不可）：
+--     ① 旧版**不看目标能不能打**：只看「攻击格当前没在自动攻击」+ 2 秒节流 ⇒ 目标是尸体也照按；
+--        而本客户端的「攻击」= `AttackTarget()` **会顺带切目标**（官方文档只写 Toggles，实测会切）；
+--     ② 旧版位置在**规则之前**（"先调用"）⇒ 每一发成了「先被它把目标切走 → 再被 选取目标 切回来」。
+--   修法：挪到规则评估之后（`if acted then return end` 之前）+ **只在目标真的能打时**才按（实时 API 判定）。
+--   判据（真实入口 EVAL_GO + 桩夹具；`[攻击]` 行与规则出手行的**先后**看调试日志环）：
+--   ★夹具为什么用**注入 EVAL_WSLOTS** 而不是 EVAL_GO_RESCAN：动作条扫描依赖自建 tooltip 的 `SetAction`，
+--     而本文件跑到末尾时那套方法已被前面的用例折腾掉（实测 `WTT.SetAction=nil` ⇒ 扫描必空 ⇒ wslots 恒空）。
+--     晚出现的组要 wslots 就**显式注入**（EVAL_WSLOTS 与引擎的 wslots 是同一张表，1.46.0 注释已说明）。
+do
+  local fails251 = TESTASSERT_FAILS
+  local savedW251 = EVAL_HELP_CONFIG.war.profiles
+  local savedAct251 = EVAL_HELP_CONFIG.war.activeProfile
+  local savedAtk251 = EVAL_HELP_CONFIG.war.attack
+  local savedEn251 = EVAL_HELP_CONFIG.war.enabled
+  local savedDeb251 = EVAL_HELP_CONFIG.goDebounce
+  local savedLog251 = EVAL_HELP_CONFIG.log
+  local savedT251, savedHas251, savedNm251, savedDead251 = TEST.time, TEST.hasTarget, TEST.curTargetName, TEST.targetDead
+  local savedCur251 = TEST.currentAction
+  local savedAtkSlot251 = EVAL_WSLOTS and EVAL_WSLOTS["攻击"]
+  local savedSkillSlot251 = EVAL_WSLOTS and EVAL_WSLOTS["致死打击"]
+
+  -- 夹具：第 1 格「致死打击」（规则出手用）+ 第 2 格「攻击」（补自动攻击用）；★不走扫描，直接注入
+  if EVAL_WSLOTS then
+    EVAL_WSLOTS["致死打击"] = { slot = 1, tex = "tex1" }
+    EVAL_WSLOTS["攻击"] = { slot = 2, tex = "tex2" }
+    EVAL_WSLOTS["自动射击"] = nil
+    EVAL_WSLOTS["射击"] = nil
+  end
+  EVAL_HELP_CONFIG.war.profiles = { { name = "组251", skills = { { skill = "致死打击", enabled = true, why = "组251", groups = {} } } } }
+  EVAL_HELP_CONFIG.war.activeProfile = 1
+  EVAL_HELP_CONFIG.war.attack = true
+  EVAL_HELP_CONFIG.war.enabled = true -- ★显式前置：别的一键宏用例可能把总开关关掉过（关掉 ⇒ EVAL_GO 直接 return，守卫测不到）
+  EVAL_HELP_CONFIG.goDebounce = 0
+  TEST.currentAction = nil  -- ★显式前置：当前**没在**自动攻击 ⇒ 本发才该补
+  TEST.curTargetName = "测试怪甲"
+  local t251 = (tonumber(TEST.time) or 1000) + 1000000 -- ★时间基准：必须**远大于**更早用例用过的任何 GetTime（2 秒节流，wLastAttackTry 是 Engine local，测试清不掉）
+  eq(EVAL_WSLOTS["攻击"] ~= nil, true, "组251①前置：夹具里**攻击格存在**（否则①②必然通过 = 假绿：压根没有可按的东西）")
+
+  -- ① 目标是**尸体** ⇒ 一次都不按（这就是用户报障的那个口子）
+  TEST.hasTarget, TEST.targetDead = true, true
+  EVAL_HELP_UPDATE_STATE()
+  TEST.used = {} TEST.attackTried = nil
+  EVAL_GO_LAST = 0
+  TEST.time = t251 + 0
+  EVAL_GO()
+  eq(TEST.attackTried, nil, "组251①★★★目标是**尸体** ⇒ 补自动攻击一次都不按（用户报障的根因）")
+  local usedAtk251a = false
+  for _, u in ipairs(TEST.used or {}) do if u == 2 then usedAtk251a = true end end
+  eq(usedAtk251a, false, "组251①★尸体时连攻击格都不点（UseAction 也没发）")
+
+  -- ② **没有目标** ⇒ 一次都不按
+  TEST.hasTarget, TEST.targetDead = false, false
+  EVAL_HELP_UPDATE_STATE()
+  TEST.used = {} TEST.attackTried = nil
+  EVAL_GO_LAST = 0
+  TEST.time = t251 + 3000
+  EVAL_GO()
+  eq(TEST.attackTried, nil, "组251②★★★没有目标 ⇒ 不按（旧版照按，正是抢目标的入口）")
+
+  -- ③ **目标可攻击** ⇒ 会按；而且 `[攻击]` 行必须**排在规则那条出手行之后**（顺序即判据）
+  TEST.hasTarget, TEST.targetDead = true, false
+  EVAL_HELP_UPDATE_STATE()
+  TEST.used = {} TEST.attackTried = nil
+  EVAL_HELP_CONFIG.log = {}
+  EVAL_GO_LAST = 0
+  TEST.time = t251 + 6000
+  EVAL_GO()
+  eq(TEST.attackTried, true, "组251③★★ 目标可攻击 ⇒ 真的补了自动攻击（修完不能把功能修没）")
+  local idxSkill251, idxAtk251 = nil, nil
+  for i, l in ipairs(EVAL_HELP_CONFIG.log or {}) do
+    local s251 = tostring(l)
+    if string.find(s251, "→ 致死打击", 1, true) ~= nil then idxSkill251 = i end
+    if string.find(s251, "[攻击]", 1, true) ~= nil then idxAtk251 = i end
+  end
+  eq(idxSkill251 ~= nil, true, "组251③前置：这一发规则真的出手了（日志里有出手行）")
+  eq(idxAtk251 ~= nil, true, "组251③★ 日志里有 `[攻击]` 取证行（含按前 ⇒ 按后的目标快照）")
+  eq(idxSkill251 ~= nil and idxAtk251 ~= nil and idxSkill251 < idxAtk251, true,
+    "组251③★★★【顺序】`[攻击]` 行排在规则出手行**之后**（旧版在之前 ⇒ 会抢在选取目标之前切目标）")
+
+  -- ④ 反向哨兵：关掉「自动攻击」开关 ⇒ 可攻击也不按
+  EVAL_HELP_CONFIG.war.attack = false
+  TEST.used = {} TEST.attackTried = nil
+  EVAL_GO_LAST = 0
+  TEST.time = t251 + 9000
+  EVAL_GO()
+  eq(TEST.attackTried, nil, "组251④★反向哨兵：关掉「自动攻击」开关 ⇒ 可攻击也不按（开关仍然有效）")
+
+  -- ⑤ 判据读的是**实时 API**、不是过期的 `st`：夹具换成尸体但**不刷新状态表**
+  --    （st 里还留着上一轮"可攻击"）⇒ 仍然不按。★这条钉住「读真值，不读缓存」。
+  EVAL_HELP_CONFIG.war.attack = true
+  TEST.hasTarget, TEST.targetDead = true, true -- 桩目标已变尸体
+  -- ★故意**不**调 EVAL_HELP_UPDATE_STATE()：st.canAttack 仍是上一轮的 true
+  eq(EVAL_HELP_STATE.canAttack == true, true, "组251⑤前置：状态表里的 canAttack 仍是**过期的 true**（夹具就是要它过期）")
+  TEST.used = {} TEST.attackTried = nil
+  EVAL_GO_LAST = 0
+  TEST.time = t251 + 12000
+  EVAL_GO()
+  eq(TEST.attackTried, nil, "组251⑤★★★用的是**实时 API**（UnitIsDeadOrGhost）而不是过期的 st.canAttack ⇒ 仍然不按")
+
+  print("  补自动攻击：目标守卫（尸体/无目标/不可攻击一律不按）· 挪到规则之后（[攻击] 行在出手行之后）· 实时 API 判定 · 开关仍有效")
+  -- 还原（测试替换全局必须还原）
+  if EVAL_WSLOTS then
+    EVAL_WSLOTS["致死打击"], EVAL_WSLOTS["攻击"] = savedSkillSlot251, savedAtkSlot251
+    EVAL_WSLOTS["自动射击"], EVAL_WSLOTS["射击"] = nil, nil
+  end
+  EVAL_HELP_CONFIG.war.profiles, EVAL_HELP_CONFIG.war.activeProfile = savedW251, savedAct251
+  EVAL_HELP_CONFIG.war.attack, EVAL_HELP_CONFIG.goDebounce = savedAtk251, savedDeb251
+  EVAL_HELP_CONFIG.war.enabled, TEST.currentAction = savedEn251, savedCur251
+  EVAL_HELP_CONFIG.log = savedLog251
+  TEST.time, TEST.hasTarget, TEST.curTargetName, TEST.targetDead = savedT251, savedHas251, savedNm251, savedDead251
+  pcall(EVAL_HELP_UPDATE_STATE)
+  if fails251 == TESTASSERT_FAILS then
+    print("GROUP 251 (补自动攻击：目标守卫(尸体/无目标/不可攻击不按) · 挪到规则之后(顺序即判据) · 实时 API 而非过期 st · 开关仍有效): PASS")
+  end
 end
 
 print("ALL TESTS PASS")

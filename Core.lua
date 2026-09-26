@@ -524,6 +524,31 @@ function EVAL_HELP_UPDATE_STATE()
     st.combatTime = 0
   end
 
+  -- ★★★1.75.11 被围攻 / 交战（用户口径：「围攻数量归入战斗数据全局可被使用,不多个地方各自计算」）
+  --   就在这里**只算一次**写进状态表；条件（Engine 的 condOne）与两个 UI（战斗UI / 状态UI）**一律读 st**：
+  --     · st.mwSiege   = 终值（取大）= max(名字口径, 估算) —— 条件求值用它
+  --     · st.mwSiegeNm = 名字口径（同名怪合并 ⇒ 3 只「峭壁野猪」只有 1）
+  --     · st.mwSiegeEst= 6s 挥击累加估算（用户：「攻速预估数量的时间区间在6秒内的累加估算就可以」）
+  --     · st.mwEngaged = 10s 内交战过的怪名数
+  --   ★战斗UI 用 Est > Nm 判「这个值是不是估算来的」⇒ 显示成「围攻 ~3只」（用户定的形态）。
+  --   ★非战斗一律 0（Engine 的读值口里就有这道闸门）；Core/Engine 没载入 ⇒ 字段如实按 0，不许假装有数据。
+  --   ★代价如实说：探针的「懒启动」因此等价于**常开**（只挂 14 条候选事件、每条几次表操作，开销极小），
+  --     换来的是「随时可用」——这正是用户要的口径。
+  if type(EVAL_MW_ACTIVE_INFO) == "function" then
+    local okS, fin, nmS, estS = pcall(EVAL_MW_ACTIVE_INFO)
+    if okS then
+      st.mwSiege, st.mwSiegeNm, st.mwSiegeEst = tonumber(fin) or 0, tonumber(nmS) or 0, tonumber(estS) or 0
+    else
+      st.mwSiege, st.mwSiegeNm, st.mwSiegeEst = 0, 0, 0
+    end
+  else
+    st.mwSiege, st.mwSiegeNm, st.mwSiegeEst = 0, 0, 0
+  end
+  local okEng, vEng = pcall(function()
+    return (type(EVAL_MW_ENGAGED_N) == "function") and EVAL_MW_ENGAGED_N() or 0
+  end)
+  st.mwEngaged = okEng and (tonumber(vEng) or 0) or 0
+
   -- 姿态 / 形态：formIndex=0 表示无姿态
   st.formIndex, st.form = 0, nil
   if type(GetShapeshiftFormInfo) == "function" then
@@ -763,6 +788,33 @@ local LOAD_RESIDUE_KEYS = {
   -- ★1.75.2 追踪探针的**专属持久读数**（最近 40 行；存在的理由见 Engine.lua 的 TRK_OUT_MAX 注释：
   --   调试日志环只有 100 条 + `[DS]` 每 ~10 秒一行 ⇒ 探针读数 ~17 分钟就被冲掉，必须另存一份）
   "trkProbe",
+  -- ★1.75.3 宠物家族探针的专属持久读数（最近 40 行，PetHelper.lua 的 PH_FAM_MAX；同样怕被 [DS] 冲掉）
+  "petProbe",
+  -- ★1.75.9 宏图标号探针的专属持久读数（最近 40 行，EvalHelp.lua 的 IDX_OUT_MAX）：
+  --   ★实测教训：`say` **只进聊天框、不落日志环**（say 与 logLine 是两个出口）⇒ 用户跑完命令若只 rely on 存档，
+  --     我这边**一个字节都读不到**；而且存档只在 /reload、小退、退出时落盘 ⇒ 探针必须自带专属读数。
+  "iconIdxProbe",
+  -- ★1.75.10 小地图配置按钮图标的取证读数（最近 12 行，EvalHelp.lua 的 /eh go mbicon）：
+  --   用户报障「插件配置的图标初始使用：现在是黑色的没有图标」——贴图失败是静默的，
+  --   必须自带专属落盘，否则 AI 侧只能靠用户截图猜（同 iconIdxProbe 的教训）。
+  "mbProbe",
+  -- ★1.75.10 选取目标「目标的目标」的取证读数（最近 12 行，EvalHelp.lua 的 `/eh go tsel`）：
+  --   用户问「选取目标:目标的目标 可行性?」——「某 UnitID/API 在本客户端到底行不行」的答案只能真机读，
+  --   而聊天框读数（say）不落日志环 ⇒ 必须自带专属落盘。
+  "tselProbe",
+  -- ★1.75.10 选取目标「玩家的目标」= AssistByName 的取证读数（最近 12 行，EvalHelp.lua 的 `/eh go assist`）：
+  --   官方只承诺「协助**附近**的玩家」，名字不存在/不在附近时**是否清掉当前目标**文档没写 ⇒ 只能真机读；
+  --   而聊天框读数（say）不落日志环 ⇒ 必须自带专属落盘（同 tselProbe/mbProbe 的教训）。
+  "assistProbe",
+  -- 1.75.11 近战围攻探针的取证读数（最近 40 行，Engine.lua 的 MW_OUT_MAX / /eh go melee）：
+  --   用户问战斗中多少只怪同时在近战打我、周围多少只怪 —— 哪条事件真的承载 X 击中你
+  --   只能真机读（官方索引里根本没有 Events 页），而聊天框读数（say）不落日志环，必须自带专属落盘。
+  "meleeProbe",
+  -- ★1.75.12 选取目标**调用点取证**的专属读数（最近 40 行，Engine.lua 的 TSEL_OUT_MAX / `/eh go tsel log`）：
+  --   用户报障「选取目标:最近敌人 + 冲锋：不按键目标也在尸体与活怪之间来回跳」——静态审计证明插件里
+  --   没有定时器切目标 ⇒ 必须读**调用点**才知道调用在不在来（队列余震 vs 键连发）；
+  --   而聊天框读数（say）不落日志环，必须自带专属落盘（同 tselProbe/mbProbe 的教训）。
+  "selProbe",
 }
 
 function EVAL_LOAD_PROBE_KEYS() return LOAD_PROBE_KEYS end

@@ -395,6 +395,42 @@ SH_CH_NO = "当前不在该频道（未加入公会/队伍）",
     PH_EMPTY_LIST = "没有匹配「%s」的宠物技能",
     PH_SCROLL_HINT = "显示 %d-%d / 共 %d 条（滚轮翻页）",
     PH_NO_DS = "任务线 & 装备入口不可用，无法跳转",
+    -- ★1.75.3 宠物家族（家族属性表 + 真机探针）：数据来源 doc/猎人宠物属性和技能图.jpg（转录见 doc/猎人宠物家族属性.md）
+    PH_FAM_TITLE = "===== 宠物家族探针（客户端真值 vs 本表；读不到就如实说，认不出就报原文）=====",
+    PH_FAM_U_FMT = "%s：存在=%s ｜ 名字=%s ｜ 家族原文=%s ｜ 类型=%s",
+    PH_FAM_U_MATCH_FMT = "　→ 本表家族：%s（%s）",
+    PH_FAM_U_UNKNOWN = "　→ 本表**认不出**这个家族名（原文已如实记录，绝不猜）",
+    PH_FAM_U_WHY_FMT = "　→ 读不到家族的原因：%s",
+    PH_FAM_U_ABSENT = "　→ 该单位不存在（没宠物 / 没选目标）——这一次读不到**不等于**没有家族信息",
+    PH_FAM_W_NOAPI = "本客户端没有这个接口（如实缺席）",
+    PH_FAM_W_EMPTY = "客户端返回空（nil 或空串）",
+    PH_FAM_W_ERROR = "调用抛错",
+    PH_FAM_W_NOTSTR = "返回的不是字符串（原文见上）",
+    PH_FAM_FOOD_FMT = "③ 宠物食谱（GetPetFoodTypes）：%s",
+    PH_FAM_SAVED_FMT = "读数已落存档 cfg.petProbe（上限 %d 行 ｜ 现有 %d 行）",
+    PH_FAM_NOSTATS = "本表未收录该家族的属性（如实说明，不显示成 0）",
+    PH_FAM_TBL_TITLE_FMT = "===== 家族属性表（%d 条 · 来源 doc/猎人宠物家族属性.md）=====",
+    PH_FAM_SAVE_TITLE_FMT = "===== 宠物家族探针 · 专属读数（存档 petProbe ｜ 上限 %d 行 ｜ 现有 %d 行）=====",
+    PH_FAM_CLEARED = "宠物家族探针：专属读数已清空",
+    PH_FAM_USAGE = "用法：/eh go 宠物家族（读一次）｜ 宠物家族 表 ｜ 宠物家族 存档 ｜ 宠物家族 清（别名 /eh pet fam）",
+    PH_FAM_CHATOFF = "（「调试日志」关着 ⇒ 探针报告只落了存档 cfg.petProbe，聊天框看不到；/eh log 可开回来）",
+    PH_FAM_SEP = " ｜ ",
+    PH_FAM_SEG_FMT = "%s %s",
+    PH_FAM_HEAD_FMT = "%s：",
+    PH_FAM_K_DMG = "伤害",
+    PH_FAM_K_ARM = "护甲",
+    PH_FAM_K_HP = "生命",
+    PH_FAM_K_FOOD = "食物",
+    PH_FAM_K_SK1 = "伤害技",
+    PH_FAM_K_SK2 = "加速技",
+    PH_FAM_K_SK3 = "特殊技",
+    PH_FAM_NONE = "—",
+    PH_FAM_UNIT_PET = "宠物（pet）",
+    PH_FAM_UNIT_TGT = "目标（target）",
+    -- ★1.75.3 家族图标 tooltip（技能详情页宠物列表 → 悬停家族图标）：内容唯一来源 = EVAL_PH_FAM_TIP_LINES
+    PH_FAM_TIP_HEAD = "%s（等级 %s · %s）",
+    PH_FAM_TIP_FAM = "家族：%s（%s）",
+    PH_FAM_TIP_SRC = "数据来源：家族属性表（/eh go 宠物家族 表 可摊开全部 17 条）",
   IB_G_ALL = "全部",
   IB_G_LOCAL = "本插件在用",
   IB_G_FIRE = "火焰", IB_G_FROST = "冰霜", IB_G_SHADOW = "暗影", IB_G_HOLY = "神圣",
@@ -706,6 +742,9 @@ PROF_TIP_CAPPED = "覆盖 %s/5 类条件 → 分数封顶（神级需覆盖 4 �
   W_ADD = "添加技能",
   W_EDIT = "编",
   W_DEL = "删",
+  -- ★1.75.10 技能列表行的悬停提示末尾的「怎么操作」一行（与 TIP_ON/TIP_OFF/TIP_COND_H 同族；
+  --   战斗信息UI 技能格用的是 TIP_CLICK，文案不同 ⇒ 另立一键，绝不能共用）
+  W_ROW_TIP = "勾选框 = 启用/停用 · [编] = 编辑条件 · [▲▼] = 调序（悬停即看完整条件）",
   W_IO = "导入导出",
   HELP_QS_H = "快速上手",
   HELP_QS_1 = "绑键（推荐）：右键方案 → 方案管理 → 选快捷键 → [保存]",
@@ -756,6 +795,11 @@ PROF_TIP_CAPPED = "覆盖 %s/5 类条件 → 分数封顶（神级需覆盖 4 �
   SE_PICK_TGT = "选取目标:指定名称…",
   SE_TN_ITEM = "输入物品名称（背包内精确名）",
   SE_TN_TARGET = "输入目标名称（精确匹配）",
+  -- ★1.75.10 技能级「选取目标:玩家的目标…」（= 协助某玩家，把目标设成**他的目标**）与它的名字输入框标题
+  SE_PICK_TGT_PLAYER = "选取目标:玩家的目标…",
+  SE_TN_PLAYER_TGT = "输入玩家名称（需在附近；协助他=选他的目标）",
+  -- ★1.75.10 目标玩家条件的名字输入框标题（用户要的「名称支持自定义输入」）
+  SE_TN_PLAYER = "输入玩家名称（精确匹配，大小写不敏感）",
   SE_PICK_FOLLOW = "跟随:指定名字…", SE_PICK_CANCELBUFF = "取消自身buff:指定名字…",
   SE_TN_FOLLOW = "输入要跟随的玩家名字", SE_TN_CANCELBUFF = "输入要取消的自身buff名称", SE_CB_ALL = "不限（取消全部）", SE_CB_CUSTOM = "自定义输入…",
   SE_CLS_ALL = "全部职业",
@@ -777,11 +821,15 @@ PROF_TIP_CAPPED = "覆盖 %s/5 类条件 → 分数封顶（神级需覆盖 4 �
   CT_POWER = "怒气/能量", CT_THPPCT = "目标血%", CT_HPPCT = "自身血%", CT_POWERPCT = "能量%",
   CT_COMBATTIME = "进战秒数", CT_COMBO = "连击点数", CT_SWINGLEFT = "距下次攻击", CT_SHOTLEFT = "距下次射击", CT_COMBAT = "战斗状态", CT_HASTARGET = "目标存在",
   CT_CANATTACK = "目标可攻击", CT_CANBLEED = "目标可流血", CT_TFRIENDLY = "目标友善", CT_THOSTILE = "目标敌对",
+  CT_TDEAD = "目标死亡", -- ★1.75.10 目标死亡（用户：条件类型 → 目标状态 → 目标死亡 是/否）
+  CT_MWSIEGE = "围攻自身数量", CT_MWENGAGED = "10s交战人数", -- ★1.75.11 近战围攻 / 交战人数（条件类型 → 自身状态；数值比较）
   CT_TNEUTRAL = "目标中立", CT_ISELITE = "目标精英", CT_ISBOSS = "目标Boss", CT_TINCOMBAT = "目标战斗中",
   CT_AUTOATTACK = "普攻已开", CT_AUTOSHOT = "自动射击已开", CT_WANDSHOOT = "魔杖射击已开", CT_ALT = "Alt按住", CT_SHIFT = "Shift按住", CT_CTRL = "Ctrl按住",
   CT_FORM = "当前姿态", CT_HASBUFF = "自身buff检查", CT_NOBUFF = "自身无buff", CT_HASDEBUFF = "目标debuff检查", CT_TBUFF = "目标buff检查", CT_PDEBUFF = "自身debuff检查",
   CT_NODEBUFF = "目标无debuff", CT_READY = "冷却就绪", CT_USABLE = "技能可用", CT_NOTQUEUED = "未排队",
   CT_TARGET = "选取目标", CT_TCLASS = "目标职业", CT_TCREATURE = "目标类型",
+  -- ★1.75.10 目标玩家（用户：「技能编辑->目标状态->添加个判断: 目标玩家:xxx名（名称支持自定义输入） 是/否」）
+  CT_TPLAYER = "目标玩家",
   CRE_BEAST = "野兽", CRE_DRAGONKIN = "龙类", CRE_DEMON = "恶魔", CRE_ELEMENTAL = "元素",
   CRE_GIANT = "巨人", CRE_UNDEAD = "亡灵", CRE_HUMANOID = "人型", CRE_CRITTER = "小动物",
   CRE_MECHANICAL = "机械", CRE_NOTSPECIFIED = "未指定", CRE_TOTEM = "图腾", CRE_OTHER = "其他",
@@ -940,7 +988,7 @@ PROF_TIP_CAPPED = "覆盖 %s/5 类条件 → 分数封顶（神级需覆盖 4 �
   TB_RAREWATCH_TIP = "任务插件发现稀有的那一刻，在聊天框报一行：名字（按品阶染色）+ 品阶 + 距最近刷新点码数；点名字 = 选中它（选不中如实报错）。默认开。",
   -- ★probe/worldmap-minimap 分支：独立插件 EH_SimpleMap（addons/ 目录，探针版）
   TB_H_SIMPLEMAP = "—— 地图插件 ——",
-  TB_DBGDRAG = "图层拖拽柄",
+  TB_DBGDRAG = "图层拖拽",
   TB_LDDRAG_RESET = "重置", -- ★1.74.29 框拖拽行右侧重置
   TB_LDDRAG_RESET_TIP = "重置：还原每一层的缩放/透明度/显隐 并清理定位数据",
   -- ★1.74.33 用户要求：「拖拽图层 右侧添加设置弹窗支持这么多种类的支持多选的下拉选择，选中的才开启配置和支持拖拽」
@@ -967,14 +1015,14 @@ PROF_TIP_CAPPED = "覆盖 %s/5 类条件 → 分数封顶（神级需覆盖 4 �
   -- ★1.74.33 被动窗口的属性弹窗里，宽/高两行被藏起来、改成这一行说明（用户看不到原因就会以为功能坏了）
   TB_LD_NOSIZE_TIP = "宽/高只给**聊天窗**：聊天框可以调长宽并会记住；其它窗口改宽高会撕裂内部布局，所以不给",
   TB_LD_XY_TIP_LINE1 = "位置：拖窗口，或右键 → 属性里的 X/Y（=绝对屏幕坐标：X 左边缘 / Y 下边缘；[−][+] 每次 ±10px，按住 Shift ±1px）",
-  -- ★★★1.74.34 图层特殊处理（用户：「工具箱->UI 工具->添加个图层特处理->设置/重置…目前里面添加个动作条狮鹫」
-  --   「以上特殊处理定义规范配置.以后可能还有其他特殊处理」）——定义在 tools/DragFrames.lua 的 DF_FIXES 表
-  TB_DFFIX = "图层特殊处理",
-  TB_DFFIX_TIP = "对某些层**内部**的个别元素做特殊处理（现在只有一条：「动作条狮鹫」= 隐藏动作条两端那两张狮鹫贴图）。右侧 [设置] 多选：勾上的才生效、取消勾选当场还原；[重置] = 还原全部并清空勾选。默认一条都不选（不擅自改你的界面）。定义写在 tools/DragFrames.lua 的 DF_FIXES 表里，以后加新处理只往表里加一项。",
-  TB_DFFIX_SET_TIP = "特殊处理选择：勾选哪些处理生效（多选，面板不关）。勾上立刻生效、取消勾选立刻还原。",
-  TB_DFFIX_RESET_TIP = "重置：还原所有已生效的特殊处理（把被隐藏的贴图显示回来），并清空勾选。",
+  -- ★★★1.74.34 图层隐藏（原名「图层特殊处理」；用户：「工具箱->UI 工具->添加个图层特处理->设置/重置…目前里面添加个动作条狮鹫」
+  --   「以上特殊处理定义规范配置.以后可能还有其他特殊处理」）——定义在 tools/LayerFix.lua 的 LF_FIXES 表
+  TB_DFFIX = "图层隐藏",
+  TB_DFFIX_TIP = "隐藏某些层**内部**的个别元素（现在只有一条：「动作条狮鹫」= 隐藏动作条两端那两张狮鹫贴图）。右侧 [设置] 多选：勾上的才生效、取消勾选当场还原；[重置] = 还原全部并清空勾选。默认一条都不选（不擅自改你的界面）。定义写在 tools/LayerFix.lua 的 LF_FIXES 表里，以后加新处理只往表里加一项。",
+  TB_DFFIX_SET_TIP = "隐藏项选择：勾选哪些隐藏生效（多选，面板不关）。勾上立刻生效、取消勾选立刻还原。",
+  TB_DFFIX_RESET_TIP = "重置：还原所有已生效的隐藏项（把被隐藏的贴图显示回来），并清空勾选。",
   TB_DFFIX_SUM_FMT = "已生效 %d/%d 项",
-  TB_DFFIX_NONE = "当前没有启用任何特殊处理",
+  TB_DFFIX_NONE = "当前没有启用任何隐藏项",
   TB_FIX_G1 = "—— 动作条 / 主界面 ——",
   TB_FIX_GRYPHON = "动作条狮鹫",
   TB_FIX_GRYPHON_TIP = "隐藏动作条两端的两张狮鹫贴图（层 = MainMenuBarArtFrame，取它 GetRegions() 里的最后 2 个纹理）。勾上立刻隐藏、取消立刻显示回来。",

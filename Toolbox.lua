@@ -4467,7 +4467,7 @@ local function tbModel()
     -- ★★★1.74.29 用户要求：本组重命名为**「UI 工具」**并**移到第一组**
     { t = "h", label = L("TB_H_UITOOLS") },
     -- ★★★1.74.35-3 用户要求（「缩放大地图右侧添加个设置」）⇒ 这一行也改成**模块行**：
-  --   右侧 [设置] 下拉（多选）与勾选框的接线**全在 tools/SimpleMap.lua 的 smRow 里**（与图层拖拽/图层特殊处理同一套）。
+  --   右侧 [设置] 下拉（多选）与勾选框的接线**全在 tools/SimpleMap.lua 的 smRow 里**（与图层拖拽/图层隐藏同一套）。
   --   ★不写 `noChk` ⇒ 保留主开关勾选框（真值 = `tbCfg().simpleMap`，读写都走模块的 EVAL_SM_ENABLED/SET）。
   { t = "mod", mod = "simpleMap", key = "simpleMap", label = L("TB_SIMPLEMAP"), tip = L("TB_SIMPLEMAP_TIP") },
     -- ★★★1.74.34 用户要求：「审查下 图层拖拽的功能.在Toolbox.lua 内的代码修改.参考以上也进行./tools 的代码文件归类」
@@ -4976,7 +4976,7 @@ function EVAL_TB_REFRESH()
           end)
         end
         if r.get and r.get() then r.mark:Show() else r.mark:Hide() end
-        -- ★★★1.74.34：有的行**没有开关**（`it.noChk`，如「图层特殊处理」—— 它的真值就是多选下拉里勾了哪几条）
+        -- ★★★1.74.34：有的行**没有开关**（`it.noChk`，如「图层隐藏」—— 它的真值就是多选下拉里勾了哪几条）
         --   ⇒ 不留一个点了没反应的勾选框（死控件）；这类行的说明文字挂在它自己的按钮 tooltip 上。
         if not it.noChk then r.chk:Show() end
         r.text:SetText(it.label)
@@ -5822,7 +5822,7 @@ function EVAL_TB_TEST_GOTO(keyOrLabel)
   return true
 end
 -- ★★★1.74.34 读值口：某一行**渲染出来的文本**（标签 + 行内摘要）。
---   为什么需要它：「图层特殊处理」那行的摘要是 `已生效 n/m 项…` / `当前没有启用任何特殊处理`，
+--   为什么需要它：「图层隐藏」（1.75.x 前叫「图层特殊处理」）那行的摘要是 `已生效 n/m 项…` / `当前没有启用任何隐藏项`，
 --   断言必须读到**真控件里那串字**（`r.text` / `r.extra` 的 GetText），而不是在测试里把
 --   `EVAL_LF_SUMMARY()`（tools/LayerFix.lua）再算一遍 —— 那就成了「测自己」，标签写错/没刷新照样绿。
 function EVAL_TB_TEST_ROW_TEXT(key)

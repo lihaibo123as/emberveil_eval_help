@@ -221,9 +221,97 @@ if (!/\nsmMigrateReopen\(\)\r?\nSM_CFG\.showGUI = nil\r?\n/.test(sm)) {
       "过渡顶满节拍 · 底瓦片跳过 · 方向 ×es · 关掉零动作 · 调试工具里已无自动适配（反向哨兵）");
   })();
 
+  // ===== SM POS CENTER CHECK（1.75.10）：世界地图的**初始位置**口径 = 每次载入的第一次开图一律居中 =====
+  // 用户报障原话：「世界地图缩放开启之后,每次插件重载的初始位置能否居中.现在他有时候会乱跳到左下角位置」
+  // ★为什么必须源码级钉（这一案全是静默的）：
+  //   ① 存档里的 `px/py` 是**跨会话继承**的屏幕中心偏移 —— 本客户端几何读回含缩放（见 smEffScale 注释），
+  //      折算口径一旦对不上，这个值会被永久沿用 ⇒ 每次开图都按它摆位置（还会累积），表现就是「乱跳」；
+  //      而代码里看着完全正常（一个 nil 判断 + 一次 SetPoint），行为断言也照不到「上次会话留下的脏值」。
+  //   ② 居中**只做一次是不够的**：客户端自己的开图流程可能在我们 apply **之后**才摆位置（与黑幕那条竞态同族）
+  //      ⇒ 必须有**有界**的窗口期重申；但窗口期又必须能被用户拖拽打断（否则就是跟用户抢位置）。
+  //   ③ 这一位（`FEAT.posArmed`）必须在**载入期就是 true** —— 它等于「本次会话还没居中过」，写反了就没居中。
+  (function () {
+    const p = path.join(__dirname, "tools", "SimpleMap.lua");
+    if (!fs.existsSync(p)) { console.log("SM POS CENTER CHECK: (无 tools/SimpleMap.lua，跳过)"); return; }
+    const sm = strip(fs.readFileSync(p, "utf8"));
+    const bad = [];
+    // ① 载入期的两位（本次会话还没居中过 / 窗口拍数）
+    const featM = /local FEAT = \{[\s\S]*?\}/.exec(sm);
+    if (!featM) bad.push("找不到 FEAT 初始化表（位置口径的两位状态就在那里）");
+    else {
+      if (!/posArmed = true/.test(featM[0])) bad.push("FEAT 初始化里没有 `posArmed = true` ⇒ /reload 后第一次开图不会居中（判据反了）");
+      if (!/recenter = 0/.test(featM[0])) bad.push("FEAT 初始化里没有 `recenter = 0`（窗口期起点）");
+    }
+    if (!/local SM_RECENTER_TICKS = \d+/.test(sm)) bad.push("没有居中窗口期常量 SM_RECENTER_TICKS（窗口期必须**有界**，不许常驻重申）");
+    // ② featCenterNow = 纯动作：清锚点 + 摆正中；且「已居中就不写」（读不到锚点才退回盲写）
+    const iNow = sm.indexOf("local function featCenterNow(");
+    const nowEnd = iNow >= 0 ? sm.indexOf("\nlocal function ", iNow + 10) : -1;
+    const nowSeg = (iNow >= 0 && nowEnd > iNow) ? sm.slice(iNow, nowEnd) : "";
+    if (!nowSeg) bad.push("没有 featCenterNow（把地图摆回正中的纯动作口）");
+    else {
+      if (nowSeg.indexOf("ClearAllPoints") < 0 || nowSeg.indexOf('SetPoint, wm, "CENTER", UIParent, "CENTER", 0, 0') < 0) {
+        bad.push("featCenterNow 没有真的把地图摆到 CENTER/UIParent/CENTER 0,0");
+      }
+      if (nowSeg.indexOf("GetPoint") < 0) bad.push("featCenterNow 没有读回自证（已居中就不写）⇒ 窗口期内每拍盲写一次锚点");
+    }
+    // ③ featCenterOnce = 清存档偏移 + 居中 + 关闩 + 开窗口
+    const iOnce = sm.indexOf("local function featCenterOnce(");
+    const onceEnd = iOnce >= 0 ? sm.indexOf("\nlocal function ", iOnce + 10) : -1;
+    const onceSeg = (iOnce >= 0 && onceEnd > iOnce) ? sm.slice(iOnce, onceEnd) : "";
+    if (!onceSeg) bad.push("没有 featCenterOnce（本次会话第一次开图的口）");
+    else {
+      if (onceSeg.indexOf("SM_CFG.px, SM_CFG.py = nil, nil") < 0) bad.push("featCenterOnce 没有清掉存档里的历史偏移 ⇒ 下次开图又被那个会漂的值摆走（用户报的「乱跳」根因）");
+      if (onceSeg.indexOf("featCenterNow(wm)") < 0) bad.push("featCenterOnce 没有调 featCenterNow");
+      if (onceSeg.indexOf("FEAT.posArmed = false") < 0) bad.push("featCenterOnce 没有关掉「本次会话还没居中过」这一位（会每拍都重清）");
+      if (!/FEAT\.recenter = SM_RECENTER_TICKS/.test(onceSeg)) bad.push("featCenterOnce 没有开居中窗口期（客户端在我们之后摆位置时又白做一次）");
+    }
+    // ④ featApply 里的**顺序**：先判「本次会话第一次」⇒ 居中；否则才走位置记忆（顺序即判据）
+    const iAp = sm.indexOf("local function featApply()");
+    const apEnd = iAp >= 0 ? sm.indexOf("\nend", iAp) : -1;
+    const apSeg = (iAp >= 0 && apEnd > iAp) ? sm.slice(iAp, apEnd) : "";
+    if (!apSeg) bad.push("找不到 featApply");
+    else {
+      const iArm = apSeg.indexOf("if FEAT.posArmed then");
+      const iMem = apSeg.indexOf("SM_CFG.px, SM_CFG.py");
+      if (iArm < 0) bad.push("featApply 里没有 `if FEAT.posArmed then`（第一次开图居中这条判据没接线）");
+      if (iArm >= 0 && apSeg.indexOf("featCenterOnce") < 0) bad.push("featApply 的 posArmed 分支没调 featCenterOnce");
+      if (iArm < 0 || iMem < 0 || iArm > iMem) bad.push("featApply 里「首次居中」不是排在**位置记忆之前**（顺序反了 ⇒ 脏偏移先摆上去、再被居中覆盖，看着像居中但白做一次）");
+    }
+    // ⑤ featKeep 的窗口块：逐拍重申居中（有界）
+    const iKeep = sm.indexOf("local function featKeep()");
+    const keepEnd = iKeep >= 0 ? sm.indexOf("\nend", iKeep) : -1;
+    const keepSeg = (iKeep >= 0 && keepEnd > iKeep) ? sm.slice(iKeep, keepEnd) : "";
+    if (!keepSeg) bad.push("找不到 featKeep");
+    else {
+      if (keepSeg.indexOf("FEAT.recenter") < 0) bad.push("featKeep 里没有居中窗口期的重申（客户端在我们之后摆位置时就会「有时候没居上」）");
+      if (keepSeg.indexOf("featCenterNow") < 0) bad.push("featKeep 的窗口期没有调 featCenterNow");
+      if (!/FEAT\.recenter = FEAT\.recenter - 1/.test(keepSeg)) bad.push("窗口期没有递减 ⇒ 变成常驻重申（跟用户抢位置）");
+    }
+    // ⑥ 用户一拖拽就让出窗口期（否则窗口期内拖完立刻被拉回正中）
+    //   ★锚点必须从 `featBuild` 往后找：文件里还有 probe 段的拖拽柄（另两处 OnDragStart），
+    //     取第一个命中会**验错对象**（这属于「检查只匹配到一处门」那族假绿）。
+    const iBuild = sm.indexOf("local function featBuild(");
+    const iDrag = iBuild >= 0 ? sm.indexOf('"OnDragStart"', iBuild) : -1;
+    const dragSeg = iDrag >= 0 ? sm.slice(iDrag, iDrag + 400) : "";
+    if (iBuild < 0) bad.push("找不到 featBuild（本检查要验它建的拖拽柄）");
+    else if (iDrag < 0) bad.push("featBuild 里找不到拖拽柄的 OnDragStart（本检查要验「拖拽让出窗口期」）");
+    else if (dragSeg.indexOf("FEAT.recenter = 0") < 0) bad.push("OnDragStart 没有清居中窗口期 ⇒ 用户拖到哪都被拉回正中（与用户抢位置）");
+    // ⑦ 复位也要开窗口期（复位 = 居中，同样会被客户端的开图流程覆盖掉）
+    const iReset = sm.indexOf("function featReset()");
+    const resetSeg = iReset >= 0 ? sm.slice(iReset, iReset + 700) : "";
+    if (iReset < 0) bad.push("找不到 featReset");
+    else if (!/FEAT\.recenter = SM_RECENTER_TICKS/.test(resetSeg)) bad.push("featReset 没有开居中窗口期 ⇒ 复位后客户端一摆位置就白复位");
+    // ⑧ 读值口在位（组 237 全靠它们，缺一个那条断言就会静默跳过）
+    for (const f of ["EVAL_SM_TEST_POS_STATE", "EVAL_SM_TEST_POS_REARM", "EVAL_SM_TEST_DRAG"]) {
+      if (sm.indexOf("function " + f) < 0) bad.push("缺读值口 " + f);
+    }
+    if (bad.length) { console.log("SM POS CENTER CHECK: FAIL - " + bad.join(" | ")); process.exitCode = 1; return; }
+    console.log("SM POS CENTER CHECK: 载入期 posArmed=true（首次开图必居中）· 清掉跨会话历史偏移 · 有界窗口期重申 + 拖拽即让位 · 复位同口径 · 读值口齐");
+  })();
+
   // ===== SM GROUP ROSTER CHECK：本模块测试文件的**组号清单**不许静默少一个（与 DF 那套同族）=====
   (function () {
-    const WANT = [224, 225, 226, 230, 232];
+    const WANT = [224, 225, 226, 230, 232, 237];
     const p = path.join(__dirname, "tests", "tools", "SimpleMap.lua");
     if (!fs.existsSync(p)) { console.log("SM GROUP ROSTER CHECK: FAIL - 找不到 tests/tools/SimpleMap.lua"); process.exitCode = 1; return; }
     const s = fs.readFileSync(p, "utf8");

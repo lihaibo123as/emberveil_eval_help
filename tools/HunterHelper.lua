@@ -846,6 +846,8 @@ end
 --   拿不到宠物/拿不到经验（或已满）→ 进度条隐藏；边框回到默认金色。**绝不编数据**。
 function EVAL_HH_PETDECOR()
   if not (HH.built and HH.btn) then return false end
+  -- ★1.75.10：顺手驱动快乐度引擎（喂食助手开着 + 有宠物 ⇒ 自动开；否则停 —— 关掉零动作）
+  if type(EVAL_HH_HAPPY_AUTO) == "function" then pcall(EVAL_HH_HAPPY_AUTO) end
   -- 边框：按快乐度档位取色
   -- ★★1.75.1 补门（合并两支时抓到）：**没有宠物 ⇒ 一律默认金**，一个快乐度读数都不读。
   --   理由 = 本函数上方那条承诺（「拿不到宠物/拿不到快乐度 ⇒ 边框回到默认金色，**绝不编数据**」）：
@@ -885,6 +887,23 @@ function EVAL_HH_PETDECOR()
     else
       pcall(HH.xpFill.Hide, HH.xpFill)
       pcall(HH.xpBg.Hide, HH.xpBg)
+    end
+  end
+  -- ★1.75.10 喂食进度柱（按钮左侧）：**有宠物 + 有预估**才显示；颜色与边框同档位（1 红 / 2 金 / 3 绿）
+  if HH.hpFill and HH.hpBg then
+    local pct = nil
+    if hhHasPet() and type(EVAL_HH_HAPPY_PCT) == "function" then pct = EVAL_HH_HAPPY_PCT() end
+    if pct then
+      local p = tonumber(pct) or 0
+      if p < 0 then p = 0 elseif p > 100 then p = 100 end
+      local inner = HH_SIZE - 2
+      pcall(HH.hpBg.Show, HH.hpBg)
+      pcall(HH.hpFill.Show, HH.hpFill)
+      pcall(HH.hpFill.SetHeight, HH.hpFill, math.max(1, inner * (p / 100)))
+      pcall(HH.hpFill.SetVertexColor, HH.hpFill, r, g, b, 1)
+    else
+      pcall(HH.hpFill.Hide, HH.hpFill)
+      pcall(HH.hpBg.Hide, HH.hpBg)
     end
   end
   return true
@@ -1011,6 +1030,22 @@ function EVAL_HH_ENSURE()
   xpFill:SetHeight(3)
   xpFill:SetWidth(0)
   HH.xpBg, HH.xpFill = xpBg, xpFill
+  -- ★★★1.75.10 喂食进度（**柱状**，贴在按钮左侧）——用户：「喂食进度百分百在喂食按键左侧添加一个类似按钮经验进度
+  --   相同的小进度条,定位在按钮左侧柱状」。口径与经验条一致：纯色纹理（WHITE8X8）+ 顶点色、**不用 SetScale**、
+  --   随按钮一起显隐（都是按钮的子纹理）。
+  local hpBg = b:CreateTexture(nil, "OVERLAY")
+  hhSolid(hpBg, 0, 0, 0, 0.75)
+  hpBg:SetPoint("TOPRIGHT", b, "TOPLEFT", -2, 0)
+  hpBg:SetPoint("BOTTOMRIGHT", b, "BOTTOMLEFT", -2, 0)
+  hpBg:SetWidth(6)
+  local hpFill = b:CreateTexture(nil, "OVERLAY")
+  hhSolid(hpFill, 0.95, 0.80, 0.25, 1) -- 默认金；随快乐度档位改色（见 EVAL_HH_PETDECOR）
+  hpFill:SetPoint("BOTTOMLEFT", hpBg, "BOTTOMLEFT", 1, 1)
+  hpFill:SetWidth(4)
+  hpFill:SetHeight(0)
+  HH.hpBg, HH.hpFill = hpBg, hpFill
+  pcall(hpBg.Hide, hpBg)
+  pcall(hpFill.Hide, hpFill)
   local label = hhText(b, 12, 0.95, 0.80, 0.30) -- 26px 里 12pt 才不挤（原 36px 用 14pt）
   label:SetPoint("CENTER", b, "CENTER", 0, 0)
   pcall(label.SetWidth, label, HH_SIZE)
@@ -1249,6 +1284,11 @@ function EVAL_HH_CMD(msg)
     if type(EVAL_IG_FILTER_REPORT) == "function" then return EVAL_IG_FILTER_REPORT(HH_BAGS, hhSay) end
     return false
   end
+  -- ★1.75.10 快乐度探针（状态变更累加）：/eh go 喂食探针 快乐 [开始|停|表|状态|清]，别名 /eh go 快乐探针
+  local hapSub = string.match(msg, "^go 喂食探针%s*快乐%s*(.-)%s*$")
+  if hapSub ~= nil then return EVAL_HH_HAPPY_CMD(hapSub) end
+  local hapSub2 = string.match(msg, "^go 快乐探针%s*(.-)%s*$")
+  if hapSub2 ~= nil then return EVAL_HH_HAPPY_CMD(hapSub2) end
   if sub ~= nil then return EVAL_HH_PROBE(sub) end
   local feedArg = string.match(msg, "^go 喂食%s*(.-)%s*$")
   if feedArg ~= nil then
@@ -1305,6 +1345,344 @@ local function hhProbePet()
   local pi = EVAL_HH_PET_INFO()
   hhSay("当前 tooltip 实际显示：" .. tostring(pi or "（无宠物 → 显示「现在没有宠物」）"))
   hhSay("★把上面几行发我即可定案伤害%的形态（分数/百分数/坏值）")
+  return true
+end
+
+-- ===== ★★★1.75.10 宠物快乐度「状态变更累加」探针（用户 2026-09-25 定的路线）=====
+-- 用户原话链：「调研分析宠物快乐度 每个等级的数值.每次喂食 增长的数值.模拟一个喂食进度%」→「获取喂食信息可以参考攻击计时器的方式如何获取」
+--   →「每个阶段的总计也不用猜.直接通过状态变更进行缓存预估」。
+-- ★路线（**不靠理论常量**，全部走观测量）：
+--   ① 锚点 = 客户端消息（与射击计时同套路：先探针把**事件名 + 原文**钉死，不猜文案、不猜事件名）；
+--   ② 每次喂食增量 = 消息「获得了 N 点 HAPPINESS_POINTS」里的 **N 直接采信并累加**（来两条就加两次 ⇒
+--      「一次 35 还是 70」不用猜；★HAPPINESS_POINTS 是**未翻译 token** ⇒ 三语言通用，是最稳的判据）；
+--   ③ 档位变化（GetPetHappiness 1/2/3）= **真值校正点** ⇒ 累计值夹回该档 + 记跨越时刻；
+--   ④ **每档总计 = 观测值**（跨越该档时累计的喂食点数 + 耗时），两次跨越间隔可反推衰减。
+-- ★落盘：EVAL_HELP_CONFIG.hhHappyProbe（有界环 150 行 + 累加器缓存）⇒ 跑完 /reload 后 AI 直接读存档。
+-- ★纪律：只在开启探针时注册事件与 tick（关掉零动作）、环有界、**不改任何喂食行为**。
+local HAP = { on = false, ev = nil, tick = nil, sum = 0, sinceFlip = 0, band = nil,
+              lastFlipT = nil, lastFlipSum = nil, seen = {}, petKey = nil, um = nil, flips = {},
+              snapVal = nil, snapT = nil, snapE = nil, decay = 0, ptPct = 0.1, samples = {} }
+local HAP_MAX = 150
+-- ★档位边界（3 等分）：**只用来「打点」**，其余全靠日志累计（用户：「唯一要查的是档位变更直接打到下一阶段的百分比」）
+local HAP_B_START = { [1] = 0.1, [2] = 33.4, [3] = 66.7 }
+local HAP_B_TOP   = { [1] = 33.3, [2] = 66.6, [3] = 99.9 }
+
+-- ★纯函数（可被断言直接喂数）：预估进度% = 打点值 + 累计点数×换算 − 衰减率×耗时
+function EVAL_HH_HAPPY_EST(pts, snapVal, rate, dt, ptPct)
+  local p = (tonumber(snapVal) or 0) + (tonumber(pts) or 0) * (tonumber(ptPct) or 0.1)
+            - (tonumber(rate) or 0) * (tonumber(dt) or 0)
+  if p < 0 then p = 0 elseif p > 100 then p = 100 end
+  return p
+end
+local HAP_EVENTS = { "CHAT_MSG_SPELL_SELF_BUFF", "CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS",
+  "CHAT_MSG_SPELL_SELF_DAMAGE", "CHAT_MSG_MONSTER_EMOTE", "CHAT_MSG_TEXT_EMOTE",
+  "CHAT_MSG_EMOTE", "CHAT_MSG_SYSTEM", "UNIT_PET", "PLAYER_ENTERING_WORLD" }
+
+function EVAL_HH_HAPPY_PARSE(txt)
+  if type(txt) ~= "string" or txt == "" then return nil, "other" end
+  local n = string.match(txt, "(%d+)[^%d]-HAPPINESS_POINTS")
+  if n then return tonumber(n), "gain" end
+  if string.find(txt, "开始食用", 1, true) then return nil, "feed" end
+  if string.find(txt, "begins eating", 1, true) then return nil, "feed" end
+  if string.find(txt, "начал есть", 1, true) then return nil, "feed" end
+  return nil, "other"
+end
+
+local function hapStore()
+  local c = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(c) ~= "table" then c = {} rawset(_G, "EVAL_HELP_CONFIG", c) end
+  local box = c.hhHappyProbe
+  if type(box) ~= "table" then box = { out = {} } c.hhHappyProbe = box end
+  if type(box.out) ~= "table" then box.out = {} end
+  return box
+end
+
+local function hapLog(line)
+  local box = hapStore()
+  table.insert(box.out, tostring(line))
+  while table.getn(box.out) > HAP_MAX do table.remove(box.out, 1) end
+  if type(EVAL_LOGLINE) == "function" then pcall(EVAL_LOGLINE, "[快乐] " .. tostring(line)) end
+  return line
+end
+
+local function hapNow() return (type(GetTime) == "function") and GetTime() or 0 end
+local function hapEpoch() return (type(time) == "function") and time() or 0 end -- ★跨会话/跨登录用挂钟秒
+
+-- ★★★滚动平均学习（用户：「前期不准没关系.最终随着次数变多.更新更精准的预测数据」）
+--   前几个样本以观测为准，之后按 1/min(n,cap) 平均 ⇒ 越用越准，且后期仍能跟随漂移。
+local function hapLearn(key, obs, cap)
+  obs = tonumber(obs)
+  if not obs or obs ~= obs or obs <= 0 then return end
+  local n = (HAP.samples[key] or 0) + 1
+  HAP.samples[key] = n
+  local w = 1 / math.min(n, tonumber(cap) or 20)
+  HAP[key] = (HAP[key] or obs) * (1 - w) + obs * w
+end
+
+local function hapBand()
+  if type(GetPetHappiness) ~= "function" then return nil end
+  local ok, v = pcall(GetPetHappiness)
+  if ok and tonumber(v) then return tonumber(v) end
+  return nil
+end
+
+local function hapUM()
+  local um, umax = nil, nil
+  if type(UnitMana) == "function" then local ok, v = pcall(UnitMana, "pet") if ok then um = tonumber(v) end end
+  if type(UnitManaMax) == "function" then local ok, v = pcall(UnitManaMax, "pet") if ok then umax = tonumber(v) end end
+  return um, umax
+end
+
+local function hapSave()
+  local box = hapStore()
+  box.sum, box.band, box.sinceFlip = HAP.sum, HAP.band, HAP.sinceFlip
+  box.flips, box.petKey = HAP.flips, HAP.petKey
+  box.at = string.format("%.1f", hapNow())
+  -- ★学习结果跨会话累积（越用越准）：打点值 / 衰减率 / 点数换算 / 样本数 / 挂钟打点时刻
+  box.snapVal, box.decay, box.ptPct = HAP.snapVal, HAP.decay, HAP.ptPct
+  box.samples, box.epoch = HAP.samples, HAP.snapE
+end
+
+local function hapEst()
+  if HAP.snapVal == nil then return nil end
+  local dt = hapNow() - (HAP.snapT or hapNow())
+  return EVAL_HH_HAPPY_EST(HAP.sinceFlip, HAP.snapVal, HAP.decay, dt, HAP.ptPct)
+end
+
+local function hapLine(tag)
+  local um, umax = hapUM()
+  local ly, lv = nil, nil
+  if type(GetPetLoyalty) == "function" then local ok, v = pcall(GetPetLoyalty) if ok then ly = v end end
+  if type(UnitLevel) == "function" then local ok, v = pcall(UnitLevel, "pet") if ok then lv = v end end
+  local est = hapEst()
+  hapLog(string.format("%s | t=%.1f | 档位=%s | 预估=%s%% | 累计喂食=%d | 本档累计=%d | UnitMana=%s/%s | 忠诚=%s | 等级=%s",
+    tostring(tag), hapNow(), tostring(hapBand()), est and string.format("%.1f", est) or "?", HAP.sum, HAP.sinceFlip,
+    tostring(um), tostring(umax), tostring(ly), tostring(lv)))
+  hapSave()
+  return um
+end
+
+local function hapCheckBand(why)
+  local b = hapBand()
+  if not b then return end
+  local now = hapNow()
+  if HAP.band == nil then
+    -- 第一次拿到档位：**打点到该档起点**（此后全靠日志累计 + 衰减）
+    HAP.band, HAP.snapVal, HAP.snapT, HAP.snapE = b, (HAP_B_START[b] or 0), now, hapEpoch()
+    HAP.lastFlipT, HAP.lastFlipSum, HAP.sinceFlip = now, HAP.sum, 0
+    hapLog(string.format("打点：档位=%s ⇒ %.1f%%（之后按日志累计）", tostring(b), HAP.snapVal))
+    hapSave()
+    return
+  end
+  if b == HAP.band then return end
+  local rising = (b > HAP.band)
+  local dt = (HAP.lastFlipT and (now - HAP.lastFlipT)) or 0
+  local pts = HAP.sinceFlip
+  -- ★打点（用户定）：升档落到**新档起点**、降档落到**旧档顶**
+  local boundary = rising and (HAP_B_START[b] or 0) or (HAP_B_TOP[HAP.band] or 0)
+  -- ★两项换算**实测**（不问服务器常量）：
+  --   ① 降档且期间没喂 ⇒ 衰减率 =（上一打点值 − 旧档顶）/ 耗时
+  --   ② 升档 ⇒ 点数→百分比换算 =（新档起点 − 上一打点值）/ 期间喂食点数
+  if (not rising) and pts <= 0 and dt > 3 then
+    local drop = (HAP.snapVal or 0) - (HAP_B_TOP[HAP.band] or 0)
+    if drop > 0 then hapLearn("decay", drop / dt, 20) end
+  end
+  if rising and pts > 0 then
+    local gainPct = (HAP_B_START[b] or 0) - (HAP.snapVal or 0)
+    if gainPct > 0 then hapLearn("ptPct", gainPct / pts, 20) end
+  end
+  hapLog(string.format("★档位变化 %s→%s（%s）| 本档耗时=%.0fs | 本档喂食=%d 点 | **打点=%.1f%%** | 实测衰减=%.4f%%/s | 点数换算=%.4f%%/点",
+    tostring(HAP.band), tostring(b), tostring(why), dt, pts, boundary, HAP.decay, HAP.ptPct))
+  table.insert(HAP.flips, { t = now, from = HAP.band, to = b, dt = dt, pts = pts, snap = boundary })
+  while table.getn(HAP.flips) > 20 do table.remove(HAP.flips, 1) end
+  HAP.band, HAP.snapVal, HAP.snapT, HAP.snapE, HAP.sinceFlip = b, boundary, now, hapEpoch(), 0
+  HAP.lastFlipT, HAP.lastFlipSum = now, HAP.sum
+  hapSave()
+end
+
+local function hapOnEvent()
+  if not HAP.on then return end
+  local ev = tostring(event or "?")
+  local txt = tostring(arg1 or "")
+  if not HAP.seen[ev] then
+    HAP.seen[ev] = 1
+    hapLog("事件首次出现：" .. ev .. "（原文：" .. string.sub(txt, 1, 60) .. "）")
+  else
+    HAP.seen[ev] = HAP.seen[ev] + 1
+  end
+  local n, kind = EVAL_HH_HAPPY_PARSE(txt)
+  if kind == "gain" then
+    HAP.sum = HAP.sum + (n or 0)
+    HAP.sinceFlip = HAP.sinceFlip + (n or 0)
+    hapLog(string.format("增量 +%s 点（累计 %d）| 事件=%s | 原文=%s", tostring(n), HAP.sum, ev, txt))
+    hapLine("喂食后")
+    hapCheckBand("喂食后")
+  elseif kind == "feed" then
+    hapLog("喂食开始 | 事件=" .. ev .. " | 原文=" .. txt)
+    hapSave()
+  end
+end
+
+local function hapTick()
+  if not HAP.on then return end
+  local b = hapBand()
+  local u = select(1, hapUM())
+  if b and HAP.band and b ~= HAP.band then
+    hapCheckBand("心跳")
+  elseif u ~= nil and HAP.um ~= nil and u ~= HAP.um then
+    hapLog(string.format("UnitMana 变化：%s → %s（档位=%s 累计喂食=%d）", tostring(HAP.um), tostring(u),
+      tostring(b), HAP.sum))
+    hapSave()
+  end
+  HAP.um = u
+end
+
+local function hapStop()
+  HAP.on = false
+  if HAP.ev and type(HAP.ev.UnregisterAllEvents) == "function" then pcall(HAP.ev.UnregisterAllEvents, HAP.ev) end
+  if HAP.tick and type(HAP.tick.SetScript) == "function" then pcall(HAP.tick.SetScript, HAP.tick, "OnUpdate", nil) end
+  hapLog("探针停止（累计喂食 " .. HAP.sum .. " 点）")
+  hapSave()
+end
+
+local function hapStart()
+  if type(CreateFrame) ~= "function" then hhSay("本客户端没有 CreateFrame ⇒ 探针不可用") return false end
+  if not HAP.ev then
+    HAP.ev = CreateFrame("Frame", "EVAL_HH_HAPPY", UIParent)
+    HAP.ev:SetScript("OnEvent", hapOnEvent)
+  end
+  for _, e in ipairs(HAP_EVENTS) do pcall(HAP.ev.RegisterEvent, HAP.ev, e) end
+  if not HAP.tick then
+    HAP.tick = CreateFrame("Frame", "EVAL_HH_HAPPY_TICK", UIParent)
+    local acc = 0
+    HAP.tick:SetScript("OnUpdate", function()
+      acc = acc + (tonumber(arg1) or 0.05)
+      if acc < 1.0 then return end
+      acc = 0
+      pcall(hapTick)
+    end)
+  end
+  HAP.on = true
+  local pk = nil
+  if type(UnitName) == "function" then local ok, v = pcall(UnitName, "pet") if ok then pk = v end end
+  -- ★★★断点续算（用户：「最终随着次数变多.更新更精准的预测数据」）：把上次的打点值 + 学习结果接过来；
+  --   离线/登出的那段时间用**挂钟差**补算衰减 ⇒ 「跑几分钟 + 中途 reload」也不会丢预测。
+  local box0 = hapStore()
+  local cont, gap = false, 0
+  if box0.snapVal and (box0.petKey == nil or box0.petKey == pk) then
+    HAP.snapVal = tonumber(box0.snapVal)
+    HAP.decay = tonumber(box0.decay) or 0
+    HAP.ptPct = tonumber(box0.ptPct) or 0.1
+    HAP.samples = (type(box0.samples) == "table") and box0.samples or {}
+    HAP.snapE = box0.epoch
+    if box0.epoch and hapEpoch() > 0 then gap = math.max(0, hapEpoch() - box0.epoch) end
+    HAP.snapT = hapNow() - gap
+    cont = true
+  end
+  HAP.petKey = pk
+  local b0 = hapBand()
+  if cont and b0 and box0.band and tonumber(b0) == tonumber(box0.band) then
+    HAP.band = box0.band
+    HAP.sum, HAP.sinceFlip = tonumber(box0.sum) or HAP.sum, tonumber(box0.sinceFlip) or 0
+    hapLog(string.format("===== 探针开始（宠物=%s；**接上次打点续算**：档位仍是 %s、预估 %.1f%%、离线 %.0fs 已按 %.4f%%/s 补算）=====",
+      tostring(pk), tostring(b0), hapEst() or -1, gap, HAP.decay))
+  else
+    HAP.band = nil -- 换宠物 / 档位变了 ⇒ 用当前档位重新打点
+    hapLog("===== 探针开始（宠物=" .. tostring(pk) .. "；新建打点）=====")
+    hapCheckBand("开始")
+  end
+  hapSave()
+  if not HAP.silent then
+    hhSay("快乐度探针已开始（引擎已在喂食助手里自动跑；本命令只是打开取证环）｜喂 3~5 次即可 → /eh go 喂食探针 快乐 状态 看预估 → 想让我读数据就 /reload")
+  end
+  return true
+end
+
+-- ★★★1.75.10 生产化口（喂食助手内自动跑，不需要用户敲命令）：
+--   `EVAL_HH_HAPPY_AUTO()`：喂食助手开着 + 有宠物 ⇒ 自动开引擎；否则停（**关掉零动作**：不注册事件、不跑心跳）。
+--   `EVAL_HH_HAPPY_PCT()`：**对外唯一读口** —— 预估进度%（拿不到 → nil，绝不编数）。
+function EVAL_HH_HAPPY_AUTO()
+  local want = false
+  if type(EVAL_HH_ENABLED) == "function" then want = EVAL_HH_ENABLED() and hhHasPet() and true or false end
+  if want and not HAP.on then
+    HAP.silent = true      -- 自动启动不刷聊天框（只进取证环 + 调试日志）
+    local ok = hapStart()
+    HAP.silent = false
+    return ok
+  end
+  if (not want) and HAP.on then hapStop() return false end
+  return HAP.on
+end
+
+function EVAL_HH_HAPPY_PCT()
+  local p = hapEst()
+  if not p then return nil end
+  return p
+end
+
+function EVAL_HH_HAPPY_CMD(sub)
+  sub = tostring(sub or "")
+  if sub == "" or sub == "开始" or sub == "start" then return hapStart() end
+  if sub == "停" or sub == "stop" then hapStop() return true end
+  if sub == "清" or sub == "clear" then
+    hapStore().out = {}
+    HAP.sum, HAP.sinceFlip, HAP.band, HAP.flips, HAP.seen = 0, 0, nil, {}, {}
+    HAP.snapVal, HAP.snapT, HAP.decay, HAP.ptPct = nil, nil, 0, 0.1
+    hapSave()
+    hhSay("快乐度探针：环与累加器已清空（打点/换算也复位）")
+    return true
+  end
+  if sub == "表" or sub == "dump" then
+    local box = hapStore()
+    local n = table.getn(box.out or {})
+    hhSay("— 快乐度探针 · 共 " .. n .. " 行（旧→新，最多打 40 行）—")
+    local from = n - 39 if from < 1 then from = 1 end
+    for i = from, n do hhSay("  " .. tostring(box.out[i])) end
+    return true
+  end
+  if sub == "状态" or sub == "state" then
+    local est = hapEst()
+    hhSay(string.format("探针=%s · 当前档位=%s · **预估进度=%.1f%%** · 本档累计=%d 点 · 累计喂食=%d 点",
+      HAP.on and "开" or "停", tostring(hapBand()), est or -1, HAP.sinceFlip, HAP.sum))
+    hhSay(string.format("　上次打点=%.1f%% · 衰减=%.4f%%/s（样本 %s）· 点数换算=%.4f%%/点（样本 %s）· 档位跨越=%d 次",
+      HAP.snapVal or -1, HAP.decay, tostring((HAP.samples or {}).decay or 0),
+      HAP.ptPct, tostring((HAP.samples or {}).ptPct or 0), table.getn(HAP.flips)))
+    hhSay("判读：把「预估进度」和宠物框上真实快乐条对一下 —— 档位一变就会打点到 33.3/66.6 的边界，之后靠日志累计。")
+    for i = 1, table.getn(HAP.flips) do
+      local f = HAP.flips[i]
+      hhSay(string.format("  跨越 %s→%s：耗时 %.0fs · 期间喂食 %d 点", tostring(f.from), tostring(f.to), f.dt, f.pts))
+    end
+    return true
+  end
+  hhSay("用法：/eh go 喂食探针 快乐 [开始|停|表|状态|清]")
+  return false
+end
+
+function EVAL_HH_TEST_HAPPY_STATE()
+  return HAP.on, HAP.sum, HAP.band, HAP.sinceFlip, table.getn(HAP.flips), table.getn(hapStore().out or {})
+end
+function EVAL_HH_TEST_HAPPY_RING(n)
+  local out = hapStore().out or {}
+  local from = math.max(1, table.getn(out) - (tonumber(n) or 10) + 1)
+  return table.concat(out, " || ", from)
+end
+-- 读值口：喂食进度条的真实状态（给断言/取证用；生产 UI 读的就是这两个纹理）
+function EVAL_HH_TEST_HAPPY_BAR()
+  if not (HH and HH.hpFill and HH.hpBg) then return nil end
+  local okS1, shown1 = pcall(HH.hpFill.IsShown, HH.hpFill)
+  local okS2, shown2 = pcall(HH.hpBg.IsShown, HH.hpBg)
+  local okH, h = pcall(HH.hpFill.GetHeight, HH.hpFill)
+  local okR, r, g, b = pcall(HH.hpFill.GetVertexColor, HH.hpFill)
+  return (okS1 and shown1) or false, (okS2 and shown2) or false, (okH and tonumber(h)) or nil,
+         (okR and tonumber(r)) or nil, (okR and tonumber(g)) or nil, (okR and tonumber(b)) or nil
+end
+
+function EVAL_HH_TEST_HAPPY_EST()
+  return hapEst(), HAP.decay, HAP.ptPct, HAP.snapVal, HAP.snapT
+end
+function EVAL_HH_TEST_HAPPY_CLEAR()
+  hapStore().out = {}
+  HAP.sum, HAP.sinceFlip, HAP.band, HAP.flips, HAP.seen = 0, 0, nil, {}, {}
   return true
 end
 

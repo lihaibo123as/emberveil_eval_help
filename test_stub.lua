@@ -605,6 +605,12 @@ UnitName = function(u)
       string.match(u, "^partypet%d+$") or string.match(u, "^raidpet%d+$")) then
     return nil
   end
+  -- ★1.75.3 宠物名走 TEST.petName（默认 nil = 真 API 里「没有宠物就没名字」的语义）
+  if u == "pet" then return TEST.petName end
+  -- ★1.75.10「目标的目标」：真 API 语义（官方 conventions#unit-ids）——目标**自己没有目标**时该 UnitID
+  --   **不解析** ⇒ `UnitName("targettarget")` 回 nil（不是回目标自己的名字）。
+  --   ★桩保真理由：旧写法让 targettarget 落进下面的兜底，**和目标同名** ⇒ 「切没切过去」这类断言恒真（断言失明）。
+  if u == "targettarget" then return TEST.targetTargetName end
   return u == "player" and "测试玩家" or (TEST.curTargetName or "测试怪")
 end
 UnitLevel = function() return 60 end
@@ -740,16 +746,37 @@ UnitExists = function(u)
   -- ★1.70.47 "player" 恒存在（真 API 语义）；队伍成员按 TEST.team 判定。
   --   此前桩对 player 返回 false —— 团队扫描把它自己漏掉了（被组 66 当场抓到）。
   if u == "player" then return true end
+  -- ★1.75.3 "pet" 按 TEST.hasPet 判定（默认 nil ⇒ false，与改动前一致：既有用例不受影响）
+  if u == "pet" then return TEST.hasPet and true or false end
   if teamRec(u) then return true end
+  -- ★1.75.10「目标的目标」：按 TEST.targetTargetName 判定（nil = 目标自己没有目标 ⇒ 该 UnitID 不解析）
+  --   ★这条必须**显式**写：否则它落到下面的兜底，恒为 false/true 都与真实语义无关（断言失明）。
+  if u == "targettarget" then return (TEST.targetTargetName ~= nil) and true or false end
   return u == "target" and TEST.hasTarget or false
 end
-UnitIsDeadOrGhost = function() return false end
+-- ★1.75.10 目标玩家条件（/eh 技能编辑 → 目标状态 → 目标玩家）：
+--   官方 api_unit 有 UnitIsPlayer(unit)（是玩家回 true，否则 **nil**）。
+--   桩默认 = **不是玩家**（与真 API 的非玩家返回值同义）；测试用 TEST.targetIsPlayer 打开。
+UnitIsPlayer = function(u)
+  if u == "player" then return true end
+  if u == "target" then return TEST.targetIsPlayer and true or nil end
+  return nil
+end
+UnitIsDeadOrGhost = function(u)
+  -- ★1.75.10 目标死亡条件（条件类型 → 目标状态 → 目标死亡）：TEST.targetDead 控制目标死活；
+  --   默认 nil ⇒ false（与改动前的硬编码 false 行为完全一致，既有用例不受影响）。
+  if u == "target" then return TEST.targetDead and true or false end
+  return false
+end
 UnitIsDead = function() return false end
 UnitAttackSpeed = function() return TEST.atkSpd or 0, TEST.atkSpdOff end
 UnitCanAttack = function() return true end
 -- ★1.70.28：本客户端实测返回带后缀的本地化名（"人型生物" 而非标准名 "人型"），
 --   所以桩默认沿用该值；测试可用 TEST.creatureType 覆盖，用于验证「带后缀/不带后缀」两种都能匹配。
 UnitCreatureType = function() return TEST.creatureType or "人型生物" end
+-- ★1.75.3 宠物家族探针（PetHelper.lua）的读数来源：真机返回值形态**尚未定案** ⇒ 桩默认 nil（= 客户端返回空），
+--   测试用 TEST.creatureFamily 造出「有名字 / 空 / 非字符串」三种形态，分别验探针的三种报法。
+UnitCreatureFamily = function() return TEST.creatureFamily end
 IsActionInRange = function(slot) return TEST.inRange and TEST.inRange[slot] end -- 1.37.0：true=内 / 0=外 / nil=不测
 UnitReaction = function() return 2 end
 HasAction = function(slot)
@@ -912,6 +939,26 @@ TargetByName = function(n)
   for _, r in ipairs(TEST.team or {}) do if r.name == n then TEST.targetUnit = r.unit end end
   for _, r in ipairs(TEST.raid or {}) do if r.name == n then TEST.targetUnit = r.unit end end
   if TEST.nearby then TEST.curTargetName = n end -- 还原目标模拟
+end
+-- ★1.75.10「玩家的目标」选取器（AssistByName）：官方语义 = 协助**附近**的一名玩家，把当前目标设成**他的目标**。
+--   ★桩的默认行为 = 「查不到这名玩家 ⇒ **什么都不做**」（目标保持原样 —— 这是待真机 `/eh go assist` 定案的一种形态）；
+--   TEST.assistTargets[玩家名] = 他的目标名 ⇒ 成功（当前目标变成那个名字）。
+--   TEST.assistClears = true ⇒ 模拟另一种形态（失败即**清掉当前目标**，与 AssistUnit 同族）——
+--   测试用这两种形态分别验「如实失败」兜底（Engine 的 TARGET_SEL_NEEDTGT）。
+AssistByName = function(n)
+  TEST.targetSel = "assist:" .. tostring(n)
+  TEST.assistArg = n
+  TEST.assistCalls = (TEST.assistCalls or 0) + 1 -- ★调用次数：验「未设名称 / dry 预览时零动作」
+  local t = TEST.assistTargets and TEST.assistTargets[n]
+  if t ~= nil then
+    TEST.targetUnit = nil
+    TEST.curTargetName = t
+    TEST.hasTarget = true
+  elseif TEST.assistClears then
+    TEST.targetUnit = nil
+    TEST.curTargetName = nil
+    TEST.hasTarget = false
+  end
 end
 TargetNearestFriend = function() TEST.targetSel = "nearFriend" end
 TargetNearestPartyMember = function() TEST.targetSel = "nearParty" end

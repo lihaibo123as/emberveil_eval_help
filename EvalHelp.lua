@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.75.2"
+local VERSION = "1.75.3"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -77,6 +77,9 @@ local SE_MARK_TEST = SE_MEDIA_ROOT .. "mark-test"       -- 黄感叹号：待测
 EVAL_UI_MARK_TEST = SE_MARK_TEST
 local SE_WARN_ICON = SE_MARK_UNAVAIL
 local TARGET_SEL, TARGET_SEL_NAME = EVAL_TARGET_SEL, EVAL_TSEL_NAME
+-- ★1.75.10「这一条选取需要名字参数」（指定名称 / 玩家的目标）——单一来源在 Engine 的 TARGET_SEL_NM；
+--   编辑器读它决定「名字格」怎么渲染与回读，别再各写一份 `cd.s == "byName"`（漏一处就是选了不生效/名字不显示）。
+local TARGET_SEL_NM = EVAL_TSEL_NM
 local CLASS_LIST = EVAL_CLASS_LIST
 -- ============ 状态 UI（参考 Cat 的 CatUI-Melee 布局，构件法用 OneJudge HUD 的已验证写法） ============
 -- /eh ui 开关窗口；按住顶部标题栏拖动换位置（自动记忆）；悬停滚轮缩放（0.5~1.6，自动重建）。
@@ -121,6 +124,35 @@ end
 -- 1.61.2 显示转义：| 在 FontString/聊天框里是颜色转义符，单个 | 会被吞；|| 转义在本客户端渲染异常（小方块）——
 -- 改用全角竖线 ｜（U+FF5C，FZLBJW 中文字体自带全角字符，视觉与 | 一致）。数据层不受影响
 local function uiEsc(s) return (string.gsub(tostring(s or ""), "|", "｜")) end
+
+-- ★★★1.75.10 按「估算宽度」截断文本（一个汉字 = 1 个单位、一个 ASCII = 0.55）——给固定宽度的列表格子用。
+--   起因（用户截图 + 原话「方案技能列表可以适当增加标题的宽度。然后鼠标提示显示完整的条件信息」）：
+--   技能名格**从来没设过宽度**，名字一长就**压到条件列上**，两段字叠成一串糊字（截图里那行
+--   「选取目标:目标的目标」+「玩家:ioiol」）。⇒ 名字格给明确宽度 + 超长截断，完整内容交给悬停提示。
+--   ★★这里**必须按字符走、不能按字节走**：一个汉字是 3 个字节，按字节记数会把「测试技能」算成 12 个单位
+--     （＝名字格只放得下 6 个字）——本轮第一版就是这么写的，组 111⑤ 的「测试技能(等级 2)」当场被截成
+--     「测试技能(等…」而报红。按 UTF-8 首字节判字符长度（0xC0/0xE0/0xF0 三档），长度单位才是「字」。
+local function uiClip(s, maxUnits)
+  s = tostring(s or "")
+  local units, cut, i, n = 0, 0, 1, string.len(s)
+  while i <= n do
+    local b = string.byte(s, i)
+    local step, u = 1, 0.55
+    if b and b > 127 then
+      if b >= 240 then step = 4 elseif b >= 224 then step = 3 elseif b >= 192 then step = 2 end
+      u = 1
+    end
+    if units + u > maxUnits then cut = i - 1 break end
+    units = units + u
+    i = i + step
+  end
+  if cut == 0 then return s end
+  while cut > 0 do -- 兜底：断点回退到 UTF-8 字符边界（砍在汉字中间 = 显示成乱码方块）
+    local b = string.byte(s, cut + 1)
+    if b and b >= 128 and b < 192 then cut = cut - 1 else break end -- 0x80~0xBF = 续字节
+  end
+  return string.sub(s, 1, cut) .. "…"
+end
 
 local function uiText(parent, size, r, g, b)
   local fs = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -410,8 +442,19 @@ local function uiTitleToggle(parent, z, xRight, getter, setter, tip)
     b.refresh()
     -- ★配置窗同步（同一份真值）：走**全局桥** EVAL_HELP_CFGWIN —— 不能用 cfgWin 这个 local，
     --   它声明在本文件后段（DECL ORDER 检查当场抓到过：EvalHelp.lua:211 used before declared at 855）。
+    -- ★★★1.75.11 用户真机 bug 修复（点 HUD 标题栏快捷开关 → 配置窗「抓宠帮手」Tab 内容重叠）：
+    --   这里原来调 `cw.refresh()`，而它是**所有页刷新的总闸**（`for _, r in ipairs(refreshes)`）——
+    --   PetHelper / 工具箱 / 任务线 / 图标库 的刷新都会被跑一遍，而它们 Show 控件时**不看当前是哪个 Tab**
+    --   ⇒ 别的页控件被重新 Show 出来、盖在当前页上（实测：停在工具箱页点开关 ⇒ 抓宠帮手页 21 个控件全亮）。
+    --   ★这里真正需要的只是「把配置窗那两个勾选框的外观同步一下」（两个入口一份真值）⇒ 只刷这两个框。
     local cw = rawget(_G, "EVAL_HELP_CFGWIN")
-    if type(cw) == "table" and type(cw.refresh) == "function" then pcall(cw.refresh) end
+    local boxes = (type(cw) == "table") and cw.uiBoxes or nil
+    if type(boxes) == "table" then
+      for _, bk in ipairs({ "subCombat", "subScheme" }) do
+        local bx = boxes[bk]
+if type(bx) == "table" and type(bx.refresh) == "function" then pcall(bx.refresh) end
+      end
+    end
   end)
   if type(tip) == "string" and tip ~= "" then
     b:SetScript("OnEnter", function()
@@ -442,6 +485,7 @@ function EVAL_HELP_UI_BUILD()
   ui.pwFill, ui.pwText, ui.pwW = nil, nil, nil
   ui.tgBar, ui.tgFill, ui.tgText, ui.tgW = nil, nil, nil, nil
   ui.tgRange, ui.status, ui.comboSegs = nil, nil, nil
+  ui.siege = nil -- ★1.75.11 被围攻人数控件（与状态行同行、贴根帧右缘；同上：不清会把「这一轮没建」盖掉 → 写成幽灵控件）
   ui.castBar, ui.castFill, ui.castText, ui.castW = nil, nil, nil, nil
   ui.swingBar, ui.swingFill, ui.swingText, ui.swingW = nil, nil, nil, nil
   ui.profBtns, ui.profCells = nil, nil
@@ -571,8 +615,23 @@ function EVAL_HELP_UI_BUILD()
     swBar:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
     y = y + math.max(6, math.floor(8 * z)) + gap
     ui.swingBar, ui.swingFill, ui.swingText, ui.swingW = swBar, swFill, swText, swW
-    status:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -y)
-    y = y + math.floor(13 * z) + gap
+    -- ★1.75.11 状态行的**顶边偏移**留成具名 local：被围攻人数要跟它**同行**（两处共用同一值 ⇒ 改布局不会只挪一半）
+    local statusY = y
+    status:SetPoint("TOPLEFT", root, "TOPLEFT", pad, -statusY)
+    y = statusY + math.floor(13 * z) + gap
+    -- ★★★1.75.11 被围攻人数（用户：「围攻数量统计移动到非战斗那一行右边对齐」）：
+    --   与**状态行同一行、贴窗口右缘右对齐**（配方同下面的目标距离文本：右缘锚 + SetJustifyH("RIGHT")）。
+    --   ★★★**绝不能锚 status**（首版就是这么写的，真机截图报「信息重叠」）：状态行是**自适应宽**的 FontString，
+    --     它的 RIGHT **就是它自己文字的右缘** ⇒ 围攻文字从「重殴:关」的尾巴上倒着长出来 = 糊成一团。
+    --     正解 = 锚**根帧**的 TOPRIGHT（-pad 内缩，与三条状态条的右缘同一条线），顶边取 statusY ⇒ 真正同一行。
+    --   数据 = **全局战斗数据 st.mwSiege**（Core 的 UPDATE_STATE 每拍只算一次，条件/两个UI 共用；★非战斗恒 0），
+    --   文案由心跳写（见 EVAL_HELP_UI_TICK）；非战斗显示「围攻 —」，不拿 0 冒充现状。
+    --   ★它属于**战斗块**（状态行就住在这里）⇒「战斗区」子开关关掉时随状态行一起不画（那正是用户要的整块语义）。
+    local siege = uiText(root, math.max(8, math.floor(10 * z)), 0.6, 0.6, 0.55)
+    siege:SetPoint("TOPRIGHT", root, "TOPRIGHT", -pad, -statusY)
+    pcall(siege.SetJustifyH, siege, "RIGHT")
+    siege:SetText("围攻 —")
+    ui.siege = siege
     -- 目标距离文本（1.37.0）：目标条右缘（近战/冲锋距/远程外，EVAL_T_RANGE 分档）
     local tgRange = uiText(tgBar, math.max(8, math.floor(9 * z)), 1, 0.85, 0.4)
     tgRange:SetPoint("RIGHT", tgBar, "RIGHT", -4, 0)
@@ -1032,6 +1091,26 @@ function EVAL_HELP_UI_TICK()
     form, atkOn and "|cff00ff00开|r" or "|cff909090关|r"))
   end -- ★1.71.12 子开关「战斗」段结束
 
+  -- ★★★1.75.11 被围攻人数（HUD）：值读**全局战斗数据 st**（Core 的 UPDATE_STATE 每拍只算一次；
+  --   用户口径：「围攻数量归入战斗数据全局可被使用,不多个地方各自计算」）—— 本处**不再自己调探针**，
+  --   战斗UI 与状态UI 与一键宏条件读的是同一份 st.mwSiege。
+  --   ★估算来的值带 ~ 标记（用户定的形态：「围攻 ~3只」）：Est > Nm ⇒ 名字口径不够、这个数来自 6s 挥击累加估算。
+  --   ★非战斗如实显示「—」（不拿 0 冒充现状）。
+  if ui.siege then
+    local nS = tonumber(st.mwSiege) or 0
+    local nEst = tonumber(st.mwSiegeEst) or 0
+    local nNm = tonumber(st.mwSiegeNm) or 0
+    if st.inCombat then
+      if nS > 0 then
+        ui.siege:SetText(string.format((nEst > nNm) and "|cffff5040围攻 ~%d只|r" or "|cffff5040围攻 %d只|r", nS))
+      else
+        ui.siege:SetText("|cff909090围攻 0只|r")
+      end
+    else
+      ui.siege:SetText("|cff909090围攻 —|r")
+    end
+  end
+
   -- ★★★1.73.55 标题栏的**方案档位**徽标：跟着「当前激活方案」走 —— 切换方案 / 改方案内容 / 切语言之后，
   --   下一个心跳就更新（现算，见 uiProfileTierText 的说明）。
   --   ★**不看「方案区」子开关**：徽标画在标题栏里，方案区关掉时它照样说明「现在用的是哪一档」。
@@ -1209,6 +1288,7 @@ local function cfgCheck(parent, x, y, label, get, set, list, tip, into) -- 1.50.
     text:SetScript("OnLeave", function() GameTooltip:Hide() end)
   end
   refresh()
+  if into then into.refresh = refresh end -- ★1.75.11 交出**单框**刷新口（HUD 快捷开关只同步这两个框，不跑整张刷新表）
   return refresh
 end
 
@@ -2035,16 +2115,62 @@ local function cfgBuild()
     icon:SetWidth(15) icon:SetHeight(15)
     row.icon = icon
     table.insert(Wp, icon)
+    -- ★★★1.75.10 用户（截图 + 原话）：「方案技能列表可以适当增加标题的宽度。然后鼠标提示显示完整的条件信息。」
+    --   截图症状 = 技能名（亮色）与条件列（灰色）**叠在一格上**成一串糊字（「选取目标:目标的目标」+「玩家:ioiol」）；
+    --   根因 = 名字格**从来没设过宽度**（按文本自动伸展），而条件列固定在 RX2+102 ⇒ 名字一长就压过去。
+    --   ⇒ 名字格给**明确宽度**并超长截断；条件列起点**跟着名字格右缘走**（单一来源，不再写死 102）；
+    --     完整内容交给下面的悬停提示（row.hov）。★右缘停在进行内按钮带（▲ 起于 W-104）左边，绝不与按钮重叠。
+    local NAME_W = WIDE and 236 or 176
+    local COND_X = RX2 + 38 + NAME_W + 6
+    local COND_W = math.max(90, (W - 104) - COND_X - 4)
     local nm = uiText(root, 10, 0.92, 0.88, 0.80)
     nm:SetPoint("TOPLEFT", root, "TOPLEFT", RX2 + 38, y - 2)
-    row.name = nm
+    pcall(nm.SetWidth, nm, NAME_W)
+    pcall(nm.SetJustifyH, nm, "LEFT")
+    row.name, row.nameW = nm, NAME_W
     table.insert(Wp, nm)
     local cds = uiText(root, 9, 0.70, 0.70, 0.70)
-    cds:SetPoint("TOPLEFT", root, "TOPLEFT", RX2 + 102, y - 3)
-    pcall(cds.SetWidth, cds, WIDE and 456 or 336) -- 1.33.0 让位滚动条；1.34.1 宽语言再加宽；1.70.45 随窗口 +100
+    cds:SetPoint("TOPLEFT", root, "TOPLEFT", COND_X, y - 3)
+    pcall(cds.SetWidth, cds, COND_W)
     pcall(cds.SetJustifyH, cds, "LEFT")
-    row.conds = cds
+    row.conds, row.condW = cds, COND_W
     table.insert(Wp, cds)
+    -- ★★★1.75.10 悬停提示（用户：「鼠标提示显示完整的条件信息」）：格子里的字会被截断，
+    --   完整的「技能名(+等级) / 启用状态 / **逐组条件**」一律从这里给 —— 与战斗信息UI 技能格同一套
+    --   文案键（TIP_ON/TIP_OFF/TIP_COND_H/TIP_NOCOND），只有点击说明是这一处独有的 W_ROW_TIP。
+    --   ★必须用**覆盖文字的透明 Button**：FontString 不吃鼠标事件（本项目已定案的同一族）。
+    --   ★几何**跟着两个文本格走**（右下锚到条件格）⇒ 永不盖到右边的 ▲▼/编/删（那是真按钮，被盖住就点不动）。
+    local hov = CreateFrame("Button", nil, root)
+    hov:SetPoint("TOPLEFT", nm, "TOPLEFT", -2, 2)
+    hov:SetPoint("BOTTOMRIGHT", cds, "BOTTOMRIGHT", 2, -2)
+    pcall(hov.EnableMouse, hov, true)
+    hov:SetScript("OnEnter", function()
+      local w2b = warCfg()
+      local rb = w2b.profiles[w2b.activeProfile or 1]
+      local r = rb and rb.skills[ri + (warUI.offset or 0)]
+      if not r or type(GameTooltip) == "nil" then return end
+      pcall(GameTooltip.SetOwner, GameTooltip, hov, "ANCHOR_RIGHT")
+      pcall(GameTooltip.AddLine, GameTooltip,
+        tostring(r.skill) .. (r.rank and ("(" .. tostring(r.rank) .. ")") or ""), 1, 0.82, 0.3)
+      pcall(GameTooltip.AddLine, GameTooltip,
+        (r.enabled ~= false) and ("|cff00ff00" .. L("TIP_ON") .. "|r") or ("|cffff0000" .. L("TIP_OFF") .. "|r"))
+      pcall(GameTooltip.AddLine, GameTooltip, L("TIP_COND_H"), 0.62, 0.55, 0.40)
+      local gc = 0
+      for gi, g in ipairs(r.groups or {}) do
+        gc = gi
+        local cs = {}
+        for _, cd in ipairs(g) do table.insert(cs, EVAL_COND_STR(cd, true)) end -- disp=true：界面走本地化名（与列表同一口径）
+        pcall(GameTooltip.AddLine, GameTooltip, string.format("%d. %s", gi, table.concat(cs, " & ")), 0.85, 0.85, 0.85, true)
+      end
+      if gc == 0 then pcall(GameTooltip.AddLine, GameTooltip, L("TIP_NOCOND"), 0.6, 0.6, 0.6) end
+      pcall(GameTooltip.AddLine, GameTooltip, L("W_ROW_TIP"), 0.5, 0.5, 0.5, true)
+      pcall(GameTooltip.Show, GameTooltip)
+    end)
+    hov:SetScript("OnLeave", function()
+      if type(GameTooltip) ~= "nil" then pcall(GameTooltip.Hide, GameTooltip) end
+    end)
+    row.hov = hov
+    table.insert(Wp, hov) -- ★必须进页控件清单：它覆盖在文字上，切走 Tab 时不 Hide = 在别的页面上**吃鼠标**
     -- 1.61.0 调序按钮改为箭头 + 新增下移；★1.71.9 用户截图反馈：「^ 看着像一条横线、v 是字母」
     --   → 换成真正的三角 **▲/▼**（与本插件「工具箱」「任务线 & 装备」的滚动按钮同一套字形，已验证能显示）。
     row.up, row.upText = mkSmall(88, y, 16, "▲", function()
@@ -2960,7 +3086,7 @@ function EVAL_WAR_TAB_REFRESH()
   end
   for ri, row in ipairs(warUI.rows) do
     local r = p and p.skills[ri + warUI.offset]
-    local widgets = { row.chk, row.icon, row.name, row.conds, row.up, row.dn, row.edit, row.del }
+    local widgets = { row.chk, row.icon, row.name, row.conds, row.hov, row.up, row.dn, row.edit, row.del }
     for _, wgt in ipairs(widgets) do
       -- ★1.73.56 显隐只在「一键宏」Tab 激活时动（见函数开头 warTabOn 的说明）
       if warTabOn then
@@ -2978,8 +3104,12 @@ function EVAL_WAR_TAB_REFRESH()
       else
         uiSolid(row.icon, 0.25, 0.25, 0.25, 1)
       end
-      row.name:SetText(tostring(r.skill) .. (r.rank and ("(" .. tostring(r.rank) .. ")") or "")) -- ★1.72.4 有等级才显示（默认仍是纯技能名）
-      row.conds:SetText(uiEsc(EVAL_GROUP_STR(r.groups, true))) -- 1.61.1 | 显示转义（★1.73.12 界面走本地化名）
+      -- ★★★1.75.10 两格都要**按格宽截断**（用户截图那行糊字的根因）：名字格宽度 = row.nameW、
+      --   条件格宽度 = row.condW，这里按「中文 1 / ASCII 0.55」估算能放几个字，超了补 …；
+      --   完整内容由 row.hov 的悬停提示给出（**列宽固定 + 提示给全** 是本轮的定案口径）。
+      local nmTxt = tostring(r.skill) .. (r.rank and ("(" .. tostring(r.rank) .. ")") or "") -- ★1.72.4 有等级才显示
+      row.name:SetText(uiClip(nmTxt, (row.nameW or 176) / 9.5))
+      row.conds:SetText(uiClip(uiEsc(EVAL_GROUP_STR(r.groups, true)), (row.condW or 300) / 8.6)) -- 1.61.1 | 显示转义（★1.73.12 界面走本地化名）
     end
   end
   -- ★★★1.71.10 方案名 / 数量变了 → 战斗信息UI 的「方案切换行」必须重排（按钮宽度按名字实测算、
@@ -3044,6 +3174,26 @@ function EVAL_TEST_CFG_TAB_NAMES()
     local p = cfgWin.pages[i]
     local ok, t = pcall(p.text.GetText, p.text)
     out[i] = ok and t or nil
+  end
+  return out
+end
+-- ★★1.75.11 读值口：**每个 Tab 页当前有多少控件是显示着的**（返回 { [页号] = { 文本… } }）。
+--   用途 = 钉死本项目最老的坑之一「数据刷新顺手改可见性，把别的页盖在当前页上」
+--   （1.73.56 全局页叠技能列表 · 用户 1.75.11 报的「切战斗UI 开关 → 抓宠帮手 Tab 内容重叠」同族）——
+--   可见性契约 = **只有 EVAL_HELP_CFG_SETTAB 能动显隐**，所以在任何页上，其它页的可见控件数必须是 **0**。
+function EVAL_TEST_CFG_PAGE_VIS()
+  local out = {}
+  for i = 1, table.getn(cfgWin.pages or {}) do
+    local p = cfgWin.pages[i]
+    local vis = {}
+    for _, wgt in ipairs(p.widgets) do
+      local okv, v = pcall(wgt.IsShown, wgt)
+      if okv and v then
+        local okt, t = pcall(wgt.GetText, wgt)
+        table.insert(vis, (okt and type(t) == "string" and t ~= "") and t or "?")
+      end
+    end
+    out[i] = vis
   end
   return out
 end
@@ -3243,15 +3393,24 @@ local mbDownX, mbDownY = nil, nil
 local mbIconTex = nil             -- 唯一的常驻视觉件：图标纹理（占满按钮）
 local mbIconPath = nil            -- 已贴上的图标路径（nil = 还没贴上）
 local mbRing, mbText = nil, nil   -- 兜底样式（仅图标拿不到时才建；悬停变色与「清空 EH 字」要引用）
+-- ★★★1.75.10（用户报障：「插件配置的图标初始使用：现在是黑色的没有图标」）——**诊断两位**：
+--   · `mbBack` = 客户端**读回**的纹理（`GetTexture()`；nil = 没贴上/拿不到）
+--   · `mbWhy`  = 本次判定原因（custom / auto:<路径> / pickfail / noapi / noframe / fallback）
+--   ★为什么必须有：贴图这事儿**失败是静默的**（pcall 吞错、`if` 守卫一挡就什么都不发生），
+--     界面上只表现为「一块黑方块」，从聊天框/存档里**一个字节都查不到**（本项目最恨的那族）。
+local mbBack, mbWhy = nil, nil
 
 -- ★图标挑选抽成**纯函数**（脱离游戏可测）：按候选前缀的**优先级**挑（不是宏图标表的表序）；
 --   enumFn(i) → 路径或 nil（本客户端 GetMacroIconInfo 的形态，与 IconBrowser.lua 同源）。
 function EVAL_HELP_MB_PICKICON(n, enumFn)
   if type(n) ~= "number" or n < 1 or type(enumFn) ~= "function" then return nil end
-  -- ★1.71.17 用户定稿：初始图标 = **力量祝福**（Spell_Holy_BlessingOfStrength，金色拳头，一眼是「增益/强化」）——
-  --   她在图标库亲自挑过这枚当按钮图标（见 1.71.15），并要求初始默认也用同一枚；
-  --   其次才是「工具箱」气质：扳手 > 工程学 > 齿轮 > 小装置 > 书（★大写化后做前缀匹配，名尾的 _TEX 不妨碍）
-  local CANDS = { "^SPELL_HOLY_BLESSINGOFSTRENGTH", "^INV_MISC_WRENCH", "^TRADE_ENGINEERING", "^INV_MISC_GEAR", "^INV_GIZMO", "^INV_MISC_BOOK" }
+  -- ★★★1.75.10 用户定稿（原话：「头龙 配置为插件默认图标」）——**初始默认图标 = 头龙**
+  --   （`INV_Misc_Head_Dragon_01`；她在图标库悬停确认过那枚 = **宏图标序号 670**，见 /eh go mbicon 的用法）。
+  --   ★它**压过** 1.71.17 定的「力量祝福」：那条**保留在候选表里当第二顺位**（万一某个客户端没有头龙那枚，
+  --     也不至于掉到扳手甚至留空白）；★真机读数已核：670 号 = `/Game/Interface/Icons/INV_Misc_Head_Dragon_01_TEX`。
+  --   其后才是「工具箱」气质：扳手 > 工程学 > 齿轮 > 小装置 > 书（★大写化后做前缀匹配，名尾的 _TEX 不妨碍）
+  --   ★★`_01` 这个尾号是**判据的一部分**：`INV_MISC_HEAD_DRAGON_BLACK/BLUE/…` 那几枚不能算命中。
+  local CANDS = { "^INV_MISC_HEAD_DRAGON_01", "^SPELL_HOLY_BLESSINGOFSTRENGTH", "^INV_MISC_WRENCH", "^TRADE_ENGINEERING", "^INV_MISC_GEAR", "^INV_GIZMO", "^INV_MISC_BOOK" }
   local names = {}
   for i = 1, n do
     local ok, p = pcall(enumFn, i)
@@ -3330,6 +3489,9 @@ do
     end
   end)
   mb:SetScript("OnEnter", function()
+    -- ★★★1.75.10 自愈：载入期那一次没贴上（宏图标表/存档还没就绪）时，**鼠标一悬停就补一次**
+    --   —— 这是最便宜的重试时机（用户想用按钮时必然经过这里），且已贴上后一次都不发（幂等）。
+    if not mbIconPath and type(EVAL_HELP_MB_RETRY) == "function" then pcall(EVAL_HELP_MB_RETRY) end
     -- 悬停反馈：兜底样式染金框；图标模式给图标染一层金（未贴图前保持暗底不动）
     if mbRing then pcall(mbRing.SetVertexColor, mbRing, 1, 0.88, 0.40, 1)
     elseif mbIconPath then pcall(mbIconTex.SetVertexColor, mbIconTex, 1, 0.88, 0.40) end
@@ -3361,10 +3523,22 @@ end
 
 -- ★贴图 + 状态同步只此一份（SETICON 自动挑 / SETCUSTOM 用户右键挑 共用）；
 --   ★贴上图标时要把兜底留下的「EH」字**清空**（OVERLAY 层会压在图标上；「先清空再隐藏」的既有配方）。
+-- 客户端读回（诊断用；纹理没有 GetTexture 就如实回 nil —— 绝不用「我们设定的值」冒充读回值）
+local function mbIconBackOf()
+  if not mbIconTex or type(mbIconTex.GetTexture) ~= "function" then return nil end
+  local ok, t = pcall(mbIconTex.GetTexture, mbIconTex)
+  if ok and type(t) == "string" and t ~= "" then return t end
+  return nil
+end
+
 local function mbApplyIcon(path)
   pcall(mbIconTex.SetTexture, mbIconTex, path)
   pcall(mbIconTex.SetVertexColor, mbIconTex, 1, 1, 1)
+  -- ★1.75.10：兜底样式会把这块暗底 `SetAlpha(0)` 藏起来（见 EVAL_HELP_MB_SETICON）⇒
+  --   从兜底切回图标时**必须还原 alpha**，否则贴上了图标却整块透明（换个花样的黑方块）。
+  pcall(mbIconTex.SetAlpha, mbIconTex, 1)
   mbIconPath = path
+  mbBack = mbIconBackOf() -- 读回自证（诊断/探针用）
   if mbText then pcall(mbText.SetText, mbText, "") end
 end
 
@@ -3373,18 +3547,35 @@ end
 function EVAL_HELP_MB_SETCUSTOM(path)
   if type(path) ~= "string" or path == "" then return false end
   c().mbIcon = path
-  if minimapBtn and mbIconTex then mbApplyIcon(path) end
+  if minimapBtn and mbIconTex then
+    mbApplyIcon(path)
+    mbWhy = "custom"
+  else
+    -- ★1.75.10：以前这里**什么都不说**（存档改了、按钮没变 = 静默）⇒ 如实记下原因，探针能读到
+    mbWhy = "noframe"
+  end
   return true
+end
+
+-- ★★★1.75.10 自愈口（幂等）：**只在还没贴上图标时才动手**——
+--   为什么需要它：`EVAL_HELP_MB_SETICON` 只在 VARIABLES_LOADED 打**一次**（本文件 3237 行注释自己写着
+--   「载入期宏图标接口未必就绪」），本客户端那一刻宏图标表/存档不一定就绪 ⇒ 一次不成界面上就是一块黑方块，
+--   而且**一声不响**。⇒ 再挂两个时机：进世界（PLAYER_ENTERING_WORLD）+ 鼠标悬停到按钮上。
+--   ★贴上过（`mbIconPath` 非 nil）就**一次调用都不发** = 正常路径零动作（与「关掉零动作」同一纪律）。
+function EVAL_HELP_MB_RETRY()
+  if mbIconPath then return true end
+  return EVAL_HELP_MB_SETICON()
 end
 
 -- ★1.71.13 给按钮贴图标：从宏图标表按名字挑一枚「工具」图标（挑选逻辑 = 上面的纯函数，可注桩直测）。
 --   ★挑不到就建旧的「金框 + 暗底 + EH」兜底样式 —— **不许留空白按钮**（接口缺席时入口不能消失）。
 function EVAL_HELP_MB_SETICON()
-  if not minimapBtn or not mbIconTex then return false end
+  if not minimapBtn or not mbIconTex then mbWhy = "noframe" return false end
   -- ★1.71.15 她在图标库里右键挑过的图标**优先**（亲自挑的 > 自动挑的）
   local cu = c().mbIcon
   if type(cu) == "string" and cu ~= "" then
     mbApplyIcon(cu)
+    mbWhy = "custom"
     return true
   end
   local path = nil
@@ -3393,9 +3584,15 @@ function EVAL_HELP_MB_SETICON()
     if okn and type(n) == "number" and n > 0 then
       path = EVAL_HELP_MB_PICKICON(n, GetMacroIconInfo)
     end
+    -- ★1.75.10：把「接口在但挑不到」与「接口不在」**分开如实记**（诊断口径；以前两者都是 nil 走兜底，
+    --   真机上分不清是「表没就绪」还是「候选一枚都没有」—— 那正是本轮要查的东西）
+    if not path then mbWhy = (type(n) == "number" and n > 0) and "pickfail" or "noapi" end
+  else
+    mbWhy = "noapi"
   end
   if path then
     mbApplyIcon(path)
+    mbWhy = "auto:" .. tostring(path)
     return true
   end
   if not mbRing then -- 兜底只建一次
@@ -3408,6 +3605,16 @@ function EVAL_HELP_MB_SETICON()
     mt:SetText("EH")
     mbRing, mbText = ring, mt
   end
+  -- ★1.75.10：**每次进兜底都把「EH」字写回** —— 贴上过图标之后它被清空成 ""，
+  --   而这段兜底只建一次（`if not mbRing`）⇒ 再回到兜底就只剩金框、没有字（组 238① 当场抓到）。
+  if mbText then pcall(mbText.SetText, mbText, "EH") end
+  -- ★★★1.75.10 修（真机症状就是这一条）：兜底的金框画在 **BACKGROUND**，而那块暗底是
+  --   **不透明、同尺寸的 ARTWORK** ⇒ 金框被 100% 盖住，等于**根本没有可见的兜底**；
+  --   表现 = 一块纯黑方块（截图取色 #1D180E ≈ 创建时的 0.12/0.10/0.06）。
+  --   ⇒ 走兜底时把暗底整块透明掉（`SetAlpha(0)`），金框 + 「EH」字才真的看得见；
+  --     以后一旦贴上图标，`mbApplyIcon` 会把 alpha 还原成 1。
+  pcall(mbIconTex.SetAlpha, mbIconTex, 0)
+  mbWhy = mbWhy or "fallback" -- 保留更具体的原因（noapi / pickfail），没有才写 fallback
   return false
 end
 
@@ -3423,14 +3630,30 @@ function EVAL_TEST_MB_DEFAULT_ANCHOR()
 end
 function EVAL_TEST_MB_OVERLAPS() return mbOverlapsMinimap(minimapBtn) end
 function EVAL_TEST_MB_BTN() return minimapBtn end
+-- ★1.75.10 读值口（测试用）：把「已贴 / 读回 / 判定」三位清回**未贴**的原始状态。
+--   为什么必须有它：`mbIconPath` 一旦贴上就粘住（自愈口靠它判「要不要再试」），
+--   而「载入那一次没贴上 → 悬停/进世界补上」这条路只有在**未贴**状态下才验得到。
+--   ★它只清**诊断/记忆**三位，不碰配置真值（cfg.mbIcon）与控制件。
+function EVAL_TEST_MB_ICON_RESET()
+  mbIconPath, mbBack, mbWhy = nil, nil, nil
+  return true
+end
 -- ★1.71.13 断言入口：按钮的**真实几何与贴图状态**（图标模式 / 兜底模式），读真控件不写死常量。
 function EVAL_TEST_MB_VISUAL()
-  local out = { w = nil, h = nil, icon = mbIconPath, hasFallback = (mbRing ~= nil) and true or false, ehText = nil }
+  -- ★1.75.10 新增诊断三件：`back` = 客户端**读回**的纹理 · `why` = 本次判定原因 · `plateAlpha` = 暗底透明度。
+  --   为什么必须进读值口：「贴上没贴上」这一族失败是**静默**的（pcall 吞错 + if 守卫一挡），
+  --   不进读值口就只能靠肉眼看真机（本轮真机症状 = 一块纯黑方块，正是这么被用户逮到的）。
+  local out = { w = nil, h = nil, icon = mbIconPath, hasFallback = (mbRing ~= nil) and true or false, ehText = nil,
+                back = mbBack, why = mbWhy, plateAlpha = nil }
   if minimapBtn then
     local okw, w = pcall(minimapBtn.GetWidth, minimapBtn)
     out.w = (okw and type(w) == "number") and w or nil
     local okh, h = pcall(minimapBtn.GetHeight, minimapBtn)
     out.h = (okh and type(h) == "number") and h or nil
+  end
+  if mbIconTex and type(mbIconTex.GetAlpha) == "function" then
+    local oka, a = pcall(mbIconTex.GetAlpha, mbIconTex)
+    out.plateAlpha = (oka and tonumber(a)) or nil
   end
   if mbText then
     local okt, t = pcall(mbText.GetText, mbText)
@@ -3885,7 +4108,8 @@ function EVAL_HELP_ST_BUILD()
   pcall(body.SetJustifyH, body, "LEFT")
 
   root:SetWidth(W)
-  root:SetHeight(titleBarH + pad * 2 + 15 * 14)
+  -- 1.75.11 14 → 16 行：新增「围攻我的怪数」+「周围敌人数」两行状态值（行高 15px 不变）
+  root:SetHeight(titleBarH + pad * 2 + 15 * 16)
   root:ClearAllPoints()
   root:SetPoint("CENTER", UIParent, "CENTER", sc.x or 330, sc.y or -180)
   if uiOffscreen(root) then
@@ -3905,7 +4129,13 @@ end
 
 -- 每次心跳：刷新状态表，逐行重排正文（Cat 的 CatUI-Melee 状态行同款展示）
 function EVAL_HELP_ST_TICK()
-  if not stui.root or not stui.root:IsVisible() then return end
+  if not stui.root or not stui.root:IsVisible() then
+    -- 1.75.11 临时测试：状态UI 关掉就停采集（零动作 —— 不开窗一个事件都不挂）
+    if type(EVAL_MW_UI_OFF) == "function" then pcall(EVAL_MW_UI_OFF) end
+    return
+  end
+  -- 1.75.11 临时测试：状态UI 开着才采集（围攻我的怪 / 周围敌人数；脱战时才切目标数周围）
+  if type(EVAL_MW_UI_ON) == "function" then pcall(EVAL_MW_UI_ON) end
   -- ★1.73.59 与战斗信息UI 同款两个徽标（档位 + 头衔）也要跟着刷 —— 登记表里一次刷完，两个窗口共用一份实现。
   uiTitleBadgeRefresh()
   EVAL_HELP_UPDATE_STATE()
@@ -3920,6 +4150,13 @@ function EVAL_HELP_ST_TICK()
     st.inCombat and "|cffff5040战斗中|r" or "|cff80ff80非战斗|r",
     st.inCombat and string.format(" %.1fs", st.combatTime) or "",
     st.form or "无姿态"))
+  -- 1.75.11 临时测试（用户：临时添加个战斗状态,周围怪物数量的状态值.在战斗UI状态Ui 内测试）：
+  --   战斗状态上面那行本来就有（战斗中 x.xs / 非战斗）；下面两行 = 新增的围攻/周围状态值。
+  if type(EVAL_MW_UI_LINES) == "function" then
+    local mwA, mwB = EVAL_MW_UI_LINES()
+    if type(mwA) == "string" then table.insert(lines, mwA) end
+    if type(mwB) == "string" then table.insert(lines, mwB) end
+  end
   table.insert(lines, string.format("Alt:%s Shift:%s Ctrl:%s 普攻:%s",
     stYesNo(st.alt), stYesNo(st.shift), stYesNo(st.ctrl), stYesNo(st.autoAttack)))
   if st.atkSpd or st.atkSpdRanged then -- 1.55.0 挥击计时行（1.74.30 起状态感知：自动射击中显示射速）
@@ -4067,10 +4304,21 @@ local SE_TYPES = {
   { id = "combo",      name = "连击点数",    kind = "num",   n = 1 }, -- 1.54.4 初始值 1（域 1-5）
   { id = "swingLeft",  name = "距下次攻击",  kind = "num",   n = 0 }, -- 1.57.0 挥击计时（秒）；★1.74.30 用户定：初始值 **0**（原 1.58.0 的 0.1）
   { id = "shotLeft",   name = "距下次射击",  kind = "num",   n = 0 }, -- ★1.74.30 射击计时（秒）；与「距下次攻击」成对，初始值同样 **0**
+  -- ★★★1.75.11 近战围攻 / 交战人数（用户：条件类型 → 自身状态；数值比较）
+  --   值由 Engine 的近战围攻探针统计（只统计战斗状态；非战斗恒 0），本表只管 UI 与初值。
+  --   ★步进 1 / 上限 10 由 SE_INT10_K 管（见下面的 +/- 按钮分支）。
+  { id = "mwSiege",    name = "围攻自身数量", kind = "num",   n = 1 },
+  { id = "mwEngaged",  name = "10s交战人数",  kind = "num",   n = 1 },
   { id = "combat",     name = "战斗状态",    kind = "bool" },
   { id = "hasTarget",  name = "目标存在",    kind = "bool" },
   { id = "canAttack",  name = "目标可攻击",  kind = "bool" },
   { id = "canBleed",   name = "目标可流血",  kind = "bool" },
+  -- ★★★1.75.10 目标死亡（用户：「技能编辑->目标状态->添加个判断: 目标死亡 是/否」）：
+  --   kind = "bool" ⇒ 是/否 由既有布尔分支渲染（**不需要任何新 UI**）；取值 = `st.tDead`
+  --   （Core 的 UPDATE_STATE 用 `UnitIsDeadOrGhost("target")` 填；★**没有目标时它被显式清成 false** ⇒ 不会拿上一只怪的死活糊弄）。
+  --   ★与「目标存在/可攻击/可流血…」同一套直接比较口径：**没有目标时「否」成立**（= 目标没有死）；
+  --     要「必须有目标且已死」就再配一条「目标存在 = 是」。
+  { id = "tDead",      name = "目标死亡",    kind = "bool" },
   { id = "tFriendly",  name = "目标友善",    kind = "bool" },
   { id = "tHostile",   name = "目标敌对",    kind = "bool" },
   { id = "tNeutral",   name = "目标中立",    kind = "bool" },
@@ -4102,6 +4350,11 @@ local SE_TYPES = {
   --   支持下拉 支持 是/否」。kind="creature"：多选下拉（或关系，同 tClass）+ 是/否。
   --   取值来自 UnitCreatureType("target")，返回**本地化名**，故匹配同时比对本地化名与英文 token。
   { id = "tCreature",  name = "目标类型",    kind = "creature" },
+  -- ★★★1.75.10 目标玩家（用户原话：「技能编辑->目标状态->添加个判断: 目标玩家:xxx名（名称支持自定义输入） 是/否」）：
+  --   kind = "pname"：**自由输入玩家名**（点名字格弹输入框 —— 用户明确要「自定义输入」，走 EVAL_TN_OPEN 回声行范式）
+  --   + 是/否（是 = 当前目标正是名为 X 的**玩家**；否 = 不是）。
+  --   ★名字存在 **cd.nm**（与「选取目标:指定名称」同一个字段口径）；显示名列在 CT_TPLAYER 语言键里。
+  { id = "tPlayer",    name = "目标玩家",    kind = "pname" },
   { id = "immune",    name = "目标免疫技能", kind = "skill", s = "" }, -- 1.36.1 免疫学习表判定；1.70.0 去战士化：默认空（旧默认 撕裂）
   { id = "inRange",   name = "施法范围内",  kind = "skill", s = "" }, -- 1.37.0 IsActionInRange；1.70.0 去战士化：默认空（旧默认 冲锋）
   { id = "casting",   name = "施法中",      kind = "skill", s = "" }, -- 1.38.0 SPELLCAST_* 事件驱动 -- 1.41.0 默认空=任意施法
@@ -4194,12 +4447,12 @@ function EVAL_TEST_SE_TYPE_INIT(id)
   return nil
 end
 local SE_TYPE_GROUPS = {
-  { label = "CTG_1", w = 1, cov = "A", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "swingLeft", "shotLeft", "combat", "autoAttack", "autoShot", "wandShoot", "alt", "shift", "ctrl", "form", "tracking" } }, -- ★1.71.2（第十五轮）施法族（施法中/施法时间/施法剩余时间）已统一移入 CTG_4；★1.75.6 补 tracking（自身状态，用户指定）
+  { label = "CTG_1", w = 1, cov = "A", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "swingLeft", "shotLeft", "combat", "autoAttack", "autoShot", "wandShoot", "alt", "shift", "ctrl", "form", "tracking", "mwSiege", "mwEngaged" } }, -- ★1.71.2（第十五轮）施法族（施法中/施法时间/施法剩余时间）已统一移入 CTG_4；★1.75.6 补 tracking（自身状态，用户指定）
   -- ★★★1.74.19 COND WEIGHT CHECK 当场抓到的漏网之鱼：`target`（「选取目标」，1.32.0 起 hidden、下拉不再提供）
   --   仍然在 SE_TYPES 里、**存量方案里还有**、求值也照跑 —— 它却不在任何分组里 ⇒
   --   新口径下会被按 **0 分**算、也不计覆盖（静默少算一截）。归到「目标状态」：它就是选目标那件事。
   --   ★hidden = true ⇒ 不会因此出现在条件下拉里（下拉那侧自己会跳过 hidden）。
-  { label = "CTG_2", w = 2, cov = "B", ids = { "tHpPct", "hasTarget", "canAttack", "canBleed", "tFriendly", "tHostile", "tNeutral", "isElite", "isBoss", "tInCombat", "tClass", "tCreature", "immune", "target" } }, -- ★1.71.2（第十五轮）目标施法族（目标施法中/目标施法时间/目标施法剩余时间）已统一移入 CTG_4
+  { label = "CTG_2", w = 2, cov = "B", ids = { "tHpPct", "hasTarget", "canAttack", "canBleed", "tDead", "tFriendly", "tHostile", "tNeutral", "isElite", "isBoss", "tInCombat", "tClass", "tCreature", "tPlayer", "immune", "target" } }, -- ★1.71.2（第十五轮）目标施法族（目标施法中/目标施法时间/目标施法剩余时间）已统一移入 CTG_4；★1.75.10 新增 tPlayer（目标玩家）、tDead（目标死亡）
   { label = "CTG_3", w = 2, cov = "C", ids = { "hasBuff", "pDebuff", "hasDebuff", "tBuff" } }, -- 1.54.0 光环检查四型
   -- ★1.70.47 队伍/团队条件单列一组：**队伍与团队各列一份**（用户要求：
   --   「条件类型: 队伍debuff / 队伍buff / 团队debuff / 团队buff」——直接作为可选类型出现，不用范围下拉）
@@ -4244,6 +4497,9 @@ end
 --   ★★必须声明在**所有使用者之前**：本项目老账 —— local 在闭包创建之后才声明 ⇒ 闭包只看到**全局 nil**
 --     （1.70.46 就因 seSecKinds 的声明位置踩过「用户一点就红字」的事故）⇒ 从后面的条件行代码**上移到这里**。
 local SE_TIME_K = { swingLeft = true, shotLeft = true, castEl = true, castLeft = true, tCastEl = true, tCastLeft = true }
+-- ★1.75.11 计数型数值条件（用户定：递步 1 / 默认 1 / 上限 10）——与时间型（0.1 步进、0-10）并列，
+--   但**步进是 1**：这两个是「几只怪」的整数计数，0.1 步进毫无意义（原默认分支是 5 步进、上限 300，也不合适）。
+local SE_INT10_K = { mwSiege = true, mwEngaged = true }
 local function seIsTimeKind(k) return (type(k) == "string" and SE_TIME_K[k] == true) and true or false end
 
 local seUI = { root = nil, ed = nil, rows = {} }
@@ -4279,6 +4535,8 @@ local function seDefaultCond(ti)
   elseif td.kind == "creature" then return { k = td.id, cs = {}, v = true } -- 1.70.28 目标类型：默认「是」+ 空选择（空=永不满足，需用户点选）
   -- ★1.75.6 追踪类型：值 = 候选表 id（默认 any = 任意追踪），是/否 = 正向/反向
   elseif td.kind == "track" then return { k = td.id, s = td.s or "any", v = true }
+  -- ★1.75.10 目标玩家：名字留空起步（**未填 = 求值如实失败**，绝不静默通过）＋ 默认「是」
+  elseif td.kind == "pname" then return { k = td.id, nm = "", v = true }
 
   else return { k = td.id } end
 end
@@ -5306,6 +5564,16 @@ function EVAL_HELP_SE_REFRESH()
       elseif td.kind == "bool" then
         row.valBtn.text:SetText(cd.v and "是" or "否")
         pcall(row.valBtn.btn.Show, row.valBtn.btn)
+      elseif td.kind == "pname" then
+        -- ★1.75.10 目标玩家：名字格（点它弹输入框）+ 是/否。
+        --   ★名字复用 skillText/sHit 那一格（x=140/142，与光环名同槽位），是/否复用 immBtn（x=246）
+        --     —— 三个控件都在 row.all 里，进本分支前已被统一 Hide，这里逐个 Show（只 Hide 不 Show 是 1.73.1 那族事故）。
+        local nmDisp = (type(cd.nm) == "string" and cd.nm ~= "") and cd.nm or "未填写（点此输入）"
+        row.skillText:SetText("玩家:" .. nmDisp)
+        pcall(row.skillText.Show, row.skillText)
+        pcall(row.sHit.Show, row.sHit)
+        row.immBtn.text:SetText((cd.v == false) and L("SE_NO") or L("SE_YES"))
+        pcall(row.immBtn.btn.Show, row.immBtn.btn)
       elseif td.kind == "flag" then
         row.valBtn.text:SetText(cd.inv and "否" or "是")
         pcall(row.valBtn.btn.Show, row.valBtn.btn)
@@ -5363,7 +5631,14 @@ function EVAL_HELP_SE_REFRESH()
         pcall(row.sHit.Show, row.sHit)
         pcall(row.skillText.Show, row.skillText)
       elseif td.kind == "target" then
-        local disp = (cd.s == "byName") and ("指定:" .. tostring(cd.nm or "未设")) or (TARGET_SEL_NAME[cd.s] or tostring(cd.s or "?"))
+        -- ★1.75.10 带名字的选取器（指定名称 / 玩家的目标）显示「<选取器名>:<名字>」，
+        --   其它显示选取器名（显示名取单一来源 TARGET_SEL_NAME，UI 层不另写映射）。
+        local disp
+        if TARGET_SEL_NM[cd.s] then
+          disp = (TARGET_SEL_NAME[cd.s] or tostring(cd.s or "?")) .. ":" .. tostring(cd.nm or "未设")
+        else
+          disp = TARGET_SEL_NAME[cd.s] or tostring(cd.s or "?")
+        end
         row.skillText:SetText(disp)
         pcall(row.sHit.Show, row.sHit)
         pcall(row.skillText.Show, row.skillText)
@@ -5637,6 +5912,13 @@ local function SE_BUILD()
     if v == L("SE_PICK_TGT") then
       EVAL_TN_OPEN(L("SE_TN_TARGET"), "", function(nm)
         if nm and nm ~= "" then seUI.ed.skill = "选取目标:指定名称:" .. nm EVAL_HELP_SE_REFRESH() end
+      end)
+      return
+    end
+    -- ★1.75.10 技能级「选取目标:玩家的目标:<名>」（协助某玩家 = AssistByName；写法与「指定名称」同族）
+    if v == L("SE_PICK_TGT_PLAYER") then
+      EVAL_TN_OPEN(L("SE_TN_PLAYER_TGT"), "", function(nm)
+        if nm and nm ~= "" then seUI.ed.skill = "选取目标:玩家的目标:" .. nm EVAL_HELP_SE_REFRESH() end
       end)
       return
     end
@@ -5928,6 +6210,7 @@ local function SE_BUILD()
       if it and it.cd.n then
         if it.cd.k == "combo" then it.cd.n = math.max(1, it.cd.n - 1) -- 1.54.3 连击点数域 1-5（GetComboPoints 上限 5）
         elseif SE_TIME_K[it.cd.k] then it.cd.n = math.max(0, math.floor((it.cd.n - 0.1) * 10 + 0.5) / 10) -- 时间型 0.1 步进
+        elseif SE_INT10_K[it.cd.k] then it.cd.n = math.max(0, (it.cd.n or 0) - 1) -- ★1.75.11 计数型：1 步进（0-10）
         else it.cd.n = math.max(0, it.cd.n - 5) end
         EVAL_HELP_SE_REFRESH()
       end
@@ -5942,6 +6225,7 @@ local function SE_BUILD()
       if it and it.cd.n then
         if it.cd.k == "combo" then it.cd.n = math.min(5, it.cd.n + 1) -- 1.54.3 连击点数域 1-5
         elseif SE_TIME_K[it.cd.k] then it.cd.n = math.min(10, math.floor((it.cd.n + 0.1) * 10 + 0.5) / 10) -- 时间型 0.1 步进 上限 10.0
+        elseif SE_INT10_K[it.cd.k] then it.cd.n = math.min(10, (it.cd.n or 0) + 1) -- ★1.75.11 计数型：1 步进 上限 10
         else it.cd.n = math.min(300, it.cd.n + 5) end
         EVAL_HELP_SE_REFRESH()
       end
@@ -6014,6 +6298,16 @@ local function SE_BUILD()
       local it = seUI.ed and seUI.ed.conds[i]
       if not it then return end
       local tdi = SE_TYPES[seTypeIndexOf(it.cd.k, it.cd.name)]
+      if tdi and tdi.kind == "pname" then
+        -- ★★★1.75.10 目标玩家：点名字格 = 弹输入框（用户明确要「名称支持自定义输入」）。
+        --   走既有输入弹窗范式 EVAL_TN_OPEN（内部是「回声行」镜像，本客户端 EditBox 不渲染的老坑已有对策）；
+        --   名字落在 **cd.nm**（与「选取目标:指定名称」同一字段）。
+        EVAL_TN_OPEN(L("SE_TN_PLAYER"), it.cd.nm or "", function(nm)
+          it.cd.nm = nm
+          EVAL_HELP_SE_REFRESH()
+        end)
+        return
+      end
       if tdi and tdi.kind == "track" then
         -- ★1.75.6 追踪类型 = **单选**下拉：
         --   第 1 行 = 此刻实际的追踪（locked，仅参考，点不动 —— 与「目标类型」那行「当前目标: X」同款做法）；
@@ -6084,15 +6378,23 @@ local function SE_BUILD()
         return
       end
       if tdi and tdi.kind == "target" then
-        -- 指定名称的名称下拉（1.29.0）：最近 5 敌名（循环枚举法）+ 自定义输入弹窗
+        -- 带名字选取器的名称下拉（1.29.0 指定名称 / 1.75.10 玩家的目标）：候选名 + 自定义输入弹窗
         local function openNameDrop()
           local items = {}
-          for _, n in ipairs(EVAL_NEARBY_ENEMY_NAMES(5)) do table.insert(items, n) end
+          -- ★1.75.10 候选按选取器分（两个入口都不许为了列名字乱动目标）：
+          --   指定名称 = 最近 5 敌名（那套是「边切边收集」，切一轮可接受）
+          --   玩家的目标 = 自己/队友/团员名（**纯只读**枚举，零副作用）
+          if it.cd.s == "playerTarget" then
+            for _, n in ipairs(EVAL_PLAYER_NAMES(12)) do table.insert(items, n) end
+          else
+            for _, n in ipairs(EVAL_NEARBY_ENEMY_NAMES(5)) do table.insert(items, n) end
+          end
           table.insert(items, "✎ 自定义名称…")
           local customIdx = table.getn(items)
+          local tnTitle = (it.cd.s == "playerTarget") and L("SE_TN_PLAYER_TGT") or L("SE_TN_TARGET")
           EVAL_DD_OPEN(row.sHit, items, function(pi)
             if pi >= customIdx then
-              EVAL_TN_OPEN("指定目标名称（盲打看金色回声行）", it.cd.nm or "", function(nm)
+              EVAL_TN_OPEN(tnTitle, it.cd.nm or "", function(nm)
                 it.cd.nm = nm
                 EVAL_HELP_SE_REFRESH()
               end)
@@ -6102,16 +6404,16 @@ local function SE_BUILD()
             end
           end)
         end
-        if it.cd.s == "byName" then
-          openNameDrop() -- 已是指定名称：本下拉=选名称（换种类重选条件类型即可）
+        if TARGET_SEL_NM[it.cd.s] then
+          openNameDrop() -- 已是带名字的选取器：本下拉=选名字（换种类重选条件类型即可）
         else
-          -- 选取目标：下拉官方 Targetting 函数种类（1.25.0 七种 + 1.29.0 目标的目标/指定名称）
+          -- 选取目标：下拉官方 Targetting 函数种类（1.25.0 七种 + 1.29.0 目标的目标/指定名称 + 1.75.10 玩家的目标）
           local items = {}
           for _, t in ipairs(TARGET_SEL) do table.insert(items, t.name) end
           EVAL_DD_OPEN(row.sHit, items, function(pi)
             it.cd.s = TARGET_SEL[pi].id
             EVAL_HELP_SE_REFRESH()
-            if it.cd.s == "byName" then openNameDrop() end -- 选完种类立即选名称
+            if TARGET_SEL_NM[it.cd.s] then openNameDrop() end -- 选完种类立即选名称
           end)
         end
         return
@@ -6439,6 +6741,33 @@ function EVAL_TEST_SE_ROW_DT(i)
   local okT, t = pcall(row.dtBtn.text.GetText, row.dtBtn.text)
   return (okS and s) and true or false, okT and t or nil
 end
+-- ★1.75.10 读值口：该行「是/否」按钮（immBtn）的可见性与**真实文字**。
+--   存在理由：目标玩家条件的 是/否 = 正向/反向的唯一界面凭据；不读真控件就只能读数据（显示侧没人钉）。
+function EVAL_TEST_SE_ROW_IMM(i)
+  local row = seUI.rows and seUI.rows[i]
+  if not (row and row.immBtn) then return nil, nil end
+  local okS, s = pcall(row.immBtn.btn.IsShown, row.immBtn.btn)
+  local okT, t = pcall(row.immBtn.text.GetText, row.immBtn.text)
+  return (okS and s) and true or false, okT and t or nil
+end
+-- ★1.75.10 读值口：布尔类条件那一格（`row.valBtn`，x=142）的可见性与真实文字。
+--   布尔类（目标死亡/目标存在/可攻击…）的是/否就在这一格，与 pname 用的 immBtn 是**两个控件**。
+function EVAL_TEST_SE_ROW_VAL(i)
+  local row = seUI.rows and seUI.rows[i]
+  if not (row and row.valBtn) then return nil, nil end
+  local okS, s = pcall(row.valBtn.btn.IsShown, row.valBtn.btn)
+  local okT, t = pcall(row.valBtn.text.GetText, row.valBtn.text)
+  return (okS and s) and true or false, okT and t or nil
+end
+-- ★1.75.10 测试直调：点该行「布尔 是/否」那一格（走**真实** OnClick —— 数据侧与接线一起验）
+function EVAL_TEST_SE_CLICK_VAL(i)
+  local row = seUI.rows and seUI.rows[i]
+  if not (row and row.valBtn) then return false end
+  local ok, fn = pcall(row.valBtn.btn.GetScript, row.valBtn.btn, "OnClick")
+  if not (ok and type(fn) == "function") then return false end
+  fn()
+  return true
+end
 -- ★1.71.3 断言入口：队伍/团员条件的两个过滤格（职业 / 小队）——可见性 + 显示文案（问真实控件）
 function EVAL_TEST_SE_ROW_CLS(i)
   local row = seUI.rows and seUI.rows[i]
@@ -6502,6 +6831,21 @@ function EVAL_TEST_SE_AURA_NAME(i)
   local ed = seUI and seUI.ed
   local it = ed and ed.conds and ed.conds[i]
   return it and it.cd and it.cd.s or nil
+end
+-- ★1.75.10 读值口：该行「名字格」的**真实文字**（`row.skillText`）。
+--   存在理由：目标玩家/目标职业/目标类型/追踪类型都把参数显示在这一格 —— 断言要读**真控件**
+--   （本项目纪律：数据侧与显示侧各钉一半；「数据对了没显示出来」与「显示了但数据不对」是两回事）。
+function EVAL_TEST_SE_ROW_TEXT(i)
+  local row = seUI.rows and seUI.rows[i]
+  if not (row and row.skillText) then return nil end
+  local ok, t = pcall(row.skillText.GetText, row.skillText)
+  return ok and t or nil
+end
+-- ★1.75.10 读第 i 行条件的**名字参数**（cd.nm：目标玩家 / 选取目标:指定名称 共用这个字段）
+function EVAL_TEST_SE_COND_NM(i)
+  local ed = seUI and seUI.ed
+  local it = ed and ed.conds and ed.conds[i]
+  return it and it.cd and it.cd.nm or nil
 end
 -- ★1.71.3 断言入口：读该行条件的**数据侧**类型 id（与显示侧的 ROW_TYPE 各钉一半——
 --   「数据对了但没显示出来」与「显示了但数据不对」是两回事，本项目两边都栽过）
@@ -6770,14 +7114,39 @@ end
 function EVAL_TEST_WAR_ROWS()
   local cw = EVAL_HELP_CFGWIN
   local wu = cw and cw.warUI
-  local out = { n = 0, names = {}, shown = {}, profDel = {}, tab = (cw and cw.tab) or nil }
+  local out = { n = 0, names = {}, conds = {}, shown = {}, profDel = {}, tab = (cw and cw.tab) or nil,
+                -- ★1.75.10 技能名/条件两列的**真实几何 + 真实宽度**（用户报「名字压到条件上」= 纯几何问题，
+    --   只验「文字写了什么」抓不到；读真控件，别在断言里复刻布局）
+                nameX = {}, nameW = {}, condX = {}, condW = {}, hov = {}, hovFrom = {} }
   if not (wu and wu.rows) then return out end
   for i, row in ipairs(wu.rows) do
     local ok, t = pcall(row.name.GetText, row.name)
     out.n = i
     out.names[i] = (ok and tostring(t or "")) or ""
+    local okc2, c2 = pcall(row.conds.GetText, row.conds)
+    out.conds[i] = (okc2 and tostring(c2 or "")) or ""
     local oks, sv = pcall(row.name.IsShown, row.name)
     out.shown[i] = (oks and sv) and true or false
+    local okx, xv = pcall(row.name.GetLeft, row.name)
+    out.nameX[i] = (okx and type(xv) == "number") and xv or nil
+    local okw, wv = pcall(row.name.GetWidth, row.name)
+    out.nameW[i] = (okw and type(wv) == "number") and wv or nil
+    local okcx, cxv = pcall(row.conds.GetLeft, row.conds)
+    out.condX[i] = (okcx and type(cxv) == "number") and cxv or nil
+    local okcw, cwv = pcall(row.conds.GetWidth, row.conds)
+    out.condW[i] = (okcw and type(cwv) == "number") and cwv or nil
+    -- 悬停热区（覆盖两格文字的透明 Button）：存在 + 挂了真脚本 + 真的收鼠标
+    out.hov[i] = (row.hov ~= nil)
+    if row.hov then
+      local oke, fe = pcall(row.hov.GetScript, row.hov, "OnEnter")
+      local okl, fl = pcall(row.hov.GetScript, row.hov, "OnLeave")
+      local okm, mv = pcall(row.hov.IsMouseEnabled, row.hov)
+      out.hovFrom[i] = {
+        enter = (oke and type(fe) == "function") or false,
+        leave = (okl and type(fl) == "function") or false,
+        mouse = (okm and mv == true) or false,
+      }
+    end
   end
   for i, pb in ipairs(wu.profBtns or {}) do
     if pb.del then
@@ -6786,6 +7155,31 @@ function EVAL_TEST_WAR_ROWS()
     end
   end
   return out
+end
+
+-- ★★★1.75.10 读值口：走**真实 OnEnter** 触发第 i 行的悬停提示（用户：「鼠标提示显示完整的条件信息」）。
+--   ★为什么不直调一段「拼 tooltip 文本」的辅助函数：那就成了「测试自己拼一份」（本项目的老坑）——
+--     必须让真实事件处理器跑一遍，从 GameTooltip 的记账里读它到底写了什么。
+function EVAL_TEST_WAR_HOVER(i)
+  local cw = EVAL_HELP_CFGWIN
+  local wu = cw and cw.warUI
+  local row = wu and wu.rows and wu.rows[i]
+  if not (row and row.hov) then return false end
+  local ok, fn = pcall(row.hov.GetScript, row.hov, "OnEnter")
+  if not (ok and type(fn) == "function") then return false end
+  pcall(fn, row.hov)
+  return true
+end
+-- ★ 配套：走真实 OnLeave（验「移开就收起来」，不许把 tooltip 留在屏幕上）
+function EVAL_TEST_WAR_HOVER_LEAVE(i)
+  local cw = EVAL_HELP_CFGWIN
+  local wu = cw and cw.warUI
+  local row = wu and wu.rows and wu.rows[i]
+  if not (row and row.hov) then return false end
+  local ok, fn = pcall(row.hov.GetScript, row.hov, "OnLeave")
+  if not (ok and type(fn) == "function") then return false end
+  pcall(fn, row.hov)
+  return true
 end
 
 function EVAL_TEST_CFG_LAYOUT()
@@ -7505,6 +7899,20 @@ function EVAL_TEST_UI_SECTIONS()
     out.rootW = (okw and type(w) == "number") and w or nil
     local okh, h = pcall(ui.root.GetHeight, ui.root)
     out.rootH = (okh and type(h) == "number") and h or nil
+  end
+  -- ★1.75.11 被围攻人数（与状态行同行、贴**根帧右缘** → 判据读**锚点与相对对象** + 与状态行**同顶**，不读写死的 y）
+  out.statusFs, out.siegeFs, out.rootFs = ui.status, ui.siege, ui.root
+  if ui.status then
+    local okp0, p0, r0, rp0, x0, y0 = pcall(ui.status.GetPoint, ui.status, 1)
+    if okp0 then out.statusPoint, out.statusRelTo, out.statusRelPoint, out.statusX, out.statusY = p0, r0, rp0, x0, y0 end
+  end
+  if ui.siege then
+    local okt, tv = pcall(ui.siege.GetText, ui.siege)
+    out.siegeText = (okt and type(tv) == "string") and tv or nil
+    local okp, sp, srel, srp, sx, sy = pcall(ui.siege.GetPoint, ui.siege, 1)
+    if okp then out.siegePoint, out.siegeRelTo, out.siegeRelPoint, out.siegeX, out.siegeY = sp, srel, srp, sx, sy end
+    local okj, jv = pcall(ui.siege.GetJustifyH, ui.siege)
+    out.siegeJustify = (okj and type(jv) == "string") and jv or nil
   end
   return out
 end
@@ -8371,6 +8779,14 @@ if type(SlashCmdList) == "table" then
       subT = string.gsub(subT, "^trackprobe%s*", "")
       if type(EVAL_TRACK_PROBE) == "function" then EVAL_TRACK_PROBE(subT)
       else say("追踪探针：引擎未载入（EVAL_TRACK_PROBE 不存在）") end
+    elseif string.find(msg, "^go 近战探针") or string.find(msg, "^go 近战") or string.find(msg, "^go melee") then
+      -- 1.75.11 近战围攻取证（见 Engine.lua 的 EVAL_MW_* 注释：附近敌人无枚举 API、事件名不许猜）
+      local subM = string.gsub(msg, "^go%s*", "")
+      subM = string.gsub(subM, "^近战探针%s*", "")
+      subM = string.gsub(subM, "^近战%s*", "")
+      subM = string.gsub(subM, "^melee%s*", "")
+      if type(EVAL_MW_CMD) == "function" then EVAL_MW_CMD(subM)
+      else say("近战探针：引擎未载入（EVAL_MW_CMD 不存在）") end
     elseif msg == "存档清理" or msg == "savescrub" then
       -- ★1.74.31 手动清全部探针残渣（iconDump / shProbe / shVariantProbe / probeEvents）
       if type(EVAL_LOAD_CLEANUP) == "function" then
@@ -8600,15 +9016,218 @@ if type(SlashCmdList) == "table" then
             e.skip and "|cffff5040×去抖丢弃|r" or "|cff00ff00√执行|r"))
         end
       end
-    elseif msg == "go mbicon" or msg == "go mbicon reset" then
+    elseif msg == "go mbicon" or string.find(msg, "^go mbicon%s") then
       -- ★1.71.15 小地图按钮图标：查当前 / 清掉自定义（清掉后回到自动挑；换图标走图标库右键，不必敲命令）
-      if msg == "go mbicon reset" then
+      -- ★★★1.75.10 扩成**取证命令**（用户报障：「插件配置的图标初始使用：现在是黑色的没有图标」）：
+      --   这一族的失败是静默的（pcall 吞错 / if 守卫一挡，界面上只有一块黑方块），所以读值必须**摊开**：
+      --   存档值 · 已贴值 · **客户端读回** · 接口张数 · 自动挑会挑谁 · 本次判定原因 · 暗底 alpha。
+      --   ★读数**专属落盘** `cfg.mbProbe`（有界 12 行，已进 Core 调试残渣键清单）——
+      --     聊天框 AI 侧读不到（`say` 不落日志环），存档只在 /reload 时才写盘（见 iconIdxProbe 的教训）。
+      local sub = string.match(msg, "^go mbicon%s+(.+)$")
+      local MB_OUT_MAX = 12 -- ★有界环（与 iconIdxProbe 同款形态 `{ out = { … } }` ⇒ 清残渣/读存档同一套）
+      local function idxSay(s)
+        local box = c().mbProbe
+        if type(box) ~= "table" or type(box.out) ~= "table" then box = { out = {} }; c().mbProbe = box end
+        box.out[table.getn(box.out) + 1] = s
+        while table.getn(box.out) > MB_OUT_MAX do table.remove(box.out, 1) end
+        say(s)
+      end
+      local function mbReport(tag)
+        local v = EVAL_TEST_MB_VISUAL()
+        local n = "接口缺失"
+        if type(GetNumMacroIcons) == "function" then
+          local okn, cnt = pcall(GetNumMacroIcons)
+          n = okn and tostring(cnt) or "调用失败"
+        end
+        local pick = "（挑不到）"
+        if type(GetNumMacroIcons) == "function" and type(GetMacroIconInfo) == "function" then
+          local okn, cnt = pcall(GetNumMacroIcons)
+          if okn and tonumber(cnt) and tonumber(cnt) > 0 then
+            local okp, p = pcall(EVAL_HELP_MB_PICKICON, tonumber(cnt), GetMacroIconInfo)
+            if okp and type(p) == "string" then pick = p end
+          end
+        end
+        idxSay("[小地图图标]" .. tag .. " 存档=" .. tostring(c().mbIcon) .. " ｜ 已贴=" .. tostring(v.icon)
+          .. " ｜ 读回=" .. tostring(v.back) .. " ｜ 判定=" .. tostring(v.why)
+          .. " ｜ 暗底alpha=" .. tostring(v.plateAlpha) .. " ｜ 宏图标表=" .. tostring(n) .. " 枚 ｜ 自动挑=" .. pick)
+      end
+      if sub == nil then
+        -- 只读报告：先把当前状态摊开，再**当场重贴一次**（= 不给用户「你先 /reload 试试」这种废话）
+        mbReport("当前：")
+        local okr, r = pcall(EVAL_HELP_MB_SETICON)
+        mbReport("重贴后：" .. (okr and tostring(r) or "抛错"))
+      elseif sub == "reset" or sub == "清" then
         c().mbIcon = nil
         EVAL_HELP_MB_SETICON()
         say("小地图按钮图标：已清掉自定义，回到自动挑选")
+        mbReport("清掉自定义后：")
+      elseif sub == "重贴" or sub == "reapply" then
+        local bak = mbIconPath
+        mbIconPath = nil -- 强制重贴（否则 RETRY 会因为「已贴上」直接返回）
+        local okr, r = pcall(EVAL_HELP_MB_SETICON)
+        if not mbIconPath then mbIconPath = bak end
+        mbReport("强制重贴：" .. (okr and tostring(r) or "抛错"))
       else
-        local cur = c().mbIcon
-        say("小地图按钮图标：" .. (type(cur) == "string" and cur or "（自动挑选）") .. "（图标库里右键任意一枚可换；/eh go mbicon reset 清掉自定义）")
+        -- 设定：`<宏序号>`（如 670）或 `<完整路径>`
+        local idx = tonumber(sub)
+        local path = nil
+        if idx then
+          if type(GetMacroIconInfo) ~= "function" then
+            say("小地图按钮图标：本客户端没有 GetMacroIconInfo，按号设置做不到（可改用完整路径）")
+          else
+            local okp, p = pcall(GetMacroIconInfo, idx)
+            if okp and type(p) == "string" and p ~= "" then path = p
+            else
+              local okn, cnt = pcall(GetNumMacroIcons)
+              say("小地图按钮图标：第 " .. idx .. " 号取不到（号越界 / 表里没有）—— 本客户端宏图标表 1~"
+                .. tostring(okn and cnt or "?"))
+            end
+          end
+        elseif string.find(sub, "[/\\]") then
+          path = sub
+        else
+          say("小地图按钮图标：看不懂「" .. sub .. "」——可敲 `/eh go mbicon` 看现状、`/eh go mbicon 670` 按宏图标号设、`/eh go mbicon reset` 清自定义")
+        end
+        if path then
+          if EVAL_HELP_MB_SETCUSTOM(path) then
+            say(string.format(L("IB_SET_MB"), path))
+            mbReport("设为：" .. path)
+          else
+            say("小地图按钮图标：设置被拒（路径为空）")
+          end
+        end
+      end
+    elseif string.find(msg, "^go tsel%s") or string.find(msg, "^go 选取目标%s") then
+      -- ★★★1.75.12 子命令 = **选取目标调用点取证环**（用户报障：「选取目标:最近敌人 + 冲锋：不按键时目标
+      --   也在尸体与活怪之间来回跳」）——静态审计已证明插件里没有任何定时器切目标 ⇒ 只能读**调用点**，
+      --   看「调用到底在不在来」。Engine 侧唯一调用口 `tselInvoke` 每条都记（谁调的 + 前后目标快照 +
+      --   第几发按键轮 + 接受/丢弃两条腿的计数），落 `cfg.selProbe`（有界 40 行，已进 Core 残渣键清单）。
+      --   ★读数一律走**读值口 EVAL_TSEL_PROBE()**（命令与断言共用同一份，不去解析中文文本）。
+      local subT, subN = string.match(msg, "^go %S+%s+(%S+)%s*(%S*)$")
+      if subT == "log" or subT == "日志" then
+        local p = (type(EVAL_TSEL_PROBE) == "function") and EVAL_TSEL_PROBE() or nil
+        if type(p) ~= "table" then
+          say("[选取取证] 读值口 EVAL_TSEL_PROBE 不存在（Engine 没载入？）")
+        else
+          local box = c().selProbe
+          local out = (type(box) == "table" and type(box.out) == "table") and box.out or {}
+          local n = table.getn(out)
+          local want = tonumber(subN) or n
+          if want > n then want = n end
+          if want < 1 then want = 0 end
+          say(string.format("[选取取证] 累计调用 %d 次 ｜ 接受发 %d / 被去抖丢弃 %d ｜ 上一发距 +%sms ｜ 上一条丢弃距 +%sms ｜ 环 %d/%s 行%s",
+            p.seq, p.acc, p.skip, tostring(p.lastAcc or "?"), tostring(p.lastSkip or "?"), n, tostring(p.max or "?"),
+            (type(p.boxT) == "string") and (" · 读于 " .. p.boxT) or ""))
+          say("  格式：[选取] #调用号 p按键轮 谁调的 函数(参数) 前快照 ⇒ 后快照 变/没变")
+          if n == 0 then
+            say("  环是**空的** ⇒ 从载入到现在**一次选取目标都没执行过**（连去抖丢弃也没记）——")
+            say("     这句话本身就是判据：若这时目标仍在跳，那就**不是本插件切的**。")
+          else
+            for i = n - want + 1, n do
+              if out[i] then say("  " .. tostring(out[i])) end
+            end
+          end
+          say("  ★`p<N>` = 第 N 发**被接受的** EVAL_GO（同一发里的多次调用同号）；`p-` = 不在按键那一轮里（编辑窗下拉/探针）。")
+          say("  ★聊天框实时行要开着「方案技能日志」：/eh wdebug；读数已落存档 cfg.selProbe ⇒ （/reload 后）我这边也能直接读。")
+        end
+      elseif subT == "clear" or subT == "清" then
+        c().selProbe = { out = {} }
+        say("[选取取证] 已清空 cfg.selProbe 的环（内存里的计数不受影响；存档那份要 /reload 才落盘）")
+      else
+        say("[选取取证] 用法：/eh go tsel log [行数] 看调用点取证环 ｜ /eh go tsel clear 清空 ｜ /eh go tsel 跑原探针（当前目标/目标的目标）")
+      end
+    elseif msg == "go tsel" or msg == "go 选取目标" then
+      -- ★★★1.75.10 取证：选取目标「**目标的目标**」（用户：「分析接口.验证选取目标的目标.可行性?」）。
+      --   官方文档核到的事实（逐条都有出处，见 CLAUDE.md §5.8）：
+      --     · conventions#unit-ids：`targettarget` = **当前目标的目标**，是合法 UnitID（大小写不敏感）；
+      --     · Targetting 页 `TargetUnit(unit)`：**「Does nothing if that UnitID does not resolve.」**
+      --       ⇒ 解析不到（没目标 / 目标自己没有目标）时**什么都不做**（★这正是本插件选它而不是 AssistUnit 的理由：
+      --       AssistUnit 对解析不到的 UnitID 会**清掉当前目标**）。
+      --   ★探针纪律：**只读 + 至多一次真切换**；「没有目标的目标」时**一次都不切**（不留副作用）。
+      --   ★读数专属落盘 `cfg.tselProbe`（`say` 只进聊天框、不落日志环 ⇒ 不自己存一份我这边读不到）。
+      local function tsSay(s)
+        local box = c().tselProbe
+        if type(box) ~= "table" or type(box.out) ~= "table" then box = { out = {} }; c().tselProbe = box end
+        box.out[table.getn(box.out) + 1] = s
+        while table.getn(box.out) > 12 do table.remove(box.out, 1) end
+        say(s)
+      end
+      if type(UnitName) ~= "function" or type(UnitExists) ~= "function" then
+        tsSay("[选取目标] 读不了：本客户端没有 UnitName/UnitExists（无法取证）")
+      else
+        local okT, hasT = pcall(UnitExists, "target")
+        local _, nmT = pcall(UnitName, "target")
+        local okTT, hasTT = pcall(UnitExists, "targettarget")
+        local _, nmTT = pcall(UnitName, "targettarget")
+        tsSay(string.format("[选取目标] 当前目标=%s（存在=%s）｜ 目标的目标=%s（存在=%s）｜ TargetUnit=%s",
+          tostring(nmT), tostring(okT and hasT), tostring(nmTT), tostring(okTT and hasTT),
+          (type(TargetUnit) == "function") and "有" or "**缺失**"))
+        if not (okT and hasT) then
+          tsSay("[选取目标] 现在**没有目标** ⇒ 不试切换（先选中一只怪/一个队友，再敲一次）")
+        elseif not (okTT and hasTT) then
+          tsSay("[选取目标] 这个目标**自己没有目标** ⇒ 「选取目标:目标的目标」会是**空操作**（TargetUnit 解析不到就什么都不做；当前目标不会被清）")
+        elseif type(TargetUnit) ~= "function" then
+          tsSay("[选取目标] TargetUnit 不存在 ⇒ 这条选取在本客户端做不了")
+        else
+          local okc, err = pcall(TargetUnit, "targettarget")
+          local _, nmA = pcall(UnitName, "target")
+          tsSay(string.format("[选取目标] 已执行 TargetUnit(\"targettarget\")：调用=%s%s ⇒ 切换后当前目标=%s（期望=%s）",
+            tostring(okc), okc and "" or (" 错=" .. tostring(err)), tostring(nmA), tostring(nmTT)))
+        end
+        tsSay("读数已落存档 cfg.tselProbe（上限 12 行）⇒ /reload 后即可读存档")
+      end
+    elseif msg == "go assist" or string.find(msg, "^go assist%s") or string.find(msg, "^go 协助%s") or msg == "go 协助" then
+      -- ★★★1.75.10 取证：选取目标「**玩家的目标**」= `AssistByName(名字)`（用户：「分析可行性」）。
+      --   为什么要探针（而不是直接信文档）：官方 Targetting 页只承诺「Assists a **nearby** player: sets the target
+      --   to that player's target.」，**名字不存在 / 不在附近时到底怎样**（什么都不做？还是像 AssistUnit 那样
+      --   **清掉当前目标**？）文档一个字都没写 —— 而这决定了我们的「如实失败」兜底（TARGET_SEL_NEEDTGT）对不对。
+      --   ★用法：`/eh go assist 玩家名`（站在队伍里对着真实玩家名跑）；不带名字只报现状与接口。
+      --   ★读数落 `cfg.assistProbe`（有界 12 行，已进 Core 调试残渣键清单）；跑完 **/reload** 才写盘。
+      local subA = string.match(msg, "^go assist%s+(.+)$") or string.match(msg, "^go 协助%s+(.+)$")
+      local AS_OUT_MAX = 12
+      local function asSay(s)
+        local box = c().assistProbe
+        if type(box) ~= "table" or type(box.out) ~= "table" then box = { out = {} }; c().assistProbe = box end
+        box.out[table.getn(box.out) + 1] = s
+        while table.getn(box.out) > AS_OUT_MAX do table.remove(box.out, 1) end
+        say(s)
+      end
+      local function asTgt()
+        local okx, has = pcall(UnitExists, "target")
+        local okn, nm = pcall(UnitName, "target")
+        return tostring(okn and nm or nil), (okx and has) and "有" or "无"
+      end
+      if type(AssistByName) ~= "function" then
+        asSay("[玩家的目标] 本客户端**没有 AssistByName** ⇒ 这条选取做不了（如实报告，不假装成功）")
+      elseif type(UnitName) ~= "function" or type(UnitExists) ~= "function" then
+        asSay("[玩家的目标] 读不了：本客户端没有 UnitName/UnitExists（无法取证）")
+      elseif subA == nil then
+        local nm0, has0 = asTgt()
+        asSay(string.format("[玩家的目标] AssistByName=有 ｜ 当前目标=%s（存在=%s）｜ 用法：/eh go assist <玩家名>（站队伍里跑；跑完 /reload 读存档）", nm0, has0))
+        if type(EVAL_PLAYER_NAMES) == "function" then
+          local okp, names = pcall(EVAL_PLAYER_NAMES, 12)
+          if okp and type(names) == "table" and table.getn(names) > 0 then
+            asSay("[玩家的目标] 队伍/团队里的玩家名候选：" .. table.concat(names, "、"))
+          else
+            asSay("[玩家的目标] 现在没读到任何队友/团员名（单人时正常）——可手打任意玩家名做对照实验")
+          end
+        end
+      else
+        local nmB, hasB = asTgt()
+        local okc, err = pcall(AssistByName, subA)
+        local nmA, hasA = asTgt()
+        asSay(string.format("[玩家的目标] AssistByName(\"%s\") 调用=%s%s", tostring(subA), tostring(okc), okc and "" or (" 错=" .. tostring(err))))
+        asSay(string.format("[玩家的目标] 切换前=%s（%s）⇒ 切换后=%s（%s）", nmB, hasB, nmA, hasA))
+        if not okc then
+          asSay("[玩家的目标] 调用抛错 ⇒ 本客户端不接受这种用法（如实失败，插件侧已按 needTgt 兜底）")
+        elseif hasA ~= "有" then
+          asSay("[玩家的目标] ★失败形态 = **调用后没有目标**（名字不在附近/不存在时**清掉了当前目标**）⇒ 证实兜底判据 needTgt 必要：插件会在这种时候**如实失败**而不是放行")
+        elseif nmA == nmB and hasB == "有" then
+          asSay("[玩家的目标] 目标名没变：要么他**不在附近**（无动作），要么**他的目标恰好就是原来那个**（两种情形读不出来，需换一个明显不同的目标再验一次）")
+        else
+          asSay("[玩家的目标] 切换成功 ⇒ 当前目标 = 他的目标（这条选取在本客户端可用）")
+        end
+        asSay("读数已落存档 cfg.assistProbe（上限 12 行）⇒ /reload 后即可读存档")
       end
     elseif msg == "go diag" then
       -- ★1.71.22 绑定链路一键取证（诊断工具，保留）：把每一环的现场证据**写进 SavedVariables**
@@ -8766,6 +9385,94 @@ if type(SlashCmdList) == "table" then
       end
       if n == 0 then say(L("BIND_ST_NONE")) end
       say("绑法：战斗信息UI 方案行**右键**开弹窗；清空：右键「方案」标签；诊断：/eh go diag（写盘，需 /reload）")
+    -- ★★★1.75.3 取证命令：**宏图标号 → 图标**（用户原话：「以下数字对应的编号.编号对应着图标可以自己写命令我配合你扫一下」）
+    --   为什么必须有它：用户给的号是**运行期宏图标表下标**（= 图标库 Tab5 悬停提示里的「宏图标序号：%d」，
+    --   见 `IconBrowser.lua` 的 `IB_TIP_IDX`），而 `doc/图标路径清单.txt` 是**按字母排序**的白名单
+    --   （行号 ≠ 号；实锤：DF 的 346 号在客户端是 `INV_Misc_Fish_20`，清单第 342 条才是它、第 346 条是 `INV_Misc_Flower_02`）
+    --   ⇒ **离线根本查不出「139 号是哪枚图」**，只能在真机读出来。这条命令就是那个读数口。
+    --   用法：`/eh go 图标号`（= 报宠物技能在用的那几个号，**读 PetData 的 iconIdx 且走与界面同一个解析口**）
+    --          `/eh go 图标号 139 255 695 …`（任意号，最多 12 个，超出如实截断 —— 防刷屏/撞反刷屏限流）
+    --          `/eh go icons 139 …` 同义（带参数时走这里；不带参数仍是整表采集）
+    -- ★★★1.75.9 读数**另存一份有界环**（同 `trkProbe`/`petProbe` 的理由，这次是实测踩到的）：
+    --   ① `say` 只进聊天框、**不落日志环**（`Core.lua` 的 say 与 logLine 是两个出口）⇒ 用户跑完我只读存档的话**一个字节都读不到**；
+    --   ② 存档只在 /reload、小退、退出时落盘 ⇒ 流程必须是「跑一次 → /reload → 我读 `EVAL_HELP_CONFIG.iconIdxProbe`」。
+    --   ⇒ 探针**必须自带专属持久读数**，别指望聊天框或 100 条的调试日志环。
+    elseif string.find(msg, "^go 图标号") or string.find(msg, "^go iconidx") or string.find(msg, "^go icons ") then
+      local IDX_OUT_MAX = 40
+      local function idxSay(s)
+        s = tostring(s)
+        local cfgP = rawget(_G, "EVAL_HELP_CONFIG")
+        if type(cfgP) == "table" then
+          local box = cfgP.iconIdxProbe
+          if type(box) ~= "table" then box = { out = {} } cfgP.iconIdxProbe = box end
+          if type(box.out) ~= "table" then box.out = {} end
+          table.insert(box.out, s)
+          while table.getn(box.out) > IDX_OUT_MAX do table.remove(box.out, 1) end
+          box.t = (type(date) == "function") and date("%H:%M:%S") or nil
+        end
+        say(s)
+      end
+      idxSay("— 宏图标号 → 图标（本客户端 GetMacroIconInfo；号 = 图标库悬停里的「宏图标序号」）—")
+      local total = 0
+      if type(GetNumMacroIcons) == "function" then
+        local okn, v = pcall(GetNumMacroIcons)
+        if okn and type(v) == "number" then total = v end
+      end
+      idxSay(string.format("接口：GetMacroIconInfo=%s ｜ 表内共 %d 枚", tostring(type(GetMacroIconInfo) == "function"), total))
+      -- 单个号一行：**三态如实**（拿到 / 取不到 / 接口不在），绝不把「取不到」写成「没有这枚图」
+      local function idxLine(idx, label)
+        local tex, why = nil, nil
+        if type(GetMacroIconInfo) ~= "function" then why = "接口不存在"
+        else
+          local ok, v = pcall(GetMacroIconInfo, idx)
+          if not ok then why = "调用抛错"
+          elseif type(v) ~= "string" or v == "" then why = "取不到（号越界 / 表里没有）"
+          else tex = v end
+        end
+        local short = nil
+        if tex then
+          local tail = string.match(tex, "([^/\\]+)$") or tex
+          short = string.gsub(tail, "_TEX$", "")
+        end
+        idxSay(string.format("  %s%d → %s", label or "", idx,
+          tex and (tex .. "（" .. tostring(short) .. "）") or ("**" .. tostring(why) .. "**")))
+      end
+      local nums = {}
+      for n in string.gmatch(msg, "%d+") do table.insert(nums, tonumber(n)) end
+      local CAP = 12
+      if table.getn(nums) == 0 then
+        local db = rawget(_G, "EVAL_PET_DB")
+        local list = {}
+        for _, sk in ipairs((db and db.skills) or {}) do
+          if type(sk.iconIdx) == "number" then table.insert(list, sk) end
+        end
+        idxSay(string.format("（未给号 ⇒ 报宠物技能在用的 %d 个号：读 PetData 的 iconIdx，与界面渲染**同一个解析口**）", table.getn(list)))
+        if type(EVAL_PH_SKILL_ICON) ~= "function" then
+          idxSay("  ⚠ 抓宠帮手模块没载入（EVAL_PH_SKILL_ICON 不存在）⇒ 只能报号、报不出纹理")
+        end
+        for i = 1, table.getn(list) do
+          local sk = list[i]
+          local tex = nil
+          if type(EVAL_PH_SKILL_ICON) == "function" then
+            local ok, v = pcall(EVAL_PH_SKILL_ICON, sk)
+            if ok and type(v) == "string" then tex = v end
+          end
+          idxSay(string.format("  %s %d → %s", tostring(sk.name), sk.iconIdx, tex or "**取不到（已退回语义图标路径）**"))
+        end
+      else
+        local m = table.getn(nums)
+        if m > CAP then idxSay(string.format("给了 %d 个号 ⇒ 只报前 %d 个（避免刷屏/撞反刷屏限流）", m, CAP)) m = CAP end
+        for i = 1, m do idxLine(nums[i], "") end
+      end
+      -- 存档落盘提示（★本命令的读数**专属落盘**，但客户端只在 /reload、小退、退出时才写盘）
+      idxSay(string.format("读数已落存档 cfg.iconIdxProbe（上限 %d 行）⇒ /reload 后即可读存档", IDX_OUT_MAX))
+      -- ★总闸门（调试日志）关着 ⇒ 上面一个字都到不了聊天框 ⇒ 走常开出口如实告知怎么开回来（静默族防线）
+      if type(EVAL_CHAT_ON) == "function" then
+        local okOn, on = pcall(EVAL_CHAT_ON)
+        if okOn and not on and type(EVAL_SAY_FORCE) == "function" then
+          pcall(EVAL_SAY_FORCE, "（「调试日志」关着 ⇒ 上面这些行看不到；/eh log 可开回来）")
+        end
+      end
     elseif msg == "go icons" then
       -- ★★★1.73.3 图标路径采集（用户要求）：「通过日志信息获取系统图标所有图片路径,存储到一个图标路径文件内」。
       --   为什么只能这样做：客户端的内置图标打包在 Content\Paks，**磁盘上取不到**；唯一能把整表路径
@@ -8862,6 +9569,16 @@ if type(SlashCmdList) == "table" then
       else
         say("猎人助手模块没载入（tools/HunterHelper.lua 是否列进了 EvalHelp.toc？）")
       end
+    -- ★1.75.3 宠物家族探针（PetHelper.lua）：/eh go 宠物家族（读一次）｜ 宠物家族 表 ｜ 存档 ｜ 清
+    --   别名 /eh pet fam（用户习惯叫法）。★前缀判据一律走 **string.find**（不是 string.sub 的数字下标）：
+    --   本文件 1.74.5 在「go 喂食」上正是栽在按字节数写下标（少算一个空格就恒不等 = 命令静默失效）。
+    elseif string.find(msg, "^go 宠物家族") or string.find(msg, "^go petfam") or string.find(msg, "^pet fam") then
+      local subF = string.gsub(msg, "^go%s*", "")
+      subF = string.gsub(subF, "^宠物家族%s*", "")
+      subF = string.gsub(subF, "^petfam%s*", "")
+      subF = string.gsub(subF, "^pet%s*fam%s*", "")
+      if type(EVAL_PH_FAM_CMD) == "function" then EVAL_PH_FAM_CMD(subF)
+      else say("抓宠帮手模块没载入（PetHelper.lua 是否列进了 EvalHelp.toc？）") end
     -- ★1.74.5 消耗品助手：/eh go 消耗品（状态）｜ 消耗品 用 <物品名> ｜ 消耗品 清
     --   "go 消耗品" = 3 + 9 = **12 字节**（string.sub 是字节下标 —— 写错就静默失效，见组 176⑩ 的教训）
     elseif string.sub(msg, 1, 12) == "go 消耗品" then
@@ -9728,9 +10445,29 @@ init:SetScript("OnEvent", function(a, b)
     if not cfg.war then
       cfg.war = { enabled = true, attack = true } -- 1.48.0 同上
     end
+    -- ★★★1.75.10 一次性迁移（用户 2026-09-25 定稿：「头龙 配置为插件默认图标」）：
+    --   清掉她存档里那枚「设了却显示成**黑方块**」的自定义图标（`INV_Misc_ShadowEgg_TEX`）
+    --   ⇒ 自动挑选接手 = **默认头龙**（`EVAL_HELP_MB_PICKICON` 的候选表已把 `INV_MISC_HEAD_DRAGON_01` 排最前）。
+    --   ★只清**这一个确切值**：自定义图标是用户自己的选择（1.71.15 定案「她自己挑的优先于自动挑」），
+    --     **绝不**无条件丢弃别人的选择；清完**如实播报**一句（改用户配置不许静默）。
+    if cfg.mbIcon == "/Game/Interface/Icons/INV_Misc_ShadowEgg_TEX" then
+      cfg.mbIcon = nil
+      if type(EVAL_LOGLINE) == "function" then
+        pcall(EVAL_LOGLINE, "小地图图标：旧自定义图标（ShadowEgg，真机上显示成黑方块）已清 ⇒ 回到默认（头龙）")
+      end
+      say("小地图按钮图标：旧的那枚显示不出来，已回到**默认图标（头龙）**；想换别的就在图标库里右键任意一枚")
+    end
     -- ★1.71.13 小地图按钮贴图标：载入期宏图标接口未必就绪 → 在 VARIABLES_LOADED 后挑；
     --   挑不到会自动退回旧的「金框 + EH」样式（不许留空白按钮）。
-    if type(EVAL_HELP_MB_SETICON) == "function" then pcall(EVAL_HELP_MB_SETICON) end
+    --   ★★★1.75.10：**如实记一条**（用户报障「配置图标是黑方块」时，这族失败在日志里必须查得到）；
+    --     并配两个自愈时机（PLAYER_ENTERING_WORLD / 悬停，见 EVAL_HELP_MB_RETRY）。
+    if type(EVAL_HELP_MB_SETICON) == "function" then
+      local okI, rI = pcall(EVAL_HELP_MB_SETICON)
+      if type(EVAL_LOGLINE) == "function" then
+        pcall(EVAL_LOGLINE, string.format("小地图图标：载入贴图 ok=%s ret=%s why=%s 读回=%s",
+          tostring(okI), tostring(rI), tostring(mbWhy), tostring(mbBack)))
+      end
+    end
     -- ★★★1.73.42n 头衔抽卡：进游戏就重算一次（方案库可能变了）——**只升不降**，已抽过的档绝不重抽；
     --   新达到的档在这里完成「每档只抽一次」的抽取（不必等玩家去点分享或敲命令）。
     if type(EVAL_TITLE_REFRESH) == "function" then pcall(EVAL_TITLE_REFRESH) end
@@ -9784,7 +10521,7 @@ init:SetScript("OnEvent", function(a, b)
     --   同时做：老存档（子插件 EH_DEBUGBOX_CFG.cust["[全局] 名"] 的 dx/dy/scale/alpha/hidden）一次性迁移、
     --   建 2 秒定时复查 tick、按存档恢复 5 个目标的位置与属性。
     if type(EVAL_DF_INSTALL) == "function" then pcall(EVAL_DF_INSTALL) end
-    -- ★★★1.74.34 图层特殊处理（tools/LayerFix.lua —— **独立工具模块**）：
+    -- ★★★1.74.34 图层隐藏（原名「图层特殊处理」，tools/LayerFix.lua —— **独立工具模块**）：
     --   这里是它与主插件之间**唯一**的接线点（用户要求：「只要加入嵌入点进行函数调用」）：
     --   模块自己读存档子树 `EVAL_HELP_CONFIG.layerFix`、自己应用一次、自己武装**有界**复查窗口，
     --   主插件只知道「有这么个安装入口」。★它**不受**框拖拽开关（dragFrames.on）影响，是独立的一条口径。
@@ -9818,6 +10555,9 @@ init:SetScript("OnEvent", function(a, b)
       elseif en == "PLAYER_ENTERING_WORLD" then
         -- ★1.74.31 记下进世界打点（报告用它算「进世界→插件首帧」）
         if type(EVAL_LOAD_MARK) == "function" then EVAL_LOAD_MARK("world") end
+        -- ★★★1.75.10 小地图配置按钮的图标：**进世界再补一次**（VARIABLES_LOADED 那一刻宏图标表/存档
+        --   未必就绪 ⇒ 用户看到的就是一块黑方块；这里已贴上就一次都不发，幂等无副作用）。
+        if type(EVAL_HELP_MB_RETRY) == "function" then pcall(EVAL_HELP_MB_RETRY) end
       elseif en == "PLAYER_TARGET_CHANGED" then
         EVAL_HELP_UPDATE_STATE()
       elseif en == "CHAT_MSG_SPELL_SELF_DAMAGE" then

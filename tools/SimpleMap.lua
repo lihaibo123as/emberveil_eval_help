@@ -1098,6 +1098,18 @@ local SM_CFG = EH_SIMPLEMAP_CFG
 -- ============================================================
 local SM_DEF_ALPHA, SM_DEF_SCALE, SM_DEF_GUIREOPEN = 0.7, 0.7, false
 
+-- ★★★1.75.10（用户报障）：「世界地图缩放开启之后，每次插件重载的初始位置能否居中。现在他有时候会乱跳到左下角位置」
+--   ⇒ **跨会话的位置记忆作废**：每次载入后的**第一次开图一律居中**，并把存档里那份历史偏移清掉；
+--     本会话内用户真拖过之后才记位置（`featSavePos` 照旧写 `SM_CFG.px/py`，但下次载入又会被清）。
+--   ★为什么要清而不是「修好折算公式」：`px/py` 是本客户端**几何读回含缩放**（见 `smEffScale` 的注释）下按
+--     折算公式写出的屏幕中心偏移，一旦口径对不上，这个值会被**永久继承**——每次开图都按它摆位置，
+--     表现就是用户说的「有时候乱跳到左下角」（还会随开关/拖拽**累积**）。位置宁可不可跨会话记忆，也不要一个会漂的数。
+--   ★为什么还要一个**窗口期**：客户端自己的开图流程可能在我们 `featApply` **之后**才摆位置
+--     （与「黑幕被重新 Show 出来」是同一条竞态）⇒ 光居中一次会「有时候没居上」。
+--     窗口期内 `featKeep` 逐拍重申居中；用户一拖拽（`OnDragStart` 把窗口清 0）立刻让位，绝不跟用户抢。
+--     ★有界（25 拍 ≈ 开图后 5 秒，`featKeep` 的节拍是 0.2s），不是常驻轮询。
+local SM_RECENTER_TICKS = 25
+
 -- ★★1.74.29 用户定：工具箱→地图功能默认 **缩放 0.7 / 透明 0.7**（原透明默认是 0.75）
 SM_CFG.alpha = tonumber(SM_CFG.alpha) or SM_DEF_ALPHA -- 透明度（Shift+滚轮；1=不透明）
 -- 一次性迁移：老存档里写着的旧默认 0.75 → 0.7（**只改“恰好等于旧默认”的值**，改过的值不动）
@@ -1110,7 +1122,11 @@ SM_CFG.scale = tonumber(SM_CFG.scale) or SM_DEF_SCALE -- 缩放（Ctrl+滚轮；
 
 -- ★1.74.35-3：FEAT 必须声明在 `featShowGUI` **之前**（里面要给它计数）；
 --   `guiCalls` = 真正发出「重显最外层 GUI」的次数 —— 用来钉「关掉时一次都不发」（行为断言照得到的那种事实）。
-local FEAT = { applied = false, built = false, guiCalls = 0, escAdded = false, torn = false }
+-- ★1.75.10 新增两位（位置口径，见 SM_RECENTER_TICKS 的注释）：
+--   · `posArmed` = **本次会话还没「居中过一次」**（载入期就是 true ⇒ /reload 后第一次开图必居中）；
+--   · `recenter` = 居中窗口剩余拍数（`featKeep` 每拍减 1；拖拽开始清 0）。
+local FEAT = { applied = false, built = false, guiCalls = 0, escAdded = false, torn = false,
+               posArmed = true, recenter = 0 }
 
 -- ============================================================
 -- ★★★1.74.35-3 用户要求（工具箱 → 缩放大地图 右侧 [设置]）：
@@ -1219,6 +1235,42 @@ local function featSavePos(wm)
   SM_CFG.py = cy - sh * z
 end
 
+-- ★★★1.75.10 新增（用户报障见 SM_RECENTER_TICKS 的注释）：位置口径的三件套。
+-- ① `featCenterNow` = **纯动作**：把地图摆回屏幕正中（不动配置、不记状态、可反复调）。
+--    ★已居中就**不写** —— 窗口期内逐拍重申，盲写就是白写 25 次（本客户端 ClearAllPoints+SetPoint 会触发锚点重算）。
+--    ★读不到 `GetPoint`（老客户端没有这个 API）时**如实退回盲写**，绝不假装「已经居中了」。
+local function featCenterNow(wm)
+  wm = wm or featWm()
+  if not wm then return false end
+  if type(wm.ClearAllPoints) ~= "function" or type(wm.SetPoint) ~= "function" then return false end
+  if type(wm.GetPoint) == "function" then
+    local okp, p, rel, rp, gx, gy = pcall(wm.GetPoint, wm)
+    -- ★比较相对帧用**对象身份**（本项目既有判据：`GetName()` 可能为 nil，按名字筛会一条都匹配不上）
+    if okp and p == "CENTER" and rel == UIParent and rp == "CENTER"
+      and (tonumber(gx) or 0) == 0 and (tonumber(gy) or 0) == 0 then
+      return true
+    end
+  end
+  pcall(wm.ClearAllPoints, wm)
+  pcall(wm.SetPoint, wm, "CENTER", UIParent, "CENTER", 0, 0)
+  return true
+end
+
+-- ② `featCenterOnce` = **本次会话的第一次开图**：丢掉跨会话的历史偏移 + 真摆正中 + 开居中窗口期。
+--    ★只有「第一次」才做（`FEAT.posArmed`）——本会话内用户拖过之后，位置记忆照旧生效。
+local function featCenterOnce(wm)
+  wm = wm or featWm()
+  local had = (SM_CFG.px ~= nil) or (SM_CFG.py ~= nil)
+  SM_CFG.px, SM_CFG.py = nil, nil -- ① 清掉会被永久继承的那份历史偏移（清的是存档真值，不是临时缓存）
+  featCenterNow(wm)               -- ② 真摆正中（客户端自己的 layout 缓存可能把图摆到别处 ⇒ 必须主动写）
+  FEAT.posArmed = false           -- ③ 本会话只做一次
+  FEAT.recenter = SM_RECENTER_TICKS
+  if had then
+    P("简易地图：已清掉历史位置偏移 —— 每次载入的**第一次开图一律居中**（本会话内拖动后才会记位置）")
+  end
+  return true
+end
+
 -- ★施加口径（用户实测：SetAlpha/SetScale 打在 WorldMapFrame 上只有**外框**生效，
 --   地图贴图是引擎单独画的、不吃父帧级联）→ 透明度要连画布一起打；缩放两路都打。
 local function featApplyAlpha(a)
@@ -1317,6 +1369,8 @@ local function featBuild(wm)
     b:RegisterForDrag("LeftButton")
     b:SetScript("OnDragStart", function()
       local w = featWm()
+      -- ★1.75.10：用户开始拖了 ⇒ **立刻让出居中窗口期**（否则窗口期内每拍把他刚拖到的位置拉回正中 = 跟用户抢）
+      FEAT.recenter = 0
       if not w then return end
       pcall(w.SetMovable, w, true)
       pcall(w.StartMoving, w) -- warm-up 两步
@@ -1574,7 +1628,12 @@ local function featApply()
     SM_CFG.guiLast = "开图 GUI重开：" .. (vis and "最外层 GUI 已重新显示" or "仍被隐藏（客户端又藏回去了）")
     P(SM_CFG.guiLast)
   end
-  if tonumber(SM_CFG.px) and tonumber(SM_CFG.py)
+  -- ★★★1.75.10（用户报障：「世界地图缩放开启之后，每次插件重载的初始位置能否居中。现在他有时候会乱跳到左下角位置」）：
+  --   **本次载入的第一次开图 ⇒ 一律居中**（并清掉存档里那份会被永久继承的历史偏移）。
+  --   之后（本会话内用户拖过）才走下面的 px/py 位置记忆 —— 即「位置记忆 = 会话内有效」。
+  if FEAT.posArmed then
+    pcall(featCenterOnce, wm)
+  elseif tonumber(SM_CFG.px) and tonumber(SM_CFG.py)
     and type(wm.ClearAllPoints) == "function" and type(wm.SetPoint) == "function" then
     pcall(wm.ClearAllPoints, wm)
     pcall(wm.SetPoint, wm, "CENTER", UIParent, "CENTER", SM_CFG.px, SM_CFG.py)
@@ -1600,6 +1659,14 @@ local function featKeep()
   local s = tonumber(SM_CFG.scale) or 1
   local okS, curs = pcall(wm.GetScale, wm)
   if okS and tonumber(curs) and math.abs(curs - s) > 0.001 then featApplyScale(s) end
+  -- ★1.75.10：居中**窗口期**（见 SM_RECENTER_TICKS 与 featCenterOnce 的注释）—— 客户端自己的开图流程
+  --   可能在我们 apply **之后**才摆位置（与「黑幕被重新 Show」同一条竞态）⇒ 窗口期内逐拍重申居中。
+  --   `featCenterNow` 内部判「已经居中就不写」⇒ 正常情况这里只是读一次锚点，不会每拍重写。
+  --   ★用户一拖拽（OnDragStart 清 0）立刻让位；本函数只在**地图开着**时被调用。
+  if (tonumber(FEAT.recenter) or 0) > 0 then
+    FEAT.recenter = FEAT.recenter - 1
+    pcall(featCenterNow, wm)
+  end
   -- ★1.74.35-2：开图期间持续保持**最外层 GUI** 可见（客户端自己的开图流程会再藏回去 ⇒ 每 tick 幂等重显）
   --   ★关掉 ⇒ 直接跳过（用户明确：不做额外 GUI 动态重现的操作）
   if smReopenOn() then pcall(featShowGUI) end
@@ -2179,6 +2246,9 @@ function featReset()
   SM_CFG.scale = 1
   SM_CFG.px = nil
   SM_CFG.py = nil
+  -- ★1.75.10：复位 = 居中 ⇒ 同样开窗口期（客户端可能在我们之后又摆一次位置，那这次复位就白做了）
+  FEAT.posArmed = false
+  FEAT.recenter = SM_RECENTER_TICKS
   featApplyAlpha(1) -- ★连画布一起（只打外框 = 贴图还是半透明的）
   featApplyScale(1)
   local wm = featWm()
@@ -2615,6 +2685,23 @@ function EVAL_SM_TEST_APPLY()
   pcall(featApply)
   return true
 end
+
+-- ★1.75.10 位置口径读值口（用户报障：「每次插件重载的初始位置能否居中」）：
+--   返回 `posArmed`（本次会话是否还没居中过）/ `recenter`（居中窗口剩余拍数）/ 存档里的 px、py。
+--   `REARM` = 把「本次会话还没居中过」这一位按**载入期的原状**恢复 —— 组 237 要验「首次开图必居中」，
+--   而前面的组（224/225/230/232）早就把这一位用掉了；不 rearm 就只能验第二次，等于没验到那条判据。
+function EVAL_SM_TEST_POS_STATE()
+  return FEAT.posArmed == true, tonumber(FEAT.recenter) or 0, SM_CFG.px, SM_CFG.py
+end
+function EVAL_SM_TEST_POS_REARM()
+  FEAT.posArmed = true
+  FEAT.recenter = 0
+  return FEAT.posArmed
+end
+-- ★拖拽柄本体（读值口）：用来点火**真实的 OnDragStart**（验「用户一开始拖就让出居中窗口期」）。
+--   本文件的自建件都随 CloseAll 注册进 _G，但那是**全局名**；模块内部的 `featDrag` 才是真身
+--   （组 232 会把 _G.EH_SM_DRAG 换成假件再清掉，所以只能从这里取）。
+function EVAL_SM_TEST_DRAG() return featDrag end
 
 -- ★1.74.36-3 默认档读值口：先 3 个**常量**、再 3 个**当前真值**。
 --   ★断言一律从这里取（不许在测试里复刻 0.7/0.7/false 三个字面量 = 同源自比）。
