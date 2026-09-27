@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.75.27"
+local VERSION = "1.75.28"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -875,12 +875,11 @@ function EVAL_HELP_UI_BUILD()
         GameTooltip:AddLine(tostring(r.skill) .. (r.rank and ("(" .. tostring(r.rank) .. ")") or ""), 1, 0.82, 0.3) -- ★1.72.4 等级一并显示
         GameTooltip:AddLine((r.enabled ~= false) and ("|cff00ff00" .. L("TIP_ON") .. "|r") or ("|cffff0000" .. L("TIP_OFF") .. "|r"))
         GameTooltip:AddLine(L("TIP_COND_H"), 0.62, 0.55, 0.40)
+        -- ★1.75.28 按 expr 显示行（&& / ｜｜ 起新行；旧 groups 存档现场推导）
         local gcount = 0
-        for gi, g in ipairs(r.groups or {}) do
+        for gi, line in ipairs(EVAL_EXPR_LINES(EVAL_RULE_EXPR(r))) do
           gcount = gi
-          local cs = {}
-          for _, cd in ipairs(g) do table.insert(cs, EVAL_COND_STR(cd)) end
-          GameTooltip:AddLine(string.format("%d. %s", gi, table.concat(cs, " & ")), 0.85, 0.85, 0.85)
+          GameTooltip:AddLine(string.format("%d. %s", gi, line), 0.85, 0.85, 0.85)
         end
         if gcount == 0 then
           GameTooltip:AddLine(L("TIP_NOCOND"), 0.6, 0.6, 0.6)
@@ -1153,7 +1152,7 @@ function EVAL_HELP_UI_TICK()
         elseif t0 then pcall(pc.icon.SetTexture, pc.icon, t0) end
         local enabled = r.enabled ~= false
         local pass = false
-        if enabled and (s or noSlotOk(r.skill, r.rank)) and r.groups then -- ★1.72.4 单一判据：宠物/选取目标/物品/姿态/取消施法/停止攻击/跟随/**指定等级** 都不占动作条，也都要参与亮金
+        if enabled and (s or noSlotOk(r.skill, r.rank)) and (r.groups or r.expr) then -- ★1.72.4 单一判据：宠物/选取目标/物品/姿态/取消施法/停止攻击/跟随/**指定等级** 都不占动作条，也都要参与亮金（★1.75.28 groups 或 expr 任一）
           local okp = groupsOK(r, true) -- dry: 亮金预览不触发选取目标等副作用
           pass = okp and true or false
         end
@@ -2155,12 +2154,11 @@ local function cfgBuild()
       pcall(GameTooltip.AddLine, GameTooltip,
         (r.enabled ~= false) and ("|cff00ff00" .. L("TIP_ON") .. "|r") or ("|cffff0000" .. L("TIP_OFF") .. "|r"))
       pcall(GameTooltip.AddLine, GameTooltip, L("TIP_COND_H"), 0.62, 0.55, 0.40)
+      -- ★1.75.28 按 expr 显示行（disp=true：界面走本地化名，与列表同一口径）
       local gc = 0
-      for gi, g in ipairs(r.groups or {}) do
+      for gi, line in ipairs(EVAL_EXPR_LINES(EVAL_RULE_EXPR(r), true)) do
         gc = gi
-        local cs = {}
-        for _, cd in ipairs(g) do table.insert(cs, EVAL_COND_STR(cd, true)) end -- disp=true：界面走本地化名（与列表同一口径）
-        pcall(GameTooltip.AddLine, GameTooltip, string.format("%d. %s", gi, table.concat(cs, " & ")), 0.85, 0.85, 0.85, true)
+        pcall(GameTooltip.AddLine, GameTooltip, string.format("%d. %s", gi, line), 0.85, 0.85, 0.85, true)
       end
       if gc == 0 then pcall(GameTooltip.AddLine, GameTooltip, L("TIP_NOCOND"), 0.6, 0.6, 0.6) end
       pcall(GameTooltip.AddLine, GameTooltip, L("W_ROW_TIP"), 0.5, 0.5, 0.5, true)
@@ -3109,7 +3107,7 @@ function EVAL_WAR_TAB_REFRESH()
       --   完整内容由 row.hov 的悬停提示给出（**列宽固定 + 提示给全** 是本轮的定案口径）。
       local nmTxt = tostring(r.skill) .. (r.rank and ("(" .. tostring(r.rank) .. ")") or "") -- ★1.72.4 有等级才显示
       row.name:SetText(uiClip(nmTxt, (row.nameW or 176) / 9.5))
-      row.conds:SetText(uiClip(uiEsc(EVAL_GROUP_STR(r.groups, true)), (row.condW or 300) / 8.6)) -- 1.61.1 | 显示转义（★1.73.12 界面走本地化名）
+      row.conds:SetText(uiClip(uiEsc(EVAL_EXPR_STR(EVAL_RULE_EXPR(r), true)), (row.condW or 300) / 8.6)) -- 1.61.1 | 显示转义（★1.73.12 界面走本地化名）
     end
   end
   -- ★★★1.71.10 方案名 / 数量变了 → 战斗信息UI 的「方案切换行」必须重排（按钮宽度按名字实测算、
@@ -4268,7 +4266,7 @@ function EVAL_HELP_ST_TOGGLE()
 end
 
 -- ============ 技能编辑窗（技能循环选择 + 独立条件属性行 + & / | 连接符） ============
--- 编辑模型：ed.conds = 线性条件列表 { {conn=nil|"&"|"|", cd=条件}, ... }；
+-- 编辑模型：ed.conds = 线性条件列表 { {conn=nil|"&"|"|"|"&&"|"||", cd=条件}, ... }（★1.75.28 四连接符）；
 -- conn 语义：& 并入当前组、| 新开一组 → 与引擎 groups（组内 & 、组间 | ）一一对应。
 -- 本客户端无下拉控件：技能/条件类型/比较符/技能名全部用「点击循环」按钮实现。
 
@@ -4599,16 +4597,14 @@ local function seTypeTip(id)
   return lines
 end
 
--- groups → 线性编辑列表（复制条件，避免保存前污染已存数据）
-local function seGroupsToLinear(groups)
+-- ★1.75.28 expr 复制（编辑期副本，避免保存前污染已存数据；表字段拷一层）。
+--   线性 expr 就是编辑器行模型（{conn, cd}）；旧 groups 存档由 EVAL_RULE_EXPR 推导后走同一副本。
+local function seExprCopy(expr)
   local list = {}
-  for gi, g in ipairs(groups or {}) do
-    for ci, cd in ipairs(g) do
-      local conn
-      if gi > 1 and ci == 1 then conn = "|"
-      elseif ci > 1 then conn = "&" end
-      local cp = {}
-      for k, v in pairs(cd) do
+  for _, it in ipairs(expr or {}) do
+    local cp = {}
+    if type(it.cd) == "table" then
+      for k, v in pairs(it.cd) do
         if type(v) == "table" then -- cs 等表字段拷一层，避免编辑期污染已存数据
           local c2 = {}
           for k2, v2 in pairs(v) do c2[k2] = v2 end
@@ -4617,26 +4613,13 @@ local function seGroupsToLinear(groups)
           cp[k] = v
         end
       end
-      -- 1.54.0 存量归一：noBuff/noDebuff → hasBuff/hasDebuff + v=false（编辑保存后即新格式）
-      if cp.k == "noBuff" then cp.k = "hasBuff" cp.v = false
-      elseif cp.k == "noDebuff" then cp.k = "hasDebuff" cp.v = false end
-      table.insert(list, { conn = conn, cd = cp })
     end
+    -- 1.54.0 存量归一：noBuff/noDebuff → hasBuff/hasDebuff + v=false（编辑保存后即新格式）
+    if cp.k == "noBuff" then cp.k = "hasBuff" cp.v = false
+    elseif cp.k == "noDebuff" then cp.k = "hasDebuff" cp.v = false end
+    table.insert(list, { conn = it.conn, cd = cp })
   end
   return list
-end
-
--- 线性列表 → groups：| 新开组，& 并入当前组
-local function seLinearToGroups(list)
-  local groups, cur = {}, nil
-  for _, it in ipairs(list or {}) do
-    if it.conn == "|" or not cur then
-      cur = {}
-      table.insert(groups, cur)
-    end
-    if it.cd then table.insert(cur, it.cd) end
-  end
-  return groups
 end
 
 local function seBtn(parent, x, y, w, h, label, fn)
@@ -5669,7 +5652,9 @@ function EVAL_HELP_SE_REFRESH()
     for _, wgt in ipairs(row.all) do pcall(wgt.Hide, wgt) end
     if it then
       local cd = it.cd
-      row.conn.text:SetText(i == 1 and "当" or ((it.conn == "|") and "｜" or (it.conn or "&"))) -- 1.61.2 关系列同用全角竖线
+      -- ★1.75.28 四态显示：& 与 ｜ 项内、&& 与 ｜｜ 项/段间（1.61.2 竖线同用全角）
+      local connDisp = { ["|"] = "｜", ["&&"] = "&&", ["||"] = "｜｜" }
+      row.conn.text:SetText(i == 1 and "当" or (connDisp[it.conn] or (it.conn or "&")))
       pcall(row.conn.btn.Show, row.conn.btn)
       local ti = seTypeIndexOf(cd.k, cd.name)
       local td = SE_TYPES[ti]
@@ -5850,7 +5835,7 @@ function EVAL_HELP_SE_REFRESH()
   end
   -- 底部实时预览（整串条件）
   -- ★1.73.12 底部预览是**给人看的** → 走本地化显示（第二个参数 true）；导出/存档仍用 token 形态
-  seUI.preview:SetText(uiEsc(EVAL_GROUP_STR(seLinearToGroups(ed.conds), true))) -- 1.61.1 | 显示转义
+  seUI.preview:SetText(uiEsc(EVAL_EXPR_STR(ed.conds, true))) -- 1.61.1 | 显示转义（★1.75.28 expr 直出）
 end
 
 local function SE_BUILD()
@@ -6238,10 +6223,36 @@ local function SE_BUILD()
     seUI.marks[mi] = { btn = mb, tex = mt }
   end
 
+  -- ★★★1.75.28 运算符说明（用户要求：「技能编辑 运算符 添加详细规则信息」）：
+  --   ① 「关系」列表头悬停 = 四个运算符的完整规则 + 优先级 + 例子（表头是 FontString **不吃鼠标** ⇒ 上面盖一枚透明 Button）；
+  --   ② 每格关系按钮悬停 = **当前**算符的含义 + 点击后变成什么（动态读 ed.conds[i].conn）。
+  --   ★单一来源：四个算符的说明只在 SE_OP_LABEL 写一份，表头与逐格共用。
+  local SE_OP_ORDER = { "&", "|", "&&", "||" }
+  local SE_OP_LABEL = {
+    ["&"] = "&　" .. L("SE_OP_M_AND"),
+    ["|"] = "｜　" .. L("SE_OP_M_OR"),
+    ["&&"] = "&&　" .. L("SE_OP_M_AND2"),
+    ["||"] = "｜｜　" .. L("SE_OP_M_OR2"),
+  }
+  local function seOpAllLines()
+    return {
+      "|cffffd100" .. L("SE_OP_TITLE") .. "|r",
+      SE_OP_LABEL["&"], SE_OP_LABEL["|"], SE_OP_LABEL["&&"], SE_OP_LABEL["||"],
+      "|cffa0a0a0" .. L("SE_OP_EX") .. "|r",
+      "|cffa0a0a0" .. L("SE_OP_HINT") .. "|r",
+    }
+  end
   -- 条件表头
   local hd = uiText(root, 9, 0.60, 0.55, 0.40)
   hd:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -48)
   hd:SetText(L("SE_HEADER"))
+  do -- 「关系」列表头的悬停热区（透明 Button 真盖住表头那几个字）
+    local hb = CreateFrame("Button", nil, root)
+    hb:SetWidth(34) hb:SetHeight(14)
+    hb:SetPoint("TOPLEFT", root, "TOPLEFT", 14, -47)
+    pcall(hb.EnableMouse, hb, true)
+    seHoverTip(hb, seOpAllLines)
+  end
 
   -- 8 行条件池
   for i = 1, 8 do
@@ -6251,11 +6262,35 @@ local function SE_BUILD()
     row.conn = seBtn(root, 16, y, 26, 15, L("SE_WHEN"), function()
       local ed = seUI.ed
       if ed and i > 1 and ed.conds[i] then
-        ed.conds[i].conn = (ed.conds[i].conn == "|") and "&" or "|"
+        -- ★1.75.28 四态循环：& 同项与 → ｜ 同项或 → && 新项·与 → ｜｜ 新段·或（优先级 & > ｜ > && > ｜｜）
+        local seq = { "&", "|", "&&", "||" }
+        local cur = ed.conds[i].conn or "&"
+        local nxt = "&"
+        for si, sv in ipairs(seq) do if sv == cur then nxt = seq[si + 1] or "&" break end end
+        ed.conds[i].conn = nxt
         EVAL_HELP_SE_REFRESH()
       end
     end)
     reg(row.conn.btn)
+    -- ★1.75.28 每格悬停：当前算符含义 + 点击后变成什么（首行如实说明「没有运算符」）
+    seHoverTip(row.conn.btn, function()
+      if i == 1 then
+        local lines = { "|cffffd100" .. L("SE_OP_FIRST") .. "|r" }
+        for _, k in ipairs(SE_OP_ORDER) do table.insert(lines, SE_OP_LABEL[k]) end
+        return lines
+      end
+      local it2 = seUI.ed and seUI.ed.conds[i]
+      local cur = (it2 and it2.conn) or "&"
+      if not SE_OP_LABEL[cur] then cur = "&" end
+      local nxt = "&"
+      for si, sv in ipairs(SE_OP_ORDER) do if sv == cur then nxt = SE_OP_ORDER[si + 1] or "&" break end end
+      return {
+        "|cffffd100" .. string.format(L("SE_OP_CUR"), SE_OP_LABEL[cur]) .. "|r",
+        "|cff9fe0ff" .. string.format(L("SE_OP_NEXT"), SE_OP_LABEL[nxt]) .. "|r",
+        "|cffa0a0a0" .. L("SE_OP_EX") .. "|r",
+        "|cffa0a0a0" .. L("SE_OP_HINT") .. "|r",
+      }
+    end)
     row.typeBtn = seBtn(root, 46, y, 92, 15, L("SE_TYPE_PH"), function()
       -- 点开下拉列表：全部 26 种条件类型可见可选（1.14.0：替代盲循环；1.25.0 选取目标；1.26.0 目标职业；1.28.0 连击点数）
       local ed = seUI.ed
@@ -7334,18 +7369,19 @@ function EVAL_HELP_SE_SAVE()
   local w2 = warCfg()
   local p = w2.profiles[ed.profIdx]
   if not p then if seUI.root then seUI.root:Hide() end return end
-  local groups = seLinearToGroups(ed.conds)
+  local expr = seExprCopy(ed.conds)
   if ed.skillIdx and p.skills[ed.skillIdx] then
     local r = p.skills[ed.skillIdx]
     r.skill = ed.skill
     r.enabled = ed.enabled
-    r.groups = groups
+    r.expr = expr
+    r.groups = nil -- ★1.75.28 旧字段废弃（真值只有 expr；EVAL_RULE_EXPR 以它为准，不留两份真值）
     r.rank = ed.rank -- ★1.72.4 等级随技能一起保存（不保存 = 用户设了等级却永远不生效）
-    say("已保存技能: " .. tostring(ed.skill) .. (ed.rank and ("(" .. tostring(ed.rank) .. ")") or "") .. " → " .. uiEsc(EVAL_GROUP_STR(groups))) -- ★1.72.4 等级一并回报
+    say("已保存技能: " .. tostring(ed.skill) .. (ed.rank and ("(" .. tostring(ed.rank) .. ")") or "") .. " → " .. uiEsc(EVAL_EXPR_STR(expr))) -- ★1.72.4 等级一并回报
   else
     -- 1.33.0 取消 8 技能上限（配置窗列表支持滚动）
-    table.insert(p.skills, { skill = ed.skill, enabled = ed.enabled, groups = groups, why = ed.skill, rank = ed.rank }) -- ★1.72.4
-    say("已添加技能: " .. tostring(ed.skill) .. (ed.rank and ("(" .. tostring(ed.rank) .. ")") or "") .. " → " .. uiEsc(EVAL_GROUP_STR(groups))) -- ★1.72.4 等级一并回报
+    table.insert(p.skills, { skill = ed.skill, enabled = ed.enabled, expr = expr, why = ed.skill, rank = ed.rank }) -- ★1.72.4
+    say("已添加技能: " .. tostring(ed.skill) .. (ed.rank and ("(" .. tostring(ed.rank) .. ")") or "") .. " → " .. uiEsc(EVAL_EXPR_STR(expr))) -- ★1.72.4 等级一并回报
   end
   pcall(EVAL_WAR_TAB_REFRESH)
   if seUI.root then seUI.root:Hide() end
@@ -7362,7 +7398,7 @@ function EVAL_HELP_SE_OPEN(profIdx, skillIdx, presetSkill)
     local r = p.skills[skillIdx]
     ed.skill = r.skill
     ed.enabled = r.enabled ~= false
-    ed.conds = seGroupsToLinear(r.groups)
+    ed.conds = seExprCopy(EVAL_RULE_EXPR(r)) -- ★1.75.28 线性 expr（旧 groups 存档现场推导）
     ed.rank = r.rank -- ★1.72.4 载入已有等级（编辑时标题要显示它）
   else
     ed.skill = presetSkill or "攻击" -- 1.48.0 白名单已删，兜底用「攻击」
@@ -7462,7 +7498,8 @@ function EVAL_PROFILE_TO_TEXT(idx)
   table.insert(lines, "")
   for _, r in ipairs(p.skills or {}) do
     local dis = (r.enabled == false) and "!" or ""
-    table.insert(lines, "- " .. dis .. tostring(r.skill) .. (r.rank and ("(" .. tostring(r.rank) .. ")") or "") .. " | " .. EVAL_GROUP_STR(r.groups)) -- ★1.72.4 等级与官方语法同形
+    -- ★1.75.28 导出走 expr 现算（旧写法 EVAL_GROUP_STR(r.groups) ⇒ 新格式 r.groups=nil ⇒ **导出丢条件**）
+    table.insert(lines, "- " .. dis .. tostring(r.skill) .. (r.rank and ("(" .. tostring(r.rank) .. ")") or "") .. " | " .. EVAL_EXPR_STR(EVAL_RULE_EXPR(r))) -- ★1.72.4 等级与官方语法同形
   end
   return table.concat(lines, "\n")
 end
@@ -7505,7 +7542,7 @@ function EVAL_PROFILE_FROM_TEXT(text)
           if base2 and base2 ~= "" and rk2 and rk2 ~= "" then sn, rank2 = condTrim(base2), condTrim(rk2) end
         end
         if sn ~= "" and string.len(sn) <= 48 then
-          table.insert(skills, { skill = sn, enabled = enabled, groups = EVAL_PARSE_CONDS(conds or ""), why = sn, rank = rank2 })
+          table.insert(skills, { skill = sn, enabled = enabled, expr = EVAL_PARSE_CONDS(conds or ""), why = sn, rank = rank2 }) -- ★1.75.28 expr
         end
       end
     end
@@ -9055,7 +9092,7 @@ if type(SlashCmdList) == "table" then
         local w2 = warCfg()
         local p = w2.profiles[w2.activeProfile or 1]
         if p then -- 1.33.4 取消 8 上限残留（1.33.0 漏改的 /eh go add 路径）
-          table.insert(p.skills, { skill = sn, enabled = true, groups = EVAL_PARSE_CONDS(conds), why = sn })
+          table.insert(p.skills, { skill = sn, enabled = true, expr = EVAL_PARSE_CONDS(conds), why = sn }) -- ★1.75.28 expr
           say("已添加: " .. sn .. " → " .. ((conds ~= "") and conds or "无条件"))
           pcall(EVAL_WAR_TAB_REFRESH)
         end
@@ -9119,7 +9156,7 @@ if type(SlashCmdList) == "table" then
       if p then
         for i, r in ipairs(p.skills) do
           say(string.format("%d. %s %s | %s", i, tostring(r.skill) .. (r.rank and ("(" .. tostring(r.rank) .. ")") or ""), -- ★1.72.4 等级一并显示（对方案核对的唯一通道）
-            (r.enabled ~= false) and "|cff00ff00开|r" or "|cffff0000关|r", uiEsc(EVAL_GROUP_STR(r.groups))))
+            (r.enabled ~= false) and "|cff00ff00开|r" or "|cffff0000关|r", uiEsc(EVAL_EXPR_STR(EVAL_RULE_EXPR(r)))))
         end
       end
     elseif msg == "go" then

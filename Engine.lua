@@ -749,8 +749,10 @@ end
 local TEAM_ORDER_KEYS = { candHp = "hp", hpPct = "hp", tHpPct = "hp",
                           candPower = "power", powerPct = "power", tPowerPct = "power" }
 function EVAL_TEAM_PICK_ORDER(rule)
-  for _, g in ipairs((rule and rule.groups) or {}) do
-    for _, cd in ipairs(g) do
+  -- ★1.75.28 走 expr（旧 groups 存档由 EVAL_RULE_EXPR 现场推导；只迭代条件、结构无关）
+  for _, it in ipairs(EVAL_RULE_EXPR(rule) or {}) do
+    local cd = it.cd
+    if type(cd) == "table" then
       local key = TEAM_ORDER_KEYS[cd.k]
       if key and type(cd.n) == "number" then
         local mode = nil
@@ -844,8 +846,10 @@ local function teamFilterList(list, cd, rule)
   local gs = (cd and type(cd.gs) == "table") and cd.gs or nil
   if not cs and not gs and rule then
     cs, gs = {}, {}
-    for _, g in ipairs(rule.groups or {}) do
-      for _, c in ipairs(g) do
+    -- ★1.75.28 走 expr（同上：只迭代条件）
+    for _, it in ipairs(EVAL_RULE_EXPR(rule) or {}) do
+      local c = it.cd
+      if type(c) == "table" then
         if type(c.cs) == "table" then for kk in pairs(c.cs) do cs[kk] = true end end
         if type(c.gs) == "table" then for kk in pairs(c.gs) do gs[kk] = true end end
       end
@@ -879,8 +883,10 @@ local TEAM_PICK_CAND_K = {
 }
 local function teamSelfOnlyHint(rule)
   local all, cand = 0, 0
-  for _, g in ipairs((rule and rule.groups) or {}) do
-    for _, cd in ipairs(g) do
+  -- ★1.75.28 走 expr（同上：只迭代条件）
+  for _, it in ipairs(EVAL_RULE_EXPR(rule) or {}) do
+    local cd = it.cd
+    if type(cd) == "table" then
       all = all + 1
       if TEAM_PICK_CAND_K[cd.k] then cand = cand + 1 end
     end
@@ -1339,9 +1345,23 @@ end
 --   ★判据：**动作条图标只是代理；从增益条亲自观察到的纹理才是权威**。
 --     学习表由 EVAL_PLAYER_BUFF_LIST / EVAL_TARGET_*_LIST 在**真实光环**上读出名字+纹理后写入 → 它才是镜子里那个。
 --   ★为什么不担心影响施法：施法走的是 wslots 的**格子号**（另一条路），不经过本函数。
+-- ★1.75.28 查表**冒号形态两侧归一**（与 cancelBuff/auraNameHit/wFindBagItem 同一纪律）：
+--   文本导入路径会把条件名整体 colonNorm（全角「：」→ 半角），而学习表/动作条键是客户端真名（全角）
+--   ⇒ 直接按名查表必 miss、条件报「未知buff」（真机存档里就有一条 真言术:韧）。
+--   外层命中失败才做线性扫描（表只有十几条，代价可忽略）。
+local function auraTexLookup(store, n)
+  if type(store) ~= "table" then return nil end
+  local v = store[n]
+  if v then return v end
+  local want = colonNorm(n)
+  for k, vv in pairs(store) do
+    if type(k) == "string" and colonNorm(k) == want then return vv end
+  end
+  return nil
+end
 function auraTexOf(n)
-  local learned = (EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war and EVAL_HELP_CONFIG.war.debuffTex and EVAL_HELP_CONFIG.war.debuffTex[n])
-    or (EVAL_DEBUFF_TEX_LEARN and EVAL_DEBUFF_TEX_LEARN[n])
+  local learned = auraTexLookup(EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war and EVAL_HELP_CONFIG.war.debuffTex, n)
+    or auraTexLookup(EVAL_DEBUFF_TEX_LEARN, n)
   if learned then return learned end
   local s = wslots[n]
   if s and s.tex then return s.tex end
@@ -2173,7 +2193,8 @@ local function creatureTypeId(raw)
   return nil -- 未列出：由调用方决定是否算 "other"
 end
 
--- ===== 条件组格式（方案/技能配置 UI 用）：rule.groups = { {cond,...}, ... }，组内条件为 & 关系，组间为 | 关系 =====
+-- ===== 条件格式（方案/技能配置 UI 用）：**规范存储 = rule.expr = {{conn,cd},…}**（1.75.28 起，见 EVAL_RULE_EXPR）；
+--   旧存档的 rule.groups = { {cond,…}, … }（组内 &、组间 |）由 EVAL_RULE_EXPR 现场推导，语义逐字等价 =====
 -- 单条件 cond = { k=类型, op/n=数值比较, v=布尔, s=技能名, inv=取反 }
 --   数值: {k="power",op=">",n=30}  tHpPct/hpPct/powerPct/combatTime/combo(连击点 1.28.0) 同
 --   布尔: {k="combat",v=true}  canAttack/canBleed/isBoss/isElite/tInCombat/alt/shift/ctrl/autoAttack
@@ -2783,26 +2804,94 @@ local function teamJointGroup(g, rule, dry)
   return false, why
 end
 
+-- ★★★1.75.28 两级关系（用户选定方案 B）：条件连接符 4 个 ——
+--   `&` 项内与 · `|` 项内或 · `&&` 新项·与 · `||` 新段·或；**优先级 & > | > && > ||**。
+--   规范存储 = `rule.expr` = { {conn=nil|"&"|"|"|"&&"|"||", cd=条件}, … }（线性，与编辑器行模型同形）。
+--   ★旧文本/旧存档**零迁移、语义逐字不变**：旧写法只含 & 与 |（组内 &、组间 |），按新优先级求值
+--   正好聚成旧的「组」—— (A&B)|(C&D) 与旧 DNF 完全等价（上线前已用 harness 对账）。
+--   新表达力 = 「与里套或」：(A|B) & C ⇒ 写法 `A | B && C`（旧版只能拆两条规则绕）。
+function EVAL_RULE_EXPR(rule)
+  if not rule then return nil end
+  if type(rule.expr) == "table" then return rule.expr end
+  -- 旧数据：groups（组内 &、组间 |）→ 线性 expr（**不写回**，编辑保存时才落新格式；cd 表按引用共享）
+  local expr = {}
+  for gi, g in ipairs(rule.groups or {}) do
+    for ci, cd in ipairs(g) do
+      local conn = nil
+      if gi > 1 and ci == 1 then conn = "|"
+      elseif ci > 1 then conn = "&" end
+      table.insert(expr, { conn = conn, cd = cd })
+    end
+  end
+  return expr
+end
+-- expr → 段/项结构：`||` 分段（段间或）、`&&` 分项（项间与）；项内只剩 & 与 |
+local function exprSplit(expr)
+  local segs = { { {} } }
+  for _, it in ipairs(expr or {}) do
+    local c = it.conn
+    if c == "||" then
+      table.insert(segs, { { it } }) -- ★新段**同时收进这条**（旧写法只开空段 ⇒ &&/|| 后面那条被丢，harness P2/P5 当场抓到）
+    elseif c == "&&" then
+      table.insert(segs[table.getn(segs)], { it }) -- ★同上：新项同时收进这条
+    else
+      local terms = segs[table.getn(segs)]
+      table.insert(terms[table.getn(terms)], it)
+    end
+  end
+  return segs
+end
+-- ★★★1.75.28 一个 AND-run 的求值（run 内连接符**全是 &**；run = 旧版的「条件组」）。
+--   ★联合判定**必须按 run 试**（不是按项！）：旧存档的多组规则转 expr 后组边界是 `|` ⇒ 整条落进**同一个项**，
+--   若按项试联合 ⇒ 「一个组里 ≥2 条队友条件」的联合选人会**静默失效**（回退成逐条各自选人 = 1.75.23 修过的老毛病）。
+--   run 粒度与旧 groupsOK 的「逐组 teamJointGroup」**逐字对齐**：单条/无队友条件时它返 nil ⇒ 走逐条路径。
+local function evalRunItems(runItems, rule, dry)
+  local g = {}
+  for _, it in ipairs(runItems) do table.insert(g, it.cd) end
+  local jok, jwhy, jtrace = teamJointGroup(g, rule, dry)
+  if jok ~= nil then return jok, jwhy, jtrace end
+  local lastWhy, trace = "条件不满足", {}
+  for _, it in ipairs(runItems) do
+    local ok, why = condOne(it.cd, rule.skill, dry, rule)
+    table.insert(trace, EVAL_COND_STR(it.cd) .. (ok and "√" or "×"))
+    if not ok then return false, why, table.concat(trace, " ") end -- ★AND 短路：后面条件（含副作用）不求值
+  end
+  return true, nil, table.concat(trace, " ")
+end
+-- 项求值 = OR of AND-runs（& 更紧）：`|` 切 run、逐 run 求值，任 run 真即项真（短路顺序与旧版一致）
+local function evalTermItems(items, rule, dry)
+  local runs, cur = {}, nil
+  for _, it in ipairs(items) do
+    if it.conn == "|" then
+      cur = { it }
+      table.insert(runs, cur)
+    else
+      if not cur then cur = {} table.insert(runs, cur) end
+      table.insert(cur, it)
+    end
+  end
+  local traceAll, lastWhy = {}, "条件不满足"
+  for _, r in ipairs(runs) do
+    local ok, why, tr = evalRunItems(r, rule, dry)
+    if tr and tr ~= "" then table.insert(traceAll, tr) end
+    if ok then return true, nil, table.concat(traceAll, " ") end
+    lastWhy = why
+  end
+  return false, lastWhy, table.concat(traceAll, " ")
+end
 function groupsOK(rule, dry)
   st.teamJointRec = nil -- ★1.75.23 防串味：每条规则的组求值开头清掉联合上下文
-  if not rule.groups or table.getn(rule.groups) == 0 then return true, nil, "无条件" end
+  local expr = EVAL_RULE_EXPR(rule)
+  if not expr or table.getn(expr) == 0 then return true, nil, "无条件" end
   local lastWhy = "条件不满足"
-  for _, g in ipairs(rule.groups or {}) do
-    -- ★★★1.75.23 方案 A：组内「队友类条件 ≥2 条」⇒ 合并成**一次联合选人**（逐候选、全部条件对同一人判定）
-    local jok, jwhy, jtrace = teamJointGroup(g, rule, dry)
-    if jok ~= nil then
-      if jok then return true, nil, jtrace end
-      lastWhy = jwhy
-    else
-      local allOK = true
-      local trace = {}
-      for _, cd in ipairs(g) do
-        local ok, why = condOne(cd, rule.skill, dry, rule)
-        table.insert(trace, EVAL_COND_STR(cd) .. (ok and "√" or "×"))
-        if not ok then allOK = false lastWhy = why break end
-      end
-      if allOK then return true, nil, table.concat(trace, " ") end
+  for _, terms in ipairs(exprSplit(expr)) do
+    local segOK, trace = true, {}
+    for _, items in ipairs(terms) do
+      local tv, why, tr = evalTermItems(items, rule, dry)
+      if tr and tr ~= "" then table.insert(trace, tr) end
+      if not tv then segOK = false lastWhy = why break end
     end
+    if segOK then return true, nil, table.concat(trace, " ") end
   end
   return false, lastWhy
 end
@@ -3894,7 +3983,9 @@ function EVAL_RULE_RUN(rules)
       end
     else
       local ok, why, trace
-      if r.groups then ok, why, trace = groupsOK(r) else ok, why = condOK(r.when or {}, r.skill) end
+      -- ★★★1.75.28 闸门必须**同时认 expr 与 groups**（旧写法只认 groups ⇒ 新格式保存后 r.groups=nil，
+      --   掉进旧 when 路径；而 r.when 也是 nil ⇒ condOK({}) 恒 true = **规则变无条件、每次都执行且不选目标**）
+      if r.expr or r.groups then ok, why, trace = groupsOK(r) else ok, why = condOK(r.when or {}, r.skill) end
       if ok then
         if wuse(r.skill, r.why or r.skill, r.rank) then
           -- 释放成功：记入释放日志（状态信息UI「最近释放」展示触发条件明细）
@@ -4397,17 +4488,31 @@ function EVAL_TEST_TEAM_PICK_AUTO(rule, selId)
   return unit
 end
 
+-- ★1.75.28 返回**线性 expr**（不再是 groups）：分词按 &&、||、&、|（先看两字符再看一字符），
+--   conn = 该条件**前面**的连接符（第一条归 nil）；旧文本（只含 & 与 |）解析结果与旧 groups 逐字等价。
 function EVAL_PARSE_CONDS(str)
-  local groups = {}
-  for orPart in string.gmatch(str or "", "([^|]+)") do
-    local g = {}
-    for andPart in string.gmatch(orPart, "([^&]+)") do
-      local cd = EVAL_PARSE_ONE(andPart)
-      if cd then table.insert(g, cd) end
+  str = str or ""
+  local expr, buf, conn = {}, "", nil
+  local function flush(c)
+    local s = string.match(buf, "^%s*(.-)%s*$")
+    if s ~= "" then
+      local cd = EVAL_PARSE_ONE(s)
+      if cd then table.insert(expr, { conn = conn, cd = cd }) end
     end
-    if table.getn(g) > 0 then table.insert(groups, g) end
+    buf = ""
+    conn = c -- 下一条条件的连接符
   end
-  return groups
+  local i, n = 1, string.len(str)
+  while i <= n do
+    local two = string.sub(str, i, i + 1)
+    local one = string.sub(str, i, i)
+    if two == "&&" or two == "||" then flush(two) i = i + 2
+    elseif one == "&" or one == "|" then flush(one) i = i + 1
+    else buf = buf .. one i = i + 1 end
+  end
+  flush(nil)
+  if expr[1] then expr[1].conn = nil end
+  return expr
 end
 
 -- 条件组 → 显示字符串（列表摘要 / 编辑回显）
@@ -4560,14 +4665,37 @@ end
 --   抄一份的话，生产代码改回裸 id 断言照样绿（本项目「测试里复刻逻辑」的老坑）。
 function EVAL_TEST_COND_NUMNAME(k) return COND_NUMNAME[k] end
 
-function EVAL_GROUP_STR(groups, disp)
+-- ★1.75.28 expr → 单行文本（连接符原样：A & B | C && D || E）；导出/导入与 EVAL_PARSE_CONDS 成对往返
+function EVAL_EXPR_STR(expr, disp)
   local parts = {}
-  for _, g in ipairs(groups or {}) do
-    local cs = {}
-    for _, cd in ipairs(g) do table.insert(cs, EVAL_COND_STR(cd, disp)) end
-    table.insert(parts, table.concat(cs, " & "))
+  for i, it in ipairs(expr or {}) do
+    local s = EVAL_COND_STR(it.cd, disp)
+    if i == 1 then table.insert(parts, s)
+    else table.insert(parts, (it.conn or "&") .. " " .. s) end
   end
-  return table.concat(parts, " | ")
+  return table.concat(parts, " ")
+end
+-- ★expr → 显示行（tooltip 用）：`&&`/`||` 起新行并带上连接符；行内按各自连接符拼
+function EVAL_EXPR_LINES(expr, disp)
+  local lines, cur = {}, nil
+  for i, it in ipairs(expr or {}) do
+    local s = EVAL_COND_STR(it.cd, disp)
+    local c = it.conn
+    if i == 1 then
+      cur = s
+    elseif c == "&&" or c == "||" then
+      table.insert(lines, cur)
+      cur = c .. " " .. s
+    else
+      cur = cur .. " " .. (c or "&") .. " " .. s
+    end
+  end
+  if cur then table.insert(lines, cur) end
+  return lines
+end
+-- 兼容壳（旧调用点/旧存档）：groups → 线性 expr → 文本；语义不变（& 组内、| 组间）
+function EVAL_GROUP_STR(groups, disp)
+  return EVAL_EXPR_STR(EVAL_RULE_EXPR({ groups = groups }), disp)
 end
 
 -- 方案数据：缺省时给空「默认」方案（1.48.0 起；旧版生成一整套战士规则已删——起手走案例模版/编辑窗）

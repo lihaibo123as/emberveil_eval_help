@@ -50,9 +50,10 @@ local tbNameClass = {}
 --   ★条目 **5 分钟失效**：下次出现时惰性重抓，见 tbNameFresh —— 等级/区域正是会随时间变化的数据）。
 local tbNameLevel = {}
 local tbNameZone = {}
--- ★1.75.27 用户定：缓存条目 **5 分钟失效**，下次出现时**才**重新抓取（★惰性：不主动全量轮询）。
---   失效判定 = **唯一助手 tbNameFresh**（三个读取口 + 主动查询入队口共用，别处不许再写一份判据）；
---   重抓路径是现成的：名字未命中 → 先 HEAL 本地只读重采、再排主动 /who（四道闸门照旧）。
+-- ★1.75.27/1.75.28 缓存条目 **5 分钟过期**（★1.75.28 用户定稿：到期**不删旧值**，旧数据照常显示，
+--   只后台触发刷新、新数据落地即无缝切换；惰性：不主动全量轮询）。
+--   过期判定 = **唯一助手 tbNameStale**（三个读取口 + 主动查询入队口共用，别处不许再写一份判据）；
+--   刷新路径是现成的：HEAL 本地只读重采 + 主动 /who（四道闸门照旧），触发限频 60 秒/名。
 local tbNameTime = {}
 local TB_NC_TTL = 300 -- 缓存失效时长（秒）= 5 分钟
 local function tbNameClassKey(name)
@@ -80,21 +81,32 @@ local function tbNameClassPut(name, klass, level, zone)
   tbNameClass[k] = tok
   return true
 end
--- ★1.75.27 失效判定（唯一）：在 5 分钟窗内 = true；过期 = **惰性驱逐**（四类数据一起清）并返回 false。
---   驱逐后这个名字按「不在缓存」处理 → 走现成的 HEAL 本地重采 + 主动 /who 重抓路径。
-local function tbNameFresh(k)
+-- ★1.75.28 过期判定（唯一）：>5 分钟没在任何来源里再见到 = true。
+--   ★机制调整（用户定）：到期**绝不删旧值** —— 旧数据照常显示（着色/等级/区域不断档），
+--   只**后台触发刷新**；新数据由 put 盖时间戳落地 = **无缝切换**（刷新不到就一直显示旧值）。
+local function tbNameStale(k)
   local t = tbNameTime[k]
-  if type(t) ~= "number" then return true end -- 没时间戳（不该有）：不算过期，按原样用
+  if type(t) ~= "number" then return false end -- 没时间戳（不该有）：不算过期
   local now = (type(GetTime) == "function") and GetTime() or 0
-  if now - t <= TB_NC_TTL then return true end
-  tbNameClass[k], tbNameLevel[k], tbNameZone[k], tbNameTime[k] = nil, nil, nil, nil
-  TB.ncExpired = (TB.ncExpired or 0) + 1
-  return false
+  return (now - t) > TB_NC_TTL
+end
+-- 刷新触发（同名 60 秒最多一次，防每条聊天都踢一脚）：
+--   本地只读重采（HEAL 自带分来源限频）+ 主动 /who（四道闸门照旧）—— 两条都是**现成路径**，不新造机制。
+local function tbNameRefreshKick(k, name)
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  TB.ncRefreshAt = TB.ncRefreshAt or {}
+  if now - (TB.ncRefreshAt[k] or -999) < 60 then return false end
+  TB.ncRefreshAt[k] = now
+  TB.ncRefresh = (TB.ncRefresh or 0) + 1
+  if type(EVAL_TB_NAMECLASS_HEAL) == "function" then pcall(EVAL_TB_NAMECLASS_HEAL) end
+  if type(EVAL_TB_WHO_ENQUEUE) == "function" and type(name) == "string" then pcall(EVAL_TB_WHO_ENQUEUE, name) end
+  return true
 end
 local function tbNameClassGet(name)
   local k = tbNameClassKey(name)
   if not k then return nil end
-  if not tbNameFresh(k) then return nil end
+  -- ★1.75.28 过期不删：旧值照返（显示不断档），顺手踢一次后台刷新（60s/名，无缝切换）
+  if tbNameStale(k) then tbNameRefreshKick(k, name) end
   return tbNameClass[k]
 end
 function EVAL_TB_NAMECLASS_PUT(n, k, lv, z) return tbNameClassPut(n, k, lv, z) end
@@ -103,7 +115,8 @@ function EVAL_TB_NAMECLASS_GET(n) return tbNameClassGet(n) end
 local function tbNameLevelGet(name)
   local k = tbNameClassKey(name)
   if not k then return nil end
-  if not tbNameFresh(k) then return nil end
+  -- ★1.75.28 过期不删：旧值照返（显示不断档），顺手踢一次后台刷新（60s/名，无缝切换）
+  if tbNameStale(k) then tbNameRefreshKick(k, name) end
   return tbNameLevel[k]
 end
 function EVAL_TB_NAMELEVEL_GET(n) return tbNameLevelGet(n) end
@@ -111,7 +124,8 @@ function EVAL_TB_NAMELEVEL_GET(n) return tbNameLevelGet(n) end
 local function tbNameZoneGet(name)
   local k = tbNameClassKey(name)
   if not k then return nil end
-  if not tbNameFresh(k) then return nil end
+  -- ★1.75.28 过期不删：旧值照返（显示不断档），顺手踢一次后台刷新（60s/名，无缝切换）
+  if tbNameStale(k) then tbNameRefreshKick(k, name) end
   return tbNameZone[k]
 end
 function EVAL_TB_NAMEZONE_GET(n) return tbNameZoneGet(n) end
@@ -2956,8 +2970,8 @@ end
 --   ③ 判据是**纯函数** EVAL_TB_CHAT_COLOR_LINE（只做字符串处理 + 查缓存，能脱游戏直接断言）；
 --   ④ 只在**聊天打印入口**加一层（与频道屏蔽**共用同一个包装体**，见 EVAL_TB_CHAN_INSTALL_ONE）；
 --   ⑤ 缓存**不落盘**（会话级）：避免 SavedVariables 膨胀与过期清理策略（ChatMOD 要 7 周清理正是因为落了盘）；
---      ★1.75.27 会话内再加 **5 分钟惰性失效**（tbNameFresh）：只清「5 分钟没在任何来源里再见到」的名字，
---      下次出现时走 HEAL 本地重采 + 主动 /who 重抓 —— 不主动全量轮询（用户定）。
+--      ★1.75.28 会话内再加 **5 分钟过期 + 无缝刷新**（tbNameStale）：到期**不删**（旧值照显），
+--      只在被读到时后台触发 HEAL 本地重采 + 主动 /who，新数据落地即无缝覆盖 —— 不主动全量轮询（用户定）。
 
 -- 开关：nil 视为**开**（与「角色名职业着色」同一套默认：装上就生效；取消勾选 = 不再染）
 function EVAL_TB_CHATCOLOR_ON()
@@ -3310,7 +3324,7 @@ function EVAL_TB_NAMECLASS_PROBE()
   say("===== 名字染色缓存探针 =====")
   say("  开关(chatColor)=" .. tostring(EVAL_TB_CHATCOLOR_ON()) .. " · 缓存条数=" .. tostring(EVAL_TB_NAMECLASS_SIZE()) ..
       " · 本会话采集新增=" .. tostring(TB.ncAdded or 0) .. " · 未命中自愈上色=" .. tostring(TB.chatHealed or 0) ..
-      " · 过期失效=" .. tostring(TB.ncExpired or 0) .. "（5 分钟未再见即清，下次出现重抓）")
+      " · 过期后台刷新=" .. tostring(TB.ncRefresh or 0) .. "（5 分钟未再见：旧值照显、后台更新无缝切换）")
   say("  公会名册: GetNumGuildMembers=" .. apiOk("GetNumGuildMembers") .. " · GetGuildRosterInfo=" .. apiOk("GetGuildRosterInfo") ..
       " · 本地条数=" .. countOf("GetNumGuildMembers") .. "（★懒加载：没开过公会窗前通常是 0）")
   if type(GetGuildRosterInfo) == "function" and type(GetNumGuildMembers) == "function" then
@@ -3463,7 +3477,7 @@ function EVAL_TB_WHO_ENQUEUE(name)
   if TB.whoNoApi then return false, "noapi" end
   local k = tbNameClassKey(name)
   if not k then return false, "badname" end
-  if tbNameClass[k] and tbNameFresh(k) then return false, "cached" end -- ★1.75.27 过期 = 不算已缓存（驱逐后放行重查）
+  if tbNameClass[k] and not tbNameStale(k) then return false, "cached" end -- ★1.75.28 过期 = 允许重查（旧值保留，查回来无缝覆盖）
   if EVAL_TB_WHO_ISMISS(k) then return false, "miss" end -- ★用户要的「查不到就别反复查」
   if tbWhoQueued(k) or (TB.whoPending and TB.whoPending.key == k) then return false, "dup" end
   if table.getn(tbWhoQ) >= TB_WHO_QMAX then

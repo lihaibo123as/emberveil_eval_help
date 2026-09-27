@@ -1363,11 +1363,10 @@ local function shScoreParts(prof)
     local row = prof.skills[i]
     if type(row) == "table" then
       local seen, w, nCond = {}, 0, 0
-      local gs = row.groups
-      for g = 1, table.getn(gs or {}) do
-        local grp = gs[g]
-        for c = 1, table.getn(grp or {}) do
-          local cd = grp[c]
+      -- ★1.75.28 走 expr（Engine 的 EVAL_RULE_EXPR；旧 groups 存档现场推导）——评分只数条件，与分组结构无关
+      local expr = (type(EVAL_RULE_EXPR) == "function") and EVAL_RULE_EXPR(row) or nil
+      for c = 1, table.getn(expr or {}) do
+          local cd = expr[c].cd
           local kk = (type(cd) == "table") and cd.k or nil
           if kk then
             local key = tostring(kk) .. "\1" .. shCondKey(cd)
@@ -1383,7 +1382,6 @@ local function shScoreParts(prof)
               end
             end
           end
-        end
       end
       if nCond > 0 then
         if w > SH_SKILL_CAP then w = SH_SKILL_CAP end
