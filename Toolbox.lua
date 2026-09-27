@@ -396,7 +396,7 @@ local function tbCfg()
   if c.tb.chatColor == nil then c.tb.chatColor = true end
   -- ★1.75.27 名字着色的附加段（等级/区域）：真值 = 集合 chatNameExtra（★选哪些显示哪些，未选不显示）。
   --   旧布尔 chatLevel → chatNameExtra.lv（只搬一次）。
-  --   ★默认 = **全不勾**（用户定稿「以上默认关闭」）：集合不存在就建空集。
+  --   ★默认 = **只勾等级**（用户定稿「默认开启等级」；区域默认不勾）。
   --   ★开发期那版曾自动落盘 { lv = true }（当时默认开，不是用户勾的）⇒ 一次性清回空集
   --     （chatNameExtraV2 标记；之后用户自己在 [设置] 里勾的选择**不动** —— 标记已立，不再进这个分支）。
   if c.tb.chatLevel ~= nil then
@@ -407,6 +407,13 @@ local function tbCfg()
   if not c.tb.chatNameExtraV2 then
     c.tb.chatNameExtraV2 = true
     c.tb.chatNameExtra = {}
+  end
+  -- ★默认值第二次调整（用户定稿：「默认开启等级」）：一次性把 等级 立为勾（V3 标记）；
+  --   区域选择**不动**；用户之后自己取消勾的等级**不再**顶回（标记已立，不再进这个分支）。
+  if not c.tb.chatNameExtraV3 then
+    c.tb.chatNameExtraV3 = true
+    if type(c.tb.chatNameExtra) ~= "table" then c.tb.chatNameExtra = {} end
+    c.tb.chatNameExtra.lv = true
   end
   if c.tb.chatNameExtra == nil then c.tb.chatNameExtra = {} end
   -- ★1.73.12 未缓存角色的主动查询：用户要求**默认开启**（工具箱里可关）
@@ -2960,12 +2967,12 @@ function EVAL_TB_CHATCOLOR_ON()
 end
 -- ★1.75.27 名字着色 [设置] 的附加段选项（顺序 = 下拉顺序）：等级 / 区域
 local TB_CHATEXTRA_OPTS = { "lv", "zone" }
--- 某个附加段是否启用（读集合真值；默认 = **全不勾**：没勾的段一个都不显示）
+-- 某个附加段是否启用（读集合真值；默认 = **只勾等级**（用户定稿「默认开启等级」），区域默认不勾）
 function EVAL_TB_CHATEXTRA_ON(id)
   local tb = tbCfg()
-  if not tb then return false end
+  if not tb then return id == "lv" end
   local s = tb.chatNameExtra
-  if type(s) ~= "table" then return false end
+  if type(s) ~= "table" then return id == "lv" end
   return s[id] == true
 end
 -- [设置] 多选下拉：选哪些显示哪些，未选不显示（改完立即生效：拼行时现读）
