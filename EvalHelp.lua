@@ -4657,15 +4657,20 @@ local function seBtn(parent, x, y, w, h, label, fn)
 end
 
 -- ===== 全局模拟下拉列表面板（1.19.0 由 SE 专用泛化：任意窗口可调用） =====
--- EVAL_DD_OPEN(锚点按钮, 选项表, 回调)；多列 12 行/列，贴屏底自动上翻；EVAL_DD_HIDE() 收起。
-local DD_COLS = 12
+-- EVAL_DD_OPEN(锚点按钮, 选项表, 回调)；多列 24 行/列，贴屏底自动上翻；EVAL_DD_HIDE() 收起。
+-- ★1.75.14 用户要求「**下拉窗高度增加一倍**」⇒ 每列行数 12 → **24**（高度 ≈188px → ≈368px，
+--   列数同比例减半）。★单个菜单可用 `opts.rowsPerCol` 覆盖（想只让某一个菜单变高/变矮就传它）。
+--   ★菜单变高不会跑出屏幕：既有的「贴屏底改为向上展开」判定按 totalH 现算，加高即自动更早翻转。
+--   ★行池 DD_MAX_ROWS=96 不变，= 4 列 × 24 行；当前最长的菜单（「来源」94 项）仍装得下、不触发截断。
+local DD_COLS = 24
 local DD_MAX_ROWS = 96 -- ★行池上限（原硬编码 48；条件类型菜单需 54 行）
 -- ★★★ 1.71.2（第十三轮）行池上限。原为硬编码 48，而**条件类型菜单需要 54 行**（五组 49 项 + 5 个组标题）
 --   → 最后一组「冷却就绪/技能可用/未排队/施法范围内/施法中」**整组被静默丢掉**，
 --   而且面板已按 5 列宽度布局 → 右侧留下一条空列（用户截图两个症状都对得上）。
 --   ★1.71.2（第十五轮）施法族（自身 3 项 + 目标 3 项）已按用户要求统一并入 CTG_4「技能状态」组 → 该组现为 10 项；
 --     全表总行数**仍然不变**（49 项 + 5 个组标题 = 54），行池上限的判断与结论都不受影响。
-local SEARCH_H = 20 -- 1.70.29 搜索框占用的额外高度（0=不显示搜索框时的高度基准不变）
+local SEARCH_H = 20
+local DD_SCROLL_H = 14 -- ★1.75.14 滚动指示条高度（只在「选项多到一屏放不下」时才计入窗口高度） -- 1.70.29 搜索框占用的额外高度（0=不显示搜索框时的高度基准不变）
 -- ★1.71.2 搜索框「停放坐标」：放在屏幕左上角外侧。
 --   为什么不用 Hide()：本客户端 EditBox 用 Hide() 之后**它的文字/底条仍会被绘出**
 --   （用户截图：搜索框消失后，所有弹窗上部留着一条看不见的黑块）→ 改用「挪出可视区」。
@@ -4797,12 +4802,42 @@ local function DD_BUILD()
       end
     end)
     rb:SetScript("OnLeave", function()
-      pcall(rbg.SetVertexColor, rbg, 0.10, 0.09, 0.06, 1)
+      -- ★1.75.14 还原**这一行自己的**底色（有配色带的分组标题用 row.bgBase），没有才回默认深底
+      local b = rec.bgBase
+      if b then pcall(rbg.SetVertexColor, rbg, b[1], b[2], b[3], 1)
+      else pcall(rbg.SetVertexColor, rbg, 0.10, 0.09, 0.06, 1) end
       if rec.tip and type(GameTooltip) ~= "nil" then pcall(GameTooltip.Hide, GameTooltip) end
     end)
   end
   dd:Hide()
   ddUI.root = dd
+  -- ★1.75.14 滚动指示：只在「选项多到一屏放不下」时显示（列 x/y + 滚轮提示）
+  local colTxt = uiText(dd, 8, 0.66, 0.62, 0.50)
+  colTxt:SetPoint("BOTTOMRIGHT", dd, "BOTTOMRIGHT", -5, 3)
+  pcall(colTxt.SetJustifyH, colTxt, "RIGHT")
+  colTxt:Hide()
+  ddUI.colTxt = colTxt
+  -- ★1.75.14 滚轮翻列：**只改 colOff，再走同一条重绘路**（ddUI.refilter 就是「重入 EVAL_DD_OPEN」，
+  --   搜索框打字用的也是它）—— 绝不在这里另写一份渲染逻辑（两处实现迟早漂移）。
+  --   ★方向走唯一来源 EVAL_WHEEL_DIR（上滚 = +1 ⇒ 位移取反 = 往前一列）；到边界不重绘、不空转。
+  if pcall(dd.EnableMouseWheel, dd, true) then
+    dd:SetScript("OnMouseWheel", function(a, b)
+      local dir = (type(EVAL_WHEEL_DIR) == "function") and EVAL_WHEEL_DIR(a, b) or 0
+      if dir == 0 then return end
+      local mx = tonumber(ddUI.maxColOff) or 0
+      if mx <= 0 then return end
+      local off = (tonumber(ddUI.colOff) or 0) - dir
+      if off < 0 then off = 0 end
+      if off > mx then off = mx end
+      if off == (tonumber(ddUI.colOff) or 0) then return end
+      ddUI.colOff = off
+      -- ★若重绘抛错，必须把 reentrant 标志清掉：留着它 = 「再点锚点收起」永久失效（静默坏掉最难查）
+      if ddUI.refilter then
+        local okr = pcall(ddUI.refilter)
+        if not okr then ddUI.reentrant = nil end
+      end
+    end)
+  end
   -- ★★★1.75.6（用户要求：「点这个下拉窗之外的任意位置都可以关闭下拉窗」）：
   --   **全屏 click-catcher**（本项目既有范式，见 DragFrames 的「全屏 click-catcher」）——
   --   压在 DD **下面**、其余界面**上面**（同 strata、层级 = DD−5，见 EVAL_DD_OPEN）
@@ -5314,50 +5349,71 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
   --   自由文本哨兵行只在「面板内有搜索框」时启用——宿主方案下由宿主自己提交自定义名称。
   local shownList = DD_FILTER(items, ddUI.locked, filterKw,
     useSearch and (opts.onFreeText ~= nil) or false)
-  local nAll = table.getn(items)
   local n = table.getn(shownList)
-  -- ★★★ 绝不静默截断（本项目铁律）：超出行池时**如实告知还有多少项**，而不是悄悄丢掉。
-  local truncated, nDraw = 0, n
-  if n > DD_MAX_ROWS then truncated = n - (DD_MAX_ROWS - 1) nDraw = DD_MAX_ROWS end
-  local cols = math.ceil(nDraw / DD_COLS)
+  -- ★★★1.75.14 用户要求「弹窗下拉支持滚动」⇒ 选定**方案 A：保持多列网格 + 滚轮翻列**。
+  --   口径：`cols` = 放下全部选项需要的总列数；`visCols` = 一屏能显示几列（受行池 DD_MAX_ROWS 限制）；
+  --   `ddUI.colOff` = 当前窗口的**起始列**（滚轮 ±1 列，钳在 [0, cols-visCols]）。
+  --   ⇒ **选项再多也全部可达**，不再有「还有 N 项未显示」那种截断（行池只需 visCols*rowsPerCol ≤ DD_MAX_ROWS）。
+  --   ★新开菜单把 colOff 归零；「重入」（搜索框打字 / 滚轮翻列）保留滚动位置 —— 判据就是 ddUI.reentrant。
+  -- ★1.75.14 每列行数（= 下拉窗高度）—— ★★★**必须声明在第一次使用之前**：下面 `cols` 立刻要用它，
+  --   写在后面就等于「先引用后声明」⇒ 词法作用域下这里绑成**全局 nil**，真机报
+  --   `attempt to perform arithmetic on global 'rowsPerCol' (a nil value)`（用户截图当场抓到）。
+  --   默认 `DD_COLS`(24) ≈ 368px 高；单个菜单可用 `opts.rowsPerCol` 覆盖（行数翻倍 = 高度翻倍、
+  --   列数同比例减半）。★菜单变高不会跑出屏幕：「贴屏底改为向上展开」按 totalH 现算，加高即更早翻转。
+  local rowsPerCol = tonumber(opts and opts.rowsPerCol) or DD_COLS
+  if rowsPerCol < 1 then rowsPerCol = DD_COLS end
+  local cols = math.ceil(n / rowsPerCol)
   if cols < 1 then cols = 1 end
+  local visCols = math.floor(DD_MAX_ROWS / rowsPerCol)
+  if visCols < 1 then visCols = 1 end
+  if visCols > cols then visCols = cols end
+  local maxColOff = cols - visCols
+  if maxColOff < 0 then maxColOff = 0 end
+  if not ddUI.reentrant then ddUI.colOff = 0 end
+  local colOff = tonumber(ddUI.colOff) or 0
+  if colOff > maxColOff then colOff = maxColOff end
+  if colOff < 0 then colOff = 0 end
+  ddUI.colOff, ddUI.maxColOff, ddUI.visCols, ddUI.totalCols = colOff, maxColOff, visCols, cols
+  local base = colOff * rowsPerCol           -- 窗口第一格在 shownList 里的位次
+  local nRest = n - base
+  if nRest < 0 then nRest = 0 end
+  local nDraw = visCols * rowsPerCol
+  if nDraw > nRest then nDraw = nRest end
   local icons = opts and opts.icons -- 1.32.4 可选图标列：与 items 同序的纹理表
   local warns = opts and opts.warns -- ★1.71.3 可选异常标记列：与 items 同序（值为纹理路径）
   local tips = opts and opts.tips   -- ★1.71.3 可选悬停说明：与 items 同序（字符串或 {行1,行2,…}）
-  local colW = (icons or warns) and 124 or 108
+  -- ★1.75.14 可选**逐行配色**（用户要求「分类样式颜色区分 · 样式美化」）：
+  --   · `opts.colors[原始下标] = {r,g,b}` —— 该行**文字色**（分组标题用它区分各类）
+  --   · `opts.rowBg[原始下标]  = {r,g,b}` —— 该行**底色带**（悬停高亮照旧；松开鼠标时还原**这一行**的底色）
+  --   ★两者都必须**每次重绘重设**：行池是复用的，不写回基准色就会把上一个菜单的颜色漏到下一个
+  --     （「状态残留」是本项目的老家族，warns/tips 已经踩过同一条）。
+  local colors = opts and opts.colors
+  local rowBgs = opts and opts.rowBg
+  -- ★1.75.14 列宽可由调用方指定（`opts.colW`）：「来源」菜单的条目要带等级区间 `(30-45)`，
+  --   默认 108/124 装不下（会串到下一列）⇒ 那里传 146。不传就是老口径，其他菜单不受影响。
+  local colW = tonumber(opts and opts.colW) or ((icons or warns) and 124 or 108)
   for slot, row in ipairs(ddUI.rows) do
     if slot <= nDraw then
-      local i = shownList[slot]   -- 显示位置 -> 原始下标（负数 = 自由文本哨兵行）
+      local i = shownList[base + slot]   -- 显示位置 -> 原始下标（负数 = 自由文本哨兵行）
       local pi = i                -- pi 保持「原始下标」语义（onPick/sel/icons 都按它索引）
-      if truncated > 0 and slot == nDraw then
-        -- ★截断提示行（不可点）
-        row.icon:Hide()
-        row.warn:Hide() -- ★1.71.3 截断提示行不许带异常标记/悬停（残留防护）
-        row.tip = nil
-        row.text:ClearAllPoints()
-        row.text:SetPoint("LEFT", row.btn, "LEFT", 4, 0)
-        row.text:SetText("|cffff8080" .. string.format(L("DD_MORE_FMT"), truncated) .. "|r")
-        row.btn:SetScript("OnClick", nil)
-        local colT = math.floor((slot - 1) / DD_COLS)
-        local riT = math.mod(slot - 1, DD_COLS)
-        row.btn:ClearAllPoints()
-        row.btn:SetPoint("TOPLEFT", dd, "TOPLEFT", 4 + colT * colW, -(4 + SEARCH_H) - riT * 15)
-        row._ddPaint = nil
-        row.btn:Show()
-      elseif i == -1 then
+      if i == -1 then
         row.icon:Hide()
         row.warn:Hide() -- ★1.71.3 自由文本行不许带异常标记/悬停（残留防护）
         row.tip = nil
         row.text:ClearAllPoints()
         row.text:SetPoint("LEFT", row.btn, "LEFT", 4, 0)
         row.text:SetText("|cff40ff40✎|r " .. L("DD_USE_TYPED") .. " \"" .. tostring(ddUI.searchText) .. "\"")
+        -- ★1.75.14 同上：自由文本行尾部的引号内容会吃到「行文字色」⇒ 必须写回基准
+        pcall(row.text.SetTextColor, row.text, 0.85, 0.85, 0.85)
+        row.bgBase = nil
+        pcall(row.bg.SetVertexColor, row.bg, 0.10, 0.09, 0.06, 1)
         row.btn:SetScript("OnClick", function()
           local txt = ddUI.searchText
           EVAL_DD_HIDE()
           opts.onFreeText(txt)
         end)
-        local col0 = math.floor((slot - 1) / DD_COLS)
-        local ri0 = math.mod(slot - 1, DD_COLS)
+        local col0 = math.floor((slot - 1) / rowsPerCol)
+        local ri0 = math.mod(slot - 1, rowsPerCol)
         row.btn:ClearAllPoints()
         row.btn:SetPoint("TOPLEFT", dd, "TOPLEFT", 4 + col0 * colW, -(4 + SEARCH_H) - ri0 * 15)
         row._ddPaint = nil
@@ -5373,6 +5429,19 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
         row.icon:Hide()
         row.text:ClearAllPoints()
         row.text:SetPoint("LEFT", row.btn, "LEFT", 4, 0)
+      end
+      -- ★1.75.14 逐行配色（opts.colors / opts.rowBg）：分组标题靠它做出「三类各有颜色 + 底色带」的层次。
+      --   ★没有配色的行必须**写回基准**（文字 0.85 白 / 底色 0.10,0.09,0.06），否则行池复用会串色。
+      local cc = colors and colors[i]
+      if cc then pcall(row.text.SetTextColor, row.text, cc[1], cc[2], cc[3])
+      else pcall(row.text.SetTextColor, row.text, 0.85, 0.85, 0.85) end
+      local bb = rowBgs and rowBgs[i]
+      if bb then
+        row.bgBase = { bb[1], bb[2], bb[3] }
+        pcall(row.bg.SetVertexColor, row.bg, bb[1], bb[2], bb[3], 1)
+      else
+        row.bgBase = nil
+        pcall(row.bg.SetVertexColor, row.bg, 0.10, 0.09, 0.06, 1)
       end
       -- ★1.71.3 异常标记：有就显示并记下悬停说明，没有就**必须清掉**（行池复用，残留就是 bug）
       local wi = warns and warns[i]
@@ -5416,8 +5485,8 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
       end -- 自由文本哨兵行
       end
       -- 布局按【显示位置 slot】，不是原始下标 i（过滤后两者不同）
-      local col = math.floor((slot - 1) / DD_COLS)
-      local ri = math.mod(slot - 1, DD_COLS)
+      local col = math.floor((slot - 1) / rowsPerCol)
+      local ri = math.mod(slot - 1, rowsPerCol)
       row.btn:ClearAllPoints()
       row.btn:SetPoint("TOPLEFT", dd, "TOPLEFT", 4 + col * colW, -(4 + SEARCH_H) - ri * 15)
       row.btn:Show()
@@ -5425,10 +5494,20 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
       row.btn:Hide()
     end
   end
-  local rows = math.min(n, DD_COLS)
-  local totalH = 8 + SEARCH_H + rows * 15
-  dd:SetWidth(math.max(8 + cols * colW, useSearch and 200 or 0))
+  local rows = math.min(n, rowsPerCol)
+  local scrollable = (maxColOff > 0)
+  -- ★高度只按「行数」算（不随滚动位置变）⇒ 翻列时窗口不会忽高忽低；滚得动才多出一条指示条
+  local totalH = 8 + SEARCH_H + rows * 15 + (scrollable and DD_SCROLL_H or 0)
+  dd:SetWidth(math.max(8 + visCols * colW, useSearch and 200 or 0))
   dd:SetHeight(totalH)
+  if ddUI.colTxt then
+    if scrollable then
+      ddUI.colTxt:SetText(string.format(L("DD_COL_FMT"), colOff + 1, colOff + visCols, cols))
+      pcall(ddUI.colTxt.Show, ddUI.colTxt)
+    else
+      pcall(ddUI.colTxt.Hide, ddUI.colTxt)
+    end
+  end
   dd:ClearAllPoints()
   dd:SetPoint("TOPLEFT", anchorBtn, "BOTTOMLEFT", 0, -2)
   -- 贴屏底时改为向上展开

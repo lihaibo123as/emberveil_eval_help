@@ -144,6 +144,38 @@ function EVAL_QC_RARITY(rec)
   return t, c[1], c[2], c[3]
 end
 
+-- ★1.75.14 **单条任务的染色**（用户定稿口径，已替换掉先前的「名字关键词 + 站点标签」判法）：
+--   ① **没有任何任务奖励 ⇒ 一律「普通」（白）**；
+--   ② **有奖励 ⇒ 按「最好那件奖励的品质色」**（与物品品质色**完全同源**，同一张 `QC_RAR`）：
+--      q0 粗糙(灰) · q1 普通(白) · q2 优秀(绿) · q3 稀有(蓝) · q4 史诗(紫) · q5 传说(橙)。
+--   ★为什么不按 eq 过滤奖励：站点**类型/部位字段会缺**（`预言藤杖`/`悲哀衬肩`/`洛瑞卡宝珠` 都被判成
+--     非装备）⇒ 按 eq 筛会把真装备藏掉；奖励清单本身就是「这件任务给什么」，直接取最高品质即可。
+--   ★不再判名字关键词与 `d/e/r` 标签（那是**任务线**的口径）；任务行要的是「装备等级的颜色」。
+function EVAL_QC_QUEST_RARITY(rec)
+  local TOK = { "POOR", "COMMON", "UNCOMMON", "RARE", "EPIC", "LEG" }   -- 下标 = 品质 q + 1
+  local best = nil
+  if type(rec) == "table" then
+    local bq = (type(EVAL_QC_BULK_QUEST) == "function") and EVAL_QC_BULK_QUEST(rec.id) or nil
+    local rw = (bq and bq.rw) or {}
+    for i = 1, table.getn(rw) do
+      local it = (type(EVAL_QC_BULK_ITEM) == "function") and EVAL_QC_BULK_ITEM(rw[i]) or nil
+      local q = (it and tonumber(it.q)) or nil
+      if q and (best == nil or q > best) then best = q end
+    end
+  end
+  local t
+  if best == nil then
+    t = "COMMON"                                  -- ① 没有任务奖励 ⇒ 一律普通
+  else
+    local idx = math.floor(best) + 1              -- ② 有奖励 ⇒ 最高品质对应的颜色
+    if idx < 1 then idx = 1 end
+    if idx > 6 then idx = 6 end
+    t = TOK[idx] or "COMMON"
+  end
+  local c = QC_RAR[t] or QC_RAR.COMMON
+  return t, c[1], c[2], c[3]
+end
+
 -- 读值口：颜色表 / token 清单（测试与界面共用，避免复刻）
 function EVAL_QC_RARITY_RGB(token)
   local c = QC_RAR[token]
@@ -210,6 +242,18 @@ function EVAL_QC_KIND_PASS(set, k)
   for _ in pairs(set) do any = true break end
   if not any then return true end
   return set[k] and true or false
+end
+
+-- ★1.75.14 用户要求「装备/任务线列表检索增加地域过滤 · 支持多选 · 默认全选」：
+--   判定与种类**同一套语义**（非表 / 空集 = 不过滤）——界面与两个列表共用这一个入口。
+--   ★空串（""）是一等公民：站点有极少数任务没写地区 ⇒ 用 "" 当键、界面给一行「（无地区）」，
+--     这样「筛了地区却混进无地区行」不会发生（用户想排除它，取消勾选那一行即可）。
+function EVAL_QC_ZONE_PASS(set, z)
+  if type(set) ~= "table" then return true end
+  local any = false
+  for _ in pairs(set) do any = true break end
+  if not any then return true end
+  return set[tostring(z or "")] and true or false
 end
 
 -- 物品 id → 记录（全量优先、策展兜底 —— 两个来源都可能只有其一）
@@ -323,15 +367,19 @@ function EVAL_QC_SEARCH(query, cap, filter)
   --   跨档长线（如 30-40）在「40-49」档会整条消失，按等级找线就会找不到。
   local lvLo = tonumber((filter or {}).loMin)
   local lvHi = tonumber((filter or {}).loMax)
+  -- ★1.75.14 等级**多选**：filter.lvRanges（档数组 { {lo,hi},… }）优先；没有才退回旧的 loMin/loMax 单档。
+  local lvRanges = EVAL_QC_LV_RANGES((filter or {}).lvRanges or lvLo, lvHi)
   local function lvOK(c)
-    if not lvLo then return true end
+    if not lvRanges then return true end
     local lo = tonumber(c and c.lo) or 0
     local hi = tonumber(c and c.hi) or lo
-    return (hi >= lvLo) and (lo <= (lvHi or 999))
+    return EVAL_QC_LV_OVER(lvRanges, lo, hi)
   end
   -- ★1.75.18 用户要求「任务线->档位过滤使用装备那边的种类过滤」：种类档也落在数据层，
   --   与装备视图**共用同一份多选集合**（空集 = 不过滤）。判据 = 这条线的**奖励里有没有**勾选的种类。
   local kinds = (filter or {}).kinds
+  -- ★1.75.14 地域档（用户要求：**两个列表**都能按地域筛；空集 = 全部）：策展链看 `c.z`、自报系列看 `s.z`。
+  local zones = (filter or {}).zones
   local sorted = EVAL_QC_LIST(filter) -- ★与详情同一顺序（filter=nil 时位次 i 就是详情 id）
   for i = 1, table.getn(sorted) do
     local c = sorted[i]
@@ -358,7 +406,7 @@ function EVAL_QC_SEARCH(query, cap, filter)
         end
       end
     end
-    if hit and lvOK(c) and qcRecKindsOK(c, kinds) then
+    if hit and lvOK(c) and qcRecKindsOK(c, kinds) and EVAL_QC_ZONE_PASS(zones, c.z) then
       put({ idx = i, c = c, kind = hit.kind, id = hit.id, name = hit.name, sub = c.z })
     end
   end
@@ -388,7 +436,7 @@ function EVAL_QC_SEARCH(query, cap, filter)
         -- ★1.75.14 记录走 **qcSeriesRec**（与详情同一来源；旧实现这里手拼、详情另拼一份 ⇒ 字段漂移）
         local rec = qcSeriesRec(s, i)
         -- ★1.75.18 种类筛选按记录里的奖励判（qcSeriesRec 已把奖励 id 一起收好）
-        if qcRecKindsOK(rec, kinds) then
+        if qcRecKindsOK(rec, kinds) and EVAL_QC_ZONE_PASS(zones, s.z) then
           put({
             idx = i, kind = "series", key = "s:" .. tostring(i), id = hit.id, name = hit.name,
             c = rec, sub = s.z,
@@ -691,8 +739,6 @@ function EVAL_QC_ITEM_CHAINS(itemId)
   return arr
 end
 
--- ============================================================================
--- 全量数据层（1.75.9 · QuestBulk.lua）：10-60+ 级**所有**带装备奖励的任务
 --   用户要求：「任务奖励只要有装备/武器的都可以进行数据采集，单任务也可以加入采集」+
 --            「经典任务线衍生到 30-60 范围，包含大型任务线、各种开门任务线」
 --   数据记法是紧凑串（见 QuestBulk.lua 头部注释），分隔符 '|' 由生成器保证不出现在名字里。
@@ -761,6 +807,676 @@ function EVAL_QC_BULK_QUEST(id)
   local rec = { id = id, n = p[1] or "", lv = tonumber(p[2]) or 0, z = p[3] or "", f = p[4] or "", rw = rw }
   qcBQ[id] = rec
   return rec
+end
+
+-- ============================================================================
+-- 全量任务表（1.75.14 · `quest/QuestAll.lua` 生成物）：**含没有装备奖励的任务**
+--   用户定案：「**C 执行**」= 全量任务进包（此前只收「带装备奖励」的 751 条 ⇒ 血色修道院那类
+--   无装备奖励的任务在插件里根本检索不到 —— 用户实测报障的正是这个）。
+--   `q[id] = 名称|任务等级|地区|阵营(A/H/空=不限)|有装备奖励(0/1)|标签码(d地下城 e精英 r团队 pPvP s护送 l传说 w世界事件)`
+--            `|需要等级|c:可选奖励id,r|r:直接给予id,r`（后两段没有就整段省略；`iw[id]` = 奖励物品名）
+--   ★1.75.21 后三段是**审计补的**（用户：「有些属于任务线的，点任务详情内是空的」）—— 详见本文件下方
+--     `EVAL_QC_ALL_REWARDS` 那一段的审计结论。
+--   ★只读、按需解析并缓存（与 bulk 同一套做法）；表不在 ⇒ 一路如实返回 nil（诚实降级）。
+-- ============================================================================
+local qcAllQ = nil
+local function qcAllTbl() return rawget(_G, "EVAL_QC_ALL") end
+
+function EVAL_QC_ALL_READY()
+  local a = qcAllTbl()
+  if type(a) ~= "table" or type(a.q) ~= "table" then return nil end
+  return true
+end
+
+-- 条目数（表以 id 为键 ⇒ 不能用 table.getn；优先用生成器写下的 meta.n，退化为现数一次）
+function EVAL_QC_ALL_COUNT()
+  local a = qcAllTbl()
+  if type(a) ~= "table" or type(a.q) ~= "table" then return 0 end
+  if a.meta and tonumber(a.meta.n) then return tonumber(a.meta.n) end
+  local n = 0
+  for _ in pairs(a.q) do n = n + 1 end
+  a.meta = a.meta or {}
+  a.meta.n = n
+  return n
+end
+
+-- 单个任务 → { id, n, lv, z, f, gear(boolean), tags }；查不到如实 nil
+function EVAL_QC_ALL_QUEST(id)
+  local a = qcAllTbl()
+  if type(a) ~= "table" or type(a.q) ~= "table" then return nil end
+  local raw = a.q[id]
+  if type(raw) ~= "string" then return nil end
+  qcAllQ = qcAllQ or {}
+  local hit = qcAllQ[id]
+  if hit then return hit end
+  local p = qcBulkSplit(raw)
+  local rec = {
+    id = id, n = p[1] or "", lv = tonumber(p[2]) or 0, z = p[3] or "",
+    f = p[4] or "", gear = (p[5] == "1"), tags = p[6] or "",
+    -- ★1.75.21 需要等级（站点「需要等级 N」）——任务详情要显示，缺字段的老表按 0 处理（诚实降级）
+    req = tonumber(p[7]) or 0,
+  }
+  qcAllQ[id] = rec
+  return rec
+end
+
+-- ★1.75.14 某任务的**奖励物品**（任务行的「行尾奖励图标带」用它）—— ★**与任务线行同一口径：不按 eq 筛**。
+--   ★★为什么不能按 `eq` 筛（本次审计实测）：站点的**类型/部位字段会缺**，于是 `预言藤杖`（法杖！）、
+--     `悲哀衬肩`（肩甲！）、`洛瑞卡宝珠`（副手！）全被判成 `eq=false` ⇒ 按 eq 筛会把**真装备藏掉**
+--     （用户要求是「**如果有装备就把装备显示出来**」）。项目铁律：**判不出就不剔**。
+--   没有奖励 ⇒ `{}, 0`（界面不画图标，详情里如实写「无装备奖励」）。
+--   ★与 `EVAL_QC_CHAIN_REWARDS` 同形（任务线行用的是那个）⇒ 界面那段布局代码两类行共用。
+function EVAL_QC_QUEST_REWARDS(id, max)
+  local bq = EVAL_QC_BULK_QUEST(id)
+  local all = (bq and bq.rw) or {}
+  local total = table.getn(all)
+  local m = tonumber(max) or total
+  if m < 1 then m = 0 end
+  local out = {}
+  for i = 1, total do
+    if i > m then break end
+    out[i] = all[i]
+  end
+  return out, total
+end
+
+-- ============================================================================
+-- ★★1.75.21 **单体任务详情**的数据口（用户报障：「有些属于任务线的，但是点击任务详情内是空的。自己审计下」）
+--   审计结论（对照 database.emberveil.org 实测）：
+--   ① 详情此前只读 `QuestBulk.q`（= 站点上「**带装备奖励**」的 751 条）⇒ 其余 3267 条任务的奖励
+--      **整段是空的**，正文只剩一行「无装备奖励」= 用户看到的「空的」。
+--      站点实测：给奖励的任务 **1685** 个，其中 **934** 个不是装备奖励任务（药水/卷轴/任务物品/食谱）
+--      —— 这些数据的唯一来源就是本次补进生成物的 `c:` / `r:` 两个字段。
+--   ② 行上标着「属任务线」，点进去却**不提是哪条线**（详情里根本没有任务线那一段）
+--      —— 本组新增 `EVAL_QC_SERIES_OF` / `EVAL_QC_QUEST_CHAINS` 反查（数据早就在，只是没人读）。
+--   ★用户 #2861「塔贝萨的任务」就是①+②的合体：站点上它确实**没有任何物品奖励**（只有经验值），
+--     但它属于「塔贝萨的任务 → 深渊皇冠」这条 2 步系列 ⇒ 现在详情会列出该线、步骤与需要等级。
+-- ============================================================================
+local qcAllI, qcAllRw = nil, nil
+
+-- 奖励物品名（**只收 QuestBulk.i 里没有的**）→ { id, n, q }；查不到如实 nil
+function EVAL_QC_ALL_ITEM(id)
+  local a = qcAllTbl()
+  if type(a) ~= "table" or type(a.iw) ~= "table" then return nil end
+  local raw = a.iw[id]
+  if type(raw) ~= "string" or raw == "" then return nil end
+  qcAllI = qcAllI or {}
+  local hit = qcAllI[id]
+  if hit then return hit end
+  local rec = { id = id, n = raw, q = 1 }
+  -- 装备表认识这件物品就优先用那份（有品质/部位，tooltip 色阶才对）
+  local it = EVAL_QC_BULK_ITEM(id)
+  if it then
+    rec.q = tonumber(it.q) or 1
+    if tostring(it.n or "") ~= "" then rec.n = it.n end
+  end
+  qcAllI[id] = rec
+  return rec
+end
+
+-- 奖励物品的**统一取件口**（列表行/详情行都走它，绝不各写一份）——装备表优先，其次奖励名表
+function EVAL_QC_REWARD_ITEM(id)
+  return EVAL_QC_BULK_ITEM(id) or EVAL_QC_ALL_ITEM(id)
+end
+
+-- 某任务在站点上的奖励 → choose（可选一件 id）· receive（直接给予 id）；各自可为空表
+--   ★生成物里的整段是 `c:1,2|r:3`（没有的段整段省略）⇒ 按**前缀**认字段，不认下标（往后加字段不会错位）。
+function EVAL_QC_ALL_REWARDS(id)
+  local a = qcAllTbl()
+  if type(a) ~= "table" or type(a.q) ~= "table" then return nil, nil end
+  local raw = a.q[id]
+  if type(raw) ~= "string" then return nil, nil end
+  qcAllRw = qcAllRw or {}
+  local hit = qcAllRw[id]
+  if hit then return hit.c, hit.r end
+  local p = qcBulkSplit(raw)
+  local function ids(s)
+    local out = {}
+    s = string.sub(s, 3)          -- 剥掉 `c:` / `r:`
+    for w in string.gmatch(s .. ",", "([^,]+)") do
+      local n = tonumber(w)
+      if n then out[table.getn(out) + 1] = n end
+    end
+    return out
+  end
+  local c, r = {}, {}
+  for i = 7, table.getn(p) do
+    local f = p[i]
+    if type(f) == "string" then
+      local pre = string.sub(f, 1, 2)
+      if pre == "c:" then c = ids(f)
+      elseif pre == "r:" then r = ids(f) end
+    end
+  end
+  qcAllRw[id] = { c = c, r = r }
+  return c, r
+end
+
+-- 任务 → **自动任务线**反查（键 `s:<位次>`，与列表/详情同一份 `EVAL_QC_SERIES_LIST` 数据）
+--   返回 { { key="s:12", rec=系列记录, n=第几步 }, … }；不属于任何线 ⇒ nil（诚实）
+local qcSerIdx = nil
+local function qcSeriesIndex()
+  if qcSerIdx then return qcSerIdx end
+  local idx = {}
+  local ser = EVAL_QC_SERIES_LIST()          -- ★全局函数，运行期才取（定义在文件更后面）
+  for i = 1, table.getn(ser) do
+    local steps = ser[i].steps or {}
+    for k = 1, table.getn(steps) do
+      local qid = steps[k].id
+      if qid then
+        local arr = idx[qid]
+        if not arr then arr = {} idx[qid] = arr end
+        arr[table.getn(arr) + 1] = { key = "s:" .. tostring(i), rec = ser[i], n = k }
+      end
+    end
+  end
+  qcSerIdx = idx
+  return idx
+end
+
+function EVAL_QC_SERIES_OF(qid)
+  local idx = qcSeriesIndex()
+  local arr = idx[qid]
+  if not arr or table.getn(arr) == 0 then return nil end
+  return arr
+end
+
+-- 任务 → **策展链**反查（`qs` 里含该任务 id 的链）→ { { rec=链记录, n=第几步 }, … }；查不到如实 nil
+local qcCurQIdx = nil
+local function qcCurQuestIndex()
+  if qcCurQIdx then return qcCurQIdx end
+  local idx = {}
+  local list = qcChainList()
+  if type(list) == "table" then
+    for i = 1, table.getn(list) do
+      local c = list[i]
+      local qs = c.qs or {}
+      for k = 1, table.getn(qs) do
+        local arr = idx[qs[k]]
+        if not arr then arr = {} idx[qs[k]] = arr end
+        arr[table.getn(arr) + 1] = { rec = c, n = k }
+      end
+    end
+  end
+  qcCurQIdx = idx
+  return idx
+end
+
+function EVAL_QC_QUEST_CHAINS(qid)
+  local arr = qcCurQuestIndex()[qid]
+  if not arr or table.getn(arr) == 0 then return nil end
+  return arr
+end
+
+-- ============================================================================
+-- ★★1.75.21 **父子任务（前置/后续）**——用户：「比如一个任务完成出现另外 2 个后续任务，则定义父子任务形式」
+--   数据两条腿（**站点为主、系列兜底**，界面只读这一个口）：
+--     ① 站点任务页「解锁」面板 → 生成物 `EVAL_QC_ALL.ch[id]="子id,子id"`（一个任务可带 N 个后续）；
+--     ② 没有「解锁」信息的任务 → **系列下一步**（站点「本系列第 N/M 部分」的线性顺序，`EVAL_QC_SERIES_OF` 现成）。
+--   ★★**父不是唯一的**（一个任务可以同时被多条线解锁）⇒ 运行期给的是**有向图**：`EVAL_QC_QUEST_PARENTS`
+--     如实返回全部前置；树视图对同一节点**只展开一次**并在行上标出「N 个前置」（不重复画、也不假装唯一）。
+-- ============================================================================
+local qcKids, qcPars = nil, nil
+local function qcKidIndex()
+  if qcKids then return qcKids end
+  local idx = {}
+  local a = qcAllTbl()
+  if type(a) == "table" and type(a.ch) == "table" then
+    for id, raw in pairs(a.ch) do
+      if type(raw) == "string" then
+        local arr = {}
+        for w in string.gmatch(raw .. ",", "([^,]+)") do
+          local n = tonumber(w)
+          if n then arr[table.getn(arr) + 1] = n end
+        end
+        if table.getn(arr) > 0 then idx[id] = arr end
+      end
+    end
+  end
+  qcKids = idx
+  return idx
+end
+
+-- 站点点「解锁」给出的**后续任务 id 数组**；没有这条 ⇒ nil（不编）
+function EVAL_QC_CHILDREN(id)
+  local k = qcKidIndex()[id]
+  if not k or table.getn(k) == 0 then return nil end
+  return k
+end
+
+-- **后续任务的唯一入口**：站点「解锁」优先；没有就退回「系列下一步」（线性顺序）
+--   返回 { id, ... } 或 nil。★同一份数据也喂给树视图与任务详情的「后续任务」段。
+function EVAL_QC_QUEST_NEXT(id)
+  local k = qcKidIndex()[id]
+  if k and table.getn(k) > 0 then return k end
+  local so = (type(EVAL_QC_SERIES_OF) == "function") and EVAL_QC_SERIES_OF(id) or nil
+  if so then
+    for i = 1, table.getn(so) do
+      local steps = so[i].rec and so[i].rec.steps or {}
+      local nx = steps[(so[i].n or 0) + 1]
+      if nx and nx.id then return { nx.id } end
+    end
+  end
+  return nil
+end
+
+-- 反向：**前置任务**（谁解锁了我）→ id 数组；查不到如实 nil
+local function qcParIndex()
+  if qcPars then return qcPars end
+  local idx, kids = {}, qcKidIndex()
+  for pid, arr in pairs(kids) do
+    for i = 1, table.getn(arr) do
+      local c = arr[i]
+      local t = idx[c]
+      if not t then t = {} idx[c] = t end
+      t[table.getn(t) + 1] = pid
+    end
+  end
+  -- ★顺序确定化（pairs 遍历顺序不定 ⇒ 同一屏两次画出来不一样）
+  for _, t in pairs(idx) do table.sort(t) end
+  qcPars = idx
+  return idx
+end
+
+function EVAL_QC_QUEST_PARENTS(id)
+  local t = qcParIndex()[id]
+  if not t or table.getn(t) == 0 then return nil end
+  return t
+end
+
+-- 树深度上限（防环 + 防病态长链把一屏撑爆；超出 ⇒ 该节点**照常出行**但不再往下展开）
+local QC_TREE_MAX_DEPTH = 8
+
+-- **父子任务树**：把过滤后的任务按「前置 → 后续」展开成**扁平行**（界面只负责画，不做图算法）
+--   filter 与列表**同一口径**（等级档/来源/阵营/关键词），返回：
+--     rows = { { q=任务记录, depth=缩进层级, par=前置个数, kids=后续个数, tree=true }, … }
+--     画出来的行数 · **多前置**（已在上方展开过、没再画）的条数 · **撞上限**没走到的条数
+--   ★两个计数分开返回是判据：混在一起 ⇒ 提示行会报「3418 条多前置」这种假话（实测过）。
+function EVAL_QC_QUEST_TREE(filter, cap)
+  local a = qcAllTbl()
+  if type(a) ~= "table" or type(a.q) ~= "table" then return {}, 0, 0, 0 end
+  local f = filter or {}
+  local maxRows = tonumber(cap) or 600
+  if maxRows <= 0 then maxRows = 600 end
+  -- ① 过滤（复用唯一入口：等级/来源/阵营/关键词的口径与列表完全一致）
+  local flt = {}
+  for k, v in pairs(f) do flt[k] = v end
+  flt.exclude = nil                       -- 树视图**不做**「步骤并入链行」（树本身就是层级）
+  local list = EVAL_QC_QUEST_LIST(f.query, flt, 0)
+  local S = {}
+  for i = 1, table.getn(list) do S[list[i].id] = list[i] end
+  local nS = table.getn(list)
+  if nS == 0 then return {}, 0, 0 end
+  -- ② 边：两端**都在本次结果里**才成边（否则父被筛掉，子就成了根 —— 与列表那条判据同源）
+  local kids, parents = {}, {}
+  for id in pairs(S) do
+    local ks = EVAL_QC_QUEST_NEXT(id)
+    if ks then
+      for i = 1, table.getn(ks) do
+        local c = ks[i]
+        if c and S[c] then
+          local arr = kids[id]
+          if not arr then arr = {} kids[id] = arr end
+          arr[table.getn(arr) + 1] = c
+          parents[c] = (parents[c] or 0) + 1
+        end
+      end
+    end
+  end
+  -- ③ 排序（等级 → 名字 → id，确定化）
+  local function byIdx(x, y)
+    local ax, ay = S[x], S[y]
+    local xl, yl = tonumber(ax and ax.lv) or 0, tonumber(ay and ay.lv) or 0
+    if xl ~= yl then return xl < yl end
+    local xn, yn = tostring(ax and ax.n or ""), tostring(ay and ay.n or "")
+    if xn ~= yn then return xn < yn end
+    return x < y
+  end
+  local roots = {}
+  for id in pairs(S) do if not parents[id] then roots[table.getn(roots) + 1] = id end end
+  table.sort(roots, byIdx)
+  -- ④ 迭代先序 DFS（栈里存 {id, depth}；`seen` 保证一个节点只展开一次）
+  --   ★返回的两个计数**必须分开**（旧写法把两者混成一个数 ⇒ 提示行会说「3418 条多前置」这种假话）：
+  --     `dup`  = **有多个前置的任务**（只在首个前置下展开；★在**入栈**处 `if not seen` 就拦掉了，
+  --              所以不能在出栈处数 —— 那样永远数不到，实测奥达曼一个都是 0，而节点上明明写着「前置2」）
+  --     `rest` = 因为**撞到行数上限**而没走到的（要靠筛选收窄，不是多前置）
+  local out, seen, nSeen = {}, {}, 0
+  local stack = {}
+  for i = table.getn(roots), 1, -1 do stack[table.getn(stack) + 1] = { roots[i], 0 } end
+  while table.getn(stack) > 0 do
+    local top = stack[table.getn(stack)]
+    stack[table.getn(stack)] = nil
+    local id, depth = top[1], top[2]
+    if not seen[id] then
+      seen[id] = true
+      nSeen = nSeen + 1
+      local r = S[id]
+      local ks = kids[id]
+      out[table.getn(out) + 1] = {
+        q = r, depth = depth, par = parents[id] or 0,
+        kids = ks and table.getn(ks) or 0, tree = true,
+      }
+      if table.getn(out) >= maxRows then break end
+      if ks and depth < QC_TREE_MAX_DEPTH then
+        local sorted = {}
+        for i = 1, table.getn(ks) do sorted[i] = ks[i] end
+        table.sort(sorted, byIdx)
+        for i = table.getn(sorted), 1, -1 do
+          if not seen[sorted[i]] then stack[table.getn(stack) + 1] = { sorted[i], depth + 1 } end
+        end
+      end
+    end
+  end
+  local dup = 0
+  for i = 1, table.getn(out) do if (out[i].par or 0) > 1 then dup = dup + 1 end end
+  return out, table.getn(out), dup, nS - nSeen
+end
+
+-- ============================================================================
+-- ★★1.75.22 **任务目标材料（需求）**——用户：「任务需求完成需要的目标材料……显示在列表元素右侧、与装备图标
+--   同行，提示『需求: xx,xx』，图标展示；**只筛选显示制造业/普通物品等、而非任务道具**」。
+--   数据：生成物 `ob[id]="物品id:需要数量,…"`（**生成期已剔除任务道具** —— 判据 = 物品页有没有
+--   `Quest Item` 标记；交易品/消耗品/装备/配方一律保留）+ `ow[物品id]="名|品质"`（材料名/品质单一来源）。
+--   ★为什么必须按物品页判：任务页上「任务道具」与「交易品」的目标行**标记完全一样**（同色同结构），
+--     唯一区别在物品页 ⇒ 只能逐件物品页取证（`tmp/refetch_objectives.js` Pass B）。
+-- ============================================================================
+local qcNeedIdx = nil
+
+-- 解析并缓存 ob 表 → { [任务id] = { ids={…}, needs={…} } }
+local function qcNeedIndex()
+  if qcNeedIdx then return qcNeedIdx end
+  local idx = {}
+  local a = qcAllTbl()
+  if type(a) == "table" and type(a.ob) == "table" then
+    for id, raw in pairs(a.ob) do
+      if type(raw) == "string" and raw ~= "" then
+        local ids, needs = {}, {}
+        for w in string.gmatch(raw .. ",", "([^,]+)") do
+          local iid, cnt = string.match(w, "^(%d+):(%d+)$")
+          if iid then
+            ids[table.getn(ids) + 1] = tonumber(iid)
+            needs[table.getn(needs) + 1] = tonumber(cnt) or 0
+          end
+        end
+        if table.getn(ids) > 0 then idx[tonumber(id) or id] = { ids = ids, needs = needs } end
+      end
+    end
+  end
+  qcNeedIdx = idx
+  return idx
+end
+
+-- 材料的取件口（名字/品质）：`ow` 优先，其次装备表/奖励名表（老数据也能显示）
+function EVAL_QC_NEED_ITEM(id)
+  local a = qcAllTbl()
+  local raw = (type(a) == "table" and type(a.ow) == "table") and a.ow[id] or nil
+  if type(raw) == "string" and raw ~= "" then
+    local p = qcBulkSplit(raw)
+    return { id = id, n = p[1] or "", q = tonumber(p[2]) or 1 }
+  end
+  local it = EVAL_QC_BULK_ITEM(id)
+  if it then return it end
+  return EVAL_QC_ALL_ITEM(id)
+end
+
+-- 某个任务的**需求材料**（**全部**）→ { {id=, need=}, … }；没有 ⇒ nil（诚实）
+function EVAL_QC_NEED_LIST(qid)
+  local e = qcNeedIndex()[qid]
+  if not e then return nil end
+  local out = {}
+  for i = 1, table.getn(e.ids) do
+    out[i] = { id = e.ids[i], need = e.needs[i] or 0 }
+  end
+  return out
+end
+
+-- 某个任务的**需求材料 id**（列表行图标带用）：最多 max 件 + 总数
+function EVAL_QC_QUEST_NEEDS(id, max)
+  local e = qcNeedIndex()[id]
+  if not e then return {}, 0 end
+  local total = table.getn(e.ids)
+  local m = tonumber(max) or total
+  if m < 1 then m = 0 end
+  local out = {}
+  for i = 1, total do
+    if i > m then break end
+    out[i] = e.ids[i]
+  end
+  return out, total
+end
+
+-- **任务线**的需求材料 = 各步骤的并集（同一材料取**最大**需求数量）；id 去重保序
+function EVAL_QC_CHAIN_NEED_LIST(key)
+  local d = EVAL_QC_DETAIL(key)
+  if type(d) ~= "table" then return nil end
+  local idx, out = qcNeedIndex(), {}
+  local seen = {}
+  for i = 1, table.getn(d.steps or {}) do
+    local qid = d.steps[i].id
+    local e = qid and idx[qid]
+    if e then
+      for k = 1, table.getn(e.ids) do
+        local iid, cnt = e.ids[k], e.needs[k] or 0
+        if seen[iid] then
+          if cnt > (seen[iid].need or 0) then seen[iid].need = cnt end
+        else
+          local rec = { id = iid, need = cnt }
+          seen[iid] = rec
+          out[table.getn(out) + 1] = rec
+        end
+      end
+    end
+  end
+  if table.getn(out) == 0 then return nil end
+  return out
+end
+
+function EVAL_QC_CHAIN_NEEDS(key, max)
+  local list = EVAL_QC_CHAIN_NEED_LIST(key)
+  local total = table.getn(list or {})
+  local m = tonumber(max) or total
+  if m < 1 then m = 0 end
+  local out = {}
+  for i = 1, total do
+    if i > m then break end
+    out[i] = list[i].id
+  end
+  return out, total
+end
+
+-- ★1.75.14 地域候选清单（筛选菜单的**唯一来源**，一律由数据现算 —— 绝不写死地名表）：
+--   来源 = 全量任务行的 `z` + 策展链 `z` + 自报系列 `z`；返回 { {z=地名, n=条目数}, ... }。
+--   排序 = 条目数降序 → 名字升序；**空地区永远排最后**。结果缓存（生成物运行期不变）。
+--   ★真机数据实测（**三处并集**：全量任务表 88 + 自报系列表 87 + 策展链 56，去重后 = **106 个来源**；
+--     下拉实际条目 = 106 + 4 个组标题 + 1 个「全部」清空行 = **111 项**）。
+--     ★上次只扫了任务表（88）⇒ 低估了 18 个名字（`职业任务`/`季节性`/`新年`/`暴风城监狱`/复合路线名等），
+--     它们当时全落到默认的「世界区域」里 —— 教训：**统计要给三个来源取并集**，少一张表就会误分类。
+--   ★★本函数**必须声明在 `local qcBulk` 之后**（bulk 段）：`qcBulk` 是文件局部，写在它之前会绑成
+--     全局 nil ⇒ 真机红字 attempt to call a nil value（本项目头号铁律「local 声明顺序 = 词法作用域」）。
+local qcZoneCache = nil
+-- ★1.75.14 全量清单（无参、缓存一次）—— 只在文件内部用；对外一律走下面的 EVAL_QC_ZONE_LIST(lo,hi)
+local function qcZoneAll()
+  if qcZoneCache then return qcZoneCache end
+  local cnt, order, zlo, zhi = {}, {}, {}, {}
+  -- ★1.75.14 用户要求「**标题后添加等级区间，并按等级区间排序**」⇒ 每个来源额外收一份 lo/hi：
+  --   来源 = 我们自己数据里所有带该来源的记录的等级（任务表给单个 `lv`；系列/策展链给它自己的 `lo..hi`）
+  --   ⇒ 三个来源取并集后求 min/max。★这是「**本库内容在该来源覆盖的等级**」，**不是**官方地区等级区间
+  --     （本库以「带装备奖励的任务 + 自报系列」为主，低等级无奖励任务不计入 ⇒ 低端可能偏高，如实告知）。
+  local function add(z, lo, hi)
+    local k = tostring(z or "")
+    if cnt[k] == nil then cnt[k] = 0 order[table.getn(order) + 1] = k end
+    cnt[k] = cnt[k] + 1
+    local a, bb = tonumber(lo), tonumber(hi)
+    if a then if zlo[k] == nil or a < zlo[k] then zlo[k] = a end end
+    if bb then if zhi[k] == nil or bb > zhi[k] then zhi[k] = bb end end
+    if bb == nil and a then if zhi[k] == nil or a > zhi[k] then zhi[k] = a end end
+  end
+  local b = qcBulk()
+  if type(b) == "table" and type(b.q) == "table" then
+    for id in pairs(b.q) do
+      local q = EVAL_QC_BULK_QUEST(id)
+      if q then add(q.z, q.lv, q.lv) end
+    end
+  end
+  local list = qcChainList()
+  if type(list) == "table" then
+    for i = 1, table.getn(list) do add(list[i].z, list[i].lo, list[i].hi) end
+  end
+  local ser = (type(EVAL_QC_SERIES_LIST) == "function") and EVAL_QC_SERIES_LIST() or nil
+  if type(ser) == "table" then
+    for i = 1, table.getn(ser) do add(ser[i].z, ser[i].lo, ser[i].hi) end
+  end
+  local out = {}
+  for i = 1, table.getn(order) do
+    local k = order[i]
+    out[i] = { z = k, n = cnt[k], lo = zlo[k], hi = zhi[k] }
+  end
+  table.sort(out, function(a, c)
+    -- ① 空来源（未标注「」）永远排最后
+    local ae, ce = (a.z == ""), (c.z == "")
+    if ae ~= ce then return ce end
+    -- ② ★按**等级区间**排序（1.75.14 用户要求）：先最低等级 → 再最高等级；缺等级的排最后
+    local alo = tonumber(a.lo) or 999
+    local clo = tonumber(c.lo) or 999
+    if alo ~= clo then return alo < clo end
+    local ahi = tonumber(a.hi) or 999
+    local chi = tonumber(c.hi) or 999
+    if ahi ~= chi then return ahi < chi end
+    -- ③ 同档再按条目数降序 → 名字升序（保证稳定，table.sort 在 5.1 不稳定）
+    if a.n ~= c.n then return a.n > c.n end
+    return a.z < c.z
+  end)
+  qcZoneCache = out
+  return out
+end
+
+-- ★1.75.14 等级档**多选**的唯一判定口（数据层；界面、装备列表、任务线列表共用这三个）：
+--   ① EVAL_QC_LV_RANGES(a, b)：把「档数组 { {lo,hi},… }」或「loMin, loMax 两个数」归一成标准档数组；
+--      nil / 空数 / 空表 = **不限等级**（「一个都没勾」= 全部，与种类/来源多选同一套语义）。
+--   ② EVAL_QC_LV_IN(ranges, lv)：单个等级是否落在**任一**档内（装备按来源任务等级判）。
+--   ③ EVAL_QC_LV_OVER(ranges, lo, hi)：区间是否与**任一**档重叠（任务线按自身 lo..hi 判，与单档同口径）。
+function EVAL_QC_LV_RANGES(a, b)
+  if type(a) == "table" then
+    local out = {}
+    for i = 1, table.getn(a) do
+      local r = a[i]
+      if type(r) == "table" and tonumber(r.lo) then
+        out[table.getn(out) + 1] = { lo = tonumber(r.lo), hi = tonumber(r.hi) or 999 }
+      end
+    end
+    if table.getn(out) == 0 then return nil end
+    return out
+  end
+  local lo = tonumber(a)
+  if not lo then return nil end
+  return { { lo = lo, hi = tonumber(b) or 999 } }
+end
+
+function EVAL_QC_LV_IN(ranges, lv)
+  if type(ranges) ~= "table" then return true end
+  local v = tonumber(lv)
+  if not v then return false end          -- 查不到等级：有档在筛就不放行（否则等于「不限」，与用户预期相反）
+  for i = 1, table.getn(ranges) do
+    local r = ranges[i]
+    if v >= (r.lo or 0) and v <= (r.hi or 999) then return true end
+  end
+  return false
+end
+
+function EVAL_QC_LV_OVER(ranges, lo, hi)
+  if type(ranges) ~= "table" then return true end
+  local a = tonumber(lo) or 0
+  local b = tonumber(hi) or a
+  for i = 1, table.getn(ranges) do
+    local r = ranges[i]
+    if b >= (r.lo or 0) and a <= (r.hi or 999) then return true end
+  end
+  return false
+end
+
+-- ★1.75.14 对外入口（可按**等级档**过滤）—— 用户要求：「来源根据等级的多选项，**动态调整过滤项**」。
+--   判据 = **区间重叠**（与任务线等级过滤同一口径）：来源自己的 [lo,hi] 与所选档相交才留在菜单里。
+--   ★为什么不用「lo 落在档内」：跨档来源（如 30-60）在「40-49」档会整条消失 ⇒ 按等级找来源就找不到。
+--   ★缺等级的来源（未标注/其它等）只在「等级: 全部」时出现（它们没有等级可比，不硬塞进任何档）。
+--   ★1.75.14 等级改**多选**后，入参可以是「档数组」（EVAL_QC_LV_RANGES 归一），也兼容旧的 (loMin, loMax)。
+function EVAL_QC_ZONE_LIST(loMin, loMax)
+  local all = qcZoneAll()
+  local ranges = EVAL_QC_LV_RANGES(loMin, loMax)
+  if not ranges then return all end
+  local out = {}
+  for i = 1, table.getn(all) do
+    local e = all[i]
+    local elo = tonumber(e.lo)
+    if elo and EVAL_QC_LV_OVER(ranges, elo, tonumber(e.hi) or elo) then
+      out[table.getn(out) + 1] = e
+    end
+  end
+  return out
+end
+
+-- ★1.75.14 来源下拉的**三分类**（用户要求：「下拉数据整理分类: 职业&制造&节日任务, 世界区域, 副本区域」）：
+--   判据 = **点名表**（与 `QC_SLOT_KIND` 同一做法）——只列需要点名的两类，其余一律进**世界区域**。
+--   ★这样新采集到的世界区域**自动归位**，不必维护一份 88 条的全量表（那份表一更新就漂移）。
+--   ★「其它」= 站点把非地名写进了地区字段的兜底组（真机实测：`传说`×5 · `史诗`×1 是**档位**串；
+--     空串 = 3 条任务没写地区）——**不硬塞进那三类**（塞进去就是骗人），菜单里单独一组如实呈现。
+--   ★`奥特兰克山谷`（战场）归**副本区域**：同为实例化内容（`奥特兰克山脉`是野外，归世界区域）。
+--   ★`暗月马戏团`（世界事件）归第一组：它不是固定区域而是**节日/活动**来源，与职业/制造同类「非地点」。
+--   ★带「预留」注释的名字 = 本版数据里还没有（离线校验脚本会标成「点名但数据里没有」，那是**故意的**）：
+--     将来采集到就自动归位，不用再改代码。
+local QC_ZONE_JOB = {
+  -- 职业
+  ["战士"] = 1, ["盗贼"] = 1, ["法师"] = 1, ["术士"] = 1, ["圣骑士"] = 1, ["德鲁伊"] = 1,
+  ["猎人"] = 1, ["牧师"] = 1, ["萨满祭司"] = 1,
+  -- 制造/采集专业（真机数据里现有 3 个；其余为**预留**）
+  ["钓鱼"] = 1, ["裁缝"] = 1, ["烹饪"] = 1,
+  ["炼金术"] = 1, ["锻造"] = 1, ["附魔"] = 1, ["工程学"] = 1, ["制皮"] = 1, ["急救"] = 1,
+  -- 节日/活动（真机数据里现有 `暗月马戏团`；其余为**预留**）
+  ["暗月马戏团"] = 1, ["春节"] = 1, ["情人节"] = 1, ["儿童周"] = 1, ["仲夏火焰节"] = 1,
+  ["收获节"] = 1, ["万圣节"] = 1, ["冬幕节"] = 1,
+  -- ★真实数据并集（106 项来源）里，这几个**内容类** token 也归这一组（不是地名）：
+  ["职业任务"] = 1, ["季节性"] = 1, ["新年"] = 1,
+}
+local QC_ZONE_DUNGEON = {
+  ["祖尔格拉布"] = 1, ["安其拉"] = 1, ["安其拉废墟"] = 1, ["纳克萨玛斯"] = 1, ["黑翼之巢"] = 1,
+  -- ★`熔火之心`= **预留项**：本版数据里还没有任何任务写它（离线校验脚本会把它标成「点名但数据里没有」，
+  --   那是**故意的**）——将来采集到就自动归到副本区域，不用再改代码。
+  ["奥妮克希亚的巢穴"] = 1, ["熔火之心"] = 1, ["厄运之槌"] = 1, ["黑石深渊"] = 1, ["黑石塔"] = 1,
+  ["斯坦索姆"] = 1, ["通灵学院"] = 1, ["血色修道院"] = 1, ["沉没的神庙"] = 1, ["玛拉顿"] = 1,
+  ["奥达曼"] = 1, ["诺莫瑞根"] = 1, ["死亡矿井"] = 1, ["监狱"] = 1, ["黑暗深渊"] = 1,
+  ["哀嚎洞穴"] = 1, ["剃刀沼泽"] = 1, ["剃刀高地"] = 1, ["祖尔法拉克"] = 1, ["影牙城堡"] = 1,
+  ["怒焰裂谷"] = 1, ["奥特兰克山谷"] = 1,
+  -- ★真实数据里还有这几个：`暴风城监狱`（与上面的 `监狱` 是**两个不同 token**，都出现过）·
+  --   `阿拉希盆地`（战场，与奥特兰克山谷同族）· 两条**复合路线名**（内容就是副本，归这类看得更准）
+  ["暴风城监狱"] = 1, ["阿拉希盆地"] = 1, ["灰谷 · 黑暗深渊"] = 1, ["西部荒野 → 死亡矿井"] = 1,
+}
+local QC_ZONE_OTHER = { ["传说"] = 1, ["史诗"] = 1 }
+
+-- 单个地区 → 组名：job / world / dungeon / other（未点名的**一律 world**）
+function EVAL_QC_ZONE_GROUP(z)
+  local k = tostring(z or "")
+  if k == "" then return "other" end
+  if QC_ZONE_JOB[k] then return "job" end
+  if QC_ZONE_DUNGEON[k] then return "dungeon" end
+  if QC_ZONE_OTHER[k] then return "other" end
+  return "world"
+end
+
+-- 分组清单（菜单用）：四个数组，**组内顺序 = EVAL_QC_ZONE_LIST 的既有顺序**（等级区间 → 条目数 → 名字）
+-- ★1.75.14 数组元素是**条目表** `{z=来源, n=条目数, lo=最低等级, hi=最高等级}`（不再是裸字符串）——
+--   菜单要在标题后显示等级区间，界面上必须拿得到 lo/hi。
+-- ★1.75.14 支持**等级档过滤**：loMin/loMax 由界面传入（菜单随等级动态收窄），口径见 EVAL_QC_ZONE_LIST。
+function EVAL_QC_ZONE_GROUPS(loMin, loMax)
+  local job, world, dun, other = {}, {}, {}, {}
+  local list = EVAL_QC_ZONE_LIST(loMin, loMax)
+  for i = 1, table.getn(list) do
+    local e = list[i]
+    local g = EVAL_QC_ZONE_GROUP(e.z)
+    if g == "job" then job[table.getn(job) + 1] = e
+    elseif g == "dungeon" then dun[table.getn(dun) + 1] = e
+    elseif g == "other" then other[table.getn(other) + 1] = e
+    else world[table.getn(world) + 1] = e end
+  end
+  return job, world, dun, other
 end
 
 -- 全量物品行 → { id, n, q, ilvl, dps, sp, s, k, st, icon, eq }（字段名与策展物品表一致，便于共用判定）
@@ -903,7 +1619,7 @@ function EVAL_QC_BULK_SOURCES(itemId)
 end
 
 -- 全量装备行（装备视图的**真身**）：每行 = 一件装备 + 它的来源任务（+ 若在策展链里则带链）
--- filter（可选）= { loMin, loMax, faction="A"/"H"/"ALL", kinds={[种类]=true}, weaponOnly }
+-- filter（可选）= { loMin, loMax, lvRanges={ {lo,hi},… }, faction="A"/"H"/"ALL", kinds={[种类]=true}, zones={[地区]=true}, weaponOnly }
 --   faction：任务行的标签是 A/H/空（空 = 站点没标阵营 ⇒ **不作为限定**，永远放行 —— 宁可多显示不误杀）
 function EVAL_QC_BULK_ITEM_ROWS(filter)
   local b = qcBulk()
@@ -913,11 +1629,19 @@ function EVAL_QC_BULK_ITEM_ROWS(filter)
   for id, raw in pairs(b.q) do
     local q = EVAL_QC_BULK_QUEST(id)
     if q then
+      -- ★1.75.14 等级**多选**：f.lvRanges（档数组）优先；没有才退回旧的 loMin/loMax 单档。
       local lvOK = true
-      if f.loMin and (q.lv < f.loMin or q.lv > (f.loMax or 999)) then lvOK = false end
+      if f.lvRanges then
+        lvOK = EVAL_QC_LV_IN(f.lvRanges, q.lv)
+      elseif f.loMin and (q.lv < f.loMin or q.lv > (f.loMax or 999)) then
+        lvOK = false
+      end
       local facOK = true
       if f.faction and f.faction ~= "ALL" and q.f ~= "" and q.f ~= f.faction then facOK = false end
-      if lvOK and facOK then
+      -- ★1.75.14 地域先按**任务级**筛：一件装备可能有多条来源任务 ⇒ 只要有一条任务的地区被勾中，
+      --   这件装备就留下（与「来源任务」那几行是同一个口径，不会出现「留下的行看不到任何被选地区」）。
+      local zOK = EVAL_QC_ZONE_PASS(f.zones, q.z)
+      if lvOK and facOK and zOK then
         for k = 1, table.getn(q.rw) do
           local iid = q.rw[k]
           local it = EVAL_QC_BULK_ITEM(iid)
@@ -951,6 +1675,15 @@ function EVAL_QC_BULK_ITEM_ROWS(filter)
     local qs = {}
     for i = 1, table.getn(qd) do qs[i] = qd[i].q end
     e.quests = qs
+    -- ★1.75.14 用户要求「装备列表单元添加地域信息」：来源任务的地区**去重**收集（顺序 = 任务等级序，
+    --   上面刚排好）⇒ 列表单元格取「首个（必是等级最低那条任务的地区）(+N)」，详情页可列全。
+    --   ★空串也进数组（显示成「（无地区）」）—— 如实呈现，不假装它没有来源。
+    local zs, zseen = {}, {}
+    for i = 1, table.getn(qs) do
+      local z = tostring(qs[i].z or "")
+      if not zseen[z] then zseen[z] = true zs[table.getn(zs) + 1] = z end
+    end
+    e.zones = zs
     dec[n] = {
       e = e,
       w = EVAL_QC_IS_WEAPON(e.it) and 0 or 1,
@@ -970,4 +1703,87 @@ function EVAL_QC_BULK_ITEM_ROWS(filter)
   local out = {}
   for n = 1, table.getn(dec) do out[n] = dec[n].e end
   return out
+end
+
+
+-- ★1.75.14 **任务检索**（用户定案「C 执行」= 全量任务进包）：
+--   覆盖**全量表里的每个任务**（不只是「不在任何线里」的那些）—— 因为站点会把某些任务编进
+--   与它地区不同的线（真机实例：`狂热之心`（血色修道院）属「蝙蝠的粪便」（剃刀沼泽）；
+--   `知识试炼`（血色修道院）属「信仰的试炼」（千针石林））⇒ 只列「单体任务」会漏掉它们。
+--   每条记 `inSeries`（是否属于某条任务线），界面据此标注「单体 / 属任务线」。
+--   filter = { lvRanges={ {lo,hi},… }, zones={[地区]=true}, faction="A"/"H"/"ALL" }；query 匹配**任务名或地区**。
+--   ★口径与装备视图一致：阵营为空的任务**永远放行**（站点没标 ⇒ 不作限定）；等级按档数组；地区按集合。
+--   返回 { {id,n,lv,z,f,gear,tags,inSeries}, … }（按 等级 → 名字 排序，截断到 cap，默认 300）。
+local qcSeriesSet = nil
+local function qcInSeriesSet()
+  if qcSeriesSet then return qcSeriesSet end
+  local set = {}
+  local b = qcBulk()
+  if type(b) == "table" and type(b.s) == "table" then
+    for i = 1, table.getn(b.s) do
+      local raw = b.s[i]
+      if type(raw) == "string" then
+        local p = qcBulkSplit(raw)
+        for w in string.gmatch((p[7] or "") .. ",", "([^,]+)") do
+          local id = tonumber(w)
+          if id then set[id] = true end
+        end
+      end
+    end
+  end
+  local list = qcChainList()
+  if type(list) == "table" then
+    for i = 1, table.getn(list) do
+      local qs = list[i].qs or {}
+      for k = 1, table.getn(qs) do set[qs[k]] = true end
+    end
+  end
+  qcSeriesSet = set
+  return set
+end
+
+--   ★1.75.21 `f.exclude`（任务 id 集合）= **已并入本次结果里的任务线行**的步骤 ⇒ 不再单独出行。
+--     返回第三个值 = 被并掉的条数（界面拿它如实说明「已并入 N 条线内步骤」）。
+function EVAL_QC_QUEST_LIST(query, filter, cap)
+  local a = qcAllTbl()
+  if type(a) ~= "table" or type(a.q) ~= "table" then return {} end
+  local f = filter or {}
+  local max = tonumber(cap) or 300
+  if max <= 0 then max = math.huge end
+  local q = string.lower(tostring(query or ""))
+  local inSeries = qcInSeriesSet()
+  local exclude, merged = f.exclude, 0
+  local out = {}
+  for id in pairs(a.q) do
+    local r = EVAL_QC_ALL_QUEST(id)
+    if r then
+      local ok = true
+      if f.lvRanges and not EVAL_QC_LV_IN(f.lvRanges, r.lv) then ok = false end
+      if ok and f.faction and f.faction ~= "ALL" and r.f ~= "" and r.f ~= f.faction then ok = false end
+      if ok and not EVAL_QC_ZONE_PASS(f.zones, r.z) then ok = false end
+      if ok and q ~= "" then
+        local hit = (string.find(string.lower(r.n), q, 1, true) ~= nil)
+          or (string.find(string.lower(r.z), q, 1, true) ~= nil)
+        if not hit then ok = false end
+      end
+      -- ★★并入判据：**只对「本次真的过滤通过」的那条**计数 —— 先判是否已出锅，再决定并还是留
+      if ok and exclude and exclude[id] then ok = false merged = merged + 1 end
+      if ok then
+        r.inSeries = inSeries[id] and true or false   -- 供界面标注（同一份缓存记录，值恒定）
+        out[table.getn(out) + 1] = r
+      end
+    end
+  end
+  table.sort(out, function(x, y)
+    local xl, yl = tonumber(x.lv) or 0, tonumber(y.lv) or 0
+    if xl ~= yl then return xl < yl end
+    if x.n ~= y.n then return x.n < y.n end
+    return x.id < y.id
+  end)
+  local res = {}
+  for i = 1, table.getn(out) do
+    if i > max then break end
+    res[i] = out[i]
+  end
+  return res, table.getn(out), merged
 end

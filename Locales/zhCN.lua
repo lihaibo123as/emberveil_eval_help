@@ -481,6 +481,23 @@ SH_WARN_MORE = "（另有 %d 条同类提示已省略）",
   DS_QP_TITLE = "任务线推荐 · 装备优先", DS_QP_TAB_ITEM = "装备", DS_QP_TAB_CHAIN = "任务线", DS_QP_CLOSE = "关闭",
   DS_QP_PH = "搜索装备 / 任务 / 奖励", DS_QP_HINT = "点条目看详情", DS_QP_GOTO_DS = "在任务线 & 装备中查询",
   DS_QP_F1_ITEM = "等级", DS_QP_F2_ITEM = "类型", DS_QP_F1_CHAIN = "等级", DS_QP_F2_CHAIN = "类型", DS_QP_F3_CHAIN = "阵营",
+  DS_QP_F0_ITEM = "来源", DS_QP_F0_CHAIN = "来源", DS_QP_ZONE_NONE = "（未标注）",
+  DS_QP_ZONE_G_JOB = "职业&制造&节日任务", DS_QP_ZONE_G_WORLD = "世界区域", DS_QP_ZONE_G_DUNGEON = "副本区域", DS_QP_ZONE_G_OTHER = "其它",
+  DS_QP_SOLO = "单体", DS_QP_INLINE = "属任务线", DS_QP_GEAR_Y = "有装备奖励", DS_QP_GEAR_N = "无装备奖励",
+  -- ★1.75.21 单体任务详情补的三段（用户报障「属于任务线的，点任务详情内是空的」）
+  DS_QP_OWNCHAIN = "所属任务线", DS_QP_REWARDS = "奖励物品",
+  DS_QP_RW_C = "可选 · ", DS_QP_RW_R = "给予 · ", DS_QP_HERE = "   ← 本任务", DS_QP_REQ = "需要等级 ",
+  DS_QP_NOGEARITEM = "（站点未提供这件物品的装备属性）",
+  DS_QP_NODATA = "站点上没有该任务的奖励与任务线信息（不是本插件漏采）",
+  -- ★1.75.21 步骤已经并进所属任务线行（列表不再重复刷屏）
+  DS_QP_MERGED = "已并入 %d 条线内步骤",
+  -- ★1.75.21 第三个子页「任务树」= 父子任务（一个任务完成可出现 N 个后续任务）
+  DS_QP_TAB_TREE = "任务树", DS_QP_TREE_HINT = "父子树：缩进=后续任务",
+  DS_QP_TREE_SKIP = "%d 个任务有多个前置（只在首个下展开）", DS_QP_MULTIPAR = "（%d 前置）",
+  DS_QP_TREE_CAP = "另 %d 条超上限（用筛选收窄）",
+  DS_QP_REL = "前置 / 后续任务", DS_QP_PREV = "前置：", DS_QP_NEXT = "后续：",
+  -- ★1.75.22 任务目标材料（**已剔除任务道具**：只留制造业/普通物品）
+  DS_QP_NEED_TAG = "需", DS_QP_NEEDS = "需求材料",
   DS_QP_LV_ALL = "全部", DS_QP_LV_L1 = "10-19", DS_QP_LV_L2 = "20-29", DS_QP_LV_L3 = "30-39",
   DS_QP_LV_L4 = "40-49", DS_QP_LV_L5 = "50-59", DS_QP_LV_L6 = "60+",
   -- ★1.75.10 任务线稀有度（与魔兽品质色同一套：传说/史诗/稀有/优秀/普通/粗糙）
@@ -671,6 +688,7 @@ TB_BUY_UI_TIP = "点格子改数量/每次；勾选框控制该条目是否参�
   TB_DISCARDED = "自动丢弃 %d 件",
   CLOSE = "关闭",
   DD_MORE_FMT = "…… 还有 %d 项未显示（请用搜索缩小范围）",
+  DD_COL_FMT = "列 %d-%d/%d · 滚轮翻列",
   G_LOG_H = "日志",
   G_LOG_FILE = "调试日志（/eh logdump 查看）",
   G_LOG_AUTO = "进出战斗自动输出",

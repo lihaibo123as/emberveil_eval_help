@@ -29,6 +29,7 @@ examples/group.lua
 Toolbox.lua
 quest\QuestData.lua
 quest\QuestBulk.lua
+quest\QuestAll.lua
 quest\QuestChains.lua
 DataSearch.lua
 Share.lua

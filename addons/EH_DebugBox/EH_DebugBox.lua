@@ -27,7 +27,7 @@ end
 
 -- ★构建标记（唯一来源）：每次改本文件顺手 +1 —— 探针第一行就打它，
 --   「跑的是不是最新版」一眼可辨（真机出现过「修了还报错」= 客户端还在跑旧构建）。
-local DBX_BUILD = "1.74.34-28"
+local DBX_BUILD = "1.74.34-34"
 
 -- ===== 语言包（1.74.31）=====
 -- 用户要求：新开关的**文案与 tooltip 走三语语言包**（Locales/zhCN|enUS|ruRU.lua 里 L("键") 三语齐全）。
@@ -307,6 +307,12 @@ local SCAN_SRC = {
   { k = "action", label = "动作条", root = "MainMenuBar", prefix = "[动作条] " },
   { k = "bag", label = "背包", root = "ContainerFrame1", prefix = "[背包] " },
   { k = "uqpin", label = "任务图钉", root = "UnrealQuestWorldMapPin1", prefix = "[任务图钉] " },
+  -- ★用户要求（1.75.13）：把**拾取框**也做成一个扫描源 —— 战利品窗（LootFrame）本身是
+  --   UIParent 的子帧，只在「界面」源里翻很费事；单独成源就能直接看它那一棵
+  --   （LootButton1..N / LootCloseButton / 各 IconTexture·Text，用户已用本工具实拍过这棵树）。
+  --   ★它是**常驻帧**（FrameXML 载入即建，没开窗也查得到）⇒ 不需要开窗就能扫；
+  --     开窗后由 tick 自动重扫（面板本来就是定时刷新）。
+  { k = "loot", label = "拾取框", root = "LootFrame", prefix = "[拾取] " },
 }
 local function uiScanSrcOn(k)
   local src = ui.scanSrc
@@ -323,7 +329,6 @@ local UIHIDE = { wrapped = false, orig = nil, count = 0, log = {}, frame = nil, 
 
 -- ★「只控制子件」实验（/edb uikids）的状态：原父级 + 原锚点 + 原绝对位置
 local UIKIDS = { done = false, saved = {}, list = { "MinimapCluster", "MainMenuBar", "PlayerFrame", "ChatFrame1", "BuffFrame" } }
-
 local function buildNodes()
   nodes = {}
   scanHitCap = false
@@ -5324,6 +5329,7 @@ if type(SlashCmdList) == "table" then
         P("定位判读：贴图「屏[...]」应整齐落在父帧矩形内（179×179 瓦片相邻无缝）；整体平移出界 ⇒ 高亮/定位走的是**逻辑坐标**（没乘父级缩放），渲染走的是缩放后坐标——这不是贴图错了，是定位口径没跟缩放；逐张散乱 ⇒ 引擎按自己的布局摆瓦片，Lua 锚点说了不算。")
       end
     elseif msg == "twprobe" or msg == "箭头探针" then
+
       -- ★★★1.74.34 折叠开关一键取证（同一现象第 3 轮 → 铁律 4 取证模式：能做成命令就不让用户手工复现）。
       --   一屏定案四件事：①跑的是哪个构建（旧构建 = 请先 /reload）②点击路径上的真实对象是什么
       --   ③ rawget / 字段读在本机的真实表现 ④ 真实 OnClick 模拟点击的成败与折叠状态翻转。

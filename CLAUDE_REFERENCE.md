@@ -96,7 +96,8 @@ Copy-Item "$src\README.md","$src\README_en.md","$src\README_ru.md","$src\CHANGEL
 Copy-Item "$src\Locales","$src\examples","$src\media","$src\tools" "$staging\EvalHelp\" -Recurse
 # quest/ 只拷插件要用的三个 .lua（fetch.js/sweep*.js/build*.js/audit.js/chains.js 是开发脚本、cache/ 是抓取缓存，都不进包）
 New-Item -ItemType Directory -Force "$staging\EvalHelp\quest" | Out-Null
-Copy-Item "$src\quest\QuestData.lua","$src\quest\QuestBulk.lua","$src\quest\QuestChains.lua" "$staging\EvalHelp\quest\"
+Copy-Item "$src\quest\QuestData.lua","$src\quest\QuestBulk.lua","$src\quest\QuestAll.lua","$src\quest\QuestChains.lua" "$staging\EvalHelp\quest\"
+# ★1.75.14 新增 quest\QuestAll.lua（**全量任务表**生成物：4018 条，含无装备奖励的任务）⇒ 出包基准 75 → **76**
 Remove-Item "$staging\EvalHelp\media\Textures" -Recurse -Force -ErrorAction SilentlyContinue  # 主题素材不进包
 [System.IO.Compression.ZipFile]::CreateFromDirectory($staging, $out)
 Copy-Item $out "$PWD\EvalHelp.zip" -Force   # ★不带版本号的固定名副本（第 9 步硬要求；两份逐字节相同）
