@@ -55,6 +55,8 @@ node luacheck.js     # fengari 逐文件全量 Lua 解析；SYNTAX OK 才算完�
    `EvalHelp.lua` 的 `local VERSION` 与 `EvalHelp.toc` 的 `## Version` 同步；
 6. **审计记忆体**：`CLAUDE.md` —— 版本要点**汇总统计后放到文档末尾**；★头部只保留**比较新的记忆注意事项（最多 20 个版本）**，
    ★不许再把一堆版本记录堆到记忆体头部（那会让整份记忆体超预算、被截断掉文末的项目现状）。
+   ★★★并且**做一次「清账」**（用户定：「**清理 Claude.md 版本流水账.提取有价值的最终解决方案的相关信息保留**」）：
+   删掉报障经过 / 时间线 / 事故叙事 / 已删测试的组号与变异号，**只留「最终方案 + 判据 + 锚点」**（长条目拆成多条独立判据），细节推给 `CHANGELOG.md` 与参考卷附录 R。
 7. **提交 + 打「附注」标签**：`git tag -a vX.Y.Z -F <说明文件>` —— ★**必须 `-a`**（轻量标签没有说明，Release 页要用它当正文）；
    ★说明文件**不能用 PowerShell `>` 重定向写**（那是 UTF-16LE → 标签说明整段乱码），要用 UTF-8 写并**回读复核**；
 8. **推送（分支 + 标签都要推）**：`git push origin master && git push github master`，再 `git push origin --tags && git push github --tags`；
