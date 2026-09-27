@@ -9220,6 +9220,30 @@ if type(SlashCmdList) == "table" then
           end
         end
       end
+    elseif msg == "联合" or string.find(msg, "^go 联合") then
+      -- ★1.75.23 方案 A 取证：**队友条件联合判定**（同组 ≥2 条队友条件 ⇒ 逐候选、对同一个人判定，
+      --   第一个全过的人命中并只切一次目标）。开关不落存档 ⇒ 关掉只为「旧语义对照」，/reload 即恢复默认。
+      local sub = string.gsub(msg, "^go%s*", "")
+      sub = string.gsub(sub, "^联合%s*", "")
+      if type(EVAL_TEAM_JOINT_SET) ~= "function" or type(EVAL_TEAM_JOINT_GET) ~= "function" then
+        say("[联合] 引擎未载入（EVAL_TEAM_JOINT_SET 不存在）")
+      elseif sub == "off" or sub == "关" then
+        EVAL_TEAM_JOINT_SET(false)
+        say("[联合] 已**关**：本会话内回旧语义（每条队友条件各自选人、后者覆盖前者）——要对照行为就用它，/reload 恢复默认")
+      elseif sub == "on" or sub == "开" then
+        EVAL_TEAM_JOINT_SET(true)
+        say("[联合] 已**开**（默认）：同组 ≥2 条队友条件 ⇒ 逐候选对同一个人判定，命中即切一次目标")
+      else
+        local on, last = EVAL_TEAM_JOINT_GET()
+        say("[联合] 当前 = " .. (on and "|cff00ff00开|r" or "|cffff6060关|r") .. " ｜ 用法：/eh go 联合 on|off")
+        if type(last) == "table" then
+          say("  最近一次：" .. (last.ok and "|cff00ff00命中|r" or "|cffff6060未命中|r") .. " · "
+            .. tostring(last.text or last.why or "?") .. " ｜ 参与条件 " .. tostring(last.n or "?"))
+        else
+          say("  最近一次：还没跑过联合判定（按一下宏，再回来敲本命令）")
+        end
+        say("  判据：只在「同一组里队友类条件 ≥2 条」时接管；单条队友条件与所有非队友条件**行为不变**")
+      end
     elseif string.find(msg, "^go tsel%s") or string.find(msg, "^go 选取目标%s") then
       -- ★★★1.75.12 子命令 = **选取目标调用点取证环**（用户报障：「选取目标:最近敌人 + 冲锋：不按键时目标
       --   也在尸体与活怪之间来回跳」）——静态审计已证明插件里没有任何定时器切目标 ⇒ 只能读**调用点**，

@@ -2496,6 +2496,49 @@ local function condOne(cd, skill, dry, rule)
   end
   if k == "teamHp" or k == "teamMana" or k == "teamBuff" or k == "teamDebuff" then
     local scope = (cd.name == "团队") and "raid" or "party"
+    -- ★★★1.75.23 方案 A：**联合判定上下文**。同组里队友条件 ≥2 条时，由 teamJointGroup 逐候选设
+    --   `st.teamJointRec` ⇒ 本分支改为「**只判这一个候选**」：不扫全员、不切目标（选人由联合驱动统一做一次）。
+    --   ★单条队友条件时 teamJointGroup 不接管 ⇒ 永远不会进这里 ⇒ 旧语义零回归。
+    local jrec = st.teamJointRec
+    if jrec then
+      local jscope = (cd.name == "团队") and "团队" or "队伍"
+      local jlim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
+      local jwho = tostring(jrec.name or jrec.unit)
+      if k == "teamHp" or k == "teamMana" then
+        local maxv = (k == "teamHp") and jrec.hpMax or jrec.powerMax
+        local pct = (k == "teamHp") and jrec.hpPct or jrec.powerPct
+        -- 没血条/没蓝条（无蓝职业）⇒ 这个候选不满足，不是「0%」
+        if not (maxv and maxv > 0) then return false, jscope .. "候选没有可测的条：" .. jwho end
+        local pass = condCmp({ cd.op, cd.n }, pct)
+        return pass, ((k == "teamHp") and jscope .. "血%" or jscope .. "蓝%") .. ":" .. tostring(pct) .. "% " .. jwho
+      elseif k == "teamBuff" then
+        local tex = texOf(cd.s)
+        if not tex then return false, "未知buff:" .. tostring(cd.s) end
+        local cnt = jrec.buffs[tex]
+        cnt = (cnt == true) and 1 or (tonumber(cnt) or 0)
+        local lack = (cnt < jlim)
+        local lbl = jscope .. "buff:" .. tostring(cd.s) .. " " .. jwho
+        if cd.v == false then return lack, lbl .. (lack and " 缺" or " 已有") end
+        return (not lack), lbl .. ((not lack) and " 有" or " 缺")
+      else
+        local want = cd.dt
+        local hasName = (cd.s ~= nil and cd.s ~= "")
+        local tex = hasName and texOf(cd.s) or nil
+        if hasName and not tex then return false, "未知debuff:" .. tostring(cd.s) end
+        local hit, hitCnt = false, 0
+        if tex then
+          local d = jrec.debuffs[tex]
+          if d and dispelMatch(d.t, want) then hit = true hitCnt = tonumber(d.n) or 1 end
+        else
+          for _, d in pairs(jrec.debuffs) do
+            if dispelMatch(d.t, want) then hit = true hitCnt = tonumber(d.n) or 1 break end
+          end
+        end
+        local lbl = jscope .. "debuff:" .. (hasName and tostring(cd.s) or "(任意)") .. " " .. jwho
+        if cd.v == false then return (not hit), lbl .. (hit and " 有" or " 无") end
+        return hit, lbl .. (hit and (" 有(层" .. tostring(hitCnt) .. ")") or " 无")
+      end
+    end
     local scopeName = (scope == "raid") and "团队" or "队伍"
     local list = EVAL_HELP_TEAM_ENSURE and EVAL_HELP_TEAM_ENSURE(scope) or nil
     if not list or table.getn(list) == 0 then
@@ -2606,18 +2649,116 @@ end
 -- 编辑窗不配条件保存 / 导入文本 "- 技能 | " 都会产出空表——技能变死条目）
 -- ★注意这里是**给上面已前置声明的 local 赋值**（不是新建 local）——
 --   改了会连带断掉「队伍成员」扫描器里的候选过滤（那些引用在声明点之前）。
+-- ★★★1.75.23 方案 A：同一技能行里「多条队友/团员条件」= **联合判定同一个人**（用户报障驱动）
+--   病因（已定案）：`恢复 | 队友血量%<85 & 队友缺buff:恢复` 里两条条件**各自扫全员、各自挑人、各自切目标**
+--   （condOne 的 team 分支 + teamSelect）⇒ **后一条覆盖前一条** ⇒ 目标是「最缺恢复的人」，
+--   哪怕他满血（甚至就是玩家自己）⇒ 出现「给不需要的人上恢复」。
+--   现在：**同一组里队友类条件 ≥2 条**时改走 teamJointGroup —— 按「驱动条件」排序**逐候选**，
+--   对该候选判**全部**队友条件，**第一个全过的人**即命中（**只切一次目标**）。
+--   ★单条队友条件时本函数直接返回 nil ⇒ 旧路径原样执行（**零回归**）。
+--   边界（写清楚，免得以后当 bug 查）：
+--     ① 组内**非**队友条件（战斗中 / 法力%>90 / 目标buff …）只判**一次**（它们与「选谁」无关）；
+--     ② `候选者*` 条件仍是**成员选取器行专用**（要那套就写 `选取目标:队伍成员`）；
+--     ③ dry（战斗UI 每 0.15s 的预览求值）只算**不切目标**；
+--     ④ 选人方向沿用 `EVAL_TEAM_PICK_ORDER`（只取**本组**的驱动条件）：`<` = 血最少优先、`>` = 最多优先；
+--     ⑤ 运行时开关**不落存档**：`/eh go 联合 off`（或 /run EVAL_TEAM_JOINT_SET(false)）可临时回旧语义做对照。
+local TEAM_JOINT = { on = true, last = nil, kinds = {
+  teamHp = true, teamMana = true, teamBuff = true, teamDebuff = true,
+} }
+function EVAL_TEAM_JOINT_SET(on)
+  TEAM_JOINT.on = (on ~= false)
+  return TEAM_JOINT.on
+end
+function EVAL_TEAM_JOINT_GET() return TEAM_JOINT.on, TEAM_JOINT.last end
+
+local function teamJointGroup(g, rule, dry)
+  if not TEAM_JOINT.on then return nil end
+  -- ★★「选取目标:队伍成员/团队成员」那一行的候选循环里**绝不接管**：那里 st.pickCand 已设、
+  --   每个候选都在被真切着目标判条件；联合路径再来一次 = 两套选人互相抢目标。
+  if st.pickCand then return nil end
+  local teamCds, otherCds = {}, {}
+  for _, cd in ipairs(g or {}) do
+    if TEAM_JOINT.kinds[cd.k] then table.insert(teamCds, cd) else table.insert(otherCds, cd) end
+  end
+  if table.getn(teamCds) < 2 then return nil end -- ★单条 = 不接管（旧路径）
+  local skill = rule and rule.skill
+  -- ① 与候选无关的条件先判一次（不过就整组失败，不做无谓扫描）
+  for _, cd in ipairs(otherCds) do
+    local ok, why = condOne(cd, skill, dry, rule)
+    if not ok then
+      TEAM_JOINT.last = { ok = false, why = tostring(why), n = table.getn(teamCds) }
+      return false, tostring(why)
+    end
+  end
+  -- ② 候选集：范围（队伍/团队）+ 这一行的「职业/队伍」过滤
+  local scope = "party"
+  for _, cd in ipairs(teamCds) do if cd.name == "团队" then scope = "raid" break end end
+  local scopeName = (scope == "raid") and "团队" or "队伍"
+  local list = EVAL_HELP_TEAM_ENSURE and EVAL_HELP_TEAM_ENSURE(scope) or nil
+  if not list or table.getn(list) == 0 then
+    local why = "不在" .. scopeName .. "中（无成员可检测）"
+    TEAM_JOINT.last = { ok = false, why = why, n = table.getn(teamCds) }
+    return false, why
+  end
+  list = teamFilterList(list, nil, rule)
+  if table.getn(list) == 0 then
+    local why = scopeName .. "中没有人符合「职业/队伍」过滤"
+    TEAM_JOINT.last = { ok = false, why = why, n = table.getn(teamCds) }
+    return false, why
+  end
+  -- ③ 排序：只取**本组**的驱动条件（没有就由 teamSortBy 默认「血最少优先」）
+  local order = EVAL_TEAM_PICK_ORDER({ groups = { g } })
+  local sorted = teamSortBy(list, order)
+  -- ④ 逐候选：把**这一组**的队友条件全部按这一个候选判定；第一个全过的人命中
+  local briefs = {}
+  for _, rec in ipairs(sorted) do
+    st.teamJointRec = rec
+    local allOK, firstWhy, trace = true, nil, {}
+    for _, cd in ipairs(teamCds) do
+      -- ★dry 传 true：联合路径下 condOne 绝不自己切目标（选人由本函数最后切**一次**）
+      local ok, why = condOne(cd, skill, true, rule)
+      table.insert(trace, EVAL_COND_STR(cd) .. (ok and "√" or "×"))
+      if not ok then allOK = false firstWhy = why break end
+    end
+    st.teamJointRec = nil
+    if allOK then
+      local pickedUnit = rec.unit
+      if not dry then pickedUnit = teamSelect(rec) end
+      local txt = teamRecBrief(rec) .. " · 条件: " .. table.concat(trace, " ")
+        .. " · 依据: " .. teamOrderLabel(order) .. " ｜ 联合判定(" .. tostring(table.getn(teamCds)) .. " 条队友条件)"
+      TEAM_JOINT.last = { ok = true, text = txt, unit = pickedUnit, n = table.getn(teamCds) }
+      wlog(tostring(skill) .. " 联合命中: " .. txt)
+      return true, nil, "联合:" .. txt
+    end
+    table.insert(briefs, tostring(rec.name or rec.unit) .. " "
+      .. tostring(math.floor((tonumber(rec.hpPct) or 0) + 0.5)) .. "%")
+  end
+  local why = scopeName .. "里**没有人同时满足**这 " .. tostring(table.getn(teamCds)) .. " 条队友条件（候选 "
+    .. tostring(table.getn(sorted)) .. " 人：" .. table.concat(briefs, " / ") .. "）"
+  TEAM_JOINT.last = { ok = false, why = why, n = table.getn(teamCds) }
+  return false, why
+end
+
 function groupsOK(rule, dry)
+  st.teamJointRec = nil -- ★1.75.23 防串味：每条规则的组求值开头清掉联合上下文
   if not rule.groups or table.getn(rule.groups) == 0 then return true, nil, "无条件" end
   local lastWhy = "条件不满足"
   for _, g in ipairs(rule.groups or {}) do
-    local allOK = true
-    local trace = {}
-    for _, cd in ipairs(g) do
-      local ok, why = condOne(cd, rule.skill, dry, rule)
-      table.insert(trace, EVAL_COND_STR(cd) .. (ok and "√" or "×"))
-      if not ok then allOK = false lastWhy = why break end
+    -- ★★★1.75.23 方案 A：组内「队友类条件 ≥2 条」⇒ 合并成**一次联合选人**（逐候选、全部条件对同一人判定）
+    local jok, jwhy, jtrace = teamJointGroup(g, rule, dry)
+    if jok ~= nil then
+      if jok then return true, nil, jtrace end
+      lastWhy = jwhy
+    else
+      local allOK = true
+      local trace = {}
+      for _, cd in ipairs(g) do
+        local ok, why = condOne(cd, rule.skill, dry, rule)
+        table.insert(trace, EVAL_COND_STR(cd) .. (ok and "√" or "×"))
+        if not ok then allOK = false lastWhy = why break end
+      end
+      if allOK then return true, nil, table.concat(trace, " ") end
     end
-    if allOK then return true, nil, table.concat(trace, " ") end
   end
   return false, lastWhy
 end
@@ -4457,6 +4598,7 @@ function EVAL_GO(profSel)
   --   否则上一轮选的人会被这一轮当成「本次命中的人」，技能就打在旧目标身上了。
   --   它由 队友/团员条件 或 选取目标:队伍成员/团队成员 在**本轮**写入。
   st.allyUnit, st.teamCur = nil, nil
+  st.teamJointRec = nil -- ★1.75.23 同上：绝不让联合上下文漏到下一轮（出错也能自愈）
   local rage     = st.power
   local inCombat = st.inCombat
 
