@@ -1234,7 +1234,7 @@ end
 local function warCfg()
   local cc = c()
   if not cc.war then
-    cc.war = { enabled = true, attack = true } -- 1.48.0 战士阈值缺省已随默认方案一起清理
+    cc.war = { enabled = true, attack = false } -- 1.48.0 战士阈值缺省已随默认方案一起清理 -- ★1.75.25 自动攻击默认关（用户定）
   end
   EVAL_WAR_ENSURE_PROFILES(cc.war) -- 方案数据迁移（缺省生成默认方案）
   return cc.war
@@ -1979,7 +1979,7 @@ local function cfgBuild()
     function() return warCfg().enabled ~= false end,
     function(v) warCfg().enabled = v end)
   swItem(L("W_AUTOATK"),
-    function() return warCfg().attack ~= false end,
+    function() return warCfg().attack == true end,
     function(v) warCfg().attack = v end, L("W_AUTOATK_TIP"))
   -- ★★★1.71.2（第四轮）用户要求：「将方案列表的调试信息开关移动到全局配置内的日志分组」。
   --   排查结论（先查后动，本轮实测确认）：它与全局→日志的「调试日志」**不是同一个功能**，故**不合并**：
@@ -10590,7 +10590,7 @@ init:SetScript("OnEvent", function(a, b)
     if cfg.auto == nil then cfg.auto = false end -- 默认不自动输出
     if cfg.wdebug == nil then cfg.wdebug = false end
     if not cfg.war then
-      cfg.war = { enabled = true, attack = true } -- 1.48.0 同上
+      cfg.war = { enabled = true, attack = false } -- 1.48.0 同上 -- ★1.75.25 同上
     end
     -- ★★★1.75.10 一次性迁移（用户 2026-09-25 定稿：「头龙 配置为插件默认图标」）：
     --   清掉她存档里那枚「设了却显示成**黑方块**」的自定义图标（`INV_Misc_ShadowEgg_TEX`）

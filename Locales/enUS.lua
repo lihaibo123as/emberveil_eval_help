@@ -730,7 +730,7 @@ PROF_TIP_CAPPED = "Covers %s/5 condition groups → score capped (God tier needs
   W_LIST_H = "Skill List (order = priority; check = enabled)",
   W_ENABLE = "Enable one-key macro",
   W_AUTOATK = "Auto Attack",
-   W_AUTOATK_TIP = "Auto-start attack on macro press: Auto Shot (hunter) / Shoot (wand) first, falls back when unusable, melee Attack last (2s throttle, toggle-safe)",
+   W_AUTOATK_TIP = "Auto-start attack on macro press: Auto Shot (hunter) / Shoot (wand) first, falls back when unusable, ; OFF by default (turn it on here to auto-start attack on macro press)",
   W_DEBUG_LOG = "Profile skill log",
   W_ADD = "Add Skill",
   W_EDIT = "Edit",

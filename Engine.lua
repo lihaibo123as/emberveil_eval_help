@@ -93,8 +93,24 @@ local wLastAttackTry = 0
 --   本轮实测踩到：跟随的守卫提示用 wlog 写，`/eh logdump` 里一行都看不到，断言当场变红）。
 --   ★判据：**要进 `/eh logdump` 的消息必须用 `EVAL_LOGLINE`**（那才是环形缓冲的写入口，见 Core.logLine）；
 --   `wlog` 是「只在开 wdebug 时顺嘴上说一句」的调试口，两者别混用。
+-- ★★★1.75.25（用户定：「方案技能触发的时候染色红色.跳过,染色灰色」）：
+--   方案技能日志（/eh wdebug）里按**内容**给消息上色 —— 命中「触发」= 红、命中「跳过」= 灰；
+--   其余（去抖提示 / 跟随守卫等）保持原样。★wlog 是 war: 那批日志行的**唯一出口** ⇒ 色码只在这里分派，
+--   前缀仍是橙色 war:（插件通道标记，所有行统一），被上色的只是**消息本体**（前后各一段色码，不嵌套）。
+--   ★顺序即判据：**先判「跳过」再判「触发」**（一句话同时含两词时以「跳过」为准，宁可灰也不误染红）。
+local WC_TRIG, WC_SKIP = "|cffff6060", "|cff909090"
 local function wlog(msg)
-  if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cffff9040war:|r " .. tostring(msg)) end
+  if not (EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug) then return end
+  if type(EVAL_SAY) ~= "function" then return end
+  local s = tostring(msg)
+  local col = nil
+  if string.find(s, "跳过", 1, true) then col = WC_SKIP
+  elseif string.find(s, "触发", 1, true) then col = WC_TRIG end
+  if col then
+    EVAL_SAY("|cffff9040war:|r " .. col .. s .. "|r")
+  else
+    EVAL_SAY("|cffff9040war:|r " .. s)
+  end
 end
 
 local function wactionName(slot)
@@ -4706,7 +4722,10 @@ function EVAL_GO(profSel)
     end
     return true
   end
-  if atkOff and w.attack ~= false and GetTime() - wLastAttackTry >= 2 then
+  -- ★★★1.75.25（用户定：「一键宏.自动攻击开关.默认关闭」）：闸门从 ~= false 改成 **== true** ——
+  --   即 **nil（从没设置过）= 关**，只有用户在本开关上**明确打开过**才补自动攻击；
+  --   语义变化本身就是迁移（旧用户没动过开关的一律变关、明确开过的一直是 true ⇒ 保持开），不必改存档。
+  if atkOff and w.attack == true and GetTime() - wLastAttackTry >= 2 then
     if not atkTargetAttackable() then
       -- 如实留证：这是**故意不按**（尸体/无目标/不可攻击），不是"忘了" —— 否则下次排查还得靠猜
       wlog("跳过补自动攻击（" .. tostring(atkName) .. "）：目标是尸体/不存在/不可攻击")
