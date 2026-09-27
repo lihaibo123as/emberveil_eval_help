@@ -9744,6 +9744,10 @@ if type(SlashCmdList) == "table" then
       end
     -- ★1.74.23 稀有提醒转播（UnrealQuest 发现稀有那一刻 → 聊天框一行）：/eh go 稀有 [状态|开|关|试]
     --   "go 稀有" = 3 + 6 = **9 字节**（string.sub 是字节下标 —— 1.74.5 在「go 喂食」上正是栽在这里）。
+    -- ★1.75.26 拾取贴手（tools/LootCursor.lua）：/eh go 拾取 [开|关|跟随|角标|探针|存档|清]
+    --   "go 拾取" = 3 + 6 = **9 字节**（string.sub 按字节；两个汉字各 3 字节 —— 1.75.5 在「go 喂食」上正是栽在这）。
+    elseif string.sub(msg, 1, 9) == "go 拾取" then
+      if type(EVAL_LC_CMD) == "function" then pcall(EVAL_LC_CMD, msg) else say("拾取贴手未载入：tools\\LootCursor.lua 不在 toc 里") end
     elseif string.sub(msg, 1, 9) == "go 稀有" then
       if type(EVAL_RW_CMD) == "function" then
         EVAL_RW_CMD(msg)
@@ -10374,6 +10378,8 @@ if type(SlashCmdList) == "table" then
       fsay("地图标注: 一个「地图标注(N)」按钮即可——点开勾选类别（=开关）；/eh ds cat <类别> on|off 命令行等价 | /eh ds clear 清空")
       fsay("稀有提醒转播: /eh go 稀有（状态）｜ 稀有 开 ｜ 稀有 关 ｜ 稀有 试 ｜ 稀有 目标 ｜ 稀有 目标探针 ｜ 稀有 链接")
       fsay("　任务插件发现稀有的那一刻在聊天框报一行（名字按品阶染色 + 品阶 + 码数）；**点名字 = 选中它**（选不中如实报错）")
+      fsay("拾取贴手: /eh go 拾取（状态）｜ 拾取 开 ｜ 拾取 关 ｜ 拾取 跟随 ｜ 拾取 角标 ｜ 拾取 探针 ｜ 拾取 存档")
+      fsay("　把拾取窗搬到光标底下：开窗贴一次，之后**每点一件立刻换到下一件**（不等拾取回话）；跟随/品质角标在工具箱 [设置] 里")
     else
       EVAL_HELP()
     end
@@ -10673,6 +10679,9 @@ init:SetScript("OnEvent", function(a, b)
     --   模块自己读存档子树 `EVAL_HELP_CONFIG.layerFix`、自己应用一次、自己武装**有界**复查窗口，
     --   主插件只知道「有这么个安装入口」。★它**不受**框拖拽开关（dragFrames.on）影响，是独立的一条口径。
     if type(EVAL_LF_INSTALL) == "function" then pcall(EVAL_LF_INSTALL) end
+    -- ★1.75.26 拾取贴手（tools/LootCursor.lua）：开关真值 = `tbCfg().lootCursor` ⇒ **必须在这里**读
+    --   （SavedVariables 要等 VARIABLES_LOADED）；关着一个事件都不注册、一个 OnUpdate 都不挂。
+    if type(EVAL_LC_INSTALL) == "function" then pcall(EVAL_LC_INSTALL) end
     -- 注册进出战斗事件（pcall 防御：事件名若不存在不会崩）
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_ENTERING_WORLD") -- ★1.74.31 进世界（载入期时钟到这里才开始走 ⇒ world 打点）
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_REGEN_DISABLED")

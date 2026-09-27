@@ -27,7 +27,7 @@ end
 
 -- ★构建标记（唯一来源）：每次改本文件顺手 +1 —— 探针第一行就打它，
 --   「跑的是不是最新版」一眼可辨（真机出现过「修了还报错」= 客户端还在跑旧构建）。
-local DBX_BUILD = "1.74.34-34"
+local DBX_BUILD = "1.74.34-40"
 
 -- ===== 语言包（1.74.31）=====
 -- 用户要求：新开关的**文案与 tooltip 走三语语言包**（Locales/zhCN|enUS|ruRU.lua 里 L("键") 三语齐全）。
@@ -4454,6 +4454,591 @@ function EVAL_LD_DRAG_RESET()
   return ldNoModule("重置定位")
 end
 
+-- ============================================================================
+-- ★1.74.34-35 拾取贴手 · 一次性真机探针（用户 2026-09-27 定：「先出探针，一次定性」）
+--   背景（已定案，勿重跑）：插件**不能代点拾取**（LootSlot 只剩确认绑定语义；Button:Click() 对拾取无效）
+--   ⇒ 唯一可行 = **把原生按钮/窗搬到鼠标手边，让玩家自己点**（不碰 Protected、不发服务器写动作）。
+--   本探针回答 5 问（第 ② 问是生死线）：
+--     ① LootFrame / LootButton1..4 现状（父子/锚点/矩形/ID/显隐/对象类型/槽内容）
+--     ② ★搬走之后**人工真鼠标点一下还能不能拾取**（能 ⇒ 方案 A 成立；不能 ⇒ 整个功能作废）
+--     ③ 客户端会不会在事件后把窗**摆回原位**（摆好 → 事件/等待 → 读回位置）
+--     ④ GroupLootFrame1..4 在不在 LootFrame 树下（决定「搬整窗」是否连 roll 框一起带走）
+--     ⑤ 光标折算（GetCursorPosition 物理像素 ÷ UIParent 有效缩放）+ 四边夹取
+--   另有两条为后续实现备料：
+--     ⑥ 三个鼠标脚本槽（OnClick/OnMouseDown/OnMouseUp）**原来有没有被占** ⇒「每次点击自动换下一个物品」该挂哪
+--        （用户明确要求：**点击一次就换下一个，不等拾取成功的确认**）
+--     ⑦ 在 LootButton 上自建纹理能否贴上（读回自证）⇒ 品质角标可行性
+--   命令：/edb loot（静态读数）｜/edb loot 摆（搬到光标 + 提示人工点击）｜/edb loot 查（读回 + 结论）
+--         ｜/edb loot 挂 / 摘（只挂 OnMouseDown 观测，**绝不覆盖 OnClick**）｜/edb loot 还原｜/edb loot 存档
+--   ★安全契约：只做「读 + SetPoint」；SetPoint 前先抓原锚点（抓过一次就不再覆盖）；还原后读回自证。
+--   ★★自证口径：`摆` 用「量回 → 逐轮修正 → 已收敛」而不是算一次偏移（老写法靠 GetLeft 差值，真机报过
+--     「鼠标没落在物品上」）；`还原` 打「原锚点 → 现在锚点 ⇒ 一致/不一致」两段对照。
+--   ★★落盘口径：`存档` = **最近输出环（80 条：摆/查/光标帧 的原话）+ 现场读数** ⇒ AI 只读存档就够，
+--     不必让用户手抄聊天（原话只进聊天 = 取证断链）。
+-- ============================================================================
+local LP = {
+  orig = nil,          -- 原锚点快照 { frame = {...}, btn = { [i] = {...} } }
+  lastX = nil, lastY = nil,
+  slotsBefore = nil,
+  ev = { open = 0, clear = 0, close = 0, lastClear = nil, down = 0, lastDown = nil, log = {} },
+  hooked = false,
+  sink = nil,          -- 非 nil 时所有输出改往这里收（存档用，避免两处逻辑漂移）
+  ring = {},           -- ★有界输出环（LP_RING_MAX 条）：摆/查/光标帧 的原话 ⇒ 存档时一起落盘（AI 直读）
+}
+
+local LP_RING_MAX = 80
+local function lpSay(s)
+  local t = LP.ring
+  if table.getn(t) >= LP_RING_MAX then table.remove(t, 1) end
+  t[table.getn(t) + 1] = tostring(s)
+  if LP.sink then LP.sink(tostring(s)) else P(tostring(s)) end
+end
+
+local function lpFrame() return _G["LootFrame"] end
+
+local function lpBtn(i)
+  local b = _G["LootButton" .. tostring(i)]
+  if b then return b end
+  local f = lpFrame()
+  if not f or type(f.GetChildren) ~= "function" then return nil end
+  local ok, kids = pcall(function() return { f:GetChildren() } end)
+  if not ok then return nil end
+  local want = "LootButton" .. tostring(i)
+  for _, c in ipairs(kids) do
+    if c and type(c.GetName) == "function" then
+      local ok2, nm = pcall(c.GetName, c)
+      if ok2 and nm == want then return c end
+    end
+  end
+  return nil
+end
+
+-- 光标：★照本仓已验证配方（Toolbox.lua 右键菜单）—— GetCursorPosition 给的是**物理像素**，
+--   必须除以 UIParent 有效缩放，否则高缩放下会飘。
+local function lpCursor()
+  local rx, ry, sc = nil, nil, 1
+  if type(GetCursorPosition) == "function" then
+    local ok, x, y = pcall(GetCursorPosition)
+    if ok and tonumber(x) and tonumber(y) then rx, ry = tonumber(x), tonumber(y) end
+  end
+  if type(UIParent) == "table" and type(UIParent.GetEffectiveScale) == "function" then
+    local ok, s = pcall(UIParent.GetEffectiveScale, UIParent)
+    if ok and tonumber(s) and tonumber(s) > 0 then sc = tonumber(s) end
+  end
+  if not rx then return nil, nil, sc, nil, nil end
+  return rx / sc, ry / sc, sc, rx, ry
+end
+
+local function lpUISize()
+  local sw, sh = 1024, 768
+  if type(UIParent) == "table" then
+    if type(UIParent.GetWidth) == "function" then local ok, v = pcall(UIParent.GetWidth, UIParent) if ok and tonumber(v) then sw = tonumber(v) end end
+    if type(UIParent.GetHeight) == "function" then local ok, v = pcall(UIParent.GetHeight, UIParent) if ok and tonumber(v) then sh = tonumber(v) end end
+  end
+  return sw, sh
+end
+
+local function lpDump(f, tag)
+  if not f or (type(f) ~= "table" and type(f) ~= "userdata") then return tag .. "：不存在" end
+  local seg = { tag }
+  local function add(k, v) seg[table.getn(seg) + 1] = k .. "=" .. tostring(v) end
+  if type(f.GetName) == "function" then local ok, v = pcall(f.GetName, f) add("名", ok and (tostring(v) == "" and "(无名)" or v) or "?") end
+  if type(f.GetObjectType) == "function" then local ok, v = pcall(f.GetObjectType, f) add("类型", ok and v or "?") end
+  if type(f.GetID) == "function" then local ok, v = pcall(f.GetID, f) add("ID", ok and v or "?") end
+  if type(f.IsShown) == "function" then local ok, v = pcall(f.IsShown, f) add("显", ok and (v and 1 or 0) or "?") end
+  if type(f.GetPoint) == "function" then
+    local ok, p, rel, rp, x, y = pcall(f.GetPoint, f, 1)
+    if ok then
+      local rn = "?"
+      if rel and type(rel.GetName) == "function" then local ok2, v = pcall(rel.GetName, rel) rn = ok2 and tostring(v) or "?" end
+      add("锚1", tostring(p) .. "/" .. rn .. "/" .. tostring(rp) .. "/" .. tostring(x) .. "," .. tostring(y))
+    else add("锚1", "报错") end
+  end
+  if type(f.GetLeft) == "function" then
+    local ok, l, bo, w, h = pcall(function() return f:GetLeft(), f:GetBottom(), f:GetWidth(), f:GetHeight() end)
+    if ok then add("矩形", string.format("%s,%s %sx%s", tostring(l), tostring(bo), tostring(w), tostring(h))) end
+  end
+  return table.concat(seg, " ")
+end
+
+local function lpScripts(f, tag)
+  if not f or type(f) ~= "table" then return tag .. "：不存在" end
+  local out = { tag }
+  for _, sn in ipairs({ "OnClick", "OnMouseDown", "OnMouseUp", "OnEnter", "OnLeave" }) do
+    local has, fn = false, nil
+    if type(f.HasScript) == "function" then local ok, v = pcall(f.HasScript, f, sn) has = (ok and v) and true or false end
+    if type(f.GetScript) == "function" then local ok, v = pcall(f.GetScript, f, sn) if ok then fn = v end end
+    local src = ""
+    if type(fn) == "function" and type(debug) == "table" and type(debug.getinfo) == "function" then
+      local ok, info = pcall(debug.getinfo, fn, "S")
+      if ok and type(info) == "table" then src = " src=" .. tostring(info.source or "?") end
+    end
+    out[table.getn(out) + 1] = string.format("%s[占=%s,%s%s]", sn, tostring(has), type(fn), src)
+  end
+  return table.concat(out, " ")
+end
+
+local function lpSlotTxt(i)
+  if type(GetLootSlotInfo) ~= "function" then return "无接口" end
+  local ok, tex, nm, cnt, q = pcall(GetLootSlotInfo, i)
+  if not ok then return "读不到（报错）" end
+  if nm == nil then return "空" end
+  local coin = ""
+  if type(LootSlotIsCoin) == "function" then local ok2, v = pcall(LootSlotIsCoin, i) coin = (ok2 and v) and " 金币=1" or "" end
+  return string.format("有(%s x%s 品质%s%s)", tostring(nm), tostring(cnt), tostring(q), coin)
+end
+
+local function lpSlotHas(i)
+  if type(GetLootSlotInfo) ~= "function" then return nil end
+  local ok, tex, nm = pcall(GetLootSlotInfo, i)
+  if not ok then return nil end
+  return (nm ~= nil) and true or false
+end
+
+-- 抓原锚点（**只抓一次**：抓第二次会把我们摆的位置当原值）
+local function lpSnap(f, n)
+  local o = { pts = {} }
+  for k = 1, (n or 1) do
+    local ok, p, rel, rp, x, y = pcall(f.GetPoint, f, k)
+    if ok and p then o.pts[k] = { p = p, rel = rel, rp = rp, x = x, y = y } end
+  end
+  return o
+end
+
+local function lpApply(o, f)
+  if not f or not o or table.getn(o.pts) == 0 then return false end
+  pcall(f.ClearAllPoints, f)
+  local okAll = true
+  for k = 1, table.getn(o.pts) do
+    local p = o.pts[k]
+    local ok
+    if p.rel then ok = pcall(f.SetPoint, f, p.p, p.rel, p.rp, p.x, p.y)
+    else ok = pcall(f.SetPoint, f, p.p, p.x, p.y) end
+    if not ok then okAll = false end
+  end
+  return okAll
+end
+
+local function lpEventFrame()
+  if LP.evF then return LP.evF end
+  local f = CreateFrame("Frame", "EH_LP_EV", UIParent)
+  if not f then return nil end
+  for _, ev in ipairs({ "LOOT_OPENED", "LOOT_SLOT_CLEARED", "LOOT_CLOSED" }) do
+    if type(f.RegisterEvent) == "function" then pcall(f.RegisterEvent, f, ev) end
+  end
+  -- ★回调零形参：事件名读全局 event、参数读全局 arg1..（本项目铁律）
+  if type(f.SetScript) == "function" then
+    pcall(f.SetScript, f, "OnEvent", function()
+      local ev = tostring(event or "?")
+      if ev == "LOOT_OPENED" then
+        LP.ev.open = LP.ev.open + 1
+      elseif ev == "LOOT_SLOT_CLEARED" then
+        LP.ev.clear = LP.ev.clear + 1
+        LP.ev.lastClear = tostring(arg1 or "?")
+      elseif ev == "LOOT_CLOSED" then
+        LP.ev.close = LP.ev.close + 1
+      end
+      local line = string.format("%s arg1=%s（累计 open=%d clear=%d close=%d）",
+        ev, tostring(arg1 or "-"), LP.ev.open, LP.ev.clear, LP.ev.close)
+      LP.ev.log[table.getn(LP.ev.log) + 1] = line
+      if ev == "LOOT_SLOT_CLEARED" then
+        -- ★这一条回答「拾完一件，下一件是留在原格还是往上压实」⇒ 决定点一次之后窗要挪几格
+        local snap = {}
+        for i = 1, 4 do snap[i] = tostring(i) .. "=" .. lpSlotTxt(i) end
+        LP.ev.log[table.getn(LP.ev.log) + 1] = "  ↳ 清空后槽位快照: " .. table.concat(snap, " ｜ ")
+      end
+      while table.getn(LP.ev.log) > 24 do table.remove(LP.ev.log, 1) end
+    end)
+  end
+  LP.evF = f
+  return f
+end
+
+local function lpStatic()
+  lpEventFrame()
+  lpSay("== 拾取贴手探针 build=" .. DBX_BUILD .. " · 静态读数 ==")
+  local f = lpFrame()
+  if not f then lpSay("LootFrame：不存在（FrameXML 还没建出来）") return end
+  lpSay(lpDump(f, "LootFrame"))
+  local cx, cy, sc, rx, ry = lpCursor()
+  local uiw, uih = lpUISize()   -- ★两个返回值必须**分别接**（套 tostring 会只剩第一个 ⇒ format 少参、真机红字）
+  lpSay(string.format("光标：物理=%s,%s ｜ UIParent 有效缩放=%.3f ｜ 折算后(UI坐标)=%s,%s ｜ UIParent 尺寸=%sx%s",
+    tostring(rx), tostring(ry), sc, tostring(cx), tostring(cy), tostring(uiw), tostring(uih)))
+  if type(GetNumLootItems) == "function" then
+    local ok, n = pcall(GetNumLootItems)
+    lpSay("GetNumLootItems = " .. tostring(ok and n or "报错"))
+  end
+  for i = 1, 4 do
+    local b = lpBtn(i)
+    lpSay(lpDump(b, "LootButton" .. tostring(i)))
+    lpSay("  脚本槽 " .. lpScripts(b, ""))
+    if b and f then
+      local ok, dx, dy = pcall(function() return b:GetLeft() - f:GetLeft(), b:GetBottom() - f:GetBottom() end)
+      if ok and tonumber(dx) then lpSay(string.format("  窗内偏移 dx=%.1f dy=%.1f（搬窗时用它把按钮对到光标）", dx, dy)) end
+    end
+    lpSay("  槽 slot" .. tostring(i) .. " = " .. lpSlotTxt(i))
+  end
+  for i = 1, 4 do
+    local g = _G["GroupLootFrame" .. tostring(i)]
+    if g then
+      local chain, cur = {}, nil
+      if type(g.GetParent) == "function" then local ok, v = pcall(g.GetParent, g) if ok then cur = v end end
+      for _ = 1, 3 do
+        if not cur then break end
+        local nm = "?"
+        if type(cur.GetName) == "function" then local ok, v = pcall(cur.GetName, cur) nm = ok and tostring(v) or "?" end
+        if nm == "" or nm == "nil" then nm = "(无名)" end
+        chain[table.getn(chain) + 1] = nm
+        if type(cur.GetParent) == "function" then local ok, v = pcall(cur.GetParent, cur) cur = ok and v or nil else cur = nil end
+      end
+      lpSay("GroupLootFrame" .. tostring(i) .. "：父链=" .. table.concat(chain, " < ") ..
+        "（含 LootFrame ⇒ 搬整窗会一起带走；不含 ⇒ roll 框要单独处理）")
+    end
+  end
+  local b1 = lpBtn(1)
+  if b1 and type(b1.CreateTexture) == "function" then
+    local ok, tex = pcall(b1.CreateTexture, b1, nil, "OVERLAY")
+    if ok and tex then
+      local ok2 = pcall(tex.SetTexture, tex, "Interface\\Buttons\\WHITE8X8")
+      local ok3, read = false, nil
+      if type(tex.GetTexture) == "function" then ok3, read = pcall(tex.GetTexture, tex) end
+      pcall(tex.Hide, tex)
+      lpSay("自建纹理（品质角标可行性）：建=成功 贴=" .. tostring(ok2) .. " 读回=" .. tostring(ok3 and read or "?") .. "（读完即 Hide，不留痕）")
+    else
+      lpSay("自建纹理：**建失败** ⇒ 品质角标这条路要换写法")
+    end
+  end
+end
+
+-- ============================================================================
+-- ★★1.74.34-37 「摆」v2 + 「光标帧」—— 修真机报障「运行 /edb loot 摆 鼠标位置未在物品上」
+--   病因（离线复盘）：v1 用 `按钮:GetLeft() - 窗:GetLeft()` 当「窗内偏移」再反推窗位置，
+--     一旦**坐标系/缩放口径不一致**（GetLeft 含屏幕口径 vs 锚点是 UIParent 口径）或读不到（nil 走兜底 2/-18），
+--     算出来的位置就完全不是「按钮落在光标下」⇒ 用户看到的就是「鼠标没在物品上」。
+--   正解（照本项目框拖拽那条已验证范式）：**按屏幕算 + 量回自证 + 逐轮修正**
+--     ① 粗摆：窗左下角 ≈ 光标（夹取到屏内）
+--     ② 读**首个可见按钮中心**与光标的残差 → 把残差加到窗锚点 → 再读回；最多 3 轮，≤1.5px 收敛
+--     ③ 摆完 +1.2s **有界**复查一次：锚点有没有被客户端摆回去（有界，照黑幕那条范式）
+--   另加 `光标帧`：报 `GetMouseFocus()` 的名字/父链/矩形 + **与 LootFrame 是否同一对象**
+--     ⇒ 一次分清「搬错帧」还是「搬对了但偏移错」。
+-- ============================================================================
+local function lpFirstBtn()
+  for i = 1, 4 do
+    local b = lpBtn(i)
+    if b then
+      local shown = true
+      if type(b.IsShown) == "function" then
+        local ok, v = pcall(b.IsShown, b)
+        shown = (ok and v) and true or false
+      end
+      if shown then return b, i end
+    end
+  end
+  return lpBtn(1), 1
+end
+
+-- 帧矩形中心（读不到就 nil —— 绝不猜）
+local function lpCenter(f)
+  if not f then return nil, nil end
+  local ok, l, b, w, h = pcall(function() return f:GetLeft(), f:GetBottom(), f:GetWidth(), f:GetHeight() end)
+  if not (ok and tonumber(l) and tonumber(b)) then return nil, nil end
+  return tonumber(l) + (tonumber(w) or 0) / 2, tonumber(b) + (tonumber(h) or 0) / 2
+end
+
+-- 实测左下角（屏幕坐标）——★真机教训（1.74.34-39 取证）：客户端开尸体时把 LootFrame 摆成
+--   \`TOPLEFT/UIParent/BOTTOMLEFT/x,y\` 这种「锚点类型与相对点不一致」的形态 ⇒ 认锚点类型必然漏判
+--   （旧写法只认 BOTTOMLEFT/BOTTOMLEFT，于是把我们自己摆的位置报成「已被客户端改动」= **假警报**）。
+--   ★判「有没有被挪走」只该看**实测几何**（GetLeft/GetBottom），不看锚点类型。
+local function lpLeftBottom(f)
+  if not f then return nil, nil end
+  local ok, l, b = pcall(function() return f:GetLeft(), f:GetBottom() end)
+  if not (ok and tonumber(l) and tonumber(b)) then return nil, nil end
+  return tonumber(l), tonumber(b)
+end
+
+local function lpPlace(f, x, y)
+  pcall(f.ClearAllPoints, f)
+  return pcall(f.SetPoint, f, "BOTTOMLEFT", UIParent, "BOTTOMLEFT", x, y)
+end
+
+-- 摆完 +1.2s 的有界复查（挂事件帧的 OnUpdate，零形参；复查过就自己停）
+local function lpRecheckTick()
+  local r = LP.recheck
+  if not r or r.printed then return end
+  local now = (type(GetTime) == "function") and tonumber(GetTime()) or nil
+  if not now then return end
+  if now - (tonumber(r.at) or now) < 1.2 then return end
+  r.printed = true
+  local f = lpFrame()
+  local nx, ny = lpLeftBottom(f)
+  local px, py = lpCenter(r.b)
+  local stuck = (nx and r.x and math.abs(nx - r.x) <= 2 and math.abs((ny or 0) - (r.y or 0)) <= 2)
+  lpSay(string.format("③ +1.2s 复查：实测左下=(%s,%s)（摆完是 %s,%s）⇒ %s ｜ 按钮中心=(%s,%s)",
+    tostring(nx), tostring(ny), tostring(r.x), tostring(r.y),
+    stuck and "**位置没被客户端改动**" or "**已被客户端摆回/改动 ⇒ 正式功能要加逐帧重申**",
+    tostring(px), tostring(py)))
+end
+
+local function lpMove()
+  local f = lpFrame()
+  if not f then lpSay("LootFrame 不存在：先开一具尸体再执行") return end
+  do -- ★真机取证：客户端在开尸体那一刻自己把窗摆出来（隐藏态摆 = 白摆）⇒ 隐藏就拒绝，别浪费一轮
+    local shown = true
+    if type(f.IsShown) == "function" then local ok, v = pcall(f.IsShown, f) shown = (ok and v) and true or false end
+    if not shown then
+      lpSay("★拾取窗现在是**隐藏**的（显=0）⇒ 客户端会在你开尸体那一刻自己把它摆出来，**先摆没用**。")
+      lpSay("   请先开一具尸体（物品列表出来）、把鼠标停在你要点的物品上，再执行 /edb loot 摆。")
+      return
+    end
+  end
+  local cx, cy, sc, rx, ry = lpCursor()
+  if not cx then lpSay("拿不到光标位置（GetCursorPosition 不可用）⇒ 这条路要换兜底") return end
+  local uiw, uih = lpUISize()
+  if not LP.orig then
+    local o = { frame = lpSnap(f, 2), btn = {} }
+    for i = 1, 4 do local b = lpBtn(i) if b then o.btn[i] = lpSnap(b, 2) end end
+    LP.orig = o
+    lpSay("已抓原锚点（frame + 4 个按钮）—— 之后 /edb loot 还原 会按它原样还回去")
+  end
+  local b, bi = lpFirstBtn()
+  local w, h = 256, 256
+  local okw, w1 = pcall(f.GetWidth, f) if okw and tonumber(w1) then w = tonumber(w1) end
+  local okh, h1 = pcall(f.GetHeight, f) if okh and tonumber(h1) then h = tonumber(h1) end
+
+  -- ① 粗摆：窗左下角就放在光标上
+  --   ★★**故意不夹取**（1.74.34-38 改）：夹取只在「整窗可见」这个装饰性目标上有用，代价却是
+  --     **按钮落不到光标**（真机报障「/edb loot 摆 鼠标位置未在物品上」的头号嫌疑：UIParent 报的
+  --     尺寸与真实屏不一致时，夹取会把窗拽回屏幕里侧、越修越偏）。按钮在光标上 ⇒ 光标必然在屏内，
+  --     本身就不需要夹取；窗的其余部分出屏无所谓。
+  local X, Y = cx, cy
+  local okS = lpPlace(f, X, Y)
+  local bx0, by0 = lpCenter(b)
+  lpSay(string.format("① 粗摆：左下角=(%.0f,%.0f) SetPoint=%s ｜ 光标(UI)=%.0f,%.0f 缩放=%.3f ｜ 窗 %sx%s ｜ UIParent=%sx%s（**不夹取**：按钮优先落在光标上）",
+    X, Y, tostring(okS), cx, cy, sc, tostring(w), tostring(h), tostring(uiw), tostring(uih)))
+  lpSay(string.format("   粗摆后按钮中心=(%s,%s) ｜ 基准按钮=LootButton%s", tostring(bx0), tostring(by0), tostring(bi)))
+
+  -- ② 量回自证 + 逐轮修正（最多 3 轮）
+  local converged = false
+  for round = 1, 3 do
+    local px, py = lpCenter(b)
+    if not px then lpSay("   第 " .. round .. " 轮：读不到按钮中心（几何不可用）⇒ 停") break end
+    local dx, dy = cx - px, cy - py
+    lpSay(string.format("   第 %d 轮：按钮中心=(%.1f,%.1f) 残差=(%.1f,%.1f)", round, px, py, dx, dy))
+    if math.abs(dx) <= 1.5 and math.abs(dy) <= 1.5 then
+      converged = true
+      lpSay("   ⇒ **已收敛：按钮中心 = 光标**")
+      break
+    end
+    local nx, ny = lpLeftBottom(f)
+    if not nx then nx, ny = X, Y end
+    lpPlace(f, nx + dx, ny + dy)
+  end
+  if not converged then
+    local qx, qy = lpCenter(b)
+    lpSay(string.format("   三轮后按钮中心=(%s,%s) ⇒ %s", tostring(qx), tostring(qy),
+      (qx and math.abs(cx - qx) <= 2 and math.abs(cy - (qy or 0)) <= 2)
+        and "收敛" or "**没收敛（坐标系/缩放不一致，或客户端在跟我们抢位置）**"))
+  end
+
+  -- ④ 几何自证：把按钮矩形和光标比 —— 收敛只是「中心对上」，这一条才回答「真点能不能命中」
+  do
+    local ok2, l, b2, w2, h2 = pcall(function() return b:GetLeft(), b:GetBottom(), b:GetWidth(), b:GetHeight() end)
+    if ok2 and tonumber(l) and tonumber(b2) then
+      local hit = (cx >= l and cx <= l + (tonumber(w2) or 0)) and (cy >= b2 and cy <= b2 + (tonumber(h2) or 0))
+      lpSay(string.format("④ 几何自证：按钮矩形=(%.0f,%.0f %.0fx%.0f) 光标=(%.0f,%.0f) ⇒ %s",
+        l, b2, tonumber(w2) or 0, tonumber(h2) or 0, cx, cy,
+        hit and ("**光标落在按钮矩形内**（真点应命中 LootButton" .. tostring(bi) .. "）")
+            or "**光标不在按钮矩形内 ⇒ 先别点，看上面的残差**"))
+    end
+  end
+
+  LP.lastX, LP.lastY = lpLeftBottom(f)
+  LP.slotsBefore = {}
+  for i = 1, 4 do LP.slotsBefore[i] = lpSlotHas(i) end
+  local ef = lpEventFrame()
+  if ef and type(ef.SetScript) == "function" then
+    LP.recheck = { at = (type(GetTime) == "function") and tonumber(GetTime()) or 0, x = LP.lastX, y = LP.lastY, b = b, printed = false }
+    pcall(ef.SetScript, ef, "OnUpdate", function() lpRecheckTick() end)
+  end
+  lpSay("★现在请**用真鼠标点一下**鼠标底下的那件物品（不是 /script），然后执行：/edb loot 查")
+  lpSay("★若窗还是没落在物品上：把鼠标**停在拾取窗上**再执行 /edb loot 光标帧，看我们搬的是不是同一个帧")
+end
+
+-- 光标下的帧（判「搬错帧」还是「偏移错」）
+local function lpFocus()
+  lpSay("== 光标下的帧（请把鼠标**停在拾取窗上**再执行）==")
+  if type(GetMouseFocus) ~= "function" then lpSay("本客户端没有 GetMouseFocus ⇒ 读不到") return end
+  local ok, mf = pcall(GetMouseFocus)
+  if not ok or not mf then lpSay("GetMouseFocus 拿不到（鼠标不在任何帧上？）") return end
+  local function nm(o)
+    if not o then return "?" end
+    if type(o.GetName) == "function" then
+      local k, v = pcall(o.GetName, o)
+      if k and tostring(v) ~= "" and tostring(v) ~= "nil" then return tostring(v) end
+    end
+    return "(无名)"
+  end
+  local chain, cur = {}, mf
+  for _ = 1, 4 do
+    if not cur then break end
+    chain[table.getn(chain) + 1] = nm(cur)
+    if type(cur.GetParent) == "function" then local k, v = pcall(cur.GetParent, cur) cur = k and v or nil else cur = nil end
+  end
+  lpSay("光标下 = " .. nm(mf) .. " ｜ 父链 = " .. table.concat(chain, " < "))
+  lpSay("  " .. lpDump(mf, "该帧"))
+  lpSay("  与 LootFrame **同一个对象** = " .. tostring(mf == lpFrame()) .. "（false ⇒ 我们搬错帧了）")
+  for i = 1, 4 do
+    local bb = lpBtn(i)
+    if bb and mf == bb then lpSay("  光标正指着 LootButton" .. tostring(i) .. "（对象对得上 ⇒ 问题在偏移/夹取）") end
+  end
+end
+local function lpCheck()
+  lpSay("== 读回（build=" .. DBX_BUILD .. "）==")
+  local f = lpFrame()
+  if f then
+    local ok, l, b = pcall(function() return f:GetLeft(), f:GetBottom() end)
+    if not LP.lastX then
+      lpSay(string.format("LootFrame 现在=(%.0f,%.0f) ｜ **本次会话还没执行过 /edb loot 摆** ⇒ 先开尸体、把鼠标停在物品上、执行 /edb loot 摆（摆之前的点击只是普通拾取，测不到我们的东西）",
+        (ok and l) or -1, (ok and b) or -1))
+    else
+      local stuck = (ok and math.abs(l - LP.lastX) <= 1.5 and math.abs(b - LP.lastY) <= 1.5)
+      lpSay(string.format("LootFrame 现在=(%.0f,%.0f) ｜ 我们摆的目标=(%.0f,%.0f) ⇒ %s",
+        (ok and l) or -1, (ok and b) or -1, LP.lastX, LP.lastY,
+        stuck and "**位置没被重摆**（SetPoint 站住了）" or "**位置已被客户端改动** ⇒ 正式功能要加「有界逐帧重申」"))
+    end
+    lpSay(lpDump(f, "LootFrame"))
+  else
+    lpSay("LootFrame 不存在")
+  end
+  for i = 1, 4 do
+    local now = lpSlotHas(i)
+    local before = LP.slotsBefore and LP.slotsBefore[i]
+    local verdict = "（本来就没东西 / 读不到）"
+    if before == true and now == false then verdict = "**已拾取 ⇒ 人工点击生效，生死线过了**"
+    elseif before == true and now == true then verdict = "**还是原样 ⇒ 点击没生效，方案 A 作废**"
+    elseif before == nil or now == nil then verdict = "（读数不可用，判不出）" end
+    lpSay(string.format("slot%d：摆前=%s 现在=%s ⇒ %s ｜ %s", i, tostring(before), tostring(now), verdict, lpSlotTxt(i)))
+    lpSay("  " .. lpDump(lpBtn(i), "LootButton" .. tostring(i)))
+  end
+  lpSay(string.format("事件：LOOT_OPENED=%d LOOT_SLOT_CLEARED=%d LOOT_CLOSED=%d ｜ 最后一次清空槽=%s",
+    LP.ev.open, LP.ev.clear, LP.ev.close, tostring(LP.ev.lastClear)))
+  if table.getn(LP.ev.log) > 0 then lpSay("事件流水（最近 " .. table.getn(LP.ev.log) .. " 条）：" .. table.concat(LP.ev.log, " ｜ ")) end
+  if LP.hooked then
+    lpSay(string.format("鼠标按下观测：已挂 ｜ 收到按下 %d 次 ｜ 最后一次 slot=%s", LP.ev.down, tostring(LP.ev.lastDown)))
+    if LP.ev.down == 0 then lpSay("⇒ 按下计数为 0：要么没点到按钮上，要么这个按钮不吃 Lua 的 OnMouseDown ⇒「点击即换下一个」要改用别的挂钩点") end
+  end
+end
+
+local function lpHook(on)
+  local n, skipped = 0, 0
+  for i = 1, 4 do
+    local b = lpBtn(i)
+    if b then
+      if on then
+        -- ★只在**没被占用**时挂：绝不覆盖 FrameXML/原生脚本（覆盖 = 可能连拾取一起弄坏）
+        local old = nil
+        if type(b.GetScript) == "function" then local ok, v = pcall(b.GetScript, b, "OnMouseDown") if ok then old = v end end
+        local has = false
+        if type(b.HasScript) == "function" then local ok, v = pcall(b.HasScript, b, "OnMouseDown") has = (ok and v) and true or false end
+        if old ~= nil or has then
+          skipped = skipped + 1
+        else
+          local ok = pcall(b.SetScript, b, "OnMouseDown", function()
+            LP.ev.down = LP.ev.down + 1
+            local btn = (type(this) == "table" or type(this) == "userdata") and this or nil
+            local slot = nil
+            if btn and type(btn.GetID) == "function" then local ok2, v = pcall(btn.GetID, btn) slot = ok2 and v or nil end
+            LP.ev.lastDown = slot
+            P(string.format("★按下命中 LootButton%d（slot=%s）⇒ 「点一次换下一个」这个挂钩点可用", i, tostring(slot)))
+          end)
+          if ok then n = n + 1 end
+        end
+      else
+        pcall(b.SetScript, b, "OnMouseDown", nil)
+      end
+    end
+  end
+  if on then
+    LP.hooked = (n > 0)
+    lpSay(string.format("OnMouseDown 观测脚本：挂上 %d 个（跳过已被占用的 %d 个）；OnClick **一个字都没动**", n, skipped))
+    lpSay("★请再点一下鼠标下的物品：若聊天里出现「★按下命中 LootButtonN」，说明这个挂钩点可用（正式功能就靠它「点一次换下一个」）")
+  else
+    LP.hooked = false
+    lpSay("OnMouseDown 观测脚本已摘掉（4 个按钮都还原成原样）")
+  end
+end
+
+local function lpRestore()
+  local f = lpFrame()
+  if not LP.orig then lpSay("没抓过原锚点（还没执行过 /edb loot 摆）⇒ 什么都不做") return end
+  local okF = lpApply(LP.orig.frame, f)
+  local n = 0
+  for i = 1, 4 do
+    local b = lpBtn(i)
+    if b and LP.orig.btn[i] then if lpApply(LP.orig.btn[i], b) then n = n + 1 end end
+  end
+  local okR, l, b2 = pcall(function() return f and f:GetLeft(), f and f:GetBottom() end)
+  local o1 = LP.orig.frame and LP.orig.frame.pts and LP.orig.frame.pts[1] or nil
+  local okP, pp, px, py = pcall(function()
+    if not f then return nil end
+    local a, _, _, c, d = f:GetPoint(1)
+    return a, c, d
+  end)
+  local same = (okP and o1 and pp == o1.p and tonumber(px) == tonumber(o1.x) and tonumber(py) == tonumber(o1.y)) and true or false
+  lpSay(string.format("已还原：frame=%s 按钮 %d/4 ｜ 原锚点=(%s %s,%s) → 现在=(%s %s,%s) ⇒ %s ｜ 矩形左下=(%s,%s)",
+    tostring(okF), n,
+    tostring(o1 and o1.p or "?"), tostring(o1 and o1.x or "?"), tostring(o1 and o1.y or "?"),
+    tostring(okP and pp or "?"), tostring(okP and px or "?"), tostring(okP and py or "?"),
+    same and "**与原来一致**" or "**与原来不一致（如实报）**",
+    tostring(okR and l or "?"), tostring(okR and b2 or "?")))
+end
+
+local function lpBake()
+  EH_DEBUGBOX_CFG = EH_DEBUGBOX_CFG or {}
+  local lines = {}
+  lines[table.getn(lines) + 1] = "== 最近输出（环 " .. table.getn(LP.ring) .. " 条 · 摆/查/光标帧 的原话）=="
+  for i = 1, table.getn(LP.ring) do lines[table.getn(lines) + 1] = LP.ring[i] end
+  lines[table.getn(lines) + 1] = "== 现场读数（存档这一刻）=="
+  LP.sink = function(s) lines[table.getn(lines) + 1] = tostring(s) end
+  local ok = pcall(function() lpStatic() lpCheck() end)
+  LP.sink = nil
+  if not ok then lines[table.getn(lines) + 1] = "（收集时出错，读数可能不全）" end
+  EH_DEBUGBOX_CFG.loot2 = lines
+  EH_DEBUGBOX_CFG.loot2At = (type(GetTime) == "function") and tostring(GetTime()) or "?"
+  EH_DEBUGBOX_CFG.loot2Build = DBX_BUILD
+  P("拾取探针读数已写入 EH_DEBUGBOX_CFG.loot2（" .. table.getn(lines) .. " 行 · build=" .. DBX_BUILD .. "）→ /reload 落盘后 AI 直接读文件")
+end
+
+local function lootProbe(msg)
+  local sub = string.match(msg, "^%S+%s*(.*)$") or ""
+  sub = string.lower(tostring(sub))
+  if sub == "" or sub == "静" or sub == "静态" then
+    lpStatic()
+  elseif sub == "摆" or sub == "光标" or sub == "move" then
+    lpMove()
+  elseif sub == "光标帧" or sub == "当前帧" or sub == "focus" then
+    lpFocus()
+  elseif sub == "查" or sub == "读" or sub == "check" then
+    lpCheck()
+  elseif sub == "挂" or sub == "hook" then
+    lpHook(true)
+  elseif sub == "摘" or sub == "unhook" then
+    lpHook(false)
+  elseif sub == "还原" or sub == "restore" then
+    lpRestore()
+  elseif sub == "存档" or sub == "bake" then
+    lpBake()
+  else
+    P("拾取贴手探针（build=" .. DBX_BUILD .. "）用法：")
+    P("  /edb loot          = 静态读数（帧/按钮/脚本槽/roll 框/光标折算，先看这个）")
+    P("  /edb loot 摆       = 把拾取窗搬到当前光标（先抓原锚点）→ 开一具尸体后执行")
+    P("  /edb loot 查       = 读回：位置有没有被重摆 + 槽位有没有被清空（**人工点击是否生效 = 生死线**）")
+    P("  /edb loot 光标帧   = 报「鼠标下的那个帧」的名字/父链，并与 LootFrame 比对（判「搬错帧」还是「偏移错」）")
+    P("  /edb loot 挂 / 摘  = 只挂/摘 OnMouseDown 观测（验证「点一次换下一个」的挂钩点，不动 OnClick）")
+    P("  /edb loot 还原     = 把窗与按钮按原锚点还回去（读回自证）")
+    P("  /edb loot 存档     = 把本次读数写进存档（/reload 后 AI 直读）")
+  end
+end
 if type(SlashCmdList) == "table" then
   SLASH_EHDEBUGBOX1 = "/edb"
   SLASH_EHDEBUGBOX2 = "/ems" -- 旧命令保留成别名
@@ -5216,6 +5801,8 @@ if type(SlashCmdList) == "table" then
         DBX_BUILD, nTex, nEmpty,
         (r == true and "已载入完成（可直接缩放）" or (r == false and "未载完（缩放会排队等待）" or "判不出/不门控")),
         table.getn(uiScaleWait.items)))
+    elseif msg == "loot" or msg == "拾取" or string.find(msg, "^loot%s") == 1 or string.find(msg, "^拾取%s") == 1 then
+      lootProbe(msg)
     elseif msg == "scan" then
       uiBuild()
       uiScanAll()

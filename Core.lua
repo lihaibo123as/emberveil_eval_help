@@ -820,6 +820,9 @@ local LOAD_RESIDUE_KEYS = {
   --   而 logLine 也受门控 ⇒ 日志环里查不到任何证据。转播改走不门控的 EVAL_SAY_FORCE 之后，
   --   这里留一份**不门控**的转播/异常读数，AI 侧读存档即可判「有没有转、走的哪个出口、回调有没有抛错」。
   "rareProbe",
+  -- ★1.75.26 拾取贴手（tools/LootCursor.lua）的取证读数（环上限 40 行，/eh go 拾取 存档）：
+  --   搬窗/换件/压实自证全在真机上才能读，而 `say` 只进聊天框、不落日志环 ⇒ 必须自带专属落盘。
+  "lcProbe",
 }
 
 function EVAL_LOAD_PROBE_KEYS() return LOAD_PROBE_KEYS end

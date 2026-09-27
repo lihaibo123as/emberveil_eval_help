@@ -4481,6 +4481,10 @@ local function tbModel()
     --   ★`mod` 的名字必须与模块登记的名字一致（"layerFix"）—— 对不上时**不静默**：渲染段会如实说一句。
     --   ★`noChk = true`：真值就是模块多选里勾了哪几条，多挂一个总开关只会多一份真值。
     { t = "mod", mod = "layerFix", key = "layerFix", label = L("TB_DFFIX"), tip = L("TB_DFFIX_TIP"), noChk = true },
+    -- ★1.75.26 拾取贴手（tools/LootCursor.lua）：搬拾取窗贴到光标下 + 点一次换下一件 + 品质角标。
+    --   同「图层隐藏」一样只是**一行数据**：控件/tooltip/多选下拉/安装全在模块里（`EVAL_TB_MOD_ROWS["lootCursor"]`）。
+    --   ★不写 `noChk` ⇒ 保留主开关勾选框（真值 `tbCfg().lootCursor`，读写走模块的 EVAL_LC_ENABLED/SET）。
+    { t = "mod", mod = "lootCursor", key = "lootCursor", label = L("TB_LOOTCURSOR"), tip = L("TB_LOOTCURSOR_TIP") },
     { t = "h", label = L("TB_H_MERCHANT") },
     { t = "c", key = "repair", label = L("TB_REPAIR"), tip = L("TB_REPAIR_TIP") },
     { t = "c", key = "sell", label = L("TB_SELL"), tip = L("TB_SELL_TIP") },

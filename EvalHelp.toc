@@ -45,3 +45,4 @@ tools\DismountHelper.lua
 tools\RareWatch.lua
 tools\DragFrames.lua
 tools\LayerFix.lua
+tools\LootCursor.lua
