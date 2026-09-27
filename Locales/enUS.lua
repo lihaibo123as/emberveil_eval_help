@@ -546,9 +546,13 @@ TB_CHANKEY_CLEAR = "Clear custom keywords",
   TB_UP = "Up", TB_DN = "Down", -- 1.73.9 toolbox scroll buttons (bottom row)
   TB_COLORCLASS = "Class-color names", -- 1.73.10
 TB_CHATCOLOR = "Color chat names by class", -- 1.73.12
-TB_CHATCOLOR_TIP = "Colors character names in the chat frame by class (shares the same name cache as the Guild / Who / Friends windows; unknown names are left untouched - no guessing, no server queries). On by default; applies to new messages.",
+TB_CHATCOLOR_TIP = "Colors character names in the chat frame by class (shares the same name cache as the Guild / Who / Friends windows; unknown names are left untouched - no guessing, no server queries). The [Settings] button on the right offers optional extras: Level / Zone - only the selected ones are shown (format [zone][level][name]; data comes from the same cache, unknown parts are simply omitted; zone is green when it matches your own map). On by default; applies to new messages.",
 TB_CHATCOLOR_ON_MSG = "Chat name coloring: ON (applies to new messages)",
 TB_CHATCOLOR_OFF_MSG = "Chat name coloring: OFF (chat text is no longer modified)",
+-- 1.75.27 extras merged into this row's [Settings] multi-select (only selected parts are shown)
+TB_CHATEXTRA_BTN = "Settings",
+TB_CHATEXTRA_LV = "Level",
+TB_CHATEXTRA_ZONE = "Zone",
 -- ★1.73.24 user request: right-click a chat name -> guild invite / copy name / say name via /s
 -- ★1.73.28 right-click name menu (final): the three original actions + our two
 TB_NAMEMENU = "Right-click name menu in chat",

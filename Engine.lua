@@ -1004,7 +1004,12 @@ end
 
 -- 物品使用（1.32.0）：rule.skill="物品:名称"——背包扫描定位 + UseContainerItem（消耗品直接用/装备自动穿上，官方文档明确不受保护）
 local function itemOf(skill)
-  return string.match(colonNorm(skill) or "", "^物品[:：](.+)$")
+  -- ★1.75.27 与 cancelBuffOf 同一修法：认前缀**不整串 colonNorm**（物品名常带全角「：」——
+  --   图样：xx / 配方：xx / 食谱：xx / 设计图：xx），名字保留**原始字节**（显示与 GetItemInfo 都吃真名）；
+  --   比对侧双侧归一（wFindBagItem）。
+  local nm = string.match(skill or "", "^物品:(.+)$")
+  if not nm then nm = string.match(skill or "", "^物品：(.+)$") end
+  return nm
 end
 -- 背包查找：→ bag, slot, tex, count（未找到返回 nil）
 local function wFindBagItem(name)
@@ -1016,7 +1021,8 @@ local function wFindBagItem(name)
         local okl, link = pcall(GetContainerItemLink, bag, slot)
         if okl and link then
           local iname = string.match(link, "%[(.-)%]")
-          if iname == name then
+          -- ★1.75.27 双侧归一：链接里的真名是全角「：」，配置名可能半角（手输/文本导入）⇒ 单侧比对必漏
+          if iname and colonNorm(iname) == colonNorm(name) then
             local oki, tex, count = pcall(GetContainerItemInfo, bag, slot)
             return bag, slot, (oki and tex) or nil, (oki and count) or 1
           end
@@ -1030,7 +1036,10 @@ end
 -- 姿态切换（1.43.0）：rule.skill="姿态:战斗姿态"——走姿态栏 CastShapeshiftForm（官方文档明确 Not protected，插件可直调），
 -- 不占动作条。战士姿态不可取消（重复按 no-op）；德鲁伊等可切换形态重复按会取消 aura → 执行前 active 守门。
 local function stanceOf(skill)
-  return string.match(colonNorm(skill) or "", "^姿态[:：](.+)$")
+  -- ★1.75.27 同一纪律：认前缀用两条字面模式，不整串归一（姿态名虽不带冒号，写法保持一致）
+  local nm = string.match(skill or "", "^姿态:(.+)$")
+  if not nm then nm = string.match(skill or "", "^姿态：(.+)$") end
+  return nm
 end
 -- 姿态名或序号（"姿态:2" 1.47.0 起兼容）→ 姿态栏 1 基索引, 图标, 当前激活(1/nil), 可用(1/nil)；未找到/无姿态栏返回 nil
 local function wFindStance(name)
@@ -1045,7 +1054,8 @@ local function wFindStance(name)
   end
   for i = 1, n do
     local oki, icon, nm, active, castable = pcall(GetShapeshiftFormInfo, i)
-    if oki and nm and nm == name then return i, icon, active, castable end
+    -- ★1.75.27 双侧归一（与 wFindBagItem 同一判据）
+    if oki and nm and colonNorm(nm) == colonNorm(name) then return i, icon, active, castable end
   end
   return nil
 end
@@ -1107,14 +1117,23 @@ local function cancelBuffOf(skill)
   -- ★1.74.9 多选（用户：「下拉选择 buff 需要支持多选」）：逗号分隔 "取消自身buff:名1,名2"
   --   → 返回的 nm 是**名单表**（集合 + 保持顺序的列表），执行侧逐个匹配；
   --   单个名字照旧（集合里就一个）。逗号在光环名里不会出现，用它当分隔符最安全。
-  local nm = string.match(colonNorm(skill) or "", "^取消自身buff:(.*)$")
+  -- ★1.75.27 认前缀**不再整串 colonNorm**：它会把名字本体里的全角「：」也压成半角
+  --   （实案：编辑器存的是 真言术：韧（全角），日志却显示 真言术:韧（半角）——用户正是这样发现对不上的）。
+  --   两种前缀各用一条**字面**模式（多字节字面量在模式里是安全的；危险的是 [...] 字节集）；
+  --   名字保留**原始字节**（显示即所见），匹配侧另有 colonNorm 双侧归一（见下方名单键）。
+  local nm = string.match(skill or "", "^取消自身buff:(.*)$")
+  if not nm then nm = string.match(skill or "", "^取消自身buff：(.*)$") end
   if nm then
     -- ★集合表（键=名字 → true），有序名单挂在 .list 上（跳过时如实点名用）；
     --   单个名字时集合里就一个 —— 与旧单名行为逐字一致。
     local set, list = {}, {}
     for part in string.gmatch(nm, "([^,]+)") do
       local one = string.match(part, "^%s*(.-)%s*$")
-      if one ~= "" and not set[one] then set[one] = true table.insert(list, one) end
+      -- ★1.75.27 名单键**归一后再存**（真机实案：真言术：韧 的真名带**全角**「：」，而技能文本经 colonNorm
+      --   后名字里的冒号被压成半角 ⇒ 只归一一侧 = 查表永远不命中 = 「身上有、却说没有」）；
+      --   显示名单 .list 保留原文（日志里点名用）。
+      local key = colonNorm(one)
+      if one ~= "" and not set[key] then set[key] = true table.insert(list, one) end
     end
     if table.getn(list) == 0 then return nil end
     set.list = list
@@ -1370,13 +1389,15 @@ local function auraNameHit(name, key, provider)
     local okRun, list, okScan = pcall(provider) -- provider 第二返回 = 本次扫描是否可信
     if okRun and type(list) == "table" then
       for _, d in ipairs(list) do
-        if type(d) == "table" and type(d.name) == "string" and d.name ~= "" then set[d.name] = true end
+        -- ★1.75.27 扫描集按**归一后的名字**建键：客户端真名可能带全角「：」（如 真言术：韧），
+        --   而文本导入的条件名在解析入口被 colonNorm 压成半角 ⇒ 不统一两侧 = 「有buff」条件假报没有。
+        if type(d) == "table" and type(d.name) == "string" and d.name ~= "" then set[colonNorm(d.name)] = true end
       end
     end
     c = { t = now, set = set, ok = (okRun and okScan) and true or false }
     auraNameCache[key] = c
   end
-  if c.set[name] then return true end
+  if c.set[colonNorm(name)] then return true end -- ★1.75.27 查询键同样归一（与扫描集同一判据）
   if c.ok then return false end
   return nil
 end
@@ -1485,7 +1506,13 @@ function EVAL_PLAYER_BUFF_NAME(bi)
   pcall(function()
     WTT:SetOwner(UIParent, "ANCHOR_NONE")
     WTT:ClearLines()
-    if WTT.SetPlayerBuff(WTT, bi) then nm = wtText1() end
+    -- ★★★1.75.27 真机定案（战斗怒吼实案：有 buff 却报「身上没有」）：
+    --   SetPlayerBuff 的**返回值恒 nil**（1.33.2 探针早就实测过），tooltip 照样填好 ——
+    --   旧写法 `if WTT.SetPlayerBuff(...) then nm = wtText1() end` 判的是**返回值** ⇒ 永远读不到名字
+    --   ⇒ 「取消自身buff:名字」**按名匹配从来没有成功过**（唯一一次成功是「不带名字 = 取消全部」那条路）。
+    --   与 EVAL_PLAYER_BUFF_LIST 同一姿势：调完直接读第一行，名字为空才认 nil。
+    WTT.SetPlayerBuff(WTT, bi)
+    nm = wtText1()
     WTT:Hide()
   end)
   if type(nm) == "string" and nm ~= "" then return nm end
@@ -1849,7 +1876,8 @@ local function wuse(name, reason, rank)
       local named = (type(cbName) == "table")
       if named then
         local bn = EVAL_PLAYER_BUFF_NAME(bi)
-        if bn and cbName[bn] then table.insert(targets, bi) end
+        -- ★1.75.27 匹配键**也归一**（与名单键同一判据：两侧都过 colonNorm 才比得公平）
+        if bn and cbName[colonNorm(bn)] then table.insert(targets, bi) end
       else
         table.insert(targets, bi)
       end

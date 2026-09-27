@@ -45,6 +45,16 @@ end
 --   局部队变量必须声明在**使用之前**（本轮两次实测：直接引用后段的 local → 拿到全局 nil →
 --   attempt to call a nil value）。单一真值：写入点只有 tbNameClassPut。
 local tbNameClass = {}
+-- ★1.75.27 名字 → 等级 / 区域缓存（聊天名字着色 [设置] 的附加段用）：与职业缓存**同键同纪律**
+--   （会话级、不落盘、写入点仍然只有 tbNameClassPut —— 等级/区域是它的第三、四个参数；别处一律不写不猜；
+--   ★条目 **5 分钟失效**：下次出现时惰性重抓，见 tbNameFresh —— 等级/区域正是会随时间变化的数据）。
+local tbNameLevel = {}
+local tbNameZone = {}
+-- ★1.75.27 用户定：缓存条目 **5 分钟失效**，下次出现时**才**重新抓取（★惰性：不主动全量轮询）。
+--   失效判定 = **唯一助手 tbNameFresh**（三个读取口 + 主动查询入队口共用，别处不许再写一份判据）；
+--   重抓路径是现成的：名字未命中 → 先 HEAL 本地只读重采、再排主动 /who（四道闸门照旧）。
+local tbNameTime = {}
+local TB_NC_TTL = 300 -- 缓存失效时长（秒）= 5 分钟
 local function tbNameClassKey(name)
   if type(name) ~= "string" then return nil end
   local s = string.gsub(name, "^%s*(.-)%s*$", "%1")
@@ -55,21 +65,56 @@ local function tbNameClassKey(name)
   if tbNameCharLen(s) < 2 then return nil end
   return s
 end
-local function tbNameClassPut(name, klass)
+local function tbNameClassPut(name, klass, level, zone)
   local k = tbNameClassKey(name)
   if not k then return false end
+  -- ★1.75.27 等级/区域与职业**分开记**：职业认不出不挡它们（客观数据，不存在「猜」的问题）；
+  --   传 nil/0/空串 = 这处来源没有这个数据 → 不覆盖旧值（名册里旧了的会在下次采集时自然刷新）。
+  local lv = tonumber(level)
+  if lv and lv > 0 then tbNameLevel[k] = lv end
+  if type(zone) == "string" and zone ~= "" then tbNameZone[k] = zone end
+  -- ★1.75.27 盖「最后见到」时间戳（5 分钟失效的基准；来源里每次见到都刷新）
+  tbNameTime[k] = (type(GetTime) == "function") and GetTime() or 0
   local tok = EVAL_TB_PAINT_CLASS_TOKEN_OF(klass)
   if not tok then return false end
   tbNameClass[k] = tok
   return true
 end
+-- ★1.75.27 失效判定（唯一）：在 5 分钟窗内 = true；过期 = **惰性驱逐**（四类数据一起清）并返回 false。
+--   驱逐后这个名字按「不在缓存」处理 → 走现成的 HEAL 本地重采 + 主动 /who 重抓路径。
+local function tbNameFresh(k)
+  local t = tbNameTime[k]
+  if type(t) ~= "number" then return true end -- 没时间戳（不该有）：不算过期，按原样用
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  if now - t <= TB_NC_TTL then return true end
+  tbNameClass[k], tbNameLevel[k], tbNameZone[k], tbNameTime[k] = nil, nil, nil, nil
+  TB.ncExpired = (TB.ncExpired or 0) + 1
+  return false
+end
 local function tbNameClassGet(name)
   local k = tbNameClassKey(name)
   if not k then return nil end
+  if not tbNameFresh(k) then return nil end
   return tbNameClass[k]
 end
-function EVAL_TB_NAMECLASS_PUT(n, k) return tbNameClassPut(n, k) end
+function EVAL_TB_NAMECLASS_PUT(n, k, lv, z) return tbNameClassPut(n, k, lv, z) end
 function EVAL_TB_NAMECLASS_GET(n) return tbNameClassGet(n) end
+-- ★1.75.27 等级读取口（聊天拼行用；查不到 = nil，**绝不猜**）
+local function tbNameLevelGet(name)
+  local k = tbNameClassKey(name)
+  if not k then return nil end
+  if not tbNameFresh(k) then return nil end
+  return tbNameLevel[k]
+end
+function EVAL_TB_NAMELEVEL_GET(n) return tbNameLevelGet(n) end
+-- ★1.75.27 区域读取口（聊天拼行用；查不到 = nil，绝不猜）
+local function tbNameZoneGet(name)
+  local k = tbNameClassKey(name)
+  if not k then return nil end
+  if not tbNameFresh(k) then return nil end
+  return tbNameZone[k]
+end
+function EVAL_TB_NAMEZONE_GET(n) return tbNameZoneGet(n) end
 function EVAL_TB_NAMECLASS_SIZE()
   local n = 0
   for _ in pairs(tbNameClass) do n = n + 1 end
@@ -349,6 +394,21 @@ local function tbCfg()
   if c.tb.colorClass == nil then c.tb.colorClass = true end
   -- ★1.73.12 聊天窗名字着色：同上默认开（引擎侧与窗口着色共用同一份名字缓存）
   if c.tb.chatColor == nil then c.tb.chatColor = true end
+  -- ★1.75.27 名字着色的附加段（等级/区域）：真值 = 集合 chatNameExtra（★选哪些显示哪些，未选不显示）。
+  --   旧布尔 chatLevel → chatNameExtra.lv（只搬一次）。
+  --   ★默认 = **全不勾**（用户定稿「以上默认关闭」）：集合不存在就建空集。
+  --   ★开发期那版曾自动落盘 { lv = true }（当时默认开，不是用户勾的）⇒ 一次性清回空集
+  --     （chatNameExtraV2 标记；之后用户自己在 [设置] 里勾的选择**不动** —— 标记已立，不再进这个分支）。
+  if c.tb.chatLevel ~= nil then
+    if type(c.tb.chatNameExtra) ~= "table" then c.tb.chatNameExtra = {} end
+    c.tb.chatNameExtra.lv = c.tb.chatLevel and true or false
+    c.tb.chatLevel = nil
+  end
+  if not c.tb.chatNameExtraV2 then
+    c.tb.chatNameExtraV2 = true
+    c.tb.chatNameExtra = {}
+  end
+  if c.tb.chatNameExtra == nil then c.tb.chatNameExtra = {} end
   -- ★1.73.12 未缓存角色的主动查询：用户要求**默认开启**（工具箱里可关）
   if c.tb.whoQuery == nil then c.tb.whoQuery = true end
 -- ★1.73.24 用户要求：右键聊天名字 → 公会邀请 / 复制名字 / /s 说出名字（默认开）
@@ -1180,6 +1240,29 @@ function EVAL_TB_CHATCOLOR_TYPECOLOR_INFO()
   local cti = _G.ChatTypeInfo
   return "ChatTypeInfo=" .. ((type(cti) == "table") and "有" or "**没有**") .. "；" .. table.concat(parts, " ")
 end
+-- ★1.75.27 等级 → 难度色码（"|c" + 8 位 hex）：难度色只走 Core.lua 的 GetDifficultyColor 垫片
+--   （与公会/查询/好友窗口的等级列同一来源）；客户端没这函数 / 返回不是表 → nil，调用处退回职业色。
+function EVAL_TB_LEVEL_HEX(lv)
+  local n = tonumber(lv)
+  if not n or n <= 0 then return nil end
+  if type(GetDifficultyColor) ~= "function" then return nil end
+  local ok, c = pcall(GetDifficultyColor, n)
+  if not ok or type(c) ~= "table" then return nil end
+  local function h(x)
+    local v = math.floor((tonumber(x) or 1) * 255 + 0.5)
+    if v < 0 then v = 0 elseif v > 255 then v = 255 end
+    return string.format("%02x", v)
+  end
+  return "|cff" .. h(c.r) .. h(c.g) .. h(c.b)
+end
+-- ★1.75.27 区域 → 色码：与自己同地图 = 绿（与公会/好友窗口「同地图绿字」同一语义），否则灰。
+function EVAL_TB_ZONE_HEX(z)
+  if type(z) == "string" and z ~= "" and type(GetRealZoneText) == "function" then
+    local ok, mz = pcall(GetRealZoneText)
+    if ok and type(mz) == "string" and mz ~= "" and mz == z then return "|cff40ff40" end
+  end
+  return "|cffb0b0b0"
+end
 -- 纯函数：拼一行（**能拼 → 字符串**；任一条判据不满足 → **nil = 不许吞**）。
 -- ★类型色只在**前缀**上（与客户端一样：公会前缀是绿的、正文是白的）：前缀后立刻 `|r` 复位。
 function EVAL_TB_CHATCOMPOSE(ev, body, sender, hex)
@@ -1195,7 +1278,30 @@ function EVAL_TB_CHATCOMPOSE(ev, body, sender, hex)
   if string.find(post, "%s", 1, true) then return nil end -- ③ 不止一个 %s → 不猜
   local name = "[" .. sender .. "]"
   if type(hex) == "string" and string.len(hex) == 8 then
-    name = "|c" .. hex .. "|Hplayer:" .. sender .. "|h[" .. sender .. "]|h|r"
+    -- ★1.75.27 名字前附加段（[设置] 多选「等级 / 区域」：★选哪些显示哪些，未选不显示；调用时读 → 改完立即生效）：
+    --   形态 = [区域][等级][名字]（★用户定稿：各自一对方括号，顺序 区域 → 等级 → 名字）；
+    --   附加段各自上色（区域 = 同地图绿/异地图灰 EVAL_TB_ZONE_HEX、等级 = 难度色 EVAL_TB_LEVEL_HEX），
+    --   缓存里**查得到才拼**（查不到不猜、那一段不显示）；
+    --   [名字] 照旧是职业色玩家链接（点它照样能密语；★附加段故意放在链接**外面** —— 不在 |h…|h 里嵌套色码）。
+    local pfx = ""
+    if type(EVAL_TB_CHATEXTRA_ON) == "function" then
+      if EVAL_TB_CHATEXTRA_ON("zone") and type(EVAL_TB_NAMEZONE_GET) == "function" then
+        local z = EVAL_TB_NAMEZONE_GET(sender)
+        if type(z) == "string" and z ~= "" then
+          local zhex = (type(EVAL_TB_ZONE_HEX) == "function") and EVAL_TB_ZONE_HEX(z) or "|cffb0b0b0"
+          pfx = pfx .. zhex .. "[" .. z .. "]|r"
+        end
+      end
+      if EVAL_TB_CHATEXTRA_ON("lv") and type(EVAL_TB_NAMELEVEL_GET) == "function" then
+        local lv = EVAL_TB_NAMELEVEL_GET(sender)
+        if type(lv) == "number" and lv > 0 then
+          local lhex = (type(EVAL_TB_LEVEL_HEX) == "function") and EVAL_TB_LEVEL_HEX(lv) or nil
+          if type(lhex) ~= "string" then lhex = "|c" .. hex end
+          pfx = pfx .. lhex .. "[" .. tostring(lv) .. "]|r"
+        end
+      end
+    end
+    name = pfx .. "|c" .. hex .. "|Hplayer:" .. sender .. "|h[" .. sender .. "]|h|r"
   end
   local tc = EVAL_TB_CHATTYPECOLOR(ev)
   if tc then
@@ -2645,7 +2751,8 @@ function EVAL_TB_PAINT_ROW(list, i, off, myZone)
   if not d then return 0 end
   -- ★1.73.12 「白拿」的一笔：上色时手上已经有 名字 + 职业 → 顺手写进名字缓存（零额外 API 调用）。
   --   聊天窗名字着色的一半数据就从这里来（另一半是队伍/团队/自己/目标，见 EVAL_TB_NAMECLASS_HARVEST）。
-  tbNameClassPut(d.name, d.klass)
+  --   ★1.75.27 等级与区域也一起带上（d.level / d.zone 名册里现成；聊天名字着色的 [设置] 附加段读它们）。
+  tbNameClassPut(d.name, d.klass, d.level, d.zone)
   local mul = d.online and 1 or 0.5 -- ★离线整行减半（XGuild 的做法保留）
   local pfx = list.btn .. tostring(i)
   local cr, cg, cb = tbHexToRGB(EVAL_TB_PAINT_CLASS_COLOR_OF(d.klass))
@@ -2841,7 +2948,9 @@ end
 --      我们这一版干脆不做 —— 查不到的名字就**不上色**（不猜、不打扰服务器）= 频率防护总则。
 --   ③ 判据是**纯函数** EVAL_TB_CHAT_COLOR_LINE（只做字符串处理 + 查缓存，能脱游戏直接断言）；
 --   ④ 只在**聊天打印入口**加一层（与频道屏蔽**共用同一个包装体**，见 EVAL_TB_CHAN_INSTALL_ONE）；
---   ⑤ 缓存**不落盘**（会话级）：避免 SavedVariables 膨胀与过期清理策略（ChatMOD 要 7 周清理正是因为落了盘）。
+--   ⑤ 缓存**不落盘**（会话级）：避免 SavedVariables 膨胀与过期清理策略（ChatMOD 要 7 周清理正是因为落了盘）；
+--      ★1.75.27 会话内再加 **5 分钟惰性失效**（tbNameFresh）：只清「5 分钟没在任何来源里再见到」的名字，
+--      下次出现时走 HEAL 本地重采 + 主动 /who 重抓 —— 不主动全量轮询（用户定）。
 
 -- 开关：nil 视为**开**（与「角色名职业着色」同一套默认：装上就生效；取消勾选 = 不再染）
 function EVAL_TB_CHATCOLOR_ON()
@@ -2849,17 +2958,60 @@ function EVAL_TB_CHATCOLOR_ON()
   if not tb then return true end
   return tb.chatColor ~= false
 end
+-- ★1.75.27 名字着色 [设置] 的附加段选项（顺序 = 下拉顺序）：等级 / 区域
+local TB_CHATEXTRA_OPTS = { "lv", "zone" }
+-- 某个附加段是否启用（读集合真值；默认 = **全不勾**：没勾的段一个都不显示）
+function EVAL_TB_CHATEXTRA_ON(id)
+  local tb = tbCfg()
+  if not tb then return false end
+  local s = tb.chatNameExtra
+  if type(s) ~= "table" then return false end
+  return s[id] == true
+end
+-- [设置] 多选下拉：选哪些显示哪些，未选不显示（改完立即生效：拼行时现读）
+function EVAL_TB_CHATEXTRA_OPEN(anchorBtn)
+  if anchorBtn == nil or type(EVAL_DD_OPEN) ~= "function" then return false end
+  local items, sel = {}, {}
+  for i = 1, table.getn(TB_CHATEXTRA_OPTS) do
+    local id = TB_CHATEXTRA_OPTS[i]
+    table.insert(items, L("TB_CHATEXTRA_" .. string.upper(id)))
+    if EVAL_TB_CHATEXTRA_ON(id) then sel[i] = true end
+  end
+  EVAL_DD_OPEN(anchorBtn, items, function(pi, on)
+    local id = TB_CHATEXTRA_OPTS[pi]
+    if not id then return end
+    local tb = tbCfg()
+    if not tb then return end
+    if type(tb.chatNameExtra) ~= "table" then tb.chatNameExtra = {} end
+    -- ★写**显式 true/false**（不是 nil）：迁移的默认值只在「从来没碰过」时给一次（见 tbCfg）
+    if on == true then tb.chatNameExtra[id] = true else tb.chatNameExtra[id] = false end
+    if type(EVAL_TB_REFRESH) == "function" then EVAL_TB_REFRESH() end
+  end, { multi = true, selected = sel })
+  return true
+end
 
 -- 采集一个单位（自己/队友/团员/目标）：UnitName + UnitClass 都是**只读**调用，不向服务器发请求
 local function tbNameClassScanUnit(unit)
   if type(UnitName) ~= "function" or type(UnitClass) ~= "function" then return false end
   local okn, name = pcall(UnitName, unit)
   if not (okn and type(name) == "string" and name ~= "") then return false end
+  -- ★1.75.27 顺手取等级（UnitLevel 是只读调用；取不到 = nil → 不覆盖旧值）
+  local lv = nil
+  if type(UnitLevel) == "function" then
+    local okl, v = pcall(UnitLevel, unit)
+    if okl and type(v) == "number" and v > 0 then lv = v end
+  end
+  -- ★区域只有「自己」拿得到（GetRealZoneText）；队友/团员/目标的区域客户端不给 → nil（不覆盖旧值）
+  local zn = nil
+  if unit == "player" and type(GetRealZoneText) == "function" then
+    local okz, vz = pcall(GetRealZoneText)
+    if okz and type(vz) == "string" and vz ~= "" then zn = vz end
+  end
   local okc, a, b = pcall(UnitClass, unit)
   if not okc then return false end
   -- ★UnitClass 两个返回值哪个是「职业」在各客户端/各语言下不一致 → **两个都试**，都认不出就不写（不猜）
-  if tbNameClassPut(name, a) then return true end
-  return tbNameClassPut(name, b)
+  if tbNameClassPut(name, a, lv, zn) then return true end
+  return tbNameClassPut(name, b, lv, zn)
 end
 
 -- 采集（kind = unit / guild / friends / who；nil = 全部）；返回**本次新写入**条数
@@ -2882,8 +3034,8 @@ function EVAL_TB_NAMECLASS_HARVEST(kind)
     local okg, n = pcall(GetNumGuildMembers)
     if okg and type(n) == "number" and n > 0 then
       for i = 1, n do
-        local okp, nm, _rank, _ri, _lv, klass = pcall(GetGuildRosterInfo, i)
-        if okp and type(nm) == "string" then tbNameClassPut(nm, klass) end
+        local okp, nm, _rank, _ri, _lv, klass, _zone = pcall(GetGuildRosterInfo, i)
+        if okp and type(nm) == "string" then tbNameClassPut(nm, klass, _lv, _zone) end
       end
     end
   end
@@ -2891,8 +3043,8 @@ function EVAL_TB_NAMECLASS_HARVEST(kind)
     local okf, n = pcall(GetNumFriends)
     if okf and type(n) == "number" then
       for i = 1, n do
-        local okp, nm, _lv, klass = pcall(GetFriendInfo, i)
-        if okp and type(nm) == "string" then tbNameClassPut(nm, klass) end
+        local okp, nm, _lv, klass, _zone = pcall(GetFriendInfo, i)
+        if okp and type(nm) == "string" then tbNameClassPut(nm, klass, _lv, _zone) end
       end
     end
   end
@@ -2900,8 +3052,8 @@ function EVAL_TB_NAMECLASS_HARVEST(kind)
     local okw, n = pcall(GetNumWhoResults)
     if okw and type(n) == "number" then
       for i = 1, n do
-        local okp, nm, _g, _lv, _race, klass = pcall(GetWhoInfo, i)
-        if okp and type(nm) == "string" then tbNameClassPut(nm, klass) end
+        local okp, nm, _g, _lv, _race, klass, _zone = pcall(GetWhoInfo, i)
+        if okp and type(nm) == "string" then tbNameClassPut(nm, klass, _lv, _zone) end
       end
     end
   end
@@ -3128,7 +3280,10 @@ end
 
 -- 诊断读值口（/eh go 聊天 与断言共用）
 function EVAL_TB_CHATCOLOR_STATE()
-  return { on = EVAL_TB_CHATCOLOR_ON(), cache = EVAL_TB_NAMECLASS_SIZE(), seen = TB.chatSeen or 0,
+  return { on = EVAL_TB_CHATCOLOR_ON(),
+           lvOn = (type(EVAL_TB_CHATEXTRA_ON) == "function") and EVAL_TB_CHATEXTRA_ON("lv") or false,
+           zoneOn = (type(EVAL_TB_CHATEXTRA_ON) == "function") and EVAL_TB_CHATEXTRA_ON("zone") or false,
+           cache = EVAL_TB_NAMECLASS_SIZE(), seen = TB.chatSeen or 0,
            painted = TB.chatPainted or 0, last = TB.chatLast, samples = TB.chatRaw or {},
            frames = TB.chanFrames or 0, miss = TB.chanMiss or 0, added = TB.ncAdded or 0,
            healed = TB.chatHealed or 0 }
@@ -3147,7 +3302,8 @@ function EVAL_TB_NAMECLASS_PROBE()
   local function tokOf(k) return tostring(EVAL_TB_PAINT_CLASS_TOKEN_OF(k)) end
   say("===== 名字染色缓存探针 =====")
   say("  开关(chatColor)=" .. tostring(EVAL_TB_CHATCOLOR_ON()) .. " · 缓存条数=" .. tostring(EVAL_TB_NAMECLASS_SIZE()) ..
-      " · 本会话采集新增=" .. tostring(TB.ncAdded or 0) .. " · 未命中自愈上色=" .. tostring(TB.chatHealed or 0))
+      " · 本会话采集新增=" .. tostring(TB.ncAdded or 0) .. " · 未命中自愈上色=" .. tostring(TB.chatHealed or 0) ..
+      " · 过期失效=" .. tostring(TB.ncExpired or 0) .. "（5 分钟未再见即清，下次出现重抓）")
   say("  公会名册: GetNumGuildMembers=" .. apiOk("GetNumGuildMembers") .. " · GetGuildRosterInfo=" .. apiOk("GetGuildRosterInfo") ..
       " · 本地条数=" .. countOf("GetNumGuildMembers") .. "（★懒加载：没开过公会窗前通常是 0）")
   if type(GetGuildRosterInfo) == "function" and type(GetNumGuildMembers) == "function" then
@@ -3300,7 +3456,7 @@ function EVAL_TB_WHO_ENQUEUE(name)
   if TB.whoNoApi then return false, "noapi" end
   local k = tbNameClassKey(name)
   if not k then return false, "badname" end
-  if tbNameClass[k] then return false, "cached" end
+  if tbNameClass[k] and tbNameFresh(k) then return false, "cached" end -- ★1.75.27 过期 = 不算已缓存（驱逐后放行重查）
   if EVAL_TB_WHO_ISMISS(k) then return false, "miss" end -- ★用户要的「查不到就别反复查」
   if tbWhoQueued(k) or (TB.whoPending and TB.whoPending.key == k) then return false, "dup" end
   if table.getn(tbWhoQ) >= TB_WHO_QMAX then
@@ -3363,10 +3519,10 @@ function EVAL_TB_WHO_ONRESULTS()
   local found = false
   if type(GetWhoInfo) == "function" then
     for i = 1, n do
-      local okp, nm, _g, _lv, _race, klass = pcall(GetWhoInfo, i)
+      local okp, nm, _g, _lv, _race, klass, _zone = pcall(GetWhoInfo, i)
       if okp and type(nm) == "string" and tbNameClassKey(nm) == p.key then
         found = true
-        tbNameClassPut(nm, klass)
+        tbNameClassPut(nm, klass, _lv, _zone)
       end
     end
   end
@@ -4498,6 +4654,8 @@ local function tbModel()
     -- ★1.73.10 用户要求：角色名按职业着色（参考 tmp/XGuild 的**需求**，实现见本文件「职业着色」段；默认开）
     { t = "c", key = "colorClass", label = L("TB_COLORCLASS"), tip = L("TB_COLORCLASS_TIP") },
     -- ★1.73.12 用户要求：「聊天窗 内的名字能着色吗?需要走缓存?」→ 聊天文字里的角色名按职业色（默认开）
+    --   ★1.75.27 右侧 [设置] = 多选「等级 / 区域」附加段（用户定稿：选哪些显示哪些，未选不显示；
+    --     等级真机验证后，按用户要求从独立开关行并入本行的设置下拉 —— 它们本来就是同一个功能）
     { t = "c", key = "chatColor", label = L("TB_CHATCOLOR"), tip = L("TB_CHATCOLOR_TIP") },
     -- ★1.73.12 用户追加要求：未缓存的名字**主动查一次**（默认开；可在这里关掉）
     { t = "c", key = "whoQuery", label = L("TB_WHOQ"), tip = L("TB_WHOQ_TIP") },
@@ -4849,6 +5007,14 @@ function EVAL_TB_REFRESH()
               if not ok and type(EVAL_SAY) == "function" then
                 pcall(EVAL_SAY, "重设位置失败：对应助手的重设函数不可用（可能插件未载入）")
               end
+            end)
+          end
+          -- ★1.75.27 聊天窗名字着色的 [设置]：多选「等级 / 区域」（选哪些显示哪些，未选不显示）
+          if it.key == "chatColor" then
+            r.chv.text:SetText(L("TB_CHATEXTRA_BTN"))
+            r.chv.btn:Show()
+            r.chv.btn:SetScript("OnClick", function()
+              if type(EVAL_TB_CHATEXTRA_OPEN) == "function" then EVAL_TB_CHATEXTRA_OPEN(r.chv.btn) end
             end)
           end
         -- ★1.74.35-3：原 `t = "smap"` 分支已删（模型里从来没有这种行 = 死代码，且它走的是已废弃的子插件注册表）。
