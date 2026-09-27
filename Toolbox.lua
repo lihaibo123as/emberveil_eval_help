@@ -4504,13 +4504,16 @@ local function tbModel()
     -- ★1.73.24 用户要求：右键聊天名字弹菜单（公会邀请 / 复制名字 / /s 说出名字；默认开）
     { t = "c", key = "nameMenu", label = L("TB_NAMEMENU"), tip = L("TB_NAMEMENU_TIP") },
     { t = "g", label = L("TB_GUILDNOTIFY"), tip = L("TB_GUILDNOTIFY_TIP") },
-    { t = "h", label = L("TB_H_QAUTO") }, -- 1.69.0 任务组拆分：自动交接 / 任务通知
+    -- ★1.75.26 用户报「工具箱 重复分类 任务 接取与交付」⇒ **两个任务标题合并成一个「任务」组**：
+    --   原先「—— 任务·接取与交付 ——」+「—— 任务·通知 ——」两个标题并列，标题文字又把下面几行的
+    --   名字（自动接取/交付任务、任务通知频道）复述了一遍 ⇒ 面板上看着就是同一个分类出现两次。
+    --   ★只并标题、**不动任何 key**（自动接取/交付/按住停止/通知频道 四条照旧挂在原 key 上）。
+    { t = "h", label = L("TB_H_QAUTO") },
     -- ★1.71.2 用户要求：自动接取 / 交付任务 **分成两个开关**（原来共用一个 quest 键，想只接取不交付做不到）
     { t = "c", key = "questAccept", label = L("TB_QUEST_ACCEPT"), tip = L("TB_QUEST_ACCEPT_TIP") },
     { t = "c", key = "questTurnIn", label = L("TB_QUEST_TURNIN"), tip = L("TB_QUEST_TURNIN_TIP") },
     -- ★1.71.2 用户要求：「自动交接任务 按键停止功能，比如按住 shift 临时停止」
     { t = "key", key = "holdKey", label = tbHoldLabel(), tip = L("TB_HOLD_TIP") },
-    { t = "h", label = L("TB_H_QNOTIFY") },
     { t = "ch", key = "qchan", label = L("TB_QCHAN"), tip = L("TB_QCHAN_TIP") }, -- 频道选择行
     -- ★1.74.5 用户要求：新增「猎人助手」分组 →「一键喂食」开关（默认关）
     --   总闸门 = tools/HunterHelper.lua 的 feedPet：勾上才**懒建**屏幕上的喂食图标（未勾 = 一个帧都不建）

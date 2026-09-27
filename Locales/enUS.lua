@@ -508,7 +508,7 @@ SH_WARN_MORE = " (%d more similar notices suppressed)",
   DS_HOW_OBJ = "objective", DS_HOW_START = "starter", DS_HOW_USE = "use",
   TB_H_MERCHANT = "—— Merchant ——",
   TB_H_SOCIAL = "—— Party / Social ——",
-  TB_H_QAUTO = "—— Quest · Accept & Turn-in ——", TB_H_QNOTIFY = "—— Quest · Notify ——",
+  TB_H_QAUTO = "—— Quests ——", -- 1.75.26 merged the two quest headers into one group
   TB_QCHAN = "Quest notify channel", TB_QCHAN_TIP = "Where quest progress/accept/complete notices go (multi-select): off/self/say/party. With several checked, only the highest-priority one is used: party > say > self, each progress announced once; party falls back to the next checked channel while not in a party (channel sends go through the rate-limit queue)",
   TB_CH_OFF = "Off", TB_CH_SELF = "Self", TB_CH_SAY = "Say", TB_CH_PARTY = "Party",
   TB_QN_ACCEPT = "Quest accepted: %s", TB_QN_PROG = "Quest progress: %s %s", TB_QN_DONE = "Quest complete: %s",

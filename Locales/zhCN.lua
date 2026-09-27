@@ -523,7 +523,7 @@ SH_WARN_MORE = "（另有 %d 条同类提示已省略）",
   DS_HOW_OBJ = "需求", DS_HOW_START = "触发", DS_HOW_USE = "使用",
   TB_H_MERCHANT = "—— 商人助手 ——",
   TB_H_SOCIAL = "—— 队伍 / 社交 ——",
-  TB_H_QAUTO = "—— 任务·接取与交付 ——", TB_H_QNOTIFY = "—— 任务·通知 ——",
+  TB_H_QAUTO = "—— 任务 ——", -- ★1.75.26 原先这里并列两个任务标题（任务·接取与交付 / 任务·通知），已合并成一个「任务」组
   TB_QCHAN = "任务通知频道", TB_QCHAN_TIP = "任务进度/接取/完成的通知去向，可多选：关闭/仅自己聊天框/说/队伍。多选时按优先级 队伍>说>仅自己 只播一个频道，每次进度仅播报一次；队伍不在队时顺延到已勾选的下一个（频道发言走限频队列防踢线）",
   TB_CH_OFF = "关闭", TB_CH_SELF = "仅自己", TB_CH_SAY = "说", TB_CH_PARTY = "队伍",
   TB_QN_ACCEPT = "任务接取： %s", TB_QN_PROG = "任务进度： %s %s", TB_QN_DONE = "任务完成： %s",

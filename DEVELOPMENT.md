@@ -13,8 +13,8 @@
     —— ★同目录的 `fetch.js`/`build*.js`/`sweep*.js`/`audit.js`/`chains.js`/`cache/` 都是**开发脚本与抓取缓存**，**不进发布包**
   → `DataSearch.lua`（Tab4 任务线 & 装备）→ `Share.lua`（方案分享）→ `IconSem.lua`（图标语义表，1.73.5）
   → `IconBrowser.lua`（Tab5 图标库）→ `PetData.lua`/`PetHelper.lua`（Tab6 抓宠帮手，1.73.0）
-  → **`tools/IconGrid.lua`（通用图标网格选择器：单选/多选 · 高度自适应 · 分页滚轮夹取，1.74.5）**
-→ **`tools/HunterHelper.lua`（猎人助手 · 一键喂食，1.74.5）** → **`tools/ConsumableHelper.lua`（消耗品助手 · 多选横排各自点用，1.74.5）**。 → **`tools/DismountHelper.lua`（骑乘助手 · 一键下马，1.74.7）** → **`tools/RareWatch.lua`（稀有提醒转播独立模块，1.74.27）**
+  → **`tools/` 工具模块（9 个，顺序照 `.toc`）**：`SimpleMap.lua`（缩放大地图）→ `IconGrid.lua`（通用图标网格选择器：单选/多选 · 高度自适应 · 分页滚轮夹取，1.74.5）→ `HunterHelper.lua`（猎人助手 · 一键喂食，1.74.5）→ `ConsumableHelper.lua`（消耗品助手 · 多选横排各自点用，1.74.5）→ `DismountHelper.lua`（骑乘助手 · 一键下马，1.74.7）→ `RareWatch.lua`（稀有提醒转播独立模块，1.74.27）→ `DragFrames.lua`（图层拖拽，1.74.30）→ `LayerFix.lua`（图层隐藏，1.74.34）→ **`LootCursor.lua`（拾取贴手 · 搬窗贴手 + 点一次换下一件 + 品质角标，1.75.26）**
+    ★工具模块一律**自包含**（真值 + 自己的存档子树 + 界面控件 + 读值口 + 自己的**有界**计时器）；`Toolbox.lua` 里只留「一行数据 + 模块行注册表 `EVAL_TB_MOD_ROWS[mod]`」，渲染/下拉/结算全在模块里。
   跨文件共享走全局桥：Core 导出 EVAL_SAY/EVAL_LOGLINE/EVAL_UIOFFSCREEN 等，Engine 导出 EVAL_WSLOTS/EVAL_WICON/EVAL_GROUPS_OK 等，
   UI 层文件顶部别名块本地化；
   ★**新增 .lua 模块要同时改两处**：`EvalHelp.toc`（顺序 = 载入顺序，共用件放前面）+ **发布包清单**（参考卷打包脚本的 Copy-Item 行；子目录模块尤其容易漏）。

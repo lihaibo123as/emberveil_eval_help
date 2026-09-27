@@ -97,7 +97,7 @@ Copy-Item "$src\Locales","$src\examples","$src\media","$src\tools" "$staging\Eva
 # quest/ 只拷插件要用的三个 .lua（fetch.js/sweep*.js/build*.js/audit.js/chains.js 是开发脚本、cache/ 是抓取缓存，都不进包）
 New-Item -ItemType Directory -Force "$staging\EvalHelp\quest" | Out-Null
 Copy-Item "$src\quest\QuestData.lua","$src\quest\QuestBulk.lua","$src\quest\QuestAll.lua","$src\quest\QuestChains.lua" "$staging\EvalHelp\quest\"
-# ★1.75.14 新增 quest\QuestAll.lua（**全量任务表**生成物：4018 条，含无装备奖励的任务）⇒ 出包基准 75 → **76**
+# ★1.75.14 新增 quest\QuestAll.lua（**全量任务表**生成物：4018 条，含无装备奖励的任务）⇒ 出包基准 75 → 76；★1.75.26 新增 `tools\LootCursor.lua`（拾取贴手）⇒ 出包基准 76 → **77**
 Remove-Item "$staging\EvalHelp\media\Textures" -Recurse -Force -ErrorAction SilentlyContinue  # 主题素材不进包
 [System.IO.Compression.ZipFile]::CreateFromDirectory($staging, $out)
 Copy-Item $out "$PWD\EvalHelp.zip" -Force   # ★不带版本号的固定名副本（第 9 步硬要求；两份逐字节相同）
@@ -105,7 +105,7 @@ Remove-Item $staging -Recurse -Force
 ```
 ★**装完必须核对条目数**（1.75.1 基准 = **75 个**：+`quest/QuestData.lua`、`quest/QuestBulk.lua`、`quest/QuestChains.lua`（1.75.9 新增 QuestBulk = 全量任务/装备数据）；1.74.34 时是 72（+`tools/LayerFix.lua` 图层特殊处理独立模块）；1.74.30 时是 71（+`tools/DragFrames.lua` 框拖拽从子插件搬进工具模块）；1.74.29 时是 70；1.74.27 时是 69（+`tools/RareWatch.lua`）；1.74.12 时是 68、1.74.6 时是 66、1.73.5 时是 63；1.74.5 陆续加了 `tools/IconGrid.lua` / `tools/HunterHelper.lua` / `tools/ConsumableHelper.lua`，1.74.7 加 `tools/DismountHelper.lua`）：
   少一个就是缺文件，用户装了会**直接报错**。
-  ★这一条与上面的模块清单原先都有源码检查 `PACK LIST CHECK` 守着（清单与 .toc 逐个比对 + 基准数按打包口径现算）—— ★**该检查随 `tests/` 一起删除了**（2026-09-26）⇒ 现在**出包必须人工核对**：先数 `Add-Type … OpenRead($out).Entries.Count`（应为 **75**），再用上面那条「允许反斜杠」的正则把 toc 里 36 个模块逐个比一遍（两条都打印结果，别只看 75）。
+  ★这一条与上面的模块清单原先都有源码检查 `PACK LIST CHECK` 守着（清单与 .toc 逐个比对 + 基准数按打包口径现算）—— ★**该检查随 `tests/` 一起删除了**（2026-09-26）⇒ 现在**出包必须人工核对**：先数 `Add-Type … OpenRead($out).Entries.Count`（**1.75.26 起应为 77**；1.75.14~1.75.25 是 76），再用上面那条「允许反斜杠」的正则把 toc 里 **38 个**模块逐个比一遍（两条都打印结果，别只看 75）。
 ★**不装**（2026-09-26 更新：测试文件已全部删除，下面这份「不装清单」里只剩与**发布**有关的项）：`preview/`（截图）、`node_modules/`、
 `api_*.html`、`.git/`、`bindings/`、`_icons_scan/`、`pay/`、`luacheck.js`/`test_stub.lua`/`tmp/`（开发用，不随包）。
 ★★**出包实测两个坑（1.75.5，务必照做）**：
@@ -906,6 +906,19 @@ Remove-Item $staging -Recurse -Force
 - ★**探针** `/eh go mbicon`（读数摊开：存档 / 已贴 / **读回** / 判定原因 / 自动挑；`<宏序号>` 按号设、`reset`、`重贴`）+ **专属有界落盘** `cfg.mbProbe`（12 行，进残渣键清单）——「贴上没贴上」在聊天框是读不到的（`say` 不落日志环）。
 - ★★★**默认图标 = 头龙**（用户定稿原话「头龙 配置为插件默认图标」）：`EVAL_HELP_MB_PICKICON` 第一条 = **`^INV_MISC_HEAD_DRAGON_01`**（= 宏图标 **670**，`/Game/Interface/Icons/INV_Misc_Head_Dragon_01_TEX`），**力量祝福退居第二顺位**（某客户端没头龙那枚时不许掉到扳手）。★★**`_01` 尾号是判据的一部分**（`..._BLACK/BLUE/Bronze/Green` **不算命中**，组 95 有反向哨兵）。★**旧自定义一次性清掉**（账号级 `cfg.mbIcon` 只清 `INV_Misc_ShadowEgg_TEX` 那一个确切值 + **如实播报**）⇒ 否则用户永远看不到头龙。
 - **判据** = **组 238** + **`MB ICON WIRING CHECK`**（变异 12/12；★教训：**M8/M8b 栽在「只查标签字样」** ⇒ 一律「标签 + **紧跟的取值表达式**」一起匹配；**M9 栽在「只建了空箱子」** ⇒ append 那一行也要钉）。判据 = `MB ICON WIRING CHECK ⑨`（顺序 + `_01` + 次位 + 迁移都在源码级钉住）。
+
+### R23. 「拾取贴手」全案（1.75.26）· 压缩版
+**需求（用户三次确认）**：①「拾取框物品能否重叠在当前鼠标位置方便快速点击」→ 定**方案 A：搬整扇拾取窗**（不重建 UI）；② 默认**吸附一次**（可切跟随）+ **品质色角标**；③「每次点击自动换下一个物品 · **不用等点击之后是否拾取成功**」。
+
+- **三份探针读数（`addons/EH_DebugBox` 的 `/edb loot*`，固化在 `doc/自动拾取战利品-调研结论.md`）**定下的事实：玩家看到的那扇窗**就是 `LootFrame`**（探针「光标帧」比过对象身份）；`LootButton1..4` 类型 = `LootButton`、**37×37**、竖向**链式互锚**（`TOP/LootButton(i-1)/BOTTOM/0,-4`）、首格中心偏移 (24,139)、**间距 41px**；`OnClick` 被原生 `LootFrameItem_OnClick(arg1)` 占、`OnEnter/OnLeave` 被原生 tooltip 占、**`OnMouseDown`/`OnMouseUp` 是空槽**；`GroupLootFrame1..4` 挂在 **WorldFrame**（搬窗不会带走 roll 框）；自建纹理能贴上（读回 `Interface\Buttons\WHITE8X8`）；金币占一格（`GetLootSlotInfo` 报「14 铜币 / 品质 0」+ `LootSlotIsCoin = 1`）。
+- ★★★**报障一：「鼠标位置未在物品上」**（探针 `摆` v1）——真因 = 旧写法按 `GetLeft` 差值算一次偏移再落锚，坐标系/缩放口径不一致时算出来的位置完全不对 + **把窗夹回屏内**（`X = UIParent宽 − 窗宽`）⇒ 按钮永远落不到光标下。修法：**量回自证 + 逐轮修正**（读按钮真实中心 → 残差 → 就地修正，最多 3 轮）+ **去掉夹取**（按钮在光标上 ⇒ 光标必然在屏内，不需要夹；夹取只为「整窗可见」这个装饰目标服务）。
+- ★★★**报障二：「拾取框有点变形」**（模块上线后）——真因 = 旧写法 `ClearAllPoints()` 后**自建 `SetPoint("BOTTOMLEFT",…)`**，而客户端随后把它**自己的 `TOPLEFT`** 补回来 ⇒ **同帧上下两条边各一个锚点 ⇒ 高度被"撑"出来**（宽度不变、居中的「物品」标题跑到中间 —— 截图特征）。★`SetPoint` 语义是：**同点名 = 替换，新点名 = 追加**，撑变形就是"追加"出来的。修法 = **只就地平移客户端自己的锚点**（按实测差值给 x/y 加位移，尺寸/版式一字不动；客户端以后重锚的还是同一个点名 ⇒ 恒 1 个锚点）+ 三道自愈：**开窗清账**（`lcNormalize`：快照里发现自建锚点指纹 `lcIsOurs`（`BOTTOMLEFT` + `rp=BOTTOMLEFT`）就地摘掉并按基准 256×256 复位尺寸）、命令 **`/eh go 拾取 修复`**（`lcRepair`）、`关` 时还原。★**撑坏过的那份尺寸不许当基准**（`lcHasLegacy` 挡住 `lcRememberSize`）。
+- ★★★**报障三（设计坑，不是真机报障）：「点一次换下一件」该挂哪** —— 直觉是挂 `OnMouseDown`（最早），但玩家的点击 = **按下 + 抬起两拍**（人手 80~150ms），按下那一刻搬窗 ⇒ **抬起时鼠标底下已经换成另一个按钮** ⇒ 客户端把 `OnClick` 派发给新按钮 = **拾到下一件、漏掉这一件**。正解 = **包装 `OnClick`**：先**零参数调原生处理体**（`this`/`arg1` 仍是客户端设的那份、拾取请求照原样发出），**再**立刻搬窗 —— 既不等服务器回话，也不会抢走这次点击。关功能时按**身份比对**复原（只换回我们装的那个，期间被别人套过的包装不许冲掉）。
+- ★**「下一件」唯一算法 `lcNextSlot(i)`** = i 之后最小编号的有物品格，没有就绕回最小编号（排除 i 自己）⇒ 天然兼容「客户端会不会把槽位往上压实」；**压实结论运行期自证**（点击前后各记一次槽位名表，`LOOT_SLOT_CLEARED` 时比对：原来 i+1 格的东西出现在 i 格 ⇒ 会压实 ⇒ 当场挪回 + 以后原地换）。诊断口 `EVAL_LC_TEST_FORGET_COMPACT()`。
+- ★**有界 + 关掉零动作**：搬完 0.5s 逐帧重申（客户端可能在我们之后自己摆一次，超窗放手）· 开窗读不到槽位 0.6s 逐帧重试（读到就贴，过了只如实说一次）· 跟随档只在窗开着时 0.15s 一拍、位移 <4px 不搬；关掉 = 摘 OnUpdate/事件/包装 + 收角标 + 按**开窗那一刻**抓到的原位还回去（读回自证）。
+- ★**离线桩（`tmp/lootcursor_harness.js`）这一轮的价值**：桩里必须把「**同轴两端都有锚点 ⇒ 尺寸被撑出来**」这条模型写进去（`recompute`），否则「防变形」那条断言在桩里**永远绿**、真机才会红；另外**父帧移动要带动子件**（真机按钮链式互锚）—— 少了它「量回修正」在桩里会发散（假红）。
+- **判据** = 真机读数 + `node luacheck.js` + 离线桩 73 条断言（防变形 / 压实两条路 / 有界重申与重试 / 关掉完整还原）+ 三语文案 35 键齐全自查。
+
 
 ## 十五、速查：分享消息模板 / 取证命令 / 关键 CHECK 明细（1.75.1 从常驻卷 §5.10 整段迁入）
 
