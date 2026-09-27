@@ -2784,13 +2784,18 @@ local function smFitDumpLines()
   --     · 记录 ✓ 但「本图已写=否」 ⇒ 折算那一步压根没跑（时间门/落闩/es 瞬态）；
   --     · 记录与活值都 ✓ ⇒ 我们写对了，问题在客户端随后又重排（那就该走 nofold 那一档）。
   local nRec, nWrote, nWait, nUse = 0, 0, 0, 0
+  -- ★1.75.24：把「在用但还没有原值」的层**点名**摊出来（只报个数的话，下次排查还得靠猜是哪几层）
+  local waitNames = {}
   for _, v in pairs(SMFIT.rec or {}) do if type(v) == "table" then nRec = nRec + 1 end end
   for _, v in pairs(SMFIT.wroteKeys or {}) do if v == mk then nWrote = nWrote + 1 end end
   local frD = _G["WorldMapDetailFrame"]
   for _, it in ipairs(smFitTargets()) do
     if smFitInUse(it.o) then
       nUse = nUse + 1
-      if type(SMFIT.rec[it.key]) ~= "table" then nWait = nWait + 1 end
+      if type(SMFIT.rec[it.key]) ~= "table" then
+        nWait = nWait + 1
+        waitNames[table.getn(waitNames) + 1] = tostring(it.key)
+      end
     end
   end
   local chain = nil
@@ -2798,6 +2803,12 @@ local function smFitDumpLines()
   add(string.format("口径：外框缩放(父链连乘)=%s ｜ 设置值 scale=%s alpha=%s ｜ 本图在用=%d ｜ 本图会话记录=%d 条 ｜ 等抓原值=%d 个 ｜ 本图已写=%d 个 ｜ 抓原值尝试=%d 读失败=%d",
     (tonumber(chain) and string.format("%.3f", chain)) or "读不到", tostring(SM_CFG.scale), tostring(SM_CFG.alpha),
     nUse, nRec, nWait, nWrote, tonumber(SMFIT.capCalls) or 0, tonumber(SMFIT.capFails) or 0))
+  if nWait > 0 then
+    add("  ★等抓原值的层（" .. nWait .. " 个）：" .. table.concat(waitNames, " · "))
+    add("    ⇒ 这几层**当前在用、却没有原值记录** ⇒ 本拍**不会折算**它们（折算只认有记录的层）；"
+      .. "★1.75.24 起它们会**推翻落闩**、由 1 秒一次的有界重试补抓，抓到即折算；"
+      .. "若这条长期不为 0 ⇒ 是它们**读不到几何**或客户端一直没给贴图（看上面每层的「活值/记录/在用」三列）")
+  end
   local list = smFitTargets()
   for i, it in ipairs(list) do
     local o = it.o
@@ -3188,7 +3199,21 @@ do
       local gap = ((tonumber(SMFIT.burst) or 0) > 0) and SMFIT_BURST_GAP or SMFIT_IDLE_GAP
       if accFit < gap then return end
       accFit = 0
-      smFitApply(es, false) -- 成功了才播报（内部 3s 节流）
+      -- ★★★1.75.24（用户报障「工具箱→大地图缩放：13、14 探索层未正确应用缩放」）：
+      --   smFitApply 的**第 3 个返回值**本来就等于「在用、却没有原值记录」的层数（它内部那一段一直在算），
+      --   旧写法**直接丢掉** ⇒ 落闩之后**没有任何一条路**会再抓原值：
+      --     · 落闩判据（smFitCapture）只看「本轮 todo」，而 todo **不含**「当时隐藏 / GetTexture()==nil
+      --       （贴图还没载入）」的层 ⇒ 已就绪的那批层一齐就落闩；
+      --     · 等 13/14 稍后显示出来/贴上贴图，它们**永远没有记录**，而折算只认有记录的层
+      --       ⇒ 那两层永远不会被折算（= 用户看到的现象：同一个 es、一部分折了一部分没折）。
+      --   ⇒ 现在：只要还有「在用却没原值」的层，就**推翻落闩**、交给上面那道**有界**重试门
+      --     （SMFIT_CAP_GAP = 1 秒一次 + SMFIT_SETTLE 版式稳定门）重抓，抓到即由 apply 折算。
+      --   ★口径不变：只对「当前显示且有贴图」的层动手（与抓原值/折算同一判定），绝不碰别的图的残留层。
+      local _chgFold, _rdyFold, nWaitFold = smFitApply(es, false) -- 成功了才播报（内部 3s 节流）
+      if (tonumber(nWaitFold) or 0) > 0 and SMFIT.captured then
+        SMFIT.captured = false
+        mfLog("补抓：本图有 %d 个在用层还没有原值 ⇒ 推翻落闩、重新开抓（1 秒一次，有界；抓到即折算）", tonumber(nWaitFold))
+      end
     end)
   end
 end
