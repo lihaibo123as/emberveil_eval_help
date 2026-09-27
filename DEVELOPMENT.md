@@ -8,6 +8,9 @@
 - **多文件架构**（1.39.0 起模块化；**真实载入顺序 = `EvalHelp.toc` 的顺序，以 .toc 为唯一真值**）：
   `Locales/{zhCN,enUS,ruRU}` → `Core.lua`（输出/i18n/状态采集+UPDATE_STATE/UI 越界助手）→ `Engine.lua`（一键宏引擎：扫描/五分类/规则引擎/解析/免疫/光环/距离/队伍扫描）
   → `EvalHelp.lua`（全部 UI 窗口+斜杠+初始化）→ `examples/*.lua`（11 个案例模版数据文件）→ `Toolbox.lua`（Tab3 工具箱）
+  → **`quest/` 数据层（4 个**只读数据文件**，顺序不能换）**：`QuestData.lua`（策展链）→ `QuestBulk.lua`（全量任务/装备生成物）→
+    **`QuestAll.lua`（全量任务表生成物：4018 条任务 + 奖励/需要等级 + 父子任务 + 需求材料，1.75.14 起）** → `QuestChains.lua`（上述三张表的数据层封装：搜索/筛选/树/详情）
+    —— ★同目录的 `fetch.js`/`build*.js`/`sweep*.js`/`audit.js`/`chains.js`/`cache/` 都是**开发脚本与抓取缓存**，**不进发布包**
   → `DataSearch.lua`（Tab4 任务线 & 装备）→ `Share.lua`（方案分享）→ `IconSem.lua`（图标语义表，1.73.5）
   → `IconBrowser.lua`（Tab5 图标库）→ `PetData.lua`/`PetHelper.lua`（Tab6 抓宠帮手，1.73.0）
   → **`tools/IconGrid.lua`（通用图标网格选择器：单选/多选 · 高度自适应 · 分页滚轮夹取，1.74.5）**
