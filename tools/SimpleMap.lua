@@ -750,7 +750,6 @@ local function autoStop()
 end
 
 
-
 -- ===== /ehm probe5：黑幕深挖（底下是不是还有一层黑幕） =====
 -- ★背景（probe4 实测）：BlackoutWorld:Hide() 后仍是黑的、压 alpha 也看不到游戏世界。
 --   本试验枚举 WorldMapFrame 的全部 regions/子帧 + 常见命名的黑幕件，
@@ -874,7 +873,6 @@ local function probeBlackRestore()
 end
 
 
-
 -- ===== /ehm probe4：半透明+缩放+拖拽 终局试验 =====
 -- ★背景（用户实测）：SetAlpha(0.5) 后「地图有点黑」、SetPoint 左移后「右边黑」——
 --   两处黑都疑似 1.12 原版全屏地图的黑色遮挡层 BlackoutWorld 透了出来。
@@ -976,7 +974,6 @@ local function probeFinalRestore()
   if tickFrame then tickFrame:SetScript("OnUpdate", nil) end
   P("已还原：黑幕放回 / 透明度 1 / 缩放 1 / 位置回中（/reload 亦可全还原）")
 end
-
 
 
 local function probeWindow()
@@ -3734,144 +3731,8 @@ function EVAL_SM_TB_REGISTER()
   return true
 end
 
--- ============ 读值口（测试/诊断用；★不复刻逻辑：真值直给字段，动作走真实入口）============
-function EVAL_SM_TEST_GUIREOPEN() return SM_CFG.guiReopen, smReopenOn() end
-function EVAL_SM_TEST_GUI_CALLS() return FEAT.guiCalls or 0 end
-function EVAL_SM_TEST_GUI_CALLS_RESET() FEAT.guiCalls = 0 return true end
 
--- ★开图路径触发器（读值口）：只跑 `featKeep` + `featApply`（= 真实开图时走的那两条路径），
---   **不改任何配置**。为什么必须有它：1.74.36-3 起 `EVAL_SM_SET(true)` 会先**套默认档**（含
---   「GUI重开 不启用」）⇒ 想验「用户在下拉里勾上 GUI重开 之后开图到底会不会重显」，
---   就不能再用 SET 间接触发（那会把刚勾上的开关又关掉）。真实用户流程也正是这个顺序：
---   先开模块 → 再在 [设置] 里勾 GUI重开 → 然后开图。
-function EVAL_SM_TEST_APPLY()
-  pcall(featKeep)
-  pcall(featApply)
-  return true
-end
-
--- ★1.75.10 位置口径读值口（用户报障：「每次插件重载的初始位置能否居中」）：
---   返回 `posArmed`（本次会话是否还没居中过）/ `recenter`（居中窗口剩余拍数）/ 存档里的 px、py。
---   `REARM` = 把「本次会话还没居中过」这一位按**载入期的原状**恢复 —— 组 237 要验「首次开图必居中」，
---   而前面的组（224/225/230/232）早就把这一位用掉了；不 rearm 就只能验第二次，等于没验到那条判据。
-function EVAL_SM_TEST_POS_STATE()
-  return FEAT.posArmed == true, tonumber(FEAT.recenter) or 0, SM_CFG.px, SM_CFG.py
-end
-function EVAL_SM_TEST_POS_REARM()
-  FEAT.posArmed = true
-  FEAT.recenter = 0
-  return FEAT.posArmed
-end
--- ★拖拽柄本体（读值口）：用来点火**真实的 OnDragStart**（验「用户一开始拖就让出居中窗口期」）。
---   本文件的自建件都随 CloseAll 注册进 _G，但那是**全局名**；模块内部的 `featDrag` 才是真身
---   （组 232 会把 _G.EH_SM_DRAG 换成假件再清掉，所以只能从这里取）。
-function EVAL_SM_TEST_DRAG() return featDrag end
-
--- ★1.74.36-3 默认档读值口：先 3 个**常量**、再 3 个**当前真值**。
---   ★断言一律从这里取（不许在测试里复刻 0.7/0.7/false 三个字面量 = 同源自比）。
-function EVAL_SM_TEST_DEFAULTS()
-  return SM_DEF_ALPHA, SM_DEF_SCALE, SM_DEF_GUIREOPEN,
-    tonumber(SM_CFG.alpha), tonumber(SM_CFG.scale), SM_CFG.guiReopen
-end
-
--- ★地图设置面板：刷新口是否已落地 + 两个值标签**实际显示的文字**（面板没建过 ⇒ nil）。
---   ★这也是「默认档有没有真的落到界面上」的唯一可断言证据（真机上就是看那两个数字）。
-function EVAL_SM_TEST_PANEL()
-  local okSync = (type(smPanelSync) == "function")
-  local a, s = nil, nil
-  local fsA, fsS = SM_PANEL.valA, SM_PANEL.valS
-  if fsA and type(fsA.GetText) == "function" then
-    local ok, v = pcall(fsA.GetText, fsA)
-    if ok then a = v end
-  end
-  if fsS and type(fsS.GetText) == "function" then
-    local ok, v = pcall(fsS.GetText, fsS)
-    if ok then s = v end
-  end
-  return okSync, a, s
-end
--- 迁移四态（★走**真实**的 smMigrateReopen，不在测试里复刻一遍判据）：
---   返回 迁移后的真值, 判据结果, 迁移后是否还留着老键（应当恒为 nil）
-function EVAL_SM_TEST_MIGRATE(old)
-  SM_CFG.guiReopen = nil
-  SM_CFG.showGUI = old
-  smMigrateReopen()
-  local v = SM_CFG.guiReopen
-  local on = smReopenOn()
-  local legacy = SM_CFG.showGUI
-  SM_CFG.showGUI = nil -- 模拟「载入期清老键」那一步，避免污染其它用例
-  return v, on, legacy
-end
-function EVAL_SM_TEST_LEGACY_KEYS() return SM_CFG.showGUI, SM_CFG.keepUI, SM_CFG.keepUIStat, SM_CFG.keepUIMode end
-function EVAL_SM_TEST_ROW() return smRow end
-
--- ===== 叠加层适配（1.74.35-4）的读值口 =====
-function EVAL_SM_TEST_MAPFIT() return smFitOn(), SM_CFG.mapFit, SMFIT.burst, SMFIT.es end
-function EVAL_SM_TEST_MAPFIT_GAPS() return SMFIT_BURST_GAP, SMFIT_BURST_SEC, SMFIT_IDLE_GAP end
-function EVAL_SM_TEST_MAPFIT_TARGETS() return table.getn(smFitTargets()) end
-function EVAL_SM_TEST_MAPFIT_APPLY(es) local c, r, rec = smFitApply(tonumber(es) or 1, true) return c, r, rec end
--- ★1.75.13：原值条数 = **跨地图分桶**合计（只数真记录；平表老数据不算 —— 见 smFitOrigCount）
-function EVAL_SM_TEST_MAPFIT_ORIG() return smFitOrigCount() end
 function EVAL_SM_TEST_MAPFIT_REC() local n = 0 for _ in pairs(SMFIT.rec or {}) do n = n + 1 end return n end
-function EVAL_SM_TEST_MAPFIT_BURST(sec) SMFIT.burst = tonumber(sec) or 0 return SMFIT.burst end
-function EVAL_SM_TEST_MAPFIT_RESTORE() return smFitRestore(true) end
--- 夹具自清（测试换过 `_G.WorldMapDetailFrame` 的假帧之后必须还原：内存记录 + 存档原值 + 开关一起复位）
-function EVAL_SM_TEST_MAPFIT_RESET()
-  SMFIT.rec = {}
-  SMFIT.open, SMFIT.es, SMFIT.burst = false, nil, 0
-  SMFIT.captured, SMFIT.needFold = false, nil
-  SMFIT.wrote = false
-  -- ★1.75.13：地图身份 / 版式计时 / 逐层记账也要复位（否则上一段夹具的图会串到下一段）
-  SMFIT.mapKey, SMFIT.mapAge, SMFIT.wroteKeys = nil, 0, {}
-  -- ★1.75.5：会话内存按图存的那份也要清（夹具自清 = 回到「刚载入」）
-  SMFIT.recMap = {}
-  -- ★1.75.5：抓原值的尝试计数与有界重试计时（新判据组 254 挂在这两个口上）
-  SMFIT.capCalls, SMFIT.capAge, SMFIT.capAt = 0, 99, nil
-  -- ★1.75.5：抓原值的失败计数 + 抓原值窗口（复位成「没开窗」）
-  SMFIT.capFails, smFitHold = 0, 0
-  -- ★1.75.5：**每次开图只报一次**的那几条标记 + 详细档开关（夹具自清 = 回到「刚载入」）
-  SMFIT.saidLatch, SMFIT.saidFail, SMFIT.saidEmpty, SMFIT.saidFold = false, false, false, false
-  SM_CFG.mapFitVerbose = nil
-  -- ★★★1.75.5：**手动适配也要复位** —— 否则上一段夹具留下的「自动逻辑让位」会**关掉后面所有组的 tick**
-  smFixActive, SM_FIX.t, SM_FIX.done = false, 0, false
-  SM_CFG.mapFitOrig = nil
-  SM_CFG.mapFitVer = nil
-  SM_CFG.mapFit = nil
-  SM_CFG.mapFitMode = nil -- ★1.75.9：策略也要回到默认（否则上一档会**串到下一段夹具**：实测 ⑨ 因此抓不到原值）
-  SM_CFG.mapFitFresh = nil -- ★1.75.5：「每次开图都当第一次打开」也回默认（nil = 开；夹具自清 = 回到「刚载入」）
-  return true
-end
--- ★★★1.75.13 新读值口（「坐标丢失 / 全挤在左下」那一案的判据挂在这几个口上）
-function EVAL_SM_TEST_MAPFIT_MAPKEY() return SMFIT.mapKey, tonumber(SMFIT.mapAge) or 0, table.getn(smFitTargets()) end
-function EVAL_SM_TEST_MAPFIT_INUSE(i)
-  local it = smFitTargets()[tonumber(i) or 1]
-  if not it then return nil end
-  return smFitInUse(it.o), it.key
-end
-function EVAL_SM_TEST_MAPFIT_WROTE(name) return SMFIT.wroteKeys[tostring(name or "")] end
-function EVAL_SM_TEST_MAPFIT_DUMP() return smFitDumpLines() end
-function EVAL_SM_TEST_MAPFIT_CAPTURE_RAW() return smFitCapture() end
--- ★1.75.5：抓原值的**尝试次数 / 有界重试计时 / 是否落闩**（「每帧重跑」那场事故的判据挂在这里）
-function EVAL_SM_TEST_MAPFIT_CAPSTATE() return tonumber(SMFIT.capCalls) or 0, tonumber(SMFIT.capAge) or 0, SMFIT.captured == true, tonumber(SMFIT.capFails) or 0 end
--- ★★★1.75.5：**只清内存、保留存档原值**（= 精确模拟 `/reload`）——
---   事故场景「存档里原值已齐（同一张图第二次打开/重载后再开）」只有这么复现：跨会话时 rec 是空的、桶是满的。
-function EVAL_SM_TEST_MAPFIT_SOFT_RESET()
-  SMFIT.rec = {}
-  SMFIT.recMap = {}
-  SMFIT.captured = false
-  SMFIT.capCalls, SMFIT.capAge, SMFIT.capAt = 0, 99, nil
-  SMFIT.capSayN = 0 -- ★1.75.5：播报计数（= /reload ⇒ 这次开图的「第 1 次尝试」要重新数）
-  -- ★1.75.5：抓原值的失败计数 + 抓原值窗口（复位成「没开窗」）
-  SMFIT.capFails, smFitHold = 0, 0
-  -- ★★★1.75.5：手动适配的让位标记同样要清（见 EVAL_SM_TEST_MAPFIT_RESET 的注释）
-  smFixActive, SM_FIX.t, SM_FIX.done = false, 0, false
-  -- ★1.75.5：**每次开图只报一次**的那几条标记（= /reload ⇒ 这次开图要重新报一遍）
-  SMFIT.saidLatch, SMFIT.saidFail, SMFIT.saidEmpty, SMFIT.saidFold = false, false, false, false
-  SMFIT.mapKey, SMFIT.mapAge = nil, 0
-  SMFIT.wroteKeys, SMFIT.wrote = {}, false
-  return true
-end
-function EVAL_SM_TEST_MAPFIT_NEWMAP(mk) return smFitNewMap(mk) end
 -- ★1.75.5：**种一条记录**进会话内存（= 旧的「存档里种脏记录」的等价物）——
 --   组 253⑤b 用它验「**有记录也不写**本图不用的层」：唯一用途是测试，不进任何生产路径。
 function EVAL_SM_TEST_MAPFIT_PLANT(name, x, y, w, h)
@@ -3880,91 +3741,4 @@ function EVAL_SM_TEST_MAPFIT_PLANT(name, x, y, w, h)
   SMFIT.rec[n] = { idx = n, name = n, p = "TOPLEFT", rel = "WorldMapDetailFrame", rp = "TOPLEFT",
     x = tonumber(x) or 0, y = tonumber(y) or 0, w = tonumber(w) or 0, h = tonumber(h) or 0, from = "plant" }
   return true
-end
--- ★1.75.5：**会话内存**分图的直读口：返回 桶数, 指定桶里的记录数（桶不存在 = 0）——定位信息不再落存档
-function EVAL_SM_TEST_MAPFIT_BUCKET(mk)
-  local t = SMFIT.recMap
-  if type(t) ~= "table" then return 0, 0 end
-  local nb = 0
-  for _ in pairs(t) do nb = nb + 1 end
-  local b = (mk ~= nil) and t[tostring(mk)] or nil
-  local n = 0
-  if type(b) == "table" then for _, v in pairs(b) do if type(v) == "table" then n = n + 1 end end end
-  return nb, n
-end
--- ★★★1.75.9 新读值口（「缩两遍」那一案的判据都挂在这几个口上）
-function EVAL_SM_TEST_MAPFIT_NEEDFOLD() return SMFIT.needFold, SMFIT.captured == true end
-function EVAL_SM_TEST_MAPFIT_DETECT() return smFitDetect() end
-function EVAL_SM_TEST_MAPFIT_PREPARE() return smFitPrepare() end
-function EVAL_SM_TEST_MAPFIT_CAPTURE() return smFitCapture() end
-function EVAL_SM_TEST_MAPFIT_MIGRATE() return smFitMigrate() end
-function EVAL_SM_TEST_MAPFIT_FROM(i)
-  local n = 0
-  for _ in pairs(SMFIT.rec or {}) do n = n + 1 end
-  if tonumber(i) then
-    local k = 1
-    for key, r in pairs(SMFIT.rec or {}) do
-      if k == tonumber(i) then return key, r.from, r.x, r.y, r.w, r.h end
-      k = k + 1
-    end
-  end
-  return n
-end
-function EVAL_SM_TEST_FEAT_TORN() return FEAT.torn == true, FEAT.escAdded == true end
-function EVAL_SM_TEST_ESC_ADDED_SET(v) FEAT.escAdded = v and true or false return FEAT.escAdded end
--- ★1.75.9 折算取证环的读值口（用户要求「可以开启日志」⇒ 断言也要能读它）
-function EVAL_SM_TEST_MAPFIT_TRACE_N()
-  return (type(SM_CFG.mapFitTrace) == "table") and table.getn(SM_CFG.mapFitTrace) or 0
-end
-function EVAL_SM_TEST_MAPFIT_TRACE_LAST()
-  local r = SM_CFG.mapFitTrace
-  if type(r) ~= "table" or table.getn(r) == 0 then return "" end
-  return tostring(r[table.getn(r)])
-end
-function EVAL_SM_TEST_MAPFIT_TRACE_ALL()
-  local r = SM_CFG.mapFitTrace
-  if type(r) ~= "table" then return "" end
-  return table.concat(r, " || ")
-end
-function EVAL_SM_TEST_MAPFIT_TRACE_CLEAR() SM_CFG.mapFitTrace = {} return true end
--- ★★★1.75.5（用户指定「本办法」）读值口：**手动适配全过程**（`/ehm fitnow`）
---   · `EVAL_SM_TEST_FIX_STATE()` = 计时帧在不在 / 已累计秒数 / 自动逻辑是否已让位 / 本趟是否已跑完
---   · `EVAL_SM_TEST_FIX_DO()`   = 直接跑第 3~5 步（跳过「等 2 秒」；测试不必真等）
---   · `EVAL_SM_TEST_FIX_RUN()`  = 走完整入口（含第 1~2 步 + 起计时）
-function EVAL_SM_TEST_FIX_STATE()
-  local f = _G["EH_SM_FITFIX"]
-  local has = (type(f) == "table" or type(f) == "userdata")
-  return has, tonumber(SM_FIX.t) or 0, smFixActive == true, SM_FIX.done == true
-end
-function EVAL_SM_TEST_FIX_DO() SM_FIX.done = false return smFixRunCapture() end
-function EVAL_SM_TEST_FIX_RUN() return smFixNow() end
--- ★★★1.75.5：「关图即清空原值（每次开图都重新读）」的真值读值口（nil = 开）+ 手动跑一次清空（测试用）
-function EVAL_SM_TEST_MAPFIT_FRESH() return smFitFreshOn(), SM_CFG.mapFitFresh end
--- ★1.75.5：详细档读值口（用户：「清理下这些调试日志」⇒ 默认必须是关）
-function EVAL_SM_TEST_MAPFIT_VERBOSE() return smFitVerboseOn(), SM_CFG.mapFitVerbose end
-function EVAL_SM_TEST_MAPFIT_DROPCLOSE(mk) return smFitDropOnClose(mk) end
-function EVAL_SM_TEST_COORDS_STATE()
-  local c = _G["EH_SM_COORDS"]
-  if not (type(c) == "table" or type(c) == "userdata") then return nil, nil, nil end
-  local ok1, shown = pcall(c.IsShown, c)
-  local ok2, sc = pcall(c.GetScript, c, "OnUpdate")
-  return (ok1 and shown) or nil, (ok2 and (sc == nil)), type(c) == "table" or type(c) == "userdata"
-end
--- ★「一次过渡」的可测入口：复刻 tick 里那两行过渡判据（burst 期开始 = 顶满节拍），供断言直接验节奏
-function EVAL_SM_TEST_MAPFIT_TRANSITION(open, es)
-  SMFIT.burst = 0
-  if open then SMFIT.burst = SMFIT_BURST_SEC end
-  if es and SMFIT.es and math.abs(tonumber(es) - SMFIT.es) > 0.001 then SMFIT.burst = SMFIT_BURST_SEC end
-  SMFIT.open, SMFIT.es = (open and true or false), (tonumber(es) or SMFIT.es)
-  return SMFIT.burst
-end
-function EVAL_SM_TEST_MENU_RAW()
-  -- ★必须走 smMenuAll（包一层）：`pcall(EVAL_SM_MENU)` 只留第一个返回值 ⇒ keys 恒 nil、这里会恒返回 nil
-  local ok, items, locked, tips, sel, keys = pcall(smMenuAll)
-  if not ok or type(items) ~= "table" or type(keys) ~= "table" then return nil end
-  local nSel = 0
-  for _ = 1, table.getn(sel or {}) do nSel = nSel + 1 end
-  local nTips = 0
-  if type(tips) == "table" and type(tips[1]) == "table" then nTips = table.getn(tips[1]) end
-  return { items = items, keys = keys, selN = nSel, tipLines = nTips, summary = EVAL_SM_SUMMARY() }
 end

@@ -516,30 +516,5 @@ function EVAL_RW_LINK_CLICK(link, button)
   return EVAL_RW_DO_TARGET(nm)
 end
 
--- 测试钩子：把安装状态清回「未安装」（安装是一次性的，判据要能反复驱动**真实安装路径**）。
--- ★摘不掉已包上的 Show（就同「SetScript(type,nil) 不能卸载脚本」一样），测试每次换一张新的假模块表即可。
-function EVAL_TEST_RW_RESET()
-  if EVAL_RW.tick then pcall(EVAL_RW.tick.SetScript, EVAL_RW.tick, "OnUpdate", nil) end
-  EVAL_RW.installed, EVAL_RW.mode, EVAL_RW.module, EVAL_RW.alerts = false, nil, nil, nil
-  EVAL_RW.tgtTries = 0
-  EVAL_RW.showRef, EVAL_RW.lastErr, EVAL_RW.lastLine, EVAL_RW.notifyForce = nil, nil, nil, nil
-  return true
-end
-
--- 读值口：给判据读**真实状态**（不是复刻一遍映射逻辑）
-function EVAL_TEST_RW_STATE()
-  return {
-    mode = EVAL_RW.mode, installed = EVAL_RW.installed, seen = EVAL_RW.seen, fails = EVAL_RW.fails,
-    hasTick = EVAL_RW.tick ~= nil, lastName = EVAL_RW.lastName,
-    lastRankText = EVAL_RW.lastRankText, lastDistance = EVAL_RW.lastDistance,
-    lastRank = EVAL_RW.lastRank, linkOn = EVAL_RW_LINK_ON(),
-    tgtTries = EVAL_RW.tgtTries or 0,
-    -- ★1.75.12：闸门/出口/接线自检/异常（读值口只**如实回读**，不复刻判据）
-    gate = EVAL_RW_GATE_ON(), notifyForce = EVAL_RW.notifyForce,
-    lastErr = EVAL_RW.lastErr, lastLine = EVAL_RW.lastLine,
-    showIsOurs = (EVAL_RW.module ~= nil and EVAL_RW.showRef ~= nil and EVAL_RW.module.Show == EVAL_RW.showRef) and true or false,
-  }
-end
-
 
 if type(EVAL_LOAD_MARK) == "function" then EVAL_LOAD_MARK("files") end -- ★1.74.31 全部源码加载完毕

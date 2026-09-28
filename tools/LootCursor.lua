@@ -953,14 +953,6 @@ function EVAL_LC_TEST_STATE()
     verdict = LC.lastVerdict, hasOrig = LC.orig and true or false,
   }
 end
-function EVAL_LC_TEST_OUT() return LC.out end
-function EVAL_LC_TEST_TARGET() return lcFirstSlot() end
-function EVAL_LC_TEST_NEXT(i) return lcNextSlot(tonumber(i) or 0) end
-function EVAL_LC_TEST_PLACE(slot) return lcPlaceFor(tonumber(slot) or 1) end
-function EVAL_LC_TEST_ROW() return LC_TB_ROWS["lootCursor"] end
-function EVAL_LC_TEST_SUMMARY() return lcStateLine() end
-function EVAL_LC_TEST_SET_FOLLOW(v) return lcSetFollow(v and true or false) end
-function EVAL_LC_TEST_SET_MARKS(v) return lcSetMarks(v and true or false) end
 -- ★诊断口：忘掉「压实」结论（下次点击重新自证）。真机上只有一个用途 = 想让客户端重新自证一次；
 --   离线 harness 靠它把「压实 / 不压实」两种客户端都验一遍（同一进程里两条路都要跑）。
 function EVAL_LC_TEST_FORGET_COMPACT() LC.compact = nil return true end

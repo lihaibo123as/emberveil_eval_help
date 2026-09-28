@@ -276,12 +276,6 @@ function EVAL_IG_KIND_RESET()
   IG_KIND_CACHE, IG_KIND_STAT = {}, { scanned = 0, kept = 0, dropped = 0, unknown = 0, cached = 0, probed = 0 }
   return true
 end
--- 读值口：某物品当前判成了什么（探针与断言用）
-function EVAL_TEST_IG_KIND(name)
-  local c = IG_KIND_CACHE[tostring(name or "")]
-  if not c then return nil end
-  return c.kind, c.src, c.text
-end
 
 -- ★★★1.74.28 过滤体检（用户：「…要过滤一下…验证可行性」）：把**每一件背包物品**的判定依据摊开——
 --   品质 / GetItemInfo 缓存里的主类型·子类型·装备槽 / 自建 tooltip 读到的类型行 / 最终判定（剔 or 留）。
@@ -859,69 +853,4 @@ function EVAL_TEST_IG_STATE()
            upShown = IG.up and IG.up.btn:IsShown() and true or false,
            dnShown = IG.dn and IG.dn.btn:IsShown() and true or false }
 end
-
--- ★「点框体外部自动关闭」的测试入口：走**真实 OnClick**（不是直调隐藏函数）
-function EVAL_TEST_IG_OUTSIDE()
-  if not IG.catcher then return false end
-  local ok, fn = pcall(IG.catcher.GetScript, IG.catcher, "OnClick")
-  if not (ok and type(fn) == "function") then return false end
-  local okc, err = pcall(fn, IG.catcher, "LeftButton")
-  return okc, err
-end
-
-function EVAL_TEST_IG_TEX(i)
-  if not IG.cells[i] then return nil end
-  return IG.cells[i].tex
-end
-
-function EVAL_TEST_IG_MARK(i)
-  if not IG.cells[i] then return nil end
-  return IG.cells[i].mark, (IG.cells[i].mark:IsShown() and true or false)
-end
-
-function EVAL_TEST_IG_CLICK(i)
-  local c = IG.cells[i]
-  if not c then return false end
-  local ok, fn = pcall(c.btn.GetScript, c.btn, "OnClick")
-  if not (ok and type(fn) == "function") then return false end
-  local okc, err = pcall(fn, c.btn, "LeftButton")
-  return okc, err
-end
-
-function EVAL_TEST_IG_HOVER(i)
-  local c = IG.cells[i]
-  if not c then return false end
-  local ok, fn = pcall(c.btn.GetScript, c.btn, "OnEnter")
-  if not (ok and type(fn) == "function") then return false end
-  local okc, err = pcall(fn)
-  return okc, err
-end
-
-function EVAL_TEST_IG_PAGE(which)
-  local t = (which == "up") and IG.up or IG.dn
-  if not (t and t.btn) then return false end
-  local ok, fn = pcall(t.btn.GetScript, t.btn, "OnClick")
-  if not (ok and type(fn) == "function") then return false end
-  local okc, err = pcall(fn)
-  return okc, err
-end
-
-function EVAL_TEST_IG_WHEEL(a, b)
-  if not IG.frame then return false end
-  local ok, fn = pcall(IG.frame.GetScript, IG.frame, "OnMouseWheel")
-  if not (ok and type(fn) == "function") then return false end
-  local okc, err = pcall(fn, a, b)
-  return okc, err
-end
-
--- spec 按钮（底栏右）驱动（测试走真实 OnClick）
-function EVAL_TEST_IG_FOOT(which)
-  local t = (which == "close") and IG.closeBtn or ((which == "a") and IG.btnA or IG.btnB)
-  if not (t and t.btn) then return false end
-  local ok, fn = pcall(t.btn.GetScript, t.btn, "OnClick")
-  if not (ok and type(fn) == "function") then return false end
-  local okc, err = pcall(fn)
-  return okc, err
-end
-
 

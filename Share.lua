@@ -266,10 +266,6 @@ local function shBodies()
   if not text or text == "" then shSay(L("SH_EMPTY")) return nil end
   return shBuildFor(text)
 end
--- ★★★1.73.42h 测试挂钩：任意文本 -> 分片。判「<=250B 预算」必须能喂**长方案**
---   （短方案只出一片，片长上限定多少都看不出来——变异「忽略预算、退回固定 220」曾在短方案下 SURVIVED），
---   同时长方案收回来要能逐字节复原（分片切法改错会在这里露出）。
-function EVAL_TEST_SHARE_BUILD_TEXT(text) return shBuildFor(tostring(text or "")) end
 function EVAL_SHARE_SEND_PROBE()
   local q, i = {}, 0
   for i = 1, table.getn(shTxQ) do
@@ -480,8 +476,6 @@ function shTxEnqueue(bodies, chanId, target)
   end
   return true
 end
--- ★测试直调：驱动与 OnUpdate **同一个**函数（判据必须落在真实调用点/真实闭包上）
-function EVAL_SHARE_TEST_TICK() shTxStep() end
 -- ★1.73.43b 测试钩子：清空「发送留痕」（判据只看**本次分享**发出的脚本，不受前面用例污染）
 -- ★★★1.73.43b 取证命令 `/eh go 分享探针`（用户报「还是没显示分享信息」）：把**唯一的现场**一次摊开 ——
 --   客户端不回话（RunScript/SendChatMessage 都不报错），所以只能看：① 封皮行算什么了、多长；
@@ -567,55 +561,6 @@ function EVAL_SHARE_SEAL_VARIANT_PROBE()
   return probe
 end
 
-function EVAL_TEST_SHARE_SENTLOG_CLEAR() SH.sentLog = {} return true end
--- ★1.73.43f 测试钩子：把发送队列**一次滴干**（分片数会随方案长度变化，夹具必须先滴干再收集）
--- ★1.73.43f 测试钩子：把发送队列填到指定条数（验「队列上限把分享信息那一条也算进去」）
-function EVAL_TEST_SHARE_QUEUE_FILL(n)
-  shTxQ = {}
-  local k = tonumber(n) or 0
-  for i = 1, k do
-    table.insert(shTxQ, { body = "|cff9ad4ff|HEHPF:ffff " .. i .. "/" .. k .. ":00|h[填队列]|h|r", chan = "SAY" })
-  end
-  return table.getn(shTxQ)
-end
-function EVAL_TEST_SHARE_DRAIN()
-  local g = 0
-  while table.getn(shTxQ) > 0 and g < 500 do
-    g = g + 1
-    if type(TEST) == "table" then TEST.time = (TEST.time or 1000) + 1 end
-    shTxStep()
-  end
-  return g
-end
--- ★按本次传输 id 数队列里的分片（不受上一笔遗留影响）
-function EVAL_TEST_SHARE_QUEUE_ID_COUNT(idh)
-  local want = tostring(idh or "")
-  if want == "" then return -1 end
-  local c = 0
-  for q = 1, table.getn(shTxQ) do
-    -- ★1.73.43f 封皮那条带 seal 标记、且序号是 0/1（不是分片）→ 不计数
-    if not shTxQ[q].seal then
-      local bd = tostring(shTxQ[q].body or "")
-      if string.find(bd, "|HEHPF:" .. want .. " ", 1, true) or string.find(bd, "[EHPF#" .. want .. " ", 1, true) then c = c + 1 end
-    end
-  end
-  return c
-end
--- ★诊断：队列里到底是什么
-function EVAL_TEST_SHARE_QUEUE_DUMP()
-  local out = {}
-  for q = 1, table.getn(shTxQ) do out[q] = string.sub(tostring(shTxQ[q].body or ""), 1, 34) end
-  return out
-end
-function EVAL_SHARE_TEST_QUEUE_LEN() return table.getn(shTxQ) end-- ★★★1.74.5 用户：「现在为弹窗原因在日志内显示」—— 把**每一条**「不弹窗」的分叉都写进调试日志
---   （EVAL_LOGLINE → /eh logdump / 存档文件）。此前只有「弹窗 / 过大 / 自己的回声」三条落盘，
---   而最容易踩的「接收开关关着」反而**完全静默** ⇒ 用户报「对方就是不弹窗」时日志里查不到原因。
---   统一前缀 `[分享] 不弹窗：`（检索词），正文写「原因（发送者=…，细节）」。
-local function shNoPop(reason, sender, extra)
-  if type(EVAL_LOGLINE) ~= "function" then return end
-  pcall(EVAL_LOGLINE, "[分享] 不弹窗：" .. tostring(reason) ..
-        "（发送者=" .. tostring(sender or "?") .. (extra and ("，" .. tostring(extra)) or "") .. "）")
-end
 
 -- ★★★1.72.3 **收不齐绝不静默**，且**给晚到的分片留冗余窗口**（用户要求：1~2 秒内都可以）。
 --   两级判定：
@@ -861,7 +806,6 @@ function EVAL_TEST_SHARE_SCENE_KEY(op, hasTarget)
   return key, (type(tb) == "table") and table.getn(tb) or 0
 end
 
-function EVAL_TEST_SHARE_SCENE_LAST() return SH.sceneLast end
 
 local function shSendScene(op)
   local p = SH.pending
@@ -1100,13 +1044,6 @@ end
 function EVAL_SHARE_PROBE_OFF()
   SH_PROBE.armed = nil
   return true
-end
-function EVAL_SHARE_PROBE_STATE()
-  local p = SH_PROBE
-  return { armed = (p.armed and p.armed.mode) or nil, tag = (p.armed and p.armed.tag) or nil,
-           sent = table.getn(p.sent or {}), got = table.getn((p.recv or {}).link or {}),
-           ladderSent = table.getn(p.ladderSent or {}), ladderGot = table.getn((p.recv or {}).len or {}),
-           forms = p.sent, ladder = p.ladderSent, verdicts = p.verdicts or {} }
 end
 -- 探针 ① 的四种形态：同一前缀 tag，各形态再带**各自唯一**的 tag（明文可见，剥标记也认得出）
 local function shProbeForms(prefix)
@@ -2226,70 +2163,11 @@ function EVAL_TITLE_EGG_CHECK()
   return true
 end
 function EVAL_TITLE_CREATOR_CLOSE() shCreatorClose(nil) end
--- ===== 测试钩子（读**真控件**，不读我们自己的账）=====
-function EVAL_TEST_CREATOR_SHOWN()
-  if not shCreator.root then return false end
-  local ok, v = pcall(shCreator.root.IsShown, shCreator.root)
-  return (ok and v) and true or false
-end
 local function shCreatorRead(fs)
   if not fs then return nil end
   local ok, v = pcall(fs.GetText, fs)
   if ok and type(v) == "string" then return v end
   return nil
-end
-function EVAL_TEST_CREATOR_TEXTS()
-  local out = { lines = {} }
-  out.title = shCreatorRead(shCreator.title)
-  for i = 1, 4 do out.lines[i] = shCreatorRead(shCreator.lineFs and shCreator.lineFs[i]) end
-  out.hint = shCreatorRead(shCreator.hint)
-  out.ok = shCreatorRead(shCreator.okText)
-  out.cancel = shCreatorRead(shCreator.cancelText)
-  out.one = shCreatorRead(shCreator.oneFs)
-  out.cur = shCreatorRead(shCreator.curFs)
-  return out
-end
-function EVAL_TEST_CREATOR_INPUT(txt)
-  if not shCreator.edit then return false end
-  pcall(shCreator.edit.SetText, shCreator.edit, tostring(txt or ""))
-  local ok, fn = pcall(shCreator.edit.GetScript, shCreator.edit, "OnTextChanged")
-  if ok and type(fn) == "function" then pcall(fn, shCreator.edit, true) end -- 与真实逐字输入同一条路
-  return true
-end
-function EVAL_TEST_CREATOR_ECHO() return shCreatorRead(shCreator.echo) end
--- ★1.73.42q 「没输入框」事故的专用读值口：EditBox 收不收鼠标 / 能不能聚焦 / 空框提示在不在
-function EVAL_TEST_CREATOR_EDIT_MOUSE()
-  if not shCreator.edit then return nil end
-  return rawget(shCreator.edit, "__mouse") and true or false
-end
-function EVAL_TEST_CREATOR_EDIT_FONT() -- EditBox 实际设上的字体（两条路都没有 = 一个字都画不出 → 看着像「没输入框」）
-  if not shCreator.edit then return nil end
-  return { fo = rawget(shCreator.edit, "__fo"), path = rawget(shCreator.edit, "__font") }
-end
-function EVAL_TEST_CREATOR_FOCUS()
-  if not shCreator.edit then return nil end
-  local ok, v = pcall(shCreator.edit.HasFocus, shCreator.edit)
-  return (ok and v) and true or false
-end
-function EVAL_TEST_CREATOR_FIELD_HINT_SHOWN()
-  if not shCreator.fieldHint then return nil end
-  local ok, v = pcall(shCreator.fieldHint.IsShown, shCreator.fieldHint)
-  return (ok and v) and true or false
-end
-function EVAL_TEST_CREATOR_CLICK_FIELD() -- 模拟「点框内任意处」（本客户端 EditBox 收鼠标不保险 → 有点击层）
-  if not shCreator.fieldHit then return false end
-  local ok, fn = pcall(shCreator.fieldHit.GetScript, shCreator.fieldHit, "OnClick")
-  if not (ok and type(fn) == "function") then return false end
-  pcall(fn)
-  return true
-end
-function EVAL_TEST_CREATOR_CLICK(which)
-  local b = (which == "cancel") and shCreator.cancel or shCreator.ok
-  if not b then return false end
-  local ok, fn = pcall(b.GetScript, b, "OnClick")
-  if not (ok and type(fn) == "function") then return false end
-  pcall(fn)
-  return true
 end
 
 -- ===== 1.73.42c 品阶图标 + 「|T 内联纹理」可行性探针（用户要求：按语义给等级配图标，先验证）=====
@@ -2356,12 +2234,6 @@ function EVAL_SHARE_ICON_PROBE(chanId)
   for i = 1, table.getn(bodies) do shSay("  " .. bodies[i]) end
   shSay("  ★判读：只有 ④ 出 = |T 不可用（聊天行改符号、图标进弹窗）；①/②/③ 出 = 聊天行可直接带图标")
   return ok and true or false
-end
--- 读值口（测试用：不靠聊天字符串判接线，改读落盘字段）
-function EVAL_SHARE_ICON_PROBE_BODIES()
-  local cfg = rawget(_G, "EVAL_HELP_CONFIG")
-  local p = type(cfg) == "table" and cfg.shareIconProbe
-  return (type(p) == "table") and p.bodies or nil
 end
 -- ===== 1.73.41c 探针 ③：悬停 tooltip 机制发现 ===========================================
 -- 用户需求（原话）：「角色名: 分享了一份绝世秘籍 —— 鼠标移动上去才能看到详细的方案信息」。
@@ -2598,9 +2470,6 @@ function EVAL_SHARE_PROBE_AUTORUN(chanId)
   end)
   return true
 end
--- 测试钩子：驱动与 OnUpdate **同一个**函数（判据落在真实调用点）；PLAN 给出待跑步数
-function EVAL_TEST_SHARE_PROBE_STEP() shProbeTick() end
-function EVAL_TEST_SHARE_PROBE_PLAN() return table.getn(shProbePlan) end
 -- ★1.71.3 事件分派（三态兼容）抽成函数：事件名在 1参 / 2参 / 全局 event，参数随之一档右移。
 --   ★抽出来的理由：断言要验的是**真实分派逻辑**（不能在测试里重写一遍）。
 function EVAL_SHARE_DISPATCH(ev, a1, a2, a3, a4)
@@ -3028,150 +2897,7 @@ end
 --   ★若将来又需要「在某个按钮上显示接收开关状态」，照下面两行重写即可：
 --     EVAL_SHARE_RECV_ON() 读当前值；文字用 string.format(L("SH_RECV"), L("SH_ON"/"SH_OFF"))。
 
--- ★1.71.2 测试钩子：弹窗**当前实际显示**的文本（标题行 + 详情行）。
---   用途：验「详情真的填进去了」。★必须读控件当前文本（走真实渲染），
---   不能只断言 SH.pending.text 里有内容——那是数据侧，与「有没有显示」是两件事。
-function EVAL_TEST_SHARE_POPUP_TEXTS()
-  local t = {}
-  if shp.body then
-    local okb, tb = pcall(shp.body.GetText, shp.body)
-    if okb and type(tb) == "string" and tb ~= "" then table.insert(t, tb) end
-  end
-  for _, fs in ipairs(shp.detailLines or {}) do
-    local okS, shown = pcall(fs.IsShown, fs)
-    if okS and shown then
-      local okt, txt = pcall(fs.GetText, fs)
-      if okt and type(txt) == "string" and txt ~= "" then table.insert(t, txt) end
-    end
-  end
-  return t
-end
 
--- 测试观察口
--- ★1.71.3 接收规则的测试观测口：在途笔数 / 去重表条数 / **生产代码真用的上限值**
---   ★上限值必须从生产代码读（断言里写死常量 = 测试在测自己，本项目已踩过）。
-function EVAL_TEST_SHARE_BUF_COUNT()
-  local c = 0
-  for _ in pairs(SH.buf) do c = c + 1 end
-  return c
-end
-function EVAL_TEST_SHARE_DONE_COUNT()
-  local c = 0
-  for _ in pairs(SH.done) do c = c + 1 end
-  return c
-end
--- 也回调提示限频器的状态（断言需要在用例之间重置它，避免跨用例残留）
-function EVAL_TEST_SHARE_RESET_WARN() shWarnLast = 0 shWarnSkip = 0 end
-function EVAL_TEST_SHARE_LIMITS()
-  return { buf = SH_MAX_BUF, chunks = SH_MAX_CHUNKS, text = SH_MAX_TEXT, done = SH_MAX_DONE, gap = SH_WARN_GAP }
-end
--- ★1.71.3 观测口：弹窗详情行的**原始文本**（含被 Hide 的行）——
---   只读 IsShown 的行会漏掉「Hide 了但文本还留着」这种残留（本客户端 Hide 后仍可能被绘出）。
-function EVAL_TEST_SHARE_DETAIL_RAW()
-  local t = {}
-  for _, fs in ipairs(shp.detailLines or {}) do
-    local okt, txt = pcall(fs.GetText, fs)
-    table.insert(t, (okt and type(txt) == "string") and txt or "")
-  end
-  return t
-end
-
--- ★1.71.3 弹窗底部一行的位置/宽度（读**真实控件**；窗口宽也读真实控件）
--- ★1.73.14 三段版：勾选框 + [导入] + [忽略] —— 把勾选框与它标签的几何也交出来，
---   断言才能验「**三段整组**以窗口中线对齐」+「三段互不重叠」（而不是只验两个按钮）。
-function EVAL_TEST_SHARE_BTN_POS()
-  local out = { x1 = nil, x2 = nil, w = 0, W = 0, sx = nil, sw = 0, lw = 0 }
-  if not shp.root then return out end
-  local okW, ww = pcall(shp.root.GetWidth, shp.root)
-  if okW and type(ww) == "number" then out.W = ww end
-  local list = { shp.importBtn, shp.ignoreBtn }
-  for i = 1, 2 do
-    local b = list[i]
-    if b then
-      local okl, l = pcall(b.GetLeft, b)
-      local okw, bw = pcall(b.GetWidth, b)
-      if okl and type(l) == "number" then out["x" .. i] = l end
-      if i == 1 and okw and type(bw) == "number" then out.w = bw end
-    end
-  end
-  -- ★1.73.14 底部一行的**布局真值**（生产算出来的那些数）+ 两枚按钮的真实几何：
-  --   断言用「生产数字」验整组居中（不写死坐标），再用「真实控件」验这些数字**真的落到了控件上**。
-  out.rowX0 = shp.rowX0    -- 整行左起点（算出来的）
-  out.rowW = shp.rowW      -- 整行总宽（勾选框段 + 缝 + 按钮 + 缝 + 按钮）
-  out.chkW = shp.chkW      -- 勾选框整段宽（16 框 + 6 缝 + 标签实测宽）
-  out.btnW = shp.btnW      -- 单个按钮宽
-  out.btnGap = shp.btnGap  -- 缝
-  if shp.recvChk then
-    local okl, l = pcall(shp.recvChk.GetLeft, shp.recvChk)
-    if okl and type(l) == "number" then out.sx = l end
-  end
-  return out
-end
--- ★1.73.14 勾选框读值口：真实控件 + 真实勾选态（断言要读它，不读自己拼的状态）
-function EVAL_TEST_SHARE_RECV_CHK()
-  local mark = nil
-  if shp.recvChk then
-    local okm, m = pcall(shp.recvChk.GetChildren, shp.recvChk) -- 兜底：拿不到就直接用闭包记录的那个
-    mark = shp.recvMark
-  end
-  return shp.recvChk, mark, shp.recvLbl
-end
--- ★1.73.14 让测试驱动「弹窗显示时刷新勾选态」（与真实显示路径同一个函数）
-function EVAL_TEST_SHARE_RECV_REFRESH()
-  if type(shp.recvRefresh) == "function" then shp.recvRefresh() end
-end
--- ★1.71.3 弹窗标题图标的**实际纹理**（读控件，不读常量——否则测的是「写死的字符串」而不是「画出来的东西」）
-function EVAL_TEST_SHARE_TITLE_ICON()
-  if not shp.titleIcon then return nil end
-  local ok, t = pcall(shp.titleIcon.GetTexture, shp.titleIcon)
-  return ok and t or nil
-end
--- ★★★1.73.42i 品阶栏读值口：图标的**实际纹理** + 三行的**实际文本** + 几何真值。
---   ★断言必须读**真控件**（GetTexture/GetText）——只读自己算出来的那个 row 表等于在测自己。
-function EVAL_TEST_SHARE_SEAL_ROW()
-  local out = { icon = nil, head = nil, meta = nil, comment = nil, shown = false,
-                tier = nil, rank = nil, score = nil,
-                sealY = shp.sealY, sealH = shp.sealH, detailY1 = shp.detailY1,
-                detailYN = shp.detailYN, btnTop = shp.btnTop, H = shp.H, W = nil }
-  if shp.root then
-    local okw, wv = pcall(shp.root.GetWidth, shp.root)
-    if okw and type(wv) == "number" then out.W = wv end
-  end
-  if shp.sealIcon then
-    local okt, tv = pcall(shp.sealIcon.GetTexture, shp.sealIcon)
-    out.icon = (okt and type(tv) == "string") and tv or nil
-    local oks, sv = pcall(shp.sealIcon.IsShown, shp.sealIcon)
-    out.shown = (oks and sv) and true or false
-  end
-  local function rd(fs)
-    if not fs then return nil end
-    local okt, tv = pcall(fs.GetText, fs)
-    if okt and type(tv) == "string" then return tv end
-    return nil
-  end
-  out.head, out.meta, out.comment = rd(shp.sealHead), rd(shp.sealMeta), rd(shp.sealComment)
-  -- ★1.73.43d 可见性也要交出来（用户要求「这块不显示」→ 判据必须读真控件的 IsShown，不看我们自己的意图）
-  local function shownOf(f)
-    -- ★1.73.46 控件已被**整个删除**（红框那两行）→ 「不存在」就等于「没显示」，返回 false 而不是 nil
-    if not f then return false end
-    if type(f.IsShown) ~= "function" then return nil end
-    local ok, v = pcall(f.IsShown, f)
-    -- ★★★`and/or` 链**没有布尔语义**（本项目 1.70.46 / 1.73.15 两次踩过）：
-    --   `ok and (v and true or false) or nil` 在 v=false 时会**返回 nil** → 必须显式分步判。
-    if not ok or v == nil then return nil end
-    if v then return true end
-    return false
-  end
-  out.iconShown, out.headShown = shownOf(shp.sealIcon), shownOf(shp.sealHead)
-  out.metaShown, out.commentShown = shownOf(shp.sealMeta), shownOf(shp.sealComment)
-  local r = shp.sealRow
-  if type(r) == "table" then
-    out.tier, out.rank, out.score = r.tier, r.rank, r.score
-    -- ★1.73.42k 判据要验「境界是**方案算的**还是退回来信的」→ 来源与配色也要交出来
-    out.rankFrom, out.rankColor, out.rankIdx = r.rankFrom, r.rankColor, r.rankIdx
-  end
-  return out
-end
 -- ★★★1.73.46 点击封皮链接 → **弹出「方案分享」窗，让玩家自己确认**（用户：「点击分享链接需要弹出方案分享,
 --   让用户自己确认.不要自动导入.」）。
 --   ★旧行为（1.73.42g）是**点一下就直接写进方案库** —— 一个没有确认的写操作：点错、误点、被别人的链接勾一下，
@@ -3201,19 +2927,6 @@ end
 function EVAL_SHARE_RECENT_STATE()
   return { list = SH.recentList or {}, recent = SH.recent or {}, seals = SH.sealSeen or 0, lastSeal = SH.sealLast }
 end
-function EVAL_TEST_SHARE_BUILD() return shBodies() end
--- ★队列里的**分片**数（v1 明文 + v2 链接两种形态都算；封皮不进队列）
-function EVAL_TEST_SHARE_QUEUE_CHUNKS()
-  local c = 0
-  for q = 1, table.getn(shTxQ) do
-    -- ★1.73.43f 分享信息那条**不是分片**（带 seal 标记）→ 不计数（否则「队列里正好 N 片」这类判据会多算一条）
-    if not shTxQ[q].seal then
-      local bd = tostring(shTxQ[q].body or "")
-      if string.sub(bd, 1, 6) == "[EHPF#" or string.find(bd, "|HEHPF:", 1, true) then c = c + 1 end
-    end
-  end
-  return c
-end
 function EVAL_SHARE_PENDING() return SH.pending end
 function EVAL_SHARE_RESET()
   -- ★1.73.43f **发送侧也一起重置**：队列里可能还压着「分享信息」那一条（它在分片之后），
@@ -3221,20 +2934,3 @@ function EVAL_SHARE_RESET()
   shTxQ = {}
   SH.sealPendA, SH.sealPendB = nil, nil
 SH.buf = {} SH.done = {} SH.doneList = {} SH.pending = nil SH.recent = {} SH.recentList = {} SH.sealMeta = {} end -- ★1.73.42i 封皮元数据也清（跨用例不许残留）
--- ★1.71.2 测试钩子：按分享弹窗的 [导入] 按钮（走它自己的 OnClick 闭包）。
---   用户报的 bug 正是这条路径漏了刷新——直调 EVAL_IMPORT_TEXT 会绕过它、测不出来。
-function EVAL_TEST_SHARE_SELF_SKIPPED() return SH.selfSkipped or 0 end
-function EVAL_TEST_SHARE_CLICK_IGNORE()
-  if not (shp.ignoreBtn and shp.ignoreBtn.GetScript) then return false end
-  local fn = shp.ignoreBtn:GetScript("OnClick")
-  if not fn then return false end
-  fn()
-  return true
-end
-function EVAL_TEST_SHARE_CLICK_IMPORT()
-  if not (shp.importBtn and shp.importBtn.GetScript) then return false end
-  local fn = shp.importBtn:GetScript("OnClick")
-  if not fn then return false end
-  fn()
-  return true
-end

@@ -6034,15 +6034,3 @@ end
 
 P("EH_DebugBox 纯缩放试验已载入：/edb 查看用法（/reload 还原一切）")
 
--- ★★★1.74.31 测试读值口（与主插件 EVAL_*_TEST_* 同族，见 CLAUDE.md §5.3「测试够不着生产 local ⇒ 加钩子」）：
---   面板状态 `ui` 与三个判据函数都是**文件内 local**，测试桩取不到 ⇒「列表到底列了什么」这条行为
---   一直没有断言（用户截图的现象就长在这个盲区里）。这里只**交出去**、不改任何行为：
---   测试走真实入口（/edb ui → uiToggle → uiRefresh、真实 OnClick），再用这些读值口读结果。
---   ★交给测试的是**真函数本身**（不是复刻一份映射逻辑），所以「读值口与生产同源」。
-function EVAL_DBX_TEST_UI()
-  return { ui = ui, namedCounts = uiNamedCounts, filtered = uiFiltered, entryNamed = uiEntryNamed,
-    -- ★★★1.74.31 第二步（可折叠树）：交给测试的仍是**真函数本身**（不是复刻一份映射逻辑）
-    entryDepth = uiEntryDepth, treePass = uiTreePass, treeHidden = uiTreeHidden, treeToggle = uiTreeToggle,
-    treeExpandTo = uiTreeExpandTo, treeFoldCount = uiTreeCollapsedCount, depthApply = uiDepthApply,
-    save = uiSaveSettings, load = uiLoadSettings }
-end

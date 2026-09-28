@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.75.31"
+local VERSION = "1.75.34"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -857,14 +857,31 @@ function EVAL_HELP_UI_BUILD()
       cb:SetPoint("TOPLEFT", root, "TOPLEFT", px, -(y + row0 * (pcell + pgap2)))
       pcall(cb.EnableMouse, cb, true)
       pcall(cb.RegisterForClicks, cb, "LeftButtonUp", "RightButtonUp") -- ★1.74.2 右键 = 技能配置弹窗（光注册左键 = 右键永远到不了分派代码）
+      -- ★★★1.75.33 用户定（截图 + 二次确认：「保留目标头像、但外面只留一圈细金边」）：
+      --   底色 = **深色实底**（原来是与描边同色的**整格亮金实底**）；「亮金描边」改由 **4 条 1px 边框**承载
+      --   （BORDER 层，与战斗UI 方案格 uiProfBtnBorder / 工具箱菜单**同一做法**）。
+      --   ⇒ 「选取目标」行画**圆形目标头像**时，四角露的是**深色底**，外面只剩一圈 1px 细金边，
+      --     不再出现「整块黄底 + 圆形头像」那种黄色大圆环（1.75.32 用户报障的就是它）。
       local cbg = cb:CreateTexture(nil, "BACKGROUND")
-      uiSolid(cbg, 0.45, 0.38, 0.15, 1)
+      uiSolid(cbg, 0.10, 0.09, 0.06, 1) -- 深色实底（同工具箱行的暗底）
       cbg:SetPoint("TOPLEFT", cb, "TOPLEFT", 0, 0)
       cbg:SetPoint("BOTTOMRIGHT", cb, "BOTTOMRIGHT", 0, 0)
       local cicon = cb:CreateTexture(nil, "ARTWORK")
       uiSolid(cicon, 0.2, 0.2, 0.2, 1)
       cicon:SetPoint("TOPLEFT", cb, "TOPLEFT", 1, -1)
       cicon:SetPoint("BOTTOMRIGHT", cb, "BOTTOMRIGHT", -1, 1)
+      local cbds = {}
+      for bi = 1, 4 do
+        local btex = cb:CreateTexture(nil, "BORDER")
+        uiSolid(btex, 0.45, 0.38, 0.15, 1)
+        pcall(btex.SetHeight, btex, 1)
+        pcall(btex.SetWidth, btex, 1)
+        cbds[bi] = btex
+      end
+      cbds[1]:SetPoint("TOPLEFT", cb, "TOPLEFT", 0, 0)       cbds[1]:SetPoint("TOPRIGHT", cb, "TOPRIGHT", 0, 0)             pcall(cbds[1].SetHeight, cbds[1], 1)
+      cbds[2]:SetPoint("BOTTOMLEFT", cb, "BOTTOMLEFT", 0, 0) cbds[2]:SetPoint("BOTTOMRIGHT", cb, "BOTTOMRIGHT", 0, 0)       pcall(cbds[2].SetHeight, cbds[2], 1)
+      cbds[3]:SetPoint("TOPLEFT", cb, "TOPLEFT", 0, 0)       cbds[3]:SetPoint("BOTTOMLEFT", cb, "BOTTOMLEFT", 0, 0)       pcall(cbds[3].SetWidth, cbds[3], 1)
+      cbds[4]:SetPoint("TOPRIGHT", cb, "TOPRIGHT", 0, 0)     cbds[4]:SetPoint("BOTTOMRIGHT", cb, "BOTTOMRIGHT", 0, 0)     pcall(cbds[4].SetWidth, cbds[4], 1)
       local ctext = uiText(cb, math.max(7, math.floor(9 * z)), 1, 1, 0.4)
       ctext:SetPoint("CENTER", cb, "CENTER", 0, 0)
       local ci = i
@@ -906,7 +923,7 @@ function EVAL_HELP_UI_BUILD()
         EVAL_WAR_TAB_REFRESH() -- ★数据变了 → 界面同步刷新（配置窗技能列表的勾选走这份真值；1.71.1 教训：刷新放写入点）
         EVAL_HELP_UI_TICK()    -- 战斗信息UI 立刻重画（不等下一个 0.15s 心跳，点击反馈要即时）
       end)
-      profCells[i] = { btn = cb, bg = cbg, icon = cicon, text = ctext }
+      profCells[i] = { btn = cb, bg = cbg, icon = cicon, text = ctext, borders = cbds }
     end
     -- ★1.71.12 同上：块内赋值（子开关「方案」= 关时既没有方案按钮也没有图标格）
     ui.profBtns, ui.profCells = profBtns, profCells -- 1.46.0 技能带=profCells（ui.cells 已废）
@@ -1146,7 +1163,9 @@ function EVAL_HELP_UI_TICK()
         pc.btn:Show()
         local s = wslots[r.skill]
         local t0 = wicon(r.skill)
-        -- 1.66.0 选取目标类技能：有目标时图标实时画目标头像（SetPortraitTexture，刷新节拍内自然跟随切目标），无目标回退原图标
+        -- ★★★1.75.33 选取目标行**照旧画目标头像**（1.66.0 的行为保留：切目标随刷新节拍即变）。
+        --   「黄色大圆环」不是靠撤头像解决的，而是把**描边从「整格亮金实底」换成 4 条 1px 边框 + 深色底**
+        --   （见本函数上方的 BUILD 与 tick 里的配色）：圆形头像四角露的是**深色底**，外面只有一圈 1px 细金边。
         if targetSelOf(r.skill) and st.hasTarget and type(SetPortraitTexture) == "function" then
           pcall(SetPortraitTexture, pc.icon, "target")
         elseif t0 then pcall(pc.icon.SetTexture, pc.icon, t0) end
@@ -1182,10 +1201,15 @@ function EVAL_HELP_UI_TICK()
             pc.text:SetText("")
           end
         end
-        if pass and enabled then
-          pcall(pc.bg.SetVertexColor, pc.bg, 1, 0.85, 0.3, 1) -- 条件满足：亮金描边
-        else
-          pcall(pc.bg.SetVertexColor, pc.bg, 0.45, 0.38, 0.15, 1)
+        -- ★1.75.33 「亮金描边」由 4 条 1px 边框承载（底色在 BUILD 里定死为深色，这里不再写底色）：
+        --   条件满足 = 亮金 1,0.85,0.3；不满足 = 暗金 0.45,0.38,0.15。
+        local bcR, bcG, bcB = 0.45, 0.38, 0.15
+        if pass and enabled then bcR, bcG, bcB = 1, 0.85, 0.3 end
+        if pc.borders then
+          for bi = 1, 4 do
+            local btex = pc.borders[bi]
+            if btex then pcall(btex.SetVertexColor, btex, bcR, bcG, bcB, 1) end
+          end
         end
       end
     end
@@ -2752,55 +2776,6 @@ function EVAL_TN_OPEN(title, cur, onOk, label)
   if tnUI.echo then tnUI.echo:SetText(cur or "") end
   tnUI.root:Show()
 end
--- ★★★1.73.32 读值口：通用输入弹窗的**规程审计**（层级 / 拖动协议 / 宽度 / 内部布局 / 标签）
-function EVAL_TEST_TN_Z()
-  if not tnUI.root then return nil end
-  local function num(o, m)
-    if not o or type(o[m]) ~= "function" then return nil end
-    local ok, v = pcall(o[m], o)
-    return (ok and type(v) == "number") and v or nil
-  end
-  local function val(o, m)
-    if not o or type(o[m]) ~= "function" then return nil end
-    local ok, v = pcall(o[m], o)
-    if ok and v ~= nil then return v end
-    return nil
-  end
-  local out = { w = num(tnUI.root, "GetWidth"), h = num(tnUI.root, "GetHeight"),
-                level = num(tnUI.root, "GetFrameLevel"), movable = val(tnUI.root, "IsMovable"),
-                ebW = num(tnUI.eb, "GetWidth"), btns = {} }
-  out.titleLevel = num(tnUI.titleBar, "GetFrameLevel")
-  out.drag = val(tnUI.titleBar, "GetDragRegistered")
-  out.clicks = val(tnUI.titleBar, "GetClicksRegistered")
-  local okL, labT = pcall(tnUI.label.GetText, tnUI.label)
-  out.label = (okL and tostring(labT or "")) or ""
-  for i = 1, table.getn(tnUI.btns or {}) do
-    local b = tnUI.btns[i]
-    table.insert(out.btns, { x = num(b, "GetLeft"), w = num(b, "GetWidth"), y = num(b, "GetTop") })
-  end
-  return out
-end
-function EVAL_TEST_TN_CLOSE() if tnUI.root then pcall(tnUI.root.Hide, tnUI.root) end return true end
--- ★1.71.3 断言入口：通用名称输入弹窗（跟随 / 物品 / 指定目标 都走它）。
---   ★为什么要它：这些「点了弹框输入」的入口以前**没有任何观测口**——「点了没反应」在测试里完全看不见，
---     而本轮「跟随:指定名字…」正是靠它落值（判据同「要验点了会弹，就必须点一下看结果」）。
-function EVAL_TEST_TN_SHOWN()
-  return (tnUI.root and tnUI.root:IsShown()) and true or false
-end
-function EVAL_TEST_TN_TITLE()
-  if not tnUI.titleText then return nil end
-  local ok, t = pcall(tnUI.titleText.GetText, tnUI.titleText)
-  return ok and t or nil
-end
--- 走**真实输入框 + 真实回车处理器**（等价于玩家打完字按回车），不是直接调回调
-function EVAL_TEST_TN_COMMIT(txt)
-  if not (tnUI.root and tnUI.eb) then return false end
-  pcall(tnUI.eb.SetText, tnUI.eb, tostring(txt or ""))
-  local ok, fn = pcall(tnUI.eb.GetScript, tnUI.eb, "OnEnterPressed")
-  if not (ok and type(fn) == "function") then return false end
-  fn()
-  return true
-end
 
 -- 删除方案（至少保留一个；activeProfile 随删除左移/收敛）
 function EVAL_WAR_DEL_PROFILE(idx)
@@ -2864,70 +2839,6 @@ local warRefreshCount = 0
 local function warRefreshTick() warRefreshCount = warRefreshCount + 1 end
 -- ★1.73.49 方案列表「品阶重算」次数（每次刷新按方案内容重算一次；判据读它证明「打开就算」）
 local warProfTierCalc = 0
--- ★1.71.9 断言入口：技能列表「调序 ▲▼」（★1.74.17 起滚动改文字按钮，只剩调序用三角）的**真实文本**。
---   ★为什么必须读控件：用户看到的是控件上的字，生产代码里的那份常量只是副本 ——
---     读常量 = 测自己（本项目「断言里写死布局常量」的老坑）。
-function EVAL_TEST_WAR_ARROWS()
-  local function txt(fs)
-    if not fs then return nil end
-    local ok, v = pcall(fs.GetText, fs)
-    return ok and v or nil
-  end
-  -- ★读 cfgWin.warUI（文件级表，cfgBuild 建好后一直有效）——本函数定义在 cfgBuild 内部，
-  --   直接引用那个局部名会解析成全局 nil（实测踩到：attempt to index a nil value (global 'warUI')）。
-  local w = cfgWin.warUI or {}
-  local out = { rowUp = nil, rowDn = nil, scrollUp = txt(w.scrollUpText), scrollDn = txt(w.scrollDnText) }
-  local r1 = w.rows and w.rows[1]
-  if r1 then out.rowUp = txt(r1.upText) out.rowDn = txt(r1.dnText) end
-  return out
-end
--- ★★★1.74.17 断言入口：技能列表底部「上一页/下一页」两个**文字按钮**的**真实几何 + 真实状态**。
---   为什么必须有它：这次的原始诉求就是**位置**（「放置在底部案例模版按钮左侧、右对齐」）与
---   **出现条件**（「在有滚动条的时候」）——这两条都只能读真控件：
---     写死坐标 = 测自己；只验「按钮存在」挡不住「还在列表右栏里 / 平台一直挂着」。
---   ★与 EVAL_TEST_CFG_NAV() 配对使用：[案例模版] 的左边缘从那边读，这里不另算一份。
-function EVAL_TEST_WAR_SCROLL()
-  local w = cfgWin.warUI or {}
-  local function txt(fs)
-    if not fs then return nil end
-    local ok, v = pcall(fs.GetText, fs)
-    return ok and v or nil
-  end
-  local function geo(b, fs)
-    if not b then return nil end
-    local okp, p, _r, _rp, ox, oy = pcall(b.GetPoint, b, 1)
-    local okw, aw = pcall(b.GetWidth, b)
-    local okh, ah = pcall(b.GetHeight, b)
-    local oks, sh = pcall(b.IsShown, b)
-    local okc, fn = pcall(b.GetScript, b, "OnClick")
-    return {
-      x = (okp and type(ox) == "number") and ox or nil,
-      y = (okp and type(oy) == "number") and oy or nil,
-      point = okp and p or nil,
-      w = (okw and type(aw) == "number") and aw or nil,
-      h = (okh and type(ah) == "number") and ah or nil,
-      shown = (oks and sh) and true or false,
-      hasClick = (okc and type(fn) == "function") and true or false,
-      label = txt(fs),
-      btn = b,
-      text = fs,
-    }
-  end
-  return {
-    up = geo(w.scrollUp, w.scrollUpText),
-    dn = geo(w.scrollDn, w.scrollDnText),
-    on = w.scrollOn and true or false, -- 生产自报的「有滚动条」状态（不靠 IsShown 反推）
-    tailGap = w.scrollTailGap,
-    groupX = w.scrollX,       -- 按钮组左端（生产自报，与真控件对读）
-    groupRight = w.scrollRight,
-    offset = w.offset or 0,   -- 当前滚动偏移（「整页步进」的判据读它）
-    rowsN = w.rowsN,          -- 可见行数（一页 = rowsN 行）
-    maxOff = w.maxOff,
-  }
-end
-function EVAL_TEST_WAR_REFRESH_COUNT() return warRefreshCount end
--- ★★★1.73.49 品阶重算计数（用户：「品阶每次打开方案自动计算完善」）——「打开了就重算」这件事必须**可断言**
-function EVAL_TEST_WAR_TIER_CALC_COUNT() return warProfTierCalc end
 -- ★★★1.73.48 方案列表行的**外观读值口**（「图标和配色与案例模版同一套」这条判据读它）：
 --   一律读**真控件**（GetTexture / IsShown / GetTextColor / GetVertexColor）——本项目「读自己拼的账 = 测自己」的老坑。
 -- ★★★1.73.49 取证命令 `/eh go 方案图标`：方案列表每行的 **品阶 → 请求的纹理 → 客户端实际报回来的纹理 → 是否显示**
@@ -3175,26 +3086,6 @@ function EVAL_TEST_CFG_TAB_NAMES()
   end
   return out
 end
--- ★★1.75.11 读值口：**每个 Tab 页当前有多少控件是显示着的**（返回 { [页号] = { 文本… } }）。
---   用途 = 钉死本项目最老的坑之一「数据刷新顺手改可见性，把别的页盖在当前页上」
---   （1.73.56 全局页叠技能列表 · 用户 1.75.11 报的「切战斗UI 开关 → 抓宠帮手 Tab 内容重叠」同族）——
---   可见性契约 = **只有 EVAL_HELP_CFG_SETTAB 能动显隐**，所以在任何页上，其它页的可见控件数必须是 **0**。
-function EVAL_TEST_CFG_PAGE_VIS()
-  local out = {}
-  for i = 1, table.getn(cfgWin.pages or {}) do
-    local p = cfgWin.pages[i]
-    local vis = {}
-    for _, wgt in ipairs(p.widgets) do
-      local okv, v = pcall(wgt.IsShown, wgt)
-      if okv and v then
-        local okt, t = pcall(wgt.GetText, wgt)
-        table.insert(vis, (okt and type(t) == "string" and t ~= "") and t or "?")
-      end
-    end
-    out[i] = vis
-  end
-  return out
-end
 function EVAL_CFG_WHEEL_SCRIPT()
   if not cfgWin.root then return nil end
   local ok, fn = pcall(cfgWin.root.GetScript, cfgWin.root, "OnMouseWheel")
@@ -3207,22 +3098,6 @@ function EVAL_HELP_SE_WARN_ICON() return SE_WARN_ICON end
 --   ★同样给 IconBrowser 用（两枚都要进「本插件在用」；只报白的会漏掉黄的那枚）。
 function EVAL_HELP_SE_MARK_ICONS() return { unavail = SE_MARK_UNAVAIL, test = SE_MARK_TEST } end
 
--- ★1.71.24 管理窗几何（供「两段都在窗内、有序排开」的断言读**生产真值**，不写死常量）
-function EVAL_TEST_PM_GEO()
-  if not (pmUI and pmUI.root) then return nil end
-  -- ★GetPoint 返回 (point, relTo, relPoint, x, y) 五个值——取第 5 个 y
-  local function yOf(f)
-    if not f then return nil end
-    local ok, _p, _r, _rp, _x, y = pcall(f.GetPoint, f, 1)
-    return (ok and type(y) == "number") and y or nil
-  end
-  local okh, hh = pcall(pmUI.root.GetHeight, pmUI.root)
-  return {
-    h = (okh and hh) or nil,
-    secNameY = yOf(pmUI.secName), secKeyY = yOf(pmUI.secKey),
-    keyBtnY = yOf(pmUI.keyBtn), infoY = yOf(pmUI.infoText), btnY = yOf(pmUI.saveBtn),
-  }
-end
 
 -- ★1.71.24 全插件还剩几个「方案管理类」弹窗（合并的**结构判据**）：
 --   ★行为断言抓不到「调用点改回旧名字」——因为旧名字是别名、开出来还是同一个窗
@@ -3235,17 +3110,6 @@ function EVAL_HELP_PM_WINDOW_COUNT()
   return n
 end
 
--- ★1.71.24 配置窗是否可见（EVAL_HELP_CFG_TOGGLE 是**切换**语义，断言前必须先确认真开着）
-function EVAL_TEST_CFG_VISIBLE()
-  if not (cfgWin and cfgWin.root) then return false end
-  local ok, v = pcall(cfgWin.root.IsVisible, cfgWin.root)
-  return (ok and v) and true or false
-end
-
--- ★1.71.24 交出配置窗的方案按钮真实控件（供「两处右键开同一个窗」的断言真的点它）
-function EVAL_TEST_CFG_PROF()
-  return cfgWin and cfgWin.profBtns and { btns = cfgWin.profBtns } or nil
-end
 
 function EVAL_TEST_CFG_NAV()
   local out = {}
@@ -3270,15 +3134,6 @@ function EVAL_TEST_CFG_NAV()
   return out
 end
 
--- ★1.71.2（第十六轮）断言专用：配置窗**真的画出来的**章节标题文案（按绘制顺序）。
---   本轮需求是「隐藏左侧的开关标题」——要验的是「它根本没被画」，不是「它被 Hide 了」
---   （本客户端 Hide 后控件仍可能被绘出，本项目在黑块那一轮吃过亏）。
---   反向哨兵同样必要：断言「不在」时，必须先证明这份登记表**本来会响**（其它标题仍在里面）。
-function EVAL_TEST_CFG_HEADERS()
-  local out = {}
-  for _, t in ipairs(cfgHeaderTexts) do table.insert(out, t) end
-  return out
-end
 
 function EVAL_HELP_CFG_TOGGLE()
   local win = cfgBuild()
@@ -3616,26 +3471,6 @@ function EVAL_HELP_MB_SETICON()
   return false
 end
 
--- ★1.71.2 测试钩子：小地图按钮的默认锚点与重叠判定（否则只能靠人眼看界面）。
---   ★必须物理放在上面那个 do 块**之后**——minimapBtn / mbAnchorDefault / mbOverlapsMinimap
---     都是 local，写在使用点之前会解析成全局 nil（DECL ORDER CHECK 当场抓出 3 条 FAIL）。
-function EVAL_TEST_MB_DEFAULT_ANCHOR()
-  if not minimapBtn then return nil end
-  mbAnchorDefault(minimapBtn)
-  local ok, point, _, relPoint, x, y = pcall(minimapBtn.GetPoint, minimapBtn, 1)
-  if not ok then return nil end
-  return { point = point, relPoint = relPoint, x = x, y = y }
-end
-function EVAL_TEST_MB_OVERLAPS() return mbOverlapsMinimap(minimapBtn) end
-function EVAL_TEST_MB_BTN() return minimapBtn end
--- ★1.75.10 读值口（测试用）：把「已贴 / 读回 / 判定」三位清回**未贴**的原始状态。
---   为什么必须有它：`mbIconPath` 一旦贴上就粘住（自愈口靠它判「要不要再试」），
---   而「载入那一次没贴上 → 悬停/进世界补上」这条路只有在**未贴**状态下才验得到。
---   ★它只清**诊断/记忆**三位，不碰配置真值（cfg.mbIcon）与控制件。
-function EVAL_TEST_MB_ICON_RESET()
-  mbIconPath, mbBack, mbWhy = nil, nil, nil
-  return true
-end
 -- ★1.71.13 断言入口：按钮的**真实几何与贴图状态**（图标模式 / 兜底模式），读真控件不写死常量。
 function EVAL_TEST_MB_VISUAL()
   -- ★1.75.10 新增诊断三件：`back` = 客户端**读回**的纹理 · `why` = 本次判定原因 · `plateAlpha` = 暗底透明度。
@@ -3658,12 +3493,6 @@ function EVAL_TEST_MB_VISUAL()
     out.ehText = (okt and tostring(t or "")) or nil
   end
   return out
-end
-function EVAL_TEST_MB_ANCHOR_CURRENT()
-  if not minimapBtn then return nil end
-  local ok, point, _, relPoint, x, y = pcall(minimapBtn.GetPoint, minimapBtn, 1)
-  if not ok then return nil end
-  return { point = point, relPoint = relPoint, x = x, y = y }
 end
 
 -- ============ 方案快捷键绑定（1.71.16，用户：「方案 右键能否弹窗设置 绑定快捷键」→ 先验证后实装） ============
@@ -3956,45 +3785,6 @@ function EVAL_BIND_FREE_SLOT(allowTaken)
   return fallback
 end
 
--- ===== 方案管理弹窗断言钩子（1.71.24：重命名 + 快捷键合并后的单一弹窗） =====
--- ★名字保留 EVAL_TEST_BIND_*（既有断言组 98/99/100 都在用）——语义已扩为「方案管理窗」。
--- ★读真控件/真数据，不读常量。
-function EVAL_TEST_BIND_UI()
-  local out = { built = (pmUI.root ~= nil) and true or false, pidx = pmUI.pidx, selKey = pmUI.selKey,
-    shown = false, title = nil, cur = nil, info = nil, echo = nil }
-  if pmUI.root then
-    local ok, v = pcall(pmUI.root.IsVisible, pmUI.root)
-    out.shown = (ok and v) and true or false
-  end
-  if pmUI.title then
-    local ok, t = pcall(pmUI.title.GetText, pmUI.title)
-    out.title = ok and tostring(t or "") or nil
-  end
-  if pmUI.curText then
-    local ok, t = pcall(pmUI.curText.GetText, pmUI.curText)
-    out.cur = ok and tostring(t or "") or nil
-  end
-  if pmUI.infoText then
-    local ok, t = pcall(pmUI.infoText.GetText, pmUI.infoText)
-    out.info = ok and tostring(t or "") or nil
-  end
-  if pmUI.echo then
-    local ok, t = pcall(pmUI.echo.GetText, pmUI.echo)
-    out.echo = ok and tostring(t or "") or nil
-  end
-  return out
-end
--- ★改名后弹窗要真的开：合并窗的「保存」按钮（改名 + 绑键一次提交）
-function EVAL_TEST_BIND_DO_BTN() return pmUI.saveBtn end
-function EVAL_TEST_BIND_CLOSE() if pmUI.root then pmUI.root:Hide() end end
--- ★合并窗专有：直接驱动输入框（EditBox 不渲染也能测逻辑），返回是否成功
-function EVAL_TEST_PM_SETNAME(nm)
-  if not pmUI.eb then return false end
-  local ok = pcall(pmUI.eb.SetText, pmUI.eb, tostring(nm or ""))
-  if ok and pmUI.echo then pcall(pmUI.echo.SetText, pmUI.echo, tostring(nm or "")) end
-  return ok
-end
-
 
 -- ============ 状态信息 UI（展示 Cat 式角色状态表 EVAL_HELP_STATE 的实时值） ============
 -- /eh st 开关；标题栏拖动（位置记忆+越界回归）；每 0.15s 刷新一次 EVAL_HELP_UPDATE_STATE()。
@@ -4208,49 +3998,6 @@ function EVAL_HELP_ST_TICK()
   stui.body:SetText(table.concat(lines, "\n"))
 end
 
--- ★★★1.73.53 读值口：状态信息UI 标题栏的**真实文本**（判据读真控件；用户要求它显示玩家角色名）
--- ★1.73.59 状态信息UI 是否可见（EVAL_HELP_ST_TOGGLE 是**切换**语义，断言前要先确认真开着）
-function EVAL_TEST_ST_VISIBLE()
-  if not (stui and stui.root) then return false end
-  local ok, v = pcall(stui.root.IsVisible, stui.root)
-  return (ok and v) and true or false
-end
-function EVAL_TEST_ST_TITLE()
-  if not stui.title then return nil end
-  local ok, v = pcall(stui.title.GetText, stui.title)
-  return (ok and type(v) == "string") and v or nil
-end
--- ★★★1.73.59 读值口：状态信息UI 标题栏的**布局与两个徽标**（用户：「状态信息名称和头衔 参考战斗信息做相同的布局」）。
---   一律读**真控件**（GetText / GetPoint / GetJustifyH / GetTextColor）—— 不读我们自己的记账；
---   与 EVAL_TEST_UI_TITLEBAR 同款字段，便于断言「两个窗口同一套布局」。
-function EVAL_TEST_ST_TITLEBAR()
-  local out = { title = nil, titlePoint = nil, titleJustify = nil, titleX = nil, tier = nil, ptitle = nil }
-  local function fsOf(fs, prefix)
-    if not fs then return end
-    local okt, tv = pcall(fs.GetText, fs)
-    if okt and type(tv) == "string" then out[prefix] = tv end
-    local okp, pt, rel, rp, px = pcall(fs.GetPoint, fs)
-    if okp and type(pt) == "string" then
-      out[prefix .. "Point"], out[prefix .. "RelTo"], out[prefix .. "RelPoint"], out[prefix .. "X"] = pt, rel, rp, px
-    end
-    local okc, cr, cg, cb = pcall(fs.GetTextColor, fs)
-    if okc and type(cr) == "number" then out[prefix .. "Color"] = { cr, cg, cb } end
-  end
-  if stui.title then
-    local okt, tv = pcall(stui.title.GetText, stui.title)
-    if okt and type(tv) == "string" then out.title = tv end
-    local okp, pt, _rel, _rp, px = pcall(stui.title.GetPoint, stui.title)
-    if okp and type(pt) == "string" then out.titlePoint = pt out.titleX = px end
-    local okj, jv = pcall(stui.title.GetJustifyH, stui.title)
-    if okj and type(jv) == "string" then out.titleJustify = jv end
-    out.titleFs = stui.title
-  end
-  fsOf(stui.tierText, "tier")
-  fsOf(stui.titleText, "ptitle")
-  fsOf(stui.planText, "plan")
-  out.tierFs, out.ptitleFs, out.planFs = stui.tierText, stui.titleText, stui.planText
-  return out
-end
 function EVAL_HELP_ST_TOGGLE()
   local sc = stCfg()
   if stui.root and stui.root:IsVisible() then
@@ -4291,8 +4038,6 @@ local function seTypeLabel(id)
   end
   return L("CT_" .. key)
 end
--- 读值口：断言与 UI 读**同一份**名字（本项目「不许在断言里另写一套判据」的纪律）
-function EVAL_TEST_SE_TYPELABEL(id) return seTypeLabel(id) end
 local SE_TYPES = {
   { id = "power",      name = "怒气/能量",   kind = "num",   n = 30 },
   { id = "tHpPct",     name = "目标血%",     kind = "num",   n = 10 },
@@ -4994,64 +4739,7 @@ function SE_AURA_MENU(k0)
   end
   return { items = items, names = names, locked = locked, liveN = liveN }
 end
--- 测试直调（1.70.28）：报告光环下拉的构建顺序——**直接观察 SE_AURA_MENU 的真实输出**，
--- 而不是在测试里复刻一遍顺序（那会让「删掉实时分组标题」之类的变异完全不可见）。
-function EVAL_TEST_AURA_DROPDOWN_ORDER(kindId)
-  -- 直接看 SE_AURA_MENU（UI 用的那一份）的真实输出
-  local m = SE_AURA_MENU(kindId)
-  local items, locked, names = m.items, m.locked, m.names
-  local firstLive, firstSkill, firstLearned = nil, nil, nil
-  for i = 1, table.getn(items) do
-    local it2 = items[i]
-    if string.find(it2, "◆", 1, true) or string.find(it2, "○", 1, true)
-      or string.find(it2, "●", 1, true) or string.find(it2, "▲", 1, true) then
-      firstLive = firstLive or i
-    elseif string.find(it2, "◇", 1, true) then
-      firstLearned = firstLearned or i
-    elseif not locked[i] and firstSkill == nil and it2 ~= "" then
-      firstSkill = i
-    end
-  end
-  local lockedN = 0
-  for i = 1, table.getn(items) do if locked[i] then lockedN = lockedN + 1 end end
-  return {
-    n = table.getn(items),
-    firstLive = firstLive, firstSkill = firstSkill,
-    liveN = m.liveN,
-    -- ★实时分组标题是否真的存在且排在第一位（只数 locked 行不够——菜单里还有其他分组标题，
-    --   删掉实时这一条时 hasHeader 仍然为真，断言会假通过，本用例首版正是这样漏掉的）
-    firstIsHeader = (locked[1] == true),
-    firstItem = items[1],
-    liveFirst = (firstLive ~= nil and firstSkill ~= nil and firstLive < firstSkill),
-    hasHeader = (lockedN > 0),
-    lockedHeaders = lockedN,
-    -- ★1.71.2 加标记断言用：暴露**真实的显示串与取值表**（不在测试里重建一份）
-    skillsLast = (m.liveN > 0 and firstSkill ~= nil and firstSkill > m.liveN),
-    items = items, names = names,
-  }
-end
 
--- 1.70.25 测试直调：确认下拉件的多选/锁定能力【真的生效】，而不是只看标志位。
--- 背景：宿主（DataSearch 地图标注下拉）曾漏传 opts.multi，于是面板走非多选分支——
---   ① OnClick 里 dd:Hide() → 点一项就关（用户报「每次点击一个下拉窗不要关闭」）；
---   ② 勾选标记与面板自绘方框两套状态并存（用户报「选草药却把矿脉也勾上」）。
--- 因此断言必须覆盖「面板不因点选而隐藏」与「锁定行不产生勾」这两条可观察行为。
-function EVAL_DD_TEST_OPEN_MULTI(items, onPick, opts)
-  EVAL_DD_HIDE()
-  if not ddUI.testAnchor then -- 惰性建一个测试用锚点（EVAL_DD_OPEN 必须拿到真实按钮来定位）
-    local a = CreateFrame("Button", nil, UIParent)
-    a:SetWidth(100) a:SetHeight(16)
-    a:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 20, -20)
-    a:Show()
-    ddUI.testAnchor = a
-  end
-  opts = opts or {}
-  opts.multi = true
-  ddUI.anchor = nil -- 清掉上一轮的 toggle 判据，保证本次一定是「打开」而非「收起」
-  EVAL_DD_OPEN(ddUI.testAnchor, items, onPick, opts)
-  local shown = ddUI.root and ddUI.root:IsShown() and true or false
-  return ddUI.multi and true or false, shown
-end
 
 -- 模拟点第 pi 行（走真实 OnClick 脚本，而非直接改状态），返回点击后面板是否仍显示
 function EVAL_DD_TEST_CLICK(pi)
@@ -5062,88 +4750,6 @@ function EVAL_DD_TEST_CLICK(pi)
   return ddUI.root and ddUI.root:IsShown() and true or false, row
 end
 
-function EVAL_DD_TEST_MULTI() return ddUI.multi and true or false end
--- 1.70.29 搜索框行为（打开/输入/重入）测试直调
-function EVAL_DD_TEST_OPEN_SEARCH(items, onPick, locked)
-  EVAL_DD_HIDE()
-  if not ddUI.testAnchor then
-    local a = CreateFrame("Button", nil, UIParent)
-    a:SetWidth(100) a:SetHeight(16)
-    a:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 20, -20)
-    a:Show()
-    ddUI.testAnchor = a
-  end
-  ddUI.anchor = nil
-  ddUI.searchText = ""
-  EVAL_DD_OPEN(ddUI.testAnchor, items, onPick, { search = true, locked = locked, onFreeText = function() end })
-  return true
-end
--- ★1.71.2 判据从 IsShown() 改成「有没有被停放到屏幕外」：
---   本客户端 EditBox 用 Hide() 之后仍会画底条（用户截图「所有弹窗上部一条黑块」），
---   所以搜索框**不再走 Hide()**，而是挪出可视区 → IsShown() 恒真，不能再当可见性判据。
--- ★1.71.2 直接跑真实的搜索框构建（DD_BUILD 只在「第一次打开下拉」时执行，测试无法在受控时机触发它）。
---   用户截图的「所有弹窗上部一条看不见的黑块」是**层设置**问题，只有执行真实构建路径才能验证。
-function EVAL_DD_TEST_BUILD_SEARCH()
-  DD_BUILD()
-  return ddUI.search ~= nil
-end
--- 搜索框当前的「层」——桩把 SetDrawLayer 当空操作的话这里拿不到值，故同时暴露调用记录
-function EVAL_DD_TEST_SEARCH_LAYER()
-  if not ddUI.search then return nil end
-  local ok, lay = pcall(function() return ddUI.search:GetDrawLayer() end)
-  if ok and type(lay) == "string" then return lay end
-  return nil
-end
--- ★1.71.2 按**宿主关键字**打开下拉（复现光环条件那条路径：面板无搜索框、靠 opts.kw 过滤）。
---   返回可见行数，供断言验证「过滤真的生效」。
-function EVAL_DD_TEST_OPEN_KW(items, kw, locked)
-  EVAL_DD_HIDE()
-  if not ddUI.testAnchor then
-    local a = CreateFrame("Button", nil, UIParent)
-    a:SetWidth(100) a:SetHeight(16)
-    a:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 20, -20)
-    a:Show()
-    ddUI.testAnchor = a
-  end
-  ddUI.anchor = nil
-  ddUI.searchText = ""
-  ddUI.hostKw = nil
-  EVAL_DD_OPEN(ddUI.testAnchor, items, function() end, { kw = kw, locked = locked })
-  local n = 0
-  for _, row in ipairs(ddUI.rows) do
-    if row.btn and row.btn:IsShown() then n = n + 1 end
-  end
-  return n
-end
--- 1.71.2 打开一个**不开搜索**的下拉（复现用户截图场景：条件类型/比较符/姿态号等短列表）
-function EVAL_DD_TEST_OPEN_NO_SEARCH(items, onPick)
-  EVAL_DD_HIDE()
-  if not ddUI.testAnchor then
-    local a = CreateFrame("Button", nil, UIParent)
-    a:SetWidth(100) a:SetHeight(16)
-    a:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 20, -20)
-    a:Show()
-    ddUI.testAnchor = a
-  end
-  ddUI.anchor = nil
-  ddUI.searchText = ""
-  EVAL_DD_OPEN(ddUI.testAnchor, items, onPick)
-  return true
-end
-function EVAL_DD_TEST_SEARCH_VISIBLE()
-  if not ddUI.search then return false end
-  local ok, x = pcall(ddUI.search.GetLeft, ddUI.search)
-  if not (ok and type(x) == "number") then return false end
-  return x > DD_SEARCH_PARK + 1
-end
--- ★1.71.2 搜索框是否**真的回到面板内**（用户第三轮报的「光标消失」= 本体还在屏幕外，
---   只有背景被搬回来了）。判据 = 左边缘在面板左边缘附近，而不是停放坐标。
-function EVAL_DD_TEST_SEARCH_IN_PANEL()
-  if not ddUI.search then return false end
-  local ok, x = pcall(ddUI.search.GetLeft, ddUI.search)
-  if not (ok and type(x) == "number") then return false end
-  return (x > DD_SEARCH_PARK + 1) and (x < 200)
-end
 -- ★1.71.2 把搜索框强制打到「停放态」——给往返断言一个**确定性起点**。
 --   为什么必须有它：DD_BUILD 只在第一次打开下拉时执行（ddUI.root 已存在就 early-return），
 --   所以测试里搜索框的初始位置是从**上一个用例**继承来的；不显式置位的话，
@@ -5153,37 +4759,6 @@ end
 --   撤掉恢复动作时，坐标会**保持上一次的值**（本轮实测：变异体照样读到 x=4 → 断言假通过）；
 --   计数才如实反映「这次打开有没有执行恢复动作」。
 function EVAL_DD_TEST_SEARCH_POS_COUNT() return ddUI.posCount or 0 end
-function EVAL_DD_TEST_PARK_SEARCH()
-  local dd = ddUI.root
-  if not (ddUI.search and dd) then return false end
-  -- ★不用 GetParent()：**当时**测试桩对未知方法的兜底是「返回一个函数」，pcall 会成功但拿到函数而非帧
-  --   （本轮实测 parkOk=false 就是这么来的）。ddUI.root 就是 DD_MAKE_SEARCH 里的那个 dd，直接用它。
-  --   ★1.71.2（第二十轮）桩已补上真正的 GetParent（纹理能反查所在帧）——这里仍保留直接引用，
-  --     因为它比「反查父帧」更**不含歧义**：少一层间接就少一个可能指错的对象。
-  ddUI.search:ClearAllPoints()
-  ddUI.search:SetPoint("TOPLEFT", dd, "TOPLEFT", DD_SEARCH_PARK, 0)
-  return true
-end
--- 供断言使用：面板本体（不是搜索框）当前是否显示
-function EVAL_DD_TEST_ROOT_VISIBLE()
-  return (ddUI.root and ddUI.root:IsShown()) and true or false
-end
-function EVAL_DD_TEST_SEARCH_TEXT() return tostring(ddUI.searchText or "") end
-function EVAL_DD_TEST_TYPE_SEARCH(txt)
-  -- 模拟用户逐字输入：先写进 EditBox，再触发 OnTextChanged（与真实路径一致）
-  if ddUI.search then
-    pcall(ddUI.search.SetText, ddUI.search, txt)
-    local h = ddUI.search:GetScript("OnTextChanged")
-    if h then h() end
-  end
-end
-function EVAL_DD_TEST_FILTERED_COUNT()
-  local n = 0
-  for _, row in ipairs(ddUI.rows) do
-    if row.btn and row.btn:IsShown() then n = n + 1 end
-  end
-  return n
-end
 function EVAL_DD_TEST_VISIBLE_TEXTS()
   local t = {}
   for _, row in ipairs(ddUI.rows) do
@@ -5193,56 +4768,13 @@ function EVAL_DD_TEST_VISIBLE_TEXTS()
   end
   return t
 end
-function EVAL_DD_TEST_HAS_FREE_ROW()
-  for _, row in ipairs(ddUI.rows) do
-    if row.btn and row.btn:IsShown() and row.text then
-      local t = row.text:GetText() or ""
-      if string.find(t, "✎", 1, true) then return true end
-    end
-  end
-  return false
-end
-function EVAL_DD_TEST_SHOWN() return (ddUI.root and ddUI.root:IsShown()) and true or false end
 function EVAL_DD_TEST_RESET_ANCHOR() ddUI.anchor = nil end -- 让下一次 OPEN 一定是「打开」而非 toggle 收起
-function EVAL_DD_TEST_ROW(i) return ddUI.rows and ddUI.rows[i] end
 -- ★1.71.3 读**控件上实际设的纹理**（不是读 opts 传参——否则测的是「传了什么」而不是「画成了什么」）
 function EVAL_DD_TEST_ROW_TEX(i)
   local row = ddUI.rows and ddUI.rows[i]
   if not (row and row.icon) then return nil end
   local ok, t = pcall(row.icon.GetTexture, row.icon)
   return ok and t or nil
-end
-function EVAL_DD_TEST_ROW_WARN(i)
-  local row = ddUI.rows and ddUI.rows[i]
-  if not (row and row.warn) then return nil end
-  local ok, t = pcall(row.warn.GetTexture, row.warn)
-  return ok and t or nil
-end
-function EVAL_DD_TEST_ROW_WARN_SHOWN(i)
-  local row = ddUI.rows and ddUI.rows[i]
-  if not (row and row.warn) then return false end
-  local ok, s = pcall(row.warn.IsShown, row.warn)
-  return (ok and s) and true or false
-end
-function EVAL_DD_TEST_ROW_TIP(i)
-  local row = ddUI.rows and ddUI.rows[i]
-  return row and row.tip or nil
-end
-function EVAL_DD_TEST_SELAT(i) return ddUI.sel and ddUI.sel[i] end
-function EVAL_DD_TEST_LOCKED_SUPPORTED()
-  -- 能力探测：开一个含锁定行的多选面板，锁定行必须【没有 OnClick】且【文本无方框】。
-  local got = {}
-  EVAL_DD_TEST_OPEN_MULTI({ "标题行", "可选项" }, function(p) got[#got + 1] = p end,
-    { selected = {}, locked = { [1] = true } })
-  local lockedRow = ddUI.rows and ddUI.rows[1]
-  local okRow = ddUI.rows and ddUI.rows[2]
-  if not (lockedRow and okRow) then return false end
-  if lockedRow.btn:GetScript("OnClick") ~= nil then return false end -- 锁定行仍可点 → 不支持
-  local t = lockedRow.text:GetText() or ""
-  if string.find(t, "■", 1, true) or string.find(t, "□", 1, true) then return false end
-  if okRow.btn:GetScript("OnClick") == nil then return false end -- 普通行必须可点
-  EVAL_DD_HIDE()
-  return true
 end
 
 function EVAL_DD_SYNC(sel)
@@ -5568,50 +5100,6 @@ local function seSecStep(cd, delta)
   cd.secN = v
 end
 
--- ★1.72.4 测试观测口/注入口：「等级元素默认隐藏、设了才显示」必须能被断言（否则只是这一次的手工动作）
-function EVAL_TEST_SE_RANK()
-  local w = seUI and seUI.rankW
-  local shown, nameShown, txt = false, false, nil
-  if w and w.btn and w.btn.IsShown then
-    local ok, v = pcall(w.btn.IsShown, w.btn)
-    shown = (ok and v) and true or false
-    if seUI.rankName and seUI.rankName.IsShown then
-      local ok2, v2 = pcall(seUI.rankName.IsShown, seUI.rankName)
-      nameShown = (ok2 and v2) and true or false
-    end
-  end
-  if seUI and seUI.rankName and seUI.rankName.GetText then
-    local ok3, v3 = pcall(seUI.rankName.GetText, seUI.rankName)
-    if ok3 then txt = v3 end
-  end
-  return { exists = (w ~= nil), shown = shown, nameShown = nameShown,
-           rank = (seUI and seUI.ed and seUI.ed.rank) or nil, text = txt }
-end
--- ★1.72.4 断言入口：走**真实 OnEnter**（写 tooltip → 桩记录行），返回是否真的挂上了。
---   ★为什么不让测试自己掏控件：seUI 是本文件的 **local**，测试脚本够不着（1.72.4 实测：
---     测试里写 seUI.rankW.btn 全是 nil，断言看起来在验接线、其实什么都没读到）。
-function EVAL_TEST_SE_RANK_TIP()
-  local w = seUI and seUI.rankW
-  if not (w and w.btn and w.btn.GetScript) then return nil end
-  local ok, fn = pcall(w.btn.GetScript, w.btn, "OnEnter")
-  if not (ok and type(fn) == "function") then return nil end
-  fn()
-  return true
-end
-function EVAL_TEST_SE_SET_RANK(rk)
-  if not (seUI and seUI.ed) then return false end
-  seUI.ed.rank = (rk == nil or rk == "") and nil or rk
-  EVAL_HELP_SE_REFRESH()
-  return true
-end
--- ★走**真实 OnClick 闭包**：右键入口这条接线必须被执行（只调判定函数测不出「压根没接上」）
-function EVAL_TEST_SE_RANK_CLICK(btn)
-  if not (seUI and seUI.skillBtn) then return false end
-  local ok, fn = pcall(seUI.skillBtn.GetScript, seUI.skillBtn, "OnClick")
-  if not (ok and type(fn) == "function") then return false end
-  fn(seUI.skillBtn, btn or "RightButton")
-  return true
-end
 -- ★1.73.2 可驱散类型集合的本地化清单（tooltip 用）：62px 的窄格只列得下 2 项，
 --   完整清单必须**另有地方给全**——不因为格子窄就把用户选的信息藏掉（本项目「绝不静默截断」）。
 local function seDispelAllNames(ids)
@@ -6834,43 +6322,7 @@ local function SE_BUILD()
   seUI.root = root
 end
 
--- ★1.70.45 测试直调：剩余时间检查的共用判据 / 步进函数（UI 用的就是这两个）
-function EVAL_TEST_SE_SEC_KINDS(k) return seSecKinds(k) end
--- ★1.74.30 测试直调：类型切换的参数继承（走**真实**纯函数 seSwitchCond，不在断言里复刻逻辑）
-function EVAL_TEST_SE_SWITCH(old, ti) return seSwitchCond(old, ti) end
--- ★1.74.30 测试读值口：按 id 取类型下标（断言要能定位到某个类型，而不写死下标）
-function EVAL_TEST_SE_TYPE_INDEX(id)
-  local i = (type(SE_BY_K) == "table") and SE_BY_K[id] or nil
-  if type(i) == "number" and i > 0 then return i end
-  for j = 1, table.getn(SE_TYPES) do if SE_TYPES[j].id == id then return j end end
-  return nil
-end
-function EVAL_TEST_SE_SEC_STEP(cd, delta) seSecStep(cd, delta) return cd and cd.secN end
 
--- ★1.70.46 测试直调：往编辑器里塞一条条件并跑**真实的**编辑器刷新。
---   存在理由＝一次真实事故：seSecKinds 曾被声明在 EVAL_HELP_SE_REFRESH **之后**，
---   于是 SE_REFRESH 里调用它时绑到**全局 nil** → 用户一点「自身buff检查」就红字报错
---   （attempt to call global 'seSecKinds' (a nil value)）。
---   ★而当时的测试**只断言了判定函数本身**（EVAL_TEST_SE_SEC_KINDS），
---   **调用点从未被执行** → 测试全绿、用户一点就炸。这是本项目第 4 次「只测解析函数、不测接线」。
-function EVAL_TEST_SE_PUSH_COND(kind, name, op, n, dt, scope)
-  if not seUI.root then EVAL_HELP_SE_OPEN(1) end
-  if not seUI.root then return nil end
-  if not seUI.ed then seUI.ed = { profIdx = 1, skillIdx = nil, skill = "测试技能", conds = {} } end
-  seUI.ed.skill = seUI.ed.skill or "测试技能"
-  -- ★1.70.47 scope：队伍/团队扫描范围（cd.name）——省略时按「队伍」，与真编辑器默认一致
-  seUI.ed.conds = { { cd = { k = kind, s = name, v = true, secOp = op, secN = n, dt = dt, name = scope } } }
-  EVAL_HELP_SE_REFRESH() -- 生产刷新路径（就是出事故的那条路）
-  return true
-end
--- 行首「条件类型」按钮的真实文案（1.70.47）：用来验证「团队debuff」这类标签真的渲染出来，
---   而不是只在 SE_TYPES 表里存在（表里有、界面上没有 = 用户看不到这个功能）。
-function EVAL_TEST_SE_ROW_TYPE(i)
-  local row = seUI.rows and seUI.rows[i]
-  if not (row and row.typeBtn) then return nil end
-  local ok, t = pcall(row.typeBtn.text.GetText, row.typeBtn.text)
-  return ok and t or nil
-end
 -- 队伍debuff 的「类型」下拉控件（1.70.47）：可见性 + 显示文案（问真实控件）
 -- ★1.73.12 预览行读值口：底部预览是**真实 FontString**，断言要读它（不能读自己拼的字符串）
 function EVAL_TEST_SE_PREVIEW()
@@ -6878,34 +6330,12 @@ function EVAL_TEST_SE_PREVIEW()
   local ok, t = pcall(function() return seUI.preview:GetText() end)
   return ok and t or nil
 end
--- ★1.74.9 读值口：某行某控件的**真实 X 坐标**（读真控件，不复刻布局逻辑）。
---   存在理由＝「类型格与时长格重叠」：两个控件都显示、都在 x=348，肉眼看到「重叠」，
---   但只断言「显示了没有」是抓不到的 —— 必须读**真实坐标**才能证实「它们分开了」。
-function EVAL_TEST_SE_ROW_GEOM(name, i)
-  i = i or 1
-  local row = seUI.rows and seUI.rows[i]
-  if not row then return nil end
-  local c = row[name]
-  if not (c and c.btn) then return nil end
-  local ok, x = pcall(c.btn.GetLeft, c.btn)
-  if ok and type(x) == "number" then return x end
-  return nil
-end
 
 function EVAL_TEST_SE_ROW_DT(i)
   local row = seUI.rows and seUI.rows[i]
   if not (row and row.dtBtn) then return nil, nil end
   local okS, s = pcall(row.dtBtn.btn.IsShown, row.dtBtn.btn)
   local okT, t = pcall(row.dtBtn.text.GetText, row.dtBtn.text)
-  return (okS and s) and true or false, okT and t or nil
-end
--- ★1.75.10 读值口：该行「是/否」按钮（immBtn）的可见性与**真实文字**。
---   存在理由：目标玩家条件的 是/否 = 正向/反向的唯一界面凭据；不读真控件就只能读数据（显示侧没人钉）。
-function EVAL_TEST_SE_ROW_IMM(i)
-  local row = seUI.rows and seUI.rows[i]
-  if not (row and row.immBtn) then return nil, nil end
-  local okS, s = pcall(row.immBtn.btn.IsShown, row.immBtn.btn)
-  local okT, t = pcall(row.immBtn.text.GetText, row.immBtn.text)
   return (okS and s) and true or false, okT and t or nil
 end
 -- ★1.75.10 读值口：布尔类条件那一格（`row.valBtn`，x=142）的可见性与真实文字。
@@ -6926,309 +6356,7 @@ function EVAL_TEST_SE_CLICK_VAL(i)
   fn()
   return true
 end
--- ★1.71.3 断言入口：队伍/团员条件的两个过滤格（职业 / 小队）——可见性 + 显示文案（问真实控件）
-function EVAL_TEST_SE_ROW_CLS(i)
-  local row = seUI.rows and seUI.rows[i]
-  if not (row and row.clsBtn) then return nil, nil end
-  local okS, s = pcall(row.clsBtn.btn.IsShown, row.clsBtn.btn)
-  local okT, t = pcall(row.clsBtn.text.GetText, row.clsBtn.text)
-  return (okS and s) and true or false, okT and t or nil
-end
-function EVAL_TEST_SE_ROW_GRP(i)
-  local row = seUI.rows and seUI.rows[i]
-  if not (row and row.grpBtn) then return nil, nil end
-  local okS, s = pcall(row.grpBtn.btn.IsShown, row.grpBtn.btn)
-  local okT, t = pcall(row.grpBtn.text.GetText, row.grpBtn.text)
-  return (okS and s) and true or false, okT and t or nil
-end
-function EVAL_TEST_SE_ROW_PREVIEW(i)
-  local row = seUI.rows and seUI.rows[i]
-  if not (row and row.preview) then return false end
-  local okS, s = pcall(row.preview.IsShown, row.preview)
-  return (okS and s) and true or false
-end
--- ★1.73.2 点**真实的类型格**（走它自己的 OnClick → 打开多选面板）
-function EVAL_TEST_SE_CLICK_DT(i)
-  local row = seUI.rows and seUI.rows[i]
-  if not (row and row.dtBtn) then return false end
-  local ok, fn = pcall(row.dtBtn.btn.GetScript, row.dtBtn.btn, "OnClick")
-  if not (ok and type(fn) == "function") then return false end
-  fn()
-  return true
-end
--- ★1.73.2 交出类型格真实控件（悬停说明断言用）
-function EVAL_TEST_SE_DT_BTN(i)
-  local row = seUI.rows and seUI.rows[i]
-  return (row and row.dtBtn and row.dtBtn.btn) or nil
-end
-function EVAL_TEST_SE_ROW_CLS_BTN(i)
-  local row = seUI.rows and seUI.rows[i]
-  return (row and row.clsBtn and row.clsBtn.btn) or nil
-end
-function EVAL_TEST_SE_ROW_GRP_BTN(i)
-  local row = seUI.rows and seUI.rows[i]
-  return (row and row.grpBtn and row.grpBtn.btn) or nil
-end
--- 行内「剩余时间」控件的可见性与文案（问真实控件，不问常量）
--- ★★★1.71.2（第八轮还原）**行内输入框已删**，输入回到面板内。
---   所以原来那批「行内输入框」钩子（ROW_BOX / BOX_TEXT / BOX_FOCUSED / TYPE_AURA / PRESS_ENTER / KW）
---   **全部删除**：它们指向的控件已不存在，留着只会让断言误判。
---   ★新断言改用**面板内搜索框**的现成钩子：EVAL_DD_TEST_SEARCH_VISIBLE / SEARCH_IN_PANEL /
---     TYPE_SEARCH / FILTERED_COUNT / HAS_FREE_ROW（全部问**真实控件**）。
--- ★保留：模拟点击那一格（走 sHit 的**真实 OnClick**）—— 现在它应该**只开下拉**。
-function EVAL_TEST_SE_CLICK_CELL(i)
-  local r = seUI and seUI.rows and seUI.rows[i]
-  if not (r and r.sHit) then return false end
-  local ok, fn = pcall(r.sHit.GetScript, r.sHit, "OnClick")
-  if not (ok and type(fn) == "function") then return false end
-  fn()
-  return true
-end
--- ★读该行当前的光环名（cd.s）——验「自定义输入提交」用
-function EVAL_TEST_SE_AURA_NAME(i)
-  local ed = seUI and seUI.ed
-  local it = ed and ed.conds and ed.conds[i]
-  return it and it.cd and it.cd.s or nil
-end
--- ★1.75.10 读值口：该行「名字格」的**真实文字**（`row.skillText`）。
---   存在理由：目标玩家/目标职业/目标类型/追踪类型都把参数显示在这一格 —— 断言要读**真控件**
---   （本项目纪律：数据侧与显示侧各钉一半；「数据对了没显示出来」与「显示了但数据不对」是两回事）。
-function EVAL_TEST_SE_ROW_TEXT(i)
-  local row = seUI.rows and seUI.rows[i]
-  if not (row and row.skillText) then return nil end
-  local ok, t = pcall(row.skillText.GetText, row.skillText)
-  return ok and t or nil
-end
--- ★1.75.10 读第 i 行条件的**名字参数**（cd.nm：目标玩家 / 选取目标:指定名称 共用这个字段）
-function EVAL_TEST_SE_COND_NM(i)
-  local ed = seUI and seUI.ed
-  local it = ed and ed.conds and ed.conds[i]
-  return it and it.cd and it.cd.nm or nil
-end
--- ★1.71.3 断言入口：读该行条件的**数据侧**类型 id（与显示侧的 ROW_TYPE 各钉一半——
---   「数据对了但没显示出来」与「显示了但数据不对」是两回事，本项目两边都栽过）
--- ★1.73.2 读第 i 行条件的**类型值**（原样交出：可能是 nil / 单选字符串 / 多选集合）
-function EVAL_TEST_SE_COND_DT(i)
-  local ed = seUI and seUI.ed
-  local it = ed and ed.conds and ed.conds[i]
-  return it and it.cd and it.cd.dt or nil
-end
-function EVAL_TEST_SE_COND_K(i)
-  local ed = seUI and seUI.ed
-  local it = ed and ed.conds and ed.conds[i]
-  return it and it.cd and it.cd.k or nil
-end
--- ★1.75.6 读第 i 行条件的**参数值**（追踪类型读它；与 COND_K / COND_DT 同族：原样交出，不加工）
-function EVAL_TEST_SE_COND_S(i)
-  local ed = seUI and seUI.ed
-  local it = ed and ed.conds and ed.conds[i]
-  return it and it.cd and it.cd.s or nil
-end
 
-function EVAL_TEST_SE_SKILL() -- ★1.71.3 编辑器当前技能名（验「名字落值」用）
-  return (seUI and seUI.ed and seUI.ed.skill) or nil
-end
-function EVAL_TEST_SE_COND_COUNT()
-  local ed = seUI and seUI.ed
-  return (ed and ed.conds and table.getn(ed.conds)) or 0
-end
--- ★点**面板内的自由文本行**（✎ 开头）—— 验「列表里没有就用自己输入的名字」这条能力。
---   ★为什么要走真实 OnClick：直接调 onFreeText 会绕过「面板真的渲染出了这一行」，
---     而那正是用户能不能用这个功能的前提。
-function EVAL_TEST_SE_DD_CLICK_FREE()
-  if not ddUI.rows then return false end
-  for _, row in ipairs(ddUI.rows) do
-    if row.btn and row.btn:IsShown() and row.text then
-      local t = row.text:GetText() or ""
-      if string.find(t, "✎", 1, true) then
-        local fn = row.btn:GetScript("OnClick")
-        if fn then fn() return true end
-      end
-    end
-  end
-  return false
-end
-
--- ★1.71.2（第十三轮）点**真实的条件类型按钮**（走它自己的 OnClick 闭包）→ 打开类型下拉。
---   为什么必须走真实 OnClick：行池上限这类 bug **只在真实构建路径上**才暴露，
---   测试自己拼一份 items 是测不出来的（本项目多次栽在「只测函数不测调用点」）。
--- ★1.71.3 点**真实的分类下拉按钮**（走它自己的 OnClick 闭包）→ 打开类别下拉。
---   为什么必须走真实按钮：本轮的图标/标记都是「调用点接线」，测试自己拼 opts 测不出来（老教训）。
-function EVAL_TEST_SE_CLICK_CAT()
-  if not (seUI and seUI.catBtn) then return false end
-  local ok, fn = pcall(seUI.catBtn.GetScript, seUI.catBtn, "OnClick")
-  if not (ok and type(fn) == "function") then return false end
-  fn()
-  return true
-end
--- ★1.71.3 类别图标：读**生产代码**给的字段（不在测试里另写一份映射）
-function EVAL_TEST_SE_CAT_ICONS()
-  local cats = EVAL_GO_SKILL_CATEGORIES()
-  local out = {}
-  for i = 1, table.getn(cats) do out[i] = cats[i].icon end
-  return out
-end
--- ★1.71.3 悬停说明的断言入口：类型格 / 比较符格的**真实按钮**（要验接线就必须走它们的 OnEnter）
-function EVAL_TEST_SE_TYPE_BTN(i)
-  local r = seUI and seUI.rows and seUI.rows[i]
-  return (r and r.typeBtn and r.typeBtn.btn) or nil
-end
-function EVAL_TEST_SE_OP_BTN(i)
-  local r = seUI and seUI.rows and seUI.rows[i]
-  return (r and r.opBtn and r.opBtn.btn) or nil
-end
--- ★1.71.3 断言入口：「添加条件」的**真实按钮**（要验初始类型就必须走真实 OnClick——本项目老判据）
-function EVAL_TEST_SE_CLICK_ADD()
-  local b = seUI and seUI.addBtn
-  if not (b and type(b.GetScript) == "function") then return false end
-  local ok, fn = pcall(b.GetScript, b, "OnClick")
-  if not (ok and type(fn) == "function") then return false end
-  fn()
-  return true
-end
--- ★1.71.3 断言入口：状态标记图例 —— 读**真实控件**上的贴图与位置（不是 opts 传参：
---   读传参只证明「传了什么」，证明不了「画成了什么」，本项目 UI ICON 那条的老判据）
-function EVAL_TEST_SE_MARK_ICONS()
-  local out = {}
-  local ms = seUI and seUI.marks
-  if type(ms) ~= "table" then return out end
-  for i = 1, table.getn(ms) do
-    local m = ms[i]
-    local rec = { tex = nil, x = nil, y = nil, w = nil }
-    if m and m.tex then
-      local okt, t = pcall(m.tex.GetTexture, m.tex)
-      rec.tex = okt and t or nil
-      local okw, wv = pcall(m.tex.GetWidth, m.tex)
-      rec.w = okw and wv or nil
-    end
-    if m and m.btn then
-      local okx, xv = pcall(m.btn.GetLeft, m.btn)
-      rec.x = okx and xv or nil
-      local oky, yv = pcall(m.btn.GetTop, m.btn)
-      rec.y = oky and yv or nil
-    end
-    out[i] = rec
-  end
-  return out
-end
--- ★1.71.3 断言入口：图例按钮本体（悬停断言必须走**真实 OnEnter**）
-function EVAL_TEST_SE_MARK_BTN(i)
-  local m = seUI and seUI.marks and seUI.marks[i]
-  return (m and m.btn) or nil
-end
-function EVAL_TEST_SE_CLICK_TYPE(i)
-  local r = seUI and seUI.rows and seUI.rows[i]
-  if not (r and r.typeBtn and r.typeBtn.btn) then return false end
-  local ok, fn = pcall(r.typeBtn.btn.GetScript, r.typeBtn.btn, "OnClick")
-  if not (ok and type(fn) == "function") then return false end
-  fn()
-  return true
-end
--- ★行池上限（供断言直接读，不写死数字）
-function EVAL_TEST_DD_MAX_ROWS() return DD_MAX_ROWS end
--- ★条件类型菜单**总共需要多少行**（真实遍历 SE_TYPE_GROUPS，不在测试里重算）
-function EVAL_TEST_SE_TYPE_MENU_ROWS()
-  local rows = 0
-  for _, grp in ipairs(SE_TYPE_GROUPS) do
-    rows = rows + 1 -- 组标题
-    for _, id in ipairs(grp.ids) do
-      local ti2 = SE_BY_K[id]
-      if ti2 and not SE_TYPES[ti2].hidden then rows = rows + 1 end
-    end
-  end
-  return rows
-end
-function EVAL_TEST_SE_ROW_SEC(i)
-  local row = seUI.rows and seUI.rows[i]
-  if not (row and row.secOp) then return nil, nil end
-  local okS, s = pcall(row.secOp.btn.IsShown, row.secOp.btn)
-  local okT, t = pcall(row.secOp.text.GetText, row.secOp.text)
-  return (okS and s) and true or false, okT and t or nil
-end
--- 点行内**真实按钮**（走它自己的 OnClick 闭包），而不是直接调 seSecStep——
--- 直接调共用函数会漏掉「按钮闭包根本没接上」这类接线错误（本项目已栽过数次）。
-function EVAL_TEST_SE_CLICK_SEC(i, plus)
-  local row = seUI.rows and seUI.rows[i]
-  if not row then return nil end
-  local b = nil
-  if plus and row.secPlus then b = row.secPlus.btn
-  elseif (not plus) and row.secMinus then b = row.secMinus.btn end
-  if not b then return nil end
-  local ok, fn = pcall(b.GetScript, b, "OnClick")
-  if not (ok and type(fn) == "function") then return nil end
-  fn()
-  return true
-end
-function EVAL_TEST_SE_SECN(i)
-  local ed = seUI.ed
-  if not (ed and ed.conds and ed.conds[i]) then return nil end
-  return ed.conds[i].cd.secN
-end
--- 收尾：清掉编辑器状态，避免把测试条件留给后面的用例（模块级状态必须自己收）
--- ★1.70.46 测试直调：全部**对用户可见**的条件类型 key。
---   供「每种条件都跑一遍真实刷新」的遍历断言用：
---   seSecKinds 那次事故只发生在 hasBuff 这一条分支里——只挑一个 kind 测是抓不到的。
-function EVAL_TEST_SE_KINDS()
-  local out = {}
-  for _, td in ipairs(SE_TYPES) do
-    if not td.hidden then table.insert(out, td.id) end
-  end
-  return out
-end
--- ★1.70.47 测试直调：条件类型下拉**真正会列出的条目**（与 SE_BUILD 里构建 items 的逻辑同一份来源）。
---   用户明确要求「条件类型里要有 队伍buff / 队伍debuff / 团队buff / 团队debuff」——
---   只断言 SE_TYPES 表里有这几个 id 是不够的（表里有、下拉没列 = 用户根本选不到），
---   所以这里复刻的是**下拉入口那一份**遍历，并让测试核对本地化后的标签。
--- ★1.70.47 测试直调：模拟「在下拉里选中某个条件类型」→ 返回它生成的条件（走真实 seDefaultCond）。
---   用途：验证选「团队debuff」得到的是 **{k=teamDebuff, name=团队}**——
---   即「界面上选团队那一条」与「引擎按团队范围扫描」确实是同一件事（两侧接不上就白做）。
-function EVAL_TEST_SE_DEFAULT_COND(typeId)
-  local ti = SE_BY_K[typeId]
-  if not ti then return nil end
-  return seDefaultCond(ti)
-end
-function EVAL_TEST_SE_TYPE_MENU()
-  local out = {}
-  for _, grp in ipairs(SE_TYPE_GROUPS) do
-    table.insert(out, L(grp.label))
-    for _, id in ipairs(grp.ids) do
-      local ti = SE_BY_K[id]
-      if ti and not SE_TYPES[ti].hidden then table.insert(out, seTypeLabel(SE_TYPES[ti].id)) end -- ★1.73.27 读值口与 UI 同源
-    end
-  end
-  return out
-end
--- ★1.71.2 断言专用：按**组标签**取真实分组表的 id 列表（返回副本，测试改不动生产表）。
---   ★为什么按 label 而不按下标：有人调整组的先后时，下标就会悄悄指错组。
---     但调用侧**必须同时断言「取到的不是 nil」**——否则 label 打错会让「不在该组」类断言恒真。
--- ★1.71.2 断言专用：条件类型菜单里每个条目所用的**语言包键**（按菜单顺序，跳过 hidden）。
---   存在理由：这些键是**运行时拼出来的**（"CT_" .. string.upper(id)），静态 LANG KEY CHECK
---   只扫源码里的 L("字面量")，**扫不到它们** → 「某语言缺键」「某语言两条同名」都只能在运行时逐语言核对。
-function EVAL_TEST_SE_TYPE_LABEL_KEYS()
-  local out = {}
-  for _, grp in ipairs(SE_TYPE_GROUPS) do
-    for _, id in ipairs(grp.ids) do
-      local ti = SE_BY_K[id]
-      if ti and not SE_TYPES[ti].hidden then table.insert(out, "CT_" .. string.upper(SE_TYPES[ti].id)) end
-    end
-  end
-  return out
-end
-function EVAL_TEST_SE_TYPE_GROUP_IDS(label)
-  for _, grp in ipairs(SE_TYPE_GROUPS) do
-    if grp.label == label then
-      local out = {}
-      for _, v in ipairs(grp.ids) do table.insert(out, v) end
-      return out
-    end
-  end
-  return nil
-end
-function EVAL_TEST_SE_CLEAR()
-  if seUI.root then pcall(seUI.root.Hide, seUI.root) end
-  seUI.ed = nil
-  return true
-end
 
 -- ★1.74.2 读值口：技能编辑窗**真的显示着**（问帧，不问我们自己的记账——「读自己拼的账 = 测自己」）
 function EVAL_TEST_SE_SHOWN()
@@ -7237,32 +6365,6 @@ function EVAL_TEST_SE_SHOWN()
   return (ok and s and true) or false
 end
 
--- ★1.70.45 测试直调：窗口宽度三方对照（来源函数 / 配置窗实际 / 编辑窗实际）。
---   三者必须一致——「一个宽度两处各写一份」正是本项目反复踩的那类坑。
-function EVAL_TEST_WIN_W()
-  return cfWinWidth(), cfgWin.W, seUI.W
-end
-
--- ★1.70.46 测试直调：两个自建窗的**实际尺寸**（不是构建期记录的常量，而是问帧本身）。
---   为什么要问帧：`SetHeight(H)` 曾被同一行的行尾注释吞掉，而两个窗口的宽度都正常，
---   于是「宽度对照」三条断言全绿、窗口却高得离谱。断言必须直接问帧要真实尺寸。
-function EVAL_TEST_SE_SIZE()
-  local r = seUI.root
-  if not r then return nil, nil end
-  local okw, w = pcall(r.GetWidth, r)
-  local okh, h = pcall(r.GetHeight, r)
-  return (okw and type(w) == "number") and w or nil, (okh and type(h) == "number") and h or nil
-end
--- ★1.71.2 暴露配置窗**生产代码实际使用的布局值**（开关组 y / 按钮行 y / 项高）。
---   用途：断言必须验「生产代码真的把开关组下移了」——
---   测试自己写一份 -389 只能证明测试自己写了 -389（本轮变异实测：生产改回 -349 照样绿）。
--- ★1.71.2 暴露「全局 → 日志」分组的行（key + y + 读写器）。
---   用途：断言要验「方案技能日志开关**真的在日志组里**（而不是只从旧位置删了），
---   且仍读写同一个 cfg.wdebug」—— 只扫源码文本拿不到这两件事。
-function EVAL_TEST_CFG_LOG_ROWS()
-  local cw = EVAL_HELP_CFGWIN
-  return cw and cw.logRows or nil
-end
 
 -- ★1.72.4 断言入口：一键宏设置页的**技能行**（读真实控件文案，验「有等级才显示等级」）
 -- ★★★1.73.56 除文案外，还要交出**每行的真实可见性**与当前 Tab：
@@ -7315,53 +6417,12 @@ function EVAL_TEST_WAR_ROWS()
   return out
 end
 
--- ★★★1.75.10 读值口：走**真实 OnEnter** 触发第 i 行的悬停提示（用户：「鼠标提示显示完整的条件信息」）。
---   ★为什么不直调一段「拼 tooltip 文本」的辅助函数：那就成了「测试自己拼一份」（本项目的老坑）——
---     必须让真实事件处理器跑一遍，从 GameTooltip 的记账里读它到底写了什么。
-function EVAL_TEST_WAR_HOVER(i)
-  local cw = EVAL_HELP_CFGWIN
-  local wu = cw and cw.warUI
-  local row = wu and wu.rows and wu.rows[i]
-  if not (row and row.hov) then return false end
-  local ok, fn = pcall(row.hov.GetScript, row.hov, "OnEnter")
-  if not (ok and type(fn) == "function") then return false end
-  pcall(fn, row.hov)
-  return true
-end
--- ★ 配套：走真实 OnLeave（验「移开就收起来」，不许把 tooltip 留在屏幕上）
-function EVAL_TEST_WAR_HOVER_LEAVE(i)
-  local cw = EVAL_HELP_CFGWIN
-  local wu = cw and cw.warUI
-  local row = wu and wu.rows and wu.rows[i]
-  if not (row and row.hov) then return false end
-  local ok, fn = pcall(row.hov.GetScript, row.hov, "OnLeave")
-  if not (ok and type(fn) == "function") then return false end
-  pcall(fn, row.hov)
-  return true
-end
 
 function EVAL_TEST_CFG_LAYOUT()
   local cw = EVAL_HELP_CFGWIN
   return cw and cw.layout or nil
 end
 
--- ★1.73.41 读值口：配置窗 [使用引导] 按钮（走它的**真实 OnClick**，不是直调动作函数）
-function EVAL_TEST_CFG_GUIDE_CLICK()
-  local cw = EVAL_HELP_CFGWIN
-  local b = cw and cw.guideBtn
-  if not b then return false end
-  local ok, fn = pcall(b.GetScript, b, "OnClick")
-  if ok and type(fn) == "function" then pcall(fn) return true end
-  return false
-end
-function EVAL_TEST_CFG_SIZE()
-  local cw = EVAL_HELP_CFGWIN
-  local r = cw and cw.root
-  if not r then return nil, nil end
-  local okw, w = pcall(r.GetWidth, r)
-  local okh, h = pcall(r.GetHeight, r)
-  return (okw and type(w) == "number") and w or nil, (okh and type(h) == "number") and h or nil
-end
 
 function EVAL_HELP_SE_SAVE()
   local ed = seUI.ed
@@ -7764,90 +6825,6 @@ function EVAL_HELP_IO_BUILD()
   ioUI.root = root
 end
 
--- ★1.71.2 测试钩子：IO 窗底部按钮行的几何（同一行判定 / 重叠 / 越界）
-function EVAL_TEST_IO_BUTTONS()
-  local out = {}
-  for _, e in ipairs(ioUI.btns or {}) do
-    -- ★x/w 取**登记值**（布局输入）——这才是「排布算得对不对」这条性质本身。
-    --   为什么不取 GetPoint：测试桩不做锚点解算，对 5 参 SetPoint 调用回的偏移量不可靠
-    --   （本轮实测：登记 x=14、GetPoint 却回 0）→ 直接用它会产生**假失败**。
-    --   ★py 另外单独取（用于「有没有按钮被事后搬到别的行」），拿不到时置 nil 由断言侧处理。
-    local ok, p, _, _, ox, oy = pcall(e.btn.GetPoint, e.btn, 1)
-    local textW = nil
-    if e.text then
-      local okt, tw = pcall(e.text.GetWidth, e.text)
-      if okt and type(tw) == "number" then textW = tw end
-    end
-    out[table.getn(out) + 1] = {
-      label = e.label or "", x = e.x, w = e.w,
-      point = ok and p or nil, px = ox,
-      py = (ok and type(oy) == "number") and oy or nil,
-      textW = textW,
-      -- ★1.71.2 暴露按钮本体：断言要验「每个按钮真的有 OnClick」（防止留空壳凑数），
-      --   只给标签与几何做不到这件事。
-      btn = e.btn,
-    }
-  end
-  return out
-end
--- ★1.71.2 从**实际锚点**数底部按钮占了几行（拿不到锚点时按布局输入视为 1 行）。
---   用途：抓住「某个按钮被事后 ClearAllPoints + SetPoint 挪到第二排」这个形态
---   ——它正是用户截图里的原始问题（分享/接收当初单独排在 BOTTOM 42）。
-function EVAL_TEST_IO_ROW_COUNT()
-  local ys = {}
-  for _, e in ipairs(ioUI.btns or {}) do
-    local ok, _, _, _, _, oy = pcall(e.btn.GetPoint, e.btn, 1)
-    if ok and type(oy) == "number" then ys[oy] = true end
-  end
-  local n = 0
-  for _ in pairs(ys) do n = n + 1 end
-  if n == 0 then return 1 end
-  return n
-end
-function EVAL_TEST_IO_WIDTH()
-  local ok, w = pcall(ioUI.root.GetWidth, ioUI.root)
-  return (ok and type(w) == "number") and w or nil
-end
-
--- ★1.71.2（第十七轮）断言专用：导入导出窗**当前是否可见**。
---   用途：验「某个按钮**不该**把它弹出来」——这类需求必须**点一下真实按钮**再看状态，
---   只 grep 源码里有没有那行调用抓不到「调用点接线」（本项目反复栽在这上面）。
--- ★1.71.2（第二十轮）断言专用：战斗信息 UI 每条状态条的真实几何
---   （填充层的内缩偏移/高度 + 所在条的宽高 + 满值时的宽度上限）。
---   本轮需求「生命条看着有阴影」= 填充层内缩 1px 露出的近黑底，是**纯几何**问题，只能读真实数值。
---   ★为什么要读「父帧」：偏移是相对条的，只验「偏移=0」证明不了「高度等于条高 / 满值不留缝」。
---   ★桩的纹理必须能 GetParent（本轮已补，见 test_stub.lua）。
-function EVAL_TEST_UI_BAR_GEOM()
-  local out = {}
-  local spec = {
-    { "hp", ui.hpFill, ui.hpW }, { "power", ui.pwFill, ui.pwW }, { "target", ui.tgFill, ui.tgW },
-    { "cast", ui.castFill, ui.castW }, { "swing", ui.swingFill, ui.swingW },
-  }
-  for _, it in ipairs(spec) do
-    local fill, maxW = it[2], it[3]
-    local e = { name = it[1], maxW = maxW }
-    if fill then
-      local okp, _, _, _, ox, oy = pcall(fill.GetPoint, fill, 1)
-      if okp then e.x, e.y = ox, oy end
-      local okh, hh = pcall(fill.GetHeight, fill)
-      if okh and type(hh) == "number" then e.fillH = hh end
-      local okg, par = pcall(fill.GetParent, fill)
-      if okg and type(par) == "table" then
-        local okw2, ww = pcall(par.GetWidth, par)
-        local okh2, hh2 = pcall(par.GetHeight, par)
-        if okw2 and type(ww) == "number" then e.barW = ww end
-        if okh2 and type(hh2) == "number" then e.barH = hh2 end
-      end
-    end
-    table.insert(out, e)
-  end
-  return out
-end
-function EVAL_TEST_IO_SHOWN()
-  if not ioUI.root then return false end
-  local ok, v = pcall(ioUI.root.IsVisible, ioUI.root)
-  return (ok and v) and true or false
-end
 
 -- ★★★1.71.10 断言入口：战斗信息UI「方案切换行」的**真实几何**（每格的位置/宽度 + 生产算出的「需要宽度」）。
 --   要验的性质：① 每格宽 ≥ 它自己需要的宽（用户报的「方案溢出宽度」就是这个）；
@@ -7912,40 +6889,32 @@ end
 function EVAL_TEST_UI_CELLS()
   local out = {}
   if not (ui and ui.profCells) then return out end
+  -- ★★★读值助手**本函数自带一份**：`EVAL_TEST_UI_PROFROWS` 里的 `num/rgb3` 是**那个函数的 local**，
+  --   跨函数根本调不到 ⇒ 直接写 `rgb3(...)` 会绑成**全局 nil**，一调用就是
+  --   「attempt to call a nil value (global 'rgb3')」——而 `luacheck`（只管语法）与 `scan_dangling`（按名字比对、
+  --   同文件有同名缩进 local 就整名跳过）**都照不到**。本项目「绝不调宿主/他人函数的 local」这条纪律就是它。
+  local function num(f, o)
+    local ok, v = pcall(f, o)
+    return (ok and type(v) == "number") and v or nil
+  end
+  local function rgb3(f, o)
+    local ok, r, g, b = pcall(f, o)
+    if ok and type(r) == "number" then return { r, g, b } end
+    return nil
+  end
   for i, pc in ipairs(ui.profCells) do
     local ok, t = pcall(pc.text.GetText, pc.text)
-    out[i] = { text = (ok and tostring(t or "")) or "", shown = true }
-  end
-  return out
-end
--- ★★★1.74.17 断言入口：战斗信息UI「技能图标带」的**真实网格几何**（每格坐标 / 共几格 / 帧高）。
---   为什么必须有它：用户这次的诉求就是**自动换行 + 自适应高度**（原话：「每行8个.超过2行的时候更多的
---   就不显示了.需求是需要能自动换行.自适应高度换行图标」）——而「第 17 格到底有没有 / 在第几行」
---   只能从**真控件的坐标**看出来：读 ui.cellRows 那种生产常量等于**测自己**（本项目老坑）。
---   ★故这里一律 pc.btn:GetPoint 现读；cols/rows/count 只作**交叉核对**（两者不一致就是生产算错了）。
-function EVAL_TEST_UI_GRID()
-  if not (ui and ui.profCells and ui.root) then return nil end
-  local out = { cols = ui.cellCols, rows = ui.cellRows, count = ui.cellCount,
-                cell = ui.cellSize, gap = ui.cellGap, cells = {} }
-  local okh, wh = pcall(ui.root.GetHeight, ui.root)
-  out.height = (okh and type(wh) == "number") and wh or nil
-  local okw, ww = pcall(ui.root.GetWidth, ui.root)
-  out.width = (okw and type(ww) == "number") and ww or nil
-  for i, pc in ipairs(ui.profCells) do
-    local btn = pc.btn
-    local okp, p, _r, _rp, ox, oy = pcall(btn.GetPoint, btn, 1)
-    local okwd, aw = pcall(btn.GetWidth, btn)
-    local okht, ah = pcall(btn.GetHeight, btn)
-    local oks, sv = pcall(btn.IsShown, btn)
-    out.cells[i] = {
-      x = (okp and type(ox) == "number") and ox or nil,
-      y = (okp and type(oy) == "number") and oy or nil,
-      point = okp and p or nil,
-      w = (okwd and type(aw) == "number") and aw or nil,
-      h = (okht and type(ah) == "number") and ah or nil,
-      shown = (oks and sv) and true or false,
-      btn = btn,
-    }
+    -- ★1.75.33 用户定「保留目标头像 + 外面只留一圈细金边、四角深色底」之后，观感判据落在**真控件**上：
+    --   底色（应为深色 ≈ 0.10,0.09,0.06）+ 4 条 1px 边框的颜色（条件满足 1,0.85,0.3 / 否则 0.45,0.38,0.15）。
+    --   ⇒ 探针/后续断言都读这里，不读我们自己的记账（本项目「读真控件」纪律）。
+    local b1 = (type(pc.borders) == "table") and pc.borders[1] or nil
+    local b3 = (type(pc.borders) == "table") and pc.borders[3] or nil
+    out[i] = { text = (ok and tostring(t or "")) or "", shown = true,
+               bgRGB = (pc.bg and pc.bg.GetVertexColor) and rgb3(pc.bg.GetVertexColor, pc.bg) or nil,
+               borderN = (type(pc.borders) == "table") and table.getn(pc.borders) or 0,
+               borderRGB = b1 and rgb3(b1.GetVertexColor, b1) or nil,
+               borderH = b1 and num(b1.GetHeight, b1) or nil,
+               borderVW = b3 and num(b3.GetWidth, b3) or nil }
   end
   return out
 end
@@ -7961,121 +6930,6 @@ function EVAL_TEST_UI_CLICK_CELL(i, button)
   return true
 end
 
--- ★★★1.71.12 断言入口：两个子开关（战斗 / 方案）的**真实生效结果**——
---   刻意读 `ui.combatOn/schemeOn`（BUILD 时定下）+ 控件的**存在性**，而不是回读配置：
---   配置写了什么与「这一轮到底建没建」是两件事（本项目「配置产出/消费两边都要断言」的判据）。
---   另附标题文本与帧宽高（标题 = 玩家名、帧高要随子开关变化）。
--- ★★★1.73.54 读值口：HUD 标题栏（标题的**锚点/对齐** + 右侧两个快捷开关的真控件/锚点/方块文本）。
---   一律读真控件（GetPoint/GetText/IsShown）—— 本项目「读自己拼的账 = 测自己」的老坑。
-function EVAL_TEST_UI_TITLEBAR()
-  local out = { title = nil, titlePoint = nil, titleJustify = nil, titleX = nil, combat = nil, scheme = nil }
-  -- ★★★1.73.55 档位徽标：读**真控件**上的文案 / 锚点 / 文字色 —— 不读 ui.tierShown、ui.tierScore 这类
-  --   我们自己的记账（本项目「读自己拼的账 = 测自己」的老坑）。
-  out.tier, out.tierPoint, out.tierRelTo, out.tierRelPoint, out.tierX, out.tierColor = nil, nil, nil, nil, nil, nil
-  if ui.title then
-    local okt, tv = pcall(ui.title.GetText, ui.title)
-    if okt and type(tv) == "string" then out.title = tv end
-    local okp, pt, _rel, _rp, px = pcall(ui.title.GetPoint, ui.title)
-    if okp and type(pt) == "string" then out.titlePoint = pt out.titleX = px end
-    local okj, jv = pcall(ui.title.GetJustifyH, ui.title)
-    if okj and type(jv) == "string" then out.titleJustify = jv end
-  end
-  local function one(b)
-    if not b then return nil end
-    local o = { point = nil, x = nil, w = nil, mark = nil, shown = nil, hasClick = false }
-    local okp, pt, _rel, _rp, px = pcall(b.GetPoint, b)
-    if okp and type(pt) == "string" then o.point = pt o.x = px end
-    local okw, wv = pcall(b.GetWidth, b)
-    if okw and type(wv) == "number" then o.w = wv end
-    if b.mark then
-      local okt, tv = pcall(b.mark.GetText, b.mark)
-      if okt and type(tv) == "string" then o.mark = tv end
-    end
-    local oks, sv = pcall(b.IsShown, b)
-    o.shown = (oks and sv) and true or false
-    if type(b.GetScript) == "function" then
-      local okc, fn = pcall(b.GetScript, b, "OnClick")
-      o.hasClick = (okc and type(fn) == "function") or false
-    end
-    return o
-  end
-  out.combat, out.scheme = one(ui.tglCombat), one(ui.tglScheme)
-  out.combatBtn, out.schemeBtn = ui.tglCombat, ui.tglScheme -- 真控件（点击钩子要用）
-  out.titleFs = ui.title -- 真控件（档位徽标锚在它的右边缘上，断言要比对 relTo）
-  if ui.tierText then
-    out.tierText = ui.tierText
-    local okt, tv = pcall(ui.tierText.GetText, ui.tierText)
-    if okt and type(tv) == "string" then out.tier = tv end
-    local okp, pt, rel, rp, px = pcall(ui.tierText.GetPoint, ui.tierText)
-    if okp and type(pt) == "string" then
-      out.tierPoint, out.tierRelTo, out.tierRelPoint, out.tierX = pt, rel, rp, px
-    end
-    local okc, cr, cg, cb = pcall(ui.tierText.GetTextColor, ui.tierText)
-    if okc and type(cr) == "number" then out.tierColor = { cr, cg, cb } end
-  end
-  -- ★★★1.73.57/1.73.62 玩家头衔 + 当前方案名（同款读值口：真控件的文案 / 锚点 / 文字色 —— 不读我们自己的记账）
-  out.ptitle, out.ptitlePoint, out.ptitleRelTo, out.ptitleRelPoint, out.ptitleX, out.ptitleColor = nil, nil, nil, nil, nil, nil
-  out.plan, out.planPoint, out.planRelTo, out.planRelPoint, out.planX, out.planColor = nil, nil, nil, nil, nil, nil
-  local function fsOf(fs, prefix)
-    if not fs then return end
-    out[prefix .. "Fs"] = fs
-    local okt, tv = pcall(fs.GetText, fs)
-    if okt and type(tv) == "string" then out[prefix] = tv end
-    local okp, pt, rel, rp, px = pcall(fs.GetPoint, fs)
-    if okp and type(pt) == "string" then
-      out[prefix .. "Point"], out[prefix .. "RelTo"], out[prefix .. "RelPoint"], out[prefix .. "X"] = pt, rel, rp, px
-    end
-    local okc, cr, cg, cb = pcall(fs.GetTextColor, fs)
-    if okc and type(cr) == "number" then out[prefix .. "Color"] = { cr, cg, cb } end
-  end
-  fsOf(ui.titleText, "ptitle")
-  fsOf(ui.planText, "plan")
-  return out
-end
--- ★★★测试钩子：点标题栏右侧的快捷开关 —— 走它**真实的 OnClick 闭包**（不直调 setter）。
---   ★为什么必须这样：本项目真事故「直接调动作函数全绿、按钮接线断了也不知道」（1.73.37 右键菜单那轮）。
-function EVAL_TEST_UI_TITLEBAR_CLICK(which)
-  local b = (which == "scheme") and ui.tglScheme or ui.tglCombat
-  if not (b and type(b.GetScript) == "function") then return false end
-  local ok, fn = pcall(b.GetScript, b, "OnClick")
-  if not (ok and type(fn) == "function") then return false end
-  pcall(fn)
-  return true
-end
-function EVAL_TEST_UI_SECTIONS()
-  local out = { combat = false, scheme = false, hasCombat = false, hasScheme = false,
-    title = nil, rootW = nil, rootH = nil }
-  if not ui then return out end
-  out.combat = ui.combatOn and true or false
-  out.scheme = ui.schemeOn and true or false
-  out.hasCombat = (ui.hpFill ~= nil) and true or false
-  out.hasScheme = (ui.profBtns ~= nil) and true or false
-  if ui.title then
-    local okt, t = pcall(ui.title.GetText, ui.title)
-    out.title = (okt and tostring(t or "")) or nil
-  end
-  if ui.root then
-    local okw, w = pcall(ui.root.GetWidth, ui.root)
-    out.rootW = (okw and type(w) == "number") and w or nil
-    local okh, h = pcall(ui.root.GetHeight, ui.root)
-    out.rootH = (okh and type(h) == "number") and h or nil
-  end
-  -- ★1.75.11 被围攻人数（与状态行同行、贴**根帧右缘** → 判据读**锚点与相对对象** + 与状态行**同顶**，不读写死的 y）
-  out.statusFs, out.siegeFs, out.rootFs = ui.status, ui.siege, ui.root
-  if ui.status then
-    local okp0, p0, r0, rp0, x0, y0 = pcall(ui.status.GetPoint, ui.status, 1)
-    if okp0 then out.statusPoint, out.statusRelTo, out.statusRelPoint, out.statusX, out.statusY = p0, r0, rp0, x0, y0 end
-  end
-  if ui.siege then
-    local okt, tv = pcall(ui.siege.GetText, ui.siege)
-    out.siegeText = (okt and type(tv) == "string") and tv or nil
-    local okp, sp, srel, srp, sx, sy = pcall(ui.siege.GetPoint, ui.siege, 1)
-    if okp then out.siegePoint, out.siegeRelTo, out.siegeRelPoint, out.siegeX, out.siegeY = sp, srel, srp, sx, sy end
-    local okj, jv = pcall(ui.siege.GetJustifyH, ui.siege)
-    out.siegeJustify = (okj and type(jv) == "string") and jv or nil
-  end
-  return out
-end
 
 -- ============ 案例模版选单（1.44.0）：按职业分组，点击方案行直接导入 ============
 -- ★★★1.73.7 案例模版窗的**版式计算**（纯函数：不建控件、不碰 UI）——用户最新要求：
@@ -8429,82 +7283,6 @@ function EVAL_HELP_TPL_BUILD()
   tplUI.root = root
 end
 
--- ★1.71.3 断言入口：案例模版窗（两列布局 + 标题感叹号）——读**真实控件**的几何与文案，
---   不在测试里写死布局常量（本项目「断言里写死常量 = 测自己」的老坑）。
-function EVAL_TEST_TPL_LAYOUT()
-  EVAL_HELP_TPL_BUILD()
-  if not tplUI.root then return nil end
-  local r = tplUI.root
-  local okw, w = pcall(r.GetWidth, r)
-  local okh, h = pcall(r.GetHeight, r)
-  return {
-    w = okw and w or nil, h = okh and h or nil,
-    margin = tplUI.margin, gap = tplUI.gap, rowH = tplUI.rowH, colGap = tplUI.colGap,
-    colW = tplUI.colW, colX2 = tplUI.colX2,
-    rowsL = tplUI.rowsL or 0, rowsR = tplUI.rowsR or 0,
-    lines = tplUI.lines or 0, plan = table.getn(tplUI.plan or {}),
-    rowCount = table.getn(tplUI.rowBtns or {}),
-    groups = table.getn(EVAL_IO_TEMPLATES or {}),
-  }
-end
-function EVAL_TEST_TPL_ROWS()
-  EVAL_HELP_TPL_BUILD()
-  local out = {}
-  for i, e in ipairs(tplUI.rowBtns or {}) do
-    local okx, x = pcall(e.btn.GetLeft, e.btn)
-    local oky, y = pcall(e.btn.GetTop, e.btn)
-    local okw, w2 = pcall(e.btn.GetWidth, e.btn)
-    out[i] = { name = e.name, cls = e.cls, x = okx and x or nil, y = oky and y or nil, w = okw and w2 or nil }
-  end
-  return out
-end
--- ★★★1.73.42l 案例模版行的「品阶外观」读值口：图标纹理 + 名称**文字色** + 行**背景色**（都读**真控件**，
---   不读我们自己记的账——本项目「断言读自己拼的状态 = 测自己」的老坑）。
-function EVAL_TEST_TPL_TIER(i)
-  EVAL_HELP_TPL_BUILD()
-  local e = (tplUI.rowBtns or {})[tonumber(i) or 0]
-  if not e or not e.btn then return nil end
-  local b = e.btn
-  local out = { name = e.name, cls = e.cls, tier = b.tierIdx, score = b.tierScore, icon = nil,
-                textR = nil, textG = nil, textB = nil, bgR = nil, bgG = nil, bgB = nil, want = nil }
-  if b.tierIcon then
-    local ok, t = pcall(b.tierIcon.GetTexture, b.tierIcon)
-    out.icon = ok and t or nil
-  end
-  if b.tierText then
-    local okt, tr, tg, tb = pcall(b.tierText.GetTextColor, b.tierText)
-    if okt then out.textR, out.textG, out.textB = tr, tg, tb end
-  end
-  if b.tierBgTex then
-    local okv, vr, vg, vb = pcall(b.tierBgTex.GetVertexColor, b.tierBgTex)
-    if okv then out.bgR, out.bgG, out.bgB = vr, vg, vb end
-  end
-  -- ★1.73.42z 布局判据要的：文字区宽 / 对齐方式 / 按钮宽（用户：「显示不全」+「名称没居中」）
-  if b.tierText then
-    local okw, wv = pcall(b.tierText.GetWidth, b.tierText)
-    if okw and type(wv) == "number" then out.textW = wv end
-    local okj, jv = pcall(b.tierText.GetJustifyH, b.tierText)
-    if okj and type(jv) == "string" then out.textJustify = jv end
-    -- ★★★1.73.47 垂直对齐也要读得回来（用户：「垂直居中」）——桩没记就永远验不到（桩保真铁律）
-    local okjv, jvv = pcall(b.tierText.GetJustifyV, b.tierText)
-    if okjv and type(jvv) == "string" then out.textJustifyV = jvv end
-    -- ★★★1.73.48 锚点也要读回来：**两个锚点**会把文字拽歪（用户真机「没垂直居中」的根因）
-    if type(b.tierText.GetAnchorCount) == "function" then
-      local okn, nv = pcall(b.tierText.GetAnchorCount, b.tierText)
-      if okn and type(nv) == "number" then out.textAnchors = nv end
-    end
-    if type(b.tierText.GetAnchorNames) == "function" then
-      local oknm, nmv = pcall(b.tierText.GetAnchorNames, b.tierText)
-      if oknm and type(nmv) == "string" then out.textAnchorNames = nmv end
-    end
-    local okyt, yv = pcall(b.tierText.GetTop, b.tierText)
-    if okyt and type(yv) == "number" then out.textTop = yv end
-  end
-  local okbw, bwv = pcall(b.GetWidth, b)
-  if okbw and type(bwv) == "number" then out.btnW = bwv end
-  if type(EVAL_SHARE_SEAL_TIER_RGB) == "function" and b.tierIdx then out.want = EVAL_SHARE_SEAL_TIER_RGB(b.tierIdx) end
-  return out
-end
 function EVAL_TEST_TPL_HEADERS()
   EVAL_HELP_TPL_BUILD()
   local out = {}
@@ -8591,13 +7369,6 @@ function EVAL_TEST_TPL_PLAN_FAKE(w, gn, per, chars)
     over = over, gapBad = gapBad, colStartBad = colStartBad, splitBad = splitBad,
     hdrShared = hdrShared, rowStartBad = rowStartBad, realRows = realRows, rowsInconsistent = rowsInconsistent,
     balance = math.abs(rowsL - rowsR), rowsL = rowsL, rowsR = rowsR, colW = colW, colX2 = colX2 }
-end
-function EVAL_TEST_TPL_TIP() EVAL_HELP_TPL_BUILD() return tplUI.tipBtn end
-function EVAL_TEST_TPL_TIP_TEXT()
-  EVAL_HELP_TPL_BUILD()
-  if not tplUI.tipText then return nil end
-  local ok, t = pcall(tplUI.tipText.GetText, tplUI.tipText)
-  return ok and t or nil
 end
 function EVAL_HELP_TPL_TOGGLE()
   if tplUI.root and tplUI.root:IsVisible() then tplUI.root:Hide() return end
@@ -10502,19 +9273,6 @@ end
 --   ★「初始打开与帮助窗同一个控制」：两者都读同一个 cfg.loadMsgSeen —— 弹窗上点「知道了」，
 --     帮助/引导也不再自动弹；配置窗里改回 true 即恢复（单一来源，不搞两份开关）。
 local loadUI = {}
--- 读值口（断言与 UI 同源）
-function EVAL_TEST_LOADPOP_STATE()
-  local shown = false
-  if loadUI.root and type(loadUI.root.IsShown) == "function" then
-    local ok, v = pcall(loadUI.root.IsShown, loadUI.root)
-    shown = (ok and v) and true or false
-  end
-  return { built = (loadUI.root ~= nil), shown = shown,
-           seen = (type(cfg) == "table" and cfg.loadMsgSeen) and true or false,
-           hasThanks = (loadUI.thanks ~= nil), hasClose = (loadUI.closeBtn ~= nil),
-           lines = loadUI.lineCount or 0, tip = loadUI.tipText or "",
-           body = loadUI.bodyText or "" }
-end
 local function loadPopBuild()
   if loadUI.root then return end
   local W, H = 460, 210
@@ -10616,15 +9374,6 @@ function EVAL_LOADPOP_SHOW(force)
 end
 function EVAL_LOADPOP_HIDE()
   if loadUI.root then pcall(loadUI.root.Hide, loadUI.root) end
-end
--- 测试：走**真实 OnClick**（不是只调钩子）
-function EVAL_TEST_LOADPOP_CLICK(which)
-  loadPopBuild()
-  local b = (which == "close") and loadUI.closeBtn or loadUI.thanks
-  if not b then return false end
-  local ok, fn = pcall(b.GetScript, b, "OnClick")
-  if ok and type(fn) == "function" then pcall(fn) return true end
-  return false
 end
 
 -- ★★★1.74.27 稀有提醒转播已**提取到独立文件** tools/RareWatch.lua（用户：「将以上功能提取到独立文件内 ./tools 然后

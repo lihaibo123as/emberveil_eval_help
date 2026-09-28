@@ -696,11 +696,6 @@ end
 --     与其做「形态猜测」不如按三档固定 —— 这也是唯一稳定、可断言的口径。
 local HH_HAPPY_DMG = { 75, 100, 125 }
 
--- 读值口（断言/探针共用同一份表；不改任何状态）
-function EVAL_HH_TEST_HAPPYDMG(idx)
-  if type(idx) ~= "number" then return nil end
-  return HH_HAPPY_DMG[idx]
-end
 
 function EVAL_HH_PET_INFO()
   if not hhHasPet() then return nil end
@@ -1260,14 +1255,6 @@ function EVAL_HH_TOGGLE()
   hhLog("总闸门打开 → 图标已显示")
   return true
 end
--- ===== 模块级状态复位（测试用；★放在文件**末尾**，否则 DECL ORDER 会抓「用在前、声明在后」） =====
-function EVAL_HH_TEST_RESET_TIMERS()
-  HH.q, HH.phase, HH.lastRun, HH.aimAt, HH.settleAt = {}, "idle", -999, 0, 0
-  -- ★★1.74.29：防踢线闸门的状态也要清（否则前一组测试的时间线会把后一组卡住）
-  HH_ACT.last, HH_ACT.lastFrame, HH_ACT.lastKind, HH_ACT.lastSay = -999, -1, nil, -999
-  HH_ACT.sec, HH_ACT.secCount, HH_ACT.blocked, HH_ACT.log = 0, 0, 0, {}
-  if HH.tick then pcall(HH.tick.SetScript, HH.tick, "OnUpdate", nil) end
-end
 
 -- ===== 诊断命令（/eh go 喂食* ；与项目「能做成命令就别让用户手工复现」一致） =====
 local function hhAvail(name)
@@ -1658,33 +1645,6 @@ function EVAL_HH_HAPPY_CMD(sub)
   return false
 end
 
-function EVAL_HH_TEST_HAPPY_STATE()
-  return HAP.on, HAP.sum, HAP.band, HAP.sinceFlip, table.getn(HAP.flips), table.getn(hapStore().out or {})
-end
-function EVAL_HH_TEST_HAPPY_RING(n)
-  local out = hapStore().out or {}
-  local from = math.max(1, table.getn(out) - (tonumber(n) or 10) + 1)
-  return table.concat(out, " || ", from)
-end
--- 读值口：喂食进度条的真实状态（给断言/取证用；生产 UI 读的就是这两个纹理）
-function EVAL_HH_TEST_HAPPY_BAR()
-  if not (HH and HH.hpFill and HH.hpBg) then return nil end
-  local okS1, shown1 = pcall(HH.hpFill.IsShown, HH.hpFill)
-  local okS2, shown2 = pcall(HH.hpBg.IsShown, HH.hpBg)
-  local okH, h = pcall(HH.hpFill.GetHeight, HH.hpFill)
-  local okR, r, g, b = pcall(HH.hpFill.GetVertexColor, HH.hpFill)
-  return (okS1 and shown1) or false, (okS2 and shown2) or false, (okH and tonumber(h)) or nil,
-         (okR and tonumber(r)) or nil, (okR and tonumber(g)) or nil, (okR and tonumber(b)) or nil
-end
-
-function EVAL_HH_TEST_HAPPY_EST()
-  return hapEst(), HAP.decay, HAP.ptPct, HAP.snapVal, HAP.snapT
-end
-function EVAL_HH_TEST_HAPPY_CLEAR()
-  hapStore().out = {}
-  HAP.sum, HAP.sinceFlip, HAP.band, HAP.flips, HAP.seen = 0, 0, nil, {}, {}
-  return true
-end
 
 function EVAL_HH_PROBE(sub)
   if sub == "宠物" or sub == "pet" then return hhProbePet() end
@@ -1821,65 +1781,6 @@ function EVAL_HH_PROBE(sub)
   return false
 end
 
--- ★测试读值口（读**真实状态**，绝不在测试里复刻逻辑）
--- ★★合并自 master 线（1.74.29）：快乐度边框的读值口 —— 本模块实现改由 EVAL_HH_PETDECOR 上色，
---   本口只**读**四条边的真实顶点色（测试用；不改变任何行为）。
-function EVAL_TEST_HH_HAP()
-  local out = { n = 0, rgb = nil, tier = nil, pet = (hhHasPet() and true or false) }
-  if not (HH.edges and HH.edges[1]) then return out end
-  out.n = table.getn(HH.edges)
-  local ok, r, g, b = pcall(HH.edges[1].GetVertexColor, HH.edges[1])
-  if ok and type(r) == "number" then out.rgb = { r, g, b } end
-  if out.pet and type(GetPetHappiness) == "function" then
-    local okh, idx = pcall(GetPetHappiness)
-    if okh and type(idx) == "number" then out.tier = idx end
-  end
-  return out
-end
-function EVAL_TEST_HH_STATE()
-  local tb = hhCfg() or {}
-  local shown = nil
-  if HH.btn and type(HH.btn.IsShown) == "function" then shown = HH.btn:IsShown() end
-  return { built = HH.built, shown = shown, on = tb.feedPet and true or false,
-           leftClicks = HH.leftClicks, rightClicks = HH.rightClicks, lastBtn = HH.lastBtn,
-           lastArgs = HH.lastArgs, regClicks = HH.regClicks,
-           food = tb.hhFood, foodTex = tb.hhFoodTex, spell = tb.hhSpell,
-           phase = HH.phase, qn = table.getn(HH.q), hasTick = HH.tick and true or false, hits = HH.hits,
-           rate = HH_RATE, qmax = HH_QMAX, lastRun = HH.lastRun,
-           -- ★1.74.11 CD 倒计时读值口
-           cdTotal = HH.cdTotal, cdUntil = HH.cdUntil,
-           cdMaskShown = (HH.cdMask and HH.cdMask.IsShown and HH.cdMask:IsShown() == true) or false }
-end
-
--- ★1.74.5 测试读值口：用**给定参数**驱动真实 OnClick（本客户端参数形态不固定，四种都要能验）
-function EVAL_TEST_HH_CLICK(a, b)
-  if not (HH.btn and type(HH.btn.GetScript) == "function") then return false end
-  local ok, fn = pcall(HH.btn.GetScript, HH.btn, "OnClick")
-  if not (ok and type(fn) == "function") then return false end
-  local okc, err = pcall(fn, a, b)
-  return okc, err
-end
-
-function EVAL_TEST_HH_GEOM()
-  local b = HH.btn
-  if not b then return nil end
-  local okl, l = pcall(b.GetLeft, b)
-  local okt, t = pcall(b.GetTop, b)
-  local okw, w = pcall(b.GetWidth, b)
-  local okh, h = pcall(b.GetHeight, b)
-  return { left = okl and l or nil, top = okt and t or nil, w = okw and w or nil, h = okh and h or nil }
-end
-
-function EVAL_TEST_HH_RESET_UI()
-  -- 只让下一次 ENSURE 重新走「懒建 + 定位」（测默认居中 / 记忆位置 / 越界夹取用）
-  HH.built, HH.btn, HH.tex, HH.label = false, nil, nil, nil
-end
-
-function EVAL_TEST_HH_DD()
-  local items, acts = EVAL_HH_MENU_MODEL()
-  HH.dd = { items = items, acts = acts }
-  return items, acts
-end
 
 -- ================================================================================
 -- ===== 「选食物」图标网格 = **共用件** tools/IconGrid.lua 的薄封装（1.74.5）=========
@@ -1887,7 +1788,7 @@ end
 --   （多选版）—— 本项目铁律「同一内容不许两处各写」，否则两边行为会慢慢漂开。
 -- 本文件只负责把「食物候选 / 单选 / 选完写配置」交给 IconGrid；格子不自绘边框、高度自适应、
 --   分页/滚轮/夹取/tooltip 全在共用件里。
--- ★对外名字（EVAL_HH_GRID_* 与 EVAL_TEST_HH_GRID*）**保持不变**：既有判据（组 176⑮⑯⑰）与取证命令不受影响。
+-- ★对外名字（EVAL_HH_GRID_* 与 EVAL_TEST_HH_GRID*）**保持不变**：既有判据（组 176⑮⑯⑰）与取证命令不受影响。 ★1.75.34：该读值口已随 tests/ 一并删除（孤儿探针清理，见 CHANGELOG）。
 local function hhGridSpec()
   return {
     key = "food",
@@ -1928,14 +1829,3 @@ function EVAL_HH_GRID_HIDE()
   return false
 end
 
-function EVAL_TEST_HH_GRID()
-  local st = hhGridIsFood()
-  if not st then return nil end
-  return st
-end
-
-function EVAL_TEST_HH_GRID_TEX(i) return EVAL_TEST_IG_TEX(i) end
-function EVAL_TEST_HH_GRID_CLICK(i) return EVAL_TEST_IG_CLICK(i) end
-function EVAL_TEST_HH_GRID_HOVER(i) return EVAL_TEST_IG_HOVER(i) end
-function EVAL_TEST_HH_GRID_PAGE(which) return EVAL_TEST_IG_PAGE(which) end
-function EVAL_TEST_HH_GRID_WHEEL(a, b) return EVAL_TEST_IG_WHEEL(a, b) end

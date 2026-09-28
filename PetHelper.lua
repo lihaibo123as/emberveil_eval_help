@@ -166,8 +166,6 @@ function EVAL_PH_SKILL_ICON(sk)
   end
   return sk.icon
 end
--- 测试用：清缓存（改完桩里的宏图标表要重新解析时才用；**不在生产路径里调**）
-function EVAL_PH_TEST_ICON_CACHE_CLEAR() PH_ICON_CACHE = {} end
 
 -- 关键字过滤：命中技能名 或 该等级任一驯服来源（野兽名/区域）——两种搜法都能用
 local function phMatch(e, ql)
@@ -965,64 +963,7 @@ if type(EVAL_HELP_CFG_TAB) == "function" and EVAL_HELP_CFG_TAB() ~= 6 then retur
   EVAL_PH_REFRESH()
 end
 
--- ===== 测试钩子（读生产真值，不在测试里复刻逻辑） =====
-function EVAL_PH_TEST_BUILT() return PH.built and true or false end
-function EVAL_PH_TEST_STATE()
-  return { view = PH.view, q = PH.q, off = PH.off, entries = table.getn(phEntries()), filtered = table.getn(phFiltered()) }
-end
-function EVAL_PH_TEST_ENTRY(i)
-  local list = phFiltered()
-  local e = list[i]
-  if not e then return nil end
-  return { skill = e.skill.name, rank = e.rank.rank, req = e.rank.req, beasts = table.getn(e.rank.beasts or {}) }
-end
-function EVAL_PH_TEST_LABEL(i) return phEntryLabel(phFiltered()[i] or {}) end
-function EVAL_PH_TEST_DETAIL()
-  local e = PH.sel
-  if not e then return nil end
-  return { skill = e.skill.name, rank = e.rank.rank, req = e.rank.req, intro = e.skill.intro, icon = e.skill.icon, beasts = e.rank.beasts }
-end
--- ★1.73.1 断言入口：详情页**真实控件上的文字**（标题/简介/属性行/需求/宠物标题）
---   ★为什么需要它：用户报「详情页信息错误」——而此前只有 DETAIL（数据侧）钩子，读不到**渲染出来的那句话**。
-function EVAL_PH_TEST_TEXTS()
-  local t = {}
-  for k, w in pairs({ title = PH.detTitle, intro = PH.detIntro, meta = PH.detMeta, req = PH.detReq, petTitle = PH.detPetTitle }) do
-    local ok, v = pcall(w.GetText, w)
-    t[k] = (ok and tostring(v or "")) or nil
-  end
-  return t
-end
-function EVAL_PH_TEST_ROW(i)
-  local r = PH.rows[i]
-  if not r then return nil end
-  return { shown = (r.btn.IsShown and r.btn:IsShown()) and true or false, text = r.text:GetText(), idx = r.idx }
-end
-function EVAL_PH_TEST_DETROW(i)
-  local r = PH.detRows[i]
-  if not r then return nil end
-  return { name = r.name:GetText(), meta = r.meta:GetText(), zoomShown = (r.zoom.btn.IsShown and r.zoom.btn:IsShown()) and true or false }
-end
--- ★1.73.6 放大镜按钮的**真实状态**：① 真控件上贴的纹理是哪个；② 保底文字「查」是否被藏掉。
---   ★判据要盯「画出来的图标 == 客户端清单里那枚放大镜」，而不是「代码里写了某个字符串」——
---     上一版的错就错在**字符串写错而没有任何断言看得见**（它画成了「?」，只有保底文字露在外面）。
-function EVAL_PH_TEST_ZOOM(i)
-  local r = PH.detRows[i or 1]
-  if not r then return nil end
-  local path = nil
-  if r.zoomIcon and type(r.zoomIcon.GetTexture) == "function" then
-    local ok, v = pcall(r.zoomIcon.GetTexture, r.zoomIcon)
-    if ok then path = v end
-  end
-  local textShown = false
-  if r.zoom and r.zoom.text and type(r.zoom.text.IsShown) == "function" then
-    local ok2, v2 = pcall(r.zoom.text.IsShown, r.zoom.text)
-    textShown = (ok2 and v2) and true or false
-  end
-  return { path = path, textShown = textShown, iconW = (r.zoomIcon and r.zoomIcon:GetWidth()) or nil }
-end
-function EVAL_PH_TEST_LAST_JUMP() return PH.lastJump end
 function EVAL_PH_RESET_JUMP() PH.lastJump = nil end
-function EVAL_PH_TEST_FAMILY_LABEL(f) return phFamLabel(f) end
 -- ★1.73.1 断言入口：本 Tab 的**真实几何与可见性**（布局审查用；测试里不许复刻坐标）。
 --   为什么必须有它：这两处真事故（搜索行没隐藏 / 宠物行名字元信息没 Show）**文本全对、只是不可见**，
 --   只读文本的断言全绿——必须能问到「这个控件此刻到底可不可见、矩形落在哪」。
@@ -1073,54 +1014,3 @@ function EVAL_PH_TEST_GEOM()
   end
   return out
 end
--- ★1.75.3 家族图标 tooltip 的**真实悬停**读值口：**走真控件的 OnEnter 脚本**（不在测试里直接调渲染逻辑，
---   也不在生产代码里读桩的记账表）—— 调用方（断言）自己去看桩记下的 tooltip 文本。
---   返回 wired（有没有挂上脚本）/ called（这次点火有没有抛错）/ hasBeast（这一行当时有没有宠物数据）。
-function EVAL_PH_TEST_FAM_HOVER(i)
-  local r = PH.detRows[i or 1]
-  if not r then return nil end
-  local okg, g = pcall(r.iconBtn.GetScript, r.iconBtn, "OnEnter")
-  if not okg or type(g) ~= "function" then return { wired = false, called = false, hasBeast = (r.beast ~= nil) } end
-  local okc = pcall(g)
-  return { wired = true, called = okc and true or false, hasBeast = (r.beast ~= nil) }
-end
--- 家族图标（读生产表，不在测试里另写一份）——用来暴露「占位图」这件事
-function EVAL_PH_TEST_FAM_ICON(f) return phFamIcon(f) end
--- ★1.75.3（第二轮）fam 重标的读值口：按「技能 + 等级 + 野兽名」取**生产真值**里的 fam
---   （不在测试里复刻生成器的定案逻辑 —— 那是两处真值）
-function EVAL_PH_TEST_BEAST_FAM(skill, rank, name)
-  local beasts = phBeastsOf(skill, rank)
-  for i = 1, table.getn(beasts) do
-    if beasts[i].name == name then return beasts[i].fam end
-  end
-  return nil
-end
--- ★1.75.3 技能图标读值口：`EVAL_PH_TEST_SKILL_ICON` = **渲染真正用的那个纹理**（走唯一解析口 = 宏图标号优先）；
---   `..._STATIC` = PetData 里那条**兜底**语义路径（两者不同 ⇒ 说明号解析生效了；接口缺失时两者应相等）。
-function EVAL_PH_TEST_SKILL_ICON(name)
-  local db = phDb()
-  for _, sk in ipairs((db and db.skills) or {}) do if sk.name == name then return EVAL_PH_SKILL_ICON(sk) end end
-  return nil
-end
-function EVAL_PH_TEST_SKILL_ICON_STATIC(name)
-  local db = phDb()
-  for _, sk in ipairs((db and db.skills) or {}) do if sk.name == name then return sk.icon end end
-  return nil
-end
-function EVAL_PH_TEST_SKILL_ICON_IDX(name)
-  local db = phDb()
-  for _, sk in ipairs((db and db.skills) or {}) do if sk.name == name then return sk.iconIdx end end
-  return nil
-end
--- ★1.75.3 **真实渲染**读值口：列表首行图标 / 详情大图标上**真正贴着的纹理**
---   （用来验「解析口接上渲染了」，而不是只验「函数算得对」—— 本项目「接线漏接不报错」的老坑）
-function EVAL_PH_TEST_ICON_TEX(which)
-  local w = nil
-  if which == "detail" then w = PH.detIcon
-  elseif which == "row" then local r = PH.rows[1] w = r and r.icon end
-  if not w then return nil end
-  local ok, v = pcall(w.GetTexture, w)
-  if ok and type(v) == "string" then return v end
-  return nil
-end
-function EVAL_PH_TEST_RESET() PH.q = "" PH.view = "list" PH.sel = nil PH.off = 0 PH.detOff = 0 PH.lastJump = nil if PH.eb then pcall(PH.eb.SetText, PH.eb, "") end end

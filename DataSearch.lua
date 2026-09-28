@@ -896,13 +896,6 @@ local function dsHidePinTooltip(f)
 end
 
 function EVAL_DS_NAV() return DS.nav end -- 测试直调（级联栈）
-function EVAL_DS_TEST_STATE(k)
-  if k == "results" then return table.getn(DS.results or {}) end
-  if k == "detOff" then return DS.detOff or 0 end
-  if k == "lastQuery" then return DS.lastQuery or "" end
-  if k == "nav" then return table.getn(DS.nav or {}) end
-  return nil
-end
 function EVAL_DS_PIN_TOOLTIP_LINES(info) return dsPinTooltipLines(info) end -- 测试直调（定义必须在本 local 之后——Lua local 作用域从声明后开始）
 
 -- ★★★标注层的全部共享状态：**必须声明在任何一个使用它的函数之前**。
@@ -1267,24 +1260,6 @@ end
 -- 测试直调：验证「同一 id 恒定同色」与「不同 id 尽量不同色」两条不变量。
 function EVAL_DS_ENTITY_COLOR(id) return dsEntityColor(id) end
 
--- ★1.70.41 测试直调：控制行「所有控件都真实构建且几何同源」的可观测契约。
--- 背景：filterBtn 曾用 DSL_ROW_BTN_Y 定位，而该 local 在 35 行之后才声明 → 读到全局 nil
--- → SetPoint("TOPLEFT", parent, "TOPLEFT", x, nil) → 本客户端对 nil 锚点不做定位、也不报错
--- → 按钮落在未定义位置（用户截图「应该有个按钮没了」）。这是第 10 次 local 作用域坑。
--- ★为什么用「构建期登记 + 运行期读取」而非解析源码行号：Lua 运行期拿不到行号，
---   而桩不校验 SetPoint 的坐标参数——把与 SetPoint **同源**的常量登记下来，
---   断言才能发现「某个控件根本没被构建 / 构建时几何是 nil」。行号级的源码校验
---   另放在 test_engine.js 的 LAYOUT CHECK（那边能读文件、能做真正的顺序检查）。
-function EVAL_DS_TEST_CONTROL_ROW_WIDGETS()
-  -- 返回 { {name=, built=, center=}, ... }：center 为 nil 即「该控件用了未声明的局部量」
-  local out = {}
-  local row = DS.controlRow
-  if type(row) ~= "table" or type(row.buttons) ~= "table" then return out end
-  for _, b in ipairs(row.buttons) do
-    table.insert(out, { name = b.name, center = b.center, declared = (b.center ~= nil) })
-  end
-  return out
-end
 
 -- 把一条标注摆上地图。
 -- ★素材与颜色**每次都要重设**：池子按序号复用，同一枚钉子这次可能是草药（小图标）、
@@ -1734,7 +1709,7 @@ end
 
 -- ★1.70.39 tick 帧的前向声明。必须出现在**任何**读写它的函数之前，
 -- 否则那些函数读到的是全局 nil（本项目第 9 次踩同一个 local 作用域坑）。
--- 本次是测试当场抓到的：EVAL_DS_TEST_TICK_FRAME() 返回 false（读到了全局）。
+-- 本次是测试当场抓到的：EVAL_DS_TEST_TICK_FRAME() 返回 false（读到了全局）。 ★1.75.34：该读值口已随 tests/ 一并删除（孤儿探针清理，见 CHANGELOG）。
 local dsTick = nil
 
 local DS_ANN_INTERVAL = 0.25
@@ -2022,34 +1997,6 @@ function EVAL_DS_TRACE(on)
   return dsTrace
 end
 function EVAL_DS_TRACE_STATE() return dsTrace end
-function EVAL_DS_NODE_TICK_FOR_TEST() dsAnnTick = 0 dsAnnTickFn() end -- 测试直调（清零节流跑一次）
-
--- 诊断（/eh ds）：一张表看清整条链路
-function EVAL_DS_NODE_DIAG()
-  local mc = dsUQModule("MapContext")
-  local areaId, err = nil, nil
-  if mc and type(mc.GetViewedZone) == "function" then
-    local ok, a = pcall(mc.GetViewedZone, mc)
-    if ok then areaId = a else err = tostring(a) end
-  end
-  local shown = "?"
-  if type(WorldMapFrame) == "table" and type(WorldMapFrame.IsShown) == "function" then
-    local ok, s = pcall(WorldMapFrame.IsShown, WorldMapFrame)
-    if ok then shown = tostring(s) end
-  end
-  local on = {}
-  for _, d in ipairs(DS_ANN_CATS) do if dsCatOn(d.k) then table.insert(on, d.label) end end
-  local tip = ""
-  if not dsAnnOn then tip = " | 图层总开关未开（/eh ds trace 或 Tab 里打开）" end
-  return string.format("图层=%s trace=%s 已绘地图=%s 钉子池=%d 对方当前区域=%s IsShown=%s(仅参考)",
-    tostring(dsAnnOn), tostring(dsTrace), tostring(dsAnnSig), table.getn(dsAnnPins),
-    tostring(areaId), tostring(shown))
-    .. " | 开启类别=" .. ((table.getn(on) > 0) and table.concat(on, ",") or "无")
-    .. " | 本次显示=" .. dsAnnSummary()
-    .. (dsAnnTruncated and (" | 已触顶(" .. DS_ANN_MAX .. ")，本图还有更多点未显示") or "")
-    .. tip .. (err and (" err=" .. err) or "")
-end
-
 
 
 -- ★★★1.70.38 地图诊断浮层（用户建议）：把当前诊断状态**直接画在世界地图上**，
@@ -2166,16 +2113,6 @@ function EVAL_DS_RND(on)
   return dsRndOn
 end
 function EVAL_DS_RND_STATE() return dsRndOn, dsRndStats end
--- ★1.70.39 测试直调：暴露 tick 帧本身，让断言能检查它的**父级**。
--- 父级是本轮根因（挂 UIParent → 地图打开时 UIParent 被隐藏 → OnUpdate 停发 → tick 停摆）。
--- 只暴露帧、不暴露判断逻辑：断言读的是真对象，不是测试里复刻的一份。
-function EVAL_DS_TEST_TICK_FRAME() return dsTick end
--- 1.70.38 测试直调：诊断浮层文本（验证它真的收到了内容，而不是只建了帧）
-function EVAL_DS_TEST_HUD_TEXT()
-  -- 返回「最后组装的诊断文本」：这是 HUD 的真实输出，与桩无关。
-  -- （用 FontString:GetText 读会被桩的能力限制，导致断言测不到东西——本项目多次踩过。）
-  return dsHudLastText
-end
 -- 每轮：清掉上一轮随机钉 → 放新的一批 → 记录成功/失败
 dsRndStep = function(now, areaId)
   if not dsRndOn then return end
@@ -2860,14 +2797,6 @@ end
 
 -- 测试直调（不建真实 UI 也能断言菜单结构与勾选一致性）
 function EVAL_DS_ANN_CAT_LIST() return DS_ANN_CATS end
-function EVAL_DS_TEST_CATBTN() return DS.catBtn and DS.catBtn.btn end -- 接线级断言用真实按钮
-function EVAL_DS_TEST_CONTROL_ROW_GEOMETRY()
-  -- 未构建时给一份与构建期同源的默认值（常量推导，不另抄数字）
-  return DS.controlRow or {
-    boxCenter = -64, phCenter = -64, phAnchorV = "CENTER",
-    buttons = { { name = "类型", center = -64 }, { name = "地图标注", center = -64 } },
-  }
-end
 -- 1.70.26 测试直调：类别图标解析与根路径
 function EVAL_DS_ANN_ICON_ROOT() return DS_ANN_ICON_ROOT end
 function EVAL_DS_CAT_ICON(k)
@@ -2875,171 +2804,6 @@ function EVAL_DS_CAT_ICON(k)
   return d and d.icon or nil
 end
 function EVAL_DS_ANN_ICON_FOR(l) return dsAnnIconFor(l) end
--- 1.70.27 测试直调：构造「层关但钉子残留」与「0 点重绘」两种真实状态
-function EVAL_DS_TEST_PIN_COUNT() return table.getn(dsAnnPins) end
-function EVAL_DS_TEST_SHOWN_COUNT() return dsAnnShownCount() end
-function EVAL_DS_TEST_WIPE_PINS() -- 制造「层开着但无可见钉子」的异常，验证安全网自愈
-  for _, f in ipairs(dsAnnPins) do pcall(f.Hide, f) end
-end
--- 清空钉子池。★测试必需：dsAnnPins 是模块级状态，会**跨用例残留**上一用例用旧桩建的帧，
--- 而 dsAnnPlace 按序号复用（存在即不新建）→ 本用例的桩根本没被用到，断言会以误导方式失败。
--- 测试直调：用给定的假 client 放一个钉子，返回 dsAnnPlace 的真实结果
-function EVAL_DS_TEST_PLACE_ONE(fakeClient, idx)
-  return dsAnnPlace(fakeClient, idx or 1, { x = 50, y = 50, name = "t" }, 1, 1, 1, nil)
-end
-function EVAL_DS_TEST_RESET_PINS()
-  dsAnnPins = {}
-  dsAnnSig = nil
-  dsAnnShown = {}
-  dsAnnLastDrawn = 0 dsAnnHealT = 0 dsAnnLastFail = 0 dsAnnPlaceLog = nil -- 1.70.42 自愈状态同样是模块级残留
-  dsAnnDrawCount = 0 -- 绘制计数器同样是模块级残留
-  -- ★稳定期闸门的候选状态也必须重置：它同样是模块级状态，会跨用例残留。
-  --   若不清，新用例的签名可能恰好等于上个用例留下的候选 → 闸门被误判为「已稳定」，
-  --   用例就会以误导的方式失败（与钉子池残留同一个坑，见 1.70.32/1.70.37）。
-end
-function EVAL_DS_TEST_DRAW_COUNT() return dsAnnDrawCount end -- 直读「重建发生了几次」
--- ★1.70.44 测试直调：走**生产用的** dsSetOverlay（而不是在测试里另写一份赋值）。
---   这正是本轮 bug 逃过测试的原因：原 capture 辅助「直接构造覆盖层」= 自己写了一个
---   与生产无关的赋值，于是「setter 绑到全局 / draw 读到局部」的分歧在测试里完全不可见。
---   ★教训（第 4 次同型）：测试必须调用被测代码的真实入口，自己复刻一份就等于没测。
-function EVAL_DS_TEST_CALL_SET_OVERLAY(loc) return dsSetOverlay(loc) end
--- 另一个读者：诊断串也读同一个变量。断言「setter 写完之后，两个读者都看得见」。
-function EVAL_DS_TEST_OVERLAY_STR() return dsOverlayStr() end
-function EVAL_DS_TEST_ALL_PINS_HIDDEN() -- 池内钉子是否全部处于隐藏态（用户可见契约）
-  for _, f in ipairs(dsAnnPins) do
-    if type(f.IsShown) == "function" and f:IsShown() then return false end
-  end
-  return true
-end
-function EVAL_DS_TEST_FORCE_LAYER_OFF() dsAnnOn = false end -- 只置开关，故意不清钉子
-function EVAL_DS_TEST_SET_EMPTY_RESULTS(on) dsTestEmptyResults = on and true or nil end
--- 磁盘存在性校验放在 node 侧（test_engine.js）：fengari 沙箱内 io 不可用，
--- 而「素材路径写错=静默不画」这条只能靠真实文件系统验证。
--- 摆放时的两个行为契约（用假 client 记录调用，不依赖真实地图）
-function EVAL_DS_TEST_PLACE_SETS_TEXTURE_EACH_TIME()
-  local calls = {}
-  local fake = {
-    CreateWorldMapPin = function() return {} end,
-    SetWorldMapPinHandlers = function() end,
-    SetWorldMapPinSize = function(_, w, h) calls[#calls + 1] = "size" end,
-    SetWorldMapPinTexture = function(_, t) calls[#calls + 1] = "tex:" .. tostring(t) end,
-    SetWorldMapPinColor = function() calls[#calls + 1] = "color" end,
-    PositionWorldMapPin = function() calls[#calls + 1] = "pos" end,
-  }
-  -- 用同一枚池位连续摆两次（模拟池子复用），第二次必须重新设素材与尺寸
-  dsAnnPins = {}
-  dsAnnPlace(fake, 1, { x = 1, y = 1, small = true }, 1, 0, 0, "herbs")
-  local first = table.concat(calls, ",")
-  calls = {}
-  dsAnnPlace(fake, 1, { x = 2, y = 2 }, 1, 0, 0, "spirithealer")
-  local second = table.concat(calls, ",")
-  dsAnnPins = {}
-  return string.find(first, "tex:") ~= nil and string.find(second, "tex:") ~= nil
-end
--- 记录一次真实重绘里「每条标注实际用了什么素材」，用于断言接线（而不是只断言解析函数）。
--- 返回 { {icon=..., small=...}, ... }，按摆放顺序。
-function EVAL_DS_TEST_CAPTURE_DRAW(areaId)
-  local captured = {}
-  local realPlace = dsAnnPlace
-  -- 用真实的 client（UnrealQuest 在测试 stub 里是打桩的），只把「记参数」包一层
-  local client = dsUQClient()
-  if not client then return captured end
-  dsAnnPlace = function(c, idx, info, r, g, b, icon)
-    -- ★1.70.41 也记颜色：用户要求搜索定位小圆点「每只怪一个随机颜色」。只断言
-    --   dsEntityColor()（解析函数）会漏掉「调用点写死一个常量色」的变异——
-    --   这正是 1.70.26 记过的「断言解析函数 ≠ 断言调用点」。必须记**调用点实际传的**值。
-    captured[table.getn(captured) + 1] = {
-      icon = icon, small = info and info.small, cat = info and info.category,
-      r = r, g = g, b = b, kind = info and info.kind, id = info and info.id,
-    }
-    return false -- 不真的建钉子，只记参数
-  end
-  pcall(dsAnnDraw, areaId)
-  dsAnnPlace = realPlace
-  return captured
-end
--- 专测搜索结果覆盖层的摆放参数：设置一个覆盖层，真实重绘，看看它有没有被塞图标。
-function EVAL_DS_TEST_CAPTURE_OVERLAY(areaId)
-  -- ★★★1.70.44 改走**生产用的 setter**（dsSetOverlay），不再自己构造一份赋值。
-  --   原实现在这里直接写 dsAnnOverlay —— 那恰好绕开了生产路径，于是
-  --   「setter 绑到全局 / draw 读到局部」这条分歧在测试里完全不可见（测试全绿、功能全废）。
-  --   ★这是「测试里复刻逻辑 ⇒ 被测代码的变异不可见」的第 4 次发作（见 1.70.25/26/28）。
-  --   现在：如果 setter 写错了变量，下面 dsAnnDraw 就看不到覆盖层 → hasOverlay=false → 断言变红。
-  local okSet = EVAL_DS_TEST_CALL_SET_OVERLAY({
-    zid = areaId, name = "测试条目", kind = "unit", id = 1, x = 50, y = 50,
-  })
-  local strBefore = EVAL_DS_TEST_OVERLAY_STR() -- 另一个读者：诊断串
-  local cap = EVAL_DS_TEST_CAPTURE_DRAW(areaId)
-  local hasOverlay, allDots = false, true
-  for _, c in ipairs(cap) do
-    -- 覆盖层的 pts 只有 1 个点、且带 ov 语义；用「无类别」识别它
-    if c.cat == nil then
-      hasOverlay = true
-      if c.icon then allDots = false end
-    end
-  end
-  dsAnnOverlay = nil
-  -- ★1.70.41 把覆盖层实际用的颜色也带出来（用于断言「颜色确实来自 dsEntityColor 派生」）
-  local ovcol = nil
-  for _, c in ipairs(cap) do
-    if c.cat == nil then ovcol = { r = c.r, g = c.g, b = c.b } break end
-  end
-  -- ★把两个读者看到的结果一并返回：断言「setter 之后两个读者都看得见」，
-  --   这正是本轮 bug 的直接反例（一个看得见、一个看不见）。
-  return { hasOverlay = hasOverlay, allDots = allDots, n = table.getn(cap), color = ovcol,
-    setOk = okSet and true or false, str = strBefore }
-end
-function EVAL_DS_TEST_ICON_NOT_TINTED()
-  local tinted = nil
-  local fake = {
-    CreateWorldMapPin = function() return {} end,
-    SetWorldMapPinHandlers = function() end,
-    SetWorldMapPinSize = function() end,
-    SetWorldMapPinTexture = function() end,
-    SetWorldMapPinColor = function(_, r, g, b) tinted = { r, g, b } end,
-    PositionWorldMapPin = function() end,
-  }
-  dsAnnPins = {}
-  dsAnnPlace(fake, 1, { x = 1, y = 1 }, 0.4, 0.85, 0.35, "herbs")
-  local iconUntinted = tinted and tinted[1] == 1 and tinted[2] == 1 and tinted[3] == 1
-  tinted = nil
-  dsAnnPlace(fake, 1, { x = 1, y = 1 }, 0.4, 0.85, 0.35, nil)
-  local dotTinted = tinted and tinted[1] == 0.4 and tinted[2] == 0.85 and tinted[3] == 0.35
-  dsAnnPins = {}
-  return (iconUntinted and dotTinted) and true or false
-end
-function EVAL_DS_TEST_DD_MENU() return dsCatMenu() end
-function EVAL_DS_TEST_DD_SEL() -- key -> true（按当前类别状态派生，与面板所见一致）
-  local m, out = dsCatMenu(), {}
-  for i = 1, table.getn(m.keys) do
-    local k = m.keys[i]
-    if k and m.sel[i] and k ~= "__all_on__" and k ~= "__all_off__" then out[k] = true end
-  end
-  return out
-end
-function EVAL_DS_TEST_DD_PICK(k, nowOn)
-  if k == "__all_on__" or k == "__all_off__" then
-    dsCatMenuPick(k, true)
-    return
-  end
-  -- Cannot write "(nowOn ~= nil) and nowOn or <default>": the Lua and/or idiom cannot
-  -- express false (when nowOn=false the left side yields false and falls through to the
-  -- default branch). Must test for nil explicitly.
-  if nowOn == nil then nowOn = not EVAL_DS_CAT_ON(k) end
-  dsCatMenuPick(k, nowOn and true or false)
-end
-function EVAL_DS_TEST_DD_LOCKED_COUNT()
-  local m, n = dsCatMenu(), 0
-  for i = 1, table.getn(m.items) do if m.locked[i] then n = n + 1 end end
-  return n
-end
-function EVAL_DS_TEST_DD_IS_LOCKED(label) -- 按标签片段找行，返回该行是否锁定
-  local m = dsCatMenu()
-  for i = 1, table.getn(m.items) do
-    if string.find(m.items[i], label, 1, true) then return m.locked[i] and true or false end
-  end
-  return nil
-end
 
 -- ===== 构建入口（配置窗调用；page.widgets 走 Tab 显隐契约） =====
 function EVAL_DS_BUILD(root, page, refreshes)
@@ -4988,67 +4752,6 @@ function EVAL_DS_BUILD(root, page, refreshes)
   --   代价 = 每帧一次空表长度判断 + 一次 IsShown；要花的活由**内部**的「弹窗可见 + 队列非空」把关。
   pcall(qpPump.Show, qpPump)
   DS.qcPump = qpPump
-  function EVAL_QP_TEST_PUMP() return qpPump end        -- 读值口：断言要驱动真 tick
-  function EVAL_QP_TEST_PUMP_TICK() qpPumpOnUpdate() end -- 断言直接跑**真**的泵体（不复制逻辑）
-
-  -- ===== 探针（用户要求「优先排查有没有 API 接口获取装备信息」）：一条命令摊开结论 =====
-  -- 用法：/eh ds 任务线   → 打印若干 id 的客户端返回；未缓存的自动排队请求（限频），
-  --       等 5 秒再跑一次即可看到「自愈」效果（回来了就有名字与游戏内图标路径）。
-  function EVAL_DS_QC_PROBE(ids)
-    local out = {}
-    local list = ids or { 2042, 2506, 1264, 6087, 2041, 1712 }
-    for i = 1, table.getn(list) do
-      local id = list[i]
-      local nm, tex, q = qpItemInfo(id)
-      table.insert(out, string.format("#%d 名字=%s | 图标=%s | 品质=%s", id,
-        tostring(nm or "nil"), tostring(tex or "nil"), tostring(q or "nil")))
-      if not nm then
-        if DS.qcReq and table.getn(DS.qcReq.q) < QP_REQ_MAX then table.insert(DS.qcReq.q, id) end
-        table.insert(out, "      ↑ 客户端未缓存 → 已排队向服务器请求（限频 " .. tostring(QP_REQ_RATE) .. "s/件）；等 5 秒再跑一次本命令看是否自愈")
-      end
-    end
-    table.insert(out, "说明：本客户端**没有**「按 id 直取物品」的独立 API（api_item 索引里只有包装备栏/商店/训练师等场景专用的那几个）；")
-    table.insert(out, "      唯一入口是 GetItemInfo(id)，**只读本地缓存** —— 未缓存就是没名字没图标（UnrealQuest 已实测并记录该行为）。")
-    -- ★1.75.12 用户问「装备链接缓存是否生效?」+「只在当前看得见的装备检索」：把**当前这一屏**的
-    --   缓存命中与待请求队列摊开（含限频），一眼看出缓存有没有自愈、有没有在乱轰服务器。
-    local hits = (DS.qpTab == "item") and (DS.qpItemHits or {}) or (DS.qpChainHits or {})
-    local visN, cachedN = 0, 0
-    for i = 1, QP_ROWS do
-      local h = hits[(DS.qpOff or 0) + i]
-      local id = h and h.id or nil
-      if type(id) == "number" then
-        visN = visN + 1
-        if qpItemInfo(id) then cachedN = cachedN + 1 end
-      end
-    end
-    local st = EVAL_QP_REQ_STATE()
-    table.insert(out, string.format("[当前页缓存] 本页装备 %d 件 · 客户端已缓存 %d · 待请求 %d 件（限频 %.1fs/件 · 队列上限 %d）",
-      visN, cachedN, st.queued, st.rate, st.cap))
-    -- ★1.75.16 「泵到底有没有在要」也要能一眼看出来（旧版只有队列长度，泵死了也显示得像正常）；
-    --   顺带把**工具柄状态**摊开（自建 / 退化用 GameTooltip / 无）—— 泵拿不到柄时靠它定位。
-    local wttState = "?"
-    if type(EVAL_WTT_STATE) == "function" then
-      local ws = EVAL_WTT_STATE()
-      wttState = ws.hasWtt and (ws.self and "自建" or "退化(GameTooltip)") or "无"
-    end
-    table.insert(out, string.format("[请求泵] 已请求 %d 件 · 因拿不到工具柄挡下 %d 次 · 泵帧=%s · 已试过 %d 件 · 工具柄=%s · 手动优先 %d 次",
-      st.req, st.blocked, (st.pumpShown and "开" or "关"), st.tried, wttState, st.pri))
-    table.insert(out, "      ★只对**当前看得见**的装备排队请求（每次重绘重建队列，绝不顺序检索全部装备）；整页都命中缓存时队列为 0。")
-    -- ★1.75.13 「载入的是哪一版」自查行：任务线**全量条数**是最好认的派生事实 ——
-    --   旧实现在 DataSearch 里写死 `EVAL_QC_SEARCH(q, 200, …)`，而列表按等级升序 ⇒ 只出 200 条、最高 hi≈40，
-    --   于是用户看到「任务线最高只有 30 级」误以为数据没收集齐（修好后 = 全量 710 条 · 最高 hi=60）。
-    local qAll = EVAL_QC_SEARCH("", 0, nil) or {}
-    local qTop, qSer = 0, 0
-    for i = 1, table.getn(qAll) do
-      local hi = tonumber(qAll[i] and qAll[i].c and qAll[i].c.hi) or 0
-      if hi > qTop then qTop = hi end
-    end
-    if type(EVAL_QC_SERIES_COUNT) == "function" then qSer = EVAL_QC_SERIES_COUNT() end
-    table.insert(out, string.format("[任务线列表] 全量 %d 条（策展 %d + 自报系列 %d）· 最高 hi=%d",
-      table.getn(qAll), table.getn(EVAL_QC_LIST() or {}), qSer, qTop))
-    table.insert(out, "      ★若这一行只有 200 条、最高 hi≈40 ⇒ **载入的是旧副本**，请 /reload 后再看（新副本是全量、最高 60）。")
-    return out
-  end
 
   -- ===== 全量数据审计（用户 1.75.9：「任务完成之后要审计装备链接是否正确…装备链接都以游戏内信息为准」）=====
   -- 逐件把**数据里的装备**与**客户端认识的信息**对账：
@@ -5360,77 +5063,16 @@ function EVAL_DS_BUILD(root, page, refreshes)
     if DS.qpTab == "item" then return DS.qpItemHits or {} end
     return DS.qpChainHits or {}
   end
-  function EVAL_QP_TEST_ROW(i)
-    local st = DS.qp
-    if not st or type(i) ~= "number" or not st.rows[i] then return nil end
-    local r = st.rows[i]
-    return { btn = r.btn, text = r.text, icon = r.icon, key = r.key, item = r.item, bg = r.bg,
-             rw = r.rw, rwMore = r.rwMore, rwIds = r.rwIds }
-  end
-  -- ★1.75.10 读值口：任务线行的奖励图标（第 j 槽）与其物品 id；以及文本宽度估算纯函数
-  function EVAL_QP_TEST_ROW_RW(i, j)
-    local st = DS.qp
-    if not st or type(i) ~= "number" or type(j) ~= "number" or not st.rows[i] then return nil end
-    local rw = st.rows[i].rw
-    return rw and rw[j] or nil
-  end
   function EVAL_QP_ROW_RW_ID(i, j)
     local st = DS.qp
     if not st or type(i) ~= "number" or type(j) ~= "number" or not st.rows[i] then return nil end
     return st.rows[i].rwIds[j]
   end
-  -- ★1.75.18 读值口：这一格的奖励图标是不是**占位图**（未扫描出装备）+ 画出来的贴图路径
-  function EVAL_QP_TEST_ROWPH(i, j)
-    local st = DS.qp
-    if not st or type(i) ~= "number" or type(j) ~= "number" or not st.rows[i] then return nil end
-    local row = st.rows[i]
-    local tex = nil
-    if row.rw[j] and row.rw[j].tex and row.rw[j].tex.GetTexture then
-      local ok, t = pcall(row.rw[j].tex.GetTexture, row.rw[j].tex)
-      if ok then tex = t end
-    end
-    return (row.rwPh[j] and true or false), tex
-  end
-  function EVAL_QP_TEST_DETPH(i)
-    local st = DS.qp
-    if not st or type(i) ~= "number" then return nil end
-    return (st.detPh[i] and true or false)
-  end
-  -- ★1.75.18 读值口：某一格奖励图标的**按钮**（断言要跑它真实的 OnEnter/OnClick）
-  function EVAL_QP_TEST_ROWPHBTN(i, j)
-    local st = DS.qp
-    if not st or type(i) ~= "number" or type(j) ~= "number" or not st.rows[i] then return nil end
-    return st.rows[i].rw[j] and st.rows[i].rw[j].btn or nil
-  end
   function EVAL_QP_TEXT_W(label, perChar) return qpTextWidth(nil, label, perChar) end
   -- ★1.75.11 顺滑滚动读值口：当前像素错位 / 动画帧（测试直接跑它的 OnUpdate，零参数）/ 详情滚动量
   function EVAL_QP_ANIM() return DS.qpAnim or 0 end
-  function EVAL_QP_TEST_ANIMFRAME() return qpAnimFrame end
   function EVAL_QP_DET_OFF() return DS.qpDetOff or 0 end
   function EVAL_QP_DET_MAX() return DS.qpDetMax or 0 end
-  function EVAL_QP_TEST_ROW_TOP(i)
-    local st = DS.qp
-    if not st or type(i) ~= "number" or not st.rows[i] then return nil end
-    local okv, v = pcall(st.rows[i].btn.GetTop, st.rows[i].btn)
-    if okv then return v end
-    return nil
-  end
-  function EVAL_QP_TEST_DET(i)
-    local st = DS.qp
-    if not st or type(i) ~= "number" then return nil end
-    return st.detRows[i]
-  end
-  -- ★1.75.10 读值口：详情奖励行的图标 / 悬停热区 / 该行的装备 id / 详情标题的稀有度
-  function EVAL_QP_TEST_DETICONROW(i)
-    local st = DS.qp
-    if not st or type(i) ~= "number" then return nil end
-    return st.detIcons[i]
-  end
-  function EVAL_QP_TEST_DETHOVER(i)
-    local st = DS.qp
-    if not st or type(i) ~= "number" then return nil end
-    return st.detHover[i]
-  end
   function EVAL_QP_DET_ITEM(i)
     local st = DS.qp
     if not st or type(i) ~= "number" then return nil end
@@ -5442,18 +5084,11 @@ function EVAL_DS_BUILD(root, page, refreshes)
     return EVAL_QC_RARITY(d and d.c or nil)
   end
   function EVAL_QP_DET_TITLE_RARITY() return DS.qpRarity end
-  function EVAL_QP_TEST_BTN() return DS.qlBtn and DS.qlBtn.btn or nil end
-  function EVAL_QP_TEST_ZOOM(i)
-    local st = DS.qp
-    if not st or type(i) ~= "number" or not st.zoomBtns[i] then return nil end
-    return st.zoomBtns[i]
-  end
   function EVAL_QP_ZOOM_WORD(i)
     local st = DS.qp
     if not st then return nil end
     return st.detZoom[i]
   end
-  function EVAL_QP_TEST_F3() return DS.qp and DS.qp.f3 and DS.qp.f3.btn or nil end
   -- 读值口：行数/几何（判据用它验「滚动区铺满窗口、末行不压分页行」——读真控件）
   function EVAL_QP_GEOM()
     local st = DS.qp
@@ -5470,32 +5105,7 @@ function EVAL_DS_BUILD(root, page, refreshes)
     return out
   end
   function EVAL_QP_ROWS() return QP_ROWS, QP_DET_ROWS end
-  function EVAL_QP_TEST_DETTITLE() return DS.qp and DS.qp.detTitle or nil end
-  function EVAL_QP_TEST_DETSUB() return DS.qp and DS.qp.detSub or nil end
-  function EVAL_QP_TEST_DETICON() return DS.qp and DS.qp.detIcon or nil end
-  function EVAL_QP_TEST_PREV() return DS.qp and DS.qp.frame and nil end
-  function EVAL_QP_TEST_NAV()
-    local st = DS.qp
-    if not st then return nil end
-    -- 返回**包裹表**（dsBtn 给的是 {btn,text}）——文字在 .text 上，按钮本体只有 GetScript
-    return st.navPrev, st.navNext
-  end
-  function EVAL_QP_TEST_ICONBTN() return DS.qp and DS.qp.detIconBtn or nil end
-  function EVAL_QP_TEST_NAV_SHOWN()
-    local st = DS.qp
-    if not st or not st.navPrev or not st.navNext then return false end
-    return (st.navPrev.btn:IsShown() and st.navNext.btn:IsShown()) and true or false
-  end
   function EVAL_QP_ITEM_INFO(id) return qpItemInfo(id) end -- 读值口：走 GetItemInfo（游戏内为准）
-  function EVAL_QP_TEST_TAB(name)
-    local st = DS.qp
-    if not st then return nil end
-    if name == "chain" then return st.tabChain.btn end
-    return st.tabItem.btn
-  end
-  function EVAL_QP_TEST_CLOSE() return DS.qp and DS.qp.frame and nil end
-  function EVAL_QP_TEST_GODS() return DS.qp and DS.qp.goDs and DS.qp.goDs.btn or nil end
-  function EVAL_QP_TEST_BACK() return DS.qp and DS.qp.back and DS.qp.back.btn or nil end
   function EVAL_QP_SET_QUERY(q)
     DS.qpQuery = tostring(q or "")
     DS.qpOff = 0
@@ -5602,10 +5212,6 @@ function EVAL_DS_BUILD(root, page, refreshes)
     table.insert(out, "  ★两者应相等且明显小于「点击前」；界面=全部 ⇒ 点选没触发重绘；都=全部 ⇒ 集合没写进去")
     return out
   end
-  function EVAL_QP_TEST_F2() return DS.qp and DS.qp.f2 and DS.qp.f2.btn or nil end  function EVAL_QP_TEST_F1() return DS.qp and DS.qp.f1 and DS.qp.f1.btn or nil end
-  -- ★1.75.9 输入框三件套读值口（用户实测「输入框无法输入」）：焦点按钮 / EditBox / 是否已聚焦
-  function EVAL_QP_TEST_EBBTN() return qpEbFocus end
-  function EVAL_QP_TEST_EB() return qpEb end
   function EVAL_QP_PH_SHOWN()
     if not qpPh then return nil end
     local ok, v = pcall(qpPh.IsShown, qpPh)
@@ -5890,43 +5496,11 @@ function EVAL_DS_BUILD_FOR_TEST()
   EVAL_DS_BUILD(root, page, {})
   return DS.built == true
 end
-function EVAL_DS_TEST_LINE(i) return DS.detLines and DS.detLines[i] end
-function EVAL_DS_TEST_ROW(i) return DS.resRows and DS.resRows[i] end
 
 -- 依赖探测与引导面板的测试访问器（1.70.46）
 -- ★断言必须落在**文案内容**上，不能只断言「面板存在/文本是字符串」——
 --   旧文本会一直留在 FontString 里，跳过刷新也能让存在性断言通过（1.70.38 教训）。
 function EVAL_DS_DEP_STATE() return dsDepState() end
-function EVAL_DS_TEST_DEP_MSG()
-  local d = DS.dep
-  if not d then return nil end
-  local ok, t = pcall(d.msg.GetText, d.msg)
-  if ok then return t end
-  return nil
-end
-function EVAL_DS_TEST_DEP_LINE(which)
-  local d = DS.dep
-  if not d then return nil end
-  local fs = (which == "title") and d.title or (which == "why") and d.why
-    or (which == "msg") and d.msg or (which == "foot") and d.foot
-  if not fs then return nil end
-  local ok, t = pcall(fs.GetText, fs)
-  if ok then return t end
-  return nil
-end
-function EVAL_DS_TEST_DEP_SHOWN()
-  local d = DS.dep
-  if not d then return nil end
-  local ok, v = pcall(d.frame.IsShown, d.frame)
-  if ok then return v end
-  return nil
-end
--- 状态 → 文案键（断言映射本身：只断言「四条文本两两不同」抓不到状态与文案被互换）
-function EVAL_DS_TEST_DEP_KEY(st) return dsDepText(st) end
--- 控制行控件清单（断言「依赖缺席时交互控件全部收起」用）
-function EVAL_DS_TEST_SEARCH_WIDGETS() return DS.searchWidgets end
--- 数据本地化子表所用的语言码（items_zhCN / units_enUS …）——与 L() 必须同源
-function EVAL_DS_TEST_LANG() return dsLang() end
 
 function EVAL_DS_PROBE()
   if not DS.built then return "未构建（先 /eh cfg 打开配置窗）" end

@@ -187,8 +187,6 @@ end
 -- 纯函数：标题 + 列宽 → 分隔条文本（渲染与断言**共用这一份**）
 local TB_HDR_PER = 11 -- 一个汉字/破折号约 11px（本机拿不到 GetStringWidth 的既有近似）
 local function tbHdrEst(s) return tbNameCharLen(tostring(s or "")) * TB_HDR_PER end
--- 读值口：估算宽度（**与生产同一个口径**；断言不许自己另写一套估算）
-function EVAL_TEST_TB_HDR_EST(s) return tbHdrEst(s) end
 function EVAL_TB_HDR_TEXT(label, colW)
   local title = tbHdrStrip(label)
   local w = tonumber(colW) or 300
@@ -811,17 +809,6 @@ function EVAL_TEST_TB_CHAN_STATE()
          (TB.chanEvtFiltered or 0), (TB.chanEvtLast) -- ★事件名判据的计数与最后一条（第 11/12 个返回值；探针与断言靠它）
 end
 
-function EVAL_TEST_TB_CHAN_RESET() -- 测试用：清计数并允许重新挂载（不还原已包装的入口、不清名字缓存）
-  TB.chanHooked = false
-  TB.chanFiltered = 0
-  TB.chanEvtFiltered, TB.chanEvtLast = 0, nil
-  TB.chanSamples = {}
-  TB.chanSeenAll = 0
-  TB.chanTryAt = nil
-  TB.chanTries = 0
-  TB.chanSweepAt = nil
-  TB.chatSeen, TB.chatPainted, TB.chatRaw, TB.chatLast = 0, 0, {}, nil
-end
 
 -- ===== 频道进出通知：走**官方消息组**接口（1.73.12 深入 API 后的发现）=====
 -- ★API 事实（本机 api 全表 1369 条逐条核过，类别 = ChatWindow）：
@@ -898,10 +885,6 @@ function EVAL_TB_CHAN_OFFICIAL_SYNC()
       " 的消息组（这是与「走不走 Lua」无关的官方路子）")
   end
   return true, found or 0
-end
-function EVAL_TEST_TB_CHAN_OFFICIAL_RESET() -- 测试用：清「已摘掉哪些窗口」的记账（模块级状态必须可重置）
-  tbChanSaved = nil
-  TB.chanOffFound, TB.chanOffAct, TB.chanOffLogged = 0, 0, false
 end
 function EVAL_TB_CHAN_OFFICIAL_STATE()
   local groups, err = EVAL_TB_CHAN_GROUPS(1)
@@ -1400,22 +1383,6 @@ function EVAL_TB_CHATEVENT_STATE()
            evtFiltered = TB.chanEvtFiltered or 0, evtLast = TB.chanEvtLast,
            chanArgs = TB.chanEvArgs or {} }
 end
-function EVAL_TEST_TB_CHATEVENT_RESET()
-  TB.chanEvtFiltered, TB.chanEvtLast = 0, nil -- 事件名判据的计数（模块级状态必须可重置）
-  TB.chanEvArgs = {} -- 频道事件的 arg8/arg9 取证缓冲
-  TB.ceSeen, TB.ceFiltered, TB.cePainted, TB.ceRaw = 0, 0, 0, {}
-  TB.ceChat, TB.ceByEv, TB.ceShape, TB.ceNoMsg, TB.ceShapeN = {}, {}, {}, 0, 0
-  TB.ceNamed, TB.ceNameMiss, TB.ceNameHold, TB.ceReplaced = 0, 0, 0, 0
-  TB.ceTryAt, TB.ceTries, TB.ceLogged = nil, 0, false
-end
--- ★1.73.20 试验口：临时打开/关闭「回写 arg2」（**默认关** —— 名字槽不吃富文本，回写只会显示成原文）。
---   有了它，「闸门关着 → arg2 一个字不改」与「闸门开着 → 真的会包成职业色」**两条都能被断言钉住**，
---   否则那段回写逻辑就成了「没被任何断言覆盖」的死代码（本项目最忌讳的盲区）。
-function EVAL_TEST_TB_NAMECOLOR_WRITE(on)
-  local old = TB_NAMECOLOR_WRITE
-  TB_NAMECOLOR_WRITE = (on == true)
-  return old
-end
 TB.ceHooked = EVAL_TB_CHATEVENT_INSTALL() and true or false
 EVAL_LOGLINE("[聊天入口] ChatFrame_OnEvent 载入时挂载：" ..
   (TB.ceHooked and "成功" or "函数还不存在（将由事件/每帧重试）"))
@@ -1812,25 +1779,6 @@ function EVAL_TEST_TB_MENU_CLICK(label)
           pcall(fn)
           return true
         end
-        return false
-      end
-    end
-  end
-  return false
-end
--- ★★★1.73.40 测试：按**标签**触发菜单条目的鼠标悬停 —— 走的是按钮**真实的 OnEnter/OnLeave 脚本**
---   （不是直接调 paint：接线断了这样才会响）。on == false → 触发 OnLeave。
-function EVAL_TEST_TB_MENU_HOVER(label, on)
-  if not TB.menu then return false end
-  local want = tostring(label or "")
-  local ev = (on == false) and "OnLeave" or "OnEnter"
-  for i = 1, table.getn(TB.menu.rows or {}) do
-    local b = TB.menu.rows[i]
-    if b and b.text and b.btn then
-      local ok, t = pcall(b.text.GetText, b.text)
-      if ok and tostring(t or "") == want then
-        local okf, fn = pcall(b.btn.GetScript, b.btn, ev)
-        if okf and type(fn) == "function" then pcall(fn) return true end
         return false
       end
     end
@@ -2483,13 +2431,6 @@ function EVAL_TB_SIR_HANDLE(link, button)
   if button ~= "RightButton" then return false end
   return EVAL_TB_MENU_SHOW(name)
 end
--- ★1.73.42g 测试钩子：走**真实**已安装的 SetItemRef 点一个链接（不直调分支函数）
-function EVAL_TEST_SIR_CLICK(link)
-  local f = _G.SetItemRef
-  if type(f) ~= "function" then return false end
-  local ok = pcall(f, tostring(link or ""), "[链接]", "LeftButton")
-  return ok and true or false
-end
 
 function EVAL_TB_SETITEMREF_INSTALL()
   local cur = _G.SetItemRef
@@ -2609,24 +2550,6 @@ function EVAL_TB_NAME_PROBE()
   local cfgP = rawget(_G, "EVAL_HELP_CONFIG")
   if type(cfgP) == "table" then cfgP.tbNameProbe = snap end -- ★命令接线的**落盘证人**（M336：不玩聊天含子串）
   return snap
-end
-function EVAL_TEST_TB_NAMEMENU_RESET()
-  TB.sirSeen, TB.sirHandled = 0, 0
-  TB_NAME_MENU.shown, TB_NAME_MENU.name = false, nil
-  TB_NAME_MENU.inviteDirect, TB_NAME_MENU.inviteScript = 0, 0
-  TB_NAME_MENU.party, TB_NAME_MENU.target, TB_NAME_MENU.whisper = 0, 0, 0
-  TB_NAME_MENU.said, TB_NAME_MENU.throttled = 0, 0
-  -- ★1.73.42s 本轮新增的记账也要清（不是队长拒发 / 只排队未确认 / 直调失败 / 最近走的接口）
-  TB_NAME_MENU.partyNotLeader, TB_NAME_MENU.partyScript, TB_NAME_MENU.partyFail = 0, 0, 0
-  TB_NAME_MENU.partySelf = 0
-  TB_NAME_MENU.friendAdd, TB_NAME_MENU.friendAddUnk, TB_NAME_MENU.friendAlready = 0, 0, 0
-  TB_NAME_MENU.friendRemove, TB_NAME_MENU.friendFail = 0, 0
-  TB_NAME_MENU.friendRemoveUnk, TB_NAME_MENU.pendingFriend = 0, nil
-  TB_NAME_MENU.cancelKicked, TB_NAME_MENU.cancelSent, TB_NAME_MENU.cancelFail = 0, 0, 0
-  TB_NAME_MENU.kickp, TB_NAME_MENU.kickpUnk = 0, 0
-  TB_NAME_MENU.partyVia = nil
-  TB_MENU_AT = {}
-  EVAL_TB_MENU_HIDE()
 end
 TB.sirHooked = EVAL_TB_SETITEMREF_INSTALL() and true or false
 EVAL_LOGLINE("[名字菜单] SetItemRef 载入时挂载：" ..
@@ -4634,8 +4557,6 @@ function EVAL_SUBADDONS_REFRESH()
   end
 end
 
-function EVAL_TEST_SUBADDONS() return SUBADDONS end
-
 
 -- （已删：临时版的 EVAL_TB_ADDON_RELOAD_ASK/SET/RECONCILE —— 子插件已回到备份的 EVAL_PLUGIN_* 实现）
 
@@ -4720,47 +4641,6 @@ local function tbModel()
   }
 end
 
--- ★测试钩子（1.71.2）：把「行模型」与「迁移」暴露给冒烟测试，
---   否则「UI 真的有两行独立复选框」只能靠人眼看界面（本项目 1.70.46 的教训：只测解析不测调用点）
-function EVAL_TEST_TB_ROWS() return tbModel() end
--- ★1.71.3 测试钩子：走**真的 tbCfg()**（迁移也在里面跑）——直接读 EVAL_HELP_CONFIG.tb 不会触发迁移。
-function EVAL_TEST_TB_CFG() return tbCfg() end
--- ★1.71.3 测试钩子：取某个 key 对应行的 [添加] 按钮（走真实控件，断言才能点真实 OnClick）
-function EVAL_TEST_TB_ADD_BTN_FOR(key)
-  if not TB.built then return nil end
-  local cols = TB.cols or TB_COLS
-  for k = 1, TB.ROWS * cols do
-    local r = TB.rows[k]
-    -- ★读 r.item（刷新时记下的**实际映射**），不在这里重算（否则变异测不出来）
-    if r and r.item and r.item.key == key and r.add then return r.add.btn end
-  end
-  -- ★找不到 → 自动翻页再试
-  if EVAL_TB_TEST_GOTO(key) then
-    for k = 1, TB.ROWS * cols do
-      local r = TB.rows[k]
-      if r and r.item and r.item.key == key and r.add then return r.add.btn end
-    end
-  end
-  return nil
-end
--- ★1.74.33 读值口：取某 key 那行的**清空槽按钮**（clr；走真实控件 + 刷新时记下的实际映射）。
---   ★为什么需要它：图层拖拽行现在有**两个**右侧按钮（[设置]=add 槽 / [重置]=clr 槽）——
---     [重置] 从 chv 槽换到了 clr 槽，因为 chv（88 宽、起点 cRight−96）与 add（44 宽、同起点）**完全重叠**。
-function EVAL_TEST_TB_CLR_FOR(key)
-  if not TB.built then return nil end
-  local cols = TB.cols or TB_COLS
-  for k = 1, TB.ROWS * cols do
-    local r = TB.rows[k]
-    if r and r.item and r.item.key == key and r.clr then return r.clr.btn end
-  end
-  if EVAL_TB_TEST_GOTO(key) then
-    for k = 1, TB.ROWS * cols do
-      local r = TB.rows[k]
-      if r and r.item and r.item.key == key and r.clr then return r.clr.btn end
-    end
-  end
-  return nil
-end
 -- ★★★1.74.33 读值口：某行的**两个右侧按钮几何**（x/宽/是否显示）——用来钉「[设置] 与 [重置] 不许重叠」。
 --   为什么必须源码/几何级守：两个按钮叠在一起时，**行为断言全绿**（按钮存在、OnClick 也挂上了），
 --   真机上却是「上面那个把点击全吃掉、另一个永远点不到」——遮挡是测试照不到的盲区。
@@ -4788,23 +4668,6 @@ function EVAL_TB_TEST_ROW_BTNS(key)
   if not out and EVAL_TB_TEST_GOTO(key) then out = scan() end
   return out
 end
--- ★1.74.13 读值口：取某 key 那行的「值按钮」（chv；走真实控件 + 刷新时记下的实际映射）
-function EVAL_TEST_TB_CHV_FOR(key)
-  if not TB.built then return nil end
-  local cols = TB.cols or TB_COLS
-  for k = 1, TB.ROWS * cols do
-    local r = TB.rows[k]
-    if r and r.item and r.item.key == key and r.chv then return r.chv.btn end
-  end
-  -- ★找不到 → 自动翻到它所在的那一页再试一次
-  if EVAL_TB_TEST_GOTO(key) then
-    for k = 1, TB.ROWS * cols do
-      local r = TB.rows[k]
-      if r and r.item and r.item.key == key and r.chv then return r.chv.btn end
-    end
-  end
-  return nil
-end
 -- ★1.74.27 读值口：取某 key 那行的**勾选框 + 勾号**（走真实控件 + 刷新时记下的实际映射）——
 --   稀有提醒开关的判据要能走**真实 OnClick**（不是直调 EVAL_RW_SET，那等于测自己）。
 function EVAL_TEST_TB_CHK_FOR(key)
@@ -4816,26 +4679,6 @@ function EVAL_TEST_TB_CHK_FOR(key)
   end
   return nil
 end
--- ★1.74.5 读值口：取某 key 那行的「待测试」标记按钮（走真实控件 + 刷新时记下的实际映射；测试不复刻逻辑）
-function EVAL_TEST_TB_WIP_FOR(key)
-  if not TB.built then return nil end
-  local cols = TB.cols or TB_COLS
-  for k = 1, TB.ROWS * cols do
-    local r = TB.rows[k]
-    if r and r.item and r.item.key == key and r.wip then return r.wip.btn, r.wip.tex end
-  end
-  -- ★找不到 → 自动翻到它所在的那一页再试
-  if EVAL_TB_TEST_GOTO(key) then
-    local cols2 = TB.cols or TB_COLS
-    for k = 1, TB.ROWS * cols2 do
-      local r = TB.rows[k]
-      if r and r.item and r.item.key == key and r.wip then return r.wip.btn, r.wip.tex end
-    end
-  end
-  return nil
-end
-function EVAL_TEST_TB_MIGRATE(t) tbMigrateQuest(t) return t end
-function EVAL_TEST_TB_HOLD_KEYS() return TB_HOLD_KEYS, TB_HOLD_LABEL end
 
 local function tbAddItem(key, txt)
   local tb = tbCfg()
@@ -5760,176 +5603,6 @@ end
 function EVAL_BUY_UI_REFRESH() buyUIRefresh() end
 function EVAL_BUY_UI_CLOSE() if buyUI.root then buyUI.root:Hide() end end
 
--- ★测试观测口：当前**可见**的列表行（读控件当前文本，而不是读配置）
-function EVAL_TEST_BUY_UI_TEXTS()
-  local out = {}
-  if not buyUI.root then return out end
-  local oks, shown = pcall(buyUI.root.IsShown, buyUI.root)
-  if not (oks and shown) then return out end
-  for i = 1, TB_BUY_UI_ROWS do
-    local r = buyUI.rows[i]
-    local okv, vis = pcall(r.chk.IsVisible, r.chk)
-    if okv and vis then
-      local okm, mvis = pcall(r.mark.IsShown, r.mark)
-      table.insert(out, { on = (okm and mvis) and true or false, name = r.name:GetText() or "",
-                          n = r.nt:GetText() or "", per = r.pt:GetText() or "" })
-    end
-  end
-  return out
-end
--- ★★★1.73.31 读值口：弹窗的**层级/鼠标开关** + 工具箱交互控件的层级（「点击不到」= 层级被压 / 不吃点击）
-function EVAL_TEST_BUY_UI_Z()
-  local out = { buy = nil, toolbox = nil, mouse = nil }
-  if buyUI.root then
-    local ok, l = pcall(buyUI.root.GetFrameLevel, buyUI.root)
-    if ok then out.buy = l end
-    local okm, m = pcall(buyUI.root.IsMouseEnabled, buyUI.root)
-    if okm then out.mouse = m and true or false end
-  end
-  for k = 1, (TB.ROWS or 0) do
-    local r = TB.rows and TB.rows[k]
-    local o = r and (r.chk or (r.add and r.add.btn) or r.clr)
-    if o and type(o.GetFrameLevel) == "function" then
-      local ok, l = pcall(o.GetFrameLevel, o)
-      if ok and type(l) == "number" then out.toolbox = l break end
-    end
-  end
-  return out
-end
--- ★★★1.73.33 读值口：自动购买弹窗的**列几何 / 拖动柄 / 说明行**（用户红线指出的两处布局问题都在这可断言）
-function EVAL_TEST_BUY_UI_GEO()
-  if not buyUI.root then return nil end
-  local W = 360
-  local okW, w0 = pcall(buyUI.root.GetWidth, buyUI.root)
-  if okW and type(w0) == "number" then W = w0 end
-  local function num(o, m)
-    if not o or type(o[m]) ~= "function" then return nil end
-    local ok, v = pcall(o[m], o)
-    return (ok and type(v) == "number") and v or nil
-  end
-  -- ★坐标统一换算成「距窗口左边」（本机桩记录的是**锚点语义**：TOPRIGHT 的 x 是负偏移）——
-  --   这样「列头右边缘」与「数据右边缘」才可比（左对齐/右对齐两种锚法都能算到同一条基准线上）。
-  local function rect(o)
-    if not o then return nil end
-    local out = {}
-    local okp, point, _relTo, relPoint, ox, oy = pcall(o.GetPoint, o)
-    if okp and type(ox) == "number" then
-      out.point, out.relPoint, out.ox, out.oy = point, relPoint, ox, oy
-      local w = num(o, "GetWidth") or 0
-      if relPoint == "TOPRIGHT" then
-        out.r = W + ox
-        out.x = out.r - w
-      else
-        out.x = ox
-        out.r = ox + w
-      end
-      out.y = oy
-    end
-    return out
-  end
-  local out = { W = W, cols = TB_BUY_COLS, heads = {}, cells = {} }
-  for i = 1, table.getn(buyUI.heads or {}) do out.heads[i] = rect(buyUI.heads[i]) end
-  local r1 = buyUI.rows and buyUI.rows[1]
-  if r1 then
-    out.cells.name = rect(r1.name) out.cells.n = rect(r1.nt)
-    out.cells.per = rect(r1.pt) out.cells.del = rect(r1.del)
-  end
-  local tb = buyUI.titleBar
-  if tb then
-    local function val(m)
-      if type(tb[m]) ~= "function" then return nil end
-      local ok, v = pcall(tb[m], tb)
-      if ok and v ~= nil then return v end
-      return nil
-    end
-    out.drag = val("GetDragRegistered")
-    out.clicks = val("GetClicksRegistered")
-    out.titleLevel = num(tb, "GetFrameLevel")
-  end
-  out.level = num(buyUI.root, "GetFrameLevel")
-  local okM, mv = pcall(buyUI.root.IsMovable, buyUI.root)
-  if okM then out.movable = mv and true or false end
-  out.hint = rect(buyUI.hint) out.tip = rect(buyUI.tip)
-  return out
-end
--- ★★★1.73.34 读值口：滚动条机制（滚轮安装/方向/夹取 · 箭头与删除列不重叠 · 指示在底栏 · 边界状态）
-function EVAL_TEST_BUY_UI_SCROLL()
-  if not buyUI.root then return nil end
-  local W = 384
-  local okW, w0 = pcall(buyUI.root.GetWidth, buyUI.root)
-  if okW and type(w0) == "number" then W = w0 end
-  local function num(o, m)
-    if not o or type(o[m]) ~= "function" then return nil end
-    local ok, v = pcall(o[m], o)
-    return (ok and type(v) == "number") and v or nil
-  end
-  local function rect(o)
-    if not o then return nil end
-    local out = {}
-    local okp, point, _relTo, relPoint, ox, oy = pcall(o.GetPoint, o)
-    if okp and type(ox) == "number" then
-      local w = num(o, "GetWidth") or 0
-      if relPoint == "TOPRIGHT" then
-        out.r = W + ox
-        out.x = out.r - w
-      else
-        out.x = ox
-        out.r = ox + w
-      end
-      out.y = oy
-      out.w = w
-    end
-    return out
-  end
-  local out = { off = buyUI.off or 0, W = W }
-  local okf, f = pcall(buyUI.root.GetScript, buyUI.root, "OnMouseWheel")
-  out.wheel = (okf and type(f) == "function") and true or false
-  local okm, mw = pcall(buyUI.root.IsMouseWheelEnabled, buyUI.root)
-  out.mouseWheel = (okm and mw) and true or false
-  out.up = rect(buyUI.up and buyUI.up.btn) out.dn = rect(buyUI.dn and buyUI.dn.btn)
-  out.ind = rect(buyUI.ind)
-  local r1 = buyUI.rows and buyUI.rows[1]
-  out.del = rect(r1 and r1.del)
-  local rl = buyUI.rows and buyUI.rows[TB_BUY_UI_ROWS]
-  out.delLast = rect(rl and rl.del) -- ★最后一行的控件 y（指示必须在它下面 = 不压任何数据行）
-  local function shown(o)
-    if not o then return nil end
-    local ok, v = pcall(o.IsShown, o)
-    return (ok and v) and true or false
-  end
-  out.upShown = shown(buyUI.up and buyUI.up.btn)
-  out.dnShown = shown(buyUI.dn and buyUI.dn.btn)
-  local okI, txt = pcall(buyUI.ind.GetText, buyUI.ind)
-  out.indText = (okI and tostring(txt or "")) or ""
-  out.pages = math.max(1, math.ceil((table.getn(buyUIList() or {})) / TB_BUY_UI_ROWS))
-  out.n = table.getn(buyUIList() or {})
-  return out
-end
--- ★模拟一次滚轮事件（走**真实**的 OnMouseWheel 脚本）
-function EVAL_TEST_BUY_UI_WHEEL(a, b)
-  if not buyUI.root then return false end
-  local ok, f = pcall(buyUI.root.GetScript, buyUI.root, "OnMouseWheel")
-  if not ok or type(f) ~= "function" then return false end
-  pcall(f, a, b)
-  return true
-end
-function EVAL_TEST_BUY_UI_SHOWN()
-  if not buyUI.root then return false end
-  local ok, shown = pcall(buyUI.root.IsShown, buyUI.root)
-  return (ok and shown) and true or false
-end
-function EVAL_TEST_BUY_UI_CELL(i, which)
-  local r = buyUI.rows and buyUI.rows[i]
-  if not r then return nil end
-  if which == "chk" then return r.chk end
-  if which == "name" then return r.nameBtn end
-  if which == "n" then return r.nBtn end
-  if which == "per" then return r.pBtn end
-  if which == "del" then return r.del end
-  return nil
-end
-function EVAL_TEST_BUY_UI_OFF() buyUI.off = buyUI.off end
-
 
 -- ===== 测试钩子（放在文件末尾） =====
 -- ★1.71.2 把队列的**模块级时间戳**还原成干净值。
@@ -5969,25 +5642,12 @@ function EVAL_TB_TEST_SCROLL()
   return { midY = TB.botMidY, closeLeft = TB.closeLeft, up = up, dn = dn, indicator = ind,
            firstRowY = (TB.rows[1] and num(TB.rows[1].chk.GetTop, TB.rows[1].chk)) or nil }
 end
-function EVAL_TB_TEST_OFF() return TB.off end
 -- ★★★1.74.30 断言入口：走**本 Tab 自己的**滚轮处理器（不是 root 链上最外层那个），可单独点火。
 --   为什么必须：root 的 OnMouseWheel 是**链式**的（war ← 工具箱 ← 数据检索 ← 图标库 ← 抓宠），
 --   从最外层点火永远先被别的 Tab 消费掉 ⇒ 验不到「本 Tab **未激活时把事件转发给原脚本**」这条。
 function EVAL_TB_TEST_WHEEL(a, b)
   if type(TB.wheel) ~= "function" then return false end
   TB.wheel(a, b)
-  return true
-end
--- ★1.74.30 断言入口：读/换「转发目标」（链上的前一个脚本）。换它是为了放一个探针进去，
---   证明「未激活时真的转发了」——用完由测试**原值还回**（跨用例状态残留是本项目老坑）。
-function EVAL_TB_TEST_WHEEL_PREV(newFn)
-  local old = TB.prevWheel
-  if newFn ~= nil then TB.prevWheel = newFn end
-  return old
-end
--- ★1.74.30 断言入口：把转发目标**原样写回**（含写回 nil）——探针用完必须还原值，不留副作用。
-function EVAL_TB_TEST_WHEEL_SET(fn)
-  TB.prevWheel = fn
   return true
 end
 -- ★★★1.73.11 断言入口：两列版式的**真实几何**（每行控件的 x/宽 + 列几何 + 切点/两列行数）
@@ -6096,43 +5756,4 @@ function EVAL_TB_TEST_SCROLL_CLICK(which)
   fn()
   return true
 end
-function EVAL_TB_TEST_RESET_TIMERS()
-  tbQLast, tbMerchantLast, tbDiscardLast = 0, 0, 0
-  tbQScanLast, tbQScanDue = 0, 0
-  -- ★新增状态必须一并纳入重置：少了这三行，前一个用例用掉的频率窗口会漏到下一个用例，
-  --   表现为「第一次交接就被拦下」（本轮实测：断言 got=false）。
-  --   判据：**凡是在文件里出现的模块级可变状态，都要在这个函数里有对应的一行**。
-  tbQuestSeen, tbQuestBurst, tbQuestWinUntil = nil, nil, 0
-  -- ★★1.71.2（第五轮）**上一轮快照也必须清**：
-  --   tbQPrev 是「上次扫描结果」，跨用例残留会让新用例的第一次差分
-  --   拿到一个**陈旧的对照组**（本轮实测：空名行早就在旧快照里 → "新增"判定永远不成立 → 断言假绿）。
-  --   ★同上条判据：**凡模块级可变状态，都要在这个函数里有对应的一行**。
-  tbQPrev = nil
-  tbLastCompleteName = nil
-end
 
--- ★1.71.2 只读查询：队列里还有几笔「任务交接」。
---   为什么断言需要它：只看最终效果（TEST.questAccepted 是否为 nil）**区分不了**
---   「事件根本没入队」和「入队后被队列闸门撤掉」——两种实现都能让断言通过，
---   于是「事件级闸门被删掉」的变异体照样存活（本轮实测 3 条全存活）。
---   ★判据：要验「按住时不入队」，就必须**直接问队列**。
--- ★1.71.2（第五轮）直接跑「扫描 + 差分 + 播报」真实路径。
---   用途：验「节点标题暂空时不会播出空白日志」——
---   这两个函数是 Toolbox.lua 的文件局部量，测试直调不到，只能靠导出桥。
---   ★一定要走**真实实现**，不能在测试里另写一份差分逻辑（本项目反复踩过）。
--- ★1.71.2 反向哨兵用：手工走**真实的 tbNotify** 发一条空名消息，
---   用于证明「空白日志检测器真的会响」——否则断言可能因为检测器本身失效而假绿。
-function EVAL_TB_TEST_NOTIFY_EMPTY()
-  local loc = EVAL_LOCALES[EVAL_GET_LANG()] or {}
-  tbNotify(string.format(loc.TB_QN_ACCEPT or "%s", ""))
-  return true
-end
-function EVAL_TB_TEST_SCAN_DIFF()
-  tbQuestDiff()
-  return true
-end
-function EVAL_TB_TEST_QUEUED_QUESTS()
-  local n = 0
-  for _, q in ipairs(tbQ) do if q.kind == "quest" then n = n + 1 end end
-  return n
-end

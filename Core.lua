@@ -831,7 +831,6 @@ local LOAD_RESIDUE_KEYS = {
   "atkProbe",
 }
 
-function EVAL_LOAD_PROBE_KEYS() return LOAD_PROBE_KEYS end
 function EVAL_LOAD_RESIDUE_KEYS() return LOAD_RESIDUE_KEYS end
 
 local function loadRawRead()

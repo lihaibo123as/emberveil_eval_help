@@ -74,17 +74,6 @@ function EVAL_WTT_MAY_READ()
   if may then WTT_TOUCH = WTT_TOUCH + 1 end -- 退化模式下真碰了玩家那个 tooltip 的次数（应该尽量 0）
   return may
 end
-function EVAL_TEST_WTT() return WTT end -- ★测试用：读出**真正在用的**那个隐性 tooltip（断言要改它、别再改 GameTooltip）
--- ★1.75.16 **正式**读值口（不是测试专用）：凡是要拿这个隐形 tooltip「向服务器要数据」的功能
---   （数据检索里给未缓存装备补缓存）都必须走这里 —— `rawget(_G, "EVAL_HELP_WTT")` 在
---   「自建失败 → 退化用 GameTooltip」那条路上**恒为 nil**，于是调用方静默什么也做不了
---   （1.75.16 真机事故：任务线当前页不再检索装备，就是读全局名读出了 nil）。
-function EVAL_WTT_HANDLE() return WTT end
-function EVAL_WTT_IS_SELF() return WTTSELF end
-function EVAL_WTT_STATE()
-  return { self = WTTSELF, name = (WTTSELF and "EVAL_HELP_WTT" or "GameTooltip"),
-           why = WTT_WHY, touches = WTT_TOUCH, hasWtt = (WTT ~= nil) }
-end
 local wslots = {}       -- 技能名 -> { slot, tex }
 local wscanned = false
 local wLastAttackTry = 0
@@ -1247,8 +1236,6 @@ local function wMacroIconScan()
   W_CANCEL_ICON = false -- 扫到了但一个关键字都没命中 → 定型（免得每次开菜单都扫一遍）
   return nil
 end
--- 断言入口：清缓存，让「宏图标表 ↔ 取消施法图标」这条链能在测试里被证实（而不是只验缓存）
-function EVAL_TEST_MACRO_ICON_RESET() W_CANCEL_ICON, W_CANCEL_ICON_TRIES = nil, 0 return true end
 
 local function wicon(name)
   local s = wslots[name]
@@ -1709,8 +1696,6 @@ function EVAL_SPELLBOOK_HAS(name, rank)
   for _, v in ipairs(EVAL_SPELLBOOK_RANKS(name)) do if v == rank then return true end end
   return false
 end
--- 测试用：清空法术书缓存（模块级状态必须可重置）
-function EVAL_SPELLBOOK_TEST_RESET() sbCache = {} end
 
 local function wuse(name, reason, rank)
   -- ★1.72.4 指定等级：`CastSpellByName("名(等级 N)")`（Protected → RunScript 绕行），**不占动作格**
@@ -3078,17 +3063,6 @@ function EVAL_SWING_REMAIN_ACTIVE()
   return EVAL_SWING_REMAIN()
 end
 
--- ★测试读值口：自校准样本数 / 当前中位数 / 最终采用的射速（都读生产真值，不在测试里复刻公式）
-function EVAL_SHOT_TEST_STATE()
-  return { n = table.getn(SHT.samples), ratio = EVAL_SHOT_CAL_RATIO(), speed = EVAL_SHOT_SPEED(), api = EVAL_SHOT_API_SPEED() }
-end
-
--- ★测试用：清掉自校准样本与锚点（模块级状态，测试必须能整组拆）
-function EVAL_SHOT_TEST_RESET()
-  SHT.samples = {}
-  st.lastShot = nil
-  return true
-end
 
 -- ===== 射击计时探针（1.74.29；用户：「调研猎人自动射击状态下的攻击时间计算 → 按方案实施」）=====
 -- ★只取证、不改任何行为：一次问清三件事 —— ① `UnitRangedDamage` 到底返回什么（哪一个才是「秒/击」）
@@ -3106,9 +3080,6 @@ local function shpSay(s)
   if type(EVAL_SAY) == "function" then pcall(EVAL_SAY, s) else print(s) end
 end
 
-function EVAL_SHOT_PROBE_STATE()
-  return { on = SHP.on, n = table.getn(SHP.rows), max = SHP.max }
-end
 
 -- 事件喂入（命中两条通道由主程序的 OnEvent 派发处调用；未命中那条由探针自己的帧收）
 function EVAL_SHOT_PROBE_FEED(ev, txt)
@@ -3350,7 +3321,7 @@ local TRK = {
                "MiniMapTracking", "MiniMapTrackingButton", "MiniMapTrackingFrame" },
 }
 
--- （EVAL_TRACK_PROBE_STATE 1.75.4 起移到本段末尾：与测试驱动口放在一起）
+-- （EVAL_TRACK_PROBE_STATE 1.75.4 起移到本段末尾：与测试驱动口放在一起） ★1.75.34：该读值口已随 tests/ 一并删除（孤儿探针清理，见 CHANGELOG）。
 -- 纹理 → 技能名（先在动作条里找；找不到返回 nil，**不猜**）
 function EVAL_TRACK_WHO(tex)
   if type(tex) ~= "string" or tex == "" or type(wslots) ~= "table" then return nil end
@@ -3576,27 +3547,7 @@ local function trkBuffs()
   return out, true
 end
 
--- 读值口（测试/诊断）：探针状态（★1.75.4 补 allEv / evTotal）
-function EVAL_TRACK_PROBE_STATE()
-  return { lastTex = TRK.lastTex, listening = TRK.ev, allEv = TRK.allEv,
-           evHit = TRK.evHit, evTotal = TRK.evTotal }
-end
 
--- ★★★测试驱动口（1.75.4）：把「事件来了」**按真机通道**打进去（设全局 event → 调 frame 的 OnEvent → 还原）
---   ★绝不直接调 trkOnEvent —— 那会绕过真实注册链路（项目纪律：断言打真实入口）；★真机回调**零形参**
-function EVAL_TRACK_TEST_FIRE_EVENT(evName)
-  if TRK.frame == nil then return false end
-  local okS, sc = pcall(TRK.frame.GetScript, TRK.frame, "OnEvent")
-  if not okS or type(sc) ~= "function" then return false end
-  local keep = event
-  event = tostring(evName or "?")
-  local okc = pcall(sc)
-  event = keep
-  return okc and true or false
-end
-
--- 读值口：每个事件命中次数（关监听时报告打印的就是同一份）
-function EVAL_TRACK_TEST_HITS() return TRK.evHit end
 -- ===== 1.75.6 追踪条件（用户：「一键宏 → 技能编辑 → 条件类型 → 自身状态 → 添加一个追踪类型，下拉单选」）=====
 -- 三条 API 的实测结论见上面 1.75.3~1.75.5 的注释；这里只做「把状态变成可判定的东西」这件事。
 
@@ -3679,9 +3630,6 @@ function EVAL_TRACK_MATCH(id)
   return (now.id == want), "追踪:" .. tostring(cur) .. "／要 " .. tostring(EVAL_TRACK_LABEL(want))
 end
 
--- 读值口（测试/诊断）：缓存本身与清缓存（断言要能验「第二次不再读 tooltip」）
-function EVAL_TEST_TRACK_CACHE() return TRK.now end
-function EVAL_TEST_TRACK_CACHE_CLEAR() TRK.now = nil end
 
 function EVAL_TRACK_PROBE(sub)
   sub = tostring(sub or "")
@@ -4461,32 +4409,6 @@ end
 -- 测试直调：单条件求值（EVAL_RULE_RUN 会跳过「不在动作条」的技能，无法用于纯粹的条件断言）
 function EVAL_COND_EVAL(cd) return condOne(cd, nil, true) end
 
--- ★1.70.47 断言专用：以**非 dry** 方式求值单个条件（= 按宏时真正走的那条路）。
---   存在理由：dry 模式不执行副作用（不切目标）、也不做队伍扫描；
---   而队伍/团队条件的核心行为**恰恰是扫描+选人+切目标**——只用 dry 断言等于没测。
---   这是本项目第 4 次栽在「只测解析不测调用点」上之后补的钩子。
-function EVAL_TEST_COND_EVAL_LIVE(cd, rule) return condOne(cd, nil, false, rule) end
-
--- ★1.70.47 断言专用：走「选取目标:队伍/团队」的 auto 判据推断（等价于 condOne 的 target 分支）。
---   传 nil 规则 = 无队伍条件 → 退化「血量最低」；传规则 = 按规则里的队伍条件反推。
--- ★1.70.47 断言专用：直调**技能级执行**（选取目标/宠物指令/物品/动作条那条路）。
---   存在理由：技能行也能写成「选取目标:团队」，那条路径**不经过 condOne**，
---   是个独立调用点；只测条件路径会漏掉它（本项目「A 产出 / B 消费 两边都要断言」）。
-function EVAL_TEST_WUSE(name) return wuse(name, "test") end
-
--- ★1.74.8 断言入口：**就绪判定**（不占动作条的特殊技能恒就绪 —— 客户端对它们不报冷却）
-function EVAL_TEST_READY(name) local ok, why = wready(name) return ok and true or false, why end
--- ★1.74.8 断言入口：**图标解析**（验「取消自身buff:名」借的是那个光环自己的纹理）
-function EVAL_TEST_ACTION_ICON(name) return wicon(name) end
-
-function EVAL_TEST_TEAM_PICK_AUTO(rule, selId)
-  teamPickArg.rule = rule
-  TARGET_SEL_ARG_LAST = selId or "teamParty"
-  local ok, unit = pcall(EVAL_TEAM_PICK, "auto")
-  teamPickArg.rule, TARGET_SEL_ARG_LAST = nil, nil
-  if not ok then return nil, tostring(unit) end
-  return unit
-end
 
 -- ★1.75.28 返回**线性 expr**（不再是 groups）：分词按 &&、||、&、|（先看两字符再看一字符），
 --   conn = 该条件**前面**的连接符（第一条归 nil）；旧文本（只含 & 与 |）解析结果与旧 groups 逐字等价。
@@ -4660,10 +4582,6 @@ if k == "immune" then return (cd.v == false and "未免疫:" or "免疫:") .. to
   return tostring(k)
 end
 
--- ★1.71.2 断言专用：数值条件的「摘要显示名」（COND_NUMNAME）。
---   为什么要这个钩子：断言必须核实「摘要**真的**用了这个名字」，而不是在测试里**再抄一份**——
---   抄一份的话，生产代码改回裸 id 断言照样绿（本项目「测试里复刻逻辑」的老坑）。
-function EVAL_TEST_COND_NUMNAME(k) return COND_NUMNAME[k] end
 
 -- ★1.75.28 expr → 单行文本（连接符原样：A & B | C && D || E）；导出/导入与 EVAL_PARSE_CONDS 成对往返
 function EVAL_EXPR_STR(expr, disp)
@@ -5392,8 +5310,6 @@ EVAL_WSLOTS = wslots
 EVAL_WICON = wicon
 EVAL_GROUPS_OK = groupsOK
 EVAL_AURA_TEX = auraTexOf
--- ★1.73.2 断言入口：可驱散类型的匹配判定（含**多选集合**）——测试直接问生产实现，不另写一份
-function EVAL_TEST_DISPEL_MATCH(actual, want) return dispelMatch(actual, want) end
 EVAL_PET_OF = petCmdOf
 EVAL_TGT_OF = targetSelOf
 EVAL_TSEL_TEAMSEL = TARGET_SEL_TEAMSEL -- ★1.71.3 条件类型下拉要按「这一行是不是成员选取器」过滤
@@ -5924,7 +5840,7 @@ local function mwFitTier(meanGap)
 end
 
 -- ★★★1.75.11 被围攻**估算明细**（纯函数：win/now 可注入 ⇒ 可断言；**唯一实现** —— EVAL_MW_EST_N 只做求和，
---   断言读值口 EVAL_MW_TEST_DETAIL 也读它 ⇒ 不存在「读值口复刻一份逻辑」那种假绿）。
+--   断言读值口 EVAL_MW_TEST_DETAIL 也读它 ⇒ 不存在「读值口复刻一份逻辑」那种假绿）。 ★1.75.34：该读值口已随 tests/ 一并删除（孤儿探针清理，见 CHANGELOG）。
 --   返回：明细数组（每项一个名字分组）, 窗口内条数。每项字段 = { nm, n, minGap, N, src, I, tier, span }
 --   **按怪名分组**，每组独立判定（这才是「同类怪」场景的正解：名字相同也分得开几只）：
 --   ① n == 1（窗口内只看到一条）⇒ 1 只。
@@ -6532,12 +6448,6 @@ function EVAL_MW_UI_LINES()
   end
   return lineA, lineB
 end
--- 读值口（断言/离线自证用）
-function EVAL_MW_TEST_UI()
-  local a, b = EVAL_MW_UI_LINES()
-  return { nearN = MW.nearN, nearT = MW.nearT, lineA = a, lineB = b, on = MW.on, inC = MW.inC,
-           activeN = EVAL_MW_ACTIVE_N(), engagedN = EVAL_MW_ENGAGED_N() }
-end
 -- ===== ChatFrame2（战斗记录页）取证（1.75.11；用户：「战斗信息层是ChatFrame2 排查下」）=====
 -- ★官方索引核过（doc/api_*.html 1370 条 · [ScrollingMessageFrame (widget)] 共 16 条方法）：
 --   AddMessage / AtBottom / AtTop / ScrollDown|Up|ToBottom|ToTop / SetFading / SetFont / SetFontObject /
@@ -6689,52 +6599,3 @@ function EVAL_MW_CHAT_RESET()
   MW_CHAT.n, MW_CHAT.noMsg, MW_CHAT.raw = 0, 0, {}
   return true
 end
--- ===== 读值口（供断言/离线自证；生产路径一个都不调）=====
-function EVAL_MW_TEST_STATE()
-  local cnt, nAtk = {}, 0
-  for k, v in pairs(MW.counts) do cnt[k] = v end
-  for _ in pairs(MW.atk) do nAtk = nAtk + 1 end
-  return { on = MW.on, n = MW.n, win = MW.win, t0 = MW.t0, counts = cnt, atkN = nAtk, hitsN = table.getn(MW.hits),
-           rawN = table.getn(MW.raw), missN = table.getn(MW.miss), allN = table.getn(mwAllNames()),
-           regN = table.getn(MW.reg), badN = table.getn(MW.bad) }
-end
-function EVAL_MW_TEST_EVENTS() return MW_EVENTS end
-function EVAL_MW_TEST_FEED(ev, a1, a2, a3)
-  local was = MW.on
-  MW.on = true
-  local r = EVAL_MW_FEED(ev, a1, a2, a3)
-  MW.on = was
-  return r
-end
-function EVAL_MW_TEST_COUNT(win, now) return table.getn(EVAL_MW_ATTACKERS(win, now)) end
-function EVAL_MW_TEST_SETWIN(w) MW.win = tonumber(w) or MW.win return MW.win end
-function EVAL_MW_TEST_RESET()
-  EVAL_MW_STOP()
-  MW.counts, MW.atk, MW.raw, MW.miss, MW.seen, MW.allCounts, MW.allSample, MW.kills, MW.n, MW.t0 = {}, {}, {}, {}, {}, {}, {}, 0, 0, nil
-  MW.hits = {} -- ★1.75.11 估算的时间环也一起清（否则夹具之间互相污染）
-  MW.ivl, MW.ivlN, MW.ivlSeen, MW.ivlLog = {}, {}, {}, {} -- ★档位/更新次数/监测次数/变更日志也清（夹具要能复现「没学过」初态）
-  MW.lastSum, MW.peak, MW.uiOpen = nil, 0, false
-  return true
-end
--- ★1.75.11 估算读值口（返回表：估算/窗口内条数/名字分组数/环内总数）——生产路径一个都不调
-function EVAL_MW_TEST_EST(win, now)
-  local e, n, g = EVAL_MW_EST_N(win, now)
-  return { est = e, n = n, groups = g, hitsN = table.getn(MW.hits) }
-end
--- ★1.75.11 自学习读数：某怪名学到的**档位**（nil = 还没学过 ⇒ 用默认档 MW_ESTI）
-function EVAL_MW_TEST_IVL(nm) return MW.ivl[nm] end
--- 常量/档位读值口（★断言不许写死数字：窗口、档位、阈值都从这里现取）
-function EVAL_MW_TEST_ESTI() return MW_ESTI, MW_UIWIN, MW_ESTCAP end
-function EVAL_MW_TEST_WIN() return MW_UIWIN end
-function EVAL_MW_TEST_TIERS() return MW_TIERS[1], MW_TIERS[2], MW_TIERS[3] end
-function EVAL_MW_TEST_GAPS() return MW_GAP_SINGLE, MW_GAP_MULTI end
-function EVAL_MW_TEST_TIEROF(g) return mwTierOf(g) end
--- ★估算**明细**（读值口与生产**同一份实现** EVAL_MW_EST_DETAIL ⇒ 不会出现「读值口复刻逻辑」的假绿）
-function EVAL_MW_TEST_DETAIL(win, now)
-  local det = EVAL_MW_EST_DETAIL(win, now)
-  return det
-end
-function EVAL_MW_TEST_IVLN(nm) return MW.ivlN[nm] end
-function EVAL_MW_TEST_IVLSEEN(nm) return MW.ivlSeen[nm] end
-function EVAL_MW_TEST_IVLLOG() return MW.ivlLog end
-function EVAL_MW_TEST_LASTSUM() return MW.lastSum end
