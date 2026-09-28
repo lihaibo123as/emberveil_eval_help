@@ -97,7 +97,7 @@ Copy-Item "$src\Locales","$src\examples","$src\media","$src\tools" "$staging\Eva
 # quest/ 只拷插件要用的三个 .lua（fetch.js/sweep*.js/build*.js/audit.js/chains.js 是开发脚本、cache/ 是抓取缓存，都不进包）
 New-Item -ItemType Directory -Force "$staging\EvalHelp\quest" | Out-Null
 Copy-Item "$src\quest\QuestData.lua","$src\quest\QuestBulk.lua","$src\quest\QuestAll.lua","$src\quest\QuestChains.lua" "$staging\EvalHelp\quest\"
-# ★1.75.14 新增 quest\QuestAll.lua（**全量任务表**生成物：4018 条，含无装备奖励的任务）⇒ 出包基准 75 → 76；★1.75.26 新增 `tools\LootCursor.lua`（拾取贴手）⇒ 出包基准 76 → **77**
+# ★1.75.14 新增 quest\QuestAll.lua（**全量任务表**生成物：4018 条，含无装备奖励的任务）⇒ 出包基准 75 → 76；★1.75.26 新增 `tools\LootCursor.lua`（拾取贴手）⇒ 基准 76 → 77；★1.75.35 新增 `tools\Probes.lua`（探针命令集中地）⇒ 基准 77 → **78**（tools/ 整目录拷 ⇒ 脚本本身不用改）
 Remove-Item "$staging\EvalHelp\media\Textures" -Recurse -Force -ErrorAction SilentlyContinue  # 主题素材不进包
 [System.IO.Compression.ZipFile]::CreateFromDirectory($staging, $out)
 Copy-Item $out "$PWD\EvalHelp.zip" -Force   # ★不带版本号的固定名副本（第 9 步硬要求；两份逐字节相同）
@@ -105,7 +105,7 @@ Remove-Item $staging -Recurse -Force
 ```
 ★**装完必须核对条目数**（1.75.1 基准 = **75 个**：+`quest/QuestData.lua`、`quest/QuestBulk.lua`、`quest/QuestChains.lua`（1.75.9 新增 QuestBulk = 全量任务/装备数据）；1.74.34 时是 72（+`tools/LayerFix.lua` 图层特殊处理独立模块）；1.74.30 时是 71（+`tools/DragFrames.lua` 框拖拽从子插件搬进工具模块）；1.74.29 时是 70；1.74.27 时是 69（+`tools/RareWatch.lua`）；1.74.12 时是 68、1.74.6 时是 66、1.73.5 时是 63；1.74.5 陆续加了 `tools/IconGrid.lua` / `tools/HunterHelper.lua` / `tools/ConsumableHelper.lua`，1.74.7 加 `tools/DismountHelper.lua`）：
   少一个就是缺文件，用户装了会**直接报错**。
-  ★这一条与上面的模块清单原先都有源码检查 `PACK LIST CHECK` 守着（清单与 .toc 逐个比对 + 基准数按打包口径现算）—— ★**该检查随 `tests/` 一起删除了**（2026-09-26）⇒ 现在**出包必须人工核对**：先数 `Add-Type … OpenRead($out).Entries.Count`（**1.75.26 起应为 77**；1.75.14~1.75.25 是 76），再用上面那条「允许反斜杠」的正则把 toc 里 **38 个**模块逐个比一遍（两条都打印结果，别只看 75）。
+  ★这一条与上面的模块清单原先都有源码检查 `PACK LIST CHECK` 守着（清单与 .toc 逐个比对 + 基准数按打包口径现算）—— ★**该检查随 `tests/` 一起删除了**（2026-09-26）⇒ 现在**出包必须人工核对**：先数 `Add-Type … OpenRead($out).Entries.Count`（**1.75.26 起应为 77**；1.75.14~1.75.25 是 76），再用上面那条「允许反斜杠」的正则把 toc 里 **40 个**模块逐个比一遍（两条都打印结果，别只看 75）。
 ★**不装**（2026-09-26 更新：测试文件已全部删除，下面这份「不装清单」里只剩与**发布**有关的项）：`preview/`（截图）、`node_modules/`、
 `api_*.html`、`.git/`、`bindings/`、`_icons_scan/`、`pay/`、`luacheck.js`/`test_stub.lua`/`tmp/`（开发用，不随包）。
 ★★**出包实测两个坑（1.75.5，务必照做）**：
@@ -197,7 +197,8 @@ Remove-Item $staging -Recurse -Force
 
 ## 八、项目位置与现状
 
-- **插件目录**：`G:\game\u5wow\Azeroth\Binaries\Win64\Games\Emberveil\live\Azeroth\Interface\AddOns\EvalHelp\`（1.21 后由 EVAL_HELP 改名 **EvalHelp**；★**目录名 == toc 基名**才加载；改名时游戏必须关闭，否则 Access denied）。
+- **插件目录**（本机实测）：`E:\soft\game\eb\Azeroth\Binaries\Win64\Games\Emberveil\live\Azeroth\Interface\AddOns\EvalHelp\`（1.21 后由 EVAL_HELP 改名 **EvalHelp**；★**目录名 == toc 基名**才加载；改名时游戏必须关闭，否则 Access denied）。
+  ★**仓库 ≠ 游戏目录**（仓库 = `D:\soft\game\ai-plugs\emberveil_eval_help`）⇒ 改完必须 `node sync_game.js`；路径真值 = 脚本里的 `DST` 常量（换机器只改它）。
 - **文件结构（1.39.0 起模块化，不是单文件）**：`EvalHelp.toc` + `Locales/{zhCN,enUS,ruRU}.lua` + `Core.lua`（输出/i18n/状态采集）+ `Engine.lua`（规则引擎）+ `EvalHelp.lua`（UI/斜杠命令/init）+ `Toolbox.lua`（工具箱 Tab3）+ `DataSearch.lua`（数据检索 Tab4）+ `Share.lua`（方案分享，1.71.0）+ `IconBrowser.lua`（图标库 Tab5）+ `PetData.lua`/`PetHelper.lua`（抓宠 Tab6，1.73.0）+ `IconSem.lua`（**图标语义表**，1.73.5）+ **`tools/IconGrid.lua`（通用图标网格选择器，1.74.5：单选/多选、高度自适应、分页、滚轮、夹取） + `tools/HunterHelper.lua`（猎人助手 · 一键喂食） + `tools/ConsumableHelper.lua`（消耗品助手 · 多选横排各自点用）—— 都在 `tools/` 子目录里**
   + `examples/*.lua`（**11 个数据文件**）；文档 `README.md`/`README_en.md`/`README_ru.md`/`CHANGELOG.md`/`DEVELOPMENT.md`/`CLAUDE.md`；开发用 `luacheck.js`（语法闸门）+ `test_stub.lua`（API 桩）+ `tmp/`（草稿，gitignore）。★**测试文件已全部删除**（2026-09-26）。**行数随开发变化，别当固定值引用**。
 - ★**toc 载入顺序（以 `EvalHelp.toc` 为唯一真值）**：`Locales/{zhCN,enUS,ruRU}` → `Core` → `Engine` → `EvalHelp` → **`examples/*`（11 个数据文件，必须排在 EvalHelp.lua 之后）** → `Toolbox` → `DataSearch` → `Share` → **`IconSem`** → `IconBrowser` → `PetData` → `PetHelper` → **`tools\IconGrid.lua`（共用网格件，必须在两个助手之前）** → **`tools\HunterHelper.lua`** → **`tools\ConsumableHelper.lua`**（★`EXAMPLES TOC CHECK` 守着「磁盘 ↔ .toc 双向一致 + 顺序 = 选单顺序」；`IconSem` 必须在 `IconBrowser` **之前**——后者读它的 `EVAL_ICON_SEM`）。
@@ -205,7 +206,7 @@ Remove-Item $staging -Recurse -Force
   ★**共用件纪律**：喂食与消耗品助手共用 `tools/IconGrid.lua`（网格 + `EVAL_IG_SCAN_BAGS` 扫背包 + `EVAL_IG_TOPLEFT` 位置换算）——
     同一内容不许两处各写（本项目铁律）；1.74.5 实踩一次「`IG.pages` 一名两义」（页号表被总页数覆盖 → 选完食物点格子报错且不收起），已拆成 `pageOf`/`pages`。
 - ★**新增 .lua 模块要同时改两处**（2026-09-26 起；原先的「四处」里有三处属于已删除的测试框架）：① `EvalHelp.toc` 载入列表（**顺序有意义**：共用件在被用者之前）；② ★**发布包清单**（第 9 步的 Copy-Item 行 / 参考卷打包脚本）——
-  **放进子目录时尤其容易漏**：1.74.5 实事故 = 旧判据只看「顶层 .lua」，子目录模块被静默漏掉（本地全绿、出包缺文件、用户装了报错）⇒ 打包脚本对 `tools/`/`quest/` 是**整目录拷或逐个列**，出包后人工核对 75 条目 + toc 36 模块（见上文出包两坑）。
+  **放进子目录时尤其容易漏**：1.74.5 实事故 = 旧判据只看「顶层 .lua」，子目录模块被静默漏掉（本地全绿、出包缺文件、用户装了报错）⇒ 打包脚本对 `tools/`/`quest/` 是**整目录拷或逐个列**，出包后人工核对 **78** 条目 + toc **40** 模块（见上文出包两坑；数字随版本增长，以 `EvalHelp.toc` + 打包口径现算为准）。
   ★原「② test_engine.js 加载数组 / ③ DECL ORDER 清单」随测试框架删除而作废 —— 但**别因此忘了 `EvalHelp.toc`**：漏一个模块 = 那个文件根本不载入（真机表现为功能静默缺失）。
 - ★**案例模版数据文件（1.71.2 新增 `examples/*.lua`）只需改一处**：`EvalHelp.toc`（它们没有顶层 local，故也无所谓声明顺序；★原先还要同步 `test_engine.js` 加载数组，那份已删）。
 - ★**在途（未发版）**：**1.74.5 猎人助手 · 一键喂食**（`tools/HunterHelper.lua` + 工具箱「猎人助手」分组）：
@@ -282,7 +283,7 @@ Remove-Item $staging -Recurse -Force
   · ★**状态（用户决定）**：用户说「这个工具先放着以后测试」→ **停在「已实现 + 双闸门绿 + 未提交/未实测」**；
     默认**关**（`tb.feedPet` 空 = 关）+ 载入期零副作用 ⇒ **放着不影响任何现有功能**。
     回来继续时：读 `.dsh/reports/hunter-helper-impl.md`（实现说明 + 16 步真机测试流程 + 四个待实测项）。
-- **当前版本（源码唯一真值）**：`EvalHelp.lua` 的 `local VERSION` == `EvalHelp.toc` 的 `## Version` = **1.75.28**（**已发布**：v1.75.28）
+- **当前版本（源码唯一真值）**：`EvalHelp.lua` 的 `local VERSION` == `EvalHelp.toc` 的 `## Version` = **1.75.35**（**已发布**：v1.75.35）
   （本版已发布；逐版本详情看 `CHANGELOG.md` 的同名小节，里程碑归纳看三语 README 的 **🏁 板块** —— 口径 = 一条一行、全板块 ≤10 条）。
   ★1.73.35~1.73.67 那批工作（分享封皮/品阶评分/头衔抽卡/彩蛋/角色扮演反应/标题栏徽标/取证探针）已随 **v1.74.0** 一起发布。
   ★**逐版本流水一律不进本文件**（见文件头写作纪律）——要点查源码注释 / `CHANGELOG.md` / `git log`；
