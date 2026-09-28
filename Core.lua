@@ -823,6 +823,12 @@ local LOAD_RESIDUE_KEYS = {
   -- ★1.75.26 拾取贴手（tools/LootCursor.lua）的取证读数（环上限 40 行，/eh go 拾取 存档）：
   --   搬窗/换件/压实自证全在真机上才能读，而 `say` 只进聊天框、不落日志环 ⇒ 必须自带专属落盘。
   "lcProbe",
+  -- ★1.75.29 自动攻击流程取证的专属读数（最近 40 行，Engine.lua 的 WATK.outMax / `/eh go atk log`）：
+  --   用户报障「首次选取目标自动射击能开，释放技能之后又被取消，要等下一个循环才生效」——
+  --   「补按之后到底还在不在」只能靠**下一拍再读一次真值**，而聊天框读数（say）不落日志环、
+  --   共享 100 环又会被 [DS] 冲掉 ⇒ 必须自带专属落盘（同 selProbe/mbProbe/meleeProbe 的教训）。
+  --   ★开关（一键宏「自动攻击」）关着时**一个字节都不写**，所以它不会给普通玩家留残渣。
+  "atkProbe",
 }
 
 function EVAL_LOAD_PROBE_KEYS() return LOAD_PROBE_KEYS end

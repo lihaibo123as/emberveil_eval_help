@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.75.28"
+local VERSION = "1.75.31"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -9281,6 +9281,55 @@ if type(SlashCmdList) == "table" then
         end
         say("  判据：只在「同一组里队友类条件 ≥2 条」时接管；单条队友条件与所有非队友条件**行为不变**")
       end
+    elseif string.find(msg, "^go atk%s") or string.find(msg, "^go 攻击%s") then
+      -- ★1.75.29 子命令 = **自动攻击流程取证环**（用户：「能否将自动攻击的内部流程添加一些日志.我这边方便演示」）：
+      --   每拍记三类行（复查 / 键首 / 判定+按后读回），落 cfg.atkProbe（有界 40 行，已进 Core 残渣键清单）。
+      --   ★读数一律走**读值口 EVAL_ATK_PROBE()**（命令与断言共用同一份，不解析中文文本）。
+      local subA, subAN = string.match(msg, "^go %S+%s+(%S+)%s*(%S*)$")
+      if subA == "log" or subA == "日志" then
+        local p = (type(EVAL_ATK_PROBE) == "function") and EVAL_ATK_PROBE() or nil
+        if type(p) ~= "table" then
+          say("[自动攻击取证] 读值口 EVAL_ATK_PROBE 不存在（Engine 没载入？）")
+        else
+          local box = c().atkProbe
+          local out = (type(box) == "table" and type(box.out) == "table") and box.out or {}
+          local n = table.getn(out)
+          local want = tonumber(subAN) or n
+          if want > n then want = n end
+          if want < 1 then want = 0 end
+          say(string.format("[自动攻击取证] 取证轮 %d ｜ 环 %d/%s 行（累计写入 %s）%s",
+            p.seq, n, tostring(p.max or "?"), tostring(p.boxN or "?"),
+            (type(p.boxT) == "string") and (" · 读于 " .. p.boxT) or ""))
+          say("  三类行：aN 复查（上一拍补按/施法之后自动射击还在不在） ｜ aN 键首（档位/状态/槽位读数/节流/目标） ｜ aN 判定（补没补、为什么没补）")
+          local gs = (type(EVAL_ATK_GUARD_STATE) == "function") and EVAL_ATK_GUARD_STATE() or nil
+          if type(gs) == "table" and gs.active then
+            say(string.format("  复查窗口：★进行中（%s ｜ 起因：%s ｜ 已拍 %s ｜ 已补按 %s ｜ 历时 %.2fs ｜ 上限 %s 拍 / %s 次）",
+              tostring(gs.name), tostring(gs.why), tostring(gs.ticks), tostring(gs.presses),
+              tonumber(gs.age) or 0, tostring(gs.ticksMax), tostring(gs.pressMax)))
+          else
+            say("  复查窗口：空闲（没在跑；有界窗口跑完就摘掉 OnUpdate，不常驻）")
+          end
+          if n == 0 then
+            say("  环是**空的** ⇒ 从载入到现在**一次都没走过自动攻击流程**（开关关着，或一次键都没按）——")
+            say("     演示前请确认：/eh cfg 一键宏设置里「自动攻击」已勾选，并且真的按过宏键。")
+          else
+            for i = n - want + 1, n do
+              if out[i] then say("  " .. tostring(out[i])) end
+            end
+          end
+          say("  ★怎么读：出现「★★补按之后又被关掉了」= 补按确实发生过、但**施法落在补按之后**（变体 B）；")
+          say("    出现「★★上一拍键首=开、未补按 ⇒ 现在=关」= 那一拍压根没补（变体 A：判定用的是按键前的旧状态）。")
+          say("  ★零足迹：开关关着时一段都不写；专属环落存档 cfg.atkProbe ⇒ /reload 后我这边可直接读。")
+          say("  ★聊天框实时行要开着「方案技能日志」：/eh wdebug（关着只写专属环，不刷屏）。")
+        end
+      elseif subA == "clear" or subA == "清" then
+        c().atkProbe = { out = {} }
+        say("[自动攻击取证] 已清空 cfg.atkProbe 的环（取证轮号不受影响；存档那份要 /reload 才落盘）")
+      else
+        say("[自动攻击取证] 用法：/eh go atk log [行数] 看流程取证环 ｜ /eh go atk clear 清空")
+      end
+    elseif msg == "go atk" or msg == "go 攻击" then
+      say("[自动攻击取证] 用法：/eh go atk log [行数] 看流程取证环 ｜ /eh go atk clear 清空")
     elseif string.find(msg, "^go tsel%s") or string.find(msg, "^go 选取目标%s") then
       -- ★★★1.75.12 子命令 = **选取目标调用点取证环**（用户报障：「选取目标:最近敌人 + 冲锋：不按键时目标
       --   也在尸体与活怪之间来回跳」）——静态审计已证明插件里没有任何定时器切目标 ⇒ 只能读**调用点**，
@@ -10401,6 +10450,7 @@ if type(SlashCmdList) == "table" then
       fsay("/eh go 一键宏状态 | /eh go rescan 重扫动作条 | /eh debug 方案技能日志（/eh war 旧命令仍兼容）")
       fsay("/eh go probe 增益探针（逐条枚举自身 buff） | /eh go 光环 [名字] 光环定向探查 | /eh go diag 绑定链路一键取证（写盘，需 /reload）")
       fsay("/eh go 停施法 1|2|3 停读法取证（本客户端停读条 API 只有 Protected 的 SpellStopCasting）")
+      fsay("/eh go atk log [行数] 自动攻击流程取证（复查/键首/判定三类行；/eh go atk clear 清空）——演示前先 /eh wdebug 开方案技能日志")
       fsay("方案命令：/eh go list 查看 | go add 技能 条件 | go del N | go newprof 名 | go prof N | go rename 新名 | go delprof N")
       fsay("方案导入导出（md 文本复制粘贴）：/eh go io，内置案例模版按职业直接导入")
       fsay("方案切换：Shift+按一键宏 | /eh go next | 战斗信息UI 方案按钮")

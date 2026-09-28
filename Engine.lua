@@ -4712,7 +4712,224 @@ function EVAL_WAR_ENSURE_PROFILES(w)
   if not w.activeProfile then w.activeProfile = 1 end
 end
 
+-- ===== 自动攻击流程取证（1.75.29；用户：「能否将自动攻击的内部流程添加一些日志.我这边方便演示」）=====
+-- ★要演示/判定的现象（1.75.28 报障）：一键宏「自动攻击」开着、方案里只有猎人印记时 ——
+--   首次选取目标自动射击能开起来，但**释放技能之后又被取消**，要到下一个按键轮才见效。
+--   两个候选根因，本轮就是要把它们**分开**（不再靠猜）：
+--     变体 A（陈旧判定）：atkOff 是规则评估**之前**采的事实 ⇒ 本拍开始时自动射击已开、随后被本拍的施法取消，
+--             而那一拍**根本不会补按**（采样当时说"不用补"）。
+--     变体 B（补按被反超）：本拍补按确实发生（按后读回=开），但**施法落在补按之后**（客户端 GCD 排队/帧末才真正开始施法）
+--             ⇒ 刚点亮的自动射击被这次施法取消，而插件此后**不再复查**。
+--   ⇒ 只有一条证据能分开 A/B：「**下一拍按键开头，再读一次上一拍那个槽位的真实状态**」＋「上一拍到底放没放技能」。
+--     所以每拍记三类行：① 复查（上一拍之后还在不在 + 上一拍放了什么）② 键首采样（档位/状态/节流/目标）
+--     ③ 本拍判定（补没补、为什么没补：节流/守卫/无档）＋ 按后**读回自证**。
+-- ★落盘纪律（本项目反复踩过的坑：say 只进聊天框、日志环只有 100 条会被 [DS] 冲掉）：
+--   · **专属有界环** cfg.atkProbe（40 行）：只要「自动攻击」开关开着就记 ⇒ 用户报障后我读存档即可取证；
+--   · **共享 100 环（EVAL_LOGLINE）+ 聊天框**：新行只在「方案技能日志」（/eh wdebug）开着时写
+--     （演示时全开、平时不刷屏）；原有的 [攻击] … 那一行**照旧无条件进共享环**（老行为一个字没改，
+--     只多了一个"按后读回"字段）。
+--   · 开关关掉 ⇒ 一段都不写（连专属环也不写），同「没调用过选取目标就一个字节都不写」的纪律。
+-- ★读它：/eh go atk log [行数]（走读值口 EVAL_ATK_PROBE，不解析中文文本）。
+local WATK = { seq = 0, last = nil, outMax = 40 } -- seq=取证轮号 · last=上一拍收尾记录（下一拍复查用）
 
+function EVAL_ATK_PROBE()
+  local cfg = (type(EVAL_HELP_CONFIG) == "table") and EVAL_HELP_CONFIG or nil
+  local box = cfg and cfg.atkProbe or nil
+  local out = (type(box) == "table" and type(box.out) == "table") and box.out or {}
+  local n = table.getn(out)
+  return {
+    seq = WATK.seq, lines = n, max = WATK.outMax,
+    last = (n > 0) and out[n] or nil,
+    lastPressed = (WATK.last and WATK.last.pressed) and true or false,
+    lastSeq = WATK.last and WATK.last.seq or nil,
+    boxT = (type(box) == "table") and box.t or nil,
+    boxN = (type(box) == "table") and box.n or nil,
+  }
+end
+
+-- 唯一出口：专属环（开关开着就记）＋ 共享环/聊天（wdebug）。★不许在别处再各写一份 ——
+--   「漏一处就少一条证据」正是本项目静默失效的高发区。
+--   always=true 只用于**原有那一行** [攻击] …（保持它「无条件进共享环」的老行为）。
+--   ★★★1.75.31 收口（用户定「修复成功.清理下日志」）：第三参 loud ——
+--     · loud ~= false（默认）= **真事件**：按/补按/自愈/被取消/超程/节流/守卫不过/窗口异常收工 ⇒ 上屏；
+--     · loud = false = **每拍常态行**（键首、判定=不需补、窗口武装、复查的 √ 系列）⇒ **只进专属环**，
+--       聊天框不再刷屏（要看全量：/eh go atk log，或临时 /eh wdebug 看事件行）。
+--   ⇒ 净效果：正常打怪聊天框安静（只有 ≤1 条/2s 的 [攻击] 行），**一有异常一定出声**（不许静默）。
+local function wAtkTrace(line, always, loud)
+  local cfg = EVAL_HELP_CONFIG
+  if type(cfg) ~= "table" then return line end
+  local box = cfg.atkProbe
+  if type(box) ~= "table" then box = {} cfg.atkProbe = box end
+  if type(box.out) ~= "table" then box.out = {} end
+  table.insert(box.out, line)
+  while table.getn(box.out) > WATK.outMax do table.remove(box.out, 1) end
+  box.n = (tonumber(box.n) or 0) + 1
+  box.t = (type(date) == "function") and date("%H:%M:%S") or nil
+  if always or cfg.wdebug == true then
+    if type(EVAL_LOGLINE) == "function" then pcall(EVAL_LOGLINE, line) end
+    if cfg.wdebug == true and loud ~= false and type(EVAL_SAY) == "function" then
+      pcall(EVAL_SAY, "|cffffd080" .. line .. "|r")
+    end
+  end
+  return line
+end
+
+-- 「上一拍放了什么技能」：读 castLog 里**本拍之后**的条目（EVAL_RULE_RUN 每次成功出手都往里写一条）——
+--   施法才会取消自动射击 ⇒ 这一半证据必须有，否则"被谁取消的"只能靠猜。
+local function wAtkCastsSince(t0)
+  if type(st) ~= "table" or type(st.castLog) ~= "table" or type(t0) ~= "number" then return "" end
+  local names = {}
+  for i = 1, table.getn(st.castLog) do
+    local c = st.castLog[i]
+    if type(c) == "table" and type(c.t) == "number" and c.t >= t0 and table.getn(names) < 4 then
+      table.insert(names, tostring(c.skill or "?"))
+    end
+  end
+  return table.concat(names, ",")
+end
+
+-- ★1.75.30 槽位状态读数（补仪表盲区）：**不管本轮选了哪一档**，都要能看到「自动射击 / 射击(魔杖)」
+--   自己是开是关 —— 用户报障说的就是「自动射击」，而最近那场战斗 13 拍全是「降档 攻击(近战)」，
+--   旧仪表对自动射击的状态**一个字都没读** ⇒ 死活无从判断（这是本轮加它的直接理由）。
+local function wAtkSlotState(name)
+  local s = wslots[name]
+  if not s then return tostring(name) .. "=不在动作条" end
+  local txt = tostring(name) .. "="
+  if type(IsCurrentAction) == "function" then
+    local okc, cur = pcall(IsCurrentAction, s.slot)
+    txt = txt .. (okc and (cur and "开" or "关") or "读不到")
+  else
+    txt = txt .. "无API"
+  end
+  if type(IsAutoRepeatAction) == "function" then -- 在案接口（停止攻击在用）；在不在要实测，读不到如实写
+    local okr, rv = pcall(IsAutoRepeatAction, s.slot)
+    txt = txt .. (okr and (rv and "/重复中" or "/未重复") or "/重复读不到")
+  end
+  if type(IsActionInRange) == "function" then
+    local okg, rg = pcall(IsActionInRange, s.slot)
+    txt = txt .. (okg and ("/射程=" .. tostring(rg)) or "/射程读不到")
+  end
+  return txt
+end
+
+-- ★1.75.30 目标守卫（从 EVAL_GO 里**提到文件级**：有界复查窗口的每一拍也要用它 ⇒ 单一来源，
+--   绝不在窗口里再写一份「有目标/非尸体/可攻击」的判定）。
+--   一律**实时 API** 判定（不用 st.canAttack —— 那是这一轮开头采的过期值）；实时 API 缺失才退回它。
+local function wAtkTargetAttackable()
+  if type(UnitExists) ~= "function" then return (st.canAttack == true) end
+  local okE, has = pcall(UnitExists, "target")
+  if not (okE and has) then return false end
+  if type(UnitIsDeadOrGhost) == "function" then
+    local okD, dead = pcall(UnitIsDeadOrGhost, "target")
+    if okD and dead then return false end
+  end
+  if type(UnitCanAttack) == "function" then
+    local okC, can = pcall(UnitCanAttack, "player", "target")
+    if okC and not can then return false end
+  end
+  return true
+end
+
+-- ★★★1.75.30 **有界复查窗口**（真机取证之后的修法第一步）——
+-- 证据（2026-09-28 用户两场战斗，cfg.atkProbe + cfg.selProbe）：
+--   · 自动射击补按 11 次里 **3 次「按后读回=关」**（客户端没收下这一按），
+--     而且 3 次**全部**发生在「刚切到新目标、目标血 100%」那一拍（p1/p15/p43）；
+--     下一拍（+0.4~0.6s）同样的按法就读回=开 ⇒ 用户的「释放技能之后自动射击被取消了，要等下一个循环才生效」。
+--   · 根因 = 档位/射程/可用性判定跑在**规则之前**，那时可能**还没有目标**（IsActionInRange 返回 nil ⇒ 代码放行）；
+--     规则随后才「选取目标:最近敌人」切到新目标（可能在射程外/死区）⇒ 真正按下去时被客户端拒收。
+--   · 另一条（同一场战斗的 13 拍键首）：选档=降档 攻击(近战)（自动射击:超程）—— 死区里插件**不补自动射击**，
+--     而旧仪表连「自动射击自己是开是关」都没读（本轮已补，见键首行的「槽位：」段）。
+-- 修法：按后读回 + 只在「这一按没生效」时武装本窗口；每 WATK.gap 秒一拍、最多 WATK.ticksMax 拍，
+--   窗口内最多补按 WATK.pressMax 次；每拍**重新**做目标守卫 + 实时射程判定（超程不按：客户端反正不收，
+--   还会刷红字）⇒ 目标一进射程/一取消施法，自动射击就自己回来，**不必等下一次按键**。
+-- 零足迹：开关关掉一个帧都不挂；成功/超时/目标没了立刻摘掉 OnUpdate（不常驻、不空转）。
+-- ⚠️边界（用户可定）：窗口只在「刚按过宏键」之后 ≤1.25s 内有效 ⇒ 这段时间里你手动关掉自动射击，
+--   它可能被补回来最多 2 次；要「手动关了就别再补」得另做判据（例如识别 ESC/停止攻击）。
+WATK.gap, WATK.ticksMax, WATK.pressMax = 0.25, 5, 2
+WATK.guard = nil -- { slot, use, name, t0, next, ticks, presses, why }
+WATK.frame = nil -- 懒建：没有窗口时一个帧都不存在
+
+local function wAtkGuardStop(why, quiet)
+  local g = WATK.guard
+  WATK.guard = nil
+  if WATK.frame and type(WATK.frame.SetScript) == "function" then
+    pcall(WATK.frame.SetScript, WATK.frame, "OnUpdate", nil) -- ★摘掉 = 不常驻
+  end
+  if g and not quiet then
+    wAtkTrace(string.format("[自动攻击] 复查窗口结束：%s（拍 %d / 补按 %d / 读到关 %d 拍 / 超程 %d 拍 / 历时 %.2fs）",
+      tostring(why), tonumber(g.ticks) or 0, tonumber(g.presses) or 0,
+      tonumber(g.sawOff) or 0, tonumber(g.over) or 0, GetTime() - (tonumber(g.t0) or GetTime())))
+  end
+end
+
+-- ★OnUpdate 回调**零形参**（本项目判据）；dt 不取，节奏直接用 GetTime 算 —— 少一个踩坑点
+-- ★★1.75.30（第二轮真机取证后改）：**读到「开」不许提前收工**，整窗一直看着 ——
+--   用户报障正是「按完 / 放完技能**之后**才被取消」（真机 a43：a42 键首=开、+0.6s 就变关），
+--   提前收工恰好漏掉的就是它。窗口到点/出问题才收工，一切正常则**安静**（不打日志）。
+local function wAtkGuardTick()
+  local g = WATK.guard
+  if not g then return end
+  local now = GetTime()
+  if now < (tonumber(g.next) or 0) then return end -- 节拍：gap 秒一拍
+  g.next = now + WATK.gap
+  g.ticks = (tonumber(g.ticks) or 0) + 1
+  local w2 = (type(EVAL_HELP_CONFIG) == "table" and EVAL_HELP_CONFIG.war) or {}
+  if w2.attack ~= true or w2.enabled == false then wAtkGuardStop("开关已关") return end
+  if type(IsCurrentAction) ~= "function" then wAtkGuardStop("本客户端没有 IsCurrentAction") return end
+  local okc, cur = pcall(IsCurrentAction, g.slot)
+  if okc and cur then
+    g.sawOn = true -- 这一拍是开的：**不提前收工**，继续看着（本拍随时可能被施法/切目标取消）
+  elseif not wAtkTargetAttackable() then
+    wAtkGuardStop("目标不可打/已消失", true) return -- 打完怪的正常收尾：只进环，不刷聊天框
+  else
+    g.sawOff = (tonumber(g.sawOff) or 0) + 1
+    local rg = nil
+    if type(IsActionInRange) == "function" then
+      local okg, v = pcall(IsActionInRange, g.slot)
+      if okg then rg = v end
+    end
+    if rg == 0 then
+      g.over = (tonumber(g.over) or 0) + 1 -- 超程：**不按**（客户端反正不收、还会刷红字），等它进射程
+    elseif (tonumber(g.presses) or 0) < WATK.pressMax then
+      g.presses = (tonumber(g.presses) or 0) + 1
+      pcall(g.use)
+      local okr, on2 = pcall(IsCurrentAction, g.slot)
+      if okr and on2 then g.healed = (tonumber(g.healed) or 0) + 1 end
+    else
+      g.full = true -- 按够次数了还不行：这拍不再按，但继续看（下拍被取消仍会记）
+    end
+  end
+  if (tonumber(g.ticks) or 0) >= WATK.ticksMax then
+    if (tonumber(g.presses) or 0) > 0 then
+      wAtkGuardStop(string.format("自愈补按 %d 次（成功 %d 次）", g.presses, tonumber(g.healed) or 0))
+    elseif (tonumber(g.sawOff) or 0) > 0 then
+      wAtkGuardStop("窗口内读到关但没补（超程 / 目标不可打 / 按够次数）")
+    else
+      wAtkGuardStop("全程保持开启（这一拍没出问题）", true) -- ★安静档：没事不刷屏
+    end
+  end
+end
+
+local function wAtkGuardArm(slot, useFn, name, why)
+  if type(CreateFrame) ~= "function" or slot == nil or type(useFn) ~= "function" then return false end
+  if not WATK.frame then
+    local okf, f = pcall(CreateFrame, "Frame")
+    if not okf or f == nil then return false end
+    WATK.frame = f
+  end
+  WATK.guard = { slot = slot, use = useFn, name = name, t0 = GetTime(),
+                 next = GetTime() + WATK.gap, ticks = 0, presses = 0, why = why }
+  pcall(WATK.frame.SetScript, WATK.frame, "OnUpdate", wAtkGuardTick)
+  return true
+end
+
+function EVAL_ATK_GUARD_STATE()
+  local g = WATK.guard
+  if not g then return { active = false } end
+  return { active = true, name = g.name, why = g.why, ticks = g.ticks, presses = g.presses,
+           age = GetTime() - (tonumber(g.t0) or GetTime()), gap = WATK.gap,
+           ticksMax = WATK.ticksMax, pressMax = WATK.pressMax }
+end
 
 -- 一键入口：/run EVAL_GO()
 -- 可选参数 profSel：0 或不传 = 当前激活方案；1-4 = 直触对应方案；字符串 = 按方案名。
@@ -4792,27 +5009,47 @@ function EVAL_GO(profSel)
   -- 1.50.0 自动攻击（改名自 自动普攻接管）：优先级 自动射击(猎人) > 射击(魔杖) > 攻击(近战普攻)；
   -- 上条且【可用】才入选（IsUsableAction——无远程武器/无魔杖自动降档）；近战「攻击」为无条件兜底。
   local atkSlot, atkUse, atkName = nil, nil, nil
+  -- ★1.75.29 取证：为什么最终落在这个档（降档原因链；纯记录，判定逻辑一个字没改）
+  local atkWhy = "无档可用"
+  local atkNeedRange = false -- ★1.75.30 选中的档是否需要射程（近战兜底「攻击」不需要）
   local function pickAtk(name, useFn, needUsable)
     local s = wslots[name]
-    if not s then return false end
+    if not s then return false, "不在动作条" end
     if needUsable then
       if type(IsUsableAction) == "function" then
         local oku, usable, noMana = pcall(IsUsableAction, s.slot)
-        if not (oku and (usable or not noMana)) then return false end -- 1.64.0 只信资源信号（缓存 false 不误降档）
+        if not (oku and (usable or not noMana)) then return false, "资源不足/不可用" end -- 1.64.0 只信资源信号（缓存 false 不误降档）
       end
       -- 1.52.0 距离检测：IsUsableAction 不含射程判定（自动射击 8-35 码贴脸也"可用"但放不出）——
       -- IsActionInRange 明确返回 0=超程时降档；nil=无目标/无法判定时放行（交给客户端自己拒）
       if type(IsActionInRange) == "function" then
         local okr, inRg = pcall(IsActionInRange, s.slot)
-        if okr and inRg == 0 then return false end
+        if okr and inRg == 0 then return false, "超程" end
       end
     end
     atkSlot, atkUse, atkName = s.slot, useFn, name
+    atkNeedRange = needUsable and true or false -- ★1.75.30 远程档（自动射击/魔杖射击）才做「按前射程复判」
     return true
   end
-  if not pickAtk("自动射击", function() UseAction(wslots["自动射击"].slot) end, true)
-     and not pickAtk("射击", function() UseAction(wslots["射击"].slot) end, true) then
-    pickAtk("攻击", function() AttackTarget() end) -- 近战兜底（不查可用，自动攻击恒可开）
+  -- ★1.75.29 改写成顺序调用只为**拿到降档原因**；短路语义与旧写法逐字等价：
+  --   自动射击选上 ⇒ 后面两个一个都不调（旧写法是 and 短路，同一个意思）。
+  do
+    local ok1, why1 = pickAtk("自动射击", function() UseAction(wslots["自动射击"].slot) end, true)
+    if ok1 then
+      atkWhy = "首选 自动射击"
+    else
+      local ok2, why2 = pickAtk("射击", function() UseAction(wslots["射击"].slot) end, true)
+      if ok2 then
+        atkWhy = "降档 射击(魔杖)（自动射击:" .. tostring(why1) .. "）"
+      else
+        local ok3, why3 = pickAtk("攻击", function() AttackTarget() end) -- 近战兜底（不查可用，自动攻击恒可开）
+        if ok3 then
+          atkWhy = "降档 攻击(近战)（自动射击:" .. tostring(why1) .. " 射击:" .. tostring(why2) .. "）"
+        else
+          atkWhy = "无档可用（自动射击:" .. tostring(why1) .. " 射击:" .. tostring(why2) .. " 攻击:" .. tostring(why3) .. "）"
+        end
+      end
+    end
   end
   st.autoAttack = false
   -- ★★1.75.12【修复·第 1 步】「补自动攻击」从规则评估之前**挪到之后**（真正按下去在下面 `tselInGo` 那一段）：
@@ -4825,9 +5062,49 @@ function EVAL_GO(profSel)
   --   ★★别再挪回规则之前：1.62.0 曾挪到之后、1.65.0 又撤销，**那次是误诊**（真凶是 1.64.0 修的 pcall 多返回截断）；
   --     1.75.12 是有真机证据的（组 251 + `/eh go tsel log` 里 `[攻击]`/`[选取]` 的先后与目标快照）。
   local atkOff = false -- 「当前没在自动攻击」= 本发需要补
+  -- ★1.75.29 取证：把这一读的结果**另存一份**（新行只用它，判定路径一个字没改）：
+  --   atkHeadOn = 键首真实状态是否"开"；atkHeadOk = 这次读取本身可信吗（API 缺失/抛错 ⇒ false）
+  local atkHeadOn, atkHeadOk = false, false
   if atkSlot and type(IsCurrentAction) == "function" then
     local okc, cur = pcall(IsCurrentAction, atkSlot)
+    atkHeadOk = (okc == true)
+    atkHeadOn = (okc and cur) and true or false
     if okc and cur then st.autoAttack = true else atkOff = (okc == true) end
+  end
+  local atkPassStart = goNow -- 本拍起点（收尾时用它从 castLog 里挑「本拍放了什么技能」）
+
+  -- ★1.75.29 自动攻击流程取证①：**上一拍复查** + 键首采样 —— 开关开着才写（零足迹：关着一个字节都不写）
+  if w.attack == true then
+    WATK.seq = WATK.seq + 1
+    local lab = "a" .. tostring(WATK.seq)
+    -- 上一拍复查：**读上一拍那个槽位**（本拍可能已降档到别的槽位 ⇒ 拿本拍的档位比会得出假结论）
+    local prev = WATK.last
+    if prev and prev.slot and type(IsCurrentAction) == "function" then
+      local okp, nowOn = pcall(IsCurrentAction, prev.slot)
+      if okp then
+        nowOn = nowOn and true or false
+        local gap = GetTime() - (tonumber(prev.t) or GetTime())
+        local castTxt = (prev.casts ~= nil and prev.casts ~= "") and ("上一拍放了[" .. tostring(prev.casts) .. "]")
+                        or (prev.acted and "上一拍有出手（未记到技能名）" or "上一拍没出手")
+        local verdict
+        if prev.pressed then
+          verdict = nowOn and "√ 补按保持住了" or "★★补按之后又被关掉了（现在=关）= 取消落在补按之后"
+        elseif prev.wasOn then
+          verdict = nowOn and "√ 一直开着" or "★★上一拍键首=开、未补按 ⇒ 现在=关 = 本轮施法取消且那一拍没补"
+        else
+          verdict = nowOn and "（上一拍本来就没开，现在=开）" or "（上一拍就没开，现在还是关）"
+        end
+        wAtkTrace(string.format("[自动攻击] %s 复查a%s：%s ｜ %s ｜ 现在=%s ｜ 距上一拍 +%.1fs",
+          lab, tostring(prev.seq or "?"), verdict, castTxt, nowOn and "开" or "关", gap), nil,
+          (string.find(verdict, "★★", 1, true) ~= nil)) -- ★「被取消」= 真事件，必须出声；√ 系列只进环
+      end
+    end
+    wAtkTrace(string.format("[自动攻击] %s 键首：档=%s ｜ 选档=%s ｜ 状态=%s%s ｜ 槽位：%s ｜ %s ｜ 开关=开 ｜ 节流剩%.1fs ｜ 目标=%s",
+      lab, tostring(atkName or "（无）"), tostring(atkWhy),
+      atkHeadOn and "开" or "关", atkHeadOk and "" or "(读不到)",
+      wAtkSlotState("自动射击") .. " · " .. wAtkSlotState("射击"),
+      wAtkSlotState("攻击"),
+      math.max(0, 2 - (GetTime() - wLastAttackTry)), tselSnap()), false, false) -- ★常态行：只进专属环
   end
 
   -- 4~10) 输出循环 = 指定方案（profSel 参数）或当前激活方案的技能规则表
@@ -4864,41 +5141,99 @@ function EVAL_GO(profSel)
   --   ③ 放在 `if acted then return end` **之前** ⇒ 规则出手了也照样补（"保持自动攻击"的意图不变）；
   --   ④ 按之前/之后各拍一张目标快照写进取证环（`[攻击] … 前 ⇒ 后`）——本客户端的 AttackTarget 会不会切目标，
   --      下一轮真机测试一眼可判（不必再靠"关掉开关再试"这种猜法）。
-  local function atkTargetAttackable()
-    if type(UnitExists) ~= "function" then return (st.canAttack == true) end
-    local okE, has = pcall(UnitExists, "target")
-    if not (okE and has) then return false end
-    if type(UnitIsDeadOrGhost) == "function" then
-      local okD, dead = pcall(UnitIsDeadOrGhost, "target")
-      if okD and dead then return false end
-    end
-    if type(UnitCanAttack) == "function" then
-      local okC, can = pcall(UnitCanAttack, "player", "target")
-      if okC and not can then return false end
-    end
-    return true
-  end
+  -- ★1.75.30 目标守卫**已提到文件级**（wAtkTargetAttackable：有界复查窗口的每一拍也要用它，
+  --   单一来源 ⇒ 这里不再留第二份定义）。
   -- ★★★1.75.25（用户定：「一键宏.自动攻击开关.默认关闭」）：闸门从 ~= false 改成 **== true** ——
   --   即 **nil（从没设置过）= 关**，只有用户在本开关上**明确打开过**才补自动攻击；
   --   语义变化本身就是迁移（旧用户没动过开关的一律变关、明确开过的一直是 true ⇒ 保持开），不必改存档。
-  if atkOff and w.attack == true and GetTime() - wLastAttackTry >= 2 then
-    if not atkTargetAttackable() then
+  -- ★1.75.29 自动攻击流程取证②：本拍判定 + 补按 + **按后读回** —— 每个分支都留一条（连"故意不按"也留）。
+  --   ★闸门与动作**逐字照旧**（atkOff ∧ 开关 ∧ 2 秒节流 ⇒ 守卫 ⇒ 按），这里只加记录与新字段，
+  --     判定顺序一个字都没动 —— 本轮是纯取证，不是修 bug（修法待用户确认后再做）。
+  -- ★1.75.30 取证行里的「本拍出手」：判定行也要带（此前只有复查行带 ⇒ 我要读「这一拍拍下去了什么」）
+  local atkCastsTxt = wAtkCastsSince(atkPassStart)
+  local atkCastLab = (atkCastsTxt ~= "") and ("本拍出手=[" .. atkCastsTxt .. "]") or "本拍没出手"
+  local atkPressed, atkAfterOn, atkAfterOk = false, nil, false
+  local atkArmNote = nil -- 本拍「为什么要武装复查窗口」（nil = 不武装）
+  if w.attack == true then
+    if not atkOff then
+      wAtkTrace(string.format("[自动攻击] a%d 判定：不需补（键首=%s）⇒ 本拍不按 ｜ %s ｜ 节流剩%.1fs",
+        WATK.seq, atkHeadOk and (atkHeadOn and "开" or "关") or "读不到",
+        atkCastLab, math.max(0, 2 - (GetTime() - wLastAttackTry))), false, false) -- ★常态不上屏
+      atkArmNote = "键首=开⇒防本拍施法/切目标把它取消" -- ★a43 那种情况就是这一支
+    elseif atkSlot == nil then
+      wAtkTrace(string.format("[自动攻击] a%d 判定：需补，但**没有可用档**（%s）⇒ 补不了 ｜ %s",
+        WATK.seq, tostring(atkWhy), atkCastLab))
+    elseif GetTime() - wLastAttackTry < 2 then
+      wAtkTrace(string.format("[自动攻击] a%d 判定：需补，但被 **2 秒硬节流**挡下（距上次补按 %.1fs，还差 %.1fs）⇒ 本拍不按 ｜ %s",
+        WATK.seq, GetTime() - wLastAttackTry, 2 - (GetTime() - wLastAttackTry), atkCastLab))
+      -- ★真机 a40/a43 两拍就是被这条节流白扔掉的（"距上次补按 2.0s，还差 0.0s"）——
+      --   节流照旧（不动它的口径），但**窗口不受它管**：0.25s 后复查窗口就会把这拍没按的补上。
+      atkArmNote = "被 2 秒节流挡下⇒窗口不受节流、立刻补上"
+    elseif not wAtkTargetAttackable() then
+      wAtkTrace(string.format("[自动攻击] a%d 判定：需补，但**目标守卫不过**（尸体/无目标/不可攻击）⇒ 故意不按 ｜ %s",
+        WATK.seq, atkCastLab))
       -- 如实留证：这是**故意不按**（尸体/无目标/不可攻击），不是"忘了" —— 否则下次排查还得靠猜
       wlog("跳过补自动攻击（" .. tostring(atkName) .. "）：目标是尸体/不存在/不可攻击")
     else
-      wLastAttackTry = GetTime()
-      local aBefore = tselSnap()
-      atkUse()
-      local aAfter = tselSnap()
-      local aline = string.format("[攻击] %s() p%s %s ⇒ %s%s", tostring(atkName),
-        (tselInGo ~= nil) and tostring(tselPass) or "-", aBefore, aAfter,
-        (aBefore == aAfter) and " 没变" or " **变了**")
-      tselPush(aline)
-      if type(EVAL_LOGLINE) == "function" then pcall(EVAL_LOGLINE, aline) end
-      if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug and type(EVAL_SAY) == "function" then
-        pcall(EVAL_SAY, "|cffffd080" .. aline .. "|r")
+      -- ★1.75.30 按之前的**实时射程复判**（本轮修法的核心之一）：原判定在规则之前，那时可能还没有目标
+      --   （IsActionInRange 返回 nil ⇒ 放行），规则随后切到的新目标可能在射程外/死区 ⇒ 客户端**拒收**这一按
+      --   （真机证据：3 次「按后读回=关」全是刚切目标那一拍）。⇒ 远程档超程时**不按**，改交有界复查窗口。
+      local atkRgNow = nil
+      if type(IsActionInRange) == "function" then
+        local okg, v = pcall(IsActionInRange, atkSlot)
+        if okg then atkRgNow = v end
+      end
+      if atkRgNow == 0 and atkNeedRange then
+        wAtkTrace(string.format("[自动攻击] a%d 判定：需补，但**实时射程=0（超程/死区）**⇒ 这一拍不按（客户端会拒收、还会刷红字），改交复查窗口等进射程 ｜ %s",
+          WATK.seq, atkCastLab))
+        atkArmNote = "超程待补（等它进射程自己开）"
+      else
+        wLastAttackTry = GetTime()
+        local aBefore = tselSnap()
+        atkUse()
+        atkPressed = true
+        -- ★按后**立刻读回自证**：Toggle 语义 ⇒ 读回还是"关"就说明这一按没被客户端接受（真机已证会发生）
+        if type(IsCurrentAction) == "function" then
+          local okr2, on2 = pcall(IsCurrentAction, atkSlot)
+          atkAfterOk = (okr2 == true)
+          atkAfterOn = (okr2 and on2) and true or false
+        end
+        local aAfter = tselSnap()
+        local aline = string.format("[攻击] %s() p%s %s ⇒ %s%s ｜ 按后读回=%s", tostring(atkName),
+          (tselInGo ~= nil) and tostring(tselPass) or "-", aBefore, aAfter,
+          (aBefore == aAfter) and " 没变" or " **变了**",
+          atkAfterOk and (atkAfterOn and "开" or "关★没被接受") or "读不到")
+        tselPush(aline)
+        -- ★落环/上屏统一走 wAtkTrace（单一出口）：always=true 保住老行为「无条件进共享 100 环」
+        wAtkTrace(aline, true)
+        atkArmNote = atkAfterOn and "读回=开⇒防随后的施法/切目标取消" or "读回=关⇒自愈重试"
       end
     end
+    -- ★★★1.75.30（第二轮真机取证后补的**关键一条**）：**每一拍都武装复查窗口**，包括「判定=不需补」那一支。
+    --   真机 a43 行就是这一支漏掉的：a42 键首=开（判定不需补、本拍一个按都没发），
+    --   而本拍规则跑了[宠物:攻击,选取目标:最近敌人]，**+0.6s 后 a43 读到关** ⇒ 施法/切目标把自动射击取消了，
+    --   旧逻辑那一拍既没按、也没有任何窗口去复查 ⇒ 用户看到的就是「释放技能之后自动射击被取消，
+    --   要等下一个循环才生效」。现在窗口覆盖整拍：任何时刻被取消，≤1.25s 内自己补回来。
+    --   ★只在「开关开着 + 有可用档 + 目标可打」时武装；目标尸体/无目标/无档 ⇒ 不武装（零成本）。
+    if atkSlot ~= nil and atkArmNote ~= nil and wAtkTargetAttackable() then
+      if wAtkGuardArm(atkSlot, atkUse, atkName, atkArmNote) then
+        wAtkTrace(string.format("[自动攻击] a%d 复查窗口：已武装（%s ｜ %s ｜ 每 %.2fs 一拍、最多 %d 拍、窗口内最多补按 %d 次；全程读到开则安静收工）",
+          WATK.seq, tostring(atkName), tostring(atkArmNote), WATK.gap, WATK.ticksMax, WATK.pressMax), nil, false)
+      end
+    end
+  end
+  -- ★1.75.29 收尾：把本拍的事实留给**下一拍复查**（A/B 判定的另一半证据就在这里）
+  if w.attack == true then
+    WATK.last = {
+      seq = WATK.seq, slot = atkSlot, name = atkName,
+      pressed = atkPressed, wasOn = atkHeadOn,
+      afterOn = atkAfterOn, afterOk = atkAfterOk,
+      casts = atkCastsTxt,
+      acted = (acted and true or false),
+      t = GetTime(),
+    }
+  else
+    WATK.last = nil -- 开关关掉 ⇒ 不留旧记录（否则下一拍会拿关闭期间的老数据瞎比）
   end
   tselInGo = nil
   if acted then return end
