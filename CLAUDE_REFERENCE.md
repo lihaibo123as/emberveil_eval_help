@@ -85,7 +85,12 @@
 **更新日志维护规则（1.28.0 起，用户定）**：① 详情写 `CHANGELOG.md` 的 `## 🎯 vX.Y.Z — 主题` 小节（要点 / 典型用法 / 设计亮点，配一个 emoji）；
 ② `README.md` 顶部「更新日志」速览表加一行（`| **X.Y.Z** | emoji 主题 | 一句话亮点 |`，**最新在上**）；③ **README 不再放版本详情**（保持精简，详情只进 CHANGELOG）。
 
-**发布包怎么打（第 9 步的脚本，实测可用）**：★在 `Interface/AddOns/` 下执行（**不是插件目录**），产物与仓库同级。
+**发布包怎么打（第 9 步的脚本，实测可用）**：★在 `Interface/AddOns/` 下执行（产物放在 AddOns 里，与旧包同处）。
+★★★**源目录必须是【仓库】、不是 AddOns 里那份**（1.75.35 出包实测事故 —— 这一条是本项目第 N 次「静默不一致」）：
+旧脚本 `$src = "$PWD\EvalHelp"` 指的是**游戏安装目录**那份，而 `sync_game.js` 的复制口径**不含 `*.md`**（README/CHANGELOG/DEVELOPMENT 从来不同步）
+⇒ 出出来的包里**文档是上一次手工拷贝的旧版**：当场验到包内 `README.md` **既没有任务树预览、也没有四态关系文案**（代码全对、只有文档旧 = 最阴的一类）。
+⇒ 正解 = `$src` 直接指仓库根（`D:\soft\game\ai-plugs\emberveil_eval_help`），模块/文档/media/tools/quest 全从仓库取（仓库 = 唯一真值；AddOns 那份只用于**运行**）；
+  ★出包后**必须开箱验文档**（不只是数条目）：解压后确认 `README.md` 含本版新增小节、`CHANGELOG.md` 含 `## ... vX.Y.Z` 小节 —— 判据见下方脚本末尾那三行 `Contains`。
 ```powershell
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $src = "$PWD\EvalHelp"; $out = "$PWD\EvalHelp-vX.Y.Z.zip"
