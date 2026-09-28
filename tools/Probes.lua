@@ -1,0 +1,558 @@
+-- tools/Probes.lua —— 探针 / 取证命令的**集中地**（1.75.35；用户：「探针默认不载入.抽取到 ./tools/Probes.lua」）
+--
+-- ★★★载入契约（用户明确要求「探针默认不载入」）：**列进 .toc 预载，但载入期零副作用** ——
+--   本文件顶层只做两件事：声明桥/局部量、把命令体登记进注册表 PR；
+--   **绝不** CreateFrame / SetScript / RegisterEvent / 读写 SavedVariables / 建计时器。
+--   一切资源都在**命令真的被敲**那一刻才建（首用才建，同 tools/HunterHelper.lua）。
+--   ★为什么不能真正「文件级懒加载」：本客户端 LoadAddOn 是 **Protected**（插件调不了），也没有
+--     文件读取 API ⇒ 唯一合法形式就是「toc 预载 + 载入期零副作用 + 首用才建」；
+--     把文件从 .toc 拿掉 = 命令根本不存在（那不是懒加载，是删功能）。
+--
+-- ★★模块纪律（CLAUDE.md §5.1）：模块只准调**全局桥**，绝不调宿主 local ⇒ 本文件自带同名 local：
+--   say → EVAL_SAY ｜ c() / cfg → EVAL_HELP_CONFIG（**懒代理**，载入期不抓快照）｜
+--   warCfg() → EVAL_HELP_CONFIG.war ｜ wslots → EVAL_WSLOTS ｜ 其余一律走 EVAL_* 全局读值口。
+--
+-- ★调用方（EvalHelp.lua 的 /eh 斜杠链）只留一行接线：EVAL_PR_RUN("<ID>", msg)。
+--   别名条件**仍留在主文件**（命令发现顺序与别名唯一性判据不变）。
+--
+-- ★**故意没搬进来**的 3 个大探针（留在 EvalHelp.lua）：go probe / go 探针关 / go mbicon ——
+--   它们直接读写宿主的 ui / stui / minimapBtn / autoFrame / mbBack / mbWhy / auraTexOf / init / loadUI
+--   等内部件（30+ 处），搬走得把这一堆全暴露成全局桥（面更大更脆）；它们本来也只在命令触发时才跑。
+
+local PR = {} -- id -> function(msg)：命令注册表（载入期只登记，不执行）
+
+-- ===== 桥（一律**调用时**读全局，绝不在载入期抓快照 —— 本项目老雷）=====
+local function say(s)
+  if type(EVAL_SAY) == "function" then pcall(EVAL_SAY, s) end
+end
+local function conf()
+  local t = rawget(_G, "EVAL_HELP_CONFIG")
+  return (type(t) == "table") and t or nil
+end
+local function c() return conf() end
+-- cfg 懒代理：读写当场转发到 EVAL_HELP_CONFIG（定式：绝不写 at and f() or nil）
+local cfg = setmetatable({}, {
+  __index = function(_, k) local t = conf() return t and t[k] or nil end,
+  __newindex = function(_, k, v) local t = conf() if t then t[k] = v end end,
+})
+local function warCfg() local t = conf() return t and t.war or nil end
+-- wslots 懒代理（动作条扫描结果由 Engine 导出；载入期可能还没扫）
+local wslots = setmetatable({}, {
+  __index = function(_, k) local ws = rawget(_G, "EVAL_WSLOTS") return type(ws) == "table" and ws[k] or nil end,
+})
+
+-- ===== 调用入口（唯一出口）=====
+function EVAL_PR_RUN(id, msg)
+  local fn = PR[id]
+  if type(fn) ~= "function" then
+    say("探针模块：没有这个命令（" .. tostring(id) .. "）")
+    return false
+  end
+  local ok, err = pcall(fn, tostring(msg or ""))
+  if not ok then say("探针出错（" .. tostring(id) .. "）：" .. tostring(err)) end -- ★绝不静默：探针自己炸了也要说
+  return ok
+end
+
+-- 读值口：模块登记了哪些命令（不解析中文文本）
+function EVAL_PR_IDS()
+  local out = {}
+  for k in pairs(PR) do table.insert(out, k) end
+  table.sort(out)
+  return out
+end
+
+-- ===== 命令体（从 EvalHelp.lua 的 /eh 链原样搬来；只把宿主 local 换成上面的桥）=====
+
+PR["LINKPROBE"] = function(msg)
+  -- ★可选频道：默认密语自己（单机可测）；自密语不回声时改用 队伍/公会（需有人在同一频道）
+  if type(EVAL_SHARE_LINK_PROBE) == "function" then
+    local chanP = "WHISPER"
+    if string.find(msg, "公会", 1, true) then chanP = "GUILD"
+    elseif string.find(msg, "队伍", 1, true) or string.find(msg, "小队", 1, true) then chanP = "PARTY"
+    elseif string.find(msg, "说", 1, true) then chanP = "SAY" end
+    EVAL_SHARE_LINK_PROBE(chanP)
+  else
+    say("分享模块未载入（EVAL_SHARE_LINK_PROBE 不存在）")
+  end
+end
+
+PR["LENPROBE"] = function(msg)
+  if type(EVAL_SHARE_LEN_PROBE) == "function" then
+    local chanL = "WHISPER"
+    if string.find(msg, "公会", 1, true) then chanL = "GUILD"
+    elseif string.find(msg, "队伍", 1, true) or string.find(msg, "小队", 1, true) then chanL = "PARTY" end
+    EVAL_SHARE_LEN_PROBE(chanL)
+  else
+    say("分享模块未载入（EVAL_SHARE_LEN_PROBE 不存在）")
+  end
+end
+
+PR["PROBEALL"] = function(msg)
+  if type(EVAL_SHARE_PROBE_AUTORUN) == "function" then
+    EVAL_SHARE_PROBE_AUTORUN("WHISPER")
+  else
+    say("分享模块未载入（EVAL_SHARE_PROBE_AUTORUN 不存在）")
+  end
+end
+
+PR["ICONPROBE"] = function(msg)
+    if type(EVAL_SHARE_ICON_PROBE) == "function" then
+      EVAL_SHARE_ICON_PROBE("WHISPER")
+    else
+      say("图标探针：分享模块未载入（EVAL_SHARE_ICON_PROBE 不存在）")
+    end
+  -- ★★★1.73.42p 彩蛋「创世者亲临」：先给命令手动触发（用户：「先提供个命令.让我能触发创世神的关注」），
+  --   真正的触发机制（写方案达到某机制）以后再接。机缘**只有一次**，用过就如实拒绝。
+end
+
+PR["SHPROBE"] = function(msg)
+    if type(EVAL_SHARE_SEND_PROBE) == "function" then
+      EVAL_SHARE_SEND_PROBE()
+    else
+      say("分享探针：Share 模块未载入（EVAL_SHARE_SEND_PROBE 不存在）")
+    end
+  -- ★★★1.74.32 框体探针（动作条1~4 / 队伍层·团队层 的真实帧名 + **被动打开层**：
+  --   公会/属性/拍卖/邮箱/任务/技能树 等）。★为什么在主插件里也开一条入口：
+  --   原来只有子插件 `/edb bars` 一条路，而子插件那句 `pcall` 会把错误**静默吞掉** ——
+  --   真机上就出现过「跑了命令、聊天框什么都不打、存档里也没痕迹」（无法判断是没跑还是跑挂了）。
+  --   这里的入口走 `EVAL_DF_PROBE_SAFE`（记录开始/错误阶段 + 播报错误原文），且不依赖子插件是否载入。
+end
+
+PR["FRAMES"] = function(msg)
+    -- ★先打一行**即时回显**再干活：它的唯一作用是让「命令到底跑到没有」一眼可判 ——
+    --   看到这行 = 命令到达了（结果要么打出来、要么出错留档）；看不到这行 = 命令压根没到
+    --   （插件没载入 / 打错字 / 分派没接上）—— 这与「跑了一半死了」是完全不同的两件事，
+    --   本轮真机就卡在这个无法区分上（子插件的裸 pcall 把错误吞了）。
+    say("框体探针：命令已收到，开始扫描（约 1 秒，别急）…")
+    if type(EVAL_DF_PROBE_SAFE) == "function" then
+      EVAL_DF_PROBE_SAFE()
+    elseif type(EVAL_DF_PROBE_BARS) == "function" then
+      local ok, err = pcall(EVAL_DF_PROBE_BARS)
+      if not ok then say("|cffff6060框体探针出错|r：" .. tostring(err)) end
+    else
+      say("框体探针：框拖拽模块未载入（tools/DragFrames.lua 没进 .toc？）")
+    end
+  -- ★★★1.74.33 开窗探针（**只读取证**）：被动窗口「打开时/定时重设自定义属性」的可行性。
+  --   要回答的是：客户端会不会在**开窗那一刻**把我们写进去的缩放/宽高覆盖掉（＝这功能是不是必需），
+  --   以及每个目标**原生有没有** OnShow 脚本（决定「链式接管 OnShow」可行还是得包 Show / 轮询）。
+  --   ★纪律同「框体探针」：即时回显 + 只读（组 218① 用写接口计数器钉住）+ 有界 60 秒（到点自停并摘脚本）。
+  --   ★英文别名 `go attrprobe` 是新的（`GO ALIAS UNIQUE CHECK` 会守住不被静默顶掉）。
+end
+
+PR["ATTRPROBE"] = function(msg)
+    say("开窗探针：命令已收到")
+    if type(EVAL_DF_PROBE_ATTR) ~= "function" then
+      say("开窗探针：框拖拽模块未载入（tools/DragFrames.lua 没进 .toc？）")
+    elseif string.find(msg or "", "停", 1, true) ~= nil then
+      EVAL_DF_PROBE_ATTR_STOP("manual")
+    elseif string.find(msg or "", "看", 1, true) ~= nil then
+      EVAL_DF_PROBE_ATTR_SHOW()
+    else
+      EVAL_DF_PROBE_ATTR()
+    end
+  -- ★★★1.74.32 被动窗口的「小图标」（默认开）：`/eh go 框体图标` 开/关，加「状态」只报状态。
+  --   ★为什么要有这条：图标是默认开的，总得给用户一个关掉它的入口（否则只能改存档）。
+  --   ★★英文别名**绝不能用 `go icons`** —— 那个名字早就被组 116 的「图标路径采集」占了
+  --     （`/eh go icons` = 把客户端真实图标路径采集进存档）。本轮第一版就是撞了它，
+  --     被断言组 116 当场抓到；现在另有 `GO ALIAS UNIQUE CHECK` 在源码层守这件事。
+end
+
+PR["PROFICON"] = function(msg)
+  if type(EVAL_WAR_PROF_ICON_PROBE) == "function" then
+    EVAL_WAR_PROF_ICON_PROBE()
+  else
+    say("方案图标探针：配置窗未载入（EVAL_WAR_PROF_ICON_PROBE 不存在）")
+  end
+end
+
+PR["NAMEMENU"] = function(msg)
+    if type(EVAL_TB_NAME_PROBE) == "function" then
+      EVAL_TB_NAME_PROBE() -- 能力与记账都在它里面打出来并落盘
+    else
+      say("名字探针：工具箱未载入（EVAL_TB_NAME_PROBE 不存在）")
+    end
+  -- ★★★1.73.42r 重置（用户：「给我一个重置删除自定义的命令.测试」）——诊断/测试用，正常玩法没有这条路
+end
+
+PR["SHOTPROBE"] = function(msg)
+  -- ★1.74.29 射击计时取证（见 Engine.lua 的 EVAL_SHOT_PROBE 注释：先问清「速度从哪来 / 锚点落哪个事件」）
+  local subS = string.gsub(msg, "^go%s*", "")
+  subS = string.gsub(subS, "^射击探针%s*", "")
+  subS = string.gsub(subS, "^shotprobe%s*", "")
+  if type(EVAL_SHOT_PROBE) == "function" then EVAL_SHOT_PROBE(subS)
+  else say("射击探针：引擎未载入（EVAL_SHOT_PROBE 不存在）") end
+end
+
+PR["TRACKPROBE"] = function(msg)
+  -- ★1.74.31 追踪取证；★1.75.2 补名字主路（GameTooltip:SetTrackingSpell）+ 事件监听
+  --   （见 Engine.lua 的 EVAL_TRACK_PROBE 注释：本客户端只有 GetTrackingTexture / SetTrackingSpell / CancelTrackingBuff）
+  local subT = string.gsub(msg, "^go%s*", "")
+  subT = string.gsub(subT, "^追踪探针%s*", "")
+  subT = string.gsub(subT, "^trackprobe%s*", "")
+  if type(EVAL_TRACK_PROBE) == "function" then EVAL_TRACK_PROBE(subT)
+  else say("追踪探针：引擎未载入（EVAL_TRACK_PROBE 不存在）") end
+end
+
+PR["MELEE"] = function(msg)
+  -- 1.75.11 近战围攻取证（见 Engine.lua 的 EVAL_MW_* 注释：附近敌人无枚举 API、事件名不许猜）
+  local subM = string.gsub(msg, "^go%s*", "")
+  subM = string.gsub(subM, "^近战探针%s*", "")
+  subM = string.gsub(subM, "^近战%s*", "")
+  subM = string.gsub(subM, "^melee%s*", "")
+  if type(EVAL_MW_CMD) == "function" then EVAL_MW_CMD(subM)
+  else say("近战探针：引擎未载入（EVAL_MW_CMD 不存在）") end
+end
+
+PR["HOVPROBE"] = function(msg)
+    if type(EVAL_SHARE_HOVER_PROBE) == "function" then
+      EVAL_SHARE_HOVER_PROBE("WHISPER")
+    else
+      say("分享模块未载入（EVAL_SHARE_HOVER_PROBE 不存在）")
+    end
+  -- ★别用 `go probe`：那个已经被「光环探针」占了（同一个 if 链里的 go probe）→ 用 proberes
+end
+
+PR["PROBERES"] = function(msg)
+  if type(EVAL_SHARE_PROBE_REPORT) == "function" then
+    EVAL_SHARE_PROBE_REPORT()
+  else
+    say("分享模块未载入（EVAL_SHARE_PROBE_REPORT 不存在）")
+  end
+end
+
+PR["ATK"] = function(msg)
+  -- ★1.75.29 子命令 = **自动攻击流程取证环**（用户：「能否将自动攻击的内部流程添加一些日志.我这边方便演示」）：
+  --   每拍记三类行（复查 / 键首 / 判定+按后读回），落 cfg.atkProbe（有界 40 行，已进 Core 残渣键清单）。
+  --   ★读数一律走**读值口 EVAL_ATK_PROBE()**（命令与断言共用同一份，不解析中文文本）。
+  local subA, subAN = string.match(msg, "^go %S+%s+(%S+)%s*(%S*)$")
+  if subA == "log" or subA == "日志" then
+    local p = (type(EVAL_ATK_PROBE) == "function") and EVAL_ATK_PROBE() or nil
+    if type(p) ~= "table" then
+      say("[自动攻击取证] 读值口 EVAL_ATK_PROBE 不存在（Engine 没载入？）")
+    else
+      local box = c().atkProbe
+      local out = (type(box) == "table" and type(box.out) == "table") and box.out or {}
+      local n = table.getn(out)
+      local want = tonumber(subAN) or n
+      if want > n then want = n end
+      if want < 1 then want = 0 end
+      say(string.format("[自动攻击取证] 取证轮 %d ｜ 环 %d/%s 行（累计写入 %s）%s",
+        p.seq, n, tostring(p.max or "?"), tostring(p.boxN or "?"),
+        (type(p.boxT) == "string") and (" · 读于 " .. p.boxT) or ""))
+      say("  三类行：aN 复查（上一拍补按/施法之后自动射击还在不在） ｜ aN 键首（档位/状态/槽位读数/节流/目标） ｜ aN 判定（补没补、为什么没补）")
+      local gs = (type(EVAL_ATK_GUARD_STATE) == "function") and EVAL_ATK_GUARD_STATE() or nil
+      if type(gs) == "table" and gs.active then
+        say(string.format("  复查窗口：★进行中（%s ｜ 起因：%s ｜ 已拍 %s ｜ 已补按 %s ｜ 历时 %.2fs ｜ 上限 %s 拍 / %s 次）",
+          tostring(gs.name), tostring(gs.why), tostring(gs.ticks), tostring(gs.presses),
+          tonumber(gs.age) or 0, tostring(gs.ticksMax), tostring(gs.pressMax)))
+      else
+        say("  复查窗口：空闲（没在跑；有界窗口跑完就摘掉 OnUpdate，不常驻）")
+      end
+      if n == 0 then
+        say("  环是**空的** ⇒ 从载入到现在**一次都没走过自动攻击流程**（开关关着，或一次键都没按）——")
+        say("     演示前请确认：/eh cfg 一键宏设置里「自动攻击」已勾选，并且真的按过宏键。")
+      else
+        for i = n - want + 1, n do
+          if out[i] then say("  " .. tostring(out[i])) end
+        end
+      end
+      say("  ★怎么读：出现「★★补按之后又被关掉了」= 补按确实发生过、但**施法落在补按之后**（变体 B）；")
+      say("    出现「★★上一拍键首=开、未补按 ⇒ 现在=关」= 那一拍压根没补（变体 A：判定用的是按键前的旧状态）。")
+      say("  ★零足迹：开关关着时一段都不写；专属环落存档 cfg.atkProbe ⇒ /reload 后我这边可直接读。")
+      say("  ★聊天框实时行要开着「方案技能日志」：/eh wdebug（关着只写专属环，不刷屏）。")
+    end
+  elseif subA == "clear" or subA == "清" then
+    c().atkProbe = { out = {} }
+    say("[自动攻击取证] 已清空 cfg.atkProbe 的环（取证轮号不受影响；存档那份要 /reload 才落盘）")
+  else
+    say("[自动攻击取证] 用法：/eh go atk log [行数] 看流程取证环 ｜ /eh go atk clear 清空")
+  end
+end
+
+PR["ATKHELP"] = function(msg)
+  say("[自动攻击取证] 用法：/eh go atk log [行数] 看流程取证环 ｜ /eh go atk clear 清空")
+end
+
+PR["TSELSUB"] = function(msg)
+  -- ★★★1.75.12 子命令 = **选取目标调用点取证环**（用户报障：「选取目标:最近敌人 + 冲锋：不按键时目标
+  --   也在尸体与活怪之间来回跳」）——静态审计已证明插件里没有任何定时器切目标 ⇒ 只能读**调用点**，
+  --   看「调用到底在不在来」。Engine 侧唯一调用口 `tselInvoke` 每条都记（谁调的 + 前后目标快照 +
+  --   第几发按键轮 + 接受/丢弃两条腿的计数），落 `cfg.selProbe`（有界 40 行，已进 Core 残渣键清单）。
+  --   ★读数一律走**读值口 EVAL_TSEL_PROBE()**（命令与断言共用同一份，不去解析中文文本）。
+  local subT, subN = string.match(msg, "^go %S+%s+(%S+)%s*(%S*)$")
+  if subT == "log" or subT == "日志" then
+    local p = (type(EVAL_TSEL_PROBE) == "function") and EVAL_TSEL_PROBE() or nil
+    if type(p) ~= "table" then
+      say("[选取取证] 读值口 EVAL_TSEL_PROBE 不存在（Engine 没载入？）")
+    else
+      local box = c().selProbe
+      local out = (type(box) == "table" and type(box.out) == "table") and box.out or {}
+      local n = table.getn(out)
+      local want = tonumber(subN) or n
+      if want > n then want = n end
+      if want < 1 then want = 0 end
+      say(string.format("[选取取证] 累计调用 %d 次 ｜ 接受发 %d / 被去抖丢弃 %d ｜ 上一发距 +%sms ｜ 上一条丢弃距 +%sms ｜ 环 %d/%s 行%s",
+        p.seq, p.acc, p.skip, tostring(p.lastAcc or "?"), tostring(p.lastSkip or "?"), n, tostring(p.max or "?"),
+        (type(p.boxT) == "string") and (" · 读于 " .. p.boxT) or ""))
+      say("  格式：[选取] #调用号 p按键轮 谁调的 函数(参数) 前快照 ⇒ 后快照 变/没变")
+      if n == 0 then
+        say("  环是**空的** ⇒ 从载入到现在**一次选取目标都没执行过**（连去抖丢弃也没记）——")
+        say("     这句话本身就是判据：若这时目标仍在跳，那就**不是本插件切的**。")
+      else
+        for i = n - want + 1, n do
+          if out[i] then say("  " .. tostring(out[i])) end
+        end
+      end
+      say("  ★`p<N>` = 第 N 发**被接受的** EVAL_GO（同一发里的多次调用同号）；`p-` = 不在按键那一轮里（编辑窗下拉/探针）。")
+      say("  ★聊天框实时行要开着「方案技能日志」：/eh wdebug；读数已落存档 cfg.selProbe ⇒ （/reload 后）我这边也能直接读。")
+    end
+  elseif subT == "clear" or subT == "清" then
+    c().selProbe = { out = {} }
+    say("[选取取证] 已清空 cfg.selProbe 的环（内存里的计数不受影响；存档那份要 /reload 才落盘）")
+  else
+    say("[选取取证] 用法：/eh go tsel log [行数] 看调用点取证环 ｜ /eh go tsel clear 清空 ｜ /eh go tsel 跑原探针（当前目标/目标的目标）")
+  end
+end
+
+PR["TSEL"] = function(msg)
+  -- ★★★1.75.10 取证：选取目标「**目标的目标**」（用户：「分析接口.验证选取目标的目标.可行性?」）。
+  --   官方文档核到的事实（逐条都有出处，见 CLAUDE.md §5.8）：
+  --     · conventions#unit-ids：`targettarget` = **当前目标的目标**，是合法 UnitID（大小写不敏感）；
+  --     · Targetting 页 `TargetUnit(unit)`：**「Does nothing if that UnitID does not resolve.」**
+  --       ⇒ 解析不到（没目标 / 目标自己没有目标）时**什么都不做**（★这正是本插件选它而不是 AssistUnit 的理由：
+  --       AssistUnit 对解析不到的 UnitID 会**清掉当前目标**）。
+  --   ★探针纪律：**只读 + 至多一次真切换**；「没有目标的目标」时**一次都不切**（不留副作用）。
+  --   ★读数专属落盘 `cfg.tselProbe`（`say` 只进聊天框、不落日志环 ⇒ 不自己存一份我这边读不到）。
+  local function tsSay(s)
+    local box = c().tselProbe
+    if type(box) ~= "table" or type(box.out) ~= "table" then box = { out = {} }; c().tselProbe = box end
+    box.out[table.getn(box.out) + 1] = s
+    while table.getn(box.out) > 12 do table.remove(box.out, 1) end
+    say(s)
+  end
+  if type(UnitName) ~= "function" or type(UnitExists) ~= "function" then
+    tsSay("[选取目标] 读不了：本客户端没有 UnitName/UnitExists（无法取证）")
+  else
+    local okT, hasT = pcall(UnitExists, "target")
+    local _, nmT = pcall(UnitName, "target")
+    local okTT, hasTT = pcall(UnitExists, "targettarget")
+    local _, nmTT = pcall(UnitName, "targettarget")
+    tsSay(string.format("[选取目标] 当前目标=%s（存在=%s）｜ 目标的目标=%s（存在=%s）｜ TargetUnit=%s",
+      tostring(nmT), tostring(okT and hasT), tostring(nmTT), tostring(okTT and hasTT),
+      (type(TargetUnit) == "function") and "有" or "**缺失**"))
+    if not (okT and hasT) then
+      tsSay("[选取目标] 现在**没有目标** ⇒ 不试切换（先选中一只怪/一个队友，再敲一次）")
+    elseif not (okTT and hasTT) then
+      tsSay("[选取目标] 这个目标**自己没有目标** ⇒ 「选取目标:目标的目标」会是**空操作**（TargetUnit 解析不到就什么都不做；当前目标不会被清）")
+    elseif type(TargetUnit) ~= "function" then
+      tsSay("[选取目标] TargetUnit 不存在 ⇒ 这条选取在本客户端做不了")
+    else
+      local okc, err = pcall(TargetUnit, "targettarget")
+      local _, nmA = pcall(UnitName, "target")
+      tsSay(string.format("[选取目标] 已执行 TargetUnit(\"targettarget\")：调用=%s%s ⇒ 切换后当前目标=%s（期望=%s）",
+        tostring(okc), okc and "" or (" 错=" .. tostring(err)), tostring(nmA), tostring(nmTT)))
+    end
+    tsSay("读数已落存档 cfg.tselProbe（上限 12 行）⇒ /reload 后即可读存档")
+  end
+end
+
+PR["ICONIDX"] = function(msg)
+  local IDX_OUT_MAX = 40
+  local function idxSay(s)
+    s = tostring(s)
+    local cfgP = rawget(_G, "EVAL_HELP_CONFIG")
+    if type(cfgP) == "table" then
+      local box = cfgP.iconIdxProbe
+      if type(box) ~= "table" then box = { out = {} } cfgP.iconIdxProbe = box end
+      if type(box.out) ~= "table" then box.out = {} end
+      table.insert(box.out, s)
+      while table.getn(box.out) > IDX_OUT_MAX do table.remove(box.out, 1) end
+      box.t = (type(date) == "function") and date("%H:%M:%S") or nil
+    end
+    say(s)
+  end
+  idxSay("— 宏图标号 → 图标（本客户端 GetMacroIconInfo；号 = 图标库悬停里的「宏图标序号」）—")
+  local total = 0
+  if type(GetNumMacroIcons) == "function" then
+    local okn, v = pcall(GetNumMacroIcons)
+    if okn and type(v) == "number" then total = v end
+  end
+  idxSay(string.format("接口：GetMacroIconInfo=%s ｜ 表内共 %d 枚", tostring(type(GetMacroIconInfo) == "function"), total))
+  -- 单个号一行：**三态如实**（拿到 / 取不到 / 接口不在），绝不把「取不到」写成「没有这枚图」
+  local function idxLine(idx, label)
+    local tex, why = nil, nil
+    if type(GetMacroIconInfo) ~= "function" then why = "接口不存在"
+    else
+      local ok, v = pcall(GetMacroIconInfo, idx)
+      if not ok then why = "调用抛错"
+      elseif type(v) ~= "string" or v == "" then why = "取不到（号越界 / 表里没有）"
+      else tex = v end
+    end
+    local short = nil
+    if tex then
+      local tail = string.match(tex, "([^/\\]+)$") or tex
+      short = string.gsub(tail, "_TEX$", "")
+    end
+    idxSay(string.format("  %s%d → %s", label or "", idx,
+      tex and (tex .. "（" .. tostring(short) .. "）") or ("**" .. tostring(why) .. "**")))
+  end
+  local nums = {}
+  for n in string.gmatch(msg, "%d+") do table.insert(nums, tonumber(n)) end
+  local CAP = 12
+  if table.getn(nums) == 0 then
+    local db = rawget(_G, "EVAL_PET_DB")
+    local list = {}
+    for _, sk in ipairs((db and db.skills) or {}) do
+      if type(sk.iconIdx) == "number" then table.insert(list, sk) end
+    end
+    idxSay(string.format("（未给号 ⇒ 报宠物技能在用的 %d 个号：读 PetData 的 iconIdx，与界面渲染**同一个解析口**）", table.getn(list)))
+    if type(EVAL_PH_SKILL_ICON) ~= "function" then
+      idxSay("  ⚠ 抓宠帮手模块没载入（EVAL_PH_SKILL_ICON 不存在）⇒ 只能报号、报不出纹理")
+    end
+    for i = 1, table.getn(list) do
+      local sk = list[i]
+      local tex = nil
+      if type(EVAL_PH_SKILL_ICON) == "function" then
+        local ok, v = pcall(EVAL_PH_SKILL_ICON, sk)
+        if ok and type(v) == "string" then tex = v end
+      end
+      idxSay(string.format("  %s %d → %s", tostring(sk.name), sk.iconIdx, tex or "**取不到（已退回语义图标路径）**"))
+    end
+  else
+    local m = table.getn(nums)
+    if m > CAP then idxSay(string.format("给了 %d 个号 ⇒ 只报前 %d 个（避免刷屏/撞反刷屏限流）", m, CAP)) m = CAP end
+    for i = 1, m do idxLine(nums[i], "") end
+  end
+  -- 存档落盘提示（★本命令的读数**专属落盘**，但客户端只在 /reload、小退、退出时才写盘）
+  idxSay(string.format("读数已落存档 cfg.iconIdxProbe（上限 %d 行）⇒ /reload 后即可读存档", IDX_OUT_MAX))
+  -- ★总闸门（调试日志）关着 ⇒ 上面一个字都到不了聊天框 ⇒ 走常开出口如实告知怎么开回来（静默族防线）
+  if type(EVAL_CHAT_ON) == "function" then
+    local okOn, on = pcall(EVAL_CHAT_ON)
+    if okOn and not on and type(EVAL_SAY_FORCE) == "function" then
+      pcall(EVAL_SAY_FORCE, "（「调试日志」关着 ⇒ 上面这些行看不到；/eh log 可开回来）")
+    end
+  end
+end
+
+PR["ICONS"] = function(msg)
+  -- ★★★1.73.3 图标路径采集（用户要求）：「通过日志信息获取系统图标所有图片路径,存储到一个图标路径文件内」。
+  --   为什么只能这样做：客户端的内置图标打包在 Content\Paks，**磁盘上取不到**；唯一能把整表路径
+  --   吐出来的官方入口就是**宏图标表**（GetNumMacroIcons/GetMacroIconInfo 给的是路径字符串）。
+  --   采集结果写进 SavedVariables（EVAL_HELP_CONFIG.iconDump）→ /reload 后落盘 → 由外部读出来
+  --   生成图标路径文件（doc/图标路径清单.txt），供挑选/替换插件里的占位图标。
+  --   ★不打印整表（上千行会刷屏 + 撞反刷屏限流），只报数量与落盘提示（如实、不静默）。
+  local n = 0
+  if type(GetNumMacroIcons) == "function" then
+    local okn, v = pcall(GetNumMacroIcons)
+    if okn and type(v) == "number" then n = v end
+  end
+  local list, fail = {}, 0
+  for i = 1, n do
+    local oki, tex = pcall(GetMacroIconInfo, i)
+    if oki and type(tex) == "string" and tex ~= "" then table.insert(list, tex) else fail = fail + 1 end
+  end
+  EVAL_HELP_CONFIG.iconDump = {
+    t = (type(GetTime) == "function") and GetTime() or 0,
+    n = n, got = table.getn(list), failed = fail, list = list,
+  }
+  say("— 图标路径采集 —")
+  say(string.format("枚举 %d 枚 / 收到 %d 枚 / 取失败 %d 枚", n, table.getn(list), fail))
+  if table.getn(list) == 0 then
+    say("一枚都没取到：本客户端可能没有宏图标表（如实报告，不假装采集成功）")
+  else
+    say("已写入存档（EVAL_HELP_CONFIG.iconDump）→ 请 /reload 或小退让存档落盘，然后让 AI 读取该文件")
+  end
+end
+
+PR["IMMUNE"] = function(msg)
+  -- 免疫事件探针（1.35.1，免疫学习器前置验证）：30 秒全事件抓取——CHAT_MSG_* 或参数含「免疫/immune」
+  -- 的写调试日志；对免疫怪放技能后翻日志拿真实事件名+文本格式，再写解析器（事件 wiki 无文档页）
+  say("免疫探针启动：30 秒内对免疫怪放技能（如撕裂）→ /eh go probe dump 看结果")
+  local pf = CreateFrame("Frame")
+  local t0 = GetTime()
+  -- 1.35.5：0 条说明全事件抓取可能没收到——加全事件计数（判定 RegisterAllEvents 是否有效）
+  -- + 显式注册候选事件名对照（计数键带 [R] 前缀区分通道）
+  cfg.probeLog = {}
+  cfg.probeEvents = {}
+  local CAND = { "CHAT_MSG_SPELL_SELF_DAMAGE", "CHAT_MSG_SPELL_FAILED_LOCALPLAYER", "CHAT_MSG_COMBAT_SELF_MISSES", "CHAT_MSG_SPELL_SELF_BUFF" }
+  pf:SetScript("OnEvent", function()
+    local a1, a2 = arg1, arg2
+    local ev = (type(event) == "string") and event or nil
+    local name = ev or (type(a1) == "string" and a1) or ""
+    if name ~= "" then
+      local pe = cfg.probeEvents
+      pe[name] = (pe[name] or 0) + 1
+      local sk = name .. "_s"
+      if not pe[sk] then pe[sk] = tostring(a1) .. " | " .. tostring(a2) end
+    end
+    local hit = (string.find(name, "^CHAT_MSG") ~= nil)
+    if not hit then
+      for _, v in ipairs({ a1, a2 }) do
+        if type(v) == "string" and (string.find(v, "免疫") or string.find(v, "immune")) then hit = true break end
+      end
+    end
+    if hit then
+      table.insert(cfg.probeLog, "PROBE " .. tostring(name) .. " | a1=" .. tostring(a1) .. " | a2=" .. tostring(a2))
+      while table.getn(cfg.probeLog) > 120 do table.remove(cfg.probeLog, 1) end
+    end
+  end)
+  local okAll = pcall(pf.RegisterAllEvents, pf)
+  for _, en in ipairs(CAND) do pcall(pf.RegisterEvent, pf, "[R]" .. en) end -- 显式注册走同一帧（事件名前缀[R]区分）
+  say("RegisterAllEvents pcall=" .. tostring(okAll) .. "；显式候选 " .. table.getn(CAND) .. " 个")
+  pf:SetScript("OnUpdate", function()
+    if GetTime() - t0 > 30 then
+      pcall(pf.UnregisterAllEvents, pf)
+      pf:SetScript("OnUpdate", nil)
+      pf:SetScript("OnEvent", nil)
+      say("免疫探针结束（30s），已记录 " .. table.getn(cfg.probeLog or {}) .. " 条 → /eh go probe dump 查看")
+    end
+  end)
+end
+
+PR["USABLE"] = function(msg)
+  -- 可用性探针（1.60.1）：dump 技能格子的原始可用性值——IsUsableAction 在本客户端走缓存态
+  -- （wiki 原文 Uses a cached usable state），疑似「可用却被跳过」时先跑这个拿现场数据。
+  -- 用法：/eh go probe usable 冲锋（或 不带参数 = 当前方案全部动作条技能）
+  local nm = string.match(msg, "^go probe usable%s*(.-)%s*$")
+  local function dumpOne(n)
+    local s = wslots[n]
+    if not s then say(n .. ": |cffff0000不在动作条（先 /eh go rescan）|r") return end
+    local oku, u, noMana = pcall(IsUsableAction, s.slot)
+    local okr, inRg = pcall(IsActionInRange, s.slot)
+    local okc, cst, dur = pcall(GetActionCooldown, s.slot)
+    local okh, has = pcall(HasAction, s.slot)
+    say(string.format("%s 格子%d: usable=%s(%s) noMana=%s inRange=%s cd=%s/%s HasAction=%s",
+      n, s.slot,
+      tostring(oku and u), tostring(oku), tostring(noMana),
+      tostring(okr and inRg), tostring(cst), tostring(dur), tostring(okh and has)))
+  end
+  say("— 可用性探针 —")
+  if nm and nm ~= "" then
+    dumpOne(nm)
+  else
+    local p = warCfg().profiles[warCfg().activeProfile or 1]
+    local any = false
+    if p then for _, r in ipairs(p.skills) do if wslots[r.skill] then dumpOne(r.skill) any = true end end end
+    if not any then say("（当前方案无动作条技能；可带参数：/eh go probe usable 冲锋）") end
+  end
+end
+
+PR["DUMP"] = function(msg)
+  -- 打印探针持久记录（1.35.4：探针结果的持久查看通道；打完免疫技能后用这个看）
+  local pl = cfg.probeLog or {}
+  say("— 探针记录 " .. table.getn(pl) .. " 条 —")
+  for i, line in ipairs(pl) do say(i .. ". " .. line) end
+  -- 1.35.5 全事件计数总览（判断事件系统是否工作）：按次数降序打前 25 个 + 首样本
+  local pe = cfg.probeEvents or {}
+  local names = {}
+  for n, c2 in pairs(pe) do if type(c2) == "number" then table.insert(names, n) end end
+  table.sort(names, function(a, b) return pe[a] > pe[b] end)
+  say("— 事件计数（共 " .. table.getn(names) .. " 种）—")
+  for i = 1, math.min(25, table.getn(names)) do
+    local n = names[i]
+    say(n .. " × " .. pe[n] .. "  样本: " .. tostring(pe[n .. "_s"]))
+  end
+  if table.getn(pl) == 0 and table.getn(names) == 0 then say("（全空——先 /eh go probe immune 并在 30 秒内对免疫怪放技能；若反复全空说明事件系统不可用）") end
+end
+
+-- 载入期到此结束：没有 CreateFrame / RegisterEvent / 存档读写 / 计时器。

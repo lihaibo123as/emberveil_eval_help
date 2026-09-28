@@ -63,6 +63,10 @@
 
 ### 4.1 架构要点
 - ★★★**工具类功能一律独立文件，`Toolbox.lua` 只做开启/配置入口**（用户 1.74.34）：`tools/<模块>.lua` 自包含（真值 + 自己的存档子树 + 界面控件 + 读值口 + 自己的**有界**计时器）；Toolbox 里只允许「模块行数据 `t="mod", mod=, key=`」与「入口按钮」；机制 = **模块行注册表 `EVAL_TB_MOD_ROWS[mod]`**（模块载入期自登记 ⇒ 与 toc 顺序无关）；判据 = `TB MOD ROW CHECK`。现有：`LayerFix` / `DragFrames` / `SimpleMap` / `RareWatch` 等。
+- ★★★**探针命令集中在 `tools/Probes.lua`（1.75.35）**：命令体按 `PR[id]` 注册、宿主 `/eh` 链只留一行 `prRun("<ID>", msg)`（**别名条件仍留在主文件** ⇒ 发现顺序/唯一性判据不变）。
+  ★★**载入契约 = toc 预载 + 载入期零副作用 + 首用才建**：本客户端 `LoadAddOn` 是 **Protected**、也没有文件读取 API ⇒ **做不了文件级懒加载**（把文件从 .toc 拿掉 = 命令根本不存在，那不是懒加载）；模块顶层只准声明桥 + 登记注册表，**不建帧/不挂事件/不读写存档/不建计时器**（同 `tools/HunterHelper.lua`）。
+  ★**桥一律「调用时读」**：`say→EVAL_SAY`、`c()/cfg→EVAL_HELP_CONFIG`（**懒代理**，载入期那是空表 = 本项目老雷）、`warCfg()→war`、`wslots→EVAL_WSLOTS`（懒代理）；判据 = `tmp/probes_harness.js`（断言零副作用 + 注册表 + 代理 + 未知 id 如实报）。
+  ★**深耦合宿主的探针不许搬**：`go probe` / `go 探针关` / `go mbicon` 直接读写宿主 `ui`/`stui`/`minimapBtn`/`autoFrame`/`mbBack`/`mbWhy`/`auraTexOf`/`init`/`loadUI` 等 30+ 处内部件 ⇒ 搬走得把这一堆全暴露成全局桥（面更大更脆）；**新增探针**：纯命令本体进模块，要读宿主内部件的就地留、别为搬迁造桥。
 - ★★★**工具模块的读值口留在模块自己文件里**（`EVAL_XX_TEST_*`）—— 名字带 TEST，但它们是**生产诊断口**（`/eh go …` 探针与真机取证都走它们）⇒ **保留**。★原先配套的「断言组 `tests/tools/<模块>.lua` + 源码检查 `tests/checks/<模块>.js` + `test_engine.js` 载入对账」**已随 `tests/` 一并删除**（用户 2026-09-26：「删除tests/下的文件.也不需要测试」；全清单见铁律 1）。
 - **状态表 `st`（`EVAL_HELP_STATE`）**：所有判定数据 `UPDATE_STATE()` **一次刷新、各处只读**；含 `playerBuffs`/`targetDebuffs`、`castLog`。
 - **规则引擎**：规则 `{ skill, enabled, expr }`（1.75.28 起线性 expr；旧 `groups` 存档由 `EVAL_RULE_EXPR` 现场推导，编辑保存才落新格式）；连接符 4 个：**`&` 项内与 / `｜` 项内或 / `&&` 项间与 / `｜｜` 段间或**（优先级 `& > ｜ > && > ｜｜`；旧文本只含 & 与 ｜ ⇒ 语义逐字等价，harness 对账）；`EVAL_RULE_RUN` 顺序执行第一条全过的；核心 = `condOne`/`groupsOK`（段→项→项内）/`EVAL_PARSE_CONDS`/`EVAL_EXPR_STR`（`EVAL_GROUP_STR` 是兼容壳）；**联合判定只接管纯 & 项**。
