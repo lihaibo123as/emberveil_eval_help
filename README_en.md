@@ -79,7 +79,7 @@ switches target, casts, and restores your original target — **you never click 
 
 ![Case-template window](preview/skill_tpl.png)
 
-**Skill editor** (opened via [Edit] or by clicking a skill icon): per-row independent condition editing — condition type / params all chosen from dropdowns (49 condition types, plus 4 "candidate" conditions reserved for member-picker rows; grouped as self / target / aura / party·raid member / skill), relation column toggles & (all-in-group) / | (any-group), live preview
+**Skill editor** (opened via [Edit] or by clicking a skill icon): per-row independent condition editing — condition type / params all chosen from dropdowns (49 condition types, plus 4 "candidate" conditions reserved for member-picker rows; grouped as self / target / aura / party·raid member / skill), the relation column is a **four-state cycle** `&` same-item AND / `｜` same-item OR / `&&` new-item AND / `｜｜` new-segment OR (precedence `& > ｜ > && > ｜｜` — you can finally write 「OR inside AND」), live preview
 
 ![Skill editor](preview/skill_doif.png)
 
@@ -109,6 +109,10 @@ switches target, casts, and restores your original target — **you never click 
 **Chain view**: from start to end, node by node — every node carries a **magnifier** (look the quest up by name) and a level badge; the "Map annotations (N)" control = category multi-select (5 gathering nodes + 11 town services, with all-on / all-off shortcuts), drawn live as the map changes-off shortcuts); checked categories are drawn live as the map changes
 
 ![Quests & Gear · chain view](preview/quests_line.png)
+
+**Quest tree (parent / child quests)**: click a quest name inside a chain to expand its **prerequisites ⇄ follow-ups** — which quests this one unlocks and which ones must be done first (the site has two relation rows, plus a chain-next fallback); a tree is capped at 600 rows, and 「multiple prerequisites」 vs 「hit the cap」 are counted separately and reported honestly
+
+![Quest tree (parent / child quests)](preview/quests_tree.png)
 
 **Pet helper (Tab 6)**: search pet abilities (icon + per-rank list) → the detail page lists the description / required level / **taming source** (which mob, where) → the magnifier jumps to Quests & Gear for spawn points — from "which pet learns this ability" to "where to tame it", end to end
 

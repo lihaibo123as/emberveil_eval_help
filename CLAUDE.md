@@ -13,7 +13,7 @@
 - **不许子代理**（用户 1.74.31 原话：「记住不要使用子代理模式处理任务」）：开发/排查/改代码**一律本人直接做**，不用 `subagent`/`subagent_fork`/`workflow`/`ralph`；上下文紧张就分段做，每段跑闸门。
 - **答复一律中文**（用户：「英文我看不懂」）：报告/分析/清单都用中文；代码标识符/API 名/事件名原样保留。
 - **改完代码自动同步**（用户 1.74.8）：★**本机仓库不在游戏目录里**（仓库 = `D:\soft\game\ai-plugs\emberveil_eval_help`，游戏 = `E:\soft\game\eb\Azeroth\Binaries\Win64\Games\Emberveil\live\Azeroth\Interface\AddOns\EvalHelp`）⇒ **改完必须跑 `node sync_game.js`**（脚本里的 `DST` 是唯一真值；它按 `EvalHelp.toc` 现算清单拷主插件 + `media`，并把 `addons\` 子插件拷到同级；幂等，报「改 N / 同 M」）。**次序：先过两道闸门再同步**；★判据 = 同步后核对「toc 清单与游戏目录**逐字节一致**」（本会话新增了 `tmp/verify_sync.js` 这个纯读核对脚本）。复制口径 = `.toc` 现算清单（含 `tools\`/`Locales\`/`examples\` 递归），**不带** `test_*`/`luacheck.js`/`tmp\`/`preview\`/`doc\`/`.git`；这条**不是** release 的一部分。
-- **「提交版本」= 只 `git add` + `commit`**（用户 1.72.1：「提交版本不要触发 release」）；只有明确说 **release / 发布 / 出包 / 建 Release** 才走 9 步（详见参考卷）；不确定先问一句。推送走 `git@` + `--tags`；Release 页我做不了（无 gh/token）⇒ 如实请用户网页建。
+- **「提交版本」= 只 `git add` + `commit`**（用户 1.72.1：「提交版本不要触发 release」）；只有明确说 **release / 发布 / 出包 / 建 Release** 才走 9 步（详见参考卷）；★**9 步里含「图片同步」**（用户 1.75.35 定）：每版按 `./preview` **最新一批图**更新三语 README 的「界面预览」板块 —— 判据 = `preview/` 文件名集合 ⊆ 三语引用集合 + 说明文字与当前功能一致 + **图比功能旧就点名让用户重拍**（不许旧图配新文案）；不确定先问一句。推送走 `git@` + `--tags`；Release 页我做不了（无 gh/token）⇒ 如实请用户网页建。
 
 ## 一、铁律
 
