@@ -128,27 +128,72 @@ local DF_XY_MIN, DF_XY_MAX = -400, 1700    -- 允许把窗口推出屏幕边缘�
 -- ★★固定目标表（与地图扫描源无关）。★口径已两次放宽：动作条1~4（1.74.31）· **宠物动作条**（1.75.x）已补进；
 --   姿态条仍不列（用户没点名）。
 local DF_TARGETS = {
-  { name = "PlayerFrame", label = "用户头像" },
-  { name = "TargetFrame", label = "目标头像" },
-  { name = "MinimapCluster", label = "小地图" },
-  { name = "ChatFrame1", label = "聊天框" },        -- 综合
+  -- ★★1.75.36n 推广（用户两句：「拖拽方案调整应用到其他常驻层」+「聊天窗的方块定位锚点,和编辑功能还没同步到新方案」）：
+  --   `block = true` 扩到**全部常驻层 12 个**（底部条族 7 + 头像/目标头像/小地图 + 聊天框/战斗记录）。
+  --   ★聊天框两条的**特殊处照旧**：守卫依旧豁免（dfSizeOK ⇒ 不进候选 —— 用户早定「聊天框不需要守卫」，
+  --     它自带拖动/拖角缩放，守卫会跟手抢）；宽/高编辑照旧开放（dfSizeOK）；变的只是**定位也走方块**。
+  --   ★注意边界（如实告知）：客户端 FCF 会自己重锚聊天框（切页/停靠变化时）⇒ 我们的接管锚点可能被顶掉，
+  --     而守卫不管它 ⇒ 下一次「关闭编辑模式 / /reload」的应用时才拉回记录位置（与老方案同一口径，没变差）。
+  { name = "PlayerFrame", label = "用户头像", block = true },
+  { name = "TargetFrame", label = "目标头像", block = true },
+  { name = "MinimapCluster", label = "小地图", block = true },
+  -- ★★★1.75.36b 用户要求（真机截图：「排查下聊天窗 鼠标移动上去才显示的这个透明层能否往上移动一点.默认固定处理」）：
+  --   现象：这族帧的柄**静息时 alpha 只有 0.38**（悬停才升到 0.62）⇒ 看着像「鼠标移上去才有」；
+  --     而 `ChatFrame1` 的左上角恰好在**第一条聊天正文**那一行 ⇒ 柄带压住系统消息。
+  --   处置 ①（1.75.36b）：先整体上移半个柄高（`hdy = DF_DRAG_H / 2`）⇒ 压到「标签行 ↔ 正文首行」的缝上；
+  --   处置 ②（1.75.36c 用户改口）：「**聊天窗的拖拽层.相对聊天窗垂直居中定位**」⇒ 改成 `hcenterY = true`：
+  --     柄**锚到目标的 `CENTER`**（由客户端自己居中 ⇒ 天然与缩放无关，不用自己算高度/除缩放）。
+  --   ★只挪柄、帧本身与存档一个字节都不动；聊天框与战斗记录两页共用同一几何 ⇒ 一起给。
+  { name = "ChatFrame1", label = "聊天框", hcenterY = true, block = true }, -- 综合（★1.75.36n 起归方块；hcenterY 留作柄带时代的记录，方块路径不读它）
   -- ★★1.74.30 用户：「战斗记录的图层知道名称吗？也加入可拖拽配置」
   --   本客户端聊天窗：综合 = ChatFrame1、**战斗记录 = ChatFrame2**（同一窗口分页）
-  { name = "ChatFrame2", label = "战斗记录" },       -- 战斗记录页
-  { name = "MainMenuBar", label = "动作条" },
+  { name = "ChatFrame2", label = "战斗记录", hcenterY = true, block = true }, -- 战斗记录页（同一窗口的另一页 ⇒ 同几何；同上归方块）
+  -- ★★★1.75.36h 用户要求：「需要经验条的拖拽层往上移动,主动作条的拖拽往下移动.错开.现在重叠了」
+  --   ⇒ 主条的柄**下移一个柄高**（`hdy = -DF_DRAG_H`）、经验条的柄**上移一个柄高**（见下表那条），
+  --     两条柄的纵向间隔因此 ≥ 一个柄高 ⇒ 任何「上边差 ≥ 0」的摆位下都不重叠（推导见经验条那条注释）。
+  --   ★hy 的口径 = **上移为正**（柄锚法 `SetPoint(hpt, fr, hpt, hx, hy)`）。
+  -- ★★★1.75.36l 用户定稿：「给每个自定义图层在最外层加一个锚点（定位方块）…守护就以方块的绝对坐标更新」+
+  --   「1.取代〔旧的 20px 柄带〕2.先验证〔先做底部条族〕」⇒ 这一族改用**方块**：
+  --   `t.block = true` ⇒ `dfRefresh` 不再给它贴整条透明柄，改画一个 20×20 的方块（颜色区分 + 标题），
+  --   目标被**接管锚点**到方块上 ⇒ 位置 = 方块的绝对坐标。
+  --   ★1.75.36n 三连调整（用户）：① 推广到全部常驻层（见本表顶部三条）② 方块透明度 **0.8**
+  --     ③ 定位 = 目标层**中心**（`CENTER ← 方块/CENTER, 0, 0`；ax/ay = 中心绝对坐标，与缩放无关）；
+  --     ④ 关闭编辑模式方块一起隐藏（dfRefresh 的方块同步**不受 `if DF.on` 门管**）。
+  { name = "MainMenuBar", label = "动作条", hdy = -DF_DRAG_H, block = true },
+  -- ★★★1.75.36 用户要求：「将经验条也加入图层拖拽->常驻层可选项」
+  --   （真机截图：`MainMenuExpBar` 已被手动拖过 −3,+39 / 透明 0.40 = 用户就是要给它一个**常驻拖拽柄**）
+  --   ★真名有**本地证据**：`/edb ui` 的图层树里它是 `MainMenuBar` 的子帧（1024×13，含 4 片 `MainMenuXPBarTexture0..3`）。
+  --   ★不带 roster/icon/pet 标记 ⇒ 自然归第 1 组「常驻层（拖拽柄）」（分组由 `EVAL_DF_PICK_MENU` 现算，标签不写死）。
+  --   ★与主条（`MainMenuBar`，本表上面那条）**各自一个柄**：拖哪个动哪个；主条动了经验条会跟着（父子关系）。
+  --   ★★★柄带定位四改（每次都是真机截图驱动的「一句话调整」，只动这一个常量）：
+  --     ① 最初：`hdy = -(DF_DRAG_H + 2)` —— 主条与经验条**左上角完全重合**（真机树：两者上边 Y53、左边 X173）
+  --        ⇒ 两条 20px 柄精确叠在一起（后画的盖住先画的）⇒ 把经验条柄下移 22px 错开。
+  --     ② 1.75.36e（用户：「经验条的拖拽位置移动到经验条上面」）：用户已经把**经验条本身**挪上去了
+  --        （真机存档里那条调试自定义：`MainMenuExpBar dx=-2.9 dy=+39.1`，即比主条顶边高 39px）
+  --        ⇒ 两条柄不再可能重合，**去掉下移量**，柄带就贴在经验条自己身上（hdy 归 0 = 左上角对齐）。
+  --     ③ 1.75.36h（用户：「需要经验条的拖拽层往上移动,主动作条的拖拽往下移动.错开.现在重叠了」）：
+  --        经验条又回到「与主条左上角相距不到一个柄高」的摆位 ⇒ 两条柄再次重叠 ⇒ 改成**各自朝相反
+  --        方向让开一个柄高**：经验条 hdy = +DF_DRAG_H（往上）· 主条 hdy = -DF_DRAG_H（往下，见上表那条）。
+  --     ★判据（为什么这样就一定不再重叠）：柄锚法 = SetPoint(hpt, fr, hpt, hx, hy)（**hy 上移为正**）、
+  --       柄高恒为 DF_DRAG_H ⇒ 屏上区间 = [上边 - hy, 上边 - hy + DF_DRAG_H]。设经验条上边 = Tx、
+  --       主条上边 = Tm、g = Tm - Tx（常态 g >= 0），两者不重叠 ⇔ hy_xp - hy_m >= DF_DRAG_H - g；
+  --       取 hy_xp = +DF_DRAG_H、hy_m = -DF_DRAG_H ⇒ 左边恒 = 2 x DF_DRAG_H ⇒ 只要 g >= -DF_DRAG_H
+  --       就绝不重叠（**含 g = 0 即两者左上角完全重合那种最坏情况**）。
+  --     ★以后若又重叠：先看这两个常量是否还在 ±DF_DRAG_H，再按「谁压住谁」调绝对值（一个数的事）。
+  { name = "MainMenuExpBar", label = "经验条", cands = { "MainMenuExpBar" }, hdy = DF_DRAG_H, block = true },
   -- ★★★1.74.31 用户要求：「图层拖拽 将 动作条1,2,3,4 也加入可拖拽项」。
   --   ★★本客户端（UE 重写）的动作条帧名**没有本地证据**：客户端 UI 编译在 pak 里，磁盘上既没有 FrameXML、
   --     别的插件也一次都没引用过 MultiBar*（本地取证：Interface 下只有 AddOns；SavedVariables 里只有 MainMenuBar）。
   --     ⇒ 不猜一个名字写死，改成**候选名解析**（`cands`）：按顺序取第一个真实存在的帧；
   --       一个都没命中 → 该目标**如实缺席**（不画拖拽条；[重置] 清单末尾单列一行说明），用 `/edb bars` 把真名探出来。
   --   ★存档键（name = 候选第一名）**与命中哪个候选无关** ⇒ 换客户端/改名都不会让老存档对不上。
-  { name = "MultiBarBottomLeft", label = "动作条1",
+  { name = "MultiBarBottomLeft", label = "动作条1", block = true,
     cands = { "MultiBarBottomLeft", "MultiBar1", "ActionBar1", "BottomLeftActionBar", "MultiActionBar1", "ActionBarFrame1" } },
-  { name = "MultiBarBottomRight", label = "动作条2",
+  { name = "MultiBarBottomRight", label = "动作条2", block = true,
     cands = { "MultiBarBottomRight", "MultiBar2", "ActionBar2", "BottomRightActionBar", "MultiActionBar2", "ActionBarFrame2" } },
-  { name = "MultiBarRight", label = "动作条3",
+  { name = "MultiBarRight", label = "动作条3", block = true,
     cands = { "MultiBarRight", "MultiBar3", "ActionBar3", "RightActionBar", "RightActionBar1", "MultiActionBar3", "ActionBarFrame3" } },
-  { name = "MultiBarLeft", label = "动作条4",
+  { name = "MultiBarLeft", label = "动作条4", block = true,
     cands = { "MultiBarLeft", "MultiBar4", "ActionBar4", "RightActionBar2", "MultiActionBar4", "ActionBarFrame4" } },
   -- ★★★1.75.x 用户要求：「工具→图层拖拽→设置. 常驻层缺少宠物动作条」⇒ 补进**常驻层**。
   --   ★不带 roster/icon 标记 ⇒ 自然归第 1 组「常驻层（拖拽柄）」（分组由 EVAL_DF_PICK_MENU 现算，标签不写死）。
@@ -157,7 +202,7 @@ local DF_TARGETS = {
   --   ★★宠物动作条是**按需出现**的（没宠物时不显示）⇒ 与队伍/团队同族，带 `pet = true` 进**有界跟随**：
   --     事件 `UNIT_PET` 有本地证据（本项目 addons/EH_DebugBox/EH_DebugBox.lua 正在注册它）；
   --     ★`PET_BAR_UPDATE` **不注册**——本地零证据（铁律 5④：探测名单不算注册依据）。
-  { name = "PetActionBarFrame", label = "宠物动作条", pet = true,
+  { name = "PetActionBarFrame", label = "宠物动作条", pet = true, block = true,
     cands = { "PetActionBarFrame", "PetActionBar", "PetBarFrame", "PetActionButtonsFrame", "PetBar" } },
   -- ★★★1.74.32 用户要求：「拖拽图层再增加队伍层,团队层如果存在的话」。
   --   ★「如果存在的话」是**两层**意思，都要如实处理，不许假装：
@@ -275,6 +320,15 @@ local dfDragEnd, dfCommitPop, dfRefresh
 --   不先声明，闭包里那个名字会**绑成全局 nil**；而那种写法外面通常套 `type(...)=="function"` 守卫 ⇒
 --   队伍/团队事件来了**静默什么都不做**（本轮最容易踩、且最难查的一处）。
 local dfRosterArm
+-- ★★★1.75.36i 同款前向声明（**harness 当场抓到的静默 bug**）：`EVAL_DF_SET`（定义在很前面）里调 `dfGuardArm`/
+--   `dfGuardStop`，而它们的 `local function` 定义在后头 ⇒ 那两个名字在 `EVAL_DF_SET` 里绑的是**全局 nil**，
+--   `pcall(nil, …)` 只是返回 false、**不报错** ⇒ 「打开开关立即武装 / 关掉立即停」从来没生效过（只有 INSTALL 那条路有效）。
+--   ⇒ 必须先在这里声明，定义处改成**赋值**（`dfGuardArm = function(...)`），绝不能再写 `local function`。
+--   ★`probe_localorder.js` 对这一类（引用点在**别的函数体内部**、声明在同文件的后面）是**盲区**，别指望它。
+local dfGuardArm, dfGuardStop
+-- ★★★1.75.36l 同款前向声明：「定位方块」（绝对基准，用户定稿）——`dfApplyAll`/`dfApplyOne` 定义在文件前部
+--   而方块那一段在后部 ⇒ 不先声明就会绑成**全局 nil**（`pcall(nil,…)` 静默失败，1.75.36i 刚踩过一模一样的坑）。
+local dfBlockApply, dfBlockSync, dfBlockDrift, dfBlockGet
 local DF = {
   on = false,          -- 开关（真值 = EVAL_HELP_CONFIG.dragFrames.on）
   installed = false,   -- EVAL_DF_INSTALL 跑过没有
@@ -296,6 +350,17 @@ local DF = {
   keepFixed = 0,       -- 有几次净检查**真的重设过**（漂移修正轮数）
   keepChecked = 0,     -- 最近一次净检查覆盖到的目标数（带定位记录且帧在位的）
   keepAge = 0,         -- 本次窗口已过去的墙钟秒数（绝对上限用它判）
+  -- ★★★1.75.36f 属性设置守卫（0.3s 常驻；用户：「宠物栏位置…偶然性拾取物品之后会被还原位置.
+  --   添加一个属性设置守卫,0.3频率重设.对所有有自定义属性设置的,对聊天框做特殊处理…不需要守卫」）
+  guardFrame = nil,    -- 守卫 tick 帧
+  guardOn = false,     -- 是否在跑（模块关掉 ⇒ 立刻摘脚本）
+  guardAcc = 0,        -- 周期累加（0.3s 一拍）
+  guardFixes = 0,      -- 累计「按存档重设」次数（读值口/断言读它）
+  guardSkipped = 0,    -- 累计整拍跳过次数（拖拽中/战斗中）
+  guardMoved = 0,      -- 累计重设的目标数（与 guardFixes 同源的另一个视角）
+  -- ★★★1.75.36g 战斗中「写了但没生效」的处理（用户报障：「进入攻击状态,会把宠物动作栏顶到上面去」）
+  guardBlocked = 0,    -- 战斗中对受保护帧写位置被拒的次数（>0 = 客户端在战斗中不放行这一写）
+  guardNoWrite = {},   -- 目标名 → true（本场战斗里写过一次却没生效 ⇒ 不再 0.3s 一次地空写；出战斗清空重试）
   catcher = nil,       -- 全屏接盘（只在拖拽期间 Show）
   pop = nil,           -- 配置弹窗控件表
   popMode = nil,       -- 弹窗定位结果："host" / "uiparent" / "failed"
@@ -570,6 +635,29 @@ local function dfRelAnchorPos(relName, relPoint, fr)
   return l + w * dfFactor(relPoint, "LEFT", "RIGHT"), b + h * dfFactor(relPoint, "BOTTOM", "TOP")
 end
 
+-- ★★★1.75.36k 相对锚点目标的「基准屏幕位置」**每次现算**（用**当前**的相对帧位置 + 存档里的锚点偏移）：
+--   为什么必须现算：`base.l/base.b` 是抓取那一刻的屏幕位置 —— 父帧一动（客户端重排底部条组）它就**过期**，
+--   于是「按存档回位」会把这一层拽回**旧世界**（真机报障：动作栏1~4 设好的位置保存后又回去 / 按键整排上浮）。
+--   现算出来的基准 = 「客户端**现在**这个版式下、这一层按存档锚点该在的地方」⇒ 我们的位移 `dx/dy`（**屏幕单位**）
+--   叠在它上面才是用户真正想要的位置；父帧挪动时基准跟着挪 ⇒ **不算漂、不打架**。
+--   ★返回 nil = 量不到相对帧 ⇒ 调用方**退回旧口径**（如实降级，绝不编一个值）。
+local function dfBaseLive(fr, cap)
+  if type(cap) ~= "table" or type(cap[1]) ~= "table" then return nil end
+  local a = cap[1]
+  if type(a[1]) ~= "string" or type(a[4]) ~= "number" or type(a[5]) ~= "number" then return nil end
+  local _, _, w, h = dfMeasure(fr)
+  if type(w) ~= "number" or type(h) ~= "number" then return nil end
+  local rm = (type(a[2]) == "string" and a[2] ~= "") and a[2] or nil
+  local rp = (type(a[3]) == "string" and a[3] ~= "") and a[3] or a[1]
+  local R = dfRelFrame(rm, fr)
+  local rl, rb, rw, rh = dfMeasure(R)
+  if type(rl) ~= "number" or type(rb) ~= "number" then return nil end
+  local qx = rl + rw * dfFactor(rp, "LEFT", "RIGHT")
+  local qy = rb + rh * dfFactor(rp, "BOTTOM", "TOP")
+  return dfNum(a[4], 0) + qx - w * dfFactor(a[1], "LEFT", "RIGHT"),
+    dfNum(a[5], 0) + qy - h * dfFactor(a[1], "BOTTOM", "TOP")
+end
+
 -- 抓一份「实测锚点」（可序列化：全是字符串与数字）
 -- 返回 { {point, relName, relPoint, x, y}, ... }；量不到几何 → nil（调用方如实放弃，不写半个记录）
 local function dfCapture(fr)
@@ -605,6 +693,39 @@ end
 
 -- 按「实测锚点 + 位移」重新锚定：**逐锚点平移同一个位移**（多锚点帧也能整体刚性平移）
 -- ★ClearAllPoints 之后位置是 (0,0)（= 父级左下角）——所以每一步都必须真的落上 SetPoint，并且把成功与否如实返回。
+-- ★★★1.75.36j **相对锚点**判定 + 按锚点判「到位」（真机取证驱动，见 dfGuardTick 的说明）：
+--   记录里的 `base[1]` = 抓取那一刻的「锚点名/相对帧/相对锚点/偏移」四元组。
+--   · 相对帧是 **UIParent**（或没有相对帧）⇒ 屏幕坐标就是稳定真值 ⇒ 走**绝对**口径（原逻辑，不变）；
+--   · 相对帧是**别的帧**（`PetActionBarFrame ← MainMenuBar`、`MultiBarBottomLeft ← ActionButton1` …）
+--     ⇒ 屏幕坐标是**旧世界的**：父帧一动（客户端重排底部条组）它就整体漂 ⇒ 必须按**相对**口径判与治，
+--       否则「按绝对坐标回位」会把这一层**从父帧上拽下来**，而客户端下一拍又把它锚回去 ⇒ 两边来回拉 = 每 0.3s 抖。
+local function dfRelCap(cap)
+  if type(cap) ~= "table" or type(cap[1]) ~= "table" then return false end
+  local a = cap[1]
+  if type(a[1]) ~= "string" or type(a[2]) ~= "string" or a[2] == "" then return false end
+  if a[2] == "UIParent" then return false end
+  return true
+end
+
+-- 当前锚点是否 = 存档锚点 + (dx,dy)（点名声/相对帧/相对锚点**逐项相等**，偏移容差 1px；锚点数不等就保守判「不到」）
+local function dfAnchorAt(fr, cap, dx, dy)
+  if type(cap) ~= "table" or type(cap[1]) ~= "table" then return false end
+  local cur = dfCapture(fr)
+  if type(cur) ~= "table" or type(cur[1]) ~= "table" then return false end
+  local n = table.getn(cap)
+  if table.getn(cur) ~= n then return false end
+  for i = 1, n do
+    local c, b = cur[i], cap[i]
+    if type(c) ~= "table" or type(b) ~= "table" then return false end
+    if c[1] ~= b[1] then return false end
+    if (c[2] or "") ~= (b[2] or "") then return false end
+    if (c[3] or "") ~= (b[3] or "") then return false end
+    if math.abs(dfNum(c[4], 0) - (dfNum(b[4], 0) + dfNum(dx, 0))) > 1 then return false end
+    if math.abs(dfNum(c[5], 0) - (dfNum(b[5], 0) + dfNum(dy, 0))) > 1 then return false end
+  end
+  return true
+end
+
 local function dfAnchorApply(fr, cap, dx, dy)
   if not fr or type(cap) ~= "table" then return false, 0 end
   if type(fr.ClearAllPoints) ~= "function" or type(fr.SetPoint) ~= "function" then return false, 0 end
@@ -683,7 +804,18 @@ end
 
 local function dfPlaceFrom(fr, cap, dx, dy)
   if type(cap) ~= "table" then return false, nil end
+  -- ★★★1.75.36k 相对锚点目标（相对帧不是 UIParent）：基准**现算**（`dfBaseLive`），随后**仍走下面同一套**
+  --   「首猜折算 → 量回自证 → 手量折算修正」。
+  --   ★★为什么不能把 `dx/dy` 直接塞进 `SetPoint`（1.75.36j 的错误写法，真机当场出事）：
+  --     `dx/dy` 是**屏幕单位**的位移，而 `SetPoint` 的偏移是**帧本地单位** —— 两者差一个有效缩放
+  --     （0.7 缩放的条：屏幕 50px 需要本地 ~71）⇒ 直接塞进去每一条都只走了 `scale × 位移`，
+  --     而动作栏1~4 是**互相锚着的链**（2←1、4←3）⇒ 误差层层叠加 ⇒ 用户 `/reload` 后「位置全错乱」。
+  --   ⇒ 屏幕位移一律交给收敛环去解，锚点身份保持相对（这一层依旧贴着父帧，不会被拽到旧世界）。
   local bl, bb = cap.l, cap.b
+  if dfRelCap(cap) then
+    local lbl, lbb = dfBaseLive(fr, cap)
+    if type(lbl) == "number" and type(lbb) == "number" then bl, bb = lbl, lbb end
+  end
   if type(bl) ~= "number" or type(bb) ~= "number" then
     -- ★老记录：先试着**反推**出屏幕基准；反推不出来才老实退回老路径（如实降级，不假装能修）
     bl, bb = dfScreenBaseOf(fr, cap)
@@ -730,10 +862,20 @@ end
 --   ★判据也改**按屏幕量**（同样不受单位约定影响）；老记录没有实测屏幕位置时退回旧的锚点比对。
 local function dfIsAt(fr, base, dx, dy)
   if type(base) ~= "table" or type(base[1]) ~= "table" then return false end
-  if type(base.l) == "number" and type(base.b) == "number" then
+  -- ★★★1.75.36k 判据统一走**屏幕**：相对锚点目标先把「基准屏幕位置」**现算**出来（父帧挪了基准跟着挪），
+  --   再比「实测屏幕位置 = 基准 + dx/dy」。★位移 `dx/dy` 是**屏幕单位**（拖拽/属性窗都是这么写的），
+  --   所以只能比屏幕；量不到相对帧才退回锚点比对（如实降级）。
+  local bl, bb = nil, nil
+  if dfRelCap(base) then
+    bl, bb = dfBaseLive(fr, base)
+    if type(bl) ~= "number" or type(bb) ~= "number" then return dfAnchorAt(fr, base, dx, dy) end
+  elseif type(base.l) == "number" and type(base.b) == "number" then
+    bl, bb = base.l, base.b
+  end
+  if type(bl) == "number" and type(bb) == "number" then
     local l, b = dfMeasure(fr)
     if not l or not b then return false end
-    return (math.abs(l - (base.l + dfNum(dx, 0))) <= 1) and (math.abs(b - (base.b + dfNum(dy, 0))) <= 1)
+    return (math.abs(l - (bl + dfNum(dx, 0))) <= 1) and (math.abs(b - (bb + dfNum(dy, 0))) <= 1)
   end
   local cur = dfCapture(fr)
   if not cur or type(cur[1]) ~= "table" then return false end
@@ -783,7 +925,10 @@ end
 -- 读目标**当前**的属性：真机可用的 API `GetScale` / `GetAlpha` / `IsShown` / `GetWidth` / `GetHeight`，一律 pcall。
 -- ★读的是**目标本身**，不是存档记录：「记录里写了 0.6」≠「它现在就是 0.6」，用户要看的是后者。
 -- ★拿不到就返回 nil（调用方如实写「?」）——**绝不编一个 1** 冒充足「默认值」（本项目「查不到 ≠ 没有」纪律）。
-local function dfReadAttrs(fr)
+-- ★1.75.36m `noSize = true` = **只读前三样**（缩放/透明/显隐）：守护每拍都要读属性，而它**永远不比宽高**
+--   （候选必然 `noSize == true`，见 `dfGuardCustom` 头注）⇒ 省掉每拍每目标 2 次 `GetWidth`/`GetHeight`。
+--   默认（nil）行为一字不变 —— 属性清单 / 还原那条路照旧读宽高。
+local function dfReadAttrs(fr, noSize)
   if not fr then return nil, nil, nil, nil, nil end
   local sc, al, sh, w, h = nil, nil, nil, nil, nil
   if type(fr.GetScale) == "function" then
@@ -803,6 +948,7 @@ local function dfReadAttrs(fr)
       elseif v == false or v == 0 then sh = false end
     end
   end
+  if noSize then return sc, al, sh, nil, nil end -- ★守护路径：宽高**连读都不读**（省 2 次调用/目标/拍）
   -- ★1.74.31 宽/高（用户要求清单里也要显示）：与缩放/透明度同口径 —— 现读目标、读不到写「?」
   if type(fr.GetWidth) == "function" then
     local ok, v = pcall(fr.GetWidth, fr)
@@ -888,16 +1034,21 @@ local function dfRestoreAttrs(fr, rec, combat)
   return done, res
 end
 
--- ============ 定时复查（每 2 秒按存档回位）============
+-- ============ **启动期有界**复查（按存档回位）============
+-- ★★★1.74.31 起**不再是「每 2 秒常驻」**（本行标题与函数内措辞曾长期停留在旧口径，2026-09-28 一并改正）：
+--   现口径 = 登录/载入后**武装一次**：周期 `DF_KEEP_PERIOD`=1.0s × **净检查 `DF_KEEP_CHECKS`=5 次**，
+--   含跳过在内的评估上限 `DF_KEEP_TRIES`=12 次，**绝对墙钟 `DF_KEEP_WALL`=15.0s** ⇒ 到点 `dfKeepStop` **摘掉 OnUpdate**、
+--   之后**永久不再复查**（用户定：「最大检测时间为屏幕载入完成 5s 内」；旧常驻 tick 会在拖拽/切图时反复抢锚点）。
+--   属性侧同理：**不做周期性写入**（只在 登录恢复 / 拖拽结束保存 / 显式应用 / 开窗重设 四个时刻写）。
 -- ★③ 拖拽进行中**整体跳过**（这是本轮用户报的「拖拽中与定时复查抢锚点」的直接修法）
 local function dfKeepTick(quiet)
   if DF.dragging then
-    if not quiet then say("框拖拽：拖拽进行中，本次定时复查跳过（不与手动拖拽抢锚点）") end
+    if not quiet then say("框拖拽：拖拽进行中，本次启动期复查跳过（不与手动拖拽抢锚点）") end
     return 0, 0
   end
   if dfInCombat() then return 0, 0 end -- ★战斗中不重锚（客户端保护）
   -- ★★★1.74.30：「显示集合签名」变化 → 重贴拖拽条。
-  --   综合/战斗记录切页时只有一页在显示，签名不一致就说明“该出现的条”变了（最多 2 秒跟上）。
+  --   综合/战斗记录切页时只有一页在显示，签名不一致就说明“该出现的条”变了（启动期 1s 一拍，最多 5 拍内跟上）。
   local sig = {}
   for i2 = 1, table.getn(DF_TARGETS) do
     local fr2 = dfTargetFrame(DF_TARGETS[i2])
@@ -923,7 +1074,13 @@ local function dfKeepTick(quiet)
     local rec = store[tgt.name]
     -- ★1.74.33 未勾选的层**不在管理范围**：不重锚（它现在连拖拽柄/图标都没有，重锚等于偷偷改用户没选的层）
     local fr = dfPicked(tgt.name) and dfTargetFrame(tgt) or nil
-    if type(rec) == "table" and type(rec.base) == "table" and fr then
+    -- ★★★1.75.36l 方块目标：判据与落点都走方块（目标被**接管锚点**到方块上 ⇒ 位置 = 方块的绝对坐标）
+    if tgt.block == true then
+      if type(rec) == "table" and fr and dfBlockDrift(tgt) then
+        checked = checked + 1
+        if dfBlockApply(tgt) then fixed = fixed + 1 end
+      end
+    elseif type(rec) == "table" and type(rec.base) == "table" and fr then
       if rec.dx or rec.dy then
         checked = checked + 1
         local bcap = rec.cur or rec.base -- ★应用用当前基准
@@ -952,7 +1109,12 @@ local function dfApplyAll(quiet)
     local fr = dfPicked(tgt.name) and dfTargetFrame(tgt) or nil
     if type(rec) == "table" and fr then
       checked = checked + 1
-      if type(rec.base) == "table" and (rec.dx or rec.dy) then
+      if tgt.block == true then
+        -- ★1.75.36l 方块目标：一次写全「方块位置 + 目标锚到方块上」（零位移迁移就在这里面）
+        if dfBlockDrift(tgt) then
+          if dfBlockApply(tgt) then fixed = fixed + 1 end
+        end
+      elseif type(rec.base) == "table" and (rec.dx or rec.dy) then
         local bcap2 = rec.cur or rec.base -- ★同上
         if not dfIsAt(fr, bcap2, rec.dx, rec.dy) then
           local ok = dfPlaceFrom(fr, bcap2, rec.dx, rec.dy)
@@ -989,19 +1151,32 @@ local DF_ROSTER_PERIOD = 0.5
 local DF_ROSTER_TRIES = 4
 
 -- 单个目标：把存档参数应用一次（位置 + 属性）——与 dfApplyAll 逐目标那段**同一口径**（不另写一套公式）
-local function dfApplyOne(tgt)
+-- ★★★`posOnly`（1.75.36g，可选第二参）= **只治位置、绝不碰属性**：战斗中专用。
+--   为什么要有它：用户报障「进入攻击状态会把宠物动作栏顶上去」，而位置漂移正是在**战斗中**发生的；
+--   但战斗中对受保护帧写属性风险高（被拒/被忽略）⇒ 战斗里**只做位置这一件事**。
+--   ★它仍然是「位置 + 属性」两者的**唯一应用入口**（只是多了一个开关），不许在别处再写一套。
+-- 返回 `true, atPos`：atPos = 位置**量回自证**的结果（nil = 本来没有位置工作 / true = 已到位 / false = 没修到位）。
+--   ★为什么要量回：`dfPlaceFrom` 内部全是 pcall，战斗中被客户端拒绝是**静默**的 ⇒ 不量一次就会把
+--     「写了但没生效」报成修复成功（那正是本项目最恨的静默失效）。
+local function dfApplyOne(tgt, posOnly)
   local store = dfStore(false)
   if not store or type(tgt) ~= "table" then return false end
   if not dfPicked(tgt.name) then return false end -- ★1.74.33 未勾选 = 不在管理范围（应用公式这一层也守一道）
   local rec = store[tgt.name]
   local fr = dfTargetFrame(tgt)
   if type(rec) ~= "table" or not fr then return false end
-  if type(rec.base) == "table" and (rec.dx or rec.dy) then
+  local atPos = nil
+  -- ★★★1.75.36l 方块目标（用户定稿）：位置 = 方块的**绝对坐标**（目标被接管锚点、挂在方块上）
+  if tgt.block == true then
+    if dfBlockDrift(tgt) then dfBlockApply(tgt) end
+    atPos = (not dfBlockDrift(tgt)) and true or false
+  elseif type(rec.base) == "table" and (rec.dx or rec.dy) then
     local bcap = rec.cur or rec.base -- ★应用用当前基准
     if not dfIsAt(fr, bcap, rec.dx, rec.dy) then dfPlaceFrom(fr, bcap, rec.dx, rec.dy) end
+    atPos = dfIsAt(fr, bcap, rec.dx, rec.dy) and true or false
   end
-  dfAttrsApply(fr, rec, true, tgt)
-  return true
+  if not posOnly then dfAttrsApply(fr, rec, true, tgt) end
+  return true, atPos
 end
 
 -- ============ ★★★1.74.33 方案 A + C：被动窗口「打开即重设」============
@@ -1828,6 +2003,35 @@ local function dfPopBuild()
     local vY = pick("y")
     if type(vX) ~= "number" then vX = nil end
     if type(vY) ~= "number" then vY = nil end
+    -- ★★★1.75.36b 用户要求（**聊天窗特殊处理**）：「本身聊天窗自身是支持拖拽调整大小的…然后图层拖拽
+    --   完成之后属性配置自动读取当前的尺寸宽高、坐标 xy，进行保存」
+    --   ⇒ 聊天窗（**唯一判据 `dfSizeOK`**）多一条：用户**没显式选**的项，保存时按**当前实测值**入库；
+    --     显式选过的项仍然以用户选的为准（实测值不覆盖人的选择）。其它目标的行为**一字不变**。
+    --   为什么只给聊天窗：它的位置与尺寸**客户端自己也会记**（自带拖动 / 拖角缩放）⇒ 只认旧记录就会在
+    --   启动期把用户刚摆好的样子「挤回原位」（真机播报原文就是这句）。
+    local isChat = (type(name) == "string") and dfSizeOK(name)
+    if isChat then
+      if not vX or not vY then
+        -- ★1.75.36n：聊天框进了方块方案 ⇒ X/Y 的口径 = **中心**（方块 ax/ay），不再是左下
+        local tgtRowC = dfTgtOfName(name)
+        local isBlockC = (type(tgtRowC) == "table") and (tgtRowC.block == true)
+        local lNow0, bNow0, wNow0, hNow0 = dfMeasure(tgt)
+        if type(lNow0) == "number" and type(bNow0) == "number" then
+          if isBlockC then
+            if not vX then vX = lNow0 + dfNum(wNow0, 0) / 2 end
+            if not vY then vY = bNow0 + dfNum(hNow0, 0) / 2 end
+          else
+            if not vX then vX = lNow0 end
+            if not vY then vY = bNow0 end
+          end
+        end
+      end
+      if not vW or not vH then
+        local _, _, _, lw0, lh0 = dfReadAttrs(tgt)
+        if not vW and type(lw0) == "number" then vW = lw0 end
+        if not vH and type(lh0) == "number" then vH = lh0 end
+      end
+    end
     dfPopHide()
     if not tgt then return end
     if dfInCombat() then say("框拖拽：战斗中不改属性（客户端保护）") return end
@@ -1841,7 +2045,40 @@ local function dfPopBuild()
     -- ★X/Y（绝对屏幕坐标）⇒ 换算成「相对记录基准的屏幕位移」再落锚：
     --   ★落锚**只走 `dfPlaceFrom`**（首猜按有效缩放折算 → 量回自证 → 手量折算修正）；
     --     绝不在算完坐标后直接 SetPoint（那就回到「把屏幕量当本地偏移用」的老坑，缩放≠1 必偏）。
-    if (vX or vY) and type(name) == "string" and name ~= "" then
+    -- ★★★1.75.36l 方块目标：X/Y 直接就是**方块（绝对）坐标** ⇒ 写 ax/ay 再落方块，不再走 base/dx/dy
+    local tgtRowXY = dfTgtOfName(name)
+    if (vX or vY) and type(tgtRowXY) == "table" and tgtRowXY.block == true then
+      local stXY = dfStore(true)
+      local recXYB = (type(stXY) == "table") and stXY[name] or nil
+      if type(recXYB) ~= "table" then recXYB = {} if type(stXY) == "table" then stXY[name] = recXYB end end
+      local curAX, curAY = dfBlockGet(tgtRowXY)
+      if (type(curAX) ~= "number" or type(curAY) ~= "number") and tgt then
+        -- ★1.75.36n：没记录的目标（编辑模式那块「不落档」的方块）⇒ 现值 = 目标现状中心
+        local flP, fbP, fwP, fhP = dfMeasure(tgt)
+        if type(flP) == "number" and type(fbP) == "number" then
+          curAX, curAY = flP + dfNum(fwP, 0) / 2, fbP + dfNum(fhP, 0) / 2
+        end
+      end
+      local nbx = vX or curAX
+      local nby = vY or curAY
+      if type(nbx) == "number" and type(nby) == "number" then
+        recXYB.ax, recXYB.ay = nbx, nby
+        local okb = dfBlockApply(tgtRowXY)
+        -- ★1.75.36n：ax/ay 的口径 = 目标**中心** ⇒ 读回自证也比中心（不再比左上角）
+        local lNowB, bNowB, wNowB, hNowB = dfMeasure(tgt)
+        local cxB = (lNowB and wNowB) and (lNowB + wNowB / 2) or nil
+        local cyB = (bNowB and hNowB) and (bNowB + hNowB / 2) or nil
+        if cxB and cyB and math.abs(cxB - nbx) <= 1.5 and math.abs(cyB - nby) <= 1.5 then
+          table.insert(done, string.format("方块坐标 %.0f,%.0f（目标中心）", cxB, cyB))
+        elseif okb then
+          table.insert(done, "方块坐标已入库（读回没到位，下次应用时再试）")
+        else
+          table.insert(done, "方块没能落上（坐标已入库）")
+        end
+      else
+        table.insert(done, "方块坐标读不到现值 ⇒ 本次没设（不猜位置）")
+      end
+    elseif (vX or vY) and type(name) == "string" and name ~= "" then
       local storeXY = dfStore(true)
       local recXY = (type(storeXY) == "table") and storeXY[name] or nil
       if type(recXY) ~= "table" then
@@ -1854,12 +2091,19 @@ local function dfPopBuild()
         local bl2, bb2 = dfScreenBaseOf(tgt, bXY)   -- 老记录：先反推基准的屏幕位置
         if type(bl2) == "number" and type(bb2) == "number" then bXY.l, bXY.b = bl2, bb2 end
       end
-      if type(bXY) == "table" and type(bXY.l) == "number" and type(bXY.b) == "number" then
-        local curX = bXY.l + dfNum(recXY.dx, 0)
-        local curY = bXY.b + dfNum(recXY.dy, 0)
+      -- ★★★1.75.36k 相对锚点目标：位移要对着**现算基准**（`dfBaseLive`）算 —— 用户填的是**屏幕坐标**，
+      --   而存的 `base.l/base.b` 是抓取那一刻的旧屏幕位置；父帧挪过之后拿旧值相减 ⇒ 设进去的坐标必偏。
+      local bXYl, bXYb = (type(bXY) == "table") and bXY.l or nil, (type(bXY) == "table") and bXY.b or nil
+      if type(bXY) == "table" and dfRelCap(bXY) then
+        local lbl, lbb = dfBaseLive(tgt, bXY)
+        if type(lbl) == "number" and type(lbb) == "number" then bXYl, bXYb = lbl, lbb end
+      end
+      if type(bXYl) == "number" and type(bXYb) == "number" then
+        local curX = bXYl + dfNum(recXY.dx, 0)
+        local curY = bXYb + dfNum(recXY.dy, 0)
         local nx = vX or curX
         local ny = vY or curY
-        recXY.dx, recXY.dy = nx - bXY.l, ny - bXY.b
+        recXY.dx, recXY.dy = nx - bXYl, ny - bXYb
         recXY.cur = nil
         local okp = dfPlaceFrom(tgt, bXY, recXY.dx, recXY.dy)
         local lNow, bNow = dfMeasure(tgt)
@@ -1893,6 +2137,8 @@ local function dfPopBuild()
       if vW and okw then table.insert(done, string.format("宽 %.0f", vW)) end
       if vH and okh then table.insert(done, string.format("高 %.0f", vH)) end
     end
+    -- ★聊天窗：如实说明「没选的那几项是按当前实测值存的」（不静默 —— 否则用户以为只改了显隐）
+    if isChat then table.insert(done, "聊天窗：未选项按当前实测的 坐标/宽高 入库") end
 
     -- 写新存档（★只写用户真的选了的项）
     local store = dfStore(true)
@@ -1912,7 +2158,13 @@ local function dfPopBuild()
         rec.w, rec.h, rec.ow, rec.oh = nil, nil, nil, nil
         table.insert(done, "已清掉老的宽高设置（该窗口不许改宽高）")
       end
-      dfLog("属性已保存 " .. name .. "：" .. table.concat(done, "/"))
+      -- ★★★1.75.36k 如实记：`done` 为空 = **什么都没保存**（用户只点了保存、没选任何一项）⇒
+      --   旧写法照样打「属性已保存 …：」（后面空着）⇒ 真机取证时看着像「保存过了」，把排查带偏过一次。
+      if table.getn(done) > 0 then
+        dfLog("属性已保存 " .. name .. "：" .. table.concat(done, "/"))
+      else
+        dfLog("属性未保存（没选任何一项） " .. name)
+      end
     end
     if table.getn(done) > 0 then
       say(string.format("已保存：%s → %s", tostring(p2.label or "?"), table.concat(done, " · ")))
@@ -1966,7 +2218,12 @@ dfCommitPop = function(target, label, name)
   pcall(p.root.SetHeight, p.root, allowSize and DF_POP_H_SIZE or DF_POP_H)
   -- X/Y 回填 = 目标**当前实测的屏幕位置**（X=左边缘、Y=下边缘）；★只回填显示、**不写 row.value**
   --   （写了就等于「用户没动过也会被保存」，那会把「客户端刚把它摆回去的错误位置」静默固化下来）
-  local xNow, yNow = dfMeasure(target)
+  local xNow, yNow, wNowD, hNowD = dfMeasure(target)
+  -- ★1.75.36n：方块目标的 X/Y 口径 = 目标**中心**（保存写的就是 ax/ay 中心）⇒ 回填显示也用中心，
+  --   免得「显示的数」和「存下去的数」不是一个东西
+  if type(tgtRow) == "table" and tgtRow.block == true and type(xNow) == "number" and type(yNow) == "number" then
+    xNow, yNow = xNow + dfNum(wNowD, 0) / 2, yNow + dfNum(hNowD, 0) / 2
+  end
   for _, row in ipairs(p.rows) do
     local val, shown = nil, nil
     local k = row.key
@@ -2029,6 +2286,20 @@ local function dfDragBegin(b)
     return false
   end
   dfCalibrate(b)
+  -- ★★★1.75.36l 方块拖动：基准 = **方块的绝对坐标**（不是目标的锚点四元组 —— 方块只认绝对坐标）
+  local isBlock = (b.dfBlock == true)
+  local bax0, bay0 = nil, nil
+  if isBlock then
+    local bt = dfTgtOfName(b.dfName)
+    if bt then bax0, bay0 = dfBlockGet(bt) end
+    if type(bax0) ~= "number" or type(bay0) ~= "number" then
+      -- 兜底：还没方块/没记录就按目标现状**中心**（零位移迁移；★1.75.36n 起 ax/ay 的口径 = 中心）
+      local fl0, fb0, fw0, fh0 = dfMeasure(fr)
+      if type(fl0) == "number" and type(fb0) == "number" then
+        bax0, bay0 = fl0 + dfNum(fw0, 0) / 2, fb0 + dfNum(fh0, 0) / 2
+      end
+    end
+  end
   -- ★拖拽状态放在**模块自己的表**里（`DF.dragSt`），不挂在按钮对象上：
   --   ① 一次只可能有一个拖拽 → 单一真相更简单；
   --   ② 「读一个没设过的字段」在不同实现下语义不同（真机返回 nil，而宽容桩的 __index 会返回一个**真值函数**），
@@ -2036,6 +2307,7 @@ local function dfDragBegin(b)
   DF.dragSt = {
     b = b, cx0 = cx, cy0 = cy, lastCx = cx, lastCy = cy,
     idle = 0, age = 0, cap = cap, moved = false,
+    isBlock = isBlock, ax0 = bax0, ay0 = bay0,
   }
   DF.dragging = true
   DF.dragHandle = b
@@ -2077,8 +2349,17 @@ dfDragEnd = function(why)
     b.dfClickHandled = true
     dfLog("图标左键点击：按用户要求**不弹**属性弹窗（改右键）")
   end
-  -- 写存档：base 用**拖前锚点**（首次拖拽时就是原始锚点），位移 = 拖后实测 − 基准实测
-  if fr and moved then
+  -- ★★★1.75.36l 方块拖动：坐标已经在拖动过程中写进 `rec.ax/ay`（目标锚在方块上会自动跟随）
+  --   ⇒ 这里**不再**走 base/dx/dy 那套（两者口径不同，混写必乱），只如实落日志 + 播报。
+  if fr and moved and b.dfBlock == true then
+    local storeB = dfStore(true)
+    local recB = (type(storeB) == "table") and storeB[b.dfName] or nil
+    local axB = (type(recB) == "table") and dfNum(recB.ax, 0) or 0
+    local ayB = (type(recB) == "table") and dfNum(recB.ay, 0) or 0
+    dfLog("方块拖动结束 " .. tostring(b.dfName) .. "：ax=" .. string.format("%.1f", axB) .. " ay=" .. string.format("%.1f", ayB))
+    say(string.format("框拖拽：%s 的定位方块已移到 %.0f,%.0f（目标按绝对坐标跟随）",
+      tostring(b.dfLabel or b.dfName or "?"), axB, ayB))
+  elseif fr and moved then
     local store = dfStore(true)
     local fin = dfCapture(fr)
     if store and fin then
@@ -2192,6 +2473,31 @@ local function dfDragUpdate(st, dt)
   -- ★位移用「拖前实测屏幕位置 + 光标累计位移」重建，**不再每帧回读 GetPoint 的偏移**
   --   （本客户端 GetPoint 返回相对帧**名字字符串**、且偏移的 y 符号口径有歧义 —— 回读加增量会累积成镜像/漂移）
   --   ★位移没变就不重写锚点（ClearAllPoints+SetPoint 每帧无谓重写会闪）
+  -- ★★★1.75.36l 方块拖动：只改方块的**绝对坐标**，目标因为锚在方块上会自己跟着走（不碰目标锚点）
+  if st.isBlock == true then
+    if (not st.appX) or math.abs(totX - st.appX) > 0.5 or math.abs(totY - st.appY) > 0.5 then
+      local bt = dfTgtOfName(b.dfName)
+      -- ★1.75.36n：拖动 = **第一次真写**（没记录就当场建 —— 编辑模式「没记录也给方块」不落档，真拖了才入库，
+      --   与旧柄带模型「拖完才写」同口径）
+      local store0 = dfStore(true)
+      local rec0 = (type(store0) == "table") and store0[b.dfName] or nil
+      if bt and type(store0) == "table" and type(st.ax0) == "number" and type(st.ay0) == "number" then
+        if type(rec0) ~= "table" then rec0 = {} store0[b.dfName] = rec0 end
+        rec0.ax, rec0.ay = st.ax0 + totX, st.ay0 + totY
+        if dfBlockApply(bt) then st.appX, st.appY = totX, totY end
+      end
+    end
+    if math.abs(cx - st.lastCx) < 0.5 and math.abs(cy - st.lastCy) < 0.5 then
+      st.idle = st.idle + dt
+      if st.idle >= DF_DRAG_IDLE_END then dfDragEnd("idle") return end
+    else
+      st.idle = 0
+    end
+    st.lastCx, st.lastCy = cx, cy
+    st.age = st.age + dt
+    if st.age >= DF_DRAG_MAX then dfDragEnd("timeout") end
+    return
+  end
   if (not st.appX) or math.abs(totX - st.appX) > 0.5 or math.abs(totY - st.appY) > 0.5 then
     local okp, kk = dfPlaceFrom(fr, st.cap, totX, totY)
     if okp then
@@ -2588,8 +2894,229 @@ local function dfHandle(i)
   return b
 end
 
+-- ============ ★★★1.75.36l 「定位方块」= 每层的**绝对基准**（用户定稿）============
+-- 用户原话：「能否给每个自定义图层都在最外层加一个锚点.编辑方案定位方块透明图层显示.颜色区分,显示标题,
+--   然后所有自定义图层守护就以这个定位方块的绝对坐标进行后期更新守护?」+「1.取代〔旧的 20px 柄带〕2.先验证〔先底部条族〕」。
+-- 机制（三层）：
+--   UIParent（最外层，客户端**不会**重排它）
+--     └── 方块 EVAL_DF_ANCHOR_<目标名>（挂 WorldFrame，但**只认 UIParent 的绝对坐标** ax/ay）
+--           └── 目标层 SetPoint("CENTER", 方块, "CENTER", 0, 0)（**接管锚点**：从此只跟方块走；★1.75.36n 起 ax/ay = 目标**中心**）
+-- ★为什么这样最稳：方块只认绝对坐标 ⇒ 客户端重排底部条族（`MainMenuBar`/`ActionButton1` 那一族）动不到它 ⇒
+--   「旧世界坐标 / 互锚链层层叠加 / 屏幕 vs 本地单位」三个坑**一次消失**；守护只剩一句话：目标屏位 == 方块屏位。
+-- ★★零位移迁移：记录里还没有 `ax/ay` 时，第一次就以**目标当前实测位置**为基准（升级不改版式、不跳一下）。
+-- ★旧柄带**保留**给其它目标（`t.block ~= true`）；`block = true` 的目标改用方块（用户定的「取代」）。
+-- ★只有 `DF.on`（编辑模式）才显示 / 可拖；守护模式只留坐标继续守护（方块隐藏 = 不吃鼠标）。
+-- ★用 `do ... end` 圈起来：主 chunk 有 **200 局部变量上限**，这一段的自建局部量一进块就占槽位，
+--   出块即释放（本项目已因这条上限红过一次：`too many local variables (limit is 200)`）。
+do
+local DF_BLOCK_SIZE = 20
+-- 每层一个色（同一个色板循环）⇒ 屏幕上一眼分清谁是谁；边框用**分组色**（常驻层蓝/队伍团队绿/窗口图标金）
+local DF_BLOCK_PAL = {
+  { 0.25, 0.60, 1.00 }, { 0.30, 0.85, 0.45 }, { 1.00, 0.72, 0.22 }, { 0.95, 0.45, 0.30 },
+  { 0.70, 0.52, 1.00 }, { 0.30, 0.85, 0.85 }, { 1.00, 0.45, 0.75 }, { 0.85, 0.85, 0.35 },
+}
+local function dfBlockGroupRGB(t)
+  if type(t) ~= "table" then return 0.15, 0.45, 0.90 end
+  if t.icon then return 0.88, 0.70, 0.25 end
+  if t.roster then return 0.25, 0.72, 0.40 end
+  return 0.15, 0.45, 0.90
+end
+-- 目标在 DF_TARGETS 里的序号（配色用；找不到按 1）
+local function dfBlockIdx(name)
+  for i = 1, table.getn(DF_TARGETS) do if DF_TARGETS[i].name == name then return i end end
+  return 1
+end
+local function dfBlockOf(name)
+  if type(name) ~= "string" or name == "" then return nil end
+  DF.blocks = DF.blocks or {}
+  return DF.blocks[name]
+end
+-- 建方块（首用才建）。★必须**具名**：`dfCapture` 要把「锚在谁身上」读回来，判据才能钉住
+local function dfBlockEnsure(t)
+  if type(t) ~= "table" or type(CreateFrame) ~= "function" then return nil end
+  local bl = dfBlockOf(t.name)
+  if bl then
+    if bl.dfLabel2 then pcall(bl.dfLabel2.SetText, bl.dfLabel2, t.label) end
+    return bl
+  end
+  bl = CreateFrame("Button", "EVAL_DF_ANCHOR_" .. tostring(t.name), dfHost())
+  bl.dfAnchName = "EVAL_DF_ANCHOR_" .. tostring(t.name)
+  bl.dfBlock = true
+  bl.dfName = t.name
+  pcall(bl.SetWidth, bl, DF_BLOCK_SIZE)
+  pcall(bl.SetHeight, bl, DF_BLOCK_SIZE)
+  pcall(bl.SetFrameStrata, bl, "FULLSCREEN_DIALOG")
+  pcall(bl.SetFrameLevel, bl, 455) -- 略高于柄带(450)、低于面板(500)
+  if type(bl.EnableMouse) == "function" then pcall(bl.EnableMouse, bl, true) end
+  if type(bl.RegisterForClicks) == "function" then pcall(bl.RegisterForClicks, bl, "LeftButtonUp", "RightButtonUp") end
+  if type(bl.RegisterForDrag) == "function" then pcall(bl.RegisterForDrag, bl, "LeftButton") end
+  -- 边框（分组色）+ 填充（本层色、半透明 = 用户要的「透明图层」）
+  local gb = bl:CreateTexture(nil, "BACKGROUND")
+  pcall(gb.SetPoint, gb, "TOPLEFT", bl, "TOPLEFT", 0, 0)
+  pcall(gb.SetPoint, gb, "BOTTOMRIGHT", bl, "BOTTOMRIGHT", 0, 0)
+  local gr, gg, gb2 = dfBlockGroupRGB(t)
+  dfSolid(gb, gr, gg, gb2, 0.85)
+  bl.dfBorder = gb
+  local tex = bl:CreateTexture(nil, "ARTWORK")
+  pcall(tex.SetPoint, tex, "TOPLEFT", bl, "TOPLEFT", 1, -1)
+  pcall(tex.SetPoint, tex, "BOTTOMRIGHT", bl, "BOTTOMRIGHT", -1, 1)
+  local pal = DF_BLOCK_PAL[((dfBlockIdx(t.name) - 1) % table.getn(DF_BLOCK_PAL)) + 1]
+  bl.dfRGB = pal
+  dfSolid(tex, pal[1], pal[2], pal[3], 0.8) -- ★1.75.36n 用户：「方块透明度0.8」（填充 0.8；悬停 1.0 / 离开回 0.8）
+  bl.dfTex = tex
+  local lab = bl:CreateFontString(nil, "OVERLAY")
+  if type(GameFontNormal) ~= "nil" then pcall(lab.SetFontObject, lab, GameFontNormal) end
+  pcall(lab.SetPoint, lab, "LEFT", bl, "RIGHT", 4, 0)
+  pcall(lab.SetJustifyH, lab, "LEFT")
+  pcall(lab.SetTextColor, lab, 1, 0.96, 0.82)
+  pcall(lab.SetText, lab, tostring(t.label or t.name))
+  bl.dfLabel2 = lab
+  -- 左键拖 = 只挪方块（目标锚在方块上会跟着走）；右键 = 属性弹窗（与柄带同一入口）
+  bl:SetScript("OnMouseDown", function() if not DF.dragging then dfDragBegin(bl) end end)
+  bl:SetScript("OnMouseUp", function()
+    if DF.dragSt and DF.dragSt.b == bl then dfDragEnd("mouseup") return end
+    -- 不是拖拽 ⇒ 当点击：右键开属性弹窗（左键留给拖动）
+    if type(arg1) == "string" and arg1 == "RightButton" then
+      if type(dfCommitPop) == "function" then pcall(dfCommitPop, bl.dfTarget, t.label, t.name) end
+    end
+  end)
+  bl:SetScript("OnDragStart", function() if not DF.dragging then dfDragBegin(bl) end end)
+  bl:SetScript("OnDragStop", function() if DF.dragSt and DF.dragSt.b == bl then dfDragEnd("dragstop") end end)
+  bl:SetScript("OnUpdate", function()
+    if not (DF.dragSt and DF.dragSt.b == bl) then return end
+    local dt = dfNum(arg1, 0.05)
+    if dt <= 0 then dt = 0.05 end
+    dfDragUpdate(DF.dragSt, dt)
+  end)
+  bl:SetScript("OnHide", function()
+    if DF.dragSt and DF.dragSt.b == bl then dfDragEnd("hide") end
+  end)
+  bl:SetScript("OnEnter", function() if bl.dfTex then pcall(bl.dfTex.SetVertexColor, bl.dfTex, pal[1], pal[2], pal[3], 1.0) end end)
+  bl:SetScript("OnLeave", function() if bl.dfTex then pcall(bl.dfTex.SetVertexColor, bl.dfTex, pal[1], pal[2], pal[3], 0.8) end end)
+  bl:Hide()
+  DF.blocks[t.name] = bl
+  return bl
+end
+-- ★方块坐标 ax/ay = 目标层的**中心**绝对屏位（1.75.36n 用户：「定位在目标层中心位置」）；
+--   没有记录就以目标现在的中心为基准（零位移迁移）。★锚法 CENTER ← CENTER ⇒ **与缩放无关**，不用除有效缩放。
+local function dfBlockPos(fr, rec)
+  if type(rec) ~= "table" or not fr then return nil end
+  if type(rec.ax) ~= "number" or type(rec.ay) ~= "number" then
+    local l, b, w, h = dfMeasure(fr)
+    if type(l) ~= "number" or type(b) ~= "number" then return nil end
+    rec.ax, rec.ay = l + dfNum(w, 0) / 2, b + dfNum(h, 0) / 2
+  end
+  return rec.ax, rec.ay
+end
+-- 读当前方块坐标（没有就以目标现状为基准；返回 ax, ay 或 nil）——给拖动/对话框用
+dfBlockGet = function(t)
+  if type(t) ~= "table" then return nil end
+  local store = dfStore(false)
+  local rec = (type(store) == "table") and store[t.name] or nil
+  local fr = dfTargetFrame(t)
+  if type(rec) ~= "table" or not fr then return nil end
+  local ax, ay = dfBlockPos(fr, rec)
+  if type(ax) ~= "number" or type(ay) ~= "number" then return nil end
+  return ax, ay
+end
+-- 「已经锚在方块上、且目标**中心**就在方块坐标上」（唯一判据；1px；★1.75.36n 起 ax/ay = 中心口径）
+local function dfBlockAt(fr, bl, rec)
+  if not fr or not bl or type(rec) ~= "table" then return false end
+  local l, b, w, h = dfMeasure(fr)
+  if not l or not b then return false end
+  local cx, cy = l + dfNum(w, 0) / 2, b + dfNum(h, 0) / 2
+  if math.abs(cx - (tonumber(rec.ax) or -1e9)) > 1 or math.abs(cy - (tonumber(rec.ay) or -1e9)) > 1 then dfLog("BLOCKAT pos " .. tostring(cx) .. "," .. tostring(cy) .. " vs " .. tostring(rec.ax) .. "," .. tostring(rec.ay)) return false end
+  local cap = dfCapture(fr)
+  local a = (type(cap) == "table") and cap[1] or nil
+  if type(a) ~= "table" then dfLog("BLOCKAT nocapline") return false end
+  if a[1] ~= "CENTER" or a[2] ~= bl.dfAnchName or a[3] ~= "CENTER" then dfLog("BLOCKAT anchor " .. tostring(a[1]) .. "/" .. tostring(a[2]) .. "/" .. tostring(a[3]) .. " want CENTER/" .. tostring(bl.dfAnchName) .. "/CENTER") return false end
+  if math.abs(dfNum(a[4], 0)) > 1 or math.abs(dfNum(a[5], 0)) > 1 then
+    dfLog("BLOCKAT 没到位：锚点偏移实测 " .. tostring(a[4]) .. "," .. tostring(a[5]) .. "（应为 0,0）")
+    return false
+  end
+  return true
+end
+-- 摆方块 + 把目标**锚到方块上**（唯一落点；位置与锚点身份一次写全）
+dfBlockApply = function(t)
+  if type(t) ~= "table" then return false end
+  local store = dfStore(false)
+  local rec = (type(store) == "table") and store[t.name] or nil
+  local fr = dfTargetFrame(t)
+  if type(rec) ~= "table" or not fr then return false end
+  local ax, ay = dfBlockPos(fr, rec)
+  if type(ax) ~= "number" or type(ay) ~= "number" then return false end
+  local bl = dfBlockEnsure(t)
+  if not bl then return false end
+  local host = rawget(_G, "UIParent") or dfHost()
+  pcall(bl.ClearAllPoints, bl)
+  pcall(bl.SetPoint, bl, "CENTER", host, "BOTTOMLEFT", ax, ay) -- ★方块**中心**落在 (ax, ay)
+  if type(fr.ClearAllPoints) ~= "function" or type(fr.SetPoint) ~= "function" then return false end
+  if not pcall(fr.ClearAllPoints, fr) then return false end
+  -- ★中心对中心：目标缩放怎么变都对齐（不用除有效缩放 —— 这就是选 CENTER 而非「BOTTOMLEFT + 半宽偏移」的原因）
+  if not pcall(fr.SetPoint, fr, "CENTER", bl, "CENTER", 0, 0) then return false end
+  return true
+end
+-- 显示/摆方块。★★★1.75.36n 三条收口：
+--   ① **没记录也给方块**（只在编辑模式 + 已勾选 + 帧在）—— 否则没拖过的目标（头像/小地图…）第一次根本
+--      没得拖（鸡生蛋）；位置 = 目标现状中心且**不落档**（真的拖了才写记录，与旧柄带模型同口径）；
+--   ② 关闭编辑模式 ⇒ 一律 Hide（前提是 dfRefresh **别再把方块同步关在 `if DF.on` 里**，见那边）；
+--   ③ 方块定位 = 目标**中心**（用户：「定位在目标层中心位置」；锚法 CENTER ← CENTER，与缩放无关）。
+dfBlockSync = function(t, fr)
+  if type(t) ~= "table" then return nil end
+  local show = (DF.on == true) and dfPicked(t.name) and (fr ~= nil)
+  -- ★目标当前没显示 ⇒ 方块也不显示（聊天窗切页 / 宠物条没宠物 ⇒ 不该留个孤块在屏上；与柄带的 shown 门同口径）
+  if show and type(fr.IsShown) == "function" then
+    local oks, vsh = pcall(fr.IsShown, fr)
+    if oks and vsh == false then show = false end
+  end
+  local store = dfStore(false)
+  local rec = (type(store) == "table") and store[t.name] or nil
+  if type(rec) ~= "table" and not show then
+    -- 守护模式 / 未勾选 / 帧不在：没记录就一个帧都不建（已建的要藏起来）
+    local bl0 = dfBlockOf(t.name)
+    if bl0 then pcall(bl0.Hide, bl0) end
+    return nil
+  end
+  local bl = dfBlockEnsure(t)
+  if not bl then return nil end
+  bl.dfTarget = fr
+  local ax, ay
+  if type(rec) == "table" then ax, ay = dfBlockPos(fr, rec) end
+  if (type(ax) ~= "number" or type(ay) ~= "number") and fr then
+    local fl, fb, fw, fh = dfMeasure(fr) -- ★没记录：方块贴目标现状中心（不落档）
+    if type(fl) == "number" and type(fb) == "number" then ax, ay = fl + dfNum(fw, 0) / 2, fb + dfNum(fh, 0) / 2 end
+  end
+  if type(ax) == "number" and type(ay) == "number" then
+    pcall(bl.ClearAllPoints, bl)
+    pcall(bl.SetPoint, bl, "CENTER", rawget(_G, "UIParent") or dfHost(), "BOTTOMLEFT", ax, ay)
+  end
+  if show then pcall(bl.Show, bl) else pcall(bl.Hide, bl) end
+  return bl
+end
+-- 漂移判据（守护用）：true = 目标不在方块上/不在方块位置上（顺带做零位移迁移）
+dfBlockDrift = function(t)
+  if type(t) ~= "table" or t.block ~= true then return false end
+  local store = dfStore(false)
+  local rec = (type(store) == "table") and store[t.name] or nil
+  local fr = dfTargetFrame(t)
+  if type(rec) ~= "table" or not fr then return false end
+  local ax, ay = dfBlockPos(fr, rec) -- ★第一次就以「它现在在哪」为基准（零位移迁移）
+  if type(ax) ~= "number" or type(ay) ~= "number" then return false end
+  local bl = dfBlockEnsure(t)
+  if not bl then return false end
+  return not dfBlockAt(fr, bl, rec)
+end
+end -- do（定位方块段结束）
+
 dfRefresh = function()
   local n = 0
+  -- ★★★1.75.36n 方块同步**不受编辑模式的门管**（用户报障：「关闭图层拖拽,也就是关闭编辑模式,方块也要一起隐藏」）：
+  --   旧写法整段循环关在 `if DF.on` 里 ⇒ 关掉开关那一刻一个 dfBlockSync 都不跑 ⇒ 方块永远留在屏上。
+  --   现在：block 目标**任何时候**都过一遍 dfBlockSync（它内部按 DF.on ∧ 勾选 ∧ 帧在不在定 Show/Hide，幂等）。
+  for i = 1, table.getn(DF_TARGETS) do
+    local tgtB = DF_TARGETS[i]
+    if tgtB.block == true then pcall(dfBlockSync, tgtB, dfTargetFrame(tgtB)) end
+  end
   if DF.on then
     for i = 1, table.getn(DF_TARGETS) do
       local tgt = DF_TARGETS[i]
@@ -2598,6 +3125,11 @@ dfRefresh = function()
       -- ★★1.74.33：**未勾选的层不贴柄**（「选中的才支持拖拽」）—— 柄池是按下标顺序分配的，
       --   跳过某个目标只是少贴一条，不会串位（末尾那段 `for i = n + 1, ... do Hide` 负责把多出来的柄收掉）。
       local fr = (dfPicked(tgt.name) and not tgt.icon) and dfTargetFrame(tgt) or nil
+      -- ★★★1.75.36l 方块目标（用户定「取代」）：画 20×20 的定位方块（颜色区分 + 标题），**不再贴整条 20px 透明柄**。
+      --   方块只在编辑模式显示；它同时是「绝对基准」（守护就按它的坐标算）。
+      if tgt.block == true then
+        fr = nil -- ★方块已在上面那段（不受 DF.on 门管）同步过；这一族不贴柄带（`n` 不递增 = 不多占池位）
+      end
       -- ★★★1.74.30：**只给当前显示的目标贴条**。
       --   综合与战斗记录是**同一窗口的两页**（ChatFrame1/ChatFrame2）：未显示的那页不该在同一位置叠出一条拖拽条。
       local shown = true
@@ -2619,7 +3151,14 @@ dfRefresh = function()
         pcall(b.SetHeight, b, DF_DRAG_H)
         pcall(b.ClearAllPoints, b)
         -- 贴目标左上角（拖拽柄锚到别人的帧上 —— 与工具箱/下拉同一套跨父级锚点写法）
-        local okp = pcall(b.SetPoint, b, "TOPLEFT", fr, "TOPLEFT", 0, 0)
+        -- ★★★1.75.36：目标可带 `hdx`/`hdy` = **只挪这条柄**的偏移（帧本身一动不动）——
+        --   用在「目标与另一个目标的左上角重合」的场合（经验条 vs 主条，见 DF_TARGETS 那条注释）。
+        local hx = dfNum(tgt.hdx, 0)
+        local hy = dfNum(tgt.hdy, 0)
+        -- ★1.75.36c：`hcenterY = true` 的目标 ⇒ 柄**锚到目标的 CENTER**（垂直居中由客户端算，
+        --   天然免掉「自己量高度 / 除有效缩放」那一串坑；`hdx/hdy` 仍作附加微调）。
+        local hpt = tgt.hcenterY and "CENTER" or "TOPLEFT"
+        local okp = pcall(b.SetPoint, b, hpt, fr, hpt, hx, hy)
         if not okp then
           local host = dfHost()
           if host then pcall(b.SetPoint, b, "TOPLEFT", host, "TOPLEFT", 200, -200) end
@@ -2673,10 +3212,22 @@ function EVAL_DF_SET(on)
   DF.on = want
   local store = dfStore(true)
   if store then store.on = want end
+  -- ★★★1.75.36i 总开关 = **编辑模式 ⇄ 守护模式**（用户定：「在编辑模式别开启守护.在关闭之后才对有自定义设置的层
+  --   进行守护设置」）—— 这一条把 1.75.36f 的武装方向**整个反过来**：
+  --     · **打开 = 编辑模式**（拖拽柄/图标可见、你正在摆位置）⇒ 属性守卫**停**（正在编辑时别跟你抢）；
+  --     · **关闭 = 守护模式** ⇒ ① 先按存档**应用一次**（把编辑/战斗期间被挪走的层拉回来，也顺手关掉拖拽态/弹窗/跟随），
+  --        ② 再**武装**守卫（常驻 0.3s，只治**有自定义记录**的层；没有记录的层一个字节都不碰）。
+  --   ★★这两件事一律排在 `dfRefresh()` **之前**：界面刷新即使失败，守护状态也不该错
+  --      （且真机上刷新与守护互不依赖 —— **顺序即判据**）。
+  --   ★注意这是「关掉零动作」铁律的**明示例外**：本模块关着时守卫照跑（因为它只碰有记录的层、且每拍只读）。
   if not DF.on then
     if DF.dragging then dfDragEnd("disable") end
     if DF.pop then dfPopHide() end
     DF.rosterLeft = 0 -- ★1.74.32 开关关掉 → 停止队伍/团队跟随（不留后台周期任务）
+    dfApplyAll(true)  -- ★「关闭之后」＝按**有自定义记录**的层应用一次（编辑期间摆好的位置就是这一刻定稿）
+    pcall(dfGuardArm, "lock")
+  else
+    pcall(dfGuardStop, "edit-on") -- ★编辑模式：守卫**不跑**（用户明确要求）
   end
   local n = dfRefresh()
   -- ★★1.74.31【任务 A】本次会话里**刚把开关打开**（登录时是关的）⇒ 这也是一次「目标首次出现」：
@@ -2689,6 +3240,8 @@ function EVAL_DF_SET(on)
     --   ⇒ 走生产同一条 dfRosterArm：立刻先算一次 + 同时武装有界跟随窗口
     --     （覆盖「帧还没建出来」的那种情况）。★不另写一份逻辑，免得两处口径打架。
     if type(dfRosterArm) == "function" then dfRosterArm("enable") end
+    -- ★1.75.36i：这里**不再武装守卫** —— 开关打开 = 编辑模式，按用户要求「编辑模式别开启守护」
+    --   （武装点搬到了上面的「关闭 = 守护模式」分支里）。
   end
   say("框拖拽 = " .. (DF.on and ("开（共 " .. tostring(n) .. " 个）") or "关"))
   return true
@@ -2874,6 +3427,11 @@ function EVAL_DF_TARGETS()
     -- ★1.74.31：对外交出**解析结果**（frame = 帧对象、resolved = 命中的真实帧名）——
     --   面板/测试不必再自己 `_G[名字]`（候选名解析后「名字」可能不是 t.name）。
     table.insert(out, { name = t.name, label = t.label, frame = f, resolved = f and t.__hitName or nil,
+      -- ★1.75.36：柄偏移（只影响那条蓝色拖拽柄的位置；断言据此验「经验条柄在主条柄下方」）
+      hdx = dfNum(t.hdx, 0), hdy = dfNum(t.hdy, 0),
+      -- ★1.75.36c：柄带是否**相对目标垂直居中**（聊天窗两页 = true）
+      hcenterY = t.hcenterY and true or false,
+    block = t.block and true or false, -- ★1.75.36l「定位方块」目标（绝对基准）
       roster = t.roster and true or false,
       -- ★1.75.x：「按需出现」的**宠物动作条**标记（与 roster 同族，但触发事件不同）
       pet = t.pet and true or false,
@@ -2883,6 +3441,393 @@ function EVAL_DF_TARGETS()
   return out
 end
 
+-- ============ ★★★1.75.36d 图层拖拽「逐目标」探针（只读）============
+-- 用户 2026-09-28：「排查图层拖拽…头像位置缩放，除了主动作条之后的其他动作条缩放位置都无法生效。逐项排查下」。
+--   每目标一行 = 勾选 · 解析到的**真帧名** · 帧在不在/显示 · 柄（**按目标名**找当前显示中那条 · 池序号 · 实测矩形）
+--   · 存档记录摘要（base 条数 / base 屏幕基准 / dx,dy / scale / alpha / hidden / w,h）。**一个帧属性都不写**。
+--   ★取证落**专属有界环 `EVAL_HELP_CONFIG.dfProbe`（`DFP_MAX` 行）**：`say` 只进聊天框、**不落日志环** ⇒ 不给专属落盘的话
+--     AI 侧读存档一个字节都拿不到（本项目的老教训，同 lcProbe/selProbe/mbProbe/atkProbe）。
+--   ★★容量**必须 ≥ 一份完整报告**（目标数 + 头 + 尾）：本表已有 ~38 个目标 ⇒ 取 40 会在**单次调用内**
+--     就把头行挤掉（2026-09-28 harness 当场抓到：n=40 但环首行已经是 #02）⇒ 定 **80**（≈ 两份报告）。
+--   ★「柄」按池位号复用 ⇒ 必须按**目标名**查当前**显示中**那条（按下标认会误报）。
+local DFP_MAX = 80   -- 至少一份完整报告（目标数 + 头 + 尾）；40 会在单次调用内挤掉头行（harness 实测）
+local function dfProbePush(ring, line)
+  table.insert(ring, line)
+  while table.getn(ring) > DFP_MAX do table.remove(ring, 1) end
+end
+local function dfProbeRec(rec)
+  if type(rec) ~= "table" then return "无记录" end
+  local p = {}
+  table.insert(p, "base=" .. tostring(type(rec.base) == "table" and table.getn(rec.base) or 0))
+  if type(rec.base) == "table" and type(rec.base.l) == "number" then
+    table.insert(p, string.format("基准屏位=%.0f,%.0f", rec.base.l, rec.base.b or 0))
+  else
+    table.insert(p, "基准屏位=?")
+  end
+  table.insert(p, "dx=" .. tostring(rec.dx or "?"))
+  table.insert(p, "dy=" .. tostring(rec.dy or "?"))
+  table.insert(p, "scale=" .. tostring(rec.scale or "?"))
+  table.insert(p, "alpha=" .. tostring(rec.alpha or "?"))
+  table.insert(p, "hidden=" .. tostring(rec.hidden))
+  if rec.w or rec.h then table.insert(p, "wh=" .. tostring(rec.w or "?") .. "x" .. tostring(rec.h or "?")) end
+  return table.concat(p, " ")
+end
+function EVAL_DF_PROBE_TARGETS(quiet)
+  local store = dfStore(false)
+  local lines, picked, withRec, resolvedN, handleN = {}, 0, 0, 0, 0
+  local virgin = dfPickVirgin()
+  for i = 1, table.getn(DF_TARGETS) do
+    local t = DF_TARGETS[i]
+    local ok = dfPicked(t.name)
+    if ok then picked = picked + 1 end
+    local fr = dfTargetFrame(t)
+    if fr then resolvedN = resolvedN + 1 end
+    -- ★柄：按**目标名**找当前**显示中**那条（池位号复用，绝不按下标认）
+    local hb, hidx, hshown = nil, nil, false
+    for k = 1, table.getn(DF.handles) do
+      local b = DF.handles[k]
+      if b and b.dfName == t.name then
+        local s = false
+        if type(b.IsShown) == "function" then local o, v = pcall(b.IsShown, b) s = (o and v) and true or false end
+        if s or not hb then hb, hidx, hshown = b, k, s end
+        if s then break end
+      end
+    end
+    local hrect = "?"
+    if hb then
+      if hshown then handleN = handleN + 1 end
+      local l, bt, w, h = dfMeasure(hb)
+      if l then hrect = string.format("%.0f,%.0f %.0fx%.0f", l, bt or 0, w or 0, h or 0) else hrect = "读不到" end
+    end
+    local rec = (type(store) == "table") and store[t.name] or nil
+    if type(rec) == "table" then withRec = withRec + 1 end
+    local shown = "?"
+    if fr and type(fr.IsShown) == "function" then
+      local o, v = pcall(fr.IsShown, fr)
+      if o then shown = v and "显示" or "隐藏" end
+    end
+    table.insert(lines, string.format("#%02d %s(%s) 勾=%s 解析=%s 帧=%s/%s 柄=%s 记录=%s",
+      i, tostring(t.label or "?"), t.name, ok and "是" or "否",
+      t.__hitName and tostring(t.__hitName) or "**没命中**",
+      fr and "在" or "**不在**", shown,
+      hb and (string.format("#%d[%s %s]", hidx, hshown and "显示" or "隐藏", hrect)) or "**无**",
+      dfProbeRec(rec)))
+  end
+  local head = string.format("== 框拖拽逐目标探针 == 总开关=%s · 目标=%d · 勾选=%d%s · 解析到帧=%d · 已贴柄=%d/%s · 有记录=%d",
+    DF.on and "开" or "**关**", table.getn(DF_TARGETS), picked, virgin and "(virgin=全选)" or "",
+    resolvedN, handleN, tostring(DF_POOL_MAX), withRec)
+  local tail = "读法：勾=否 或 柄=无 ⇒ 那一层现在拖不动；记录里 scale/dx/dy 全是 ? ⇒ 从没成功改过它（不是「改了不生效」，是没写进存档）。"
+  local ring = {}
+  dfProbePush(ring, head)
+  for i = 1, table.getn(lines) do dfProbePush(ring, lines[i]) end
+  dfProbePush(ring, tail)
+  local cfg = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(cfg) == "table" then
+    local old = cfg.dfProbe
+    if type(old) ~= "table" then old = {} cfg.dfProbe = old end
+    for i = 1, table.getn(ring) do dfProbePush(old, ring[i]) end
+  end
+  if not quiet then
+    for i = 1, table.getn(ring) do say(ring[i]) end
+  end
+  return table.getn(ring)
+end
+
+-- ============ ★★★1.75.36f 属性设置守卫（0.3s；用户定）============
+-- 用户原话：「宠物栏位置.在设置之后.偶然性拾取物品之后会被还原位置. 添加一个属性设置守卫,0.3频率重设.
+--   对所有有自定义属性设置的, 对聊天框做特殊处理.他本身会被移动缩放大小的.不需要守卫」。
+-- ★为什么要「先探测再动手」：1.74.31 之前那套「每 2 秒按存档重锚」的教训是**无条件写** ——
+--   拖拽/切图/开窗时反复抢锚点，用户看到的就是「闪烁 / 拖不动」。所以本守卫**每拍只读**，
+--   **没有漂移就一个写 API 都不发** ⇒ 平时零写入，才谈得上「常驻」。
+-- 三条口径：
+--   ① 只对**有自定义属性设置**的目标：记录里真有 `scale/alpha/hidden/dx/dy/w/h` 之一（只有 `base` 不算 ——
+--      那是首次解析时就物化的锚点快照）；
+--      ★★**聊天框 1.75.36n 起只守坐标**（用户改口：「坐标守卫兜底,尺寸不需要守卫」；此前是整体排除）。
+--   ② 每拍：`dfMeasure`（位置）+ `dfReadAttrs`（缩放/透明/显隐/宽高）现读，与记录差超阈值**才**调 `dfApplyOne`
+--      （位置+属性的**唯一应用入口**，不另写一套）；
+--   ③ **拖拽中整拍跳过**（用户正在动它）；**战斗中只治位置**、属性一律不碰（1.75.36g 定，见 dfGuardTick）。
+-- 取证：`DF.guardFixes` 计数 + 专属有界环 `EVAL_HELP_CONFIG.dfGuard`（40 行，**只记真动手的拍**，不刷屏）。
+-- ★★★1.75.36m 节拍两档（用户问：「守护能否频率快一点. 1s 30帧. 对性能影响大不?」）：
+--   本守卫**每拍只读**（没漂移一个写 API 都不发），所以它的成本 = 「候选数 × 每拍调用次数 × 频率」。
+--   逐路径数一下（方块目标无漂移那一拍，就是最常见的一拍）：dfMeasure 4 次（GetLeft/GetWidth/GetHeight/GetBottom）
+--   + dfCapture（锚点数/锚点/名字）3~4 次 + 属性 3 次（现改成**记录里没有 scale/alpha/hidden 就一次都不读**，
+--   读也只读 3 样、不再白读宽高）≈ **每个候选 10 次上下**（都是 pcall 包着的只读调用）。
+--   ⇒ 10 个候选 ≈ 100 次/拍：0.3s 一拍 ≈ 0.3k 次/秒（可忽略）；**30 帧/秒 ≈ 3k 次/秒**，量级仍在 1% CPU 上下。
+--   ⇒ 结论：**30 帧常驻也不至于卡**，但「屏上什么都没动的那些帧」是**纯白花**（客户端只在几个可预知时机重排底部条族）。
+--   所以口径 = 平时 0.3s，**一旦有东西在动就切 30 帧/秒并只盯一小段（有界）**：
+--     ① 进战斗（PLAYER_REGEN_DISABLED —— 你报障的那个时机）② UNIT_PET（宠物动作条登场/退场）
+--     ③ ★本守卫**真动手修过一次**（说明客户端正在挪东西）④ 手动 /eh go 框拖拽守卫 快 [秒]。
+--   ★要「常驻 30 帧」也有开关：/eh go 框拖拽守卫 常快（**本会话**，不落存档）⇒ 你自己 A/B 体感。
+--   ★成本不靠估算，**真机实测**：OnUpdate 里用 GetTime() 量每拍耗时（DF.perfN/perfMs），
+--     /eh go 框拖拽守卫 压测 [拍数] 立刻连跑 N 拍并报「平均 ms/拍 · 折算每秒 ms」。
+local DF_GUARD_PERIOD = 0.3    -- 平时节拍（只读巡检）
+-- ★★快档数值与助手一律走 **DF 表 / 全局口**，不新增 local：主 chunk 有 **200 局部变量上限**，本文件已贴着
+--   上限 —— 这一轮加 3 个 local 当场把整份文件打成语法错（`too many local variables (limit is 200)`，
+--   本项目 1.75.36l 已因同一条红过一次）⇒ 新常量进 DF 表，新函数直接挂全局读值口。
+DF.guardFastPeriod = 0.033    -- ★快档 ≈ 30 帧/秒（用户要的「1s 30帧」）
+DF.guardFastSec = 1.5         -- ★快窗口**长度上限**（有界；过窗自动回落 0.3s）
+local DF_GUARD_RING = 40
+
+-- ★★★候选判据 = 「**真有能被本守卫写回去的属性**」：位置（`dx/dy`/`ax/ay`）· 缩放 · 透明 · 显隐。
+--   ★★**宽/高故意不算**（1.75.36f 收口）：宽高对**任何**目标都不进守卫（非聊天窗根本写不回去；
+--     聊天窗能写但用户定了「尺寸不需要守卫」——1.75.36n）⇒ 算进来只会得到「每拍都判漂移、却永远修不好」的空转。
+--   ★★**聊天框不再整体排除**（1.75.36n 用户改口：「聊天窗也可以设置坐标守卫兜底,尺寸不不需要守卫」）：
+--     它**只进坐标守卫**（候选要有方块坐标 `ax/ay`；尺寸/属性一概不守 —— 客户端的淡出、拖角缩放都归客户端）。
+--     ⇒ 判据与「真能动手」对齐，`EVAL_DF_GUARD_STATE` 报的候选数才是**真会动手的**那些。
+local function dfGuardCustom(rec)
+  if type(rec) ~= "table" then return false end
+  -- ★1.75.36l 方块记录（`ax/ay`）= 有自定义位置 ⇒ 也算候选（判据与落点由 `dfBlock*` 那条路负责）
+  return (rec.scale ~= nil or rec.alpha ~= nil or rec.hidden ~= nil or rec.dx ~= nil or rec.dy ~= nil
+    or rec.ax ~= nil or rec.ay ~= nil)
+end
+
+local function dfGuardCandidates()
+  local out = {}
+  local store = dfStore(false)
+  if type(store) ~= "table" then return out end
+  for i = 1, table.getn(DF_TARGETS) do
+    local t = DF_TARGETS[i]
+    if dfPicked(t.name) then
+      if dfSizeOK(t.name) then
+        -- ★1.75.36n 聊天框：**只守坐标**（候选 = 记录里有方块坐标 ax/ay；尺寸/属性不守 ⇒ 不算候选依据）
+        local recC = store[t.name]
+        if type(recC) == "table" and (recC.ax ~= nil or recC.ay ~= nil) then table.insert(out, t) end
+      elseif dfGuardCustom(store[t.name]) then
+        table.insert(out, t)
+      end
+    end
+  end
+  return out
+end
+
+-- ★★★名单是**按目标名做键**的表 ⇒ 数它**必须走 pairs**：`table.getn`/`#` 只数数组部分，
+--   对纯字符串键的表**恒返回 0**（本读值口第一版就是这么写的：名单明明有 1 个，报出来却是 0）。
+local function dfGuardNoWriteN()
+  local t = DF.guardNoWrite
+  if type(t) ~= "table" then return 0 end
+  local n = 0
+  for _ in pairs(t) do n = n + 1 end
+  return n
+end
+
+local function dfGuardRing(line)
+  local cfg = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(cfg) ~= "table" then return end
+  local ring = cfg.dfGuard
+  if type(ring) ~= "table" then ring = {} cfg.dfGuard = ring end
+  table.insert(ring, line)
+  while table.getn(ring) > DF_GUARD_RING do table.remove(ring, 1) end
+end
+
+-- ★★★1.75.36m 开一段**快窗口**（0.033s ≈ 30 帧/秒，**有界**）。四类触发都走这一个入口（探针也走它，不在别处复刻映射）。
+--   ★★续期纪律：同一段窗口**不因「又一次动手」无限续期** —— 否则客户端每拍挪一次 = 我们 30 帧/秒跟它拉锯，
+--     而「拉锯」正是 1.74.31 之前那套「每 2s 无条件重锚」被人看成闪烁的原因。现在 why == "fix" 且窗口还开着
+--     ⇒ **不续期**，一段最多 DF.guardFastSec；过窗后若还在漂，下一拍（0.3s）再修并重新开窗 ⇒ 拉锯夹成有界的一段段。
+-- ★★★注意：本函数**故意是全局**（`EVAL_DF_GUARD_FAST`）= 内部助手 + 探针操作口**同一个**（200 local 上限，见上）。
+function EVAL_DF_GUARD_FAST(sec, why)
+  local s = tonumber(sec) or DF.guardFastSec
+  if s <= 0 then s = DF.guardFastSec end
+  if s > 60 then s = 60 end -- 上限 60s（防止手滑传个天文数字 = 事实上的常驻满速）
+  local cur = dfNum(DF.guardFastLeft, 0)
+  if tostring(why) == "fix" and cur > 0 then return cur end -- 不无限续期（见上）
+  if s > cur then DF.guardFastLeft = s end
+  DF.guardFastArms = dfNum(DF.guardFastArms, 0) + 1
+  if tostring(why) ~= "quiet" then
+    dfLog(string.format("GUARD FAST %.2fs why=%s", s, tostring(why or "?")))
+  end
+  return dfNum(DF.guardFastLeft, 0)
+end
+
+local function dfGuardTick()
+  if DF.dragging then return 0, true end
+  local combat = dfInCombat()
+  -- ★★★1.75.36g 战斗中也要治**位置**（用户报障：「进入攻击状态,会把宠物动作栏顶到上面去」）——
+  --   旧的 `if dfInCombat() then return 0, true end` 把整拍跳掉了，正是这条报障在战斗中**永远治不了**的原因。
+  --   现在的口径：**战斗中只治位置**（属性一律不碰，见下）；位置写被客户端拒 ⇒ 记名单、本场战斗不再空写。
+  -- ★一出战斗就把名单清空 ⇒ 下一场战斗会**重新试一次**（真被保护就再记一次，绝不永久放弃）。
+  if (not combat) and type(DF.guardNoWrite) == "table" and next(DF.guardNoWrite) ~= nil then DF.guardNoWrite = {} end
+  local cands = dfGuardCandidates()
+  local store = dfStore(false)
+  local n = 0
+  for i = 1, table.getn(cands) do
+    local t = cands[i]
+    local fr = dfTargetFrame(t)
+    local rec = (type(store) == "table") and store[t.name] or nil
+    if fr and type(rec) == "table" then
+      local posNeed, attrNeed, why = false, false, nil
+      -- ★★★1.75.36k 漂移判据 = **唯一助手 `dfIsAt`**（相对锚点由它内部把基准现算成屏幕位置）。
+      --   ★为什么不再自写第二套：1.75.36j 在这里自写了一条「按锚点判」的分支，而落锚那侧（`dfPlaceFrom`）
+      --     把**屏幕位移**当**本地偏移**塞进 SetPoint ⇒ 判据与落锚的单位口径不一致：判「到了」但屏幕上是错的，
+      --     动作栏1~4 这种**互锚链**还会层层叠加 ⇒ 用户 `/reload` 后「位置全错乱」。
+      --   现在判与治都只认屏幕口径（`dfBaseLive` + `dx/dy`），两处不可能再各说各话。
+      -- ★★★1.75.36l 方块目标：漂移 = 「没锚在方块上 / 不在方块位置上」（绝对基准，与客户端版式无关）
+      if t.block == true then
+        if dfBlockDrift(t) then posNeed = true why = "位置" end
+      elseif type(rec.base) == "table" and (rec.dx or rec.dy) then
+        local bcap = rec.cur or rec.base
+        if not dfIsAt(fr, bcap, rec.dx, rec.dy) then posNeed = true why = "位置" end
+      end
+      -- ★★属性（缩放/透明/显隐）**只在非战斗时**检测与写入：这三种写在战斗中被拒绝/忽略的面更大，
+      --   而本轮报障只关于**位置** ⇒ 战斗里把风险面收到最小（位置是「量回自证 + 失败即退让」的）。
+      -- ★1.75.36m 两条**省调用**（快档下这是主要成本，行为一字不变 —— 只是把「判不出结果」的读取去掉）：
+      --   ① 记录里根本没有 scale/alpha/hidden ⇒ 属性那三条判定**不可能成立** ⇒ 一次属性读都不做；
+      --   ② 真要读时传 noSize = true ⇒ 不再白读 GetWidth/GetHeight（守护永远不比宽高）。
+      -- ★1.75.36n 聊天框（dfSizeOK）：**属性连读都不读**（用户：「聊天窗也可以设置坐标守卫兜底,尺寸不不需要守卫」
+      --   —— 它只进**坐标守卫**；客户端的淡出/拖角缩放归客户端，守卫一概不碰）。
+      local needAttrs = (not dfSizeOK(t.name)) and ((rec.scale ~= nil) or (rec.alpha ~= nil) or (rec.hidden ~= nil))
+      if (not posNeed) and (not combat) and needAttrs then
+        -- ★只读**三样**：缩放 / 透明 / 显隐 —— **宽高不读也不比**（见 `dfGuardCustom` 的头注：候选必然 `noSize`，
+        --   宽高根本写不回去，检测它只会「每拍都判漂移、却永远修不好」的空转）。
+        local sc, al, sh = dfReadAttrs(fr, true)
+        if type(rec.scale) == "number" and type(sc) == "number" and math.abs(sc - rec.scale) > 0.005 then attrNeed = true why = "缩放" end
+        if (not attrNeed) and type(rec.alpha) == "number" and type(al) == "number" and math.abs(al - rec.alpha) > 0.005 then attrNeed = true why = "透明" end
+        if (not attrNeed) and rec.hidden == true and sh == true then attrNeed = true why = "隐藏" end
+        if (not attrNeed) and rec.hidden == false and sh == false then attrNeed = true why = "显示" end
+      end
+      -- 本场战斗里这个目标已经「写了但没生效」过 ⇒ 不再 0.3s 一次地空写（出战斗自动解禁）
+      local noWrite = combat and type(DF.guardNoWrite) == "table" and DF.guardNoWrite[t.name] == true
+      if (not noWrite) and (posNeed or attrNeed) then
+        -- ★战斗中传 posOnly = combat（只治位置）；`atPos == false` = 位置**没修到位**（多半受保护、被客户端拒）
+        -- ★战斗中只治位置；★1.75.36n 聊天框**一律 posOnly**（坐标守卫兜底，尺寸/属性不守）
+        local ok, atPos = dfApplyOne(t, combat or dfSizeOK(t.name))
+        local notAt = ok and atPos == false
+        if notAt and combat then
+          -- 战斗中被拒：记名单 + 计数，**不算修复**（不进环、guardFixes 不加）—— 绝不谎报成「已重设」
+          if type(DF.guardNoWrite) ~= "table" then DF.guardNoWrite = {} end
+          DF.guardNoWrite[t.name] = true
+          DF.guardBlocked = dfNum(DF.guardBlocked, 0) + 1
+          dfLog("GUARD 战斗中被拒 " .. tostring(t.name) .. "（本场战斗不再重试）")
+        elseif ok then
+          if notAt then DF.guardBlocked = dfNum(DF.guardBlocked, 0) + 1 end -- 非战斗也没量到位：如实计数
+          n = n + 1
+          DF.guardFixes = dfNum(DF.guardFixes, 0) + 1
+          dfGuardRing(string.format("%s：按存档重设（%s%s%s · 累计第 %d 次）", tostring(t.label or t.name),
+            tostring(why or "?"), combat and " · 战斗中" or "", notAt and " ·未量到位" or "", DF.guardFixes))
+          dfLog("GUARD 重设 " .. tostring(t.name) .. " why=" .. tostring(why) .. (combat and " combat" or ""))
+        end
+      end
+    end
+  end
+  return n, false
+end
+
+dfGuardStop = function(why)
+  DF.guardOn = false
+  DF.guardNoWrite = {} -- ★关掉/重开都从「没被拒过」重新开始（名单只对**当前这一场战斗**有意义）
+  DF.guardFastLeft = 0 -- ★1.75.36m 快窗口一并失效（停下 = **零动作**：不留热档、不留事件）
+  local gf = DF.guardFrame
+  if gf and type(gf.SetScript) == "function" then
+    pcall(gf.SetScript, gf, "OnUpdate", nil)
+    pcall(gf.SetScript, gf, "OnEvent", nil)
+  end
+  if gf and type(gf.UnregisterAllEvents) == "function" then pcall(gf.UnregisterAllEvents, gf) end
+  dfLog("GUARD STOP why=" .. tostring(why or "?"))
+  return true
+end
+
+dfGuardArm = function(why)
+  if type(CreateFrame) ~= "function" then return false end
+  local gf = DF.guardFrame
+  if not gf then
+    gf = CreateFrame("Frame", "EVAL_DF_GUARD", dfHost())
+    DF.guardFrame = gf
+  end
+  DF.guardAcc = 0
+  DF.guardOn = true
+  if type(DF.guardFastLeft) ~= "number" then DF.guardFastLeft = 0 end
+  -- ★1.75.36m 「客户端正准备重排底部条族」的两个时机 ⇒ 顺带开一段快窗口（注册得上才认，注册不上不报错）
+  if type(gf.RegisterEvent) == "function" then
+    if type(gf.SetScript) == "function" then
+      pcall(gf.SetScript, gf, "OnEvent", function()
+        local ev = event
+        if DF.guardOn and (ev == "PLAYER_REGEN_DISABLED" or ev == "UNIT_PET") then
+          EVAL_DF_GUARD_FAST(nil, string.lower(tostring(ev)))
+        end
+      end)
+    end
+    pcall(gf.RegisterEvent, gf, "PLAYER_REGEN_DISABLED")
+    pcall(gf.RegisterEvent, gf, "UNIT_PET")
+  end
+  if type(gf.SetScript) == "function" then
+    pcall(gf.SetScript, gf, "OnUpdate", function()
+      local dt = dfNum(arg1, 0.05)
+      if dt <= 0 then dt = 0.05 end
+      -- ★快窗口倒计时（有界；「常快」档不看它）
+      local left = dfNum(DF.guardFastLeft, 0)
+      if left > 0 then
+        left = left - dt
+        DF.guardFastLeft = (left > 0) and left or 0
+      end
+      DF.guardAcc = dfNum(DF.guardAcc, 0) + dt
+      local fast = (DF.guardFastAlways == true) or (dfNum(DF.guardFastLeft, 0) > 0)
+      if DF.guardAcc < (fast and DF.guardFastPeriod or DF_GUARD_PERIOD) then return end
+      DF.guardAcc = 0
+      -- ★1.75.36m 真机实测每拍耗时（GetTime 进世界才有值；读不到就只计拍数，**不伪造 0**）
+      local t0 = (type(GetTime) == "function") and GetTime() or nil
+      local n, skipped = dfGuardTick()
+      local t1 = (type(GetTime) == "function") and GetTime() or nil
+      if type(t0) == "number" and type(t1) == "number" and t1 >= t0 then
+        DF.perfMs = dfNum(DF.perfMs, 0) + (t1 - t0) * 1000
+        DF.perfN = dfNum(DF.perfN, 0) + 1
+      end
+      if skipped then DF.guardSkipped = dfNum(DF.guardSkipped, 0) + 1 end
+      if n and n > 0 then
+        DF.guardMoved = dfNum(DF.guardMoved, 0) + n
+        EVAL_DF_GUARD_FAST(nil, "fix") -- ★真动手修过 ⇒ 有东西在动 ⇒ 盯紧一小段（不续期，见该函数头注）
+      end
+    end)
+  end
+  dfLog("GUARD ARM why=" .. tostring(why or "?"))
+  return true
+end
+
+-- 读值口 / 操作口（诊断用；与既有的 `EVAL_DF_KEEP_TICK` 同一族：宿主探针与离线 harness 都走它，
+--   ★不在别处复刻映射逻辑）。返回：在跑吗 / 累计重设次数 / 候选数 / 整拍跳过次数 / 累计重设目标数
+function EVAL_DF_GUARD_STATE()
+  return DF.guardOn and true or false, dfNum(DF.guardFixes, 0), table.getn(dfGuardCandidates()),
+    dfNum(DF.guardSkipped, 0), dfNum(DF.guardMoved, 0), dfNum(DF.guardBlocked, 0),
+    dfGuardNoWriteN()
+end
+
+-- 立刻按存档重设一次（**手动补救**用：宠物栏刚被客户端挪走、不想等到下一拍时用）
+function EVAL_DF_GUARD_TICK()
+  local ok, n = pcall(dfGuardTick)
+  if not ok then return 0 end
+  return dfNum(n, 0)
+end
+
+-- 手动武装 / 停下守卫（诊断与「关掉零动作」自证用）
+function EVAL_DF_GUARD_ARM(why) return dfGuardArm(why or "manual") end
+function EVAL_DF_GUARD_OFF(why) return dfGuardStop(why or "manual") end
+-- ★★★1.75.36m 节拍 / 性能读值口 + 操作口（探针 `/eh go 框拖拽守卫` 调它们，**不在探针里复刻映射逻辑**）
+-- ★快窗口 / 常快档的**定义点**在 dfGuardRing 之后（那是内部助手 + 本读值口同一个全局函数，见那里的头注）
+-- 常驻快档开关（**本会话**，不落存档；要 A/B 体感时用）
+function EVAL_DF_GUARD_FAST_TOGGLE()
+  DF.guardFastAlways = not (DF.guardFastAlways == true)
+  return DF.guardFastAlways
+end
+-- 返回：快窗口剩余秒 · 常快档 · 快窗口累计开过几次 · 累计实测拍数 · 累计实测耗时(ms)
+function EVAL_DF_GUARD_FAST_STATE()
+  return dfNum(DF.guardFastLeft, 0), (DF.guardFastAlways == true), dfNum(DF.guardFastArms, 0),
+    dfNum(DF.perfN, 0), dfNum(DF.perfMs, 0)
+end
+-- ★压测：立刻连跑 n 拍（默认 30 ≈ 快档下 1 秒的量）。返回 拍数 / 累计动手次数 / 总耗时ms（读不到时间 = nil）/ 候选数
+function EVAL_DF_GUARD_PERF_RUN(n)
+  local k = tonumber(n) or 30
+  if k < 1 then k = 1 end
+  if k > 300 then k = 300 end
+  local t0 = (type(GetTime) == "function") and GetTime() or nil
+  local wrote = 0
+  for _ = 1, k do
+    local m = EVAL_DF_GUARD_TICK()
+    if type(m) == "number" and m > 0 then wrote = wrote + m end
+  end
+  local t1 = (type(GetTime) == "function") and GetTime() or nil
+  local ms = nil
+  if type(t0) == "number" and type(t1) == "number" and t1 >= t0 then ms = (t1 - t0) * 1000 end
+  local cands = select(3, EVAL_DF_GUARD_STATE())
+  return k, wrote, ms, cands
+end
 -- 安装点（EvalHelp.lua 在 VARIABLES_LOADED 调）：读开关 + 迁移老存档 + 恢复存档 + 武装**有界**复查窗口
 function EVAL_DF_INSTALL()
   if DF.installed then return true end
@@ -2933,6 +3878,11 @@ function EVAL_DF_INSTALL()
   --   ② 开关开着就跟着走一次（有界）—— 组上人那一刻自动恢复存档参数 + 补拖拽柄。
   dfRosterEnsure()
   if DF.on then dfRosterArm("install") end
+  -- ★★★1.75.36i 守卫与「编辑模式」互斥（用户定：「在编辑模式别开启守护.在关闭之后才对有自定义设置的层
+  --   进行守护设置」）⇒ 安装期这一行的方向与 1.75.36f **正好相反**：
+  --     · 总开关**关着 = 守护模式** ⇒ **武装**（只治「有自定义记录、且非聊天框」的层，没漂移不写）；
+  --     · 总开关**开着 = 编辑模式** ⇒ **停**（你正在摆位置时别抢）。
+  if DF.on then pcall(dfGuardStop, "install-edit") else pcall(dfGuardArm, "install-lock") end
   dfLog("INSTALL on=" .. tostring(DF.on) .. " store=" .. tostring(store ~= nil))
   return true
 end
@@ -3909,6 +4859,333 @@ function EVAL_DF_PROBE_ATTR_SHOW()
       say(string.format("    · [%s] 打开后：%s", tostring(row.label), table.concat(row.badOpen, " · ")))
     end
   end
+  return true
+end
+
+-- ============ ★★★1.75.36g 「战斗中底部条组被顶上去」取证探针（**只读** · 行为零变化）============
+-- 用户报障（原话）：「进入攻击状态,会把宠物动作栏顶到上面去,排查下」。
+-- 真机存档已经证实的两条现状（不用猜，直接从 dragFrames 读出来的）：
+--   · PetActionBarFrame 有自定义记录（dx/dy 都在）⇒ 它**是**属性守卫的候选，理论上该被治；
+--   · 它的锚点写的是 TOPLEFT ← MainMenuBar / BOTTOMLEFT, 36, 97（基准屏位 371.8, 70.7）
+--     ⇒ **宠物条的位置挂在主动作条上**：客户端只要在战斗中重排底部条组，它就会跟着走。
+-- ── 这个探针要回答三个问题（少一个都定不了修法）：
+--   ① 到底是谁动了（宠物条自己 / 主动作条 / 额外动作条 BonusActionBarFrame）；
+--   ② 动到哪（屏幕矩形 + 锚点四元组 + 父级 + 帧层）；
+--   ③ 什么时候动（进战斗那一拍 / 战斗中若干拍 / 出战斗）—— 每 0.25s 一拍，**只在真变了的那一拍落一行**。
+-- ── 只读取证：IsShown/GetWidth/GetHeight/GetScale/GetAlpha/GetLeft/GetBottom/GetPoint/GetNumPoints/
+--   GetParent/GetFrameLevel/IsProtected —— 写接口一个都不碰。
+--   战斗进出用 PLAYER_REGEN_DISABLED / PLAYER_REGEN_ENABLED：★**注册得上才认**（pcall 结果如实落档），
+--   注册不上也不影响结论 —— 变化检测**不依赖事件名**（这是本项目「事件名不许猜」的落地做法）。
+-- ── 用户侧用法：「/eh go 战斗探针」武装 180 秒 → 进战斗打两下 → 出战斗 → /reload → 读存档
+--   EVAL_HELP_CONFIG.dragCombat（**有界环 160 行**：这是给 AI 取证用的那一份）。
+local DF_CBT_SECS = 180
+local DF_CBT_PERIOD = 0.25
+local DF_CBT_RING = 160     -- 有界环：头 + 基线 + 变更 + 进出战斗 + 尾
+local DF_CBT_CHANGES = 60   -- 变更行上限（防刷屏、防把存档灌大；超了如实记「丢了几条」）
+local DF_CBT_SHOW_TAIL = 20 -- 结束/复读时上屏的行数（完整那份在存档里）
+local DF_CBT_EVENTS = { "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED" }
+-- 看的帧 = 宠物条 + 它的锚点链 + 四个动作条 + 额外动作条
+--   （BonusActionBarFrame 这个名字有本地证据：tools/LayerFix.lua 的真机父级清单里就有它）
+local DF_CBT_WATCH = {
+  { "PetActionBarFrame", "宠物动作条" },
+  { "MainMenuBar", "主动作条" },
+  { "MainMenuExpBar", "经验条" },
+  { "BonusActionBarFrame", "额外动作条" },
+  { "ActionButton1", "主动作条第1格" },
+  { "MultiBarBottomLeft", "动作条1" },
+  { "MultiBarBottomRight", "动作条2" },
+  { "MultiBarRight", "动作条3" },
+  { "MultiBarLeft", "动作条4" },
+}
+
+local function dfCbtParent(fr)
+  if type(fr.GetParent) ~= "function" then return "?" end
+  local ok, p = pcall(fr.GetParent, fr)
+  if not ok then return "读不到" end
+  if type(p) == "string" then return p end
+  if p and type(p.GetName) == "function" then
+    local o2, nm = pcall(p.GetName, p)
+    if o2 and type(nm) == "string" and nm ~= "" then return nm end
+  end
+  return "匿名"
+end
+
+local function dfCbtProt(fr)
+  if type(fr.IsProtected) ~= "function" then return "无此API" end
+  local ok, v = pcall(fr.IsProtected, fr)
+  if not ok then return "读不到" end
+  return v and "受保护" or "可动"
+end
+
+local function dfCbtCap(fr)
+  local cap = dfCapture(fr)
+  if type(cap) ~= "table" then return "读不到" end
+  local p = {}
+  for i = 1, table.getn(cap) do
+    local a = cap[i]
+    if type(a) == "table" then
+      table.insert(p, string.format("%s<-%s/%s,%.0f,%.0f", tostring(a[1]), tostring(a[2] or "父级"),
+        tostring(a[3]), dfNum(a[4], 0), dfNum(a[5], 0)))
+    end
+  end
+  if table.getn(p) == 0 then return "无锚点" end
+  return table.concat(p, " + ")
+end
+
+local function dfCbtRead(fr)
+  if not fr then return nil end
+  local g = dfAttrPRead(fr, true)
+  if type(g) ~= "table" then g = {} end
+  g.parent = dfCbtParent(fr)
+  g.prot = dfCbtProt(fr)
+  g.cap = dfCbtCap(fr)
+  g.level = dfAttrPNum(fr, "GetFrameLevel")
+  return g
+end
+
+local function dfCbtGeom(g)
+  if type(g) ~= "table" then return "读不到" end
+  local l, b, w, h = g.left, g.bottom, g.w, g.h
+  return string.format("屏位=%s,%s 尺寸=%sx%s 缩放=%s 透明=%s 显示=%s",
+    l and string.format("%.0f", l) or "?", b and string.format("%.0f", b) or "?",
+    w and string.format("%.0f", w) or "?", h and string.format("%.0f", h) or "?",
+    tostring(g.scale or "?"), tostring(g.alpha or "?"), tostring(g.shown))
+end
+
+local function dfCbtRectOf(name)
+  local fr = dfFrameOf(name)
+  if not fr then return name .. "=不在" end
+  local l, b = dfMeasure(fr)
+  if not l then return name .. "=读不到" end
+  return string.format("%s=%.0f,%.0f", name, l, b or 0)
+end
+
+local function dfCbtSummary()
+  return dfCbtRectOf("PetActionBarFrame") .. " · " .. dfCbtRectOf("MainMenuBar") .. " · "
+    .. dfCbtRectOf("BonusActionBarFrame")
+end
+
+-- 两次采样之间**真的变了**的项（nil ↔ 数字 也算变化，如实报）
+local function dfCbtDiff(a, b)
+  if type(a) ~= "table" or type(b) ~= "table" then return nil end
+  local p = {}
+  if a.left ~= b.left or a.bottom ~= b.bottom then
+    local dx = (tonumber(b.left) or 0) - (tonumber(a.left) or 0)
+    local dy = (tonumber(b.bottom) or 0) - (tonumber(a.bottom) or 0)
+    table.insert(p, string.format("位置 %.0f,%.0f -> %.0f,%.0f（Δ%.0f,%.0f）",
+      tonumber(a.left) or -1, tonumber(a.bottom) or -1, tonumber(b.left) or -1, tonumber(b.bottom) or -1, dx, dy))
+  end
+  if a.parent ~= b.parent then table.insert(p, "父级 " .. tostring(a.parent) .. " -> " .. tostring(b.parent)) end
+  if a.cap ~= b.cap then table.insert(p, "锚点 " .. tostring(a.cap) .. " -> " .. tostring(b.cap)) end
+  if a.shown ~= b.shown then table.insert(p, "显示 " .. tostring(a.shown) .. " -> " .. tostring(b.shown)) end
+  if a.scale ~= b.scale then table.insert(p, "缩放 " .. tostring(a.scale) .. " -> " .. tostring(b.scale)) end
+  if a.alpha ~= b.alpha then table.insert(p, "透明 " .. tostring(a.alpha) .. " -> " .. tostring(b.alpha)) end
+  if a.level ~= b.level then table.insert(p, "帧层 " .. tostring(a.level) .. " -> " .. tostring(b.level)) end
+  if table.getn(p) == 0 then return nil end
+  return table.concat(p, " · ")
+end
+
+local function dfCbtEvStr(P)
+  local p = {}
+  if type(P) ~= "table" or type(P.ev) ~= "table" then return "无" end
+  for i = 1, table.getn(DF_CBT_EVENTS) do
+    local ev = DF_CBT_EVENTS[i]
+    local v = P.ev[ev]
+    local s = "未尝试"
+    if v == true then s = "已注册" elseif v == false then s = "注册失败" end
+    table.insert(p, ev .. "=" .. s)
+  end
+  if P.ev.note then table.insert(p, tostring(P.ev.note)) end
+  return table.concat(p, " · ")
+end
+
+-- 落环（有界）+ 可选上屏。★上屏走**总闸门**（cfg.log.on），落档不受闸门影响（AI 取证永远拿得到）
+local function dfCbtLine(P, line, loud)
+  if type(P) ~= "table" or type(P.ring) ~= "table" then return end
+  table.insert(P.ring, line)
+  while table.getn(P.ring) > DF_CBT_RING do table.remove(P.ring, 1) end
+  -- ★★★**边跑边落档**（1.75.36g 真机第一次就白跑了一趟的教训）：环原本只在**结束**那一刻才写进存档，
+  --   而用户很可能跑到一半就 `/reload`（或 180s 窗口没走完就退出）⇒ 内存一丢，存档里**一条都没有**、
+  --   AI 侧取证直接断链。现在每落一行就把同一个表引用同步给 SavedVariables（零拷贝、零额外成本）。
+  local cfg = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(cfg) == "table" then cfg.dragCombat = P.ring end
+  if loud then say(line) end
+end
+
+local function dfCbtStep(dt)
+  local P = DF.cbtProbe
+  if not P or P.on ~= true then return false end
+  local d = tonumber(dt)
+  if not d or d <= 0 then d = DF_CBT_PERIOD end
+  P.elapsed = P.elapsed + d
+  P.periods = P.periods + 1
+  local combat = dfInCombat()
+  if combat ~= P.combat then
+    P.combat = combat
+    dfCbtLine(P, string.format("== %s == t=%.1fs · %s", combat and "★进战斗" or "★出战斗", P.elapsed,
+      dfCbtSummary()), true)
+  end
+  for i = 1, table.getn(DF_CBT_WATCH) do
+    local w = DF_CBT_WATCH[i]
+    local fr = dfFrameOf(w[1])
+    if fr then
+      local now = dfCbtRead(fr)
+      local prev = P.tgt[w[1]]
+      P.tgt[w[1]] = now
+      if type(prev) == "table" and type(now) == "table" then
+        local line = dfCbtDiff(prev, now)
+        if line then
+          if P.changes >= DF_CBT_CHANGES then
+            P.drop = dfNum(P.drop, 0) + 1 -- ★如实记「丢了几条」，不假装全都记下了
+          else
+            P.changes = P.changes + 1
+            dfCbtLine(P, string.format("%s(%s) %s%s", w[2], w[1], line, combat and " · 战斗中" or ""), true)
+          end
+        end
+      end
+    end
+  end
+  return true
+end
+
+local dfCbtStop -- 前置声明（OnUpdate 里要用它；Lua local 的作用域从声明之后开始）
+local function dfCbtOnUpdate()
+  local P = DF.cbtProbe
+  if not P or P.on ~= true then return end
+  local d = dfNum(arg1, DF_CBT_PERIOD) -- ★零形参回调：dt 只认全局 arg1
+  if d <= 0 then d = DF_CBT_PERIOD end
+  P.acc = dfNum(P.acc, 0) + d
+  if P.acc < DF_CBT_PERIOD then return end
+  local step = P.acc
+  P.acc = 0
+  -- ★OnUpdate 里抛错会每帧刷屏 ⇒ 立刻停 + 错误原文落档（三态纪律，同开窗探针）
+  local ok, err = pcall(dfCbtStep, step)
+  if not ok then
+    P.err = tostring(err)
+    dfCbtStop("error")
+    say("|cffff6060战斗探针出错已停止|r：" .. tostring(err))
+    return
+  end
+  if P.elapsed >= DF_CBT_SECS then dfCbtStop("timeout") end
+end
+
+-- 落档 + 播报（结束/出错/手动停 都走这里：**单一出口**）
+local function dfCbtWrite(why)
+  local P = DF.cbtProbe
+  if not P then return 0 end
+  P.on = false
+  if P.frame and type(P.frame.SetScript) == "function" then pcall(P.frame.SetScript, P.frame, "OnUpdate", nil) end
+  P.why = tostring(why or "?")
+  dfCbtLine(P, string.format("== 战斗探针结束（%s）== 采样 %d 拍 / %.1f 秒 · 变更 %d 条 · 超限丢弃 %d 条 · 事件：%s",
+    P.why, P.periods, P.elapsed, P.changes, dfNum(P.drop, 0), dfCbtEvStr(P)))
+  local cfg = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(cfg) == "table" then cfg.dragCombat = P.ring end -- ★有界环直接落档（/reload 后 AI 可读）
+  local n = table.getn(P.ring)
+  say(string.format("战斗探针：结束（%s）· 采样 %d 拍 / %.1f 秒 · 变更 %d 条（完整 %d 行已落存档 EVAL_HELP_CONFIG.dragCombat）",
+    P.why, P.periods, P.elapsed, P.changes, n))
+  local from = n - DF_CBT_SHOW_TAIL + 1
+  if from < 1 then from = 1 end
+  for i = from, n do say("  " .. tostring(P.ring[i])) end
+  return n
+end
+dfCbtStop = dfCbtWrite
+
+-- ============ 对外入口（用户命令走它们）============
+function EVAL_DF_COMBAT_PROBE()
+  if type(CreateFrame) ~= "function" then
+    say("战斗探针：本环境不能建帧（CreateFrame 不可用）")
+    return false
+  end
+  local old = DF.cbtProbe
+  if type(old) == "table" and old.on == true then
+    say("战斗探针：已经在跑了（先 「/eh go 战斗探针 停」 收工，或等它自己到点）")
+    return false
+  end
+  local P = {}
+  DF.cbtProbe = P
+  P.on, P.elapsed, P.periods, P.acc, P.changes = true, 0, 0, 0, 0
+  P.armedAt = (type(GetTime) == "function") and GetTime() or nil
+  P.ring, P.tgt, P.ev = {}, {}, {}
+  P.combat = dfInCombat()
+  dfCbtLine(P, string.format("== 战斗中底部条组探针 == 只读取证 · 每 %.2fs 一拍 · %d 秒到点自停 · 起始：%s",
+    DF_CBT_PERIOD, DF_CBT_SECS, P.combat and "已在战斗中" or "不在战斗"))
+  for i = 1, table.getn(DF_CBT_WATCH) do
+    local w = DF_CBT_WATCH[i]
+    local fr = dfFrameOf(w[1])
+    if fr then
+      local g = dfCbtRead(fr)
+      P.tgt[w[1]] = g
+      -- ★宠物条那一行**上屏**（它就是报障主角：父级/帧层/受保护三态/锚点一眼可看）；其余只进环
+      dfCbtLine(P, string.format("基线 %s(%s) %s · 父级=%s · 帧层=%s · %s · 锚点 %s", w[2], w[1],
+        dfCbtGeom(g), tostring(g.parent), tostring(g.level), tostring(g.prot), tostring(g.cap)),
+        w[1] == "PetActionBarFrame")
+    else
+      dfCbtLine(P, string.format("基线 %s(%s) **不在**（本客户端没有这个名字 / 属惰加载）", w[2], w[1]))
+    end
+  end
+  local f = P.frame
+  if not f then
+    f = CreateFrame("Frame", "EVAL_DF_COMBAT", dfHost())
+    P.frame = f
+  end
+  if type(f.SetScript) == "function" then
+    pcall(f.SetScript, f, "OnUpdate", dfCbtOnUpdate)
+  end
+  if type(f.RegisterEvent) == "function" then
+    for i = 1, table.getn(DF_CBT_EVENTS) do
+      local name = DF_CBT_EVENTS[i]
+      local ok = pcall(f.RegisterEvent, f, name)
+      P.ev[name] = ok and true or false -- ★注册不上如实记 false（事件名在本客户端成不成立，这就是证据）
+    end
+    if type(f.SetScript) == "function" then
+      pcall(f.SetScript, f, "OnEvent", function()
+        local P2 = DF.cbtProbe
+        if not P2 or P2.on ~= true then return end
+        dfCbtLine(P2, string.format("（事件 %s @ t=%.1fs）%s", tostring(arg1 or "?"), P2.elapsed, dfCbtSummary()), true)
+      end)
+    end
+  else
+    P.ev.note = "该帧不支持 RegisterEvent（只靠变化检测，结论不受影响）"
+  end
+  say(string.format("战斗探针：已武装 %d 秒（每 %.2fs 只读采一拍，**只记真的变了的拍**）· 事件 %s",
+    DF_CBT_SECS, DF_CBT_PERIOD, dfCbtEvStr(P)))
+  say("  现在去进战斗打两下再出战斗；「/eh go 战斗探针 看」可复读、「停」提前收工（**边跑边落档**，中途 /reload 也留得住）")
+  -- ★总开关关着时**必须点明**（真机第一次报障就是它）：探针只读、照样能取证，但「自动回位」那半边不会工作。
+  local master = (type(EVAL_DF_ENABLED) == "function") and (EVAL_DF_ENABLED() and true or false) or nil
+  if master == true then
+    say("  ★提醒：现在是**编辑模式**（总开关开着）⇒ 本探针照常取证（只读），但**位置不会自动回位**"
+      .. "（这正是你要的：编辑时不跟你抢）；摆完把开关关掉 ＝ 守护模式，那时才会自动回位。")
+  end
+  return true
+end
+
+-- 立刻采一拍（命令子命令「采样」用；harness 也走它 —— **不在别处复刻采样逻辑**）
+function EVAL_DF_COMBAT_PROBE_TICK(dt)
+  local P = DF.cbtProbe
+  if not P or P.on ~= true then return 0 end
+  local ok = pcall(dfCbtStep, tonumber(dt) or DF_CBT_PERIOD)
+  return ok and 1 or 0
+end
+
+function EVAL_DF_COMBAT_PROBE_STOP(why) return dfCbtStop(why or "manual") end
+
+-- 复读上次结果（不重新武装）
+function EVAL_DF_COMBAT_PROBE_SHOW()
+  local P = DF.cbtProbe
+  local ring = P and P.ring or nil
+  if type(ring) ~= "table" or table.getn(ring) == 0 then
+    local cfg = rawget(_G, "EVAL_HELP_CONFIG")
+    ring = (type(cfg) == "table") and cfg.dragCombat or nil
+  end
+  if type(ring) ~= "table" or table.getn(ring) == 0 then
+    say("战斗探针：还没有结果（先 「/eh go 战斗探针」，结束后会自动落档）")
+    return false
+  end
+  local n = table.getn(ring)
+  say(string.format("战斗探针结果（共 %d 行，列最近 %d 行）：", n, DF_CBT_SHOW_TAIL))
+  local from = n - DF_CBT_SHOW_TAIL + 1
+  if from < 1 then from = 1 end
+  for i = from, n do say("  " .. tostring(ring[i])) end
   return true
 end
 

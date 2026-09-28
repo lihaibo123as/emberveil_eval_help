@@ -31,15 +31,6 @@
 --   1.27.0: 光环类条件下拉追加实时项（◆当前目标debuff/○当前自身buff，GameTooltip SetUnitDebuff/SetPlayerBuff 读名）；
 --           名称→纹理即时学习持久化 cfg.war.debuffTex，texOf 学习表回退——非动作条光环也能做 有/无debuff/buff 比对
 --
--- 参考 OneJudge 开发流程的关键约定：
---   1) 目录规则：Interface/AddOns/EvalHelp/EvalHelp.toc（文件夹名 == toc 基名）
---   2) 插件暴露全局函数，一键宏正文就一行：/run EVAL_HELP()
---   3) 本客户端判断函数返回 true/false/nil（不是老 1.12 的 1/nil），必须宽松真值判断，
---      旧写法 UnitAffectingCombat("player") == 1 在 true 面前永远判假！
---   4) 配置用 SavedVariables（EVAL_HELP_CONFIG），要等 VARIABLES_LOADED 事件后才读。
---   5) 聊天输出用 DEFAULT_CHAT_FRAME:AddMessage；日志走 SavedVariables 环形缓冲（见下）。
---   6) 本客户端没有 /startattack、/castsequence；插件不能调 Protected 函数
---      （CastSpellByName 等），施法走 UseAction(动作条格子)。
 --
 -- 用法（/eh help 随时查看）：
 --   一键宏：游戏内新建宏，正文一行  /run EVAL_GO()   拖到按键上连按（全职业通用框架）
@@ -829,6 +820,18 @@ local LOAD_RESIDUE_KEYS = {
   --   共享 100 环又会被 [DS] 冲掉 ⇒ 必须自带专属落盘（同 selProbe/mbProbe/meleeProbe 的教训）。
   --   ★开关（一键宏「自动攻击」）关着时**一个字节都不写**，所以它不会给普通玩家留残渣。
   "atkProbe",
+  -- ★1.75.36d 图层拖拽**逐目标探针**的专属读数（环上限 80 = 至少一份完整报告，tools/DragFrames.lua 的 DFP_MAX）：
+  --   用户报障「头像/其他动作条的缩放位置无法生效」——「哪一层没柄、哪一层记录里根本没写进去」
+  --   只能真机读，而聊天框读数（say）不落日志环 ⇒ 必须自带专属落盘（同 lcProbe/selProbe 的教训）。
+  "dfProbe",
+  -- ★1.75.36f 图层拖拽**属性设置守卫**的取证环（最近 40 行，tools/DragFrames.lua 的 DF_GUARD_RING）：
+  --   用户报障「宠物栏设置好之后、拾取物品会被还原位置」⇒ 守卫每 0.3s 只读探测、**没漂移不写**，
+  --   只有真动手重设的那一拍才记一行（不刷屏）；它同时也是「谁在什么时候把它挪走」的取证。
+  "dfGuard",
+  -- ★★★1.75.36g 图层拖拽**战斗中底部条组**取证环（最近 160 行，tools/DragFrames.lua 的 DF_CBT_RING）：
+  --   用户报障「进入攻击状态会把宠物动作栏顶到上面去」⇒ 只读探针每 0.25s 采一拍、**只在真的变了的那一拍**记一行
+  --   （矩形/锚点/父级/帧层/显隐），并记战斗进出。原话只进聊天 = AI 读存档时取证断链（老教训）⇒ 必须专属落盘。
+  "dragCombat",
 }
 
 function EVAL_LOAD_RESIDUE_KEYS() return LOAD_RESIDUE_KEYS end

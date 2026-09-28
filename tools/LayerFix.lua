@@ -26,13 +26,21 @@
 --   key    唯一英文键 = **存档键**（真值 = `EVAL_HELP_CONFIG.layerFix.fix[key] = true`）。
 --          ★绝不用序号或显示名当键：加条目 / 换语言都会让老存档错位（本项目「按序号做键」的老坑）。
 --   group  下拉分组号（同 EVAL_DF_PICK_MENU：分组标题行走 locked ⇒ 点不到，keys 留空 ⇒ 回调天然跳过）。
---   kind   处理类型（决定用哪个执行器）：现在只有 `"hideTex"` = **隐藏**层内挑出来的纹理（可还原）。
+--   kind   处理类型（决定用哪个执行器）：
+--            `"hideTex"` = **隐藏**层内挑出来的纹理（可还原，用户 1.74.34 的「动作条狮鹫」）；
+--            `"hideObj"` = 直接隐藏**具名对象**（1.75.36 新增，「主动作条背景」用它）。
 --   layer  目标层 `{ cands = { "帧名", … } }`：本客户端 UI 编译在 pak 里，帧名只能现场探
 --          ⇒ 与图层拖拽同口径（按候选顺序取第一个存在的帧；一个都不在 = **如实缺席**：
 --            这一次一个对象都不动，也绝不换一个「看起来像」的层动手）。
 --   pick   从层里挑哪些对象（二选一）：
 --            `{ last = N }`      = 按 `GetRegions()` 顺序取**最后 N 个纹理**（用户 1.74.34 的口径）
 --            `{ path = "子串" }` = 按贴图路径（小写包含）匹配（**更稳**；拿到真机路径后再启用）
+--   objs   （仅 `hideObj`）具名对象清单 `{ { cands = { "主名", "备选名" }, parent = { "真实父级", … } }, … }`；
+--          ★字段名是 `parent`（`in` 是 Lua 关键字，不能当键）；
+--          解析**三级**：① `rawget(_G, 名字)`；② `parent`（真机图层树里看到的**真实父级**，浅扫深度 1）；
+--          ③ `containers`（通用兜底，深扫深度 2）—— 一律按 `GetName()` 比对（区域 + 子件都算）。
+--          ★一个都找不到 ⇒ **如实缺席**（这一次一个对象都不动）；**部分命中**要把没找到的名字一并报出来。
+--   containers （仅 `hideObj`）兜底容器名表（按名字找时的搜索起点）。
 --   label / tip  取词函数，**必须写成 `function() return L("键") end`**：
 --          ① 键的字面量出现在源码里 ⇒ `LANG KEY CHECK` 看得见（否则这条键缺语言包也没人管）；
 --          ② 每次现取 ⇒ 换语言后菜单立刻是新语言（写成加载期字符串就会绑死当时那一种语言）。
@@ -92,6 +100,36 @@ local LF_FIXES = {
     pick = { last = 2 },
     label = function() return L("TB_FIX_GRYPHON") end,
     tip = function() return L("TB_FIX_GRYPHON_TIP") end,
+  },
+  {
+    -- ★★★1.75.36（用户 2026-09-28 截图：「将主动作条以上这几个层加入 工具箱->图层隐藏->主动作条背景 设置」）：
+    --   名字**逐字取自真机图层树**（用户第一张截图那几行）—— 具名件按名字找，不靠父子链、也不靠序号。
+    --   ★范围口径（如实写进 tip，绝不多藏）= **美术背景**这一类：条身 4 片 + 翻页动画片 + 额外动作条背景 2 片；
+    --     经验条（MainMenuExpBar / MainMenuXPBarTexture0~5 / ExhaustionLevelFillBar）· 满级条
+    --     （MainMenuMaxLevelBar0~3）· 页码（MainMenuBarPageNumber）**故意不含**：那是「信息」不是「背景」，
+    --     藏了会让人以为插件坏了（要并进来只加几行 objs，其余代码一行不用改）。
+    --   ★两头端盖（MainMenuBarLeftEndCap / RightEndCap = 狮鹫）归上面那条 `gryphon`，**不在这里重复**。
+    key = "barBg", group = 1, kind = "hideObj",
+    -- ★父级**逐字取自用户第二张真机图层树截图**（MainMenuBar 那棵树）：
+    --   MainMenuBar → MainMenuBarArtFrame → [MainMenuBarTexture0..3]
+    --   MainMenuBar → MainMenuBarOverlayFrame → [MainMenuBarAnimFrame]（该帧在树里是 ▶ 折叠的）
+    --   额外动作条：BonusActionBarFrame → [BonusActionBarTexture0/1]
+    objs = {
+      --   ★字段名用 `parent`（**不能写 `in`**：`in` 是 Lua 关键字，`{ in = … }` 是语法错 —— 1.75.36 首次踩到）
+      { cands = { "MainMenuBarTexture0" }, parent = { "MainMenuBarArtFrame", "MainMenuBar" } },
+      { cands = { "MainMenuBarTexture1" }, parent = { "MainMenuBarArtFrame", "MainMenuBar" } },
+      { cands = { "MainMenuBarTexture2" }, parent = { "MainMenuBarArtFrame", "MainMenuBar" } },
+      { cands = { "MainMenuBarTexture3" }, parent = { "MainMenuBarArtFrame", "MainMenuBar" } },
+      { cands = { "MainMenuBarAnimFrame" }, parent = { "MainMenuBarOverlayFrame", "MainMenuBar" } },
+      { cands = { "BonusActionBarTexture0" }, parent = { "BonusActionBarFrame" } },
+      { cands = { "BonusActionBarTexture1" }, parent = { "BonusActionBarFrame" } },
+    },
+    -- 通用兜底容器（`in` 没命中才用）；顺序 = 从最可能到最不可能
+    containers = { "MainMenuBarArtFrame", "MainMenuBar", "MainMenuBarOverlayFrame",
+      "MainMenuBarExpBar", "MainMenuBarMaxLevelBar", "BonusActionBarFrame", "UIParent" },
+    layerLabel = "具名背景层",
+    label = function() return L("TB_FIX_BARBG") end,
+    tip = function() return L("TB_FIX_BARBG_TIP") end,
   },
 }
 -- 分组标题（下拉里那几行「—— xxx ——」；没有的分组号 → 显示 "?"，不静默）
@@ -253,9 +291,88 @@ local function lfTextures(layer)
   return out, nil
 end
 
--- 从层里挑出要处理的对象（kind 分派）——返回 对象表, 失败原因
+-- ===== 具名对象解析（kind = "hideObj" 用）=====
+-- 在 obj 的 [区域 + 子件] 里按 **GetName()** 找 nm（带深度上限 ⇒ 绝不做无界遍历）
+local function lfFindByName(obj, nm, depth)
+  if not lfFrameUsable(obj) then return nil end
+  local kids = {}
+  local function collect(m)
+    if type(m) ~= "function" then return end
+    local rr = { pcall(m, obj) }
+    if not rr[1] then return end
+    for i = 2, table.getn(rr) do if rr[i] then table.insert(kids, rr[i]) end end
+  end
+  collect(obj.GetRegions)
+  collect(obj.GetChildren)
+  for i = 1, table.getn(kids) do
+    local k = kids[i]
+    if lfFrameUsable(k) and type(k.GetName) == "function" then
+      local ok, kn = pcall(k.GetName, k)
+      if ok and kn == nm then return k end
+    end
+  end
+  local d = lfNum(depth, 0)
+  if d > 0 then
+    for i = 1, table.getn(kids) do
+      local f2 = lfFindByName(kids[i], nm, d - 1)
+      if f2 then return f2 end
+    end
+  end
+  return nil
+end
+
+-- 具名对象解析（**三级**，从最确定到最兜底）：
+--   ① 全局名 `rawget(_G, 名字)`；
+--   ② `in` = 真机图层树里看到的**真实父级**（浅扫，深度 1 —— 名字就在它自己的区域/子件里）；
+--   ③ `containers` = 通用兜底容器（深扫，深度 2）。
+--   ★一个都不命中 ⇒ 交给调用方如实缺席（这里不猜、也不换一个名字相近的对象）。
+local function lfNamedScan(list, nm, depth)
+  if type(list) ~= "table" then return nil end
+  for i = 1, table.getn(list) do
+    local root = lfFrameOf(list[i])
+    if root and lfFrameUsable(root) then
+      local hit = lfFindByName(root, nm, depth)
+      if hit then return hit end
+    end
+  end
+  return nil
+end
+local function lfNamedHit(inList, containers, nm, depth)
+  local g = lfFrameOf(nm)
+  if g and lfFrameUsable(g) then return g end
+  return lfNamedScan(inList, nm, 1) or lfNamedScan(containers, nm, depth)
+end
+
+-- 播报用名词（两种 kind 口径不同：不该把「背景层」叫成「纹理」）
+local function lfNoun(fix)
+  return ((type(fix) == "table") and fix.kind == "hideObj") and "背景层" or "纹理"
+end
+
+-- 从层里挑出要处理的对象（kind 分派）——返回 对象表, 失败原因, 没找到的名字表
 local function lfPickObjs(fix, layer)
   local kind = tostring((type(fix) == "table") and fix.kind or "")
+  -- ★1.75.36：hideObj = 直接按**名字**隐藏（不需要层；名字来自真机图层树）
+  if kind == "hideObj" then
+    local list = (type(fix.objs) == "table") and fix.objs or nil
+    if not list then return nil, "这条处理没写 objs（具名对象清单）" end
+    local out, miss = {}, {}
+    for i = 1, table.getn(list) do
+      local spec = list[i]
+      local cands = (type(spec) == "table") and spec.cands or { spec }
+      local inList = (type(spec) == "table") and spec.parent or nil -- ★真实父级（可选；键名是 parent，不是 in）
+      local hit = nil
+      for j = 1, table.getn(cands) do
+        hit = lfNamedHit(inList, fix.containers, cands[j], 2)
+        if hit then break end
+      end
+      if hit then table.insert(out, hit)
+      else table.insert(miss, tostring(cands[1])) end
+    end
+    if table.getn(out) == 0 then
+      return nil, "具名对象一个都没找到（" .. table.concat(miss, " · ") .. "）"
+    end
+    return out, nil, miss -- ★部分命中：miss 跟着播报一起报出去，绝不静默少藏
+  end
   if kind ~= "hideTex" then return nil, "未知的处理类型：" .. kind end
   local tex, why = lfTextures(layer)
   if not tex then return nil, why end
@@ -290,10 +407,14 @@ local function lfMsg(fix, st)
   local n = table.getn(st.objs)
   local p = {}
   for i = 1, n do p[i] = tostring(st.paths[i] or "（读不到贴图路径）") end
-  return string.format("图层隐藏[%s]：已隐藏 %d 个纹理（层=%s%s）｜贴图：%s",
-    lfFixWord(fix, "label"), n, tostring(st.layer),
+  local miss = ""
+  if type(st.miss) == "table" and table.getn(st.miss) > 0 then
+    miss = "；**没找到**：" .. table.concat(st.miss, " · ")
+  end
+  return string.format("图层隐藏[%s]：已隐藏 %d 个%s（层=%s%s）｜贴图：%s%s",
+    lfFixWord(fix, "label"), n, lfNoun(fix), tostring(st.layer),
     (lfNum(st.already, 0) > 0) and ("，其中 " .. tostring(st.already) .. " 个本来就是隐藏的") or "",
-    table.concat(p, " · "))
+    table.concat(p, " · "), miss)
 end
 
 -- 应用一条（幂等：已经生效过就直接返回，**不重复读原状** —— 那会把「我们自己藏的」记成原始值）
@@ -301,11 +422,16 @@ end
 local function lfApplyOne(fix, quiet)
   if type(fix) ~= "table" then return false, "no-fix", nil end
   if type(LF.fixState[fix.key]) == "table" then return true, "already", nil end
-  local layer, hit = lfFixLayer(fix)
-  if not layer then return false, "layer-missing", "层不在（候选帧名逐个都没命中）" end
-  local objs, why = lfPickObjs(fix, layer)
+  local kind = tostring(fix.kind or "")
+  local layer, hit = nil, nil
+  if kind ~= "hideObj" then -- ★hideObj 按名字直接找（没有「层」这一步）；别的 kind 仍要求层先命中
+    layer, hit = lfFixLayer(fix)
+    if not layer then return false, "layer-missing", "层不在（候选帧名逐个都没命中）" end
+  end
+  local objs, why, miss = lfPickObjs(fix, layer)
   if not objs then return false, "pick-failed", why end
-  local st = { key = fix.key, layer = hit, objs = objs, orig = {}, paths = {}, already = 0 }
+  local st = { key = fix.key, layer = hit or fix.layerLabel or "具名对象", objs = objs, orig = {}, paths = {},
+    already = 0, miss = miss }
   for i = 1, table.getn(objs) do
     local o = objs[i]
     local sh = nil -- 三态：true / false / nil(读不到)
@@ -320,7 +446,7 @@ local function lfApplyOne(fix, quiet)
   end
   LF.fixState[fix.key] = st
   LF.fixApplied = lfNum(LF.fixApplied, 0) + 1
-  lfLog("apply key=" .. tostring(fix.key) .. " layer=" .. tostring(hit) .. " n=" .. tostring(table.getn(objs)))
+  lfLog("apply key=" .. tostring(fix.key) .. " layer=" .. tostring(st.layer) .. " n=" .. tostring(table.getn(objs)))
   if not quiet then say(lfMsg(fix, st)) end
   return true, "applied", nil
 end
@@ -339,8 +465,8 @@ local function lfResetOne(fix, quiet)
   end
   LF.fixState[fix.key] = nil
   if not quiet then
-    say(string.format("图层隐藏[%s]：已还原 %d 个纹理（层=%s）",
-      lfFixWord(fix, "label"), n, tostring(st.layer)))
+    say(string.format("图层隐藏[%s]：已还原 %d 个%s（层=%s）",
+      lfFixWord(fix, "label"), n, lfNoun(fix), tostring(st.layer)))
   end
   return n
 end
@@ -383,7 +509,7 @@ local function lfStop(why)
     pcall(kf.SetScript, kf, "OnUpdate", nil) -- ★永久停：脚本被摘掉 ⇒ 不再有常驻 tick
   end
   if LF.keepLate > 0 or LF.keepRe > 0 then
-    say(string.format("图层隐藏：启动期复查结束（%s）—— 补生效 %d 条（层晚出现）· 又把 %d 个被显示回来的纹理藏了回去（守护）",
+    say(string.format("图层隐藏：启动期复查结束（%s）—— 补生效 %d 条（层晚出现）· 又把 %d 个被显示回来的对象藏了回去（守护）",
       tostring(LF.keepWhy), LF.keepLate, LF.keepRe))
   end
   lfLog("KEEP STOP why=" .. tostring(LF.keepWhy) .. " runs=" .. tostring(LF.keepRuns) ..
@@ -430,7 +556,7 @@ local function lfTick()
   LF.keepRe = lfNum(LF.keepRe, 0) + reN
   -- ★只在**真的做了事**的时候当场播报一句（这个窗口 5 秒结束即停，不会刷屏；「没做事」也绝不虚报）
   if lateN > 0 or reN > 0 then
-    say(string.format("图层隐藏：启动期复查 —— 补生效 %d 条（层晚出现）· 又把 %d 个被显示回来的纹理藏了回去（守护）",
+    say(string.format("图层隐藏：启动期复查 —— 补生效 %d 条（层晚出现）· 又把 %d 个被显示回来的对象藏了回去（守护）",
       lateN, reN))
   end
   return lateN + reN
@@ -613,7 +739,7 @@ function EVAL_LF_RESET()
     restored = restored + lfResetOne(f, false)
     if lfFixOn(f.key) then lfSet(f.key, false) end
   end
-  say(string.format("图层隐藏：重置完成 —— 还原 %d 个纹理 · 已清空 %d 条处理的勾选（要再启用请点 [设置]）",
+  say(string.format("图层隐藏：重置完成 —— 还原 %d 个对象 · 已清空 %d 条处理的勾选（要再启用请点 [设置]）",
     restored, n))
   return restored
 end

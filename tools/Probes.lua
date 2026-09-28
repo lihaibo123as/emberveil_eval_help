@@ -139,6 +139,152 @@ PR["FRAMES"] = function(msg)
   --   ★英文别名 `go attrprobe` 是新的（`GO ALIAS UNIQUE CHECK` 会守住不被静默顶掉）。
 end
 
+PR["DFT"] = function(msg)
+  -- ★★★1.75.36d 图层拖拽**逐目标**探针（用户：「逐项排查下」）：即时回显 + 只读 + 出错**如实报**（绝不吞）。
+  --   读数落**有界环 `EVAL_HELP_CONFIG.dfProbe`（40 行）**（见 tools/DragFrames.lua 的 EVAL_DF_PROBE_TARGETS）。
+  say("框拖拽探针：命令已收到，逐目标读数（约 0.5 秒，别急）…")
+  if type(EVAL_DF_PROBE_TARGETS) == "function" then
+    local ok, err = pcall(EVAL_DF_PROBE_TARGETS)
+    if not ok then say("|cffff6060框拖拽探针出错|r：" .. tostring(err)) end
+  else
+    say("框拖拽探针：框拖拽模块未载入（tools/DragFrames.lua 没进 .toc？）")
+  end
+end
+
+PR["DFG"] = function(msg)
+  -- ★★★1.75.36f 属性设置守卫（0.3s）的取证 / 操作口。用户报障原话：「宠物栏位置.在设置之后.
+  --   偶然性拾取物品之后会被还原位置.」⇒ 给「有自定义属性的目标」加了 0.3s 一拍的**只读**守卫
+  --   （见 tools/DragFrames.lua 的 dfGuard* 段；聊天框永远排除 —— 它自带拖动/拖角缩放）。
+  --   本命令三个用途：① 看它到底在不在跑、候选几个、重设过几次（状态行）；
+  --   ② 「重设」= 不动等下一拍，**立刻**按存档重设一次（宠物栏刚被客户端挪走时的手动补救）；
+  --   ③ 「开」/「关」= 手动武装 / 停下（诊断用；正式开关仍在工具箱那一行）。
+  --   ★状态一律走 EVAL_DF_GUARD_STATE()（**不在别处复刻映射逻辑**）。
+  say("框拖拽守卫：命令已收到")
+  if type(EVAL_DF_GUARD_STATE) ~= "function" then
+    say("框拖拽守卫：框拖拽模块未载入（tools/DragFrames.lua 没进 .toc？）")
+    return
+  end
+  -- ★★★1.75.36g 真机报障定案（用户：「出战斗也不会回到设置的位置」）：**总开关关着**（`dragFrames.on = false`）
+  --   ⇒ 守卫根本没武装过（`dfGuard` 环里一条都没有就是佐证）⇒ 登录时按存档应用一次之后，客户端在战斗中/
+  --   之后把它挪走，**没有任何人拉回来**。这一行必须显式打出来，否则用户看到的只是含糊的「停着」。
+  local master = (type(EVAL_DF_ENABLED) == "function") and (EVAL_DF_ENABLED() and true or false) or nil
+  if master == true then
+    say("  总开关（工具箱 → 「图层拖拽」）= **开** = **编辑模式** ⇒ 按你的要求**守卫不跑**（正在摆位置时不跟你抢）")
+    say("     摆完把它**关掉** = 进入**守护模式**：那一刻会先按存档应用一次、再武装守卫（只治**有自定义记录**的层）")
+  else
+    say("  总开关（工具箱 → 「图层拖拽」）= **关** = **守护模式** ⇒ 守卫**应当自动武装**（只治**有自定义记录**的层；"
+      .. "没有记录的层一个字节都不碰）")
+  end
+  local m = tostring(msg or "")
+  -- ★1.75.36m 快档接口在不在（老版本没有 ⇒ 如实说一句，别静默）
+  local hasFast = (type(EVAL_DF_GUARD_FAST) == "function") and (type(EVAL_DF_GUARD_FAST_STATE) == "function")
+  if string.find(m, "重设", 1, true) ~= nil or string.find(m, "now", 1, true) ~= nil then
+    local n = tonumber(EVAL_DF_GUARD_TICK()) or 0
+    say("框拖拽守卫：立刻按存档重设 —— 本轮动手 " .. tostring(n) ..
+      " 个目标（0 = 没有任何目标漂移，或模块总开关没开）")
+  elseif string.find(m, "常快", 1, true) ~= nil or string.find(m, "always", 1, true) ~= nil then
+    -- ★1.75.36m 常驻 30 帧档（**本会话**，不落存档）⇒ 你自己 A/B 体感 + 用「压测」看数字
+    if not hasFast or type(EVAL_DF_GUARD_FAST_TOGGLE) ~= "function" then
+      say("框拖拽守卫：本版本没有快档接口（模块要 1.75.36m 起）")
+    else
+      local onF = EVAL_DF_GUARD_FAST_TOGGLE()
+      say("框拖拽守卫：常驻快档 = " .. (onF and "**开**（0.033s ≈ 30 帧/秒，一直跑）"
+        or "**关**（回到 0.3s + 事件触发的**有界**快窗口）"))
+      say("  （本会话有效、/reload 后失效；想先看代价就跑一次「压测」）")
+    end
+  elseif string.find(m, "压测", 1, true) ~= nil or string.find(m, "perf", 1, true) ~= nil then
+    -- ★★真机实测（不靠估算）：立刻连跑 N 拍（默认 30 ≈ 快档下 1 秒的量）并报每拍耗时
+    if not hasFast or type(EVAL_DF_GUARD_PERF_RUN) ~= "function" then
+      say("框拖拽守卫：本版本没有压测接口（模块要 1.75.36m 起）")
+    else
+      local kk, wrote, ms, cands = EVAL_DF_GUARD_PERF_RUN(tonumber(string.match(m, "(%d+)")) or 30)
+      say("框拖拽守卫：压测 " .. tostring(kk) .. " 拍（候选 " .. tostring(cands) .. " 个）—— 动手 "
+        .. tostring(wrote) .. " 次（>0 = 确有目标在漂，顺便看看谁在动）")
+      if type(ms) == "number" then
+        local per = ms / ((tonumber(kk) or 0) > 0 and tonumber(kk) or 1)
+        say(string.format("  共 %.2f ms，平均 %.3f ms/拍", ms, per))
+        say(string.format("  折算：常驻 30 帧/秒 ≈ %.1f ms/秒（每 100 秒花 %.2f 秒）；平时 0.3s 一拍 ≈ %.1f ms/秒",
+          per * 30, per * 30 / 10, per / 0.3))
+      else
+        say("  本客户端读不到 GetTime ⇒ 耗时无法量化（功能不受影响）")
+      end
+    end
+  elseif string.find(m, "快", 1, true) ~= nil or string.find(m, "fast", 1, true) ~= nil then
+    -- ★开一段**有界**快窗口（默认 1.5s；`快 5` = 5 秒）
+    if not hasFast then
+      say("框拖拽守卫：本版本没有快档接口（模块要 1.75.36m 起）")
+    else
+      local left = EVAL_DF_GUARD_FAST(tonumber(string.match(m, "(%d+%.?%d*)")), "probe")
+      say(string.format("框拖拽守卫：快窗口已开 —— 剩 %.1f 秒（这段里 0.033s ≈ 30 帧/秒；过窗自动回落 0.3s）",
+        tonumber(left) or 0))
+    end
+  elseif string.find(m, "关", 1, true) ~= nil or string.find(m, "off", 1, true) ~= nil then
+    EVAL_DF_GUARD_OFF("probe")
+    say("框拖拽守卫：已停下（真摘 OnUpdate，不留空转 tick）")
+  elseif string.find(m, "开", 1, true) ~= nil or string.find(m, "arm", 1, true) ~= nil then
+    local ok = EVAL_DF_GUARD_ARM("probe")
+    say("框拖拽守卫：" .. (ok and "已武装（0.3s 一拍 · 每拍只读 · 有漂移才写）" or "武装失败（CreateFrame 不可用）")
+      .. ((ok and master ~= true) and "（**本会话临时**：/reload 后失效 —— 要长期生效请把总开关打开）" or ""))
+  end
+  local on, fixes, cands, skipped, moved, blocked, noWrite = EVAL_DF_GUARD_STATE()
+  say("框拖拽守卫 = " .. (on and "在跑" or "停着") .. "｜候选 " .. tostring(cands) ..
+    " 个（已勾选 ∧ 有能写回的自定义属性；★聊天框只守坐标、不守尺寸/属性）｜累计重设 " .. tostring(fixes) ..
+    " 次｜拖拽中整拍跳过 " .. tostring(skipped) .. " 次｜累计重设目标 " .. tostring(moved) .. " 个")
+  say("  战斗中：位置写被客户端拒 " .. tostring(blocked) .. " 次｜本场战斗已放弃重试的目标 " .. tostring(noWrite) ..
+    " 个（>0 = 这个客户端战斗中不放行写位置；出战斗会自动恢复重试）")
+  -- ★1.75.36m 节拍 + 实测成本（用户问「1s 30帧 · 对性能影响大不」⇒ 这一行必须一眼看出**现在跑多快、花了多少**）
+  if hasFast and type(EVAL_DF_GUARD_FAST_STATE) == "function" then
+    local left, always, arms, pn, pms = EVAL_DF_GUARD_FAST_STATE()
+    local rate = "平时 0.30s 一拍"
+    if always == true then
+      rate = "常驻快档 0.033s（≈30 帧/秒）"
+    elseif tonumber(left) and tonumber(left) > 0 then
+      rate = string.format("快窗口 0.033s（剩 %.1f 秒，过窗自动回落）", tonumber(left))
+    end
+    local perMs = 0
+    if tonumber(pn) and tonumber(pn) > 0 and tonumber(pms) then perMs = tonumber(pms) / tonumber(pn) end
+    say(string.format("  节拍：%s｜快窗口累计开过 %d 次｜实测 %d 拍 共 %.1f ms（平均 %.3f ms/拍 ⇒ 30 帧/秒 ≈ %.1f ms/秒）",
+      rate, tonumber(arms) or 0, tonumber(pn) or 0, tonumber(pms) or 0, perMs, perMs * 30))
+    say("  （想量化代价：`/eh go 框拖拽守卫 压测` 立刻连跑 30 拍；想常驻 30 帧：`常快`；临时加速：`快 [秒]`）")
+  end
+  -- ★★一致性检查（编辑模式 ⇄ 守护模式是一对互斥态，错配必须**当场点明**，不许含糊）
+  if master ~= true and on ~= true then
+    say("  ★异常：现在是**守护模式**（总开关关着）却显示守卫「停着」—— 正常应由关掉开关那一刻自动武装；"
+      .. "请把工具箱那一行**开一次再关一次**，本会话救急可用本命令的「开」。")
+  elseif master == true and on == true then
+    say("  ★注意：现在是**编辑模式**，守卫本不该在跑（多半是手动「开」过）—— 把开关关掉即回到守护模式。")
+  end
+  local t = conf()
+  local ring = t and t.dfGuard
+  if type(ring) == "table" and table.getn(ring) > 0 then
+    say("最近 " .. tostring(table.getn(ring)) .. " 条重设计录（有界环 40 行）：")
+    for i = 1, table.getn(ring) do say("  " .. tostring(ring[i])) end
+  else
+    say("还没有任何重设计录（= 从没漂移过；平时一个写 API 都不发）")
+  end
+end
+
+PR["CBT"] = function(msg)
+  -- ★★★1.75.36g 「战斗中底部条组被顶上去」取证口（用户：「进入攻击状态,会把宠物动作栏顶到上面去,排查下」）。
+  --   只读取证：0.25s 一拍，只在**真的变了**的那一拍落一行（矩形/锚点/父级/帧层/显隐/缩放）。
+  --   读数落**有界环** `EVAL_HELP_CONFIG.dragCombat`（160 行）—— 原话只进聊天 = AI 读存档时取证断链（老教训）。
+  --   子命令：默认=武装 · `停`=提前收工（照旧落档）· `看`=复读上次结果 · `采样`=立刻采一拍。
+  if type(EVAL_DF_COMBAT_PROBE) ~= "function" then
+    say("战斗探针：框拖拽模块未载入（tools/DragFrames.lua 没进 .toc？）")
+    return
+  end
+  local m = tostring(msg or "")
+  if string.find(m, "停", 1, true) ~= nil or string.find(m, "stop", 1, true) ~= nil then
+    EVAL_DF_COMBAT_PROBE_STOP("manual")
+  elseif string.find(m, "看", 1, true) ~= nil or string.find(m, "show", 1, true) ~= nil then
+    EVAL_DF_COMBAT_PROBE_SHOW()
+  elseif string.find(m, "采样", 1, true) ~= nil or string.find(m, "tick", 1, true) ~= nil then
+    say("战斗探针：立刻采一拍 —— 记录 " .. tostring(EVAL_DF_COMBAT_PROBE_TICK()) .. " 拍")
+  else
+    EVAL_DF_COMBAT_PROBE()
+  end
+end
+
 PR["ATTRPROBE"] = function(msg)
     say("开窗探针：命令已收到")
     if type(EVAL_DF_PROBE_ATTR) ~= "function" then

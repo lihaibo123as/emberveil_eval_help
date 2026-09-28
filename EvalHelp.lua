@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.75.35"
+local VERSION = "1.75.37"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -7472,6 +7472,18 @@ if type(SlashCmdList) == "table" then
       prRun("SHPROBE", msg)
     elseif msg == "go 框体探针" or msg == "go frames" or msg == "go 被动层探针" or msg == "go 动作条探针" then
       prRun("FRAMES", msg)
+    elseif msg == "go 框拖拽探针" or msg == "go dftargets" or string.find(msg or "", "^go 框拖拽探针%s") == 1 then
+      -- ★★★1.75.36d 图层拖拽**逐目标**读数（勾选/解析/柄/记录 一行一个目标）⇒ 逐项排查「改了不生效」。
+      --   ★别名 `go dftargets` 是全项目唯一的（工具探针别名不许两家共用，`GO ALIAS UNIQUE CHECK` 那条纪律）。
+      prRun("DFT", msg)
+    elseif msg == "go 框拖拽守卫" or msg == "go dfguard" or string.find(msg or "", "^go 框拖拽守卫%s") == 1 then
+      -- ★★★1.75.36f 属性设置守卫（0.3s）的取证口：`go 框拖拽守卫` 看状态 · 后面跟 `重设` = 立刻按存档
+      --   重设一次 · `开`/`关` = 手动武装/停下。★别名 `go dfguard` 全项目唯一（`GO ALIAS UNIQUE CHECK` 纪律）。
+      prRun("DFG", msg)
+    elseif msg == "go 战斗探针" or msg == "go combatprobe" or string.find(msg or "", "^go 战斗探针%s") == 1 then
+      -- ★★★1.75.36g 「进战斗把宠物动作栏顶上去」的取证口（只读）：默认武装 · `停` · `看` · `采样`。
+      --   ★别名 `go combatprobe` 全项目唯一（`GO ALIAS UNIQUE CHECK` 纪律）。
+      prRun("CBT", msg)
     elseif msg == "go 开窗探针" or msg == "go attrprobe" or string.find(msg or "", "^go 开窗探针%s") == 1 then
       prRun("ATTRPROBE", msg)
     elseif msg == "go 框体图标" or msg == "go frameicons" or string.find(msg or "", "^go 框体图标%s") == 1 then

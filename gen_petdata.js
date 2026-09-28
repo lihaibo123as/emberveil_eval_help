@@ -60,6 +60,79 @@ const FAM = [
 const FAM_ORDER = ['cat', 'raptor', 'bat', 'owl', 'spider', 'windserpent', 'gorilla', 'crab', 'scorpid',
                    'bear', 'boar', 'turtle', 'bird', 'crocolisk', 'hyena', 'tallstrider', 'wolf'];
 
+// ===== 宠物攻速数据（1.75.36）=====
+// ★★口径（Petopia Classic 攻速页明文）：宠物**驯服后保留原生攻速** ⇒ 攻速是「按生物个体」而不是「按家族」；
+//   同一家族横跨多档（猫科 1.0~2.0、熊 2.0~2.5；而迅猛龙/猪/鳄鱼/螃蟹/乌龟/风蛇/猩猩/猫头鹰**全是 2.0**）。
+//   所以本表是**个体表**；家族区间由 552 条个体表现算，绝不手写第二份。
+// 数据源 = doc/猎人宠物攻速数据.lua（中文名已与本机 UnrealQuest 客户端库逐条对账 552/552；等级与本服世界库对账 549/552）。
+//   来源与四条独立印证见该文件表头；它只在仓库里当数据源（不进 .toc、不随插件发布），与 doc/宠物技能数据.lua 同性质。
+const SPEED_SRC = fs.readFileSync('doc/猎人宠物攻速数据.lua', 'utf8').split(/\r?\n/);
+// ★旧译/异名 → 客户端规范名（证据 = PetData 转录的「地区 + 等级」与客户端库逐条对上；全表见 doc/猎人宠物攻速.md §三）
+const SPEED_ALIAS = {
+  '拉克西斯': '纳拉克西斯',       // 暮色森林 27 蜘蛛 = Naraxis（客户端名多一个「纳」）
+  '小海湾蟹': '小海浪蟹',         // 杜隆塔尔 5-6 螃蟹 = Pygmy Surf Crawler
+  '薊熊': '蓟熊',                 // 黑海岸 11-12 熊 = Thistle Bear（繁体「薊」→ 简体「蓟」）
+  '猎行蛛': '小型结网毒蜘蛛',     // 西部荒野 17-18 蜘蛛 = Pygmy Venom Web Spider
+  '血色猎犬': '血色捕猎犬',       // 血色修道院 33-34 = Scarlet Tracking Hound（**1.5**）
+  '天灾蝙蝠': '瘟疫蝙蝠',         // 东瘟疫之地 53-55 = Plaguebat
+  '年幼的斗猪': '斗猪',           // 莫高雷 3-4 = Battleboar
+  '天灾野猪': '瘟疫野猪',         // 东瘟疫之地 60 = Plagued Swine
+  '变异刺喉蛇': '变异刺鞭蛇',     // 哀嚎洞穴 16-17 = Deviate Stinglash
+  '大型雷鹰': '巨型雷鹰',         // 贫瘠之地 23-24 = Greater Thunderhawk
+  '堕落的蝎': '堕落蝎',           // 杜隆塔尔 10-11 = Corrupted Scorpid
+  '巨型天灾蝙蝠': '巨型瘟疫蝙蝠', // 东瘟疫之地 56-58 = Monstrous Plaguebat
+  '幼霜刃豹': '霜刃豹幼崽',       // 冬泉谷 55-56 = Frostsaber Cub（**1.5** —— 这 15 条里唯一不是 2.0 的）
+};
+// ★客户端库确实查无此名（旧译对不上任何 id）⇒ 按「同地区 + 同等级区间候选**逐一查过、全部同档**」定案（表外默认档）。
+//   ★不是猜：阿拉希高地 34-35 / 31-32 的秃鹫（盐湖秃鹫 2.0 · 饥饿的秃鹫 2.0 · 游荡的秃鹫 2.0 · 盐湖食腐鹫 2.0）全部 2.0。
+const SPEED_FIX = { '山地秃鹫': 2.0, '山地秃鹫幼崽': 2.0 };
+const SPEED_FAST_MAX = 1.7;   // 「快速具名宠」纳入上限（1.0~1.7 档；2.0 是绝大多数野兽的默认档）
+const SPEED_BEAST = {};       // 客户端中文名 → { sp, en, fam, lvl, zone, rnk }
+for (const line of SPEED_SRC) {
+  const m = line.match(/^  \{ "([^"]+)", "([^"]*)", ([\d.]+), "([a-z]+)", "([^"]*)", "([^"]*)", "([^"]*)", "([a-z]*)" \},$/);
+  if (!m) continue;
+  const cn = m[1];
+  if (SPEED_BEAST[cn] && SPEED_BEAST[cn].sp !== parseFloat(m[3])) throw new Error('攻速表里同名不同攻速（要人工定案，不许默默取一个）：' + cn);
+  // ★m[6] = 来源原文的英文地区（可复核）、m[7] = 客户端中文地区（界面显示用）、m[8] = 稀有标记
+  SPEED_BEAST[cn] = { sp: parseFloat(m[3]), en: m[2], fam: m[4], lvl: m[5], zone: m[7], zoneEn: m[6], rnk: m[8] };
+}
+if (Object.keys(SPEED_BEAST).length < 500) throw new Error('攻速数据源读取失败：只读到 ' + Object.keys(SPEED_BEAST).length + ' 条（期望 552）—— 检查 doc/猎人宠物攻速数据.lua');
+// ★别名必须真的指向表里一只（写错名字当场炸 ⇒ 绝不静默退化成「读不到攻速」）
+for (const k of Object.keys(SPEED_ALIAS)) {
+  if (!SPEED_BEAST[SPEED_ALIAS[k]]) throw new Error('SPEED_ALIAS 指向的名字不在攻速表里：' + k + ' → ' + SPEED_ALIAS[k]);
+}
+// 家族攻速区间（由 552 条现算；只统计本插件认识的 17 个家族）
+const SPEED_FAM = {};
+for (const id of FAM_ORDER) SPEED_FAM[id] = null;
+for (const cn of Object.keys(SPEED_BEAST)) {
+  const r = SPEED_BEAST[cn], c = SPEED_FAM[r.fam];
+  if (c === undefined) continue;
+  if (c === null) SPEED_FAM[r.fam] = { min: r.sp, max: r.sp };
+  else { if (r.sp < c.min) c.min = r.sp; if (r.sp > c.max) c.max = r.sp; }
+}
+// 快速具名宠（本服世界库标了稀有/精英 且 攻速 ≤ SPEED_FAST_MAX）——技能详情页页脚与家族 tooltip 用它
+const SPEED_NAMED = [];
+for (const cn of Object.keys(SPEED_BEAST)) {
+  const r = SPEED_BEAST[cn];
+  if (r.rnk !== '' && r.sp <= SPEED_FAST_MAX) SPEED_NAMED.push({ name: cn, sp: r.sp, fam: r.fam, lvl: r.lvl, zone: r.zone, rnk: r.rnk });
+}
+SPEED_NAMED.sort((a, b) => a.sp - b.sp || (a.name < b.name ? -1 : 1));
+// ★全量个体表（1.75.37 宠物列表视图的数据）：**按攻速升序**排（1.0 最前），同档按名字升序（顺序稳定、可复算）。
+//   ★不再单独输出「名字→速度」映射：运行期由 PetHelper 从本表现建索引（一处真值、少一半体积）。
+const SPEED_ALL = Object.keys(SPEED_BEAST).map(cn => ({
+  name: cn, sp: SPEED_BEAST[cn].sp, fam: SPEED_BEAST[cn].fam,
+  lvl: SPEED_BEAST[cn].lvl, zone: SPEED_BEAST[cn].zone, rnk: SPEED_BEAST[cn].rnk
+}));
+SPEED_ALL.sort((a, b) => a.sp - b.sp || (a.name < b.name ? -1 : (a.name > b.name ? 1 : 0)));
+// 唯一读法（生成期自查也走它）：beast[名] → alias[名] 再查一次 → fix[名]；都没有 = null（界面如实显示 ?）
+function speedOfBeastName(nm) {
+  if (SPEED_BEAST[nm]) return SPEED_BEAST[nm].sp;
+  const al = SPEED_ALIAS[nm];
+  if (al && SPEED_BEAST[al]) return SPEED_BEAST[al].sp;
+  if (typeof SPEED_FIX[nm] === 'number') return SPEED_FIX[nm];
+  return null;
+}
+
 // ===== 家族基础属性（图片逐行转录：伤害/护甲/生命加成 + 食物 + 天生技能三列）=====
 // ★来源：doc/猎人宠物属性和技能图.jpg（用户提供）→ doc/猎人宠物家族属性.md（转录 + 与现有 fam 标注的对账）。
 // ★字段口径：
@@ -225,6 +298,13 @@ if (exceptList.length) console.log('★image-exception（与图片冲突，闸�
 if (nameLost.length) console.log('☆名字被图片判掉（复核清单）：\n   ' + nameLost.join('\n   '));
 const leftOther = Object.keys(famDecided).filter(k => famDecided[k] === 'other');
 console.log('仍留 other（' + leftOther.length + ' 只）：' + (leftOther.join('、') || '（无 —— 全部定案）'));
+// ★攻速覆盖自查（1.75.36）：技能详情页的**每一只**驯服来源都要能查到攻速 —— 查不到就如实列出来（界面显示「?」，不冒充 2.0）。
+{
+  const all = Object.keys(famDecided);
+  const noSpd = all.filter(nm => speedOfBeastName(nm) === null);
+  console.log('攻速覆盖：' + (all.length - noSpd.length) + '/' + all.length + ' 只可查（含 ' + Object.keys(SPEED_ALIAS).length + ' 条旧译别名 + ' + Object.keys(SPEED_FIX).length + ' 条定案值）'
+    + (noSpd.length ? '；★查不到攻速（界面按 ? 显示）：' + noSpd.join('、') : '；全部可查'));
+}
 void uniqueRetag;
 const out = [];
 // ★★★1.73.4 图标全部换成**客户端真实路径**（用户要求：「完善宠物助手tab 内所有图标替换，先根据语义从系统图标文件内自己匹配对应语义相似的图标」）。
@@ -297,6 +377,7 @@ out.push('-- ★★★本文件是**生成物**（生成器 = 仓库根目录 ge
 out.push('--   **绝不手改本文件** —— 改数据请改生成器再跑 `node gen_petdata.js`，否则下次生成会把手改冲掉。');
 out.push('-- 数据来源：① 宠物技能总表截图（doc/pet_info.png）② 家族基础属性表截图（doc/猎人宠物属性和技能图.jpg，转录见 doc/猎人宠物家族属性.md）。');
 out.push('-- 结构：skills（技能定义+图标）/ ranks[技能名]（各等级：需求宠物等级 + 驯服来源野兽 + fam）/ families（家族 id → 名称+图标+三加成+食物+天生技能+客户端家族名候选）/ famOrder（图片行序）。');
+out.push('--   + speed（1.75.36 宠物攻速：个体表 beast / 旧译别名 alias / 定案值 fix / 家族区间 fam / 快速具名 named / 狂乱点数 frenzy）');
 out.push('-- ★★fam（野兽→家族）按**图片的「家族→技能」三列**定案（用户 2026-09-25：「以最新的图片为准」）：');
 out.push('--   ① 技能交集唯一 ⇒ 图片直接定案 ② 名字关键字（只在候选内、最长匹配优先，修了「狼蛛被当狼」的老 bug）');
 out.push('--   ③ 显式覆写（同系列兄弟/知名命名怪，见生成器 FAM_OVERRIDE 与理由）④ 名字硬证据（…鳄鱼/…蛛）⑤ 其余如实 other。');
@@ -382,6 +463,50 @@ for (const id of FAM_ORDER) famLine(id);
 out.push('  other = { label = ' + Q + '其他' + Q + ', icon = ' + Q + iconPath(FAM_ICON.other) + Q + ' },');
 out.push('}');
 out.push('');
+
+// ===== 宠物攻速（1.75.36）：写进 PetData.lua =====  ★读法（PetHelper 侧唯一入口）= beast[名] → alias[名] 再查一次 → fix[名]；都没有 = 如实「?」，绝不默认 2.0
+out.push('');
+out.push('-- ===== 宠物攻速（1.75.36）=====');
+out.push('-- ★★口径：Petopia Classic 攻速页明文「宠物驯服后保留原生攻速」⇒ 攻速按**个体**不按家族（同家族横跨多档：猫科 1.0~2.0、熊 2.0~2.5）。');
+out.push('--   数据源 = doc/猎人宠物攻速数据.lua（552 条个体数据；中文名与本机 UnrealQuest 客户端库逐条对账 552/552，等级与本服世界库对账 549/552）。');
+out.push('--   `all` = **全量个体表**（按攻速升序，1.0 最前）：{ 名字, 秒/次, 家族, 等级, 地区, 稀有标记 } ｜ `alias` = PetData 转录里的旧译/异名 → 客户端规范名（证据见 doc/猎人宠物攻速.md §三）');
+out.push('--   `bsk` = 宠物名 → 它在驯服来源表里教的技能（宠物列表行「技能」列用它；没有键 = 转录表里没这只，界面改显示家族天生技能）');
+out.push('--   `fix` = 客户端库查无此名、但同地区同等级候选**逐一查过全部同档**的定案值 ｜ `fam` = 家族区间（由 552 条现算，不是手写）');
+out.push('--   `named` = 本服世界库标了稀有/精英且攻速 ≤ ' + SPEED_FAST_MAX + ' 的具名个体（技能详情页页脚 / 家族 tooltip 的「快速具名宠」清单）');
+out.push('--   `frenzy` = 狂乱天赋点数建议（来源 17173《经典旧世猎人宠物攻速心得》/ uiwow 1.12 百科：攻速 <1.4 → 3 点、<1.6 → 4 点、其余 5 点）');
+out.push('EVAL_PET_DB.speed = {');
+out.push('  fast = ' + SPEED_FAST_MAX + ',');
+out.push('  alias = {');
+for (const k of Object.keys(SPEED_ALIAS).sort()) out.push('    [' + Q + k + Q + '] = ' + Q + SPEED_ALIAS[k] + Q + ',');
+out.push('  },');
+out.push('  fix = {');
+for (const k of Object.keys(SPEED_FIX).sort()) out.push('    [' + Q + k + Q + '] = ' + SPEED_FIX[k] + ',');
+out.push('  },');
+// ★全量个体表（1.75.37 宠物列表视图）：beast = 名字→速度的映射**已取消**（运行期从 all 建索引，省一半体积）
+out.push('  all = {');
+for (const r of SPEED_ALL) out.push('    { ' + Q + r.name + Q + ', ' + r.sp + ', ' + Q + r.fam + Q + ', ' + Q + r.lvl + Q + ', ' + Q + r.zone + Q + ', ' + Q + r.rnk + Q + ' },');
+out.push('  },');
+// ★宠物 → 它在驯服来源表里教的技能（转录表反向索引；只有转录表里出现过的名字才有键）—— 宠物列表行的「技能」列用它
+out.push('  bsk = {');
+{
+  const names = Object.keys(beastSkills || {}).sort();
+  for (const nm of names) {
+    const ks = Object.keys(beastSkills[nm] || {}).sort();
+    if (!ks.length) continue;
+    out.push('    [' + Q + nm + Q + '] = { ' + ks.map(x => Q + x + Q).join(', ') + ' },');
+  }
+}
+out.push('  },');
+out.push('  fam = {');
+for (const id of FAM_ORDER) { const c = SPEED_FAM[id]; if (c) out.push('    ' + id + ' = { ' + c.min + ', ' + c.max + ' },'); }
+out.push('  },');
+out.push('  named = {');
+for (const r of SPEED_NAMED) out.push('    { ' + Q + r.name + Q + ', ' + r.sp + ', ' + Q + r.fam + Q + ', ' + Q + r.lvl + Q + ', ' + Q + r.zone + Q + ', ' + Q + r.rnk + Q + ' },');
+out.push('  },');
+out.push('  frenzy = { { 1.4, 1.6 }, { 3, 4, 5 } },');
+out.push('}');
+out.push('');
+console.log('攻速：个体 ' + Object.keys(SPEED_BEAST).length + ' 条 ｜ 家族区间 ' + Object.keys(SPEED_FAM).filter(k => SPEED_FAM[k]).length + ' 个 ｜ 快速具名 ' + SPEED_NAMED.length + ' 只 ｜ 别名 ' + Object.keys(SPEED_ALIAS).length + ' 条');
 
 out.push('return EVAL_PET_DB');
 fs.writeFileSync('PetData.lua', out.join(NL));

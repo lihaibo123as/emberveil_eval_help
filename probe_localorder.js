@@ -8,7 +8,7 @@
  *    local 声明挂到当前块）→ 第二趟对每个引用由内向外找最近声明：
  *      · 找到「声明位置 < 引用位置」或参数同名        → 正常
  *      · 只找到「声明位置 > 引用位置」（将来才声明）  → **报警**（此刻抓到的是全局，极可能 nil）
- *  用法（CLI）  ：node probe_localorder.js [文件...]     默认 DataSearch.lua + quest/QuestChains.lua + EvalHelp.lua
+ *  用法（CLI）  ：node probe_localorder.js [文件...]     默认 11 个主力文件（EvalHelp/Core/Engine/PetHelper/Toolbox/DataSearch/IconBrowser/PetData/QuestChains/tools.Probes/tools.RareWatch）
  *  用法（自检） ：node probe_localorder.js --selftest   正例必报 / 反例不报（判据纪律：闸门自己也要被证明）
  *  用法（模块） ：const { scan } = require('./probe_localorder.js')
  */
@@ -161,8 +161,13 @@ if (require.main === module && process.argv[2] === '--selftest') {
 }
 
 if (require.main === module) {
+  // ★1.75.37 扩默认清单（用户报障的真机红字教训）：默认只覆盖 3 个文件时，`PetHelper.lua` 里
+  //   「宠物列表块插在 phFamById 之前 ⇒ 调用的是**全局 nil**」这种错**扫不到**（luacheck 也扫不到），
+  //   只能等真机红字。现在把主力文件一并纳入（本轮实测 8 个文件全绿；新文件请手动加进来）。
   const files = process.argv.slice(2).length ? process.argv.slice(2)
-    : ['DataSearch.lua', 'quest/QuestChains.lua', 'EvalHelp.lua'];
+    : ['EvalHelp.lua', 'Core.lua', 'Engine.lua', 'PetHelper.lua', 'Toolbox.lua', 'DataSearch.lua',
+       'IconBrowser.lua', 'PetData.lua', 'quest/QuestChains.lua',
+       'tools/Probes.lua', 'tools/RareWatch.lua'];
   let total = 0;
   for (const f of files) {
     const bad = scan(fs.readFileSync(f, 'utf8'));

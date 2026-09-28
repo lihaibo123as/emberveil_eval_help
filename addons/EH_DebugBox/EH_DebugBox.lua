@@ -292,8 +292,11 @@ local function topSrcOf(nm) return TOP_SRC[nm] or "map" end
 --   而 ui 表本体在下方几百行处才定义 —— 不声明就是「读到全局 nil」（同 §5.1 那条铁律）。
 local ui
 
--- ★★用户要求（1.74.29）：把 **UIParent** 加入扫描类型 ⇒ 做成**扫描源多选**（默认只勾「地图」，
---   保持此前「会话前那套单根检索」的行为不变；勾上界面/世界层/小地图才追加那些根）。
+-- ★★用户要求（1.74.29）：把 **UIParent** 加入扫描类型 ⇒ 做成**扫描源多选**；
+--   勾上界面/世界层/小地图才追加那些根（未交互过时只开 SCAN_SRC_DEFAULT）。
+-- ★★★1.75.36（用户 2026-09-28 截图定稿：「扫描源默认[=]图片里选中的那个」= **界面(UIParent)**）：
+--   默认源**从「地图」改成「界面」**；★唯一来源 = 下面这个常量（要回旧行为只改这一处）。
+local SCAN_SRC_DEFAULT = "ui" -- "ui" = 界面(UIParent) · "map" = 地图（1.75.35 及以前的行为）
 local SCAN_SRC = {
   { k = "map", label = "地图", root = "WorldMapFrame", prefix = nil },          -- 前缀空 = 沿用 WorldMapFrame 路径（旧存档兼容）
   { k = "ui", label = "界面", root = "UIParent", prefix = "[界面] " },
@@ -316,8 +319,8 @@ local SCAN_SRC = {
 }
 local function uiScanSrcOn(k)
   local src = ui.scanSrc
-  -- ★★未交互过 → 默认只扫「地图」（与旧行为一致）
-  if type(src) ~= "table" or ui.scanSrcTouched ~= true then return k == "map" end
+  -- ★★未交互过 → 默认只扫 SCAN_SRC_DEFAULT（1.75.36 起 = 界面/UIParent；此前 = 地图）
+  if type(src) ~= "table" or ui.scanSrcTouched ~= true then return k == SCAN_SRC_DEFAULT end
   -- ★★用户动过后：**完全按勾选**（取消地图就真的不扫地图）
   return src[k] == true
 end
@@ -643,7 +646,7 @@ ui = { -- ★★不能再写 local：前面已有 local ui（前向声明），�
   depthMax = 1,
   hideUnnamed = true, -- ★★★1.74.31 用户要求：**默认隐藏没有名字的层**（开关文案/tooltip 走语言包；存档键 ui.hideUnnamed）
   scriptFilter = {}, -- ★事件/脚本过滤（多选）：只显示挂了所选脚本之一的层（空 = 不过滤）
-  scanSrc = nil,     -- ★扫描源（多选）：nil = 只扫地图（与旧行为一致）；{ui=true} = 追加 UIParent 等
+  scanSrc = nil,     -- ★扫描源（多选）：nil = 只扫 SCAN_SRC_DEFAULT（1.75.36 起 = 界面/UIParent）；{map=true} 等 = 完全按勾选
   -- ★★★1.74.31 第二步（用户要求：「图层列表能否有树的方式。现在量太大，有点卡」）：
   --   **折叠状态** —— 键 = 条目路径，值 = true 表示这棵子树收起来了；空表 = 全展开（老存档的默认）。
   --   落存档 `EH_DEBUGBOX_CFG.ui.treeCollapsed` ⇒ /reload 之后保持（用户要求「折叠状态跨 reload 保持」）。
@@ -1517,7 +1520,7 @@ end
 
 -- ★★★1.74.30 框拖拽的目标清单 = 主插件工具模块 `tools/DragFrames.lua` 的真值（EVAL_DF_TARGETS()）。
 --   本子插件的「自定义重设」循环**必须跳过这 5 个目标**：它们的定位/属性现在存在
---   `EVAL_HELP_CONFIG.dragFrames` 里，由模块自己的 2 秒复查负责；这里若再按老记录写一次 = **两处抢锚点**
+--   `EVAL_HELP_CONFIG.dragFrames` 里，由模块自己的**启动期有界复查**（1s×5 次 / 墙钟 ≤15s，做完摘脚本 ⇒ 不是常驻）负责；这里若再按老记录写一次 = **两处抢锚点**
 --   （用户报的「拖拽时位移/闪烁」正是这么来的）。★清单现取，不在这里抄第二份。
 local function uiIsDragTarget(path)
   if type(path) ~= "string" then return false end
@@ -1531,7 +1534,7 @@ end
 
 -- ★★★1.74.30 面板里那几个「写层」按钮（应用属性 / 微调坐标 / 清理自定义 / 还原坐标）要用的闸门：
 --   只要**当前选中项**里有框拖拽目标，这些按钮就整体不动手 —— 它们的定位/属性真值在主插件工具模块里，
---   面板再写一次就是**两处抢锚点**（模块的 2 秒复查反过来又会把它按回去，用户看到的是「改了不生效」）。
+--   面板再写一次就是**两处抢锚点**（模块的启动期复查/登录恢复会把它按回去，用户看到的是「改了不生效」）。
 local function uiSelHasDragTarget()
   for _, e in ipairs(ui.entries or {}) do
     if ui.sel and ui.sel[e.path] and uiIsDragTarget(e.path) then return true end
@@ -3170,7 +3173,7 @@ local function uiBuild()
     ui.sfDrop = dd
     return dd
   end
-  -- ★扫描源下拉（多选）：地图 / 界面(UIParent) / 世界层 / 小地图簇
+  -- ★扫描源下拉（多选）：地图 / 界面(UIParent，1.75.36 起为默认) / 世界层 / 小地图簇 …
   local function ssCount()
     local n = 0
     for _, src in ipairs(SCAN_SRC) do if uiScanSrcOn(src.k) then n = n + 1 end end
@@ -3227,8 +3230,9 @@ local function uiBuild()
       rb:SetScript("OnClick", function()
         -- ★★真正的多选：点条目 = 切换该源（不关下拉）；首次交互后一律按勾选算
         local cur = uiScanSrcOn(src.k)
-        ui.scanSrc = ui.scanSrc or { map = true }
-        ui.scanSrcTouched = true -- ★从此不再默认开地图
+        -- ★首写先物化「当前默认」快照（不物化的话，这一次点击会把其余源一起丢掉）
+        ui.scanSrc = ui.scanSrc or { [SCAN_SRC_DEFAULT] = true }
+        ui.scanSrcTouched = true -- ★从此完全按勾选（不再回默认源）
         ui.scanSrc[src.k] = (not cur) and true or nil
         ui.off = 0
         nodes = nil -- ★换扫描源要重扫（缓存作废）

@@ -10,6 +10,7 @@
 --   EVAL_HELP_CFG_TAB（判断本 Tab 是否激活）、EVAL_HELP_CFG_SETTAB（跳 Tab）、EVAL_DS_SEARCH_NAME（数据检索入口）
 
 local PH = { built = false, q = "", view = "list", sel = nil, off = 0, detOff = 0,
+             mode = "skill",   -- ★1.75.37 列表视图：skill = 技能列表（默认）/ pet = 宠物列表（按攻速升序）
              rows = {}, detRows = {}, detWidgets = {} }
 local PH_TAB = 6          -- 配置窗第 6 个 Tab（与 EvalHelp.lua 的 tabNames 顺序一一对应）
 -- ===== 布局常量（1.73.1 重排：**单一来源**，几何断言直接读由这些值画出来的真实控件）=====
@@ -23,6 +24,22 @@ local PH_LIST_ROWS = 15
 local PH_DET_ROWS = 12
 local PH_LIST_Y = -104
 local PH_DET_Y = -150
+-- ★1.75.36 攻速页脚：12 行宠物行下沿 -390、内容下沿 -420 ⇒ 页脚放 -400（单行 10pt，下缘约 -412，留 8px 余量）
+local PH_FAST_SHOW = 4    -- 页脚「快速具名宠」最多列几个家族（每家族取最快 1 只，其余在行 tooltip 里全列）
+-- ★1.75.37 宠物列表视图：右侧「技能列表 / 宠物列表」两个切换钮 + 每行右端「攻速 x.x」列
+local PH_MODE_BW = 72     -- 切换钮宽（两个 + 6px 间距，右端贴 RX）
+local PH_MODE_BH = 18     -- 切换钮高
+local PH_MODE_Y = -78     -- 切换钮 y：搜索行占 -54..-74、列表首行 -104 ⇒ 放 -78..-96（留 8px）
+local PH_MODE_GAP = 6     -- 两钮间距
+local PH_SPD_W = 96        -- 行右端攻速列宽（★三语取最宽：ruRU「скорость 1.0」≈ 9 汉字宽）
+-- ★1.75.37b 宠物列表的**技能图标条**（用户：「技能说明能否替换成图标显示」）：
+--   数据实测单只最多 5 个技能（猫科家族天生：撕咬/爪击/突进/潜伏/畏缩）⇒ 固定 5 个槽位、不按内容变宽（行内几何恒定）。
+--   标签（技能 / 家族技）是**两态区分**的唯一可见线索：图标本身看不出「这是它在驯服来源表里教的」还是「家族天生」的。
+local PH_SK_LABEL_W = 36   -- 技能条左侧短标签的**兜底最小宽**（实际宽按三语标签现算：中文「家族技」≈33px、英文「family」≈20px）
+local PH_SK_ICON = 16      -- 技能图标边长
+local PH_SK_GAP = 2        -- 图标间距
+local PH_SKILL_MAX = 5     -- 图标槽位数（超出只影响显示：tooltip 仍列全部）
+local PH_SKILL_W = PH_SKILL_MAX * PH_SK_ICON + (PH_SKILL_MAX - 1) * PH_SK_GAP   -- 图标条总宽 = 88
 -- 控件宽度/右边缘关系（1.73.1 修重叠：原来是「谁写谁算」，现在集中成常量并由几何断言守着）
 local PH_LABEL_W = 90     -- 搜索标签宽（x=PH_X）
 local PH_BOX_W = 300      -- 输入框宽（x=PH_X+96）
@@ -139,6 +156,92 @@ local function phFamIcon(famId)
   local f = db and db.families and db.families[famId]
   return f and f.icon or nil
 end
+-- ===== 攻速（1.75.36）：数据唯一来源 = PetData.lua 的 EVAL_PET_DB.speed（生成物，见 gen_petdata.js）=====
+-- ★★口径：Petopia 明文「宠物驯服后保留原生攻速」⇒ 攻速按**个体**不按家族（同家族横跨多档）。
+--   所以本文件只做「查表 + 显示」：**不自己算、不按家族推定、缺数据不冒充 2.0**（如实显示「?」）。
+-- ★读法唯一入口 phSpdOf（PetData 转录名 → 客户端规范名 → 个体速度）；生成的 `alias` 就是为此存在的。
+local function phSpeedDb()
+  local db = phDb()
+  local s = (type(db) == "table") and db.speed or nil
+  if type(s) ~= "table" then return nil end
+  return s
+end
+-- 名字 → 秒/次的索引：**首次用到时从 speed.all 建一次**（生成物不再单独输出映射 ⇒ 一处真值、少一半体积）
+local PH_SPD_IDX = nil
+local function phSpdIdx()
+  if PH_SPD_IDX then return PH_SPD_IDX end
+  local m = {}
+  local s = phSpeedDb()
+  local a = (s and type(s.all) == "table") and s.all or {}
+  for i = 1, table.getn(a) do
+    local e = a[i]
+    if type(e) == "table" and type(e[1]) == "string" and type(e[2]) == "number" then m[e[1]] = e[2] end
+  end
+  PH_SPD_IDX = m
+  return m
+end
+local function phSpdOf(name)
+  local s = phSpeedDb()
+  if not s then return nil end
+  name = tostring(name or "")
+  if name == "" then return nil end
+  local idx = phSpdIdx()
+  local v = idx[name]
+  if type(v) == "number" then return v end
+  local al = (type(s.alias) == "table") and s.alias or {}
+  local cn = al[name]
+  if type(cn) == "string" then v = idx[cn] end
+  if type(v) == "number" then return v end
+  v = (type(s.fix) == "table") and s.fix[name] or nil
+  if type(v) == "number" then return v end
+  return nil
+end
+-- 显示口径：社区一律写一位小数（1.0 / 1.2 / 2.5）
+local function phSpdTxt(sp)
+  if type(sp) ~= "number" then return nil end
+  return string.format("%.1f", sp)
+end
+-- 家族攻速区间 { min, max }（由 552 条个体在生成期现算）
+local function phFamSpd(famId)
+  local s = phSpeedDb()
+  if not s or type(s.fam) ~= "table" then return nil end
+  local t = s.fam[famId]
+  if type(t) ~= "table" or type(t[1]) ~= "number" or type(t[2]) ~= "number" then return nil end
+  return t
+end
+-- 该家族的「快速具名宠」清单（本服世界库标了稀有/精英且攻速 ≤ speed.fast；生成期已按攻速升序）
+local function phFamNamed(famId)
+  local out = {}
+  local s = phSpeedDb()
+  if not s or type(s.named) ~= "table" then return out end
+  for i = 1, table.getn(s.named) do
+    local e = s.named[i]
+    if type(e) == "table" and e[3] == famId then table.insert(out, e) end
+  end
+  return out
+end
+-- 狂乱天赋点数建议（来源 17173《经典旧世猎人宠物攻速心得》/ uiwow 1.12 百科）：阈值与点数都在生成物里
+local function phFrenzy(sp)
+  local s = phSpeedDb()
+  if type(sp) ~= "number" or not s or type(s.frenzy) ~= "table" then return nil end
+  local t, p = s.frenzy[1], s.frenzy[2]
+  if type(t) ~= "table" or type(p) ~= "table" then return nil end
+  for i = 1, table.getn(t) do
+    if sp < t[i] and type(p[i]) == "number" then return p[i] end
+  end
+  return p[table.getn(t) + 1]
+end
+-- 「宠物名 攻速」显示片段（家族清单/页脚共用；查不到写「?」，绝不写 2.0）
+local function phSpdPair(nm, sp)
+  return string.format(L("PH_SPD_NAME_FMT"), tostring(nm), phSpdTxt(sp) or L("PH_SPD_UNKNOWN"))
+end
+-- 稀有度原文 → 语言键（探针「攻速」清单用）
+local PH_SPD_RANK = { rare = "PH_SPD_R_RARE", elite = "PH_SPD_R_ELITE", rareelite = "PH_SPD_R_RAREELITE" }
+local function phSpdRankTxt(rk)
+  local k = PH_SPD_RANK[tostring(rk or "")]
+  if not k then return "" end
+  return L(k)
+end
 
 -- ★★★1.75.3（用户指定）技能图标 = **宏图标号**（用户原话：「宠物技能图标调整: 撕咬->宏图标139 · 爪击->255 ·
 --   嚎叫->695 · 冲锋->700 · 甲壳护盾->710 · 暗影抗性->133」；号来自**图标库 Tab5 悬停的「宏图标序号：N」**）。
@@ -234,6 +337,159 @@ local function phFamById(id)
   if type(f) ~= "table" then return nil end
   return f
 end
+-- ===== 宠物列表视图（1.75.37）：数据 = speed.all（552 条个体，按攻速升序）+ speed.bsk + families 的家族天生技能 =====
+-- ★★为什么要这个视图（用户原话：「将一些未包含的宠物信息裹入宠物列表」）：有一批宠物**不在**转录的「谁教这个技能」表里
+--   （例：迪舒 / 影爪 / 死亡之喉 / 狮王休玛），技能详情页因此没有它们的行；但它们的攻速/家族/等级/地区都在个体表里
+--   ⇒ 宠物列表把它们一并纳入。★技能列两态如实区分：① bsk[名] = 它在驯服来源表里**实际**教的技能；② 没有 = **家族天生**技能。
+local function phPetsAll()
+  local s = phSpeedDb()
+  return (s and type(s.all) == "table") and s.all or nil
+end
+-- 家族天生技能（families[fam].sk 的伤害/加速/特殊三列合并；`other` 家族故意没有 sk 字段 ⇒ 返回 nil，不编）
+local function phFamSkills(famId)
+  local f = phFamById(famId)
+  local sk = (type(f) == "table" and type(f.sk) == "table") and f.sk or nil
+  if not sk then return nil end
+  local out = {}
+  local cols = { "dmg", "spd", "sp" }
+  for c = 1, table.getn(cols) do
+    local t = sk[cols[c]]
+    if type(t) == "table" then for i = 1, table.getn(t) do table.insert(out, tostring(t[i])) end end
+  end
+  if table.getn(out) == 0 then return nil end
+  return out
+end
+-- 该宠物的技能**列表** + 来源标记（false = 转录表里的实际来源技能；true = 家族天生技能；nil = 两处都没有）
+--   ★1.75.37b 改：以前返回拼好的串，现在返回**表**（图标条要逐个画），文案由 phPetSkillsText 现拼（单一来源）
+local function phPetSkills(name, famId)
+  local s = phSpeedDb()
+  local b = (s and type(s.bsk) == "table") and s.bsk or {}
+  local own = b[name]
+  if type(own) == "table" and table.getn(own) > 0 then return own, false end
+  local fs = phFamSkills(famId)
+  if fs then return fs, true end
+  return nil, false
+end
+-- 技能文案（tooltip 用；两态如实区分；都没有 = 如实「未知」）
+local function phPetSkillsText(name, famId)
+  local list, isFam = phPetSkills(name, famId)
+  if type(list) ~= "table" or table.getn(list) == 0 then return L("PH_PET_SKNONE") end
+  if isFam then return string.format(L("PH_PET_SKFAM_FMT"), table.concat(list, "、")) end
+  return string.format(L("PH_PET_SK_FMT"), table.concat(list, "、"))
+end
+-- 技能条短标签（图标条左侧；两态区分的**唯一可见线索**）
+local function phPetSkillsLabel(name, famId)
+  local list, isFam = phPetSkills(name, famId)
+  if type(list) ~= "table" or table.getn(list) == 0 then return "" end
+  if isFam then return L("PH_PET_SKFAM_LABEL") end
+  return L("PH_PET_SK_LABEL")
+end
+-- 技能名 → skills 表项（画图标要整条 skill：里面有 iconIdx 宏图标号）；★建一次即缓存
+local PH_SK_BY_NAME = nil
+local function phSkillOf(name)
+  if not PH_SK_BY_NAME then
+    local m = {}
+    local db = phDb()
+    local t = (type(db) == "table" and type(db.skills) == "table") and db.skills or {}
+    for i = 1, table.getn(t) do
+      if type(t[i]) == "table" and type(t[i].name) == "string" then m[t[i].name] = t[i] end
+    end
+    PH_SK_BY_NAME = m
+  end
+  return PH_SK_BY_NAME[tostring(name or "")]
+end
+-- 技能名 → 图标纹理（走**唯一解析口** EVAL_PH_SKILL_ICON：宏图标号运行期解析、取不到退回语义路径）
+local function phSkillIcon(name)
+  local sk = phSkillOf(name)
+  if not sk then return nil end
+  if type(EVAL_PH_SKILL_ICON) ~= "function" then return sk.icon end
+  local ok, tex = pcall(EVAL_PH_SKILL_ICON, sk)
+  if ok and type(tex) == "string" and tex ~= "" then return tex end
+  return sk.icon
+end
+-- 技能条 tooltip 行（**唯一来源**：界面与 harness 都读它）——首行 = 宠物名（与家族 tooltip 同一格式），次行 = 技能两态文案
+local function phPetSkTipLines(pet)
+  local out = {}
+  if type(pet) ~= "table" then return out end
+  table.insert(out, { t = string.format(L("PH_FAM_TIP_HEAD"), tostring(pet[1] or "?"), tostring(pet[4] or "?"), tostring(pet[5] or "?")),
+                      r = 1, g = 0.85, b = 0.35 })
+  table.insert(out, { t = phPetSkillsText(pet[1], pet[3]), r = 0.85, g = 0.90, b = 0.70 })
+  return out
+end
+-- 文本加权宽度（汉字 1、ASCII 0.55 —— 与项目 uiClip 同口径；用来判断要不要截断）
+--   ★★必须按 UTF-8 **首字节跳整字**：汉字 3 字节，按字节数会把「撕咬」算成 6 而不是 2（本函数第一版就踩了，harness 当场抓到）
+local function phTextUnits(s)
+  local u, i = 0, 1
+  s = tostring(s or "")
+  local n = string.len(s)
+  while i <= n do
+    local b = string.byte(s, i)
+    if b >= 240 then u = u + 1; i = i + 4
+    elseif b >= 224 then u = u + 1; i = i + 3
+    elseif b >= 192 then u = u + 1; i = i + 2
+    else u = u + 0.55; i = i + 1 end
+  end
+  return u
+end
+-- 超长按**字符**截断补 …（★绝不按字节：汉字 3 字节，按字节会切成乱码）
+local function phClipW(s, maxU)
+  s = tostring(s or "")
+  if type(maxU) ~= "number" or maxU <= 1 then return s end
+  if phTextUnits(s) <= maxU then return s end
+  local out, u, i = "", 0, 1
+  local n = string.len(s)
+  while i <= n do
+    local b = string.byte(s, i)
+    local step, w = 1, 1
+    if b >= 240 then step = 4 elseif b >= 224 then step = 3 elseif b >= 192 then step = 2 else w = 0.55 end
+    if u + w > maxU - 1 then break end
+    out = out .. string.sub(s, i, i + step - 1)
+    u = u + w
+    i = i + step
+  end
+  return out .. "…"
+end
+-- 列表行被点击/技能条被点击 → 同一处分派（**唯一来源**）
+local function phRowActivate(row)
+  if type(row) ~= "table" then return end
+  if row.pet then EVAL_PH_JUMP(row.pet[1])
+  elseif row.idx then EVAL_PH_OPEN(row.idx) end
+end
+-- 宠物行文案（**唯一来源**：界面与 harness 都读它；改文案只改这里 + 语言包）
+--   ★1.75.37b：技能段**搬进图标条**（左边短标签 + 图标），行内只留 名字/家族/等级/地区；超长按宽度截断（全文见悬停 tooltip）
+local function phPetRowText(e)
+  local name = tostring(e[1] or "?")
+  local tag = phSpdRankTxt(e[6])
+  if tag ~= "" then name = string.format(L("PH_PET_RAREFMT"), tag) .. " " .. name end
+  local txt = string.format(L("PH_PET_ROW_FMT"), name, phFamLabel(e[3]), tostring(e[4] or "?"), tostring(e[5] or "?"))
+  if type(PH.textW) == "number" and PH.textW > 0 then txt = phClipW(txt, PH.textW / 11) end
+  return txt
+end
+-- 宠物列表过滤（命中：宠物名 / 家族名 / 地区；空词 = 全部）
+-- ★★顺序**就是生成物 all 的顺序 = 按攻速升序（1.0 最前）**（用户定：「默认列表根据攻速排序.1.0最前面」）——这里不许再排一次
+local function phPetFiltered()
+  local all = phPetsAll()
+  if not all then return {} end
+  local out = {}
+  local ql = string.lower(tostring(PH.q or ""))
+  if ql == "" then
+    for i = 1, table.getn(all) do table.insert(out, all[i]) end
+    return out
+  end
+  for i = 1, table.getn(all) do
+    local e = all[i]
+    if type(e) == "table" then
+      local n1 = string.lower(tostring(e[1] or ""))
+      local n2 = string.lower(tostring(phFamLabel(e[3])))
+      local n3 = string.lower(tostring(e[5] or ""))
+      if string.find(n1, ql, 1, true) or string.find(n2, ql, 1, true) or string.find(n3, ql, 1, true) then
+        table.insert(out, e)
+      end
+    end
+  end
+  return out
+end
+-- ===== 宠物列表视图结束（harness 按这两行标记抽块；勿删）=====
 
 -- 家族名 → id：label 与 cname（客户端候选名）都接受；**精确匹配**（去首尾空白、大小写不敏感）；认不出 → nil
 function EVAL_PH_FAM_BY_NAME(nm)
@@ -381,24 +637,46 @@ function EVAL_PH_FAM_TIP_LINES(famId, beast)
     local zn = (type(beast) == "table") and beast.zone or nil
     table.insert(out, { t = string.format(L("PH_FAM_TIP_HEAD"), nm, tostring(lv or "?"), tostring(zn or "?")),
                         r = 1, g = 0.85, b = 0.35 })
+    -- ★1.75.36 攻速（**这一只的个体值**）：攻速按个体 ⇒ 查不到就写「?」，绝不按家族推定、绝不默认 2.0
+    local sp = phSpdOf(nm)
+    table.insert(out, { t = string.format(L("PH_TIP_SPD_FMT"), phSpdTxt(sp) or L("PH_SPD_UNKNOWN")),
+                        r = 0.95, g = 0.92, b = 0.55 })
+    local pt = phFrenzy(sp)
+    if pt then table.insert(out, { t = string.format(L("PH_TIP_FRENZY_FMT"), pt), r = 0.70, g = 0.90, b = 0.70 }) end
   end
+  -- ★★家族段**只留一个 return**（旧版三处 return ⇒ 新增的攻速补充段要在三处各写一遍，漏一处就静默少显示一段）
+  local hasStats = false
   local f = phFamById(famId)
   if type(f) ~= "table" then
     table.insert(out, { t = L("PH_FAM_NOSTATS"), r = 1, g = 0.5, b = 0.4 })
-    return out
+  else
+    table.insert(out, { t = string.format(L("PH_FAM_TIP_FAM"), tostring(f.label), tostring(famId)), r = 0.6, g = 0.9, b = 1 })
+    if type(f.dmg) ~= "number" then
+      table.insert(out, { t = L("PH_FAM_NOSTATS"), r = 1, g = 0.5, b = 0.4 })
+    else
+      hasStats = true
+      local sk = (type(f.sk) == "table") and f.sk or {}
+      table.insert(out, { t = phSegJoin({ { L("PH_FAM_K_DMG"), phPct(f.dmg) }, { L("PH_FAM_K_ARM"), phPct(f.armor) },
+                                          { L("PH_FAM_K_HP"), phPct(f.hp) } }), r = 0.9, g = 0.9, b = 0.9 })
+      table.insert(out, { t = phSegJoin({ { L("PH_FAM_K_FOOD"), phJoinList(f.foods) } }), r = 0.82, g = 0.86, b = 0.72 })
+      table.insert(out, { t = phSegJoin({ { L("PH_FAM_K_SK1"), phJoinList(sk.dmg) }, { L("PH_FAM_K_SK2"), phJoinList(sk.spd) },
+                                          { L("PH_FAM_K_SK3"), phJoinList(sk.sp) } }), r = 0.82, g = 0.86, b = 0.72 })
+    end
   end
-  table.insert(out, { t = string.format(L("PH_FAM_TIP_FAM"), tostring(f.label), tostring(famId)), r = 0.6, g = 0.9, b = 1 })
-  if type(f.dmg) ~= "number" then
-    table.insert(out, { t = L("PH_FAM_NOSTATS"), r = 1, g = 0.5, b = 0.4 })
-    return out
+  -- ★1.75.36 攻速补充段：家族攻速区间（552 条现算）+ 该家族的快速具名宠清单 —— 读不到就整段不显示（不编）
+  local fs = phFamSpd(famId)
+  if fs then
+    table.insert(out, { t = string.format(L("PH_TIP_SPD_RANGE_FMT"), phSpdTxt(fs[1]), phSpdTxt(fs[2])),
+                        r = 0.85, g = 0.85, b = 0.65 })
   end
-  local sk = (type(f.sk) == "table") and f.sk or {}
-  table.insert(out, { t = phSegJoin({ { L("PH_FAM_K_DMG"), phPct(f.dmg) }, { L("PH_FAM_K_ARM"), phPct(f.armor) },
-                                      { L("PH_FAM_K_HP"), phPct(f.hp) } }), r = 0.9, g = 0.9, b = 0.9 })
-  table.insert(out, { t = phSegJoin({ { L("PH_FAM_K_FOOD"), phJoinList(f.foods) } }), r = 0.82, g = 0.86, b = 0.72 })
-  table.insert(out, { t = phSegJoin({ { L("PH_FAM_K_SK1"), phJoinList(sk.dmg) }, { L("PH_FAM_K_SK2"), phJoinList(sk.spd) },
-                                      { L("PH_FAM_K_SK3"), phJoinList(sk.sp) } }), r = 0.82, g = 0.86, b = 0.72 })
-  table.insert(out, { t = L("PH_FAM_TIP_SRC"), r = 0.6, g = 0.6, b = 0.6 })
+  local named = phFamNamed(famId)
+  if table.getn(named) > 0 then
+    local arr = {}
+    for i = 1, table.getn(named) do table.insert(arr, phSpdPair(named[i][1], named[i][2])) end
+    table.insert(out, { t = string.format(L("PH_TIP_SPD_FAST_FMT"), table.concat(arr, L("PH_FAM_SEP"))),
+                        r = 0.80, g = 0.88, b = 0.70 })
+  end
+  if hasStats then table.insert(out, { t = L("PH_FAM_TIP_SRC"), r = 0.6, g = 0.6, b = 0.6 }) end
   return out
 end
 
@@ -442,7 +720,14 @@ function EVAL_PH_FAM_PROBE()
   return rep
 end
 
--- 命令入口：/eh go 宠物家族（= 别名 /eh pet fam）｜ 宠物家族 表 ｜ 存档 ｜ 清
+-- 家族攻速区间显示片段（1.75.36；读不到返回空串 ⇒ 不显示，不编）
+local function phSpdFamSeg(famId)
+  local fs = phFamSpd(famId)
+  if not fs then return "" end
+  return string.format(L("PH_FAM_SPD_SEG"), phSpdTxt(fs[1]), phSpdTxt(fs[2]))
+end
+
+-- 命令入口：/eh go 宠物家族（= 别名 /eh pet fam）｜ 宠物家族 表 ｜ 攻速 ｜ 存档 ｜ 清
 function EVAL_PH_FAM_CMD(sub)
   sub = tostring(sub or "")
   sub = string.gsub(sub, "^%s+", "")
@@ -454,8 +739,46 @@ function EVAL_PH_FAM_CMD(sub)
     phFamSay(string.format(L("PH_FAM_TBL_TITLE_FMT"), table.getn(cards)))
     for i = 1, table.getn(cards) do
       local f = cards[i]
-      if f.hasStats then phFamSay(string.format(L("PH_FAM_HEAD_FMT"), tostring(f.label)) .. phFamLine(f))
-      else phFamSay(string.format(L("PH_FAM_HEAD_FMT"), tostring(f.label)) .. L("PH_FAM_NOSTATS")) end
+      if f.hasStats then phFamSay(string.format(L("PH_FAM_HEAD_FMT"), tostring(f.label)) .. phFamLine(f) .. phSpdFamSeg(f.id))
+      else phFamSay(string.format(L("PH_FAM_HEAD_FMT"), tostring(f.label)) .. L("PH_FAM_NOSTATS") .. phSpdFamSeg(f.id)) end
+    end
+  elseif sub == "攻速" or sub == "speed" or sub == "spd" then
+    -- ★1.75.36 攻速表（数据来自生成物 EVAL_PET_DB.speed；这里是**唯一**能把整表摊开看的地方）
+    local s = phSpeedDb()
+    local nB, nF, nN = 0, 0, 0
+    if s then
+      if type(s.all) == "table" then nB = table.getn(s.all) end   -- ★1.75.37 字段改名：beast 映射 → all 列表
+      if type(s.fam) == "table" then for _ in pairs(s.fam) do nF = nF + 1 end end
+      if type(s.named) == "table" then nN = table.getn(s.named) end
+    end
+    if nB == 0 then
+      -- 查不到 ≠ 没有：如实说数据源缺席（PetData 旧版本 / 载入失败），不显示成「攻速全是 0」
+      phFamSay(L("PH_FAM_SPD_NODATA"))
+    else
+      phFamSay(string.format(L("PH_FAM_SPD_TITLE_FMT"), nB, nF, nN))
+      local cards = EVAL_PH_FAM_CARDS()
+      for i = 1, table.getn(cards) do
+        local c = cards[i]
+        local fs = phFamSpd(c.id)
+        if fs then
+          local named = phFamNamed(c.id)
+          local seg = ""
+          if table.getn(named) > 0 then
+            local arr = {}
+            for k = 1, table.getn(named) do table.insert(arr, phSpdPair(named[k][1], named[k][2])) end
+            seg = string.format(L("PH_FAM_SPD_NAMED_FMT"), table.concat(arr, L("PH_FAM_SEP")))
+          end
+          phFamSay(string.format(L("PH_FAM_SPD_ROW_FMT"), tostring(c.label), phSpdTxt(fs[1]), phSpdTxt(fs[2]), seg))
+        end
+      end
+      -- 逐只明细（本服库标了稀有/精英且 ≤ speed.fast 的具名个体）
+      if type(s.named) == "table" then
+        for i = 1, table.getn(s.named) do
+          local e = s.named[i]
+          phFamSay(string.format(L("PH_FAM_SPD_ONE_FMT"), tostring(e[1]), phSpdTxt(e[2]) or L("PH_SPD_UNKNOWN"),
+                                 phFamLabel(e[3]), tostring(e[4]), tostring(e[5]), phSpdRankTxt(e[6])))
+        end
+      end
     end
   elseif sub == "存档" or sub == "save" then
     local box = phFamStore()
@@ -504,6 +827,19 @@ function EVAL_PH_OPEN(idx)
   return true
 end
 
+-- ★1.75.37 列表视图切换：「技能列表」（原样：技能 → 等级 → 驯服来源）/「宠物列表」（552 条个体，按攻速升序）
+--   真值 = PH.mode；切换 = 回列表视图 + 重置滚动 + 重绘。读值口 EVAL_PH_GET_MODE 是**活的**（刷新时用它给两个钮上色）。
+function EVAL_PH_GET_MODE() return (PH.mode == "pet") and "pet" or "skill" end
+function EVAL_PH_SET_MODE(m)
+  m = tostring(m or "")
+  PH.mode = (m == "pet") and "pet" or "skill"
+  PH.view = "list"
+  PH.sel = nil
+  PH.off = 0
+  EVAL_PH_REFRESH()
+  return PH.mode
+end
+
 function EVAL_PH_BACK()
   PH.view = "list"
   PH.sel = nil
@@ -537,13 +873,31 @@ end
 --      （截图里每行只剩「?」和「查」）。★测试桩里 SetText 与显隐是两件事，所以上一版断言只读文本，全绿。
 function EVAL_PH_REFRESH()
   if not PH.built then return end
-  local list = phFiltered()
+  local petsMode = (EVAL_PH_GET_MODE() == "pet")
+  local list = petsMode and phPetFiltered() or phFiltered()
   local detail = (PH.view == "detail") and PH.sel or nil
 
-  -- ① 搜索行（标签 / 输入框 / 占位 / 计数 / [清除]）**只在列表视图显示**
+  -- ① 搜索行 + **两个视图切换钮**（都是「列表视图专用」⇒ 详情视图整排隐藏）
   if PH.listRow then
     for _, w in ipairs(PH.listRow) do
       if detail then pcall(w.Hide, w) else pcall(w.Show, w) end
+    end
+  end
+  -- ★1.75.37 切换钮上色：当前模式亮、另一个暗（看不清哪个是当前的 = 用户分不清在看哪个列表）
+  if PH.modeBtns then
+    local keys = { "skill", "pet" }
+    for m = 1, table.getn(keys) do
+      local w = PH.modeBtns[keys[m]]
+      if w then
+        local on = (keys[m] == EVAL_PH_GET_MODE())
+        if w.bg then
+          if on then phSolid(w.bg, 0.46, 0.36, 0.13, 1) else phSolid(w.bg, 0.20, 0.16, 0.09, 1) end
+        end
+        if w.text then
+          if on then pcall(w.text.SetTextColor, w.text, 1, 0.88, 0.42)
+          else pcall(w.text.SetTextColor, w.text, 0.62, 0.58, 0.50) end
+        end
+      end
     end
   end
   if not detail then
@@ -557,7 +911,9 @@ function EVAL_PH_REFRESH()
   local nList = table.getn(list)
   if PH.emptyList then
     if (not detail) and nList == 0 then
-      PH.emptyList:SetText(string.format(L("PH_EMPTY_LIST"), tostring(PH.q)))
+      -- 空结果文案按模式分派（「没有匹配的宠物技能」≠「没有匹配的宠物」）
+      if petsMode then PH.emptyList:SetText(string.format(L("PH_EMPTY_PETS"), tostring(PH.q)))
+      else PH.emptyList:SetText(string.format(L("PH_EMPTY_LIST"), tostring(PH.q))) end
       pcall(PH.emptyList.Show, PH.emptyList)
     else
       pcall(PH.emptyList.Hide, PH.emptyList)
@@ -567,20 +923,67 @@ function EVAL_PH_REFRESH()
     local row = PH.rows[i]
     local e = (not detail) and list[PH.off + i] or nil
     row.btn:Hide()
+    -- ★这三样**只在宠物列表显示**（攻速列 / 技能条短标签 / 技能图标）⇒ 每行都显式 Hide 一次
+    --   （本项目「显隐走显式清单」，绝不靠残留 —— 否则技能列表会看到上一只宠物的技能图标）
+    if row.spd then pcall(row.spd.Hide, row.spd) end
+    if row.skLabel then row.skLabel:SetText("") pcall(row.skLabel.Hide, row.skLabel) end
+    if row.skBtn then pcall(row.skBtn.Hide, row.skBtn) end
+    if row.skIcons then for k = 1, table.getn(row.skIcons) do pcall(row.skIcons[k].Hide, row.skIcons[k]) end end
+    row.idx = nil
+    row.pet = nil
     if e then
       row.btn:Show()
-      if row.icon then
-        -- ★图标走**唯一解析口**（有 iconIdx 的技能 = 宏图标号 → 运行期解析；取不到退回语义路径）
-        local itex = EVAL_PH_SKILL_ICON(e.skill)
-        if itex then pcall(row.icon.SetTexture, row.icon, itex) end
-      end
-      row.text:SetText(phEntryLabel(e))
       -- 交替底色：偶数行稍亮，长列表不再糊成一片（纯观感，不影响判定）
       if row.bg then
         if (PH.off + i) % 2 == 0 then phSolid(row.bg, 0.14, 0.12, 0.08, 1)
         else phSolid(row.bg, 0.10, 0.09, 0.06, 1) end
       end
-      row.idx = PH.off + i
+      if petsMode then
+        -- 宠物行：家族图标 + 文案（名/★稀有标记/家族/等级/地区）+ **技能图标条** + 右端攻速列
+        if row.icon then
+          local ftex = phFamIcon(e[3])
+          if ftex then pcall(row.icon.SetTexture, row.icon, ftex) end
+        end
+        row.text:SetText(phPetRowText(e))
+        -- ★1.75.37b 技能图标条：标签（技能 / 家族技，两态区分）+ 逐只图标（一张都取不到就整条 Label 也留空）
+        local skList = phPetSkills(e[1], e[3])
+        local nSk = (type(skList) == "table") and table.getn(skList) or 0
+        if row.skLabel then
+          row.skLabel:SetText(phPetSkillsLabel(e[1], e[3]))
+          pcall(row.skLabel.Show, row.skLabel)
+        end
+        local nIcon = 0
+        if nSk > 0 and row.skIcons then
+          for k = 1, table.getn(row.skIcons) do
+            local nm = (k <= nSk) and skList[k] or nil
+            local tex = nm and phSkillIcon(nm) or nil
+            if tex then
+              pcall(row.skIcons[k].SetTexture, row.skIcons[k], tex)
+              pcall(row.skIcons[k].Show, row.skIcons[k])
+              nIcon = nIcon + 1
+            else
+              pcall(row.skIcons[k].Hide, row.skIcons[k])
+            end
+          end
+        end
+        -- 图标条热区：只在**真有图标**时显示（空条也吃鼠标 = 挡住整行点击的隐形陷阱）
+        if row.skBtn then
+          if nIcon > 0 then pcall(row.skBtn.Show, row.skBtn) else pcall(row.skBtn.Hide, row.skBtn) end
+        end
+        if row.spd then
+          row.spd:SetText(string.format(L("PH_PET_SPD_FMT"), phSpdTxt(e[2]) or L("PH_SPD_UNKNOWN")))
+          pcall(row.spd.Show, row.spd)
+        end
+        row.pet = e
+      else
+        if row.icon then
+          -- ★图标走**唯一解析口**（有 iconIdx 的技能 = 宏图标号 → 运行期解析；取不到退回语义路径）
+          local itex = EVAL_PH_SKILL_ICON(e.skill)
+          if itex then pcall(row.icon.SetTexture, row.icon, itex) end
+        end
+        row.text:SetText(phEntryLabel(e))
+        row.idx = PH.off + i
+      end
     end
   end
 
@@ -640,13 +1043,43 @@ function EVAL_PH_REFRESH()
         pcall(row.iconBtn.Show, row.iconBtn)
         row.name:SetText(tostring(b.name))
         pcall(row.name.Show, row.name)
-        row.meta:SetText(string.format(L("PH_PET_META"), tostring(b.level), tostring(b.zone), phFamLabel(b.fam)))
+        -- ★1.75.36 攻速：每只驯服来源都显示自己的**个体**攻速（查不到写「?」；绝不按家族推定）
+        row.meta:SetText(string.format(L("PH_PET_META"), tostring(b.level), tostring(b.zone), phFamLabel(b.fam))
+                         .. string.format(L("PH_PET_META_SPD"), phSpdTxt(phSpdOf(b.name)) or L("PH_SPD_UNKNOWN")))
         pcall(row.meta.Show, row.meta)
         pcall(row.nameBtn.Show, row.nameBtn)
         pcall(row.zoom.btn.Show, row.zoom.btn)
         row.zoom.btn:SetScript("OnClick", function() EVAL_PH_JUMP(b.name) end)
         row.nameBtn:SetScript("OnClick", function() EVAL_PH_JUMP(b.name) end)
         row.beast = b
+      end
+    end
+    -- ★1.75.36 攻速页脚：只列**本页涉及的家族**的快速具名宠（每家族最快 1 只，按攻速升序取前 PH_FAST_SHOW 个）
+    if PH.detFast then
+      local famSeen, famList = {}, {}
+      for i = 1, table.getn(beasts) do
+        local fm = beasts[i].fam
+        if type(fm) == "string" and fm ~= "" and not famSeen[fm] then famSeen[fm] = true; table.insert(famList, fm) end
+      end
+      local picked = {}
+      for i = 1, table.getn(famList) do
+        local one = phFamNamed(famList[i])
+        if table.getn(one) > 0 then table.insert(picked, one[1]) end   -- 生成期已按攻速升序 ⇒ [1] 就是该家族最快的一只
+      end
+      table.sort(picked, function(a, b) if a[2] ~= b[2] then return a[2] < b[2] end return a[1] < b[1] end)
+      local nShow = table.getn(picked)
+      if nShow > PH_FAST_SHOW then nShow = PH_FAST_SHOW end
+      if nShow == 0 then
+        PH.detFast:SetText("")
+        pcall(PH.detFast.Hide, PH.detFast)
+      else
+        local arr = {}
+        for i = 1, nShow do table.insert(arr, phSpdPair(picked[i][1], picked[i][2])) end
+        local txt = string.format(L("PH_DET_FAST_FMT"), table.concat(arr, L("PH_FAM_SEP")))
+        local more = table.getn(picked) - nShow
+        if more > 0 then txt = txt .. string.format(L("PH_DET_FAST_MORE"), more) end
+        PH.detFast:SetText(txt)
+        pcall(PH.detFast.Show, PH.detFast)
       end
     end
   end
@@ -734,7 +1167,30 @@ function EVAL_PH_BUILD(root, page, refreshes)
   table.insert(PH.listRow, cnt)
   table.insert(PH.listRow, clearBtn.btn)
 
-  -- 列表行池：图标 + 文本（整行可点 → 打开详情）
+  -- ★1.75.37 视图切换钮「技能列表 / 宠物列表」：放在搜索行与列表首行之间的**右侧**（用户指定位置）
+  --   · 它们是**列表视图专用** ⇒ 一并进 PH.listRow（详情视图跟着整排隐藏，不然会压在 [返回] 那一带）
+  --   · 当前模式上色在 EVAL_PH_REFRESH 里做（唯一处），这里只管建
+  local modeSkill = phBtn(root, RX - PH_MODE_BW * 2 - PH_MODE_GAP, PH_MODE_Y, PH_MODE_BW, PH_MODE_BH,
+                          L("PH_MODE_SKILL"), function() EVAL_PH_SET_MODE("skill") end)
+  local modePet = phBtn(root, RX - PH_MODE_BW, PH_MODE_Y, PH_MODE_BW, PH_MODE_BH,
+                        L("PH_MODE_PET"), function() EVAL_PH_SET_MODE("pet") end)
+  table.insert(widgets, modeSkill.btn)
+  table.insert(widgets, modePet.btn)
+  table.insert(PH.listRow, modeSkill.btn)
+  table.insert(PH.listRow, modePet.btn)
+  PH.modeBtns = { skill = modeSkill, pet = modePet }
+
+  -- 列表行池：图标 + 文本（整行可点 → 打开详情 / 宠物行 → 查刷新点）
+  -- ★1.75.37b 行内几何**唯一来源**（常量 = 文件头那批；右端三段的 x 从行宽倒推，谁都不许自己算）
+  local rowW = W - 40
+  local spdX = rowW - PH_SPD_W - 6                 -- 攻速列
+  local skX = spdX - PH_SKILL_W - 4                -- 技能图标条
+  --   ★短标签宽**按三语实际标签现算**（不写死：中文「家族技」≈33px、英文「family」≈20px），低于兜底值就取兜底
+  local labelW = math.ceil(math.max(phTextUnits(L("PH_PET_SK_LABEL")), phTextUnits(L("PH_PET_SKFAM_LABEL"))) * 11) + 4
+  if labelW < PH_SK_LABEL_W then labelW = PH_SK_LABEL_W end
+  local skLabelX = skX - labelW - 2                -- 技能条短标签
+  local textW = skLabelX - 24 - 8                  -- 主文本可用宽（超长由 phPetRowText 按字符截断）
+  PH.textW = textW                                 -- 刷新时截断用（保存一份，refresh 不重算）
   for i = 1, PH_LIST_ROWS do
     local y = PH_LIST_Y - (i - 1) * PH_ROW_H
     local b = CreateFrame("Button", nil, root)
@@ -751,10 +1207,68 @@ function EVAL_PH_BUILD(root, page, refreshes)
     icon:SetPoint("LEFT", b, "LEFT", 3, 0)
     local t = phText(b, 11, 0.92, 0.88, 0.80)
     t:SetPoint("LEFT", b, "LEFT", 24, 0)
-    pcall(t.SetWidth, t, W - 80)
+    -- ★1.75.37b 主文本宽度 = 行宽 − 左侧 24 − 右侧整段预留（攻速列 + 图标条 + 标签 + 各段间隔）
+    --   （两种列表共用同一宽度 = 单一来源，不按模式改宽度；文本超长由 phPetRowText 按字符截断）
+    pcall(t.SetWidth, t, textW)
     pcall(t.SetJustifyH, t, "LEFT")
+    -- ★1.75.37b 技能条：左侧短标签 + 5 个图标槽（宠物列表专用；技能模式下逐个显式 Hide）
+    local sLabel = phText(b, 10, 0.72, 0.82, 0.66)
+    sLabel:SetPoint("LEFT", b, "LEFT", skLabelX, 0)
+    pcall(sLabel.SetWidth, sLabel, labelW)
+    pcall(sLabel.SetJustifyH, sLabel, "RIGHT")
+    local sIcons = {}
+    for k = 1, PH_SKILL_MAX do
+      local tex = b:CreateTexture(nil, "ARTWORK")
+      tex:SetWidth(PH_SK_ICON) tex:SetHeight(PH_SK_ICON)
+      tex:SetPoint("LEFT", b, "LEFT", skX + (k - 1) * (PH_SK_ICON + PH_SK_GAP), 0)
+      sIcons[k] = tex
+    end
+    -- 整条技能图标 = **一个透明 Button** 兜住（★纹理不吃鼠标事件）：悬停出技能清单、点击与整行同样分派
+    local skBtn = CreateFrame("Button", nil, b)
+    skBtn:SetWidth(PH_SKILL_W) skBtn:SetHeight(PH_ROW_H - 2)
+    skBtn:SetPoint("LEFT", b, "LEFT", skX, 0)
+    pcall(skBtn.EnableMouse, skBtn, true)
+    pcall(skBtn.RegisterForClicks, skBtn, "LeftButtonUp")
+    pcall(skBtn.SetScript, skBtn, "OnClick", function() phRowActivate(PH.rows[i]) end)
+    pcall(skBtn.SetScript, skBtn, "OnEnter", function()
+      local r = PH.rows[i]
+      if not (r and r.pet) then return end
+      if type(GameTooltip) == "nil" then return end
+      local lines = phPetSkTipLines(r.pet)
+      pcall(GameTooltip.SetOwner, GameTooltip, skBtn, "ANCHOR_RIGHT")
+      for k = 1, table.getn(lines) do
+        pcall(GameTooltip.AddLine, GameTooltip, lines[k].t, lines[k].r, lines[k].g, lines[k].b)
+      end
+      pcall(GameTooltip.Show, GameTooltip)
+    end)
+    pcall(skBtn.SetScript, skBtn, "OnLeave", function()
+      if type(GameTooltip) ~= "nil" then pcall(GameTooltip.Hide, GameTooltip) end
+    end)
+    -- ★1.75.37 攻速列（只有宠物列表显示；技能模式下每行显式 Hide —— 见 EVAL_PH_REFRESH）
+    local spd = phText(b, 11, 0.98, 0.90, 0.52)
+    -- ★锚点用本项目已验证的 LEFT/LEFT 形式（行宽 W-40 ⇒ 偏移 = 行宽 − 列宽 − 6，仍是右对齐），不引入未验过的 RIGHT 锚点
+    spd:SetPoint("LEFT", b, "LEFT", spdX, 0)
+    pcall(spd.SetWidth, spd, PH_SPD_W)
+    pcall(spd.SetJustifyH, spd, "RIGHT")
+    -- 悬停 tooltip：宠物行显示「家族属性 + 攻速 + 快速具名」那一套（唯一来源 = EVAL_PH_FAM_TIP_LINES）
+    --   ★技能行没有 pet ⇒ 什么都不做（绝不弹上一个宠物的信息）
+    pcall(b.SetScript, b, "OnEnter", function()
+      local r = PH.rows[i]
+      if not (r and r.pet) then return end
+      if type(GameTooltip) == "nil" then return end
+      local p = r.pet
+      local lines = EVAL_PH_FAM_TIP_LINES(p[3], { name = p[1], level = p[4], zone = p[5] })
+      pcall(GameTooltip.SetOwner, GameTooltip, b, "ANCHOR_RIGHT")
+      for k = 1, table.getn(lines) do
+        pcall(GameTooltip.AddLine, GameTooltip, lines[k].t, lines[k].r, lines[k].g, lines[k].b)
+      end
+      pcall(GameTooltip.Show, GameTooltip)
+    end)
+    pcall(b.SetScript, b, "OnLeave", function()
+      if type(GameTooltip) ~= "nil" then pcall(GameTooltip.Hide, GameTooltip) end
+    end)
     table.insert(widgets, b)
-    PH.rows[i] = { btn = b, bg = bg, icon = icon, text = t, idx = i }
+    PH.rows[i] = { btn = b, bg = bg, icon = icon, text = t, spd = spd, skLabel = sLabel, skIcons = sIcons, skBtn = skBtn, idx = nil, pet = nil }
   end
 
   -- 空结果如实提示（不留一片空白）
@@ -825,6 +1339,17 @@ function EVAL_PH_BUILD(root, page, refreshes)
   local backBtn = phBtn(root, RX - PH_BACK_W, -58, PH_BACK_W, 20, L("PH_BACK"), function() EVAL_PH_BACK() end)
   table.insert(widgets, backBtn.btn)
   PH.backBtn = backBtn
+
+  -- ★1.75.36 攻速页脚：本页（本技能本等级的各驯服来源）涉及的家族里，本服世界库标了稀有/精英且攻速 ≤ speed.fast
+  --   的具名个体（每家族取**最快** 1 只，最多 PH_FAST_SHOW 个；其余在每行的家族图标 tooltip 里全列）。
+  --   · 位置 = 12 行宠物行下沿（-390）与内容下沿（-420）之间 ⇒ 固定 -400（布局常量算过，见文件头注释）。
+  --   · 没有内容时**显式 Hide**（本项目「显隐走显式控件清单」），绝不显示空行。
+  local detFast = phText(root, 10, 0.86, 0.90, 0.62)
+  detFast:SetPoint("TOPLEFT", root, "TOPLEFT", PH_X, -400)
+  pcall(detFast.SetWidth, detFast, W - PH_X - PH_RPAD)
+  pcall(detFast.SetJustifyH, detFast, "LEFT")
+  table.insert(widgets, detFast)
+  PH.detFast = detFast
 
   -- 宠物行池：底条 + 家族图标 + 名称（可点） + 元信息 + 放大镜
   --   ★列宽关系固定（互不相交）：名称 x=PH_X+26 宽 PH_NAME_W ｜ 元信息 x=PH_X+PH_META_X 宽 到 [查] 左边 -8 ｜ [查] 右贴 RX
@@ -903,7 +1428,7 @@ function EVAL_PH_BUILD(root, page, refreshes)
     PH.detRows[i] = { bg = bg, icon = icon, iconBtn = ib, name = name, nameBtn = nb, meta = meta, zoom = zoom, zoomIcon = zi }
   end
 
-  PH.detWidgets = { detIcon, detTitle, detIntro, detMeta, detReq, detPetTitle, sep, detScroll, backBtn.btn }
+  PH.detWidgets = { detIcon, detTitle, detIntro, detMeta, detReq, detPetTitle, sep, detScroll, detFast, backBtn.btn }
   for i = 1, PH_DET_ROWS do
     local r = PH.detRows[i]
     table.insert(PH.detWidgets, r.bg)
@@ -918,9 +1443,8 @@ function EVAL_PH_BUILD(root, page, refreshes)
   -- 点击列表行 → 详情（★local 作用域陷阱：OnClick 在所有控件建好后再挂）
   for i = 1, PH_LIST_ROWS do
     local row = PH.rows[i]
-    row.btn:SetScript("OnClick", function()
-      if row.idx then EVAL_PH_OPEN(row.idx) end
-    end)
+    -- ★1.75.37b 分派收进**唯一来源** phRowActivate（整行点击与技能条热区点击走同一处：宠物行 → 跳「任务线 & 装备」查刷新点；技能行 → 打开技能详情）
+    row.btn:SetScript("OnClick", function() phRowActivate(row) end)
   end
 
   -- 滚轮：列表翻页 / 详情宠物翻页（链式接管，不吞别人事件）
