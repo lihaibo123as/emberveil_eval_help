@@ -159,7 +159,7 @@ local DF_TARGETS = {
   --   ★1.75.36n 三连调整（用户）：① 推广到全部常驻层（见本表顶部三条）② 方块透明度 **0.8**
   --     ③ 定位 = 目标层**中心**（`CENTER ← 方块/CENTER, 0, 0`；ax/ay = 中心绝对坐标，与缩放无关）；
   --     ④ 关闭编辑模式方块一起隐藏（dfRefresh 的方块同步**不受 `if DF.on` 门管**）。
-  { name = "MainMenuBar", label = "动作条", hdy = -DF_DRAG_H, block = true },
+  { name = "MainMenuBar", label = "主动作条", hdy = -DF_DRAG_H, block = true },
   -- ★★★1.75.36 用户要求：「将经验条也加入图层拖拽->常驻层可选项」
   --   （真机截图：`MainMenuExpBar` 已被手动拖过 −3,+39 / 透明 0.40 = 用户就是要给它一个**常驻拖拽柄**）
   --   ★真名有**本地证据**：`/edb ui` 的图层树里它是 `MainMenuBar` 的子帧（1024×13，含 4 片 `MainMenuXPBarTexture0..3`）。
@@ -204,6 +204,16 @@ local DF_TARGETS = {
   --     ★`PET_BAR_UPDATE` **不注册**——本地零证据（铁律 5④：探测名单不算注册依据）。
   { name = "PetActionBarFrame", label = "宠物动作条", pet = true, block = true,
     cands = { "PetActionBarFrame", "PetActionBar", "PetBarFrame", "PetActionButtonsFrame", "PetBar" } },
+  -- ★★1.75.38 用户两句：「将战士/小德姿态条也加入图层拖拽->常驻可选」+「将主动作条内的动作条 加入常驻可选」
+  --   （真机截图证据 = 图层树探针报 `#282 BonusActionBarFrame`，框内有两枚姿态图标）。
+  --   ★姿态条帧名**没有本地证据**（UI 编译在 pak 里）⇒ 走候选名解析；一个都没命中就**如实缺席**
+  --     （编辑模式下不会出现它的方块），真名用 `/edb bars` 探。BonusActionBarFrame 有截图证据 ⇒ 直接写死。
+  --   ★两者都**按职业/状态出现**（法师没有姿态条；不切姿态不出额外动作条）⇒ 方块自带 IsShown 门
+  --     （目标没显示就不画孤块）；位置漂移由守卫兜底。
+  { name = "ShapeshiftBarFrame", label = "姿态条", block = true,
+    cands = { "ShapeshiftBarFrame", "StanceBarFrame", "StanceBar", "ShapeshiftBar", "StanceBarFrame1" } },
+  { name = "BonusActionBarFrame", label = "主动作条内单独动作条", block = true,
+    cands = { "BonusActionBarFrame", "BonusActionBar", "BonusBarFrame" } },
   -- ★★★1.74.32 用户要求：「拖拽图层再增加队伍层,团队层如果存在的话」。
   --   ★「如果存在的话」是**两层**意思，都要如实处理，不许假装：
   --     ① **帧名**同动作条1~4：本客户端 UI 编译在 pak 里（磁盘无 FrameXML、别的插件零引用）
@@ -4040,6 +4050,8 @@ local function dfFrameLikeGroup(n)
   -- ★1.75.x 宠物动作条：**必须在 bar 之前判** —— `PetActionBarFrame` 里含 "actionbar"，
   --   顺序反了会被判成 "bar" 组（探针分组里就看不到宠物条，取证时误判「帧名不对」）。
   if string.find(s, "petaction", 1, true) or string.find(s, "petbar", 1, true) then return "pet" end
+  -- ★1.75.38 姿态条：必须在 bar 之前判 —— `ShapeshiftBarFrame` 里含 "bar"（顺序反了会归错组）
+  if string.find(s, "shapeshift", 1, true) or string.find(s, "stance", 1, true) then return "stance" end
   if string.find(s, "multibar", 1, true) or string.find(s, "actionbar", 1, true)
     or string.find(s, "actionbutton", 1, true) or string.find(s, "multiaction", 1, true)
     or string.find(s, "mainmenubar", 1, true) then return "bar" end
@@ -4242,7 +4254,7 @@ function EVAL_DF_PROBE_SAFE()
 end
 
 -- ★分组表**必须与 `dfFrameLikeGroup` 的返回值一一对应**（少一个组名 ⇒ 该组结果静默丢掉，本项目最恨的那种）
-local DF_PROBE_GROUPS = { "bar", "pet", "party", "raid", "guild", "char", "auction", "mail", "quest",
+local DF_PROBE_GROUPS = { "bar", "pet", "stance", "party", "raid", "guild", "char", "auction", "mail", "quest",
   "spell", "trainer", "trade", "merchant", "friend" }
 local DF_PROBE_TOP_MAX = 80  -- 顶层大帧清单上限（够用即可，避免存档被灌成大文件）
 -- ★★上限（1.74.32 真机实测补）：关键词会命中**几千个同名子件**（ActionButton* 的贴图/文字/冷却圈…），
@@ -4890,7 +4902,7 @@ local DF_CBT_WATCH = {
   { "PetActionBarFrame", "宠物动作条" },
   { "MainMenuBar", "主动作条" },
   { "MainMenuExpBar", "经验条" },
-  { "BonusActionBarFrame", "额外动作条" },
+  { "BonusActionBarFrame", "主动作条内单独动作条" },
   { "ActionButton1", "主动作条第1格" },
   { "MultiBarBottomLeft", "动作条1" },
   { "MultiBarBottomRight", "动作条2" },
