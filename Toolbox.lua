@@ -4627,20 +4627,23 @@ local function tbModel()
     -- ★1.74.5 用户要求：新增「猎人助手」分组 →「一键喂食」开关（默认关）
     --   总闸门 = tools/HunterHelper.lua 的 feedPet：勾上才**懒建**屏幕上的喂食图标（未勾 = 一个帧都不建）
     { t = "h", label = L("TB_H_HUNTER") },
-    --   ★wip = 右侧那枚**黄感叹号（待测试）**的 tooltip 文案（用户要求：还没经过游戏内实测的功能要标出来）
-    { t = "c", key = "feedPet", label = L("TB_FEEDPET"), tip = L("TB_FEEDPET_TIP"), wip = L("TB_WIP_TIP"),
+    { t = "h", label = L("TB_H_HUNTER") },
+    -- ★★★1.75.42 用户：「清理掉以上这几个右边感叹号」⇒ **退休 `wip`（黄感叹号 = 待测试）标记**：
+    --   这几个助手（一键喂食 / 消耗品 / 一键下马 / 自动下马）都已在真机实测过 ⇒ 连同**整条 wip 机制**
+    --   一起删（标记按钮 + tooltip + 显隐清单 + 读值口字段），不留「零引用」的死代码。
+    { t = "c", key = "feedPet", label = L("TB_FEEDPET"), tip = L("TB_FEEDPET_TIP"),
       posReset = true }, -- ★用户要求：右侧加「重设位置」按钮（图标回屏幕正中）
     -- ★1.74.5 用户要求：「参照喂食助手，添加个消耗品助手」→ 多选 + 主图标旁横排各自点用
     { t = "h", label = L("TB_CH_GROUP") },
-    { t = "c", key = "consumable", label = L("TB_CONSUMABLE"), tip = L("TB_CONSUMABLE_TIP"), wip = L("TB_WIP_TIP"),
+    { t = "c", key = "consumable", label = L("TB_CONSUMABLE"), tip = L("TB_CONSUMABLE_TIP"),
       posReset = true }, -- ★同上：右侧「重设位置」
     -- ★1.74.7 用户要求：「按照推荐的在工具箱内添加个一键下马功能」→ 骑乘助手分组
     --   总闸门 = tools/DismountHelper.lua 的 dismount：勾上才懒建屏幕上的下马图标（未勾 = 一个帧都不建）
     --   ★实现依据：本客户端无 Dismount/IsMounted API；坐骑=可取消的有益光环（tooltip 描述含「速度提高X%」）
     --     → CancelPlayerBuff（非 Protected）取消它。自动下马 = 被系统以「你正在/无法在/骑乘」拒绝时顺手下马。
     { t = "h", label = L("TB_H_RIDE") },
-    { t = "c", key = "dismount", label = L("TB_DISMOUNT"), tip = L("TB_DISMOUNT_TIP"), wip = L("TB_WIP_TIP") },
-    { t = "c", key = "dismountAuto", label = L("TB_DISMOUNT_AUTO"), tip = L("TB_DISMOUNT_AUTO_TIP"), wip = L("TB_WIP_TIP") },
+    { t = "c", key = "dismount", label = L("TB_DISMOUNT"), tip = L("TB_DISMOUNT_TIP") },
+    { t = "c", key = "dismountAuto", label = L("TB_DISMOUNT_AUTO"), tip = L("TB_DISMOUNT_AUTO_TIP") },
     -- ★1.74.27 用户要求：「将以上功能提取到独立文件内 ./tools 然后再工具箱内设置开关.」
     --   稀有提醒转播（tools/RareWatch.lua）的**总开关**放这里；★读写走实现自己的单一来源
     --   （EVAL_RW_ENABLED / EVAL_RW_SET），**不另开一个配置键** —— 免得开关与实现两处真值打架。
@@ -4773,6 +4776,19 @@ function EVAL_TB_COL_CUT(items, off, rows, cols)
   if bestCut == nil then
     bestCut = (pageN < rr) and pageN or rr
   end
+  -- ★★★1.75.42 修（用户报障：「工具箱 → 队伍/社交 分类下面有个空白的任务分类标题」）：
+  --   硬切正好落在**标题条**上时，左列最后一行是个标题、下面什么都没有（右列却从它的条目开始 = 无头条目，
+  --   两列都读不懂）。口径：**标题永远不许当列尾**。
+  --   做法 = 切点前移一格（标题连同它的条目一起进右列）+ 本窗口**少放最后一条**
+  --   ⇒ 左列 rr−1 行、右列 rr 行（两列都在每列行数之内），且**不跳条**：少放的那一条下一次逐行滚动就出现
+  --   （窗口上界/滚轮仍走恒定 cap 口径，见 tbWinMaxOff；本函数只改「这一次铺几条」）。
+  --   ★while 而不是 if：模型里万一有**连续两个标题**，前移一格仍会以标题收尾 ⇒ 继续前移。
+  local guard = 0
+  while bestCut >= 2 and pageN >= 3 and guard < 8 do
+    local lastL = items[o + bestCut]
+    if not (type(lastL) == "table" and lastL.t == "h") then break end
+    bestCut, pageN, guard = bestCut - 1, pageN - 1, guard + 1
+  end
   return bestCut, bestCut, pageN - bestCut, pageN
 end
 
@@ -4839,7 +4855,6 @@ function EVAL_TB_REFRESH()
       r.idx = okc and (TB.off + pi) or nil
     end
     r.chk:Hide() r.text:Hide() r.hdr:Hide() r.extra:Hide() r.add.btn:Hide() r.clr.btn:Hide() r.chv.btn:Hide()
-    if r.wip then r.wip.btn:Hide() end -- ★1.74.5 「待测试」标记也在显式清单里（少一处 = 上一页的标记残留）
     r.get, r.set = nil, nil
     r.modelKey = it and it.key or nil -- ★1.73.10 记住这一格当前是哪个 key（勾选后要按 key 做即时副作用）
     if it then
@@ -5028,11 +5043,6 @@ function EVAL_TB_REFRESH()
         r.text:SetText(it.label)
         r.text:Show()
         r.tip = it.tip
-        -- ★1.74.5 用户要求：模型标了 wip 的行 → 右侧显示**插件本地黄感叹号**（待测试）
-        if it.wip and r.wip then
-          r.wip.tip = it.wip
-          r.wip.btn:Show()
-        end
       end
     end
   end
@@ -5040,7 +5050,9 @@ function EVAL_TB_REFRESH()
     -- ★★★1.74.30 计数器 = `起–止 / 总数`（窗口语义，文本走纯函数 EVAL_TB_PAGE_TEXT 单一来源）：
     --   起 = off+1、止 = min(n, off+cap)；★与旧版的差别：旧版「一屏装得下就 Hide」——
     --   连续窗口下**位置任何时候都有意义**（窗口起点是行偏移，用户要看到自己在 31 条里的哪一段）⇒ 常显。
-    TB.indicator:SetText(EVAL_TB_PAGE_TEXT(TB.off, cap, n))
+    --   ★1.75.42：止用 **pageN**（本窗口实际铺了几条）—— 修「列尾孤标题」时窗口偶尔会少放一条，
+    --     这里跟着说实话，不虚报那一条（pageN 的单一来源仍是 EVAL_TB_COL_CUT 的返回）。
+    TB.indicator:SetText(EVAL_TB_PAGE_TEXT(TB.off, pageN, n))
     TB.indicator:Show()
   end
   if TB.scrollUp then
@@ -5177,35 +5189,9 @@ function EVAL_TB_BUILD(root, page, refreshes)
     row.add = tbBtn(root, cRight - 96, y, 44, L("TB_ADD"), function() end, widgets)
     row.clr = tbBtn(root, cRight - 48, y, 40, L("TB_CLEAR"), function() end, widgets)
     row.chv = tbBtn(root, cRight - 96, y, 88, "", function() end, widgets) -- 1.69.0 频道值按钮（ch 行）
-    -- ★1.74.5 「待测试」标记（用户要求：一键喂食 右侧 加一个**插件本地图标黄色感叹号**，tooltip=待测试）：
-    --   · 贴**本列右边缘**，且沿用「全用距左边表示」的列几何口径（不用 TOPRIGHT 再算一遍）；
-    --   · 用**独立小 Button** 而不是 Texture —— 纹理不吃鼠标事件，挂不了 OnEnter/tooltip；
-    --   · 路径走单一来源 EVAL_UI_MARK_TEST（EvalHelp.lua 导出；UI ICON CHECK 核它在磁盘上）。
-    local wipBtn = CreateFrame("Button", nil, root)
-    wipBtn:SetWidth(12)
-    wipBtn:SetHeight(12)
-    wipBtn:SetPoint("TOPLEFT", root, "TOPLEFT", cRight - 12, y - 2)
-    pcall(wipBtn.EnableMouse, wipBtn, true)
-    local wipTex = wipBtn:CreateTexture(nil, "OVERLAY")
-    wipTex:SetPoint("TOPLEFT", wipBtn, "TOPLEFT", 0, 0)
-    wipTex:SetPoint("BOTTOMRIGHT", wipBtn, "BOTTOMRIGHT", 0, 0)
-    local wipPath = rawget(_G, "EVAL_UI_MARK_TEST")
-    if type(wipPath) == "string" and wipPath ~= "" then pcall(wipTex.SetTexture, wipTex, wipPath) end
-    wipBtn:Hide()
-    wipBtn:SetScript("OnEnter", function()
-      if type(row.wip) ~= "table" or not row.wip.tip then return end
-      if type(GameTooltip) ~= "table" then return end
-      GameTooltip:SetOwner(wipBtn, "ANCHOR_RIGHT")
-      GameTooltip:ClearLines()
-      GameTooltip:AddLine(L("TB_WIP"), 1, 0.85, 0.25)
-      GameTooltip:AddLine(row.wip.tip, 0.85, 0.85, 0.85, 1)
-      GameTooltip:Show()
-    end)
-    wipBtn:SetScript("OnLeave", function()
-      if type(GameTooltip) == "table" then GameTooltip:Hide() end
-    end)
-    row.wip = { btn = wipBtn, tex = wipTex, tip = nil }
-    table.insert(widgets, wipBtn)
+    -- ★★★1.75.42 原「待测试」黄感叹号标记（1.74.5 加）已按用户要求**整条退休**：
+    --   标记按钮 + tooltip + 显隐清单 + 读值口字段一起删（避免留下零引用的死控件；每行本来都要建一个 12×12
+    --   的 Button + Texture = 24 行 × 2 个对象，纯浪费）。要再标某个功能待测试，从 git 历史取回这段即可。
     -- ★★★1.73.25 用户（截图圈出「自动购买指定物 / 自动丢弃指定物」两行）：
     --   「右侧的对应的按键 [要与] 左侧名称**对齐**」。
     --   根因（读代码可证）：标签 FontString 锚在 `y - TB_ROW_TXT_DY`（往下 3px），而按钮锚在同行的 `y`
@@ -5746,12 +5732,21 @@ function EVAL_TB_TEST_LAYOUT()
     if r then
       -- ★读刷新时记下的**实际映射**（r.item / r.pi / r.idx）——本读值口**不重算**（重算 = 测试验的是读值口自己）
       local it = r.item
+      -- ★★★1.75.42 加**颜色读数**（用户报障「滚动之后所有标题都变成绿色」，而 Toolbox 自己**只在建帧时**
+      --   设过一次颜色：标签 0.92/0.88/0.80、组标题 0.95/0.80/0.30）⇒ 真机上量出「刷新后到底是什么色」
+      --   才能定案是谁改的。GetTextColor 客户端可能没有 ⇒ 取不到就如实留 nil（不编）。
+      local function tcol(fs)
+        if not fs or type(fs.GetTextColor) ~= "function" then return nil end
+        local okc, cr, cg, cb = pcall(fs.GetTextColor, fs)
+        if not (okc and type(cr) == "number") then return nil end
+        return { cr, cg, cb }
+      end
       out.rows[k] = { col = r.col, slot = r.slot, pi = r.pi, idx = r.idx, key = it and it.key or nil,
                       kind = it and it.t or nil, shown = r.chk:IsShown() and true or false,
                       chk = rect(r.chk), text = rect(r.text), extra = rect(r.extra),
                       add = rect(r.add and r.add.btn), clr = rect(r.clr and r.clr.btn),
                       chv = rect(r.chv and r.chv.btn), hdr = rect(r.hdr),
-                      wip = rect(r.wip and r.wip.btn), wipTip = (r.wip and r.wip.tip) or nil }
+                      textColor = tcol(r.text), hdrColor = tcol(r.hdr) }
     end
   end
   return out

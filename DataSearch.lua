@@ -1606,6 +1606,35 @@ local function dsAnnSummary()
   return table.concat(parts, " ")
 end
 
+-- 诊断（/eh ds）：一张表看清整条链路
+-- ★★★1.75.42 **恢复被误删的定义**（1.75.34 孤儿清理删掉了它，而 EvalHelp.lua 里 `/eh ds 节点诊断`
+--   那条分支还在调 —— 调用点写成 `if type(EVAL_DS_NODE_DIAG)=="function" then say(...)` ⇒ **静默**：
+--   命令敲下去什么都不打印，用户只会以为「这命令没用」）。
+function EVAL_DS_NODE_DIAG()
+  local mc = dsUQModule("MapContext")
+  local areaId, err = nil, nil
+  if mc and type(mc.GetViewedZone) == "function" then
+    local ok, a = pcall(mc.GetViewedZone, mc)
+    if ok then areaId = a else err = tostring(a) end
+  end
+  local shown = "?"
+  if type(WorldMapFrame) == "table" and type(WorldMapFrame.IsShown) == "function" then
+    local ok, s = pcall(WorldMapFrame.IsShown, WorldMapFrame)
+    if ok then shown = tostring(s) end
+  end
+  local on = {}
+  for _, d in ipairs(DS_ANN_CATS) do if dsCatOn(d.k) then table.insert(on, d.label) end end
+  local tip = ""
+  if not dsAnnOn then tip = " | 图层总开关未开（/eh ds trace 或 Tab 里打开）" end
+  return string.format("图层=%s trace=%s 已绘地图=%s 钉子池=%d 对方当前区域=%s IsShown=%s(仅参考)",
+    tostring(dsAnnOn), tostring(dsTrace), tostring(dsAnnSig), table.getn(dsAnnPins),
+    tostring(areaId), tostring(shown))
+    .. " | 开启类别=" .. ((table.getn(on) > 0) and table.concat(on, ",") or "无")
+    .. " | 本次显示=" .. dsAnnSummary()
+    .. (dsAnnTruncated and (" | 已触顶(" .. DS_ANN_MAX .. ")，本图还有更多点未显示") or "")
+    .. tip .. (err and (" err=" .. err) or "")
+end
+
 -- 检查 GetViewedZone 的语义：返回 areaId 则可标注，nil = 地图没开/大陆视图
 -- 视图签名：**区域 + 地图视图**，参照 UnrealQuest WorldMapPins 的 ViewSignature
 -- （Map/WorldMapPins.lua:678 —— 它的签名含 areaId|mapFile|continent|zoneIndex）。
@@ -4753,6 +4782,68 @@ function EVAL_DS_BUILD(root, page, refreshes)
   pcall(qpPump.Show, qpPump)
   DS.qcPump = qpPump
 
+  -- ===== 探针（用户要求「优先排查有没有 API 接口获取装备信息」）：一条命令摊开结论 =====
+  -- 用法：/eh ds 任务线   → 打印若干 id 的客户端返回；未缓存的自动排队请求（限频），
+  --       等 5 秒再跑一次即可看到「自愈」效果（回来了就有名字与游戏内图标路径）。
+  -- ★★★1.75.42 **恢复被误删的定义**（1.75.34 孤儿清理删掉了它，而 EvalHelp.lua 的 `go 任务线` 分支还在调它，
+  --   并且那条分支带 `else say("探针不可用：EVAL_DS_QC_PROBE 未定义…")` ⇒ 用户看到的是「探针不可用」，
+  --   而不是崩溃 —— 同族的静默/半静默失效）。
+  function EVAL_DS_QC_PROBE(ids)
+    local out = {}
+    local list = ids or { 2042, 2506, 1264, 6087, 2041, 1712 }
+    for i = 1, table.getn(list) do
+      local id = list[i]
+      local nm, tex, q = qpItemInfo(id)
+      table.insert(out, string.format("#%d 名字=%s | 图标=%s | 品质=%s", id,
+        tostring(nm or "nil"), tostring(tex or "nil"), tostring(q or "nil")))
+      if not nm then
+        if DS.qcReq and table.getn(DS.qcReq.q) < QP_REQ_MAX then table.insert(DS.qcReq.q, id) end
+        table.insert(out, "      ↑ 客户端未缓存 → 已排队向服务器请求（限频 " .. tostring(QP_REQ_RATE) .. "s/件）；等 5 秒再跑一次本命令看是否自愈")
+      end
+    end
+    table.insert(out, "说明：本客户端**没有**「按 id 直取物品」的独立 API（api_item 索引里只有包装备栏/商店/训练师等场景专用的那几个）；")
+    table.insert(out, "      唯一入口是 GetItemInfo(id)，**只读本地缓存** —— 未缓存就是没名字没图标（UnrealQuest 已实测并记录该行为）。")
+    -- ★1.75.12 用户问「装备链接缓存是否生效?」+「只在当前看得见的装备检索」：把**当前这一屏**的
+    --   缓存命中与待请求队列摊开（含限频），一眼看出缓存有没有自愈、有没有在乱轰服务器。
+    local hits = (DS.qpTab == "item") and (DS.qpItemHits or {}) or (DS.qpChainHits or {})
+    local visN, cachedN = 0, 0
+    for i = 1, QP_ROWS do
+      local h = hits[(DS.qpOff or 0) + i]
+      local id = h and h.id or nil
+      if type(id) == "number" then
+        visN = visN + 1
+        if qpItemInfo(id) then cachedN = cachedN + 1 end
+      end
+    end
+    local st = EVAL_QP_REQ_STATE()
+    table.insert(out, string.format("[当前页缓存] 本页装备 %d 件 · 客户端已缓存 %d · 待请求 %d 件（限频 %.1fs/件 · 队列上限 %d）",
+      visN, cachedN, st.queued, st.rate, st.cap))
+    -- ★1.75.16 「泵到底有没有在要」也要能一眼看出来（旧版只有队列长度，泵死了也显示得像正常）；
+    --   顺带把**工具柄状态**摊开（自建 / 退化用 GameTooltip / 无）—— 泵拿不到柄时靠它定位。
+    local wttState = "?"
+    if type(EVAL_WTT_STATE) == "function" then
+      local ws = EVAL_WTT_STATE()
+      wttState = ws.hasWtt and (ws.self and "自建" or "退化(GameTooltip)") or "无"
+    end
+    table.insert(out, string.format("[请求泵] 已请求 %d 件 · 因拿不到工具柄挡下 %d 次 · 泵帧=%s · 已试过 %d 件 · 工具柄=%s · 手动优先 %d 次",
+      st.req, st.blocked, (st.pumpShown and "开" or "关"), st.tried, wttState, st.pri))
+    table.insert(out, "      ★只对**当前看得见**的装备排队请求（每次重绘重建队列，绝不顺序检索全部装备）；整页都命中缓存时队列为 0。")
+    -- ★1.75.13 「载入的是哪一版」自查行：任务线**全量条数**是最好认的派生事实 ——
+    --   旧实现在 DataSearch 里写死 `EVAL_QC_SEARCH(q, 200, …)`，而列表按等级升序 ⇒ 只出 200 条、最高 hi≈40，
+    --   于是用户看到「任务线最高只有 30 级」误以为数据没收集齐（修好后 = 全量 710 条 · 最高 hi=60）。
+    local qAll = EVAL_QC_SEARCH("", 0, nil) or {}
+    local qTop, qSer = 0, 0
+    for i = 1, table.getn(qAll) do
+      local hi = tonumber(qAll[i] and qAll[i].c and qAll[i].c.hi) or 0
+      if hi > qTop then qTop = hi end
+    end
+    if type(EVAL_QC_SERIES_COUNT) == "function" then qSer = EVAL_QC_SERIES_COUNT() end
+    table.insert(out, string.format("[任务线列表] 全量 %d 条（策展 %d + 自报系列 %d）· 最高 hi=%d",
+      table.getn(qAll), table.getn(EVAL_QC_LIST() or {}), qSer, qTop))
+    table.insert(out, "      ★若这一行只有 200 条、最高 hi≈40 ⇒ **载入的是旧副本**，请 /reload 后再看（新副本是全量、最高 60）。")
+    return out
+  end
+
   -- ===== 全量数据审计（用户 1.75.9：「任务完成之后要审计装备链接是否正确…装备链接都以游戏内信息为准」）=====
   -- 逐件把**数据里的装备**与**客户端认识的信息**对账：
   --   · 未缓存 = 客户端还没这件物品（图标/属性暂时没有，已排队限频请求，稍后自愈）
@@ -5106,6 +5197,11 @@ function EVAL_DS_BUILD(root, page, refreshes)
   end
   function EVAL_QP_ROWS() return QP_ROWS, QP_DET_ROWS end
   function EVAL_QP_ITEM_INFO(id) return qpItemInfo(id) end -- 读值口：走 GetItemInfo（游戏内为准）
+  -- ★★★1.75.42 **恢复被误删的读值口** `EVAL_QP_TEST_F2`（= 类型筛选按钮 F2 的本体，探针要跑它真实的 OnClick）：
+  --   1.75.34 孤儿清理按判据①（.lua 零引用）删了它，**违反了同一份判据的第②条**——「其它文件类型零提及
+  --   （.md/.js/.html/.toc）」：`quest/probe_chainkinds.js` 里一直在调它（两处）⇒ 那个探针一跑就
+  --   `attempt to call a nil value`。同族的 F1/F3 全项目零提及 ⇒ 那两个删掉是对的，只还原 F2。
+  function EVAL_QP_TEST_F2() return DS.qp and DS.qp.f2 and DS.qp.f2.btn or nil end
   function EVAL_QP_SET_QUERY(q)
     DS.qpQuery = tostring(q or "")
     DS.qpOff = 0

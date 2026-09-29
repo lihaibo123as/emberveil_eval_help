@@ -562,6 +562,21 @@ function EVAL_SHARE_SEAL_VARIANT_PROBE()
 end
 
 
+-- ★★★1.75.42 **恢复被误删的定义**（真机红字：`Share.lua:961: attempt to call global 'shNoPop' (a nil value)`）：
+--   1.74.5 立的规矩（用户：「现在为弹窗原因在日志内显示」）—— 把**每一条**「不弹窗」的分叉都写进调试日志
+--   （EVAL_LOGLINE → /eh logdump / 存档文件）。此前只有「弹窗 / 过大 / 自己的回声」三条落盘，
+--   而最容易踩的「接收开关关着」反而**完全静默** ⇒ 用户报「对方就是不弹窗」时日志里查不到原因。
+--   统一前缀 `[分享] 不弹窗：`（检索词），正文写「原因（发送者=…，细节）」。
+--   ★为什么需要这行恢复说明：1.75.34 的「孤儿清理」把它**整段删掉**，而 8 处调用点全留着
+--     （清理脚本的判据是「零引用」，本函数明明有 8 处引用 —— 属于清理脚本的误删）；
+--     这类「调用还在、定义没了」luacheck / probe_localorder / scan_dangling **都抓不到**
+--     （scan_dangling 只扫 addons/ 子目录）⇒ 只有真机红字能暴露。全项目同类还有 4 个（已一并恢复）。
+local function shNoPop(reason, sender, extra)
+  if type(EVAL_LOGLINE) ~= "function" then return end
+  pcall(EVAL_LOGLINE, "[分享] 不弹窗：" .. tostring(reason) ..
+        "（发送者=" .. tostring(sender or "?") .. (extra and ("，" .. tostring(extra)) or "") .. "）")
+end
+
 -- ★★★1.72.3 **收不齐绝不静默**，且**给晚到的分片留冗余窗口**（用户要求：1~2 秒内都可以）。
 --   两级判定：
 --     ① 空闲超过 SH_RECV_TOLERANCE(2s) 仍未收齐 → **如实提醒**（点名发送者 + 收了几片），

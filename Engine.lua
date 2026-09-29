@@ -74,6 +74,20 @@ function EVAL_WTT_MAY_READ()
   if may then WTT_TOUCH = WTT_TOUCH + 1 end -- 退化模式下真碰了玩家那个 tooltip 的次数（应该尽量 0）
   return may
 end
+-- ★1.75.16 **正式**读值口（不是测试专用）：凡是要拿这个隐形 tooltip「向服务器要数据」的功能
+--   （数据检索里给未缓存装备补缓存）都必须走这里 —— `rawget(_G, "EVAL_HELP_WTT")` 在
+--   「自建失败 → 退化用 GameTooltip」那条路上**恒为 nil**，于是调用方静默什么也做不了
+--   （1.75.16 真机事故：任务线当前页不再检索装备，就是读全局名读出了 nil）。
+-- ★★★1.75.42 **恢复被误删的定义**（1.75.34 孤儿清理把这一整块删了，而调用点全留着）：
+--   DataSearch.lua / Engine.lua / EvalHelp.lua 共 4 处都写成 `if type(EVAL_WTT_HANDLE)=="function"` ⇒
+--   守卫恒假、请求泵永远拿不到工具柄 ⇒ 「任务线当前页的装备详情永远不检索」——**与 1.75.16 那次事故同一个症状**，
+--   而且全程静默（这也是为什么必须靠「全项目审计」而不是靠日志才发现）。
+function EVAL_WTT_HANDLE() return WTT end
+function EVAL_WTT_IS_SELF() return WTTSELF end
+function EVAL_WTT_STATE()
+  return { self = WTTSELF, name = (WTTSELF and "EVAL_HELP_WTT" or "GameTooltip"),
+           why = WTT_WHY, touches = WTT_TOUCH, hasWtt = (WTT ~= nil) }
+end
 local wslots = {}       -- 技能名 -> { slot, tex }
 local wscanned = false
 local wLastAttackTry = 0
