@@ -37,6 +37,7 @@ IconSem.lua
 IconBrowser.lua
 PetData.lua
 PetHelper.lua
+ItemPriceData.lua
 tools\SimpleMap.lua
 tools\IconGrid.lua
 tools\HunterHelper.lua
@@ -46,4 +47,6 @@ tools\RareWatch.lua
 tools\DragFrames.lua
 tools\LayerFix.lua
 tools\LootCursor.lua
+tools\InfoBar.lua
+tools\ItemPrice.lua
 tools\Probes.lua

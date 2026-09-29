@@ -832,6 +832,20 @@ local LOAD_RESIDUE_KEYS = {
   --   用户报障「进入攻击状态会把宠物动作栏顶到上面去」⇒ 只读探针每 0.25s 采一拍、**只在真的变了的那一拍**记一行
   --   （矩形/锚点/父级/帧层/显隐），并记战斗进出。原话只进聊天 = AI 读存档时取证断链（老教训）⇒ 必须专属落盘。
   "dragCombat",
+  -- ★1.75.40 顶部信息条（tools/InfoBar.lua）的取证读数（环上限 40，/eh go 信息条 存档）：
+  --   位置越界回归 / 拖动落点 / 设置变更 / 开关节拍 —— 都是只能真机读的判据，而聊天框读数（say）
+  --   不落日志环、共享 100 环又会被 [DS] 冲掉 ⇒ 必须自带专属落盘（同 lcProbe/selProbe 的教训）。
+  --   ★主开关关着时**一个字节都不写**，不给普通玩家留残渣。
+  "ibProbe",
+  -- ★1.75.41 物品价探针（tools/Probes.lua 的 PR["ITEMPRICE"]，环上限 60，/eh go 物品价 环）：
+  --   「替换 GameTooltip 的方法在本客户端活不活 / OnTooltipAddMoney 的金额在第几个参数 / 自建 GameTooltip 帧
+  --   会不会触发 / OneBag 格子按钮能否解析出 bag/slot」—— 四条都只能真机读，而聊天框读数（say）
+  --   不落日志环、共享 100 环又会被 [DS] 冲掉 ⇒ 必须自带专属落盘（同 ibProbe/lcProbe/selProbe 的教训）。
+  "ipProbe",
+  -- ★1.75.41b 物品价探针的**监听环**（tools/Probes.lua 的 PR["ITEMPRICE"]，环上限 60）：
+  --   首轮真机教训：报告（一次性 10 来行）与监听（每次悬停几十行）**共用一个环**时，
+  --   跑完 `监听` 会把 `状态/采样` 的报告整段刷掉（存档里只剩钱行、测③④一行不剩）⇒ 必须分成两个键。
+  "ipListen",
 }
 
 function EVAL_LOAD_RESIDUE_KEYS() return LOAD_RESIDUE_KEYS end

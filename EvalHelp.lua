@@ -3500,7 +3500,7 @@ end
 --   ① CLICK 隐藏按钮派发（vanilla 经典招）——客户端把「CLICK <按钮>:LeftButton」解析岔了，
 --     **触发被挂到鼠标左右键**、原始转屏被顶掉（插件确实被触发 = 链路通、命令串形态错）→ 弃用；
 --   ② 裸命令名 `EVAL_GO<i>` —— **绑定表接受但不派发**（用户实测：绑定成功、按键不触发）；
---   ③ Bindings.xml 登记 —— **本客户端根本不读插件的 Bindings.xml**（对照实验 + unrealUI 源码双重确认）→ 弃用；
+--   ③ Bindings.xml 登记 —— **本客户端根本不读插件的 Bindings.xml**（对照实验 + 另一份插件的源码双重确认）→ 弃用；
 --   ④ ★最终 = 命令名用**客户端自带的** ACTIONBUTTON<n> + 插件接管 ActionButtonDown/Up 翻译成 EVAL_GO(方案)。
 -- ★持久化：绑定后 SaveBindings(GetCurrentBindingSet())——不存就随重登消失（实测当前 set = 1）。
 
@@ -3642,9 +3642,9 @@ end
 --   ★为什么不是 Bindings.xml（两条独立证据一致判死）：
 --     ① 本机对照实验（2026-09-18）：把 ArchiTotem **启用**后**完整重启**客户端，
 --        它的 CAST_EARTH_TOTEM 依然不在命令表里（连一条 CAST_* 都没有），表恒为 226 行。
---     ② 同机同客户端的 unrealUI 插件在源码注释里写明它自己踩过同一个坑（2026-08-19 实测）：
---        「Bindings.xml declarations -- unrealUI's 60 commands were absent from a
---          225-entry binding table」→ 它最后也放弃这条路（「nothing here depends on that」）。
+--     ② 同机另一份插件在源码注释里写明它自己踩过同一个坑（2026-08-19 实测）：
+--        它的 60 条命令在一个 225 条的绑定表里**一条都不在** → 它最后也放弃这条路
+--        （原话「nothing here depends on that」；原文与出处见 CHANGELOG）。
 --     ③ 结论：SetBinding 会**照单全收**任何字符串（Keybinds.ini 里真能看到那行），
 --        但客户端的命令表只含它自带的条目 → 按键时查不到执行体 → **静默无反应**。
 --
@@ -3658,11 +3658,11 @@ end
 --         + 接管 ActionButtonUp，把「格号 → 方案号」的映射翻译成 EVAL_GO(方案号)。
 --   ★零成本：不占宏名额、不占动作格、不改用户的任何现有按键、游戏运行中立即生效。
 --
---   ★代价（unrealUI 源码明确警告，必须自己补回）：
+--   ★代价（那份插件的源码注释明确警告过，必须自己补回）：
 --     本客户端是按**物理键**触发 ActionButtonDown/Up 的，不是按精确组合键 ——
 --     替换掉原函数就丢掉了客户端原有的「组合键保护」，
 --     于是「绑到 ACTIONBUTTONn 的裸键」在按住 Alt/Ctrl/Shift 时也会触发。
---     这里按 unrealUI 的做法重建守卫：按住修饰键时若该组合键另有归属，就不当作动作条按键。
+--     这里按同样的做法重建守卫：按住修饰键时若该组合键另有归属，就不当作动作条按键。
 -- ============================================================================
 
 -- 动作格命令名（纯函数，测试直测）：客户端**自己认**的只有 ACTIONBUTTON1..12（主条 12 格）。
@@ -3689,7 +3689,7 @@ function EVAL_BIND_SLOT_MAP()
 end
 
 -- 组合键守卫：按住修饰键时，若「修饰键+该键」另有归属 → 这次按键不该算作动作条按键。
---   ★判据严格照抄 unrealUI：拿该格命令的主键，拼出修饰前缀，查 GetBindingAction；
+--   ★判据严格照抄那份实现：拿该格命令的主键，拼出修饰前缀，查 GetBindingAction；
 --     不等于本格命令 = 被别的功能占了 → 不触发（把这一下让给客户端）。
 function EVAL_BIND_MODIFIER_STOLEN(index)
   local prefix = ""
@@ -3712,7 +3712,7 @@ function EVAL_BIND_MODIFIER_STOLEN(index)
   return false
 end
 
--- 文本输入中不该触发动作（聊天框开着时按键是文字）——照抄 unrealUI 的守卫
+-- 文本输入中不该触发动作（聊天框开着时按键是文字）——照抄那套守卫
 function EVAL_BIND_TEXT_BLOCKS()
   if type(ChatFrame1) == "table" and type(ChatFrame1.IsShown) == "function" then
     local ok, shown = pcall(ChatFrame1.IsShown, ChatFrame1)
@@ -7624,6 +7624,17 @@ if type(SlashCmdList) == "table" then
       prRun("CBT", msg)
     elseif msg == "go 开窗探针" or msg == "go attrprobe" or string.find(msg or "", "^go 开窗探针%s") == 1 then
       prRun("ATTRPROBE", msg)
+    -- ★1.75.40 顶部信息条（tools/InfoBar.lua）：状态 / 开 / 关 / 重设 / 顺序 / 诊断 / 存档 / 清。
+    --   ★别名 `go 信息条` 与 `go infobar` 全项目唯一（`GO ALIAS UNIQUE CHECK` 那条纪律）。
+    elseif msg == "go 信息条" or msg == "go infobar" or string.find(msg or "", "^go 信息条%s") == 1 then
+      prRun("IB", msg)
+    -- ★1.75.41 物品价探针（用户：「在不依赖其他插件的情况下能否实现物品售价预览」）：
+    --   本探针只做**前置取证**，不写任何价格数据；4 个未知点 = `GameTooltip.SetBagItem` 字段替换活不活 ·
+    --   `OnTooltipAddMoney` 金额在第几个参数 · **自建** GameTooltip 帧会不会触发 · OneBag 格子按钮能否解析出 bag/slot。
+    --   命令体在 tools/Probes.lua 的 `PR["ITEMPRICE"]`（别名条件仍留在这里：发现顺序与唯一性判据不变）。
+    --   ★别名 `go 物品价` 与 `go iprice` 全项目唯一（`GO ALIAS UNIQUE CHECK` 那条纪律）。
+    elseif msg == "go 物品价" or msg == "go iprice" or string.find(msg or "", "^go 物品价%s") == 1 then
+      prRun("ITEMPRICE", msg)
     elseif msg == "go 框体图标" or msg == "go frameicons" or string.find(msg or "", "^go 框体图标%s") == 1 then
       if type(EVAL_DF_ICONS_SET) ~= "function" then
         say("框体图标：框拖拽模块未载入（EVAL_DF_ICONS_SET 不存在）")
@@ -8266,7 +8277,7 @@ if type(SlashCmdList) == "table" then
           add("7." .. segN .. " " .. table.concat(seg, ","))
         end
       end
-      -- ⑥b ★★1.71.22 unrealUI 实证路线核对：它的注释写明「vanilla 绑定命令走全局
+      -- ⑥b ★★1.71.22 实证路线核对（那份插件的注释）：它写明「vanilla 绑定命令走全局
       --   ActionButtonDown/Up」——若这两个全局在本客户端存在，就能用它们**接管**任意 ACTIONBUTTON<n> 的派发
       --   （比「宏 + 动作条」更直接：不用占宏名额、不用占动作格）。
       add("6b ActionButtonDown=" .. type(ActionButtonDown) .. " ActionButtonUp=" .. type(ActionButtonUp)
@@ -9275,6 +9286,12 @@ init:SetScript("OnEvent", function(a, b)
     -- ★1.75.26 拾取贴手（tools/LootCursor.lua）：开关真值 = `tbCfg().lootCursor` ⇒ **必须在这里**读
     --   （SavedVariables 要等 VARIABLES_LOADED）；关着一个事件都不注册、一个 OnUpdate 都不挂。
     if type(EVAL_LC_INSTALL) == "function" then pcall(EVAL_LC_INSTALL) end
+    -- ★1.75.40 顶部信息条（tools/InfoBar.lua，移植自 SimpleInfoBar/MIT）：开关真值 = `tbCfg().infoBar`
+    --   ⇒ **必须在这里**读（SavedVariables 要等 VARIABLES_LOADED）；关着 = 不建帧、不注册事件、不挂节拍。
+    if type(EVAL_IB_INSTALL) == "function" then pcall(EVAL_IB_INSTALL) end
+    -- ★1.75.43 物品价（tools/ItemPrice.lua）：开关真值 = `tbCfg().itemPrice`
+    --   ⇒ **必须在这里**读（SavedVariables 要等 VARIABLES_LOADED）；关着 = 不挂按钮包装、不注册事件、不建计时器。
+    if type(EVAL_IP_INSTALL) == "function" then pcall(EVAL_IP_INSTALL) end
     -- 注册进出战斗事件（pcall 防御：事件名若不存在不会崩）
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_ENTERING_WORLD") -- ★1.74.31 进世界（载入期时钟到这里才开始走 ⇒ world 打点）
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_REGEN_DISABLED")

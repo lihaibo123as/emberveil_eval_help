@@ -4583,7 +4583,16 @@ local function tbModel()
     --   同「图层隐藏」一样只是**一行数据**：控件/tooltip/多选下拉/安装全在模块里（`EVAL_TB_MOD_ROWS["lootCursor"]`）。
     --   ★不写 `noChk` ⇒ 保留主开关勾选框（真值 `tbCfg().lootCursor`，读写走模块的 EVAL_LC_ENABLED/SET）。
     { t = "mod", mod = "lootCursor", key = "lootCursor", label = L("TB_LOOTCURSOR"), tip = L("TB_LOOTCURSOR_TIP") },
+    -- ★1.75.40 顶部信息条（tools/InfoBar.lua）：区域·金钱·背包·网络·专业·内存 一条常驻；
+    --   同 simpleMap/lootCursor 一样只是**一行数据** —— 控件、tooltip、多选下拉、[重设位置] 全在模块里
+    --   （`EVAL_TB_MOD_ROWS["infoBar"]`）。★不写 `noChk` ⇒ 保留主开关勾选框（真值 `tbCfg().infoBar`）。
+    { t = "mod", mod = "infoBar", key = "infoBar", label = L("TB_INFOBAR"), tip = L("TB_INFOBAR_TIP") },
     { t = "h", label = L("TB_H_MERCHANT") },
+    -- ★1.75.43 物品价（tools/ItemPrice.lua，A1 = 价格库 + 学价 + 悬停价格行 + 背包/银行估值）：
+    --   同 infoBar/lootCursor 一样只是**一行数据** —— 控件、tooltip、两个按钮全在模块里
+    --   （`EVAL_TB_MOD_ROWS["itemPrice"]`）。★不写 `noChk` ⇒ 保留主开关勾选框（真值 `tbCfg().itemPrice`）。
+    --   ★默认**关**（opt-in）：关着时一个探测都不做（不挂包装 / 不注册事件 / 不建计时器）。
+    { t = "mod", mod = "itemPrice", key = "itemPrice", label = L("TB_ITEMPRICE"), tip = L("TB_ITEMPRICE_TIP") },
     { t = "c", key = "repair", label = L("TB_REPAIR"), tip = L("TB_REPAIR_TIP") },
     { t = "c", key = "sell", label = L("TB_SELL"), tip = L("TB_SELL_TIP") },
     { t = "l", key = "buy", flag = "buyOn", label = L("TB_BUY"), tip = L("TB_BUY_TIP"), ask = L("TB_BUY_ASK") },

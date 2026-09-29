@@ -701,4 +701,466 @@ PR["DUMP"] = function(msg)
   if table.getn(pl) == 0 and table.getn(names) == 0 then say("（全空——先 /eh go probe immune 并在 30 秒内对免疫怪放技能；若反复全空说明事件系统不可用）") end
 end
 
+-- ★1.75.40 顶部信息条（tools/InfoBar.lua）：命令体**留在模块自己文件里**（`EVAL_IB_CMD`），
+--   这里只做转发 —— 与「纯命令本体进模块、要读宿主内部件的就地留」同一条纪律（本探针只读模块自己的状态）。
+PR["IB"] = function(msg)
+  if type(EVAL_IB_CMD) ~= "function" then
+    say("顶部信息条：模块未载入（tools/InfoBar.lua 不在 .toc 或载入失败）")
+    return
+  end
+  EVAL_IB_CMD(msg)
+end
+
+-- ===== 物品价探针（/eh go 物品价）=====
+-- 背景（用户要求：「在不依赖其他插件的情况下能否实现物品售价预览？然后把物品售价比对的功能完善」）：
+--   本客户端**没有**「由物品 id 拿售价」的 API（`GetItemInfo` 停在 texture，已按官方 wiki 原文核过），
+--   唯一能从客户端嘴里撬出卖价的口径是：**商人窗开着时** `GameTooltip:SetBagItem` 会触发
+--   `OnTooltipAddMoney`（带整栈售价）。而参考实现（客户端自带的另一份插件，已移出插件目录，
+--   见其 modules/itemprice.lua 的 USER_CONFIRMED_INGAME 记录）写明了**两条硬事实**：
+--     ① **替换 GameTooltip 的方法在本客户端不成立**（10 个 item setter 全被换掉，悬停时一个都没跑）
+--        ⇒ 物品只能**从被悬停的按钮**识别，不能从 tooltip 识别；
+--     ② `GameTooltip:SetTooltipMoney` **调用不报错但不显示**。
+--   ⇒ 动手写模块之前，必须先把 4 个未知点问清（本探针只做这件事，**不写任何价格数据**）：
+--     ① `GameTooltip.SetBagItem` 的字段替换到底活不活（「替换 widget 方法」那条路会不会是死的）；
+--     ② `OnTooltipAddMoney` 把金额放在**第几个参数**（那份实现说位置不定，要试 a1..a4 + arg1）；
+--     ③ **自建** GameTooltip 帧会不会触发 `OnTooltipAddMoney`（官方 wiki 没写，当时是未知）；
+--     ④ 格子按钮能不能由**客户端自己的约定**稳定解析出 bag/slot（「独立模块」方案的地基）。
+--   ★纪律：即时回显「命令已收到」；除「测①写入存活」那一次赋值（**当场还原**）外**全程只读**；
+--     读数一律进专属有界环 `cfg.ipProbe`（`say` 只进聊天框、不落日志环 ⇒ 只上屏 = AI 读存档时断链）；
+--     监听是**有界窗口**（到点自停并还原脚本），绝不常驻。
+-- ★★1.75.41b **两个环必须分开**（首轮真机教训）：报告是「一次性 10 来行」，监听是「每次悬停几十行」
+--   ⇒ 共用一个 60 行环时，用户跑完 `监听` 会把 `状态/采样` 的报告**整段刷掉**（首轮真机就是这个结果：
+--   存档里只剩钱行，测③④的报告一行不剩）。现在：`ipProbe` = 报告环（25 行，只由 状态/采样 写）、
+--   `ipListen` = 监听环（60 行，只由 监听 写）。
+local IPR_RING = 25          -- 报告环上限
+local IPR_LRING = 60         -- 监听环上限
+local IPR_LISTEN_SECS = 60   -- 监听窗口（有界）
+
+local IPR = {
+  on = false, t0 = 0, secs = IPR_LISTEN_SECS,
+  hooked = false, origScript = nil,
+  wrapped = false, setBagOrig = nil,
+  bagHits = 0, moneyHits = 0, saidMiss = 0,
+  f = nil,
+}
+
+local function iprPush(key, cap, line)
+  local t = cfg[key]
+  if type(t) ~= "table" then t = {} cfg[key] = t end
+  table.insert(t, tostring(line))
+  while table.getn(t) > cap do table.remove(t, 1) end
+end
+
+local function iprRing(line) iprPush("ipProbe", IPR_RING, line) end
+local function iprLRing(line) iprPush("ipListen", IPR_LRING, line) end
+
+local function iprSay(s) say(s) iprRing(s) end
+local function iprLSay(s) say(s) iprLRing(s) end
+-- 监听的收尾摘要两边都留（报告侧也要有「监听到底跑没跑」的证人）
+local function iprSayBoth(s) say(s) iprRing(s) iprLRing(s) end
+
+-- 金额可能在 a1..a4 的任意位置（同款口径：先试四个形参），最后才试全局 arg1。
+-- ★绝不用 `tostring(f())` 接多返回值（本项目老雷：只留第一个）。
+local function iprAmount(a1, a2, a3, a4)
+  local cand = { a1, a2, a3, a4, rawget(_G, "arg1") }
+  for i = 1, 5 do
+    local v = tonumber(cand[i])
+    if v and v > 0 then return v, i end
+  end
+  return nil
+end
+
+local function iprHas(name) return type(rawget(_G, name)) == "function" end
+local function iprMark(name)
+  if iprHas(name) then return name .. "=有" end
+  return "|cffff6060" .. name .. "=无|r"
+end
+
+-- 商人窗开没开：帧显隐为准（GetMerchantNumItems 可能残留），两个都报出来
+local function iprMerchant()
+  local n = 0
+  if iprHas("GetMerchantNumItems") then
+    local ok, v = pcall(GetMerchantNumItems)
+    if ok and type(v) == "number" then n = v end
+  end
+  local shown = false
+  local mf = rawget(_G, "MerchantFrame")
+  if mf and mf.IsShown then
+    local ok, s = pcall(mf.IsShown, mf)
+    if ok then shown = s and true or false end
+  end
+  return shown, n
+end
+
+-- 测①：字段替换活不活。
+-- ★★1.75.41c 第 2 轮真机定案：本客户端 **widget 方法每次读都是一个新对象**（同机另一份插件的自检命令
+--   同机那份实现的记录也写了这条）⇒ `读回 == 写入值` **恒为假、`还原成功` 也无法自证** ——
+--   第 2 轮报的「还原=否」是**假警报**，不是真丢了东西。真判据只有一个：**行为**（我们的包装到底跑没跑）。
+local function iprTest1()
+  local GT = rawget(_G, "GameTooltip")
+  if not GT or type(GT.SetBagItem) ~= "function" then
+    return "GameTooltip 或其 SetBagItem 不在（「替换 widget 方法」那条路根本没法走）"
+  end
+  local orig = GT.SetBagItem
+  local ran = 0
+  GT.SetBagItem = function(self, bag, slot) ran = ran + 1 return orig(self, bag, slot) end
+  local readBack = (GT.SetBagItem ~= orig) -- 本客户端恒为真 ⇒ 不可当判据
+  -- 只读纪律：工具提示正显示时**不直调**（会把玩家正看的 tooltip 重画）
+  local shown = false
+  if GT.IsShown then local okS, s = pcall(GT.IsShown, GT) if okS then shown = s and true or false end end
+  local callNote = "跳过直调（工具提示正显示）"
+  if not shown then
+    local okC = pcall(function() GT:SetBagItem(0, 1) end)
+    callNote = "直调跑到包装=" .. (ran > 0 and "是" or "**否**") .. "（pcall=" .. tostring(okC) .. "）"
+  end
+  pcall(function() GT.SetBagItem = orig end)
+  return string.format("读回≠原值=%s（★不可当判据）· %s", readBack and "是" or "否", callNote)
+end
+
+-- 测③：自建 GameTooltip 帧扫背包 —— 它到底会不会触发 OnTooltipAddMoney
+local function iprScanFrame()
+  local f = rawget(_G, "EVAL_IP_SCAN")
+  if f then return f end
+  if type(CreateFrame) ~= "function" then return nil end
+  local ok, fr = pcall(CreateFrame, "GameTooltip", "EVAL_IP_SCAN", UIParent)
+  if not ok or not fr then return nil end
+  f = fr
+  if f.SetOwner then pcall(f.SetOwner, f, UIParent, "ANCHOR_NONE") end
+  return f
+end
+
+-- 扫背包的公共实现：对给定 tooltip 逐格 SetBagItem，数钱行命中 + 记前几格明细。
+-- ★明细里同时报「该格数量」与「金额」⇒ **一次就能判定金额是「整栈总价」还是「单价」**
+--   （这是价格库正确性的地基；首轮真机只拿到了悬停的钱行，判不出这一条）。
+local function iprSweepWith(tip, detail, cap)
+  local hits, money = 0, 0
+  local pendBag, pendSlot, pendCount, pendName = nil, nil, 1, "?"
+  local old = (tip.GetScript) and tip:GetScript("OnTooltipAddMoney") or nil
+  pcall(tip.SetScript, tip, "OnTooltipAddMoney", function(a1, a2, a3, a4)
+    local v = iprAmount(a1, a2, a3, a4)
+    hits = hits + 1
+    if v then
+      money = money + 1
+      if table.getn(detail) < cap then
+        local per = ""
+        if pendCount and pendCount > 1 then
+          per = "，每件≈" .. tostring(math.floor(v / pendCount + 0.5))
+        end
+        detail[#detail + 1] = string.format("格 %s,%s ×%s = %s%s（%s）",
+          tostring(pendBag), tostring(pendSlot), tostring(pendCount), tostring(v), per, tostring(pendName))
+      end
+    end
+  end)
+  local slots = 0
+  for bag = 0, 4 do
+    local n = tonumber(GetContainerNumSlots(bag)) or 0
+    for slot = 1, n do
+      local tex, cnt = GetContainerItemInfo(bag, slot)
+      if tex and tex ~= "" then
+        slots = slots + 1
+        pendBag, pendSlot, pendCount = bag, slot, tonumber(cnt) or 1
+        pendName = "?"
+        if iprHas("GetContainerItemLink") then
+          local lnk = GetContainerItemLink(bag, slot)
+          if type(lnk) == "string" then
+            local nm = string.match(lnk, "%[(.-)%]")
+            if nm then pendName = nm end
+          end
+        end
+        pcall(tip.SetOwner, tip, UIParent, "ANCHOR_NONE")
+        pcall(tip.SetBagItem, tip, bag, slot)
+      end
+    end
+  end
+  pcall(tip.SetScript, tip, "OnTooltipAddMoney", old)
+  return slots, hits, money
+end
+
+-- 测③a：**自建** GameTooltip 帧扫背包（零副作用优先：完全不动玩家那个 tooltip）
+--   ★★第 2 轮补的判据：还要数**自建帧自己建起来了几行文本** —— 否则「触发 0 次」分不清是
+--   「tooltip 根本没建起来」还是「建起来了但自建帧不触发钱行」（第 2 轮就是分不清，白跑一轮）。
+local function iprTest3()
+  if not iprHas("GetContainerNumSlots") or not iprHas("GetContainerItemInfo") then
+    return nil, "GetContainerNumSlots / GetContainerItemInfo 不全，扫不了背包"
+  end
+  local f = iprScanFrame()
+  if not f then return nil, "自建 GameTooltip 失败（CreateFrame 出错）" end
+  local detail = {}
+  local slots, hits, money = iprSweepWith(f, detail, 6)
+  -- 自建帧的文本行数（具名 GameTooltip 的字串名 = 帧名..TextLeftN）
+  local lines, first = 0, nil
+  for i = 1, 12 do
+    local fs = rawget(_G, "EVAL_IP_SCANTextLeft" .. i)
+    if fs == nil then break end
+    local okT, t = pcall(fs.GetText, fs)
+    if okT and type(t) == "string" and t ~= "" then
+      lines = lines + 1
+      if first == nil then first = t end
+    end
+  end
+  pcall(f.Hide, f)
+  return slots, hits, money, first, detail, lines
+end
+
+-- 测③b：**借用玩家那个 GameTooltip** 扫背包（第二种扫法：共用玩家那个 tooltip）。
+--   ★★第 2 轮它被「工具提示正显示」挡掉了（用户鼠标正悬停在物品上）⇒ 现在改成**先藏起来再扫**
+--   （命令是你主动敲的，闪一下可接受）；扫完再藏一次，绝不把它留在屏幕上显示背包物品。
+local function iprTest3b()
+  local GT = rawget(_G, "GameTooltip")
+  if not GT then return nil, "GameTooltip 不在" end
+  local wasShown = false
+  if GT.IsShown then
+    local okS, s = pcall(GT.IsShown, GT)
+    if okS and s then wasShown = true pcall(GT.Hide, GT) end
+  end
+  local detail = {}
+  local slots, hits, money = iprSweepWith(GT, detail, 6)
+  pcall(GT.Hide, GT)
+  return slots, hits, money, detail, wasShown
+end
+
+-- ③a/③b 两条扫价路径的公共播报：把「哪一格、几件、多少钱、每件≈多少」逐格打进报告环
+--   ⇒ 存档里就能直接判「金额是整栈总价还是单价」，不用再问一轮。
+local function iprSaySweep(mOpen)
+  local s1, h1, m1, first, d1, lines = iprTest3()
+  iprSay(string.format("③a 自建 tooltip（EVAL_IP_SCAN）扫背包：扫到 %s 格 → 触发 %s 次 / 拿到金额 %s 次",
+    tostring(s1), tostring(h1), tostring(m1)))
+  iprSay(string.format("    自建帧文本行=%s（首行=%s）← 0 行 = tooltip 根本没建起来，不是「不触发钱行」",
+    tostring(lines), tostring(first)))
+  if type(d1) == "table" then
+    for i = 1, table.getn(d1) do iprSay("     " .. tostring(d1[i])) end
+  end
+  local s2, h2, m2, d2, wasShown = iprTest3b()
+  if s2 == nil then
+    -- ★跳过时第二个返回值是**原因**（不是次数）
+    iprSay("③b 借用 GameTooltip 扫背包：**跳过** —— " .. tostring(h2))
+  else
+    iprSay(string.format("③b 借用 GameTooltip 扫背包：扫到 %s 格 → 触发 %s 次 / 拿到金额 %s 次%s",
+      tostring(s2), tostring(h2), tostring(m2),
+      wasShown and "（扫描前工具提示正显示，已先藏起来）" or ""))
+    if type(d2) == "table" then
+      for i = 1, table.getn(d2) do iprSay("     " .. tostring(d2[i])) end
+    end
+  end
+  if not mOpen then
+    iprSay("  ★商人窗没开时 ③a/③b **必然都是 0**（官方 wiki：只在商人窗触发）⇒ 先开个商人再跑 `/eh go 物品价 采样`")
+  end
+end
+
+-- 测④：格子按钮能不能由**客户端自己的约定**解析出 bag/slot（独立模块的地基）。
+--   ★口径（本项目要求「不与其它插件做关联」）：**只用** `GetID()`（格子号）+ 父级 `GetID()`（容器号）——
+--   这正是客户端原生 `ContainerFrameItemButton_OnEnter` 取法；**不读任何插件自己的私有字段**。
+--   扫法：从 UIParent 有界下探（深度 ≤ 4、节点 ≤ 400），把「父级 GetID 与自身 GetID 都是数字、
+--   且挂了 OnEnter 脚本」的帧算作「可解析格子的按钮」——不管它是哪家背包插件、还是客户端原生的。
+local function iprTest4()
+  local nodes, btns, okN, sample = 0, 0, 0, nil
+  local seen = {}
+  local function visit(fr, depth)
+    if fr == nil or depth > 4 or nodes > 400 then return end
+    if seen[fr] then return end
+    seen[fr] = true
+    nodes = nodes + 1
+    local okT, ot = pcall(function() return fr.GetObjectType and fr:GetObjectType() end)
+    if okT and (ot == "Frame" or ot == "Button") then
+      local sid = (type(fr.GetID) == "function") and fr:GetID() or nil
+      local par = (type(fr.GetParent) == "function") and fr:GetParent() or nil
+      local bid = (par and type(par.GetID) == "function") and par:GetID() or nil
+      local okS, scr = pcall(function() return fr.GetScript and fr:GetScript("OnEnter") end)
+      if type(sid) == "number" and type(bid) == "number" and okS and type(scr) == "function" then
+        btns = btns + 1
+        okN = okN + 1
+        if not sample then
+          sample = string.format("name=%s GetID=%s 父GetID=%s", tostring(fr.GetName and fr:GetName()), tostring(sid), tostring(bid))
+        end
+      end
+      -- ★多返回值不能 tostring：整个 pcall 结果收进表（[1] = 成功与否，其后是子件）
+      local kids = { pcall(fr.GetChildren, fr) }
+      if kids[1] then
+        for i = 2, table.getn(kids) do visit(kids[i], depth + 1) end
+      end
+    end
+  end
+  visit(UIParent, 1)
+  local stock = (type(ContainerFrameItemButton_OnEnter) == "function")
+  local stockBtn = rawget(_G, "ContainerFrame1Item1")
+  return nodes, btns, okN, sample, stock, stockBtn
+end
+
+-- 监听（测②：金额参数位置；测①的真判据：原生悬停会不会走我们的包装）
+local function iprStop()
+  if not IPR.on then return false end
+  local GT = rawget(_G, "GameTooltip")
+  if GT then
+    if IPR.hooked then pcall(GT.SetScript, GT, "OnTooltipAddMoney", IPR.origScript) end
+    if IPR.wrapped and IPR.setBagOrig ~= nil then GT.SetBagItem = IPR.setBagOrig end
+  end
+  if IPR.f then
+    pcall(IPR.f.SetScript, IPR.f, "OnUpdate", nil)
+    pcall(IPR.f.Hide, IPR.f)
+  end
+  IPR.on, IPR.hooked, IPR.wrapped = false, false, false
+  IPR.origScript, IPR.setBagOrig = nil, nil
+  return true
+end
+
+local function iprStart(secs)
+  local GT = rawget(_G, "GameTooltip")
+  if not GT then iprSay("监听：GameTooltip 不在，没法监听") return end
+  iprStop()
+  IPR.bagHits, IPR.moneyHits, IPR.saidMiss = 0, 0, 0
+  IPR.secs = tonumber(secs) or IPR_LISTEN_SECS
+  if IPR.secs < 5 then IPR.secs = 5 end
+  if IPR.secs > 600 then IPR.secs = 600 end
+
+  IPR.origScript = (GT.GetScript) and GT:GetScript("OnTooltipAddMoney") or nil
+  IPR.hooked = true
+  pcall(GT.SetScript, GT, "OnTooltipAddMoney", function(a1, a2, a3, a4)
+    local v, pos = iprAmount(a1, a2, a3, a4)
+    IPR.moneyHits = IPR.moneyHits + 1
+    local txt = "?"
+    local fs = rawget(_G, "GameTooltipTextLeft1")
+    if fs and fs.GetText then
+      local okT, t = pcall(fs.GetText, fs)
+      if okT and type(t) == "string" and t ~= "" then txt = t end
+    end
+    local line = string.format("钱行#%d 位置=%s 金额=%s 首行=%s ｜ a1=%s a2=%s a3=%s a4=%s arg1=%s",
+      IPR.moneyHits, tostring(pos), tostring(v), txt,
+      tostring(a1), tostring(a2), tostring(a3), tostring(a4), tostring(rawget(_G, "arg1")))
+    iprLRing(line) -- ★监听的钱行进**监听环**（报告环留给 状态/采样，别互相刷掉）
+    if v then
+      say("  [钱行] " .. line)
+    elseif IPR.saidMiss < 3 then
+      IPR.saidMiss = IPR.saidMiss + 1
+      say("  （这一拍四个参数都不像金额）" .. line)
+    end
+  end)
+
+  -- 包装 SetBagItem：原生悬停若也走它 ⇒ 计数会涨（=「替换活着」的真判据）
+  if type(GT.SetBagItem) == "function" then
+    IPR.setBagOrig = GT.SetBagItem
+    GT.SetBagItem = function(self, bag, slot)
+      IPR.bagHits = IPR.bagHits + 1
+      return IPR.setBagOrig(self, bag, slot)
+    end
+    IPR.wrapped = true
+  end
+
+  -- 驱动帧（首用才建、匿名）＋ 有界窗口：到点自停并还原
+  if not IPR.f then
+    if type(CreateFrame) ~= "function" then iprSay("监听：CreateFrame 不在，无法计时自停") return end
+    local okF, fr = pcall(CreateFrame, "Frame")
+    if not okF or not fr then iprSay("监听：建驱动帧失败") return end
+    IPR.f = fr
+  end
+  IPR.t0 = (type(GetTime) == "function") and GetTime() or 0
+  IPR.on = true
+  pcall(IPR.f.SetScript, IPR.f, "OnUpdate", function()
+    -- ★零形参：dt 从全局 arg1 取（本客户端 OnUpdate 回调一个参数都不传）
+    if not IPR.on then return end
+    local now = (type(GetTime) == "function") and GetTime() or (IPR.t0 + (tonumber(arg1) or 0))
+    if (now - IPR.t0) >= IPR.secs then
+      local b, mm = IPR.bagHits, IPR.moneyHits
+      local secs2 = IPR.secs
+      iprStop()
+      iprSayBoth(string.format("监听结束（%d 秒）：SetBagItem 被调用 %d 次（>0 = 字段替换**真的活着**）· OnTooltipAddMoney 触发 %d 次",
+        secs2, b, mm))
+    end
+  end)
+  iprSayBoth(string.format("监听已开（%d 秒，到点自停并还原脚本）：现在去**开一个商人窗口**，把鼠标划过背包里几件**可卖**物品", IPR.secs))
+end
+
+PR["ITEMPRICE"] = function(msg)
+  local m = tostring(msg or "")
+  -- ★即时回显**只上屏、不进环**：它要回答的是「命令到底跑到没有」，而进环会让「环空」那条分支
+  --   变成**永远走不到的死代码**（本探针的 harness 真跑抓到：`环` 先回显再读环 ⇒ 永远非空）。
+  say("物品价探针：命令已收到（tools/Probes.lua 的 PR[\"ITEMPRICE\"]）")
+
+  if string.find(m, "监听", 1, true) or string.find(m, "listen", 1, true) then
+    local secs = tonumber(string.match(m, "%d+"))
+    iprStart(secs)
+    return
+  end
+
+  if string.find(m, "停", 1, true) or string.find(m, "stop", 1, true) then
+    local b, mm = IPR.bagHits, IPR.moneyHits
+    if iprStop() then
+      iprSayBoth(string.format("监听已停并还原：SetBagItem 共 %d 次 · OnTooltipAddMoney 共 %d 次", b, mm))
+    else
+      iprSay("监听本来就没开（零动作）")
+    end
+    return
+  end
+
+  -- ★1.75.43 A1 落地后：**生产命令优先**交给模块（tools/ItemPrice.lua 的 EVAL_IP_CMD）——
+  --   学价/扫 · 值/估值 · 清价/忘掉 · 空参数（=状态）；只有带「探针」二字才跑下面那四段取证。
+  --   ★顺序即判据：这一段必须排在「环 / 清」之前，否则 `清价` 会被 `清`（清环）那条先吃掉。
+  if not string.find(m, "探针", 1, true) then
+    local prod = (m == "")
+      or string.find(m, "学价", 1, true) or string.find(m, "扫", 1, true)
+      or string.find(m, "值", 1, true) or string.find(m, "清价", 1, true) or string.find(m, "忘掉", 1, true)
+    if prod then
+      if type(EVAL_IP_CMD) == "function" then
+        EVAL_IP_CMD(m)
+        return
+      end
+      -- ★模块缺席（.toc 漏了 / 载入失败）⇒ 如实说一句，绝不静默（下面仍会跑探针取证）
+      say("物品价模块未载入（tools/ItemPrice.lua 不在 .toc 或载入失败）—— 本次只跑探针取证")
+    end
+  end
+
+  if string.find(m, "环", 1, true) or string.find(m, "log", 1, true) then
+    local t = cfg.ipProbe
+    local lt = cfg.ipListen
+    local n = (type(t) == "table") and table.getn(t) or 0
+    local ln = (type(lt) == "table") and table.getn(lt) or 0
+    if n == 0 and ln == 0 then
+      say("物品价探针：两个环都是空的")
+      return
+    end
+    say("— 物品价探针 · 报告环（" .. n .. " 行，上限 " .. IPR_RING .. "）—")
+    for i = 1, n do say(i .. ". " .. tostring(t[i])) end
+    say("— 物品价探针 · 监听环（" .. ln .. " 行，上限 " .. IPR_LRING .. "）—")
+    for i = 1, ln do say(i .. ". " .. tostring(lt[i])) end
+    return
+  end
+
+  if string.find(m, "清", 1, true) or string.find(m, "clear", 1, true) then
+    cfg.ipProbe = {}
+    cfg.ipListen = {}
+    say("物品价探针：两个环都已清空")
+    return
+  end
+
+  -- 「采样」= 只跑测③a/③b（开完商人窗后重跑这一项）
+  if string.find(m, "采样", 1, true) or string.find(m, "scan", 1, true) then
+    local mOpen, merchN = iprMerchant()
+    iprSay(string.format("— 物品价探针 · 采样（商人窗：%s，GetMerchantNumItems=%s）—",
+      mOpen and "开" or "|cffff6060关|r", tostring(merchN)))
+    iprSaySweep(mOpen)
+    return
+  end
+
+  -- 默认 = 探针取证（四个未知点**已在 1.75.41~43 三轮真机问清**，这一段留作回归/复现用）
+  local mOpen, merchN = iprMerchant()
+  iprSay("— 物品价探针（回归取证；日常请用 `/eh go 物品价` 看状态、`学价`、`值`）—")
+  iprSay("① 基础 API：" .. iprMark("GetItemInfo") .. " " .. iprMark("GetContainerItemLink") .. " "
+    .. iprMark("GetContainerItemInfo") .. " " .. iprMark("GetItemQualityColor") .. " " .. iprMark("IsShiftKeyDown"))
+  iprSay("   价格旁路：" .. iprMark("GetMerchantItemInfo") .. " " .. iprMark("GetMerchantItemLink") .. " "
+    .. iprMark("GetMerchantNumItems") .. " " .. iprMark("GetBuybackItemInfo") .. " "
+    .. iprMark("GetAuctionSellItemInfo") .. " " .. iprMark("CalculateAuctionDeposit"))
+  iprSay("② 方法替换（GameTooltip.SetBagItem）：" .. iprTest1())
+  iprSay("   ★这一项只证明「赋值没被拒绝」；**替换活不活**的真判据是 `监听` 里原生悬停的计数")
+  iprSay(string.format("③ 商人窗：%s（GetMerchantNumItems=%s）", mOpen and "开" or "|cffff6060关|r", tostring(merchN)))
+  iprSaySweep(mOpen)
+  local nodes, btns, okN, sample, stock, stockBtn = iprTest4()
+  iprSay(string.format("④ 从 UIParent 有界下探 %d 个节点 → 可解析出 bag/slot 的格子按钮 %d 个"
+    .. "（口径 = 客户端约定：GetID + 父级 GetID，且挂了 OnEnter）", nodes, okN))
+
+  iprSay("   样本：" .. tostring(sample))
+  iprSay(string.format("   stock：ContainerFrameItemButton_OnEnter=%s · ContainerFrame1Item1=%s",
+    stock and "有" or "|cffff6060无|r", stockBtn and "有" or "|cffff6060无|r"))
+  iprSay("⑤ 日常命令：`/eh go 物品价`（状态）· `学价`（开商人窗后扫）· `值`（背包/银行估值）· `清价`")
+  iprSay("   （报告进 cfg.ipProbe、监听进 cfg.ipListen，互不刷掉 ⇒ /reload 后落盘，AI 可直接读存档）")
+end
+
 -- 载入期到此结束：没有 CreateFrame / RegisterEvent / 存档读写 / 计时器。
