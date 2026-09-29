@@ -12,14 +12,17 @@
     **`QuestAll.lua`（全量任务表生成物：4018 条任务 + 奖励/需要等级 + 父子任务 + 需求材料，1.75.14 起）** → `QuestChains.lua`（上述三张表的数据层封装：搜索/筛选/树/详情）
     —— ★同目录的 `fetch.js`/`build*.js`/`sweep*.js`/`audit.js`/`chains.js`/`cache/` 都是**开发脚本与抓取缓存**，**不进发布包**
   → `DataSearch.lua`（Tab4 任务线 & 装备）→ `Share.lua`（方案分享）→ `IconSem.lua`（图标语义表，1.73.5）
-  → `IconBrowser.lua`（Tab5 图标库）→ `PetData.lua`/`PetHelper.lua`（Tab6 抓宠帮手，1.73.0）
-  → **`tools/` 工具模块（10 个，顺序照 `.toc`）**：`SimpleMap.lua`（缩放大地图）→ `IconGrid.lua`（通用图标网格选择器：单选/多选 · 高度自适应 · 分页滚轮夹取，1.74.5）→ `HunterHelper.lua`（猎人助手 · 一键喂食，1.74.5）→ `ConsumableHelper.lua`（消耗品助手 · 多选横排各自点用，1.74.5）→ `DismountHelper.lua`（骑乘助手 · 一键下马，1.74.7）→ `RareWatch.lua`（稀有提醒转播独立模块，1.74.27）→ `DragFrames.lua`（图层拖拽，1.74.30）→ `LayerFix.lua`（图层隐藏，1.74.34）→ **`LootCursor.lua`（拾取贴手 · 搬窗贴手 + 点一次换下一件 + 品质角标，1.75.26）** → **`Probes.lua`（探针命令集中地：`PR[id]` 注册表 + 宿主一行 `prRun`；toc 预载但**载入期零副作用**、首用才建，1.75.35）**
+  → `IconBrowser.lua`（Tab5 图标库）→ `PetData.lua`/`PetHelper.lua`（Tab6 抓宠帮手，1.73.0）→ **`ItemPriceData.lua`（物品价基准价**生成物**：13,994 条 vanilla 价，1.75.43；生成器 = `gen_itemprices.js`，**绝不手改**）**
+  → **`tools/` 工具模块（12 个，顺序照 `.toc`）**：`SimpleMap.lua`（缩放大地图）→ `IconGrid.lua`（通用图标网格选择器：单选/多选 · 高度自适应 · 分页滚轮夹取，1.74.5）→ `HunterHelper.lua`（猎人助手 · 一键喂食，1.74.5）→ `ConsumableHelper.lua`（消耗品助手 · 多选横排各自点用，1.74.5）→ `DismountHelper.lua`（骑乘助手 · 一键下马，1.74.7）→ `RareWatch.lua`（稀有提醒转播独立模块，1.74.27）→ `DragFrames.lua`（图层拖拽，1.74.30）→ `LayerFix.lua`（图层隐藏，1.74.34）→ **`LootCursor.lua`（拾取贴手 · 搬窗贴手 + 点一次换下一件 + 品质角标，1.75.26）** → **`InfoBar.lua`（顶部信息条：六段 · 移植自开源 SimpleInfoBar/MIT，1.75.40）** → **`ItemPrice.lua`（物品价：商人处学真价 + 悬停价格行 + 背包·银行估值，1.75.43）** → **`Probes.lua`（探针命令集中地：`PR[id]` 注册表 + 宿主一行 `prRun`；toc 预载但**载入期零副作用**、首用才建，1.75.35）**
     ★工具模块一律**自包含**（真值 + 自己的存档子树 + 界面控件 + 读值口 + 自己的**有界**计时器）；`Toolbox.lua` 里只留「一行数据 + 模块行注册表 `EVAL_TB_MOD_ROWS[mod]`」，渲染/下拉/结算全在模块里。
   跨文件共享走全局桥：Core 导出 EVAL_SAY/EVAL_LOGLINE/EVAL_UIOFFSCREEN 等，Engine 导出 EVAL_WSLOTS/EVAL_WICON/EVAL_GROUPS_OK 等，
   UI 层文件顶部别名块本地化；
   ★**新增 .lua 模块要同时改两处**：`EvalHelp.toc`（顺序 = 载入顺序，共用件放前面）+ **发布包清单**（参考卷打包脚本的 Copy-Item 行；子目录模块尤其容易漏）。
   ★**新增 `examples/*.lua` 只需一处**：`EvalHelp.toc`（它们没有顶层 local）。
   ★**改动后只跑一个命令**：`node luacheck.js`（fengari 逐文件真解析 —— **唯一的语法闸门**）。
+  ★**另外三个按需手动跑的静态助手**（都不是自动闸门，但改到相区域必须跑一遍）：
+  `node scan_dangling.js`（**第二段·全仓**：找出「被调用、但全项目没有定义」的名字 —— 客户端 API 白名单 + 一趟扫的 Lua 清洗器 + **区分「无守卫＝真机必崩」与「有守卫＝静默死」**；1.75.42 新增，起因 = 1.75.34 孤儿清理误删 7 个定义）·
+  `node probe_localorder.js`（文件内 local「先用后声明」）· `node scan_dangling.js` 第一段（`addons/` 子插件的可疑未定义调用）。
   ★★**本项目没有测试**（用户 2026-09-26 定案：「删除tests/下的文件.也不需要测试」）：`tests/`、`test_assert.lua`、`test_engine.js`、`check.js`、`mutate.js` 已全部删除
   ⇒ 行为/接线/渲染/存档这类**静默失效没有自动判据兜底**，改完请**自查调用点**并**进游戏实测**。
 -  SavedVariables：`EVAL_HELP_CONFIG`（落盘于 `%LOCALAPPDATA%\Azeroth\Saved\Account\<账号>\SavedVariables\EVAL_HELP.lua`，小退/重载时写入）。

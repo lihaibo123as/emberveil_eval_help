@@ -102,13 +102,13 @@ New-Item -ItemType Directory -Path "$staging\EvalHelp" | Out-Null
 # ★★1.74.5 教训：模块放进**子目录**后，PACK LIST CHECK 的旧判据只看「顶层 .lua」→ 本地测试全绿、出包却缺文件
 #   （用户装了直接报错）。现有判据已扩成「toc 里带路径的 .lua：要么逐个列出、要么所在目录被整目录拷」。
 # ★★清单必须**跟着 EvalHelp.toc 走**（下面的模块名与基准数由源码检查 PACK LIST CHECK 守着，改漏一处当场 FAIL）
-Copy-Item "$src\EvalHelp.toc","$src\Core.lua","$src\Engine.lua","$src\EvalHelp.lua","$src\Toolbox.lua","$src\DataSearch.lua","$src\Share.lua","$src\IconSem.lua","$src\IconBrowser.lua","$src\PetData.lua","$src\PetHelper.lua" "$staging\EvalHelp\"
+Copy-Item "$src\EvalHelp.toc","$src\Core.lua","$src\Engine.lua","$src\EvalHelp.lua","$src\Toolbox.lua","$src\DataSearch.lua","$src\Share.lua","$src\IconSem.lua","$src\IconBrowser.lua","$src\PetData.lua","$src\PetHelper.lua","$src\ItemPriceData.lua" "$staging\EvalHelp\"
 Copy-Item "$src\README.md","$src\README_en.md","$src\README_ru.md","$src\CHANGELOG.md","$src\DEVELOPMENT.md" "$staging\EvalHelp\"
 Copy-Item "$src\Locales","$src\examples","$src\media","$src\tools" "$staging\EvalHelp\" -Recurse
 # quest/ 只拷插件要用的三个 .lua（fetch.js/sweep*.js/build*.js/audit.js/chains.js 是开发脚本、cache/ 是抓取缓存，都不进包）
 New-Item -ItemType Directory -Force "$staging\EvalHelp\quest" | Out-Null
 Copy-Item "$src\quest\QuestData.lua","$src\quest\QuestBulk.lua","$src\quest\QuestAll.lua","$src\quest\QuestChains.lua" "$staging\EvalHelp\quest\"
-# ★1.75.14 新增 quest\QuestAll.lua（**全量任务表**生成物：4018 条，含无装备奖励的任务）⇒ 出包基准 75 → 76；★1.75.26 新增 `tools\LootCursor.lua`（拾取贴手）⇒ 基准 76 → 77；★1.75.35 新增 `tools\Probes.lua`（探针命令集中地）⇒ 基准 77 → **78**（tools/ 整目录拷 ⇒ 脚本本身不用改）
+# ★1.75.14 新增 quest\QuestAll.lua（**全量任务表**生成物：4018 条，含无装备奖励的任务）⇒ 出包基准 75 → 76；★1.75.26 新增 `tools\LootCursor.lua`（拾取贴手）⇒ 基准 76 → 77；★1.75.35 新增 `tools\Probes.lua`（探针命令集中地）⇒ 基准 77 → **78**（tools/ 整目录拷 ⇒ 脚本本身不用改）；★★1.75.43 新增三个模块 ⇒ 基准 78 → **81**：`ItemPriceData.lua`（**顶层** .lua ⇒ **必须写进上面那行 Copy-Item**，漏了用户装了直接报错）+ `tools\InfoBar.lua`/`tools\ItemPrice.lua`（在 tools/ 里 ⇒ 整目录拷自动带上）；★toc 模块数同时 40 → **42**
 Remove-Item "$staging\EvalHelp\media\Textures" -Recurse -Force -ErrorAction SilentlyContinue  # 主题素材不进包
 [System.IO.Compression.ZipFile]::CreateFromDirectory($staging, $out)
 Copy-Item $out "$PWD\EvalHelp.zip" -Force   # ★不带版本号的固定名副本（第 9 步硬要求；两份逐字节相同）
@@ -116,7 +116,10 @@ Remove-Item $staging -Recurse -Force
 ```
 ★**装完必须核对条目数**（1.75.1 基准 = **75 个**：+`quest/QuestData.lua`、`quest/QuestBulk.lua`、`quest/QuestChains.lua`（1.75.9 新增 QuestBulk = 全量任务/装备数据）；1.74.34 时是 72（+`tools/LayerFix.lua` 图层特殊处理独立模块）；1.74.30 时是 71（+`tools/DragFrames.lua` 框拖拽从子插件搬进工具模块）；1.74.29 时是 70；1.74.27 时是 69（+`tools/RareWatch.lua`）；1.74.12 时是 68、1.74.6 时是 66、1.73.5 时是 63；1.74.5 陆续加了 `tools/IconGrid.lua` / `tools/HunterHelper.lua` / `tools/ConsumableHelper.lua`，1.74.7 加 `tools/DismountHelper.lua`）：
   少一个就是缺文件，用户装了会**直接报错**。
-  ★这一条与上面的模块清单原先都有源码检查 `PACK LIST CHECK` 守着（清单与 .toc 逐个比对 + 基准数按打包口径现算）—— ★**该检查随 `tests/` 一起删除了**（2026-09-26）⇒ 现在**出包必须人工核对**：先数 `Add-Type … OpenRead($out).Entries.Count`（**1.75.26 起应为 77**；1.75.14~1.75.25 是 76），再用上面那条「允许反斜杠」的正则把 toc 里 **40 个**模块逐个比一遍（两条都打印结果，别只看 75）。
+  ★这一条与上面的模块清单原先都有源码检查 `PACK LIST CHECK` 守着（清单与 .toc 逐个比对 + 基准数按打包口径现算）—— ★**该检查随 `tests/` 一起删除了**（2026-09-26）⇒ 现在**出包必须人工核对**：先数 `Add-Type … OpenRead($out).Entries.Count`（**1.75.43 起应为 81**；1.75.26~1.75.42 是 77~78；1.75.14~1.75.25 是 76），再用上面那条「允许反斜杠」的正则把 toc 里 **42 个**模块逐个比一遍（两条都打印结果，别只看条目数）。
+  ★★**1.75.43 实做口径（可直接复用）**：`tmp/pack_release.ps1`（**纯 ASCII**、`powershell -ExecutionPolicy Bypass -File` 跑）一次做完三件事并打印
+  ① `ENTRIES`（= 81）② toc 模块逐个对齐（`MISSING = 0`，键名两侧都把 `\` 归一成 `/`）③ **开箱验文档**（包内 `README.md` 含本版里程碑、`CHANGELOG.md` 含 `## 🎯 vX.Y.Z`、`DEVELOPMENT.md` 含新模块名）。
+  ★另外**必须打印头几条条目名**（`FIRST ENTRIES`）—— 1.75.43 首跑就是因为键名格式假设错（zip 条目其实用**反斜杠**）而 `MISSING = 42` 全假红，只看条数会以为「包是对的」。
 ★**不装**（2026-09-26 更新：测试文件已全部删除，下面这份「不装清单」里只剩与**发布**有关的项）：`preview/`（截图）、`node_modules/`、
 `api_*.html`、`.git/`、`bindings/`、`_icons_scan/`、`pay/`、`luacheck.js`/`test_stub.lua`/`tmp/`（开发用，不随包）。
 ★★**出包实测两个坑（1.75.5，务必照做）**：
@@ -294,7 +297,7 @@ Remove-Item $staging -Recurse -Force
   · ★**状态（用户决定）**：用户说「这个工具先放着以后测试」→ **停在「已实现 + 双闸门绿 + 未提交/未实测」**；
     默认**关**（`tb.feedPet` 空 = 关）+ 载入期零副作用 ⇒ **放着不影响任何现有功能**。
     回来继续时：读 `.dsh/reports/hunter-helper-impl.md`（实现说明 + 16 步真机测试流程 + 四个待实测项）。
-- **当前版本（源码唯一真值）**：`EvalHelp.lua` 的 `local VERSION` == `EvalHelp.toc` 的 `## Version` = **1.75.39**（**已发布**：v1.75.39）
+- **当前版本（源码唯一真值）**：`EvalHelp.lua` 的 `local VERSION` == `EvalHelp.toc` 的 `## Version` = **1.75.43**（**已发布**：v1.75.43）
   （本版已发布；逐版本详情看 `CHANGELOG.md` 的同名小节，里程碑归纳看三语 README 的 **🏁 板块** —— 口径 = 一条一行、全板块 ≤10 条）。
   ★1.73.35~1.73.67 那批工作（分享封皮/品阶评分/头衔抽卡/彩蛋/角色扮演反应/标题栏徽标/取证探针）已随 **v1.74.0** 一起发布。
   ★**逐版本流水一律不进本文件**（见文件头写作纪律）——要点查源码注释 / `CHANGELOG.md` / `git log`；
