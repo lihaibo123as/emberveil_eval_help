@@ -122,19 +122,23 @@ local function igQualityRGB(q)
 end
 
 
--- ===== 通用纯函数：位置换算（两个助手共用 —— 免得各写一份、方向/尺寸错一个就歪）=====
+-- ===== 通用纯函数：位置换算（三个助手共用 —— 免得各写一份、方向/尺寸错一个就歪）=====
 -- 存的是「中心偏移」(cx 向右为正、cy 向上为正)，落点用 TOPLEFT 锚点：
 --   x = w/2 + cx - size/2；y = -(h/2 - cy - size/2)（**y 向下为负**）
 -- ★夹取：偏移量先夹到 [-(w/2-size/2), w/2-size/2]、y 同理 ⇒ 图标四边永远在屏幕内。
-function EVAL_IG_TOPLEFT(sw, sh, size, cx, cy)
+-- ★★★1.75.42 新增**可选的高** `sizeH`（默认 = size ⇒ 所有老调用点行为一字不变）：
+--   喂食助手 1.75.42 曾把图标改成非方形（26×30）⇒ y 轴再拿 size 当高就会**偏 2px**；该需求随后又退回正方形，
+--   但**参数保留**（默认 = size ⇒ 一行不改也兼容）：任何助手以后要非方形，都不必再各写一份换算。
+function EVAL_IG_TOPLEFT(sw, sh, size, cx, cy, sizeH)
   sw, sh, size = tonumber(sw) or 1024, tonumber(sh) or 768, tonumber(size) or 36
+  sizeH = tonumber(sizeH) or size
   cx, cy = tonumber(cx) or 0, tonumber(cy) or 0
-  local maxX, maxY = sw / 2 - size / 2, sh / 2 - size / 2
+  local maxX, maxY = sw / 2 - size / 2, sh / 2 - sizeH / 2
   if maxX < 0 then maxX = 0 end
   if maxY < 0 then maxY = 0 end
   if cx > maxX then cx = maxX elseif cx < -maxX then cx = -maxX end
   if cy > maxY then cy = maxY elseif cy < -maxY then cy = -maxY end
-  return sw / 2 + cx - size / 2, -(sh / 2 - cy - size / 2)
+  return sw / 2 + cx - size / 2, -(sh / 2 - cy - sizeH / 2)
 end
 
 -- ===== 物品类型判定（1.74.28，两个助手共用）=====================

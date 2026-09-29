@@ -63,7 +63,41 @@ local HH = {
 -- ★1.74.5 用户（截图）：「两个助手的图标都太大了，需要和配置的图标相同」
 --   ⇒ 与小地图/配置入口按钮**同尺寸 26×26**（EvalHelp.lua: `mb:SetWidth(26)`「边长 26（与图标库单格一致；按钮 = 图标，无内缩）」）。
 --   ★位置记忆存的是「中心偏移」（与尺寸无关）⇒ 改尺寸不会让老存档的位置跑偏。
-local HH_SIZE = 26
+local HH_SIZE = 26                    -- 图标**宽**（当前是正方形；高见 HH_H）
+-- ★★★1.75.42 图标**高**（唯一来源：`b:SetHeight` / `hhTopLeft` / 重设居中 / 存档兜底 都读它）。
+--   经过：用户先要「图标高度加高4px」（⇒ 26×30），随后又「缩小下图标.还原到尺寸调整到正方形样式」
+--   ⇒ **回到正方形**：高 = 宽 = 26。★常量**保留**（不删）：下次再要非方形只改这一行，
+--   不必再去每个 y 轴换算处找写死的数字 —— 这正是当初把它单列出来的理由。
+local HH_H = HH_SIZE
+-- ★★★1.75.40~42 上下两条进度条的**共用几何**（用户 1.75.41：「上下两个槽位样式保持一致.参考下面的」；
+--   1.75.42：「经验进度条的槽位边框使用细黑」⇒ 顶槽那 1px 亮线**去掉**，两条槽从此**完全同构**）：
+--   槽厚 HH_BAR_H、芯 HH_BAR_CORE（槽内上下各留 1px ⇒ 居中）、芯左右各内缩 HH_XP_INSET。
+--   ★★**声明顺序铁律**：下面「图标纹理边长」那几条**依赖 HH_BAR_H** ⇒ 必须排在它之后！
+--     （本项目老雷：Lua 的 local 作用域从声明之后才开始，写在前面就绑成全局 nil。
+--      本轮就是这么踩的：`HH_ICON` 先引用 HH_BAR_H ⇒ 真机加载会 `arithmetic on global 'HH_BAR_H' (a nil value)`
+--      整个文件挂掉，而 `luacheck` 与 `probe_localorder` **都照不到** —— 是离线 harness 真跑当场抓到的。）
+local HH_BAR_H = 4                 -- 槽厚（上下两条共用；改这一处两条一起变）
+local HH_BAR_CORE = HH_BAR_H - 2   -- 芯厚 = 2px（槽内上下各留 1px 黑边）
+local HH_XP_INSET = 1              -- 芯左右各内缩 1px
+local HH_XP_X = 1 + HH_XP_INSET    -- 芯起点（相对按钮左边）= 槽 1 + 芯 1 = 2
+local HH_XP_W_RUN = HH_SIZE - 2 - HH_XP_INSET * 2    -- 芯最大行程 = 内宽 24 − 左右各 1 = 22（两条共用）
+-- ★★★1.75.42 图标纹理的**正方形边长**（用户三次要求收口：「高度拉伸.但是图标别拉伸能处理吗?」→
+--   「内部的图标能缩小下不.居中」→「调整到20px 试下」）：
+--   图片**固定正方形**（宽 = 高 = HH_ICON），绝不跟边框对拉变形；落点由 X/Y 居中算式给出（改这一个数，居中自动重算）。
+--   ★取值 18px = 用户 1.75.42 指定（先在 16 与 20 之间试过）。参考值：两条槽之间的**净空**是
+--     HH_H − 2×(1 + HH_BAR_H) = 16px ⇒ 18 比净空高 2px ⇒ **上下各被槽压住 1px**；
+--     左右各距框边 (26−18)/2 = 4px（其中 1px 是边框线本身 ⇒ 看得见 3px 黑边）。
+local HH_ICON = 18
+-- 图片在框内**水平/垂直都居中**（落点 = 左上角内缩半个余量；不写死数字 ⇒ 改框高/槽厚/图边长都会自动跟随）
+local HH_ICON_X = (HH_SIZE - HH_ICON) / 2
+local HH_ICON_Y = (HH_H - HH_ICON) / 2
+-- ★★★1.75.42 快乐度**衰减速率**（用户 1.75.42 给的定案数据）：
+--   「快乐值会随着时间的度过缓慢降低，降低速度取决于宠物的忠诚度，忠诚度越高的快乐下降速度越慢。
+--    在忠诚度为最高即"忠诚的"情况下，减少速度约为 7.2/s」⇒ 满值 1000 ⇒ **0.72 %/秒**（1 点 = 0.1%）。
+--   ★低忠诚各档的倍率用户未给、本机也没有服务端源码可查 ⇒ **不编倍率**：只钉 6 档这个锚点，
+--   其余档位由**实测**补（每次「期间没喂食却掉档」= 一次测量，按忠诚度分桶滚动平均、跨会话累积）。
+local HH_DECAY_TOP = 0.72         -- %/秒 @ 忠诚度 6（= 7.2 点/s ÷ 1000 × 100）
+local HH_BAR_PERIOD = 0.2         -- 进度条**实时**刷新节拍（用户：「完善进度预估实时变更」）
 local HH_RATE = 2.0        -- ★1.74.10 用户：「公共CD 是1.5s 喂食间隔设置2s」—— 间隔放宽到 2s/笔（给 1.5s GCD 留余量）
 local HH_AIM_WAIT = 1.0
 local HH_SETTLE_WAIT = 0.8
@@ -331,9 +365,47 @@ local function hhHasPet()
   return false
 end
 
+-- ★★★1.75.42 快乐度档位 → 颜色（**唯一来源**：四条边框与喂食进度条共用同一组读数与色值）
+--   1 不开心 → 红 · 2 一般 → 金 · 3 快乐 → 绿；★没有宠物 / 读不到 ⇒ 默认金（绝不编数据、也不沿用上一档）。
+--   （这道门是 1.75.1 补的：`GetPetHappiness()` **没有「无宠物」语义**，少了它会「宠物没了还亮着绿边」。）
+local function hhHappyRGB()
+  local idx = nil
+  if hhHasPet() and type(GetPetHappiness) == "function" then
+    local ok, v = pcall(GetPetHappiness)
+    if ok and tonumber(v) then idx = tonumber(v) end
+  end
+  local r, g, b = 0.85, 0.70, 0.20 -- 默认金（无宠物 / 拿不到快乐度）
+  if idx == 1 then r, g, b = 1.00, 0.35, 0.30
+  elseif idx == 2 then r, g, b = 0.95, 0.80, 0.25
+  elseif idx == 3 then r, g, b = 0.45, 1.00, 0.45 end
+  return r, g, b, idx
+end
+
+-- ★★★1.75.42 喂食进度条的**唯一绘制口**（2 秒心跳与 0.2 秒实时 tick 都调它，绝不两处各画一遍）：
+--   读口 = `EVAL_HH_HAPPY_PCT()`（预估%；拿不到 → 两条一起隐藏，绝不编数）；
+--   长度 = HH_XP_W_RUN × 百分比（向左长）；颜色 = 档位色（与边框同源 hhHappyRGB）。
+--   ★成本：两处 pcalls（HasPetUI/UnitExists + GetPetHappiness）+ 一次 SetWidth/SetVertexColor ⇒ 0.2s 一拍很轻。
+local function hhHappyBarPaint()
+  if not (HH.built and HH.hpFill and HH.hpBg) then return false end
+  local pct = nil
+  if hhHasPet() and type(EVAL_HH_HAPPY_PCT) == "function" then pct = EVAL_HH_HAPPY_PCT() end
+  if not pct then
+    pcall(HH.hpFill.Hide, HH.hpFill)
+    pcall(HH.hpBg.Hide, HH.hpBg)
+    return false
+  end
+  local p = tonumber(pct) or 0
+  if p < 0 then p = 0 elseif p > 100 then p = 100 end
+  local r, g, b = hhHappyRGB()
+  pcall(HH.hpBg.Show, HH.hpBg)
+  pcall(HH.hpFill.Show, HH.hpFill)
+  pcall(HH.hpFill.SetWidth, HH.hpFill, math.max(1, HH_XP_W_RUN * (p / 100)))
+  pcall(HH.hpFill.SetVertexColor, HH.hpFill, r, g, b, 1)
+  return true
+end
+
 -- ===== 喂食状态机（跨帧：RunScript 是排队通道，当帧硬点背包必然踩空） =====
-local function hhRelease()
-  HH.phase = "idle"
+local function hhRelease()  HH.phase = "idle"
   if table.getn(HH.q) == 0 and HH.tick then
     pcall(HH.tick.SetScript, HH.tick, "OnUpdate", nil) -- 队列空 → 摘掉 OnUpdate（不在后台空转）
   end
@@ -627,9 +699,9 @@ function EVAL_HH_RESET_POS()
     --   这里用同一套换算（若 EVAL_IG_TOPLEFT 可用则走共用件）
     local x, y
     if type(EVAL_IG_TOPLEFT) == "function" then
-      x, y = EVAL_IG_TOPLEFT(w2, h2, HH_SIZE, 0, 0)
+      x, y = EVAL_IG_TOPLEFT(w2, h2, HH_SIZE, 0, 0, HH_H)   -- ★高单独传 HH_H（当前 = 宽；改高只改常量）
     else
-      x, y = w2 / 2 - HH_SIZE / 2, -(h2 / 2 - HH_SIZE / 2)
+      x, y = w2 / 2 - HH_SIZE / 2, -(h2 / 2 - HH_H / 2)
     end
     pcall(HH.btn.ClearAllPoints, HH.btn)
     pcall(HH.btn.SetPoint, HH.btn, "TOPLEFT", UIParent, "TOPLEFT", x, y)
@@ -675,7 +747,7 @@ local function hhSavePos()
   -- ★存「图标中心相对 UIParent 中心的偏移」（与项目其它记忆位置同一口径；含缩放 → 要除）
   local okw, w2 = pcall(UIParent.GetWidth, UIParent)
   local okh, h2 = pcall(UIParent.GetHeight, UIParent)
-  local bw, bh = HH_SIZE, HH_SIZE
+  local bw, bh = HH_SIZE, HH_H   -- 兜底值（正常会读实测宽高；高由 HH_H 给，改高/改方都不用动这里）
   local okbw, v1 = pcall(b.GetWidth, b)
   if okbw and type(v1) == "number" then bw = v1 end
   local okbh, v2 = pcall(b.GetHeight, b)
@@ -849,15 +921,8 @@ function EVAL_HH_PETDECOR()
   --   `GetPetHappiness()` **没有「无宠物」这个返回值语义**（桩里它就照读 `TEST.happiness`；真机上取值也不该被当成
   --   「这只有宠物的快乐度」）⇒ 少了这道门，宠物刚消失时会**沿用上一档颜色**（宠物没了却还亮着红/绿边）。
   --   判据 = 组 188 ④ 的**反向哨兵**「没有宠物 → 退回默认金边（不硬编『开心』）」（head 线原有，合并后当场抓到）。
-  local idx = nil
-  if hhHasPet() and type(GetPetHappiness) == "function" then
-    local ok, v = pcall(GetPetHappiness)
-    if ok and tonumber(v) then idx = tonumber(v) end
-  end
-  local r, g, b = 0.85, 0.70, 0.20 -- 默认金（无宠物/拿不到快乐度）
-  if idx == 1 then r, g, b = 1.00, 0.35, 0.30
-  elseif idx == 2 then r, g, b = 0.95, 0.80, 0.25
-  elseif idx == 3 then r, g, b = 0.45, 1.00, 0.45 end
+  --   ★1.75.42：档位→颜色收进 `hhHappyRGB()`（**唯一来源**），本函数与进度条都读它，不再各写一份。
+  local r, g, b = hhHappyRGB()
   if type(HH.edges) == "table" then
     for i = 1, 4 do
       local e = HH.edges[i]
@@ -875,7 +940,7 @@ function EVAL_HH_PETDECOR()
     if cur and max and max > 0 then
       local pct = cur / max
       if pct < 0 then pct = 0 elseif pct > 1 then pct = 1 end
-      local inner = HH_SIZE - 2
+      local inner = HH_XP_W_RUN   -- ★1.75.40（用户选 A）：蓝芯左右各内缩 1px ⇒ 行程唯一来源；亮线/黑槽仍是全内宽
       pcall(HH.xpBg.Show, HH.xpBg)
       pcall(HH.xpFill.Show, HH.xpFill)
       pcall(HH.xpFill.SetWidth, HH.xpFill, inner * pct)
@@ -884,23 +949,10 @@ function EVAL_HH_PETDECOR()
       pcall(HH.xpBg.Hide, HH.xpBg)
     end
   end
-  -- ★1.75.10 喂食进度柱（按钮左侧）：**有宠物 + 有预估**才显示；颜色与边框同档位（1 红 / 2 金 / 3 绿）
-  if HH.hpFill and HH.hpBg then
-    local pct = nil
-    if hhHasPet() and type(EVAL_HH_HAPPY_PCT) == "function" then pct = EVAL_HH_HAPPY_PCT() end
-    if pct then
-      local p = tonumber(pct) or 0
-      if p < 0 then p = 0 elseif p > 100 then p = 100 end
-      local inner = HH_SIZE - 2
-      pcall(HH.hpBg.Show, HH.hpBg)
-      pcall(HH.hpFill.Show, HH.hpFill)
-      pcall(HH.hpFill.SetHeight, HH.hpFill, math.max(1, inner * (p / 100)))
-      pcall(HH.hpFill.SetVertexColor, HH.hpFill, r, g, b, 1)
-    else
-      pcall(HH.hpFill.Hide, HH.hpFill)
-      pcall(HH.hpBg.Hide, HH.hpBg)
-    end
-  end
+  -- ★1.75.10 喂食进度条（★1.75.41 起 = **底部横条**）：**有宠物 + 有预估**才显示；颜色与边框同档位。
+  --   ★★★1.75.42：绘制收进 `hhHappyBarPaint()`（**唯一绘制口**）—— 本 2s 心跳与 0.2s **实时 tick** 走同一段代码，
+  --   两处各画一遍必然漂（本项目老雷）；实时 tick 见 `hapStart` 里那个 `HH_BAR_PERIOD` 帧。
+  pcall(hhHappyBarPaint)
   return true
 end
 
@@ -954,8 +1006,8 @@ end
 --     夹取与它的**目的相同**（绝不还原到屏幕外），语义更干净。
 -- ★1.74.5 换算本体抽到共用件 EVAL_IG_TOPLEFT（消耗品助手要用同一份 —— 免得两处各写、方向错一个就歪）
 local function hhTopLeft(sw, sh, cx, cy)
-  if type(EVAL_IG_TOPLEFT) == "function" then return EVAL_IG_TOPLEFT(sw, sh, HH_SIZE, cx, cy) end
-  return sw / 2 + (tonumber(cx) or 0) - HH_SIZE / 2, -(sh / 2 - (tonumber(cy) or 0) - HH_SIZE / 2)
+  if type(EVAL_IG_TOPLEFT) == "function" then return EVAL_IG_TOPLEFT(sw, sh, HH_SIZE, cx, cy, HH_H) end
+  return sw / 2 + (tonumber(cx) or 0) - HH_SIZE / 2, -(sh / 2 - (tonumber(cy) or 0) - HH_H / 2)
 end
 
 -- 懒建（幂等）：开关打开 / 首次需要时才建帧
@@ -963,7 +1015,7 @@ function EVAL_HH_ENSURE()
   if HH.built and HH.btn then return HH.btn end
   local b = CreateFrame("Button", nil, UIParent)
   b:SetWidth(HH_SIZE)
-  b:SetHeight(HH_SIZE)
+  b:SetHeight(HH_H)   -- ★高走 HH_H（当前 = 宽 ⇒ 正方形 26×26；1.75.42 曾短暂 26×30，用户要求还原）
   local tb = hhCfg() or {}
   local okc, w2 = pcall(UIParent.GetWidth, UIParent)
   local okh, h2 = pcall(UIParent.GetHeight, UIParent)
@@ -1010,34 +1062,46 @@ function EVAL_HH_ENSURE()
     end
   end
   local tex = b:CreateTexture(nil, "ARTWORK")
-  tex:SetPoint("TOPLEFT", b, "TOPLEFT", 2, -2)
-  tex:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", -2, 2)
+  -- ★★★1.75.42 尺寸与位置（三次用户要求收口：① 别被拉伸 ⇒ 正方形；② 居中；③ 再缩小一点）：
+  --   落点 = 左上角内缩 HH_ICON_X / HH_ICON_Y（都是**算式**：半余量 ⇒ 居中），宽高都 = HH_ICON（正方形）。
+  --   ★旧写法是 `TOPLEFT` + `BOTTOMRIGHT` 两锚点对拉 ⇒ 框一变高图片就被纵向拉长（用户截图里那根「变长的培根」）。
+  tex:SetPoint("TOPLEFT", b, "TOPLEFT", HH_ICON_X, -HH_ICON_Y)
+  tex:SetWidth(HH_ICON)
+  tex:SetHeight(HH_ICON)
   tex:Hide()
   -- ★★1.74.29 用户要求：按钮**顶部一条小小的蓝色进度条**（宠物经验百分比）
+  -- ★★★1.75.40 用户要求：给它**槽底加一根 1px 小线**（线**含在**槽内、不加高）、线用中性亮色。
+  -- ★★★1.75.41 用户：「上下两个槽位样式保持一致.参考下面的」⇒ **槽厚与芯的摆法照底槽**（4px 槽 + 居中 2px 芯）。
   local xpBg = b:CreateTexture(nil, "OVERLAY")
   hhSolid(xpBg, 0, 0, 0, 0.75)
   xpBg:SetPoint("TOPLEFT", b, "TOPLEFT", 1, -1)
   xpBg:SetPoint("TOPRIGHT", b, "TOPRIGHT", -1, -1)
-  xpBg:SetHeight(3)
+  xpBg:SetHeight(HH_BAR_H)                    -- ★与底槽同厚（改 HH_BAR_H 两条一起变）
   local xpFill = b:CreateTexture(nil, "OVERLAY")
   hhSolid(xpFill, 0.25, 0.55, 1.0, 1) -- 蓝色
-  xpFill:SetPoint("TOPLEFT", b, "TOPLEFT", 1, -1)
-  xpFill:SetHeight(3)
+  -- ★与底槽同款摆法：锚槽的左下角内侧 (1,1) ⇒ 槽内上下各留 1px 黑边、左右各内缩 1px
+  xpFill:SetPoint("BOTTOMLEFT", xpBg, "BOTTOMLEFT", 1, 1)
+  xpFill:SetHeight(HH_BAR_CORE)
   xpFill:SetWidth(0)
+  -- ★★★1.75.42 用户：「经验进度条的槽位边框使用细黑」⇒ **删掉 1.75.40 那根 1px 亮白线**：
+  --   槽底那 1px 现在就是槽自己的半透明黑（= 底槽同位置的黑边）⇒ 两条槽**完全同构**，不再有亮边。
+  --   （旧实现在真机上被取色证实是一条 `167,174,184` 的亮线横贯槽底，用户看到的就是它。）
   HH.xpBg, HH.xpFill = xpBg, xpFill
-  -- ★★★1.75.10 喂食进度（**柱状**，贴在按钮左侧）——用户：「喂食进度百分百在喂食按键左侧添加一个类似按钮经验进度
-  --   相同的小进度条,定位在按钮左侧柱状」。口径与经验条一致：纯色纹理（WHITE8X8）+ 顶点色、**不用 SetScale**、
-  --   随按钮一起显隐（都是按钮的子纹理）。
+  -- ★★★1.75.10 喂食进度条 —— ★★★1.75.41 用户：「将喂食进度绿条放置在底部」⇒ 由框内右侧**竖柱**改成**底部横条**，
+  --   并成为**上下两条槽的样式基准**（用户：「上下两个槽位样式保持一致.参考下面的」）。
+  --   构造与顶部经验条同款（本项目配方）：纯色纹理（WHITE8X8）+ 顶点色、**不用 SetScale**、随按钮一起显隐（都是按钮的子纹理）。
+  --   槽 = 全内宽 × HH_BAR_H、贴底内缩 1px；芯 = HH_BAR_CORE 厚（槽内上下各留 1px 黑边）+ 左右各内缩 1px，**由左往右长**
+  --   （长度 = HH_XP_W_RUN × 百分比，宽度由 EVAL_HH_PETDECOR 按百分比设）。
   local hpBg = b:CreateTexture(nil, "OVERLAY")
   hhSolid(hpBg, 0, 0, 0, 0.75)
-  hpBg:SetPoint("TOPRIGHT", b, "TOPLEFT", -2, 0)
-  hpBg:SetPoint("BOTTOMRIGHT", b, "BOTTOMLEFT", -2, 0)
-  hpBg:SetWidth(6)
+  hpBg:SetPoint("BOTTOMLEFT", b, "BOTTOMLEFT", 1, 1)
+  hpBg:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", -1, 1)
+  hpBg:SetHeight(HH_BAR_H)
   local hpFill = b:CreateTexture(nil, "OVERLAY")
   hhSolid(hpFill, 0.95, 0.80, 0.25, 1) -- 默认金；随快乐度档位改色（见 EVAL_HH_PETDECOR）
-  hpFill:SetPoint("BOTTOMLEFT", hpBg, "BOTTOMLEFT", 1, 1)
-  hpFill:SetWidth(4)
-  hpFill:SetHeight(0)
+  hpFill:SetPoint("BOTTOMLEFT", hpBg, "BOTTOMLEFT", 1, 1)   -- 左右各内缩 1px、上下各留 1px 黑槽边
+  hpFill:SetHeight(HH_BAR_CORE)
+  hpFill:SetWidth(0)
   HH.hpBg, HH.hpFill = hpBg, hpFill
   pcall(hpBg.Hide, hpBg)
   pcall(hpFill.Hide, hpFill)
@@ -1348,11 +1412,20 @@ end
 -- ★纪律：只在开启探针时注册事件与 tick（关掉零动作）、环有界、**不改任何喂食行为**。
 local HAP = { on = false, ev = nil, tick = nil, sum = 0, sinceFlip = 0, band = nil,
               lastFlipT = nil, lastFlipSum = nil, seen = {}, petKey = nil, um = nil, flips = {},
-              snapVal = nil, snapT = nil, snapE = nil, decay = 0, ptPct = 0.1, samples = {} }
+              snapVal = nil, snapT = nil, snapE = nil, decay = 0, ptPct = 0.1,
+              -- ★★★1.75.42 衰减（用户：「快乐值随时间缓慢降低…取决于忠诚度…最高档约 7.2/s」）：
+              loyal = nil,     -- 当前忠诚档位（1..6；"?" = 解析不出）
+              decayBy = {},    -- 按忠诚度分桶的**实测**衰减（%/s）
+              decayN = {},     -- 各桶的实测样本数（滚动平均用）
+              bar = nil }      -- 进度条**实时**刷新帧（0.2s 一拍；hapStart 建、hapStop 摘）
 local HAP_MAX = 150
 -- ★档位边界（3 等分）：**只用来「打点」**，其余全靠日志累计（用户：「唯一要查的是档位变更直接打到下一阶段的百分比」）
-local HAP_B_START = { [1] = 0.1, [2] = 33.4, [3] = 66.7 }
-local HAP_B_TOP   = { [1] = 33.3, [2] = 66.6, [3] = 99.9 }
+-- ★★★1.75.40 按用户给的**定案口径**精确化（原值是 0.1 / 99.9 的近似）：
+--   快乐度满值 = **1000**（±5）· 三档**等分** ⇒ 不高兴 0–333（0.0–33.3%）· 满足 334–666（33.4–66.6%）
+--   · 快乐 667–1000（66.7–100.0%）。★由此可推：1 点 = 0.1% ⇒ 学习项 ptPct 的缺省 0.1 **就是**这个口径
+--   （不必再靠观测反推；观测只用来逼近衰减率 decay）。
+local HAP_B_START = { [1] = 0.0, [2] = 33.4, [3] = 66.7 }
+local HAP_B_TOP   = { [1] = 33.3, [2] = 66.6, [3] = 100.0 }
 
 -- ★纯函数（可被断言直接喂数）：预估进度% = 打点值 + 累计点数×换算 − 衰减率×耗时
 function EVAL_HH_HAPPY_EST(pts, snapVal, rate, dt, ptPct)
@@ -1396,21 +1469,50 @@ local function hapNow() return (type(GetTime) == "function") and GetTime() or 0 
 local function hapEpoch() return (type(time) == "function") and time() or 0 end -- ★跨会话/跨登录用挂钟秒
 
 -- ★★★滚动平均学习（用户：「前期不准没关系.最终随着次数变多.更新更精准的预测数据」）
---   前几个样本以观测为准，之后按 1/min(n,cap) 平均 ⇒ 越用越准，且后期仍能跟随漂移。
-local function hapLearn(key, obs, cap)
-  obs = tonumber(obs)
-  if not obs or obs ~= obs or obs <= 0 then return end
-  local n = (HAP.samples[key] or 0) + 1
-  HAP.samples[key] = n
-  local w = 1 / math.min(n, tonumber(cap) or 20)
-  HAP[key] = (HAP[key] or obs) * (1 - w) + obs * w
-end
+--   ★1.75.42：原来这里有个通用 `hapLearn(key, obs, cap)`；它最后两个调用者（点数换算 / 衰减）都已收口
+--   —— 点数换算按用户定案口径**不再学习**（恒定 0.1%/点），衰减改走**按忠诚度分桶**的 `hapLearnDecay` ⇒ 本函数已无调用者，删掉（孤儿代码）。
 
 local function hapBand()
   if type(GetPetHappiness) ~= "function" then return nil end
   local ok, v = pcall(GetPetHappiness)
   if ok and tonumber(v) then return tonumber(v) end
   return nil
+end
+
+-- ★★★1.75.42 忠诚度档位（1..6；**6 = 「忠诚的」= 衰减最慢**，用户给的就是这一档的 7.2 点/s）。
+--   本客户端 `GetPetLoyalty()` 返回**未本地化英文串**（如 "(Loyalty Level 3) Unruly"）⇒ 只取第一个数字并夹到 1..6；
+--   解析不出 / 接口不在 → **"?"**（如实标记「这一档未知」，而不是假装成 6 档）。
+local function hapLoyal()
+  if type(GetPetLoyalty) ~= "function" then return "?" end
+  local ok, v = pcall(GetPetLoyalty)
+  if not (ok and type(v) == "string") then return "?" end
+  local n = tonumber(string.match(v, "(%d+)"))
+  if n and n >= 1 and n <= 6 then return n end
+  return "?"
+end
+
+-- ★★★1.75.42 **生效衰减率**（%/s）= 当前忠诚档位的**实测值**；没有实测 → 用已知锚点 `HH_DECAY_TOP` 兜底。
+--   ★为什么可以兜底：衰减是**线性**的（每秒固定点数）⇒ 兜底值只会让预估「偏慢一点」，而每跨一档就是一次实测
+--   （`hapLearnDecay`），该档的桶一旦有值就立刻改用它 ⇒ 越用越准。
+--   ★绝不按「忠诚越高越慢」自己编 1~5 档的倍率 —— 那是编数据（本项目铁律）；缺的档位靠实测补。
+local function hapDecayNow()
+  local d = HAP.decayBy[HAP.loyal or "?"]
+  if d then return d end
+  return HH_DECAY_TOP
+end
+
+-- ★衰减实测**按忠诚度分桶**滚动平均（跨会话累积；cap 20 与其它学习项同口径）
+local function hapLearnDecay(obs)
+  obs = tonumber(obs)
+  if not obs or obs ~= obs or obs <= 0 then return end
+  local key = HAP.loyal or "?"
+  local n = (HAP.decayN[key] or 0) + 1
+  HAP.decayN[key] = n
+  local w = 1 / math.min(n, 20)
+  local cur = HAP.decayBy[key]
+  HAP.decayBy[key] = ((cur or obs) * (1 - w)) + (obs * w)
+  HAP.decay = hapDecayNow()
+  return HAP.decayBy[key]
 end
 
 local function hapUM()
@@ -1427,13 +1529,22 @@ local function hapSave()
   box.at = string.format("%.1f", hapNow())
   -- ★学习结果跨会话累积（越用越准）：打点值 / 衰减率 / 点数换算 / 样本数 / 挂钟打点时刻
   box.snapVal, box.decay, box.ptPct = HAP.snapVal, HAP.decay, HAP.ptPct
-  box.samples, box.epoch = HAP.samples, HAP.snapE
+  box.epoch = HAP.snapE
+  -- ★1.75.42 衰减**按忠诚度分桶**一起落盘（换号/换宠/跨会话都接着用）
+  box.decayBy, box.decayN, box.loyal = HAP.decayBy, HAP.decayN, HAP.loyal
 end
 
 local function hapEst()
   if HAP.snapVal == nil then return nil end
   local dt = hapNow() - (HAP.snapT or hapNow())
-  return EVAL_HH_HAPPY_EST(HAP.sinceFlip, HAP.snapVal, HAP.decay, dt, HAP.ptPct)
+  local p = EVAL_HH_HAPPY_EST(HAP.sinceFlip, HAP.snapVal, HAP.decay, dt, HAP.ptPct)
+  -- ★★★1.75.41 夹进**当前档位的区间**（用户：「需要根据实际的快乐度等级正确的显示百分比 0-33%-66%-100%」）：
+  --   档位 = `GetPetHappiness()` **实测**；百分比 = 我们推算的 ⇒ 显示**不许与档位自相矛盾**
+  --   （快乐档最少 66.7%、满足档最多 66.6%、不高兴档最多 33.3%）。估算只能决定「档内位置」，不能越档。
+  local lo, hi = HAP_B_START[HAP.band], HAP_B_TOP[HAP.band]
+  if lo and p < lo then p = lo end
+  if hi and p > hi then p = hi end
+  return p
 end
 
 local function hapLine(tag)
@@ -1442,8 +1553,9 @@ local function hapLine(tag)
   if type(GetPetLoyalty) == "function" then local ok, v = pcall(GetPetLoyalty) if ok then ly = v end end
   if type(UnitLevel) == "function" then local ok, v = pcall(UnitLevel, "pet") if ok then lv = v end end
   local est = hapEst()
-  hapLog(string.format("%s | t=%.1f | 档位=%s | 预估=%s%% | 累计喂食=%d | 本档累计=%d | UnitMana=%s/%s | 忠诚=%s | 等级=%s",
-    tostring(tag), hapNow(), tostring(hapBand()), est and string.format("%.1f", est) or "?", HAP.sum, HAP.sinceFlip,
+  hapLog(string.format("%s | t=%.1f | 档位=%s | 预估=%s%% | 衰减=%.3f%%/s@忠诚%s | 累计喂食=%d | 本档累计=%d | UnitMana=%s/%s | 忠诚=%s | 等级=%s",
+    tostring(tag), hapNow(), tostring(hapBand()), est and string.format("%.1f", est) or "?",
+    (tonumber(HAP.decay) or -1), tostring(HAP.loyal), HAP.sum, HAP.sinceFlip,
     tostring(um), tostring(umax), tostring(ly), tostring(lv)))
   hapSave()
   return um
@@ -1465,18 +1577,20 @@ local function hapCheckBand(why)
   local rising = (b > HAP.band)
   local dt = (HAP.lastFlipT and (now - HAP.lastFlipT)) or 0
   local pts = HAP.sinceFlip
-  -- ★打点（用户定）：升档落到**新档起点**、降档落到**旧档顶**
-  local boundary = rising and (HAP_B_START[b] or 0) or (HAP_B_TOP[HAP.band] or 0)
+  -- ★打点（用户定）：升档落到**两档交界**（= 新档起点）；降档同样落到**交界**（= 新档顶）
+  --   ★★★1.75.41 修（用户：「如果快乐度是绿色退到黄色…应该是进度在66%」）：旧写法降档用 `HAP_B_TOP[HAP.band]`
+  --   —— 那是**旧档**（更高的那档）的顶 ⇒ 3→2 会落到 **100%**（明明掉档了却显示满格，与实测档位自相矛盾）。
+  --   正确口径 = 交界：升档 66.7（新档起点）/ 降档 66.6（新档顶）⇒ 与用户的「0 / 33 / 66 / 100」四档线对齐。
+  local boundary = rising and (HAP_B_START[b] or 0) or (HAP_B_TOP[b] or 0)
   -- ★两项换算**实测**（不问服务器常量）：
-  --   ① 降档且期间没喂 ⇒ 衰减率 =（上一打点值 − 旧档顶）/ 耗时
-  --   ② 升档 ⇒ 点数→百分比换算 =（新档起点 − 上一打点值）/ 期间喂食点数
+  --   ① 降档且期间没喂 ⇒ 衰减率 =（上一打点值 − 交界值）/ 耗时
+  --   ② ★★★1.75.42 **删掉了「点数→百分比换算」的学习**（原 `hapLearn("ptPct", gainPct/pts, 20)`）：
+  --     用户已给定案口径（满值 1000 ⇒ **1 点 = 0.1%**，就是缺省 `ptPct`），不必反推；而旧写法**会毒死换算**——
+  --     跨档时「上一打点值→新档起点」常常只有 0.1%（打点本来就在交界上），却要除以期间几百点 ⇒
+  --     学出 0.00025 %/点，之后喂 400 点只涨 0.1%（离线 harness 实抓：喂 400 点后预估从 66.7 只到 66.8）。
   if (not rising) and pts <= 0 and dt > 3 then
-    local drop = (HAP.snapVal or 0) - (HAP_B_TOP[HAP.band] or 0)
-    if drop > 0 then hapLearn("decay", drop / dt, 20) end
-  end
-  if rising and pts > 0 then
-    local gainPct = (HAP_B_START[b] or 0) - (HAP.snapVal or 0)
-    if gainPct > 0 then hapLearn("ptPct", gainPct / pts, 20) end
+    local drop = (HAP.snapVal or 0) - boundary   -- ★同上：交界 = 新档顶（旧写法用旧档顶 ⇒ 3→2 时永为负、衰减率学不到）
+    if drop > 0 then hapLearnDecay(drop / dt) end   -- ★1.75.42 按**忠诚度分桶**学（用户：速度取决于忠诚度）
   end
   hapLog(string.format("★档位变化 %s→%s（%s）| 本档耗时=%.0fs | 本档喂食=%d 点 | **打点=%.1f%%** | 实测衰减=%.4f%%/s | 点数换算=%.4f%%/点",
     tostring(HAP.band), tostring(b), tostring(why), dt, pts, boundary, HAP.decay, HAP.ptPct))
@@ -1512,6 +1626,17 @@ end
 
 local function hapTick()
   if not HAP.on then return end
+  -- ★★★1.75.42 每拍刷新**忠诚度 + 生效衰减率**（用户：「降低速度取决于宠物的忠诚度」）：
+  --   换宠 / 忠诚升级 / 重新召唤都会在这里被发现 ⇒ 立刻切到该档的实测衰减（没有实测就用锚点兜底）。
+  local ly = hapLoyal()
+  if ly ~= HAP.loyal then
+    local old = HAP.loyal       -- ★先留旧值再改（否则日志里两头都是新值 = 自欺）
+    HAP.loyal = ly
+    HAP.decay = hapDecayNow()
+    hapLog(string.format("忠诚度档位 %s → %s ⇒ 生效衰减=%.3f%%/s（该档实测样本 %d）",
+      tostring(old), tostring(ly), tonumber(HAP.decay) or -1, tonumber(HAP.decayN[ly]) or 0))
+    hapSave()
+  end
   local b = hapBand()
   local u = select(1, hapUM())
   if b and HAP.band and b ~= HAP.band then
@@ -1528,6 +1653,8 @@ local function hapStop()
   HAP.on = false
   if HAP.ev and type(HAP.ev.UnregisterAllEvents) == "function" then pcall(HAP.ev.UnregisterAllEvents, HAP.ev) end
   if HAP.tick and type(HAP.tick.SetScript) == "function" then pcall(HAP.tick.SetScript, HAP.tick, "OnUpdate", nil) end
+  -- ★1.75.42 **实时进度条 tick 一起摘**（关掉零动作：不摘就是一个每 0.2s 白转的 OnUpdate）
+  if HAP.bar and type(HAP.bar.SetScript) == "function" then pcall(HAP.bar.SetScript, HAP.bar, "OnUpdate", nil) end
   hapLog("探针停止（累计喂食 " .. HAP.sum .. " 点）")
   hapSave()
 end
@@ -1549,23 +1676,41 @@ local function hapStart()
       pcall(hapTick)
     end)
   end
+  -- ★★★1.75.42 进度条**实时**刷新（用户：「完善进度预估实时变更」）：
+  --   引擎在跑 ⇒ 每 HH_BAR_PERIOD(0.2s) 调一次**唯一绘制口**。本条 OnUpdate 只做「按时间衰减重算 + 画」，
+  --   **不读任何 API**（`hhHappyBarPaint` 里那两次 pcall 是档位色，成本可忽略）⇒ 关掉引擎即摘（见 hapStop）。
+  if not HAP.bar then
+    HAP.bar = CreateFrame("Frame", "EVAL_HH_HAPPY_BAR", UIParent)
+    local accB = 0
+    HAP.bar:SetScript("OnUpdate", function()
+      accB = accB + (tonumber(arg1) or 0.05)
+      if accB < HH_BAR_PERIOD then return end
+      accB = 0
+      pcall(hhHappyBarPaint)
+    end)
+  end
   HAP.on = true
   local pk = nil
   if type(UnitName) == "function" then local ok, v = pcall(UnitName, "pet") if ok then pk = v end end
   -- ★★★断点续算（用户：「最终随着次数变多.更新更精准的预测数据」）：把上次的打点值 + 学习结果接过来；
   --   离线/登出的那段时间用**挂钟差**补算衰减 ⇒ 「跑几分钟 + 中途 reload」也不会丢预测。
   local box0 = hapStore()
+  -- ★★★1.75.42 衰减（按忠诚度分桶）与当前忠诚档位先接过来（否则本会话第一秒会退化成锚点兜底）
+  HAP.decayBy = (type(box0.decayBy) == "table") and box0.decayBy or {}
+  HAP.decayN = (type(box0.decayN) == "table") and box0.decayN or {}
+  HAP.loyal = hapLoyal()
   local cont, gap = false, 0
   if box0.snapVal and (box0.petKey == nil or box0.petKey == pk) then
     HAP.snapVal = tonumber(box0.snapVal)
-    HAP.decay = tonumber(box0.decay) or 0
+    -- ★迁移：老存档只有一个标量 box.decay（未分桶）⇒ 归到**当前忠诚**这一桶（只做一次；有分桶表就不动它）
+    if next(HAP.decayBy) == nil and tonumber(box0.decay) then HAP.decayBy[HAP.loyal] = tonumber(box0.decay) end
     HAP.ptPct = tonumber(box0.ptPct) or 0.1
-    HAP.samples = (type(box0.samples) == "table") and box0.samples or {}
     HAP.snapE = box0.epoch
     if box0.epoch and hapEpoch() > 0 then gap = math.max(0, hapEpoch() - box0.epoch) end
     HAP.snapT = hapNow() - gap
     cont = true
   end
+  HAP.decay = hapDecayNow()   -- ★生效衰减 = 当前忠诚档的实测值（没有就用 HH_DECAY_TOP 锚点兜底）
   HAP.petKey = pk
   local b0 = hapBand()
   if cont and b0 and box0.band and tonumber(b0) == tonumber(box0.band) then
@@ -1588,9 +1733,15 @@ end
 -- ★★★1.75.10 生产化口（喂食助手内自动跑，不需要用户敲命令）：
 --   `EVAL_HH_HAPPY_AUTO()`：喂食助手开着 + 有宠物 ⇒ 自动开引擎；否则停（**关掉零动作**：不注册事件、不跑心跳）。
 --   `EVAL_HH_HAPPY_PCT()`：**对外唯一读口** —— 预估进度%（拿不到 → nil，绝不编数）。
+-- ★★★1.75.40 修（本函数自 1.75.10 起**一次都没生效过**）：原来写 `if type(EVAL_HH_ENABLED) == "function"`，
+--   而这个名字**全项目从来没有定义**（`git log -S"function EVAL_HH_ENABLED"` 在任何版本都查不到；名字只在
+--   2535bc0 被引入这一处**读**）⇒ `want` 恒 false ⇒ 快乐度引擎一次都没启动 ⇒ `EVAL_HH_HAPPY_PCT()` 恒 nil
+--   ⇒ 按钮旁那根喂食进度柱（`HH.hpBg/hpFill`）**永远不显示**；★同一处还会把用户手动开的探针
+--   （`/eh go 喂食探针 快乐 开始`）在 2 秒内**停掉**（PETDECOR 每 2s 调一次本函数）。
+--   ⇒ 判据改用本文件自己的总闸门 `hhOn()`（= 角色级 `tb.feedPet`，与喂食入口 `HH_FEED` 同一份真值）。
+--   ★取证锚点：账户级存档里没有 `hhHappyProbe` 键 = 引擎从未 `hapSave()` 过。
 function EVAL_HH_HAPPY_AUTO()
-  local want = false
-  if type(EVAL_HH_ENABLED) == "function" then want = EVAL_HH_ENABLED() and hhHasPet() and true or false end
+  local want = hhOn() and hhHasPet() and true or false
   if want and not HAP.on then
     HAP.silent = true      -- 自动启动不刷聊天框（只进取证环 + 调试日志）
     local ok = hapStart()
@@ -1614,9 +1765,12 @@ function EVAL_HH_HAPPY_CMD(sub)
   if sub == "清" or sub == "clear" then
     hapStore().out = {}
     HAP.sum, HAP.sinceFlip, HAP.band, HAP.flips, HAP.seen = 0, 0, nil, {}, {}
-    HAP.snapVal, HAP.snapT, HAP.decay, HAP.ptPct = nil, nil, 0, 0.1
+    HAP.snapVal, HAP.snapT, HAP.ptPct = nil, nil, 0.1
+    -- ★1.75.42 衰减学习也一起复位（回到「所有档位都用锚点兜底」的干净状态）
+    HAP.decayBy, HAP.decayN, HAP.loyal = {}, {}, hapLoyal()
+    HAP.decay = hapDecayNow()
     hapSave()
-    hhSay("快乐度探针：环与累加器已清空（打点/换算也复位）")
+    hhSay("快乐度探针：环与累加器已清空（打点/换算/**各忠诚档的衰减实测**也复位）")
     return true
   end
   if sub == "表" or sub == "dump" then
@@ -1631,9 +1785,24 @@ function EVAL_HH_HAPPY_CMD(sub)
     local est = hapEst()
     hhSay(string.format("探针=%s · 当前档位=%s · **预估进度=%.1f%%** · 本档累计=%d 点 · 累计喂食=%d 点",
       HAP.on and "开" or "停", tostring(hapBand()), est or -1, HAP.sinceFlip, HAP.sum))
-    hhSay(string.format("　上次打点=%.1f%% · 衰减=%.4f%%/s（样本 %s）· 点数换算=%.4f%%/点（样本 %s）· 档位跨越=%d 次",
-      HAP.snapVal or -1, HAP.decay, tostring((HAP.samples or {}).decay or 0),
-      HAP.ptPct, tostring((HAP.samples or {}).ptPct or 0), table.getn(HAP.flips)))
+    hhSay(string.format("　上次打点=%.1f%% · **生效衰减=%.4f%%/s**（当前忠诚档 %s）· 点数换算=%.4f%%/点（用户定案：1000 点 = 100%%）· 档位跨越=%d 次",
+      HAP.snapVal or -1, tonumber(HAP.decay) or -1, tostring(HAP.loyal),
+      HAP.ptPct, table.getn(HAP.flips)))
+    -- ★1.75.42 各忠诚档的**实测衰减**摊开（用户给的锚点只有 6 档；1~5 档靠这里攒出来）
+    local keys = {}
+    for k in pairs(HAP.decayBy or {}) do table.insert(keys, tostring(k)) end
+    table.sort(keys)
+    if table.getn(keys) > 0 then
+      local seg = {}
+      for i = 1, table.getn(keys) do
+        local k = keys[i]
+        table.insert(seg, string.format("忠诚%s=%.4f%%/s(%d 样本)", k, tonumber(HAP.decayBy[k]) or -1,
+          tonumber(HAP.decayN[k]) or 0))
+      end
+      hhSay("　实测衰减分桶：" .. table.concat(seg, " · ") .. "（★6 档锚点 = 用户给的 7.2 点/s = 0.72%/s）")
+    else
+      hhSay("　实测衰减分桶：**还没有实测样本** ⇒ 全部档位用 6 档锚点 0.72%/s 兜底（等一次「没喂食就掉档」即有值）")
+    end
     hhSay("判读：把「预估进度」和宠物框上真实快乐条对一下 —— 档位一变就会打点到 33.3/66.6 的边界，之后靠日志累计。")
     for i = 1, table.getn(HAP.flips) do
       local f = HAP.flips[i]
