@@ -4152,6 +4152,17 @@ local function seTypeIndexOf(k, name)
 end
 local SE_OPS = { ">", ">=", "<", "<=", "==", "~=" }
 
+-- ★★★1.75.39 光环类条件（**阶段 1 多选**的十项）= 名字集合 `cd.ss`；
+--   其余 kind=="skill"（免疫/范围/施法中…）仍是单值 `cd.s`（阶段 2 才评估）。
+--   ★这是**单一真值**：显示格、下拉、文本往返全从它判 —— 别再各写一份 cd.k=="hasBuff" or … 的长串
+--     （那种写法漏一处就是「导出能看、导入即丢」或「选中了却不生效」）。
+local SE_AURA_MULTI_KINDS = {
+  hasBuff = true, noBuff = true, tBuff = true, pDebuff = true, hasDebuff = true, noDebuff = true,
+  teamBuff = true, teamDebuff = true, candBuff = true, candDebuff = true,
+}
+local function isAuraMultiKind(k)
+  return (type(k) == "string" and SE_AURA_MULTI_KINDS[k] == true) and true or false
+end
 -- ★目标类型表（1.70.28）：id 稳定（存进条件里），loc=中文显示名，tok=英文 token。
 --   本客户端 UnitCreatureType 返回**本地化字符串**，故求值时两种写法都要认（enUS 客户端回英文）。
 --   最后一项 "other" 用于兜住未列出的返回值——**绝不静默丢弃**，否则用户会遇到「明明是这个类型却不匹配」。
@@ -4298,6 +4309,12 @@ local function seSwitchCond(old, ti)
   end
   local oldTd = SE_TYPES[seTypeIndexOf(old.k, old.name)]
   if old.s and new.s and oldTd and oldTd.kind == SE_TYPES[ti].kind then new.s = old.s end -- s 仅同族保留
+  -- ★1.75.39 多选名字集合也**同族保留**：切条件类型时不丢用户已挑好的那串光环（深浅拷一层，防编辑期污染）
+  if type(old.ss) == "table" and oldTd and oldTd.kind == SE_TYPES[ti].kind then
+    local c2 = {}
+    for k2, v2 in pairs(old.ss) do c2[k2] = v2 end
+    new.ss = c2
+  end
   return new
 end
 
@@ -4329,9 +4346,15 @@ local SE_TODO_KINDS = {
 local function seTypeTip(id)
   if id == nil then return nil end
   local isTodo = SE_TODO_KINDS[id] and true or false
-  if not SE_TIP_RULE_KINDS[id] and not isTodo then return nil end
+  -- ★1.75.39 光环多选类也要说明（否则它们不在 SE_TIP_RULE_KINDS / SE_TODO_KINDS 里 ⇒ 悬停什么都不显示）
+  local isMultiAura = (type(isAuraMultiKind) == "function") and isAuraMultiKind(id) or false
+  if not SE_TIP_RULE_KINDS[id] and not isTodo and not isMultiAura then return nil end
   local lines = { "|cffffd100" .. seTypeLabel(id) .. "|r" }
   if SE_TIP_SEM[id] then table.insert(lines, L(SE_TIP_SEM[id])) end
+  if isMultiAura then
+    table.insert(lines, "|cffffd100" .. L("SE_TIP_MULTI") .. "|r")
+    table.insert(lines, "|cffa0a0a0" .. L("SE_TIP_MULTI_SEM") .. "|r")
+  end
   if SE_TIP_RULE_KINDS[id] then table.insert(lines, "|cff9fe0ff" .. L("SE_TIP_RULE") .. "|r") end
   if SE_TIP_SEM[id] then table.insert(lines, "|cffa0a0a0" .. L("SE_TIP_CAND_ONLY") .. "|r") end
   if isTodo then
@@ -4660,7 +4683,8 @@ end
 --          → ③ 其余技能名（垫底，仍可选）。三组之间用不可点分组标题分隔。
 --   ★为什么必须共用：先前测试自己复刻了一遍这个顺序，于是「删掉实时分组标题」这类变异
 --   在测试里完全不可见（测试测的是副本）。抽到这里之后，UI 与断言看的是同一份代码。
-function SE_AURA_MENU(k0)
+-- ★1.75.39 第二参数 cd = 当前条件对象（用于④「已选但不在候选里」那一组）；不传 = 老行为（零回归）。
+function SE_AURA_MENU(k0, cd)
   local items, names, locked = {}, {}, {}
   local function push(disp, nm)
     local i = table.getn(items) + 1
@@ -4674,6 +4698,9 @@ function SE_AURA_MENU(k0)
     locked[i] = true
   end
   local isAura = (k0 == "hasDebuff" or k0 == "noDebuff" or k0 == "hasBuff" or k0 == "noBuff" or k0 == "tBuff" or k0 == "pDebuff")
+  -- ★1.75.39 多选类：**第一行是不可点的说明行**（用户要求「添加好提示信息 · 多选情况下的检测机制」）：
+  --   说明「可多选 + 或运算 + 反向需全部满足」——没有这行，用户在下拉里看不到任何规则提示。
+  if isAuraMultiKind(k0) then header(L("SE_AURA_MULTI_HINT")) end
   -- ★1.70.29 若用户已输入关键字且表中无同名项，追加一行「使用输入的名称」——
   --   光环名可能不在任何名单里（自制/未记录/跨版本），没有这条用户就无路可走。
   --   注意：这里只登记候选，真正的过滤在 EVAL_DD_OPEN 里做（单一实现）。
@@ -4703,7 +4730,9 @@ function SE_AURA_MENU(k0)
   -- ② 已记录过的光环名（跨会话持久：光环此刻不在也能选——修「药水 buff 不及时显示」）
   if isAura then
     local seen = {}
-    for _, n in ipairs(names) do seen[n] = true end
+    -- ★★1.75.39 这里**必须按 items 的长度数值遍历**：`names` 是**带洞数组**（分组标题行 `names[i]=nil`），
+    --   `ipairs(names)` 会在第一个标题处**提前停止** ⇒ 去重失效（实时项又被列进「已记录」组）。
+    for i2 = 1, table.getn(items) do if names[i2] ~= nil then seen[names[i2]] = true end end
     local w2c = EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war
     local lt = w2c and w2c.debuffTex
     local learned = {}
@@ -4734,6 +4763,28 @@ function SE_AURA_MENU(k0)
         push(n .. " |cff888888[物]|r", n)
       else
         push(n, n)
+      end
+    end
+  end
+  -- ★★★1.75.39 ④「已选但不在候选里」——用户诉求「下拉选择对已经选择这项目,在下拉重新打开要能正确显示选中状态」。
+  --   为什么会有这种项：① 自定义输入的名字（实时/已记录/技能名三组都没有）；② 跨版本/跨角色导入的条件名；
+  --   ③ 切条件类型时同族继承过来的名字。它们**不在菜单里 = 看不到勾、也取消不掉**（只能删整条条件）。
+  --   ★点了就是正常切换（多选 = 取消该勾；单选 = 设为它），所以列表里能看见 = 能改回来。
+  if cd ~= nil then
+    local picked = {}
+    if isAuraMultiKind(k0) and type(EVAL_AURA_NAMES) == "function" then
+      for _, n in ipairs(EVAL_AURA_NAMES(cd)) do if n ~= "" then table.insert(picked, n) end end
+    elseif type(cd.s) == "string" and cd.s ~= "" then
+      table.insert(picked, cd.s)
+    end
+    if table.getn(picked) > 0 then
+      local inMenu = {}
+      for i2 = 1, table.getn(items) do if names[i2] ~= nil then inMenu[names[i2]] = true end end
+      local extra = {}
+      for _, n in ipairs(picked) do if not inMenu[n] then table.insert(extra, n) end end
+      if table.getn(extra) > 0 then
+        header(L("SE_SEL_EXTRA"))
+        for _, n in ipairs(extra) do push(n, n) end
       end
     end
   end
@@ -5179,13 +5230,25 @@ function EVAL_HELP_SE_REFRESH()
         pcall(row.valBtn.btn.Show, row.valBtn.btn)
         pcall(row.formN.btn.Show, row.formN.btn)
       elseif td.kind == "skill" then
-        local disp = tostring(cd.s or "?")
-        if cd.k == "tCasting" and (cd.s == nil or cd.s == "") then disp = L("TCAST_ANY") end -- 1.40.0 空参数=任意施法
-        if cd.k == "casting" and (cd.s == nil or cd.s == "") then disp = L("TCAST_ANY") end -- 1.41.0 自身施法同规
-        -- 1.70.0：空技能名（光环检查/免疫/范围）提示待选，避免旧职业化默认造成「条件恒不满足却不自知」
-        if (cd.s == nil or cd.s == "") and cd.k ~= "casting" and cd.k ~= "tCasting" then disp = "未选择（点此选择）" end
+        -- ★★★1.75.39 光环类（buff/debuff 十项）= 多选：格子里显示「首项 等N项」，完整清单走悬停 + 底部整串预览。
+        --   技能名类（免疫/范围内/施法中）仍是单值 cd.s（阶段 2 才评估）。
+        local auraMulti = isAuraMultiKind(cd.k)
+        local auraNames = (auraMulti and type(EVAL_AURA_NAMES) == "function") and EVAL_AURA_NAMES(cd) or {}
+        local disp
+        if auraMulti then
+          local an = table.getn(auraNames)
+          if an == 0 then disp = "未选择（点此选择）"
+          elseif an == 1 then disp = auraNames[1]
+          else disp = auraNames[1] .. " 等" .. an .. "项" end
+        else
+          disp = tostring(cd.s or "?")
+          if cd.k == "tCasting" and (cd.s == nil or cd.s == "") then disp = L("TCAST_ANY") end -- 1.40.0 空参数=任意施法
+          if cd.k == "casting" and (cd.s == nil or cd.s == "") then disp = L("TCAST_ANY") end -- 1.41.0 自身施法同规
+          -- 1.70.0：空技能名（光环检查/免疫/范围）提示待选，避免旧职业化默认造成「条件恒不满足却不自知」
+          if (cd.s == nil or cd.s == "") and cd.k ~= "casting" and cd.k ~= "tCasting" then disp = "未选择（点此选择）" end
+        end
         -- ★1.70.47 队伍debuff 的名称是**可选**的（不填 = 只看「有没有任意该类型的负面效果」）
-        if (cd.k == "teamDebuff" or cd.k == "candDebuff") and (cd.s == nil or cd.s == "") then disp = L("DS_T_ANY") end
+        if (cd.k == "teamDebuff" or cd.k == "candDebuff") and table.getn(auraNames) == 0 then disp = L("DS_T_ANY") end
         local auraChk = (cd.k == "hasBuff" or cd.k == "hasDebuff" or cd.k == "tBuff" or cd.k == "pDebuff") -- 1.54.0 光环检查型 是/否
         -- ★1.70.47 队伍/团队光环型也要 是/否（「队伍有魔法」「团队无buff」都得能切）
         local teamAura = (cd.k == "teamBuff" or cd.k == "teamDebuff" or cd.k == "candBuff" or cd.k == "candDebuff") -- ★1.71.3 候选者光环型同样有 是/否
@@ -5935,8 +5998,31 @@ local function SE_BUILD()
     sHit:SetPoint("TOPLEFT", root, "TOPLEFT", 140, y)
     pcall(sHit.EnableMouse, sHit, true)
     pcall(sHit.RegisterForClicks, sHit, "LeftButtonUp")
-    sHit:SetScript("OnEnter", function() pcall(st2.SetTextColor, st2, 1, 1, 0.85) end)
-    sHit:SetScript("OnLeave", function() pcall(st2.SetTextColor, st2, 1, 0.9, 0.5) end)
+    -- ★★★1.75.39 多选：格子里只显示首项 ⇒ 悬停列出**全部选中项**（完整条件仍在窗口底部整串预览里）。
+    --   ★只有 >1 项时才弹 tooltip：单项时格子里已经是全部信息，弹了反而碍事。
+    sHit:SetScript("OnEnter", function()
+      pcall(st2.SetTextColor, st2, 1, 1, 0.85)
+      local itT = seUI.ed and seUI.ed.conds[i]
+      if itT and isAuraMultiKind(itT.cd.k) and type(EVAL_AURA_NAMES) == "function" then
+        local nsT = EVAL_AURA_NAMES(itT.cd)
+        if table.getn(nsT) > 0 and GameTooltip then
+          -- ★1.75.39 悬停 = 多选的**判定机制说明**（用户要求「添加好提示信息 · 多选情况下的检测机制」）：
+          --   条件类型 + 已选几项 + 逐个名字 + **方向**（任一满足 / 全部满足）+ 一句话规则。
+          --   ★单项也弹：单项时也要让人知道这是「或运算」的条件（原来只在 >1 项时弹，等于没说机制）。
+          GameTooltip:SetOwner(sHit, "ANCHOR_RIGHT")
+          GameTooltip:ClearLines()
+          GameTooltip:AddLine("|cffffd100" .. seTypeLabel(itT.cd.k) .. "|r · " .. table.getn(nsT) .. " 项")
+          for _, nmT in ipairs(nsT) do GameTooltip:AddLine("  · " .. tostring(nmT)) end
+          GameTooltip:AddLine("|cffffd100" .. (((itT.cd.v == false) and L("SE_TIP_ALL_ONE") or L("SE_TIP_ANY_ONE"))) .. "|r")
+          GameTooltip:AddLine("|cffa0a0a0" .. L("SE_TIP_MULTI_SEM") .. "|r")
+          GameTooltip:Show()
+        end
+      end
+    end)
+    sHit:SetScript("OnLeave", function()
+      pcall(st2.SetTextColor, st2, 1, 0.9, 0.5)
+      if GameTooltip and GameTooltip.Hide then GameTooltip:Hide() end
+    end)
     row.sHit = sHit
     reg(sHit)
     -- [v] 下拉：buff/debuff 技能名全列表（1.35.2 起按钮本体常驻隐藏，仅作处理器宿主）
@@ -6073,19 +6159,64 @@ local function SE_BUILD()
       -- ★1.70.28 菜单结构抽到文件作用域 SE_AURA_MENU()：UI 与测试**共用同一份实现**。
       --   起因：我先前把顺序断言写成「测试里重新实现一遍顺序」，于是变异体（例如删掉实时分组标题）
       --   **测不出来**——测试看的是自己的副本，而不是真代码。抽成共用函数后变异立刻可见。
-      local menu = SE_AURA_MENU(it.cd.k)
+      local menu = SE_AURA_MENU(it.cd.k, it.cd)
       local items, names, locked = menu.items, menu.names, menu.locked
       local icons = {}
       local anyIcon = false
-      for i2, nm in ipairs(names) do
-        local t = auraTexOf(nm)
-        if t then icons[i2] = t anyIcon = true end
+      local auraMulti2 = isAuraMultiKind(it.cd.k)
+      local sel2 = {}
+      local curSet = {}
+      if auraMulti2 and type(EVAL_AURA_NAMES) == "function" then
+        for _, cn in ipairs(EVAL_AURA_NAMES(it.cd)) do curSet[cn] = true end
       end
-      EVAL_DD_OPEN(row.sHit, items, function(pi)
+      -- ★★★1.75.39 遍历**必须按 items 的长度数值走**：`names` 是**带洞数组**（分组标题行 `names[i]=nil`），
+      --   `ipairs(names)` 会在第一行标题处**直接停住** ⇒ 勾选框（sel2）与图标（icons）**一个都填不上**。
+      --   （用户报障原话：「下拉选择对已经选择这项目,在下拉重新打开要能正确显示选中状态」= 就是这个。）
+      for i2 = 1, table.getn(items) do
+        local nm = names[i2]
+        local t = (nm ~= nil) and auraTexOf(nm) or nil
+        if t then icons[i2] = t anyIcon = true end
+        if auraMulti2 and nm ~= nil and curSet[nm] then sel2[i2] = true end
+      end
+      -- ★1.75.39 单选类（免疫/范围内/施法中）也要能看出**当前值**：
+      --   `EVAL_DD_OPEN` 的 `selected` **只在 multi 模式生效** ⇒ 单选列表得自己标（与「追踪类型」那一支同一做法）。
+      if (not auraMulti2) and type(it.cd.s) == "string" and it.cd.s ~= "" then
+        for i2 = 1, table.getn(items) do
+          if names[i2] == it.cd.s then
+            items[i2] = "|cffffd100" .. string.char(226, 128, 162) .. "|r " .. tostring(items[i2])
+          end
+        end
+      end
+      -- ★★★1.75.39 光环类 = **多选下拉**（或运算：任一选中项命中即通过；点按切换、不关面板）；
+      --   技能名类（免疫/范围内/施法中）保持原来的**单选**（阶段 2 才评估）。
+      --   ★写入口只走 EVAL_AURA_SET（写 ss、清 s）= 单一真值，避免两处真值打架。
+      local function auraSetNow()
+        local set = {}
+        if type(EVAL_AURA_NAMES) == "function" then
+          for _, cn in ipairs(EVAL_AURA_NAMES(it.cd)) do set[cn] = true end
+        end
+        return set
+      end
+      local function auraCommit(set)
+        local out = {}
+        for nm2 in pairs(set) do table.insert(out, nm2) end
+        if type(EVAL_AURA_SET) == "function" then EVAL_AURA_SET(it.cd, out) end
+        EVAL_HELP_SE_REFRESH()
+      end
+      EVAL_DD_OPEN(row.sHit, items, function(pi, on)
         if locked[pi] then return end -- 分组标题行：不可选
+        if auraMulti2 then
+          local nm3 = names[pi]
+          if nm3 == nil or nm3 == "" then return end
+          local set2 = auraSetNow()
+          if on then set2[nm3] = true else set2[nm3] = nil end
+          auraCommit(set2)
+          return
+        end
         it.cd.s = names[pi]
         EVAL_HELP_SE_REFRESH()
       end, {
+        multi = auraMulti2 and true or nil, selected = auraMulti2 and sel2 or nil,
         icons = anyIcon and icons or nil, locked = locked,
         -- ★★★1.71.2（第八轮）用户要求**还原**：「这个功能还原，到输入框格保持在下拉内，
         --   并且支持打字过滤和自定义输入」。
@@ -6096,6 +6227,13 @@ local function SE_BUILD()
         search = true,
         onFreeText = function(txt)
           if txt == nil or txt == "" then return end
+          if auraMulti2 then
+            -- ★多选：自定义输入 = **追加**一项（用户可连输几个；面板内过滤关键字照旧）
+            local set3 = auraSetNow()
+            set3[txt] = true
+            auraCommit(set3)
+            return
+          end
           it.cd.s = txt
           EVAL_HELP_SE_REFRESH()
         end,

@@ -1415,13 +1415,46 @@ function EVAL_AURA_TEST_RESET_NAME_CACHE() auraNameCache = {} end
 --   返回 (cnt, unknown)：unknown=true = **两条路都认不出这个光环** → 调用方必须如实失败，
 --   **绝不能当成「没有」**（1.71.2 铁律：查不到 ≠ 没有；旧写法就是这里退化成 0 → 规则无限重放）。
 --   texStore 传 st.playerBuffs / st.playerDebuffs / st.targetBuffs / st.targetDebuffs。
-local function auraCountOf(cd, texStore, key, provider, typeStore)
+-- ★★★1.75.39 光环名**多选**（阶段 1，用户定案）：数据 = `cd.ss`（集合 { [名字]=true }）优先，
+--   没有就退化 `cd.s`（存量单值）⇒ **存量存档零迁移**；写入口只写 ss 并清掉 s ⇒ **单一真值**
+--   （留着 s 就是两处真值，漏改的旧读取点会读到过期名字——比读不到更难查）。
+--   ★顺序确定性：导出文本、「自己方案回声」的逐字比较、界面显示都靠它 ⇒ 一律 `table.sort`。
+function EVAL_AURA_NAMES(cd)
+  local out = {}
+  if type(cd) ~= "table" then return out end
+  local ss = cd.ss
+  if type(ss) == "table" then
+    for nm, on in pairs(ss) do
+      if on and type(nm) == "string" and nm ~= "" then table.insert(out, nm) end
+    end
+  end
+  if table.getn(out) == 0 and type(cd.s) == "string" and cd.s ~= "" then table.insert(out, cd.s) end
+  table.sort(out)
+  return out
+end
+
+-- 写入口（编辑窗下拉 / 文本解析共用）：names = 数组；空数组 ⇒ ss=nil、s=nil（= 未选择）
+function EVAL_AURA_SET(cd, names)
+  if type(cd) ~= "table" then return end
+  local t = names or {}
+  local ss, n = {}, 0
+  for i = 1, table.getn(t) do
+    local nm = t[i]
+    if type(nm) == "string" and nm ~= "" then ss[nm] = true n = n + 1 end
+  end
+  cd.ss = (n > 0) and ss or nil
+  cd.s = nil
+end
+
+-- 单个名字的层数查询（原 auraCountOf 的单名字版；nm 空 + dt 有值 = 「有任意该类型」，语义一字未改）
+-- 返回 (cnt, unknown)：cnt = 层数（数字；0 = 确认没有）；unknown = 纹理与名字两条路都认不出
+local function auraCountOne(nm, texStore, key, provider, dt, typeStore)
   -- ★★★1.74.6 名称留空 + 指定了「负面类型」= **有任意该类型负面**（与队伍debuff 同一套语义）：
   --   按类型平行表数命中项，层数取命中项里的**最大值**（lim=1 即「存在」；lim=N 即「有一条叠到 N 层」）。
-  if (cd.s == nil or cd.s == "") and cd.dt ~= nil and typeStore ~= nil then
+  if (nm == nil or nm == "") and dt ~= nil and typeStore ~= nil then
     local mx, hits = 0, 0
     for tex2, t2 in pairs(typeStore) do
-      if dispelMatch(t2, cd.dt) then
+      if dispelMatch(t2, dt) then
         hits = hits + 1
         local n2 = tonumber(texStore and texStore[tex2]) or 1
         if n2 > mx then mx = n2 end
@@ -1429,19 +1462,107 @@ local function auraCountOf(cd, texStore, key, provider, typeStore)
     end
     return (hits > 0) and mx or 0, false
   end
-  local tex = auraTexKnown(cd.s)
+  local tex = auraTexKnown(nm)
   local cnt = tex and texStore and texStore[tex] or nil
   if cnt then
     -- ★1.74.6 指定了类型：**名字对上了但类型不符 → 视为没有**（正向不误判、反向不误放行）
-    if cd.dt ~= nil and typeStore ~= nil then
-      if not dispelMatch(typeStore[tex], cd.dt) then cnt = 0 end
+    if dt ~= nil and typeStore ~= nil then
+      if not dispelMatch(typeStore[tex], dt) then cnt = 0 end
     end
   else
-    local hit = auraNameHit(cd.s, key, provider)
+    local hit = auraNameHit(nm, key, provider)
     if hit == true then cnt = 1
     elseif hit == nil and not tex then return nil, true end -- 既没纹理、名字扫描也不可信 → 如实失败
   end
-  return cnt, false
+  if cnt == true then return 1, false end
+  return (tonumber(cnt) or 0), false
+end
+
+-- ★★★1.75.39 多选聚合（**唯一**聚合点）：对每个选中名字跑 judge(nm, cnt) → (ok, label)，再按方向合：
+--   · 正向（`cd.v ~= false`：有/是）  = **或运算** —— 任一选中项 ok 即通过（用户原话语义）
+--   · 反向（`cd.v == false`：无/否/缺）= 对偶 —— **每一项**都 ok 才通过（= 都不存在 / 都已快到期）
+--     ★反向为什么不是「任一缺失即通过」：那等于「只缺一个就恒真」，配置越多越像常量真 ⇒ 无脑重放。
+--   · 三态（「查不到 ≠ 没有」铁律不破）：任一项明确命中 ⇒ 正向成立；**全部项都认不出** ⇒ 如实失败。
+--   返回 (pass, why, hitName)；why/label 由 judge 给（日志文案与旧版同族）。
+local function auraMulti(cd, texStore, key, provider, typeStore, judge, vEff)
+  local names = EVAL_AURA_NAMES(cd)
+  local n = table.getn(names)
+  if n == 0 then
+    -- 名字留空：① 有「负面类型」= 有任意该类型（1.74.6 既有语义，保留）；② 都没写 = 未选择（如实失败）
+    if cd.dt ~= nil and typeStore ~= nil then
+      local cnt0 = auraCountOne(nil, texStore, key, provider, cd.dt, typeStore)
+      local ok0, lbl0 = judge(nil, cnt0)
+      return ok0, lbl0, nil
+    end
+    return false, "未选择光环（点此选择）", nil
+  end
+  -- ★vEff：存量旧 k（noBuff/noDebuff）没有 v 字段 ⇒ 由调用方强制方向（nil = 用 cd.v）
+  --   ★★绝不写成 `(vEff == nil) and cd.v or vEff`：cd.v == false（反向条件！）时它返回 vEff(nil)
+  --     ⇒ want 恒 true ⇒ **反向条件被当正向**（本项目铁律：and/or 链在中间值为 false 时恒取 fallback）。
+  local vNow = cd.v
+  if vEff ~= nil then vNow = vEff end
+  local want = (vNow ~= false)
+  local yes, no, unk = 0, 0, 0
+  local why, hitName, unkName = nil, nil, nil
+  for i = 1, n do
+    local nm = names[i]
+    local cnt, unknown = auraCountOne(nm, texStore, key, provider, cd.dt, typeStore)
+    if unknown then
+      unk = unk + 1
+      if unkName == nil then unkName = nm end
+    else
+      local ok1, lbl1 = judge(nm, cnt)
+      if ok1 then
+        yes = yes + 1
+        if hitName == nil then hitName, why = nm, lbl1 end
+      else
+        no = no + 1
+        if why == nil then why = lbl1 end
+      end
+    end
+  end
+  -- ★1.75.39 「检测机制」可见化（用户要求）：判定依据写进 label —— 日志/条件 trace 里一眼看出是**或**还是**与**，
+  --   以及到底命中了哪一项、还是每一项都得补。label 由各分支的单项 judge 给（含名字与层数）。
+  if want then
+    if yes > 0 then return true, "任一命中 → " .. tostring(why), hitName end -- 或运算：命中一个就过（即使别的项认不出）
+    if unk > 0 and no == 0 then return false, "无法识别光环「" .. tostring(unkName) .. "」（纹理或名字均未记录）", nil end
+    return false, "都没命中 → " .. tostring(why or "?"), nil
+  end
+  -- 反向：每一项都必须 ok（三态：有明确失败 ⇒ 直接失败；全认不出 ⇒ 如实失败）
+  if no > 0 then return false, "需全部满足 → " .. tostring(why), nil end
+  if unk > 0 then return false, "无法识别光环「" .. tostring(unkName) .. "」（纹理或名字均未记录）", nil end
+  return true, "全部需补（" .. n .. " 项）" .. ((why ~= nil) and (" · " .. tostring(why)) or ""), nil
+end
+
+-- ★★★1.75.39 名字集合 × **成员记录**（队伍/团员/候选者共用）：返回该成员上「任一选中项」的极值。
+--   ★为什么这两族的反向与自身/目标**不同**：它们要**选人**（命中就切过去给后面的技能用）——
+--     · buff「缺」方向 = 找「缺任一选中 buff」的成员（= 最该补的人），仍是**存在性**；
+--     · debuff「无」方向 = **没有任何成员**中任一选中项（与自身/目标同口径的取反）。
+--   返回 (maxCnt, maxName, minCnt, minName, allUnknown)：
+--     maxCnt = 选中项里层数最大者（nil = 一个都没命中）；minCnt = 最小者（认不出的项不参与）
+--     allUnknown = 全部选中项都认不出（纹理/动作条/学习表都没有）⇒ 调用方如实失败
+local function memberAuraHit(rec, isDebuff, names, dt)
+  local n = table.getn(names)
+  local maxC, maxN, minC, minN, unk = nil, nil, nil, nil, 0
+  for i = 1, n do
+    local nm = names[i]
+    local tex = auraTexKnown(nm)
+    if not tex then
+      unk = unk + 1
+    else
+      local cnt = 0
+      if isDebuff then
+        local d = rec.debuffs and rec.debuffs[tex]
+        if d and dispelMatch(d.t, dt) then cnt = tonumber(d.n) or 1 end
+      else
+        local b = rec.buffs and rec.buffs[tex]
+        if b then cnt = (b == true) and 1 or (tonumber(b) or 0) end
+      end
+      if maxC == nil or cnt > maxC then maxC, maxN = cnt, nm end
+      if minC == nil or cnt < minC then minC, minN = cnt, nm end
+    end
+  end
+  return maxC, maxN, minC, minN, (n > 0 and unk == n)
 end
 
 -- 当前目标 debuff 实时清单：[{name,tex},...]（每次调用现场扫描 + 学习）
@@ -2197,8 +2318,9 @@ local function condOne(cd, skill, dry, rule)
   --   只在**光环确实存在**时才参与判定：于是「无buff:奥术智慧[<30s]」= 没有 或 快到期（正是「该补了」）。
   --   left == 0：wiki（globals/Buff）明确「越界/空槽/无限/无结束时间都返回 0」→ 视作**永不到期**，
   --   只有 > / >= 才算满足。若把 0 当「0 秒」，<N 会恒真 → 每次求值都判「该补」→ 无脑重施。
-  local function auraTimeCmp(cd, tbl)
-    local tex = texOf(cd.s)
+  -- ★1.75.39 多选：nm = 要查的那一项（不传 = 旧行为，用 cd.s）—— 每项各自判时长。
+  local function auraTimeCmp(cd, tbl, nm)
+    local tex = texOf(nm or cd.s)
     if not tex then return false, "未知光环" end
     local left = tbl and tbl[tex] or nil
     if type(left) ~= "number" then return false, "无剩余时间数据" end
@@ -2211,23 +2333,33 @@ local function condOne(cd, skill, dry, rule)
     --   ★格式与本文件既有的「冷却剩 %.1fs」（第 761/773/788 行）保持一致，不另造一套。
     return condCmp({ cd.secOp, cd.secN }, left), string.format("剩余%.1fs", left)
   end
-  -- ★1.70.45 把剩余时间检查并入光环判定的**唯一**入口（自身 buff / 自身 debuff 共用）。
-  --   语义（v 决定方向，这正是「刷新」用法的核心）：
-  --     · v=true （有buff）：必须「有」**且**剩余满足比较；
-  --     · v=false（无buff）：没有 **或** 剩余满足比较 —— 于是
-  --       「无buff:奥术智慧[<30s]」= 没有 或 快到期 → 正是「该补了」。
-  --     · 光环不存在时不查时间（没有东西可查）：v=false 直接判真（该补），v=true 已判假。
-  --   ★我第一版把 v=false 时「有 buff 但时间满足」也判成假（因为「有≠无」先短路了），
-  --     被用例 (2) 当场抓到——注释写对了、代码没写对，是测试把它逼出来的。
-  local function auraTimeJudge(cd, has, okv, tbl, label)
-    if type(cd.secN) ~= "number" or not has then return okv, nil end
-    local okT, why = auraTimeCmp(cd, tbl)
-    if cd.v == false then
-      if okT then return true, nil end
-      return false, label .. "剩余时间不符(" .. tostring(why) .. ")"
+  -- ★★★1.75.39 多选重构：原「剩余时间检查唯一入口」`auraTimeJudge`（单值版）已由 `auraMulti` +
+  --   各分支的**单项 judge** 承担（逐项判、按方向聚合）。旧语义逐字保留：
+  --     · v=true （有buff）：该项必须「有」**且**剩余满足比较；
+  --     · v=false（无buff）：该项「没有」**或**剩余满足比较（= 快到期 ⇒ 该补）。
+  --   ★单项口径 = 旧单值口径 ⇒ 存量单名字条件**逐字零回归**（多选只是把它按或/与聚合）。
+  --
+  --   自身 buff / 自身 debuff 共用的**单项判定工厂**（只有「哪一个光环」被参数化；时长逐项算）。
+  --   返回 judge(nm, cnt) -> ok, label（cnt = 该项层数，nil = 名字留空走类型扫描）
+  local function auraSelfJudge(cd, lim, want, tbl, pfx)
+    return function(nm, cnt)
+      local has = (cnt >= lim)
+      local lbl = pfx .. ":" .. tostring(nm or "(任意)") .. (lim > 1 and (" " .. cnt .. "/" .. lim) or "")
+      if has == want then
+        if has and type(cd.secN) == "number" then
+          local okT, whyT = auraTimeCmp(cd, tbl, nm)
+          if not okT then return false, lbl .. "剩余时间不符(" .. tostring(whyT) .. ")" end
+          return true, lbl .. ((whyT ~= nil) and (" " .. tostring(whyT)) or "")
+        end
+        return true, lbl
+      end
+      -- 反向（无buff/无debuff）且该项存在：**快到期 = 也该补**（旧 auraTimeJudge 的 v=false 分支，逐项保留）
+      if (not want) and has and type(cd.secN) == "number" then
+        local okT = auraTimeCmp(cd, tbl, nm)
+        if okT then return true, lbl .. " 快到期" end
+      end
+      return false, lbl .. (has and " 已有" or " 无")
     end
-    if not okT then return false, label .. "剩余时间不符(" .. tostring(why) .. ")" end
-    return okv, nil
   end
   if k == "combat" then return (st.inCombat == cd.v), "战斗状态"
   elseif k == "combatTime" then return condCmp({ cd.op, cd.n }, st.combatTime), "进战时间"
@@ -2303,59 +2435,50 @@ local function condOne(cd, skill, dry, rule)
       cur = okc and c2 and true or false
     end
     return (cur == (cd.v ~= false)), sn
-  elseif k == "hasBuff" then -- 1.54.0 合并：v=false=无buff（旧 k=noBuff 仅兼容存量数据）；1.70.1 层数门槛 cd.n
-    -- ★★★1.71.2（第十轮）先解析纹理；**解析不出就如实失败**，绝不退化成「0 层」。
-    --   （旧写法会把未知光环当成「确定没有」→「否/无」方向永远成立→规则无限重放）
-    local cnt, unknownAura = auraCountOf(cd, st.playerBuffs, "pb", EVAL_PLAYER_BUFF_LIST)
-    if unknownAura then return false, "自身buff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
-    cnt = (cnt == true) and 1 or (tonumber(cnt) or 0) -- 兼容旧布尔/新层数
+  elseif k == "hasBuff" or k == "noBuff" then
+    -- ★★★1.75.39 多选（阶段 1）：名字集合**逐项判**（judge）+ 按方向聚合（正向或 / 反向与）。
+    --   ★`noBuff` 是存量旧 k（没有 v 字段）⇒ 方向**强制「无」**（vEff=false），否则会被当成「有」。
+    --   ★两条路都认不出 ⇒ auraMulti 如实失败（绝不退化成「0 层」= 没有 → 规则无限重放）。
     local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
-    local has = cnt >= lim
-    local okv, whyT = auraTimeJudge(cd, has, (has == (cd.v ~= false)), st.playerBuffLeft, "自身buff")
-    if not okv then return false, whyT or "自身buff判定不符" end
-    return true, "自身buff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "/" .. lim) or "")
-  elseif k == "noBuff" then
-    local cnt, unknownAura = auraCountOf(cd, st.playerBuffs, "pb", EVAL_PLAYER_BUFF_LIST)
-    if unknownAura then return false, "已有buff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
-    local have = (cnt == true) or ((tonumber(cnt) or 0) > 0)
-    return (not have), "已有buff:" .. tostring(cd.s)
+    local vEff = cd.v
+    if k == "noBuff" then vEff = false end -- ★不能用 `and false or cd.v`（cd.v 为 nil/false 时链式取值会走 fallback）
+    local judge = auraSelfJudge(cd, lim, (vEff ~= false), st.playerBuffLeft, "自身buff")
+    return auraMulti(cd, st.playerBuffs, "pb", EVAL_PLAYER_BUFF_LIST, nil, judge, vEff)
   elseif k == "tBuff" then -- 1.54.0 目标 buff 检查（v=false=无目标buff）；1.70.1 层数门槛
     -- ★1.70.45 目标光环**没有**时长 API（wiki globals/Buff：其他单位只有 UnitBuff/UnitDebuff = 图标+层数）。
     --   带剩余时间检查时如实返回 false —— 不忽略它（忽略 = 写了却不生效，属静默失败）。
     if type(cd.secN) == "number" then return false, "目标buff无剩余时间数据" end
-    local cnt, unknownAura = auraCountOf(cd, st.targetBuffs, "tb", EVAL_TARGET_BUFF_LIST)
-    if unknownAura then return false, "目标buff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
-    cnt = (cnt == true) and 1 or (tonumber(cnt) or 0)
     local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
-    local has = cnt >= lim
-    return (has == (cd.v ~= false)), "目标buff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "/" .. lim) or "")
+    -- ★1.75.39 单项 judge 的协议 = **按方向**判定（正向：存在 / 反向：不存在）；
+    --   聚合侧再由 auraMulti 决定取或（正向）还是取与（反向）—— 两侧口径必须一致，
+    --   否则反向会退化成「每一项都不存在才算过」的**半边逻辑**（harness 当场抓到过这一条）。
+    local judge = function(nm, cnt)
+      local has = (cnt >= lim)
+      local lbl = "目标buff:" .. tostring(nm or "(任意)") .. (lim > 1 and (" " .. cnt .. "/" .. lim) or "")
+      if has == (cd.v ~= false) then return true, lbl end
+      return false, lbl .. (has and " 已有" or " 无")
+    end
+    return auraMulti(cd, st.targetBuffs, "tb", EVAL_TARGET_BUFF_LIST, nil, judge)
   elseif k == "pDebuff" then -- 1.54.0 自身 debuff 检查（v=false=无自身debuff）；1.70.1 层数门槛
-    local cnt, unknownAura = auraCountOf(cd, st.playerDebuffs, "pd", EVAL_PLAYER_DEBUFF_LIST, st.playerDebuffType)
-    if unknownAura then return false, "自身debuff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
-    cnt = (cnt == true) and 1 or (tonumber(cnt) or 0)
     local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
-    local has = cnt >= lim
-    local okv, whyT = auraTimeJudge(cd, has, (has == (cd.v ~= false)), st.playerDebuffLeft, "自身debuff")
-    if not okv then return false, whyT or "自身debuff判定不符" end
-    return true, "自身debuff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "/" .. lim) or "")
-  elseif k == "hasDebuff" then
+    local judge = auraSelfJudge(cd, lim, (cd.v ~= false), st.playerDebuffLeft, "自身debuff")
+    return auraMulti(cd, st.playerDebuffs, "pd", EVAL_PLAYER_DEBUFF_LIST, st.playerDebuffType, judge)
+  elseif k == "hasDebuff" or k == "noDebuff" then
     -- ★1.70.45 同 tBuff：目标光环无时长数据 → 带剩余时间检查时如实 false
     if type(cd.secN) == "number" then return false, "目标debuff无剩余时间数据" end
     -- 1.54.0 合并：v=false=无debuff（不足 lim 层才算无，与旧 noDebuff 同语义）；层数门槛 cd.n（1.31.0）
-    local cnt, unknownAura = auraCountOf(cd, st.targetDebuffs, "td", EVAL_TARGET_DEBUFF_LIST, st.targetDebuffType)
-    if unknownAura then return false, "目标debuff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
-    cnt = (cnt == true) and 1 or (tonumber(cnt) or 0) -- 兼容旧布尔/新层数
+    -- ★1.75.39 多选：`noDebuff` 是存量旧 k ⇒ 方向强制「无」（vEff=false）。
     local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
-    local has = cnt >= lim
-    return (has == (cd.v ~= false)), "目标debuff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "/" .. lim) or "")
-  elseif k == "noDebuff" then
-    -- 层数门槛（1.31.0）：cd.n=视为"无"的上限（nil/1=完全没有；N=不足N层才算无）
-    local cnt, unknownAura = auraCountOf(cd, st.targetDebuffs, "td", EVAL_TARGET_DEBUFF_LIST, st.targetDebuffType)
-    if unknownAura then return false, "目标debuff:无法识别光环「" .. tostring(cd.s) .. "」（纹理未记录）" end
-    cnt = (cnt == true) and 1 or (cnt or 0)
-    local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
-    if cnt >= lim then return false, "目标已有debuff:" .. tostring(cd.s) .. (lim > 1 and (" " .. cnt .. "层") or "") end
-    return true, "debuff层数不足:" .. cnt .. "/" .. lim
+    local vEff = cd.v
+    if k == "noDebuff" then vEff = false end -- ★同上：and/or 链陷阱
+    -- ★1.75.39 同 tBuff：judge 按方向判（`vEff` 已把存量旧 k noDebuff 强制成「无」方向）
+    local judge = function(nm, cnt)
+      local has = (cnt >= lim)
+      local lbl = "目标debuff:" .. tostring(nm or "(任意)") .. (lim > 1 and (" " .. cnt .. "/" .. lim) or "")
+      if has == (vEff ~= false) then return true, lbl end
+      return false, lbl .. (has and " 已有" or " 无")
+    end
+    return auraMulti(cd, st.targetDebuffs, "td", EVAL_TARGET_DEBUFF_LIST, st.targetDebuffType, judge, vEff)
   elseif k == "ready" then
     local rd, why = wready(skill)
     if cd.inv then rd = not rd end
@@ -2515,33 +2638,39 @@ local function condOne(cd, skill, dry, rule)
       if not (rec.powerMax and rec.powerMax > 0) then return false, "候选者没有能量条（无蓝职业）：" .. rn end
       return candNumPass(cd, rec.powerPct), "候选者能量%:" .. tostring(teamPct(rec.powerPct)) .. "% " .. rn
     elseif k == "candBuff" then
-      local tex = texOf(cd.s)
-      if not tex then return false, "未知buff:" .. tostring(cd.s) end
+      -- ★1.75.39 多选：名字集合 × 成员记录（正向 = 有任一 / 反向「缺」= 缺任一 ⇒ 报出最该补的那个）
+      local names = EVAL_AURA_NAMES(cd)
+      if table.getn(names) == 0 then return false, "候选者缺buff:未选择光环" end
       local need = (type(cd.n) == "number" and cd.n > 0) and cd.n or 1
-      local cnt = rec.buffs[tex]
-      cnt = (cnt == true) and 1 or (tonumber(cnt) or 0)
-      local lack = (cnt < need) -- 「缺」= 层数不足（与「队友缺buff」同一套语义：v==false 表示缺）
-      local lbl = "候选者缺buff:" .. tostring(cd.s)
-      if cd.v == false then return lack, lbl .. (lack and (" 缺:" .. rn) or " 已有") end
-      return (not lack), lbl .. ((not lack) and (" 有:" .. rn) or " 缺")
+      local maxC, maxN, minC, minN, allUnk = memberAuraHit(rec, false, names, nil)
+      if allUnk then return false, "未知buff:" .. table.concat(names, "/") end
+      local lbl = "候选者buff:" .. table.concat(names, "/")
+      if cd.v == false then
+        local lack = (minC ~= nil and minC < need)
+        return lack, lbl .. (lack and (" 缺:" .. rn .. "(" .. tostring(lack and minN or "?") .. ")") or " 已有")
+      end
+      local has = (maxC ~= nil and maxC >= need)
+      return has, lbl .. (has and (" 有:" .. rn) or " 缺")
     else -- candDebuff：候选者身上有该（或该类型）负面效果
+      -- ★1.75.39 多选：有任一选中项即命中；「无」= 所有选中项都不在他身上（与自身/目标同口径的取反）
+      local names2 = EVAL_AURA_NAMES(cd)
       local want = cd.dt
-      local hasName = (cd.s ~= nil and cd.s ~= "")
-      local tex = hasName and texOf(cd.s) or nil
-      if hasName and not tex then return false, "未知debuff:" .. tostring(cd.s) end
+      local nn2 = table.getn(names2)
+      local lbl2 = "候选者debuff:" .. (nn2 > 0 and table.concat(names2, "/") or "(任意)")
+        .. ((want ~= nil and want ~= "" and want ~= "any") and ("(" .. tostring(want) .. ")") or "")
       local hit, hitCnt = false, 0
-      if tex then
-        local d = rec.debuffs[tex]
-        if d and dispelMatch(d.t, want) then hit = true hitCnt = tonumber(d.n) or 1 end
-      else
-        for _, d in pairs(rec.debuffs) do
+      if nn2 == 0 then
+        -- 名字留空 + 类型 = 有任意该类型（1.74.6 既有语义，原样保留）
+        for _, d in pairs(rec.debuffs or {}) do
           if dispelMatch(d.t, want) then hit = true hitCnt = tonumber(d.n) or 1 break end
         end
+      else
+        local maxC2, maxN2, minC2, minN2, allUnk2 = memberAuraHit(rec, true, names2, want)
+        if allUnk2 then return false, "未知debuff:" .. table.concat(names2, "/") end
+        if maxC2 ~= nil and maxC2 > 0 then hit, hitCnt = true, maxC2 end
       end
-      local lbl = "候选者debuff:" .. (hasName and tostring(cd.s) or "(任意)")
-        .. ((want ~= nil and want ~= "" and want ~= "any") and ("(" .. tostring(want) .. ")") or "")
-      if cd.v == false then return (not hit), lbl .. (hit and " 有" or " 无") end
-      return hit, lbl .. (hit and (" 有:" .. rn) or " 无")
+      if cd.v == false then return (not hit), lbl2 .. (hit and " 有" or " 无") end
+      return hit, lbl2 .. (hit and (" 有:" .. rn) or " 无")
     end
   end
   if k == "teamHp" or k == "teamMana" or k == "teamBuff" or k == "teamDebuff" then
@@ -2562,29 +2691,34 @@ local function condOne(cd, skill, dry, rule)
         local pass = condCmp({ cd.op, cd.n }, pct)
         return pass, ((k == "teamHp") and jscope .. "血%" or jscope .. "蓝%") .. ":" .. tostring(pct) .. "% " .. jwho
       elseif k == "teamBuff" then
-        local tex = texOf(cd.s)
-        if not tex then return false, "未知buff:" .. tostring(cd.s) end
-        local cnt = jrec.buffs[tex]
-        cnt = (cnt == true) and 1 or (tonumber(cnt) or 0)
-        local lack = (cnt < jlim)
-        local lbl = jscope .. "buff:" .. tostring(cd.s) .. " " .. jwho
-        if cd.v == false then return lack, lbl .. (lack and " 缺" or " 已有") end
-        return (not lack), lbl .. ((not lack) and " 有" or " 缺")
+        -- ★1.75.39 多选：名字集合 × 该候选（正向 = 有任一 / 反向「缺」= 缺任一）
+        local namesJ = EVAL_AURA_NAMES(cd)
+        if table.getn(namesJ) == 0 then return false, "未知buff:未选择光环" end
+        local maxC, maxN, minC, minN, allUnk = memberAuraHit(jrec, false, namesJ, nil)
+        if allUnk then return false, "未知buff:" .. table.concat(namesJ, "/") end
+        local lbl = jscope .. "buff:" .. table.concat(namesJ, "/") .. " " .. jwho
+        if cd.v == false then
+          local lack = (minC ~= nil and minC < jlim)
+          return lack, lbl .. (lack and " 缺" or " 已有")
+        end
+        local has = (maxC ~= nil and maxC >= jlim)
+        return has, lbl .. (has and " 有" or " 缺")
       else
+        -- ★1.75.39 多选：有任一选中项即命中；「无」= 所有选中项都不在他身上
+        local namesJ2 = EVAL_AURA_NAMES(cd)
         local want = cd.dt
-        local hasName = (cd.s ~= nil and cd.s ~= "")
-        local tex = hasName and texOf(cd.s) or nil
-        if hasName and not tex then return false, "未知debuff:" .. tostring(cd.s) end
+        local nnJ = table.getn(namesJ2)
         local hit, hitCnt = false, 0
-        if tex then
-          local d = jrec.debuffs[tex]
-          if d and dispelMatch(d.t, want) then hit = true hitCnt = tonumber(d.n) or 1 end
-        else
-          for _, d in pairs(jrec.debuffs) do
+        if nnJ == 0 then
+          for _, d in pairs(jrec.debuffs or {}) do
             if dispelMatch(d.t, want) then hit = true hitCnt = tonumber(d.n) or 1 break end
           end
+        else
+          local maxC2, maxN2, minC2, minN2, allUnk2 = memberAuraHit(jrec, true, namesJ2, want)
+          if allUnk2 then return false, "未知debuff:" .. table.concat(namesJ2, "/") end
+          if maxC2 ~= nil and maxC2 > 0 then hit, hitCnt = true, maxC2 end
         end
-        local lbl = jscope .. "debuff:" .. (hasName and tostring(cd.s) or "(任意)") .. " " .. jwho
+        local lbl = jscope .. "debuff:" .. (nnJ > 0 and table.concat(namesJ2, "/") or "(任意)") .. " " .. jwho
         if cd.v == false then return (not hit), lbl .. (hit and " 有" or " 无") end
         return hit, lbl .. (hit and (" 有(层" .. tostring(hitCnt) .. ")") or " 无")
       end
@@ -2633,53 +2767,68 @@ local function condOne(cd, skill, dry, rule)
       -- 「有队伍buff:X」= **有任一**成员带 X（层数够）；「无队伍buff:X」= **有任一**成员缺 X。
       --   ★语义与自身/目标的 有buff/无buff 对齐：都是「存在性」判定，不要求全队一致。
       --   报出的成员：有 → 层数最高的那个；无 → 层数最少的那个（= 最该补的人）。
-      local tex = texOf(cd.s)
-      if not tex then return false, "未知buff:" .. tostring(cd.s) end
+      -- ★1.75.39 多选：名字集合 × 逐成员判（任一选中项）—— 正向取层数最高者、反向取最缺者。
+      local namesT = EVAL_AURA_NAMES(cd)
+      if table.getn(namesT) == 0 then return false, "未知buff:未选择光环" end
       local have, haveCnt, lack, lackCnt = nil, nil, nil, nil
+      local unkAllN = 0
       for _, r in ipairs(list) do
-        local cnt = r.buffs[tex]
-        cnt = (cnt == true) and 1 or (tonumber(cnt) or 0)
-        -- ★并列时的裁决：层数相同就选**血量百分比更低**的那个。
-        --   与 EVAL_TEAM_PICK 的 teamPickBest 用同一条规则——否则「条件报出的人」和
-        --   「选取目标实际切过去的人」可能不是同一个（日志与行为对不上，用户会以为选错了）。
-        if cnt >= lim then
-          if not have or cnt > haveCnt or (cnt == haveCnt and r.hpPct < have.hpPct) then have, haveCnt = r, cnt end
+        local maxC, maxN, minC, minN, allUnk = memberAuraHit(r, false, namesT, nil)
+        if allUnk then
+          unkAllN = unkAllN + 1
         else
-          if not lack or cnt < lackCnt or (cnt == lackCnt and r.hpPct < lack.hpPct) then lack, lackCnt = r, cnt end
+          -- ★并列时的裁决：层数相同就选**血量百分比更低**的那个。
+          --   与 EVAL_TEAM_PICK 的 teamPickBest 用同一条规则——否则「条件报出的人」和
+          --   「选取目标实际切过去的人」可能不是同一个（日志与行为对不上，用户会以为选错了）。
+          if maxC ~= nil and maxC >= lim then
+            if not have or maxC > haveCnt or (maxC == haveCnt and r.hpPct < have.hpPct) then have, haveCnt = r, maxC end
+          end
+          if minC ~= nil and minC < lim then
+            if not lack or minC < lackCnt or (minC == lackCnt and r.hpPct < lack.hpPct) then lack, lackCnt = r, minC end
+          end
         end
       end
-      local lbl = scopeName .. "buff:" .. tostring(cd.s) .. (lim > 1 and (">=" .. lim) or "")
+      local lbl = scopeName .. "buff:" .. table.concat(namesT, "/") .. (lim > 1 and (">=" .. lim) or "")
       if cd.v == false then
-        if not lack then return false, lbl .. " 全都有" end -- 「无/缺」不成立：没人缺
+        if not lack then
+          if unkAllN >= table.getn(list) then return false, "未知buff:" .. table.concat(namesT, "/") end
+          return false, lbl .. " 全都有" -- 「无/缺」不成立：没人缺
+        end
         if not dry then teamSelect(lack) end -- 缺 buff 的人 = 该被补的那个人
         return true, lbl .. " 缺:" .. tostring(lack.name or lack.unit)
       end
-      if not have then return false, lbl .. " 无人有" end
+      if not have then
+        if unkAllN >= table.getn(list) then return false, "未知buff:" .. table.concat(namesT, "/") end
+        return false, lbl .. " 无人有"
+      end
       -- 「有」= 纯存在性判定（不是「该对谁施法」）→ **不切目标**
       return true, lbl .. " 有:" .. tostring(have.name or have.unit)
     else -- teamDebuff
       -- 「有队伍debuff:X」= **有任一**成员中 X；「无队伍debuff:X」= **没人**中 X。
       --   ★这正是「队伍有魔法 → 解魔法」：正向为真时，报出的那个成员就是该解的人。
+      -- ★1.75.39 多选：任一选中项命中即算命中；「无」= **没有任何成员**中任一选中项。
+      local namesD = EVAL_AURA_NAMES(cd)
       local want = cd.dt
-      local hasName = (cd.s ~= nil and cd.s ~= "")
-      local tex = hasName and texOf(cd.s) or nil
-      if hasName and not tex then return false, "未知debuff:" .. tostring(cd.s) end
+      local nnD = table.getn(namesD)
       local hit, hitCnt, best = false, 0, nil
+      local unkAllD = 0
       for _, r in ipairs(list) do
         local cur2, curCnt = false, 0
-        if tex then
-          local d = r.debuffs[tex]
-          if d and dispelMatch(d.t, want) then cur2 = true curCnt = tonumber(d.n) or 1 end
-        else
-          for _, d in pairs(r.debuffs) do
+        if nnD == 0 then
+          for _, d in pairs(r.debuffs or {}) do
             if dispelMatch(d.t, want) then cur2 = true curCnt = tonumber(d.n) or 1 break end
           end
+        else
+          local maxC, maxN, minC, minN, allUnk = memberAuraHit(r, true, namesD, want)
+          if allUnk then unkAllD = unkAllD + 1
+          elseif maxC ~= nil and maxC > 0 then cur2, curCnt = true, maxC end
         end
         if cur2 and (best == nil or curCnt > hitCnt) then hit, hitCnt, best = true, curCnt, r end
       end
-      local lbl = scopeName .. "debuff:" .. (hasName and tostring(cd.s) or "(任意)")
+      local lbl = scopeName .. "debuff:" .. (nnD > 0 and table.concat(namesD, "/") or "(任意)")
         .. ((want ~= nil and want ~= "" and want ~= "any") and ("(" .. tostring(want) .. ")") or "")
       if not hit then
+        if unkAllD >= table.getn(list) then return false, "未知debuff:" .. table.concat(namesD, "/") end
         -- 没人中：正向（有）如实失败；取反（无）如实通过
         return (cd.v == false), lbl .. " 无人有"
       end
@@ -4056,6 +4205,22 @@ local COND_FLAG_INV = {
 -- ★1.70.45 内层：原 EVAL_PARSE_ONE 主体。外层（见下方 EVAL_PARSE_ONE）负责先剥掉
 --   「剩余时间」后缀 [<30s]，再统一挂到结果 cd 上——这样 8 个光环分支一处都不用改，
 --   也保证任何分支都不会把后缀当成光环名字的一部分（否则名字错=永远静默匹配不上）。
+-- ★★★1.75.39 文本 → 名字集合（解析侧，光环类条件共用）：没写分隔符 ⇒ 单元素（**存量文本逐字等价**）。
+--   分隔符 = "/"（与职业/目标类型/小队/负面类型同一写法），顿号「、」与中文逗号「，」也认。
+--   ★空串 ⇒ nil（= 未选择 / 名字留空）——由各分支自己的语义决定是「任意该类型」还是「如实失败」。
+local function auraNamesFromText(nm)
+  if type(nm) ~= "string" then return nil end
+  local t = string.gsub(nm, "、", "/")
+  t = string.gsub(t, "，", "/")
+  local out = {}
+  for one in string.gmatch(t, "[^/]+") do
+    local x = condTrim(one)
+    if x ~= "" then out[x] = true end
+  end
+  if next(out) == nil then return nil end
+  return out
+end
+
 local function parseOneRaw(token)
   token = condTrim(colonNorm(token)) -- ★1.71.3 全角冒号先归一（多字节字符不能进 Lua 的 [...] 字节集）
   if token == "" then return nil end
@@ -4111,21 +4276,21 @@ local function parseOneRaw(token)
     return nm, n, dt
   end
   local bs = string.match(token, "^无buff[:：](.+)$") or string.match(token, "^noBuff[:=](.+)$")
-  if bs then local nm, n = auraStack(bs, "max") return { k = "hasBuff", s = nm, n = n, v = false } end -- 1.54.0 合并为 hasBuff+v（旧 noBuff 词条仍认）；1.70.1 层数
+  if bs then local nm, n = auraStack(bs, "max") return { k = "hasBuff", ss = auraNamesFromText(nm), n = n, v = false } end -- 1.54.0 合并为 hasBuff+v（旧 noBuff 词条仍认）；1.70.1 层数
   local tb = string.match(token, "^目标buff[:：](.+)$") or string.match(token, "^tBuff[:=](.+)$") -- 1.54.0；1.70.1 层数
-  if tb then local nm, n = auraStack(tb, "min") return { k = "tBuff", s = nm, n = n, v = not neg } end
+  if tb then local nm, n = auraStack(tb, "min") return { k = "tBuff", ss = auraNamesFromText(nm), n = n, v = not neg } end
   local tbn = string.match(token, "^无目标buff[:：](.+)$") or string.match(token, "^目标无buff[:：](.+)$")
-  if tbn then local nm, n = auraStack(tbn, "max") return { k = "tBuff", s = nm, n = n, v = false } end
+  if tbn then local nm, n = auraStack(tbn, "max") return { k = "tBuff", ss = auraNamesFromText(nm), n = n, v = false } end
   local pd = string.match(token, "^自身debuff[:：](.+)$") or string.match(token, "^pDebuff[:=](.+)$")
-  if pd then local nm, n, dt = auraStackSplit(pd, "min") return { k = "pDebuff", s = nm, n = n, dt = dt, v = not neg } end
+  if pd then local nm, n, dt = auraStackSplit(pd, "min") return { k = "pDebuff", ss = auraNamesFromText(nm), n = n, dt = dt, v = not neg } end
   local pdn = string.match(token, "^无自身debuff[:：](.+)$") or string.match(token, "^自身无debuff[:：](.+)$")
-  if pdn then local nm, n, dt = auraStackSplit(pdn, "max") return { k = "pDebuff", s = nm, n = n, dt = dt, v = false } end
+  if pdn then local nm, n, dt = auraStackSplit(pdn, "max") return { k = "pDebuff", ss = auraNamesFromText(nm), n = n, dt = dt, v = false } end
   bs = string.match(token, "^有buff[:：](.+)$") or string.match(token, "^hasBuff[:=](.+)$")
-  if bs then local nm, n = auraStack(bs, "min") return { k = "hasBuff", s = nm, n = n } end
+  if bs then local nm, n = auraStack(bs, "min") return { k = "hasBuff", ss = auraNamesFromText(nm), n = n } end
   bs = string.match(token, "^无debuff[:：](.+)$") or string.match(token, "^noDebuff[:=](.+)$")
-  if bs then local nm, n, dt = auraStackSplit(bs, "max") return { k = "hasDebuff", s = nm, n = n, dt = dt, v = false } end -- 1.54.0 合并；1.74.6 类型
+  if bs then local nm, n, dt = auraStackSplit(bs, "max") return { k = "hasDebuff", ss = auraNamesFromText(nm), n = n, dt = dt, v = false } end -- 1.54.0 合并；1.74.6 类型
   bs = string.match(token, "^有debuff[:：](.+)$") or string.match(token, "^hasDebuff[:=](.+)$")
-  if bs then local nm, n, dt = auraStackSplit(bs, "min") return { k = "hasDebuff", s = nm, n = n, dt = dt } end
+  if bs then local nm, n, dt = auraStackSplit(bs, "min") return { k = "hasDebuff", ss = auraNamesFromText(nm), n = n, dt = dt } end
   -- ★1.70.47 队伍/团队 buff/debuff（导入/文本编辑）：前缀「队伍」或「团队」决定扫描范围（cd.name）。
   --   写法：有/无{队伍|团队}buff:名 ；有/无{队伍|团队}debuff:名(类型) 或直接写类型 ；英文 id teamBuff/teamDebuff(默认队伍)
   --   ★★★两条 Lua 模式的硬规矩（都是本项目 H 节记过、我这次又踩的）：
@@ -4141,39 +4306,39 @@ local function parseOneRaw(token)
   local p1, p2
   p1, p2 = string.match(token, "^有(.+)buff[:：](.+)$")
   if p1 and teamScope(p1) then local nm, n = auraStack(p2, "min")
-    return { k = "teamBuff", s = nm, n = n, v = not neg, name = teamScope(p1) } end
+    return { k = "teamBuff", ss = auraNamesFromText(nm), n = n, v = not neg, name = teamScope(p1) } end
   p1, p2 = string.match(token, "^无(.+)buff[:：](.+)$")
   if p1 and teamScope(p1) then local nm, n = auraStack(p2, "max")
-    return { k = "teamBuff", s = nm, n = n, v = false, name = teamScope(p1) } end
+    return { k = "teamBuff", ss = auraNamesFromText(nm), n = n, v = false, name = teamScope(p1) } end
   p1, p2 = string.match(token, "^(.+)无buff[:：](.+)$")
   if p1 and teamScope(p1) then local nm, n = auraStack(p2, "max")
-    return { k = "teamBuff", s = nm, n = n, v = false, name = teamScope(p1) } end
+    return { k = "teamBuff", ss = auraNamesFromText(nm), n = n, v = false, name = teamScope(p1) } end
   p1, p2 = string.match(token, "^有(.+)debuff[:：](.*)$")
   if p1 and teamScope(p1) then local nm, dt = dispelSplit(p2)
-    return { k = "teamDebuff", s = nm, dt = dt, v = not neg, name = teamScope(p1) } end
+    return { k = "teamDebuff", ss = auraNamesFromText(nm), dt = dt, v = not neg, name = teamScope(p1) } end
   p1, p2 = string.match(token, "^无(.+)debuff[:：](.*)$")
   if p1 and teamScope(p1) then local nm, dt = dispelSplit(p2)
-    return { k = "teamDebuff", s = nm, dt = dt, v = false, name = teamScope(p1) } end
+    return { k = "teamDebuff", ss = auraNamesFromText(nm), dt = dt, v = false, name = teamScope(p1) } end
   p1, p2 = string.match(token, "^(.+)无debuff[:：](.*)$")
   if p1 and teamScope(p1) then local nm, dt = dispelSplit(p2)
-    return { k = "teamDebuff", s = nm, dt = dt, v = false, name = teamScope(p1) } end
+    return { k = "teamDebuff", ss = auraNamesFromText(nm), dt = dt, v = false, name = teamScope(p1) } end
   -- 英文 id（默认队伍范围）
   local tbf = string.match(token, "^teamBuff[:=](.+)$")
   if tbf then local nm, n = auraStack(tbf, "min")
-    return { k = "teamBuff", s = nm, n = n, v = not neg, name = "队伍" } end
+    return { k = "teamBuff", ss = auraNamesFromText(nm), n = n, v = not neg, name = "队伍" } end
   local tdb = string.match(token, "^teamDebuff[:=](.*)$")
   if tdb then local nm, dt = dispelSplit(tdb)
-    return { k = "teamDebuff", s = nm, dt = dt, v = not neg, name = "队伍" } end
+    return { k = "teamDebuff", ss = auraNamesFromText(nm), dt = dt, v = not neg, name = "队伍" } end
   -- ★1.71.3 候选者 buff/debuff（选取器行的候选过滤；只在选取器行有意义）
   local cbf = string.match(token, "^候选者缺buff[:：](.+)$") or string.match(token, "^候选者无buff[:：](.+)$")
     or string.match(token, "^candBuff[:=](.+)$")
-  if cbf then local nm, n = auraStack(cbf, "max") return { k = "candBuff", s = nm, n = n, v = false } end
+  if cbf then local nm, n = auraStack(cbf, "max") return { k = "candBuff", ss = auraNamesFromText(nm), n = n, v = false } end
   local cbs = string.match(token, "^候选者buff[:：](.+)$")
-  if cbs then local nm, n = auraStack(cbs, "min") return { k = "candBuff", s = nm, n = n, v = true } end
+  if cbs then local nm, n = auraStack(cbs, "min") return { k = "candBuff", ss = auraNamesFromText(nm), n = n, v = true } end
   local cdbf = string.match(token, "^候选者debuff[:：](.*)$") or string.match(token, "^candDebuff[:=](.*)$")
-  if cdbf then local nm, dt = dispelSplit(cdbf) return { k = "candDebuff", s = nm, dt = dt, v = not neg } end
+  if cdbf then local nm, dt = dispelSplit(cdbf) return { k = "candDebuff", ss = auraNamesFromText(nm), dt = dt, v = not neg } end
   local cdbn = string.match(token, "^候选者无debuff[:：](.*)$")
-  if cdbn then local nm, dt = dispelSplit(cdbn) return { k = "candDebuff", s = nm, dt = dt, v = false } end
+  if cdbn then local nm, dt = dispelSplit(cdbn) return { k = "candDebuff", ss = auraNamesFromText(nm), dt = dt, v = false } end
   -- 1.70.28 目标类型（导入）：支持 目标类型:野兽/元素、目标类型非:元素、tCreature=beast
   local tcr = string.match(token, "^目标类型非[:：](.+)$") or string.match(token, "^notcreature[:=](.+)$")
   if tcr then
@@ -4458,6 +4623,16 @@ local function teamFilterSuffix(cd)
   return out
 end
 
+-- ★★★1.75.39 多选导出的**名字串**（光环类条件共用）：1 项写裸名字（**存量逐字不变**）、≥2 项用 "/" 连接
+--   （与「目标职业/目标类型/小队/负面类型」同一套分隔符；解析侧同样容忍顿号与中文逗号）。
+--   ★空集（用户把勾选全取消）= 空串 = 未选择 —— 与旧版空名字同形，解析侧照旧如实处理。
+--   ★必须让所有导出点**共用同一个函数**：本项目纪律「同一份格式化只有一处」——两处迟早漂移。
+local function auraNameStr(cd)
+  local names = EVAL_AURA_NAMES(cd)
+  if table.getn(names) == 0 then return "" end
+  return table.concat(names, "/")
+end
+
 function EVAL_COND_STR(cd, disp)
   local k = cd.k
   -- ★1.70.47 队伍/团队血蓝：前缀随扫描范围（cd.name）变化，保证「导出→导入」往返不掉范围
@@ -4524,24 +4699,24 @@ function EVAL_COND_STR(cd, disp)
     return ""
   end
   -- ★1.71.3 候选者光环型（必须放在 stkSuffix/secSuffix 声明之后，否则引用到全局 nil）
-  if k == "candBuff" then return ((cd.v == false) and "候选者缺buff:" or "候选者buff:") .. tostring(cd.s) .. stkSuffix() .. secSuffix() .. teamFilterSuffix(cd) end
-  if k == "candDebuff" then return ((cd.v == false) and "候选者无debuff:" or "候选者debuff:") .. tostring(cd.s) .. dtSuffix() .. stkSuffix() .. secSuffix() .. teamFilterSuffix(cd) end -- ★1.74.6 补类型后缀（原来这里漏了 → 类型存不住）
-  if k == "hasBuff" then return ((cd.v == false) and "无buff:" or "有buff:") .. tostring(cd.s) .. stkSuffix() .. secSuffix() end -- 1.54.0 合并（旧 k=noBuff 走下一行兼容）
-  if k == "noBuff" then return "无buff:" .. tostring(cd.s) end
-  if k == "tBuff" then return ((cd.v == false) and "无目标buff:" or "目标buff:") .. tostring(cd.s) .. stkSuffix() .. secSuffix() end -- 1.54.0
+  if k == "candBuff" then return ((cd.v == false) and "候选者缺buff:" or "候选者buff:") .. auraNameStr(cd) .. stkSuffix() .. secSuffix() .. teamFilterSuffix(cd) end
+  if k == "candDebuff" then return ((cd.v == false) and "候选者无debuff:" or "候选者debuff:") .. auraNameStr(cd) .. dtSuffix() .. stkSuffix() .. secSuffix() .. teamFilterSuffix(cd) end -- ★1.74.6 补类型后缀（原来这里漏了 → 类型存不住）
+  if k == "hasBuff" then return ((cd.v == false) and "无buff:" or "有buff:") .. auraNameStr(cd) .. stkSuffix() .. secSuffix() end -- 1.54.0 合并（旧 k=noBuff 走下一行兼容）
+  if k == "noBuff" then return "无buff:" .. auraNameStr(cd) end
+  if k == "tBuff" then return ((cd.v == false) and "无目标buff:" or "目标buff:") .. auraNameStr(cd) .. stkSuffix() .. secSuffix() end -- 1.54.0
   if k == "pDebuff" then -- 1.54.0；★1.74.6 支持类型后缀与「名称留空 = 任意该类型」
-    local nm = (cd.s ~= nil and cd.s ~= "") and tostring(cd.s) or ""
+    local nm = auraNameStr(cd)
     return ((cd.v == false) and "无自身debuff:" or "自身debuff:") .. nm .. dtSuffix() .. stkSuffix() .. secSuffix()
   end
   if k == "hasDebuff" then -- ★1.74.6 同 pDebuff：类型后缀 + 名称留空「任意该类型」
-    local nm2 = (cd.s ~= nil and cd.s ~= "") and tostring(cd.s) or ""
+    local nm2 = auraNameStr(cd)
     return ((cd.v == false) and "无debuff:" or "有debuff:") .. nm2 .. dtSuffix() .. ((type(cd.n) == "number" and cd.n > 1) and ((cd.v == false and "<" or ">=") .. cd.n) or "") .. secSuffix()
   end
-  if k == "noDebuff" then return "无debuff:" .. tostring(cd.s) .. ((type(cd.n) == "number" and cd.n > 1) and ("<" .. cd.n) or "") end
+  if k == "noDebuff" then return "无debuff:" .. auraNameStr(cd) .. ((type(cd.n) == "number" and cd.n > 1) and ("<" .. cd.n) or "") end
   -- ★1.70.47 队伍/团队 buff/debuff（用户要求）：前缀带扫描范围；类型以 (Magic) 后缀附上，解析侧双向容忍本地化名
-  if k == "teamBuff" then return ((cd.v == false) and ("无" .. tscope .. "buff:") or ("有" .. tscope .. "buff:")) .. tostring(cd.s) .. stkSuffix() .. teamFilterSuffix(cd) end
+  if k == "teamBuff" then return ((cd.v == false) and ("无" .. tscope .. "buff:") or ("有" .. tscope .. "buff:")) .. auraNameStr(cd) .. stkSuffix() .. teamFilterSuffix(cd) end
   if k == "teamDebuff" then
-    local nm = (cd.s ~= nil and cd.s ~= "") and tostring(cd.s) or ""
+    local nm = auraNameStr(cd)
     -- ★1.73.2 多选：导出形态 (Magic) / (Magic/Poison)；单选与存量**逐字相同**
     -- ★1.73.12 disp=true 时走本地化名（**只影响界面显示**；导出/往返一律 false）
     return ((cd.v == false) and ("无" .. tscope .. "debuff:") or ("有" .. tscope .. "debuff:")) .. nm .. dtSuffix() .. teamFilterSuffix(cd)
