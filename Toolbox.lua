@@ -4591,7 +4591,8 @@ local function tbModel()
     -- ★1.75.45 装备比较（tools/EquipCompare.lua，参考**同客户端** UnrealQuest 的 ShowItemCompare 口径）：
     --   同 infoBar/lootCursor 一样只是**一行数据** —— 控件、包装、自建对比框、命令全在模块里
     --   （`EVAL_TB_MOD_ROWS["equipCompare"]`）。★不写 `noChk` ⇒ 保留主开关勾选框（真值 = `tbCfg().equipCompare`）。
-    --   ★默认**关**（opt-in）：关着 = 不包装容器按钮、不挂 OnUpdate、不建对比框（一个动作都没有）。
+    --   ★★默认**开**（用户 1.75.45 定：「装备比较默认开启.」；键为 nil 时模块当场物化 true，
+    --      用户显式关过（false）永远是关）；关着 = 不包装容器按钮、不挂 OnUpdate、不建对比框（一个动作都没有）。
     { t = "mod", mod = "equipCompare", key = "equipCompare", label = L("TB_EQCOMPARE"), tip = L("TB_EQCOMPARE_TIP") },
     -- ★1.75.46 目标血条（tools/TargetBar.lua · target-bar 分支 · 参考 unrealUI 的单位框机制）：
     --   紧凑目标血条（名字+等级+百分比 · 敌我着色 · 难度色等级 · 精英后缀 · 左键拖动摆位）；

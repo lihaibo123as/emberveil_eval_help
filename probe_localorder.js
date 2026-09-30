@@ -166,8 +166,9 @@ if (require.main === module) {
   //   只能等真机红字。现在把主力文件一并纳入（本轮实测 8 个文件全绿；新文件请手动加进来）。
   const files = process.argv.slice(2).length ? process.argv.slice(2)
     : ['EvalHelp.lua', 'Core.lua', 'Engine.lua', 'PetHelper.lua', 'Toolbox.lua', 'DataSearch.lua',
-       'IconBrowser.lua', 'PetData.lua', 'quest/QuestChains.lua',
-       'tools/Probes.lua', 'tools/RareWatch.lua', 'tools/EquipCompare.lua'];
+       'IconBrowser.lua', 'PetData.lua', 'quest/QuestChains.lua', 'Share.lua',
+       'tools/Probes.lua', 'tools/RareWatch.lua', 'tools/EquipCompare.lua', 'tools/SimpleMap.lua',
+       'tools/TargetBar.lua'];
   let total = 0;
   for (const f of files) {
     const bad = scan(fs.readFileSync(f, 'utf8'));

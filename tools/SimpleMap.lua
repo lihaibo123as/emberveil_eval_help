@@ -1297,6 +1297,16 @@ end
 --   才声明 ⇒ 在 `featApplyScale` 里引用会绑成**全局 nil**，`featApply` 会中途报错被 pcall 吞掉 —— 本轮就是
 --   `LOCAL ORDER CHECK` 当场抓到的：GUI重开的计数直接变成 0）。
 local smFitHold = 0
+-- ★★★1.75.45 新增（用户要求）：「未适配完成的探索层图层尽快尽早设置不可见，等缩放完成之后再显示可见度」。
+--   ★前向声明：实现在 `smFitRestore` 之后（`featTeardown` / `smFitNewMap` / `smFitDropOnClose` / tick 四处都要能调它）。
+--   ★为什么必须是**提前声明**：本项目老雷 —— 在 `local function` 定义之前引用会绑成全局 nil，`pcall` 一吞就静默。
+local smFitGhostShow
+-- ★★★1.75.45：`mfLog` 也必须提前声明 —— 它的**首次使用在 1727 行**（`featHideBlackout`），
+--   而定义在 2000 行之后 ⇒ 不声明的话那几处绑全局 nil、被 `pcall` 静默吞掉（见其定义处的注释）。
+--   ★`smFitSayV` 同族（`probe_localorder.js` 在 1.75.45 把它扫出来）：首次使用 1744 行（黑幕耗时取证行）、
+--   定义 2123 行 ⇒ 「黑幕遮蔽：开图后 N ms 藏住 M 层」那条**上屏**取证行同样是死的（`mfLog` 那条进环、这条上屏）。
+local mfLog
+local smFitSayV
 -- ★★★1.75.5（用户指定「本办法」）：**手动适配进行中** —— 置真时自动逻辑（抓原值窗口 / 每帧守缩放 / 折算）
 --   整段让位，由 `/ehm fitnow` 那条调试命令按「开图 → 置自然档 → 等 2s → 读原值 → 套缩放 → 折算」一步步走完并**逐条打印**。
 --   为什么要有它：自动时序依赖客户端开图时机，出问题时看不出卡在哪一步；手动过程完全确定、每步都有读数。
@@ -1846,10 +1856,17 @@ local function featTeardown()
     FEAT.escAdded = false
   end
   FEAT.blackoutUntil, FEAT.blackoutAt, FEAT.blackoutLogged = 0, 0, false -- 瞬时窗口也收掉
+  -- ★★★1.75.45：**「未适配先隐形」的探索层也要还回可见度** —— 否则关功能后那几层还是 alpha 0 = 永久隐形
+  --   （与本函数上面「关掉时把自己改过的属性还回去」同一条铁律；`smFitGhostShow` 是提前声明的 local）。
+  local nGhost = 0
+  if smFitGhostShow then
+    local okG, ng = pcall(smFitGhostShow, "关闭功能")
+    if okG then nGhost = tonumber(ng) or 0 end
+  end
   -- ★★★1.75.6：地图设置面板 + 它的 click-catcher 一起收 —— 关功能 = 零动作，
   --   ★catcher 绝不能留着（它是全屏 Button，留着会吃地图上的所有点击）。
   if type(FEAT.cfgShow) == "function" then pcall(FEAT.cfgShow, false) end
-  mfLog("关闭收尾：黑幕透明度还原 %d 层（原 alpha 由 featBlackoutRestore 写回）", nAlpha)
+  mfLog("关闭收尾：黑幕透明度还原 %d 层（原 alpha 由 featBlackoutRestore 写回）｜探索层隐形还回 %d 层", nAlpha, nGhost)
 end
 
 -- ★★★1.75.9 新增：**再武装**（关闭时藏起来的件，开启时必须回来）—— 与 featTeardown 成对，缺一半就是上面那个真机 bug。
@@ -1892,6 +1909,21 @@ end
 local SMFIT = { open = false, es = nil, burst = 0, rec = {}, captured = false, needFold = nil, wrote = false,
   pendingApply = false, mapKey = nil, mapAge = 0, wroteKeys = {}, capAt = nil, capCalls = 0, capAge = 99,
   capFails = 0,
+  -- ★1.75.45：`ghost` = 「未适配完成 ⇒ 先隐形」的账（键 = 纹理名 → { o = 活对象, a = 原 alpha }）。
+  --   ★只活在**一次抓原值窗口 / 一次本图访问**里：窗口收口 / 兜底超时 / 关图 / 换图 / 关功能 都会还回去
+  --     （`SMFIT_GHOST_SEC` 是结构性兜底，绝不永久隐形）。
+  ghost = {}, ghostAt = 0,
+  -- ★1.75.45：「本图这一次访问是不是已经折完」——用于决定「还没折完 ⇒ 先把未适配的层隐形」；
+  --   折完（或兜底超时放弃）置 true ⇒ 不在同一张图上反复隐形/显示（防闪烁）。
+  foldedThisMap = false,
+  -- ★★★1.75.45b（用户报障「切换其他地图之后，探索层的缩放就会失效」的根因修法）：
+  --   `natLeft` = **本次地图访问**还剩几次「自然档窗口」（`natMax` = 3；换图/关图重新给满）；
+  --   `holdAge` = 当前窗口已经开了多少秒（`natSettle` = 1.0 秒内不读 —— 我们自己刚 SetScale(1) 会惊动客户端重排）；
+  --   `wroteRun` = **本次 `smFitApply` 调用**真写过哪些层（第 5 步逐层打印用；旧写法拿「本图这一整个会话写过」的
+  --     旧账来打 ⇒ 会出现「写入 0 个」却 12 行都标「★本次已写」的自相矛盾日志）。
+  --   ★这三个常量/状态放表里而不是新增文件级 local —— 主 chunk 有 200 个局部队变量的上限。
+  --   ★`natLeft` 初始就给满：功能**在地图已经开着**时被打开（`EVAL_SM_SET(true)`）也要走同一条「自然档窗口」路。
+  natLeft = 3, holdAge = 0, wroteRun = {}, natMax = 3, natSettle = 1.0,
   recMap = {} }
 -- ★★★1.75.5 定案（用户提问：「这个探索层每个地区的定位是从缓存读取的吗? 理论上每次打开地图都要重新计算的.
 --   不需要缓存区记录这个定位信息?」）——**用户是对的：这份定位信息不该长期存盘**。三条事实：
@@ -1924,6 +1956,10 @@ local SMFIT_CAP_GAP = 1.0
 --   抓到就立刻收窗口并缩放；到点还没抓到 ⇒ 也收窗口（先缩放、稍后由有界重试继续补抓），
 --   **绝不把地图卡在满尺寸**。
 local SMFIT_HOLD_SEC = 2.0
+-- ★★★1.75.45（用户要求）：「未适配完成的探索层先隐形」的**兜底上限**（秒）——
+--   ★结构性保险：任何没预料到的分支最多隐形这么久 ⇒ 「绝不永久隐形」不靠人去记全所有还原点。
+--   到点还回去的同时把本图这一次访问标记成「已放弃隐形」（否则下一个折算节拍又会把它藏起来 = 闪烁）。
+local SMFIT_GHOST_SEC = 1.0
 
 -- ★★★1.75.13 新增：**地图身份**（这是本轮修法的地基）。
 --   为什么必须：`WorldMapOverlay1..N` 这批纹理是**按序号逐图复用**的 —— 客户端每次 `WorldMapFrame_Update`
@@ -2061,7 +2097,12 @@ end
 --   记的全是**分叉处的实数**：探测（缩放 1 vs 0.7 时读到的屏幕宽）、抓原值（读时的外框缩放 ⇒ 自证自然档）、
 --   每次折算（es + 原值 → 新值）、每次还原（读回）、每次开关（mode/touched/还原数）。
 local MF_TRACE_MAX = 60
-local function mfLog(fmt, ...)
+-- ★★★1.75.45 修（前向声明老雷，同类坑本项目已多次记录）：`mfLog` 的**首次使用在 1727/1739/1863 行**
+--   （`featHideBlackout` 与 `featTeardown` 里），而定义原本是这里的 `local function` ⇒ 在那些函数体里
+--   `mfLog` 绑的是**全局 nil**，调用即 `attempt to call a nil value`，被外面的 `pcall` 一吞就**静默**：
+--   「黑幕遮蔽：开图后 N ms 藏住 M 层」与「关闭收尾：…」这两条**唯一的取证行从来没打出来过**。
+--   ⇒ 修法照项目定案：**顶部前向声明 + 定义处改赋值**（不是 `local function`）。
+mfLog = function(fmt, ...)
   local msg = (select("#", ...) > 0) and string.format(fmt, ...) or tostring(fmt)
   local t = (type(GetTime) == "function") and GetTime() or 0
   local line = string.format("%.2f %s", t, msg)
@@ -2090,7 +2131,10 @@ end
 --   安静档（默认）每次开图只留 2 行（「已读到 N 条」+「折算已对齐」）、关图 1 行；
 --   逐条原值 / 第 N 次尝试 / 每次重试提示 / 窗口开关 / 每次折算细节 = **verbose 档**（`/ehm mapfit verbose on`）。
 --   ★无论如何都进 `mapFitTrace` 取证环（`mfLog` 那一句不省）⇒ 真出问题时仍然读得到全过程。
-local function smFitSayV(fmt, ...)
+--   ★★★1.75.45 修：这里原本是 `local function`，而它**首次使用在 1744 行**（黑幕耗时取证行）⇒
+--     那处绑全局 nil、被 `pcall(featHideBlackout)` 静默吞掉 ⇒ 那条**上屏**取证行从来没打出来过。
+--     修法照项目定案：**顶部前向声明 + 定义处改赋值**（同 `mfLog` / `featRearm`）。
+smFitSayV = function(fmt, ...)
   local msg = (select("#", ...) > 0) and string.format(fmt, ...) or tostring(fmt)
   mfLog("[详细] %s", msg)
   if not smFitVerboseOn() then return msg end
@@ -2108,6 +2152,10 @@ end
 --     · 切走时把当前图的记录**存回 recMap**；切回来时**直接取回**那份（有记录 ⇒ 抓原值空转一次即落闩、一个缩放都不碰）。
 local function smFitNewMap(mk)
   mk = tostring(mk or "?")
+  -- ★★★1.75.45：换图 ⇒ 上一张图那批「未适配就隐形」的层**必须先还回可见度**
+  --   （同一批纹理名会被客户端重指到新图；留着 alpha 0 = 新图那几层凭空消失）
+  if smFitGhostShow and next(SMFIT.ghost or {}) ~= nil then pcall(smFitGhostShow, "换图") end
+  SMFIT.foldedThisMap = false -- 新的一张图 ⇒ 「这一次访问折完没有」重新判定
   local old = SMFIT.mapKey
   if old and old ~= mk and type(SMFIT.rec) == "table" and next(SMFIT.rec) ~= nil then
     SMFIT.recMap[old] = SMFIT.rec
@@ -2122,7 +2170,13 @@ local function smFitNewMap(mk)
   SMFIT.capSayN = 0
   -- ★1.75.5（用户：「清理下这些调试日志」）：**每次开图只报一次**的那几条也要跟着换图归零
   SMFIT.saidLatch, SMFIT.saidFail, SMFIT.saidEmpty, SMFIT.saidFold = false, false, false, false
+  SMFIT.saidNat = false -- ★1.75.45b：同上（「非自然档不记原值」那条也只许每图说一次）
   smFitHold = 0 -- ★1.75.5：换图 ⇒ 窗口重新判定（下一拍按「本图有没有记录」决定开不开）
+  -- ★★★1.75.45b：换图 ⇒ **自然档窗口的预算重新给满**（每张图各自有界；「一变就做、不等稳定」——
+  --   连续切图时上一条身份的窗口直接作废，绝不排队，否则会重演 DataSearch 1.70.40 那个
+  --   「稳定期闸门把重绘全吞掉 ⇒ 一次都不重绘」的坑）。
+  SMFIT.natLeft = tonumber(SMFIT.natMax) or 3
+  SMFIT.holdAge = 0
   mfLog("换图：%s ⇒ 本图原值改从**会话内存**取（有就复用、没有就在自然档抓一次；跨图沿用就是「坐标丢失/全挤在左下」的根因）",
     tostring(mk))
   return true
@@ -2230,9 +2284,32 @@ local function smFitNeedFold()
   return true -- ★默认：折算（否则「正常开启无法生效」= 用户实测到的那种回归）
 end
 
+-- ★★★1.75.45：**「这一层与 记录×es 是否已经对齐」的唯一判据**（折算与「未适配先隐形」共用 —— 单一来源，
+--   免得两处各写一套 near/口径、日后改一处漏一处）。
+--   返回 `need`（true = 要写 / false = 已对齐 / **nil = 几何读不到 ⇒ 判不出就不动**）+ 要写进去的四个目标值。
+local function smFitNeedWrite(o, r, es)
+  local okp, p, _rel, _rp, x, y = pcall(o.GetPoint, o, 1)
+  local okw, w = pcall(o.GetWidth, o)
+  local okh, h = pcall(o.GetHeight, o)
+  if not (okp and p and okw and okh and tonumber(x) and tonumber(y) and tonumber(w) and tonumber(h)) then
+    return nil
+  end
+  local wantX, wantY, wantW, wantH = r.x * es, r.y * es, r.w * es, r.h * es
+  -- 两种读回口径都认（与旧写法逐字一致）：okA = 读回≈逻辑值；okB = 读回≈逻辑值×es
+  local near = function(a, b) return math.abs((tonumber(a) or 0) - (tonumber(b) or 0)) <= 0.5 end
+  local okA = near(x, wantX) and near(y, wantY) and near(w, wantW) and near(h, wantH)
+  local okB = near(x, wantX * es) and near(y, wantY * es) and near(w, wantW * es) and near(h, wantH * es)
+  if okA or okB then return false, wantX, wantY, wantW, wantH end
+  return true, wantX, wantY, wantW, wantH
+end
+
 -- 应用适配：返回 改动数, 已适配数, 等原值的目标数
 local function smFitApply(es, quiet)
   smFitMigrate()
+  -- ★★★1.75.45b：**本次调用的写入账**（`wroteRun`）必须在所有早退之前清干净 ——
+  --   第 5 步逐层那行「★本次已写」要按**这一次调用**判，不能拿 `wroteKeys`（那是「本图这一整个会话写过」的旧账：
+  --   实测同一张图连跑两次手动适配会打出「写入 0 个」却有 12 行「★本次已写」的自相矛盾日志）。
+  SMFIT.wroteRun = {}
   if not smFitNeedFold() then return 0, 0, 0 end
   local fr = _G["WorldMapDetailFrame"]
   if not (type(fr) == "table" or type(fr) == "userdata") then return 0, 0, 0 end
@@ -2278,28 +2355,23 @@ local function smFitApply(es, quiet)
     --   旧写法对它们照写 = 真机看到的那批「全部挤在同一处」）
     local use = smFitInUse(o)
     if not use then skipped = skipped + 1 end
-    local okp, p, rel, rp, x, y = pcall(o.GetPoint, o, 1)
-    local okw, w = pcall(o.GetWidth, o)
-    local okh, h = pcall(o.GetHeight, o)
-    if use and okp and p and okw and okh and tonumber(x) and tonumber(y) and tonumber(w) and tonumber(h) then
+    -- ★★★1.75.45：几何读回 + 「要不要写」的判定收进 `smFitNeedWrite`（**唯一判据来源**，
+    --   折算与「未适配先隐形」共用；读不到几何 ⇒ 返回 nil ⇒ 两边都**判不出就不动**）。
+    if use then
       -- ★本函数**只读、绝不记原值**（唯一写入点是 smFitCapture）：没有记录 ⇒ 只计数，等抓原值那一拍补上
       local r = SMFIT.rec[it.key]
       if not r then rec = rec + 1 end
       if r then
-        local wantX, wantY = r.x * es, r.y * es
-        local wantW, wantH = r.w * es, r.h * es
         -- ★读回口径（1.75.5 改成**两种都认**，与 smFitRestore 同一套判据）：
         --   · 「读回 = 逻辑值」（不会级联的客户端）⇒ 对齐 = 读回 ≈ 原值×es（旧写法只认这一种）；
         --   · 「读回 = 逻辑值×es」（**本客户端实测**：几何读回含父帧缩放）⇒ 写进去的逻辑值读回来是 ×es
         --     ⇒ 对齐 = 读回 ≈ 原值×es×es。
         --   ★旧写法只按第一种比 ⇒ 在会级联的客户端上**每一拍都判成「要改」**（真机取证：8 个纹理被反复重写、
         --     聊天每 3 秒刷一条「叠加层适配」）；两种都认之后：该写时写一次，之后永远判「已对齐」。
-        local near = function(a, b) return math.abs((tonumber(a) or 0) - (tonumber(b) or 0)) <= 0.5 end
-        local okA = near(x, wantX) and near(y, wantY) and near(w, wantW) and near(h, wantH)
-        local okB = near(x, wantX * es) and near(y, wantY * es) and near(w, wantW * es) and near(h, wantH * es)
-        if okA or okB then
+        local need, wantX, wantY, wantW, wantH = smFitNeedWrite(o, r, es)
+        if need == false then
           ready = ready + 1
-        else
+        elseif need == true then
           -- ★★★1.75.5 真机定案（用户截图：**探索层贴图跑到游戏画面里**，右下角拼出一块丹莫罗地图）：
           --   写锚点**必须传「帧对象」**，绝不能把记录里的相对帧**名字（字符串）或 nil** 丢给 `SetPoint` ——
           --   本客户端对「字符串/nil 相对帧」的处理 = **锚到屏幕**（UIParent）⇒ 这些纹理逃出地图窗口、画在游戏世界上
@@ -2317,6 +2389,7 @@ local function smFitApply(es, quiet)
           SMFIT.wrote = true -- ★1.75.9：记下「本会话**真的写过**几何」⇒ 关闭时才需要还原（没写过就一个写都不发）
           -- ★1.75.13：**逐层记账**（还原只还我们写过的、且只还**本图**写过的）
           SMFIT.wroteKeys[it.key] = mk
+          SMFIT.wroteRun[it.key] = true -- ★1.75.45b：**本次调用**的写入账（第 5 步逐层打印用，见函数开头）
           mfLog("折算：es=%.3f %s 原值(%.1f,%.1f %.1f×%.1f,来自%s) → 写入(%.1f,%.1f %.1f×%.1f)",
             es, tostring(it.key), r.x, r.y, r.w, r.h, tostring(r.from or "rec"),
             wantX, wantY, wantW, wantH)
@@ -2446,6 +2519,35 @@ local function smFitCapture()
   end
   local norm = (SMFIT.needFold == true) and 1 or esC
   if norm <= 0 then norm = 1 end
+  -- ★★★1.75.45b（用户报障「切换其他地图之后，探索层的缩放就会失效」的根因；真机取证定案）：**只在自然档记原值**。
+  --   旧写法默认按「读回 = 逻辑值 × es」归一（`norm = esC`），可默认档是 fold、**只读探测只在 auto 档才跑**
+  --   ⇒ `SMFIT.needFold` 恒 nil ⇒ 永远走 ÷esC 那一支。后果（与读回口径无关，纯代数）：
+  --     · 外框在 0.7/0.5 上读到的「原值」= 真原值 ÷ esC（记录偏小）；
+  --     · 折算要写的是 `记录 × es`，当 `esC == es`（同一个档）时 **「要写」== 「读回」** ⇒ `smFitNeedWrite`
+  --       判「已对齐」⇒ **一个几何都不写** ⇒ 探索层保持客户端给的原矩形（偏大 1/es 倍）= 用户看到的现象。
+  --   真机证据（`simpleMapCfg.mapFitCapLog`）：DunMorogh/LochModan 上混着 `归一÷1.00` 与 `÷0.70 / ÷0.50`；
+  --   ÷1.00 的那几次正好是**换图后第一次开图**（外框还是自然档）⇒ 与「只有初次打开地图缩放才成功」逐字吻合。
+  --   ⇒ 现在**硬门**：外框不是自然档 ⇒ 一条都不记（不猜口径、绝不写脏原值），改为**申请/续一个自然档窗口**，
+  --     下一轮在 1.00 上读 —— 与 `/ehm fitnow` 第 2~3 步同一条路（用户已实测有效：那一轮「写入 12 个」）。
+  if math.abs(esC - 1) > 0.001 then
+    local free = (tonumber(SMFIT.natLeft) or 0) > 0
+    if (not SMFIT.saidNat) or smFitVerboseOn() then
+      SMFIT.saidNat = true
+      smFitSayV("抓原值**跳过**：外框当前不是自然档（真有效缩放=%.3f）⇒ 在这个档上读到的「原值」会被归一系数搅成偏小值"
+        .. "（折算就变成空操作）⇒ 本次**一条都不记**；%s", esC,
+        free and string.format("改为申请一个自然档窗口（本图还剩 %d 次）", tonumber(SMFIT.natLeft) or 0)
+          or "本图自然档窗口预算已用完 ⇒ 等下次开图/换图再读")
+      mfLog("抓原值跳过（非自然档）：esC=%.3f ⇒ 一条都没记（记了也只会偏小、折算变空操作）；本图窗口预算剩 %d",
+        esC, tonumber(SMFIT.natLeft) or 0)
+    end
+    if free then
+      -- ★只**申请**窗口：真正把外框按回 1.00 由 tick 的窗口块统一做（单一出口，免得两处各写一次）
+      SMFIT.natLeft = (tonumber(SMFIT.natLeft) or 0) - 1
+      smFitHold, SMFIT.holdAge = SMFIT_HOLD_SEC, 0
+    end
+    SMFIT.capAt = (type(GetTime) == "function") and GetTime() or 0
+    return 0
+  end
   for _, it in ipairs(todo) do
     local o = it.o
     local okp, p, rel, rp, x, y = pcall(o.GetPoint, o, 1)
@@ -2604,6 +2706,87 @@ local function smFitRestore(quiet)
   return n, miss, bad
 end
 
+-- ★★★1.75.45（用户要求）：「工具箱→缩放大地图：能否在一开始将**未适配完成**的探索层图层尽快尽早
+--   设置不可见，然后等缩放完成之后再显示可见度」。
+--   ★为什么用 **alpha 0 而不是 `Hide()`**：`Hide()` 会让 `IsShown()==false`，而我们的「本图在用」判据
+--     （`smFitInUse`：`IsShown()==false` ⇒ 判成「客户端本图不用」）会因此把**刚隐形的层排除在抓原值/折算之外**
+--     ⇒ 自己把自己判死（隐形 → 不抓 → 永不折算 → 永远隐形）。alpha 只改透明度、`IsShown()` 一个字节不动。
+--     （与本项目黑幕遮蔽同族：`SetAlpha(0)` 硬抗闪 + 有界窗口逐帧重申 + 有界还原。）
+--   ★「未适配完成」的判据 = **没有原值记录**，或者**记录×es 与活值还对不上**（与折算同一判定，见 smFitNeedWrite）
+--     ⇒ 只对本图在用、且真的还没适配好的层动手；已经对齐的层一个字节都不碰。
+--   ★`es` 传 nil = 只按「有没有原值记录」判（抓原值窗口刚开那一拍用：那时本来一条记录都没有）；
+--     传了 es = 连「还没对齐」的层也一起隐形（换回看过的图时它有记录、但客户端刚重摆过 = 还没折）。
+--   ★同一层只在**第一次**记账（`g.o ~= o` 才重记）⇒ 逐帧重申不会把 0 当成原值。
+local function smFitGhostHide(es)
+  local list = smFitTargets()
+  local n = 0
+  for _, it in ipairs(list) do
+    local o = it.o
+    if smFitInUse(o) then
+      local r = SMFIT.rec[it.key]
+      local need = false
+      if not r then
+        need = true -- 没原值 ⇒ 一定还没适配
+      elseif es then
+        local nw = smFitNeedWrite(o, r, es)
+        need = (nw == true) -- nil（读不到）⇒ **判不出就不动**，绝不凭猜把它藏了
+      end
+      if need then
+        local g = SMFIT.ghost[it.key]
+        if (not g) or g.o ~= o then
+          if next(SMFIT.ghost) == nil then
+            SMFIT.ghostAt = (type(GetTime) == "function") and GetTime() or 0
+          end
+          local a = 1
+          if type(o.GetAlpha) == "function" then
+            local ok, v = pcall(o.GetAlpha, o)
+            if ok and tonumber(v) then a = tonumber(v) end
+          end
+          SMFIT.ghost[it.key] = { o = o, a = a }
+          mfLog("探索层隐形：%s 还没适配好（原 alpha=%.2f）⇒ 先隐形，折算完再显示", tostring(it.key), a)
+        end
+        if type(o.SetAlpha) == "function" then pcall(o.SetAlpha, o, 0) end
+        n = n + 1
+      end
+    end
+  end
+  return n
+end
+
+-- 逐帧**廉价重申**（不扫几何、不判对齐）：只把已经记过账的那几层再按 alpha 0 —— 客户端可能自己摆回来。
+local function smFitGhostKeep()
+  local n = 0
+  for _, g in pairs(SMFIT.ghost or {}) do
+    local o = g and g.o
+    if o and type(o.SetAlpha) == "function" then
+      pcall(o.SetAlpha, o, 0)
+      n = n + 1
+    end
+  end
+  return n
+end
+
+-- 还回可见度（**唯一还原口**）：折算完成 / 兜底超时 / 关图 / 换图 / 关功能 全部走这里。
+--   ★按**记录下来的对象引用**还（不重新扫描、也不按名字）⇒ 目标列表变了也一定还得回去；
+--   ★幂等（重复调用安全），★绝不留「永久隐形」；★原 alpha 读不到就按 1 还（如实，不猜中间值）。
+smFitGhostShow = function(why)
+  local n = 0
+  for _, g in pairs(SMFIT.ghost or {}) do
+    local o = g and g.o
+    if o and type(o.SetAlpha) == "function" then
+      local a = tonumber(g.a)
+      if (not a) or a < 0 or a > 1 then a = 1 end
+      pcall(o.SetAlpha, o, a)
+      n = n + 1
+    end
+  end
+  if n > 0 then
+    mfLog("探索层隐形：已还回可见度 %d 层（原因：%s）", n, tostring(why))
+  end
+  SMFIT.ghost, SMFIT.ghostAt = {}, 0
+  return n
+end
+
 -- ★★★1.75.13 新增：**换图 = 换一套原值**（同一个纹理名在不同地图上是完全不同的矩形 ⇒ 绝不跨图复用）。
 --   ★★1.75.5：已上移到 smFitApply 之前（apply/capture/restore 三处都要按身份换绑）—— 见 `smFitNewMap`。
 
@@ -2626,6 +2809,9 @@ local function smFitDropOnClose(mk)
   mk = tostring(mk or SMFIT.mapKey or "?")
   -- ★身份已经换了（这一拍同时换了图）⇒ 不动手：换图那条路有自己的作废（smFitNewMap），两边都写会打架
   if mk ~= tostring(SMFIT.mapKey or "?") then return false end
+  -- ★★★1.75.45：关图 ⇒ **先把「未适配先隐形」的层还回可见度**（下次开图重新按需隐形）
+  if smFitGhostShow and next(SMFIT.ghost or {}) ~= nil then pcall(smFitGhostShow, "关图") end
+  SMFIT.foldedThisMap = false -- 关图 = 本次访问结束 ⇒ 下次开图重新判「折完没有」
   local had, nBack, backOK = smFitRecCount(), 0, true
   if SMFIT.wrote == true then
     local ok, n, _miss, bad = pcall(smFitRestore, true) -- ① 先还回自然档（quiet：细节不进聊天框，下面一句话总说）
@@ -2671,8 +2857,11 @@ local function smFitDropOnClose(mk)
   SMFIT.capAge, SMFIT.capCalls, SMFIT.capSayN = 99, 0, 0
   -- ★1.75.5：**每次开图只报一次**的那几条标记一起归零（关图 = 本次开图的生命周期结束）
   SMFIT.saidLatch, SMFIT.saidFail, SMFIT.saidEmpty, SMFIT.saidFold = false, false, false, false
+  SMFIT.saidNat = false -- ★1.75.45b：同族（「非自然档不记原值」也只许每图说一次）
   -- ★窗口也要归零：关图时窗口可能还开着（那个块只在 `open` 时递减）⇒ 不归零的话下次开图会**少一段**自然档时间
   smFitHold = 0
+  SMFIT.natLeft = tonumber(SMFIT.natMax) or 3 -- ★1.75.45b：关图 = 本次访问结束 ⇒ 自然档窗口预算下次开图重新给满
+  SMFIT.holdAge = 0
   smFitSay("关图（%s）：按「关图即清空原值」删掉本图 %d 条原值、%d 个折过的几何已还回自然档 ⇒ **下次开图重新读一遍再缩放**",
     mk, had, nBack)
   return true
@@ -2868,7 +3057,7 @@ end
 --     ① 开图（`ShowUIPanel`；本项目纪律：开图绝不用 Toggle）→ ② 外框**置回自然档 1.00**、等 2 秒让版式稳定
 --     → ③ 读原值（**不翻转、不归一**，读到的就是原值）并逐条打印 → ④ 套缩放并打印（设置值/自身 GetScale/父链连乘）
 --     → ⑤ 折算并逐条打印（原值 → 写入）。★期间 `smFixActive` 让**整段自动逻辑让位**（否则会被抢写缩放）。
-local SM_FIX = { t = 0 }
+local SM_FIX = { t = 0, armMax = 3, armGap = 2.0 }  -- armGap：待命触发的**最小间隔**（同一次换图的身份抖动不许烧两次预算）
 local function smFixOut(s)
   local out = (type(EVAL_SAY_FORCE) == "function") and EVAL_SAY_FORCE or P
   pcall(out, "[简易地图] " .. tostring(s))
@@ -2937,7 +3126,7 @@ local function smFixDoCapture()
       if type(r) == "table" and smFitInUse(it.o) then
         smFixOut(string.format("第5步   %s 原值(%.1f,%.1f %.1f×%.1f) → 写入(%.1f,%.1f %.1f×%.1f)%s",
           tostring(it.key), r.x, r.y, r.w, r.h, r.x * es, r.y * es, r.w * es, r.h * es,
-          (SMFIT.wroteKeys[it.key] == mk) and " ★本次已写" or "（判为已对齐，未写）"))
+          (SMFIT.wroteRun and SMFIT.wroteRun[it.key]) and " ★本次已写" or "（判为已对齐，未写）"))
       end
     end
   else
@@ -2958,8 +3147,9 @@ local function smFixRunCapture()
   return okD
 end
 
--- ①②步 + 起计时：由 `/ehm fitnow`（别名 适配/修正）调用
-local function smFixNow()
+-- ①②步 + 起计时：由 `/ehm fitnow`（别名 适配/修正）调用，或由**待命模式**在地图开/换图时自动调用。
+--   ★`armed = true` 时地图已经开着（是 tick 触发的）⇒ 不重复开图、并在第一行点明是自动触发。
+local function smFixBegin(armed)
   if not EVAL_SM_ENABLED() then
     smFixOut("前置：**「缩放大地图」没开启** ⇒ 先在工具箱里勾上它，再跑本命令")
     return false
@@ -2967,7 +3157,8 @@ local function smFixNow()
   smFixActive = true
   SM_FIX.t = 0
   SM_FIX.done = false
-  smFixOut("第1步 前置：模块=开 ｜ 地图=" .. (featOpenNow() and "开" or "关") ..
+  smFixOut((armed and "【待命触发】" or "") .. "第1步 前置：模块=开 ｜ 地图=" .. (featOpenNow() and "开" or "关") ..
+    " ｜ 地图身份=" .. tostring(smMapKey() or SMFIT.mapKey or "?") ..
     " ｜ 当前 设置值 scale=" .. tostring(SM_CFG.scale) .. " alpha=" .. tostring(SM_CFG.alpha))
   if not featOpenNow() then
     local wm = _G["WorldMapFrame"]
@@ -2987,7 +3178,10 @@ local function smFixNow()
   end
   smFixOut("第2步 已把外框缩放置回**自然档 1.00**（读回自身 GetScale=" .. own .. "），等 2.0 秒让客户端版式稳定…")
   -- 计时帧**懒建**（本项目纪律：载入期零副作用；没有帧也照样把三步走完）
-  local par = _G["UIParent"] or _G["WorldFrame"]
+  -- ★★★1.75.45b：父级**必须优先 `WorldFrame`** —— 硬事实（照抄 `DataSearch.lua:2479-2488`，源头是 UnrealQuest
+  --   `Core/Driver.lua:467-482` 明文）：**开全屏地图时 `UIParent` 被隐藏 ⇒ 挂在它下面的帧收不到 OnUpdate**。
+  --   旧写法优先 `UIParent` ⇒ 「等 2 秒再读原值」这段计时**在地图开着时随时可能不跑**（本轮能跑通属侥幸）。
+  local par = _G["WorldFrame"] or _G["UIParent"]
   local f = _G["EH_SM_FITFIX"]
   if (not f) and type(CreateFrame) == "function" and par then
     f = CreateFrame("Frame", "EH_SM_FITFIX", par)
@@ -3081,18 +3275,84 @@ do
       --   ★必须在「抓原值窗口」块**之前**（否则本拍窗口会按还没清的旧记录判定成「已齐」而不开）。
       local closedNow = (not open) and SMFIT.open
       if closedNow and smFitOn() and smFitFreshOn() and smFitNeedFold() then pcall(smFitDropOnClose, SMFIT.mapKey) end
+      -- ★★★1.75.45（用户实测：「/ehm fitnow 这个命令无法跑. 地图开着无法进行 GUI 交互」）：
+      --   **待命模式** —— 命令在地图关着时敲好，之后**每次新开地图 / 换一张图**由本 tick 自动跑一遍手动适配
+      --   （置自然档 1.00 → 等 2s → 读原值 → 套缩放 → 折算，逐步打印且全部进取证环 ⇒ 事后 `/ehm mapfit trace` 可读）。
+      --   ★有界：一次待命最多跑 `SM_FIX.armMax`（默认 3）张图，跑完自动解除；`/ehm fitnow 取消` 随时解除。
+      --   ★必须排在「抓原值窗口」之前：`smFixBegin` 会把 `smFixActive` 置真，本函数下一拍开头就整段让位。
+      --   ★★★1.75.45b：再加一道**最小间隔**（`SM_FIX.armGap` = 2s）—— 真机 trace 里出现过**同一秒内两次完整五步**
+      --     （都在 DunMorogh）⇒ 待命预算被同一次换图的身份抖动烧掉两次，紧接着就「跑完上限自动解除」。
+      --     身份抖动时**不推进 `armKey`**，等它稳定下来再触发（不排队、不累计）。
+      local armNowT = (type(GetTime) == "function") and GetTime() or 0
+      if SM_FIX.arm and open and mkNow and SM_FIX.armKey ~= mkNow and not smFixActive
+        and (armNowT - (tonumber(SM_FIX.armAt) or -99)) >= (tonumber(SM_FIX.armGap) or 2.0) then
+        SM_FIX.armKey = mkNow
+        SM_FIX.armAt = armNowT
+        SM_FIX.armLeft = (tonumber(SM_FIX.armLeft) or 0) - 1
+        local okB, errB = pcall(smFixBegin, true)
+        if not okB then
+          -- ★出错也必须放掉让位标记，否则自动逻辑被永久让位（本项目「自己关死自己」的老坑）
+          smFixActive = false
+          smFixOut("【待命触发】**出错**（已放掉让位标记，自动逻辑继续）：" .. tostring(errB))
+        end
+        if (tonumber(SM_FIX.armLeft) or 0) <= 0 then
+          SM_FIX.arm, SM_FIX.armKey = false, nil
+          smFixOut("【待命结束】已跑完待命的图数上限 ⇒ 自动解除（要再来一次：`/ehm fitnow 待命`）")
+        else
+          smFixOut(string.format("【待命】还剩 %d 张图会自动跑（换图即触发；取消：`/ehm fitnow 取消`）",
+            tonumber(SM_FIX.armLeft) or 0))
+        end
+        -- ★★这一拍**整段让位**：否则下面的「每帧守缩放」会在同一拍把刚置的 1.00 又掰回 0.70
+        --   （`smFixActive` 只在**下一拍**开头才挡住自动逻辑）—— 手动过程必须从头到尾不让位失败。
+        return
+      end
+      -- ★★★1.75.45（用户要求）：「未适配完成的探索层先隐形」—— **兜底还原排在本函数所有早退之前**：
+      --   任何「不该再隐形」的情形（地图关了 / 叠加层适配关了 / 当前档不折算）都当场还回可见度。
+      --   ★这是「绝不永久隐形」的第一道保险（第二道 = 折算完成/兜底超时，第三道 = 关图/换图/关功能）。
+      if next(SMFIT.ghost or {}) ~= nil and ((not open) or (not smFitOn()) or (not smFitNeedFold())) then
+        pcall(smFitGhostShow, (not open) and "地图已关" or "当前档不折算")
+      end
+      -- ★★★1.75.45：已经隐形的那几层**逐帧廉价重申**（客户端自己会摆回 alpha）——只重申已记账的层，
+      --   不扫几何 ⇒ 每帧成本 = 每个隐形层一次 SetAlpha。有 `SMFIT_GHOST_SEC` 兜底 ⇒ 最多 1 秒。
+      if next(SMFIT.ghost or {}) ~= nil then pcall(smFitGhostKeep) end
       -- ★★★1.75.5（用户设计，采纳）：「**本图还没有原值 ⇒ 先不缩放**，在自然档读原值，抓完再缩放」。
       --   为什么这样最好：抓原值时**不用翻转外框**（翻转会惊动客户端 ⇒ 读不到）、也**不用做读回÷es 的归一**
       --   （外框还是 1.00 ⇒ 读回就是原值，不押注任何口径）。
       --   ★只在**真正需要**时开窗口（本图会话记录一条都没有）⇒ 有记录时零延迟、行为与原来完全一样；
       --   ★窗口**有界**（SMFIT_HOLD_SEC）：抓到立刻收（同一拍套缩放），到点没抓到也收（先缩放、稍后补抓）。
       --   ★★**必须排在下面那道「每帧守缩放」之前**（顺序即判据）：反了的话开窗那一拍会先被守缩放写一次。
+      --   ★★★1.75.45b（用户报障「换图后探索层缩放失效」的修法，用户选定「和初次打开一样地适配一遍」）：
+      --     **窗口期必须把外框真的按在自然档 1.00**，不能只是「不写 0.7」——
+      --     旧写法只挡写、不归位，而外框缩放是**跟着上一张图留下来的**（客户端自己把它重置回 1.0 之后我们又写回 0.7）；
+      --     于是第一段窗口超时收口时把 scale 套上、紧接着 tick 又开第二段窗口，**第二段就是在 0.7/0.5 上读的原值**
+      --     ⇒ `mapFitCapLog` 里那些 `归一÷0.70 / ÷0.50`（记录偏小 ⇒ 折算变空操作）=「换图后失效」的真凶。
+      --   ★纪律照抄 `DataSearch.lua:1746-1780`（任务插件切图能正确显示的全部原因）：**一变就做、不等稳定**
+      --     （它曾经有个 0.8s「稳定期闸门」，连续切图时每次都判「未稳定」⇒ 一次都不重绘，是那边「切图不更新」的主因）。
+      --     这里同理：换图即在 `smFitNewMap` 里把窗口状态与预算**重置**，旧身份的窗口直接作废、绝不排队。
+      --   ★窗口**有界且有预算**（`SMFIT.natMax` = 3 段/图）：续段只出现在「还没读齐」时，避免把地图永久按在满尺寸。
       if open then
         if (tonumber(smFitHold) or 0) > 0 then
           smFitHold = math.max(0, (tonumber(smFitHold) or 0) - dt)
+          SMFIT.holdAge = (tonumber(SMFIT.holdAge) or 0) + dt
           if SMFIT.captured then smFitHold = 0 end
+          if smFitHold > 0 then
+            -- ★窗口期**逐帧重申**自然档（本该是空操作：`featApplyScale` 自带同档不重写 ⇒ 不加写动作）
+            pcall(featApplyScale, 1)
+          elseif (not SMFIT.captured) and (tonumber(SMFIT.natLeft) or 0) > 0 and smFitOn() and smFitNeedFold() then
+            -- ★★续段：到点仍没读齐 ⇒ **不先套缩放、不重开一段**（旧写法的顺序是「套缩放 → 下一帧再开窗」，
+            --   于是第二段必然带着已套的缩放读原值）。续段 = 继续停在自然档，等客户端把本图叠加层摆出来。
+            SMFIT.natLeft = (tonumber(SMFIT.natLeft) or 0) - 1
+            smFitHold, SMFIT.holdAge = SMFIT_HOLD_SEC, 0
+            pcall(featApplyScale, 1)
+            mfLog("抓原值窗口**续段**：%s 到点仍没读齐（记录 %d 条）⇒ 继续停在自然档再等 %.1fs（本图还剩 %d 段预算）",
+              tostring(SMFIT.mapKey or "?"), smFitRecCount(), SMFIT_HOLD_SEC, tonumber(SMFIT.natLeft) or 0)
+          end
           if smFitHold == 0 then
             pcall(featApplyScale, tonumber(SM_CFG.scale) or 1)
+            -- ★★★1.75.45b：窗口一收口**当拍就折算**（`accFit` 顶满 ⇒ 这一拍的折算节拍立刻到点）。
+            --   为什么必须：本拍 `es` 是刚套上去的那一档（读在窗口块之后）⇒ 同一拍折算写进去的就是最终值；
+            --   不顶的话要等下一个节拍（0.1~0.3s），那段时间地图已经缩小、探索层还是没折的大矩形 = 一眼可见的错位。
+            accFit = 1e9
             -- ★1.75.5（用户要求「获取原值的地方打印出来」）：窗口收口改成**看得见**的一行（每图最多一次）
             --   ★★措辞必须与**实际读到的条数**挂钩：真机出过「0 条也报『已抓到原值』」⇒ 用户完全被误导
             --     （那次是因为客户端还没摆叠加层，而旧代码把空候选当成「已齐」落了闩）。
@@ -3111,12 +3371,30 @@ do
               smFitSayV("抓原值窗口结束：**还没读到原值**（记录 %d 条）⇒ 继续 1 秒一次补抓", nRecWin)
             end
           end
-        elseif smFitNeedFold() and (not SMFIT.captured) and next(SMFIT.rec or {}) == nil then
+        elseif smFitOn() and smFitNeedFold() and (not SMFIT.captured) and (tonumber(SMFIT.natLeft) or 0) > 0 then
+          -- ★条件不再要求「本图一条记录都没有」：`SMFIT.captured` 被「在用却没原值」的层推翻时（1.75.24 那条补抓路），
+          --   后来才出现的层**同样必须在自然档读**，否则又是记录偏小 ⇒ 那一层永远折不动。
           smFitHold = SMFIT_HOLD_SEC
+          SMFIT.holdAge = 0
+          SMFIT.natLeft = (tonumber(SMFIT.natLeft) or 0) - 1
+          -- ★★★就是这一句把「先不缩放」从**愿望**变成**事实**：旧写法只靠 `featApplyScale` 的 hold 判定挡写，
+          --   而外框在换图后本来就是上一张图的 0.7/0.5（客户端不会替我们复位）⇒ 读到的原值全被 ÷esC 搅过。
+          pcall(featApplyScale, 1)
+          -- ★★★1.75.45（用户要求）：「一开始就把**未适配完成**的探索层尽快尽早设成不可见」——
+          --   窗口开的那一拍**当场**把本图在用的层隐形（此刻本来就一条记录都没有 ⇒ 全是「未适配」）。
+          --   ★`es` 传 nil：这一拍只按「有没有原值记录」判，不做几何比对（窗口刚开、记录必然为空）。
+          --   ★★门 = `not SMFIT.foldedThisMap`：抓不到原值的图会**反复开窗**（窗口有界 2s + 1 秒重试），
+          --     不挡的话就是「隐形 → 兜底超时显示 → 又开窗隐形」= **一秒一闪**（本模块 harness 实测抓到）。
+          local nGhostHide = 0
+          if not SMFIT.foldedThisMap then
+            local okGH, nGH = pcall(smFitGhostHide, nil)
+            if okGH then nGhostHide = tonumber(nGH) or 0 end
+          end
           -- ★同上：开窗这一行是「本图还没原值 ⇒ 先不缩放」的唯一可见证据（每图一次）
           -- ★条件里带 `smFitNeedFold()`：**不折算的档**根本不会读原值 ⇒ 不许把地图按在自然档上白等 2 秒
-          smFitSayV("抓原值窗口开启：本图（%s）还没有原值 ⇒ **地图先停在自然档、暂不缩放**，最多 %.1fs 内读一次（读到立刻套缩放）",
-            tostring(SMFIT.mapKey or "?"), SMFIT_HOLD_SEC)
+          smFitSayV("抓原值窗口开启：本图（%s）还有层没有原值 ⇒ **已把外框按回自然档 1.00、暂不缩放**，最多 %.1fs 内读一次"
+            .. "（读到立刻套缩放；本图还剩 %d 段预算）；未适配的探索层已先隐形 %d 层（折算完成即恢复显示）",
+            tostring(SMFIT.mapKey or "?"), SMFIT_HOLD_SEC, tonumber(SMFIT.natLeft) or 0, nGhostHide)
         end
       end
       -- ★★★1.75.5：**每帧守住地图缩放**（顺序：排在「抓原值窗口」**之后** —— 窗口期本轮不写，`featApplyScale` 自己让位）。
@@ -3188,28 +3466,62 @@ do
         SMFIT.capAge = 99 -- 已落闩 ⇒ 下次换图时又立刻可抓
       else
         SMFIT.capAge = (tonumber(SMFIT.capAge) or 99) + dt
-        if SMFIT.mapAge >= SMFIT_SETTLE and SMFIT.capAge >= SMFIT_CAP_GAP then
+        -- ★★★1.75.45b：窗口开着时**必须等窗口稳下来再读** —— 窗口开启那一拍我们自己刚 `SetScale(1)`，
+        --   本客户端会重排/清锚点（1.75.5 的实测结论）⇒ 立刻读只会读到中间态或读不到。
+        --   `SMFIT.natSettle`（1.0s）＝ 与 `/ehm fitnow` 的「等满 2s」同一意图的有界版（窗口总长 2s，读齐即收）。
+        local settled = ((tonumber(smFitHold) or 0) <= 0) or ((tonumber(SMFIT.holdAge) or 0) >= (tonumber(SMFIT.natSettle) or 1.0))
+        if SMFIT.mapAge >= SMFIT_SETTLE and SMFIT.capAge >= SMFIT_CAP_GAP and settled then
           SMFIT.capAge = 0
           pcall(smFitCapture)
         end
       end
       local gap = ((tonumber(SMFIT.burst) or 0) > 0) and SMFIT_BURST_GAP or SMFIT_IDLE_GAP
-      if accFit < gap then return end
-      accFit = 0
-      -- ★★★1.75.24（用户报障「工具箱→大地图缩放：13、14 探索层未正确应用缩放」）：
-      --   smFitApply 的**第 3 个返回值**本来就等于「在用、却没有原值记录」的层数（它内部那一段一直在算），
-      --   旧写法**直接丢掉** ⇒ 落闩之后**没有任何一条路**会再抓原值：
-      --     · 落闩判据（smFitCapture）只看「本轮 todo」，而 todo **不含**「当时隐藏 / GetTexture()==nil
-      --       （贴图还没载入）」的层 ⇒ 已就绪的那批层一齐就落闩；
-      --     · 等 13/14 稍后显示出来/贴上贴图，它们**永远没有记录**，而折算只认有记录的层
-      --       ⇒ 那两层永远不会被折算（= 用户看到的现象：同一个 es、一部分折了一部分没折）。
-      --   ⇒ 现在：只要还有「在用却没原值」的层，就**推翻落闩**、交给上面那道**有界**重试门
-      --     （SMFIT_CAP_GAP = 1 秒一次 + SMFIT_SETTLE 版式稳定门）重抓，抓到即由 apply 折算。
-      --   ★口径不变：只对「当前显示且有贴图」的层动手（与抓原值/折算同一判定），绝不碰别的图的残留层。
-      local _chgFold, _rdyFold, nWaitFold = smFitApply(es, false) -- 成功了才播报（内部 3s 节流）
-      if (tonumber(nWaitFold) or 0) > 0 and SMFIT.captured then
-        SMFIT.captured = false
-        mfLog("补抓：本图有 %d 个在用层还没有原值 ⇒ 推翻落闩、重新开抓（1 秒一次，有界；抓到即折算）", tonumber(nWaitFold))
+      -- ★★★1.75.45（用户要求）：「未适配完成的探索层先隐形」—— 与折算**同一个节拍**扫一遍未适配的层
+      --   （含「有记录、但客户端刚重摆过 ⇒ 还没对齐」那种，例如切回一张看过的图）。
+      --   ★`SMFIT.foldedThisMap` = 本次访问已经折完（或兜底放弃）⇒ 不再隐形，避免反复隐形/显示。
+      local ranApply, nWaitFold = false, 0
+      if (not SMFIT.foldedThisMap) and next(SMFIT.ghost or {}) ~= nil then pcall(smFitGhostKeep) end
+      if (not SMFIT.foldedThisMap) and accFit >= gap then
+        pcall(smFitGhostHide, es) -- 按「没原值 或 还没对齐」隐形（读不到几何的不动）
+      end
+      if accFit >= gap then
+        accFit = 0
+        ranApply = true
+        -- ★★★1.75.24（用户报障「工具箱→大地图缩放：13、14 探索层未正确应用缩放」）：
+        --   smFitApply 的**第 3 个返回值**本来就等于「在用、却没有原值记录」的层数（它内部那一段一直在算），
+        --   旧写法**直接丢掉** ⇒ 落闩之后**没有任何一条路**会再抓原值：
+        --     · 落闩判据（smFitCapture）只看「本轮 todo」，而 todo **不含**「当时隐藏 / GetTexture()==nil
+        --       （贴图还没载入）」的层 ⇒ 已就绪的那批层一齐就落闩；
+        --     · 等 13/14 稍后显示出来/贴上贴图，它们**永远没有记录**，而折算只认有记录的层
+        --       ⇒ 那两层永远不会被折算（= 用户看到的现象：同一个 es、一部分折了一部分没折）。
+        --   ⇒ 现在：只要还有「在用却没原值」的层，就**推翻落闩**、交给上面那道**有界**重试门
+        --     （SMFIT_CAP_GAP = 1 秒一次 + SMFIT_SETTLE 版式稳定门）重抓，抓到即由 apply 折算。
+        --   ★口径不变：只对「当前显示且有贴图」的层动手（与抓原值/折算同一判定），绝不碰别的图的残留层。
+        local _chgFold, _rdyFold
+        _chgFold, _rdyFold, nWaitFold = smFitApply(es, false) -- 成功了才播报（内部 3s 节流）
+        if (tonumber(nWaitFold) or 0) > 0 and SMFIT.captured then
+          SMFIT.captured = false
+          -- ★★★1.75.45b：**给「后出现的层」再留一段自然档窗口预算** —— 否则第一段窗口把 3 段预算用光之后，
+          --   后来才显示/贴上贴图的层永远读不到原值（⇒ 永不折算 = 1.75.24 那个「13/14 层没折」复发）。
+          --   ★天然有界：只有真的出现「在用却没原值」的层才会走到这里，每次最多补一段窗口。
+          if (tonumber(SMFIT.natLeft) or 0) <= 0 then SMFIT.natLeft = 1 end
+          mfLog("补抓：本图有 %d 个在用层还没有原值 ⇒ 推翻落闩、重新开抓（1 秒一次，有界；抓到即折算；已补一段自然档窗口预算）", tonumber(nWaitFold))
+        end
+      end
+      -- ★★★1.75.45（用户要求）：「**等缩放完成之后再显示可见度**」—— 判定放在**本拍折算之后**：
+      --   ① 本拍真的折算过 + 本图已抓到原值 + **没有层在等原值** ⇒ 折完了 ⇒ 当场还回可见度；
+      --   ② 兜底：已经隐形超过 `SMFIT_GHOST_SEC` ⇒ 无论折没折完都还回去（**绝不永久隐形**），
+      --      并把本图这次访问标成「放弃隐形」（否则下一个折算节拍又把它藏起来 = 一闪一闪）。
+      if next(SMFIT.ghost or {}) ~= nil then
+        local gNow = (type(GetTime) == "function") and GetTime() or 0
+        local gAge = gNow - (tonumber(SMFIT.ghostAt) or gNow)
+        if ranApply and SMFIT.captured and (tonumber(nWaitFold) or 0) == 0 then
+          SMFIT.foldedThisMap = true
+          pcall(smFitGhostShow, "本图折算已完成")
+        elseif gAge > SMFIT_GHOST_SEC then
+          SMFIT.foldedThisMap = true
+          pcall(smFitGhostShow, string.format("兜底超时（隐形 %.2fs 仍未折算完）", gAge))
+        end
       end
     end)
   end
@@ -3474,6 +3786,17 @@ if type(SlashCmdList) == "table" then
         smFitDiag()
       end
       P("用法：/ehm mapfit on | off | restore | diag | dump（只读清单）| trace | traceclear | mode fold|auto|nofold | fresh on|off | verbose on|off（不给子命令 = diag）")
+      -- ★1.75.45：待命模式状态（把读值口挂到命令上 ⇒ 「活」的诊断口，不是孤儿）
+      P(string.format("待命模式（`/ehm fitnow 待命`）：%s%s ｜ 让位中=%s",
+        EVAL_SM_TEST_FIX_ARM() and "**开**" or "关",
+        EVAL_SM_TEST_FIX_ARM() and string.format("（还剩 %d 张图会自动跑）", EVAL_SM_TEST_FIX_ARM_LEFT()) or "",
+        EVAL_SM_TEST_FIX_ACTIVE() and "是（手动适配进行中）" or "否"))
+      -- ★★★1.75.45b：**自然档窗口**状态（「原值只在自然档读」这条修法的活口 —— 下次取证直接看这里）
+      P(string.format("自然档窗口：本图还剩 %d 段 ｜ 窗口剩余 %.1fs（已开 %.1fs）｜ 外框缩放=%s%s",
+        EVAL_SM_TEST_NAT_LEFT(), tonumber(smFitHold) or 0, tonumber(SMFIT.holdAge) or 0,
+        EVAL_SM_TEST_NAT_SCALE(),
+        (math.abs((tonumber(EVAL_SM_TEST_NAT_SCALE()) or 1) - 1) > 0.001 and (tonumber(smFitHold) or 0) <= 0)
+          and "　★注意：现在不是自然档 ⇒ 抓原值会被跳过（等换图/开图开窗口）" or ""))
     elseif msg == "reset" or msg == "复位" then
       featReset()
     elseif msg == "default" or msg == "默认" or msg == "默认档" then
@@ -3483,13 +3806,34 @@ if type(SlashCmdList) == "table" then
       P(string.format("默认档已套用：缩放 %.2f / 透明度 %.2f / GUI重开 %s", s, a, smReopenOn() and "开" or "关"))
       P(string.format("当前真值：alpha=%s scale=%s guiReopen=%s（面板/滚轮可再调）",
         tostring(SM_CFG.alpha), tostring(SM_CFG.scale), tostring(SM_CFG.guiReopen)))
-    elseif msg == "fitnow" or msg == "适配" or msg == "修正" then
-      -- ★★★1.75.5（用户指定「本办法」）：**手动适配全过程，逐步打印**
-      --   用户原话：「打开地图, 等待2s, 获取原值. 打印原值, 应用缩放. 打印缩放信息. 这样的调整过程.」
-      local okRun = smFixNow()
-      P("用法：/ehm fitnow（别名 /ehm 适配 · /ehm 修正）—— 缩放开启时按「开图 → 置 1.00 → 等 2s → 读原值 → 套缩放 → 折算」逐步打印；"
-        .. "若仍不对，把这一整段连同 /ehm mapfit dump 一起发我")
-      if not okRun then P("本次**没有开跑**：原因见上面那条（模块没开启）。") end
+    elseif msg == "fitnow" or msg == "适配" or msg == "修正"
+      or string.find(msg, "^fitnow%s") == 1 or string.find(msg, "^适配%s") == 1 or string.find(msg, "^修正%s") == 1 then
+      -- ★★★1.75.45（用户实测：「/ehm fitnow 这个命令无法跑. 地图开着无法进行 GUI 交互」）：
+      --   本客户端**开图时 UIParent 被隐藏** ⇒ 地图里既敲不了命令也点不了 GUI ⇒ 「在地图上跑 fitnow」这条路**不存在**。
+      --   ⇒ 新增**待命模式**：命令在地图**关着**时先敲，之后由 tick 在**每次新开/换图**时自动跑同一套五步（逐步打印，
+      --   全部进取证环 ⇒ 事后 `/ehm mapfit trace` 读得到，不需要在地图里看屏）。
+      local sub = string.lower(tostring(string.match(msg, "^%S+%s+(.*)$") or ""))
+      if sub == "待命" or sub == "自动" or sub == "auto" or sub == "arm" then
+        SM_FIX.arm, SM_FIX.armKey = true, nil
+        SM_FIX.armLeft = tonumber(SM_FIX.armMax) or 3
+        SM_FIX.armAt = 0 -- ★1.75.45b：重新待命 ⇒ 最小间隔从零起算（第一次换图必触发）
+        P(string.format("已进入**待命模式**：接下来**每次新开地图 / 换一张图**都会自动跑一遍"
+          .. "「置自然档 1.00 → 等 2s → 读原值 → 套缩放 → 折算」并逐步打印（最多 %d 张图；本命令请在地图**关着**时敲）。",
+          SM_FIX.armLeft))
+        P("　★地图里不需要任何操作（本客户端开图会隐藏 UIParent）；结果事后用 `/ehm mapfit trace` 看。取消：`/ehm fitnow 取消`")
+      elseif sub == "取消" or sub == "关" or sub == "off" or sub == "cancel" then
+        SM_FIX.arm, SM_FIX.armKey = false, nil
+        P("已取消待命模式（不再自动跑手动适配）")
+      else
+        -- ★★★1.75.5（用户指定「本办法」）：**手动适配全过程，逐步打印**
+        --   用户原话：「打开地图, 等待2s, 获取原值. 打印原值, 应用缩放. 打印缩放信息. 这样的调整过程.」
+        local okRun = smFixBegin(false)
+        P("用法：/ehm fitnow（别名 /ehm 适配 · /ehm 修正）—— 缩放开启时按「开图 → 置 1.00 → 等 2s → 读原值 → 套缩放 → 折算」逐步打印；"
+          .. "若仍不对，把这一整段连同 /ehm mapfit dump 一起发我")
+        P("　★地图开着时敲不了命令（本客户端开图隐藏 UIParent）⇒ 想「在地图上」跑，改用 `/ehm fitnow 待命`"
+          .. "（先在地图关着时敲，之后每次开图/换图自动跑；取消 `/ehm fitnow 取消`）")
+        if not okRun then P("本次**没有开跑**：原因见上面那条（模块没开启）。") end
+      end
     elseif msg == "fix" then
       -- ★手动补救+状态报告：正式版没生效时跑这个（报告侦测信号/黑幕显隐/配置值）
       P("fix：开图信号=" .. tostring(featOpenNow())
@@ -3615,6 +3959,13 @@ function EVAL_SM_MAPFIT_TIP()
   else
     m = m .. "｜探测：还没探过（开启时自动探一次）"
   end
+  -- ★1.75.45（用户要求）：「未适配完成的探索层先隐形，等缩放完成之后再显示」⇒ 悬停里说清（含**有界**承诺）
+  m = m .. "｜★未适配完成的探索层**先隐形**（alpha 归零、不动显隐），折算完成立刻恢复显示；"
+    .. "抓不到原值时最多 " .. string.format("%.1f", SMFIT_GHOST_SEC) .. " 秒兜底恢复 ⇒ 绝不永久隐藏"
+  -- ★★★1.75.45b（用户报障「换图后探索层缩放失效」的修法）：**原值只在自然档读**
+  m = m .. "｜★原值**只在自然档 1.00 读**（开图/换图时先把外框按回 1.00、每图最多 "
+    .. tostring(tonumber(SMFIT.natMax) or 3) .. " 段×" .. string.format("%.1f", SMFIT_HOLD_SEC)
+    .. "s 窗口；非自然档**一条都不记** —— 记了就会偏小、折算变成空操作）"
   return m
 end
 
@@ -3733,6 +4084,22 @@ end
 
 
 function EVAL_SM_TEST_MAPFIT_REC() local n = 0 for _ in pairs(SMFIT.rec or {}) do n = n + 1 end return n end
+-- ★1.75.45 **待命模式读值口**（`/ehm fitnow 待命`）：命令在地图关着时敲、tick 在开图/换图时自动跑一遍手动适配。
+--   ★它们是**生产诊断口**（真机取证 + 离线 harness 都走它们），不是「为测试而生」的孤儿口。
+function EVAL_SM_TEST_FIX_ACTIVE() return smFixActive == true end
+function EVAL_SM_TEST_FIX_ARM() return SM_FIX.arm == true end
+function EVAL_SM_TEST_FIX_ARM_LEFT() return tonumber(SM_FIX.armLeft) or 0 end
+-- ★★★1.75.45b **自然档窗口读值口**（用户报障「换图后探索层缩放失效」那条修法的活口）：
+--   `_LEFT` = 本图还剩几段窗口预算；`_SCALE` = 外框当前真有效缩放（字符串，便于直接上屏）。
+--   ★同样是**生产诊断口**：`/ehm mapfit` 状态行与离线 harness 都读它们。
+function EVAL_SM_TEST_NAT_LEFT() return tonumber(SMFIT.natLeft) or 0 end
+function EVAL_SM_TEST_NAT_SCALE()
+  local fr = _G["WorldMapDetailFrame"]
+  if not (type(fr) == "table" or type(fr) == "userdata") then return "?" end
+  local e = smEffScale(fr)
+  if tonumber(e) and tonumber(e) > 0 then return string.format("%.3f", tonumber(e)) end
+  return "?"
+end
 -- ★1.75.5：**种一条记录**进会话内存（= 旧的「存档里种脏记录」的等价物）——
 --   组 253⑤b 用它验「**有记录也不写**本图不用的层」：唯一用途是测试，不进任何生产路径。
 function EVAL_SM_TEST_MAPFIT_PLANT(name, x, y, w, h)

@@ -16,6 +16,14 @@
 --       `CURRENTLY_EQUIPPED`（客户端本地化串）再重画。
 --     · ★本模块**只读**玩家那个 GameTooltip 的**几何与首行文本**（不调它的任何 Set* 方法）
 --       ⇒ 不会破坏玩家自己的提示（CLAUDE.md：借别人的 UI 对象去 *写* = 静默破坏界面）。
+--     · ★★★**换填对比框之前必须把左右两栏 FontString 全抹一遍**（`ecTipWipe`）：本客户端换填时
+--       **只写它自己那几行**的 FontString —— 上一件（比如武器）留在**右栏**的「速度 2.70」既冲不掉、
+--       `ClearLines` 也收不走 ⇒ ① 读回时被并进护甲那一行、② 或留在框里继续显示
+--       （用户报障：「装备上而不是武器信息,里面的速度是哪来的?」）。
+--       取证 = `/eh go 装备比较 行摊开`（把两边气泡的每一行连左右栏一起摊开，鼠标先停在物品上）。
+--     · ★★★**汇总「只在一侧出现」的判据 = 对比框那一趟读到的全部键**（含**同值**行 ⇒ `cmpKey`）：
+--       只把「有变化的键」标成见过 ⇒ 「护甲 144 对 144」这种同值属性会在第二趟被当成单侧属性、
+--       补一条 `悬停 − 0` = 假差值「护甲 +144」（用户报障「护甲计算不对」）。
 --
 -- ★★★悬停识别为什么不用「替换 GameTooltip 的方法」：1.75.43 物品价三轮真机取证定稿 ——
 --   **在本客户端替换 GameTooltip 的方法无效**（行为判据：一次都没跑到包装）。
@@ -122,9 +130,13 @@ local function sayF(s)
 end
 
 -- 总开关真值（工具箱那一行的勾选框读写的就是它）
+-- ★★★**默认开**（用户 1.75.45 定：「装备比较默认开启.」）⇒ 键为 nil 时**当场物化 true**（同 tools/TargetBar.lua 的写法）；
+--   用户显式关过（false）永远是关 —— 读的时候绝不用 `or true` 顶回用户的选择。
 function EVAL_EC_ENABLED()
   local tb = ecTb()
-  return (type(tb) == "table" and tb.equipCompare == true) or false
+  if type(tb) ~= "table" then return false end
+  if tb.equipCompare == nil then tb.equipCompare = true end
+  return tb.equipCompare == true
 end
 
 function EVAL_EC_SET(v)
@@ -507,6 +519,23 @@ local function ecReadLines(name)
   return lines
 end
 
+-- ★★★换填对比框之前 / 读回之后，把**左右两侧**的 FontString 全部抹空（1..EC_MAX_LINES）。
+--   真机形态（用户报障「装备上而不是武器信息,里面的速度是哪来的?」）：客户端换填时**只写它自己那几行**
+--   的 FontString，上一件（比如武器）写在**右栏**的「速度 2.70」既不会被冲掉、`ClearLines` 也收不走
+--   ⇒ ① 读回时会被并进护甲那一行（框里冒出一条别的物品的字段）、② 或者留在框里继续显示。两处都靠这一遍抹平。
+--   ★左栏一起抹：行数之外还留着上一次的旧文本（本来就靠 NumLines 限制），抹了更干净。
+--   ★只抹**我们自建的对比框**，一个字节都不碰客户端自己的气泡。
+local function ecTipWipe(name)
+  local row = 1
+  while row <= EC_MAX_LINES do
+    local l = rawget(_G, name .. "TextLeft" .. row)
+    if l and type(l.SetText) == "function" then pcall(l.SetText, l, "") end
+    local r = rawget(_G, name .. "TextRight" .. row)
+    if r and type(r.SetText) == "function" then pcall(r.SetText, r, "") end
+    row = row + 1
+  end
+end
+
 -- ===== 对比染色：把一行拆成「标签键 + 数值」 =====
 -- 标签键 = 行内**所有数字都换成 #** 后的文本（归一空白）⇒ 两侧同名行天然对上，**不需要维护属性词表**
 --   （「428点护甲」与「328点护甲」都归一成「#点护甲」；「+2 力量」与「+3 力量」都归一成「+# 力量」）。
@@ -585,6 +614,8 @@ local function ecSkipKey(key)
 end
 
 -- 汇总行用的标签：把归一里的 `#` 去掉、收拾空格与落单的符号（`+# 力量` → `力量` · `耐久度 # / #` → `耐久度`）
+--   ★★还要剥掉**量词**：本客户端护甲行是 `144点护甲` ⇒ 去数字后剩 `点护甲`；汇总里要写 **`护甲`**
+--   （用户明确：「护甲的描述就是护甲,而不是点护甲」）。只剥**开头**的量词，剥完为空就不剥（保险）。
 local function ecLabelOf(key)
   local s = tostring(key or "")
   s = string.gsub(s, "#", "")
@@ -594,6 +625,8 @@ local function ecLabelOf(key)
   s = string.gsub(s, "^%s+", "")
   s = string.gsub(s, "^[%+%-]%s*", "")
   s = string.gsub(s, "%s+$", "")
+  local bare = string.gsub(s, "^点%s*", "")     -- 量词「点」（144**点**护甲 / 12**点**格挡…）
+  if bare ~= "" then s = bare end
   if s == "" then return "?" end
   return s
 end
@@ -623,15 +656,18 @@ local function ecFill(idx, slotId, host, hostIdx, nameR, nameG, nameB)
   if type(tip.SetInventoryItem) ~= "function" then EC.why = "no SetInventoryItem" return false end
   local okOwn = pcall(tip.SetOwner, tip, UIParent, "ANCHOR_NONE")
   if not okOwn then EC.why = "SetOwner failed" return false end
+  local name = EC_TIP_NAME .. tostring(idx)
+  -- ★★换填**之前**先抹掉左右两栏（ClearLines 收不走上一件的右栏字段 —— 见 ecTipWipe 的注释）
+  ecTipWipe(name)
   if type(tip.ClearLines) == "function" then pcall(tip.ClearLines, tip) end
   local okSet = pcall(tip.SetInventoryItem, tip, "player", slotId)
   if not okSet then EC.why = "SetInventoryItem failed" return false end
-  local name = EC_TIP_NAME .. tostring(idx)
   local lines = ecReadLines(name)
   if table.getn(lines) == 0 then EC.why = "empty compare lines" return false end
+  ecTipWipe(name)
   if type(tip.ClearLines) == "function" then pcall(tip.ClearLines, tip) end
   pcall(tip.AddLine, tip, tostring(ecHeading()), 1, 0.82, 0.30)
-  local colored, deltas = 0, {}
+  local colored, deltas, keys = 0, {}, {}
   local i = 1
   while i <= table.getn(lines) do
     local ln = lines[i]
@@ -648,6 +684,10 @@ local function ecFill(idx, slotId, host, hostIdx, nameR, nameG, nameB)
       if key and v then
         -- ★记进「已装备那件」的键→数值：左侧气泡（未装备那件）染色要拿它当参照系
         if EC.wornIdx then EC.wornIdx[key] = v end
+        -- ★★★**凡是「两边都读过」的键都要交出去**（不是只交有变化的那些）：
+        --   漏了它 ⇒「两侧数值相同」的属性会在第二趟被当成「只在一侧出现」再补一条 `悬停 − 0`
+        --   —— 用户报障「护甲计算不对」的真凶：护甲 144 对 144，汇总却写着「护甲 +144」。
+        keys[table.getn(keys) + 1] = key
         -- ★只在一侧出现的属性也要能比：悬停件没有这一行 ⇒ 按 0 算（换装后就丢了这一项）
         local vRef = hostIdx[key]
         if vRef == nil then vRef = 0 end
@@ -668,7 +708,8 @@ local function ecFill(idx, slotId, host, hostIdx, nameR, nameG, nameB)
   end
   EC.colored = colored
   -- ★汇总**不写在这个框里**（用户要求改到左侧「未装备」那栏下面）⇒ 只把差值交出去
-  return true, deltas
+  --   第 3 个返回 = **两边比过的全部键**（给 ecShow 标「见过」，防同值属性被当成单侧属性）
+  return true, deltas, keys
 end
 
 -- ★★★汇总段 = **直接追加进客户端那个气泡**（用户：「不是独立的框.而是合并到未装备信息栏内」）。
@@ -842,7 +883,7 @@ local function ecShow(host, id)
   local hostIdx, hostOrder = ecHostIndex(host)
   EC.wornIdx, EC.hostOwn = {}, nil      -- 本拍的「已装备键→数值」与「气泡自己行数」都重新抓
 
-  local shown, firstSlot, all, seenKey = {}, nil, {}, {}
+  local shown, firstSlot, all, seenKey, cmpKey = {}, nil, {}, {}, {}
   local i = 1
   while i <= table.getn(names) do
     local slotId = ecSlotIDByName(names[i])
@@ -855,7 +896,7 @@ local function ecShow(host, id)
       if okL and type(wornLink) == "string" and wornLink ~= "" and not same then
         -- ★名字行的品质色**现算**（读回色不可信，用户报「稀有度标题没染色」）
         local qr, qg, qb = ecQualityRGB(wornID)
-        local okF, dl = ecFill(table.getn(shown) + 1, slotId, host, hostIdx, qr, qg, qb)
+        local okF, dl, ks = ecFill(table.getn(shown) + 1, slotId, host, hostIdx, qr, qg, qb)
         if okF then
           table.insert(shown, EC.tips[table.getn(shown) + 1])
           if not firstSlot then firstSlot = names[i] end
@@ -869,6 +910,14 @@ local function ecShow(host, id)
             end
             j = j + 1
           end
+          -- ★★★再把「**两边都比过**的键」全部标成见过 —— **不只是有变化的那些**
+          --   （只标有变化的 ⇒「两侧数值相同」的属性（护甲 144 对 144）会在下面第二趟被当成
+          --    「只在一侧出现」再补一条 `悬停 − 0` = 「护甲 +144」；用户报障「护甲计算不对」即此）
+          local m = 1
+          while m <= table.getn(ks) do
+            if ks[m] then cmpKey[ks[m]] = true end
+            m = m + 1
+          end
         end
       end
     end
@@ -877,10 +926,11 @@ local function ecShow(host, id)
 
   -- ★★只出现在**悬停那件**上的属性（当前装备这一栏里根本没有这一行）：差 = 悬停值 − 0
   --   —— 用户报「有些属性丢失比较，没显示耐力的差值」就是这一支（+3 耐力在对面，这边整行都不存在）。
+  --   ★★前提 = **对比框里一次都没读到过这个键**（`cmpKey` 由上面那一趟**全量**标记：同值行也算「见过」）。
   local j2 = 1
   while j2 <= table.getn(hostOrder) do
     local it = hostOrder[j2]
-    if it and it.key and not seenKey[it.key] and not ecSkipKey(it.key) and it.v and it.v ~= 0 then
+    if it and it.key and not cmpKey[it.key] and not ecSkipKey(it.key) and it.v and it.v ~= 0 then
       seenKey[it.key] = true
       all[table.getn(all) + 1] = { key = it.key, d = it.v }
     end
@@ -1072,6 +1122,83 @@ local function ecFrameApiLine()
   return "对比框：" .. table.concat(out, " · ")
 end
 
+-- ★★取证：把一个提示帧的**每一行原样摊开**（左栏 + 右栏 + 是否越界）——
+--   专治「框里冒出一条不属于这件物品的字段」这类报障（例如护甲框里出现「速度 2.70」）：
+--   一眼能看出那条是**读回来的**（在我们 AddLine 的行里）还是**客户端/别人的帧**画的。
+--   ★行数之外（row > NumLines）也照扫：本项目的定案 —— 行数之外还留着上一次的旧文本。
+local function ecDumpLines(title, name)
+  if type(name) ~= "string" or name == "" then
+    sayF(title .. "：拿不到帧名")
+    return
+  end
+  local tip = rawget(_G, name)
+  if not tip then
+    sayF(title .. "（" .. name .. "）：不存在")
+    return
+  end
+  local n = 0
+  local okN, nn = pcall(tip.NumLines, tip)
+  if okN and type(nn) == "number" then n = nn end
+  local shown = "?"
+  if type(tip.IsShown) == "function" then
+    local okS, s = pcall(tip.IsShown, tip)
+    if okS then shown = tostring(s) end
+  end
+  sayF(title .. "（" .. name .. "）：NumLines=" .. tostring(n) .. " · IsShown=" .. shown)
+  local row, any = 1, false
+  while row <= EC_MAX_LINES do
+    local l = rawget(_G, name .. "TextLeft" .. row)
+    local r = rawget(_G, name .. "TextRight" .. row)
+    local lt, rt = "", ""
+    if l and type(l.GetText) == "function" then
+      local ok, t = pcall(l.GetText, l)
+      if ok and type(t) == "string" then lt = t end
+    end
+    if r and type(r.GetText) == "function" then
+      local ok, t = pcall(r.GetText, r)
+      if ok and type(t) == "string" then rt = t end
+    end
+    if lt ~= "" or rt ~= "" then
+      any = true
+      sayF("  " .. tostring(row) .. (row > n and "★越界" or "") .. " 左[" .. lt .. "] 右[" .. rt .. "]")
+    end
+    row = row + 1
+  end
+  if not any then sayF("  （这个帧一行文本都没有）") end
+end
+
+-- 顺手列出**屏上还有哪些提示帧**（自建对比框之外的：客户端自带的对照气泡 / 别的插件的提示）——
+--   ★索引守卫：只收 `GetObjectType()=="Frame"` 的对象（不可索引的 userdata 会抛错并打断整个探针）。
+local function ecDumpOtherTips()
+  local n = 0
+  local okAll = pcall(function()
+    for k, v in pairs(_G) do
+      if n < 12 and type(k) == "string" and type(v) == "table" and type(v.GetObjectType) == "function"
+        and string.find(k, "Tooltip", 1, true) and not string.find(k, EC_TIP_NAME, 1, true) then
+        local okO, ot = pcall(v.GetObjectType, v)
+        if okO and ot == "Frame" then
+          local okS, sh = pcall(v.IsShown, v)
+          if okS and sh then
+            local cnt = 0
+            local okC, c = pcall(v.NumLines, v)
+            if okC and type(c) == "number" then cnt = c end
+            local first = ""
+            local fs = rawget(_G, k .. "TextLeft1")
+            if fs and type(fs.GetText) == "function" then
+              local okT, t = pcall(fs.GetText, fs)
+              if okT and type(t) == "string" then first = t end
+            end
+            n = n + 1
+            sayF("  屏上提示帧：" .. k .. " · 行=" .. tostring(cnt) .. " · 首行[" .. first .. "]")
+          end
+        end
+      end
+    end
+  end)
+  if not okAll then sayF("  （全局扫描中断：有对象不可索引 ⇒ 已跳过）") end
+  if n == 0 then sayF("  （没有别的提示帧在显示）") end
+end
+
 local function ecStatusLine()
   return L("EC_STATE",
     EVAL_EC_ENABLED() and L("EC_ON") or L("EC_OFF"),
@@ -1091,6 +1218,21 @@ function EVAL_EC_CMD(msg)
   if string.find(m, "关", 1, true) then
     EVAL_EC_SET(false)
     sayF(L("EC_OFF"))
+    return true
+  end
+  if string.find(m, "dump", 1, true) or string.find(m, "行", 1, true) then
+    -- 取证：把两边气泡的每一行原样摊开（先**把鼠标停在物品上**，气泡还在屏上时敲命令）
+    sayF("— 装备比较 · 行摊开 —")
+    local host = ecTipShown()
+    if host and type(host.GetName) == "function" then
+      local okN, nm = pcall(host.GetName, host)
+      ecDumpLines("主气泡（悬停那件）", (okN and type(nm) == "string") and nm or "")
+    else
+      sayF("主气泡：现在没有显示中的提示（先把鼠标停在物品上，再敲这条命令）")
+    end
+    ecDumpLines("对比框1（当前装备）", EC_TIP_NAME .. "1")
+    ecDumpLines("对比框2（当前装备）", EC_TIP_NAME .. "2")
+    ecDumpOtherTips()
     return true
   end
   if string.find(m, "测", 1, true) then
