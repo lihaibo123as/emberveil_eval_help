@@ -1121,7 +1121,11 @@ local function dfApplyAll(quiet)
       checked = checked + 1
       if tgt.block == true then
         -- ★1.75.36l 方块目标：一次写全「方块位置 + 目标锚到方块上」（零位移迁移就在这里面）
-        if dfBlockDrift(tgt) then
+        -- ★★1.75.47：迁移基准（axAuto）的目标**不进应用** —— 它的位置就是客户端版式本身，
+        --   客户端挪了它 ≠ 漂移（拉回了才是破坏版式）；用户真拖过/显式设过（axAuto 已清）的才守。
+        --   ★顺序即判据：dfBlockDrift **先跑**（它顺带做零位移迁移并**当场标 axAuto**），
+        --     再读 axAuto 决定是否接管 —— 否则迁移那一拍 axAuto 还没标上，纯迁移层会被误接管。
+        if dfBlockDrift(tgt) and rec.axAuto ~= true then
           if dfBlockApply(tgt) then fixed = fixed + 1 end
         end
       elseif type(rec.base) == "table" and (rec.dx or rec.dy) then
@@ -1178,8 +1182,16 @@ local function dfApplyOne(tgt, posOnly)
   local atPos = nil
   -- ★★★1.75.36l 方块目标（用户定稿）：位置 = 方块的**绝对坐标**（目标被接管锚点、挂在方块上）
   if tgt.block == true then
-    if dfBlockDrift(tgt) then dfBlockApply(tgt) end
-    atPos = (not dfBlockDrift(tgt)) and true or false
+    -- ★★1.75.47：迁移基准（axAuto）= 没有位置工作（客户端版式它自己说了算）⇒ 不应用、atPos 也记 nil。
+    --   ★顺序即判据：dfBlockDrift **先跑**（顺带迁移 + 当场标 axAuto），再读 axAuto ——
+    --     否则迁移那一拍 axAuto 还没标上，纯迁移层会被误接管。
+    local driftB = dfBlockDrift(tgt)
+    if rec.axAuto == true then
+      atPos = nil
+    else
+      if driftB then dfBlockApply(tgt) end
+      atPos = (not dfBlockDrift(tgt)) and true or false
+    end
   elseif type(rec.base) == "table" and (rec.dx or rec.dy) then
     local bcap = rec.cur or rec.base -- ★应用用当前基准
     if not dfIsAt(fr, bcap, rec.dx, rec.dy) then dfPlaceFrom(fr, bcap, rec.dx, rec.dy) end
@@ -1218,6 +1230,58 @@ local function dfTgtOfName(name)
 end
 
 -- 该不该对这个目标做「打开即重设」：主开关 + 勾选 + 帧在位 + 当前是显示的
+-- ============ ★★★1.75.47 ghost：开窗/重设的「弹跳遮蔽」 ============
+-- 用户原话：「图层拖拽完成后的属性设置会被游戏内置的机制重置回初始位置…能否强制设置隐藏或者透明度 0，
+--   等属性设置成功之后再显示正确的透明度？这样…弹跳位置，视觉上不太好」。
+-- 机制（与 SimpleMap 的 SMFIT_GHOST 同族，已验证的模式）：
+--   ① 客户端开窗/出现时会先把窗口摆回**它的**原位，我们的重设（OnShow 链 / C 复查）再把它拉回自定义位置
+--     ⇒ 用户看到「跳一下」。**先 alpha 归零遮蔽 → 应用 → 量回自证就位 → 恢复正确透明度**（rec.alpha 或 1），
+--     多数情况同一帧内完成 ⇒ 弹跳根本看不见；
+--   ② **alpha 归零，绝不 Hide()** —— IsShown 是「显示中」判据的信号源（藏了会把自己判死，SimpleMap 判据 ①）；
+--   ③ 恢复值 = **记录里的自定义透明度**（没有则 1），不是固定 1.0；
+--   ④ 结构性兜底：复查窗口到点 / 摘链 / 关功能 ⇒ **无条件恢复**（绝不永久隐形）；
+--   ⑤ 只遮「有位置工作」的层：axAuto 迁移基准不算（本来就在原位，没有弹跳可遮）。
+DF.ghostOn = function(fr, rec)
+  if (type(fr) ~= "table" and type(fr) ~= "userdata") or type(fr.SetAlpha) ~= "function" then return end
+  DF.ghost = DF.ghost or {}
+  if DF.ghost[fr] == nil then -- 已在遮蔽中不重复记（防把 0 记成恢复值）
+    DF.ghost[fr] = (type(rec) == "table" and type(rec.alpha) == "number") and rec.alpha or 1
+  end
+  pcall(fr.SetAlpha, fr, 0)
+end
+DF.ghostOff = function(fr)
+  local G = DF.ghost
+  if type(G) ~= "table" or G[fr] == nil then return end
+  local a = G[fr]
+  if type(fr.SetAlpha) == "function" then pcall(fr.SetAlpha, fr, a) end
+  G[fr] = nil
+end
+DF.ghostOffAll = function()
+  local G = DF.ghost
+  if type(G) ~= "table" then return end
+  for fr in pairs(G) do
+    if type(fr.SetAlpha) == "function" then pcall(fr.SetAlpha, fr, G[fr]) end
+    G[fr] = nil
+  end
+end
+-- 「有位置工作要遮」= 有用户自定义的位置记录（迁移基准 axAuto 不算：它本来就贴在原位，没有弹跳）
+DF.ghostHasWork = function(tgt, rec)
+  if type(rec) ~= "table" then return false end
+  if type(tgt) == "table" and tgt.block == true then
+    return (rec.ax ~= nil or rec.ay ~= nil) and rec.axAuto ~= true
+  end
+  return type(rec.base) == "table" and (rec.dx ~= nil or rec.dy ~= nil)
+end
+-- 量回自证：位置已经就位（与守卫同一套判据；方块目标判 dfBlockDrift 的反面）
+DF.ghostSettled = function(tgt, fr, rec)
+  if type(rec) ~= "table" then return true end
+  if type(tgt) == "table" and tgt.block == true then return not dfBlockDrift(tgt) end
+  if type(rec.base) == "table" and (rec.dx ~= nil or rec.dy ~= nil) then
+    return dfIsAt(fr, rec.cur or rec.base, rec.dx, rec.dy) and true or false
+  end
+  return true
+end
+
 local function dfOpenDue(tgt)
   if not DF.on then return false end                 -- 主开关关着 → 什么都不做
   if not dfPicked(tgt.name) then return false end    -- 未勾选的层不在管理范围
@@ -1267,6 +1331,8 @@ local function dfOpenCheckStep()
             fixed = fixed + 1
             W.fixed = dfNum(W.fixed, 0) + 1
           end
+          -- ★1.75.47 ghost 量回：位置已就位 ⇒ 恢复透明度（没就位继续遮蔽，交给下一拍；窗口到点有兜底）
+          if DF.ghost and DF.ghost[fr] ~= nil and DF.ghostSettled(tgt, fr, rec) then DF.ghostOff(fr) end
         end
       end
     end
@@ -1281,6 +1347,7 @@ local function dfOpenStop(why)
   if not W then return false end
   W.on = false
   W.why = tostring(why or "?")
+  DF.ghostOffAll()  -- ★1.75.47 结构性兜底：复查窗口到点/出错/完成 ⇒ 遮蔽一律无条件恢复（绝不永久隐形）
   -- ★★必须**摘脚本**：隐藏帧的 OnUpdate 照样触发 ⇒ 只 Hide 会永远空转
   if W.frame and type(W.frame.SetScript) == "function" then
     pcall(W.frame.SetScript, W.frame, "OnUpdate", nil)
@@ -1348,8 +1415,18 @@ local function dfOnShowBoss(self)
   if not ok then return end
   if DF.dragging or dfInCombat() then
     DF.onShowSkips = dfNum(DF.onShowSkips, 0) + 1    -- 拖拽中/战斗中不抢：如实记「跳过了」
-  elseif dfApplyOne(tgt) then
-    DF.onShowFixed = dfNum(DF.onShowFixed, 0) + 1
+  else
+    -- ★1.75.47 ghost：客户端开窗把窗口摆回它的原位 → 我们拉回 ⇒ 视觉上「跳一下」。
+    --   有位置工作的先 alpha 归零遮蔽，应用后量回、就位即恢复（多数同一帧内完成，弹跳看不见）；
+    --   没就位交给 C 复查窗口（到点无条件恢复 = 兜底）。
+    local storeS = dfStore(false)
+    local recS = (type(storeS) == "table") and storeS[tgt.name] or nil
+    local frS = dfTargetFrame(tgt)
+    if frS and DF.ghostHasWork(tgt, recS) then DF.ghostOn(frS, recS) end
+    if dfApplyOne(tgt) then
+      DF.onShowFixed = dfNum(DF.onShowFixed, 0) + 1
+    end
+    if frS and DF.ghost and DF.ghost[frS] ~= nil and DF.ghostSettled(tgt, frS, recS) then DF.ghostOff(frS) end
   end
   dfOpenArm(tgt)   -- ★C：开窗后这一两秒再盯几眼（客户端可能过后才把自己的尺寸摆好）
 end
@@ -1388,6 +1465,7 @@ local function dfOpenHookRemove(fr)
   -- ★不管现在挂的是谁的脚本，我们自己的记账都要清干净（否则下次会拿它当「原生脚本」链错人）
   DF.onShowTgt[fr] = nil
   if DF.onShowOrig then DF.onShowOrig[fr] = nil end
+  DF.ghostOff(fr)   -- ★1.75.47 摘链时若还在遮蔽 ⇒ 恢复该帧透明度（兜底的一支）
   return true
 end
 
@@ -2013,35 +2091,10 @@ local function dfPopBuild()
     local vY = pick("y")
     if type(vX) ~= "number" then vX = nil end
     if type(vY) ~= "number" then vY = nil end
-    -- ★★★1.75.36b 用户要求（**聊天窗特殊处理**）：「本身聊天窗自身是支持拖拽调整大小的…然后图层拖拽
-    --   完成之后属性配置自动读取当前的尺寸宽高、坐标 xy，进行保存」
-    --   ⇒ 聊天窗（**唯一判据 `dfSizeOK`**）多一条：用户**没显式选**的项，保存时按**当前实测值**入库；
-    --     显式选过的项仍然以用户选的为准（实测值不覆盖人的选择）。其它目标的行为**一字不变**。
-    --   为什么只给聊天窗：它的位置与尺寸**客户端自己也会记**（自带拖动 / 拖角缩放）⇒ 只认旧记录就会在
-    --   启动期把用户刚摆好的样子「挤回原位」（真机播报原文就是这句）。
-    local isChat = (type(name) == "string") and dfSizeOK(name)
-    if isChat then
-      if not vX or not vY then
-        -- ★1.75.36n：聊天框进了方块方案 ⇒ X/Y 的口径 = **中心**（方块 ax/ay），不再是左下
-        local tgtRowC = dfTgtOfName(name)
-        local isBlockC = (type(tgtRowC) == "table") and (tgtRowC.block == true)
-        local lNow0, bNow0, wNow0, hNow0 = dfMeasure(tgt)
-        if type(lNow0) == "number" and type(bNow0) == "number" then
-          if isBlockC then
-            if not vX then vX = lNow0 + dfNum(wNow0, 0) / 2 end
-            if not vY then vY = bNow0 + dfNum(hNow0, 0) / 2 end
-          else
-            if not vX then vX = lNow0 end
-            if not vY then vY = bNow0 end
-          end
-        end
-      end
-      if not vW or not vH then
-        local _, _, _, lw0, lh0 = dfReadAttrs(tgt)
-        if not vW and type(lw0) == "number" then vW = lw0 end
-        if not vH and type(lh0) == "number" then vH = lh0 end
-      end
-    end
+    -- ★★★1.75.47 用户拍板**废掉「按现状入库」**（原 1.75.36b 聊天窗特殊处理：未选项按当前实测值入库）——
+    --   它是「没设过自定义属性的层也进更新操作」的污染源：弹窗保存一次 ⇒ 坐标/宽高全入库 ⇒ 守卫候选全中。
+    --   现在聊天窗与其它目标**同一口径：只写用户显式选择的项**；
+    --   客户端自带拖拽摆出的位置由守卫按存档坐标拉回（位置唯一来源 = 我们的存档 / 方块拖动 / 弹窗显式 X/Y）。
     dfPopHide()
     if not tgt then return end
     if dfInCombat() then say("框拖拽：战斗中不改属性（客户端保护）") return end
@@ -2073,6 +2126,7 @@ local function dfPopBuild()
       local nby = vY or curAY
       if type(nbx) == "number" and type(nby) == "number" then
         recXYB.ax, recXYB.ay = nbx, nby
+        recXYB.axAuto = nil -- ★1.75.47：用户显式设的 X/Y = 自定义位置（清掉迁移标记）
         local okb = dfBlockApply(tgtRowXY)
         -- ★1.75.36n：ax/ay 的口径 = 目标**中心** ⇒ 读回自证也比中心（不再比左上角）
         local lNowB, bNowB, wNowB, hNowB = dfMeasure(tgt)
@@ -2147,8 +2201,6 @@ local function dfPopBuild()
       if vW and okw then table.insert(done, string.format("宽 %.0f", vW)) end
       if vH and okh then table.insert(done, string.format("高 %.0f", vH)) end
     end
-    -- ★聊天窗：如实说明「没选的那几项是按当前实测值存的」（不静默 —— 否则用户以为只改了显隐）
-    if isChat then table.insert(done, "聊天窗：未选项按当前实测的 坐标/宽高 入库") end
 
     -- 写新存档（★只写用户真的选了的项）
     local store = dfStore(true)
@@ -2494,6 +2546,7 @@ local function dfDragUpdate(st, dt)
       if bt and type(store0) == "table" and type(st.ax0) == "number" and type(st.ay0) == "number" then
         if type(rec0) ~= "table" then rec0 = {} store0[b.dfName] = rec0 end
         rec0.ax, rec0.ay = st.ax0 + totX, st.ay0 + totY
+        rec0.axAuto = nil   -- ★1.75.47：用户真拖了 = 自定义位置（清掉迁移标记，进守卫候选）
         if dfBlockApply(bt) then st.appX, st.appY = totX, totY end
       end
     end
@@ -3015,6 +3068,14 @@ local function dfBlockPos(fr, rec)
     local l, b, w, h = dfMeasure(fr)
     if type(l) ~= "number" or type(b) ~= "number" then return nil end
     rec.ax, rec.ay = l + dfNum(w, 0) / 2, b + dfNum(h, 0) / 2
+    -- ★★1.75.47 axAuto（迁移基准标记）的**判定口径**：只有「记录里本来就没有任何自定义痕迹」的迁移
+    --   才标 —— 那种位置是**系统看到它时它就在那**（客户端版式），不是用户摆的 ⇒ 不进守卫/更新。
+    --   ★有 dx/dy **字段**（哪怕值是 0）= 拖拽流程写过（dfDragEnd 只在真拖了才写）⇒ 用户自定义，
+    --     **不标**（否则把「用户真拖过的层」移出守卫 = 回归）；scale/alpha/hidden/w/h 同理（只能显式设）。
+    local hadCustom = rec.dx ~= nil or rec.dy ~= nil
+      or rec.scale ~= nil or rec.alpha ~= nil or rec.hidden ~= nil
+      or rec.w ~= nil or rec.h ~= nil
+    if not hadCustom then rec.axAuto = true end
   end
   return rec.ax, rec.ay
 end
@@ -3233,6 +3294,7 @@ function EVAL_DF_SET(on)
   if not DF.on then
     if DF.dragging then dfDragEnd("disable") end
     if DF.pop then dfPopHide() end
+    DF.ghostOffAll()  -- ★1.75.47 关功能 ⇒ 遮蔽一律恢复（结构性兜底）
     DF.rosterLeft = 0 -- ★1.74.32 开关关掉 → 停止队伍/团队跟随（不留后台周期任务）
     dfApplyAll(true)  -- ★「关闭之后」＝按**有自定义记录**的层应用一次（编辑期间摆好的位置就是这一刻定稿）
     pcall(dfGuardArm, "lock")
@@ -3354,6 +3416,10 @@ function EVAL_DF_RESET()
         end
         -- 定位数据一律清掉（既有口径「只清定位」的那一半照旧）
         rec.dx, rec.dy = nil, nil
+        -- ★★1.75.47 方块坐标**也要清**：旧写法只清 dx/dy ⇒ 方块目标（14 个常驻层）的 ax/ay 留在记录里
+        --   ⇒ 「记录清空 → 整条删除」永远轮不到它们 ⇒ 重置后守卫继续守旧的方块坐标 = 「重置了没效果」。
+        --   清掉后下次编辑模式由「零位移迁移」以现状为基准重建（标 axAuto，不进守卫）——自洽。
+        rec.ax, rec.ay, rec.axAuto = nil, nil, nil
         -- ② 缩放 / 透明度 / 显隐 / 宽 / 高：一起还原，并清掉记录字段
         local got, res = dfRestoreAttrs(fr, rec, combat)
         cScale = cScale + res.scale
@@ -3587,8 +3653,13 @@ local DF_GUARD_RING = 40
 local function dfGuardCustom(rec)
   if type(rec) ~= "table" then return false end
   -- ★1.75.36l 方块记录（`ax/ay`）= 有自定义位置 ⇒ 也算候选（判据与落点由 `dfBlock*` 那条路负责）
-  return (rec.scale ~= nil or rec.alpha ~= nil or rec.hidden ~= nil or rec.dx ~= nil or rec.dy ~= nil
-    or rec.ax ~= nil or rec.ay ~= nil)
+  -- ★★1.75.47 用户要求「未设置自定义属性的层不要进入更新操作」：`axAuto == true` 的 `ax/ay`
+  --   是「零位移迁移」的自动基准（系统摆的，不是用户摆的）⇒ **不算候选**（每拍连读都不读）。
+  if rec.scale ~= nil or rec.alpha ~= nil or rec.hidden ~= nil or rec.dx ~= nil or rec.dy ~= nil then
+    return true
+  end
+  if (rec.ax ~= nil or rec.ay ~= nil) and rec.axAuto ~= true then return true end
+  return false
 end
 
 local function dfGuardCandidates()
@@ -3601,7 +3672,7 @@ local function dfGuardCandidates()
       if dfSizeOK(t.name) then
         -- ★1.75.36n 聊天框：**只守坐标**（候选 = 记录里有方块坐标 ax/ay；尺寸/属性不守 ⇒ 不算候选依据）
         local recC = store[t.name]
-        if type(recC) == "table" and (recC.ax ~= nil or recC.ay ~= nil) then table.insert(out, t) end
+        if type(recC) == "table" and (recC.ax ~= nil or recC.ay ~= nil) and recC.axAuto ~= true then table.insert(out, t) end -- ★1.75.47 迁移基准同样不算
       elseif dfGuardCustom(store[t.name]) then
         table.insert(out, t)
       end
@@ -3797,6 +3868,16 @@ function EVAL_DF_GUARD_STATE()
   return DF.guardOn and true or false, dfNum(DF.guardFixes, 0), table.getn(dfGuardCandidates()),
     dfNum(DF.guardSkipped, 0), dfNum(DF.guardMoved, 0), dfNum(DF.guardBlocked, 0),
     dfGuardNoWriteN()
+end
+
+-- ★1.75.47 ghost 遮蔽状态读值口（生产诊断：守卫状态行与离线 harness 共用；★直给真实计数，不复刻逻辑）。
+--   正常恒为 0（就位即恢复）；> 0 = 有帧正在「alpha 归零遮蔽」中等量回 —— 复查窗口到点/摘链/关功能会兜底清零。
+function EVAL_DF_GHOST_STATE()
+  local G = DF.ghost
+  if type(G) ~= "table" then return 0 end
+  local n = 0
+  for _ in pairs(G) do n = n + 1 end
+  return n
 end
 
 -- 立刻按存档重设一次（**手动补救**用：宠物栏刚被客户端挪走、不想等到下一拍时用）
