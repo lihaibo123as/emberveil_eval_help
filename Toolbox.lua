@@ -4593,6 +4593,11 @@ local function tbModel()
     --   （`EVAL_TB_MOD_ROWS["equipCompare"]`）。★不写 `noChk` ⇒ 保留主开关勾选框（真值 = `tbCfg().equipCompare`）。
     --   ★默认**关**（opt-in）：关着 = 不包装容器按钮、不挂 OnUpdate、不建对比框（一个动作都没有）。
     { t = "mod", mod = "equipCompare", key = "equipCompare", label = L("TB_EQCOMPARE"), tip = L("TB_EQCOMPARE_TIP") },
+    -- ★1.75.46 目标血条（tools/TargetBar.lua · target-bar 分支 · 参考 unrealUI 的单位框机制）：
+    --   紧凑目标血条（名字+等级+百分比 · 敌我着色 · 难度色等级 · 精英后缀 · 左键拖动摆位）；
+    --   同 lootCursor 一样只是**一行数据** —— 控件/设置下拉/拖拽/存档全在模块里（`EVAL_TB_MOD_ROWS["targetBar"]`）。
+    --   ★不写 `noChk` ⇒ 保留主开关勾选框（真值 `tbCfg().targetBar`，**默认开** = 用户点名要的功能）。
+    { t = "mod", mod = "targetBar", key = "targetBar", label = L("TB_TARGETBAR"), tip = L("TB_TARGETBAR_TIP") },
     { t = "h", label = L("TB_H_MERCHANT") },
     -- ★1.75.43 物品价（tools/ItemPrice.lua，A1 = 价格库 + 学价 + 悬停价格行 + 背包/银行估值）：
     --   同 infoBar/lootCursor 一样只是**一行数据** —— 控件、tooltip、两个按钮全在模块里

@@ -50,4 +50,5 @@ tools\LootCursor.lua
 tools\InfoBar.lua
 tools\ItemPrice.lua
 tools\EquipCompare.lua
+tools\TargetBar.lua
 tools\Probes.lua
