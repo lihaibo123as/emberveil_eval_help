@@ -1,5 +1,5 @@
 -- ★★★生成物（**勿手改**）—— 生成器：`node gen_mapoverlay.js`
---   源：TurtleWoW `!Libs\!MyLib\libs\LibMapOverlayData.lua`（库 LibMapOverlayData = MozzFullWorldMap 血统）
+--   源：本仓库快照 `doc/地图层数据-源快照.txt`（上游 LibMapOverlayData = MozzFullWorldMap 血统的区域表）
 --   形态：`EVAL_MAP_OVERLAY_DATA[地图文件名][区域名] = { 宽, 高, offsetX, offsetY }`
 --   ★单位 = **地图像素**；原点 = `WorldMapDetailFrame` 左上、**y 向下**（与 `GetMapOverlayInfo` 同口径）。
 --   ★贴图路径按 Mozz 规则拼：`Interface\WorldMap\<地图文件名>\<区域名><分块号>`，
