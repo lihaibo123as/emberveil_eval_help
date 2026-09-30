@@ -4588,6 +4588,11 @@ local function tbModel()
     --   同 simpleMap/lootCursor 一样只是**一行数据** —— 控件、tooltip、多选下拉、[重设位置] 全在模块里
     --   （`EVAL_TB_MOD_ROWS["infoBar"]`）。★不写 `noChk` ⇒ 保留主开关勾选框（真值 `tbCfg().infoBar`）。
     { t = "mod", mod = "infoBar", key = "infoBar", label = L("TB_INFOBAR"), tip = L("TB_INFOBAR_TIP") },
+    -- ★1.75.45 装备比较（tools/EquipCompare.lua，参考**同客户端** UnrealQuest 的 ShowItemCompare 口径）：
+    --   同 infoBar/lootCursor 一样只是**一行数据** —— 控件、包装、自建对比框、命令全在模块里
+    --   （`EVAL_TB_MOD_ROWS["equipCompare"]`）。★不写 `noChk` ⇒ 保留主开关勾选框（真值 = `tbCfg().equipCompare`）。
+    --   ★默认**关**（opt-in）：关着 = 不包装容器按钮、不挂 OnUpdate、不建对比框（一个动作都没有）。
+    { t = "mod", mod = "equipCompare", key = "equipCompare", label = L("TB_EQCOMPARE"), tip = L("TB_EQCOMPARE_TIP") },
     { t = "h", label = L("TB_H_MERCHANT") },
     -- ★1.75.43 物品价（tools/ItemPrice.lua，A1 = 价格库 + 学价 + 悬停价格行 + 背包/银行估值）：
     --   同 infoBar/lootCursor 一样只是**一行数据** —— 控件、tooltip、两个按钮全在模块里

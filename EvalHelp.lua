@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.75.44"
+local VERSION = "1.75.45"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -7635,6 +7635,16 @@ if type(SlashCmdList) == "table" then
     --   ★别名 `go 物品价` 与 `go iprice` 全项目唯一（`GO ALIAS UNIQUE CHECK` 那条纪律）。
     elseif msg == "go 物品价" or msg == "go iprice" or string.find(msg or "", "^go 物品价%s") == 1 then
       prRun("ITEMPRICE", msg)
+    -- ★1.75.45 装备比较（tools/EquipCompare.lua，参考**同客户端** UnrealQuest 的 ShowItemCompare 口径）：
+    --   命令体在模块自己文件里（`EVAL_EC_CMD`），这里只留一行分派。
+    --   ★"go 装备比较" = 3 + 4×3 = **15 字节**（string.sub 按字节；「装备比较」四个汉字各 3 字节）。
+    --   ★别名 `go eqc` 全项目唯一（`GO ALIAS UNIQUE CHECK` 那条纪律）。
+    elseif string.sub(msg, 1, 15) == "go 装备比较" or msg == "go eqc" then
+      if type(EVAL_EC_CMD) == "function" then
+        pcall(EVAL_EC_CMD, msg)
+      else
+        say("装备比较未载入：tools\\EquipCompare.lua 不在 EvalHelp.toc 里（或载入失败）")
+      end
     elseif msg == "go 框体图标" or msg == "go frameicons" or string.find(msg or "", "^go 框体图标%s") == 1 then
       if type(EVAL_DF_ICONS_SET) ~= "function" then
         say("框体图标：框拖拽模块未载入（EVAL_DF_ICONS_SET 不存在）")
@@ -9007,6 +9017,8 @@ if type(SlashCmdList) == "table" then
       fsay("　任务插件发现稀有的那一刻在聊天框报一行（名字按品阶染色 + 品阶 + 码数）；**点名字 = 选中它**（选不中如实报错）")
       fsay("拾取贴手: /eh go 拾取（状态）｜ 拾取 开 ｜ 拾取 关 ｜ 拾取 跟随 ｜ 拾取 角标 ｜ 拾取 探针 ｜ 拾取 存档")
       fsay("　把拾取窗搬到光标底下：开窗贴一次，之后**每点一件立刻换到下一件**（不等拾取回话）；跟随/品质角标在工具箱 [设置] 里")
+      fsay("装备比较: /eh go 装备比较（状态 + API 体检）｜ 装备比较 开 ｜ 装备比较 关 ｜ 装备比较 测")
+      fsay("　悬停装备类物品时旁边并排显示已装备的同部位物品（双戒指/双饰品各一格）；工具箱「UI 工具」里勾选启用")
     else
       EVAL_HELP()
     end
@@ -9293,6 +9305,9 @@ init:SetScript("OnEvent", function(a, b)
     -- ★1.75.43 物品价（tools/ItemPrice.lua）：开关真值 = `tbCfg().itemPrice`
     --   ⇒ **必须在这里**读（SavedVariables 要等 VARIABLES_LOADED）；关着 = 不挂按钮包装、不注册事件、不建计时器。
     if type(EVAL_IP_INSTALL) == "function" then pcall(EVAL_IP_INSTALL) end
+    -- ★1.75.45 装备比较（tools/EquipCompare.lua）：开关真值 = `tbCfg().equipCompare`
+    --   ⇒ **必须在这里**读（SavedVariables 要等 VARIABLES_LOADED）；关着 = 不包装按钮、不挂 OnUpdate。
+    if type(EVAL_EC_INSTALL) == "function" then pcall(EVAL_EC_INSTALL) end
     -- 注册进出战斗事件（pcall 防御：事件名若不存在不会崩）
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_ENTERING_WORLD") -- ★1.74.31 进世界（载入期时钟到这里才开始走 ⇒ world 打点）
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_REGEN_DISABLED")
