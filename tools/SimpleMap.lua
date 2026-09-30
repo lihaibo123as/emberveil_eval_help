@@ -1924,6 +1924,12 @@ local SMFIT = { open = false, es = nil, burst = 0, rec = {}, captured = false, n
   --   ★这三个常量/状态放表里而不是新增文件级 local —— 主 chunk 有 200 个局部队变量的上限。
   --   ★`natLeft` 初始就给满：功能**在地图已经开着**时被打开（`EVAL_SM_SET(true)`）也要走同一条「自然档窗口」路。
   natLeft = 3, holdAge = 0, wroteRun = {}, natMax = 3, natSettle = 1.0,
+  -- ★★★1.75.45c（用户要求「按地图签名缓存；没缓存的走初次打开流程；新探索层出现时增量缩放」）：
+  --   `wroteVal[纹理名] = {x,y,w,h}` = **我们这次真正写进去的值**（逻辑值）。
+  --   用途 = **运行期自证读回口径**：拿「已写过的层」的实时读回 ÷ 写进去的值 ⇒ 得到 k（1 = 读回就是逻辑值；
+  --   ≈es = 读回 = 逻辑值×es）。有了 k 就能在**非自然档**上直接为**新出现的层**补一份正确原值
+  --   （= 增量适配，不用再把整张图按回自然档 1~2 秒）。
+  wroteVal = {},
   recMap = {} }
 -- ★★★1.75.5 定案（用户提问：「这个探索层每个地区的定位是从缓存读取的吗? 理论上每次打开地图都要重新计算的.
 --   不需要缓存区记录这个定位信息?」）——**用户是对的：这份定位信息不该长期存盘**。三条事实：
@@ -2171,6 +2177,9 @@ local function smFitNewMap(mk)
   -- ★1.75.5（用户：「清理下这些调试日志」）：**每次开图只报一次**的那几条也要跟着换图归零
   SMFIT.saidLatch, SMFIT.saidFail, SMFIT.saidEmpty, SMFIT.saidFold = false, false, false, false
   SMFIT.saidNat = false -- ★1.75.45b：同上（「非自然档不记原值」那条也只许每图说一次）
+  SMFIT.saidPrint = false -- ★1.75.45c：逐层「指纹」每图打一次（它是判「层到底对不对」的唯一数据）
+  -- ★★★1.75.45c：**按签名缓存**的写入账随图切换（`wroteVal` 只服务「本图已写过的层 ⇒ 反解读回口径 k」）
+  SMFIT.wroteVal = {}
   smFitHold = 0 -- ★1.75.5：换图 ⇒ 窗口重新判定（下一拍按「本图有没有记录」决定开不开）
   -- ★★★1.75.45b：换图 ⇒ **自然档窗口的预算重新给满**（每张图各自有界；「一变就做、不等稳定」——
   --   连续切图时上一条身份的窗口直接作废，绝不排队，否则会重演 DataSearch 1.70.40 那个
@@ -2390,6 +2399,8 @@ local function smFitApply(es, quiet)
           -- ★1.75.13：**逐层记账**（还原只还我们写过的、且只还**本图**写过的）
           SMFIT.wroteKeys[it.key] = mk
           SMFIT.wroteRun[it.key] = true -- ★1.75.45b：**本次调用**的写入账（第 5 步逐层打印用，见函数开头）
+          -- ★1.75.45c：记下**写进去的逻辑值**（增量适配时用它与实时读回反解读回口径 k，见 smFitReadbackK）
+          SMFIT.wroteVal[it.key] = { x = wantX, y = wantY, w = wantW, h = wantH }
           mfLog("折算：es=%.3f %s 原值(%.1f,%.1f %.1f×%.1f,来自%s) → 写入(%.1f,%.1f %.1f×%.1f)",
             es, tostring(it.key), r.x, r.y, r.w, r.h, tostring(r.from or "rec"),
             wantX, wantY, wantW, wantH)
@@ -2423,6 +2434,33 @@ local function smFitApply(es, quiet)
     end
   end
   return changed, ready, rec
+end
+
+-- ★★★1.75.45c（用户要求「按地图签名缓存 + 新探索层出现时增量缩放」）：**运行期自证读回口径**。
+--   问题：抓原值必须知道「读回值 ÷ ? = 逻辑值」。自然档下 ? = 1（不用押注）；非自然档下 ? 要么 1、要么 es，
+--   而这台客户端两轮取证都没定性 ⇒ 旧写法只能把整张图按回自然档去读（每次换图满尺寸 1~2 秒）。
+--   ⇒ 现在**用我们自己写过的层反解**：写进去的是 `wroteVal`（逻辑值），实时读回 ÷ 写进去的值 = k。
+--     · k ≈ 1   ⇒ 读回就是逻辑值（本档不级联）；
+--     · k ≈ es  ⇒ 读回 = 逻辑值 × es；
+--     · 两者都不是 ⇒ 判不出（**如实返回 nil**，绝不猜 —— 调用方会退回「自然档窗口」那条安全路）。
+--   ★只认「本图写过 + 现在还在用 + 读得回来」的层（`wroteKeys[名] == 本图签名`），且**取第一个算得出来的**。
+local function smFitReadbackK(es)
+  es = tonumber(es) or 0
+  if es <= 0 then return nil end
+  local mk = smMapKey() or SMFIT.mapKey or "?"
+  for _, it in ipairs(smFitTargets()) do
+    local wv = SMFIT.wroteVal and SMFIT.wroteVal[it.key]
+    if type(wv) == "table" and SMFIT.wroteKeys[it.key] == mk and smFitInUse(it.o) then
+      local okw, lw = pcall(it.o.GetWidth, it.o)
+      local want = tonumber(wv.w)
+      if okw and tonumber(lw) and want and want > 0.5 then
+        local k = tonumber(lw) / want
+        -- ★只接受两个**已知口径**（k≈1 / k≈es）；其余一律判不出（避免把「客户端正在重摆」的中间态当口径）
+        if math.abs(k - 1) <= 0.06 or math.abs(k - es) <= 0.06 then return k end
+      end
+    end
+  end
+  return nil
 end
 
 -- ★★★1.75.9 新增：**先抓原值、再改缩放**（本项目铁律「读原值 → 写新值，顺序不许换」，1.74.31 组 206 的教训）。
@@ -2517,27 +2555,31 @@ local function smFitCapture()
     local e = smEffScale(frC)
     if tonumber(e) and tonumber(e) > 0 then esC = tonumber(e) end
   end
-  local norm = (SMFIT.needFold == true) and 1 or esC
-  if norm <= 0 then norm = 1 end
-  -- ★★★1.75.45b（用户报障「切换其他地图之后，探索层的缩放就会失效」的根因；真机取证定案）：**只在自然档记原值**。
-  --   旧写法默认按「读回 = 逻辑值 × es」归一（`norm = esC`），可默认档是 fold、**只读探测只在 auto 档才跑**
-  --   ⇒ `SMFIT.needFold` 恒 nil ⇒ 永远走 ÷esC 那一支。后果（与读回口径无关，纯代数）：
-  --     · 外框在 0.7/0.5 上读到的「原值」= 真原值 ÷ esC（记录偏小）；
-  --     · 折算要写的是 `记录 × es`，当 `esC == es`（同一个档）时 **「要写」== 「读回」** ⇒ `smFitNeedWrite`
-  --       判「已对齐」⇒ **一个几何都不写** ⇒ 探索层保持客户端给的原矩形（偏大 1/es 倍）= 用户看到的现象。
-  --   真机证据（`simpleMapCfg.mapFitCapLog`）：DunMorogh/LochModan 上混着 `归一÷1.00` 与 `÷0.70 / ÷0.50`；
-  --   ÷1.00 的那几次正好是**换图后第一次开图**（外框还是自然档）⇒ 与「只有初次打开地图缩放才成功」逐字吻合。
-  --   ⇒ 现在**硬门**：外框不是自然档 ⇒ 一条都不记（不猜口径、绝不写脏原值），改为**申请/续一个自然档窗口**，
-  --     下一轮在 1.00 上读 —— 与 `/ehm fitnow` 第 2~3 步同一条路（用户已实测有效：那一轮「写入 12 个」）。
-  if math.abs(esC - 1) > 0.001 then
+  -- ★★★1.75.45c（用户要求「按地图签名缓存；没缓存的走初次打开流程；新探索层出现时增量缩放」）归一系数三条路：
+  --   ① **自然档**（|esC−1| ≤ 0.001）⇒ `norm = 1`：读回就是原值，不押注任何口径（初次打开流程用的是这条）；
+  --   ② **非自然档 + 能自证口径**（本图有我们写过的层 ⇒ `smFitReadbackK` 反解出 k）
+  --      ⇒ `norm = k`，**直接在这里记**（= 增量适配：只为「还没有原值的层」补记录，不重来整张图、不把地图按回自然档）；
+  --   ③ **非自然档 + 自证不出**（本图我们没有写过任何层 ⇒ 没有参照物）⇒ **一条都不记**，申请/续一个自然档窗口
+  --      （这条就是「没缓存 ⇒ 走初次打开流程」；★绝不猜口径、绝不写偏小的脏原值）。
+  --   旧写法（1.75.45b 及以前）永远走 ③ 或盲猜 ÷esC：盲猜的那条正是「换图后探索层缩放失效」的根因。
+  local normSrc = "自然档"
+  local norm = nil
+  if math.abs(esC - 1) <= 0.001 then
+    norm = 1
+  else
+    local k = smFitReadbackK(esC)
+    -- ★k 必须与 esC 同档才算数（`smFitReadbackK` 内部已只接受 k≈1 / k≈es）
+    if k then norm, normSrc = k, "k自证" end
+  end
+  if norm == nil then
     local free = (tonumber(SMFIT.natLeft) or 0) > 0
     if (not SMFIT.saidNat) or smFitVerboseOn() then
       SMFIT.saidNat = true
-      smFitSayV("抓原值**跳过**：外框当前不是自然档（真有效缩放=%.3f）⇒ 在这个档上读到的「原值」会被归一系数搅成偏小值"
-        .. "（折算就变成空操作）⇒ 本次**一条都不记**；%s", esC,
-        free and string.format("改为申请一个自然档窗口（本图还剩 %d 次）", tonumber(SMFIT.natLeft) or 0)
+      smFitSayV("抓原值**跳过**：外框不是自然档（真有效缩放=%.3f）、且本图还没有「我们写过的层」可用来反解读回口径"
+        .. "⇒ 本次**一条都不记**（绝不猜口径、绝不写偏小的原值）；%s", esC,
+        free and string.format("改为申请一个自然档窗口（本图还剩 %d 段）", tonumber(SMFIT.natLeft) or 0)
           or "本图自然档窗口预算已用完 ⇒ 等下次开图/换图再读")
-      mfLog("抓原值跳过（非自然档）：esC=%.3f ⇒ 一条都没记（记了也只会偏小、折算变空操作）；本图窗口预算剩 %d",
+      mfLog("抓原值跳过（非自然档且自证不出口径）：esC=%.3f ⇒ 一条都没记；本图窗口预算剩 %d",
         esC, tonumber(SMFIT.natLeft) or 0)
     end
     if free then
@@ -2548,6 +2590,12 @@ local function smFitCapture()
     SMFIT.capAt = (type(GetTime) == "function") and GetTime() or 0
     return 0
   end
+  if normSrc == "k自证" then
+    -- ★增量适配：**不开窗口**在非自然档上直接补记（只为 todo 里那些「还没有原值」的新层）
+    mfLog("增量抓原值（**不开窗口**）：外框 es=%.3f ｜ 用本图已写过的层反解读回口径 k=%.3f ⇒ 按 k 归一记 %d 个新层"
+      .. "（地图不按回自然档、已适配的层一个都不碰）", esC, norm, table.getn(todo))
+  end
+  if norm <= 0 then norm = 1 end
   for _, it in ipairs(todo) do
     local o = it.o
     local okp, p, rel, rp, x, y = pcall(o.GetPoint, o, 1)
@@ -2596,12 +2644,12 @@ local function smFitCapture()
   -- ★★★1.75.5：**每次尝试都留一行小结**（用户要求「监测地图信息才能知道原值问题」）——
   --   这一行让人（和 AI 读存档）不必再靠猜：第几次尝试 / 记下几条 / 读失败几个 / 归一系数 / 是否落闩。
   --   ★必须排在落闩**之后**，否则小结里的「落闩」永远是「否」（差一行就会让读数骗人）。
-  local capLine = string.format("%.2f 第%d次 记%d/待%d 失败%d 归一÷%.2f 落闩=%s 地图=%s",
+  local capLine = string.format("%.2f 第%d次 记%d/待%d 失败%d 归一÷%.2f(%s) 落闩=%s 地图=%s",
     (type(GetTime) == "function") and GetTime() or 0, tonumber(SMFIT.capCalls) or 0, n, table.getn(todo),
-    fails, norm, SMFIT.captured and "是" or "否", tostring(mk))
+    fails, norm, tostring(normSrc or "?"), SMFIT.captured and "是" or "否", tostring(mk))
   mfLog("抓原值小结：第 %d 次尝试 ｜ 本次记 %d / 待记 %d ｜ 读失败 %d（累计 %d）｜ 归一÷%.2f（%s）｜ 落闩=%s ｜ 地图=%s",
     tonumber(SMFIT.capCalls) or 0, n, table.getn(todo), fails, tonumber(SMFIT.capFails) or 0, norm,
-    (SMFIT.needFold == true) and "读回=逻辑值" or "读回=逻辑×es",
+    (normSrc == "k自证") and "增量·k自证" or "自然档·读回即原值",
     SMFIT.captured and "是" or "否", tostring(mk))
   -- ★★★1.75.5（用户要求「获取原值的地方打印出来」，随后又要求「清理下这些调试日志」）：
   --   ⇒ 安静档**每次开图只留一条**「已读到 N 条」（下面那条）；逐次小结进 verbose 档。
@@ -2858,6 +2906,8 @@ local function smFitDropOnClose(mk)
   -- ★1.75.5：**每次开图只报一次**的那几条标记一起归零（关图 = 本次开图的生命周期结束）
   SMFIT.saidLatch, SMFIT.saidFail, SMFIT.saidEmpty, SMFIT.saidFold = false, false, false, false
   SMFIT.saidNat = false -- ★1.75.45b：同族（「非自然档不记原值」也只许每图说一次）
+  SMFIT.saidPrint = false -- ★1.75.45c：同族（逐层指纹每图一次）
+  SMFIT.wroteVal = {} -- ★1.75.45c：写入账随「本图的原值」一起清（关图即清空原值 ⇒ 参照物没了，k 也不能再自证）
   -- ★窗口也要归零：关图时窗口可能还开着（那个块只在 `open` 时递减）⇒ 不归零的话下次开图会**少一段**自然档时间
   smFitHold = 0
   SMFIT.natLeft = tonumber(SMFIT.natMax) or 3 -- ★1.75.45b：关图 = 本次访问结束 ⇒ 自然档窗口预算下次开图重新给满
@@ -3371,7 +3421,11 @@ do
               smFitSayV("抓原值窗口结束：**还没读到原值**（记录 %d 条）⇒ 继续 1 秒一次补抓", nRecWin)
             end
           end
-        elseif smFitOn() and smFitNeedFold() and (not SMFIT.captured) and (tonumber(SMFIT.natLeft) or 0) > 0 then
+        elseif smFitOn() and smFitNeedFold() and (not SMFIT.captured) and (tonumber(SMFIT.natLeft) or 0) > 0
+          -- ★★★1.75.45c（用户要求）：「**没缓存的走初次打开的流程**」—— 本图（签名）只要已经有原值记录，
+          --   就**绝不再开自然档窗口**（不再有「换图必先满尺寸 1~2 秒」），直接用缓存折算；
+          --   后来才出现的层走 `smFitCapture` 的**增量**那条路（k 自证 ⇒ 非自然档直接补记，同样不开窗口）。
+          and next(SMFIT.rec or {}) == nil then
           -- ★条件不再要求「本图一条记录都没有」：`SMFIT.captured` 被「在用却没原值」的层推翻时（1.75.24 那条补抓路），
           --   后来才出现的层**同样必须在自然档读**，否则又是记录偏小 ⇒ 那一层永远折不动。
           smFitHold = SMFIT_HOLD_SEC
@@ -3497,6 +3551,36 @@ do
         --   ⇒ 现在：只要还有「在用却没原值」的层，就**推翻落闩**、交给上面那道**有界**重试门
         --     （SMFIT_CAP_GAP = 1 秒一次 + SMFIT_SETTLE 版式稳定门）重抓，抓到即由 apply 折算。
         --   ★口径不变：只对「当前显示且有贴图」的层动手（与抓原值/折算同一判定），绝不碰别的图的残留层。
+        -- ★★★1.75.45c **取证指纹（每图一次，写盘可见）**：把每一层的「记录 / 期望写入 / 实测读回 / 判定」摊开。
+        --   为什么必须：读回口径（读回=逻辑值 还是 逻辑值×es）在这台客户端上一直没有**确定**的答案，
+        --   而「层看起来不对」既可能是「该折没折」也可能是「折了不该折的」——只靠现有日志两轮都判不出来。
+        --   这一行就是判据：目视「偏大」应对上「实测=记录」；「偏小」应对上「实测=期望×es」。
+        --   ★必须排在 smFitApply **之前**（这样实测 = 我们动手前的活值）。
+        if (not SMFIT.saidPrint) and ranApply then
+          SMFIT.saidPrint = true
+          local nP = 0
+          for _, it in ipairs(smFitTargets()) do
+            if smFitInUse(it.o) and nP < 14 then
+              local r = SMFIT.rec[it.key]
+              if type(r) == "table" then
+                local okp, _p, _rel, _rp, px, py = pcall(it.o.GetPoint, it.o, 1)
+                local okw, pw = pcall(it.o.GetWidth, it.o)
+                local okh, ph = pcall(it.o.GetHeight, it.o)
+                local need, wx, wy, ww, wh = smFitNeedWrite(it.o, r, es)
+                local live = (okp and okw and okh) and string.format("%.1f,%.1f %.1f×%.1f", tonumber(px) or 0, tonumber(py) or 0, tonumber(pw) or 0, tonumber(ph) or 0) or "读不到"
+                nP = nP + 1
+                mfLog("指纹：%s 记录(%.1f,%.1f %.1f×%.1f) 期望(%.1f,%.1f %.1f×%.1f) 实测(%s) ⇒ %s",
+                  tostring(it.key), r.x, r.y, r.w, r.h, tonumber(wx) or 0, tonumber(wy) or 0, tonumber(ww) or 0, tonumber(wh) or 0,
+                  live, (need == nil) and "判不出" or (need and "要写" or "已对齐"))
+              end
+            end
+          end
+          local fsc = "?"
+          local _wm = featWm()
+          if _wm then local oks, v = pcall(_wm.GetScale, _wm) if oks then fsc = string.format("%.3f", tonumber(v) or 0) end end
+          mfLog("指纹小结：地图=%s ｜ es=%.3f ｜ 外框 GetScale=%s ｜ 窗口剩余=%.1f ｜ 记录 %d 条 ｜ 在用 %d 个（本拍折算前）",
+            tostring(SMFIT.mapKey or "?"), es, fsc, tonumber(smFitHold) or 0, smFitRecCount(), nP)
+        end
         local _chgFold, _rdyFold
         _chgFold, _rdyFold, nWaitFold = smFitApply(es, false) -- 成功了才播报（内部 3s 节流）
         if (tonumber(nWaitFold) or 0) > 0 and SMFIT.captured then
@@ -3966,6 +4050,10 @@ function EVAL_SM_MAPFIT_TIP()
   m = m .. "｜★原值**只在自然档 1.00 读**（开图/换图时先把外框按回 1.00、每图最多 "
     .. tostring(tonumber(SMFIT.natMax) or 3) .. " 段×" .. string.format("%.1f", SMFIT_HOLD_SEC)
     .. "s 窗口；非自然档**一条都不记** —— 记了就会偏小、折算变成空操作）"
+  -- ★★★1.75.45c（用户要求）：按**地图签名**缓存 + 新层增量
+  m = m .. "｜★按**地图签名**缓存原值：**有缓存就直接折算**（不再有「换图必先满尺寸」那 1~2 秒）；"
+    .. "**没缓存才走初次打开流程**（自然档窗口读一次）；★**后来新出现的层做增量** —— 用「本图已写过的层」"
+    .. "实时反解读回口径 k（1 或 es）⇒ 在**当前档**直接补记，不开窗口、不碰已适配的层"
   return m
 end
 
