@@ -108,7 +108,7 @@ Copy-Item "$src\Locales","$src\examples","$src\media","$src\tools" "$staging\Eva
 # quest/ 只拷插件要用的三个 .lua（fetch.js/sweep*.js/build*.js/audit.js/chains.js 是开发脚本、cache/ 是抓取缓存，都不进包）
 New-Item -ItemType Directory -Force "$staging\EvalHelp\quest" | Out-Null
 Copy-Item "$src\quest\QuestData.lua","$src\quest\QuestBulk.lua","$src\quest\QuestAll.lua","$src\quest\QuestChains.lua" "$staging\EvalHelp\quest\"
-# ★1.75.14 新增 quest\QuestAll.lua（**全量任务表**生成物：4018 条，含无装备奖励的任务）⇒ 出包基准 75 → 76；★1.75.26 新增 `tools\LootCursor.lua`（拾取贴手）⇒ 基准 76 → 77；★1.75.35 新增 `tools\Probes.lua`（探针命令集中地）⇒ 基准 77 → **78**（tools/ 整目录拷 ⇒ 脚本本身不用改）；★★1.75.43 新增三个模块 ⇒ 基准 78 → **81**：`ItemPriceData.lua`（**顶层** .lua ⇒ **必须写进上面那行 Copy-Item**，漏了用户装了直接报错）+ `tools\InfoBar.lua`/`tools\ItemPrice.lua`（在 tools/ 里 ⇒ 整目录拷自动带上）；★toc 模块数同时 40 → **42**；★1.75.45 新增 `tools\EquipCompare.lua`（装备比较，在 tools/ 里 ⇒ 整目录拷自动带上）⇒ 基准 81 → **82**、toc 模块数 42 → **43**（同上：脚本本身一行都不用改）；★1.75.46 新增 `tools\TargetBar.lua`（目标血条，在 tools/ 里 ⇒ 整目录拷自动带上）⇒ 基准 82 → **83**、toc 模块数 43 → **44**
+# ★1.75.14 新增 quest\QuestAll.lua（**全量任务表**生成物：4018 条，含无装备奖励的任务）⇒ 出包基准 75 → 76；★1.75.26 新增 `tools\LootCursor.lua`（拾取贴手）⇒ 基准 76 → 77；★1.75.35 新增 `tools\Probes.lua`（探针命令集中地）⇒ 基准 77 → **78**（tools/ 整目录拷 ⇒ 脚本本身不用改）；★★1.75.43 新增三个模块 ⇒ 基准 78 → **81**：`ItemPriceData.lua`（**顶层** .lua ⇒ **必须写进上面那行 Copy-Item**，漏了用户装了直接报错）+ `tools\InfoBar.lua`/`tools\ItemPrice.lua`（在 tools/ 里 ⇒ 整目录拷自动带上）；★toc 模块数同时 40 → **42**；★1.75.45 新增 `tools\EquipCompare.lua`（装备比较，在 tools/ 里 ⇒ 整目录拷自动带上）⇒ 基准 81 → **82**、toc 模块数 42 → **43**（同上：脚本本身一行都不用改）；★1.75.46 新增 `tools\TargetBar.lua`（目标血条）⇒ 基准 82 → 83；★★**1.75.47c 应用户要求整体移除它**（用户要的「悬浮血条」是姓名板方向，该模块为误建的目标 HUD 血条）⇒ 基准回到 **82**、toc 模块数回到 **43**
 Remove-Item "$staging\EvalHelp\media\Textures" -Recurse -Force -ErrorAction SilentlyContinue  # 主题素材不进包
 [System.IO.Compression.ZipFile]::CreateFromDirectory($staging, $out)
 Copy-Item $out "$PWD\EvalHelp.zip" -Force   # ★不带版本号的固定名副本（第 9 步硬要求；两份逐字节相同）
@@ -116,7 +116,7 @@ Remove-Item $staging -Recurse -Force
 ```
 ★**装完必须核对条目数**（1.75.1 基准 = **75 个**：+`quest/QuestData.lua`、`quest/QuestBulk.lua`、`quest/QuestChains.lua`（1.75.9 新增 QuestBulk = 全量任务/装备数据）；1.74.34 时是 72（+`tools/LayerFix.lua` 图层特殊处理独立模块）；1.74.30 时是 71（+`tools/DragFrames.lua` 框拖拽从子插件搬进工具模块）；1.74.29 时是 70；1.74.27 时是 69（+`tools/RareWatch.lua`）；1.74.12 时是 68、1.74.6 时是 66、1.73.5 时是 63；1.74.5 陆续加了 `tools/IconGrid.lua` / `tools/HunterHelper.lua` / `tools/ConsumableHelper.lua`，1.74.7 加 `tools/DismountHelper.lua`）：
   少一个就是缺文件，用户装了会**直接报错**。
-  ★这一条与上面的模块清单原先都有源码检查 `PACK LIST CHECK` 守着（清单与 .toc 逐个比对 + 基准数按打包口径现算）—— ★**该检查随 `tests/` 一起删除了**（2026-09-26）⇒ 现在**出包必须人工核对**：先数 `Add-Type … OpenRead($out).Entries.Count`（**1.75.46 起应为 83**；1.75.45 是 82；1.75.43~1.75.44 是 81；1.75.26~1.75.42 是 77~78；1.75.14~1.75.25 是 76），再用上面那条「允许反斜杠」的正则把 toc 里 **44 个**模块逐个比一遍（两条都打印结果，别只看条目数）。
+  ★这一条与上面的模块清单原先都有源码检查 `PACK LIST CHECK` 守着（清单与 .toc 逐个比对 + 基准数按打包口径现算）—— ★**该检查随 `tests/` 一起删除了**（2026-09-26）⇒ 现在**出包必须人工核对**：先数 `Add-Type … OpenRead($out).Entries.Count`（**1.75.47c 起应为 82**（1.75.46 曾短暂是 83，TargetBar 已移除）；1.75.43~1.75.44 是 81；1.75.26~1.75.42 是 77~78；1.75.14~1.75.25 是 76），再用上面那条「允许反斜杠」的正则把 toc 里 **43 个**模块逐个比一遍（两条都打印结果，别只看条目数）。
   ★★**1.75.43 实做口径（可直接复用）**：`tmp/pack_release.ps1`（**纯 ASCII**、`powershell -ExecutionPolicy Bypass -File` 跑）一次做完三件事并打印
   ① `ENTRIES`（= 81）② toc 模块逐个对齐（`MISSING = 0`，键名两侧都把 `\` 归一成 `/`）③ **开箱验文档**（包内 `README.md` 含本版里程碑、`CHANGELOG.md` 含 `## 🎯 vX.Y.Z`、`DEVELOPMENT.md` 含新模块名）。
   ★另外**必须打印头几条条目名**（`FIRST ENTRIES`）—— 1.75.43 首跑就是因为键名格式假设错（zip 条目其实用**反斜杠**）而 `MISSING = 42` 全假红，只看条数会以为「包是对的」。

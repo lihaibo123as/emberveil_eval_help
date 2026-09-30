@@ -130,7 +130,7 @@ local function sayF(s)
 end
 
 -- 总开关真值（工具箱那一行的勾选框读写的就是它）
--- ★★★**默认开**（用户 1.75.45 定：「装备比较默认开启.」）⇒ 键为 nil 时**当场物化 true**（同 tools/TargetBar.lua 的写法）；
+-- ★★★**默认开**（用户 1.75.45 定：「装备比较默认开启.」）⇒ 键为 nil 时**当场物化 true**（★绝不 `or true` —— 那会顶回用户显式关过的 false；1.75.47c 起 TargetBar 已移除，此写法以本文件为准）；
 --   用户显式关过（false）永远是关 —— 读的时候绝不用 `or true` 顶回用户的选择。
 function EVAL_EC_ENABLED()
   local tb = ecTb()

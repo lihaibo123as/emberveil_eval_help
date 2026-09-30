@@ -9308,9 +9308,6 @@ init:SetScript("OnEvent", function(a, b)
     -- ★1.75.45 装备比较（tools/EquipCompare.lua）：开关真值 = `tbCfg().equipCompare`
     --   ⇒ **必须在这里**读（SavedVariables 要等 VARIABLES_LOADED）；关着 = 不包装按钮、不挂 OnUpdate。
     if type(EVAL_EC_INSTALL) == "function" then pcall(EVAL_EC_INSTALL) end
-    -- ★1.75.46 目标血条（tools/TargetBar.lua）：开关真值 = `tbCfg().targetBar`
-    --   ⇒ **必须在这里**读（SavedVariables 要等 VARIABLES_LOADED）；关着 = 隐藏、摘 tick、摘事件。
-    if type(EVAL_TARGETBAR_INIT) == "function" then pcall(EVAL_TARGETBAR_INIT) end
     -- 注册进出战斗事件（pcall 防御：事件名若不存在不会崩）
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_ENTERING_WORLD") -- ★1.74.31 进世界（载入期时钟到这里才开始走 ⇒ world 打点）
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_REGEN_DISABLED")

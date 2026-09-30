@@ -167,8 +167,7 @@ if (require.main === module) {
   const files = process.argv.slice(2).length ? process.argv.slice(2)
     : ['EvalHelp.lua', 'Core.lua', 'Engine.lua', 'PetHelper.lua', 'Toolbox.lua', 'DataSearch.lua',
        'IconBrowser.lua', 'PetData.lua', 'quest/QuestChains.lua', 'Share.lua',
-       'tools/Probes.lua', 'tools/RareWatch.lua', 'tools/EquipCompare.lua', 'tools/SimpleMap.lua',
-       'tools/TargetBar.lua'];
+       'tools/Probes.lua', 'tools/RareWatch.lua', 'tools/EquipCompare.lua', 'tools/SimpleMap.lua'];
   let total = 0;
   for (const f of files) {
     const bad = scan(fs.readFileSync(f, 'utf8'));
