@@ -3387,6 +3387,100 @@ end
 --   旧实现**只清定位数据**（缩放/透明/显隐原样保留在记录里）；现在改成**逐项还原到默认**：
 --   缩放=1 · 透明度=1 · Show() · 位置按既有 base 归零；还原一项就清掉记录里对应的那一项，
 --   记录清空 → 整条删除（沿用既有做法）。战斗保护口径照旧：战斗中不碰受保护帧的这三个属性（如实提示、记录保留）。
+-- ============ ★★★1.75.47b [重置] 完成后的「需要 /reload」确认窗 ============
+-- 用户原话：「工具箱->图层拖拽->重置.->完成之后弹窗提醒用户需要/reload 操作.确定进行重载」。
+-- ★为什么必须 /reload：重置清掉了记录（ax/ay/dx/dy/scale/alpha/hidden），但**被接管锚点的层**
+--   （14 个常驻层 SetPoint CENTER/方块/CENTER）不会自动还回客户端原生锚点 —— 接管时 ClearAllPoints
+--   把原生锚点冲掉了、我们没存 ⇒ 当场还不了 ⇒ 只有 /reload 让客户端自己重摆（空记录不再接管）。
+-- ★ReloadUI 在本客户端是 PROTECTED（UnrealQuest ClientAPI 实测："addons cannot call this"）⇒
+--   确定按钮走 **RunScript 绕行**（与本项目 SendChatMessage/SpellStopCasting 同款已验证机制），
+--   外加一行诚实兜底（RunScript 是队列/若失败也不崩）：「若界面未刷新，请手动输入 /reload」。
+-- ★样式仿 Toolbox.lua 的 subConfirmBuild（DIALOG + level 230 + 金边 + 两按钮）。
+DF.reloadAskBuild = function()
+  if DF.rloadAsk then return true end
+  if type(CreateFrame) ~= "function" then return false end
+  local W, H = 420, 150
+  -- ★帧名绝不与函数同名（组 54 老坑：具名帧顶掉同名全局函数 ⇒ 函数 type 检查与调用全废）——
+  --   函数是 EVAL_DF_RELOAD_ASK()，帧叫 EVAL_DF_RLOAD_ASK。
+  local root = CreateFrame("Frame", "EVAL_DF_RLOAD_ASK", UIParent)
+  root:SetWidth(W) root:SetHeight(H)
+  root:SetPoint("CENTER", UIParent, "CENTER", 0, 130)
+  pcall(root.SetFrameStrata, root, "DIALOG")
+  pcall(root.SetFrameLevel, root, 230)
+  if type(root.EnableMouse) == "function" then pcall(root.EnableMouse, root, true) end
+  local bg = root:CreateTexture(nil, "BACKGROUND")
+  bg:SetAllPoints(root)
+  dfSolid(bg, 0.04, 0.04, 0.04, 0.96)
+  for _, e in ipairs({ "TOP", "BOTTOM" }) do
+    local t = root:CreateTexture(nil, "BORDER")
+    dfSolid(t, 0.85, 0.70, 0.20, 1)
+    t:SetPoint(e .. "LEFT", root, e .. "LEFT", 0, 0)
+    t:SetPoint(e .. "RIGHT", root, e .. "RIGHT", 0, 0)
+    t:SetHeight(1)
+  end
+  for _, s in ipairs({ "LEFT", "RIGHT" }) do
+    local t = root:CreateTexture(nil, "BORDER")
+    dfSolid(t, 0.85, 0.70, 0.20, 1)
+    t:SetPoint("TOP" .. s, root, "TOP" .. s, 0, 0)
+    t:SetPoint("BOTTOM" .. s, root, "BOTTOM" .. s, 0, 0)
+    t:SetWidth(1)
+  end
+  local function mkFS(parent)
+    local fs = parent:CreateFontString(nil, "OVERLAY")
+    pcall(fs.SetFontObject, fs, "GameFontHighlightSmall")
+    return fs
+  end
+  local title = mkFS(root)
+  title:SetPoint("TOP", root, "TOP", 0, -12)
+  title:SetTextColor(0.95, 0.82, 0.35)
+  local body = mkFS(root)
+  body:SetPoint("TOP", root, "TOP", 0, -34)
+  body:SetWidth(W - 36)
+  pcall(body.SetJustifyH, body, "CENTER")
+  body:SetTextColor(0.90, 0.90, 0.90)
+  local function mkB(txt, x, fn, nm)
+    -- ★具名（与 EVAL_DF_ANCHOR_* 同一惯例）：真机取证与离线 harness 都靠名字拿到按钮
+    local b = CreateFrame("Button", nm, root)
+    b:SetWidth(130) b:SetHeight(22)
+    b:SetPoint("BOTTOM", root, "BOTTOM", x, 14)
+    if type(b.EnableMouse) == "function" then pcall(b.EnableMouse, b, true) end
+    if type(b.RegisterForClicks) == "function" then pcall(b.RegisterForClicks, b, "LeftButtonUp") end
+    local bb = b:CreateTexture(nil, "BACKGROUND")
+    bb:SetAllPoints(b)
+    dfSolid(bb, 0.22, 0.17, 0.07, 1)
+    local bl = mkFS(b)
+    bl:SetPoint("CENTER", b, "CENTER", 0, 0)
+    bl:SetText(txt)
+    b:SetScript("OnClick", fn)
+    return b
+  end
+  mkB("确定重载", -72, function()
+    pcall(root.Hide, root)
+    -- ★Protected 绕行（与本项目 SendChatMessage/SpellStopCasting 同款已验证机制）；
+    --   RunScript 是队列，失败也不崩 ⇒ 下一行提示兜底（「若没重载请自己敲」）。
+    pcall(RunScript, "ReloadUI()")
+    say("图层拖拽：正在重载界面…（若界面未刷新，请手动输入 /reload）")
+  end, "EVAL_DF_RELOAD_ASK_OK")
+  mkB("稍后自己 /reload", 72, function() pcall(root.Hide, root) end, "EVAL_DF_RELOAD_ASK_CANCEL")
+  root:Hide()
+  DF.rloadAsk = { root = root, title = title, body = body }
+  return true
+end
+
+-- 弹窗（重置完成 = n >= 1 才弹；什么都没清就不用重载）
+function EVAL_DF_RELOAD_ASK(n)
+  if not DF.reloadAskBuild() then
+    say("图层拖拽：重置完成 —— 请手动输入 /reload 让各层恢复客户端原生布局")
+    return false
+  end
+  pcall(DF.rloadAsk.title.SetText, DF.rloadAsk.title, "图层拖拽 · 重置完成")
+  local nTxt = (type(n) == "number" and n > 0) and ("已清除 " .. tostring(n) .. " 个目标的自定义设置") or "自定义设置已清除"
+  pcall(DF.rloadAsk.body.SetText, DF.rloadAsk.body,
+    nTxt .. "。\n被接管锚点的层需要 /reload 才能恢复客户端原生布局。\n确定现在重载界面吗？")
+  pcall(DF.rloadAsk.root.Show, DF.rloadAsk.root)
+  return true
+end
+
 function EVAL_DF_RESET()
   local store = dfStore(false)
   local n, kept, skipped = 0, 0, 0
@@ -3465,6 +3559,8 @@ function EVAL_DF_RESET()
   end
   msg = msg .. "；拖拽柄 " .. tostring(got) .. " 个（已按新位置重贴）"
   say(msg)
+  -- ★1.75.47b：被接管锚点的层要 /reload 才能恢复客户端原生布局 ⇒ 弹窗提醒 + 一键重载（用户定）
+  if n >= 1 then pcall(EVAL_DF_RELOAD_ASK, n) end
   return n
 end
 
