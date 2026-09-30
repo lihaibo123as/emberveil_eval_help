@@ -43,11 +43,19 @@ local EC = {
   orig = nil, wrap = nil,
   tickF = nil, acc = 0, -- 节拍帧 / 累加器
   tips = {},            -- 自建对比框（最多两个，首用才建）
+  wornIdx = nil,        -- 本拍「已装备」那件的 键→数值（给左侧气泡染色当参照系）
+  hostOwn = nil,        -- 客户端气泡**自己**的行数（我们追加汇总之前抓的；染色只染这几行）
+  painted = 0,          -- 最近一次给左侧气泡染了几行
+  sumAppended = false,  -- 汇总段是否已追加进客户端气泡（★客户端重建后要补回）
+  sumKey = nil,         -- 已追加的那一份汇总的内容键（显式标记：同键 + 无重建信号 ⇒ 不重写）
+  sumList = nil,        -- 最近一次汇总的差值列表（诊断用）
   shown = {},           -- 本拍显示中的对比框
   hb = nil, hs = nil,   -- 最近一次容器悬停（bag/slot）
   cur = nil,            -- 当前已对比的物品 id（同一件不重画）
+  tipName = nil,        -- 上一次气泡首行名字（变了 = 客户端重建/换物品 ⇒ 清汇总标记）
   hits = 0,             -- 成功显示对比的次数
   colored = 0,          -- 最近一次对比里被染色（更好=绿 / 更差=红）的行数
+  deltas = 0,           -- 最近一次汇总里列了几条「有变化的同名行」
   why = nil,            -- 最近一次「没显示」的原因（诊断口 / 命令输出）
   last = nil,           -- 最近一次成功对比的描述（状态行）
 }
@@ -56,6 +64,7 @@ local EC_TICK = 0.15            -- 收框/换物品的节拍（只为「离开�
 local EC_GAP = 2                -- 对比框与主提示的间距
 local EC_MAX_LINES = 30         -- 读回行数上限（NumLines 读不到时的兜底）
 local EC_TIP_NAME = "EVAL_EC_CMP"
+local ecSumHide                 -- ★前向声明（定义在 ecPlace 之后；ecHideAll 要用它）
 local EC_HEAD_FALLBACK = nil    -- 见 ecHeading（客户端串读不到时用语言包的兜底）
 
 -- ★★对比染色（用户定：「数值行对比染色：更好的绿、更差的红」）：
@@ -71,6 +80,15 @@ local EC_DN_R, EC_DN_G, EC_DN_B = 1.00, 0.35, 0.35   -- 更差 = 红
 local EC_LOWER_BETTER = {
   "需要等级", "Requires Level", "Требуется",
   "速度", "Speed", "Скорость",
+}
+-- ★★**不参与比较**的标签（用户：「比较属性不需要比较: 等级,耐久」）——既**不染色**也不进汇总：
+--   · 等级 = `需要等级`（**只匹配「需要等级」**，别写成裸「等级」：那会把「物品等级」也一起吞掉）；
+--   · 耐久 = `耐久度`（只有上限/当前值，不是战斗属性）；
+--   · 商人价 = 客户端自己加的钱行（`商人价 10s 22c` 这种，多数字行，比出来没有意义）。
+local EC_SKIP_KEYS = {
+  "需要等级", "Requires Level", "Требуется",
+  "耐久", "Durability", "Прочность",
+  "商人价", "Sell Price", "Цена",
 }
 
 ----------------------------------------------------------------------
@@ -448,8 +466,10 @@ local function ecHideAll()
     i = i + 1
   end
   EC.shown = {}
+  -- ★汇总框（锚在**左侧未装备气泡**下方那个）跟着一起收
+  --   ★前向声明：ecSumHide 定义在后面（本项目的「先用后声明 = 绑全局 nil」老雷 ⇒ 顶部先 `local ecSumHide`）
+  if ecSumHide then ecSumHide() end
 end
-
 -- 读回刚填好的行（★限制在 NumLines 之内：行数之外还留着**上一次**的旧文本，本项目已定案）
 local function ecReadLines(name)
   local tip = rawget(_G, name)
@@ -519,20 +539,27 @@ local function ecLineKey(text)
   return key, v
 end
 
--- 主提示（悬停那件）的行索引：标签键 → 数值（同名行取第一条）
+-- 主提示（悬停那件）的行索引：返回 ①标签键→数值（同名取第一条）②**按行序**的 {key, v} 列表
+--   ★要那份行序列表是为了「**只在一侧出现**的属性」：悬停件有 +3 耐力、当前装备没有 ⇒ 也要能进汇总
+--   （用户报「有些属性丢失比较，没显示耐力的差值」）。
 local function ecHostIndex(host)
-  local idx = {}
-  if not host or type(host.GetName) ~= "function" then return idx end
+  local idx, order = {}, {}
+  if not host or type(host.GetName) ~= "function" then return idx, order end
   local okN, nm = pcall(host.GetName, host)
-  if not okN or type(nm) ~= "string" or nm == "" then return idx end
+  if not okN or type(nm) ~= "string" or nm == "" then return idx, order end
   local lines = ecReadLines(nm)
   local i = 1
   while i <= table.getn(lines) do
     local key, v = ecLineKey(lines[i].text)
-    if key and idx[key] == nil then idx[key] = v end
+    if key then
+      if idx[key] == nil then
+        idx[key] = v
+        order[table.getn(order) + 1] = { key = key, v = v }
+      end
+    end
     i = i + 1
   end
-  return idx
+  return idx, order
 end
 
 local function ecLowerBetter(key)
@@ -545,9 +572,52 @@ local function ecLowerBetter(key)
   return false
 end
 
+-- ★这一条标签是不是「不参与比较」（见 EC_SKIP_KEYS：等级 / 耐久 / 商人价）
+local function ecSkipKey(key)
+  if type(key) ~= "string" or key == "" then return true end
+  local i = 1
+  while i <= table.getn(EC_SKIP_KEYS) do
+    local kw = EC_SKIP_KEYS[i]
+    if kw and kw ~= "" and string.find(key, kw, 1, true) then return true end
+    i = i + 1
+  end
+  return false
+end
+
+-- 汇总行用的标签：把归一里的 `#` 去掉、收拾空格与落单的符号（`+# 力量` → `力量` · `耐久度 # / #` → `耐久度`）
+local function ecLabelOf(key)
+  local s = tostring(key or "")
+  s = string.gsub(s, "#", "")
+  s = string.gsub(s, "[%+%-]%s*$", "")
+  s = string.gsub(s, "[/%s]+$", "")
+  s = string.gsub(s, "%s+", " ")
+  s = string.gsub(s, "^%s+", "")
+  s = string.gsub(s, "^[%+%-]%s*", "")
+  s = string.gsub(s, "%s+$", "")
+  if s == "" then return "?" end
+  return s
+end
+
+-- 读回行的品质色：★★本客户端**读回的物品名那行颜色不可信**（用户报「当前装备的稀有度标题没有染色」——
+--   实测读回来是白的，客户端是在绘制时才按品质上色）⇒ 名字行一律**用 GetItemQualityColor(quality) 现算**，
+--   拿不到才退回读回色。wornID 由调用方（ecShow）从已装备那件的 link 解出来。
+local function ecQualityRGB(id)
+  local infoFn = ecFn("GetItemInfo")
+  local qcFn = ecFn("GetItemQualityColor")
+  if not infoFn or not qcFn or not id then return nil end
+  local okI, _, _, q = pcall(infoFn, id)          -- ★多返回值分开接：第 3 返回 = quality
+  if not okI or type(q) ~= "number" then return nil end
+  local okC, cr, cg, cb = pcall(qcFn, q)
+  if okC and type(cr) == "number" and type(cg) == "number" and type(cb) == "number" then
+    return cr, cg, cb
+  end
+  return nil
+end
+
 -- 填一个对比框：SetInventoryItem → 读回 → 插「已装备」标题 → **逐行对比染色** → 重画。
---   hostIdx = 主提示的行索引（ecHostIndex），没有就只画原色（绝不错染）。返回 true = 真填上了内容
-local function ecFill(idx, slotId, host, hostIdx)
+--   hostIdx = 主提示的行索引（ecHostIndex 第 1 返回）· nameR/G/B = 名字行的品质色（nil = 用读回色）
+--   **返回：true, deltas**（deltas = 这个框里「有变化的行」的 {key, d} 列表，交给 ecShow 汇总）
+local function ecFill(idx, slotId, host, hostIdx, nameR, nameG, nameB)
   local tip = ecTipFrame(idx, host)
   if not tip then EC.why = "no compare frame" return false end
   if type(tip.SetInventoryItem) ~= "function" then EC.why = "no SetInventoryItem" return false end
@@ -561,28 +631,139 @@ local function ecFill(idx, slotId, host, hostIdx)
   if table.getn(lines) == 0 then EC.why = "empty compare lines" return false end
   if type(tip.ClearLines) == "function" then pcall(tip.ClearLines, tip) end
   pcall(tip.AddLine, tip, tostring(ecHeading()), 1, 0.82, 0.30)
-  local colored = 0
+  local colored, deltas = 0, {}
   local i = 1
   while i <= table.getn(lines) do
     local ln = lines[i]
     local txt, r, g, b = ln.text, ln.r, ln.g, ln.b
     if ln.right then txt = txt .. "  " .. ln.right end
-    -- ★第 1 行是物品名 ⇒ 永远保留品质色（不参与染色）
+    -- ★第 1 行是物品名 ⇒ 保留**品质色**（不参与对比染色）；品质色现算，读回色只当兜底
+    if i == 1 and type(nameR) == "number" then
+      r, g, b = nameR, nameG, nameB
+    end
     if i > 1 and type(hostIdx) == "table" then
       local key, v = ecLineKey(ln.text)
-      local vRef = key and hostIdx[key] or nil
-      if vRef and v and v ~= vRef then
-        local better = (v > vRef)
-        if ecLowerBetter(key) then better = (v < vRef) end
-        if better then r, g, b = EC_UP_R, EC_UP_G, EC_UP_B
-        else r, g, b = EC_DN_R, EC_DN_G, EC_DN_B end
-        colored = colored + 1
+      -- ★★不参与比较的标签（等级 / 耐久 / 商人价）：**既不染色也不进汇总**（用户明确定）
+      if key and ecSkipKey(key) then key, v = nil, nil end
+      if key and v then
+        -- ★记进「已装备那件」的键→数值：左侧气泡（未装备那件）染色要拿它当参照系
+        if EC.wornIdx then EC.wornIdx[key] = v end
+        -- ★只在一侧出现的属性也要能比：悬停件没有这一行 ⇒ 按 0 算（换装后就丢了这一项）
+        local vRef = hostIdx[key]
+        if vRef == nil then vRef = 0 end
+        if v ~= vRef then
+          local better = (v > vRef)
+          if ecLowerBetter(key) then better = (v < vRef) end
+          if better then r, g, b = EC_UP_R, EC_UP_G, EC_UP_B
+          else r, g, b = EC_DN_R, EC_DN_G, EC_DN_B end
+          colored = colored + 1
+          -- ★汇总用：**只收真有变化的**（用户定「只列变化的行」）；方向 = 悬停 − 已装备
+          --   （= 换上这件之后这一项会变成多少 ⇒ 屏幕上的「+」= 更好那一侧的方向由 ecLowerBetter 定色）
+          deltas[table.getn(deltas) + 1] = { key = key, d = vRef - v }
+        end
       end
     end
     pcall(tip.AddLine, tip, txt, r, g, b)
     i = i + 1
   end
   EC.colored = colored
+  -- ★汇总**不写在这个框里**（用户要求改到左侧「未装备」那栏下面）⇒ 只把差值交出去
+  return true, deltas
+end
+
+-- ★★★汇总段 = **直接追加进客户端那个气泡**（用户：「不是独立的框.而是合并到未装备信息栏内」）。
+--   手法与「物品价」的价格行**完全同源**、同一客户端已验证：`GameTooltip:AddLine` 是**追加**，不动客户端
+--   自己的行（只是往末尾加我们这几行）。
+--   ★★必须处理「客户端每 1/5 秒重建自己的气泡」——重建会把我们追加的行冲掉 ⇒ 用**显式标记 + 重建信号**：
+--     · `EC.sumKey` = 我们刚追加的是哪一份（悬停 id + 条目拼串）⇒ 相同且**没收到重建信号**就一拍都不重写；
+--     · 重建信号① = 我们的容器按钮包装**又被调用**（客户端每 1/5 秒重建时会再调一次那个全局）；
+--     · 重建信号② = 气泡**首行名字变了**。两处都清标记 ⇒ 下一拍（0.15s）自动补回。
+--   ★绝不用「搜我们那行文本」去重：行数之外还留着上一次的旧文本（本项目已定案的老坑）。
+ecSumHide = function()
+  -- 标记清零（下一拍如有悬停会重新染色 + 重新追加）；行本身归客户端的气泡管
+  EC.sumKey, EC.sumAppended, EC.hostOwn = nil, false, nil
+end
+
+-- 客户端气泡**自己**的行数（我们追加汇总之前抓；染色只染这几行，别染到自己追加的汇总行）
+local function ecNumLines(host)
+  if not host or type(host.NumLines) ~= "function" then return EC_MAX_LINES end
+  local ok, n = pcall(host.NumLines, host)
+  if ok and type(n) == "number" and n > 0 then return n end
+  return EC_MAX_LINES
+end
+
+-- ★★★给**左侧（未装备那件）气泡自己的行**按差异染色（用户：「差异的染色也在未装备的信息内处理」）：
+--   口径与右侧那栏**对称**：左侧那行显示的是**悬停件**的值 ⇒ 悬停更好 = 绿、更差 = 红；
+--   两侧都排除等级/耐久/商人价；★第 1 行（物品名）永不染；★只染到 `own` 行（客户端自己的行），
+--   不碰我们自己追加的汇总段。颜色是**改客户端的 FontString**，客户端重建后会复位 ⇒ 靠同一套标记补回。
+local function ecHostPaint(host, wornIdx, own)
+  if not host or type(wornIdx) ~= "table" or type(host.GetName) ~= "function" then return 0 end
+  local okN, nm = pcall(host.GetName, host)
+  if not okN or type(nm) ~= "string" or nm == "" then return 0 end
+  local painted, row = 0, 2          -- ★从第 2 行起（第 1 行是物品名）
+  while row <= own do
+    local fs = rawget(_G, nm .. "TextLeft" .. row)
+    if fs and type(fs.GetText) == "function" and type(fs.SetTextColor) == "function" then
+      local okT, t = pcall(fs.GetText, fs)
+      if okT and type(t) == "string" and t ~= "" then
+        local key, vRef = ecLineKey(t)
+        if key and vRef and not ecSkipKey(key) then
+          local v = wornIdx[key]
+          if v == nil then v = 0 end          -- 当前装备没有这一项 ⇒ 按 0（换上就多了这一项）
+          if vRef ~= v then
+            local better = (vRef > v)
+            if ecLowerBetter(key) then better = (vRef < v) end
+            if better then pcall(fs.SetTextColor, fs, EC_UP_R, EC_UP_G, EC_UP_B)
+            else pcall(fs.SetTextColor, fs, EC_DN_R, EC_DN_G, EC_DN_B) end
+            painted = painted + 1
+          end
+        end
+      end
+    end
+    row = row + 1
+  end
+  return painted
+end
+
+-- 往客户端气泡末尾追加汇总。deltas = {{key=, d=}, ...}（d = 悬停 − 已装备）
+local function ecSumShow(host, deltas)
+  if not host or type(host.AddLine) ~= "function" then ecSumHide() return false end
+  local n = table.getn(deltas)
+  -- 组装文本（同一份内容 ⇒ 同一个 key ⇒ 不重复追加）
+  local out, key = {}, tostring(EC.cur) .. "|" .. tostring(n)
+  local k = 1
+  while k <= n do
+    local d = deltas[k]
+    local sign = (d.d > 0) and "+" or "-"
+    local txt = ecLabelOf(d.key) .. " " .. sign .. tostring(math.abs(d.d))
+    out[table.getn(out) + 1] = { txt = txt, d = d.d, key = d.key }
+    key = key .. "|" .. txt
+    k = k + 1
+  end
+  if EC.sumKey == key then return true end      -- 已处理且没收到重建信号 ⇒ 不重写
+  -- ★先给客户端气泡**自己的行**按差异染色（追加汇总之前抓它自己的行数）
+  if EC.hostOwn == nil then EC.hostOwn = ecNumLines(host) end
+  EC.painted = ecHostPaint(host, EC.wornIdx, EC.hostOwn)
+  pcall(host.AddLine, host, L("EC_SUM_HEAD"), 0.62, 0.62, 0.62)
+  if n == 0 then
+    pcall(host.AddLine, host, L("EC_SUM_NONE"), 0.62, 0.62, 0.62)
+  else
+    k = 1
+    while k <= table.getn(out) do
+      local it = out[k]
+      -- 颜色 = 「换装后这项变好还是变差」：越大越好 ⇒ +为绿；越小越好 ⇒ +为红
+      local better = (it.d > 0)
+      if ecLowerBetter(it.key) then better = (it.d < 0) end
+      if better then
+        pcall(host.AddLine, host, it.txt, EC_UP_R, EC_UP_G, EC_UP_B)
+      else
+        pcall(host.AddLine, host, it.txt, EC_DN_R, EC_DN_G, EC_DN_B)
+      end
+      k = k + 1
+    end
+  end
+  EC.sumKey, EC.sumAppended = key, true
+  pcall(host.Show, host)     -- 追加后让客户端重新排版（高度会变）
   return true
 end
 
@@ -658,9 +839,10 @@ local function ecShow(host, id)
   end
 
   -- ★对比染色的参照系 = **主提示那份行索引**（悬停那件）；取不到就整框原色（绝不错染）
-  local hostIdx = ecHostIndex(host)
+  local hostIdx, hostOrder = ecHostIndex(host)
+  EC.wornIdx, EC.hostOwn = {}, nil      -- 本拍的「已装备键→数值」与「气泡自己行数」都重新抓
 
-  local shown, firstSlot = {}, nil
+  local shown, firstSlot, all, seenKey = {}, nil, {}, {}
   local i = 1
   while i <= table.getn(names) do
     local slotId = ecSlotIDByName(names[i])
@@ -671,14 +853,41 @@ local function ecShow(host, id)
       local wornID = okL and ecLinkID(wornLink) or nil
       local same = (wornID ~= nil and wornID == id)   -- ★悬停的就是这一格穿的那件 ⇒ 比它自己没意义
       if okL and type(wornLink) == "string" and wornLink ~= "" and not same then
-        if ecFill(table.getn(shown) + 1, slotId, host, hostIdx) then
+        -- ★名字行的品质色**现算**（读回色不可信，用户报「稀有度标题没染色」）
+        local qr, qg, qb = ecQualityRGB(wornID)
+        local okF, dl = ecFill(table.getn(shown) + 1, slotId, host, hostIdx, qr, qg, qb)
+        if okF then
           table.insert(shown, EC.tips[table.getn(shown) + 1])
           if not firstSlot then firstSlot = names[i] end
+          -- 汇总候选：双戒指/双饰品两个框的差值合并（同名键只取第一条）
+          local j = 1
+          while j <= table.getn(dl) do
+            local it = dl[j]
+            if it and it.key and not seenKey[it.key] then
+              seenKey[it.key] = true
+              all[table.getn(all) + 1] = it
+            end
+            j = j + 1
+          end
         end
       end
     end
     i = i + 1
   end
+
+  -- ★★只出现在**悬停那件**上的属性（当前装备这一栏里根本没有这一行）：差 = 悬停值 − 0
+  --   —— 用户报「有些属性丢失比较，没显示耐力的差值」就是这一支（+3 耐力在对面，这边整行都不存在）。
+  local j2 = 1
+  while j2 <= table.getn(hostOrder) do
+    local it = hostOrder[j2]
+    if it and it.key and not seenKey[it.key] and not ecSkipKey(it.key) and it.v and it.v ~= 0 then
+      seenKey[it.key] = true
+      all[table.getn(all) + 1] = { key = it.key, d = it.v }
+    end
+    j2 = j2 + 1
+  end
+  EC.deltas = table.getn(all)
+  EC.sumList = all
 
   if table.getn(shown) == 0 then
     EC.why = "nothing equipped"      -- 该部位没穿东西（正常情况，不是错误）
@@ -692,6 +901,8 @@ local function ecShow(host, id)
     k = k + 1
   end
   ecPlace(host)
+  -- ★汇总写到**左侧未装备气泡下面**（用户要求从右侧搬过来）
+  if type(hostIdx) == "table" then ecSumShow(host, all) end
   EC.hits = EC.hits + 1
   EC.last = L("EC_HIT", tostring(id), tostring(firstSlot or equipLoc))
   return true
@@ -706,13 +917,23 @@ local function ecUpdate(force)
     EC.cur, EC.why = nil, "no tooltip"
     return false
   end
+  -- ★重建信号②：气泡**首行名字变了**（客户端换物品/重建）⇒ 清汇总标记，允许补写一次
+  local nmNow = ecNameNorm(ecTipName())
+  if nmNow ~= EC.tipName then
+    EC.tipName = nmNow
+    EC.sumKey = nil
+  end
   local id = ecHoverID()
   if not id then
     ecHideAll()
     EC.cur, EC.why = nil, "unresolved hover"
     return false
   end
-  if (not force) and id == EC.cur then return true end
+  if (not force) and id == EC.cur then
+    -- ★客户端重建过（标记被清）⇒ 只把**汇总**补回气泡，不必重算对比框（省一遍读回/重画）
+    if EC.sumKey == nil and EC.sumList then ecSumShow(host, EC.sumList) end
+    return true
+  end
   EC.cur = id
   return ecShow(host, id)
 end
@@ -734,6 +955,9 @@ local function ecHookButtons()
     local btn = rawget(_G, "this")
     local b, s = ecBtnSlot(btn)
     if b and s then EC.hb, EC.hs = b, s end
+    -- ★重建信号①：容器按钮每 1/5 秒重建气泡时会**再调一次这个全局** ⇒ 当场清汇总标记，允许补写一次
+    --   （客户端重建会连带把我们追加的汇总行冲掉；标记不清就会以为「已经写过」而不再补）
+    EC.sumKey = nil
     ecUpdate(true)
   end
   rawset(_G, "ContainerFrameItemButton_OnEnter", wrap)
@@ -892,7 +1116,8 @@ function EVAL_EC_TEST_STATE()
   return {
     on = EVAL_EC_ENABLED(), armed = EC.armed, wrapped = EC.wrapped, built = EC.built,
     hits = EC.hits, cur = EC.cur, why = EC.why, last = EC.last,
-    colored = EC.colored,
+    colored = EC.colored, deltas = EC.deltas, sumAppended = EC.sumAppended and true or false,
+    painted = EC.painted,
     hb = EC.hb, hs = EC.hs, shown = table.getn(EC.shown),
     api = ecApiLine(),
   }
