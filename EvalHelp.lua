@@ -29,7 +29,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.75.43"
+local VERSION = "1.75.44"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -8295,15 +8295,16 @@ if type(SlashCmdList) == "table" then
     elseif msg == "go mapdbg" or msg == "go mapdbg pop" then
       -- ★probe/worldmap-minimap 分支：地图插件开关链路诊断（弹窗未弹的取证）
       say("— 地图插件开关诊断 —")
-      say("① 开关真值 EVAL_SMAP_ENABLED=" .. tostring(type(EVAL_SMAP_ENABLED) == "function" and EVAL_SMAP_ENABLED()))
+      -- ★1.75.44 名字修正：SimpleMap 的全局桥叫 EVAL_SM_*（EVAL_SMAP_* 是旧名、已不存在 —— scan_dangling 全仓闸门抓到）
+      say("① 开关真值 EVAL_SM_ENABLED=" .. tostring(type(EVAL_SM_ENABLED) == "function" and EVAL_SM_ENABLED()))
       say("② IsAddOnLoaded(EH_SimpleMap)="
         .. tostring(type(IsAddOnLoaded) == "function" and IsAddOnLoaded("EH_SimpleMap")))
       local okES, es = pcall(GetAddOnEnableState, "player", "EH_SimpleMap")
       say("③ GetAddOnEnableState: ok=" .. tostring(okES) .. " v=" .. tostring(es))
-      say("④ 弹窗函数 EVAL_SMAP_RELOAD_ASK=" .. type(EVAL_SMAP_RELOAD_ASK))
+      say("④ 弹窗函数 EVAL_PLUGIN_RELOAD_ASK=" .. type(EVAL_PLUGIN_RELOAD_ASK))
       if msg == "go mapdbg pop" then
-        if type(EVAL_SMAP_RELOAD_ASK) == "function" then
-          EVAL_SMAP_RELOAD_ASK()
+        if type(EVAL_PLUGIN_RELOAD_ASK) == "function" then
+          EVAL_PLUGIN_RELOAD_ASK("EH_SimpleMap")
           say("⑤ 已试弹确认窗（屏幕上应出现「现在重载吗」弹窗；确定=自动 /reload）")
         else
           say("⑤ 弹窗函数不存在（Toolbox.lua 没载入新版？）")

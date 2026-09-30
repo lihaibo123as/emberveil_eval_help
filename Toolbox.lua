@@ -293,6 +293,7 @@ local TB_CHAR_KEYS = {
   chUse = true, chTex = true, consumable = true, chX = true, chY = true,
   -- 猎人助手 · 一键喂食
   feedPet = true, hhFood = true, hhFoodTex = true, hhSpell = true, hhX = true, hhY = true,
+  hhAutoFeed = true, -- ★1.75.44 「自动喂养」开关（默认开；模块侧第一次把 nil 物化为 true）
   -- 骑乘助手 · 一键下马
   dismount = true, dismountAuto = true, dhX = true, dhY = true,
 }
@@ -4633,6 +4634,10 @@ local function tbModel()
     --   一起删（标记按钮 + tooltip + 显隐清单 + 读值口字段），不留「零引用」的死代码。
     { t = "c", key = "feedPet", label = L("TB_FEEDPET"), tip = L("TB_FEEDPET_TIP"),
       posReset = true }, -- ★用户要求：右侧加「重设位置」按钮（图标回屏幕正中）
+    -- ★★★1.75.44 用户：「自动喂养的开关在工具箱->一键喂食->添加个设置->自动喂养,默认开启」——
+    --   真值 = 角色级 `hhAutoFeed`（TB_CHAR_KEYS 已收）；**默认开** = 模块侧第一次进世界把 nil 物化为 true
+    --   （绝不顶掉用户之后的勾选）；关掉 = 自动喂养一拍都不跑（手动点图标不受影响）。
+    { t = "c", key = "hhAutoFeed", label = L("TB_HHAUTOFEED"), tip = L("TB_HHAUTOFEED_TIP") },
     -- ★1.74.5 用户要求：「参照喂食助手，添加个消耗品助手」→ 多选 + 主图标旁横排各自点用
     { t = "h", label = L("TB_CH_GROUP") },
     { t = "c", key = "consumable", label = L("TB_CONSUMABLE"), tip = L("TB_CONSUMABLE_TIP"),

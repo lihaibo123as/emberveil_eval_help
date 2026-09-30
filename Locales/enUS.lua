@@ -935,6 +935,8 @@ SE_OP_NEXT = "Click to switch to: %s",
   -- ===== 1.74.5 Toolbox "Hunter helper" group + one-click feeding (tools/HunterHelper.lua) =====
   TB_H_HUNTER = "—— Hunter helper ——",
   TB_FEEDPET = "One-click feed pet",
+  TB_HHAUTOFEED = "Auto feed",
+  TB_HHAUTOFEED_TIP = "When your pet's happiness is below green (<66%) and you are **not in combat**, feed it automatically every 20s (same channel as the left click: casts Feed Pet and feeds the chosen food). On by default; a failed feed pauses it (with a chat note), and one successful manual feed re-arms it.",
   TB_FEEDPET_TIP = "Puts a feeding icon on screen: Left = feed your pet in one click (casts Feed Pet and feeds the chosen food) · Right = pick food from your bags (the icon then shows that food) · hold Left to drag. Off by default; while off, not even the icon frame is created.",
   HH_ON_MSG = "✅ One-click feed: icon shown (Left = feed / Right = pick food / drag to move)",
   HH_OFF_MSG = "One-click feed: icon hidden",

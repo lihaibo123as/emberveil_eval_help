@@ -57,6 +57,11 @@ local HH = {
   rightClicks = 0,   -- 右键点击计数（诊断：为 0 = 右键根本没到分派代码）
   lastBtn = nil,     -- 最近一次 OnClick 判出的 button
   lastArgs = nil,    -- 最近一次 OnClick 的**原始参数形状**（a/b/arg1 的类型）
+  -- ★★★1.75.44 自动喂养（用户定）：armed = 是否武装（默认开；**自动执行中途失败就暂停**；
+  --   你手动喂成功一次后自动恢复）；at = 上一次自动触发时刻（间隔 HH_AUTO_GAP 秒）
+  auto = { armed = true, at = 0 },
+  runAuto = nil,     -- 状态机里**这一发**是不是自动触发的（hhOk 恢复 / hhFail 暂停都要靠它分）
+  autoSet = nil,     -- ★1.75.44 工具箱「自动喂养」开关的一次性物化标记（没写过就给它默认开）
 }
 
 -- ===== 常量（单一来源；改这里就够） =====
@@ -99,6 +104,9 @@ local HH_ICON_Y = (HH_H - HH_ICON) / 2
 local HH_DECAY_TOP = 0.72         -- %/秒 @ 忠诚度 6（= 7.2 点/s ÷ 1000 × 100）
 local HH_BAR_PERIOD = 0.2         -- 进度条**实时**刷新节拍（用户：「完善进度预估实时变更」）
 local HH_RATE = 2.0        -- ★1.74.10 用户：「公共CD 是1.5s 喂食间隔设置2s」—— 间隔放宽到 2s/笔（给 1.5s GCD 留余量）
+local HH_AUTO_GAP = 20.0   -- ★★★1.75.44 自动喂养间隔 —— 定案 **20s**（用户要 12s、让我核对 buff：classicdb 与
+--   **EmberVeil 自己的数据库** /spell/1539「Feed Pet Effect」都是 **Duration: 20 Sec**、Instant、**战斗中不可用**、
+--   每 2s 一跳涨快乐 -> 12s 会在宠物还在吃的时候又喂 = 浪费食物；取 buff 时长 20s 作为自动喂最小间隔）。
 local HH_AIM_WAIT = 1.0
 local HH_SETTLE_WAIT = 0.8
 local HH_QMAX = 3
@@ -110,7 +118,7 @@ local HH_BURST_MAX = 8       -- ★仅作记账用（不再硬停）：一秒窗
 local HH_MAX_CAND = 96
 local HH_BAGS = { 0, 1, 2, 3, 4 }
 local HH_DEF_W, HH_DEF_H = 1024, 768   -- UIParent 尺寸拿不到时的兜底（与项目其它位置换算同口径）
-local HH_SPELL_CAND = { "喂食宠物", "Feed Pet" }
+local HH_SPELL_CAND = { "喂养宠物", "喂食宠物", "Feed Pet" } -- ★★★1.75.44 用户定稿：「喂食技能默认名称叫做喂养宠物」（截图 buff = 喂养宠物效果）⇒ 排第一；旧写法「喂食宠物」与英文当兜底
 -- ★食物启发式词表：本客户端**没有**「某物品是不是宠物食物」的 API（全表只有 GetPetFoodTypes/GetStablePetFoodTypes），
 --   所以下拉只能「全部列出 + 把像食物的排前面」；**吃不吃由客户端判定**（喂不动会如实回报并放回原格）。
 --   词表按物品名里真会出现的字取；GetPetFoodTypes 的食谱名（如「肉类/鱼类」）也一并当信号。
@@ -414,8 +422,25 @@ end
 local function hhFail(msg)
   hhSay("❌ " .. tostring(msg))
   hhLog("失败：" .. tostring(msg))
+  -- ★★★1.75.44 自动喂养**中途失败** ⇒ 信息提示 + 暂停（用户：「中途喂养失败,则信息提示.中止行为」）；
+  --   你手动喂成功一次后自动恢复（见 hhOk）。★HH.runAuto 只在**出队之后**才被置位 ⇒
+  --   EVAL_HH_FEED 入口处的「CD/队列/技能」拒绝**不会**误暂停自动喂养（那些属于让位，不属于喂养失败）。
+  if HH.runAuto then
+    HH.auto.armed = false
+    hhSay("⚠ 自动喂养已暂停（原因：" .. tostring(msg) .. "；你手动喂成功一次后自动恢复）")
+    hhLog("自动喂养失败 ⇒ 暂停（armed=false）：" .. tostring(msg))
+    HH.runAuto = nil
+  end
   hhRelease()
   return false
+end
+
+-- ★★★1.75.44 语义明确 = 技能未匹配（用户：「这块要进行自动化检索技能绑定流程.并且语义明确点.就是技能未匹配的问题」）：
+--   施放失败 / 选目标态超时且**重新检索也没找到**时的统一出口 —— 不再是含糊的「没能进入『等待选目标』状态」，
+--   而是直接告诉你是**技能未匹配**（法术书与动作条都没有「喂养宠物」），以及接下来该怎么办（拖上动作条）。
+local function hhFailSkill()
+  local nm = tostring(HH_SPELL_CAND[1])
+  return hhFail("技能未匹配：法术书与动作条都没有「" .. nm .. "」（施放后没进选目标态；请先把它**拖到动作条上**再点喂食）")
 end
 
 local function hhOk(now)
@@ -423,6 +448,16 @@ local function hhOk(now)
   hhSay(string.format(L("HH_OK"), tostring(HH.food or "?")))
   hhLog("喂食完成：食物=" .. tostring(HH.food))
   HH.food = nil
+  -- ★★★1.75.44 手动喂食成功 ⇒ 自动喂养**恢复**（用户：「在下次用户自己点击喂养图标并且正确喂养之后自动开启自动喂养流程」）；
+  --   任何成功都顺带把自动间隔从这一刻重算（刚喂完不该立刻再来一发自动）。
+  if not HH.runAuto and not HH.auto.armed then
+    HH.auto.armed = true
+    hhSay("手动喂食成功 ⇒ 自动喂养已恢复（低于绿色 · 非战斗时自动接管）")
+    hhLog("手动喂食成功 ⇒ 自动喂养已恢复（armed=true）")
+  end
+  HH.auto.at = tonumber(now) or hhNow()
+  HH.runAuto = nil
+  HH.retried = nil -- ★1.75.44 喂成功 ⇒ 清空「超时重新检索」标记（本发结束）
   -- ★1.74.11 CD 倒计时：喂食施法走**公共 CD 1.5s**（GCD 默认值；
   --   食物本身没单独 CD 可查，公共 CD 是真实约束）。
   --   ★截止时刻用**喂完那一刻的真实时间**（step 的 now 参数），不是 hhNow()（GetTime 可能滞后）。
@@ -438,6 +473,13 @@ end
 local function hhFailUnclear()
   hhSay(L("HH_UNCLEAR"))
   hhLog("结果未确认（已点包但待选态未按时结束）")
+  -- ★★★1.75.44 「未确认」也算喂养失败：自动触发的同样暂停（与 hhFail 同一口径）
+  if HH.runAuto then
+    HH.auto.armed = false
+    hhSay("⚠ 自动喂养已暂停（结果未确认；你手动喂成功一次后自动恢复）")
+    hhLog("自动喂养结果未确认 ⇒ 暂停（armed=false）")
+    HH.runAuto = nil
+  end
   HH.food = nil
   hhRelease()
   EVAL_HH_REFRESH()
@@ -481,6 +523,25 @@ end
 --   手段：依次读每格的 tooltip 文本（本项目已验证的读法：GameTooltip:SetAction(slot) → TextLeft1）。
 --   ★只在首次需要时扫一次（缓存），避免高频 tooltip 调用。
 local HH_SLOT_CACHE = nil
+-- ★★★1.75.44 施放前**轻核验**（用户截图实锤「移动技能位置后报『没能进入选目标态』」= 格号缓存过期）：
+--   缓存的格号用之前先读这格 tooltip 第一行：还是那个技能名才准用；名字对不上（多半是换位置了）⇒
+--   当帧作废缓存重新检索（hhFindSpellSlot），不再拿旧格号去按一个空的/别的动作。
+--   返回：true=确认是它 · false=确认不是它 · nil=客户端读不了（调用方按「不是它」处理，重新检索最稳）。
+local function hhSlotHasSpell(slot, name)
+  if type(slot) ~= "number" or type(name) ~= "string" or name == "" then return false end
+  if type(GetActionTexture) ~= "function" or type(GameTooltip) ~= "table" then return nil end
+  local okTex, tex = pcall(GetActionTexture, slot)
+  if not (okTex and tex) then return false end -- 格子是空的 ⇒ 必然不是它
+  local tip = GameTooltip
+  if not pcall(tip.SetOwner, tip, UIParent, "ANCHOR_NONE") then return nil end
+  pcall(tip.ClearLines, tip)
+  if not pcall(tip.SetAction, tip, slot) then return nil end
+  local tl = _G["GameTooltipTextLeft1"]
+  if not (tl and type(tl.GetText) == "function") then return nil end
+  local okT, t = pcall(tl.GetText, tl)
+  return (okT and type(t) == "string" and string.find(t, name, 1, true)) and true or false
+end
+
 local function hhFindSpellSlot(spellName)
   if HH_SLOT_CACHE ~= nil then return HH_SLOT_CACHE or nil end
   if type(spellName) ~= "string" or spellName == "" then return nil end
@@ -515,6 +576,39 @@ local function hhFindSpellSlot(spellName)
   return nil
 end
 
+-- ★★★1.75.44 自动检索绑定（用户：「在点击未检测到喂养宠物技能则自动扫描动作条进行技能检索绑定操作；
+--   如果动作条没检索到.则提示用户将该技能拖拽到动作条上」——省掉「让用户主动设置喂食技能」这一步）：
+--   顺序 = ① EVAL_HH_SPELL()（手动指定/缓存命中/法术书）② 动作条逐格 tooltip 检索 ⇒ 命中即**绑定**
+--   （写进 spellCache，以后直接命中）③ 两处都没有 ⇒ **只提示**（把「喂养宠物」从法术书拖到动作条上），如实失败。
+--   ★返回值：命中 = 技能名(, 格号)；没命中 = nil。★**不静默**：检索命中与「请拖上动作条」都如实说。
+-- ★★★1.75.44b `quiet` 参数（**修刷屏**）：自动喂养那条路也调本函数（每 20s 一次可行性分析），
+--   失败时**绝不能上屏** —— 只在点击路径出声（用户点了没反应必须给原因），自动路径只记 hhLog。
+local function hhEnsureFeedSkill(quiet)
+  local nm = EVAL_HH_SPELL()
+  if nm then return nm end
+  for ci = 1, table.getn(HH_SPELL_CAND) do
+    local cand = HH_SPELL_CAND[ci]
+    if HH_SLOT_CACHE == false then HH_SLOT_CACHE = nil end -- ★上一次是「没找到」的缓存 ⇒ 本拍放开重扫（否则用户拖上技能后点不动）
+    local slot = hhFindSpellSlot(cand)
+    if slot then
+      HH.spellCache, HH.spellIndex, HH.spellAt = cand, nil, -999
+      hhSay(string.format("已在动作条第 %d 格找到「%s」并绑定为喂食技能（以后自动使用它）", slot, cand))
+      hhLog("技能检索绑定：动作条第 " .. tostring(slot) .. " 格「" .. tostring(cand) .. "」")
+      return cand, slot
+    end
+  end
+  -- ★两条出路都要给（用户问「有了自动检测，『选技能』还要不要」→ **要**：非中/英文客户端的技能名不在候选表，
+  --   法术书与动作条**都**识别不到 ⇒ 那时只有「选技能」手动指定这一条路能救回来）。
+  if not quiet then
+    hhSay("找不到「" .. tostring(HH_SPELL_CAND[1]) .. "」：① 从法术书（P）把它**拖到动作条上**再点喂食；"
+      .. "② 或**右键喂食图标 -> 「选技能」手动指定**（非中/英文客户端请走这条）")
+  end
+  hhLog("技能检索绑定失败：法术书与动作条都没有「" .. tostring(HH_SPELL_CAND[1])
+    .. "」（已提示两条出路：拖上动作条 / 右键「选技能」手动指定；quiet=" .. tostring(quiet and true or false) .. "）")
+  return nil
+end
+
+-- ① 施放：进入待选目标态（受保护函数走 RunScript —— 项目既有通道，Engine.lua 指定等级同款）
 local function hhBegin(now, req)
   local tb = hhCfg()
   if not tb or not tb.feedPet then return hhFail(L("HH_OFF")) end
@@ -530,11 +624,25 @@ local function hhBegin(now, req)
   --   认可的正规动作 → 被反作弊标记的概率大大降低。找不到格号才退回 RunScript。
   local slot = hhFindSpellSlot(spell)
   if slot then
+    -- ★★★1.75.44 施放前**核验缓存格号**（用户截图实锤：技能在动作条上换位置后，旧格号去按是空的/别的动作
+    --   ⇒ 「没能进入选目标态」。核验不过就当帧作废重扫 —— 这样「移动技能位置」对用户完全无感）。
+    if hhSlotHasSpell(slot, spell) ~= true then
+      HH_SLOT_CACHE = nil
+      local slot2 = hhFindSpellSlot(spell)
+      if slot2 and slot2 ~= slot then
+        hhLog("缓存格号失效（第 " .. tostring(slot) .. " 格已不是「" .. tostring(spell) .. "」）⇒ 重新检索命中第 "
+          .. tostring(slot2) .. " 格")
+      end
+      slot = slot2
+    end
+  end
+  if slot then
     -- （门控已改为「调用方先判 hhActReady」：不在这里拒绝，避免吃掉玩家点击）
     local okA = pcall(UseAction, slot)
     if okA then
       HH.lastRun, HH.phase, HH.aimAt = now, "aim", now
       HH.food = foodName
+      HH.retried = nil -- ★1.75.44 本发还没做过「选目标态超时的重新检索」
       hhActMark("cast", now) -- ★记账（已实际发出）
       hhLog("动作条施放泡点 " .. tostring(slot) .. "（避开 RunScript 绕行）→ 等待选目标态")
       return true
@@ -581,6 +689,7 @@ function EVAL_HH_STEP(now)
     -- ★先判「现在能发动作吗」**再**取队列：否则一旦被拒，这一次点击就被吃掉了（审核发现的设计缺陷）
     if table.getn(HH.q) > 0 and (now - HH.lastRun) >= HH_RATE and hhActReady(now) then
       local req = table.remove(HH.q, 1)
+      HH.runAuto = (req and req.auto == true) or false -- ★1.75.44 这一发是自动触发的吗（hhOk 恢复 / hhFail 暂停都要靠它分）
       hhBegin(now, req)
     end
     if HH.phase == "idle" and table.getn(HH.q) == 0 then
@@ -592,7 +701,26 @@ function EVAL_HH_STEP(now)
     if hhIsTargeting() == true and hhActReady(now) then -- ★等 0.2s 间隔（延迟，不拒绝）
       hhPick(now)
     elseif (now - HH.aimAt) > HH_AIM_WAIT then
-      hhFail(L("HH_AIM_FAIL"))
+      -- ★★★1.75.44 施放后没进选目标态 ⇒ 多半是技能在动作条上**换了位置**（格号缓存过期）。
+      --   修法 = 当帧**自动重新检索绑定**一次：找到新格号就接着喂，找不到才如实报「技能未匹配」。
+      if not HH.retried then
+        HH.retried = true
+        HH_SLOT_CACHE = nil
+        local sp = EVAL_HH_SPELL()
+        local slot2 = sp and hhFindSpellSlot(sp) or nil
+        if slot2 then
+          hhLog("选目标态超时 ⇒ 自动重新检索：「" .. tostring(sp) .. "」在第 " .. tostring(slot2) .. " 格，重新施放")
+          local ok2 = pcall(UseAction, slot2)
+          if ok2 then
+            hhActMark("cast", now)
+            HH.aimAt = now -- ★再给它一次机会（不重复触发超时）
+            return
+          end
+        end
+        hhLog("选目标态超时 ⇒ 自动重新检索也没找到「" .. tostring(sp) .. "」（法术书与动作条都没有）")
+      end
+      -- ★语义明确 = 技能未匹配（用户：「语义明确点.就是技能未匹配的问题」）——不再是含糊的「没能进入选目标态」
+      return hhFailSkill()
     end
     return
   end
@@ -657,6 +785,14 @@ function EVAL_HH_FEED(req)
     why(false, "队列已满（" .. tostring(HH_QMAX) .. "）")
     return hhFail(L("HH_BUSY"))
   end
+  -- ★★★1.75.44 点击前**自动检索绑定**（用户：「在点击未检测到喂养宠物技能则自动扫描动作条进行技能检索绑定操作」）：
+  --   法术书与动作条都没有才提示拖上动作条（省掉「让用户主动设置喂食技能」的手动指定步骤）。
+  --   ★自动触发（hhAutoTick）也会走到这里：同一条通道 ⇒ 手动/自动的技能识别一致。
+  if not EVAL_HH_SPELL() and not hhEnsureFeedSkill(true) then
+    why(false, "法术书与动作条都没有「" .. tostring(HH_SPELL_CAND[1]) .. "」")
+    return hhFail("找不到「" .. tostring(HH_SPELL_CAND[1]) .. "」：① 从法术书（P）把它拖到动作条上；"
+      .. "② 或右键喂食图标 -> 「选技能」手动指定（非中/英文客户端走这条）")
+  end
   if HH.phase ~= "idle" and table.getn(HH.q) > 0 then
     why(true, "状态机正忙，本次排到队尾")
   else
@@ -683,6 +819,66 @@ function EVAL_HH_FEED(req)
   end)
   return true
 end
+-- ===== ★★★1.75.44 自动喂养（用户定：**低于绿色（<66%）触发** · 非战斗才跑 · 12s 间隔 · 中途失败提示并暂停 · 手动喂成功一次后恢复） =====
+-- 用户原话：「自动喂养流程: 在检测到宠物黄脸状态进入自动喂养流程可行分析,触发喂养,中途喂养失败,则信息提示.中止行为.
+--   在下次用户自己点击喂养图标并且正确喂养之后自动开启自动喂养流程」＋「自动喂养触发流程是在非战斗状态,
+--   自动喂养间隔查询下资料应该是12s间隔」。
+-- ★触发点 = 现成的 2s 装饰心跳（EVAL_HH_PETDECOR 之后那一拍），不另起 tick（开关一停一拍都不跑 = 关掉零动作）。
+-- ★「可行分析」= 便宜 → 贵的顺序：档位（低于绿色：档 1/2，<66%）→ 武装/非战斗/间隔 → 食物已设且背包有 → 技能可绑（法术书或动作条）→
+--   CD/状态机空闲 ⇒ 全过才入队（req.auto = true）；任何一项不过 = **这一拍跳过**（只记 hhLog，绝不每 2 秒刷屏、也不暂停）。
+--   暂停（disarm）只发生在「已经开始喂、中途失败」那一刻（hhFail / hhFailUnclear 里的 HH.runAuto 分支）。
+local function hhInCombat()
+  local st = rawget(_G, "EVAL_HELP_STATE")
+  if type(st) == "table" and st.inCombat ~= nil then return st.inCombat and true or false end
+  if type(UnitAffectingCombat) == "function" then
+    local ok, v = pcall(UnitAffectingCombat, "player")
+    if ok then return v and true or false end
+  end
+  return false -- 读不到就当非战斗（有战斗时由下一次档位/战斗事件再判）
+end
+
+local function hhHappyBand()
+  if type(GetPetHappiness) ~= "function" then return nil end
+  local ok, v = pcall(GetPetHappiness)
+  if ok and tonumber(v) then return tonumber(v) end
+  return nil
+end
+
+-- ★★★1.75.44 工具箱 -> 一键喂食 -> 设置 ->「自动喂养」开关（用户定：**默认开**）：
+--   真值 = 角色级存档 `tb.hhAutoFeed`；第一次进世界物化为 true（只写一次，绝不顶掉用户的勾选 —— 判据同
+--   TB_CHAR_KEYS 的「`false or nil` 不许顶回」老雷）。**会话暂停**（喂失败）走另一个字段 `HH.auto.armed`，
+--   与这个配置开关互不打扰：暂停后**不**去改配置，恢复后**也**不去改配置。
+local function hhAutoOn()
+  local tb = hhCfg()
+  if not tb then return false end
+  if not HH.autoSet then
+    HH.autoSet = true
+    if tb.hhAutoFeed == nil then tb.hhAutoFeed = true end -- ★默认开（只物化一次）
+  end
+  return tb.hhAutoFeed ~= false
+end
+
+local function hhAutoTick()
+  if not hhOn() or not hhHasPet() then return end
+  if not hhAutoOn() then return end               -- ★工具箱「自动喂养」开关（默认开；关掉 = 一拍都不跑）
+  if not HH.auto.armed then return end            -- ★会话暂停（自动喂中途失败过 -> 手动喂成功一次后自动恢复）
+  local band = hhHappyBand()
+  if band == 3 or band == nil then return end    -- ★★★低于绿色都喂（用户定：「低于绿色,也就是低于66% 都触发」——档 2 黄脸 / 档 1 红脸）；绿脸（档 3）不喂；读不到不喂
+  if hhInCombat() then return end                -- ★非战斗才跑
+  local now = hhNow()
+  if (now - HH.auto.at) < HH_AUTO_GAP then return end
+  -- 可行分析（便宜 → 贵；都不过就安静跳过：只记 hhLog，绝不每 2 秒刷屏）
+  local tb = hhCfg() or {}
+  local food = tb.hhFood
+  if type(food) ~= "string" or food == "" then hhLog("自动喂养跳过：未设食物") return end
+  if not EVAL_HH_FIND_FOOD(food) then hhLog("自动喂养跳过：背包里没有食物「" .. tostring(food) .. "」") return end
+  if not EVAL_HH_SPELL() and not hhEnsureFeedSkill(true) then return end -- ★技能：法术书或动作条可绑；绑不上 ⇒ **静默跳过**（quiet: 只记日志，绝不每 20s 刷聊天框）
+  if HH.cdUntil > now or HH.phase ~= "idle" then hhLog("自动喂养跳过：CD/状态机正忙（这一拍让位）") return end
+  HH.auto.at = now
+  hhLog("自动喂养：低于绿色（档位=" .. tostring(band) .. "）⇒ 触发（食物=" .. tostring(food) .. " · 间隔=" .. tostring(HH_AUTO_GAP) .. "s）")
+  EVAL_HH_FEED({ auto = true })
+end
+
 -- ★★1.74.29 用户要求：工具箱「喂食助手」行加「重设位置」按钮 → 图标回到**屏幕正中**。
 --   口径与项目其它记忆位置一致：位置 = 「中心偏移」（hhX 向右为正、hhY 向上为正），
 --   正中 = 偏移 (0,0)；写配置后**立刻**按同一套换算重新落位（hhTopLeft 是唯一来源）。
@@ -844,6 +1040,14 @@ function EVAL_HH_TIP_LINES()
   else
     put(string.format(L("HH_TT_SPELL"), L("HH_TT_SPELL_NONE")), 1, 0.5, 0.4)
   end
+  -- ★★★1.75.44 自动喂养状态行（三态：用户开关关掉 / 会话暂停 / 开）
+  if not hhAutoOn() then
+    put("自动喂养：关（工具箱 -> 一键喂食 -> 设置里关了）", 1, 0.5, 0.4)
+  elseif HH.auto.armed then
+    put("自动喂养：开（低于绿 · 非战斗 · " .. tostring(HH_AUTO_GAP) .. "s 一拍）", 0.55, 1, 0.55)
+  else
+    put("自动喂养：暂停（喂失败过 -> 手动喂成功一次后自动恢复）", 1, 0.5, 0.4)
+  end
   -- ★1.74.12 有宠物 → 显示宠物信息行（等级/快乐度/忠诚/经验）；没宠物 → 显示「现在没有宠物」
   local piTxt, piR, piG, piB = EVAL_HH_PET_INFO()
   if piTxt then put(piTxt, piR, piG, piB) else put(L("HH_TT_NOPET"), 1, 0.5, 0.4) end
@@ -968,6 +1172,7 @@ do
       if acc < 2.0 then return end
       acc = 0
       if HH.built and HH.btn then pcall(EVAL_HH_PETDECOR) end
+      pcall(hhAutoTick) -- ★1.75.44 自动喂养（黄脸 · 非战斗 · 12s；中途失败暂停、手动喂成功恢复）
     end)
   end
 end
@@ -1244,28 +1449,57 @@ function EVAL_HH_MENU()
   return true
 end
 
--- 二级：从法术书里挑喂食技能（ruRU 等语言识别不到时的**唯一可靠**路径）
+-- 二级：从法术书里挑喂食技能 —— ★★★1.75.44 结论：**这个入口不能删**（用户问「有了自动检索绑定还要不要它」）：
+--   自动检索是**按名字**比对（`HH_SPELL_CAND`）；非中/英文客户端（如 ruRU）技能名不在候选表 ⇒ 法术书 ✗、
+--   动作条检索**也按名字** ✗ ⇒ **拖上动作条同样救不了** ⇒ 只有这里的手动指定（写 `tb.hhSpell`）能让链路工作。
+--   ★也不许改成「按图标识别」：vanilla 的「训练野兽」与「喂养宠物」**共用** Ability_Hunter_BeastTraining ⇒ 二义。
+-- ★★★1.75.44b 技能图标（与**技能编辑窗同一口径**的两个来源；都拿不到 ⇒ 如实返回 nil，绝不编图标）：
+--   ① `GetSpellTexture(法术书下标, "spell")` —— 按下标取，跨语言精确（Engine.lua 也用它）；
+--   ② 退 `EVAL_WICON(名字)`（Engine 导出的共用件，技能编辑窗的 seItemIcons 走的就是它）。
+local function hhSpellTexOf(idx, name)
+  if type(GetSpellTexture) == "function" then
+    local ok, tv = pcall(GetSpellTexture, idx, "spell")
+    if ok and type(tv) == "string" and tv ~= "" then return tv end
+  end
+  if type(EVAL_WICON) == "function" then
+    local ok2, tv2 = pcall(EVAL_WICON, name)
+    if ok2 and type(tv2) == "string" and tv2 ~= "" then return tv2 end
+  end
+  return nil
+end
+
 function EVAL_HH_SPELL_MENU()
   if type(EVAL_DD_OPEN) ~= "function" then return false end
-  local names = {}
+  local names, icons, seen = {}, {}, {}
+  local anyIcon = false
   if type(GetNumSpellTabs) == "function" and type(GetSpellName) == "function" then
     local okt, tabs = pcall(GetNumSpellTabs)
     tabs = (okt and tonumber(tabs)) or 0
     for t = 1, tabs do
+      if table.getn(names) >= HH_MAX_CAND then break end
       local oki, _, _, off, num = pcall(GetSpellTabInfo, t)
       if oki then
         off, num = tonumber(off) or 0, tonumber(num) or 0
         for i = off + 1, off + num do
+          if table.getn(names) >= HH_MAX_CAND then break end
           local okn, nm = pcall(GetSpellName, i, "spell")
-          if okn and type(nm) == "string" and nm ~= "" and table.getn(names) < HH_MAX_CAND then
+          -- ★★★1.75.44b 用户报障「列表里很多重复项」：法术书**每个等级都是一条、名字还一样**
+          --   （截图：奥术射击/毒蛇钉刺/猛禽一击 各出现两次）⇒ **同名只留一条**（本菜单只要名字）。
+          if okn and type(nm) == "string" and nm ~= "" and not seen[nm] then
+            seen[nm] = true
             table.insert(names, nm)
+            local tex = hhSpellTexOf(i, nm)
+            icons[table.getn(names)] = tex -- ★与 names **同序**（DD 的 opts.icons 契约）；★按**下标赋值**，nil 会让 insert 整表错位
+            if tex then anyIcon = true end
           end
         end
       end
     end
   end
   if table.getn(names) == 0 then hhSay(L("HH_NO_SPELLBOOK")) return false end
-  EVAL_DD_OPEN(HH.btn, names, function(pi) EVAL_HH_SET_SPELL(names[pi]) end)
+  -- ★一个图标都没有 ⇒ **不传** opts（与 seItemIcons 的 any 口径一致；避免给 DD 一张全 nil 的图标表）
+  EVAL_DD_OPEN(HH.btn, names, function(pi) EVAL_HH_SET_SPELL(names[pi]) end,
+    anyIcon and { icons = icons } or nil)
   return true
 end
 
@@ -1974,7 +2208,9 @@ local function hhGridSpec()
     end,
     btnBText = L("HH_G_SKILL"),
     btnB = function()
-      EVAL_IG_HIDE()
+      -- ★★★1.75.44c 用户报障「在打开选技能之后，喂食配置窗口消失了」：**不再关食物窗**。
+      --   两个窗本来就互不打架（食物窗 DIALOG/240 + 捕手 239；技能下拉 DIALOG/250 + 捕手 245
+      --   ⇒ 下拉在上；点下拉外面先关下拉，食物窗原地留着）⇒ 选完技能**接着挑食物**，省一次重开。
       EVAL_HH_SPELL_MENU()
     end,
   }
