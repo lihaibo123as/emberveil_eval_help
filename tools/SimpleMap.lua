@@ -1293,34 +1293,20 @@ end
 -- ★缩放口径（用户定）：**只缩外框**，内部地图贴图不缩放（画布另缩会露出底图留白）。
 --   透明度口径不变：外框 + 画布一起打（否则贴图不透明）。
 --   ★已知悬停漂移问题在 probe/map-scale 分支专项排查（probe9：A/B/C 全漂）。
--- ★★★1.75.5：**抓原值窗口**的剩余秒数。★必须是**提前声明的文件级 local**，不能放进 `SMFIT`（那张表在第 1750 行
---   才声明 ⇒ 在 `featApplyScale` 里引用会绑成**全局 nil**，`featApply` 会中途报错被 pcall 吞掉 —— 本轮就是
---   `LOCAL ORDER CHECK` 当场抓到的：GUI重开的计数直接变成 0）。
-local smFitHold = 0
--- ★★★1.75.45 新增（用户要求）：「未适配完成的探索层图层尽快尽早设置不可见，等缩放完成之后再显示可见度」。
---   ★前向声明：实现在 `smFitRestore` 之后（`featTeardown` / `smFitNewMap` / `smFitDropOnClose` / tick 四处都要能调它）。
---   ★为什么必须是**提前声明**：本项目老雷 —— 在 `local function` 定义之前引用会绑成全局 nil，`pcall` 一吞就静默。
-local smFitGhostShow
+-- ★★★1.75.52（用户定：整条「探索层适配」摘除）：这一段原来的 `smFitHold`（抓原值窗口剩余秒数）与
+--   `smFitGhostShow`（「未适配先隐形」的还回口）**随整条适配一起删掉了** —— 「打开世界迷雾」（表驱动全渲染）
+--   是替代方案，可见性由它自己按表决定，不再有「先隐形、折算完再显示」这一套。
 -- ★★★1.75.45：`mfLog` 也必须提前声明 —— 它的**首次使用在 1727 行**（`featHideBlackout`），
 --   而定义在 2000 行之后 ⇒ 不声明的话那几处绑全局 nil、被 `pcall` 静默吞掉（见其定义处的注释）。
 --   ★`smFitSayV` 同族（`probe_localorder.js` 在 1.75.45 把它扫出来）：首次使用 1744 行（黑幕耗时取证行）、
 --   定义 2123 行 ⇒ 「黑幕遮蔽：开图后 N ms 藏住 M 层」那条**上屏**取证行同样是死的（`mfLog` 那条进环、这条上屏）。
 local mfLog
 local smFitSayV
--- ★★★1.75.5（用户指定「本办法」）：**手动适配进行中** —— 置真时自动逻辑（抓原值窗口 / 每帧守缩放 / 折算）
---   整段让位，由 `/ehm fitnow` 那条调试命令按「开图 → 置自然档 → 等 2s → 读原值 → 套缩放 → 折算」一步步走完并**逐条打印**。
---   为什么要有它：自动时序依赖客户端开图时机，出问题时看不出卡在哪一步；手动过程完全确定、每步都有读数。
-local smFixActive = false
 local function featApplyScale(s)
   local w = featWm()
   if not w then return end
   s = tonumber(s) or 1
-  -- ★★★1.75.5（用户设计，采纳）：**抓原值窗口内先不缩放** —— 用户原话「探索层不加缓存是否可以在 /reload 的时候
-  --   不进行缩放,以获取原值,获取完成之后再进行缩放操作?」⇒ 可以，而且这样**不用翻转外框**（翻转会惊动客户端 ⇒ 读不到），
-  --   也**不用做「读回 ÷ es」的归一**（读回就是原值，不押注口径）。代价：开图后到抓完这段地图是满尺寸，
-  --   所以窗口必须**有界**（`SMFIT_HOLD_SEC`；抓不到/超时就照旧先缩放，绝不把地图卡在满尺寸）。
-  --   ★只挡「非 1」的写（`s == 1` 是复位/关闭路径，必须照写）⇒ 关掉功能仍能正常还原。
-  if (tonumber(smFitHold) or 0) > 0 and math.abs(s - 1) > 0.001 then return end
+  -- ★1.75.52：原来这里还有一道「抓原值窗口内先不缩放」的闸门（`smFitHold`）—— 随探索层适配整条摘除。
   -- ★★★1.75.9：**同一档只写一次**。开启路径里 `smApplyDefaults` / `featApply` / `featKeep` 三处都会调它，
   --   若本客户端 SetScale 是累乘语义（或客户端自己也记一份），一次开启就会被缩两遍 —— 用户报的正是「一开就缩两遍」。
   --   做法：先读回 `GetScale()`，已经是这档就**不写**（写出去的值与读回一致才算「已经是」）。
@@ -1716,7 +1702,7 @@ local function featHideBlackout()
           end
         end
       end
-      -- ② Hide（保鼠标；★只对「现在显示着」的动手 —— `IsShown` 读不到就照藏，判不出不拦，与 smFitInUse 同口径）
+      -- ② Hide（保鼠标；★只对「现在显示着」的动手 —— `IsShown` 读不到就照藏，「判不出就不拦」）
       local shown = true
       if type(b.IsShown) == "function" then
         local ok, v = pcall(b.IsShown, b)
@@ -1833,7 +1819,8 @@ end
 --     · 拖拽柄：Hide；
 --     · `UISpecialFrames`：**只有我们自己插进去的那一项**才拿掉（`FEAT.escAdded` 记账）；
 --     · 滚轮处理器：**不摘链**（摘链会连客户端原生滚轮一起弄丢），而是在处理器开头加 enabled 门（见 featWheelOn）。
---   ★**不清 `SMFIT.rec` / 存档原值** —— 那是「真原值」，留着才能在下次开启时把几何还原（见 smFitApply 的注释）。
+--   ★关功能 = 只还回**我们改过的那几样**（黑幕 alpha / 外框缩放 / 透明度 / 装上的钩子）——
+  --     整条「探索层适配」已摘除 ⇒ 探索层几何我们一个字节都没碰过，也就没有任何原值要还原。
 --   ★1.75.5 追加：**黑幕的原 alpha 也要还回去**（featBlackoutRestore）—— 跟几何原值同一个道理。
 local function featTeardown()
   FEAT.torn = true
@@ -1856,17 +1843,11 @@ local function featTeardown()
     FEAT.escAdded = false
   end
   FEAT.blackoutUntil, FEAT.blackoutAt, FEAT.blackoutLogged = 0, 0, false -- 瞬时窗口也收掉
-  -- ★★★1.75.45：**「未适配先隐形」的探索层也要还回可见度** —— 否则关功能后那几层还是 alpha 0 = 永久隐形
-  --   （与本函数上面「关掉时把自己改过的属性还回去」同一条铁律；`smFitGhostShow` 是提前声明的 local）。
-  local nGhost = 0
-  if smFitGhostShow then
-    local okG, ng = pcall(smFitGhostShow, "关闭功能")
-    if okG then nGhost = tonumber(ng) or 0 end
-  end
+  -- ★1.75.52：原来这里还要把「未适配先隐形」的探索层还回可见度 —— 那条（`smFitGhostShow`）随探索层适配整条摘除。
   -- ★★★1.75.6：地图设置面板 + 它的 click-catcher 一起收 —— 关功能 = 零动作，
   --   ★catcher 绝不能留着（它是全屏 Button，留着会吃地图上的所有点击）。
   if type(FEAT.cfgShow) == "function" then pcall(FEAT.cfgShow, false) end
-  mfLog("关闭收尾：黑幕透明度还原 %d 层（原 alpha 由 featBlackoutRestore 写回）｜探索层隐形还回 %d 层", nAlpha, nGhost)
+  mfLog("关闭收尾：黑幕透明度还原 %d 层（原 alpha 由 featBlackoutRestore 写回）", nAlpha)
 end
 
 -- ★★★1.75.9 新增：**再武装**（关闭时藏起来的件，开启时必须回来）—— 与 featTeardown 成对，缺一半就是上面那个真机 bug。
@@ -1888,85 +1869,10 @@ featRearm = function() -- ★赋值给上面前向声明的 local（不是 local
   return true
 end
 
--- ===== ★★★1.74.35-4 地图探索叠加层「跟随地图缩放」自动适配（用户定：**属缩放大地图**，默认启动）=====
---   用户原话（1.74.35-4）：「开图 / es 变化后 0.1s 高频爆发期（持续 2 秒，感知上无缝）＋之后就降到 0.3 稳态巡检
---     （兜换区域的重排）」；「以上的功能是工具箱→大地图缩放要默认启动的功能，不是给图层调试工具内使用的」。
---   ⇒ 功能从 EH_DebugBox（调试工具，只留只读/手动探针）**搬到这里**，默认开。
---
---   ★为什么需要（真机定案；1.74.34-18b 探针 27 行 + 用户实测 `/edb maptile fit s` 有效）：
---     · WorldMapDetailFrame 下 12 张底瓦片 `WorldMapDetailTile*`：**互相锚 + 偏移全 0** ⇒ 对缩放免疫，本功能**不碰**；
---     · 9 张 `WorldMapOverlayN` + `WorldMapHighlight`：锚父帧 TOPLEFT 且**偏移非零**（本客户端 Lua 侧几何一律逻辑口径）
---       ⇒ 地图一缩放就错位。对齐口径 = 按父帧**有效缩放 es** 把「锚点偏移 + 宽高」整体 **×es**（÷es 实测无效）。
---
---   ★节奏（用户定稿）：开图 / es 变化 → **0.1s 爆发期（持续 2s）** → 之后 **0.3s 稳态巡检**。
---     过渡检测在每帧做（两次廉价 pcall：IsShown + GetEffectiveScale），命中就把节拍顶满 ⇒ **下一帧就动手**。
---
---   ★幂等判据：当前值 ≈ 原值 ×es 就跳过（客户端重排会把我们写的冲掉，下一拍自动补回；es 回到 1 时自动还原）。
---     **原值在首次应用时记下**（/reload 之后叠加层是客户端原始布局）——★顺序不许换：读原值 → 写新值（1.74.31 组 206 的教训）。
---   ★默认**开**（用户：「要默认启动的功能」）；`/ehm mapfit off` 关、`/ehm mapfit diag` 取证、`restore` 还原原始几何。
--- ★★★1.75.13：`rec` = **本图**（当前地图身份）的原值；`wroteKeys[纹理名] = 地图身份` = 本图我们真写过哪些层
---   （还原只还我们写过的，绝不去动没碰过的层）；`mapKey` = 当前地图身份；`mapAge` = 本图已开多少秒（等版式稳定）
-local SMFIT = { open = false, es = nil, burst = 0, rec = {}, captured = false, needFold = nil, wrote = false,
-  pendingApply = false, mapKey = nil, mapAge = 0, wroteKeys = {}, capAt = nil, capCalls = 0, capAge = 99,
-  capFails = 0,
-  -- ★1.75.45：`ghost` = 「未适配完成 ⇒ 先隐形」的账（键 = 纹理名 → { o = 活对象, a = 原 alpha }）。
-  --   ★只活在**一次抓原值窗口 / 一次本图访问**里：窗口收口 / 兜底超时 / 关图 / 换图 / 关功能 都会还回去
-  --     （`SMFIT_GHOST_SEC` 是结构性兜底，绝不永久隐形）。
-  ghost = {}, ghostAt = 0,
-  -- ★1.75.45：「本图这一次访问是不是已经折完」——用于决定「还没折完 ⇒ 先把未适配的层隐形」；
-  --   折完（或兜底超时放弃）置 true ⇒ 不在同一张图上反复隐形/显示（防闪烁）。
-  foldedThisMap = false,
-  -- ★★★1.75.45b（用户报障「切换其他地图之后，探索层的缩放就会失效」的根因修法）：
-  --   `natLeft` = **本次地图访问**还剩几次「自然档窗口」（`natMax` = 3；换图/关图重新给满）；
-  --   `holdAge` = 当前窗口已经开了多少秒（`natSettle` = 1.0 秒内不读 —— 我们自己刚 SetScale(1) 会惊动客户端重排）；
-  --   `wroteRun` = **本次 `smFitApply` 调用**真写过哪些层（第 5 步逐层打印用；旧写法拿「本图这一整个会话写过」的
-  --     旧账来打 ⇒ 会出现「写入 0 个」却 12 行都标「★本次已写」的自相矛盾日志）。
-  --   ★这三个常量/状态放表里而不是新增文件级 local —— 主 chunk 有 200 个局部队变量的上限。
-  --   ★`natLeft` 初始就给满：功能**在地图已经开着**时被打开（`EVAL_SM_SET(true)`）也要走同一条「自然档窗口」路。
-  natLeft = 3, holdAge = 0, wroteRun = {}, natMax = 3, natSettle = 1.0,
-  -- ★★★1.75.45c（用户要求「按地图签名缓存；没缓存的走初次打开流程；新探索层出现时增量缩放」）：
-  --   `wroteVal[纹理名] = {x,y,w,h}` = **我们这次真正写进去的值**（逻辑值）。
-  --   用途 = **运行期自证读回口径**：拿「已写过的层」的实时读回 ÷ 写进去的值 ⇒ 得到 k（1 = 读回就是逻辑值；
-  --   ≈es = 读回 = 逻辑值×es）。有了 k 就能在**非自然档**上直接为**新出现的层**补一份正确原值
-  --   （= 增量适配，不用再把整张图按回自然档 1~2 秒）。
-  wroteVal = {},
-  recMap = {} }
--- ★★★1.75.5 定案（用户提问：「这个探索层每个地区的定位是从缓存读取的吗? 理论上每次打开地图都要重新计算的.
---   不需要缓存区记录这个定位信息?」）——**用户是对的：这份定位信息不该长期存盘**。三条事实：
---   ① 客户端**每次开图都会自己重摆**这批纹理（`WorldMapFrame_Update` 按当前地图的补丁列表 `SetPoint/SetWidth`）
---      ⇒ 开图那一刻纹理上的活值**就是原值**，不需要从存档里翻一份出来；
---   ② 存盘带来的全是坑：旧 schema 按纹理名记一份（跨图污染 = 「坐标丢失/全挤在左下」）、版本戳迁移、
---      「存档已齐 ⇒ 抓原值空转 ⇒ 每帧抖缩放」（1.75.4 那场事故）；
---   ③ 唯一**真需要记住**的是：**本会话内、按地图**的一份 —— 一旦我们把某张图折过，纹理上就是折后值；
---      同一会话里切回该图时若客户端没重摆，没有内存记录就会把折后值当原值再折一遍（1.75.9 的「缩两遍」）。
---   ⇒ 现在：**内存 `SMFIT.recMap[地图身份]`（会话级、按图）**，存档里那份**一次性清掉**（没人再读它）。
---   ★不写版本戳：判据就一条「老键还在就丢」——丢掉之后自然不再命中，天然幂等（少一个会过期的字段）。
-local function smFitMigrate()
-  local had = (SM_CFG.mapFitOrig ~= nil) or (SM_CFG.mapFitVer ~= nil)
-  if had then
-    SM_CFG.mapFitOrig = nil
-    SM_CFG.mapFitVer = nil
-    SMFIT.rec = {}
-    SMFIT.recMap = {}
-    SMFIT.captured = false
-  end
-  return had
-end
-local SMFIT_BURST_GAP, SMFIT_BURST_SEC, SMFIT_IDLE_GAP = 0.1, 2.0, 0.3
--- ★1.75.13：等客户端把**本图**的版式摆稳再抓原值（开图那一瞬抓到的可能还是上一张图/未布局的几何）
-local SMFIT_SETTLE = 0.4
--- ★★★1.75.5：抓原值的**有界重试**间隔（秒）—— 读不出来时最多 1 秒重试一次，
---   绝不每帧重试（1.75.4 的事故：没落闩 + 每帧重试 = 每帧把地图缩放按 1 再放回 ⇒ 缩放抖动 + 刷屏）
-local SMFIT_CAP_GAP = 1.0
--- ★★★1.75.5（用户设计）：**抓原值窗口**上限（秒）—— 「本图还没有原值」时先不缩放、在自然档读原值；
---   抓到就立刻收窗口并缩放；到点还没抓到 ⇒ 也收窗口（先缩放、稍后由有界重试继续补抓），
---   **绝不把地图卡在满尺寸**。
-local SMFIT_HOLD_SEC = 2.0
--- ★★★1.75.45（用户要求）：「未适配完成的探索层先隐形」的**兜底上限**（秒）——
---   ★结构性保险：任何没预料到的分支最多隐形这么久 ⇒ 「绝不永久隐形」不靠人去记全所有还原点。
---   到点还回去的同时把本图这一次访问标记成「已放弃隐形」（否则下一个折算节拍又会把它藏起来 = 闪烁）。
-local SMFIT_GHOST_SEC = 1.0
-
+-- 「打开世界迷雾」渲染节拍（爆发 0.1s / 稳态 0.3s）—— ★1.75.52 起**整条「探索层适配」已按用户要求摘除**
+--   （用户：「1.75.45b 换图后探索层缩放失效那块可以不用保留，替代方案已做好」）⇒
+--   这三个常量只服务**表驱动全渲染**的「开图 / 换图 / 缩放变化后逐帧重申」，不再有任何抓原值/折算。
+local SM_BURST_GAP, SM_BURST_SEC, SM_IDLE_GAP = 0.1, 2.0, 0.3
 -- ★★★1.75.13 新增：**地图身份**（这是本轮修法的地基）。
 --   为什么必须：`WorldMapOverlay1..N` 这批纹理是**按序号逐图复用**的 —— 客户端每次 `WorldMapFrame_Update`
 --   按当前地图的叠加层列表重新分配它们（本机 S_WorldMap 同源代码：`CreateTexture("WorldMapOverlay"..j)` → 每图重摆），
@@ -1994,59 +1900,6 @@ local function smNumOverlays()
   if not ok or not tonumber(n) then return nil end
   return tonumber(n)
 end
-
--- ★★★1.75.13：**本图*真正在用*的叠加层**判定（只读；读不到一律**放行** —— 判不出就不拦，绝不把功能判死）。
---   · `IsShown() == false` ⇒ 客户端本图不用它（它留着上一张图的几何，写它就是制造错位）；
---   · `GetTexture()` 读得到且为空 ⇒ 客户端这一轮根本没往它上面贴图（同上）。
-local function smFitInUse(o)
-  if type(o.IsShown) == "function" then
-    local ok, v = pcall(o.IsShown, o)
-    if ok and v == false then return false end
-  end
-  if type(o.GetTexture) == "function" then
-    local ok, v = pcall(o.GetTexture, o)
-    if ok and (v == nil or v == "") then return false end
-  end
-  return true
-end
-
--- ★1.75.5：原值总条数 = **会话内存**里的记录合计（当前图 + 本会话访问过的其他图；存档里那条路已废弃）
-local function smFitOrigCount()
-  local n = 0
-  for _, v in pairs(SMFIT.rec or {}) do if type(v) == "table" then n = n + 1 end end
-  for mk, bucket in pairs(SMFIT.recMap or {}) do
-    if mk ~= SMFIT.mapKey and type(bucket) == "table" then
-      for _, v in pairs(bucket) do if type(v) == "table" then n = n + 1 end end
-    end
-  end
-  return n
-end
--- ★1.75.5：**本图**（当前绑定）的记录条数 —— 播报抓原值状态用（`smFitOrigCount` 是「跨图合计」，口径不同，别混用）
-local function smFitRecCount()
-  local n = 0
-  for _, v in pairs(SMFIT.rec or {}) do if type(v) == "table" then n = n + 1 end end
-  return n
-end
-local smFitMsgAt = -99
--- ★1.75.5：瞬态「折算暂缓」取证行的节流时刻（独立于 smFitMsgAt，避免两条消息互相挤掉节流）
-local smFitTransAt = -99
-
--- ★（`smFitNewMap` / `smFitBindMap` 定义在 `mfLog` **之后**、`smFitApply` 之前：
---   它们要写取证环 —— 本项目的铁律是「引用的 local 必须在**声明之后**」，写反了就是全局 nil。）
-
--- 开关真值：`SM_CFG.mapFit`，**nil = 默认开**（只有显式 false 才算关 —— 「默认启动」是用户明确要求）
-local function smFitOn()
-  return SM_CFG.mapFit ~= false
-end
-
--- ★★★1.75.5（**用户要求**）：「每次地图关闭都把原值数据清理、不要保存这个值；每次打开地图都重新获取原值、重新缩放大地图」
---   —— 采纳为**默认行为**。真值 `SM_CFG.mapFitFresh`（**nil = 开**）；
---   `/ehm mapfit fresh off` 回退成「本会话内按图记住原值」（只有换图 / `/reload` 才重抓）。
---   ★清空动作在**关图那一刻**做，见 `smFitDropOnClose`。
-local function smFitFreshOn()
-  return SM_CFG.mapFitFresh ~= false
-end
-
 -- ★★★1.75.5（用户：「好的功能正常了.清理下这些调试日志」）：**详细日志开关**，真值 `SM_CFG.mapFitVerbose`，
 --   **nil = 关**（安静档）。安静档只保留「读到了几条 / 折算已对齐 / 关图已清空 / 真出问题」这几行；
 --   逐条原值、第 N 次尝试、每次重试提示、窗口开关、每次折算细节 = 本档（`/ehm mapfit verbose on`）。
@@ -2054,54 +1907,6 @@ end
 local function smFitVerboseOn()
   return SM_CFG.mapFitVerbose == true
 end
-
--- 相对锚的**名字**（存档里只能存名字；内存里保留对象引用，见 SMFIT.rec）
-local function smRelName(rel)
-  if not rel then return nil end
-  local n = frameName(rel)
-  if type(n) == "string" and n ~= "?" then return n end
-  return nil
-end
-
--- 目标 = 父帧下的**非瓦片纹理**（底瓦片跟着地图走，动它反而错）
-local function smFitTargets()
-  local fr = _G["WorldMapDetailFrame"]
-  if not (type(fr) == "table" or type(fr) == "userdata") then return {} end
-  local list = {}
-  if type(fr.GetRegions) ~= "function" then return list end
-  local ok, regs = pcall(function() return { fr:GetRegions() } end)
-  if not ok then return list end
-  local idx = 0
-  for _, o in ipairs(regs) do
-    local usable = o and type(o.GetWidth) == "function" and type(o.SetPoint) == "function"
-    if usable then
-      local isTex = true
-      if type(o.GetObjectType) == "function" then
-        local okt, t = pcall(o.GetObjectType, o)
-        isTex = (okt and tostring(t) == "Texture")
-      end
-      if isTex then
-        idx = idx + 1
-        local nm = frameName(o)
-        if not (type(nm) == "string" and string.sub(nm, 1, 18) == "WorldMapDetailTile") then
-          -- ★★★1.75.9：键**以纹理名优先**（`WorldMapOverlay1`/`WorldMapHighlight` 是稳定身份）。
-          --   旧写法用枚举序号 `tex1..texN` ⇒ 换区/开图重建让序号漂移，还原就写到**别的纹理**上，
-          --   再折一次 = 花屏/两遍（这类「按位置当身份」的坑本项目在柄池那处也踩过）。
-          local key = (type(nm) == "string" and nm ~= "" and nm ~= "?") and nm or ("tex" .. tostring(idx))
-          table.insert(list, { o = o, key = key, name = nm })
-        end
-      end
-    end
-  end
-  return list
-end
-
--- ★★★1.75.9 折算取证环（用户：「可以开启日志.在何种情况下会进行双次缩放操作.」）
---   为什么**另存一份**而不只走日志：`EVAL_LOGLINE` 受「调试日志」总闸门管（关掉就一个字都不记），
---   而这一案要能**任意时刻**复现取证 ⇒ 记进本模块自己的子树 `SM_CFG.mapFitTrace`（60 行小环，随 SavedVariables 落盘，
---   `/ehm mapfit trace` 用**常开出口**打出来；与追踪探针的 `trkProbe` 同一套路）。
---   记的全是**分叉处的实数**：探测（缩放 1 vs 0.7 时读到的屏幕宽）、抓原值（读时的外框缩放 ⇒ 自证自然档）、
---   每次折算（es + 原值 → 新值）、每次还原（读回）、每次开关（mode/touched/还原数）。
 local MF_TRACE_MAX = 60
 -- ★★★1.75.45 修（前向声明老雷，同类坑本项目已多次记录）：`mfLog` 的**首次使用在 1727/1739/1863 行**
 --   （`featHideBlackout` 与 `featTeardown` 里），而定义原本是这里的 `local function` ⇒ 在那些函数体里
@@ -2148,63 +1953,461 @@ smFitSayV = function(fmt, ...)
   pcall(out, "[简易地图] " .. msg)
   return msg
 end
+-- ===== ★★★「打开世界迷雾」（1.75.51 起叫「S_WorldMap 贴图替代」，1.75.52 改名并合并残留清理）= 表驱动全渲染 =====
+-- 用户要求（原话）：「缩放大地图->设置内->添加个 S_WorldMap 贴图替代开关。开启则直接使用 S_WorldMap
+--   数据源自动开全图。忽略内置探索纹理。」
+--   · **数据源** = 随插件带一份的 `MapOverlayData.lua`（生成物，`node gen_mapoverlay.js`；源 = Turtle 的
+--     `!Libs\!MyLib\libs\LibMapOverlayData.lua`，S_WorldMap / MozzFullWorldMap 血统）：
+--     `EVAL_MAP_OVERLAY_DATA[地图文件名][区域名] = { 宽, 高, offsetX, offsetY }`，单位 = **地图像素**，
+--     原点 = `WorldMapDetailFrame` 左上、y **向下**为正（与 `GetMapOverlayInfo` 同口径）。
+--   · **贴图与分块（Mozz 口径，与 `S_WorldMap\Modules\MapOverlay.lua:794-835` 逐行同源）**：
+--     贴图 = `Interface\WorldMap\<GetMapInfo() 第1个返回>\<区域名><块号>`；每 256×256 一块
+--     （列数 nh = ceil(w/256)、行数 nv = ceil(h/256)，**行优先** t = (j-1)*nh + k），末列/末行取余数（余 0 按 256）；
+--     `SetTexCoord(0, 像素/文件边长, 0, 像素/文件边长)`，文件边长 = 16 起按 2 的幂倍增到 ≥ 像素；
+--     挂点 = TOPLEFT / WorldMapDetailFrame / TOPLEFT + (ox, -oy)。
+--   · **倍率 k = 现读**（用户 1.75.51：「缩放要根据当前缩放级别和数据库实时计算」）——
+--     引擎在当前缩放级别下给出的叠加层真值 ÷ 表推值（多样本取中位数；读不出就兜底外框有效缩放、再兜底 1 并如实说判不出）。
+--     ★**不留常数**：早期按 DebugBox 的一行读数（`尺寸=68x85 ｜ 原=113x142 ｜ es=0.6`）推断「表值原样写」，
+--     那只在「引擎真值 = 表值」时成立；地图一换缩放级别就不成立 —— 现在每拍现读、绝不会停在某个写死的值上。
+--     ★写后**读回自证**（本项目纪律：写成功 ≠ 写进去生效）；判不出就如实说，绝不假装成功。
+--   · **忽略内置探索纹理**：`WorldMapOverlay1..N` 这批池位本来就是客户端按自己那张旧表摆的 ⇒
+--     我们把**每一条都改写成**本表推出来的贴图/UV/尺寸/位置；本图不在表里（大陆图 / 城市图）⇒
+--     **把客户端自己的探索层全部 Hide**（替代语义：宁可空着，也不留旧图）。
+--   · **层不够就自己补**（用户同一条要求：「渲染的时候如果本身层不够要自行添加完成渲染」）：真机现状是
+--     贫瘠之地客户端只摆了 5 个池位、而表里这张图有几十块 ⇒ 缺口由我们现场 `CreateTexture` 补齐
+--     （具名失败退回**匿名**纹理，照样能画），并**跨帧复用**（`MDQ.own`）—— 渲染在开图后是**逐帧重申**的，
+--     每帧新建会瞬间泄漏几百张纹理。
+--   · **全自动**：不新增命令、不新增计时器 —— 挂在开图 tick 的既有节拍上（爆发窗 0.1s / 稳态 0.3s）：
+--     开图爆发窗（2s）内逐帧重申，之后 0.3s 一拍；关掉开关即整段让位（`MDQ.release` 把我们补建的层收起来）。
+local MDQ = {}
 
--- ★★★1.75.13/1.75.5：**换图 = 换一套原值**（同一个纹理名在不同地图上是完全不同的矩形 ⇒ 绝不跨图复用）。
---   为什么必须有它：`WorldMapOverlay1..N` 是按序号逐图复用的（客户端每图重摆），把 A 图的矩形盖到 B 图上
---   就是用户报的「坐标丢失 + 全挤在左下」。
---   ★★1.75.5 起改成**会话内存按图存**（`SMFIT.recMap[地图身份]`）、**不再落存档**（用户提问定案：
---     「理论上每次打开地图都要重新计算的，不需要缓存区记录这个定位信息?」—— 客户端每次开图都会自己重摆，
---      存盘只会带来跨会话脏值；只有「本会话内我们把某图折过」这件事必须记住，否则切回该图会把折后值当原值再折一遍）：
---     · 切走时把当前图的记录**存回 recMap**；切回来时**直接取回**那份（有记录 ⇒ 抓原值空转一次即落闩、一个缩放都不碰）。
-local function smFitNewMap(mk)
-  mk = tostring(mk or "?")
-  -- ★★★1.75.45：换图 ⇒ 上一张图那批「未适配就隐形」的层**必须先还回可见度**
-  --   （同一批纹理名会被客户端重指到新图；留着 alpha 0 = 新图那几层凭空消失）
-  if smFitGhostShow and next(SMFIT.ghost or {}) ~= nil then pcall(smFitGhostShow, "换图") end
-  SMFIT.foldedThisMap = false -- 新的一张图 ⇒ 「这一次访问折完没有」重新判定
-  local old = SMFIT.mapKey
-  if old and old ~= mk and type(SMFIT.rec) == "table" and next(SMFIT.rec) ~= nil then
-    SMFIT.recMap[old] = SMFIT.rec
+-- ★★★「残留图层清理」的节拍与有界上限（★1.75.52 摘除探索层适配时**误删过一次** ⇒ 常量一律留在 MDQ 表上、
+--   紧挨着表定义，别再夹在别的族中间）。
+MDQ.STALE_GAP = 0.25      -- 换图/开图窗口内的扫描节拍（客户端这时还在重摆/重指贴图，扫密一点）
+MDQ.STALE_GAP_IDLE = 1.0  -- 窗口外的节拍（非区域地图上照样把「又冒出来的」叠加层再藏掉）
+MDQ.STALE_SEC = 3.0       -- 「换图 / 开图」后的快扫窗口长度（窗口内 0.25s 一拍）
+MDQ.STALE_LOG_MAX = 40    -- 「藏了哪些纹理」的**有界落盘环**上限（`SM_CFG.staleLog`，最新在前）
+-- ★★★**同一处误删的还有这张表**（真机红字：`bad argument #1 to 'pairs' (table expected, got nil)` @ tick 里那行）：
+--   `MDQ.staleHid` = **藏账**（纹理对象 → { name = 层名, path = 当时的贴图 }）；区域图上全部还回时清空。
+--   ⇒ 与上面四个常量一起留在表定义旁边；★纪律：**摘除大块代码后必须做一次「状态初始化审计」**
+--     （凡是挂在 `MDQ` / 原先那张 `SMFIT` 上的状态表，逐个确认还有没有创建点）—— 光跑语法闸门与 scan_dangling **抓不到这种雷**。
+MDQ.staleHid = {}         -- 藏账：纹理对象 → { name = 层名, path = 当时的贴图 }（区域地图上**全部还回**并清账）
+
+MDQ.TILE = 256       -- Mozz 口径的分块边长
+MDQ.poolMax = 240    -- 纹理池上限（防病态表把纹理建爆；撞上就如实报「上限已满」）
+MDQ.own = {}         -- 我们自己补建的纹理：池位号 → 纹理对象（跨帧复用，绝不每帧新建）
+MDQ.made = {}        -- 同上（按名字记；收层时一起清）
+MDQ.ownSet = {}      -- 同上但按**对象身份**记（`MDQ.own[n] = 纹理` ⇒ 反查「这张是不是我们自建的」）：
+                     --   ★1.75.52 六改「接管守护」要用它区分「客户端原生层」与「我们自己画的层」——
+                     --   名字判定不够（本客户端那批原生层也叫 `WorldMapOverlay<n>`，我们补建的还可能与之重名）。
+MDQ.poolSeen = 0     -- 见过的最大池位号（收尾 Hide 只扫到它，不空扫 poolMax 次）
+MDQ.newN = 0         -- **本轮**新加了几张（渲染行如实报「客户端既有 N ｜ 新加 M」）
+MDQ.saidMk = nil     -- 上一张已播报过的地图（每图只报一次，不刷屏）
+
+-- 开关真值（唯一入口）：`SM_CFG.swmOverlay`（nil/false = 关 = 默认；true = 开）。
+--   ★**落存档**（这是产品开关，与「只在本会话有效」的诊断档不同）；写入点只有两个：
+--     `EVAL_SM_SWM_SET`（设置下拉 / 命令都走它）与老键迁移。
+MDQ.swm = function()
+  -- ★★★1.75.52（用户：「缩放大地图->设置->**默认开启全图**」）：真值 = `SM_CFG.swmOverlay`，**默认开**——
+  --   键为 nil ⇒ **当场物化 true**（本项目「默认开」的定式，同 EC/HH）；**显式关过（false）永远是关**
+  --   （读的时候绝不用 `or true` 顶回用户的选择）。
+  if type(SM_CFG) == "table" and SM_CFG.swmOverlay == nil then SM_CFG.swmOverlay = true end
+  return (type(SM_CFG) == "table") and SM_CFG.swmOverlay == true
+end
+
+-- 期望分块数（列×行）
+MDQ.tiles = function(w, h)
+  local a, b = tonumber(w) or 0, tonumber(h) or 0
+  if a <= 0 or b <= 0 then return 0 end
+  return math.ceil(a / MDQ.TILE) * math.ceil(b / MDQ.TILE)
+end
+
+-- 贴图文件边长（Mozz 口径：从 16 起按 2 的幂倍增到 ≥ 像素）—— SetTexCoord 的分母就是它
+MDQ.fileDim = function(px)
+  local v = tonumber(px) or 0
+  if v <= 16 then return 16 end
+  local d = 16
+  while d < v do d = d * 2 end
+  return d
+end
+
+-- 第 t 块（1 基，行优先）的**期望**像素几何：宽, 高, offsetX, offsetY（读不出 ⇒ nil）
+MDQ.expectRect = function(rec, t)
+  if type(rec) ~= "table" then return nil end
+  local w, h, ox, oy = tonumber(rec[1]), tonumber(rec[2]), tonumber(rec[3]), tonumber(rec[4])
+  if not (w and h and ox and oy) then return nil end
+  local nh = math.max(1, math.ceil(w / MDQ.TILE))
+  local nv = math.max(1, math.ceil(h / MDQ.TILE))
+  local idx = math.max(1, tonumber(t) or 1)
+  if idx > nh * nv then return nil end
+  local j = math.floor((idx - 1) / nh) + 1        -- 第几行
+  local k = ((idx - 1) % nh) + 1                  -- 第几列
+  local pw = (k < nh) and MDQ.TILE or (w % MDQ.TILE)
+  local ph = (j < nv) and MDQ.TILE or (h % MDQ.TILE)
+  if pw == 0 then pw = MDQ.TILE end
+  if ph == 0 then ph = MDQ.TILE end
+  return pw, ph, ox + MDQ.TILE * (k - 1), oy + MDQ.TILE * (j - 1)
+end
+
+-- ===== ★★★1.75.51 倍率 k = **现读**（当前缩放级别 × 数据库，实时算；不留常数）=====
+-- 用户要求（原话）：「缩放要根据当前缩放级别和数据库实时计算。」
+--   做法 = **拿引擎在当前缩放级别下给出的叠加层真值 ÷ 表推值**：
+--     · `GetNumMapOverlays()` + `GetMapOverlayInfo(i)` 是**引擎**按当前地图/缩放级别列出来的
+--       (贴图名, 宽, 高, offsetX, offsetY) —— **与我们写没写过无关** ⇒ 任何时候读都是引擎的真值；
+--     · 贴图名按 Mozz 规则解析回 (地图, 区域, 块号)，去表里取**同一块**的表推宽 ⇒ 比值 = 当前倍率；
+--     · 多个样本取**中位数**；≥3 个样本且离散度 > 15% ⇒ **判不出**（表与客户端内容不同源，不硬套）；
+--     · 现读不出（本图 0 条 / 名字读不懂 / 表里没这一块）⇒ **兜底用外框有效缩放**（沿父链连乘，也是现读）；
+--       连它也读不到 ⇒ 按 1 写，并**如实说「判不出」**（绝不假装算出来了）。
+--   ★**不漂移**：我们写进去的是「表值 × k」，下一拍再测仍是同一个 k（引擎真值不因我们改写而变）⇒ 稳态下 k 恒定；
+--     客户端一换图 / 一缩放，引擎真值跟着变 ⇒ 下一拍自动跟上（这就是「实时计算」）。
+--   ★每拍现读（0.2s 节流 + 按地图签名缓存），代价 = 每 0.2s 约 N 次只读 API（N = 本图叠加层条数）。
+MDQ.kCache = {}     -- 地图签名 → { k = 倍率, src = 来源说明, n = 样本数 }
+MDQ.kAt = 0         -- 上次现读的时间（节流用）
+
+-- 贴图名解析：`Interface\WorldMap\<地图文件名>\<区域名><分块号>` —— 返回表，或 nil（读不懂就 nil，绝不猜）
+MDQ.parse = function(name)
+  local s = tostring(name or "")
+  if s == "" then return nil end
+  local dir, leaf = string.match(s, "^(.*)\\([^\\]+)$")
+  if not dir or not leaf or leaf == "" then return nil end
+  local mf = string.match(dir, "([^\\]+)$")
+  if not mf or mf == "" then return nil end
+  local base, digits = string.match(leaf, "^(.-)(%d*)$")
+  if not base or base == "" then return nil end
+  return { file = mf, leaf = leaf, area = base, tile = (digits ~= "" and tonumber(digits)) or 1 }
+end
+
+-- 现读倍率：引擎真值 ÷ 表推值（多样本取中位数；离散太大 ⇒ nil,样本数）
+MDQ.measureK = function(file, m)
+  if type(m) ~= "table" then return nil, 0 end
+  local n = tonumber(smNumOverlays()) or 0
+  if n <= 0 then return nil, 0 end
+  local rs = {}
+  for i = 1, n do
+    local ok, nm, w = pcall(function() return GetMapOverlayInfo(i) end)
+    if ok and nm then
+      local px = MDQ.parse(nm)
+      if px and tostring(px.file) == tostring(file) then
+        local rec = m[px.leaf] or m[px.area]
+        local ew = rec and select(1, MDQ.expectRect(rec, px.tile))
+        local cw = tonumber(w)
+        if ew and cw and ew > 8 then
+          local r = cw / ew
+          if r > 0.05 and r < 20 then table.insert(rs, r) end
+        end
+      end
+    end
   end
-  SMFIT.mapKey = mk
-  SMFIT.rec = SMFIT.recMap[mk] or {}
-  SMFIT.recMap[mk] = SMFIT.rec
-  SMFIT.captured = false
-  SMFIT.mapAge = 0
-  SMFIT.capAge = 99 -- 换图后第一次抓原值只受「版式稳定」门管（不会被有界重试门多等一秒）
-  -- ★1.75.5：播报计数跟着换图归零（用户要求「获取原值的地方打印出来」，但换图后**只许再报几次**，绝不刷屏）
-  SMFIT.capSayN = 0
-  -- ★1.75.5（用户：「清理下这些调试日志」）：**每次开图只报一次**的那几条也要跟着换图归零
-  SMFIT.saidLatch, SMFIT.saidFail, SMFIT.saidEmpty, SMFIT.saidFold = false, false, false, false
-  SMFIT.saidNat = false -- ★1.75.45b：同上（「非自然档不记原值」那条也只许每图说一次）
-  SMFIT.saidPrint = false -- ★1.75.45c：逐层「指纹」每图打一次（它是判「层到底对不对」的唯一数据）
-  -- ★★★1.75.45c：**按签名缓存**的写入账随图切换（`wroteVal` 只服务「本图已写过的层 ⇒ 反解读回口径 k」）
-  SMFIT.wroteVal = {}
-  smFitHold = 0 -- ★1.75.5：换图 ⇒ 窗口重新判定（下一拍按「本图有没有记录」决定开不开）
-  -- ★★★1.75.45b：换图 ⇒ **自然档窗口的预算重新给满**（每张图各自有界；「一变就做、不等稳定」——
-  --   连续切图时上一条身份的窗口直接作废，绝不排队，否则会重演 DataSearch 1.70.40 那个
-  --   「稳定期闸门把重绘全吞掉 ⇒ 一次都不重绘」的坑）。
-  SMFIT.natLeft = tonumber(SMFIT.natMax) or 3
-  SMFIT.holdAge = 0
-  mfLog("换图：%s ⇒ 本图原值改从**会话内存**取（有就复用、没有就在自然档抓一次；跨图沿用就是「坐标丢失/全挤在左下」的根因）",
-    tostring(mk))
-  return true
+  local cnt = table.getn(rs)
+  if cnt == 0 then return nil, 0 end
+  table.sort(rs)
+  local med = rs[math.floor((cnt + 1) / 2)]
+  if cnt >= 3 then
+    local spread = (rs[cnt] - rs[1]) / med
+    if spread > 0.15 then return nil, cnt end   -- 离散太大 ⇒ 表与客户端不同源 ⇒ 判不出（不硬套）
+  end
+  return med, cnt
 end
 
--- 把「当前图」的记录绑到 recMap 上（三处调用口共用；★身份变了就换绑 —— 只有这里会换 `SMFIT.rec`）
-local function smFitBindMap(mk)
-  mk = tostring(mk or "?")
-  if mk ~= SMFIT.mapKey then pcall(smFitNewMap, mk) end
-  SMFIT.recMap[mk] = SMFIT.rec
-  return SMFIT.rec
+-- 现读（0.2s 节流 + 按地图签名缓存）；返回 k, 来源说明, 样本数
+MDQ.kLive = function(file, m, es)
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  local mk = smMapKey() or file
+  local c = MDQ.kCache[mk]
+  if type(c) == "table" and (now - (tonumber(MDQ.kAt) or 0)) < 0.2 then return c.k, c.src, c.n end
+  local k, nS = MDQ.measureK(file, m)
+  local src
+  if k then
+    src = string.format("引擎实测（%d 个样本）", nS)
+  else
+    k = tonumber(es)
+    if k and k > 0 then
+      src = (nS > 0) and "外框有效缩放（引擎真值离散太大 ⇒ 兜底现读）" or "外框有效缩放（引擎没给本图叠加层 ⇒ 兜底现读）"
+    else
+      k, src = 1, "**判不出**（引擎与缩放都读不到 ⇒ 按 1 写）"
+    end
+  end
+  MDQ.kCache[mk] = { k = k, src = src, n = nS }
+  MDQ.kAt = now
+  return k, src, nS
 end
 
--- ★★★1.75.9：**本客户端的 `GetEffectiveScale` 返回的是「自身 scale」，不是级联后的有效缩放** ——
---   真机证据（用户 DebugBox 截图）：`WorldMapDetailFrame … S1.00`，而它的尺寸是 `701×468` = `1002×668 × 0.7`，
---   即：**尺寸读回含父帧缩放、GetScale 报自身** ⇒ 面板上「缩放 0.70」与折算消息里的「按缩放 1.00」是两个量
---   （前者是我们写进 `WorldMapFrame:SetScale` 的**设置值**，后者是 `GetEffectiveScale` 的**读回值**）。
---   ⇒ 另算一个「沿父链把 GetScale 连乘」的**真有效缩放**，只用于**报告 / 取证 / 诊断**；
---     折算系数仍按读回口径（那才是与读回几何同一口径的量，见 tick 与参考卷 R20）。
+-- 取池位 n 的纹理：① 客户端已有的（`_G` 里查得到）→ 复用；② 我们自己补建的 → 复用；③ 都没有 ⇒ **现场补建**
+--   ★两级建法：先按客户端的命名习惯建具名（`WorldMapOverlay<n>`，与 S_WorldMap 同法 ⇒ 能一路接管它的池位）；
+--     具名失败（名字被占 / 本客户端不许具名）⇒ **退回匿名纹理**（照样能画，只是 `_G` 里查不到）—— 绝不静默放弃。
+--   ★返回值带**来源**（existing / own / created / no_frame / create_failed），渲染行如实报「既有 N ｜ 新加 M」。
+MDQ.texAt = function(n)
+  local nm = "WorldMapOverlay" .. tostring(n)
+  if n > (tonumber(MDQ.poolSeen) or 0) then MDQ.poolSeen = n end
+  local t = rawget(_G, nm)
+  if t ~= nil then
+    -- ★★★1.75.52 六改 b：**复用来的池位也算「我们接管了」** —— 我们马上要往它身上写表内容；
+    --   不标记的话「接管守护」会把它当客户端原生层**再藏一次** ⇒ 数据库查出来的层等于没加上（用户实报）。
+    MDQ.ownSet[t] = true
+    return t, "existing"
+  end
+  t = MDQ.own[n]
+  if t ~= nil then
+    MDQ.ownSet[t] = true
+    return t, "own"
+  end
+  local fr = _G["WorldMapDetailFrame"]
+  if not (type(fr) == "table" or type(fr) == "userdata") or type(fr.CreateTexture) ~= "function" then
+    return nil, "no_frame"
+  end
+  local ok, t2 = pcall(fr.CreateTexture, fr, nm, "ARTWORK")
+  if not ok or t2 == nil then
+    local ok2, t3 = pcall(fr.CreateTexture, fr, nil, "ARTWORK")   -- ★退回匿名（照样能画）
+    if ok2 and t3 ~= nil then t2 = t3 else return nil, "create_failed" end
+  end
+  MDQ.own[n] = t2
+  MDQ.made[nm] = true
+  MDQ.ownSet[t2] = true     -- ★身份账（接管守护判「这张是不是我们自建的」唯一依据）
+  MDQ.newN = (tonumber(MDQ.newN) or 0) + 1
+  return t2, "created"
+end
+
+-- 从第 from 位起把池位全部 Hide（客户端池 + 我们自己补的）。
+--   ★**不空扫**：客户端那批名字是从 1 起的**连续**池位 ⇒ 扫到「既没有具名纹理、又超过我们见过的最大号」
+--     就可以收工；扫到的都把 `MDQ.poolSeen` 顶上去（这样下次才知道该扫到哪）。
+MDQ.hideFrom = function(from)
+  local n = 0
+  local lo = tonumber(from) or 1
+  if lo < 1 then lo = 1 end
+  for i = lo, MDQ.poolMax do
+    local t = rawget(_G, "WorldMapOverlay" .. tostring(i)) or MDQ.own[i]
+    if t ~= nil then
+      pcall(t.Hide, t)
+      n = n + 1
+      if i > (tonumber(MDQ.poolSeen) or 0) then MDQ.poolSeen = i end
+    elseif i > (tonumber(MDQ.poolSeen) or 0) then
+      break
+    end
+  end
+  return n
+end
+
+-- ★★★1.75.52 六改 b（用户真机报障：「**删完之后数据库查询出来的层有没添加进去，现在全都是空白的**」）：
+--   **表查找 = 单一来源 + 大小写不敏感**：`GetMapInfo()` 的图名与表键**可能大小写不一致** ⇒
+--   直接 `tbl[file]` 取不到就会「一片都不画」，再叠加「原生全藏」= **整张图空白**。
+--   这里一次性收口：精确命中 → 退**逐个键不比大小写**（53 个键，命中后按图名缓存，不每拍扫表）。
+--   返回 `m（区域表）, 真键`；读不到 ⇒ nil。
+MDQ.areaCache = {}
+MDQ.areaOf = function(file)
+  if type(file) ~= "string" or file == "" then return nil end
+  local tbl = rawget(_G, "EVAL_MAP_OVERLAY_DATA")
+  if type(tbl) ~= "table" then return nil end
+  local m = tbl[file]
+  if m ~= nil then return m, file end
+  local c = MDQ.areaCache[file]
+  if c ~= nil then
+    if c == false then return nil end
+    return c, nil
+  end
+  local low = string.lower(file)
+  for k, v in pairs(tbl) do
+    if type(k) == "string" and string.lower(k) == low then
+      MDQ.areaCache[file] = v
+      return v, k
+    end
+  end
+  MDQ.areaCache[file] = false
+  return nil
+end
+
+-- 只收**我们自己自建**的层（绝不碰客户端的）：表里没有这张图时用它 ——
+--   「数据库没有这张图」= **无从替代** ⇒ 客户端自己的探索层**保持原样**（本项目铁律：拿不到证据就一个字节都不碰）。
+MDQ.hideOwnFrom = function(from)
+  local n = 0
+  local lo = tonumber(from) or 1
+  if lo < 1 then lo = 1 end
+  for i = lo, MDQ.poolMax do
+    local t = MDQ.own[i]
+    if t ~= nil then
+      pcall(t.Hide, t)
+      n = n + 1
+      if i > (tonumber(MDQ.poolSeen) or 0) then MDQ.poolSeen = i end
+    end
+  end
+  return n
+end
+
+-- 全渲染当前图（**纯写**：贴图/UV/尺寸/位置全部由表现算；不读也不记任何原值）。
+--   ★`k` = **当前倍率**（`MDQ.kLive` 现读：当前缩放级别 ÷ 表值）—— 表值 × k 才是这一拍该写的逻辑几何。
+--     写表值原样（k=1）只在「引擎真值 = 表值」时成立，**不是**一条可以写死的规则。
+--   返回 块数, 区域数, 表里有没有这张图, 是否渲完整, 原因, 客户端既有层数, 新加层数
+MDQ.render = function(file, k)
+  k = tonumber(k) or 1
+  if k <= 0 then k = 1 end
+  local fr = _G["WorldMapDetailFrame"]
+  if not (type(fr) == "table" or type(fr) == "userdata") then
+    MDQ.lastRenderN = 0
+    return 0, 0, false, true, "没有 WorldMapDetailFrame", 0, 0
+  end
+  local m = MDQ.areaOf(file)   -- ★六改 b：表查找单一来源（大小写不敏感）
+  MDQ.newN = 0
+  -- ★★★1.75.52 六改 c：**本拍我们真正写过的那批对象**（`wroteObj`）—— 「接管守护」的安全底线：
+  --   守护只许藏「本拍**没**写过、名字又属池位族」的东西；**一个都没认出来 ⇒ 判不出 ⇒ 一个字节都不碰**。
+  --   真机日志取证（`/ehm mapfit 残留` 落盘）：`渲染 22 块（客户端既有 0 ｜ 新加 22）` 与
+  --   `守护：藏原生 22 ｜ 枚举池位 22` **同时出现** ⇒ 枚举里那 22 个不是我们画的（我们画的没被枚举到
+  --   或身份每拍都变）⇒ 旧写法会把它们当原生全藏，等于把我们刚画的一起藏掉 = **整张空白图**。
+  MDQ.wroteObj = {}
+  MDQ.lastW, MDQ.lastH, MDQ.lastArea, MDQ.lastTex = nil, nil, nil, nil
+  if type(m) ~= "table" then
+    -- ★★★1.75.52 六改 b：**表里没有这张图 ⇒ 只收我们自建的那几层，客户端自己的探索层保持原样**
+    --   （用户真机报障：「删完之后数据库查询出来的层有没添加进去，现在全都是空白的」——
+    --    数据库没有这张图时**无从替代**，把原生全藏只会得到一片空白；
+    --    本项目铁律「拿不到证据就一个字节都不碰」。）
+    MDQ.lastRenderN = 0
+    local hid = MDQ.hideOwnFrom(1)
+    return 0, 0, false, true,
+      ("本图不在 S_WorldMap 表里（数据库没有这张图 ⇒ 客户端自己的探索层**保持原样**；只收起我们自建的 " .. tostring(hid) .. " 层）"), 0, 0
+  end
+  local areas = {}
+  for a in pairs(m) do table.insert(areas, a) end
+  table.sort(areas)                 -- ★顺序必须确定（同一张图每次渲染的层序一致，便于逐层对照取证）
+  local n, nArea, full = 0, 0, true
+  local nExist, fail = 0, nil
+  for _, a in ipairs(areas) do
+    local rec = m[a]
+    local total = MDQ.tiles(rec and rec[1], rec and rec[2])
+    if total > 0 then
+      nArea = nArea + 1
+      for t = 1, total do
+        if n >= MDQ.poolMax then full = false fail = "max" break end
+        local pw, ph, ox, oy = MDQ.expectRect(rec, t)
+        if pw then
+          local tex, how = MDQ.texAt(n + 1)
+          if tex == nil then full = false fail = (how or "create_failed") break end
+          if how == "existing" then nExist = nExist + 1 end
+          n = n + 1
+          MDQ.wroteObj[tex] = true   -- ★六改 c：这一拍我们写过它（守护的「不许藏」名单）
+          local fdw, fdh = MDQ.fileDim(pw), MDQ.fileDim(ph)
+          pcall(tex.SetTexture, tex, string.format("Interface\\WorldMap\\%s\\%s%d", file, a, t))
+          pcall(tex.SetTexCoord, tex, 0, pw / fdw, 0, ph / fdh)
+          pcall(tex.SetWidth, tex, pw * k)
+          pcall(tex.SetHeight, tex, ph * k)
+          pcall(tex.ClearAllPoints, tex)
+          pcall(tex.SetPoint, tex, "TOPLEFT", fr, "TOPLEFT", ox * k, -(oy * k))
+          pcall(tex.Show, tex)
+          if MDQ.lastW == nil then
+            MDQ.lastW, MDQ.lastH = pw * k, ph * k   -- ★**写进去的**（自证与播报都按它说）
+            MDQ.lastTw, MDQ.lastTh = pw, ph         -- ★表值（播报里「表 X ⇒ 写 Y」两个都摊开）
+            MDQ.lastTox, MDQ.lastToy = ox, oy
+            MDQ.lastK = k
+            MDQ.lastArea = a
+            MDQ.lastTex = tex      -- ★自证读这一张（**我们真正写的那张**；可能是我们自己补建的匿名纹理）
+          end
+        end
+      end
+    end
+    if not full then break end
+  end
+  -- 收尾：这一轮没用到的池位全部 Hide（客户端自己的残留层也在里面 —— 「忽略内置探索纹理」）
+  MDQ.hideFrom(n + 1)
+  MDQ.lastRenderN = n   -- ★六改 b：本拍真的画出了几块（「接管守护」拿它判「有没有东西可替代」）
+  local why = nil
+  if not full then
+    why = (fail == "max")
+      and ("纹理池上限 " .. MDQ.poolMax .. " 已满（已渲染 " .. n .. " 块 ⇒ 表里还有区域没画出来）")
+      or ("**本客户端建不出新图层**（CreateTexture 失败，已渲染 " .. n .. " 块）")
+  end
+  return n, nArea, true, full, why, nExist, (tonumber(MDQ.newN) or 0)
+end
+
+-- 把**我们自己补建**的层收起来（Hide）—— WoW 1.12 **没有销毁纹理的 API**（创建即常驻），所以只能藏：
+--   藏了之后它们 `IsShown()==false` ⇒ 任何「按本图在用挑层」的逻辑都**不会**再把它们当成客户端的层
+--   去抓原值（否则我们会把自己画的几何当原值再折一遍，越折越大）。
+--   ★幂等；`MDQ.own`/`made` 一起清（下次要用会重新按需补建）。
+MDQ.release = function(why)
+  -- ★★★1.75.52 六改：先把「接管守护」藏过的**客户端原生层**全部 Show 还回（绝不永久藏）——
+  --   调在这里 ⇒ 三条路（关开关 / 还原·关功能 / 任何收层）**天然全覆盖**，不靠人去记全调用点。
+  pcall(MDQ.holdShowAll, tostring(why))
+  local n = 0
+  for k, t in pairs(MDQ.own or {}) do
+    if t ~= nil then pcall(t.Hide, t) n = n + 1 end
+    MDQ.ownSet[t] = nil
+    MDQ.own[k] = nil
+  end
+  for nm in pairs(MDQ.made or {}) do MDQ.made[nm] = nil end
+  MDQ.newN = 0
+  MDQ.saidMk = nil
+  if n > 0 then
+    pcall(mfLog, "收层（%s）：我们补建的 %d 个叠加层已 Hide（纹理不能销毁，只能藏；藏了就不再被当成客户端的层）",
+      tostring(why), n)
+  end
+  return n
+end
+
+-- 渲染 + **写后自证**（返回 块数, 区域数, 判定文本）；`silent` = 一个字都不打（逐帧重申那条路）
+--   ★`quiet` 只为与渲染节拍的调用约定对齐而保留；本档的播报节流由 `MDQ.saidMk`（每图一次）与
+--     「k 变了也报一次」（缩放级别变了 = 真事件）负责。
+MDQ.renderCurrent = function(es, quiet, silent)
+  local file = select(1, smMapInfo())
+  if type(file) ~= "string" or file == "" then return 0, 0, "读不到当前地图文件名" end
+  local m = MDQ.areaOf(file)   -- ★六改 b：与 `MDQ.holdN` / `MDQ.render` 同一个表查找（大小写不敏感）
+  -- ★★★1.75.51（用户：「缩放要根据当前缩放级别和数据库实时计算」）：倍率**现读**，不留常数。
+  local k, kSrc = 1, "表里没有这张图（不渲染）"
+  if type(m) == "table" then k, kSrc = MDQ.kLive(file, m, es) end
+  local n, nArea, inTbl, full, why, nExist, nNew = MDQ.render(file, k)
+  -- ★六改 b：把本拍的渲染账留在 `MDQ` 上（只读体检 `/ehm mapfit 残留` 直接摊出来 ⇒
+  --   「数据库查出来的层到底加进去没有」不再靠猜）
+  MDQ.lastRender = { map = file, n = n, areas = nArea, inTbl = inTbl, full = full, why = why, k = k }
+  -- ★★★1.75.52 六改：**接管守护**与渲染**同拍**（换图/开图爆发窗内逐帧重申，之后 0.3s 一拍）——
+  --   藏「客户端原生层」+ 数量守护（序号超出本图应有块数的池位一律藏）+ 存在性守护（我们自建的块被藏就复位）。
+  --   ★必须排在 `MDQ.render` **之后**：渲染先写/Show 我们自建的块，守护这一拍才判得出「谁是我们自建的」。
+  local hHid, hBack, hSeen, hWant, hAgain = MDQ.holdTick(file)
+  -- 写后自证：读回**我们真正写的那张**第一块（可能是客户端原有的池位，也可能是我们自己补建的匿名纹理）
+  --   两种已知口径都认（读回 = 写入值 / 读回 = 写入值 × es）—— 都对不上就如实说「判不出」。
+  local verdict = "（没渲染出任何块）"
+  local t1 = MDQ.lastTex
+  if n > 0 and MDQ.lastW and t1 ~= nil and type(t1.GetWidth) == "function" then
+    local okw, v = pcall(t1.GetWidth, t1)
+    local lw = (okw and tonumber(v)) and tonumber(v) or nil
+    local e = tonumber(es) or 1
+    if lw == nil then
+      verdict = string.format("写入 %.1f ⇒ 读回读不到（判不出）", MDQ.lastW)
+    elseif math.abs(lw - MDQ.lastW) <= 0.6 then
+      verdict = string.format("写入 %.1f ⇒ 读回 %.1f ⇒ **生效**（读回=写入值）", MDQ.lastW, lw)
+    elseif math.abs(lw - MDQ.lastW * e) <= 0.6 then
+      verdict = string.format("写入 %.1f ⇒ 读回 %.1f ⇒ **生效**（读回=写入值×es %.2f）", MDQ.lastW, lw, e)
+    else
+      verdict = string.format("写入 %.1f ⇒ 读回 %.1f ⇒ **判不出/没接受**（既不是写入值，也不是 ×es %.2f）", MDQ.lastW, lw, e)
+    end
+  end
+  if silent then return n, nArea, verdict end  -- 逐帧重申那条路：一个字都不打（连取证环也不进）
+  local mk = smMapKey() or file
+  -- 播报门 = **每图一次** + **k 变了再报一次**（用户在缩放地图 ⇒ 倍率真的变了，值得一行）
+  local kChg = (MDQ.lastKSaid == nil) or (math.abs((tonumber(MDQ.lastKSaid) or 0) - k) > 0.03)
+  if MDQ.saidMk ~= mk or kChg then
+    MDQ.saidMk, MDQ.lastKSaid = mk, k
+    local line = string.format("打开世界迷雾：地图=%s ｜ 表里 %d 区 ⇒ 渲染 %d 块（客户端既有 %d ｜ 新加 %d）"
+      .. "｜ 倍率 k=%.3f（%s）｜ 外框 es=%.3f ｜ 首块=%s 表 %.0fx%.0f @%.0f,%.0f ⇒ 写 %.0fx%.0f @%.0f,%.0f%s",
+      tostring(file), nArea, n, tonumber(nExist) or 0, tonumber(nNew) or 0,
+      k, tostring(kSrc), tonumber(es) or 1,
+      tostring(MDQ.lastArea or "?"), tonumber(MDQ.lastTw) or 0, tonumber(MDQ.lastTh) or 0,
+      tonumber(MDQ.lastTox) or 0, tonumber(MDQ.lastToy) or 0,
+      tonumber(MDQ.lastW) or 0, tonumber(MDQ.lastH) or 0,
+      (tonumber(MDQ.lastTox) or 0) * k, -((tonumber(MDQ.lastToy) or 0) * k),
+      ((why and (" ｜★" .. why)) or "")
+      -- ★1.75.52 六改：守护的三个数字（数量/存在性）摊在**同一行**（用户点名要「数量、存在性都要检查」）
+      .. string.format(" ｜ 守护：藏原生 %d（又冒出来再藏 %d）｜ 复位我们自建 %d ｜ 枚举池位 %d（认出我们画的 %d）｜ 本图应有 %d 块",
+        tonumber(hHid) or 0, tonumber(hAgain) or 0, tonumber(hBack) or 0, tonumber(hSeen) or 0,
+        tonumber(MDQ.holdStat.ours) or 0, tonumber(hWant) or 0))
+    pcall(mfLog, "%s ｜ 自证：%s", line, verdict)
+    -- ★「真出问题必须出声」（本项目判据）：本图不在表里 / 一块都没渲 / 渲不完整 / 自证判不出 / 倍率判不出 ⇒ 常开出口上屏；
+    --   正常的成功行走**详细档**（用户：「清理之前调试的一些日志」）—— 全量永远在 mapFitTrace 取证环里。
+    local prob = (not inTbl) or (not full) or (n == 0)
+      or (string.find(verdict, "判不出", 1, true) ~= nil)
+      or (string.find(kSrc, "判不出", 1, true) ~= nil)
+    if prob then
+      smFitSay("%s ｜ 自证：%s", line, verdict)
+    else
+      smFitSayV("%s ｜ 自证：%s", line, verdict)
+    end
+  end
+  return n, nArea, verdict
+end
 local function smEffScale(f)
   local z, cur, guard = 1, f, 0
   while cur and guard < 8 do
@@ -2217,1395 +2420,775 @@ local function smEffScale(f)
   end
   return z
 end
-
--- ★★★1.75.9 只读探测：**本客户端会不会把父帧缩放级联到这些纹理的渲染上**？
---   为什么必须实测：两种客户端模型要求**相反**的做法 ——
---     · 会级联（叠加层自己跟着地图缩）⇒ 我们**一个几何都不该碰**（再折一次 = 缩两遍，正是用户报的 bug）；
---     · 不会级联 ⇒ 必须按 es 折算（1.74.34-18b 的老结论）。
---   判据（只读）：把外框缩放临时按 1 → 0.7 走一档，读纹理的**屏幕几何**（GetLeft/GetTop/GetWidth，本客户端含缩放）——
---     跟着变 ⇒ 会级联（`needFold = false`）；一点不变 ⇒ 不会级联（`needFold = true`）；读不到 ⇒ nil。
---   ★`nil`（测不出）一律按**不折算**用（见 tick）：用户实测的两次「缩两遍」都发生在会被级联的客户端上，
---     这一侧才是安全默认；真需要折算的客户端由探测结果自行打开。
---   ★改完立刻把缩放放回原档（同一帧内，无可见闪烁）。
-local function smFitDetect()
-  local list = smFitTargets()
-  if table.getn(list) == 0 then return nil end
-  local wm = featWm()
-  if not wm then return nil end
-  local oks, cur = pcall(wm.GetScale, wm)
-  cur = (oks and tonumber(cur)) or 1
-  if cur <= 0 then return nil end
-  local function snap(o)
-    local okL, l = pcall(o.GetLeft, o)
-    local okT, t = pcall(o.GetTop, o)
-    local okW, w = pcall(o.GetWidth, o)
-    return { l = (okL and tonumber(l)) or nil, t = (okT and tonumber(t)) or nil, w = (okW and tonumber(w)) or nil }
-  end
-  local seen, moved = false, false
-  for _, it in ipairs(list) do
-    local o = it.o
-    local a = snap(o)
-    pcall(wm.SetScale, wm, 1)
-    local b = snap(o)
-    pcall(wm.SetScale, wm, 0.7)
-    local c2 = snap(o)
-    pcall(wm.SetScale, wm, cur)
-    if a.w and b.w and c2 and c2.w then
-      seen = true
-      -- 1 → 0.7 这一档：屏幕宽度跟着缩 ⇒ 客户端会级联
-      if b.w > 0 and math.abs(c2.w - b.w * 0.7) <= b.w * 0.06 then moved = true end
+MDQ.staleLevel = function(file)
+  if type(GetCurrentMapZone) == "function" then
+    local okz, z = pcall(GetCurrentMapZone)
+    if okz and tonumber(z) ~= nil then
+      if tonumber(z) == 0 then return true, "GetCurrentMapZone=0" end
+      return false, string.format("GetCurrentMapZone=%d", tonumber(z))
     end
-    if a.l and b.l and c2 and c2.l and math.abs(c2.l - b.l) > 0.5 then seen, moved = true, true end
-    if not seen then
-      mfLog("探测：%s 读不到屏幕几何（GetLeft/GetTop/GetWidth 都无效）⇒ 判定未知", tostring(it.key))
-    else
-      mfLog("探测：%s 缩放1→读宽 %s ｜ 缩放0.7→读宽 %s ⇒ %s（读回口径 es=%s ｜ 父链真有效缩放=%s ｜ 设置值=%s）", tostring(it.key),
-        tostring(b and b.w), tostring(c2 and c2.w),
-        moved and "**跟着缩**（客户端自己会级联 ⇒ 折算将是第二遍）" or "不动（客户端不会级联 ⇒ 需要折算）",
-        tostring(cur), tostring(smEffScale(wm)), tostring(SM_CFG.scale))
+  end
+  local tbl = rawget(_G, "EVAL_MAP_OVERLAY_DATA")
+  if type(tbl) == "table" then
+    if type(file) == "string" and file ~= "" and tbl[file] ~= nil then
+      return false, "S_WorldMap 表里有这张图（区域图）"
     end
-    if moved then break end
+    return true, "S_WorldMap 表里没有这张图（大陆/世界/城市级）"
   end
-  if not seen then return nil end
-  return (not moved)
+  return false, "判不出（GetCurrentMapZone 与 S_WorldMap 表都读不到）"
 end
 
--- ★★★1.75.9 折算策略（**默认折算** —— 用户实测：改成「探测说什么就听什么」会让「正常开启完全不生效」）：
---   `SM_CFG.mapFitMode`：nil / "fold" = **照旧折算**（探测结论只进提示与取证）；"auto" = 交给只读探测；"nofold" = 一个几何都不碰。
---   ★这条 A/B 是给真机定档用的：`/ehm mapfit mode fold|auto|nofold`（见 EVAL_SM_MAPFIT_MODE_SET）。
-local function smFitMode()
-  local m = SM_CFG.mapFitMode
-  if m == "auto" or m == "nofold" or m == "fold" then return m end
-  return "fold"
+-- ★「藏了哪些纹理」记进**有界落盘环**（`SM_CFG.staleLog`，最新在前、最多 `MDQ.STALE_LOG_MAX` 条）：
+--   用户要的就是「把哪些纹理隐藏了记下来」；★只上屏的日志 `/reload` 后就没了、事后也没法取证
+--   （本项目纪律：探针/判定的**原话必须落盘**，否则用户跑一趟等于白跑）。
+MDQ.staleLogPut = function(line)
+  if type(SM_CFG) ~= "table" then return 0 end
+  local t = SM_CFG.staleLog
+  if type(t) ~= "table" then t = {} SM_CFG.staleLog = t end
+  table.insert(t, 1, tostring(line))
+  local n = table.getn(t)
+  while n > MDQ.STALE_LOG_MAX do t[n] = nil n = n - 1 end
+  return table.getn(t)
 end
 
-local function smFitModeLabel()
-  local m = smFitMode()
-  if m == "auto" then return "自动（听探测结论）" end
-  if m == "nofold" then return "不折算（一个几何都不碰）" end
-  return "折算（默认：按 es 折一次）"
+-- 读落盘环（最新在前，最多 max 条）
+MDQ.staleLogGet = function(max)
+  local t = (type(SM_CFG) == "table") and SM_CFG.staleLog or nil
+  if type(t) ~= "table" then return {} end
+  local out = {}
+  local lim = math.min(tonumber(max) or MDQ.STALE_LOG_MAX, table.getn(t))
+  for i = 1, lim do out[i] = tostring(t[i]) end
+  return out
 end
 
-local function smFitNeedFold()
-  local m = smFitMode()
-  if m == "nofold" then return false end
-  if m == "auto" then return (SMFIT.needFold == true) end
-  return true -- ★默认：折算（否则「正常开启无法生效」= 用户实测到的那种回归）
-end
-
--- ★★★1.75.45：**「这一层与 记录×es 是否已经对齐」的唯一判据**（折算与「未适配先隐形」共用 —— 单一来源，
---   免得两处各写一套 near/口径、日后改一处漏一处）。
---   返回 `need`（true = 要写 / false = 已对齐 / **nil = 几何读不到 ⇒ 判不出就不动**）+ 要写进去的四个目标值。
-local function smFitNeedWrite(o, r, es)
-  local okp, p, _rel, _rp, x, y = pcall(o.GetPoint, o, 1)
-  local okw, w = pcall(o.GetWidth, o)
-  local okh, h = pcall(o.GetHeight, o)
-  if not (okp and p and okw and okh and tonumber(x) and tonumber(y) and tonumber(w) and tonumber(h)) then
-    return nil
+-- 藏账的层名清单（播报 / 体检用）：`WorldMapOverlay1、WorldMapOverlay3…（共 N 个）`
+MDQ.staleNames = function(max)
+  local names = {}
+  for _, rec in pairs(MDQ.staleHid) do
+    table.insert(names, tostring(rec and rec.name or "?"))
   end
-  local wantX, wantY, wantW, wantH = r.x * es, r.y * es, r.w * es, r.h * es
-  -- 两种读回口径都认（与旧写法逐字一致）：okA = 读回≈逻辑值；okB = 读回≈逻辑值×es
-  local near = function(a, b) return math.abs((tonumber(a) or 0) - (tonumber(b) or 0)) <= 0.5 end
-  local okA = near(x, wantX) and near(y, wantY) and near(w, wantW) and near(h, wantH)
-  local okB = near(x, wantX * es) and near(y, wantY * es) and near(w, wantW * es) and near(h, wantH * es)
-  if okA or okB then return false, wantX, wantY, wantW, wantH end
-  return true, wantX, wantY, wantW, wantH
+  table.sort(names)
+  local n = table.getn(names)
+  if n == 0 then return "（无）" end
+  local lim = math.min(tonumber(max) or 8, n)
+  local head = {}
+  for i = 1, lim do head[i] = names[i] end
+  local s = table.concat(head, "、")
+  if n > lim then s = s .. "…" end
+  return s .. string.format("（共 %d 个）", n)
 end
 
--- 应用适配：返回 改动数, 已适配数, 等原值的目标数
-local function smFitApply(es, quiet)
-  smFitMigrate()
-  -- ★★★1.75.45b：**本次调用的写入账**（`wroteRun`）必须在所有早退之前清干净 ——
-  --   第 5 步逐层那行「★本次已写」要按**这一次调用**判，不能拿 `wroteKeys`（那是「本图这一整个会话写过」的旧账：
-  --   实测同一张图连跑两次手动适配会打出「写入 0 个」却有 12 行「★本次已写」的自相矛盾日志）。
-  SMFIT.wroteRun = {}
-  if not smFitNeedFold() then return 0, 0, 0 end
+-- 开关真值（唯一入口）：`SM_CFG.staleClean` —— nil = **默认开**（用户要的就是「别让不属这张图的贴图留在图上」）；
+--   显式 false = 关（关掉零动作：不再新藏 + 当场把藏账里的层全部还回）。
+MDQ.staleOn = function()
+  return SM_CFG.staleClean ~= false
+end
+
+-- 名字像不像「客户端叠加层池位」：**按前缀 `WorldMapOverlay` 认**（DebugBox 图层树里那批就是 `WorldMapOverlayN`）。
+--   ★★★1.75.52 四改（用户原话就一个词：「**WorldMapOverlayN**」）⇒ 判据从「严格数字后缀」**放宽成前缀 `WorldMapOverlay*`**：
+--     只认数字后缀的话，真机上若出现字母/其它后缀（`WorldMapOverlayN` 这种写法）就**一条都认不出**，
+--     而且是**静默失效**（一个字节都不碰、图上残留照旧）—— 这正是本项目最怕的那种坑。
+--   ★仍然只是**名字证据**：底图瓦片 `WorldMapDetailTile*`、匿名纹理（`GetName()` 读不到）照样**一个字都不碰**。
+MDQ.stalePoolName = function(o)
+  local nm = string.lower(tostring(frameName(o) or ""))
+  return (nm ~= "" and string.find(nm, "worldmapoverlay", 1, true) == 1)
+end
+
+-- 世界地图贴图路径里的**图名段**：`…\WorldMap\<图名>\…`（`/` 与 `\` 都认；大小写不敏感；容忍 `/Game/Interface/` 前缀）
+--   ★返回 nil = **判不出**（不是世界地图贴图 / 路径读不到）⇒ 调用方**一律不碰**（没证据不动手，本项目铁律）。
+MDQ.staleSeg = function(path)
+  local s = string.lower(tostring(path or ""))
+  if s == "" then return nil end
+  s = string.gsub(s, "/", "\\")
+  local i = string.find(s, "\\worldmap\\", 1, true)
+  if i == nil then
+    if string.sub(s, 1, 9) == "worldmap\\" then i = 0 else return nil end
+  end
+  local seg = string.match(string.sub(s, i + 10), "^([^\\]+)")
+  if seg == nil or seg == "" then return nil end
+  return seg
+end
+
+-- 路径相等（大小写 + 分隔符都不敏感；全长相等 或「末段文件名」相等都算）—— 与引擎自报的叠加层路径比对用
+--   ★分隔符必须归一：本客户端 `GetTexture()` 报反斜杠，而 `GetMapOverlayInfo()` 可能报 `/Game/Interface/…` 正斜杠形态
+--     （追踪图标那条已实测是这个形态）⇒ 不归一就会「明明是同一张图却判成不在清单里」。
+MDQ.samePath = function(a, b)
+  local x = string.lower(tostring(a or ""))
+  local y = string.lower(tostring(b or ""))
+  if x == "" or y == "" then return false end
+  x, y = string.gsub(x, "/", "\\"), string.gsub(y, "/", "\\")
+  if x == y then return true end
+  local lx, ly = string.match(x, "([^\\]+)$"), string.match(y, "([^\\]+)$")
+  return (lx ~= nil and lx == ly)
+end
+
+-- 引擎自报的叠加层路径清单（本图这一拍的真值）；读不到 ⇒ 空表（★空表 = 引擎说「本图没有叠加层」，
+--   这时任何「路径属于别的图」的池位都必是残留 —— 与 1.75.45d「自报 0 条 ⇒ 没有可适配的层」同口径）。
+MDQ.staleEngineList = function()
+  local want = {}
+  local n = tonumber(smNumOverlays()) or 0
+  for i = 1, n do
+    local okg, nm = pcall(function() return GetMapOverlayInfo(i) end)
+    if okg and type(nm) == "string" and nm ~= "" then table.insert(want, nm) end
+  end
+  return want, n
+end
+
+-- 藏账条数
+MDQ.staleLedgerN = function()
+  local c = 0
+  for _ in pairs(MDQ.staleHid) do c = c + 1 end
+  return c
+end
+
+-- ★★★1.75.52 三改（用户看了 DebugBox 图层树后的定案，原话：「**非区域地图 就将 WorldMapOverlay 隐藏了就可以**」）
+--   ⇒ 规则**简化成两条**（不再看贴图路径、不再比引擎清单 —— 那两条只留在只读体检里当诊断）：
+--     · **非区域地图**（大陆 / 世界级，`MDQ.staleLevel` = true）⇒ 把 `WorldMapOverlay<n>` 池位**全部 `Hide`**；
+--     · **区域地图**（`GetCurrentMapZone() > 0` / 表里有这张图）⇒ 把我们藏过的**全部 `Show` 还回**
+--       （这一级客户端要用这批池位画本图的探索层；★**不还回就是永久窟窿** —— 这条是本次改动的第一判据）。
+--   ★纪律不变：**只 `Hide`/`Show`**，绝不 `SetTexture`、绝不动 UV、绝不改几何；
+--     **名字不合 `WorldMapOverlay*` 的对象（底图瓦片 `WorldMapDetailTile*` / 匿名纹理）一个字节都不碰**。
+--   ★**藏了哪几条记名 + 落盘**（`SM_CFG.staleLog` 有界 40）—— 用户 1.75.52 二改点名要的那一条。
+--   ★返回 本轮新藏 N, 本轮还回 M, 看过的池位 k, 当前图名, 藏账条数, 级别依据
+MDQ.staleTick = function()
+  local fileRaw = tostring(select(1, smMapInfo()) or "")
+  local want = string.lower(fileRaw)
+  local ledger0 = MDQ.staleLedgerN()
+  if want == "" then return 0, 0, 0, "?", ledger0, "读不到地图名" end
+  local lvl, lvlWhy = MDQ.staleLevel(fileRaw)
+  -- ★★★1.75.52 五改（用户真机定案的那条**触发条件**）：「**在切换到某个图、如果检索不到目标地图数据的情况下，
+  --   会将刚开（上一张）地图的默认纹理直接显示在这个地图上**，导致地图错乱 —— 世界地图 / 板块地图 /
+  --   **某些没有探索层数据的地图**都是相同问题」。
+  --   ⇒「**本图没有探索层数据**」= 动手的信号，三条**任一**成立即可（证据从硬到软）：
+  --     ① `GetNumMapOverlays() == 0` —— **引擎自报本图一条叠加层都没有**（最硬：本图压根不用这批池位
+  --        ⇒ 任何还显示着的 `WorldMapOverlay*` 必是上一张图的残留）★这一条正是用户描述的那个场景；
+  --     ② **非区域地图**（世界/板块级，用户前一条定案：「非区域地图就将 WorldMapOverlay 隐藏了就可以」）；
+  --     ③ 判不出级别且引擎也读不到 ⇒ 走第 ①/② 的 false 分支（**不动手**，本项目铁律）。
+  --   ★反之：**本图有数据**（区域图 且 引擎自报 ≥1 条）⇒ **把我们藏过的还回**（那一级客户端要自己摆）。
+  --     ★自愈性：引擎的 0 条若只是**尚未摆版式**的瞬态，下一拍它报 ≥1 ⇒ 规则翻回「还回」⇒ 不会留窟窿。
+  local engineN = select(2, MDQ.staleEngineList())
+  engineN = tonumber(engineN) or 0
+  -- ★★★1.75.52 六改 c：**替代开关开着、且本图在表里 ⇒ 残留清理整段让位**（可见性归「接管守护」：
+  --   那一档客户端原生层一律要藏、还要按表自行添加）—— 两套规则同时动手只会互相打架（藏了又被还回）。
+  --   ★**只在「本图在表里」时让位**（用户要求「全图默认开」之后这更重要）：表里没有这张图的图
+  --   （大陆 / 世界 / 城市）**接管守护本来就不动手**，那时残留清理必须继续干活，否则两档都失效。
+  if MDQ.swm() and MDQ.holdN(fileRaw) > 0 then
+    return 0, 0, 0, want, ledger0, "替代开关已开（本图在表里 ⇒ 可见性归「接管守护」）"
+  end
+  local noData = (lvl == true) or (engineN == 0)
+  local whyLvl = lvl and ("非区域地图：" .. tostring(lvlWhy))
+    or (engineN == 0 and "引擎自报本图 0 条叠加层（= 本图没有探索层数据）")
+    or ("本图有探索层数据（引擎自报 " .. tostring(engineN) .. " 条）")
   local fr = _G["WorldMapDetailFrame"]
-  if not (type(fr) == "table" or type(fr) == "userdata") then return 0, 0, 0 end
-  es = tonumber(es) or 1
-  if es <= 0 then es = 1 end
-  -- ★★★1.75.5：**缩放还没落地的瞬态** ⇒ 这一拍先不折算。
-  --   真机证据（1.75.4 那场事故的日志）：设置值 scale=0.7 而读回 es=1.000 ⇒ 若照折，就会先把
-  --   **未折几何**写一遍（下一拍 es 到位再写一遍）＝ 同一次开图两个不同值都落下去（既闪又刷屏）。
-  --   等缩放落地再算，语义与结果都更干净；这也是「读回口径不可信时不动手」的同族判据。
-  if math.abs(es - 1) <= 0.001 and math.abs((tonumber(SM_CFG.scale) or 1) - 1) > 0.001 then
-    -- ★★★1.75.5（真机日志实测：7 分钟内反复出现「读回 es=1.000 而设置值 0.7」）：
-    --   这一拍**主动把缩放掰回去**（`featApplyScale` 自带「同档不重写」读回自证 ⇒ 本来就对时一个写都不发），
-    --   这样瞬态最多只影响**一拍**；然后再暂缓折算。
-    pcall(featApplyScale, tonumber(SM_CFG.scale) or 1)
-    -- 取证行**不受 quiet 门控**（这是「为什么这一拍没折算」的唯一证据），但**有界节流**（3s 一条），绝不刷屏。
-    -- ★同时把**自身 GetScale / 父帧有没有**摊出来 —— 这是区分「客户端把缩放重置了」与「父链一时读不到」的唯一证据。
-    local nowT = (type(GetTime) == "function") and GetTime() or 0
-    if nowT - (smFitTransAt or -99) > 3 then
-      smFitTransAt = nowT
-      local ownS, hasPar = "?", "?"
-      if type(fr) == "table" or type(fr) == "userdata" then
-        local ok1, v1 = pcall(fr.GetScale, fr)
-        if ok1 then ownS = string.format("%.3f", tonumber(v1) or 0) end
-        local ok2, v2 = pcall(fr.GetParent, fr)
-        hasPar = (ok2 and v2 ~= nil) and "有" or "**无**"
+  local okFr = (type(fr) == "table" or type(fr) == "userdata") and type(fr.GetRegions) == "function"
+  -- ① 本图**有**数据 ⇒ **还回**（绝不把「藏」的状态带过去；幂等：账空了就什么都不做）
+  if not noData then
+    local back = 0
+    if ledger0 > 0 then back = MDQ.staleShowAll("本图有探索层数据（" .. tostring(whyLvl) .. "）") end
+    return 0, back, 0, want, MDQ.staleLedgerN(), whyLvl
+  end
+  -- ② 本图没有探索层数据 ⇒ 把叠加层池位**全部藏掉**（空闲时也允许新藏：客户端随后又 Show 出来就再藏，残留不许回潮）
+  if not okFr then return 0, 0, 0, want, ledger0, whyLvl end
+  local okr, regs = pcall(function() return { fr:GetRegions() } end)
+  if not okr then return 0, 0, 0, want, ledger0, whyLvl end
+  local hid, seen, nTex = 0, 0, 0
+  local samples = {}
+  for _, o in ipairs(regs) do
+    -- 唯一的证据 = **名字**是叠加层池位；名字不合（底图瓦片 / 匿名装饰）⇒ 一个字节都不碰
+    if o ~= nil then
+      nTex = nTex + 1
+      if nTex <= 6 then
+        local nmS = frameName(o)
+        table.insert(samples, (nmS ~= "" and nmS ~= "?") and nmS or "(无名)")
       end
-      mfLog("折算暂缓：读回 es=1.000 而设置值 scale=%s ⇒ 已主动掰回缩放、本拍不折算（自身 GetScale=%s ｜ 父帧=%s）",
-        tostring(SM_CFG.scale), ownS, hasPar)
-    end
-    return 0, 0, 0
-  end
-  -- ★★★1.75.5：记录只来自**会话内存**（`SMFIT.recMap[地图身份]`，见 smFitMigrate 的注释）——
-  --   定位信息由客户端每次开图重摆、我们只在会话内记住「折之前是什么」，**不再落存档**。
-  local mk = smMapKey() or SMFIT.mapKey or "?"
-  smFitBindMap(mk) -- ★1.75.5：身份变了自己换绑（并把本图记录挂回 recMap）
-  -- ★本图客户端自己说「零条叠加层」⇒ 一个几何都不该碰（旧写法照样把那批残留几何写一遍）
-  if smNumOverlays() == 0 then return 0, 0, 0 end
-  local list = smFitTargets()
-  local changed, ready, rec, skipped = 0, 0, 0, 0
-  for _, it in ipairs(list) do
-    local o = it.o
-    -- ★★★1.75.13：**本图不用的层一个几何都不碰**（隐藏 / 没贴图 ⇒ 它身上是别的图的残留几何；
-    --   旧写法对它们照写 = 真机看到的那批「全部挤在同一处」）
-    local use = smFitInUse(o)
-    if not use then skipped = skipped + 1 end
-    -- ★★★1.75.45：几何读回 + 「要不要写」的判定收进 `smFitNeedWrite`（**唯一判据来源**，
-    --   折算与「未适配先隐形」共用；读不到几何 ⇒ 返回 nil ⇒ 两边都**判不出就不动**）。
-    if use then
-      -- ★本函数**只读、绝不记原值**（唯一写入点是 smFitCapture）：没有记录 ⇒ 只计数，等抓原值那一拍补上
-      local r = SMFIT.rec[it.key]
-      if not r then rec = rec + 1 end
-      if r then
-        -- ★读回口径（1.75.5 改成**两种都认**，与 smFitRestore 同一套判据）：
-        --   · 「读回 = 逻辑值」（不会级联的客户端）⇒ 对齐 = 读回 ≈ 原值×es（旧写法只认这一种）；
-        --   · 「读回 = 逻辑值×es」（**本客户端实测**：几何读回含父帧缩放）⇒ 写进去的逻辑值读回来是 ×es
-        --     ⇒ 对齐 = 读回 ≈ 原值×es×es。
-        --   ★旧写法只按第一种比 ⇒ 在会级联的客户端上**每一拍都判成「要改」**（真机取证：8 个纹理被反复重写、
-        --     聊天每 3 秒刷一条「叠加层适配」）；两种都认之后：该写时写一次，之后永远判「已对齐」。
-        local need, wantX, wantY, wantW, wantH = smFitNeedWrite(o, r, es)
-        if need == false then
-          ready = ready + 1
-        elseif need == true then
-          -- ★★★1.75.5 真机定案（用户截图：**探索层贴图跑到游戏画面里**，右下角拼出一块丹莫罗地图）：
-          --   写锚点**必须传「帧对象」**，绝不能把记录里的相对帧**名字（字符串）或 nil** 丢给 `SetPoint` ——
-          --   本客户端对「字符串/nil 相对帧」的处理 = **锚到屏幕**（UIParent）⇒ 这些纹理逃出地图窗口、画在游戏世界上
-          --   （`smFitRestore` 那条路一直是**解析成对象**的，所以「关功能」能救回来 —— 这也正是两边行为不一致的真因）。
-          local relObj = nil
-          if type(r.relObj) == "table" or type(r.relObj) == "userdata" then relObj = r.relObj end
-          if (not relObj) and type(r.rel) == "string" and r.rel ~= "" then relObj = _G[r.rel] end
-          if not relObj then relObj = fr end -- 兜底：原值记的就是「锚父帧 TOPLEFT」
-          pcall(o.ClearAllPoints, o)
-          pcall(o.SetPoint, o, r.p, relObj, r.rp, wantX, wantY)
-          r.relObj = relObj -- ★记住活对象（同会话内换图/还原都用它，不再靠字符串）
-          pcall(o.SetWidth, o, wantW)
-          pcall(o.SetHeight, o, wantH)
-          changed = changed + 1
-          SMFIT.wrote = true -- ★1.75.9：记下「本会话**真的写过**几何」⇒ 关闭时才需要还原（没写过就一个写都不发）
-          -- ★1.75.13：**逐层记账**（还原只还我们写过的、且只还**本图**写过的）
-          SMFIT.wroteKeys[it.key] = mk
-          SMFIT.wroteRun[it.key] = true -- ★1.75.45b：**本次调用**的写入账（第 5 步逐层打印用，见函数开头）
-          -- ★1.75.45c：记下**写进去的逻辑值**（增量适配时用它与实时读回反解读回口径 k，见 smFitReadbackK）
-          SMFIT.wroteVal[it.key] = { x = wantX, y = wantY, w = wantW, h = wantH }
-          mfLog("折算：es=%.3f %s 原值(%.1f,%.1f %.1f×%.1f,来自%s) → 写入(%.1f,%.1f %.1f×%.1f)",
-            es, tostring(it.key), r.x, r.y, r.w, r.h, tostring(r.from or "rec"),
-            wantX, wantY, wantW, wantH)
-        end
-      end
-    end
-  end
-  if changed > 0 then
-    SM_CFG.mapFitAt = (type(GetTime) == "function") and string.format("%.1f", GetTime()) or "?"
-    SM_CFG.mapFitLast = { es = es, changed = changed, total = table.getn(list), skipped = skipped, map = mk }
-    local now = (type(GetTime) == "function") and GetTime() or 0
-    -- 同一波重排只播报一次（3s 节流），不然每拍刷屏
-    -- ★★★1.75.5（用户：「好的功能正常了.清理下这些调试日志」）：再叠一道**每次开图只报一次**的门
-    --   （真机实测：开一次图那条「叠加层适配：对齐 8 个」会重复出现 6 次以上 —— 每次重排/重抓都会再来一轮）。
-    --   ⇒ 安静档只留**本图第一次折算**那一条；其余进 verbose 档与取证环。
-    local firstFold = (not SMFIT.saidFold)
-    if (not quiet) and (now - (smFitMsgAt or -99) > 3) and (firstFold or smFitVerboseOn()) then
-      smFitMsgAt = now
-      SMFIT.saidFold = true
-      local eff = smEffScale(fr)
-      mfLog("折算口径：读回 es=%.3f ｜ 父链真有效缩放=%.3f ｜ 设置值 scale=%s", es, eff, tostring(SM_CFG.scale))
-      local same = (math.abs(eff - es) < 0.01)
-      P(string.format("叠加层适配：按读回口径 %.2f 对齐 %d 个（非瓦片纹理共 %d 个%s；底瓦片不动）%s",
-        es, changed, table.getn(list),
-        (skipped > 0) and ("，本图不用的 " .. skipped .. " 个已跳过") or "",
-        same and "" or string.format("｜★真有效缩放(父链连乘)=%.2f，读回口径=%.2f（本客户端 `GetEffectiveScale` 报的是**自身** scale，两个量不同）", eff, es)))
-    else
-      -- 安静档：只进取证环（一行一条，供 `/ehm mapfit trace` 事后翻）
-      mfLog("折算（静默）：es=%.3f 改 %d 个（本图第 %s 次折算；要逐次上屏用 /ehm mapfit verbose on）",
-        es, changed, tostring(SMFIT.saidFold and ">1" or "1"))
-    end
-  end
-  return changed, ready, rec
-end
-
--- ★★★1.75.45c（用户要求「按地图签名缓存 + 新探索层出现时增量缩放」）：**运行期自证读回口径**。
---   问题：抓原值必须知道「读回值 ÷ ? = 逻辑值」。自然档下 ? = 1（不用押注）；非自然档下 ? 要么 1、要么 es，
---   而这台客户端两轮取证都没定性 ⇒ 旧写法只能把整张图按回自然档去读（每次换图满尺寸 1~2 秒）。
---   ⇒ 现在**用我们自己写过的层反解**：写进去的是 `wroteVal`（逻辑值），实时读回 ÷ 写进去的值 = k。
---     · k ≈ 1   ⇒ 读回就是逻辑值（本档不级联）；
---     · k ≈ es  ⇒ 读回 = 逻辑值 × es；
---     · 两者都不是 ⇒ 判不出（**如实返回 nil**，绝不猜 —— 调用方会退回「自然档窗口」那条安全路）。
---   ★只认「本图写过 + 现在还在用 + 读得回来」的层（`wroteKeys[名] == 本图签名`），且**取第一个算得出来的**。
-local function smFitReadbackK(es)
-  es = tonumber(es) or 0
-  if es <= 0 then return nil end
-  local mk = smMapKey() or SMFIT.mapKey or "?"
-  for _, it in ipairs(smFitTargets()) do
-    local wv = SMFIT.wroteVal and SMFIT.wroteVal[it.key]
-    if type(wv) == "table" and SMFIT.wroteKeys[it.key] == mk and smFitInUse(it.o) then
-      local okw, lw = pcall(it.o.GetWidth, it.o)
-      local want = tonumber(wv.w)
-      if okw and tonumber(lw) and want and want > 0.5 then
-        local k = tonumber(lw) / want
-        -- ★只接受两个**已知口径**（k≈1 / k≈es）；其余一律判不出（避免把「客户端正在重摆」的中间态当口径）
-        if math.abs(k - 1) <= 0.06 or math.abs(k - es) <= 0.06 then return k end
-      end
-    end
-  end
-  return nil
-end
-
--- ★★★1.75.9 新增：**先抓原值、再改缩放**（本项目铁律「读原值 → 写新值，顺序不许换」，1.74.31 组 206 的教训）。
---   真机事故：载入后点开启 ⇒ 探索层缩了两遍。旧顺序 = `smApplyDefaults()`（**立刻** SetScale 0.7）
---   → 之后 tick 才去记「原值」⇒ 记下来的可能已经是**缩过的值**，再折一次 = 两遍。
---   ★本客户端几何读回**可能含缩放**（R15 ⑥d 实测：宽 384 + es 0.7 ⇒ 读回 268.8）⇒
---     抓原值时把外框缩放**临时置 1**（自然档）读一次，读完立刻恢复原缩放（同一帧内，不会闪）。
---   ★只补「还没记过」的目标（**绝不覆盖**已有记录）；成功抓到就把版本戳写进存档。
-local function smFitCapture()
-  SMFIT.capCalls = (tonumber(SMFIT.capCalls) or 0) + 1 -- ★1.75.5：抓原值的**尝试次数**（读值口/事故取证用）
-  -- ★★★1.75.5（**用户要求**：「获取原值的地方添加日志信息，打印出来」）：
-  --   每次尝试先报一条**看得见**的入口行（前 5 次 / 每图；计数在 smFitNewMap 里归零）——
-  --   真机实证：重开后没重开地图那一次，聊天框里一条抓原值都没有 ⇒ 无法判断是「没抓」还是「抓了没成」。
-  local nSay = tonumber(SMFIT.capSayN) or 0
-  SMFIT.capSayN = nSay + 1
-  -- ★详细档（verbose）才逐次播报；安静档一个字都不打（真出问题时 `/ehm mapfit verbose on` 打开即可）
-  if nSay < 5 then
-    smFitSayV("抓原值 第%d次尝试：地图=%s ｜ 本图已有记录=%d 条 ｜ 落闩=%s ｜ 客户端叠加层=%s 条",
-      tonumber(SMFIT.capCalls) or 0, tostring(smMapKey() or SMFIT.mapKey or "?"), smFitRecCount(),
-      SMFIT.captured and "是" or "否", tostring(smNumOverlays()))
-  end
-  -- ★★★1.75.5：只抓**本图真正在用**的层（见 smFitInUse / smMapKey 的注释），记录进**会话内存** `SMFIT.rec`
-  local mk = smMapKey() or SMFIT.mapKey or "?"
-  smFitBindMap(mk)
-  if smNumOverlays() == 0 then
-    if nSay == 0 then smFitSayV("抓原值：客户端说本图 **0 条叠加层** ⇒ 不抓、也不碰任何几何") end
-    return 0
-  end
-  local list = smFitTargets()
-  if table.getn(list) == 0 then
-    if nSay == 0 then
-      smFitSay("抓原值：`WorldMapDetailFrame` 下**没有可用纹理**（地图没开，或客户端还没建这批纹理）⇒ 本次什么都不做")
-    end
-    return 0
-  end
-  -- ★★★1.75.5 真机事故（用户：「换了一个账号之后…地图缩放不正常了」）：**先筛候选，再动缩放**。
-  --   旧写法把「临时 SetScale(1)」放在筛选**之前**，而落闩条件写的是 `n > 0` —— 原值已齐（每次 /reload 必然如此）
-  --   时 `n = 0` ⇒ `SMFIT.captured` 永远 false ⇒ tick **每帧**重跑本函数、**每帧**把世界地图缩放按 1 再放回
-  --   ⇒ ① 地图缩放每帧抖一次（看着就是「缩放没生效/不正常」）；② 取证环 1 秒被刷满 60 条（把真证据挤掉）；
-  --   ③ 折算口径被搅成 1.000 ⇒ 叠加层被反复重写（聊天刷屏）。
-  local todo, skipUse = {}, 0
-  for _, it in ipairs(list) do
-    if not smFitInUse(it.o) then
-      skipUse = skipUse + 1 -- 本图不用的层：既不抓也不写（它身上是别的图的残留几何）
-    elseif not SMFIT.rec[it.key] then
-      table.insert(todo, it)
-    end
-  end
-  if table.getn(todo) == 0 then
-    -- ★★★1.75.5 真机报障（用户截图：「/reload 插件载入的时候为什么原值为 0 也定义为原值抓取完成?这个流程本身就不对」）：
-    --   `todo` 空有**两种完全不同的来法**，一视同仁地落闩就是那个 bug：
-    --     · 目标**都已经有记录**（本图确实读过）⇒ 真没事可做 ⇒ 落闩 ✓（原设计针对的就是这个场景）；
-    --     · 目标**一个都不在用**（客户端还没摆版式 / 还没贴图）⇒ **一条都没读到** ⇒ 落闩意味着
-    --       「以后再也不会抓」⇒ 地图缩了、探索层没缩 = 错位（真机现象：「原值已齐（0 条）」+「已抓到原值」+
-    --       一个几何都不折）。⇒ 这一种**绝不落闩**，交给 tick 的**有界重试**（1 秒一次）等它摆好。
-    if smFitRecCount() > 0 then
-      -- 本图原值已齐 ⇒ **当场落闩**（并记下尝试时刻，供有界重试用）：一个缩放都不碰、一次读都不做
-      SMFIT.captured = true
-      SMFIT.capAt = (type(GetTime) == "function") and GetTime() or 0
-      -- ★安静档：**每次开图只报这一条**（有记录、落闩）—— 详细档才逐次摊开
-      if not SMFIT.saidLatch then
-        SMFIT.saidLatch = true
-        smFitSay("抓原值：本图原值**已齐**（%d 条；跳过 %d 个本图不用的层）⇒ 落闩", smFitRecCount(), skipUse)
-      else
-        smFitSayV("抓原值：本图原值**已齐**（%d 条；本轮跳过 %d 个本图不用的层）⇒ 当场落闩，一个缩放都不碰",
-          smFitRecCount(), skipUse)
-      end
-      if skipUse > 0 then
-        mfLog("抓原值：原值已齐，本图不用的 %d 个叠加层已跳过（隐藏/没贴图 ⇒ 旧写法抓到的是别的图的残留几何）", skipUse)
-      end
-      return 0
-    end
-    -- ★一条都没读到（记录 0 条 + 候选全不在用）⇒ 不算完成，不落闩
-    SMFIT.capAt = (type(GetTime) == "function") and GetTime() or 0
-    smFitSayV("抓原值：本图 %d 个候选**一个都还没在用**（客户端还没摆好版式/还没贴图）⇒ **不算抓到原值**、"
-      .. "**不落闩**，1 秒后自动重试（等它摆出来再读）", skipUse)
-    return 0
-  end
-  local n, fails = 0, 0
-  -- ★★★1.75.5 真机定案（用户：「插件载入时地图缩放异常，关/开一次缩放大地图后探索层才正常」）：
-  --   **抓原值时绝不翻转外框缩放** —— 旧写法「同一帧里 SetScale(1) → 立刻读 → 放回」在**外框已经是 0.70** 时
-  --   是一次**真改动** ⇒ 本客户端立刻重排/清锚点 ⇒ 紧接着的读**全部读不到**（静默）⇒ 原值 0 条 ⇒ 折算无事可做。
-  --   （而「关/开」那条路能成，是因为关的时候 `featReset` 已把外框复位成**真的 1.00** ⇒ 那句 SetScale(1) 是**空操作**、不惊动客户端。）
-  --   ★两种客户端口径都能**从读回直接算出逻辑值**，所以根本不需要翻转：
-  --     · 本客户端实测「几何读回 = 逻辑值 × es」（`needFold == false`）⇒ **÷ es** 归一；
-  --     · 老探针口径「读回就是逻辑值」（`needFold == true`）⇒ 原样取；
-  --     · 没探过（`nil`）⇒ 按本客户端实测口径（÷ es）。
-  --   ★可自证：trace 里同时记「读回原始值 / 归一系数 / 记录值」，`/ehm mapfit dump` 里也同时打「活值」与「记录」。
-  local frC = _G["WorldMapDetailFrame"]
-  local esC = 1
-  if type(frC) == "table" or type(frC) == "userdata" then
-    local e = smEffScale(frC)
-    if tonumber(e) and tonumber(e) > 0 then esC = tonumber(e) end
-  end
-  -- ★★★1.75.45c（用户要求「按地图签名缓存；没缓存的走初次打开流程；新探索层出现时增量缩放」）归一系数三条路：
-  --   ① **自然档**（|esC−1| ≤ 0.001）⇒ `norm = 1`：读回就是原值，不押注任何口径（初次打开流程用的是这条）；
-  --   ② **非自然档 + 能自证口径**（本图有我们写过的层 ⇒ `smFitReadbackK` 反解出 k）
-  --      ⇒ `norm = k`，**直接在这里记**（= 增量适配：只为「还没有原值的层」补记录，不重来整张图、不把地图按回自然档）；
-  --   ③ **非自然档 + 自证不出**（本图我们没有写过任何层 ⇒ 没有参照物）⇒ **一条都不记**，申请/续一个自然档窗口
-  --      （这条就是「没缓存 ⇒ 走初次打开流程」；★绝不猜口径、绝不写偏小的脏原值）。
-  --   旧写法（1.75.45b 及以前）永远走 ③ 或盲猜 ÷esC：盲猜的那条正是「换图后探索层缩放失效」的根因。
-  local normSrc = "自然档"
-  local norm = nil
-  if math.abs(esC - 1) <= 0.001 then
-    norm = 1
-  else
-    local k = smFitReadbackK(esC)
-    -- ★k 必须与 esC 同档才算数（`smFitReadbackK` 内部已只接受 k≈1 / k≈es）
-    if k then norm, normSrc = k, "k自证" end
-  end
-  if norm == nil then
-    local free = (tonumber(SMFIT.natLeft) or 0) > 0
-    if (not SMFIT.saidNat) or smFitVerboseOn() then
-      SMFIT.saidNat = true
-      smFitSayV("抓原值**跳过**：外框不是自然档（真有效缩放=%.3f）、且本图还没有「我们写过的层」可用来反解读回口径"
-        .. "⇒ 本次**一条都不记**（绝不猜口径、绝不写偏小的原值）；%s", esC,
-        free and string.format("改为申请一个自然档窗口（本图还剩 %d 段）", tonumber(SMFIT.natLeft) or 0)
-          or "本图自然档窗口预算已用完 ⇒ 等下次开图/换图再读")
-      mfLog("抓原值跳过（非自然档且自证不出口径）：esC=%.3f ⇒ 一条都没记；本图窗口预算剩 %d",
-        esC, tonumber(SMFIT.natLeft) or 0)
-    end
-    if free then
-      -- ★只**申请**窗口：真正把外框按回 1.00 由 tick 的窗口块统一做（单一出口，免得两处各写一次）
-      SMFIT.natLeft = (tonumber(SMFIT.natLeft) or 0) - 1
-      smFitHold, SMFIT.holdAge = SMFIT_HOLD_SEC, 0
-    end
-    SMFIT.capAt = (type(GetTime) == "function") and GetTime() or 0
-    return 0
-  end
-  if normSrc == "k自证" then
-    -- ★增量适配：**不开窗口**在非自然档上直接补记（只为 todo 里那些「还没有原值」的新层）
-    mfLog("增量抓原值（**不开窗口**）：外框 es=%.3f ｜ 用本图已写过的层反解读回口径 k=%.3f ⇒ 按 k 归一记 %d 个新层"
-      .. "（地图不按回自然档、已适配的层一个都不碰）", esC, norm, table.getn(todo))
-  end
-  if norm <= 0 then norm = 1 end
-  for _, it in ipairs(todo) do
-    local o = it.o
-    local okp, p, rel, rp, x, y = pcall(o.GetPoint, o, 1)
-    local okw, w = pcall(o.GetWidth, o)
-    local okh, h = pcall(o.GetHeight, o)
-    if okp and p and okw and okh and tonumber(x) and tonumber(y) and tonumber(w) and tonumber(h) then
-      -- ★记录进**会话内存**（带活对象引用 `o`：还原时要用它确认「记录对应的就是这个对象」）
-      local lx, ly, lw, lh = tonumber(x) / norm, tonumber(y) / norm, tonumber(w) / norm, tonumber(h) / norm
-      SMFIT.rec[it.key] = { o = o, idx = it.key, name = it.name, p = tostring(p),
-        rel = smRelName(rel), relObj = rel, rp = smRelName(rp), from = "live",
-        x = lx, y = ly, w = lw, h = lh, map = mk }
-      n = n + 1
-      mfLog("抓原值：%s %s 读回(%.1f,%.1f %.1f×%.1f) ÷%.2f ⇒ 记录(%.1f,%.1f %.1f×%.1f)（不翻转外框；地图=%s；只存会话内存）",
-        tostring(it.key), tostring(p), tonumber(x), tonumber(y), tonumber(w), tonumber(h), norm,
-        lx, ly, lw, lh, tostring(mk))
-      -- ★用户要求「打印原值」⇒ 每图**第一次**尝试把每条原值也打到聊天框（之后只进取证环，绝不刷屏）
-      if nSay <= 1 then
-        smFitSayV("抓原值：%s 读回(%.1f,%.1f %.1f×%.1f) ÷%.2f ⇒ 原值(%.1f,%.1f %.1f×%.1f) ｜ 锚 %s",
-          tostring(it.key), tonumber(x), tonumber(y), tonumber(w), tonumber(h), norm,
-          lx, ly, lw, lh, tostring(p))
-      end
-    else
-      -- ★★★1.75.5：读不到**再也不许静默**（这次就是被「静默失败」拖了三轮）——计数 + 有界日志
-      --   ★只详报**第一个**失败目标（8 个全报会把 60 行取证环一秒冲满），其余只计数、由下面的小结摊开
-      --   ★★安静档也**必须出声**：这是「原值抓不到」唯一的直接证据（真出了问题，用户看不到就只能干等）
-      fails = fails + 1
-      if fails == 1 and (not SMFIT.saidFail) then
-        SMFIT.saidFail = true
-        mfLog("抓原值读不到：%s（GetPoint=%s p=%s ｜ GetWidth=%s ｜ GetHeight=%s）⇒ 本次不记它，1 秒后重试",
-          tostring(it.key), tostring(okp), tostring(p), tostring(okw), tostring(okh))
-        smFitSay("抓原值**读不到**：%s（GetPoint=%s p=%s ｜ 宽=%s ｜ 高=%s）⇒ 本次不记它，1 秒后重试",
-          tostring(it.key), tostring(okp), tostring(p), tostring(okw), tostring(okh))
-      elseif fails == 1 then
-        mfLog("抓原值读不到：%s（GetPoint=%s p=%s ｜ GetWidth=%s ｜ GetHeight=%s）⇒ 本次不记它，1 秒后重试",
-          tostring(it.key), tostring(okp), tostring(p), tostring(okw), tostring(okh))
-      end
-    end
-  end
-  SMFIT.capFails = (tonumber(SMFIT.capFails) or 0) + fails
-  SMFIT.capAt = (type(GetTime) == "function") and GetTime() or 0
-  -- ★落闩判据 = 「本图这一轮的目标**全部**都拿到了」：
-  --   · 拿到了 ⇒ 落闩（否则 tick 每帧重跑 = 上面那条事故）；
-  --   · 有目标读不出来 ⇒ **不落闩**，由 tick 的**有界**重试门（`SMFIT_CAP_GAP` = 1 秒一次）兜，
-  --     既不漏（等它可读时补上）也不刷（绝不每帧）。
-  if n >= table.getn(todo) then SMFIT.captured = true end
-  -- ★★★1.75.5：**每次尝试都留一行小结**（用户要求「监测地图信息才能知道原值问题」）——
-  --   这一行让人（和 AI 读存档）不必再靠猜：第几次尝试 / 记下几条 / 读失败几个 / 归一系数 / 是否落闩。
-  --   ★必须排在落闩**之后**，否则小结里的「落闩」永远是「否」（差一行就会让读数骗人）。
-  local capLine = string.format("%.2f 第%d次 记%d/待%d 失败%d 归一÷%.2f(%s) 落闩=%s 地图=%s",
-    (type(GetTime) == "function") and GetTime() or 0, tonumber(SMFIT.capCalls) or 0, n, table.getn(todo),
-    fails, norm, tostring(normSrc or "?"), SMFIT.captured and "是" or "否", tostring(mk))
-  mfLog("抓原值小结：第 %d 次尝试 ｜ 本次记 %d / 待记 %d ｜ 读失败 %d（累计 %d）｜ 归一÷%.2f（%s）｜ 落闩=%s ｜ 地图=%s",
-    tonumber(SMFIT.capCalls) or 0, n, table.getn(todo), fails, tonumber(SMFIT.capFails) or 0, norm,
-    (normSrc == "k自证") and "增量·k自证" or "自然档·读回即原值",
-    SMFIT.captured and "是" or "否", tostring(mk))
-  -- ★★★1.75.5（用户要求「获取原值的地方打印出来」，随后又要求「清理下这些调试日志」）：
-  --   ⇒ 安静档**每次开图只留一条**「已读到 N 条」（下面那条）；逐次小结进 verbose 档。
-  --   ★取证环（`mfLog`）永远记全 ⇒ 真出问题时 `/ehm mapfit verbose on` 或 `/ehm mapfit dump` 都还看得到。
-  if nSay < 5 then
-    smFitSayV("抓原值小结：第%d次 ｜ 记 %d / 待记 %d ｜ 读失败 %d（累计 %d）｜ 归一÷%.2f（%s）｜ 落闩=%s ｜ 地图=%s",
-      tonumber(SMFIT.capCalls) or 0, n, table.getn(todo), fails, tonumber(SMFIT.capFails) or 0, norm,
-      (SMFIT.needFold == true) and "读回=逻辑值" or "读回=逻辑×es",
-      SMFIT.captured and "是" or "否", tostring(mk))
-  end
-  -- ★★安静档的**唯一一条**成功播报（每次开图一次）：读到了几条 + 落闩
-  if SMFIT.captured and (not SMFIT.saidLatch) then
-    SMFIT.saidLatch = true
-    smFitSay("抓原值：已读到 **%d 条**原值（地图=%s，第 %d 次尝试）⇒ 落闩",
-      smFitRecCount(), tostring(mk), tonumber(SMFIT.capCalls) or 0)
-  end
-  -- ★★★1.75.5：**同一份小结再落一条专属存档环**（本项目既有纪律：say 不落日志环 / 环太小 ⇒ 事后读不到的读数
-  --   必须自存一份**有界**环，同 `cfg.tselProbe` / `cfg.rareProbe` / `cfg.petProbe`）。
-  --   为什么必须：日志环只有 60/100 行，抓原值那几行几分钟后就被刷掉 ⇒ AI 读存档只能靠猜「到底抓没抓成」。
-  if type(SM_CFG.mapFitCapLog) ~= "table" then SM_CFG.mapFitCapLog = {} end
-  local capRing = SM_CFG.mapFitCapLog
-  table.insert(capRing, capLine)
-  while table.getn(capRing) > 10 do table.remove(capRing, 1) end
-  return n
-end
-
--- 还原到**会话内存**里的原始几何（★1.75.5 起不再有存档那条路：定位信息由客户端每次开图重摆，我们只记会话内那一份）
-local function smFitRestore(quiet)
-  smFitMigrate()
-  local mk = smMapKey() or SMFIT.mapKey or "?"
-  smFitBindMap(mk)
-  local list = smFitTargets()
-  local n, miss, bad, untouched = 0, 0, 0, 0
-  for _, it in ipairs(list) do
-    -- ★记录必须**对应同一个活对象**（`live.o == it.o`）—— 客户端重建过纹理时旧记录一律不算（宁可如实跳过）
-    local live = SMFIT.rec[it.key]
-    local r = (type(live) == "table" and live.o == it.o) and live or nil
-    -- ★★★1.75.13：**只还「本图我们真写过的」层** —— 没写过的层一个几何都不碰（「关掉零动作」的同族；
-    --   旧写法会把「有记录但本次没写过」的层也写一遍，在跨图场景里等于又制造一次错位）
-    if SMFIT.wroteKeys[it.key] ~= mk then
-      untouched = untouched + 1
-    elseif r and tonumber(r.x) and tonumber(r.y) and tonumber(r.w) and tonumber(r.h) then
-      local o = it.o
-      local rel = nil
-      -- ★1.75.5：**优先用捕获时记下的活对象**（`relObj`）—— 字符串在**本客户端**会被当成「锚到屏幕」，
-      --   与写入路径同一个坑（用户截图：探索层贴图跑到游戏画面上）；只有对象才是安全的。
-      if type(r.relObj) == "table" or type(r.relObj) == "userdata" then rel = r.relObj end
-      if (not rel) and type(r.rel) == "string" and r.rel ~= "" then rel = _G[r.rel] end
-      if type(r.rel) ~= "string" and type(r.rel) ~= "nil" and r.rel and type(r.rel) ~= "table" and type(r.rel) ~= "userdata" then rel = r.rel end
-      if not rel then rel = _G["WorldMapDetailFrame"] end -- 原值记的就是「锚父帧 TOPLEFT」（探针 27 行定案）
-      local rp = (type(r.rp) == "string" and r.rp ~= "") and r.rp or "TOPLEFT"
-      pcall(o.ClearAllPoints, o)
-      local ok = pcall(o.SetPoint, o, tostring(r.p), rel, rp, tonumber(r.x), tonumber(r.y))
-      pcall(o.SetWidth, o, tonumber(r.w))
-      pcall(o.SetHeight, o, tonumber(r.h))
-      -- ★写完**读回自证**（本项目纪律：写成功 ≠ 写进去生效）。★读回含缩放 ⇒ 比之前先除 es。
-      local okv, _, _, _, vx, vy = pcall(o.GetPoint, o, 1)
-      local okw2, vw = pcall(o.GetWidth, o)
-      local es = 1
-      local fr2 = _G["WorldMapDetailFrame"]
-      if (type(fr2) == "table" or type(fr2) == "userdata") then
-        local eff2 = smEffScale(fr2)
-        if tonumber(eff2) and tonumber(eff2) > 0 then es = tonumber(eff2) end
-        if es == 1 and type(fr2.GetEffectiveScale) == "function" then
-          local oke, v = pcall(fr2.GetEffectiveScale, fr2)
-          if oke and tonumber(v) and tonumber(v) > 0 then es = tonumber(v) end
-        end
-      end
-      local okRead = okv and tonumber(vx) and okw2 and tonumber(vw)
-      local good = ok and okRead
-      if good and es > 0 then
-        -- ★两种客户端口径都认：读回含缩放（真机）除 es 后对得上 **或** 读回就是逻辑值 ⇒ 都算写成功；
-        --   两边都对不上才记「读回对不上」（如实报出，不静默）。
-        local okA = math.abs(tonumber(vx) / es - tonumber(r.x)) <= 0.75 and math.abs(tonumber(vw) / es - tonumber(r.w)) <= 0.75
-        local okB = math.abs(tonumber(vx) - tonumber(r.x)) <= 0.75 and math.abs(tonumber(vw) - tonumber(r.w)) <= 0.75
-        good = okA or okB
-      end
-      if not ok then
-        miss = miss + 1
-        mfLog("还原失败：%s 写不进去（SetPoint 抛错）", tostring(it.key))
-      elseif not good then
-        bad = bad + 1 n = n + 1
-        mfLog("还原存疑：%s 写回后读回对不上（读 x=%s w=%s，期望 %.1f×%.1f，es=%.2f）",
-          tostring(it.key), tostring(vx), tostring(vw), tonumber(r.x), tonumber(r.w), es)
-      else
-        n = n + 1
-        mfLog("还原：%s x=%.1f y=%.1f w=%.1f h=%.1f（读回自证通过，es=%.2f）",
-          tostring(it.key), tonumber(r.x), tonumber(r.y), tonumber(r.w), tonumber(r.h), es)
-      end
-    else
-      miss = miss + 1
-    end
-  end
-  -- ★★★1.75.9：**绝不在这里清 `SMFIT.rec`** —— 那是「本进程的真原值」，清掉就等于允许下次把
-  --   已折过的值重新当原值记下来（旧版「关一次再开 ⇒ 折两遍」的根因）。
-  if not quiet then
-    P("叠加层还原：按原值还原 " .. n .. " 个"
-      .. (miss > 0 and ("；" .. miss .. " 个没有原值或锚点解析失败 ⇒ **如实跳过**（没动它们）") or "")
-      .. (bad > 0 and ("；" .. bad .. " 个写回后读回对不上 ⇒ **如实报出**（可能被客户端布局盖掉）") or "")
-      .. (untouched > 0 and ("；" .. untouched .. " 个本图我们没写过 ⇒ **一个几何都不碰**") or ""))
-  end
-  return n, miss, bad
-end
-
--- ★★★1.75.45（用户要求）：「工具箱→缩放大地图：能否在一开始将**未适配完成**的探索层图层尽快尽早
---   设置不可见，然后等缩放完成之后再显示可见度」。
---   ★为什么用 **alpha 0 而不是 `Hide()`**：`Hide()` 会让 `IsShown()==false`，而我们的「本图在用」判据
---     （`smFitInUse`：`IsShown()==false` ⇒ 判成「客户端本图不用」）会因此把**刚隐形的层排除在抓原值/折算之外**
---     ⇒ 自己把自己判死（隐形 → 不抓 → 永不折算 → 永远隐形）。alpha 只改透明度、`IsShown()` 一个字节不动。
---     （与本项目黑幕遮蔽同族：`SetAlpha(0)` 硬抗闪 + 有界窗口逐帧重申 + 有界还原。）
---   ★「未适配完成」的判据 = **没有原值记录**，或者**记录×es 与活值还对不上**（与折算同一判定，见 smFitNeedWrite）
---     ⇒ 只对本图在用、且真的还没适配好的层动手；已经对齐的层一个字节都不碰。
---   ★`es` 传 nil = 只按「有没有原值记录」判（抓原值窗口刚开那一拍用：那时本来一条记录都没有）；
---     传了 es = 连「还没对齐」的层也一起隐形（换回看过的图时它有记录、但客户端刚重摆过 = 还没折）。
---   ★同一层只在**第一次**记账（`g.o ~= o` 才重记）⇒ 逐帧重申不会把 0 当成原值。
-local function smFitGhostHide(es)
-  local list = smFitTargets()
-  local n = 0
-  for _, it in ipairs(list) do
-    local o = it.o
-    if smFitInUse(o) then
-      local r = SMFIT.rec[it.key]
-      local need = false
-      if not r then
-        need = true -- 没原值 ⇒ 一定还没适配
-      elseif es then
-        local nw = smFitNeedWrite(o, r, es)
-        need = (nw == true) -- nil（读不到）⇒ **判不出就不动**，绝不凭猜把它藏了
-      end
-      if need then
-        local g = SMFIT.ghost[it.key]
-        if (not g) or g.o ~= o then
-          if next(SMFIT.ghost) == nil then
-            SMFIT.ghostAt = (type(GetTime) == "function") and GetTime() or 0
+      if MDQ.stalePoolName(o) then
+        seen = seen + 1
+        local oks, shown = pcall(o.IsShown, o)
+        if oks and shown == true then
+          local okh = pcall(o.Hide, o)
+          if okh then
+            hid = hid + 1
+            -- ★账上没有 ⇒ 第一次藏：记名 + 落盘；★账上已有、却又是显示着的 ⇒ **客户端又把它 Show 出来了**，
+            --   照样再藏一次（残留不许回潮），但**不重复记名**（免得一次开图刷满 40 条环）。
+            if MDQ.staleHid[o] == nil then
+              local nm = frameName(o)
+              local okp, path = pcall(o.GetTexture, o)
+              if not okp then path = nil end
+              MDQ.staleHid[o] = { name = nm, path = tostring(path) }
+              MDQ.staleLogPut(string.format("藏：地图=%s（%s）｜ %s ｜ 贴图=%s",
+                tostring(want), tostring(whyLvl), tostring(nm), tostring(path)))
+            end
           end
-          local a = 1
-          if type(o.GetAlpha) == "function" then
-            local ok, v = pcall(o.GetAlpha, o)
-            if ok and tonumber(v) then a = tonumber(v) end
-          end
-          SMFIT.ghost[it.key] = { o = o, a = a }
-          mfLog("探索层隐形：%s 还没适配好（原 alpha=%.2f）⇒ 先隐形，折算完再显示", tostring(it.key), a)
         end
-        if type(o.SetAlpha) == "function" then pcall(o.SetAlpha, o, 0) end
-        n = n + 1
       end
     end
   end
-  return n
-end
-
--- 逐帧**廉价重申**（不扫几何、不判对齐）：只把已经记过账的那几层再按 alpha 0 —— 客户端可能自己摆回来。
-local function smFitGhostKeep()
-  local n = 0
-  for _, g in pairs(SMFIT.ghost or {}) do
-    local o = g and g.o
-    if o and type(o.SetAlpha) == "function" then
-      pcall(o.SetAlpha, o, 0)
-      n = n + 1
+  -- ★★★1.75.52 四改：**一个池位名都没认出**时如实出声（否则「名字判据与真机对不上」会变成**静默失效** ——
+  --   一个字节都不碰、图上残留照旧，而用户以为修好了）。样本名一起给出来，便于一眼看出真机叫什么。
+  if nTex > 0 and seen == 0 then
+    MDQ.staleNoPoolSay = (tonumber(MDQ.staleNoPoolSay) or 0) + 1
+    if MDQ.staleNoPoolSay <= 3 then
+      pcall(mfLog, "残留图层：本图（%s）**没认出任何 WorldMapOverlay 池位**（枚举 %d 个纹理，名字样本：%s）",
+        tostring(want), nTex, table.concat(samples, "、"))
     end
   end
-  return n
+  return hid, 0, seen, want, MDQ.staleLedgerN(), whyLvl
 end
 
--- 还回可见度（**唯一还原口**）：折算完成 / 兜底超时 / 关图 / 换图 / 关功能 全部走这里。
---   ★按**记录下来的对象引用**还（不重新扫描、也不按名字）⇒ 目标列表变了也一定还得回去；
---   ★幂等（重复调用安全），★绝不留「永久隐形」；★原 alpha 读不到就按 1 还（如实，不猜中间值）。
-smFitGhostShow = function(why)
+-- 把藏账里的层**当场全部还回**（关开关 / 关图 / 关模块 / 关功能时用；幂等）
+MDQ.staleShowAll = function(why)
   local n = 0
-  for _, g in pairs(SMFIT.ghost or {}) do
-    local o = g and g.o
-    if o and type(o.SetAlpha) == "function" then
-      local a = tonumber(g.a)
-      if (not a) or a < 0 or a > 1 then a = 1 end
-      pcall(o.SetAlpha, o, a)
-      n = n + 1
-    end
+  local names = {}
+  for o in pairs(MDQ.staleHid) do
+    pcall(o.Show, o)
+    table.insert(names, tostring((MDQ.staleHid[o] or {}).name or "?"))
+    MDQ.staleHid[o] = nil
+    n = n + 1
   end
   if n > 0 then
-    mfLog("探索层隐形：已还回可见度 %d 层（原因：%s）", n, tostring(why))
+    pcall(mfLog, "残留图层：把藏起来的 %d 个叠加层全部还回（%s）", n, tostring(why))
+    table.sort(names)
+    MDQ.staleLogPut(string.format("还回全部 %d 个（%s）：%s", n, tostring(why), table.concat(names, "、")))
   end
-  SMFIT.ghost, SMFIT.ghostAt = {}, 0
   return n
 end
 
--- ★★★1.75.13 新增：**换图 = 换一套原值**（同一个纹理名在不同地图上是完全不同的矩形 ⇒ 绝不跨图复用）。
---   ★★1.75.5：已上移到 smFitApply 之前（apply/capture/restore 三处都要按身份换绑）—— 见 `smFitNewMap`。
-
--- ★★★1.75.5（**用户要求**）：「**每次地图关闭都把原值数据清理，不要保存这个值；每次打开地图都重新获取原值、重新缩放大地图**」
---   +「每次打开地图都当做是第一次打开」「每次 reload 插件载入也都当做第一次」—— **全部采纳**，落在关闭这一侧：
---   · **关图那一刻**：把折过的几何还回自然档，然后**把本图的原值记录整块删掉**（`rec` / 分桶 / 逐层记账 / 落闩 / 计数）；
---   · **下一次开图**：记录天然是空的 ⇒ 走既有的「本图还没有原值 ⇒ 先不缩放、在自然档读一次 → 落闩 → 套缩放」，
---     也就是「重新获取原值 + 重新缩放」（不需要额外开关，这条路本来就是为「没有记录」设计的）；
---   · `/reload`：原值只在**会话内存**（定位信息绝不落存档）⇒ 载入后本来就是空的 ⇒ 第一次开图必然重读（判据 = 组 254⑦⑧）。
---   ★为什么必须在**关闭**这一侧清（而不是开图时清）：
---     ① 关闭时地图不可见，还原几何**不会闪**，也不会惊动客户端正在做的版式计算；
---     ② 开图那一瞬客户端还在摆版式，此时去写几何/清记录最容易和它抢（实测「抓到 0 条却当成已齐」那类怪象都出在这个窗口）；
---     ③ 「记录只活在**一次开图**里」这条口径最干净：不存在「拿着上一次的矩形当原值」的可能（分辨率 / UI 缩放 /
---        客户端布局一变，旧记录就是错的 —— 这一案反复的根源正是它）。
---   ★安全阀（顺序铁律，缺一步就会把**折过的值**当原值 = 折两遍）：
---     还回自然档**必须先做且必须验成功**才敢清记录。若还回没成功（写回后读回对不上 —— 多半是客户端正在重排版式
---     把我们的写盖掉了），就**保留记录**、如实播报，宁可退化成老行为，也不制造一个更难查的错位。
---   ★真值 `SM_CFG.mapFitFresh`（nil = 开；`/ehm mapfit fresh off` 回退成「本会话内按图记住」）。
-local function smFitDropOnClose(mk)
-  mk = tostring(mk or SMFIT.mapKey or "?")
-  -- ★身份已经换了（这一拍同时换了图）⇒ 不动手：换图那条路有自己的作废（smFitNewMap），两边都写会打架
-  if mk ~= tostring(SMFIT.mapKey or "?") then return false end
-  -- ★★★1.75.45：关图 ⇒ **先把「未适配先隐形」的层还回可见度**（下次开图重新按需隐形）
-  if smFitGhostShow and next(SMFIT.ghost or {}) ~= nil then pcall(smFitGhostShow, "关图") end
-  SMFIT.foldedThisMap = false -- 关图 = 本次访问结束 ⇒ 下次开图重新判「折完没有」
-  local had, nBack, backOK = smFitRecCount(), 0, true
-  if SMFIT.wrote == true then
-    local ok, n, _miss, bad = pcall(smFitRestore, true) -- ① 先还回自然档（quiet：细节不进聊天框，下面一句话总说）
-    if ok then
-      nBack, backOK = tonumber(n) or 0, (tonumber(bad) or 0) == 0
-    else
-      backOK = false
-    end
+-- ★★★1.75.52 六改：**只清账、不还回**（幂等）—— 用在「替代开关刚被打开」那一拍：从这一刻起可见性由
+--   「接管守护」负责（客户端原生层本来就要**全藏**）⇒ 若走 `staleShowAll` 会先闪一下再藏回去。
+MDQ.staleForget = function(why)
+  local n = 0
+  for o in pairs(MDQ.staleHid) do
+    MDQ.staleHid[o] = nil
+    n = n + 1
   end
-  -- ★★还回之后**自己再严格验一遍**（不能只信 `smFitRestore` 的「两种读回口径都认」）：
-  --   本函数只在 `needFold == true`（读回 = **逻辑值本身**）那一档才会被调用 ⇒ 这一档里
-  --   「读回 ≈ 原值 × es」**只可能**是客户端把我们的还回写盖掉了（几何还是折后的值）。
-  --   ★为什么必须自己验：两种口径在数值上会长得一样（读回 70 既可能是「级联客户端还回成功」，
-  --     也可能是「不级联客户端还回失败」）—— 只有按本档的口径严格比，才能把后者揪出来。
-  local backBad = 0
-  if backOK then
-    local liveOk = true
-    for _, it in ipairs(smFitTargets()) do
-      local r = SMFIT.rec[it.key]
-      if SMFIT.wroteKeys[it.key] == mk and type(r) == "table" and r.o == it.o then
-        local okp, _p, _rel, _rp, vx, vy = pcall(it.o.GetPoint, it.o, 1)
-        local okw, vw = pcall(it.o.GetWidth, it.o)
-        local okh, vh = pcall(it.o.GetHeight, it.o)
-        local good = okp and okw and okh and tonumber(vx) and tonumber(vy) and tonumber(vw) and tonumber(vh)
-          and math.abs(tonumber(vx) - tonumber(r.x)) <= 0.75 and math.abs(tonumber(vy) - tonumber(r.y)) <= 0.75
-          and math.abs(tonumber(vw) - tonumber(r.w)) <= 0.75 and math.abs(tonumber(vh) - tonumber(r.h)) <= 0.75
-        if not good then liveOk = false end
-      end
-    end
-    if not liveOk then backBad = 1 end
+  if n > 0 then
+    pcall(mfLog, "残留图层：账上 %d 个叠加层交给「接管守护」接管（替代开关已开，%s）", n, tostring(why))
+    MDQ.staleLogPut(string.format("转交接管守护 %d 个（%s）", n, tostring(why)))
   end
-  if (not backOK) or backBad > 0 then
-    -- ★★安全阀：**还回自然档没成功** ⇒ **绝不清记录**（清了就等于把「折过的值」当原值，下次再折一次 = 缩两遍）
-    smFitSay("关图（%s）：本图折过的几何**没能还回自然档**（写回后读回对不上）⇒ **保留原值记录、不清空**"
-      .. "（清掉的话下次开图会把折后的值当原值 ⇒ 折两遍）", mk)
-    return false
-  end
-  -- ② 清掉本图的原值（★只动本图：别的图的分桶一个都不碰）
-  SMFIT.rec = {}
-  SMFIT.recMap[mk] = {}
-  SMFIT.wroteKeys, SMFIT.wrote = {}, false
-  SMFIT.captured, SMFIT.capFails = false, 0
-  SMFIT.capAge, SMFIT.capCalls, SMFIT.capSayN = 99, 0, 0
-  -- ★1.75.5：**每次开图只报一次**的那几条标记一起归零（关图 = 本次开图的生命周期结束）
-  SMFIT.saidLatch, SMFIT.saidFail, SMFIT.saidEmpty, SMFIT.saidFold = false, false, false, false
-  SMFIT.saidNat = false -- ★1.75.45b：同族（「非自然档不记原值」也只许每图说一次）
-  SMFIT.saidPrint = false -- ★1.75.45c：同族（逐层指纹每图一次）
-  SMFIT.wroteVal = {} -- ★1.75.45c：写入账随「本图的原值」一起清（关图即清空原值 ⇒ 参照物没了，k 也不能再自证）
-  -- ★窗口也要归零：关图时窗口可能还开着（那个块只在 `open` 时递减）⇒ 不归零的话下次开图会**少一段**自然档时间
-  smFitHold = 0
-  SMFIT.natLeft = tonumber(SMFIT.natMax) or 3 -- ★1.75.45b：关图 = 本次访问结束 ⇒ 自然档窗口预算下次开图重新给满
-  SMFIT.holdAge = 0
-  smFitSay("关图（%s）：按「关图即清空原值」删掉本图 %d 条原值、%d 个折过的几何已还回自然档 ⇒ **下次开图重新读一遍再缩放**",
-    mk, had, nBack)
-  return true
+  return n
 end
 
--- ★★★1.75.9：**开启时的叠加层准备**（顺序铁律：先探测/抓原值，再改缩放）。
---   ① 迁移掉不可信的老原值；② 只读探测「本客户端要不要我们折算」；
---   ③ 不需要折算（客户端自己会跟随）⇒ 顺手把**以前折过**的几何还回去，然后**一个几何都不碰**；
---   ④ 需要折算 ⇒ 此刻还没套默认缩放，正好在**自然档**抓原值（见 smFitCapture）。
-local function smFitPrepare()
-  smFitMigrate()
-  -- ★1.75.13：先把**地图身份**对齐（换了图 ⇒ 旧记录当场作废；随后抓到的才是**本图**的几何）
-  local mk0 = smMapKey()
-  if mk0 and SMFIT.mapKey and mk0 ~= SMFIT.mapKey then
-    pcall(smFitNewMap, mk0)
-  elseif mk0 then
-    SMFIT.mapKey = mk0
-  end
-  SMFIT.needFold = smFitDetect() -- 两种档都探一次（提示 / 取证 / auto 档的判据）
-  if not smFitNeedFold() then
-    -- ★只有**本会话真写过**才需要还回去（否则还原也是一次无谓的几何写 —— 「关掉零动作」的同族）
-    if SMFIT.wrote == true then pcall(smFitRestore, true) end
-    return false
-  end
-  pcall(smFitCapture)
-  return true
-end
-
--- 取证：开关 / 地图开没开 / es / 目标数 / 原值条数 / 本次改动 / burst 剩余
-local function smFitDiag()
-  local fr = _G["WorldMapDetailFrame"]
-  local es = nil
-  local esApi = nil
-  if (type(fr) == "table" or type(fr) == "userdata") then
-    local eff = smEffScale(fr)
-    if tonumber(eff) and tonumber(eff) > 0 then es = tonumber(eff) end
-    if type(fr.GetEffectiveScale) == "function" then
-      local ok, v = pcall(fr.GetEffectiveScale, fr)
-      if ok and tonumber(v) then esApi = tonumber(v) end
-    end
-  end
-  local nList = table.getn(smFitTargets())
-  local nOrig = smFitOrigCount()
-  -- ★1.75.13：**地图身份 / 客户端叠加层条数 / 本图在用几个 / 本图我们写过几个**都要摊出来 ——
-  --   「坐标丢失 + 全挤在左下」这一案的核心事实就是「原值属于哪张图、这张图到底用哪几个层」。
-  local mkDiag = smMapKey() or SMFIT.mapKey or "?"
-  local nOvDiag = smNumOverlays()
-  local nUseDiag, nWroteDiag, nWaitDiag = 0, 0, 0
-  for _, it in ipairs(smFitTargets()) do
-    if smFitInUse(it.o) then
-      nUseDiag = nUseDiag + 1
-      -- 「等抓原值」= 本图在用的层里还没有会话记录的那些（★别复用 `ready`：那是折算后的「已适配数」，
-      --   而且它声明在本行**下面** —— 1.75.5 实案就是这么炸的：`local` 之前引用 = 全局 nil ⇒ `%d` 收到 nil）
-      if type(SMFIT.rec[it.key]) ~= "table" then nWaitDiag = nWaitDiag + 1 end
-    end
-  end
-  for _, v in pairs(SMFIT.wroteKeys or {}) do if v == mkDiag then nWroteDiag = nWroteDiag + 1 end end
-  P(string.format("地图身份=%s ｜ 客户端叠加层=%s ｜ 本图在用 %d / 非瓦片 %d ｜ 等抓原值 %d 个 ｜ 本图已写 %d 个 ｜ 原值共 %d 条（**会话内存**、按地图）",
-    tostring(mkDiag), (nOvDiag ~= nil) and tostring(nOvDiag) or "读不到", nUseDiag, nList, nWaitDiag, nWroteDiag, nOrig))
-  -- ★★★1.75.5：抓原值的**尝试 / 读失败**必须摊出来 —— 「静默读不到」正是这次拖了三轮的元凶
-  P(string.format("抓原值：尝试 %d 次 ｜ 本图记录 %d 条 ｜ 读失败 %d 次 ｜ 落闩=%s ｜ 归一系数按 %s",
-    tonumber(SMFIT.capCalls) or 0, (function() local k = 0 for _ in pairs(SMFIT.rec or {}) do k = k + 1 end return k end)(),
-    tonumber(SMFIT.capFails) or 0, SMFIT.captured and "是" or "否",
-    (SMFIT.needFold == true) and "读回=逻辑值（不归一）" or "读回=逻辑×es（÷es 归一）"))
-  if (type(fr) == "table" or type(fr) == "userdata") then
-    P(string.format("缩放量对照：**采用值(父链连乘)**=%.3f ｜ 旧 API 读回=%s ｜ 配置里的设置值 scale=%.3f",
-      tonumber(es) or 0, (esApi and string.format("%.3f", esApi)) or "?", tonumber(SM_CFG.scale) or 1))
-    P("　★`GetEffectiveScale` 在本客户端**会滞后**（第一次开启读 1.00、关开一次后读 0.70）⇒ 折算一律用**父链连乘**；旧 API 的数字只作对照")
-  end
-  local changed, ready = 0, 0
-  if smFitOn() and es and es > 0.01 then changed, ready = smFitApply(es, true) end
-  P(string.format("叠加层适配：开关=%s（默认开） · 地图开=%s · es=%s · 非瓦片纹理 %d 个 · 原值 %d 条 · 本次改 %d / 已适配 %d · burst 剩余 %.1fs",
-    smFitOn() and "开" or "关", tostring(featOpenNow()),
-    es and string.format("%.3f", es) or "?", nList, nOrig, changed, ready, tonumber(SMFIT.burst) or 0))
-  -- ★★★1.75.9：**折算判据必须摊开**（「本客户端要不要我们折算」是这一案的核心事实，不许藏在代码里）
-  P("折算策略 = " .. smFitModeLabel() .. "（/ehm mapfit mode fold|auto|nofold 可切）")
-  if SMFIT.needFold == nil then
-    P("探测结论：**还没探过**（开启时/开图后各探一次）")
-  else
-    P("探测结论：" .. (SMFIT.needFold and "本客户端**不会**自动级联 ⇒ 需要按 es 折算（原值取自自然档）"
-      or "本客户端**会**自动级联 ⇒ 折算就是第二遍（策略 auto 时我们不碰）"))
-  end
-  P("本次实际动作 = " .. (smFitNeedFold() and "折算（按 es 写几何）" or "**不折算**（一个几何都不碰）")
-    .. " ｜ 取证行数 = " .. tostring((type(SM_CFG.mapFitTrace) == "table") and table.getn(SM_CFG.mapFitTrace) or 0)
-    .. "（/ehm mapfit trace 可打出来）")
-  return changed
-end
-
--- ★★★1.75.13 新增（用户：「排查工具箱->缩放大地图->探索层额外处理异常…**先别修改**，分析问题」⇒ 先给只读取证口）：
---   `/ehm mapfit dump` 的**内容生成口**（命令与测试同源；测试直接读它，不必解析聊天框）。
---   每行都是**只读**读数：本模块的判定（显示 / 贴图 / 本图在用）+ 我们记过/写过什么 + **客户端自己的叠加层真值**
---   （`GetMapInfo` / `GetNumMapOverlays` / `GetMapOverlayInfo`）⇒「谁写的、该是多少」一眼可判。
-local function smFitDumpLines()
+-- ★★★1.75.52 **只读**取证：本帧每个 Texture 的「名字 / 贴图 / 图名段 / 结论」，一个字节都不写（零副作用）。
+--   ★这是「路径口径到底对不对」的唯一真机判据：**在大陆图（有残留）时跑**，就能看清残留那几条的贴图属于哪张图；
+--     瓦片即使路径不符也只在这里**列出来**（现行实现不藏它们）。
+MDQ.staleProbe = function()
   local out = {}
-  local function add(s) table.insert(out, s) end
-  local mk = smMapKey() or SMFIT.mapKey or "?"
-  local a, b, c = smMapInfo()
-  local nOv = smNumOverlays()
-  add(string.format("清单：地图身份=%s（GetMapInfo=%s / %s / %s）｜ 客户端叠加层=%s ｜ 策略=%s ｜ es=%s ｜ 本图已开 %.2fs",
-    tostring(mk), tostring(a), tostring(b), tostring(c),
-    (nOv ~= nil) and tostring(nOv) or "读不到", smFitModeLabel(),
-    tostring(SMFIT.es), tonumber(SMFIT.mapAge) or 0))
-  -- ★★★1.75.5（用户报障「每次 /reload 之后探索层缩放都不生效，只有关/开一次缩放大地图才生效」）：
-  --   「记录」和「纹理上的**活值**」必须**同时**摊出来 —— 缺了活值就分不清是哪条路坏：
-  --     · 记录 ≈ 活值 ≈ 客户端真值×0.7 ⇒ 抓原值时那次临时 `SetScale(1)` **没让读回跟着变**（折出来会是 0.49×）；
-  --     · 记录 ✓ 但「本图已写=否」 ⇒ 折算那一步压根没跑（时间门/落闩/es 瞬态）；
-  --     · 记录与活值都 ✓ ⇒ 我们写对了，问题在客户端随后又重排（那就该走 nofold 那一档）。
-  local nRec, nWrote, nWait, nUse = 0, 0, 0, 0
-  -- ★1.75.24：把「在用但还没有原值」的层**点名**摊出来（只报个数的话，下次排查还得靠猜是哪几层）
-  local waitNames = {}
-  for _, v in pairs(SMFIT.rec or {}) do if type(v) == "table" then nRec = nRec + 1 end end
-  for _, v in pairs(SMFIT.wroteKeys or {}) do if v == mk then nWrote = nWrote + 1 end end
-  local frD = _G["WorldMapDetailFrame"]
-  for _, it in ipairs(smFitTargets()) do
-    if smFitInUse(it.o) then
-      nUse = nUse + 1
-      if type(SMFIT.rec[it.key]) ~= "table" then
-        nWait = nWait + 1
-        waitNames[table.getn(waitNames) + 1] = tostring(it.key)
+  local wantRaw = tostring(select(1, smMapInfo()) or "?")
+  local want = wantRaw
+  local wl = string.lower(want)
+  local lvl, lvlWhy = MDQ.staleLevel(wantRaw)
+  local elist, en = MDQ.staleEngineList()
+  en = tonumber(en) or 0
+  -- ★五改：**本图没有探索层数据**（非区域 或 引擎自报 0 条）⇒ 本档动手藏；有数据 ⇒ 不藏（并还回）
+  local noData = (lvl == true) or (en == 0)
+  local fr = _G["WorldMapDetailFrame"]
+  local nAll, nPool, nHide, nTileMis, nUnk, nEng = 0, 0, 0, 0, 0, 0
+  local lines = {}
+  if (type(fr) == "table" or type(fr) == "userdata") and type(fr.GetRegions) == "function" then
+    local okr, regs = pcall(function() return { fr:GetRegions() } end)
+    if okr then
+      for _, o in ipairs(regs) do
+        if o ~= nil and type(o.GetTexture) == "function" then
+          nAll = nAll + 1
+          local okp, path = pcall(o.GetTexture, o)
+          if not okp then path = nil end
+          local seg = MDQ.staleSeg(path)
+          local nm = frameName(o)
+          local isPool = MDQ.stalePoolName(o)
+          local isTile = (string.sub(nm, 1, 18) == "WorldMapDetailTile")
+          local inEngine = false
+          if type(path) == "string" and path ~= "" then
+            for wi = 1, table.getn(elist) do
+              if MDQ.samePath(path, elist[wi]) then inEngine = true break end
+            end
+          end
+          if inEngine then nEng = nEng + 1 end
+          if isPool then nPool = nPool + 1 end
+          local v
+          if not noData then
+            -- 「本图有探索层数据」：本档**不藏**（这一级客户端要用这批池位画探索层；藏账也会被全部还回）
+            if isPool then
+              v = "叠加层池位 ⇒ 本图**有数据**（引擎自报 " .. tostring(en) .. " 条）⇒ **不藏**"
+            elseif seg == nil then
+              nUnk = nUnk + 1
+              v = "判不出（路径里没有 WorldMap\\<图名>\\ 段）⇒ 不碰"
+            else
+              v = "本图/别图（" .. seg .. "）⇒ **不碰**（不是叠加层池位）"
+            end
+          elseif isPool then
+            nHide = nHide + 1
+            v = "叠加层池位 ⇒ **藏**（" .. (lvl and "非区域地图" or "引擎自报本图 0 条叠加层 = 没有探索层数据") .. "：全藏）"
+              .. ((seg ~= nil and seg ~= wl) and ("，注意它的贴图属于别图（" .. seg .. "）= 残留来源") or "")
+          elseif seg == nil then
+            nUnk = nUnk + 1
+            v = "判不出（路径里没有 WorldMap\\<图名>\\ 段）⇒ 不碰"
+          else
+            if isTile then nTileMis = nTileMis + 1 end
+            v = "**别图**（" .. seg .. "）⇒ **只报不藏**（不是叠加层池位；底图/瓦片绝不打洞）"
+          end
+          table.insert(lines, string.format("　#%d %s ｜ 贴图=%s ｜ 图名段=%s ｜ %s",
+            nAll, nm, tostring(path), tostring(seg), v))
+        end
       end
     end
   end
-  local chain = nil
-  if type(frD) == "table" or type(frD) == "userdata" then chain = smEffScale(frD) end
-  add(string.format("口径：外框缩放(父链连乘)=%s ｜ 设置值 scale=%s alpha=%s ｜ 本图在用=%d ｜ 本图会话记录=%d 条 ｜ 等抓原值=%d 个 ｜ 本图已写=%d 个 ｜ 抓原值尝试=%d 读失败=%d",
-    (tonumber(chain) and string.format("%.3f", chain)) or "读不到", tostring(SM_CFG.scale), tostring(SM_CFG.alpha),
-    nUse, nRec, nWait, nWrote, tonumber(SMFIT.capCalls) or 0, tonumber(SMFIT.capFails) or 0))
-  if nWait > 0 then
-    add("  ★等抓原值的层（" .. nWait .. " 个）：" .. table.concat(waitNames, " · "))
-    add("    ⇒ 这几层**当前在用、却没有原值记录** ⇒ 本拍**不会折算**它们（折算只认有记录的层）；"
-      .. "★1.75.24 起它们会**推翻落闩**、由 1 秒一次的有界重试补抓，抓到即折算；"
-      .. "若这条长期不为 0 ⇒ 是它们**读不到几何**或客户端一直没给贴图（看上面每层的「活值/记录/在用」三列）")
+  table.insert(out, string.format(
+    "残留体检：地图=%s ｜ 本图数据=%s（级别=%s ｜ 引擎自报叠加层 %d 条）｜ 枚举 Texture %d 个（叠加层池位 %d ｜ 引擎清单命中 %d）｜ "
+      .. "本档要藏 %d 个 ｜ 瓦片路径不符 %d 个（只报不藏）｜ 判不出 %d 个 ｜ 藏账 %d 条",
+    want, noData and "**没有探索层数据 ⇒ 叠加层全藏**" or "有探索层数据 ⇒ **不藏**（藏账全部还回）",
+    tostring(lvlWhy), en, nAll, nPool, nEng, nHide, nTileMis, nUnk, MDQ.staleLedgerN()))
+  for _, l in ipairs(lines) do table.insert(out, l) end
+  -- ★「把哪些纹理隐藏了」= 用户点名要的那一条：当前藏账逐条 + 落盘历史（`SM_CFG.staleLog`）
+  table.insert(out, string.format("残留体检·当前藏账 %d 条：%s", MDQ.staleLedgerN(), MDQ.staleNames(12)))
+  local ledger = {}
+  for o, rec in pairs(MDQ.staleHid) do
+    table.insert(ledger, string.format("　藏账 %s ｜ 藏时的贴图=%s",
+      tostring(rec and rec.name or "?"), tostring(rec and rec.path or "?")))
   end
-  local list = smFitTargets()
-  for i, it in ipairs(list) do
-    local o = it.o
-    local shown, tex = "读不到", "读不到"
-    if type(o.IsShown) == "function" then
-      local ok, v = pcall(o.IsShown, o)
-      if ok then shown = v and "显示" or "隐藏" end
-    end
-    if type(o.GetTexture) == "function" then
-      local ok, v = pcall(o.GetTexture, o)
-      if ok then tex = (v == nil or v == "") and "空" or tostring(v) end
-    end
-    local r = SMFIT.rec[it.key]
-    local rtxt = "无"
-    if type(r) == "table" then rtxt = string.format("(%.0f,%.0f) %.0fx%.0f", r.x, r.y, r.w, r.h) end
-    -- ★1.75.5：**活值**（纹理此刻的读回几何）—— 与「记录」「客户端真值」三者对照才能定案
-    local ltxt = "读不到"
-    local okp, _p, _rel, _rp, lx, ly = pcall(o.GetPoint, o, 1)
-    local okw, lw = pcall(o.GetWidth, o)
-    local okh, lh = pcall(o.GetHeight, o)
-    if okp and okw and okh and tonumber(lx) and tonumber(ly) and tonumber(lw) and tonumber(lh) then
-      ltxt = string.format("(%.0f,%.0f) %.0fx%.0f", tonumber(lx), tonumber(ly), tonumber(lw), tonumber(lh))
-    end
-    add(string.format("  %d) %s：%s ｜ 贴图=%s ｜ 本图在用=%s ｜ 活值=%s ｜ 记录=%s ｜ 本图已写=%s",
-      i, tostring(it.key), shown, tex, smFitInUse(o) and "是" or "否", ltxt, rtxt,
-      (SMFIT.wroteKeys[it.key] == mk) and "是" or "否"))
-  end
-  if table.getn(list) == 0 then
-    add("  （WorldMapDetailFrame 下没有非瓦片纹理：地图没开，或客户端还没建这批纹理）")
-  end
-  if nOv and nOv > 0 and type(GetMapOverlayInfo) == "function" then
-    for i = 1, nOv do
-      local ok, tn, w, h, ox, oy = pcall(function() return GetMapOverlayInfo(i) end)
-      if not ok then
-        add(string.format("  客户端第 %d 条叠加层：读不到（GetMapOverlayInfo 失败）", i))
-        break
-      end
-      add(string.format("  客户端叠加层 %d：%s %sx%s @(%s,%s)", i, tostring(tn), tostring(w), tostring(h), tostring(ox), tostring(oy)))
-    end
+  table.sort(ledger)
+  for _, l in ipairs(ledger) do table.insert(out, l) end
+  local hist = MDQ.staleLogGet(12)
+  table.insert(out, string.format("残留体检·落盘历史（SM_CFG.staleLog，最多 %d 条，最新在前）%d 条：",
+    MDQ.STALE_LOG_MAX, table.getn(hist)))
+  if table.getn(hist) == 0 then
+    table.insert(out, "　（空 —— 本档还没藏过任何纹理；/reload 后这里也会保留）")
   else
-    add("  客户端叠加层清单：读不到（GetNumMapOverlays/GetMapOverlayInfo 不可用，或本图 0 条）")
-  end
-  add("  口径：显示/贴图/在用 = 本模块的**只读**判定（「本图在用=否」的层我们一个几何都不碰）；"
-    .. "记录 = **本会话内存**里本图的原值（★定位信息不落存档：客户端每次开图都会自己重摆）；本图已写 = 本次会话我们真写过的层")
-  -- ★1.75.5：抓原值的**专属有界环**（最近 10 次尝试；随存档落盘 ⇒ 日志环被刷掉也能事后定案）
-  local capRing = SM_CFG.mapFitCapLog
-  if type(capRing) == "table" and table.getn(capRing) > 0 then
-    add("  抓原值历史（最近 " .. table.getn(capRing) .. " 次，最旧→最新）：")
-    for i = 1, table.getn(capRing) do add("    " .. tostring(capRing[i])) end
-  else
-    add("  抓原值历史：**空**（本次会话还没尝试过抓原值 —— 地图没开过，或还没走到那一步）")
+    for i = 1, table.getn(hist) do table.insert(out, "　" .. hist[i]) end
   end
   return out
 end
 
--- ★★★1.75.5（用户指定「本办法」）：**手动适配 = 一条调试命令、全过程逐条打印**
---   用户原话：「缩放功能开启的情况下, 游戏首次载入, 可以做个调试命令执行. 打开地图, 等待2s, 获取原值.
---   打印原值, 应用缩放. 打印缩放信息. 这样的调整过程.」
---   ★为什么要有它：自动时序依赖客户端的开图时机，出问题时**看不出卡在哪一步**；手动过程完全确定：
---     ① 开图（`ShowUIPanel`；本项目纪律：开图绝不用 Toggle）→ ② 外框**置回自然档 1.00**、等 2 秒让版式稳定
---     → ③ 读原值（**不翻转、不归一**，读到的就是原值）并逐条打印 → ④ 套缩放并打印（设置值/自身 GetScale/父链连乘）
---     → ⑤ 折算并逐条打印（原值 → 写入）。★期间 `smFixActive` 让**整段自动逻辑让位**（否则会被抢写缩放）。
-local SM_FIX = { t = 0, armMax = 3, armGap = 2.0 }  -- armGap：待命触发的**最小间隔**（同一次换图的身份抖动不许烧两次预算）
-local function smFixOut(s)
-  local out = (type(EVAL_SAY_FORCE) == "function") and EVAL_SAY_FORCE or P
-  pcall(out, "[简易地图] " .. tostring(s))
-  mfLog("[手动适配] %s", tostring(s)) -- 同时进取证环/日志环 ⇒ 事后读存档就能看到每一步
+-- ★★★1.75.52 六改（用户原话：「每次切换到一个地图、识别到地图签名的时候，对应这个地图的贴图数据库查询下有多少贴图，
+--   然后删除原生的贴图数据，再自行添加。并且做好守护程序：**有可能会将超出当前贴图数据层数的数据添加回去**，
+--   所以要做好守护程序 —— **数量、存在性都要检查**」）⇒ **只在「打开世界迷雾」开着时接管**（用户选的口径 B）：
+--   · **数量基准 = 表**：本图应有几块由 `MDQ.holdN` 现算（与 `MDQ.render` **同一算法、同一上限** `poolMax`
+--     ⇒ 全项目「本图该有几块」只有一个来源，绝不写常数）；
+--   · **原生全藏**：枚举 `WorldMapDetailFrame` 的 region，凡名字属 `WorldMapOverlay*` 且**不是我们自建的**
+--     （身份判定 `MDQ.ownSet`，**不看名字** —— 本客户端那批原生层的名字与我们补建的会重名）⇒ `Hide`。
+--     ★1.12 **没有销毁纹理的 API** ⇒「删除原生贴图」只能靠 `Hide`（这也正是本项目「只 Hide/Show」铁律）；
+--   · **数量守护**：序号**超出本图应有块数**的池位（上一张图块更多时留下的、或客户端又冒出来的）一律 `Hide`
+--     ⇒ 残留不许回潮；**存在性/可见性守护**：我们自建的块（序号在本图应有块数之内）**被藏了就重新 `Show`**；
+--   · **绝不永久藏**：`MDQ.holdShowAll` 把藏过的**原生**层全部还回并清账，调在 `MDQ.release` 里
+--     ⇒ 关开关 / 关功能 / 关模块**三条路天然全覆盖**（另有「关图」那一拍）。
+--   ★节拍 = 挂在 `MDQ.renderCurrent` 里 ⇒ 与渲染**同拍**（换图/开图爆发窗内逐帧重申，之后 0.3s 一拍）；
+--   ★这里**一个字节都不写贴图 / UV / 几何**（同残留清理的三条纪律）。
+MDQ.holdStat = { map = "?", want = 0, hid = 0, again = 0, reshow = 0, seen = 0, ours = 0, blind = false, at = 0 }
+MDQ.holdHid = {}   -- 藏账（**只记客户端原生层**）：对象 → { name =, path =, again = }（关开关/关功能时全部还回）
+MDQ.holdOrder = {} -- 藏账的**插入顺序**（超上限时把最老的放回去 ⇒ 账有界且绝不永久藏）
+MDQ.HOLD_LEDGER_MAX = 600  -- ★真机日志取证：客户端每拍重建自己的池位 ⇒ 无界账一小时就攒到 3960 条
+
+-- 池位名字里的**尾号**（`WorldMapOverlay7` → 7）；认不出（字母后缀 / 没有后缀）⇒ nil，**绝不猜**
+MDQ.poolIdx = function(o)
+  local nm = string.lower(frameName(o) or "")
+  if string.find(nm, "worldmapoverlay", 1, true) ~= 1 then return nil end
+  local d = string.match(nm, "(%d+)$")
+  return d and tonumber(d) or nil
 end
 
--- ③④⑤ 三步：读原值 → 打印 → 套缩放 → 打印 → 折算 → 打印（★由计时帧在等满 2 秒后调用）
-local function smFixDoCapture()
-  -- ★重入闸（计时帧与「挂不上 OnUpdate 就当场跑」两条路只许走一条）
-  if SM_FIX.done then return 0 end
-  SM_FIX.done = true
-  local mk = smMapKey() or SMFIT.mapKey or "?"
-  smFitBindMap(mk)
-  local n, fails = 0, 0
-  smFixOut("第3步 读原值（外框已在自然档、且已等满 2s ⇒ 客户端版式稳定；**不翻转、不归一**）")
-  for _, it in ipairs(smFitTargets()) do
-    if smFitInUse(it.o) then
-      local o = it.o
-      local okp, p, rel, rp, x, y = pcall(o.GetPoint, o, 1)
-      local okw, w = pcall(o.GetWidth, o)
-      local okh, h = pcall(o.GetHeight, o)
-      if okp and p and okw and okh and tonumber(x) and tonumber(y) and tonumber(w) and tonumber(h) then
-        SMFIT.rec[it.key] = { o = o, idx = it.key, name = it.name, p = tostring(p),
-          rel = smRelName(rel), relObj = rel, rp = smRelName(rp), from = "fixnow",
-          x = tonumber(x), y = tonumber(y), w = tonumber(w), h = tonumber(h), map = mk }
-        n = n + 1
-        -- ★锚点名字：`smRelName` 只认**帧对象**，相对**点**（"TOPLEFT" 这种字符串）会给 nil ⇒ 打印成 `-`
-        --   （★别把 nil 丢给 `%s`：本客户端是 Lua 5.1，`string.format("%s", nil)` 会**直接抛错**打不出这一行）
-        local reln, rpn = smRelName(rel), smRelName(rp)
-        smFixOut(string.format("第3步  原值 %s = (%.1f,%.1f) %.1f×%.1f ｜ 锚 %s/%s/%s",
-          tostring(it.key), tonumber(x), tonumber(y), tonumber(w), tonumber(h),
-          tostring(p), reln or "-", rpn or "-"))
-      else
-        fails = fails + 1
-        smFixOut(string.format("第3步  读不到 %s（GetPoint=%s ｜ GetWidth=%s ｜ GetHeight=%s）",
-          tostring(it.key), tostring(okp), tostring(okw), tostring(okh)))
-      end
-    end
+-- 本图**应有几块**（表推；数量口径唯一来源，与 `MDQ.render` 同一算法与同一上限）
+MDQ.holdN = function(file)
+  local m = MDQ.areaOf(file)   -- ★六改 b：与渲染**同一个**表查找（大小写不敏感）⇒ 数量口径不会与画出来的块数打架
+  if type(m) ~= "table" then return 0 end
+  local n = 0
+  for _, rec in pairs(m) do
+    n = n + (tonumber(MDQ.tiles(rec and rec[1], rec and rec[2])) or 0)
   end
-  SMFIT.captured = (n > 0)
-  smFixOut(string.format("第3步 完成：原值 %d 条（读不到 %d 条）", n, fails))
-  -- ④ 套缩放 + 打印
-  smFitHold = 0
-  pcall(featApplyScale, tonumber(SM_CFG.scale) or 1)
-  local own, chain = "?", "?"
-  local wm = featWm()
-  if wm then
-    local ok, v = pcall(wm.GetScale, wm)
-    if ok then own = string.format("%.3f", tonumber(v) or 0) end
-  end
-  -- ★父链连乘可能踩到「父级不是帧」的脏环境（`cur.GetScale` 的取值在 pcall **外面**求值 ⇒ 会真抛错）
-  --   ⇒ 这一句必须自己带 pcall，否则第 4 步抛错会把「第 5 步 + 放掉让位标记」整段吃掉。
-  local fr = _G["WorldMapDetailFrame"]
-  if type(fr) == "table" or type(fr) == "userdata" then
-    local oke, e = pcall(smEffScale, fr)
-    if oke and tonumber(e) then chain = string.format("%.3f", e) end
-  end
-  smFixOut(string.format("第4步 已套缩放：设置值=%.2f ｜ 自身 GetScale=%s ｜ 父链连乘=%s", tonumber(SM_CFG.scale) or 1, own, chain))
-  -- ⑤ 折算 + 打印
-  local es = tonumber(chain)
-  if es and es > 0 then
-    local changed, ready = smFitApply(es, true)
-    smFixOut(string.format("第5步 折算：es=%.3f ⇒ 写入 %d 个 / 已对齐 %d 个", es, changed, ready))
-    for _, it in ipairs(smFitTargets()) do
-      local r = SMFIT.rec[it.key]
-      if type(r) == "table" and smFitInUse(it.o) then
-        smFixOut(string.format("第5步   %s 原值(%.1f,%.1f %.1f×%.1f) → 写入(%.1f,%.1f %.1f×%.1f)%s",
-          tostring(it.key), r.x, r.y, r.w, r.h, r.x * es, r.y * es, r.w * es, r.h * es,
-          (SMFIT.wroteRun and SMFIT.wroteRun[it.key]) and " ★本次已写" or "（判为已对齐，未写）"))
-      end
-    end
-  else
-    smFixOut("第5步 折算**跳过**：读不到父链缩放（上面第 4 步的「父链连乘」是 ?）")
-  end
-  smFixActive = false
-  smFixOut("手动适配**结束**（以上就是完整调整过程；若仍不对，把这一整段发我）")
+  if n > MDQ.poolMax then n = MDQ.poolMax end
   return n
 end
 
--- ★★★1.75.5：兜底跑第 3~5 步 —— **无论成败都放掉让位标记** 并如实报错。
---   为什么必须有它：`smFixActive` 是我们自己关掉自动逻辑的开关，一旦哪一步抛错而没人放掉它，
---   整个「探索层适配」就**永久静默失效**（看着像功能坏了，其实是让位没收）。这类「自己关死自己」的坑本项目有先例。
-local function smFixRunCapture()
-  local okD, errD = pcall(smFixDoCapture)
-  smFixActive = false
-  if not okD then smFixOut("手动适配**中途出错**（后面几步没跑到）：" .. tostring(errD)) end
-  return okD
+-- 原生藏账条数
+MDQ.holdLedgerN = function()
+  local c = 0
+  for _ in pairs(MDQ.holdHid) do c = c + 1 end
+  return c
 end
 
--- ①②步 + 起计时：由 `/ehm fitnow`（别名 适配/修正）调用，或由**待命模式**在地图开/换图时自动调用。
---   ★`armed = true` 时地图已经开着（是 tick 触发的）⇒ 不重复开图、并在第一行点明是自动触发。
-local function smFixBegin(armed)
-  if not EVAL_SM_ENABLED() then
-    smFixOut("前置：**「缩放大地图」没开启** ⇒ 先在工具箱里勾上它，再跑本命令")
-    return false
+-- ★接管守护（**每拍都跑**）：藏原生 + 数量守护（超出本图块数的池位）+ 存在性守护（我们自建的块被藏就复位）
+--   返回：藏了原生 N 个, 复位我们自建的 M 个, 枚举到池位 K 个, 本图应有 W 块, 「又冒出来再藏」A 次
+MDQ.holdTick = function(file)
+  if not MDQ.swm() then return 0, 0, 0, 0, 0 end
+  local fr = _G["WorldMapDetailFrame"]
+  if not ((type(fr) == "table" or type(fr) == "userdata") and type(fr.GetRegions) == "function") then
+    return 0, 0, 0, 0, 0
   end
-  smFixActive = true
-  SM_FIX.t = 0
-  SM_FIX.done = false
-  smFixOut((armed and "【待命触发】" or "") .. "第1步 前置：模块=开 ｜ 地图=" .. (featOpenNow() and "开" or "关") ..
-    " ｜ 地图身份=" .. tostring(smMapKey() or SMFIT.mapKey or "?") ..
-    " ｜ 当前 设置值 scale=" .. tostring(SM_CFG.scale) .. " alpha=" .. tostring(SM_CFG.alpha))
-  if not featOpenNow() then
-    local wm = _G["WorldMapFrame"]
-    if type(ShowUIPanel) == "function" and wm then
-      pcall(ShowUIPanel, wm)
-      smFixOut("第1步 地图没开 ⇒ 已调 `ShowUIPanel(WorldMapFrame)` 打开它")
-    else
-      smFixOut("第1步 地图没开、且取不到 ShowUIPanel/WorldMapFrame ⇒ 请手动打开地图后重跑本命令")
+  local want = MDQ.holdN(file)
+  local drew = tonumber(MDQ.lastRenderN) or 0
+  -- ★★★1.75.52 六改 b（用户真机报障「全都是空白的」）：**数据库里没有这张图 / 一块都没画出来**
+  --   ⇒ **一个字节都不碰**（客户端的探索层保持原样）。理由两条：
+  --     ① 本项目铁律「拿不到证据就一个字节都不碰」—— 不知道这张图该有什么，就没有替代依据；
+  --     ② 旧写法（原生全藏 + 不自行添加）在「表里没有这张图」时 = **整张图空白**，比残留更糟。
+  if want <= 0 or drew <= 0 then return 0, 0, 0, want, 0 end
+  local okr, regs = pcall(function() return { fr:GetRegions() } end)
+  if not okr then return 0, 0, 0, want, 0 end
+  local hid, reshow, seen, again, oursSeen = 0, 0, 0, 0, 0
+  local kills, shows = {}, {}
+  -- ===== 第一趟：只**判定**，一个字节都不写 =====
+  for _, o in ipairs(regs) do
+    -- 唯一的证据 = **名字**属叠加层池位族；名字不合（底图瓦片 / 匿名装饰）⇒ 一个字节都不碰
+    if o ~= nil and MDQ.stalePoolName(o) then
+      seen = seen + 1
+      -- ★六改 c：「我们画的」= 身份账 **或** 本拍真的写过它（后者不依赖对象身份跨拍稳定）
+      local ours = (MDQ.ownSet[o] == true) or (MDQ.wroteObj[o] == true)
+      if ours then oursSeen = oursSeen + 1 end
+      local idx = MDQ.poolIdx(o)
+      local oks, shown = pcall(o.IsShown, o)
+      -- ★原生层**不看序号**（它就是客户端自己那套 / 上一张图的残留）；我们自建的层按**数量**判（超出即藏）
+      local kill = (not ours) or (idx ~= nil and idx > want)
+      if oks and shown == true and kill then
+        table.insert(kills, { o = o, ours = ours })
+      elseif oks and shown == false and ours and idx ~= nil and idx <= want then
+        table.insert(shows, o)   -- 存在性守护：我们自建的块被藏了 ⇒ 待会儿还回来
+      end
     end
   end
-  pcall(featApplyScale, 1)
-  local own = "?"
-  local wm2 = featWm()
-  if wm2 then
-    local ok, v = pcall(wm2.GetScale, wm2)
-    if ok then own = string.format("%.3f", tonumber(v) or 0) end
-  end
-  smFixOut("第2步 已把外框缩放置回**自然档 1.00**（读回自身 GetScale=" .. own .. "），等 2.0 秒让客户端版式稳定…")
-  -- 计时帧**懒建**（本项目纪律：载入期零副作用；没有帧也照样把三步走完）
-  -- ★★★1.75.45b：父级**必须优先 `WorldFrame`** —— 硬事实（照抄 `DataSearch.lua:2479-2488`，源头是 UnrealQuest
-  --   `Core/Driver.lua:467-482` 明文）：**开全屏地图时 `UIParent` 被隐藏 ⇒ 挂在它下面的帧收不到 OnUpdate**。
-  --   旧写法优先 `UIParent` ⇒ 「等 2 秒再读原值」这段计时**在地图开着时随时可能不跑**（本轮能跑通属侥幸）。
-  local par = _G["WorldFrame"] or _G["UIParent"]
-  local f = _G["EH_SM_FITFIX"]
-  if (not f) and type(CreateFrame) == "function" and par then
-    f = CreateFrame("Frame", "EH_SM_FITFIX", par)
-    _G["EH_SM_FITFIX"] = f
-  end
-  if not f or type(f.SetScript) ~= "function" then
-    smFixOut("第2步 **没有可用的计时帧** ⇒ 立刻执行第 3~5 步（不等待）")
-    smFixRunCapture()
-    return true
-  end
-  local okSet = pcall(f.SetScript, f, "OnUpdate", function()
-    local dt = tonumber(arg1) or 0.05
-    SM_FIX.t = (tonumber(SM_FIX.t) or 0) + dt
-    if SM_FIX.t >= 2.0 then
-      pcall(f.SetScript, f, "OnUpdate", nil)
-      smFixRunCapture()
+  -- ★★★第二趟之前的安全门（1.75.52 六改 c；真机日志取证换来的）：**枚举里一个「我们画的」都认不出**
+  --   而本拍明明画出来了 ⇒ 本客户端要么把我们建的纹理排在下一次枚举里、要么对象身份每拍都换
+  --   ⇒ **判不出谁是原生 ⇒ 一个字节都不碰**（旧写法会把它们当原生全藏 = 连自己画的一起藏 = 空白图）。
+  --   ★出声一次（常开出口）并指明取证命令，绝不让它变成静默失效。
+  if oursSeen == 0 and seen > 0 then
+    MDQ.holdStat.map, MDQ.holdStat.want = tostring(file), want
+    MDQ.holdStat.hid, MDQ.holdStat.again, MDQ.holdStat.reshow = 0, 0, 0
+    MDQ.holdStat.seen, MDQ.holdStat.ours = seen, 0
+    MDQ.holdStat.at = (type(GetTime) == "function") and GetTime() or 0
+    MDQ.holdStat.blind = true
+    local mkB = smMapKey() or tostring(file)
+    if MDQ.holdSaidBlind ~= mkB then
+      MDQ.holdSaidBlind = mkB
+      pcall(smFitSay, "接管守护：地图=%s ｜ 枚举到 **%d** 个叠加层池位，但**一个都不是我们刚画的**"
+        .. "（本拍画了 %d 块）⇒ **判不出谁是原生 ⇒ 一个字节都不碰**（宁可保留原生的，也绝不留空白图）。"
+        .. "取证：/ehm mapfit 残留（首两行给渲染账与枚举数）",
+        tostring(file), seen, drew)
     end
-  end)
-  if not okSet then
-    -- ★挂不上就当场走完（否则 `smFixActive` 永远为真 = 自动逻辑被永久让位，那就成了新故障）
-    smFixOut("第2步 计时帧**挂不上 OnUpdate** ⇒ 立刻执行第 3~5 步（不等待）")
-    smFixRunCapture()
+    return 0, 0, seen, want, 0
   end
-  return true
+  MDQ.holdStat.blind = false
+  -- ===== 第二趟：动手（藏原生 + 数量守护），并复位被藏的我们自建的块 =====
+  for _, o in ipairs(shows) do
+    if pcall(o.Show, o) then reshow = reshow + 1 end
+  end
+  for _, it in ipairs(kills) do
+    local o, ours = it.o, it.ours
+    if pcall(o.Hide, o) then
+      hid = hid + 1
+      if not ours then
+        local rec = MDQ.holdHid[o]
+        if rec == nil then
+          local nm = frameName(o)
+          local okp, path = pcall(o.GetTexture, o)
+          if not okp then path = nil end
+          -- ★藏账**有界**（真机日志：一小时不到就攒到 3960 条 —— 客户端每拍重建自己的池位对象
+          --   ⇒ 无界账会把内存与「关开关时逐个 Show」都拖垮）。超上限时把最老的**放回去**（绝不永久藏）。
+          if MDQ.holdOrder == nil then MDQ.holdOrder = {} end
+          MDQ.holdHid[o] = { name = nm, path = tostring(path), again = 0 }
+          table.insert(MDQ.holdOrder, o)
+          while table.getn(MDQ.holdOrder) > MDQ.HOLD_LEDGER_MAX do
+            local old = table.remove(MDQ.holdOrder, 1)
+            if old ~= nil and MDQ.holdHid[old] ~= nil then
+              pcall(old.Show, old)     -- ★放回（绝不永久藏）
+              MDQ.holdHid[old] = nil
+            end
+          end
+          MDQ.staleLogPut(string.format("接管藏：地图=%s ｜ 客户端原生层 %s ｜ 贴图=%s",
+            tostring(file), tostring(nm), tostring(path)))
+        else
+          rec.again = (tonumber(rec.again) or 0) + 1
+          again = again + 1
+          -- ★「客户端又把它 Show 出来了」= 用户报障的那条现象；每个对象最多记 3 次（环有界、不刷屏）
+          if rec.again <= 3 then
+            MDQ.staleLogPut(string.format("接管再藏（第 %d 次）：地图=%s ｜ 原生层 %s（客户端自己又 Show 出来了）",
+              rec.again, tostring(file), tostring(rec.name)))
+          end
+        end
+      end
+    end
+  end
+  local st = MDQ.holdStat
+  st.map, st.want = tostring(file), want
+  st.hid, st.again, st.reshow, st.seen = hid, again, reshow, seen
+  st.ours = oursSeen
+  st.at = (type(GetTime) == "function") and GetTime() or 0
+  -- ★「客户端又把它 Show 出来了」正是用户报障的那条现象 ⇒ **必须出声**（常开出口），但**每图只一次**
+  --   （逐帧重申那一拍 + 客户端每次重摆都可能命中它，不节流就是刷屏）。
+  if again > 0 then
+    local mkA = smMapKey() or tostring(file)
+    if MDQ.holdSaidAgain ~= mkA then
+      MDQ.holdSaidAgain = mkA
+      pcall(smFitSay, "接管守护：地图=%s ｜ 客户端又把 **%d** 个原生探索层 Show 出来了 ⇒ **已当场再藏**"
+        .. "（守护每拍都查：① 数量 = 表推本图 %d 块；② 存在性 = 超出块数的池位一律藏）",
+        tostring(file), again, want)
+    end
+  end
+  return hid, reshow, seen, want, again
 end
 
--- 开图侦测 tick（0.2s 节流；★挂 WorldFrame 不挂 UIParent）
+-- 把我们藏过的**客户端原生层**全部还回（关开关 / 关功能 / 关图 / 关模块；幂等）⇒「绝不永久藏」
+MDQ.holdShowAll = function(why)
+  local n = 0
+  for o in pairs(MDQ.holdHid) do
+    pcall(o.Show, o)
+    MDQ.holdHid[o] = nil
+    n = n + 1
+  end
+  MDQ.holdOrder = {}
+  if n > 0 then
+    pcall(mfLog, "接管守护（%s）：把藏过的 %d 个客户端原生探索层全部 Show 还回", tostring(why), n)
+  end
+  return n
+end
+
+-- 只读体检（`/ehm mapfit 残留` 里一并打印）：**数量**（本图应有几块）+ **存在性**（逐条：谁的 / 显示没显示 / 结论）
+--   ★零副作用：只 `IsShown` / `GetTexture` / `GetRegions`，一个 `Set*` 都不发。
+MDQ.holdProbe = function()
+  local out = {}
+  local file = tostring(select(1, smMapInfo()) or "")
+  local okFile = (file ~= "")
+  local want = MDQ.holdN(okFile and file or nil)
+  local drew = tonumber(MDQ.lastRenderN) or 0
+  table.insert(out, string.format(
+    "接管守护（打开世界迷雾 %s）：地图=%s ｜ 表推本图应有 %d 块 ｜ "
+      .. "上一次守护：藏原生 %d ｜ 又冒出来再藏 %d ｜ 我们自建被藏后复位 %d ｜ 枚举池位 %d（认出我们画的 %d）｜ 原生藏账 %d 条%s",
+    MDQ.swm() and "**开**" or "关", okFile and file or "?", want,
+    tonumber(MDQ.holdStat.hid) or 0, tonumber(MDQ.holdStat.again) or 0, tonumber(MDQ.holdStat.reshow) or 0,
+    tonumber(MDQ.holdStat.seen) or 0, tonumber(MDQ.holdStat.ours) or 0, MDQ.holdLedgerN(),
+    MDQ.holdStat.blind and "　★判不出（枚举里一个我们画的都没认出）⇒ **一个字节都不碰**" or ""))
+  -- ★六改 b：再摊**本拍的渲染账**（用户报障「数据库查出来的层有没添加进去」的唯一直接答案）：
+  --   渲染 N 块 / 表里 M 区 / 在不在表里 / 有没有渲完整 / 失败原因 / 现读倍率
+  local rr = MDQ.lastRender
+  if type(rr) == "table" then
+    table.insert(out, string.format(
+      "接管渲染：地图=%s ｜ 表里 %d 区 ⇒ **渲染 %d 块**（在表里=%s ｜ 渲完整=%s ｜ 倍率 k=%.3f）%s",
+      tostring(rr.map or "?"), tonumber(rr.areas) or 0, tonumber(rr.n) or 0,
+      rr.inTbl and "是" or "**否**", rr.full and "是" or "**否**",
+      tonumber(rr.k) or 1, rr.why and (" ｜★" .. tostring(rr.why)) or ""))
+  else
+    table.insert(out, "接管渲染：**本会话还没渲染过**（地图关着 / 替代开关刚打开还没到一拍）")
+  end
+  if want <= 0 or drew <= 0 then
+    table.insert(out, "　（**数据库里没有这张图 / 一块都没画出来** ⇒ 接管守护按「无从替代」处理："
+      .. "客户端自己的探索层**保持原样**，一个字节都不碰 —— 不会出现空白图）")
+  end
+  if not MDQ.swm() then
+    table.insert(out, "　（替代开关关着 ⇒ 接管守护**一个字节都不碰**；这时由「残留图层清理」那两条规则负责）")
+  end
+  local fr = _G["WorldMapDetailFrame"]
+  if (type(fr) == "table" or type(fr) == "userdata") and type(fr.GetRegions) == "function" then
+    local okr, regs = pcall(function() return { fr:GetRegions() } end)
+    if okr then
+      local rows = {}
+      for _, o in ipairs(regs) do
+        if o ~= nil and MDQ.stalePoolName(o) then
+          local ours = (MDQ.ownSet[o] == true)
+          local idx = MDQ.poolIdx(o)
+          local oks, shown = pcall(o.IsShown, o)
+          local okp, path = pcall(o.GetTexture, o)
+          if not okp then path = nil end
+          local pos = (idx ~= nil) and ("#" .. tostring(idx)) or "#（认不出尾号）"
+          local verdict
+          if ours then
+            verdict = (idx ~= nil and idx <= want) and "本图该在（被藏就复位）" or "**超出本图块数 ⇒ 藏**"
+          elseif want > 0 and drew > 0 then
+            verdict = "**客户端原生 ⇒ 藏**（本图有表数据，替代语义）"
+          else
+            verdict = "客户端原生 ⇒ **保持原样**（数据库里没有这张图 / 一块都没画出来 ⇒ 一个字节都不碰）"
+          end
+          table.insert(rows, string.format("　%s ｜ %s ｜ %s ｜ %s ｜ 贴图=%s ⇒ %s",
+            tostring(frameName(o)), pos, ours and "我们自建" or "客户端原生",
+            (oks and shown == true) and "显示中" or "已隐藏", tostring(path), verdict))
+        end
+      end
+      table.sort(rows)
+      if table.getn(rows) == 0 then
+        table.insert(out, "　（本图枚举到的 region 里**没有** WorldMapOverlay* 池位）")
+      else
+        for _, r in ipairs(rows) do table.insert(out, r) end
+      end
+    end
+  end
+  return out
+end
+
+-- ★★★1.75.51（用户：「缩放大地图->设置内->添加个 S_WorldMap 贴图替代开关」）：
+--   **数据源 = `MDQ.swm()`**（唯一判据入口；产品开关，落存档）：
+--     · 开（**默认**）= **表驱动全渲染**（`MDQ.render`，见那一族）：不抓原值、不读本地缓存、不逐层折算 ——
+--       贴图/UV/尺寸/位置全部由 S_WorldMap 表现算，客户端内置的那批探索层被逐条改写/多余的藏起来；
+--     · 关 = 不再碰叠加层（1.75.52 用户定：整条「探索层适配」已摘除，关掉就是**客户端原生行为**）。
+--   ★判据写法：**一律写 `MDQ.swm()`**（挂在既有 `MDQ` 表上）—— 主 chunk 有 **200 个 local 的上限**，
+--     为这种一个布尔判断新增文件级 local 会把离线 harness 直接顶爆
+--     （历史实测症状 `LOAD FAIL: … too many local variables (limit is 200) in main function`）。
+--
+-- ★★★1.75.51（用户：「清理掉本地地图签名缓存」）：**清本地缓存**的**唯一出口**（幂等；内存 + 存档老键一起清）。
+--   · 存档老键四个（`mapFitOrig` 老原值 · `mapFitVer` 版本戳 · `mapFitTrace` 取证环 · `mapFitCapLog` 抓原值环）
+--     —— 它们正是用户要清的「之前调试的日志」；返回清掉的**存档键个数**（0 = 本来就没有）。
+--   ★挂在 `MDQ` 表上而不是新增文件级 local（同上：200 local 上限）。
+MDQ.cacheClear = function(why)
+  local n = 0
+  if type(SM_CFG) == "table" then
+    for _, k in ipairs({ "mapFitOrig", "mapFitVer", "mapFitTrace", "mapFitCapLog" }) do
+      if SM_CFG[k] ~= nil then SM_CFG[k] = nil n = n + 1 end
+    end
+  end
+  pcall(mfLog, "清缓存（%s）：存档老键 %d 个（原值/写入账那些会话内存已随探索层适配整条摘除）", tostring(why), n)
+  return n
+end
+-- 开图侦测 tick（★挂 WorldFrame 不挂 UIParent —— 开全屏地图时 UIParent 会被隐藏，挂它下面收不到 OnUpdate）
+--   ★★1.75.52（用户定：整条「探索层适配」摘除）后只剩三件事：
+--     ① 黑幕瞬时窗口（开图逐帧重申藏黑幕）｜ ② 「开图保持」（透明度/缩放/居中/位置记忆）
+--     ③ 「打开世界迷雾」渲染节拍 + 「残留图层清理」节拍（规则与实现都在 `MDQ.*` 里，这里只管节拍与播报）。
 do
   local parent = _G["WorldFrame"]
   if not (type(parent) == "table" or type(parent) == "userdata") then parent = _G["UIParent"] end
   if type(CreateFrame) == "function" and parent then
     local f = CreateFrame("Frame", "EH_SM_FEAT", parent)
     local acc = 0        -- 「开图保持」节拍（0.2s，行为不变）
-    local accFit = 0     -- 叠加层适配节拍（爆发 0.1s / 稳态 0.3s）
+    local accSwm = 0     -- 「打开世界迷雾」渲染节拍（爆发 0.1s / 稳态 0.3s）
     local esCache = nil
+    -- 会话级状态（原来寄在 `SMFIT` 表里；探索层适配整条摘掉后收进这一张小表，主 chunk 的 local 预算反而更宽）
+    local ST = { open = false, burst = 0, mapKey = nil, pendingApply = false,
+      staleUntil = 0, staleAt = -99, staleHidN = 0, staleBackN = 0, staleSaid = false, staleSaidNoPool = false }
     f:SetScript("OnUpdate", function()
-      -- ★★★1.75.7（用户排查：「未开启缩放大地图时，会不会还在监听探索层的缩放操作」）——**会**，而且不只是监听：
-      --   实测（修前：模块关闭 + 点 10 拍 tick）：叠加层几何被写了 **8 次**，355/-320/215×215 被折成
-      --   248.5/-224/150.5×150.5（×0.7），还记下 2 条原值。根因两条：
-      --     ① 这段 tick 是**载入期无条件建**的 ⇒ 关掉开关它照样每帧跑；
-      --     ② ④ 只受 smFitOn()（**默认开**）管，③「开图保持」那一段**压根没看总开关**。
-      --   ⇒ 关闭时**整段免打扰**：连 IsShown / GetEffectiveScale 都不读（那正是「监听探索层缩放」），
-      --     一个几何都不碰（项目纪律：关掉零动作）。
-      --   ★「关掉时把已经折算过的几何还回去」改由 EVAL_SM_SET(false) 那侧**当场**做（见那里）——
-      --     旧注释把这件事寄托在「常驻 tick 兜还原」上，代价就是关掉开关后照跑照折；现在正面解决。
+      -- ★1.75.7（用户：「未开启缩放大地图时，会不会还在监听探索层的缩放操作」）⇒ **关掉零动作**：
+      --   连 IsShown / GetEffectiveScale 都不读，并把「世界迷雾」自建的层收掉、把藏过的层（残留 + 接管守护）全部还回。
       if not EVAL_SM_ENABLED() then
         FEAT.applied = false
-        SMFIT.open, SMFIT.es, SMFIT.burst = false, nil, 0
+        ST.open, ST.burst = false, 0
+        pcall(MDQ.release, "模块已关")
+        pcall(MDQ.staleShowAll, "模块已关")
+        pcall(MDQ.holdShowAll, "模块已关")
         return
       end
-      -- ★★★1.75.5（用户指定「本办法」）：**手动适配进行中 ⇒ 整段自动逻辑让位** —— 由 `/ehm fitnow`
-      --   那条调试命令按「开图 → 置自然档 → 等 2s → 读原值 → 套缩放 → 折算」一步步走完并**逐条打印**。
-      --   ★必须挡在**最前面**（连「每帧守缩放」「抓原值窗口」都不参与），否则手动过程会被自动逻辑抢写缩放，
-      --     那就又变成「看不出卡在哪一步」。
-      if smFixActive then return end
       local dt = tonumber(arg1) or 0.05
       acc = acc + dt
-      accFit = accFit + dt
-      -- ① 每帧廉价探测：地图开没开 + **真有效缩放**（各一次 pcall，别做几何扫描）
+      accSwm = accSwm + dt
       local open = featOpenNow()
-      -- ★★★1.75.5（用户报障：「地图每次打开.会闪烁一次背景黑幕?这个如何避免?」）：**开图瞬时遮蔽窗口**。
-      --   成因：藏黑幕原来只挂 0.2s 节拍，而客户端**每次开图都会自己把黑幕 Show 出来、而且是在我们之后**
-      --   ⇒ 从「开图」到「藏住」最多空 0.2 秒 = 用户看到的那一闪。
-      --   修法：开图那一拍起，在 `SM_BLACKOUT_SEC` 窗口内**逐帧**重申藏黑幕（已隐藏时是空操作、`IsShown` 极廉价）；
-      --   窗口一过就回到 0.2s 节拍（不常驻每帧）。★与「开图后逐拍重申居中」同一套手法、同样**有界**。
+      -- ① 黑幕瞬时窗口：开图那一拍起 `SM_BLACKOUT_SEC` 内**逐帧**重申（客户端每次开图都自己 Show 它、且在我们之后）
       do
         local nowT = (type(GetTime) == "function") and GetTime() or 0
-        if open and not SMFIT.open then
-          -- 刚开图：开窗 + 记起点（`featHideBlackout` 用它算「开图后多少毫秒才藏住」并记进取证环）
+        if open and not ST.open then
           FEAT.blackoutUntil, FEAT.blackoutAt, FEAT.blackoutLogged = nowT + SM_BLACKOUT_SEC, nowT, false
           pcall(featHideBlackout)
         elseif open and (tonumber(FEAT.blackoutUntil) or 0) > nowT then
-          pcall(featHideBlackout) -- 窗口期内逐帧重申（客户端可能在我们上一拍之后又 Show 出来）
+          pcall(featHideBlackout)
         elseif not open then
-          -- ★★★1.75.5（**用户明确要求**：「然后关闭地图不要恢复这个背景的透明度」）：
-          --   关图**只失效瞬时窗口**，**绝不**去还原黑幕的 alpha（也不还原地图帧的透明度/缩放/位置）——
-          --   客户端下次开图会自己 Show 黑幕，而它保持 alpha=0 ⇒ **下次开图也不会闪**（这正是这一步的意义）。
-          --   ★原 alpha 只在**关掉功能**那条路还回去（`featTeardown` → `featBlackoutRestore`，唯一调用点）。
+          -- ★用户明确要求：关图**只失效窗口**，绝不还原黑幕 alpha（它保持 0 ⇒ 下次开图也不闪）
           FEAT.blackoutUntil, FEAT.blackoutAt, FEAT.blackoutLogged = 0, 0, false
         end
       end
-      -- ★★★1.75.5：**地图身份对齐必须排在「抓原值窗口」之前** —— `smFitNewMap` 会把窗口清零（换图要重新判定），
-      --   若它排在窗口块之后，就会在**同一拍**把刚开的窗关掉、紧接着的折算分支又会去写缩放
-      --   （组 254⑧「取原值期间一个缩放都不写」实测抓到过这一次写入）。
+      -- ② 地图身份（换图 = 客户端把这批纹理重摆/重指 ⇒ 世界迷雾**当拍重画**、残留清理重开窗口）
       local mkNow = smMapKey()
-      if mkNow and mkNow ~= SMFIT.mapKey then pcall(smFitNewMap, mkNow) end
-      -- ★★★1.75.5（**用户要求**）：「每次地图关闭都把原值数据清理、不要保存；每次打开地图都重新获取原值、重新缩放大地图」。
-      --   ⇒ 清空放在**关图那一刻**（地图不可见、不闪、也不跟客户端的版式计算抢），开图时记录天然是空的，
-      --     直接走既有的「本图还没有原值 ⇒ 先不缩放 → 读原值 → 落闩 → 套缩放」= 重新获取 + 重新缩放。
-      --   ★门：总开关开 + 叠加层适配开 + **折算档**（nofold / auto 判定不折算时我们根本不读原值，也就不清）。
-      --   ★必须在「抓原值窗口」块**之前**（否则本拍窗口会按还没清的旧记录判定成「已齐」而不开）。
-      local closedNow = (not open) and SMFIT.open
-      if closedNow and smFitOn() and smFitFreshOn() and smFitNeedFold() then pcall(smFitDropOnClose, SMFIT.mapKey) end
-      -- ★★★1.75.45（用户实测：「/ehm fitnow 这个命令无法跑. 地图开着无法进行 GUI 交互」）：
-      --   **待命模式** —— 命令在地图关着时敲好，之后**每次新开地图 / 换一张图**由本 tick 自动跑一遍手动适配
-      --   （置自然档 1.00 → 等 2s → 读原值 → 套缩放 → 折算，逐步打印且全部进取证环 ⇒ 事后 `/ehm mapfit trace` 可读）。
-      --   ★有界：一次待命最多跑 `SM_FIX.armMax`（默认 3）张图，跑完自动解除；`/ehm fitnow 取消` 随时解除。
-      --   ★必须排在「抓原值窗口」之前：`smFixBegin` 会把 `smFixActive` 置真，本函数下一拍开头就整段让位。
-      --   ★★★1.75.45b：再加一道**最小间隔**（`SM_FIX.armGap` = 2s）—— 真机 trace 里出现过**同一秒内两次完整五步**
-      --     （都在 DunMorogh）⇒ 待命预算被同一次换图的身份抖动烧掉两次，紧接着就「跑完上限自动解除」。
-      --     身份抖动时**不推进 `armKey`**，等它稳定下来再触发（不排队、不累计）。
-      local armNowT = (type(GetTime) == "function") and GetTime() or 0
-      if SM_FIX.arm and open and mkNow and SM_FIX.armKey ~= mkNow and not smFixActive
-        and (armNowT - (tonumber(SM_FIX.armAt) or -99)) >= (tonumber(SM_FIX.armGap) or 2.0) then
-        SM_FIX.armKey = mkNow
-        SM_FIX.armAt = armNowT
-        SM_FIX.armLeft = (tonumber(SM_FIX.armLeft) or 0) - 1
-        local okB, errB = pcall(smFixBegin, true)
-        if not okB then
-          -- ★出错也必须放掉让位标记，否则自动逻辑被永久让位（本项目「自己关死自己」的老坑）
-          smFixActive = false
-          smFixOut("【待命触发】**出错**（已放掉让位标记，自动逻辑继续）：" .. tostring(errB))
+      if mkNow and mkNow ~= ST.mapKey then
+        ST.mapKey = mkNow
+        if open then
+          ST.burst = SM_BURST_SEC
+          accSwm = 1e9
+          ST.staleUntil = ((type(GetTime) == "function") and GetTime() or 0) + MDQ.STALE_SEC
+          ST.staleAt, ST.staleSaid, ST.staleSaidNoPool = -99, false, false
+          ST.staleHidN, ST.staleBackN = 0, 0
         end
-        if (tonumber(SM_FIX.armLeft) or 0) <= 0 then
-          SM_FIX.arm, SM_FIX.armKey = false, nil
-          smFixOut("【待命结束】已跑完待命的图数上限 ⇒ 自动解除（要再来一次：`/ehm fitnow 待命`）")
-        else
-          smFixOut(string.format("【待命】还剩 %d 张图会自动跑（换图即触发；取消：`/ehm fitnow 取消`）",
-            tonumber(SM_FIX.armLeft) or 0))
+      end
+      -- ③ 残留图层清理节拍：**只 `Hide`/`Show`**，绝不 SetTexture / 绝不动 UV / 绝不改几何（全在 `MDQ.staleTick`）
+      do
+        local hasLedger = false
+        -- ★防御（1.75.52 真机红字换来的）：即便藏账因为任何原因没建起来，也**只退化成「没账」**，
+        --   绝不让 tick 每帧抛错刷红字（`type` 判一次的成本可以忽略）。
+        local hid = MDQ.staleHid
+        if type(hid) == "table" then
+          for _ in pairs(hid) do hasLedger = true break end
         end
-        -- ★★这一拍**整段让位**：否则下面的「每帧守缩放」会在同一拍把刚置的 1.00 又掰回 0.70
-        --   （`smFixActive` 只在**下一拍**开头才挡住自动逻辑）—— 手动过程必须从头到尾不让位失败。
-        return
-      end
-      -- ★★★1.75.45（用户要求）：「未适配完成的探索层先隐形」—— **兜底还原排在本函数所有早退之前**：
-      --   任何「不该再隐形」的情形（地图关了 / 叠加层适配关了 / 当前档不折算）都当场还回可见度。
-      --   ★这是「绝不永久隐形」的第一道保险（第二道 = 折算完成/兜底超时，第三道 = 关图/换图/关功能）。
-      if next(SMFIT.ghost or {}) ~= nil and ((not open) or (not smFitOn()) or (not smFitNeedFold())) then
-        pcall(smFitGhostShow, (not open) and "地图已关" or "当前档不折算")
-      end
-      -- ★★★1.75.45：已经隐形的那几层**逐帧廉价重申**（客户端自己会摆回 alpha）——只重申已记账的层，
-      --   不扫几何 ⇒ 每帧成本 = 每个隐形层一次 SetAlpha。有 `SMFIT_GHOST_SEC` 兜底 ⇒ 最多 1 秒。
-      if next(SMFIT.ghost or {}) ~= nil then pcall(smFitGhostKeep) end
-      -- ★★★1.75.5（用户设计，采纳）：「**本图还没有原值 ⇒ 先不缩放**，在自然档读原值，抓完再缩放」。
-      --   为什么这样最好：抓原值时**不用翻转外框**（翻转会惊动客户端 ⇒ 读不到）、也**不用做读回÷es 的归一**
-      --   （外框还是 1.00 ⇒ 读回就是原值，不押注任何口径）。
-      --   ★只在**真正需要**时开窗口（本图会话记录一条都没有）⇒ 有记录时零延迟、行为与原来完全一样；
-      --   ★窗口**有界**（SMFIT_HOLD_SEC）：抓到立刻收（同一拍套缩放），到点没抓到也收（先缩放、稍后补抓）。
-      --   ★★**必须排在下面那道「每帧守缩放」之前**（顺序即判据）：反了的话开窗那一拍会先被守缩放写一次。
-      --   ★★★1.75.45b（用户报障「换图后探索层缩放失效」的修法，用户选定「和初次打开一样地适配一遍」）：
-      --     **窗口期必须把外框真的按在自然档 1.00**，不能只是「不写 0.7」——
-      --     旧写法只挡写、不归位，而外框缩放是**跟着上一张图留下来的**（客户端自己把它重置回 1.0 之后我们又写回 0.7）；
-      --     于是第一段窗口超时收口时把 scale 套上、紧接着 tick 又开第二段窗口，**第二段就是在 0.7/0.5 上读的原值**
-      --     ⇒ `mapFitCapLog` 里那些 `归一÷0.70 / ÷0.50`（记录偏小 ⇒ 折算变空操作）=「换图后失效」的真凶。
-      --   ★纪律照抄 `DataSearch.lua:1746-1780`（任务插件切图能正确显示的全部原因）：**一变就做、不等稳定**
-      --     （它曾经有个 0.8s「稳定期闸门」，连续切图时每次都判「未稳定」⇒ 一次都不重绘，是那边「切图不更新」的主因）。
-      --     这里同理：换图即在 `smFitNewMap` 里把窗口状态与预算**重置**，旧身份的窗口直接作废、绝不排队。
-      --   ★窗口**有界且有预算**（`SMFIT.natMax` = 3 段/图）：续段只出现在「还没读齐」时，避免把地图永久按在满尺寸。
-      if open then
-        if (tonumber(smFitHold) or 0) > 0 then
-          smFitHold = math.max(0, (tonumber(smFitHold) or 0) - dt)
-          SMFIT.holdAge = (tonumber(SMFIT.holdAge) or 0) + dt
-          if SMFIT.captured then smFitHold = 0 end
-          if smFitHold > 0 then
-            -- ★窗口期**逐帧重申**自然档（本该是空操作：`featApplyScale` 自带同档不重写 ⇒ 不加写动作）
-            pcall(featApplyScale, 1)
-          elseif (not SMFIT.captured) and (tonumber(SMFIT.natLeft) or 0) > 0 and smFitOn() and smFitNeedFold() then
-            -- ★★续段：到点仍没读齐 ⇒ **不先套缩放、不重开一段**（旧写法的顺序是「套缩放 → 下一帧再开窗」，
-            --   于是第二段必然带着已套的缩放读原值）。续段 = 继续停在自然档，等客户端把本图叠加层摆出来。
-            SMFIT.natLeft = (tonumber(SMFIT.natLeft) or 0) - 1
-            smFitHold, SMFIT.holdAge = SMFIT_HOLD_SEC, 0
-            pcall(featApplyScale, 1)
-            mfLog("抓原值窗口**续段**：%s 到点仍没读齐（记录 %d 条）⇒ 继续停在自然档再等 %.1fs（本图还剩 %d 段预算）",
-              tostring(SMFIT.mapKey or "?"), smFitRecCount(), SMFIT_HOLD_SEC, tonumber(SMFIT.natLeft) or 0)
-          end
-          if smFitHold == 0 then
-            pcall(featApplyScale, tonumber(SM_CFG.scale) or 1)
-            -- ★★★1.75.45b：窗口一收口**当拍就折算**（`accFit` 顶满 ⇒ 这一拍的折算节拍立刻到点）。
-            --   为什么必须：本拍 `es` 是刚套上去的那一档（读在窗口块之后）⇒ 同一拍折算写进去的就是最终值；
-            --   不顶的话要等下一个节拍（0.1~0.3s），那段时间地图已经缩小、探索层还是没折的大矩形 = 一眼可见的错位。
-            accFit = 1e9
-            -- ★1.75.5（用户要求「获取原值的地方打印出来」）：窗口收口改成**看得见**的一行（每图最多一次）
-            --   ★★措辞必须与**实际读到的条数**挂钩：真机出过「0 条也报『已抓到原值』」⇒ 用户完全被误导
-            --     （那次是因为客户端还没摆叠加层，而旧代码把空候选当成「已齐」落了闩）。
-            local nRecWin = smFitRecCount()
-            -- ★★★1.75.5（用户：「好的功能正常了.清理下这些调试日志」）：**成功**那一句不再出口
-            --   （成功由「抓原值：已读到 N 条 ⇒ 落闩」那一条统一报，避免同一件事两行）；
-            --   只有**真的没读到**才出声（一次），详细档照旧两行都打。
-            if SMFIT.captured and nRecWin > 0 then
-              smFitSayV("抓原值窗口结束：**已抓到原值 %d 条** ⇒ 现在套缩放 scale=%s（此前一直是自然档，读到的就是原值）",
-                nRecWin, tostring(SM_CFG.scale))
-            elseif not SMFIT.saidEmpty then
-              SMFIT.saidEmpty = true
-              smFitSay("抓原值：窗口结束仍**没读到原值**（本图记录 %d 条 —— 客户端还没把叠加层摆出来）⇒ 先缩放，之后 1 秒一次继续补抓",
-                nRecWin)
-            else
-              smFitSayV("抓原值窗口结束：**还没读到原值**（记录 %d 条）⇒ 继续 1 秒一次补抓", nRecWin)
+        if (not MDQ.staleOn()) and hasLedger then
+          pcall(MDQ.staleShowAll, "残留图层清理已关")
+          hasLedger = false
+        end
+        if open and mkNow and MDQ.staleOn() then
+          local tS = (type(GetTime) == "function") and GetTime() or 0
+          local armed = (tonumber(ST.staleUntil) or 0) > tS
+          local gapS = armed and MDQ.STALE_GAP or MDQ.STALE_GAP_IDLE
+          if (armed or hasLedger) and ((tS - (tonumber(ST.staleAt) or -99)) >= gapS) then
+            ST.staleAt = tS
+            local hidS, backS, seenS, fileS, nLed, lvlWhyS = MDQ.staleTick()
+            hidS, backS = tonumber(hidS) or 0, tonumber(backS) or 0
+            ST.staleHidN = (tonumber(ST.staleHidN) or 0) + hidS
+            ST.staleBackN = (tonumber(ST.staleBackN) or 0) + backS
+            if hidS > 0 or backS > 0 then
+              pcall(mfLog, "残留图层：地图=%s（%s）｜ 本拍藏 %d 个叠加层 ｜ 还回 %d 个 ｜ 看过池位 %d 个 ｜ 藏账还留 %d 条",
+                tostring(fileS), tostring(lvlWhyS or "?"), hidS, backS, tonumber(seenS) or 0, tonumber(nLed) or 0)
+            end
+            -- ★一个池位都没认出 ⇒ 每图出声一次（「判据与真机对不上」若静默，用户会以为修好了而残留照旧）；
+            --   ★「让位」那一拍不许出声（那时 `staleTick` 根本没干活，`seenS == 0` 是让位不是「名字对不上」）。
+            local stood = string.find(tostring(lvlWhyS or ""), "接管守护", 1, true) ~= nil
+            if (not ST.staleSaidNoPool) and (not stood) and (tonumber(seenS) or 0) == 0 and hidS == 0 then
+              ST.staleSaidNoPool = true
+              smFitSay("残留图层清理：地图=%s（%s）**没认出任何 WorldMapOverlay 池位** ⇒ 这一档什么都没藏"
+                .. "（图上若仍有残留，请敲 `/ehm mapfit 残留` 把首行发我 —— 那行有真机上的纹理名）",
+                tostring(fileS), tostring(lvlWhyS or "?"))
+            end
+            if (not ST.staleSaid) and (tonumber(ST.staleHidN) or 0) > 0 then
+              ST.staleSaid = true
+              smFitSay("残留图层清理：地图=%s（%s）｜ 已藏 **%d** 个叠加层：%s"
+                .. "（**本图没有探索层数据** ⇒ 全藏、只 Hide 不改几何；**切到有数据的区域图会全部还回**；全量见 /ehm mapfit 残留）%s",
+                tostring(fileS), tostring(lvlWhyS or "?"), tonumber(ST.staleHidN) or 0, MDQ.staleNames(8),
+                ((tonumber(ST.staleBackN) or 0) > 0) and ("；期间已还回 " .. tostring(ST.staleBackN) .. " 个") or "")
             end
           end
-        elseif smFitOn() and smFitNeedFold() and (not SMFIT.captured) and (tonumber(SMFIT.natLeft) or 0) > 0
-          -- ★★★1.75.45c（用户要求）：「**没缓存的走初次打开的流程**」—— 本图（签名）只要已经有原值记录，
-          --   就**绝不再开自然档窗口**（不再有「换图必先满尺寸 1~2 秒」），直接用缓存折算；
-          --   后来才出现的层走 `smFitCapture` 的**增量**那条路（k 自证 ⇒ 非自然档直接补记，同样不开窗口）。
-          and next(SMFIT.rec or {}) == nil then
-          -- ★条件不再要求「本图一条记录都没有」：`SMFIT.captured` 被「在用却没原值」的层推翻时（1.75.24 那条补抓路），
-          --   后来才出现的层**同样必须在自然档读**，否则又是记录偏小 ⇒ 那一层永远折不动。
-          smFitHold = SMFIT_HOLD_SEC
-          SMFIT.holdAge = 0
-          SMFIT.natLeft = (tonumber(SMFIT.natLeft) or 0) - 1
-          -- ★★★就是这一句把「先不缩放」从**愿望**变成**事实**：旧写法只靠 `featApplyScale` 的 hold 判定挡写，
-          --   而外框在换图后本来就是上一张图的 0.7/0.5（客户端不会替我们复位）⇒ 读到的原值全被 ÷esC 搅过。
-          pcall(featApplyScale, 1)
-          -- ★★★1.75.45（用户要求）：「一开始就把**未适配完成**的探索层尽快尽早设成不可见」——
-          --   窗口开的那一拍**当场**把本图在用的层隐形（此刻本来就一条记录都没有 ⇒ 全是「未适配」）。
-          --   ★`es` 传 nil：这一拍只按「有没有原值记录」判，不做几何比对（窗口刚开、记录必然为空）。
-          --   ★★门 = `not SMFIT.foldedThisMap`：抓不到原值的图会**反复开窗**（窗口有界 2s + 1 秒重试），
-          --     不挡的话就是「隐形 → 兜底超时显示 → 又开窗隐形」= **一秒一闪**（本模块 harness 实测抓到）。
-          local nGhostHide = 0
-          if not SMFIT.foldedThisMap then
-            local okGH, nGH = pcall(smFitGhostHide, nil)
-            if okGH then nGhostHide = tonumber(nGH) or 0 end
-          end
-          -- ★同上：开窗这一行是「本图还没原值 ⇒ 先不缩放」的唯一可见证据（每图一次）
-          -- ★条件里带 `smFitNeedFold()`：**不折算的档**根本不会读原值 ⇒ 不许把地图按在自然档上白等 2 秒
-          smFitSayV("抓原值窗口开启：本图（%s）还有层没有原值 ⇒ **已把外框按回自然档 1.00、暂不缩放**，最多 %.1fs 内读一次"
-            .. "（读到立刻套缩放；本图还剩 %d 段预算）；未适配的探索层已先隐形 %d 层（折算完成即恢复显示）",
-            tostring(SMFIT.mapKey or "?"), SMFIT_HOLD_SEC, tonumber(SMFIT.natLeft) or 0, nGhostHide)
         end
       end
-      -- ★★★1.75.5：**每帧守住地图缩放**（顺序：排在「抓原值窗口」**之后** —— 窗口期本轮不写，`featApplyScale` 自己让位）。
-      --   真机日志实证 `折算暂缓：… 自身 GetScale=1.000 ｜ 父帧=有` ⇒ 是**客户端自己**把地图帧缩放重置回 1.0；
-      --   旧写法只在 0.2s 节拍里守 ⇒ 开图/换图后有一段「没缩放」窗口（用户报的「载入后缩放异常」）。
-      --   读一次 `GetScale` 很便宜、`featApplyScale` 自带「同档不重写」⇒ **只有漂了才写**。
+      -- ④ 关图 ⇒ 把藏过的层**全部还回**（残留清理 + 接管守护；绝不把「藏」的状态带进下一张图）
+      local closedNow = (not open) and ST.open
+      if closedNow then
+        pcall(MDQ.staleShowAll, "地图已关")
+        pcall(MDQ.holdShowAll, "地图已关")
+      end
+      -- ⑤ 每帧守住地图缩放（读一次 GetScale 很便宜、`featApplyScale` 自带「同档不重写」⇒ 只有漂了才写）
       if open then pcall(featApplyScale, tonumber(SM_CFG.scale) or 1) end
       local fr = _G["WorldMapDetailFrame"]
       local es = nil
       if (type(fr) == "table" or type(fr) == "userdata") then
-        -- ★★★1.75.9：**不读 `GetEffectiveScale`** —— 真机实测它在本客户端**滞后**：
-        --   第一次开启读到 1.00（于是那一次等于没折算 = 用户看到的「正常开启不生效」），
-        --   关一次再开才读到 0.70 ⇒ 用户原话「**在重新打开关闭之后才能正确读取到缩放**」。
-        --   ⇒ 改用**沿父链连乘**（`smEffScale`：`WorldMapFrame 0.70 × DetailFrame 1.00 = 0.70`），
-        --     它读的是我们自己刚写进去的 `SetScale`，写完立刻就是最新值、不会滞后。
+        -- ★1.75.9：**不读 `GetEffectiveScale`**（本客户端它滞后）⇒ 沿父链连乘，读的是我们自己刚写进去的值
         local eff = smEffScale(fr)
         if tonumber(eff) and tonumber(eff) > 0 then es = tonumber(eff) end
         if not es and type(fr.GetEffectiveScale) == "function" then
-          local ok, v = pcall(fr.GetEffectiveScale, fr) -- 兜底：父链读不到时才用（可能滞后）
+          local ok, v = pcall(fr.GetEffectiveScale, fr)
           if ok and tonumber(v) then es = tonumber(v) end
         end
       end
-      -- ② 过渡（开图 / es 变化）⇒ 进爆发期，并把节拍**顶满**（下一帧就动手，不等 0.1s）
-      local justOpened = (open and not SMFIT.open)
-      -- ★1.75.9：**闩住「刚开图」这个信号** —— ③ 是 0.2s 节拍，若开图那一拍恰好不在节拍点上，
-      --   光靠 `justOpened` 会漏掉这次应用（于是又变成「要开关一次才生效」）。
-      if justOpened then SMFIT.pendingApply = true end
-      if justOpened then SMFIT.burst = SMFIT_BURST_SEC accFit = 1e9 end
-      if es and esCache and math.abs(es - esCache) > 0.001 then SMFIT.burst = SMFIT_BURST_SEC accFit = 1e9 end
-      if not open then SMFIT.burst = 0 end
-      SMFIT.open, SMFIT.es = open, (es or SMFIT.es)
+      local justOpened = (open and not ST.open)
+      if justOpened then ST.pendingApply = true end
+      if justOpened then
+        ST.burst = SM_BURST_SEC
+        accSwm = 1e9
+        ST.staleUntil = ((type(GetTime) == "function") and GetTime() or 0) + MDQ.STALE_SEC
+        ST.staleAt, ST.staleSaid, ST.staleSaidNoPool = -99, false, false
+        ST.staleHidN, ST.staleBackN = 0, 0
+      end
+      if es and esCache and math.abs(es - esCache) > 0.001 then ST.burst = SM_BURST_SEC accSwm = 1e9 end
+      if not open then ST.burst = 0 end
+      ST.open, ST.es = open, (es or ST.es)
       esCache = es or esCache
-      if (tonumber(SMFIT.burst) or 0) > 0 then SMFIT.burst = math.max(0, SMFIT.burst - dt) end
-      -- ③ 既有的「开图保持」节拍（0.2s；★保持原行为不动）
+      if (tonumber(ST.burst) or 0) > 0 then ST.burst = math.max(0, ST.burst - dt) end
+      -- ⑥ 「开图保持」节拍（0.2s）：开图那一刻**无条件幂等应用一次**（否则开了功能但地图是关的时候，那一位已是 true ⇒ 开图反而不应用）
       if acc >= 0.2 then
         acc = 0
         if open then
-          -- ★★★1.75.9（用户要求：「开启缩放默认设置 0.7 / 透明度 0.7，不管有没打开；**打开就生效**，不打开就不生效」）：
-          --   **每次开图那一刻无条件幂等应用一次**。旧写法只在 `not FEAT.applied` 时应用，而开启时若地图是**关的**，
-          --   那一位已经是 true ⇒ **开图那一次反而不应用**（用户就得多开/关一次才生效）。`featApply` 本身幂等，重复调无副作用。
-          if SMFIT.pendingApply or not FEAT.applied then
+          if ST.pendingApply or not FEAT.applied then
             featApply()
             FEAT.applied = true
-            SMFIT.pendingApply = false
+            ST.pendingApply = false
           end
-          featKeep() -- ★开图期间持续保持（黑幕重藏 + 透明度/缩放漂移校准）
+          featKeep() -- 开图期间持续保持（黑幕重藏 + 透明度/缩放漂移校准 + 居中窗口 + 位置记忆）
         elseif FEAT.applied then
           FEAT.applied = false
         end
       end
-      -- ④ 叠加层适配：走到这里说明**总开关是开的**（本函数开头已闸）⇒ 这里只需看子开关 mapFit（nil = 默认开）。
-      --   ★关闭时的几何还原由 EVAL_SM_SET(false) 当场做（不再靠本 tick 兜）。
-      if not smFitOn() then return end
-      if not open or not es or es <= 0 then
-        SMFIT.mapAge = 0 -- 地图关着 ⇒ 计时归零（下次开图重新等版式稳定）
-        return
+      -- ⑦ 「打开世界迷雾」渲染节拍：爆发窗（开图/换图/缩放变化后 2s）内**逐帧重申**，之后 0.3s 一拍。
+      --   ★渲染 + 「接管守护（数量/存在性）」同在 `MDQ.renderCurrent` 里（守护排在渲染之后 ⇒ 判得出谁是我们刚画的）。
+      if not (open and es and es > 0) then return end
+      local gap = ((tonumber(ST.burst) or 0) > 0) and SM_BURST_GAP or SM_IDLE_GAP
+      if accSwm >= gap then
+        accSwm = 0
+        pcall(MDQ.renderCurrent, es, false, false)
       end
-      -- ★★★1.75.5：地图身份的对齐已经**上移到本函数开头**（必须早于「抓原值窗口」）—— 这里不再重复做。
-      SMFIT.mapAge = (tonumber(SMFIT.mapAge) or 0) + dt
-      -- ★★★1.75.9：折算策略（默认折算；`auto` 才先探测）。探测结论只读、只影响 auto 档。
-      if smFitMode() == "auto" and SMFIT.needFold == nil then SMFIT.needFold = smFitDetect() end
-      if not smFitNeedFold() then return end
-      -- ★原值必须在**自然档**抓一次（见 smFitCapture），绝不能拿已折过的值当原值。
-      --   ★★★1.75.13：还要**等客户端把本图版式摆稳**（SMFIT_SETTLE）—— 开图那一瞬抓到的往往是
-      --   「还没布局 / 本图不用」的残留几何（真机存档里 6 条原值完全相同就是这么来的）。
-      --   ★★★1.75.5：再加一道**有界重试**门（`capAge`/`SMFIT_CAP_GAP`）—— 抓原值内部会把缩放临时按 1，
-      --   不落闩时**每帧**重跑就是 1.75.4 那场事故（地图缩放每帧抖一次 + 取证环 1 秒刷满 + 折算刷屏）。
-      if SMFIT.captured then
-        SMFIT.capAge = 99 -- 已落闩 ⇒ 下次换图时又立刻可抓
-      else
-        SMFIT.capAge = (tonumber(SMFIT.capAge) or 99) + dt
-        -- ★★★1.75.45b：窗口开着时**必须等窗口稳下来再读** —— 窗口开启那一拍我们自己刚 `SetScale(1)`，
-        --   本客户端会重排/清锚点（1.75.5 的实测结论）⇒ 立刻读只会读到中间态或读不到。
-        --   `SMFIT.natSettle`（1.0s）＝ 与 `/ehm fitnow` 的「等满 2s」同一意图的有界版（窗口总长 2s，读齐即收）。
-        local settled = ((tonumber(smFitHold) or 0) <= 0) or ((tonumber(SMFIT.holdAge) or 0) >= (tonumber(SMFIT.natSettle) or 1.0))
-        if SMFIT.mapAge >= SMFIT_SETTLE and SMFIT.capAge >= SMFIT_CAP_GAP and settled then
-          SMFIT.capAge = 0
-          pcall(smFitCapture)
-        end
-      end
-      local gap = ((tonumber(SMFIT.burst) or 0) > 0) and SMFIT_BURST_GAP or SMFIT_IDLE_GAP
-      -- ★★★1.75.45（用户要求）：「未适配完成的探索层先隐形」—— 与折算**同一个节拍**扫一遍未适配的层
-      --   （含「有记录、但客户端刚重摆过 ⇒ 还没对齐」那种，例如切回一张看过的图）。
-      --   ★`SMFIT.foldedThisMap` = 本次访问已经折完（或兜底放弃）⇒ 不再隐形，避免反复隐形/显示。
-      local ranApply, nWaitFold = false, 0
-      if (not SMFIT.foldedThisMap) and next(SMFIT.ghost or {}) ~= nil then pcall(smFitGhostKeep) end
-      if (not SMFIT.foldedThisMap) and accFit >= gap then
-        pcall(smFitGhostHide, es) -- 按「没原值 或 还没对齐」隐形（读不到几何的不动）
-      end
-      if accFit >= gap then
-        accFit = 0
-        ranApply = true
-        -- ★★★1.75.24（用户报障「工具箱→大地图缩放：13、14 探索层未正确应用缩放」）：
-        --   smFitApply 的**第 3 个返回值**本来就等于「在用、却没有原值记录」的层数（它内部那一段一直在算），
-        --   旧写法**直接丢掉** ⇒ 落闩之后**没有任何一条路**会再抓原值：
-        --     · 落闩判据（smFitCapture）只看「本轮 todo」，而 todo **不含**「当时隐藏 / GetTexture()==nil
-        --       （贴图还没载入）」的层 ⇒ 已就绪的那批层一齐就落闩；
-        --     · 等 13/14 稍后显示出来/贴上贴图，它们**永远没有记录**，而折算只认有记录的层
-        --       ⇒ 那两层永远不会被折算（= 用户看到的现象：同一个 es、一部分折了一部分没折）。
-        --   ⇒ 现在：只要还有「在用却没原值」的层，就**推翻落闩**、交给上面那道**有界**重试门
-        --     （SMFIT_CAP_GAP = 1 秒一次 + SMFIT_SETTLE 版式稳定门）重抓，抓到即由 apply 折算。
-        --   ★口径不变：只对「当前显示且有贴图」的层动手（与抓原值/折算同一判定），绝不碰别的图的残留层。
-        -- ★★★1.75.45c **取证指纹（每图一次，写盘可见）**：把每一层的「记录 / 期望写入 / 实测读回 / 判定」摊开。
-        --   为什么必须：读回口径（读回=逻辑值 还是 逻辑值×es）在这台客户端上一直没有**确定**的答案，
-        --   而「层看起来不对」既可能是「该折没折」也可能是「折了不该折的」——只靠现有日志两轮都判不出来。
-        --   这一行就是判据：目视「偏大」应对上「实测=记录」；「偏小」应对上「实测=期望×es」。
-        --   ★必须排在 smFitApply **之前**（这样实测 = 我们动手前的活值）。
-        if (not SMFIT.saidPrint) and ranApply then
-          SMFIT.saidPrint = true
-          local nP = 0
-          for _, it in ipairs(smFitTargets()) do
-            if smFitInUse(it.o) and nP < 14 then
-              local r = SMFIT.rec[it.key]
-              if type(r) == "table" then
-                local okp, _p, _rel, _rp, px, py = pcall(it.o.GetPoint, it.o, 1)
-                local okw, pw = pcall(it.o.GetWidth, it.o)
-                local okh, ph = pcall(it.o.GetHeight, it.o)
-                local need, wx, wy, ww, wh = smFitNeedWrite(it.o, r, es)
-                local live = (okp and okw and okh) and string.format("%.1f,%.1f %.1f×%.1f", tonumber(px) or 0, tonumber(py) or 0, tonumber(pw) or 0, tonumber(ph) or 0) or "读不到"
-                nP = nP + 1
-                mfLog("指纹：%s 记录(%.1f,%.1f %.1f×%.1f) 期望(%.1f,%.1f %.1f×%.1f) 实测(%s) ⇒ %s",
-                  tostring(it.key), r.x, r.y, r.w, r.h, tonumber(wx) or 0, tonumber(wy) or 0, tonumber(ww) or 0, tonumber(wh) or 0,
-                  live, (need == nil) and "判不出" or (need and "要写" or "已对齐"))
-              end
-            end
-          end
-          local fsc = "?"
-          local _wm = featWm()
-          if _wm then local oks, v = pcall(_wm.GetScale, _wm) if oks then fsc = string.format("%.3f", tonumber(v) or 0) end end
-          mfLog("指纹小结：地图=%s ｜ es=%.3f ｜ 外框 GetScale=%s ｜ 窗口剩余=%.1f ｜ 记录 %d 条 ｜ 在用 %d 个（本拍折算前）",
-            tostring(SMFIT.mapKey or "?"), es, fsc, tonumber(smFitHold) or 0, smFitRecCount(), nP)
-        end
-        local _chgFold, _rdyFold
-        _chgFold, _rdyFold, nWaitFold = smFitApply(es, false) -- 成功了才播报（内部 3s 节流）
-        if (tonumber(nWaitFold) or 0) > 0 and SMFIT.captured then
-          SMFIT.captured = false
-          -- ★★★1.75.45b：**给「后出现的层」再留一段自然档窗口预算** —— 否则第一段窗口把 3 段预算用光之后，
-          --   后来才显示/贴上贴图的层永远读不到原值（⇒ 永不折算 = 1.75.24 那个「13/14 层没折」复发）。
-          --   ★天然有界：只有真的出现「在用却没原值」的层才会走到这里，每次最多补一段窗口。
-          if (tonumber(SMFIT.natLeft) or 0) <= 0 then SMFIT.natLeft = 1 end
-          mfLog("补抓：本图有 %d 个在用层还没有原值 ⇒ 推翻落闩、重新开抓（1 秒一次，有界；抓到即折算；已补一段自然档窗口预算）", tonumber(nWaitFold))
-        end
-      end
-      -- ★★★1.75.45（用户要求）：「**等缩放完成之后再显示可见度**」—— 判定放在**本拍折算之后**：
-      --   ① 本拍真的折算过 + 本图已抓到原值 + **没有层在等原值** ⇒ 折完了 ⇒ 当场还回可见度；
-      --   ② 兜底：已经隐形超过 `SMFIT_GHOST_SEC` ⇒ 无论折没折完都还回去（**绝不永久隐形**），
-      --      并把本图这次访问标成「放弃隐形」（否则下一个折算节拍又把它藏起来 = 一闪一闪）。
-      if next(SMFIT.ghost or {}) ~= nil then
-        local gNow = (type(GetTime) == "function") and GetTime() or 0
-        local gAge = gNow - (tonumber(SMFIT.ghostAt) or gNow)
-        if ranApply and SMFIT.captured and (tonumber(nWaitFold) or 0) == 0 then
-          SMFIT.foldedThisMap = true
-          pcall(smFitGhostShow, "本图折算已完成")
-        elseif gAge > SMFIT_GHOST_SEC then
-          SMFIT.foldedThisMap = true
-          pcall(smFitGhostShow, string.format("兜底超时（隐形 %.2fs 仍未折算完）", gAge))
-        end
+      if (tonumber(ST.burst) or 0) > 0 then
+        pcall(MDQ.renderCurrent, es, true, true) -- 爆发窗内逐帧重申（silent：一个字都不打、也不进取证环）
       end
     end)
   end
@@ -3675,76 +3258,47 @@ function EVAL_SM_SET(on)
   local tb = smTbCfg(false)
   if tb then tb.simpleMap = on and true or false end
   if on then
-    -- ★★★1.75.9（用户实测：载入后点开启 ⇒ 探索层缩两遍）：**先探测 + 抓原值，再改缩放**。
-    --   顺序铁律「读原值 → 写新值」（1.74.31 组 206 的教训）—— 旧顺序是先 SetScale(0.7) 再在 tick 里记原值，
-    --   而本客户端几何读回**含缩放** ⇒ 记下的原值已经是缩过的值，再折一次就是第二遍。
-    --   ★`smFitPrepare()` 内部只读探测：客户端自己会级联 ⇒ 我们**一个几何都不碰**（并把以前折过的还回去）。
-    SMFIT.needFold = nil   -- 每次开启重新探测（客户端行为可能跟着地图状态变）
-    pcall(smFitPrepare)
-    mfLog("开关 ON：策略=%s 探测=%s 抓原值=%d 条 缓存记录=%d 条", smFitMode(),
-      (SMFIT.needFold == nil) and "未判定" or tostring(SMFIT.needFold ~= false),
-      smFitOrigCount(),
-      (function() local k = 0 for _ in pairs(SMFIT.rec or {}) do k = k + 1 end return k end)())
+    -- ★1.75.52：原来这里先做「只读探测 + 抓原值准备」（`smFitPrepare`），顺序铁律是「先读原值、再写新值」——
+    --   整条探索层适配摘除后**不再需要**：我们只改外框缩放/透明度，客户端的探索层一个字节都不碰。
     -- ★★★1.74.36-3：**开启即套默认档**（缩放 0.7 / 透明度 0.7 / GUI重开 不启用）——用户原话
     --   「开启之后默认值设置 0.7缩放 0.7 透明度 不启用GUI」；先套默认值，再应用/就位。
     local a, s = smApplyDefaults()
     pcall(featKeep)   -- 事件帧就位（开图时自动应用）
     pcall(featApply)  -- 立刻应用一次
     -- ★★★1.75.7：**应用过就要记下来**（FEAT.applied）——关闭路径拿它判「到底动没动过地图纹理」。
-    --   旧版只有 tick 那一条路会置这一位 ⇒ 开启后立刻关闭时，关闭路径会以为「没动过」而跳过复位。
     FEAT.applied = true
 
     P(string.format("简易地图：已启用（默认档：缩放 %.2f / 透明度 %.2f / GUI重开 %s；面板或 Shift/Ctrl+滚轮可再调）%s",
       s, a, smReopenOn() and "开" or "关",
       featOpenNow() and "；当前地图=开 ⇒ 已立刻生效" or "；当前地图=关 ⇒ **开图即生效**（默认档已写入配置）"))
-    -- ★★★1.75.5（**用户要求**「获取原值的地方添加日志信息，打印出来」）：
-    --   真机实证（用户截图：**重开后没重新打开地图**那一次）聊天框里一条抓原值都没有 ⇒ 用户无法判断是「没抓」还是「抓了没成」。
-    --   所以这里把**抓原值的状态与下一步**当场说清（尤其是地图没开时：抓原值必须等地图打开，这是唯一的原因）。
-    P(string.format("　抓原值：本图记录 %d 条 ｜ 落闩=%s ｜ 地图=%s%s", smFitRecCount(),
-      SMFIT.captured and "是" or "否", featOpenNow() and "开" or "关",
-      featOpenNow() and string.format(" ⇒ 等版式稳定 %.1fs 后读一次原值（读不到 1 秒后重试）", SMFIT_SETTLE)
-        or string.format(" ⇒ **要等你把地图打开**才读得到（打开后先等 %.1fs 再读自然档原值；这期间地图保持 %.2f 缩放）",
-          SMFIT_SETTLE, s)))
-    -- ★★★1.75.5：策略是非默认档时**当场说清**（否则用户会以为「开关坏了」）。
-    --   实案：`mapFitMode = "nofold"` 落存档 + 主开关**不复位策略** ⇒ 用户怎么关开都「始终不生效」，却看不到原因。
-    if smFitMode() ~= "fold" then
-      P("　★★注意：折算策略当前 = " .. smFitModeLabel() ..
-        (smFitMode() == "nofold" and " ⇒ 叠加层适配**一个几何都不碰**（这就是「关开都不生效」的原因）"
-          or " ⇒ 是否折算听探测结论") ..
-        "；恢复默认档：/ehm mapfit mode fold（本档只在本会话有效，/reload 后自动回默认）")
-    end
+    -- ★1.75.52：这条原来是「抓原值状态」（记录几条 / 落闩没有 / 地图开没开）—— 那一族已摘除，
+    --   现在开图要做的事只有一件：**按 S_WorldMap 表把本图整张画出来**（「打开世界迷雾」）。
+    P("　打开世界迷雾 = " .. (MDQ.swm() and "**开**（开图即按 S_WorldMap 表整张渲染；表里没有这张图 ⇒ 一个字节都不碰）"
+      or "关（不碰叠加层，客户端原生行为）"))
   else
     -- ★★★1.75.7 关闭 = 把**我们改过的**东西还回去（用户要求：「未开启地图缩放功能不需要进行任务纹理的操作」）。
-    --   ★★判据 = **确实动过**才写：FEAT.applied（我们应用过）或会话里还留着原值记录。
+    --   ★★判据 = **确实动过**才写：FEAT.applied（我们应用过）。
     --     从未开启过 ⇒ **一个地图纹理都不碰**（连透明/缩放都不写 1 —— 它们本来就没被我们改过）。
-    --   顺序：先还原叠加层几何（读首次折算时记下的原值）→ 再复位透明度/缩放/位置 → 最后如实播报。
-    local nOrig230 = smFitOrigCount()
-    local touched230 = (FEAT.applied == true) or (nOrig230 > 0)
-    mfLog("开关 OFF：策略=%s 动过=%s（applied=%s 原值=%d 条）", smFitMode(), tostring(touched230),
-      tostring(FEAT.applied == true), nOrig230)
+    --   顺序：收掉「世界迷雾」自建的层 + 把藏过的原生层全部还回 → 再复位透明度/缩放/位置 → 最后如实播报。
+    local touched230 = (FEAT.applied == true)
+    mfLog("开关 OFF：动过=%s（applied=%s）", tostring(touched230), tostring(FEAT.applied == true))
     if not touched230 then
       FEAT.applied = false
       P("简易地图：已停用（**本就没启用过 ⇒ 没动过任何地图纹理**；透明度/缩放保持原样）")
     else
-      local nRestore230, nMiss230, nBad230 = 0, 0, 0
-      local wrote230 = (SMFIT.wrote == true)
-      if wrote230 and type(smFitRestore) == "function" then
-        local okR, aR, bR, cR = pcall(smFitRestore, true)
-        if okR then nRestore230, nMiss230, nBad230 = tonumber(aR) or 0, tonumber(bR) or 0, tonumber(cR) or 0 end
-      end
+      -- ★1.75.52：世界迷雾那两族的还原（我们自建的层收掉 + 藏过的原生层 Show 还回）
+      local okR, nRestore230 = pcall(MDQ.release, "关闭缩放大地图")
+      if not okR then nRestore230 = 0 end
+      pcall(MDQ.staleShowAll, "关闭缩放大地图")
+      pcall(MDQ.holdShowAll, "关闭缩放大地图")
       FEAT.applied = false
-      SMFIT.wrote = false -- ★1.75.9：这一轮写过的痕迹清了（下轮重新记）
       pcall(featReset)  -- 透明/缩放/位置复位
       -- ★★★1.75.9：**把装上去的钩子/帧收干净**（用户要求：「开启/关闭要做好探索层纹理的事件清理」）。
       pcall(featTeardown)
       P("简易地图：已停用（已复位：透明度 1 / 缩放 1 / 位置回屏幕中央；坐标行/拖拽柄已收起"
-        .. (wrote230 and ((nRestore230 > 0) and ("；叠加层几何已还原 " .. nRestore230 .. " 项") or "；叠加层几何**没有原值可还原**")
-            or "；叠加层几何**我们一次都没写过** ⇒ 没动它")
-        .. ((nMiss230 > 0) and ("；" .. nMiss230 .. " 项没有原值 ⇒ 如实跳过") or "")
-        .. ((tonumber(nBad230) or 0) > 0 and ("；" .. nBad230 .. " 项读回对不上 ⇒ 如实报出") or "") .. "）")
+        .. "；世界迷雾自建的层已收起 " .. tostring(tonumber(nRestore230) or 0) .. " 层、藏过的原生探索层已全部还回）")
     end
   end
-
 
   return true
 end
@@ -3828,59 +3382,54 @@ if type(SlashCmdList) == "table" then
         SM_CFG.mapFitTrace = {}
         local out = (type(EVAL_SAY_FORCE) == "function") and EVAL_SAY_FORCE or P
         out("[简易地图] 折算取证已清空")
-      elseif sub == "dump" or sub == "探针" or sub == "清单" then
-        -- ★★★1.75.13：只读清单（地图身份 / 客户端叠加层真值 / 每个层的在用判定与记录）——「谁写的、该是多少」一眼可判
-        local out2 = (type(EVAL_SAY_FORCE) == "function") and EVAL_SAY_FORCE or P
-        for _, ln in ipairs(smFitDumpLines()) do out2("[简易地图] " .. tostring(ln)) end
-      elseif string.find(sub, "^mode") then
-        EVAL_SM_MAPFIT_MODE_SET(string.match(sub, "^mode%s+(%S+)") or "")
-      elseif string.find(sub, "^fresh") or sub == "重抓" then
-        -- ★★★1.75.5（用户要求「每次打开地图都当做是第一次打开」）：默认**开**；关掉 = 老行为（本会话内按图记住）
-        local v = string.match(sub, "^%S+%s+(%S+)") or ""
+      elseif sub == "残留" or sub == "stale" or sub == "残留层" or sub == "残留贴图" then
+        -- ★★★1.75.52（用户：「**在检测到地图签名变更的时候将这些不属于这块地图的贴图删除**」）：
+        --   两个用途都在这一条命令里：① `on|off` = 与 [设置] 里那个开关**同一个写口**的等价入口；
+        --   ② 不给参数 = **只读体检**（一个字节都不写）：把本帧每个 Texture 的「名字 / 贴图 / 图名段 / 结论」摊开。
+        --   ★**地图开着（有残留）时跑最有意义** —— 那是「路径口径对不对」的唯一真机判据。
+        local v = string.lower(string.match(sub, "^%S+%s+(%S+)") or "")
         if v == "on" or v == "开" then
-          SM_CFG.mapFitFresh = nil
+          pcall(EVAL_SM_STALE_SET, true)
         elseif v == "off" or v == "关" then
-          SM_CFG.mapFitFresh = false
+          pcall(EVAL_SM_STALE_SET, false)
         end
-        P("关图即清空原值 当前 = " .. (smFitFreshOn()
-          and "**开**（默认：每次关图删掉本图原值、把折过的几何还回自然档 ⇒ 下次开图重新读一遍再缩放）"
-          or "关（本会话内按图记住原值，只有换图 / `/reload` 才重抓）"))
-        P("　真值 SM_CFG.mapFitFresh=" .. tostring(SM_CFG.mapFitFresh) .. "（nil=开）｜ 代价：开图后约 0.4s 才发现原值（这段时间地图停在自然档）")
-        P("用法：/ehm mapfit fresh on | off")
-      elseif string.find(sub, "^verbose") or sub == "详细" then
-        -- ★★★1.75.5（用户：「好的功能正常了.清理下这些调试日志」）：详细档开关，**默认关**
-        local v = string.match(sub, "^%S+%s+(%S+)") or ""
+        local lines = MDQ.staleProbe()
+        for _, l in ipairs(lines) do
+          P(l)
+          pcall(mfLog, "%s", l)
+        end
+        -- ★★★1.75.52 六改：把「接管守护」的**数量 + 存在性**体检一并打印（同样**零副作用**）——
+        --   用户点名要「数量、存在性都要检查」⇒ 这两项必须有**只读**取证口，否则只能靠猜。
+        local hlines = MDQ.holdProbe()
+        for _, l in ipairs(hlines) do
+          P(l)
+          pcall(mfLog, "%s", l)
+        end
+        P("用法：/ehm mapfit 残留 [on|off]（别名 stale/残留层；不给参数 = 只读体检，含「接管守护」的数量/存在性）"
+          .. "｜等价开关：工具箱 → 缩放大地图 → [设置] →「打开世界迷雾」")
+      elseif sub == "swm" or sub == "贴图替代" then
+        -- ★★★「打开世界迷雾」（1.75.51 时叫「S_WorldMap 贴图替代」）：与工具箱 → 缩放大地图 → [设置] 里那个开关**同一个真值入口**
+        --   （唯一写口 EVAL_SM_SWM_SET）—— 地图开着时敲不了命令（本项目定案），所以主入口是设置里的开关；
+        --   这条命令只是给它一个**等价入口**（取证 / 脚本化用）。
+        local v = string.lower(string.match(sub, "^%S+%s+(%S+)") or "")
         if v == "on" or v == "开" then
-          SM_CFG.mapFitVerbose = true
+          pcall(EVAL_SM_SWM_SET, true)
         elseif v == "off" or v == "关" then
-          SM_CFG.mapFitVerbose = nil
+          pcall(EVAL_SM_SWM_SET, false)
+        else
+          P("打开世界迷雾 = **" .. (MDQ.swm() and "开" or "关") .. "**")
+          P("　" .. EVAL_SM_SWM_TIP())
         end
-        P("详细日志 当前 = " .. (smFitVerboseOn()
-          and "开（逐条原值 / 第 N 次尝试 / 每次重试与折算都上屏）"
-          or "**关**（默认：安静档 —— 每次开图最多「已读到 N 条」+「折算已对齐」两行，关图一行；真出问题才出声）"))
-        P("　真值 SM_CFG.mapFitVerbose=" .. tostring(SM_CFG.mapFitVerbose) .. "（nil=关）｜ 全过程永远进取证环：/ehm mapfit trace")
-        P("用法：/ehm mapfit verbose on | off")
-      elseif sub == "on" or sub == "开" then
-        EVAL_SM_MAPFIT_SET(true)
-      elseif sub == "off" or sub == "关" then
-        EVAL_SM_MAPFIT_SET(false)
-      elseif sub == "restore" or sub == "还原" then
-        smFitRestore(false)
+        P("用法：/ehm mapfit swm [on | off]（不给参数 = 只报当前）｜等价开关：工具箱 → 缩放大地图 → [设置]")
       else
-        smFitDiag()
+        -- ★1.75.52（用户定：整条「探索层适配」摘除）⇒ `mapfit` 只剩三条真在干活的路
+        --   （swm / 残留 / trace 族），不给子命令 = **现读现报**一份状态。
+        P("缩放大地图：模块=" .. (EVAL_SM_ENABLED() and "**开**" or "关")
+          .. " ｜ 打开世界迷雾=" .. (MDQ.swm() and "**开**" or "关")
+          .. " ｜ 残留图层清理=" .. (MDQ.staleOn() and "开" or "关"))
+        P("用法：/ehm mapfit swm [on|off] ｜ 残留 [on|off]（只读体检，含接管守护的数量/存在性）｜ trace [N] ｜ traceclear ｜ 清缓存")
+        P("　★「叠加层适配（抓原值/折算/隐形）」已按 1.75.52 要求整条摘除 —— 「打开世界迷雾」的表驱动全渲染是它的替代方案。")
       end
-      P("用法：/ehm mapfit on | off | restore | diag | dump（只读清单）| trace | traceclear | mode fold|auto|nofold | fresh on|off | verbose on|off（不给子命令 = diag）")
-      -- ★1.75.45：待命模式状态（把读值口挂到命令上 ⇒ 「活」的诊断口，不是孤儿）
-      P(string.format("待命模式（`/ehm fitnow 待命`）：%s%s ｜ 让位中=%s",
-        EVAL_SM_TEST_FIX_ARM() and "**开**" or "关",
-        EVAL_SM_TEST_FIX_ARM() and string.format("（还剩 %d 张图会自动跑）", EVAL_SM_TEST_FIX_ARM_LEFT()) or "",
-        EVAL_SM_TEST_FIX_ACTIVE() and "是（手动适配进行中）" or "否"))
-      -- ★★★1.75.45b：**自然档窗口**状态（「原值只在自然档读」这条修法的活口 —— 下次取证直接看这里）
-      P(string.format("自然档窗口：本图还剩 %d 段 ｜ 窗口剩余 %.1fs（已开 %.1fs）｜ 外框缩放=%s%s",
-        EVAL_SM_TEST_NAT_LEFT(), tonumber(smFitHold) or 0, tonumber(SMFIT.holdAge) or 0,
-        EVAL_SM_TEST_NAT_SCALE(),
-        (math.abs((tonumber(EVAL_SM_TEST_NAT_SCALE()) or 1) - 1) > 0.001 and (tonumber(smFitHold) or 0) <= 0)
-          and "　★注意：现在不是自然档 ⇒ 抓原值会被跳过（等换图/开图开窗口）" or ""))
     elseif msg == "reset" or msg == "复位" then
       featReset()
     elseif msg == "default" or msg == "默认" or msg == "默认档" then
@@ -3890,34 +3439,6 @@ if type(SlashCmdList) == "table" then
       P(string.format("默认档已套用：缩放 %.2f / 透明度 %.2f / GUI重开 %s", s, a, smReopenOn() and "开" or "关"))
       P(string.format("当前真值：alpha=%s scale=%s guiReopen=%s（面板/滚轮可再调）",
         tostring(SM_CFG.alpha), tostring(SM_CFG.scale), tostring(SM_CFG.guiReopen)))
-    elseif msg == "fitnow" or msg == "适配" or msg == "修正"
-      or string.find(msg, "^fitnow%s") == 1 or string.find(msg, "^适配%s") == 1 or string.find(msg, "^修正%s") == 1 then
-      -- ★★★1.75.45（用户实测：「/ehm fitnow 这个命令无法跑. 地图开着无法进行 GUI 交互」）：
-      --   本客户端**开图时 UIParent 被隐藏** ⇒ 地图里既敲不了命令也点不了 GUI ⇒ 「在地图上跑 fitnow」这条路**不存在**。
-      --   ⇒ 新增**待命模式**：命令在地图**关着**时先敲，之后由 tick 在**每次新开/换图**时自动跑同一套五步（逐步打印，
-      --   全部进取证环 ⇒ 事后 `/ehm mapfit trace` 读得到，不需要在地图里看屏）。
-      local sub = string.lower(tostring(string.match(msg, "^%S+%s+(.*)$") or ""))
-      if sub == "待命" or sub == "自动" or sub == "auto" or sub == "arm" then
-        SM_FIX.arm, SM_FIX.armKey = true, nil
-        SM_FIX.armLeft = tonumber(SM_FIX.armMax) or 3
-        SM_FIX.armAt = 0 -- ★1.75.45b：重新待命 ⇒ 最小间隔从零起算（第一次换图必触发）
-        P(string.format("已进入**待命模式**：接下来**每次新开地图 / 换一张图**都会自动跑一遍"
-          .. "「置自然档 1.00 → 等 2s → 读原值 → 套缩放 → 折算」并逐步打印（最多 %d 张图；本命令请在地图**关着**时敲）。",
-          SM_FIX.armLeft))
-        P("　★地图里不需要任何操作（本客户端开图会隐藏 UIParent）；结果事后用 `/ehm mapfit trace` 看。取消：`/ehm fitnow 取消`")
-      elseif sub == "取消" or sub == "关" or sub == "off" or sub == "cancel" then
-        SM_FIX.arm, SM_FIX.armKey = false, nil
-        P("已取消待命模式（不再自动跑手动适配）")
-      else
-        -- ★★★1.75.5（用户指定「本办法」）：**手动适配全过程，逐步打印**
-        --   用户原话：「打开地图, 等待2s, 获取原值. 打印原值, 应用缩放. 打印缩放信息. 这样的调整过程.」
-        local okRun = smFixBegin(false)
-        P("用法：/ehm fitnow（别名 /ehm 适配 · /ehm 修正）—— 缩放开启时按「开图 → 置 1.00 → 等 2s → 读原值 → 套缩放 → 折算」逐步打印；"
-          .. "若仍不对，把这一整段连同 /ehm mapfit dump 一起发我")
-        P("　★地图开着时敲不了命令（本客户端开图隐藏 UIParent）⇒ 想「在地图上」跑，改用 `/ehm fitnow 待命`"
-          .. "（先在地图关着时敲，之后每次开图/换图自动跑；取消 `/ehm fitnow 取消`）")
-        if not okRun then P("本次**没有开跑**：原因见上面那条（模块没开启）。") end
-      end
     elseif msg == "fix" then
       -- ★手动补救+状态报告：正式版没生效时跑这个（报告侦测信号/黑幕显隐/配置值）
       P("fix：开图信号=" .. tostring(featOpenNow())
@@ -3980,6 +3501,27 @@ do
         SM_CFG.mapFitVerbose = nil
         P("详细日志已回默认（关）：上一会话遗留的详细档已清（只在本会话有效；要开：/ehm mapfit verbose on）")
       end
+      -- ★★★1.75.51（用户：「清理掉本地地图签名缓存」+「清理之前调试的一些日志」）：**一次性**清账。
+      --   ★用标记键保证只清一次（之后再积累的取证环是**新一轮测试**的日志，不能再被清）。
+      -- ★★★1.75.51：上一轮的**测试/探针**存档键一次性清掉（用户：「清理以上测试代码」）——
+      --   /ehm mapdata 逐图核验（mapData / mapDataLog / mapDataArm）已整条删除，那几张表**没人再读**。
+      --   ★必须用**新的**标记键：cacheCleared51 在用户的老存档里已经是 true ⇒ 复用它这一段根本不会跑。
+      if not SM_CFG.probeCleared52 then
+        SM_CFG.probeCleared52 = true
+        local np, nk = 0, {}
+        for _, k in ipairs({ "mapData", "mapDataLog", "mapDataArm" }) do
+          if SM_CFG[k] ~= nil then SM_CFG[k] = nil np = np + 1 table.insert(nk, k) end
+        end
+        if np > 0 then
+          P("已清理上一轮全图核验探针的存档（" .. table.concat(nk, " / ") .. "）")
+        end
+      end
+      if not SM_CFG.cacheCleared51 then
+        SM_CFG.cacheCleared51 = true
+        local nc = MDQ.cacheClear("载入一次性清账")
+        P("本地地图签名缓存 + 旧调试日志已清（存档老键 " .. tostring(nc) .. " 个）⇒ 从零开始：会话内存缓存已空、"
+          .. "旧取证环已删，之后只留新一轮的日志")
+      end
       pcall(mg.UnregisterEvent, mg, "VARIABLES_LOADED")
     end)
   end
@@ -3990,109 +3532,111 @@ end
 --   控件、几何、tooltip、下拉、结算**全在本文件里**（与 LayerFix / DragFrames 同一套规矩）。
 --   ★这一行**有**勾选框（模型里不写 `noChk`）：勾选框 = 本工具开/关（真值 = `tbCfg().simpleMap`，
 --     与 `EVAL_SM_ENABLED()` 同源、与「子插件」Tab 无关 —— 本模块 1.74.29 起就是主插件的工具模块）。
---   ★`[设置]` = **多选下拉**（`EVAL_DD_OPEN` 的 multi 模式），目前唯一条目 = 「GUI重开」，
---     默认**不勾**（关）；勾上 = 开图时重显最外层 GUI（副作用见 TB_SM_GUIREOPEN_TIP*）。
+--   ★`[设置]` = **多选下拉**（`EVAL_DD_OPEN` 的 multi 模式），三个条目：
+--     ① 「GUI重开」= 开图时重显最外层 GUI（副作用见 TB_SM_GUIREOPEN_TIP*）；
+--     ② 「打开世界迷雾」= 1.75.51「S_WorldMap 贴图替代」改名而来：按 S_WorldMap 区域表把本图整张画出来、忽略客户端内置探索纹理
+--        （见 TB_SM_SWM_TIP* 与 MDQ 那一族；真值 = `SM_CFG.swmOverlay`，唯一写口 = `EVAL_SM_SWM_SET`）；
+--     ③ 「残留图层清理」= 1.75.52 新增（**默认开**）：换图/开图时把**不属于本图**的叠加层贴图藏掉
+--        （缩放到大陆/世界地图时上一张图的探索层会留在图上；见 TB_SM_STALE_TIP* 与 `MDQ.stale*`；
+--         真值 = `SM_CFG.staleClean`，唯一写口 = `EVAL_SM_STALE_SET`）。
 local SM_TIP_W = 460
 
--- 真值读写（**唯一入口**）：读走 `EVAL_SM_ENABLED()`，写走 `EVAL_SM_SET()`（它同时把 tbCfg() 写进去 + 立刻应用/复位）
-function EVAL_SM_GUIREOPEN_ON() return smReopenOn() end
-
-function EVAL_SM_GUIREOPEN_SET(on)
-  SM_CFG.guiReopen = on and true or false
-  P("GUI重开 = " .. (smReopenOn() and "开（开图时重显最外层 GUI）" or "关（开图时不做任何额外 GUI 动作）"))
-  return true
-end
 
 -- 行内摘要（**现算**，不缓存：勾选/滚轮改完立刻重画）
 --   ★1.74.36-3：末尾带上「默认档」三个值（都从 SM_DEF_* 现取，绝不写第二份字面量）——
 --     用户看悬停就知道「关掉再开回来会回到什么档位」，不用猜。
 function EVAL_SM_SUMMARY()
-  return string.format("缩放 %.2f · 透明 %.2f · GUI重开 %s（默认档 %.2f / %.2f / %s）",
+  return string.format("缩放 %.2f · 透明 %.2f · GUI重开 %s · 打开世界迷雾 %s（默认档 %.2f / %.2f / %s）",
     tonumber(SM_CFG.scale) or SM_DEF_SCALE, tonumber(SM_CFG.alpha) or SM_DEF_ALPHA,
-    smReopenOn() and "开" or "关",
+    smReopenOn() and "开" or "关", EVAL_SM_FOG_ON() and "开" or "关",
     SM_DEF_SCALE, SM_DEF_ALPHA, SM_DEF_GUIREOPEN and "开" or "关")
 end
 
--- 默认档那一句（在悬停里**独立成行**；与真值同源 = SM_DEF_*，不许另拼文案）
-function EVAL_SM_DEF_TIP()
-  return string.format("开启默认档：缩放 %.2f · 透明度 %.2f · GUI重开 %s（每次开启都套用；开着时可随时再调）",
-    SM_DEF_SCALE, SM_DEF_ALPHA, SM_DEF_GUIREOPEN and "开" or "关")
-end
 
--- ===== 叠加层适配（1.74.35-4）：读写口 + 读值口 =====
--- 真值 `SM_CFG.mapFit`：nil = 默认开（用户：「要默认启动的功能」），只有显式 false = 关
-function EVAL_SM_MAPFIT_ON() return smFitOn() end
-
-function EVAL_SM_MAPFIT_SET(on)
-  SM_CFG.mapFit = on and true or false
-  P("叠加层适配 = " .. (smFitOn() and ("开 · 策略=" .. smFitModeLabel()) or "关（不再碰叠加层几何）"))
-  if smFitOn() then P("　" .. EVAL_SM_MAPFIT_TIP()) end
-  return true
-end
-
--- 行 tooltip 里那句（与真值同源；行渲染处取它，别处不许再拼一遍文案）
-function EVAL_SM_MAPFIT_TIP()
-  local m = "叠加层适配：" .. (smFitOn() and "开" or "关")
-    .. "（WorldMapOverlay/Highlight 的处理，底瓦片不动；/ehm mapfit 可关或取证）"
-  -- ★★★1.75.9：**策略 + 实测判据**都要摊在悬停里 —— 用户报的「被缩两遍」与「正常开启不生效」都是这条事实没被看见。
-  m = m .. "｜策略：" .. smFitModeLabel()
-  if SMFIT.needFold == false then
-    m = m .. "｜探测：本客户端**会自动跟随缩放**（折算档下仍按策略折算；想听探测用 mode auto）"
-  elseif SMFIT.needFold == true then
-    m = m .. "｜探测：本客户端**不会自动跟随** ⇒ 需要按 es 折算（原值取自自然档）"
-  else
-    m = m .. "｜探测：还没探过（开启时自动探一次）"
-  end
-  -- ★1.75.45（用户要求）：「未适配完成的探索层先隐形，等缩放完成之后再显示」⇒ 悬停里说清（含**有界**承诺）
-  m = m .. "｜★未适配完成的探索层**先隐形**（alpha 归零、不动显隐），折算完成立刻恢复显示；"
-    .. "抓不到原值时最多 " .. string.format("%.1f", SMFIT_GHOST_SEC) .. " 秒兜底恢复 ⇒ 绝不永久隐藏"
-  -- ★★★1.75.45b（用户报障「换图后探索层缩放失效」的修法）：**原值只在自然档读**
-  m = m .. "｜★原值**只在自然档 1.00 读**（开图/换图时先把外框按回 1.00、每图最多 "
-    .. tostring(tonumber(SMFIT.natMax) or 3) .. " 段×" .. string.format("%.1f", SMFIT_HOLD_SEC)
-    .. "s 窗口；非自然档**一条都不记** —— 记了就会偏小、折算变成空操作）"
-  -- ★★★1.75.45c（用户要求）：按**地图签名**缓存 + 新层增量
-  m = m .. "｜★按**地图签名**缓存原值：**有缓存就直接折算**（不再有「换图必先满尺寸」那 1~2 秒）；"
-    .. "**没缓存才走初次打开流程**（自然档窗口读一次）；★**后来新出现的层做增量** —— 用「本图已写过的层」"
-    .. "实时反解读回口径 k（1 或 es）⇒ 在**当前档**直接补记，不开窗口、不碰已适配的层"
-  return m
-end
-
--- ★★★1.75.9 折算策略的读写口（默认 fold = 照旧折算，保住「开启即生效」）
-function EVAL_SM_MAPFIT_MODE() return smFitMode() end
-
-function EVAL_SM_MAPFIT_MODE_SET(m)
-  m = tostring(m or "")
-  if m == "auto" or m == "自动" then m = "auto"
-  elseif m == "nofold" or m == "不折算" or m == "不折" or m == "off" then m = "nofold"
-  else m = "fold" end
-  SM_CFG.mapFitMode = m
-  SMFIT.captured = false -- 换档后重新在自然档校准一次原值
-  SMFIT.needFold = smFitDetect()
-  mfLog("策略切换：%s（探测=%s）", smFitModeLabel(), (SMFIT.needFold == nil) and "未判定" or tostring(SMFIT.needFold))
-  P("叠加层折算策略 = " .. smFitModeLabel() .. "（★本档只在本会话有效：/reload 后自动回默认「折算」）")
-  P("　" .. EVAL_SM_MAPFIT_TIP())
-  if m == "nofold" then
-    -- ★★★1.75.5 实案：这一档曾把用户坑成「关闭/开启 缩放始终不生效」（它落存档、而开关不复位策略）⇒ 必须**当场说清**
-    P("　★★注意：这一档 = **一个几何都不碰** ⇒ 叠加层适配完全不动作（现象就是「怎么关开都不生效」）。" ..
-      "要长期关掉请用工具箱的「叠加层适配」开关（/ehm mapfit off）；要恢复折算：/ehm mapfit mode fold")
-  end
-  return true
-end
 
 -- 提示行（★用户原话里的副作用必须**如实写出来**，不许只写「可能有影响」）
 function EVAL_SM_GUIREOPEN_TIPS()
   return { L("TB_SM_GUIREOPEN_TIP1"), L("TB_SM_GUIREOPEN_TIP2"), L("TB_SM_GUIREOPEN_TIP3") }
 end
 
--- 菜单内容（与行渲染**同源**：勾选态 = 真值现算，唯一来源 = SM_CFG.guiReopen）
---   返回 items, locked, tips, sel, keys —— 与 EVAL_DD_OPEN(…, {multi=true, selected=sel, …}) 同口径
+-- GUI重开真值**唯一写口**（命令行 `/ehm gui on|off` 与设置下拉两条路都走它）。
+--   ★1.75.52 摘除探索层适配时，一次性脚本按「function NAME(」搜结尾 `end` 时把**紧邻的这一个**误删过一次
+--     （症状 = `scan_dangling.js` 报 `EVAL_SM_GUIREOPEN_SET` 无守卫调用）⇒ 这里补回，并留一条判据：
+--     **删函数块不许用「找下一个 col-0 end」这种启发式**（单行函数 `function X() ... end` 不是 col-0 `end`）。
+function EVAL_SM_GUIREOPEN_SET(on)
+  SM_CFG.guiReopen = on and true or false
+  P("GUI重开 = " .. (smReopenOn() and "开（开图时重显最外层 GUI）" or "关（开图时不做任何额外 GUI 动作）"))
+  return true
+end
+
+-- ===== ★★★1.75.52「打开世界迷雾」= **一个控制管两件事**（用户：「以上两个配置合成一个控制：打开世界迷雾」）
+--   合并口径 = **一个写口把两个老键一起写**（`SM_CFG.swmOverlay` + `SM_CFG.staleClean`）：
+--     开 = 表驱动全图渲染（忽略内置探索纹理）+ 残留清理；
+--     关 = 两族都停（当场收回我们补建的层、把藏过的原生层全部 Show 还回，且此后一个字节都不碰）。
+--   ★下面两族的闸门（`MDQ.swm()` / `MDQ.staleOn()`）**一个字都不用改** ⇒ 风险最小、行为可预期。
+--   ★两个老写口（`EVAL_SM_SWM_SET` / `EVAL_SM_STALE_SET`）**全部转调这里** ⇒ 命令与界面**不可能各写一半**。
+function EVAL_SM_FOG_ON() return MDQ.swm() and MDQ.staleOn() end
+
+function EVAL_SM_FOG_SET(on)
+  on = on and true or false
+  SM_CFG.swmOverlay, SM_CFG.staleClean = on, on
+  if not on then
+    -- 关：先收我们补建的层（`MDQ.release` 里同时把守护藏过的原生层全部 Show 还回），再把残留清理的账还回。
+    pcall(MDQ.release, "关闭世界迷雾")
+    pcall(MDQ.staleShowAll, "关闭世界迷雾")
+    P("打开世界迷雾 = 关（回到客户端自己摆的探索层：抓原值 + 按 es 折算；此前藏过的层已全部还回）")
+  else
+    -- 开：残留清理的账**只清不还**（可见性归「接管守护」，走还回会先闪一下又被藏）。
+    pcall(MDQ.staleForget, "世界迷雾已开")
+    P("打开世界迷雾 = 开（本图整张由 S_WorldMap 表渲染 + 残留清理；不再自己跑图探索）")
+    P("　" .. EVAL_SM_SWM_TIP())
+  end
+  return true
+end
+
+-- ===== 1.75.51「S_WorldMap 贴图替代」（**已并入上面的「打开世界迷雾」**）=====
+-- 真值读写：读走 `EVAL_SM_SWM_ON()`（与渲染族同源 = `MDQ.swm()`），写走 `EVAL_SM_SWM_SET()`（**转调合并写口**）。
+function EVAL_SM_SWM_ON() return MDQ.swm() end
+
+function EVAL_SM_SWM_SET(on)
+  return EVAL_SM_FOG_SET(on)
+end
+
+-- 行 tooltip / 菜单里那一句（与真值同源；别处不许再拼一遍文案）
+--   ★★★1.75.52（用户：「以上信息直接替换成: 初看是这个世界的,其实不是这个世界的.有没似陈相识? **不要加额外信息**」）
+--   ⇒ 说明**就这一句**（`TB_SM_SWM_TIP1`，三语同文），这里**不再拼任何前缀/后缀**
+--     （旧写法还拼「打开世界迷雾：开（默认）」+ 两三句技术解释 ⇒ 悬停一屏全是字，正是用户要清掉的东西）。
+function EVAL_SM_SWM_TIP()
+  return L("TB_SM_SWM_TIP1")
+end
+
+-- 下拉那一行自己的悬停（与 [设置] 悬停**同一句**，避免两处文案各写一遍）
+function EVAL_SM_SWM_TIPS()
+  return { EVAL_SM_SWM_TIP() }
+end
+
+-- ===== 1.75.52「残留图层清理」（**已并入「打开世界迷雾」**；命令入口保留，写口转调合并写口）=====
+-- 真值读写：读走 `EVAL_SM_STALE_ON()`（与清理族同源 = `MDQ.staleOn()`），写走 `EVAL_SM_STALE_SET()`（**转调合并写口**）。
+function EVAL_SM_STALE_ON() return MDQ.staleOn() end
+
+function EVAL_SM_STALE_SET(on)
+  return EVAL_SM_FOG_SET(on)
+end
+
+
+
+-- 菜单内容（与行渲染**同源**：勾选态 = 真值现算）
+--   ★★★1.75.52（用户：「以上两个配置合成一个控制：**打开世界迷雾**」）：
+--     残留清理那一项**并进全图开关** ⇒ 菜单只剩两项（GUI重开 / 打开世界迷雾）；
+--     勾选态 = `MDQ.swm()`（全图那一档的闸门；写的时候**两个老键一起写**，见 `EVAL_SM_FOG_SET`）。
 function EVAL_SM_MENU()
-  local items = { L("TB_SM_GUIREOPEN") }
+  local items = { L("TB_SM_GUIREOPEN"), L("TB_SM_SWM") }
   local locked = {}
-  local tips = { EVAL_SM_GUIREOPEN_TIPS() }
-  local keys = { "guiReopen" }
+  local tips = { EVAL_SM_GUIREOPEN_TIPS(), EVAL_SM_SWM_TIPS() }
+  local keys = { "guiReopen", "swmOverlay" }
   local sel = {}
   if smReopenOn() then sel[1] = true end
+  if MDQ.swm() then sel[2] = true end
   return items, locked, tips, sel, keys
 end
 
@@ -4120,11 +3664,11 @@ local function smRow(r, it)
     pcall(tip.SetMinimumWidth, tip, SM_TIP_W)
     pcall(tip.SetOwner, tip, r.add.btn, "ANCHOR_RIGHT")
     if type(tip.ClearLines) == "function" then pcall(tip.ClearLines, tip) end
-    pcall(tip.AddLine, tip, (type(it) == "table" and it.tip) or L("TB_SIMPLEMAP_TIP"), 1, 0.85, 0.30)
-    for _, ln in ipairs(EVAL_SM_GUIREOPEN_TIPS()) do pcall(tip.AddLine, tip, ln, 0.88, 0.88, 0.88) end
-    pcall(tip.AddLine, tip, EVAL_SM_MAPFIT_TIP(), 0.72, 0.92, 0.72) -- ★1.74.35-4 叠加层适配状态（默认开）
-    pcall(tip.AddLine, tip, EVAL_SM_DEF_TIP(), 0.92, 0.82, 0.55) -- ★1.74.36-3 开启默认档 0.7/0.7/GUI不启用
-    pcall(tip.AddLine, tip, EVAL_SM_SUMMARY(), 0.75, 0.95, 0.75)
+    -- ★★★1.75.52（用户：「设置说明清理下，**只保留红色选中部分**」）：
+    --   [设置] 按钮的悬停**只留「打开世界迷雾」这一句**（唯一真正属于这个按钮的说明）。
+    --   ★其余各行**没有丢**，只是不在这里堆：GUI重开 / 打开世界迷雾 的逐条说明在下拉**各自那一行**的悬停里
+    --     （`EVAL_SM_MENU` 的 `tips`），残留清理 / 叠加层适配 / 默认档的说明在各自的行与 `/ehm mapfit` 命令里。
+    pcall(tip.AddLine, tip, EVAL_SM_SWM_TIP(), 0.62, 0.82, 1.00)
     pcall(tip.Show, tip)
   end)
   r.add.btn:SetScript("OnLeave", function()
@@ -4146,6 +3690,8 @@ local function smRow(r, it)
       local key = keys[pi]
       if type(key) ~= "string" or key == "" then return end
       if key == "guiReopen" then pcall(EVAL_SM_GUIREOPEN_SET, on == true) end
+      -- ★★★合并开关：一个控制管「表驱动全图 + 残留清理」两件事（`EVAL_SM_FOG_SET` 两个老键一起写）
+      if key == "swmOverlay" then pcall(EVAL_SM_FOG_SET, on == true) end
       if type(EVAL_TB_REFRESH) == "function" then pcall(EVAL_TB_REFRESH) end
     end, { multi = true, selected = sel, locked = locked, tips = tips })
   end)
@@ -4160,40 +3706,17 @@ if type(SM_TB_ROWS) ~= "table" then
   rawset(_G, "EVAL_TB_MOD_ROWS", SM_TB_ROWS)
 end
 SM_TB_ROWS["simpleMap"] = smRow
-function EVAL_SM_TB_REGISTER()
-  local t = rawget(_G, "EVAL_TB_MOD_ROWS")
-  if type(t) ~= "table" then
-    t = {}
-    rawset(_G, "EVAL_TB_MOD_ROWS", t)
-  end
-  t["simpleMap"] = smRow
-  return true
-end
 
 
-function EVAL_SM_TEST_MAPFIT_REC() local n = 0 for _ in pairs(SMFIT.rec or {}) do n = n + 1 end return n end
--- ★1.75.45 **待命模式读值口**（`/ehm fitnow 待命`）：命令在地图关着时敲、tick 在开图/换图时自动跑一遍手动适配。
---   ★它们是**生产诊断口**（真机取证 + 离线 harness 都走它们），不是「为测试而生」的孤儿口。
-function EVAL_SM_TEST_FIX_ACTIVE() return smFixActive == true end
-function EVAL_SM_TEST_FIX_ARM() return SM_FIX.arm == true end
-function EVAL_SM_TEST_FIX_ARM_LEFT() return tonumber(SM_FIX.armLeft) or 0 end
--- ★★★1.75.45b **自然档窗口读值口**（用户报障「换图后探索层缩放失效」那条修法的活口）：
---   `_LEFT` = 本图还剩几段窗口预算；`_SCALE` = 外框当前真有效缩放（字符串，便于直接上屏）。
---   ★同样是**生产诊断口**：`/ehm mapfit` 状态行与离线 harness 都读它们。
-function EVAL_SM_TEST_NAT_LEFT() return tonumber(SMFIT.natLeft) or 0 end
-function EVAL_SM_TEST_NAT_SCALE()
-  local fr = _G["WorldMapDetailFrame"]
-  if not (type(fr) == "table" or type(fr) == "userdata") then return "?" end
-  local e = smEffScale(fr)
-  if tonumber(e) and tonumber(e) > 0 then return string.format("%.3f", tonumber(e)) end
-  return "?"
-end
--- ★1.75.5：**种一条记录**进会话内存（= 旧的「存档里种脏记录」的等价物）——
---   组 253⑤b 用它验「**有记录也不写**本图不用的层」：唯一用途是测试，不进任何生产路径。
-function EVAL_SM_TEST_MAPFIT_PLANT(name, x, y, w, h)
-  local n = tostring(name or "")
-  if n == "" then return false end
-  SMFIT.rec[n] = { idx = n, name = n, p = "TOPLEFT", rel = "WorldMapDetailFrame", rp = "TOPLEFT",
-    x = tonumber(x) or 0, y = tonumber(y) or 0, w = tonumber(w) or 0, h = tonumber(h) or 0, from = "plant" }
-  return true
-end
+-- ★★★1.75.52（用户定：整条「探索层适配」摘除）——**原来这里的读值口整族已删**：
+--   `EVAL_SM_TEST_MAPFIT_REC`（本图记录条数）· `EVAL_SM_TEST_FIX_ACTIVE/ARM/ARM_LEFT`（`/ehm fitnow 待命` 状态）·
+--   `EVAL_SM_TEST_NAT_LEFT/NAT_SCALE`（自然档窗口预算/外框缩放）· `EVAL_SM_TEST_MAPFIT_PLANT`（种记录）。
+--   理由：它们的**唯一真值来源**（`SMFIT` 那张表）已随适配整条删除 ⇒ 留着就是「读永远 0 / 恒 false」的死口。
+--   ★留一句纪律：读值口**要么挂到 `/ehm` 命令上（活），要么别加** —— 只给离线 harness 用的口，删功能时必须一起删。
+
+-- ★★★1.75.49 → 1.75.52 **这一族口已删，不再留空壳**：图层调试子插件（EH_DebugBox）曾问这里要
+--   「某探索层的系统原值」（旧 `EVAL_SM_ORIG_OF`，从抓原值那一拍的记账表取）。
+--   抓原值整条随「探索层适配」摘除 ⇒ **来源永久缺席** ⇒ 空壳口（恒返回 nil）也一并删掉：
+--   子插件的 `type(rawget(_G,"EVAL_SM_ORIG_OF"))=="function"` 守卫会如实报「不在」，四级来源自动降一级。
+--   ★★结论性事实（写进 CLAUDE.md / DebugBox 注释）：现在「原始尺寸」的**唯一可信来源**
+--     = 子插件自己**第一次改之前**读到的值（`uiCustEnsure`）；其余（首次观测 / 无记录）都只是观测值。

@@ -27,7 +27,7 @@ end
 
 -- ★构建标记（唯一来源）：每次改本文件顺手 +1 —— 探针第一行就打它，
 --   「跑的是不是最新版」一眼可辨（真机出现过「修了还报错」= 客户端还在跑旧构建）。
-local DBX_BUILD = "1.74.34-40"
+local DBX_BUILD = "1.74.34-41"
 
 -- ===== 语言包（1.74.31）=====
 -- 用户要求：新开关的**文案与 tooltip 走三语语言包**（Locales/zhCN|enUS|ruRU.lua 里 L("键") 三语齐全）。
@@ -201,13 +201,98 @@ local function nodeType(v)
   return "?"
 end
 
--- ★1.74.34：节点上限兜底（超限**如实报**，绝不假装扫全）；深挖扫描（选中目标下钻）走 maxD=64，全量维持 4。
+-- ★★1.75.48：节点上限兜底（超限**如实报**，绝不假装扫全）；深挖扫描（选中目标下钻）走 maxD=64，全量维持 4。
+--   ★`scanCap` = **当前生效的预算**（nil = SCAN_NODE_CAP）：深挖那一支临时改成 SCAN_DIG_CAP 见下。
 local SCAN_NODE_CAP = 20000
+-- ★★★1.75.48 「深挖」自己的预算（旧版与全量共用 20000 ⇒ 选中根节点时等于又扫一遍全树 = 用户报的卡死）
+local SCAN_DIG_CAP = 4000
+local scanCap = nil
 local scanHitCap = false
+
+-- ★★★1.75.48 「级联（按需）扫描」——用户报障：「子插件→图层调试，打开很容易卡死。能否级联查询，不要检索太多数据」。
+--   旧行为：`buildNodes` **递归到 4 层**（深挖 64 层）、节点上限 20000 ⇒ 以默认源「界面(UIParent)」打开面板时，
+--   几万次 `GetRegions/GetChildren/GetName/GetParent` 全挤在同一帧 ⇒ 真机卡死（面板的定时刷新还会反复触发）。
+--   ★新口径（**默认视觉档与旧版逐字相同**，只是不再预扫"看不见的层"）：
+--     ① 打开/重扫 = **只枚举每个源的直接子件与区域**（一层，不递归）；
+--     ② 每个条目带一个 `more` = 「还没枚举过的子件数」⇒ 行内照旧画 ▶/▼（判据见 uiRefresh 的 unmaterialized）；
+--     ③ 用户**点开某一支**时才 `uiMaterialize` 它那一层（级联下钻），并把新条目**插回 DFS 前序位置**。
+--   ★为什么"插回原位置"是必须的：`uiTreePass` 的父子关系**只靠「层号 + 前序相邻性」**推（不按路径字符串），
+--     子条目必须紧跟父条目插入，否则整棵树的父子关系会错位。
+--   这一帧「有没有子件/区域」——**不枚举**，只问答数（用于给还没下钻的条目画 ▶）；
+--   ★两个接口都拿不到 ⇒ 保守给 1（宁可多画一个箭头让用户点开看看，也别让它展不开；点开是空的箭头自会消失）。
+local function uiKidHint(f)
+  local kids, regs = nil, nil
+  if (type(f) == "table" or type(f) == "userdata") then
+    if type(f.GetNumChildren) == "function" then
+      local ok, v = pcall(f.GetNumChildren, f)
+      if ok and tonumber(v) then kids = tonumber(v) end
+    end
+    if type(f.GetNumRegions) == "function" then
+      local ok, v = pcall(f.GetNumRegions, f)
+      if ok and tonumber(v) then regs = tonumber(v) end
+    end
+    -- ★两个接口都没有（老控件/非帧对象）⇒ 退回「枚举一次」问个数（**只在这一帧上做**，不进子树）
+    if kids == nil and regs == nil then
+      if type(f.GetChildren) == "function" then
+        local okc, cc = pcall(function() return { f:GetChildren() } end)
+        if okc then kids = table.getn(cc) else kids = 0 end
+      end
+      if type(f.GetRegions) == "function" then
+        local okr, rg = pcall(function() return { f:GetRegions() } end)
+        if okr then regs = table.getn(rg) else regs = 0 end
+      end
+    end
+  end
+  if kids == nil and regs == nil then return 1 end
+  return (kids or 0) + (regs or 0)
+end
+
+-- ★只枚举**一层**：本帧的 regions + children（不递归）。返回新增条数。
+--   ★`uniq` 的作用域 = **每个父级一次调用**（与旧 scanTree 同口径）：同父级下的同名兄弟加 `#n` 序号，
+--     让路径唯一（选中/自定义/折叠全按路径做键；第 1 个不加后缀 ⇒ 老存档键兼容）。
+--   ★区域（纹理/字体串）**不会有子件** ⇒ `more = 0`（不给它们画箭头，避免一屏假箭头）。
+local function scanShallow(f, path, depth, out)
+  out = out or nodes
+  local dup = {}
+  local function uniq(base)
+    dup[base] = (dup[base] or 0) + 1
+    if dup[base] == 1 then return base end
+    return base .. "#" .. dup[base]
+  end
+  local made = 0
+  if type(f.GetRegions) == "function" then
+    local rr = { pcall(f.GetRegions, f) }
+    if rr[1] then
+      for i = 2, table.getn(rr) do
+        local r = rr[i]
+        if r then
+          local rn = uiFrameName(r)
+          local rseg = (rn ~= nil and (not uiNameLooksFake(rn))) and ("region:" .. rn) or ("region:" .. nodeType(r))
+          table.insert(out, { f = r, n = uniq(path .. "/" .. rseg), d = depth + 1, more = 0 })
+          made = made + 1
+        end
+      end
+    end
+  end
+  if type(f.GetChildren) == "function" then
+    local rc = { pcall(f.GetChildren, f) }
+    if rc[1] then
+      for i = 2, table.getn(rc) do
+        local c = rc[i]
+        if c then
+          local nm = nodeName(c)
+          table.insert(out, { f = c, n = uniq(path .. "/" .. nm), d = depth + 1, more = uiKidHint(c) })
+          made = made + 1
+        end
+      end
+    end
+  end
+  return made
+end
 
 local function scanTree(f, path, depth, maxD)
   if depth > (maxD or 4) then return end
-  if table.getn(nodes or {}) >= SCAN_NODE_CAP then scanHitCap = true return end
+  if table.getn(nodes or {}) >= (scanCap or SCAN_NODE_CAP) then scanHitCap = true return end
   -- ★★★1.74.34-11 修「纹理行无法单选（点一个全亮）」（用户截图实锤）：
   --   同一父级下的同名兄弟（`region:Texture` ×16、无名子帧 `?` ×N）会得到**完全相同的路径**，
   --   而选中/自定义/折叠全按路径做键 ⇒ 一个键命中一大片。现在在本父级内给同名兄弟加 **#n 序号**，
@@ -335,6 +420,7 @@ local UIKIDS = { done = false, saved = {}, list = { "MinimapCluster", "MainMenuB
 local function buildNodes()
   nodes = {}
   scanHitCap = false
+  if type(ui) == "table" then ui.mat = {} end   -- ★1.75.48 重扫 = 新的一棵树 ⇒ 级联账本清空
   local seen = {}
   local anyRoot = false
   for _, src in ipairs(SCAN_SRC) do
@@ -347,8 +433,9 @@ local function buildNodes()
         else
           seen[root] = true
           local base = src.prefix and (src.prefix .. src.root) or src.root
-          table.insert(nodes, { f = root, n = base .. (src.prefix and "/（本体）" or "(本体)"), src = src.k, d = 1 })
-          scanTree(root, base, 1)
+          table.insert(nodes, { f = root, n = base .. (src.prefix and "/（本体）" or "(本体)"), src = src.k, d = 1, more = uiKidHint(root) })
+          -- ★★★1.75.48：**只扫一层**（旧版是 `scanTree(root, base, 1)` 递归 4 层 = 打开即卡死的根源）
+          scanShallow(root, base, 1, nodes)
         end
       end
     end
@@ -359,8 +446,8 @@ local function buildNodes()
     if (type(wm) == "table" or type(wm) == "userdata") and uiScanSrcOn("map") then
       if type(ShowUIPanel) == "function" then pcall(ShowUIPanel, wm) end
       nodes = {}
-      table.insert(nodes, { f = wm, n = "WorldMapFrame(本体)", src = "map", d = 1 })
-      scanTree(wm, "WorldMapFrame", 1)
+      table.insert(nodes, { f = wm, n = "WorldMapFrame(本体)", src = "map", d = 1, more = uiKidHint(wm) })
+      scanShallow(wm, "WorldMapFrame", 1, nodes)
     elseif uiScanSrcOn("map") then
       return nil
     end
@@ -628,7 +715,12 @@ ui = { -- ★★不能再写 local：前面已有 local ui（前向声明），�
   xVal = 0, yVal = 0, -- ★用户要求：x,y 坐标设置（相对现有锚点的偏移增量）
   wVal = 700, hVal = 600, -- ★用户要求：宽/高设置，默认 700×600、步进 10
   cust = {}, colorOf = {}, -- ★需求 3/5：自定义记账（账号级存档）+ 每层颜色
-  origDefaults = {}, -- ★「从未自定义时」观测到的原始尺寸（清理自定义时的兜底依据）
+  -- ★★★1.75.49 重写语义（用户报障「原始尺寸/当前尺寸是否正确」）：这是**观测基线**，
+  --   **不是系统原值** —— 值 = `{ w=, h=, es=观测时有效缩放, at=时刻, nm=纹理名 }`。
+  --   · 键走 `uiOrigKey`：复用纹理（WorldMapOverlay*）按 `路径@地图身份` 分桶（同一名字在不同图上是不同矩形）；
+  --   · 只在**没有我们自己自定义记录**时记；地图身份读不到就不记（宁可不记，不记脏值）；
+  --   · 只在本会话内存（不落存档 —— 树是「当前这一眼」的快照，落盘只会留过期路径）。
+  origDefaults = {},
   -- ★应用外观时的**参数勾选**（只应用勾上的项）：用户要求「默认宽高不选中」→ 宽/高默认关闭，
   --   避免一键「应用外观」把尺寸也改掉（尺寸要单独勾选或走「应用尺寸」）
   par = { scale = true, alpha = true, w = false, h = false },
@@ -651,6 +743,9 @@ ui = { -- ★★不能再写 local：前面已有 local ui（前向声明），�
   --   **折叠状态** —— 键 = 条目路径，值 = true 表示这棵子树收起来了；空表 = 全展开（老存档的默认）。
   --   落存档 `EH_DEBUGBOX_CFG.ui.treeCollapsed` ⇒ /reload 之后保持（用户要求「折叠状态跨 reload 保持」）。
   treeCollapsed = {},
+  -- ★★★1.75.48 级联扫描的**账本**：已下钻过的节点路径（一条支只枚举一次）。
+  --   ★只在**会话内存**、不落存档：树是「当前这一眼」的快照，落盘只会留下过期路径。
+  mat = {},
 }
 
 -- ===== 顶栏分类（ui.cat）的**唯一来源** =====
@@ -2049,7 +2144,7 @@ local function uiBuildEntries(skipExtra)
     -- ★d = 扫描时就写好的**层号**（根 = 1）；带上它，缩进与「层深」过滤才是同一口径（字符串数 '/' 会漏算前缀源）
     -- ★1.74.34-26：`scaleable` 判据也必须走 uiField —— 这里原来 `type(nd.f.SetScale)` 直接索引，
     --   遇到「不能索引的对象」会让 **uiBuildEntries 当场抛错**（真机红字 `attempt to index field 'f'` 的另一个现场）。
-    table.insert(ui.entries, { path = nd.n, f = nd.f, scaleable = (type(uiField(nd.f, "SetScale")) == "function"), i = i, no = no, depth = tonumber(nd.d) or nil })
+    table.insert(ui.entries, { path = nd.n, f = nd.f, scaleable = (type(uiField(nd.f, "SetScale")) == "function"), i = i, no = no, depth = tonumber(nd.d) or nil, more = tonumber(nd.more) or 0 })
   end
   if not skipExtra then
   for _, nm in ipairs(TOP) do
@@ -2282,6 +2377,33 @@ local function uiDepthApply(depth)
   return ui.depthMax, n
 end
 
+-- ★★★1.75.48 级联展开：**用户点开某一支时才枚举它那一层**（用户要求「能否级联查询.不要检索太多数据」）。
+--   · 账本 `ui.mat[path]` 在**会话内存**里：一条支只枚举一次（重复展开不再扫）；
+--   · 新条目**紧跟本条目插入**（DFS 前序相邻性 = uiTreePass 算父子关系的唯一依据，见顶部注释）；
+--   · 枚举完把该节点的 `more` 清 0（箭头从此由真实子层数决定；空支的箭头自会消失）。
+--   · 返回新增条数（0 = 这一支确实是空的）。
+local function uiMaterialize(e)
+  if not e or type(e.path) ~= "string" then return 0 end
+  ui.mat = ui.mat or {}
+  if ui.mat[e.path] then return 0 end
+  ui.mat[e.path] = true
+  local f = e.f
+  if not f then return 0 end
+  local at = nil
+  for i = 1, table.getn(nodes or {}) do
+    if nodes[i].n == e.path then at = i break end
+  end
+  if not at then return 0 end
+  nodes[at].more = 0
+  local tmp = {}
+  local n = scanShallow(f, e.path, uiEntryDepth(e), tmp)
+  if n > 0 then
+    for i = n, 1, -1 do table.insert(nodes, at + 1, tmp[i]) end
+    ui.entries = nil  -- ★条目表作废 ⇒ 下次刷新用新 nodes 重建（否则列表看着没变）
+  end
+  return n
+end
+
 -- ★点一行的折叠开关 = 折叠/展开这一棵子树（真实控件 OnClick 走这里）
 --   ★三种状态要分清（否则会出现「点了没反应」的假开关）：
 --     ① 已折叠（有折叠标记）           → 展开：清标记；
@@ -2295,6 +2417,7 @@ local function uiTreeToggle(e)
   local folded = (ui.treeCollapsed and ui.treeCollapsed[e.path]) and true or false
   if folded then
     ui.treeCollapsed[e.path] = nil
+    uiMaterialize(e)   -- ★1.75.48 级联：展开 = 当场只枚举**这一层**（没枚举过才扫）
     if capBlocks then
       uiDepthApply(math.min(9, d + 1))
     else
@@ -2302,6 +2425,7 @@ local function uiTreeToggle(e)
       if uiRefresh then uiRefresh() end
     end
   elseif capBlocks then
+    uiMaterialize(e)   -- ★同上：被「层深」挡住的支，点它就是往下钻一层
     uiDepthApply(math.min(9, d + 1))
   else
     ui.treeCollapsed = ui.treeCollapsed or {}
@@ -2405,6 +2529,156 @@ end
 --   ★为什么要搬：三条真因（①结束不掉 ②弹窗贴左下角 ③拖拽中定时复查抢锚点）都长在这几段里，
 --     而它们与地图功能无关；搬进模块后能**整块重写生命周期**（全屏接盘 + 自校准兜底 + 拖拽期间跳过复查）。
 
+-- ===== ★★★1.75.49 尺寸取证族（用户报障：「图层调试排查下 原始尺寸信息/当前尺寸信息是否正确」）=====
+-- 三条硬事实（都是本项目拿真机数据定过案的）：
+--   ① **读回口径不能押注**：SimpleMap 那一案实测「几何读回 = 逻辑值 × 父帧缩放」，
+--      而本文件 `/edb maptile diag` 那轮又实测「k 全 = 1.000（逻辑口径）」——两处结论互相矛盾。
+--      ⇒ 显示层**一律当场自证**：拿「屏幕实测」（GetRight−GetLeft / GetTop−GetBottom）与
+--        「原样读回」「读回 × 有效缩放」比，哪个对上标哪个；都对不上 ⇒ 如实写「判不出」。
+--   ② **「原始尺寸」是我们观测不到的东西**：只观测得到「第一次看见时的读数」——别的模块
+--      （SimpleMap 折算探索层 / DragFrames 还原尺寸）若已经改过它，记下的就是**改过的值**。
+--      ⇒ 来源必须分级（自定义前 > 地图适配 > 首次观测 > 无记录），且**绝不拿当前尺寸冒充原值**。
+--   ③ **客户端按序号逐图复用探索层纹理**（`WorldMapOverlay1..N`：同一名字在不同图上是不同矩形，
+--      见 tools/SimpleMap.lua 的 R20c/R20d 定案）⇒ 这类层的观测基线**按地图身份分桶**，绝不做会话级全局值。
+-- ★★装进**一张表**（`uiSz`）而不是散着写 10 个 `local function`：主 chunk 有 **200 个 local 的上限**，
+--   散着写当场把语法闸门顶爆（本文件已经贴到上限：`EH_DebugBox.lua: too many local variables`）。
+local uiSz = {}
+
+uiSz.mapKey = function()
+  -- 与 SimpleMap 的 smMapKey 同口径（`file:WxH`）；读不到 ⇒ nil（判不出就不记，绝不用别的图的值顶）
+  if type(GetMapInfo) ~= "function" then return nil end
+  local ok, file, w, h = pcall(GetMapInfo)
+  if not ok or type(file) ~= "string" or file == "" then return nil end
+  return file .. ":" .. tostring(w) .. "x" .. tostring(h)
+end
+
+uiSz.reused = function(nm)
+  -- 客户端**自持版式**的复用纹理（同一名字在不同地图 / 不同时刻代表不同矩形）
+  return (type(nm) == "string" and string.find(nm, "^WorldMapOverlay%d+$") ~= nil) and true or false
+end
+
+-- 观测基线的键：复用纹理**按地图身份分桶**，其余按路径（读不到地图身份 ⇒ nil = 这一条不记）
+uiSz.origKey = function(path, nm)
+  if uiSz.reused(nm) then
+    local mk = uiSz.mapKey()
+    if not mk then return nil end
+    return tostring(path) .. "@" .. mk
+  end
+  return path
+end
+
+-- ★SimpleMap 桥（**调用时读**，载入期不碰 —— 本项目老雷）：★1.75.52 起**永久缺席** ——
+--   SimpleMap 的「探索层适配（抓自然档原值 → 折算）」已按用户要求整条摘除（替代方案 = 「打开世界迷雾」的
+--   表驱动全渲染，它不读任何原值）⇒ `EVAL_SM_ORIG_OF` 连空壳口都删了。
+--   ★保留这个读取口只为**如实降级**：`type(...)~="function"` ⇒ 返回 nil ⇒ 界面按「未知」显示，
+--     四级来源自动降到「自定义前 / 首次观测 / 无记录」——**绝不拿当前值冒充系统原值**。
+uiSz.smOrigOf = function(nm)
+  if not uiSz.reused(nm) then return nil end
+  local f = rawget(_G, "EVAL_SM_ORIG_OF")
+  if type(f) ~= "function" then return nil end
+  local ok, x, y, w, h = pcall(f, nm)
+  if ok and tonumber(w) and tonumber(h) then return tonumber(w), tonumber(h) end
+  return nil
+end
+
+-- 有效缩放：Frame 有 GetEffectiveScale（api 索引里它属 **Frame (widget)**）——
+--   区域层（纹理/字体串）不一定有 ⇒ 退回父帧；都读不到 ⇒ nil（判不出就不标）
+uiSz.effScale = function(obj)
+  if obj == nil then return nil end
+  local f = uiField(obj, "GetEffectiveScale")
+  if type(f) == "function" then
+    local ok, v = pcall(f, obj)
+    if ok and tonumber(v) and tonumber(v) > 0 then return tonumber(v) end
+  end
+  return nil
+end
+
+-- ★★★当前尺寸的**实时读数**（tooltip 与 `/edb size` 共用）：一次问清 5 个数，全部 pcall 守卫。
+--   ★为什么**不放进 uiScanOne**：那是「每次刷新对**全部条目**跑一遍」的（深挖视图可到几千条），
+--     多读 5 个方法就是整块变慢；而这里只在**真的要看这一层**时读一次（悬停 / 取证命令），
+--     顺带还更准 —— 读到的是「此刻」的几何，不是上一次扫描的快照。
+uiSz.live = function(f)
+  if f == nil then return nil, nil, nil, nil, nil end
+  local function num(k)
+    local fn = uiField(f, k)
+    if type(fn) ~= "function" then return nil end
+    local ok, v = pcall(fn, f)
+    if ok and tonumber(v) then return tonumber(v) end
+    return nil
+  end
+  local w, h = num("GetWidth"), num("GetHeight")
+  local l, b = num("GetLeft"), num("GetBottom")
+  local r, t = num("GetRight"), num("GetTop")
+  local rw = (l and r) and (r - l) or nil
+  local rh = (b and t) and (t - b) or nil
+  local es = uiSz.effScale(f)
+  if not es then
+    local gp = uiField(f, "GetParent")
+    if type(gp) == "function" then
+      local okp, par = pcall(gp, f)
+      if okp and par ~= nil then es = uiSz.effScale(par) end
+    end
+  end
+  return w, h, rw, rh, es
+end
+
+uiSz.class = function(w, h, rw, rh, es)
+  -- 读回口径判定（只报**能自证**的那种；判不出就如实 nil）：
+  --   「读数 = 屏幕实测」⇔ |读回 − 屏幕| ≤ 1 ；「读数是未缩放逻辑值」⇔ |读回×有效缩放 − 屏幕| ≤ 1
+  if not (tonumber(w) and tonumber(h) and tonumber(rw) and tonumber(rh)) then return nil end
+  local e2 = tonumber(es)
+  local dRaw = math.abs(rw - w) + math.abs(rh - h)
+  if not (e2 and e2 > 0) then
+    return (dRaw <= 1.0) and "读数=屏幕实测（缩放读不到，口径未定）" or nil
+  end
+  local dSc = math.abs(rw - w * e2) + math.abs(rh - h * e2)
+  if math.abs(e2 - 1) <= 0.001 then
+    -- 有效缩放 1.00 ⇒ 两种口径等值 ⇒ **如实说判不出**，不硬给一个结论
+    return (dRaw <= 1.0) and "读数=屏幕实测（有效缩放 1.00，两口径等值）" or nil
+  end
+  if dRaw <= 1.0 and dSc <= 1.0 then return nil end
+  if dRaw <= 1.0 then return "读数=屏幕实测（含缩放）" end
+  if dSc <= 1.0 then return "读数=未缩放逻辑值" end
+  return nil
+end
+
+-- ★当前尺寸的**口径附注**：tooltip 与 `/edb size` **共用同一份真值**（绝不各写一份，免得两边口径打架）
+uiSz.note = function(w, h, rw, rh, es)
+  local t = {}
+  if tonumber(rw) and tonumber(rh) then table.insert(t, string.format("屏幕实测 %.0fx%.0f", rw, rh)) end
+  if tonumber(es) then table.insert(t, string.format("有效缩放 %.2f", es)) end
+  local cls = uiSz.class(w, h, rw, rh, es)
+  if cls then table.insert(t, cls) end
+  if cls == "读数=屏幕实测（含缩放）" and tonumber(es) and tonumber(es) > 0 and tonumber(w) and tonumber(h) then
+    table.insert(t, string.format("未缩放 %.0fx%.0f", w / es, h / es))
+  end
+  return table.concat(t, " · ")
+end
+
+-- 原始尺寸的**来源说明**（四级来源各自的含义必须写清楚：用户就是被「来源：观测」这几个字骗了）
+uiSz.srcNote = function(src, extra)
+  if src == "自定义前" then return "自定义前（我们第一次改之前读到的）" end
+  if src == "自定义前(部分)" then return "自定义前（只有一个分量有记录）" end
+  if src == "地图适配" then return "地图适配（SimpleMap 本图自然档 · 未缩放）" end
+  if src == "首次观测" then
+    local es = (type(extra) == "table") and tonumber(extra.es) or nil
+    return "首次观测（**非系统原值**" .. (es and string.format(" · 观测时缩放 %.2f", es) or "") .. "）"
+  end
+  if src == "当前" then return "当前（旧口径：拿现值充当原值）" end
+  return tostring(src or "无记录")
+end
+
+-- 观测基线读数（第二/三级来源共用；键按 uiSz.origKey 现算 —— 复用纹理的地图身份读不到 ⇒ 当作没有）
+uiSz.observed = function(path, e)
+  local key = uiSz.origKey(path, uiFrameName(e and e.f))
+  if not key then return nil, nil, nil end
+  local od = ui.origDefaults[key]
+  if type(od) ~= "table" then return nil, nil, nil end
+  local ow, oh = tonumber(od.w), tonumber(od.h)
+  if not (ow and oh) then return nil, nil, nil end
+  return ow, oh, { es = tonumber(od.es), at = tonumber(od.at), nm = od.nm }
+end
+
 -- ★★★1.74.34-26 条目级扫描（**一次刷新的原子单元**）：原来这段是 uiScanState 里的循环体，
 --   现在抽成函数 —— 因为真机里出现了「**一个坏条目打断整次刷新**」：
 --   `EH_DebugBox.lua:2377: attempt to index field 'f' (a userdata value)`（那行是 `type(e.f.IsShown)`），
@@ -2475,6 +2749,17 @@ local function uiScanOne(e)
       if ok and tonumber(v) then sb = tonumber(v) end
     end
     e.l, e.b = sl, sb
+    -- ★有效缩放：区域层多半没有 GetEffectiveScale（api 索引里它属 Frame）⇒ 退回父帧。
+    --   ★这是**唯一**为了「观测基线」多读的一个量（记下观测时在哪一档，否则两次数值不同档、直接比就是错的）；
+    --     「屏幕实测 + 口径判定」是**按需实时读**的（`uiSz.live`），绝不在这里对全部条目读 —— 那是刷新变慢的根源。
+    e.escale = uiSz.effScale(e.f)
+    if not e.escale then
+      local gp = uiField(e.f, "GetParent")
+      if type(gp) == "function" then
+        local okp2, par = pcall(gp, e.f)
+        if okp2 and par ~= nil then e.escale = uiSz.effScale(par) end
+      end
+    end
     -- ★1.74.34-15 用户要求：列表单元显示**相对坐标**（锚点 + 相对帧 + 偏移，即 SetPoint 那一套）
     local apt, arel, arp, ax, ay = nil, nil, nil, nil, nil
     if type(uiField(e.f, "GetPoint")) == "function" then
@@ -2485,10 +2770,18 @@ local function uiScanOne(e)
       end
     end
     e.apt, e.arel, e.arp, e.ax, e.ay = apt, arel, arp, ax, ay
-    -- ★清理自定义的兜底依据：**从未自定义过**的层，把当前尺寸记为它的原始默认值
+    -- ★★★1.75.49（用户报障「原始尺寸是否正确」）—— 这一格**不再无条件记**，四条纪律：
+    --   ① 只记**没有我们自己自定义记录**的层（照旧：有 c.ow/oh 的层以那份为准）；
+    --   ② 键走 uiOrigKey（复用纹理按**地图身份**分桶 —— 会话级全局值在换图后必然是**别的图的矩形**）；
+    --   ③ 记下**观测时的有效缩放**（两次数值不同档时，直接比大小就是错的）；地图身份读不到 ⇒ 不记；
+    --   ④ 记下时刻与纹理名（`/edb size` 要能说清「这个值是什么时候、在哪张图上看到的」）。
     if not ui.cust[e.path] and w and h then
-      local od = ui.origDefaults[e.path]
-      if not od then ui.origDefaults[e.path] = { w = w, h = h } end
+      local nm = uiFrameName(e.f)
+      local key = uiSz.origKey(e.path, nm)
+      if key and not ui.origDefaults[key] then
+        ui.origDefaults[key] = { w = w, h = h, es = e.escale, nm = nm,
+          at = (type(GetTime) == "function") and GetTime() or 0 }
+      end
     end
     -- ★用户要求：列表要显示「层名称 + 当前实际尺寸 + 父类层名称」
     --   名称取叶子名（路径最后一段），父类用 GetParent + GetName
@@ -2601,12 +2894,15 @@ local function uiScanAll()
   if table.getn(targets) > 0 then
     scanHitCap = false
     nodes = {}
+    ui.mat = {}                 -- ★1.75.48 深挖 = 一次全新枚举 ⇒ 级联账本清空（否则新树的支会被当成"已下钻"）
+    scanCap = SCAN_DIG_CAP      -- ★1.75.48 深挖也有**自己的预算**（旧版与全量共用 20000 ⇒ 选中根节点照样卡死）
     for _, e in ipairs(targets) do
       -- ★根保留**原路径**（不加「(本体)」后缀）⇒ 选中/自定义/折叠等按键记录全部沿用；
       --   层号从 1 重起（深挖视图里它就是树根，缩进/层深过滤同一口径）
-      table.insert(nodes, { f = e.f, n = e.path, d = 1 })
-      scanTree(e.f, e.path, 1, 64) -- 深挖：上限 64（全量扫描是 4），节点上限 20000 兜底
+      table.insert(nodes, { f = e.f, n = e.path, d = 1, more = uiKidHint(e.f) })
+      scanTree(e.f, e.path, 1, 64) -- 深挖：上限 64（全量扫描是 4），节点预算 SCAN_DIG_CAP 兜底
     end
+    scanCap = nil
     ui.entries = nil
     uiBuildEntries(true) -- true = 深挖视图：不追加 [顶层]/[全局] 额外条目
     uiScanState()
@@ -2616,7 +2912,7 @@ local function uiScanAll()
     ui.off = 0
     if uiRefresh then uiRefresh() end
     P("深挖扫描完成：选中 " .. table.getn(targets) .. " 个目标 → 子树共 " .. table.getn(nodes) .. " 层"
-      .. (scanHitCap and "（已达节点上限 20000，**未扫全**）" or "")
+      .. (scanHitCap and ("（已达本次预算 " .. SCAN_DIG_CAP .. " 层，**未扫全**）") or "")
       .. "（只扫选中子树、不扫全部节点；清空选择后点「扫描」回到全量）")
     return table.getn(ui.entries or {})
   end
@@ -2708,8 +3004,10 @@ end
 --   三级还原依据：
 --     ① ui.cust[path] 里**首次自定义前**记录的原值（oscale/oalpha/ow/oh/opt）；
 --     ② 缺值兜底：缩放/透明度 = **系统默认 1**（SetScale/SetAlpha 的原生默认）；
---       宽/高 = ui.origDefaults[path]（**从未自定义时**观测到的原始尺寸）；
+--       宽/高 = 「首次观测」基线（★1.75.49 起**如实标明它不是系统原值**、并在小结里点出用了多少层；
+--       键走 uiOrigKey ⇒ 复用纹理按地图身份分桶，换图后取不到就对——别的图的矩形不能拿来还原本图）；
 --     ③ 原始值恰好等于自定义值（说明当时抓晚了）→ 同样按 ① 的兜底处理，避免"还原成自定义值"。
+--   ★★★**唯一能当还原依据的真值 = ①**（我们第一次写之前读到的）；②只是「观测」——它**可能本来就已经是改过的值**。
 local function uiClearCustom()
   -- ★★★1.74.30 框拖拽目标的真值在主插件工具模块（tools/DragFrames.lua）→ 这里一律不动手，并如实说明去处。
   if uiSelHasDragTarget() then
@@ -2725,7 +3023,7 @@ local function uiClearCustom()
   for _, e in ipairs(ui.entries or {}) do
     if ui.cust[e.path] and (not anySel or ui.sel[e.path]) then table.insert(targets, e) end
   end
-  local n, miss, detail = 0, 0, 0
+  local n, miss, detail, obsUsed = 0, 0, 0, 0
   for _, e in ipairs(targets) do
     local c = ui.cust[e.path]
     local f = e.f or uiResolvePath(e.path)
@@ -2737,10 +3035,12 @@ local function uiClearCustom()
       -- 透明度：同上，默认 1
       local al = c.oalpha
       if not tonumber(al) or (s.alpha and math.abs((tonumber(al) or 0) - s.alpha) < 0.001) then al = 1 end
-      -- 宽/高：原值缺失时用「从未自定义时观测到的原始尺寸」
-      local od = ui.origDefaults[e.path] or {}
-      local w = tonumber(c.ow) or tonumber(od.w)
-      local h = tonumber(c.oh) or tonumber(od.h)
+      -- 宽/高：原值缺失时用**首次观测的基线**（★1.75.49：它**不是系统原值** ⇒ 如实计数并在小结里点出来，
+      --   不再让它冒充「原始值」；复用纹理按地图身份分桶 ⇒ 换图后取不到是对的 —— 别的图的矩形不能拿来还原本图）
+      local odW, odH = uiSz.observed(e.path, e)
+      local w = tonumber(c.ow) or odW
+      local h = tonumber(c.oh) or odH
+      if (not tonumber(c.ow) or not tonumber(c.oh)) and (w or h) then obsUsed = obsUsed + 1 end
       if type(f.SetScale) == "function" and type(f.GetScale) == "function" then
         pcall(f.SetScale, f, sc)
         detail = detail + 1
@@ -2776,6 +3076,8 @@ local function uiClearCustom()
   uiCustSave()
   uiMarksRefresh(ui.entries)
   P("清理自定义设置：已还原 " .. n .. " 层（共回写 " .. detail .. " 项属性；缩放/透明度默认回 1）"
+    .. (obsUsed > 0 and ("；★其中 " .. obsUsed .. " 层的**尺寸**用的是「首次观测」基线（**不是系统原值**："
+      .. "别的模块改过的话记下的就是改过的值），如需真值请先拍照对比") or "")
     .. (miss > 0 and ("；另有 " .. miss .. " 条解析不到已剔除记录") or ""))
   if uiRefresh then uiRefresh() end
 end
@@ -2838,18 +3140,96 @@ local function uiApplyVisibilityToSelected(hidden)
   return n, skip
 end
 
--- ★1.74.34-15 用户要求：列表显示**原始尺寸**。三级来源（与「清理自定义」同一套依据，绝不编造）：
---   ① 该层自定义记录里**第一次改之前**记下的 ow/oh（最准）；② 从未自定义时观测到的 origDefaults；
---   ③ 都没有 ⇒ 返回当前尺寸并标明来源=当前（如实，不假装那就是原始值）
+-- ★★★1.75.49 重写（用户报障「排查 原始尺寸/当前尺寸 是否正确」）：**四级来源，且绝不拿当前尺寸冒充原值**
+--   ① `自定义前` = 我们第一次写之前读到的（**唯一能当还原依据的真值**，写入点是 uiCustEnsure）；
+--   ② `地图适配` = SimpleMap 本图自然档读数（仅探索层 WorldMapOverlay*；那是它抓原值的产物，未缩放逻辑值）；
+--   ③ `首次观测` = 本会话第一次看到时的读数（**不是系统原值**：别人改过就是改过的值；复用纹理按地图分桶）；
+--   ④ 都没有 ⇒ **nil + "无记录"**（旧写法返回当前尺寸并标「当前」—— 用户看到「原 = 当前」的原因之一）
+--   返回值：w, h, 来源, 附注（附注 = 观测基线的 {es,at,nm}）
 local function uiOrigSizeOf(path, e)
   local c = ui.cust[path]
   if c then
     local w, h = tonumber(c.ow), tonumber(c.oh)
-    if w or h then return w, h, "自定义前" end
+    if w and h then return w, h, "自定义前" end
+    if w or h then
+      -- ★只有一个分量（拖拽路径建的记录 / 老存档）⇒ 有的那个用记录、缺的用观测补，如实标「部分」
+      local ow, oh = uiSz.observed(path, e)
+      return (w or ow), (h or oh), "自定义前(部分)"
+    end
   end
-  local od = ui.origDefaults[path]
-  if od and (tonumber(od.w) or tonumber(od.h)) then return tonumber(od.w), tonumber(od.h), "观测" end
-  return (e and e.w), (e and e.h), "当前"
+  local nm = uiFrameName(e and e.f)
+  local sw, sh = uiSz.smOrigOf(nm)
+  if sw and sh then return sw, sh, "地图适配" end
+  local ow, oh, extra = uiSz.observed(path, e)
+  if ow and oh then return ow, oh, "首次观测", extra end
+  return nil, nil, "无记录"
+end
+
+-- ★★★1.75.49 `/edb sz [N]`：尺寸取证（用户问「原始尺寸/当前尺寸是否正确」⇒ 一条命令把**判据全摊开**）
+--   · 目标 = 当前**选中的层**；没选中 ⇒ 当前列表前 N 条（默认 12，上限 40）
+--   · 每层打印：路径+类型 / **此刻**读回 / 屏幕实测 / 有效缩放 / **口径判定** / 原值四级来源
+--   · ★命令名故意**不叫 size**（那是「改画布尺寸」），别名 `/edb 尺寸`
+--   · ★读数落**有界存档环** `EH_DEBUGBOX_CFG.sizeProbe`（40 行）—— 照项目范式：
+--     探针原话不进环 ⇒ AI 读存档时**取证断链**、用户白跑一趟
+uiSz.probe = function(msg)
+  local n = tonumber(string.match(tostring(msg or ""), "(%d+)")) or 12
+  if n < 1 then n = 1 end
+  if n > 40 then n = 40 end
+  local list = ui.entries or {}
+  local okf, flt = pcall(uiFiltered)
+  if okf and type(flt) == "table" then list = flt end
+  local selN = 0
+  for _, e in ipairs(list) do
+    if ui.sel[e.path] then selN = selN + 1 end
+  end
+  local targets = {}
+  for _, e in ipairs(list) do
+    if table.getn(targets) < n and (selN == 0 or ui.sel[e.path]) then table.insert(targets, e) end
+  end
+  local lines = {}
+  local function out(s) table.insert(lines, s) P(s) end
+  out(string.format("—— 尺寸取证（build %s）—— 目标 %d 层（%s）｜地图身份 %s ｜SimpleMap 桥 %s",
+    tostring(DBX_BUILD), table.getn(targets),
+    (selN > 0) and ("选中 " .. selN .. " 层") or "未选中 ⇒ 取列表前若干条",
+    tostring(uiSz.mapKey() or "读不到"),
+    (type(rawget(_G, "EVAL_SM_ORIG_OF")) == "function") and "在" or "不在"))
+  out("  ★读回口径：屏幕实测≈读回 ⇒ 读数含缩放；读回×有效缩放≈屏幕实测 ⇒ 读数是未缩放逻辑值；都对不上 ⇒ 判不出")
+  out("  ★原值来源分级：自定义前 > 地图适配 > 首次观测 > 无记录（**只有「自定义前」能当还原依据**）")
+  local nScreen, nLogic, nBad, nNoOrig = 0, 0, 0, 0
+  for _, e in ipairs(targets) do
+    -- ★实时读（不是扫描快照）；顺带报「快照 vs 此刻」的差（差得多 = 这层在动）
+    local lw, lh, lrw, lrh, les = uiSz.live(e.f)
+    local cls = uiSz.class(lw, lh, lrw, lrh, les)
+    if cls == "读数=屏幕实测（含缩放）" then nScreen = nScreen + 1
+    elseif cls == "读数=未缩放逻辑值" then nLogic = nLogic + 1
+    else nBad = nBad + 1 end
+    local nm = uiFrameName(e.f)
+    local ow, oh, src, extra = uiOrigSizeOf(e.path, e)
+    if not (tonumber(ow) and tonumber(oh)) then nNoOrig = nNoOrig + 1 end
+    local snap = ""
+    if tonumber(e.w) and tonumber(lw) and (math.abs(e.w - lw) > 1 or math.abs((tonumber(e.h) or 0) - (lh or 0)) > 1) then
+      snap = string.format(" ｜ 扫描快照 %.0fx%.0f（此刻已变）", e.w, tonumber(e.h) or 0)
+    end
+    out(string.format("  %s [%s] 此刻 %s ｜ %s%s", tostring(e.name or e.path), tostring(nodeType(e.f)),
+      (lw and lh) and string.format("%.0fx%.0f", lw, lh) or "?x?",
+      uiSz.note(lw, lh, lrw, lrh, les), snap))
+    out(string.format("      原值 %s ｜ 来源 %s ｜ 复用名 %s ｜ 锚 %s ｜ 自定义 %s",
+      (tonumber(ow) and tonumber(oh)) and string.format("%.0fx%.0f", ow, oh) or "未知",
+      uiSz.srcNote(src, extra), uiSz.reused(nm) and (tostring(nm) .. "（是）") or "否",
+      (e.apt and (tostring(e.apt) .. "←" .. tostring(e.arel or "?"))) or "读不到",
+      ui.cust[e.path] and "有" or "无"))
+  end
+  out(string.format("小结：读数含缩放 %d ｜ 读数=未缩放逻辑值 %d ｜ 判不出 %d ｜ 无原值记录 %d",
+    nScreen, nLogic, nBad, nNoOrig))
+  EH_DEBUGBOX_CFG = EH_DEBUGBOX_CFG or {}
+  local ring = EH_DEBUGBOX_CFG.sizeProbe
+  if type(ring) ~= "table" then ring = {} EH_DEBUGBOX_CFG.sizeProbe = ring end
+  local t = (type(GetTime) == "function") and GetTime() or 0
+  for _, s in ipairs(lines) do
+    table.insert(ring, string.format("%.1f %s", t, s))
+  end
+  while table.getn(ring) > 40 do table.remove(ring, 1) end
+  P("（本次 " .. table.getn(lines) .. " 行已进存档 EH_DEBUGBOX_CFG.sizeProbe 有界环 40 行 ⇒ /reload 后可读）")
 end
 
 -- ★合并后的应用族（用户要求：功能重复的合并）
@@ -3498,12 +3878,22 @@ local function uiBuild()
         add(uiPad("层级", LBL) .. "第 " .. tostring(uiEntryDepth(e)) .. " 层", 0.80, 0.80, 0.80)
 
         add("外观", nil, nil, nil) rowTip[table.getn(rowTip)].head = true
-        local sz = (e.w and e.h) and string.format("%.0fx%.0f", e.w, e.h) or "?x?"
-        add(uiPad("当前尺寸", LBL) .. sz, 0.92, 0.92, 0.92)
+        -- ★★★1.75.49：当前尺寸 = **实时读数**（不是扫描快照）+ 口径附注 ——
+        --   用户这一问（「当前尺寸是否正确」）的答案全在这行里，不再是一个孤零零的数字。
+        local lw, lh, lrw, lrh, les = uiSz.live(e.f)
+        if not (lw and lh) then lw, lh = e.w, e.h end
+        local sz = (lw and lh) and string.format("%.0fx%.0f", lw, lh) or "?x?"
+        local szNote = uiSz.note(lw, lh, lrw, lrh, les)
+        add(uiPad("当前尺寸", LBL) .. sz .. (szNote ~= "" and ("   （" .. szNote .. "）") or ""), 0.92, 0.92, 0.92)
         do
-          local ow, oh, src = uiOrigSizeOf(e.path, e)
-          add(uiPad("原始尺寸", LBL) .. (tonumber(ow) and string.format("%.0f", ow) or "?") .. "x"
-            .. (tonumber(oh) and string.format("%.0f", oh) or "?") .. "   （来源：" .. tostring(src) .. "）", 0.88, 0.88, 0.88)
+          local ow, oh, src, extra = uiOrigSizeOf(e.path, e)
+          if tonumber(ow) and tonumber(oh) then
+            add(uiPad("原始尺寸", LBL) .. string.format("%.0fx%.0f", ow, oh)
+              .. "   （来源：" .. uiSz.srcNote(src, extra) .. "）", 0.88, 0.88, 0.88)
+          else
+            -- ★旧口径在这里返回「当前尺寸」并标「当前」⇒ 看起来永远「原 = 当前」（这正是用户起疑的点）
+            add(uiPad("原始尺寸", LBL) .. "未知（本层没有可用的原值记录；可用 /edb sz 取证）", 0.72, 0.72, 0.72)
+          end
         end
         add(uiPad("缩放/透明", LBL) .. "S" .. (e.scale and string.format("%.2f", e.scale) or "?")
           .. "  A" .. (e.alpha and string.format("%.2f", e.alpha) or "?"), 0.88, 0.88, 0.88)
@@ -3895,9 +4285,13 @@ local function uiBuild()
         local cap = tonumber(ui.depthMax) or 0
         -- 「层深」上限正好卡住这一层的子层 ⇒ 视觉上也是**收起**的（点它就是往下钻一层：把上限抬高）
         local capBlocks = (cap > 0) and (cap <= drow)
-        local shut = ((ui.treeCollapsed and ui.treeCollapsed[e.path]) and true or false) or capBlocks
+        -- ★★★1.75.48 级联：`more > 0` = 「还没枚举过的子件」⇒ 这一支**尚未下钻** ⇒ 按「收起」画
+        --   （点它才去枚举那一层）；枚举过之后 `more` 归 0，箭头由真实子层数（e.kids）决定。
+        local unmaterialized = ((tonumber(e.more) or 0) > 0) and ((e.kids or 0) == 0)
+        local shut = ((ui.treeCollapsed and ui.treeCollapsed[e.path]) and true or false) or capBlocks or unmaterialized
+        local hasKid = ((e.kids or 0) > 0) or ((tonumber(e.more) or 0) > 0)
         if row.tw then
-          if ((e.kids or 0) > 0) and (shut or e.visKid) then
+          if hasKid and (shut or e.visKid) then
             if row.tw.label then
               pcall(row.tw.label.SetText, row.tw.label, shut and UI_TREE_SHUT or UI_TREE_OPEN)
             end
@@ -5966,6 +6360,12 @@ if type(SlashCmdList) == "table" then
         end
       end
       P("—— 探针完（把这屏结果发我；存档键 EH_DEBUGBOX_CFG 无需动）——")
+    elseif msg == "sz" or msg == "sizeprobe" or msg == "尺寸" or string.find(msg, "^sz%s+%d+$") == 1
+      or string.find(msg, "^尺寸%s*%d*$") == 1 then
+      -- ★★★1.75.49 尺寸取证（用户问「原始尺寸/当前尺寸是否正确」）：
+      --   把「实时读回 / 屏幕实测 / 有效缩放 / 口径判定 / 原值四级来源」一次摊开；读数进有界存档环。
+      --   ★命令名**故意不叫 size**：`/edb size 820 546` 是「改画布尺寸」，同名两个含义必然打架。
+      uiSz.probe(msg)
     elseif string.match(msg, "^sizef%s+%d+%s+%d+") then
       local w, h = string.match(msg, "^sizef%s+(%d+)%s+(%d+)")
       sizeApply(tonumber(w), tonumber(h), true)
@@ -6027,6 +6427,7 @@ if type(SlashCmdList) == "table" then
       P("/edb grab=★全自动采集（自开图→扫描→自关图→落盘）· /edb deep 0.7=全层同缩 · /edb off=全部回1")
       P("/edb mouse=★鼠标开关点名（谁吃鼠标/谁吃滚轮，判『谁抢了悬停』）")
       P("/edb size 820 546=★改画布尺寸（渲染+命中一起变的可能路线）· /edb sizef 820 546=连外框一起 · /edb sizeoff=原尺寸还原")
+      P("/edb sz [N]=★尺寸取证（原始尺寸/当前尺寸的口径与来源全摊开；N=最多几层，默认 12；无选中时取列表前 N 条）· 别名 /edb 尺寸")
       P("/edb fit 0.7=按系数改三个坐标链帧尺寸 · /edb scale 0.7=三个帧 SetScale · /edb scalef 0.7=+外框 · /edb mix 0.7=尺寸+缩放同时")
       P("/edb ui=★图层调试面板（打开面板；列表是可折叠的树：行左侧 ▼/▶ 折叠 · 顶栏「层深」= 展开到第 N 层）")
       P("/edb named=无名层过滤诊断（条目/有名/无名/列表条数 + 前 5 条实证）")

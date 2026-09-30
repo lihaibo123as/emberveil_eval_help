@@ -1081,11 +1081,14 @@ SE_OP_NEXT = "Click to switch to: %s",
   TB_DBGDRAG_TIP = "Adds a transparent drag bar to player / target / minimap / chat / combat log / action bar / action bars 1-4 / party / raid - width = frame width, 20px tall, aligned to the frame top-left, with a label. Dragging it moves that frame; the position is saved to your config and checked periodically. Clicking it also sets that frame's scale / alpha / visibility / width / height; the Reset button restores those attributes. Off by default: the bar captures the mouse. Party and raid are absent while you are not grouped (reported honestly) and appear as soon as you join. The checkbox is edit mode / guard mode: on = edit mode (drag bars and icons shown, the attribute guard is paused so it does not fight you while arranging); off = guard mode (applies your saved settings once, then keeps guarding only the layers that have custom settings - layers you never configured are never written to).",
   TB_H_UITOOLS = "UI tools", -- ★★1.74.29 由「地图工具」改名（并移到第一组）
   TB_SIMPLEMAP = "Zoom world map", -- ★1.74.30 用户：改叫「缩放大地图」
-  TB_SIMPLEMAP_TIP = "Tool module of the main addon (tools/SimpleMap.lua): world map scale + opacity + blackout hiding + position memory, applied automatically when the map opens (no /reload needed). Shift+wheel=opacity · Ctrl+wheel=scale · gold bar=drag · GUI reopen lives in [Setup] on the right. Off by default.",
+  TB_SIMPLEMAP_TIP = "World-map tool: zoom + opacity + blackout hiding + position memory; applies automatically when the map opens (no /reload). Shift+wheel=opacity - Ctrl+wheel=zoom - golden bar=drag - [Settings] on the right = GUI reopen / Reveal whole world map (on by default).",
   TB_SM_GUIREOPEN = "GUI reopen",
   TB_SM_GUIREOPEN_TIP1 = "On map open, re-show the outermost GUI once (the client hides it while the map is open).",
   TB_SM_GUIREOPEN_TIP2 = "Side effect: the map addon then believes the map is CLOSED - once you zoom out to a continent/world layer the map is auto-refreshed back to your current zone (every 2s).",
   TB_SM_GUIREOPEN_TIP3 = "Off by default. Tick it only if you want the minimap/action bars visible while the map is open.",
+  TB_SM_SWM = "Reveal whole world map",
+  -- ★★★1.75.52（用户定稿：说明**就这一句**，不要加额外信息）—— 三语同文。
+  TB_SM_SWM_TIP1 = "初看是这个世界的,其实不是这个世界的.有没似陈相识?",
   TB_SMAP_WIP = "Probe build: enable + /reload, then /ehm probe for client support; /ehm probe2 for write tests (reverted by /reload).",
   TB_SMAP_RELOAD = "EH_SimpleMap (simple map) enabled: /reload to load it",
   TB_SMAP_ASK = "Enabled. A UI reload (/reload) is required to load it. Reload now?",

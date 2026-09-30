@@ -827,6 +827,18 @@ local function lcProbe()
       tostring(px), tostring(py), under))
   end
   lcSay("最近一条判定：" .. tostring(LC.lastVerdict))
+  -- ★「下一件」链（把唯一算法 `lcNextSlot` 挂成活口 —— 见文件末尾 `EVAL_LC_TEST_NEXT` 的注释）：
+  --   真机上一个问题「点完这件之后窗为什么贴到那一格」看这一行就够了。
+  do
+    local n, chain = lcNumButtons(), {}
+    for i = 1, n do
+      if lcSlotInfo(i) then
+        local nx = lcNextSlot(i)
+        chain[table.getn(chain) + 1] = "slot" .. i .. "→" .. (nx and ("slot" .. nx) or "无")
+      end
+    end
+    lcSay("下一件链（`lcNextSlot`）：" .. (table.getn(chain) > 0 and table.concat(chain, "  ") or "（当前一格有物品的都没有）"))
+  end
 end
 
 local function lcSaveProbe()
@@ -881,6 +893,14 @@ function EVAL_LC_CMD(msg)
     lcSay("拾取贴手读数环已清空（存档里那份也要 /reload 才消失）")
   elseif rest == "" or rest == "状态" then
     lcSay(lcStateLine())
+    -- ★活口自查（用户报「工具箱里点不到这一行」时一眼可判）：注册表里那一项**就是**我们的渲染函数吗？
+    do
+      local rows = rawget(_G, "EVAL_TB_MOD_ROWS")
+      local mine = EVAL_LC_TEST_ROW()
+      lcSay("工具箱模块行："
+        .. ((type(rows) == "table" and type(mine) == "function" and rows["lootCursor"] == mine)
+          and "已登记（`EVAL_TB_MOD_ROWS.lootCursor` = 本模块渲染函数）" or "**未登记**（工具箱里会点不到这一行）"))
+    end
     lcSay("用法：" .. L("LC_USAGE"))
   else
     lcSay("未知子命令 ⇒ " .. L("LC_USAGE"))
@@ -956,3 +976,18 @@ end
 -- ★诊断口：忘掉「压实」结论（下次点击重新自证）。真机上只有一个用途 = 想让客户端重新自证一次；
 --   离线 harness 靠它把「压实 / 不压实」两种客户端都验一遍（同一进程里两条路都要跑）。
 function EVAL_LC_TEST_FORGET_COMPACT() LC.compact = nil return true end
+
+-- ★★★诊断口：「下一件」唯一算法 `lcNextSlot(i)` 的对外出口（1.75.34 的孤儿清理**误删过一次**：
+--   判据①只看 `.lua` 零引用，而它的调用方在 `tmp/lootcursor_harness.js`（.js）里 ⇒ 被当成孤儿删掉，
+--   于是那个 harness 自 1.75.34 起一直崩（`attempt to call a nil value (global 'EVAL_LC_TEST_NEXT')`）。
+--   ★按项目纪律：读值口**要么挂到命令上是活口，要么别加** —— 所以它现在**被 `lcProbe()` 调用**：
+--   `/eh go 拾取 探针` 会打一行「下一件链」= 真机上「点这一件之后窗会贴到哪一格」的直接答案。
+function EVAL_LC_TEST_NEXT(i)
+  return lcNextSlot(tonumber(i) or 0)
+end
+
+-- ★★同族诊断口（同一个孤儿清理误删的第二个）：工具箱**模块行渲染函数**本身。
+--   用途 = 真机自查「工具箱那一行登记上没有」（`/eh go 拾取 状态` 里拿它与注册表比对）。
+function EVAL_LC_TEST_ROW()
+  return lcRow
+end

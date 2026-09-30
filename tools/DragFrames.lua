@@ -1086,7 +1086,11 @@ local function dfKeepTick(quiet)
     local fr = dfPicked(tgt.name) and dfTargetFrame(tgt) or nil
     -- ★★★1.75.36l 方块目标：判据与落点都走方块（目标被**接管锚点**到方块上 ⇒ 位置 = 方块的绝对坐标）
     if tgt.block == true then
-      if type(rec) == "table" and fr and dfBlockDrift(tgt) then
+      -- ★★1.75.52：**必须带 `axAuto` 门**（与 `dfApplyAll`/`dfApplyOne` 同口径）——
+      --   迁移基准（客户端版式本身）的层**不算漂移**，拉回方块才是破坏版式；
+      --   用户报障「重置之后底部动作栏位置自动偏移」就是这里漏了门：重置已把目标从方块上摘下来，
+      --   这一支见「没锚在方块上」立刻 `dfBlockApply` 又把它锚回去 ⇒ 位置就飘了。
+      if type(rec) == "table" and fr and rec.axAuto ~= true and dfBlockDrift(tgt) then
         checked = checked + 1
         if dfBlockApply(tgt) then fixed = fixed + 1 end
       end
@@ -3152,7 +3156,14 @@ dfBlockSync = function(t, fr)
   if not bl then return nil end
   bl.dfTarget = fr
   local ax, ay
-  if type(rec) == "table" then ax, ay = dfBlockPos(fr, rec) end
+  -- ★★1.75.52：**只在编辑模式（`show`）里才做「零位移迁移」** —— `dfBlockPos` 会往记录里写 `ax/ay`，
+  --   而守护模式 / 未勾选 / 帧不在时**一个字段都不该写**（用户定：「未设置自定义属性的层不要进入更新操作」；
+  --   这也是「[重置] 之后记录清不干净」的第二半：以前每拍 dfRefresh 都把坐标又迁回来）。
+  if show and type(rec) == "table" then ax, ay = dfBlockPos(fr, rec) end
+  if (type(ax) ~= "number" or type(ay) ~= "number") and type(rec) == "table"
+    and type(rec.ax) == "number" and type(rec.ay) == "number" then
+    ax, ay = rec.ax, rec.ay -- 非编辑模式：只按记录里**已有**的坐标摆块，绝不迁移、绝不落档
+  end
   if (type(ax) ~= "number" or type(ay) ~= "number") and fr then
     local fl, fb, fw, fh = dfMeasure(fr) -- ★没记录：方块贴目标现状中心（不落档）
     if type(fl) == "number" and type(fb) == "number" then ax, ay = fl + dfNum(fw, 0) / 2, fb + dfNum(fh, 0) / 2 end
@@ -3510,6 +3521,13 @@ function EVAL_DF_RESET()
         end
         -- 定位数据一律清掉（既有口径「只清定位」的那一半照旧）
         rec.dx, rec.dy = nil, nil
+        -- ★★1.75.52（用户报障：「重置之后底部动作栏位置会自动偏移；理论上重置后守护不该生效」）：
+        --   `base`/`cur` 是**定位基准**（重置刚才就是拿 base 平移回 0 偏移的）⇒ 必须一起清，
+        --   否则记录**永远不是空的** ⇒ 下面「记录清空 → 整条删除」轮不到它 ⇒ 重置后
+        --   ① `dfBlockSync` 每拍按现状**零位移迁移**又把 `ax/ay` 写回来；
+        --   ② `dfKeepTick` 的方块分支见「没锚在方块上」就 `dfBlockApply` **重新锚回方块**（位置就飘了）。
+        --   ★顺序即判据：这一行**必须在上面 `dfPlaceFrom(fr, rec.base, 0, 0)` 之后**（那是最后一次用 base）。
+        rec.base, rec.cur = nil, nil
         -- ★★1.75.47 方块坐标**也要清**：旧写法只清 dx/dy ⇒ 方块目标（14 个常驻层）的 ax/ay 留在记录里
         --   ⇒ 「记录清空 → 整条删除」永远轮不到它们 ⇒ 重置后守卫继续守旧的方块坐标 = 「重置了没效果」。
         --   清掉后下次编辑模式由「零位移迁移」以现状为基准重建（标 axAuto，不进守卫）——自洽。

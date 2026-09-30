@@ -101,7 +101,8 @@ local function dhBuffText(bi)
   local may = true
   if type(EVAL_WTT_MAY_READ) == "function" then may = EVAL_WTT_MAY_READ() and true or false end
   if not may then return nil, false end
-  if type(EVAL_DH_TEST_TEXT) == "function" then return EVAL_DH_TEST_TEXT(bi) end -- 测试钩子（生产环境不存在）
+  -- ★1.75.52 清账：这里原有一行**测试钩子** `EVAL_DH_TEST_TEXT`（全项目**从无定义**、离线 harness 也一次没用过
+  --   ⇒ 恒为 nil 的死分支）。按「测试代码不留在产品里」清掉；要再挂钩就挂到 `/eh go` 命令上（活口才有取证价值）。
   local names = {}
   local ok = pcall(function()
     -- ★1.73.14：只碰**自建**的隔离 tooltip（EVAL_HELP_WTT），绝不碰 GameTooltip（那会清空玩家正看的物品提示）

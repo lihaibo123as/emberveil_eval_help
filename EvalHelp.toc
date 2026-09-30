@@ -38,6 +38,7 @@ IconBrowser.lua
 PetData.lua
 PetHelper.lua
 ItemPriceData.lua
+MapOverlayData.lua
 tools\SimpleMap.lua
 tools\IconGrid.lua
 tools\HunterHelper.lua
