@@ -49,7 +49,8 @@ local SM_CFG = setmetatable({}, {
 })
 
 -- 一次性迁移：老存档里迷雾的键在 `simpleMapCfg`（与「缩放大地图」共用），搬到自己的子树后**从老表删掉**。
---   ★搬不到也不影响行为：`swmOverlay`/`staleClean` 缺省就是「开」，其余（藏账/探针环/一次性标记）只是历史记录。
+--   ★搬不到也不影响行为：`swmOverlay`/`staleClean` 1.75.59c 起**缺省就是「关」**（载入期会落成显式 false），
+  --     其余（藏账/探针环/一次性标记）只是历史记录。
 local WF_MIGRATE_KEYS = { "cacheCleared51", "mapFitMode", "mapFitVerbose", "perfProbe", "probeCleared52", "staleClean", "staleLog", "swmOverlay" }
 local function wfMigrate()
   local c = rawget(_G, "EVAL_HELP_CONFIG")
@@ -326,14 +327,14 @@ MDQ.texProbe = function()
   return out
 end
 
--- 开关真值（唯一入口）：`SM_CFG.swmOverlay`（nil/false = 关 = 默认；true = 开）。
+-- 开关真值（唯一入口）：`SM_CFG.swmOverlay`（true = 开；nil/false = **关 = 默认**）。
 --   ★**落存档**（这是产品开关，与「只在本会话有效」的诊断档不同）；写入点只有两个：
---     `MDQ.fogSet`（设置下拉 / 命令 / 工具箱行都走它）与老键迁移。
+--     `MDQ.fogSet`（工具箱勾选框 / 设置下拉 / 命令都走它）与载入期归一。
 MDQ.swm = function()
-  -- ★★★1.75.52（用户：「缩放大地图->设置->**默认开启全图**」）：真值 = `SM_CFG.swmOverlay`，**默认开**——
-  --   键为 nil ⇒ **当场物化 true**（本项目「默认开」的定式，同 EC/HH）；**显式关过（false）永远是关**
-  --   （读的时候绝不用 `or true` 顶回用户的选择）。
-  if type(SM_CFG) == "table" and SM_CFG.swmOverlay == nil then SM_CFG.swmOverlay = true end
+  -- ★★★1.75.59c（用户：「默认以上两个都不勾选」+「不勾选原始地图,勾选才是开启功能,显示实际探索过的
+  --   自定义贴图功能」）：真值 = `SM_CFG.swmOverlay`，**默认关** —— 键为 nil ⇒ 关（**不物化、不顶改**）；
+  --   **显式 true 才是开**。旧版 1.75.52 的「默认开启全图」口径已按用户新要求作废（载入期会把 nil 落成
+  --   显式 false 并如实播报一次，见文件末尾的载入清账块）。
   return (type(SM_CFG) == "table") and SM_CFG.swmOverlay == true
 end
 
@@ -776,7 +777,7 @@ MDQ.release = function(why)
   return n
 end
 
--- ★★★1.75.54d/54e：**「打开世界迷雾」关掉 = 把这一路上动过的东西全部交还给客户端**（幂等，一拍一次）。
+-- ★★★1.75.54d/54e：**「关闭世界迷雾」关掉 = 把这一路上动过的东西全部交还给客户端**（幂等，一拍一次）。
 --   顺序（即判据）：① `MDQ.release` = 藏起我们自建的层 + 还回守护/收尾藏过的原生层 + 还原复用池位的原值；
 --                    ② 残留清理的账再还一次（它跟这个开关一起写，两族都不会漏）；
 --                    ③ 会话状态复位（安全阀/渲染账/性能计数）⇒ 下次打开从零开始，不带着上一轮的降档跑。
@@ -826,7 +827,7 @@ MDQ.renderCurrent = function(es, quiet, silent, withGuard)
     if type(MDQ.noTexSaid) ~= "table" then MDQ.noTexSaid = {} end
     if not MDQ.noTexSaid[file] then
       MDQ.noTexSaid[file] = true
-      pcall(smFitSay, "打开世界迷雾：地图=%s ｜ 本客户端**加载不出**这批探索层贴图"
+      pcall(smFitSay, "世界迷雾：地图=%s ｜ 本客户端**加载不出**这批探索层贴图"
         .. "（`media\\WorldMap\\%s\\…` 与 `Interface\\WorldMap\\%s\\…` 两份都探不到）"
         .. "⇒ **这一张图不接管**（客户端自己的探索层保持原样；不渲染、不藏原生）。体检：/ehm mapfit 贴图",
         tostring(file), tostring(file), tostring(file))
@@ -874,7 +875,7 @@ MDQ.renderCurrent = function(es, quiet, silent, withGuard)
   if (not MDQ.perfGuard) and (_ms > (tonumber(MDQ.SLOW_MS) or 12)
       or (tonumber(MDQ.perfSlowN) or 0) >= 3) then
     MDQ.perfGuard = true
-    pcall(smFitSay, "打开世界迷雾：本拍耗时 **%.0f ms**（地图=%s ｜ %d 块 ｜ 客户端叠加层 %d 条）"
+    pcall(smFitSay, "世界迷雾：本拍耗时 **%.0f ms**（地图=%s ｜ %d 块 ｜ 客户端叠加层 %d 条）"
       .. "⇒ 已**自动降档**：逐帧重申改成 0.5s 一拍（护守照旧每拍查数量/存在性；功能不受影响）。"
       .. "取证：/ehm mapfit perf", _ms, tostring(file), n, tonumber(hSeen) or 0)
     pcall(mfLog, "[perf] 降档：%.1f ms ｜ %s ｜ %d 块 ｜ 写 %d ｜ 跳过 %d",
@@ -904,7 +905,7 @@ MDQ.renderCurrent = function(es, quiet, silent, withGuard)
   local kChg = (MDQ.lastKSaid == nil) or (math.abs((tonumber(MDQ.lastKSaid) or 0) - k) > 0.03)
   if MDQ.saidMk ~= mk or kChg then
     MDQ.saidMk, MDQ.lastKSaid = mk, k
-    local line = string.format("打开世界迷雾：地图=%s ｜ 表里 %d 区 ⇒ 渲染 %d 块（客户端既有 %d ｜ 新加 %d）"
+    local line = string.format("世界迷雾：地图=%s ｜ 表里 %d 区 ⇒ 渲染 %d 块（客户端既有 %d ｜ 新加 %d）"
       .. "｜ 倍率 k=%.3f（%s）｜ 外框 es=%.3f ｜ 首块=%s 表 %.0fx%.0f @%.0f,%.0f ⇒ 写 %.0fx%.0f @%.0f,%.0f%s",
       tostring(file), nArea, n, tonumber(nExist) or 0, tonumber(nNew) or 0,
       k, tostring(kSrc), tonumber(es) or 1,
@@ -989,10 +990,12 @@ MDQ.staleNames = function(max)
   return s .. string.format("（共 %d 个）", n)
 end
 
--- 开关真值（唯一入口）：`SM_CFG.staleClean` —— nil = **默认开**（用户要的就是「别让不属这张图的贴图留在图上」）；
---   显式 false = 关（关掉零动作：不再新藏 + 当场把藏账里的层全部还回）。
+-- 开关真值（唯一入口）：`SM_CFG.staleClean` —— **默认关**（★1.75.59c 起：它与「关闭世界迷雾」是**同一个
+--   控制**（1.75.52 合并），而那个勾选框现在**默认不勾选** ⇒ 清理也默认关；用户要的是「不勾选 = 原始地图、
+--   插件不碰地图」）；显式 true = 开。开着时：换到「没有探索层数据」的图才把上一张图残留的池位藏起来，
+--   有数据的图**必须还回**（关掉零动作：不再新藏 + 当场把藏账里的层全部还回）。
 MDQ.staleOn = function()
-  return SM_CFG.staleClean ~= false
+  return (type(SM_CFG) == "table") and SM_CFG.staleClean == true
 end
 
 -- 名字像不像「客户端叠加层池位」：**按前缀 `WorldMapOverlay` 认**（DebugBox 图层树里那批就是 `WorldMapOverlayN`）。
@@ -1081,7 +1084,7 @@ MDQ.staleTick = function()
   engineN = tonumber(engineN) or 0
   -- ★★★1.75.52 六改 c：**替代开关开着、且本图在表里 ⇒ 残留清理整段让位**（可见性归「接管守护」：
   --   那一档客户端原生层一律要藏、还要按表自行添加）—— 两套规则同时动手只会互相打架（藏了又被还回）。
-  --   ★**只在「本图在表里」时让位**（用户要求「全图默认开」之后这更重要）：表里没有这张图的图
+  --   ★**只在「本图在表里」时让位**（1.75.52 要求「全图默认开」、1.75.59c 起**默认不勾选** ⇒ 这条更重要）：表里没有这张图的图
   --   （大陆 / 世界 / 城市）**接管守护本来就不动手**，那时残留清理必须继续干活，否则两档都失效。
   if MDQ.swm() and MDQ.holdN(fileRaw) > 0 then
     return 0, 0, 0, want, ledger0, "替代开关已开（本图在表里 ⇒ 可见性归「接管守护」）"
@@ -1271,7 +1274,7 @@ end
 
 -- ★★★1.75.52 六改（用户原话：「每次切换到一个地图、识别到地图签名的时候，对应这个地图的贴图数据库查询下有多少贴图，
 --   然后删除原生的贴图数据，再自行添加。并且做好守护程序：**有可能会将超出当前贴图数据层数的数据添加回去**，
---   所以要做好守护程序 —— **数量、存在性都要检查**」）⇒ **只在「打开世界迷雾」开着时接管**（用户选的口径 B）：
+--   所以要做好守护程序 —— **数量、存在性都要检查**」）⇒ **只在「关闭世界迷雾」开着时接管**（用户选的口径 B）：
 --   · **数量基准 = 表**：本图应有几块由 `MDQ.holdN` 现算（与 `MDQ.render` **同一算法、同一上限** `poolMax`
 --     ⇒ 全项目「本图该有几块」只有一个来源，绝不写常数）；
 --   · **原生全藏**：枚举 `WorldMapDetailFrame` 的 region，凡名字属 `WorldMapOverlay*` 且**不是我们自建的**
@@ -1313,6 +1316,24 @@ MDQ.holdN = function(file)
   if n > MDQ.poolMax then n = MDQ.poolMax end
   MDQ.holdNCache[key] = n
   return n
+end
+
+-- ★★★1.75.57d：**「迷雾这一拍真的接管了本图吗」**（只读；折算让位的**唯一**判据）。
+--   为什么必须有：让位条件原来是「**迷雾开关开着**」⇒ 迷雾开着但**本图它没接管**（表里没有这张图 /
+--   贴图探不到 / 池位建不出来 / 倍率判不出而早退）时 —— 迷雾不画、折算又被那道闸门挡着
+--   ⇒ **两边都不缩放探索层** = 用户报障「地图首次打开缩放探索层功能异常」。
+--   四条全过才算接管：① 开关开着 ② 地图身份读得到 ③ 表里**有**这张图（`holdN > 0`）
+--   ④ **本图这一拍真画出了块**（`lastRender.map` = 本图 ∧ `lastRenderN > 0`）。
+--   ★判不出（任一项读不到）⇒ 返回 **false**（不让位 ⇒ 折算照跑）—— 「判不出就不动手」的同一条纪律：
+--     宁可折算跑一遍（9/29 那份的既有行为），也不许两边都不管。
+MDQ.takesMap = function()
+  if not MDQ.swm() then return false end
+  local file = select(1, smMapInfo())
+  if file == nil or tostring(file) == "" then return false end
+  local lr = MDQ.lastRender
+  if type(lr) ~= "table" or tostring(lr.map or "") ~= tostring(file) then return false end
+  if (tonumber(MDQ.holdN(file)) or 0) <= 0 then return false end
+  return (tonumber(MDQ.lastRenderN) or 0) > 0
 end
 
 -- 原生藏账条数
@@ -1484,7 +1505,7 @@ MDQ.holdProbe = function()
   local want = MDQ.holdN(okFile and file or nil)
   local drew = tonumber(MDQ.lastRenderN) or 0
   table.insert(out, string.format(
-    "接管守护（打开世界迷雾 %s）：地图=%s ｜ 表推本图应有 %d 块 ｜ "
+    "接管守护（世界迷雾 %s）：地图=%s ｜ 表推本图应有 %d 块 ｜ "
       .. "上一次守护：藏原生 %d ｜ 又冒出来再藏 %d ｜ 我们自建被藏后复位 %d ｜ 枚举池位 %d（认出我们画的 %d）｜ 原生藏账 %d 条%s",
     MDQ.swm() and "**开**" or "关", okFile and file or "?", want,
     tonumber(MDQ.holdStat.hid) or 0, tonumber(MDQ.holdStat.again) or 0, tonumber(MDQ.holdStat.reshow) or 0,
@@ -1763,7 +1784,7 @@ MDQ.tick = function(es, dt, open, mk)
 end
 
 -- ============ 本模块**自己的开图节拍帧**（★绝不依赖「缩放大地图」那个开关）============
---   ★★★1.75.56 真机报障（用户截图：「缩放大地图」未勾 + 「打开世界迷雾」已勾 ⇒ 迷雾不生效）：
+--   ★★★1.75.56 真机报障（用户截图：「缩放大地图」未勾 + 迷雾那个勾选框已勾 ⇒ 迷雾不生效；该勾选框当时叫「打开世界迷雾」，1.75.59c 起按用户要求改名**「关闭世界迷雾」**）：
 --     第一版把本模块的节拍挂在 `SimpleMap` 的开图 tick 里，而那个 tick 在「缩放大地图**关掉**」时
 --     **整段早退**（`if not EVAL_SM_ENABLED() then … return end`）⇒ 迷雾跟着一起停摆 ——
 --     界面上勾选框显示「开」、实际一个字节都不做（最坏的那种**静默失效**）。
@@ -1799,10 +1820,26 @@ do
       local mk = mkFn and mkFn() or nil
       pcall(MDQ.tick, es, dt, true, mk)
     end
-    wf:SetScript("OnUpdate", beat)
-    -- 挂在模块表上（**不新增文件级 local**；`fogSet` 后面用它真摘/重挂）
+    -- ★★★1.75.59c：**载入期不挂节拍**（默认不勾选 ⇒ 连一次空节拍都不跑）。挂/摘的唯一入口 = 下面的
+    --   `MDQ.beatSync`（`VARIABLES_LOADED` 清账块调一次，`MDQ.fogSet` 每次切换也调）。
+    -- 挂在模块表上（**不新增文件级 local**；`fogSet` / `beatSync` 后面用它真摘/重挂）
     MDQ.wfFrame, MDQ.wfBeat = wf, beat
   end
+end
+
+-- ★★★1.75.59c（用户：「默认以上两个都不勾选」）——**节拍与开关同步的唯一入口** `MDQ.beatSync()`：
+--   ① 打开 ⇒ 挂上 beat；关掉/默认关 ⇒ **真摘 `SetScript(…, "OnUpdate", nil)`**（项目铁律：关掉零动作
+--      = 真摘，**不是**靠每帧早退 —— 每帧早退也还在跑、还在读）；
+--   ② 载入期就要调一次（`VARIABLES_LOADED` 清账块里）⇒ 默认不勾选的用户**一帧空节拍都不跑**；
+--   ③ 全文件 `OnUpdate` 注册/摘除**只有这一处**（harness 结构钉守着计数），将来谁再接一根线也推不动。
+MDQ.beatSync = function()
+  if MDQ.wfFrame == nil or MDQ.wfBeat == nil then return false end
+  if MDQ.swm() then
+    pcall(MDQ.wfFrame.SetScript, MDQ.wfFrame, "OnUpdate", MDQ.wfBeat)
+  else
+    pcall(MDQ.wfFrame.SetScript, MDQ.wfFrame, "OnUpdate", nil)
+  end
+  return true
 end
 
 -- ============ 迷雾**自己的工具箱行** + 开关 + 命令（1.75.56 从 SimpleMap 搬出来，独立管理）============
@@ -1818,8 +1855,8 @@ local function say(msg)
   end
 end
 
--- 合并开关真值（唯一读写口）：`SM_CFG.swmOverlay`；★nil = 默认开（读时由 `MDQ.swm()` 当场物化 true），
---   **显式 false 永远是关**；两个老键（swmOverlay / staleClean）一起写 ⇒ 两族闸门天然一致。
+-- 合并开关真值（唯一读写口）：`SM_CFG.swmOverlay`；★**1.75.59c 起默认关**（nil ⇒ 关；载入期落成显式 false），
+--   **显式 true 才是开**；两个老键（swmOverlay / staleClean）一起写 ⇒ 两族闸门天然一致。
 MDQ.fogSet = function(on, quiet)
   on = on and true or false
   SM_CFG.swmOverlay, SM_CFG.staleClean = on, on
@@ -1833,21 +1870,24 @@ MDQ.fogSet = function(on, quiet)
   -- ★★★1.75.57b（用户：「开关状态是否能正确关闭,节拍停止.图层清理操作」）：
   --   **关 ⇒ 真摘节拍**（不是靠每帧早退；图层清理已在上面同步做完）
   --   **开 ⇒ 重新挂上**（开回来立刻就有节拍，不用等 /reload）
-  if on then
-    if MDQ.wfFrame ~= nil and MDQ.wfBeat ~= nil then
-      pcall(MDQ.wfFrame.SetScript, MDQ.wfFrame, "OnUpdate", MDQ.wfBeat)
-    end
-  else
-    if MDQ.wfFrame ~= nil then
-      pcall(MDQ.wfFrame.SetScript, MDQ.wfFrame, "OnUpdate", nil)
-    end
-  end
+  -- ★1.75.59c：这一段的唯一实现搬到 `MDQ.beatSync()`（载入期也要用同一份 ⇒ 一处真值）
+  if type(MDQ.beatSync) == "function" then pcall(MDQ.beatSync) end
   if not quiet then
     if on then
       say("世界迷雾 = 开（本图整张由 S_WorldMap 表渲染 + 残留图层清理；节拍已启动）")
       say("　" .. L("TB_SM_SWM_TIP1"))
     else
       say("世界迷雾 = 关（**节拍已停**；我们补建的层已收起、复用过的池位已还原原贴图/几何、藏过的原生层已全部还回）")
+    end
+    -- ★★★1.75.59c（用户：「缩放大地图/关闭世界迷雾.开关状态切换都要提示用户reload操作.」）：
+    --   **切换完弹通用「需要 /reload」确认窗**（Core.lua 的 `EVAL_RELOAD_ASK` = 全项目唯一实现）；
+    --   老核心没有这个口 ⇒ 退回一行如实播报（绝不静默、也绝不假装已经生效）。
+    local ask = rawget(_G, "EVAL_RELOAD_ASK")
+    local stateTxt = L(on and "DH_ON" or "DH_OFF")
+    if type(ask) == "function" then
+      pcall(ask, L("REL_ASK_TITLE_FOG"), L("REL_ASK_BODY_FOG", stateTxt))
+    else
+      say("　" .. L("REL_ASK_BODY_FOG", stateTxt))
     end
   end
   return true
@@ -1884,7 +1924,7 @@ local TB_ROWS = rawget(_G, "EVAL_TB_MOD_ROWS")
 if type(TB_ROWS) ~= "table" then TB_ROWS = {} rawset(_G, "EVAL_TB_MOD_ROWS", TB_ROWS) end
 TB_ROWS["worldFog"] = function(r, it)
   if type(r) ~= "table" then return false end
-  -- 主开关：读 = 合并真值（`MDQ.swm()`，nil 默认开）；写 = 唯一写口 `MDQ.fogSet`
+  -- 主开关：读 = 合并真值（`MDQ.swm()`，1.75.59c 起 nil ⇒ 默认**关**）；写 = 唯一写口 `MDQ.fogSet`
   r.get = function() return MDQ.swm() end
   r.set = function(v) pcall(MDQ.fogSet, v and true or false) end
   r.extra:Hide()                       -- ★行上不重复显示摘要（只在 [设置] 悬停里）
@@ -1904,7 +1944,7 @@ TB_ROWS["worldFog"] = function(r, it)
     if tip and type(tip.Hide) == "function" then pcall(tip.Hide, tip) end
   end)
   r.add.btn:SetScript("OnClick", function()
-    if type(EVAL_DD_OPEN) ~= "function" then say("打开世界迷雾设置失败：下拉控件未载入") return end
+    if type(EVAL_DD_OPEN) ~= "function" then say("关闭世界迷雾设置失败：下拉控件未载入") return end
     local items = { L("TB_SM_SWM") }
     local keys = { "swmOverlay" }
     local sel = {}
@@ -1958,27 +1998,41 @@ do
         end
         if nc > 0 then pcall(mfLog, "清缓存：存档老键 %d 个（一次性）", nc) end
       end
-      -- ④ **开关状态归一**（1.75.54e）：合并开关之前「残留清理」可能被显式关过（false）而合并键从没写过
-      --   （nil ⇒ 读时默认开）⇒ 那会出现「勾选框显示开、功能半关」⇒ 尊重用户显式关过的那一次，两个键一起写 false。
-      if SM_CFG.swmOverlay == nil and SM_CFG.staleClean == false then
-        SM_CFG.swmOverlay, SM_CFG.staleClean = false, false
-        if type(say) == "function" then
-          say("世界迷雾 = 关（老存档里「残留图层清理」是你显式关过的 ⇒ 合并成一个控制后按关处理；要开就在工具箱勾上）")
-        end
+      -- ④ **默认档 = 不勾选**（★1.75.59c；用户：「默认以上两个都不勾选」+「不勾选原始地图,勾选才是开启功能」）：
+      --   键为 nil（从没写过）⇒ **落成显式 false**（不留 nil —— 项目纪律：开关值要显式，别让「默认」反复顶改）；
+      --   ★老用户升级时这是**行为改变**（旧版默认开 ⇒ 现在默认关）⇒ **如实播报一次**，绝不悄悄改掉；
+      --   ★之后键已存在 ⇒ 不再播报、也**绝不覆盖用户显式选过的值**。
+      --   ★老版本单独开过「残留图层清理」（`staleClean` 显式 true 而合并键从没写过）⇒ 尊重那一次显式选择。
+      local wfFresh = (SM_CFG.swmOverlay == nil)
+      if wfFresh then
+        SM_CFG.swmOverlay = (SM_CFG.staleClean == true)
       end
+      if SM_CFG.staleClean == nil then SM_CFG.staleClean = SM_CFG.swmOverlay end
+      if SM_CFG.swmOverlay == nil then SM_CFG.swmOverlay = false end
+      if SM_CFG.staleClean == nil then SM_CFG.staleClean = false end
+      if wfFresh and type(say) == "function" then
+        say("世界迷雾 = " .. (MDQ.swm() and "开" or "关")
+          .. "（本版起「缩放大地图 / 关闭世界迷雾」**默认都不勾选**：不勾选 = 保持客户端原始地图；"
+          .. "勾上并 /reload 后才启用。开关：工具箱 → UI 工具）")
+      end
+      -- ⑤ **节拍与开关同步**（默认关 ⇒ 载入期就不挂 OnUpdate：关掉零动作 = 真摘，不是每帧早退）
+      pcall(MDQ.beatSync)
       pcall(mg.UnregisterEvent, mg, "VARIABLES_LOADED")
     end)
   end
 end
 
--- ============ 对外桥（只留**真正在用**的两个口）============
+-- ============ 对外桥（只留**真正在用**的三个口）============
 --   ★★★1.75.57 审计（用户：「世界迷雾功能独立于大地图缩放.不要做强关联.」）：原来这里挂了 27 个 `EVAL_WF_*`，
 --     但搬家后宿主（SimpleMap）**只用两个** ⇒ 其余 25 个是**死口**（本项目纪律：读值口要么挂在活命令上、
---     要么别加 —— 死口就是下一轮「误接回来」的耦合面）。处置：只留下面两个，其余全删。
---   · `EVAL_WF_ON` —— 折算让位用（唯一一处「迷雾开着 ⇒ 探索层折算本拍不参与」的安全互锁，只读）。
+--     要么别加 —— 死口就是下一轮「误接回来」的耦合面）。处置：只留下面三个，其余全删。
+--   · `EVAL_WF_ON` —— 「迷雾开关开着没」（只读；`/ehm` 与诊断用，★**折算让位不许再用它** —— 见下一条）。
 --   · `EVAL_WF_CMD` —— `/ehm mapfit 残留|贴图|perf|swm [on|off]` 的命令分流（模块自带命令口）。
+--   · `EVAL_WF_TAKES_MAP` —— ★1.75.57d：**「迷雾这一拍真的接管了本图吗」**（只读，转 `MDQ.takesMap`）——
+--       折算让位的**唯一**判据（旧写法只看开关 ⇒ 触发「两边都不缩放探索层」那个用户报障）。
 --   ★迷雾自己的渲染/护守/清理/收尾**不再对外暴露**：节拍帧 `EH_WF_FEAT` 与工具箱行都在本文件里，
 --     宿主既不需要、也不该调用它们（这正是「不做强关联」的落地方式）。
 EVAL_WF_ON = function() return MDQ.swm() end
+EVAL_WF_TAKES_MAP = function() return MDQ.takesMap() end
 EVAL_WF_CMD = function(sub) return MDQ.cmd(sub) end
 

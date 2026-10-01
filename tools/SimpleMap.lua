@@ -2235,9 +2235,15 @@ local function smFitModeLabel()
 end
 
 local function smFitNeedFold()
-  -- ★★★1.75.56：**「打开世界迷雾」开着 ⇒ 整条探索层折算让位** —— 那批池位归迷雾的表驱动全渲染
-  --   （`MDQ.render`）负责，两套抢同一批几何只会互相覆盖。关掉迷雾即刻恢复折算。
-  if type(EVAL_WF_ON) == "function" and EVAL_WF_ON() then return false end
+  -- ★★★1.75.57d（用户报障「以上 SimpleMap 调整后、地图首次打开缩放探索层功能异常」）：让位条件从
+  --   「**迷雾开关开着**」改成「**迷雾真的接管了本图**」（`EVAL_WF_TAKES_MAP`：开关开着 ∧ 地图身份读得到
+  --   ∧ 表里**有**这张图 ∧ 本图这一拍**真画出了块**）。
+  --   ★旧写法（1.75.56）为什么会出这个现象：迷雾开着但**本图它没接管**（表里没有这张图 / 贴图探不到 /
+  --     池位建不出来 / 倍率判不出而早退）⇒ 迷雾不画、而折算被这道闸门挡着 ⇒ **两边都不缩放探索层**
+  --     = 用户看到的那张图「探索层缩放没生效」；9/29 那份没有迷雾、折算照跑才是他验证过的行为。
+  --   ⇒ 现在 = **谁真画了谁负责**：迷雾接管时折算让位（不打架），没接管时折算照跑（不漏）。
+  --   ★桥拿不到（旧版 WorldFog / 该文件没列进 toc）⇒ **不让位**（= 9/29 那份的既有行为）。
+  if type(EVAL_WF_TAKES_MAP) == "function" and EVAL_WF_TAKES_MAP() then return false end
   local m = smFitMode()
   if m == "nofold" then return false end
   if m == "auto" then return (SMFIT.needFold == true) end
@@ -2770,6 +2776,7 @@ local function smFitDiag()
       or "本客户端**会**自动级联 ⇒ 折算就是第二遍（策略 auto 时我们不碰）"))
   end
   P("本次实际动作 = " .. (smFitNeedFold() and "折算（按 es 写几何）" or "**不折算**（一个几何都不碰）")
+    .. " ｜ 迷雾本图接管=" .. (((type(EVAL_WF_TAKES_MAP) == "function") and EVAL_WF_TAKES_MAP()) and "是" or "否")
     .. " ｜ 取证行数 = " .. tostring((type(SM_CFG.mapFitTrace) == "table") and table.getn(SM_CFG.mapFitTrace) or 0)
     .. "（/ehm mapfit trace 可打出来）")
   return changed
@@ -2789,6 +2796,15 @@ local function smFitDumpLines()
     tostring(mk), tostring(a), tostring(b), tostring(c),
     (nOv ~= nil) and tostring(nOv) or "读不到", smFitModeLabel(),
     tostring(SMFIT.es), tonumber(SMFIT.mapAge) or 0))
+  -- ★★★1.75.57d：**把「折算为什么没跑」摊开** —— 用户报障「首次打开探索层缩放异常」的直接答案就在这一行：
+  --   迷雾开关**开着**但「本图接管=否」⇒ 折算**照跑**（这是本版的口径）；只有「本图接管=是」才让位。
+  local fogOn = (type(EVAL_WF_ON) == "function") and (EVAL_WF_ON() == true)
+  local fogBridge = (type(EVAL_WF_TAKES_MAP) == "function")
+  local fogTake = fogBridge and (EVAL_WF_TAKES_MAP() == true)
+  add(string.format("迷雾：开关=%s ｜ 本图接管=%s%s ｜ 折算本拍=%s",
+    fogOn and "开" or "关", fogTake and "是" or "否",
+    fogBridge and "" or "（**无此桥** ⇒ 按旧口径「不让位」）",
+    smFitNeedFold() and "**照跑**（按 es 写几何）" or "让位（一个几何都不碰）"))
   -- ★★★1.75.5（用户报障「每次 /reload 之后探索层缩放都不生效，只有关/开一次缩放大地图才生效」）：
   --   「记录」和「纹理上的**活值**」必须**同时**摊出来 —— 缺了活值就分不清是哪条路坏：
   --     · 记录 ≈ 活值 ≈ 客户端真值×0.7 ⇒ 抓原值时那次临时 `SetScale(1)` **没让读回跟着变**（折出来会是 0.49×）；
@@ -3368,6 +3384,16 @@ function EVAL_SM_SET(on)
     end
   end
 
+  -- ★★★1.75.59c（用户：「缩放大地图/关闭世界迷雾.开关状态切换都要提示用户reload操作.」）：
+  --   **切换完弹通用「需要 /reload」确认窗**（`Core.lua` 的 `EVAL_RELOAD_ASK` = 全项目唯一实现）；
+  --   老核心没有这个口 ⇒ 退回一行如实播报（绝不静默、也绝不假装已经完整生效）。
+  local ask = rawget(_G, "EVAL_RELOAD_ASK")
+  local stateTxt = L(on and "DH_ON" or "DH_OFF")
+  if type(ask) == "function" then
+    pcall(ask, L("REL_ASK_TITLE_SM"), L("REL_ASK_BODY_SM", stateTxt))
+  else
+    P(L("REL_ASK_BODY_SM", stateTxt))
+  end
 
   return true
 end

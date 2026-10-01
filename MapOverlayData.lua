@@ -4,7 +4,7 @@
 --   ★单位 = **地图像素**；原点 = `WorldMapDetailFrame` 左上、**y 向下**（与 `GetMapOverlayInfo` 同口径）。
 --   ★贴图路径按 Mozz 规则拼：`Interface\WorldMap\<地图文件名>\<区域名><分块号>`，
 --     每 256×256 一块、序号从 1 起；消费方 = `tools/SimpleMap.lua` 的 MDQ 渲染族
---     （工具箱 → 缩放大地图 → [设置] →「打开世界迷雾」开关）。
+--     （工具箱 → UI 工具 →「关闭世界迷雾」开关；★1.75.59c 起**默认不勾选**）。
 --   统计：地图 53 张 ｜ 区域 707 条
 EVAL_MAP_OVERLAY_DATA = {
 	["Durotar"] = {

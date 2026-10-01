@@ -207,6 +207,101 @@ local function ehResolveLang()
   EH_LANG = "zhCN"
 end
 
+-- ============ ★★★1.75.59c 通用「需要 /reload」确认窗（全项目唯一实现）============
+-- 用户：「缩放大地图/关闭世界迷雾.开关状态切换都要提示用户reload操作.」
+--   ★为什么自建：1.12 没有统一确认框 API；本客户端 `ReloadUI` 还是 **Protected**
+--     （UnrealQuest ClientAPI 实测 "addons cannot call this"）⇒ 只有 `RunScript("ReloadUI()")`
+--     这条已验证绕行路（与本项目 SendChatMessage/SpellStopCasting 同款），外加一行诚实兜底。
+--   ★★纪律：**帧名绝不与函数名同名**（组 54 老坑：具名帧顶掉同名全局函数 ⇒ type 检查与调用全废）
+--     —— 函数 = `EVAL_RELOAD_ASK(title, body)`；帧 = `EVAL_RELOAD_ASK_FRAME`；按钮 = `EVAL_RA_OK` / `EVAL_RA_LATER`。
+--   ★样式参照图层拖拽那份先行实现（DIALOG + level 230 + 金边 + 两按钮，已在真机验证过）；
+--     **新开关一律走本函数**（别再各建一份）。1.12 没有销毁帧/纹理的 API ⇒ 建成后只 Show/Hide（如实记在此）。
+--   ★返回 true = 弹出来了；false = 这个客户端建不了帧 ⇒ 调用方必须**如实转聊天行**，绝不静默。
+local reloadAsk = { frame = nil }
+function EVAL_RELOAD_ASK(title, body)
+  if type(CreateFrame) ~= "function" then return false end
+  if reloadAsk.frame == nil then
+    local W, H = 430, 156
+    local root = CreateFrame("Frame", "EVAL_RELOAD_ASK_FRAME", UIParent)
+    root:SetWidth(W)
+    root:SetHeight(H)
+    root:SetPoint("CENTER", UIParent, "CENTER", 0, 130)
+    pcall(root.SetFrameStrata, root, "DIALOG")
+    pcall(root.SetFrameLevel, root, 230)
+    if type(root.EnableMouse) == "function" then pcall(root.EnableMouse, root, true) end
+    -- ★纯色纹理只有 WHITE8X8 + SetVertexColor 可靠（项目配方）；边框四条 1px 金线
+    local bg = root:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints(root)
+    pcall(bg.SetTexture, bg, "Interface\\Buttons\\WHITE8X8")
+    pcall(bg.SetVertexColor, bg, 0.04, 0.04, 0.04, 0.96)
+    for _, e in ipairs({ "TOP", "BOTTOM" }) do
+      local t = root:CreateTexture(nil, "BORDER")
+      pcall(t.SetTexture, t, "Interface\\Buttons\\WHITE8X8")
+      pcall(t.SetVertexColor, t, 0.85, 0.70, 0.20, 1)
+      t:SetPoint(e .. "LEFT", root, e .. "LEFT", 0, 0)
+      t:SetPoint(e .. "RIGHT", root, e .. "RIGHT", 0, 0)
+      t:SetHeight(1)
+    end
+    for _, s in ipairs({ "LEFT", "RIGHT" }) do
+      local t = root:CreateTexture(nil, "BORDER")
+      pcall(t.SetTexture, t, "Interface\\Buttons\\WHITE8X8")
+      pcall(t.SetVertexColor, t, 0.85, 0.70, 0.20, 1)
+      t:SetPoint("TOP" .. s, root, "TOP" .. s, 0, 0)
+      t:SetPoint("BOTTOM" .. s, root, "BOTTOM" .. s, 0, 0)
+      t:SetWidth(1)
+    end
+    local function mkFS(parent)
+      local fs = parent:CreateFontString(nil, "OVERLAY")
+      -- ★字体链（项目配方）：先试 FontObject，读不到字体再试字体文件，全程 pcall（EditBox/FontString 老雷）
+      local okF = pcall(fs.SetFontObject, fs, "GameFontHighlightSmall")
+      local okG, fpath = pcall(fs.GetFont, fs)
+      if (not okF) or (not okG) or fpath == nil then
+        pcall(fs.SetFont, fs, "Fonts\\FZLBJW.TTF", 12)
+      end
+      return fs
+    end
+    local titleFS = mkFS(root)
+    titleFS:SetPoint("TOP", root, "TOP", 0, -12)
+    titleFS:SetTextColor(0.95, 0.82, 0.35)
+    local bodyFS = mkFS(root)
+    bodyFS:SetPoint("TOP", root, "TOP", 0, -34)
+    bodyFS:SetWidth(W - 36)
+    pcall(bodyFS.SetJustifyH, bodyFS, "CENTER")
+    bodyFS:SetTextColor(0.90, 0.90, 0.90)
+    local function mkB(txt, x, fn, nm)
+      local b = CreateFrame("Button", nm, root)
+      b:SetWidth(150)
+      b:SetHeight(22)
+      b:SetPoint("BOTTOM", root, "BOTTOM", x, 14)
+      if type(b.EnableMouse) == "function" then pcall(b.EnableMouse, b, true) end
+      if type(b.RegisterForClicks) == "function" then pcall(b.RegisterForClicks, b, "LeftButtonUp") end
+      local bb = b:CreateTexture(nil, "BACKGROUND")
+      bb:SetAllPoints(b)
+      pcall(bb.SetTexture, bb, "Interface\\Buttons\\WHITE8X8")
+      pcall(bb.SetVertexColor, bb, 0.22, 0.17, 0.07, 1)
+      local bl = mkFS(b)
+      bl:SetPoint("CENTER", b, "CENTER", 0, 0)
+      bl:SetText(txt)
+      b:SetScript("OnClick", fn)
+      return b
+    end
+    mkB(L("REL_ASK_OK"), -80, function()
+      pcall(root.Hide, root)
+      -- ★Protected 绕行（SendChatMessage/SpellStopCasting 同款已验证机制）；RunScript 是队列，失败也不崩
+      pcall(RunScript, "ReloadUI()")
+      say(L("REL_ASK_RUNNING"))
+    end, "EVAL_RA_OK")
+    mkB(L("REL_ASK_LATER"), 80, function() pcall(root.Hide, root) end, "EVAL_RA_LATER")
+    root:Hide()
+    reloadAsk.frame = { root = root, title = titleFS, body = bodyFS }
+  end
+  local F = reloadAsk.frame
+  pcall(F.title.SetText, F.title, tostring(title or ""))
+  pcall(F.body.SetText, F.body, tostring(body or ""))
+  pcall(F.root.Show, F.root)
+  return true
+end
+
 
 local function output(msg)
   say(msg)

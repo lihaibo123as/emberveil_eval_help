@@ -4568,12 +4568,17 @@ local function tbModel()
     -- ★★★1.74.35-3 用户要求（「缩放大地图右侧添加个设置」）⇒ 这一行也改成**模块行**：
   --   右侧 [设置] 下拉（多选）与勾选框的接线**全在 tools/SimpleMap.lua 的 smRow 里**（与图层拖拽/图层隐藏同一套）。
   --   ★不写 `noChk` ⇒ 保留主开关勾选框（真值 = `tbCfg().simpleMap`，读写都走模块的 EVAL_SM_ENABLED/SET）。
+  --   ★★★1.75.59c（用户：「默认以上两个都不勾选」）：本行**默认不勾选**（nil ⇒ false）；
+  --     切换勾选框后模块会弹**通用「需要 /reload」确认窗**（`Core.lua` 的 `EVAL_RELOAD_ASK`）。
   { t = "mod", mod = "simpleMap", key = "simpleMap", label = L("TB_SIMPLEMAP"), tip = L("TB_SIMPLEMAP_TIP") },
     -- ★★★1.75.56 用户要求：「将开启迷雾功能独立个脚本文件代码管理」+「单独占工具箱一行（自己一个勾选框
     --   + 自己的 [设置]）」⇒ 世界迷雾**独立成一行**，控件/悬停/下拉/结算全在 `tools/WorldFog.lua`
     --   （登记进全局注册表 `EVAL_TB_MOD_ROWS["worldFog"]`，载入期就登记、早于任何一次面板构建）。
-    --   ★勾选框真值 = 模块自己的合并开关（`SM_CFG.swmOverlay`，nil = 默认开）—— 模块的 `r.get`/`r.set` 接管，
-    --     这里的 `key` 只是行标识（不再指向工具箱自己的配置键）。
+    --   ★勾选框真值 = 模块自己的合并开关（`SM_CFG.swmOverlay`，★1.75.59c 起 **nil ⇒ 默认关 = 不勾选**）
+    --     —— 模块的 `r.get`/`r.set` 接管，这里的 `key` 只是行标识（不再指向工具箱自己的配置键）。
+    --   ★★★1.75.59c（用户：「打开世界迷雾重命名: 关闭世界迷雾」+「不勾选原始地图,勾选才是开启功能」）：
+    --     行名 = `TB_SM_SWM`（三语都改）；**勾选含义不变**（勾上 = 用数据库贴图重画探索层）；
+    --     切换勾选框后模块弹**通用「需要 /reload」确认窗**（`EVAL_RELOAD_ASK`）。
     { t = "mod", mod = "worldFog", key = "swmOverlay", label = L("TB_SM_SWM"), tip = L("TB_SM_SWM_TIP1") },
     -- ★★★1.74.34 用户要求：「审查下 图层拖拽的功能.在Toolbox.lua 内的代码修改.参考以上也进行./tools 的代码文件归类」
     --   ⇒ 这一行现在也只是**一行数据**（原先那 128 行界面接线搬进了 `tools/DragFrames.lua` 的 `dfRow`，

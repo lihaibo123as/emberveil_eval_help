@@ -4519,7 +4519,9 @@ local function DD_BUILD()
     local rb = CreateFrame("Button", nil, dd)
     rb:SetWidth(104) rb:SetHeight(14)
     pcall(rb.EnableMouse, rb, true)
-    pcall(rb.RegisterForClicks, rb, "LeftButtonUp")
+    -- ★1.75.59 也注册右键：下拉可选支持 `opts.onRowRight`（「已记录」组**右键 = 删除这一条缓存记录**）。
+    --   ★不注册 = 右键事件永远到不了分派代码（本项目铁律）；★不传 opts.onRowRight 的菜单**行为一个字节都不变**。
+    pcall(rb.RegisterForClicks, rb, "LeftButtonUp", "RightButtonUp")
     local rbg = rb:CreateTexture(nil, "BACKGROUND")
     uiSolid(rbg, 0.10, 0.09, 0.06, 1)
     rbg:SetPoint("TOPLEFT", rb, "TOPLEFT", 0, 0)
@@ -4538,7 +4540,20 @@ local function DD_BUILD()
     rw:SetWidth(12) rw:SetHeight(12)
     rw:SetPoint("RIGHT", rb, "RIGHT", -2, 0)
     rw:Hide()
-    local rec = { btn = rb, bg = rbg, text = rt, icon = ri, warn = rw, tip = nil }
+    -- ★1.75.59b 每行的**显式删除钮**（默认隐藏；只有宿主用 `opts.rowDel[下标]` 点名的行才显示出来）：
+    --   ★为什么要有它：右键能不能被识别，取决于「客户端把鼠标键报给谁」（本项目 idiom 要读全局 arg1）
+    --     —— 这条是**不依赖那件事**的保底路（真机右键曾被当成左键 ⇒ 只把行选中）。
+    --   ★它是行内的独立帧：本客户端**抬高父帧不带动子件** ⇒ 每一拍显式 SetFrameLevel（同行的做法）。
+    local rx = CreateFrame("Button", nil, rb)
+    rx:SetWidth(11) rx:SetHeight(11)
+    rx:SetPoint("RIGHT", rb, "RIGHT", -1, 0)
+    pcall(rx.EnableMouse, rx, true)
+    pcall(rx.RegisterForClicks, rx, "LeftButtonUp")
+    local rxt = uiText(rx, 9, 0.95, 0.45, 0.45)
+    rxt:SetPoint("CENTER", rx, "CENTER", 0, 0)
+    rxt:SetText("|cffff6060✕|r")
+    rx:Hide()
+    local rec = { btn = rb, bg = rbg, text = rt, icon = ri, warn = rw, xDel = rx, tip = nil }
     ddUI.rows[i] = rec
     rb:SetScript("OnEnter", function()
       pcall(rbg.SetVertexColor, rbg, 0.38, 0.30, 0.10, 1)
@@ -4683,9 +4698,68 @@ end
 --          → ③ 其余技能名（垫底，仍可选）。三组之间用不可点分组标题分隔。
 --   ★为什么必须共用：先前测试自己复刻了一遍这个顺序，于是「删掉实时分组标题」这类变异
 --   在测试里完全不可见（测试测的是副本）。抽到这里之后，UI 与断言看的是同一份代码。
+-- ★★★1.75.59 光环「名字→纹理」学习表的**删除唯一实现**（命令 `/eh go texdel|texclear` 与下拉里的
+--   「右键删除 / 清空已记录」共用这一份）——两处各写一份迟早漂移（本项目「一处真值变两处」的老账）。
+--   用户诉求原话：「一键宏 → 方案技能编辑 → 技能选择的弹窗内，**已记录的技能有点太多而且杂**，
+--   如何能选择的删除缓存记录?」
+--   · 数据源 = `cfg.war.debuffTex`（**每角色持久**，Engine 每次真实光环扫描时自动写入）+ 运行时兜底表
+--     `EVAL_DEBUFF_TEX_LEARN`；它同时就是下拉「已记录」那一组的**唯一来源**（见 SE_AURA_MENU ②）
+--     ⇒ 从这里删掉一条 = 菜单里立刻消失（**下次真的看到那个光环时会被重新学回来**，删是可逆的）。
+--   · ★大小写口径照原 `/eh go texdel`：`/eh` 会把整条命令转小写 ⇒ 比对按小写做（否则 ASCII 名字删不掉）。
+function EVAL_AURA_TEX_FORGET(name)
+  local want = tostring(name or "")
+  if want == "" then return nil end
+  local key = string.lower(want)
+  local hit = nil
+  local function delFrom(t)
+    if type(t) ~= "table" then return end
+    if t[want] ~= nil then hit = want t[want] = nil return end
+    for k in pairs(t) do
+      if type(k) == "string" and string.lower(k) == key then hit = k t[k] = nil return end
+    end
+  end
+  delFrom(EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war and EVAL_HELP_CONFIG.war.debuffTex)
+  delFrom(EVAL_DEBUFF_TEX_LEARN)
+  if type(EVAL_AURA_TEST_RESET_NAME_CACHE) == "function" then pcall(EVAL_AURA_TEST_RESET_NAME_CACHE) end
+  return hit
+end
+
+-- 清空整张学习表（持久表 + 运行时兜底表）；返回**去重后**清掉的条数（两张表可能重名 ⇒ 只数一次）
+function EVAL_AURA_TEX_FORGET_ALL()
+  local seen, n = {}, 0
+  local function sweep(t)
+    if type(t) ~= "table" then return end
+    for k in pairs(t) do
+      if type(k) == "string" and not seen[k] then seen[k] = true n = n + 1 end
+      t[k] = nil
+    end
+  end
+  sweep(EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war and EVAL_HELP_CONFIG.war.debuffTex)
+  sweep(EVAL_DEBUFF_TEX_LEARN)
+  if type(EVAL_AURA_TEST_RESET_NAME_CACHE) == "function" then pcall(EVAL_AURA_TEST_RESET_NAME_CACHE) end
+  return n
+end
+
+-- 学习表当前条数（两表**去重**）——「清空已记录（N 条）」那一行与删除后的播报共用它（同一口径）
+function EVAL_AURA_TEX_COUNT()
+  local seen, n = {}, 0
+  local function count(t)
+    if type(t) ~= "table" then return end
+    for k in pairs(t) do
+      if type(k) == "string" and not seen[k] then seen[k] = true n = n + 1 end
+    end
+  end
+  count(EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war and EVAL_HELP_CONFIG.war.debuffTex)
+  count(EVAL_DEBUFF_TEX_LEARN)
+  return n
+end
+
 -- ★1.75.39 第二参数 cd = 当前条件对象（用于④「已选但不在候选里」那一组）；不传 = 老行为（零回归）。
 function SE_AURA_MENU(k0, cd)
   local items, names, locked = {}, {}, {}
+  -- ★1.75.59 「已记录」那一组的**可删除行**（del[原始下标]=true）与**动作行**（act[原始下标]="clearLearned"）：
+  --   由调用方（sei 的光环条件下拉）消费 —— 右键删单条 / 左键清空；其它组**一个都不标**（只读列表）。
+  local del, act = {}, {}
   local function push(disp, nm)
     local i = table.getn(items) + 1
     items[i] = disp names[i] = nm
@@ -4738,8 +4812,19 @@ function SE_AURA_MENU(k0, cd)
     local learned = {}
     if lt then for n in pairs(lt) do if not seen[n] and n ~= "" then table.insert(learned, n) end end end
     table.sort(learned)
-    if table.getn(learned) > 0 then header(L("SE_LEARNED_AURA")) end
-    for _, n in ipairs(learned) do push("◇" .. n, n) end
+    local nLearned = table.getn(learned)
+    if nLearned > 0 then
+      header(L("SE_LEARNED_AURA"))
+      -- ★1.75.59 用户要求「能选择的删除缓存记录」⇒ 这一组**每行可右键删除**（del[i]=true，宿主回调里删学习表），
+      --   并在组尾给一条**动作行**「✕ 清空已记录（N 条）」（act[i]="clearLearned"，左键生效）。
+      --   ★动作行是**可选行**（names[i]=nil 但不 locked）——正好与分组标题相反：标题不可点、这条可点。
+      for _, n in ipairs(learned) do
+        local li = push("◇" .. n, n)
+        del[li] = true
+      end
+      local ci = push("|cffff8080✕|r " .. string.format(L("SE_LEARNED_CLEAR"), nLearned), nil)
+      act[ci] = "clearLearned"
+    end
   end
   -- ③ 其余技能名（垫底；光环条件下它们大多不是光环，但保留以便手工指定）
   local rest = {}
@@ -4788,7 +4873,7 @@ function SE_AURA_MENU(k0, cd)
       end
     end
   end
-  return { items = items, names = names, locked = locked, liveN = liveN }
+  return { items = items, names = names, locked = locked, liveN = liveN, del = del, act = act }
 end
 
 
@@ -4958,6 +5043,36 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
   -- ★1.75.14 列宽可由调用方指定（`opts.colW`）：「来源」菜单的条目要带等级区间 `(30-45)`，
   --   默认 108/124 装不下（会串到下一列）⇒ 那里传 146。不传就是老口径，其他菜单不受影响。
   local colW = tonumber(opts and opts.colW) or ((icons or warns) and 124 or 108)
+  -- ★★★1.75.59 可选 `opts.onRowRight(pi)`：**只有宿主传了才挂右键**（不传 ⇒ 返回原闭包，老行为一个字节不变）。
+  --   用户诉求原话（方案技能编辑 → 光环条件下拉）：「已记录的技能有点太多而且杂,如何能选择的删除缓存记录?」
+  --   ⇒ 那一组的行右键 = 删掉这条学习记录（宿主回调里做，下拉组件不认识「学习表」这东西）。
+  --   ★★★鼠标键**必须按本项目既有 idiom 从 a / b / 全局 `arg1` 三处取**（同「方案」按钮与技能格那一族）：
+  --     本客户端把脚本处理体的参数放在**全局 arg1/arg2**（OnUpdate 更要「一个参数都不传」）⇒
+  --     只读回调实参 a/b 时右键被当成左键 —— **真机症状：右键把这一行「选中」了**（用户 2026-10-01 截图 + 原话
+  --     「右键目前是选中的状态.」）。★处置：照抄 idiom，**不再自作聪明省掉 arg1**；
+  --     风险收敛：删除**只对宿主点名的那几行生效**（`delMap[pi]`），别的行右键/误读都返回 false、什么都不做。
+  --   ★返回值语义：宿主回调返回 true = 「已处理」（宿主自己负责刷新视图）。
+  --   ★★★1.75.59c **这里不再就地灰那一行**：宿主删完会**当场重开下拉**（用户要求「删除之后当前下拉要能及时刷新」），
+  --     重绘后**同一个行池位**显示的是**别的条目** ⇒ 此时改它的文字色会**灰到不相干的那一行**（真机可见的错色）。
+  local function ddLeft(pi, row, fn)
+    if not (opts and opts.onRowRight) then return fn end
+    return function(a, b)
+      local mbtn = (type(a) == "string" and a) or (type(b) == "string" and b)
+        or (type(arg1) == "string" and arg1) or "LeftButton"
+      if mbtn == "RightButton" then
+        pcall(opts.onRowRight, pi)
+        return
+      end
+      if fn then fn() end
+    end
+  end
+  -- ★1.75.59b 每行右端一个**显式删除钮**（`opts.rowDel[原始下标]=true` 的行才显示）：
+  --   右键在客户端上「报不报鼠标键」是有条件的事实（见上），这里给一条**不依赖它**的路 ——
+  --   左键点 ✕ = 删这一条；点行本身照旧 = 选中/取消。★行池复用 ⇒ 每一拍都必须显式 Show/Hide。
+  local rowDels = opts and opts.rowDel
+  local function rowDelPress(pi)
+    return function() pcall(opts.onRowRight, pi) end
+  end
   for slot, row in ipairs(ddUI.rows) do
     if slot <= nDraw then
       local i = shownList[base + slot]   -- 显示位置 -> 原始下标（负数 = 自由文本哨兵行）
@@ -4965,6 +5080,7 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
       if i == -1 then
         row.icon:Hide()
         row.warn:Hide() -- ★1.71.3 自由文本行不许带异常标记/悬停（残留防护）
+        if row.xDel then row.xDel:Hide() end -- ★1.75.59b 同上：删除钮也不许残留到这一行
         row.tip = nil
         row.text:ClearAllPoints()
         row.text:SetPoint("LEFT", row.btn, "LEFT", 4, 0)
@@ -4973,11 +5089,11 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
         pcall(row.text.SetTextColor, row.text, 0.85, 0.85, 0.85)
         row.bgBase = nil
         pcall(row.bg.SetVertexColor, row.bg, 0.10, 0.09, 0.06, 1)
-        row.btn:SetScript("OnClick", function()
+        row.btn:SetScript("OnClick", ddLeft(pi, row, function()
           local txt = ddUI.searchText
           EVAL_DD_HIDE()
           opts.onFreeText(txt)
-        end)
+        end))
         local col0 = math.floor((slot - 1) / rowsPerCol)
         local ri0 = math.mod(slot - 1, rowsPerCol)
         row.btn:ClearAllPoints()
@@ -5020,6 +5136,22 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
       -- ★1.71.3 悬停说明：**逐项** tips 优先（用户要求：把「支持选取规则的条件类型」分别加 tooltip），
       --   没有逐项说明时才退回「异常标记」那句 warnTip。★每次重绘都要重设（行池复用，残留就是 bug）。
       row.tip = (tips and tips[i]) or (wi and opts.warnTip) or nil
+      -- ★1.75.59b 显式删除钮：**只有宿主点名的行**才显示（`opts.rowDel[原始下标]`），分组标题行永不显示。
+      --   ★行池复用 ⇒ 每一拍都要显式 Show/Hide（残留就是 bug，同 warns/tips 那一族）；
+      --   ★显示时给文字一个**限宽**（下拉行文字本来不限宽，会压到 ✕ 上）——隐藏时必须写回 0（= 自动宽）。
+      if row.xDel then
+        local isLocked = ddUI.locked and ddUI.locked[pi] and true or false
+        if rowDels and rowDels[pi] and not isLocked then
+          pcall(row.xDel.SetFrameLevel, row.xDel, (tonumber(wantLevel) or 250) + 10 + slot)
+          pcall(row.text.SetWidth, row.text, colW - 22)
+          row.xDel:SetScript("OnClick", rowDelPress(pi))
+          row.xDel:Show()
+        else
+          pcall(row.text.SetWidth, row.text, 0) -- 0 = 自动宽（还原）
+          row.xDel:SetScript("OnClick", nil)
+          row.xDel:Hide()
+        end
+      end
       if ddUI.multi then
         -- 多选标记统一为「方框」样式，与配置窗自绘勾选框（cfgCheck）观感一致：
         -- 选中=|cffffd100■|r、未选=|cff6a6a6□|r（用户要求「支持第二张图的方式多选」）
@@ -5038,16 +5170,16 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
         if locked then
           row.btn:SetScript("OnClick", nil)
         else
-          row.btn:SetScript("OnClick", function()
+          row.btn:SetScript("OnClick", ddLeft(pi, row, function()
             local nowOn = not (ddUI.sel[pi] and true or false)
             ddUI.sel[pi] = nowOn or nil
             paint()
             onPick(pi, nowOn)
-          end)
+          end))
         end
       else
         row.text:SetText(tostring(items[i]))
-        row.btn:SetScript("OnClick", function() dd:Hide() onPick(pi) end)
+        row.btn:SetScript("OnClick", ddLeft(pi, row, function() dd:Hide() onPick(pi) end))
       end -- 自由文本哨兵行
       end
       -- 布局按【显示位置 slot】，不是原始下标 i（过滤后两者不同）
@@ -6161,11 +6293,15 @@ local function SE_BUILD()
       --   **测不出来**——测试看的是自己的副本，而不是真代码。抽成共用函数后变异立刻可见。
       local menu = SE_AURA_MENU(it.cd.k, it.cd)
       local items, names, locked = menu.items, menu.names, menu.locked
+      -- ★1.75.59 「已记录」组的可删除行 / 清空动作行（见 SE_AURA_MENU ②）：由本处的右键回调与 onPick 消费
+      local delMap, actMap = menu.del, menu.act
       local icons = {}
       local anyIcon = false
       local auraMulti2 = isAuraMultiKind(it.cd.k)
       local sel2 = {}
       local curSet = {}
+      -- ★1.75.59 「已记录」那些行的悬停说明（告诉用户**右键能删**）——只在真有可删行时才传 opts.tips
+      local tips, anyTip = {}, false
       if auraMulti2 and type(EVAL_AURA_NAMES) == "function" then
         for _, cn in ipairs(EVAL_AURA_NAMES(it.cd)) do curSet[cn] = true end
       end
@@ -6176,6 +6312,7 @@ local function SE_BUILD()
         local nm = names[i2]
         local t = (nm ~= nil) and auraTexOf(nm) or nil
         if t then icons[i2] = t anyIcon = true end
+        if delMap and delMap[i2] then tips[i2] = L("SE_LEARNED_DEL_TIP") anyTip = true end
         if auraMulti2 and nm ~= nil and curSet[nm] then sel2[i2] = true end
       end
       -- ★1.75.39 单选类（免疫/范围内/施法中）也要能看出**当前值**：
@@ -6203,7 +6340,44 @@ local function SE_BUILD()
         if type(EVAL_AURA_SET) == "function" then EVAL_AURA_SET(it.cd, out) end
         EVAL_HELP_SE_REFRESH()
       end
+      -- ★★★1.75.59 「已记录」组的两个动作（用户要求「已记录的技能有点太多而且杂,如何能选择的删除缓存记录?」）：
+      --   ① **右键某一行 = 删掉那一条学习记录**（`EVAL_AURA_TEX_FORGET`，唯一实现 —— 与 `/eh go texdel` 同源）；
+      --      ★若这个名字**正被本条件选中**，必须**同时从选中集里摘掉**：否则留下一个「查不到纹理」的名字，
+      --      判定会如实报「无法识别光环」而技能永远不放（本项目「查不到 ≠ 没有」那一族的老雷）。
+      --   ② 组尾动作行「✕ 清空已记录（N 条）」= 清空整表（`EVAL_AURA_TEX_FORGET_ALL`）。
+      --   两条都**只动本角色的学习表**（**可逆**：下次真的看到那个光环会被重新学回来），并**如实报条数**。
+      -- ★★★1.75.59c **删完当场重开下拉**（用户要求：「删除之后当前下拉要能及时刷新」）：
+      --   口径 = **先关、再走同一个入口** —— `EVAL_DD_OPEN` 开头有 toggle 分支（「再点一次同一锚点 = 收起」），
+      --   不先关的话重开会被当成收起（= 删完列表**消失**，比不刷新还糟）。
+      --   入口 = 宿主按钮自己的 OnClick 脚本（与 sHit 用的是同一个，绝不另写一份菜单构建逻辑）。
+      local function auraDropRefresh()
+        local b = row.sDrop and row.sDrop.btn
+        local c = b and b:GetScript("OnClick")
+        pcall(EVAL_DD_HIDE)
+        if c then pcall(c) end
+      end
+      local function learnedDrop(name)
+        local hit = EVAL_AURA_TEX_FORGET(name)
+        if not hit then return false end
+        if auraMulti2 then
+          local set4 = auraSetNow()
+          if set4[hit] or set4[name] then
+            set4[hit] = nil set4[name] = nil
+            auraCommit(set4)
+          end
+        end
+        say(string.format(L("SE_LEARNED_DEL"), tostring(hit), EVAL_AURA_TEX_COUNT()))
+        auraDropRefresh() -- ★删完立刻用新数据重画（那一行消失、「清空已记录（N 条）」的 N 也跟着变）
+        return true
+      end
+      local function learnedClearAll()
+        local n = EVAL_AURA_TEX_FORGET_ALL()
+        if auraMulti2 and next(auraSetNow()) ~= nil then auraCommit({}) end
+        say(string.format(L("SE_LEARNED_CLEARED"), n))
+        auraDropRefresh() -- ★同上：清完当场刷新（「已记录」整组消失）
+      end
       EVAL_DD_OPEN(row.sHit, items, function(pi, on)
+        if actMap and actMap[pi] == "clearLearned" then learnedClearAll() return end
         if locked[pi] then return end -- 分组标题行：不可选
         if auraMulti2 then
           local nm3 = names[pi]
@@ -6218,6 +6392,15 @@ local function SE_BUILD()
       end, {
         multi = auraMulti2 and true or nil, selected = auraMulti2 and sel2 or nil,
         icons = anyIcon and icons or nil, locked = locked,
+        -- ★1.75.59 「已记录」组：行悬停说明「右键 = 删除这条记录」+ 右键回调（见 learnedDrop）；
+        --   非该组的行 onRowRight 返回 false ⇒ 组件不会灰掉它（也不会误删任何东西）。
+        tips = anyTip and tips or nil,
+        -- ★1.75.59b 每行右端的显式 ✕ 删除钮（不依赖「客户端报不报鼠标键」那条路）；delMap 由 SE_AURA_MENU 给出
+        rowDel = delMap,
+        onRowRight = function(pi)
+          if not (delMap and delMap[pi]) then return false end
+          return learnedDrop(names[pi])
+        end,
         -- ★★★1.71.2（第八轮）用户要求**还原**：「这个功能还原，到输入框格保持在下拉内，
         --   并且支持打字过滤和自定义输入」。
         --   → 重新启用**面板内搜索框**：打字即过滤；自定义输入走 onFreeText（自由文本行）。
@@ -8380,34 +8563,21 @@ if type(SlashCmdList) == "table" then
       end
       if n1 > 12 then say("  …另有 " .. (n1 - 12) .. " 条未列出") end
       say("删单条 /eh go texdel 名字 ｜ 全清 /eh go texclear ｜ 立即扫一遍 /eh go texscan")
+      say("（同一个口也在光环下拉里：「已记录」组**右键某行 = 删这一条** ｜ 组尾「清空已记录」= 全清）")
     elseif string.find(msg, "^go texdel ") then
       -- ★1.72.2 删掉一条学习记录 → 下次判定应**重新扫描并自动学回来**（这正是你要验的「自动扫描」）
+      -- ★1.75.59 删法**只此一份**（`EVAL_AURA_TEX_FORGET`）：下拉里的「右键删除」调的是同一个函数 ——
+      --   两处各写一份的话，「大小写口径/运行时兜底表/名字缓存重置」迟早有一处漏掉（本项目老账）。
       local want = string.sub(msg, 11) -- "go texdel " 共 10 字符
-      local hit = nil
-      local function delFrom(t)
-        if type(t) ~= "table" then return end
-        if t[want] ~= nil then hit = want t[want] = nil return end
-        for k in pairs(t) do -- ★/eh 会把整条命令转小写，所以名字要**大小写不敏感**匹配
-          if type(k) == "string" and string.lower(k) == want then hit = k t[k] = nil return end
-        end
-      end
-      delFrom(EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war and EVAL_HELP_CONFIG.war.debuffTex)
-      delFrom(EVAL_DEBUFF_TEX_LEARN)
-      EVAL_AURA_TEST_RESET_NAME_CACHE()
+      local hit = EVAL_AURA_TEX_FORGET(want)
       if hit then
-        say("已删除学习记录：" .. tostring(hit) .. " —— 下次判定会**重新扫描**并按名字自动学回来")
+        say("已删除学习记录：" .. tostring(hit) .. "（剩 " .. EVAL_AURA_TEX_COUNT()
+          .. " 条）—— 下次判定会**重新扫描**并按名字自动学回来")
       else
         say("学习表里没有「" .. tostring(want) .. "」这条（可能本来就没学过）")
       end
     elseif msg == "go texclear" then
-      local n = 0
-      local function clearT(t)
-        if type(t) ~= "table" then return end
-        for k in pairs(t) do n = n + 1 t[k] = nil end
-      end
-      clearT(EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war and EVAL_HELP_CONFIG.war.debuffTex)
-      clearT(EVAL_DEBUFF_TEX_LEARN)
-      EVAL_AURA_TEST_RESET_NAME_CACHE()
+      local n = EVAL_AURA_TEX_FORGET_ALL()
       say("已清空光环学习表（" .. n .. " 条）—— 之后光环判定会先按名字扫描、并自动学回来")
     elseif msg == "go texscan" then
       -- ★1.72.2 立即扫一遍四类光环：名字=纹理 + **本次扫描是否可信**（三态设计的直接证据）
