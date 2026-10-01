@@ -1873,6 +1873,10 @@ end
 --   （用户：「1.75.45b 换图后探索层缩放失效那块可以不用保留，替代方案已做好」）⇒
 --   这三个常量只服务**表驱动全渲染**的「开图 / 换图 / 缩放变化后逐帧重申」，不再有任何抓原值/折算。
 local SM_BURST_GAP, SM_BURST_SEC, SM_IDLE_GAP = 0.1, 2.0, 0.3
+-- ★★★1.75.54（1.75.53 真机报障「开了十几个地区以后游戏会卡死」）：爆发窗的**重新武装**必须只认
+--   **引擎真值**（我们写不进去的东西），并且有**最小间隔**与**帧数上限** ——
+--   旧写法看 `es` 抖 0.001 就重置 2s 窗口，而我们每拍都在写几何 ⇒ 窗口永不结束 = 每帧整张图重写。
+local SM_BURST_REARM_MIN, SM_BURST_FRAMES = 0.5, 90
 -- ★★★1.75.13 新增：**地图身份**（这是本轮修法的地基）。
 --   为什么必须：`WorldMapOverlay1..N` 这批纹理是**按序号逐图复用**的 —— 客户端每次 `WorldMapFrame_Update`
 --   按当前地图的叠加层列表重新分配它们（本机 S_WorldMap 同源代码：`CreateTexture("WorldMapOverlay"..j)` → 每图重摆），
@@ -1899,6 +1903,22 @@ local function smNumOverlays()
   local ok, n = pcall(GetNumMapOverlays)
   if not ok or not tonumber(n) then return nil end
   return tonumber(n)
+end
+
+-- ★★★1.75.54：**引擎真值签名** —— 只用来判「要不要重新武装爆发窗」。
+--   为什么不用 `es`：我们每拍都在写几何（尺寸/锚点），`es` 会跟着抖 0.001 ⇒ 旧写法每次都重置 2s 窗口
+--   ⇒ 逐帧重申永不结束 = **每帧整张图重写 + 每帧枚举 region**（地区一多就卡死，真机实报）。
+--   这里读的是**客户端自己那批叠加层的条数与首块宽度** —— `GetMapOverlayInfo` 是引擎按当前地图/缩放
+--   级别给出的真值，**我们写不进去**（`MDQ.measureK` 的注释里有同一条事实），所以它变 = 真的换图/真缩放。
+local function smMeasEngineSig()
+  local n = tonumber(smNumOverlays())
+  if n == nil then return nil end
+  local w = ""
+  if n > 0 and type(GetMapOverlayInfo) == "function" then
+    local ok, _, cw = pcall(function() return GetMapOverlayInfo(1) end)
+    if ok and tonumber(cw) then w = tostring(math.floor(tonumber(cw) + 0.5)) end
+  end
+  return tostring(n) .. ":" .. w
 end
 -- ★★★1.75.5（用户：「好的功能正常了.清理下这些调试日志」）：**详细日志开关**，真值 `SM_CFG.mapFitVerbose`，
 --   **nil = 关**（安静档）。安静档只保留「读到了几条 / 折算已对齐 / 关图已清空 / 真出问题」这几行；
@@ -2003,6 +2023,24 @@ MDQ.ownSet = {}      -- 同上但按**对象身份**记（`MDQ.own[n] = 纹理` 
 MDQ.poolSeen = 0     -- 见过的最大池位号（收尾 Hide 只扫到它，不空扫 poolMax 次）
 MDQ.newN = 0         -- **本轮**新加了几张（渲染行如实报「客户端既有 N ｜ 新加 M」）
 MDQ.saidMk = nil     -- 上一张已播报过的地图（每图只报一次，不刷屏）
+
+-- ★★★1.75.54 **性能收口（1.75.53 真机报障「开了十几个地区以后游戏会卡死」换来的）** —— 三处：
+--   ① **写前比对**（`MDQ.slot`）：每块记住「上次写进去的 (地图/区域/块号/倍率/对象)」，
+--      完全一样就**一个 `Set*` 都不发** ⇒ 稳态（没换图/没缩放）每拍零写；
+--      这也是唯一能保证「不因为反复 `SetTexture` 而反复取贴图文件」的做法。
+--   ② **护守只在节流那一拍跑**（逐帧重申那条 silent 路径**不跑** `holdTick`）⇒
+--      每帧 `GetRegions()` + 逐 region `GetName()` 的字符串风暴消失。
+--   ③ **爆发窗不许被我们自己的写入反复重新武装**（原来 `es` 抖 0.001 就重置 2s 窗口，
+--      而我们每拍都在写几何 ⇒ 窗口永不结束 = **每帧整张图重写**）；现在只认**引擎真值**变化，
+--      且重新武装有**最小间隔** + 窗口内**帧数上限**，超了如实出声并降档。
+MDQ.slot = {}            -- 池位号 → { tex=, file=, area=, tile=, k=, shown=true }（写前比对用）
+MDQ.wroteN = 0           -- 本拍**真发出去的**写次数（取证用；稳态应为 0）
+MDQ.skipN = 0            -- 本拍因「内容没变」跳过的块数（取证用）
+MDQ.SLOW_MS = 12         -- ★安全阀：单拍渲染超过这个毫秒数 ⇒ 降档（宁可少重申，绝不卡死）
+MDQ.SLOW_WARN_MS = 6     -- 连续 3 拍超过它 ⇒ 也降档（提前刹车）
+MDQ.perfGuard = false    -- 已降档标记（本会话）；`/ehm mapfit perf` 可看、`重启/关开关`复位
+MDQ.perfRing = {}        -- 有界取证环（最近 12 拍：{ ms, wrote, skip, n, seen, k }）
+MDQ.PERF_RING_MAX = 12
 
 -- ===== ★★★1.75.53：贴图**来源**解析 + 存在性探针（发布独立性；用户：「插件要绝对独立，
 --   依赖的东西要复制到插件内自己载入，不然发布上去别人又可能找不到贴图」）=====
@@ -2363,6 +2401,8 @@ MDQ.hideFrom = function(from)
     local t = rawget(_G, "WorldMapOverlay" .. tostring(i)) or MDQ.own[i]
     if t ~= nil then
       pcall(t.Hide, t)
+      -- ★1.75.54：藏了就**作废那一格的写前比对**（否则下次要显示它时会被判「没变」而不 Show ⇒ 缺块）
+      if MDQ.slot[i] ~= nil then MDQ.slot[i].shown = false end
       n = n + 1
       if i > (tonumber(MDQ.poolSeen) or 0) then MDQ.poolSeen = i end
     elseif i > (tonumber(MDQ.poolSeen) or 0) then
@@ -2410,6 +2450,7 @@ MDQ.hideOwnFrom = function(from)
     local t = MDQ.own[i]
     if t ~= nil then
       pcall(t.Hide, t)
+      if MDQ.slot[i] ~= nil then MDQ.slot[i].shown = false end
       n = n + 1
       if i > (tonumber(MDQ.poolSeen) or 0) then MDQ.poolSeen = i end
     end
@@ -2453,6 +2494,7 @@ MDQ.render = function(file, k)
   table.sort(areas)                 -- ★顺序必须确定（同一张图每次渲染的层序一致，便于逐层对照取证）
   local n, nArea, full = 0, 0, true
   local nExist, fail = 0, nil
+  MDQ.wroteN, MDQ.skipN = 0, 0   -- ★1.75.54：本拍真发了几次写 / 因没变跳过了几块（取证 + 安全阀判据）
   for _, a in ipairs(areas) do
     local rec = m[a]
     local total = MDQ.tiles(rec and rec[1], rec and rec[2])
@@ -2467,14 +2509,25 @@ MDQ.render = function(file, k)
           if how == "existing" then nExist = nExist + 1 end
           n = n + 1
           MDQ.wroteObj[tex] = true   -- ★六改 c：这一拍我们写过它（守护的「不许藏」名单）
-          local fdw, fdh = MDQ.fileDim(pw), MDQ.fileDim(ph)
-          pcall(tex.SetTexture, tex, MDQ.texPath(file, a, t))
-          pcall(tex.SetTexCoord, tex, 0, pw / fdw, 0, ph / fdh)
-          pcall(tex.SetWidth, tex, pw * k)
-          pcall(tex.SetHeight, tex, ph * k)
-          pcall(tex.ClearAllPoints, tex)
-          pcall(tex.SetPoint, tex, "TOPLEFT", fr, "TOPLEFT", ox * k, -(oy * k))
-          pcall(tex.Show, tex)
+          -- ★★★1.75.54 写前比对：**内容一模一样就一个 `Set*` 都不发**。
+          --   比对项 = 对象 + 地图 + 区域 + 块号 + 倍率 + 当前是否显示中（`shown` 被 hideFrom/release 清过）。
+          --   ★**不建字符串**（不调 `texPath`）—— 逐帧重申这条路上每块一次 `string.format` 就是纯浪费。
+          local sg = MDQ.slot[n]
+          if sg ~= nil and sg.tex == tex and sg.shown == true and sg.k == k
+            and sg.file == file and sg.area == a and sg.tile == t then
+            MDQ.skipN = MDQ.skipN + 1
+          else
+            local fdw, fdh = MDQ.fileDim(pw), MDQ.fileDim(ph)
+            pcall(tex.SetTexture, tex, MDQ.texPath(file, a, t))
+            pcall(tex.SetTexCoord, tex, 0, pw / fdw, 0, ph / fdh)
+            pcall(tex.SetWidth, tex, pw * k)
+            pcall(tex.SetHeight, tex, ph * k)
+            pcall(tex.ClearAllPoints, tex)
+            pcall(tex.SetPoint, tex, "TOPLEFT", fr, "TOPLEFT", ox * k, -(oy * k))
+            pcall(tex.Show, tex)
+            MDQ.slot[n] = { tex = tex, file = file, area = a, tile = t, k = k, shown = true }
+            MDQ.wroteN = MDQ.wroteN + 1
+          end
           if MDQ.lastW == nil then
             MDQ.lastW, MDQ.lastH = pw * k, ph * k   -- ★**写进去的**（自证与播报都按它说）
             MDQ.lastTw, MDQ.lastTh = pw, ph         -- ★表值（播报里「表 X ⇒ 写 Y」两个都摊开）
@@ -2515,6 +2568,7 @@ MDQ.release = function(why)
     MDQ.own[k] = nil
   end
   for nm in pairs(MDQ.made or {}) do MDQ.made[nm] = nil end
+  MDQ.slot = {}    -- ★1.75.54：收层 = 把那几层藏了 ⇒ 写前比对全部作废（下次要画会老老实实重写一遍）
   MDQ.newN = 0
   MDQ.saidMk = nil
   if n > 0 then
@@ -2527,7 +2581,7 @@ end
 -- 渲染 + **写后自证**（返回 块数, 区域数, 判定文本）；`silent` = 一个字都不打（逐帧重申那条路）
 --   ★`quiet` 只为与渲染节拍的调用约定对齐而保留；本档的播报节流由 `MDQ.saidMk`（每图一次）与
 --     「k 变了也报一次」（缩放级别变了 = 真事件）负责。
-MDQ.renderCurrent = function(es, quiet, silent)
+MDQ.renderCurrent = function(es, quiet, silent, withGuard)
   local file = select(1, smMapInfo())
   if type(file) ~= "string" or file == "" then return 0, 0, "读不到当前地图文件名" end
   local m = MDQ.areaOf(file)   -- ★六改 b：与 `MDQ.holdN` / `MDQ.render` 同一个表查找（大小写不敏感）
@@ -2559,7 +2613,40 @@ MDQ.renderCurrent = function(es, quiet, silent)
   -- ★★★1.75.52 六改：**接管守护**与渲染**同拍**（换图/开图爆发窗内逐帧重申，之后 0.3s 一拍）——
   --   藏「客户端原生层」+ 数量守护（序号超出本图应有块数的池位一律藏）+ 存在性守护（我们自建的块被藏就复位）。
   --   ★必须排在 `MDQ.render` **之后**：渲染先写/Show 我们自建的块，守护这一拍才判得出「谁是我们自建的」。
-  local hHid, hBack, hSeen, hWant, hAgain = MDQ.holdTick(file)
+  -- ★★★1.75.54：**逐帧重申那条 silent 路径不跑护守**（原写法每帧都跑 `holdTick` ⇒ 每帧一次
+  --   `GetRegions()` + 逐 region `GetName()` 的字符串风暴，地区一多直接把帧率吃掉）。
+  --   护守按**节流节拍**跑（爆发窗 0.1s / 稳态 0.3s）足够 —— 客户端把原生层 Show 回来时，
+  --   最迟 0.3s 就会被再藏一次，肉眼看不到。
+  local _t0 = (type(GetTime) == "function") and GetTime() or 0
+  local hHid, hBack, hSeen, hWant, hAgain = 0, 0, 0, 0, 0
+  if withGuard ~= false then
+    hHid, hBack, hSeen, hWant, hAgain = MDQ.holdTick(file)
+  end
+  -- ★★★1.75.54 **安全阀**：单拍太慢 ⇒ **降档**（少重申，绝不卡死）+ 如实出声一次。
+  --   为什么会有慢拍：地区多 ⇒ 块多（每块一次写）+ 客户端原生层多（护守要逐个判）。
+  --   判据 = 单拍 > `MDQ.SLOW_MS`，或连续 3 拍 > `MDQ.SLOW_WARN_MS`。
+  local _ms = ((type(GetTime) == "function") and (GetTime() - _t0) or 0) * 1000
+  MDQ.perfMs = _ms
+  if _ms > (tonumber(MDQ.SLOW_WARN_MS) or 6) then
+    MDQ.perfSlowN = (tonumber(MDQ.perfSlowN) or 0) + 1
+  else
+    MDQ.perfSlowN = 0
+  end
+  local ring = MDQ.perfRing
+  if type(ring) == "table" then
+    table.insert(ring, { ms = _ms, wrote = tonumber(MDQ.wroteN) or 0, skip = tonumber(MDQ.skipN) or 0,
+      n = n, seen = tonumber(hSeen) or 0, k = k })
+    while table.getn(ring) > (tonumber(MDQ.PERF_RING_MAX) or 12) do table.remove(ring, 1) end
+  end
+  if (not MDQ.perfGuard) and (_ms > (tonumber(MDQ.SLOW_MS) or 12)
+      or (tonumber(MDQ.perfSlowN) or 0) >= 3) then
+    MDQ.perfGuard = true
+    pcall(smFitSay, "打开世界迷雾：本拍耗时 **%.0f ms**（地图=%s ｜ %d 块 ｜ 客户端叠加层 %d 条）"
+      .. "⇒ 已**自动降档**：逐帧重申改成 0.5s 一拍（护守照旧每拍查数量/存在性；功能不受影响）。"
+      .. "取证：/ehm mapfit perf", _ms, tostring(file), n, tonumber(hSeen) or 0)
+    pcall(mfLog, "[perf] 降档：%.1f ms ｜ %s ｜ %d 块 ｜ 写 %d ｜ 跳过 %d",
+      _ms, tostring(file), n, tonumber(MDQ.wroteN) or 0, tonumber(MDQ.skipN) or 0)
+  end
   -- 写后自证：读回**我们真正写的那张**第一块（可能是客户端原有的池位，也可能是我们自己补建的匿名纹理）
   --   两种已知口径都认（读回 = 写入值 / 读回 = 写入值 × es）—— 都对不上就如实说「判不出」。
   local verdict = "（没渲染出任何块）"
@@ -2989,14 +3076,21 @@ MDQ.poolIdx = function(o)
 end
 
 -- 本图**应有几块**（表推；数量口径唯一来源，与 `MDQ.render` 同一算法与同一上限）
+--   ★1.75.54：**按图名缓存** —— 它每拍被 `holdTick` 与 `staleTick` 各调一次，逐拍遍历整张区域表是白费；
+--   表是**载入期常量**（生成物），所以缓存安全；`MDQ.holdNCache` 只随访问过的图增长（≤ 图数）。
+MDQ.holdNCache = {}
 MDQ.holdN = function(file)
-  local m = MDQ.areaOf(file)   -- ★六改 b：与渲染**同一个**表查找（大小写不敏感）⇒ 数量口径不会与画出来的块数打架
-  if type(m) ~= "table" then return 0 end
+  local key = tostring(file or "")
+  local c = MDQ.holdNCache[key]
+  if c ~= nil then return c end
+  local m = MDQ.areaOf(key)   -- ★六改 b：与渲染**同一个**表查找（大小写不敏感）⇒ 数量口径不会与画出来的块数打架
+  if type(m) ~= "table" then MDQ.holdNCache[key] = 0 return 0 end
   local n = 0
   for _, rec in pairs(m) do
     n = n + (tonumber(MDQ.tiles(rec and rec[1], rec and rec[2])) or 0)
   end
   if n > MDQ.poolMax then n = MDQ.poolMax end
+  MDQ.holdNCache[key] = n
   return n
 end
 
@@ -3211,6 +3305,61 @@ MDQ.holdProbe = function()
   return out
 end
 
+-- ★★★1.75.54 **性能体检**（`/ehm mapfit perf`；用户报障「开了十几个地区以后游戏会卡死」换来的取证口）：
+--   ★口令是「体检」不是「只读」—— 它**真跑两拍**（与正常节拍完全相同的那条路：渲染 + 护守），会写地图层。
+--   为什么这么设计：卡顿只有在**真跑**时才量得出来（离线 harness 只能数调用次数，量不到引擎真实耗时）。
+--   读数同时进**有界落盘环** `SM_CFG.perfProbe`(40) ⇒ AI 读存档即可判「有没有慢拍 / 哪一拍慢 / 写了几次」。
+MDQ.perfProbe = function()
+  local out = {}
+  local file = tostring(select(1, smMapInfo()) or "")
+  local fr = _G["WorldMapDetailFrame"]
+  local es = 1
+  if fr ~= nil then
+    local eff = smEffScale(fr)
+    if tonumber(eff) and tonumber(eff) > 0 then es = tonumber(eff) end
+  end
+  local m = MDQ.areaOf(file)
+  local nArea = 0
+  if type(m) == "table" then for _ in pairs(m) do nArea = nArea + 1 end end
+  table.insert(out, string.format("性能体检：地图=%s ｜ 表里 %d 区 / 应有 %d 块 ｜ 外框 es=%.3f ｜ 开关=%s ｜ 纹理池上限 %d",
+    tostring(file), nArea, MDQ.holdN(file), es, MDQ.swm() and "开" or "关", MDQ.poolMax))
+  table.insert(out, string.format("　引擎自报叠加层 %s 条（`GetNumMapOverlays`；**探索过的地区越多它越大**）",
+    tostring(smNumOverlays())))
+  local T = (type(GetTime) == "function") and GetTime or function() return 0 end
+  local rows = {}
+  for pass = 1, 2 do
+    local t0 = T()
+    local n1 = select(1, MDQ.renderCurrent(es, true, true, true))   -- 与正常「带护守那一拍」完全同路
+    local ms = (T() - t0) * 1000
+    local line = string.format("第 %d 拍：%.1f ms ｜ 渲染 %s 块 ｜ **写 %s 次** ｜ 跳过(内容没变) %s ｜ 护守：枚举 %s ｜ 藏 %s ｜ 复位 %s ｜ 认出我们画的 %s%s",
+      pass, ms, tostring(n1), tostring(MDQ.wroteN or 0), tostring(MDQ.skipN or 0),
+      tostring(MDQ.holdStat.seen or 0), tostring(MDQ.holdStat.hid or 0), tostring(MDQ.holdStat.reshow or 0),
+      tostring(MDQ.holdStat.ours or 0), MDQ.holdStat.blind and " ｜ **盲（判不出谁是原生 ⇒ 一个字节都不碰）**" or "")
+    table.insert(out, line)
+    rows[#rows + 1] = line
+  end
+  table.insert(out, string.format("安全阀：perfGuard=%s ｜ 慢拍阈值 %d ms（连续 3 拍 > %d ms 也降档）｜ 最近 %d 拍：%s",
+    tostring(MDQ.perfGuard), tonumber(MDQ.SLOW_MS) or 12, tonumber(MDQ.SLOW_WARN_MS) or 6,
+    table.getn(MDQ.perfRing), (function()
+      local t = {}
+      for _, r in ipairs(MDQ.perfRing) do
+        t[#t + 1] = string.format("%.0fms/写%d", tonumber(r.ms) or 0, tonumber(r.wrote) or 0)
+      end
+      return table.concat(t, " ")
+    end)()))
+  table.insert(out, "　★判读：**第 2 拍「写 0 次」= 写前比对生效**（稳态零写，只有换图/缩放才写）；"
+    .. "若第 2 拍还在写几十次 ⇒ 有东西每拍在变（报给作者看这两行）；单拍 > 12ms ⇒ 会自动降档（逐帧重申改 0.5s 一拍）。")
+  table.insert(out, "　★地区多导致叠加层多时：护守每拍要枚举全部 region（只读），这是**节流拍**才做的事（0.1s/0.3s）。")
+  if type(SM_CFG) == "table" then
+    if type(SM_CFG.perfProbe) ~= "table" then SM_CFG.perfProbe = {} end
+    local ring = SM_CFG.perfProbe
+    table.insert(ring, string.format("[%s] %s ｜ %s", date and tostring(date("%H:%M:%S")) or "?", tostring(file), table.concat(rows, " ｜ ")))
+    while table.getn(ring) > 40 do table.remove(ring, 1) end
+  end
+  for _, l in ipairs(out) do pcall(mfLog, "[perf] %s", l) end
+  return out
+end
+
 -- ★★★1.75.51（用户：「缩放大地图->设置内->添加个 S_WorldMap 贴图替代开关」）：
 --   **数据源 = `MDQ.swm()`**（唯一判据入口；产品开关，落存档）：
 --     · 开（**默认**）= **表驱动全渲染**（`MDQ.render`，见那一族）：不抓原值、不读本地缓存、不逐层折算 ——
@@ -3358,13 +3507,31 @@ do
       if justOpened then ST.pendingApply = true end
       if justOpened then
         ST.burst = SM_BURST_SEC
+        ST.burstN, ST.rearmAt = 0, (type(GetTime) == "function") and GetTime() or 0
         accSwm = 1e9
         ST.staleUntil = ((type(GetTime) == "function") and GetTime() or 0) + MDQ.STALE_SEC
         ST.staleAt, ST.staleSaid, ST.staleSaidNoPool = -99, false, false
         ST.staleHidN, ST.staleBackN = 0, 0
       end
-      if es and esCache and math.abs(es - esCache) > 0.001 then ST.burst = SM_BURST_SEC accSwm = 1e9 end
-      if not open then ST.burst = 0 end
+      -- ★★★1.75.54：**爆发窗的重新武装只认「引擎真值」**（`smMeasEngineSig`：客户端自己那批叠加层的
+      --   条数 + 首块宽度 —— 我们写不进去），并且 ① 有**最小间隔** `SM_BURST_REARM_MIN` ② 有**帧数上限**
+      --   `SM_BURST_FRAMES` ③ 慢拍被安全阀降档后**不再逐帧重申**。
+      --   旧写法（`es` 抖 0.001 就重置 2s）在「我们每拍都写几何」的前提下 = 窗口永不结束 = 每帧整张图重写，
+      --   地区越多越致命（1.75.53 真机报障「开了十几个地区以后游戏会卡死」的根因）。
+      local ev = smMeasEngineSig()
+      if ev ~= nil and ST.engSig ~= nil and ev ~= ST.engSig then
+        local nowT = (type(GetTime) == "function") and GetTime() or 0
+        if (nowT - (tonumber(ST.rearmAt) or -99)) >= SM_BURST_REARM_MIN then
+          ST.rearmAt, ST.burstN = nowT, 0
+          ST.burst, accSwm = SM_BURST_SEC, 1e9
+        end
+      end
+      if ev ~= nil then ST.engSig = ev end
+      if (tonumber(ST.burst) or 0) > 0 then
+        ST.burstN = (tonumber(ST.burstN) or 0) + 1
+        if ST.burstN > SM_BURST_FRAMES then ST.burst = 0 end   -- ★帧数上限：绝不无限逐帧重申
+      end
+      if not open then ST.burst, ST.burstN = 0, 0 end
       ST.open, ST.es = open, (es or ST.es)
       esCache = es or esCache
       if (tonumber(ST.burst) or 0) > 0 then ST.burst = math.max(0, ST.burst - dt) end
@@ -3382,16 +3549,20 @@ do
           FEAT.applied = false
         end
       end
-      -- ⑦ 「打开世界迷雾」渲染节拍：爆发窗（开图/换图/缩放变化后 2s）内**逐帧重申**，之后 0.3s 一拍。
-      --   ★渲染 + 「接管守护（数量/存在性）」同在 `MDQ.renderCurrent` 里（守护排在渲染之后 ⇒ 判得出谁是我们刚画的）。
+      -- ⑦ 「打开世界迷雾」渲染节拍：爆发窗（开图/换图/**引擎真值变化**后 2s，且 ≤ `SM_BURST_FRAMES` 帧）
+      --   内逐帧重申，之后 0.3s 一拍。★1.75.54 分两档：
+      --     · **节流那一拍** = 渲染 + 护守（数量/存在性）+ 写后自证 + 播报（`withGuard = true`）
+      --     · **逐帧重申那一拍** = **只渲染**（`withGuard = false`）—— 每帧 `GetRegions()` + 逐 region
+      --       `GetName()` 是卡顿主因之一；护守按 0.1s/0.3s 拍子查足够（客户端把原生层 Show 回来，
+      --       最迟 0.3s 就会被再藏一次）。
       if not (open and es and es > 0) then return end
       local gap = ((tonumber(ST.burst) or 0) > 0) and SM_BURST_GAP or SM_IDLE_GAP
       if accSwm >= gap then
         accSwm = 0
-        pcall(MDQ.renderCurrent, es, false, false)
+        pcall(MDQ.renderCurrent, es, false, false, true)   -- 带护守的那一拍
       end
-      if (tonumber(ST.burst) or 0) > 0 then
-        pcall(MDQ.renderCurrent, es, true, true) -- 爆发窗内逐帧重申（silent：一个字都不打、也不进取证环）
+      if (tonumber(ST.burst) or 0) > 0 and not MDQ.perfGuard then
+        pcall(MDQ.renderCurrent, es, true, true, false)    -- 逐帧重申：silent + 不跑护守
       end
     end)
   end
@@ -3610,6 +3781,14 @@ if type(SlashCmdList) == "table" then
         end
         P("用法：/ehm mapfit 残留 [on|off]（别名 stale/残留层；不给参数 = 只读体检，含「接管守护」的数量/存在性）"
           .. "｜等价开关：工具箱 → 缩放大地图 → [设置] →「打开世界迷雾」")
+      elseif sub == "perf" or sub == "性能" then
+        -- ★★★1.75.54：**性能体检**（用户报障「开了十几个地区以后游戏会卡死」换来的取证口）。
+        --   ★这一条**会真跑一拍渲染**（与正常节拍完全相同的那条路），会写地图层 —— 如实告知，不假装只读。
+        local lines = MDQ.perfProbe()
+        for _, l in ipairs(lines) do
+          P(l)
+          pcall(mfLog, "%s", l)
+        end
       elseif sub == "贴图" or sub == "tex" then
         -- ★★★1.75.53 只读体检：引擎自报的贴图路径 vs 我们按表拼的两条路径（自带 media / 客户端）——
         --   「发布后别人会不会找不到贴图」这一问，真机上一条命令就能看清。
@@ -3638,7 +3817,7 @@ if type(SlashCmdList) == "table" then
         P("缩放大地图：模块=" .. (EVAL_SM_ENABLED() and "**开**" or "关")
           .. " ｜ 打开世界迷雾=" .. (MDQ.swm() and "**开**" or "关")
           .. " ｜ 残留图层清理=" .. (MDQ.staleOn() and "开" or "关"))
-        P("用法：/ehm mapfit swm [on|off] ｜ 残留 [on|off]（只读体检，含接管守护的数量/存在性）｜ 贴图（只读体检：贴图路径与来源）｜ trace [N] ｜ traceclear ｜ 清缓存")
+        P("用法：/ehm mapfit swm [on|off] ｜ 残留 [on|off]（只读体检，含接管守护的数量/存在性）｜ 贴图（只读体检：贴图路径与来源）｜ perf（性能体检：真跑两拍，量耗时/写次数/护守）｜ trace [N] ｜ traceclear ｜ 清缓存")
         P("　★「叠加层适配（抓原值/折算/隐形）」已按 1.75.52 要求整条摘除 —— 「打开世界迷雾」的表驱动全渲染是它的替代方案。")
       end
     elseif msg == "reset" or msg == "复位" then
