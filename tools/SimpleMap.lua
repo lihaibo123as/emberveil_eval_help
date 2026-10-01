@@ -1683,6 +1683,15 @@ end
 --     **读不到原值就不写 alpha**（宁可只 Hide —— 我们已经在用的那条路），绝不拿 0 冒充原值害用户还原不回。
 --   ★为什么要抽成一个函数：原来这段在 `featApply` 与 `featKeep` 各写一份，现在再加上「开图瞬时窗口」就是**第三处** ——
 --     三份循环迟早漂移（本项目铁律：判据/动作单一来源）。
+--   ★★★1.75.57c：**前向声明**（修一个 9/29 原版就带着的**绑定 bug**；`node probe_localorder.js` 抓到它）：
+--     本函数（与 `featBlackoutRestore`）写在 `local function mfLog`（后文 ~2064 行）**之前**，而 Lua 的
+--     词法作用域**从声明之后才开始** ⇒ 函数体里那 4 处 `mfLog(...)` / `smFitSayV(...)` 编译成**全局查找**
+--     ⇒ 运行时 `attempt to call a global 'mfLog' (a nil value)`，而三处调用点都是 `pcall(featHideBlackout)`
+--     ⇒ **静默吞掉**：功能照旧（Hide/alpha 都在报错之前做完了），但**黑幕那三条取证行从来没打出来过**
+--     （「黑幕遮蔽：开图后 N ms 藏住 M 层」= 治黑闪要量化的那一行，一直在哑）。
+--     修法 = 项目既定写法「**前向声明 + 定义处改赋值**」：逻辑一字未改、local 个数也没变（两个）。
+local mfLog, smFitSayV
+
 --   返回：本次真遮住的层数（>=1 才算「遮住过」；0 = 本来就既透明又隐藏）
 local function featHideBlackout()
   local hid = 0
@@ -2061,7 +2070,8 @@ end
 --   记的全是**分叉处的实数**：探测（缩放 1 vs 0.7 时读到的屏幕宽）、抓原值（读时的外框缩放 ⇒ 自证自然档）、
 --   每次折算（es + 原值 → 新值）、每次还原（读回）、每次开关（mode/touched/还原数）。
 local MF_TRACE_MAX = 60
-local function mfLog(fmt, ...)
+--   ★1.75.57c：**是赋值不是 `local function`** —— 见上面那条**前向声明**（黑幕那几处引用在它之前）。
+mfLog = function(fmt, ...)
   local msg = (select("#", ...) > 0) and string.format(fmt, ...) or tostring(fmt)
   local t = (type(GetTime) == "function") and GetTime() or 0
   local line = string.format("%.2f %s", t, msg)
@@ -2090,7 +2100,8 @@ end
 --   安静档（默认）每次开图只留 2 行（「已读到 N 条」+「折算已对齐」）、关图 1 行；
 --   逐条原值 / 第 N 次尝试 / 每次重试提示 / 窗口开关 / 每次折算细节 = **verbose 档**（`/ehm mapfit verbose on`）。
 --   ★无论如何都进 `mapFitTrace` 取证环（`mfLog` 那一句不省）⇒ 真出问题时仍然读得到全过程。
-local function smFitSayV(fmt, ...)
+--   ★1.75.57c：**是赋值不是 `local function`** —— 同上（黑幕那处 `smFitSayV` 引用在声明之前）。
+smFitSayV = function(fmt, ...)
   local msg = (select("#", ...) > 0) and string.format(fmt, ...) or tostring(fmt)
   mfLog("[详细] %s", msg)
   if not smFitVerboseOn() then return msg end
@@ -3756,10 +3767,16 @@ end
 
 -- ============ 迷雾模块（`tools\WorldFog.lua`）要的桥（1.75.56 拆分为独立模块时加的）============
 --   ★★★为什么要有这一段：迷雾整族独立成另一个文件之后，它需要**宿主（本文件）的几个文件局部**
---     （配置表 / 地图身份 / 有效缩放 / 播报出口）—— 跨文件拿不到 local，只能走 `_G`。统一暴露成 `EVAL_SM_*`。
---   ★一律「调用时读」：桥自己就是函数，迷雾侧**拿到才调** ⇒ `.toc` 顺序不敏感、载入期零依赖。
---   ★**只暴露这几个**（别的都不给）：耦合面越小，将来两边各自改就越不容易互相带坏。
-EVAL_SM_CFG = function() return EH_SIMPLEMAP_CFG end
+--     （地图身份 / 引擎条数 / 有效缩放 / 开图信号 / 播报出口）—— 跨文件拿不到 local，只能走 `_G`。
+--     统一暴露成 `EVAL_SM_*`，迷雾侧用**懒代理**接（拿到才调）。
+--   ★一律「调用时读」：桥自己就是函数 ⇒ `.toc` 顺序不敏感、载入期零依赖。
+--   ★★★**这是白名单**（1.75.57c 定；用户：「世界迷雾功能独立于大地图缩放.不要做强关联」）：
+--     下面 **9 个** = 5 个**只读**（`OPEN` / `MAPINFO` / `MAPKEY` / `NUMOVERLAYS` / `EFFSCALE`）
+--     + 3 个**出口**（`FITSAY` / `FITSAYV` / `MFLOG`）+ 1 个**层名**（`FRAMENAME`）。
+--     **只暴露这几个，别的都不给**；`tmp/swm_harness.js` 有一条白名单钉：迷雾侧出现白名单以外的
+--     `EVAL_SM_*`、或引用本文件的开关/命令口 ⇒ 当场转红（那才是「强关联」）。
+--   ★同批删掉的：`EVAL_SM_CFG`（迷雾 1.75.56c 起自带配置子树 `worldFogCfg`，这个口**零引用** ⇒ 按
+--     「要么挂在活命令上、要么别加」的纪律删掉；留着就是下一轮误接的耦合面）。
 EVAL_SM_OPEN = function() return featOpenNow() == true end   -- 迷雾自带帧要用：地图开着没
 EVAL_SM_MAPINFO = function() return smMapInfo() end
 EVAL_SM_MAPKEY = function() return smMapKey() end

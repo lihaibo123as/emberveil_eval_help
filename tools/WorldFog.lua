@@ -5,9 +5,19 @@
 --   混在一个文件里时，任何一边的改动都可能把另一边带坏（1.75.52 摘「探索层适配」就是这么连带摘掉的）。
 --   · 本文件**只放迷雾**：`MDQ` 全族（渲染/池位/护守/残留清理/贴图来源/开关收尾/体检探针）。
 --   · 与 SimpleMap 的往来**一律走桥**（载入期零依赖、调用时才读）：
---       - 本文件要用 SimpleMap 的 8 个内部件（配置表 / 地图身份 / 有效缩放 / 播报出口）
---         ⇒ 由 SimpleMap 暴露 `EVAL_SM_*`，这里用**懒代理**接（见下 `br()` 与别名段）。
---       - SimpleMap 要用本文件的 ⇒ 本文件末尾统一挂 `EVAL_WF_*`。
+--       - 本文件要用 SimpleMap 的 **9 个内部件**（见下「桥白名单」）⇒ 由 SimpleMap 暴露 `EVAL_SM_*`，
+--         这里用**懒代理**接（见下 `br()` 与代理段）。
+--       - SimpleMap 要用本文件的 ⇒ **只有 2 个**（`EVAL_WF_ON` 折算让位 / `EVAL_WF_CMD` 命令分流）。
+--   · ★★★1.75.57c「桥白名单」（用户：「世界迷雾功能独立于大地图缩放.**不要做强关联**」）——
+--     本模块引用的 `EVAL_SM_*` **只准是这 9 个**：5 个**只读**（地图身份 `MAPINFO`/`MAPKEY`、
+--     引擎条数 `NUMOVERLAYS`、有效缩放 `EFFSCALE`、开图信号 `OPEN`）+ 4 个**出口**（播报 `FITSAY`/`FITSAYV`、
+--     取证环 `MFLOG`、层名 `FRAMENAME`）。
+--     ★为什么**保留**这些只读桥、而不是在两边各抄一份实现（本版评估过、结论是保留）：① 跨文件只走全局桥
+--       是项目既定纪律（§4.1「模块只准调全局桥」），这 9 个是**单向、只读、懒读、拿不到就退回「判不出」**
+--       的纯读口，不含任何状态；② 抄一份 = 地图身份/有效缩放两套口径各自演化（本项目吃过「同一处真值变两处」
+--       的亏），而桥是**一处实现**；③ 两侧同在一个插件里（语法错一起载不进去）⇒ 拆桥换不来任何可用性。
+--     ⇒ 真正的「不做强关联」靠**判据**守（`tmp/swm_harness.js` 的白名单钉：本文件出现白名单以外的
+--       `EVAL_SM_*`、或引用缩放大地图的开关/命令口 ⇒ 当场转红）。
 --   · 载入期**零副作用**（不建帧 / 不挂事件 / 不读写存档 / 不建计时器）：只有表与函数声明。
 --   · 载入顺序：`.toc` 里排在 `tools\SimpleMap.lua` **之后**（桥是调用时读，晚载入也不会踩空）。
 -- ============================================================
@@ -19,7 +29,9 @@ local function br(name)
   return nil
 end
 
--- 配置子树：懒代理（读写都现取 EVAL_SM_CFG()，与 SimpleMap 的 EH_SIMPLEMAP_CFG 是**同一张表**）
+-- 配置子树：懒代理（读写都现取 `EVAL_HELP_CONFIG.worldFogCfg`）
+--   ★1.75.57c：以前这里写的是「与 SimpleMap 的 EH_SIMPLEMAP_CFG 是同一张表」—— 那从 1.75.56c
+--   （迷雾自带配置子树）起就**不成立了**；两边现在是两张互不相干的表。
 --   ★拿不到桥时退化成一张**本地孤儿表**（功能等于关着）—— 绝不抛错、也绝不静默改别人的表。
 local function wfLive()
   -- ★★★1.75.56c（用户：「世界迷雾功能独立于大地图缩放.不要做强关联.」）：本模块**自己的配置子树**
@@ -316,7 +328,7 @@ end
 
 -- 开关真值（唯一入口）：`SM_CFG.swmOverlay`（nil/false = 关 = 默认；true = 开）。
 --   ★**落存档**（这是产品开关，与「只在本会话有效」的诊断档不同）；写入点只有两个：
---     `EVAL_SM_SWM_SET`（设置下拉 / 命令都走它）与老键迁移。
+--     `MDQ.fogSet`（设置下拉 / 命令 / 工具箱行都走它）与老键迁移。
 MDQ.swm = function()
   -- ★★★1.75.52（用户：「缩放大地图->设置->**默认开启全图**」）：真值 = `SM_CFG.swmOverlay`，**默认开**——
   --   键为 nil ⇒ **当场物化 true**（本项目「默认开」的定式，同 EC/HH）；**显式关过（false）永远是关**
@@ -1906,15 +1918,13 @@ TB_ROWS["worldFog"] = function(r, it)
   return true
 end
 
--- 旧名字一律**转调**新写口（命令与界面不可能各写一半；docs/其它文件也不用改）
-EVAL_SM_FOG_ON = function() return MDQ.swm() and MDQ.staleOn() end
-EVAL_SM_FOG_SET = function(on) return MDQ.fogSet(on) end
-EVAL_SM_SWM_ON = function() return MDQ.swm() end
-EVAL_SM_SWM_SET = function(on) return MDQ.fogSet(on) end
-EVAL_SM_STALE_ON = function() return MDQ.staleOn() end
-EVAL_SM_STALE_SET = function(on) return MDQ.fogSet(on) end
-EVAL_SM_SWM_TIP = function() return L("TB_SM_SWM_TIP1") end
-EVAL_SM_SWM_TIPS = function() return { L("TB_SM_SWM_TIP1") } end
+-- ★★★1.75.57c 审计（与 1.75.57 清掉那 25 个死 `EVAL_WF_*` 用同一把尺子）：这里原来还挂着 8 个旧名字
+--   （`EVAL_SM_FOG_ON` / `FOG_SET` · `SWM_ON` / `SWM_SET` · `STALE_ON` / `STALE_SET` · `SWM_TIP` / `SWM_TIPS`），
+--   一律**转调**当时的合并写口。搬家之后**活入口已经全部就位**（工具箱模块行 `TB_ROWS["worldFog"]` 的勾选框
+--   与 `[设置]` 下拉 · `/ehm mapfit swm [on|off]` · 模块自己的 `MDQ.cmd`），而全仓扫（`.lua` / `.js` / `.toc`
+--   的**非注释行**）对这 8 个名字**零引用** ⇒ 按纪律「读值口要么挂在活命令上、要么别加」**删掉**：
+--   留着就是下一轮「误接回来」的耦合面（`EVAL_SM_SWM_SET` 这种名字最容易被当成「官方写口」再接一次）。
+--   ★判据 = `tmp/swm_harness.js` 的白名单钉（MOD 里出现旧别名 ⇒ 当场转红）。
 
 -- ============ 载入期一次性清账 / 归位（1.75.56 从 SimpleMap 的载入钩子搬过来）============
 --   ★为什么必须在 VARIABLES_LOADED：文件执行期存档表还是空的（迁移早调 = 从空表继承出空配置）。
