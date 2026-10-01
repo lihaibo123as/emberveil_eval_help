@@ -3334,12 +3334,16 @@ MDQ.perfProbe = function()
     tostring(smNumOverlays())))
   local T = (type(GetTime) == "function") and GetTime or function() return 0 end
   local rows = {}
+  -- ★两拍**故意走两条不同的路**（1.75.54b 起）：第 1 拍 = **节流拍**（withGuard = true ⇒ force ⇒
+  --   **必须整批重申**，写 N 次是正常的）；第 2 拍 = **逐帧拍**（withGuard = false ⇒ 写前比对 ⇒ **应写 0 次**）。
+  --   ⇒ 一条命令同时量出「重申的代价」与「比对的收益」；第 2 拍还在写 ⇒ 有东西每拍在变（报给作者看这两行）。
   for pass = 1, 2 do
     local t0 = T()
-    local n1 = select(1, MDQ.renderCurrent(es, true, true, true))   -- 与正常「带护守那一拍」完全同路
+    local n1 = select(1, MDQ.renderCurrent(es, true, true, pass == 1))
     local ms = (T() - t0) * 1000
-    local line = string.format("第 %d 拍：%.1f ms ｜ 渲染 %s 块 ｜ **写 %s 次** ｜ 跳过(内容没变) %s ｜ 护守：枚举 %s ｜ 藏 %s ｜ 复位 %s ｜ 认出我们画的 %s%s",
-      pass, ms, tostring(n1), tostring(MDQ.wroteN or 0), tostring(MDQ.skipN or 0),
+    local line = string.format("第 %d 拍（%s）：%.1f ms ｜ 渲染 %s 块 ｜ **写 %s 次** ｜ 跳过(内容没变) %s ｜ 护守：枚举 %s ｜ 藏 %s ｜ 复位 %s ｜ 认出我们画的 %s%s",
+      pass, (pass == 1) and "节流拍·强制重申" or "逐帧拍·写前比对",
+      ms, tostring(n1), tostring(MDQ.wroteN or 0), tostring(MDQ.skipN or 0),
       tostring(MDQ.holdStat.seen or 0), tostring(MDQ.holdStat.hid or 0), tostring(MDQ.holdStat.reshow or 0),
       tostring(MDQ.holdStat.ours or 0), MDQ.holdStat.blind and " ｜ **盲（判不出谁是原生 ⇒ 一个字节都不碰）**" or "")
     table.insert(out, line)
@@ -3354,8 +3358,9 @@ MDQ.perfProbe = function()
       end
       return table.concat(t, " ")
     end)()))
-  table.insert(out, "　★判读：**第 2 拍「写 0 次」= 写前比对生效**（稳态零写，只有换图/缩放才写）；"
-    .. "若第 2 拍还在写几十次 ⇒ 有东西每拍在变（报给作者看这两行）；单拍 > 12ms ⇒ 会自动降档（逐帧重申改 0.5s 一拍）。")
+  table.insert(out, "　★判读：**第 1 拍（节流拍）该写满 N 次** —— 那是「强制重申」，客户端自己重摆过也能被我们纠正回来（1.75.54b）；"
+    .. "**第 2 拍（逐帧拍）该「写 0 次」** = 写前比对生效（逐帧那条路才省开销）；"
+    .. "若第 2 拍还在写 ⇒ 有东西每拍在变（报给作者看这两行）；单拍 > 12ms ⇒ 会自动降档（逐帧重申停掉）。")
   table.insert(out, "　★地区多导致叠加层多时：护守每拍要枚举全部 region（只读），这是**节流拍**才做的事（0.1s/0.3s）。")
   if type(SM_CFG) == "table" then
     if type(SM_CFG.perfProbe) ~= "table" then SM_CFG.perfProbe = {} end
