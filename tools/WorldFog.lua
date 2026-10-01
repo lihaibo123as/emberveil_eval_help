@@ -1732,6 +1732,39 @@ MDQ.tick = function(es, dt, open, mk)
   return 1
 end
 
+-- ============ 本模块**自己的开图节拍帧**（★绝不依赖「缩放大地图」那个开关）============
+--   ★★★1.75.56 真机报障（用户截图：「缩放大地图」未勾 + 「打开世界迷雾」已勾 ⇒ 迷雾不生效）：
+--     第一版把本模块的节拍挂在 `SimpleMap` 的开图 tick 里，而那个 tick 在「缩放大地图**关掉**」时
+--     **整段早退**（`if not EVAL_SM_ENABLED() then … return end`）⇒ 迷雾跟着一起停摆 ——
+--     界面上勾选框显示「开」、实际一个字节都不做（最坏的那种**静默失效**）。
+--   ⇒ 本模块**自带帧**（项目纪律「工具模块自带自己的有界计时器」）：只看**自己那个开关**，
+--     与「缩放大地图」开关完全无关；宿主那边**不再**喊 `EVAL_WF_TICK`（两处喊 = 每帧白跑两遍）。
+do
+  local parent = _G["WorldFrame"]
+  if not (type(parent) == "table" or type(parent) == "userdata") then parent = _G["UIParent"] end
+  if type(CreateFrame) == "function" and parent then
+    local wf = CreateFrame("Frame", "EH_WF_FEAT", parent)
+    wf:SetScript("OnUpdate", function()
+      local dt = tonumber(arg1) or 0.05
+      local openFn = br("EVAL_SM_OPEN")
+      local open = false
+      if openFn then open = (openFn() == true) end
+      if not open then
+        -- 关图那一拍也要跑：把藏过的原生层/账**全部还回**（绝不把「藏」的状态带过关图）
+        pcall(MDQ.tick, nil, dt, false, nil)
+        return
+      end
+      local fr = _G["WorldMapDetailFrame"]
+      local effFn = br("EVAL_SM_EFFSCALE")
+      local es = nil
+      if fr ~= nil and effFn then es = effFn(fr) end
+      local mkFn = br("EVAL_SM_MAPKEY")
+      local mk = mkFn and mkFn() or nil
+      pcall(MDQ.tick, es, dt, true, mk)
+    end)
+  end
+end
+
 -- ============ 迷雾**自己的工具箱行** + 开关 + 命令（1.75.56 从 SimpleMap 搬出来，独立管理）============
 --   用户定：「将开启迷雾功能独立个脚本文件代码管理」+「单独占工具箱一行（自己一个勾选框 + 自己的 [设置]）」。
 local function L(k, ...)

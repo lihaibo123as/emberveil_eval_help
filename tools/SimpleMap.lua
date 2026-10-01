@@ -3039,8 +3039,8 @@ do
       if not EVAL_SM_ENABLED() then
         FEAT.applied = false
         SMFIT.open, SMFIT.es, SMFIT.burst = false, nil, 0
-        -- ★1.75.56：迷雾（独立模块 tools\WorldFog.lua）也在这一拍收尾（幂等、只做一次）
-        pcall(EVAL_WF_SHUTDOWN, "模块已关")
+        -- ★1.75.56：这里**不许**动世界迷雾 —— 它是**另一个模块、另一个开关**（自带节拍帧 EH_WF_FEAT）。
+        --   关掉「缩放大地图」只该停这一套（黑幕/透明/缩放/折算），与迷雾完全无关。
         return
       end
       -- ★★★1.75.5（用户指定「本办法」）：**手动适配进行中 ⇒ 整段自动逻辑让位** —— 由 `/ehm fitnow`
@@ -3144,9 +3144,9 @@ do
           if ok and tonumber(v) then es = tonumber(v) end
         end
       end
-      -- ★★★1.75.56：**世界迷雾（独立模块 tools\WorldFog.lua）自己的开图节拍** —— 本文件只喊一句，
-      --   爆发窗/残留清理窗口/渲染节拍/关图还回全在那边（模块自带自己的有界节拍，宿主换文件也不带坏它）。
-      if type(EVAL_WF_TICK) == "function" then pcall(EVAL_WF_TICK, es, dt, open, smMapKey()) end
+      -- ★★★1.75.56：世界迷雾**不在这里** —— 它是独立模块（`tools\WorldFog.lua`），自带节拍帧
+      --   `EH_WF_FEAT`，只看自己那个开关。本文件与它唯一的往来 = ① 折算在迷雾开着时让位
+      --   （见 `smFitNeedFold`）② 命令分流（见 `/ehm` 分派里的 `EVAL_WF_CMD`）。
       -- ② 过渡（开图 / es 变化）⇒ 进爆发期，并把节拍**顶满**（下一帧就动手，不等 0.1s）
       local justOpened = (open and not SMFIT.open)
       -- ★1.75.9：**闩住「刚开图」这个信号** —— ③ 是 0.2s 节拍，若开图那一拍恰好不在节拍点上，
@@ -3760,6 +3760,7 @@ end
 --   ★一律「调用时读」：桥自己就是函数，迷雾侧**拿到才调** ⇒ `.toc` 顺序不敏感、载入期零依赖。
 --   ★**只暴露这几个**（别的都不给）：耦合面越小，将来两边各自改就越不容易互相带坏。
 EVAL_SM_CFG = function() return EH_SIMPLEMAP_CFG end
+EVAL_SM_OPEN = function() return featOpenNow() == true end   -- 迷雾自带帧要用：地图开着没
 EVAL_SM_MAPINFO = function() return smMapInfo() end
 EVAL_SM_MAPKEY = function() return smMapKey() end
 EVAL_SM_NUMOVERLAYS = function() return smNumOverlays() end
