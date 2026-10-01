@@ -21,21 +21,35 @@ end
 
 -- 配置子树：懒代理（读写都现取 EVAL_SM_CFG()，与 SimpleMap 的 EH_SIMPLEMAP_CFG 是**同一张表**）
 --   ★拿不到桥时退化成一张**本地孤儿表**（功能等于关着）—— 绝不抛错、也绝不静默改别人的表。
-local WF_ORPHAN = {}
+local function wfLive()
+  -- ★★★1.75.56c（用户：「世界迷雾功能独立于大地图缩放.不要做强关联.」）：本模块**自己的配置子树**
+  --   `EVAL_HELP_CONFIG.worldFogCfg` —— 开关 / 藏账 / 探针环 / 一次性标记全在这里，
+  --   **不再**寄在 `simpleMapCfg`（那是「缩放大地图」的子树）里 ⇒ 那个模块怎么改都动不到迷雾的设置。
+  --   ★与项目纪律一致：跨文件只走全局（`EVAL_HELP_CONFIG`），且**调用时读**（载入期那是空表 = 老雷）。
+  local c = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(c) ~= "table" then c = {} rawset(_G, "EVAL_HELP_CONFIG", c) end
+  if type(c.worldFogCfg) ~= "table" then c.worldFogCfg = {} end
+  return c.worldFogCfg
+end
 local SM_CFG = setmetatable({}, {
-  __index = function(_, k)
-    local g = br("EVAL_SM_CFG")
-    local t = g and g() or nil
-    if type(t) == "table" then return t[k] end
-    return WF_ORPHAN[k]
-  end,
-  __newindex = function(_, k, v)
-    local g = br("EVAL_SM_CFG")
-    local t = g and g() or nil
-    if type(t) == "table" then t[k] = v return end
-    WF_ORPHAN[k] = v
-  end,
+  __index = function(_, k) return wfLive()[k] end,
+  __newindex = function(_, k, v) wfLive()[k] = v end,
 })
+
+-- 一次性迁移：老存档里迷雾的键在 `simpleMapCfg`（与「缩放大地图」共用），搬到自己的子树后**从老表删掉**。
+--   ★搬不到也不影响行为：`swmOverlay`/`staleClean` 缺省就是「开」，其余（藏账/探针环/一次性标记）只是历史记录。
+local WF_MIGRATE_KEYS = { "cacheCleared51", "mapFitMode", "mapFitVerbose", "perfProbe", "probeCleared52", "staleClean", "staleLog", "swmOverlay" }
+local function wfMigrate()
+  local c = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(c) ~= "table" then return 0 end
+  local dst, src = c.worldFogCfg, c.simpleMapCfg
+  if type(dst) ~= "table" or type(src) ~= "table" then return 0 end
+  local n = 0
+  for _, k in ipairs(WF_MIGRATE_KEYS) do
+    if dst[k] == nil and src[k] ~= nil then dst[k] = src[k] src[k] = nil n = n + 1 end
+  end
+  return n
+end
 
 -- 以下 8 个别名与 SimpleMap 里的同名内部件**逐字同签名**（惰性转发全部返回值）
 local function smMapInfo()
@@ -1884,6 +1898,7 @@ do
     local mg = CreateFrame("Frame", "EH_WF_CLEAN", UIParent)
     mg:RegisterEvent("VARIABLES_LOADED")
     mg:SetScript("OnEvent", function()
+      wfMigrate()   -- ★1.75.56c：把老存档里属于迷雾的键搬进自己的子树
       -- ① 上一轮「全图核验」探针的存档键一次性清掉（那些命令已整条删除）
       if not SM_CFG.probeCleared52 then
         SM_CFG.probeCleared52 = true
