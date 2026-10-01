@@ -1656,6 +1656,10 @@ local TS = { open = false, mapKey = nil, burst = 0, burstN = 0, rearmAt = 0, eng
   staleUntil = 0, staleAt = -99, staleHidN = 0, staleBackN = 0, staleSaid = false, staleSaidNoPool = false }
 
 MDQ.tick = function(es, dt, open, mk)
+  -- ★★★1.75.57b（用户：「开关状态是否能正确关闭,节拍停止」）：**双保险** —— 除了节拍帧那边
+  --   「关掉就真摘 OnUpdate」，这里也先判一次开关：任何调用者（将来谁再接一根线）在关着时都推不动一拍，
+  --   而且这一句**早于任何探测/读写**（连 `GetNumMapOverlays` 都不读）= 铁律「关掉零动作」的落地。
+  if not MDQ.swm() then return 0 end
   dt = tonumber(dt) or 0.05
   local nowT = (type(GetTime) == "function") and GetTime() or 0
   local function armStale()
@@ -1758,7 +1762,14 @@ do
   if not (type(parent) == "table" or type(parent) == "userdata") then parent = _G["UIParent"] end
   if type(CreateFrame) == "function" and parent then
     local wf = CreateFrame("Frame", "EH_WF_FEAT", parent)
-    wf:SetScript("OnUpdate", function()
+    -- ★★★1.75.57b（用户：「开关状态是否能正确关闭,节拍停止.图层清理操作」）——**关掉零动作**：
+    --   ① 节拍函数**第一行**先判自己那个开关：关着一拍都不往下走（**连 `GetNumMapOverlays` / 地图签名
+    --      都不读**，更不做换图/引擎签名/残留清理的任何探测）—— 这是项目铁律「关掉零动作」的字面落地；
+    --   ② 关掉那一刻由 `MDQ.fogSet(false)` **真摘 OnUpdate**（不是靠每帧早退），开回来再挂上；
+    --   ③ 图层清理（收我们自建的层 + 还原复用池位 + 把藏过的原生层全部还回）在 `fogSet(false)` 里
+    --      **同步做完**（走 `MDQ.shutdown`）—— 绝不寄托在常驻节拍上（否则关掉后还得靠帧跑才干净）。
+    local function beat()
+      if not MDQ.swm() then return end          -- ★关着：本拍零动作（早于任何探测/读写）
       local dt = tonumber(arg1) or 0.05
       local openFn = br("EVAL_SM_OPEN")
       local open = false
@@ -1775,7 +1786,10 @@ do
       local mkFn = br("EVAL_SM_MAPKEY")
       local mk = mkFn and mkFn() or nil
       pcall(MDQ.tick, es, dt, true, mk)
-    end)
+    end
+    wf:SetScript("OnUpdate", beat)
+    -- 挂在模块表上（**不新增文件级 local**；`fogSet` 后面用它真摘/重挂）
+    MDQ.wfFrame, MDQ.wfBeat = wf, beat
   end
 end
 
@@ -1804,12 +1818,24 @@ MDQ.fogSet = function(on, quiet)
     MDQ.offDone = false                     -- 下次闸门判定不再走「已关」那条早退路
     pcall(MDQ.staleForget, "世界迷雾已开")  -- 残留清理的账**只清不还**（可见性归接管守护）
   end
+  -- ★★★1.75.57b（用户：「开关状态是否能正确关闭,节拍停止.图层清理操作」）：
+  --   **关 ⇒ 真摘节拍**（不是靠每帧早退；图层清理已在上面同步做完）
+  --   **开 ⇒ 重新挂上**（开回来立刻就有节拍，不用等 /reload）
+  if on then
+    if MDQ.wfFrame ~= nil and MDQ.wfBeat ~= nil then
+      pcall(MDQ.wfFrame.SetScript, MDQ.wfFrame, "OnUpdate", MDQ.wfBeat)
+    end
+  else
+    if MDQ.wfFrame ~= nil then
+      pcall(MDQ.wfFrame.SetScript, MDQ.wfFrame, "OnUpdate", nil)
+    end
+  end
   if not quiet then
     if on then
-      say("世界迷雾 = 开（本图整张由 S_WorldMap 表渲染 + 残留图层清理）")
+      say("世界迷雾 = 开（本图整张由 S_WorldMap 表渲染 + 残留图层清理；节拍已启动）")
       say("　" .. L("TB_SM_SWM_TIP1"))
     else
-      say("世界迷雾 = 关（我们补建的层已收起、复用过的池位已还原原贴图/几何、藏过的原生层已全部还回）")
+      say("世界迷雾 = 关（**节拍已停**；我们补建的层已收起、复用过的池位已还原原贴图/几何、藏过的原生层已全部还回）")
     end
   end
   return true
