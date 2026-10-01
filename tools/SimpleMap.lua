@@ -1302,11 +1302,19 @@ end
 --   定义 2123 行 ⇒ 「黑幕遮蔽：开图后 N ms 藏住 M 层」那条**上屏**取证行同样是死的（`mfLog` 那条进环、这条上屏）。
 local mfLog
 local smFitSayV
+-- ★★★1.75.55：`MDQ` 也必须**提前声明**（同族老雷）：`featApplyScale`（**本行下面就是**）要读
+--   `MDQ.fit.hold`（探索层折算的「自然档抓原值」窗口）—— 而 `MDQ` 的定义在 2005 行。不声明的话
+--   那两处绑的是**全局 nil** ⇒ `attempt to index a nil value (global 'MDQ')` 被外层 `pcall` 静默吞掉
+--   ⇒ 表现是「地图**根本不再缩放**」而日志一个字都没有（本项目已多次记录这种前向声明坑）。
+local MDQ
 local function featApplyScale(s)
   local w = featWm()
   if not w then return end
   s = tonumber(s) or 1
   -- ★1.75.52：原来这里还有一道「抓原值窗口内先不缩放」的闸门（`smFitHold`）—— 随探索层适配整条摘除。
+  -- ★★★1.75.55：**又加回来了**（探索层折算需要「自然档抓原值」）—— 只在「打开世界迷雾」**关着**且
+  --   折算的抓原值窗口还开着时挡一下；窗口一收（原值抓齐 / `MDQ.FIT_HOLD_SEC` 到点）就照常套缩放。
+  if (not MDQ.swm()) and (tonumber(MDQ.fit and MDQ.fit.hold) or 0) > 0 and math.abs(s - 1) > 0.001 then return end
   -- ★★★1.75.9：**同一档只写一次**。开启路径里 `smApplyDefaults` / `featApply` / `featKeep` 三处都会调它，
   --   若本客户端 SetScale 是累乘语义（或客户端自己也记一份），一次开启就会被缩两遍 —— 用户报的正是「一开就缩两遍」。
   --   做法：先读回 `GetScale()`，已经是这档就**不写**（写出去的值与读回一致才算「已经是」）。
@@ -1999,7 +2007,7 @@ end
 --     每帧新建会瞬间泄漏几百张纹理。
 --   · **全自动**：不新增命令、不新增计时器 —— 挂在开图 tick 的既有节拍上（爆发窗 0.1s / 稳态 0.3s）：
 --     开图爆发窗（2s）内逐帧重申，之后 0.3s 一拍；关掉开关即整段让位（`MDQ.release` 把我们补建的层收起来）。
-local MDQ = {}
+MDQ = {}
 
 -- ★★★「残留图层清理」的节拍与有界上限（★1.75.52 摘除探索层适配时**误删过一次** ⇒ 常量一律留在 MDQ 表上、
 --   紧挨着表定义，别再夹在别的族中间）。
@@ -3556,10 +3564,366 @@ MDQ.cacheClear = function(why)
   pcall(mfLog, "清缓存（%s）：存档老键 %d 个（原值/写入账那些会话内存已随探索层适配整条摘除）", tostring(why), n)
   return n
 end
+-- ============ ★★★1.75.55 探索层折算（客户端自己的探索层跟随地图缩放）============
+-- 用户 2026-10-01 报障：「在关闭世界迷雾地图功能之后我们最开始完成的地图探索层缩放功能不生效了。」
+--   ⇒ 让探索层跟着地图缩放走的那段（1.75.45c 的 `SMFIT` 折算）在 1.75.52 被整条摘除（当时定的替代方案 = 打开世界迷雾）。
+--     现在开关能真停了，关掉之后就只剩客户端自己摆的那批探索层 —— 而它**不跟我们的地图缩放**
+--     （这正是 1.75.45b 报过的「缩放大地图 → 换图后探索层缩放失效」）。
+--   ⇒ 以**精简形态**把它加回来（口径与 1.75.45c 逐条对齐，删掉了那套诊断档/策略档/隐形/命令），范围收窄到四条：
+--     ① **只在「打开世界迷雾」关闭时**跑（开着时那批池位由表驱动全渲染负责，别两套抢同一批几何）；
+--     ② **只写几何**（锚点 x/y + 宽/高）—— 绝不 Hide/Show、绝不 SetTexture、绝不动 UV；
+--     ③ **只碰** `WorldMapDetailFrame` 下**名字属 `WorldMapOverlay*` 且本图真在用**的非瓦片纹理
+--        （底瓦片 `WorldMapDetailTile*` 互相锚 + 偏移 0 ⇒ 对缩放**免疫**，动它反而错）；
+--     ④ **写之前先读原值**（顺序铁律）· 原值只在**会话内存**、按地图身份分桶（绝不落存档）·
+--        关图 / 关功能 / 切回世界迷雾 ⇒ **当场按原值还回**。
+--   ★★★**自然档抓原值**（1.75.45b 的根因就出在这）：地图刚打开时先**不套我们的缩放**（`MDQ.fit.hold` 窗口），
+--     等本图在用的层原值抓齐（或窗口 `MDQ.FIT_HOLD_SEC` 到点）再套缩放 + 折算 ⇒ 读到的原值才是**自然档**的。
+--     （旧写法在 0.7 档上读原值 ⇒ 记录偏小 ⇒ 判成「已对齐」⇒ 一个几何都不写 = 用户看到的「缩放失效」。）
+--   ★**幂等**：当前值 ≈ 原值 × es 就跳过（客户端重排会把我们写的冲掉，下一拍自动补回；es 回 1 时自动还原）。
+--   ★**不靠 es 抖动作重新武装**（1.75.54 的教训）：爆发窗只在**开图/换图**这两个真事件上武装。
+--   ★全部挂在 `MDQ` 表上（**不新增文件级 local** —— 主 chunk 有 200 local 上限）。
+MDQ.fit = { rec = {}, recMap = {}, mapKey = nil, wroteKeys = {}, wrote = false, captured = false,
+  open = false, needCap = false, hold = 0, holdAge = 0, age = 0, acc = 0, burst = 0, capRan = false,
+  esCache = nil, saidFold = false, saidCap = false, wroteN = 0, restoreN = 0, natLeft = 0, capAt = -99 }
+MDQ.FIT_HOLD_SEC = 2.0    -- 自然档抓原值窗口上限（秒；到点必收，绝不把地图卡在满尺寸）
+MDQ.FIT_SETTLE = 0.4      -- 等客户端把本图版式摆稳再抓（开图那一瞬抓到的可能还是上一张图的几何）
+MDQ.FIT_CAP_GAP = 0.5     -- 窗口内抓原值的重试间隔（秒；有界，不每帧重试）
+MDQ.FIT_BURST_SEC = 2.0   -- 折算爆发窗（开图/换图后逐帧重申）
+MDQ.FIT_BURST_GAP = 0.1
+MDQ.FIT_IDLE_GAP = 0.3    -- 稳态巡检节拍
+
+-- 折算的**开关口径**（唯一入口）：模块开着（tick 已保证）+ 地图开着（调用方保证）+ **世界迷雾关着**。
+MDQ.fitArmed = function()
+  return not MDQ.swm()
+end
+
+-- ★★★本图**真在用**的层（只读；**读不到一律放行** —— 判不出就不拦，绝不把功能判死）：
+--   · `IsShown() == false` ⇒ 客户端本图不用它（上面留着别的图的几何，写它就是制造错位）；
+--   · `GetTexture()` 读得到且为空 ⇒ 这一轮根本没往它上面贴图（同上）。
+MDQ.fitInUse = function(o)
+  if type(o.IsShown) == "function" then
+    local ok, v = pcall(o.IsShown, o)
+    if ok and v == false then return false end
+  end
+  if type(o.GetTexture) == "function" then
+    local ok, v = pcall(o.GetTexture, o)
+    if ok and (v == nil or v == "") then return false end
+  end
+  return true
+end
+
+-- 目标 = `WorldMapDetailFrame` 下**名字属 `WorldMapOverlay*` 的非瓦片纹理**，键 = **纹理名**（稳定身份）
+--   ★为什么要枚举 region：本客户端那批原生探索层**不在 `_G` 里**（按名字查不到 —— 1.75.51 实测），
+--     只有枚举拿得到；这里**只写几何**，绝不 Hide/Show、绝不改贴图/UV（弄乱地图的那两版是「全当叠加层改写 + 收尾 Hide」）。
+MDQ.fitTargets = function()
+  local fr = _G["WorldMapDetailFrame"]
+  if not ((type(fr) == "table" or type(fr) == "userdata") and type(fr.GetRegions) == "function") then return {} end
+  local ok, regs = pcall(function() return { fr:GetRegions() } end)
+  if not ok then return {} end
+  local list, idx = {}, 0
+  for _, o in ipairs(regs) do
+    if o ~= nil and type(o.GetWidth) == "function" and type(o.SetPoint) == "function" then
+      local isTex = true
+      if type(o.GetObjectType) == "function" then
+        local okt, tp = pcall(o.GetObjectType, o)
+        isTex = (okt and tostring(tp) == "Texture")
+      end
+      if isTex then
+        idx = idx + 1
+        local nm = frameName(o)
+        if type(nm) == "string" and string.find(string.lower(nm), "worldmapoverlay", 1, true) == 1 then
+          table.insert(list, { o = o, key = nm })
+        end
+      end
+    end
+  end
+  return list
+end
+
+-- 本图记录条数（播报/取证用）
+MDQ.fitRecCount = function()
+  local n = 0
+  for _, v in pairs(MDQ.fit.rec or {}) do if type(v) == "table" then n = n + 1 end end
+  return n
+end
+
+-- ★★★1.75.13 的地基：**同一个纹理名在不同地图上是完全不同的矩形**（客户端按当前图的叠加层列表逐图复用这批名字）
+--   ⇒ 原值必须**按地图身份分桶**（`recMap[mk]`），换图即换绑；绝不跨图复用一份记录。
+MDQ.fitBindMap = function(mk)
+  if type(mk) ~= "string" or mk == "" then return end
+  local f = MDQ.fit
+  if f.mapKey == mk then return end
+  if type(f.mapKey) == "string" then
+    f.recMap[f.mapKey] = f.rec
+  else
+    -- ★还没有身份（第一拍）⇒ **把手里已有的记录归到这个身份下**，绝不新建空表把刚抓的原值丢掉
+    f.recMap[mk] = f.rec
+  end
+  f.mapKey = mk
+  f.rec = f.recMap[mk] or {}
+  f.recMap[mk] = f.rec
+  -- 换图 ⇒ 写入账与「已抓齐」标记作废（新图要用自己的原值重抓）
+  f.wroteKeys, f.wrote, f.captured, f.capRan = {}, false, false, false
+  f.saidFold, f.saidCap = false, false
+  f.burst, f.acc = MDQ.FIT_BURST_SEC, 0
+end
+
+-- 记录里的相对帧**解析成活对象**（★1.75.5 真机定案：写锚点必须传对象，传字符串/nil 会被锚到屏幕
+--   ⇒ 纹理跑到游戏画面上；兜底 = 父帧本身，因为原值记的就是「锚父帧 TOPLEFT」）。
+MDQ.fitRelObj = function(r)
+  local rel = r and r.relObj
+  if type(rel) == "table" or type(rel) == "userdata" then return rel end
+  if r ~= nil and type(r.rel) == "string" and r.rel ~= "" then
+    local o = rawget(_G, r.rel)
+    if type(o) == "table" or type(o) == "userdata" then return o end
+  end
+  return _G["WorldMapDetailFrame"]
+end
+
+-- 「这一层与 原值×es 是否已经对齐」的**唯一判据**（返回 true = 要写 / false = 已对齐 / **nil = 几何读不到 ⇒ 判不出就不动**）
+--   ★两种读回口径都认（与 1.75.45c 逐字同口径）：okA = 读回≈逻辑值；okB = 读回≈逻辑值×es
+--     —— 只认第一种的话，在会级联的客户端上每一拍都判「要改」⇒ 反复重写 + 刷屏。
+MDQ.fitNeedWrite = function(o, r, es)
+  local okp, p, _rel, _rp, x, y = pcall(o.GetPoint, o, 1)
+  local okw, w = pcall(o.GetWidth, o)
+  local okh, h = pcall(o.GetHeight, o)
+  if not (okp and p and okw and okh and tonumber(x) and tonumber(y) and tonumber(w) and tonumber(h)) then
+    return nil
+  end
+  local wx, wy, ww, wh = r.x * es, r.y * es, r.w * es, r.h * es
+  local near = function(a, b) return math.abs((tonumber(a) or 0) - (tonumber(b) or 0)) <= 0.5 end
+  local okA = near(x, wx) and near(y, wy) and near(w, ww) and near(h, wh)
+  local okB = near(x, wx * es) and near(y, wy * es) and near(w, ww * es) and near(h, wh * es)
+  if okA or okB then return false, wx, wy, ww, wh end
+  return true, wx, wy, ww, wh
+end
+
+-- 抓原值（**只读**；顺序铁律：读原值 → 写新值）。返回 本次抓到 N 条, 还缺 M 条（在用的层里没原值的个数）。
+MDQ.fitCapture = function(quiet)
+  local f = MDQ.fit
+  -- ★先按当前地图身份换绑（原值**按图分桶**）—— 抓原值与折算必须落在同一张图的账上
+  MDQ.fitBindMap(smMapKey())
+  local list = MDQ.fitTargets()
+  if table.getn(list) == 0 then return 0, 0 end
+  -- 客户端本图自报 **0 条叠加层** ⇒ 一个几何都不该碰（旧写法照样把那批残留几何写一遍）
+  local nOv = smNumOverlays()
+  if nOv ~= nil and tonumber(nOv) == 0 then return 0, 0 end
+  local got, missing = 0, 0
+  for _, it in ipairs(list) do
+    local o, key = it.o, it.key
+    if f.rec[key] == nil and MDQ.fitInUse(o) then
+      local okp, p, rel, rp, x, y = pcall(o.GetPoint, o, 1)
+      local okw, w = pcall(o.GetWidth, o)
+      local okh, h = pcall(o.GetHeight, o)
+      if okp and okw and okh and p ~= nil and tonumber(x) and tonumber(y) and tonumber(w) and tonumber(h) then
+        f.rec[key] = { o = o, p = p, relObj = rel, rel = frameName(rel), rp = rp,
+          x = tonumber(x), y = tonumber(y), w = tonumber(w), h = tonumber(h) }
+        got = got + 1
+      end
+    end
+  end
+  for _, it in ipairs(list) do
+    if MDQ.fitInUse(it.o) and f.rec[it.key] == nil then missing = missing + 1 end
+  end
+  if missing == 0 and MDQ.fitRecCount() > 0 then f.captured = true end
+  return got, missing
+end
+
+-- 折算（把在用的层写成 原值 × es）。返回 本拍真写了几层, 已对齐几层。
+MDQ.fitApply = function(es)
+  local f = MDQ.fit
+  if not MDQ.fitArmed() then return 0, 0 end
+  if f.needCap then return 0, 0 end          -- 原值窗口还没收口 ⇒ 这一拍先不折（保持自然档）
+  es = tonumber(es) or 1
+  if es <= 0 then es = 1 end
+  local nOv = smNumOverlays()
+  if nOv ~= nil and tonumber(nOv) == 0 then return 0, 0 end
+  local mk = smMapKey()
+  MDQ.fitBindMap(mk)
+  local changed, ready = 0, 0
+  for _, it in ipairs(MDQ.fitTargets()) do
+    local o, key = it.o, it.key
+    local r = f.rec[key]
+    if type(r) == "table" and r.o == o and MDQ.fitInUse(o) then
+      local need, wx, wy, ww, wh = MDQ.fitNeedWrite(o, r, es)
+      if need == true then
+        local relObj = MDQ.fitRelObj(r)
+        if relObj ~= nil then
+          pcall(o.ClearAllPoints, o)
+          pcall(o.SetPoint, o, r.p, relObj, r.rp, wx, wy)
+          pcall(o.SetWidth, o, ww)
+          pcall(o.SetHeight, o, wh)
+          r.relObj = relObj
+          f.wrote, f.wroteKeys[key] = true, mk
+          changed = changed + 1
+        end
+      elseif need == false then
+        ready = ready + 1
+      end
+    end
+  end
+  f.wroteN = changed
+  if changed > 0 and not f.saidFold then
+    f.saidFold = true
+    pcall(smFitSay, "探索层折算：地图=%s ｜ 按外框缩放 es=%.3f 折算 **%d** 个探索层（只写锚点/宽高；"
+      .. "关图 / 关功能 / 切回「打开世界迷雾」都按原值还回）", tostring(mk or "?"), es, changed)
+  end
+  return changed, ready
+end
+
+-- 按原值还回（**只还我们写过的**；幂等）。返回 还回 N 个, 没还回去的 M 个。
+MDQ.fitRestore = function(why)
+  local f = MDQ.fit
+  local n, miss = 0, 0
+  local live = {}
+  for _, it in ipairs(MDQ.fitTargets()) do live[it.key] = it.o end
+  local function back(key, o)
+    local r = f.rec[key]
+    if type(r) ~= "table" then miss = miss + 1 return end
+    local relObj = MDQ.fitRelObj(r)
+    if relObj == nil or o == nil then miss = miss + 1 return end
+    pcall(o.ClearAllPoints, o)
+    pcall(o.SetPoint, o, r.p, relObj, r.rp, r.x, r.y)
+    pcall(o.SetWidth, o, r.w)
+    pcall(o.SetHeight, o, r.h)
+    n = n + 1
+  end
+  for key in pairs(f.wroteKeys) do
+    local o = live[key]
+    if o ~= nil and f.rec[key] ~= nil and f.rec[key].o == o then back(key, o)
+    elseif f.rec[key] ~= nil and f.rec[key].o ~= nil then back(key, f.rec[key].o)   -- 关图那一刻枚举不到 ⇒ 用记录里的对象
+    else miss = miss + 1 end
+  end
+  f.wroteKeys, f.wrote, f.restoreN = {}, false, n
+  if n > 0 or miss > 0 then
+    pcall(mfLog, "探索层折算还回（%s）：地图=%s ｜ 按原值还回 %d 个%s", tostring(why), tostring(f.mapKey or "?"), n,
+      (miss > 0) and ("；" .. tostring(miss) .. " 个没有原值/锚点解析失败 ⇒ 如实跳过（没动它们）") or "")
+  end
+  return n, miss
+end
+
+-- 开图/换图那一拍：重开自然档抓原值窗口 + 武装折算爆发窗
+--   ★★★窗口期**必须主动把外框按回自然档**（`featApplyScale(1)`）—— 只「挡住缩放」是不够的：
+--     外框的 0.7 是**跟着上一张图留下来的**（客户端不会替我们复位）⇒ 不归位就会在 0.7 上读原值
+--     ⇒ 记录偏小 ⇒ 折算变空操作（正是 1.75.45b 报的「换图后探索层缩放失效」）。
+--   ★**没缓存才走初次流程**（1.75.45c）：本图已经有原值记录（本会话访问过、没关过图）⇒ **不开窗口**，
+--     直接用缓存折算（不再有「每次开图先满尺寸 1~2 秒」）。关图会把记录丢掉 ⇒ 下次开图必然重抓（用户 1.75.5 定的口径）。
+MDQ.fitOpen = function()
+  local f = MDQ.fit
+  f.open, f.age, f.holdAge = true, 0, 0
+  f.needCap = (next(f.rec or {}) == nil)
+  f.hold = f.needCap and MDQ.FIT_HOLD_SEC or 0
+  f.natLeft = 3          -- ★补抓窗口预算（每图最多 3 段，绝不把地图长期按在自然档）
+  f.capAt = -99
+  f.capRan, f.captured, f.esCache = false, false, nil
+  f.burst, f.acc = MDQ.FIT_BURST_SEC, 0
+  f.saidFold, f.saidCap = false, false
+end
+
+-- 关图 / 关功能 / 切回世界迷雾：**当场按原值还回**，并把本图记录丢掉（「每次开图重新抓」的口径）
+--   ★安全阀（1.75.45c 的原话）：**还回没验成功就绝不丢记录** —— 丢了就等于允许下次把「折后值」当原值记下来（折两遍）。
+MDQ.fitClose = function(why)
+  local f = MDQ.fit
+  if not f.open and not f.wrote then return 0 end
+  f.open, f.needCap, f.hold, f.holdAge, f.age, f.capRan = false, false, 0, 0, 0, false
+  local n, miss = 0, 0
+  if f.wrote then n, miss = MDQ.fitRestore(why or "已收手") end
+  if miss == 0 then
+    local mk = f.mapKey
+    f.rec = {}
+    if type(mk) == "string" then f.recMap[mk] = f.rec end
+    f.captured, f.saidFold, f.saidCap = false, false, false
+  else
+    pcall(smFitSay, "探索层折算：%s ｜ **%d** 个层的原值没还回去（几何读回对不上）⇒ **保留原值记录、不清空**"
+      .. "（清掉的话下次开图会把折后值当原值 ⇒ 折两遍）", tostring(why or "已收手"), miss)
+  end
+  return n
+end
+
+-- 折算节拍（挂在既有开图 tick 上；`es` = 外框有效缩放，`dt` = 本帧步长，`mk` = 当前地图签名）
+MDQ.fitTick = function(es, dt, mk)
+  local f = MDQ.fit
+  -- ① 关着（切回世界迷雾）⇒ 还回并收手（**零动作**：之后每拍只判一个布尔）
+  if not MDQ.fitArmed() then
+    if f.open or f.wrote then pcall(MDQ.fitClose, "切回打开世界迷雾") end
+    return 0
+  end
+  dt = tonumber(dt) or 0.05
+  if type(mk) == "string" and mk ~= "" and mk ~= f.mapKey then
+    -- ★换图：**不写任何几何** —— 换图那一刻客户端自己会把这批纹理按新图重摆（几何归它），
+    --   我们若把上一张图的原值写回去 = 拿旧矩形盖新图（1.75.45c 的老坑）；这里只换绑 + 按新图重抓原值。
+    MDQ.fitBindMap(mk)
+    MDQ.fitOpen()
+  elseif not f.open then
+    MDQ.fitOpen()
+  end
+  -- ② 自然档抓原值窗口：等版式稳定再抓；抓齐 / 到点都收窗口（★绝不把地图卡在满尺寸）
+  if f.needCap then
+    f.age = (tonumber(f.age) or 0) + dt
+    f.hold = math.max(0, (tonumber(f.hold) or 0) - dt)
+    f.holdAge = (tonumber(f.holdAge) or 0) + dt
+    -- ★窗口期**逐帧重申自然档**（本该是空操作：`featApplyScale` 自带「同档不重写」读回自证 ⇒ 不加写动作）
+    pcall(featApplyScale, 1)
+    if f.age >= MDQ.FIT_SETTLE and (not f.capRan or f.holdAge >= MDQ.FIT_CAP_GAP) then
+      f.capRan, f.holdAge = true, 0
+      local got, missing = MDQ.fitCapture()
+      if missing == 0 and MDQ.fitRecCount() > 0 then
+        f.needCap, f.hold = false, 0
+        if not f.saidCap then
+          f.saidCap = true
+          pcall(smFitSay, "探索层折算：地图=%s ｜ 原值已抓齐 **%d** 层（自然档读的；抓了 %d 条）⇒ 套缩放并折算",
+            tostring(mk or "?"), MDQ.fitRecCount(), tonumber(got) or 0)
+        end
+      end
+    end
+    if f.hold <= 0 then
+      f.needCap = false
+      -- ★窗口收口**同一拍**就把缩放套上、并**当拍折算**（不顶满 acc 的话要等下一个节拍，
+      --   那 0.1~0.3s 里地图已缩小、探索层还是原尺寸 = 一眼可见的错位 —— 1.75.45b 的原话）
+      pcall(featApplyScale, tonumber(SM_CFG.scale) or 1)
+      f.acc = 1e9
+      f.capAt = (type(GetTime) == "function") and GetTime() or 0
+      if not f.saidCap then
+        f.saidCap = true
+        pcall(smFitSay, "探索层折算：地图=%s ｜ 抓原值窗口到点收口（原值 %d 层）⇒ 套缩放 + 折算"
+          .. "（没抓到的层**一个几何都不碰**）", tostring(mk or "?"), MDQ.fitRecCount())
+      end
+    end
+  end
+  -- ②-b 窗口关了之后：**后来才冒出来的层**走有界补抓 —— ★1.75.24 的教训：后来出现的层同样必须在**自然档**读，
+  --   否则记录偏小 ⇒ 那一层永远折不动；预算 `f.natLeft` 用完就收手（绝不把地图长期按在自然档）。
+  if (not f.needCap) and (tonumber(f.natLeft) or 0) > 0 then
+    local tNow = (type(GetTime) == "function") and GetTime() or 0
+    if (tNow - (tonumber(f.capAt) or -99)) >= MDQ.FIT_CAP_GAP then
+      f.capAt = tNow
+      local _got, missing = MDQ.fitCapture()
+      if (tonumber(missing) or 0) > 0 then
+        f.natLeft = f.natLeft - 1
+        f.needCap, f.hold, f.holdAge, f.age = true, MDQ.FIT_HOLD_SEC, 0, MDQ.FIT_SETTLE
+        pcall(featApplyScale, 1)
+        pcall(mfLog, "[fit] 补抓窗口：地图=%s ｜ 还有 %d 个在用的探索层没原值 ⇒ 回到自然档再等 %.1fs"
+          .. "（本图预算还剩 %d 段）", tostring(mk or "?"), tonumber(missing) or 0, MDQ.FIT_HOLD_SEC, f.natLeft)
+      end
+    end
+  end
+  -- ③ 折算节拍：爆发窗内（开图/换图后 2s）逐帧重申，之后 0.3s 一拍；内容已对齐就一个写都不发
+  if (not f.needCap) and es and tonumber(es) and tonumber(es) > 0 then
+    f.burst = math.max(0, (tonumber(f.burst) or 0) - dt)
+    local gap = ((tonumber(f.burst) or 0) > 0) and MDQ.FIT_BURST_GAP or MDQ.FIT_IDLE_GAP
+    f.acc = (tonumber(f.acc) or 0) + dt
+    if f.acc >= gap then
+      f.acc = 0
+      pcall(MDQ.fitApply, tonumber(es))
+    end
+  end
+  return 0
+end
+
 -- 开图侦测 tick（★挂 WorldFrame 不挂 UIParent —— 开全屏地图时 UIParent 会被隐藏，挂它下面收不到 OnUpdate）
 --   ★★1.75.52（用户定：整条「探索层适配」摘除）后只剩三件事：
 --     ① 黑幕瞬时窗口（开图逐帧重申藏黑幕）｜ ② 「开图保持」（透明度/缩放/居中/位置记忆）
 --     ③ 「打开世界迷雾」渲染节拍 + 「残留图层清理」节拍（规则与实现都在 `MDQ.*` 里，这里只管节拍与播报）。
+--   ★1.75.55 起再加一件：**探索层折算节拍**（`MDQ.fitTick`；只在「打开世界迷雾」关着时干活）。
 do
   local parent = _G["WorldFrame"]
   if not (type(parent) == "table" or type(parent) == "userdata") then parent = _G["UIParent"] end
@@ -3580,6 +3944,8 @@ do
         -- ★★★1.75.54e：关掉整个模块 = 与关「世界迷雾」**同一套还原**（收自建层 + 复用池位还原原值 +
         --   藏过的原生层全部还回）。走 `MDQ.shutdown`（幂等、只做一次）⇒ 不再每帧重复还回（原来三连 pcall）。
         pcall(MDQ.shutdown, "模块已关")
+        -- ★1.75.55：探索层折算也一起收手（按原值还回几何）
+        pcall(MDQ.fitClose, "模块已关")
         return
       end
       local dt = tonumber(arg1) or 0.05
@@ -3658,10 +4024,12 @@ do
         end
       end
       -- ④ 关图 ⇒ 把藏过的层**全部还回**（残留清理 + 接管守护；绝不把「藏」的状态带进下一张图）
+      --   ★1.75.55：探索层折算也在这里收手（按原值还回几何 + 丢掉本图原值 ⇒ 下次开图重新抓）
       local closedNow = (not open) and ST.open
       if closedNow then
         pcall(MDQ.staleShowAll, "地图已关")
         pcall(MDQ.holdShowAll, "地图已关")
+        pcall(MDQ.fitClose, "地图已关")
       end
       -- ⑤ 每帧守住地图缩放（读一次 GetScale 很便宜、`featApplyScale` 自带「同档不重写」⇒ 只有漂了才写）
       if open then pcall(featApplyScale, tonumber(SM_CFG.scale) or 1) end
@@ -3728,6 +4096,9 @@ do
       --     · **逐帧重申那一拍** = **只渲染**（`withGuard = false`）—— 每帧 `GetRegions()` + 逐 region
       --       `GetName()` 是卡顿主因之一；护守按 0.1s/0.3s 拍子查足够（客户端把原生层 Show 回来，
       --       最迟 0.3s 就会被再藏一次）。
+      -- ⑦-b ★★★1.75.55 探索层折算节拍（**只在「打开世界迷雾」关着时干活**；规则与状态全在 `MDQ.fit*` 里）：
+      --   自然档抓原值窗口 → 折算（原值 × es）→ 关图/关功能/切回世界迷雾时按原值还回。
+      if open then pcall(MDQ.fitTick, es, dt, mkNow) end
       if not (open and es and es > 0) then return end
       local gap = ((tonumber(ST.burst) or 0) > 0) and SM_BURST_GAP or SM_IDLE_GAP
       if accSwm >= gap then
@@ -3838,6 +4209,7 @@ function EVAL_SM_SET(on)
       if not okR then nRestore230 = 0 end
       pcall(MDQ.staleShowAll, "关闭缩放大地图")
       pcall(MDQ.holdShowAll, "关闭缩放大地图")
+      pcall(MDQ.fitClose, "关闭缩放大地图")   -- ★1.75.55：探索层折算也按原值还回
       FEAT.applied = false
       pcall(featReset)  -- 透明/缩放/位置复位
       -- ★★★1.75.9：**把装上去的钩子/帧收干净**（用户要求：「开启/关闭要做好探索层纹理的事件清理」）。
@@ -4163,6 +4535,8 @@ function EVAL_SM_FOG_SET(on)
   else
     -- 开：残留清理的账**只清不还**（可见性归「接管守护」，走还回会先闪一下又被藏）。
     MDQ.offDone = false   -- ★1.75.54d：重新打开 ⇒ 下一次闸门判定不再走「已关」那条早退路
+    -- ★1.75.55：探索层折算**先按原值还回**（开着世界迷雾时那批层归表驱动全渲染负责，别两套抢同一批几何）
+    pcall(MDQ.fitClose, "打开世界迷雾")
     pcall(MDQ.staleForget, "世界迷雾已开")
     P("打开世界迷雾 = 开（本图整张由 S_WorldMap 表渲染 + 残留清理；不再自己跑图探索）")
     P("　" .. EVAL_SM_SWM_TIP())
