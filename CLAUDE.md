@@ -12,7 +12,7 @@
 
 - **不许子代理**（用户 1.74.31 原话：「记住不要使用子代理模式处理任务」）：开发/排查/改代码**一律本人直接做**，不用 `subagent`/`subagent_fork`/`workflow`/`ralph`；上下文紧张就分段做，每段跑闸门。
 - **答复一律中文**（用户：「英文我看不懂」）：报告/分析/清单都用中文；代码标识符/API 名/事件名原样保留。
-- **改完代码自动同步**（用户 1.74.8）：★**本机仓库不在游戏目录里**（仓库 = `D:\soft\game\ai-plugs\emberveil_eval_help`，游戏 = `E:\soft\game\eb\Azeroth\Binaries\Win64\Games\Emberveil\live\Azeroth\Interface\AddOns\EvalHelp`）⇒ **改完必须跑 `node sync_game.js`**（脚本里的 `DST` 是唯一真值；它按 `EvalHelp.toc` 现算清单拷主插件 + `media`，并把 `addons\` 子插件拷到同级；幂等，报「改 N / 同 M」）。**次序：先过两道闸门再同步**；★判据 = 同步后核对「toc 清单与游戏目录**逐字节一致**」（本会话新增了 `tmp/verify_sync.js` 这个纯读核对脚本）。复制口径 = `.toc` 现算清单（含 `tools\`/`Locales\`/`examples\` 递归），**不带** `test_*`/`luacheck.js`/`tmp\`/`preview\`/`doc\`/`.git`；这条**不是** release 的一部分。
+- **改完代码自动同步**（用户 1.74.8）：★**仓库位置按机器分两种**：**本机（当前会话）= 仓库就在游戏目录里**（`…\Interface\AddOns\EvalHelp` 本身就是 git 仓库 ⇒ `sync_game.js` 打印「本机无需同步主插件：仓库本址已在游戏 AddOns 内」，改文件 / `git pull` 即等于同步，脚本只把 `addons\` 子插件拷到同级）；**另一台电脑**仓库 = `D:\soft\game\ai-plugs\emberveil_eval_help`、游戏 = `E:\soft\game\eb\Azeroth\…\AddOns\EvalHelp`（脚本里的 `DST` 就是它，本机不存在属正常）⇒ **改完照样跑一次 `node sync_game.js`**（脚本里的 `DST` 是唯一真值；它按 `EvalHelp.toc` 现算清单拷主插件 + `media`，并把 `addons\` 子插件拷到同级；幂等，报「改 N / 同 M」）。**次序：先过两道闸门再同步**；★判据 = 同步后核对「toc 清单与游戏目录**逐字节一致**」（本会话新增了 `tmp/verify_sync.js` 这个纯读核对脚本）。复制口径 = `.toc` 现算清单（含 `tools\`/`Locales\`/`examples\` 递归），**不带** `test_*`/`luacheck.js`/`tmp\`/`preview\`/`doc\`/`.git`；这条**不是** release 的一部分。
 - ★★★**改完不自动提交**（用户 1.75.57d：「**每次修改不要提交.等我确认统一提交**」）⇒ 改完**只**跑闸门 + `node sync_game.js`（让游戏目录拿到新文件），**默认不 `git commit`**；只有用户明确说「提交」才 `git add` + `commit`，推送与否再问一次。
 - **「提交版本」= 只 `git add` + `commit`**（用户 1.72.1：「提交版本不要触发 release」）；只有明确说 **release / 发布 / 出包 / 建 Release** 才走 9 步（详见参考卷）；★**9 步里含「图片同步」**（用户 1.75.35 定）：每版按 `./preview` **最新一批图**更新三语 README 的「界面预览」板块 —— 判据 = `preview/` 文件名集合 ⊆ 三语引用集合 + 说明文字与当前功能一致 + **图比功能旧就点名让用户重拍**（不许旧图配新文案）；不确定先问一句。推送走 `git@` + `--tags`；Release 页我做不了（无 gh/token）⇒ 如实请用户网页建。
 
@@ -132,7 +132,7 @@
 - ★★★**模块只准调「全局桥」，绝不调宿主 local**：`tbCfg`/`say`/`logLine` 在模块里是全局 nil ⇒ 「读永远 false、写一次不生效、播报静默」；跨文件走 `EVAL_TB_CFG`/`EVAL_SAY`/`EVAL_LOGLINE`/`EVAL_L`，或模块自带同名 local。判据 = `MODULE HOST LOCAL CHECK`。
 - ★★★**「关掉零动作」= 总开关闸在任何探测/读写之前**（1.75.7）：闸门块要**清「已应用」标记 + `return`**；「关掉时把改过的几何还回去」必须**当场做**（寄托常驻 tick = 关掉还在跑）；反向哨兵不许把功能关死。判据 = 组 230 + `SM OFF SILENT CHECK`。★带开关的**工具模块**的关断四件事（**资源回收 / 节拍停止 / 数据重置 / 图层有新增就要清理**）与可复跑判据 = §4.1「**工具类开发规范 · 关断路径四件事**」（1.75.57）。
 - ★★★**整条「探索层适配」已按用户要求摘除（1.75.52）** —— 原话：「1.75.45b 缩放大地图→换图后探索层缩放失效**这块可以不用保留**，替代方案已做好」：
-  ① **替代方案 = 「打开世界迷雾」**（`MDQ` 那一族，表驱动全渲染，**默认开**）：它按 S_WorldMap 表把地图整张画出来，
+  ① **替代方案 = 「关闭世界迷雾」**（`MDQ` 那一族，表驱动全渲染；★**1.75.59c 起默认关 = 不勾选**，行名也从「打开世界迷雾」改成「关闭世界迷雾」，见 §5.4 ⑫）：它按 S_WorldMap 表把地图整张画出来，
      **不读也不写任何探索层几何**（可见性由表 + 「接管守护」决定）⇒ 探索层那套「抓自然档原值 → 折算 → 先隐形 → 指纹自证」全都失去了存在理由。
   ② **删掉的东西（别再往回加）**：`SMFIT` 表 · `smFitCapture/Apply/Restore/NeedWrite/ReadbackK/Detect/Mode/Prepare/Diag/DumpLines` ·
      `smFitGhostHide/Keep/Show` · `smFitDropOnClose` · `smFitNewMap/BindMap` · `smFitTargets/InUse/RecCount/OrigCount` · `smRelName` ·
@@ -140,7 +140,7 @@
      载入期那份「策略/详细日志/观察层」跨会话清理 · 读值口 `EVAL_SM_TEST_MAPFIT_REC/FIX_*/NAT_*` · `EVAL_SM_ORIG_OF`（连空壳口都不留）。
   ③ **留下的公共件（它们不只服务适配）**：`mfLog`（取证环 `mapFitTrace`）· `smFitSay`/`smFitSayV`（常开出口，残留清理与守护在播报）·
      `smFitVerboseOn` · `smMapInfo/smMapKey/smNumOverlays`（地图身份，MDQ 的倍率缓存也用）· `smEffScale`（MDQ 的 k 兜底）。
-  ④ **tick 现在只有三件事**（`EH_SM_FEAT` 的 OnUpdate）：黑幕瞬时窗口 · 「开图保持」（透明/缩放/居中/位置记忆）· 「打开世界迷雾」渲染节拍 + 残留清理节拍。
+  ④ **tick 的归属（★1.75.56 拆分后）**：`EH_SM_FEAT`（SimpleMap）只剩**黑幕瞬时窗口** · **「开图保持」**（透明/缩放/居中/位置记忆）· **探索层折算**；「世界迷雾」那一整套（渲染节拍 + 残留清理 + 接管守护）搬进 `tools/WorldFog.lua` 的**自带节拍帧** `EH_WF_FEAT` —— 一个模块只许一个节拍帧，挂/摘走**唯一入口** `MDQ.beatSync`（默认关 ⇒ 一帧空节拍都不跑）。
      ★会话状态收在 tick 里的小表 `ST`（原来寄在 `SMFIT` 里）；`MDQ.STALE_GAP/STALE_GAP_IDLE/STALE_SEC/STALE_LOG_MAX` **一律留在 MDQ 表上、紧挨表定义**
      —— 这次摘除**误删过一次那四个常量**（症状 = 残留清理一调就 `attempt to compare nil with number`，`tmp/swm_harness.js` 当场抓到）。
   ⑤ **纪律（两条）**：**读值口要么挂到 `/eh` 命令上（活口），要么别加** —— 只给离线 harness 用的口，删功能时必须连它一起删；
@@ -245,7 +245,7 @@
   ③ **开启后 = 表驱动全渲染 `MDQ.render`**（贴图/UV/尺寸/位置全部由表现算，**不读也不记任何原值**）：贴图 `Interface\WorldMap\<GetMapInfo() 第1个返回>\<区域名><块号>`；每 **256×256** 一块（`nh=ceil(w/256)`、`nv=ceil(h/256)`，**行优先** `t=(j-1)*nh+k`），**末列/末行取余数**、余 0 按 256；`SetTexCoord(0, 像素/文件边长, 0, 像素/文件边长)`（文件边长 = 16 起按 2 的幂倍增到 ≥ 像素）；挂点 `TOPLEFT / WorldMapDetailFrame` + `(ox, -oy)`（**y 取负**）。
      ★★★**倍率 k = 现读，绝不写常数**（1.75.51 用户：「缩放要根据当前缩放级别和数据库实时计算」）：`MDQ.kLive` 每拍现读 = **引擎在当前缩放级别下给出的叠加层真值 ÷ 表推值**（`GetNumMapOverlays` + `GetMapOverlayInfo` → `MDQ.parse` → `MDQ.expectRect`；多样本取**中位数**，≥3 样本离散 > 15% ⇒ **判不出**）⇒ 读不出就**兜底外框有效缩放**（`smEffScale`，也是现读），再读不出按 1 写并如实说「判不出」；0.2s 节流 + 按地图签名缓存。★**不漂移**：我们写进去的是「表值 × k」，而引擎真值**不受我们改写影响** ⇒ 稳态下 k 恒定；换图 / 用户缩放 ⇒ 引擎真值变 ⇒ 下一拍自动跟上。★**写表值原样（k=1）只是「引擎真值 = 表值」时的特例，不是能写死的规则**（早期按 DebugBox 一行读数 `尺寸=68x85 ｜ 原=113x142 ｜ es=0.6` 推断出来的写法已纠正）。播报行口径 = `倍率 k=0.750（引擎实测 3 个样本）｜ 外框 es=0.700 ｜ 首块=… 表 256x200 @10,20 ⇒ 写 192x150 @7.5,-15`；**倍率一变也再报一行**（缩放级别变了 = 真事件）。旧 A/B 档 `/ehm mapfit k es` 与数据源档 `src swm|client` **已按用户要求删除**。
   ④ **「忽略内置探索纹理」= 按客户端的**具名池位**复用/补建**（1.75.51 **已按用户要求整体回退到这一版**）：`MDQ.texAt(n)` 只做 `rawget(_G, "WorldMapOverlay"..n)`（**不做对象枚举、绝不读 `GetRegions()` —— 全案见 ⑨**）；命中即复用（播报算「客户端既有 N」），没命中就现场补建：先建具名（能一路接管客户端池位），具名失败**退回匿名纹理**（照样能画，绝不静默放弃），并**跨帧复用** `MDQ.own`（渲染是逐帧重申的，每帧新建 = 瞬间泄漏几百张纹理）；**收尾 `MDQ.hideFrom(n+1)`**（`_G` 名 + `MDQ.own`，用 `poolSeen` 有界扫、不空转 `poolMax` 次）；**本图不在表里（大陆图/城市图）⇒ `MDQ.hideFrom(1)`**（替代语义：宁可空着，也不留旧图）。★**已知代价（如实告知，不再自行"修"）**：本客户端那批纹理**在 `_G` 里按名字找不到** ⇒ 客户端自己的内置探索纹理**藏不掉、会留两三块残留**（用户 1.75.51 定案：**宁可留残留，也绝不许动 region** —— 动过 region 的两版都把地图弄乱）。
-  ⑤ **全自动、挂开图 tick 的既有节拍**（★1.75.52 探索层适配整条摘除后，tick 只做黑幕/开图保持/世界迷雾渲染 + 残留清理四件事）：`accSwm` 节拍 = 爆发窗（开图/换图/外框缩放变化后 2s）内**逐帧重申** `pcall(MDQ.renderCurrent, es, true, true)`、之后 `SM_IDLE_GAP`(0.3s) 一拍，**不新增命令/计时器**；会话状态（`burst/mapKey/stale*`）收在 tick 的 `ST` 小表里。
+  ⑤ **全自动、挂开图 tick 的既有节拍**（★1.75.56 起「世界迷雾」有**自己的节拍帧** `EH_WF_FEAT`，SimpleMap 的 tick 只剩黑幕 / 开图保持 / 探索层折算）：`accSwm` 节拍 = 爆发窗（开图/换图/外框缩放变化后 2s）内**逐帧重申** `pcall(MDQ.renderCurrent, es, true, true)`、之后 `SM_IDLE_GAP`(0.3s) 一拍，**不新增命令/计时器**；会话状态（`burst/mapKey/stale*`）收在 tick 的 `ST` 小表里。
   ⑥ **写后自证**：读回**我们真正写的那张**第一块（`MDQ.lastTex`），认「读回=逻辑值」与「读回=逻辑值×es」两种口径 ⇒ 生效 / **判不出**（如实说，绝不假装成功）；**每图只播一次**（`MDQ.saidMk`）——只有真问题（本图不在表 / 0 块 / 渲不完整 / 判不出）走常开出口 `smFitSay`，正常成功行走详细档 + `mapFitTrace` 环。
   ⑦ **表的覆盖范围（离线预检 `tmp/mapdata_pretest.js` —— 纯读表体检，**保留**，与已删探针无关）**：表内部自洽（并集画布约 660×1000；707 区里 **619 区跨多块** ⇒ 多块是常态）；但表只覆盖**区域图** —— 本机存在的大陆图（`Kalimdor`/`Azeroth`）与城市图（`Ogrimmar`）表里没有；真机样本 `Barrens` 的 `WorldMapOverlay1`（125×115 @492,63）与表里该图 26 区 / 84 块**一块都不吻合** ⇒ **EmberVeil 的地图内容与这张表可能不同源**，效果以真机开图实测为准（不一致的预案：只画「表 ∩ 客户端清单」的交集）。
   ⑧ ★**清账纪律**：`/ehm mapdata` 逐图核验探针（含 `MDQ.check/snapshot/store/tick`）与 `src`/`render`/`k` 三个测试子命令**已整体删除**（用户：「清理以上测试代码」）；它留下的存档键 `mapData`/`mapDataLog`/`mapDataArm` 在载入期**一次性**清掉（标记键 `SM_CFG.probeCleared52` —— ★不能复用 `cacheCleared51`：它在老存档里已是 true，复用它这段根本不跑）。

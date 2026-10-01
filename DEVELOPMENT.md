@@ -7,14 +7,14 @@
 - EmberVeil 私服客户端（1.12.1 规则 / UE 引擎 / **Lua 5.1**）的 FrameXML 插件；
 - **多文件架构**（1.39.0 起模块化；**真实载入顺序 = `EvalHelp.toc` 的顺序，以 .toc 为唯一真值**）：
   `Locales/{zhCN,enUS,ruRU}` → `Core.lua`（输出/i18n/状态采集+UPDATE_STATE/UI 越界助手）→ `Engine.lua`（一键宏引擎：扫描/五分类/规则引擎/解析/免疫/光环/距离/队伍扫描）
-  → `EvalHelp.lua`（全部 UI 窗口+斜杠+初始化）→ `examples/*.lua`（11 个案例模版数据文件）→ `Toolbox.lua`（Tab3 工具箱）
+  → `EvalHelp.lua`（全部 UI 窗口+斜杠+初始化）→ `examples/*.lua`（12 个案例模版数据文件）→ `Toolbox.lua`（Tab3 工具箱）
   → **`quest/` 数据层（4 个**只读数据文件**，顺序不能换）**：`QuestData.lua`（策展链）→ `QuestBulk.lua`（全量任务/装备生成物）→
     **`QuestAll.lua`（全量任务表生成物：4018 条任务 + 奖励/需要等级 + 父子任务 + 需求材料，1.75.14 起）** → `QuestChains.lua`（上述三张表的数据层封装：搜索/筛选/树/详情）
     —— ★同目录的 `fetch.js`/`build*.js`/`sweep*.js`/`audit.js`/`chains.js`/`cache/` 都是**开发脚本与抓取缓存**，**不进发布包**
   → `DataSearch.lua`（Tab4 任务线 & 装备）→ `Share.lua`（方案分享）→ `IconSem.lua`（图标语义表，1.73.5）
   → `IconBrowser.lua`（Tab5 图标库）→ `PetData.lua`/`PetHelper.lua`（Tab6 抓宠帮手，1.73.0）→ **`ItemPriceData.lua`（物品价基准价**生成物**：13,994 条 vanilla 价，1.75.43；生成器 = `gen_itemprices.js`，**绝不手改**）**
   → **`MapOverlayData.lua`（世界地图探索层区域表**生成物**：53 图 / 707 区，1.75.51；生成器 = `gen_mapoverlay.js`，源 = 本仓库快照 `doc/地图层数据-源快照.txt`，**绝不手改**）**
-  → **`tools/` 工具模块（13 个，顺序照 `.toc`）**：`SimpleMap.lua`（缩放大地图 + **「打开世界迷雾」**）→ `IconGrid.lua`（通用图标网格选择器：单选/多选 · 高度自适应 · 分页滚轮夹取，1.74.5）→ `HunterHelper.lua`（猎人助手 · 一键喂食，1.74.5）→ `ConsumableHelper.lua`（消耗品助手 · 多选横排各自点用，1.74.5）→ `DismountHelper.lua`（骑乘助手 · 一键下马，1.74.7）→ `RareWatch.lua`（稀有提醒转播独立模块，1.74.27）→ `DragFrames.lua`（图层拖拽，1.74.30）→ `LayerFix.lua`（图层隐藏，1.74.34）→ **`LootCursor.lua`（拾取贴手 · 搬窗贴手 + 点一次换下一件 + 品质角标，1.75.26）** → **`InfoBar.lua`（顶部信息条：六段 · 移植自开源 SimpleInfoBar/MIT，1.75.40）** → **`ItemPrice.lua`（物品价：商人处学真价 + 悬停价格行 + 背包·银行估值，1.75.43）** → **`EquipCompare.lua`（装备比较：自建对比框 + 部位判定 + 差异染色 + 换装差值汇总，1.75.45）** → **`Probes.lua`（探针命令集中地：`PR[id]` 注册表 + 宿主一行 `prRun`；toc 预载但**载入期零副作用**、首用才建，1.75.35）**
+  → **`tools/` 工具模块（14 个，顺序照 `.toc`）**：`SimpleMap.lua`（缩放大地图 + **探索层折算**）→ **`WorldFog.lua`（世界迷雾独立模块：工具箱行「**关闭世界迷雾**」+ 表驱动全渲染 + 接管守护 + 残留清理 + **自带节拍帧** `EH_WF_FEAT`，1.75.56；与缩放大地图只走一行桥白名单）** → `IconGrid.lua`（通用图标网格选择器：单选/多选 · 高度自适应 · 分页滚轮夹取，1.74.5）→ `HunterHelper.lua`（猎人助手 · 一键喂食，1.74.5）→ `ConsumableHelper.lua`（消耗品助手 · 多选横排各自点用，1.74.5）→ `DismountHelper.lua`（骑乘助手 · 一键下马，1.74.7）→ `RareWatch.lua`（稀有提醒转播独立模块，1.74.27）→ `DragFrames.lua`（图层拖拽，1.74.30）→ `LayerFix.lua`（图层隐藏，1.74.34）→ **`LootCursor.lua`（拾取贴手 · 搬窗贴手 + 点一次换下一件 + 品质角标，1.75.26）** → **`InfoBar.lua`（顶部信息条：六段 · 移植自开源 SimpleInfoBar/MIT，1.75.40）** → **`ItemPrice.lua`（物品价：商人处学真价 + 悬停价格行 + 背包·银行估值，1.75.43）** → **`EquipCompare.lua`（装备比较：自建对比框 + 部位判定 + 差异染色 + 换装差值汇总，1.75.45）** → **`Probes.lua`（探针命令集中地：`PR[id]` 注册表 + 宿主一行 `prRun`；toc 预载但**载入期零副作用**、首用才建，1.75.35）**
     ★工具模块一律**自包含**（真值 + 自己的存档子树 + 界面控件 + 读值口 + 自己的**有界**计时器）；`Toolbox.lua` 里只留「一行数据 + 模块行注册表 `EVAL_TB_MOD_ROWS[mod]`」，渲染/下拉/结算全在模块里。
   → **`media/`（运行期贴图）**：`Flags/`（旗帜）· `icons/`（图标）· **`WorldMap/<地图>/<区域><块号>.blp`（「打开世界迷雾」的**可选**自带贴图，1.75.53；生成器 = `gen_worldmap_media.js --from <interface.MPQ> --full-only`，**只放整张齐全的图**、逐字节可复现）**
     —— ★贴图**自带优先**，加载不出来退回客户端 `Interface\WorldMap\…`；两份都加载不出来 ⇒ **这张图不接管**（绝不画空白图）；判据见 `tools/SimpleMap.lua` 的 `MDQ.srcKey`/`MDQ.probeTrust`（**探针必须带负对照**：本客户端对不存在的文件也报尺寸）
@@ -39,7 +39,7 @@ node luacheck.js     # fengari 逐文件全量 Lua 解析；SYNTAX OK 才算完�
 所以除语法外的失效（接线漏接、渲染不对、存档键写错、清单过时）**只能靠自查 + 真机实测**，请务必在 `/reload` 后按改动点自己走一遍。
 
 **Lua 整文件编译**：一处语法错误 = 整个插件静默不载入，游戏日志看不到。曾有两处 `end)` 多括号导致三个版本白发。
-**版本号只有两处**：`EvalHelp.lua` 的 `local VERSION` + `EvalHelp.toc` 的 `## Version`（`VERSION CHECK` 守着两侧一致）。
+**版本号只有两处**：`EvalHelp.lua` 的 `local VERSION` + `EvalHelp.toc` 的 `## Version`（原先的 `VERSION CHECK` 已随 `tests/` 删除 ⇒ 现在发版时**人工核对**两侧一致）。
 ★文件头**不再写版本号**：旧写法（`-- EvalHelp 1.70.44`）实际漂移了十几个版本都没人发现，因为源码检查只比对那两处。
 
 ## 🚀 发布流程（用户定，**9 步**；每次发版必做）
