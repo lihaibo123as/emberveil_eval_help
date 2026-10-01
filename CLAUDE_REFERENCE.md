@@ -123,6 +123,12 @@ Remove-Item $staging -Recurse -Force
   ① `ENTRIES`（= 81）② toc 模块逐个对齐（`MISSING = 0`，键名两侧都把 `\` 归一成 `/`）③ **开箱验文档**（包内 `README.md` 含本版里程碑、`CHANGELOG.md` 含 `## 🎯 vX.Y.Z`、`DEVELOPMENT.md` 含新模块名）。
   ★另外**必须打印头几条条目名**（`FIRST ENTRIES`）—— 1.75.43 首跑就是因为键名格式假设错（zip 条目其实用**反斜杠**）而 `MISSING = 42` 全假红，只看条数会以为「包是对的」。
   ★★**1.75.53 实做口径（现行，脚本 = `tmp/pack17553.ps1`，**纯 ASCII**）**：`$repo` 用 `$PSScriptRoot\..`（**源一律取仓库、不取 AddOns 里那份**）、`$addons = Split-Path $repo -Parent`（产物与旧包同处），打印 `STAGING FILES` / `ENTRIES`（**应为 430**）/ `TOC MODULES`（45）/ `MISSING`（0）/ 头 6 条条目名 / 四项开箱验文档 / `WORLDMAP entries in zip`（346）/ 两份副本**哈希相同**。
+  ★★★**1.75.59 实做口径（脚本 = `tmp/pack17559.ps1`，纯读核对 = `tmp/packverify17559.ps1`，两者都**逐字节 ASCII**）**：
+  一次打印 `STAGING FILES` / `ENTRIES`（**应为 430**）/ 头 6 条条目名 / `TOC MODULES`（**45**）/ `MISSING`（**0**）/
+  `WORLDMAP entries in zip`（**346**）/ `TOOLS modules in zip`（**14**）/ 五项开箱验文档 / 两份副本 SHA256 相同（v-zip 约 11.17 MB）。
+  ★★★**比对键名必须说全**：zip 条目名 = **`EvalHelp/`（zip 里其实是反斜杠）+ toc 里的相对路径** —— **顶层那个文件夹本身就是条目的一部分**
+  ⇒ 拿 `Core.lua` 这种相对名去比会得到「**45 个模块全 MISSING**」的**假红**（1.75.59 首跑实踩；与 1.75.43 的「反斜杠」属**同一类键名假设错**）。
+  正解 = **两侧都归一成 `/`，并且拿 zip 名比时补上 `EvalHelp/` 前缀**；`WORLDMAP` / `TOOLS` 这种**带目录的 `-like` 过滤**天然不受影响（所以它们首跑就是对的，只有裸模块名全红 —— 一眼就能认出是键名口径问题，不是缺文件）。
   ★★★**教训（本轮真踩）**：脚本里**一个中文注释**就让 Windows PowerShell 5.1 按 GBK 读成乱码、**赋值行被吃掉**（症状 = `Join-Path : Cannot bind argument to parameter 'Path' because it is null.`）⇒ **出包脚本必须逐字节 ASCII**（连比较用的 `→`/emoji 都要换成 ASCII 子串，例如查 `"1.75.53"` 而不是 `"1.52.0 → 1.75.53"`）。
 ★**不装**（2026-09-26 更新：测试文件已全部删除，下面这份「不装清单」里只剩与**发布**有关的项）：`preview/`（截图）、`node_modules/`、
 `api_*.html`、`.git/`、`bindings/`、`_icons_scan/`、`pay/`、`luacheck.js`/`test_stub.lua`/`tmp/`（开发用，不随包）。
