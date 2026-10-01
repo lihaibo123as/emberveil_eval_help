@@ -1935,42 +1935,14 @@ do
   end
 end
 
--- ============ 对外桥（SimpleMap 用；名字统一 EVAL_WF_*）============
---   ★SimpleMap 侧**绝不再直接碰 MDQ**（那是本文件私有的）⇒ 拆开后两边的耦合面就只有这一排名字。
---   ★★为什么**逐条写**（不用 `for k,v in pairs(API) do rawset(_G,"EVAL_WF_"..k,v) end` 那种动态挂）：
---     动态挂法对**全仓静态闸门**（`node scan_dangling.js`）是不可见的 ⇒ 一旦本文件掉出 `.toc` 或载入失败，
---     SimpleMap 里那 15 处调用就是**全局 nil 调用**（多半还被 pcall 吞掉 = 静默半死），而闸门一句话都不报。
---     逐条写 = 闸门看得见、grep 得到、以后改名也不会漏。
-EVAL_WF_READY = function() return type(br("EVAL_SM_CFG")) == "function" end
+-- ============ 对外桥（只留**真正在用**的两个口）============
+--   ★★★1.75.57 审计（用户：「世界迷雾功能独立于大地图缩放.不要做强关联.」）：原来这里挂了 27 个 `EVAL_WF_*`，
+--     但搬家后宿主（SimpleMap）**只用两个** ⇒ 其余 25 个是**死口**（本项目纪律：读值口要么挂在活命令上、
+--     要么别加 —— 死口就是下一轮「误接回来」的耦合面）。处置：只留下面两个，其余全删。
+--   · `EVAL_WF_ON` —— 折算让位用（唯一一处「迷雾开着 ⇒ 探索层折算本拍不参与」的安全互锁，只读）。
+--   · `EVAL_WF_CMD` —— `/ehm mapfit 残留|贴图|perf|swm [on|off]` 的命令分流（模块自带命令口）。
+--   ★迷雾自己的渲染/护守/清理/收尾**不再对外暴露**：节拍帧 `EH_WF_FEAT` 与工具箱行都在本文件里，
+--     宿主既不需要、也不该调用它们（这正是「不做强关联」的落地方式）。
 EVAL_WF_ON = function() return MDQ.swm() end
-EVAL_WF_STALE_ON = function() return MDQ.staleOn() end
-EVAL_WF_HAS_LEDGER = function()
-  local t = MDQ.staleHid
-  if type(t) ~= "table" then return false end
-  for _ in pairs(t) do return true end
-  return false
-end
-EVAL_WF_RENDER = function(...) return MDQ.renderCurrent(...) end
-EVAL_WF_RELEASE = function(...) return MDQ.release(...) end
-EVAL_WF_SHUTDOWN = function(...) return MDQ.shutdown(...) end
-EVAL_WF_STALE_SHOWALL = function(...) return MDQ.staleShowAll(...) end
-EVAL_WF_HOLD_SHOWALL = function(...) return MDQ.holdShowAll(...) end
-EVAL_WF_STALE_TICK = function(...) return MDQ.staleTick(...) end
-EVAL_WF_HOLD_TICK = function(...) return MDQ.holdTick(...) end
-EVAL_WF_STALE_FORGET = function(...) return MDQ.staleForget(...) end
-EVAL_WF_STALE_NAMES = function(...) return MDQ.staleNames(...) end
-EVAL_WF_STALE_PROBE = function(...) return MDQ.staleProbe(...) end
-EVAL_WF_HOLD_PROBE = function(...) return MDQ.holdProbe(...) end
-EVAL_WF_PERF_PROBE = function(...) return MDQ.perfProbe(...) end
-EVAL_WF_TEX_PROBE = function(...) return MDQ.texProbe(...) end
-EVAL_WF_CACHE_CLEAR = function(...) return MDQ.cacheClear(...) end
-EVAL_WF_OFF_RESET = function() MDQ.offDone = false end
-EVAL_WF_PERF_GUARD = function() return MDQ.perfGuard == true end
-EVAL_WF_STALE_SEC = function() return MDQ.STALE_SEC end
-EVAL_WF_STALE_GAP = function() return MDQ.STALE_GAP end
-EVAL_WF_STALE_GAP_IDLE = function() return MDQ.STALE_GAP_IDLE end
-EVAL_WF_TICK = function(es, dt, open, mk) return MDQ.tick(es, dt, open, mk) end
 EVAL_WF_CMD = function(sub) return MDQ.cmd(sub) end
-EVAL_WF_FOG_SET = function(on) return MDQ.fogSet(on) end
-EVAL_WF_FOG_ON = function() return MDQ.swm() end
 
