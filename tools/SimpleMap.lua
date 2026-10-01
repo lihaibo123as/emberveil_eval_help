@@ -3132,10 +3132,18 @@ MDQ.holdTick = function(file)
     -- 唯一的证据 = **名字**属叠加层池位族；名字不合（底图瓦片 / 匿名装饰）⇒ 一个字节都不碰
     if o ~= nil and MDQ.stalePoolName(o) then
       seen = seen + 1
-      -- ★六改 c：「我们画的」= 身份账 **或** 本拍真的写过它（后者不依赖对象身份跨拍稳定）
-      local ours = (MDQ.ownSet[o] == true) or (MDQ.wroteObj[o] == true)
-      if ours then oursSeen = oursSeen + 1 end
       local idx = MDQ.poolIdx(o)
+      -- ★★★1.75.54c（真机 `/ehm mapfit 残留` 截图定案）：**旧身份账在本客户端永远不成立** ——
+      --   枚举出来的 `WorldMapOverlay*` 与我们写进去的那批**不是同一批对象**（同号还能出现两条），
+      --   于是每拍都判「盲 ⇒ 一个字节都不碰」⇒ **原生层一个都没被藏**（用户看到的叠影/缩放异常）。
+      --   ⇒ 「我们画的」改成**对着当前活句柄比对象**（序号取自名字）：
+      --     `o == _G["WorldMapOverlay"..idx]`（客户端当前活的那条池位，我们正往里写）
+      --     或 `o == MDQ.own[idx]`（我们自建的）。**同一个序号的两条里只有活的那条算我们的**，
+      --     另一条（重复/残留）照旧按「数量守护 / 非我们 ⇒ 藏」处理 ⇒ 叠影消失、我们画的不受影响。
+      --   ★旧账（`ownSet`/`wroteObj`）仍然算数（二者取并集，只增不减，绝不把我们的层误藏）。
+      local live = (idx ~= nil) and (o == rawget(_G, "WorldMapOverlay" .. tostring(idx)) or o == MDQ.own[idx])
+      local ours = live or (MDQ.ownSet[o] == true) or (MDQ.wroteObj[o] == true)
+      if ours then oursSeen = oursSeen + 1 end
       local oks, shown = pcall(o.IsShown, o)
       -- ★原生层**不看序号**（它就是客户端自己那套 / 上一张图的残留）；我们自建的层按**数量**判（超出即藏）
       local kill = (not ours) or (idx ~= nil and idx > want)
