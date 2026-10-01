@@ -1618,6 +1618,275 @@ MDQ.cacheClear = function(why)
   return n
 end
 
+-- ============ 开图节拍（**自包含**：宿主只喊一句 `EVAL_WF_TICK`）============
+--   ★★★1.75.56：这一套原来长在 `SimpleMap.lua` 的开图 tick 里 —— 搬家的意义 = **本模块自带自己的有界节拍**
+--     （项目纪律「工具模块自带自己的有界计时器」），宿主换文件/改节拍都不会把迷雾带坏。
+--   契约：`EVAL_WF_TICK(es, dt, open, mk)` —— `es` 外框有效缩放 / `dt` 本帧步长 / `open` 地图是否开着 /
+--     `mk` 当前地图签名（= `EVAL_SM_MAPKEY()`）；模块关掉那一拍由宿主先喊 `EVAL_WF_SHUTDOWN`。
+local BURST_GAP, BURST_SEC, IDLE_GAP = 0.1, 2.0, 0.3
+local REARM_MIN, BURST_FRAMES = 0.5, 90
+
+-- 引擎真值签名（客户端自己那批叠加层**条数 + 首块宽度**）—— 我们写不进去 ⇒ 它变 = 真的换图/真缩放
+local function engineSig()
+  local n = tonumber(smNumOverlays())
+  if n == nil then return nil end
+  local w = ""
+  if n > 0 and type(GetMapOverlayInfo) == "function" then
+    local ok, _, cw = pcall(function() return GetMapOverlayInfo(1) end)
+    if ok and tonumber(cw) then w = tostring(math.floor(tonumber(cw) + 0.5)) end
+  end
+  return tostring(n) .. ":" .. w
+end
+
+local TS = { open = false, mapKey = nil, burst = 0, burstN = 0, rearmAt = 0, engSig = nil, acc = 0,
+  staleUntil = 0, staleAt = -99, staleHidN = 0, staleBackN = 0, staleSaid = false, staleSaidNoPool = false }
+
+MDQ.tick = function(es, dt, open, mk)
+  dt = tonumber(dt) or 0.05
+  local nowT = (type(GetTime) == "function") and GetTime() or 0
+  local function armStale()
+    TS.staleUntil = nowT + MDQ.STALE_SEC
+    TS.staleAt, TS.staleSaid, TS.staleSaidNoPool = -99, false, false
+    TS.staleHidN, TS.staleBackN = 0, 0
+  end
+  -- ① 换图（签名变）⇒ 武装爆发窗 + 残留清理窗口（客户端这时才重摆/重指贴图）
+  if mk ~= nil and mk ~= TS.mapKey then
+    TS.mapKey = mk
+    if open then TS.burst, TS.acc, TS.burstN, TS.rearmAt = BURST_SEC, 1e9, 0, nowT armStale() end
+  end
+  -- ② 开图那一拍：同样武装（并让本拍立刻渲染一次）
+  if open and not TS.open then
+    TS.burst, TS.acc, TS.burstN, TS.rearmAt = BURST_SEC, 1e9, 0, nowT
+    armStale()
+  end
+  -- ③ 残留图层清理节拍：**只 Hide/Show**，规则全在 `MDQ.staleTick` 里
+  do
+    local hasLedger = (type(MDQ.staleHid) == "table") and (next(MDQ.staleHid) ~= nil)
+    if (not MDQ.staleOn()) and hasLedger then
+      pcall(MDQ.staleShowAll, "残留图层清理已关")
+      hasLedger = false
+    end
+    if open and mk ~= nil and MDQ.staleOn() then
+      local armed = (tonumber(TS.staleUntil) or 0) > nowT
+      local gapS = armed and MDQ.STALE_GAP or MDQ.STALE_GAP_IDLE
+      if (armed or hasLedger) and ((nowT - (tonumber(TS.staleAt) or -99)) >= gapS) then
+        TS.staleAt = nowT
+        local hidS, backS, seenS, fileS, nLed, lvlWhyS = MDQ.staleTick()
+        hidS, backS = tonumber(hidS) or 0, tonumber(backS) or 0
+        TS.staleHidN = (tonumber(TS.staleHidN) or 0) + hidS
+        TS.staleBackN = (tonumber(TS.staleBackN) or 0) + backS
+        if hidS > 0 or backS > 0 then
+          pcall(mfLog, "残留图层：地图=%s（%s）｜ 本拍藏 %d 个叠加层 ｜ 还回 %d 个 ｜ 看过池位 %d 个 ｜ 藏账还留 %d 条",
+            tostring(fileS), tostring(lvlWhyS or "?"), hidS, backS, tonumber(seenS) or 0, tonumber(nLed) or 0)
+        end
+        -- ★一个池位都没认出 ⇒ 每图出声一次（判据与真机对不上若静默，用户会以为修好了而残留照旧）
+        --   ★「让位」那一拍不许出声（那时 staleTick 根本没干活，seenS==0 是让位不是「名字对不上」）。
+        local stood = string.find(tostring(lvlWhyS or ""), "接管守护", 1, true) ~= nil
+        if (not TS.staleSaidNoPool) and (not stood) and (tonumber(seenS) or 0) == 0 and hidS == 0 then
+          TS.staleSaidNoPool = true
+          pcall(smFitSay, "残留图层清理：地图=%s（%s）**没认出任何 WorldMapOverlay 池位** ⇒ 这一档什么都没藏"
+            .. "（图上若仍有残留，请敲 `/ehm mapfit 残留` 把首行发我 —— 那行有真机上的纹理名）",
+            tostring(fileS), tostring(lvlWhyS or "?"))
+        end
+        if (not TS.staleSaid) and (tonumber(TS.staleHidN) or 0) > 0 then
+          TS.staleSaid = true
+          pcall(smFitSay, "残留图层清理：地图=%s（%s）｜ 已藏 **%d** 个叠加层：%s"
+            .. "（**本图没有探索层数据** ⇒ 全藏、只 Hide 不改几何；**切到有数据的区域图会全部还回**；全量见 /ehm mapfit 残留）%s",
+            tostring(fileS), tostring(lvlWhyS or "?"), tonumber(TS.staleHidN) or 0, MDQ.staleNames(8),
+            ((tonumber(TS.staleBackN) or 0) > 0) and ("；期间已还回 " .. tostring(TS.staleBackN) .. " 个") or "")
+        end
+      end
+    end
+  end
+  -- ④ 关图 ⇒ 把藏过的层**全部还回**（残留清理 + 接管守护；绝不把「藏」的状态带进下一张图）
+  if (not open) and TS.open then
+    pcall(MDQ.staleShowAll, "地图已关")
+    pcall(MDQ.holdShowAll, "地图已关")
+  end
+  -- ⑤ 爆发窗的重新武装**只认「引擎真值」**（绝不认 `es` 抖动 —— 那正是 1.75.53 卡死根因）
+  local ev = engineSig()
+  if ev ~= nil and TS.engSig ~= nil and ev ~= TS.engSig then
+    if (nowT - (tonumber(TS.rearmAt) or -99)) >= REARM_MIN then
+      TS.rearmAt, TS.burstN, TS.burst, TS.acc = nowT, 0, BURST_SEC, 1e9
+    end
+  end
+  if ev ~= nil then TS.engSig = ev end
+  if (tonumber(TS.burst) or 0) > 0 then
+    TS.burstN = (tonumber(TS.burstN) or 0) + 1
+    if TS.burstN > BURST_FRAMES then TS.burst = 0 end      -- ★帧数上限：绝不无限逐帧重申
+  end
+  if not open then TS.burst, TS.burstN = 0, 0 end
+  TS.open = open
+  if (tonumber(TS.burst) or 0) > 0 then TS.burst = math.max(0, TS.burst - dt) end
+  -- ⑥ 渲染节拍：爆发窗内逐帧重申、之后 0.3s 一拍；节流那一拍带护守、逐帧那条不带
+  if not (open and es and tonumber(es) and tonumber(es) > 0) then return 0 end
+  local gap = ((tonumber(TS.burst) or 0) > 0) and BURST_GAP or IDLE_GAP
+  TS.acc = (tonumber(TS.acc) or 0) + dt
+  if TS.acc >= gap then
+    TS.acc = 0
+    pcall(MDQ.renderCurrent, tonumber(es), false, false, true)   -- 带护守的那一拍
+  end
+  if (tonumber(TS.burst) or 0) > 0 and not MDQ.perfGuard then
+    pcall(MDQ.renderCurrent, tonumber(es), true, true, false)    -- 逐帧重申：silent + 不跑护守
+  end
+  return 1
+end
+
+-- ============ 迷雾**自己的工具箱行** + 开关 + 命令（1.75.56 从 SimpleMap 搬出来，独立管理）============
+--   用户定：「将开启迷雾功能独立个脚本文件代码管理」+「单独占工具箱一行（自己一个勾选框 + 自己的 [设置]）」。
+local function L(k, ...)
+  if type(EVAL_L) == "function" then return EVAL_L(k, ...) end
+  return k
+end
+local function say(msg)
+  if type(EVAL_SAY) == "function" then pcall(EVAL_SAY, msg) return end
+  if type(DEFAULT_CHAT_FRAME) == "table" and DEFAULT_CHAT_FRAME.AddMessage then
+    pcall(DEFAULT_CHAT_FRAME.AddMessage, DEFAULT_CHAT_FRAME, tostring(msg))
+  end
+end
+
+-- 合并开关真值（唯一读写口）：`SM_CFG.swmOverlay`；★nil = 默认开（读时由 `MDQ.swm()` 当场物化 true），
+--   **显式 false 永远是关**；两个老键（swmOverlay / staleClean）一起写 ⇒ 两族闸门天然一致。
+MDQ.fogSet = function(on, quiet)
+  on = on and true or false
+  SM_CFG.swmOverlay, SM_CFG.staleClean = on, on
+  if not on then
+    pcall(MDQ.shutdown, "关闭世界迷雾")     -- 一次性收层 + 还原复用池位 + 藏过的原生层全部还回
+    pcall(MDQ.staleShowAll, "关闭世界迷雾")
+  else
+    MDQ.offDone = false                     -- 下次闸门判定不再走「已关」那条早退路
+    pcall(MDQ.staleForget, "世界迷雾已开")  -- 残留清理的账**只清不还**（可见性归接管守护）
+  end
+  if not quiet then
+    if on then
+      say("世界迷雾 = 开（本图整张由 S_WorldMap 表渲染 + 残留图层清理）")
+      say("　" .. L("TB_SM_SWM_TIP1"))
+    else
+      say("世界迷雾 = 关（我们补建的层已收起、复用过的池位已还原原贴图/几何、藏过的原生层已全部还回）")
+    end
+  end
+  return true
+end
+
+-- 命令口（宿主 `/ehm mapfit <子命令>` 分流到这里）：返回 true = 本模块处理了
+MDQ.cmd = function(sub)
+  sub = tostring(sub or "")
+  if sub == "残留" or sub == "stale" or sub == "残留层" or sub == "残留贴图" then
+    for _, l in ipairs(MDQ.staleProbe()) do mfLog("[mapfit] %s", l) end
+    return true
+  elseif sub == "贴图" then
+    for _, l in ipairs(MDQ.texProbe()) do mfLog("[mapfit] %s", l) end
+    return true
+  elseif sub == "perf" or sub == "性能" then
+    for _, l in ipairs(MDQ.perfProbe()) do mfLog("[perf] %s", l) end
+    return true
+  elseif sub == "swm" then
+    say("世界迷雾 = **" .. (MDQ.swm() and "开" or "关") .. "**"
+      .. " ｜ 接管守护=" .. (MDQ.swm() and "开" or "关")
+      .. " ｜ 残留图层清理=" .. (MDQ.staleOn() and "开" or "关")
+      .. "（开关：工具箱 → 世界迷雾；或 /ehm mapfit swm on|off）")
+    return true
+  elseif sub == "swm on" then
+    return MDQ.fogSet(true)
+  elseif sub == "swm off" then
+    return MDQ.fogSet(false)
+  end
+  return false
+end
+
+-- 工具箱**模块行**（一行数据在 `Toolbox.lua`；控件/悬停/下拉/结算全在这里）
+local TB_ROWS = rawget(_G, "EVAL_TB_MOD_ROWS")
+if type(TB_ROWS) ~= "table" then TB_ROWS = {} rawset(_G, "EVAL_TB_MOD_ROWS", TB_ROWS) end
+TB_ROWS["worldFog"] = function(r, it)
+  if type(r) ~= "table" then return false end
+  -- 主开关：读 = 合并真值（`MDQ.swm()`，nil 默认开）；写 = 唯一写口 `MDQ.fogSet`
+  r.get = function() return MDQ.swm() end
+  r.set = function(v) pcall(MDQ.fogSet, v and true or false) end
+  r.extra:Hide()                       -- ★行上不重复显示摘要（只在 [设置] 悬停里）
+  r.add.text:SetText(L("TB_LDDRAG_SET"))
+  r.add.btn:Show()
+  r.add.btn:SetScript("OnEnter", function()
+    local tip = _G["GameTooltip"]
+    if not tip or type(tip.SetOwner) ~= "function" or type(tip.AddLine) ~= "function" then return end
+    pcall(tip.SetMinimumWidth, tip, 460)
+    pcall(tip.SetOwner, tip, r.add.btn, "ANCHOR_RIGHT")
+    if type(tip.ClearLines) == "function" then pcall(tip.ClearLines, tip) end
+    pcall(tip.AddLine, tip, L("TB_SM_SWM_TIP1"), 0.62, 0.82, 1.00)
+    pcall(tip.Show, tip)
+  end)
+  r.add.btn:SetScript("OnLeave", function()
+    local tip = _G["GameTooltip"]
+    if tip and type(tip.Hide) == "function" then pcall(tip.Hide, tip) end
+  end)
+  r.add.btn:SetScript("OnClick", function()
+    if type(EVAL_DD_OPEN) ~= "function" then say("打开世界迷雾设置失败：下拉控件未载入") return end
+    local items = { L("TB_SM_SWM") }
+    local keys = { "swmOverlay" }
+    local sel = {}
+    if MDQ.swm() then sel[1] = true end
+    local tips = { { L("TB_SM_SWM_TIP1") } }
+    EVAL_DD_OPEN(r.add.btn, items, function(pi, on)
+      if keys[pi] == "swmOverlay" then pcall(MDQ.fogSet, on == true) end
+      if type(EVAL_TB_REFRESH) == "function" then pcall(EVAL_TB_REFRESH) end
+    end, { multi = true, selected = sel, locked = {}, tips = tips })
+  end)
+  return true
+end
+
+-- 旧名字一律**转调**新写口（命令与界面不可能各写一半；docs/其它文件也不用改）
+EVAL_SM_FOG_ON = function() return MDQ.swm() and MDQ.staleOn() end
+EVAL_SM_FOG_SET = function(on) return MDQ.fogSet(on) end
+EVAL_SM_SWM_ON = function() return MDQ.swm() end
+EVAL_SM_SWM_SET = function(on) return MDQ.fogSet(on) end
+EVAL_SM_STALE_ON = function() return MDQ.staleOn() end
+EVAL_SM_STALE_SET = function(on) return MDQ.fogSet(on) end
+EVAL_SM_SWM_TIP = function() return L("TB_SM_SWM_TIP1") end
+EVAL_SM_SWM_TIPS = function() return { L("TB_SM_SWM_TIP1") } end
+
+-- ============ 载入期一次性清账 / 归位（1.75.56 从 SimpleMap 的载入钩子搬过来）============
+--   ★为什么必须在 VARIABLES_LOADED：文件执行期存档表还是空的（迁移早调 = 从空表继承出空配置）。
+--   ★★用**新标记键** `probeCleared52`：`cacheCleared51` 在老存档里已经是 true，复用它这段根本不跑。
+do
+  if type(CreateFrame) == "function" and type(UIParent) ~= "nil" then
+    local mg = CreateFrame("Frame", "EH_WF_CLEAN", UIParent)
+    mg:RegisterEvent("VARIABLES_LOADED")
+    mg:SetScript("OnEvent", function()
+      -- ① 上一轮「全图核验」探针的存档键一次性清掉（那些命令已整条删除）
+      if not SM_CFG.probeCleared52 then
+        SM_CFG.probeCleared52 = true
+        local np, nk = 0, {}
+        for _, k in ipairs({ "mapData", "mapDataLog", "mapDataArm" }) do
+          if SM_CFG[k] ~= nil then SM_CFG[k] = nil np = np + 1 table.insert(nk, k) end
+        end
+        if np > 0 and type(say) == "function" then
+          say("世界迷雾：已清理上一轮全图核验探针的存档（" .. table.concat(nk, " / ") .. "）")
+        end
+      end
+      -- ② 只在本会话有效的诊断档（策略/详细日志）回默认 —— 忘了关就会一直刷屏
+      if SM_CFG.mapFitMode ~= nil then SM_CFG.mapFitMode = nil end
+      if SM_CFG.mapFitVerbose ~= nil then SM_CFG.mapFitVerbose = nil end
+      -- ③ 清本地地图签名缓存 + 旧调试日志（一次性；用户 1.75.51 定的口径）
+      if not SM_CFG.cacheCleared51 then
+        SM_CFG.cacheCleared51 = true
+        local nc = 0
+        for _, k in ipairs({ "mapFitOrig", "mapFitVer", "mapFitTrace", "mapFitCapLog" }) do
+          if SM_CFG[k] ~= nil then SM_CFG[k] = nil nc = nc + 1 end
+        end
+        if nc > 0 then pcall(mfLog, "清缓存：存档老键 %d 个（一次性）", nc) end
+      end
+      -- ④ **开关状态归一**（1.75.54e）：合并开关之前「残留清理」可能被显式关过（false）而合并键从没写过
+      --   （nil ⇒ 读时默认开）⇒ 那会出现「勾选框显示开、功能半关」⇒ 尊重用户显式关过的那一次，两个键一起写 false。
+      if SM_CFG.swmOverlay == nil and SM_CFG.staleClean == false then
+        SM_CFG.swmOverlay, SM_CFG.staleClean = false, false
+        if type(say) == "function" then
+          say("世界迷雾 = 关（老存档里「残留图层清理」是你显式关过的 ⇒ 合并成一个控制后按关处理；要开就在工具箱勾上）")
+        end
+      end
+      pcall(mg.UnregisterEvent, mg, "VARIABLES_LOADED")
+    end)
+  end
+end
+
 -- ============ 对外桥（SimpleMap 用；名字统一 EVAL_WF_*）============
 --   ★SimpleMap 侧**绝不再直接碰 MDQ**（那是本文件私有的）⇒ 拆开后两边的耦合面就只有这一排名字。
 --   ★★为什么**逐条写**（不用 `for k,v in pairs(API) do rawset(_G,"EVAL_WF_"..k,v) end` 那种动态挂）：
@@ -1652,4 +1921,8 @@ EVAL_WF_PERF_GUARD = function() return MDQ.perfGuard == true end
 EVAL_WF_STALE_SEC = function() return MDQ.STALE_SEC end
 EVAL_WF_STALE_GAP = function() return MDQ.STALE_GAP end
 EVAL_WF_STALE_GAP_IDLE = function() return MDQ.STALE_GAP_IDLE end
+EVAL_WF_TICK = function(es, dt, open, mk) return MDQ.tick(es, dt, open, mk) end
+EVAL_WF_CMD = function(sub) return MDQ.cmd(sub) end
+EVAL_WF_FOG_SET = function(on) return MDQ.fogSet(on) end
+EVAL_WF_FOG_ON = function() return MDQ.swm() end
 
