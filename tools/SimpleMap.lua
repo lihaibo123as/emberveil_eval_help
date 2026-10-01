@@ -2462,7 +2462,11 @@ end
 --   ★`k` = **当前倍率**（`MDQ.kLive` 现读：当前缩放级别 ÷ 表值）—— 表值 × k 才是这一拍该写的逻辑几何。
 --     写表值原样（k=1）只在「引擎真值 = 表值」时成立，**不是**一条可以写死的规则。
 --   返回 块数, 区域数, 表里有没有这张图, 是否渲完整, 原因, 客户端既有层数, 新加层数
-MDQ.render = function(file, k)
+--   ★`force = true` ⇒ **忽略写前比对，整批重写**（★1.75.54b：**节流那一拍必须这样**）：
+--     我们复用的是**客户端自己的** `WorldMapOverlay<n>` 池位纹理，客户端会在我们写完之后**自己再摆一次**
+--     （首次开图尤其明显）⇒ 只靠比对会判「没变⇒跳过」⇒ 客户端那套（缩放不对的）几何留在屏幕上
+--     = 用户报的「**首次地图打开客户端自身的贴图缩放异常**」。⇒ 重申语义不能省，只在**逐帧**那条路用比对省。
+MDQ.render = function(file, k, force)
   k = tonumber(k) or 1
   if k <= 0 then k = 1 end
   local fr = _G["WorldMapDetailFrame"]
@@ -2513,7 +2517,7 @@ MDQ.render = function(file, k)
           --   比对项 = 对象 + 地图 + 区域 + 块号 + 倍率 + 当前是否显示中（`shown` 被 hideFrom/release 清过）。
           --   ★**不建字符串**（不调 `texPath`）—— 逐帧重申这条路上每块一次 `string.format` 就是纯浪费。
           local sg = MDQ.slot[n]
-          if sg ~= nil and sg.tex == tex and sg.shown == true and sg.k == k
+          if (not force) and sg ~= nil and sg.tex == tex and sg.shown == true and sg.k == k
             and sg.file == file and sg.area == a and sg.tile == t then
             MDQ.skipN = MDQ.skipN + 1
           else
@@ -2606,7 +2610,10 @@ MDQ.renderCurrent = function(es, quiet, silent, withGuard)
   -- ★★★1.75.51（用户：「缩放要根据当前缩放级别和数据库实时计算」）：倍率**现读**，不留常数。
   local k, kSrc = 1, "表里没有这张图（不渲染）"
   if type(m) == "table" then k, kSrc = MDQ.kLive(file, m, es) end
-  local n, nArea, inTbl, full, why, nExist, nNew = MDQ.render(file, k)
+  -- ★1.75.54b：**节流那一拍强制整批重写**（`force = withGuard ~= false`）—— 客户端会在我们写完之后自己
+  --   再摆一次它那批池位纹理（首次开图尤其明显），只靠「写前比对」会跳过重申 ⇒ 客户端那套缩放不对的
+  --   几何留在屏上（用户报的「首次地图打开客户端自身的贴图缩放异常」）。逐帧那条 silent 路才用比对省开销。
+  local n, nArea, inTbl, full, why, nExist, nNew = MDQ.render(file, k, withGuard ~= false)
   -- ★六改 b：把本拍的渲染账留在 `MDQ` 上（只读体检 `/ehm mapfit 残留` 直接摊出来 ⇒
   --   「数据库查出来的层到底加进去没有」不再靠猜）
   MDQ.lastRender = { map = file, n = n, areas = nArea, inTbl = inTbl, full = full, why = why, k = k }
