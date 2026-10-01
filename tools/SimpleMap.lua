@@ -3310,6 +3310,20 @@ MDQ.holdProbe = function()
         end
       end
       table.sort(rows)
+      -- ★★★1.75.54c **决定性诊断**：我们手里的活句柄有没有出现在这份枚举里。
+      --   0 个 ⇒ 枚举的是**另一批对象**（多半是客户端上几代同名纹理：1.12 没有销毁纹理的 API，
+      --     客户端每次重摆版式都新建一批、旧的既不销毁也不隐藏）⇒ 身份只能靠「活句柄」这一条；
+      --   >0 ⇒ 枚举里确实混着我们的层 ⇒ 同号的重复条可以安全藏（叠影消失）。
+      local liveHit, liveN = 0, 0
+      for i = 1, (tonumber(MDQ.poolSeen) or 0) do
+        local lt = rawget(_G, "WorldMapOverlay" .. tostring(i)) or MDQ.own[i]
+        if lt ~= nil then
+          liveN = liveN + 1
+          for _, o in ipairs(regs) do if o == lt then liveHit = liveHit + 1 break end end
+        end
+      end
+      table.insert(out, string.format("　★活句柄核对：我们手里 %d 个池位，**%d 个出现在上面的枚举里**"
+        .. "（0 ⇒ 枚举的是上几代同名纹理；>0 ⇒ 同号重复条可安全藏）", liveN, liveHit))
       if table.getn(rows) == 0 then
         table.insert(out, "　（本图枚举到的 region 里**没有** WorldMapOverlay* 池位）")
       else
