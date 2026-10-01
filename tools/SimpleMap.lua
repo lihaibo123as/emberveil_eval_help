@@ -2393,16 +2393,29 @@ end
 -- 从第 from 位起把池位全部 Hide（客户端池 + 我们自己补的）。
 --   ★**不空扫**：客户端那批名字是从 1 起的**连续**池位 ⇒ 扫到「既没有具名纹理、又超过我们见过的最大号」
 --     就可以收工；扫到的都把 `MDQ.poolSeen` 顶上去（这样下次才知道该扫到哪）。
-MDQ.hideFrom = function(from)
+--   ★★★1.75.54e（用户：「开关状态要做好正确的功能开关状态维护.不要影响到原始地图的功能」）：
+--     这里藏掉的**客户端池位**（= 序号超出本图块数的那些 / 客户端多摆的）必须**进藏账**（`MDQ.holdNote`）
+--     —— 旧写法只 Hide 不记账 ⇒ 关掉开关时「还回」找不到它们 ⇒ 客户端的探索层**永久缺块**。
+--     口径两条：① 只记**我们没自建**的（`ownSet` 之外的才是客户端的，自建的由 `release` 负责收）；
+--             ② 只记**当下真的显示着**的（本来就隐藏的不记，免得还回时把客户端自己藏起来的层顶出来）。
+MDQ.hideFrom = function(from, file)
   local n = 0
   local lo = tonumber(from) or 1
   if lo < 1 then lo = 1 end
   for i = lo, MDQ.poolMax do
     local t = rawget(_G, "WorldMapOverlay" .. tostring(i)) or MDQ.own[i]
     if t ~= nil then
+      local ours = (MDQ.ownSet[t] == true)
+      -- ★只有「还没记过账的客户端池位」才需要读一次 IsShown（记过的不再读 ⇒ 稳态零额外开销）
+      local wasShown = false
+      if (not ours) and MDQ.holdHid[t] == nil then
+        local okS, sh = pcall(t.IsShown, t)
+        wasShown = (okS and sh == true)
+      end
       pcall(t.Hide, t)
       -- ★1.75.54：藏了就**作废那一格的写前比对**（否则下次要显示它时会被判「没变」而不 Show ⇒ 缺块）
       if MDQ.slot[i] ~= nil then MDQ.slot[i].shown = false end
+      if wasShown then pcall(MDQ.holdNote, t, file, "接管藏（多余池位）") end
       n = n + 1
       if i > (tonumber(MDQ.poolSeen) or 0) then MDQ.poolSeen = i end
     elseif i > (tonumber(MDQ.poolSeen) or 0) then
@@ -2521,6 +2534,9 @@ MDQ.render = function(file, k, force)
             and sg.file == file and sg.area == a and sg.tile == t then
             MDQ.skipN = MDQ.skipN + 1
           else
+            -- ★★★1.75.54e：**写之前先把原值读下来**（只对「复用客户端自己的池位」这条来源）——
+            --   关掉开关时靠它把这一格还原成客户端原来那份（否则我们的几何永远留在客户端对象上）。
+            if how == "existing" then pcall(MDQ.origGrab, n, tex) end
             local fdw, fdh = MDQ.fileDim(pw), MDQ.fileDim(ph)
             pcall(tex.SetTexture, tex, MDQ.texPath(file, a, t))
             pcall(tex.SetTexCoord, tex, 0, pw / fdw, 0, ph / fdh)
@@ -2546,7 +2562,8 @@ MDQ.render = function(file, k, force)
     if not full then break end
   end
   -- 收尾：这一轮没用到的池位全部 Hide（客户端自己的残留层也在里面 —— 「忽略内置探索纹理」）
-  MDQ.hideFrom(n + 1)
+  --   ★1.75.54e：这次 Hide 掉的**客户端**池位要**进藏账**（关开关时按账全部 Show 还回）——见 `MDQ.hideFrom`
+  MDQ.hideFrom(n + 1, file)
   MDQ.lastRenderN = n   -- ★六改 b：本拍真的画出了几块（「接管守护」拿它判「有没有东西可替代」）
   local why = nil
   if not full then
@@ -2557,6 +2574,81 @@ MDQ.render = function(file, k, force)
   return n, nArea, true, full, why, nExist, (tonumber(MDQ.newN) or 0)
 end
 
+-- ★★★1.75.54e（用户：「开关状态要做好正确的功能开关状态维护.不要影响到原始地图的功能」）：
+--   **复用客户端池位之前，先把原值读下来**（本项目铁律「改属性前先把原始值读下来」）。
+--   为什么必须做：`MDQ.texAt` 的第 ① 条路是**复用客户端自己的** `_G["WorldMapOverlay<n>"]`，而 `MDQ.render`
+--   往它身上写的是**贴图 / UV / 宽高 / 锚点**四样 —— 全是客户端那份几何。旧写法关掉开关时对这些对象
+--   **一个字节都不还**（它们不在 `MDQ.own` 里）⇒ 用户看到的就是「**关掉了，地图上还是我们画的那几张
+--   （缩放不对的）**」= 「关闭之后依然在生效」的另一半（闸门那半见 `MDQ.renderCurrent` 头部的 1.75.54d）。
+--   口径：原值 = **我们第一次写它之前**读到的那份（唯一可信的原值，同 DebugBox 的「自定义前」）；
+--   ★按**池位号**存（不是按对象）⇒ 天然有界（≤ `poolMax`）；同号换了新对象就整条换新（旧对象已不是
+--     客户端当前那格，可见性由藏账负责）。
+MDQ.origIdx = {}
+MDQ.origGrab = function(n, t)
+  if t == nil then return nil end
+  local rec = MDQ.origIdx[n]
+  if rec ~= nil and rec.obj == t then return rec end
+  rec = { obj = t, pts = {}, ok = true }
+  local okt, tex = pcall(t.GetTexture, t)
+  if okt then rec.tex = tex else rec.ok = false end
+  local okw, w = pcall(t.GetWidth, t)
+  if okw then rec.w = tonumber(w) end
+  local okh, h = pcall(t.GetHeight, t)
+  if okh then rec.h = tonumber(h) end
+  local oks, sh = pcall(t.IsShown, t)
+  if oks then rec.shown = (sh == true) else rec.ok = false end
+  local okn, np = pcall(t.GetNumPoints, t)
+  if okn and tonumber(np) then
+    for i = 1, tonumber(np) do
+      -- ★5 个返回一个都不能少（锚点 / 相对对象 / 相对锚点 / x / y）—— 少存一个，还原出来的锚点就是错的
+      local okp, p, relTo, relP, x, y = pcall(t.GetPoint, t, i)
+      if okp and p ~= nil then
+        table.insert(rec.pts, { p, relTo, relP, tonumber(x) or 0, tonumber(y) or 0 })
+      end
+    end
+  end
+  local oktc, ta, tb, tc2, td = pcall(t.GetTexCoord, t)
+  if oktc and tonumber(ta) then
+    rec.tc = { tonumber(ta), tonumber(tb) or 0, tonumber(tc2) or 0, tonumber(td) or 1 }
+  end
+  MDQ.origIdx[n] = rec
+  return rec
+end
+
+-- 把复用的客户端池位**还回原样**（贴图 / UV / 宽高 / 锚点 / 显隐；幂等）。返回 还回 N 个, 抓不到原值 M 个。
+--   ★抓不到原值（本客户端某个读口缺席 / 探针失败）⇒ **绝不把我们写的那份留在屏幕上**：先把这一格藏起来
+--     （客户端下一次摆版式会自己恢复），并如实记一行 —— 宁可暂时少一块，也不留一张缩放不对的图。
+MDQ.origRestore = function(why)
+  local n, bad = 0, 0
+  for idx, rec in pairs(MDQ.origIdx or {}) do
+    local t = rec and rec.obj
+    if t ~= nil then
+      if rec.ok and rec.tex ~= nil and rec.w ~= nil and rec.h ~= nil and table.getn(rec.pts) > 0 then
+        pcall(t.SetTexture, t, rec.tex)
+        if rec.tc ~= nil then pcall(t.SetTexCoord, t, rec.tc[1], rec.tc[2], rec.tc[3], rec.tc[4]) end
+        pcall(t.SetWidth, t, rec.w)
+        pcall(t.SetHeight, t, rec.h)
+        pcall(t.ClearAllPoints, t)
+        for _, p in ipairs(rec.pts) do pcall(t.SetPoint, t, p[1], p[2], p[3], p[4], p[5]) end
+        if rec.shown == true then pcall(t.Show, t) else pcall(t.Hide, t) end
+        n = n + 1
+      else
+        bad = bad + 1
+        pcall(t.Hide, t)
+      end
+      -- 交还给客户端 ⇒ 身份账一并撤掉（否则下一次接管会把它当「我们自建的」而不敢动它）
+      MDQ.ownSet[t] = nil
+      MDQ.wroteObj[t] = nil
+    end
+    MDQ.origIdx[idx] = nil
+  end
+  if n > 0 or bad > 0 then
+    pcall(mfLog, "还原复用的客户端池位（%s）：原贴图/几何还回 %d 个%s", tostring(why), n,
+      (bad > 0) and ("；**抓不到原值** " .. tostring(bad) .. " 个已先隐藏（客户端重摆版式时自己恢复）") or "")
+  end
+  return n, bad
+end
+
 -- 把**我们自己补建**的层收起来（Hide）—— WoW 1.12 **没有销毁纹理的 API**（创建即常驻），所以只能藏：
 --   藏了之后它们 `IsShown()==false` ⇒ 任何「按本图在用挑层」的逻辑都**不会**再把它们当成客户端的层
 --   去抓原值（否则我们会把自己画的几何当原值再折一遍，越折越大）。
@@ -2565,6 +2657,9 @@ MDQ.release = function(why)
   -- ★★★1.75.52 六改：先把「接管守护」藏过的**客户端原生层**全部 Show 还回（绝不永久藏）——
   --   调在这里 ⇒ 三条路（关开关 / 还原·关功能 / 任何收层）**天然全覆盖**，不靠人去记全调用点。
   pcall(MDQ.holdShowAll, tostring(why))
+  -- ★★★1.75.54e：再**把复用的客户端池位还原成原样**（贴图/UV/尺寸/锚点/显隐四样）——
+  --   不还 = 关掉开关后地图上仍是我们的（缩放不对的）那几张 ⇒ 用户眼里「关掉了还在生效」。
+  pcall(MDQ.origRestore, tostring(why))
   local n = 0
   for k, t in pairs(MDQ.own or {}) do
     if t ~= nil then pcall(t.Hide, t) n = n + 1 end
@@ -2582,10 +2677,42 @@ MDQ.release = function(why)
   return n
 end
 
+-- ★★★1.75.54d/54e：**「打开世界迷雾」关掉 = 把这一路上动过的东西全部交还给客户端**（幂等，一拍一次）。
+--   顺序（即判据）：① `MDQ.release` = 藏起我们自建的层 + 还回守护/收尾藏过的原生层 + 还原复用池位的原值；
+--                    ② 残留清理的账再还一次（它跟这个开关一起写，两族都不会漏）；
+--                    ③ 会话状态复位（安全阀/渲染账/性能计数）⇒ 下次打开从零开始，不带着上一轮的降档跑。
+--   ★**只做一次**（`MDQ.offDone` 门）：关着时 tick 每拍都会走到这里，逐拍还回是白烧（且会让播报刷屏）。
+MDQ.shutdown = function(why)
+  if MDQ.offDone then return 0 end
+  MDQ.offDone = true
+  MDQ.lastRenderN = 0
+  MDQ.perfGuard, MDQ.perfSlowN = false, 0
+  local a = 0
+  local ok1, r1 = pcall(MDQ.release, tostring(why))
+  if ok1 then a = tonumber(r1) or 0 end
+  pcall(MDQ.staleShowAll, tostring(why))
+  pcall(mfLog, "[mapfit] %s：收层 %d 个 + 复用池位还原原值 + 藏过的原生层全部还回"
+    .. "（此后不再渲染、不再接管；再打开时从零开始）", tostring(why), a)
+  return a
+end
+
 -- 渲染 + **写后自证**（返回 块数, 区域数, 判定文本）；`silent` = 一个字都不打（逐帧重申那条路）
 --   ★`quiet` 只为与渲染节拍的调用约定对齐而保留；本档的播报节流由 `MDQ.saidMk`（每图一次）与
 --     「k 变了也报一次」（缩放级别变了 = 真事件）负责。
 MDQ.renderCurrent = function(es, quiet, silent, withGuard)
+  -- ★★★1.75.54d + 1.75.54e（用户报障「关闭功能之后依然在生效」，以及「开关状态要做好正确的功能开关状态维护.
+  --   不要影响到原始地图的功能」）：**总开关闸排在所有探测/读写之前**（本项目铁律「关掉零动作」）——
+  --   关着**连 `smMapInfo()` 都不读**，只判一个布尔就早退。
+  --   为什么原来会「关掉还在生效」：闸门只在「护守」（`MDQ.holdTick` 首行）与「残留清理」（`staleTick` 的
+  --   让位条件）里 ⇒ **渲染本身没有闸门** ⇒ 取消勾选后地图照旧被我们每拍整张重写；
+  --   而且写进客户端池位的那份几何**从来没还过**（见 `MDQ.origRestore`）⇒ 屏幕上看还是我们的。
+  --   ⇒ 关的那一拍走 `MDQ.shutdown` **一次性收干净**（收自建层 + 还回藏过的原生层 + 还原复用池位的原值），
+  --     之后每拍只早退一次；再打开时（`offDone` 复位）照旧从零渲染。
+  if not MDQ.swm() then
+    MDQ.shutdown("世界迷雾已关")
+    return 0, 0, "世界迷雾已关（不接管）"
+  end
+  MDQ.offDone = false
   local file = select(1, smMapInfo())
   if type(file) ~= "string" or file == "" then return 0, 0, "读不到当前地图文件名" end
   local m = MDQ.areaOf(file)   -- ★六改 b：与 `MDQ.holdN` / `MDQ.render` 同一个表查找（大小写不敏感）
@@ -3108,6 +3235,33 @@ MDQ.holdLedgerN = function()
   return c
 end
 
+-- ★★★1.75.54e：「我们把某个**客户端层**藏起来了」→ **记名进同一个有界藏账**（关开关时按它全部 Show 还回）。
+--   ★**唯一写账口**（`holdTick` 与 `hideFrom` 共用）⇒ 不会出现「藏了却没账」的层（那正是关掉开关后
+--     地图缺块的原因：`hideFrom` 收尾藏掉的那些**从来没进过账**，还回时自然找不到它们）。
+--   ★只记**当下真的显示着**的层（本来就隐藏的不进账 —— 否则还回会把客户端自己藏起来的层顶出来）；
+--     已记过的不重复记（有界 + 不刷屏）。返回 true = 新记一条。
+MDQ.holdNote = function(o, file, tag)
+  if o == nil or MDQ.holdHid[o] ~= nil then return false end
+  local nm = frameName(o)
+  local okp, path = pcall(o.GetTexture, o)
+  if not okp then path = nil end
+  if MDQ.holdOrder == nil then MDQ.holdOrder = {} end
+  MDQ.holdHid[o] = { name = nm, path = tostring(path), again = 0 }
+  table.insert(MDQ.holdOrder, o)
+  -- ★藏账**有界**（真机日志：一小时不到就攒到 3960 条 —— 客户端每拍重建自己的池位对象
+  --   ⇒ 无界账会把内存与「关开关时逐个 Show」都拖垮）。超上限时把最老的**放回去**（绝不永久藏）。
+  while table.getn(MDQ.holdOrder) > MDQ.HOLD_LEDGER_MAX do
+    local old = table.remove(MDQ.holdOrder, 1)
+    if old ~= nil and MDQ.holdHid[old] ~= nil then
+      pcall(old.Show, old)     -- ★放回（绝不永久藏）
+      MDQ.holdHid[old] = nil
+    end
+  end
+  MDQ.staleLogPut(string.format("%s：地图=%s ｜ 客户端原生层 %s ｜ 贴图=%s",
+    tostring(tag or "接管藏"), tostring(file), tostring(nm), tostring(path)))
+  return true
+end
+
 -- ★接管守护（**每拍都跑**）：藏原生 + 数量守护（超出本图块数的池位）+ 存在性守护（我们自建的块被藏就复位）
 --   返回：藏了原生 N 个, 复位我们自建的 M 个, 枚举到池位 K 个, 本图应有 W 块, 「又冒出来再藏」A 次
 MDQ.holdTick = function(file)
@@ -3186,23 +3340,8 @@ MDQ.holdTick = function(file)
       if not ours then
         local rec = MDQ.holdHid[o]
         if rec == nil then
-          local nm = frameName(o)
-          local okp, path = pcall(o.GetTexture, o)
-          if not okp then path = nil end
-          -- ★藏账**有界**（真机日志：一小时不到就攒到 3960 条 —— 客户端每拍重建自己的池位对象
-          --   ⇒ 无界账会把内存与「关开关时逐个 Show」都拖垮）。超上限时把最老的**放回去**（绝不永久藏）。
-          if MDQ.holdOrder == nil then MDQ.holdOrder = {} end
-          MDQ.holdHid[o] = { name = nm, path = tostring(path), again = 0 }
-          table.insert(MDQ.holdOrder, o)
-          while table.getn(MDQ.holdOrder) > MDQ.HOLD_LEDGER_MAX do
-            local old = table.remove(MDQ.holdOrder, 1)
-            if old ~= nil and MDQ.holdHid[old] ~= nil then
-              pcall(old.Show, old)     -- ★放回（绝不永久藏）
-              MDQ.holdHid[old] = nil
-            end
-          end
-          MDQ.staleLogPut(string.format("接管藏：地图=%s ｜ 客户端原生层 %s ｜ 贴图=%s",
-            tostring(file), tostring(nm), tostring(path)))
+          -- ★1.75.54e：新记一条走**唯一写账口**（有界 + 落盘 + 超上限放回最老的）
+          MDQ.holdNote(o, file, "接管藏")
         else
           rec.again = (tonumber(rec.again) or 0) + 1
           again = again + 1
@@ -3438,9 +3577,9 @@ do
       if not EVAL_SM_ENABLED() then
         FEAT.applied = false
         ST.open, ST.burst = false, 0
-        pcall(MDQ.release, "模块已关")
-        pcall(MDQ.staleShowAll, "模块已关")
-        pcall(MDQ.holdShowAll, "模块已关")
+        -- ★★★1.75.54e：关掉整个模块 = 与关「世界迷雾」**同一套还原**（收自建层 + 复用池位还原原值 +
+        --   藏过的原生层全部还回）。走 `MDQ.shutdown`（幂等、只做一次）⇒ 不再每帧重复还回（原来三连 pcall）。
+        pcall(MDQ.shutdown, "模块已关")
         return
       end
       local dt = tonumber(arg1) or 0.05
@@ -3946,6 +4085,17 @@ do
         P("本地地图签名缓存 + 旧调试日志已清（存档老键 " .. tostring(nc) .. " 个）⇒ 从零开始：会话内存缓存已空、"
           .. "旧取证环已删，之后只留新一轮的日志")
       end
+      -- ★★★1.75.54e 一次性**开关状态归一**（用户：「打开世界迷雾开关状态要做好正确的功能开关状态维护」）：
+      --   合并开关（1.75.52）之前，「残留图层清理」有自己的开关且**落过存档**；老存档里它可能是**显式 false**
+      --   而合并键 `swmOverlay` 从没写过（nil ⇒ 读时物化成 true 默认开）⇒ 那会出现
+      --   「勾选框显示**开**、但清理那一半其实关着」的状态不一致。口径 = **尊重用户显式关过的那一次**：
+      --   把合并键一起写成 false（一个控制管两件事，之后两族闸门天然一致）。
+      --   ★只在这一种组合下迁移（合并键已写过就完全按用户的当前选择，绝不二次顶改）。
+      if SM_CFG.swmOverlay == nil and SM_CFG.staleClean == false then
+        SM_CFG.swmOverlay, SM_CFG.staleClean = false, false
+        P("打开世界迷雾 = 关（老存档里「残留图层清理」是你**显式关过**的 ⇒ 合并成一个控制后按关处理；"
+          .. "要开就在 工具箱 → 缩放大地图 → [设置] 里勾上）")
+      end
       pcall(mg.UnregisterEvent, mg, "VARIABLES_LOADED")
     end)
   end
@@ -4005,12 +4155,14 @@ function EVAL_SM_FOG_SET(on)
   on = on and true or false
   SM_CFG.swmOverlay, SM_CFG.staleClean = on, on
   if not on then
-    -- 关：先收我们补建的层（`MDQ.release` 里同时把守护藏过的原生层全部 Show 还回），再把残留清理的账还回。
-    pcall(MDQ.release, "关闭世界迷雾")
-    pcall(MDQ.staleShowAll, "关闭世界迷雾")
-    P("打开世界迷雾 = 关（回到客户端自己摆的探索层：抓原值 + 按 es 折算；此前藏过的层已全部还回）")
+    -- 关：**当场一次性收干净**（`MDQ.shutdown` = 收我们补建的层 + 还原复用池位的原值 + 把藏过的原生层全部还回），
+    --   并把 `offDone` 置上 ⇒ 本拍之后 tick 每拍只判一个布尔就早退（零动作，绝不半关半开）。
+    pcall(MDQ.shutdown, "关闭世界迷雾")
+    P("打开世界迷雾 = 关（回到客户端自己摆的探索层：我们补建的层已收起、复用过的池位已还原原贴图/几何、"
+      .. "此前藏过的原生层已全部还回）")
   else
     -- 开：残留清理的账**只清不还**（可见性归「接管守护」，走还回会先闪一下又被藏）。
+    MDQ.offDone = false   -- ★1.75.54d：重新打开 ⇒ 下一次闸门判定不再走「已关」那条早退路
     pcall(MDQ.staleForget, "世界迷雾已开")
     P("打开世界迷雾 = 开（本图整张由 S_WorldMap 表渲染 + 残留清理；不再自己跑图探索）")
     P("　" .. EVAL_SM_SWM_TIP())
