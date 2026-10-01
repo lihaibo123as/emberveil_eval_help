@@ -2004,6 +2004,191 @@ MDQ.poolSeen = 0     -- 见过的最大池位号（收尾 Hide 只扫到它，�
 MDQ.newN = 0         -- **本轮**新加了几张（渲染行如实报「客户端既有 N ｜ 新加 M」）
 MDQ.saidMk = nil     -- 上一张已播报过的地图（每图只报一次，不刷屏）
 
+-- ===== ★★★1.75.53：贴图**来源**解析 + 存在性探针（发布独立性；用户：「插件要绝对独立，
+--   依赖的东西要复制到插件内自己载入，不然发布上去别人又可能找不到贴图」）=====
+--   ① **自带贴图优先**：`EvalHelp\media\WorldMap\<地图>\<区域><块号>` —— 只要那份**能加载**就用它
+--      ⇒ 把贴图拷进 `media/WorldMap/` 就自动变成完全自包含（不用改一行代码）。
+--   ② 否则退回**客户端自带** `Interface\WorldMap\<地图>\<区域><块号>`（1.12 客户端的探索层美术，
+--      与上游 `S_WorldMap` 逐字同口径，见 `Modules/MapOverlay.lua:744/835`）。
+--   ③ 两份都**加载不出来** ⇒ `"none"` ⇒ **这一张图不接管**（不渲染、不藏原生、如实出声一次）
+--      —— 依据本项目铁律「拿不到证据就一个字节都不碰」：宁可保持客户端原样，也绝不画出一片空白图。
+--   ★探针口径：新建一张**不设宽高**的纹理 ⇒ `SetTexture(p)` ⇒ 读 `GetWidth/GetHeight`（客户端报的是
+--     **贴图文件**的像素尺寸）。文件在 ⇒ >0；文件不在 ⇒ 0；**读不到/判不出 ⇒ nil = 不拦**（fail-open：
+--     判据本身没把握时绝不把功能关死；只有明确探到 0 才判定「没有」）。
+--   ★探针纹理**每次新建一张**（匿名、不 Show；1.12 没有销毁纹理的 API ⇒ 泄漏无害），
+--     结果按路径缓存（`MDQ.tpOK`）⇒ 每张图最多建两张，绝不逐块探。
+MDQ.tpOK = {}        -- 路径 → true/false（会话级缓存；nil = 没探过或判不出）
+MDQ.texSrc = {}      -- 地图 → "own" | "client" | "none"（每图只判一次，缓存）
+
+MDQ.probeTex = function(path)
+  local c = MDQ.tpOK[path]
+  if c ~= nil then return c end
+  local fr = _G["WorldMapDetailFrame"]
+  if not (type(fr) == "table" or type(fr) == "userdata") or type(fr.CreateTexture) ~= "function" then return nil end
+  -- ★每次**新建**一张探针纹理（不复用）：复用有「上一次的文件尺寸残留 ⇒ 探出假结果」的风险；
+  --   结果按路径缓存 ⇒ 每张图最多建两张，代价可忽略（匿名、不 Show、不进我们的池位）。
+  local ok, t = pcall(fr.CreateTexture, fr, nil, "ARTWORK")
+  if not ok or t == nil then return nil end
+  if type(t.SetTexture) ~= "function" or type(t.GetWidth) ~= "function" then return nil end
+  if not pcall(t.SetTexture, t, path) then return nil end
+  local okw, w = pcall(t.GetWidth, t)
+  local okh, h = pcall(t.GetHeight, t)
+  if not (okw and okh) then return nil end
+  local w2, h2 = tonumber(w), tonumber(h)
+  if w2 == nil and h2 == nil then return nil end -- 判不出 ⇒ 不拦（fail-open）
+  local ok2 = (w2 or 0) > 0 and (h2 or 0) > 0
+  MDQ.tpOK[path] = ok2 and true or false
+  return ok2 and true or false
+end
+
+-- ★★★探针的**负对照**（1.75.53b 真机报障换来的）：本客户端**对「文件不存在」的报法并不一致** ——
+--   `.blp` 这种带扩展名的路径**明明没有文件，也可能报出非 0 尺寸** ⇒ 只按「>0 = 有」判，会**把没有的
+--   当成有** ⇒ 整张图都去加载**不存在的自带贴图** ⇒ 用户眼里的「去迷雾贴图没生效了」（我们画的块全空）。
+--   ⇒ 每个写法都配一张**同目录、同后缀、不可能存在**的对照路径：
+--     ① 对照也说「有」⇒ 这个写法**读不出真假** ⇒ 返回 nil（判不出）；
+--     ② 判不出 ⇒ 一律**退回客户端那份**（= 一直可用的行为；依据铁律「拿不到证据就一个字节都不碰」）。
+MDQ.probeBogus = "__eh_nosuch__"
+MDQ.probeTrust = function(path)
+  local r = MDQ.probeTex(path)
+  if r == nil then return nil end
+  local p = tostring(path)
+  local dir = string.gsub(p, "[^\\]*$", "")          -- 去掉文件名 → 留目录（含结尾反斜杠）
+  local e = string.find(p, "%.[A-Za-z0-9]+$")
+  local ext = (e ~= nil) and string.sub(p, e) or ""  -- 同后缀（负对照也要走同一条解析路）
+  if MDQ.probeTex(dir .. MDQ.probeBogus .. ext) == true then return nil end
+  return r
+end
+
+-- 自带贴图的路径前缀（相对插件目录；`media\WorldMap\...` 是可选的「自己载入」那一份）
+MDQ.ownPfx = "Interface\\AddOns\\EvalHelp\\media\\WorldMap\\"
+MDQ.cliPfx = "Interface\\WorldMap\\"
+
+-- ★★★自带那份的**写法（后缀）必须逐个试**：本客户端对**插件目录里的散装文件**要求**写扩展名**
+--   （已在案：`media\Flags\<名>.tga` 就是这么写进 `SetTexture` 的，见 `EvalHelp.lua:1521`），
+--   而客户端自带的美术在**归档**里，一律**不写扩展名**（上游 `S_WorldMap` 同款）。
+--   ⇒ 依次试 `.blp` → `.tga` → 不写，**哪个能加载就用哪个**（判据 = 探针读得到文件尺寸）。
+MDQ.ownForms = { ".blp", ".tga", "" }
+MDQ.srcPick = {}     -- 地图 → 选中的写法："own:blp" / "own:tga" / "own:raw" / "client" / "none"
+                     --   （`texPath` 按它拼；`srcOf` 把前三种归一成 "own"）
+MDQ.ownExtOf = function(key)
+  local s = tostring(key)
+  if string.sub(s, 1, 4) ~= "own:" then return "" end
+  local e = string.sub(s, 5)
+  if e == "raw" then return "" end
+  return "." .. e
+end
+
+-- 本图的贴图来源（每图判一次，缓存）："own:blp" / "own:tga" / "own:raw" / "client" / "none"
+MDQ.srcKey = function(file)
+  local s = MDQ.srcPick[file]
+  if s ~= nil then return s end
+  local m = MDQ.areaOf(file)
+  local areas = {}
+  if type(m) == "table" then for a in pairs(m) do table.insert(areas, a) end end
+  table.sort(areas)
+  local a0 = areas[1]
+  if a0 == nil then MDQ.srcPick[file], MDQ.texSrc[file] = "none", "none" return "none" end
+  local unclear = false
+  for _, ext in ipairs(MDQ.ownForms) do
+    local own = MDQ.probeTrust(string.format("%s%s\\%s1%s", MDQ.ownPfx, file, a0, ext))
+    if own == true then
+      local key = (ext == "") and "own:raw" or ("own:" .. string.sub(ext, 2))
+      MDQ.srcPick[file], MDQ.texSrc[file] = key, "own"
+      return key
+    end
+    if own == nil then unclear = true end
+  end
+  local cli = MDQ.probeTrust(string.format("%s%s\\%s1", MDQ.cliPfx, file, a0))
+  -- ★只有**明确探到「没有」**（false）才判 none；`nil`（判不出）按「客户端有」处理 —— 不拦、不关功能。
+  if cli == false and not unclear then
+    MDQ.srcPick[file], MDQ.texSrc[file] = "none", "none"
+    return "none"
+  end
+  MDQ.srcPick[file], MDQ.texSrc[file] = "client", "client"
+  return "client"
+end
+
+-- 本图的贴图来源（**三态**，给播报与外部读）：own（自带那份可用）/ client（客户端美术）/ none（都不行）
+MDQ.srcOf = function(file)
+  local k = MDQ.srcKey(file)
+  if k == "none" then return "none" end
+  if k == "client" then return "client" end
+  return "own"
+end
+
+-- 实际写进 `SetTexture` 的路径（自带那份能用就用自带的 ⇒ 拷进 media 即自包含）
+MDQ.texPath = function(file, a, t)
+  local k = MDQ.srcKey(file)
+  if k == "none" or k == "client" then return string.format("%s%s\\%s%d", MDQ.cliPfx, file, a, t) end
+  return string.format("%s%s\\%s%d%s", MDQ.ownPfx, file, a, t, MDQ.ownExtOf(k))
+end
+
+-- ★只读体检：`/ehm mapfit 贴图` —— 把「引擎自报的贴图路径」与「我们按表拼的两条路径」并排列出来，
+--   并逐条给**探针结果**（文件加载得出来 / 探不到 / 判不出）。零副作用（只建一张不显示的探针纹理）。
+MDQ.texProbe = function()
+  local out = {}
+  local file, w, h = smMapInfo()
+  out[table.getn(out) + 1] = string.format("贴图体检：地图=%s（%sx%s）｜ 表里 %s ｜ 来源判定=%s",
+    tostring(file), tostring(w), tostring(h),
+    (function() local m = MDQ.areaOf(tostring(file)); if type(m) ~= "table" then return "**没有这张图**" end
+      local n = 0 for _ in pairs(m) do n = n + 1 end return n .. " 区" end)(),
+    tostring(MDQ.texSrc[tostring(file)] or "（还没判过）"))
+  out[table.getn(out) + 1] = "　路径前缀：自带=" .. MDQ.ownPfx .. "　客户端=" .. MDQ.cliPfx
+  -- ① 引擎自报（客户端自己那批探索层的贴图路径 —— 「这批贴图到底叫什么」的唯一真值）
+  local n = nil
+  if type(GetNumMapOverlays) == "function" then local ok, v = pcall(GetNumMapOverlays) if ok then n = tonumber(v) end end
+  out[table.getn(out) + 1] = string.format("① 引擎自报 GetNumMapOverlays=%s", tostring(n))
+  if type(GetMapOverlayInfo) == "function" and (n or 0) > 0 then
+    for i = 1, math.min(n, 6) do
+      local ok, nm, tw, th, ox, oy = pcall(function() return GetMapOverlayInfo(i) end)
+      if ok and nm ~= nil then
+        local r = MDQ.probeTex(tostring(nm))
+        out[table.getn(out) + 1] = string.format("　[%d] %s ｜ %sx%s @%s,%s ｜ 探针=%s", i, tostring(nm),
+          tostring(tw), tostring(th), tostring(ox), tostring(oy),
+          (r == true) and "**加载得出来**" or (r == false and "**探不到**" or "判不出"))
+      end
+    end
+    if (n or 0) > 6 then out[table.getn(out) + 1] = string.format("　…（另有 %d 条）", n - 6) end
+  end
+  -- ② 我们按表拼的两条路径（本图第一个区域的第一块）
+  local m = MDQ.areaOf(tostring(file))
+  if type(m) ~= "table" then
+    out[table.getn(out) + 1] = "② 表里没有这张图 ⇒ 本来就不渲染（客户端探索层保持原样）"
+  else
+    local areas = {}
+    for a in pairs(m) do table.insert(areas, a) end
+    table.sort(areas)
+    local a0 = areas[1]
+    local cliP = string.format("%s%s\\%s1", MDQ.cliPfx, tostring(file), tostring(a0))
+    local rc = MDQ.probeTrust(cliP)
+    local fmt = function(p, r)
+      return string.format("　%s ｜ 探针=%s", p, (r == true) and "**加载得出来**" or (r == false and "**探不到**" or "判不出"))
+    end
+    out[table.getn(out) + 1] = string.format("② 本表 %d 区 ｜ 首个区域=%s ⇒ 我们拼的路径（自带那份逐个写法都试）：",
+      table.getn(areas), tostring(a0))
+    for _, ext in ipairs(MDQ.ownForms) do
+      local p = string.format("%s%s\\%s1%s", MDQ.ownPfx, tostring(file), tostring(a0), ext)
+      out[table.getn(out) + 1] = fmt(p, MDQ.probeTrust(p))
+    end
+    out[table.getn(out) + 1] = fmt(cliP, rc)
+    out[table.getn(out) + 1] = "　（每个写法都带**负对照**：同目录同后缀的不可能文件名；对照也说「有」⇒ 该写法判不出 ⇒ 退回客户端）"
+    local key = tostring(MDQ.srcKey(tostring(file)))
+    local src = MDQ.srcOf(tostring(file))
+    out[table.getn(out) + 1] = "　⇒ 选中写法：" .. key
+    out[table.getn(out) + 1] = (src == "own") and "　⇒ 结论：**用自带的 media 贴图**（插件自包含）"
+      or ((src == "client") and "　⇒ 结论：**用客户端自带贴图**（`Interface\\WorldMap`）"
+      or "　⇒ 结论：**两份都探不到 ⇒ 本图不接管**（不渲染、不藏原生；客户端探索层保持原样）")
+  end
+  out[table.getn(out) + 1] = "　★判据：自带那份只要能加载就**优先用它** ⇒ 把贴图拷进 `media\\WorldMap\\<地图>\\<区域><块号>.blp` 即完全自包含（不用改代码）。"
+  out[table.getn(out) + 1] = "　★探针可信度（拿一个**不可能存在**的客户端路径当负对照）："
+    .. ((MDQ.probeTrust(MDQ.cliPfx .. MDQ.probeBogus) == nil)
+      and "**判不出** —— 本客户端对「文件不存在」也报尺寸 ⇒ 一律**退回客户端那份**（绝不改走不存在的自带路径）"
+      or "可信（不存在 ⇒ 报 0）⇒ 自带那份的判定可用")
+  out[table.getn(out) + 1] = "　★写法：插件目录里的散装文件**要写扩展名**（同 `media\\Flags\\<名>.tga`），所以自带那份按 `.blp` → `.tga` → 不写 依次试。"
+  out[table.getn(out) + 1] = "　★探针口径：不设宽高的临时纹理 + `SetTexture` + 读 `GetWidth/GetHeight`（文件在 ⇒ >0；不在 ⇒ 0；**判不出 ⇒ 不放拦**）。"
+  return out
+end
+
 -- 开关真值（唯一入口）：`SM_CFG.swmOverlay`（nil/false = 关 = 默认；true = 开）。
 --   ★**落存档**（这是产品开关，与「只在本会话有效」的诊断档不同）；写入点只有两个：
 --     `EVAL_SM_SWM_SET`（设置下拉 / 命令都走它）与老键迁移。
@@ -2283,7 +2468,7 @@ MDQ.render = function(file, k)
           n = n + 1
           MDQ.wroteObj[tex] = true   -- ★六改 c：这一拍我们写过它（守护的「不许藏」名单）
           local fdw, fdh = MDQ.fileDim(pw), MDQ.fileDim(ph)
-          pcall(tex.SetTexture, tex, string.format("Interface\\WorldMap\\%s\\%s%d", file, a, t))
+          pcall(tex.SetTexture, tex, MDQ.texPath(file, a, t))
           pcall(tex.SetTexCoord, tex, 0, pw / fdw, 0, ph / fdh)
           pcall(tex.SetWidth, tex, pw * k)
           pcall(tex.SetHeight, tex, ph * k)
@@ -2346,6 +2531,24 @@ MDQ.renderCurrent = function(es, quiet, silent)
   local file = select(1, smMapInfo())
   if type(file) ~= "string" or file == "" then return 0, 0, "读不到当前地图文件名" end
   local m = MDQ.areaOf(file)   -- ★六改 b：与 `MDQ.holdN` / `MDQ.render` 同一个表查找（大小写不敏感）
+  -- ★★★1.75.53（用户：「插件要绝对独立…不然发布上去别人又可能找不到贴图」）：**贴图准入** ——
+  --   表里有这张图，但「自带 media 那一份」与「客户端自带的 Interface\WorldMap 那一份」**都加载不出来**
+  --   ⇒ **这一张图一帧都不接管**（不渲染、不藏原生、不建层），并且把之前藏过的原生层**当场还回**。
+  --   依据 = 本项目铁律「拿不到证据就一个字节都不碰」：宁可保持客户端原样，也绝不画出一片空白图。
+  if type(m) == "table" and MDQ.srcOf(file) == "none" then
+    pcall(MDQ.release, "本图贴图加载不出来")   -- 把上一张图藏过的原生层与本图自建的层都还回/收起
+    MDQ.lastRender = { map = file, n = 0, areas = 0, inTbl = true, full = false, k = 1, src = "none",
+      why = "本应用加载不出这批贴图（自带 media\\WorldMap 与客户端 Interface\\WorldMap 都没有）" }
+    if type(MDQ.noTexSaid) ~= "table" then MDQ.noTexSaid = {} end
+    if not MDQ.noTexSaid[file] then
+      MDQ.noTexSaid[file] = true
+      pcall(smFitSay, "打开世界迷雾：地图=%s ｜ 本客户端**加载不出**这批探索层贴图"
+        .. "（`media\\WorldMap\\%s\\…` 与 `Interface\\WorldMap\\%s\\…` 两份都探不到）"
+        .. "⇒ **这一张图不接管**（客户端自己的探索层保持原样；不渲染、不藏原生）。体检：/ehm mapfit 贴图",
+        tostring(file), tostring(file), tostring(file))
+    end
+    return 0, 0, "本图贴图加载不出来（不接管）"
+  end
   -- ★★★1.75.51（用户：「缩放要根据当前缩放级别和数据库实时计算」）：倍率**现读**，不留常数。
   local k, kSrc = 1, "表里没有这张图（不渲染）"
   if type(m) == "table" then k, kSrc = MDQ.kLive(file, m, es) end
@@ -3407,6 +3610,14 @@ if type(SlashCmdList) == "table" then
         end
         P("用法：/ehm mapfit 残留 [on|off]（别名 stale/残留层；不给参数 = 只读体检，含「接管守护」的数量/存在性）"
           .. "｜等价开关：工具箱 → 缩放大地图 → [设置] →「打开世界迷雾」")
+      elseif sub == "贴图" or sub == "tex" then
+        -- ★★★1.75.53 只读体检：引擎自报的贴图路径 vs 我们按表拼的两条路径（自带 media / 客户端）——
+        --   「发布后别人会不会找不到贴图」这一问，真机上一条命令就能看清。
+        local tl = MDQ.texProbe()
+        for _, l in ipairs(tl) do
+          P(l)
+          pcall(mfLog, "%s", l)
+        end
       elseif sub == "swm" or sub == "贴图替代" then
         -- ★★★「打开世界迷雾」（1.75.51 时叫「S_WorldMap 贴图替代」）：与工具箱 → 缩放大地图 → [设置] 里那个开关**同一个真值入口**
         --   （唯一写口 EVAL_SM_SWM_SET）—— 地图开着时敲不了命令（本项目定案），所以主入口是设置里的开关；
@@ -3427,7 +3638,7 @@ if type(SlashCmdList) == "table" then
         P("缩放大地图：模块=" .. (EVAL_SM_ENABLED() and "**开**" or "关")
           .. " ｜ 打开世界迷雾=" .. (MDQ.swm() and "**开**" or "关")
           .. " ｜ 残留图层清理=" .. (MDQ.staleOn() and "开" or "关"))
-        P("用法：/ehm mapfit swm [on|off] ｜ 残留 [on|off]（只读体检，含接管守护的数量/存在性）｜ trace [N] ｜ traceclear ｜ 清缓存")
+        P("用法：/ehm mapfit swm [on|off] ｜ 残留 [on|off]（只读体检，含接管守护的数量/存在性）｜ 贴图（只读体检：贴图路径与来源）｜ trace [N] ｜ traceclear ｜ 清缓存")
         P("　★「叠加层适配（抓原值/折算/隐形）」已按 1.75.52 要求整条摘除 —— 「打开世界迷雾」的表驱动全渲染是它的替代方案。")
       end
     elseif msg == "reset" or msg == "复位" then
