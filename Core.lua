@@ -214,7 +214,9 @@ end
 --     这条已验证绕行路（与本项目 SendChatMessage/SpellStopCasting 同款），外加一行诚实兜底。
 --   ★★纪律：**帧名绝不与函数名同名**（组 54 老坑：具名帧顶掉同名全局函数 ⇒ type 检查与调用全废）
 --     —— 函数 = `EVAL_RELOAD_ASK(title, body)`；帧 = `EVAL_RELOAD_ASK_FRAME`；按钮 = `EVAL_RA_OK` / `EVAL_RA_LATER`。
---   ★样式参照图层拖拽那份先行实现（DIALOG + level 230 + 金边 + 两按钮，已在真机验证过）；
+--   ★样式参照图层拖拽那份先行实现（金边 + 两按钮，已在真机验证过）；
+--   ★★★层级（1.75.60r 修正）：**FULLSCREEN + level 4000** —— 原先是 DIALOG + 230，从世界地图里调用时
+--     会被地图帧（FULLSCREEN strata）整个盖住 ⇒ 用户看到「点了没反应」（真机「保存按钮无法点击」即此）；
 --     **新开关一律走本函数**（别再各建一份）。1.12 没有销毁帧/纹理的 API ⇒ 建成后只 Show/Hide（如实记在此）。
 --   ★返回 true = 弹出来了；false = 这个客户端建不了帧 ⇒ 调用方必须**如实转聊天行**，绝不静默。
 local reloadAsk = { frame = nil }
@@ -226,8 +228,13 @@ function EVAL_RELOAD_ASK(title, body)
     root:SetWidth(W)
     root:SetHeight(H)
     root:SetPoint("CENTER", UIParent, "CENTER", 0, 130)
-    pcall(root.SetFrameStrata, root, "DIALOG")
-    pcall(root.SetFrameLevel, root, 230)
+    -- ★★★1.75.60r（真机报障「保存（写盘 + 重载）无法点击」）：**必须能盖住世界地图** ——
+    --   本客户端的世界地图帧是 `FULLSCREEN` strata（编辑模式那个贴图列表当初也得设 FULLSCREEN 才浮在地图上面），
+    --   而确认窗原先留在 `DIALOG` ⇒ 从地图里点「保存」时它**整个躲在地图背后**：用户看到的就是「点了没反应 /
+    --   无法点击」（连点都没得点，因为窗根本不在屏上）。⇒ 窗抬到 `FULLSCREEN` + 高 level（高于拖拽接盘 900）。
+    --   ★这只是把窗抬高，尺寸/按钮/口径一字未改（`EVAL_RELOAD_ASK` 的其它调用点只会更靠前，不会更差）。
+    pcall(root.SetFrameStrata, root, "FULLSCREEN")
+    pcall(root.SetFrameLevel, root, 4000)
     if type(root.EnableMouse) == "function" then pcall(root.EnableMouse, root, true) end
     -- ★纯色纹理只有 WHITE8X8 + SetVertexColor 可靠（项目配方）；边框四条 1px 金线
     local bg = root:CreateTexture(nil, "BACKGROUND")

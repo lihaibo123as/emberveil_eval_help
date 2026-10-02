@@ -77,9 +77,10 @@ local function L(k, ...)
   if type(EVAL_L) == "function" then return EVAL_L(k, ...) end
   return k
 end
-
-local say, logLine = EVAL_SAY, EVAL_LOGLINE
-local L = EVAL_L
+-- ★★★1.75.60x 修（真 bug，且是「静默」那一类）：原来这两行
+--   `local say, logLine = EVAL_SAY, EVAL_LOGLINE` / `local L = EVAL_L` 把上面那三个**兜底函数整个作废**
+--   （同名 local 被新 local 覆盖）——桥若还没就位，say / logLine / L 就是 nil：面板一切正常，
+--   但「如实播报」与日志**一个字都出不来**。⇒ 删掉这两行，桥一律**调用时现读**。
 
 -- ============ 常量 ============
 local LF_TIP_W = 460          -- tooltip 最小宽度（与工具箱其它行的口径一致：TB_LD_TIP_W = 460）

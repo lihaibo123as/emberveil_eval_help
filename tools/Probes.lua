@@ -139,6 +139,126 @@ PR["FRAMES"] = function(msg)
   --   ★英文别名 `go attrprobe` 是新的（`GO ALIAS UNIQUE CHECK` 会守住不被静默顶掉）。
 end
 
+-- ★★★1.75.60s：**图层定位探针**（只读）—— 一条命令回答「谁盖住了谁 / 怎么把窗放到最顶层」。
+--   起因（真机报障）：/reload 确认窗原先留在 `DIALOG` strata，而世界地图帧是 `FULLSCREEN` strata
+--   ⇒ 从地图里点「保存」时窗**整个躲在地图背后**，用户看到的就是「点了没反应 / 无法点击」。
+--   ① **光标下的帧**（GetMouseFocus）+ 它的**父链**（每级 strata/level/显隐）⇒ 它若不是你刚点的那个按钮，
+--      就是它吃掉了点击；② **本插件各窗 vs 地图框的层级对照** ⇒ 一眼看出哪个窗在地图上面 / 下面。
+--   ★判读口径（本客户端在案）：strata 顺序 = BACKGROUND < LOW < MEDIUM < HIGH < DIALOG < FULLSCREEN <
+--     **FULLSCREEN_DIALOG** < TOOLTIP（★1.75.60x 补齐：原来漏了 FULLSCREEN_DIALOG，而本插件好几处正靠它压过地图）；
+--     **先比 strata，再比 level**（strata 大的永远在上面 —— level 再大也翻不过去）；
+--     **子帧永远画在父帧之上**，但**抬高父帧不带动子件** ⇒ 行 / 输入框必须各自 SetFrameLevel。
+--   ★「放最外层」= **三档**（1.75.60x）：① 普通窗之上 = DIALOG + 90~100；② **压过地图**（地图是 FULLSCREEN）=
+--     `FULLSCREEN_DIALOG` + 高层级（确认窗用 FULLSCREEN/4000；要压过地图里**所有件** ⇒ 层级**现算**
+--     `max(500, 地图各件最高层级 + 40)`，**绝不写死**）；③ 真·最外层 = `TOOLTIP`（代价 = 盖住 GameTooltip）。
+--   用法：`/eh go 层级`（光标下的帧 + 对照表）｜`/eh go 层级 <帧名>`（查具名帧，例：EVAL_HELP_CFG）
+PR["LAYER"] = function(msg)
+  local tail = string.match(tostring(msg or ""), "^go%s+%S+%s*(.*)$") or ""
+  tail = string.gsub(string.gsub(tail, "^%s+", ""), "%s+$", "")
+  -- 取值助手（全 pcall；读不到如实回 "?" —— 体检口自己不许成为新的故障源）
+  local function gv(o, m)
+    if o == nil or m == nil then return "?" end
+    local ok, fn = pcall(function() return o[m] end)
+    if not (ok and type(fn) == "function") then return "?" end
+    local ok2, v = pcall(fn, o)
+    if not (ok2 and v ~= nil) then return "?" end
+    return tostring(v)
+  end
+  local function nm(o)
+    if o == nil then return "?" end
+    local v = gv(o, "GetName")
+    if v == "?" or v == "" then return "(无名)" end
+    return v
+  end
+  local function sh(o)
+    local v = gv(o, "IsShown")
+    if v == "true" or v == "1" then return "显示" end
+    if v == "false" or v == "0" then return "收起" end
+    return "?"
+  end
+  local function one(o)
+    return string.format("%s[strata=%s level=%s %s]", nm(o), gv(o, "GetFrameStrata"), gv(o, "GetFrameLevel"), sh(o))
+  end
+  -- 父链（**有界**：最多 8 级 + seen 去环 —— 本项目铁律「递归/遍历必须有界」）
+  local function chainOf(o)
+    local out, cur, n, seen = {}, o, 0, {}
+    while cur ~= nil and n < 8 and seen[cur] ~= true do
+      seen[cur] = true
+      local par = nil
+      local ok, fn = pcall(function() return cur.GetParent end)
+      if ok and type(fn) == "function" then
+        local ok2, v = pcall(fn, cur)
+        if ok2 then par = v end
+      end
+      cur = par
+      n = n + 1
+      if cur ~= nil then
+        out[#out + 1] = nm(cur) .. "(" .. gv(cur, "GetFrameStrata") .. "/" .. gv(cur, "GetFrameLevel") .. ")"
+      end
+    end
+    if #out == 0 then return "（没有父帧 / 读到顶了）" end
+    return table.concat(out, " < ")
+  end
+  say("== 图层定位（/eh go 层级）==")
+  -- ★1.75.60x：strata 全序**要写全**（原来漏了 `FULLSCREEN_DIALOG`，而本插件好几处正靠它压过地图 —— 漏写会误导判读）
+  say("  口径：strata 顺序 BACKGROUND<LOW<MEDIUM<HIGH<DIALOG<FULLSCREEN<FULLSCREEN_DIALOG<TOOLTIP ｜ **先比 strata 再比 level**"
+    .. " ｜ 子帧永远在父帧之上（但抬高父帧不带动子件）")
+  if tail ~= "" then
+    local q = rawget(_G, tail)
+    if q == nil then
+      say("★查具名帧「" .. tail .. "」：`_G` 里没有这个名字（拼错 / 还没建出来 / 在别的插件里）")
+    else
+      say("★具名帧「" .. tail .. "」= " .. one(q))
+      say("  父链 = " .. chainOf(q))
+    end
+  end
+  if type(GetMouseFocus) == "function" then
+    local okf, mf = pcall(GetMouseFocus)
+    if okf and mf ~= nil then
+      say("① 光标下的帧 = " .. one(mf))
+      say("  父链 = " .. chainOf(mf))
+      say("  ★它若不是你刚点的那个按钮 ⇒ **就是它吃掉了点击**（拿它的名字去 _G 里对 / 子插件 /edb loot 光标帧 细看）")
+    else
+      say("① 光标下的帧：GetMouseFocus 读不到（鼠标不在任何帧上？）")
+    end
+  else
+    say("① 光标下的帧：本客户端没有 GetMouseFocus")
+  end
+  local rows = {
+    "EVAL_RELOAD_ASK_FRAME", "EVAL_HELP_CFG", "EVAL_HELP_DD", "EVAL_HELP_DD_CATCH", "EVAL_HELP_SE", "EVAL_HELP_UI",
+    "EVAL_DF_POP", "EVAL_DF_RLOAD_ASK", "EVAL_WF_EDITCATCH", "EVAL_WF_EDITLIST", "EH_DB_UI",
+    "EH_DS_MAPICON", "WorldMapDetailFrame", "WorldMapFrame", "WorldMapButton",
+  }
+  say("② 本插件各窗 vs 地图框（同一把尺子：strata/level/显隐）")
+  for i = 1, #rows do
+    local o = rawget(_G, rows[i])
+    if o == nil then
+      say("   " .. rows[i] .. " = 不在（没建出来 / 名字变了）")
+    else
+      say("   " .. one(o) .. " ← " .. rows[i])
+    end
+  end
+  -- ★★★2026-10-02：通用下拉的**内部四件**（面板 / 首行 / 搜索框 / 全屏捕手）也要能一眼看到 ——
+  --   它们是**匿名帧**（`_G` 里查不到，上面的名字表够不着），而「弹窗压在地图下面」恰恰就出在这一层
+  --   （只抬父帧不抬子件 ⇒ 行留在 DIALOG ⇒ 面板背景压在地图上、一行字都看不见）。
+  if type(EVAL_DD_DIAG) == "function" then
+    local okD, s = pcall(EVAL_DD_DIAG)
+    say("   通用下拉实测（EVAL_HELP_DD）：" .. (okD and tostring(s) or "读不到"))
+  else
+    say("   通用下拉实测：读值口 EVAL_DD_DIAG 不在（EvalHelp.lua 没载入？）")
+  end
+  -- ★★★2026-10-02 二改：「怎么放最外层」= **照抄子插件「图层调试」那一套**（用户：「直接参考子插件 图层调试
+  --   是如何将层显示在地图层上的.直接参考 将标注下拉也这种方式打开」）—— 别只背 strata：
+  say("★放最外层（照抄图层调试那一套；★**先问宿主、再问 strata**）：")
+  say("   ① 压过普通窗/地图设置面板 ⇒ DIALOG + level 90~100")
+  say("   ② ★★★**压过世界地图 = 宿主 WorldFrame + `FULLSCREEN_DIALOG` + level 500~800**（图层调试的面板 500 /")
+  say("      它自己的下拉 800 就是这一档，真机截图实证能压过地图）—— ★**先看宿主**：**开全屏地图会隐藏 UIParent**")
+  say("      （子插件 `EH_DebugBox.lua:3261` 在案），挂在 UIParent 上的帧**一个像素都不渲染**，这时 strata 抬多高都没用")
+  say("   ③ **真·最外层** ⇒ TOOLTIP + 高层级（图层调试的高亮框就是它；★代价 = 会盖住 GameTooltip ⇒ 纯显示层记得 EnableMouse(false)）")
+  say("   ★两条配套：**层级现算**（`max(800, 地图各件最高层级+40)`，绝不写死 —— 写死的常数换客户端就被压住）；")
+  say("     **抬了父帧必须逐个抬子件**（行/搜索框/行内独立帧都要 `SetFrameStrata` + `SetFrameLevel`，两样都不能省）")
+end
+
 PR["DFT"] = function(msg)
   -- ★★★1.75.36d 图层拖拽**逐目标**探针（用户：「逐项排查下」）：即时回显 + 只读 + 出错**如实报**（绝不吞）。
   --   读数落**有界环 `EVAL_HELP_CONFIG.dfProbe`（40 行）**（见 tools/DragFrames.lua 的 EVAL_DF_PROBE_TARGETS）。
@@ -388,9 +508,9 @@ PR["ATK"] = function(msg)
       say("  三类行：aN 复查（上一拍补按/施法之后自动射击还在不在） ｜ aN 键首（档位/状态/槽位读数/节流/目标） ｜ aN 判定（补没补、为什么没补）")
       local gs = (type(EVAL_ATK_GUARD_STATE) == "function") and EVAL_ATK_GUARD_STATE() or nil
       if type(gs) == "table" and gs.active then
-        say(string.format("  复查窗口：★进行中（%s ｜ 起因：%s ｜ 已拍 %s ｜ 已补按 %s ｜ 历时 %.2fs ｜ 上限 %s 拍 / %s 次）",
+        say(string.format("  复查窗口：★进行中（%s ｜ 起因：%s ｜ 已拍 %s ｜ 已补按 %s ｜ 历时 %.2fs ｜ 上限 %s 拍 / %s 次 ｜ 窗口总长 %ss）",
           tostring(gs.name), tostring(gs.why), tostring(gs.ticks), tostring(gs.presses),
-          tonumber(gs.age) or 0, tostring(gs.ticksMax), tostring(gs.pressMax)))
+          tonumber(gs.age) or 0, tostring(gs.ticksMax), tostring(gs.pressMax), tostring(gs.span or "?")))
       else
         say("  复查窗口：空闲（没在跑；有界窗口跑完就摘掉 OnUpdate，不常驻）")
       end

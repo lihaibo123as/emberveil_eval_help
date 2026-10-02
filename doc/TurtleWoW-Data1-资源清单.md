@@ -78,6 +78,35 @@
 - 块来源分布：**patch-Z 供 656 块 · patch-9 供 363 块**（两档互补，缺一不可）；
 - 重叠情况：1019 块里 **1010 块多档都有** ⇒ 「取哪一档」是硬判据（§0 已定优先级）。
 
+### 3.1 「有多少套区域地图纹理」的准确数字（`tmp/wm_sets.js`）
+
+**口径① 按地图（张）算**：`Interface\WorldMap\<图>\<块>` 的**地图名并集 = 175 张**，
+「图+块」文件并集 **4464 个**，「归档 × 文件」条目 **8048 条**。
+
+| 归档 | 条目 | 张图 | | 归档 | 条目 | 张图 |
+|---|---|---|---|---|---|---|
+| interface.MPQ | 1453 | **52** | | patch-6.mpq | 389 | 15 |
+| patch.MPQ | 206 | 17 | | patch-7.mpq | 24 | 1 |
+| patch-3.mpq | 1262 | **112** | | patch-8.mpq | 358 | 26 |
+| patch-4.mpq | 309 | 33 | | patch-9.mpq | 2619 | **132** |
+| patch-5.mpq | 210 | 13 | | patch-Z.mpq | 1218 | **130** |
+
+- **43 张只在一个档里**；其余 132 张被 2~7 个档同时提供（分布：2 档 12 张 / 3 档 57 / 4 档 33 / 5 档 22 / 6 档 5 / **7 档 3 张** = `Azeroth`·`StonetalonMountains`·`World`）。
+- 按「哪些归档提供它」做签名 → **共 43 套来源组合**；最大的三组：`patch-3` 独占 **36 张**（TurtleWoW 副本层，只有 patch-3 有）· `patch-3+patch-9+patch-Z` **29 张** · `patch-9+patch-Z` **10 张**。
+
+**口径② 按「同一块贴图有几个版本」算（= 真·几套画法）**：抽样 223 块（每图最多 2 块，只取多档都有的）——
+**内容完全一致只有 3 块，内容不同 220 块**；同一格里同时出现的内容份数分布：**2 份 135 块 · 3 份 58 · 4 份 19 · 5 份 8**。
+例：`AhnQiraj\AhnQiraj1.blp` 在 `patch-3` = 33940 字节 / 在 `patch-9` = 32916 字节，md5 不同；`AlahThalas1.blp` 五个档五份都不同。
+
+⇒ **结论**：区域地图贴图**不是「一套复制多份」，而是同一张图被重画过好几代**；客户端按加载顺序只显示**最高档（patch-Z）**那一份。
+
+**非「图\块」形态**（不在上面 175 张里）：`Interface\WorldMap\*` 直接放的 **42 个**（地图框底图/装饰）· `Interface\WorldMap\ShadowfangKeep\*` 1 个 · `Interface\WorldMap\UpperKarazhan2f\*` 1 个。
+
+★**读取器修正（重要，影响上一轮结论）**：本机 MPQ 的**扇区在「压缩后长度 == 该扇区原始长度」时是原样存储的，且不带压缩掩码字节**
+（实测 `patch-9` 的 `AhnQiraj1.blp` 末扇区 148 字节 = 148 字节输出，首字节 `0xad` 是像素数据不是掩码）。
+不按这条判 ⇒ 表现成「未知掩码 / zlib incorrect header check」的**假失败**。修好之后：**223/223 抽样块全部读出、0 失败**；
+提取样例 55 个块 + 1 个块全部是真 `BLP2`（`tmp/blp_check.js`）。已同步修 `tmp/mpq_take.js` 与 `tmp/wm_unpack.js`。
+
 ★表外的图：Data1 里的地图名并集 **175 张**，比表里的 53 张多约 120 张（副本层、TurtleWoW 自研图：`BlackrockDepths2f`、`UpperKarazhan`、`WindhornCanyon`、`ThornGorge`、`StormwroughtRuins`、`EmeraldSanctum`…）。
 这些**贴图在归档里**（例如 patch-9 有 132 张图），但**表里没有它们的尺寸/偏移** ⇒ 想接管得先有表数据（来源：`WorldMapArea.dbc` + `AreaTable.dbc`，或运行期 `GetMapOverlayInfo`）——**目前没做，别当成已有能力**。
 
@@ -118,13 +147,17 @@ node tmp/mpq_take.js --report "<正则>"      :: 某名字在哪些档里有
 node tmp/mpq_take.js --take "<正则>" --out <目录> [--from <某档>] [--dry]
                                            :: 按优先级取最高档那份（--from 强制某一档，用于 A/B）
 node tmp/wm_coverage_data1.js              :: 表内 53 图逐块核 Data1 → 整张齐全清单与体积
+node tmp/wm_sets.js                        :: ★数「有几套」：地图张数 / 归档组合签名 / 同一块的多版本 + md5 抽样
+node tmp/blp_check.js                      :: 校验解出来的贴图是不是真 BLP（magic 分布）
 node tmp/wm_overlap.js                     :: 多档重叠统计 + 同名块逐档 md5 比对（样本）
 node tmp/cmp_locale.js                     :: patch-8/9/Z 的 GlobalStrings 中英文对照（覆盖顺序判据）
 ```
 
 ## 6. 已知失败 / 未验证（如实记）
 
-- **14 个文件取不出来**（`tmp/mpq_take.js` 报 `未知掩码`）：各 `Blizzard_*\Localization.lua`（12 个，patch.MPQ）· `Turtle_InspectTalentsUI\Turtle_TalentsData.lua`（patch-8）· `FrameXML\Options\Functions.lua`（patch-9）⇒ 属 **加密文件里的 SPARSE / 非 zlib 压缩**，读取器未实现，不是文件不存在。
+- ~~14 个文件取不出来~~ **已修正**：那不是加密/SPARSE，是读取器漏了「末扇区原样存储不带掩码字节」这条规则（见 §3.1）。
+  修好后重取 **379 个客户端 UI 源文件，0 失败**（`tmp/mpq_out/`，4.71 MB）；`Blizzard_*\Localization.lua` 12 个、`Turtle_TalentsData.lua`、`Options\Functions.lua` 全都在。
+  **仍未支持**：`MPQ_FILE_IMPLODE`（PKWARE 老式压缩）—— 目前没在 WorldMap/UI 源文件里遇到，遇到就是真失败。
 - **旧的 `tmp/wm_unpack.js` / `tmp/wm_coverage.js` 指向的 `Data\interface.MPQ` 已不存在**，直接用会报错。
 - **「客户端认不认插件目录里的 `.blp`」仍未真机验证**（与 1.75.53 判据里那条待验证项同一件事）。
 - §0 的覆盖顺序是**离线实证**（中文覆盖英文），真机若要 100% 定死，可放一个同名小文件进两个 patch 档做 A/B；目前按 patch-Z 最高处理。

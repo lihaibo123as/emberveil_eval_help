@@ -4579,7 +4579,7 @@ local function tbModel()
     --   ★★★1.75.59c（用户：「打开世界迷雾重命名: 关闭世界迷雾」+「不勾选原始地图,勾选才是开启功能」）：
     --     行名 = `TB_SM_SWM`（三语都改）；**勾选含义不变**（勾上 = 用数据库贴图重画探索层）；
     --     切换勾选框后模块弹**通用「需要 /reload」确认窗**（`EVAL_RELOAD_ASK`）。
-    { t = "mod", mod = "worldFog", key = "swmOverlay", label = L("TB_SM_SWM"), tip = L("TB_SM_SWM_TIP1") },
+    { t = "mod", mod = "worldFog", key = "swmOverlay", label = L("TB_SM_SWM"), tip = L("TB_SM_SWM_TIP1") .. " " .. L("TB_SM_SWM_TIP2") },
     -- ★★★1.74.34 用户要求：「审查下 图层拖拽的功能.在Toolbox.lua 内的代码修改.参考以上也进行./tools 的代码文件归类」
     --   ⇒ 这一行现在也只是**一行数据**（原先那 128 行界面接线搬进了 `tools/DragFrames.lua` 的 `dfRow`，
     --     由模块载入期登记进 `EVAL_TB_MOD_ROWS`）。★**不写 `noChk`** ⇒ 保留主开关勾选框（真值 `dragFrames.on`）。

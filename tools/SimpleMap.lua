@@ -68,13 +68,28 @@ EH_SIMPLEMAP_CFG = setmetatable({}, {
 
 local SM = { lines = {} }
 
+-- ★★★1.75.59f（用户定 **A 方案**：「调试日志关掉就不许自动说话；但**我敲的命令必须看得见**」）：
+--   **命令回显窗口** —— 用户敲 `/ehm …` 时由分派入口盖章（截止时刻 = 现在 + `SM_ECHO_SEC`）。
+--   窗口内 `P` / `smFitSay` / `smFitSayV` **一律放行**（你问它答必须可见）；窗口外一律读
+--   `EVAL_CHAT_ON()`（= Core 的 `logEnabled`，与「调试日志」同一个判据，不另立真值）。
+--   ★为什么用**时间戳**而不是布尔标志：命令体里有几十个 `return` / `pcall` 分支，布尔标志一旦
+--     漏清就会「此后所有自动诊断都漏出来」——时间戳自己过期，天然自愈；0.75s 足够覆盖同步回显
+--     （异步的 `/ehm mapfit` 手动适配那条本来就走 `smFixOut` 常开出口，不依赖本窗口）。
+local SM_ECHO_SEC = 0.75
+local SM_ECHO_AT = 0
+local function smEchoing()
+  if type(GetTime) ~= "function" then return false end
+  return GetTime() <= (tonumber(SM_ECHO_AT) or 0)
+end
+SM_TEST_ECHOING = smEchoing -- 读值口（离线核对「命令回显窗口」这一条腿真的在）
+
 local function P(msg)
   msg = tostring(msg)
   table.insert(SM.lines, msg)
-  -- ★★★1.75.8（用户要求）：本模块自己的播报也跟「全局 → 调试日志」总闸门
-  --   （`EVAL_CHAT_ON` = Core 里那个**同一个**判据，不另立一份）。
+  -- ★★★1.75.8：本模块自己的播报跟「全局 → 调试日志」总闸门（`EVAL_CHAT_ON` = Core 里同一个判据）。
+  --   ★1.75.59f：**命令回显窗口内例外**（`smEchoing()`）—— 你敲的命令必须看得见。
   --   ★`SM.lines`（模块探针自己的读数环）照记 —— 那是数据层，与「说不说话」分开。
-  if type(EVAL_CHAT_ON) == "function" and not EVAL_CHAT_ON() then return end
+  if not smEchoing() and type(EVAL_CHAT_ON) == "function" and not EVAL_CHAT_ON() then return end
   if DEFAULT_CHAT_FRAME and type(DEFAULT_CHAT_FRAME.AddMessage) == "function" then
     pcall(DEFAULT_CHAT_FRAME.AddMessage, DEFAULT_CHAT_FRAME, "|cff66ccff[简易地图]|r " .. msg)
   end
@@ -788,7 +803,20 @@ local function probeBlack()
     if type(r.GetObjectType) == "function" then local ok, v = pcall(r.GetObjectType, r) if ok then ot = tostring(v) end end
     return ot
   end
-  local function tryCollectBlack(f, tag)
+  -- ★★★1.75.60x：**递归必须有界**（用户 2026-10-02 铁律：「递归不能无限级深入」）。
+  --   本函数原写法按子帧**无界递归** ⇒ 客户端树一深、或 `GetChildren` 出现环（本客户端是 UE 封装，
+  --   句柄/父子关系都可能被重建）就是无限级深入 ⇒ Lua 侧先报 "C stack overflow"、再顶穿原生栈。
+  --   ★真机取证（2026-10-02 最近半小时 4 次崩溃中有 2 次）：故障指令**同一条**（RVA 0x6f118f4，读 0x7fe900000010），
+  --     落在客户端**内嵌的 Lua 虚拟机**里（相邻帧引用 "C stack overflow" / "loop in gettable" / "get length of"），
+  --     抓到的调用栈出现**重复循环**。⇒ 两道闸缺一不可：① 深度上限常量；② `seen` 访问集（防环）。
+  local SM_BLACK_WALK_MAX = 6
+  local seen = {}
+  local function tryCollectBlack(f, tag, depth)
+    if not f then return end
+    local d = tonumber(depth) or 0
+    if d > SM_BLACK_WALK_MAX then return end -- ★深度上限（不许靠数据规模当上限）
+    if seen[f] then return end               -- ★防环：同一个对象只走一次
+    seen[f] = true
     -- 帧本体若是 Frame 也可能有纯黑 backdrop；先 regions 后子帧
     if type(f.GetRegions) == "function" then
       local rr = { pcall(f.GetRegions, f) }
@@ -822,7 +850,7 @@ local function probeBlack()
           if c then
             local nm = "?"
             if type(c.GetName) == "function" then local ok, v = pcall(c.GetName, c) if ok then nm = tostring(v) end end
-            tryCollectBlack(c, tag .. ">" .. nm)
+            tryCollectBlack(c, tag .. ">" .. nm, d + 1) -- ★必须把深度带下去（带成 nil = 上限形同虚设）
           end
         end
       end
@@ -2090,7 +2118,10 @@ end
 --   ★代价必须认：抓原值这条路径可能 1 秒重试一次 ⇒ **只在「有界」的分叉点调用本函数**（调用点各自带计数门）。
 local function smFitSay(fmt, ...)
   local msg = (select("#", ...) > 0) and string.format(fmt, ...) or tostring(fmt)
-  mfLog("[播报] %s", msg)
+  mfLog("[播报] %s", msg) -- ★取证环**照记**（关掉总闸门只是「不上屏」，断链不成立）
+  -- ★★★1.75.59f（用户定 A 方案）：这是**自动跑出来的**诊断结论 ⇒ 必须受「调试日志」总闸门管。
+  --   例外 = 命令回显窗口（`smEchoing()`：用户刚敲了 `/ehm …` ⇒ 它要的回答必须看得见）。
+  if not smEchoing() and type(EVAL_CHAT_ON) == "function" and not EVAL_CHAT_ON() then return msg end
   local out = (type(EVAL_SAY_FORCE) == "function") and EVAL_SAY_FORCE or P
   pcall(out, "[简易地图] " .. msg)
   return msg
@@ -2105,6 +2136,8 @@ smFitSayV = function(fmt, ...)
   local msg = (select("#", ...) > 0) and string.format(fmt, ...) or tostring(fmt)
   mfLog("[详细] %s", msg)
   if not smFitVerboseOn() then return msg end
+  -- ★1.75.59f：详细档自身开着也仍受总闸门管（命令回显窗口内例外）——见 `smFitSay` 的同一段理由
+  if not smEchoing() and type(EVAL_CHAT_ON) == "function" and not EVAL_CHAT_ON() then return msg end
   local out = (type(EVAL_SAY_FORCE) == "function") and EVAL_SAY_FORCE or P
   pcall(out, "[简易地图] " .. msg)
   return msg
@@ -2722,7 +2755,13 @@ local function smFitPrepare()
 end
 
 -- 取证：开关 / 地图开没开 / es / 目标数 / 原值条数 / 本次改动 / burst 剩余
-local function smFitDiag()
+-- ★★★1.75.59g：**两档输出**（用户：「一次 diag 十几行 ⇒ 收成精简 3 行，全量走 `/ehm mapfit dump`」）——
+--   · **精简档**（默认，`/ehm mapfit` / `/ehm mapfit diag`）= 3 行：地图身份 · 适配与本次改了几个 · 本次实际动作；
+--   · **全量档**（`/ehm mapfit diag full`、`/ehm mapfit dump`）= 原来的 8 行
+--     （含「抓原值 尝试/读失败/落闩」「缩放量对照」「`GetEffectiveScale` 会滞后」提醒、「探测结论」）。
+--   ★`noWrite = true`（只读清单 `dump` 用）⇒ **一个几何都不碰**（`dump` 的只读契约不变），
+--     那两格如实写「－（只读：不折算）」，绝不拿 0 冒充「算过了」。
+local function smFitDiag(full, noWrite)
   local fr = _G["WorldMapDetailFrame"]
   local es = nil
   local esApi = nil
@@ -2750,35 +2789,55 @@ local function smFitDiag()
     end
   end
   for _, v in pairs(SMFIT.wroteKeys or {}) do if v == mkDiag then nWroteDiag = nWroteDiag + 1 end end
-  P(string.format("地图身份=%s ｜ 客户端叠加层=%s ｜ 本图在用 %d / 非瓦片 %d ｜ 等抓原值 %d 个 ｜ 本图已写 %d 个 ｜ 原值共 %d 条（**会话内存**、按地图）",
-    tostring(mkDiag), (nOvDiag ~= nil) and tostring(nOvDiag) or "读不到", nUseDiag, nList, nWaitDiag, nWroteDiag, nOrig))
+  if full then
+    P(string.format("地图身份=%s ｜ 客户端叠加层=%s ｜ 本图在用 %d / 非瓦片 %d ｜ 等抓原值 %d 个 ｜ 本图已写 %d 个 ｜ 原值共 %d 条（**会话内存**、按地图）",
+      tostring(mkDiag), (nOvDiag ~= nil) and tostring(nOvDiag) or "读不到", nUseDiag, nList, nWaitDiag, nWroteDiag, nOrig))
+  else
+    P(string.format("地图=%s ｜ 本图在用 %d / 非瓦片 %d ｜ 原值 %d 条（等抓 %d）",
+      tostring(mkDiag), nUseDiag, nList, nOrig, nWaitDiag))
+  end
   -- ★★★1.75.5：抓原值的**尝试 / 读失败**必须摊出来 —— 「静默读不到」正是这次拖了三轮的元凶
-  P(string.format("抓原值：尝试 %d 次 ｜ 本图记录 %d 条 ｜ 读失败 %d 次 ｜ 落闩=%s ｜ 归一系数按 %s",
-    tonumber(SMFIT.capCalls) or 0, (function() local k = 0 for _ in pairs(SMFIT.rec or {}) do k = k + 1 end return k end)(),
-    tonumber(SMFIT.capFails) or 0, SMFIT.captured and "是" or "否",
-    (SMFIT.needFold == true) and "读回=逻辑值（不归一）" or "读回=逻辑×es（÷es 归一）"))
-  if (type(fr) == "table" or type(fr) == "userdata") then
-    P(string.format("缩放量对照：**采用值(父链连乘)**=%.3f ｜ 旧 API 读回=%s ｜ 配置里的设置值 scale=%.3f",
-      tonumber(es) or 0, (esApi and string.format("%.3f", esApi)) or "?", tonumber(SM_CFG.scale) or 1))
-    P("　★`GetEffectiveScale` 在本客户端**会滞后**（第一次开启读 1.00、关开一次后读 0.70）⇒ 折算一律用**父链连乘**；旧 API 的数字只作对照")
+  --   ★1.75.59g：收紧进**全量档**（精简 3 行只留「原值 N 条（等抓 M）」，那两个数要细看时走 dump）。
+  if full then
+    P(string.format("抓原值：尝试 %d 次 ｜ 本图记录 %d 条 ｜ 读失败 %d 次 ｜ 落闩=%s ｜ 归一系数按 %s",
+      tonumber(SMFIT.capCalls) or 0, (function() local k = 0 for _ in pairs(SMFIT.rec or {}) do k = k + 1 end return k end)(),
+      tonumber(SMFIT.capFails) or 0, SMFIT.captured and "是" or "否",
+      (SMFIT.needFold == true) and "读回=逻辑值（不归一）" or "读回=逻辑×es（÷es 归一）"))
+    if (type(fr) == "table" or type(fr) == "userdata") then
+      P(string.format("缩放量对照：**采用值(父链连乘)**=%.3f ｜ 旧 API 读回=%s ｜ 配置里的设置值 scale=%.3f",
+        tonumber(es) or 0, (esApi and string.format("%.3f", esApi)) or "?", tonumber(SM_CFG.scale) or 1))
+      P("　★`GetEffectiveScale` 在本客户端**会滞后**（第一次开启读 1.00、关开一次后读 0.70）⇒ 折算一律用**父链连乘**；旧 API 的数字只作对照")
+    end
   end
   local changed, ready = 0, 0
-  if smFitOn() and es and es > 0.01 then changed, ready = smFitApply(es, true) end
-  P(string.format("叠加层适配：开关=%s（默认开） · 地图开=%s · es=%s · 非瓦片纹理 %d 个 · 原值 %d 条 · 本次改 %d / 已适配 %d · burst 剩余 %.1fs",
-    smFitOn() and "开" or "关", tostring(featOpenNow()),
-    es and string.format("%.3f", es) or "?", nList, nOrig, changed, ready, tonumber(SMFIT.burst) or 0))
-  -- ★★★1.75.9：**折算判据必须摊开**（「本客户端要不要我们折算」是这一案的核心事实，不许藏在代码里）
-  P("折算策略 = " .. smFitModeLabel() .. "（/ehm mapfit mode fold|auto|nofold 可切）")
-  if SMFIT.needFold == nil then
-    P("探测结论：**还没探过**（开启时/开图后各探一次）")
-  else
-    P("探测结论：" .. (SMFIT.needFold and "本客户端**不会**自动级联 ⇒ 需要按 es 折算（原值取自自然档）"
-      or "本客户端**会**自动级联 ⇒ 折算就是第二遍（策略 auto 时我们不碰）"))
+  if not noWrite then
+    if smFitOn() and es and es > 0.01 then changed, ready = smFitApply(es, true) end
   end
-  P("本次实际动作 = " .. (smFitNeedFold() and "折算（按 es 写几何）" or "**不折算**（一个几何都不碰）")
+  local fragChg = noWrite and "－（只读：不折算）" or string.format("%d", changed)
+  local fragRdy = noWrite and "－" or string.format("%d", ready)
+  local lineFit = string.format("叠加层适配：开关=%s（默认开） · 地图开=%s · es=%s · 非瓦片纹理 %d 个 · 原值 %d 条 · 本次改 %s / 已适配 %s · burst 剩余 %.1fs",
+    smFitOn() and "开" or "关", tostring(featOpenNow()),
+    es and string.format("%.3f", es) or "?", nList, nOrig, fragChg, fragRdy, tonumber(SMFIT.burst) or 0)
+  -- 精简档把「折算策略」并进这一行（它是判读「为什么本次不折算」的关键一格，不能只留在全量档）
+  if not full then lineFit = lineFit .. " ｜ 折算策略=" .. smFitModeLabel() end
+  P(lineFit)
+  if full then
+    -- ★★★1.75.9：**折算判据必须摊开**（「本客户端要不要我们折算」是这一案的核心事实，不许藏在代码里）
+    P("折算策略 = " .. smFitModeLabel() .. "（/ehm mapfit mode fold|auto|nofold 可切）")
+    if SMFIT.needFold == nil then
+      P("探测结论：**还没探过**（开启时/开图后各探一次）")
+    else
+      P("探测结论：" .. (SMFIT.needFold and "本客户端**不会**自动级联 ⇒ 需要按 es 折算（原值取自自然档）"
+        or "本客户端**会**自动级联 ⇒ 折算就是第二遍（策略 auto 时我们不碰）"))
+    end
+  end
+  local act = "本次实际动作 = " .. (smFitNeedFold() and "折算（按 es 写几何）" or "**不折算**（一个几何都不碰）")
     .. " ｜ 迷雾本图接管=" .. (((type(EVAL_WF_TAKES_MAP) == "function") and EVAL_WF_TAKES_MAP()) and "是" or "否")
     .. " ｜ 取证行数 = " .. tostring((type(SM_CFG.mapFitTrace) == "table") and table.getn(SM_CFG.mapFitTrace) or 0)
-    .. "（/ehm mapfit trace 可打出来）")
+    .. "（/ehm mapfit trace 可打出来）"
+  -- 精简档给一句**下一步**（要看全量就看哪条命令），省得再猜
+  if not full then act = act .. " ｜ 全量诊断：/ehm mapfit dump（只读）" end
+  P(act)
   return changed
 end
 
@@ -3403,9 +3462,19 @@ if type(SlashCmdList) == "table" then
   SLASH_EHSIMPLEMAP2 = "/ehsimplemap"
   SlashCmdList["EHSIMPLEMAP"] = function(msg)
     msg = string.lower(tostring(msg or ""))
+    -- ★★★1.75.59f：**命令回显窗口盖章** —— 用户主动敲的命令，它的回显必须在「调试日志」关着时也看得见
+    --   （窗口 0.75s，覆盖本次同步分派；`P`/`smFitSay` 都读它）。
+    if type(GetTime) == "function" then SM_ECHO_AT = GetTime() + SM_ECHO_SEC end
     -- ★1.75.56：**世界迷雾（独立模块）的子命令先分流**（残留 / 贴图 / perf / swm [on|off]）——
     --   它的命令体在 tools\WorldFog.lua 里（模块自带命令口 = 项目纪律）。
-    if type(EVAL_WF_CMD) == "function" and EVAL_WF_CMD(msg) then return end
+    -- ★★★1.75.59h 修（真机截图定案）：**必须递「子命令」、不能递整串**。旧写法 `EVAL_WF_CMD(msg)`
+    --   递的是 `"mapfit perf"`，而 `MDQ.cmd` 里比的是裸子命令（`sub == "perf"`）⇒ 永不成立 ⇒ 掉回本文件的
+    --   `mapfit` 分支、`sub = "perf"` 不匹配任何一条 ⇒ 落到最后的 `else` ⇒ **打出一份折算 diag**
+    --   （用户现象：敲完 `perf` 只看到 diag 3 行 + 用法，以为「命令跑了、只是没内容」）。
+    --   ★代价 = **四条命令全部静默失效**（`残留`/`贴图`/`perf`/`swm`，自 1.75.56 拆分起）——
+    --   正是本项目最怕的那类错（不报红字、看着像没数据）。判据 = `tmp/wfcmd_harness.js` 正向钉 + 反向钉。
+    local msub = string.match(msg, "^mapfit%s+(.*)$") or string.match(msg, "^叠加层%s+(.*)$")
+    if msub ~= nil and type(EVAL_WF_CMD) == "function" and EVAL_WF_CMD(msub) then return end
     if msg == "probe" or msg == "探针" then
       probeRead()
     elseif msg == "probe2" or msg == "探针2" then
@@ -3482,7 +3551,10 @@ if type(SlashCmdList) == "table" then
         out("[简易地图] 折算取证已清空")
       elseif sub == "dump" or sub == "探针" or sub == "清单" then
         -- ★★★1.75.13：只读清单（地图身份 / 客户端叠加层真值 / 每个层的在用判定与记录）——「谁写的、该是多少」一眼可判
+        -- ★★★1.75.59g：**全量诊断行也并进这里**（用户：「一次 diag 十几行 ⇒ 精简 3 行、全量走 dump」）——
+        --   传 `noWrite = true` ⇒ 这一趟**一个几何都不折算**（`dump` 的**只读契约不变**）。
         local out2 = (type(EVAL_SAY_FORCE) == "function") and EVAL_SAY_FORCE or P
+        smFitDiag(true, true)
         for _, ln in ipairs(smFitDumpLines()) do out2("[简易地图] " .. tostring(ln)) end
       elseif string.find(sub, "^mode") then
         EVAL_SM_MAPFIT_MODE_SET(string.match(sub, "^mode%s+(%S+)") or "")
@@ -3519,9 +3591,15 @@ if type(SlashCmdList) == "table" then
       elseif sub == "restore" or sub == "还原" then
         smFitRestore(false)
       else
-        smFitDiag()
+        -- ★1.75.59g：`diag` = **精简 3 行**（默认）；要看全量那 8 行 ⇒ `diag full` / `全量`（或 `dump`，只读）。
+        if string.find(sub, "full") or string.find(sub, "全量") then
+          smFitDiag(true)
+        else
+          smFitDiag()
+        end
       end
-      P("用法：/ehm mapfit on | off | restore | diag | dump（只读清单）| trace | traceclear | mode fold|auto|nofold | fresh on|off | verbose on|off（不给子命令 = diag）")
+      P("用法：/ehm mapfit on | off | restore | diag [full] | dump（只读清单 + 全量诊断）| trace | traceclear | mode fold|auto|nofold | fresh on|off | verbose on|off"
+        .. " ｜ **世界迷雾**（本行之外的子命令）：**自检（一条命令跑完全部只读诊断 + 自动 /reload 落盘，AI 直接读存档）** | 检查（一句话结论）| 检查 alpha［试｜停］| 残留 | 贴图 | perf | swm [on|off] | 编辑 [on|off|配对|清|清全部|透明度 0-100|重置插件 本图|全部] | 微调（箭头微调体检）")
     elseif msg == "reset" or msg == "复位" then
       featReset()
     elseif msg == "default" or msg == "默认" or msg == "默认档" then

@@ -1023,7 +1023,7 @@ SE_OP_NEXT = "Click to switch to: %s",
   TB_RAREWATCH_TIP = "One chat line the moment the quest addon spots a rare: name (coloured by rank) + rank + yards to the nearest recorded spawn; clicking the name selects it (a miss is reported as an error). On by default.",
   -- probe/worldmap-minimap branch: standalone addon EH_SimpleMap (addons/ dir, probe build)
   TB_H_SIMPLEMAP = "—— Map addon ——",
-  TB_DBGDRAG = "Layer dragging",
+  TB_DBGDRAG = "Layer dragging!",
   TB_LDDRAG_RESET = "Reset", -- ★1.74.29 框拖拽行右侧重置
   TB_LDDRAG_RESET_TIP = "Reset: restores each layer's scale/opacity/visibility and clears positioning data",
   -- ★1.74.33 图层选择（多选下拉）
@@ -1080,15 +1080,53 @@ SE_OP_NEXT = "Click to switch to: %s",
   TB_LD_SUM_MISS = "%d more target(s) have no matching frame on this client (action bars / party / raid are matched by candidate names; party and raid are absent while you are not grouped) - /edb bars lists the available names",
   TB_DBGDRAG_TIP = "Adds a transparent drag bar to player / target / minimap / chat / combat log / action bar / action bars 1-4 / party / raid - width = frame width, 20px tall, aligned to the frame top-left, with a label. Dragging it moves that frame; the position is saved to your config and checked periodically. Clicking it also sets that frame's scale / alpha / visibility / width / height; the Reset button restores those attributes. Off by default: the bar captures the mouse. Party and raid are absent while you are not grouped (reported honestly) and appear as soon as you join. The checkbox is edit mode / guard mode: on = edit mode (drag bars and icons shown, the attribute guard is paused so it does not fight you while arranging); off = guard mode (applies your saved settings once, then keeps guarding only the layers that have custom settings - layers you never configured are never written to).",
   TB_H_UITOOLS = "UI tools", -- ★★1.74.29 由「地图工具」改名（并移到第一组）
-  TB_SIMPLEMAP = "Zoom world map", -- ★1.74.30 用户：改叫「缩放大地图」
+  TB_SIMPLEMAP = "Zoom world map!", -- ★1.74.30 用户：改叫「缩放大地图」
   TB_SIMPLEMAP_TIP = "World-map tool: zoom + opacity + blackout hiding + position memory; applies automatically when the map opens. Shift+wheel=opacity - Ctrl+wheel=zoom - golden bar=drag - [Settings] on the right = GUI reopen / Disable the world fog (off by default). Note: toggling this row needs /reload to fully apply (a confirm box pops up).",
   TB_SM_GUIREOPEN = "GUI reopen",
   TB_SM_GUIREOPEN_TIP1 = "On map open, re-show the outermost GUI once (the client hides it while the map is open).",
   TB_SM_GUIREOPEN_TIP2 = "Side effect: the map addon then believes the map is CLOSED - once you zoom out to a continent/world layer the map is auto-refreshed back to your current zone (every 2s).",
   TB_SM_GUIREOPEN_TIP3 = "Off by default. Tick it only if you want the minimap/action bars visible while the map is open.",
-  TB_SM_SWM = "Disable the world fog",
+  TB_SM_SWM = "Disable the world fog!",
   -- ★★★1.75.52（用户定稿：说明**就这一句**，不要加额外信息）—— 三语同文。
   TB_SM_SWM_TIP1 = "初看是这个世界的,其实不是这个世界的.有没似陈相识?",
+  -- ★1.75.60d: feedback channel for map offsets (user asked for this line).
+  TB_SM_SWM_TIP2 = "Some zone maps may be offset: report it in the addon comments or the QQ group and it will be corrected.",
+  -- ★★★1.75.59o: "edit mode" = drag the fog tiles to tune this game's own coordinate compensation
+  --   (paired with MapOverlayData.lua). Tooltip stays short: what it is / how to use / how to undo.
+  TB_SM_EDIT = "Edit mode",
+  TB_SM_EDIT_TIP1 = "Drag the fog tiles on the map to fine-tune their position (the compensation is saved and paired with MapOverlayData.lua). The list on the right supports multi-select: everything selected moves together. The arrows at the bottom of the list nudge by 1 pixel per click (Shift+click = 10).",
+  -- ★★★1.75.60z: the three "texture set" keys were removed on request (the multi-version texture
+  --   mechanism / the `_v` folders are gone entirely) ⇒ no strings for it in the language pack.
+  WF_EDIT_TITLE = "Fog tiles · %s",
+  WF_EDIT_SEL = "selected %d",
+  WF_EDIT_ALL = "All",
+  WF_EDIT_NONE = "None",
+  WF_EDIT_ZERO = "Zero picked",
+  -- ★1.75.59p: reset / cleanup = drop the compensation table (back to the base MapOverlayData values).
+  --   Destructive actions use **click-twice confirmation**: the button itself turns into "click again".
+  WF_EDIT_RESET = "Reset map",
+  WF_EDIT_RESETALL = "Reset all",
+  WF_EDIT_ARM = "click again",
+  WF_EDIT_FIXED = "offsets %d",
+  -- ★★★1.75.60b: the two view toggles on the right-side list (original layers / fog layers show-hide).
+  WF_EDIT_NATIVE = "Original layers",
+  WF_EDIT_FOG = "Fog layers",
+  WF_EDIT_SHOW = "shown",
+  WF_EDIT_RESETPLUGIN = "Reset map (with plugin)",
+  WF_EDIT_RESETPLUGINALL = "Reset all (with plugin)",
+  WF_EDIT_RST_L = "Left: clear your own edits only (falls back to the plugin base)",
+  WF_EDIT_RST_R = "Right: also clear the plugin offsets (back to raw table values)",
+  WF_EDIT_ALPHA = "Fog opacity",
+  WF_EDIT_ARROW_TIP = "Arrow nudge: one click = 1 screen pixel (Shift+click = 10); select a layer in the list first (a whole selection moves together)",
+  WF_EDIT_WDEC = "W −",
+  WF_EDIT_WINC = "W +",
+  WF_EDIT_HDEC = "H −",
+  WF_EDIT_HINC = "H +",
+  WF_EDIT_SIZE_TIP = "Size nudge: one click = 1 screen pixel (Shift+click = 10); works only with exactly one layer selected (the buttons grey out otherwise); the tile itself is stretched, the UV is untouched",
+  WF_EDIT_SAVE = "Save (write + reload)",
+  WF_EDIT_SAVE_TITLE = "World fog - save & reload",
+  WF_EDIT_SAVE_BODY = "Fog compensation in the saved variables: %d for this map / %d in total (worldFogCfg.edit).\nThis client writes saved variables only on /reload, so reloading now persists these offsets (the chat frame will be cleared).\nReload the UI now?",
+  WF_EDIT_HIDE = "hidden",
   -- ★★★1.75.59c 通用「需要 /reload」确认窗（Core.lua 的 EVAL_RELOAD_ASK；两个地图开关共用）
   REL_ASK_TITLE_SM = "Zoom world map - switch changed",
   REL_ASK_TITLE_FOG = "World fog - switch changed",

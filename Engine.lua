@@ -4950,9 +4950,18 @@ end
 --   窗口内最多补按 WATK.pressMax 次；每拍**重新**做目标守卫 + 实时射程判定（超程不按：客户端反正不收，
 --   还会刷红字）⇒ 目标一进射程/一取消施法，自动射击就自己回来，**不必等下一次按键**。
 -- 零足迹：开关关掉一个帧都不挂；成功/超时/目标没了立刻摘掉 OnUpdate（不常驻、不空转）。
--- ⚠️边界（用户可定）：窗口只在「刚按过宏键」之后 ≤1.25s 内有效 ⇒ 这段时间里你手动关掉自动射击，
+-- ⚠️边界（用户可定）：窗口只在「刚按过宏键」之后 ≤WATK.span 内有效 ⇒ 这段时间里你手动关掉自动射击，
 --   它可能被补回来最多 2 次；要「手动关了就别再补」得另做判据（例如识别 ESC/停止攻击）。
-WATK.gap, WATK.ticksMax, WATK.pressMax = 0.25, 5, 2
+-- ★★★1.75.59e（用户 2026-10-01 定：「只跳 ≤1.25 秒就停 = 自动攻击窗口」⇒「这个设定在 0.75s 试下」）：
+--   **窗口总时长 1.25s → 0.75s**；★单一来源 = `WATK.span`，**拍数由它推导**（`0.75 ÷ 0.25 = 3` 拍）
+--   —— 别再手写 `ticksMax`：两处各写一遍，改一处漏一处就是「设的值和实际跑的不一样」。
+--   ★`pressMax` 仍 2（用户只要求改窗口长度）；gap 仍 0.25s（拍子越密越贵，没必要）。
+--   ★**已知未改的两条放大器**（用户下一轮 A/B 用）：① `wAtkGuardArm` 无「已在跑就别重开」门 ⇒
+--     每发被接受的 EVAL_GO 都**重新武装**一个新窗口（拍数/补按数归零重算）；② 窗口补按**不更新**
+--     `wLastAttackTry` ⇒ 不受 2 秒硬节流管。⇒ 缩短窗口只减**尾巴**，链条燃料仍是「调用在来」。
+WATK.gap, WATK.pressMax = 0.25, 2
+WATK.span = 0.75 -- ★窗口总时长（秒）——与 gap 一起是唯一真值，ticksMax 由它推导
+WATK.ticksMax = math.max(1, math.floor(WATK.span / WATK.gap + 0.5)) -- = 3 拍（原 5 拍 = 1.25s）
 WATK.guard = nil -- { slot, use, name, t0, next, ticks, presses, why }
 WATK.frame = nil -- 懒建：没有窗口时一个帧都不存在
 
@@ -5035,7 +5044,7 @@ function EVAL_ATK_GUARD_STATE()
   if not g then return { active = false } end
   return { active = true, name = g.name, why = g.why, ticks = g.ticks, presses = g.presses,
            age = GetTime() - (tonumber(g.t0) or GetTime()), gap = WATK.gap,
-           ticksMax = WATK.ticksMax, pressMax = WATK.pressMax }
+           span = WATK.span, ticksMax = WATK.ticksMax, pressMax = WATK.pressMax }
 end
 
 -- 一键入口：/run EVAL_GO()
@@ -5320,7 +5329,7 @@ function EVAL_GO(profSel)
     --   真机 a43 行就是这一支漏掉的：a42 键首=开（判定不需补、本拍一个按都没发），
     --   而本拍规则跑了[宠物:攻击,选取目标:最近敌人]，**+0.6s 后 a43 读到关** ⇒ 施法/切目标把自动射击取消了，
     --   旧逻辑那一拍既没按、也没有任何窗口去复查 ⇒ 用户看到的就是「释放技能之后自动射击被取消，
-    --   要等下一个循环才生效」。现在窗口覆盖整拍：任何时刻被取消，≤1.25s 内自己补回来。
+    --   要等下一个循环才生效」。现在窗口覆盖整拍：任何时刻被取消，≤WATK.span 内自己补回来。
     --   ★只在「开关开着 + 有可用档 + 目标可打」时武装；目标尸体/无目标/无档 ⇒ 不武装（零成本）。
     if atkSlot ~= nil and atkArmNote ~= nil and wAtkTargetAttackable() then
       if wAtkGuardArm(atkSlot, atkUse, atkName, atkArmNote) then

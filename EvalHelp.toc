@@ -39,6 +39,7 @@ PetData.lua
 PetHelper.lua
 ItemPriceData.lua
 MapOverlayData.lua
+MapOverlayOffset.lua
 tools\SimpleMap.lua
 tools\WorldFog.lua
 tools\IconGrid.lua

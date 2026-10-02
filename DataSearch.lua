@@ -1626,12 +1626,22 @@ function EVAL_DS_NODE_DIAG()
   for _, d in ipairs(DS_ANN_CATS) do if dsCatOn(d.k) then table.insert(on, d.label) end end
   local tip = ""
   if not dsAnnOn then tip = " | 图层总开关未开（/eh ds trace 或 Tab 里打开）" end
+  -- ★1.75.60aa：节拍帧「挂着吗 / 为什么」——「用才挂、不用真摘」的取证行（挂在活命令 `/eh ds` 上）
+  local tickTxt = ""
+  if type(EVAL_DS_TICK_STATE) == "function" then
+    local tOn, tHot, tDue, tAnn, tMm, tMap, tRaw, tHook = EVAL_DS_TICK_STATE()
+    tickTxt = string.format(" | 节拍=%s（页腿=%s 检索待办=%s ｜ 标注=%s 小地图=%s ｜ 地图=%s（%s）｜ 开图钩子=%s）",
+      tOn and "挂" or "真摘", tHot and "在" or "不在", tDue and "有" or "无",
+      tAnn and "开" or "关", tMm and "开" or "关",
+      tostring(tMap), tostring(tRaw), tostring(tHook))
+  end
   return string.format("图层=%s trace=%s 已绘地图=%s 钉子池=%d 对方当前区域=%s IsShown=%s(仅参考)",
     tostring(dsAnnOn), tostring(dsTrace), tostring(dsAnnSig), table.getn(dsAnnPins),
     tostring(areaId), tostring(shown))
     .. " | 开启类别=" .. ((table.getn(on) > 0) and table.concat(on, ",") or "无")
     .. " | 本次显示=" .. dsAnnSummary()
     .. (dsAnnTruncated and (" | 已触顶(" .. DS_ANN_MAX .. ")，本图还有更多点未显示") or "")
+    .. tickTxt
     .. tip .. (err and (" err=" .. err) or "")
 end
 
@@ -1779,6 +1789,23 @@ local DS_ANN_HEARTBEAT = 30
 --   这三件套不但无害论不成立（5s 兜底每分钟 12 次全量重建、闸门直接吞掉重绘），
 --   还会让后来的人以为「这里有保护」。★先证伪前提，再决定去留。
 
+-- ★★★1.75.60aa：**开图信号**（节拍器「用才挂 / 不用真摘」的判据之一）——
+--   与 `tools/SimpleMap.lua` 的 `featOpenNow()` **同一口径**（真机已验证「缩放大地图」整套都靠它判开图）。
+--   ★本客户端 `WorldMapFrame:IsShown()` **不可靠**（1.70.17 定案；上面 `dsMapShown` 只当「仅参考」），
+--     可靠的是 `WorldMapDetailFrame` / `WorldMapButton` 这两个件自己的 `IsShown`。
+--   ★件不在 / 读不到 ⇒ 返回 false（**绝不猜「开着」**）：上层要么退回常驻、要么按钩子信号走。
+local DS_MAP_FRAMES = { "WorldMapDetailFrame", "WorldMapButton" }
+local function dsMapFrameShown()
+  for _, n in ipairs(DS_MAP_FRAMES) do
+    local f = rawget(_G, n)
+    if f ~= nil and type(f.IsShown) == "function" then
+      local ok, v = pcall(f.IsShown, f)
+      if ok and v then return true end
+    end
+  end
+  return false
+end
+
 -- 心跳/诊断日志（沿用 1.70.16 的教训：先记心跳再判开关，否则静默无法与「没跑」区分）
 local function dsAnnHeartbeat(now, areaId)
   if not dsTrace then return end
@@ -1807,13 +1834,35 @@ local dsMapIconStep
 
 local function dsAnnTickFn()
   local now = (type(GetTime) == "function") and GetTime() or 0
+  -- ★★★1.75.60aa（用户：「节拍器只在这个 Tab 才启用；性能与稳定性第一，事件类要用的时候才启用、不用要关闭」）：
+  --   **按消费者分腿** —— 两条腿都不在用 ⇒ 一拍都不干活（连 `MapContext` 都不读）：
+  --     · 小地图腿：小地图常显 ⇒ 由 `dsMmOn ∧ dsAnnOn` 说了算（这条腿开着 = 低频常驻，见 `dsTickSync`）；
+  --     · 地图腿：由 `dsMapFrameShown()`（世界地图真开着）说了算 —— 关图那一拍只做**一次性收层**。
+  local mmHot = (dsMmOn == true) and (dsAnnOn == true)
+  -- ★★★顺序即判据：**先节流盖章、再读开图信号** —— 两腿都冷时也照样节流，
+  --   否则「挂着的每一帧」都会去 `IsShown` 两个地图件（那正是本次要消灭的常驻开销）。
   if now - dsAnnTick < DS_ANN_INTERVAL then return end
   dsAnnTick = now
+  local mapHot = dsMapFrameShown()
+  if (not mmHot) and (not mapHot) then return end
   -- ★1.75.13 小地图标注层：**放在地图状态判断之前** —— 它靠玩家自己的位置作原点，
   --   与「大地图在看哪张图」无关（关着大地图时小地图才真正可见，那正是它的主场）。
-  dsMmStep(now)
+  if mmHot then dsMmStep(now) end
 
-  -- 地图没开：整层隐藏（切走/关图 → 标注跟着走，这是用户明确要求的「绑定地图」）
+  -- 地图没开：地图侧那一整套探测（`MapContext` / 诊断浮层 / 放大镜图标 / 随机点 / 重绘）**一概不跑**；
+  --   只做两件：① 关图那一刻把地图那一层收干净（`dsAnnHideAll` 会把 `dsAnnSig` 清成 nil ⇒ 下次开图必定重画）；
+  --             ② 心跳照记（trace 开着时）——「节拍停了」与「没跑」必须还能区分（1.70.16 的教训）。
+  if not mapHot then
+    dsAnnHeartbeat(now, nil)
+    if dsAnnSig ~= nil then
+      dsLog("地图关闭/大陆视图 → 隐藏整层（原地图=" .. tostring(dsAnnSig) .. "）")
+      dsAnnHideAll()
+    end
+    -- 与旧路径一致：关图那一拍仍要让放大镜图标自己收起（它内部按 areaId=nil 走「隐藏 + 只说一次为什么」）
+    if dsMapIconStep then dsMapIconStep(nil) end
+    return
+  end
+
   local mc = dsUQModule("MapContext")
   local sig, areaId = dsViewSig(mc)
   dsAnnHeartbeat(now, areaId)
@@ -2497,6 +2546,107 @@ end
 --
 -- ★教训：「定时刷新」类修复之前，先确认「定时器在地图打开时是否真的在跑」。
 --   我连续用日志推断了几轮，却没问过「这些日志本身是不是在地图打开时根本不产生」。
+-- ★★★1.75.60aa（用户：「DataSearch.lua 节拍器只在 tab 切换到这个页面才启用，非当前 tab 别生效」
+--   ＋「插件性能/稳定性第一，事件类要用的时候才启用、不用要关闭」）：
+--   本帧**不再常驻**；挂/摘走**唯一入口 `dsTickSync()`**，按「谁现在真的在用」现算三条腿：
+--     ① 页腿：第④页是当前 tab（宿主 `EVAL_HELP_CFG_SETTAB` / 配置窗 `OnHide` 喊 `EVAL_DS_PAGE_HOT`）
+--              ＋ 有挂起的检索去抖（`DS.due > 0` —— 把它跑完再摘，**绝不吞掉一次检索**）；
+--     ② 小地图腿：`dsMmOn ∧ dsAnnOn` —— 小地图常显，所以这条腿开着就是**低频常驻**（0.25s 一拍，
+--              只干小地图那点活；要彻底零常驻，去第④页的「地图标注」菜单里取消勾选「小地图也显示」）；
+--     ③ 地图腿：`dsAnnOn ∧ 世界地图真开着` —— 开图信号 = **包住** `WorldMapDetailFrame` / `WorldMapButton`
+--              自己的 `OnShow`/`OnHide`（**不覆盖**：先原样调旧脚本，再同步节拍；旧脚本与我们的包装都记账）。
+--   ★★★**装不上开图钩子 ⇒ 退回常驻**（fail-open：`dsMapHookOK = false` 时地图腿按「标注层开着」挂）——
+--     宁可多跑几拍，也**绝不静默少画一屏标注**；钩子装好之后下一次同步就会自动收紧。
+--   ★**自愈**：节拍跑着的时候每 0.25s 复核一次「还要不要拍子」，不要了就**真摘**
+--     （`SetScript(dsTick,"OnUpdate",nil)`，不是每帧早退）；再要的时候**重挂同一个 handler**，不用 `/reload`。
+local dsMapHook, dsTickBody, dsTickSync   -- ★前向声明（钩子/钩子回调/同步口都要互相引用）
+local dsMapHookOK = false                 -- 开图钩子装上了吗（装不上 ⇒ 地图腿退回常驻）
+local dsHookFailSaid = false              -- 「钩子没装上」只如实说一次
+DS.hookOld, DS.hookOurs = {}, {}          -- 旧脚本账 / 我们那份（各 ≤ 2 帧 × 2；体检读后一个）
+
+-- 开图钩子：包住地图件自己的 OnShow/OnHide（**不覆盖**：先存旧脚本、调用时先原样调它）
+dsMapHook = function()
+  if dsMapHookOK then return true end
+  local any = false
+  for _, n in ipairs(DS_MAP_FRAMES) do
+    local f = rawget(_G, n)
+    if f ~= nil and type(f.SetScript) == "function" and type(f.GetScript) == "function" then
+      local oks, oldS = pcall(f.GetScript, f, "OnShow")
+      local okh, oldH = pcall(f.GetScript, f, "OnHide")
+      if oks and okh then
+        local mine = {}
+        mine.show = function(...)
+          if type(oldS) == "function" then pcall(oldS, ...) end
+          if dsTickSync then pcall(dsTickSync) end
+        end
+        mine.hide = function(...)
+          if type(oldH) == "function" then pcall(oldH, ...) end
+          if dsTickSync then pcall(dsTickSync) end
+        end
+        local ok1 = pcall(f.SetScript, f, "OnShow", mine.show)
+        local ok2 = pcall(f.SetScript, f, "OnHide", mine.hide)
+        if ok1 and ok2 then
+          DS.hookOld[n] = { show = oldS, hide = oldH }   -- 旧脚本（有界：最多 2 帧 × 2）
+          DS.hookOurs[n] = mine                          -- 我们那份（体检读它验「还是我们那份吗」）
+          any = true
+        end
+      end
+    end
+  end
+  dsMapHookOK = any
+  if (not any) and (not dsHookFailSaid) then
+    dsHookFailSaid = true
+    -- 如实说一次：钩子装不上 ⇒ 地图那一条腿退回常驻（**绝不静默少画**）
+    dsLogAlways("节拍器：开/关图钩子没装上（WorldMapDetailFrame/WorldMapButton 还没有）⇒ 地图腿退回常驻轮询")
+  end
+  return any
+end
+
+-- 三条腿各自说「现在要不要拍子」
+local function dsTickNeed()
+  if DS.pageHot == true then return true end             -- ① 页腿（第④页是当前 tab）
+  if (tonumber(DS.due) or 0) > 0 then return true end    -- ② 挂起的检索去抖
+  if dsAnnOn == true then
+    if dsMmOn == true then return true end               -- ③ 小地图腿（小地图常显）
+    if (not dsMapHookOK) or dsMapFrameShown() then return true end -- ④ 地图腿
+  end
+  return false
+end
+
+-- 节拍本体（OnUpdate：**零形参**，本项目铁律）
+dsTickBody = function()
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  if DS.due > 0 and now >= DS.due then dsDoSearch() end  -- 照旧：有去抖待办就把它跑完（与 tab 无关，绝不吞）
+  dsAnnTickFn()                                          -- 小地图腿 / 地图腿（分腿门控在它里面）
+  -- ★每 0.25s 复核一次「还要不要拍子」：不要了当场真摘（自愈：钩子被顶掉 / 地图关了都能停干净）
+  if now - (tonumber(DS.syncAt) or 0) >= DS_ANN_INTERVAL then
+    DS.syncAt = now
+    if dsTickSync then pcall(dsTickSync) end
+  end
+end
+
+-- 挂/摘唯一入口（幂等）
+dsTickSync = function()
+  if dsTick == nil then return false end
+  -- 懒装开图钩子：**有界重试**（最多 `DS_HOOK_TRIES` 次；一直装不上就退回常驻，绝不每拍空试）
+  if (not dsMapHookOK) and (tonumber(DS.hookTry) or 0) < 8 then
+    DS.hookTry = (tonumber(DS.hookTry) or 0) + 1
+    pcall(dsMapHook)
+  end
+  local want = dsTickNeed()
+  if want and DS.tickOn ~= true then
+    DS.tickOn = true
+    DS.syncAt = (type(GetTime) == "function") and GetTime() or 0
+    pcall(dsTick.SetScript, dsTick, "OnUpdate", dsTickBody)
+  elseif (not want) and DS.tickOn == true then
+    DS.tickOn = false
+    dsAnnTick = 0        -- 节流归零：下次挂上立刻就能有一拍
+    DS.syncAt = 0
+    pcall(dsTick.SetScript, dsTick, "OnUpdate", nil)  -- ★真摘（不是每帧早退）
+  end
+  return DS.tickOn == true
+end
+
 local dsTickParent = UIParent
 do
   -- WorldFrame 是 3D 视口，UI 隐藏时不会被隐藏；拿不到就退回 UIParent（聊胜于无）。
@@ -2505,11 +2655,41 @@ do
   if wf then dsTickParent = wf end
 end
 dsTick = CreateFrame("Frame", "EVAL_DATASEARCH_TICK", dsTickParent)
-dsTick:SetScript("OnUpdate", function()
-  local now = (type(GetTime) == "function") and GetTime() or 0
-  if DS.due > 0 and now >= DS.due then dsDoSearch() end
-  dsAnnTickFn() -- 统一标注层：随地图切换重建/隐藏
-end)
+DS.tickOn = false
+pcall(dsTickSync)  -- ★载入期先同步一次：标注层开着就立刻挂上（与旧行为一致）；全关就**一帧空节拍都不跑**
+
+-- ★宿主接线口（唯一）：第④页是不是当前 tab（`SETTAB` 与配置窗显隐各喊一次）
+function EVAL_DS_PAGE_HOT(on)
+  DS.pageHot = (on == true)
+  if dsTickSync then pcall(dsTickSync) end
+  return DS.pageHot
+end
+
+-- 读值口（**活口**：`/eh ds` 的体检行读它）—— 回答「节拍现在挂着吗、为什么、开图钩子可信吗」
+function EVAL_DS_TICK_STATE()
+  local function one(n)
+    local f = rawget(_G, n)
+    if f == nil or type(f.IsShown) ~= "function" then return "不在" end
+    local ok, v = pcall(f.IsShown, f)
+    if not ok then return "读不到" end
+    return v and "显示" or "隐藏"
+  end
+  local hooked = "未装"
+  if dsMapHookOK then
+    hooked = "已装"
+    for n, mine in pairs(DS.hookOurs or {}) do
+      local f = rawget(_G, n)
+      if f ~= nil and type(f.GetScript) == "function" then
+        local ok, cur = pcall(f.GetScript, f, "OnShow")
+        if ok and cur ~= mine.show then hooked = "已装(被别人顶掉)" end
+      end
+    end
+  end
+  return DS.tickOn == true, DS.pageHot == true, (tonumber(DS.due) or 0) > 0,
+    dsAnnOn == true, dsMmOn == true, (dsMapFrameShown() and "开" or "关"),
+    ("WorldMapDetailFrame=" .. one("WorldMapDetailFrame") .. " WorldMapButton=" .. one("WorldMapButton")),
+    hooked
+end
 
 -- ===== 地图标注菜单（1.70.25 提到文件作用域，供 UI 与测试共用）=====
 -- 多选勾选（用户确认的形式）：每项独立开关，可同时看多类；点一项即切换，面板不关闭。
@@ -2600,7 +2780,14 @@ end
 --   ③ **开图才显示**：开图信号用 tick 给的 `areaId`（nil = 关图/大陆视图）—— 绝不读 `WorldMapFrame:IsShown()`。
 --   ④ **左键**打开下拉：复用 `dsCatMenu()` / `dsCatMenuPick()`（**单一来源**，与配置窗那个「地图标注(N)」按钮同一个菜单）。
 --   ⑤ **点外面关**：由通用下拉的全屏 click-catcher 负责（EvalHelp.lua 的 `ddUI.catch`）。
---   层级：FULLSCREEN_DIALOG + 动态层级（地图自身的件都在 FULLSCREEN 层 ⇒ strata 上就压住了；再读回自证）。
+--   层级：**`FULLSCREEN_DIALOG` + 动态层级**（★★★2026-10-02 二改，用户：「直接参考子插件 图层调试 是如何将层显示在地图层上的」）：
+--     **照抄「图层调试」那一套**（`addons/EH_DebugBox/EH_DebugBox.lua`：面板挂 `uiHost()`=**WorldFrame** +
+--     `FULLSCREEN_DIALOG`/500、它自己的下拉 `FULLSCREEN_DIALOG`/800）——
+--     ① **宿主必须是 WorldFrame**（`EvalHelp.lua` 的 `ddHost()`）：真根因是**开全屏地图会隐藏 UIParent**
+--        （子插件原话在案：「挂在 UIParent 下的面板会跟着被藏」）⇒ 挂 UIParent 的下拉**根本没画出来**，
+--        这时抬 strata 抬到多高都没用；
+--     ② strata = `FULLSCREEN_DIALOG`（图层面板/下拉就是在这一档压过地图的，真机截图实证）；
+--     ③ 层级仍**现算** `max(DS_MAP_LEVEL_MIN, 地图各件最高层级+40)`，并**读回自证**（见 `dsMapIconRaise`）。
 local DS_MAPICON_TEX = "Interface\\AddOns\\unrealQuest\\media\\search-icon"
 local DS_MAPICON_SIZE = 22
 local DS_MAPICON_W = 136 -- 图标 + 描述文字整条的宽度（★整条都是按钮：点文字也能开菜单，热区更大）
@@ -2645,9 +2832,20 @@ local function dsMapIconTopLevel()
 end
 
 -- 层级/strata：现算 + 读回自证（写死的话在客户端换版/换图后就可能被压住/点不到 —— 内层缩放那轮已实证）
+-- ★★★2026-10-02 二改（用户：「直接参考子插件 图层调试 是如何将层显示在地图层上的.直接参考 将标注下拉也这种方式打开」）：
+--   **照抄图层调试那一套 = `FULLSCREEN_DIALOG`（面板 500 / 它自己的下拉 800）**，不再自己另立 `FULLSCREEN`+4000。
+--   ★★真根因不在 strata 而在**宿主**：**开全屏地图会隐藏 UIParent**（子插件 `EH_DebugBox.lua:3261` 在案，
+--     1.70.39 起就有记录）⇒ 挂在 `UIParent` 上的下拉**根本没被渲染**，抬 strata 是治错了病；
+--     ⇒ 现在下拉/捕手都改挂 **WorldFrame**（`EvalHelp.lua` 的 `ddHost()`，读不到就退回 UIParent）。
+-- ★★另一条要点：**图标看得见 ≠ 下拉生效**——图标的父帧是 `WorldMapFrame`，它本来就在地图上面
+--   （`dsMapIconBuild` 里 `CreateFrame("Button", "EH_DS_MAPICON", wm)`）；判据只能看下拉自己的读回值
+--   （`EVAL_DD_DIAG`），不能拿图标当证据。
+-- ★level = `max(DS_MAP_LEVEL_MIN, 地图各件最高层级 + 40)` **现算**（绝不写死常数；`+40` = 与地图件同一把尺子；
+--   下限 `DS_MAP_LEVEL_MIN = 800` = 图层调试那个下拉的层级）。
+local DS_MAP_LEVEL_MIN = 800
 local function dsMapIconRaise(fr)
   if not fr then return nil end
-  local lv = 500 -- EH_DebugBox 的面板用它压过地图（FULLSCREEN 层）⇒ 本机已知可用
+  local lv = DS_MAP_LEVEL_MIN
   local top = dsMapIconTopLevel() + 40
   if top > lv then lv = top end
   pcall(fr.SetFrameStrata, fr, "FULLSCREEN_DIALOG")
@@ -2750,11 +2948,29 @@ local function dsMapIconBuild()
       return
     end
     local m = dsCatMenu()
+    -- ★★★2026-10-02 二改（用户：「直接参考子插件 图层调试 是如何将层显示在地图层上的.直接参考 将标注下拉也这种方式打开」）
+    --   ⇒ **照抄图层调试那一套**，三条一起才管用：
+    --   ① **宿主 = WorldFrame**（不是 UIParent）—— 图层调试面板就是靠改挂 WorldFrame 才显示在地图上的
+    --      （子插件原话：「开全屏地图会隐藏 UIParent，挂在 UIParent 下的面板会跟着被藏」）；
+    --      ★这条是**真根因**：父帧被隐藏时子帧一个像素都不渲染 ⇒ 抬 strata 治不了这个病。
+    --      实现在组件侧（`EvalHelp.lua` 的 `ddHost()`：下拉与全屏捕手都挂 WorldFrame）；
+    --   ② **strata 用 `FULLSCREEN_DIALOG`**（图层调试的面板 500 / 它自己的下拉 800 就是这一档，真机截图实证能压过地图）；
+    --   ③ **level 与图标同一把尺子**：`dsMapIconRaise` 现算（图标 ≥ `DS_MAP_LEVEL_MIN`）⇒ 菜单 = 图标 + 40
+    --      （**唯一来源** ⇒ 天然永远在图标与「地图各件」之上；★不再写死常数，1.75.60w 那次写死 `620` 就是这么翻的）；
+    --   ★配套：行 / 搜索框 / 捕手的 strata 由组件侧一起抬（只抬父帧不抬子件 ⇒ 面板背板上去了、一行字都看不见）。
+    local _, iconLv = dsMapIconRaise(b)
+    local ddLv = (tonumber(iconLv) or DS_MAP_LEVEL_MIN) + 40
     EVAL_DD_OPEN(b, m.items, function(pi, nowOn)
       dsCatMenuPick(m.keys[pi], nowOn)
       dsMapIconLabel() -- 勾选后就地刷新文字里的 (N)（与配置窗那个按钮同一个计数口径）
-    end, { multi = true, selected = m.sel, locked = m.locked, strata = "FULLSCREEN_DIALOG", level = 620 })
+    end, { multi = true, selected = m.sel, locked = m.locked, strata = "FULLSCREEN_DIALOG", level = ddLv })
+    -- ★★★2026-10-02：排查期在这条路上挂过「读回自证 + 3 秒点击回执」的实测读数（宿主/面板/首行/搜索/捕手），
+    --   真机确认能压过地图之后**按用户要求清掉刷屏**（原话：「功能正常了.可以将调试信息清理了.」）——
+    --   点一次就刷一行带层级细节的聊天、还把图标那行字顶成回执，属**常态不该有的噪声**。
+    --   ★读数本身**没删**：它是本项目「写成功 ≠ 生效」的判据口，走**按需**的 `/eh go 层级`
+    --     （同一份实现 `EVAL_DD_DIAG`：宿主 + 面板/首行/搜索/捕手的实际 strata/level），要查时敲命令即可。
     dsLogAlways("地图标注图标：已打开下拉（" .. tostring(table.getn(m.items)) .. " 行；点面板外任意位置关闭）")
+    dsMapIconLabel()
   end)
   pcall(b.Hide, b)
   dsMapIcon.fr = b

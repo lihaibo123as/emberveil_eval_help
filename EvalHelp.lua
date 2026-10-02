@@ -2318,7 +2318,12 @@ local function cfgBuild()
   close:SetScript("OnClick", function() root:Hide() end)
 
   cfgWin.root = root
-  root:SetScript("OnHide", function() EVAL_DD_HIDE() end) -- 关窗收起下拉（1.19.0）
+  root:SetScript("OnHide", function()
+    EVAL_DD_HIDE() -- 关窗收起下拉（1.19.0）
+    -- ★★★1.75.60aa：关窗 = 第④页不再「在用」⇒ 让 DataSearch 的节拍帧按需**真摘**（这一步覆盖
+    --   所有关窗路径：关闭按钮 / `/eh cfg` 切换 / 别的代码 `root:Hide()` 都会走到 OnHide）。
+    if type(EVAL_DS_PAGE_HOT) == "function" then pcall(EVAL_DS_PAGE_HOT, false) end
+  end)
   cfgWin.refresh = function() for _, r in ipairs(refreshes) do pcall(r) end end
   if type(EVAL_TB_BUILD) == "function" then EVAL_TB_BUILD(root, pages[3], refreshes) end -- 工具箱 Tab（1.68.0 Toolbox.lua 独立载入）
   if type(EVAL_DS_BUILD) == "function" then EVAL_DS_BUILD(root, pages[4], refreshes) end -- 任务线 & 装备 Tab（DataSearch.lua 独立载入，基于 UnrealQuest 数据库）
@@ -3065,6 +3070,18 @@ function EVAL_HELP_CFG_SETTAB(idx)
   if idx == 5 and type(EVAL_IB_REFRESH) == "function" then pcall(EVAL_IB_REFRESH) end -- 图标库
   if idx == 6 and type(EVAL_PH_REFRESH) == "function" then pcall(EVAL_PH_REFRESH) end -- 抓宠帮手
   if idx == 7 and type(EVAL_SUBADDONS_REFRESH) == "function" then pcall(EVAL_SUBADDONS_REFRESH) end -- ★子插件（调试类）
+  -- ★★★1.75.60aa（用户：「DataSearch 的节拍器只在这个 Tab 才启用，非当前 tab 别生效」）：
+  --   把「第④页是不是真的在用」告诉 DataSearch —— 它的节拍帧据此**真挂/真摘**（`dsTickSync`）。
+  --   ★必须带**可见性**：`cfgBuild` 里那次 `SETTAB` 是建窗时调的（窗还没 Show）⇒ 不判可见就会
+  --     把 pageHot 误置 true，关着窗也一直挂着节拍（用户要的正好相反）。
+  if type(EVAL_DS_PAGE_HOT) == "function" then
+    local vis = false
+    if cfgWin.root then
+      local okv, v = pcall(cfgWin.root.IsVisible, cfgWin.root)
+      vis = (okv and v == true)
+    end
+    pcall(EVAL_DS_PAGE_HOT, (idx == 4) and vis)
+  end
 end
 
 -- ★1.71.2 测试钩子：配置窗底部导航按钮（模版/分享/接收）的几何。
@@ -3157,6 +3174,11 @@ function EVAL_HELP_CFG_TOGGLE()
     --   方案列表的品阶/图标/配色（SETTAB 只在 Tab=2 时刷；这里补一次，保证切过去的瞬间就是最新的）。
     if type(EVAL_WAR_TAB_REFRESH) == "function" then pcall(EVAL_WAR_TAB_REFRESH) end
     win:Show()
+    -- ★★★1.75.60aa：上面那次 `SETTAB` 是在 `Show()` **之前**调的（那时窗还不可见 ⇒ 它按可见性把
+    --   pageHot 判成 false）⇒ 开窗后必须**按当前 Tab 再喊一次**，否则「开在④页」这一路节拍挂不上。
+    if type(EVAL_DS_PAGE_HOT) == "function" then
+      pcall(EVAL_DS_PAGE_HOT, (cfgWin.tab or c().cfgTab or 1) == 4)
+    end
   end
 end
 
@@ -4479,9 +4501,23 @@ end)
 sb:SetScript("OnEscapePressed", function() EVAL_DD_HIDE() end)
 end
 
+-- ★★★1.75.60ab（用户：「直接参考子插件 图层调试 是如何将层显示在地图层上的，直接把标注下拉也按这种方式打开」）：
+--   **宿主必须是 WorldFrame，不能是 UIParent** —— 这是本项目在案的**真根因**（子插件 `EH_DebugBox.lua:3261`
+--   原话：「★★用户要求「面板要在地图上层显示」：根因是本项目著名坑 —— **开全屏地图会隐藏 UIParent**（1.70.39 记录在案），
+--   挂在 UIParent 下的面板会跟着被藏。→ 改挂 WorldFrame（开图时不隐藏、关图后也一直在），strata 抬到 FULLSCREEN_DIALOG」）。
+--   ⇒ ★**父帧被隐藏时子帧一个像素都不渲染** —— 挂 UIParent 的下拉在开图时**根本没画出来**，
+--     这时候把 strata 抬到多高都没用（抬 strata 只能解决「画出来了但被盖住」）。子插件面板正是靠改挂 WorldFrame
+--     + `FULLSCREEN_DIALOG`（面板 500 / 它自己的下拉 800）才真正显示在地图上层（用户截图实证）。
+--   ★读不到 WorldFrame 就退回 UIParent（老行为，绝不因为拿不到宿主而整条下拉消失）。
+local function ddHost()
+  local wf = rawget(_G, "WorldFrame")
+  if type(wf) == "table" or type(wf) == "userdata" then return wf end
+  return UIParent
+end
+
 local function DD_BUILD()
   if ddUI.root then return end
-  local dd = CreateFrame("Frame", "EVAL_HELP_DD", UIParent)
+  local dd = CreateFrame("Frame", "EVAL_HELP_DD", ddHost())
   pcall(dd.SetFrameStrata, dd, "DIALOG")
   pcall(dd.SetFrameLevel, dd, 250)
   pcall(dd.EnableMouse, dd, true)
@@ -4609,8 +4645,10 @@ local function DD_BUILD()
   --   压在 DD **下面**、其余界面**上面**（同 strata、层级 = DD−5，见 EVAL_DD_OPEN）
   --   ⇒ 菜单打开期间点任何地方都先落到它身上 = 关菜单（标准菜单语义）。
   --   ★它是**菜单期间**才显示（EVAL_DD_HIDE 一并收起），不会常驻吃点击。
-  local cat = CreateFrame("Button", "EVAL_HELP_DD_CATCH", UIParent)
-  pcall(cat.SetAllPoints, cat, UIParent)
+  --   ★★★1.75.60ab：**捕手也挂 WorldFrame**（同 DD_BUILD 的 `ddHost()`）—— 挂 UIParent 的话开图时它一样
+  --     不渲染 ⇒ 菜单打开期间点外面**关不掉**（子插件面板改挂 WorldFrame 的同一条理由）。
+  local cat = CreateFrame("Button", "EVAL_HELP_DD_CATCH", ddHost())
+  pcall(cat.SetAllPoints, cat, ddHost())
   pcall(cat.EnableMouse, cat, true)
   if type(cat.RegisterForClicks) == "function" then
     pcall(cat.RegisterForClicks, cat, "LeftButtonUp", "RightButtonUp")
@@ -4924,6 +4962,35 @@ end
 -- anchorBtn 下方展开 items 列表；onPick(序号) 回调
 -- opts.multi=true 多选模式（1.26.0）：点按切换选中（√ 金标）不关面板，onPick(序号, 是否选中) 逐项回调；
 -- opts.selected = { [序号]=true } 初始选中集（面板重开时重建传入）。收起走 EVAL_DD_HIDE()/宿主窗 OnHide。
+-- ★★★2026-10-02 **下拉实际层级的读值口**（活口：地图标注入口的「读回自证」与 `/eh go 层级` 体检共用这一份）。
+--   为什么必需：`SetFrameStrata` / `SetFrameLevel` 全程 pcall —— **名字不被接受**（老客户端没有这个档）
+--   与**层级不够**（同 strata 下被别的件压住）**两种情况都完全静默** ⇒ 「弹窗压在下面看不见」这类报障，
+--   只看「我请求了 FULLSCREEN_DIALOG/840」永远判不出来，必须读**实际**值（本项目「写成功 ≠ 生效」纪律）。
+--   ★★★1.75.60ab 补 **宿主**（`父=…`）：真根因不是 strata 而是**父帧被隐藏**（开全屏地图会隐藏 UIParent，
+--     子插件 `EH_DebugBox.lua:3261` 在案）⇒ 读数里必须能一眼看出「它挂在哪」；挂 UIParent = 开图必不显示。
+--   一次摊开：宿主 / 面板 / 第一行 / 搜索框 / 全屏捕手（行内贴图·文字是区域，跟着行走，不必单列）。
+function EVAL_DD_DIAG()
+  local function z(o)
+    if o == nil then return "不在" end
+    local s, l = "?", "?"
+    if type(o.GetFrameStrata) == "function" then local ok, v = pcall(o.GetFrameStrata, o) if ok then s = tostring(v) end end
+    if type(o.GetFrameLevel) == "function" then local ok, v = pcall(o.GetFrameLevel, o) if ok then l = tostring(v) end end
+    return s .. "/" .. l
+  end
+  local row = (type(ddUI.rows) == "table") and ddUI.rows[1] or nil
+  -- ★宿主名（真根因那一格）：挂 UIParent = **开全屏地图时整条下拉不渲染**（父帧被隐藏），必须一眼看得出来。
+  local pn = "?"
+  if ddUI.root ~= nil and type(ddUI.root.GetParent) == "function" then
+    local okp, p = pcall(ddUI.root.GetParent, ddUI.root)
+    if okp and p ~= nil and type(p.GetName) == "function" then
+      local okn, nm = pcall(p.GetName, p)
+      if okn and nm ~= nil then pn = tostring(nm) end
+    end
+  end
+  return string.format("宿主=%s 面板=%s 首行=%s 搜索=%s 捕手=%s",
+    pn, z(ddUI.root), z(row and row.btn), z(ddUI.search), z(ddUI.catch))
+end
+
 function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
   -- ★1.75.12 防御（真机红字事故的兜底）：条目表必须是真表 —— 调用方给 nil 时**静默不开**，
   --   而不是让 DD_FILTER 里 `getn(nil)` 把整屏糊上错误框（根因在调用方，见 QUEST PANEL CHECK 的静态守卫）。
@@ -4943,13 +5010,30 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
   --   `SetFrameLevel` 只抬**面板自己**（背景是它的纹理 ⇒ 跟着上去），而**行是独立帧**、保留构建时的层级
   --   ⇒ 面板背景反而盖住了自己的行。**层级是绝对值、子件不会跟着父件走**（与内层缩放那轮同一个坑）。
   --   ⇒ 父件抬完，**子件一起抬**：行 = wantLevel+10+i（文本/图标是行的子件，自然跟着），搜索框再高一点。
+  -- ★★★2026-10-02（用户：「地图标注->左键点这里选类别->**点击弹窗不能再地图上层显示**」）：
+  --   **行与「行内独立帧」也要各自 `SetFrameStrata`** —— strata **先比**，level 再高也翻不过去；
+  --   只抬 level 时父件上去了、行仍留在建帧时的 `DIALOG` ⇒ 表现是「面板背景压在地图上、**一行字都看不见**」
+  --   （与 1.75.6 那次「只剩一个黑框」同型，只是成因从 level 变成了 strata）。
+  --   ★不传 `opts.strata` 时 wantStrata == "DIALOG" == 建帧时的档 ⇒ **老行为一个字节不变**（配置窗那些菜单不受影响）。
+  --   ★行内的贴图/文字是**区域**（region），跟着**所属帧**的 strata 走 ⇒ 只需给「行」与「独立帧」各设一次。
   if type(ddUI.rows) == "table" then
     for i = 1, table.getn(ddUI.rows) do
-      local rb = ddUI.rows[i] and ddUI.rows[i].btn
-      if rb then pcall(rb.SetFrameLevel, rb, wantLevel + 10 + i) end
+      local rc = ddUI.rows[i]
+      local rb = rc and rc.btn
+      if rb then
+        pcall(rb.SetFrameStrata, rb, wantStrata)
+        pcall(rb.SetFrameLevel, rb, wantLevel + 10 + i)
+        -- 行内那个独立的 ✕ 删除钮（1.75.59b）是**独立帧**，同样不吃父帧的 strata/level
+        if rc ~= nil and rc.xDel ~= nil and type(rc.xDel.SetFrameStrata) == "function" then
+          pcall(rc.xDel.SetFrameStrata, rc.xDel, wantStrata)
+        end
+      end
     end
   end
-  if ddUI.search then pcall(ddUI.search.SetFrameLevel, ddUI.search, wantLevel + 40) end
+  if ddUI.search then
+    pcall(ddUI.search.SetFrameStrata, ddUI.search, wantStrata)
+    pcall(ddUI.search.SetFrameLevel, ddUI.search, wantLevel + 40)
+  end
   if ddUI.searchBg then pcall(ddUI.searchBg.SetDrawLayer, ddUI.searchBg, "BACKGROUND") end
   -- ★1.75.6 全屏 click-catcher（点面板外任意位置 = 关菜单）：压在 DD **下面**、其余界面**上面**
   --   ⇒ 同 strata、层级 = DD − 5（太低会被别的窗口压住吃不到点击，太高又会盖住菜单本身）。
@@ -7793,6 +7877,11 @@ if type(SlashCmdList) == "table" then
       prRun("SHPROBE", msg)
     elseif msg == "go 框体探针" or msg == "go frames" or msg == "go 被动层探针" or msg == "go 动作条探针" then
       prRun("FRAMES", msg)
+    elseif msg == "go 层级" or msg == "go strata" or string.find(msg or "", "^go 层级%s") == 1 then
+      -- ★★★1.75.60s 图层定位探针（只读）：`/eh go 层级` = 光标下的帧 + 父链 + 本插件各窗 vs 地图框的层级对照；
+      --   `/eh go 层级 <帧名>` = 直接查具名帧（回答「谁盖住了谁 / 怎么放到最顶层」）。命令体在 tools/Probes.lua。
+      --   ★别名 `go strata` 全项目唯一（`GO ALIAS UNIQUE CHECK` 那条纪律）。
+      prRun("LAYER", msg)
     elseif msg == "go 框拖拽探针" or msg == "go dftargets" or string.find(msg or "", "^go 框拖拽探针%s") == 1 then
       -- ★★★1.75.36d 图层拖拽**逐目标**读数（勾选/解析/柄/记录 一行一个目标）⇒ 逐项排查「改了不生效」。
       --   ★别名 `go dftargets` 是全项目唯一的（工具探针别名不许两家共用，`GO ALIAS UNIQUE CHECK` 那条纪律）。
