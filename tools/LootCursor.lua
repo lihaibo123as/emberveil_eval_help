@@ -2,8 +2,14 @@
 --
 -- 需求（用户原话，三次确认）：
 --   ①「拾取框物品能否重叠在当前鼠标位置方便快速点击？」→ 调研后定**方案 A：搬整个拾取窗**（不重建 UI）；
---   ②「默认吸附一次（开关可切跟随）+ 加品质色角标」；
+--   ②「默认吸附一次（开关可切跟随）+ 加品质色描边」；
 --   ③「每次点击自动换下一个物品 · **不用等点击之后是否拾取成功**」← 本文件就是实现它。
+--
+-- ★★★ 1.75.63 改版（用户：「装备右下角小方块标识装备稀有度的**换一种方式.直接对装备外框进行稀有度描边**,
+--   参考图片内」+「**只对普通以上的稀有度染色.普通灰色这种白的的不需要高亮**」）：品质标识由「格子右下角一块
+--   9×9 方块」改成**沿整格外框描一圈品质色**（四条边各一条，见 `lcMarkNew`），且**只描「优秀及以上」**
+--   （`LC_EDGE_MIN_Q` = 2；白装/灰装不描，金币金色例外）—— 与客户端自带的品质边框视觉一致（参考图那圈绿框）。
+--   配置键仍是 `marks`（存档兼容），界面/命令文案改叫「品质描边」（旧命令词 `角标` / `marks` 继续认，别删）。
 --
 -- ★★★ 真机实测事实（1.74.34-39 探针读数）：
 --   · 玩家看到的那扇窗**就是** `LootFrame`（探针「光标帧」比过对象身份）；`LootButton1..4` 类型 = `LootButton`、
@@ -12,7 +18,7 @@
 --   · `OnClick` 被原生处理体占（`LootFrameItem_OnClick(arg1)`）、`OnEnter/OnLeave` 被原生 tooltip 占，
 --     **`OnMouseDown`/`OnMouseUp` 是空槽**；
 --   · `GroupLootFrame1..4` 挂在 **WorldFrame**（不在 LootFrame 下）⇒ 搬窗不会连带 roll 框；
---   · 自建纹理贴得上（读回 `Interface\Buttons\WHITE8X8`）⇒ 品质角标可行；
+--   · 自建纹理贴得上（读回 `Interface\Buttons\WHITE8X8`）⇒ 品质描边可行；
 --   · `UIParent` = 1371.79×768、有效缩放 1.000（光标物理像素 == UI 坐标；仍按配方除缩放，兼容其它档）。
 --
 -- ★★★ 为什么挂 `OnClick`、**不是** `OnMouseDown`（本模块最关键的一条判断，别再改回去）：
@@ -34,7 +40,7 @@
 --   ⇒ 它天然兼容「压实」与「不压实」两种客户端（只是窗要不要搬不同）。
 --
 -- ★安全契约（关掉 = 一个动作都不做）：总开关闸在**所有探测/读写之前**；关掉那一刻
---   ① 摘掉 4 个 OnClick 包装（按身份复原）② 收起品质角标 ③ 把窗按**开窗那一刻**抓到的原位放回去（读回自证）
+--   ① 摘掉 4 个 OnClick 包装（按身份复原）② 收起品质描边 ③ 把窗按**开窗那一刻**抓到的原位放回去（读回自证）
 --   ④ 注销事件 + 摘掉 OnUpdate（绝不常驻 ticking）。
 --
 -- 依赖的全局桥（只在调用时读，载入期不读 ⇒ 与 toc 顺序解耦）：
@@ -52,7 +58,7 @@ local LC = {
   before = nil,       -- 点击瞬间的槽位名表（自证压实用的对照）
   lastClickSlot = nil,
   hold = nil,         -- 有界重申窗口 { until = 时刻, x = 左, y = 下 }
-  marks = {},         -- [i] = 品质角标纹理（懒建、复用）
+  marks = {},         -- [i] = 品质描边的 4 条边纹理 {上,下,左,右}（懒建、复用；见 lcMarkNew）
   reasserts = 0,      -- 被客户端摆回去、我们重申的次数（判据：>0 ⇒ 这客户端会抢位置）
   repairs = 0,        -- 尺寸被撑坏、我们修回来的次数
   normalized = 0,     -- 开窗时把「我们自己的锚点」清掉、还原成客户端锚点形态的次数
@@ -71,7 +77,13 @@ local LC_HOLD_SEC = 0.5      -- 搬完窗后的**有界**重申窗口（客户�
 local LC_EMPTY_SEC = 0.6     -- 开窗那一拍读不到槽位时的**有界**重试窗口（读到就贴，过了如实说一次）
 local LC_FOLLOW_GAP = 0.15   -- 跟随档节拍（只在窗开着时跑）
 local LC_FOLLOW_MIN = 4      -- 跟随档最小响应位移（小抖动不搬，避免鼠标下swap）
-local LC_MARK_W = 9          -- 品质角标边长
+local LC_EDGE_PX = 2         -- 品质描边粗细（逻辑像素；**只改这一个数**就能调粗细）
+local LC_EDGE_INSET = 0      -- 描边相对格子边缘的内缩（0 = 正贴格子外框，和客户端自带品质边框同一圈）
+-- ★★★描边只给**优秀及以上**（用户 1.75.63：「**只对普通以上的稀有度染色.普通灰色这种白的的不需要高亮**」）：
+--   品质序号 0=粗糙(灰) / 1=普通(白) / 2=优秀(绿) / 3=精良(蓝) / 4=史诗(紫) / 5=传说(橙)
+--   ⇒ `< LC_EDGE_MIN_Q` 一律不描（白装/灰装满地都是，描了等于把「值得捡的」淹没在噪声里）。
+--   ★**金币例外**：那不是稀有度档（`quality` 也是 0），照旧金色高亮。
+local LC_EDGE_MIN_Q = 2
 local LC_PITCH_FALLBACK = 41 -- 只作兜底：按钮间距**优先现算**（真机实测 41）
 -- ★帧的**标称尺寸**（真机探针实测 256×256；开窗/空窗都一样 —— 拾取窗是固定尺寸，不随件数变）
 --   只在「抓到的尺寸明显被撑坏」时当兜底用（见 lcSizeBad / lcRepair）
@@ -439,44 +451,93 @@ local function lcFollowStep()
   end
 end
 
--- ===== 品质角标 =====
--- ★贴图口必须**读回自证**（本项目判据：贴图静默失败是常态）⇒ 每轮记「贴上几块 / 读回为空几块」
+-- ===== 品质描边（1.75.63：由「右下角一块方块」改成**沿整格外框描一圈品质色**）=====
+-- ★四条边各一块纯色纹理（`WHITE8X8` + `SetVertexColor`）：上/下用**两端锚点**拉满宽、左/右拉满高，
+--   厚度由 `LC_EDGE_PX` 定 ⇒ 合起来就是「这一格被品质色描了边」。★**白装/灰装不描**（`LC_EDGE_MIN_Q`）。
+-- ★贴图口必须**读回自证**（本项目判据：贴图静默失败是常态）⇒ 每轮记「贴上几格 / 读回为空几格」。
+-- ★只改粗细/内缩就改那两个常量，**别在别处硬写数值**。
+local function lcMarkNew(b, side)
+  if type(b.CreateTexture) ~= "function" then return nil end
+  local ok, t = pcall(b.CreateTexture, b, nil, "OVERLAY")
+  if not (ok and t) then return nil end
+  pcall(t.SetTexture, t, "Interface\\Buttons\\WHITE8X8")
+  if type(t.SetDrawLayer) == "function" then pcall(t.SetDrawLayer, t, "OVERLAY", 7) end
+  local e, i = LC_EDGE_PX, LC_EDGE_INSET
+  if side == 1 then            -- 上边
+    pcall(t.SetPoint, t, "TOPLEFT", b, "TOPLEFT", i, -i)
+    pcall(t.SetPoint, t, "TOPRIGHT", b, "TOPRIGHT", -i, -i)
+    pcall(t.SetHeight, t, e)
+  elseif side == 2 then        -- 下边
+    pcall(t.SetPoint, t, "BOTTOMLEFT", b, "BOTTOMLEFT", i, i)
+    pcall(t.SetPoint, t, "BOTTOMRIGHT", b, "BOTTOMRIGHT", -i, i)
+    pcall(t.SetHeight, t, e)
+  elseif side == 3 then        -- 左边
+    pcall(t.SetPoint, t, "TOPLEFT", b, "TOPLEFT", i, -i)
+    pcall(t.SetPoint, t, "BOTTOMLEFT", b, "BOTTOMLEFT", i, i)
+    pcall(t.SetWidth, t, e)
+  else                         -- 右边
+    pcall(t.SetPoint, t, "TOPRIGHT", b, "TOPRIGHT", -i, -i)
+    pcall(t.SetPoint, t, "BOTTOMRIGHT", b, "BOTTOMRIGHT", -i, i)
+    pcall(t.SetWidth, t, e)
+  end
+  pcall(t.Hide, t)
+  return t
+end
+
+-- 懒建 + 复用（一条边建不出来就**整格放弃**：宁可不画，也不画半圈）
+local function lcMarkEnsure(b, i)
+  local g = LC.marks[i]
+  if type(g) == "table" then return g end
+  local t = {}
+  for side = 1, 4 do
+    t[side] = lcMarkNew(b, side)
+    if not t[side] then return nil end
+  end
+  LC.marks[i] = t
+  return t
+end
+
+local function lcMarkHide(g)
+  if type(g) ~= "table" then return end
+  for k = 1, table.getn(g) do
+    local t = g[k]
+    if t then pcall(t.Hide, t) end
+  end
+end
+
 local function lcMarksUpdate()
   local on = lcMarksOn() and EVAL_LC_ENABLED()
   local shown, blank = 0, 0
   for i = 1, lcNumButtons() do
     local b = lcBtn(i)
     if b then
-      local t = LC.marks[i]
       if not on then
-        if t then pcall(t.Hide, t) end
+        lcMarkHide(LC.marks[i])
       else
-        if not t and type(b.CreateTexture) == "function" then
-          local ok, tex = pcall(b.CreateTexture, b, nil, "OVERLAY")
-          if ok and tex then
-            t = tex
-            LC.marks[i] = t
-            pcall(t.SetTexture, t, "Interface\\Buttons\\WHITE8X8")
-            if type(t.SetDrawLayer) == "function" then pcall(t.SetDrawLayer, t, "OVERLAY", 7) end
-            pcall(t.SetWidth, t, LC_MARK_W)
-            pcall(t.SetHeight, t, LC_MARK_W)
-            pcall(t.SetPoint, t, "BOTTOMRIGHT", b, "BOTTOMRIGHT", -1, 1)
+        local g = lcMarkEnsure(b, i)
+        local s = nil
+        if g then s = lcSlotInfo(i) end
+        -- ★★★品质门槛（用户：「只对普通以上的稀有度染色.普通灰色这种白的的不需要高亮」）：
+        --   白装/灰装不描；**金币例外**（`s.coin` 永远金色 —— 它不是稀有度档）
+        local q = s and (tonumber(s.quality) or 0) or 0
+        local want = s and (s.coin or q >= LC_EDGE_MIN_Q) or false
+        if not g then
+          blank = blank + 1                     -- 建不出纹理：如实计入（下一轮还会再试）
+        elseif want then
+          local c = s.coin and LC_COIN_COLOR or (LC_QCOLOR[s.quality + 1] or LC_QCOLOR[1])
+          for k = 1, table.getn(g) do
+            pcall(g[k].SetVertexColor, g[k], c[1], c[2], c[3], 1)
+            pcall(g[k].Show, g[k])
           end
-        end
-        if t then
-          local s = lcSlotInfo(i)
-          if s then
-            local c = s.coin and LC_COIN_COLOR or (LC_QCOLOR[s.quality + 1] or LC_QCOLOR[1])
-            pcall(t.SetVertexColor, t, c[1], c[2], c[3], 1)
-            pcall(t.Show, t)
-            shown = shown + 1
-            if type(t.GetTexture) == "function" then
-              local ok3, read = pcall(t.GetTexture, t)
-              if not (ok3 and read and tostring(read) ~= "") then blank = blank + 1 end
-            end
-          else
-            pcall(t.Hide, t)
+          shown = shown + 1
+          -- ★读回自证只看**上边那一条**：四条边是同一轮、同一个口建出来的，一条能读回就说明贴图口通
+          local t1 = g[1]
+          if type(t1.GetTexture) == "function" then
+            local ok3, read = pcall(t1.GetTexture, t1)
+            if not (ok3 and read and tostring(read) ~= "") then blank = blank + 1 end
           end
+        else
+          lcMarkHide(g)
         end
       end
     end
@@ -486,8 +547,7 @@ end
 
 local function lcMarksClear()
   for i = 1, table.getn(LC.marks) do
-    local t = LC.marks[i]
-    if t then pcall(t.Hide, t) end
+    lcMarkHide(LC.marks[i])
   end
 end
 
@@ -806,7 +866,7 @@ local function lcProbe()
     tostring(cx), tostring(cy), tostring(LC.slot),
     (LC.compact == nil) and "?" or tostring(LC.compact), lcCountWrapped(), LC.reasserts,
     LC.placed, LC.clicked, LC.failed))
-  lcSay(string.format("品质角标：贴上 %d 块 ｜ 贴图读回为空 %d 块（>0 ⇒ 这个客户端的贴图口要换写法）",
+  lcSay(string.format("品质描边：贴上 %d 格（每格 4 条边）｜ 贴图读回为空 %d 格（>0 ⇒ 这个客户端的贴图口要换写法）",
     tonumber(LC.marksShown) or 0, tonumber(LC.marksBlank) or 0))
   lcSay(string.format("搬窗手法：就地平移（绝不 ClearAllPoints）｜ 开窗清账 %d 次 ｜ 尺寸修复 %d 次 ｜ 重申 %d 次",
     LC.normalized or 0, LC.repairs or 0, LC.reasserts or 0))
@@ -867,7 +927,8 @@ function EVAL_LC_CMD(msg)
     lcSetFollow(v)
     lcSay(L("LC_STATE", EVAL_LC_ENABLED() and L("SH_ON") or L("SH_OFF"), v and L("SH_ON") or L("SH_OFF"),
       lcMarksOn() and L("SH_ON") or L("SH_OFF"), "-", LC.placed, LC.clicked))
-  elseif rest == "角标" or rest == "marks" then
+  elseif rest == "描边" or rest == "edge" or rest == "角标" or rest == "marks" then
+    -- ★1.75.63 起叫「品质描边」；旧词（角标 / marks）继续认 —— 用户记着旧名字，删掉就是「命令静默失效」
     local v = not lcMarksOn()
     lcSetMarks(v)
     lcMarksUpdate()

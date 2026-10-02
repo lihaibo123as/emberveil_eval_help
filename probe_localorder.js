@@ -168,7 +168,10 @@ if (require.main === module) {
     : ['EvalHelp.lua', 'Core.lua', 'Engine.lua', 'PetHelper.lua', 'Toolbox.lua', 'DataSearch.lua',
        'IconBrowser.lua', 'PetData.lua', 'quest/QuestChains.lua', 'Share.lua',
        'tools/Probes.lua', 'tools/RareWatch.lua', 'tools/EquipCompare.lua', 'tools/SimpleMap.lua',
-       'tools/WorldFog.lua'];
+       'tools/WorldFog.lua',
+       // ★1.75.63 补：`tools/LootCursor.lua` 一直漏在清单外（1.75.26 建模块时没加）
+       //   —— 它 990 多行、前向声明风险最高的一族（包装/节拍/纹理助手）⇒ 必须纳入。
+       'tools/LootCursor.lua'];
   let total = 0;
   for (const f of files) {
     const bad = scan(fs.readFileSync(f, 'utf8'));

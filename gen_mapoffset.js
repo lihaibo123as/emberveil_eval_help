@@ -26,8 +26,22 @@
 // ============================================================================
 const fs = require("fs"), path = require("path");
 const ROOT = __dirname;
-const OUT = path.join(ROOT, "MapOverlayOffset.lua");
-const BASE = path.join(ROOT, "MapOverlayData.lua");
+// ★★★1.75.61：`--jpg` = **实景图层**那套（`worldFogCfg.editJpg` → `MapOverlayOffsetJPG.lua`）。
+//   与彩图那套**完全对称**（合并累积 / 0 影 = 删除 / `--maps` 整图替换 / `--prune` / `--check` 全部同语义），
+//   只有四处不同：
+//     ① 产物 / 全局名：`MapOverlayOffsetJPG.lua` / `EVAL_MAP_OVERLAY_OFFSET_JPG`；
+//     ② 存档子树：`worldFogCfg.editJpg`（**每图一条记录**，不是 [区域][块号] 两层）；
+//     ③ 基线表：`MapOverlayJPGData.lua`（形态 `[图]={宽,高,偏移x,偏移y}`）；
+//     ④ 实景是**整区一张** ⇒ 记录按地图存（键 = 伪区域 `_JPG` + 块号 1），配对基准 = **整张矩形**（不走 256 拆分）。
+//   ⇒ 做法：把 `editJpg` **归一成与彩图同一个嵌套形态**（`{ 图: { "_JPG#1": rec } }`）再走同一条流水线，
+//     下面所有逻辑（0 影 / 孤儿 / 漂移 / 合并 / 发射）**一行都不用分叉**。
+const JPG = process.argv.includes("--jpg");
+const JPG_AREA = "_JPG";
+const OUT = path.join(ROOT, JPG ? "MapOverlayOffsetJPG.lua" : "MapOverlayOffset.lua");
+const BASE = path.join(ROOT, JPG ? "MapOverlayJPGData.lua" : "MapOverlayData.lua");
+const GLOBAL_NAME = JPG ? "EVAL_MAP_OVERLAY_OFFSET_JPG" : "EVAL_MAP_OVERLAY_OFFSET";
+const EDIT_KEY = JPG ? '"editJpg"' : '"edit"';
+const GEN_CMD = "node gen_mapoffset.js" + (JPG ? " --jpg" : "");
 const ACCOUNTS_DIR = path.join(process.env.LOCALAPPDATA, "Azeroth", "Saved", "Account");
 
 // ── 找存档（所有账号里 mtime 最新、且含 worldFogCfg 的那份；--account 可点名账号目录）──
@@ -131,11 +145,13 @@ function parseBase(src) {
   return out;
 }
 function tilesOf(w, h) {
+  if (JPG) return 1;                                // ★实景：整区一张（没有 256 拆分）
   if (!(w > 0) || !(h > 0)) return 0;
   return Math.ceil(w / 256) * Math.ceil(h / 256);   // 与 MDQ.tiles 同算法（每 256×256 一块）
 }
 // 第 t 块（1 基，行优先）的期望矩形 —— **与 tools/WorldFog.lua 的 MDQ.expectRect 逐行同算法**
 function tileRect(b, t) {
+  if (JPG) return (Number(t) === 1) ? { x: b[2], y: b[3], w: b[0], h: b[1] } : null;   // ★实景 = 整张矩形
   const w = b[0], h = b[1], ox = b[2], oy = b[3];
   const nh = Math.ceil(w / 256), nv = Math.ceil(h / 256);
   if (!(t >= 1) || t > nh * nv) return null;
@@ -143,6 +159,32 @@ function tileRect(b, t) {
   let tw = (k < nh) ? 256 : (w % 256); if (tw === 0) tw = 256;
   let th = (j < nv) ? 256 : (h % 256); if (th === 0) th = 256;
   return { x: ox + 256 * (k - 1), y: oy + 256 * (j - 1), w: tw, h: th };
+}
+
+// ★★★1.75.61：**实景那两套解析器**（与上面彩图的两个配对；形态不同、纪律相同 = 深度/括号配平）
+//   ① `parseEditJpg`：存档 `editJpg` 是**一层**（`[图] = { ["x"]=…, ["y"]=… }`）⇒ 直接取每条记录；
+//   ② `parseBaseJpg`：基线表是**一层数字**（`[图] = { 1002, 668, 0, 0 }`）。
+function parseEditJpg(body) {
+  const out = {};
+  const re = /\[\s*"((?:[^"\\]|\\.)*)"\s*\]\s*=\s*\{/g;
+  for (const m of body.matchAll(re)) {
+    let a = m.index + m[0].length - 1, dd = 0, b = a;
+    for (; b < body.length; b++) { const ch = body[b]; if (ch === "{") dd++; else if (ch === "}") { dd--; if (dd === 0) { b++; break; } } }
+    const f = {};
+    for (const kv of body.slice(a, b).matchAll(/\[\s*"(\w+)"\s*\]\s*=\s*("(?:[^"\\]|\\.)*"|-?[\d.]+|true|false)/g)) {
+      f[kv[1]] = kv[2].replace(/^"|"$/g, "");
+    }
+    out[m[1].replace(/\\"/g, '"')] = f;
+  }
+  return out;
+}
+function parseBaseJpg(src) {
+  const out = {};
+  for (const m of src.matchAll(/\["((?:[^"\\]|\\.)*)"\]\s*=\s*\{([^}]*)\}/g)) {
+    const nums = m[2].split(",").map(v => Number(v.trim()));
+    if (nums.length >= 4 && nums.every(v => !Number.isNaN(v))) out[m[1]] = { [JPG_AREA]: nums };
+  }
+  return out;
 }
 
 // ── 解析**上一次导出的** MapOverlayOffset.lua（合并累积的旧库；自己发的格式，自己吃得回来）──
@@ -168,9 +210,21 @@ function parseOldOffset(src) {
 
 // ── 主流程 ──
 const buildTag = (saveText.match(/buildTag"?\s*\]?\s*=\s*"([^"]+)"/) || [])[1] || "?";
-const editBody = bodyOf(saveText, '"edit"');
-if (!editBody) { console.error("存档里没有 worldFogCfg.edit（还没拖过 ⇒ 没什么可导出的）"); process.exit(1); }
-const edit = parseEdit(editBody);
+const editBody = bodyOf(saveText, EDIT_KEY);
+if (!editBody) {
+  console.error(JPG ? "存档里没有 worldFogCfg.editJpg（实景图层还没拖过 ⇒ 没什么可导出的）"
+    : "存档里没有 worldFogCfg.edit（还没拖过 ⇒ 没什么可导出的）");
+  process.exit(1);
+}
+// ★★★1.75.61：实景那套**归一成与彩图同一个嵌套形态**（`{ 图: { "_JPG#1": rec } }`）⇒ 后面一条流水线通吃
+let edit;
+if (JPG) {
+  const flat = parseEditJpg(editBody);
+  edit = {};
+  for (const map of Object.keys(flat)) edit[map] = { [JPG_AREA + "#1"]: flat[map] };
+} else {
+  edit = parseEdit(editBody);
+}
 // ── --maps A,B：只同步这几张图（大小写不敏感）—— ★这几张图是**整图替换**（见 ②a：它们的旧库不铺底）──
 let mapsWanted = null;   // Set<小写图名>，或 null = 不过滤（全量合并累积）
 if (argMaps) {
@@ -188,7 +242,9 @@ if (argMaps) {
     + " —— 这几张图的旧库记录以存档**全量覆盖**；其余图的旧库记录原样保留）");
 }
 const baseSrc = fs.readFileSync(BASE, "utf8");
-const base = parseBase(baseSrc.slice(baseSrc.indexOf("EVAL_MAP_OVERLAY_DATA")));
+const base = JPG
+  ? parseBaseJpg(baseSrc.slice(baseSrc.indexOf("EVAL_MAP_OVERLAY_JPG_DATA")))
+  : parseBase(baseSrc.slice(baseSrc.indexOf("EVAL_MAP_OVERLAY_DATA")));
 
 const fmt = (v) => {
   const n = Number(v);
@@ -311,9 +367,16 @@ nKeep = nTot - nNew - nUpd;   // 合计里除去「本次新写/更新」的 = �
 // ③ 发射 Lua（形态与 MapOverlayData.lua 同风格；tab 缩进；排序确定 ⇒ git diff 干净）
 const mapNames = Object.keys(merged).sort((a, b) => a.localeCompare(b, "en"));
 const L = [];
-L.push("-- ★★★生成物（**勿手改**）—— 生成器：`node gen_mapoffset.js`");
-L.push("--   数据源：存档 `worldFogCfg.edit`（编辑模式逐块微调；存档 = " + savePath);
+L.push("-- ★★★生成物（**勿手改**）—— 生成器：" + GEN_CMD);
+L.push("--   数据源：存档 `worldFogCfg." + (JPG ? "editJpg" : "edit") + "`（编辑模式微调"
+  + (JPG ? "；**实景图层** = 整区一张，记录**按地图**存" : "；逐块") + "；存档 = " + savePath);
 L.push("--     ｜ 存档时间 = " + saveMtime.toLocaleString() + " ｜ buildTag = " + buildTag + "）");
+if (JPG) {
+  L.push("--   ★**实景图层专用**（`/ehm mapfit 图层 实景` / 工具箱 → 关闭世界迷雾 → [设置] → 图层：区域实景）：");
+  L.push("--     · 贴图 = `media\\WorldMapJpg\\<图>.jpg`（**不带扩展名**载入），**整区一张**铺在 `WorldMapDetailFrame` 上；");
+  L.push("--     · 基线 = `MapOverlayJPGData.lua`（帧空间 `{1002,668,0,0}`）⇒ **最终坐标 = 基线 + 本文件偏移量**；");
+  L.push("--     · 与彩图那套**分家**（那套在 `MapOverlayOffset.lua` / 存档 `worldFogCfg.edit`）⇒ 两套互不影响。");
+}
 L.push("--   ★**数据库语义**：全量导出 = **合并累积**（存档非零 = 写/更新 ｜ 存档显式 0 影 = 删除 ｜ 存档没有 = **保留**）");
 L.push("--     ★「0 影」= **位置与尺寸都为 0** 的记录；只调了宽高（dw/dh 非 0）的记录是**有效补偿**，不是删除指令");
 L.push("--     —— 烘完就清存档是正常动作，绝不清掉已烘的数据；全量镜像重建用 `node gen_mapoffset.js --prune`");
@@ -321,18 +384,21 @@ L.push("--   ★★**但 `--maps <图>` 点名的图 = 整图替换**（用户�
   + "直接指定区域数据覆盖」）：存档是这几张图的**全量真值**，旧库里不在存档里的记录**丢弃**；没点名的图照旧合并累积。");
 L.push("--     本次点名的图：" + (mapsWanted ? Object.keys(merged).filter(m => mapsWanted.has(m.toLowerCase())).join(" / ")
   + "（整图替换，丢弃旧记录 " + nDrop + " 条）" : "（无 —— 全量合并累积）"));
-L.push("--   形态：`EVAL_MAP_OVERLAY_OFFSET[地图文件名][区域名][块号] = { x=, y=, dw=, dh=, bx=, by=, bw=, bh= }`");
-L.push("--     · x, y = **表口径偏移量**（地图像素；正 x 右 / 正 y 下，与 MapOverlayData.lua 的 offsetX/offsetY 同符号）");
+L.push(JPG
+  ? "--   形态：`EVAL_MAP_OVERLAY_OFFSET_JPG[地图文件名][\"" + JPG_AREA + "\"][1] = { x=, y=, dw=, dh=, bx=, by=, bw=, bh= }`"
+  : "--   形态：`EVAL_MAP_OVERLAY_OFFSET[地图文件名][区域名][块号] = { x=, y=, dw=, dh=, bx=, by=, bw=, bh= }`");
+L.push("--     · x, y = **表口径偏移量**（地图像素；正 x 右 / 正 y 下，与 " + (JPG ? "MapOverlayJPGData.lua" : "MapOverlayData.lua") + " 的 offsetX/offsetY 同符号）");
 L.push("--     · dw, dh = **尺寸补偿**（表口径增量；最终块尺寸 = 基础表块尺寸 + dw/dh ⇒ 基础表重生也不影响；缺省 = 0）");
 L.push("--     · bx, by, bw, bh = 导出时该块在**基础表**里的值（配对基准 ⇒ 基础表重生时能判出「这条是按旧表调的」）");
-L.push("--   ★与 `MapOverlayData.lua` **配对使用**（消费方 = `tools/WorldFog.lua`）：");
-L.push("--       最终坐标 = MapOverlayData.lua 表值 + 本文件偏移量；");
-L.push("--       存档 `worldFogCfg.edit` 里同键的后续微调**优先**于本文件（清存档 ⇒ 回落到本文件基线）；");
-L.push("--       基础表里查不到 (区域,块号) 的条目**不生效**（孤儿补偿绝不硬加到别的块上）。");
+L.push("--   ★与 `" + (JPG ? "MapOverlayJPGData.lua" : "MapOverlayData.lua") + "` **配对使用**（消费方 = `tools/WorldFog.lua`）：");
+L.push("--       最终坐标 = " + (JPG ? "MapOverlayJPGData.lua 基线（整帧）" : "MapOverlayData.lua 表值") + " + 本文件偏移量；");
+L.push("--       存档 `worldFogCfg." + (JPG ? "editJpg" : "edit") + "` 里同键的后续微调**优先**于本文件（清存档 ⇒ 回落到本文件基线）；");
+L.push("--       " + (JPG ? "实景基线表里查不到这张图的条目**不生效**（孤儿补偿绝不硬加到别的图上）。"
+  : "基础表里查不到 (区域,块号) 的条目**不生效**（孤儿补偿绝不硬加到别的块上）。"));
 L.push("--   统计：地图 " + mapNames.length + " 张 ｜ 偏移量 " + nTot + " 条"
   + "（本次：新增 " + nNew + " ｜ 更新 " + nUpd + " ｜ 删除 " + nDel + " ｜ 保留 " + nKeep
   + (nDrop > 0 ? " ｜ 整图替换丢弃 " + nDrop : "") + "）");
-L.push("EVAL_MAP_OVERLAY_OFFSET = {");
+L.push(GLOBAL_NAME + " = {");
 for (const map of mapNames) {
   L.push('\t["' + map + '"] = {');
   for (const area of Object.keys(merged[map]).sort((a, b) => a.localeCompare(b, "en"))) {
@@ -371,4 +437,5 @@ if (warns.length > 0) {
   console.log("--- 校验警告（照发但点名；孤儿运行时**不生效**）---");
   for (const w of warns) console.log("  " + w);
 }
-console.log("下一步：把 MapOverlayOffset.lua 留在仓库（toc 已挂）⇒ 别人装插件就直接看到矫正后的贴图。");
+console.log("下一步：把 " + path.basename(OUT) + " 留在仓库（toc 已挂）⇒ 别人装插件就直接看到矫正后的"
+  + (JPG ? "**实景**贴图。" : "贴图。"));

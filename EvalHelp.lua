@@ -2,7 +2,11 @@
 --   通用一键宏（条件规则引擎）+ 案例模版 + 方案分享 + 状态日志 + 战斗信息UI + 配置窗口
 --   （配置窗内嵌 一键宏设置 / 工具箱 / 任务线 & 装备 / 图标库 / 抓宠帮手 / 子插件 六个 Tab）。
 --   ★版本号只有**两处**：本文件的 local VERSION 与 EvalHelp.toc 的 ## Version ——
---     由 test_engine.js 的 VERSION CHECK 守着（两侧必须一致）。
+--     **两侧必须一致**（★原由 test_engine.js 的 VERSION CHECK 守着，那个闸门随 `tests/` 一起删除了 ⇒
+--       1.75.61~64 四个版本**没人对账**：toc 走到 1.75.64 而这里停在 1.75.60，标题栏一直显示旧版本；
+--       ⇒ 判据已搬进 `tmp/swm_harness.js` 的 AUDIT：**VERSION == toc ## Version == MDQ.BUILD 三处一致**，
+--       ★1.75.65b 起还含**第三处** `tools\WorldFog.lua` 的 `MDQ.BUILD`（= `worldFogCfg.buildTag`，
+--       「客户端跑的是哪一份代码」的唯一记号）⇒ 改版本时**三处一起改**）。
 --     ★文件头**不再写版本号**：旧写法（「-- EvalHelp 1.70.44」）实际漂移了十几个版本都没人发现，
 --       因为源码检查只比对 local VERSION 与 toc —— 同一件事写三遍必然漂移。
 --   ★逐版本变更**不写在这里**：完整记录见 CHANGELOG.md 与 git log；设计与判据见 CLAUDE.md（记忆体）。
@@ -29,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.75.60"
+local VERSION = "1.75.70"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====

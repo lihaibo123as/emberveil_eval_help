@@ -119,7 +119,7 @@ local MDQ = {}
 --       「命令没跑成」与「跑的是旧版（那条命令在旧版里根本不存在）」—— 那时只看这个键就能立刻定性。
 --   它落在两个地方：① 载入期写进存档 `worldFogCfg.buildTag`（**只要 /reload 过就一定有**）；
 --   ② `/ehm mapfit 自检` 的落盘环表头与 `[1] 环境` 行（跟着那一次的读数一起存）。
-MDQ.BUILD = "1.75.60"
+MDQ.BUILD = "1.75.70"
 
 -- ★★★1.75.60b：**编辑模式里的两个视图开关**（用户：「编辑模式右侧增加原始贴图层的显示和隐藏,迷雾贴图层的显示和隐藏」）
 --   用途 = 逐块对位时的「对照看」：把**客户端自己的探索层**放出来、把我们画的迷雾层收起来 ——
@@ -271,7 +271,7 @@ end
 MDQ.srcKey = function(file)
   local s = MDQ.srcPick[file]
   if s ~= nil then return s end
-  local m = MDQ.areaOf(file)
+  local m = MDQ.artTbl(file)     -- ★1.75.64：**永远看彩图那份表**（结果按图名缓存 ⇒ 绝不被实景模式污染）
   local areas = {}
   if type(m) == "table" then for a in pairs(m) do table.insert(areas, a) end end
   table.sort(areas)
@@ -305,6 +305,79 @@ MDQ.srcOf = function(file)
   return "own"
 end
 
+-- ============================================================
+-- ★★★1.75.64：**图层类型（区域彩图 / 区域实景）** —— 用户原话：
+--   「工具箱->关闭世界迷雾->设置: 区域彩图,区域实景,单选,实景数据源载入由之前验证成功的 jpg 方式载入.\media\WorldMapJpg」
+--   · **区域彩图**（`MDQ.LAYER_ART`）= 现行那套：按 `MapOverlayData.lua` 逐区域/逐块贴
+--     `media\WorldMap\<图>\<区域><块>.blp`（游戏世界地图那张手绘图）。
+--   · **区域实景**（`MDQ.LAYER_JPG`，★1.75.65 起的**默认档**）= **整区一张** `media\WorldMapJpg\<图>.jpg`（地形实拍拼接）——
+--     载入写法 = **不带扩展名**（1.75.62 真机验证（当时的「贴图格式测试」工具已在 1.75.69 清理，结论见 CHANGELOG 1.75.62）：插件目录里的散装 JPG 能画）。
+--   ★真值 = `SM_CFG.layerMode`（"art" / "jpg"）；**只有显式 "art" 才是彩图** ⇒ 缺键/垃圾值一律实景
+--     （★1.75.64 时是反过来的：那时只有显式 "jpg" 才是实景 —— 用户 1.75.65 点名把默认档改成实景）。
+--   ★四条纪律（缺一条就会出「切换没生效 / 残留层压住新层 / 性能异常 / 数据串味」）：
+--     ① **切换走唯一写口 `MDQ.layerSet`**：先 `MDQ.release`（把这一路动过的三样全部交还）**再**换真值
+--        —— 顺序反了，上一套的几何会留在客户端池位上（用户看到的就是「切换了没反应」）。
+--     ② **切换要按「关断四件事」做**：资源回收（收自建层 + 还回复用池位原值 + 藏过的原生层全部 Show）·
+--        节拍停止（切完这一拍由 `beatSync` 按需重挂，**不新增常驻**）· 数据重置（编辑模式的会话态全部清零：
+--        选中集 `sel` / 逐块隐藏 `blkHide` / 悬停 `hoverIdx` / 闪光 `flashAt` / 图层池账 `slot`）·
+--        图层清理（两套的层不共存 —— 渲染收尾 `hideFrom` 天然收干净，切换那一刻先 `release` 一次）。
+--     ③ **实景层渲染优先级最高**：写进 **`OVERLAY`** 绘制层（彩图那批在 `ARTWORK`）⇒ **同组内遮盖其它层**；
+--        客户端池位的原绘制层随**原值账**还回（原值第 7 样，见 `origGrab` / `origRestore`）。
+--     ④ **两套的补偿数据分家**：彩图 → `worldFogCfg.edit` / `MapOverlayOffset.lua`；
+--        实景 → `worldFogCfg.editJpg` / `MapOverlayOffsetJPG.lua`。`editTbl`/`editFileTbl` 按模式**换根**
+--        ⇒ 编辑模式那一整族（拖拽/箭头/尺寸/列表/重置/体检）**一行不改**就跟着走
+--        —— 键形态仍是 `区域#块号`，实景的伪区域 = `MDQ.JPG_AREA`（`_JPG#1`）。
+MDQ.LAYER_ART, MDQ.LAYER_JPG = "art", "jpg"
+MDQ.JPG_AREA, MDQ.JPG_TILE = "_JPG", 1
+-- ★★★1.75.65（用户：「默认设置 开启世界迷雾->选中实景地图,关闭彩图」）：
+--   **默认档 = 区域实景** —— `worldFogCfg.layerMode` 为 nil（老存档 / 从没写过）⇒ **实景**；
+--   ★**用户显式选过彩图（`"art"`）⇒ 保持彩图**（白名单式判定：只有 `"art"` 算彩图，其余一律实景 ——
+--     绝不留「nil/垃圾值」这种半状态，也绝不用 `or` 顶改用户的选择）。
+--   ★载入期会把它**落成显式值**并**如实播报一次**（行为改变必须出声，见文件末尾清账块）。
+MDQ.layerMode = function()
+  local v = (type(SM_CFG) == "table") and SM_CFG.layerMode or nil
+  return (v == MDQ.LAYER_ART) and MDQ.LAYER_ART or MDQ.LAYER_JPG
+end
+MDQ.jpgMode = function() return MDQ.layerMode() == MDQ.LAYER_JPG end
+
+-- 实景基线表（生成物 `MapOverlayJPGData.lua`；懒读 + **大小写不敏感**，与 `MDQ.areaOf` 同口径）
+MDQ.jpgTbl = function()
+  local t = rawget(_G, "EVAL_MAP_OVERLAY_JPG_DATA")
+  if type(t) ~= "table" then return nil end
+  return t
+end
+-- 本图的实景基线记录（`{ 宽, 高, 偏移x, 偏移y }`，帧空间）；表里没有 ⇒ nil ⇒ **本图不接管**
+MDQ.jpgBase = function(file)
+  if type(file) ~= "string" or file == "" then return nil end
+  local t = MDQ.jpgTbl()
+  if t == nil then return nil end
+  local r = t[file]
+  if type(r) == "table" then return r, file end
+  local low = string.lower(file)
+  for k, v in pairs(t) do
+    if type(k) == "string" and type(v) == "table" and string.lower(k) == low then return v, k end
+  end
+  return nil
+end
+
+-- 实景贴图路径：**不带扩展名**（真机验证过的写法；插件目录里的散装 JPG）
+MDQ.jpgPfx = "Interface\\AddOns\\EvalHelp\\media\\WorldMapJpg\\"
+MDQ.jpgPath = function(file) return MDQ.jpgPfx .. tostring(file) end
+-- 实景贴图准入：**只有自带这一份**（没有第二来源可退）⇒ 探不到就**不接管**（本项目铁律：拿不到证据就一个字节都不碰）。
+--   ★`MDQ.probeTrust` 自带**负对照**（同目录同后缀的不可能文件）⇒ 判不出（nil）一律**放拦**（fail-open）。
+--   ★每图判一次并缓存（切换图层/换图都不重探）。
+MDQ.jpgSrc = {}
+MDQ.jpgSrcOf = function(file)
+  local c = MDQ.jpgSrc[file]
+  if c == true then return "own" end
+  if c == false then return "none" end
+  local p = MDQ.jpgPath(file)
+  local ok = MDQ.probeTrust(p)
+  if ok == true then MDQ.jpgSrc[file] = true return "own" end
+  if ok == false then MDQ.jpgSrc[file] = false return "none" end
+  return "own"    -- 判不出 ⇒ 放拦（绝不因为「判不出」把功能关死）
+end
+
 -- 实际写进 `SetTexture` 的路径（自带那份能用就用自带的 ⇒ 拷进 media 即自包含）
 --   ★1.75.60z：**没有版本前缀了**（分版本已清理）⇒ 自带那份一律 `MDQ.ownPfx`。
 MDQ.texPath = function(file, a, t)
@@ -318,9 +391,10 @@ end
 MDQ.texProbe = function()
   local out = {}
   local file, w, h = smMapInfo()
-  out[table.getn(out) + 1] = string.format("贴图体检：地图=%s（%sx%s）｜ 表里 %s ｜ 来源判定=%s",
+  out[table.getn(out) + 1] = string.format("贴图体检：地图=%s（%sx%s）｜ 图层类型=%s ｜ 彩图表里 %s ｜ 来源判定=%s",
     tostring(file), tostring(w), tostring(h),
-    (function() local m = MDQ.areaOf(tostring(file)); if type(m) ~= "table" then return "**没有这张图**" end
+    (MDQ.jpgMode() and "**区域实景**（本命令体检的是**彩图**那份贴图；实景看 `/ehm mapfit 图层`）" or "区域彩图"),
+    (function() local m = MDQ.artTbl(tostring(file)); if type(m) ~= "table" then return "**没有这张图**" end
       local n = 0 for _ in pairs(m) do n = n + 1 end return n .. " 区" end)(),
     tostring(MDQ.texSrc[tostring(file)] or "（还没判过）"))
   out[table.getn(out) + 1] = "　路径前缀：自带=" .. MDQ.ownPfx .. "　客户端=" .. MDQ.cliPfx
@@ -341,7 +415,7 @@ MDQ.texProbe = function()
     if (n or 0) > 6 then out[table.getn(out) + 1] = string.format("　…（另有 %d 条）", n - 6) end
   end
   -- ② 我们按表拼的两条路径（本图第一个区域的第一块）
-  local m = MDQ.areaOf(tostring(file))
+  local m = MDQ.artTbl(tostring(file))   -- ★1.75.64：体检的是**彩图**那份表（实景走 `/ehm mapfit 图层`）
   if type(m) ~= "table" then
     out[table.getn(out) + 1] = "② 表里没有这张图 ⇒ 本来就不渲染（客户端探索层保持原样）"
   else
@@ -379,19 +453,22 @@ MDQ.texProbe = function()
   return out
 end
 
--- 开关真值（唯一入口）：`SM_CFG.swmOverlay`（true = 开；nil/false = **关 = 默认**）。
+-- 开关真值（唯一入口）：`SM_CFG.swmOverlay`（**默认 = 开**；显式 false = 用户主动关过 = 关）。
 --   ★**落存档**（这是产品开关，与「只在本会话有效」的诊断档不同）；写入点只有两个：
---     `MDQ.fogSet`（工具箱勾选框 / 设置下拉 / 命令都走它）与载入期归一。
+--     `MDQ.fogSet`（工具箱这一行的勾选框 / 命令都走它。★1.75.65 起 **`[设置]` 下拉里不再登记它**）与载入期归一。
 MDQ.swm = function()
-  -- ★★★1.75.59c（用户：「默认以上两个都不勾选」+「不勾选原始地图,勾选才是开启功能,显示实际探索过的
-  --   自定义贴图功能」）：真值 = `SM_CFG.swmOverlay`，**默认关** —— 键为 nil ⇒ 关（**不物化、不顶改**）；
-  --   **显式 true 才是开**。旧版 1.75.52 的「默认开启全图」口径已按用户新要求作废（载入期会把 nil 落成
-  --   显式 false 并如实播报一次，见文件末尾的载入清账块）。
+  -- ★★★1.75.65（用户：「默认设置 开启世界迷雾->选中实景地图,关闭彩图」）：**默认开**。
+  --   读法仍是**只认显式 true**（`== true`）—— 载入期清账块会把 nil 落成**显式 true**（行为改变如实播报一次），
+  --   之后键永远存在 ⇒ **绝不在这里写 `or true`**（那会顶改用户显式关掉的选择，本项目在案的老雷）。
   return (type(SM_CFG) == "table") and SM_CFG.swmOverlay == true
 end
 
 -- 期望分块数（列×行）
+--   ★★★1.75.64：**实景模式恒为 1**（整区一张 JPG，没有按 256 的拆分）——
+--   这一条 + `expectRect` 的实景分支，就是「编辑模式那一整族在实景下自动只有一行」的全部代价：
+--   面板列表 / 拖拽柄 / 箭头微调 / 尺寸 / 配对体检 读的都是 `areaOf → tiles → expectRect` 这条链。
 MDQ.tiles = function(w, h)
+  if MDQ.jpgMode() then return 1 end
   local a, b = tonumber(w) or 0, tonumber(h) or 0
   if a <= 0 or b <= 0 then return 0 end
   return math.ceil(a / MDQ.TILE) * math.ceil(b / MDQ.TILE)
@@ -407,8 +484,16 @@ MDQ.fileDim = function(px)
 end
 
 -- 第 t 块（1 基，行优先）的**期望**像素几何：宽, 高, offsetX, offsetY（读不出 ⇒ nil）
+--   ★★★1.75.64：**实景分支 = 整区一张**（块 1 = 整张图的基线矩形，`{1002,668,0,0}` 那种）——
+--   ★`t = 1` 以外一律 nil（实景只有一块；调用方按 `MDQ.tiles` 的返回遍历，本来也只会问第 1 块）。
 MDQ.expectRect = function(rec, t)
   if type(rec) ~= "table" then return nil end
+  if MDQ.jpgMode() then
+    if (tonumber(t) or 1) ~= 1 then return nil end
+    local jw, jh, jx, jy = tonumber(rec[1]), tonumber(rec[2]), tonumber(rec[3]), tonumber(rec[4])
+    if not (jw and jh and jx and jy) then return nil end
+    return jw, jh, jx, jy
+  end
   local w, h, ox, oy = tonumber(rec[1]), tonumber(rec[2]), tonumber(rec[3]), tonumber(rec[4])
   if not (w and h and ox and oy) then return nil end
   local nh = math.max(1, math.ceil(w / MDQ.TILE))
@@ -592,7 +677,9 @@ end
 --   这里一次性收口：精确命中 → 退**逐个键不比大小写**（53 个键，命中后按图名缓存，不每拍扫表）。
 --   返回 `m（区域表）, 真键`；读不到 ⇒ nil。
 MDQ.areaCache = {}
-MDQ.areaOf = function(file)
+-- 彩图基表（**永远读艺术表**，与当前图层类型无关）—— 「问的是彩图那份贴图」的口必须走它：
+--   `MDQ.srcKey`（自带 .blp 的来源判定，结果按图名缓存 ⇒ 绝不能被实景模式污染）· `MDQ.texProbe`（贴图体检）。
+MDQ.artTbl = function(file)
   if type(file) ~= "string" or file == "" then return nil end
   local tbl = rawget(_G, "EVAL_MAP_OVERLAY_DATA")
   if type(tbl) ~= "table" then return nil end
@@ -612,6 +699,35 @@ MDQ.areaOf = function(file)
   end
   MDQ.areaCache[file] = false
   return nil
+end
+
+-- ★★★1.75.64：**本图的基表（按图层类型分派）** —— 全项目「本图有哪些层 / 每层多大在哪」的唯一入口。
+--   彩图 = `MDQ.artTbl`（`[区域][块]` 两层，按 256 拆块）；
+--   实景 = **现场合成的伪表** `{ [_JPG] = { 宽, 高, 偏移x, 偏移y } }`（一份数据、一个伪区域、一块）。
+--   ★为什么用「合成一张形态相同的表」而不是让每个调用点自己分支：编辑模式那一整族
+--     （面板列表 `editLines`/`panelSync` · 拖拽柄 `grabSyncAll`/`editBegin` · 箭头 `nudge`/`dragMembers` ·
+--      尺寸 `selSizeNow`/`sizeStep` · 配对体检 `editJoin` · 数量守护 `holdN`）读的都是
+--     `areaOf → tiles → expectRect` 这条链 ⇒ **换基表即换套**，一行调用点都不用改
+--     （本项目在案的教训：「按存储/数据格式分派的地方必须一次全改」，最容易漏的就是散在各处的读取点）。
+--   ★大小写不敏感与彩图同口径（`MDQ.jpgBase` 内部逐键比小写）。
+MDQ.areaOf = function(file)
+  if MDQ.jpgMode() then
+    if type(file) ~= "string" or file == "" then return nil end
+    local c = MDQ.jpgAreaCache
+    if c == nil then c = {} MDQ.jpgAreaCache = c end
+    local hit = c[file]
+    if hit ~= nil then
+      if hit == false then return nil end
+      return hit
+    end
+    local rec = MDQ.jpgBase(file)
+    if type(rec) ~= "table" then c[file] = false return nil end
+    local t = {}
+    t[MDQ.JPG_AREA] = rec
+    c[file] = t
+    return t, file
+  end
+  return MDQ.artTbl(file)
 end
 
 -- 只收**我们自己自建**的层（绝不碰客户端的）：表里没有这张图时用它 ——
@@ -817,6 +933,152 @@ MDQ.render = function(file, k, force)
   return n, nArea, true, full, why, nExist, (tonumber(MDQ.newN) or 0)
 end
 
+-- ============ ★★★1.75.64：**实景图层**（整区一张 JPG）的渲染 ============
+--   与彩图那套（`MDQ.render`）**共用同一份几何账**（`MDQ.slot[1]`）与**同一批收尾语义**
+--   （`hideFrom` 收多余池位 / 迷雾隐藏 / 逐块隐藏 / 统一透明度 / 柄与列表同步）
+--   —— 编辑模式那一整族读的就是这份账，两套算法各写一份坐标迟早会不一致（本项目在案的教训）。
+--   返回口径与 `MDQ.render` **逐字相同**：块数, 区域数, 表里有没有这张图, 是否渲完整, 原因, 客户端既有层数, 新加层数
+-- ★★★1.75.68：**屏幕矩形**（真屏幕像素，含全部缩放 —— `GetRight-GetLeft` / `GetTop-GetBottom`）。
+--   用途：判「实景贴图到底铺没铺满帧」。★为什么必须用它、不能用 `GetWidth` 比：
+--   本项目在案两条实测**互相冲突**（帧 `GetWidth` **含**父链缩放，如真机 `701.4 = 1002 × 0.7`；
+--   而纹理 `GetWidth` 报的是**写进去的逻辑值**）⇒ 两个读回值不许直接比，只有屏幕矩形是同一把尺子。
+--   读不到（老客户端 / 对象没建 / 地图关着报 0）⇒ 返回 nil，调用方**不许动手**。
+MDQ.scrBox = function(o)
+  if o == nil then return nil, nil end
+  local o1, l = pcall(o.GetLeft, o)
+  local o2, r = pcall(o.GetRight, o)
+  local o3, b = pcall(o.GetBottom, o)
+  local o4, t = pcall(o.GetTop, o)
+  if not (o1 and o2 and o3 and o4) then return nil, nil end
+  if type(l) ~= "number" or type(r) ~= "number" or type(b) ~= "number" or type(t) ~= "number" then return nil, nil end
+  return (r - l), (t - b)
+end
+-- 实景的**客户端倍率口径**（会话级，一次量准就固定用）：本项目对「`SetWidth` 是逻辑值还是屏幕值」
+--   在案两条实测互相冲突 ⇒ **不猜，写完当场量**（见 `MDQ.jpgRender` 里的自证块）：
+--   `MDQ.unitFit` = 让「贴图屏幕矩形 = 帧屏幕矩形」所需的额外倍数（1 = 基线原样即铺满）。
+MDQ.unitFit = nil
+-- ★实景几何 = **唯一写入口**（UV / 宽高 / 绘制层 / 锚点 / 显示 只此一处）：
+--   两个调用点 = 首次写入 + 「屏测自证后按测量值重写」⇒ 收成一处，避免同口径散成两份
+--   （本项目在案教训：同一段写几何的代码复制两份 ⇒ 变异锚点「不唯一」、改口径必漏一处）。
+MDQ.jpgPlace = function(tex, fr, fw, fh, fox, foy, k)
+  pcall(tex.SetTexCoord, tex, 0, 1, 0, 1)          -- ★**整张图**（不是 256 块，UV 铺满）
+  pcall(tex.SetWidth, tex, fw * k)
+  pcall(tex.SetHeight, tex, fh * k)
+  -- ★★★用户点名：「实景图层在渲染层显示优先级最高.遮盖其他同组层」——
+  --   彩图那批池位在 `ARTWORK`，实景写 **`OVERLAY`**（内容层之上）⇒ 同组内一定压住其它层。
+  --   原绘制层进原值账（第 7 样）⇒ 关开关/收层时 `origRestore` 连它一起还回。
+  pcall(tex.SetDrawLayer, tex, "OVERLAY")
+  pcall(tex.ClearAllPoints, tex)
+  pcall(tex.SetPoint, tex, "TOPLEFT", fr, "TOPLEFT", fox * k, -(foy * k))
+  pcall(tex.Show, tex)
+end
+MDQ.jpgRender = function(file, k, force)
+  k = tonumber(k) or 1
+  if k <= 0 then k = 1 end
+  -- ★已量过这个客户端的口径 ⇒ 从一开始就按它算，后续每拍都不会再写错一次
+  if MDQ.unitFit ~= nil then k = k * MDQ.unitFit end
+  local fr = _G["WorldMapDetailFrame"]
+  if not (type(fr) == "table" or type(fr) == "userdata") then
+    MDQ.lastRenderN = 0
+    return 0, 0, false, true, "没有 WorldMapDetailFrame", 0, 0
+  end
+  MDQ.newN = 0
+  MDQ.wroteObj = {}
+  MDQ.wroteN, MDQ.skipN, MDQ.offN = 0, 0, 0
+  MDQ.lastW, MDQ.lastH, MDQ.lastArea, MDQ.lastTex = nil, nil, nil, nil
+  MDQ.lastFw, MDQ.lastFh = nil, nil
+  local rec = MDQ.jpgBase(file)
+  if type(rec) ~= "table" then
+    -- ★与彩图那套同一条铁律：**表里没有这张图 ⇒ 只收我们自建的层**，客户端自己的探索层保持原样
+    MDQ.lastRenderN = 0
+    local hid = MDQ.hideOwnFrom(1)
+    if MDQ.grabHideAll then pcall(MDQ.grabHideAll, "本图没有实景数据") end
+    if MDQ.panelHide then pcall(MDQ.panelHide, "本图没有实景数据") end
+    return 0, 0, false, true,
+      ("实景表（MapOverlayJPGData.lua）里没有这张图 ⇒ 客户端自己的探索层**保持原样**（只收起我们自建的 "
+        .. tostring(hid) .. " 层）"), 0, 0
+  end
+  local ox, oy = tonumber(rec[3]) or 0, tonumber(rec[4]) or 0
+  local off = MDQ.editRec(file, MDQ.JPG_AREA, MDQ.JPG_TILE)     -- 存档 > 文件（`editTbl` 已按模式换根）
+  local fox, foy, used = MDQ.editFinal(ox, oy, off)
+  local fw, fh = MDQ.editSize(tonumber(rec[1]) or 0, tonumber(rec[2]) or 0, off)
+  if used then MDQ.offN = 1 end
+  local tex, how = MDQ.texAt(1)
+  if tex == nil then
+    MDQ.lastRenderN = 0
+    return 0, 0, true, false, ("建不出实景图层（" .. tostring(how or "create_failed") .. "）"), 0, 0
+  end
+  MDQ.wroteObj[tex] = true        -- ★「接管守护」的「不许藏」名单（本拍我们写的）
+  local sg = MDQ.slot[1]
+  -- ★写前比对（与彩图那套同口径：对象 + 图 + 伪区域/块号 + 倍率 + 显隐 + 最终几何）⇒ 稳态零写
+  local same = (not force) and sg ~= nil and sg.tex == tex and sg.shown == true and sg.k == k
+    and sg.file == file and sg.area == MDQ.JPG_AREA and sg.tile == MDQ.JPG_TILE
+    and sg.ox == fox and sg.oy == foy and sg.ow == fw and sg.oh == fh
+  if same then
+    MDQ.skipN = 1
+  else
+    -- ★复用客户端池位 ⇒ **写之前先把原值读下来**（贴图/UV/宽高/锚点/显隐/alpha/绘制层 七样）
+    if how == "existing" then pcall(MDQ.origGrab, 1, tex, "pool") end
+    pcall(tex.SetTexture, tex, MDQ.jpgPath(file))
+    MDQ.jpgPlace(tex, fr, fw, fh, fox, foy, k)      -- ★唯一写入口（UV/宽高/绘制层/锚点/显示）
+    -- ★★★1.75.68：**写完当场用屏幕矩形自证并校正倍率**（只量一次、只记一次；量不出/不合常理 ⇒ 一个字节都不动）
+    --   症状 = 用户报「实景与地图**缩放和位置**对不上」：若客户端把 `SetWidth` 当逻辑值，
+    --   写 `基线 × 外框缩放(0.7)` 就只铺了帧的 70% ⇒ 实景缩在左上角。
+    --   判据 = 贴图屏幕宽 ÷ 帧屏幕宽：≈1 铺满；≈0.7 说明多乘了一次 ⇒ 把 k 乘上这个比值重写一次。
+    if MDQ.unitFit == nil then
+      local fsw = MDQ.scrBox(fr)
+      local tsw = MDQ.scrBox(tex)
+      if (fsw ~= nil) and (tsw ~= nil) and fsw > 1 and tsw > 1 then
+        local fit = fsw / tsw
+        if fit > 0.25 and fit < 4 then
+          if (fit > 1.03) or (fit < 0.97) then
+            MDQ.unitFit = fit
+            k = k * fit
+            MDQ.jpgPlace(tex, fr, fw, fh, fox, foy, k)   -- 按测量值重写一次（同一写入口）
+            MDQ.fitSay = string.format("世界迷雾·实景倍率：屏幕实测「贴图/帧 = %.3f」⇒ 已校正 ×%.4f（k 现在 = %.4f）"
+              .. "，本图铺满帧", fit, fit, k)
+          else
+            MDQ.unitFit = 1
+            MDQ.fitSay = string.format("世界迷雾·实景倍率：屏幕实测「贴图/帧 = %.3f」⇒ 基线原样即铺满，无需校正", fit)
+          end
+        end
+      end
+    end
+    MDQ.slot[1] = { tex = tex, file = file, area = MDQ.JPG_AREA, tile = MDQ.JPG_TILE, k = k, shown = true,
+      ox = fox, oy = foy, off = used or nil, wx = fox * k, wy = -(foy * k), ww = fw * k, wh = fh * k,
+      ow = fw, oh = fh, jpg = true,
+      fa = ((sg ~= nil) and (sg.tex == tex)) and sg.fa or nil }
+    MDQ.wroteN = 1
+    if MDQ.fitSay ~= nil then say(MDQ.fitSay) MDQ.fitSay = nil end
+  end
+  MDQ.lastW, MDQ.lastH = fw * k, fh * k
+  MDQ.lastTw, MDQ.lastTh = tonumber(rec[1]) or 0, tonumber(rec[2]) or 0
+  MDQ.lastFw, MDQ.lastFh = fw, fh
+  MDQ.lastTox, MDQ.lastToy = ox, oy
+  MDQ.lastK = k
+  MDQ.lastArea = MDQ.JPG_AREA
+  MDQ.lastTex = tex
+  -- 收尾：实景只有一层 ⇒ 序号 2 起（我们的 + 客户端多摆的）全部收起（藏账由 `hideFrom` 负责，关开关时全部 Show 还回）
+  MDQ.hideFrom(2, file, (MDQ.liveNative ~= nil) and MDQ.liveNative() or false)
+  MDQ.lastRenderN = 1
+  local sl = MDQ.slot[1]
+  if (MDQ.liveFogOff ~= nil) and MDQ.liveFogOff() then
+    pcall(tex.Hide, tex) sl.shown = false
+  elseif MDQ.blkHidden(MDQ.JPG_AREA, MDQ.JPG_TILE) then
+    pcall(tex.Hide, tex) sl.shown = false
+  else
+    local faNow = tonumber(MDQ.fogAlpha) or 1
+    if faNow < 0 then faNow = 0 end
+    if faNow > 1 then faNow = 1 end
+    if (tonumber(sl.fa) or 1) ~= faNow then
+      if pcall(tex.SetAlpha, tex, faNow) then sl.fa = faNow MDQ.fogAlphaN = (tonumber(MDQ.fogAlphaN) or 0) + 1 end
+    end
+  end
+  if MDQ.grabSyncAll then pcall(MDQ.grabSyncAll, file, 1, k) end
+  if MDQ.panelSync then pcall(MDQ.panelSync, file, 1, k) end
+  return 1, 1, true, true, nil, ((how == "existing") and 1 or 0), (tonumber(MDQ.newN) or 0)
+end
+
 -- ★★★1.75.54e（用户：「开关状态要做好正确的功能开关状态维护.不要影响到原始地图的功能」）：
 --   **复用客户端池位之前，先把原值读下来**（本项目铁律「改属性前先把原始值读下来」）。
 --   为什么必须做：`MDQ.texAt` 的第 ① 条路是**复用客户端自己的** `_G["WorldMapOverlay<n>"]`，而 `MDQ.render`
@@ -850,6 +1112,11 @@ MDQ.origGrab = function(n, t, ctx)
   if okh then rec.h = tonumber(h) end
   local oks, sh = pcall(t.IsShown, t)
   if oks then rec.shown = (sh == true) else rec.ok = false end
+  -- ★★★1.75.64：**绘制层也进原值账**（第 7 样）—— 实景图层要写 `OVERLAY`（用户点名「优先级最高.遮盖同组其它层」）,
+  --   而那是往**客户端自己的池位纹理**上写的属性 ⇒ 抓不到原值就还不了（本项目铁律「改属性前先把原值读下来」）。
+  --   ★读不到 ⇒ `rec.layer` 留 nil（**不判整条失败**）：还原时看到 nil 就**不写 layer**（有原值才写）。
+  local okl, ly = pcall(t.GetDrawLayer, t)
+  if okl and type(ly) == "string" and ly ~= "" then rec.layer = ly end
   local okn, np = pcall(t.GetNumPoints, t)
   if okn and tonumber(np) then
     for i = 1, tonumber(np) do
@@ -893,6 +1160,8 @@ MDQ.origRestoreOne = function(key)
     pcall(t.SetWidth, t, rec.w)
     pcall(t.SetHeight, t, rec.h)
     if rec.a ~= nil then pcall(t.SetAlpha, t, rec.a) end
+    -- ★1.75.64：绘制层（第 7 样）—— 只在抓到过原值时才写回（抓不到就保持现状，绝不留一个还不了的层）
+    if rec.layer ~= nil then pcall(t.SetDrawLayer, t, rec.layer) end
     pcall(t.ClearAllPoints, t)
     for _, p in ipairs(rec.pts) do pcall(t.SetPoint, t, p[1], p[2], p[3], p[4], p[5]) end
     if rec.shown == true then pcall(t.Show, t) else pcall(t.Hide, t) end
@@ -1004,22 +1273,32 @@ MDQ.renderCurrent = function(es, quiet, silent, withGuard)
   MDQ.offDone = false
   local file = select(1, smMapInfo())
   if type(file) ~= "string" or file == "" then return 0, 0, "读不到当前地图文件名" end
-  local m = MDQ.areaOf(file)   -- ★六改 b：与 `MDQ.holdN` / `MDQ.render` 同一个表查找（大小写不敏感）
+  -- ★★★1.75.64：**图层类型在这里分派**（区域彩图 = 逐区域/逐块的老口径；区域实景 = 整区一张 JPG）——
+  --   两条路**共用**后面的倍率 / 守护 / 安全阀 / 写后自证，只有「本图的基表」与「画法」不同。
+  local jpg = MDQ.jpgMode()
+  local m = jpg and MDQ.jpgBase(file) or MDQ.areaOf(file)
+  -- ★六改 b：与 `MDQ.holdN` / `MDQ.render` 同一个表查找（大小写不敏感）
   -- ★★★1.75.53（用户：「插件要绝对独立…不然发布上去别人又可能找不到贴图」）：**贴图准入** ——
   --   表里有这张图，但「自带 media 那一份」与「客户端自带的 Interface\WorldMap 那一份」**都加载不出来**
   --   ⇒ **这一张图一帧都不接管**（不渲染、不藏原生、不建层），并且把之前藏过的原生层**当场还回**。
   --   依据 = 本项目铁律「拿不到证据就一个字节都不碰」：宁可保持客户端原样，也绝不画出一片空白图。
-  if type(m) == "table" and MDQ.srcOf(file) == "none" then
+  if type(m) == "table" and (jpg and MDQ.jpgSrcOf(file) or MDQ.srcOf(file)) == "none" then
     pcall(MDQ.release, "本图贴图加载不出来")   -- 把上一张图藏过的原生层与本图自建的层都还回/收起
     MDQ.lastRender = { map = file, n = 0, areas = 0, inTbl = true, full = false, k = 1, src = "none",
-      why = "本应用加载不出这批贴图（自带 media\\WorldMap 与客户端 Interface\\WorldMap 都没有）" }
+      why = jpg and "本图实景 JPG（media\\WorldMapJpg）加载不出来" or "本应用加载不出这批贴图（自带 media\\WorldMap 与客户端 Interface\\WorldMap 都没有）" }
     if type(MDQ.noTexSaid) ~= "table" then MDQ.noTexSaid = {} end
     if not MDQ.noTexSaid[file] then
       MDQ.noTexSaid[file] = true
-      pcall(smFitSay, "世界迷雾：地图=%s ｜ 本客户端**加载不出**这批探索层贴图"
-        .. "（`media\\WorldMap\\%s\\…` 与 `Interface\\WorldMap\\%s\\…` 两份都探不到）"
-        .. "⇒ **这一张图不接管**（客户端自己的探索层保持原样；不渲染、不藏原生）。体检：/ehm mapfit 贴图",
-        tostring(file), tostring(file), tostring(file))
+      if jpg then
+        pcall(smFitSay, "世界迷雾·实景：地图=%s ｜ **加载不出**这张实景 JPG（`media\\WorldMapJpg\\%s`）"
+          .. "⇒ **这一张图不接管**（客户端自己的探索层保持原样；不渲染、不藏原生）。体检：/ehm mapfit 贴图",
+          tostring(file), tostring(file))
+      else
+        pcall(smFitSay, "世界迷雾：地图=%s ｜ 本客户端**加载不出**这批探索层贴图"
+          .. "（`media\\WorldMap\\%s\\…` 与 `Interface\\WorldMap\\%s\\…` 两份都探不到）"
+          .. "⇒ **这一张图不接管**（客户端自己的探索层保持原样；不渲染、不藏原生）。体检：/ehm mapfit 贴图",
+          tostring(file), tostring(file), tostring(file))
+      end
     end
     return 0, 0, "本图贴图加载不出来（不接管）"
   end
@@ -1029,7 +1308,12 @@ MDQ.renderCurrent = function(es, quiet, silent, withGuard)
   -- ★1.75.54b：**节流那一拍强制整批重写**（`force = withGuard ~= false`）—— 客户端会在我们写完之后自己
   --   再摆一次它那批池位纹理（首次开图尤其明显），只靠「写前比对」会跳过重申 ⇒ 客户端那套缩放不对的
   --   几何留在屏上（用户报的「首次地图打开客户端自身的贴图缩放异常」）。逐帧那条 silent 路才用比对省开销。
-  local n, nArea, inTbl, full, why, nExist, nNew = MDQ.render(file, k, withGuard ~= false)
+  local n, nArea, inTbl, full, why, nExist, nNew
+  if jpg then
+    n, nArea, inTbl, full, why, nExist, nNew = MDQ.jpgRender(file, k, withGuard ~= false)
+  else
+    n, nArea, inTbl, full, why, nExist, nNew = MDQ.render(file, k, withGuard ~= false)
+  end
   -- ★六改 b：把本拍的渲染账留在 `MDQ` 上（只读体检 `/ehm mapfit 残留` 直接摊出来 ⇒
   --   「数据库查出来的层到底加进去没有」不再靠猜）
   MDQ.lastRender = { map = file, n = n, areas = nArea, inTbl = inTbl, full = full, why = why, k = k }
@@ -1179,9 +1463,9 @@ MDQ.staleNames = function(max)
   return s .. string.format("（共 %d 个）", n)
 end
 
--- 开关真值（唯一入口）：`SM_CFG.staleClean` —— **默认关**（★1.75.59c 起：它与「关闭世界迷雾」是**同一个
---   控制**（1.75.52 合并），而那个勾选框现在**默认不勾选** ⇒ 清理也默认关；用户要的是「不勾选 = 原始地图、
---   插件不碰地图」）；显式 true = 开。开着时：换到「没有探索层数据」的图才把上一张图残留的池位藏起来，
+-- 开关真值（唯一入口）：`SM_CFG.staleClean` —— **默认开**（★1.75.65 起：它与「关闭世界迷雾」是**同一个
+--   控制**（1.75.52 合并），而那个勾选框现在**默认勾选** ⇒ 清理也默认开；显式 false = 用户主动关过 = 关）；
+--   开着时：换到「没有探索层数据」的图才把上一张图残留的池位藏起来，
 --   有数据的图**必须还回**（关掉零动作：不再新藏 + 当场把藏账里的层全部还回）。
 MDQ.staleOn = function()
   return (type(SM_CFG) == "table") and SM_CFG.staleClean == true
@@ -1526,6 +1810,16 @@ end
 MDQ.holdNCache = {}
 MDQ.holdN = function(file)
   local key = tostring(file or "")
+  -- ★★★1.75.64：**实景模式本图只有一层**（整区一张，没有按区域/块的拆分）⇒ 数量基准恒为 1。
+  --   ★「数量守护」就是拿它当上限藏「序号超出的池位」⇒ 实景下 2..poolMax 全藏（我们那套残留与客户端的都被收掉）。
+  if MDQ.jpgMode() then
+    local cj = MDQ.holdNCache["\1jpg\1" .. key]
+    if cj ~= nil then return cj end
+    local r = MDQ.jpgBase(key)
+    local nj = (type(r) == "table") and 1 or 0
+    MDQ.holdNCache["\1jpg\1" .. key] = nj
+    return nj
+  end
   local c = MDQ.holdNCache[key]
   if c ~= nil then return c end
   local m = MDQ.areaOf(key)   -- ★六改 b：与渲染**同一个**表查找（大小写不敏感）⇒ 数量口径不会与画出来的块数打架
@@ -3111,8 +3405,9 @@ say = function(msg)
   end
 end
 
--- 合并开关真值（唯一读写口）：`SM_CFG.swmOverlay`；★**1.75.59c 起默认关**（nil ⇒ 关；载入期落成显式 false），
---   **显式 true 才是开**；两个老键（swmOverlay / staleClean）一起写 ⇒ 两族闸门天然一致。
+-- 合并开关真值（唯一读写口）：`SM_CFG.swmOverlay`；★**1.75.65 起默认开**（nil ⇒ 载入期落成显式 true），
+--   **显式 false 才是关**（用户主动关过 ⇒ 永远尊重）；两个老键（swmOverlay / staleClean）一起写 ⇒ 两族闸门天然一致。
+--   ★写入点 = 工具箱这一行的勾选框 / `/ehm mapfit swm on|off`（★1.75.65 起 `[设置]` 下拉里**不再**登记它）。
 MDQ.fogSet = function(on, quiet)
   on = on and true or false
   SM_CFG.swmOverlay, SM_CFG.staleClean = on, on
@@ -3199,13 +3494,62 @@ MDQ.EDIT_LOG_MAX = 40    -- 「补偿记了什么」的**有界落盘环**上限
 MDQ.EDIT_MAX = 1200      -- 补偿表条数上限（表本身最多 1019 块，这道门只防病态存档）
 
 -- 补偿表读写（**唯一入口**；别在别处直接碰 `SM_CFG.edit`）
+-- ★★★1.75.64：**图层类型（区域彩图 / 区域实景）的唯一写口** —— 工具箱 `[设置]` 单选 / 命令都走它。
+--   ★★★切换 = 一次「关断四件事」（本项目 §4.1 那把尺子），缺一件就是「看着切了、实际还在跑/还占资源」：
+--     ① **资源回收 + ④ 图层清理**：**先 `MDQ.release`** —— 收我们自建的层 + 按原值账还回复用的客户端池位
+--        （贴图/UV/宽高/锚点/显隐/alpha/**绘制层**七样）+ 把守护藏过的客户端原生层全部 `Show` 还回。
+--        ★★**顺序铁律：先还、再换真值** —— 反过来的话还回那一步已经按新模式的账在走，会漏还（残留压住新层）。
+--     ② **数据重置**：编辑模式的**会话态**全部清零（选中集 / 逐块隐藏 / 悬停 / 关联闪光 / 图层池账 /
+--        每图一次播报闸 / 收尾门）⇒ 下次打开从零开始，不带着上一套的半状态跑。
+--        ★**补偿数据不在此列**（那是用户的数据，模式各有各的根：`edit` / `editJpg`，切换一个字都不动）。
+--     ③ **不新增常驻**：节拍由既有 `beatSync` 按需管（切完这一拍该挂就挂、该摘就摘），本函数**不建帧、不挂脚本**。
+--     ④ **立刻刷一拍**（`editViewApply` = 与正常节流同一路：quiet + silent + withGuard）⇒ **切换当场生效、不用 /reload**。
+--   返回：是否真的切了, 现模式
+MDQ.layerSet = function(mode, quiet)
+  local want = (mode == MDQ.LAYER_JPG) and MDQ.LAYER_JPG or MDQ.LAYER_ART
+  local cur = MDQ.layerMode()
+  if want == cur then
+    if not quiet then
+      say("世界迷雾·图层类型已经是「" .. ((want == MDQ.LAYER_JPG) and "区域实景" or "区域彩图") .. "」（没有变化）")
+    end
+    return false, cur
+  end
+  pcall(MDQ.release, "切换图层类型（" .. tostring(cur) .. " → " .. tostring(want) .. "）")
+  MDQ.sel, MDQ.blkHide = {}, {}
+  MDQ.hoverIdx, MDQ.flashIdx, MDQ.flashAt = nil, nil, 0
+  MDQ.slot, MDQ.lastRender, MDQ.lastRenderN = {}, nil, 0
+  MDQ.saidMk, MDQ.offDone = nil, false
+  SM_CFG.layerMode = want
+  pcall(MDQ.editViewApply)
+  if type(MDQ.beatSync) == "function" then pcall(MDQ.beatSync) end
+  if not quiet then
+    if want == MDQ.LAYER_JPG then
+      say("世界迷雾·图层类型 = **区域实景**：整区一张 `media\\WorldMapJpg\\<图>.jpg`（地形实拍），"
+        .. "在本组内**优先级最高**（写 `OVERLAY` 绘制层 ⇒ 遮盖其它层）。")
+      say("　★补偿数据换到 `worldFogCfg.editJpg`（彩图那份在 `worldFogCfg.edit`，两套互不影响）；"
+        .. "编辑模式照旧可拖拽/箭头/改尺寸，列表里只有「整区一张」这一行。")
+    else
+      say("世界迷雾·图层类型 = **区域彩图**：按 `MapOverlayData.lua` 逐区域/逐块贴 `media\\WorldMap\\…`（游戏世界地图那张手绘图）。")
+      say("　★补偿数据在 `worldFogCfg.edit`；实景那份（`worldFogCfg.editJpg`）原样留着，切回去接着用。")
+    end
+  end
+  return true, want
+end
+
+-- ★★★1.75.64：**存档根的按模式分派（唯一分派点）** —— 彩图 = `worldFogCfg.edit`、实景 = `worldFogCfg.editJpg`。
+--   为什么只改这两个口就够：编辑模式那一整族（拖拽 `editTick` / 箭头 `nudge` / 尺寸 `sizeStep` /
+--   列表 `editLines` / 归零 `zeroOne` / 重置 `editClear`/`editResetPlugin` / 体检 `editJoin` / 渲染配对 `editRec`）
+--   **全部**只经由 `editTbl` + `editFileTbl` 两个口拿存储 ⇒ 换根即换套，**两套数据永不串味**
+--   （键形态也一字未改：仍是 `区域#块号`，实景那套的伪区域 = `MDQ.JPG_AREA`）。
+MDQ.EDIT_ROOT_ART, MDQ.EDIT_ROOT_JPG = "edit", "editJpg"
 MDQ.editTbl = function(make)
   if type(SM_CFG) ~= "table" then return nil end
-  local t = SM_CFG.edit
+  local key = MDQ.jpgMode() and MDQ.EDIT_ROOT_JPG or MDQ.EDIT_ROOT_ART
+  local t = SM_CFG[key]
   if type(t) ~= "table" then
     if not make then return nil end
     t = {}
-    SM_CFG.edit = t
+    SM_CFG[key] = t
   end
   return t
 end
@@ -3237,8 +3581,11 @@ end
 --      （`node gen_mapoffset.js`）；★**「拖回原点」是唯一例外**：文件基线上有值时**显式写 `{x=0,y=0}` 压住文件**
 --      （直接删存档会回落到文件值，不是回原点 —— 见 `MDQ.editEnd`）。
 --   ③ **文件也是生成物**（手改会被下次导出冲掉）⇒ 与 `MapOverlayData.lua` 同纪律：运行时只读、`rawget` 懒读。
+-- ★1.75.64：**按图层类型选文件基线**（彩图 = `MapOverlayOffset.lua`、实景 = `MapOverlayOffsetJPG.lua`）
+--   —— 与 `MDQ.editTbl` 同一个分派口径（两处必须一致，否则「存档读 A、文件读 B」= 补偿串味）。
 MDQ.editFileTbl = function()
-  local t = rawget(_G, "EVAL_MAP_OVERLAY_OFFSET")
+  local nm = MDQ.jpgMode() and "EVAL_MAP_OVERLAY_OFFSET_JPG" or "EVAL_MAP_OVERLAY_OFFSET"
+  local t = rawget(_G, nm)
   if type(t) ~= "table" then return nil end
   return t
 end
@@ -6055,6 +6402,97 @@ MDQ.cmd = function(sub)
   elseif sub == "perf" or sub == "性能" then
     for _, l in ipairs(MDQ.perfProbe()) do mfLog("[perf] %s", l) say("[perf] " .. tostring(l)) end
     return true
+  elseif sub == "图层" or sub == "layer" or sub == "图层状态" then
+    -- ★★★1.75.64：**图层类型（区域彩图 / 区域实景）** 的只读状态 + 真机自证
+    --   ① 现模式 + 两套补偿各几条（分家是否生效，一眼可见）；
+    --   ② **实景贴图探针**（自带那份 + **负对照**）⇒ 「这张图的 JPG 到底加载得出来吗」不必靠猜；
+    --   ③ 帧与基线：实景要**与客户端地图坐标系对齐**（矩形 → 可见帧 1002x668；
+    --      ★1.75.67 实测：客户端把美术按**瓦片 1:1 原尺寸**画进帧、多出的右 22px / 下 100px 被裁掉；
+    --        而**手绘城区本身是示意图**（偏西 160~210px / 偏北 100~130px、公园↔要塞跨度为真实 2.5 倍）
+    --        ⇒ 逐地物贴合只能靠编辑模式微调，下面的实时几何读数用来分辨「基线不对」与「美术示意」）。
+    local jm = MDQ.jpgMode()
+    say("世界迷雾·图层类型 = **" .. (jm and "区域实景" or "区域彩图") .. "**"
+      .. "（/ehm mapfit 图层 彩图|实景 切换）")
+    local f = select(1, smMapInfo())
+    say(string.format("　本图=%s ｜ 帧=WorldMapDetailFrame ｜ 基线=%s",
+      tostring(f),
+      (function()
+        if not jm then
+          local m = MDQ.areaOf(tostring(f))
+          local n = 0
+          if type(m) == "table" then for _ in pairs(m) do n = n + 1 end end
+          return string.format("彩图 %d 区块位", n)
+        end
+        local r = MDQ.jpgBase(tostring(f))
+        if type(r) ~= "table" then return "**实景表里没有这张图（不接管）**" end
+        return string.format("实景 %sx%s @%s,%s", tostring(r[1]), tostring(r[2]), tostring(r[3]), tostring(r[4]))
+      end)()))
+    if jm then
+      local p = MDQ.jpgPath(tostring(f))
+      local r = MDQ.probeTrust(p)
+      say("　实景贴图：" .. p .. " ｜ 探针="
+        .. ((r == true) and "**加载得出来**" or (r == false and "**探不到** ⇒ 本图不接管" or "判不出（放拦）")))
+      say("　负对照：" .. p .. MDQ.probeBogus .. " ｜ 探针="
+        .. ((MDQ.probeTrust(p .. MDQ.probeBogus) == nil) and "**也报有 ⇒ 判不出 ⇒ 放拦（本客户端对不存在的文件也报尺寸）**"
+          or "可信（不存在 ⇒ 探不到）"))
+      say("　★写法 = **不带扩展名**（`media\\WorldMapJpg\\<图>`）—— 1.75.62 真机验证过的载入方式（见 CHANGELOG 1.75.62）。")
+      -- ★★★1.75.67：**实时几何读数**（只读，零写入）—— 用来当场分辨两种「对不上」：
+      --   ① 美术本身是手绘示意图（离线已证：客户端把地图美术按 **瓦片 1:1 原尺寸**画进帧、被 1002x668 帧裁切；
+      --      而手绘城区相对矩形推算位置整体偏西/偏北 ⇒ 换任何线性基线都不可能逐地物重合）；
+      --   ② 运行时几何不对（倍率 k 取错 / 锚点错）—— 这一条只有真机能判，故把「写进去的」与「读回来的」并排列出。
+      local fr = _G["WorldMapDetailFrame"]
+      local function rd(o, m)
+        if o == nil or m == nil then return "?" end
+        local ok, v = pcall(o[m], o)
+        if ok and v ~= nil then return tostring(v) end
+        return "?"
+      end
+      local okE, esNow = pcall(smEffScale, fr)
+      if not okE then esNow = "?" end
+      say(string.format("　帧几何：逻辑 %s x %s ｜ 有效缩放 %s ｜ 上次渲染 k=%s ｜ 上次写入 %sx%s @%s,%s",
+        rd(fr, "GetWidth"), rd(fr, "GetHeight"), tostring(esNow), tostring(MDQ.lastK),
+        tostring(MDQ.lastW), tostring(MDQ.lastH), tostring(MDQ.lastTox), tostring(MDQ.lastToy)))
+      local st = MDQ.slot[1]
+      if type(st) == "table" and st.tex ~= nil then
+        local p1 = { pcall(st.tex.GetPoint, st.tex, 1) }
+        say(string.format("　实景纹理读回：宽高 %s x %s ｜ 锚点偏移 %s,%s ｜ 渲染账 k=%s ｜ 有补偿=%s",
+          rd(st.tex, "GetWidth"), rd(st.tex, "GetHeight"),
+          tostring(p1[4]), tostring(p1[5]), tostring(st.k), tostring(st.off ~= nil)))
+        say("　★判读：**读回宽高 ≈ 基线 x k**（k 为 1 时 ≈ 基线）⇒ 几何按口径落地；"
+          .. "若读回明显小于基线 ⇒ 倍率 k 没取到 1（本图无引擎叠加层数据时按外框有效缩放兜底）——"
+          .. "那才是「实景比地图小一圈」；若读回 ≈ 基线而画面仍与手绘图错位 ⇒ 属美术本身示意（用编辑模式微调）。")
+        -- ★★★1.75.67b：**屏测（真屏幕像素，含全部缩放）** —— 唯一能判「贴图到底铺没铺满帧」的口径：
+        --   `GetWidth/GetHeight` 在**帧**上含父链缩放、在**纹理**上是逻辑值（本项目在案的两条实测，
+        --   互相冲突 ⇒ 不许拿两个读回值直接比）。⇒ 一律比**屏幕矩形**（`MDQ.scrBox` = 唯一实现）：
+        --   比值 ≈ 1 ⇒ 铺满帧；≈ 有效缩放 ⇒ 只铺了那么多（运行时已由 `MDQ.unitFit` 自证校正，见 jpgRender）。
+        local fSw, fSh = MDQ.scrBox(fr)
+        local tSw, tSh = MDQ.scrBox(st.tex)
+        local upEs = "?"
+        local okU, vU = pcall(smEffScale, _G["UIParent"])
+        if okU and vU ~= nil then upEs = tostring(vU) end
+        if fSw ~= nil and tSw ~= nil and fSw > 0 then
+          say(string.format("　屏测：帧 %dx%d ｜ 实景贴图 %dx%d ｜ 贴图/帧 = %.3f",
+            math.floor(fSw + 0.5), math.floor(fSh + 0.5), math.floor(tSw + 0.5), math.floor(tSh + 0.5), tSw / fSw))
+        else
+          say("　屏测：读不到屏幕矩形（老客户端 / 纹理还没建）⇒ 退回「读回宽高 ÷ 基线」判断")
+        end
+        say(string.format("　缩放链：帧 smEffScale=%s ｜ 帧 GetEffectiveScale=%s ｜ UIParent smEffScale=%s"
+          .. " ｜ 已测得的客户端倍率口径 unitFit=%s（nil = 还没量到；★贴图/帧 应 ≈ 1）",
+          tostring(esNow), rd(fr, "GetEffectiveScale"), upEs, tostring(MDQ.unitFit)))
+      else
+        say("　实景纹理读回：本会话还没渲染过（先开一次地图、再敲本命令）")
+      end
+    end
+    local mine, tot = MDQ.editCount(tostring(f))
+    local fmine, ftot = MDQ.editFileCount(tostring(f))
+    say(string.format("　补偿分家：本模式 本图 %d / 全部 %d 条（存档）｜ 插件基线 本图 %d / 全部 %d 条（%s）",
+      mine, tot, fmine, ftot, jm and "MapOverlayOffsetJPG.lua" or "MapOverlayOffset.lua"))
+    say("　★渲染优先级：实景层写 **OVERLAY** 绘制层（彩图那批在 ARTWORK）⇒ 同组内遮盖其它层；原绘制层进原值账，关开关/切换时还回。")
+    return true
+  elseif sub == "图层 彩图" or sub == "layer art" then
+    return MDQ.layerSet(MDQ.LAYER_ART)
+  elseif sub == "图层 实景" or sub == "layer jpg" then
+    return MDQ.layerSet(MDQ.LAYER_JPG)
   elseif sub == "swm" then
     say("世界迷雾 = **" .. (MDQ.swm() and "开" or "关") .. "**"
       .. " ｜ 接管守护=" .. (MDQ.swm() and "开" or "关")
@@ -6163,6 +6601,8 @@ TB_ROWS["worldFog"] = function(r, it)
     pcall(tip.AddLine, tip, L("TB_SM_SWM_TIP1"), 0.62, 0.82, 1.00)
     -- ★1.75.60d（用户：「某些区域地图如有偏移反馈插件评论,或者QQ 群.会进行偏移矫正」）：第二行 = 反馈渠道
     pcall(tip.AddLine, tip, L("TB_SM_SWM_TIP2"), 1.00, 0.82, 0.35)
+    -- ★1.75.65：第三行 = **默认档说明**（本版起默认勾选（开）+ 区域实景；取消勾选 = 回到客户端原始地图）
+    pcall(tip.AddLine, tip, L("TB_SM_SWM_TIP3"), 0.72, 0.92, 0.72)
     pcall(tip.Show, tip)
   end)
   r.add.btn:SetScript("OnLeave", function()
@@ -6173,19 +6613,45 @@ TB_ROWS["worldFog"] = function(r, it)
     if type(EVAL_DD_OPEN) ~= "function" then say("关闭世界迷雾设置失败：下拉控件未载入") return end
     -- ★1.75.59f：这是**用户主动点开的设置菜单** ⇒ 回显算「你问它答」，盖章让本模块的播报走常开出口
     if type(GetTime) == "function" then WF_ECHO_AT = GetTime() + WF_ECHO_SEC end
-    -- ★1.75.59o：第二项 = **编辑模式**（本游戏专属坐标补偿；拖拽柄 + 地图右侧贴图列表只在它开着时出现）
-    -- ★1.75.60z：**贴图版本这一项已彻底删除**（机制一起清理，见文件上方那段注释）—— 这个下拉只剩两项。
-    local items = { L("TB_SM_SWM"), L("TB_SM_EDIT") }
-    local keys = { "swmOverlay", "editMode" }
-    local sel = {}
-    if MDQ.swm() then sel[1] = true end
-    if MDQ.editOn() then sel[2] = true end
-    local tips = { { L("TB_SM_SWM_TIP1") }, { L("TB_SM_EDIT_TIP1") } }
+    -- ★1.75.59o：第一项 = **编辑模式**（本游戏专属坐标补偿；拖拽柄 + 地图右侧贴图列表只在它开着时出现）
+    -- ★1.75.60z：**贴图版本这一项已彻底删除**（机制一起清理，见文件上方那段注释）。
+    -- ★★★1.75.64：第三/四项 = **图层类型（区域彩图 / 区域实景）**，用户点名要**单选**：
+    --   两行**互斥**（勾只给当前模式那一行；点谁切谁 ⇒ 天然单选），切换走唯一写口 `MDQ.layerSet`
+    --   （它自己负责「关断四件事」：交还上一套的层 + 会话态清零 + 立刻刷一拍）。
+    -- ★★★1.75.65（用户：「图片内的关闭世界迷雾这个选项可以删除.重复了.」）：**下拉里不再登记开关项**
+    --   —— 开关的真值入口 = **工具箱这一行自己的勾选框**（外加等价命令 `/ehm mapfit swm on|off`）；
+    --   下拉里再放一条「关闭世界迷雾！」= 同一个开关两个入口，既重复又容易各写一半。
+    --   ⇒ 本下拉只剩三项，且**全是「不是开关」的档**（编辑模式 + 图层类型单选）。
+    local items = { L("TB_SM_EDIT"), L("TB_SM_LAYER_ART"), L("TB_SM_LAYER_JPG") }
+    local keys = { "editMode", "layerArt", "layerJpg" }
+    -- ★★★1.75.65b（用户：「关闭世界迷雾->设置->**图层单选切换要能正确的更新到弹窗内**」）：
+    --   勾的状态**只有一个来源 = `menuSel()` 现算**（编辑模式 = 第 1 行；图层类型 = 当前模式那一行）。
+    --   ★为什么必须这样：下拉组件在 `multi` 模式下点一行**只切换那一行自己的勾**（`ddUI.sel[pi]`），
+    --     它**不认识「互斥」** ⇒ 单选语义（另一行必须熄）只能由宿主刷；不刷就会出现
+    --     「两行都勾着」/「勾在彩图上而实际是实景」= **弹窗与真值不一致**（用户这次报的就是它）。
+    --   ★做法照抄本项目的既有 idiom（`Toolbox.lua` 的频道互斥菜单 / `DataSearch.lua` 的负面类型多选）：
+    --     打开时 `selected = menuSel()`、**每次点完再 `EVAL_DD_SYNC(menuSel())` 整表重绘**
+    --     —— 与「勾选状态每次由数据重算后整表重绘」是同一条纪律，绝不靠面板自己那份状态。
+    --   ★顺带修正两种「乐观勾」：被点那一项其实没生效（例如切到同一个模式 = `layerSet` 幂等返回 false）
+    --     时，重绘会把勾**按真值拨回去**（组件已经先把那一行的勾切掉了）。
+    local function menuSel()
+      local t = {}
+      if MDQ.editOn() then t[1] = true end
+      if MDQ.jpgMode() then t[3] = true else t[2] = true end     -- ★单选：只勾当前那一行
+      return t
+    end
+    local tips = { { L("TB_SM_EDIT_TIP1") }, { L("TB_SM_LAYER_TIP1") }, { L("TB_SM_LAYER_TIP2") } }
     EVAL_DD_OPEN(r.add.btn, items, function(pi, on)
-      if keys[pi] == "swmOverlay" then pcall(MDQ.fogSet, on == true)
-      elseif keys[pi] == "editMode" then pcall(MDQ.editSet, on == true) end
+      -- ★用户点我们自己的菜单项 = **他主动问的**（同 1.75.59p 的面板按钮口径）⇒ **先盖章再动手**：
+      --   章晚了（动作里面那几句 `say` 已经发出去）就挡在「调试日志」门外 = 用户点了像没反应。
+      if type(wfEcho) == "function" then pcall(wfEcho) end
+      if keys[pi] == "editMode" then pcall(MDQ.editSet, on == true)
+      elseif keys[pi] == "layerArt" then pcall(MDQ.layerSet, MDQ.LAYER_ART)
+      elseif keys[pi] == "layerJpg" then pcall(MDQ.layerSet, MDQ.LAYER_JPG) end
+      -- ★单选 / 状态回正：面板不关 ⇒ 当场按真值整表重画勾（唯一来源 = menuSel()）
+      if type(EVAL_DD_SYNC) == "function" then pcall(EVAL_DD_SYNC, menuSel()) end
       if type(EVAL_TB_REFRESH) == "function" then pcall(EVAL_TB_REFRESH) end
-    end, { multi = true, selected = sel, locked = {}, tips = tips })
+    end, { multi = true, selected = menuSel(), locked = {}, tips = tips })
   end)
   return true
 end
@@ -6230,30 +6696,46 @@ do
         end
         if nc > 0 then pcall(mfLog, "清缓存：存档老键 %d 个（一次性）", nc) end
       end
-      -- ④ **默认档 = 不勾选**（★1.75.59c；用户：「默认以上两个都不勾选」+「不勾选原始地图,勾选才是开启功能」）：
-      --   键为 nil（从没写过）⇒ **落成显式 false**（不留 nil —— 项目纪律：开关值要显式，别让「默认」反复顶改）；
-      --   ★老用户升级时这是**行为改变**（旧版默认开 ⇒ 现在默认关）⇒ **如实播报一次**，绝不悄悄改掉；
-      --   ★之后键已存在 ⇒ 不再播报、也**绝不覆盖用户显式选过的值**。
-      --   ★老版本单独开过「残留图层清理」（`staleClean` 显式 true 而合并键从没写过）⇒ 尊重那一次显式选择。
+      -- ④ ★★★1.75.65（用户：「默认设置 开启世界迷雾->选中实景地图,关闭彩图」）：**默认档 = 开 + 区域实景**。
+      --   · `swmOverlay` / `staleClean`（1.75.52 起同一个控制）：键为 nil（从没写过）⇒ **落成显式 true**
+      --     —— 项目纪律：开关值要显式，别让「默认」反复顶改；★**显式 false（用户主动关过）永远是关**，绝不顶改。
+      --   · `layerMode`：nil ⇒ 落成显式 `"jpg"`；★**显式 `"art"`（用户选过彩图）保持彩图**。
+      --   ★老用户升级时这是**行为改变**（1.75.59c~1.75.64 那几版默认是「关 + 彩图」）⇒ **如实播报一次**，
+      --     绝不悄悄改掉；之后键已存在 ⇒ 不再播报。
+      --   ★老版本单独关过 / 单独开过某一边的存档：只认它自己那一键的显式值（另一半缺失才跟默认走）。
       local wfFresh = (SM_CFG.swmOverlay == nil)
       if wfFresh then
-        SM_CFG.swmOverlay = (SM_CFG.staleClean == true)
+        if SM_CFG.staleClean == false then SM_CFG.swmOverlay = false     -- ★不许写成 and/or 链（false 会被吞）
+        else SM_CFG.swmOverlay = true end
       end
-      if SM_CFG.staleClean == nil then SM_CFG.staleClean = SM_CFG.swmOverlay end
-      if SM_CFG.swmOverlay == nil then SM_CFG.swmOverlay = false end
-      if SM_CFG.staleClean == nil then SM_CFG.staleClean = false end
+      if SM_CFG.staleClean == nil then SM_CFG.staleClean = (SM_CFG.swmOverlay == true) end
+      local lmFresh = (SM_CFG.layerMode == nil)
+      if lmFresh then SM_CFG.layerMode = MDQ.LAYER_JPG end
       -- ★1.75.59o：**编辑模式也落成显式布尔**（默认关；项目纪律：开关值不留 nil，别让「默认」反复顶改）。
-      --   补偿表本身（`edit` / `editLog`）是**用户数据**，一律不碰（只有用户显式「编辑 清」才动）。
+      --   补偿表本身（`edit` / `editJpg` / `editLog`）是**用户数据**，一律不碰（只有用户显式「编辑 清」才动）。
       if SM_CFG.editMode == nil then SM_CFG.editMode = false end
       -- ★1.75.60z：**分版本贴图的死键一次性清掉**（该机制已整条清理；留着只会让以后的排查
       --   看到 `texPack = "live"` 却找不到任何读它的代码）。键本身是配置不是用户数据 ⇒ 直接清。
       if SM_CFG.texPack ~= nil then SM_CFG.texPack = nil end
+      -- ★1.75.69：**「贴图格式测试」的取证环一次性清掉**（`tools\TexTest.lua` + `media\TexTest\` 已按用户指令整条删除；
+      --   它只写过 `EVAL_HELP_CONFIG.texTestCfg.ring` 这一个取证环 ⇒ 留着就是「有键无代码」的迷惑项）。
+      local G = rawget(_G, "EVAL_HELP_CONFIG")
+      if type(G) == "table" and G.texTestCfg ~= nil then G.texTestCfg = nil end
       if type(SM_CFG.edit) ~= "table" and SM_CFG.edit ~= nil then SM_CFG.edit = nil end
+      if type(SM_CFG.editJpg) ~= "table" and SM_CFG.editJpg ~= nil then SM_CFG.editJpg = nil end
       if type(SM_CFG.editLog) ~= "table" and SM_CFG.editLog ~= nil then SM_CFG.editLog = nil end
       if wfFresh and type(say) == "function" then
-        say("世界迷雾 = " .. (MDQ.swm() and "开" or "关")
-          .. "（本版起「缩放大地图 / 关闭世界迷雾」**默认都不勾选**：不勾选 = 保持客户端原始地图；"
-          .. "勾上并 /reload 后才启用。开关：工具箱 → UI 工具）")
+        --   ★播报必须与**实际落成的值**一致（老存档里单独关过清理的那一支是关 ⇒ 不许照念「默认开」那套词）
+        if MDQ.swm() then
+          say("世界迷雾 = 开（本版起**默认就是「开 + 区域实景」**：不想让插件重画地图就取消工具箱里的勾选并 /reload；"
+            .. "开关：工具箱 → UI 工具 →「关闭世界迷雾」）")
+        else
+          say("世界迷雾 = 关（★尊重你以前**单独关过「残留图层清理」**那一次选择 ⇒ 本版默认档没顶改它；"
+            .. "要开：工具箱 → UI 工具 →「关闭世界迷雾」勾上并 /reload）")
+        end
+      end
+      if lmFresh and type(say) == "function" then
+        say("世界迷雾·图层类型 = **区域实景**（本版起的默认档）；要换回游戏手绘彩图：同一行的 [设置] → 「图层：区域彩图」")
       end
       -- ④b ★1.75.59l：**改动记号落盘**（每次 `/reload` 都刷一次）—— 存档里有了它，
       --   「客户端现在跑的是哪一份代码」当场可判（本节就是今天绕了一圈才确认「跑的是旧版」的那件事）。
