@@ -54,6 +54,7 @@ local EC = {
   wornIdx = nil,        -- 本拍「已装备」那件的 键→数值（给左侧气泡染色当参照系）
   hostOwn = nil,        -- 客户端气泡**自己**的行数（我们追加汇总之前抓的；染色只染这几行）
   painted = 0,          -- 最近一次给左侧气泡染了几行
+  subN = 0,             -- 最近一次给「子类名」汉化了几格（读值口）
   sumAppended = false,  -- 汇总段是否已追加进客户端气泡（★客户端重建后要补回）
   sumKey = nil,         -- 已追加的那一份汇总的内容键（显式标记：同键 + 无重建信号 ⇒ 不重写）
   sumList = nil,        -- 最近一次汇总的差值列表（诊断用）
@@ -117,6 +118,70 @@ end
 local function L(k, ...)
   if type(EVAL_L) == "function" then return EVAL_L(k, ...) end
   return k
+end
+-- ★★★子类名汉化（1.75.61；用户报障：「分析工具->装备比较->内的装备类型能否翻译成中文.皮甲.布甲之类的.」）：
+--   真机形态（用户截图）：本客户端 zhCN 下**物品子类串仍是英文**（「胸部  Mail」），而这一行**是客户端自己画的** ——
+--   左边那栏是客户端气泡，右边那栏是我们读回后用 `AddLine` 重画（`ecFill` 里 `txt .. "  " .. ln.right` 那一句）⇒ 两处都要处理。
+--   · 只认**整串**或「前缀 + 空格 + 行尾那一段」命中下表已知子类词的：命中才改，**其余文本一个字节都不碰**（绝不猜、绝不整行重写）；
+--   · 值走三语 `L()`；★**拿不到就不动**（`L()` 回空串、或回的正是键名 —— 语言包缺键时的兜底 —— 一律返回 nil）
+--     ⇒ 英文客户端取到的就是 `Mail`（与原文相同 ⇒ 我们不改），**绝不会把英文客户端改成中文**；
+--   · 客户端每 1/5 秒重建气泡会把它复位 ⇒ 与染色同一个时机重贴（`ecUpdate` 每拍 + `ecFill` 每次填框）。
+--   · 表里**只放英文原串**（客户端给的就是英文）；单/复数的不同写法作为**别名**指向同一个键。
+--   ★★★1.75.61b：真机给的是**单数裸词**（用户第二张截图：「单手  Sword」「双手  Staff」）——
+--     左列的部位前缀（单手/双手/胸部）**客户端自己已经本地化了**，右列只剩一个裸子类词 ⇒
+--     裸词必须映射到**裸词译名**（`剑` / `法杖` / `锤` / `盾牌`），**不能**映射到 `单手剑` / `双手剑` 那一族词组键
+--     （否则画出来是「单手  单手剑」= 我们自己造的重复）。⇒ 裸词一律走 `_B` 结尾的那一族键（B = bare）。
+--     ★同理：**英文客户端的 `_B` 值必须是那一个裸词本身**（`Axe` 对 `Axe`）⇒ 命中后 `v == s` ⇒ 不改一个字节（零回归）。
+local EC_SUB = {
+  ["Cloth"] = "EC_SUB_CLOTH", ["Leather"] = "EC_SUB_LEATHER", ["Mail"] = "EC_SUB_MAIL", ["Plate"] = "EC_SUB_PLATE",
+  ["Shield"] = "EC_SUB_SHIELD", ["Miscellaneous"] = "EC_SUB_MISC", ["Held In Off-hand"] = "EC_SUB_OFFHAND",
+  ["One-Handed Axes"] = "EC_SUB_AXE1", ["One-Hand Axes"] = "EC_SUB_AXE1", ["One-Handed Axe"] = "EC_SUB_AXE1",
+  ["Two-Handed Axes"] = "EC_SUB_AXE2", ["Two-Hand Axes"] = "EC_SUB_AXE2", ["Two-Handed Axe"] = "EC_SUB_AXE2",
+  ["One-Handed Maces"] = "EC_SUB_MACE1", ["One-Hand Maces"] = "EC_SUB_MACE1", ["One-Handed Mace"] = "EC_SUB_MACE1",
+  ["Two-Handed Maces"] = "EC_SUB_MACE2", ["Two-Hand Maces"] = "EC_SUB_MACE2", ["Two-Handed Mace"] = "EC_SUB_MACE2",
+  ["One-Handed Swords"] = "EC_SUB_SWORD1", ["One-Hand Swords"] = "EC_SUB_SWORD1", ["One-Handed Sword"] = "EC_SUB_SWORD1",
+  ["Two-Handed Swords"] = "EC_SUB_SWORD2", ["Two-Hand Swords"] = "EC_SUB_SWORD2", ["Two-Handed Sword"] = "EC_SUB_SWORD2",
+  ["Daggers"] = "EC_SUB_DAGGER", ["Fist Weapons"] = "EC_SUB_FIST", ["Polearms"] = "EC_SUB_POLEARM",
+  ["Staves"] = "EC_SUB_STAFF", ["Bows"] = "EC_SUB_BOW", ["Crossbows"] = "EC_SUB_CROSSBOW",
+  ["Guns"] = "EC_SUB_GUN", ["Wands"] = "EC_SUB_WAND", ["Thrown"] = "EC_SUB_THROWN",
+  ["Fishing Poles"] = "EC_SUB_FISHING", ["Relic"] = "EC_SUB_RELIC",
+  -- ★裸词族（真机形态；覆盖全部装备子类：武器 / 护甲 / 副手 / 圣物 / 饰品）
+  ["Sword"] = "EC_SUB_SWORD_B", ["Axe"] = "EC_SUB_AXE_B", ["Mace"] = "EC_SUB_MACE_B",
+  ["Dagger"] = "EC_SUB_DAGGER_B", ["Staff"] = "EC_SUB_STAFF_B", ["Polearm"] = "EC_SUB_POLEARM_B",
+  ["Fist Weapon"] = "EC_SUB_FIST_B", ["Bow"] = "EC_SUB_BOW_B", ["Crossbow"] = "EC_SUB_CROSSBOW_B",
+  ["Gun"] = "EC_SUB_GUN_B", ["Wand"] = "EC_SUB_WAND_B", ["Fishing Pole"] = "EC_SUB_FISHING_B",
+  ["Libram"] = "EC_SUB_LIBRAM_B", ["Idol"] = "EC_SUB_IDOL_B", ["Totem"] = "EC_SUB_TOTEM_B",
+  ["Trinket"] = "EC_SUB_TRINKET_B",
+}
+-- 语言包取值；★回空串、或**回的正是键名**（缺键兜底）一律当「拿不到」⇒ nil（宁可不改，也不把键名画到气泡上）
+local function ecSubText(key)
+  local v = L(key)
+  if type(v) ~= "string" or v == "" or v == key then return nil end
+  return v
+end
+-- 命中才返回替换后的整串；否则 nil（调用方原样保留）。
+-- ★两趟：① 整串就是子类词（右列单独一格）；② 「前缀 + 空格 + 行尾那一段」是子类词（并进一行之后的形态）。
+local function ecSubTranslate(s)
+  if type(s) ~= "string" or s == "" then return nil end
+  local k = EC_SUB[s]
+  if k then
+    local v = ecSubText(k)
+    if v and v ~= s then return v end
+    return nil
+  end
+  local pos = 0
+  while true do
+    local sp = string.find(s, " ", pos + 1, true)
+    if not sp then return nil end
+    local tail = string.sub(s, sp + 1)
+    local k2 = EC_SUB[tail]
+    if k2 then
+      local v = ecSubText(k2)
+      if v and v ~= tail then return string.sub(s, 1, sp) .. v end
+      return nil
+    end
+    pos = sp
+  end
 end
 
 local function say(s)
@@ -673,6 +738,9 @@ local function ecFill(idx, slotId, host, hostIdx, nameR, nameG, nameB)
     local ln = lines[i]
     local txt, r, g, b = ln.text, ln.r, ln.g, ln.b
     if ln.right then txt = txt .. "  " .. ln.right end
+    -- ★子类名汉化（本客户端右列的子类串仍是英文：真机截图「胸部  Mail」）⇒ 命中才换，其余原样
+    local subTxt = ecSubTranslate(txt)
+    if subTxt then txt = subTxt end
     -- ★第 1 行是物品名 ⇒ 保留**品质色**（不参与对比染色）；品质色现算，读回色只当兜底
     if i == 1 and type(nameR) == "number" then
       r, g, b = nameR, nameG, nameB
@@ -763,6 +831,39 @@ local function ecHostPaint(host, wornIdx, own)
     end
     row = row + 1
   end
+  return painted
+end
+
+
+-- ★★★把**某个气泡**的左右两列 FontString 就地汉化（只命中已知子类词才 `SetText`，其余一个字节都不碰）。
+--   ★为什么每拍都跑：客户端每 1/5 秒重建自己的气泡 ⇒ 汉化会被复位，靠与染色同一个时机重贴；
+--     两个重建信号（容器按钮包装又被调 / 首行名字变了）都会走到 `ecUpdate`，挂在那里最稳。
+--   ★只扫客户端**自己**的行（`EC.hostOwn`；还没抓到时按当前行数）—— 我们追加的汇总行是我们自己写的，不碰。
+local function ecSubPaintHost(host)
+  if not host or type(host.GetName) ~= "function" then return 0 end
+  local okN, nm = pcall(host.GetName, host)
+  if not okN or type(nm) ~= "string" or nm == "" then return 0 end
+  local own = EC.hostOwn or ecNumLines(host)
+  local painted, row = 0, 1
+  while row <= own do
+    local side = 0
+    while side < 2 do
+      local fs = rawget(_G, nm .. (side == 0 and "TextLeft" or "TextRight") .. row)
+      if fs and type(fs.GetText) == "function" and type(fs.SetText) == "function" then
+        local okT, t = pcall(fs.GetText, fs)
+        if okT and type(t) == "string" and t ~= "" then
+          local v = ecSubTranslate(t)
+          if v then
+            pcall(fs.SetText, fs, v)
+            painted = painted + 1
+          end
+        end
+      end
+      side = side + 1
+    end
+    row = row + 1
+  end
+  EC.subN = painted
   return painted
 end
 
@@ -967,6 +1068,7 @@ local function ecUpdate(force)
     EC.cur, EC.why = nil, "no tooltip"
     return false
   end
+  ecSubPaintHost(host)                 -- ★子类名汉化（客户端重建会复位 ⇒ 每拍重贴；命中才写）
   -- ★重建信号②：气泡**首行名字变了**（客户端换物品/重建）⇒ 清汇总标记，允许补写一次
   local nmNow = ecNameNorm(ecTipName())
   if nmNow ~= EC.tipName then
@@ -1259,7 +1361,7 @@ function EVAL_EC_TEST_STATE()
     on = EVAL_EC_ENABLED(), armed = EC.armed, wrapped = EC.wrapped, built = EC.built,
     hits = EC.hits, cur = EC.cur, why = EC.why, last = EC.last,
     colored = EC.colored, deltas = EC.deltas, sumAppended = EC.sumAppended and true or false,
-    painted = EC.painted,
+    painted = EC.painted, subN = EC.subN,
     hb = EC.hb, hs = EC.hs, shown = table.getn(EC.shown),
     api = ecApiLine(),
   }
