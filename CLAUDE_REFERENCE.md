@@ -107,7 +107,7 @@ New-Item -ItemType Directory -Path "$staging\EvalHelp" | Out-Null
 # ★★清单必须**跟着 EvalHelp.toc 走**（下面的模块名与基准数由源码检查 PACK LIST CHECK 守着，改漏一处当场 FAIL）
 #   ★★★1.75.53 出包前核对发现：这行**漏了 `MapOverlayData.lua`**（1.75.51 新增的**顶层** .lua）——
 #     漏了它 = 用户装了**直接报错**（`.toc` 要求载入一个包内不存在的文件）。已补进下面这行。
-Copy-Item "$src\EvalHelp.toc","$src\Core.lua","$src\Engine.lua","$src\EvalHelp.lua","$src\Toolbox.lua","$src\DataSearch.lua","$src\Share.lua","$src\IconSem.lua","$src\IconBrowser.lua","$src\PetData.lua","$src\PetHelper.lua","$src\ItemPriceData.lua","$src\MapOverlayData.lua","$src\MapOverlayOffset.lua" "$staging\EvalHelp\"
+Copy-Item "$src\EvalHelp.toc","$src\Core.lua","$src\Engine.lua","$src\EvalHelp.lua","$src\Toolbox.lua","$src\DataSearch.lua","$src\Share.lua","$src\IconSem.lua","$src\IconBrowser.lua","$src\PetData.lua","$src\PetHelper.lua","$src\ItemPriceData.lua","$src\MapOverlayData.lua","$src\MapOverlayOffset.lua","$src\MapOverlayJPGData.lua","$src\MapOverlayOffsetJPG.lua" "$staging\EvalHelp\"
 Copy-Item "$src\README.md","$src\README_en.md","$src\README_ru.md","$src\CHANGELOG.md","$src\DEVELOPMENT.md" "$staging\EvalHelp\"
 Copy-Item "$src\Locales","$src\examples","$src\media","$src\tools" "$staging\EvalHelp\" -Recurse
 # quest/ 只拷插件要用的三个 .lua（fetch.js/sweep*.js/build*.js/audit.js/chains.js 是开发脚本、cache/ 是抓取缓存，都不进包）
@@ -133,6 +133,7 @@ Remove-Item $staging -Recurse -Force
   ★★★**1.75.60 实做口径（现行，脚本 = `tmp/pack1760.ps1`，纯 ASCII）**：`$repo` = `$PSScriptRoot\..`（**源一律取仓库、不取 AddOns 里那份**）、产物放仓库的上一级（`Interface/AddOns/`，与旧包同处）；
   一次打印 `STAGING FILES` / `ENTRIES`（**应为 1105** = 52 + media **1053** = 根 1 + icons 29 + Flags 3 + `WorldMap` **1020**）/ 头 6 条条目名 / `TOC MODULES`（**46**）/ `MISSING`（**0**）/
   `WORLDMAP entries in zip`（**1020** = 53 图 / 1019 块 + `README.txt`）/ `WORLDMAP _v entries`（**0**）/ `TOOLS modules in zip`（**14**）/ `QUEST modules in zip`（**4**）/ 六项开箱验文档（含 README 里的 `v1.75.60`、里程碑**板块内**恰好 10 条、CHANGELOG 的 `## 🎯 v1.75.60` 与 `1.75.60ab` 行）/ 两份副本 SHA256 相同（v-zip 约 **19.95 MB**）。
+   ★★★**1.75.70 实做口径（现行，脚本 = `tmp/pack1770.ps1`，纯 ASCII）**：口径与上一版相同，基准全部更新为 —— `ENTRIES` **1165**（= **48 个 toc 模块** + `EvalHelp.toc` 1 + 文档 5 + `media` **1111**）· `TOC MODULES` **48**（★新增两个**顶层** .lua：`MapOverlayJPGData.lua` / `MapOverlayOffsetJPG.lua` —— **必须写进上面那行 Copy-Item**，漏了 = 用户装了直接报错）· `media` 构成 = 根 1 + `icons` 29 + `Flags` 3 + `WorldMap` 1020 + **`WorldMapJpg` 58**（57 张 JPG + `README.txt`）· `TOOLS modules` **14** · `QUEST modules` **4** · `WORLDMAP _v entries` **0** · 两份副本 SHA256 相同（v-zip 约 **28 MB**，含 11 MB 实景图库）。开箱验文档同六项：README 含 `v1.75.70`、里程碑**板块内**恰好 10 条、CHANGELOG 含 `## 🎯 v1.75.70`。
   ★**里程碑条目数要按板块范围数**（`- **` 全文件数会把正文里别的列表也算进去 —— 1.75.60 首跑就得到 16；正解 = 从标题行（唯一含 ASCII 字面量 `1.52.0` 的 `## ` 行）数到下一个 `## ` 为止，恰好 10）。
   ★`MapOverlayOffset.lua`（**顶层** .lua）必须进 Copy-Item 那行（漏了 = 用户装了直接报错）；`media\WorldMap\_v` 本机已不存在 ⇒ 那条 `Remove-Item` 是无害的 no-op（留着防回潮）。
   ★★★**比对键名必须说全**：zip 条目名 = **`EvalHelp/`（zip 里其实是反斜杠）+ toc 里的相对路径** —— **顶层那个文件夹本身就是条目的一部分**
