@@ -25,22 +25,21 @@
 --     · `Darnassis` = **客户端资源目录的暴雪老拼写** ⇒ 两个键并存（生成器的 `CLIENT_ALIAS`）。
 --   ★**用户微调不进这个文件**（生成物）：活增量在存档 `worldFogCfg.editJpg`，
 --     烘成插件基线走 `node gen_mapoffset.js --jpg` → `MapOverlayOffsetJPG.lua`（与彩图那套完全对称）。
---   统计：图 57 张 ｜ 帧 1002x668
+--   统计：图 56 张 ｜ 帧 1002x668
 EVAL_MAP_OVERLAY_JPG_DATA = {
 	["Alterac"]={1002,668,0,0}, ["AlteracValley"]={1002,668,0,0}, ["Arathi"]={1002,668,0,0}, ["Ashenvale"]={1002,668,0,0}, ["Aszhara"]={1002,668,0,0},
-	["Badlands"]={1002,668,0,0}, ["Balor"]={1002,668,0,0}, ["Barrens"]={1002,668,0,0}, ["BlackstoneIsland"]={1002,668,0,0},
-	["BlastedLands"]={1002,668,0,0}, ["BurningSteppes"]={1002,668,0,0}, ["Darkshore"]={1002,668,0,0}, ["Darnassis"]={1002,668,0,0},
-	["Darnassus"]={1002,668,0,0}, ["DeadwindPass"]={1002,668,0,0}, ["Desolace"]={1002,668,0,0}, ["DunMorogh"]={1002,668,0,0},
-	["Durotar"]={1002,668,0,0}, ["Duskwood"]={1002,668,0,0}, ["Dustwallow"]={1002,668,0,0}, ["EasternPlaguelands"]={1002,668,0,0},
-	["Elwynn"]={1002,668,0,0}, ["Felwood"]={1002,668,0,0}, ["Feralas"]={1002,668,0,0}, ["Gillijim"]={1002,668,0,0}, ["Gilneas"]={1002,668,0,0},
-	["GrimReaches"]={1002,668,0,0}, ["Hilsbrad"]={1002,668,0,0}, ["Hinterlands"]={1002,668,0,0}, ["Hyjal"]={1002,668,0,0}, ["Icepoint"]={1002,668,0,0},
-	["Lapidis"]={1002,668,0,0}, ["LochModan"]={1002,668,0,0}, ["Moonglade"]={1002,668,0,0}, ["Moonwhisper"]={1002,668,0,0}, ["Mulgore"]={1002,668,0,0},
-	["Northwind"]={1002,668,0,0}, ["Redridge"]={1002,668,0,0}, ["SearingGorge"]={1002,668,0,0}, ["Silithus"]={1002,668,0,0},
-	["Silverpine"]={1002,668,0,0}, ["StonetalonMountains"]={1002,668,0,0}, ["Stormwind"]={1002,668,0,0}, ["Stranglethorn"]={1002,668,0,0},
-	["SwampOfSorrows"]={1002,668,0,0}, ["Tanaris"]={1002,668,0,0}, ["TelAbim"]={1002,668,0,0}, ["Teldrassil"]={1002,668,0,0},
-	["ThalassianHighlands"]={1002,668,0,0}, ["ThousandNeedles"]={1002,668,0,0}, ["ThunderBluff"]={1002,668,0,0}, ["Tirisfal"]={1002,668,0,0},
-	["UngoroCrater"]={1002,668,0,0}, ["WesternPlaguelands"]={1002,668,0,0}, ["Westfall"]={1002,668,0,0}, ["Wetlands"]={1002,668,0,0},
-	["Winterspring"]={1002,668,0,0},
+	["Badlands"]={1002,668,0,0}, ["Barrens"]={1002,668,0,0}, ["BlackstoneIsland"]={1002,668,0,0}, ["BlastedLands"]={1002,668,0,0},
+	["BurningSteppes"]={1002,668,0,0}, ["Darkshore"]={1002,668,0,0}, ["Darnassis"]={1002,668,0,0}, ["Darnassus"]={1002,668,0,0},
+	["DeadwindPass"]={1002,668,0,0}, ["Desolace"]={1002,668,0,0}, ["DunMorogh"]={1002,668,0,0}, ["Durotar"]={1002,668,0,0}, ["Duskwood"]={1002,668,0,0},
+	["Dustwallow"]={1002,668,0,0}, ["EasternPlaguelands"]={1002,668,0,0}, ["Elwynn"]={1002,668,0,0}, ["Felwood"]={1002,668,0,0},
+	["Feralas"]={1002,668,0,0}, ["Gillijim"]={1002,668,0,0}, ["Gilneas"]={1002,668,0,0}, ["GrimReaches"]={1002,668,0,0}, ["Hilsbrad"]={1002,668,0,0},
+	["Hinterlands"]={1002,668,0,0}, ["Hyjal"]={1002,668,0,0}, ["Icepoint"]={1002,668,0,0}, ["Lapidis"]={1002,668,0,0}, ["LochModan"]={1002,668,0,0},
+	["Moonglade"]={1002,668,0,0}, ["Moonwhisper"]={1002,668,0,0}, ["Mulgore"]={1002,668,0,0}, ["Northwind"]={1002,668,0,0}, ["Redridge"]={1002,668,0,0},
+	["SearingGorge"]={1002,668,0,0}, ["Silithus"]={1002,668,0,0}, ["Silverpine"]={1002,668,0,0}, ["StonetalonMountains"]={1002,668,0,0},
+	["Stormwind"]={1002,668,0,0}, ["Stranglethorn"]={1002,668,0,0}, ["SwampOfSorrows"]={1002,668,0,0}, ["Tanaris"]={1002,668,0,0},
+	["TelAbim"]={1002,668,0,0}, ["Teldrassil"]={1002,668,0,0}, ["ThalassianHighlands"]={1002,668,0,0}, ["ThousandNeedles"]={1002,668,0,0},
+	["ThunderBluff"]={1002,668,0,0}, ["Tirisfal"]={1002,668,0,0}, ["UngoroCrater"]={1002,668,0,0}, ["WesternPlaguelands"]={1002,668,0,0},
+	["Westfall"]={1002,668,0,0}, ["Wetlands"]={1002,668,0,0}, ["Winterspring"]={1002,668,0,0},
 }
 -- ★元信息（取证用：核对时写日志，一眼知道比对的是哪一版数据）
-EVAL_MAP_OVERLAY_JPG_META = { maps = 57, frame = "1002x668", src = "media/WorldMapJpg", gen = "gen_mapjpgdata.js" }
+EVAL_MAP_OVERLAY_JPG_META = { maps = 56, frame = "1002x668", src = "media/WorldMapJpg", gen = "gen_mapjpgdata.js" }

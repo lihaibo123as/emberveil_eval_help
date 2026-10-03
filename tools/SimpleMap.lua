@@ -1121,7 +1121,13 @@ local SM_CFG = EH_SIMPLEMAP_CFG
 --   ★开了之后当然还能随便调（地图设置面板 [−][+] / Shift+滚轮透明度 / Ctrl+滚轮缩放），
 --     调出来的值在「保持开启」期间一直有效；只有**重新开启**才会回到默认档。
 -- ============================================================
-local SM_DEF_ALPHA, SM_DEF_SCALE, SM_DEF_GUIREOPEN = 0.7, 0.7, false
+-- ★★★1.75.71（用户：「工具箱->缩放大地图->默认地图透明度1,缩放1」）：默认档由 **0.7 / 0.7** 改成 **1 / 1**。
+--   为什么：透明度 < 1 不是给地图调色，而是把整张地图**半透明地叠在背景上** ⇒ **原色被稀释**（发灰发浅、对比下降）——
+--   用户实测就是「AI 高清重绘的实景图在游戏里掉色」，根因是这一档；同源在案还有 1.75.60g「透明度 0.7 ⇒ 贴图一闪一闪」。
+--   ⇒ 默认给**不透明 + 原始缩放**（用户要看"原色"就不该有任何叠加）。
+--   ★老存档里的**旧默认值**（透明度 0.75 / 0.7、缩放 0.7）由载入期一次性迁移（见文件末尾 EH_SM_MODEGUARD 块）；
+--     用户**自己调出来的**其它档位（0.8 / 0.9 / 0.5…）一律不动（绝不二次顶改）。
+local SM_DEF_ALPHA, SM_DEF_SCALE, SM_DEF_GUIREOPEN = 1, 1, false
 
 -- ★★★1.75.10（用户报障）：「世界地图缩放开启之后，每次插件重载的初始位置能否居中。现在他有时候会乱跳到左下角位置」
 --   ⇒ **跨会话的位置记忆作废**：每次载入后的**第一次开图一律居中**，并把存档里那份历史偏移清掉；
@@ -1144,13 +1150,11 @@ local SM_RECENTER_TICKS = 25
 --   取证：`featHideBlackout` 会记一条「开图后 N ms 藏住」（进 mapFitTrace；详细档还会上屏）。
 local SM_BLACKOUT_SEC = 0.6
 
--- ★★1.74.29 用户定：工具箱→地图功能默认 **缩放 0.7 / 透明 0.7**（原透明默认是 0.75）
+-- ★★1.74.29 用户定过 **缩放 0.7 / 透明 0.7**（再早的透明默认是 0.75）；★1.75.71 按用户指令改成 **1 / 1**（见 SM_DEF_* 处注释）。
+--   ★这两句只做「读的时候给个兜底」：SM_CFG 是**懒代理**（读的永远是存档真值），但**文件执行期 `EVAL_HELP_CONFIG` 还是空表**
+--     ⇒ 写在这里的值会被客户端随后换上的那份存档表**顶掉**（1.75.9 老雷）⇒ 真正的**落值 / 迁移**放在文件末尾的
+--     VARIABLES_LOADED 块里（那一块也顺带把旧默认 0.75 / 0.7 升到新默认，两处迁移合并成一处口径）。
 SM_CFG.alpha = tonumber(SM_CFG.alpha) or SM_DEF_ALPHA -- 透明度（Shift+滚轮；1=不透明）
--- 一次性迁移：老存档里写着的旧默认 0.75 → 0.7（**只改“恰好等于旧默认”的值**，改过的值不动）
-if tonumber(SM_CFG.alpha) == 0.75 and SM_CFG.alphaDefMigrated ~= true then
-  SM_CFG.alpha = SM_DEF_ALPHA
-  SM_CFG.alphaDefMigrated = true
-end
 SM_CFG.scale = tonumber(SM_CFG.scale) or SM_DEF_SCALE -- 缩放（Ctrl+滚轮；只缩外框）
 
 
@@ -3310,6 +3314,8 @@ do
 end
 
 -- 复位：透明度/缩放/位置全回默认
+--   ★1.75.71：与 SM_DEF_* 的默认档**同值**（1/1）—— 默认档改成不透明之后，「复位」= 「回默认」，
+--   面板上的 [复位] 与「关掉再开启（套默认档）」从此得到同一个档位，用户不用再记两套。
 function featReset()
   SM_CFG.alpha = 1
   SM_CFG.scale = 1
@@ -3331,7 +3337,7 @@ function featReset()
 end
 
 -- ★★★默认档的执行口（用户 1.74.36-3；三个常量在文件上方 SM_DEF_* 处 = 单一来源）：
---   **开启「缩放大地图」时套用** —— 缩放 0.7 · 透明度 0.7 · GUI重开 **不启用**。
+--   **开启「缩放大地图」时套用** —— 缩放 1 · 透明度 1 · GUI重开 **不启用**（★1.75.71 起；此前是 0.7/0.7）。
 --   ★写的是**配置真值**（SM_CFG，落存档），并立刻应用视觉效果；面板已建好就顺带刷新它的标签
 --     （否则面板显示上一轮的旧数字，看着像「默认值没生效」）。
 --   ★顺序固定：先写三处真值 → 再应用（应用读的就是刚写进去的值）→ 最后刷面板。
@@ -3678,6 +3684,26 @@ do
         SM_CFG.mapFitVerbose = nil
         P("详细日志已回默认（关）：上一会话遗留的详细档已清（只在本会话有效；要开：/ehm mapfit verbose on）")
       end
+      -- ★★★1.75.71（用户：「工具箱->缩放大地图->默认地图透明度1,缩放1」）：默认档 0.7/0.7 → **1/1** 的一次性迁移。
+      --   只升级**旧默认值**：透明度 0.75（更早的默认）或 0.7 · 缩放 0.7；
+      --   ★用户**自己调出来的**其它档位（0.8/0.9/0.5…）**一律不动** —— 绝不二次顶改用户选过的值。
+      --   ★为什么放这里：文件执行期 `EVAL_HELP_CONFIG` 还是空表，早写会落进被替换掉的那张临时表（1.75.9 老雷）。
+      --   ★与旧默认同值也可能是手调的（Shift/Ctrl+滚轮每档 0.1）⇒ 迁移**只做一次** + **如实出声** + 附「怎么调回去」。
+      --   ★迁移后当场应用一次（没开图 / 面板没开时是空操作）；面板标签在下次建窗/刷新时读的就是新值。
+      local aWas = tonumber(SM_CFG.alpha)
+      if (aWas == 0.75 or aWas == 0.7) and SM_CFG.alphaDefMigrated ~= true then
+        SM_CFG.alpha = SM_DEF_ALPHA
+        SM_CFG.alphaDefMigrated = true
+        P(string.format("地图默认档更新：透明度 %.2f → %.2f（只升级旧默认值，做过一次；要调回去：Shift+滚轮）", aWas, SM_DEF_ALPHA))
+        pcall(featApplyAlpha, SM_DEF_ALPHA)
+      end
+      local sWas = tonumber(SM_CFG.scale)
+      if sWas == 0.7 and SM_CFG.scaleDefMigrated ~= true then
+        SM_CFG.scale = SM_DEF_SCALE
+        SM_CFG.scaleDefMigrated = true
+        P(string.format("地图默认档更新：缩放 %.2f → %.2f（只升级旧默认值，做过一次；要调回去：Ctrl+滚轮）", sWas, SM_DEF_SCALE))
+        pcall(featApplyScale, SM_DEF_SCALE)
+      end
       pcall(mg.UnregisterEvent, mg, "VARIABLES_LOADED")
     end)
   end
@@ -3810,7 +3836,7 @@ local function smRow(r, it)
     pcall(tip.AddLine, tip, (type(it) == "table" and it.tip) or L("TB_SIMPLEMAP_TIP"), 1, 0.85, 0.30)
     for _, ln in ipairs(EVAL_SM_GUIREOPEN_TIPS()) do pcall(tip.AddLine, tip, ln, 0.88, 0.88, 0.88) end
     pcall(tip.AddLine, tip, EVAL_SM_MAPFIT_TIP(), 0.72, 0.92, 0.72) -- ★1.74.35-4 叠加层适配状态（默认开）
-    pcall(tip.AddLine, tip, EVAL_SM_DEF_TIP(), 0.92, 0.82, 0.55) -- ★1.74.36-3 开启默认档 0.7/0.7/GUI不启用
+    pcall(tip.AddLine, tip, EVAL_SM_DEF_TIP(), 0.92, 0.82, 0.55) -- ★1.74.36-3 开启默认档；★1.75.71 起 = 1/1/GUI不启用
     pcall(tip.AddLine, tip, EVAL_SM_SUMMARY(), 0.75, 0.95, 0.75)
     pcall(tip.Show, tip)
   end)
