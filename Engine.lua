@@ -2940,7 +2940,15 @@ local function teamJointGroup(g, rule, dry)
       local txt = teamRecBrief(rec) .. " · 条件: " .. table.concat(trace, " ")
         .. " · 依据: " .. teamOrderLabel(order) .. " ｜ 联合判定(" .. tostring(table.getn(teamCds)) .. " 条队友条件)"
       TEAM_JOINT.last = { ok = true, text = txt, unit = pickedUnit, n = table.getn(teamCds) }
-      wlog(tostring(skill) .. " 联合命中: " .. txt)
+      -- ★★★这里**故意不打日志**（原写法 `wlog(skill .. " 联合命中: " .. txt)` 已按用户指令删除）：
+      --   本函数是**求值函数**，`dry = true` 也会被调 —— 而战斗信息UI 的亮金预览每 0.15s
+      --   （`EvalHelp.lua` 的 `UI_TICK`）就 `groupsOK(r, true)` 一次 ⇒ 条件一成立就每秒 6~7 行
+      --   「联合命中」刷屏（用户真机报障），而那条路上**一次技能都没放**。
+      --   ★一眼分清「预览」与「真放」的判据：真执行时日志在别处 —— `EVAL_RULE_RUN` 的「触发: …」
+      --     与 `wuse` 的绿色 `→ 技能 (原因) | 法力N`；报障截图上这两行**一条都没有** ⇒ 全是预览。
+      --   ⇒ 现在：真执行由 `EVAL_RULE_RUN` 打**唯一**一行 `技能触发: 联合:…`（trace 经 groupsOK 原样回传，
+      --     同 1.75.23 起文档记的形态），预览路径一个字都不说。
+      --   ★**别再往回加**；将来真要在这里说点什么，必须带 `if not dry then` 门。
       return true, nil, "联合:" .. txt
     end
     table.insert(briefs, tostring(rec.name or rec.unit) .. " "

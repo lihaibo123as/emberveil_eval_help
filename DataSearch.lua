@@ -410,6 +410,90 @@ local function dsFirstLoc(kind, id)
   return nil
 end
 
+-- ===== 起始 / 结束 NPC（任务发布者与交付人）· 1.75.72 =====
+-- 用户要求（两轮）：「任务线&装备 -> 任务树 -> 点任务进详情时，任务的**起始 NPC** 需要显示，并且点击
+--   支持在**地图上打开该 NPC 的坐标**；这块坐标数据检索数据库网站查看。」
+--   +「起始 的意思是**开始 NPC，和结束 NPC**，现在是只有一个吗？类似（任务日志那种 起始/结束 分块的）布局」
+--
+-- ★数据源已按用户指示**实地核对过站点**（结论：用插件内已带的那一份，不另抓）：
+--   站点 database.emberveil.org 的任务页在「任务发布者」面板里给出 —— NPC 链接（/creature/<id>）、
+--   名字、角色（开始 / 结束 / 开始与结束）、等级、所属区域（/zone/<id> + 区域名 + 刷新点数），
+--   以及地图上的百分比标记（style left/top，如 56.42% / 47.62% = 坐标 56.42, 47.62）。
+--   而插件内 UnrealQuest 捆绑的库（同源 = VMaNGOS / pfQuest 打包）与之**逐条一致**（抽样实测）：
+--     #102 丹努文队长  站点 56.42/47.62（区域 40 西部荒野） ↔ 库 56.4/47.6（区域 40）
+--     #704 勘察员基恩萨·铁环 站点 65.93/65.62（区域 38 洛克莫丹） ↔ 库 65.9/65.6（区域 38）
+--     #1061 佐尔·孤树  站点 38.93/38.40（区域 1637 奥格瑞玛） ↔ 库 38.9/38.4（区域 1637）
+--   ⇒ 直接读库里现成的 `start` / `end` 关系（零联网、零新增数据文件；同一份真值不做两处）。
+--   ★#704 这条还顺带定了口径：NPC 的**自己的区域**才是该打开的地图（任务写着奥达曼，
+--     而发任务的人在洛克莫丹）⇒ 一律用刷新点自带的 areaId，绝不用任务所在的区域去覆盖。
+--
+-- ★两个关系**各走各的口**（同一份实现 + 两个薄壳，绝不各写一份）：
+--   · `start` = **起始 NPC**（谁发任务）→ `EVAL_DS_QUEST_STARTERS`
+--   · `end`   = **结束 NPC**（交给谁）  → `EVAL_DS_QUEST_FINISHERS`
+--   ★全量实测（4018 个任务）：`end` 覆盖 3986（无 end 的仅 32）；**end.U 3788 / end.O 201 / end.I 0**
+--     （**没有物品交付** ⇒ 界面不需要「物品交付」前缀）；`end` 与 `start` **完全同一批人 = 2405（60%）**、
+--     不同 = 1581；end 无可定位点 = 204；end 多于一个实体 = 10。⇒ 界面按「同一批人只写一行并标（开始与结束）」
+--     渲染（60% 的任务不会出现同一个人写两遍），不同则分「起始 NPC / 结束 NPC」两块。
+-- ★查不到就**如实返回空表**（调用方写一行说明），绝不编名字、绝不编坐标。
+-- ★全量分布实测（start）：1 个起始单位 = 3908，2 个 = 42，3~12 个 = 31，无 start 的 = 37，
+--   区域触发（.A）**一个都没有** ⇒ 只处理 U(生物) / O(物体) / I(物品) 三种。
+--   ★两条上限**分开**（缺一条就会在真数据上出洋相）：
+--     · `DS_STARTER_SCAN` = **收集上限**（异常数据兜底，防一条关系灌爆对话框）；
+--     · `DS_STARTER_MAX`  = **界面列出上限**，多出来的由调用方如实写「还有 N 个」（绝不静默截断）。
+--   ★去重口径（真数据 #2933 实测：12 个「毒液瓶」挤在 20 米内，不去重就是 6 行几乎一样的字）：
+--     有坐标 ⇒ 按「子表 + 名字 + 区域 + 坐标（0.1 精度）」去重；没坐标（物品发起 / 查不到刷新点）
+--     ⇒ **按 id 各算一条**（两个都没有坐标的不同单位绝不能合并成一条）。
+local DS_STARTER_MAX = 6
+local DS_STARTER_SCAN = 24
+local function dsQuestRelRows(qid, relKey)
+  local out = {}
+  local db = dsDb()
+  if not db or type(qid) ~= "number" then return out end
+  local q = db.quests and db.quests[qid]
+  local rel = (type(q) == "table") and q[relKey] or nil
+  if type(rel) ~= "table" then return out end
+  -- 子表 → 数据表名（`dsLocEntry` 的本地化表前缀同名）+ 定位用的 sourceType（UnrealQuest 口径）
+  local subs = {
+    { "U", "units", "unit" },
+    { "O", "objects", "object" },
+    { "I", "items", "item" },
+  }
+  local seen = {}
+  for si = 1, table.getn(subs) do
+    local sub, base, src = subs[si][1], subs[si][2], subs[si][3]
+    local ids = rel[sub]
+    if type(ids) == "table" then
+      for k = 1, table.getn(ids) do
+        local id = ids[k]
+        if type(id) == "number" and table.getn(out) < DS_STARTER_SCAN then
+          local rec = db[base] and db[base][id] or nil
+          -- ★物品发起的任务（站点写的「该物品将开始一个任务」）没有自己的坐标 ⇒ loc 留 nil，
+          --   界面照旧把名字列出来（不是所有起始者都站在地图上）
+          local nm = dsLocEntry(base, id)
+          local loc = dsRecLoc(rec, nm, src, id)
+          if loc then loc.kind = src loc.id = id loc.how = relKey end
+          local key
+          if loc then
+            key = sub .. "|" .. tostring(nm) .. "|" .. tostring(loc.zid) .. "|"
+              .. string.format("%.1f,%.1f", loc.x or -1, loc.y or -1)
+          else
+            key = sub .. "|#" .. tostring(id)
+          end
+          if not seen[key] then
+            seen[key] = true
+            -- ★`ent` = **实体身份键**（子表 + id，不含坐标）：界面用它判断「起始」与「结束」是不是同一批人
+            --   —— 比显示串靠谱（同一个 NPC 换了个刷新点仍然是同一个人），也比再算一次便宜。
+            table.insert(out, { id = id, sub = sub, kind = src, name = nm, loc = loc, ent = sub .. "#" .. tostring(id) })
+          end
+        end
+      end
+    end
+  end
+  return out
+end
+function EVAL_DS_QUEST_STARTERS(qid) return dsQuestRelRows(qid, "start") end
+function EVAL_DS_QUEST_FINISHERS(qid) return dsQuestRelRows(qid, "end") end
+
 -- ===== 搜索（逻辑层，可测）：前缀匹配 > 子串匹配，名称短者优先，取前 10 =====
 local DS_TYPES = { "quest", "item", "unit", "object" }
 local DS_BASE = { quest = "quests", item = "items", unit = "units", object = "objects" }
@@ -3484,6 +3568,9 @@ function EVAL_DS_BUILD(root, page, refreshes)
   DS.qpDetIcon, DS.qpDetTitle, DS.qpDetSub = qpDetIcon, qpDetTitle, qpDetSub
   local qpDetRows, qpDetWidgets, qpZoomBtns = {}, {}, {}
   local qpDetIcons, qpDetHover = {}, {}
+  -- ★1.75.72 槽 B 那颗按钮的纹理句柄要能**逐行换图**（放大镜 / 地图圆点）：帧对象上不敢挂字段
+  --   （本项目没验证过 UE 封装帧能不能当表用）⇒ 另存一张同序表，由 DS.qp.zoomTex 带出去。
+  local qpZoomTex = {}
   for i = 1, QP_DET_ROWS do
     local t = dsText(qp, 9, 0.9, 0.87, 0.78)
     -- ★1.75.14 用户报障「任务线任务详情内 · 任务线左侧的图标重叠」⇒ 详情行改成**两个左侧槽位**：
@@ -3526,6 +3613,7 @@ function EVAL_DS_BUILD(root, page, refreshes)
     pcall(zb.RegisterForClicks, zb, "LeftButtonUp")
     zb:Hide()
     qpZoomBtns[i] = zb
+    qpZoomTex[i] = zt
     table.insert(qpDetWidgets, zb)
   end
   -- ★翻页按钮**不进任何互斥清单**：同时进两份会被后处理的 detWidgets「Hide 掉」（1.75.5 实测：
@@ -3548,6 +3636,8 @@ function EVAL_DS_BUILD(root, page, refreshes)
     tabItem = qpTabItem, tabChain = qpTabChain, tabTree = qpTabTree, f0 = qpF0, f1 = qpF1, f2 = qpF2, f3 = qpF3,
     back = qpBack, goDs = qpGoDs, bar = qpBar,
     zoomBtns = qpZoomBtns, detIcons = qpDetIcons, detHover = qpDetHover, detItem = {}, detZoom = {}, detPh = {},
+    -- ★1.75.72 起始 NPC 行：detLoc[行] = 定位数据（有 ⇒ 这一行的槽 B 按钮 + 整行文字区都改指向「地图定位」）
+    detLoc = {}, zoomTex = qpZoomTex, zoomIcon = QP_ZOOM_ICON, mapIcon = DS_MAP_ICON,
     navPrev = qpUp, navNext = qpDn,
     detIcon = qpDetIcon, detIconBtn = qpDetIconBtn, detTitle = qpDetTitle, detSub = qpDetSub, hint = qpHint,
   }
@@ -4423,6 +4513,7 @@ function EVAL_DS_BUILD(root, page, refreshes)
       st.detRows[i]:SetTextColor(0.9, 0.87, 0.78)
       st.detZoom[i] = nil
       st.detItem[i] = nil
+      st.detLoc[i] = nil            -- ★1.75.72 定位行也要逐行清（行池复用）
       pcall(st.zoomBtns[i].Hide, st.zoomBtns[i])
       pcall(st.detIcons[i].Hide, st.detIcons[i])   -- ★行池复用：图标/热区必须逐行清（否则残留在别的行上）
       pcall(st.detHover[i].Hide, st.detHover[i])
@@ -4445,7 +4536,7 @@ function EVAL_DS_BUILD(root, page, refreshes)
     for i = 1, QP_DET_ROWS do
       local e = (body and total > 0) and body[off + i] or nil
       local fs = st.detRows[i]
-      st.detZoom[i], st.detItem[i], st.detPh[i] = nil, nil, nil
+      st.detZoom[i], st.detItem[i], st.detPh[i], st.detLoc[i] = nil, nil, nil, nil
       pcall(st.zoomBtns[i].Hide, st.zoomBtns[i])
       pcall(st.detIcons[i].Hide, st.detIcons[i])
       pcall(st.detHover[i].Hide, st.detHover[i])
@@ -4455,8 +4546,18 @@ function EVAL_DS_BUILD(root, page, refreshes)
       else
         fs:SetText(tostring(e.text or ""))
         fs:SetTextColor(e.r or 0.9, e.g or 0.87, e.b or 0.78)
-        if e.zoom and e.zoom ~= "" then
+        -- ★1.75.72 起始 NPC 行（用户要求「点击支持在地图上打开该 NPC 坐标」）：槽 B 那颗按钮
+        --   这一行**改成地图圆点**（点它 = 定位）；其余行照旧是放大镜（按任务名去检索）。
+        --   ★同一颗按钮两种用途，**按行数据分派**：loc 优先于 zoom（两者不会同时出现）。
+        if e.loc then
+          st.detLoc[i] = e.loc
+          local zt = st.zoomTex and st.zoomTex[i]
+          if zt then pcall(zt.SetTexture, zt, st.mapIcon or DS_MAP_ICON) end
+          pcall(st.zoomBtns[i].Show, st.zoomBtns[i])
+        elseif e.zoom and e.zoom ~= "" then
           st.detZoom[i] = e.zoom
+          local zt = st.zoomTex and st.zoomTex[i]
+          if zt then pcall(zt.SetTexture, zt, st.zoomIcon or QP_ZOOM_ICON) end
           pcall(st.zoomBtns[i].Show, st.zoomBtns[i])
         end
         if e.item then
@@ -4470,6 +4571,12 @@ function EVAL_DS_BUILD(root, page, refreshes)
             pcall(st.detIcons[i].Show, st.detIcons[i])
           end
           if isPh then st.detPh[i] = true end
+          pcall(st.detHover[i].Show, st.detHover[i])
+        elseif e.loc then
+          -- ★★★1.75.72 用户报障：「NPC 前面为啥会出现两个图标?」—— 真凶 = **同一颗地图圆点画了两遍**：
+          --   行首的槽 B（可点按钮，见上面 `if e.loc then` 那一段）换了地图圆点，而这支又给**槽 A**（纯纹理）
+          --   贴了同一张图 ⇒ 并排两颗一模一样的圆点。★槽 A 是纹理、**根本点不动** ⇒ 它对「能点」毫无贡献，
+          --   只制造重影 ⇒ 这里**只显示整行热区、槽 A 一个字节都不画**（定位行的可见抓手 = 槽 B 那一颗）。
           pcall(st.detHover[i].Show, st.detHover[i])
         elseif e.quest then
           -- ★1.75.12 任务行：左侧**黄色感叹号**（照数据检索列表同一张图），行照样挂放大镜按钮
@@ -4669,7 +4776,78 @@ function EVAL_DS_BUILD(root, page, refreshes)
       end
     end
 
-    -- ① 所属任务线：**自动系列**与**策展链**是两个来源，分开列（不合并冒充同一条）    local serOf = (type(EVAL_QC_SERIES_OF) == "function") and EVAL_QC_SERIES_OF(id) or nil
+    -- ⓪ 起始 / 结束 NPC（1.75.72 两轮；用户：「起始 的意思是**开始 NPC，和结束 NPC**，现在是只有一个吗？
+    --   类似（任务日志那种 起始/结束 分块）的布局」「点击支持在地图上打开该 NPC 坐标」）
+    --   ★排在**最前**：「这任务在哪接、交给谁」是点进详情第一个要知道的事（在「所属任务线」之前）。
+    --   ★数据 = EVAL_DS_QUEST_STARTERS(`start`) / EVAL_DS_QUEST_FINISHERS(`end`)（同一份实现两个薄壳；
+    --     网站与插件库已逐条核对一致，见那两个函数头注释）。
+    --   ★行上带 loc ⇒ 整行热区与槽 B 的圆点按钮 = 开图定位（实现在构建段的 hb / zb 处理体里）。
+    --   ★★**同一批人只写一行**：真数据里 2405/4018（60%）的交付人**就是**起始人 ⇒ 那种情况不重复写两遍，
+    --     改在行尾标 `（开始与结束）`；**不同**才分「起始 NPC / 结束 NPC」两块（照任务日志那种分块布局）。
+    --   ★查不到就**如实写一行**（不编、也不静默留白——本项目最忌讳的静默失败）。
+    --   ★一个渲染件同时服务两个关系（`roleTag` 只管前缀/无记录文案），避免两段几乎一样的代码各自漂移。
+    if type(EVAL_DS_QUEST_STARTERS) == "function" or type(EVAL_DS_QUEST_FINISHERS) == "function" then
+      local sl = (type(EVAL_DS_QUEST_STARTERS) == "function") and EVAL_DS_QUEST_STARTERS(id) or {}
+      local fl = (type(EVAL_DS_QUEST_FINISHERS) == "function") and EVAL_DS_QUEST_FINISHERS(id) or {}
+      -- 「起始」与「结束」是不是同一批人（按实体键比，不比显示串：同一个人换个刷新点还是同一人）
+      local samePeople = (table.getn(sl) > 0 and table.getn(sl) == table.getn(fl))
+      if samePeople then
+        local fset = {}
+        for i = 1, table.getn(fl) do fset[fl[i].ent or ("?")] = true end
+        for i = 1, table.getn(sl) do
+          if not fset[sl[i].ent or ("?") ] then samePeople = false break end
+        end
+      end
+      local function putPeople(list, title, noneKey, itemTag, bothTag)
+        sec(title)
+        if table.getn(list) == 0 then
+          put({ text = L(noneKey), r = 0.66, g = 0.62, b = 0.50 })
+          return
+        end
+        local showN = table.getn(list)
+        if showN > DS_STARTER_MAX then showN = DS_STARTER_MAX end
+        for i = 1, showN do
+          local e = list[i]
+          local nm = tostring(e.name or "")
+          if nm == "" then nm = "#" .. tostring(e.id) end
+          -- 物品发起的任务（站点：「该物品将开始一个任务」）没有自己的坐标 ⇒ 名字照列、不摆定位
+          local tag = (e.sub == "I" and itemTag) and L(itemTag) or ""
+          local txt, loc = tag .. nm, e.loc
+          if type(loc) == "table" then
+            -- ★坐标口径与站点一致（百分比，0~100，y 向下）：站点 #102 = 56.42/47.62，库 = 56.4/47.6
+            txt = string.format("%s · %s (%.1f, %.1f)", txt,
+              dsZoneName(loc.zid) or ("#" .. tostring(loc.zid)), loc.x or 0, loc.y or 0)
+          else
+            txt = txt .. L("DS_QP_STARTER_NOLOC")
+          end
+          if bothTag then txt = txt .. L("DS_QP_ROLE_BOTH") end
+          put({ text = txt, r = 0.62, g = 0.92, b = 0.68, loc = (type(loc) == "table") and loc or nil })
+        end
+        -- ★截断必须出声（本项目铁律：绝不静默截断）—— 真数据上只有 4 个任务会走到这一行
+        local more = table.getn(list) - showN
+        if more > 0 then
+          put({ text = string.format(L("DS_QP_STARTER_MORE"), more), r = 0.66, g = 0.62, b = 0.50 })
+        end
+      end
+      if samePeople then
+        -- 同一个（批）人既发又收 ⇒ 一块列完、行尾标明两个身份
+        putPeople(sl, L("DS_QP_STARTER"), "DS_QP_STARTER_NONE", "DS_QP_STARTER_ITEM", true)
+      else
+        putPeople(sl, L("DS_QP_STARTER"), "DS_QP_STARTER_NONE", "DS_QP_STARTER_ITEM", false)
+        -- ★结束块：`end.I` 全量实测 **0 条** ⇒ 不给物品交付加前缀（真出现也只写名字，不写错前缀）
+        putPeople(fl, L("DS_QP_FINISHER"), "DS_QP_FINISHER_NONE", nil, false)
+      end
+    end
+
+    -- ① 所属任务线：**自动系列**与**策展链**是两个来源，分开列（不合并冒充同一条）
+    -- ★★★1.75.72 修一处**静默死**（本次审计抓到的）：这一行原来是
+    --   `-- ① 所属任务线：…（不合并冒充同一条）    local serOf = …` —— `local serOf = …` 整句
+    --   **被吃进注释里**了（注释与语句写在同一行）⇒ `serOf` 成了**全局 nil** ⇒ 下面 `if serOf then`
+    --   永远不成立 ⇒ `EVAL_QC_SERIES_OF`（站点「本系列第 N/M 部分」的**自动系列**，实测 688 条）
+    --   在详情里**从来没渲染过**；看得见的只有策展链那一支（`curOf`）。
+    --   ★`luacheck` / `probe_localorder` / `scan_dangling` **一个都不报**（语法合法、名字只是被读）
+    --   ⇒ 常驻判据 = `node tmp/comment_local_scan.js`（注释里藏 `local NAME =` 而该名字在文件里被当变量用）。
+    local serOf = (type(EVAL_QC_SERIES_OF) == "function") and EVAL_QC_SERIES_OF(id) or nil
     local curOf = (type(EVAL_QC_QUEST_CHAINS) == "function") and EVAL_QC_QUEST_CHAINS(id) or nil
     if (serOf and table.getn(serOf) > 0) or (curOf and table.getn(curOf) > 0) then
       sec(L("DS_QP_OWNCHAIN"))
@@ -5207,11 +5385,29 @@ function EVAL_DS_BUILD(root, page, refreshes)
       EVAL_QP_LIST()
     end)
   end)
+  -- ★1.75.72 定位行的悬停提示**唯一实现**（槽 B 按钮与整行热区共用一份，口径不会各说一套）：
+  --   第一行 = 用法（点击在地图上定位），第二行 = 这个 NPC 在哪（区域 + 坐标），第三行 = 名字。
+  local function qpLocTip(owner, loc)
+    if type(GameTooltip) == "nil" or type(loc) ~= "table" then return end
+    pcall(GameTooltip.SetOwner, GameTooltip, owner, "ANCHOR_RIGHT")
+    pcall(GameTooltip.SetText, GameTooltip, L("DS_QP_STARTER_TIP"))
+    local zn = dsZoneName(loc.zid) or ("#" .. tostring(loc.zid))
+    pcall(GameTooltip.AddLine, GameTooltip, string.format("%s  (%.1f, %.1f)", zn, loc.x or 0, loc.y or 0))
+    if loc.name and tostring(loc.name) ~= "" then pcall(GameTooltip.AddLine, GameTooltip, tostring(loc.name)) end
+    pcall(GameTooltip.Show, GameTooltip)
+  end
+  -- 定位行点击 = 开图 + 打点（唯一出口 = EVAL_DS_SHOWMAP，与数据检索列表那条路完全同一条）
+  local function qpLocGo(loc)
+    if type(loc) ~= "table" then return end
+    if type(EVAL_DS_SHOWMAP) == "function" then pcall(EVAL_DS_SHOWMAP, loc) end
+  end
   for zi = 1, QP_DET_ROWS do
     -- ★1.75.10 奖励行的**链接 tooltip**：悬停按装备 id 出原生物品详情（客户端认识就用客户端的，
     --   不认识就用站点数据自绘 —— 与武器列表行同一个 qpItemTooltip），点击直接进该装备详情。
     local hb = qpDetHover[zi]
     hb:SetScript("OnEnter", function()
+      local loc = DS.qp and DS.qp.detLoc[zi]
+      if type(loc) == "table" then qpLocTip(hb, loc) return end
       local id = DS.qp and DS.qp.detItem[zi]
       if type(id) ~= "number" then return end
       -- ★1.75.18 详情页奖励行同理：占位 → 「数据更新中…（点击优先刷新）」；扫到了才出物品链接
@@ -5221,12 +5417,18 @@ function EVAL_DS_BUILD(root, page, refreshes)
       if type(GameTooltip) ~= "nil" then pcall(GameTooltip.Hide, GameTooltip) end
     end)
     hb:SetScript("OnClick", function()
+      -- ★1.75.72 起始 NPC 行：**点整行 = 在地图上定位该 NPC**（用户要求「点击支持在地图上打开该 NPC 坐标」）
+      local loc = DS.qp and DS.qp.detLoc[zi]
+      if type(loc) == "table" then qpLocGo(loc) return end
       local id = DS.qp and DS.qp.detItem[zi]
       if type(id) ~= "number" then return end
       if DS.qp.detPh[zi] then qpReqPriority(id) else EVAL_QP_ITEM_DETAIL(id) end
     end)
     local zb = qpZoomBtns[zi]
     zb:SetScript("OnClick", function()
+      -- ★1.75.72 槽 B 在这类行上是**地图圆点**（不是放大镜）⇒ 同一个按钮按行数据分派
+      local loc = DS.qp and DS.qp.detLoc[zi]
+      if type(loc) == "table" then qpLocGo(loc) return end
       local word = DS.qp.detZoom[zi]
       if type(word) == "string" and word ~= "" and type(EVAL_DS_SEARCH_NAME) == "function" then
         EVAL_DS_SEARCH_NAME(word) -- ★按**任务名**检索（用户要求：节点放大镜直达数据检索）
@@ -5242,6 +5444,8 @@ function EVAL_DS_BUILD(root, page, refreshes)
     end)
     zb:SetScript("OnEnter", function()
       if type(GameTooltip) == "nil" then return end
+      local loc = DS.qp and DS.qp.detLoc[zi]
+      if type(loc) == "table" then qpLocTip(zb, loc) return end
       pcall(GameTooltip.SetOwner, GameTooltip, zb, "ANCHOR_RIGHT")
       pcall(GameTooltip.SetText, GameTooltip, L("DS_QP_ZOOM_TIP"))
       pcall(GameTooltip.Show, GameTooltip)

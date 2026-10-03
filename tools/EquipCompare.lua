@@ -43,6 +43,15 @@
 --   · 包装纪律：先存旧的 → **零参数**调原生 → **按身份比对**还原（期间被别人套过的不许冲掉）。
 --   · OnUpdate **零形参**（dt 只能从全局 `arg1` 取）；单一 0.15s 节拍，只为「换/离开悬停时收框」。
 --   · 认不出就**什么都不显示**并如实记原因（查不到 ≠ 没有；绝不猜部位、绝不乱挂）。
+--
+-- ★★★两道「该不该比」的门（1.75.71 用户报障后加的；顺序即判据，都排在读回/建框**之前**）：
+--   ① **类别门**（`ecClassOf`）：悬停那件必须**不是**已知的**非装备类**（消耗品/商品/任务/配方/容器/
+--      弹药/钥匙…）才继续 —— 用户原话：「像绷带类型不要启用比较……只有装备,武器这些才开启」。
+--      ★只拦「明确判成非装备」的；**判不出（nil）一律放行**（ruRU 等词表覆盖不到的语种不能被误杀）。
+--   ② **另一侧有属性门**：当前装备那件读回来**一条可比数值行都没有**（衬衣/战袍这类）⇒ 这一格
+--      不摆框（用户原话：「比较另一方无……属性类的时候就不应该开启比较」）；双戒指/双饰品**逐格判**。
+--   · 取证口 = `/eh go 装备比较 物品`（**鼠标先停在物品上**）：把这件的 `GetItemInfo` 十个返回
+--     逐个摊开 + ①②两道门的判定结论（离线测不到的东西，一条命令问清楚）；纯读、不改屏上状态。
 
 local EC = {
   built = false,        -- 自建对比框是否已建（读值口）
@@ -67,6 +76,13 @@ local EC = {
   deltas = 0,           -- 最近一次汇总里列了几条「有变化的同名行」
   why = nil,            -- 最近一次「没显示」的原因（诊断口 / 命令输出）
   last = nil,           -- 最近一次成功对比的描述（状态行）
+  -- ★★★1.75.72b 只读取证环（cfg.ecProbe）的会话参数：★常量挂 EC 表上，**不新增文件级 local**
+  --   （本项目定的：主 chunk 局部量有上限，而 harness 把「桩 + 模块 + 测试」拼成同一个 chunk）。
+  probeMax = 40,        -- 环上限（条）
+  noteGap = 2.0,        -- 同一形态的判决行最少间隔秒数（容器气泡每 0.2s 重建 ⇒ 不去抖 40 行 8 秒就满）
+  noteKey = nil,        -- 上一条判决行原文（去重用）
+  noteAt = 0,           -- 上一条判决行的时刻（GetTime）
+  saidOrigErr = false,  -- 「原生处理体抛错」是否已上屏说过一次（防刷屏；其余只进取证环）
 }
 
 local EC_TICK = 0.15            -- 收框/换物品的节拍（只为「离开悬停」这类没有事件可挂的时刻）
@@ -513,6 +529,67 @@ local function ecSlotIDByName(name)
 end
 
 ----------------------------------------------------------------------
+-- 「这件东西能不能比较」= 只认装备类（★第一道门）
+----------------------------------------------------------------------
+
+-- ★★★用户报障：「像绷带类型不要启用比较……只有装备,武器这些才开启装备比较」。
+--   绷带/药水/材料这类**非装备**也弹对比框 = 纯噪声（弹出来只有个名字 + 一件它对应的装备）。
+--   口径三条（每条都是踩过的坑换来的）：
+--     ① **按词判、不按下标判** —— `GetItemInfo` 的多返回值位置在各客户端/文档里有出入
+--        （本仓库两处记录就不一致：IconGrid 用「第 6 返回 = 类型」，doc/物品价 记的是「第 5 = 类型」）
+--        ⇒ 一律**扫一遍它的字符串返回**（跳过 ①物品名 ②链接 ⑨贴图），命中哪个词算哪个；
+--        ★**名字绝不能扫**（「任务：xxx 之剑」这类装备名里含「任务」⇒ 会把真装备误杀）。
+--     ② **认不出 ≠ 非装备** —— 只有**命中非装备类词**才拦；两张词表都命中时**装备优先**；
+--        都没命中 ⇒ 返回 nil = 判不出 ⇒ **放行**（继续走下面的装备槽/部位行那条既有路）。
+--        ★这条是给别人用的：ruRU 的「Доспехи / Оружие」不在词表里，绝不能因此把装备也拦掉。
+--     ③ 词表**只收类名**（不收子类）；英文串大小写不敏感；`trade goods` 这种多词也按子串匹配。
+local EC_CLASS_EQUIP = { "护甲", "武器", "盔甲", "Armor", "Weapon" }
+local EC_CLASS_OTHER = {
+  "消耗品", "商品", "贸易品", "任务", "配方", "图样", "设计图", "结构图", "容器",
+  "箭矢", "弹药", "钥匙", "杂物", "其它",
+  "Consumable", "Trade Goods", "Trade", "Quest", "Recipe", "Pattern", "Schematic",
+  "Container", "Projectile", "Key", "Miscellaneous", "Misc", "Reagent", "Quiver",
+}
+
+local function ecWordHit(s, words)
+  local low = string.lower(tostring(s or ""))
+  if low == "" then return nil end
+  local i = 1
+  while i <= table.getn(words) do
+    local w = words[i]
+    if type(w) == "string" and w ~= "" and string.find(low, string.lower(w), 1, true) then return w end
+    i = i + 1
+  end
+  return nil
+end
+
+-- 返回 "equip" / "other" / nil（判不出）；第 2 个返回 = 命中的那个词（取证口用）
+local function ecClassOf(id)
+  local infoFn = ecFn("GetItemInfo")
+  if not infoFn or not id then return nil, nil end
+  local ok, a1, a2, a3, a4, a5, a6, a7, a8, a9 = pcall(infoFn, id)
+  if not ok then return nil, nil end
+  local rets = { a3, a4, a5, a6, a7, a8 }
+  local text, seen = "", {}
+  local i = 1
+  while i <= table.getn(rets) do
+    local v = rets[i]
+    -- ★跳过与 ①名字 ②链接 ⑨贴图 **逐字相同**的串（贴图名如 `INV_Misc_Bandage_08` 里含 `Misc`）
+    if type(v) == "string" and v ~= "" and v ~= a1 and v ~= a2 and v ~= a9 and not seen[v] then
+      seen[v] = true
+      text = text .. " " .. v
+    end
+    i = i + 1
+  end
+  if text == "" then return nil, nil end
+  local eq = ecWordHit(text, EC_CLASS_EQUIP)
+  if eq then return "equip", eq end
+  local ot = ecWordHit(text, EC_CLASS_OTHER)
+  if ot then return "other", ot end
+  return nil, nil
+end
+
+----------------------------------------------------------------------
 -- 自建对比框（首用才建；关掉只 Hide，不销毁）
 ----------------------------------------------------------------------
 
@@ -793,6 +870,47 @@ ecSumHide = function()
   EC.sumKey, EC.sumAppended, EC.hostOwn = nil, false, nil
 end
 
+-- ★★★1.75.72b 只读取证环（`cfg.ecProbe`，有界 `EC.probeMax` 行）—— 用户报障「某些情况下装备比较
+--   会让**客户端气泡 + 我们的对比框两样都不显示**」时，**唯一能事后判读的证据**。要判的就是两条：
+--     ① 「原生 OnEnter 抛错」= 机制①：包装被中断（客户端气泡填不出来 + 我们后面的更新一行都不跑）；
+--     ② 「两边都写着在（shown=1）但 vis=0」= 机制②：`IsShown` 只报**自己那个标志**，父级被隐藏时它
+--        照样是 true ⇒ 必须看 `IsVisible`；本客户端开全屏地图会隐藏 `UIParent`，而客户端自己的
+--        `GameTooltip` 与我们的对比框**都是 UIParent 子件** ⇒ 两边一起不渲染（本项目在案）。
+--   ★为什么每个字都要自存一份：`say` 只进聊天框、**不落日志环**，存档又只在 /reload 落盘 ⇒
+--     不自存我这边一个字节都读不到（同 lcProbe / atkProbe / selProbe 的教训）。
+--   ★只在开关开着时写（关掉零动作 —— 不给没在用这个功能的玩家留残渣）。
+--   ★★判决行要**去抖**：容器气泡每 0.2s 重建一次，会一遍遍喊我们 ⇒ 同一形态的行 `EC.noteGap` 秒内
+--     只记一条（否则 40 行的环 8 秒就满、真正那一拍反被冲掉）。
+--   ★唯一写口：本文件里写 `cfg.ecProbe` 的**只有这一个函数**（漏一处就少一条证据，同 wAtkTrace 的纪律）。
+local function ecDiag(tag)
+  local cfg = ecConf()
+  if type(cfg) ~= "table" then return end
+  local tip = ecTipObj()
+  -- 「真的看得见吗」：只认 `IsVisible`（读不到就如实写 `?`，绝不拿 IsShown 冒充）
+  local function vis(o)
+    local f = o
+    if type(f) ~= "table" and type(f) ~= "userdata" then return "?" end
+    if type(f.IsVisible) ~= "function" then return "?" end
+    local ok, v = pcall(f.IsVisible, f)
+    if not ok then return "?" end
+    return v and "1" or "0"
+  end
+  local line = string.format("%s%s｜id=%s｜why=%s｜框=%d｜气泡 shown=%s vis=%s｜UIParent vis=%s",
+    ((type(date) == "function") and (date("%H:%M:%S") .. " ") or ""),
+    tostring(tag), tostring(EC.cur), tostring(EC.why), table.getn(EC.shown),
+    (ecTipShown() and "1" or "0"), vis(tip), vis(rawget(_G, "UIParent")))
+  local now = ((type(GetTime) == "function") and GetTime()) or 0
+  if EC.noteKey == line and (now - (tonumber(EC.noteAt) or 0)) < EC.noteGap then return end
+  EC.noteKey, EC.noteAt = line, now
+  local box = cfg.ecProbe
+  if type(box) ~= "table" then box = {} cfg.ecProbe = box end
+  if type(box.out) ~= "table" then box.out = {} end
+  table.insert(box.out, line)
+  while table.getn(box.out) > EC.probeMax do table.remove(box.out, 1) end
+  box.n = (tonumber(box.n) or 0) + 1
+  box.t = line
+end
+
 -- 客户端气泡**自己**的行数（我们追加汇总之前抓；染色只染这几行，别染到自己追加的汇总行）
 local function ecNumLines(host)
   if not host or type(host.NumLines) ~= "function" then return EC_MAX_LINES end
@@ -954,10 +1072,27 @@ end
 -- 显示某一件的对照（认不出部位 / 没有已装备件 ⇒ 一个框都不显示，并如实记原因）
 local function ecShow(host, id)
   ecHideAll()
+  -- ★★★1.75.72b：本件的「汇总差值表」在**进门第一件事**就作废 ——
+  --   `ecUpdate` 是在调本函数**之前**就写了 `EC.cur = id`，而 `EC.sumList` 只在下面
+  --   `EC.sumList = all` 那一行赋值 ⇒ 「类别门 / 装备槽空串 / 部位认不出」这几条**早退路**
+  --   会把**上一件的差值表**留在 `EC.sumList` 里；下一拍走 `id == EC.cur` 的快捷路
+  --   （`if EC.sumKey == nil and EC.sumList then ecSumShow(host, EC.sumList) end`）⇒
+  --   把上一件的「换装后」汇总画到**这一件的客户端气泡**上（用户在别的物品上看到别人的差值）。
+  --   ★不动 `EC.cur`：留着它才能避免「被拦的物品每 0.15s 重跑一遍整条判定」。
+  EC.sumList = nil
   local infoFn = ecFn("GetItemInfo")
   local wornFn = ecFn("GetInventoryItemLink")
-  if not infoFn then EC.why = "no GetItemInfo" return false end
-  if not wornFn then EC.why = "no GetInventoryItemLink" return false end
+  if not infoFn then EC.why = "no GetItemInfo" ecDiag("⚠拿不到 API") return false end
+  if not wornFn then EC.why = "no GetInventoryItemLink" ecDiag("⚠拿不到 API") return false end
+
+  -- ★★★第一道门：**只比较装备类**（用户：「只有装备,武器这些.才开启装备比较」）。
+  --   判不出（nil）⇒ 放行 —— 认不出 ≠ 非装备（别人的客户端/别的语种词表里没有时不能拦）。
+  local cls, clsWord = ecClassOf(id)
+  if cls == "other" then
+    EC.why = "not equip class(" .. tostring(clsWord) .. ")"
+    ecDiag("①类别门拦下（命中词 " .. tostring(clsWord) .. "）")
+    return false
+  end
 
   local equipLoc = nil
   local _, _, _, _, _, _, _, loc = infoFn(id)     -- ★第 8 返回 = INVTYPE token（多返回值分开接）
@@ -965,6 +1100,7 @@ local function ecShow(host, id)
   -- ★官方 wiki 明文：非装备类物品这一位是**空串**（不是 nil）⇒ 直接如实说「不是装备」，别再去找部位行
   if equipLoc == "" then
     EC.why = "not equipment"
+    ecDiag("②装备槽空串（不是装备）")
     return false
   end
 
@@ -977,6 +1113,7 @@ local function ecShow(host, id)
   end
   if not names then
     EC.why = "unknown slot (" .. tostring(equipLoc) .. ")"
+    ecDiag("③部位认不出")
     return false
   end
 
@@ -985,6 +1122,7 @@ local function ecShow(host, id)
   EC.wornIdx, EC.hostOwn = {}, nil      -- 本拍的「已装备键→数值」与「气泡自己行数」都重新抓
 
   local shown, firstSlot, all, seenKey, cmpKey = {}, nil, {}, {}, {}
+  local wornNoAttr = 0
   local i = 1
   while i <= table.getn(names) do
     local slotId = ecSlotIDByName(names[i])
@@ -998,6 +1136,15 @@ local function ecShow(host, id)
         -- ★名字行的品质色**现算**（读回色不可信，用户报「稀有度标题没染色」）
         local qr, qg, qb = ecQualityRGB(wornID)
         local okF, dl, ks = ecFill(table.getn(shown) + 1, slotId, host, hostIdx, qr, qg, qb)
+        -- ★★★第二道门（用户：「比较另一方无……属性类的时候就不应该开启比较」）：
+        --   这一格穿的那件**一条可比的属性都没有**（读回来的行里除了 需要等级/耐久度/商人价
+        --   以外一个数值行都没有 —— 衬衣/战袍这类）⇒ **这一格不摆框**：摆出来只有个名字，
+        --   外加一堆「悬停件 − 0」的假差值，比不摆更糟。★双戒指/双饰品是**逐格判**的：
+        --   一格没属性只收那一格，另一格照常比。
+        if okF and table.getn(ks) == 0 then
+          wornNoAttr = wornNoAttr + 1
+          okF = false
+        end
         if okF then
           table.insert(shown, EC.tips[table.getn(shown) + 1])
           if not firstSlot then firstSlot = names[i] end
@@ -1041,7 +1188,9 @@ local function ecShow(host, id)
   EC.sumList = all
 
   if table.getn(shown) == 0 then
-    EC.why = "nothing equipped"      -- 该部位没穿东西（正常情况，不是错误）
+    -- 该部位没穿东西（正常情况，不是错误）；★穿了东西但**一条属性都没有** = 另一回事，分开如实报
+    EC.why = (wornNoAttr > 0) and "worn no attrs" or "nothing equipped"
+    ecDiag("④一个框都没摆（另一侧没穿 / 没属性）")
     return false
   end
   EC.shown = shown
@@ -1056,6 +1205,9 @@ local function ecShow(host, id)
   if type(hostIdx) == "table" then ecSumShow(host, all) end
   EC.hits = EC.hits + 1
   EC.last = L("EC_HIT", tostring(id), tostring(firstSlot or equipLoc))
+  -- ★★★1.75.72b：成功这一拍也记一行 —— 它是取证环里的**对照基线**：
+  --   读存档时要能分清「这一拍本来就该有框（却 vis=0 = 机制②）」与「这一拍被门拦了」。
+  ecDiag("✅摆框成功")
   return true
 end
 
@@ -1064,6 +1216,10 @@ local function ecUpdate(force)
   if not EC.armed then return false end
   local host = ecTipShown()
   if not host then
+    -- ★★1.75.72b「刚才两样都在、这一刻都没了」的**边沿**：上一拍我们还在摆框（`EC.shown` 非空）
+    --   ⇒ 记一行判决（机制②的证据就在这一行：`shown=1` 而 `vis=0`，或 `UIParent vis=0`）。
+    --   ★先记再收（`ecHideAll` 会把 `EC.shown` 清空 —— 顺序反了这行就永远是「框=0」）。
+    if table.getn(EC.shown) > 0 then ecDiag("★气泡消失（上一拍我们还在摆框）") end
     ecHideAll()
     EC.cur, EC.why = nil, "no tooltip"
     return false
@@ -1102,8 +1258,22 @@ local function ecHookButtons()
     return false
   end
   local wrap = function()
-    if type(orig) == "function" then orig() end     -- ★零参数调原生（客户端把 this/arg1 放全局）
-    if not EC.armed then return end                 -- 关掉零动作（即使没能摘掉包装也不做事）
+    -- ★★★1.75.72b：原生处理体**必须 pcall**（用户报障「客户端气泡 + 我们的对比框两样都不显示」的第一嫌疑）。
+    --   它是**客户端气泡唯一的填充口**：不套 pcall ⇒ 它一抛错就把整个包装中断
+    --   （客户端气泡填不出来 + 我们后面的更新一行都不跑 ⇒ 屏上两样都没有）。
+    --   ★同族：ItemPrice 挂的是同一个全局（谁后挂谁是外层）⇒ 它那一层抛错会顺着**我们这一次调用**
+    --     冒上来，所以必须由我们兜住；★兜住之后**如实记一行**（绝不静默），并只上屏说一次（防刷屏）。
+    local okOrig, errOrig = true, nil
+    if type(orig) == "function" then okOrig, errOrig = pcall(orig) end
+    if not EC.armed then return end                 -- 关掉零动作（连取证环也不写 —— 不留残渣）
+    if not okOrig then
+      ecDiag("★原生 OnEnter 抛错：" .. tostring(errOrig))
+      if not EC.saidOrigErr then
+        EC.saidOrigErr = true
+        sayF("装备比较：客户端原生的容器悬停处理体抛错了（已兜住，不再中断后续更新）："
+          .. tostring(errOrig) .. "｜同类只进取证环：/eh go 装备比较 记录")
+      end
+    end
     local btn = rawget(_G, "this")
     local b, s = ecBtnSlot(btn)
     if b and s then EC.hb, EC.hs = b, s end
@@ -1111,6 +1281,9 @@ local function ecHookButtons()
     --   （客户端重建会连带把我们追加的汇总行冲掉；标记不清就会以为「已经写过」而不再补）
     EC.sumKey = nil
     ecUpdate(true)
+    -- ★★1.75.72b「该出气泡却两样都没有」的判决点：客户端刚喊过我们（= 它正要显示气泡），
+    --   若这一刻客户端气泡**根本没显示** ⇒ 记一行（含 UIParent 可见性 —— 机制②的判决证据）。
+    if not ecTipShown() then ecDiag("★两样都不在（客户端气泡没显示）") end
   end
   rawset(_G, "ContainerFrameItemButton_OnEnter", wrap)
   if rawget(_G, "ContainerFrameItemButton_OnEnter") == wrap then   -- 读回自证
@@ -1133,23 +1306,33 @@ local function ecUnhookButtons()
   return true
 end
 
+-- ★★★1.75.72b：挂节拍必须**幂等重挂**（本项目「关断路径四件事 · 节拍停止」那条的正面要求）——
+--   `ecTickOff` 是**真摘** `OnUpdate`（`SetScript(..., nil)`），而它**不清 `EC.tickF`**
+--   （1.12 没有销毁帧的 API ⇒ 帧留着复用）⇒ 旧写法开头那句「`EC.tickF` 还在就 `return true`」
+--   会让**关一次再打开**之后节拍**永远不再跑**：容器路因为包装还在、看着「像好的」，
+--   而**焦点路**（拾取行 / 任务奖励 / 商人行）的悬停与离开收框全靠这一拍 ⇒ 全哑。
+--   ★handler 只建一份、存在 `EC.tickH` 上（**不新增文件级 local**：主 chunk 局部量有上限）。
 local function ecTickOn()
-  if EC.tickF then return true end
-  local create = ecFn("CreateFrame")
-  if not create then return false end
-  local ok, f = pcall(create, "Frame")
-  if not ok or not f then return false end
-  EC.tickF = f
-  pcall(f.SetScript, f, "OnUpdate", function()
-    -- ★零形参：dt 从全局 arg1 取（本客户端 OnUpdate 回调一个参数都不传）
-    if not EC.armed then return end
-    local dt = tonumber(rawget(_G, "arg1")) or 0
-    EC.acc = EC.acc + dt
-    if EC.acc >= EC_TICK then
-      EC.acc = 0
-      ecUpdate(false)
+  if not EC.tickF then
+    local create = ecFn("CreateFrame")
+    if not create then return false end
+    local ok, f = pcall(create, "Frame")
+    if not ok or not f then return false end
+    EC.tickF = f
+    EC.tickH = function()
+      -- ★零形参：dt 从全局 arg1 取（本客户端 OnUpdate 回调一个参数都不传）
+      if not EC.armed then return end
+      local dt = tonumber(rawget(_G, "arg1")) or 0
+      EC.acc = EC.acc + dt
+      if EC.acc >= EC_TICK then
+        EC.acc = 0
+        ecUpdate(false)
+      end
     end
-  end)
+  end
+  if not EC.tickH then return false end
+  -- ★幂等重挂：每次「要挂」都真挂一遍（判据 = 开回来立刻有节拍、不用 /reload）
+  pcall(EC.tickF.SetScript, EC.tickF, "OnUpdate", EC.tickH)
   return true
 end
 
@@ -1301,6 +1484,84 @@ local function ecDumpOtherTips()
   if n == 0 then sayF("  （没有别的提示帧在显示）") end
 end
 
+-- ★★★取证口（**一条命令、纯读**）：把「鼠标停着的那件」的 `GetItemInfo` **逐个返回**原样摊开 +
+--   我们两道门的判定结论。用途 = 真机排查「为什么这东西也弹框 / 为什么不弹框」：
+--   非装备类词到底报在哪个位置、装备槽是不是空串、另一侧有没有可比属性 —— 离线全测不到。
+--   ★用法：**先把鼠标停在物品上**，气泡还在屏上时敲 `/eh go 装备比较 物品`。
+local function ecItemProbe()
+  sayF("— 装备比较 · 物品判定 —")
+  local host = ecTipShown()
+  local id = ecHoverID()
+  sayF("悬停解析：id=" .. tostring(id) .. " · 气泡首行=" .. tostring(ecTipName() or "-")
+    .. " · 上次结论 why=" .. tostring(EC.why or "-"))
+  if not id then
+    sayF("（没解析出物品：先把鼠标停在物品上、气泡还在屏上时敲这条命令）")
+    return
+  end
+  local infoFn = ecFn("GetItemInfo")
+  if not infoFn then sayF("GetItemInfo：**无**") return end
+  local ok, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 = pcall(infoFn, id)
+  if not ok then sayF("GetItemInfo 调用失败（pcall 抛错）") return end
+  local rets = { a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 }
+  local i = 1
+  while i <= 10 do
+    local v = rets[i]
+    if v ~= nil then
+      local t = type(v)
+      sayF("  #" .. tostring(i) .. " [" .. t .. "] " .. ((t == "string") and v or tostring(v)))
+    end
+    i = i + 1
+  end
+  local cls, cw = ecClassOf(id)
+  sayF("① 类别门：" .. ((cls == nil) and "**判不出**（放行 —— 继续走装备槽/部位行那条路）"
+    or ((cls == "equip") and ("装备类（命中「" .. tostring(cw) .. "」）⇒ 放行")
+      or ("**非装备类**（命中「" .. tostring(cw) .. "」）⇒ **不比较**（why=not equip class）"))))
+  local equipLoc = (type(a8) == "string" and a8 ~= "") and a8 or nil
+  local names = equipLoc and EC_SLOTS[equipLoc] or nil
+  sayF("② 装备槽：#8=" .. (equipLoc or "**空串/非串**")
+    .. " · 查表=" .. (names and names[1] or "认不出")
+    .. " · 气泡部位行=" .. tostring(ecLocFromTip(host) or "-"))
+  if not names then
+    local loc2 = ecLocFromTip(host)
+    names = loc2 and EC_SLOTS[loc2] or nil
+  end
+  if not names then
+    sayF("⇒ 结论：**不比较**（部位认不出）")
+    return
+  end
+  local wornFn = ecFn("GetInventoryItemLink")
+  local slotId = ecSlotIDByName(names[1])
+  local wornLink = nil
+  if wornFn and slotId then
+    local okL, w = pcall(wornFn, "player", slotId)
+    if okL then wornLink = w end
+  end
+  local wornID = ecLinkID(wornLink)
+  local wcls, wcw = ecClassOf(wornID)
+  sayF("③ 另一侧：" .. names[1] .. "（槽 " .. tostring(slotId) .. "）· 当前装备=" .. tostring(wornLink or "**没穿**")
+    .. " · 它的类别=" .. tostring(wcls or "判不出") .. (wcw and ("（命中「" .. tostring(wcw) .. "」）") or ""))
+  if type(wornLink) == "string" and wornLink ~= "" then
+    -- 另一侧「有没有可比属性」：真填一次**探针框（0 号）**再读回来，读完**当场收掉**
+    --   ★填框会顺手写 `EC.wornIdx`/`EC.colored`（那是屏幕那套的状态）⇒ 探针**先存后还**，
+    --     绝不因为敲了一次体检命令就把屏上的染色参照系改掉。
+    local keepWorn, keepColored = EC.wornIdx, EC.colored
+    local idx = ecHostIndex(host)
+    local probeName = EC_TIP_NAME .. "0"
+    local okF, dl, ks = ecFill(0, slotId, host, idx, nil, nil, nil)
+    sayF("④ 另一侧可比属性：读回行=" .. tostring(table.getn(ecReadLines(probeName)))
+      .. " · 可比键=" .. tostring(okF and table.getn(ks) or "**填框失败**")
+      .. " ⇒ " .. ((okF and table.getn(ks) > 0) and "会摆框" or "**这一格不摆框**（why=worn no attrs）"))
+    EC.wornIdx, EC.colored = keepWorn, keepColored
+    local f = EC.tips[0]
+    if f then
+      pcall(f.Hide, f)
+      if type(f.ClearLines) == "function" then pcall(f.ClearLines, f) end
+    end
+  else
+    sayF("④ 另一侧没穿东西 ⇒ **不摆框**（why=nothing equipped）")
+  end
+end
+
 local function ecStatusLine()
   return L("EC_STATE",
     EVAL_EC_ENABLED() and L("EC_ON") or L("EC_OFF"),
@@ -1308,6 +1569,40 @@ local function ecStatusLine()
     EC.built and "已建" or "未建",
     tostring(EC.hits),
     tostring(EC.last or "-"))
+end
+
+-- ★★★1.75.72b 取证环的**唯一读口**（命令与真机取证都走它；`记录` 分支不解析中文文本）
+--   ★为什么要有它：用户报障是「某些情况下**两样都不显示**」，而那一拍现场只能靠**存档里的判决行**复原。
+--   返回 = { n = 累计条数, out = {…最新在后…}, last = 最后一条 }
+function EVAL_EC_PROBE()
+  local cfg = ecConf()
+  local box = (type(cfg) == "table") and cfg.ecProbe or nil
+  local out = (type(box) == "table" and type(box.out) == "table") and box.out or {}
+  local n = table.getn(out)
+  return { n = (type(box) == "table") and tonumber(box.n) or 0, lines = n, max = EC.probeMax,
+    last = (n > 0) and out[n] or nil, out = out }
+end
+
+local function ecProbeOut(k)
+  local p = EVAL_EC_PROBE()
+  local out = p.out
+  local n = table.getn(out)
+  local take = tonumber(k) or 8
+  if take < 1 then take = 1 end
+  if take > n then take = n end
+  sayF("— 装备比较 · 取证环（共记 " .. tostring(p.n) .. " 条 · 现存 " .. tostring(n)
+    .. " / 上限 " .. tostring(p.max) .. " · 最新在后）—")
+  if n == 0 then
+    sayF("（环是空的：要么开关关着、要么这一版还没悬停过装备 —— 复现之后再来读）")
+    return
+  end
+  local i = n - take + 1
+  while i <= n do
+    sayF("  " .. tostring(out[i]))
+    i = i + 1
+  end
+  sayF("判读：①`原生 OnEnter 抛错` ⇒ 机制①（包装被中断）；②`框=1` 而 `vis=0` 或 `UIParent vis=0`"
+    .. " ⇒ 机制②（父级被隐藏，两边一起不渲染）；③`①类别门拦下（命中词 …）` ⇒ 认成非装备被拦（看那个词对不对）")
 end
 
 function EVAL_EC_CMD(msg)
@@ -1320,6 +1615,11 @@ function EVAL_EC_CMD(msg)
   if string.find(m, "关", 1, true) then
     EVAL_EC_SET(false)
     sayF(L("EC_OFF"))
+    return true
+  end
+  if string.find(m, "记录", 1, true) or string.find(m, "log", 1, true) then
+    -- 取证环：把最近 N 条判决行原样打出来（默认 8 条；纯读，不动任何状态）
+    ecProbeOut(tonumber(string.match(m, "(%d+)")))
     return true
   end
   if string.find(m, "dump", 1, true) or string.find(m, "行", 1, true) then
@@ -1337,6 +1637,11 @@ function EVAL_EC_CMD(msg)
     ecDumpOtherTips()
     return true
   end
+  if string.find(m, "物品", 1, true) then
+    -- 取证：把悬停那件的 GetItemInfo 十个返回 + 两道门的判定摊开（鼠标先停在物品上）
+    ecItemProbe()
+    return true
+  end
   if string.find(m, "测", 1, true) then
     -- 手动跑一次（不用等悬停；用于确认「包装/识别/填框」哪一段没通）
     local ok = ecUpdate(true)
@@ -1351,6 +1656,13 @@ function EVAL_EC_CMD(msg)
     .. " · 染色行=" .. tostring(EC.colored) .. "（更好=绿 · 更差=红）")
   sayF("全局 API：" .. ecApiLine())
   sayF(ecFrameApiLine())
+  -- ★★★「某些情况下两样都不显示」的常驻判决：状态里**必须**带环的最后一条（不用另敲命令就能看一眼）
+  do
+    local p = EVAL_EC_PROBE()
+    sayF("取证环：共记 " .. tostring(p.n) .. " 条 · 现存 " .. tostring(p.lines)
+      .. " / 上限 " .. tostring(p.max) .. "｜最后一条 = " .. tostring(p.last or "（空）"))
+    sayF("（要看最近 8/20 条：/eh go 装备比较 记录 [条数]）")
+  end
   sayF(L("EC_CMD_HINT"))
   return true
 end
@@ -1363,6 +1675,9 @@ function EVAL_EC_TEST_STATE()
     colored = EC.colored, deltas = EC.deltas, sumAppended = EC.sumAppended and true or false,
     painted = EC.painted, subN = EC.subN,
     hb = EC.hb, hs = EC.hs, shown = table.getn(EC.shown),
+    probeN = EVAL_EC_PROBE().n, probeLines = EVAL_EC_PROBE().lines, probeMax = EC.probeMax,
+    probeLast = EVAL_EC_PROBE().last,
+    saidOrigErr = EC.saidOrigErr and true or false,
     api = ecApiLine(),
   }
 end

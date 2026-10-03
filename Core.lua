@@ -948,6 +948,13 @@ local LOAD_RESIDUE_KEYS = {
   --   首轮真机教训：报告（一次性 10 来行）与监听（每次悬停几十行）**共用一个环**时，
   --   跑完 `监听` 会把 `状态/采样` 的报告整段刷掉（存档里只剩钱行、测③④一行不剩）⇒ 必须分成两个键。
   "ipListen",
+  -- ★1.75.72b 装备比较（tools/EquipCompare.lua）的**只读取证环**（环上限 40 行 = EC.probeMax）：
+  --   用户报障「某些情况下装备比较会让**客户端气泡 + 我们的对比框两样都不显示**」—— 那一拍的现场
+  --   只能靠这一环复原（①`原生 OnEnter 抛错` = 包装被中断，客户端气泡填不出来 + 我们的更新一行不跑；
+  --   ②`框=1` 而 `vis=0` / `UIParent vis=0` = 两边同挂 UIParent，父级被隐藏时一起不渲染）。
+  --   而聊天框读数（say）不落日志环、共享 100 环又会被 [DS] 冲掉 ⇒ 必须自带专属落盘
+  --   （同 lcProbe/atkProbe/selProbe 的教训）。★开关关着时一个字节都不写（不给普通玩家留残渣）。
+  "ecProbe",
 }
 
 function EVAL_LOAD_RESIDUE_KEYS() return LOAD_RESIDUE_KEYS end
