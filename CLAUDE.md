@@ -112,6 +112,11 @@
 - ★★★**pwsh 的 `workdir` 必须逐字正确**：cwd 不存在时报的是 `spawn …powershell.exe ENOENT` —— **看起来像 shell 挂了**（曾把 `u5wow` 打成 `u_wow`，连试十几次都「挂」）⇒ 见到 ENOENT 先按字符核 workdir；「推不上去」也要分清**命令根本没跑起来**与**认证/网络失败**（`ssh -T git@gitee.com`、`git@github.com` 双端验签一次就能分）。
 - `edit` 工具：本会话内须先 `read`；`old_string` 要精确（失败先 `grep` 核对）；**node 外部改过文件后必须重新 read**。大块插入 = 写块文件 + node 边界替换脚本。
 - ★★★**绝不用 PowerShell 读/写文本**：`Get-Content` 把无 BOM UTF-8 读成 GBK（乱码），`Set-Content`/`>` 写成 UTF-16LE+BOM（node 读全是乱码），**含中文往返不可逆写坏**。⇒ 一律走 node（`fs.readFileSync(p,"utf8")`）或 `read`/`edit`；看 git 某版本用 `execSync("git show rev:file")`。
+- ★★★**对照类 harness 的「旧实现」基准绝不许写 `HEAD`**（1.75.73 实踩）：改动一提交，`HEAD` 就是**新版** ⇒
+  拿它当旧实现则**两边一模一样 = 对照组失效**（症状 = harness 报「旧实现 0 个场景说过话」，正是它自己那条
+  **「对照有效性」断言**抓到的；没有那条断言就是「旧 = 新」的**假绿**）。正解 = **自动回溯历史**，找「最后一版还带那句待删代码」
+  的修订当裁判（找不到就**报错拒绝跑**），并在输出里打印所用修订号。锚点 = `tmp/verify_joint_logcut.js` 的 `oldEngine()`。
+
 - ★★★**长任务不许套 `Select-Object -First N`**（1.75.21/22 连踩三次）：`-First` 收够 N 条就**关掉整条管道** ⇒ node 被当上游掐死（报 `[exit code: 1]`、进度恰好停在 N 行处，**看着像「任务失败」**）。⇒ 后台长任务一律裸跑 `node tmp/x.js 2>&1`（用 `job_output` 读），要截断只能在**跑完之后**另起一条命令。
 - ★★★**交给用户的真机探针 / 新代码，先自己用 fengari harness 真跑一遍**（范式 `tmp/*_harness.js`：抽待验代码块 + 保真桩 + 逐子命令 `pcall` + **结构断言**）——「`luacheck` 绿」只保证**能解析**，运行时错（format 参数个数 · nil 索引 · 判定分支根本走不到）它**一个都抓不到**，而用户跑一次的成本远高于我离线跑十次（首案：拾取探针第 1 条命令就红字）。★**桩必须保真**：方法一律带 `self`（否则 `pcall(f.SetPoint, f, …)` = `f:SetPoint(…)` 整体错位，症状是「字符串参与算术」）· 具名帧**同时挂 `_G`**（否则 `_G["LootButton1"]` 拿不到）· 跨 chunk 共享的状态用**全局**（`local` 在下一个 chunk 里看不见）· **几何断言一律比锚点**（`GetPoint`）、**别比** `GetLeft`/`GetBottom` —— 桩里这俩是**不同口径**（锚点偏移 vs 屏幕矩形），比错了只会得到**假红**（拾取探针 v2 实案：还原明明对了却报「期望 20,300 实测 20,-300」）· ★**探针「原话」必须进有界落盘环**（范式：`LP.ring` 80 条 → `存档` 一起写盘）：原话只进聊天 = AI 读存档时**取证断链**、用户白跑一趟（同族：§5.2 的 `cfg.mbProbe`）。
 - **SavedVariables 路径**：`%LOCALAPPDATA%\Azeroth\Saved\Account\<账号>\SavedVariables\EvalHelp.lua`（★文件名是 `EvalHelp.lua`）；**只在 `/reload`/小退/退出时写盘**。★★★**账号不是固定的**（本机实测过 `LIHAIBOAS1` / `LIHAIBOAS2` / `lihaiboas3` 三个都在用）⇒ **一律读「所有账号目录里 mtime 最新那一份」**，绝不许把某个账号名写死（1.75.59l 就因为写死 `LIHAIBOAS1` 误判成「自检没跑成」，白绕一轮）：读全文 = `node tmp/read_fitdiag3.js`（**按 key 数字序**排好再切组 —— ★本客户端把有界环写成**显式键的乱序表**（`[127]=… [158]=…`），**按文件出现顺序读会把几组自检搅在一起**；旧脚本 `read_fitdiag2.js` 就踩了这个，别再用），列各账号概览 = `node tmp/sv_all.js`，只看时间线/结论 = `node tmp/fitdiag_timeline.js`。
@@ -166,6 +171,13 @@
   ★**两条纪律**：① **被 `pcall` 包住的函数体里，「先引用后声明」是完全哑的**（真机不报红字、什么都不发生）⇒ 只能靠
   `probe_localorder.js` 这类静态闸门；**新模块要手动加进它的默认清单**（本版已把 `tools/WorldFog.lua` 加进去）；
   ② **能静态查出来的绑定错，绝不等真机**（真机那一步可能永远不来）。
+- ★★★**「求值函数」里不许写日志出口 / 任何副作用**（1.75.73 真机报障：「一键宏.以上信息会刷屏」）：
+  `groupsOK(rule, dry)` 会被战斗信息UI 的亮金预览每 **0.15s**（`EvalHelp.lua` 的 `UI_TICK`）以 `dry = true` 调一次 ⇒
+  在 `teamJointGroup` / `condOne` 这类**求值函数**里 `wlog(...)` = **预览刷屏**（同组 ≥2 条队友条件、条件成立期间每秒 6~7 行），
+  而那条路上**一次技能都没放**。判据 = **日志只写在 `EVAL_RULE_RUN` / `wuse` 等真执行路径**，预览路径零上屏；
+  ★一眼分清：真执行另有绿色 `→ 技能 (原因) \| 法力N` 行，报障截图里没有它 ⇒ 那些行全是预览。
+  锚点 = `Engine.lua` 的 `teamJointGroup` 尾部注释 · `tmp/verify_joint_logcut.js`。
+
 - ★★★**同一个函数名不许定义两次**（1.75.65 实踩）：重写注释块时把 `MDQ.staleOn` **整份复制了一份** ⇒ 后者**静默顶掉**前者 —— 行为按后一份走，前面那整份实现与它上面的注释全成**假话**。★**`luacheck` / `probe_localorder` / `scan_dangling` 一个字都不报**（都不是语法错，也都不看「定义了几次」）⇒ 常驻判据 = `tmp/swm_harness.js` 的源码钉「每个 `MDQ.X` 只许定义一次」（正则抓 `MDQ.X = function` 与 `function MDQ.X(` 两形态、按名字计数）。★当年的露头方式是**变异套件报「锚点不唯一(2)」** ⇒ 这类现场的排查次序 = 先怀疑「同一个函数被定义了两遍」，别先去改判据。
 - ★★★**注释绝不许与语句写在同一行**（1.75.72 审计抓到，**静默死**家族）：`DataSearch.lua` 的
   `-- ① 所属任务线：…（不合并冒充同一条）    local serOf = (type(EVAL_QC_SERIES_OF) …` ——
