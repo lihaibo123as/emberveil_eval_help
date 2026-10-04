@@ -59,6 +59,7 @@ local EC = {
   wrapped = false,      -- 容器按钮处理体是否已包装
   orig = nil, wrap = nil,
   tickF = nil, acc = 0, -- 节拍帧 / 累加器
+  tickT0 = nil,         -- ★1.75.74 节拍的**时间基准**（arg1 不可用时用 GetTime 差值推 dt）
   tips = {},            -- 自建对比框（最多两个，首用才建）
   wornIdx = nil,        -- 本拍「已装备」那件的 键→数值（给左侧气泡染色当参照系）
   hostOwn = nil,        -- 客户端气泡**自己**的行数（我们追加汇总之前抓的；染色只染这几行）
@@ -386,39 +387,51 @@ end
 
 -- 鼠标焦点路的物品链接（拾取行 / 任务奖励 / 商人行）；对不上就返回 nil（不猜）
 local function ecFocusLink(tipName)
-  local gmf = ecFn("GetMouseFocus")
-  if not gmf then return nil, nil end
-  local okF, w = pcall(gmf)
-  if not okF or w == nil then return nil, nil end
-  local okN, nm = pcall(function() return w.GetName and w:GetName() end)
-  if not okN or type(nm) ~= "string" then return nil, nil end
-
-  local i = tonumber(string.match(nm, "^LootButton(%d+)$"))
-  if i then
-    local f = ecFn("GetLootSlotLink")
-    if f then
-      local ok, link = pcall(f, i)
-      if ok and type(link) == "string" then return link, "loot" end
-    end
-    return nil, nil
-  end
-
-  if string.match(nm, "^MerchantItemButton%d+$") or string.match(nm, "^MerchantItem%d+$") then
-    local j = tonumber(string.match(nm, "(%d+)$"))
-    local f = ecFn("GetMerchantItemLink")
-    if j and f then
-      local ok, link = pcall(f, j)
-      if ok and type(link) == "string" then return link, "merchant" end
-    end
-    return nil, nil
-  end
-
-  local inLog = string.match(nm, "^QuestLogItem%d+$") ~= nil
-  local inGiver = string.match(nm, "^QuestRewardItem%d+$") ~= nil
-    or string.match(nm, "^QuestProgressItem%d+$") ~= nil
-  if not (inLog or inGiver) then return nil, nil end
   if not tipName then return nil, nil end
-  return ecQuestFocus(tipName, inLog), "quest"
+  local gmf = ecFn("GetMouseFocus")
+  if gmf then
+    local okF, w = pcall(gmf)
+    if okF and w ~= nil then
+      local okN, nm = pcall(function() return w.GetName and w:GetName() end)
+      if okN and type(nm) == "string" then
+        local i = tonumber(string.match(nm, "^LootButton(%d+)$"))
+        if i then
+          local f = ecFn("GetLootSlotLink")
+          if f then
+            local ok, link = pcall(f, i)
+            if ok and type(link) == "string" then return link, "loot" end
+          end
+          return nil, nil
+        end
+
+        if string.match(nm, "^MerchantItemButton%d+$") or string.match(nm, "^MerchantItem%d+$") then
+          local j = tonumber(string.match(nm, "(%d+)$"))
+          local f = ecFn("GetMerchantItemLink")
+          if j and f then
+            local ok, link = pcall(f, j)
+            if ok and type(link) == "string" then return link, "merchant" end
+          end
+          return nil, nil
+        end
+
+        local inLog = string.match(nm, "^QuestLogItem%d+$") ~= nil
+        local inGiver = string.match(nm, "^QuestRewardItem%d+$") ~= nil
+          or string.match(nm, "^QuestProgressItem%d+$") ~= nil
+        if inLog or inGiver then return ecQuestFocus(tipName, inLog), "quest" end
+      end
+    end
+  end
+  -- ★★★1.75.74 **按名字兜底（不依赖 GetMouseFocus，也不依赖帧名）**：任务奖励页那个按钮的帧名
+  --   在不同客户端/不同页面可能是 `QuestRewardItemN` / `QuestProgressItemN` / 别的名字，而
+  --   `GetMouseFocus` 在本客户端**不可靠**（DragFrames 那边要自校准才敢采信）⇒ 焦点路认不出时，
+  --   直接拿**气泡首行名字**去任务奖励（choice/reward）与任务日志（choice/reward）里找同名项，
+  --   找到就用它的链接（`ecQuestFocus` 内部按名字匹配、拿不到就 nil，**绝不猜**）。
+  --   非任务悬停（背包 / 技能 / NPC）在这里扫到空表即返回，代价可忽略。
+  local link = ecQuestFocus(tipName, false)
+  if link then return link, "questname" end
+  link = ecQuestFocus(tipName, true)
+  if link then return link, "questlogname" end
+  return nil, nil
 end
 
 -- 当前悬停的是哪一件：① 容器按钮（校验首行名）② 焦点路；都拿不到 ⇒ nil（不猜）
@@ -900,8 +913,13 @@ local function ecDiag(tag)
     tostring(tag), tostring(EC.cur), tostring(EC.why), table.getn(EC.shown),
     (ecTipShown() and "1" or "0"), vis(tip), vis(rawget(_G, "UIParent")))
   local now = ((type(GetTime) == "function") and GetTime()) or 0
-  if EC.noteKey == line and (now - (tonumber(EC.noteAt) or 0)) < EC.noteGap then return end
-  EC.noteKey, EC.noteAt = line, now
+  -- ★★★1.75.74：去抖键**绝不能含时间戳** —— 旧写法拿整行（含 `%H:%M:%S`）当键 ⇒ 时间戳每秒都变
+  --   ⇒ 同一形态的行每秒都算「新」 ⇒ 40 行的环被容器悬停刷爆（真机实测累计 **3354 条**，
+  --   真正那一拍（任务奖励页）**被冲掉** = 取证断链，本轮白绕一轮的直接原因）。
+  local key = tostring(tag) .. "|" .. tostring(EC.cur) .. "|" .. tostring(EC.why)
+    .. "|" .. tostring(table.getn(EC.shown))
+  if EC.noteKey == key and (now - (tonumber(EC.noteAt) or 0)) < EC.noteGap then return end
+  EC.noteKey, EC.noteAt = key, now
   local box = cfg.ecProbe
   if type(box) ~= "table" then box = {} cfg.ecProbe = box end
   if type(box.out) ~= "table" then box.out = {} end
@@ -1029,8 +1047,11 @@ end
 
 -- 摆位：默认贴主提示右侧；右侧越界就整组翻到左侧（几何一律现算 + 读回自证口径）
 local function ecPlace(host)
-  local tip = ecTipObj()
-  if not tip then return end
+  -- ★★★1.75.74：定位基准用**调用方传来的那个 host**（= `ecTipShown()` 判定为「显示中」的气泡），
+  --   不再自己 `ecTipObj()`（写死 GameTooltip）—— 两者不一致时会**锚到一个不可见的气泡上**
+  --   （框 Show 了却摆到屏外/不可见处 = 用户眼里的"没框"）。拿不到就**如实记一行**，绝不静默放弃。
+  local tip = host or ecTipObj()
+  if not tip then ecDiag("⚠定位拿不到气泡（跳过摆位）") return end
   local okR, hostRight = pcall(tip.GetRight, tip)
   local okU = UIParent and type(UIParent.GetRight) == "function"
   local parentRight = nil
@@ -1205,6 +1226,10 @@ local function ecShow(host, id)
   if type(hostIdx) == "table" then ecSumShow(host, all) end
   EC.hits = EC.hits + 1
   EC.last = L("EC_HIT", tostring(id), tostring(firstSlot or equipLoc))
+  -- ★★★1.75.74：成功 ⇒ **当场清 why**。旧写法只在「没显示」的各分支写 why、成功时不复位 ⇒
+  --   状态行与探针的「上次结论 why=」会一直挂着**上一次失败的原因**（本轮真机就把它当成
+  --   "当前结论"、白绕一轮；且与「✅摆框成功」自相矛盾）。
+  EC.why = nil
   -- ★★★1.75.72b：成功这一拍也记一行 —— 它是取证环里的**对照基线**：
   --   读存档时要能分清「这一拍本来就该有框（却 vis=0 = 机制②）」与「这一拍被门拦了」。
   ecDiag("✅摆框成功")
@@ -1319,11 +1344,26 @@ local function ecTickOn()
     local ok, f = pcall(create, "Frame")
     if not ok or not f then return false end
     EC.tickF = f
+    -- ★★★1.75.74：逻辑帧也**显式 Show** —— OnUpdate 只对「显示中」的帧回调（本项目在案：
+    --   挂在被隐藏的父级下的帧会**停摆**，例：开图隐藏 UIParent）。这个帧没有尺寸/贴图，
+    --   Show 不画任何东西；不 Show 的代价是「焦点路整条哑、而画面与"本来就没框"一模一样」。
+    pcall(f.Show, f)
     EC.tickH = function()
       -- ★零形参：dt 从全局 arg1 取（本客户端 OnUpdate 回调一个参数都不传）
       if not EC.armed then return end
-      local dt = tonumber(rawget(_G, "arg1")) or 0
-      EC.acc = EC.acc + dt
+      -- ★★★1.75.74：**dt 不再只认 arg1**。旧写法 `tonumber(arg1) or 0` ⇒ 本客户端若不给全局
+      --   `arg1`，`acc` 永远是 0 ⇒ 这一拍**一次都不调 ecUpdate** ⇒ 焦点路（任务奖励 / 拾取行 /
+      --   商人行）全哑，而容器悬停走包装、看着「像好的」（用户报障「任务奖励页不出对比框」即此）。
+      --   现在：arg1 合理就直接用；否则拿 GetTime 差值兜底（全项目其它节拍一律 `or 0.05` 兜底）。
+      local now = ((type(GetTime) == "function") and GetTime()) or nil
+      local dt = tonumber(rawget(_G, "arg1"))
+      if (not dt) or dt <= 0 or dt > 0.5 then
+        dt = (now and EC.tickT0 and (now - EC.tickT0)) or 0.05
+      end
+      if now then EC.tickT0 = now end
+      if dt <= 0 then dt = 0.05 end
+      if dt > 0.5 then dt = 0.5 end
+      EC.acc = (EC.acc or 0) + dt
       if EC.acc >= EC_TICK then
         EC.acc = 0
         ecUpdate(false)
@@ -1656,6 +1696,19 @@ function EVAL_EC_CMD(msg)
     .. " · 染色行=" .. tostring(EC.colored) .. "（更好=绿 · 更差=红）")
   sayF("全局 API：" .. ecApiLine())
   sayF(ecFrameApiLine())
+  -- ★★★1.75.74：**「节拍挂没挂」必须能读** —— 焦点路（任务奖励 / 拾取行 / 商人行）的悬停与
+  --   离开收框**全靠这一拍**，而它没挂上时画面与「本来就不该有框」长得**一模一样**
+  --   （本轮真机白绕一轮的原因）。判据 = 直接问帧 `GetScript("OnUpdate")` 有没有 handler。
+  do
+    local att = "?"
+    if EC.tickF and type(EC.tickF.GetScript) == "function" then
+      local okG, h = pcall(EC.tickF.GetScript, EC.tickF, "OnUpdate")
+      if okG then att = (h and "**挂**" or "**真摘**") end
+    end
+    sayF("节拍：" .. att .. " ｜ armed=" .. tostring(EC.armed) .. " · 包装=" .. tostring(EC.wrapped)
+      .. " · acc=" .. string.format("%.2f", tonumber(EC.acc) or 0)
+      .. " · 累积计入=" .. tostring(EC.hits))
+  end
   -- ★★★「某些情况下两样都不显示」的常驻判决：状态里**必须**带环的最后一条（不用另敲命令就能看一眼）
   do
     local p = EVAL_EC_PROBE()
