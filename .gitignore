@@ -2,6 +2,7 @@ node_modules/
 api_*.html
 .dsh/
 /tmp
+/token
 # quest/ 抓取缓存（几百个抓下来的页面 JSON；数据真值是 quest/QuestData.lua，缓存可随时重建）
 quest/cache/
 # media/WorldMap/_v/ 分版本测试贴图（≈59 MB；用户定：先不入库、不进发布包，本机留着做 A/B；打包脚本里也有一行 Remove-Item 兜底）
