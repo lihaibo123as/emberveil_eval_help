@@ -394,8 +394,12 @@ local function ecFocusLink(tipName)
     if okF and w ~= nil then
       local okN, nm = pcall(function() return w.GetName and w:GetName() end)
       if okN and type(nm) == "string" then
-        local i = tonumber(string.match(nm, "^LootButton(%d+)$"))
-        if i then
+        -- ★★★1.75.74：先接住匹配结果、**非 nil 才转数字** —— 旧写法把 string.match 的结果直接
+        --   喂给 tonumber，模式不匹配时就是 tonumber(nil) ⇒ 当场抛错（这条路径没有 pcall 兜着，
+        --   悬停任何「具名但不是 LootButton」的帧都会炸掉整个更新 ⇒ 屏上两样都没有）。
+        local lootN = string.match(nm, "^LootButton(%d+)$")
+        if lootN then
+          local i = tonumber(lootN)
           local f = ecFn("GetLootSlotLink")
           if f then
             local ok, link = pcall(f, i)
@@ -405,7 +409,8 @@ local function ecFocusLink(tipName)
         end
 
         if string.match(nm, "^MerchantItemButton%d+$") or string.match(nm, "^MerchantItem%d+$") then
-          local j = tonumber(string.match(nm, "(%d+)$"))
+          local mN = string.match(nm, "(%d+)$")
+          local j = mN and tonumber(mN) or nil
           local f = ecFn("GetMerchantItemLink")
           if j and f then
             local ok, link = pcall(f, j)
@@ -1659,7 +1664,10 @@ function EVAL_EC_CMD(msg)
   end
   if string.find(m, "记录", 1, true) or string.find(m, "log", 1, true) then
     -- 取证环：把最近 N 条判决行原样打出来（默认 8 条；纯读，不动任何状态）
-    ecProbeOut(tonumber(string.match(m, "(%d+)")))
+    -- ★★★1.75.74：先接住匹配结果再转数字 —— 旧写法在**不带条数**时（`装备比较 记录`）是
+    --   `tonumber(nil)` ⇒ 命令当场抛错（本该回落到默认 8 条）。同一个潜伏形态见 ecFocusLink。
+    local nStr = string.match(m, "(%d+)")
+    ecProbeOut(nStr and tonumber(nStr) or nil)
     return true
   end
   if string.find(m, "dump", 1, true) or string.find(m, "行", 1, true) then

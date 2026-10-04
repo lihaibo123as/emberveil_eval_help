@@ -36,6 +36,8 @@ local IP = {
   armed = false,        -- 总开关是否已生效（事件/计时器在跑）
   evF = nil,            -- 事件帧（首用才建）
   tickF = nil,          -- 节拍帧（首用才建）
+  tickT0 = nil,         -- ★1.75.74 节拍的时间基准（arg1 不可用时用 GetTime 差值推 dt）
+  dtSrc = nil,          -- ★1.75.74 上一拍 dt 的来源："arg1" / "clock"（命令读数用）
   scan = nil,           -- 自建扫价 tooltip（GameTooltip 模板）
   orig = nil, wrap = nil, wrapped = false,   -- 被包装的全局处理体
   q, qn = nil, 0,       -- 扫价队列（FIFO）
@@ -388,40 +390,11 @@ local function ipBtnSlot(btn)
   return nil
 end
 
--- 拾取行（LootButton1..4）与任务奖励（QuestRewardItem / QuestProgressItem / QuestLogItem）
---   ★走「鼠标焦点」而不是逐个 hook：这几个面的按钮数量不定，焦点判定一条就够。
-local function ipFocusItem()
-  if type(GetMouseFocus) ~= "function" then return nil end
-  local okF, w = pcall(GetMouseFocus)
-  if not okF or w == nil then return nil end
-  local okN, nm = pcall(function() return w.GetName and w:GetName() end)
-  if not okN or type(nm) ~= "string" then return nil end
-
-  local i = tonumber(string.match(nm, "^LootButton(%d+)$"))
-  if i then
-    local link = nil
-    if type(GetLootSlotLink) == "function" then link = GetLootSlotLink(i) end
-    local cnt = 1
-    if type(GetLootSlotInfo) == "function" then
-      local _, _, c2 = GetLootSlotInfo(i)      -- (纹理, 名字, 数量, 品质……)
-      cnt = tonumber(c2) or 1
-    end
-    return link, cnt, ipLinkName(link)
-  end
-
-  local inLog = string.match(nm, "^QuestLogItem%d+$") ~= nil
-  local inGiver = string.match(nm, "^QuestRewardItem%d+$") ~= nil
-    or string.match(nm, "^QuestProgressItem%d+$") ~= nil
-  if not inLog and not inGiver then return nil end
-
-  -- 任务奖励没有「焦点即知道是第几个」的直接口 ⇒ 按 tooltip 首行名字在候选里反查
-  local fs = rawget(_G, "GameTooltipTextLeft1")
-  local name = nil
-  if fs and fs.GetText then
-    local okT, t = pcall(fs.GetText, fs)
-    if okT and type(t) == "string" and t ~= "" then name = t end
-  end
-  if not name then return nil end
+-- 任务奖励页 / 任务日志：**按气泡首行名字**在候选里反查（拿不到就 nil，绝不猜）
+--   inLog = true ⇒ 查任务日志（QuestLog*）；false ⇒ 查奖励页（GetQuestItemInfo / GetQuestItemLink）
+--   返回 link, 数量, 名字
+local function ipQuestByName(name, inLog)
+  if type(name) ~= "string" or name == "" then return nil end
   local kinds = { "choice", "reward" }
   local k = 1
   while kinds[k] do
@@ -436,7 +409,7 @@ local function ipFocusItem()
     end
     local j = 1
     while j <= n do
-      local nm2, _, cnt = nil, nil, nil
+      local nm2, cnt = nil, nil
       if inLog then
         if kind == "choice" then
           if type(GetQuestLogChoiceInfo) == "function" then nm2, _, cnt = GetQuestLogChoiceInfo(j) end
@@ -458,6 +431,63 @@ local function ipFocusItem()
       j = j + 1
     end
     k = k + 1
+  end
+  return nil
+end
+
+-- 拾取行（LootButton1..4）与任务奖励（QuestRewardItem / QuestProgressItem / QuestLogItem）
+--   ★走「鼠标焦点」而不是逐个 hook：这几个面的按钮数量不定，焦点判定一条就够。
+--   ★★★1.75.74：**帧名认不出时不再整条放弃**（真机奖励页那个按钮的真身就不在这几个模式里；
+--     装备比较 1.75.74 真机正是栽在「只认帧名」这一点上）⇒ 还剩气泡首行名字可依据，就把
+--     任务日志族与奖励页族都试一遍，都对不上才返回 nil（**绝不猜**）。
+--   ★同批修掉的潜伏崩溃：旧写法把 string.match 的结果**直接喂给 tonumber**，模式不匹配时那就是
+--     tonumber(nil) ⇒ 当场抛错；而这条路径没有 pcall 兜着（悬停任何**具名**而非 LootButton 的帧
+--     都会炸）⇒ 现在先接住匹配结果、非 nil 才转数字（锚点：local lootN = ... then）。
+local function ipFocusItem()
+  -- 气泡首行名字（**与帧名无关**的那条依据；真机奖励页就是靠它）
+  local name = nil
+  do
+    local fs = rawget(_G, "GameTooltipTextLeft1")
+    if fs and fs.GetText then
+      local okT, t = pcall(fs.GetText, fs)
+      if okT and type(t) == "string" and t ~= "" then name = t end
+    end
+  end
+  -- 光标下那个帧的名字（★本客户端 GetMouseFocus 不可靠 ⇒ 可能读不到；读不到不算错）
+  local nm = nil
+  if type(GetMouseFocus) == "function" then
+    local okF, w = pcall(GetMouseFocus)
+    if okF and w ~= nil then
+      local okN, n2 = pcall(function() return w.GetName and w:GetName() end)
+      if okN and type(n2) == "string" then nm = n2 end
+    end
+  end
+
+  -- ① 拾取行：帧名能定到第几格 ⇒ 直接问客户端要链接
+  local lootN = nm and string.match(nm, "^LootButton(%d+)$") or nil
+  if lootN then
+    local i = tonumber(lootN)
+    local link = nil
+    if type(GetLootSlotLink) == "function" then link = GetLootSlotLink(i) end
+    local cnt = 1
+    if type(GetLootSlotInfo) == "function" then
+      local _, _, c2 = GetLootSlotInfo(i)      -- (纹理, 名字, 数量, 品质……)
+      cnt = tonumber(c2) or 1
+    end
+    return link, cnt, ipLinkName(link)
+  end
+
+  -- ② 帧名认得出是任务面 ⇒ 按它定族（奖励页 / 任务日志），再按名字反查
+  local inLog = (nm and string.match(nm, "^QuestLogItem%d+$")) and true or false
+  local inGiver = (nm and (string.match(nm, "^QuestRewardItem%d+$")
+    or string.match(nm, "^QuestProgressItem%d+$"))) and true or false
+  if inLog or inGiver then return ipQuestByName(name, inLog) end
+
+  -- ③ 帧名认不出 ⇒ 只剩首行名字：任务日志族 + 奖励页族都试一遍
+  if name then
+    local link, cnt = ipQuestByName(name, true)
+    if not link then link, cnt = ipQuestByName(name, false) end
+    if link then return link, cnt, name end
   end
   return nil
 end
@@ -704,10 +734,29 @@ local function ipTickOn()
     if not ok or not f then return false end
     IP.tickF = f
   end
+  -- ★★★1.75.74：逻辑帧也**显式 Show** —— OnUpdate 只对「显示中」的帧回调（本项目在案：挂在被隐藏
+  --   的父级下的帧会停摆，例：开图隐藏 UIParent）。该帧没有尺寸/贴图，Show 不画任何东西；
+  --   不 Show 的代价是「整条节拍不存在」—— 而容器悬停走包装是**直接调** ipAnnotate 的 ⇒
+  --   背包照旧有价、看着像好的，只有焦点路（拾取/任务奖励）与自动扫价全哑（同装备比较 1.75.74）。
+  pcall(IP.tickF.Show, IP.tickF)
   pcall(IP.tickF.SetScript, IP.tickF, "OnUpdate", function()
-    -- ★零形参：dt 从全局 arg1 取（本客户端 OnUpdate 回调一个参数都不传）
+    -- ★零形参：dt 先取全局 arg1（本客户端 OnUpdate 回调一个参数都不传、参数走全局）
     if not IP.armed then return end
-    local dt = tonumber(rawget(_G, "arg1")) or 0
+    -- ★★★1.75.74：dt **不再只认 arg1**。旧写法 `tonumber(arg1) or 0` ⇒ 拿不到就 acc 恒 0
+    --   ⇒ ①注释节拍永不触发（焦点路全哑）②`sweepWait` 永不递减（**开商人窗自动扫价也永不启动**），
+    --   而这两条都只表现成「什么都没有」，与「本来就没价」肉眼分不出（同装备比较 1.75.74）。
+    --   现在：arg1 合理就直接用，否则拿 GetTime 差值兜底（全项目其它节拍一律 `or 0.05` 兜底）。
+    local now = ((type(GetTime) == "function") and GetTime()) or nil
+    local dt = tonumber(rawget(_G, "arg1"))
+    if (not dt) or dt <= 0 or dt > 0.5 then
+      dt = (now and IP.tickT0 and (now - IP.tickT0)) or 0.05
+      IP.dtSrc = "clock"
+    else
+      IP.dtSrc = "arg1"
+    end
+    if now then IP.tickT0 = now end
+    if dt <= 0 then dt = 0.05 end
+    if dt > 0.5 then dt = 0.5 end
     IP.acc = IP.acc + dt
 
     -- ① 开窗后等列表载入 → 建队列
@@ -761,6 +810,7 @@ function EVAL_IP_INSTALL()
   ipScanHide()
   IP.q, IP.qn, IP.sweeping = {}, 0, false
   IP.hb, IP.hs, IP.appended, IP.lastName = nil, nil, nil, nil
+  IP.tickT0, IP.dtSrc = nil, nil
   return false
 end
 
@@ -776,6 +826,22 @@ local function ipStatusLine()
   local bn = (type(base) == "table" and type(base.meta) == "table") and tonumber(base.meta.n) or 0
   local total = EVAL_IP_BAG_WORTH()
   return L("IP_STATUS", EVAL_IP_ENABLED() and L("IP_ON") or L("IP_OFF"), n, bn, ipMoney(total))
+end
+
+-- ★★★1.75.74：「节拍挂没挂 / dt 从哪来」必须能读 —— 焦点路（拾取行 / 任务奖励页）的悬停补价、
+--   以及「开商人窗后自动扫价」**全靠这一拍**，而它没在跑时画面与「本来就没价」一模一样
+--   （装备比较 1.75.74 就是白绕一轮栽在这种静默上）。判据 = 直接问帧有没有 OnUpdate handler。
+local function ipTickLine()
+  local att = "?"
+  if IP.tickF and type(IP.tickF.GetScript) == "function" then
+    local okG, h = pcall(IP.tickF.GetScript, IP.tickF, "OnUpdate")
+    if okG then att = (h and "**挂**" or "**真摘**") end
+  end
+  return "节拍：" .. att .. " ｜ armed=" .. tostring(IP.armed) .. " · 包装=" .. tostring(IP.wrapped)
+    .. " · acc=" .. string.format("%.2f", tonumber(IP.acc) or 0)
+    .. " · dt 来源=" .. tostring(IP.dtSrc or "?")
+    .. " · 扫价等=" .. string.format("%.1f", tonumber(IP.sweepWait) or 0) .. "s"
+    .. " · 队列=" .. tostring(IP.qn or 0)
 end
 
 function EVAL_IP_STATUS() return ipStatusLine() end
@@ -802,6 +868,7 @@ function EVAL_IP_CMD(msg)
   end
   -- 默认 = 状态
   sayF(ipStatusLine())
+  sayF(ipTickLine())
   local c = ipCfgRO()
   if c and c.bank then
     local st, sk, su = ipBankSaved()
@@ -817,10 +884,16 @@ function EVAL_IP_TEST_STATE()
   local c = ipCfgRO()
   local n = 0
   if c and type(c.learned) == "table" then for _ in pairs(c.learned) do n = n + 1 end end
+  local att = false
+  if IP.tickF and type(IP.tickF.GetScript) == "function" then
+    local okG, h = pcall(IP.tickF.GetScript, IP.tickF, "OnUpdate")
+    att = (okG and h ~= nil) and true or false
+  end
   return {
     on = EVAL_IP_ENABLED(), armed = IP.armed, built = IP.built, wrapped = IP.wrapped,
     learned = n, sweeping = IP.sweeping, queue = IP.qn,
     lastSay = IP.lastSay, hb = IP.hb, hs = IP.hs,
+    tickAttached = att, dtSrc = IP.dtSrc, sweepWait = IP.sweepWait,
   }
 end
 
