@@ -77,13 +77,38 @@
      顶层一个 `EvalHelp\` 文件夹，内容 = `.toc` 实际清单（**必须按 toc 逐个核对**：
      1.72.0 发现随包的 `EvalHelp-v1.71.2.zip` **只有 25 个文件、缺 `IconBrowser.lua` + 5 个 examples** →
      用户装那个包会**直接报错**；正确包是 **60 个文件**）。打包脚本见下方「发布包怎么打」。
-   - **Release 页**：★**这一步我（AI）做不到，需要用户手动操作** ——
-     建 Release 要走 **GitHub/Gitee API + token**，而本机 `gh` CLI **未安装**、环境变量与凭据文件里
-     **都没有任何 token**（实测 `POST /repos/.../releases` 返回 **401 Unauthorized**）。
-     ★按会话规则**不申请权限提升**，所以**如实告知用户去网页建**，并把 URL 与要填的标题/说明/附件给全。
-     GitHub: `https://github.com/lihaibo123as/emberveil_eval_help/releases/new`（选已存在的 tag → 标题 →
-     说明可从 `git tag -n99 vX.Y.Z` 取 → 附件拖 zip → Publish）；
-     Gitee: `https://gitee.com/xeval/emberveil_eval_help/releases/new`（同样选 tag + 上传同一个 zip）。
+   - ★★★**Release 页 = 现在由 AI 自动建**（用户 2026-10-05 定：「**我之前应该给你授权的 token 了. release 要记住. 自动完成 release 发布流程**」；
+     ★**本条推翻**旧口径「AI 做不到、请用户网页建」——**不许再让用户手动建 Release 页**）：
+     · **凭据**（都在仓库根的 `token/` 里、已被 `.gitignore:5 /token` 忽略、**绝不提交、输出里绝不打印**）：
+       `token/git.txt` = GitHub **fine-grained PAT**（93 字节 `github_pat_…`，账号 `lihaibo123as`）·
+       `token/gitee.txt` = Gitee **hex32** token（32 字节，账号 `xeval`）。
+       ★探针 = `tmp/rel_tokens_probe.js`（**只读**：识别形态 + 双端 `GET /user` 验签，**不打印 token 本体**；
+       2026-10-05 实测两端都 HTTP 200）。★token 失效时的症状 = `401/403`（GitHub）/ `401`（Gitee）⇒ **如实报「token 过期」并请用户重发**，别反复重试。
+     · ★★★**必须走本地代理**（境外 API）：同一条命令里先
+       `$env:HTTP_PROXY="http://127.0.0.1:10809"; $env:HTTPS_PROXY="http://127.0.0.1:10809"; $env:NODE_USE_ENV_PROXY="1"`，
+       再 `node tmp/rel_publish_<版本>.js`（脚本一律写 `tmp/*.js`、Node 24 的全局 `fetch`/`FormData`/`Blob` 可用；
+       ★大文件上传是长任务 ⇒ 用 `run_in_background: true` + `job_output(wait)`，别用管道截断）。
+     · **GitHub 三步**：① `POST https://api.github.com/repos/lihaibo123as/emberveil_eval_help/releases`
+       body `{tag_name, name, body, draft:false, prerelease:false}` → **201**（已存在回 **422 already_exists** ⇒
+       `GET /releases/tags/<tag>` 复用，**幂等**）；② 传包
+       `POST https://uploads.github.com/repos/<owner>/<repo>/releases/<id>/assets?name=<文件名>`
+       （`Content-Type: application/octet-stream` + `Content-Length`，63 MB 走代理约 1 分钟）；
+       ③ 名字写错了可以原地改：`PATCH /repos/<owner>/<repo>/releases/assets/<asset_id>` body `{"name":"…"}`（**200**）。
+     · **Gitee 三步**：① `POST https://gitee.com/api/v5/repos/xeval/emberveil_eval_help/releases`
+       （**form-urlencoded**：`access_token/tag_name/name/body/target_commitish=master/prerelease=false`）→ 201；
+       ② 传包 `POST …/releases/<id>/attach_files`（**multipart**：`access_token` + `file`）；
+       ③ ★★★**要删附件必须先拿 id**：release 详情的 `assets[]` **只有 `browser_download_url`/`name`、没有 id**（拿它去 DELETE 只会 404）
+       ⇒ 正确入口 = **`GET …/releases/<id>/attach_files?access_token=…`**（返回 `[{id,name,size,…}]`）⇒ 再
+       `DELETE …/releases/<id>/attach_files/<attach_file_id>?access_token=…` → **204**。
+     · ★★★**附件命名铁律（本轮踩过）**：版本名那份必须叫 **`EvalHelp-v<版本>.zip`（带 `v`）** +
+       **固定名 `EvalHelp.zip`** —— 两份都要传；★**只叫 `EvalHelp-1.75.74.zip`（漏 v）会与三语 README 里的直链
+       `…/download/v1.75.74/EvalHelp-v1.75.74.zip` 对不上**（本轮就是这样发现并原地改名 + 补传的）。
+     · **核对（做完必跑）**：`tmp/rel_probe_assets.js`（**只读 HEAD 探针**）逐条打印
+       `HTTP 状态 / content-length / content-type`：两端 `EvalHelp-v<版本>.zip` 与 `EvalHelp.zip` 都必须
+       **200 + 63.63 MB**；错名 URL 必须 **404**（GitHub 改名后即 404；Gitee 要确认那条 attach 已删）。
+     · 幂等口径：release 已存在 ⇒ 复用；同名附件已存在 ⇒ 跳过上传（脚本里查一次 `assets`/`attach_files`）。
+     · GitHub Release 页 URL = `https://github.com/lihaibo123as/emberveil_eval_help/releases/tag/v<版本>`；
+       Gitee = `https://gitee.com/xeval/emberveil_eval_help/releases/tag/v<版本>`（交付说明里直接给这两个链接）。
 
 **更新日志维护规则（1.28.0 起，用户定）**：① 详情写 `CHANGELOG.md` 的 `## 🎯 vX.Y.Z — 主题` 小节（要点 / 典型用法 / 设计亮点，配一个 emoji）；
 ② `README.md` 顶部「更新日志」速览表加一行（`| **X.Y.Z** | emoji 主题 | 一句话亮点 |`，**最新在上**）；③ **README 不再放版本详情**（保持精简，详情只进 CHANGELOG）。
