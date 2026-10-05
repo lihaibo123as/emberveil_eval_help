@@ -758,7 +758,6 @@ PM_HINT = "Left-click a profile = activate; right-click = open this window (rena
   BIND_L_TIP_1 = "Left-click a profile = activate it",
   BIND_L_TIP_2 = "Right-click a profile = bind/change its hotkey",
   BIND_L_TIP_3 = "Right-click this label = clear ALL custom bindings",
-  BIND_ALL_CLEARED = "All custom bindings cleared (%d)",
   -- 1.71.20 left-click the label = print current bindings
   BIND_ST_ROW = "%d. %s = %s",
   BIND_ST_NONE = "(no custom bindings — right-click a profile to bind, right-click this label to clear all)",
