@@ -46,6 +46,21 @@ local CH_STRIP_STEP = CH_STRIP + CH_STRIP_GAP
 local CH_STRIP_MAX = 10     -- 横排最多几枚（超出如实提示，不静默丢）
 local CH_RATE = 0.3         -- 限频：服务器写动作 ≥0.3s/笔（与工具箱 TB_RATE 同口径）
 local CH_BAGS = { 0, 1, 2, 3, 4 }
+-- ★★★1.75.88 召唤物例外白名单（用户：「消耗品助手内选择物品的弹窗：法师的宝石和术士的糖这两类是否可以加入?」）
+--   为什么要例外：弹窗候选走「类型过滤」（`EVAL_IG_SCAN_BAGS{classify=true}`），而**法师的法力玛瑙(5514)
+--   在本客户端数据里 `class = 护甲`**（其余 3 颗宝石与全部治疗石 = 消耗品）⇒ 它被「护甲类一律剔」误剔，
+--   同一族的另外 3 颗却留着 = 现实里看到的「宝石有的有、有的没有」。治疗石那一族 `class = 消耗品`
+--   （类型词表里没有「消耗品」⇒ 判不出 ⇒ **本来就不剔**），列进来是为了**不依赖 class 数据**、语义显式。
+--   ★按 **id** 而不是名字：物品 id 与语言无关（zhCN/enUS/ruRU 同一份数据），也不必维护三语词表；
+--   ★id 出处 = 本服数据库 `database.emberveil.org` 的 `/api/proxy/items?name=…`（2026-10-05 实测）。
+local CH_KEEP_IDS = {
+  [5514] = true, [5513] = true, [8007] = true, [8008] = true,           -- 法力玛瑙（护甲！）· 法力翡翠 · 法力黄水晶 · 法力红宝石
+  [5512] = true, [19004] = true, [19005] = true,                        -- 初级治疗石
+  [5511] = true, [19006] = true, [19007] = true,                        -- 次级治疗石
+  [5509] = true, [19008] = true, [19009] = true,                        -- 治疗石
+  [5510] = true, [19010] = true, [19011] = true,                        -- 强效治疗石
+  [9421] = true, [19012] = true, [19013] = true,                        -- 特效治疗石
+}
 local CH_DEF_W, CH_DEF_H = 1024, 768
 local CH_TEXT = "耗"         -- 没选中任何物品时的保底文字（不写纹理字面量）
 -- ★★★1.74.5 用户：「在物品消耗完了之后显示图标灰色」——
@@ -690,7 +705,8 @@ function EVAL_CH_PANEL()
       -- ★1.74.28 弹窗候选**开类型过滤**（用户：「弹窗选的物品项目要过滤一下.不要显示武器,装备.
       --   灰色物品,草药,矿物,任务物品,材料等等非可使用的物品」）—— 只有这条用户点击驱动的路径开，
       --   因为它会走 tooltip 兜底（贵调用）；`EVAL_CH_FIND` 那种按名字解析包格的路径不受影响。
-      return EVAL_IG_SCAN_BAGS(CH_BAGS, { classify = true })
+      -- ★1.75.88 再给一条**召唤物 id 白名单**（法师法力宝石 / 术士治疗石，见 CH_KEEP_IDS 的注释）。
+      return EVAL_IG_SCAN_BAGS(CH_BAGS, { classify = true, keepIds = CH_KEEP_IDS })
     end,
     isSelected = function(it) return EVAL_CH_IS_SELECTED(it.name) end,
     onToggle = function(it)
@@ -785,7 +801,8 @@ function EVAL_CH_CMD(msg)
   --   ★判据 = 差值：1 = 正常（和游戏原生一致）；> 1 = 本客户端把 API 改成「用整组」（要绕）。
   -- ★1.74.28 「验证可行性」入口：/eh go 消耗品探针 过滤 —— 把背包里每件物品的类型判定依据摊开
   if sub == "探针 过滤" or sub == "过滤" then
-    if type(EVAL_IG_FILTER_REPORT) == "function" then return EVAL_IG_FILTER_REPORT(CH_BAGS, chSay) end
+    -- ★1.75.88 体检口带上**同一个 id 白名单** ⇒ 读数与弹窗里的实际结果一致（否则它会报「这件被剔」）
+    if type(EVAL_IG_FILTER_REPORT) == "function" then return EVAL_IG_FILTER_REPORT(CH_BAGS, chSay, 30, CH_KEEP_IDS) end
     return false
   end
   local probeName = string.match(sub, "^探针%s*(.-)%s*$")

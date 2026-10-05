@@ -4206,6 +4206,12 @@ end
 --   原因：简化版把按钮标签建成 root:CreateFontString（挂根上、无字体兜底）→ 空框；
 --   备份用 subFont(ob)（FontString 直接挂按钮上 + 字体链兜底）= 验证过能显示的写法。
 local SUBADDONS = {
+  -- ★★用户 2026-10-05 指定：新增子插件 **EH_Bag**（整合背包；功能/UI 参考 TurtleWoW 的 OneBag，
+  --   实现是自研零依赖，不内嵌 Ace2/DewDrop/OneStorage）。
+  --   ★它与 EmberVeil 官方装的 OneBag/OneBank 互斥：EH_Bag 自己在载入期检测，
+  --     检测到就**自动让位**并强制可见地提示（详见 addons/EH_Bag/EH_Bag.lua 文件头）。
+  { key = "bag", id = "EH_Bag", group = "bag", name = L("SUB_BAG"),
+    tip = L("SUB_BAG_TIP"), slash = "EHBAG", slashArg = "ui", hasUI = true },
   { key = "debugBox", id = "EH_DebugBox", group = "debug", name = L("SUB_LAYERDEBUG"),
     tip = L("SUB_LAYERDEBUG_TIP"), slash = "EHDEBUGBOX", slashArg = "ui", hasUI = true },
   -- ★★★1.74.29 用户要求：简易地图**已移到工具箱（工具模块）** → 从本 Tab 移除，不再在这里列出
@@ -4385,7 +4391,10 @@ local function subShowTip(owner, a)
   pcall(tip.AddLine, tip, "状态：" .. state, 0.80, 0.90, 0.80)
   pcall(tip.AddLine, tip, "勾选 = 启用并写入客户端插件清单；未勾选 = 不载入（连文件都不读）", 0.70, 0.70, 0.70)
   if a.slash then
-    pcall(tip.AddLine, tip, "命令：/" .. string.lower(a.slash == "EHDEBUGBOX" and "edb" or a.slash)
+    -- ★命令别名唯一映射（必须与各子插件自己注册的 SLASH_* 逐字一致；新增子插件在这里补一行）
+    local alias = { EHDEBUGBOX = "edb", EHBAG = "ebag" }
+    local shown = alias[a.slash] or string.lower(a.slash)
+    pcall(tip.AddLine, tip, "命令：/" .. shown
       .. (a.slashArg and (" " .. a.slashArg) or "") .. "（打开面板）", 0.70, 0.85, 1.00)
   end
   pcall(tip.Show, tip)
@@ -4501,6 +4510,18 @@ function EVAL_SUBADDONS_BUILD(root, page, refreshes)
     table.insert(page.widgets, fs)
   end
   local y = -56
+  -- ★EH_Bag（整合背包）单列一组，排在调试组之前 —— 它是玩家日常工具，不是调试件
+  local hasBag = false
+  for _, a in ipairs(SUBADDONS) do if a.group == "bag" then hasBag = true break end end
+  if hasBag then head(L("SUB_GROUP_BAG"), y) y = y - ROWH end
+  for _, a in ipairs(SUBADDONS) do
+    if a.group == "bag" then
+      local row = subMakeRow(root, y, a, page)
+      for _, f in ipairs(row.widgets) do table.insert(page.widgets, f) end
+      table.insert(subUI.rows, row)
+      y = y - ROWH
+    end
+  end
   head(L("SUB_GROUP_DEBUG"), y)
   y = y - ROWH
   for _, a in ipairs(SUBADDONS) do
@@ -4897,12 +4918,15 @@ function EVAL_TB_REFRESH()
             r.chv.text:SetText(L("SUB_OPEN"))
             r.chv.btn:Show()
             r.chv.btn:SetScript("OnClick", function()
+              -- ★1.75.x 修：命令名**从 `it.openCmd` 现算**（原来这里把命令名写死成图层调试那个，
+              --   算好的 `cmd` 反而丢掉 ⇒ 谁再加一条带 openCmd 的行都会静默打开别的面板＝两处真值打架）。
               local cmd = string.gsub(tostring(it.openCmd), "^/", "")
-              local cmdfn = (type(SlashCmdList) == "table") and SlashCmdList["EHDEBUGBOX"] or nil
+              cmd = string.upper(cmd)
+              local cmdfn = (type(SlashCmdList) == "table") and SlashCmdList[cmd] or nil
               if type(cmdfn) == "function" then
                 pcall(cmdfn, "ui")
               elseif type(EVAL_SAY) == "function" then
-                pcall(EVAL_SAY, "打开失败：图层调试模块未载入（请确认 tools/LayerDebug.lua 在 toc 里）")
+                pcall(EVAL_SAY, "打开失败：该子插件当前未载入（/" .. string.lower(cmd) .. " 命令不存在）")
               end
             end)
           end

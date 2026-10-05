@@ -4649,10 +4649,10 @@ function EVAL_DS_BUILD(root, page, refreshes)
       }
       local qs = c.qs or {}
       for j = 1, table.getn(qs) do
-        -- ★1.75.1：名字三级来源 —— 赏金任务名 → 生成数据的系列步骤名（`sn`，覆盖无装备奖励的步骤）→ 如实 `#id`
-        local qn = EVAL_QC_QUEST_NAME(qs[j])
-          or ((type(EVAL_QC_STEP_NAME) == "function") and EVAL_QC_STEP_NAME(qs[j]))
-          or ("#" .. tostring(qs[j]))
+        -- ★1.75.75：名字走**任务名唯一入口**（逻辑层四层兜底：策展 → 系列步骤名 → 全量表 → 任务全表）
+        --   ⇒ 旧写法在这里手接的 `EVAL_QC_STEP_NAME` 那一层已收进逻辑层（界面不再各写一套）。
+        local qn = (type(EVAL_QC_QUEST_NAME) == "function") and EVAL_QC_QUEST_NAME(qs[j]) or nil
+        if not qn or qn == "" then qn = "#" .. tostring(qs[j]) end
         local lv = EVAL_QC_QUEST_LEVEL(qs[j])
         -- ★1.75.12 用户要求：任务行要带**任务等级**（LvNN），并配黄色感叹号
         local txt = string.format("%d. %s", j, tostring(qn))
@@ -4705,8 +4705,9 @@ function EVAL_DS_BUILD(root, page, refreshes)
         if it and EVAL_QC_IS_WEAPON(it) then r, g, b = 1.00, 0.72, 0.25 end
         body[table.getn(body) + 1] = { text = txt, r = r, g = g, b = b, item = src.id }
       elseif k == "step" then
-        -- ★1.75.1：放大镜的词优先用**行模型给的真名**（`src.name`）—— 只查 q 表时，没有装备奖励的步骤
-        --   （如「爱与家庭」）会拿到 nil ⇒ 放大镜空转（点了没反应）。行模型的名字已含「系列块 → q 表 → sn」三级。
+        -- ★1.75.1：放大镜的词优先用**行模型给的真名**（`src.name`）—— 旧写法只查 q 表时，没有装备奖励的步骤
+        --   （如「爱与家庭」）会拿到 nil ⇒ 放大镜空转（点了没反应）。
+        --   ★1.75.75：行模型的名字已走**唯一入口** `EVAL_QC_QUEST_NAME`（四层兜底）⇒ 这里只在它拿不到时退回 `src.name`。
         local qn = (src.id and EVAL_QC_QUEST_NAME(src.id)) or src.name or nil
         body[table.getn(body) + 1] = { text = txt, r = 0.88, g = 0.84, b = 0.62, zoom = qn, quest = true }
       else
@@ -4750,10 +4751,11 @@ function EVAL_DS_BUILD(root, page, refreshes)
     local body = {}
     local function put(t) body[table.getn(body) + 1] = t end
     local function sec(t) put({ text = t, r = 0.45, g = 0.85, b = 1.00 }) end
-    -- 步骤名三级兜底：系列块抄下来的名字 → 任务名（q 表 / sn）→ 如实 `#id`（绝不编名）
+    -- 步骤名两级兜底：系列块抄下来的名字 → **任务名唯一入口**（逻辑层四层兜底，见 `EVAL_QC_QUEST_NAME`）
+    --   → 如实 `#id`（绝不编名）。★1.75.75：界面**不再自己接** `EVAL_QC_STEP_NAME` 那一层
+    --   （逻辑层的四层链已含它）—— 界面各写一套兜底就是「一处真值变两处」。
     local function stepName(qid, fallback)
       local nm = (type(EVAL_QC_QUEST_NAME) == "function") and EVAL_QC_QUEST_NAME(qid) or nil
-      if not nm and type(EVAL_QC_STEP_NAME) == "function" then nm = EVAL_QC_STEP_NAME(qid) end
       if not nm then nm = fallback end
       if not nm or nm == "" then nm = "#" .. tostring(qid) end
       return tostring(nm)
@@ -4910,7 +4912,15 @@ function EVAL_DS_BUILD(root, page, refreshes)
           local qid = ids[i]
           if qid then
             local nm = stepName(qid)
-            put({ text = tag .. nm, zoom = nm, quest = true, r = rr, g = gg, b = bb })
+            -- ★1.75.75 信息完善（用户：「有些前后任务未能检索到任务信息」）：名字之后补 **Lv + 地区**
+            --   —— 与「所属任务线」步骤行同口径（等级走 `EVAL_QC_QUEST_LEVEL`、地区走 `EVAL_QC_QUEST_ZONE`），
+            --   都拿不到就不写那一段（绝不写 `Lv0` / 空地区这种假话）。名字仍只走 `stepName` 一个口。
+            local txt = tag .. nm
+            local lv = (type(EVAL_QC_QUEST_LEVEL) == "function") and EVAL_QC_QUEST_LEVEL(qid) or nil
+            if lv then txt = txt .. "  Lv" .. tostring(lv) end
+            local zn = (type(EVAL_QC_QUEST_ZONE) == "function") and EVAL_QC_QUEST_ZONE(qid) or nil
+            if zn and zn ~= "" then txt = txt .. " · " .. tostring(zn) end
+            put({ text = txt, zoom = nm, quest = true, r = rr, g = gg, b = bb })
           end
         end
       end

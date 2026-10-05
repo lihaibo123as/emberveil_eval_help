@@ -200,6 +200,17 @@ local function newMock()
     GetVertexColor = function(self)
       return rawget(self, "__vr") or 1, rawget(self, "__vg") or 1, rawget(self, "__vb") or 1, rawget(self, "__va") or 1
     end,
+    -- ★★★0.3.16 桩保真：真客户端纹理**有** TexCoord（SetTexCoord / GetTexCoord）——
+    --   金钱行那三枚币就是靠**图集 TexCoords**（金 0~0.25 / 银 0.25~0.5 / 铜 0.5~0.75）分开的，
+    --   桩不记 = 「到底取的是哪一格」在测试里完全不可见（桩不记状态 = 断言失明，本项目老族教训）。
+    SetTexCoord = function(self, l, r, t, b)
+      rawset(self, "__uv", { l, r, t, b })
+    end,
+    GetTexCoord = function(self)
+      local u = rawget(self, "__uv")
+      if type(u) ~= "table" then return nil end
+      return u[1], u[2], u[3], u[4]
+    end,
     -- ★1.73.40 桩保真：backdrop 三兄弟 + GetBackdrop。真客户端**只有** SetBackdrop /
     --   SetBackdropColor / SetBackdropBorderColor / GetBackdrop —— GetBackdropColor 与
     --   GetBackdropBorderColor **不存在**（参考插件 Compatibility/ClientAPI.lua:5051 实测记录）
@@ -228,7 +239,8 @@ local function newMock()
       end
       return "WHITE8X8|" .. tail
     end,
-    SetBackdropColor = function(_, r, g, b, a) TEST.backdropColor = { r, g, b, a } end,
+    -- ★0.3.17：连**谁调的**一起记账 —— 否则「总览窗背板也跟主窗同源」这条判据失明（只能看到最后一个颜色）
+    SetBackdropColor = function(self, r, g, b, a) TEST.backdropColor = { r, g, b, a } TEST.backdropColorFrame = self end,
     SetBackdropBorderColor = function(_, r, g, b, a) TEST.backdropBorderColor = { r, g, b, a } end,
     -- ★1.73.40 桩保真：FontString 的**文字色**要能读回来（用户「只要**文字**变色，不用背景变色」）——
     --   否则「到底哪一层在变色」根本判不出来（桩不记 = 断言失明，本项目老族教训）。

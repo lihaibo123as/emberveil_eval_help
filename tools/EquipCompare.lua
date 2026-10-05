@@ -70,6 +70,10 @@ local EC = {
   sumList = nil,        -- 最近一次汇总的差值列表（诊断用）
   shown = {},           -- 本拍显示中的对比框
   hb = nil, hs = nil,   -- 最近一次容器悬停（bag/slot）
+  -- ★★★1.75.91 / EH_Bag 0.3.22：**代理视图插件主动报上来的悬停账**（`EVAL_EC_HOVER` 写 / `EVAL_EC_LEAVE` 清）
+  --   真因见 `EVAL_EC_HOVER` 上方那段：容器腿的唯一写点是全局 `ContainerFrameItemButton_OnEnter`，
+  --   而代理背包（EH_Bag）把格子的 `OnEnter` 覆盖成自己的处理体 ⇒ 那个全局永远不会被调到。
+  ext = nil,
   cur = nil,            -- 当前已对比的物品 id（同一件不重画）
   tipName = nil,        -- 上一次气泡首行名字（变了 = 客户端重建/换物品 ⇒ 清汇总标记）
   hits = 0,             -- 成功显示对比的次数
@@ -451,6 +455,16 @@ local function ecHoverID()
     if id and linkName and tipName and linkName == tipName then
       return id, "bag"
     end
+  end
+
+  -- ★★★1.75.91（代理视图腿）：容器腿之后、焦点路之前 —— 由**调用方自己**报「现在悬停的是这一件」
+  --   （EH_Bag 那种「把格子 OnEnter 覆盖成自己处理体」的代理窗口，全局包装收不到）。
+  --   ★与容器腿**同一把尺子**：必须与主提示首行名字一致 —— 防「鼠标已经走了、账还留着」的陈旧账
+  --   （残留时气泡首行早已是别的物品名 ⇒ 不匹配 ⇒ 不认；同名不同品质的极端情形与容器腿同族，接受）。
+  local ex = EC.ext
+  if type(ex) == "table" then
+    local exId, exName = ecLinkID(ex.link), ecNameNorm(ecLinkName(ex.link))
+    if exId and exName and tipName and exName == tipName then return exId, "ext" end
   end
 
   local link, src = ecFocusLink(tipName)
@@ -1333,6 +1347,37 @@ local function ecUnhookButtons()
     say(L("EC_UNHOOK_BUSY"))
   end
   EC.orig, EC.wrap, EC.wrapped = nil, nil, false
+  -- ★1.75.91：关掉时把**外部悬停账**一起清（关断四件事的数据重置 —— 不留「关掉后还认着上一件」的残账）
+  EC.ext = nil
+  return true
+end
+
+-- ★★★1.75.91 / EH_Bag 0.3.22：**外部悬停通知口**（代理视图类插件专用 —— 目前唯一调用方 = EH_Bag）。
+--   真因（源码级证据 = `Interface\FrameXML\ContainerFrame.xml`：容器格子模板的 `OnEnter` 里那句
+--   `ContainerFrameItemButton_OnEnter();`）：背包/银行格的悬停**本来就靠客户端调这个全局**，而那正是
+--   本模块容器腿（`EC.hb/hs`）的**唯一写点**；代理背包把格子的 `OnEnter` 覆盖成自己的处理体
+--   （它必须自己填气泡）⇒ 这条全局**永远不会被调到**；焦点路又只认拾取行 / 商人行 / 任务奖励行
+--   ⇒ 代理背包里的悬停**两条腿都断** = 用户报的「装备比较在背包插件内不能正常生效」。
+--   ⇒ 由调用方在**它自己那一拍**如实报一声「现在悬停的是这一件」；我们按与容器腿同一把尺子认它
+--   （名字校验），**不抄第二份判定**，也不让本模块去认别人的内部件。
+--   ★解耦与降级：拿不到这两个口 / 对方不调 ⇒ 本模块行为一字不变（老版本 EH_Bag 照旧）；
+--     本模块关着（`EC.armed ~= true`）⇒ 一个字节都不动（关掉零动作）。
+function EVAL_EC_HOVER(link, name)
+  if EC.armed ~= true then return false end
+  if type(link) ~= "string" or link == "" then return false end
+  EC.ext = { link = link, name = name }
+  ecUpdate(true)
+  return true
+end
+
+function EVAL_EC_LEAVE(link)
+  local ex = EC.ext
+  if type(ex) ~= "table" then return false end
+  -- ★按 link 匹配才清：鼠标从 A 格划到 B 格时，A 的 `OnLeave` 可能**后到** ⇒ 无条件清会把刚报上来的
+  --   B 当场抹掉（与 EH_Bag 那条 `B.hoverBtn == btn` 的身份判定同一族）；不传 link = 无条件清。
+  if type(link) == "string" and link ~= ex.link then return false end
+  EC.ext = nil
+  if EC.armed == true then ecUpdate(true) end
   return true
 end
 

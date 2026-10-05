@@ -20,6 +20,9 @@
 --   mode       "single" | "multi"
 --   candidates function() return list, total end   —— **每次刷新现算**（唯一真值）
 --                 list[i] = { name=, bag=, slot=, tex=, count=, q= }
+--                 ★1.75.76 **非物品条目也允许**：只给 name + tex 即可（方案图标选择器用的就是这种）；
+--                   tooltip 里那一行「名字 ×数量 [包,格]」只在 bag/slot 都是数字时才画
+--                   （否则会打出「×1 [nil,nil]」这种假信息）。
 --   isSelected function(item) -> bool             —— multi 模式用（决定角标）
 --   onPick     function(item)                     —— single：点即调用，随后收起
 --   onToggle   function(item)                     —— multi：点即切换（不收起）
@@ -287,10 +290,11 @@ end
 --     「本来该剔、判定对了」和「读不出类型、靠保守策略留下的」。一次全摊开，真机一眼定案。
 --   ★同时它也是**补词表的依据**：tooltip 里读到的真实文案会原样打出来（本客户端是 zhCN，词表按它维护）。
 --   ★打印上限 30 行（超出如实报「还有 N 条未显示」），统计行永远打。
-function EVAL_IG_FILTER_REPORT(bags, sayFn, maxRows)
+function EVAL_IG_FILTER_REPORT(bags, sayFn, maxRows, keepIds)
   if type(sayFn) ~= "function" then return false end
   bags = bags or { 0, 1, 2, 3, 4 }
   maxRows = tonumber(maxRows) or 30
+  keepIds = (type(keepIds) == "table") and keepIds or nil
   EVAL_IG_KIND_RESET()
   local rows, stat = {}, { scanned = 0, kept = 0, dropped = 0, unknown = 0, cached = 0, probed = 0, nocache = 0 }
   for bi = 1, table.getn(bags) do
@@ -325,10 +329,17 @@ function EVAL_IG_FILTER_REPORT(bags, sayFn, maxRows)
         end
         local kind, src = EVAL_IG_ITEM_KIND(nm, link, q, bag, slot, true)
         local drop = (kind ~= nil and IG_KIND_DROP[kind]) and true or false
+        -- ★1.75.88 体检口也要认**调用方的 id 白名单**（否则它会报「这件被剔」而弹窗里其实留着 = 读数与事实相反）
+        local byId = false
+        if drop and keepIds then
+          local iid = (type(link) == "string") and tonumber(string.match(link, "item:(%d+)")) or nil
+          if iid and keepIds[iid] then drop = false byId = true end
+        end
         stat.scanned = stat.scanned + 1
         if itype or isub or (type(islot) == "string" and islot ~= "") then stat.cached = stat.cached + 1 else stat.nocache = stat.nocache + 1 end
         if src == "tooltip" then stat.probed = stat.probed + 1 end
         if kind == nil then stat.unknown = stat.unknown + 1 end
+        if byId then stat.keptById = (stat.keptById or 0) + 1 end
         if drop then stat.dropped = stat.dropped + 1 else stat.kept = stat.kept + 1 end
         local cacheTxt = (itype or isub) and ((tostring(itype or "?") .. "/" .. tostring(isub or "?")) .. (type(islot) == "string" and islot ~= "" and ("｜装备槽 " .. tostring(islot)) or "")) or "未缓存"
         local tp = nil
@@ -336,7 +347,8 @@ function EVAL_IG_FILTER_REPORT(bags, sayFn, maxRows)
         if c and c.text then tp = c.text end
         table.insert(rows, string.format("[%d,%d] %s ｜ 品质 %s ｜ 缓存 %s ｜ tooltip %s ｜ 判定 %s（%s）→ %s",
           bag, slot, nm, tostring(q or "?"), cacheTxt, tp and ("「" .. tp .. "」") or "—",
-          tostring(kind or "判不出"), tostring(src or "-"), drop and "剔除" or "保留"))
+          tostring(kind or "判不出"), tostring(src or "-"),
+          drop and "剔除" or (byId and "保留（id 白名单）" or "保留")))
       end
     end
   end
@@ -347,8 +359,8 @@ function EVAL_IG_FILTER_REPORT(bags, sayFn, maxRows)
     sayFn(rows[i])
   end
   if n > maxRows then sayFn("…还有 " .. tostring(n - maxRows) .. " 条未显示（上限 " .. tostring(maxRows) .. " 行）") end
-  sayFn(string.format("统计：剔除 %d ｜ 保留 %d ｜ 判不出 %d ｜ 缓存有类型 %d ｜ 未缓存 %d ｜ tooltip 探了 %d 次",
-    stat.dropped, stat.kept, stat.unknown, stat.cached, stat.nocache, stat.probed))
+  sayFn(string.format("统计：剔除 %d ｜ 保留 %d ｜ 判不出 %d ｜ 缓存有类型 %d ｜ 未缓存 %d ｜ tooltip 探了 %d 次 ｜ id 白名单放行 %d",
+    stat.dropped, stat.kept, stat.unknown, stat.cached, stat.nocache, stat.probed, stat.keptById or 0))
   return true
 end
 
@@ -357,6 +369,10 @@ end
 -- ★不做任何「像不像食物/消耗品」的判断：那由调用方排序（本客户端也没有「某物品是不是消耗品」的 API）。
 -- ★★1.74.28：`opts.classify = true` 时**同时做类型过滤**（武器/护甲/灰色/材料/任务/容器/箭矢/钥匙/配方 一律剔）——
 --   只有**弹窗候选**这条用户点击驱动的路径才传 true（tooltip 兜底是贵调用，别放进热路径）。
+-- ★★★1.75.88 调用方可给两条**例外**（都是「本来要剔、点名放行」，命中就如实记账，例外不外溢）：
+--   ① `opts.keepNames(name)` —— **按名字**（1.74.29 给喂食助手兜肉类/食物加的，需要三语词表）；
+--   ② `opts.keepIds[id]` —— **按物品 id**（语言无关、也不依赖 class 数据对不对）⇒ **召唤物那一族走这条**
+--      （法师法力宝石 · 术士治疗石；见 `tools/ConsumableHelper.lua` 的 `CH_KEEP_IDS`）。
 -- ★读值口：最近一次扫描的「被类型过滤剔掉」名单（探针/取证用）
 function EVAL_IG_KIND_DROPS() return IG_KIND_STAT.dropLog or {} end
 
@@ -403,7 +419,7 @@ function EVAL_IG_SCAN_BAGS(bags, opts)
             IG_KIND_STAT.probed < IG_KIND_PROBE_MAX)
         end
         local skip = false
-        local keptByCaller = false
+        local keptByCaller, keptById = false, false
         if classify and kind then
           if IG_KIND_DROP[kind] then skip = true end
           -- ★★1.74.29 用户实测「大块野猪肉在下拉里看不到」的根因：肉类在客户端类型行属于
@@ -415,6 +431,20 @@ function EVAL_IG_SCAN_BAGS(bags, opts)
               skip = false
               keptByCaller = true
               IG_KIND_STAT.keptByCaller = (IG_KIND_STAT.keptByCaller or 0) + 1
+            end
+          end
+          -- ★★★1.75.88 二号例外 = **按物品 id 的白名单**（`opts.keepIds`，语言无关）：
+          --   用途 = **召唤物**（法师的法力宝石 4 颗 · 术士的治疗石 5 档）—— ★其中**法力玛瑙(5514)
+          --   在本客户端数据里 `class = 护甲`**（其余宝石/治疗石 = 消耗品），会被「护甲类一律剔」误剔；
+          --   按 id 放行有两个好处：① 不依赖 class 数据写得对不对（那份数据里它就是个异类）；
+          --   ② **与语言无关**（物品 id 不随 zhCN/enUS/ruRU 变），不必维护三语词表。
+          --   ★只放行点名的 id（例外不外溢）：不在表里的护甲/武器照旧被剔。
+          if skip and type(opts.keepIds) == "table" then
+            local iid = (type(link) == "string") and tonumber(string.match(link, "item:(%d+)")) or nil
+            if iid and opts.keepIds[iid] then
+              skip = false
+              keptById = true
+              IG_KIND_STAT.keptById = (IG_KIND_STAT.keptById or 0) + 1
             end
           end
           if ksrc == "cache" then IG_KIND_STAT.cached = IG_KIND_STAT.cached + 1 end
@@ -430,7 +460,8 @@ function EVAL_IG_SCAN_BAGS(bags, opts)
         else
           IG_KIND_STAT.kept = IG_KIND_STAT.kept + 1
           table.insert(out, { name = nm, bag = bag, slot = slot, tex = tex, count = cnt,
-                              locked = locked, q = q, idx = total, kind = kind, ksrc = ksrc })
+                              locked = locked, q = q, idx = total, kind = kind, ksrc = ksrc,
+                              keptById = keptById })
         end
       end
     end
@@ -564,9 +595,13 @@ function EVAL_IG_ENSURE()
         pcall(GameTooltip.ClearLines, GameTooltip)
         pcall(GameTooltip.AddLine, GameTooltip, tostring(it.name), qr, qg, qb)
       end
-      pcall(GameTooltip.AddLine, GameTooltip,
-            string.format("%s ×%s  [%s,%s]", tostring(it.name), tostring(it.count or 1),
-                          tostring(it.bag), tostring(it.slot)), 0.85, 0.85, 0.85)
+      -- ★1.75.76 只有**背包物品**才写「名字 ×数量 [包,格]」那一行：图标这类非物品条目没有包/格
+      --   （方案图标选择器 = 第一个非物品消费方），照旧无条件打印会画出「名字 ×1  [nil,nil]」= 假信息。
+      if type(it.bag) == "number" and type(it.slot) == "number" then
+        pcall(GameTooltip.AddLine, GameTooltip,
+              string.format("%s ×%s  [%s,%s]", tostring(it.name), tostring(it.count or 1),
+                            tostring(it.bag), tostring(it.slot)), 0.85, 0.85, 0.85)
+      end
       if IG.spec.hint then pcall(GameTooltip.AddLine, GameTooltip, IG.spec.hint, 0.55, 0.90, 0.55) end
       if IG.spec.mode == "multi" and cell.sel then
         pcall(GameTooltip.AddLine, GameTooltip, igL("IG_SELECTED"), 0.45, 1, 0.45)

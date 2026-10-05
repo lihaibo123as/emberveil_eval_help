@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.75.74"
+local VERSION = "1.75.96"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -265,21 +265,100 @@ local function uiProfBtnBorder(pb, sel, rgb)
   end
   return n == 4
 end
+-- ★★★1.75.90 战斗UI 方案行：「方案图标 + 方案名」这一组在按钮内**水平居中**
+--   （用户：「能否将这两者紧凑的信息进行水平居中定位按钮」；紧挨关系与 1.75.82 一致，只把整组摆到中间）。
+--   · **唯一算式**（`uiProfBtnIcon` 的让位/回位两态都读它 ⇒ 不会两处各算一份）：
+--       组宽 `gw` = 名字实宽（+ 画上图标时的「图标 + 间隙」）⇒ 起点 `x = floor((格宽 − gw)/2 + 0.5)`。
+--   · **夹到 padX**：格宽被 `profNeed` 夹过 / 名字极长 ⇒ 居中放不下时退回贴左缘，**绝不越出左边界**。
+--   · ★量不到名宽或格宽（坏数据）⇒ 退回 1.75.82 的左对齐口径（fail-open：宁可版式旧，也不算出 NaN 几何）。
+local function uiProfTextX(pb, shown)
+  local pad0 = pb.textX or 2
+  local nmW, bw = pb.nameW, pb.btnW
+  if type(nmW) ~= "number" or type(bw) ~= "number" then
+    return shown and (pad0 + (pb.iconShift or 0)) or pad0
+  end
+  local gw = nmW
+  if shown then gw = gw + (pb.iconShift or 0) end
+  local x = math.floor((bw - gw) / 2 + 0.5)
+  if x < pad0 then x = pad0 end
+  return shown and (x + (pb.iconShift or 0)) or x
+end
+
+-- ★★★1.75.77 战斗信息UI **方案行**的方案图标（用户：「方案图标设置完成之后,再战斗UI 对于方案位置也要显示对应图标」）。
+--   与配置窗方案列表**同一条来源优先级**（唯一规则、两处绘制）：
+--     已存自定义（走读口 EVAL_WAR_PROF_ICON_GET） > 品阶图标（EVAL_SHARE_SEAL_ICON，**只取第一个返回值**）。
+--   ★两样都判不出 ⇒ 收起这张图（**绝不画假图**）+ 文字**回到没图标的位置**（1.75.90 起 = 名字自己居中）。
+--   ★写完读回自证（本项目「写成功 ≠ 写进去」那一族）：读回空 / 非字符串 ⇒ 记账 ui.profIconNoTex 并收起。
+--   ★**不许拿读回值与原路径比** —— 本客户端会把路径归一（配置窗方案列表那边同样只判「非空」）。
+local function uiProfBtnIcon(pb, tierIdx)
+  if not (pb and pb.icon and pb.text) then return false end
+  local path = nil
+  if type(EVAL_WAR_PROF_ICON_GET) == "function" then
+    local okg, v = pcall(EVAL_WAR_PROF_ICON_GET, pb.idx)
+    if okg and type(v) == "string" and v ~= "" then path = v end
+  end
+  if (not path) and tierIdx and type(EVAL_SHARE_SEAL_ICON) == "function" then
+    local okt, vt = pcall(EVAL_SHARE_SEAL_ICON, tierIdx)
+    if okt and type(vt) == "string" and vt ~= "" then path = vt end
+  end
+  local shown = false
+  if path then
+    if pb.iconPath ~= path then
+      pcall(pb.icon.SetTexture, pb.icon, path)
+      pb.iconPath = path
+    end
+    local okr, got = pcall(pb.icon.GetTexture, pb.icon)
+    if okr and type(got) == "string" and got ~= "" then
+      pcall(pb.icon.Show, pb.icon)
+      shown = true
+      ui.profIconN = (ui.profIconN or 0) + 1
+    else
+      ui.profIconNoTex = (ui.profIconNoTex or 0) + 1 -- ★读回对不上 = 没画上（如实记账，不假装贴上了）
+      pcall(pb.icon.Hide, pb.icon)
+      pb.iconPath = nil
+    end
+  else
+    pcall(pb.icon.Hide, pb.icon)
+    pb.iconPath = nil
+  end
+  -- ★★★1.75.90 让位 / 回位 = **整组居中**（用户：「图标和标题…这两者紧凑的信息进行水平居中定位按钮」）：
+  --   起点由 `uiProfTextX` 按**组宽**现算（画上图标 ⇒ 组里多出「图标 + 间隙」⇒ 整组连名字一起挪到中间）。
+  --   两态**都是 LEFT 锚 + `SetJustifyH("LEFT")`**（盒比字宽时也从盒左缘起画 ⇒ 图标与字之间恒为 `iconGap`；
+  --   ★靠 FontString 的 CENTER 锚去「居中」是把**盒子**居中，图标会被推到框外 —— 反向钉守着这一条）。
+  --   只在**状态变了**才发几何（这一族每 0.15s 跑一次，不许每拍写几何）；左缘一动，右侧上限也跟着变 ⇒ 盒宽同拍重算。
+  local tx = uiProfTextX(pb, shown)
+  if tx and pb.textShift ~= shown then
+    pb.textShift = shown
+    pcall(pb.text.SetPoint, pb.text, "LEFT", pb.btn, "LEFT", tx, 0)
+    if type(pb.btnW) == "number" then
+      local lim = pb.btnW - tx - (pb.textX or 2)
+      if lim < 1 then lim = 1 end
+      pcall(pb.text.SetWidth, pb.text, lim)
+    end
+  end
+  return shown
+end
+
+-- ★★★1.73.58 / 1.74.29 战斗UI 方案格的**配色 + 边框**（唯一绘制口：BUILD 建完即调一次 + tick 每 0.15s 调一次）。
 local function uiProfBtnPaint(pb, prof, sel)
   if not (pb and pb.bg and pb.text) then return false end
-  local rgb = uiProfileTierRGB(prof)
+  local rgb, tidx = uiProfileTierRGB(prof)
+  local isTier = false
   if rgb then
     local k = sel and 0.45 or 0.22
     pcall(pb.bg.SetVertexColor, pb.bg, rgb.r * k, rgb.g * k, rgb.b * k, 1)
     pcall(pb.text.SetTextColor, pb.text, rgb.r, rgb.g, rgb.b)
     ui.profTierCalc = (ui.profTierCalc or 0) + 1 -- 记数：判据要能证明「这次真的按品阶算了」
     uiProfBtnBorder(pb, sel, rgb) -- ★1.74.29 激活 → 同色 1px 边框高亮
-    return true
+    isTier = true
+  else
+    pcall(pb.bg.SetVertexColor, pb.bg, sel and 0.45 or 0.16, sel and 0.35 or 0.13, sel and 0.10 or 0.08, 1)
+    pcall(pb.text.SetTextColor, pb.text, sel and 1 or 0.72, sel and 0.9 or 0.68, sel and 0.4 or 0.55)
+    uiProfBtnBorder(pb, sel, nil) -- ★1.74.29 算不出品阶也照样给激活格镶暖金边框
   end
-  pcall(pb.bg.SetVertexColor, pb.bg, sel and 0.45 or 0.16, sel and 0.35 or 0.13, sel and 0.10 or 0.08, 1)
-  pcall(pb.text.SetTextColor, pb.text, sel and 1 or 0.72, sel and 0.9 or 0.68, sel and 0.4 or 0.55)
-  uiProfBtnBorder(pb, sel, nil) -- ★1.74.29 算不出品阶也照样给激活格镶暖金边框
-  return false
+  -- ★★★1.75.77 图标**排在配色之后**：自定义图标与品阶无关 ⇒ 算不出品阶也照旧画（fail-open）
+  uiProfBtnIcon(pb, tidx)
+  return isTier
 end
 
 -- ★★★1.73.55 标题栏中段的**方案档位**（用户：「这位置增加显示玩家方案的档位」）。
@@ -654,7 +733,7 @@ function EVAL_HELP_UI_BUILD()
     -- 1.56.0 自适应布局：行宽与上方状态条对齐（右缘一致）；方案多时自动换行。
     -- ★★★1.71.10 用户实测「有些方案会溢出宽度」——根因是**按钮宽度按行均分**（同一行所有按钮一样宽）：
     --   长名字（如「一键团队驱散」）撑破自己的按钮、压在邻居上。现改为**按名字实测宽度**分配：
-    --     · 每格宽 = 量宽(名字) + 内边距，夹在 [minBW, 整行可用宽] 之间；
+    --     · 每格宽 = 量宽(名字) + 内边距 + **方案图标位 16z**（1.75.77），夹在 [minBW, 整行可用宽] 之间；
     --     · 按可用宽**贪心换行**（首行扣掉「方案」标签宽）；
     --     · 每行剩余空间**均摊**回该行按钮 —— 保住 1.56.0 的「每行填满」观感；
     --     · 文字格显式限宽 + 禁折行（名字极长时在自己的按钮里裁掉，不再压邻居）。
@@ -710,8 +789,29 @@ function EVAL_HELP_UI_BUILD()
       end
     end)
     -- 量宽尺（与方案按钮同字号；挪出可视区，不参与显示）
-    local uiRuler = uiText(root, math.max(7, math.floor(9 * z)), 0.85, 0.80, 0.70)
+    local uiSubSz = math.max(7, math.floor(9 * z)) -- ★1.75.82 字号单一来源（估宽也要用它）
+    local uiRuler = uiText(root, uiSubSz, 0.85, 0.80, 0.70)
     pcall(uiRuler.SetPoint, uiRuler, "TOPLEFT", root, "TOPLEFT", -2000, 0)
+    -- ★★★1.75.82 **按字符估宽**（汉字 1 个字宽、ASCII 0.6 个字宽）——只当**上界兜底**用。
+    --   起因（用户真机截图 + 原话「方案名有时完整显示、有时被截断成『神…』」）：三个 4 字方案名
+    --   （雷霆万钧 / 一夫当关 / 泰坦之力）在格子里只剩「第一个字 + …」，而格子本身有 6~8 个字宽
+    --   ⇒ **量出来的名宽只有 1 个字**。本客户端 `FontString:GetStringWidth` 对中文会报小值
+    --   （FontString 建出来时挂的是拉丁字体，中文靠回退字形渲染，量出来的宽度与实际画出来的字宽不是一回事）
+    --   ⇒ 量宽偏小 ⇒ 文字限宽偏小 ⇒ 客户端把整串截成「第一个字 + …」（差 1px 也会整串截）。
+    local function uiEstW(s)
+      local i, n, w = 1, string.len(s), 0
+      while i <= n do
+        local b = string.byte(s, i) or 0
+        if b > 127 then -- 汉字（含全角符号）按 1 个字宽
+          w = w + uiSubSz
+          if b >= 240 then i = i + 4 elseif b >= 224 then i = i + 3 elseif b >= 192 then i = i + 2 else i = i + 1 end
+        else
+          w = w + math.ceil(uiSubSz * 0.6)
+          i = i + 1
+        end
+      end
+      return w
+    end
     local function uiMeasure(s)
       s = tostring(s or "")
       local w0 = 0
@@ -720,19 +820,31 @@ function EVAL_HELP_UI_BUILD()
         local okv, v = pcall(uiRuler.GetStringWidth, uiRuler)
         if okv and type(v) == "number" and v > 0 then w0 = v end
       end
-      if w0 <= 0 then w0 = math.floor(string.len(s) / 3 + 0.5) * 9 end -- 近似：中文字一字约 9px
+      -- ★★★1.75.82 取 **max(实测, 估宽)**：实测偏小一律以估宽兜底（正常情况两者一致，格子宽度不变）
+      --   ——「宁可格子宽一点，也绝不把名字截成『神…』」。
+      local est = uiEstW(s)
+      if w0 < est then w0 = est end
       return w0
     end
-    local function profNeed(name) -- 一格需要多宽（实测 + 内边距；夹在 [minBW, 整行宽]）
-      local w0 = uiMeasure(name) + math.floor(10 * z)
+    local function profNeed(wM) -- 一格需要多宽（**外部量好的名字实宽** + 内边距 + 图标位；夹在 [minBW, 整行宽]）
+      -- ★1.75.77 方案行现在也画方案图标 ⇒ 每格**多留 16z**（2z 边距 + 12z 图标 + 2z 间隙），
+      --   不留就会「图标压名字」；格子跟着变宽 ⇒ 贪心换行的行数可能变（属预期，不是 bug）。
+      local w0 = (tonumber(wM) or 0) + math.floor(6 * z) + math.floor(16 * z)
       if w0 < minBW then w0 = minBW end
       if w0 > barAvailW then w0 = barAvailW end
       return w0
     end
-    local needW = {}
+    -- ★1.75.78 nameW = **名字实宽**（图标贴文字 / 文字限宽都用它；建窗期量一次，tick 里一个宽度都不量）
+    --   ★★★1.75.82 **只量一次**，格子宽与文字限宽都从**同一个数**派生 —— 旧写法量了两次
+    --     （`nameW[i] = uiMeasure(nm)` 与 `profNeed(nm)` 内各量一次），两次量出不同的值时限宽那次偏小
+    --     就是「名字被截」的直接原因；现在结构上不可能再出现两个口径。
+    local needW, nameW = {}, {}
     for i = 1, 12 do
       local prof = w20.profiles and w20.profiles[i]
-      needW[i] = profNeed(prof and prof.name or ("方案" .. tostring(i)))
+      local nm = prof and prof.name or ("方案" .. tostring(i))
+      local wM = uiMeasure(nm)
+      nameW[i] = wM
+      needW[i] = profNeed(wM)
     end
     -- 贪心换行 + 每行剩余**限量**均摊（余数给前几格）→ geo[i] = { x, y, w }
     --   ★★★1.71.11 用户第二轮反馈「空的太多了」：上一版把每行剩余**全部**均摊 → 一行里只有一个短名时，
@@ -781,14 +893,50 @@ function EVAL_HELP_UI_BUILD()
       pb:SetPoint("TOPLEFT", root, "TOPLEFT", g0.x, g0.y)
       pcall(pb.EnableMouse, pb, true)
       pcall(pb.RegisterForClicks, pb, "LeftButtonUp", "RightButtonUp") -- 1.71.16 右键 = 绑定快捷键
+      -- ★★★1.75.82 建窗期**就按真值定显隐**（可见性契约：显隐走显式 Show/Hide，不靠父子传播，也不等 0.15s 后的 tick）：
+      --   旧写法 12 个格子建出来**全是显示状态**（`CreateFrame` 默认显示、文案也先写进去了），只有 tick 才把
+      --   「不存在的方案位」收起 ⇒ 每次重建（增删技能 / 换方案 / 改名 / 导入分享）都会先闪一下
+      --   「一堆方案名叠在同一格上」（用户口径：「有些操作会导致全部标题都显示，然后被隐藏了」）。
+      --   ★只藏按钮本身即可（父帧隐藏时子件不渲染；`pb.text` 不单独 Hide —— tick 的 Show 路径只 Show 按钮，
+      --     文字若被单独藏过就再也回不来了）。
+      if not (w20.profiles and w20.profiles[i]) then pcall(pb.Hide, pb) end
       local pbg = pb:CreateTexture(nil, "BACKGROUND")
       uiSolid(pbg, 0.16, 0.13, 0.08, 1)
       pbg:SetPoint("TOPLEFT", pb, "TOPLEFT", 0, 0)
       pbg:SetPoint("BOTTOMRIGHT", pb, "BOTTOMRIGHT", 0, 0)
       local pt = uiText(pb, math.max(7, math.floor(9 * z)), 0.85, 0.80, 0.70)
-      pt:SetPoint("CENTER", pb, "CENTER", 0, 0)
-      pcall(pt.SetWidth, pt, g0.w - 4) -- ★限宽：极长名在自己的按钮里裁掉，不压邻居
+      -- ★★★1.75.90 **版式 = 「图标 + 名字」这一组在按钮内水平居中**（承 1.75.77「战斗UI 也要显示方案图标」+
+      --   1.75.82「图标和标题紧凑对齐」；本版用户：「能否将这两者紧凑的信息进行水平居中定位按钮」）：
+      --   图标与名字仍紧挨（间隙 `iconGap`），但**整组的起点由 `uiProfTextX` 按组宽现算**（见该函数注释）——
+      --   ★这里只给**建窗期的初值**（`txIcon` = 有图标时那一态的起点），真位置由 `uiProfBtnIcon` 每态刷新。
+      --   ★★文字盒**恒为 LEFT 锚 + `SetJustifyH("LEFT")`**：盒比字宽时文字也从盒左缘起画 ⇒ 图标与字之间恒为
+      --     `iconGap`（1.75.78 那版靠客户端的内部居中 ⇒ 盒子一宽，图标与字之间就裂开一段空档，正是用户截图那问题）。
+      local padX = math.floor(2 * z)
+      local iconW = math.floor(12 * z)
+      local iconGap = math.floor(2 * z)
+      local txIcon = padX + iconW + iconGap -- 建窗期初值（有图标时文字的起点）；真位置每态由 uiProfTextX 现算
+      pt:SetPoint("LEFT", pb, "LEFT", txIcon, 0)
+      pcall(pt.SetJustifyH, pt, "LEFT")
+      --   ★限宽 = 格宽 − 文字起点 − 两侧内边距（居中后恒 ≥ `nameW + 4z`，因为 needW = nameW + 6z + 16z）⇒ 名字放得下、
+      --     极长的名字在自己的按钮里裁掉、两头都不压邻居（1.75.82 之前量宽会偏小 ⇒ 名字被截成「神…」）；
+      --     ★图标状态一变、文字起点就动 ⇒ 那份限宽由 `uiProfBtnIcon` 同拍重算（这里只是建窗期初值）。
+      local tlim = g0.w - txIcon - padX
+      if tlim < 1 then tlim = 1 end
+      pcall(pt.SetWidth, pt, math.max(1, tlim)) -- ★限宽：极长名在自己的按钮里裁掉，不压邻居
       pcall(pt.SetNonSpaceWrap, pt, false)
+      -- ★★★1.75.78 建窗期**先把名字写进去**：FontString 有真实宽度，图标锚在它左边才会立刻落对位置
+      --   （不写的话第一帧文字串宽为 0 ⇒ 图标会先叠在文字中间，等 tick 那一下才跳开）。
+      pcall(pt.SetText, pt, tostring((w20.profiles and w20.profiles[i] and w20.profiles[i].name) or ("方案" .. tostring(i))))
+      -- ★★★1.75.78 方案图标控件（12z 见方，ARTWORK 层）：**锚在文字的左边**（跟着文字走）——
+      --   锚不上（拿不到 FontString 当锚点）就退回「贴格子左缘 2z」，**绝不因为锚点不支持就不画图标**（fail-open）。
+      --   画什么由 uiProfBtnPaint → uiProfBtnIcon 按**同一条来源优先级**决定（这里只建控件，不贴图）。
+      local pIcon = pb:CreateTexture(nil, "ARTWORK")
+      pcall(pIcon.SetWidth, pIcon, math.floor(12 * z))
+      pcall(pIcon.SetHeight, pIcon, math.floor(12 * z))
+      if not pcall(pIcon.SetPoint, pIcon, "RIGHT", pt, "LEFT", -math.floor(2 * z), 0) then
+        pcall(pIcon.SetPoint, pIcon, "LEFT", pb, "LEFT", math.floor(2 * z), 0)
+      end
+      pcall(pIcon.Hide, pIcon)
       local pidx = i
       pb:SetScript("OnClick", function(a, b)
         local mbtn = (type(a) == "string" and a) or (type(b) == "string" and b) or (type(arg1) == "string" and arg1) or "LeftButton"
@@ -819,7 +967,13 @@ function EVAL_HELP_UI_BUILD()
       pbds[2]:SetPoint("BOTTOMLEFT", pb, "BOTTOMLEFT", 0, 0) pbds[2]:SetPoint("BOTTOMRIGHT", pb, "BOTTOMRIGHT", 0, 0)       pcall(pbds[2].SetHeight, pbds[2], 1)
       pbds[3]:SetPoint("TOPLEFT", pb, "TOPLEFT", 0, 0)       pbds[3]:SetPoint("BOTTOMLEFT", pb, "BOTTOMLEFT", 0, 0)       pcall(pbds[3].SetWidth, pbds[3], 1)
       pbds[4]:SetPoint("TOPRIGHT", pb, "TOPRIGHT", 0, 0)     pbds[4]:SetPoint("BOTTOMRIGHT", pb, "BOTTOMRIGHT", 0, 0)     pcall(pbds[4].SetWidth, pbds[4], 1)
-      profBtns[i] = { btn = pb, bg = pbg, text = pt, borders = pbds }
+      -- ★★★1.75.77/82/90 包裹表交出六样：`icon` = 本格自己的方案图标控件（与配置窗方案列表的
+      --   warUI.profBtns[i].icon **同名但是两码事**，别混）；`idx` = 读口要的方案序号；`textX` = 左边界
+      --   （= `padX`，居中放不下时的**兜底起点**）；`iconShift` = 组里「图标 + 间隙」占的宽；
+      --   ★`nameW` / `btnW` = 建窗期量好的**名字实宽**与**本格实宽** —— 居中算式（组宽/格宽）就靠这两个数，
+      --   不交出来 ⇒ `uiProfTextX` 只能退回左对齐（fail-open，缩水但不崩）。
+      profBtns[i] = { btn = pb, bg = pbg, text = pt, borders = pbds, icon = pIcon, idx = i,
+                      textX = padX, iconShift = iconW + iconGap, nameW = nameW[i], btnW = g0.w }
       -- ★1.73.58 建出来就按品阶上色（不等 0.15s 后的 tick，免得先闪一下暗金）
       uiProfBtnPaint(profBtns[i], w20.profiles and w20.profiles[i], (w20.activeProfile or 1) == i)
     end
@@ -1781,6 +1935,9 @@ local function cfgBuild()
     clipText = nil } -- ★1.75.74 列表标题右侧那行「已复制：…」（无复制态 = 收起）
   cfgWin.warUI = warUI
   local MAXPROF = 12 -- 1.42.0 方案上限 4→12（间距 21→19 紧凑排列装下）
+  -- ★1.75.75 上限交给 warUI：新建方案那一路现在在**全局函数 EVAL_WAR_PROF_ADD** 里（三颗按钮与「+」格共用，
+  --   见文件后段「方案列表：新建 / 调序」）—— 它是文件级函数，看不到本函数的 local ⇒ 上限随 warUI 走（单一真值）。
+  warUI.maxProf = MAXPROF
 
   -- 左栏：方案列表（多方案 Tab；最后一个 [+] 新建方案）
   cfgHeader(root, LX, -56, L("W_PROF_H"), Wp)
@@ -1822,10 +1979,11 @@ local function cfgBuild()
       end
       if pidx <= table.getn(w2.profiles) then
         w2.activeProfile = pidx
-      elseif pidx == table.getn(w2.profiles) + 1 and table.getn(w2.profiles) < MAXPROF then
-        table.insert(w2.profiles, { name = "方案" .. tostring(table.getn(w2.profiles) + 1), skills = {}, src = "manual", author = (type(UnitName) == "function" and UnitName("player")) or nil }) -- ★1.73.63 手动创建（彩蛋闸门要认）★1.74.5 作者=自己名字彩蛋闸门要认）
-        w2.activeProfile = table.getn(w2.profiles)
-        say("新建方案: " .. tostring(w2.profiles[w2.activeProfile].name))
+      elseif pidx == table.getn(w2.profiles) + 1 then
+        -- ★★★1.75.75 新建方案**只有一个实现**（全局 EVAL_WAR_PROF_ADD，自带播报与刷新）。
+        --   这一格从本版起被三颗按钮（▲ ▼ +）**整行盖住**（见下方 mkSmall 那一段），留着当**兜底**：
+        --   万一那三颗建不出来 / 没进页控件清单，用户点这一格照样能新建（fail-open，不是死路）。
+        if type(EVAL_WAR_PROF_ADD) == "function" then EVAL_WAR_PROF_ADD() return end
       end
       EVAL_WAR_TAB_REFRESH()
     end)
@@ -1839,7 +1997,7 @@ local function cfgBuild()
         GameTooltip:SetOwner(pb, "ANCHOR_RIGHT")
         GameTooltip:AddLine(tostring(prof.name or "?"), 1, 0.82, 0.2)
         -- ★★★1.74.19 走**单一入口** EVAL_PROFILE_TIER：评分口径重做后，品阶不只是分数 ——
-        --   还要看**覆盖大类数**（覆盖 1/2/3 类分别封顶 34/69/119，≥4 类才不封顶）。
+        --   还要看**覆盖大类数**（覆盖 1/2/3 类分别封顶 23/35/49，≥4 类才不封顶）。
         --   ★透明度是硬要求：「125 分却是稀有」必须在 tooltip 里当场说清，否则玩家只会当成 bug。
         local parts = (type(EVAL_PROFILE_PARTS) == "function") and EVAL_PROFILE_PARTS(prof) or nil
         local sc = parts and parts.score or nil
@@ -1964,7 +2122,7 @@ local function cfgBuild()
     end
     table.insert(Wp, b)
     table.insert(Wp, bt)
-    navBtns[idx] = { btn = b, text = bt, label = label } -- label 供断言逐项比对（不从控件反查，桩里文本不可靠）
+    navBtns[idx] = { btn = b, text = bt, bg = bb, label = label } -- label 供断言逐项比对（不从控件反查，桩里文本不可靠）；bg = 底色纹理（1.75.78 案例模版要单独配色）
     return b
   end
   -- ★★★1.71.2（第十九轮）分享按钮的 tooltip（用户要求）：「指引他怎么分享，别人需要什么条件才能接收分享，
@@ -2001,6 +2159,13 @@ local function cfgBuild()
     --   ★而且那个函数是 **Toggle**：IO 窗本来就开着时，点分享反而会把它**关掉**——比「多开一个窗」更糟。
     if type(EVAL_SHARE_SEND_UI) == "function" then pcall(EVAL_SHARE_SEND_UI, navBtns[2].btn) end
   end, shareNavTip())
+  -- ★★★1.75.78 用户：「案例模版这个按钮设置不一样的颜色.高亮鲜艳一点.方便用户能一眼看到这个按钮」
+  --   ⇒ [案例模版] 单独用**亮紫**（与功能色表里的暗金/绿/蓝/红都不同族 ⇒ 一眼就能找到它），文字同步提亮；
+  --     另外两颗按钮保持默认暗金。★配色只在这里发一次（底部导航行是常显的，不是每拍刷的东西）。
+  if navBtns[1] and navBtns[1].bg then
+    pcall(navBtns[1].bg.SetVertexColor, navBtns[1].bg, 0.33, 0.11, 0.48, 1)
+    pcall(navBtns[1].text.SetTextColor, navBtns[1].text, 0.97, 0.83, 1.00)
+  end
   -- ★★★1.71.2（第十六轮）[接收] 按钮**已删除**（用户要求：「删除分享右边的按键，和开关状态内的接收方案重复」）。
   --   ★动手前核实过（不是照字面删）：它的 OnClick 调 EVAL_SHARE_RECV_TOGGLE() = 翻转 cfg.share.recv，
   --     而开关组第 3 项「接收方案」调的是**同一个函数** → 确实是重复入口，删掉不丢任何功能。
@@ -2191,7 +2356,50 @@ local function cfgBuild()
     b:SetScript("OnClick", fn)
     table.insert(list or Wp, b)
     if list then table.insert(list, bt) end -- 文本属按钮子件随动，但 G 列表契约要求显式登记
-    return b, bt
+    return b, bt, bb -- ★1.75.75 第 3 个返回 = 底色纹理（各功能按钮要**按功能配色**：技能行 [编]/[删]、方案列 上/下/增）
+  end
+  -- ★★★1.75.75 用户：「一键宏->方案列表->将新建方案的 + 按钮拆分 3 个按钮……（调整激活方案在方案列表的排序位置）,
+  --   按钮参考技能列表的移动按钮」⇒ 方案列**最后一个「+」那一行**改成 **▲ / ▼ / 增** 三颗
+  --   （★用户第二轮：「上下 换成技能列表的上下箭头图标」⇒ 前两颗用**技能列表同款 ▲/▼ 字形**、第三颗是文字「增」）。
+  --   · 样式 = **同一个 mkSmall**（技能列表那排按钮就是它建的）；★**三颗紧挨着铺满整行**（30×3 = 90 = 方案列宽、
+  --     高改成一整行 17）—— 留缝/留边 = 点到的那个像素**漏到下面那一格**（那一格的 OnClick 就是「新建方案」）
+  --     = 用户点「▼」却新建了一个方案，而且**看不出来**是哪来的。
+  --   · ★★**按功能配色**（用户：「颜色区分下」）：调序（▲/▼）= 暗金 · 新增（增）= 绿
+  --     —— 与技能行那排按钮同一套尺子（调序 = 暗金 / 编辑 = 蓝 / 删除 = 红），两个列表一眼能对上。
+  --   · ★★★**那一格的「+」必须由刷新清掉**（它的文字左对齐 20px ⇒ 正好压在第一颗上，用户截图就是「上+」）——
+  --     见 EVAL_WAR_TAB_REFRESH 里那一处（建不出来才写回「+」）。
+  --   · ★位置**不写在这儿**：方案数一变，那一行就跟着走 ⇒ 每次 EVAL_WAR_TAB_REFRESH **现算**（见那一处）。
+  --   · ★显隐归 Tab 切换（list 传 nil ⇒ 进 Wp 页控件清单）；★与上面那排 pb 同为 root 子件、**建得更晚**，
+  --     层级不抬 —— 所以**不能指望盖住下面那格的文字**，文字要显式清（上面那条）。
+  warUI.prow = {}
+  -- ★初锚：x 用 cfgBuild 的 LX（**只有这里看得到它**，见刷新那一处的注释），y 与 pb 那排同一公式；
+  --   真正的锚点由 EVAL_WAR_TAB_REFRESH 每拍钉到「方案列最后一个 + 格」上（方案数一变它跟着走）。
+  warUI.prowX = LX
+  local prowN0 = table.getn(warCfg().profiles or {})
+  for k = 1, 3 do
+    local pfn = nil
+    if k == 1 then pfn = function() EVAL_WAR_PROF_MOVE(-1) end
+    elseif k == 2 then pfn = function() EVAL_WAR_PROF_MOVE(1) end
+    else pfn = function() EVAL_WAR_PROF_ADD() end end
+    local pbtn, ptext, pbg = mkSmall(warUI.prowX + (k - 1) * 30, -74 - prowN0 * 19, 30,
+      (k == 1 and "▲" or (k == 2 and "▼" or L("W_PROF_BTN_ADD"))), pfn)
+    pcall(pbtn.SetHeight, pbtn, 17)
+    local pAdd = (k == 3)
+    pcall(pbg.SetVertexColor, pbg, pAdd and 0.12 or 0.16, pAdd and 0.28 or 0.13, pAdd and 0.14 or 0.08, 1)
+    pcall(ptext.SetTextColor, ptext, pAdd and 0.62 or 0.95, pAdd and 0.95 or 0.82, pAdd and 0.55 or 0.35)
+    -- 悬停说明（三颗各一句；★「调序时绑定一起换位」这条必须说 —— 那是用户最容易被吓到的地方）
+    local ptip = (k == 1 and L("W_PROF_TIP_UP") or (k == 2 and L("W_PROF_TIP_DN") or L("W_PROF_TIP_ADD")))
+    pcall(pbtn.SetScript, pbtn, "OnEnter", function()
+      if type(GameTooltip) ~= "table" then return end
+      pcall(function()
+        GameTooltip:SetOwner(pbtn, "ANCHOR_RIGHT")
+        GameTooltip:AddLine(ptip, 0.95, 0.82, 0.35)
+        GameTooltip:AddLine(L("W_PROF_TIP_BIND"), 0.72, 0.72, 0.72)
+        GameTooltip:Show()
+      end)
+    end)
+    pcall(pbtn.SetScript, pbtn, "OnLeave", function() pcall(function() GameTooltip:Hide() end) end)
+    warUI.prow[k] = { btn = pbtn, text = ptext, bg = pbg }
   end
   -- 方案导入/导出窗口入口（md 文本互转）
   -- [添加技能]：直接打开技能编辑窗新增（技能下拉 + 条件逐行配置 + 保存即入列表）
@@ -2361,7 +2569,7 @@ hov:SetScript("OnLeave", function()
         EVAL_WAR_TAB_REFRESH()
       end
     end, nil, true)
-    row.edit = mkSmall(44, y, 24, L("W_EDIT"), function()
+    row.edit, row.editText, row.editBg = mkSmall(44, y, 24, L("W_EDIT"), function()
       -- 打开技能编辑窗（独立条件属性行 + & / | 关系调整）
       local w2 = warCfg()
       local p = w2.profiles[w2.activeProfile or 1]
@@ -2370,7 +2578,7 @@ hov:SetScript("OnLeave", function()
         EVAL_HELP_SE_OPEN(w2.activeProfile or 1, idx)
       end
     end, nil, true)
-    row.del = mkSmall(16, y, 24, L("W_DEL"), function()
+    row.del, row.delText, row.delBg = mkSmall(16, y, 24, L("W_DEL"), function()
       local p = warCfg().profiles[warCfg().activeProfile or 1]
       local idx = ri + (warUI.offset or 0)
       if p and p.skills[idx] then
@@ -2378,6 +2586,14 @@ hov:SetScript("OnLeave", function()
         EVAL_WAR_TAB_REFRESH()
       end
     end, nil, true)
+    -- ★★★1.75.75 用户：「右侧的按钮列表页根据不同功能按钮配色」⇒ 技能行按钮**按功能配色**：
+    --   调序 ▲/▼ = 暗金（mkSmall 默认，一个字节不动）· 编辑 [编] = 蓝 · 删除 [删] = 红。
+    --   ★这套色值**只在这里上一次**（功能色不随选中/数据变化）⇒ 刷新里一个 SetVertexColor 都不发；
+    --     方案列那颗 [删] 用的是同一族红（0.25,0.10,0.10），三处（技能行/方案列/三颗按钮）一眼能对上。
+    pcall(row.editBg.SetVertexColor, row.editBg, 0.13, 0.20, 0.36, 1)
+    pcall(row.editText.SetTextColor, row.editText, 0.74, 0.86, 1.00)
+    pcall(row.delBg.SetVertexColor, row.delBg, 0.30, 0.10, 0.10, 1)
+    pcall(row.delText.SetTextColor, row.delText, 1.00, 0.70, 0.62)
     warUI.rows[ri] = row
   end
 
@@ -2491,10 +2707,15 @@ end
 --   ★左键语义不变（仍是激活方案）——只合并「右键」这一路。
 -- ★EditBox 在本客户端可能不渲染 → 保留回声行（OnTextChanged 实时镜像，盲打也可见）的保底范式。
 local pmUI = {}
+-- ★1.75.76 方案图标（自定义）：选择器 = 共用件 tools/IconGrid.lua（8×5 图标网格 + 滚轮翻页 + 全屏捕手）。
+--   key 是「分页状态按它各存一份」的标识，也是**关窗时判断网格是不是我们那把**的唯一依据（别无条件收起）。
+local PM_ICON_KEY = "profIcon"
 
 function EVAL_PM_BUILD()
   if pmUI.root then return end
-  local W, H = 320, 232
+  -- ★1.75.76 高度 232 → 280：新增「③ 方案图标」一行（预览 26×26 + 选择图标 + 恢复默认）。
+  --   底部三颗按钮锚在 BOTTOMLEFT ⇒ 窗口长高它们自己跟着走；各段的 TOPLEFT 锚点一字不动。
+  local W, H = 320, 280
   local root = CreateFrame("Frame", "EVAL_HELP_PM", UIParent)
   root:SetWidth(W) root:SetHeight(H)
   root:SetPoint("CENTER", UIParent, "CENTER", 0, 120)
@@ -2625,6 +2846,60 @@ function EVAL_PM_BUILD()
   pcall(infoText.SetWidth, infoText, W - 36)
   pmUI.infoText = infoText
 
+  -- ===== ③ 方案图标（1.75.76；用户：「方案右键设置: 增加方案图标可让用户自定已设置」）=====
+  --   ① 数据 = war.profiles[i].icon（纹理路径；nil/空 = 没自定义 ⇒ 回落**品阶图标**，行为与旧版一字不差）；
+  --   ② **提交语义 = 跟「确定」一起走**（用户 1.75.76 选定）：点选择器只写待定态 pmUI.iconPending，
+  --      [确定] 才落进方案、[取消] 什么都不动 —— 与同窗的「方案名称 / 快捷键」完全同一口径；
+  --   ③ 待定态三态：nil = 没动过 · 字符串 = 设成这枚 · false = 恢复默认（false 是真值，不能用 nil 顶替）。
+  --   ★预览图**与方案列表同一来源**（自定义优先，没有才现算品阶图标）——「同一个东西不许两处各算一份」。
+  local secIcon = uiText(root, 10, 0.85, 0.70, 0.20)
+  secIcon:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -196)
+  secIcon:SetText(L("PM_SEC_ICON"))
+  pmUI.secIcon = secIcon
+  local iconBtn = CreateFrame("Button", nil, root)
+  iconBtn:SetWidth(26) iconBtn:SetHeight(26)
+  iconBtn:SetPoint("TOPLEFT", root, "TOPLEFT", 18, -212)
+  pcall(iconBtn.EnableMouse, iconBtn, true)
+  pcall(iconBtn.RegisterForClicks, iconBtn, "LeftButtonUp")
+  local iconBg = iconBtn:CreateTexture(nil, "BACKGROUND")
+  uiSolid(iconBg, 0.10, 0.09, 0.06, 1)
+  iconBg:SetPoint("TOPLEFT", iconBtn, "TOPLEFT", 0, 0)
+  iconBg:SetPoint("BOTTOMRIGHT", iconBtn, "BOTTOMRIGHT", 0, 0)
+  local iconTex = iconBtn:CreateTexture(nil, "ARTWORK")
+  iconTex:SetWidth(24) iconTex:SetHeight(24)
+  iconTex:SetPoint("CENTER", iconBtn, "CENTER", 0, 0)
+  iconBg:Show()
+  iconTex:Hide()
+  pmUI.iconBtn, pmUI.iconTex, pmUI.iconBg = iconBtn, iconTex, iconBg
+  local iconText = uiText(root, 9, 0.75, 0.75, 0.70)
+  iconText:SetPoint("TOPLEFT", root, "TOPLEFT", 50, -220)
+  pcall(iconText.SetWidth, iconText, 72)
+  pcall(iconText.SetJustifyH, iconText, "LEFT")
+  pcall(iconText.SetNonSpaceWrap, iconText, false)
+  pmUI.iconText = iconText
+  -- ③ 段的两颗按钮（与底部那三颗同一长相，只是锚在这一行上）
+  local function iconRowBtn(x, w, label, fn)
+    local b = CreateFrame("Button", nil, root)
+    b:SetWidth(w) b:SetHeight(22)
+    b:SetPoint("TOPLEFT", root, "TOPLEFT", x, -212)
+    pcall(b.EnableMouse, b, true)
+    pcall(b.RegisterForClicks, b, "LeftButtonUp")
+    local bb = b:CreateTexture(nil, "BACKGROUND")
+    uiSolid(bb, 0.16, 0.13, 0.08, 1)
+    bb:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+    bb:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+    local bt = uiText(b, 10, 0.95, 0.82, 0.35)
+    bt:SetPoint("CENTER", b, "CENTER", 0, 0)
+    pcall(bt.SetNonSpaceWrap, bt, false)
+    bt:SetText(label)
+    b:SetScript("OnClick", fn)
+    return b
+  end
+  -- ★「选择图标…」走唯一入口 EVAL_PM_ICON_PICK（预览图点一下也走它）；「恢复默认」走 EVAL_PM_ICON_CLEAR
+  pmUI.iconPick = iconRowBtn(126, 100, L("PM_ICON_PICK"), function() EVAL_PM_ICON_PICK() end)
+  pmUI.iconReset = iconRowBtn(230, 76, L("PM_ICON_RESET"), function() EVAL_PM_ICON_CLEAR() end)
+  iconBtn:SetScript("OnClick", function() EVAL_PM_ICON_PICK() end)
+
   -- ===== 按钮行 =====
   local function bBtn(x, label, fn)
     local b = CreateFrame("Button", nil, root)
@@ -2658,10 +2933,23 @@ function EVAL_PM_BUILD()
 
   root:SetScript("OnHide", function()
     if type(EVAL_DD_HIDE) == "function" then pcall(EVAL_DD_HIDE) end -- 下拉贴 UIParent，宿主关了要一起收
+    -- ★1.75.76 图标选择网格（共用件 IconGrid）也挂在 UIParent + 自带全屏捕手 ⇒ 关窗必须一起收，
+    --   否则它会留在屏上（「面板没了、捕手还在吞点击」是这类件最经典的坏状态）。
+    --   ★只收**我们那把**：按 spec.key 判（共用件还有喂食/消耗品两个消费方，绝不许替别人关）。
+    if type(EVAL_IG_HIDE) == "function" and type(EVAL_TEST_IG_STATE) == "function" then
+      local okS, st = pcall(EVAL_TEST_IG_STATE)
+      if okS and type(st) == "table" and st.key == PM_ICON_KEY then pcall(EVAL_IG_HIDE) end
+    end
   end)
   root:Hide()
   pmUI.root = root
 end
+
+-- ★★★1.75.76 **③ 段预览的绘制口必须前向声明**：`pmRefresh`（下面第一个用到它的函数）写在定义之前，
+--   直接写 `local function pmIconPaint` ⇒ 上面的引用编译成**全局查找** = 运行时 `attempt to call a global`
+--   （本项目 R2 / 1.75.14 rowsPerCol / 1.75.57c mfLog 全是这一族；`luacheck` 与 `probe_localorder` 都照不到这种
+--    「函数体内部先引用后声明」）⇒ 一律「顶部前向声明 + 定义处改赋值」。
+local pmIconPaint
 
 -- 刷新显示（标题 / 当前键 / 名字回填 / 冲突提示）——单一刷新点，改名与绑键都走它
 function pmRefresh()
@@ -2685,6 +2973,115 @@ function pmRefresh()
   end
   pmUI.infoText:SetText(info)
   pcall(pmUI.infoText.SetTextColor, pmUI.infoText, ir, ig, ib)
+  pmIconPaint(p) -- ★1.75.76 ③ 段预览（同一个刷新点，与方案列表同一套来源优先级）
+end
+
+-- ★1.75.76 ③ 段预览的**唯一绘制口**（pmRefresh 每次调；点选择器只改待定态，绘制仍走这里）。
+--   优先级 = 待定态 > 方案里存着的自定义图标 > **品阶图标**（现算，与方案列表同一个读值口 uiProfileTierRGB）。
+--   ★「待定恢复默认」（pending == false）= 挡住存着的那条自定义 ⇒ 预览**立刻回品阶图标**
+--     （画的就是「确定」之后真正会显示的那枚图 —— 预览的意义就是预告结果，不许只写一句话）。
+--   ★读回自证（本项目「写成功 ≠ 写进去」的既定判据）：贴完读一次 GetTexture，空就记一笔 pmUI.iconNoTex。
+--   ★判不出（既没自定义、品阶也算不出）⇒ 如实画暗底、把预览图**收起来**，绝不拿一张假图冒充。
+--   ★定义处**赋值**（不写 `local function`）—— 前向声明在上面（见那一段注释）。
+pmIconPaint = function(p)
+  if not (pmUI.iconTex and pmUI.iconText) then return false end
+  local pend = pmUI.iconPending
+  local path, custom = nil, false
+  if type(pend) == "string" and pend ~= "" then
+    path, custom = pend, true
+  elseif pend ~= false and type(p) == "table" and type(p.icon) == "string" and p.icon ~= "" then
+    path, custom = p.icon, true
+  end
+  if path == nil and type(p) == "table" then
+    -- 没自定义（或待定恢复默认）⇒ 预览就画**这枚方案当前的品阶图标**（与方案列表同源，用户一眼能对上）
+    local rgb, tidx = uiProfileTierRGB(p)
+    if rgb and tidx then
+      local ip = EVAL_SHARE_SEAL_ICON(tidx) -- ★只取第一个返回（内联成实参 = SetTexture 第二参 = 纯黑方块，1.73.49 踩过）
+      if type(ip) == "string" and ip ~= "" then path = ip end
+    end
+  end
+  if type(path) == "string" and path ~= "" then
+    pcall(pmUI.iconTex.SetTexture, pmUI.iconTex, path)
+    local okr, got = pcall(pmUI.iconTex.GetTexture, pmUI.iconTex)
+    if (not okr) or type(got) ~= "string" or got == "" then
+      pmUI.iconNoTex = (pmUI.iconNoTex or 0) + 1
+    end
+    pcall(pmUI.iconTex.Show, pmUI.iconTex)
+  else
+    pcall(pmUI.iconTex.Hide, pmUI.iconTex)
+  end
+  local txt = custom and L("PM_ICON_CUR_CUS") or L("PM_ICON_CUR_DEF")
+  if pend ~= nil then txt = txt .. L("PM_ICON_PENDING") end
+  pcall(pmUI.iconText.SetText, pmUI.iconText, txt)
+  return true
+end
+
+-- ★1.75.76 待定态的三个入口（都只改 pmUI.iconPending + 重画预览；**一个字节都不落进方案**）：
+--   · EVAL_PM_ICON_TAKE(it)  = 选择器点中一格（真正的写盘在「确定」那条路上，见 EVAL_PM_SAVE）
+--   · EVAL_PM_ICON_CLEAR()   = 恢复默认（写 false —— 真值，不是 nil）
+--   · EVAL_PM_ICON_PICK()    = 开选择器（复用共用件 IconGrid；拿不到就**如实出声**，绝不静默不成事）
+function EVAL_PM_ICON_TAKE(it)
+  local path = (type(it) == "table") and it.iconPath or nil
+  if type(path) ~= "string" or path == "" then return false end
+  pmUI.iconPending = path
+  pcall(pmRefresh)
+  return true
+end
+
+function EVAL_PM_ICON_CLEAR()
+  pmUI.iconPending = false
+  pcall(pmRefresh)
+  return true
+end
+
+-- 选择器候选：**图标库的唯一真值**（IconBrowser.lua 的读值口）——绝不在这里另抄一份名单。
+--   ★映射结果**缓存一把**（EVAL_IB_ITEMS 是静态的；而 candidates 每翻一页都会被调到 ——
+--     每次重建 1033 个表就是白烧），只在库不可用时如实返空。
+local pmIconCache = nil
+local function pmIconCands()
+  if pmIconCache then return pmIconCache end
+  if type(EVAL_IB_ITEMS) ~= "function" then return {} end
+  local okI, src = pcall(EVAL_IB_ITEMS)
+  if not okI or type(src) ~= "table" then return {} end
+  local out = {}
+  for i = 1, table.getn(src) do
+    local it = src[i]
+    if type(it) == "table" and type(it.path) == "string" and it.path ~= "" then
+      out[table.getn(out) + 1] = { name = tostring(it.name or it.path), tex = it.path, iconPath = it.path }
+    end
+  end
+  -- ★★★空结果**不许进缓存**：图标库这一刻没取到（未扫 / 接口缺失 / 暂时为空）时若把空表缓存下来，
+  --   这一整局就再也开不出选择器了（「第一次失败 = 永久失败」，正是本项目最忌讳的静默死）。
+  --   不缓存 ⇒ 下次点还现取一次，库一旦可用就自愈（代价 = 失败那几下多调一次读值口）。
+  if table.getn(out) > 0 then pmIconCache = out end
+  return out
+end
+
+function EVAL_PM_ICON_PICK()
+  if type(EVAL_IG_OPEN) ~= "function" or type(EVAL_IB_SCAN) ~= "function" then
+    say(L("PM_ICON_NOIB"))
+    return false
+  end
+  pcall(EVAL_IB_SCAN) -- 首用才扫（内部有缓存）；接口缺失/取不到都走下面那句如实告知
+  local list = pmIconCands()
+  if table.getn(list) == 0 then
+    say(L("PM_ICON_NOIB"))
+    return false
+  end
+  return EVAL_IG_OPEN({
+    key = PM_ICON_KEY,
+    anchor = pmUI.iconBtn,
+    title = L("PM_SEC_ICON"),
+    hint = L("PM_ICON_TIP"),
+    mode = "single",
+    candidates = function() return pmIconCands() end,
+    onPick = function(it) EVAL_PM_ICON_TAKE(it) end,
+    btnAText = L("PM_ICON_RESET"),
+    btnA = function()
+      EVAL_PM_ICON_CLEAR()
+      EVAL_IG_REFRESH()
+    end,
+  })
 end
 
 function EVAL_PM_PICK(key)
@@ -2735,6 +3132,17 @@ function EVAL_PM_SAVE()
       end
     end
   end
+  -- ★1.75.76 ③ 方案图标：**只有点过「确定」才落进方案**（用户选定的提交语义）。
+  --   待定态三态：nil = 没动过（一个字节都不写）· 字符串 = 设成这枚 · false = 恢复默认（写 nil 进字段）。
+  if pmUI.iconPending ~= nil then
+    local ipath = (type(pmUI.iconPending) == "string" and pmUI.iconPending ~= "") and pmUI.iconPending or nil
+    if EVAL_WAR_PROF_ICON_SET(pmUI.pidx, ipath) then
+      did = true
+      if ipath then say(string.format(L("PM_ICON_SET"), tostring(ipath)))
+      else say(L("PM_ICON_RESET_OK")) end
+      pmUI.iconPending = nil
+    end
+  end
   if not did then say(L("PM_NAME_EMPTY")) end
   pmRefresh()
   EVAL_WAR_TAB_REFRESH() -- ★数据变了 → 界面同步刷新（1.71.1 教训：刷新放写入点）
@@ -2748,6 +3156,7 @@ function EVAL_PM_OPEN(idx)
   if not (w2.profiles and w2.profiles[idx]) then return false end
   pmUI.pidx = idx
   pmUI.selKey = nil
+  pmUI.iconPending = nil -- ★1.75.76 每次开窗都从「没动过」开始（上一轮的待定图标绝不许跨方案粘过来）
   local nm = tostring(w2.profiles[idx].name or "")
   if pmUI.eb then
     pcall(pmUI.eb.SetText, pmUI.eb, nm)
@@ -2763,6 +3172,34 @@ end
 --   留别名会让「调用点改回旧名字」这种回归**悄悄通过**（旧名照样开同一个窗 → 行为断言全绿），
 --   实测变异 M1/M2 正是这样 SURVIVED 的 → 删掉旧名，任何回退都会当场变成「调用 nil」而炸响。
 --   （旧名 EVAL_HELP_RP_OPEN / EVAL_BIND_OPEN 的调用点已全部改指 EVAL_PM_OPEN。）
+
+
+-- ============ 方案图标：读写口（1.75.76）============
+-- 数据 = war.profiles[i].icon（**纹理路径字符串**，与「小地图按钮自定义图标」同一口径）。
+--   nil / 空串 = 没自定义 ⇒ 方案列表回落**品阶图标**（旧行为一字不差）。
+-- ★这是**唯一写口**：EVAL_PM_SAVE 的「确定」走它，`/run EVAL_WAR_PROF_ICON_SET(1,"…")` 取证也走它 ⇒
+--   不可能出现「界面改了、列表没刷」。读口给探针与离线 harness 用（本项目「读值口要么挂活口、要么别加」）。
+function EVAL_WAR_PROF_ICON_GET(idx)
+  local w2 = warCfg()
+  local p = w2.profiles and w2.profiles[idx]
+  if type(p) ~= "table" then return nil end
+  if type(p.icon) == "string" and p.icon ~= "" then return p.icon end
+  return nil
+end
+
+-- path = 纹理路径（设自定义）· nil / 空串 = 恢复默认（**删键**，存档里不留死字段）
+function EVAL_WAR_PROF_ICON_SET(idx, path)
+  local w2 = warCfg()
+  local p = w2.profiles and w2.profiles[idx]
+  if type(p) ~= "table" then return false end
+  local v = nil
+  if type(path) == "string" and path ~= "" then v = path end
+  p.icon = v
+  -- 写入点即刷新点（方案列表那张 13×13 的图与方案管理窗的预览都在这里跟着变）
+  if type(EVAL_WAR_TAB_REFRESH) == "function" then pcall(EVAL_WAR_TAB_REFRESH) end
+  if pmUI.root and type(pmRefresh) == "function" then pcall(pmRefresh) end
+  return true
+end
 
 
 -- ===== 通用名称输入弹窗（1.29.0：仿 1.17.0 重命名弹窗回声行范式——EditBox 可能不渲染 → 金色回声行保底） =====
@@ -3140,35 +3577,46 @@ function EVAL_WAR_TAB_REFRESH()
       warProfTierCalc = warProfTierCalc + 1
       -- ★1.73.58 品阶判定抽成 uiProfileTierRGB（**方案列表与战斗信息UI 方案行共用同一份**，不再各写一遍）
       trgb, tidx = uiProfileTierRGB(prof)
+      -- ★★★1.75.76 用户：「方案右键设置 → 增加方案图标可让用户自定」⇒ **自定义图标优先**：
+      --   数据 = war.profiles[i].icon（纹理路径；nil / 空串 = 没自定义 ⇒ 回落到品阶图标，旧行为一字不差）。
+      --   ★与品阶**无关**：算不出品阶（trgb = nil）时照旧画自定义图标（fail-open）——判据在下面那个共用绘制块里。
+      --   ★只换那张 13×13 的图：底色 / 文字色仍按品阶（用户没要求改配色，两处配色口径不许分叉）。
+      local ipath = nil
+      if type(prof.icon) == "string" and prof.icon ~= "" then ipath = prof.icon end
       if trgb then
         local k = sel and 0.45 or 0.22
         pcall(pb.bg.SetVertexColor, pb.bg, trgb.r * k, trgb.g * k, trgb.b * k, 1)
         pcall(pb.text.SetTextColor, pb.text, trgb.r, trgb.g, trgb.b)
-        if pb.icon then
-          -- ★★★1.73.49 真机「图标还是黑的」的根因：`EVAL_SHARE_SEAL_ICON` **返回两个值**（路径 + 文件名），
-          --   直接**内联成实参**时 Lua 会把两个都展开 → 实际调用成了 `SetTexture(路径, 文件名)`；
-          --   而本客户端的 `SetTexture` 第二参是 **wrap 模式**（现代签名）→ 拿到一个字符串 → 尺寸对、**整块纯黑**
-          --   （正是用户截图里那个 13×13 的黑方块）。★模板窗那边写的是 `local tiPath = …` 再传 → 一直正常。
-          --   ⇒ ① 只取第一个返回值；② 写完**读回来确认**（本项目在 ChatFrame_OnEvent 上吃过「写成功 ≠ 写进去」的亏）。
-          local ipath = EVAL_SHARE_SEAL_ICON(tidx)
-          if type(ipath) == "string" and ipath ~= "" then
-            pcall(pb.icon.SetTexture, pb.icon, ipath)
-            local okr, got = pcall(pb.icon.GetTexture, pb.icon)
-            if (not okr) or type(got) ~= "string" or got == "" then
-              warUI.iconNoTex = (warUI.iconNoTex or 0) + 1 -- 如实记账（探针会打印它）
-            end
-            if warTabOn then pcall(pb.icon.Show, pb.icon) end
-          else
-            if warTabOn then pcall(pb.icon.Hide, pb.icon) end
-          end
-        end
+        -- ★★★1.73.49 真机「图标还是黑的」的根因：`EVAL_SHARE_SEAL_ICON` **返回两个值**（路径 + 文件名），
+        --   直接**内联成实参**时 Lua 会把两个都展开 → 实际调用成了 `SetTexture(路径, 文件名)`；
+        --   而本客户端的 `SetTexture` 第二参是 **wrap 模式**（现代签名）→ 拿到一个字符串 → 尺寸对、**整块纯黑**
+        --   （正是用户截图里那个 13×13 的黑方块）。★模板窗那边写的是 `local tiPath = …` 再传 → 一直正常。
+        --   ⇒ 只取第一个返回值（这里与自定义图标同一个口，见下面那个共用绘制块）。
+        if not ipath then ipath = EVAL_SHARE_SEAL_ICON(tidx) end
       else
         pcall(pb.bg.SetVertexColor, pb.bg, sel and 0.45 or 0.16, sel and 0.35 or 0.13, sel and 0.10 or 0.08, 1)
         pcall(pb.text.SetTextColor, pb.text, sel and 1 or 0.75, sel and 0.9 or 0.72, sel and 0.4 or 0.6)
-        if pb.icon and warTabOn then pb.icon:Hide() end
+      end
+      -- ★1.75.76 两条来源（自定义 / 品阶）**共用这一个绘制口**：写完读回来确认（本项目「写成功 ≠ 写进去」那一族），
+      --   取不到就**如实记账**（warUI.iconNoTex，探针与 harness 读它），绝不假装贴上了。
+      if pb.icon then
+        if type(ipath) == "string" and ipath ~= "" then
+          pcall(pb.icon.SetTexture, pb.icon, ipath)
+          local okr, got = pcall(pb.icon.GetTexture, pb.icon)
+          if (not okr) or type(got) ~= "string" or got == "" then
+            warUI.iconNoTex = (warUI.iconNoTex or 0) + 1
+          end
+          if warTabOn then pcall(pb.icon.Show, pb.icon) end
+        else
+          if warTabOn then pcall(pb.icon.Hide, pb.icon) end
+        end
       end
     elseif i == table.getn(w2.profiles) + 1 then
-      pb.text:SetText("+")
+      -- ★★★1.75.75 这一格从本版起由**三颗按钮**（▲ ▼ 增）接管 ⇒ 那一格的「+」**必须清掉**：
+      --   它的文字是**左对齐 20px**（`pb.text` 的锚点，给左边的品阶图标让位）⇒ 正好落在第一颗（▲）身上，
+      --   屏幕上就是「上+」（用户截图点名），而且它会**透在自己那层按钮之上**（同层级后建帧没能盖住它）。
+      --   ★**三颗真的建出来了才清**（`warUI.prow` 在 = 建出来了）：建不出来时这里照旧写「+」⇒ 老兜底照旧能用（fail-open）。
+      if warUI.prow then pb.text:SetText("") else pb.text:SetText("+") end
       pcall(pb.bg.SetVertexColor, pb.bg, 0.10, 0.10, 0.10, 1)
       if pb.icon and warTabOn then pb.icon:Hide() end
     else
@@ -3184,6 +3632,43 @@ function EVAL_WAR_TAB_REFRESH()
         pcall(pb.delBg.SetVertexColor, pb.delBg, armed and 0.75 or 0.25, 0.10, 0.10, 1)
       else
         if warTabOn then pb.del:Hide() end
+      end
+    end
+  end
+  -- ★★★1.75.75 三颗方案按钮（▲ ▼ +）的**位置与配色**：位置 = **锚在方案列最后一个「+」格上**
+  --   （那一格自己就是按方案数摆的 ⇒ 方案数一变三颗跟着走，**这里一个绝对坐标都不算**）；
+  --   配色 = 「按不按得动」（▲ 在第一个时、▼ 在最后一个时、+ 满员时 → 暗掉；
+  --   点了仍会走一遍并**如实出声**，不静默）。
+  --   ★★为什么是「锚在那一格」而不是写坐标：`LX` / `-74 - n*19` 都是 **cfgBuild 的 local**，
+  --     而本函数是**文件级函数**（看不到那个 local）—— 在这里写 `LX + …` 编译成**全局查找** ⇒ nil 算术
+  --     （真机当场红字、且它在 `pcall` 的**实参**里 ⇒ 连 pcall 都兜不住）。这条踩过（1.75.14 的 rowsPerCol 同族）。
+  --   ★三颗**铺满那一格**（偏移 0、宽 30、高 17 = 与 pb 同行同高）—— 留缝/留边就会点到下面那一格（= 新建方案）。
+  --   ★只动**几何与配色**：显隐一律归 Tab 切换（本文件可见性契约，数据刷新不改显隐 —— 见本函数开头那段长注释）。
+  local prow = cfgWin.warUI and cfgWin.warUI.prow
+  if prow then
+    local pn = table.getn(w2.profiles)
+    local pi0 = w2.activeProfile or 1
+    local pcap = cfgWin.warUI.maxProf or 12
+    local prowRow = cfgWin.warUI.profBtns[pn + 1] and cfgWin.warUI.profBtns[pn + 1].btn
+    for k = 1, 3 do
+      local e = prow[k]
+      if e and e.btn and prowRow then
+        pcall(e.btn.SetPoint, e.btn, "TOPLEFT", prowRow, "TOPLEFT", (k - 1) * 30, 0)
+        local live = true
+        if k == 1 then live = (pi0 > 1)
+        elseif k == 2 then live = (pi0 < pn)
+        else live = (pn < pcap) end
+        -- 配色与建窗时**同一套**（★两处不一致 = 能按的那一下颜色会跳）：调序 上/下 = 暗金 · 新增 增 = 绿；
+        -- 不能按时**整体压暗**（底色 + 字色一起），但**不换色系** —— 一眼仍看得出这颗是干什么的。
+        local add = (k == 3)
+        local cr, cg, cb = add and 0.12 or 0.16, add and 0.28 or 0.13, add and 0.14 or 0.08
+        local tr, tg, tb = add and 0.62 or 0.95, add and 0.95 or 0.82, add and 0.55 or 0.35
+        if not live then
+          cr, cg, cb = cr * 0.55, cg * 0.55, cb * 0.55
+          tr, tg, tb = tr * 0.55, tg * 0.55, tb * 0.55
+        end
+        pcall(e.bg.SetVertexColor, e.bg, cr, cg, cb, 1)
+        pcall(e.text.SetTextColor, e.text, tr, tg, tb)
       end
     end
   end
@@ -3294,6 +3779,9 @@ function EVAL_HELP_CFG_SETTAB(idx)
     end
     pcall(EVAL_DS_PAGE_HOT, (idx == 4) and vis)
   end
+  -- ★★★1.75.78 起手引导：切到②页 ⇒ 问一次「要不要主动弹出案例模版」（helper 自己判**窗可见 / 本会话只弹一次 /
+  --   是不是真的一条技能都没有** —— 建窗期那次 SETTAB 会被「窗还不可见」挡掉，不用在这里再分叉）。
+  if type(EVAL_WAR_TPL_AUTOPOP) == "function" then pcall(EVAL_WAR_TPL_AUTOPOP) end
 end
 
 -- ★1.71.2 测试钩子：配置窗底部导航按钮（模版/分享/接收）的几何。
@@ -3391,6 +3879,8 @@ function EVAL_HELP_CFG_TOGGLE()
     if type(EVAL_DS_PAGE_HOT) == "function" then
       pcall(EVAL_DS_PAGE_HOT, (cfgWin.tab or c().cfgTab or 1) == 4)
     end
+    -- ★★★1.75.78 起手引导：开窗那一路也要判一次 —— 上面那次 SETTAB 在 `Show()` **之前**，那时窗还不可见。
+    if type(EVAL_WAR_TPL_AUTOPOP) == "function" then pcall(EVAL_WAR_TPL_AUTOPOP) end
   end
 end
 
@@ -3936,6 +4426,25 @@ function EVAL_BIND_SHIFT(idx, n0)
   for k, v in pairs(nt) do t[k] = v end
   if moved > 0 then EVAL_BIND_SAVE() end
   return moved
+end
+
+-- ★★★1.75.75 两个方案的绑定记录**互换**（只动**本角色**的记录；调用点 = 方案列 ▲/▼ 调序，见 EVAL_WAR_PROF_MOVE）。
+--   为什么必须换：绑定是**按方案序号**存的（war.bindByChar[<角色键>][方案序号]）⇒ 只换 profiles 的顺序而不换绑定，
+--   结果是「A 方案的快捷键粘到 B 方案上」——**张冠李戴且全程静默**（同族：删除方案必须左移，EVAL_BIND_SHIFT）。
+--   ★只在**真换出东西**时落盘（两侧都没记录 = 无事发生，不发 SaveBindings）；返回换动的记录条数（0/1/2）。
+function EVAL_BIND_SWAP(i, j)
+  local t = EVAL_BIND_CHAR_TBL(false)
+  if type(t) ~= "table" then return 0 end
+  i, j = tonumber(i), tonumber(j)
+  if not i or not j or i == j then return 0 end
+  local a, b = t[i], t[j]
+  if a == nil and b == nil then return 0 end
+  t[i], t[j] = b, a -- ★给 nil 赋值 = 删键 ⇒ 只有一侧有记录时，换完仍然是「只有那一侧有」
+  EVAL_BIND_SAVE()
+  local n = 0
+  if a ~= nil then n = n + 1 end
+  if b ~= nil then n = n + 1 end
+  return n
 end
 
 -- ★★★载入期对账（幂等）。返回一张结果表（数字供播报/自检）：
@@ -4677,20 +5186,29 @@ local SE_TYPES = {
   --     「队伍debuff(魔法)」= 队里**是否有人中魔法** → 挑出那个人并切成当前目标 → 后面技能就解他
   --   扫描范围写进 **cd.name**（"队伍"/"团队"）；kind=num → 比较符+数值；
   --   kind=skill → 光环名下拉 + 是/否 + 层数；debuff 型再多个「类型」下拉（row.dtBtn）。
-  { id = "teamHp",        name = "队友血量%",  kind = "num",   n = 60, name2 = "队伍" },
-  { id = "teamMana",      name = "队友蓝量%",  kind = "num",   n = 20, name2 = "队伍" },
-  { id = "teamBuff",      name = "队友缺buff", kind = "skill", s = "",  name2 = "队伍" },
-  { id = "teamDebuff",    name = "队友debuff", kind = "skill", s = "",  name2 = "队伍" },
-  { id = "teamRaidHp",    name = "团员血量%",  kind = "num",   n = 60, name2 = "团队", base = "teamHp" },
-  { id = "teamRaidMana",  name = "团员蓝量%",  kind = "num",   n = 20, name2 = "团队", base = "teamMana" },
-  { id = "teamRaidBuff",  name = "团员缺buff", kind = "skill", s = "",  name2 = "团队", base = "teamBuff" },
-  { id = "teamRaidDebuff",name = "团员debuff", kind = "skill", s = "",  name2 = "团队", base = "teamDebuff" },
+  --   ★★★1.75.83 命名铁律：这一族的显示名一律**中性**（buff检查 / debuff），**绝不把方向写进名字**
+  --     —— 同一个类型上挂着 是/否 两向，名字里写「缺」时选「是」就与字面矛盾（用户 2026-10-05 点名）。
+  --     显示名唯一来源 = `seTypeLabel(id)` → `L("CT_"..ID)`（本表的 `name` 字段**从不显示**，只作注释兜底，
+  --     但为免误导仍与语言键逐字保持一致）。★改的是**显示名**：`id`/`cd.k`/`cd.name`（"队伍"/"团队"）
+  --     **一个字节都不许动**（那是存档与求值的口径）。
+  --   ★★★1.75.87 用词三处统一：**显示名（CT_* 语言键）也改成 队伍/团队**（原 1.75.83~85 的 队友buff/团员buff）
+  --     ⇒ 显示名 = 导出/解析的文本口径 = 内部规范名 `cd.name`，三方同字（en/ru 本来就是 Party|Raid / группы|рейда）。
+  --     ★1.75.86 那次是把**文本词**改成「队友/团员」、按用户要求整体回退；本版是把**显示名**拉回 队伍/团队 ——
+  --     两次动的层不同，别把「回退」理解成「显示名要留在 队友/团员」。
+  { id = "teamHp",        name = "队伍血量%",  kind = "num",   n = 60, name2 = "队伍" },
+  { id = "teamMana",      name = "队伍蓝量%",  kind = "num",   n = 20, name2 = "队伍" },
+  { id = "teamBuff",      name = "队伍buff", kind = "skill", s = "",  name2 = "队伍" },
+  { id = "teamDebuff",    name = "队伍debuff", kind = "skill", s = "",  name2 = "队伍" },
+  { id = "teamRaidHp",    name = "团队血量%",  kind = "num",   n = 60, name2 = "团队", base = "teamHp" },
+  { id = "teamRaidMana",  name = "团队蓝量%",  kind = "num",   n = 20, name2 = "团队", base = "teamMana" },
+  { id = "teamRaidBuff",  name = "团队buff", kind = "skill", s = "",  name2 = "团队", base = "teamBuff" },
+  { id = "teamRaidDebuff",name = "团队debuff", kind = "skill", s = "",  name2 = "团队", base = "teamDebuff" },
   -- ★★★1.71.3 候选者条件（用户要求：**原 8 项一字不动**，另外独立加这 4 项）——
   --   语义 = 「循环检索到的那个成员」（含自己；范围由「选取目标:队伍成员/团队成员」那一行决定）。
   --   ★只在**选取器行**的下拉里出现（见 typeBtn 的过滤）；配在别的行上求值时如实失败、不假装通过。
   { id = "candHp",     name = "候选者血%",   kind = "num",   n = 60 },
   { id = "candPower",  name = "候选者能量%", kind = "num",   n = 20 },
-  { id = "candBuff",   name = "候选者缺buff",kind = "skill", s = "" },
+  { id = "candBuff",   name = "候选者buff",kind = "skill", s = "" },
   { id = "candDebuff", name = "候选者debuff",kind = "skill", s = "" },
 }
 local SE_BY_K = {}
@@ -5917,6 +6435,27 @@ local function seDispelAllNames(ids)
   return table.concat(out, "/")
 end
 
+-- ★★★1.75.79 条件行**上下调序**（用户：「方案技能编辑->技能条件列表页: 增加上下移动功能,UI 方格参考方案的上下移动」）：
+--   与相邻那一条**互换**（dir = -1 上移 / +1 下移）；越界、没这条、坏数据 ⇒ **一个字节都不动**、返回 false。
+--   ★★连接符 `conn` 属于**位置**（首行固定没有运算符），不属于条件本身 ⇒ 互换后把两格的 conn **摆回原位**：
+--     只搬条件而不管 conn 的话，首行会带上「&」、中间那行会变成没有运算符 ⇒ 文本导出 / 求值语义当场错。
+function EVAL_SE_COND_MOVE(i, dir)
+  local ed = seUI.ed
+  if type(ed) ~= "table" or type(ed.conds) ~= "table" then return false end
+  -- ★先验下标**再**算 j：`i` 不是数字时 `i + …` 会当场算术崩（本版首跑被 harness 抓到）
+  if type(i) ~= "number" then return false end
+  local j = i + ((dir == -1) and -1 or 1)
+  local n = table.getn(ed.conds)
+  if i < 1 or i > n or j < 1 or j > n then return false end
+  local a, b = ed.conds[i], ed.conds[j]
+  if type(a) ~= "table" or type(b) ~= "table" then return false end
+  local ca, cb = a.conn, b.conn
+  ed.conds[i], ed.conds[j] = b, a
+  ed.conds[i].conn, ed.conds[j].conn = ca, cb
+  EVAL_HELP_SE_REFRESH()
+  return true
+end
+
 function EVAL_HELP_SE_REFRESH()
   local ed = seUI.ed
   if not ed or not seUI.root then return end
@@ -5943,6 +6482,13 @@ function EVAL_HELP_SE_REFRESH()
     seUI.catName:SetText(cl[ci])
   end
   if ed.enabled then seUI.enMark:Show() else seUI.enMark:Hide() end
+  -- ★★★1.75.79 调序 ▲/▼ 的「按不按得动」上色（**色值只此一处**）：能按 = 暗金（与技能行/方案列同一套），
+  --   不能按（首行不能上移 / 末行不能下移）= 压暗 —— 与方案列三颗同一口径（两处不一致 = 能按的那一下颜色会跳）。
+  local function seMovePaint(pb, on)
+    if not (pb and pb.bg and pb.text) then return end
+    pcall(pb.bg.SetVertexColor, pb.bg, on and 0.16 or 0.08, on and 0.13 or 0.07, on and 0.08 or 0.04, 1)
+    pcall(pb.text.SetTextColor, pb.text, on and 1.00 or 0.45, on and 0.82 or 0.40, on and 0.30 or 0.20)
+  end
   -- 条件行
   for i, row in ipairs(seUI.rows) do
     local it = ed.conds[i]
@@ -6140,6 +6686,11 @@ function EVAL_HELP_SE_REFRESH()
       -- ★让位：这两格占的正是行内预览的位置 → 队伍/团员那 8 行不显示行内预览（底部整串预览照旧）
       if isTeamKind then pcall(row.preview.Hide, row.preview) else pcall(row.preview.Show, row.preview) end
       pcall(row.del.btn.Show, row.del.btn)
+      -- ★★★1.75.79 调序 ▲/▼：显隐 + **按不按得动**上色（首行不能上移、末行不能下移 ⇒ 压暗）
+      pcall(row.up.btn.Show, row.up.btn)
+      pcall(row.down.btn.Show, row.down.btn)
+      seMovePaint(row.up, i > 1)
+      seMovePaint(row.down, i < table.getn(ed.conds))
     end
   end
   -- 底部实时预览（整串条件）
@@ -6149,7 +6700,16 @@ end
 
 local function SE_BUILD()
   if seUI.root then return end
-  local W, H = cfWinWidth(), 280 -- 1.70.45：与配置窗同宽（原固定 470）
+  -- ★★★1.75.79 用户：「技能编辑UI宽度可以在增大一点」⇒ 比配置窗**宽一点**（+80）；
+  --   ★装不下屏幕就**逐级退回**（+80 → +40 → 原宽）—— 屏幕尺寸走 `UIParent:GetWidth()`（与 uiOffscreen 同一口径），
+  --     读不到就按加宽走（fail-open：宁可宽一点，也不因为一次读不出就把用户要的宽度丢掉）。
+  local SW0 = cfWinWidth()
+  local W, H = SW0 + 80, 280 -- 1.70.45：与配置窗同宽（原固定 470）
+  local okSw, swU = pcall(UIParent.GetWidth, UIParent)
+  if okSw and type(swU) == "number" and swU > 0 then
+    while W > SW0 and W > swU - 40 do W = W - 40 end
+    if W < SW0 then W = SW0 end
+  end
   local root = CreateFrame("Frame", "EVAL_HELP_SE", UIParent)
   root:SetWidth(W)
   seUI.W = W -- 1.70.45 记下实际宽度（供断言与 cfgWin.W 比对）
@@ -6535,21 +7095,71 @@ local function SE_BUILD()
   -- ★★★1.75.28 运算符说明（用户要求：「技能编辑 运算符 添加详细规则信息」）：
   --   ① 「关系」列表头悬停 = 四个运算符的完整规则 + 优先级 + 例子（表头是 FontString **不吃鼠标** ⇒ 上面盖一枚透明 Button）；
   --   ② 每格关系按钮悬停 = **当前**算符的含义 + 点击后变成什么（动态读 ed.conds[i].conn）。
-  --   ★单一来源：四个算符的说明只在 SE_OP_LABEL 写一份，表头与逐格共用。
+  --   ★单一来源：整套说明只在 `seOpSheet` 写一份，**表头与每一格共用**（两处永远不会各写一份）。
+  --
+  -- ★★★1.75.80 用户：「技能编辑符号说明信息增加更加通俗.让非开发人员更能理解的说明信息。然后增加 || && 更多的一些案例,
+  --   方便理解,说明布局格式美化一下」⇒ 整段重写，四条口径：
+  --   ① **说人话**：用「而且 / 或者 / 另起一组 / 另起一段」代替「同项·与 / 新段·或」这类术语；
+  --   ② **一个符号一行**（老版把四个符号挤成两行长句，自动折行后读不出层次）+ 空行分段；
+  --   ③ **`||` 与 `&&` 各给两条例子**（老版一共只有一条例子，用户点名要更多）；
+  --   ④ ★**彻底去掉 `**` 记号** —— GameTooltip 是纯文本，老版那两处 `**` 会**原样画在屏幕上**
+  --      （用户截图里「本项内**全部**条件」就是它）；强调一律改用**色码**（金色标题 / 浅蓝符号 / 灰色说明）。
   local SE_OP_ORDER = { "&", "|", "&&", "||" }
+  -- 短标签（逐格那两行用）+ 一句话解释（长短两处都从这里取，绝不各写一份）
   local SE_OP_LABEL = {
-    ["&"] = "&　" .. L("SE_OP_M_AND"),
-    ["|"] = "｜　" .. L("SE_OP_M_OR"),
-    ["&&"] = "&&　" .. L("SE_OP_M_AND2"),
-    ["||"] = "｜｜　" .. L("SE_OP_M_OR2"),
+    ["&"] = { sym = "&　" .. L("SE_OP_N_AND"), mean = L("SE_OP_M_AND") },
+    ["|"] = { sym = "｜　" .. L("SE_OP_N_OR"), mean = L("SE_OP_M_OR") },
+    ["&&"] = { sym = "&&　" .. L("SE_OP_N_AND2"), mean = L("SE_OP_M_AND2") },
+    ["||"] = { sym = "｜｜　" .. L("SE_OP_N_OR2"), mean = L("SE_OP_M_OR2") },
   }
-  local function seOpAllLines()
+  -- 整套说明：四符号清单 → 例子 → 运算顺序 → 怎么切换 → 第 1 条为什么不用选
+  local function seOpSheet()
     return {
-      "|cffffd100" .. L("SE_OP_TITLE") .. "|r",
-      SE_OP_LABEL["&"], SE_OP_LABEL["|"], SE_OP_LABEL["&&"], SE_OP_LABEL["||"],
-      "|cffa0a0a0" .. L("SE_OP_EX") .. "|r",
+      "|cffffd100" .. L("SE_OP_SHEET") .. "|r",
+      "|cff9fe0ff&|r" .. L("SE_OP_S_AND"),
+      "|cff9fe0ff｜|r" .. L("SE_OP_S_OR"),
+      "|cff9fe0ff&&|r" .. L("SE_OP_S_AND2"),
+      "|cff9fe0ff｜｜|r" .. L("SE_OP_S_OR2"),
+      " ",
+      "|cffffd100" .. L("SE_OP_EX_T") .. "|r",
+      "|cffd8d8d8" .. L("SE_OP_EX1") .. "|r",
+      "|cffd8d8d8" .. L("SE_OP_EX2") .. "|r",
+      "|cffd8d8d8" .. L("SE_OP_EX3") .. "|r",
+      "|cffd8d8d8" .. L("SE_OP_EX4") .. "|r",
+      "|cffd8d8d8" .. L("SE_OP_EX5") .. "|r",
+      "|cffd8d8d8" .. L("SE_OP_EX6") .. "|r",
+      " ",
+      "|cffa0a0a0" .. L("SE_OP_PRIO") .. "|r",
       "|cffa0a0a0" .. L("SE_OP_HINT") .. "|r",
+      "|cffa0a0a0" .. L("SE_OP_FIRST") .. "|r",
     }
+  end
+  -- 表头（「关系」两个字）悬停 = 标题 + 整套说明
+  local function seOpAllLines()
+    local out = { "|cffffd100" .. L("SE_OP_TITLE") .. "|r" }
+    for _, ln in ipairs(seOpSheet()) do table.insert(out, ln) end
+    return out
+  end
+  -- 第 1 条那一格：它固定是「当」，所以只给整套说明 + 一句「为什么这一格不用设置」
+  local function seOpFirstLines()
+    local out = { "|cffffd100" .. L("SE_OP_FIRST_T") .. "|r" }
+    for _, ln in ipairs(seOpSheet()) do table.insert(out, ln) end
+    return out
+  end
+  -- 某一格悬停 = 这一格现在是什么（短标签 + 一句话）→ 再点一下会变成什么 → 整套说明
+  local function seOpCellLines(cur, nxt)
+    local cd = SE_OP_LABEL[cur] or SE_OP_LABEL["&"]
+    local nd = SE_OP_LABEL[nxt] or SE_OP_LABEL["&"]
+    local out = {
+      "|cffffd100" .. string.format(L("SE_OP_CUR"), cd.sym) .. "|r",
+      "|cffffffff" .. cd.mean .. "|r",
+      " ",
+      "|cff9fe0ff" .. string.format(L("SE_OP_NEXT"), nd.sym) .. "|r",
+      "|cff9fe0ff" .. nd.mean .. "|r",
+      " ",
+    }
+    for _, ln in ipairs(seOpSheet()) do table.insert(out, ln) end
+    return out
   end
   -- 条件表头
   local hd = uiText(root, 9, 0.60, 0.55, 0.40)
@@ -6583,22 +7193,14 @@ local function SE_BUILD()
     reg(row.conn.btn)
     -- ★1.75.28 每格悬停：当前算符含义 + 点击后变成什么（首行如实说明「没有运算符」）
     seHoverTip(row.conn.btn, function()
-      if i == 1 then
-        local lines = { "|cffffd100" .. L("SE_OP_FIRST") .. "|r" }
-        for _, k in ipairs(SE_OP_ORDER) do table.insert(lines, SE_OP_LABEL[k]) end
-        return lines
-      end
+      -- ★1.75.80 三处说明都收在 SE_BUILD 顶部那几个小函数里（表头 / 第 1 条 / 中间格），这里只做分派
+      if i == 1 then return seOpFirstLines() end
       local it2 = seUI.ed and seUI.ed.conds[i]
       local cur = (it2 and it2.conn) or "&"
       if not SE_OP_LABEL[cur] then cur = "&" end
       local nxt = "&"
       for si, sv in ipairs(SE_OP_ORDER) do if sv == cur then nxt = SE_OP_ORDER[si + 1] or "&" break end end
-      return {
-        "|cffffd100" .. string.format(L("SE_OP_CUR"), SE_OP_LABEL[cur]) .. "|r",
-        "|cff9fe0ff" .. string.format(L("SE_OP_NEXT"), SE_OP_LABEL[nxt]) .. "|r",
-        "|cffa0a0a0" .. L("SE_OP_EX") .. "|r",
-        "|cffa0a0a0" .. L("SE_OP_HINT") .. "|r",
-      }
+      return seOpCellLines(cur, nxt)
     end)
     row.typeBtn = seBtn(root, 46, y, 92, 15, L("SE_TYPE_PH"), function()
       -- 点开下拉列表：全部 26 种条件类型可见可选（1.14.0：替代盲循环；1.25.0 选取目标；1.26.0 目标职业；1.28.0 连击点数）
@@ -6661,9 +7263,14 @@ local function SE_BUILD()
     end)
     reg(row.opBtn.btn)
     -- ★1.71.3 悬停说明：seHoverTip 已提到上面（与「启用」右侧图例共用同一份实现，见该处说明）。
+    -- ★★★1.75.84 悬停也走**归一后的类型**（`seTypeIndexOf`）：旧存档里 `k = "noBuff"` / `"noDebuff"`
+    --   （1.54.0 合并前的旧 id，解析侧已不再产出）的类型格显示的是中性名「自身buff检查」，
+    --   而悬停原先直接喂 `cd.k` ⇒ 同一行「格子中性、悬停带方向（自身无buff）」两套口径。
+    --   ★`cd.k` 为 nil 时仍如实不出提示（`seTypeIndexOf` 的兜底是下标 1，喂进去会误报「怒气/能量」）。
     seHoverTip(row.typeBtn.btn, function()
       local it2 = seUI.ed and seUI.ed.conds[i]
-      return (it2 and it2.cd) and seTypeTip(it2.cd.k) or nil
+      if not (it2 and it2.cd and it2.cd.k ~= nil) then return nil end
+      return seTypeTip(SE_TYPES[seTypeIndexOf(it2.cd.k, it2.cd.name)].id)
     end)
     seHoverTip(row.opBtn.btn, function()
       local it2 = seUI.ed and seUI.ed.conds[i]
@@ -7219,17 +7826,40 @@ local function SE_BUILD()
     local pv = uiText(root, 9, 0.55, 0.75, 0.55)
     pv:SetPoint("TOPLEFT", root, "TOPLEFT", 484, y - 3) -- 1.70.45 右移给「剩余时间」让位（原 348）
     row.preview = pv
+    -- ★1.75.79 限宽：右缘停在 ▲ 左边（长度不受限的 FontString 会**从调序/删按钮底下穿过去**）
+    pcall(pv.SetWidth, pv, math.max(30, W - 92 - 484 - 6))
     reg(pv)
     row.del = seBtn(root, W - 50, y, 28, 15, L("W_DEL"), function() -- 1.70.45 右缘锚定（原 420 固定）
       local ed = seUI.ed
       if ed and ed.conds[i] then table.remove(ed.conds, i) EVAL_HELP_SE_REFRESH() end
     end)
     reg(row.del.btn)
+    -- ★★★1.75.79 用户：「增加上下移动功能,UI 方格参考方案的上下移动」+「以及功能按钮配色」：
+    --   ▲/▼ 两颗**小方块**（与方案列 / 技能列表同一套字形，19×15），紧挨在 [删] 左边、右缘依次为
+    --   W-92 / W-71 / W-50 ⇒ 三个按钮各留 2-3px 缝、绝不叠在一起（叠了就会点错功能）。
+    --   ★调序按钮的颜色**不在这里写死**：刷新里按「按不按得动」重画（seMovePaint）。
+    row.up = seBtn(root, W - 92, y, 19, 15, "▲", function() EVAL_SE_COND_MOVE(i, -1) end)
+    row.down = seBtn(root, W - 71, y, 19, 15, "▼", function() EVAL_SE_COND_MOVE(i, 1) end)
+    reg(row.up.btn)
+    reg(row.down.btn)
+    seHoverTip(row.up.btn, function() return { "|cffffd100" .. L("SE_MOVE_UP") .. "|r" } end)
+    seHoverTip(row.down.btn, function() return { "|cffffd100" .. L("SE_MOVE_DN") .. "|r" } end)
+    -- ★1.75.79 功能色表：删除 = 红（与技能行 [删] / 方案列 [删] 同一族）
+    pcall(row.del.bg.SetVertexColor, row.del.bg, 0.30, 0.10, 0.10, 1)
+    pcall(row.del.text.SetTextColor, row.del.text, 1.00, 0.70, 0.62)
     seUI.rows[i] = row
   end
 
   -- 添加条件 + 预览 + 保存/取消
-  local addW = seBtn(root, 16, -64 - 8 * 20 - 6, 96, 16, L("SE_ADD"), function()
+  -- ★★★1.75.81 用户（真机截图）：「技能编辑->添加条件这一行能否和底部右侧保持的按钮同行.
+  --   按钮高度保持一致.左对齐」⇒ 底部**只留一行**：左边 [+ 添加条件] 贴左缘（与上面的「关系」表头同一列
+  --   x = BOT.x = 16），右边 [保存][取消] 贴右缘，三颗按钮**同一个高度 + 同一条底线**（中线天然对齐，
+  --   不再一高一低）；「预览:」与预览文本改为**锚在这颗按钮的右边**（中线对齐）⇒ 以后调高度/挪位置不会再各飘各的。
+  --   ★★BOT 是**本窗底部行的单一来源**（底距/高/左缘/按钮宽）——判据 = 三处都读它，源码里不再出现
+  --     「-64 - 8 * 20 - 6」这类算式与写死的 22/12；数值与配置窗底部行同口径（高 22 · 底距 10）。
+  local BOT = { y = 10, h = 22, x = 16, addW = 96 }
+  local botTop = -(H - BOT.y - BOT.h) -- TOPLEFT 口径：这一行的顶边 y（= 底距 + 高，与 [保存] 同一带）
+  local addW = seBtn(root, BOT.x, botTop, BOT.addW, BOT.h, L("SE_ADD"), function()
     local ed = seUI.ed
     if ed and table.getn(ed.conds) < 8 then
       -- ★1.71.3 初始类型按**这一行的过滤表**选（用户要求「添加初始值从过滤条件内选」）
@@ -7238,19 +7868,29 @@ local function SE_BUILD()
     end
   end)
   seUI.addBtn = addW.btn -- ★1.71.3 断言要能点**真实按钮**（走它自己的 OnClick 闭包）
-  -- 1.36.2 预览挪到 [+添加条件] 右侧同行（原在底部与 保存/取消 按钮重叠）
+  -- ★1.75.79 功能色表：新增 = 绿（与方案列那颗「增」/ 技能行的配色同一族，用户：「功能按钮配色」）
+  pcall(addW.bg.SetVertexColor, addW.bg, 0.12, 0.28, 0.14, 1)
+  pcall(addW.text.SetTextColor, addW.text, 0.62, 0.95, 0.55)
+  -- 1.36.2 预览在 [+添加条件] 右侧**同一行**（1.75.81：改为锚在按钮右边 ⇒ 垂直中线自动对齐，不再手写 y）
   local pvLabel = uiText(root, 9, 0.60, 0.55, 0.40)
-  pvLabel:SetPoint("TOPLEFT", root, "TOPLEFT", 122, -64 - 8 * 20 - 9)
+  pvLabel:SetPoint("LEFT", addW.btn, "RIGHT", 10, 0)
   pvLabel:SetText(L("SE_PREVIEW"))
   local pv = uiText(root, 9, 0.95, 0.82, 0.35)
-  pv:SetPoint("TOPLEFT", root, "TOPLEFT", 158, -64 - 8 * 20 - 9)
-  pcall(pv.SetWidth, pv, 300)
+  pv:SetPoint("LEFT", pvLabel, "RIGHT", 6, 0)
+  -- ★限宽：右缘停在 [保存] 左边留 10px（不限宽的长预览会压到按钮上 —— 与列表预览同一条纪律）；
+  --   「预览:」的宽度优先**实测**（GetStringWidth），拿不到才用 44 近似（西文标签比中文宽）。
+  local labW = 44
+  if type(pvLabel.GetStringWidth) == "function" then
+    local okLW, lw = pcall(pvLabel.GetStringWidth, pvLabel)
+    if okLW and type(lw) == "number" and lw > 0 then labW = lw end
+  end
+  pcall(pv.SetWidth, pv, math.max(60, (W - 182) - (BOT.x + BOT.addW + 10 + labW + 6) - 10))
   pcall(pv.SetJustifyH, pv, "LEFT")
   seUI.preview = pv
   local function bBtn(x, w, label, fn)
     local b = CreateFrame("Button", nil, root)
-    b:SetWidth(w) b:SetHeight(22)
-    b:SetPoint("BOTTOMLEFT", root, "BOTTOMLEFT", x, 12)
+    b:SetWidth(w) b:SetHeight(BOT.h)
+    b:SetPoint("BOTTOMLEFT", root, "BOTTOMLEFT", x, BOT.y)
     pcall(b.EnableMouse, b, true)
     pcall(b.RegisterForClicks, b, "LeftButtonUp")
     local bb = b:CreateTexture(nil, "BACKGROUND")
@@ -7416,6 +8056,65 @@ function EVAL_HELP_SE_OPEN(profIdx, skillIdx, presetSkill)
   seUI.ed = ed
   EVAL_HELP_SE_REFRESH()
   seUI.root:Show()
+end
+
+-- ============ 方案列表：新建 / 调序（1.75.75；「+」那一行 = ▲ ▼ + 三颗按钮） ============
+-- ★新建方案（**唯一实现**）：三颗按钮里的「+」、方案列最后一格（兜底入口）、命令 `/eh go newprof [名]` 都走它。
+--   ★上限从 warUI.maxProf 现取（那是 cfgBuild 里 MAXPROF 唯一的落点）—— 绝不在这里再写一个 12。
+--   ★nm 可选：空 / 不给 ⇒ 默认「方案N」（命令那条路可不带名字）。
+function EVAL_WAR_PROF_ADD(nm)
+  local w2 = warCfg()
+  local n = table.getn(w2.profiles)
+  local cap = (cfgWin.warUI and cfgWin.warUI.maxProf) or 12
+  if n >= cap then say(string.format(L("W_PROF_FULL"), tostring(cap))) return false end
+  local name = string.gsub(tostring(nm or ""), "^%s*(.-)%s*$", "%1")
+  if name == "" then name = "方案" .. tostring(n + 1) end
+  -- ★1.73.63 手动创建（彩蛋闸门要认）★1.74.5 作者 = 自己名字（彩蛋闸门要认）
+  table.insert(w2.profiles, { name = name, skills = {}, src = "manual",
+    author = (type(UnitName) == "function") and UnitName("player") or nil })
+  w2.activeProfile = n + 1
+  say("新建方案: " .. tostring(w2.profiles[n + 1].name))
+  pcall(EVAL_WAR_TAB_REFRESH)
+  return true
+end
+
+-- ★★★1.75.75 方案调序（▲/▼）：把**当前激活方案**在方案列表里上移 / 下移一格（用户点名的「激活方案顺序调整」）。
+--   三件事缺一不可（本项目「按存储格式分派的地方必须一次全改」在「方案序号」上的落地）：
+--     ① 换 war.profiles 的两条；② activeProfile 跟着走（否则「挪一下」= 顺手换了激活的方案）；
+--     ③ **绑定记录一起换位**（按序号存的 ⇒ 不换 = 快捷键粘到别的方案上，而且全程静默）。
+--   ★★两个窗的下标也是**方案序号**，一起重指（不重指 = 用户随后一保存就写进别人的方案）：
+--     · 技能编辑窗 seUI.ed.profIdx（EVAL_HELP_SE_SAVE 按它取方案 —— 它就在本函数上面几行）
+--     · 方案管理窗 pmUI.pidx（改名 / 绑键按它取方案）
+--   ★到顶 / 到底**如实出声**（不静默，也不假装修了一下）。
+function EVAL_WAR_PROF_MOVE(dir)
+  local w2 = warCfg()
+  local n = table.getn(w2.profiles)
+  local i = w2.activeProfile or 1
+  if n < 2 or not w2.profiles[i] then return false end
+  local d = ((tonumber(dir) or 0) < 0) and -1 or 1
+  local j = i + d
+  local nm = tostring(w2.profiles[i].name or ("方案" .. tostring(i)))
+  if j < 1 then say(string.format(L("W_PROF_TOP"), nm)) return false end
+  if j > n then say(string.format(L("W_PROF_BOTTOM"), nm)) return false end
+  w2.profiles[i], w2.profiles[j] = w2.profiles[j], w2.profiles[i]
+  w2.activeProfile = j
+  local mv = 0
+  if type(EVAL_BIND_SWAP) == "function" then mv = EVAL_BIND_SWAP(i, j) or 0 end
+  if seUI and seUI.ed then
+    if seUI.ed.profIdx == i then seUI.ed.profIdx = j
+    elseif seUI.ed.profIdx == j then seUI.ed.profIdx = i end
+  end
+  if pmUI and pmUI.pidx then
+    if pmUI.pidx == i then pmUI.pidx = j
+    elseif pmUI.pidx == j then pmUI.pidx = i end
+    if pmUI.root then pcall(pmRefresh) end
+  end
+  local okKey = (d < 0) and "W_PROF_UP_OK" or "W_PROF_DN_OK"
+  local tail = ""
+  if mv > 0 then tail = string.format(L("W_PROF_BIND_MOVED"), tostring(mv)) end
+  say(string.format(L(okKey), nm) .. tail)
+  pcall(EVAL_WAR_TAB_REFRESH)
+  return true
 end
 
 -- ============ 方案 导入/导出（md 文本互转，复制粘贴快速分享） ============
@@ -8363,6 +9062,45 @@ function EVAL_HELP_TPL_TOGGLE()
   if tplUI.root then tplUI.root:Show() end
 end
 
+-- ★★★1.75.78 **是不是「一条技能都没有」**（起手引导的唯一判据）——用户：「方案内技能都是空的情况下」。
+--   · 一个方案都没有 ⇒ 更算空（照弹）；有一条技能 ⇒ **老用户，绝不打扰**。
+--   · 读的是**同一份**方案数据的 `skills`（与 Engine 判「这条方案有没有技能」同一口径：`table.getn(p.skills) > 0`）。
+function EVAL_WAR_ALL_EMPTY()
+  local w = uiWarCfg()
+  local ps = w and w.profiles
+  local n = (type(ps) == "table") and table.getn(ps) or 0
+  if n == 0 then return true end
+  for i = 1, n do
+    local p = ps[i]
+    if type(p) == "table" and type(p.skills) == "table" and table.getn(p.skills) > 0 then return false end
+  end
+  return true
+end
+
+-- ★★★1.75.78 **起手引导**（用户：「一键宏设置,在用户刚打开的时候方案内技能都是空的情况下主动弹出案例列表
+--   方便用户选择一个初始方案」）——四条口径，缺一条就会「乱弹」或「弹不出来」：
+--     ① **只在一个技能都没有时弹**（`EVAL_WAR_ALL_EMPTY`）⇒ 老用户一辈子看不到它；
+--     ② **只在②页 + 配置窗真的可见**时弹（建窗期那次 SETTAB 窗还没 Show ⇒ 按可见性判，与 DS_PAGE_HOT 同一把尺子）；
+--     ③ **本会话只弹一次**（`cfgWin.tplAutoDone`）⇒ 用户关掉它就不会被反复打扰（选了模版/加了技能后条件本身也不再成立）；
+--     ④ **拿不到案例模版窗的口就一个字节都不动**（连标记都不写 ⇒ 下次还有机会），且**只弹窗不代选**（绝不替用户导入方案）。
+function EVAL_WAR_TPL_AUTOPOP()
+  if type(EVAL_HELP_TPL_TOGGLE) ~= "function" then return false end
+  if cfgWin.tplAutoDone then return false end
+  if (cfgWin.tab or c().cfgTab or 1) ~= 2 then return false end
+  local vis = false
+  if cfgWin.root then
+    local okv, v = pcall(cfgWin.root.IsVisible, cfgWin.root)
+    vis = (okv and v == true)
+  end
+  if not vis then return false end
+  if not EVAL_WAR_ALL_EMPTY() then return false end
+  if tplUI.root and tplUI.root:IsVisible() then cfgWin.tplAutoDone = true return false end -- 已经开着 ⇒ 只记标记，不重复弹
+  cfgWin.tplAutoDone = true
+  pcall(EVAL_HELP_TPL_TOGGLE)
+  say(L("TPL_AUTO_SAY"))
+  return true
+end
+
 -- 预览区刷新：当前方案文本逐行填进保底 FontString（跳过空行；EditBox 不渲染时靠它看内容）
 function EVAL_HELP_IO_REFRESH()
   if not ioUI.pvLines then return end
@@ -8892,15 +9630,10 @@ if type(SlashCmdList) == "table" then
       end
     elseif string.find(msg, "^go newprof") then
       local nm = string.match(msg, "^go newprof%s*(.*)$")
-      local w2 = warCfg()
-      if table.getn(w2.profiles) < 4 then
-        table.insert(w2.profiles, { name = (nm and nm ~= "") and nm or ("方案" .. tostring(table.getn(w2.profiles) + 1)), skills = {}, src = "manual", author = (type(UnitName) == "function" and UnitName("player")) or nil }) -- ★1.73.63 手动创建（彩蛋闸门要认）★1.74.5 作者=自己名字
-        w2.activeProfile = table.getn(w2.profiles)
-        say("新建并切换到: " .. tostring(w2.profiles[w2.activeProfile].name))
-        pcall(EVAL_WAR_TAB_REFRESH)
-      else
-        say("最多 4 个方案")
-      end
+      -- ★1.75.75 收敛到**唯一新建口**（原来这里是第二份实现，且上限还停在老版本的 4 —— 与界面 12 不一致）。
+      --   成不成、为什么不成，都由 EVAL_WAR_PROF_ADD 如实出声（满员那句三语键就有）。
+      if type(EVAL_WAR_PROF_ADD) ~= "function" then say("新建失败：新建入口未载入完整")
+      else EVAL_WAR_PROF_ADD(nm) end
     elseif string.find(msg, "^go prof ") then
       local n = tonumber(string.sub(msg, 9))
       local w2 = warCfg()

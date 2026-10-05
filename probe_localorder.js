@@ -171,7 +171,10 @@ if (require.main === module) {
        'tools/WorldFog.lua',
        // ★1.75.63 补：`tools/LootCursor.lua` 一直漏在清单外（1.75.26 建模块时没加）
        //   —— 它 990 多行、前向声明风险最高的一族（包装/节拍/纹理助手）⇒ 必须纳入。
-       'tools/LootCursor.lua'];
+       'tools/LootCursor.lua',
+       // ★子插件也纳入：EH_Bag（1.75.x 新建）两个文件 —— 跨 chunk 共用口全挂 B 表，
+       //   本文件的「先引用后声明」错在子插件里同样是**静默**的（pcall 一包就什么都不报）。
+       'addons/EH_Bag/EH_Bag.lua', 'addons/EH_Bag/EH_BagSort.lua'];
   let total = 0;
   for (const f of files) {
     const bad = scan(fs.readFileSync(f, 'utf8'));

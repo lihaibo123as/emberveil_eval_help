@@ -43,10 +43,25 @@ function EVAL_QC_SOURCE()
   return m.src, m.built
 end
 
+-- ★★★1.75.75 **任务名唯一入口**（四层兜底，越准越先）：① 策展表 → ② 系列步骤名 `bulk.sn` →
+--   ③ 全量表 `bulk.q` 的名称段 → ④ 任务全表 `ALL.q` 的名称段。**界面不再各写一套兜底**。
+--   ★为什么必须四层（真机报障「任务详情 → 前置 / 后续任务 写成 `后续: #466`」）：
+--     旧实现只挂了 ①②，而 ② 按设计**只收「该步骤不在 q 表里」的名字**（见 `QuestBulk.lua` 头注）
+--     ⇒ 凡「不在策展表、却带装备奖励」的任务（466 = 火岩矿石）两源**全落空**，显示成 `#id`。
+--     fengari 真跑量化：`QuestAll.ch` 的 1553 个端点里 **1119 个（72%）**取不到名字 ⇒ 补 ③④ 后 **0 个**。
+--   ★这里调的是**全局函数**（`EVAL_QC_BULK_QUEST` / `EVAL_QC_ALL_QUEST` 定义在本文件更后面）：
+--     `qcAllTbl` 那类文件局部在本行**还不可见**（Lua 作用域从声明之后开始）⇒ 只能走全局入口。
 function EVAL_QC_QUEST_NAME(id)
   local q = qcQuests()
   local r = (type(q) == "table") and q[id] or nil
-  return r and r.n or nil
+  if r and r.n and r.n ~= "" then return r.n end
+  local sn = (type(EVAL_QC_STEP_NAME) == "function") and EVAL_QC_STEP_NAME(id) or nil
+  if sn then return sn end
+  local bq = (type(EVAL_QC_BULK_QUEST) == "function") and EVAL_QC_BULK_QUEST(id) or nil
+  if bq and bq.n and bq.n ~= "" then return bq.n end
+  local aq = (type(EVAL_QC_ALL_QUEST) == "function") and EVAL_QC_ALL_QUEST(id) or nil
+  if aq and aq.n and aq.n ~= "" then return aq.n end
+  return nil
 end
 
 function EVAL_QC_ITEM_NAME(id)
@@ -67,13 +82,26 @@ function EVAL_QC_ITEM(id)
 end
 
 -- 任务等级（1.75.12 用户要求：装备→任务线的信息里要展示**任务对应的等级**）
--- 两份数据源依次找：策展任务表 → 全量任务表；查不到如实返回 nil
+-- 三层依次找：策展任务表 → 全量表 → **任务全表**（★1.75.75 补第三层，与任务名同口径）；查不到如实 nil
+-- ★`lv` 为 0 = 数据里没记等级（不是「0 级任务」）⇒ 一律当**查不到**返回 nil，界面就不写「Lv0」这种假话
 function EVAL_QC_QUEST_LEVEL(id)
   local q = qcQuests()
   local r = (type(q) == "table") and q[id] or nil
   if r and tonumber(r.lv) then return tonumber(r.lv) end
   local bq = (type(EVAL_QC_BULK_QUEST) == "function") and EVAL_QC_BULK_QUEST(id) or nil
-  if bq and tonumber(bq.lv) then return tonumber(bq.lv) end
+  if bq and tonumber(bq.lv) and tonumber(bq.lv) > 0 then return tonumber(bq.lv) end
+  local aq = (type(EVAL_QC_ALL_QUEST) == "function") and EVAL_QC_ALL_QUEST(id) or nil
+  if aq and tonumber(aq.lv) and tonumber(aq.lv) > 0 then return tonumber(aq.lv) end
+  return nil
+end
+
+-- 任务地区（★1.75.75 新增：任务详情的「前置 / 后续任务」要写清这些任务在哪张图）
+-- 两层兜底：全量表 → 任务全表（策展链记录不留地区）；查不到如实 nil（界面就不写这一段）
+function EVAL_QC_QUEST_ZONE(id)
+  local bq = (type(EVAL_QC_BULK_QUEST) == "function") and EVAL_QC_BULK_QUEST(id) or nil
+  if bq and type(bq.z) == "string" and bq.z ~= "" then return bq.z end
+  local aq = (type(EVAL_QC_ALL_QUEST) == "function") and EVAL_QC_ALL_QUEST(id) or nil
+  if aq and type(aq.z) == "string" and aq.z ~= "" then return aq.z end
   return nil
 end
 
@@ -112,11 +140,8 @@ local function qcRarityHay(rec)
   local parts = { tostring(rec.n or "") }
   local qs = rec.qs or {}
   for i = 1, table.getn(qs) do
+    -- ★1.75.75：兜底链已收进 `EVAL_QC_QUEST_NAME`（四层）⇒ 这里不再自己接一层（一处真值）
     local nm = EVAL_QC_QUEST_NAME(qs[i])
-    if not nm then
-      local bq = (type(EVAL_QC_BULK_QUEST) == "function") and EVAL_QC_BULK_QUEST(qs[i]) or nil
-      nm = bq and bq.n or nil
-    end
     if nm then parts[table.getn(parts) + 1] = tostring(nm) end
   end
   return table.concat(parts, " ")
@@ -629,11 +654,14 @@ function EVAL_QC_LINES(key)
   table.insert(out, { text = "", kind = "sec_steps" })
   for i = 1, table.getn(d.steps) do
     local s = d.steps[i]
-    -- ★★★1.75.1 名字四级来源（**别只认 q 表**）：系列步骤名（站点系列块抄来的 `nm`）→ q 表 → `sn` → 如实 `#id`。
-    --   旧写法 `(s.q and s.q.n) or ("#"..id)` 对**没有装备奖励**的步骤必然退化（用户截图：7 行全 `#5742`）。
-    local nm = (type(s.nm) == "string" and s.nm ~= "" and s.nm)
-      or (s.q and s.q.n) or EVAL_QC_STEP_NAME(s.id) or ("#" .. tostring(s.id))
-    local lv = (s.q and s.q.lv) and ("(" .. tostring(s.q.lv) .. ")") or ""
+    -- ★★★1.75.75 名字统一走**唯一入口** `EVAL_QC_QUEST_NAME`（四层兜底：系列块抄来的名 → 策展表 →
+    --   系列步骤名 `sn` → 全量表 → 任务全表）→ 如实 `#id`；★旧写法在这里手接 `EVAL_QC_STEP_NAME`，
+    --   而那一层**不覆盖 q 表** ⇒ 「不在策展表、却带装备奖励」的步骤照样落成 `#id`（与前置/后续同一根因）。
+    --   等级同理走 `EVAL_QC_QUEST_LEVEL`（多一层任务全表）⇒ 没装备奖励的步骤也能显示 `(lv)`。
+    local nm = (type(s.nm) == "string" and s.nm ~= "" and s.nm) or EVAL_QC_QUEST_NAME(s.id)
+    if not nm or nm == "" then nm = "#" .. tostring(s.id) end
+    local slv = EVAL_QC_QUEST_LEVEL(s.id)
+    local lv = slv and ("(" .. tostring(slv) .. ")") or ""
     table.insert(out, { text = string.format("%d. %s%s", s.n, nm, lv), kind = "step", id = s.id, name = nm })
   end
   if c.note and c.note ~= "" then
@@ -1550,9 +1578,11 @@ function EVAL_QC_SERIES_LIST()
         for w in string.gmatch(p[7] .. ",", "([^,]+)") do
           local qid = tonumber(w)
           if qid then
-            local q = EVAL_QC_BULK_QUEST(qid)
-            local nm = (q and q.n) or (type(b.sn) == "table" and b.sn[qid]) or ("#" .. tostring(qid))
-            steps[table.getn(steps) + 1] = { id = qid, n = nm, lv = (q and q.lv) or 0 }
+            -- ★1.75.75 名字走**唯一入口**（四层兜底；旧写法只试 bulk.q → bulk.sn，`ALL` 里独有的一律落成 `#id`）
+            local nm = EVAL_QC_QUEST_NAME(qid)
+            if not nm then nm = "#" .. tostring(qid) end
+            local lv = EVAL_QC_QUEST_LEVEL(qid) or 0
+            steps[table.getn(steps) + 1] = { id = qid, n = nm, lv = lv }
           end
         end
       end
