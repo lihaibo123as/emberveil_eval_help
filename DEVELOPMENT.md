@@ -20,6 +20,10 @@
     ★工具模块一律**自包含**（真值 + 自己的存档子树 + 界面控件 + 读值口 + 自己的**有界**计时器）；`Toolbox.lua` 里只留「一行数据 + 模块行注册表 `EVAL_TB_MOD_ROWS[mod]`」，渲染/下拉/结算全在模块里。
   → **`media/`（运行期贴图）**：`Flags/`（旗帜）· `icons/`（图标）· **`WorldMap/<地图>/<区域><块号>.blp`（「打开世界迷雾」的**可选**自带贴图，1.75.53；生成器 = `gen_worldmap_media.js --from <interface.MPQ> --full-only`，**只放整张齐全的图**、逐字节可复现）** · **`WorldMapJpg/<地图>.jpg`（「区域实景」图库：**56 图** = 53 区域 + 露天主城 3 座（暴风城 / 达纳苏斯 / 雷霆崖）；生成器 = `tmp/make_city_jpg.js`（主城）/ `tmp/minimap_stitch.js`（区域）；★**素材规格 = 宽 ≤1500**（`tmp/jpg_cap1500.js`；1.75.70 另做过一轮质量门控压缩 `tmp/jpg_compress.js`，1.75.71 整库换成 AI 高清重绘版后**只封顶、不再压**）：**当前 56 图 / 44.8 MB**，1.75.64~1.75.71）**
     —— ★贴图**自带优先**，加载不出来退回客户端 `Interface\WorldMap\…`；两份都加载不出来 ⇒ **这张图不接管**（绝不画空白图）；判据见 `tools/SimpleMap.lua` 的 `MDQ.srcKey`/`MDQ.probeTrust`（**探针必须带负对照**：本客户端对不存在的文件也报尺寸）
+  → **`addons/`（两个独立子插件，各自 toc / 存档 / 文档）**：`EH_Bag\`（**整合背包**，与 OneBag 逐项对齐：连续排布 · 品质辉光 · 一键整理 · 跨角色总览 · 冷却倒计时 · 金币金钱行 · 资源绝对自包含；`EH_Bag.toc` 列 `EH_Bag.lua` + `EH_BagSort.lua`）· `EH_DebugBox\`（图层调试，`/edb`）
+    ★**子插件与主插件是两套 LoadAddOn、两套 SavedVariables**（`EH_BAG_CFG` / `EH_DEBUGBOX_CFG`，宿主绝不碰）；子插件**不得**读写 `EVAL_HELP_CONFIG`/`EVAL_HELP_CHAR`（常驻闸门 `tmp/mem_sep_probe.js`，命中必须 0 处）
+    ★`node sync_game.js` 把 `addons\<名>\` 拷到插件**同级**游戏目录（勾选才 `EnableAddOn` + `/reload` 载入）；**release 时各自独立打包两份**（`<名>-v<子版本>.zip` + 固定名 `<名>.zip`，内容逐字节相同）一起传到同一个 Release
+    ★文档各自成套：`README.md`（面向使用者）· `CLAUDE.md`（**子插件自己的记忆体**，与宿主记忆分文件）· `CHANGELOG.md`（`0.3.x` ↔ 宿主 `1.75.y` 同轮升级）；宿主只留指针，**绝不复制子插件正文**
   跨文件共享走全局桥：Core 导出 EVAL_SAY/EVAL_LOGLINE/EVAL_UIOFFSCREEN 等，Engine 导出 EVAL_WSLOTS/EVAL_WICON/EVAL_GROUPS_OK 等，
   UI 层文件顶部别名块本地化；
   ★**新增 .lua 模块要同时改两处**：`EvalHelp.toc`（顺序 = 载入顺序，共用件放前面）+ **发布包清单**（参考卷打包脚本的 Copy-Item 行；子目录模块尤其容易漏）。
@@ -30,7 +34,8 @@
   `node probe_localorder.js`（文件内 local「先用后声明」）· `node scan_dangling.js` 第一段（`addons/` 子插件的可疑未定义调用）。
   ★★**本项目没有测试**（用户 2026-09-26 定案：「删除tests/下的文件.也不需要测试」）：`tests/`、`test_assert.lua`、`test_engine.js`、`check.js`、`mutate.js` 已全部删除
   ⇒ 行为/接线/渲染/存档这类**静默失效没有自动判据兜底**，改完请**自查调用点**并**进游戏实测**。
--  SavedVariables：`EVAL_HELP_CONFIG`（落盘于 `%LOCALAPPDATA%\Azeroth\Saved\Account\<账号>\SavedVariables\EVAL_HELP.lua`，小退/重载时写入）。
+-  SavedVariables：`EVAL_HELP_CONFIG`（落盘于 `%LOCALAPPDATA%\Azeroth\Saved\Account\<账号>\SavedVariables\EvalHelp.lua`，小退/重载时写入；★**账号目录不固定**，读存档要取「所有账号里 mtime 最新那份」）。
+  子插件各有自己的存档文件（`addons\EH_Bag` → `EH_BAG_CFG`、`addons\EH_DebugBox` → `EH_DEBUGBOX_CFG`）—— **两套 LoadAddOn、两套记忆体，绝不互碰**（宿主代码里出现子插件存档键 = 0 处，常驻闸门 `tmp/mem_sep_probe.js`）。
 
 ## ⚠️ 提交前必做
 
@@ -102,13 +107,13 @@ node luacheck.js     # fengari 逐文件全量 Lua 解析；SYNTAX OK 才算完�
 | 宏入口 | `EVAL_GO(profSel)`：0/不传=激活方案，1-4/方案名=直触；`EVAL_GO1~4` 便捷函数 |
 | 战斗信息UI | `EVAL_HELP_UI_BUILD/TICK`：标题=玩家名（取不到退回语言包文案）；两大区块（**战斗区**=血/能量/连击/目标条+读条+挥击条+状态行，**方案区**=方案切换行+技能图标带）各有独立子开关 `cfg.ui.subCombat/subScheme`（1.71.12，nil=开，关=整块不画、布局随之前移、帧高跟着变；tick 只认 BUILD 时定下的 `ui.combatOn/schemeOn`，普攻判定不随区块跳过） |
 | 状态信息UI | `EVAL_HELP_ST_*`：状态变量总览+最近释放明细 |
-| 配置窗 | `cfgBuild`：Tab{全局, 一键宏设置}；方案栏/技能列表/[添加技能]/[导入导出] |
-| 技能编辑窗 | `EVAL_HELP_SE_*`：条件逐行配置（seGroupsToLinear/seLinearToGroups 线性↔分组） |
+| 配置窗 | `cfgBuild`：**七个 Tab** = 全局 · 一键宏设置 · 工具箱 · 任务线 & 装备 · 图标库 · 抓宠帮手 · 子插件；方案栏/技能列表/[添加技能]/[导入导出] |
+| 技能编辑窗 | `EVAL_HELP_SE_*`：条件逐行配置（1.75.28 起规则存**线性 `expr`**：项内 `&` / 项内或 `｜` / 项间与 `&&` / 段间或 `｜｜`，解析 `EVAL_PARSE_CONDS`、回写 `EVAL_EXPR_STR`；旧 `groups` 存档现场推导、编辑保存才落新格式）· 条件行 ▲/▼ 调序（1.75.79）· 「关系运算符说明」= 一份说明三处共用（1.75.80）· 底行三颗按钮同一条带（1.75.81） |
 | 通用 UI 件 | `EVAL_DD_OPEN` 下拉面板 / **`EVAL_PM_*` 方案管理弹窗**（1.71.24：改名+快捷键合并成一个窗，**旧的 `EVAL_HELP_RP_*` 重命名窗与绑定窗都已删除、不留别名**；回声行范式） / `uiSolid/uiText/cfgCheck/cfgSlider` / `EVAL_HELP_MB_*` 小地图图标钮（1.71.13：按钮=宏图标本身 26×26 无边框，`EVAL_HELP_MB_PICKICON` 纯函数按名字优先级挑图标，挑不到退回「金框 + EH」兜底） |
 | 方案快捷键派发 | `EVAL_BIND_*`（1.71.22 定案）：命令名 = 客户端自带的 `ACTIONBUTTON<n>`，插件**接管全局 `ActionButtonDown/Up`** 把格号翻成 `EVAL_GO(方案号)`；`EVAL_BIND_INSTALL/UNINSTALL`、`EVAL_BIND_SLOT_MAP`、`EVAL_BIND_MODIFIER_STOLEN`（组合键守卫）、`EVAL_BIND_TEXT_BLOCKS`。★`Bindings.xml` 路线已在 1.71.22 被对照实验证伪并删除 |
 | IO | `EVAL_PROFILE_TO_TEXT/FROM_TEXT` md 文本互转；`EVAL_HELP_IO_*` 窗口（FontString 保底预览区） |
 | 案例模版窗 | `EVAL_HELP_TPL_*`：读 `examples/*.lua` 的数据渲染成**分组分两列 + 组内同行自动换行**（版式由纯函数 `tplTwoColPlan` 算），点击即导入 |
-| 工具箱 Tab3 | `Toolbox.lua`：`EVAL_TB_BUILD(root, page, refreshes)`；商人 / 队伍社交 / 任务三组，动作全部走限频队列（0.3s/笔 + 逐笔核对） |
+| 工具箱 Tab3 | `Toolbox.lua`：`EVAL_TB_BUILD(root, page, refreshes)`；行清单 = `tbModel()`（**37 行 / 8 组**：UI 工具 · 商人助手 · 队伍/社交 · 任务 · 猎人助手 · 消耗品助手 · 骑乘助手 · 稀有提醒），三语 README 的「工具箱」是它的镜像；动作全部走限频队列（0.3s/笔 + 逐笔核对）；模块行由 `EVAL_TB_MOD_ROWS[mod]` 自登记 ⇒ 与 toc 顺序无关 |
 | 任务线 & 装备 Tab4 | `DataSearch.lua`：`EVAL_DS_BUILD`；逻辑层 `EVAL_DS_SEARCH/DETAIL/SHOWMAP` 与 UI 分离、可 node 直测；**任务线视图 + 装备视图**（装备优先 → 反查任务线）与四类检索同页；地图标注层硬依赖 UnrealQuest |
 | 方案分享 | `Share.lua`：公会 / 队伍 / 说 三频道分片直发直收（`SH_CHANS` 白名单是唯一真值）+ 接收规则（只留最新一笔 + 四道上限）；1.74.0 起含**品阶封皮**（`[品阶秘籍·名]` 可点链接 + 弹窗确认）+ **品阶评分**（`SH_SEAL_TIERS` 单一来源）+ **头衔抽卡**（`EVAL_TITLE_*`）+ 彩蛋「创世者亲临」+ **角色扮演反应**（`SH_FUN_IMP/IGN` 嵌套表 + `shSendReaction` 按来源频道） |
 | 图标库 Tab5 | `IconBrowser.lua`：读客户端内置宏图标表，按前缀分组 / tooltip 显示路径 / **先过滤再分页** |
