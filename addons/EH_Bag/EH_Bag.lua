@@ -49,7 +49,7 @@ local B = {}
 _G.EH_BAG = B
 
 -- 构建标记（唯一来源）：改本文件顺手 +1，用于「客户端跑的是哪一份」取证
-local BAG_BUILD = "0.3.27"
+local BAG_BUILD = "0.3.30"
 
 local function strVal(v)
   return tostring(v)
@@ -1914,8 +1914,49 @@ end
 --        代价如实记：空格子的辉光纹理常驻显示（一层 alpha=0 的 ADD 纹理），绘制开销可忽略；
 --        关窗时父帧 `Hide` ⇒ 纹理随之不可见，关断四件事不受影响。
 --   ★两个通道都写（与 `applySlotTint` 同一条 idiom）：顶点色 alpha + `SetAlpha`，真机认哪个都行。
+-- ★★★0.3.30 辉光「亮度归一」**已按用户要求整体撤销 —— 不要调暗**
+--   用户原话：「**查看最近一次参考蓝色边框的样式调暗边框亮度问题.调回去.不要调暗**」。
+--   ★0.3.29 当年做了什么（**教训留着、代码不留**）：以稀有(蓝)为参考色，按 `(参考色亮度 ÷ 本颜色亮度) ^ 0.5`
+--     把每一档**写进去的 α** 缩一遍，让「有效 α² × 颜色亮度」五档相等（写值 α = 蓝 0.85 · 绿 0.65 ·
+--     紫 0.88 · 橙 0.69 · 悬停金 0.56）—— 观感确实齐了，**代价 = 所有比蓝亮的档一律被调暗**
+--     （悬停金的有效透明度 0.72 → 约 0.31）⇒ 用户点名不要这个。
+--     ★当初为什么会走这条路：ADD 混合抬升的是**颜色自己的亮度**（Rec.601，鲜丽档实算）：
+--       稀有(蓝) (0,0.382,1) = 0.338 ｜ 优秀(绿) (0,1,0) = 0.587 ｜ 史诗(紫) = 0.315
+--       传说(橙) = 0.519 ｜ 悬停金 (0.95,0.80,0.25) = 0.783
+--     ⇒ 同一个 α 下**绿格比蓝格亮 1.7 倍**（真机截图里「绿框又粗又亮、蓝框细细一条」）。
+--   ★撤销口径 = **α 原样写下去**（品质档 `B.GLOW_A`、悬停档 `B.GLOW_A_HOVER`，两档仍同值 ⇒ 0.3.20 那条
+--     「机制和悬浮辉光相同效果,只是颜色不同而已」的**颜色**口径不变）；归一那一套（`B.GLOW_REF_Q` ·
+--     `B.GLOW_POW` · `B.GLOW_L_MIN` · `B.GLOW_A_MAX` · `B.glowRefLuma`）**一并删除**，不留死代码、
+--     也不留「有键无代码」的迷惑项。
+--   ★★★**必读的代价（如实报备：0.3.28 那条报障会回来）**：亮色档（绿 / 橙 / 悬停金）又会比蓝档看着更亮更粗。
+--     要「各档一样细」就只能做归一，而**按参考色归一 = 调暗亮色**（本次被否掉的就是这条）；**唯一不调暗的做法**
+--     是把参考色换成**最亮那一档**（把暗色往亮里抬、上限 1 ⇒ 蓝变亮，而不是绿变暗）—— 那是另一个决定，
+--     **未经用户点头不许加**。
+--   ★`B.glowAlpha(r,g,b,a)` **仍留着**：它是**唯一写口** `applyGlowTint` 里的**唯一换算点**，现在只做
+--     「归一化 + 上限 1」（等价于原样）⇒ 以后要再归一（或改走「按最亮档归一」）**只改这一个函数**，
+--     调用点一个字节都不用动。
+B.lumaRGB = function(r, g, b)
+  if type(r) ~= "number" or type(g) ~= "number" or type(b) ~= "number" then return 0 end
+  return 0.299 * r + 0.587 * g + 0.114 * b
+end
+-- ★0.3.30：**归一已撤销 ⇒ 这里不再按颜色亮度缩放，只夹取**（见上方长注释；要再归一就只改这一个函数）
+B.glowAlpha = function(r, g, b, a)
+  local base = tonumber(a) or 0
+  if base <= 0 then return 0 end
+  if base > 1 then base = 1 end
+  return base
+end
+-- 读值/播报用的薄壳（与真正画上去的同一条路：`vividRGB(qualRGB(q))` → `glowAlpha`）
+B.glowAlphaOfQ = function(q, base)
+  local r, g, b = B.vividRGB(qualRGB(q))
+  return B.glowAlpha(r, g, b, base)
+end
+
 local function applyGlowTint(btn, r, g, b, a)
   if isObj(btn.ehGlow) == false then return end
+  -- ★0.3.30：这里仍是**全项目唯一的一处 α 换算**（`B.glowAlpha`）—— 但 0.3.29 的「亮度归一」已按用户要求
+  --   撤销 ⇒ 现在是**原样写基准值**（不再调暗亮色档；经过与撤销原因见上方长注释）
+  a = B.glowAlpha(r, g, b, a)
   if (a or 0) <= 0 then
     pcall(btn.ehGlow.SetVertexColor, btn.ehGlow, 0, 0, 0, 0)
     pcall(btn.ehGlow.SetAlpha, btn.ehGlow, 0)
@@ -7080,7 +7121,7 @@ local function usage()
   sayForce("/ebag alpha <0~100> = 窗口背景透明度（当前 " .. B.bgText() .. "；也认小数 alpha 0.45）")
   sayForce("/ebag force | yield = 强行接管 / 恢复自动让位")
   sayForce("/ebag view = 跨角色总览（OneView：读存档里各角色的快照，只读）")
-  sayForce("/ebag menu = 设置菜单（窗口右下「设置」那颗按钮同一个口）")
+  sayForce("/ebag menu = 设置菜单（窗口**右上**「设置」那颗按钮同一个口）")
   sayForce("/ebag chars = 列出存档里已记录的角色")
   sayForce("/ebag snap = 立刻记录本角色快照（跨角色总览的数据源）")
   sayForce("/ebag status = 体检（开关/让位/挂钩/容器/格子数/构建）")
@@ -7228,6 +7269,33 @@ function B.status()
       .. " ｜ 格框染品质=" .. (c.edges ~= false and "开" or "关")
       .. " ｜ 背景透明度=" .. B.bgText() .. " ｜ 图标系数=" .. strVal(B.ICON_K)
       .. " ｜ 界面缩放=" .. strVal(math.floor(B.z() * 100 + 0.5)) .. "%")
+    -- ★0.3.30 辉光读数（活口）：**写进 alpha 的值**（= 基准值原样，0.3.29 的归一已按用户要求撤销）
+    --   + **观感读数**（有效 α² × 颜色亮度 —— ★各档**不相等是正常的**，它只解释「为什么亮色档看着更亮更粗」）。
+    do
+      local a3 = B.glowAlphaOfQ(3, B.GLOW_A)
+      local a2 = B.glowAlphaOfQ(2, B.GLOW_A)
+      local a4 = B.glowAlphaOfQ(4, B.GLOW_A)
+      local a5 = B.glowAlphaOfQ(5, B.GLOW_A)
+      local ag = B.glowAlpha(0.95, 0.80, 0.25, B.GLOW_A_HOVER)
+      -- 观感 = **有效 α**（= 写值的平方，见 `applyGlowTint` 上方那段）× 该颜色的亮度（**只读，不做归一**）
+      local function feel(a, r, g, b) return a * a * B.lumaRGB(r, g, b) * 255 end
+      local r3, g3, b3 = B.vividRGB(qualRGB(3))
+      local r2, g2, b2 = B.vividRGB(qualRGB(2))
+      local r4, g4, b4 = B.vividRGB(qualRGB(4))
+      local r5, g5, b5 = B.vividRGB(qualRGB(5))
+      sayForce("辉光写值 α(0.3.30 归一已撤销 · ★不再调暗)：蓝 " .. string.format("%.2f", a3)
+        .. " ｜绿 " .. string.format("%.2f", a2)
+        .. " ｜紫 " .. string.format("%.2f", a4)
+        .. " ｜橙 " .. string.format("%.2f", a5)
+        .. " ｜悬停金 " .. string.format("%.2f", ag)
+        .. "（基准 = 品质 " .. string.format("%.2f", B.GLOW_A)
+        .. " / 悬停 " .. string.format("%.2f", B.GLOW_A_HOVER) .. "）")
+      sayForce("观感读数(有效α²×颜色亮度，仅读数·不做归一)：蓝 " .. string.format("%.1f", feel(a3, r3, g3, b3))
+        .. " ｜绿 " .. string.format("%.1f", feel(a2, r2, g2, b2))
+        .. " ｜紫 " .. string.format("%.1f", feel(a4, r4, g4, b4))
+        .. " ｜橙 " .. string.format("%.1f", feel(a5, r5, g5, b5))
+        .. " ｜悬停金 " .. string.format("%.1f", feel(ag, 0.95, 0.80, 0.25)))
+    end
   end
   -- ★0.3.24 外部资源 + 快照反查的现场读数（活口）：
   --   · 金钱图集**自带一份**（0.3.25 起：`media\moneyicons.blp`，来源判定见 `B.mnyPickUI`），

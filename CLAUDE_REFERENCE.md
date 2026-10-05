@@ -53,11 +53,25 @@
 5. **更新文件内的版本记录**：`CHANGELOG.md` 保留**完整**版本记录；`EvalHelp.lua` 的 `local VERSION` 与 `EvalHelp.toc` 的 `## Version` **同步**（`VERSION` 源码检查守着）。
 6. **审计记忆体（本文件 `CLAUDE.md`）**：版本要点**汇总统计后放到文档末尾**；★**头部只保留比较新的记忆注意事项（最多 20 个版本）**
    —— ★**不要再把一堆逐版本记录堆到记忆体头部**（那是异常，会让文件超预算被截断，且把铁律挤出视野）。
-   ★★★**同时必做一次「清账」**（用户 1.75.13 定：「**清理 Claude.md 版本流水账.提取有价值的最终解决方案的相关信息保留**」）：
-   逐条过常驻卷，删掉**用户报障经过 / 时间线 / 事故叙事 / 已删测试的组号与变异号（`tests/` 已不存在）/ 逐版本流水**，
-   **只保留「最终方案 + 判据 + 锚点」**（源码标识符 · 读值口 · 取证命令 · 参考卷 R 号）；长条目**拆成多条独立判据**
-   （以后可单独改写）；细节推给 `CHANGELOG.md` 与参考卷附录 R。判据 = **信息量不变、字节数明显下降**，
-   且没有一条只写「当时发生了什么」而不写「以后怎么做」。（1.75.13 首轮实做：39,077 → 约 34,000 字符。）
+      ★★★**同时必做一次「清账」= 一道有工具、有判据的操作流程**（用户 1.75.13 定：「**清理 Claude.md 版本流水账.提取有价值的最终解决方案的相关信息保留**」；
+   用户 2026-10-05 再点名：「**整理 Claude.md 版本流水记录.提取有价值的最终解决方案.清理流程账记录.加入操作流程**」）：
+   **① 范围 = 三份一起清**（只清宿主那一份 = 漏）：宿主常驻卷 `CLAUDE.md` · 参考卷 `CLAUDE_REFERENCE.md`（**正文**里的流水账要清；★**附录 R 只增不删**）· **每个子插件自己的 `CLAUDE.md`**（`addons\<名>\CLAUDE.md`）。
+   **② 先备份 + 记基数**（可回滚，判据要用）：`Copy-Item CLAUDE.md tmp\CLAUDE.before_cleanup_<版本>.md`（★用 `Copy-Item` **复制**，不要用 PowerShell 读进来再写 —— 无 BOM UTF-8 会被当 GBK 读坏）；三份各备一份，并记下清账前的**字节数 / 行数**。
+   **③ 划「必须留」的白名单**（清账删的是**叙事**，不是信息）：最终方案 · 判据（一句规则）· 锚点（源码标识符 / 读值口 / 取证命令 / harness 文件名 / 参考卷 `R n`）· **已知闸门欠账**（那是**待办**，不是流水账）· 当前默认档与开关写法 · 三处版本一致判据。
+   **④ 命中这五类就删（或搬走）**：⒜ 用户报障经过（「用户说…后来发现…」）；⒝ 时间线与事故叙事（谁在第几轮发现 / 试了几次）；⒞ 逐版本流水（已进 `CHANGELOG.md` 的那份）；⒟ **已删测试体系**的组号/变异号叙事（`tests/` 2026-09-26 已删 ⇒ 只留「判据搬进了哪个 harness」，不留当年组号）；⒠ **流程账**（本轮怎么查的 / 临时脚本名 / 中途的待办 / 已修欠账的经过）。
+   **⑤ 搬迁而不是丢弃**：细节 → 宿主 `CHANGELOG.md` 对应版本小节 + 参考卷**附录 R**（新开一条 `R n`）；子插件的细节 → 子插件自己的 `CHANGELOG.md`。
+   **⑥ 长条目拆分**：一条里混了三件事 ⇒ 拆成三条独立判据（以后能单独改写）。
+   **⑦ 判据（两条腿，都要过）**：
+     · **人眼那条**：没有一条只写「当时发生了什么」而不写「以后怎么做」；同一条判据的**信息量不变**（关键锚点一个不少）。
+     · **机器那条 = `node tmp/mem_cleanup_diff.js <before.md> <after.md>`**：把「清账前有、清账后没有」的**硬锚点**
+       （`EVAL_*` / `B.GLOW_A` 这类**点号标识符** / `tmp/*.js` 判据脚本 / `*CHECK`）逐个查三处 ——
+       **别的 `.md` 里还有 = 已搬迁 ✅** · 文档全无但**产品代码还在用 = ❌ 疑似丢锚点** · 文档与代码都没有 = 可删的旧残留 ✅ · 只剩 `tmp/` 判据里提到 = ⚠ 提醒。
+       ★判据 = 输出 **「❌ 疑似丢锚点」= 0 且 `exit 0`**（有 ❌ 就补回判据，或在交付说明里写明「该功能/该模块已删」）；顺手打印 before→after 的**字节/行数降幅**。
+       ★自证过「它会红」：拿一个只存在于代码、任何 `.md` 都没有的锚点（如 `EVAL_BIND_ALL`）造一对快照 ⇒ 脚本点名 `← EVAL_BIND_ALL（EvalHelp.lua）` 并 `exit 1`。
+   **⑧ 交付说明要报**：清账覆盖了哪几份 · before→after 字节数 · 删掉的是哪几类（叙事 / 流水 / 流程账）· 有没有 ❌ 需要说明。
+   ★**清账里绝不许顺手做的事**：删锚点（版本号 / 常量 / 命令名 / 行号 —— 那是判据的一部分）· 改「最终方案」的结论 · 把**欠账清单**当流水账删掉。
+   （1.75.13 首轮实做 39,077 → 约 34,000 字符；2026-10-05「宿主卷 ↔ 子插件记忆体分离」那一轮：`473,129 B / 1198 行` → `348,464 B / 737 行`，
+   闸门报「已搬迁 239 · ❌ 0 · exit 0」。）
 7. **提交 + 打「附注」标签**：`git commit` → `git tag -a vX.Y.Z -F <说明文件>`。
    ★★**必须是附注标签（`-a`），不是轻量标签** —— 轻量标签只是个 commit 指针、**没有说明**，
    而 Release 页要用它的说明当正文（1.72.0 踩过：先打了轻量标签，只能 `git tag -a ... -f` 重打再强推）。
@@ -166,6 +180,77 @@ Remove-Item $staging -Recurse -Force
   ★★★**比对键名必须说全**：zip 条目名 = **`EvalHelp/`（zip 里其实是反斜杠）+ toc 里的相对路径** —— **顶层那个文件夹本身就是条目的一部分**
   ⇒ 拿 `Core.lua` 这种相对名去比会得到「**45 个模块全 MISSING**」的**假红**（1.75.59 首跑实踩；与 1.75.43 的「反斜杠」属**同一类键名假设错**）。
   正解 = **两侧都归一成 `/`，并且拿 zip 名比时补上 `EvalHelp/` 前缀**；`WORLDMAP` / `TOOLS` 这种**带目录的 `-like` 过滤**天然不受影响（所以它们首跑就是对的，只有裸模块名全红 —— 一眼就能认出是键名口径问题，不是缺文件）。
+   ★★★**子插件独立打包（2026-10-05 用户定）**：用户原话「**release 子插件要独立压缩包打包并且配置独立无版本号的压缩包.一同上传到对应插件版本发布内**」
+   ⇒ **主插件那两份之外，`addons\` 下每个子插件各自再出两份**（现 2 个子插件 ⇒ 一次发布 **6 个附件**）：
+
+   | 附件名 | 内容 |
+   | :-- | :-- |
+   | `<名>-v<子版本>.zip` | 顶层一个 `<名>\`：`<名>.toc` 里列的 `.lua` + `media\`（若有；剔除 `_v`/`Textures` 这类测试素材）+ `README.md` + `CHANGELOG.md` |
+   | `<名>.zip` | 上一份的**固定名副本**（同一目录、**内容逐字节相同**、SHA256 必须相等） |
+
+   · ★**产物目录 = 主插件那两个 zip 同一个目录**（`$out = Split-Path $repo -Parent` ⇒ `Interface/AddOns/` 下，**不进仓库**）。
+   · ★**子版本现读** `<名>.toc` 的 `## Version`（EH_Bag 另与源码常量 `BAG_BUILD` 相等）⇒ **脚本不许写死版本号**；本节出现的 `EH_Bag-v0.3.29.zip` 只是**当时的例子**。
+   · ★**不带 `CLAUDE.md`**（开发记忆，与宿主 `CLAUDE.md` 同一档、不入包；子插件记忆体就在它自己目录里）、**不带 `preview\`**（截图）—— 与主插件的「不装清单」同一口径。
+   · ★**当前两个子插件的实际形态**：`EH_Bag` = `EH_Bag.toc`（列 `EH_Bag.lua` + `EH_BagSort.lua`）+ `media\`（19 张素材）+ `README.md` + `CHANGELOG.md`；`EH_DebugBox` = `EH_DebugBox.toc` + 一个 `.lua` + `README.md` + `CHANGELOG.md`（**无 `media\`**）。
+   · ★**传到同一个 Release**（**绝不另建 release 页**）：GitHub `POST …/releases/<id>/assets?name=<附件名>`（`?name=` 就是幂等键，同名先查再跳过）、Gitee `POST …/releases/<id>/attach_files`（multipart；**同名已存在要先 `GET …/attach_files` 拿 attach id 再 DELETE** —— 见上面三条）。
+   · ★★★**核对（做完必跑）**：`tmp/rel_probe_assets.js` 的清单从「主插件 2 份」扩成 **`2 + 2×子插件数`**（现 2 个 ⇒ **6 份**：`EvalHelp-v…zip` · `EvalHelp.zip` · `EH_Bag-v…zip` · `EH_Bag.zip` · `EH_DebugBox-v…zip` · `EH_DebugBox.zip`），逐份 **200 + content-length 对得上**；错名 URL 仍须 **404**。
+   · **打包片段（落地脚本 `tmp/pack_subaddons.ps1`，★纯 ASCII** —— 见下面那条「一个中文注释就让 PS 5.1 读成 GBK」的教训）**：
+   · ★**脚本必须幂等**：`CreateFromDirectory` **拒绝覆盖**已存在的 zip ⇒ 先 `Remove-Item` 再建（首跑回来就是这条）；★**子插件名字的唯一来源 = `addons\` 目录现读**，核对循环也跟着它走（写死 `EH_Bag|EH_DebugBox` 或拿 `*.zip` 一把梭，会把别的 release 的包比进来 = **假红**）。
+   · **怎么跑**：`powershell -NoProfile -ExecutionPolicy Bypass -File tmp\pack_subaddons.ps1`（★本机默认执行策略**禁止直接跑 `.ps1`** —— 直接 `& tmp\pack_subaddons.ps1` 会报 `not digitally signed`；这与「脚本必须纯 ASCII」是同一条教训：跑法也要写死）。
+
+   ```powershell
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$repo  = Split-Path $PSScriptRoot -Parent          # repo root = the only truth (never the AddOns copy)
+$out   = Split-Path $repo -Parent                  # same folder as EvalHelp-vX.Y.Z.zip
+$addir = Join-Path $repo "addons"
+$names = @(Get-ChildItem $addir -Directory | ForEach-Object { $_.Name })   # names come from the folder, never hardcoded
+$fail  = 0
+foreach ($name in $names) {
+  $dir   = Join-Path $addir $name
+  $toc   = Join-Path $dir "$name.toc"
+  $lines = [System.IO.File]::ReadAllLines($toc)      # .NET reads UTF-8; PS Get-Content would not
+  $ver   = ($lines | Select-String -Pattern '^##\s*Version:\s*(\S+)').Matches[0].Groups[1].Value
+  $stg   = Join-Path $env:TEMP ("subpkg_" + $name)
+  if (Test-Path $stg) { Remove-Item $stg -Recurse -Force }
+  $dst = Join-Path $stg $name
+  New-Item -ItemType Directory -Path $dst | Out-Null
+  Copy-Item $toc $dst
+  # only the .lua listed in the toc (never CLAUDE.md / preview / test assets)
+  $lines | Where-Object { $_ -match '^[A-Za-z0-9_\-]+\.lua\s*$' } | ForEach-Object {
+    Copy-Item (Join-Path $dir $_.Trim()) $dst
+  }
+  $media = Join-Path $dir "media"
+  if (Test-Path $media) { Copy-Item $media $dst -Recurse }
+  foreach ($sub in @("_v", "Textures")) {
+    Remove-Item (Join-Path $dst ("media\" + $sub)) -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  foreach ($doc in @("README.md", "CHANGELOG.md")) {
+    $p = Join-Path $dir $doc
+    if (Test-Path $p) { Copy-Item $p $dst }
+  }
+  $zip   = Join-Path $out "$name-v$ver.zip"
+  $fixed = Join-Path $out "$name.zip"
+  Remove-Item $zip, $fixed -Force -ErrorAction SilentlyContinue   # CreateFromDirectory refuses to overwrite
+  [System.IO.Compression.ZipFile]::CreateFromDirectory($stg, $zip)
+  Copy-Item $zip $fixed -Force                                    # fixed-name copy, byte-identical
+  $n = (Get-ChildItem $stg -Recurse -File).Count
+  Remove-Item $stg -Recurse -Force
+  "SUBPKG $name ver=$ver files=$n"
+  # verify: entries + README inside + no CLAUDE.md / preview  (zip entry names use BACKSLASH: normalize first)
+  $z = [System.IO.Compression.ZipFile]::OpenRead($zip)
+  $ents = @($z.Entries | ForEach-Object { $_.FullName -replace '\\', '/' })
+  $z.Dispose()
+  $readme = [bool]($ents | Where-Object { $_ -like '*/README.md' })
+  $bad    = @($ents | Where-Object { $_ -match 'CLAUDE\.md$' -or $_ -match '/preview/' }).Count
+  $same   = ((Get-FileHash $zip -Algorithm SHA256).Hash -eq (Get-FileHash $fixed -Algorithm SHA256).Hash)
+  "  $name entries=$($ents.Count) readme=$readme bad=$bad same=$same"
+  if (-not $readme -or $bad -ne 0 -or -not $same) { "  *** CHECK FAILED: $name ***"; $fail = 1 }
+}
+"SUBPKG DONE names=$($names.Count) fail=$fail"
+exit $fail
+   ```
+   ★**逐份核对 = 三样**：① 条目数（与上一次发布比，只该多/少得能解释）；② 包内**有 `README.md`**（开箱验，别只数条目）；③ **两份 SHA256 相同**（`Get-FileHash`）。
+   ★**改了子插件目录结构 ⇒ 三处一起改**：本节的打包口径 · 宿主 `CLAUDE.md` §4.3「宿主契约 ④」· 两个子插件各自 `CLAUDE.md` 的「发布打包」一节。
   ★★★**教训（本轮真踩）**：脚本里**一个中文注释**就让 Windows PowerShell 5.1 按 GBK 读成乱码、**赋值行被吃掉**（症状 = `Join-Path : Cannot bind argument to parameter 'Path' because it is null.`）⇒ **出包脚本必须逐字节 ASCII**（连比较用的 `→`/emoji 都要换成 ASCII 子串，例如查 `"1.75.53"` 而不是 `"1.52.0 → 1.75.53"`）。
 ★**不装**（2026-09-26 更新：测试文件已全部删除，下面这份「不装清单」里只剩与**发布**有关的项）：`preview/`（截图）、`node_modules/`、
 `api_*.html`、`.git/`、`bindings/`、`_icons_scan/`、`pay/`、`luacheck.js`/`test_stub.lua`/`tmp/`（开发用，不随包）。

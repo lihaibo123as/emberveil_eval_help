@@ -72,8 +72,13 @@ node luacheck.js     # fengari 逐文件全量 Lua 解析；SYNTAX OK 才算完�
    `EvalHelp.lua` 的 `local VERSION` 与 `EvalHelp.toc` 的 `## Version` 同步；
 6. **审计记忆体**：`CLAUDE.md` —— 版本要点**汇总统计后放到文档末尾**；★头部只保留**比较新的记忆注意事项（最多 20 个版本）**，
    ★不许再把一堆版本记录堆到记忆体头部（那会让整份记忆体超预算、被截断掉文末的项目现状）。
-   ★★★并且**做一次「清账」**（用户定：「**清理 Claude.md 版本流水账.提取有价值的最终解决方案的相关信息保留**」）：
-   删掉报障经过 / 时间线 / 事故叙事 / 已删测试的组号与变异号，**只留「最终方案 + 判据 + 锚点」**（长条目拆成多条独立判据），细节推给 `CHANGELOG.md` 与参考卷附录 R。
+      ★★★并且**做一次「清账」= 发布流程里的固定一步**（用户定：「**清理 Claude.md 版本流水账.提取有价值的最终解决方案的相关信息保留**」+「**清理流程账记录.加入操作流程**」）：
+   **三份一起清**（宿主 `CLAUDE.md` · `CLAUDE_REFERENCE.md` 正文 · **每个子插件自己的 `CLAUDE.md`**）→
+   先 `Copy-Item` 备份到 `tmp\CLAUDE.before_cleanup_<版本>.md`（★只复制、不要在 PS 里读进来再写）并记字节/行数 →
+   只留「**最终方案 + 判据 + 锚点 + 欠账清单**」，删「报障经过 / 时间线 / 逐版本流水 / 已删测试的组号与变异号 / **流程账**（怎么查的 · 临时脚本名 · 中途待办）」→
+   细节搬 `CHANGELOG.md` 与参考卷附录 R，长条目拆成多条独立判据；
+   ★判据 = **`node tmp/mem_cleanup_diff.js <before.md> <after.md>` 报「❌ 0」且 `exit 0`**（逐个查消失的硬锚点是「已搬迁 / 可删 / 丢锚点」）
+   + 人眼一条「没有一条只写当时发生了什么、不写以后怎么做」；交付说明里报 before→after 字节数与删掉的类别。
 7. **提交 + 打「附注」标签**：`git tag -a vX.Y.Z -F <说明文件>` —— ★**必须 `-a`**（轻量标签没有说明，Release 页要用它当正文）；
    ★说明文件**不能用 PowerShell `>` 重定向写**（那是 UTF-16LE → 标签说明整段乱码），要用 UTF-8 写并**回读复核**；
 8. **推送（分支 + 标签都要推）**：`git push origin master && git push github master`，再 `git push origin --tags && git push github --tags`；
@@ -82,7 +87,7 @@ node luacheck.js     # fengari 逐文件全量 Lua 解析；SYNTAX OK 才算完�
 9. **出发布包 + 建 Release 页**：打包 `EvalHelp-vX.Y.Z.zip`（放 `Interface/AddOns/` 下，顶层一个 `EvalHelp\`，内容 = `.toc` 实际清单，
    ★装完核对条目数）→ ★★**再复制一份不带版本号的 `EvalHelp.zip`**（同一目录、**内容逐字节相同**）——
    用户定：「**9 出包还要对应复制一个没有版本号的包 EvalHelp.zip**」＝ 固定名字的下载口 → 在 gitee / github 网页建 Release
-   （**需要 API token，AI 做不了** → 如实告知用户去建，并给全 URL/标题/说明/附件）。
+   （**Release 页与附件现在由 AI 自动建/自动传** —— 见参考卷发布段「Release 页 = 现在由 AI 自动建」；★★**子插件也各自独立打包两份**（`<名>-v<子版本>.zip` + 固定名 `<名>.zip`，内容逐字节相同），与主插件那两份**一起传到同一个 Release**（用户 2026-10-05 定：「release 子插件要独立压缩包打包并且配置独立无版本号的压缩包.一同上传到对应插件版本发布内」；口径见参考卷「子插件独立打包」）。
 
 > ★发布前必跑：`node luacheck.js`（`SYNTAX OK`）—— ★测试框架已于 2026-09-26 删除，**再没有第二道闸门**；提交用 `git add <明确路径>`（**不要** `git add -A`）。
 > ★推送：分支 `master`；远端 `origin`=gitee、`github`=github（用默认密钥 `~/.ssh/id_rsa`，别指定 `gitee_id_rsa`）。
