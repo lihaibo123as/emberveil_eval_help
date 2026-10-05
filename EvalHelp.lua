@@ -702,8 +702,9 @@ function EVAL_HELP_UI_BUILD()
     plb:SetScript("OnClick", function(a, b)
       local mbtn = (type(a) == "string" and a) or (type(b) == "string" and b) or (type(arg1) == "string" and arg1) or "LeftButton"
       if mbtn == "RightButton" then
-        local n = EVAL_BIND_CLEAR_ALL()
-        say(string.format(L("BIND_ALL_CLEARED"), n))
+        -- ★1.75.74 返回三个数（实际解绑 / 本角色条数 / 其它角色条数）——按角色后如实分列
+        local unbound, mine, others = EVAL_BIND_CLEAR_ALL()
+        say(string.format(L("BIND_ALL_CLEARED2"), tonumber(mine) or 0, tonumber(others) or 0, tonumber(unbound) or 0))
       else
         EVAL_BIND_STATUS() -- ★1.71.20 左键点「方案」= 打印当前绑定情况（只打印，不动绑定）
       end
@@ -1406,6 +1407,63 @@ local function cfgHeader(parent, x, y, label, list)
   return t -- 1.71.14 交出真实控件（断言要读它的真实位置，不是 y 常量）
 end
 
+-- ★★★1.75.74 技能列表「复制 / 插入」用的**深拷贝**（右键菜单）：
+--   · 只走新格式：先用 Engine 的 EVAL_RULE_EXPR 归一成 expr，再把每条条件**连嵌套表一起拷一层**
+--     （cs / gs / ss / dt 都是表 ⇒ 不拷就会把「插入后编辑的那条」写回源技能身上）。
+--   · skill / rank / enabled 原样带过去（停用态 enabled=false 也照抄 —— 复制的是「这一条」）。
+--   · 复制态**不进存档**（挂在 cfgWin.warUI.clip 上）：切方案 / 切 Tab 都不丢，/reload 清空。
+--   ★放在 cfgBuild **之前**：本文件里它被 cfgBuild 内的行处理器与后面的全局口共用，
+--     定义在它们之后就会绑成全局 nil（本项目「先引用后声明」老雷，probe_localorder 守）。
+local function warRuleCopy(r)
+  if type(r) ~= "table" then return nil end
+  local src = (type(EVAL_RULE_EXPR) == "function") and EVAL_RULE_EXPR(r) or r.expr
+  local out = { skill = r.skill, rank = r.rank, enabled = r.enabled, expr = {} }
+  for i, it in ipairs(src or {}) do
+    local cd2 = {}
+    if type(it.cd) == "table" then
+      for k, v in pairs(it.cd) do
+        if type(v) == "table" then
+          local v2 = {}
+          for k2, vv in pairs(v) do v2[k2] = vv end
+          cd2[k] = v2
+        else
+          cd2[k] = v
+        end
+      end
+    end
+    out.expr[i] = { conn = it.conn, cd = cd2 }
+  end
+  return out
+end
+
+-- ★★★1.75.74 技能提示的**唯一实现**（技能行悬停 / 复制态小标悬停**共用**）：
+--   技能名(+等级) · 启用态 · 逐条条件（本地化名）· 可选「来源方案」· 说明行。
+--   ★「fromName」 非空 = 复制态那一支（多一行来源 + 换成「右键技能行可插入」的说明）。
+--   ★先 ClearLines 再画：本客户端 tooltip 的行会残留（本项目在案的老家族）。
+local function warSkillTip(owner, r, fromName)
+  if type(r) ~= "table" or type(GameTooltip) == "nil" then return end
+  pcall(GameTooltip.SetOwner, GameTooltip, owner, "ANCHOR_RIGHT")
+  pcall(GameTooltip.ClearLines, GameTooltip)
+  local nmTxt = tostring(r.skill or "") .. (r.rank and ("(" .. tostring(r.rank) .. ")") or "")
+  pcall(GameTooltip.AddLine, GameTooltip, nmTxt, 1, 0.82, 0.3)
+  if type(fromName) == "string" and fromName ~= "" then
+    pcall(GameTooltip.AddLine, GameTooltip, L("W_CLIP_FROM", fromName), 0.62, 0.92, 0.68)
+  end
+  pcall(GameTooltip.AddLine, GameTooltip,
+    (r.enabled ~= false) and ("|cff00ff00" .. L("TIP_ON") .. "|r") or ("|cffff0000" .. L("TIP_OFF") .. "|r"))
+  pcall(GameTooltip.AddLine, GameTooltip, L("TIP_COND_H"), 0.62, 0.55, 0.40)
+  local gc = 0
+  for gi, line in ipairs(EVAL_EXPR_LINES(EVAL_RULE_EXPR(r), true)) do
+    gc = gi
+    pcall(GameTooltip.AddLine, GameTooltip, string.format("%d. %s", gi, line), 0.85, 0.85, 0.85, true)
+  end
+  if gc == 0 then pcall(GameTooltip.AddLine, GameTooltip, L("TIP_NOCOND"), 0.6, 0.6, 0.6) end
+  pcall(GameTooltip.AddLine, GameTooltip,
+    (type(fromName) == "string" and fromName ~= "") and L("W_CLIP_TIP") or L("W_ROW_TIP"), 0.5, 0.5, 0.5, true)
+  pcall(GameTooltip.AddLine, GameTooltip, L("W_CLIP_HINT"), 0.5, 0.5, 0.5, true)
+  pcall(GameTooltip.Show, GameTooltip)
+end
+
 -- ★1.70.45 窗口宽度的**单一来源**：配置窗与技能编辑窗必须同宽（用户要求），
 --   且两份宽度必须由同一个函数给出——否则改一处漏一处（本项目「两份数据必须有断言盯着」的惯例）。
 --   用户要求：在原来基础上加宽 ~100（中 560→660 / 西文 700→800）。
@@ -1718,7 +1776,9 @@ local function cfgBuild()
 
   -- ===== Tab 2「一键宏设置」：多方案 + 技能规则列表（可视化编辑器，全职业通用） =====
   local Wp = pages[2].widgets
-  local warUI = { rows = {}, profBtns = {}, picker = {}, editing = nil, pickSkill = nil }
+  local warUI = { rows = {}, profBtns = {}, picker = {}, editing = nil, pickSkill = nil,
+    clip = nil,      -- ★1.75.74 技能复制态（会话级剪贴板，不进存档）{ rule=, label=, skill=, rank=, from= }
+    clipText = nil } -- ★1.75.74 列表标题右侧那行「已复制：…」（无复制态 = 收起）
   cfgWin.warUI = warUI
   local MAXPROF = 12 -- 1.42.0 方案上限 4→12（间距 21→19 紧凑排列装下）
 
@@ -2041,6 +2101,76 @@ local function cfgBuild()
   -- 右侧：技能规则列表（顺序=优先级；勾选=技能配置开关）
   local RX2 = 128
   cfgHeader(root, RX2, -56, L("W_LIST_H"), Wp)
+  -- ★★★1.75.74c 用户：「技能列表标题添加悬浮信息，增加一些当前列表的操作说明（比如右键新增的功能信息）」。
+  --   ★标题是 FontString —— **纹理/字串都不吃鼠标**（本项目定案）⇒ 必须盖一枚**透明 Button**；
+  --     几何**只盖标题那一格**（宽 232、高 16），右缘停在复制小标左边（小标左缘 = RX2 + 240）
+  --     ⇒ 两个热区不重叠、也不盖到下面的列表行（首行 y=-74，本热区到 -70 为止）。
+  --   ★四行操作说明都走语言键（三语齐）；其中「右键 = 复制 / 插入」是本版**新增**的能力，必须写出来 ——
+  --     不写说明等于把功能藏起来（本项目对隐藏功能的一贯处置）。
+  local titleHit = CreateFrame("Button", nil, root)
+  titleHit:SetPoint("TOPLEFT", root, "TOPLEFT", RX2 - 2, -54)
+  titleHit:SetWidth(232) titleHit:SetHeight(16)
+  pcall(titleHit.EnableMouse, titleHit, true)
+  titleHit:SetScript("OnEnter", function()
+    if type(GameTooltip) == "nil" then return end
+    pcall(GameTooltip.SetOwner, GameTooltip, titleHit, "ANCHOR_RIGHT")
+    pcall(GameTooltip.ClearLines, GameTooltip)
+    pcall(GameTooltip.AddLine, GameTooltip, L("W_LIST_H"), 1, 0.82, 0.30)
+    pcall(GameTooltip.AddLine, GameTooltip, L("W_ROW_TIP"), 0.85, 0.85, 0.85, true)
+    pcall(GameTooltip.AddLine, GameTooltip, L("W_LIST_TIP_RIGHT"), 0.62, 0.92, 0.68, true)
+    pcall(GameTooltip.AddLine, GameTooltip, L("W_LIST_TIP_SCROLL"), 0.80, 0.80, 0.80, true)
+    pcall(GameTooltip.AddLine, GameTooltip, L("W_LIST_TIP_ADD"), 0.80, 0.80, 0.80, true)
+    pcall(GameTooltip.AddLine, GameTooltip, L("W_LIST_TIP_CLIP"), 0.62, 0.92, 0.68, true)
+    pcall(GameTooltip.Show, GameTooltip)
+  end)
+  titleHit:SetScript("OnLeave", function()
+    if type(GameTooltip) ~= "nil" then pcall(GameTooltip.Hide, GameTooltip) end
+  end)
+  table.insert(Wp, titleHit)
+
+  -- ★★★1.75.74b 复制态小标（用户截图报障：「复制信息被遮挡」+ 要**技能图标** + 要**悬浮详情**）。
+  --   · 第一版错在哪：右缘锚 -104 ⇒ 正好落在 **[添加技能]/[导入导出]** 那两个右锚按钮**底下**
+  --     （zhCN 下它们在 W-172..W-92 / W-84..W-16），屏上只剩一个被截掉的字母。
+  --   · 现在右缘 = **[添加技能] 左边缘 − 10**，且用那一行按钮**自己的常量**现算（x=WIDE and 122 or 92、
+  --     w=WIDE and 112 or 80）⇒ 以后挪按钮这里跟着走（同一把尺子，不另写死数）。
+  --   · 左缘取 「RX2 + 240」：三种语言里最长的标题右缘上界（英/俄标题比中文还长）⇒ **绝不压标题**。
+  --   · 内容 = 底纹 + **技能图标** + 文案（图标取 wicon(skill)，与技能行同一套；取不到画灰块）。
+  --   · 悬浮 = 与技能行**同一份**提示（warSkillTip）+ 来源方案 + 「右键可插入」说明。
+  --   · 显隐仍走本页控件清单 Wp（可见性契约），由 EVAL_WAR_TAB_REFRESH 在**一键宏 Tab 激活时**决定。
+  local addLeft = (WIDE and 122 or 92) + (WIDE and 112 or 80)
+  local clipAvail = math.max(48, (W - addLeft - 10) - (RX2 + 240))
+  local clipBg = root:CreateTexture(nil, "BACKGROUND")
+  uiSolid(clipBg, 0.09, 0.20, 0.12, 0.85)
+  clipBg:SetPoint("TOPRIGHT", root, "TOPRIGHT", -(addLeft + 10), -56)
+  clipBg:SetHeight(16)
+  clipBg:SetWidth(clipAvail)
+  local clipIcon = root:CreateTexture(nil, "ARTWORK")
+  clipIcon:SetPoint("LEFT", clipBg, "LEFT", 2, 0)
+  clipIcon:SetWidth(13) clipIcon:SetHeight(13)
+  local clipText = uiText(root, 9, 0.72, 0.96, 0.78)
+  clipText:SetPoint("LEFT", clipBg, "LEFT", 19, 0)
+  pcall(clipText.SetWidth, clipText, math.max(20, clipAvail - 22))
+  pcall(clipText.SetJustifyH, clipText, "LEFT")
+  pcall(clipText.SetNonSpaceWrap, clipText, false)
+  clipText:SetText("")
+  local clipHit = CreateFrame("Button", nil, root)
+  clipHit:SetPoint("TOPLEFT", clipBg, "TOPLEFT", -2, 2)
+  clipHit:SetPoint("BOTTOMRIGHT", clipBg, "BOTTOMRIGHT", 2, -2)
+  pcall(clipHit.EnableMouse, clipHit, true)
+  clipHit:SetScript("OnEnter", function()
+    local cu = cfgWin.warUI
+    local cc = cu and cu.clip
+    if type(cc) == "table" and type(cc.rule) == "table" then warSkillTip(clipHit, cc.rule, cc.from) end
+  end)
+  clipHit:SetScript("OnLeave", function()
+    if type(GameTooltip) ~= "nil" then pcall(GameTooltip.Hide, GameTooltip) end
+  end)
+  for _, wgt in ipairs({ clipBg, clipIcon, clipText, clipHit }) do
+    pcall(wgt.Hide, wgt)
+    table.insert(Wp, wgt)
+  end
+  warUI.clipBg, warUI.clipIcon, warUI.clipText, warUI.clipHit = clipBg, clipIcon, clipText, clipHit
+  warUI.clipMaxUnits = math.max(6, math.floor((clipAvail - 22) / 9))
   -- 1.60.0 列表高度衍生到底部：行数按窗口高度动态算（旧固定 8 行，底部大片空置）——
   -- 起始 y=-74、行距 24，底部给关闭按钮留 120px
   local ROWS = math.floor((H - 120) / 24)
@@ -2172,31 +2302,47 @@ local function cfgBuild()
     hov:SetPoint("BOTTOMRIGHT", cds, "BOTTOMRIGHT", 2, -2)
     pcall(hov.EnableMouse, hov, true)
     hov:SetScript("OnEnter", function()
+      -- ★1.75.74 提示体抽成共用件（与复制态小标同一份：名字/启用态/逐条条件/说明）
       local w2b = warCfg()
       local rb = w2b.profiles[w2b.activeProfile or 1]
       local r = rb and rb.skills[ri + (warUI.offset or 0)]
-      if not r or type(GameTooltip) == "nil" then return end
-      pcall(GameTooltip.SetOwner, GameTooltip, hov, "ANCHOR_RIGHT")
-      pcall(GameTooltip.AddLine, GameTooltip,
-        tostring(r.skill) .. (r.rank and ("(" .. tostring(r.rank) .. ")") or ""), 1, 0.82, 0.3)
-      pcall(GameTooltip.AddLine, GameTooltip,
-        (r.enabled ~= false) and ("|cff00ff00" .. L("TIP_ON") .. "|r") or ("|cffff0000" .. L("TIP_OFF") .. "|r"))
-      pcall(GameTooltip.AddLine, GameTooltip, L("TIP_COND_H"), 0.62, 0.55, 0.40)
-      -- ★1.75.28 按 expr 显示行（disp=true：界面走本地化名，与列表同一口径）
-      local gc = 0
-      for gi, line in ipairs(EVAL_EXPR_LINES(EVAL_RULE_EXPR(r), true)) do
-        gc = gi
-        pcall(GameTooltip.AddLine, GameTooltip, string.format("%d. %s", gi, line), 0.85, 0.85, 0.85, true)
-      end
-      if gc == 0 then pcall(GameTooltip.AddLine, GameTooltip, L("TIP_NOCOND"), 0.6, 0.6, 0.6) end
-      pcall(GameTooltip.AddLine, GameTooltip, L("W_ROW_TIP"), 0.5, 0.5, 0.5, true)
-      pcall(GameTooltip.Show, GameTooltip)
+      warSkillTip(hov, r, nil)
     end)
-    hov:SetScript("OnLeave", function()
+hov:SetScript("OnLeave", function()
       if type(GameTooltip) ~= "nil" then pcall(GameTooltip.Hide, GameTooltip) end
     end)
     row.hov = hov
     table.insert(Wp, hov) -- ★必须进页控件清单：它覆盖在文字上，切走 Tab 时不 Hide = 在别的页面上**吃鼠标**
+    -- ★★★1.75.74 用户：「技能列表 -> 单元增加右键：复制 / 插入（只有在复制状态的情况才出现插入，
+    --   在这条技能条后面粘贴插入），切换到其他方案之后也支持（跨方案）」。
+    --   · 锚点 = 覆盖文字那枚**透明 Button**（纹理/FontString 都不吃鼠标 —— 本项目定案）；
+    --     ★几何**只盖文字格**（nm → cds），绝不盖右边 ▲▼/编/删（那是真按钮，被盖住就点不动）。
+    --   · 左键行为**一个字节不变**（这一格左键本来什么都不做）⇒ 必须把右键注册上，
+    --     否则右键事件永远到不了处理体（本项目铁律）；鼠标键读 a / b / **全局 arg1** 三处
+    --     （真机踩过：只读 a、b 时右键被当成左键）。
+    --   · 「插入」项**只有复制态存在时**才拼进菜单（拼个 nil 洞 ≠ 不显示 —— 带洞的表在本项目出过事）。
+    --   · 实际动作走全局口 EVAL_WAR_CLIP_COPY / INSERT（可离线 harness、可真机 /run 取证）。
+    pcall(hov.RegisterForClicks, hov, "LeftButtonUp", "RightButtonUp")
+    hov:SetScript("OnClick", function(a, b)
+      local mbtn = (type(a) == "string" and a) or (type(b) == "string" and b)
+        or (type(arg1) == "string" and arg1) or "LeftButton"
+      if mbtn ~= "RightButton" then return end
+      local w2m = warCfg()
+      local p0 = w2m.profiles[w2m.activeProfile or 1]
+      local ix0 = ri + (warUI.offset or 0)
+      if not (p0 and p0.skills and p0.skills[ix0]) then return end
+      local items = { L("W_CTX_COPY") }
+      if warUI.clip and warUI.clip.rule then items[#items + 1] = L("W_CTX_INSERT") end
+      EVAL_DD_OPEN(hov, items, function(pi)
+        local piNow = warCfg().activeProfile or 1
+        local ixNow = ri + (warUI.offset or 0)
+        if pi == 1 then
+          EVAL_WAR_CLIP_COPY(piNow, ixNow)
+        elseif pi == 2 then
+          EVAL_WAR_CLIP_INSERT(piNow, ixNow)
+        end
+      end)
+    end)
     -- 1.61.0 调序按钮改为箭头 + 新增下移；★1.71.9 用户截图反馈：「^ 看着像一条横线、v 是字母」
     --   → 换成真正的三角 **▲/▼**（与本插件「工具箱」「任务线 & 装备」的滚动按钮同一套字形，已验证能显示）。
     row.up, row.upText = mkSmall(88, y, 16, "▲", function()
@@ -2522,14 +2668,15 @@ function pmRefresh()
   local w2 = warCfg()
   local p = pmUI.pidx and w2.profiles and w2.profiles[pmUI.pidx]
   pmUI.title:SetText(L("PM_TITLE") .. "：" .. (p and tostring(p.name) or "?"))
-  local cur = w2.bindKeys and w2.bindKeys[pmUI.pidx]
+  local cur = EVAL_BIND_KEY(pmUI.pidx)
   pmUI.curText:SetText(string.format(L("BIND_CUR"), (type(cur) == "string" and cur ~= "") and cur or L("BIND_NONE")))
   pmUI.keyText:SetText(pmUI.selKey or L("BIND_PICK"))
   local info, ir, ig, ib = L("PM_HINT"), 0.65, 0.65, 0.65
   if pmUI.selKey then
     local okA, act = pcall(GetBindingAction, pmUI.selKey)
     act = (okA and type(act) == "string") and act or ""
-    local cmd = (pmUI.pidx and w2.bindSlots and w2.bindSlots[pmUI.pidx]) and EVAL_BIND_SLOT_CMD(w2.bindSlots[pmUI.pidx]) or ""
+    local mySlot = EVAL_BIND_SLOT(pmUI.pidx)
+    local cmd = mySlot and EVAL_BIND_SLOT_CMD(mySlot) or ""
     if act == "" or (cmd ~= "" and act == cmd) then
       info, ir, ig, ib = L("BIND_FREE"), 0.55, 0.85, 0.45
     else
@@ -2578,7 +2725,14 @@ function EVAL_PM_SAVE()
       say(string.format(L("BIND_DONE"), pmUI.selKey, tostring(p.name)))
       pmUI.selKey = nil
     else
-      say(string.format(L("BIND_FAIL"), tostring(err)))
+      -- ★1.75.74 空格的两种「绑不上」要说清出路（不是一句「客户端拒绝」能解决的）
+      if err == "noslot" then
+        say(L("BIND_NOSLOT"))
+      elseif err == "nochar" then
+        say(L("BIND_NOCHAR"))
+      else
+        say(string.format(L("BIND_FAIL"), tostring(err)))
+      end
     end
   end
   if not did then say(L("PM_NAME_EMPTY")) end
@@ -2794,40 +2948,23 @@ function EVAL_WAR_DEL_PROFILE(idx)
   if not w2.profiles[idx] then return false end
   local nm = tostring(w2.profiles[idx].name)
   -- ★★★1.73.25 用户：「方案删除 要删除对应绑定的按键信息」。
-  --   绑定是按**方案序号**存的（w2.bindKeys[pidx] / w2.bindSlots[pidx]，单一真源见 EVAL_BIND_*）→
-  --   删掉第 idx 个方案时必须做三件事，缺一就会留下错位/幽灵按键：
-  --   ① 把 idx 那一格**解绑 + 清空**（EVAL_BIND_CLEAR，它自带 SaveBindings）；
+  --   绑定是按**方案序号**存的（★1.75.74 起存在**本角色**的记录表 war.bindByChar[<角色键>][pidx]，
+  --   单一真源与读口见 EVAL_BIND_* 那一族）→ 删掉第 idx 个方案时必须做三件事，
+  --   缺一就会留下错位/幽灵按键：
+  --   ① 把 idx 那一格**解绑 + 清空**（EVAL_BIND_CLEAR，它自带落盘）；
   --   ② 把 idx **之后**的绑定**整体左移一格**（★不左移 = 被删方案的键会「粘」到下一个方案身上）；
-  --   ③ 左移之后再 SaveBindings 落盘（前一步存的是中间状态，这里必须再存一次）。
-  local freed, moved = false, 0
+  --   ③ 左移之后再落盘（前一步存的是中间状态，EVAL_BIND_SHIFT 里会再存一次）。
+  local freed, shifted = false, 0
   if type(EVAL_BIND_CLEAR) == "function" then
-    local ok = pcall(EVAL_BIND_CLEAR, idx)
-    if ok and w2.bindKeys and w2.bindKeys[idx] == nil then freed = true end
-    -- ★EVAL_BIND_CLEAR 里的判据已经清过一遍；这里再确认一次「解绑真的生效」（不许只看返回值）
-    local stillKey = w2.bindKeys and w2.bindKeys[idx]
-    if stillKey == nil and w2.bindSlots and w2.bindSlots[idx] == nil then freed = true end
+    pcall(EVAL_BIND_CLEAR, idx)
+    -- ★再确认一次「记录真的清了」（不许只看返回值）
+    local stillKey = (type(EVAL_BIND_KEY) == "function") and EVAL_BIND_KEY(idx) or nil
+    if stillKey == nil then freed = true end
   end
-  local function tbShiftBind(tbl)
-    if type(tbl) ~= "table" then return end
-    local nt = {}
-    for i = 1, n0 do
-      if i ~= idx and tbl[i] ~= nil then
-        local j = (i < idx) and i or (i - 1)
-        nt[j] = tbl[i]
-        moved = moved + 1
-      end
-    end
-    for k in pairs(tbl) do tbl[k] = nil end
-    for k, v in pairs(nt) do tbl[k] = v end
-  end
-  tbShiftBind(w2.bindKeys)
-  tbShiftBind(w2.bindSlots)
-  if moved > 0 and type(SaveBindings) == "function" then
-    pcall(SaveBindings, (type(GetCurrentBindingSet) == "function" and GetCurrentBindingSet()) or 1)
-  end
+  if type(EVAL_BIND_SHIFT) == "function" then shifted = EVAL_BIND_SHIFT(idx, n0) or 0 end
   say("已删除方案: " .. nm ..
       (freed and "（已解除它自己的快捷键绑定）" or "") ..
-      (moved > 0 and ("；后面 " .. tostring(moved) .. " 个方案的绑定已左移一格") or ""))
+      (shifted > 0 and ("；后面 " .. tostring(shifted) .. " 个方案的绑定已左移一格") or ""))
   table.remove(w2.profiles, idx)
   if (w2.activeProfile or 1) > table.getn(w2.profiles) then
     w2.activeProfile = table.getn(w2.profiles)
@@ -2903,6 +3040,55 @@ function EVAL_TEST_WAR_PROF_ROWS()
   return out
 end
 
+-- ============ 技能复制 / 插入（1.75.74）============
+--   ★复制态挂 cfgWin.warUI.clip：**不进存档**（会话级剪贴板）⇒ 切方案、切 Tab 都不丢；
+--     /reload 清空（复制回执里如实写这一点）。
+--   ★插入位置 = **点的那一条之后**（用户原话「在这条技能条后面粘贴插入」），插进**当前激活方案**
+--     —— 所以「复制 → 换方案 → 在别的方案里插入」天然成立（剪贴板里存的是**自包含的整条规则**）。
+--   ★索引由调用方给（行处理器算的是 「ri + warUI.offset」，与 ▲▼/编/删 同一口径）。
+--   ★拿不到规则 / 位置越界 / 没有复制态 ⇒ 返回 false 且**一个字都不写**（绝不半插）。
+--   ★做成**全局口**（不是局部闭包）：离线 harness 能直接跑、真机也能 「/run EVAL_WAR_CLIP_*」 取证
+--     （本项目「读值口要么挂活口、要么别加」的纪律）。
+function EVAL_WAR_CLIP_STATE()
+  local u = cfgWin and cfgWin.warUI
+  local c = u and u.clip
+  if not (type(c) == "table" and type(c.rule) == "table") then return nil end
+  return { label = c.label, skill = c.skill, rank = c.rank, from = c.from,
+    n = table.getn(c.rule.expr or {}) }
+end
+
+function EVAL_WAR_CLIP_COPY(profIdx, idx)
+  local w2 = warCfg()
+  local pi = profIdx or (w2.activeProfile or 1)
+  local p = w2.profiles and w2.profiles[pi]
+  local r = p and p.skills and p.skills[idx]
+  local cp = warRuleCopy(r)
+  local u = cfgWin and cfgWin.warUI
+  if not (cp and u) then return false end
+  local lbl = tostring(r.skill or "")
+  if r.rank ~= nil then lbl = lbl .. "(" .. tostring(r.rank) .. ")" end
+  u.clip = { rule = cp, label = lbl, skill = r.skill, rank = r.rank, from = tostring(p.name or "") }
+  say(L("W_CLIP_DONE", lbl, tostring(p.name or "")))
+  if type(EVAL_WAR_TAB_REFRESH) == "function" then EVAL_WAR_TAB_REFRESH() end
+  return true
+end
+
+function EVAL_WAR_CLIP_INSERT(profIdx, idx)
+  local w2 = warCfg()
+  local pi = profIdx or (w2.activeProfile or 1)
+  local p = w2.profiles and w2.profiles[pi]
+  local u = cfgWin and cfgWin.warUI
+  local c = u and u.clip
+  if not (p and p.skills and p.skills[idx]) then return false end
+  if not (type(c) == "table" and type(c.rule) == "table") then return false end
+  local cp = warRuleCopy(c.rule)
+  if not cp then return false end
+  table.insert(p.skills, idx + 1, cp)
+  say(L("W_INS_DONE", tostring(cp.skill or ""), tostring(p.name or "")))
+  if type(EVAL_WAR_TAB_REFRESH) == "function" then EVAL_WAR_TAB_REFRESH() end
+  return true
+end
+
 function EVAL_WAR_TAB_REFRESH()
   warRefreshTick() -- ★1.71.2 计数（见 warRefreshTick 说明：只验数据验不出「没刷新」）
   if not EVAL_IS_SCANNED() then EVAL_GO_RESCAN(true, "auto") end -- 1.32.9 自愈：初始化重扫若早于动作条就绪，这里补扫（否则技能行图标全灰）
@@ -2917,6 +3103,28 @@ function EVAL_WAR_TAB_REFRESH()
   --     所以这里**只在「一键宏」Tab 正激活时才动显隐**，数据（文字 / 配色 / 图标 / 品阶）照旧每次都刷。
   --   ★顺序也对得上：SETTAB(2) 先把本页控件全 Show，再调本函数把「没有对应技能的空行」Hide 掉。
   local warTabOn = (cfgWin.tab == 2)
+  -- ★★★1.75.74 「复制的是哪个技能」标题右侧那一行：每次刷新同步（无复制态 = 清字 + 收起）
+  if warUI.clipBg then
+    local cl = warUI.clip
+    local clOn = (type(cl) == "table" and type(cl.rule) == "table")
+    if clOn then
+      pcall(warUI.clipText.SetText, warUI.clipText,
+        uiClip(L("W_CLIP_SHOW", tostring(cl.label or cl.skill or "?")), warUI.clipMaxUnits or 12))
+      -- ★图标与技能行同一套（wicon）；取不到就画灰块 —— 绝不空着（同技能行的处置）
+      local ct = (type(wicon) == "function") and wicon(cl.rule.skill) or nil
+      if ct then
+        pcall(warUI.clipIcon.SetTexture, warUI.clipIcon, ct)
+        pcall(warUI.clipIcon.SetVertexColor, warUI.clipIcon, 1, 1, 1)
+      else
+        uiSolid(warUI.clipIcon, 0.25, 0.25, 0.25, 1)
+      end
+    else
+      pcall(warUI.clipText.SetText, warUI.clipText, "")
+    end
+    for _, wgt in ipairs({ warUI.clipBg, warUI.clipIcon, warUI.clipText, warUI.clipHit }) do
+      if clOn and warTabOn then pcall(wgt.Show, wgt) else pcall(wgt.Hide, wgt) end
+    end
+  end
   local w2 = warCfg()
   for i, pb in ipairs(warUI.profBtns) do
     local prof = w2.profiles[i]
@@ -3550,7 +3758,8 @@ function EVAL_BIND_KEYLIST()
   local cats = {
     { label = L("BIND_CAT_F"),      keys = { "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12" } },
     { label = L("BIND_CAT_NUM"),    keys = { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0" } },
-    { label = L("BIND_CAT_LETTER"), keys = { "Q", "E", "R", "T", "F", "G", "Z", "X", "C", "V", "B" } },
+    -- ★1.75.74b 字母键按用户点名的顺序追加 6 个（原 11 个：Q E R T F G Z X C V B）
+    { label = L("BIND_CAT_LETTER"), keys = { "Q", "E", "R", "T", "F", "G", "Z", "X", "C", "V", "B", "Y", "H", "N", "U", "J", "M" } },
     { label = L("BIND_CAT_MOUSE"),  keys = { "BUTTON3", "BUTTON4", "BUTTON5", "MOUSEWHEELUP", "MOUSEWHEELDOWN" } },
     { label = L("BIND_CAT_MOD"),    keys = { "SHIFT-1", "SHIFT-2", "SHIFT-3", "SHIFT-4", "CTRL-1", "CTRL-2", "CTRL-3", "CTRL-4", "ALT-1", "ALT-2", "ALT-3", "ALT-4", "SHIFT-Q", "SHIFT-E", "SHIFT-R" } },
   }
@@ -3582,83 +3791,398 @@ function EVAL_BIND_PICK(key)
   if type(EVAL_PM_PICK) == "function" then return EVAL_PM_PICK(key) end
 end
 
+-- ============================================================================
+-- ★★★1.75.74 按键绑定「按角色」（用户定稿：插件自管 · 默认开 · 载入期对账 · 冲突抢回并播报）
+--
+--   ★为什么必须插件自管：客户端把按键存在**账号级**文件里（真机实测
+--     `%LOCALAPPDATA%\Azeroth\Saved\Account\<账号>\Keybinds.ini` —— 一个账号一份、所有角色共用；
+--     角色目录的 CharacterSave.ini 里只有 `[CharKeybind] bCharacterSpecificKeys=False`）
+--     ⇒ 角色 A 绑的键，角色 B 登录时**照样在**（换角色时内存里的绑定表也不重置）。
+--   ★不用客户端原生那档「角色专用按键」（bCharacterSpecificKeys + LoadBindings）：它切的是
+--     **整张绑定表**（打开那一刻角色集若为空，玩家的 Q/E/R、滚轮会一起失效）⇒ 本项目明确不碰。
+--
+--   本表 = 全账号各角色的绑定记录（写进**账号级**存档，按角色分桶）：
+--     war.bindByChar[<角色键>][方案序号] = { key = "E", slot = 5 }
+--   ★为什么放账号级而不是角色级存档：**摘遗留必须能枚举别的角色绑过什么键** ——
+--     角色级存档只看得到自己，就只剩「盲解绑 ACTIONBUTTON1~12」这条会把玩家 Q/E/R 删掉的路。
+--
+--   ★★★绝不许做的一件事：**遍历 ACTIONBUTTON1~12 全量解绑**（那些命令名就是玩家自己的动作条键，
+--     真机 LIHAIBOAS2 的 `ACTIONBUTTON1=Q / 2=E / 3=R`）——只碰**自己账上记过的 (键, 格) 组合**。
+-- ============================================================================
+
+-- 角色键（唯一来源）：UnitName("player")；能读到服务器名就带上（同账号跨服才需要）。
+--   ★拿不到 ⇒ nil ⇒ 调用方一律**如实降级**（绝不编一个名字把记录写到别人名下）。
+function EVAL_BIND_CHARKEY()
+  local nm = nil
+  if type(UnitName) == "function" then
+    local ok, v = pcall(UnitName, "player")
+    if ok and type(v) == "string" and v ~= "" then nm = v end
+  end
+  if not nm then return nil end
+  if type(GetRealmName) == "function" then
+    local ok2, r = pcall(GetRealmName)
+    if ok2 and type(r) == "string" and r ~= "" then return nm .. "-" .. r end
+  end
+  return nm
+end
+
+-- 本角色的记录表（方案序号 → { key=, slot= }）；create=true 时缺就建。返回 表, 角色键
+function EVAL_BIND_CHAR_TBL(create)
+  local ck = EVAL_BIND_CHARKEY()
+  if not ck then return nil, nil end
+  local w2 = warCfg()
+  if type(w2.bindByChar) ~= "table" then
+    if not create then return nil, ck end
+    w2.bindByChar = {}
+  end
+  local t = w2.bindByChar[ck]
+  if type(t) ~= "table" then
+    if not create then return nil, ck end
+    t = {}
+    w2.bindByChar[ck] = t
+  end
+  return t, ck
+end
+
+-- ★读口：全项目只走这几个（别再直接摸 bindByChar —— 「按存储格式分派」必须收进少数几个口）
+function EVAL_BIND_KEY(pidx)
+  local t = EVAL_BIND_CHAR_TBL(false)
+  local r = t and t[pidx]
+  return (type(r) == "table" and type(r.key) == "string" and r.key ~= "") and r.key or nil
+end
+function EVAL_BIND_SLOT(pidx)
+  local t = EVAL_BIND_CHAR_TBL(false)
+  local r = t and t[pidx]
+  return (type(r) == "table" and type(r.slot) == "number") and r.slot or nil
+end
+function EVAL_BIND_ALL()
+  local w2 = warCfg()
+  return (type(w2.bindByChar) == "table") and w2.bindByChar or nil
+end
+
+-- 某个 ACTIONBUTTON 命令当前绑着哪几个键（客户端最多 2 个）；返回表（可能为空）
+function EVAL_BIND_CMD_KEYS(cmd)
+  local out = {}
+  if type(cmd) ~= "string" or type(GetBindingKey) ~= "function" then return out end
+  local ok, k1, k2 = pcall(GetBindingKey, cmd)
+  if not ok then return out end
+  if type(k1) == "string" and k1 ~= "" then out[#out + 1] = k1 end
+  if type(k2) == "string" and k2 ~= "" then out[#out + 1] = k2 end
+  return out
+end
+
+-- 落盘（唯一出口）：只在「真的改了」时调用
+function EVAL_BIND_SAVE()
+  if type(SaveBindings) ~= "function" then return false end
+  pcall(SaveBindings, (type(GetCurrentBindingSet) == "function" and GetCurrentBindingSet()) or 1)
+  return true
+end
+
+-- ★有界诊断环（30 条、最新在最前）：对账与自检的读数都进它 ⇒ AI 直接从存档读，不用玩家转述
+function EVAL_BIND_NOTE(line)
+  local w2 = warCfg()
+  local log = w2.bindLog
+  if type(log) ~= "table" then log = {} w2.bindLog = log end
+  table.insert(log, 1, tostring(line or ""))
+  while table.getn(log) > 30 do table.remove(log) end
+  return true
+end
+
+-- ★一次性迁移（账号级旧表 → 当前角色）：老存档里 bindKeys/bindSlots 是全账号共用的一份，
+--   升级后记在「当前登录角色」名下（用户选定：默认开 + 迁移给当前角色），并把旧表退役。
+--   ★拿不到角色名 ⇒ **不标记**、下次登录再来（否则标志立上了、记录却丢了）。
+function EVAL_BIND_MIGRATE()
+  local w2 = warCfg()
+  if w2.bindPerCharMigrated then return 0, nil end
+  local ck = EVAL_BIND_CHARKEY()
+  if not ck then return 0, nil end
+  local oldK = w2.bindKeys
+  local oldS = w2.bindSlots
+  local n = 0
+  if type(oldK) == "table" or type(oldS) == "table" then
+    local t = nil
+    for pidx, key in pairs(oldK or {}) do
+      if type(key) == "string" and key ~= "" then
+        if not t then t = EVAL_BIND_CHAR_TBL(true) end
+        if t then
+          local rec = t[pidx]
+          if type(rec) ~= "table" then rec = {} t[pidx] = rec end
+          rec.key = key
+          local s = (type(oldS) == "table") and oldS[pidx] or nil
+          if type(s) == "number" then rec.slot = s end
+          n = n + 1
+        end
+      end
+    end
+  end
+  w2.bindKeys, w2.bindSlots = nil, nil -- 账号级旧表退役（不再写、不再读）
+  w2.bindPerCharMigrated = true
+  return n, ck
+end
+
+-- ★方案删除后的绑定左移（只动**本角色**的记录；调用点在 table.remove 之前，n0 = 旧条数）
+function EVAL_BIND_SHIFT(idx, n0)
+  local t = EVAL_BIND_CHAR_TBL(false)
+  if type(t) ~= "table" then return 0 end
+  local nt, moved = {}, 0
+  for i = 1, (tonumber(n0) or 0) do
+    if i ~= idx and t[i] ~= nil then
+      local j = (i < idx) and i or (i - 1)
+      nt[j] = t[i]
+      moved = moved + 1
+    end
+  end
+  for k in pairs(t) do t[k] = nil end
+  for k, v in pairs(nt) do t[k] = v end
+  if moved > 0 then EVAL_BIND_SAVE() end
+  return moved
+end
+
+-- ★★★载入期对账（幂等）。返回一张结果表（数字供播报/自检）：
+--   { charKey, bound, leftover, retaken, moved, unbound, skipped, why }
+--   ① 摘遗留：别的角色记过的 (键, 格) 组合，若那个键现在仍绑着我们的命令 ⇒ 解绑。
+--      ★两道保险：**只碰账上组合**；且**本角色那一格没有技能**（有技能 ⇒ 那个键多半是你自己
+--        在这个角色上给该格设的键 ⇒ 绝不动它）。
+--   ② 复核本角色记录：格被占了 / 格上有别人的键 / 我们的键被改绑了 ⇒ 换格、抢回。
+--   ③ 只有真的改了才 SaveBindings。
+function EVAL_BIND_SYNC()
+  local res = { charKey = nil, bound = 0, leftover = 0, retaken = 0, moved = 0, unbound = 0, skipped = 0, why = "" }
+  local ck = EVAL_BIND_CHARKEY()
+  res.charKey = ck
+  local w2 = warCfg()
+  local all = EVAL_BIND_ALL()
+  local changed = false
+  -- ① 摘其它角色的遗留
+  if ck and type(all) == "table" then
+    for name, t in pairs(all) do
+      if name ~= ck and type(t) == "table" then
+        for _, r in pairs(t) do
+          if type(r) == "table" and type(r.key) == "string" and r.key ~= "" and type(r.slot) == "number" then
+            local cmd = EVAL_BIND_SLOT_CMD(r.slot)
+            local occupied = false
+            if type(HasAction) == "function" then
+              local okh, has = pcall(HasAction, r.slot)
+              occupied = (okh and has) and true or false
+            end
+            if cmd and not occupied then
+              local okA, act = pcall(GetBindingAction, r.key)
+              if okA and type(act) == "string" and act == cmd then
+                pcall(SetBinding, r.key)
+                res.leftover = res.leftover + 1
+                changed = true
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+  if not ck then res.why = "nochar" return res end
+  local t = EVAL_BIND_CHAR_TBL(false)
+  if type(t) ~= "table" then
+    res.why = "norec"
+    -- ★本角色还没有记录，但①可能已经摘掉了别的角色的遗留 ⇒ **那也必须落盘**
+    --   （harness 真跑抓到的真 bug：原来直接 return ⇒ 摘了却没存，下次登录又冒出同一个键）
+    if changed then EVAL_BIND_SAVE() end
+    EVAL_BIND_NOTE(string.format("sync 角色=%s 无记录 遗留=%d", tostring(ck), res.leftover))
+    return res
+  end
+  -- ② 逐条复核（只报到现有方案序号上）
+  local nProf = table.getn(w2.profiles or {})
+  for pidx = 1, nProf do
+    local r = t[pidx]
+    if type(r) == "table" and type(r.key) == "string" and r.key ~= "" then
+      local slot = (type(r.slot) == "number") and r.slot or nil
+      local cmd = slot and EVAL_BIND_SLOT_CMD(slot) or nil
+      local occupied = false
+      if slot and type(HasAction) == "function" then
+        local okh, has = pcall(HasAction, slot)
+        occupied = (okh and has) and true or false
+      end
+      -- 这一格命令上「除我们自己的键以外」还有谁的键
+      local foreign = {}
+      if cmd then
+        for _, k in ipairs(EVAL_BIND_CMD_KEYS(cmd)) do
+          if k ~= r.key then foreign[#foreign + 1] = k end
+        end
+      end
+      -- 2a 该格在本角色上有技能了 / 格上有别人的键 / 格号坏了 ⇒ 换一个干净格
+      if (not cmd) or occupied or (#foreign > 0) then
+        local ns = EVAL_BIND_FREE_SLOT()
+        if ns then
+          pcall(SetBinding, r.key) -- 先从旧格摘掉我们的键（旧格让回给玩家）
+          r.slot = ns
+          res.moved = res.moved + 1
+          changed = true
+        else
+          -- 没有干净格：格上有别人的键就**必须**摘（不摘 ⇒ 那个键会静默触发我们的方案，更糟）；
+          --   仅仅是「格里有技能、没有别人的键」⇒ 我们的键照旧可用，如实记一笔、一个字都不动
+          for _, k in ipairs(foreign) do
+            pcall(SetBinding, k)
+            res.unbound = res.unbound + 1
+            changed = true
+          end
+          if occupied and #foreign == 0 then res.skipped = res.skipped + 1 end
+        end
+      end
+      -- 2b 我们的键被改绑到别处了 ⇒ 抢回（用户选定：抢回 + 如实播报）
+      local cmd2 = EVAL_BIND_SLOT_CMD(r.slot)
+      if cmd2 then
+        local okA, act = pcall(GetBindingAction, r.key)
+        act = (okA and type(act) == "string") and act or ""
+        if act ~= cmd2 then
+          local okS, rs = pcall(SetBinding, r.key, cmd2)
+          if okS and rs then
+            res.retaken = res.retaken + 1
+            changed = true
+          end
+        end
+      end
+      res.bound = res.bound + 1
+    end
+  end
+  if changed then EVAL_BIND_SAVE() end
+  EVAL_BIND_NOTE(string.format("sync 角色=%s 本角色=%d 遗留=%d 抢回=%d 换格=%d 解绑=%d 跳=%d",
+    tostring(ck), res.bound, res.leftover, res.retaken, res.moved, res.unbound, res.skipped))
+  return res
+end
+
 -- 逻辑层（UI 与测试共用一份实现）：绑定 / 清除。★换键时把旧键解绑；绑定后立刻 SaveBindings 持久化。
 --   ★1.71.22 最终形态：命令名 = 客户端**自己认**的 ACTIONBUTTON<n>（实测 12 条在命令表里），
 --     派发由本文件下方的 EVAL_BIND_INSTALL() 接管 ActionButtonUp 完成（不占宏名额、不占动作格）。
+--   ★1.75.74 起记录按角色（见上方大段注释）。
+-- 该格是否「干净」：命令上除了本方案自己记录里的那个键，没有别的键
+--   （★有别人的键 ⇒ 那个键按下去也会触发我们的方案 —— 干净才复用）
+function EVAL_BIND_SLOT_CLEAN(slot, pidx)
+  local cmd = EVAL_BIND_SLOT_CMD(slot)
+  if not cmd then return false end
+  local mine = EVAL_BIND_KEY(pidx)
+  for _, k in ipairs(EVAL_BIND_CMD_KEYS(cmd)) do
+    if not (mine and k == mine) then return false end
+  end
+  return true
+end
+
 function EVAL_BIND_DO(pidx, key)
   if type(key) ~= "string" or key == "" then return false, "nokey" end
   local w2 = warCfg()
   if not (w2.profiles and w2.profiles[pidx]) then return false, "noprof" end
-  -- 已有格就直接复用；没有才挑一个**完全无主**的格（不抢用户已有的键位）
-  w2.bindSlots = w2.bindSlots or {}
-  local slot = w2.bindSlots[pidx]
-  if type(slot) ~= "number" then
-    slot = EVAL_BIND_FREE_SLOT()
-    if not slot then return false, "noslot" end
-    w2.bindSlots[pidx] = slot
+  local t = EVAL_BIND_CHAR_TBL(true)
+  if not t then return false, "nochar" end
+  -- ★一键只归一方案：本角色别的方案上若已绑同一个键，先把那条记录摘掉
+  --   （否则状态里会出现「两个方案都绑着 E」，而实际只有一个命令吃得到那个键）
+  for i, r in pairs(t) do
+    if i ~= pidx and type(r) == "table" and r.key == key then t[i] = nil end
+  end
+  local isNew = (type(t[pidx]) ~= "table")
+  local rec = t[pidx]
+  if isNew then rec = {} t[pidx] = rec end
+  -- 已有格且那一格仍「干净」才复用；否则重新挑一个干净格（不抢玩家已有的键位）
+  local slot = rec.slot
+  local borrowed = nil
+  if type(slot) ~= "number" or not EVAL_BIND_SLOT_CLEAN(slot, pidx) then
+    local kind, oldKeys = nil, nil
+    slot, kind, oldKeys = EVAL_BIND_FREE_SLOT()
+    if not slot then if isNew then t[pidx] = nil end return false, "noslot" end
+    rec.slot = slot
+    if kind == "noaction" then borrowed = oldKeys end
   end
   local cmd = EVAL_BIND_SLOT_CMD(slot)
-  if not cmd then return false, "noslotcmd" end
+  if not cmd then if isNew then t[pidx] = nil end return false, "noslotcmd" end
   local ok, r = pcall(SetBinding, key, cmd)
-  if not (ok and r) then return false, "reject" end
-  w2.bindKeys = w2.bindKeys or {}
-  local old = w2.bindKeys[pidx]
+  if not (ok and r) then if isNew then t[pidx] = nil end return false, "reject" end
+  local old = rec.key
   if type(old) == "string" and old ~= "" and old ~= key then pcall(SetBinding, old) end -- 换键：解掉旧键
-  w2.bindKeys[pidx] = key
-  if type(SaveBindings) == "function" then
-    pcall(SaveBindings, (type(GetCurrentBindingSet) == "function" and GetCurrentBindingSet()) or 1)
+  rec.key = key
+  -- ★规则③借来的格（空格但命令上已有键）：那几个键本来指向**空动作**（按了什么都不发生）
+  --   ⇒ 必须一并解绑，否则它们会**静默触发我们的方案**（比原本什么都不发生更糟）
+  if type(borrowed) == "table" then
+    for _, k in ipairs(borrowed) do
+      if k ~= key then pcall(SetBinding, k) end
+    end
   end
+  EVAL_BIND_SAVE()
   -- 保证接管已装上（运行中立即生效；装过就是幂等的 no-op）
   EVAL_BIND_INSTALL()
+  EVAL_BIND_NOTE(string.format("bind 角色=%s 方案%d %s -> ACTIONBUTTON%d",
+    tostring(EVAL_BIND_CHARKEY()), pidx, tostring(key), slot))
   return true, key, slot
 end
 
 -- ★1.71.20 左键点「方案」标签：把当前绑定情况打到聊天框（用户：「左键点击<标题方案>.日志打印方案绑定情况.」）。
 --   ★只打印、不动任何绑定；没有绑定时**如实说没有**（不是静默什么都不出）。
+--   ★1.75.74 起多报一行「本角色是谁、绑了几条」（记录按角色存）。
 function EVAL_BIND_STATUS()
   local w2 = warCfg()
   local n = 0
+  local ck = EVAL_BIND_CHARKEY()
   say("— " .. L("BIND_L_TIP_T") .. " —")
-  if w2.bindKeys then
-    for i = 1, table.getn(w2.profiles or {}) do
-      local key = w2.bindKeys[i]
-      if type(key) == "string" and key ~= "" then
-        n = n + 1
-        say(string.format(L("BIND_ST_ROW"), i, tostring(w2.profiles[i].name or i), key))
-      end
+  if not ck then
+    say(L("BIND_NOCHAR"))
+    return 0
+  end
+  for i = 1, table.getn(w2.profiles or {}) do
+    local key = EVAL_BIND_KEY(i)
+    if key then
+      n = n + 1
+      say(string.format(L("BIND_ST_ROW"), i, tostring(w2.profiles[i].name or i), key))
     end
   end
   if n == 0 then say(L("BIND_ST_NONE")) end
+  say(string.format(L("BIND_CHAR_ROW"), tostring(ck), n))
+  EVAL_BIND_NOTE(string.format("status 角色=%s 本角色=%d", tostring(ck), n))
   return n
 end
 
--- ★1.71.19 一键清除**全部**自定义绑定（右键点「方案」标签）：逐键解绑 + 清表 + 存档；返回清掉的个数。
+-- ★1.71.19 一键清除**全部**自定义绑定（右键点「方案」标签）：逐条解绑 + 清账 + 存档。
+--   ★1.75.74 语义跟随「按角色」：清的是**整个账号**上的本插件绑定（本角色 + 其它角色遗留），
+--     并如实报三个数（本角色 N 条 ｜ 其它角色 M 条 ｜ 实际解绑 K 个键）。
+--   ★只解绑「那个键现在真的还绑着我们的命令」的（玩家自己改绑过的键**一个都不碰**）。
 function EVAL_BIND_CLEAR_ALL()
   local w2 = warCfg()
-  local n = 0
-  if w2.bindKeys then
-    for _, key in pairs(w2.bindKeys) do
-      if type(key) == "string" and key ~= "" then pcall(SetBinding, key) n = n + 1 end
+  local mine, others, unbound = 0, 0, 0
+  local ck = EVAL_BIND_CHARKEY()
+  local all = EVAL_BIND_ALL()
+  if type(all) == "table" then
+    for name, t in pairs(all) do
+      if type(t) == "table" then
+        for _, r in pairs(t) do
+          if type(r) == "table" and type(r.key) == "string" and r.key ~= "" then
+            local cmd = EVAL_BIND_SLOT_CMD(r.slot)
+            if cmd then
+              local okA, act = pcall(GetBindingAction, r.key)
+              if okA and type(act) == "string" and act == cmd then
+                pcall(SetBinding, r.key)
+                unbound = unbound + 1
+              end
+            end
+            if ck and name == ck then mine = mine + 1 else others = others + 1 end
+          end
+        end
+      end
     end
-    w2.bindKeys = nil
   end
-  -- 格映射一并清掉（我们只是借用了这个命令行，没动过格子里的东西，无需还原动作格）
-  w2.bindSlots = nil
-  if type(SaveBindings) == "function" then
-    pcall(SaveBindings, (type(GetCurrentBindingSet) == "function" and GetCurrentBindingSet()) or 1)
-  end
-  return n
+  w2.bindByChar = nil
+  w2.bindKeys, w2.bindSlots = nil, nil -- 历史（账号级）表一并退役
+  EVAL_BIND_SAVE()
+  EVAL_BIND_NOTE(string.format("clearall 角色=%s 本角色=%d 其它=%d 解绑=%d",
+    tostring(ck), mine, others, unbound))
+  return unbound, mine, others
 end
 
 function EVAL_BIND_CLEAR(pidx)
-  local w2 = warCfg()
-  local old = w2.bindKeys and w2.bindKeys[pidx]
-  if type(old) == "string" and old ~= "" then pcall(SetBinding, old) end
-  if w2.bindKeys then w2.bindKeys[pidx] = nil end
-  if w2.bindSlots then w2.bindSlots[pidx] = nil end
-  if type(SaveBindings) == "function" then
-    pcall(SaveBindings, (type(GetCurrentBindingSet) == "function" and GetCurrentBindingSet()) or 1)
+  local t = EVAL_BIND_CHAR_TBL(false)
+  local rec = t and t[pidx]
+  local old = (type(rec) == "table") and rec.key or nil
+  local oldSlot = (type(rec) == "table") and rec.slot or nil
+  if type(old) == "string" and old ~= "" then
+    local cmd = oldSlot and EVAL_BIND_SLOT_CMD(oldSlot) or nil
+    local okA, act = pcall(GetBindingAction, old)
+    -- ★只解绑「那个键现在真的还绑着我们的命令」的（玩家自己改绑过的键不动）
+    if cmd and okA and type(act) == "string" and act == cmd then pcall(SetBinding, old) end
   end
+  if t then t[pidx] = nil end
+  EVAL_BIND_SAVE()
   return true
 end
 
@@ -3701,14 +4225,14 @@ end
 EVAL_BIND_ORIG_DOWN = nil
 EVAL_BIND_ORIG_UP = nil
 
--- 格号 → 方案号 映射（从配置重建，纯读；返回 table）。★单一真源 = cfg.bindKeys/bindSlots
+-- 格号 → 方案号 映射（从配置重建，纯读；返回 table）。
+--   ★单一真源 = 本角色记录表 war.bindByChar[<角色键>]（1.75.74 起按角色；读口见 EVAL_BIND_SLOT）
 function EVAL_BIND_SLOT_MAP()
-  local w2 = warCfg()
   local map = {}
-  local slots = w2.bindSlots
-  if type(slots) == "table" then
-    for pidx, slot in pairs(slots) do
-      if type(slot) == "number" then map[slot] = pidx end
+  local t = EVAL_BIND_CHAR_TBL(false)
+  if type(t) == "table" then
+    for pidx, r in pairs(t) do
+      if type(r) == "table" and type(r.slot) == "number" then map[r.slot] = pidx end
     end
   end
   return map
@@ -3786,29 +4310,43 @@ function EVAL_BIND_UNINSTALL()
   return true
 end
 
--- 找一个空闲的动作格命令：优先「该格没放东西 且 该命令没绑键」的（完全无主，不抢用户键位）。
---   ★用户 1.71.22 追问「动作条前面都有具体站位了」→ 所以两轮挑；返回 slot 或 nil。
-function EVAL_BIND_FREE_SLOT(allowTaken)
-  local fallback = nil
+-- 找一个可用的动作格（★1.75.74 重订判据：**命令上没有任何键**才用 —— 这样绝不吞玩家现有按键）。
+--   三档（越靠前越干净），返回 slot, kind, keys：
+--     ① clean ：命令没绑键 **且 格子是空的**（最干净，也最不容易被玩家后来占用）
+--     ② clean ：命令没绑键，格子里有技能 —— 我们只吃**新绑的那个键**，那个技能本来就没有键盘快捷键
+--               （鼠标点动作按钮不走 ActionButtonUp，所以点得动、用得了）
+--     ③ noaction：格子是空的，但命令上已经有一个（或两个）键 —— 那些键本来指向**空动作**（按了什么
+--               都不发生）⇒ 借这一格要**把那几个键一并解绑**，否则它们会静默触发我们的方案（更糟）
+--   ★一档都找不到（主条 12 格全有技能且全有键）⇒ 返回 nil（如实说「本插件不抢你的键」+ 给出路）。
+--   ★旧写法「格子空就行」+ 死参数 allowTaken 已删（那版会把玩家已有键位静默接到方案上）。
+function EVAL_BIND_FREE_SLOT()
+  local t = EVAL_BIND_CHAR_TBL(false) or {}
+  local used = {}
+  for _, r in pairs(t) do
+    if type(r) == "table" and type(r.slot) == "number" then used[r.slot] = true end
+  end
+  local cleanEmpty, cleanAny, noAction, noActionKeys = nil, nil, nil, nil
   for s = 1, 12 do
-    if not EVAL_BIND_SLOT_MAP()[s] then -- 没被我们占用
+    if not used[s] then
       local cmd = EVAL_BIND_SLOT_CMD(s)
+      local ks = EVAL_BIND_CMD_KEYS(cmd)
       local occupied = false
       if type(HasAction) == "function" then
         local okh, has = pcall(HasAction, s)
         occupied = (okh and has) and true or false
       end
-      local taken = false
-      if cmd and type(GetBindingKey) == "function" then
-        local okk, ks = pcall(GetBindingKey, cmd)
-        taken = (okk and type(ks) == "string" and ks ~= "")
+      if #ks == 0 then
+        if not occupied and cleanEmpty == nil then cleanEmpty = s end
+        if cleanAny == nil then cleanAny = s end
+      elseif not occupied and noAction == nil then
+        noAction, noActionKeys = s, ks
       end
-      if not occupied and not taken then return s end      -- ① 完全无主：格子空 + 键没人用
-      if not occupied and fallback == nil then fallback = s end -- ② 备选：格子空但键被占
     end
   end
-  if allowTaken then return fallback end
-  return fallback
+  if cleanEmpty then return cleanEmpty, "clean", {} end
+  if cleanAny then return cleanAny, "clean", {} end
+  if noAction then return noAction, "noaction", noActionKeys end
+  return nil, "none", {}
 end
 
 
@@ -6893,7 +7431,18 @@ end
 --   属于名字本身，导入时**不拆**（守卫见 EVAL_PROFILE_FROM_TEXT）。
 -- 解析容忍 markdown 杂物：# 开头 = 方案名，> 或 < 开头/超长行忽略，无 | 的行忽略。
 
-local ioUI = { root = nil, eb = nil }
+local ioUI = { root = nil, eb = nil, mlOK = nil, sf = nil }
+-- ★★★1.75.74f 输入框的竖线转义（**真机取证换来的**）：
+--   体检读数 918 字节/16 行/0 竖线，而**同一方案离线渲染**是 918 字节/16 行/**16 竖线** ——
+--   字节数一模一样 ⇒ 竖线不是丢了，是**在进框时被换成了等长字符**（本客户端把裸竖线当转义符）。
+--   后果比「看着难受」严重得多：框里的文本再拿去导入 ⇒ 每行都没有「技能名 | 条件」那个分隔符
+--   ⇒ 解析侧拿不到条件 ⇒ **导成无条件技能**（静默坏，本项目最忌讳的一类）。
+--   ⇒ 写框时 `|` → 全角「｜」（预览区一直这么用、客户端画得出来），读回时再还原；两个方向成对。
+--   ★导出侧从不写全角竖线（连接符写的是半角 & | && ||）⇒ 这个转义**无歧义、可逆**。
+--   ★离线 harness 直接跑这两个纯函数（往返 == 原串、竖线个数守恒）。
+function EVAL_IO_EB_ESC(s) return (string.gsub(tostring(s or ""), "|", "｜")) end
+function EVAL_IO_EB_UNESC(s) return (string.gsub(tostring(s or ""), "｜", "|")) end
+-- ★1.75.74d mlOK = SetMultiLine 的**读回自证**（true/false/nil=判不出）；sf = ScrollFrame
 local tplUI = { root = nil } -- 1.44.0 案例模版选单
 
 -- 案例模版库（1.44.0）：**数据已移出本文件**，改放 examples/ 下按职业分文件（见 EvalHelp.toc 的载入顺序）。
@@ -7097,7 +7646,21 @@ function EVAL_HELP_IO_BUILD()
   -- 多行输入框（1.15.1：字体对象优先；本客户端 EditBox 可能不渲染，下方有保底预览区）
   local okEb, eb = pcall(CreateFrame, "EditBox", "EVAL_HELP_IO_EB", root)
   if okEb and eb then
+    -- ★★★1.75.74d 用户：「技能信息输入框是否不支持多行输入？现在是单行输入框」。
+    --   事实先摆清：本客户端**支持**多行 EditBox —— 它自己的宏编辑器 / 邮件正文 / GM 问卷都是
+    --   XML 里的 `multiLine="true"`（证据：tmp/mpq_out 下 Blizzard_MacroUI.xml:397、MailFrame.xml:616）。
+    --   但**Lua 的 SetMultiLine 在本客户端是否真生效，离线判不了**（客户端自己的框走 XML 属性，
+    --   不代表这个 Lua 方法存在）⇒ 调完**读回自证**：有 IsMultiLine 就记 true/false，
+    --   没有就记 nil = **判不出**（绝不假装成功）；Enter 兜底与 /eh go io 体检都读它。
     pcall(eb.SetMultiLine, eb, true)
+    do
+      local ml = nil
+      if type(eb.IsMultiLine) == "function" then
+        local okm, vm = pcall(eb.IsMultiLine, eb)
+        if okm then ml = vm and true or false end
+      end
+      ioUI.mlOK = ml
+    end
     pcall(eb.SetAutoFocus, eb, false)
     pcall(eb.EnableMouse, eb, true)
     -- 1.32.8 编辑区尺寸修正：EditBox 装进 ScrollFrame 精确裁剪到可视框（ebBg 内缩），
@@ -7139,6 +7702,19 @@ function EVAL_HELP_IO_BUILD()
     ebEdge:SetPoint("TOPLEFT", root, "TOPLEFT", 14, -38)
     ebEdge:SetWidth(W - 28) ebEdge:SetHeight(1)
     eb:SetScript("OnEscapePressed", function() pcall(eb.ClearFocus, eb) end)
+    -- ★★★1.75.74d 回车语义（照抄客户端**邮件正文**那个多行框：它的 OnEnterPressed 只做 SetFocus，
+    --   既不提交也不关窗 —— MailFrame.xml:831）：
+    --   · 多行实现下客户端自己会在光标处插一个换行 ⇒ 我们**只保焦点**，绝不插第二个；
+    --   · 读回确认「多行没生效」（ioUI.mlOK == false）⇒ 手动补一个换行（否则回车什么都不做，
+    --     用户看到的就是「这是个单行框」）；
+    --   · 判不出（mlOK == nil）⇒ 走保守路线：**只保焦点**（宁可让客户端自己处理，也不制造双换行）。
+    eb:SetScript("OnEnterPressed", function()
+      if ioUI.mlOK == false then
+        local okT, t = pcall(eb.GetText, eb)
+        if okT and type(t) == "string" then pcall(eb.SetText, eb, t .. "\n") end
+      end
+      pcall(eb.SetFocus, eb)
+    end)
     ioUI.eb = eb
   else
     local noEb = uiText(root, 9, 0.7, 0.5, 0.5)
@@ -7207,7 +7783,8 @@ function EVAL_HELP_IO_BUILD()
     local text = ""
     if ioUI.eb then
       local ok, t = pcall(ioUI.eb.GetText, ioUI.eb)
-      if ok and type(t) == "string" then text = t end
+      -- ★1.75.74f 还原写入时的转义（全角 → 半角）；用户手打半角竖线也不受影响（无全角可还）
+      if ok and type(t) == "string" then text = EVAL_IO_EB_UNESC(t) end
     end
     local ok, msg = ioImportText(text) -- 1.44.0 共用导入（含方案上限 12 修正）
     say(msg)
@@ -7215,7 +7792,8 @@ function EVAL_HELP_IO_BUILD()
   end)
   ioBtn(_bx[2], IO_BW, L("IO_EXPORT"), function()
     if ioUI.eb then
-      pcall(ioUI.eb.SetText, ioUI.eb, EVAL_PROFILE_TO_TEXT())
+      -- ★1.75.74f 过 ESC：裸竖线进框会被客户端换掉（见 EVAL_IO_EB_ESC 的说明）
+      pcall(ioUI.eb.SetText, ioUI.eb, EVAL_IO_EB_ESC(EVAL_PROFILE_TO_TEXT()))
       pcall(ioUI.eb.SetFocus, ioUI.eb)
       pcall(ioUI.eb.HighlightText, ioUI.eb)
     end
@@ -7797,11 +8375,93 @@ function EVAL_HELP_IO_REFRESH()
   end
 end
 
+-- ★★★1.75.74d 输入框体检（用户问「是否不支持多行输入」）——**一条命令**把三件事读出来，别靠猜：
+--   ① 多行声明到底生没生效（IsMultiLine 读值口有没有、报什么；没有 = **判不出**）
+--   ② 框里现在几行 / 半角竖线几个 / 全角竖线几个（验证「竖线被客户端文本引擎吃掉」这个根因：
+--      导出的文本进框后若半角竖线为 0、而文本本该有竖线 ⇒ 就是被吃了；存储值没变，导入仍正确）
+--   ③ ScrollFrame 在不在、框高多少（能不能滚、能不能显示多行）
+--   ★纯读：一个字节都不写框（不 SetText、不动焦点）。
+function EVAL_IO_EB_DIAG()
+  local eb = ioUI and ioUI.eb
+  say("— 方案导入导出 · 输入框体检 —")
+  if not eb then
+    say("输入框：**没建出来**（先 /eh cfg → 一键宏设置 → [导入导出] 打开一次再跑）")
+    return
+  end
+  local ml = ioUI.mlOK
+  local mlTxt = (ml == true) and "**已生效**（IsMultiLine 读回 true）"
+    or (ml == false) and "**没生效**（读回 false ⇒ 目前是单行框，回车靠我们兜底补换行）"
+    or "**判不出**（本客户端没有 IsMultiLine 读值口）"
+  say("多行声明：" .. mlTxt)
+  local okT, t = pcall(eb.GetText, eb)
+  if not (okT and type(t) == "string") then say("文本：**读不出来**（GetText 失败）") return end
+  local nl = 0
+  for i = 1, string.len(t) do if string.sub(t, i, i) == "\n" then nl = nl + 1 end end
+  local _, np = string.gsub(t, "|", "|")
+  local _, nfp = string.gsub(t, "｜", "｜")
+  say("文本：" .. tostring(string.len(t)) .. " 字节 · " .. tostring(nl + 1) .. " 行 · 半角竖线 "
+    .. tostring(np) .. " 个 · 全角竖线 " .. tostring(nfp) .. " 个")
+  local okH, h = pcall(eb.GetHeight, eb)
+  say("几何：框高 " .. tostring(okH and h or "?") .. " · ScrollFrame="
+    .. ((ioUI.sf ~= nil) and "有" or "**没有**") .. " · 焦点="
+    .. (function() local okF, f = pcall(eb.HasFocus, eb) return (okF and f) and "有" or "无" end)() .. "")
+  -- ★1.75.74f 判读改成**两个读数并列**（上一版一口断定「被吃了」，而字节数对照说明是**被换成了等长字符**）：
+  --   · 行数 > 1 ⇒ 多行与换行都正常；
+  --   · 半角 0 个而文本本该有 ⇒ 竖线**在进框时被换掉**了（拿同一方案离线渲染能算出本该有几个）；
+  --   · 到底换成了什么、该用哪个替代字符 ⇒ 跑 /eh go io 往返（写进去读回来，自带还原）。
+  say("判读：行数 > 1 ⇒ 多行/换行正常；半角竖线 0 个而文本本该有 ⇒ 竖线在**进框时被换掉**（不是丢了，见字节数对照）")
+  say("要怎么修/换成了什么：跑 /eh go io 往返（写进去读回来，自带还原；会临时改写输入框）")
+end
+
+-- ★★★1.75.74f 输入框**往返自证**（自带还原）：把几个候选串写进框、读回来，看客户端对竖线做了什么。
+--   ★这是**会写**的实验子命令（本项目规矩：要写的另立子命令 + **自带还原**）；
+--     还原失败会**如实说**并提示手动 /reload，绝不静默。
+function EVAL_IO_EB_ROUNDTRIP()
+  local eb = ioUI and ioUI.eb
+  say("— 输入框往返自证（临时改写，最后还原）—")
+  if not eb then
+    say("输入框：**没建出来**（先 /eh cfg → 一键宏设置 → [导入导出] 打开一次再跑）")
+    return
+  end
+  local okT, orig = pcall(eb.GetText, eb)
+  if not (okT and type(orig) == "string") then say("原文读不出来 ⇒ **一个字节都不动**（不冒险）") return end
+  -- ★原文里本来就有几个半角竖线：决定「能不能原样还原」—— 写回时它们同样会被换掉（客户端行为）
+  local _, origPipes = string.gsub(orig, "|", "|")
+  if origPipes > 0 then
+    say("原文含 " .. tostring(origPipes) .. " 个半角竖线 ⇒ 写回时它们**同样会被换掉**（这是本客户端的既有行为，不是本次探测造成的额外破坏）")
+  end
+  local tests = {
+    { "半角竖线", "A|B" },
+    { "全角竖线", "A｜B" },
+    { "竖线带空格", "A | B" },
+  }
+  for i = 1, table.getn(tests) do
+    local nm, s = tests[i][1], tests[i][2]
+    pcall(eb.SetText, eb, s)
+    local okR, got = pcall(eb.GetText, eb)
+    local g = (okR and type(got) == "string") and got or "?"
+    local same = (g == s)
+    say(nm .. "：写 \"" .. s .. "\"（" .. tostring(string.len(s)) .. " 字节）⇒ 读回 \"" .. g .. "\"（"
+      .. tostring(string.len(g)) .. " 字节）" .. (same and "  **原样**" or "  ★**变了**"))
+  end
+  pcall(eb.SetText, eb, orig)
+  local okB, back = pcall(eb.GetText, eb)
+  if okB and back == orig then
+    say("还原：**成功**（原文一字不差）")
+  elseif origPipes > 0 then
+    -- ★如实：这**不是**探测造成的破坏，而是「原文里的竖线本来就会被换掉」的同一件事
+    say("还原：**没能一字不差** —— 原文里那 " .. tostring(origPipes) .. " 个半角竖线写回时又被换掉了（同一个客户端行为）；"
+      .. "要原样文本：点 [导出当前方案] 重新生成，或手动 /reload")
+  else
+    say("还原：★**没还原成原样**（原文不含竖线却也没写回）—— 已尽力，请手动 /reload 一次（如实告知，不假装成功）")
+  end
+end
+
 function EVAL_HELP_IO_TOGGLE()
   if ioUI.root and ioUI.root:IsVisible() then ioUI.root:Hide() return end
   EVAL_HELP_IO_BUILD()
   -- 每次打开默认填入当前方案的导出文本（看一眼格式 / 直接改）
-  if ioUI.eb then pcall(ioUI.eb.SetText, ioUI.eb, EVAL_PROFILE_TO_TEXT()) end
+  if ioUI.eb then pcall(ioUI.eb.SetText, ioUI.eb, EVAL_IO_EB_ESC(EVAL_PROFILE_TO_TEXT())) end -- ★1.75.74f 过 ESC
   EVAL_HELP_IO_REFRESH()
   if ioUI.root then ioUI.root:Show() end
 end
@@ -8273,6 +8933,9 @@ if type(SlashCmdList) == "table" then
       end
     elseif msg == "go io" or msg == "go export" or msg == "go import" then
       EVAL_HELP_IO_TOGGLE()
+    elseif string.find(msg, "go io ", 1, true) == 1 then
+      -- ★1.75.74d 子命令：体检（纯读）/ 往返（会临时改写，自带还原）
+      if string.find(msg, "往返", 1, true) then EVAL_IO_EB_ROUNDTRIP() else EVAL_IO_EB_DIAG() end
     elseif msg == "go list" then
       local w2 = warCfg()
       local p = w2.profiles[w2.activeProfile or 1]
@@ -8596,33 +9259,74 @@ if type(SlashCmdList) == "table" then
           say("⑤ 弹窗函数不存在（Toolbox.lua 没载入新版？）")
         end
       end
-    elseif msg == "go bind" then
-      -- ★1.71.22 现状检查（**诊断用，不再做写入试验**）：派发链路现在是
+    elseif msg == "go bind" or msg == "go 绑定" then
+      -- ★1.71.22 现状检查（**诊断用，不做任何写入试验**）：派发链路现在是
       --   SetBinding(键, "ACTIONBUTTON<格>") + 接管 ActionButtonUp，所以这里只报「这条链路各环的现状」。
       --   旧的 T1/T2 写入型试验已删除（它们验的是已被判死的 Bindings.xml 路线，留着只会误导）。
-      say("— 方案快捷键现状（只读）—")
-      local function gba(k)
-        local ok, v = pcall(GetBindingAction, k)
-        return (ok and type(v) == "string") and v or nil
+      -- ★1.75.74 按角色：这条命令也是「为什么绑不上 / 到底哪几格能用」的**唯一读数口** ⇒ 它要给出
+      --   角色键 · 派发前提 · 接管状态 · **主条 12 格逐格（键 / 格内有没有技能 → 能不能当绑定格）** ·
+      --   本角色记录（带读回自证）· 其它角色记录条数。
+      --   ★读数同时进有界环 war.bindLog（30 条，最新在前）⇒ AI 直接从存档读，不用玩家转述；
+      --     ★不在这里自己 /reload（那会把刚打出来的结论当场抹掉），环在你下次自然 /reload 时落盘。
+      say(L("BIND_DIAG_HDR"))
+      local ck = (type(EVAL_BIND_CHARKEY) == "function") and EVAL_BIND_CHARKEY() or nil
+      local function bindDiag(line)
+        say(line)
+        if type(EVAL_BIND_NOTE) == "function" then pcall(EVAL_BIND_NOTE, line) end
       end
-      -- ① 派发前提：客户端自带的 ACTIONBUTTON1~12 在不在命令表里
-      say("① 派发前提：命令表里 ACTIONBUTTON1~12 共 " .. tostring(EVAL_BIND_XML_STATUS()) .. " 条（12 = 前提成立）")
-      -- ② 接管状态：两个转发全局是否已被我们替换
-      say("② 接管状态：ActionButtonUp=" .. type(ActionButtonUp) .. " 已接管=" .. tostring(EVAL_BIND_ORIG_UP ~= nil))
-      -- ③ 逐方案报绑定与占用格
+      bindDiag(string.format(L("BIND_DIAG_CHAR"), tostring(ck or "?")))
+      bindDiag("① 派发前提：命令表里 ACTIONBUTTON1~12 共 " .. tostring(EVAL_BIND_XML_STATUS()) .. " 条（12 = 前提成立）")
+      bindDiag("② 接管状态：ActionButtonUp=" .. type(ActionButtonUp) .. " 已接管=" .. tostring(EVAL_BIND_ORIG_UP ~= nil))
+      -- ③ 主条 12 格逐格：命令上有没有键 + 格子里有没有技能 ⇒ 能不能当绑定格
+      local freeList, takenList, usedList = {}, {}, {}
+      local mapNow = EVAL_BIND_SLOT_MAP()
+      for s = 1, 12 do
+        local ks = EVAL_BIND_CMD_KEYS(EVAL_BIND_SLOT_CMD(s))
+        local occupied = false
+        if type(HasAction) == "function" then
+          local okh, has = pcall(HasAction, s)
+          occupied = (okh and has) and true or false
+        end
+        if mapNow[s] then
+          usedList[#usedList + 1] = s .. "（方案" .. tostring(mapNow[s]) .. "）"
+        elseif #ks == 0 then
+          freeList[#freeList + 1] = s .. (occupied and "（格内有技能）" or "（空格）")
+        else
+          takenList[#takenList + 1] = s .. "=" .. table.concat(ks, ",")
+        end
+      end
+      bindDiag(string.format(L("BIND_DIAG_FREE"),
+        (#freeList > 0) and table.concat(freeList, " ") or "无",
+        (#usedList > 0) and table.concat(usedList, " ") or "无"))
+      if #takenList > 0 then
+        bindDiag(string.format(L("BIND_DIAG_TAKEN"), table.concat(takenList, "  ")))
+      end
+      -- ④ 本角色记录逐条（带读回，验「写进去的真在」）
       local w2 = warCfg()
       local n = 0
       for i = 1, table.getn(w2.profiles or {}) do
-        local key = w2.bindKeys and w2.bindKeys[i]
-        if type(key) == "string" and key ~= "" then
+        local key = EVAL_BIND_KEY(i)
+        if key then
           n = n + 1
-          local slot = w2.bindSlots and w2.bindSlots[i]
-          say(string.format(L("BIND_ST_ROW"), i, tostring(w2.profiles[i].name or i), key)
-            .. "  → ACTIONBUTTON" .. tostring(slot) .. "（读回 " .. tostring(gba(key)) .. "）")
+          local slot = EVAL_BIND_SLOT(i)
+          local okA, act = pcall(GetBindingAction, key)
+          bindDiag(string.format(L("BIND_ST_ROW"), i, tostring(w2.profiles[i].name or i), key)
+            .. " → ACTIONBUTTON" .. tostring(slot) .. "（读回 " .. tostring(okA and act or "?") .. "）")
         end
       end
-      if n == 0 then say(L("BIND_ST_NONE")) end
-      say("绑法：战斗信息UI 方案行**右键**开弹窗；清空：右键「方案」标签；诊断：/eh go diag（写盘，需 /reload）")
+      if n == 0 then bindDiag(L("BIND_ST_NONE")) end
+      -- ⑤ 其它角色的记录条数（它们各自登录时才会绑回去）
+      local others = 0
+      local all = EVAL_BIND_ALL()
+      if type(all) == "table" then
+        for name, t in pairs(all) do
+          if name ~= ck and type(t) == "table" then
+            for _ in pairs(t) do others = others + 1 end
+          end
+        end
+      end
+      bindDiag(string.format(L("BIND_DIAG_REC"), n, others))
+      bindDiag("绑法：战斗信息UI 方案行**右键**开弹窗；清空：右键「方案」标签")
     -- ★★★1.75.3 取证命令：**宏图标号 → 图标**（用户原话：「以下数字对应的编号.编号对应着图标可以自己写命令我配合你扫一下」）
     --   为什么必须有它：用户给的号是**运行期宏图标表下标**（= 图标库 Tab5 悬停提示里的「宏图标序号：%d」，
     --   见 `IconBrowser.lua` 的 `IB_TIP_IDX`），而 `doc/图标路径清单.txt` 是**按字母排序**的白名单
@@ -9508,7 +10212,53 @@ init:SetScript("OnEvent", function(a, b)
     if type(EVAL_TITLE_EGG_CHECK) == "function" then pcall(EVAL_TITLE_EGG_CHECK) end
     -- ★1.71.22 方案快捷键派发上线：登录时把 ActionButtonDown/Up 接管装上（运行中立即生效，无需重启）。
     --   ★装不上要**如实说**（客户端若没这两个全局，按键就永远不会触发 —— 不许假装成功）。
+    -- ★★★1.75.74 按角色：先一次性迁移（账号级旧表 → 当前角色），再**对账重绑**，最后才装派发。
+    --   次序即判据：对账要读「本角色是谁/本角色记录」，必须在派发之前完成。
     if type(EVAL_BIND_INSTALL) == "function" then
+      if type(EVAL_BIND_MIGRATE) == "function" then
+        local okM, migN, migCK = pcall(EVAL_BIND_MIGRATE)
+        if okM and type(migN) == "number" and migN > 0 then
+          say(string.format(L("BIND_MIGRATED"), migN, tostring(migCK)))
+        end
+      end
+      if type(EVAL_BIND_SYNC) == "function" then
+        local okY, r = pcall(EVAL_BIND_SYNC)
+        if okY and type(r) == "table" then
+          if r.why == "nochar" then
+            say(L("BIND_NOCHAR"))
+          elseif (r.leftover + r.retaken + r.moved + r.unbound) > 0 then
+            local line = string.format(L("BIND_SYNC_DONE"), r.bound, r.leftover, r.retaken, r.moved, r.unbound)
+            -- ★抢回/解绑 = 动了玩家自己的按键 ⇒ 这一行**强制可见**（调试日志关着也看得见）；
+            --   其余（摘遗留/换格）是常规自动播报，受「调试日志」总闸门管（1.75.59f 口径）
+            if (r.retaken + r.unbound) > 0 and type(EVAL_SAY_FORCE) == "function" then
+              pcall(EVAL_SAY_FORCE, "|cffff9040按键按角色:|r " .. line)
+            else
+              say(line)
+            end
+          end
+          -- ★本角色还没有绑定、而账号里**别的角色**有 ⇒ 每个角色第一次登录时说一句
+          --   （按角色之后，别的角色绑的键在这个角色上**本来就不该生效**；不说清就是「按键坏了」）
+          if r.why == "norec" and (r.leftover + r.retaken + r.moved + r.unbound) == 0 then
+            local all2 = EVAL_BIND_ALL()
+            local others2 = 0
+            local ck2 = EVAL_BIND_CHARKEY()
+            if type(all2) == "table" then
+              for nm2, t2 in pairs(all2) do
+                if nm2 ~= ck2 and type(t2) == "table" then
+                  for _ in pairs(t2) do others2 = others2 + 1 end
+                end
+              end
+            end
+            if others2 > 0 and ck2 and not (EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.war and
+              type(EVAL_HELP_CONFIG.war.bindNoRecSaid) == "table" and EVAL_HELP_CONFIG.war.bindNoRecSaid[ck2]) then
+              local w2s = warCfg()
+              if type(w2s.bindNoRecSaid) ~= "table" then w2s.bindNoRecSaid = {} end
+              w2s.bindNoRecSaid[ck2] = true
+              say(string.format(L("BIND_NOREC_HINT"), others2))
+            end
+          end
+        end
+      end
       if not EVAL_BIND_INSTALL() then
         say("方案快捷键：本客户端没有 ActionButtonDown/Up 全局，按键派发装不上（功能不可用）")
       end

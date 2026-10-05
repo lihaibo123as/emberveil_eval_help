@@ -2193,9 +2193,16 @@ end
 --      本轮先照他列的顺序都用它；要区分只需换掉本表里第 4 项（绝版）。
 --   ★五个名字都在 IconSem.lua（客户端图标清单）里**逐字存在**（已核）→ 路径真实、本客户端画得出来。
 --     ★文件名**不带** `_TEX` 后缀：`_TEX` 是客户端资源命名，插件侧路径一律 `Interface\Icons\<名>`。
+-- ★★★1.75.74e 用户（截图 + 原话：「方案:神级 替换图标宏图标序号 110」）⇒ **神级档**换成宏图标 **110**
+--   = 「治疗」`Spell_Nature_WispHeal`（图标库悬停里显示的就是这个号与这条路径）。
+--   · 只动**第 5 项**：`SH_SEAL_TIERS[5].max = 9999` = 神级（亮蓝 |cff00bfff）⇒ 方案列表 / 案例模版 /
+--     分享封皮 / 标题栏徽标**四处一起变**（它们共用 EVAL_SHARE_SEAL_ICON 这一个口，绝不各存一份）。
+--   · 名字**逐字**在 IconSem.lua 与 doc/图标路径清单.txt 里存在（闸门 tmp/seal_icon_check.js 守着）。
+--   · ★宏图标号（110）**离线核不了**：图标清单是按字母排序的，行号 ≠ 宏图标号（本项目老坑）——
+--     这一条以用户截图（我们自己的图标库读 GetMacroIconInfo）为准。
 -- ★但「聊天行里能不能画图标」是本客户端**未知数**：`|T` 标记在本仓库与两个参考插件里**使用次数为 0** ⇒ 必须实测。
 local SH_SEAL_ICONS = {
-  "INV_Axe_10", "INV_Spear_04", "INV_Sword_22", "INV_Sword_2H_AshbringerCorrupt", "INV_Misc_ShadowEgg",
+  "INV_Axe_10", "INV_Spear_04", "INV_Sword_22", "INV_Sword_2H_AshbringerCorrupt", "Spell_Nature_WispHeal",
 }
 -- ★★★1.73.42d 实测结论（用户回报探针）：`|T` 内联纹理**不可用**（只有纯符号对照 ④ 渲染出来）
 --   → 聊天行改用**符号**按品阶区分；图标留到**点击后的详情弹窗**里（UI 纹理 100% 可行）。
