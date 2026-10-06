@@ -3750,14 +3750,15 @@ function EVAL_DF_RESET_LIST(names)
 end
 
 -- ★★★1.75.101 重置面板的**只读**状态口（**活口** = `/eh go dfreset` 探针；判据 harness 也读它）：
---   返回：面板建出来没有 / 显示 / 遮罩显示 / 清单条数 / 显示行数 / 超出未列的条数 / 已选条数 / 行池上限。
+--   返回：面板建出来没有 / 显示 / 遮罩显示 / 清单条数 / 显示行数 / **可滚行数** / 已选条数 / 行池上限 /
+--         **行偏移 / 可见窗口 / 是不是全选着**（后三个 = 1.75.102 滚动与全选加的；**只追加在尾部** ⇒ 老读数不变）。
 --   ★一个字节都不写（纯读）—— 探针与判据共用同一份读数，绝不在别处复刻映射逻辑。
 function EVAL_DF_RST_STATE()
   local listed = 0
   local ok, list = pcall(EVAL_DF_CUSTOM_LIST)
   if ok and type(list) == "table" then listed = table.getn(list) end
   local p = DF.rst
-  if type(p) ~= "table" then return false, false, false, listed, 0, 0, 0, DF.RST_ROWS end
+  if type(p) ~= "table" then return false, false, false, listed, 0, 0, 0, DF.RST_ROWS, 0, 0, false end
   local shownRows, selN = 0, 0
   local i
   for i = 1, table.getn(p.rows or {}) do
@@ -3769,7 +3770,10 @@ function EVAL_DF_RST_STATE()
   if p.root and p.root:IsShown() == true then shown = true end
   local covShown = false
   if p.cover and p.cover:IsShown() == true then covShown = true end
-  return true, shown, covShown, listed, shownRows, (p.more or 0), selN, DF.RST_ROWS
+  local cap = p.cap or 0
+  local maxOff = listed - cap
+  if maxOff < 0 then maxOff = 0 end
+  return true, shown, covShown, listed, shownRows, maxOff, selN, DF.RST_ROWS, (p.off or 0), cap, (listed > 0 and selN >= listed)
 end
 
 function EVAL_DF_APPLYALL(quiet)
@@ -5609,9 +5613,21 @@ local DF_TIP_W = 460   -- tooltip 最小宽度（原 Toolbox 的 `TB_LD_TIP_W`�
 --   ★★三条路（全局 `EVAL_DF_RESET` / 选中 `EVAL_DF_RESET_LIST` / 图标左键 `dfResetOne`）**共用同一个逐目标体**
 --     `DF.resetBody` —— 以后改重置步骤只改一处（反向钉守着「不许再各写一份」）。
 --   ★空清单 ⇒ **不开面板**，如实播报「没有任何自定义属性设置，无需重置」（少一个空窗 = 与旧口径一致）。
---   ★行池**有界** `DF.RST_ROWS`：超出的**如实写一行**「还有 N 条未列出」，绝不静默截断。
+--   ★★★1.75.102（用户：「重置图层属性增加个全选/取消全选,滚动机制,最大高度」）三条一起上：
+--     ① **最大高度** `DF.RST_CAP`：可见窗口 = `min(条数, RST_CAP)`，面板高度 = 顶栏 + 窗口 × 行距 + 底栏
+--        ⇒ **不再是**旧写法那套「固定 20 行 + 一行『还有 N 条未列出』」（条数少时留一大片空白、
+--        条数多时只能靠「先重置上面这些，再打开一次」两步走）；
+--     ② **滚动**：行偏移 `p.off` + 双侧夹 `0..max(0, n - cap)`、滚轮**逐行**、**链式接管**（到边界就交给链上的人，
+--        绝不吞别人的滚轮事件）；方向唯一来源 `EVAL_WHEEL_DIR`（全项目同一把尺子，禁位移与方向同号）；
+--     ③ **[全选]/[取消全选]**：命中范围 = **清单里的全部条目**（含滚出视口的），不是只选看得见的那几行。
+--   ★行控件池`DF.RST_ROWS`**有界**（≥ RST_CAP；1.12 没有销毁帧的 API ⇒ 建一次复用，只 Show/Hide）。
+--   ★计数器行 `p.count` **常显**（已选 N / 共 M；需要滚动时再补一段「第 a-b 行 / 共 M」）= 滚动列表的标准件。
 --   ★★★全部函数挂 `DF.rstXxx`（**主 chunk 局部量已到 200 上限**：新增一个文件级 local 就整份载不进去）。
-DF.RST_ROWS = 20
+DF.RST_ROWS = 20      -- 行控件池上限（建一次复用）
+DF.RST_CAP = 16       -- 可见窗口上限 = 面板**最大高度**对应的行数
+DF.RST_ROW_H = 18     -- 行距（行高 17 + 1px 缝）
+DF.RST_TOPY = 62      -- 第一行距顶部的偏移（标题 / 提示 / 计数器各占一段）
+DF.RST_BOT = 38       -- 底栏高度（[全选] 与 [确定] 那一排）
 DF.RST_W = 320
 
 -- 收面板（唯一出口；root 的 OnHide 负责把遮罩一起收）
@@ -5625,19 +5641,54 @@ DF.rstHide = function()
   return true
 end
 
--- 重画（选中态 + [确定] 上的条数）—— 行列内容全部现读 p.list（不缓存别处的数字）
+-- 滚轮方向（唯一来源 `EVAL_WHEEL_DIR`，归一 ±1；桥拿不到就按原始 delta 归一 —— fail-open：
+--   ★绝不因为桥缺席就「整条滚不动」，「拿不到证据就一个字节都不碰」在这里的正确用法是「判不出方向就不动」）
+DF.rstWheelDir = function(a, b)
+  if type(EVAL_WHEEL_DIR) == "function" then
+    local ok, d = pcall(EVAL_WHEEL_DIR, a, b)
+    if ok and type(d) == "number" then return d end
+  end
+  if type(b) ~= "number" or b == 0 then return 0 end
+  if b > 0 then return 1 end
+  return -1
+end
+
+-- 滚动（**唯一入口**）：越界 ⇒ 一个字节都不动、**一次都不重画** ⇒ 返回 false 让链上的人接手
+--   ★夹取口径与全项目一致（`off` 是行偏移、双侧夹 `0..max(0, n - cap)`）；+1 = 上滚（回到前面）
+DF.rstScroll = function(dir)
+  local p = DF.rst
+  if type(p) ~= "table" or type(dir) ~= "number" or dir == 0 then return false end
+  local n = table.getn(p.list or {})
+  local cap = p.cap or 0
+  local maxOff = n - cap
+  if maxOff < 0 then maxOff = 0 end
+  local off = (p.off or 0) - dir
+  if off < 0 then off = 0 end
+  if off > maxOff then off = maxOff end
+  if off == (p.off or 0) then return false end
+  p.off = off
+  DF.rstPaint()
+  return true
+end
+
 DF.rstPaint = function()
   local p = DF.rst
   if type(p) ~= "table" then return 0 end
   local list = p.list or {}
-  local n = 0
+  local n = table.getn(list)
+  local cap = p.cap or 0
+  local maxOff = n - cap
+  if maxOff < 0 then maxOff = 0 end
+  local off = p.off or 0
+  if off < 0 then off = 0 end
+  if off > maxOff then off = maxOff end
+  p.off = off
   local i
   for i = 1, table.getn(p.rows) do
     local row = p.rows[i]
-    local it = list[i]
-    if type(it) == "table" then
+    local it = list[off + i]          -- ★行偏移窗口：第 i 个控件画 list[off + i]
+    if type(it) == "table" and i <= cap then
       local on = (p.sel[it.name] == true)
-      if on then n = n + 1 end
       row.dfName = it.name
       pcall(row.label.SetText, row.label, it.label .. "：" .. table.concat(it.keys, "·"))
       if on then
@@ -5649,26 +5700,36 @@ DF.rstPaint = function()
       end
       pcall(row.Show, row)
     else
-      row.dfName = nil
+      row.dfName = nil                -- ★窗口外的行必须**清掉名字**（留着 = 点一下会改到别人的选中态）
       pcall(row.Hide, row)
     end
   end
-  if p.moreLine then
-    if (p.more or 0) > 0 then
-      pcall(p.moreLine.SetText, p.moreLine, string.format(L("TB_LD_RST_MORE_FMT"), p.more, table.getn(p.rows)))
-      pcall(p.moreLine.Show, p.moreLine)
-    else
-      pcall(p.moreLine.Hide, p.moreLine)
+  -- ★已选计数**只数真选中**：取消选中写的是 sel[k] = false（键还在表里）⇒ pairs 计数会把「取消」也数成选中
+  local selN = 0
+  local k, v
+  for k, v in pairs(p.sel or {}) do if v == true then selN = selN + 1 end end
+  -- 计数器行**常显**；需要滚动时补一段「第 a-b 行 / 共 M」（让「还有多少没看到」一眼可见）
+  if p.count then
+    local txt = string.format(L("TB_LD_RST_COUNT_FMT"), selN, n)
+    if maxOff > 0 then
+      txt = txt .. "  ｜  " .. string.format(L("TB_LD_RST_RANGE_FMT"), off + 1, off + cap, n)
     end
+    pcall(p.count.SetText, p.count, txt)
+  end
+  -- [全选]/[取消全选]：文案按「是不是全选着」现算 ⇒ 按钮上写的永远等于真值
+  local allOn = (n > 0 and selN >= n)
+  if p.allb then
+    if allOn then pcall(p.allb.label.SetText, p.allb.label, L("TB_LD_RST_UNALL"))
+    else pcall(p.allb.label.SetText, p.allb.label, L("TB_LD_RST_ALL")) end
   end
   if p.ok then
-    if n > 0 then pcall(p.ok.label.SetText, p.ok.label, string.format(L("TB_LD_RST_OK_FMT"), n))
+    if selN > 0 then pcall(p.ok.label.SetText, p.ok.label, string.format(L("TB_LD_RST_OK_FMT"), selN))
     else pcall(p.ok.label.SetText, p.ok.label, L("TB_LD_RST_OK0")) end
   end
-  return n
+  return selN
 end
 
--- 装填（每次打开都现读；**每次打开清空选中集** —— 绝不带着上一次的选中悄悄重置）
+-- 装填（每次打开都现读；**每次打开清空选中集 + 滚动位置归零** —— 绝不带着上一次的选中悄悄重置）
 DF.rstFill = function()
   local p = DF.rst
   if type(p) ~= "table" then return 0 end
@@ -5676,10 +5737,16 @@ DF.rstFill = function()
   if not ok or type(list) ~= "table" then list = {} end
   p.list = list
   p.sel = {}
+  p.off = 0                 -- ★每次打开都回到第一行（不带着上一次的滚动位置）
   local total = table.getn(list)
-  local shown = total
-  if shown > table.getn(p.rows) then shown = table.getn(p.rows) end
-  p.more = total - shown
+  local cap = total
+  if cap > DF.RST_CAP then cap = DF.RST_CAP end                  -- ★最大高度：窗口封顶
+  if cap > table.getn(p.rows) then cap = table.getn(p.rows) end  -- 池子兜底（池 ≥ RST_CAP，正常不会触发）
+  p.cap = cap
+  -- 面板高度 = 顶栏 + 可见窗口 × 行距 + 底栏（**最大高度**由 RST_CAP 封顶；条目少就矮一点，不留一片空白）
+  if p.root and type(p.root.SetHeight) == "function" then
+    pcall(p.root.SetHeight, p.root, DF.RST_TOPY + cap * DF.RST_ROW_H + DF.RST_BOT)
+  end
   DF.rstPaint()
   return total
 end
@@ -5697,6 +5764,30 @@ DF.rstOpen = function()
   end
   pcall(p.root.Show, p.root)
   pcall(p.cover.Show, p.cover)
+  return true
+end
+
+-- [全选]/[取消全选]（**唯一入口**）：范围 = **清单里的全部条目**（含滚出视口的），不是只选看得见的那几行
+--   ★「全选着」= 已选数 ≥ 总条数（现算，不看按钮自己那份状态）；取消全选**整表清掉**（不留 false 残键）
+DF.rstAll = function()
+  local p = DF.rst
+  if type(p) ~= "table" then return false end
+  local list = p.list or {}
+  local n = table.getn(list)
+  if n <= 0 then return false end
+  local selN = 0
+  local k, v
+  for k, v in pairs(p.sel or {}) do if v == true then selN = selN + 1 end end
+  if selN >= n then
+    p.sel = {}
+  else
+    local i
+    for i = 1, n do
+      local it = list[i]
+      if type(it) == "table" and type(it.name) == "string" then p.sel[it.name] = true end
+    end
+  end
+  DF.rstPaint()
   return true
 end
 
@@ -5728,7 +5819,7 @@ DF.rstBuild = function()
   if type(CreateFrame) ~= "function" then return false end
   local host = dfHost()
   local anchorTo = host or rawget(_G, "UIParent")
-  local p = { rows = {}, sel = {}, list = {}, more = 0 }
+  local p = { rows = {}, sel = {}, list = {}, off = 0, cap = 0 }
   local cover = CreateFrame("Button", "EVAL_DF_RSTCOVER", host or anchorTo)
   pcall(cover.SetFrameStrata, cover, "FULLSCREEN_DIALOG")
   pcall(cover.SetFrameLevel, cover, 1240)
@@ -5741,7 +5832,7 @@ DF.rstBuild = function()
 
   local root = CreateFrame("Frame", "EVAL_DF_RESETPANEL", host or anchorTo)
   root:SetWidth(DF.RST_W)
-  root:SetHeight(64 + DF.RST_ROWS * 18 + 30)
+  root:SetHeight(DF.RST_TOPY + DF.RST_CAP * DF.RST_ROW_H + DF.RST_BOT)   -- 开面就是**最大高度**；装填时按真实条数收矮
   p.root = root   -- ★1.75.101：**必须在建完就记住**（漏了这一行 = 面板建得出来、永远不显示 —— 判据当场抓到）
   pcall(root.SetFrameStrata, root, "FULLSCREEN_DIALOG")
   pcall(root.SetFrameLevel, root, 1250)
@@ -5787,12 +5878,19 @@ DF.rstBuild = function()
   pcall(hint.SetTextColor, hint, 0.75, 0.75, 0.75)
   pcall(hint.SetText, hint, L("TB_LD_RST_HINT"))
   p.hint = hint
+  -- 计数器行（常显）：已选 N / 共 M ｜ 需要滚动时补「第 a-b 行 / 共 M」
+  local count = root:CreateFontString(nil, "OVERLAY")
+  if type(GameFontHighlightSmall) ~= "nil" then pcall(count.SetFontObject, count, GameFontHighlightSmall) end
+  pcall(count.SetPoint, count, "TOPLEFT", root, "TOPLEFT", 10, -44)
+  pcall(count.SetTextColor, count, 0.80, 0.86, 0.95)
+  pcall(count.SetText, count, "")
+  p.count = count
   local i
   for i = 1, DF.RST_ROWS do
     local b = CreateFrame("Button", "EVAL_DF_RSTROW" .. i, root)
     b:SetWidth(DF.RST_W - 20)
     b:SetHeight(17)
-    if type(b.SetPoint) == "function" then pcall(b.SetPoint, b, "TOPLEFT", root, "TOPLEFT", 10, -(46 + (i - 1) * 18)) end
+    if type(b.SetPoint) == "function" then pcall(b.SetPoint, b, "TOPLEFT", root, "TOPLEFT", 10, -(DF.RST_TOPY + (i - 1) * DF.RST_ROW_H)) end
     if type(b.EnableMouse) == "function" then pcall(b.EnableMouse, b, true) end
     if type(b.RegisterForClicks) == "function" then pcall(b.RegisterForClicks, b, "LeftButtonUp") end
     local rbg = b:CreateTexture(nil, "BACKGROUND")
@@ -5812,15 +5910,36 @@ DF.rstBuild = function()
       pp.sel[b.dfName] = (pp.sel[b.dfName] ~= true)
       DF.rstPaint()
     end)
+    pcall(b.EnableMouseWheel, b, true)
+    local rPrev = nil
+    if type(b.GetScript) == "function" then
+      local okg, g = pcall(b.GetScript, b, "OnMouseWheel")
+      if okg and type(g) == "function" then rPrev = g end
+    end
+    b:SetScript("OnMouseWheel", function(a, bb)
+      if DF.rstScroll(DF.rstWheelDir(a, bb)) == true then return end
+      if rPrev then pcall(rPrev, a, bb) end
+    end)
     b:Hide()
     table.insert(p.rows, b)
   end
-  local moreLine = root:CreateFontString(nil, "OVERLAY")
-  if type(GameFontHighlightSmall) ~= "nil" then pcall(moreLine.SetFontObject, moreLine, GameFontHighlightSmall) end
-  pcall(moreLine.SetPoint, moreLine, "BOTTOMLEFT", root, "BOTTOMLEFT", 10, 34)
-  pcall(moreLine.SetTextColor, moreLine, 0.95, 0.72, 0.45)
-  moreLine:Hide()
-  p.moreLine = moreLine
+  -- 滚轮：面板根 + 每一行都挂（本客户端把滚轮事件给**光标下那个帧**；行铺满列表区 ⇒ 行必须自己会滚）
+  --   ★链式接管：到边界（滚不动）就把事件原样转给原来那个处理体，绝不吞别人的滚轮
+  pcall(root.EnableMouseWheel, root, true)
+  local prevWheel = nil
+  if type(root.GetScript) == "function" then
+    local okg, g = pcall(root.GetScript, root, "OnMouseWheel")
+    if okg and type(g) == "function" then prevWheel = g end
+  end
+  root:SetScript("OnMouseWheel", function(a, b)
+    if DF.rstScroll(DF.rstWheelDir(a, b)) == true then return end
+    if prevWheel then pcall(prevWheel, a, b) end
+  end)
+  -- [全选]/[取消全选]（底栏左）；[确定] 在底栏右 —— 两块并排、绝不重叠
+  local allb = dfBtn(root, 120, 20, L("TB_LD_RST_ALL"), "EVAL_DF_RSTALL")
+  if type(allb.SetPoint) == "function" then pcall(allb.SetPoint, allb, "BOTTOMLEFT", root, "BOTTOMLEFT", 10, 8) end
+  allb:SetScript("OnClick", function() DF.rstAll() end)
+  p.allb = allb
   local okb = dfBtn(root, 140, 20, L("TB_LD_RST_OK0"), "EVAL_DF_RSTOK")
   if type(okb.SetPoint) == "function" then pcall(okb.SetPoint, okb, "BOTTOMRIGHT", root, "BOTTOMRIGHT", -10, 8) end
   okb:SetScript("OnClick", function() DF.rstOk() end)

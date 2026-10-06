@@ -281,12 +281,15 @@ PR["DFRST"] = function(msg)
     say("重置面板：框拖拽模块未载入（tools/DragFrames.lua 没进 .toc？）")
     return
   end
-  local built, shown, cov, listed, rowsShown, more, selN, cap = EVAL_DF_RST_STATE()
+  local built, shown, cov, listed, rowsShown, maxOff, selN, pool, off, win, allOn = EVAL_DF_RST_STATE()
   say(string.format("  面板：%s ｜ %s ｜ 遮罩 %s",
     built and "已建" or "未建", shown and "显示中" or "没显示", cov and "显示中" or "没显示"))
-  say(string.format("  列表：有自定义属性设置的层 %d 条 ｜ 面板显示 %d 行（行池上限 %d）｜ 超出未列 %d 条",
-    tonumber(listed) or 0, tonumber(rowsShown) or 0, tonumber(cap) or 0, tonumber(more) or 0))
-  say(string.format("  选中：%d 条（点行切换；[确定] 只重置选中的）", tonumber(selN) or 0))
+  say(string.format("  列表：有自定义属性设置的层 %d 条 ｜ 面板显示 %d 行（可见窗口 %d ｜ 行池上限 %d）",
+    tonumber(listed) or 0, tonumber(rowsShown) or 0, tonumber(win) or 0, tonumber(pool) or 0))
+  say(string.format("  滚动：行偏移 %d ｜ 还能滚 %d 行（滚轮逐行；到边界就把事件交给链上的人）",
+    tonumber(off) or 0, tonumber(maxOff) or 0))
+  say(string.format("  选中：%d 条 ｜ %s（[全选]/[取消全选] 覆盖全部条目；[确定] 只重置选中的）",
+    tonumber(selN) or 0, allOn and "已全选" or "未全选"))
   if (tonumber(listed) or 0) <= 0 then
     say("  ★清单为空 = 没有任何层设过自定义属性 ⇒ 点 [重置] 会如实播报、**不开面板**（这是对的，不是坏了）")
   end
