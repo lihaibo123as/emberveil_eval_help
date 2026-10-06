@@ -49,7 +49,7 @@ local B = {}
 _G.EH_BAG = B
 
 -- 构建标记（唯一来源）：改本文件顺手 +1，用于「客户端跑的是哪一份」取证
-local BAG_BUILD = "0.3.32"
+local BAG_BUILD = "0.3.33"
 
 local function strVal(v)
   return tostring(v)
@@ -187,6 +187,23 @@ local BAG_T = {
     TINT_ULTRA = "极鲜",
     MENU_BG = "背景透明度",
 MENU_CGAP = "格子间距",
+    MENU_DROP = "右键直投窗口",
+    DROP_ON = "右键直投窗口：开（拍卖行「出售」页 / 写邮件页 / 交易窗 开着时，右键背包物品即放入，不必拖）",
+    DROP_OFF = "右键直投窗口：关（右键照旧只使用物品）",
+    DROP_USAGE = "（开关：设置菜单这一行，或 /ebag drop on|off；只读探针 = /ebag drop）",
+    DROP_OK = "已放进%s：%s",
+    DROP_CURSOR = "东西还留在光标上：请你手动放一下（本插件绝不清光标 —— 清掉就等于把东西弄丢）",
+    DROP_FAIL = "没能把这件物品拿起来（%s），这一下没动手",
+    DROP_UNKNOWN = "判不出",
+    DROP_BLOCK_AH = "拍卖行开着，但当前不在「出售」页（页签 = %s）⇒ 这一下不投、也|cffff8080不使用物品|r",
+    DROP_BLOCK_MAIL = "邮件窗开着，但当前不是「写邮件」页 ⇒ 这一下不投、也|cffff8080不使用物品|r",
+    DROP_BLOCK_NOCLICK = "%s 这个口在本客户端拿不到（那一扇窗的 UI 可能是按需加载的：先开一次它）⇒ 这一下不投、也|cffff8080不使用物品|r",
+    DROP_BLOCK_NOTRADE = "交易窗的读取口（GetTradePlayerItemLink）不可用 ⇒ 这一下不投、也|cffff8080不使用物品|r",
+    DROP_BLOCK_TRADEFULL = "交易格已经满了 ⇒ 这一下不投、也|cffff8080不使用物品|r",
+    DROP_NAME_AH = "拍卖行出售栏",
+    DROP_NAME_MAIL = "邮件附件栏",
+    DROP_NAME_TRADE = "交易格",
+    DEF_SAY_333 = "EH_Bag 0.3.33：新增「右键直投窗口」（默认开）—— 拍卖行「出售」页 / 写邮件页 / 交易窗 开着时，右键背包物品直接放进去，不必拖。要关：设置菜单「右键直投窗口」行，或 /ebag drop off",
     DEF_SAY_314 = "背包初始设置已更新：背包顺序=倒序 · 整理步进=快(0.2s) · 界面缩放=80% · 背包条=关 · 钥匙链=关（右键「设置」或 /ebag help 可随时改回）",
     MENU_WIN_CENTER = "窗口回到屏幕中间",
     WIN_CENTERED = "窗口已回到屏幕中间（%s）",
@@ -330,6 +347,23 @@ MENU_CGAP = "格子间距",
     TINT_ULTRA = "Ultra",
     MENU_BG = "Background opacity",
 MENU_CGAP = "Slot spacing",
+    MENU_DROP = "Right-click into window",
+    DROP_ON = "Right-click into window: ON (with the auction 'Sell' tab / the write-mail page / the trade window open, right-clicking a bag item puts it there - no dragging)",
+    DROP_OFF = "Right-click into window: OFF (right-click just uses the item again)",
+    DROP_USAGE = " (toggle: this menu row, or /ebag drop on|off; read-only probe = /ebag drop)",
+    DROP_OK = "Placed into %s: %s",
+    DROP_CURSOR = "The item is still on the cursor: please place it yourself (this addon never clears the cursor - clearing it means losing the item)",
+    DROP_FAIL = "Could not pick that item up (%s); nothing was done",
+    DROP_UNKNOWN = "unknown",
+    DROP_BLOCK_AH = "The auction house is open, but not on the 'Sell' tab (tab = %s) - nothing is dropped and the item is NOT used",
+    DROP_BLOCK_MAIL = "The mail window is open, but not the write-mail page - nothing is dropped and the item is NOT used",
+    DROP_BLOCK_NOCLICK = "%s is unavailable in this client (that window's UI may be load-on-demand: open it once first) - nothing is dropped and the item is NOT used",
+    DROP_BLOCK_NOTRADE = "The trade read port (GetTradePlayerItemLink) is unavailable - nothing is dropped and the item is NOT used",
+    DROP_BLOCK_TRADEFULL = "All trade slots are full - nothing is dropped and the item is NOT used",
+    DROP_NAME_AH = "the auction sell slot",
+    DROP_NAME_MAIL = "the mail attachment slot",
+    DROP_NAME_TRADE = "the trade slot",
+    DEF_SAY_333 = "EH_Bag 0.3.33: new 'right-click into window' (on by default) - with the auction 'Sell' tab / the write-mail page / the trade window open, right-clicking a bag item puts it there without dragging. To turn it off: the 'Right-click into window' menu row, or /ebag drop off",
     DEF_SAY_314 = "Bag defaults updated: order=reversed · sort step=fast(0.2s) · UI scale=80% · bag bar=off · keyring=off (right-click Settings or /ebag help to change back)",
     MENU_WIN_CENTER = "Center window on screen",
     WIN_CENTERED = "Window centered on screen (%s)",
@@ -473,6 +507,23 @@ MENU_CGAP = "Slot spacing",
     TINT_ULTRA = "Максимум",
     MENU_BG = "Прозрачность фона",
 MENU_CGAP = "Интервал ячеек",
+    MENU_DROP = "ПКМ в окно",
+    DROP_ON = "ПКМ в окно: ВКЛ (при открытой вкладке «Продажа» аукциона / странице письма / окне обмена правый клик по предмету кладёт его туда — без перетаскивания)",
+    DROP_OFF = "ПКМ в окно: ВЫКЛ (правый клик снова только использует предмет)",
+    DROP_USAGE = " (переключатель: эта строка меню или /ebag drop on|off; только чтение = /ebag drop)",
+    DROP_OK = "Положено в %s: %s",
+    DROP_CURSOR = "Предмет остался на курсоре: положите его сами (аддон никогда не очищает курсор — очистка означает потерю предмета)",
+    DROP_FAIL = "Не удалось взять предмет (%s); ничего не сделано",
+    DROP_UNKNOWN = "не определить",
+    DROP_BLOCK_AH = "Аукцион открыт, но не на вкладке «Продажа» (вкладка = %s) — ничего не кладём и предмет НЕ используем",
+    DROP_BLOCK_MAIL = "Окно почты открыто, но это не страница написания письма — ничего не кладём и предмет НЕ используем",
+    DROP_BLOCK_NOCLICK = "%s недоступно в этом клиенте (интерфейс этого окна может загружаться по требованию: сначала откройте его) — ничего не кладём и предмет НЕ используем",
+    DROP_BLOCK_NOTRADE = "Порт чтения обмена (GetTradePlayerItemLink) недоступен — ничего не кладём и предмет НЕ используем",
+    DROP_BLOCK_TRADEFULL = "Все ячейки обмена заняты — ничего не кладём и предмет НЕ используем",
+    DROP_NAME_AH = "лоток продажи аукциона",
+    DROP_NAME_MAIL = "ячейку вложения письма",
+    DROP_NAME_TRADE = "ячейку обмена",
+    DEF_SAY_333 = "EH_Bag 0.3.33: добавлено «ПКМ в окно» (включено по умолчанию) — при открытой вкладке «Продажа» аукциона / странице письма / окне обмена правый клик по предмету кладёт его туда без перетаскивания. Отключить: строка меню «ПКМ в окно» или /ebag drop off",
     DEF_SAY_314 = "Настройки сумок обновлены: порядок=обратный · шаг сортировки=быстро(0.2с) · масштаб=80% · панель сумок=выкл · кольцо ключей=выкл (правый клик «Настройки» или /ebag help)",
     MENU_WIN_CENTER = "Окно в центр экрана",
     WIN_CENTERED = "Окно возвращено в центр экрана (%s)",
@@ -579,6 +630,12 @@ local DEF = {
   -- ★0.3.14：背包顺序默认 **倒序**（第三张图：「背包顺序：倒序」）；
   --   ★只有**缺键**才算「没选过」⇒ 落到新默认；显式写过 `"fwd"`（玩家自己选的正序）一个字节都不动。
   direction = "rev",
+  -- ★★★0.3.33 右键直投窗口（拍卖行→出售页 / 写邮件→附件栏 / 交易窗→空格）：**默认开** ——
+  --   用户定：「以上功能只整合到子插件背包整合的右键功能内，配置设置开关开启关闭，
+  --   只在开启以上事件窗口的时候才生效」。
+  --   ★默认开的理由 = 客户端**原生容器**本来就是这个行为（`ContainerFrameItemButton_OnClick` 的右键分支），
+  --   换成代理背包之后丢的正是它；★行为改变必须出声（`B.init` 末尾一次性播报，标记 `dropSaid333`）。
+  dropWin = true,
 }
 
 -- 整理步进的合法区间（唯一来源；`B.cfg()` 夹取 + `/ebag gap` 写口都读它）——
@@ -611,6 +668,9 @@ function B.cfg()
   -- ★下限夹取（不信存档）：坏数据/手改存档不许把我们拖成「一帧几十次写动作」
   if c.moveGap < B.MOVEGAP_MIN then c.moveGap = B.MOVEGAP_MIN end
   if c.autoShow == nil then c.autoShow = DEF.autoShow end
+  -- ★0.3.33 右键直投窗口：**默认开**（nil ⇒ 物化 true，见 `DEF.dropWin`）——
+  --   只有**显式 false** 才是关（与 `DEF.bar` 那条正好相反，别记混）。
+  if c.dropWin == nil then c.dropWin = DEF.dropWin end
   -- ★0.3.13 品质染色档位：缺键/坏数据（含字符串、越界）一律落成默认档（DEF.tint = 鲜丽）——
   --   `B.tintIdx()` 自己也会回落，这里只负责把「存档里那个坏值」当场纠正成合法序号。
   if type(c.tint) ~= "number" then c.tint = DEF.tint end
@@ -2789,6 +2849,12 @@ local function bindItemButton(btn)
       return
     end
     if mb == "RightButton" then
+      -- ★★★0.3.33 右键直投窗口（拍卖行 / 写邮件 / 交易）：只在那些窗口**开着**时才接管（用户要求）；
+      --   三态返回值 —— "done"/"skip" = 这一下已被我们处理（**绝不回落「使用物品」**：拍卖行开着时
+      --   把东西「用掉」比投不进去更糟）· "none" = 窗口没开 / 开关关 / 按着 Shift·Ctrl ⇒ 照旧使用物品。
+      --   ★Shift+右键 = 使用（原生口径）；Ctrl+右键保持本插件现状（也走使用），两者都不归本功能管。
+      local dw = B.windowDrop(rec, shift, ctrl)
+      if dw ~= "none" then return end
       useSlot(rec)
       return
     end
@@ -4233,11 +4299,13 @@ B.MENU_COLS = 2
 -- ★0.3.13：条数 20 → 21（多了「品质染色」）⇒ `per = 11` = 11 + 10，池 22 ⇒ 余量 1。
 -- ★0.3.14：11 → **12**（条数 21 → **22**：又多了「背景透明度」）⇒ `per = ceil(22/2) = 11` **仍只有 11 行/列**
 --   ⇒ **菜单高度与版式一字未变**；池 24 ⇒ 余量 2（池必须**恒大于**行数，见下）。
-B.MENU_MAXROWS0 = 12
+-- ★0.3.33：12 → **13**（条数 23 → **24**：多了「右键直投窗口」那一行）⇒ `per = ceil(24/2) = 12`
+--   **仍只有 12 行/列** ⇒ **菜单高度与版式一字未变**；池 26 ⇒ 余量 2（池必须**恒大于**行数）。
+B.MENU_MAXROWS0 = 13
 -- 行池：★必须恒 ≥ menuItems() 的条数，且**留一格余量** —— 行是**建一次复用**的池，
 --   超池的行**静默不显示**（不报错、看着就是「少了一项」）⇒ 加了新行忘了加池 = 那一行神秘消失。
---   池 = MENU_COLS × MENU_MAXROWS0 = 24（现 menuItems() 23 条 ⇒ 余量 1 行；★0.3.31h「格子间距」那行就是这么挤进池的）。
-B.MENU_ROWS = 24
+--   池 = MENU_COLS × MENU_MAXROWS0 = 26（现 menuItems() 24 条 ⇒ 余量 2 行；★0.3.33「右键直投窗口」那行加进来时池一起加了）。
+B.MENU_ROWS = 26
 
 -- ★★★开关行的「状态配色」（0.3.7；用户：「设置栏的开关状态在当前设置背景没正确匹配颜色，开状态和
 --   关状态有个颜色」）：开 = 绿、关 = 红、纯数值行（列数/顺序/缩放/动作行）= 中性金。
@@ -4314,6 +4382,252 @@ B.bagLabel = bagLabel
 local function onOff(v)
   if v then return L("ST_ON") end
   return L("ST_OFF")
+end
+
+-- ============ ★★★0.3.33 右键直投窗口（拍卖行 / 写邮件 / 交易）============
+-- 用户：「以上功能只整合到子插件背包整合的右键功能内，配置设置开关开启关闭，只在开启以上事件窗口的时候才生效」。
+--   · 来源 = 三个老插件（`tmp/c/addons/autoitem_right/` 的 FancyAH / FancyMail / FancyTrade，18 / 63 / 21 行）。
+--     它们三个都是**包全局 `UseContainerItem`**（谁后载入谁在外层）。
+--     ★★★那个做法在本项目**绝不能抄**：`UseContainerItem` 在本项目有 **4 个调用点** ——
+--       本文件右键（useSlot）· `Engine.lua` 一键宏「物品:名称」· `Toolbox.lua` 商人助手待售队列 ·
+--       `tools/ConsumableHelper.lua` 用物品 ⇒ 拍卖行一开着，这 4 条**全会被劫持成「挂上拍卖行」**
+--       （一键宏里那条「物品:XX」技能 = 直接把东西上架）。⇒ 只做在**本文件的右键分派里**（唯一调用点、零副作用面）。
+--   · 行为规格 = 客户端**原生** `ContainerFrameItemButton_OnClick` 的右键分支（旁证 = TurtleWoW 抽取物
+--     `tmp/mpq_out/Interface/FrameXML/ContainerFrame.lua:565~648`；本客户端 UI 与它同源，但**帧名与页签只有真机
+--     能证** —— 拍卖行 UI 还是**按需加载**的暴雪插件 `Blizzard_AuctionUI`（toc 写着 `## LoadOnDemand: 1`）
+--     ⇒ 只读探针 = `/ebag drop`）：
+--       拍卖行可见：页签 1（浏览）= 不动 · **页签 3（出售）= 投** · 其它页签（如竞价）= 不动
+--       邮件：**写邮件页**（`SendMailFrame`）可见才投附件（收件箱页不投）
+--       交易：先找**第一个空的**交易格（`GetTradePlayerItemLink(i)` 为空）再投
+--         （原生 `TradeFrame_GetAvailableSlot` 读的是 UI 内部字段 `TradePlayerItem{i}ItemButton.hasItem`，
+--          不在本客户端 API 索引里 ⇒ 不用它，改读有文档的 `GetTradePlayerItemLink`）
+--   · ★★★三条安全口径（比那三个老插件严）：
+--     ① **绝不 `ClearCursor()`**（清光标 = 丢件风险；原生邮件那一支就清了）⇒ 投完**读回自证**：光标还有东西
+--        就如实出声、就地收工让玩家自己放（与 `EH_BagSort` 的 SORT_STOP_CURSOR 同一语义）；
+--     ② **先判「能不能投」再拿**（老插件 FancyTrade 是「先拿起再找空格」⇒ 拿不到槽就把东西留在光标上）；
+--     ③ **判不出就不动手**：帧名 / 页签 / 接口读不出 ⇒ 不接管；★但**也绝不回落到「使用物品」** ——
+--        拍卖行开着时把东西「用掉」比投不进去更糟 ⇒ 三态返回值把这两件事分开。
+--   · 返回值（唯一入口 `B.windowDrop`）：`"done"` = 已投 · `"skip"` = 窗口开着但不能投（**不许使用物品**）
+--     · `"none"` = 窗口没开 / 开关关 / 按着 Shift·Ctrl（调用方照旧 `useSlot`）。
+--   · ★只在那些窗口**开着**时才生效（用户要求）：窗口一个个都关着 ⇒ 这一整段返回 "none"，
+--     调用方与今天**一字不差**（且开关最先判、之后才碰客户端帧）。
+B.DROP_TRACE_MAX = 12
+
+B.dropOn = function()
+  -- ★默认档 = **开**（`DEF.dropWin` = true）⇒ 只有**显式 false** 才是关（口径与 DEF.bar 那条正好相反，别记混）
+  return B.cfg().dropWin ~= false
+end
+
+B.dropText = function()
+  return onOff(B.dropOn())
+end
+
+B.dropAdd = function(s)
+  local c = B.cfg()
+  if type(c.dropTrace) ~= "table" then c.dropTrace = {} end
+  local t = c.dropTrace
+  table.insert(t, strVal(s))
+  while table.getn(t) > B.DROP_TRACE_MAX do
+    table.remove(t, 1)
+  end
+end
+
+-- 帧名解析：**惰性现读**（拍卖行 UI 按需加载 ⇒ 首次开拍卖行之前那个全局根本不存在）；
+--   rawget 直取（不触发 __index）+ isObj 守卫（table/userdata，绝不写 ~= nil）
+B.dropFrame = function(name)
+  local f = rawget(_G, name)
+  if isObj(f) then return f end
+  return nil
+end
+
+-- 可见性：**读不出 = nil = 判不出**（调用方按「不动手」处理）
+B.dropShown = function(f)
+  if isObj(f) ~= true then return nil end
+  if type(f.IsShown) == "function" then
+    local ok, v = pcall(f.IsShown, f)
+    if ok and (v == true or v == false) then return v == true end
+  end
+  if type(f.IsVisible) == "function" then
+    local ok2, v2 = pcall(f.IsVisible, f)
+    if ok2 and (v2 == true or v2 == false) then return v2 == true end
+  end
+  return nil
+end
+
+-- 读一个数字字段（拍卖行的页签等）：读不出 ⇒ nil（判不出，绝不猜）
+B.dropNum = function(f, k)
+  if isObj(f) ~= true then return nil end
+  local get = function() return f[k] end
+  local ok, v = pcall(get)
+  if ok and type(v) == "number" then return v end
+  return nil
+end
+
+-- 「窗口开着但这一下不能投」的如实出声（用户主动点击 ⇒ 强制可见；同一句限频 1s，防连点刷屏）
+B.dropNote = function(s)
+  B.dropAdd("拦下：" .. strVal(s))
+  local now = GetTime()
+  if B.dropSaidAt ~= nil and (now - B.dropSaidAt) < 1.0 then return end
+  B.dropSaidAt = now
+  sayForce(strVal(s))
+end
+
+-- 唯一投递动作：**先判能投（调用方已判）→ 拿起 → 投 → 读回自证**（顺序即判据）
+B.dropDo = function(rec, clickFn, arg, name)
+  pickUp(rec)
+  if cursorHas() ~= true then
+    B.dropAdd(strVal(name) .. "：拿不起来 " .. strVal(rec.bag) .. "," .. strVal(rec.slot))
+    sayForce(L("DROP_FAIL", strVal(name)))
+    return "skip"
+  end
+  local ok = pcall(clickFn, arg)
+  if ok ~= true then
+    -- 投递口自己报错：东西已经在我们手上了 ⇒ 绝不硬清，交给玩家
+    holdForget()
+    B.dropAdd(strVal(name) .. "：投递口报错（东西已在光标上 ⇒ 让玩家自己放）")
+    sayForce(L("DROP_CURSOR"))
+    return "done"
+  end
+  if cursorHas() == true then
+    -- ★绝不 ClearCursor（清 = 丢件）：如实收工，让玩家自己放
+    holdForget()
+    B.dropAdd(strVal(name) .. "：投后光标仍有物品 ⇒ 如实收工（绝不清光标）")
+    sayForce(L("DROP_CURSOR"))
+    return "done"
+  end
+  holdForget()
+  B.dropAdd(strVal(name) .. "：已投 " .. strVal(rec.bag) .. "," .. strVal(rec.slot) .. " " .. strVal(rec.name))
+  sayForce(L("DROP_OK", strVal(name), strVal(rec.name)))
+  B.markDirty(0.05)
+  return "done"
+end
+
+-- ★★★唯一入口：右键落在背包格上时问一句「这一下该不该投进开着的那扇窗」
+B.windowDrop = function(rec, shiftHeld, ctrlHeld)
+  if rec == nil then return "none" end
+  if B.dropOn() ~= true then return "none" end
+  if cursorHas() == true then return "none" end            -- 光标上有东西 ⇒ 这一下是落格（调用方已先处理）
+  if shiftHeld == true or ctrlHeld == true then return "none" end
+  -- ① 拍卖行（顺序照原生：拍卖行 → 邮件 → 交易）
+  local ah = B.dropFrame("AuctionFrame")
+  if B.dropShown(ah) == true then
+    local tab = B.dropNum(ah, "selectedTab")
+    if tab ~= 3 then
+      B.dropNote(L("DROP_BLOCK_AH", (tab == nil and L("DROP_UNKNOWN") or strVal(tab))))
+      return "skip"
+    end
+    local fn = rawget(_G, "ClickAuctionSellItemButton")
+    if type(fn) ~= "function" then
+      B.dropNote(L("DROP_BLOCK_NOCLICK", "ClickAuctionSellItemButton"))
+      return "skip"
+    end
+    return B.dropDo(rec, fn, nil, L("DROP_NAME_AH"))
+  end
+  -- ② 写邮件页（原生要求 MailFrame **与** SendMailFrame 都在；只看 MailFrame = 收件箱页也会投 ⇒ 那是老插件的错法）
+  local mail = B.dropFrame("MailFrame")
+  if B.dropShown(mail) == true then
+    if B.dropShown(B.dropFrame("SendMailFrame")) ~= true then
+      B.dropNote(L("DROP_BLOCK_MAIL"))
+      return "skip"
+    end
+    local fn2 = rawget(_G, "ClickSendMailItemButton")
+    if type(fn2) ~= "function" then
+      B.dropNote(L("DROP_BLOCK_NOCLICK", "ClickSendMailItemButton"))
+      return "skip"
+    end
+    return B.dropDo(rec, fn2, nil, L("DROP_NAME_MAIL"))
+  end
+  -- ③ 交易窗：先找第一个空的交易格（**先判能投再拿** —— 老插件 FancyTrade 是反的）
+  local trade = B.dropFrame("TradeFrame")
+  if B.dropShown(trade) == true then
+    local fn3 = rawget(_G, "ClickTradeButton")
+    if type(fn3) ~= "function" then
+      B.dropNote(L("DROP_BLOCK_NOCLICK", "ClickTradeButton"))
+      return "skip"
+    end
+    if type(GetTradePlayerItemLink) ~= "function" then
+      B.dropNote(L("DROP_BLOCK_NOTRADE"))
+      return "skip"
+    end
+    local maxn = tonumber(rawget(_G, "MAX_TRADABLE_ITEMS")) or 6
+    local slot = nil
+    local i
+    for i = 1, maxn do
+      local ok, v = pcall(GetTradePlayerItemLink, i)
+      if ok and (v == nil or v == "") then
+        slot = i
+        break
+      end
+    end
+    if slot == nil then
+      B.dropNote(L("DROP_BLOCK_TRADEFULL"))
+      return "skip"
+    end
+    return B.dropDo(rec, fn3, slot, L("DROP_NAME_TRADE"))
+  end
+  return "none"
+end
+
+-- ★唯一写口：认 true/false（也认 "on"/"off"）；**无参数 = 只读播报**（活口）；坏输入一个字节都不动
+B.dropSet = function(v)
+  local c = B.cfg()
+  if v == nil then
+    sayForce(L("MENU_DROP") .. " = " .. B.dropText() .. L("DROP_USAGE"))
+    return
+  end
+  local on = nil
+  if v == true or v == false then
+    on = v
+  elseif v == "on" or v == "off" then
+    on = (v == "on")
+  end
+  if on == nil then
+    sayForce(L("MENU_DROP") .. " = " .. B.dropText() .. L("DROP_USAGE"))
+    return
+  end
+  c.dropWin = on
+  sayForce(on and L("DROP_ON") or L("DROP_OFF"))
+end
+
+-- ★0.3.33 **只读**探针：一条命令回答「这一版的右键直投到底能不能用」。
+--   为什么必须真机：帧名 / 页签 / 三个 Click* 口只有运行时能证，而拍卖行 UI 还是**按需加载**的暴雪插件
+--   （`Blizzard_AuctionUI` 的 toc = `## LoadOnDemand: 1` ⇒ 没开过拍卖行时 `AuctionFrame` 根本不存在）。
+--   全只读：只读帧/字段/接口在不在 + 摊开取证环；一个字节都不写存档（除取证环本身）。
+function B.dropDump()
+  local c = B.cfg()
+  sayForce(L("MENU_DROP") .. " = " .. B.dropText() .. L("DROP_USAGE"))
+  local names = { "AuctionFrame", "SendMailFrame", "MailFrame", "TradeFrame", "MerchantFrame" }
+  local i
+  for i = 1, table.getn(names) do
+    local f = B.dropFrame(names[i])
+    local sh = B.dropShown(f)
+    local st = "不在（未加载 / 无此帧）"
+    if f ~= nil then
+      if sh == true then st = "开着"
+      elseif sh == false then st = "关着"
+      else st = "在，但显隐判不出" end
+    end
+    sayForce("  " .. names[i] .. "：" .. st)
+  end
+  local ah = B.dropFrame("AuctionFrame")
+  local tab = B.dropNum(ah, "selectedTab")
+  sayForce("  拍卖行页签 selectedTab = " .. (tab == nil and "判不出" or strVal(tab)) .. "（只在 3 = 出售页投递）")
+  local fns = { "ClickAuctionSellItemButton", "ClickSendMailItemButton", "ClickTradeButton" }
+  for i = 1, table.getn(fns) do
+    sayForce("  " .. fns[i] .. " = " .. (type(rawget(_G, fns[i])) == "function" and "在" or "不在"))
+  end
+  sayForce("  MAX_TRADABLE_ITEMS = " .. strVal(tonumber(rawget(_G, "MAX_TRADABLE_ITEMS")) or "判不出（兜底 6）")
+    .. " ｜ GetTradePlayerItemLink = " .. (type(GetTradePlayerItemLink) == "function" and "在" or "不在")
+    .. " ｜ 光标上有东西 = " .. (cursorHas() and "是" or "否"))
+  local t = c.dropTrace
+  local tn = 0
+  if type(t) == "table" then tn = table.getn(t) end
+  sayForce("  取证环（共 " .. strVal(tn) .. " 条，上限 " .. strVal(B.DROP_TRACE_MAX) .. "）：")
+  for i = 1, tn do
+    sayForce("    " .. strVal(i) .. ". " .. strVal(t[i]))
+  end
+  sayForce("  ★本命令**全只读** · 用法：拍卖行→出售页 / 写邮件页 / 交易窗 开着时，右键背包物品即放入"
+    .. "（Shift+右键 = 照旧使用物品；开关 = 设置菜单「" .. L("MENU_DROP") .. "」行 或 /ebag drop on|off）")
 end
 
 -- 背包条显隐（唯一写口：窗口开着 且 **c.bar == true** 才显示）
@@ -4552,6 +4866,14 @@ function B.menuItems()
       c.autoShow = not (c.autoShow ~= false)
       say(c.autoShow and L("AUTO_ON") or L("AUTO_OFF"))
     end,
+  })
+  -- ★★★0.3.33 右键直投窗口（用户：「只整合到子插件背包整合的右键功能内，配置设置开关开启关闭，
+  --   只在开启以上事件窗口的时候才生效」）—— 唯一写口 B.dropSet（与 /ebag drop 共用）。
+  --   ★这一行加进来时**池也一起加了**（MENU_MAXROWS0 12→13 ⇒ 池 26，见那里的注释）。
+  table.insert(out, {
+    on = B.dropOn(),
+    text = L("MENU_DROP") .. "：" .. B.dropText(),
+    fn = function() B.dropSet(not B.dropOn()) end,
   })
   table.insert(out, {
     text = L("MENU_COLS_FMT", tonumber(c.cols) or DEF.cols),
@@ -7192,6 +7514,12 @@ function B.init()
     B.cfg().def314Said = true
     sayForce(L("DEF_SAY_314"))
   end
+  -- ★0.3.33 一次性出声：本版给右键加了「直投窗口」（拍卖行→出售页 / 写邮件→附件栏 / 交易窗→空格），
+  --   默认**开** —— 老用户在那些窗口开着时的右键行为会变（旧行为 = 使用物品）⇒ 按铁律如实说一次。
+  if B.cfg().dropSaid333 ~= true then
+    B.cfg().dropSaid333 = true
+    sayForce(L("DEF_SAY_333"))
+  end
   -- 载入后 4s 记一份自己的快照（PLAYER_ENTERING_WORLD 可能已经过去了）
   B.snapDue = GetTime() + 4
   B.pumpSync()
@@ -7226,6 +7554,7 @@ local function usage()
   sayForce("/ebag cd = 冷却体检（在走几格 / 客户端写了几次 / 写前比对跳过几次 / 取证环）")
   sayForce("/ebag bankread = 银行读数体检（只读：银行主格逐格的链接/贴图/气泡名，明细落存档）")
   sayForce("/ebag res = 资源体检（只读：15 条固定贴图的「自带/客户端」来源 + 负对照，逐条摊开）")
+  sayForce("/ebag drop [on|off] = 右键直投窗口（拍卖行「出售」页 / 写邮件页 / 交易窗 开着时右键即放入；无参数 = 只读探针：帧名/页签/接口在不在；当前 " .. B.dropText() .. "）")
   sayForce("/ebag trace [N|clear] = 开合取证环（按键到底调了哪个函数）")
   sayForce("构建 " .. BAG_BUILD)
 end
@@ -7669,6 +7998,16 @@ function B.cmd(msg)
   elseif msg == "res" or msg == "资源" or msg == "资源体检" then
     -- ★0.3.26 只读：逐条摊开「自带两种写法 + 负对照 + 选定路径 + 理由」（一条命令、零步骤、不写存档）
     B.resProbe()
+  elseif string.match(msg, "^drop") ~= nil or string.match(msg, "^投放") ~= nil or string.match(msg, "^投递") ~= nil then
+    -- ★0.3.33 无参数 = **只读**探针（帧名/页签/三个 Click* 口在不在 + 取证环，一条命令、零步骤）；
+    --   `drop on|off` = 等价写口（与设置菜单「右键直投窗口」那一行共用 B.dropSet）。
+    --   ★分支条件必须按「前缀」认：`msg == "drop"` 只匹配裸命令，`drop off` 根本进不来（首版真机教训）。
+    local dv = string.match(msg, "^%S+%s+(%S+)$")
+    if dv == "on" or dv == "off" then
+      B.dropSet(dv)
+    else
+      B.dropDump()
+    end
   elseif msg == "trace" or msg == "取证" then
     B.traceDump(10)
   elseif msg == "trace clear" or msg == "取证清空" then
