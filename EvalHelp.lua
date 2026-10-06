@@ -9545,6 +9545,10 @@ if type(SlashCmdList) == "table" then
       -- ★★★1.75.36f 属性设置守卫（0.3s）的取证口：`go 框拖拽守卫` 看状态 · 后面跟 `重设` = 立刻按存档
       --   重设一次 · `开`/`关` = 手动武装/停下。★别名 `go dfguard` 全项目唯一（`GO ALIAS UNIQUE CHECK` 纪律）。
       prRun("DFG", msg)
+    elseif msg == "go 重置面板" or msg == "go dfreset" or string.find(msg or "", "^go 重置面板%s") == 1 then
+      -- ★★★1.75.101 重置面板（列表多选 + 确定提交）的**只读**状态口：看清单条数 / 面板显没显示 / 选中几条、
+      --   以及「清单为空 ⇒ 不开面板」的如实说明。★别名 `go dfreset` 全项目唯一（GO ALIAS UNIQUE 纪律）。
+      prRun("DFRST", msg)
     elseif msg == "go 战斗探针" or msg == "go combatprobe" or string.find(msg or "", "^go 战斗探针%s") == 1 then
       -- ★★★1.75.36g 「进战斗把宠物动作栏顶上去」的取证口（只读）：默认武装 · `停` · `看` · `采样`。
       --   ★别名 `go combatprobe` 全项目唯一（`GO ALIAS UNIQUE CHECK` 纪律）。

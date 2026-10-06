@@ -271,6 +271,27 @@ PR["DFT"] = function(msg)
   end
 end
 
+-- ★★★1.75.101 重置面板的**只读**状态口（用户：「工具箱->图层拖拽->重置->功能调整: 点击下栏有自定义属性设置的
+--   层/窗口列表,支持多选.确定提交重置.」）：本命令把「为什么面板没开 / 有没有开出来 / 列表里几条 / 选中几条」
+--   一次摊开 —— 面板是界面件，用户看不到内部状态时只能靠这条命令定性（也供离线判据读同一份读数）。
+--   一个字节都不写（纯读）。
+PR["DFRST"] = function(msg)
+  say("重置面板：命令已收到")
+  if type(EVAL_DF_RST_STATE) ~= "function" then
+    say("重置面板：框拖拽模块未载入（tools/DragFrames.lua 没进 .toc？）")
+    return
+  end
+  local built, shown, cov, listed, rowsShown, more, selN, cap = EVAL_DF_RST_STATE()
+  say(string.format("  面板：%s ｜ %s ｜ 遮罩 %s",
+    built and "已建" or "未建", shown and "显示中" or "没显示", cov and "显示中" or "没显示"))
+  say(string.format("  列表：有自定义属性设置的层 %d 条 ｜ 面板显示 %d 行（行池上限 %d）｜ 超出未列 %d 条",
+    tonumber(listed) or 0, tonumber(rowsShown) or 0, tonumber(cap) or 0, tonumber(more) or 0))
+  say(string.format("  选中：%d 条（点行切换；[确定] 只重置选中的）", tonumber(selN) or 0))
+  if (tonumber(listed) or 0) <= 0 then
+    say("  ★清单为空 = 没有任何层设过自定义属性 ⇒ 点 [重置] 会如实播报、**不开面板**（这是对的，不是坏了）")
+  end
+end
+
 PR["DFG"] = function(msg)
   -- ★★★1.75.36f 属性设置守卫（0.3s）的取证 / 操作口。用户报障原话：「宠物栏位置.在设置之后.
   --   偶然性拾取物品之后会被还原位置.」⇒ 给「有自定义属性的目标」加了 0.3s 一拍的**只读**守卫

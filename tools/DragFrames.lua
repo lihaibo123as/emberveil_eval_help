@@ -72,8 +72,10 @@ local function L(k, ...)
   return k
 end
 
-local say, logLine = EVAL_SAY, EVAL_LOGLINE
-local L = EVAL_L
+-- ★★★1.75.101 删掉这里原来的 `local say, logLine = EVAL_SAY, EVAL_LOGLINE` + `local L = EVAL_L`：
+--   那是把**上面自带的** say/logLine/L（每次调用现读全局桥）**覆盖成载入期快照** —— 与上面那段注释的契约
+--   （「模块必须自带 say/logLine」）正好相反，且**桥晚到就是 nil** ⇒ 之后每一句 `say(...)` 都是
+--   `attempt to call a nil value`（被 pcall 吞掉 = 播报全静默；没被吞就是整段炸）。判据 harness 当场抓到。
 
 -- ============ 常量 ============
 local DF_DRAG_H = 20            -- 拖拽柄高度（贴目标左上角）
@@ -455,8 +457,9 @@ local function dfSolid(t, r, g, b, a)
 end
 
 -- 自绘小按钮（与子插件里的 uiBtn 同形，但只属于本模块）
-local function dfBtn(parent, w, h, txt)
-  local b = CreateFrame("Button", nil, parent)
+-- ★1.75.101：`name` 可选 —— 具名帧才进 `_G`（重置面板的按钮要能被判据/命令驱动）
+local function dfBtn(parent, w, h, txt, name)
+  local b = CreateFrame("Button", name, parent)
   b:SetWidth(w) b:SetHeight(h)
   if type(b.EnableMouse) == "function" then pcall(b.EnableMouse, b, true) end
   if type(b.RegisterForClicks) == "function" then pcall(b.RegisterForClicks, b, "LeftButtonUp") end
@@ -2383,6 +2386,61 @@ local function dfDragBegin(b)
   return true
 end
 
+-- ★★★1.75.101 共用件（[重置] 面板 / 全局重置 / 图标左键重置 三条路**都必须走它**，绝不许各写一份）：
+--   ① `dfIsCustom(rec)` = 「这条记录算不算有自定义属性」的**唯一判定**（位置偏移 / 缩放 / 透明度 / 显隐 / 宽 / 高 之一）；
+--      只剩 base/cur/legacy 这类内部痕迹的**不算**（重置后就只剩它们）。清单与面板两处共用同一份口径。
+--   ② `dfCustomKeys(rec)` = 面板行右端那串「设了哪些项」（位置/缩放/透明度/显隐/宽高）。
+--   ③ `dfResetBody(rec, fr, combat)` = **逐目标体重置**（全局 EVAL_DF_RESET / 选中 EVAL_DF_RESET_LIST / 图标左键 dfResetOne 共用）：
+--      位置回基准 0 偏移（dfPlaceFrom）→ 清定位账（dx/dy/base/cur/ax/ay/axAuto）→ 缩放/透明度/显隐/宽高回原始值
+--      （dfRestoreAttrs 自己清字段）→ 记录空了由调用方整条删。**顺序即判据**（见下面两条在案教训）。
+--   ★★为什么要挂 `DF` 表而不是文件级 local：**主 chunk 局部量已到 200 上限**（本项目在案）—— 加一个 local 就整份载不进去。
+DF.isCustom = function(rec)
+  if type(rec) ~= "table" then return false end
+  return (rec.dx ~= nil) or (rec.dy ~= nil) or (rec.scale ~= nil)
+    or (rec.alpha ~= nil) or (rec.hidden ~= nil) or (rec.w ~= nil) or (rec.h ~= nil)
+end
+DF.customKeys = function(rec)
+  local out = {}
+  if (rec.dx ~= nil) or (rec.dy ~= nil) then table.insert(out, L("TB_LD_SUM_POS")) end
+  if rec.scale ~= nil then table.insert(out, L("TB_LD_SUM_SCALE")) end
+  if rec.alpha ~= nil then table.insert(out, L("TB_LD_SUM_ALPHA")) end
+  if rec.hidden ~= nil then table.insert(out, L("TB_LD_RST_SHOWHIDE")) end
+  if (rec.w ~= nil) or (rec.h ~= nil) then table.insert(out, L("TB_LD_RST_SIZE")) end
+  return out
+end
+DF.resetBody = function(rec, fr, combat)
+  local did = {}
+  local c = { pos = 0, scale = 0, alpha = 0, show = 0, w = 0, h = 0, whMiss = 0, skipped = 0, rest = 0 }
+  -- ① 定位还原（**沿用既有的定位还原逻辑**：有 base 就按 base 平移回 0 偏移）
+  if type(rec.base) == "table" and fr then
+    if dfPlaceFrom(fr, rec.base, 0, 0) then
+      c.pos = 1
+      table.insert(did, L("TB_LD_SUM_POS"))
+    end
+  end
+  -- 定位数据一律清掉
+  rec.dx, rec.dy = nil, nil
+  -- ★★1.75.52（用户报障「重置之后底部动作栏位置会自动偏移」）：`base`/`cur` 是**定位基准**（重置刚才就是拿 base 平移回 0 偏移）
+  --   ⇒ 必须一起清，否则记录**永远不是空的** ⇒ 「记录清空 → 整条删除」轮不到它 ⇒ 重置后 dfBlockSync 每拍零位移迁移又把
+  --   ax/ay 写回来、dfKeepTick 的方块分支见「没锚在方块上」就重新锚回方块（位置就飘了）。
+  --   ★顺序即判据：这一行**必须在上面 `dfPlaceFrom(fr, rec.base, 0, 0)` 之后**（那是最后一次用 base）。
+  rec.base, rec.cur = nil, nil
+  -- ★★1.75.47 方块坐标**也要清**（只清 dx/dy ⇒ 方块目标的 ax/ay 留在记录里 = 「重置了没效果」）；
+  --   清掉后下次编辑模式由「零位移迁移」以现状为基准重建（标 axAuto，不进守卫）—— 自洽。
+  rec.ax, rec.ay, rec.axAuto = nil, nil, nil
+  -- ② 缩放 / 透明度 / 显隐 / 宽 / 高：一起还原，并清掉记录字段
+  local got, res = dfRestoreAttrs(fr, rec, combat)
+  c.scale, c.alpha, c.show = res.scale, res.alpha, res.show
+  c.w, c.h = (res.w or 0), (res.h or 0)
+  c.whMiss, c.skipped = (res.whMiss or 0), (res.skipped or 0)
+  for k = 1, table.getn(got) do table.insert(did, got[k]) end
+  -- ③ 记录还剩几个字段（0 ⇒ 调用方整条删）
+  local rest = 0
+  for _ in pairs(rec) do rest = rest + 1 end
+  c.rest = rest
+  return did, c
+end
+
 -- ★★★左键点一下（不拖动）配置图标 = 重置这一个框的属性（用户 2026-10-06：「增加个左键点击重置对应框属性功能」）：
 --   与全局 [重置]（EVAL_DF_RESET）的逐目标体**同一套步骤**、只作用于这一个目标：
 --   位置回基准 0 偏移（dfPlaceFrom）→ 清定位账（dx/dy/base/cur/ax/ay/axAuto）→
@@ -2404,21 +2462,10 @@ local function dfResetOne(name, label, fr)
     say(string.format("框拖拽：%s 没有自定义记录，无需重置", tostring(label or name or "?")))
     return false
   end
-  local did = {}
-  -- ① 定位还原：有 base 就按 base 平移回 0 偏移（与 EVAL_DF_RESET 同一套；★顺序：这是最后一次用 base）
-  if type(rec.base) == "table" and fr then
-    if dfPlaceFrom(fr, rec.base, 0, 0) then table.insert(did, L("TB_LD_SUM_POS")) end
-  end
-  -- 定位账全部清掉（base/cur 是定位基准；ax/ay/axAuto 是方块口径 —— 不清 = 记录永远删不干净）
-  rec.dx, rec.dy = nil, nil
-  rec.base, rec.cur = nil, nil
-  rec.ax, rec.ay, rec.axAuto = nil, nil, nil
-  -- ② 缩放 / 透明度 / 显隐 / 宽 / 高 回原始值（dfRestoreAttrs 自己清字段；宽/高没有原始值就保留并如实说）
-  local got, res = dfRestoreAttrs(fr, rec, false)
-  for k = 1, table.getn(got) do table.insert(did, got[k]) end
-  -- ③ 记录清空 → 整条删除
-  local rest = 0
-  for _ in pairs(rec) do rest = rest + 1 end
+  -- ★1.75.101：逐目标体走共用件 dfResetBody（与全局重置/选中重置**同一套步骤**，不再各写一份）
+  local did, c = DF.resetBody(rec, fr, false)
+  local res = { skipped = c.skipped, whMiss = c.whMiss }
+  local rest = c.rest
   if rest == 0 then store[name] = nil end
   pcall(dfRefresh)
   local what = (table.getn(did) > 0) and table.concat(did, "+") or "没有可还原的项"
@@ -3356,6 +3403,7 @@ function EVAL_DF_SET(on)
   if not DF.on then
     if DF.dragging then dfDragEnd("disable") end
     if DF.pop then dfPopHide() end
+    if type(DF.rstHide) == "function" then pcall(DF.rstHide) end   -- ★1.75.101 重置面板也一起收（关断四件事）
     DF.ghostOffAll()  -- ★1.75.47 关功能 ⇒ 遮蔽一律恢复（结构性兜底）
     DF.rosterLeft = 0 -- ★1.74.32 开关关掉 → 停止队伍/团队跟随（不留后台周期任务）
     dfApplyAll(true)  -- ★「关闭之后」＝按**有自定义记录**的层应用一次（编辑期间摆好的位置就是这一刻定稿）
@@ -3399,8 +3447,7 @@ function EVAL_DF_SUMMARY()
     -- ★「自定义记录」= 记录里**还有实质内容**（位置偏移 / 缩放 / 透明度 / 显隐）；
     --   只剩 base（定位基准）或 legacy 这类内部痕迹的**不算** —— 重置后正是只剩它们，
     --   那时合计写「0 条自定义记录」才与逐行的「（默认值）」自洽（同一口径两处一致）。
-    local custom = hasRec and (((rec.dx ~= nil) or (rec.dy ~= nil)) or (rec.scale ~= nil)
-      or (rec.alpha ~= nil) or (rec.hidden ~= nil) or (rec.w ~= nil) or (rec.h ~= nil))
+    local custom = hasRec and DF.isCustom(rec)   -- ★1.75.101：判定收进共用件（面板同源）
     local fr = dfTargetFrame(tgt)
     -- ★★★1.74.31：候选名一个都没命中的目标**不逐行占版面**（否则新加的 4 个动作条会刷 4 行「帧不在·读不到当前值」），
     --   改成**最后统一一行**如实说明（条数 + 提示用 /edb bars 查真名）。
@@ -3562,41 +3609,18 @@ function EVAL_DF_RESET()
       end
       if type(rec) == "table" then
         local fr = dfTargetFrame(tgt)
-        local did = {}
-        -- ① 定位还原（**沿用既有的定位还原逻辑**：有 base 就按 base 平移回 0 偏移）
-        if type(rec.base) == "table" and fr then
-          if dfPlaceFrom(fr, rec.base, 0, 0) then
-            cPos = cPos + 1
-            table.insert(did, L("TB_LD_SUM_POS"))
-          end
-        end
-        -- 定位数据一律清掉（既有口径「只清定位」的那一半照旧）
-        rec.dx, rec.dy = nil, nil
-        -- ★★1.75.52（用户报障：「重置之后底部动作栏位置会自动偏移；理论上重置后守护不该生效」）：
-        --   `base`/`cur` 是**定位基准**（重置刚才就是拿 base 平移回 0 偏移的）⇒ 必须一起清，
-        --   否则记录**永远不是空的** ⇒ 下面「记录清空 → 整条删除」轮不到它 ⇒ 重置后
-        --   ① `dfBlockSync` 每拍按现状**零位移迁移**又把 `ax/ay` 写回来；
-        --   ② `dfKeepTick` 的方块分支见「没锚在方块上」就 `dfBlockApply` **重新锚回方块**（位置就飘了）。
-        --   ★顺序即判据：这一行**必须在上面 `dfPlaceFrom(fr, rec.base, 0, 0)` 之后**（那是最后一次用 base）。
-        rec.base, rec.cur = nil, nil
-        -- ★★1.75.47 方块坐标**也要清**：旧写法只清 dx/dy ⇒ 方块目标（14 个常驻层）的 ax/ay 留在记录里
-        --   ⇒ 「记录清空 → 整条删除」永远轮不到它们 ⇒ 重置后守卫继续守旧的方块坐标 = 「重置了没效果」。
-        --   清掉后下次编辑模式由「零位移迁移」以现状为基准重建（标 axAuto，不进守卫）——自洽。
-        rec.ax, rec.ay, rec.axAuto = nil, nil, nil
-        -- ② 缩放 / 透明度 / 显隐 / 宽 / 高：一起还原，并清掉记录字段
-        local got, res = dfRestoreAttrs(fr, rec, combat)
-        cScale = cScale + res.scale
-        cAlpha = cAlpha + res.alpha
-        cShow = cShow + res.show
-        cW = cW + (res.w or 0)
-        cH = cH + (res.h or 0)
-        whMiss = whMiss + (res.whMiss or 0)
-        skipped = skipped + res.skipped
-        for k = 1, table.getn(got) do table.insert(did, got[k]) end
+        -- ★1.75.101：逐目标体 = 共用件（与 dfResetOne / EVAL_DF_RESET_LIST 同一套）
+        local did, cc = DF.resetBody(rec, fr, combat)
+        cPos = cPos + cc.pos
+        cScale = cScale + cc.scale
+        cAlpha = cAlpha + cc.alpha
+        cShow = cShow + cc.show
+        cW = cW + cc.w
+        cH = cH + cc.h
+        whMiss = whMiss + cc.whMiss
+        skipped = skipped + cc.skipped
         -- ③ 记录清空 → 整条删除（沿用既有做法）
-        local rest = 0
-        for _ in pairs(rec) do rest = rest + 1 end
-        if rest == 0 then store[tgt.name] = nil else kept = kept + 1 end
+        if cc.rest == 0 then store[tgt.name] = nil else kept = kept + 1 end
         if table.getn(did) > 0 then
           table.insert(detail, tgt.label .. "=" .. table.concat(did, "+"))
         end
@@ -3631,6 +3655,121 @@ function EVAL_DF_RESET()
   -- ★1.75.47b：被接管锚点的层要 /reload 才能恢复客户端原生布局 ⇒ 弹窗提醒 + 一键重载（用户定）
   if n >= 1 then pcall(EVAL_DF_RELOAD_ASK, n) end
   return n
+end
+
+-- ★★★1.75.101 重置面板的数据源（用户：「点击下栏有自定义属性设置的层/窗口列表,支持多选.确定提交重置.」）：
+--   **只列「有自定义属性设置」且已勾选的目标** —— 判定走共用件 `DF.isCustom`（与悬停清单同一口径）；
+--   未勾选的层不在管理范围 ⇒ 照旧不列（与 EVAL_DF_RESET 的 `unpicked` 口径一致）。
+--   返回 `{ { name = …, label = …, keys = { … } }, … }`（keys = 这一层设了哪些项，供面板行右端显示）。
+function EVAL_DF_CUSTOM_LIST()
+  local out = {}
+  local store = dfStore(false)
+  if not store then return out end
+  for _, tgt in ipairs(DF_TARGETS) do
+    local rec = store[tgt.name]
+    if DF.isCustom(rec) and dfPicked(tgt.name) then
+      table.insert(out, { name = tgt.name, label = tgt.label, keys = DF.customKeys(rec) })
+    end
+  end
+  return out
+end
+
+-- ★★★1.75.101 **只重置选中的那些**（面板 [确定] 的唯一写口）：
+--   逐个走共用逐目标体 `DF.resetBody` —— 与全局 `EVAL_DF_RESET` / 图标左键 `dfResetOne` **同一套步骤**，
+--   绝不是复制一份（复制 = 以后改一处漏两处）。
+--   ① 名单里不存在的名字、没有自定义记录的、未勾选的 ⇒ **如实分档计数**（miss / unpicked / n），绝不静默跳过；
+--   ② 战斗中照旧由 `dfRestoreAttrs` 的 combat 门保护（缩放/透明/显隐/宽高保留在记录里，脱战再点一次）。
+function EVAL_DF_RESET_LIST(names)
+  local want = {}
+  if type(names) == "table" then
+    for i = 1, table.getn(names) do
+      local nm = names[i]
+      if type(nm) == "string" and nm ~= "" then want[nm] = true end
+    end
+  end
+  local store = dfStore(false)
+  local combat = dfInCombat()
+  local n, kept, skipped, unpicked, missN = 0, 0, 0, 0, 0
+  local cScale, cAlpha, cShow, cPos, cW, cH, whMiss = 0, 0, 0, 0, 0, 0, 0
+  local detail = {}
+  if store then
+    for _, tgt in ipairs(DF_TARGETS) do
+      if want[tgt.name] then
+        want[tgt.name] = nil
+        local rec = store[tgt.name]
+        if not DF.isCustom(rec) then
+          missN = missN + 1
+        elseif not dfPicked(tgt.name) then
+          unpicked = unpicked + 1
+        else
+          local fr = dfTargetFrame(tgt)
+          local did, cc = DF.resetBody(rec, fr, combat)
+          cPos = cPos + cc.pos
+          cScale = cScale + cc.scale
+          cAlpha = cAlpha + cc.alpha
+          cShow = cShow + cc.show
+          cW = cW + cc.w
+          cH = cH + cc.h
+          whMiss = whMiss + cc.whMiss
+          skipped = skipped + cc.skipped
+          if cc.rest == 0 then store[tgt.name] = nil else kept = kept + 1 end
+          if table.getn(did) > 0 then
+            table.insert(detail, tgt.label .. "=" .. table.concat(did, "+"))
+          end
+          n = n + 1
+        end
+      end
+    end
+  end
+  -- 名单里有、但 DF_TARGETS 里没有的名字（旧存档/改名）⇒ 也算「没处理」，如实计数
+  for _ in pairs(want) do missN = missN + 1 end
+  local got = dfRefresh()
+  local msg
+  if n == 0 then
+    msg = string.format("框拖拽重置（选中 %d 个）：处理 0 个目标（选中的项没有自定义记录或不在管理范围）", table.getn(names or {}))
+  else
+    msg = string.format("框拖拽重置（选中 %d 个）：处理 %d 个目标%s；合计 宽还原 %d · 高还原 %d · 缩放还原 %d · 透明度还原 %d · 显示还原 %d · 位置还原 %d",
+      table.getn(names or {}), n, (table.getn(detail) > 0 and ("（" .. table.concat(detail, " · ") .. "）") or ""),
+      cW, cH, cScale, cAlpha, cShow, cPos)
+  end
+  if combat then
+    msg = msg .. "｜战斗中不改缩放/透明度/显隐/宽高（客户端保护）：这几项仍保留在记录里，脱战后请再点一次确定"
+  elseif skipped > 0 then
+    msg = msg .. "｜另有 " .. tostring(skipped) .. " 项没改成（目标读不到或接口不可用，记录已保留）"
+  end
+  if whMiss > 0 then
+    msg = msg .. "｜另有 " .. tostring(whMiss) .. " 项宽/高没有「原始值」记录，无法还原，字段保留"
+  end
+  if kept > 0 then msg = msg .. "｜另 " .. tostring(kept) .. " 个目标仍留有定位基准记录（未整条删除）" end
+  if unpicked > 0 then msg = msg .. "｜另有 " .. tostring(unpicked) .. " 个目标没勾选（不在管理范围：记录与属性都原样没动）" end
+  if missN > 0 then msg = msg .. "｜另有 " .. tostring(missN) .. " 项没找到或有改动（已跳过）" end
+  msg = msg .. "；拖拽柄 " .. tostring(got) .. " 个（已按新位置重贴）"
+  say(msg)
+  if n >= 1 then pcall(EVAL_DF_RELOAD_ASK, n) end
+  return n
+end
+
+-- ★★★1.75.101 重置面板的**只读**状态口（**活口** = `/eh go dfreset` 探针；判据 harness 也读它）：
+--   返回：面板建出来没有 / 显示 / 遮罩显示 / 清单条数 / 显示行数 / 超出未列的条数 / 已选条数 / 行池上限。
+--   ★一个字节都不写（纯读）—— 探针与判据共用同一份读数，绝不在别处复刻映射逻辑。
+function EVAL_DF_RST_STATE()
+  local listed = 0
+  local ok, list = pcall(EVAL_DF_CUSTOM_LIST)
+  if ok and type(list) == "table" then listed = table.getn(list) end
+  local p = DF.rst
+  if type(p) ~= "table" then return false, false, false, listed, 0, 0, 0, DF.RST_ROWS end
+  local shownRows, selN = 0, 0
+  local i
+  for i = 1, table.getn(p.rows or {}) do
+    if p.rows[i]:IsShown() == true then shownRows = shownRows + 1 end
+  end
+  -- ★只数**真选中**：取消选中写的是 `sel[k] = false`（键还在表里）⇒ `pairs` 计数会把「取消」也数成选中
+  for _, v in pairs(p.sel or {}) do if v == true then selN = selN + 1 end end
+  local shown = false
+  if p.root and p.root:IsShown() == true then shown = true end
+  local covShown = false
+  if p.cover and p.cover:IsShown() == true then covShown = true end
+  return true, shown, covShown, listed, shownRows, (p.more or 0), selN, DF.RST_ROWS
 end
 
 function EVAL_DF_APPLYALL(quiet)
@@ -5462,6 +5601,238 @@ end
 --   `EVAL_DF_RESET` / `EVAL_DF_SET` …）—— 工具箱那一侧一行判定逻辑都没有。
 local DF_TIP_W = 460   -- tooltip 最小宽度（原 Toolbox 的 `TB_LD_TIP_W`；搬过来后工具箱不再需要那个常量）
 
+-- ============ ★★★1.75.101 重置面板（列表多选 + 确定提交）============
+-- 用户：「工具箱->图层拖拽->重置->功能调整: 点击下栏有自定义属性设置的层/窗口列表,支持多选.确定提交重置.」
+--   ① 数据源 = `EVAL_DF_CUSTOM_LIST()`（**只列「有自定义属性设置」且已勾选的目标**；未勾选的层不在管理范围 ⇒ 不列）；
+--   ② 点一行 = 选中 / 取消（**多选**：绿字 + 绿底）；③ [确定] = `EVAL_DF_RESET_LIST(选中名单)` —— **只重置选中的**；
+--   ④ 点面板外面 = 取消（全屏遮罩；**随 root 一起收** —— root 的 OnHide 是唯一收尾出口）。
+--   ★★三条路（全局 `EVAL_DF_RESET` / 选中 `EVAL_DF_RESET_LIST` / 图标左键 `dfResetOne`）**共用同一个逐目标体**
+--     `DF.resetBody` —— 以后改重置步骤只改一处（反向钉守着「不许再各写一份」）。
+--   ★空清单 ⇒ **不开面板**，如实播报「没有任何自定义属性设置，无需重置」（少一个空窗 = 与旧口径一致）。
+--   ★行池**有界** `DF.RST_ROWS`：超出的**如实写一行**「还有 N 条未列出」，绝不静默截断。
+--   ★★★全部函数挂 `DF.rstXxx`（**主 chunk 局部量已到 200 上限**：新增一个文件级 local 就整份载不进去）。
+DF.RST_ROWS = 20
+DF.RST_W = 320
+
+-- 收面板（唯一出口；root 的 OnHide 负责把遮罩一起收）
+DF.rstHide = function()
+  local p = DF.rst
+  if type(p) ~= "table" or not p.root then return false end
+  pcall(p.root.Hide, p.root)
+  -- ★显式收遮罩：root 的 OnHide 仍是**单一出口**，这里是双保险（本客户端偶有不触发 OnHide 的状态；
+  --   漏收 = 一个常驻全屏空层把后面所有点击都吃掉 —— 项目在案的老雷）
+  if p.cover then pcall(p.cover.Hide, p.cover) end
+  return true
+end
+
+-- 重画（选中态 + [确定] 上的条数）—— 行列内容全部现读 p.list（不缓存别处的数字）
+DF.rstPaint = function()
+  local p = DF.rst
+  if type(p) ~= "table" then return 0 end
+  local list = p.list or {}
+  local n = 0
+  local i
+  for i = 1, table.getn(p.rows) do
+    local row = p.rows[i]
+    local it = list[i]
+    if type(it) == "table" then
+      local on = (p.sel[it.name] == true)
+      if on then n = n + 1 end
+      row.dfName = it.name
+      pcall(row.label.SetText, row.label, it.label .. "：" .. table.concat(it.keys, "·"))
+      if on then
+        pcall(row.label.SetTextColor, row.label, 0.62, 0.95, 0.55)
+        dfSolid(row.bg, 0.14, 0.26, 0.16, 1)
+      else
+        pcall(row.label.SetTextColor, row.label, 0.85, 0.85, 0.85)
+        dfSolid(row.bg, 0.10, 0.10, 0.12, 1)
+      end
+      pcall(row.Show, row)
+    else
+      row.dfName = nil
+      pcall(row.Hide, row)
+    end
+  end
+  if p.moreLine then
+    if (p.more or 0) > 0 then
+      pcall(p.moreLine.SetText, p.moreLine, string.format(L("TB_LD_RST_MORE_FMT"), p.more, table.getn(p.rows)))
+      pcall(p.moreLine.Show, p.moreLine)
+    else
+      pcall(p.moreLine.Hide, p.moreLine)
+    end
+  end
+  if p.ok then
+    if n > 0 then pcall(p.ok.label.SetText, p.ok.label, string.format(L("TB_LD_RST_OK_FMT"), n))
+    else pcall(p.ok.label.SetText, p.ok.label, L("TB_LD_RST_OK0")) end
+  end
+  return n
+end
+
+-- 装填（每次打开都现读；**每次打开清空选中集** —— 绝不带着上一次的选中悄悄重置）
+DF.rstFill = function()
+  local p = DF.rst
+  if type(p) ~= "table" then return 0 end
+  local ok, list = pcall(EVAL_DF_CUSTOM_LIST)
+  if not ok or type(list) ~= "table" then list = {} end
+  p.list = list
+  p.sel = {}
+  local total = table.getn(list)
+  local shown = total
+  if shown > table.getn(p.rows) then shown = table.getn(p.rows) end
+  p.more = total - shown
+  DF.rstPaint()
+  return total
+end
+
+-- 打开（空清单 ⇒ 一个字节都不开，如实播报）
+DF.rstOpen = function()
+  if DF.rstBuild() ~= true then
+    say("框拖拽：重置面板建不出来（客户端接口不可用）")
+    return false
+  end
+  local p = DF.rst
+  if DF.rstFill() <= 0 then
+    say(L("TB_LD_RST_EMPTY"))
+    return false
+  end
+  pcall(p.root.Show, p.root)
+  pcall(p.cover.Show, p.cover)
+  return true
+end
+
+-- [确定]：提交选中名单（一条都没选 ⇒ 如实说 + **面板不关**）
+DF.rstOk = function()
+  local p = DF.rst
+  if type(p) ~= "table" then return false end
+  local names = {}
+  local list = p.list or {}
+  local i
+  for i = 1, table.getn(list) do
+    local it = list[i]
+    if type(it) == "table" and p.sel[it.name] == true then table.insert(names, it.name) end
+  end
+  if table.getn(names) == 0 then
+    say(L("TB_LD_RST_NONE"))
+    return false
+  end
+  DF.rstHide()
+  local ok = pcall(EVAL_DF_RESET_LIST, names)
+  if ok ~= true then say("框拖拽：重置没跑成（模块接口异常）") end
+  if type(EVAL_TB_REFRESH) == "function" then pcall(EVAL_TB_REFRESH) end
+  return true
+end
+
+-- 建一次复用（1.12 没有销毁帧的 API ⇒ 建出来只 Show/Hide）
+DF.rstBuild = function()
+  if DF.rst then return true end
+  if type(CreateFrame) ~= "function" then return false end
+  local host = dfHost()
+  local anchorTo = host or rawget(_G, "UIParent")
+  local p = { rows = {}, sel = {}, list = {}, more = 0 }
+  local cover = CreateFrame("Button", "EVAL_DF_RSTCOVER", host or anchorTo)
+  pcall(cover.SetFrameStrata, cover, "FULLSCREEN_DIALOG")
+  pcall(cover.SetFrameLevel, cover, 1240)
+  if type(cover.SetAllPoints) == "function" and (host or anchorTo) then pcall(cover.SetAllPoints, cover, host or anchorTo) end
+  if type(cover.EnableMouse) == "function" then pcall(cover.EnableMouse, cover, true) end
+  if type(cover.RegisterForClicks) == "function" then pcall(cover.RegisterForClicks, cover, "LeftButtonUp", "RightButtonUp") end
+  cover:SetScript("OnClick", function() DF.rstHide() end)
+  cover:Hide()
+  p.cover = cover
+
+  local root = CreateFrame("Frame", "EVAL_DF_RESETPANEL", host or anchorTo)
+  root:SetWidth(DF.RST_W)
+  root:SetHeight(64 + DF.RST_ROWS * 18 + 30)
+  p.root = root   -- ★1.75.101：**必须在建完就记住**（漏了这一行 = 面板建得出来、永远不显示 —— 判据当场抓到）
+  pcall(root.SetFrameStrata, root, "FULLSCREEN_DIALOG")
+  pcall(root.SetFrameLevel, root, 1250)
+  if type(root.SetPoint) == "function" and anchorTo then pcall(root.SetPoint, root, "CENTER", anchorTo, "CENTER", 0, 0) end
+  if type(root.EnableMouse) == "function" then pcall(root.EnableMouse, root, true) end
+  root:SetScript("OnHide", function()
+    -- ★单一出口：root 一藏，遮罩跟着藏（漏藏 = 后续点击被一个常驻空层全吃掉）
+    if p.cover then pcall(p.cover.Hide, p.cover) end
+  end)
+  local bg = root:CreateTexture(nil, "BACKGROUND")
+  bg:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
+  bg:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", 0, 0)
+  dfSolid(bg, 0.02, 0.02, 0.02, 0.92)
+  local eTop = root:CreateTexture(nil, "BORDER")
+  eTop:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
+  eTop:SetPoint("TOPRIGHT", root, "TOPRIGHT", 0, 0)
+  eTop:SetHeight(1)
+  dfSolid(eTop, 0.55, 0.48, 0.20, 1)
+  local eBot = root:CreateTexture(nil, "BORDER")
+  eBot:SetPoint("BOTTOMLEFT", root, "BOTTOMLEFT", 0, 0)
+  eBot:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", 0, 0)
+  eBot:SetHeight(1)
+  dfSolid(eBot, 0.55, 0.48, 0.20, 1)
+  local eLeft = root:CreateTexture(nil, "BORDER")
+  eLeft:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0)
+  eLeft:SetPoint("BOTTOMLEFT", root, "BOTTOMLEFT", 0, 0)
+  eLeft:SetWidth(1)
+  dfSolid(eLeft, 0.55, 0.48, 0.20, 1)
+  local eRight = root:CreateTexture(nil, "BORDER")
+  eRight:SetPoint("TOPRIGHT", root, "TOPRIGHT", 0, 0)
+  eRight:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", 0, 0)
+  eRight:SetWidth(1)
+  dfSolid(eRight, 0.55, 0.48, 0.20, 1)
+  local title = root:CreateFontString(nil, "OVERLAY")
+  if type(GameFontNormal) ~= "nil" then pcall(title.SetFontObject, title, GameFontNormal) end
+  pcall(title.SetPoint, title, "TOPLEFT", root, "TOPLEFT", 10, -8)
+  pcall(title.SetTextColor, title, 0.95, 0.82, 0.35)
+  pcall(title.SetText, title, L("TB_LD_RST_TITLE"))
+  p.title = title
+  local hint = root:CreateFontString(nil, "OVERLAY")
+  if type(GameFontHighlightSmall) ~= "nil" then pcall(hint.SetFontObject, hint, GameFontHighlightSmall) end
+  pcall(hint.SetPoint, hint, "TOPLEFT", root, "TOPLEFT", 10, -26)
+  pcall(hint.SetTextColor, hint, 0.75, 0.75, 0.75)
+  pcall(hint.SetText, hint, L("TB_LD_RST_HINT"))
+  p.hint = hint
+  local i
+  for i = 1, DF.RST_ROWS do
+    local b = CreateFrame("Button", "EVAL_DF_RSTROW" .. i, root)
+    b:SetWidth(DF.RST_W - 20)
+    b:SetHeight(17)
+    if type(b.SetPoint) == "function" then pcall(b.SetPoint, b, "TOPLEFT", root, "TOPLEFT", 10, -(46 + (i - 1) * 18)) end
+    if type(b.EnableMouse) == "function" then pcall(b.EnableMouse, b, true) end
+    if type(b.RegisterForClicks) == "function" then pcall(b.RegisterForClicks, b, "LeftButtonUp") end
+    local rbg = b:CreateTexture(nil, "BACKGROUND")
+    rbg:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
+    rbg:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
+    dfSolid(rbg, 0.10, 0.10, 0.12, 1)
+    b.bg = rbg
+    local fs = b:CreateFontString(nil, "OVERLAY")
+    if type(GameFontHighlightSmall) ~= "nil" then pcall(fs.SetFontObject, fs, GameFontHighlightSmall) end
+    pcall(fs.SetPoint, fs, "LEFT", b, "LEFT", 4, 0)
+    if type(fs.SetJustifyH) == "function" then pcall(fs.SetJustifyH, fs, "LEFT") end
+    pcall(fs.SetTextColor, fs, 0.85, 0.85, 0.85)
+    b.label = fs
+    b:SetScript("OnClick", function()
+      local pp = DF.rst
+      if type(pp) ~= "table" or type(b.dfName) ~= "string" then return end
+      pp.sel[b.dfName] = (pp.sel[b.dfName] ~= true)
+      DF.rstPaint()
+    end)
+    b:Hide()
+    table.insert(p.rows, b)
+  end
+  local moreLine = root:CreateFontString(nil, "OVERLAY")
+  if type(GameFontHighlightSmall) ~= "nil" then pcall(moreLine.SetFontObject, moreLine, GameFontHighlightSmall) end
+  pcall(moreLine.SetPoint, moreLine, "BOTTOMLEFT", root, "BOTTOMLEFT", 10, 34)
+  pcall(moreLine.SetTextColor, moreLine, 0.95, 0.72, 0.45)
+  moreLine:Hide()
+  p.moreLine = moreLine
+  local okb = dfBtn(root, 140, 20, L("TB_LD_RST_OK0"), "EVAL_DF_RSTOK")
+  if type(okb.SetPoint) == "function" then pcall(okb.SetPoint, okb, "BOTTOMRIGHT", root, "BOTTOMRIGHT", -10, 8) end
+  okb:SetScript("OnClick", function() DF.rstOk() end)
+  p.ok = okb
+  -- ★★★1.75.101：**建完立刻 Hide** —— 客户端新建帧默认是**显示**状态，而空清单那条路是「建出来但不显示」
+  --   （不显式 Hide ⇒ 用户点 [重置] 会先看到一个空窗；判据当场抓到）
+  pcall(root.Hide, root)
+  pcall(cover.Hide, cover)
+  DF.rst = p
+  return true
+end
+
 -- 画「图层拖拽」那一行（`t = "mod"` 的行由工具箱把 `r` 与模型项 `it` 交给这里）
 --   ★几何（唯一一套，别处不许再摆一次）：[设置] = `r.add`（cRight−96 宽 44）、[重置] = `r.clr`（cRight−48 宽 40）
 --     —— 两块并排、中间留 4px 缝。★★**绝不许用 `r.chv`**（88 宽、起点 cRight−96，与 add 槽**完全重叠**：
@@ -5483,6 +5854,8 @@ local function dfRow(r, it)
     pcall(tip.SetOwner, tip, r.clr.btn, "ANCHOR_RIGHT")
     if type(tip.ClearLines) == "function" then pcall(tip.ClearLines, tip) end
     pcall(tip.AddLine, tip, L("TB_LDDRAG_RESET_TIP"), 1, 0.85, 0.30)
+    -- ★1.75.101：补一行「点一下会开列表，多选后确定才重置」（三语）
+    pcall(tip.AddLine, tip, L("TB_LD_RST_HINT"), 0.75, 0.75, 0.75)
     -- 清单**现读**（不在行渲染期缓存：读的是每一层的当前真值，绝不与别处数字打架）
     if type(EVAL_DF_SUMMARY) == "function" then
       local ok, list = pcall(EVAL_DF_SUMMARY)
@@ -5501,7 +5874,14 @@ local function dfRow(r, it)
     if tip and type(tip.Hide) == "function" then pcall(tip.Hide, tip) end
   end)
   r.clr.btn:SetScript("OnClick", function()
-    pcall(EVAL_DF_RESET)
+    -- ★★★1.75.101（用户：「工具箱->图层拖拽->重置->功能调整: 点击下栏有自定义属性设置的层/窗口列表,支持多选.确定提交重置.」）：
+    --   点 [重置] = 打开**有自定义属性设置**的列表（多选 + 确定才提交），**不再直接全量重置**；
+    --   空清单 ⇒ 面板一个字节都不开，如实播报「没有任何自定义属性设置」。
+    if type(DF.rstOpen) == "function" then
+      pcall(DF.rstOpen)
+    else
+      pcall(EVAL_DF_RESET)   -- fail-open：面板口拿不到就退回旧的全量重置（绝不静默什么都不做）
+    end
     if type(EVAL_TB_REFRESH) == "function" then pcall(EVAL_TB_REFRESH) end
   end)
   -- ② [设置]：图层选择（**多选**下拉；点一项切换、面板不关）
