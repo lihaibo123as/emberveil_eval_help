@@ -114,6 +114,14 @@
        ③ ★★★**要删附件必须先拿 id**：release 详情的 `assets[]` **只有 `browser_download_url`/`name`、没有 id**（拿它去 DELETE 只会 404）
        ⇒ 正确入口 = **`GET …/releases/<id>/attach_files?access_token=…`**（返回 `[{id,name,size,…}]`）⇒ 再
        `DELETE …/releases/<id>/attach_files/<attach_file_id>?access_token=…` → **204**。
+       ④ ★★★**「只更新某一个附件」（原地换包，1.75.102 实测通过）**：两端都是「**先删旧份、再传新份**」——
+       新份换成带新版本号的名字时，旧的那份（如 `EH_Bag-v0.3.31.zip`）**必须删掉**否则页面上新旧并存；
+         **固定名那份（`EH_Bag.zip`）同名 ⇒ 幂等脚本会「跳过上传」而留着旧字节** ⇒ 一样要先 DELETE 再 POST。
+         实测：GitHub `DELETE /releases/assets/<id>` → **204** · Gitee `DELETE …/attach_files/<id>?access_token=…` → **204**，之后 POST 均 **201**；
+         最后跑 HEAD 探针要同时断言「**新名 200 + 字节数对得上**」与「**旧名 404**」（脚本 = `tmp/rel_probe_<版本>.js` 的 GOOD/BAD 两份清单）。
+       ⑤ ★★★**Gitee「更新发布正文」必须用 JSON 形态的 PATCH**（本轮实测：form-urlencoded → **HTTP 400**）⇒
+         `PATCH https://gitee.com/api/v5/repos/<owner>/<repo>/releases/<id>`，`Content-Type: application/json`，
+         body = `{ "access_token": <GT>, "tag_name": "v<版本>", "name": "<标题>", "body": "<正文>" }` → **200**（脚本 = `tmp/rel_fix_gitee_body.js`）。
      · ★★★**附件命名铁律（本轮踩过）**：版本名那份必须叫 **`EvalHelp-v<版本>.zip`（带 `v`）** +
        **固定名 `EvalHelp.zip`** —— 两份都要传；★**只叫 `EvalHelp-1.75.74.zip`（漏 v）会与三语 README 里的直链
        `…/download/v1.75.74/EvalHelp-v1.75.74.zip` 对不上**（本轮就是这样发现并原地改名 + 补传的）。
