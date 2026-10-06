@@ -955,6 +955,11 @@ local LOAD_RESIDUE_KEYS = {
   --   而聊天框读数（say）不落日志环、共享 100 环又会被 [DS] 冲掉 ⇒ 必须自带专属落盘
   --   （同 lcProbe/atkProbe/selProbe 的教训）。★开关关着时一个字节都不写（不给普通玩家留残渣）。
   "ecProbe",
+  -- ★1.75.93 「自身装备」条件的 tooltip 取证环（tools/Probes.lua 的 PR["EQUIPTIP"]，环上限 40 行）：
+  --   用户报障「装备:黑色甲壳盾跳过: 判不出使用效果」——tooltip 通道（WTT）有没有填上、
+  --   SetInventoryItem/SetBagItem 的 pcall 结果、逐行原文、冷却三参，都只能真机读，
+  --   而聊天框读数（say）不落日志环 ⇒ 必须自带专属落盘（同 ecProbe/ipProbe 的教训）。
+  "equipProbe",
 }
 
 function EVAL_LOAD_RESIDUE_KEYS() return LOAD_RESIDUE_KEYS end

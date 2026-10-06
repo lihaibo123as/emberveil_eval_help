@@ -236,7 +236,7 @@ local DF_TARGETS = {
   --   形态：小图标（默认开）· 点图标 = 开该层属性弹窗 · 拖图标 = 拖窗口 · 图标挂在窗口下随窗口显隐。
   --   ★真机取证的两条关键事实：① 这族窗口尺寸统一 **384×512 / lv=1**（`CharacterFrame` 打开时是 lv=8）；
   --     ② 它们都是 `UIParent` 的顶层子帧（探针「顶层大帧兜底」清单里一目了然）。
-  { name = "GuildFrame",   label = "公会",     icon = true, cands = { "GuildFrame" } },
+  -- { name = "GuildFrame",   label = "公会",     icon = true, cands = { "GuildFrame" } },
   { name = "CharacterFrame", label = "属性",   icon = true, cands = { "CharacterFrame" } },
   { name = "MailFrame",    label = "邮箱",     icon = true, cands = { "MailFrame" } },
   { name = "QuestLogFrame", label = "任务",    icon = true, cands = { "QuestLogFrame" } },
@@ -2383,6 +2383,54 @@ local function dfDragBegin(b)
   return true
 end
 
+-- ★★★左键点一下（不拖动）配置图标 = 重置这一个框的属性（用户 2026-10-06：「增加个左键点击重置对应框属性功能」）：
+--   与全局 [重置]（EVAL_DF_RESET）的逐目标体**同一套步骤**、只作用于这一个目标：
+--   位置回基准 0 偏移（dfPlaceFrom）→ 清定位账（dx/dy/base/cur/ax/ay/axAuto）→
+--   缩放/透明度/显隐/宽高回原始值（dfRestoreAttrs 自己清字段）→ 记录空了就整条删。
+--   ★分工（现行）：左键**拖动** = 移动窗口（照旧）· 左键**点一下**（不拖动）= **重置该框属性** · 右键 = 属性弹窗（照旧）。
+--   ★为什么用 dfStore(false)：商店不存在 ⇒ 从来就没有过记录 ⇒ 如实说「无需重置」，一个字节都不建。
+local function dfResetOne(name, label, fr)
+  if dfInCombat() then
+    say("框拖拽：战斗中不可重置（客户端保护），脱战后再点一次")
+    return false
+  end
+  local store = dfStore(false)
+  if not store then
+    say("框拖拽：存档不可用，本次重置没做")
+    return false
+  end
+  local rec = store[name]
+  if type(rec) ~= "table" then
+    say(string.format("框拖拽：%s 没有自定义记录，无需重置", tostring(label or name or "?")))
+    return false
+  end
+  local did = {}
+  -- ① 定位还原：有 base 就按 base 平移回 0 偏移（与 EVAL_DF_RESET 同一套；★顺序：这是最后一次用 base）
+  if type(rec.base) == "table" and fr then
+    if dfPlaceFrom(fr, rec.base, 0, 0) then table.insert(did, L("TB_LD_SUM_POS")) end
+  end
+  -- 定位账全部清掉（base/cur 是定位基准；ax/ay/axAuto 是方块口径 —— 不清 = 记录永远删不干净）
+  rec.dx, rec.dy = nil, nil
+  rec.base, rec.cur = nil, nil
+  rec.ax, rec.ay, rec.axAuto = nil, nil, nil
+  -- ② 缩放 / 透明度 / 显隐 / 宽 / 高 回原始值（dfRestoreAttrs 自己清字段；宽/高没有原始值就保留并如实说）
+  local got, res = dfRestoreAttrs(fr, rec, false)
+  for k = 1, table.getn(got) do table.insert(did, got[k]) end
+  -- ③ 记录清空 → 整条删除
+  local rest = 0
+  for _ in pairs(rec) do rest = rest + 1 end
+  if rest == 0 then store[name] = nil end
+  pcall(dfRefresh)
+  local what = (table.getn(did) > 0) and table.concat(did, "+") or "没有可还原的项"
+  local msg = string.format("框拖拽：已重置 %s（%s）", tostring(label or name or "?"), what)
+  if res.skipped > 0 then msg = msg .. "；另有 " .. tostring(res.skipped) .. " 项没改成（目标读不到或接口不可用，记录已保留）" end
+  if res.whMiss > 0 then msg = msg .. "；宽/高没有「原始值」记录，无法还原，字段保留" end
+  if rest > 0 then msg = msg .. "；记录仍有字段（未整条删除）" end
+  say(msg)
+  dfLog("图标左键点击 = 重置：" .. tostring(name) .. " -> " .. what)
+  return true
+end
+
 dfDragEnd = function(why)
   local b = DF.dragHandle
   local st = DF.dragSt
@@ -2400,8 +2448,9 @@ dfDragEnd = function(why)
   dfCatcherShow(false)
   local fr = b.dfTarget
   local moved = (st.moved == true)
-  -- ★★★1.74.33 用户要求：「窗口的拖拽使用图标…**左键不要触发弹窗效果**」⇒
-  --   图标形态的左键**一律不弹属性窗**（点一下不弹、拖动也不弹）；属性窗改挂**右键**（见 dfIconBuild 的 OnMouseUp）。
+  -- ★★★分工（现行，2026-10-06 用户改口）：左键**点一下（不拖动）= 重置该框属性** · 左键**拖动** = 移动窗口 · **右键** = 属性弹窗。
+  --   历史口径：1.74.33「窗口的拖拽使用图标…左键不要触发弹窗效果」⇒ 当时左键一律不弹属性窗、属性窗改挂右键（见 dfIconBuild 的 OnMouseUp）——
+  --   「左键不弹窗」这条**仍然有效**（现在点一下 = 重置，不是弹窗），下面那段「点击判据只能走 st.moved」的机制注释照旧有效。
   --   ★原来的实现是在这里判「按下但没移动 = 点击 ⇒ 开弹窗」（理由见下），现在这条路整段撤掉；
   --     下面那段「真的松手就弹配置窗」也必须把图标排除（否则点一下照样弹，只是换了个分支弹）。
   --     整条柄（非图标目标）的行为**一点不变**。
@@ -2413,7 +2462,9 @@ dfDragEnd = function(why)
   --     （本轮实测：组 202「拖拽完成弹属性窗」当场被这条判据挡掉）。真机上它是 nil 才对，但判据不能靠这个巧合。
   if b.dfIcon == true and fr and not moved then
     b.dfClickHandled = true
-    dfLog("图标左键点击：按用户要求**不弹**属性弹窗（改右键）")
+    -- ★2026-10-06 用户改口（「增加个左键点击重置对应框属性功能」）：左键点一下（不拖动）= **重置该框属性**；
+    --   历史口径「左键什么都不做（1.74.33）」被它取代；右键仍 = 属性弹窗（分工与 tooltip 三语同步）。
+    dfResetOne(b.dfName, b.dfLabel, fr)
   end
   -- ★★★1.75.36l 方块拖动：坐标已经在拖动过程中写进 `rec.ax/ay`（目标锚在方块上会自动跟随）
   --   ⇒ 这里**不再**走 base/dx/dy 那套（两者口径不同，混写必乱），只如实落日志 + 播报。
@@ -2611,7 +2662,7 @@ local DF_ICON_RIGHT = 58
 --   ★注意别和「头部拖拽带」搞混：带的右端 = W − DF_ICON_RIGHT − DF_ICON_SIZE ⇒ 带与图标**横向相邻不重叠**
 --     （组 215③ 守这条），所以图标往下挪多少都不会被带盖住（两份控件同一套鼠标分工 `dfBindDragButton`）。
 --   ★同族判据：组 212⑤c 验**性质**（上边距 ≥12），改这一个数字不会卡断言。
-local DF_ICON_TOP = 18
+local DF_ICON_TOP = 13
 local DF_ICON_LABEL = "配"  -- ★仅在宏图标取不到时退回的兜底文字（见 DF_ICON_MACRO）
 -- ★★★1.74.33 用户要求：「窗口的拖拽使用图标 346 号宏图标，左键不要触发弹窗效果」。
 --   · **图标 = 宏图标表第 346 号**：本客户端取宏图标纹理的**唯一合法入口**是

@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.75.99"
+local VERSION = "1.75.100"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -745,7 +745,10 @@ function EVAL_HELP_UI_BUILD()
     local w20 = uiWarCfg()
     local nProf = (w20.profiles and table.getn(w20.profiles)) or 1
     local labelW = math.floor(28 * z)
-    local btnH = math.floor(15 * z)
+    -- ★★★方案行按钮高度（1.75.93 用户：「方案/方案列表按钮增加下高度…在哪里调整我微调下」）：
+    --   **想微调就改这一个数**（单位 px，乘缩放 z；原 15 ⇒ 现 17）。行距/换行/帧高全部从它现算，
+    --   改它一处整行跟着变；「方案」标签按钮共用同一高度（下面 plb）。
+    local btnH = math.floor(17 * z)
     local barAvailW = W - pad * 2
     local minBW = math.floor(34 * z) -- 单按钮最小宽（名字可读）
     local PGAP = 2
@@ -762,6 +765,9 @@ function EVAL_HELP_UI_BUILD()
     pcall(plb.RegisterForClicks, plb, "LeftButtonUp", "RightButtonUp")
     local plabel = uiText(plb, math.max(8, math.floor(9 * z)), 0.95, 0.82, 0.35)
     plabel:SetPoint("LEFT", plb, "LEFT", 0, 0)
+    -- ★1.75.93 用户：「方案 标题垂直居中」——LEFT→LEFT 锚点本来就带垂直居中，这里再显式 JustifyV("MIDDLE")
+    --   钉死（字体基线在本客户端有偏差时，显式声明比隐式居中可靠）；方案名文字同口径（见 pt 那两行）。
+    pcall(plabel.SetJustifyV, plabel, "MIDDLE")
     plabel:SetText("方案")
     ui.profLabelBtn = plb -- 供断言点真控件
     plb:SetScript("OnEnter", function()
@@ -917,6 +923,7 @@ function EVAL_HELP_UI_BUILD()
       local txIcon = padX + iconW + iconGap -- 建窗期初值（有图标时文字的起点）；真位置每态由 uiProfTextX 现算
       pt:SetPoint("LEFT", pb, "LEFT", txIcon, 0)
       pcall(pt.SetJustifyH, pt, "LEFT")
+      pcall(pt.SetJustifyV, pt, "MIDDLE") -- ★1.75.93 方案名垂直居中（与「方案」标签同口径；配合加高后的按钮）
       --   ★限宽 = 格宽 − 文字起点 − 两侧内边距（居中后恒 ≥ `nameW + 4z`，因为 needW = nameW + 6z + 16z）⇒ 名字放得下、
       --     极长的名字在自己的按钮里裁掉、两头都不压邻居（1.75.82 之前量宽会偏小 ⇒ 名字被截成「神…」）；
       --     ★图标状态一变、文字起点就动 ⇒ 那份限宽由 `uiProfBtnIcon` 同拍重算（这里只是建窗期初值）。
@@ -5125,6 +5132,17 @@ local SE_TYPES = {
   --   ★步进 1 / 上限 10 由 SE_INT10_K 管（见下面的 +/- 按钮分支）。
   { id = "mwSiege",    name = "围攻自身数量", kind = "num",   n = 1 },
   { id = "mwEngaged",  name = "10s交战人数",  kind = "num",   n = 1 },
+  -- ★★★1.75.92 自身物品数量（用户：「一键宏->技能编辑->条件类型-->增加个:自身物品:xxx(弹窗选择背包内的物品)
+  --   数量判断,是/否,需求是对背包某个物品数量的判断」）：
+  --   kind = "item" = **名字格（点它 = 背包物品弹窗 IconGrid，共用件）+ 比较符/数量 + 是/否**；
+  --   数据 = { k, s=物品名, op, n=数量门槛, v=是/否 }（v=false = 「数量不满足这个比较」才算过）。
+  --   求值在 Engine 的 condOne（值 = 背包里该物品所有堆叠相加的总数，wCountBagItem）。
+  { id = "bagItem",    name = "自身物品",   kind = "item",  s = "" },
+  -- ★★★1.75.92 自身装备可使用（用户：「条件类型-->增加:自身装备:xxx(弹窗选择已经装备列表) 物品技能是否可使用」）：
+  --   kind = "eitem" = **名字格（点它 = 已装备列表弹窗 IconGrid）+ 是/否**（无数量参数）；
+  --   数据 = { k, s=装备名, v=是/否 }（是 = 穿在身上 ∧ 有使用效果 ∧ 使用冷却就绪；否 = 不满足）。
+  --   求值在 Engine 的 condOne（使用效果判定走隐形 tooltip 读「使用：」行——本客户端没有 IsUsableItem）。
+  { id = "eUse",       name = "自身装备",   kind = "eitem", s = "" },
   { id = "combat",     name = "战斗状态",    kind = "bool" },
   { id = "hasTarget",  name = "目标存在",    kind = "bool" },
   { id = "canAttack",  name = "目标可攻击",  kind = "bool" },
@@ -5283,7 +5301,7 @@ function EVAL_TEST_SE_TYPE_INIT(id)
   return nil
 end
 local SE_TYPE_GROUPS = {
-  { label = "CTG_1", w = 1, cov = "A", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "swingLeft", "shotLeft", "combat", "autoAttack", "autoShot", "wandShoot", "alt", "shift", "ctrl", "form", "tracking", "mwSiege", "mwEngaged" } }, -- ★1.71.2（第十五轮）施法族（施法中/施法时间/施法剩余时间）已统一移入 CTG_4；★1.75.6 补 tracking（自身状态，用户指定）
+  { label = "CTG_1", w = 1, cov = "A", ids = { "power", "hpPct", "powerPct", "combatTime", "combo", "swingLeft", "shotLeft", "combat", "autoAttack", "autoShot", "wandShoot", "alt", "shift", "ctrl", "form", "tracking", "mwSiege", "mwEngaged", "bagItem", "eUse" } }, -- ★1.71.2（第十五轮）施法族（施法中/施法时间/施法剩余时间）已统一移入 CTG_4；★1.75.6 补 tracking（自身状态，用户指定）；★1.75.92 补 bagItem（自身物品数量）与 eUse（自身装备可使用，均为用户指定）
   -- ★★★1.74.19 COND WEIGHT CHECK 当场抓到的漏网之鱼：`target`（「选取目标」，1.32.0 起 hidden、下拉不再提供）
   --   仍然在 SE_TYPES 里、**存量方案里还有**、求值也照跑 —— 它却不在任何分组里 ⇒
   --   新口径下会被按 **0 分**算、也不计覆盖（静默少算一截）。归到「目标状态」：它就是选目标那件事。
@@ -5373,6 +5391,10 @@ local function seDefaultCond(ti)
   elseif td.kind == "track" then return { k = td.id, s = td.s or "any", v = true }
   -- ★1.75.10 目标玩家：名字留空起步（**未填 = 求值如实失败**，绝不静默通过）＋ 默认「是」
   elseif td.kind == "pname" then return { k = td.id, nm = "", v = true }
+  -- ★1.75.92 自身物品：名字留空起步（未选 = 求值如实失败，同 pname 口径）＋ 默认「数量 >= 1」「是」
+  elseif td.kind == "item" then return { k = td.id, s = "", op = ">=", n = 1, v = true }
+  -- ★1.75.92 自身装备：名字留空起步（未选 = 求值如实失败）＋ 默认「是」（可使用）
+  elseif td.kind == "eitem" then return { k = td.id, s = "", v = true }
 
   else return { k = td.id } end
 end
@@ -6456,6 +6478,27 @@ function EVAL_SE_COND_MOVE(i, dir)
   return true
 end
 
+-- ★★★1.75.92「自身物品」行的数量控件**渲染期重定位**（与 dtBtn 的渲染期定位同一手法，行池复用 ⇒ 必须归位）：
+--   默认位（op 142 / - 180 / 值 204 / + 230）与名字格（140~240）**同带重叠**；item 行需要
+--   「名字格 + 数量 + 是/否」同屏 ⇒ 数量控件挪到 stk/secOp 那一带（这两族控件在 item 行不显示）。
+--   ★坐标常量单一来源 = 本函数；num 分支每次刷新**归位**（否则从 item 行切回数值行时控件留在右边）。
+local function seNumCtlPos(row, isItem)
+  if not (row and row.opBtn and row.minus and row.valText and row.plus) then return end
+  local x0 = isItem and 290 or 142
+  local y = row.dtY or 0
+  pcall(function()
+    local pr = row.opBtn.btn:GetParent()
+    row.opBtn.btn:ClearAllPoints()
+    row.opBtn.btn:SetPoint("TOPLEFT", pr, "TOPLEFT", x0, y)
+    row.minus.btn:ClearAllPoints()
+    row.minus.btn:SetPoint("TOPLEFT", pr, "TOPLEFT", x0 + 38, y)
+    row.valText:ClearAllPoints()
+    row.valText:SetPoint("TOPLEFT", pr, "TOPLEFT", x0 + 62, y - 3)
+    row.plus.btn:ClearAllPoints()
+    row.plus.btn:SetPoint("TOPLEFT", pr, "TOPLEFT", x0 + 88, y)
+  end)
+end
+
 function EVAL_HELP_SE_REFRESH()
   local ed = seUI.ed
   if not ed or not seUI.root then return end
@@ -6473,12 +6516,13 @@ function EVAL_HELP_SE_REFRESH()
   --     所以元素一直在，默认文案本身就是「当前用的是技能本身（不指定等级）」这层含义。
   if seUI.rankName then seUI.rankName:SetText(ed.rank or L("SE_RANK_ANY")) end
   if seUI.catName then -- 分类按钮文字 = 当前技能所属类（1.32.3）
-    local cl = { L("SK_CAT_1"), L("SK_CAT_2"), L("SK_CAT_3"), L("SK_CAT_4"), L("SK_CAT_5") }
+    local cl = { L("SK_CAT_1"), L("SK_CAT_2"), L("SK_CAT_3"), L("SK_CAT_4"), L("SK_CAT_5"), L("SK_CAT_6") }
     local ci = 2
     if ed.skill == "攻击" or ed.skill == "自动射击" or ed.skill == "射击" or cancelCastOf(ed.skill) or stopAllOf(ed.skill) or followOf(ed.skill) or stanceOf(ed.skill) then ci = 1
     elseif petCmdOf(ed.skill) then ci = 3
     elseif targetSelOf(ed.skill) then ci = 4
-    elseif itemOf(ed.skill) then ci = 5 end
+    elseif itemOf(ed.skill) then ci = 5
+    elseif EVAL_EQUIP_OF and EVAL_EQUIP_OF(ed.skill) then ci = 6 end -- ★1.75.92 装备使用（全局桥直读，不加文件级 local）
     seUI.catName:SetText(cl[ci])
   end
   if ed.enabled then seUI.enMark:Show() else seUI.enMark:Hide() end
@@ -6504,6 +6548,7 @@ function EVAL_HELP_SE_REFRESH()
       row.typeBtn.text:SetText(seTypeLabel(td.id)) -- ★1.73.27 实时资源名（法系显示「法力」）
       pcall(row.typeBtn.btn.Show, row.typeBtn.btn)
       if td.kind == "num" then
+        seNumCtlPos(row, false) -- ★1.75.92 行池复用：从「自身物品」行切回数值行时数量控件归位
         row.opBtn.text:SetText(cd.op or ">")
         -- 1.58.0 时间型一位小数显示（步进 0.1；防 0.30000000004 浮点噪音）
         local isTime = seIsTimeKind(cd.k) -- ★1.74.30 走单一来源（原先这里另抄了一份清单）
@@ -6525,6 +6570,36 @@ function EVAL_HELP_SE_REFRESH()
         pcall(row.sHit.Show, row.sHit)
         row.immBtn.text:SetText((cd.v == false) and L("SE_NO") or L("SE_YES"))
         pcall(row.immBtn.btn.Show, row.immBtn.btn)
+      elseif td.kind == "item" then
+        -- ★★★1.75.92 自身物品：名字格（点它 = 背包物品弹窗 IconGrid，接线在 sDrop 的 OnClick 分支）
+        --   + 是/否（immBtn）+ 比较符/数量（opBtn/-/值/+，**挪到 290 那带**，与名字格错开）。
+        --   ★五个控件都在 row.all 里，进本分支前已被统一 Hide，这里逐个 Show（只 Hide 不 Show 是 1.73.1 那族事故）。
+        local nmItem = (type(cd.s) == "string" and cd.s ~= "") and cd.s or "未选择（点此选择）"
+        row.skillText:SetText("物品:" .. nmItem)
+        pcall(row.skillText.Show, row.skillText)
+        pcall(row.sHit.Show, row.sHit)
+        row.immBtn.text:SetText((cd.v == false) and L("SE_NO") or L("SE_YES"))
+        pcall(row.immBtn.btn.Show, row.immBtn.btn)
+        seNumCtlPos(row, true) -- 数量控件让位到 stk/secOp 那一带（本行那两族不显示）
+        row.opBtn.text:SetText(cd.op or ">=")
+        row.valText:SetText(tostring(cd.n or 1))
+        pcall(row.opBtn.btn.Show, row.opBtn.btn)
+        pcall(row.minus.btn.Show, row.minus.btn)
+        pcall(row.plus.btn.Show, row.plus.btn)
+        pcall(row.valText.Show, row.valText)
+      elseif td.kind == "eitem" then
+        -- ★1.75.92 自身装备：名字格（点它 = 已装备列表弹窗，接线在 sDrop 的 OnClick 分支）+ 是/否。
+        --   ★1.75.93 + 状态格（stk 位，三选 可使用/冷却中/无效果）。
+        --   ★四个控件都在 row.all 里，进本分支前已被统一 Hide，这里逐个 Show（只 Hide 不 Show 是 1.73.1 那族事故）。
+        local nmEq = (type(cd.s) == "string" and cd.s ~= "") and cd.s or "未选择（点此选择）"
+        row.skillText:SetText("装备:" .. nmEq)
+        pcall(row.skillText.Show, row.skillText)
+        pcall(row.sHit.Show, row.sHit)
+        row.immBtn.text:SetText((cd.v == false) and L("SE_NO") or L("SE_YES"))
+        pcall(row.immBtn.btn.Show, row.immBtn.btn)
+        local stEq = (cd.st == "cd") and L("SE_EUST_CD") or ((cd.st == "nouse") and L("SE_EUST_NOUSE") or L("SE_EUST_READY"))
+        row.stk.text:SetText(stEq)
+        pcall(row.stk.btn.Show, row.stk.btn)
       elseif td.kind == "flag" then
         row.valBtn.text:SetText(cd.inv and "否" or "是")
         pcall(row.valBtn.btn.Show, row.valBtn.btn)
@@ -6777,6 +6852,7 @@ local function SE_BUILD()
     if petCmdOf(skill) then return 3 end
     if targetSelOf(skill) then return 4 end
     if itemOf(skill) then return 5 end
+    if EVAL_EQUIP_OF and EVAL_EQUIP_OF(skill) then return 6 end -- ★1.75.92 装备使用
     return 2
   end
   -- 项列表 → 图标表（1.32.4：下拉行左侧显示技能/物品图标；wicon 统一入口含宠物/选取/物品兜底）
@@ -7285,6 +7361,7 @@ local function SE_BUILD()
         if it.cd.k == "combo" then it.cd.n = math.max(1, it.cd.n - 1) -- 1.54.3 连击点数域 1-5（GetComboPoints 上限 5）
         elseif SE_TIME_K[it.cd.k] then it.cd.n = math.max(0, math.floor((it.cd.n - 0.1) * 10 + 0.5) / 10) -- 时间型 0.1 步进
         elseif SE_INT10_K[it.cd.k] then it.cd.n = math.max(0, (it.cd.n or 0) - 1) -- ★1.75.11 计数型：1 步进（0-10）
+        elseif it.cd.k == "bagItem" then it.cd.n = math.max(0, (it.cd.n or 0) - 1) -- ★1.75.92 物品数量：1 步进（0-999）
         else it.cd.n = math.max(0, it.cd.n - 5) end
         EVAL_HELP_SE_REFRESH()
       end
@@ -7300,6 +7377,7 @@ local function SE_BUILD()
         if it.cd.k == "combo" then it.cd.n = math.min(5, it.cd.n + 1) -- 1.54.3 连击点数域 1-5
         elseif SE_TIME_K[it.cd.k] then it.cd.n = math.min(10, math.floor((it.cd.n + 0.1) * 10 + 0.5) / 10) -- 时间型 0.1 步进 上限 10.0
         elseif SE_INT10_K[it.cd.k] then it.cd.n = math.min(10, (it.cd.n or 0) + 1) -- ★1.75.11 计数型：1 步进 上限 10
+        elseif it.cd.k == "bagItem" then it.cd.n = math.min(999, (it.cd.n or 0) + 1) -- ★1.75.92 物品数量：1 步进 上限 999
         else it.cd.n = math.min(300, it.cd.n + 5) end
         EVAL_HELP_SE_REFRESH()
       end
@@ -7403,6 +7481,119 @@ local function SE_BUILD()
           it.cd.nm = nm
           EVAL_HELP_SE_REFRESH()
         end)
+        return
+      end
+      if tdi and tdi.kind == "item" then
+        -- ★★★1.75.92 自身物品：点名字格 = **背包物品弹窗**（共用件 IconGrid，与喂食/消耗品助手同一份网格）。
+        --   ★候选 = EVAL_IG_SCAN_BAGS **不开类型过滤**（classify 不传）：数量判断对**任何**背包物品都有意义
+        --     （草药/矿石/任务道具也可能要数），过滤反而把用户要数的物品剔掉（「判错一类 = 静默找不到」那族雷）。
+        --   ★名字落在 **cd.s**（与技能名类条件同一字段）；底栏 [自定义输入] 兜底「现在背包里没有的物品」。
+        if type(EVAL_IG_OPEN) ~= "function" then return end -- 共用件缺席 ⇒ 如实没反应（IconGrid 在 toc 里，正常不会发生）
+        EVAL_IG_OPEN({
+          key = "bagItemCond",
+          anchor = row.sHit,
+          title = L("SE_ITEM_PICK_T"),
+          hint = L("SE_ITEM_PICK_H"),
+          mode = "single",
+          candidates = function()
+            if type(EVAL_IG_SCAN_BAGS) ~= "function" then return {}, 0 end
+            return EVAL_IG_SCAN_BAGS({ 0, 1, 2, 3, 4 })
+          end,
+          onPick = function(item2)
+            if item2 and type(item2.name) == "string" and item2.name ~= "" then
+              it.cd.s = item2.name
+              EVAL_HELP_SE_REFRESH()
+            end
+          end,
+          btnAText = L("SE_ITEM_CUSTOM"),
+          btnA = function()
+            EVAL_TN_OPEN(L("SE_TN_ITEM"), it.cd.s or "", function(nm)
+              if nm and nm ~= "" then it.cd.s = nm EVAL_HELP_SE_REFRESH() end
+            end)
+          end,
+        })
+        return
+      end
+      if tdi and tdi.kind == "eitem" then
+        -- ★★★1.75.92 自身装备：点名字格 = **已装备列表弹窗**（IconGrid 共用件；用户：「弹窗选择已经装备列表」）。
+        --   ★1.75.93 候选扩到「身上 ∨ 背包里的装备」（用户：「背包内的装备也加入可选范围」）：
+        --     背包侧只收**明确是装备**的（GetItemInfo 返回里带 INVTYPE_ token —— 扫字符串返回、不押注返回位置，
+        --     与 EquipCompare 的 ecClassOf 同一手法）；**判不出（nil）的不剔**（查不到 ≠ 不是装备）。
+        --   ★条目是非物品形态（只有 name+tex+q，没有 bag/slot ⇒ 共用件 tooltip 不会画「×1 [nil,nil]」假信息）。
+        --   ★不加「自定义输入」：不在身上/背包里的装备配了也只会如实报「未装备且背包未找到」。
+        if type(EVAL_IG_OPEN) ~= "function" then return end -- 共用件缺席 ⇒ 如实没反应
+        EVAL_IG_OPEN({
+          key = "equipCond",
+          anchor = row.sHit,
+          title = L("SE_EQUIP_PICK_T"),
+          hint = L("SE_EQUIP_PICK_H"),
+          mode = "single",
+          candidates = function()
+            local l, seen = {}, {}
+            -- 背包物品是不是装备：扫 GetItemInfo 的字符串返回找 INVTYPE_ token（不押注返回位置）；判不出 = nil
+            local function equipableByLink(link)
+              if type(GetItemInfo) ~= "function" then return nil end
+              local r = { pcall(GetItemInfo, link) }
+              if r[1] ~= true then return nil end
+              for ri = 2, 16 do
+                local v = r[ri]
+                if type(v) == "string" and string.find(v, "^INVTYPE_") then
+                  return (v ~= "" and v ~= "INVTYPE_NON_EQUIP")
+                end
+              end
+              return nil
+            end
+            if type(GetInventoryItemLink) == "function" then
+              for slot = 1, 19 do
+                local okl, link = pcall(GetInventoryItemLink, "player", slot)
+                local nm = okl and link and string.match(link, "%[(.-)%]")
+                if nm and nm ~= "" and not seen[nm] then
+                  seen[nm] = true
+                  local tex, q = nil, nil
+                  if type(GetInventoryItemTexture) == "function" then
+                    local okt, t = pcall(GetInventoryItemTexture, "player", slot)
+                    if okt then tex = t end
+                  end
+                  if type(GetInventoryItemQuality) == "function" then
+                    local okq, qq = pcall(GetInventoryItemQuality, "player", slot)
+                    if okq then q = tonumber(qq) end
+                  end
+                  table.insert(l, { name = nm, tex = tex, q = q })
+                end
+              end
+            end
+            if type(GetContainerNumSlots) == "function" then
+              for bag = 0, 4 do
+                local okn, slots = pcall(GetContainerNumSlots, bag)
+                if okn and slots and slots > 0 then
+                  for slot = 1, slots do
+                    local okl, link = pcall(GetContainerItemLink, bag, slot)
+                    local nm = okl and link and string.match(link, "%[(.-)%]")
+                    if nm and nm ~= "" and not seen[nm] then
+                      local eq = equipableByLink(link)
+                      if eq ~= false then -- 明确判成非装备才剔；判不出保留（查不到 ≠ 不是装备）
+                        seen[nm] = true
+                        local tex, q = nil, nil
+                        if type(GetContainerItemInfo) == "function" then
+                          local oki, t2, _c, _lk, qq = pcall(GetContainerItemInfo, bag, slot)
+                          if oki then tex, q = t2, tonumber(qq) end
+                        end
+                        table.insert(l, { name = nm, tex = tex, q = q })
+                      end
+                    end
+                  end
+                end
+              end
+            end
+            return l, table.getn(l)
+          end,
+          onPick = function(item2)
+            if item2 and type(item2.name) == "string" and item2.name ~= "" then
+              it.cd.s = item2.name
+              EVAL_HELP_SE_REFRESH()
+            end
+          end,
+        })
         return
       end
       if tdi and tdi.kind == "track" then
@@ -7677,6 +7868,25 @@ local function SE_BUILD()
     row.stk = seBtn(root, 290, y, 54, 15, L("SE_STK"), function()
       local it = seUI.ed and seUI.ed.conds[i]
       if not it then return end
+      -- ★1.75.93 自身装备行：这一格改当「状态」三选（可使用/冷却中/无效果；写 cd.st）——
+      --   装备没有层数概念，stk 格在 eitem 行原本闲置（同一格两种用途按行类型互斥，与 dtBtn/secOp 同一手法）。
+      local tdi3 = SE_TYPES[seTypeIndexOf(it.cd.k, it.cd.name)]
+      if tdi3 and tdi3.kind == "eitem" then
+        local stIds = { "ready", "cd", "nouse" }
+        local stItems = { L("SE_EUST_READY"), L("SE_EUST_CD"), L("SE_EUST_NOUSE") }
+        -- 当前值加金色圆点（EVAL_DD 的 selected 只在 multi 生效，单选自己标 —— 与追踪类型同一做法）
+        local curSt = (it.cd.st == "cd" or it.cd.st == "nouse") and it.cd.st or "ready"
+        for si2 = 1, 3 do
+          if stIds[si2] == curSt then
+            stItems[si2] = "|cffffd100" .. string.char(226, 128, 162) .. "|r " .. stItems[si2]
+          end
+        end
+        EVAL_DD_OPEN(row.stk.btn, stItems, function(pi)
+          it.cd.st = stIds[pi]
+          EVAL_HELP_SE_REFRESH()
+        end)
+        return
+      end
       local stkItems = { L("SE_STK_UNLIM") } for si = 2, 5 do table.insert(stkItems, L("SE_STK_FMT", si)) end
       EVAL_DD_OPEN(row.stk.btn, stkItems, function(pi)
         it.cd.n = (pi > 1) and pi or nil -- 序号2-5即层数2-5
@@ -9319,6 +9529,10 @@ if type(SlashCmdList) == "table" then
       else
         say("装备比较未载入：tools\\EquipCompare.lua 不在 EvalHelp.toc 里（或载入失败）")
       end
+    -- ★1.75.93 装备 tooltip 取证（「自身装备」条件的探针；命令体在 tools/Probes.lua 的 PR["EQUIPTIP"]）：
+    --   ★"go 装备探针" = 3 + 4×3 = **15 字节**；别名 `go etip` 全项目唯一。
+    elseif string.sub(msg, 1, 15) == "go 装备探针" or msg == "go etip" or string.find(msg or "", "^go etip%s") == 1 then
+      prRun("EQUIPTIP", msg)
     elseif msg == "go 框体图标" or msg == "go frameicons" or string.find(msg or "", "^go 框体图标%s") == 1 then
       if type(EVAL_DF_ICONS_SET) ~= "function" then
         say("框体图标：框拖拽模块未载入（EVAL_DF_ICONS_SET 不存在）")

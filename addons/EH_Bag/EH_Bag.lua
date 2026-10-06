@@ -49,7 +49,7 @@ local B = {}
 _G.EH_BAG = B
 
 -- 构建标记（唯一来源）：改本文件顺手 +1，用于「客户端跑的是哪一份」取证
-local BAG_BUILD = "0.3.30"
+local BAG_BUILD = "0.3.31"
 
 local function strVal(v)
   return tostring(v)
@@ -1012,6 +1012,39 @@ B.tintIdx = function()
   return DEF.tint
 end
 B.tintK = function() return B.TINTS[B.tintIdx()].k end
+
+-- ★★★0.3.31 每档品质亮度系数 `B.QUAL_K`（用户 2026-10-06：「我想降低绿色的亮度提高蓝色的亮度应该调整哪些参数」→「A 试下」）：
+--   ★唯一来源 = 这张表 · 唯一读口 = `B.qualK(q)` · **唯一作用点 = `paintButton` 的两个写口**：
+--     底色 = 颜色 × k（乘完逐通道夹 0~1 ⇒ 色相不变、只变明暗）；辉光 = 写值 α × k（`B.glowAlpha` 夹到 ≤1）。
+--     别处一律不乘：格框（`B.SLOT_DIM` 中性）· 悬停金 · 顶栏品质圆点 —— 它们不是「这一格的品质观感」。
+--   ★**只做用户逐档手调，绝不做自动归一**（0.3.29 那套已按用户要求撤销；这张表就是替代它的「手动档」）。
+--   ★默认档（按用户两句话直接落值）：绿降 0.80 · 蓝升 1.15 —— 参照 0.3.30 的实算观感（绿 108.2 / 蓝 62.3）：
+--     绿 0.80 ⇒ 底色 ×0.8 + 辉光写值 0.68（观感 ≈ 69）；蓝 1.15 ⇒ 辉光写值 0.9775（观感 ≈ 82，底色颜色已被夹到顶）。
+--     想两档完全拉平：绿 0.87 / 蓝 1.15（两档观感都 ≈ 82）。微调**只改这张表里的数**。
+--   ★0.3.31e 改判：辉光 alpha **只走顶点色**（不再与 `SetAlpha` 相乘）⇒ 写值 = 观感本身（**线性**），
+--     且「初始打开 == 悬停恢复」（单通道两态都落地）。**最终定档（用户真机微调后定）**：基准 `B.GLOW_A` = 0.85² = 0.7225、
+--     绿 = 0.80 本体（观感 0.578 = 基准的 80%）· 蓝 = 1.3225 = 1.15²（观感 0.955，与 0.3.31 稳态相同）。
+B.QUAL_K = {
+  [2] = 0.80,   -- 优秀（绿）：★用户最终定档（0.3.31e 单通道后按观感**线性**生效）⇒ 观感 = 基准 × 0.80 = 0.578，恰为基准的 80%（降两成）
+  [3] = 1.3225, -- 稀有（蓝）：= 1.15²（同上 ⇒ 保住 0.955）
+}
+B.qualK = function(q)
+  local k = B.QUAL_K[tonumber(q) or -1]
+  if type(k) ~= "number" then return 1 end
+  if k < 0 then return 0 end
+  if k > 2 then return 2 end   -- 上限夹取：写再大的数也只是「亮到顶」，不许失控
+  return k
+end
+-- 读值口（`/ebag status` 的「外观」行列出当前系数；没有系数就如实写「全部 1」）
+B.qualKLine = function()
+  local ks = {}
+  for q = 2, 6 do
+    local k = B.QUAL_K[q]
+    if type(k) == "number" then table.insert(ks, "q" .. q .. "=" .. strVal(k)) end
+  end
+  if table.getn(ks) == 0 then return "（无，全部 1）" end
+  return table.concat(ks, " · ")
+end
 B.tintText = function()
   local i = B.tintIdx()
   return L(B.TINT_KEYS[i] or "TINT_VIVID")
@@ -1867,8 +1900,8 @@ B.SLOT_DIM = 0.72
 --     （由 `slotframe.tga` 派生，生成脚本 `tmp/mk_slotglow.js`：框上最亮 · 向内渐弱 · 向外只留一点点 ·
 --      画布四角透明），按品质染色、ADD 压在图标之上。
 B.SLOT_GLOW = "Interface\\AddOns\\EH_Bag\\media\\slotglow.tga"
-B.GLOW_A = 0.85          -- 品质辉光强度（★0.3.20：与悬停**同一把尺子** —— 用户定「机制和悬浮辉光相同效果,只是颜色不同而已」）
-B.GLOW_A_HOVER = 0.85    -- 悬停辉光强度（与品质档同值 ⇒ 悬停与品质的差别**只有颜色**；要单独调悬停只改这一处）
+B.GLOW_A = 0.7225          -- 品质辉光强度（★0.3.31e 单通道：写值 = 观感本身、不再平方 ⇒ 取旧基准 0.85 的平方 ⇒ 稳态观感与 0.3.30 逐值相同；0.3.20 的「与悬停同一把尺子」照旧）
+B.GLOW_A_HOVER = 0.7225    -- 悬停辉光强度（与品质档同值 ⇒ 悬停与品质的差别**只有颜色**；要单独调悬停只改这一处）
 -- ★★★0.3.18b：空格的白框 = **一圈更暗的框**（用户看完 0.3.18 的截图后选定「留一圈更暗的框（内部底块仍全透明）」）——
 --   0.3.18 那一版是 **0 = 完全透明**（用户原话「默认空格…把白色的边框设置透明色」），真机截图逐像素核过
 --   「空格一个像素都不画」（整行只有有物品的格子才有框边）⇒ 按用户指令改成留框。
@@ -1958,13 +1991,15 @@ local function applyGlowTint(btn, r, g, b, a)
   --   撤销 ⇒ 现在是**原样写基准值**（不再调暗亮色档；经过与撤销原因见上方长注释）
   a = B.glowAlpha(r, g, b, a)
   if (a or 0) <= 0 then
+    -- ★0.3.31e 单通道：静默 = 顶点 α 0；`SetAlpha` 恒显式写 1（初始 == 悬停恢复，与 0.3.27 空格框同一配方）
     pcall(btn.ehGlow.SetVertexColor, btn.ehGlow, 0, 0, 0, 0)
-    pcall(btn.ehGlow.SetAlpha, btn.ehGlow, 0)
+    pcall(btn.ehGlow.SetAlpha, btn.ehGlow, 1)
     return
   end
   pcall(btn.ehGlow.Show, btn.ehGlow)
+  -- ★0.3.31e 单通道：alpha **只走顶点色第 4 参**（它两态都落地），`SetAlpha` 恒钉 1 ⇒ 有效观感 = 写值本身（不再平方）
   pcall(btn.ehGlow.SetVertexColor, btn.ehGlow, r, g, b, a)
-  pcall(btn.ehGlow.SetAlpha, btn.ehGlow, a)
+  pcall(btn.ehGlow.SetAlpha, btn.ehGlow, 1)
 end
 
 -- ★★★整格底色（0.3.7；用户：「背包物品……需要对物品进行稀有度着色」+ 选定「整格底色按品质染色」）：
@@ -2090,7 +2125,8 @@ local function newItemButton(parent, bag, slot)
   -- ★0.3.21：建出来就是**显示态 + 全透明**（**不 Hide**，两个 alpha 通道一起归 0）——
   --   本客户端在隐藏态写属性不落地（见 applyGlowTint 上方那段：那正是「初始没有染色边框」的真因）。
   pcall(glow.SetVertexColor, glow, 1, 1, 1, 0)
-  pcall(glow.SetAlpha, glow, 0)
+  -- ★0.3.31e：建仓就把乘数通道钉成 1（顶点 α 0 保持全透明；写 0 反而让「初始打开读回 1」与「稳态读回写值」对不上）
+  pcall(glow.SetAlpha, glow, 1)
   btn.ehGlow = glow
   -- 句柄分派（显式两分支，绝不 or 回读）
   if ownIcon ~= nil then
@@ -6284,7 +6320,10 @@ local function paintButton(btn, rec)
   if c.edges ~= false and hovered ~= true and q >= 2 then
     local vr, vg, vb = B.vividRGB(qualRGB(q))
     local kk = B.tintK()
-    applyFillTint(btn, vr * kk, vg * kk, vb * kk, 1)
+    -- ★0.3.31 每档亮度系数（B.QUAL_K / B.qualK，唯一作用点之一）：乘在颜色上 ⇒ 明暗变、色相不变；
+    --   >1 的分量逐通道夹回 1（不许喂 >1 给 SetVertexColor）
+    local qk = B.qualK(q)
+    applyFillTint(btn, math.min(1, vr * kk * qk), math.min(1, vg * kk * qk), math.min(1, vb * kk * qk), 1)
   else
     -- ★0.3.15：中性格底 = **透明**（白装/灰装/悬停/关掉染色都只留框，不再铺一层暗底）
     applyFillTint(btn, FILL_DARK[1], FILL_DARK[2], FILL_DARK[3], 0)
@@ -6314,7 +6353,8 @@ local function paintButton(btn, rec)
     applyGlowTint(btn, 0.95, 0.80, 0.25, B.GLOW_A_HOVER)
   elseif c.edges ~= false and q >= 2 then
     local vr, vg, vb = B.vividRGB(qualRGB(q))
-    applyGlowTint(btn, vr, vg, vb, B.GLOW_A)
+    -- ★0.3.31 每档亮度系数：辉光乘在**写值 α** 上（B.glowAlpha 夹到 ≤1；颜色保持 vivid 原色、色相不变）
+    applyGlowTint(btn, vr, vg, vb, B.GLOW_A * B.qualK(q))
   else
     applyGlowTint(btn, 0, 0, 0, 0)
   end
@@ -6336,6 +6376,7 @@ function B.paintOne(btn)
   paintButton(btn, B.itemAt(bag, slot))
   return true
 end
+
 
 -- 筛选：命中保留 alpha 1、未命中变暗（与搜索同一套语义；照 OneBag 不重排格子）
 local function matchFilter(rec)
@@ -7263,34 +7304,34 @@ function B.status()
   --   与「画出来是什么色」（前者看档位、后者看那三个数；两组数不匹配 = 卡的中间那一段）。
   do
     local q3r, q3g, q3b = B.vividRGB(qualRGB(3))
-    local kk = B.tintK()
+    local kk = B.tintK() * B.qualK(3)   -- ★0.3.31：外观行的实算色与真正画出去的同一个口径（含每档系数）
     sayForce("外观：品质染色=" .. B.tintText() .. "（" .. strVal(B.tintIdx()) .. "/" .. strVal(table.getn(B.TINTS))
       .. " ｜ 精良(蓝)实算 " .. string.format("%.3f,%.3f,%.3f", q3r * kk, q3g * kk, q3b * kk) .. "）"
       .. " ｜ 格框染品质=" .. (c.edges ~= false and "开" or "关")
-      .. " ｜ 背景透明度=" .. B.bgText() .. " ｜ 图标系数=" .. strVal(B.ICON_K)
+      .. " ｜ 逐档系数=" .. B.qualKLine() .. " ｜ 背景透明度=" .. B.bgText() .. " ｜ 图标系数=" .. strVal(B.ICON_K)
       .. " ｜ 界面缩放=" .. strVal(math.floor(B.z() * 100 + 0.5)) .. "%")
     -- ★0.3.30 辉光读数（活口）：**写进 alpha 的值**（= 基准值原样，0.3.29 的归一已按用户要求撤销）
     --   + **观感读数**（有效 α² × 颜色亮度 —— ★各档**不相等是正常的**，它只解释「为什么亮色档看着更亮更粗」）。
     do
-      local a3 = B.glowAlphaOfQ(3, B.GLOW_A)
-      local a2 = B.glowAlphaOfQ(2, B.GLOW_A)
-      local a4 = B.glowAlphaOfQ(4, B.GLOW_A)
-      local a5 = B.glowAlphaOfQ(5, B.GLOW_A)
+      local a3 = B.glowAlphaOfQ(3, B.GLOW_A * B.qualK(3))
+      local a2 = B.glowAlphaOfQ(2, B.GLOW_A * B.qualK(2))
+      local a4 = B.glowAlphaOfQ(4, B.GLOW_A * B.qualK(4))
+      local a5 = B.glowAlphaOfQ(5, B.GLOW_A * B.qualK(5))
       local ag = B.glowAlpha(0.95, 0.80, 0.25, B.GLOW_A_HOVER)
-      -- 观感 = **有效 α**（= 写值的平方，见 `applyGlowTint` 上方那段）× 该颜色的亮度（**只读，不做归一**）
-      local function feel(a, r, g, b) return a * a * B.lumaRGB(r, g, b) * 255 end
+      -- 观感 = **有效 α**（★0.3.31e 单通道：= 写值本身，不再平方）× 该颜色的亮度（**只读，不做归一**）
+      local function feel(a, r, g, b) return a * B.lumaRGB(r, g, b) * 255 end   -- ★0.3.31e 单通道：有效 = 写值本身（不再平方）
       local r3, g3, b3 = B.vividRGB(qualRGB(3))
       local r2, g2, b2 = B.vividRGB(qualRGB(2))
       local r4, g4, b4 = B.vividRGB(qualRGB(4))
       local r5, g5, b5 = B.vividRGB(qualRGB(5))
-      sayForce("辉光写值 α(0.3.30 归一已撤销 · ★不再调暗)：蓝 " .. string.format("%.2f", a3)
+      sayForce("辉光写值 α(0.3.31 逐档系数 B.QUAL_K · 无归一)：蓝 " .. string.format("%.2f", a3)
         .. " ｜绿 " .. string.format("%.2f", a2)
         .. " ｜紫 " .. string.format("%.2f", a4)
         .. " ｜橙 " .. string.format("%.2f", a5)
         .. " ｜悬停金 " .. string.format("%.2f", ag)
         .. "（基准 = 品质 " .. string.format("%.2f", B.GLOW_A)
         .. " / 悬停 " .. string.format("%.2f", B.GLOW_A_HOVER) .. "）")
-      sayForce("观感读数(有效α²×颜色亮度，仅读数·不做归一)：蓝 " .. string.format("%.1f", feel(a3, r3, g3, b3))
+      sayForce("观感读数(有效α×颜色亮度，仅读数·不做归一)：蓝 " .. string.format("%.1f", feel(a3, r3, g3, b3))
         .. " ｜绿 " .. string.format("%.1f", feel(a2, r2, g2, b2))
         .. " ｜紫 " .. string.format("%.1f", feel(a4, r4, g4, b4))
         .. " ｜橙 " .. string.format("%.1f", feel(a5, r5, g5, b5))

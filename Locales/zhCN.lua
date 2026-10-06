@@ -964,6 +964,7 @@ SE_OP_NEXT = "再点一下会变成：%s",
   SK_CAT_3 = "宠物行为",
   SK_CAT_4 = "目标选取",
   SK_CAT_5 = "物品使用",
+  SK_CAT_6 = "装备使用", -- ★1.75.92 已装备物品（下拉 = 纸娃娃槽位实时枚举）
   CTG_1 = "自身状态",
   CTG_2 = "目标状态",
   CTG_3 = "buff/debuff检查",
@@ -973,6 +974,14 @@ SE_OP_NEXT = "再点一下会变成：%s",
   CT_CANATTACK = "目标可攻击", CT_CANBLEED = "目标可流血", CT_TFRIENDLY = "目标友善", CT_THOSTILE = "目标敌对",
   CT_TDEAD = "目标死亡", -- ★1.75.10 目标死亡（用户：条件类型 → 目标状态 → 目标死亡 是/否）
   CT_MWSIEGE = "围攻自身数量", CT_MWENGAGED = "10s交战人数", -- ★1.75.11 近战围攻 / 交战人数（条件类型 → 自身状态；数值比较）
+  CT_BAGITEM = "自身物品", -- ★1.75.92 自身物品数量（条件类型 → 自身状态；背包弹窗选物品 + 数量比较 + 是/否）
+  SE_ITEM_PICK_T = "选择背包物品",
+  SE_ITEM_PICK_H = "点选即写入条件；数量 = 背包里该物品所有堆叠相加的总数",
+  SE_ITEM_CUSTOM = "自定义输入",
+  CT_EUSE = "自身装备", -- ★1.75.92 自身装备可使用（条件类型 → 自身状态；已装备弹窗 + 使用效果/冷却 + 是/否）
+  SE_EQUIP_PICK_T = "选择装备（身上或背包）",
+  SE_EQUIP_PICK_H = "点选即写入条件；判定 = 有使用效果 且 冷却状态（身上或背包里的都算）",
+  SE_EUST_READY = "可使用", SE_EUST_CD = "冷却中", SE_EUST_NOUSE = "无效果", -- ★1.75.93 自身装备三态
   CT_TNEUTRAL = "目标中立", CT_ISELITE = "目标精英", CT_ISBOSS = "目标Boss", CT_TINCOMBAT = "目标战斗中",
   CT_AUTOATTACK = "普攻已开", CT_AUTOSHOT = "自动射击已开", CT_WANDSHOOT = "魔杖射击已开", CT_ALT = "Alt按住", CT_SHIFT = "Shift按住", CT_CTRL = "Ctrl按住",
   CT_FORM = "当前姿态", CT_HASBUFF = "自身buff检查", CT_NOBUFF = "自身无buff", CT_HASDEBUFF = "目标debuff检查", CT_TBUFF = "目标buff检查", CT_PDEBUFF = "自身debuff检查",
@@ -1163,7 +1172,7 @@ SE_OP_NEXT = "再点一下会变成：%s",
   TB_LD_PICK_G2 = "—— 队伍 / 团队层 ——",
   TB_LD_PICK_G3 = "—— 被动窗口（点图标开属性 · 拖图标移窗口）——",
   -- ★1.74.33 图标形态的分工改了（用户：「左键不要触发弹窗效果」）⇒ 悬停说明跟着改
-  TB_LD_ICON_TIP_LINE1 = "左键拖动可移动这个窗口",
+  TB_LD_ICON_TIP_LINE1 = "左键拖动 = 移动窗口；左键点一下（不拖动）= 重置这个框的属性（含位置/缩放/透明度/宽高/显隐）",
   TB_LD_ICON_TIP_LINE2 = "右键点图标 = 打开属性配置（缩放/透明度/宽高/显隐）",
   TB_LD_UISCALE = "UI 缩放",
   TB_LD_SHOWHIDE = "显示/隐藏",

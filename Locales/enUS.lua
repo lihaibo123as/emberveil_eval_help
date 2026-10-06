@@ -930,6 +930,7 @@ SE_OP_NEXT = "One more click changes it to: %s",
   SK_CAT_3 = "Pet",
   SK_CAT_4 = "Targeting",
   SK_CAT_5 = "Items",
+  SK_CAT_6 = "Equipped", -- ★1.75.92 use equipped item (dropdown = live paper-doll slots)
   CTG_1 = "Self",
   CTG_2 = "Target",
   CTG_3 = "Buff / Debuff checks",
@@ -939,6 +940,14 @@ SE_OP_NEXT = "One more click changes it to: %s",
   CT_CANATTACK = "Attackable", CT_CANBLEED = "Bleedable", CT_TFRIENDLY = "T:Friendly", CT_THOSTILE = "T:Hostile",
   CT_TDEAD = "Target Dead", -- ★1.75.10 目标死亡
   CT_MWSIEGE = "Melee Attackers", CT_MWENGAGED = "Engaged (10s)", -- ★1.75.11 melee siege / engaged count
+  CT_BAGITEM = "Own Item", -- ★1.75.92 bag item count condition (pick from bags + count compare + yes/no)
+  SE_ITEM_PICK_T = "Pick Bag Item",
+  SE_ITEM_PICK_H = "Click to write into the condition; count = total of all stacks in bags",
+  SE_ITEM_CUSTOM = "Custom input",
+  CT_EUSE = "Own Equipment", -- ★1.75.92 equipped-item usable condition (pick from equipped list + use-effect/CD + yes/no)
+  SE_EQUIP_PICK_T = "Pick Equipment (worn or bags)",
+  SE_EQUIP_PICK_H = "Click to write into the condition; judged by use-effect and cooldown (worn or in bags)",
+  SE_EUST_READY = "Usable", SE_EUST_CD = "On Cooldown", SE_EUST_NOUSE = "No Use Effect", -- ★1.75.93 three states
   CT_TNEUTRAL = "T:Neutral", CT_ISELITE = "T:Elite", CT_ISBOSS = "T:Boss", CT_TINCOMBAT = "T:In Combat",
   CT_AUTOATTACK = "Auto-attack On", CT_AUTOSHOT = "Auto Shot On", CT_WANDSHOOT = "Wand Shoot On", CT_ALT = "Alt Held", CT_SHIFT = "Shift Held", CT_CTRL = "Ctrl Held",
   CT_FORM = "Current Stance", CT_HASBUFF = "Self Buff", CT_NOBUFF = "Missing Buff", CT_HASDEBUFF = "Target Debuff", CT_TBUFF = "Target Buff", CT_PDEBUFF = "Self Debuff",
@@ -1112,7 +1121,7 @@ SE_OP_NEXT = "One more click changes it to: %s",
   TB_LD_PICK_G1 = "—— Always-on layers (drag handle) ——",
   TB_LD_PICK_G2 = "—— Party / raid layers ——",
   TB_LD_PICK_G3 = "—— Passive windows (click icon = attrs, drag icon = move) ——",
-  TB_LD_ICON_TIP_LINE1 = "Left-drag moves this window",
+  TB_LD_ICON_TIP_LINE1 = "Left-drag = move the window; left-click (no drag) = reset this frame's attributes (position/scale/alpha/size/visibility)",
   TB_LD_ICON_TIP_LINE2 = "Right-click the icon = open attribute settings (scale/alpha/size/visibility)",
   TB_LD_UISCALE = "UI scale",
   TB_LD_SHOWHIDE = "Show/Hide",

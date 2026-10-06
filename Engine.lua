@@ -1042,6 +1042,151 @@ local function wFindBagItem(name)
   return nil
 end
 
+-- ★★★背包计数（1.75.92「自身物品」条件；用户：「条件类型-->增加个:自身物品:xxx 数量判断,是/否」）：
+--   同名物品**所有堆叠的数量相加**（多个半堆 ≠ 一堆）→ 总数；背包 API 缺失返回 **nil**（如实失败用）。
+--   ★认名口径与 wFindBagItem 同一套（双侧 colonNorm 归一）；★背包扫描是**权威读数**（读得到就是真数），
+--     所以「没有这个物品」如实返回 **0**（数量判断里 0 是真答案，不是「查不到」）。
+--   ★0.5s 整扫缓存：战斗信息UI 的亮金预览每 0.15s 求值一次，逐拍全扫背包是白浪费
+--     （与 auraNameHit 的 0.5s 缓存同一手法）；BAG_UPDATE 不挂事件——0.5s 足够跟上拾取/消耗。
+--   ★★全局函数 + 缓存挂 EVAL_HELP_STATE（**主 chunk 200 局部上限**，不新增文件级 local；
+--     UPDATE_STATE 只更新自己的字段、不换表 ⇒ 缓存在它上面安全）。
+function EVAL_COUNT_BAG_ITEM(name)
+  if type(GetContainerNumSlots) ~= "function" then return nil end
+  local stt = rawget(_G, "EVAL_HELP_STATE")
+  if type(stt) ~= "table" then stt = { bagCntAt = 0 } end -- 兜底（正常 Core 早已建表）
+  local now = (type(GetTime) == "function") and GetTime() or 0
+  if stt.bagCntMap == nil or (now - (stt.bagCntAt or 0)) > 0.5 then
+    local map = {}
+    for bag = 0, 4 do
+      local okn, slots = pcall(GetContainerNumSlots, bag)
+      if okn and slots and slots > 0 then
+        for slot = 1, slots do
+          local okl, link = pcall(GetContainerItemLink, bag, slot)
+          if okl and link then
+            local iname = string.match(link, "%[(.-)%]")
+            if iname then
+              local cnt = 1
+              if type(GetContainerItemInfo) == "function" then
+                local oki, tex, c = pcall(GetContainerItemInfo, bag, slot)
+                if oki then cnt = tonumber(c) or 1 end
+              end
+              local key = colonNorm(iname)
+              map[key] = (map[key] or 0) + cnt
+            end
+          end
+        end
+      end
+    end
+    stt.bagCntMap, stt.bagCntAt = map, now
+  end
+  return stt.bagCntMap[colonNorm(tostring(name or ""))] or 0
+end
+
+-- ★★★装备使用（1.75.92；用户：「技能编辑能否增加个装备使用?已经装备的如何使用,排查API,功能参考: 物品使用.
+--   但是装备的选取是已经装备的下拉列表项」）：
+--   rule.skill = "装备:名称" —— 与「物品:名称」同族，差别只在**位置**：物品扫背包（0-4 袋），装备扫**纸娃娃槽位 1-19**。
+--   ★API 已按 wiki（emberveil.org/wiki/lua/globals/Inventory）核实：UseInventoryItem(slot)「uses the equipped item
+--     (same path as a right-click on the paper doll)」、**无 Protected 行**（与 UseContainerItem 同档，可直调）；
+--     GetInventoryItemLink("player", slot) / GetInventoryItemTexture(unit, slot) / GetInventoryItemCooldown(unit, slot) 均在索引。
+--   ★★全局函数（**主 chunk 200 局部上限**，与 EVAL_COUNT_BAG_ITEM 同一处理；内部调用点直接用全局名）。
+function EVAL_EQUIP_OF(skill)
+  local nm = string.match(skill or "", "^装备:(.+)$")
+  if not nm then nm = string.match(skill or "", "^装备：(.+)$") end
+  return nm
+end
+-- 装备槽查找：→ slot, tex（未找到返回 nil）。槽位 = 纸娃娃 1-19（0=弹药，不可使用，不扫）。
+function EVAL_FIND_EQUIPPED(name)
+  if type(GetInventoryItemLink) ~= "function" then return nil end
+  for slot = 1, 19 do
+    local okl, link = pcall(GetInventoryItemLink, "player", slot)
+    if okl and link then
+      local iname = string.match(link, "%[(.-)%]")
+      -- ★双侧归一（与 wFindBagItem 同一判据）：链接里的真名可能全角「：」，配置名可能半角
+      if iname and colonNorm(iname) == colonNorm(name) then
+        local tex = nil
+        if type(GetInventoryItemTexture) == "function" then
+          local okt, t = pcall(GetInventoryItemTexture, "player", slot)
+          if okt then tex = t end
+        end
+        return slot, tex
+      end
+    end
+  end
+  return nil
+end
+
+-- ★★★「这件物品有没有使用效果」探针（1.75.92 条件类型「自身装备」用；1.75.93 扩到背包格）：
+--   ★API 排查结论：本客户端**没有 IsUsableItem**（1370 条索引里不存在），GetItemInfo 也不给「使用」标记 ⇒
+--     唯一能判「有没有使用效果」的路 = **隐形 tooltip 读「使用：」行**（zh 使用 / en Use: / ru Использование）。
+--   ★走自建隐形 tooltip（WTT + EVAL_WTT_MAY_READ 守卫，绝不碰玩家正看的 GameTooltip）；
+--     SetInventoryItem / SetBagItem 的**返回值不可信**（本项目定案）⇒ 调完直接读行。
+--   ★结果按名字**缓存**（EVAL_HELP_STATE.equipUseMap）：「有没有使用效果」是物品的静态属性，不会变；
+--     **判不出（nil）不进缓存**（tooltip 不可用只是暂时的，下拍再探）。三态：true / false / nil（判不出）。
+-- 读 WTT 当前内容里有没有「使用：」行（★调用前必须已填好）：true / false / nil（WTT 不可用）。
+--   ★扫描循环只有这一份（装备槽/背包格两个入口共用）；全局形态是为了不碰主 chunk 的 200 局部上限。
+--   ★★★1.75.93 真机取证修正（/eh go 装备探针 黑色甲壳盾）：本客户端的使用行**不是行首格式**——
+--     实测原文 = 「尝试驱散目标身上的1个中毒效果，…持续8秒。使用：」（描述在前、「使用：」缀在**行尾**，下一行是次数「2次」）
+--     ⇒ 匹配从「行首 ^使用」放宽为**子串**「使用：/使用：」（plain find，全/半角冒号都认）。
+--     en/ru 同样按子串（"Use:" / "Использование:"），防同一客户端的换序排版。
+function EVAL_WTT_HAS_USE_LINE()
+  if not (WTT and WTT.NumLines) then return nil end
+  local base = "GameTooltip"
+  if WTTSELF then
+    local okn, nm0 = pcall(function() return WTT:GetName() end)
+    if okn and type(nm0) == "string" and nm0 ~= "" then base = nm0 end
+  end
+  local okN, n = pcall(WTT.NumLines, WTT)
+  n = (okN and tonumber(n)) or 30
+  if n > 30 then n = 30 end
+  for row = 1, n do
+    local fs = rawget(_G, base .. "TextLeft" .. row)
+    if fs and fs.GetText then
+      local okt, t = pcall(function() return fs:GetText() end)
+      if okt and type(t) == "string" then
+        if string.find(t, "使用:", 1, true) or string.find(t, "使用：", 1, true)
+          or string.find(t, "Use:", 1, true) or string.find(t, "Использование:", 1, true) then
+          return true
+        end
+      end
+    end
+  end
+  return false
+end
+-- 装备槽版：EVAL_EQUIP_HAS_USE(名, 纸娃娃槽位 1-19)
+function EVAL_EQUIP_HAS_USE(name, slot)
+  if type(slot) ~= "number" then return nil end
+  local stt = rawget(_G, "EVAL_HELP_STATE")
+  if type(stt) ~= "table" then stt = {} end
+  if type(stt.equipUseMap) ~= "table" then stt.equipUseMap = {} end
+  local key = colonNorm(tostring(name or ""))
+  local cached = stt.equipUseMap[key]
+  if cached ~= nil then return cached end
+  if not (WTT and WTT.SetInventoryItem and EVAL_WTT_MAY_READ()) then return nil end
+  local okS = pcall(WTT.SetInventoryItem, WTT, "player", slot)
+  if not okS then return nil end
+  local found = EVAL_WTT_HAS_USE_LINE()
+  pcall(function() WTT:Hide() end)
+  if found ~= nil then stt.equipUseMap[key] = found end
+  return found
+end
+-- 背包格版：EVAL_BAG_HAS_USE(名, bag, slot)（1.75.93：背包里的装备也进判定范围）
+function EVAL_BAG_HAS_USE(name, bag, slot)
+  if type(bag) ~= "number" or type(slot) ~= "number" then return nil end
+  local stt = rawget(_G, "EVAL_HELP_STATE")
+  if type(stt) ~= "table" then stt = {} end
+  if type(stt.equipUseMap) ~= "table" then stt.equipUseMap = {} end
+  local key = colonNorm(tostring(name or ""))
+  local cached = stt.equipUseMap[key]
+  if cached ~= nil then return cached end
+  if not (WTT and WTT.SetBagItem and EVAL_WTT_MAY_READ()) then return nil end
+  local okS = pcall(WTT.SetBagItem, WTT, bag, slot)
+  if not okS then return nil end
+  local found = EVAL_WTT_HAS_USE_LINE()
+  pcall(function() WTT:Hide() end)
+  if found ~= nil then stt.equipUseMap[key] = found end
+  return found
+end
+
 -- 姿态切换（1.43.0）：rule.skill="姿态:战斗姿态"——走姿态栏 CastShapeshiftForm（官方文档明确 Not protected，插件可直调），
 -- 不占动作条。战士姿态不可取消（重复按 no-op）；德鲁伊等可切换形态重复按会取消 aura → 执行前 active 守门。
 local function stanceOf(skill)
@@ -1158,7 +1303,8 @@ end
 --   ★rank（指定等级）走 RunScript 直接施法，**本来就不需要动作条** → 必须算进来。
 function skillNoSlotOk(skill, rank)
   if rank then return true end
-  return (petCmdOf(skill) or targetSelOf(skill) or itemOf(skill) or stanceOf(skill)
+  -- ★1.75.92 装备使用（EVAL_EQUIP_OF）也不占动作条：与「物品使用」同族，位置在纸娃娃槽位
+  return (petCmdOf(skill) or targetSelOf(skill) or itemOf(skill) or EVAL_EQUIP_OF(skill) or stanceOf(skill)
           or cancelCastOf(skill) or stopAllOf(skill) or followOf(skill) or cancelBuffOf(skill)) and true or false
 end
 
@@ -1290,6 +1436,16 @@ local function wicon(name)
     if type(GetItemInfo) == "function" then
       local ok, _1, _2, _3, _4, _5, _6, _7, itex = pcall(GetItemInfo, iname)
       if ok and itex then return itex end -- 1.12 GetItemInfo 第9返回值=纹理
+    end
+    return "Interface\\Icons\\INV_Misc_QuestionMark"
+  end
+  local ename0 = EVAL_EQUIP_OF(name) -- ★1.75.92 装备使用：装备槽图标 → GetItemInfo 缓存 → 问号（与物品同一口径）
+  if ename0 then
+    local _es, etex = EVAL_FIND_EQUIPPED(ename0)
+    if etex then return etex end
+    if type(GetItemInfo) == "function" then
+      local ok2, _1, _2, _3, _4, _5, _6, _7, itex2 = pcall(GetItemInfo, ename0)
+      if ok2 and itex2 then return itex2 end
     end
     return "Interface\\Icons\\INV_Misc_QuestionMark"
   end
@@ -1725,6 +1881,17 @@ local function wready(name)
     local left = (start or 0) + (dur or 0) - GetTime()
     return false, string.format("冷却剩 %.1fs", left > 0 and left or 0)
   end
+  local ename1 = EVAL_EQUIP_OF(name) -- ★1.75.92 装备冷却走装备槽 API（GetInventoryItemCooldown）
+  if ename1 then
+    local eslot = EVAL_FIND_EQUIPPED(ename1)
+    if not eslot then return false, "未装备" end
+    if type(GetInventoryItemCooldown) ~= "function" then return true end -- 无冷却 API ⇒ 如实按「就绪」放行（别假装在冷却）
+    local okc2, start2, dur2 = pcall(GetInventoryItemCooldown, "player", eslot)
+    if not okc2 then return false, "冷却查询失败" end
+    if (start2 or 0) == 0 and (dur2 or 0) == 0 then return true end
+    local left2 = (start2 or 0) + (dur2 or 0) - GetTime()
+    return false, string.format("冷却剩 %.1fs", left2 > 0 and left2 or 0)
+  end
   local stname2 = stanceOf(name) -- 1.43.0 姿态冷却走姿态栏 API；已在该姿态=不就绪（防止德鲁伊形态被再按取消）
   if stname2 then
     local si, _t, active, castable = wFindStance(stname2)
@@ -1925,6 +2092,20 @@ local function wuse(name, reason, rank)
     local iline = string.format("→ %s (%s)", name, reason)
     EVAL_LOGLINE(iline)
     if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cff7fff7f" .. iline .. "|r") end
+    return true
+  end
+  local ename2 = EVAL_EQUIP_OF(name)
+  if ename2 then
+    -- ★1.75.92 装备使用：UseInventoryItem(slot) —— wiki 原文「uses the equipped item (same path as
+    --   a right-click on the paper doll)」、无 Protected 行（与 UseContainerItem 同档，可直调）；
+    --   空槽/没装备这件 ⇒ 如实跳过（客户端自己对空槽也是空操作）。
+    local eslot2 = EVAL_FIND_EQUIPPED(ename2)
+    if not eslot2 then wlog(name .. "跳过: 未装备") return false end
+    if type(UseInventoryItem) ~= "function" then wlog(name .. "跳过: 本客户端没有 UseInventoryItem") return false end
+    pcall(UseInventoryItem, eslot2)
+    local eline = string.format("→ %s (%s) | 槽位:%d", name, reason, eslot2)
+    EVAL_LOGLINE(eline)
+    if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cff7fff7f" .. eline .. "|r") end
     return true
   end
   local stname3 = stanceOf(name)
@@ -2402,6 +2583,56 @@ local function condOne(cd, skill, dry, rule)
   elseif k == "mwEngaged" then
     local nE = tonumber(st.mwEngaged) or 0
     return condCmp({ cd.op, cd.n }, nE), "交战数"
+  -- ★★★1.75.92 自身物品数量（用户：「一键宏->技能编辑->条件类型-->增加个:自身物品:xxx(弹窗选择背包内的物品)
+  --   数量判断,是/否,需求是对背包某个物品数量的判断」）：
+  --   值 = 背包（0-4 袋）里该物品**所有堆叠的总数**（EVAL_COUNT_BAG_ITEM，0.5s 整扫缓存）；
+  --   是/否 = **比较成立 / 不成立**（否 = 数量不满足这个比较，含 0 个 —— 「无物品:面包>=1」= 面包不够 1 个）。
+  --   ★名字没填 / 背包 API 缺失 ⇒ **如实失败**（本项目铁律「查不到 ≠ 没有」的反向：绝不静默通过）。
+  elseif k == "bagItem" then
+    local nmB = tostring(cd.s or "")
+    if nmB == "" then return false, "物品:未选择" end
+    local cntB = (type(EVAL_COUNT_BAG_ITEM) == "function") and EVAL_COUNT_BAG_ITEM(nmB) or nil
+    if cntB == nil then return false, "物品:背包 API 不可用" end
+    local okB = condCmp({ cd.op or ">=", cd.n or 1 }, cntB)
+    return (okB == (cd.v ~= false)), "物品:" .. nmB .. " ×" .. tostring(cntB)
+  -- ★★★1.75.92 自身装备可使用（用户：「条件类型-->增加:自身装备:xxx(弹窗选择已经装备列表) 物品技能是否可使用」）；
+  --   ★1.75.93 扩三态 + 扩范围（用户：「判定目标装备不局限在已经装备.背包内的装备也加入可选范围.
+  --     是否支持冷却中.可使用,无使用效果判定?」）：
+  --   · **范围 = 身上 ∨ 背包**（先查纸娃娃槽位，没有再查背包 0-4 袋）；
+  --   · **状态三态**（cd.st）：ready=可使用（有使用效果 ∧ 冷却就绪）/ cd=冷却中 / nouse=无使用效果；是/否 = 命中/不命中该状态。
+  --   ★三条如实失败口径：未选名 / **两处都找不到**（两个方向都不算过——与 tPlayer 同一纪律）/ 使用效果判不出。
+  elseif k == "eUse" then
+    local nmE = tostring(cd.s or "")
+    if nmE == "" then return false, "装备:未选择" end
+    local eslot = (type(EVAL_FIND_EQUIPPED) == "function") and EVAL_FIND_EQUIPPED(nmE) or nil
+    local ebag, eslotB = nil, nil
+    if not eslot then ebag, eslotB = wFindBagItem(nmE) end
+    if not eslot and not ebag then return false, "装备:未装备且背包未找到" end
+    local hasUse = nil
+    -- ★★★and/or 陷阱（1.75.93 真机报障「判不出使用效果」的真凶）：探针返回 **false**（无使用效果）时，
+    --   `(cond) and f() or nil` 会把它改写成 **nil**（判不出）⇒ 两件不同的事被捏成一件。
+    --   本项目定案写法 = 分两步（a and f() 只留第一个返回值 + false 变 fallback，两个坑都在这一条上）。
+    if eslot then
+      if type(EVAL_EQUIP_HAS_USE) == "function" then hasUse = EVAL_EQUIP_HAS_USE(nmE, eslot) end
+    else
+      if type(EVAL_BAG_HAS_USE) == "function" then hasUse = EVAL_BAG_HAS_USE(nmE, ebag, eslotB) end
+    end
+    if hasUse == nil then return false, "装备:判不出使用效果" end
+    local readyE = false
+    if hasUse == true then
+      if eslot and type(GetInventoryItemCooldown) == "function" then
+        local okc3, st3, du3 = pcall(GetInventoryItemCooldown, "player", eslot)
+        readyE = okc3 and ((st3 or 0) == 0 or (du3 or 0) == 0) or false
+      elseif ebag and type(GetContainerItemCooldown) == "function" then
+        local okc4, st4, du4 = pcall(GetContainerItemCooldown, ebag, eslotB)
+        readyE = okc4 and ((st4 or 0) == 0 or (du4 or 0) == 0) or false
+      end
+    end
+    local stateNow = (hasUse ~= true) and "nouse" or (readyE and "ready" or "cd")
+    local wantE = (cd.st == "cd" or cd.st == "nouse") and cd.st or "ready"
+    local stateLbl = (stateNow == "ready") and "可使用" or (stateNow == "cd" and "冷却中" or "无使用效果")
+    return ((stateNow == wantE) == (cd.v ~= false)),
+      "装备:" .. nmE .. "(" .. stateLbl .. ((not eslot) and "·背包" or "") .. ")"
   elseif k == "tHpPct" then return condCmp({ cd.op, cd.n }, st.tHpPct), "目标血%"
   elseif k == "swingLeft" then -- 1.57.0 距下次攻击秒数（1.74.30 起**状态感知**：自动射击中 = 距下次射击）
     local rem = (type(EVAL_SWING_REMAIN_ACTIVE) == "function") and EVAL_SWING_REMAIN_ACTIVE() or EVAL_SWING_REMAIN()
@@ -4398,6 +4629,44 @@ local function parseOneRaw(token)
     if nmP2 == "" then return nil end
     return { k = "tPlayer", nm = nmP2, v = false }
   end
+  -- ★★★1.75.92 自身物品数量（导入/文本编辑）：物品:名>=3 / 无物品:名<2；英文 bagItem= / nobagitem=；! 前缀也认。
+  --   数量后缀与光环层数同一写法（末尾 比较符+数字；★(.-) 非贪婪 + 锚尾 ⇒ 取**最后一个**比较符，名字里带数字不受影响）；
+  --   **没写数量 = 默认 >=1**（「有这个物品」）。★空名 = 写法错误 ⇒ 整条如实丢弃（与 tPlayer 同口径）。
+  local biNeg = false
+  local bim = string.match(token, "^无物品[:：](.+)$") or string.match(token, "^nobagitem[:=](.+)$")
+  if bim then biNeg = true else bim = string.match(token, "^物品[:：](.+)$") or string.match(token, "^bagitem[:=](.+)$") end
+  if bim then
+    local nmB, opB, nB = string.match(bim, "^(.-)([><]=?=?)(%d+)$")
+    if nmB and condTrim(nmB) ~= "" then
+      return { k = "bagItem", s = condTrim(nmB), op = opB, n = tonumber(nB), v = not (neg or biNeg) }
+    end
+    local nmB2 = condTrim(bim)
+    if nmB2 == "" then return nil end
+    return { k = "bagItem", s = nmB2, op = ">=", n = 1, v = not (neg or biNeg) }
+  end
+  -- ★1.75.92 自身装备可使用（导入/文本编辑）：装备可用:名 / 装备不可用:名；英文 equipUse= / noEquipUse=；! 前缀也认。
+  --   ★空名 = 写法错误 ⇒ 整条如实丢弃（与 tPlayer/bagItem 同口径）。
+  --   ★1.75.93 三态：装备冷却中:名 / 装备无效果:名（英文 equipCd= / equipNoUse=），方向「否」走 ! 前缀（入口已剥成 neg）。
+  local euNeg = false
+  local eum = string.match(token, "^装备不可用[:：](.+)$") or string.match(token, "^noequipuse[:=](.+)$")
+  if eum then euNeg = true else eum = string.match(token, "^装备可用[:：](.+)$") or string.match(token, "^equipuse[:=](.+)$") end
+  if eum then
+    local nmE2 = condTrim(eum)
+    if nmE2 == "" then return nil end
+    return { k = "eUse", s = nmE2, v = not (neg or euNeg) }
+  end
+  local ecd = string.match(token, "^装备冷却中[:：](.+)$") or string.match(token, "^equipcd[:=](.+)$")
+  if ecd then
+    local nmE3 = condTrim(ecd)
+    if nmE3 == "" then return nil end
+    return { k = "eUse", s = nmE3, st = "cd", v = not neg }
+  end
+  local enu = string.match(token, "^装备无效果[:：](.+)$") or string.match(token, "^equipnouse[:=](.+)$")
+  if enu then
+    local nmE4 = condTrim(enu)
+    if nmE4 == "" then return nil end
+    return { k = "eUse", s = nmE4, st = "nouse", v = not neg }
+  end
   local tc = string.match(token, "^目标职业[:：](.+)$") or string.match(token, "^tClass[:=](.+)$")
   if tc then
     -- 分隔统一成 / 再切：顿号/中文逗号是多字节，直接进字符类会按字节误切汉字（如"猎"含 ，的字节）
@@ -4775,6 +5044,23 @@ if k == "immune" then return (cd.v == false and "未免疫:" or "免疫:") .. to
     local nmP = tostring(cd.nm or "")
     if nmP == "" then nmP = "未填" end -- 空名在界面上/导出里如实写「未填」，不显示成空白
     return ((cd.v == false) and "目标不是玩家:" or "目标玩家:") .. nmP
+  end
+  if k == "bagItem" then
+    -- ★1.75.92 自身物品数量（导出/回显）：物品:名>=3 / 无物品:名<2（与 parseOneRaw **成对**——导出读不回 = 导入即丢条件）。
+    --   名字本来就是本地化真名 ⇒ disp 与否同一形态；空名如实写「未选」（不显示成空白）。
+    local nmB = tostring(cd.s or "")
+    if nmB == "" then nmB = "未选" end
+    return ((cd.v == false) and "无物品:" or "物品:") .. nmB .. (cd.op or ">=") .. tostring(cd.n or 1)
+  end
+  if k == "eUse" then
+    -- ★1.75.92 自身装备可使用（导出/回显）；★1.75.93 三态：装备可用:名 / 装备冷却中:名 / 装备无效果:名，
+    --   方向「否」= 前面加 !（与 parseOneRaw 成对——导出读不回 = 导入即丢条件）；空名如实写「未选」。
+    --   ★兼容形态：旧版「装备不可用:名」= 可用 + 否（解析侧照认）。
+    local nmE = tostring(cd.s or "")
+    if nmE == "" then nmE = "未选" end
+    if cd.st == "cd" then return ((cd.v == false) and "!" or "") .. "装备冷却中:" .. nmE end
+    if cd.st == "nouse" then return ((cd.v == false) and "!" or "") .. "装备无效果:" .. nmE end
+    return ((cd.v == false) and "!" or "") .. "装备可用:" .. nmE
   end
   return tostring(k)
 end
@@ -5468,6 +5754,24 @@ function EVAL_GO_SKILL_CATEGORIES()
     table.insert(l, 1, L("SE_PICK_ITEM"))
     return l
   end })
+  -- ★★★1.75.92 第六类「装备使用」（用户：「装备的选取是已经装备的下拉列表项」）：
+  --   项 = **当前已装备**的物品（纸娃娃槽位 1-19 实时枚举，同名饰品/戒指去重），点开时才取数（装备是动态的）。
+  --   ★不加「自定义输入」首行：装备名必须**此刻穿在身上**才有意义（没穿着 ⇒ 执行侧如实报「未装备」），
+  --     要用手里没穿的物品请走第五类「物品使用」的自定义输入。
+  table.insert(cats, { label = L("SK_CAT_6"), icon = CAT_ICON_ROOT .. "chests", items = function()
+    local l, seen = {}, {}
+    if type(GetInventoryItemLink) == "function" then
+      for slot = 1, 19 do
+        local okl, link = pcall(GetInventoryItemLink, "player", slot)
+        local nm = okl and link and string.match(link, "%[(.-)%]")
+        if nm and nm ~= "" and not seen[nm] then
+          seen[nm] = true
+          table.insert(l, "装备:" .. nm)
+        end
+      end
+    end
+    return l
+  end })
   return cats
 end
 
@@ -5495,6 +5799,9 @@ function EVAL_GO_STATUS()
       elseif itemOf(n) then
         local bag = wFindBagItem(itemOf(n))
         EVAL_SAY(n .. ": " .. (bag and "|cff00ff00背包已找到|r" or "|cffff0000背包未找到|r"))
+      elseif EVAL_EQUIP_OF(n) then -- ★1.75.92 装备使用：状态总览同样如实报「身上穿没穿着」
+        local eslot = EVAL_FIND_EQUIPPED(EVAL_EQUIP_OF(n))
+        EVAL_SAY(n .. ": " .. (eslot and ("|cff00ff00已装备（槽位" .. eslot .. "）|r") or "|cffff0000未装备|r"))
       else
         local s = wslots[n]
         if s then

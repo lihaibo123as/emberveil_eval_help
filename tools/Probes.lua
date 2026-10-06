@@ -1283,4 +1283,116 @@ PR["ITEMPRICE"] = function(msg)
   iprSay("   （报告进 cfg.ipProbe、监听进 cfg.ipListen，互不刷掉 ⇒ /reload 后落盘，AI 可直接读存档）")
 end
 
+-- ★★★1.75.93 装备 tooltip 取证（用户真机报障：「装备:黑色甲壳盾跳过: 判不出使用效果」⇒ 审计 tooltip 信息来源）。
+--   一条命令摊开全链路：WTT 通道状态 → 定位（身上槽位 ∨ 背包格）→ SetInventoryItem/SetBagItem pcall 结果 →
+--   NumLines → 逐行原文 → 使用效果判定（现场值 + 缓存值）→ 冷却三参。
+--   ★原话进有界落盘环 `cfg.equipProbe`（40 行，最新在后）⇒ /reload 后 AI 可直接读存档，不让玩家转述。
+--   命令：`/eh go 装备探针 [名字]`（不带名字 = 列出当前已装备清单）。
+PR["EQUIPTIP"] = function(msg)
+  local ring = {}
+  local function out(s)
+    s = tostring(s)
+    if type(EVAL_SAY_FORCE) == "function" then pcall(EVAL_SAY_FORCE, s) else say(s) end -- ★命令回显 = 强制可见
+    local cf = conf()
+    if cf then
+      if type(cf.equipProbe) ~= "table" then cf.equipProbe = {} end
+      table.insert(cf.equipProbe, s)
+      while table.getn(cf.equipProbe) > 40 do table.remove(cf.equipProbe, 1) end
+    end
+  end
+  local nm = string.match(msg, "^go 装备探针%s+(.+)$") or string.match(msg, "^go etip%s+(.+)$") or ""
+  out("— 装备 tooltip 取证 " .. date("%H:%M:%S") .. " —")
+  -- ① 通道状态
+  if type(EVAL_WTT_STATE) == "function" then
+    local wst = EVAL_WTT_STATE()
+    out("① tooltip 通道: " .. tostring(wst and wst.why) .. " ｜ 此刻可读="
+      .. tostring(type(EVAL_WTT_MAY_READ) == "function" and EVAL_WTT_MAY_READ()))
+  else
+    out("① EVAL_WTT_STATE 不存在（Engine 未载入完整）")
+  end
+  local WTT = (type(EVAL_WTT_HANDLE) == "function") and EVAL_WTT_HANDLE() or nil
+  out("   WTT=" .. (WTT and "有" or "|cffff6060无|r")
+    .. " ｜ SetInventoryItem=" .. tostring(WTT and WTT.SetInventoryItem ~= nil)
+    .. " ｜ SetBagItem=" .. tostring(WTT and WTT.SetBagItem ~= nil)
+    .. " ｜ NumLines=" .. tostring(WTT and WTT.NumLines ~= nil))
+  -- ② 不带名字 = 列已装备清单
+  if nm == "" then
+    out("② 当前已装备（纸娃娃槽位 1-19）：")
+    local any = false
+    if type(GetInventoryItemLink) == "function" then
+      for slot = 1, 19 do
+        local okl, link = pcall(GetInventoryItemLink, "player", slot)
+        local n2 = okl and link and string.match(link, "%[(.-)%]")
+        if n2 then any = true out("   槽" .. slot .. ": " .. n2) end
+      end
+    end
+    if not any then out("   （一个都没读到）") end
+    out("用法: /eh go 装备探针 <名字> —— 摊开那件装备的 tooltip 原文")
+    return
+  end
+  -- ③ 定位：先身上，再背包（与 condOne 的 eUse 同一顺序）
+  local eslot = (type(EVAL_FIND_EQUIPPED) == "function") and EVAL_FIND_EQUIPPED(nm) or nil
+  local ebag, eslotB = nil, nil
+  if not eslot and type(EVAL_IG_SCAN_BAGS) == "function" then
+    local list = EVAL_IG_SCAN_BAGS({ 0, 1, 2, 3, 4 })
+    for _, it2 in ipairs(list or {}) do
+      if it2.name == nm then ebag, eslotB = it2.bag, it2.slot break end
+    end
+  end
+  if not eslot and not ebag then
+    out("③ 定位：|cffff6060身上和背包都没找到「" .. nm .. "」|r（名字须与链接里的真名逐字一致，全角/半角冒号已归一）")
+    return
+  end
+  out("③ 定位: " .. (eslot and ("身上槽位 " .. eslot) or ("背包 [" .. ebag .. "," .. eslotB .. "]")))
+  -- ④ 填 tooltip + pcall 结果
+  if not WTT then out("④ WTT 不存在 ⇒ 整条 tooltip 路不可用") return end
+  local okS, err
+  if eslot then
+    if not WTT.SetInventoryItem then out("④ WTT 没有 SetInventoryItem ⇒ 判不出") return end
+    okS, err = pcall(WTT.SetInventoryItem, WTT, "player", eslot)
+    out("④ SetInventoryItem(player," .. eslot .. ") pcall=" .. tostring(okS) .. (okS and "" or (" ｜ " .. tostring(err))))
+  else
+    if not WTT.SetBagItem then out("④ WTT 没有 SetBagItem ⇒ 判不出") return end
+    okS, err = pcall(WTT.SetBagItem, WTT, ebag, eslotB)
+    out("④ SetBagItem(" .. ebag .. "," .. eslotB .. ") pcall=" .. tostring(okS) .. (okS and "" or (" ｜ " .. tostring(err))))
+  end
+  -- ⑤ 逐行原文（NumLines 之内；之外是旧文本，不读）
+  local wname = "GameTooltip"
+  if type(EVAL_WTT_IS_SELF) == "function" and EVAL_WTT_IS_SELF() then
+    local okn, n0 = pcall(function() return WTT:GetName() end)
+    if okn and type(n0) == "string" and n0 ~= "" then wname = n0 end
+  end
+  local okN, nl = pcall(WTT.NumLines, WTT)
+  nl = (okN and tonumber(nl)) or 0
+  out("⑤ NumLines=" .. tostring(nl) .. "（行对象前缀 " .. wname .. "）")
+  local maxR = nl
+  if maxR > 20 then maxR = 20 end
+  for row = 1, maxR do
+    local fs = rawget(_G, wname .. "TextLeft" .. row)
+    local t = (fs and fs.GetText) and (function() local ok2, x = pcall(function() return fs:GetText() end) return ok2 and x or "?" end)() or "|cffff6060<行对象不存在>|r"
+    out("   " .. row .. ". " .. tostring(t))
+  end
+  if nl > 20 then out("   …（只列前 20 行）") end
+  -- ⑥ 判定与冷却（★分两步写：eslot and A or B 在 A 返回 **false** 时会改走 B（参数 nil ⇒ nil），
+  --   首轮取证就是这么把「false=没有」打成「nil=判不出」的——and/or 陷阱，与 condOne 同案）
+  local hu = nil
+  if eslot then
+    if type(EVAL_EQUIP_HAS_USE) == "function" then hu = EVAL_EQUIP_HAS_USE(nm, eslot) end
+  else
+    if type(EVAL_BAG_HAS_USE) == "function" then hu = EVAL_BAG_HAS_USE(nm, ebag, eslotB) end
+  end
+  out("⑥ 使用效果判定: " .. tostring(hu) .. "（true=有 / false=没有 / nil=判不出；这步会写缓存）")
+  local cf2 = conf()
+  local cached = cf2 and rawget(_G, "EVAL_HELP_STATE") and rawget(_G, "EVAL_HELP_STATE").equipUseMap
+  out("   缓存值: " .. tostring(cached and cached[nm] or "(无)"))
+  if eslot and type(GetInventoryItemCooldown) == "function" then
+    local okc, a, b, c2 = pcall(GetInventoryItemCooldown, "player", eslot)
+    out("   冷却(GetInventoryItemCooldown): pcall=" .. tostring(okc) .. " ｜ start=" .. tostring(a) .. " dur=" .. tostring(b) .. " enable=" .. tostring(c2))
+  elseif ebag and type(GetContainerItemCooldown) == "function" then
+    local okc, a, b, c2 = pcall(GetContainerItemCooldown, ebag, eslotB)
+    out("   冷却(GetContainerItemCooldown): pcall=" .. tostring(okc) .. " ｜ start=" .. tostring(a) .. " dur=" .. tostring(b) .. " enable=" .. tostring(c2))
+  end
+  out("（已记入存档环 equipProbe，/reload 后 AI 可直接读）")
+end
+
 -- 载入期到此结束：没有 CreateFrame / RegisterEvent / 存档读写 / 计时器。
