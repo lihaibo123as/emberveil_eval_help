@@ -102,6 +102,16 @@
        `$env:HTTP_PROXY="http://127.0.0.1:10809"; $env:HTTPS_PROXY="http://127.0.0.1:10809"; $env:NODE_USE_ENV_PROXY="1"`，
        再 `node tmp/rel_publish_<版本>.js`（脚本一律写 `tmp/*.js`、Node 24 的全局 `fetch`/`FormData`/`Blob` 可用；
        ★大文件上传是长任务 ⇒ 用 `run_in_background: true` + `job_output(wait)`，别用管道截断）。
+     · ★★★**通用脚本（1.75.103 起，以后每次发布都用这套、不再按版本重写；用户：「发布脚本能否写好.下次重用」）**：
+       ① **打包主插件 = `tmp/pack_main.ps1`**（版本现读 `EvalHelp.toc`；媒体计数 zip↔磁盘互比，零硬编码期望）；
+       ② **打包子插件 = `tmp/pack_subaddons.ps1`**（遍历 `addons\`、版本现读各自 toc）；
+       ③ **发布 = `tmp/rel_publish.js`**（宿主/子版本全现读；正文 = `tmp/tagmsg_<版本去点>.txt`（如 `tagmsg_175103.txt`），
+       发布标题 = 正文第 1 行剥掉 `EVAL_HELP ` 前缀；两端「按 tag 查：有 = 复用（幂等）/ 没有 = 建」→ **同名先删再传** →
+       PATCH 标题+正文（Gitee 必须 JSON 形态）→ 内置只读 HEAD 探针（好名 200 且字节一致、不带 v 的错名 404）；
+       **`--subs-only` = 原地更新只换子插件包那一族流程**（主插件两份不碰，正文照常 PATCH）。
+       ★踩过的两个坑已收进脚本：Gitee 建 release **必须带 `target_commitish=master`**（缺了报 400 `target_commitish is missing`，
+       1.75.103 实踩）· tagmsg 文件名是**版本去点**（`1.75.103` → `tagmsg_175103.txt`）。
+       既发布过就只读探针复核 = 同一脚本再跑一遍（幂等）。
      · **GitHub 三步**：① `POST https://api.github.com/repos/lihaibo123as/emberveil_eval_help/releases`
        body `{tag_name, name, body, draft:false, prerelease:false}` → **201**（已存在回 **422 already_exists** ⇒
        `GET /releases/tags/<tag>` 复用，**幂等**）；② 传包
