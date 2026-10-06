@@ -544,7 +544,7 @@
 · ★**行为改变必须出声**：`B.init` 末尾一次性播报（标记 `dropSaid333` + 三语 `DEF_SAY_333`）—— 老用户观感会变，如实说一次并告诉怎么关。
 · **菜单**：23 → **24 行** ⇒ `B.MENU_MAXROWS0` **12 → 13**、`B.MENU_ROWS` **24 → 26**（`MENU_COLS = 2` ⇒ 12 + 12；**余量 2 行**）；★**加菜单行必须同时加池**（超池的行静默不显示）。
 · ★★**三语 17 键 ×3**：`MENU_DROP` · `DROP_ON` · `DROP_OFF` · `DROP_USAGE` · `DROP_OK(%s,%s)` · `DROP_CURSOR` · `DROP_FAIL(%s)` · `DROP_UNKNOWN` · `DROP_BLOCK_AH(%s)` · `DROP_BLOCK_MAIL` · `DROP_BLOCK_NOCLICK(%s)` · `DROP_BLOCK_NOTRADE` · `DROP_BLOCK_TRADEFULL` · `DROP_NAME_AH` · `DROP_NAME_MAIL` · `DROP_NAME_TRADE` · `DEF_SAY_333`。★**面向聊天框的文案里不许出现 `**`**（聊天框是纯文本，会原样画出两个星号）⇒ 强调一律用色码（本轮已把 5 条 `DROP_BLOCK_*` 的 `**不使用物品**` 改成 `|cffff8080…|r`）；★`DROP_BLOCK_NOCLICK` 的括注**对三个口通用**（原文只提「拍卖行 UI 按需加载」，对邮件/交易那两个口是误导）。
-· **判据（本轮只过语法闸门）** = `node luacheck.js` **SYNTAX OK: 54** · `node sync_game.js` + `tmp/verify_sync.js` **不一致 0**；★`tmp/` 三条腿（行为 / 结构钉 / 变异）**尚未扩到 0.3.33** —— 扩写清单见文末「已知闸门欠账」。
+· **判据** = `node luacheck.js` SYNTAX OK: 54 · `tmp/ehbag_harness.js` **844/0**（0.3.33 新增 50 条行为断言：页签 1/2/3 · 收件箱不投 · 交易找第一个空格 · Shift/Ctrl 不接管 · 开关关 ⇒ 一个客户端 API 都不读 · 投后光标仍留 ⇒ 出声且 `ClearCursor` 调用数 = 0 · 菜单行翻转 · `/ebag drop` 只读 · **真点一次右键的 OnClick 分派**）· `tmp/ehbag_wiring_check.js` **531/0**（0.3.33 新增 26 条结构钉：唯一入口计数 · 顺序钉 · 反向钉「零 ClearCursor / 拿取只走 pickUp / 不许 FancyTrade 式先拿起」· 三语 17 键 · 文案零 `**`）· `tmp/ehbag_verify_fix.js` **15 条新变异全抓** + 逐字节还原 · `node sync_game.js` + `tmp/verify_sync.js` 不一致 0；★同批抓到一个真 bug 并已修：`/ebag drop off` 进不了分支（首版 `msg == "drop"` 只匹配裸命令 ⇒ 改前缀匹配 + 行为断言 + 反向钉 + 变异守住）。已随 v1.75.102 子插件包**原地更新**发布（探针 bad=0）。
 · ⏳**留给下一轮的相邻问题（本轮有意不动）**：① **邮件窗开着不会自动开背包窗**（`OPEN_EVENTS` 里没有 `MAIL_SHOW`，用户尚未表态）；② 那两个 2015 年老插件（`autoitem_right` 里的 `FancyAH`/`FancyMail`/`FancyTrade`）如果还装着，与本功能在「投不进去」的 fail-open 分支上会**互相打架** ⇒ 建议把它们停用（或并进 `RIVALS` 互斥名单）；③ `Ctrl+右键` 仍走「使用物品」（原生什么都不做）—— 按本插件现状有意保留。
 ★★★**0.3.32 收口（一键整理：排布改成「靠背包区末尾对齐」）**：
 · **改了什么**（`EH_BagSort.lua`）：`lessRec` 四条比较键**全部反向**（大类 `ac > bc` · 品质 `aq < bq` · 名称降序 · id 降序）**同时** `slotOrder()` 两个循环**全部反向**（`for k = 5, 1, -1` 包序 4→0 · `for s = n, 1, -1` 槽位 n→1）。
@@ -576,10 +576,6 @@
 · **活规则**：**只要再引入任何「按颜色归一」的写法**（0.3.29 那种按参考色亮度缩放写值 α），harness 的悬停金断言会立刻转红 ——
   悬停没有品质系数；再动辉光配色先读 0.3.30 条（归一 = 调暗亮色，用户已否）。
 · 判据一律**不许写死版本号/颜色值**（从 `BAG_BUILD`、`B.TINTS` 现读互比）。
-· ★★★**0.3.33「右键直投窗口」的三条腿尚未扩写（统一推送那一轮必须先做，否则等于没判据）**：
-  · **行为断言（`tmp/ehbag_harness.js`，新增一组）**：拍卖行**页签 1/2/3** 三态（只有 3 投）· 拍卖行 `Click*` 口缺失 ⇒ `"skip"` **且一次 `useSlot` 都没有** · 邮件**收件箱页不投**（`MailFrame` 在、`SendMailFrame` 不在 ⇒ `"skip"`）· 邮件写页才投 · 交易**找第一个空格**（第 1 格有物、第 2 格空 ⇒ 投第 2 格；全满 ⇒ `"skip"`）· `GetTradePlayerItemLink` 缺失 ⇒ `"skip"` · **Shift/Ctrl ⇒ `"none"`（不接管）** · 帧名不存在（拍卖行 UI 未加载）⇒ `"none"` · **投后光标仍有物 ⇒ 出声 `DROP_CURSOR` 且 `ClearCursor` 调用数 = 0** · 开关关 ⇒ `"none"`（且**一个客户端 API 都不读**）· `B.dropSet` 坏输入 ⇒ 值不变 · 菜单那一行点一下真翻转 · `/ebag drop` 探针**全只读**（除取证环外零写入）。
-  · **结构钉（`tmp/ehbag_wiring_check.js`）**：唯一入口 `B.windowDrop` 的调用点计数 = 1（且在 `useSlot` **之前** —— `indexOf` 比先后）· **顺序钉**：`dropDo` 里「判能投 / 拿到东西」排在 `pickUp` 之前、`pcall(clickFn,…)` 在读回之前 · **反向钉**：「全文件零 `ClearCursor`」（子插件整体都不许出现）· **反向钉**：「不许出现裸 `PickupContainerItem` 之外的拿取路」（拿取只走 `pickUp`）· **反向钉**：「不许退回 FancyTrade 那种『先拿起再找空格』」· 菜单 24 行 / 池 26 / `MENU_MAXROWS0 = 13` · 三语 **17 键各 3 处**（且**面向聊天框的串里不许有 `**`**）· `/ebag drop` 分支 + 用法行 · `DEF.dropWin = true` + `cfg()` 归一 · `BAG_BUILD` == `EH_Bag.toc`。
-  · **变异（`tmp/ehbag_verify_fix.js`，新增一组，逐条必须转红）**：拿起来之前先判能投那一步删掉 · 投完不再读回 `cursorHas` · 投后加 `ClearCursor`（**必须转红**）· 三态塌成两态（`"skip"` 也回落 `useSlot`）· 邮件只看 `MailFrame` · 拍卖行页签判据写成 `~= 1` · 交易不找空格直接用 1 · Shift/Ctrl 判据删掉 · 开关不最先判 · `dropDo` 里 `holdForget` 删掉 · 菜单行删掉 · `/ebag drop` 的 on/off 分支删掉 · 语言键缺失 · 取证环无界。
 
 ## 发布打包（由宿主负责，本子插件只管好自己的目录）
 

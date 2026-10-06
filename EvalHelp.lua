@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.75.102"
+local VERSION = "1.75.103"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -4517,11 +4517,6 @@ function EVAL_BIND_SYNC()
     if type(r) == "table" and type(r.key) == "string" and r.key ~= "" then
       local slot = (type(r.slot) == "number") and r.slot or nil
       local cmd = slot and EVAL_BIND_SLOT_CMD(slot) or nil
-      local occupied = false
-      if slot and type(HasAction) == "function" then
-        local okh, has = pcall(HasAction, slot)
-        occupied = (okh and has) and true or false
-      end
       -- 这一格命令上「除我们自己的键以外」还有谁的键
       local foreign = {}
       if cmd then
@@ -4529,8 +4524,10 @@ function EVAL_BIND_SYNC()
           if k ~= r.key then foreign[#foreign + 1] = k end
         end
       end
-      -- 2a 该格在本角色上有技能了 / 格上有别人的键 / 格号坏了 ⇒ 换一个干净格
-      if (not cmd) or occupied or (#foreign > 0) then
+      -- 2a 格号坏了 / 记录还在**主条**（1-12，用户定「不碰主动动作条」⇒ 顺势迁到优先条）⇒ 按优先级换一格；
+      --   命令上有别人的键 ⇒ **强制覆盖**：静默解绑（用户选定，不提示）。
+      --   ★「格里有技能」不再是换格理由 —— 我们的键走派发接管（按键触发方案），那格技能照旧鼠标可用。
+      if (not cmd) or (type(slot) == "number" and slot <= 12) then
         local ns = EVAL_BIND_FREE_SLOT()
         if ns then
           pcall(SetBinding, r.key) -- 先从旧格摘掉我们的键（旧格让回给玩家）
@@ -4538,14 +4535,13 @@ function EVAL_BIND_SYNC()
           res.moved = res.moved + 1
           changed = true
         else
-          -- 没有干净格：格上有别人的键就**必须**摘（不摘 ⇒ 那个键会静默触发我们的方案，更糟）；
-          --   仅仅是「格里有技能、没有别人的键」⇒ 我们的键照旧可用，如实记一笔、一个字都不动
-          for _, k in ipairs(foreign) do
-            pcall(SetBinding, k)
-            res.unbound = res.unbound + 1
-            changed = true
-          end
-          if occupied and #foreign == 0 then res.skipped = res.skipped + 1 end
+          res.skipped = res.skipped + 1
+        end
+      else
+        for _, k in ipairs(foreign) do
+          pcall(SetBinding, k)
+          res.unbound = res.unbound + 1
+          changed = true
         end
       end
       -- 2b 我们的键被改绑到别处了 ⇒ 抢回（用户选定：抢回 + 如实播报）
@@ -4571,21 +4567,10 @@ function EVAL_BIND_SYNC()
 end
 
 -- 逻辑层（UI 与测试共用一份实现）：绑定 / 清除。★换键时把旧键解绑；绑定后立刻 SaveBindings 持久化。
---   ★1.71.22 最终形态：命令名 = 客户端**自己认**的 ACTIONBUTTON<n>（实测 12 条在命令表里），
---     派发由本文件下方的 EVAL_BIND_INSTALL() 接管 ActionButtonUp 完成（不占宏名额、不占动作格）。
+--   ★1.71.22 路线：SetBinding(键, 客户端命令名) + 接管派发全局翻译成 EVAL_GO（不占宏名额、不占动作格）。
 --   ★1.75.74 起记录按角色（见上方大段注释）。
--- 该格是否「干净」：命令上除了本方案自己记录里的那个键，没有别的键
---   （★有别人的键 ⇒ 那个键按下去也会触发我们的方案 —— 干净才复用）
-function EVAL_BIND_SLOT_CLEAN(slot, pidx)
-  local cmd = EVAL_BIND_SLOT_CMD(slot)
-  if not cmd then return false end
-  local mine = EVAL_BIND_KEY(pidx)
-  for _, k in ipairs(EVAL_BIND_CMD_KEYS(cmd)) do
-    if not (mine and k == mine) then return false end
-  end
-  return true
-end
-
+--   ★1.75.102（补 2 后续）选格与覆盖：优先级 = 右侧第二 → 右侧 → 右下 → 左下 → 姿态，主条不碰；
+--     命令上已有键 ⇒ 直接强制覆盖、不需要提示（用户选定），被覆盖的键静默解绑、只进取证环。
 function EVAL_BIND_DO(pidx, key)
   if type(key) ~= "string" or key == "" then return false, "nokey" end
   local w2 = warCfg()
@@ -4600,15 +4585,23 @@ function EVAL_BIND_DO(pidx, key)
   local isNew = (type(t[pidx]) ~= "table")
   local rec = t[pidx]
   if isNew then rec = {} t[pidx] = rec end
-  -- 已有格且那一格仍「干净」才复用；否则重新挑一个干净格（不抢玩家已有的键位）
+  -- 已有格且落在优先区（13-70）⇒ 复用；命令上除本方案旧键以外的键 = 强制覆盖对象（静默解绑）。
+  --   ★记录还在**主条**（1-12）⇒ 不复用：按优先级重挑（用户定「不碰主动动作条」⇒ 老记录顺势迁走）。
   local slot = rec.slot
   local borrowed = nil
-  if type(slot) ~= "number" or not EVAL_BIND_SLOT_CLEAN(slot, pidx) then
+  if type(slot) == "number" and slot >= 13 and slot <= 70 and EVAL_BIND_SLOT_CMD(slot) then
+    for _, k in ipairs(EVAL_BIND_CMD_KEYS(EVAL_BIND_SLOT_CMD(slot))) do
+      if k ~= rec.key then
+        if borrowed == nil then borrowed = {} end
+        borrowed[table.getn(borrowed) + 1] = k
+      end
+    end
+  else
     local kind, oldKeys = nil, nil
     slot, kind, oldKeys = EVAL_BIND_FREE_SLOT()
     if not slot then if isNew then t[pidx] = nil end return false, "noslot" end
     rec.slot = slot
-    if kind == "noaction" then borrowed = oldKeys end
+    if kind == "override" then borrowed = oldKeys end
   end
   local cmd = EVAL_BIND_SLOT_CMD(slot)
   if not cmd then if isNew then t[pidx] = nil end return false, "noslotcmd" end
@@ -4617,18 +4610,22 @@ function EVAL_BIND_DO(pidx, key)
   local old = rec.key
   if type(old) == "string" and old ~= "" and old ~= key then pcall(SetBinding, old) end -- 换键：解掉旧键
   rec.key = key
-  -- ★规则③借来的格（空格但命令上已有键）：那几个键本来指向**空动作**（按了什么都不发生）
-  --   ⇒ 必须一并解绑，否则它们会**静默触发我们的方案**（比原本什么都不发生更糟）
+  -- ★强制覆盖（用户选定「直接强制覆盖.不需要提示」）：被覆盖的那批键静默解绑、只进取证环，不做聊天提示
   if type(borrowed) == "table" then
+    local nb = 0
     for _, k in ipairs(borrowed) do
-      if k ~= key then pcall(SetBinding, k) end
+      if k ~= key then pcall(SetBinding, k) nb = nb + 1 end
+    end
+    if nb > 0 then
+      EVAL_BIND_NOTE(string.format("override 方案%d 命令=%s 静默解绑既有键 %d 个（强制覆盖）",
+        pidx, tostring(cmd), nb))
     end
   end
   EVAL_BIND_SAVE()
   -- 保证接管已装上（运行中立即生效；装过就是幂等的 no-op）
   EVAL_BIND_INSTALL()
-  EVAL_BIND_NOTE(string.format("bind 角色=%s 方案%d %s -> ACTIONBUTTON%d",
-    tostring(EVAL_BIND_CHARKEY()), pidx, tostring(key), slot))
+  EVAL_BIND_NOTE(string.format("bind 角色=%s 方案%d %s -> %s",
+    tostring(EVAL_BIND_CHARKEY()), pidx, tostring(key), tostring(cmd)))
   return true, key, slot
 end
 
@@ -4738,15 +4735,38 @@ end
 --     这里按同样的做法重建守卫：按住修饰键时若该组合键另有归属，就不当作动作条按键。
 -- ============================================================================
 
--- 动作格命令名（纯函数，测试直测）：客户端**自己认**的只有 ACTIONBUTTON1..12（主条 12 格）。
+-- 动作格命令名（纯函数，测试直测）：槽号 → 客户端命令名。
+--   ★1.75.102（补 2 后续）扩到 1..70（用户定「绑定的优先级优先使用不常用的动作条」）：
+--     1-12 主条 ACTIONBUTTON（**只给旧记录用，新绑不再挑主条**）· 13-24 左下 MULTIACTIONBAR1 ·
+--     25-36 右下 MULTIACTIONBAR2 · 37-48 右侧 MULTIACTIONBAR3 · 49-60 右侧第二 MULTIACTIONBAR4 ·
+--     61-70 姿态 BONUSACTIONBUTTON（vanilla 1.12 该族只有 1..10）。
 function EVAL_BIND_SLOT_CMD(slot)
-  if slot and slot >= 1 and slot <= 12 then return "ACTIONBUTTON" .. tostring(slot) end
+  if type(slot) ~= "number" then return nil end
+  if slot >= 1 and slot <= 12 then return "ACTIONBUTTON" .. tostring(slot) end
+  if slot >= 13 and slot <= 24 then return "MULTIACTIONBAR1BUTTON" .. tostring(slot - 12) end
+  if slot >= 25 and slot <= 36 then return "MULTIACTIONBAR2BUTTON" .. tostring(slot - 24) end
+  if slot >= 37 and slot <= 48 then return "MULTIACTIONBAR3BUTTON" .. tostring(slot - 36) end
+  if slot >= 49 and slot <= 60 then return "MULTIACTIONBAR4BUTTON" .. tostring(slot - 48) end
+  if slot >= 61 and slot <= 70 then return "BONUSACTIONBUTTON" .. tostring(slot - 60) end
   return nil
 end
 
 -- 原始全局（接管前保存；OnDisable/清理时还回去，绝不把客户端留在被改状态）
 EVAL_BIND_ORIG_DOWN = nil
 EVAL_BIND_ORIG_UP = nil
+EVAL_BIND_ORIG_MDOWN = nil
+EVAL_BIND_ORIG_MUP = nil
+EVAL_BIND_ORIG_BDOWN = nil
+EVAL_BIND_ORIG_BUP = nil
+
+-- 多动作条条名 → 槽位基址（vanilla 映射，参考 FrameXML Bindings.xml 实证：
+--   MULTIACTIONBAR1..4BUTTON<n> ↔ MultiActionButtonDown/Up("MultiBarBottomLeft/BottomRight/Right/Left", n)）
+EVAL_BIND_MULTIBAR_BASE = {
+  MultiBarBottomLeft = 12,
+  MultiBarBottomRight = 24,
+  MultiBarRight = 36,
+  MultiBarLeft = 48,
+}
 
 -- 格号 → 方案号 映射（从配置重建，纯读；返回 table）。
 --   ★单一真源 = 本角色记录表 war.bindByChar[<角色键>]（1.75.74 起按角色；读口见 EVAL_BIND_SLOT）
@@ -4822,6 +4842,50 @@ function EVAL_BIND_INSTALL()
     end
     return origUp(index)
   end
+  -- ★1.75.102（补 2 后续）多动作条接管：MULTIACTIONBAR 命令的按键派发到
+  --   MultiActionButtonDown/Up(条名, 格号) —— 同一套「(条名,格号) → 槽号 → 方案号」翻译。
+  --   只吞我们占的格；其余原样交给客户端（绝不改变别人的行为）。
+  if type(MultiActionButtonDown) == "function" and type(MultiActionButtonUp) == "function" then
+    EVAL_BIND_ORIG_MDOWN, EVAL_BIND_ORIG_MUP = MultiActionButtonDown, MultiActionButtonUp
+    local origMDown, origMUp = EVAL_BIND_ORIG_MDOWN, EVAL_BIND_ORIG_MUP
+    MultiActionButtonDown = function(bar, id)
+      local base = EVAL_BIND_MULTIBAR_BASE[bar]
+      local slot = base and (base + (tonumber(id) or 0)) or nil
+      local pidx = slot and EVAL_BIND_SLOT_MAP()[slot]
+      if pidx and not EVAL_BIND_TEXT_BLOCKS() and not EVAL_BIND_MODIFIER_STOLEN(slot) then return end
+      return origMDown(bar, id)
+    end
+    MultiActionButtonUp = function(bar, id, onSelf)
+      local base = EVAL_BIND_MULTIBAR_BASE[bar]
+      local slot = base and (base + (tonumber(id) or 0)) or nil
+      local pidx = slot and EVAL_BIND_SLOT_MAP()[slot]
+      if pidx and not EVAL_BIND_TEXT_BLOCKS() and not EVAL_BIND_MODIFIER_STOLEN(slot) then
+        if type(EVAL_GO) == "function" then pcall(EVAL_GO, pidx) end
+        return
+      end
+      return origMUp(bar, id, onSelf)
+    end
+  end
+  -- ★姿态条接管：BONUSACTIONBUTTON 命令的按键派发到 BonusActionButtonDown/Up(格号)（槽位 61-70）。
+  if type(BonusActionButtonDown) == "function" and type(BonusActionButtonUp) == "function" then
+    EVAL_BIND_ORIG_BDOWN, EVAL_BIND_ORIG_BUP = BonusActionButtonDown, BonusActionButtonUp
+    local origBDown, origBUp = EVAL_BIND_ORIG_BDOWN, EVAL_BIND_ORIG_BUP
+    BonusActionButtonDown = function(id)
+      local slot = 60 + (tonumber(id) or 0)
+      local pidx = EVAL_BIND_SLOT_MAP()[slot]
+      if pidx and not EVAL_BIND_TEXT_BLOCKS() and not EVAL_BIND_MODIFIER_STOLEN(slot) then return end
+      return origBDown(id)
+    end
+    BonusActionButtonUp = function(id)
+      local slot = 60 + (tonumber(id) or 0)
+      local pidx = EVAL_BIND_SLOT_MAP()[slot]
+      if pidx and not EVAL_BIND_TEXT_BLOCKS() and not EVAL_BIND_MODIFIER_STOLEN(slot) then
+        if type(EVAL_GO) == "function" then pcall(EVAL_GO, pidx) end
+        return
+      end
+      return origBUp(id)
+    end
+  end
   return true
 end
 
@@ -4829,46 +4893,44 @@ end
 function EVAL_BIND_UNINSTALL()
   if EVAL_BIND_ORIG_DOWN then ActionButtonDown = EVAL_BIND_ORIG_DOWN end
   if EVAL_BIND_ORIG_UP then ActionButtonUp = EVAL_BIND_ORIG_UP end
+  if EVAL_BIND_ORIG_MDOWN then MultiActionButtonDown = EVAL_BIND_ORIG_MDOWN end
+  if EVAL_BIND_ORIG_MUP then MultiActionButtonUp = EVAL_BIND_ORIG_MUP end
+  if EVAL_BIND_ORIG_BDOWN then BonusActionButtonDown = EVAL_BIND_ORIG_BDOWN end
+  if EVAL_BIND_ORIG_BUP then BonusActionButtonUp = EVAL_BIND_ORIG_BUP end
   EVAL_BIND_ORIG_DOWN, EVAL_BIND_ORIG_UP = nil, nil
+  EVAL_BIND_ORIG_MDOWN, EVAL_BIND_ORIG_MUP = nil, nil
+  EVAL_BIND_ORIG_BDOWN, EVAL_BIND_ORIG_BUP = nil, nil
   return true
 end
 
--- 找一个可用的动作格（★1.75.74 重订判据：**命令上没有任何键**才用 —— 这样绝不吞玩家现有按键）。
---   三档（越靠前越干净），返回 slot, kind, keys：
---     ① clean ：命令没绑键 **且 格子是空的**（最干净，也最不容易被玩家后来占用）
---     ② clean ：命令没绑键，格子里有技能 —— 我们只吃**新绑的那个键**，那个技能本来就没有键盘快捷键
---               （鼠标点动作按钮不走 ActionButtonUp，所以点得动、用得了）
---     ③ noaction：格子是空的，但命令上已经有一个（或两个）键 —— 那些键本来指向**空动作**（按了什么
---               都不发生）⇒ 借这一格要**把那几个键一并解绑**，否则它们会静默触发我们的方案（更糟）
---   ★一档都找不到（主条 12 格全有技能且全有键）⇒ 返回 nil（如实说「本插件不抢你的键」+ 给出路）。
---   ★旧写法「格子空就行」+ 死参数 allowTaken 已删（那版会把玩家已有键位静默接到方案上）。
+-- 找一个可用的动作格（★1.75.102 补 2 后续，用户定「绑定的优先级优先使用哪些不常用的动作条」）：
+--   **优先级 = 右侧第二条 → 右侧条 → 右下条 → 左下条 → 姿态条；主条（ACTIONBUTTON）不碰** ——
+--   它 12 格正是玩家自己绑满的那一条（这次报「没有可用动作格」的来源）。
+--   平铺取第一个没被本插件占用的格；**命令上已有键 ⇒ 直接强制覆盖、不需要提示**（用户原话），
+--   返回 kind = "override" 与那批键，由调用方静默解绑（只进 bindLog 取证环，不做聊天提示）。
+--   一格都找不到（58 格全被本插件的方案占满）⇒ 返回 nil（如实报）。
+EVAL_BIND_BAR_RANGES = {
+  { 49, 60 },  -- 优先1 右侧第二条 MULTIACTIONBAR4BUTTON
+  { 37, 48 },  -- 优先2 右侧条   MULTIACTIONBAR3BUTTON
+  { 25, 36 },  -- 优先3 右下条   MULTIACTIONBAR2BUTTON
+  { 13, 24 },  -- 优先4 左下条   MULTIACTIONBAR1BUTTON
+  { 61, 70 },  -- 优先5 姿态条   BONUSACTIONBUTTON（1..10）
+}
 function EVAL_BIND_FREE_SLOT()
   local t = EVAL_BIND_CHAR_TBL(false) or {}
   local used = {}
   for _, r in pairs(t) do
     if type(r) == "table" and type(r.slot) == "number" then used[r.slot] = true end
   end
-  local cleanEmpty, cleanAny, noAction, noActionKeys = nil, nil, nil, nil
-  for s = 1, 12 do
-    if not used[s] then
-      local cmd = EVAL_BIND_SLOT_CMD(s)
-      local ks = EVAL_BIND_CMD_KEYS(cmd)
-      local occupied = false
-      if type(HasAction) == "function" then
-        local okh, has = pcall(HasAction, s)
-        occupied = (okh and has) and true or false
-      end
-      if #ks == 0 then
-        if not occupied and cleanEmpty == nil then cleanEmpty = s end
-        if cleanAny == nil then cleanAny = s end
-      elseif not occupied and noAction == nil then
-        noAction, noActionKeys = s, ks
+  for _, rg in ipairs(EVAL_BIND_BAR_RANGES) do
+    for s = rg[1], rg[2] do
+      if not used[s] then
+        local ks = EVAL_BIND_CMD_KEYS(EVAL_BIND_SLOT_CMD(s))
+        if table.getn(ks) == 0 then return s, "clean", {} end
+        return s, "override", ks
       end
     end
   end
-  if cleanEmpty then return cleanEmpty, "clean", {} end
-  if cleanAny then return cleanAny, "clean", {} end
-  if noAction then return noAction, "noaction", noActionKeys end
   return nil, "none", {}
 end
 
@@ -10253,6 +10315,101 @@ if type(SlashCmdList) == "table" then
           say("⑤ 弹窗函数不存在（Toolbox.lua 没载入新版？）")
         end
       end
+    elseif msg == "go bind bars" or msg == "go 绑定 动作条" then
+      -- ★只读排查（用户：「绑定的优先级优先使用哪些不常用的动作条.先排查下支持哪些动作条带我确认」）——
+      --   离线证据已尽（exe 字符串压缩、api 索引不含绑定命令族、Keybinds.ini 只记已绑）⇒ 只有运行时
+      --   命令表能回答「本客户端到底认哪些动作条命令族」。全只读：一个 SetBinding/SaveBindings 都不发；
+      --   读数同时进有界环 war.bindLog（30 条）⇒ AI 直接从存档读，不用玩家转述。
+      say(L("BIND_DIAG_HDR"))
+      local function barsDiag(line)
+        say(line)
+        if type(EVAL_BIND_NOTE) == "function" then pcall(EVAL_BIND_NOTE, line) end
+      end
+      -- ① 命令表按族清点（与 EVAL_BIND_XML_STATUS 同一条链路：GetNumBindings/GetBinding）
+      local FAMS = { "ACTIONBUTTON", "MULTIACTIONBAR1BUTTON", "MULTIACTIONBAR2BUTTON",
+        "MULTIACTIONBAR3BUTTON", "MULTIACTIONBAR4BUTTON", "BONUSACTIONBUTTON",
+        "SELFACTIONBUTTON", "SHAPESHIFTBUTTON" }
+      local famCnt, total, uuiCnt, uuiSample = {}, 0, 0, {}
+      if type(GetNumBindings) == "function" and type(GetBinding) == "function" then
+        local okN, nB = pcall(GetNumBindings)
+        if okN and type(nB) == "number" then
+          total = nB
+          local i
+          for i = 1, math.min(nB, 600) do
+            local okG, cmd = pcall(GetBinding, i)
+            if okG and type(cmd) == "string" then
+              -- ★自然实验：unrealUI 自己在 Bindings.xml 声明的命令若出现在命令表里
+              --   ⇒ 本客户端**确实**会在启动时读插件的 Bindings.xml（与我们 1.71.22 对照实验的结论对撞，
+              --     差别可能在「必须完整重启客户端、/reload 不算」）
+              if string.find(cmd, "^UNREALUIBAR") then
+                uuiCnt = uuiCnt + 1
+                if table.getn(uuiSample) < 3 then uuiSample[table.getn(uuiSample) + 1] = cmd end
+              end
+              local fi
+              for fi = 1, table.getn(FAMS) do
+                if string.find(cmd, "^" .. FAMS[fi] .. "%d+$") then
+                  famCnt[FAMS[fi]] = (famCnt[FAMS[fi]] or 0) + 1
+                  break
+                end
+              end
+            end
+          end
+        end
+      end
+      local famLine = {}
+      local fi2
+      for fi2 = 1, table.getn(FAMS) do
+        famLine[fi2] = FAMS[fi2] .. "=" .. tostring(famCnt[FAMS[fi2]] or 0)
+      end
+      barsDiag("① 命令表共 " .. tostring(total) .. " 条 ｜ " .. table.concat(famLine, " "))
+      barsDiag("①b 插件自声明命令：unrealUI 装着=" .. tostring(type(IsAddOnLoaded) == "function" and IsAddOnLoaded("unrealUI"))
+        .. " ｜ UNREALUIBAR*=" .. tostring(uuiCnt) .. " 条（>0 = 客户端**确实读了**插件 Bindings.xml；样例 "
+        .. (table.getn(uuiSample) > 0 and table.concat(uuiSample, ",") or "无") .. "）")
+      -- ② 派发全局（接管前提）：主条走 ActionButtonDown/Up；多动作条走 MultiActionButtonDown/Up（另一对全局）
+      barsDiag("② 派发全局：ActionButtonDown/Up=" .. type(ActionButtonDown) .. "/" .. type(ActionButtonUp)
+        .. " ｜ MultiActionButtonDown/Up=" .. type(MultiActionButtonDown) .. "/" .. type(MultiActionButtonUp)
+        .. " ｜ BonusActionButtonDown/Up=" .. type(BonusActionButtonDown) .. "/" .. type(BonusActionButtonUp))
+      -- ③ 多动作条帧在不在（FrameXML 的条 = 这些命令的可见宿主）
+      local barNames = { "MultiBarBottomLeft", "MultiBarBottomRight", "MultiBarRight", "MultiBarLeft" }
+      local barLine = {}
+      local bi
+      for bi = 1, 4 do
+        local f = rawget(_G, barNames[bi])
+        barLine[bi] = barNames[bi] .. "=" .. ((type(f) == "table" or type(f) == "userdata") and "在" or "不在")
+      end
+      barsDiag("③ 多动作条帧：" .. table.concat(barLine, " "))
+      -- ④ 每条多动作条逐格：命令上无键的格数 + 格内有技能的格数（vanilla 槽位区间 fam1..4 = 13/25/37/49 起）
+      local BASES = { 13, 25, 37, 49 }
+      local fi3
+      for fi3 = 1, 4 do
+        local fam = "MULTIACTIONBAR" .. fi3 .. "BUTTON"
+        if (famCnt[fam] or 0) > 0 then
+          local freeN, occN, taken = 0, 0, {}
+          local s
+          for s = 1, 12 do
+            local ks = EVAL_BIND_CMD_KEYS(fam .. s)
+            if table.getn(ks) == 0 then freeN = freeN + 1
+            else taken[#taken + 1] = s .. "=" .. table.concat(ks, ",") end
+            if type(HasAction) == "function" then
+              local okh, has = pcall(HasAction, BASES[fi3] + s - 1)
+              if okh and has then occN = occN + 1 end
+            end
+          end
+          local line = "④ " .. fam .. "：无键格 " .. freeN .. "/12 ｜ 格内有技能 " .. occN .. "/12"
+          if table.getn(taken) > 0 then line = line .. " ｜ 已绑 " .. table.concat(taken, " ") end
+          barsDiag(line)
+        else
+          barsDiag("④ " .. fam .. "：命令表里**没有**（本客户端不认这一族 ⇒ 绑了也不会派发）")
+        end
+      end
+      -- ⑤ 对照：主条 12 格当前绑了几个（这次报「没有可用动作格」的直接原因）
+      local mainTaken = 0
+      local s5
+      for s5 = 1, 12 do
+        if table.getn(EVAL_BIND_CMD_KEYS(EVAL_BIND_SLOT_CMD(s5))) > 0 then mainTaken = mainTaken + 1 end
+      end
+      barsDiag("⑤ 对照：主条 ACTIONBUTTON 已绑 " .. mainTaken .. "/12")
+      barsDiag("★本命令全只读：没绑任何键、没解任何键；读数已进 war.bindLog 环，下次 /reload 落盘")
     elseif msg == "go bind" or msg == "go 绑定" then
       -- ★1.71.22 现状检查（**诊断用，不做任何写入试验**）：派发链路现在是
       --   SetBinding(键, "ACTIONBUTTON<格>") + 接管 ActionButtonUp，所以这里只报「这条链路各环的现状」。
@@ -10305,7 +10462,7 @@ if type(SlashCmdList) == "table" then
           local slot = EVAL_BIND_SLOT(i)
           local okA, act = pcall(GetBindingAction, key)
           bindDiag(string.format(L("BIND_ST_ROW"), i, tostring(w2.profiles[i].name or i), key)
-            .. " → ACTIONBUTTON" .. tostring(slot) .. "（读回 " .. tostring(okA and act or "?") .. "）")
+            .. " → " .. tostring(EVAL_BIND_SLOT_CMD(slot)) .. "（读回 " .. tostring(okA and act or "?") .. "）")
         end
       end
       if n == 0 then bindDiag(L("BIND_ST_NONE")) end

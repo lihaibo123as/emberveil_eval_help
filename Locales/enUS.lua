@@ -779,7 +779,7 @@ PM_HINT = "Left-click a profile = activate; right-click = open this window (rena
   BIND_NOCHAR = "Per-character bindings: UnitName unavailable, so dispatch is installed but nothing is rebound (your keys are untouched)",
   BIND_MIGRATED = "Hotkey bindings are now per-character: %d old record(s) were assigned to the current character \"%s\"",
   BIND_SYNC_DONE = "Per-character binding sync: this character %d | other characters' leftovers removed %d | reclaimed %d | slot moved %d | extra keys unbound %d",
-  BIND_NOSLOT = "No free action slot: all 12 ACTIONBUTTON commands already have keys (this addon will not steal yours) - free a slot or use a macro /run EVAL_GO(2)",
+  BIND_NOSLOT = "No free action slot: all 58 priority slots are already used by this addon's profiles - unbind some profiles or use a macro /run EVAL_GO(2)",
   BIND_ALL_CLEARED2 = "All custom bindings cleared: this character %d | other characters %d | keys actually unbound %d",
   BIND_DIAG_HDR = "- Profile hotkeys (per character, read-only) -",
   BIND_DIAG_CHAR = "Character key = %s (readable = per-character mode is active)",
