@@ -931,6 +931,10 @@ SE_OP_NEXT = "One more click changes it to: %s",
   SK_CAT_4 = "Targeting",
   SK_CAT_5 = "Items",
   SK_CAT_6 = "Equipped", -- ★1.75.92 use equipped item (dropdown = live paper-doll slots)
+  SK_CAT_7 = "Gear Swap", -- ★1.75.101 equip a bag item into a chosen slot
+  -- ★1.75.101 swap slot names (semicolon-separated; 1st = slot 0 "Auto", then paper-doll 1~19)
+  SW_SLOT_NAMES = "Auto;Head;Neck;Shoulder;Shirt;Chest;Waist;Legs;Feet;Wrist;Hands;Ring 1;Ring 2;Trinket 1;Trinket 2;Back;Main Hand;Off Hand;Ranged;Tabard",
+  SW_SLOT_TIP = "Slot %s = %s", SW_SLOT_CUR = "Currently: %s",
   CTG_1 = "Self",
   CTG_2 = "Target",
   CTG_3 = "Buff / Debuff checks",

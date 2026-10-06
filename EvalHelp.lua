@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.75.100"
+local VERSION = "1.75.101"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -103,6 +103,15 @@ local uiLastTick = 0
 --     （这一轮做变异测试时当场撞到：把池子写成常量 16 而公式仍算 1 行 → 每帧重建、界面乱掉）。
 --   ★单一来源之后，「BUILD 算的」与「tick 算的」在结构上**不可能**不一致。
 local UI_CELL_COLS = 8
+
+-- ★★★1.75.101 战斗信息UI **方案行按钮的高 / 最小宽**（用户：「方案/方案列表按钮增加下高度 在哪里调整我微调下.
+--   创建个方案按钮高度,宽度的变量.方便我微调测试.」）：
+--   ★★想微调就改这两个数（单位 px，乘界面缩放 z 后落地）：高度 = UI_PROF_BTN_H · 最小宽度 = UI_PROF_MIN_W。
+--   行距/换行/帧高/「方案」标签按钮全部从这两个数现算 ⇒ 改完 `/eh ui` 开关一次（或 /reload）即生效。
+--   ★宽度说明：方案按钮的宽度本来是**按方案名实宽现算**的（长名字格子更宽），UI_PROF_MIN_W 是**最小宽度**
+--     （名字短也不会窄于它）；要整体加宽就把它调大。
+local UI_PROF_BTN_H = 22 -- 方案按钮高度（px；1.75.93 由 15 加高到 17）
+local UI_PROF_MIN_W = 34 -- 方案按钮最小宽度（px；按名字实宽比这宽就按名字走）
 local function uiCellRows(n)
   local v = tonumber(n) or 0
   if v < 0 then v = 0 end
@@ -745,12 +754,10 @@ function EVAL_HELP_UI_BUILD()
     local w20 = uiWarCfg()
     local nProf = (w20.profiles and table.getn(w20.profiles)) or 1
     local labelW = math.floor(28 * z)
-    -- ★★★方案行按钮高度（1.75.93 用户：「方案/方案列表按钮增加下高度…在哪里调整我微调下」）：
-    --   **想微调就改这一个数**（单位 px，乘缩放 z；原 15 ⇒ 现 17）。行距/换行/帧高全部从它现算，
-    --   改它一处整行跟着变；「方案」标签按钮共用同一高度（下面 plb）。
-    local btnH = math.floor(17 * z)
+    -- ★★★方案行按钮高度/最小宽 = **文件级常量 UI_PROF_BTN_H / UI_PROF_MIN_W**（文件开头，想微调去那里改）。
+    local btnH = math.floor(UI_PROF_BTN_H * z)
     local barAvailW = W - pad * 2
-    local minBW = math.floor(34 * z) -- 单按钮最小宽（名字可读）
+    local minBW = math.floor(UI_PROF_MIN_W * z) -- 单按钮最小宽（名字可读）
     local PGAP = 2
     -- ★1.71.19 用户要求：「方案文字 添加 tooltip 提示：右键取消所有自定绑定，左键点击具体的方案激活方案，
     --   右键绑定方案按键，美化说明下」——「方案」二字本身做成可点标签：
@@ -6516,13 +6523,14 @@ function EVAL_HELP_SE_REFRESH()
   --     所以元素一直在，默认文案本身就是「当前用的是技能本身（不指定等级）」这层含义。
   if seUI.rankName then seUI.rankName:SetText(ed.rank or L("SE_RANK_ANY")) end
   if seUI.catName then -- 分类按钮文字 = 当前技能所属类（1.32.3）
-    local cl = { L("SK_CAT_1"), L("SK_CAT_2"), L("SK_CAT_3"), L("SK_CAT_4"), L("SK_CAT_5"), L("SK_CAT_6") }
+    local cl = { L("SK_CAT_1"), L("SK_CAT_2"), L("SK_CAT_3"), L("SK_CAT_4"), L("SK_CAT_5"), L("SK_CAT_6"), L("SK_CAT_7") }
     local ci = 2
     if ed.skill == "攻击" or ed.skill == "自动射击" or ed.skill == "射击" or cancelCastOf(ed.skill) or stopAllOf(ed.skill) or followOf(ed.skill) or stanceOf(ed.skill) then ci = 1
     elseif petCmdOf(ed.skill) then ci = 3
     elseif targetSelOf(ed.skill) then ci = 4
     elseif itemOf(ed.skill) then ci = 5
-    elseif EVAL_EQUIP_OF and EVAL_EQUIP_OF(ed.skill) then ci = 6 end -- ★1.75.92 装备使用（全局桥直读，不加文件级 local）
+    elseif EVAL_EQUIP_OF and EVAL_EQUIP_OF(ed.skill) then ci = 6 -- ★1.75.92 装备使用（全局桥直读，不加文件级 local）
+    elseif EVAL_SWAP_OF and EVAL_SWAP_OF(ed.skill) then ci = 7 end -- ★1.75.101 换装（同口径）
     seUI.catName:SetText(cl[ci])
   end
   if ed.enabled then seUI.enMark:Show() else seUI.enMark:Hide() end
@@ -6853,6 +6861,7 @@ local function SE_BUILD()
     if targetSelOf(skill) then return 4 end
     if itemOf(skill) then return 5 end
     if EVAL_EQUIP_OF and EVAL_EQUIP_OF(skill) then return 6 end -- ★1.75.92 装备使用
+    if EVAL_SWAP_OF and EVAL_SWAP_OF(skill) then return 7 end -- ★1.75.101 换装
     return 2
   end
   -- 项列表 → 图标表（1.32.4：下拉行左侧显示技能/物品图标；wicon 统一入口含宠物/选取/物品兜底）
@@ -6953,9 +6962,46 @@ local function SE_BUILD()
     return true
   end
 
+  -- ★★★1.75.101 换装的**槽位续弹**（用户：「装备格子(悬浮格子数字含义)」）：
+  --   选了装备（"换装:名"）之后**立即续弹槽位下拉**（与「指定名称」续弹名字框同一范式）：
+  --   行 = 「槽号 · 槽名」（槽名唯一来源 = Engine 的 EVAL_SWAP_SLOTS → 语言键 SW_SLOT_NAMES）；
+  --   ★悬浮说明 = 「槽位 N = 槽名 + 该格现在穿着什么」（实时读 GetInventoryItemLink —— 数字含义一眼可核）。
+  local function seOpenSwapSlotPick(nm)
+    if not (seUI.ed and type(EVAL_DD_OPEN) == "function") then return end
+    local slots = (type(EVAL_SWAP_SLOTS) == "function") and EVAL_SWAP_SLOTS() or {}
+    if table.getn(slots) == 0 then return end -- 语言键缺失 ⇒ 如实不出（EVAL_SWAP_SLOTS 已是空表）
+    local items, tips = {}, {}
+    for i2, s in ipairs(slots) do
+      items[i2] = tostring(s.id) .. " · " .. tostring(s.label)
+      local cur = nil
+      if s.id >= 1 and type(GetInventoryItemLink) == "function" then
+        local okl, lk = pcall(GetInventoryItemLink, "player", s.id)
+        if okl and lk then cur = string.match(lk, "%[(.-)%]") end
+      end
+      tips[i2] = { "|cffffd100" .. string.format(L("SW_SLOT_TIP"), tostring(s.id), tostring(s.label)) .. "|r",
+                   "|cff9fe0ff" .. string.format(L("SW_SLOT_CUR"), tostring(cur or "—")) .. "|r" }
+    end
+    EVAL_DD_OPEN(seUI.skillBtn, items, function(pi)
+      local s = slots[pi]
+      if s and seUI.ed then
+        seUI.ed.skill = "换装:" .. s.id .. ":" .. nm
+        EVAL_HELP_SE_REFRESH()
+      end
+    end, { tips = tips })
+  end
+
   -- 项选中落值（两个下拉共用）：特殊项弹输入框，物品项剥 ×数量 展示后缀
   local function seApplySkillPick(v)
     if not v then return end
+    -- ★1.75.101 换装：类目 7 的项是「换装:名」（**还没有槽位号**）⇒ 续弹槽位下拉；
+    --   已带槽位号的完整写法（换装:13:名）不拦（EVAL_SWAP_OF 能解析 ⇒ 落通用路径原样写入）。
+    if string.sub(v, 1, 6) == "换装" and not ((type(EVAL_SWAP_OF) == "function") and EVAL_SWAP_OF(v)) then
+      local body = nil
+      if string.sub(v, 7, 7) == ":" then body = string.sub(v, 8)
+      elseif string.sub(v, 7, 9) == "：" then body = string.sub(v, 10) end
+      if body and body ~= "" then seOpenSwapSlotPick(body) end
+      return
+    end
     if v == L("SE_PICK_ITEM") then
       EVAL_TN_OPEN(L("SE_TN_ITEM"), "", function(nm)
         if nm and nm ~= "" then seUI.ed.skill = "物品:" .. nm EVAL_HELP_SE_REFRESH() end
@@ -7517,8 +7563,8 @@ local function SE_BUILD()
       if tdi and tdi.kind == "eitem" then
         -- ★★★1.75.92 自身装备：点名字格 = **已装备列表弹窗**（IconGrid 共用件；用户：「弹窗选择已经装备列表」）。
         --   ★1.75.93 候选扩到「身上 ∨ 背包里的装备」（用户：「背包内的装备也加入可选范围」）：
-        --     背包侧只收**明确是装备**的（GetItemInfo 返回里带 INVTYPE_ token —— 扫字符串返回、不押注返回位置，
-        --     与 EquipCompare 的 ecClassOf 同一手法）；**判不出（nil）的不剔**（查不到 ≠ 不是装备）。
+        --     背包侧只收**明确是装备**的（1.75.101b 起走 `EVAL_IG_ITEM_KIND` 三级判定 + tooltip 兜底 ——
+        --     自写的 INVTYPE_ 扫描两头漏已废）；**判不出（nil）的不剔**（查不到 ≠ 不是装备）。
         --   ★条目是非物品形态（只有 name+tex+q，没有 bag/slot ⇒ 共用件 tooltip 不会画「×1 [nil,nil]」假信息）。
         --   ★不加「自定义输入」：不在身上/背包里的装备配了也只会如实报「未装备且背包未找到」。
         if type(EVAL_IG_OPEN) ~= "function" then return end -- 共用件缺席 ⇒ 如实没反应
@@ -7530,18 +7576,15 @@ local function SE_BUILD()
           mode = "single",
           candidates = function()
             local l, seen = {}, {}
-            -- 背包物品是不是装备：扫 GetItemInfo 的字符串返回找 INVTYPE_ token（不押注返回位置）；判不出 = nil
-            local function equipableByLink(link)
-              if type(GetItemInfo) ~= "function" then return nil end
-              local r = { pcall(GetItemInfo, link) }
-              if r[1] ~= true then return nil end
-              for ri = 2, 16 do
-                local v = r[ri]
-                if type(v) == "string" and string.find(v, "^INVTYPE_") then
-                  return (v ~= "" and v ~= "INVTYPE_NON_EQUIP")
-                end
-              end
-              return nil
+            -- ★★★1.75.101b 背包物品是不是装备：改用项目已验证的 `EVAL_IG_ITEM_KIND`（IconGrid 三级判定，
+            --   tooltip 兜底会顺手把物品写进客户端缓存 = 自愈）—— 自写的 INVTYPE_ 扫描两头漏
+            --   （找不到 token = nil = 判不出保留 ⇒ 非装备全被放行，用户真机截图实锤）。
+            --   只留 armor / weapon；判不出（nil）不剔（查不到 ≠ 不是装备）。
+            local function equipableByLink(link, nm, bag, slot)
+              if type(EVAL_IG_ITEM_KIND) ~= "function" then return nil end
+              local kd = EVAL_IG_ITEM_KIND(nm, link, nil, bag, slot, true)
+              if kd == nil then return nil end
+              return (kd == "armor" or kd == "weapon")
             end
             if type(GetInventoryItemLink) == "function" then
               for slot = 1, 19 do
@@ -7570,7 +7613,7 @@ local function SE_BUILD()
                     local okl, link = pcall(GetContainerItemLink, bag, slot)
                     local nm = okl and link and string.match(link, "%[(.-)%]")
                     if nm and nm ~= "" and not seen[nm] then
-                      local eq = equipableByLink(link)
+                      local eq = equipableByLink(link, nm, bag, slot)
                       if eq ~= false then -- 明确判成非装备才剔；判不出保留（查不到 ≠ 不是装备）
                         seen[nm] = true
                         local tex, q = nil, nil

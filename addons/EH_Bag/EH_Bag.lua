@@ -186,6 +186,7 @@ local BAG_T = {
     TINT_VIVID = "鲜丽",
     TINT_ULTRA = "极鲜",
     MENU_BG = "背景透明度",
+MENU_CGAP = "格子间距",
     DEF_SAY_314 = "背包初始设置已更新：背包顺序=倒序 · 整理步进=快(0.2s) · 界面缩放=80% · 背包条=关 · 钥匙链=关（右键「设置」或 /ebag help 可随时改回）",
     MENU_WIN_CENTER = "窗口回到屏幕中间",
     WIN_CENTERED = "窗口已回到屏幕中间（%s）",
@@ -328,6 +329,7 @@ local BAG_T = {
     TINT_VIVID = "Vivid",
     TINT_ULTRA = "Ultra",
     MENU_BG = "Background opacity",
+MENU_CGAP = "Slot spacing",
     DEF_SAY_314 = "Bag defaults updated: order=reversed · sort step=fast(0.2s) · UI scale=80% · bag bar=off · keyring=off (right-click Settings or /ebag help to change back)",
     MENU_WIN_CENTER = "Center window on screen",
     WIN_CENTERED = "Window centered on screen (%s)",
@@ -470,6 +472,7 @@ local BAG_T = {
     TINT_VIVID = "Яркая",
     TINT_ULTRA = "Максимум",
     MENU_BG = "Прозрачность фона",
+MENU_CGAP = "Интервал ячеек",
     DEF_SAY_314 = "Настройки сумок обновлены: порядок=обратный · шаг сортировки=быстро(0.2с) · масштаб=80% · панель сумок=выкл · кольцо ключей=выкл (правый клик «Настройки» или /ebag help)",
     MENU_WIN_CENTER = "Окно в центр экрана",
     WIN_CENTERED = "Окно возвращено в центр экрана (%s)",
@@ -827,6 +830,52 @@ B.bgCycle = function()
     end
   end
   B.bgSet(B.BG_LEVELS[1])
+end
+
+-- ★★★0.3.31g 格子边距（格子与格子之间的间距，用户：「增加个格子边距的参数.我微调下.」）：
+--   **三个唯一**：读口 `B.cgap()`（自己夹取 0~16 + 坏数据退 `DEF.gap` = 4）· 写口 `B.cgapSet(v)`
+--   （认数字 0~16；**无参数 = 只读播报** = 活口；坏输入一个字节都不动）· 布局 `B.layout()` 只读这一个口。
+--   ★存档键 = `c.gap`（0.3.0 起就有的**休眠键**：一直有读没有写 —— 本次给它接上写口）；老存档没这键 ⇒ 默认 4，零迁移。
+--   ★单位 = **未缩放像素**（与 `c.cell` 同口径；布局里再乘 z —— 改界面缩放时间距按比例走，与现状一致）。
+--   ★作用面 = 只影响**主背包网格**（x/y 步进 · 行数 · 网格宽高 ⇒ 窗口宽高跟着走）；
+--     左侧背包条排距（`barCell + 4*z`）与跨角色总览间距**各走各的尺子，不碰**。
+B.CGAP_MIN, B.CGAP_MAX = 0, 16
+B.cgap = function()
+  local v = tonumber(B.cfg().gap)
+  if v == nil then return DEF.gap end
+  if v < B.CGAP_MIN then return B.CGAP_MIN end
+  if v > B.CGAP_MAX then return B.CGAP_MAX end
+  return v
+end
+B.cgapSet = function(v)
+  local n = tonumber(v)
+  if n == nil then
+    sayForce("格子间距 = " .. strVal(B.cgap()) .. "px（用法 /ebag cgap 0~16；0 = 格子紧贴）")
+    return false
+  end
+  if n < B.CGAP_MIN then n = B.CGAP_MIN end
+  if n > B.CGAP_MAX then n = B.CGAP_MAX end
+  B.cfg().gap = n
+  B.ui.needLayout = true
+  B.layout()
+  if type(B.refreshAll) == "function" then B.refreshAll() end
+  sayForce("格子间距 = " .. strVal(n) .. "px（/ebag cgap 0~16；0 = 格子紧贴）")
+  return true
+end
+
+-- ★菜单行「格子间距」与 `/ebag cgap` 共用的循环口（与 `B.bgCycle` 同一配方；手调怪值 ⇒ 循环一律回第一档）
+B.CGAP_LEVELS = { 0,1,2, 4 }
+B.cgapCycle = function()
+  local n = table.getn(B.CGAP_LEVELS)
+  local cur = B.cgap()
+  local i
+  for i = 1, n do
+    if B.CGAP_LEVELS[i] == cur then
+      B.cgapSet(B.CGAP_LEVELS[(i % n) + 1])
+      return
+    end
+  end
+  B.cgapSet(B.CGAP_LEVELS[1])
 end
 
 -- 背包条按钮边长（base = 总览里的物品图标大小；用户点名「大小跟总览内的物品图标相同」）
@@ -4187,7 +4236,7 @@ B.MENU_COLS = 2
 B.MENU_MAXROWS0 = 12
 -- 行池：★必须恒 ≥ menuItems() 的条数，且**留一格余量** —— 行是**建一次复用**的池，
 --   超池的行**静默不显示**（不报错、看着就是「少了一项」）⇒ 加了新行忘了加池 = 那一行神秘消失。
---   池 = MENU_COLS × MENU_MAXROWS0 = 24（现 menuItems() 22 条 ⇒ 余量 2 行）。
+--   池 = MENU_COLS × MENU_MAXROWS0 = 24（现 menuItems() 23 条 ⇒ 余量 1 行；★0.3.31h「格子间距」那行就是这么挤进池的）。
 B.MENU_ROWS = 24
 
 -- ★★★开关行的「状态配色」（0.3.7；用户：「设置栏的开关状态在当前设置背景没正确匹配颜色，开状态和
@@ -4490,6 +4539,11 @@ function B.menuItems()
   table.insert(out, {
     text = L("MENU_BG") .. "：" .. B.bgText(),
     fn = function() B.bgCycle() end,
+  })
+  -- ★★★0.3.31h：格子边距（用户：「将以上间距添加入背包设置」）⇒ 点一下循环档位（写口 B.cgapSet / 线 B.cgapCycle，与 `/ebag cgap` 共用；池 24 余量 2 → 1，几何常量不动）
+  table.insert(out, {
+    text = L("MENU_CGAP") .. "：" .. strVal(B.cgap()) .. "px",
+    fn = function() B.cgapCycle() end,
   })
   table.insert(out, {
     on = (c.autoShow ~= false),
@@ -5543,7 +5597,7 @@ function B.layout()
   local c = B.cfg()
   local z = B.z()
   local cell = (c.cell or DEF.cell) * z
-  local gap = (c.gap or DEF.gap) * z
+  local gap = B.cgap() * z   -- ★0.3.31g：唯一读口（夹取 + 坏数据退默认；存档键 c.gap 接上写口了）
   -- ★背包条/银行包条的**排距尺子**与格框无关（`B.BARCELL`）：旧写法拿格框的 `cell + 4`
   --   去排左侧条 ⇒ 左条 41 一格、右条 34 一格（两条不等高，左侧看着「又大又散」）
   local barCell = (B.BARCELL or 30) * z
@@ -7160,6 +7214,7 @@ local function usage()
   sayForce("/ebag vsize 小|中|大 = 跨角色总览格子大小（当前 " .. B.vsizeText() .. "，越小同屏放得越多）")
   sayForce("/ebag tint 标准|鲜丽|极鲜 = 品质染色浓淡（当前 " .. B.tintText() .. "，与「格框染品质」那行独立）")
   sayForce("/ebag alpha <0~100> = 窗口背景透明度（当前 " .. B.bgText() .. "；也认小数 alpha 0.45）")
+  sayForce("/ebag cgap [0~16] = 格子间距（当前 " .. strVal(B.cgap()) .. "px；0 = 格子紧贴，只影响主背包网格）")
   sayForce("/ebag force | yield = 强行接管 / 恢复自动让位")
   sayForce("/ebag view = 跨角色总览（OneView：读存档里各角色的快照，只读）")
   sayForce("/ebag menu = 设置菜单（窗口**右上**「设置」那颗按钮同一个口）")
@@ -7308,7 +7363,7 @@ function B.status()
     sayForce("外观：品质染色=" .. B.tintText() .. "（" .. strVal(B.tintIdx()) .. "/" .. strVal(table.getn(B.TINTS))
       .. " ｜ 精良(蓝)实算 " .. string.format("%.3f,%.3f,%.3f", q3r * kk, q3g * kk, q3b * kk) .. "）"
       .. " ｜ 格框染品质=" .. (c.edges ~= false and "开" or "关")
-      .. " ｜ 逐档系数=" .. B.qualKLine() .. " ｜ 背景透明度=" .. B.bgText() .. " ｜ 图标系数=" .. strVal(B.ICON_K)
+      .. " ｜ 逐档系数=" .. B.qualKLine() .. " ｜ 格子间距=" .. strVal(B.cgap()) .. "px ｜ 背景透明度=" .. B.bgText() .. " ｜ 图标系数=" .. strVal(B.ICON_K)
       .. " ｜ 界面缩放=" .. strVal(math.floor(B.z() * 100 + 0.5)) .. "%")
     -- ★0.3.30 辉光读数（活口）：**写进 alpha 的值**（= 基准值原样，0.3.29 的归一已按用户要求撤销）
     --   + **观感读数**（有效 α² × 颜色亮度 —— ★各档**不相等是正常的**，它只解释「为什么亮色档看着更亮更粗」）。
@@ -7678,11 +7733,20 @@ function B.cmd(msg)
     -- ★0.3.14：窗背景透明度（`/ebag alpha 45` 或 `alpha 0.45`；无参数 = 只读播报）
     local an = string.match(msg, "^alpha%s*(.*)$")
     if an == nil then an = string.match(msg, "^透明度%s*(.*)$") end
+    -- ★0.3.31g：格子边距（`/ebag cgap 0~16`；无参数 = 只读播报）
+    local kn = string.match(msg, "^cgap%s*(.*)$")
+    if kn == nil then kn = string.match(msg, "^间距%s*(.*)$") end
     if an ~= nil then
       if an == "" then
         B.bgSet(nil)                                     -- 无参数 = 只读播报（活口）
       else
         B.bgSet(an)
+      end
+    elseif kn ~= nil then
+      if kn == "" then
+        B.cgapSet(nil)                                   -- 无参数 = 只读播报（活口）
+      else
+        B.cgapSet(kn)
       end
     elseif tn2 ~= nil then
       local tv = tonumber(tn2)

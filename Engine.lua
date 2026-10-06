@@ -1187,6 +1187,39 @@ function EVAL_BAG_HAS_USE(name, bag, slot)
   return found
 end
 
+-- ★★★换装（1.75.101；用户：「一键宏的新技能类别: 换装:装备:装备类(非全物品)下拉可选,装备格子(悬浮格子数字含义)」）：
+--   rule.skill = "换装:槽位号:物品名"（槽位 = 纸娃娃 1-19；**0 = 自动落槽** AutoEquipCursorItem）。
+--   ★API 依据（wiki Cursor/Inventory 页逐条核实，均无 Protected 行）：
+--     PickupContainerItem(bag,slot) 拿起 → EquipCursorItem(槽位)「1–19 = sends an inventory swap into that slot」
+--     （= 指定格装备/替换的官方路）→ 旧装备被换到光标上 ⇒ 搬进第一个空格（★绝不清光标 —— 丢件铁律 1.75.x）。
+--   ★解析走**字节级前缀剥离**（"换装"=6 字节）：多字节字符绝不进 [...] 字节集（项目老雷）；
+--     全角「：」当分隔符也认（文本导入可能带）。
+--   ★★全局函数（主 chunk 200 局部上限，与 EVAL_EQUIP_OF 同一处理）。
+function EVAL_SWAP_OF(skill)
+  if type(skill) ~= "string" or string.sub(skill, 1, 6) ~= "换装" then return nil end
+  local body = nil
+  if string.sub(skill, 7, 7) == ":" then body = string.sub(skill, 8)
+  elseif string.sub(skill, 7, 9) == "：" then body = string.sub(skill, 10) end
+  if not body then return nil end
+  local s2, nm = string.match(body, "^(%d+):(.+)$")
+  if not s2 then s2, nm = string.match(body, "^(%d+)：(.+)$") end
+  local inv = tonumber(s2)
+  if not (inv and nm and nm ~= "") then return nil end
+  if inv < 0 or inv > 19 then return nil end
+  return inv, nm
+end
+-- 槽位下拉清单（编辑器用）：{ { id=0, label=自动 }, { id=1, label=头 }, … } —— 标签唯一来源 = 语言键
+--   SW_SLOT_NAMES（分号分隔，第 1 项 = id 0）；语言键缺失 ⇒ 如实给空表（调用方就此不出下拉）。
+function EVAL_SWAP_SLOTS()
+  local raw = (type(EVAL_L) == "function") and EVAL_L("SW_SLOT_NAMES") or nil
+  if type(raw) ~= "string" or raw == "" or raw == "SW_SLOT_NAMES" then return {} end
+  local out = {}
+  for part in string.gmatch(raw, "([^;]+)") do
+    table.insert(out, { id = table.getn(out), label = part }) -- 第 1 项进来时 getn=0 ⇒ id 从 0 起
+  end
+  return out
+end
+
 -- 姿态切换（1.43.0）：rule.skill="姿态:战斗姿态"——走姿态栏 CastShapeshiftForm（官方文档明确 Not protected，插件可直调），
 -- 不占动作条。战士姿态不可取消（重复按 no-op）；德鲁伊等可切换形态重复按会取消 aura → 执行前 active 守门。
 local function stanceOf(skill)
@@ -1303,8 +1336,8 @@ end
 --   ★rank（指定等级）走 RunScript 直接施法，**本来就不需要动作条** → 必须算进来。
 function skillNoSlotOk(skill, rank)
   if rank then return true end
-  -- ★1.75.92 装备使用（EVAL_EQUIP_OF）也不占动作条：与「物品使用」同族，位置在纸娃娃槽位
-  return (petCmdOf(skill) or targetSelOf(skill) or itemOf(skill) or EVAL_EQUIP_OF(skill) or stanceOf(skill)
+  -- ★1.75.92 装备使用（EVAL_EQUIP_OF）/ 1.75.101 换装（EVAL_SWAP_OF）也不占动作条：与「物品使用」同族
+  return (petCmdOf(skill) or targetSelOf(skill) or itemOf(skill) or EVAL_EQUIP_OF(skill) or EVAL_SWAP_OF(skill) or stanceOf(skill)
           or cancelCastOf(skill) or stopAllOf(skill) or followOf(skill) or cancelBuffOf(skill)) and true or false
 end
 
@@ -1446,6 +1479,26 @@ local function wicon(name)
     if type(GetItemInfo) == "function" then
       local ok2, _1, _2, _3, _4, _5, _6, _7, itex2 = pcall(GetItemInfo, ename0)
       if ok2 and itex2 then return itex2 end
+    end
+    return "Interface\\Icons\\INV_Misc_QuestionMark"
+  end
+  local _swI, swNm = EVAL_SWAP_OF(name) -- ★1.75.101 换装：背包图标 → GetItemInfo 缓存 → 问号（与物品同一口径）
+  --   ★下拉里的中间形态是「换装:名」（还没选槽位 ⇒ EVAL_SWAP_OF 解析不出）⇒ 再按纯前缀剥一次，图标照样画得出。
+  if not swNm and type(name) == "string" and string.sub(name, 1, 6) == "换装" then
+    if string.sub(name, 7, 7) == ":" then swNm = string.sub(name, 8)
+    elseif string.sub(name, 7, 9) == "：" then swNm = string.sub(name, 10) end
+    if swNm == "" then swNm = nil end
+  end
+  if swNm then
+    local _b4, _s4, stex = wFindBagItem(swNm)
+    if not stex and type(EVAL_FIND_EQUIPPED) == "function" then -- ★合集口径：已装备的图标也要画得出
+      local _es4, etex4 = EVAL_FIND_EQUIPPED(swNm)
+      stex = etex4
+    end
+    if stex then return stex end
+    if type(GetItemInfo) == "function" then
+      local ok3, _1, _2, _3, _4, _5, _6, _7, itex3 = pcall(GetItemInfo, swNm)
+      if ok3 and itex3 then return itex3 end
     end
     return "Interface\\Icons\\INV_Misc_QuestionMark"
   end
@@ -1892,6 +1945,13 @@ local function wready(name)
     local left2 = (start2 or 0) + (dur2 or 0) - GetTime()
     return false, string.format("冷却剩 %.1fs", left2 > 0 and left2 or 0)
   end
+  local swR, swN = EVAL_SWAP_OF(name) -- ★1.75.101 换装：无冷却概念，就绪 = 背包或身上找得到这件
+  if swR then
+    local b3 = wFindBagItem(swN)
+    if not b3 and type(EVAL_FIND_EQUIPPED) == "function" then b3 = EVAL_FIND_EQUIPPED(swN) end
+    if not b3 then return false, "背包与身上都没找到" end
+    return true
+  end
   local stname2 = stanceOf(name) -- 1.43.0 姿态冷却走姿态栏 API；已在该姿态=不就绪（防止德鲁伊形态被再按取消）
   if stname2 then
     local si, _t, active, castable = wFindStance(stname2)
@@ -2106,6 +2166,94 @@ local function wuse(name, reason, rank)
     local eline = string.format("→ %s (%s) | 槽位:%d", name, reason, eslot2)
     EVAL_LOGLINE(eline)
     if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cff7fff7f" .. eline .. "|r") end
+    return true
+  end
+  local swInv, swName = EVAL_SWAP_OF(name)
+  if swInv then
+    -- ★★★换装（1.75.101）：拿起背包里的装备 → EquipCursorItem 精确落槽（wiki：1-19 = inventory swap；
+    --   0 = 自动落槽 AutoEquipCursorItem）→ 旧装备若被换到光标上 ⇒ 搬进第一个空格。
+    --   ★铁律遵守：① 绝不清光标（没空格 ⇒ 如实喊话让玩家自己放，绝不丢件）；② 已在该槽 ⇒ 跳过
+    --     （防规则连击来回换）；③ 同一技能 0.5s 硬节流（一次换装 = 3 次服务器写动作，频率防护）；
+    --     ④ 每一步都验证（光标/落槽读回），失败如实写日志，绝不假装成功。
+    local sttS = rawget(_G, "EVAL_HELP_STATE")
+    if type(sttS) ~= "table" then sttS = {} end
+    local nowS = (type(GetTime) == "function") and GetTime() or 0
+    if sttS.swapLast and (nowS - sttS.swapLast) < 0.5 then wlog(name .. "跳过: 换装节流") return false end
+    if type(CursorHasItem) == "function" and CursorHasItem() then
+      wlog(name .. "跳过: 光标上有东西（先手动放下，绝不替玩家清光标）") return false
+    end
+    local curNm = nil
+    if swInv >= 1 and type(GetInventoryItemLink) == "function" then
+      local okl0, lk0 = pcall(GetInventoryItemLink, "player", swInv)
+      if okl0 and lk0 then curNm = string.match(lk0, "%[(.-)%]") end
+    end
+    if curNm and colonNorm(curNm) == colonNorm(swName) then wlog(name .. "跳过: 已在该槽位") return false end
+    -- ★来源 = 背包优先，背包没有就找身上（合集口径：已装备的也能选 ⇒ 从身上的槽位挪到目标槽）
+    local bag2, slot2 = wFindBagItem(swName)
+    local srcInv = nil
+    if not bag2 and type(EVAL_FIND_EQUIPPED) == "function" then
+      srcInv = EVAL_FIND_EQUIPPED(swName)
+      if srcInv == swInv then wlog(name .. "跳过: 已在该槽位") return false end
+      if srcInv and swInv == 0 then wlog(name .. "跳过: 已装备着（自动落槽对它没有意义）") return false end
+    end
+    if not bag2 and not srcInv then wlog(name .. "跳过: 背包与身上都没找到") return false end
+    if bag2 then
+      if type(PickupContainerItem) ~= "function" then wlog(name .. "跳过: 无 PickupContainerItem") return false end
+      pcall(PickupContainerItem, bag2, slot2)
+    else
+      if type(PickupInventoryItem) ~= "function" then wlog(name .. "跳过: 无 PickupInventoryItem") return false end
+      pcall(PickupInventoryItem, srcInv) -- wiki：空光标 = 拿起身上这件（之后 EquipCursorItem 落目标槽）
+    end
+    local gotIt = (type(CursorHasItem) == "function") and (CursorHasItem() and true or false) or true
+    if not gotIt then wlog(name .. "跳过: 拿不起来（物品锁定/战斗中）") return false end
+    if swInv == 0 then
+      pcall(AutoEquipCursorItem)
+    else
+      pcall(EquipCursorItem, swInv)
+    end
+    -- 落槽读回验证 + 旧装备收容（绝不 ClearCursor）
+    local okSlot = nil
+    if swInv >= 1 and type(GetInventoryItemLink) == "function" then
+      local okl2, lk2 = pcall(GetInventoryItemLink, "player", swInv)
+      if okl2 and lk2 then
+        local nm2 = string.match(lk2, "%[(.-)%]")
+        okSlot = (nm2 and colonNorm(nm2) == colonNorm(swName)) and true or false
+      end
+    end
+    local leftNote = ""
+    if type(CursorHasItem) == "function" and CursorHasItem() then
+      local parked = false
+      if type(GetContainerNumSlots) == "function" and type(GetContainerItemInfo) == "function" then
+        for b2 = 0, 4 do
+          local okn2, nslots = pcall(GetContainerNumSlots, b2)
+          if okn2 and nslots and nslots > 0 and not parked then
+            for s2 = 1, nslots do
+              local oki2, t2 = pcall(GetContainerItemInfo, b2, s2)
+              if oki2 and (t2 == nil or t2 == "") and not parked then
+                pcall(PickupContainerItem, b2, s2) -- 把换下来的旧装备放进这个空格
+                parked = true
+              end
+            end
+          end
+        end
+      end
+      if not parked then
+        leftNote = " ｜ ★旧装备还在光标上（背包没空格）——请手动放下，插件绝不清光标"
+        wlog(name .. ": 旧装备还在光标上（背包没空格），请手动放下")
+        EVAL_SAY("|cffff8080换装：背包没空格，换下来的旧装备在光标上，请手动找个格子放下|r")
+      end
+    end
+    sttS.swapLast = nowS
+    local sline = string.format("→ %s (%s) | 落槽:%s%s", name, reason,
+      (swInv == 0 and "自动" or swInv), leftNote)
+    if okSlot == false then
+      sline = name .. " 换装未生效（落槽读回不是它——可能战斗中被锁/装绑待确认）" .. leftNote
+      EVAL_LOGLINE(sline)
+      if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cffff8080" .. sline .. "|r") end
+      return false
+    end
+    EVAL_LOGLINE(sline)
+    if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cff7fff7f" .. sline .. "|r") end
     return true
   end
   local stname3 = stanceOf(name)
@@ -5772,6 +5920,59 @@ function EVAL_GO_SKILL_CATEGORIES()
     end
     return l
   end })
+  -- ★★★1.75.101 第七类「换装」（用户：「换装:装备:装备类(非全物品)下拉可选」）：
+  --   ★合集口径（用户追加：「下拉选择需要过滤下只显示装备类型的项目和已经装备的项目合集」）：
+  --     项 = **已装备的（纸娃娃 1-19，排在前面）∪ 背包里的装备**（同名去重）。
+  --     选中后由编辑器**续弹槽位下拉**（换装:槽位:名 两参写法）。
+  --   ★★★1.75.101b 过滤真修（用户真机截图：药水/矿石/布料/炉石全混进来了）：自写的 INVTYPE_ 扫描**两头漏**
+  --     —— 找到 token 才赋值，找不到 = nil = 「判不出保留」⇒ 非装备全被放行；且本客户端缓存没热身时
+  --     GetItemInfo 经常拿不到值。⇒ 改用项目**已验证**的类型判定件 `EVAL_IG_ITEM_KIND`（IconGrid：
+  --     品质 → GetItemInfo 缓存 → tooltip 兜底三级，tooltip 还会把物品写进缓存 = 自愈），
+  --     **只留 armor / weapon**；判不出（nil）照旧不剔（铁律「查不到 ≠ 没有」）。
+  table.insert(cats, { label = L("SK_CAT_7"), icon = CAT_ICON_ROOT .. "chests", items = function()
+    local l, seen = {}, {}
+    if type(GetInventoryItemLink) == "function" then -- ① 已装备（槽位序）
+      for slot = 1, 19 do
+        local okl, link = pcall(GetInventoryItemLink, "player", slot)
+        local nm = okl and link and string.match(link, "%[(.-)%]")
+        if nm and nm ~= "" and not seen[nm] then
+          seen[nm] = true
+          table.insert(l, "换装:" .. nm)
+        end
+      end
+    end
+    local bagList = {}
+    if type(GetContainerNumSlots) == "function" and type(GetContainerItemLink) == "function" then -- ② 背包里的装备
+      for bag = 0, 4 do
+        local okn, slots = pcall(GetContainerNumSlots, bag)
+        if okn and slots and slots > 0 then
+          for slot = 1, slots do
+            local okl, link = pcall(GetContainerItemLink, bag, slot)
+            local nm = okl and link and string.match(link, "%[(.-)%]")
+            if nm and nm ~= "" and not seen[nm] then
+              local q5 = nil
+              if type(GetContainerItemInfo) == "function" then
+                local oki5, _t5, _c5, _l5, qq5 = pcall(GetContainerItemInfo, bag, slot)
+                if oki5 then q5 = tonumber(qq5) end
+              end
+              local kind5 = nil
+              if type(EVAL_IG_ITEM_KIND) == "function" then
+                -- ★allowProbe=true：这是用户点击驱动的弹窗路径（项目规矩：只有这条路才许开 tooltip 贵调用）
+                kind5 = EVAL_IG_ITEM_KIND(nm, link, q5, bag, slot, true)
+              end
+              if kind5 == nil or kind5 == "armor" or kind5 == "weapon" then
+                seen[nm] = true
+                table.insert(bagList, "换装:" .. nm)
+              end
+            end
+          end
+        end
+      end
+      table.sort(bagList)
+    end
+    for _, v in ipairs(bagList) do table.insert(l, v) end
+    return l
+  end })
   return cats
 end
 
@@ -5802,6 +6003,11 @@ function EVAL_GO_STATUS()
       elseif EVAL_EQUIP_OF(n) then -- ★1.75.92 装备使用：状态总览同样如实报「身上穿没穿着」
         local eslot = EVAL_FIND_EQUIPPED(EVAL_EQUIP_OF(n))
         EVAL_SAY(n .. ": " .. (eslot and ("|cff00ff00已装备（槽位" .. eslot .. "）|r") or "|cffff0000未装备|r"))
+      elseif EVAL_SWAP_OF(n) then -- ★1.75.101 换装：如实报「背包或身上有没有这件」
+        local _swI, swNm2 = EVAL_SWAP_OF(n)
+        local bagS = wFindBagItem(swNm2)
+        if not bagS and type(EVAL_FIND_EQUIPPED) == "function" then bagS = EVAL_FIND_EQUIPPED(swNm2) end
+        EVAL_SAY(n .. ": " .. (bagS and "|cff00ff00背包/身上已找到|r" or "|cffff0000背包与身上都没找到|r"))
       else
         local s = wslots[n]
         if s then
