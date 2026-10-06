@@ -94,14 +94,17 @@ end
 local function lessRec(a, b)
   local ac = catRankOf(a)
   local bc = catRankOf(b)
-  if ac ~= bc then return ac < bc end
+  if ac ~= bc then return ac > bc end          -- ★ 大类：位次大的在前
+
   local aq = a.quality or 0
   local bq = b.quality or 0
-  if aq ~= bq then return aq > bq end
+  if aq ~= bq then return aq < bq end          -- ★ 品质：低品质在前
+
   local an = string.lower(a.name or "")
   local bn = string.lower(b.name or "")
-  if an ~= bn then return an < bn end
-  return (a.id or 0) < (b.id or 0)
+  if an ~= bn then return an > bn end          -- ★ 名称：降序
+
+  return (a.id or 0) > (b.id or 0)             -- ★ id：降序
 end
 
 -- 位置序：**工作区 = 0~4 号袋的全部物理格子**，显示中的包排前面、收起的排后面。
@@ -114,12 +117,12 @@ local function slotOrder()
   local slots = {}
   local pass, k, s
   for pass = 1, 2 do
-    for k = 1, 5 do
+        for k = 5, 1, -1 do    --改动点
       local bag = k - 1
       local shown = B.bagShown(bag)
       if (pass == 1 and shown) or (pass == 2 and not shown) then
         local n = B.bagSlotsRaw(bag)
-        for s = 1, n do
+        for s = n, 1, -1 do --改动点
           table.insert(slots, { bag = bag, slot = s })
         end
       end

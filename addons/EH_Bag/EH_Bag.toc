@@ -2,7 +2,7 @@
 ## Title: EH_Bag |cff66ccff整合背包子插件|r
 ## Notes: 独立子插件：整合背包一窗显示 + 背包条 + 圆角品质底（自带美术）+ 金币图标金钱行 + 搜索 + 类型/品质筛选 + 一键整理（限频执行）+ 跨角色总览（背包/银行分段）+ 冷却倒计时 + 品质辉光染色。
 ## Author: DSH
-## Version: 0.3.31
+## Version: 0.3.32
 ## X-Category: Inventory
 ## SavedVariables: EH_BAG_CFG
 

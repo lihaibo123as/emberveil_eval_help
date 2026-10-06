@@ -49,7 +49,7 @@ local B = {}
 _G.EH_BAG = B
 
 -- 构建标记（唯一来源）：改本文件顺手 +1，用于「客户端跑的是哪一份」取证
-local BAG_BUILD = "0.3.31"
+local BAG_BUILD = "0.3.32"
 
 local function strVal(v)
   return tostring(v)
