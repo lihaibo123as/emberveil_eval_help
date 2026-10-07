@@ -174,7 +174,9 @@ if (require.main === module) {
        'tools/LootCursor.lua',
        // ★子插件也纳入：EH_Bag（1.75.x 新建）两个文件 —— 跨 chunk 共用口全挂 B 表，
        //   本文件的「先引用后声明」错在子插件里同样是**静默**的（pcall 一包就什么都不报）。
-       'addons/EH_Bag/EH_Bag.lua', 'addons/EH_Bag/EH_BagSort.lua'];
+       'addons/EH_Bag/EH_Bag.lua', 'addons/EH_Bag/EH_BagSort.lua',
+       // ★EH_Damage（增强伤害显示子插件）：同样全是 pcall 包裹的事件处理器 ⇒ 静默雷必须静态扫
+       'addons/EH_Damage/EH_Damage.lua'];
   let total = 0;
   for (const f of files) {
     const bad = scan(fs.readFileSync(f, 'utf8'));

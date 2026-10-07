@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.75.103"
+local VERSION = "1.75.105"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -6353,6 +6353,13 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
         row.icon:Hide()
         row.text:ClearAllPoints()
         row.text:SetPoint("LEFT", row.btn, "LEFT", textXIcon, 0) -- ★1.75.101 无图标行也让出图标位（带图标列的菜单整列对齐）
+      end
+      -- ★★★1.75.105 分组标题行（locked）与**图标列同 x**（用户：「已记录的技能标题要左对齐技能图标.
+      --   参考全部技能分组内的技能对齐方式」）—— 标题左缘与技能图标的左缘对齐（x=2），
+      --   而不是跟着文字列走（x=18 时标题悬在图标与勾选框之间，用户截图点名的那种「没对齐」）。
+      if ddUI.locked and ddUI.locked[pi] then
+        row.text:ClearAllPoints()
+        row.text:SetPoint("LEFT", row.btn, "LEFT", 2, 0)
       end
       -- ★1.75.14 逐行配色（opts.colors / opts.rowBg）：分组标题靠它做出「三类各有颜色 + 底色带」的层次。
       --   ★没有配色的行必须**写回基准**（文字 0.85 白 / 底色 0.10,0.09,0.06），否则行池复用会串色。

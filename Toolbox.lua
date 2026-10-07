@@ -4214,6 +4214,10 @@ local SUBADDONS = {
     tip = L("SUB_BAG_TIP"), slash = "EHBAG", slashArg = "ui", hasUI = true },
   { key = "debugBox", id = "EH_DebugBox", group = "debug", name = L("SUB_LAYERDEBUG"),
     tip = L("SUB_LAYERDEBUG_TIP"), slash = "EHDEBUGBOX", slashArg = "ui", hasUI = true },
+  -- ★1.75.x 新增子插件 **EH_Damage**（增强伤害显示/浮动战斗信息；动画引擎参考 DamageEx(Nampower)，
+  --   事件源走 SCT 模式解析 CHAT_MSG_* 文本 —— 本客户端无结构化战斗事件/GUID/姓名板帧）。
+  { key = "damage", id = "EH_Damage", group = "combat", name = L("SUB_DAMAGE"),
+    tip = L("SUB_DAMAGE_TIP"), slash = "EHDAMAGE", slashArg = "ui", hasUI = true },
   -- ★★★1.74.29 用户要求：简易地图**已移到工具箱（工具模块）** → 从本 Tab 移除，不再在这里列出
 }
 
@@ -4516,6 +4520,18 @@ function EVAL_SUBADDONS_BUILD(root, page, refreshes)
   if hasBag then head(L("SUB_GROUP_BAG"), y) y = y - ROWH end
   for _, a in ipairs(SUBADDONS) do
     if a.group == "bag" then
+      local row = subMakeRow(root, y, a, page)
+      for _, f in ipairs(row.widgets) do table.insert(page.widgets, f) end
+      table.insert(subUI.rows, row)
+      y = y - ROWH
+    end
+  end
+  -- ★战斗组（EH_Damage）：日常工具，排在背包组之后、调试组之前；真有条目才画表头
+  local hasCombat = false
+  for _, a in ipairs(SUBADDONS) do if a.group == "combat" then hasCombat = true break end end
+  if hasCombat then head(L("SUB_GROUP_COMBAT"), y) y = y - ROWH end
+  for _, a in ipairs(SUBADDONS) do
+    if a.group == "combat" then
       local row = subMakeRow(root, y, a, page)
       for _, f in ipairs(row.widgets) do table.insert(page.widgets, f) end
       table.insert(subUI.rows, row)
