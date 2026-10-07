@@ -19,7 +19,7 @@
 --   · 字体链 FZLBJW→FRIZQT→ARIALN 全程 pcall；FontString 不吃鼠标 ⇒ 热区用透明 Button。
 -- ============================================================================
 
-local BUILD = "0.2.14"
+local BUILD = "0.2.23"
 
 local D = {}                      -- 命名空间（跨函数共享件全挂这里，控 local 数）
 _G["EH_DMG"] = D                  -- 调试/桥接口（子插件独立，不依赖宿主）
@@ -47,14 +47,37 @@ local ITEMS = {
   { id = "incoming",     def = true,  zh = "受到的伤害（附加）" },
 }
 
-local DIRS = { "up", "down", "arc", "angleUp", "angleDown", "horiz", "sprinkler", "sine" }
+local DIRS = { "up", "down", "arc", "angleUp", "angleDown", "horiz", "sprinkler", "sine",
+               "burst", "burstL", "burstR" }
 local DIR_ZH = { up = "向上滚动", down = "向下滚动", arc = "抛物线滚动",
                  angleUp = "斜上抛物", angleDown = "斜下抛物", horiz = "水平散开",
-                 sprinkler = "洒水散开", sine = "正弦上升" }
+                 sprinkler = "洒水散开", sine = "正弦上升",
+                 burst = "极速蹦出", burstL = "极速蹦出·斜左", burstR = "极速蹦出·斜右" }
+
+-- ★★曲线函数库（0.2.23；用户：「模仿官方的伤害展现方式…有哪些曲线函数支持吗?增加专门曲线函数的配置项?」）
+--   全部输入 t∈[0,1]、输出进度（绝对时间驱动）；官方 FCT 手感 = **缓出**（快起慢收）；
+--   `back` 会**过冲到终点以上再回落**（~1.10 处），就是「蹦」的那一下。
+local CURVES = {
+  cubic = function(t) local u = 1 - t return 1 - u * u * u end,          -- 缓出立方（官方手感主力）
+  quad  = function(t) local u = 1 - t return 1 - u * u end,              -- 缓出平方（稍柔）
+  back  = function(t) local c1, c3 = 1.70158, 2.70158 local u = t - 1
+            return 1 + c3 * u * u * u + c1 * u * u end,                  -- 回弹过冲（蹦）
+  expo  = function(t) if t >= 1 then return 1 end return 1 - 2 ^ (-10 * t) end, -- 指数缓出（起步最暴）
+}
+local CURVE_ORD = { "cubic", "quad", "back", "expo" }
+local CURVE_ZH = { cubic = "缓出立方", quad = "缓出平方", back = "回弹过冲", expo = "指数缓出" }
+
+local function easeCurve(name, t)
+  local fn = CURVES[name or "cubic"] or CURVES.cubic
+  local ok, v = pcall(fn, t)
+  if ok and type(v) == "number" then return v end
+  return t
+end
 
 local DEF = {
   master = true,
   direction = "angleUp",   -- ★0.2.13 初始默认（用户截图定）：斜上抛物
+  curve = "cubic",         -- ★0.2.23 蹦出系方向的曲线函数（缓出立方/缓出平方/回弹过冲/指数缓出）
   fontTier = 6,            -- 字号档位 1小/2中/3大/4特大/5巨大/6超大（★0.2.13 初始默认 = 超大）
   speed = 180,             -- ★0.2.13 初始默认：180 像素/秒
   duration = 2.0,          -- 秒
@@ -171,7 +194,7 @@ local function sizeApply(fs, tier, kind)
   if fo then pcall(fs.SetFontObject, fs, fo) end
 end
 local FONT_BASE = 22                    -- 历史常量（暴击系数语义已并入档位，留着防外部引用）
-local FONT_CHAIN = { "Fonts\\FZLBJW.TTF", "Fonts\\FRIZQT__.TTF", "Fonts\\ARIALN.TTF" }  -- 字号探针样本 A/D/H 仍用
+local FONT_CHAIN = { "Fonts\\FZLBJW.TTF", "Fonts\\FRIZQT__.TTF", "Fonts\\ARIALN.TTF" }  -- mkFont 的字体链兜底
 
 -- ----------------------------------------------------------------------------
 -- 显示种类（kind）→ 颜色 / 车道 / 文案
@@ -376,6 +399,16 @@ local function tick()
           -- 正弦上升（0.2.2；DamageEx OTHER 族的 sin 手法）：直上 + 左右正弦摆
           x = s.x0 + math.sin(t * 6) * 40
           y = s.y0 + (c.speed or 90) * t
+        elseif s.dir == "burst" or s.dir == "burstL" or s.dir == "burstR" then
+          -- 极速蹦出（0.2.3；用户：「模仿官方的伤害展现方式：中间极速蹦出来、方向朝上」）：
+          --   官方 FCT = **缓出曲线**（快起慢收）；`back` 曲线过冲到终点以上再回落 = 「蹦」
+          --   ★曲线吃「进度分数」t/dur（0..1），不是秒
+          local f = t / s.dur
+          local e = easeCurve(c.curve, f)
+          local dist = (c.speed or 90) * s.dur * 0.45          -- 总行程（速度×时长定，比例恒定）
+          y = s.y0 + dist * e
+          if s.dir == "burstL" then x = s.x0 - 70 * f * f
+          elseif s.dir == "burstR" then x = s.x0 + 70 * f * f end
         else
           y = s.y0 + (c.speed or 90) * t
         end
@@ -398,11 +431,6 @@ local function tick()
   -- 配置面板拖拽（同一节拍驱动，不再立第二个节拍帧）
   if ui.drag then
     D.uiDragTick()
-  end
-  -- 字号探针到期自动收
-  if D.probeUntil and now >= D.probeUntil then
-    D.probeUntil = nil
-    D.probeHide()
   end
 end
 D.tick = tick
@@ -821,6 +849,7 @@ local function uiRefresh()
   pcall(ui.sizeText.SetText, ui.sizeText, (D.TIER[c.fontTier or 3].zh) .. "（" .. tostring(c.fontTier or 3) .. "/" .. table.getn(D.TIER) .. "）")
   pcall(ui.speedText.SetText, ui.speedText, tostring(c.speed))
   pcall(ui.durText.SetText, ui.durText, string.format("%.1f", c.duration or 2.0))
+  pcall(ui.curveText.SetText, ui.curveText, CURVE_ZH[c.curve or "cubic"] or tostring(c.curve))
   pcall(ui.editText.SetText, ui.editText, D.editOn and "编辑模式：开" or "编辑模式：关")
   pcall(ui.simText.SetText, ui.simText, D.simOn and "模拟战斗：开" or "模拟战斗：关")
   pcall(ui.masterMk.Show, ui.masterMk)
@@ -830,7 +859,7 @@ end
 local function uiBuild()
   if ui.built then return true end
   if type(CreateFrame) ~= "function" then return false end
-  local W, H = 470, 400                  -- ★0.2.6 高度重算：表头+总开关 62 + 勾选 10 行 220 + 参数 2 行 62 + 按钮/备注 ~56
+  local W, H = 470, 424                  -- ★0.2.23 高度重算：表头+总开关 62 + 勾选 10 行 220 + 参数 3 行 86 + 按钮/备注 ~56
   local root = CreateFrame("Frame", "EH_DMG_UI", UIParent)
   root:SetWidth(W) root:SetHeight(H)
   root:SetPoint("CENTER", UIParent, "CENTER", ui.px, ui.py)
@@ -971,7 +1000,15 @@ local function uiBuild()
   end)
   ui.speedText = paramCell("速度", PX1, py - 24, function(d) local c = C() c.speed = math.max(20, math.min(400, (c.speed or 90) + d * 10)) end)
   ui.durText = paramCell("时长", PX2, py - 24, function(d) local c = C() c.duration = math.max(0.5, math.min(6, (c.duration or 2.0) + d * 0.25)) end)
-  py = py - 48
+  -- ★0.2.23 曲线函数（蹦出系方向用；循环类：`-` 反向）
+  ui.curveText = paramCell("曲线", PX1, py - 48, function(d)
+    local c = C()
+    local i = 1
+    for k, v in ipairs(CURVE_ORD) do if v == (c.curve or "cubic") then i = k break end end
+    local n = table.getn(CURVE_ORD)
+    c.curve = CURVE_ORD[((i - 1 + (d or 1)) % n) + 1]
+  end)
+  py = py - 72
 
   -- 底部按钮
   local by = py - 6
@@ -1060,10 +1097,8 @@ local function setMaster(on)
     -- ③ 数据重置：游标/拖拽/低血武装复位
     D.drag = nil
     D.lowArmed.hp = true D.lowArmed.mana = true
-    -- ④ 图层清理：编辑锚点收起 + 字号探针收起
+    -- ④ 图层清理：编辑锚点收起
     if D.editUI then pcall(D.editUI.f.Hide, D.editUI.f) end
-    D.probeUntil = nil
-    D.probeHide()
     D.editOn = false D.simOn = false
     eventSync()      -- 摘全部事件
     say("EH_Damage 已关闭（收层 · 停节拍 · 摘事件）")
@@ -1073,108 +1108,6 @@ local function setMaster(on)
 end
 D.setMaster = setMaster
 
--- ----------------------------------------------------------------------------
--- 字号探针（/edmg 字号探针）：五种机制并排画样本，一张截图判定哪条通（铁律 4 取证范式）
--- ----------------------------------------------------------------------------
-local probeUI = { n = 0, frames = {} }
-
-local function probeHide()
-  for i = 1, probeUI.n do
-    local f = probeUI.frames[i]
-    if f then pcall(f.Hide, f) end
-  end
-end
-D.probeHide = probeHide
-
-local function probeRun()
-  probeHide()
-  if type(CreateFrame) ~= "function" then say("探针不可用（建不出控件）") return end
-  local RECIPES = {
-    { zh = "A：继承模板+SetFontOUTLINE｜样本伤害30", inherits = true, mk = function(fs)
-        for _, fp in ipairs(FONT_CHAIN) do if pcall(fs.SetFont, fs, fp, 30, "OUTLINE") then break end end
-      end },
-    { zh = "B：继承模板+SetTextHeight｜样本伤害30", inherits = true, mk = function(fs)
-        pcall(fs.SetTextHeight, fs, 30)
-      end },
-    { zh = "C：SetFontObject+SetTextHeight｜样本伤害30", mk = function(fs)
-        pcall(fs.SetFontObject, fs, GameFontHighlight)
-        pcall(fs.SetTextHeight, fs, 30)
-      end },
-    { zh = "D：无继承+SetFontOUTLINE｜样本伤害30", mk = function(fs)
-        for _, fp in ipairs(FONT_CHAIN) do if pcall(fs.SetFont, fs, fp, 30, "OUTLINE") then break end end
-      end },
-    { zh = "E：帧缩放SetScale(2)｜样本伤害15", mk = function(fs)
-        pcall(fs.SetTextHeight, fs, 15)
-      end, frameScale = 2 },
-    -- ★探针第二轮（0.1.6；A~E 真机全一样小 ⇒ FontString 文字不吃任何字号/缩放）：
-    --   F/G = 与编辑锚点同族的 **Button 对象**（用户指出的没试过的路：UMG 真按钮的文字通道
-    --         与 FontString 不是一套）；H = MessageFrame widget（客户端自己的错误文字通道同款）。
-    { zh = "F：Button+SetText+缩放2｜样本伤害15", kind = "button", scale = 2 },
-    { zh = "G：Button+SetText｜样本伤害30", kind = "button" },
-    { zh = "H：MessageFrame+SetFont30｜样本伤害", kind = "msgframe" },
-    -- ★探针第三轮（0.1.8；F/G 真机不显示 = Button 无字体对象不画字）：
-    --   之前只用过 12 号的字体对象 ⇒ 试**分档字体对象**（渲染器不认「改字号」，
-    --   但可能认字体对象**自带**的大小 —— 这是还没试过的最后一条文字通道）。
-    { zh = "I：字体对象GameFontNormalLarge｜样本伤害", fontobj = "GameFontNormalLarge" },
-    { zh = "J：字体对象GameFontNormalHuge｜样本伤害", fontobj = "GameFontNormalHuge" },
-    { zh = "K：字体对象NumberFontNormalHuge｜88888", fontobj = "NumberFontNormalHuge" },
-    -- 0.2.3 加档验证（巨大/超大档用的字体对象在本客户端存不存在、多大）
-    { zh = "L：字体对象SystemFont_Huge3｜88888", fontobj = "SystemFont_Huge3" },
-    { zh = "M：字体对象SystemFont_Huge4｜88888", fontobj = "SystemFont_Huge4" },
-  }
-  local y = 140
-  for i, r in ipairs(RECIPES) do
-    local f = probeUI.frames[i]
-    if not f then
-      -- ★真机教训（0.1.7）：本客户端某些 widget 类型（如 MessageFrame）CreateFrame 直接回 nil/抛错
-      --   ⇒ 建帧必须 pcall + 守卫，建不出就如实报、跳过这一行，绝不让整批探针崩掉
-      local kind = r.kind == "button" and "Button" or r.kind == "msgframe" and "MessageFrame" or "Frame"
-      local okC, nf = pcall(CreateFrame, kind, nil, UIParent)
-      if okC and nf then
-        f = nf
-        f:SetWidth(480) f:SetHeight(36)
-        probeUI.frames[i] = f
-      end
-    end
-    if not f then
-      say("字号探针：第 " .. i .. " 行（" .. tostring(r.kind or "Frame") .. " 类型）建不出 ⇒ 跳过")
-    else
-    f._probe = true
-    pcall(f.SetScale, f, r.frameScale or r.scale or 1)
-    f:SetPoint("CENTER", UIParent, "CENTER", 0, y)
-    if r.kind == "button" then
-      pcall(f.SetText, f, r.zh)
-      pcall(f.SetTextColor, f, 1, 0.85, 0.3)
-    elseif r.kind == "msgframe" then
-      for _, fp in ipairs(FONT_CHAIN) do if pcall(f.SetFont, f, fp, 30, "OUTLINE") then break end end
-      pcall(f.AddMessage, f, r.zh, 1, 0.85, 0.3)
-    else
-      local fs = f._fs
-      if not fs then
-        if r.inherits then fs = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        else fs = f:CreateFontString(nil, "OVERLAY") end
-        f._fs = fs
-        pcall(fs.SetPoint, fs, "CENTER", f, "CENTER", 0, 0)
-      end
-      if r.fontobj then
-        local fo = rawget(_G, r.fontobj)
-        if fo then pcall(fs.SetFontObject, fs, fo)
-        else say("字号探针：字体对象 " .. r.fontobj .. " 不存在（第 " .. i .. " 行按默认画）") end
-      else
-        r.mk(fs)
-      end
-      pcall(fs.SetTextColor, fs, 1, 0.85, 0.3)
-      pcall(fs.SetText, fs, r.zh)
-    end
-    pcall(f.Show, f)
-    y = y - 44
-    end
-  end
-  probeUI.n = table.getn(RECIPES)
-  D.probeUntil = (GetTime and GetTime() or 0) + 10
-  say("字号探针：A~H 八行样本，10 秒后自动收 —— 哪行明显大，把字母告诉我")
-end
-D.probeRun = probeRun
 
 -- ----------------------------------------------------------------------------
 -- 命令
@@ -1225,20 +1158,7 @@ local function cmd(msg)
     say("已放 3 条测试字")
     return
   end
-  if sub == "字号探针" or sub == "探针" or sub == "probe" then probeRun() return end
-  if sub == "字体" or sub == "fonts" then
-    -- 只读体检：候选大字体对象在本客户端**存不存在**（特大/巨大/超大观感一样时的判定口）
-    local cands = { "NumberFontNormalHuge", "SystemFont_Huge1", "SystemFont_Huge2",
-      "SystemFont_Huge3", "SystemFont_Huge4", "ZoneTextFont", "SubZoneTextFont",
-      "BossEmoteNormalHuge", "QuestFont_Huge", "QuestFont_Large",
-      "GameFontNormalHuge", "GameFontNormalLarge" }
-    say("候选字体对象存在性（有/无）：")
-    for _, nm in ipairs(cands) do
-      say("  " .. nm .. " = " .. (rawget(_G, nm) and "有" or "无"))
-    end
-    return
-  end
-  say("命令：/edmg ui · 编辑 · 模拟 · 开|关 · 捕获 · 事件 · 状态 · 测试 · 字号探针 · 字体")
+  say("命令：/edmg ui · 编辑 · 模拟 · 开|关 · 捕获 · 事件 · 状态 · 测试")
 end
 D.cmd = cmd
 
