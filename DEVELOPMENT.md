@@ -20,8 +20,8 @@
     ★工具模块一律**自包含**（真值 + 自己的存档子树 + 界面控件 + 读值口 + 自己的**有界**计时器）；`Toolbox.lua` 里只留「一行数据 + 模块行注册表 `EVAL_TB_MOD_ROWS[mod]`」，渲染/下拉/结算全在模块里。
   → **`media/`（运行期贴图）**：`Flags/`（旗帜）· `icons/`（图标）· **`WorldMap/<地图>/<区域><块号>.blp`（「打开世界迷雾」的**可选**自带贴图，1.75.53；生成器 = `gen_worldmap_media.js --from <interface.MPQ> --full-only`，**只放整张齐全的图**、逐字节可复现）** · **`WorldMapJpg/<地图>.jpg`（「区域实景」图库：**56 图** = 53 区域 + 露天主城 3 座（暴风城 / 达纳苏斯 / 雷霆崖）；生成器 = `tmp/make_city_jpg.js`（主城）/ `tmp/minimap_stitch.js`（区域）；★**素材规格 = 宽 ≤1500**（`tmp/jpg_cap1500.js`；1.75.70 另做过一轮质量门控压缩 `tmp/jpg_compress.js`，1.75.71 整库换成 AI 高清重绘版后**只封顶、不再压**）：**当前 56 图 / 44.8 MB**，1.75.64~1.75.71）**
     —— ★贴图**自带优先**，加载不出来退回客户端 `Interface\WorldMap\…`；两份都加载不出来 ⇒ **这张图不接管**（绝不画空白图）；判据见 `tools/SimpleMap.lua` 的 `MDQ.srcKey`/`MDQ.probeTrust`（**探针必须带负对照**：本客户端对不存在的文件也报尺寸）
-  → **`addons/`（两个独立子插件，各自 toc / 存档 / 文档）**：`EH_Bag\`（**整合背包**，与 OneBag 逐项对齐：连续排布 · 品质辉光 · 一键整理 · 跨角色总览 · 冷却倒计时 · 金币金钱行 · 资源绝对自包含；`EH_Bag.toc` 列 `EH_Bag.lua` + `EH_BagSort.lua`）· `EH_DebugBox\`（图层调试，`/edb`）
-    ★**子插件与主插件是两套 LoadAddOn、两套 SavedVariables**（`EH_BAG_CFG` / `EH_DEBUGBOX_CFG`，宿主绝不碰）；子插件**不得**读写 `EVAL_HELP_CONFIG`/`EVAL_HELP_CHAR`（常驻闸门 `tmp/mem_sep_probe.js`，命中必须 0 处）
+  → **`addons/`（四个独立子插件，各自 toc / 存档 / 文档）**：`EH_Bag\`（**整合背包**，与 OneBag 逐项对齐：连续排布 · 品质辉光 · 一键整理 · 跨角色总览 · 冷却倒计时 · 金币金钱行 · 资源绝对自包含；`EH_Bag.toc` 列 `EH_Bag.lua` + `EH_BagSort.lua`）· `EH_DebugBox\`（图层调试，`/edb`）· `EH_Damage\`（增强伤害显示 / 浮动战斗信息，`/edmg`：19 项显示勾选 · 11 种滚动方向 · 4 种缓出曲线 · 6 档分档字体对象 · 技能图标 · 编辑模式模拟战斗）· `EH_DPS\`（**队伍级伤害统计**，`/edps`：全部数据来自战斗日志文本解析 —— **9 个视图全部按玩家出条目**（伤害/DPS/治疗/HPS/承受/受疗/能量/击杀/施放）· 职业染色 · 点条目下钻该玩家技能分解 · 双段 + 各自活跃时间 EDPS · 报告限频 · 窗口拖拽/改尺寸/Ctrl+滚轮缩放/右键视图菜单/[设] 配置）
+    ★**子插件与主插件是两套 LoadAddOn、两套 SavedVariables**（`EH_BAG_CFG` / `EH_DEBUGBOX_CFG` / `EH_DAMAGE_CFG` / `EH_DPS_CFG`，宿主绝不碰）；子插件**不得**读写 `EVAL_HELP_CONFIG`/`EVAL_HELP_CHAR`（常驻闸门 `tmp/mem_sep_probe.js`，命中必须 0 处）
     ★`node sync_game.js` 把 `addons\<名>\` 拷到插件**同级**游戏目录（勾选才 `EnableAddOn` + `/reload` 载入）；**release 时各自独立打包两份**（`<名>-v<子版本>.zip` + 固定名 `<名>.zip`，内容逐字节相同）一起传到同一个 Release
     ★文档各自成套：`README.md`（面向使用者）· `CLAUDE.md`（**子插件自己的记忆体**，与宿主记忆分文件）· `CHANGELOG.md`（`0.3.x` ↔ 宿主 `1.75.y` 同轮升级）；宿主只留指针，**绝不复制子插件正文**
   跨文件共享走全局桥：Core 导出 EVAL_SAY/EVAL_LOGLINE/EVAL_UIOFFSCREEN 等，Engine 导出 EVAL_WSLOTS/EVAL_WICON/EVAL_GROUPS_OK 等，
@@ -35,7 +35,7 @@
   ★★**本项目没有测试**（用户 2026-09-26 定案：「删除tests/下的文件.也不需要测试」）：`tests/`、`test_assert.lua`、`test_engine.js`、`check.js`、`mutate.js` 已全部删除
   ⇒ 行为/接线/渲染/存档这类**静默失效没有自动判据兜底**，改完请**自查调用点**并**进游戏实测**。
 -  SavedVariables：`EVAL_HELP_CONFIG`（落盘于 `%LOCALAPPDATA%\Azeroth\Saved\Account\<账号>\SavedVariables\EvalHelp.lua`，小退/重载时写入；★**账号目录不固定**，读存档要取「所有账号里 mtime 最新那份」）。
-  子插件各有自己的存档文件（`addons\EH_Bag` → `EH_BAG_CFG`、`addons\EH_DebugBox` → `EH_DEBUGBOX_CFG`）—— **两套 LoadAddOn、两套记忆体，绝不互碰**（宿主代码里出现子插件存档键 = 0 处，常驻闸门 `tmp/mem_sep_probe.js`）。
+  子插件各有自己的存档文件（`addons\EH_Bag` → `EH_BAG_CFG`、`addons\EH_DebugBox` → `EH_DEBUGBOX_CFG`、`addons\EH_Damage` → `EH_DAMAGE_CFG`、`addons\EH_DPS` → `EH_DPS_CFG`）—— **两套 LoadAddOn、两套记忆体，绝不互碰**（宿主代码里出现子插件存档键 = 0 处，常驻闸门 `tmp/mem_sep_probe.js`）。
 
 ## ⚠️ 提交前必做
 
