@@ -35,6 +35,8 @@ local CAT_RANK = {
 local SORT_MAX_MOVES = 400
 local SORT_TIMEOUT = 180
 local SORT_STALL_MAX = 3
+-- ★0.3.35：整理「新鲜戳记」有效期（秒）—— 刚动过的格子在这段时间内不拿滞后的读回盖掉直接画好的内容
+B.SORT_FRESH_SEC = 1.5
 
 local idCache = {}
 
@@ -44,7 +46,9 @@ local function itemInfoCached(id)
   if hit ~= nil then return hit end
   local info = { name = "?", quality = 1, itemType = nil, maxStack = 1, equipLoc = nil }
   if type(GetItemInfo) == "function" then
-    local ok, n, _, q, _, t, sub, maxStack, eqLoc = pcall(GetItemInfo, id)
+    -- ★0.3.38：第 9 个返回 = 纹理（真机探针实证可读）—— recAt 的记录要带 texture，
+    --   否则 paintRec 每一步都是 SetTexture(nil) 清图标 = 用户报的「有数无图标」
+    local ok, n, _, q, _, t, sub, maxStack, eqLoc, tex = pcall(GetItemInfo, id)
     if ok then
       if type(n) == "string" and n ~= "" then info.name = n end
       if type(q) == "number" then info.quality = q end
@@ -52,6 +56,7 @@ local function itemInfoCached(id)
       info.subType = sub
       info.equipLoc = eqLoc
       if type(maxStack) == "number" and maxStack > 0 then info.maxStack = maxStack end
+      if type(tex) == "string" and tex ~= "" then info.texture = tex end
     end
   end
   idCache[id] = info
@@ -65,14 +70,17 @@ local function recAt(bag, slot)
   if not ok or type(link) ~= "string" or link == "" then return nil end
   local id = tonumber(string.match(link, "item:(%d+)"))
   local info = itemInfoCached(id)
-  local count, locked
+  local count, locked, texture
   if type(GetContainerItemInfo) == "function" then
-    local ok2, _, c, l = pcall(GetContainerItemInfo, bag, slot)
+    local ok2, tex2, c, l = pcall(GetContainerItemInfo, bag, slot)
     if ok2 then
+      -- ★0.3.38：容器读到的贴图优先；滞后缺了（探针实证会发生）⇒ 用 id 现取的那份补
+      if tex2 ~= nil and tex2 ~= "" then texture = tex2 end
       count = c
       locked = l
     end
   end
+  if texture == nil and info ~= nil then texture = info.texture end
   return {
     bag = bag, slot = slot, id = id, link = link,
     name = (info and info.name) or "?",
@@ -82,6 +90,7 @@ local function recAt(bag, slot)
     maxStack = (info and info.maxStack) or 1,
     count = count or 1,
     locked = locked and true or false,
+    texture = texture,
   }
 end
 
@@ -225,7 +234,12 @@ local function oneStep()
     local ok, why = moveNow({ bag = src.bag, slot = src.slot }, { bag = dst.bag, slot = dst.slot }, true)
     if ok then
       if why == "cursor" then return "cursor" end
-      return "moved"
+      -- ★0.3.35：落格要画的那条记录 = 源堆 + 目标堆的合并堆（数量合并、其余字段照源堆）
+      local mc = {}
+      local mk, mv
+      for mk, mv in pairs(src) do mc[mk] = mv end
+      mc.count = (src.count or 1) + (dst.count or 1)
+      return "moved", src.bag, src.slot, dst.bag, dst.slot, mc
     end
   end
   -- ② 位次排序：期望序 = 当前所有物品按规则排序
@@ -259,7 +273,7 @@ local function oneStep()
           local ok2, why2 = moveNow({ bag = donor.bag, slot = donor.slot }, { bag = slots[i].bag, slot = slots[i].slot })
           if ok2 then
             if why2 == "cursor" then return "cursor" end
-            return "moved"
+            return "moved", donor.bag, donor.slot, slots[i].bag, slots[i].slot, donor
           end
           if why2 == "locked" then return "stall" end
         else
@@ -278,7 +292,7 @@ local function oneStep()
           local ok3, why3 = moveNow({ bag = cur.bag, slot = cur.slot }, { bag = slots[park].bag, slot = slots[park].slot })
           if ok3 then
             if why3 == "cursor" then return "cursor" end
-            return "moved"
+            return "moved", cur.bag, cur.slot, slots[park].bag, slots[park].slot, cur
           end
           if why3 == "locked" then return "stall" end
           return "stall"
@@ -299,7 +313,31 @@ function B.sortStopFn(reason)
     pcall(f.ehSortBtn.label.SetText, f.ehSortBtn.label, L("SORT"))
   end
   B.sayForce(L("SORT_STOP", tostring(reason or "?"), moves))
+  -- ★0.3.38 中止也盖落定重刷（中止前搬过的那几步同样需要一次「读回恢复后」的整刷）
+  B.sortSettleAt = GetTime() + B.SORT_FRESH_SEC + 0.05
   B.pumpSync()
+end
+
+-- ★实时显示（0.3.34 → 0.3.35；只动画面、整理算法一字未碰 —— 用户两轮原话见 CHANGELOG）：
+--   每走一步，**当场**只重画动过的那两格（不等 +0.08s 的全窗 refreshAll）：
+--   · 源格直接画**空**（三条 moved 路径里源格都搬空了 —— 不必等读回）；
+--   · 落格直接画**我们手里已知的那条记录**（dstRec —— 本客户端容器读回在整理中滞后
+--     （服务器没确认就报空，0.3.9 在案），等读回 = 用户报的「黄框格整程空白」；
+--     搬的那件本来就在手里，不必等它）；
+--   · 两格各盖一个**新鲜戳记**（`B.sortFresh`，有效期 `B.SORT_FRESH_SEC`）：戳记有效期内
+--     `refreshAll` / `paintOne` 不拿滞后的「报空」盖掉这份直接画好的内容；
+--     过期后照常按读回画 —— 那时服务器早确认了。
+function B.sortPaintMove(sb, ss, db, ds, dstRec)
+  local bs = B.ui and B.ui.buttons
+  if type(bs) ~= "table" then return end
+  local bSrc = (type(sb) == "number" and type(ss) == "number") and bs[sb] and bs[sb][ss] or nil
+  local bDst = (type(db) == "number" and type(ds) == "number") and bs[db] and bs[db][ds] or nil
+  if type(B.paintRec) ~= "function" then return end
+  if B.sortFresh == nil then B.sortFresh = {} end
+  if bSrc ~= nil then B.sortFresh[sb .. "," .. ss] = GetTime() end
+  if bDst ~= nil then B.sortFresh[db .. "," .. ds] = GetTime() end
+  if B.isObj(bSrc) then B.paintRec(bSrc, nil) end
+  if B.isObj(bDst) then B.paintRec(bDst, dstRec) end
 end
 
 function B.sortStep(dt)
@@ -325,10 +363,12 @@ function B.sortStep(dt)
   B.sortAcc = (B.sortAcc or 0) + (tonumber(dt) or 0.05)
   if B.sortAcc < gap then return end
   B.sortAcc = 0
-  local r = oneStep()
+  local r, mvSb, mvSs, mvDb, mvDs, mvRec = oneStep()
   if r == "moved" then
     B.sortMoves = (B.sortMoves or 0) + 1
     B.sortStall = 0
+    -- ★0.3.35 实时显示：当场用已知记录直接画动过的那两格 + 盖新鲜戳记（算法节奏不变，markDirty 照旧兜底）
+    B.sortPaintMove(mvSb, mvSs, mvDb, mvDs, mvRec)
     B.markDirty(0.08)
     if B.sortMoves % 20 == 0 then
       B.say(L("SORTING") .. " " .. tostring(B.sortMoves))
@@ -355,6 +395,9 @@ function B.sortStep(dt)
     end
     B.sayForce(L("SORT_DONE", B.sortMoves or 0, used))
     B.markDirty(0.05)
+    -- ★0.3.38 落定重刷：戳记（1.5s）全部过期之后再整刷一次 —— 探针实证：整理一停容器读回就恢复，
+    --   但戳记过期之后没有人再刷新 ⇒ 被守卫跳过的格子永远停在「有数无图标」（0.3.37 真机定案）。
+    B.sortSettleAt = GetTime() + B.SORT_FRESH_SEC + 0.05
     B.pumpSync()
   else
     B.sortStopFn(tostring(r))
@@ -394,6 +437,11 @@ function B.sortStart(loud)
   B.sortStall = 0
   B.sortElapsed = 0
   B.sortT0 = GetTime()
+  -- ★0.3.35：每次整理开一张新的「新鲜戳记」表（旧戳记按时间自然过期，不在收尾处清 ——
+  --   收尾那一刻最后几步的读回多半还没确认，清了就会被 refreshAll 画回空格）
+  B.sortFresh = {}
+  -- ★0.3.38：上一次的落定重刷作废（新一轮整理期间由每步的周期刷 + 戳记接管）
+  B.sortSettleAt = nil
   local f = B.ui and B.ui.frame
   if f ~= nil and B.isObj(f.ehSortBtn) and B.isObj(f.ehSortBtn.label) then
     pcall(f.ehSortBtn.label.SetText, f.ehSortBtn.label, L("SORTING"))

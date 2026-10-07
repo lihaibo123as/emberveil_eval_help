@@ -49,7 +49,7 @@ local B = {}
 _G.EH_BAG = B
 
 -- 构建标记（唯一来源）：改本文件顺手 +1，用于「客户端跑的是哪一份」取证
-local BAG_BUILD = "0.3.33"
+local BAG_BUILD = "0.3.38"
 
 local function strVal(v)
   return tostring(v)
@@ -1383,10 +1383,14 @@ local function fillInfoFromLink(rec)
   if id == nil then return rec end
   rec.id = tonumber(id)
   if rec.id == nil or type(GetItemInfo) ~= "function" then return rec end
-  local ok, n, _, q, _, t, sub, maxStack, eqLoc = pcall(GetItemInfo, rec.id)
+  local ok, n, _, q, _, t, sub, maxStack, eqLoc, tex = pcall(GetItemInfo, rec.id)
   if not ok then return rec end
   if type(n) == "string" and n ~= "" then rec.name = n end
   if type(q) == "number" then rec.quality = q end
+  -- ★0.3.36：容器读回滞后时**贴图可能缺**（数量/链接却在 ⇒ 格子画成「只有右下角一个数、没有图标」，
+  --   0.3.35 真机二轮）⇒ 用物品 id 现取纹理补上（`GetItemInfo` 第 9 个返回 = 纹理；
+  --   只补缺、不覆盖容器读回给的那份）—— 快照 / 普通显示 / 整理实时画三条路一起自愈。
+  if (rec.texture == nil or rec.texture == "") and type(tex) == "string" and tex ~= "" then rec.texture = tex end
   rec.itemType = t
   rec.subType = sub
   rec.equipLoc = eqLoc
@@ -6749,7 +6753,24 @@ function B.paintOne(btn)
   -- ★格号字段是 `ehSlot_`（数字）；`ehSlot` 是**那圈格框纹理对象**，两者差一个下划线、混用即崩
   local bag, slot = btn.ehBag, btn.ehSlot_
   if type(bag) ~= "number" or type(slot) ~= "number" then return false end
-  paintButton(btn, B.itemAt(bag, slot))
+  local rec = B.itemAt(bag, slot)
+  -- ★0.3.35：整理刚动过的格子读回可能还滞后（报空）⇒ 戳记有效期内不盖掉直接画好的内容
+  if rec == nil then
+    local fk = B.sortFresh
+    if fk ~= nil then
+      local ft = fk[bag .. "," .. slot]
+      if ft ~= nil and (GetTime() - ft) < B.SORT_FRESH_SEC then return true end
+    end
+  end
+  paintButton(btn, rec)
+  return true
+end
+
+-- ★0.3.35：用「我们已知的那条记录」直接画一格（整理的实时显示 —— 本客户端容器读回在整理中滞后，
+--   搬的那件手里本来就有 rec，不必等读回）；与 paintOne **同一个绘制口** `paintButton`，绝不另抄判定。
+function B.paintRec(btn, rec)
+  if isObj(btn) ~= true then return false end
+  paintButton(btn, rec)
   return true
 end
 
@@ -6792,15 +6813,30 @@ function B.refreshBag(bag)
     if btn ~= nil then
       btn.ehLive = gen
       local rec = B.itemAt(bag, s)
+      -- ★0.3.35：整理刚动过的格子，容器读回可能还滞后（服务器没确认 ⇒ 报空）——
+      --   戳记有效期内**不拿「报空」盖掉** `B.sortPaintMove` 用已知记录直接画好的内容
+      --   （照旧盖章/照旧计已用；戳记过期后照常按读回画 —— 那时服务器早确认了）。
+      local keepFresh = false
+      if rec == nil then
+        local fk = B.sortFresh
+        if fk ~= nil then
+          local ft = fk[bag .. "," .. s]
+          if ft ~= nil and (GetTime() - ft) < B.SORT_FRESH_SEC then keepFresh = true end
+        end
+      end
       -- ★0.3.21：**先把这一格显示出来、再画子件**（父按钮隐藏时写子件属性同样不落地 ——
       --   与辉光那条同源；末尾那句 Show 照旧留着当幂等兜底）
       if type(btn.Show) == "function" then pcall(btn.Show, btn) end
-      paintButton(btn, rec)
-      if rec ~= nil then used = used + 1 end
-      if rec ~= nil and matchFilter(rec) == false then
-        pcall(btn.SetAlpha, btn, dim)
+      if keepFresh then
+        used = used + 1
       else
-        pcall(btn.SetAlpha, btn, 1)
+        paintButton(btn, rec)
+        if rec ~= nil then used = used + 1 end
+        if rec ~= nil and matchFilter(rec) == false then
+          pcall(btn.SetAlpha, btn, dim)
+        else
+          pcall(btn.SetAlpha, btn, 1)
+        end
       end
       if type(btn.Show) == "function" then pcall(btn.Show, btn) end
     end
@@ -7296,6 +7332,7 @@ end
 function B.pumpNeed()
   if B.dragging == true then return true end   -- ★拖拽中必须有拍子（收尾路 ③ 要读鼠标键）
   if B.refreshAt ~= nil then return true end
+  if B.sortSettleAt ~= nil then return true end   -- ★0.3.38 整理落定重刷的到点腿
   if B.snapDue ~= nil then return true end
   if B.sortOn == true then return true end
   if B.tipPend ~= nil then return true end    -- ★物品气泡的延后复核待办（到点那一下必须有人执行）
@@ -7340,6 +7377,15 @@ function B.pump()
   if B.refreshAt ~= nil then
     if GetTime() >= B.refreshAt then
       B.refreshAt = nil
+      B.refreshAll()
+    end
+  end
+  -- ★0.3.38 落定重刷：戳记（1.5s）全部过期之后整刷一次 —— 探针实证整理一停读回就恢复，
+  --   这一刷把「被戳记守卫跳过、停在有数无图标」的格子一次性落回正确物品。
+  if B.sortSettleAt ~= nil then
+    if GetTime() >= B.sortSettleAt then
+      B.sortSettleAt = nil
+      B.sortFresh = nil
       B.refreshAll()
     end
   end
