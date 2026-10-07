@@ -1412,8 +1412,53 @@ end
 function EVAL_TB_NAMEMENU_ON()
   return tbCfg().nameMenu ~= false
 end
+-- ★全屏捕手（用户：「角色右键弹出点击任意其他位置关闭弹窗」）：项目既有配方（§三.4 弹出层）——
+--   全屏 Button 挂 UIParent、DIALOG + level 245（菜单本体 250 之下 ⇒ 菜单条目照常点得到）、
+--   左右键都收 ⇒ 点弹窗外任意位置即关；★唯一隐藏出口 EVAL_TB_MENU_HIDE 必须把它一起藏
+--   （否则留一个吃点击的常驻空层）。
+local TB_MENU_CATCH = nil
+local function tbMenuCatchEnsure()
+  if TB_MENU_CATCH then return TB_MENU_CATCH end
+  if type(CreateFrame) ~= "function" then return nil end
+  local c = CreateFrame("Button", "EVAL_TB_NAMEMENU_CATCH", UIParent)
+  if type(c) ~= "table" and type(c) ~= "userdata" then return nil end
+  pcall(c.SetAllPoints, c, UIParent)
+  pcall(c.SetFrameStrata, c, "DIALOG")
+  pcall(c.SetFrameLevel, c, 245)
+  if type(c.EnableMouse) == "function" then pcall(c.EnableMouse, c, true) end
+  -- ★读回自证（1.75.x 用户报「点别处关不掉弹窗」的嫌疑位）：本客户端 widget Set* 静默失效族在案 ⇒
+  --   SetAllPoints 若没生效，捕手就是 0×0 ⇒ 永远点不到。读回太小就按 UIParent 尺寸兜底重写，
+  --   并重读确认；都不行就如实说一次（绝不静默）。
+  local okw, w0 = pcall(c.GetWidth, c)
+  if not (okw and type(w0) == "number" and w0 > 10) then
+    local uw, uh = 1024, 768
+    if type(UIParent) == "table" and type(UIParent.GetWidth) == "function" then
+      local ok1, v1 = pcall(UIParent.GetWidth, UIParent)
+      if ok1 and type(v1) == "number" and v1 > 0 then uw = v1 end
+    end
+    if type(UIParent) == "table" and type(UIParent.GetHeight) == "function" then
+      local ok2, v2 = pcall(UIParent.GetHeight, UIParent)
+      if ok2 and type(v2) == "number" and v2 > 0 then uh = v2 end
+    end
+    pcall(c.SetWidth, c, uw) pcall(c.SetHeight, c, uh)
+    pcall(c.SetPoint, c, "BOTTOMLEFT", UIParent, "BOTTOMLEFT", 0, 0)
+    local okw2, w2 = pcall(c.GetWidth, c)
+    if okw2 and type(w2) == "number" and w2 > 10 then
+      say("|cffff8080[名字菜单] 全屏捕手 SetAllPoints 未生效，已按屏幕尺寸兜底（" .. math.floor(w2) .. " 宽）|r")
+    else
+      say("|cffff8080[名字菜单] 全屏捕手尺寸读回失败：点弹窗外可能关不掉菜单（请把这句话反馈给作者）|r")
+    end
+  end
+  pcall(c.RegisterForClicks, c, "LeftButtonUp", "RightButtonUp")
+  c:SetScript("OnClick", function() EVAL_TB_MENU_HIDE() end)
+  c:SetScript("OnMouseUp", function() EVAL_TB_MENU_HIDE() end)  -- 第二条路：RegisterForClicks 静默失效时兜底（幂等）
+  pcall(c.Hide, c)
+  TB_MENU_CATCH = c
+  return c
+end
 function EVAL_TB_MENU_HIDE()
   if TB.menu then pcall(TB.menu.Hide, TB.menu) end
+  if TB_MENU_CATCH then pcall(TB_MENU_CATCH.Hide, TB_MENU_CATCH) end
   TB_NAME_MENU.shown = false
 end
 -- ★★★1.73.35 用户（第 2 条）：右键菜单**扩展 + 两列 + 宽高自适应 + 锚点右上**
@@ -1952,6 +1997,9 @@ function EVAL_TB_MENU_SHOW(name)
   end
   pcall(f.Show, f)
   TB_NAME_MENU.shown = true
+  -- ★全屏捕手跟着菜单一起出（菜单藏 ⇒ 捕手在 EVAL_TB_MENU_HIDE 里一起收）
+  local cat = tbMenuCatchEnsure()
+  if cat then pcall(cat.Show, cat) end
   return true
 end
 -- ★★★1.73.29 预填聊天输入框（不发送）：悄悄话与「复制名字」共用这一条实现。
@@ -4218,6 +4266,10 @@ local SUBADDONS = {
   --   事件源走 SCT 模式解析 CHAT_MSG_* 文本 —— 本客户端无结构化战斗事件/GUID/姓名板帧）。
   { key = "damage", id = "EH_Damage", group = "combat", name = L("SUB_DAMAGE"),
     tip = L("SUB_DAMAGE_TIP"), slash = "EHDAMAGE", slashArg = "ui", hasUI = true },
+  -- ★新增子插件 **EH_DPS**（个人伤害统计表，自娱自乐版；SCT 文本解析，只统计自己+宠物，
+  --   数据口径参考 ShaguDPS(TurtleWoW)，准确度不保证）。
+  { key = "dps", id = "EH_DPS", group = "combat", name = L("SUB_DPS"),
+    tip = L("SUB_DPS_TIP"), slash = "EHDPS", slashArg = "ui", hasUI = true },
   -- ★★★1.74.29 用户要求：简易地图**已移到工具箱（工具模块）** → 从本 Tab 移除，不再在这里列出
 }
 

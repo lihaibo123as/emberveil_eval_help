@@ -176,7 +176,9 @@ if (require.main === module) {
        //   本文件的「先引用后声明」错在子插件里同样是**静默**的（pcall 一包就什么都不报）。
        'addons/EH_Bag/EH_Bag.lua', 'addons/EH_Bag/EH_BagSort.lua',
        // ★EH_Damage（增强伤害显示子插件）：同样全是 pcall 包裹的事件处理器 ⇒ 静默雷必须静态扫
-       'addons/EH_Damage/EH_Damage.lua'];
+       'addons/EH_Damage/EH_Damage.lua',
+       // ★EH_DPS（个人伤害统计子插件）：同上，事件处理器全 pcall ⇒ 静默雷必须静态扫
+       'addons/EH_DPS/EH_DPS.lua'];
   let total = 0;
   for (const f of files) {
     const bad = scan(fs.readFileSync(f, 'utf8'));

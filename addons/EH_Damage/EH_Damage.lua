@@ -19,7 +19,7 @@
 --   · 字体链 FZLBJW→FRIZQT→ARIALN 全程 pcall；FontString 不吃鼠标 ⇒ 热区用透明 Button。
 -- ============================================================================
 
-local BUILD = "0.2.23"
+local BUILD = "0.2.26b"
 
 local D = {}                      -- 命名空间（跨函数共享件全挂这里，控 local 数）
 _G["EH_DMG"] = D                  -- 调试/桥接口（子插件独立，不依赖宿主）
@@ -78,6 +78,7 @@ local DEF = {
   master = true,
   direction = "angleUp",   -- ★0.2.13 初始默认（用户截图定）：斜上抛物
   curve = "cubic",         -- ★0.2.23 蹦出系方向的曲线函数（缓出立方/缓出平方/回弹过冲/指数缓出）
+  clampPct = 30,           -- ★0.2.25 移动上限（占屏 %；行程夹取 + 屏界保险丝，5~60）
   fontTier = 6,            -- 字号档位 1小/2中/3大/4特大/5巨大/6超大（★0.2.13 初始默认 = 超大）
   speed = 180,             -- ★0.2.13 初始默认：180 像素/秒
   duration = 2.0,          -- 秒
@@ -310,6 +311,10 @@ local function addText(kind, text, crit, spellName)
   s.active = true
   s.kind = kind
   s.crit = (crit == 1 and C().critAnim == 1) and 1 or 0
+  -- ★0.2.26b：暴击**文字身份**与「暴击动画」开关**解耦**（用户：「致命一击 没有标红」——
+  --   首版把红色挂在 s.crit 上，而它被 critAnim 挡着 ⇒ 关掉暴击动画的人看不到红）：
+  --   红不红只由事件文本的「致命」标记决定；字号抬档仍走 s.crit（开关管动画，不管颜色）。
+  s.critTxt = (crit == 1) and 1 or 0
   s.t0 = GetTime and GetTime() or 0
   s.dur = c.duration or 2.0
   s.tier = c.fontTier or 3
@@ -322,7 +327,10 @@ local function addText(kind, text, crit, spellName)
     text = tostring(spellName) .. " " .. tostring(text)        -- 技能名纯文本（默认关）
   end
   pcall(s.fs.SetText, s.fs, tostring(text))
-  pcall(s.fs.SetTextColor, s.fs, kd.r, kd.g, kd.b)
+  -- ★0.2.26：暴击伤害值变红（用户：「暴击的时候将伤害值变红色」）—— 判定走 critTxt（与动画开关解耦）；
+  --   槽是复用的但颜色每次出生都重写 ⇒ 不会串色。
+  if s.critTxt == 1 then pcall(s.fs.SetTextColor, s.fs, 1, 0.15, 0.1)
+  else pcall(s.fs.SetTextColor, s.fs, kd.r, kd.g, kd.b) end
   sizeApply(s.fs, s.tier, kind)                                -- ★分档字体对象（探针定案，见上）
   s._tier = s.tier
   -- 技能图标（0.2.4）：锚在文字左缘；查不到/没传/关着就不画（绝不画 ? 图）
@@ -412,6 +420,28 @@ local function tick()
         else
           y = s.y0 + (c.speed or 90) * t
         end
+        -- ★★★0.2.25 行程上限 + 屏界保险丝（用户：「有没一个参数这是动画移动的上限或者下限占屏幕
+        --   百分百?有时候技能都飘到屏幕外面去了」+「A+B」）：
+        --   A = 行程夹取：|x−x0| ≤ 屏宽×上限%、|y−y0| ≤ 屏高×上限%（到顶的字**原地停住继续淡出**，
+        --       对方向/曲线/速度/时长全兼容 —— 夹取是轨迹算完之后的最后一步）；
+        --   B = 屏界夹取：最终坐标恒在屏内（CENTER 锚口径：±宽/2、±高/2）—— 锚点贴边也出不了屏。
+        do
+          local cPct = tonumber(c.clampPct) or 30
+          if cPct < 5 then cPct = 5 elseif cPct > 60 then cPct = 60 end
+          local sw, sh = 1024, 768
+          if type(UIParent) == "table" then
+            local okw, w1 = pcall(UIParent.GetWidth, UIParent)
+            if okw and type(w1) == "number" and w1 > 0 then sw = w1 end
+            local okh, h1 = pcall(UIParent.GetHeight, UIParent)
+            if okh and type(h1) == "number" and h1 > 0 then sh = h1 end
+          end
+          local mx, my = sw * cPct / 100, sh * cPct / 100
+          if x - s.x0 > mx then x = s.x0 + mx elseif s.x0 - x > mx then x = s.x0 - mx end
+          if y - s.y0 > my then y = s.y0 + my elseif s.y0 - y > my then y = s.y0 - my end
+          local hx, hy = sw / 2, sh / 2
+          if x > hx then x = hx elseif x < -hx then x = -hx end
+          if y > hy then y = hy elseif y < -hy then y = -hy end
+        end
         -- 暴击：0.35s 窗口内抬一档（特大封顶），窗口外落回配置档 —— 档位制下的「缩放」语义
         if s.crit == 1 then
           local wantTier = (t < 0.35) and math.min(table.getn(D.TIER), (s.tier or 3) + 1) or (s.tier or 3)
@@ -499,6 +529,11 @@ EVH["CHAT_MSG_SPELL_SELF_DAMAGE"] = function(m)
   if abs and itemOn("mitigation") then addText("mitigation", "-" .. abs .. " 减免", 0) end
 end
 EVH["CHAT_MSG_SPELL_PERIODIC_HOSTILEPLAYER_DAMAGE"] = function(m)
+  -- ★★★0.2.24 归属门（真机报障：「某些其他骑士的奉献神圣伤害会在牧师的伤害界面上显示?」）：
+  --   这族事件的「目标类别」是敌对玩家/生物，**来源不限**（vanilla 语义：附近任何人的 DoT 跳在
+  --   怪身上都会进战斗日志）⇒ 别人的奉献（范围周期神圣伤害）会显示成我们的 dot ⇒ 只认自己的：
+  --   真机已校准句式一律「你的 …」开头（「你的 撕裂 使 X 受到了 9 点伤害。」）；不是就跳过+落环。
+  if string.sub(m, 1, 3) ~= "你" then capture("DOT-OTHER", m) return end
   local n = numOf(m)
   if not n then capture("DOT-NONUM", m) return end   -- 0.2.4：提不出数字不硬显示（同 incoming 的尺子）
   local sp = string.match(m, "^你的%s*(.-)%s*使") or string.match(m, "^你的%s*(.-)%s*击中")
@@ -850,6 +885,7 @@ local function uiRefresh()
   pcall(ui.speedText.SetText, ui.speedText, tostring(c.speed))
   pcall(ui.durText.SetText, ui.durText, string.format("%.1f", c.duration or 2.0))
   pcall(ui.curveText.SetText, ui.curveText, CURVE_ZH[c.curve or "cubic"] or tostring(c.curve))
+  pcall(ui.clampText.SetText, ui.clampText, tostring(tonumber(c.clampPct) or 30) .. "%")
   pcall(ui.editText.SetText, ui.editText, D.editOn and "编辑模式：开" or "编辑模式：关")
   pcall(ui.simText.SetText, ui.simText, D.simOn and "模拟战斗：开" or "模拟战斗：关")
   pcall(ui.masterMk.Show, ui.masterMk)
@@ -1007,6 +1043,10 @@ local function uiBuild()
     for k, v in ipairs(CURVE_ORD) do if v == (c.curve or "cubic") then i = k break end end
     local n = table.getn(CURVE_ORD)
     c.curve = CURVE_ORD[((i - 1 + (d or 1)) % n) + 1]
+  end)
+  -- ★0.2.25 移动上限（占屏 %，行程夹取 + 屏界保险丝，见 tick）：曲线右边的空槽
+  ui.clampText = paramCell("移动上限", PX2, py - 48, function(d)
+    local c = C() c.clampPct = math.max(5, math.min(60, (tonumber(c.clampPct) or 30) + d * 5))
   end)
   py = py - 72
 

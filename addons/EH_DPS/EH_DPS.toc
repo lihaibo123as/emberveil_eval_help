@@ -1,0 +1,8 @@
+## Interface: 11200
+## Title: |cffffcc00EH|rDPS 伤害统计（自娱自乐版）
+## Notes: 个人伤害/治疗统计表：解析战斗文本，统计自己的输出、承受伤害、能量回复与击杀。
+## Author: EvalHelp
+## Version: 0.2.5
+## SavedVariables: EH_DPS_CFG
+
+EH_DPS.lua
