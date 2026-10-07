@@ -6266,6 +6266,13 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
   local nDraw = visCols * rowsPerCol
   if nDraw > nRest then nDraw = nRest end
   local icons = opts and opts.icons -- 1.32.4 可选图标列：与 items 同序的纹理表
+  -- ★★★1.75.101 文字列对齐（用户：「技能编辑->条件技能相关的弹窗技能列表->已记录的技能标题要左对齐技能图标.
+  --   参考全部技能分组内的技能对齐方式」）：菜单**带图标列**时，**所有行**（分组标题 / 没分到图标的条目）
+  --   的文字统一从图标列之后（x=18）起 —— 否则有图标行 18、没图标行 4 = 「已记录」组里文字列参差不齐
+  --   （学习表缺纹理的那几条会比同组其它行凸出一截）；不带图标的菜单照旧 x=4，一个字节不变。
+  local anyIcon = false
+  if type(icons) == "table" then for _ in pairs(icons) do anyIcon = true break end end
+  local textXIcon = anyIcon and 18 or 4
   local warns = opts and opts.warns -- ★1.71.3 可选异常标记列：与 items 同序（值为纹理路径）
   local tips = opts and opts.tips   -- ★1.71.3 可选悬停说明：与 items 同序（字符串或 {行1,行2,…}）
   -- ★1.75.14 可选**逐行配色**（用户要求「分类样式颜色区分 · 样式美化」）：
@@ -6318,7 +6325,7 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
         if row.xDel then row.xDel:Hide() end -- ★1.75.59b 同上：删除钮也不许残留到这一行
         row.tip = nil
         row.text:ClearAllPoints()
-        row.text:SetPoint("LEFT", row.btn, "LEFT", 4, 0)
+        row.text:SetPoint("LEFT", row.btn, "LEFT", textXIcon, 0) -- ★1.75.101 带图标列的菜单与图标行同列对齐
         row.text:SetText("|cff40ff40✎|r " .. L("DD_USE_TYPED") .. " \"" .. tostring(ddUI.searchText) .. "\"")
         -- ★1.75.14 同上：自由文本行尾部的引号内容会吃到「行文字色」⇒ 必须写回基准
         pcall(row.text.SetTextColor, row.text, 0.85, 0.85, 0.85)
@@ -6345,7 +6352,7 @@ function EVAL_DD_OPEN(anchorBtn, items, onPick, opts)
       else
         row.icon:Hide()
         row.text:ClearAllPoints()
-        row.text:SetPoint("LEFT", row.btn, "LEFT", 4, 0)
+        row.text:SetPoint("LEFT", row.btn, "LEFT", textXIcon, 0) -- ★1.75.101 无图标行也让出图标位（带图标列的菜单整列对齐）
       end
       -- ★1.75.14 逐行配色（opts.colors / opts.rowBg）：分组标题靠它做出「三类各有颜色 + 底色带」的层次。
       --   ★没有配色的行必须**写回基准**（文字 0.85 白 / 底色 0.10,0.09,0.06），否则行池复用会串色。
@@ -6511,11 +6518,21 @@ end
 
 -- ★1.70.45 「剩余时间」步进：单位秒、步进 1、区间 1-300（用户指定）。
 --   ± 按钮与断言共用本函数（测试自己复刻夹紧逻辑的话，把这里改坏就测不出来）。
+--   ★1.75.102 **按住 Shift 点 = 递步 ×10**（用户：「数值类的左右调整递步在按住shift 的时候递步增加到10.按照推荐来」）。
 local function seSecStep(cd, delta)
   if not (cd and type(cd.secN) == "number") then return end
-  local v = cd.secN + delta
+  local sh = (type(IsShiftKeyDown) == "function" and IsShiftKeyDown()) and true or false
+  local v = cd.secN + delta * (sh and 10 or 1)
   if v < 1 then v = 1 elseif v > 300 then v = 300 end
   cd.secN = v
+end
+
+-- ★1.75.102 数值格的「基础递步 / Shift 递步」对照（± 按钮的悬停提示用；± 闭包本体是另一处，两处同一口径）：
+--   百分比/裸值/秒数 5→50 · 时间型 0.1→1.0 · 计数型 1→10。
+local function seStepPair(k)
+  if SE_TIME_K and SE_TIME_K[k] then return "0.1", "1" end
+  if k == "combo" or k == "bagItem" or (SE_INT10_K and SE_INT10_K[k]) then return "1", "10" end
+  return "5", "50"
 end
 
 -- ★1.73.2 可驱散类型集合的本地化清单（tooltip 用）：62px 的窄格只列得下 2 项，
@@ -7463,18 +7480,28 @@ local function SE_BUILD()
     end)
     -- 1.58.0 时间类型（秒）：步进 0.1、区间 0.0-10.0
     -- ★1.74.30 SE_TIME_K 已**上移到条件行代码之前**（单一来源；原位置在使用者之后 = 闭包看不到它）
+    -- ★1.75.102 **按住 Shift 点 ± = 递步 ×10**（用户选定推荐方案 A：百分比/裸值/秒数 5→50 · 时间型 0.1→1.0 · 计数型 1→10）
     row.minus = seBtn(root, 180, y, 20, 15, "-", function()
       local it = seUI.ed and seUI.ed.conds[i]
       if it and it.cd.n then
-        if it.cd.k == "combo" then it.cd.n = math.max(1, it.cd.n - 1) -- 1.54.3 连击点数域 1-5（GetComboPoints 上限 5）
-        elseif SE_TIME_K[it.cd.k] then it.cd.n = math.max(0, math.floor((it.cd.n - 0.1) * 10 + 0.5) / 10) -- 时间型 0.1 步进
-        elseif SE_INT10_K[it.cd.k] then it.cd.n = math.max(0, (it.cd.n or 0) - 1) -- ★1.75.11 计数型：1 步进（0-10）
-        elseif it.cd.k == "bagItem" then it.cd.n = math.max(0, (it.cd.n or 0) - 1) -- ★1.75.92 物品数量：1 步进（0-999）
-        else it.cd.n = math.max(0, it.cd.n - 5) end
+        local sh = (type(IsShiftKeyDown) == "function" and IsShiftKeyDown()) and true or false
+        if it.cd.k == "combo" then it.cd.n = math.max(1, it.cd.n - (sh and 10 or 1)) -- 1.54.3 连击点数域 1-5（GetComboPoints 上限 5）
+        elseif SE_TIME_K[it.cd.k] then it.cd.n = math.max(0, math.floor((it.cd.n - (sh and 1 or 0.1)) * 10 + 0.5) / 10) -- 时间型 0.1 步进
+        elseif SE_INT10_K[it.cd.k] then it.cd.n = math.max(0, (it.cd.n or 0) - (sh and 10 or 1)) -- ★1.75.11 计数型：1 步进（0-10）
+        elseif it.cd.k == "bagItem" then it.cd.n = math.max(0, (it.cd.n or 0) - (sh and 10 or 1)) -- ★1.75.92 物品数量：1 步进（0-999）
+        else it.cd.n = math.max(0, it.cd.n - (sh and 50 or 5)) end
         EVAL_HELP_SE_REFRESH()
       end
     end)
     reg(row.minus.btn)
+    -- ★1.75.102 操作帮助：± 的悬停写明「点一下 = 基础递步，按住 Shift = 10 倍」（用户：「做好操作帮助信息提示」）
+    local function seStepTipLines()
+      local it2 = seUI.ed and seUI.ed.conds[i]
+      if not it2 then return nil end
+      local a, b = seStepPair(it2.cd.k)
+      return { "|cffffd100" .. L("SE_STEP_TIP_T") .. "|r", string.format(L("SE_STEP_TIP"), a, b) }
+    end
+    seHoverTip(row.minus.btn, seStepTipLines)
     local vt = uiText(root, 9, 1, 0.9, 0.5)
     vt:SetPoint("TOPLEFT", root, "TOPLEFT", 204, y - 3)
     row.valText = vt
@@ -7482,15 +7509,17 @@ local function SE_BUILD()
     row.plus = seBtn(root, 230, y, 20, 15, "+", function()
       local it = seUI.ed and seUI.ed.conds[i]
       if it and it.cd.n then
-        if it.cd.k == "combo" then it.cd.n = math.min(5, it.cd.n + 1) -- 1.54.3 连击点数域 1-5
-        elseif SE_TIME_K[it.cd.k] then it.cd.n = math.min(10, math.floor((it.cd.n + 0.1) * 10 + 0.5) / 10) -- 时间型 0.1 步进 上限 10.0
-        elseif SE_INT10_K[it.cd.k] then it.cd.n = math.min(10, (it.cd.n or 0) + 1) -- ★1.75.11 计数型：1 步进 上限 10
-        elseif it.cd.k == "bagItem" then it.cd.n = math.min(999, (it.cd.n or 0) + 1) -- ★1.75.92 物品数量：1 步进 上限 999
-        else it.cd.n = math.min(300, it.cd.n + 5) end
+        local sh = (type(IsShiftKeyDown) == "function" and IsShiftKeyDown()) and true or false
+        if it.cd.k == "combo" then it.cd.n = math.min(5, it.cd.n + (sh and 10 or 1)) -- 1.54.3 连击点数域 1-5
+        elseif SE_TIME_K[it.cd.k] then it.cd.n = math.min(10, math.floor((it.cd.n + (sh and 1 or 0.1)) * 10 + 0.5) / 10) -- 时间型 0.1 步进 上限 10.0
+        elseif SE_INT10_K[it.cd.k] then it.cd.n = math.min(10, (it.cd.n or 0) + (sh and 10 or 1)) -- ★1.75.11 计数型：1 步进 上限 10
+        elseif it.cd.k == "bagItem" then it.cd.n = math.min(999, (it.cd.n or 0) + (sh and 10 or 1)) -- ★1.75.92 物品数量：1 步进 上限 999
+        else it.cd.n = math.min(300, it.cd.n + (sh and 50 or 5)) end
         EVAL_HELP_SE_REFRESH()
       end
     end)
     reg(row.plus.btn)
+    seHoverTip(row.plus.btn, seStepTipLines)
     -- 布尔/标志/姿态：是/否循环
     row.valBtn = seBtn(root, 142, y, 44, 15, L("SE_YES"), function()
       local it = seUI.ed and seUI.ed.conds[i]
@@ -8081,11 +8110,16 @@ local function SE_BUILD()
     row.secMinus = seBtn(root, 414, y, 16, 15, "-", function()
       local it2 = seUI.ed and seUI.ed.conds[i]
       if it2 then
-        seSecStep(it2.cd, -1) -- 步进 1，区间 1-300（共用函数，见 seSecStep）
+        seSecStep(it2.cd, -1) -- 步进 1，区间 1-300（共用函数，见 seSecStep；按住 Shift = 10 倍）
         EVAL_HELP_SE_REFRESH()
       end
     end)
     reg(row.secMinus.btn)
+    -- ★1.75.102 操作帮助：剩余时长的 ± 也写明 Shift 规则（与数值格同一套文案）
+    local function seSecTipLines()
+      return { "|cffffd100" .. L("SE_STEP_TIP_T") .. "|r", string.format(L("SE_STEP_TIP"), "1", "10") }
+    end
+    seHoverTip(row.secMinus.btn, seSecTipLines)
     local secTxt = uiText(root, 9, 1, 0.9, 0.5)
     secTxt:SetPoint("TOPLEFT", root, "TOPLEFT", 432, y - 3)
     pcall(secTxt.SetWidth, secTxt, 24)
@@ -8100,6 +8134,7 @@ local function SE_BUILD()
       end
     end)
     reg(row.secPlus.btn)
+    seHoverTip(row.secPlus.btn, seSecTipLines)
     -- ★★★1.71.3 队伍/团员条件的两个过滤格（用户要求）：
     --   ① 职业多选（8 项队伍/团员条件都有）；② 小队多选（只对**团员**条件，用户要求「先验证可行性」）。
     --   ★★语义与「目标职业」**正好相反**：空 = **不过滤**（用户原话「默认空不过滤职业.也就是全部」）。

@@ -902,6 +902,8 @@ SE_OP_NEXT = "One more click changes it to: %s",
   SE_PREVIEW = "Preview:",
   SE_MOVE_UP = "Move this condition up (swap with the one above; the operator stays in its slot)",
   SE_MOVE_DN = "Move this condition down (swap with the one below; the operator stays in its slot)",
+  SE_STEP_TIP_T = "Step",
+  SE_STEP_TIP = "Click = ±%s | Shift+Click = ±%s (10x)", -- ★1.75.102 numeric +/- hover hint
   SE_SAVE = "Save",
   BTN_OK = "OK",
   TN_LABEL = "Input",
