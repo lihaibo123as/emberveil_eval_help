@@ -19,7 +19,7 @@
 --   · 字体链 FZLBJW→FRIZQT→ARIALN 全程 pcall；FontString 不吃鼠标 ⇒ 热区用透明 Button。
 -- ============================================================================
 
-local BUILD = "0.2.10"
+local BUILD = "0.2.14"
 
 local D = {}                      -- 命名空间（跨函数共享件全挂这里，控 local 数）
 _G["EH_DMG"] = D                  -- 调试/桥接口（子插件独立，不依赖宿主）
@@ -54,9 +54,9 @@ local DIR_ZH = { up = "向上滚动", down = "向下滚动", arc = "抛物线滚
 
 local DEF = {
   master = true,
-  direction = "up",
-  fontTier = 3,              -- 字号档位 1小/2中/3大/4特大（0.2.0 起档位制，旧 fontSize 像素值由迁移折算）
-  speed = 90,              -- 像素/秒
+  direction = "angleUp",   -- ★0.2.13 初始默认（用户截图定）：斜上抛物
+  fontTier = 6,            -- 字号档位 1小/2中/3大/4特大/5巨大/6超大（★0.2.13 初始默认 = 超大）
+  speed = 180,             -- ★0.2.13 初始默认：180 像素/秒
   duration = 2.0,          -- 秒
   critAnim = 1,            -- 暴击缩放动画开关
   showIcon = true,         -- 技能图标（法术书名→图标缓存，查不到就不画）
@@ -449,6 +449,15 @@ local function isCrit(msg) return string.find(msg, "致命") ~= nil end
 -- 事件表：ev → 处理器（全部用全局 arg1 原文）
 local EVH = {}
 
+-- 光环/展示类去重（0.2.14）：归一键 + 时间窗内同名只出一条（窗口可配）
+D.recent = {}
+local function dupOk(key, win)
+  local now = GetTime and GetTime() or 0
+  if D.recent[key] and (now - D.recent[key]) < (win or 1.0) then return false end
+  D.recent[key] = now
+  return true
+end
+
 EVH["CHAT_MSG_COMBAT_SELF_HITS"] = function(m)
   addText("damage", numOf(m) or m, isCrit(m) and 1 or 0)
 end
@@ -524,13 +533,27 @@ EVH["CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS"] = function(m)
     addText("energize", "+" .. n .. " " .. pw, 0, src)
     return
   end
-  local a = string.match(m, "^你获得了(.+)。") or string.match(m, "^你获得(.+)效果")
-         or string.match(m, "^你从.-获得了(.-)效果")
-  if a then addText("auraGain", "+ " .. a, 0, a) else capture("PERIODIC_SELF_BUFFS?", m) end
+  -- ★模式次序（0.2.14 修）：先整句（「…获得了 X 。」两种主语），再「效果」形 ——
+  --   `(.-)效果` 按首个「效果」截会得到「恢复的」（与整句形「恢复的效果」归一不到一起 = 去重失效）
+  local a = string.match(m, "^你获得了(.+)。") or string.match(m, "^你从.-获得了(.+)。")
+         or string.match(m, "^你获得(.+)效果") or string.match(m, "^你从.-获得了(.+)效果")
+  -- ★0.2.14 去重（真机截图：同一次「恢复」出了两条）—— 本客户端对同一次 buff 施加会发
+  --   两种句式（「你从 X 获得了恢复效果。」+「你获得了恢复的效果。」）⇒ 归一名字、1s 窗内同名只出一条
+  if a then
+    local key = string.gsub(a, "的效果$", "")
+    key = string.gsub(key, "效果$", "")
+    if not dupOk("ag:" .. key, 1.0) then return end
+    addText("auraGain", "+ " .. a, 0, a)
+  else capture("PERIODIC_SELF_BUFFS?", m) end
 end
 
 EVH["CHAT_MSG_SPELL_AURA_GONE_SELF"] = function(m)
   local a = string.match(m, "^(.+)效果从你身上消失") or string.match(m, "^(.+)消失了")
+  if a then
+    local key = string.gsub(a, "的效果$", "")
+    key = string.gsub(key, "效果$", "")
+    if not dupOk("af:" .. key, 1.0) then return end
+  end
   addText("auraFade", "- " .. (a or m), 0, a)
 end
 
@@ -760,9 +783,10 @@ function D.editTick(now)
       editPlace()
     end
   end
-  -- 模拟战斗
+  -- 模拟战斗（0.2.12 加密：0.45s 一拍、每拍两条 —— 用户「频率再快一点、信息密集一点」）
   if D.simOn and now >= D.simNext then
-    D.simNext = now + 0.9
+    D.simNext = now + 0.45
+    simFire()
     simFire()
   end
 end
@@ -920,7 +944,7 @@ local function uiBuild()
     local lb = mkFont(root)
     pcall(lb.SetPoint, lb, "TOPLEFT", root, "TOPLEFT", x, y)
     pcall(lb.SetTextColor, lb, 0.95, 0.80, 0.30)
-    pcall(lb.SetText, label)
+    pcall(lb.SetText, lb, label)
     local bm = uiSolidBtn(root, "-", 22, 18, function() getSet(-1) uiRefresh() end)
     bm:SetPoint("TOPLEFT", root, "TOPLEFT", x + 78, y + 2)
     local val = mkFont(root)
@@ -932,13 +956,19 @@ local function uiBuild()
     return val
   end
   local PX1, PX2 = 18, 250
-  ui.dirText = paramCell("滚动方向", PX1, py, function()
+  -- ★循环类参数（方向/档位）：`+` 正向、`-` 反向（0.2.12；旧写法两颗都正滚 = 用户眼里的「调节异常」）
+  ui.dirText = paramCell("滚动方向", PX1, py, function(d)
     local c = C()
     local i = 1
     for k, v in ipairs(DIRS) do if v == c.direction then i = k break end end
-    c.direction = DIRS[(i % table.getn(DIRS)) + 1]
+    local n = table.getn(DIRS)
+    c.direction = DIRS[((i - 1 + (d or 1)) % n) + 1]
   end)
-  ui.sizeText = paramCell("字号档位", PX2, py, function() local c = C() c.fontTier = ((c.fontTier or 3) % table.getn(D.TIER)) + 1 end)
+  ui.sizeText = paramCell("字号档位", PX2, py, function(d)
+    local c = C()
+    local n = table.getn(D.TIER)
+    c.fontTier = (((c.fontTier or 3) - 1 + (d or 1)) % n) + 1
+  end)
   ui.speedText = paramCell("速度", PX1, py - 24, function(d) local c = C() c.speed = math.max(20, math.min(400, (c.speed or 90) + d * 10)) end)
   ui.durText = paramCell("时长", PX2, py - 24, function(d) local c = C() c.duration = math.max(0.5, math.min(6, (c.duration or 2.0) + d * 0.25)) end)
   py = py - 48
@@ -1196,7 +1226,19 @@ local function cmd(msg)
     return
   end
   if sub == "字号探针" or sub == "探针" or sub == "probe" then probeRun() return end
-  say("命令：/edmg ui · 编辑 · 模拟 · 开|关 · 捕获 · 事件 · 状态 · 测试 · 字号探针")
+  if sub == "字体" or sub == "fonts" then
+    -- 只读体检：候选大字体对象在本客户端**存不存在**（特大/巨大/超大观感一样时的判定口）
+    local cands = { "NumberFontNormalHuge", "SystemFont_Huge1", "SystemFont_Huge2",
+      "SystemFont_Huge3", "SystemFont_Huge4", "ZoneTextFont", "SubZoneTextFont",
+      "BossEmoteNormalHuge", "QuestFont_Huge", "QuestFont_Large",
+      "GameFontNormalHuge", "GameFontNormalLarge" }
+    say("候选字体对象存在性（有/无）：")
+    for _, nm in ipairs(cands) do
+      say("  " .. nm .. " = " .. (rawget(_G, nm) and "有" or "无"))
+    end
+    return
+  end
+  say("命令：/edmg ui · 编辑 · 模拟 · 开|关 · 捕获 · 事件 · 状态 · 测试 · 字号探针 · 字体")
 end
 D.cmd = cmd
 
