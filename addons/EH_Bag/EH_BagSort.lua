@@ -65,6 +65,60 @@ end
 
 -- 轻量读一格：只要 id/名称/品质/类型/上限（不做图标与 tooltip）
 local function recAt(bag, slot)
+  -- ★0.3.40 银行主格（用户：「银行背包窗口开的情况下.背包整理顺带也要整理银行背包内的物品」）：
+  --   主格 24 格走**装备槽 API**（40..63）；本客户端恒不给链接（0.3.24）⇒ 链接/id 走
+  --   唯一反查口 `B.bankMainInfo`（名字 → GetItemInfo，0.3.39/0.3.40 与显示侧共用，带缓存）。
+  if bag == B.BANK then
+    local inv = 39 + slot
+    if type(BankButtonIDToInvSlotID) == "function" then
+      local okI, v = pcall(BankButtonIDToInvSlotID, slot)
+      if okI and type(v) == "number" and v > 0 then inv = v end
+    end
+    local link, texture, count
+    if type(GetInventoryItemLink) == "function" then
+      local okL, l = pcall(GetInventoryItemLink, "player", inv)
+      if okL and type(l) == "string" and l ~= "" then link = l end
+    end
+    if type(GetInventoryItemTexture) == "function" then
+      local okT, t2 = pcall(GetInventoryItemTexture, "player", inv)
+      if okT and type(t2) == "string" and t2 ~= "" then texture = t2 end
+    end
+    if type(GetInventoryItemCount) == "function" then
+      local okC, c2 = pcall(GetInventoryItemCount, "player", inv)
+      if okC and type(c2) == "number" then count = c2 end
+    end
+    if link == nil and texture == nil then return nil end
+    local id = (link ~= nil) and tonumber(string.match(link, "item:(%d+)")) or nil
+    local info = (id ~= nil) and itemInfoCached(id) or nil
+    if info == nil and type(B.bankMainInfo) == "function" then
+      local bi = B.bankMainInfo(inv, texture)
+      if type(bi) == "table" then
+        if link == nil and type(bi.link) == "string" then
+          link = bi.link
+          id = tonumber(string.match(link, "item:(%d+)"))
+          if id ~= nil then info = itemInfoCached(id) end
+        end
+        if info == nil then
+          info = { name = bi.name or "?", quality = bi.quality or 1,
+                   itemType = bi.itemType, subType = bi.subType,
+                   maxStack = bi.maxStack or 1, equipLoc = bi.equipLoc, texture = bi.texture }
+        end
+      end
+    end
+    if texture == nil and info ~= nil then texture = info.texture end
+    return {
+      bag = bag, slot = slot, id = id, link = link,
+      name = (info and info.name) or "?",
+      quality = (info and info.quality) or 1,
+      itemType = info and info.itemType or nil,
+      equipLoc = info and info.equipLoc or nil,
+      maxStack = (info and info.maxStack) or 1,
+      count = count or 1,
+      locked = false,
+      texture = texture,
+      bankMain = true,
+    }
+  end
   if type(GetContainerItemLink) ~= "function" then return nil end
   local ok, link = pcall(GetContainerItemLink, bag, slot)
   if not ok or type(link) ~= "string" or link == "" then return nil end
@@ -122,7 +176,28 @@ end
 --   而整理引擎在可见区找不到空格做中转 ⇒ 直接误报「一格空位都没有」。
 --   ★口径：**收起只影响看不看得见，不影响这一格能不能用**；只有**物理上一格不空**才是真的没空位。
 --   排序仍然优先把东西摆在**看得见的地方**（第 1 趟 = 显示中的包），多出来的才落到收起的包里。
-local function slotOrder()
+local function slotOrder(scope)
+  -- ★0.3.40 银行工作区（`scope == "bank"`；用户：「顺带也要整理银行背包内的物品」）：
+  --   主格 24（先）+ 银行包 5~10（后），全部物理格；★只在银行开着时才有（`B.bankOpen`）。
+  --   ★与背包工作区**分两段跑**（sortStep 在背包 done 后换段）—— 绝不跨容器搬（背包 ↔ 银行）。
+  if scope == "bank" then
+    -- ★★★0.3.40d 死循环收口（真机：「开着银行 整理 卡主死循环了」）——
+    --   **银行主格 24 格从工作区拿掉**：本客户端对它们恒不给链接（0.3.24 定案）⇒ 引擎只能
+    --   「名字→GetItemInfo」反查，id 时有时无（nil id 互相「相等」⇒ 反复互搬）+ 读回滞后
+    --   ⇒ 期望序每步都变 ⇒ **永不收敛 = 死循环**（「未找到指定物品」= 反查失败时客户端喷的错）。
+    --   ⇒ 银行段**只整银行包 5~10**（容器 API，与背包同稳定级）；主格 24 格如实跳过、出声说明。
+    local slots = {}
+    if B.bankOpen == true then
+      local k, s
+      for k = 10, 5, -1 do
+        local n = B.bagSlotsRaw(k)
+        for s = n, 1, -1 do
+          table.insert(slots, { bag = k, slot = s })
+        end
+      end
+    end
+    return slots
+  end
   local slots = {}
   local pass, k, s
   for pass = 1, 2 do
@@ -178,8 +253,25 @@ end
 --   **绝不发起「两格互换」**：互换会让一件物品留在光标上，而光标上的东西一旦被我们 ClearCursor
 --   就是**丢件**（本模块首版就是这么把两件物品弄没的，harness 的「后 12 格全空」断言当场抓到）。
 --   目标被占用时改走「先 park 到空格，下一步再搬」的两步策略（见 oneStep）。
+-- ★0.3.40：拿取分派 —— 银行主格走 `PickupInventoryItem(装备槽)`，其余照旧 `PickupContainerItem`
+local function pickUp(bag, slot)
+  if bag == B.BANK then
+    if type(PickupInventoryItem) ~= "function" then return false end
+    local inv = 39 + slot
+    if type(BankButtonIDToInvSlotID) == "function" then
+      local okI, v = pcall(BankButtonIDToInvSlotID, slot)
+      if okI and type(v) == "number" and v > 0 then inv = v end
+    end
+    pcall(PickupInventoryItem, inv)
+    return true
+  end
+  if type(PickupContainerItem) ~= "function" then return false end
+  pcall(PickupContainerItem, bag, slot)
+  return true
+end
+
 local function moveNow(src, dst, allowMerge)
-  if type(PickupContainerItem) ~= "function" then return false, "noapi" end
+  if type(PickupContainerItem) ~= "function" and type(PickupInventoryItem) ~= "function" then return false, "noapi" end
   local srcRec = recAt(src.bag, src.slot)
   local dstRec = recAt(dst.bag, dst.slot)
   if srcRec == nil then return false, "empty" end
@@ -190,8 +282,8 @@ local function moveNow(src, dst, allowMerge)
     if dstRec.id ~= srcRec.id then return false, "occupied" end
     if (srcRec.count or 1) + (dstRec.count or 1) > (srcRec.maxStack or 1) then return false, "toobig" end
   end
-  pcall(PickupContainerItem, src.bag, src.slot)
-  pcall(PickupContainerItem, dst.bag, dst.slot)
+  if not pickUp(src.bag, src.slot) then return false, "noapi" end
+  pickUp(dst.bag, dst.slot)
   -- ★真机上「搬进空格」与「整堆合并」都不该留下光标物品；留下了 = 我们对客户端语义的假设不成立
   --   ⇒ **绝不清光标**（清 = 丢件），而是如实上报让上层收工，把东西留给玩家自己放。
   if cursorBusy() then return true, "cursor" end
@@ -225,7 +317,7 @@ end
 
 -- 一步：返回 "moved" / "done" / "stall" / "nofree" / "cursor" / 其它错误串
 local function oneStep()
-  local slots = slotOrder()
+  local slots = slotOrder(B.sortScope)
   local list, n = snapshot(slots)
   local i
   -- ① 合并堆叠（整堆并入，装不下不动手）
@@ -307,6 +399,7 @@ function B.sortStopFn(reason)
   if B.sortOn ~= true then return end
   B.sortOn = false
   B.sortAcc = 0
+  B.sortScope = nil
   local moves = B.sortMoves or 0
   local f = B.ui and B.ui.frame
   if f ~= nil and B.isObj(f.ehSortBtn) and B.isObj(f.ehSortBtn.label) then
@@ -385,6 +478,24 @@ function B.sortStep(dt)
     -- 客户端把物品留在光标上了（我们对 Drop 语义的假设不成立）⇒ 立刻收工，让玩家自己放
     B.sortStopFn(L("SORT_STOP_CURSOR"))
   elseif r == "done" then
+    -- ★0.3.40：背包段整完、银行开着 ⇒ 换**银行段**接着整（用户：「顺带也要整理银行背包内的物品」）——
+    --   两段分跑，绝不跨容器搬；银行里不足 2 件就跳过这段直接收工。
+    if B.sortScope ~= "bank" and B.bankOpen == true then
+      local bslots = slotOrder("bank")
+      local blist, bn = snapshot(bslots)
+      local bc = 0
+      local bi2
+      for bi2 = 1, bn do
+        if blist[bi2] ~= nil then bc = bc + 1 end
+      end
+      if bc >= 2 then
+        B.sortScope = "bank"
+        B.sortAcc = 0
+        B.sayForce("背包整理完成，继续整理银行包（银行主格 24 格客户端读不到链接、暂不整理）…")
+        return
+      end
+    end
+    B.sortScope = nil
     local t0 = B.sortT0 or GetTime()
     local used = GetTime() - t0
     B.sortOn = false
@@ -427,10 +538,25 @@ function B.sortStart(loud)
   for i = 1, nSlots do
     if list[i] ~= nil then n = n + 1 end
   end
+  -- ★0.3.40：背包不足 2 件、但银行开着且银行里 ≥2 件 ⇒ 直接从**银行段**开整（换段逻辑与 done 分支同口径）
+  local startScope = nil
+  if n < 2 and B.bankOpen == true then
+    local bslots = slotOrder("bank")
+    local blist, bn = snapshot(bslots)
+    local bc = 0
+    for i = 1, bn do
+      if blist[i] ~= nil then bc = bc + 1 end
+    end
+    if bc >= 2 then
+      startScope = "bank"
+      n = bc
+    end
+  end
   if n < 2 then
     B.sayForce(L("SORT_NONE"))
     return false
   end
+  B.sortScope = startScope
   B.sortOn = true
   B.sortAcc = 0
   B.sortMoves = 0

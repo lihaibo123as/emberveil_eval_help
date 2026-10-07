@@ -49,7 +49,7 @@ local B = {}
 _G.EH_BAG = B
 
 -- 构建标记（唯一来源）：改本文件顺手 +1，用于「客户端跑的是哪一份」取证
-local BAG_BUILD = "0.3.38"
+local BAG_BUILD = "0.3.40d"
 
 local function strVal(v)
   return tostring(v)
@@ -859,6 +859,17 @@ function B.bgApply()
     end
     if isObj(vf.ehVBg) then pcall(vf.ehVBg.SetAlpha, vf.ehVBg, a) end
   end
+  -- ★0.3.40：左侧背包条 / 银行包条同一把尺子（用户：「受主背包配置项控制(透明度…)」）
+  local bar = isObj(f) and f.ehBar or nil
+  if isObj(bar) and type(bar.SetBackdropColor) == "function" then
+    pcall(bar.SetBackdropColor, bar, 0.03, 0.03, 0.03, a)
+  end
+  local bbar = isObj(f) and f.ehBankBar or nil
+  if isObj(bbar) and type(bbar.SetBackdropColor) == "function" then
+    pcall(bbar.SetBackdropColor, bbar, 0.03, 0.03, 0.03, a)
+  end
+  if isObj(B.ui.barBg) then pcall(B.ui.barBg.SetAlpha, B.ui.barBg, a) end
+  if isObj(B.ui.bankBarBg) then pcall(B.ui.bankBarBg.SetAlpha, B.ui.bankBarBg, a) end
   -- 格子的中性底色（空格 / 白装 / 悬停 / 关掉染色）跟着走；唯一绘制口在 paintButton，这里只是重画一趟
   if type(B.refreshAll) == "function" then B.refreshAll() end
 end
@@ -1401,6 +1412,47 @@ end
 -- 读一格：无物品返回 nil。
 -- ★银行主格（BANK_CONTAINER）走的是**人物装备槽** 40..63（vanilla BankButtonIDToInvSlotID = slot+39），
 --   不能用容器 API 读 —— 这是「银行背包没生效」最容易踩的一处。
+-- ★★★0.3.39/0.3.40：银行主格信息反查（本客户端银行主槽**不给链接**，0.3.24 定案）——
+--   走**自建隐形气泡 `EH_BagReadTip` 读名字** → 按名字 `GetItemInfo` 补品质/类型/链接。
+--   返回 { name, quality, itemType, subType, maxStack, equipLoc, link } 或 nil（判不出）。
+--   ★缓存键 = `inv|贴图`（换物品 = 贴图变 = 自动失效；槽数 × 物品数天然有界）。
+--   ★唯一实现：显示侧 `B.itemAt`（0.3.39 品阶染色）与整理引擎 `EH_BagSort.lua`（0.3.40 银行整理）共用。
+B.bankMainInfo = function(inv, texture)
+  local ckey = strVal(inv) .. "|" .. strVal(texture)
+  local hit = B.bankQualCache and B.bankQualCache[ckey]
+  if hit ~= nil then return (hit ~= false) and hit or nil end
+  hit = false
+  local tip = B.readTipGet()
+  if tip ~= nil and type(tip.SetInventoryItem) == "function" and type(GetItemInfo) == "function" then
+    if type(tip.ClearLines) == "function" then pcall(tip.ClearLines, tip) end
+    pcall(tip.SetOwner, tip, UIParent, "ANCHOR_NONE")
+    if pcall(tip.SetInventoryItem, tip, "player", inv) then
+      local nm = B.readTipLeft(tip, 1)
+      -- ★★★0.3.40c 真凶修复（真机：「银行打开之后会固定弹出一个物品信息框.不消失…是银行物品的最后一个」）：
+      --   `SetInventoryItem` 这类 Set 调用会**顺带把我们的隐形气泡 Show 出来** ⇒ 屏上多出一只钉死的幽灵气泡
+      --   （内容 = 最后读到的那一格）⇒ **读完当场收**（每次用必收，与「借用要还」同一把尺子）。
+      pcall(tip.Hide, tip)
+      if type(nm) == "string" and nm ~= "" then
+        nm = string.gsub(nm, "|c%x%x%x%x%x%x%x%x", "")
+        nm = string.gsub(nm, "|r", "")
+        nm = string.gsub(nm, "^%s*(.-)%s*$", "%1")
+        -- 第 2 个返回 = 链接（有了它，整理引擎就能拿到 id 走合并与比较）
+        local okI, n, lnk, q, _, t2, sub2, ms2, eq2 = pcall(GetItemInfo, nm)
+        if okI then
+          hit = { name = (type(n) == "string" and n ~= "") and n or nm,
+                  link = (type(lnk) == "string" and lnk ~= "") and lnk or nil,
+                  quality = (type(q) == "number") and q or nil,
+                  itemType = t2, subType = sub2, maxStack = (type(ms2) == "number") and ms2 or nil,
+                  equipLoc = eq2 }
+        end
+      end
+    end
+  end
+  B.bankQualCache = B.bankQualCache or {}
+  B.bankQualCache[ckey] = hit
+  return (hit ~= false) and hit or nil
+end
+
 function B.itemAt(bag, slot)
   if bag == nil or slot == nil then return nil end
   if bag == B.BANK then
@@ -1422,7 +1474,19 @@ function B.itemAt(bag, slot)
       if ok3 and type(cnt) == "number" then rec.count = cnt end
     end
     if rec.link == nil and rec.texture == nil then return nil end
-    rec.name = "?"
+    -- ★★★0.3.39 银行主格品阶染色（真机报障「银行背包内的品阶染色功能还没生效」）：
+    --   本客户端对银行主槽**不给链接**（0.3.24 定案）⇒ fillInfoFromLink 补不到品质 ⇒ quality 恒 1 ⇒
+    --   品质门（q ≥ 2 才上色）永远不开 ⇒ 唯一反查口 `B.bankMainInfo`（0.3.40 抽成共用件）。
+    if rec.link == nil then
+      local hit = B.bankMainInfo(inv, rec.texture)
+      if type(hit) == "table" then
+        rec.name = hit.name
+        if type(hit.quality) == "number" then rec.quality = hit.quality end
+        rec.itemType, rec.subType, rec.equipLoc = hit.itemType, hit.subType, hit.equipLoc
+        if type(hit.maxStack) == "number" then rec.maxStack = hit.maxStack end
+      end
+    end
+    rec.name = rec.name or "?"
     return fillInfoFromLink(rec)
   end
   if type(GetContainerItemInfo) ~= "function" then return nil end
@@ -2578,6 +2642,8 @@ B.richTry = function(bag, slot, rec)
   end
   if okFill ~= true then return false end
   local has, judged = B.tipRead(tip)
+  -- ★0.3.40c：与 bankMainInfo 同一处真凶 —— Set 调用会把隐形气泡 Show 出来 ⇒ 读完当场收
+  pcall(tip.Hide, tip)
   if not (judged == true and has == true) then return false end
   B.richN = (B.richN or 0) + 1
   -- 行（有界）：行数优先 NumLines，读不出才逐行读到空
@@ -2972,6 +3038,11 @@ local function bindItemButton(btn)
   btn.ehTipAt = 0
   btn:SetScript("OnUpdate", function()
     if B.tipHold ~= btn then return end
+    -- ★★★0.3.39b 回滚（真机报障：焦点自愈把正常气泡全弄没了）——
+    --   0.3.39 那道「`GetMouseFocus() ~= btn` ⇒ 视同离开」的自愈**已撤销**：本客户端满世界包装对象
+    --   （DebugBox 在案：查询返回的对象与手里句柄可能不同身份）⇒ 焦点比对**永远不相等** ⇒
+    --   每帧都判「鼠标走了」⇒ 气泡一出来就被自己藏掉。API 索引**没有 `IsMouseOver`** ⇒ 没有可靠的
+    --   「还悬不悬着」判定口 ⇒ 这道自愈先不做（气泡钉屏的问题 ② 退回未解，只留 B.hide 那条收口）。
     local t = GetTime()
     if t < (B.tipGuardAt or 0) then return end
     B.tipGuardAt = t + B.TIP_GUARD_GAP
@@ -4102,7 +4173,23 @@ function B.build()
   local barBg = bar:CreateTexture(nil, "BACKGROUND")
   barBg:SetPoint("TOPLEFT", bar, "TOPLEFT", 0, 0)
   barBg:SetPoint("BOTTOMRIGHT", bar, "BOTTOMRIGHT", 0, 0)
-  solid(barBg, 0.03, 0.03, 0.03, 0.85)
+  -- ★0.3.40（用户：「银行背包和用户背包条.背景和边框风格保持和主背包框架一致,受主背包配置项控制」）：
+  --   背板与主窗**同一套配方**（bgFile/edgeFile/边框色/唯一读口 `B.bgK()`），透明度跟着「背景透明度」走；
+  --   SetBackdrop 走不通才退回纯色纹理（与主窗两条建成路同一口径），句柄交 `B.bgApply()`。
+  local okBDB = pcall(bar.SetBackdrop, bar, {
+    bgFile = B.res("ChatFrameBackground", "Interface\\ChatFrame\\ChatFrameBackground"),
+    edgeFile = B.res("UI-Tooltip-Border", "Interface\\Tooltips\\UI-Tooltip-Border"),
+    tile = true, tileSize = 16, edgeSize = 16,
+    insets = { left = 4, right = 4, top = 4, bottom = 4 },
+  })
+  if okBDB then
+    pcall(bar.SetBackdropColor, bar, 0.03, 0.03, 0.03, B.bgK())
+    pcall(bar.SetBackdropBorderColor, bar, 0.55, 0.45, 0.18, 1)
+    pcall(barBg.SetAlpha, barBg, 0)
+  else
+    solid(barBg, 0.03, 0.03, 0.03, B.bgK())
+    B.ui.barBg = barBg
+  end
   f.ehBar = bar
 
   local i
@@ -4216,7 +4303,21 @@ function B.build()
   local bbarBg = bbar:CreateTexture(nil, "BACKGROUND")
   bbarBg:SetPoint("TOPLEFT", bbar, "TOPLEFT", 0, 0)
   bbarBg:SetPoint("BOTTOMRIGHT", bbar, "BOTTOMRIGHT", 0, 0)
-  solid(bbarBg, 0.03, 0.03, 0.03, 0.85)
+  -- ★0.3.40：银行包条与主窗同一套背板配方（同上一条）
+  local okBDB2 = pcall(bbar.SetBackdrop, bbar, {
+    bgFile = B.res("ChatFrameBackground", "Interface\\ChatFrame\\ChatFrameBackground"),
+    edgeFile = B.res("UI-Tooltip-Border", "Interface\\Tooltips\\UI-Tooltip-Border"),
+    tile = true, tileSize = 16, edgeSize = 16,
+    insets = { left = 4, right = 4, top = 4, bottom = 4 },
+  })
+  if okBDB2 then
+    pcall(bbar.SetBackdropColor, bbar, 0.03, 0.03, 0.03, B.bgK())
+    pcall(bbar.SetBackdropBorderColor, bbar, 0.55, 0.45, 0.18, 1)
+    pcall(bbarBg.SetAlpha, bbarBg, 0)
+  else
+    solid(bbarBg, 0.03, 0.03, 0.03, B.bgK())
+    B.ui.bankBarBg = bbarBg
+  end
   f.ehBankBar = bbar
 
   for i = 1, table.getn(B.BANKBAGS) do
@@ -7103,6 +7204,24 @@ function B.hide(reason)
   -- ★0.3.19：悬停账也一起收 —— 关窗时鼠标可能还停在哪一格上（客户端不一定补发 OnLeave）
   --   ⇒ 下次开窗那一格会自带金框/金辉光
   if type(B.hoverForget) == "function" then B.hoverForget() end
+  -- ★0.3.39：tipHold/气泡账也一起收（与 hoverForget 同族 —— OnLeave 漏发时气泡会钉在屏上；
+  --   格子 Hide 后 OnUpdate 自愈也跑不到这条路）⇒ 气泡还属于那格才 Hide，属于别人一个像素都不碰
+  do
+    local hb = B.tipHold
+    B.tipHold = nil
+    B.tipPend = nil
+    if hb ~= nil then
+      local tip = _G.GameTooltip
+      if tip ~= nil and type(tip.Hide) == "function" then
+        local owned = true
+        if type(tip.IsOwned) == "function" then
+          local okO, vO = pcall(tip.IsOwned, tip, hb)
+          owned = (okO and (vO == true or vO == 1)) and true or false
+        end
+        if owned then pcall(tip.Hide, tip) end
+      end
+    end
+  end
   return true
 end
 
