@@ -594,6 +594,13 @@
 ### 5.5 API 与客户端事实
 - `SpellStopCasting()` 覆盖读条/自动射击/魔杖；**Protected** ⇒ 须 `RunScript`；「进度条没了」≠ 取消。
 - `AttackTarget()` = Toggles 须先 `IsCurrentAction(攻击格)`；Movement 仅 `FollowByName`/`FollowUnit` 非 Protected；`FollowByName` 空名 = 当前目标、只搜已知玩家、无返回值、不走 RunScript。
+- ★★★**「取消跟随」没有专用 API，只能借移动类的 `*Stop`（1.75.110 定案；用户：「角色行为:添加个取消跟随的行为.调查API 是否支持」）**：
+  · **全库零命中**：`StopFollow`/`CancelFollow`/`IsFollowing`/`GetFollowTarget` 在**本机 `api_*.html` 1370 条**、**客户端 exe 的 Lua 注册名表**、**官方 Movement 页全文**三处都没有（★**别被 exe 里那一次 `StopFollow` 骗到**：摊开上下文是 UE 的 `MontageSync_StopFollowing`，不是客户端 API —— 我第一遍就误命中过一次）。
+  · **唯一机制 = 移动类函数**：官方 Movement 页对 `MoveForward*`/`MoveBackward*`/`TurnLeft*`/`TurnRight*`/`StrafeLeft*`/`StrafeRight*` **每一条**都明写「Cancels autofollow and click-to-move」；页首另写「除 `FollowUnit`/`FollowByName` 外整页 Protected：addons cannot call it；**玩家手敲的 `/script` 行是允许的**」。
+  · **通道 = 直调 → 失败才 `RunScript`**（唯一入口 `EVAL_STOP_FOLLOW()`）：本客户端实测过**同族直调生效**（1.71.3「移动脉冲」现场现象是**角色真被往前挪**）⇒ 直调优先；被挡才退 `RunScript`（本项目对所有 Protected 的既定绕行）；**通道如实写日志**（同「停止攻击」的三通道纪律）。
+  · **选 `MoveForwardStop`（不是 Start）**：`*Start` 会 **Clears autorun** + 真位移；`*Stop` 只停对应输入轴 ⇒ 不位移/不改朝向/不碰自动奔跑。★**代价如实**：玩家正按着 W 前进时，这一下等于替他松手；**并且没有回读**（★`IsPlayerMoving()` 报的是「**有没有移动输入**」，官方原文「滑行/坠落/被击退不算」⇒ **跟随中它照旧 false，绝不能拿它当判据**；客户端也没有「我在跟谁」的查询）。
+  · 行为侧：`EVAL_STOPFOLLOW_OF`（`取消跟随`/`停止跟随`/`stopFollow` 三种写法）⇒ 不占动作条（`skillNoSlotOk`）· 恒就绪 · 图标**复用** `ACT_FOLLOW_ICON`（不新增二进制素材）· 分类归「角色行为」；`test_stub.lua` 的「**绝不移动玩家角色**」反向哨兵口径已改写为「**除「取消跟随」这一处外**绝不移动」。
+  · 取证 = `/eh go 跟随`（**只读**体检：接口 + 调查结论 + 机制 + 代价）｜`跟随 试 [直调|绕行]`（**真发一次**；判读 = **先真的在跟随**，跑完看自己有没有停下）｜`跟随 记录/清` ⇒ 专属有界环 `cfg.followProbe`(40，已进 `LOAD_RESIDUE_KEYS`)；读值口 `EVAL_FOLLOW_PROBE()`。★**待真机验收**（离线无法验证「客户端到底有没有取消」）。
 - `GetRaidRosterInfo(i)` 九返回；越界/非团队回 nil。
 - 1370 API **无 aura 专用函数**；`GetPlayerBuff(i,f)` = 增益条 **0 基**下标；**无文件读取 API** ⇒ 载入唯一形式 = 列进 `.toc`；★`LoadAddOn` 是 **Protected** ⇒ 不能文件级懒加载，只能「toc 预载 + 载入期零副作用 + 首用才建帧」（范式 `tools/HunterHelper.lua`）。
 - `GetQuestReward` 会再触发 `QUEST_COMPLETE` ⇒ 三层防护（同名去重/领取窗口闸门/全局频率上限）；`UnitDebuff` 第 3 返回 = dispel token；`UnitMana` 有显示缩放（怒气÷10、幸福÷1000）⇒ 判蓝量前先 `UnitPowerType(unit)==0`。

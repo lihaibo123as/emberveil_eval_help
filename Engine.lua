@@ -1310,6 +1310,176 @@ local function followOf(skill)
   return nil
 end
 
+-- ★★★1.75.110 取消跟随（用户要求：「一键宏->技能编辑->角色行为:添加个取消跟随的行为.调查API 是否支持」）。
+--   【API 调查结论 = **没有专用函数**，但**做得到**，走移动类那条路】
+--     · **不存在**「停止跟随」的 API：`StopFollow` / `CancelFollow` / `IsFollowing` / `GetFollowTarget` 在
+--       本机 `api_*.html`（1370 条）与**客户端 exe 的 Lua 注册名表**里**全部零命中**
+--       （★第一遍在 exe 里搜到过一次 `StopFollow`，把上下文摊开后确认是 UE 的 `MontageSync_StopFollowing`，
+--         **不是**客户端 API —— 这条弯路记在这儿，别再当线索重查；exe 名表里 Follow 只有 FollowUnit/FollowByName）。
+--     · 唯一能取消自动跟随的**机制 = 移动类函数**：官方 Movement 页对 `MoveForward*` / `MoveBackward*` /
+--       `TurnLeft*` / `TurnRight*` / `StrafeLeft*` / `StrafeRight*` **每一条**都明写
+--       「**Cancels autofollow and click-to-move**」；页首另写明「除 `FollowUnit`/`FollowByName` 外整页都是
+--       Protected：addons cannot call it；**玩家手敲的 `/script` 行是允许的**」。
+--     · ★★`IsPlayerMoving()` **不能当回读**：官方原文是「是否**正在提供移动输入**（WASD/摇杆）」并明写
+--       「滑行、坠落、被击退不算」—— 自动跟随是客户端自己走的、**不算输入** ⇒ 跟随中它照旧 false。
+--       客户端**没有**「我现在在跟谁」的查询 ⇒ 本行为**没有回读**，只能如实记账，绝不假装成功。
+--   【通道（两条独立，缺哪条如实写日志 —— 与「停止攻击」同一条纪律）】
+--     ① **直调** `MoveForwardStop()`：本项目 1.71.3 对同族函数**真机实测过直调生效** —— 当年那条「移动脉冲」
+--        （MoveForwardStart → 0.08s → MoveForwardStop）的现场现象是**角色确实往前挪了** ⇒ 本客户端这一族**调得动**，
+--        wiki 的 Protected 列在移动这一族上未见强制拦（★同族旁证：同为 Protected 的 `SpellStopCasting` 直调也有本地效果）；
+--     ② 直调**报错**（真被 Protected 挡住）才退 `RunScript("MoveForwardStop()")`（本项目对所有 Protected 的既定绕行）。
+--   【为什么选 `MoveForwardStop` 而不是 Start】官方原文里 `MoveForwardStart`/`MoveBackwardStart` 会
+--     **Clears autorun**（顺手关掉玩家的自动奔跑）**且真把角色往前挪**；`*Stop` 只停对应的输入轴 ⇒
+--     **不位移、不改朝向、不碰自动奔跑**，是副作用最小的那一个。
+--   ★**已知代价（如实告知）**：玩家此刻**正按着 W 前进**时，这一下等价于替他松手（要重按一下才继续走）。
+--   ★**不能试的写法**：`FollowUnit("player")` —— 官方明写 You cannot follow yourself，既不会取消跟随、也不能当重置。
+--   ★★**Engine.lua 顶层 local 已顶到 200 上限**（见 EVAL_IS_PET_KIND 那条注释）⇒ 本判定口与执行口**一律走全局**。
+function EVAL_STOPFOLLOW_OF(skill)
+  if skill == "取消跟随" then return true end
+  if skill == "停止跟随" then return true end -- 同义写法（导入文本时宽容一点）
+  if skill == "stopFollow" then return true end
+  return nil
+end
+-- 执行：返回 是否出手, 通道明细（唯一写口 —— wuse 与探针都调它）
+function EVAL_STOP_FOLLOW()
+  if type(MoveForwardStop) ~= "function" then
+    -- 本机连这个函数都没有（别的客户端）：退 RunScript 让客户端自己解析；两条都不行就如实失败
+    if type(RunScript) == "function" then
+      local okr = pcall(RunScript, "MoveForwardStop()")
+      return okr and true or false,
+        okr and "RunScript（本客户端没有 MoveForwardStop 函数）" or "客户端既没有 MoveForwardStop 也没有可用的 RunScript"
+    end
+    return false, "客户端没有 MoveForwardStop（取消跟随不可用）"
+  end
+  local ok, err = pcall(MoveForwardStop)
+  if ok then return true, "直调 MoveForwardStop" end
+  if type(RunScript) == "function" then
+    local ok2 = pcall(RunScript, "MoveForwardStop()")
+    if ok2 then return true, "RunScript 绕行（直调被挡：" .. tostring(err) .. "）" end
+    return false, "直调与 RunScript 都被挡（" .. tostring(err) .. "）"
+  end
+  return false, "直调被挡且没有 RunScript（" .. tostring(err) .. "）"
+end
+
+-- ★1.75.110 「取消跟随」的取证环（**唯一写口**）：只在「真执行」与「用户敲 `/eh go 跟随`」时写。
+--   ★为什么不靠聊天框：`say` 只进聊天框、**不落日志环**，而共享 100 环又会被 [DS] 冲掉 ⇒ 必须自带专属落盘
+--     （同 atkProbe/ecProbe 的教训；已进 Core.lua 的 LOAD_RESIDUE_KEYS）。
+-- ★顶层 local 已满 200（见 EVAL_IS_PET_KIND 那条）⇒ 环上限与写口**一律走全局**
+EVAL_FOLLOW_RING_MAX = 40
+function EVAL_FOLLOW_TRACE(line)
+  local c0 = EVAL_HELP_CONFIG
+  if type(c0) ~= "table" then return line end
+  local box = c0.followProbe
+  if type(box) ~= "table" then box = {} c0.followProbe = box end
+  if type(box.out) ~= "table" then box.out = {} end
+  table.insert(box.out, line)
+  while table.getn(box.out) > EVAL_FOLLOW_RING_MAX do table.remove(box.out, 1) end
+  box.n = (tonumber(box.n) or 0) + 1
+  box.t = (type(date) == "function") and date("%H:%M:%S") or nil
+  return line
+end
+
+-- 读值口（命令与断言共用同一份，不解析中文文本）
+function EVAL_FOLLOW_PROBE()
+  local c0 = (type(EVAL_HELP_CONFIG) == "table") and EVAL_HELP_CONFIG or nil
+  local box = c0 and c0.followProbe or nil
+  local out = (type(box) == "table" and type(box.out) == "table") and box.out or {}
+  return {
+    lines = table.getn(out),
+    max = EVAL_FOLLOW_RING_MAX,
+    last = (table.getn(out) > 0) and out[table.getn(out)] or nil,
+    boxN = (type(box) == "table") and box.n or nil,
+    boxT = (type(box) == "table") and box.t or nil,
+    hasMoveForwardStop = (type(MoveForwardStop) == "function") and true or false,
+    hasFollowByName = (type(FollowByName) == "function") and true or false,
+    hasRunScript = (type(RunScript) == "function") and true or false,
+  }
+end
+
+-- ★★「取消跟随」诊断 / 实测定案口（用户要的「调查 API 是否支持」= 一条命令给结论 + 一条命令真试）：
+--   /eh go 跟随              → **只读**体检（接口在不在 + 调查结论 + 机制 + 代价；一个字节都不动）
+--   /eh go 跟随 试 [直调|绕行] → **真发一次**（默认走生产通道 EVAL_STOP_FOLLOW：直调 → 失败才 RunScript）
+--   /eh go 跟随 记录 [条数]   → 摊开专属环（默认全部）
+--   /eh go 跟随 清            → 清环
+--   ★判读方法（必须说清楚，否则用户不知道看什么）：**先真的在跟随**（选中队友 → `/跟随` 或按插件里的「跟随」），
+--     确认自己正在自动跟着走；然后敲 `/eh go 跟随 试`；**看你有没有停下来** —— 停下 = 机制有效。
+--   ★为什么不自动装一个「观察器」来判断成功与否：客户端**没有**「我在跟谁」的查询，`IsPlayerMoving` 报的是
+--     「有没有移动输入」而跟随不算输入（官方原文）⇒ 没有任何可靠的机器判据，只能靠这一眼 + 环里的通道记录。
+function EVAL_FOLLOW_CMD(sub)
+  sub = tostring(sub or "")
+  local a1, a2 = string.match(sub, "^%s*(%S*)%s*(%S*)%s*$")
+  a1, a2 = a1 or "", a2 or ""
+  local function has(n)
+    if type(_G[n]) == "function" then return "有" end
+    return "无"
+  end
+  -- ★用户主动敲的命令 = **强制可见**（关掉「调试日志」也要看得见）—— 与 EquipCompare/ItemPrice 的 sayF 同一口径
+  local function P(s)
+    EVAL_FOLLOW_TRACE(s)
+    if type(EVAL_SAY_FORCE) == "function" then pcall(EVAL_SAY_FORCE, tostring(s))
+    elseif type(EVAL_SAY) == "function" then pcall(EVAL_SAY, tostring(s)) end
+  end
+  if a1 == "清" or a1 == "clear" then
+    local c0 = EVAL_HELP_CONFIG
+    if type(c0) == "table" then c0.followProbe = { out = {}, max = EVAL_FOLLOW_RING_MAX } end
+    P("[取消跟随] 专属环已清空")
+    return true
+  end
+  if a1 == "记录" or a1 == "log" then
+    local p = EVAL_FOLLOW_PROBE()
+    local c0 = (type(EVAL_HELP_CONFIG) == "table") and EVAL_HELP_CONFIG or nil
+    local out = (c0 and type(c0.followProbe) == "table" and type(c0.followProbe.out) == "table")
+      and c0.followProbe.out or {}
+    local n = table.getn(out)
+    local want = tonumber(a2) or n
+    if want > n then want = n end
+    if want < 0 then want = 0 end
+    P(string.format("[取消跟随] 环 %d/%s 行（累计写入 %s%s）", n, tostring(p.max), tostring(p.boxN or 0),
+      (type(p.boxT) == "string") and (" · 读于 " .. p.boxT) or ""))
+    for i = n - want + 1, n do
+      if i >= 1 then P("  " .. tostring(out[i])) end
+    end
+    return true
+  end
+  if a1 == "试" or a1 == "try" then
+    local line = "【试】用户主动触发（先确认自己真的在跟随，再跑这条）"
+    P("[取消跟随] " .. line)
+    if a2 == "直调" then
+      local ok1, err1 = pcall(MoveForwardStop)
+      P(string.format("[取消跟随] 直调 pcall(MoveForwardStop) → ok=%s%s", tostring(ok1),
+        ok1 and "（没报错 ⇒ 本客户端这一族**调得动**）" or ("；报错原话：" .. tostring(err1))))
+      P("[取消跟随] 判读：看自己有没有停下自动跟随 —— 停下 = 有效")
+      return true
+    end
+    if a2 == "绕行" then
+      if type(RunScript) ~= "function" then P("[取消跟随] 本客户端没有 RunScript，绕行不可用") return false end
+      local ok2, err2 = pcall(RunScript, "MoveForwardStop()")
+      P(string.format("[取消跟随] RunScript(\"MoveForwardStop()\") → ok=%s%s", tostring(ok2),
+        ok2 and "（排队已接受）" or ("；报错原话：" .. tostring(err2))))
+      P("[取消跟随] 判读：看自己有没有停下自动跟随 —— 停下 = 有效")
+      return true
+    end
+    local okc, how = EVAL_STOP_FOLLOW()
+    P(string.format("[取消跟随] 生产通道 EVAL_STOP_FOLLOW() → 出手=%s ｜ 通道=%s", tostring(okc), tostring(how)))
+    P("[取消跟随] 判读：看自己有没有停下自动跟随 —— 停下 = 有效（通道见上；直调被挡时会自动退 RunScript）")
+    return okc
+  end
+  -- 默认档 = 只读体检
+  P("— 取消跟随 · API 调查（只读，一个字节都没动）—")
+  P("接口检测：FollowByName=" .. has("FollowByName") .. " FollowUnit=" .. has("FollowUnit")
+    .. " MoveForwardStop=" .. has("MoveForwardStop") .. " MoveBackwardStop=" .. has("MoveBackwardStop")
+    .. " TurnLeftStop=" .. has("TurnLeftStop") .. " StrafeLeftStop=" .. has("StrafeLeftStop")
+    .. " JumpStop=" .. has("JumpStop") .. " RunScript=" .. has("RunScript") .. " IsPlayerMoving=" .. has("IsPlayerMoving"))
+  P("结论①：**没有**「停止跟随」的专用 API —— StopFollow / CancelFollow / IsFollowing / GetFollowTarget 全库零命中")
+  P("　（已核三处：本机 api_*.html 1370 条索引 · 客户端 exe 的 Lua 注册名表 · 官方 Movement 页全文）")
+  P("结论②：唯一机制 = **移动类函数**（MoveForward*/MoveBackward*/TurnLeft*/TurnRight*/StrafeLeft*/StrafeRight* 逐条注明「Cancels autofollow」）")
+  P("结论③：移动类整页标 Protected（addons cannot call），但本项目 1.71.3 真机实测过同族**直调生效**（角色真被往前挪）⇒ 走 EVAL_STOP_FOLLOW：直调 → 失败才 RunScript")
+  P("结论④：选 MoveForwardStop（`*Start` 会 Clears autorun + 真位移；`*Stop` 只停对应输入轴，副作用最小）")
+  P("代价如实：玩家正按着 W 前进时，这一下等于替他松手（要重按）；且**没有回读**（IsPlayerMoving 只报「移动输入」，跟随不算输入）")
+  P("用法：/eh go 跟随 试 [直调|绕行] ｜ /eh go 跟随 记录 [条数] ｜ /eh go 跟随 清")
+  return true
+end
+
 -- 取消自身buff（1.74.8 特殊行为，用户要求：「方案->技能->取消自身buff」）：
 --   rule.skill = "取消自身buff"（取消**全部**可取消的自身光环）
 --              / "取消自身buff:光环名"（只取消那一个）。
@@ -1361,7 +1531,7 @@ function skillNoSlotOk(skill, rank)
   if rank then return true end
   -- ★1.75.92 装备使用（EVAL_EQUIP_OF）/ 1.75.101 换装（EVAL_SWAP_OF）也不占动作条：与「物品使用」同族
   return (petCmdOf(skill) or targetSelOf(skill) or itemOf(skill) or EVAL_EQUIP_OF(skill) or EVAL_SWAP_OF(skill) or stanceOf(skill)
-          or cancelCastOf(skill) or stopAllOf(skill) or followOf(skill) or cancelBuffOf(skill)) and true or false
+          or cancelCastOf(skill) or stopAllOf(skill) or followOf(skill) or EVAL_STOPFOLLOW_OF(skill) or cancelBuffOf(skill)) and true or false
 end
 
 -- ===== 「停读条」通道（1.71.3：**保留原始 SpellStopCasting 方式**；移动脉冲实测无效、已删）=====
@@ -1469,6 +1639,9 @@ local function wicon(name)
     return "Interface\\Icons\\INV_Misc_QuestionMark"
   end
   if followOf(name) then return ACT_FOLLOW_ICON end -- ★1.71.3 跟随：本插件自带的那张（跟着走）
+  -- ★1.75.110 取消跟随：**复用同一张**（没有新增二进制素材；取消跟随 = 跟随的逆操作，同一张靴子图不至于认错，
+  --   将来若要与「跟随」区分开，只需在这里换一张自包含的 media\icons\ 图 —— 单一来源仍在 wicon 这一处）
+  if EVAL_STOPFOLLOW_OF(name) then return ACT_FOLLOW_ICON end
   local _cbOn, cbNm = cancelBuffOf(name) -- ★1.74.8 取消自身buff：借**那个光环自己的图标**（学习表/动作条）；无名退回问号
   if _cbOn then
     -- ★1.74.9 多选：cbNm 是**集合表**（键=名字）；图标取名单里**第一个**认得出的光环（多个时显示第一个）
@@ -2000,6 +2173,9 @@ local function wready(name)
   if followOf(name) then -- ★1.71.3 跟随：不占动作条、无冷却 → 恒就绪（能否跟上由客户端判定，wuse 里如实记账）
     return true
   end
+  if EVAL_STOPFOLLOW_OF(name) then -- ★1.75.110 取消跟随：不占动作条、无冷却 → 恒就绪（真取消没取消见 wuse 的如实记账）
+    return true
+  end
   if cancelBuffOf(name) then -- ★1.74.8 取消自身buff：不占动作条、无冷却 → 恒就绪（身上有没有由 wuse 里如实记录）
     return true
   end
@@ -2420,6 +2596,25 @@ local function wuse(name, reason, rank)
                                 name, reason, (who ~= "") and who or "当前目标", okf and "" or " · 调用失败(pcall)")
     EVAL_LOGLINE(fline)
     if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cff7fff7f" .. fline .. "|r") end
+    return true
+  end
+  if EVAL_STOPFOLLOW_OF(name) then
+    -- 取消跟随（1.75.110 用户要求）：机制/通道/代价见 EVAL_STOPFOLLOW_OF 上方那段调查结论。
+    -- ★没有回读（客户端不提供「在跟谁」的查询、IsPlayerMoving 也不报跟随）⇒ 只如实记账发出的是哪条通道，
+    --   并明确写出「若仍在跟请自己按一下移动键」，绝不假装已经取消成功（本项目最恨静默假成功）。
+    local okc, how = EVAL_STOP_FOLLOW()
+    if not okc then
+      local sl = name .. "跳过: " .. tostring(how)
+      EVAL_FOLLOW_TRACE("[真执行] " .. sl)
+      EVAL_LOGLINE(sl)
+      if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cffff8080" .. sl .. "|r") end
+      return false
+    end
+    local sline2 = string.format("→ %s (%s) | 取消跟随: %s（客户端不提供回读；若仍在跟，请自己按一下移动键）",
+                                 name, reason, tostring(how))
+    EVAL_FOLLOW_TRACE("[真执行] " .. sline2)
+    EVAL_LOGLINE(sline2)
+    if EVAL_HELP_CONFIG and EVAL_HELP_CONFIG.wdebug then EVAL_SAY("|cff7fff7f" .. sline2 .. "|r") end
     return true
   end
   local s = wslots[name]
@@ -5980,8 +6175,10 @@ function EVAL_GO_SKILL_CATEGORIES()
     --   `L("SE_PICK_FOLLOW")`（「跟随:指定名字…」）点了会弹名字输入框 → 存成 `跟随:名字`。
     -- ★1.74.8 追加「取消自身buff」（用户要求：「方案->技能->取消自身buff」）：
     --   裸写法 = 取消**全部**可取消的自身增益；带名字写法只取消那一个（点了弹名字输入框）。
+    -- ★1.75.110 追加「取消跟随」（用户要求：「角色行为:添加个取消跟随的行为.调查API 是否支持」）：
+    --   没有专用 API ⇒ 走移动类的 MoveForwardStop（调查结论与代价见 EVAL_STOPFOLLOW_OF 上方那段）。
     local l = { "攻击", "自动射击", "射击", "取消施法", "停止攻击", "跟随", L("SE_PICK_FOLLOW"),
-                "取消自身buff", L("SE_PICK_CANCELBUFF") }
+                "取消跟随", "取消自身buff", L("SE_PICK_CANCELBUFF") }
     if type(GetNumShapeshiftForms) == "function" then
       local okn, n = pcall(GetNumShapeshiftForms)
       if okn and n and n > 0 then
@@ -6137,7 +6334,7 @@ function EVAL_GO_STATUS()
     EVAL_SAY("激活方案「" .. tostring(p.name) .. "」：")
     for _, r in ipairs(p.skills) do
       local n = r.skill
-      if petCmdOf(n) or targetSelOf(n) or stanceOf(n) or cancelCastOf(n) or stopAllOf(n) or followOf(n) then -- ★1.71.3 跟随也算「不占动作条的特殊技能」
+      if petCmdOf(n) or targetSelOf(n) or stanceOf(n) or cancelCastOf(n) or stopAllOf(n) or followOf(n) or EVAL_STOPFOLLOW_OF(n) then -- ★1.71.3 跟随也算「不占动作条的特殊技能」；★1.75.110 取消跟随同族
         EVAL_SAY(n .. ": |cff80ff80特殊技能（不占动作条）|r")
       elseif itemOf(n) then
         local bag = wFindBagItem(itemOf(n))

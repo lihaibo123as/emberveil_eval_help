@@ -22,29 +22,31 @@
 --   · 字体链 FZLBJW→FRIZQT→ARIALN 全程 pcall；FontString 不吃鼠标 ⇒ 热区用透明 Button。
 -- ============================================================================
 
-local BUILD = "0.2.28"
+local BUILD = "0.2.36"
 
 local D = {}                      -- 命名空间（跨函数共享件全挂这里，控 local 数）
 _G["EH_DMG"] = D                  -- 调试/桥接口（子插件独立，不依赖宿主）
 
 -- ----------------------------------------------------------------------------
--- 配置：显示项（与暴雪「浮动战斗信息」面板逐行对齐，def = 参考截图的默认勾选）
+-- 配置：显示项（与暴雪「浮动战斗信息」面板逐行对齐）
+--   ★★★def = 默认勾选，**2026-10-08 按用户真机截图 + 存档 `EH_DAMAGE_CFG` 逐项定稿**
+--   （用户：「将以上作为默认值」）⇒ 以后改默认勾选只改这一列；★「恢复默认」也走这张表。
 -- ----------------------------------------------------------------------------
 local ITEMS = {
   { id = "lowHealth",    def = true,  zh = "生命法力过低显示" },
-  { id = "auraGain",     def = true,  zh = "效果显示" },
+  { id = "auraGain",     def = false, zh = "效果显示" },
   { id = "auraFade",     def = false, zh = "效果消失显示" },
-  { id = "combatState",  def = true,  zh = "战斗状态显示" },
-  { id = "misses",       def = false, zh = "躲闪/招架/未击中显示" },
-  { id = "mitigation",   def = false, zh = "伤害减免显示" },
-  { id = "reputation",   def = false, zh = "声望显示" },
-  { id = "reactSpell",   def = false, zh = "反击法术和技能显示" },
-  { id = "healerNames",  def = false, zh = "友方治疗者姓名显示" },
-  { id = "comboPoints",  def = false, zh = "连击点显示" },
+  { id = "combatState",  def = false, zh = "战斗状态显示" },
+  { id = "misses",       def = true,  zh = "躲闪/招架/未击中显示" },
+  { id = "mitigation",   def = true,  zh = "伤害减免显示" },
+  { id = "reputation",   def = true,  zh = "声望显示" },
+  { id = "reactSpell",   def = true,  zh = "反击法术和技能显示" },
+  { id = "healerNames",  def = true,  zh = "友方治疗者姓名显示" },
+  { id = "comboPoints",  def = true,  zh = "连击点显示" },
   { id = "energize",     def = false, zh = "能量获取显示" },
   { id = "honor",        def = true,  zh = "荣誉显示" },
   { id = "targetDamage", def = true,  zh = "目标伤害显示" },
-  { id = "dotDamage",    def = true,  zh = "周期性伤害" },
+  { id = "dotDamage",    def = false, zh = "周期性伤害" },
   { id = "petDamage",    def = true,  zh = "宠物伤害" },
   -- 附加项（截图之外、DamageEx 血统里有）：受到的伤害
   { id = "incoming",     def = true,  zh = "受到的伤害（附加）" },
@@ -78,26 +80,77 @@ local function easeCurve(name, t)
 end
 
 local DEF = {
+  -- ★★★2026-10-08 默认档整份重定（用户真机截图 +「将以上作为默认值」）——
+  --   下面每个值都对应面板上一格，改之前先问一句「用户是不是又调过面板了」：
+  --   滚动方向 极速蹦出·斜右 · 速度 200 · 时长 2.5 · 曲线 指数缓出 · 移动上限 35%
+  --   字号档位 特大(4/6) · 受击下移 -44 · 图集缩放 100% · 描边样式 同色光晕
+  --   缩放曲线 指数缓出 · 初始缩放 40% · 暴击幅度 100% · 尾声缩小 25%
+  --   自带字体图集 开 · 暴击缩放动画 开 · 技能图标 开 · 技能名文本 关
+  --   ★只影响「新装 / 缺这个键的老存档」与「恢复默认」；已有显式值的存档一个字节都不动。
   master = true,
-  direction = "angleUp",   -- ★0.2.13 初始默认（用户截图定）：斜上抛物
-  curve = "cubic",         -- ★0.2.23 蹦出系方向的曲线函数（缓出立方/缓出平方/回弹过冲/指数缓出）
-  clampPct = 30,           -- ★0.2.25 移动上限（占屏 %；行程夹取 + 屏界保险丝，5~60）
-  fontTier = 6,            -- 字号档位 1小/2中/3大/4特大/5巨大/6超大（★0.2.13 初始默认 = 超大）
-  speed = 180,             -- ★0.2.13 初始默认：180 像素/秒
-  duration = 2.0,          -- 秒
+  direction = "burstR",    -- 极速蹦出·斜右
+  curve = "expo",          -- 指数缓出（蹦出系方向用）
+  clampPct = 35,           -- 移动上限（占屏 %；行程夹取 + 屏界保险丝，5~60）
+  fontTier = 4,            -- 字号档位 1小/2中/3大/4特大/5巨大/6超大
+  speed = 200,             -- 像素/秒
+  duration = 2.5,          -- 秒
   critAnim = 1,            -- 暴击缩放动画开关
   showIcon = true,         -- 技能图标（法术书名→图标缓存，查不到就不画）
   showSpellText = false,   -- 技能名纯文本（默认关；开了 = 「撕裂 9」「次级治疗术 +154」这样带名字）
-  posX = 0, posY = -60,    -- 主锚点（屏幕中心偏移，逻辑单位）
+  posX = 0, posY = -60,    -- 主锚点（屏幕中心偏移，逻辑单位）★截图里没有锚点 ⇒ 这两项没动
   -- ★0.2.28 受击锚点下移量（用户真机报障「受到的伤害数字太下面的，距离锚点太远了」）：
   --   旧默认 -170 太靠下（-60 + -170 = 屏幕中线以下 230px）+ 「down」车道还会继续往下漂
   --   ⇒ 数字整段落在动作条那一带。默认收到 -120，并且**不再是只能改代码的死值**：
   --   面板「受击下移」±10 步进 + 编辑模式**第二个红色锚点可直接拖**（写的就是这个字段）。
-  inOffY = -120,           -- 受到伤害行相对主锚点的下移量（负 = 更靠下）
+  inOffY = -44,            -- 受到伤害行相对主锚点的下移量（负 = 更靠下）★2026-10-08 用户截图定稿
+  -- ★0.2.29 战斗数字「自带字体图集」（R4：插件目录里的 TTF 离线渲成 TGA，运行期用纹理画数字）。
+  --   为什么不用 SetFont 直接换字体：本客户端 `FontString:SetFont` 是**静默失败** API，而「自建 Font +
+  --   SetFontObject(散装 TTF)」被客户端自带插件实测为「文字直接消失」（unrealUI 知识库
+  --   fonts.setfont_silent_failure / RUNTIME_FAILURE_CONFIRMED）⇒ 走**已验证能加载的贴图路**。
+  fontAtlas = true,        -- ★2026-10-08 默认改**开**（用户截图定稿：战斗数字直接用插件自带字体图集）
+  faScale = 100,           -- 图集整体缩放 %（= 字号的**连续**微调；档位管粗调）
+  -- ★0.2.30 图集**描边风格**（用户真机反馈「字体黑色边框能换个吗?美化一点吗?」）：
+  --   旧版只有一种：纯白字 + 硬黑描边（0.06×格高，最大档 5px，观感偏「糊黑圈」）。
+  --   现在每种风格**各自一套 TGA + 各自一套度量**（描边/暗晕不同 ⇒ 墨区不同），id 见 D.FAS_ORD。
+  --   ★默认 = glow 同色光晕（2026-10-08 用户截图定稿；载入期一次性归一 + 如实出声见 cfgEnsure）。
+  faEdge = "glow",         -- 描边风格 id（soft/hard/glow/shadow/plain）
+  -- ★0.2.31 缩放动画（**图集行专用**）：用户问「这种形式的伤害数字是否就支持动画曲线平滑缩放了?」
+  --   答案是「路子通了，但得写这段代码」—— 文字行那条路缩放已被 0.2.0~0.2.21 逐条真机证死；
+  --   图集行的数字是**纹理格** ⇒ 宽/高/锚点可每拍现算 ⇒ 连续 + 曲线缓动成立（**只补发几何，不碰贴图/UV**）。
+  animCurve = "expo",      -- 缩放曲线（复用 CURVES：cubic/quad/back/expo）★2026-10-08 用户截图定稿
+  animAmp = 100,           -- **暴击鼓包**幅度 %（1 → 1+amp → 1；0 = 不鼓包，**不再管出生弹入**）
+  -- ★0.2.34 出生弹入幅度**独立成一个参数**（用户：「伤害文字初始出现缩放增加可缩放参数」）：
+  --   出生那一瞬的缩放 = animStart%，0.35s 内平滑回到 100%（`D.FA_POP_SEC`，走同一条 animCurve）。
+  --   100 = 不弹入（出生即原尺寸）· <100 = 由小涨大 · **>100 = 由大缩回**（也是合法观感）。
+  --   ★老存档兼容：0.2.31~0.2.33 里「幅度 = 0」就是「关掉缩放动画」的意思（当时只有那一个开关）
+  --   ⇒ 迁移时把这种存档的 animStart 落成 100，原样保留用户那次选择（见 cfgEnsure）。
+  animStart = 40,          -- ★2026-10-08 用户截图定稿（由小涨大，起点 40%）
+  -- ★0.2.35 **尾声缩小**（用户：「尽量接近尾声动画同步. 缩小切隐藏」）：数字生命最后那段
+  --   （**与淡出同一相位**：淡出占后 50% 的寿命，这里就跟着那 50% 走，到点正好一起消失）从 100% 缩到 (100-animEnd)%。
+  --   0 = 不缩；100 = 缩到下限（`D.FA_K_MIN`=10%，不会出现 0 宽高纹理）⇒ 也就是「缩小切隐藏」。
+  animEnd = 25,
   capture = false,         -- 诊断：捕获未识别的战斗文本进环
 }
 -- 受击下移的可调范围（面板步进与编辑模式拖拽**共用同一对常量**，绝不各写一份）
 D.INOFF_MIN, D.INOFF_MAX = -400, -20
+-- 图集缩放范围（同上：面板步进与读值口共用）
+D.FAS_MIN, D.FAS_MAX = 60, 200
+-- ★0.2.34 初始缩放范围（%）：<100 由小涨大 · 100 不弹入 · >100 由大缩回
+D.ANS_MIN, D.ANS_MAX = 30, 150
+-- ★0.2.35 尾声缩小范围（%）：0 = 不缩 · 100 = 缩到下限
+D.AEN_MIN, D.AEN_MAX = 0, 100
+-- ★0.2.31 缩放动画的常量（面板步进 / 读值口 / 档图挑选**共用同一批**，绝不各写一份）：
+--   幅度范围 0~100%（默认 25；★0.2.33 用户要求上限 50 → 100）· 出生弹入 0.35s · 暴击鼓包 0.35s
+D.ANIM_MIN, D.ANIM_MAX = 0, 100
+D.FA_POP_SEC, D.FA_CRIT_SEC = 0.35, 0.35
+-- ★0.2.33 缩放系数下限：幅度 100% 时出生弹入的起点算出来是 **0 倍**（0 宽/高的纹理没意义，
+--   「从 0 涨出来」视觉上也等于凭空出现）⇒ 夹到 10%。幅度 ≤ 90% 时这个下限**永远不会生效**。
+D.FA_K_MIN = 0.1
+-- ★0.2.30 描边风格：**顺序 = 面板 ± 循环顺序**，中文名 = 界面显示（与生成器 STYLES 同序同 id）
+D.FAS_ORD = { "soft", "hard", "glow", "shadow", "plain" }
+D.FAS_ZH = {
+  soft = "柔和暗晕", hard = "硬黑描边", glow = "同色光晕", shadow = "右下投影", plain = "无描边",
+}
 
 local say                                   -- ★前向声明：cfgEnsure 的迁移播报用到它（否则绑全局 nil）
 
@@ -125,6 +178,40 @@ local function cfgEnsure()
   -- ★0.2.28（同版收口）**受击下移只取整数**（用户真机截图：面板显示「-43.86591064453」还折成两行）：
   --   拖拽写的是光标差（浮点），所以这里把**已经存进去的浮点老值**一次性归整；之后写入口也一律取整。
   if type(c.inOffY) == "number" then c.inOffY = math.floor(c.inOffY + 0.5) end
+  -- ★0.2.30 图集描边风格：老存档没有这个键 ⇒ 落成新默认（soft）并**如实出声一次**
+  --   （行为改变必须出声：老用户会看到战斗数字的描边换了样；面板「描边样式」或 `/edmg 描边 hard` 可换回原观感）
+  if c.faEdge == nil then
+    c.faEdge = DEF.faEdge
+    if type(say) == "function" then
+      say("战斗数字描边已换成「" .. (D.FAS_ZH[DEF.faEdge] or DEF.faEdge) ..
+        "」：面板「描边样式」± 或 /edmg 描边 <风格> 可换（hard = 原来的硬黑描边）")
+    end
+  elseif type(c.faEdge) ~= "string" or D.FAS_ZH[c.faEdge] == nil then
+    c.faEdge = DEF.faEdge          -- 垃圾值（手改存档 / 旧实验）⇒ 归一到默认，绝不把不认识的 id 用下去
+  end
+  -- ★0.2.34 出生弹入幅度**独立成参数**：老存档里「幅度 = 0」原本就是「关掉缩放动画」（当时只有那一个开关）
+  --   ⇒ 这种存档补上「初始缩放 100%」，把用户那次选择原样保留（只做一次 + 如实出声）；其余情况落默认 75%。
+  if type(c.animStart) ~= "number" then
+    if tonumber(c.animAmp) == 0 then
+      c.animStart = 100
+      if type(say) == "function" then
+        say("缩放动画：幅度 0 = 关（你原来的选择已保留 —— 出生弹入也关掉了）；" ..
+          "现在「初始缩放」与「暴击幅度」是两个独立参数，要弹入就调「初始缩放」")
+      end
+    else
+      c.animStart = DEF.animStart
+    end
+  end
+  -- ★0.2.36 默认档整份重定（用户截图 +「将以上作为默认值」）：**只补「缺的键」**——
+  --   已有显式值的存档一个字节都不动（用户自己调出来的当然保留），所以真正会换观感的只有
+  --   **0.2.31 之前的老存档**（它们没有 animAmp/animCurve/animEnd ⇒ 补上新的动画默认）⇒ 如实说一次。
+  if c.direction ~= nil and c.animAmp == nil then
+    if type(say) == "function" then
+      say("默认档已更新（初始缩放 " .. tostring(DEF.animStart) .. "% · 暴击幅度 " ..
+        tostring(DEF.animAmp) .. "% · 尾声缩小 " .. tostring(DEF.animEnd) .. "% · 缩放松紧曲线 " ..
+        (CURVE_ZH[DEF.animCurve] or DEF.animCurve) .. "）：面板每一格都能改，恢复默认也回到这一套")
+    end
+  end
   for k, v in pairs(DEF) do if c[k] == nil then c[k] = v end end
   for _, it in ipairs(ITEMS) do
     if c["it_" .. it.id] == nil then c["it_" .. it.id] = it.def and true or false end
@@ -257,12 +344,22 @@ D.ICON_RATIO = 0.45                        -- 图标边长 = 行距 × 系数（
 D.ICON_DY = -3                             -- 图标 y 微调（0.2.9；FontString 行盒比字形高 ⇒ 字面重心偏下，
                                            --   图标按行盒中心锚会偏高 ⇒ 下移对齐字面，真机可再调）
 local KIND_NUMERIC = { damage = 1, dot = 1, pet = 1, heal = 1, incoming = 1, energize = 1, mitigation = 1 }
-local function sizeApply(fs, tier, kind)
+-- ★0.2.29：整条是否**纯 ASCII**（≤126）。数字字体（NumberFontNormalHuge = 客户端的大号数字字体）
+--   **不含中文字形** ⇒ 「+298 [治疗者甲]」里的名字会被渲染成**空白**（真机截图里就是 `+298 []`，
+--   括号在、字没了）⇒ 含非 ASCII 的整条一律退回**中文字体**（tt.game）。
+local function isAsciiOnly(s)
+  if type(s) ~= "string" then return false end
+  for i = 1, string.len(s) do if string.byte(s, i) > 126 then return false end end
+  return true
+end
+local function sizeApply(fs, tier, kind, asciiOnly)
   tier = math.max(1, math.min(table.getn(D.TIER), tonumber(tier) or 3))
   -- ★逐级向下回退：某一档的字体对象不存在（本客户端 Fonts.xml 未必全）就落下一档，绝不比配置的档显小
   for t = tier, 1, -1 do
     local tt = D.TIER[t]
-    local fo = rawget(_G, KIND_NUMERIC[kind] and tt.num or tt.game)
+    -- ★只有「整条纯 ASCII」才敢用数字字体（那族字体不含中文字形 ⇒ 中文名字会变成空白）
+    local useNum = KIND_NUMERIC[kind] and (asciiOnly ~= false)
+    local fo = rawget(_G, useNum and tt.num or tt.game)
     if fo then pcall(fs.SetFontObject, fs, fo) return end
   end
   local fo = rawget(_G, "GameFontNormal")
@@ -307,6 +404,306 @@ local KIND_ITEM = {
 }
 
 -- ----------------------------------------------------------------------------
+-- ★0.2.29 战斗数字「图集」渲染（R4）——把插件目录里的 TTF 离线渲成「每档一张 TGA」，运行期用纹理画数字
+--   为什么走这条路：本客户端 `FontString:SetFont` 是**静默失败** API（保持继承字体、`GetFont` 还回报假读数），
+--   而「自建 Font + SetFontObject(散装 TTF)」被客户端自带插件实测为「文字直接消失」
+--   （unrealUI 知识库 fonts.setfont_silent_failure / RUNTIME_FAILURE_CONFIRMED）⇒ 用**已验证能加载的贴图路**。
+--   收益：完全自包含（素材在 media\，两份都进包）、只影响本插件的战斗数字、**大小完全可控**
+--   （档位管粗调 = 换图；`faScale` 管细调 = 缩放贴图）。
+--   数据 = 生成物 `FontDigits.lua`（`python tmp/gen_fontatlas.py`）；charset 只有数字/符号 ⇒
+--   **任何含中文或字母的整条一律回落 FontString**（不做半吊子混排；技能名行走回落，图标自然也不冲突）。
+-- ----------------------------------------------------------------------------
+local FA = { ready = false, ok = false, chars = "", nch = 0, idx = {}, tiers = {}, N = 0 }
+local FA_MAXQ = 8            -- 单条最多几格（有界；40 槽 × 8 = 320 张上限，且**按需建** —— 开关关着一个都不建）
+
+local function faEnsure()
+  if FA.ready then return FA.ok end
+  FA.ready = true
+  local t = rawget(_G, "EVAL_EDMG_FONTDIGITS")
+  if type(t) ~= "table" or type(t.tiers) ~= "table" then FA.ok = false return false end
+  local ch = tostring(t.chars or "")
+  if ch == "" then FA.ok = false return false end
+  FA.chars, FA.nch = ch, string.len(ch)
+  for i = 1, FA.nch do
+    local one = string.sub(ch, i, i)
+    if FA.idx[one] == nil then FA.idx[one] = i - 1 end      -- 字符 → atlas 第几格（0 基）
+  end
+  local n = 0
+  for i = 1, table.getn(t.tiers) do
+    local e = t.tiers[i]
+    if type(e) == "table" and type(e.file) == "string" and tonumber(e.h) then
+      -- ★0.2.29：**每格宽度逐字不同**（`cw` 字宽表 + `cx` 贴图内偏移 + `W` 总宽）；
+      --   旧版只有等宽 `cellw`（保留兼容：没有 cw 时退回等宽排）。
+      -- ★0.2.30：`st[风格]` = 每种描边风格**各自一套度量**（描边/暗晕不同 ⇒ 墨区不同，硬套一份会切边）；
+      --   表里没有 `st`（旧生成的 FontDigits.lua）⇒ 全部风格都走顶层那套（= hard，向后兼容）。
+      FA.tiers[i] = { file = e.file, h = tonumber(e.h), cellw = tonumber(e.cellw),
+                      W = tonumber(e.W),
+                      cw = (type(e.cw) == "table" and e.cw) or nil,
+                      cx = (type(e.cx) == "table" and e.cx) or nil,
+                      st = (type(e.st) == "table" and e.st) or nil }
+      n = i
+    end
+  end
+  FA.N, FA.ok = n, (n > 0)
+  return FA.ok
+end
+-- 当前描边风格（配置值 → 白名单；不认识的值得不到 ⇒ 退默认 "soft"，绝不把垃圾值用下去）
+local function faStyleNow()
+  local v = C().faEdge
+  if type(v) == "string" and D.FAS_ZH[v] ~= nil then return v end
+  return DEF.faEdge
+end
+-- 风格的规范 id（接受 id 或**中文名**；都不认 ⇒ nil）
+local function faStyleNorm(v)
+  if type(v) ~= "string" or v == "" then return nil end
+  if D.FAS_ZH[v] ~= nil then return v end
+  for _, id in ipairs(D.FAS_ORD) do if D.FAS_ZH[id] == v then return id end end
+  return nil
+end
+-- 取某档、某风格的度量（★唯一取度量口）：返回 file, W, cw, cx
+--   没有这个风格的表项（旧表 / `--only` 只重生成了一部分）⇒ 退回顶层那套（= hard）
+local function faMetrics(t, style)
+  if type(t) ~= "table" then return nil end
+  local e = t.st and t.st[style]
+  if type(e) == "table" and type(e.file) == "string" then
+    return e.file, tonumber(e.W), (type(e.cw) == "table" and e.cw) or nil, (type(e.cx) == "table" and e.cx) or nil
+  end
+  return t.file, t.W, t.cw, t.cx
+end
+-- 图集整体缩放（% → 倍率）；范围与面板步进**共用同一对常量**
+local function faPct()
+  return math.max(D.FAS_MIN, math.min(D.FAS_MAX, tonumber(C().faScale) or 100)) / 100
+end
+-- 整条都能用图集画吗（含中文/字母/空格一律 false ⇒ 回落字体）
+local function faTextOK(s)
+  if type(s) ~= "string" or s == "" then return false end
+  if string.len(s) > FA_MAXQ then return false end
+  for i = 1, string.len(s) do
+    if FA.idx[string.sub(s, i, i)] == nil then return false end
+  end
+  return true
+end
+local function faQuad(s, i)
+  if i > FA_MAXQ then return nil end
+  s.fa = s.fa or {}
+  if s.fa[i] then return s.fa[i] end
+  if type(s.f.CreateTexture) ~= "function" then return nil end
+  local ok, q = pcall(s.f.CreateTexture, s.f, nil, "OVERLAY")
+  if not ok or not q then return nil end
+  s.fa[i] = q
+  return q
+end
+-- 槽复用：把上一次的数字格全部收起（换回文字行时必须做，否则两套叠着显示）
+local function faClear(s)
+  if not s.fa then return end
+  for i = 1, FA_MAXQ do if s.fa[i] then pcall(s.fa[i].Hide, s.fa[i]) end end
+end
+-- 排一行：整组在 s.f 内**水平居中**（s.f 自己跟着轨迹走 ⇒ 数字天然跟着动画/淡入淡出）
+--   ★★★**必须按「每个字自己的宽度」排**（`cw`）：等宽排会让窄字（尤其 `1`）后面空一大截 ——
+--     真机报障原话「某些数字为什么空格有点大」（旧版格宽被最宽字形 `%` 撑出来）。UV 也按 `cx/W` 逐字切。
+local function faLayout(s, text, tier, pct, r, g, b)
+  if not FA.ok then return false end
+  local t = FA.tiers[tier] or FA.tiers[FA.N]
+  if not t then return false end
+  -- ★0.2.30 先按**当前描边风格**取度量（file/W/cw/cx 四样同源，绝不混用两套 —— 混了就是错位切边）
+  local file, tW, tcw, tcx = faMetrics(t, faStyleNow())
+  if type(file) ~= "string" then return false end
+  local n = string.len(text)
+  if n == 0 or n > FA_MAXQ then return false end
+  -- 第一趟：逐字查格号 + 累计总宽（宽度先按 1:1 累，最后统一乘缩放 ⇒ 少一轮乘法）
+  local ci1, w1, total = {}, {}, 0
+  for i = 1, n do
+    local ci = FA.idx[string.sub(text, i, i)]
+    if ci == nil then return false end
+    local w = (tcw and tonumber(tcw[ci + 1])) or t.cellw
+    if not w then return false end
+    ci1[i], w1[i] = ci, w
+    total = total + w
+  end
+  local h = t.h * pct
+  local x = -(total * pct) / 2
+  -- 第二趟：逐格写贴图/UV/几何（组内水平居中 ⇒ 每格锚在「本格中心」）
+  for i = 1, n do
+    local w = w1[i] * pct
+    local q = faQuad(s, i)
+    if not q then return false end
+    local u0, u1
+    if tcw and tcx and tW and tW > 0 then
+      local cx0 = tonumber(tcx[ci1[i] + 1]) or 0
+      u0, u1 = cx0 / tW, (cx0 + w1[i]) / tW
+    else
+      u0, u1 = ci1[i] / FA.nch, (ci1[i] + 1) / FA.nch      -- 兼容等宽旧表
+    end
+    pcall(q.SetTexture, q, file)
+    -- ★★★SetTexCoord 的参数顺序是 **(left, right, top, bottom)** —— 与 WorldFog 画地图瓦片同一条口径。
+    --   0.2.29 首版真机踩到：写成 (left, top, right, bottom) ⇒ 每格取到「错位的窄条」，
+    --   屏上看起来就是乱码（截图：数字变成一格格竖条 + 拉长的方块）。★这条顺序不许再改。
+    pcall(q.SetTexCoord, q, u0, u1, 0, 1)
+    pcall(q.SetWidth, q, w) pcall(q.SetHeight, q, h)
+    pcall(q.SetPoint, q, "CENTER", s.f, "CENTER", x + w / 2, 0)
+    -- ★染色是**乘法**：字身是白→灰渐变（乘上颜色 = 该色的亮→暗）、描边/暗晕是近黑（乘完仍是暗色）
+    --   ⇒ 每种描边风格都天然跟着数字颜色走，绝不会出现「红字配死黑边」那种割裂（0.2.30 五风格同此口径）
+    pcall(q.SetVertexColor, q, r, g, b)
+    pcall(q.Show, q)
+    -- ★0.2.31 记下**基准几何**（宽 + 相对组中心的偏移）：缩放动画每拍只按这两样重算几何，
+    --   贴图/UV 一个字节都不碰（UV 与缩放无关 ⇒ 没必要重发）
+    s.faGeo = s.faGeo or {}
+    s.faGeo[i] = { w = w, cx = x + w / 2 }
+    x = x + w
+  end
+  for j = n + 1, FA_MAXQ do if s.fa and s.fa[j] then pcall(s.fa[j].Hide, s.fa[j]) end end
+  s.faW, s.faH = total * pct, h            -- 整组尺寸（技能图标换锚到这一组的左缘时要用）
+  s.faGN, s.faBH, s.faK = n, h, 1          -- 格数 / 基准格高 / 当前缩放（出生即 1，动画从这上面叠）
+  return true
+end
+-- ----------------------------------------------------------------------------
+-- ★0.2.31 缩放动画（图集行专用）—— 用户：「这种形式的伤害数字是否就支持动画曲线平滑缩放了?」
+--   为什么文字行做不到、图集行能做：文字行的字号通道（SetFont/SetTextHeight/帧 SetScale/具名真对象 SetScale）
+--   已被 0.2.0~0.2.21 逐条真机证死；图集行的数字是**纹理格**，宽/高/锚点本来就是我们每拍现算写的
+--   ⇒ 连续缩放 + 曲线缓动成立。代价如实记：位图字体**放大**会插值发虚（**向下**缩不受影响）。
+-- ----------------------------------------------------------------------------
+-- 幅度（0~1 的倍率。配置是百分数）——★只表示**暴击鼓包**，出生弹入另有 animStart
+local function animAmpNow()
+  local v = tonumber(C().animAmp)
+  if v == nil then v = DEF.animAmp end
+  return math.max(0, math.min(D.ANIM_MAX, v)) / 100
+end
+-- 出生弹入的**起点倍率**（0.3~1.5；1 = 不弹入）
+local function animStartNow()
+  local v = tonumber(C().animStart)
+  if v == nil then v = DEF.animStart end
+  return math.max(D.ANS_MIN, math.min(D.ANS_MAX, v)) / 100
+end
+-- 尾声缩小的**幅度**（0~1；0 = 不缩）
+local function animEndNow()
+  local v = tonumber(C().animEnd)
+  if v == nil then v = DEF.animEnd end
+  return math.max(D.AEN_MIN, math.min(D.AEN_MAX, v)) / 100
+end
+-- ★E 用的**峰值系数**（唯一算式）：出生那段的最大值是 max(起点, 1)（起点 >100% 时峰值就是起点），
+--   暴击那段再乘 (1+amp) ⇒ 取乘积上界（**保守**：只会多挑一档图，绝不放大 ⇒ 不发虚）
+local function faPeakFactor(crit)
+  local hs = animStartNow()
+  if hs < 1 then hs = 1 end
+  local amp = crit and animAmpNow() or 0
+  return hs * (1 + amp)
+end
+-- ★E：按**峰值**挑档图 —— 峰值会超过原尺寸时，改用「够高的那一档图」再缩下来（素材密度 ≥ 峰值
+--   ⇒ 动画全程都不放大、不发虚）；峰值 ≤ 1（只做出生弹入这种「先小后正」的动画）⇒ 原档不动（稳态最清晰）。
+local function faPeakTier(baseTier, peak)
+  local n = table.getn(D.TIER_H)
+  if type(baseTier) ~= "number" or baseTier < 1 then baseTier = 1 end
+  if baseTier > n then baseTier = n end
+  if peak <= 1 or baseTier >= n then return baseTier end
+  local want = (D.TIER_H[baseTier] or 0) * peak
+  local t = baseTier
+  while t < n and (D.TIER_H[t] or 0) < want do t = t + 1 end
+  return t
+end
+-- 当前缩放系数（1 = 基准尺寸）：**出生弹入**（animStart → 1）+ **暴击鼓包**（1 → 1+amp → 1）+ **尾声缩小**（→ 1-end）
+--   ★曲线吃**进度分数**（t/时长），不是秒（0.2.23 在滚动那边踩过一次，这里同一个口径）
+--   ★每拍每槽都要调一次 ⇒ 配置只读一次（C() 会遍历一遍 DEF 补缺，热路径上别读两遍）
+--   `fo` = **淡出进度**（0~1，由 tick 算好传进来；缺省 0）—— 尾声缩小与淡出**同相位**，
+--   到点（t ≥ dur，槽被收掉）那一刻正好缩到位 ⇒ 观感就是「缩小切隐藏」。
+local function animK(s, t, fo)
+  local c = C()
+  if t < 0 then t = 0 end
+  fo = tonumber(fo) or 0
+  local k = 1
+  -- ① 出生弹入：起点 = 初始缩放%（<100 = 由小涨大 · 100 = 不弹入 · >100 = 由大缩回）
+  local hs = animStartNow()
+  if hs ~= 1 and t < D.FA_POP_SEC then
+    k = hs + (1 - hs) * easeCurve(c.animCurve or DEF.animCurve, t / D.FA_POP_SEC)
+  end
+  -- ② 暴击鼓包（幅度 0 = 不鼓包；`s.crit` 已带 critAnim 开关的门）
+  --   ★0.2.35 用**平滑包络**：前半起、后半落，两段都过 smoothstep ⇒ 起点/峰值/回正三处斜率都是 0，
+  --     「放大回正」不再是一头撞回原尺寸（旧写法把缓出曲线**反着用**，末端斜率非 0 = 那一下顿）。
+  local amp = animAmpNow()
+  if s.crit == 1 and amp > 0 and t < D.FA_CRIT_SEC then
+    local f = t / D.FA_CRIT_SEC
+    local u = (f < 0.4) and smoothstep(f / 0.4) or smoothstep((1 - f) / 0.6)
+    k = k * (1 + amp * u)
+  end
+  -- ③ 尾声缩小：与淡出同相位（fo = smoothstep 过的淡出进度），缩到 (1-end) 后随槽一起收掉
+  local en = animEndNow()
+  if en > 0 and fo > 0 then k = k * (1 - en * fo) end
+  -- ★0.2.33 下限（初始缩放调到 30%、尾声缩到 100% 也不会更小；0 宽/高的纹理没意义）
+  if k < D.FA_K_MIN then k = D.FA_K_MIN end
+  return k
+end
+-- 把缩放系数落到几何上（**只发 SetWidth/SetHeight/SetPoint**；贴图与 UV 不动）
+--   ★按「相对组中心的偏移 × k」摆 ⇒ 缩放天然以**组中心**为锚（不是每格各自缩放而散了队形）
+local function faScaleApply(s, k)
+  local n = s.faGN or 0
+  if n <= 0 then return end
+  for i = 1, n do
+    local g = s.faGeo and s.faGeo[i]
+    local q = s.fa and s.fa[i]
+    if g and q then
+      pcall(q.SetWidth, q, g.w * k)
+      pcall(q.SetHeight, q, s.faBH * k)
+      pcall(q.SetPoint, q, "CENTER", s.f, "CENTER", g.cx * k, 0)
+    end
+  end
+  -- 技能图标跟着一起缩、并贴着整组左缘重锚（不缩 = 数字缩了图标不动，pop 那一下看着散）
+  if s.icShown and s.icBase then
+    local sz = s.icBase * k
+    pcall(s.ic.SetWidth, s.ic, sz) pcall(s.ic.SetHeight, s.ic, sz)
+    pcall(s.ic.SetPoint, s.ic, "RIGHT", s.f, "CENTER", -(s.faW or 0) * k / 2 - 2, D.ICON_DY or 0)
+  end
+  s.faK = k
+end
+-- 逐拍推进（唯一调用点 = tick；写前比对 ⇒ 稳态一个 Set* 都不发）
+local function faScaleTick(s, t, fo)
+  if not (s.faUsed and s.faTxt) then return end
+  local want = animK(s, t, fo)
+  if math.abs(want - (s.faK or 1)) > 0.0005 then faScaleApply(s, want) end
+end
+
+-- 只读自检：这个贴图路径到底能不能加载（返回「读到的文件宽」或 nil=判不出）
+--   ★每次**新建**一张匿名探针纹理（复用会把上一次的文件尺寸读回来 ⇒ 假结果；WorldFog 同款配方）
+local function faProbeTex(path)
+  local host = rawget(_G, "UIParent")
+  if not (type(host) == "table" or type(host) == "userdata") or type(host.CreateTexture) ~= "function" then return nil end
+  local ok, tx = pcall(host.CreateTexture, host, nil, "ARTWORK")
+  if not ok or tx == nil or type(tx.SetTexture) ~= "function" or type(tx.GetWidth) ~= "function" then return nil end
+  pcall(tx.Hide, tx)
+  if not pcall(tx.SetTexture, tx, path) then return nil end
+  local okw, v = pcall(tx.GetWidth, tx)
+  if okw and type(v) == "number" and v > 0 then return v end
+  return nil
+end
+-- 当前风格在表里真的有**独立度量**吗（否 = 退回顶层那套 ⇒ 界面/体检要如实说，绝不假装换过）
+--   ★`hard` 特殊：**顶层那套就是 hard**（生成器不重复写 `st.hard`，旧版单风格表也只有顶层那套）
+--   ⇒ 它只要表读到了就算「有」，否则面板会对最该可用的那个风格报「表里没有」。
+local function faEdgeOK()
+  if not faEnsure() then return false end
+  local t = FA.tiers[1]
+  if t == nil then return false end
+  local st = faStyleNow()
+  if t.st and t.st[st] then return true end
+  if st == "hard" then return true end
+  return false
+end
+function D.faState()
+  return {
+    on = (C().fontAtlas == true), scale = tonumber(C().faScale) or 100,
+    edge = faStyleNow(), edgeOK = faEdgeOK(),
+    ok = faEnsure(), nch = FA.nch, N = FA.N,
+    t1 = FA.tiers[1] and FA.tiers[1].file or nil,
+  }
+end
+D.faEnsure, D.faTextOK, D.faClear, D.faLayout, D.faPct, D.faProbeTex, D.faMetrics =
+  faEnsure, faTextOK, faClear, faLayout, faPct, faProbeTex, faMetrics
+D.faStyleNow, D.faStyleNorm, D.faEdgeOK = faStyleNow, faStyleNorm, faEdgeOK
+-- ★0.2.31 缩放动画的四个口（挂 D：离线 harness 直跑 + 真机 /run 也能查）
+D.animK, D.faScaleApply, D.faScaleTick, D.faPeakTier, D.animAmpNow =
+  animK, faScaleApply, faScaleTick, faPeakTier, animAmpNow
+-- ★0.2.34 初始缩放（出生弹入）的口；★0.2.35 加尾声缩小
+D.animStartNow, D.faPeakFactor = animStartNow, faPeakFactor
+D.animEndNow = animEndNow
+
+-- ----------------------------------------------------------------------------
 -- 动画槽池（1.12 无销毁 API ⇒ 建一次只 Show/Hide；上限有界）
 -- ----------------------------------------------------------------------------
 local POOL_MAX = 40
@@ -321,7 +718,12 @@ local function slotAcquire()
   if D.poolN >= POOL_MAX then return nil end
   if type(CreateFrame) ~= "function" then return nil end
   local f = CreateFrame("Frame", nil, UIParent)
-  f:SetWidth(260) f:SetHeight(30)
+  -- ★0.2.29 高度给足：图集模式的数字格是**本帧的子纹理**（最大档 84px），
+  --   帧太小有被裁掉的风险（本客户端是 UE 封装，裁剪行为未知）⇒ 直接建大一点，零代价。
+  -- ★0.2.33 再放大：缩放幅度上限提到 100% ⇒ 暴击峰值可达 **2 倍**（最大档 84px 的数字组按 6 位算约 420px
+  --   ⇒ 峰值 ~840px）⇒ 帧宽给到 1024 覆盖这个量级。★如实边界：8 位数字 + 最大档 + 100% 会略微超出，
+  --   而且本客户端到底裁不裁子纹理**没验过**（真机若看到大数字边缘被切，就是它在裁 —— 反馈我继续放大）。
+  f:SetWidth(1024) f:SetHeight(384)
   -- ★带继承模板建 FontString（宿主 uiText 已验证配方），SetFontObject 再双保险
   local fs = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   pcall(fs.SetFontObject, fs, GameFontNormal)
@@ -341,6 +743,47 @@ end
 
 local function slotReleaseAll()
   for i = 1, D.poolN do slotRelease(D.pool[i]) end
+end
+
+-- ★0.2.29 图集开关的**唯一写口**（面板勾选 / `/edmg 图集 开|关` 都走它）：
+--   写配置 + **清空当前所有字**（否则会半新半旧地留着上一种画法的字）+ 刷新面板真值
+function D.fontAtlasSet(on)
+  local c = C()
+  c.fontAtlas = on and true or false
+  slotReleaseAll()
+  for i = 1, D.poolN do local s = D.pool[i] if s.fa then faClear(s) end end
+  if type(D.uiRefresh) == "function" then D.uiRefresh() end
+  say("自带字体图集：" .. (c.fontAtlas and "开（战斗数字改用插件自带字体）" or "关（回到客户端字体）"))
+end
+
+-- ★0.2.30 描边风格的**唯一写口**（面板「描边样式」± / `/edmg 描边 <风格>` 都走它）：
+--   只换**贴图**（几何/UV 由 faLayout 按该风格自己的度量重算）⇒ **不 clean 场**：屏上已经在飘的数字
+--   当场按新风格重排（不然要等下一次出生才换，用户会以为「点了没反应」）。
+--   ★不认识的风格 id ⇒ 一个字节都不写 + 返回 false（绝不把垃圾值写进存档）。
+function D.faStyleSet(v)
+  local id = faStyleNorm(v)
+  if not id then return false end
+  local c = C()
+  c.faEdge = id
+  for i = 1, D.poolN do
+    local s = D.pool[i]
+    if s.active and s.faUsed and s.faTxt then
+      local col = s._faCol or { 1, 1, 1 }
+      faLayout(s, s.faTxt, s._tier or s.tier, faPct(), col[1], col[2], col[3])
+    end
+  end
+  if type(D.uiRefresh) == "function" then D.uiRefresh() end
+  say("战斗数字描边：" .. (D.FAS_ZH[id] or id) .. "（" .. id .. "）" ..
+    (faEdgeOK() and "" or " ｜ ★FontDigits.lua 里没有这种风格的度量 ⇒ 退回硬描边"))
+  return true
+end
+-- 风格循环（面板 ± 用；方向 d=+1 正向、-1 反向）
+function D.faStyleStep(d)
+  local cur = faStyleNow()
+  local i = 1
+  for k, id in ipairs(D.FAS_ORD) do if id == cur then i = k break end end
+  local n = table.getn(D.FAS_ORD)
+  D.faStyleSet(D.FAS_ORD[((i - 1 + (d or 1)) % n) + 1])
 end
 
 -- 唯一入口：往屏幕上放一条字
@@ -401,12 +844,36 @@ local function addText(kind, text, crit, spellName)
   if C().showSpellText == true and spellName then
     text = tostring(spellName) .. " " .. tostring(text)        -- 技能名纯文本（默认关）
   end
-  pcall(s.fs.SetText, s.fs, tostring(text))
   -- ★0.2.26：暴击伤害值变红（用户：「暴击的时候将伤害值变红色」）—— 判定走 critTxt（与动画开关解耦）；
   --   槽是复用的但颜色每次出生都重写 ⇒ 不会串色。
-  if s.critTxt == 1 then pcall(s.fs.SetTextColor, s.fs, 1, 0.15, 0.1)
-  else pcall(s.fs.SetTextColor, s.fs, kd.r, kd.g, kd.b) end
-  sizeApply(s.fs, s.tier, kind)                                -- ★分档字体对象（探针定案，见上）
+  local faR, faG, faB = kd.r, kd.g, kd.b
+  if s.critTxt == 1 then faR, faG, faB = 1, 0.15, 0.1 end
+  local faTxt = tostring(text)
+  -- ★0.2.29 图集优先（R4）：**整条都能用图集画**才走图集（含中文/字母/空格一律回落客户端字体 ⇒ 老行为不变）
+  s.faTxt, s.faUsed = nil, false
+  if C().fontAtlas == true and faEnsure() and faTextOK(faTxt) then
+    -- ★0.2.31 E：峰值会超过基准尺寸时才挑更高的档图（见 faPeakTier）；基准视觉尺寸一个字都不变
+    --   ★0.2.34 峰值口径收进 faPeakFactor（初始缩放 >100% 也会算进峰值；暴击再乘鼓包幅度）
+    local layTier, layPct = s.tier, faPct()
+    local useTier = faPeakTier(s.tier, faPeakFactor(s.crit == 1))
+    if useTier ~= s.tier then
+      layTier = useTier
+      layPct = layPct * (D.TIER_H[s.tier] or 24) / (D.TIER_H[useTier] or 24)
+    end
+    if faLayout(s, faTxt, layTier, layPct, faR, faG, faB) then
+      s.faTxt, s.faUsed = faTxt, true
+    end
+  end
+  if s.faUsed then
+    pcall(s.fs.SetText, s.fs, "")        -- 文字让位给数字格（两套绝不叠着画）
+    s._faCol = { faR, faG, faB }         -- 换描边风格时要在原地重排，颜色沿用出生时那份
+  else
+    faClear(s)                           -- 槽复用：换回文字行时把上次的数字格收起
+    pcall(s.fs.SetText, s.fs, faTxt)
+  end
+  pcall(s.fs.SetTextColor, s.fs, faR, faG, faB)
+  s._ascii = isAsciiOnly(faTxt)               -- ★含中文的整条必须走中文字体（否则名字渲染成空白）
+  sizeApply(s.fs, s.tier, kind, s._ascii)                      -- ★分档字体对象（探针定案，见上）
   s._tier = s.tier
   -- 技能图标（0.2.4）：锚在文字左缘；查不到/没传/关着就不画（绝不画 ? 图）
   local icon = (C().showIcon ~= false) and iconOf(spellName) or nil
@@ -415,10 +882,17 @@ local function addText(kind, text, crit, spellName)
     local sz = math.max(6, math.floor((D.TIER_H[s.tier] or 24) * (D.ICON_RATIO or 0.45) + 0.5))
     pcall(s.ic.SetTexture, s.ic, icon)
     pcall(s.ic.SetWidth, s.ic, sz) pcall(s.ic.SetHeight, s.ic, sz)
-    pcall(s.ic.SetPoint, s.ic, "RIGHT", s.fs, "LEFT", -2, D.ICON_DY or 0)
+    -- ★图集行没有 FontString 文字 ⇒ 锚到**数字组的左缘**（否则图标会飘到空格子的左缘上压住数字）
+    if s.faUsed then
+      pcall(s.ic.SetPoint, s.ic, "RIGHT", s.f, "CENTER", -(s.faW or 0) / 2 - 2, D.ICON_DY or 0)
+    else
+      pcall(s.ic.SetPoint, s.ic, "RIGHT", s.fs, "LEFT", -2, D.ICON_DY or 0)
+    end
     pcall(s.ic.Show, s.ic)
+    s.icShown, s.icBase = true, sz      -- ★0.2.31 缩放动画要用基准尺寸（图标跟数字一起缩、一起重锚）
   else
     pcall(s.ic.Hide, s.ic)
+    s.icShown, s.icBase = false, nil
   end
   pcall(s.f.SetAlpha, s.f, 0)
   pcall(s.f.SetPoint, s.f, "CENTER", UIParent, "CENTER", s.x0, s.y0)
@@ -443,10 +917,14 @@ local function tick()
         slotRelease(s)
       else
         -- 透明度：前 10% smoothstep 淡入，后 50% smoothstep 淡出
-        local a
-        if t < s.dur * 0.1 then a = smoothstep(t / (s.dur * 0.1))
-        elseif t > s.dur * 0.5 then a = 1 - smoothstep((t - s.dur * 0.5) / (s.dur * 0.5))
-        else a = 1 end
+        --   ★0.2.35 顺手把**淡出进度 `fo`** 留下来喂给缩放动画（尾声缩小与淡出同相位 ⇒ 
+        --   「缩小切隐藏」= 缩到位那一刻正好也是 t≥dur 收槽那一刻，绝不出现「先缩没、又空飘一会儿」）
+        local a, fo
+        if t < s.dur * 0.1 then a = smoothstep(t / (s.dur * 0.1)) fo = 0
+        elseif t > s.dur * 0.5 then
+          fo = smoothstep((t - s.dur * 0.5) / (s.dur * 0.5))
+          a = 1 - fo
+        else a = 1 fo = 0 end
         -- 位移（绝对时间驱动：t = now - t0，与帧率无关）
         local x, y = s.x0, s.y0
         if s.dir == "down" then
@@ -518,10 +996,17 @@ local function tick()
           if y > hy then y = hy elseif y < -hy then y = -hy end
         end
         -- 暴击：0.35s 窗口内抬一档（特大封顶），窗口外落回配置档 —— 档位制下的「缩放」语义
-        if s.crit == 1 then
+        --   ★0.2.31：**只对文字行**保留抬档；图集行改成**平滑缩放鼓包**（见 faScaleTick）——
+        --   纹理本来就能连续缩放，硬跳档反而每 0.35s 多做一次整组重排（换图 + 逐格重写）。
+        if s.crit == 1 and not (s.faUsed and s.faTxt) then
           local wantTier = (t < 0.35) and math.min(table.getn(D.TIER), (s.tier or 3) + 1) or (s.tier or 3)
-          if wantTier ~= s._tier then s._tier = wantTier sizeApply(s.fs, wantTier, s.kind) end
+          if wantTier ~= s._tier then
+            s._tier = wantTier
+            sizeApply(s.fs, wantTier, s.kind, s._ascii)
+          end
         end
+        -- ★0.2.31 图集行缩放动画（出生弹入 + 暴击鼓包 + **0.2.35 尾声缩小**）：只补发几何，写前比对 ⇒ 稳态一个 Set* 都不发
+        faScaleTick(s, t, fo)
         pcall(s.f.SetPoint, s.f, "CENTER", UIParent, "CENTER", x, y)
         pcall(s.f.SetAlpha, s.f, clamp01(a))
         s.cy = y                                        -- 当前 y（防重叠取「离锚点最近一条」要用）
@@ -679,6 +1164,9 @@ EVH["CHAT_MSG_SPELL_HOSTILEPLAYER_BUFF"]  = function(m)
   local who = string.match(m, "^你因%s*(.-)%s*的") or string.match(m, "^%s*(.-)%s*的")
   local sp = string.match(m, "^你因%s*.-的%s*(.-)%s*而") or string.match(m, "^.-的%s*(.-)%s*治疗你")
           or string.match(m, "^.-的%s*(.-)%s*使")
+  -- ★0.2.29 空名字不给空括号（真机截图里出现过「+298 []」：`^你因的…` 这类句式会捕获到**空串**，
+  --   而空串在 Lua 里是真值 ⇒ 旧写法就画出一对空方括号）
+  if who == "" then who = nil end
   addText("heal", "+" .. n .. (who and (" [" .. who .. "]") or ""), 0, sp)
 end
 EVH["CHAT_MSG_SPELL_PARTY_BUFF"]         = EVH["CHAT_MSG_SPELL_HOSTILEPLAYER_BUFF"]
@@ -869,11 +1357,60 @@ D.simOn = false
 D.simNext = 0
 D.simIdx = 0
 
+-- ----------------------------------------------------------------------------
+-- ★0.2.32 模拟战斗的**技能名池**（用户：「模拟战斗的时候随便添加个攻击技能的图标做图标和文字的测试案例」）
+--   以前模拟战斗**一个 spellName 都不传** ⇒ 图标通道从来没被它覆盖到（0.2.31 图标跟着数字一起缩放后更需要它）。
+--   三条纪律：① 候选**必须真的能解析出图标**才入池（名字写错 / 这个角色没学过 = 静默不画图 ⇒ 这个测试案例等于没测）；
+--   ② `D.iconScan` 重扫法术书后**按缓存对象身份重新过滤**（学了新技能不用 /reload）；
+--   ③ 一个都解析不出 ⇒ **退回不带名字**（宁可没有图标，也绝不画错图）+ 如实说一次。
+-- ----------------------------------------------------------------------------
+local SIM_SKILLS = {
+  atk = { "英勇打击", "致死打击", "背刺", "邪恶攻击", "火球术", "冰霜震击", "闪电箭", "自动射击", "猛击", "斩击" },
+  pet = { "撕咬", "爪击", "冲锋", "低吼", "闪电吐息" },
+}
+local SIM_POOL, SIM_POOL_CACHE, SIM_NO_SAY = nil, nil, false
+
+local function simPoolEnsure()
+  if SIM_POOL and SIM_POOL_CACHE == D.iconCache then return end
+  SIM_POOL = { atk = {}, pet = {} }
+  SIM_POOL_CACHE = D.iconCache
+  local hit = 0
+  for k, list in pairs(SIM_SKILLS) do
+    for i = 1, table.getn(list) do
+      if iconOf(list[i]) then table.insert(SIM_POOL[k], list[i]) hit = hit + 1 end
+    end
+  end
+  if hit == 0 and not SIM_NO_SAY then
+    SIM_NO_SAY = true
+    say("模拟战斗：法术书里没有候选技能 ⇒ 样例只测文字、不配图标（学一个候选技能，或改 SIM_SKILLS 候选表）")
+  end
+end
+-- 取一个（轮转）**能解析出图标**的技能名；该类池空 ⇒ 退回攻击池；两池都空 ⇒ nil（退回无图标）
+local function simSkill(cls)
+  simPoolEnsure()
+  local pool = SIM_POOL or {}
+  local list = pool[cls]
+  if (not list or table.getn(list) == 0) and cls ~= "atk" then list = pool.atk end
+  if not list or table.getn(list) == 0 then return nil end
+  D.simSkillIdx = ((D.simSkillIdx or 0) % table.getn(list)) + 1
+  return list[D.simSkillIdx]
+end
+-- 池子的一行人话（开关播报与 `/edmg 状态` **共用同一份**，绝不各拼一遍）
+local function simPoolLine()
+  simPoolEnsure()
+  local atk = (SIM_POOL and SIM_POOL.atk) or {}
+  local pet = (SIM_POOL and SIM_POOL.pet) or {}
+  if table.getn(atk) == 0 and table.getn(pet) == 0 then return "无（只测文字、不配图标）" end
+  local s = table.concat(atk, "/")
+  if table.getn(pet) > 0 then s = s .. " ｜ 宠物：" .. table.concat(pet, "/") end
+  return s
+end
+
 local SIM_SEQ = {
-  { kind = "damage",    fn = function() return tostring(math.random(80, 900)) end, crit = 0 },
-  { kind = "damage",    fn = function() return tostring(math.random(400, 1600)) end, crit = 1 },
-  { kind = "dot",       fn = function() return tostring(math.random(20, 120)) .. " ·持续" end, crit = 0 },
-  { kind = "pet",       fn = function() return tostring(math.random(30, 220)) .. " ·宠物" end, crit = 0 },
+  { kind = "damage",    fn = function() return tostring(math.random(80, 900)) end, crit = 0, sk = "atk" },
+  { kind = "damage",    fn = function() return tostring(math.random(400, 1600)) end, crit = 1, sk = "atk" },
+  { kind = "dot",       fn = function() return tostring(math.random(20, 120)) .. " ·持续" end, crit = 0, sk = "atk" },
+  { kind = "pet",       fn = function() return tostring(math.random(30, 220)) .. " ·宠物" end, crit = 0, sk = "pet" },
   { kind = "heal",      fn = function() return "+" .. math.random(100, 600) .. " [治疗者甲]" end, crit = 0 },
   { kind = "incoming",  fn = function() return "-" .. math.random(50, 400) end, crit = 0 },
   { kind = "auraGain",  fn = function() return "+ 奥术智慧" end, crit = 0 },
@@ -898,7 +1435,12 @@ local function simFire()
     local e = SIM_SEQ[D.simIdx]
     local gate = KIND_ITEM[e.kind]
     if not gate or itemOn(gate) then
-      addText(e.kind, e.fn(), e.crit)
+      -- ★0.2.32 第 4 参 = 技能名 ⇒ 走**图标通道**（`iconOf` 查法术书缓存；池空时 simSkill 返回 nil
+      --   ⇒ 退回无图标，与老行为一字不差）。★图标行/文字行两条路都覆盖：开着「技能名文本」时
+      --   文本含中文 ⇒ 该行走 FontString 且图标锚在文字左缘；关着时纯数字走图集、图标锚数字组左缘。
+      local sp = nil
+      if e.sk then sp = simSkill(e.sk) end
+      addText(e.kind, e.fn(), e.crit, sp)
       return
     end
   end
@@ -979,6 +1521,18 @@ local function editSet(on)
 end
 D.editSet = editSet
 
+-- ★0.2.32 模拟战斗的**唯一开关口**（面板「模拟战斗」按钮与 `/edmg 模拟` 共用）
+--   —— 以前两处各写一遍「翻转 + 必要时进编辑模式 + 清 simNext + 播报」，改一处漏一处；
+--   现在播报里还会**如实点出用哪些样例技能**（池空就直说「一个都解析不出」）。
+function D.simSet(on)
+  D.simOn = on and true or false
+  if D.simOn and not D.editOn then editSet(true) end
+  D.simNext, D.simIdx = 0, 0
+  if type(D.uiRefresh) == "function" then D.uiRefresh() end
+  if not D.simOn then say("模拟战斗：关") return end
+  say("模拟战斗：开（编辑锚点处持续放样例数字 · 样例技能：" .. simPoolLine() .. "）")
+end
+
 -- 编辑模式的每拍（由 tick 在 editOn 时调用）
 function D.editTick(now)
   -- 拖拽推进：读光标 + 键状态收尾（GetCursorPosition 与 SetPoint 同单位是本客户端既有口径，真机复核）
@@ -1043,6 +1597,18 @@ local function uiRefresh()
   -- ★0.2.28（同版收口）受击下移**只显示整数**（用户：「受击位移只 int 类型处理下不需要保留小数位」）
   local inV = math.floor((tonumber(c.inOffY) or DEF.inOffY) + 0.5)
   pcall(ui.inText.SetText, ui.inText, tostring(inV))
+  pcall(ui.faText.SetText, ui.faText, tostring(tonumber(c.faScale) or 100) .. "%")
+  -- ★0.2.30 描边风格：显示中文名 + id（表里没有这种风格的度量时如实点出来，绝不假装换过）
+  pcall(ui.faEdgeText.SetText, ui.faEdgeText,
+    (D.FAS_ZH[D.faStyleNow()] or D.faStyleNow()) .. (D.faEdgeOK() and "" or "（表里没有）"))
+  -- ★0.2.31 缩放动画：曲线名 + 幅度%（0 = 关，显示成「关」比显示 0% 直观）；★0.2.34 加初始缩放
+  pcall(ui.acText.SetText, ui.acText, CURVE_ZH[c.animCurve or DEF.animCurve] or tostring(c.animCurve))
+  local aa = tonumber(c.animAmp) or DEF.animAmp
+  pcall(ui.aaText.SetText, ui.aaText, (aa <= 0) and "关" or (tostring(aa) .. "%"))
+  local an = tonumber(c.animStart) or DEF.animStart
+  pcall(ui.anStartText.SetText, ui.anStartText, (an == 100) and "不弹入" or (tostring(an) .. "%"))
+  local ae = tonumber(c.animEnd) or DEF.animEnd
+  pcall(ui.anEndText.SetText, ui.anEndText, (ae <= 0) and "不缩" or (tostring(ae) .. "%"))
   pcall(ui.editText.SetText, ui.editText, D.editOn and "编辑模式：开" or "编辑模式：关")
   pcall(ui.simText.SetText, ui.simText, D.simOn and "模拟战斗：开" or "模拟战斗：关")
   pcall(ui.masterMk.Show, ui.masterMk)
@@ -1052,8 +1618,8 @@ end
 local function uiBuild()
   if ui.built then return true end
   if type(CreateFrame) ~= "function" then return false end
-  local W, H = 470, 448                  -- ★0.2.28 高度重算（参数 3 行 → 4 行，+24）：
-                                         --   表头+总开关 62 + 勾选 10 行 220 + 参数 4 行 110 + 按钮/备注 ~56
+  local W, H = 470, 520                  -- ★0.2.35 高度重算（参数 6 行 → 7 行，+24）：
+                                         --   表头+总开关 62 + 勾选 10 行 220 + 参数 7 行 182 + 按钮/备注 ~56
   local root = CreateFrame("Frame", "EH_DMG_UI", UIParent)
   root:SetWidth(W) root:SetHeight(H)
   root:SetPoint("CENTER", UIParent, "CENTER", ui.px, ui.py)
@@ -1153,6 +1719,9 @@ local function uiBuild()
     get = function() return C().showIcon ~= false end, set = function(v) C().showIcon = v and true or false end })
   table.insert(TOGGLES, { zh = "技能名文本",
     get = function() return C().showSpellText == true end, set = function(v) C().showSpellText = v and true or false end })
+  -- ★0.2.29 网格最后一个空位（第 20 格）：战斗数字改用**插件自带字体图集**（R4；默认关）
+  table.insert(TOGGLES, { zh = "自带字体图集",
+    get = function() return C().fontAtlas == true end, set = function(v) D.fontAtlasSet(v) end })
   local GRID_ROWS = 10
   local y0 = -62
   for i, tg in ipairs(TOGGLES) do
@@ -1213,19 +1782,47 @@ local function uiBuild()
     local cur = math.floor((tonumber(c.inOffY) or DEF.inOffY) + 0.5)
     c.inOffY = math.max(D.INOFF_MIN, math.min(D.INOFF_MAX, cur + d * 10))
   end)
-  py = py - 96
+  -- ★0.2.29 图集缩放（图集模式的**连续**字号微调；档位管粗调 = 换更粗的一档图）
+  ui.faText = paramCell("图集缩放", PX2, py - 72, function(d)
+    local c = C()
+    c.faScale = math.max(D.FAS_MIN, math.min(D.FAS_MAX, (tonumber(c.faScale) or 100) + d * 5))
+  end)
+  -- ★0.2.30 图集描边风格（用户：「字体黑色边框能换个吗?美化一点吗?」）—— ± 循环（写口 = D.faStyleSet）
+  ui.faEdgeText = paramCell("描边样式", PX1, py - 96, function(d) D.faStyleStep(d) end)
+  -- ★0.2.34 初始缩放（出生弹入的起点；用户：「伤害文字初始出现缩放增加可缩放参数」）—— 占第 5 行**空着的右格**
+  --   （正好在「缩放幅度」正上方 ⇒ 两个缩放参数挨着，面板高度不用变）
+  ui.anStartText = paramCell("初始缩放", PX2, py - 96, function(d)
+    local c = C()
+    local cur = tonumber(c.animStart) or DEF.animStart
+    c.animStart = math.max(D.ANS_MIN, math.min(D.ANS_MAX, cur + d * 5))
+  end)
+  -- ★0.2.31 缩放动画（**只对图集行生效** —— 文字行的缩放通道已被真机证死，见文件头注释）：
+  --   左格 = 缓动曲线（与「滚动方向→曲线」共用 CURVES 表），右格 = 幅度%（**0 = 关掉缩放动画**）
+  ui.acText = paramCell("缩放曲线", PX1, py - 120, function(d)
+    local c = C()
+    local i = 1
+    for k, v in ipairs(CURVE_ORD) do if v == (c.animCurve or DEF.animCurve) then i = k break end end
+    local n = table.getn(CURVE_ORD)
+    c.animCurve = CURVE_ORD[((i - 1 + (d or 1)) % n) + 1]
+  end)
+  ui.aaText = paramCell("暴击幅度", PX2, py - 120, function(d)     -- ★0.2.34 改名：它现在只管暴击鼓包
+    local c = C()
+    local cur = tonumber(c.animAmp) or DEF.animAmp
+    c.animAmp = math.max(D.ANIM_MIN, math.min(D.ANIM_MAX, cur + d * 5))
+  end)
+  -- ★0.2.35 尾声缩小（淡出那一段同步缩小，到点随槽一起收掉 = 「缩小切隐藏」）—— 第 7 行左格
+  ui.anEndText = paramCell("尾声缩小", PX1, py - 144, function(d)
+    local c = C()
+    local cur = tonumber(c.animEnd) or DEF.animEnd
+    c.animEnd = math.max(D.AEN_MIN, math.min(D.AEN_MAX, cur + d * 5))
+  end)
+  py = py - 168
 
   -- 底部按钮
   local by = py - 6
   local e1; e1, ui.editText = uiSolidBtn(root, "编辑模式", 96, 20, function() editSet(not D.editOn) uiRefresh() end)
   e1:SetPoint("TOPLEFT", root, "TOPLEFT", 18, by)
-  local e2; e2, ui.simText = uiSolidBtn(root, "模拟战斗", 96, 20, function()
-    D.simOn = not D.simOn
-    if D.simOn and not D.editOn then editSet(true) end
-    D.simNext = 0
-    uiRefresh()
-    say("模拟战斗：" .. (D.simOn and "开（编辑锚点处持续放样例数字）" or "关"))
-  end)
+  local e2; e2, ui.simText = uiSolidBtn(root, "模拟战斗", 96, 20, function() D.simSet(not D.simOn) end)
   e2:SetPoint("TOPLEFT", root, "TOPLEFT", 122, by)
   local e3 = uiSolidBtn(root, "重置位置", 84, 20, function()
     local c = C() c.posX, c.posY, c.inOffY = DEF.posX, DEF.posY, DEF.inOffY
@@ -1259,6 +1856,7 @@ local function uiToggle()
   if ui.root:IsShown() then pcall(ui.root.Hide, ui.root)
   else uiRefresh() pcall(ui.root.Show, ui.root) end
 end
+D.uiRefresh = uiRefresh          -- ★0.2.29：给 D.fontAtlasSet 用（表字段 = 晚绑定，绝不写裸 local 名）
 D.uiToggle = uiToggle
 
 -- 面板拖拽推进（由唯一节拍帧 tick 驱动；不再立第二个节拍帧）
@@ -1327,13 +1925,7 @@ local function cmd(msg)
   local sub = string.lower(msg)
   if sub == "" or sub == "ui" then uiToggle() return end
   if sub == "编辑" or sub == "edit" then editSet(not D.editOn) uiRefresh() return end
-  if sub == "模拟" or sub == "sim" then
-    D.simOn = not D.simOn
-    if D.simOn and not D.editOn then editSet(true) end
-    D.simNext = 0
-    say("模拟战斗：" .. (D.simOn and "开" or "关"))
-    return
-  end
+  if sub == "模拟" or sub == "sim" then D.simSet(not D.simOn) return end
   if sub == "开" or sub == "on" then setMaster(true) return end
   if sub == "关" or sub == "off" then setMaster(false) return end
   if sub == "捕获" or sub == "capture" then
@@ -1359,8 +1951,15 @@ local function cmd(msg)
         tostring(math.floor((tonumber(c.posY) or 0) + 0.5)) .. ")" ..
       " 受击下移=" .. tostring(math.floor((tonumber(c.inOffY) or DEF.inOffY) + 0.5)) ..
       " 上限=" .. tostring(tonumber(c.clampPct) or 30) .. "%" ..
+      " 图集=" .. (c.fontAtlas == true and "开" or "关") .. "/" .. tostring(tonumber(c.faScale) or 100) .. "%" ..
+      "/" .. (D.FAS_ZH[D.faStyleNow()] or D.faStyleNow()) ..
+      " 缩放动画=" .. (CURVE_ZH[c.animCurve or DEF.animCurve] or "?") .. "/" ..
+        ((tonumber(c.animAmp) or DEF.animAmp) <= 0 and "关" or (tostring(tonumber(c.animAmp) or DEF.animAmp) .. "%")) ..
+        "/初始" .. tostring(tonumber(c.animStart) or DEF.animStart) .. "%" ..
+        "/尾声" .. tostring(tonumber(c.animEnd) or DEF.animEnd) .. "%" ..
       " 槽=" .. D.poolN .. "/" .. POOL_MAX ..
       " 编辑=" .. (D.editOn and "开" or "关") .. " 模拟=" .. (D.simOn and "开" or "关") ..
+      " 模拟技能=" .. simPoolLine() ..
       " v" .. BUILD)
     return
   end
@@ -1371,7 +1970,74 @@ local function cmd(msg)
     say("已放 3 条测试字")
     return
   end
-  say("命令：/edmg ui · 编辑 · 模拟 · 开|关 · 捕获 · 事件 · 状态 · 测试")
+  -- ★0.2.29/0.2.30 图集体检（一条命令、零步骤、只读落盘）：读表 · 逐档探贴图能不能加载（带负对照）
+  --   ★0.2.30 加一段「**每种风格**各探一张（tier1）」⇒ 换风格后文件没同步过来这一句话就能看出来。
+  if sub == "图集" or sub == "atlas" then
+    local ok = faEnsure()
+    local c = C()
+    local st = faStyleNow()
+    local head = "自带字体图集：开关=" .. (c.fontAtlas == true and "开" or "关") ..
+      " 缩放=" .. tostring(tonumber(c.faScale) or 100) .. "%" ..
+      " 描边=" .. (D.FAS_ZH[st] or st) .. "(" .. st .. ")" ..
+      " 表=" .. (ok and (tostring(FA.N) .. " 档 / " .. tostring(FA.nch) .. " 字符" ..
+        (FA.tiers[1] and FA.tiers[1].st and " / 多风格" or " / 单风格(旧表)")) or "读不到 FontDigits.lua")
+    say(head)
+    -- 负对照：同目录、同后缀、不可能存在的名字（本客户端对「不存在」也可能报非 0 尺寸 ⇒ 判不出）
+    local neg = faProbeTex("Interface\\AddOns\\EH_Damage\\media\\__no_such_digits.tga")
+    ringPush("FA " .. head .. " ｜ 负对照读回宽=" .. tostring(neg))
+    -- 逐档（**当前风格**）：读回宽必须 == 该风格自己的表宽（否则就是切边/取错风格）
+    local bad = 0
+    for i = 1, math.min(FA.N, 12) do
+      local t = FA.tiers[i]
+      local file, W = faMetrics(t, st)
+      local w = faProbeTex(file)
+      local fit = (w == nil or not W or w == W) and "对" or "★不符"
+      if not w or (W and w ~= W) then bad = bad + 1 end
+      ringPush("FA tier" .. tostring(i) .. " 风格=" .. st .. " 表宽=" .. tostring(W) ..
+        " 读回宽=" .. tostring(w) .. " " .. fit .. " ｜ " .. tostring(file))
+      say("  " .. tostring(i) .. " 档（" .. (D.FAS_ZH[st] or st) .. "）：读回宽=" .. tostring(w) ..
+        "（表宽=" .. tostring(W) .. " " .. fit .. "）")
+    end
+    -- 每种风格各探 tier1 一张（换风格的文件没同步 ⇒ 这一行当场看得出来）
+    local line = "各风格 tier1 探针："
+    for _, id in ipairs(D.FAS_ORD) do
+      local file, W = faMetrics(FA.tiers[1], id)
+      local w = faProbeTex(file)
+      line = line .. " " .. id .. "=" .. tostring(w) .. "/" .. tostring(W) ..
+        ((type(file) == "string" and w and W and w == W) and "" or "(★)")
+    end
+    say(line)
+    ringPush("FA " .. line)
+    say(neg and "★探针不可信（负对照也报出宽）⇒ 以屏上实际效果为准" or "探针可信（负对照读不到宽）")
+    if ok then addText("damage", "1234567", 0) say("已放 1 条样例数字（当前档位 + 当前描边）") end
+    if bad > 0 then say("有 " .. tostring(bad) .. " 档探不到贴图或表宽不符（文件没同步到游戏目录？）") end
+    return
+  end
+  if sub == "图集开" or sub == "图集关" then
+    D.fontAtlasSet(sub == "图集开")
+    return
+  end
+  -- ★0.2.30 描边风格：`/edmg 描边` 列当前 + 全部可选；`/edmg 描边 soft` 直接设（id 或中文名都认）
+  --   ★参数从**已小写归一**的整串里抠（多字节「描边」当字面量安全 —— 危险的是 `[...]` 字节集）
+  local edgeArg = string.match(sub, "^描边%s+(.*)$") or string.match(sub, "^edge%s+(.*)$")
+  if sub == "描边" or sub == "edge" or edgeArg then
+    local a = edgeArg or ""
+    if a == "" then
+      local line = "描边风格：" .. (D.FAS_ZH[D.faStyleNow()] or "?") .. "（" .. D.faStyleNow() .. "）"
+      for _, id in ipairs(D.FAS_ORD) do
+        line = line .. " · " .. id .. "=" .. (D.FAS_ZH[id] or id)
+      end
+      say(line)
+      say(faEdgeOK() and "当前风格在表里有独立度量（FontDigits.lua 是新版）"
+        or "★FontDigits.lua 里没有多风格度量 ⇒ 实际用的是硬描边（重跑 python tmp/gen_fontatlas.py 并同步）")
+      return
+    end
+    if not D.faStyleSet(a) then
+      say("认不出这种风格：" .. a .. "（可选 soft/hard/glow/shadow/plain，或中文名）")
+    end
+    return
+  end
+  say("命令：/edmg ui · 编辑 · 模拟 · 开|关 · 捕获 · 事件 · 状态 · 测试 · 图集 · 描边 [风格]")
 end
 D.cmd = cmd
 
@@ -1401,15 +2067,33 @@ function _G.EVAL_EDMG_STATE()
   local c = C()
   local active = 0
   for i = 1, D.poolN do if D.pool[i].active then active = active + 1 end end
+  simPoolEnsure()          -- ★0.2.32 模拟战斗会用的样例技能（真实解析出来的；读取口顺带刷一次池）
   return {
     version = BUILD, master = c.master, direction = c.direction,
     fontTier = c.fontTier, speed = c.speed, duration = c.duration,
     posX = c.posX, posY = c.posY, inOffY = tonumber(c.inOffY) or DEF.inOffY,
     inOffMin = D.INOFF_MIN, inOffMax = D.INOFF_MAX, clampPct = tonumber(c.clampPct) or 30,
     inAnchor = (D.editUI and D.editUI.g) and true or false,
+    -- ★0.2.29 自带字体图集（R4）：开关 / 缩放 / 表读到了没 / 档数 / 字符数
+    fontAtlas = (c.fontAtlas == true), faScale = tonumber(c.faScale) or 100,
+    faScaleMin = D.FAS_MIN, faScaleMax = D.FAS_MAX,
+    -- ★0.2.30 描边风格：当前 id / 全部可选 / 表里有没有这种风格的独立度量
+    faEdge = D.faStyleNow(), faEdgeList = table.concat(D.FAS_ORD, ","), faEdgeOK = D.faEdgeOK(),
+    -- ★0.2.31 缩放动画（图集行）：曲线 / 幅度% / 两段时长 / 幅度上下限（0 = 关）
+    -- ★0.2.34 加**初始缩放**（出生弹入起点；100 = 不弹入）与峰值口径
+    animCurve = (c.animCurve or DEF.animCurve), animAmp = tonumber(c.animAmp) or DEF.animAmp,
+    animStart = tonumber(c.animStart) or DEF.animStart,
+    animStartMin = D.ANS_MIN, animStartMax = D.ANS_MAX,
+    -- ★0.2.35 尾声缩小（与淡出同相位）
+    animEnd = tonumber(c.animEnd) or DEF.animEnd, animEndMin = D.AEN_MIN, animEndMax = D.AEN_MAX,
+    animMin = D.ANIM_MIN, animMax = D.ANIM_MAX, popSec = D.FA_POP_SEC, critSec = D.FA_CRIT_SEC,
+    faOK = faEnsure(), faN = FA.N, faChars = FA.nch,
     pool = D.poolN, active = active,
     shapeN = shapeCount(),                        -- 句形环已记多少种（真机取证口）
     editOn = D.editOn, simOn = D.simOn, ring = table.getn(c.ring or {}),
+    -- ★0.2.32 模拟战斗的样例技能池（都已确认能解析出图标 ⇒ 池空就是真没图标可配）
+    simAtk = table.concat((SIM_POOL and SIM_POOL.atk) or {}, ","),
+    simPet = table.concat((SIM_POOL and SIM_POOL.pet) or {}, ","),
     tickAttached = (D.frame ~= nil), build = BUILD,
   }
 end

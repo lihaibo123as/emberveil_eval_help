@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.75.109"
+local VERSION = "1.75.110"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -6042,7 +6042,7 @@ function SE_AURA_MENU(k0, cd)
   -- ③ 其余技能名（垫底；光环条件下它们大多不是光环，但保留以便手工指定）
   local rest = {}
   for _, n in ipairs(EVAL_GO_SKILL_CHOICES()) do
-    if not petCmdOf(n) and not targetSelOf(n) and not itemOf(n) and not stanceOf(n) and not cancelCastOf(n) and not stopAllOf(n) and not followOf(n) then
+    if not petCmdOf(n) and not targetSelOf(n) and not itemOf(n) and not stanceOf(n) and not cancelCastOf(n) and not stopAllOf(n) and not followOf(n) and not EVAL_STOPFOLLOW_OF(n) then
       table.insert(rest, n)
     end
   end
@@ -6635,7 +6635,7 @@ function EVAL_HELP_SE_REFRESH()
   if seUI.catName then -- 分类按钮文字 = 当前技能所属类（1.32.3）
     local cl = { L("SK_CAT_1"), L("SK_CAT_2"), L("SK_CAT_3"), L("SK_CAT_4"), L("SK_CAT_5"), L("SK_CAT_6"), L("SK_CAT_7") }
     local ci = 2
-    if ed.skill == "攻击" or ed.skill == "自动射击" or ed.skill == "射击" or cancelCastOf(ed.skill) or stopAllOf(ed.skill) or followOf(ed.skill) or stanceOf(ed.skill) then ci = 1
+    if ed.skill == "攻击" or ed.skill == "自动射击" or ed.skill == "射击" or cancelCastOf(ed.skill) or stopAllOf(ed.skill) or followOf(ed.skill) or EVAL_STOPFOLLOW_OF(ed.skill) or stanceOf(ed.skill) then ci = 1
     elseif petCmdOf(ed.skill) then ci = 3
     elseif targetSelOf(ed.skill) then ci = 4
     elseif itemOf(ed.skill) then ci = 5
@@ -6971,7 +6971,7 @@ local function SE_BUILD()
   -- 技能选择行（1.32.3 二级下拉 UI）：[分类▾] [图标] [具体项▾]　启用
   -- 分类按钮在左（替代旧"技能:"标签位），项按钮在右——点哪个弹哪级，所见即两级
   local function seCatOfSkill(skill) -- 技能名 → 分类序号（EVAL_GO_SKILL_CATEGORIES 顺序）
-    if skill == "攻击" or skill == "自动射击" or skill == "射击" or cancelCastOf(skill) or stopAllOf(skill) or followOf(skill) or stanceOf(skill) then return 1 end
+    if skill == "攻击" or skill == "自动射击" or skill == "射击" or cancelCastOf(skill) or stopAllOf(skill) or followOf(skill) or EVAL_STOPFOLLOW_OF(skill) or stanceOf(skill) then return 1 end
     if petCmdOf(skill) then return 3 end
     if targetSelOf(skill) then return 4 end
     if itemOf(skill) then return 5 end
@@ -8641,7 +8641,7 @@ function EVAL_PROFILE_FROM_TEXT(text)
         --   （如「物品:治疗药水(大)」「跟随:某人(等级 2)」）——拆开 = **静默改义**（技能名被改、行为被改，
         --   而导入侧与使用侧都不报错）。★只有真法术名才可能带官方等级括号，才允许拆。
         --   ★判据：本守卫 + 断言组 111（前缀名带括号 → 逐字保留；真法术名 → 照拆）。
-        if not (itemOf(sn) or petCmdOf(sn) or stanceOf(sn) or followOf(sn) or targetSelOf(sn) or cancelCastOf(sn) or stopAllOf(sn)) then
+        if not (itemOf(sn) or petCmdOf(sn) or stanceOf(sn) or followOf(sn) or EVAL_STOPFOLLOW_OF(sn) or targetSelOf(sn) or cancelCastOf(sn) or stopAllOf(sn)) then
           local base2, rk2 = string.match(sn, "^(.-)%s*%(([^()]+)%)$")
           if base2 and base2 ~= "" and rk2 and rk2 ~= "" then sn, rank2 = condTrim(base2), condTrim(rk2) end
         end
@@ -11048,6 +11048,12 @@ if type(SlashCmdList) == "table" then
       say("免疫学习记录 " .. n .. " 条（/eh go immune clear 清空）:")
       for _, k in ipairs(keys) do say("  " .. k) end
     elseif msg == "go immune clear" then
+    elseif msg == "go 跟随" or string.find(msg or "", "^go 跟随") == 1
+        or string.find(msg or "", "^go follow") == 1 then
+      -- ★1.75.110 「取消跟随」的 API 调查 + 实测定案口（命令体在 tools/Probes.lua 的 PR["FOLLOW"]；
+      --   别名条件留在这里，命令发现顺序/唯一性判据不变）：
+      --   /eh go 跟随 = 只读体检 ｜ 跟随 试 [直调|绕行] = 真发一次 ｜ 跟随 记录/清 = 专属环
+      EVAL_PR_RUN("FOLLOW", msg)
     elseif msg == "go 停施法" or string.find(msg or "", "^go 停施法") == 1 then
       -- ★1.71.3 结论（用户两轮实测）：插件调 SpellStopCasting 在本客户端**只清本地进度条**、
       --   服务端读条照旧；「移动脉冲」实测同样无效（已删）。★用户判断这可能是**客户端 bug** →
@@ -11194,6 +11200,7 @@ if type(SlashCmdList) == "table" then
       fsay("/eh go 一键宏状态 | /eh go rescan 重扫动作条 | /eh debug 方案技能日志（/eh war 旧命令仍兼容）")
       fsay("/eh go probe 增益探针（逐条枚举自身 buff） | /eh go 光环 [名字] 光环定向探查 | /eh go diag 绑定链路一键取证（写盘，需 /reload）")
       fsay("/eh go 停施法 1|2|3 停读法取证（本客户端停读条 API 只有 Protected 的 SpellStopCasting）")
+      fsay("/eh go 跟随 取消跟随取证（只读体检；「跟随 试」真发一次 —— 先确认自己真的在跟随，再看有没有停下）")
       fsay("/eh go atk log [行数] 自动攻击流程取证（复查/键首/判定三类行；/eh go atk clear 清空）——演示前先 /eh wdebug 开方案技能日志")
       fsay("方案命令：/eh go list 查看 | go add 技能 条件 | go del N | go newprof 名 | go prof N | go rename 新名 | go delprof N")
       fsay("方案导入导出（md 文本复制粘贴）：/eh go io，内置案例模版按职业直接导入")

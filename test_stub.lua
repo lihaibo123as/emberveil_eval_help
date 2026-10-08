@@ -929,7 +929,11 @@ EVAL_TB_TEST_RESET_ACTIONBUTTON_GLOBALS()
 --   （两份桩已合并：上方那份保留 TEST.partyN/TEST.team 两种数据源）
 AttackTarget = function() TEST.attackTried = true end
 -- ★1.71.3 反向哨兵：这两条**故意留着**——停读条确认无法真中断（移动脉冲实测无效、已从生产代码删除），
---   断言用它们证明「我们**绝不**去动玩家角色」（调用了就让断言变红）。
+--   当年断言用它们证明「我们**绝不**去动玩家角色」（调用了就让断言变红）。
+--   ★★1.75.110 起这条哨兵**有了唯一一个明示例外**：用户点名的「取消跟随」行为（角色行为）走 `MoveForwardStop()`
+--   （本客户端没有停止跟随的专用 API；官方 Movement 页逐条注明移动类会 Cancels autofollow）⇒ 现在的口径是
+--   「**除「取消跟随」这一处外**，绝不去动玩家角色」：谁要在别处调用这两个桩，断言照旧该变红。
+--   ★桩计数保留（TEST.moveStart / TEST.moveStop）：既能让「取消跟随真的调了」可断言，也能继续当越权哨兵。
 MoveForwardStart = function() TEST.moveStart = (TEST.moveStart or 0) + 1 end
 MoveForwardStop = function() TEST.moveStop = (TEST.moveStop or 0) + 1 end
 UseAction = function(slot) table.insert(TEST.used, slot) end

@@ -549,6 +549,20 @@ PR["PROBERES"] = function(msg)
   end
 end
 
+PR["FOLLOW"] = function(msg)
+  -- ★1.75.110 「取消跟随」的 API 调查 + 实测定案口（用户要求：「角色行为:添加个取消跟随的行为.调查API 是否支持」）：
+  --   命令体在 Engine.lua 的 EVAL_FOLLOW_CMD（它要用 EVAL_STOP_FOLLOW / 专属环 / EVAL_SAY_FORCE），
+  --   本文件只做**薄分派**（同 TRACKPROBE / MELEE 那两条的写法：探针本体进模块、需要宿主内部件的就地留）。
+  --   /eh go 跟随            → 只读体检（接口 + 调查结论 + 机制 + 代价）
+  --   /eh go 跟随 试 [直调|绕行] → 真发一次（判读：看自己有没有停下自动跟随）
+  --   /eh go 跟随 记录 [条数] / 清 → 专属环 cfg.followProbe
+  local subF = string.gsub(msg or "", "^go%s*", "")
+  subF = string.gsub(subF, "^跟随%s*", "")
+  subF = string.gsub(subF, "^follow%s*", "")
+  if type(EVAL_FOLLOW_CMD) == "function" then EVAL_FOLLOW_CMD(subF)
+  else say("取消跟随探针：引擎未载入（EVAL_FOLLOW_CMD 不存在）") end
+end
+
 PR["ATK"] = function(msg)
   -- ★1.75.29 子命令 = **自动攻击流程取证环**（用户：「能否将自动攻击的内部流程添加一些日志.我这边方便演示」）：
   --   每拍记三类行（复查 / 键首 / 判定+按后读回），落 cfg.atkProbe（有界 40 行，已进 Core 残渣键清单）。

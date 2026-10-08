@@ -1071,6 +1071,12 @@ local LOAD_RESIDUE_KEYS = {
   --   只能真机回答，而聊天框读数（say）不落日志环 ⇒ 必须自带专属落盘（同 ecProbe/ipProbe 的教训）。
   --   ★本环只在用户主动跑 `/eh go 图层隐藏` 时写（日常勾选一个字都不写，不给普通玩家留残渣）。
   "layerFixProbe",
+  -- ★1.75.110 「取消跟随」的取证环（Engine.lua 的 FOLLOW_RING_MAX = 40 行，`/eh go 跟随 [试|记录|清]`）：
+  --   用户要求「角色行为:添加个取消跟随的行为.调查API 是否支持」—— 本客户端**没有**停止跟随的专用 API，
+  --   唯一机制是移动类（wiki 逐条注明 Cancels autofollow，但整页标 Protected）⇒ 「直调会不会被挡 / 走没走 RunScript /
+  --   客户端有没有真取消」三条**只能真机读**；而聊天框读数（say）不落日志环、共享 100 环又会被 [DS] 冲掉
+  --   ⇒ 必须自带专属落盘（同 ecProbe/ipProbe 的教训）。★只在真执行或用户敲命令时写，日常一个字节都不写。
+  "followProbe",
 }
 
 function EVAL_LOAD_RESIDUE_KEYS() return LOAD_RESIDUE_KEYS end
