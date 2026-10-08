@@ -22,7 +22,7 @@
 --   · 字体链 FZLBJW→FRIZQT→ARIALN 全程 pcall；FontString 不吃鼠标 ⇒ 热区用透明 Button。
 -- ============================================================================
 
-local BUILD = "0.2.27"
+local BUILD = "0.2.28"
 
 local D = {}                      -- 命名空间（跨函数共享件全挂这里，控 local 数）
 _G["EH_DMG"] = D                  -- 调试/桥接口（子插件独立，不依赖宿主）
@@ -89,9 +89,15 @@ local DEF = {
   showIcon = true,         -- 技能图标（法术书名→图标缓存，查不到就不画）
   showSpellText = false,   -- 技能名纯文本（默认关；开了 = 「撕裂 9」「次级治疗术 +154」这样带名字）
   posX = 0, posY = -60,    -- 主锚点（屏幕中心偏移，逻辑单位）
-  inOffY = -170,           -- 受到伤害行的额外下移
+  -- ★0.2.28 受击锚点下移量（用户真机报障「受到的伤害数字太下面的，距离锚点太远了」）：
+  --   旧默认 -170 太靠下（-60 + -170 = 屏幕中线以下 230px）+ 「down」车道还会继续往下漂
+  --   ⇒ 数字整段落在动作条那一带。默认收到 -120，并且**不再是只能改代码的死值**：
+  --   面板「受击下移」±10 步进 + 编辑模式**第二个红色锚点可直接拖**（写的就是这个字段）。
+  inOffY = -120,           -- 受到伤害行相对主锚点的下移量（负 = 更靠下）
   capture = false,         -- 诊断：捕获未识别的战斗文本进环
 }
+-- 受击下移的可调范围（面板步进与编辑模式拖拽**共用同一对常量**，绝不各写一份）
+D.INOFF_MIN, D.INOFF_MAX = -400, -20
 
 local say                                   -- ★前向声明：cfgEnsure 的迁移播报用到它（否则绑全局 nil）
 
@@ -104,6 +110,21 @@ local function cfgEnsure()
     local px = tonumber(c.fontSize) or 44
     c.fontTier = (px <= 14 and 1) or (px <= 18 and 2) or (px <= 30 and 3) or 4
   end
+  -- ★0.2.28 受击下移：**只升级「旧默认值」这一个确切值**（-170 —— 面板此前没有这个旋钮，
+  --   所以存档里出现 -170 只可能是旧默认被物化），用户自己拖/调出来的值一个字节都不动；
+  --   只做一次（inOffMig）+ 如实出声（行为改变必须出声：老用户会觉得数字位置变了）。
+  if c.inOffY == -170 and c.inOffMig ~= true then
+    c.inOffY = DEF.inOffY
+    c.inOffMig = true
+    if type(say) == "function" then
+      -- ★聊天行是纯文本 ⇒ 不许出现 `**`（会原样画出来；项目在案）
+      say("受击数字默认位置已上调（" .. tostring(DEF.inOffY) ..
+        "）：面板「受击下移」可调，编辑模式里红色锚点可直接拖")
+    end
+  end
+  -- ★0.2.28（同版收口）**受击下移只取整数**（用户真机截图：面板显示「-43.86591064453」还折成两行）：
+  --   拖拽写的是光标差（浮点），所以这里把**已经存进去的浮点老值**一次性归整；之后写入口也一律取整。
+  if type(c.inOffY) == "number" then c.inOffY = math.floor(c.inOffY + 0.5) end
   for k, v in pairs(DEF) do if c[k] == nil then c[k] = v end end
   for _, it in ipairs(ITEMS) do
     if c["it_" .. it.id] == nil then c["it_" .. it.id] = it.def and true or false end
@@ -337,7 +358,8 @@ local function addText(kind, text, crit, spellName)
   local c = C()
   local lane = kd.lane
   local x = c.posX or 0
-  local y = (lane == "in") and ((c.posY or 0) + (c.inOffY or -170)) or (c.posY or 0)
+  -- ★0.2.28：受击行的起点 = 主锚点 + 受击下移（同一个字段被面板步进 / 编辑模式红锚点 / 重置位置共用）
+  local y = (lane == "in") and ((c.posY or 0) + (tonumber(c.inOffY) or DEF.inOffY)) or (c.posY or 0)
 
   -- ★防重叠（0.1.2 重写；真机报障「技能伤害定位越来越高」的根因）：
   --   新字**永远从锚点出发** —— 先到的字已经漂走了，天然不叠；
@@ -885,32 +907,45 @@ end
 local function editEnsureUI()
   if D.editUI then return true end
   if type(CreateFrame) ~= "function" then return false end
-  local f = CreateFrame("Button", "EH_DMG_ANCHOR", UIParent)
-  f:SetWidth(170) f:SetHeight(30)
-  if type(f.EnableMouse) == "function" then pcall(f.EnableMouse, f, true) end
-  pcall(f.RegisterForDrag, f, "LeftButton")
-  local bg = f:CreateTexture(nil, "BACKGROUND")
-  bg:SetPoint("TOPLEFT", f, "TOPLEFT", 0, 0) bg:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", 0, 0)
-  solid(bg, 0.10, 0.08, 0.04, 0.85)
-  for _, e in ipairs({ "TOP", "BOTTOM" }) do
-    local t = f:CreateTexture(nil, "BORDER") solid(t, 0.85, 0.70, 0.20, 1)
-    t:SetPoint(e .. "LEFT", f, e .. "LEFT", 0, 0) t:SetPoint(e .. "RIGHT", f, e .. "RIGHT", 0, 0) t:SetHeight(1)
+  -- ★0.2.28 两个锚点（用户真机报障「受到的伤害数字太下面的，距离锚点太远了」）：
+  --   金色 = 主锚点（伤害/治疗/效果那几条 lane="out" 的车道）· 红色 = 受击锚点（lane="in"）。
+  --   同一套配方建两份实例，拖动分别写 posX/posY 与 inOffY；1.12 无销毁 API ⇒ 建一次只 Show/Hide。
+  local function mkAnchor(fname, label, cr, cg, cb)
+    local a = CreateFrame("Button", fname, UIParent)
+    a:SetWidth(170) a:SetHeight(30)
+    if type(a.EnableMouse) == "function" then pcall(a.EnableMouse, a, true) end
+    pcall(a.RegisterForDrag, a, "LeftButton")
+    local bg = a:CreateTexture(nil, "BACKGROUND")
+    bg:SetPoint("TOPLEFT", a, "TOPLEFT", 0, 0) bg:SetPoint("BOTTOMRIGHT", a, "BOTTOMRIGHT", 0, 0)
+    solid(bg, 0.10, 0.08, 0.04, 0.85)
+    for _, e in ipairs({ "TOP", "BOTTOM" }) do
+      local t = a:CreateTexture(nil, "BORDER") solid(t, cr, cg, cb, 1)
+      t:SetPoint(e .. "LEFT", a, e .. "LEFT", 0, 0) t:SetPoint(e .. "RIGHT", a, e .. "RIGHT", 0, 0) t:SetHeight(1)
+    end
+    for _, s in ipairs({ "LEFT", "RIGHT" }) do
+      local t = a:CreateTexture(nil, "BORDER") solid(t, cr, cg, cb, 1)
+      t:SetPoint("TOP" .. s, a, "TOP" .. s, 0, 0) t:SetPoint("BOTTOM" .. s, a, "BOTTOM" .. s, 0, 0) t:SetWidth(1)
+    end
+    local fs = mkFont(a)
+    pcall(fs.SetPoint, fs, "CENTER", a, "CENTER", 0, 0)
+    pcall(fs.SetText, fs, label)
+    pcall(fs.SetTextColor, fs, cr, cg, cb)
+    return a, fs
   end
-  for _, s in ipairs({ "LEFT", "RIGHT" }) do
-    local t = f:CreateTexture(nil, "BORDER") solid(t, 0.85, 0.70, 0.20, 1)
-    t:SetPoint("TOP" .. s, f, "TOP" .. s, 0, 0) t:SetPoint("BOTTOM" .. s, f, "BOTTOM" .. s, 0, 0) t:SetWidth(1)
-  end
-  local fs = mkFont(f)
-  pcall(fs.SetPoint, fs, "CENTER", f, "CENTER", 0, 0)
-  pcall(fs.SetText, fs, "伤害锚点（拖动）")
-  pcall(fs.SetTextColor, fs, 0.95, 0.82, 0.35)
+  local f, fs = mkAnchor("EH_DMG_ANCHOR", "伤害锚点（拖动）", 0.95, 0.82, 0.35)
+  local g, gs = mkAnchor("EH_DMG_INANCHOR", "受击锚点（拖动）", 1.00, 0.45, 0.30)
   -- 拖拽三件套（项目已验证）：OnMouseDown 起 + 节拍里 GetCursorPosition 现算 + 鼠标键状态收尾
   f:SetScript("OnMouseDown", function()
     local cx, cy = GetCursorPosition()
-    D.drag = { sx = cx, sy = cy, bx = C().posX or 0, by = C().posY or 0 }
+    D.drag = { which = "main", sx = cx, sy = cy, bx = C().posX or 0, by = C().posY or 0 }
   end)
   f:SetScript("OnMouseUp", function() D.drag = nil end)
-  D.editUI = { f = f, fs = fs }
+  g:SetScript("OnMouseDown", function()
+    local cx, cy = GetCursorPosition()
+    D.drag = { which = "in", sx = cx, sy = cy, by = tonumber(C().inOffY) or DEF.inOffY }
+  end)
+  g:SetScript("OnMouseUp", function() D.drag = nil end)
+  D.editUI = { f = f, fs = fs, g = g, gs = gs }
   return true
 end
 
@@ -918,6 +953,11 @@ local function editPlace()
   if not D.editUI then return end
   local c = C()
   pcall(D.editUI.f.SetPoint, D.editUI.f, "CENTER", UIParent, "CENTER", c.posX or 0, c.posY or 0)
+  -- 受击锚点 = 主锚点 + 受击下移（与 addText 里 lane="in" **同一条算式**，绝不各写一份）
+  if D.editUI.g then
+    pcall(D.editUI.g.SetPoint, D.editUI.g, "CENTER", UIParent, "CENTER",
+      c.posX or 0, (c.posY or 0) + (tonumber(c.inOffY) or DEF.inOffY))
+  end
 end
 
 local function editSet(on)
@@ -926,9 +966,13 @@ local function editSet(on)
     if not editEnsureUI() then say("编辑模式不可用（建不出控件）") D.editOn = false return end
     editPlace()
     pcall(D.editUI.f.Show, D.editUI.f)
-    say("编辑模式：开 —— 拖动金色锚点定位；「模拟战斗」可实时预览参数效果")
+    if D.editUI.g then pcall(D.editUI.g.Show, D.editUI.g) end
+    say("编辑模式：开 —— 金色锚点 = 伤害行起点，红色锚点 = 受击行起点（都能直接拖）")
   else
-    if D.editUI then pcall(D.editUI.f.Hide, D.editUI.f) end
+    if D.editUI then
+      pcall(D.editUI.f.Hide, D.editUI.f)
+      if D.editUI.g then pcall(D.editUI.g.Hide, D.editUI.g) end
+    end
     D.drag = nil
     say("编辑模式：关")
   end
@@ -944,8 +988,15 @@ function D.editTick(now)
     else
       local cx, cy = GetCursorPosition()
       local c = C()
-      c.posX = D.drag.bx + (cx - D.drag.sx)
-      c.posY = D.drag.by + (cy - D.drag.sy)
+      if D.drag.which == "in" then
+        -- 受击锚点：只认垂直位移（红锚点相对主锚点画，水平跟着主锚点走）
+        -- ★0.2.28（同版收口）：**先取整再夹**（光标是浮点 ⇒ 不取整会把 -43.86591064453 写进存档）
+        local v = math.floor((D.drag.by or DEF.inOffY) + (cy - D.drag.sy) + 0.5)
+        c.inOffY = math.max(D.INOFF_MIN, math.min(D.INOFF_MAX, v))
+      else
+        c.posX = D.drag.bx + (cx - D.drag.sx)
+        c.posY = D.drag.by + (cy - D.drag.sy)
+      end
       editPlace()
     end
   end
@@ -989,6 +1040,9 @@ local function uiRefresh()
   pcall(ui.durText.SetText, ui.durText, string.format("%.1f", c.duration or 2.0))
   pcall(ui.curveText.SetText, ui.curveText, CURVE_ZH[c.curve or "cubic"] or tostring(c.curve))
   pcall(ui.clampText.SetText, ui.clampText, tostring(tonumber(c.clampPct) or 30) .. "%")
+  -- ★0.2.28（同版收口）受击下移**只显示整数**（用户：「受击位移只 int 类型处理下不需要保留小数位」）
+  local inV = math.floor((tonumber(c.inOffY) or DEF.inOffY) + 0.5)
+  pcall(ui.inText.SetText, ui.inText, tostring(inV))
   pcall(ui.editText.SetText, ui.editText, D.editOn and "编辑模式：开" or "编辑模式：关")
   pcall(ui.simText.SetText, ui.simText, D.simOn and "模拟战斗：开" or "模拟战斗：关")
   pcall(ui.masterMk.Show, ui.masterMk)
@@ -998,7 +1052,8 @@ end
 local function uiBuild()
   if ui.built then return true end
   if type(CreateFrame) ~= "function" then return false end
-  local W, H = 470, 424                  -- ★0.2.23 高度重算：表头+总开关 62 + 勾选 10 行 220 + 参数 3 行 86 + 按钮/备注 ~56
+  local W, H = 470, 448                  -- ★0.2.28 高度重算（参数 3 行 → 4 行，+24）：
+                                         --   表头+总开关 62 + 勾选 10 行 220 + 参数 4 行 110 + 按钮/备注 ~56
   local root = CreateFrame("Frame", "EH_DMG_UI", UIParent)
   root:SetWidth(W) root:SetHeight(H)
   root:SetPoint("CENTER", UIParent, "CENTER", ui.px, ui.py)
@@ -1151,7 +1206,14 @@ local function uiBuild()
   ui.clampText = paramCell("移动上限", PX2, py - 48, function(d)
     local c = C() c.clampPct = math.max(5, math.min(60, (tonumber(c.clampPct) or 30) + d * 5))
   end)
-  py = py - 72
+  -- ★0.2.28 受击下移（受到伤害那一行相对主锚点往下多少；编辑模式的**红色锚点**写的就是这个字段）
+  --   写入口**一律取整**（用户：「受击位移只 int 类型处理下不需要保留小数位」）
+  ui.inText = paramCell("受击下移", PX1, py - 72, function(d)
+    local c = C()
+    local cur = math.floor((tonumber(c.inOffY) or DEF.inOffY) + 0.5)
+    c.inOffY = math.max(D.INOFF_MIN, math.min(D.INOFF_MAX, cur + d * 10))
+  end)
+  py = py - 96
 
   -- 底部按钮
   local by = py - 6
@@ -1166,9 +1228,9 @@ local function uiBuild()
   end)
   e2:SetPoint("TOPLEFT", root, "TOPLEFT", 122, by)
   local e3 = uiSolidBtn(root, "重置位置", 84, 20, function()
-    local c = C() c.posX, c.posY = DEF.posX, DEF.posY
+    local c = C() c.posX, c.posY, c.inOffY = DEF.posX, DEF.posY, DEF.inOffY
     slotReleaseAll()
-    editPlace() uiRefresh() say("锚点已重置")
+    editPlace() uiRefresh() say("两个锚点已重置（伤害 + 受击）")
   end)
   e3:SetPoint("TOPLEFT", root, "TOPLEFT", 226, by)
   local e4 = uiSolidBtn(root, "恢复默认", 84, 20, function()
@@ -1241,8 +1303,11 @@ local function setMaster(on)
     D.drag = nil
     D.lowArmed.hp = true D.lowArmed.mana = true
     D.shapeSeen = {}                 -- 句形去重表也随关断清（下次打开从零记）
-    -- ④ 图层清理：编辑锚点收起
-    if D.editUI then pcall(D.editUI.f.Hide, D.editUI.f) end
+    -- ④ 图层清理：编辑锚点收起（★0.2.28：**两个都要收** —— 只收金色那个会留一个红色空层吃点击）
+    if D.editUI then
+      pcall(D.editUI.f.Hide, D.editUI.f)
+      if D.editUI.g then pcall(D.editUI.g.Hide, D.editUI.g) end
+    end
     D.editOn = false D.simOn = false
     eventSync()      -- 摘全部事件
     say("EH_Damage 已关闭（收层 · 停节拍 · 摘事件）")
@@ -1290,6 +1355,10 @@ local function cmd(msg)
       " 方向=" .. (DIR_ZH[c.direction] or "?") ..
       " 字号=" .. (D.TIER[c.fontTier or 3].zh) .. " 速度=" .. tostring(c.speed) ..
       " 时长=" .. string.format("%.1f", c.duration or 0) ..
+      " 锚点=(" .. tostring(math.floor((tonumber(c.posX) or 0) + 0.5)) .. "," ..
+        tostring(math.floor((tonumber(c.posY) or 0) + 0.5)) .. ")" ..
+      " 受击下移=" .. tostring(math.floor((tonumber(c.inOffY) or DEF.inOffY) + 0.5)) ..
+      " 上限=" .. tostring(tonumber(c.clampPct) or 30) .. "%" ..
       " 槽=" .. D.poolN .. "/" .. POOL_MAX ..
       " 编辑=" .. (D.editOn and "开" or "关") .. " 模拟=" .. (D.simOn and "开" or "关") ..
       " v" .. BUILD)
@@ -1335,7 +1404,10 @@ function _G.EVAL_EDMG_STATE()
   return {
     version = BUILD, master = c.master, direction = c.direction,
     fontTier = c.fontTier, speed = c.speed, duration = c.duration,
-    posX = c.posX, posY = c.posY, pool = D.poolN, active = active,
+    posX = c.posX, posY = c.posY, inOffY = tonumber(c.inOffY) or DEF.inOffY,
+    inOffMin = D.INOFF_MIN, inOffMax = D.INOFF_MAX, clampPct = tonumber(c.clampPct) or 30,
+    inAnchor = (D.editUI and D.editUI.g) and true or false,
+    pool = D.poolN, active = active,
     shapeN = shapeCount(),                        -- 句形环已记多少种（真机取证口）
     editOn = D.editOn, simOn = D.simOn, ring = table.getn(c.ring or {}),
     tickAttached = (D.frame ~= nil), build = BUILD,
