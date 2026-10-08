@@ -139,6 +139,7 @@
        `HTTP 状态 / content-length / content-type`：两端 `EvalHelp-v<版本>.zip` 与 `EvalHelp.zip` 都必须
        **200 + 63.63 MB**；错名 URL 必须 **404**（GitHub 改名后即 404；Gitee 要确认那条 attach 已删）。
      · 幂等口径：release 已存在 ⇒ 复用；同名附件已存在 ⇒ 跳过上传（脚本里查一次 `assets`/`attach_files`）。
+     · ★★★**release 页只保留最新 5 个 —— 旧版本整页删除**（用户 2026-10-08 定：「**版本记录最多保留5个,旧版本的release 都删除**」）：发布收尾**必跑** `node tmp/rel_releases_prune.js --keep 5 --del`（**两端一起**删整页；**git tag 不动** —— 删的是 release 页与其附件）；★这条同时是 **Gitee 附件配额（单文件附件共 1 GB）** 的长期解法：不删旧页时新的大包会被直接拒（`验证失败：文件大小已超出仓库附件配额：1 GB`，1.75.110 实踩）。配套三个只读/补包脚本：`tmp/rel_gitee_quota.js`（列出各 release 附件与总占用）· `tmp/rel_gitee_restore.js <tag…>`（把本地已有的主插件包补回保留页）· `tmp/rel_probe_<版本>.js`（只读 HEAD 探针，**版本与清单全现读**，判据 = 好名 200 且 `content-length == 本地字节数`、错名 404）。
      · GitHub Release 页 URL = `https://github.com/lihaibo123as/emberveil_eval_help/releases/tag/v<版本>`；
        Gitee = `https://gitee.com/xeval/emberveil_eval_help/releases/tag/v<版本>`（交付说明里直接给这两个链接）。
 
