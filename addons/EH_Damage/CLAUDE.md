@@ -16,11 +16,38 @@
 
 ## 判据正文
 
-- ★★★**事件源只能是 SCT 模式（CHAT_MSG_ 文本解析）**：本客户端无 Nampower 结构化战斗事件、无 GUID API、
+- ★★★**事件源只能是 SCT 模式（CHAT_MSG_ 文本解析）**；**姓名板附着做不到**（见下一条反向钉）：本客户端无 Nampower 结构化战斗事件、无 GUID API、
   姓名板非 Lua widget（三轮调研定案，见宿主 CLAUDE.md 与 `tmp/DamageEx for Nampower 2026-04-16` 分析）。
   ⇒ ① 事件名与文本格式**不许猜**（铁律 5）：模式表是 zhCN 尽力而为，未识别的战斗文本走**捕获环**
   （`/edmg 捕获` 开 → 原文落 `EH_DAMAGE_CFG.ring` 有界 40 → `/edmg 事件` 查看）供真机逐条校准；
   ② **绝不引入** `GetUnitGUID`/姓名板附着/TargetLine 这类 Nampower 依赖（反向钉）。
+  ★**证据（exe 侧，可复核）**：`RAW_COMBATLOG`（Nampower 的结构化战斗事件口）**0 命中**，同批 `CHAT_MSG_*`/
+  `PLAYER_ENTERING_WORLD` 各 1 命中 ⇒ 事件注册表确实编译在 exe 里；`UnitGUID`/`GetNameplateGUID` 同样 0 命中。
+  取证工具 = `node tmp/client_sym_scan.js <符号名>`（支持 `--ctx`）。
+  ★**判据边界**：exe 只装**引擎侧**事件名与 C API；FrameXML 的 Lua 全局名在 Content 包里 ⇒ exe 查不到 ≠ 不存在。
+- ★★★**「提不出数字不硬显示」是全局尺子**（用户真机反馈「两个没有伤害的技能会显示之前的Cat 伤害信息」）：
+  任何战斗文本处理器**提不出数字就一个字节都不画**，并把该句的**句形**落环供校准 ——
+  ★**反向钉：全文件不许再出现 `numOf(m) or m`**（旧写法会把整句原文当伤害值画在屏幕上；真机例
+  「你施放毒蛇钉刺失败：尚未恢复」「Cat的撕咬没有击中雌性草原狮。」）。结构钉守着这条。
+- ★★★**自我受击（incoming）有归属门**（真机例「雌性草原狮击中Cat造成8点伤害。」= 宠物挨打）：
+  整句必须含「你」才显示 —— 否则宠物/别人的挨打会显示成红色「-X」当作我受到的伤害（`inHit`/`inMiss` 都加）。
+- ★★★**姓名板附着做不了（2026-10-08 定案，别再重做）**：用户需求 = 把伤害数字锚到**怪头顶那条浮动姓名板**。
+  取证：本客户端姓名板是 **UE 引擎 widget**（exe 里 `AzerothNameplateWidget` / `AzerothNameplateWidgetComponent` /
+  `HealthPlateComponent`），**Lua 侧只有 `ShowNameplates`/`HideNameplates`/`ShowFriendNameplates`/`HideFriendNameplates`
+  四个开关函数**；无 `GetNameplateGUID`/`UnitGUID`/`UnitPosition`/`GetCameraPosition`（exe 0 命中，
+  `node tmp/client_sym_scan.js` 可复核）、无 Lua 侧 `WorldToScreen`（只有 UE 内部 `ProjectWorldToScreen` 符号）、
+  `_G["NamePlate1"]` 也不存在 ⇒ **没有句柄、没有单位世界坐标、没有世界→屏幕转换**，三样都没有就锚不上。
+  同族旁证：unrealUI 的姓名板模块（WORKING_SOURCE 抄 UnrealPfUI）在本客户端首轮实测 **28 子件 / 0 plates / 28 rejected**；
+  UnrealQuest 记 `world.nameplates_are_not_lua_widgets`（WorldFrame 26 子件全是 FrameXML 家具）+ 一次**假姓名板**事故
+  （5 个子件被认成姓名板、1204 次读名字全读出 "Item Name"）；本机也没装 pfUI/ShaguPlates 这类自带 Lua 姓名板的插件可挂靠。
+  ★曾按「有血条呈现 + 名字匹配就把数字锚到**目标框体血条**重心」实现并真机跑通（贴到血条 15 条），
+  但用户要的是浮动姓名板 ⇒ **整条回退**（代码里已无残留；`/edmg 锚点`、`/edmg 姓名板` 两条探针一并撤）。
+- ★★★**宠物技能图标**（用户问「宠物技能击中能显示对应图标吗?」）：图标缓存（`D.iconScan`）除玩家法术书外，
+  再扫 **宠物动作条 `GetPetActionInfo(i)`**（Pet 类 API，本客户端在案；vanilla 形状 = name, subtext, texture,
+  isToken,…；token 名字经 `_G` 转本地化名）+ 宠物法术书 `GetSpellName(i,"pet")` 兜底；
+  技能名由 **`spellFromMsg(m)`** 按真机句式取（宠物技能「Cat的撕咬击中X造成8点伤害。」⇒ 撕咬 ·
+  用 `UnitName("pet")` 锚定宠物名，不做任何「猜技能」；宠物普攻「Cat击中X…」与玩家平砍「你击中X…」**不给名**）。
+  ★`PET_BAR_UPDATE` / `UNIT_PET` 时重扫（新学的技能不用 /reload）；**查不到就一个图标都不画**（绝不画 ? 图）。
 - ★★★**动画 = 绝对时间驱动**（`t = now - t0`，与帧率无关）：smoothstep 淡入淡出 `t*t*(3-2*t)`（前 10% 入 / 后 50% 出）·
   暴击 = 0.35s 窗口内抬一档字号（0.2.0 起；旧「三段缩放」随字号机制一起作废）· 彩虹弧线 `y = y0 + 240t − 200t²`
   （0.2.1 加高：峰值 ~72px · 0.6s 到顶 · 落到锚点以下；旧 `140t − 240t²` 峰值仅 ~20px）+ 侧漂。
@@ -87,6 +114,12 @@
 | :-- | :-- |
 | `tmp/ehdmg_harness.js` | 离线真跑（fengari）：载入零副作用 · VLA 武装 · 动画推进 · 事件解析 · 捕获环 · 编辑模式 · 关断四件事 |
 | `tmp/ehdmg_wiring_check.js` | 接线结构钉（五处契约 + 记忆体分离 + 一个节拍帧） |
+| `tmp/ehdmg_rules_harness.js` | **伤害文本规则匹配修复专项**（离线真跑 · 保真桩 + 真源码切片）：宠物技能图标三态与 `spellFromMsg` 五条真机句式 · 三条无伤害文本一条都不画且句形入环 · 受到伤害归属门（宠物挨打不显示 / 真·我挨打照旧 −9）· 句形去重与有界 · 关断四件事与句形表清 · 读值口/状态行不含已删字段 · 剥注释后的反向钉（无已删定位实现 / 无 GUID·姓名板 API / 无 `numOf(m) or m`）= **行为 40 + 结构钉 9** |
+
+★**本工作副本（D 盘仓库）的 `tmp/` 里只有 `ehdmg_rules_harness.js`** —— 上面那两个（`ehdmg_harness.js` /
+`ehdmg_wiring_check.js`）是**另一台机器**上的成套闸门，`tmp/` 本身被 `.gitignore` 忽略、不随仓库走。
+⇒ 在本机核对本插件改动时，**能跑的就是这一个**；不要把「本机跑不了那两个」误读成「闸门不存在」。
+★取证类工具同目录：`tmp/client_sym_scan.js`（查客户端 exe 里有没有某个 API/事件符号，判据边界见上）。
 
 ★功能修改过程中只跑 `node luacheck.js` + `node sync_game.js`；那一轮不得声称「过了全套闸门」。
 

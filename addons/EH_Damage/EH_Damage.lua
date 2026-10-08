@@ -5,8 +5,11 @@
 --   · 动画引擎参考 DamageEx(Nampower 2026-04-16)：动画槽池 + smoothstep 淡入淡出
 --     (t*t*(3-2t)) + 暴击三段缩放 + 彩虹弧线(重力衰减) + 防重叠游标。
 --   · DamageEx 的「结构化战斗事件 / GUID / 姓名板附着」全部依赖 Nampower 客户端
---     补丁，本客户端(EmberVeil) 1329 条 API 里一律没有 ⇒ 事件源只能走 SCT 模式
---     （解析 CHAT_MSG_* 文本事件），姓名板附着不可行（姓名板非 Lua widget）。
+--     补丁，本客户端(EmberVeil) 一律没有 ⇒ 事件源只能走 SCT 模式
+--     （解析 CHAT_MSG_* 文本事件）。
+--     ★★姓名板附着**做不到**（2026-10-08 定案，别再重做）：本客户端姓名板是 UE 引擎 widget
+--     （AzerothNameplateWidget/…WidgetComponent + HealthPlateComponent；Lua 侧只有 Show/HideNameplates
+--     四个开关函数），且无 GUID / 单位位置 / 世界→屏幕 API ⇒ 自绘文字锚不到怪头顶那条浮动姓名板。
 --   · 文本模式 = zhCN 尽力而为：**事件名与文本格式不许猜**（铁律 5）⇒ 内置
 --     「捕获环」/edmg 捕获 + /edmg 事件 把真机原文落盘，供逐条校准模式表。
 -- 客户端配方（项目既有判据）：
@@ -19,7 +22,7 @@
 --   · 字体链 FZLBJW→FRIZQT→ARIALN 全程 pcall；FontString 不吃鼠标 ⇒ 热区用透明 Button。
 -- ============================================================================
 
-local BUILD = "0.2.26b"
+local BUILD = "0.2.27"
 
 local D = {}                      -- 命名空间（跨函数共享件全挂这里，控 local 数）
 _G["EH_DMG"] = D                  -- 调试/桥接口（子插件独立，不依赖宿主）
@@ -158,12 +161,62 @@ function D.iconScan()
       if okT and tex and not c[name] then c[name] = tex end
     end
   end
+  -- ★★0.2.27 宠物技能图标（用户：「宠物技能击中能显示对应图标吗?」；真机句式
+  --   「Cat的撕咬击中雌性草原狮造成8点伤害。」）：
+  --   来源① = **宠物动作条** `GetPetActionInfo(i)`（Pet 类 API，本客户端 exe/索引都在案；
+  --     vanilla 形状 = name, subtext, texture, isToken, isActive, …）—— 撕咬/低吼这类宠物技能就在这里；
+  --     token 形态的名字（PET_ACTION_*）要经 `_G` 转本地化名，转不出就当没有；
+  --   来源② = 宠物法术书 `GetSpellName(i, "pet")`（客户端不认这个 bookType 就静默跳过，绝不当成错）。
+  --   ★仍然守既有铁律：**查不到就一个图标都不画**（绝不画 ? 图）。
+  if type(GetPetActionInfo) == "function" then
+    for i = 1, 10 do
+      local ok, n, _sub, tex, isToken = pcall(GetPetActionInfo, i)
+      if ok and type(n) == "string" and n ~= "" then
+        if isToken and type(rawget(_G, n)) == "string" then n = rawget(_G, n) end
+        if type(tex) == "string" and tex ~= "" and not c[n] then c[n] = tex end
+      end
+    end
+  end
+  if type(GetSpellName) == "function" and type(GetSpellTexture) == "function" then
+    for i = 1, 30 do
+      local okN, name = pcall(GetSpellName, i, "pet")
+      if not okN or type(name) ~= "string" or name == "" then break end
+      local okT, tex = pcall(GetSpellTexture, i, "pet")
+      if okT and tex and not c[name] then c[name] = tex end
+    end
+  end
   D.iconCache = c
 end
 local function iconOf(spellName)
   if not spellName then return nil end
   return D.iconCache and D.iconCache[spellName] or nil
 end
+
+-- ★0.2.27 从战斗文本里取「技能名」（配图用；句式 = 2026-10-08 用户真机日志）：
+--   自己远程/技能：「你的自动射击击中雌性草原狮造成25点伤害。」「你的 撕裂 使 X 受到了…」
+--   宠物技能　　：「Cat的撕咬击中雌性草原狮造成8点伤害。」（Cat = `UnitName("pet")`）
+--   宠物普攻　　：「Cat击中雌性草原狮造成15点伤害。」⇒ **提不出技能名**（普攻不给图标，与玩家平砍同一把尺子）
+--   玩家平砍　　：「你击中X造成12点伤害。」⇒ 同上
+--   ★只用文本给名字、用 `UnitName("pet")` 锚定宠物，**不做任何「猜技能」**；查不到图标就不画。
+local function spellFromMsg(m)
+  if type(m) ~= "string" or m == "" then return nil end
+  local sp = string.match(m, "^你的%s*(.-)%s*击中")        -- 自己的技能 / 远程自动射击
+  if sp and sp ~= "" then return sp end
+  local pet
+  if type(UnitName) == "function" then
+    local ok, v = pcall(UnitName, "pet")
+    if ok and type(v) == "string" and v ~= "" then pet = v end
+  end
+  if pet and string.sub(m, 1, string.len(pet) + 1) == pet .. "的" then
+    local rest = string.sub(m, string.len(pet) + 2)
+    sp = string.match(rest, "^(.-)%s*击中") or string.match(rest, "^(.-)%s*对")
+    if sp and sp ~= "" then return sp end
+  end
+  local who, sp2 = string.match(m, "^(.-)的(.-)%s*击中")    -- 宠物名兜底（拿不到 UnitName("pet") 时）
+  if who and who ~= "你" and sp2 and sp2 ~= "" then return sp2 end
+  return nil
+end
+D.spellFromMsg = spellFromMsg
 
 -- ★★字号机制终案（0.2.0；探针 A~K 真机定案）：「改字号」（SetFont/SetTextHeight/帧缩放）
 --   在本客户端全无效，但**分档字体对象**（Fonts.xml 自带大小的字体模板）有效，梯度 I<J<K。
@@ -496,6 +549,28 @@ local function ringPush(line)
   while table.getn(r) > RING_MAX do table.remove(r, 1) end
 end
 
+-- ★★★句形去重落环（真机取证口）：把这句战斗文本的「句形」（数字统一换成 `#`）记一次 ——
+--   一串同形的伤害只留一行、会话内有界（SHAPE_MAX）⇒ 打完一场就有一份「本客户端到底有哪几种
+--   战斗句式」的清单，供模式表逐条校准（真机踩过：不看清真实句式就改匹配规则 = 整车失效）。
+--   ★调用点在运行时（事件/命令），赋值在载入期 ⇒ 用 D. 字段而不是 local（不许先引用后声明）。
+D.shapeSeen = {}
+local SHAPE_MAX = 40
+local function shapeCount()
+  local n = 0
+  for _ in pairs(D.shapeSeen) do n = n + 1 end
+  return n
+end
+D.shapeCount = shapeCount
+function D.noteShape(tag, m)
+  if type(m) ~= "string" or m == "" then return end
+  local shape = string.gsub(m, "%d+", "#")
+  local key = tostring(tag) .. "|" .. shape
+  if D.shapeSeen[key] then return end
+  if shapeCount() >= SHAPE_MAX then return end        -- 有界：满了就不再记（绝不无界增长）
+  D.shapeSeen[key] = true
+  ringPush("SHAPE " .. key)
+end
+
 local function capture(ev, msg)
   if C().capture then ringPush(tostring(ev) .. " | " .. tostring(msg)) end
 end
@@ -517,13 +592,19 @@ local function dupOk(key, win)
 end
 
 EVH["CHAT_MSG_COMBAT_SELF_HITS"] = function(m)
-  addText("damage", numOf(m) or m, isCrit(m) and 1 or 0)
+  -- ★0.2.27「提不出数字不硬显示」（与 incoming/DOT 早已定下的尺子统一）：非伤害文本
+  --   （真机例：「你施放毒蛇钉刺失败：尚未恢复」「Cat的撕咬没有击中雌性草原狮。」）落到这个事件上时
+  --   旧写法 `numOf(m) or m` 会把**整句原文当伤害值画在屏幕上** ⇒ 现在一律不画、只记句形供校准。
+  local n = numOf(m)
+  if not n then D.noteShape("hit-nonum", m) return end
+  addText("damage", n, isCrit(m) and 1 or 0, spellFromMsg(m))
 end
 EVH["CHAT_MSG_SPELL_SELF_DAMAGE"] = function(m)
-  -- 技能名（配图用）：真机句式「你的 撕裂 使 噬骨者 受到了 9 点物理伤害。」「你的 寒冰箭 击中 X…」
-  local sp = string.match(m, "^你的%s*(.-)%s*使") or string.match(m, "^你的%s*(.-)%s*击中")
-          or string.match(m, "^你的%s*(.-)%s*对")
-  addText("damage", numOf(m) or m, isCrit(m) and 1 or 0, sp)
+  local n = numOf(m)
+  if not n then D.noteShape("spell-nonum", m) return end
+  -- 技能名（配图用）：真机句式「你的 撕裂 使 噬骨者 受到了 9 点物理伤害。」「你的自动射击击中X造成25点伤害。」
+  local sp = string.match(m, "^你的%s*(.-)%s*使") or spellFromMsg(m)
+  addText("damage", n, isCrit(m) and 1 or 0, sp)
   -- 减免后缀（……点被抵抗/吸收/格挡）：减免显示开着时补一条
   local abs = string.match(m, "（(%d+)点被(.+)）") or string.match(m, "(%d+)点被抵抗")
   if abs and itemOn("mitigation") then addText("mitigation", "-" .. abs .. " 减免", 0) end
@@ -549,9 +630,18 @@ EVH["CHAT_MSG_COMBAT_SELF_MISSES"] = function(m)
 end
 EVH["CHAT_MSG_SPELL_SELF_MISSES"] = EVH["CHAT_MSG_COMBAT_SELF_MISSES"]
 
-EVH["CHAT_MSG_COMBAT_PET_HITS"] = function(m) addText("pet", numOf(m) or m, isCrit(m) and 1 or 0) end
+-- ★★0.2.27 宠物伤害（用户真机反馈：「宠物伤害显示匹配应该还有问题」）：
+--   **提不出数字不硬显示**（旧写法 `numOf(m) or m` 会把整句原文当伤害值画在屏幕上 ——
+--   与 incoming/DOT 早已定下的尺子不一致，宠物句式恰好是「未校准」那一套 ⇒ 必然踩中）；
+--   句形落环走 `SHAPE pet-nonum|…`，一场仗下来就能看到宠物伤害的真实句式。
+local function petHit(m)
+  local n = numOf(m)
+  if not n then D.noteShape("pet-nonum", m) return end
+  addText("pet", n, isCrit(m) and 1 or 0, spellFromMsg(m))
+end
+EVH["CHAT_MSG_COMBAT_PET_HITS"] = petHit
+EVH["CHAT_MSG_SPELL_PET_DAMAGE"] = petHit
 EVH["CHAT_MSG_COMBAT_PET_MISSES"] = function(m) EVH["CHAT_MSG_COMBAT_SELF_MISSES"](m) end
-EVH["CHAT_MSG_SPELL_PET_DAMAGE"]  = function(m) addText("pet", numOf(m) or m, isCrit(m) and 1 or 0) end
 
 -- 能量类型 token → 中文（真机句式里是未翻译 token：RAGE_POINTS 等；查不到就原文显示）
 local POWER_ZH = { RAGE_POINTS = "怒气", MANA = "法力", ENERGY = "能量", FOCUS = "集中值", HAPPINESS = "快乐" }
@@ -629,12 +719,21 @@ end
 --   事件名按 vanilla 候选注册（pcall 逐个试，不存在的被客户端静默忽略；哪个真发火捕获环说话）
 --   ★0.2.4 真机实锤：这类事件的 arg1 负载可能是**裸名字**（不是整句文本）⇒ 提不出数字
 --     一律不显示（否则屏上出「-losol」这种垃圾），原文落环待校准（与治疗的「+?」同一把尺子）
+--   ★★0.2.27 归属门：这条必须**是打在我身上**的 —— 真机例「雌性草原狮击中Cat造成8点伤害。」
+--     是**宠物挨打**（2026-10-08 用户日志），旧写法会把它显示成红色「-8」当作我受到的伤害。
+--     判据 = 整句里必须出现「你」（vanilla zhCN 的自我受击句式一律含「你」）。
 local function inHit(m)
+  if type(m) ~= "string" or not string.find(m, "你", 1, true) then
+    D.noteShape("in-other", m) return
+  end
   local n = numOf(m)
   if not n then capture("INCOMING-NONUM", m) return end
   addText("incoming", "-" .. n, isCrit(m) and 1 or 0)
 end
 local function inMiss(m)
+  if type(m) ~= "string" or not string.find(m, "你", 1, true) then
+    D.noteShape("inmiss-other", m) return
+  end
   local w = string.find(m, "躲闪") and "躲闪" or string.find(m, "招架") and "招架"
          or string.find(m, "未击中") and "未击中" or string.find(m, "抵抗") and "抵抗" or "未命中"
   addText("incoming", w, 0)
@@ -653,6 +752,9 @@ end
 EVH["PLAYER_REGEN_DISABLED"] = function() addText("combat", "进入战斗", 0) end
 EVH["PLAYER_REGEN_ENABLED"]  = function() addText("combat", "离开战斗", 0) end
 EVH["SPELLS_CHANGED"]        = function() D.iconScan() end
+-- ★0.2.27 宠物技能图标：宠物换了/动作条变了就重扫图标缓存（不然新学的技能要 /reload 才有图）
+EVH["PET_BAR_UPDATE"]        = function() D.iconScan() end
+EVH["UNIT_PET"]              = function(u) if u == "pet" or u == nil then D.iconScan() end end
 
 EVH["UNIT_COMBO_POINTS"] = function(u)
   if u ~= "player" then return end
@@ -701,6 +803,7 @@ local EVENTS = {
   "CHAT_MSG_COMBAT_HOSTILEPLAYER_HITS", "CHAT_MSG_COMBAT_HOSTILEPLAYER_MISSES",
   "CHAT_MSG_SPELL_CREATURE_VS_SELF_DAMAGE", "CHAT_MSG_SPELL_HOSTILEPLAYER_DAMAGE",
   "PLAYER_REGEN_DISABLED", "PLAYER_REGEN_ENABLED", "SPELLS_CHANGED",
+  "PET_BAR_UPDATE", "UNIT_PET",                       -- ★0.2.27 宠物技能图标重扫
   "UNIT_COMBO_POINTS", "UNIT_HEALTH", "UNIT_MANA",
 }
 
@@ -1137,6 +1240,7 @@ local function setMaster(on)
     -- ③ 数据重置：游标/拖拽/低血武装复位
     D.drag = nil
     D.lowArmed.hp = true D.lowArmed.mana = true
+    D.shapeSeen = {}                 -- 句形去重表也随关断清（下次打开从零记）
     -- ④ 图层清理：编辑锚点收起
     if D.editUI then pcall(D.editUI.f.Hide, D.editUI.f) end
     D.editOn = false D.simOn = false
@@ -1232,6 +1336,7 @@ function _G.EVAL_EDMG_STATE()
     version = BUILD, master = c.master, direction = c.direction,
     fontTier = c.fontTier, speed = c.speed, duration = c.duration,
     posX = c.posX, posY = c.posY, pool = D.poolN, active = active,
+    shapeN = shapeCount(),                        -- 句形环已记多少种（真机取证口）
     editOn = D.editOn, simOn = D.simOn, ring = table.getn(c.ring or {}),
     tickAttached = (D.frame ~= nil), build = BUILD,
   }
