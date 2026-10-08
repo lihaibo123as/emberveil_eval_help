@@ -172,6 +172,10 @@ if (require.main === module) {
        // ★1.75.63 补：`tools/LootCursor.lua` 一直漏在清单外（1.75.26 建模块时没加）
        //   —— 它 990 多行、前向声明风险最高的一族（包装/节拍/纹理助手）⇒ 必须纳入。
        'tools/LootCursor.lua',
+       // ★1.75.109 补两个一直漏在清单外的工具模块：
+       //   `tools/LayerFix.lua`（本轮给它加「节拍唯一入口 + 分帧深挖」时踩了 R2 前向声明的坑）
+       //   `tools/DragFrames.lua`（6000+ 行、前向声明最多的一族 —— 静默雷风险最高）
+       'tools/LayerFix.lua', 'tools/DragFrames.lua',
        // ★子插件也纳入：EH_Bag（1.75.x 新建）两个文件 —— 跨 chunk 共用口全挂 B 表，
        //   本文件的「先引用后声明」错在子插件里同样是**静默**的（pcall 一包就什么都不报）。
        'addons/EH_Bag/EH_Bag.lua', 'addons/EH_Bag/EH_BagSort.lua',

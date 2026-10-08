@@ -88,6 +88,35 @@ local LF_KEEP_PERIOD = 1.0    -- 启动期复查周期（秒）
 local LF_KEEP_CHECKS = 5      -- 净检查次数上限（5 × 1s ⇒ 载入完成后 5 秒内收工）
 local LF_KEEP_WALL = 15.0     -- 绝对墙钟上限（秒）：从「武装」那一刻起算，任何情况都不许超过它
 
+-- ★★★1.75.109 **扫描闸门**（真机报障「图层隐藏 → 主动作条背景，初次打开会把游戏卡死」换来的）：
+--   旧 `lfFindByName` **只有深度上限** —— 既没有**访问集 `seen`**、也没有**节点预算**，而兜底容器
+--   （`containers`）里还带着 **`UIParent`** ⇒ 正是本项目 §5.1 铁律明令「两道闸缺一不可」的那一族
+--   （同族在案：`tools/SimpleMap.lua` 的 `tryCollectBlack` 按子帧无界递归；子插件 `EH_DebugBox` 1.75.48
+--    「几万次 `GetRegions/GetChildren/GetName` 全挤在同一帧 ⇒ 真机卡死」）。
+--   ★**真机数据（不是估算）**：`EH_DebugBox` 存档里落着一条树路径 `[界面] UIParent/GeneratedLuaUIObject_914`
+--   ⇒ **UIParent 至少 914 个直接子件**、且名字是**合成名**（DebugBox 在案）。从 UIParent 往下扫 2 层
+--   = 每个节点 2~3 次客户端调用（`GetRegions`/`GetChildren`/`GetName` 各一次）⇒ 一趟就是**上万次调用挤在同一帧**；
+--   而 `lfPickObjs` 是**逐名字**扫的 —— 7 个具名对象各走一趟（没命中就一路扫到 UIParent）⇒ 真机直接卡死。
+--   ⇒ 四道收口：① **预算**（**整趟共享**、写死常量，绝不拿数据规模当上限）② **`seen` 去环**
+--     （本客户端是 UE 封装，`GetChildren` 未必是树）③ **`UIParent` 不进兜底深扫**（它只是「整个 UI 的根」，
+--     而本模块 7 个目标全在动作条族里 ⇒ 扫它既无用又致命）④ **撞预算不许静默**（如实点名 + 本会话不再重试）。
+local LF_SCAN_MAX = 1500   -- 一趟（一次 lfPickObjs）里**所有名字共享**的节点预算
+local LF_SCAN_DEEP = 2     -- 兜底容器允许的深度（动作条族那几个帧很浅；真正的闸门是**预算**）
+local LF_SCAN_KEEP = 60    -- 落盘取证环上限（`EVAL_HELP_CONFIG.layerFixProbe`）
+local LF_PATH_MAX = 12     -- ★★★1.75.109 **路径缓存**的名字链长度上限（写死的常量；链是真实走出来的，不是猜的）
+local lfScanN = 0          -- 本趟已访问节点数（唯一写口 = lfScanTake）
+local lfScanCap = false    -- 本趟撞没撞预算（撞了 = 判不出 ⇒ 如实点名「有几项没敢扫」，绝不当成「没有」）
+
+-- ★★★1.75.109 **路径缓存**（用户原话：「**不要每次遍历.直接进行一次成功的隐藏之后记录路径就可以**」）：
+--   一次解析成功后，把**真实走出来的名字链**（从 `_G` 里那个根，逐级到叶子）落进
+--   `EVAL_HELP_CONFIG.layerFixPath[处理键][目标名] = { 根名, …, 叶子名 }` ⇒ 下次直接照链走：
+--   **每一级只枚举该帧的直接区域+子件**（几~几十个），代价比整树扫描小两个数量级，
+--   而且**根本不再进「深扫」那条路**（卡死的成因从源头消失；预算只留给「路径失效后的那一次重找」）。
+--   ★四条纪律：① 链必须**真实走出来**（`lfFindByName` 边下钻边记），绝不许按名字拼；
+--   ② 链上出现**匿名节点**（`GetName()` 读不到）⇒ **这条不许缓存**（缓存了下次也走不通，还会假装成功）；
+--   ③ 走不通 ⇒ **立刻删掉这条缓存**，并照旧回落一次有界扫描（坏缓存自愈，绝不因此放弃功能）；
+--   ④ 写口唯一 `lfPathPut`（校验：键/名是字符串、链长 1..`LF_PATH_MAX`、**末项必须等于这个名字**）。
+
 -- ============ 处理定义表（**唯一来源**）============
 local LF_FIXES = {
   {
@@ -111,6 +140,24 @@ local LF_FIXES = {
     --     藏了会让人以为插件坏了（要并进来只加几行 objs，其余代码一行不用改）。
     --   ★两头端盖（MainMenuBarLeftEndCap / RightEndCap = 狮鹫）归上面那条 `gryphon`，**不在这里重复**。
     key = "barBg", group = 1, kind = "hideObj",
+    -- ★★★1.75.109 **内置路径**（`名字 = { 根名, …, 叶子名 }`）：**真机日志烘进来的**「照路径直接拿」表。
+    --   来历（用户定的工作流）：「可以做个日志记录.我开启关闭.你读取日志直接就可以将正确的元素都记录好路径」
+    --   ⇒ 他开关一次 → 插件把「谁在第几级命中 + 完整路径链」写进 `layerFixProbe` 环 → 我读存档 →
+    --   把链**逐字填到这里** ⇒ 以后**任何玩家第一次勾选**都直接照链走（不再整树遍历，也不可能卡死）。
+    --   ★★**真机实测（1.75.109 · 账号 lihaiboas3 / 角色 Iosol 的日志，逐字照抄）**：
+    --     `MainMenuBarTexture0..3` 与 `BonusActionBarTexture0/1` **六片都是「①全局名」命中**
+    --     ⇒ 链 = `{ 名字 }`（ⓠ 走它 = 一次 `rawget`，**零枚举**）；
+    --     `MainMenuBarAnimFrame` **三级全没命中**（本趟 363 个节点、没撞预算，没找到 1）——
+    --     它**故意留在这里**：将来哪一版客户端把它放进 `_G` 或动作条族里就自动生效；
+    --     要现在就拿准它，跑 `/eh go 图层隐藏 深挖`（分帧有界深挖，找到就把链写进取证环）。
+    paths = {
+      ["MainMenuBarTexture0"] = { "MainMenuBarTexture0" },
+      ["MainMenuBarTexture1"] = { "MainMenuBarTexture1" },
+      ["MainMenuBarTexture2"] = { "MainMenuBarTexture2" },
+      ["MainMenuBarTexture3"] = { "MainMenuBarTexture3" },
+      ["BonusActionBarTexture0"] = { "BonusActionBarTexture0" },
+      ["BonusActionBarTexture1"] = { "BonusActionBarTexture1" },
+    },
     -- ★父级**逐字取自用户第二张真机图层树截图**（MainMenuBar 那棵树）：
     --   MainMenuBar → MainMenuBarArtFrame → [MainMenuBarTexture0..3]
     --   MainMenuBar → MainMenuBarOverlayFrame → [MainMenuBarAnimFrame]（该帧在树里是 ▶ 折叠的）
@@ -125,9 +172,12 @@ local LF_FIXES = {
       { cands = { "BonusActionBarTexture0" }, parent = { "BonusActionBarFrame" } },
       { cands = { "BonusActionBarTexture1" }, parent = { "BonusActionBarFrame" } },
     },
-    -- 通用兜底容器（`in` 没命中才用）；顺序 = 从最可能到最不可能
+    -- 通用兜底容器（`parent` 没命中才用）；顺序 = 从最可能到最不可能
+    -- ★★★1.75.109：**`UIParent` 已从这里摘掉**（旧写法把「整个 UI 的根」当兜底容器 ⇒ 真机卡死的根源）：
+    --   它是 914+ 直接子件的总根，从它往下扫 2 层 = 上万次客户端调用挤在同一帧；而本模块这 7 个目标
+    --   **全在动作条族里**（下面的 6 个容器），扫 UIParent 既无用又致命。找不到就如实缺席、一个字节都不碰。
     containers = { "MainMenuBarArtFrame", "MainMenuBar", "MainMenuBarOverlayFrame",
-      "MainMenuBarExpBar", "MainMenuBarMaxLevelBar", "BonusActionBarFrame", "UIParent" },
+      "MainMenuBarExpBar", "MainMenuBarMaxLevelBar", "BonusActionBarFrame" },
     layerLabel = "具名背景层",
     label = function() return L("TB_FIX_BARBG") end,
     tip = function() return L("TB_FIX_BARBG_TIP") end,
@@ -153,7 +203,14 @@ local LF = {
   keepDone = true,     -- 是否已停（初始 true = 还没武装过）
   keepWhy = nil,       -- 结束原因
   keepArmed = nil,     -- 这次窗口被谁武装的（诊断用）
-  retryFrame = nil,    -- 存档未就位时的有界重试帧
+  retry = nil,         -- ★1.75.109：存档未就位时的有界重试会话态（并进唯一节拍；原 retryFrame 已删）
+  -- ★1.75.109：**本会话已经撞过扫描预算**的处理键 ⇒ 后续（启动期复查 1s×5 / 再点一次）不再重扫
+  --   （不记这一笔 ⇒ 每拍重扫一次 = 卡死会重复 5 次；★用户显式取消勾选时清掉，让他有机会重问一次）
+  capKeys = {},
+  scanN = 0,           -- 最近一趟实际访问的节点数（读值口 / 播报用）
+  -- ★1.75.109 分帧深挖的会话态（`dig` = 正在跑；`digLast` = 上一次的结果一句话，体检口要报）
+  dig = nil,
+  digLast = nil,
 }
 
 -- ============ 小助手（同族工具；见文件头「纪律」那段）============
@@ -230,8 +287,87 @@ local function lfFixTbl(create)
   return t
 end
 
-local function lfFixOn(key)
-  local t = lfFixTbl(false)
+-- ============ 路径缓存（1.75.109；用户：「不要每次遍历.直接进行一次成功的隐藏之后记录路径就可以」）============
+--   `EVAL_HELP_CONFIG.layerFixPath[处理键][目标名] = { 根名, …, 叶子名 }`（★末项 = 目标名，写口校验）
+--   读口 `lfPathGet` / 写口**唯一** `lfPathPut` / 删口 `lfPathDel`（走不通就删 = 坏缓存自愈）
+local function lfPathStore(create)
+  local c = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(c) ~= "table" then return nil end
+  local t = c.layerFixPath
+  if type(t) ~= "table" then
+    if not create then return nil end
+    t = {}
+    c.layerFixPath = t
+  end
+  return t
+end
+local function lfPathGet(key, nm)
+  local t = lfPathStore(false)
+  local per = (type(t) == "table") and t[key] or nil
+  local chain = (type(per) == "table") and per[nm] or nil
+  return (type(chain) == "table") and chain or nil
+end
+local function lfPathDel(key, nm)
+  local t = lfPathStore(false)
+  local per = (type(t) == "table") and t[key] or nil
+  if type(per) ~= "table" then return false end
+  per[nm] = nil
+  return true
+end
+-- 唯一写口：校验全部做完才落盘（★末项必须等于这个名字 —— 写错 = 下次照着走必然走不通）
+local function lfPathPut(key, nm, chain)
+  if type(key) ~= "string" or key == "" then return false end
+  if type(nm) ~= "string" or nm == "" then return false end
+  if type(chain) ~= "table" then return false end
+  local n = table.getn(chain)
+  if n < 1 or n > LF_PATH_MAX then return false end
+  for i = 1, n do
+    if type(chain[i]) ~= "string" or chain[i] == "" then return false end
+  end
+  if chain[n] ~= nm then return false end
+  local t = lfPathStore(true)
+  if type(t) ~= "table" then return false end
+  local per = t[key]
+  if type(per) ~= "table" then per = {} t[key] = per end
+  local old, changed = per[nm], false
+  if type(old) ~= "table" or table.getn(old) ~= n then
+    changed = true
+  else
+    for i = 1, n do if old[i] ~= chain[i] then changed = true break end end
+  end
+  if not changed then return false end   -- ★没变就不写（存档不因为每次登录都重写一遍）
+  per[nm] = chain
+  return true
+end
+-- 只读：这个处理键已经缓存了几条路径（体检口用）
+local function lfPathCount(key)
+  local t = lfPathStore(false)
+  local per = (type(t) == "table") and t[key] or nil
+  if type(per) ~= "table" then return 0 end
+  local n = 0
+  for _ in pairs(per) do n = n + 1 end
+  return n
+end
+
+-- ★★★1.75.109 **有界落盘取证环**（`EVAL_HELP_CONFIG.layerFixProbe`，上限 `LF_SCAN_KEEP` 行）：
+--   用户的工作流 = 「我开关一下，你去读日志」⇒ **每次解析（勾选/取消/载入期）自动写**，
+--   不需要他敲任何命令；全文含「每个名字在第几级命中 + 完整路径链」⇒ 我读存档就能把正确的路径
+--   **烘进插件**（`LF_FIXES[].paths`），以后所有玩家第一次勾选就零遍历。
+--   ★上限到了从**头部**砍（最新在后，读的时候取尾部）；★`EVAL_HELP_CONFIG` 没就位就一个字节都不写。
+local function lfRingPush(line)
+  local c = rawget(_G, "EVAL_HELP_CONFIG")
+  if type(c) ~= "table" then return false end
+  local r = c.layerFixProbe
+  if type(r) ~= "table" then
+    r = {}
+    c.layerFixProbe = r
+  end
+  table.insert(r, tostring(line))
+  while table.getn(r) > LF_SCAN_KEEP do table.remove(r, 1) end
+  return true
+end
+
+local function lfFixOn(key)  local t = lfFixTbl(false)
   if type(t) ~= "table" then return false end
   return (t[key] == true)
 end
@@ -293,9 +429,20 @@ local function lfTextures(layer)
 end
 
 -- ===== 具名对象解析（kind = "hideObj" 用）=====
--- 在 obj 的 [区域 + 子件] 里按 **GetName()** 找 nm（带深度上限 ⇒ 绝不做无界遍历）
-local function lfFindByName(obj, nm, depth)
-  if not lfFrameUsable(obj) then return nil end
+-- 本趟还能不能继续扫 —— **唯一的预算闸**（★铁律：闸门必须排在**任何客户端调用之前**）：
+--   撞预算（`lfScanN >= LF_SCAN_MAX`）⇒ 置 `lfScanCap` 并**立刻停**（后面一律返回 false）；
+--   `seen[obj]` 已访问过 ⇒ 也停（去环：本客户端 `GetChildren` 未必是树，同族在案 = SimpleMap 的爆栈）。
+local function lfScanTake(seen, obj)
+  if lfScanCap then return false end
+  if lfScanN >= LF_SCAN_MAX then lfScanCap = true return false end
+  if seen[obj] then return false end
+  seen[obj] = true
+  lfScanN = lfScanN + 1
+  return true
+end
+
+-- 一个对象的**直接**区域 + 子件（唯一实现：深扫与「照路径逐级走」共用同一把尺子）
+local function lfKids(obj)
   local kids = {}
   local function collect(m)
     if type(m) ~= "function" then return end
@@ -305,43 +452,112 @@ local function lfFindByName(obj, nm, depth)
   end
   collect(obj.GetRegions)
   collect(obj.GetChildren)
+  return kids
+end
+
+-- ★★★1.75.109 **照路径走**（用户：「不要每次遍历.直接进行一次成功的隐藏之后记录路径就可以」）：
+--   `chain = { 根名, 中间名…, 叶子名 }`（根名必须能 `rawget(_G, …)` 到）
+--   ⇒ 从根开始，**每一级只枚举该帧的直接区域+子件**（几~几十个）逐级按名找下一级。
+--   ★代价 = 链长 × 每级直接子件数（比整树扫描小两个数量级）；★每级都过 `lfScanTake`（同一个预算池，
+--     防「病态长链」把这一趟吃光）；★任一级找不到 ⇒ 返回 nil（调用方立刻删掉这条缓存并回落一次有界扫描）。
+local function lfPathWalk(chain)
+  if type(chain) ~= "table" then return nil end
+  local n = table.getn(chain)
+  if n < 1 or n > LF_PATH_MAX then return nil end
+  local cur = lfFrameOf(chain[1])
+  if not (cur and lfFrameUsable(cur)) then return nil end
+  for i = 2, n do
+    local nm = chain[i]
+    if type(nm) ~= "string" or nm == "" then return nil end
+    if not lfScanTake({}, cur) then return nil end
+    local kids = lfKids(cur)
+    local nxt = nil
+    for k = 1, table.getn(kids) do
+      local o = kids[k]
+      if lfFrameUsable(o) and type(o.GetName) == "function" then
+        local ok, kn = pcall(o.GetName, o)
+        if ok and kn == nm then nxt = o break end
+      end
+    end
+    if not nxt then return nil end
+    cur = nxt
+  end
+  return cur
+end
+
+-- 在 obj 的 [区域 + 子件] 里按 **GetName()** 找 nm
+--   ★★★1.75.109 两道闸一起上：① 预算（`lfScanTake`，整趟共享）② `seen` 访问集（**每次遍历一份** ——
+--   跨名字共用会让第二个名字一步都走不动）。旧写法只有深度上限 ⇒ 真机卡死（见文件头那段）。
+--   ★`rec`（可选；传了才记路径）：`rec.path` = 祖先名字链、`rec.anon` = 链上有匿名节点（⇒ 不缓存）、
+--   `rec.leaf` = 叶子名。路径是**边下钻边记**出来的，绝不是按名字拼的。
+local function lfFindByName(obj, nm, depth, seen, rec)
+  seen = seen or {}
+  if not lfScanTake(seen, obj) then return nil end
+  if not lfFrameUsable(obj) then return nil end
+  local pushed = false
+  if rec then
+    local okn, v = pcall(obj.GetName, obj)
+    if okn and type(v) == "string" and v ~= "" then
+      table.insert(rec.path, v)
+      pushed = true
+    else
+      rec.anon = true
+    end
+  end
+  local kids = lfKids(obj)
   for i = 1, table.getn(kids) do
     local k = kids[i]
     if lfFrameUsable(k) and type(k.GetName) == "function" then
       local ok, kn = pcall(k.GetName, k)
-      if ok and kn == nm then return k end
+      if ok and kn == nm then
+        if rec then rec.leaf = nm end
+        return k
+      end
     end
   end
   local d = lfNum(depth, 0)
   if d > 0 then
     for i = 1, table.getn(kids) do
-      local f2 = lfFindByName(kids[i], nm, d - 1)
+      local f2 = lfFindByName(kids[i], nm, d - 1, seen, rec)
       if f2 then return f2 end
     end
   end
+  if rec and pushed then table.remove(rec.path) end
   return nil
 end
 
 -- 具名对象解析（**三级**，从最确定到最兜底）：
---   ① 全局名 `rawget(_G, 名字)`；
---   ② `in` = 真机图层树里看到的**真实父级**（浅扫，深度 1 —— 名字就在它自己的区域/子件里）；
---   ③ `containers` = 通用兜底容器（深扫，深度 2）。
+--   ① 全局名 `rawget(_G, 名字)`（零客户端调用）；
+--   ② `parent` = 真机图层树里看到的**真实父级**（浅扫，深度 1 —— 名字就在它自己的区域/子件里）；
+--   ③ `containers` = 通用兜底容器（深扫 `LF_SCAN_DEEP` 层，**共享预算**）。
 --   ★一个都不命中 ⇒ 交给调用方如实缺席（这里不猜、也不换一个名字相近的对象）。
-local function lfNamedScan(list, nm, depth)
+--   ★★`seen` 的**作用域 = 每个根一次遍历**（`lfFindByName` 自己建），**绝不跨名字共用** ——
+--     共用会让第二个名字「一步都走不动」（它要走的节点已被上一个名字标成「走过」了）⇒ 静默少找。
+--     真正跨名字共享的是**预算**（`lfScanN`，整趟一个池子）。
+--   ★★1.75.109：**三级由 `lfPickObjs` 分段调用**（全局名先给所有名字跑完，再父级、再兜底）——
+--     原来那个「一口气走完三级」的 `lfNamedHit` 已删除：它会让排在前面的名字把预算吃光（静默少藏）。
+--   ★`rec`（可选）= 边下钻边记路径（命中时交出 `rec.chain`，供**烘进插件**与运行时缓存用）。
+local function lfNamedScan(list, nm, depth, rec)
   if type(list) ~= "table" then return nil end
   for i = 1, table.getn(list) do
-    local root = lfFrameOf(list[i])
+    local rootKey = list[i]
+    local root = lfFrameOf(rootKey)
     if root and lfFrameUsable(root) then
-      local hit = lfFindByName(root, nm, depth)
-      if hit then return hit end
+      if rec then rec.path, rec.anon, rec.leaf, rec.chain = {}, false, nil, nil end
+      local hit = lfFindByName(root, nm, depth, {}, rec)
+      if hit then
+        if rec and not rec.anon then
+          local chain = {}
+          for k = 1, table.getn(rec.path) do chain[k] = rec.path[k] end
+          chain[1] = rootKey          -- ★首项必须是**能 rawget 到的全局名**（`GetName()` 读回的可能不一样）
+          table.insert(chain, nm)     -- 叶子
+          rec.chain = chain
+        end
+        return hit
+      end
     end
   end
   return nil
-end
-local function lfNamedHit(inList, containers, nm, depth)
-  local g = lfFrameOf(nm)
-  if g and lfFrameUsable(g) then return g end
-  return lfNamedScan(inList, nm, 1) or lfNamedScan(containers, nm, depth)
 end
 
 -- 播报用名词（两种 kind 口径不同：不该把「背景层」叫成「纹理」）
@@ -356,23 +572,144 @@ local function lfPickObjs(fix, layer)
   if kind == "hideObj" then
     local list = (type(fix.objs) == "table") and fix.objs or nil
     if not list then return nil, "这条处理没写 objs（具名对象清单）" end
-    local out, miss = {}, {}
+    local out, miss, capped = {}, {}, {}
+    -- ★★★1.75.109 解析次序（**顺序即判据**：越便宜、越确定的路越先走，贵的最后才动）：
+    --   ⓠ **照路径走**：① 内置路径（`fix.paths`，真机日志烘进来的）② 运行时缓存（`layerFixPath`，上次成功记下的）
+    --      —— 每级只枚举直接区域+子件 ⇒ **稳态根本不做整树遍历**（用户要的就是这个）；
+    --   ⒜ **全局名**（`rawget`，零客户端调用）—— 给全部名字一次机会；
+    --   ⒝ **真实父级浅扫**（深度 1；**共享预算**）；
+    --   ⒞ **兜底容器深扫**（`LF_SCAN_DEEP` 层；同一个预算）。
+    --   ★分段（而不是按名字一口气走完）的理由：那会让**排在前面的名字**把预算吃光、后面的名字**静默找不到**。
+    --   ★撞预算 ⇒ 后面的名字**一个都不扫**、进 `capped` 如实点名（判不出就如实说，绝不当「没有」）。
+    lfScanN, lfScanCap = 0, false
+    local pend, pend2, byPath = {}, {}, 0
+    local trace = {}   -- ★真机取证：逐名字一行（级别 + 完整路径）⇒ 烘进插件/我读存档定案
+    -- ⓠ 路径（内置 → 运行时缓存）
     for i = 1, table.getn(list) do
       local spec = list[i]
       local cands = (type(spec) == "table") and spec.cands or { spec }
       local inList = (type(spec) == "table") and spec.parent or nil -- ★真实父级（可选；键名是 parent，不是 in）
+      -- ⓠ 路径（内置优先 → **内置失效就继续试运行时缓存** → 都失效才去扫描）
+      --   ★★★这条「继续试下一个」是必须的（harness 当场抓到）：不同机器/版本上，内置路径的根或中间级
+      --   可能不存在，而**这台机器上次成功学到的链**（`layerFixPath`）照样有效 ⇒ 绝不能因为内置失效就去扫。
       local hit = nil
       for j = 1, table.getn(cands) do
-        hit = lfNamedHit(inList, fix.containers, cands[j], 2)
+        local nm = tostring(cands[j])
+        local tries = {
+          { from = "内置路径", builtin = true, chain = (type(fix.paths) == "table") and fix.paths[nm] or nil },
+          { from = "路径缓存", builtin = false, chain = lfPathGet(fix.key, nm) },
+        }
+        for t = 1, 2 do
+          local chain = tries[t].chain
+          if type(chain) == "table" then
+            hit = lfPathWalk(chain)
+            if hit then
+              byPath = byPath + 1
+              table.insert(trace, string.format("%s ← %s（%s）", nm, tries[t].from, table.concat(chain, "/")))
+              break
+            end
+            -- 失效：内置路径**留着**（别的客户端版本可能正是这条路，也留给体检口如实报）；
+            --   运行时缓存**立刻删**（它是这台机器学到的，坏了就是坏了 ⇒ 下次重新学）
+            if not tries[t].builtin then lfPathDel(fix.key, nm) end
+            lfLog("PATH MISS key=" .. tostring(fix.key) .. " nm=" .. nm .. " via=" .. tries[t].from ..
+              " chain=" .. table.concat(chain, "/"))
+            -- ★同一个事实也写进取证环（用户「我开关、你读日志」的工作流就靠这一环：能分清
+            --   「路径坏了（客户端改了层级）」与「名字变了」——两者都要重新烘路径）
+            lfRingPush(string.format("[解析] %s %s ← %s**失效**（%s）—— %s",
+              tostring(fix.key), nm, tries[t].from, table.concat(chain, "/"),
+              tries[t].builtin and "改试运行时缓存/扫描" or "已删掉这条缓存，改走扫描"))
+          end
+        end
         if hit then break end
       end
+      if hit then table.insert(out, hit) else table.insert(pend, { cands = cands, inList = inList }) end
+    end
+    -- ★`LF.capKeys[key]` = **本会话已经撞过预算**的处理 ⇒ 扫描路（⒝/⒞）整段让位
+    --   （启动期复查 1s×5 每拍重扫一次 = 卡死会重复 5 次；撞过一次就记名，用户取消勾选时清掉、可重问一次）
+    local skip2 = (type(LF.capKeys) == "table") and (LF.capKeys[fix.key] == true)
+    -- ⒜ 全局名
+    for i = 1, table.getn(pend) do
+      local cands, inList = pend[i].cands, pend[i].inList
+      local hit, nm = nil, nil
+      for j = 1, table.getn(cands) do
+        local g = lfFrameOf(cands[j])
+        if g and lfFrameUsable(g) then hit, nm = g, tostring(cands[j]) break end
+      end
+      if hit then
+        table.insert(out, hit)
+        table.insert(trace, tostring(nm) .. " ← ①全局名")
+        lfPathPut(fix.key, tostring(nm), { tostring(nm) })
+      else
+        table.insert(pend2, { cands = cands, inList = inList })
+      end
+    end
+    -- ⒝ 真实父级浅扫
+    local pend3 = {}
+    for i = 1, table.getn(pend2) do
+      local cands, inList = pend2[i].cands, pend2[i].inList
+      local hit, nm = nil, nil
+      if not skip2 then
+        for j = 1, table.getn(cands) do
+          local rec = {}
+          hit = lfNamedScan(inList, cands[j], 1, rec)
+          if hit then
+            nm = tostring(cands[j])
+            if type(rec.chain) == "table" then
+              lfPathPut(fix.key, nm, rec.chain)
+              table.insert(trace, nm .. " ← ②真实父级（" .. table.concat(rec.chain, "/") .. "）")
+            else
+              table.insert(trace, nm .. " ← ②真实父级（路径不可缓存）")
+            end
+            break
+          end
+        end
+      end
+      if hit then table.insert(out, hit) else table.insert(pend3, cands) end
+    end
+    -- ⒞ 兜底容器深扫
+    for i = 1, table.getn(pend3) do
+      local cands = pend3[i]
+      local hit, nm = nil, nil
+      if not skip2 then
+        for j = 1, table.getn(cands) do
+          local rec = {}
+          hit = lfNamedScan(fix.containers, cands[j], LF_SCAN_DEEP, rec)
+          if hit then
+            nm = tostring(cands[j])
+            if type(rec.chain) == "table" then
+              lfPathPut(fix.key, nm, rec.chain)
+              table.insert(trace, nm .. " ← ③兜底容器（" .. table.concat(rec.chain, "/") .. "）")
+            else
+              table.insert(trace, nm .. " ← ③兜底容器（路径不可缓存）")
+            end
+            break
+          end
+        end
+      end
       if hit then table.insert(out, hit)
+      elseif lfScanCap or skip2 then table.insert(capped, tostring(cands[1]))
       else table.insert(miss, tostring(cands[1])) end
     end
-    if table.getn(out) == 0 then
-      return nil, "具名对象一个都没找到（" .. table.concat(miss, " · ") .. "）"
+    -- ★真机取证 + 自查：把这一趟「谁在第几级命中、完整路径是什么」逐行记下来
+    --   （用户的工作流：他开关一下，我读存档就能把正确的路径链烘进 `LF_FIXES[].paths`）
+    for i = 1, table.getn(trace) do lfRingPush("[解析] " .. tostring(fix.key) .. " " .. trace[i]) end
+    if table.getn(trace) > 0 or table.getn(miss) > 0 or table.getn(capped) > 0 then
+      lfRingPush(string.format("[解析] %s：命中 %d（其中照路径 %d）· 没找到 %d · 没敢扫 %d · 本趟节点 %d%s",
+        tostring(fix.key), table.getn(out), byPath, table.getn(miss), table.getn(capped), lfScanN,
+        lfScanCap and "（★撞预算）" or ""))
     end
-    return out, nil, miss -- ★部分命中：miss 跟着播报一起报出去，绝不静默少藏
+    fix.lastByPath = byPath
+    fix.lastScanN = lfScanN
+    if table.getn(out) == 0 then
+      local why = "具名对象一个都没找到"
+      if table.getn(miss) > 0 then why = why .. "（" .. table.concat(miss, " · ") .. "）" end
+      if table.getn(capped) > 0 then
+        why = why .. "；★另有 " .. tostring(table.getn(capped)) .. " 项**没敢扫**（" .. table.concat(capped, " · ") ..
+          "）—— 为不卡死提前收工（见 /eh go 图层隐藏）"
+      end
+      return nil, why
+    end
+    return out, nil, miss, capped -- ★部分命中：miss / capped 跟着播报一起报出去，绝不静默少藏
   end
   if kind ~= "hideTex" then return nil, "未知的处理类型：" .. kind end
   local tex, why = lfTextures(layer)
@@ -404,6 +741,8 @@ local function lfPickObjs(fix, layer)
 end
 
 -- 播报文本（如实带数字 / 层名 / 贴图路径；本来就隐藏的个数也报出来，不把「没变化」说成「藏好了」）
+--   ★1.75.109 补两条**如实说明**（都属「判不出就说判不出」）：① `capped` = 因扫描预算没敢扫的项；
+--   ② `scanCap` = 本趟撞了预算（把「为不卡死提前收工」这句话连同节点数一起说出来）。
 local function lfMsg(fix, st)
   local n = table.getn(st.objs)
   local p = {}
@@ -411,6 +750,12 @@ local function lfMsg(fix, st)
   local miss = ""
   if type(st.miss) == "table" and table.getn(st.miss) > 0 then
     miss = "；**没找到**：" .. table.concat(st.miss, " · ")
+  end
+  if type(st.capped) == "table" and table.getn(st.capped) > 0 then
+    miss = miss .. "；★**没敢扫**（为不卡死提前收工）：" .. table.concat(st.capped, " · ")
+  end
+  if st.scanCap == true then
+    miss = miss .. "｜★本趟扫描撞到预算上限 " .. tostring(LF_SCAN_MAX) .. " 个节点（已提前停，界面没有被弄坏）"
   end
   return string.format("图层隐藏[%s]：已隐藏 %d 个%s（层=%s%s）｜贴图：%s%s",
     lfFixWord(fix, "label"), n, lfNoun(fix), tostring(st.layer),
@@ -429,10 +774,19 @@ local function lfApplyOne(fix, quiet)
     layer, hit = lfFixLayer(fix)
     if not layer then return false, "layer-missing", "层不在（候选帧名逐个都没命中）" end
   end
-  local objs, why, miss = lfPickObjs(fix, layer)
+  local objs, why, miss, capped = lfPickObjs(fix, layer)
+  -- ★1.75.109 **扫描账**（在 `lfPickObjs` 之后立刻取，别让后面的调用把它冲掉）：
+  --   `scanCap` = 这一趟撞没撞预算 ⇒ 记进 `LF.capKeys`（启动期复查/再点一次都不再重扫 = 卡死不重复）
+  local scanCap, scanNodes = lfScanCap, lfScanN
+  LF.scanN = scanNodes
+  if scanCap then
+    if type(LF.capKeys) ~= "table" then LF.capKeys = {} end
+    LF.capKeys[fix.key] = true
+    lfLog("SCAN CAP key=" .. tostring(fix.key) .. " nodes=" .. tostring(scanNodes) .. "（本会话不再深扫这一条）")
+  end
   if not objs then return false, "pick-failed", why end
   local st = { key = fix.key, layer = hit or fix.layerLabel or "具名对象", objs = objs, orig = {}, paths = {},
-    already = 0, miss = miss }
+    already = 0, miss = miss, capped = capped, scanCap = scanCap, scanN = scanNodes }
   for i = 1, table.getn(objs) do
     local o = objs[i]
     local sh = nil -- 三态：true / false / nil(读不到)
@@ -455,6 +809,9 @@ end
 -- 还原一条（**只还原确定是「我们藏起来的」那些**：读到「本来就隐藏」的绝不用 Show 把它弄出来）
 local function lfResetOne(fix, quiet)
   local st = LF.fixState[fix.key]
+  -- ★1.75.109：取消勾选 = 用户主动收回这一次请求 ⇒ 连同「本会话已撞过预算」的记名一起清掉
+  --   （下次勾上还有机会重扫一次；不清 = 用户永远看不到那几片，且没有任何解释）。
+  if type(LF.capKeys) == "table" then LF.capKeys[fix.key] = nil end
   if type(st) ~= "table" then return 0 end
   local n = 0
   for i = 1, table.getn(st.objs) do
@@ -501,14 +858,19 @@ end
 -- ============ 启动期**有界**复查窗口（1s × 5 次，做完摘脚本即停）============
 -- ① 勾了但还没生效（层当时还没建出来）→ 在这里补上；
 -- ② 已生效、但客户端自己又把它显示回来了 → **再藏一次**（守护；如实计数，不静默）。
+-- ★★★1.75.109 **前向声明（本项目 R2 老雷，必须照这条写）**：节拍那两个函数（handler `lfBeat` 与
+--   挂/摘唯一入口 `lfBeatSync`）在下面才定义，而 `lfStop` / `lfDigStop` / `lfDigStep` **都还没有它们**；
+--   写成 `local function` ⇒ 引用点绑**全局 nil** ⇒ 运行时 `attempt to call a global 'lfBeatSync'`
+--   （被 pcall 包住时**完全哑**：节拍永远挂不上、深挖永远推不动）。⇒ 声明放这里、定义处改赋值。
+local lfBeatSync, lfBeat
+
 local function lfStop(why)
   if LF.keepDone then return end
   LF.keepDone = true
   LF.keepWhy = tostring(why or "?")
-  local kf = LF.keepFrame
-  if kf and type(kf.SetScript) == "function" then
-    pcall(kf.SetScript, kf, "OnUpdate", nil) -- ★永久停：脚本被摘掉 ⇒ 不再有常驻 tick
-  end
+  -- ★1.75.109：**不再直接 SetScript(nil)** —— 挂/摘收进唯一入口 `lfBeatSync`
+  --   （本模块现在有两种活要跑：keep 复查窗口 与 分帧深挖 ⇒ 谁还在跑就不能摘，否则另一个永远推不动）
+  lfBeatSync()
   if LF.keepLate > 0 or LF.keepRe > 0 then
     say(string.format("图层隐藏：启动期复查结束（%s）—— 补生效 %d 条（层晚出现）· 又把 %d 个被显示回来的对象藏了回去（守护）",
       tostring(LF.keepWhy), LF.keepLate, LF.keepRe))
@@ -563,7 +925,8 @@ local function lfTick()
   return lateN + reN
 end
 
-local function lfOnUpdate(a1)
+-- 启动期复查的**一拍**（原 `lfOnUpdate` 的体重命名；逻辑一字未改）
+local function lfKeepBeat(a1)
   if LF.keepDone then return end
   local dt = lfNum(a1, nil)
   if not dt then dt = lfNum(arg1, 0.05) end
@@ -584,6 +947,161 @@ local function lfOnUpdate(a1)
   if why then lfStop(why) end
 end
 
+-- ============ ★★★1.75.109 分帧有界深挖（找「三级都没命中」的那几片；**绝不卡死**）============
+--   为什么要它：真机日志（1.75.109 · lihaiboas3/Iosol）证明 **`MainMenuBarAnimFrame` 三级都没命中**
+--   （本趟 363 个节点、没撞预算），而用户图层树截图里它确实在界面上。
+--   ⇒ 直接在节拍里扫整个 UI 就是**当年卡死的那条路**；这里拆成**每帧固定节点预算、跨帧接着走**：
+--   `LF_DIG_PER` 节点/帧 · 总量 `LF_DIG_MAX` · 深度上限 `LF_DIG_DEPTH`（都用写死的常量）。
+--   ★命中 ⇒ 把**完整链**写进取证环（我读存档就能烘 `LF_FIXES[].paths`）；扫完/撞上限 ⇒ 如实说没找到。
+--   ★链上出现**匿名节点**（`GetName()` 读不到）就记 `?` —— 烘焙时一眼看出那一级没法照名字走。
+local LF_DIG_PER = 400
+local LF_DIG_MAX = 20000
+local LF_DIG_DEPTH = 8
+
+-- 帧的**唯一创建口**（keep 复查 / 分帧深挖 / 存档未就位的重试 —— 三种活共用**同一个**节拍帧）
+local function lfFrameEnsure()
+  if LF.keepFrame then return LF.keepFrame end
+  if type(CreateFrame) ~= "function" then return nil end
+  local kf = CreateFrame("Frame", "EVAL_LF_KEEP", lfHost())
+  LF.keepFrame = kf
+  return kf
+end
+
+-- 存档未就位时的**有界重试**（原来自带第二帧；1.75.109 并进唯一节拍：0.5s 一拍、上限 20 次）
+--   ★`EVAL_LF_INSTALL` 是全局函数（定义在下面）⇒ 调用时按全局名字解析，不是编译期绑定（不违 R2）。
+local function lfRetryBeat(a1)
+  local r = LF.retry
+  if type(r) ~= "table" then return end
+  if LF.installed then LF.retry = nil return end
+  local dt = lfNum(a1, nil)
+  if not dt then dt = lfNum(arg1, 0.05) end
+  if (not dt) or dt < 0 then dt = 0.05 end
+  r.acc = lfNum(r.acc, 0) + dt
+  if r.acc < 0.5 then return end
+  r.acc = 0
+  r.tries = lfNum(r.tries, 0) + 1
+  if EVAL_LF_INSTALL() then
+    lfLog("INSTALL：就位后第 " .. tostring(r.tries) .. " 次重试成功")
+    LF.retry = nil
+  elseif r.tries >= 20 then
+    say("图层隐藏：存档重试 20 次仍未就位（期间未写入，不会抹数据）；下次 /reload 再试")
+    LF.retry = nil
+  end
+end
+
+local function lfDigStop(why, hitChain)
+  local d = LF.dig
+  LF.dig = nil
+  if type(d) ~= "table" then return end
+  if type(hitChain) == "table" then
+    local line = string.format("[深挖] 找到 %s ← %s（%d 个节点 / %d 帧）",
+      tostring(d.target), table.concat(hitChain, "/"), lfNum(d.n, 0), lfNum(d.ticks, 0))
+    LF.digLast = line
+    lfRingPush(line)
+    lfLog("DIG HIT " .. tostring(d.target) .. " chain=" .. table.concat(hitChain, "/"))
+    say("图层隐藏深挖：找到 " .. tostring(d.target) .. " —— " .. table.concat(hitChain, "/") ..
+      "（已写进取证环，可让 AI 烘成内置路径）")
+  else
+    local line = string.format("[深挖] %s **没找到**（%d 个节点 / %d 帧，%s）—— 名字可能不对，或被合成名替代",
+      tostring(d.target), lfNum(d.n, 0), lfNum(d.ticks, 0), tostring(why or "扫完"))
+    LF.digLast = line
+    lfRingPush(line)
+    lfLog("DIG MISS " .. tostring(d.target) .. " why=" .. tostring(why) .. " n=" .. tostring(d.n))
+    say("图层隐藏深挖：" .. tostring(d.target) .. " 深挖也没找到（" .. tostring(why or "扫完") .. "）—— 详见取证环")
+  end
+  lfBeatSync()
+end
+
+-- 深挖的**一拍**：处理至多 `LF_DIG_PER` 个节点（迭代式 DFS，绝不递归 ⇒ 不可能爆栈）
+local function lfDigStep()
+  local d = LF.dig
+  if type(d) ~= "table" then return end
+  d.ticks = lfNum(d.ticks, 0) + 1
+  local budget = LF_DIG_PER
+  while budget > 0 do
+    local ns = table.getn(d.stack)
+    if ns <= 0 then lfDigStop("扫完") return end
+    local top = d.stack[ns]
+    table.remove(d.stack, ns)
+    if not d.seen[top.o] then
+      d.seen[top.o] = true
+      d.n = lfNum(d.n, 0) + 1
+      budget = budget - 1
+      if d.n > LF_DIG_MAX then lfDigStop("撞总量上限 " .. tostring(LF_DIG_MAX)) return end
+      if lfFrameUsable(top.o) then
+        local kids = lfKids(top.o)
+        for i = 1, table.getn(kids) do
+          local k = kids[i]
+          if (not d.seen[k]) and lfFrameUsable(k) and type(k.GetName) == "function" then
+            local ok, kn = pcall(k.GetName, k)
+            if ok and kn == d.target then
+              local chain = {}
+              for x = 1, table.getn(top.chain) do chain[x] = top.chain[x] end
+              table.insert(chain, kn)
+              lfDigStop(nil, chain)
+              return
+            end
+            if top.d < LF_DIG_DEPTH then
+              local c2 = {}
+              for x = 1, table.getn(top.chain) do c2[x] = top.chain[x] end
+              table.insert(c2, (ok and type(kn) == "string" and kn ~= "") and kn or "?")
+              table.insert(d.stack, { o = k, chain = c2, d = top.d + 1 })
+            end
+          end
+        end
+      end
+    end
+  end
+  lfBeatSync()
+end
+
+-- ============ 节拍**唯一入口**（挂/摘只此一处；一个模块只许一个节拍帧）============
+--   ★要挂的条件 = 「keep 复查窗口还在跑」**或**「深挖还在跑」；两者都停 ⇒ **真摘**（`SetScript(…, nil)`）。
+--   ★幂等：重复「要挂」不重复挂；`lfArm` / `lfStop` / `lfDigStep` / `lfDigStart` 全走它。
+--   ★★定义处用**赋值**（顶部已前向声明 `local lfBeatSync, lfBeat`）—— 见那边那段 R2 说明。
+--   ★★★1.75.109：**本模块只有这一帧**（`EVAL_LF_KEEP`）—— 原来「存档未就位的重试」自带第二帧
+--   （`EVAL_LF_INSTALL_RETRY` + 4 处 `SetScript`）已并进来（`LF.retry` 腿）⇒ 全文件 `SetScript` 只剩
+--   「这一次挂」与「这一次摘」两处，harness 的 A18 结构钉直接数这个数（一个模块只许一个节拍帧）。
+lfBeatSync = function()
+  local need = (LF.keepDone ~= true) or (type(LF.dig) == "table") or (type(LF.retry) == "table")
+  local kf = LF.keepFrame
+  if not kf then
+    if not need then return false end
+    kf = lfFrameEnsure()
+  end
+  if not kf or type(kf.SetScript) ~= "function" then return false end
+  pcall(kf.SetScript, kf, "OnUpdate", need and lfBeat or nil)
+  return need
+end
+
+-- 唯一的 handler（零形参：dt 只能从全局 `arg1` 取 —— 本项目在案）
+lfBeat = function(a1)
+  if type(LF.retry) == "table" then lfRetryBeat(a1) end
+  if LF.keepDone ~= true then lfKeepBeat(a1) end
+  if type(LF.dig) == "table" then lfDigStep() end
+  lfBeatSync()
+end
+
+-- 起一次深挖（`/eh go 图层隐藏 深挖 [名字]` 的唯一实现）——**只读**：不改界面、不写配置
+local function lfDigStart(nm)
+  if type(nm) ~= "string" or nm == "" then return false, "没给要深挖的名字" end
+  local rootKey = "UIParent"
+  local root = lfFrameOf(rootKey)
+  if not (root and lfFrameUsable(root)) then return false, "找不到 UIParent（深挖的起点）" end
+  if type(CreateFrame) ~= "function" then return false, "建不出节拍帧（客户端接口不可用）" end
+  local kf = LF.keepFrame
+  if not kf then
+    kf = CreateFrame("Frame", "EVAL_LF_KEEP", lfHost())
+    LF.keepFrame = kf
+  end
+  LF.dig = { target = nm, stack = { { o = root, chain = { rootKey }, d = 0 } }, seen = {}, n = 0, ticks = 0 }
+  lfRingPush(string.format("[深挖] 开始找 %s（每帧 %d 节点 / 总量上限 %d / 深度上限 %d）—— 分帧跑，不会卡",
+    nm, LF_DIG_PER, LF_DIG_MAX, LF_DIG_DEPTH))
+  lfLog("DIG START " .. nm)
+  lfBeatSync()
+  return true
+end
+
 local function lfArm(why)
   if type(CreateFrame) ~= "function" then return false end
   local kf = LF.keepFrame
@@ -596,7 +1114,7 @@ local function lfArm(why)
   LF.keepWhy = nil
   LF.keepArmed = tostring(why or "?")
   LF.keepLate, LF.keepRe = 0, 0
-  if type(kf.SetScript) == "function" then pcall(kf.SetScript, kf, "OnUpdate", lfOnUpdate) end
+  lfBeatSync()   -- ★唯一入口（要挂就挂）
   lfLog("ARM why=" .. tostring(why))
   return true
 end
@@ -636,27 +1154,9 @@ function EVAL_LF_INSTALL()
   -- ★存档没就位 ⇒ **不锁死**（留给后续调用/重试重来）；写存档必须在就位之后（否则会抹数据）
   if type(rawget(_G, "EVAL_HELP_CONFIG")) ~= "table" then
     lfLog("INSTALL：存档尚未就位 → 本次不锁死，自带有界重试")
-    if type(CreateFrame) == "function" and not LF.retryFrame then
-      local rf = CreateFrame("Frame", "EVAL_LF_INSTALL_RETRY", lfHost())
-      LF.retryFrame = rf
-      local acc, tries = 0, 0
-      rf:SetScript("OnUpdate", function()
-        if LF.installed then pcall(rf.SetScript, rf, "OnUpdate", nil) LF.retryFrame = nil return end
-        acc = acc + (lfNum(arg1, 0.05))
-        if acc < 0.5 then return end
-        acc = 0
-        tries = tries + 1
-        if EVAL_LF_INSTALL() then
-          lfLog("INSTALL：就位后第 " .. tostring(tries) .. " 次重试成功")
-          pcall(rf.SetScript, rf, "OnUpdate", nil)
-          LF.retryFrame = nil
-        elseif tries >= 20 then
-          say("图层隐藏：存档重试 20 次仍未就位（期间未写入，不会抹数据）；下次 /reload 再试")
-          pcall(rf.SetScript, rf, "OnUpdate", nil)
-          LF.retryFrame = nil
-        end
-      end)
-    end
+    -- ★1.75.109：重试并进**唯一节拍**（原来自带第二帧 `EVAL_LF_INSTALL_RETRY` —— 一个模块只许一个节拍帧）
+    LF.retry = { acc = 0, tries = 0 }
+    lfBeatSync()
     return false
   end
   LF.installed = true
@@ -732,6 +1232,41 @@ end
 -- 结算入口（工具箱那个多选下拉每点一下就调一次；非静默 = 当场播报「藏了哪几个 / 还原了几个」）
 function EVAL_LF_SYNC(quiet) return lfSync(quiet and true or false) end
 
+-- ★★★1.75.109 深挖入口（`/eh go 图层隐藏 深挖 [名字]`）：**只读**（不改界面、不写配置）
+--   ★不给名字就自动挑「第一条**还没有内置路径**的具名对象」—— 真机实测那就是三级都没命中的那一片
+--     （1.75.109 日志：`MainMenuBarAnimFrame`）。结果写进 `layerFixProbe` 环 ⇒ 我读存档就能烘 `paths`。
+function EVAL_LF_DIG(nm)
+  if type(nm) ~= "string" or nm == "" then
+    nm = nil
+    for i = 1, table.getn(LF_FIXES) do
+      local f = LF_FIXES[i]
+      if tostring(f.kind or "") == "hideObj" and type(f.objs) == "table" then
+        for k = 1, table.getn(f.objs) do
+          local spec = f.objs[k]
+          local cands = (type(spec) == "table") and spec.cands or { spec }
+          local cand = tostring(cands[1])
+          if not ((type(f.paths) == "table") and (f.paths[cand] ~= nil)) then
+            nm = cand
+            break
+          end
+        end
+      end
+      if nm then break end
+    end
+  end
+  if type(nm) ~= "string" or nm == "" then return false, "所有具名对象都已有内置路径（没有要深挖的）" end
+  if type(LF.dig) == "table" then return false, "上一次深挖还在跑（目标 " .. tostring(LF.dig.target) .. "）" end
+  local ok, err = lfDigStart(nm)
+  return ok, nm, err
+end
+
+-- 深挖的只读状态（体检口用）
+function EVAL_LF_DIG_STATE()
+  local d = LF.dig
+  if type(d) ~= "table" then return false, LF.digLast or "无" end
+  return true, string.format("%s：已走 %d 个节点 / %d 帧", tostring(d.target), lfNum(d.n, 0), lfNum(d.ticks, 0))
+end
+
 -- [重置]：还原全部已生效的处理 + 清空勾选（**如实报数字**；没勾任何条目也照样报「无事可做」）
 function EVAL_LF_RESET()
   local restored, n = 0, table.getn(LF_FIXES)
@@ -743,6 +1278,106 @@ function EVAL_LF_RESET()
   say(string.format("图层隐藏：重置完成 —— 还原 %d 个对象 · 已清空 %d 条处理的勾选（要再启用请点 [设置]）",
     restored, n))
   return restored
+end
+
+-- ============ 只读取证（1.75.109；「动作条背景初次勾选卡死」的定案口）============
+-- 一条命令拿全部数字：`/eh go 图层隐藏`（别名 `/eh go lf`）⇒ 本函数 + 有界落盘环 `layerFixProbe`
+--   （★那个环平时**每次解析都自动写** —— 用户「开关一下、我读日志」的工作流不依赖这条命令）。
+--   ★为什么必须有它：卡死的真机读数（**UIParent 到底多大 / 7 个名字各在第几级命中 / 一趟扫了多少节点 /
+--   路径缓存有没有建起来**）只能真机回答；而按本项目纪律「AI 自己读存档、不让用户转述」⇒ 全文进有界环。
+--   ★本函数**一个字节都不写界面**（不 Hide / 不记 fixState / 不写配置）—— 只追加取证环。
+-- 一个帧的**规模**（★只问答数、**绝不枚举** —— 这正是 EH_DebugBox 1.75.48 的级联手法：
+--   `GetNumChildren/GetNumRegions` 拿不到才如实写「判不出」，绝不退回「枚举一遍数个数」）
+local function lfSizeOf(f)
+  if not f then return nil, nil end
+  local k, r = nil, nil
+  if type(f.GetNumChildren) == "function" then
+    local ok, v = pcall(f.GetNumChildren, f)
+    if ok and tonumber(v) then k = tonumber(v) end
+  end
+  if type(f.GetNumRegions) == "function" then
+    local ok, v = pcall(f.GetNumRegions, f)
+    if ok and tonumber(v) then r = tonumber(v) end
+  end
+  return k, r
+end
+
+function EVAL_LF_PROBE()
+  local out = {}
+  local function P(s) table.insert(out, tostring(s)) end
+  P(string.format("图层隐藏体检：预算 %d 节点/趟 · 兜底深度 %d · 落盘环上限 %d 行",
+    LF_SCAN_MAX, LF_SCAN_DEEP, LF_SCAN_KEEP))
+  -- ① 两条处理各自的勾选 / 生效状态
+  for i = 1, table.getn(LF_FIXES) do
+    local f = LF_FIXES[i]
+    local st = LF.fixState[f.key]
+    local on = lfFixOn(f.key)
+    P(string.format("· [%s] 勾选=%s 生效=%s%s", tostring(f.key), on and "是" or "否",
+      (type(st) == "table") and ("是（已藏 " .. tostring(table.getn(st.objs)) .. " 个）") or "否",
+      (type(LF.capKeys) == "table" and LF.capKeys[f.key]) and "｜★本会话已撞过预算（不再深扫）" or ""))
+    -- ★路径缓存的状态（用户的工作流就靠这两个数：内置烘了几条 / 运行时学到了几条）
+    local builtN = 0
+    if type(f.paths) == "table" then for _ in pairs(f.paths) do builtN = builtN + 1 end end
+    P(string.format("· [%s] 路径：内置 %d 条 ｜ 运行时缓存 %d 条 ｜ 最近一照路径命中 %s 项",
+      tostring(f.key), builtN, lfPathCount(f.key), tostring(lfNum(f.lastByPath, 0))))
+  end
+  -- ② UIParent 的规模（**只问答数**；这是「旧写法为什么会卡死」的直接读数）
+  local ui = rawget(_G, "UIParent")
+  local uc, ur = lfSizeOf(ui)
+  P(string.format("· UIParent：%s ｜ 直接子件=%s 区域=%s（旧兜底容器从这个根深扫 2 层 = 上万次调用/趟）",
+    ui and "在" or "不在", (uc ~= nil) and tostring(uc) or "判不出", (ur ~= nil) and tostring(ur) or "判不出"))
+  -- ★分帧深挖的状态（`/eh go 图层隐藏 深挖` 的进度 / 上次结果）
+  local digOn, digTxt = EVAL_LF_DIG_STATE()
+  P(string.format("· 深挖：%s（%s）", digOn and "正在跑" or "没在跑", tostring(digTxt)))
+  -- ③ 逐条 hideObj：**三级体检**（哪一级命中 / 一趟扫多少节点 / 有没有撞预算）—— 全只读
+  for i = 1, table.getn(LF_FIXES) do
+    local f = LF_FIXES[i]
+    if tostring(f.kind or "") == "hideObj" and type(f.objs) == "table" then
+      lfScanN, lfScanCap = 0, false
+      P(string.format("· [%s] 具名对象 %d 个（只读体检，顺序=ⓠ路径 ①全局名 ②真实父级 ③兜底容器）",
+        tostring(f.key), table.getn(f.objs)))
+      for k = 1, table.getn(f.objs) do
+        local spec = f.objs[k]
+        local cands = (type(spec) == "table") and spec.cands or { spec }
+        local inList = (type(spec) == "table") and spec.parent or nil
+        local nm = tostring(cands[1])
+        local lvl, hit = "-", nil
+        -- ⓠ 路径（内置优先，其次运行时缓存）—— 这也是**真机日志要烘的那份链**
+        local chain = (type(f.paths) == "table") and f.paths[nm] or nil
+        local from = "内置"
+        if type(chain) ~= "table" then chain = lfPathGet(f.key, nm) from = "缓存" end
+        if type(chain) == "table" then
+          hit = lfPathWalk(chain)
+          if hit then
+            lvl = "ⓠ" .. from .. "路径（" .. table.concat(chain, "/") .. "）"
+          else
+            lvl = "ⓠ" .. from .. "路径**失效**（" .. table.concat(chain, "/") .. "）"
+          end
+        end
+        if not hit then
+          local g = lfFrameOf(nm)
+          if g and lfFrameUsable(g) then lvl, hit = "①全局名", g end
+        end
+        if not hit then
+          hit = lfNamedScan(inList, nm, 1)
+          if hit then lvl = "②真实父级" end
+        end
+        if not hit then
+          hit = lfNamedScan(f.containers, nm, LF_SCAN_DEEP)
+          if hit then lvl = "③兜底容器" end
+        end
+        P(string.format("    %s → %s%s", nm, lvl,
+          hit and "" or (lfScanCap and "（★预算用尽：没敢继续扫 ⇒ 判不出）" or "（都没命中）")))
+      end
+      P(string.format("    本趟访问节点数 = %d%s", lfScanN,
+        lfScanCap and ("（★撞预算上限 " .. tostring(LF_SCAN_MAX) .. "，已提前停）") or "（未撞预算）"))
+    end
+  end
+  P("用法：勾上/取消在 工具箱 → 图层隐藏 → [设置]（多选）；本体检只读，不改界面、不写配置")
+  -- ★全文进有界落盘环（AI 自己读存档；聊天里只回显这几行）
+  for i = 1, table.getn(out) do lfRingPush(out[i]) end
+  lfRingPush("—— 体检结束（" .. tostring(table.getn(out)) .. " 行）——")
+  return out
 end
 
 -- ============ 工具箱那一行（**嵌入点的被调方**）============

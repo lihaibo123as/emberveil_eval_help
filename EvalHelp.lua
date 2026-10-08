@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.75.106"
+local VERSION = "1.75.109"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -5290,6 +5290,20 @@ local SE_TYPES = {
   { id = "teamRaidMana",  name = "团队蓝量%",  kind = "num",   n = 20, name2 = "团队", base = "teamMana" },
   { id = "teamRaidBuff",  name = "团队buff", kind = "skill", s = "",  name2 = "团队", base = "teamBuff" },
   { id = "teamRaidDebuff",name = "团队debuff", kind = "skill", s = "",  name2 = "团队", base = "teamDebuff" },
+  -- ★★★1.75.108 队伍/团队**宠物**条件（同族第 2 批：成员 → 成员宠物）。用户需求原话：「队伍/团队,能否获取到
+  --   猎人等宠物的信息?」→ 调研结论 = **能**（客户端原生 UnitID `partypet1..4` / `raidpetN`，见 Core.lua 的
+  --   `EVAL_HELP_TEAM_PET_ENSURE` 顶部那段证据链）。这一族的**引擎 k 与成员族一一对应**（petHp/petMana/
+  --   petBuff/petDebuff），扫描范围照旧写在 **cd.name**（"队伍"/"团队"）⇒ 与成员族**同一套**解析/求值/导出写法，
+  --   只是候选集换成「成员的宠物」（含自己的宠物 `pet`；团队侧自己的宠物走 `raidpet<本人在团队里的序号>`）。
+  --   ★命名铁律照旧：显示名**中性**（不带方向），方向交给 是/否。
+  { id = "petHp",         name = "队伍宠物血量%",  kind = "num",   n = 60, name2 = "队伍" },
+  { id = "petMana",       name = "队伍宠物蓝量%",  kind = "num",   n = 20, name2 = "队伍" },
+  { id = "petBuff",       name = "队伍宠物buff", kind = "skill", s = "",  name2 = "队伍" },
+  { id = "petDebuff",     name = "队伍宠物debuff", kind = "skill", s = "",  name2 = "队伍" },
+  { id = "petRaidHp",     name = "团队宠物血量%",  kind = "num",   n = 60, name2 = "团队", base = "petHp" },
+  { id = "petRaidMana",   name = "团队宠物蓝量%",  kind = "num",   n = 20, name2 = "团队", base = "petMana" },
+  { id = "petRaidBuff",   name = "团队宠物buff", kind = "skill", s = "",  name2 = "团队", base = "petBuff" },
+  { id = "petRaidDebuff", name = "团队宠物debuff", kind = "skill", s = "",  name2 = "团队", base = "petDebuff" },
   -- ★★★1.71.3 候选者条件（用户要求：**原 8 项一字不动**，另外独立加这 4 项）——
   --   语义 = 「循环检索到的那个成员」（含自己；范围由「选取目标:队伍成员/团队成员」那一行决定）。
   --   ★只在**选取器行**的下拉里出现（见 typeBtn 的过滤）；配在别的行上求值时如实失败、不假装通过。
@@ -5328,6 +5342,7 @@ local SE_OPS = { ">", ">=", "<", "<=", "==", "~=" }
 local SE_AURA_MULTI_KINDS = {
   hasBuff = true, noBuff = true, tBuff = true, pDebuff = true, hasDebuff = true, noDebuff = true,
   teamBuff = true, teamDebuff = true, candBuff = true, candDebuff = true,
+  petBuff = true, petDebuff = true, -- ★1.75.108 队伍/团队**宠物**光环型（与成员族同一套多选机制）
 }
 local function isAuraMultiKind(k)
   return (type(k) == "string" and SE_AURA_MULTI_KINDS[k] == true) and true or false
@@ -5380,6 +5395,10 @@ local SE_TYPE_GROUPS = {
   -- ★1.70.47 队伍/团队条件单列一组：**队伍与团队各列一份**（用户要求：
   --   「条件类型: 队伍debuff / 队伍buff / 团队debuff / 团队buff」——直接作为可选类型出现，不用范围下拉）
   { label = "CTG_5", w = 3, cov = "E", ids = { "teamHp", "teamMana", "teamBuff", "teamDebuff", "teamRaidHp", "teamRaidMana", "teamRaidBuff", "teamRaidDebuff" } },
+  -- ★1.75.108 队伍/团队**宠物**条件单列一组（与成员族同权重同覆盖大类：权 3 / cov E）——
+  --   ★单列而不是并进 CTG_5：那一组已有 8 行，再加 8 行菜单一屏塞不下；而且「成员」与「成员宠物」
+  --     是**两套候选集**（后者会切到 `partypetN` 上施法），分开列让用户一眼看清自己在选谁。
+  { label = "CTG_7", w = 3, cov = "E", ids = { "petHp", "petMana", "petBuff", "petDebuff", "petRaidHp", "petRaidMana", "petRaidBuff", "petRaidDebuff" } },
   -- ★1.71.3 候选者条件组：**只在成员选取器那一行**的下拉里显示（见 typeBtn 的过滤），普通行不出现
   { label = "CTG_6", w = 3, cov = "E", ids = { "candHp", "candPower", "candBuff", "candDebuff" } },
   -- ★★★1.71.2（第十五轮）施法族归并（用户要求）：「自身施法相关 + 目标施法相关」全部并进本组。
@@ -5394,7 +5413,7 @@ local SE_TYPE_GROUPS = {
 -- ★★★1.74.19 评分侧的两个读值口（**唯一来源 = 上面那张分组表**，不另抄一份 44 项的清单）：
 --   Share.lua 的 EVAL_PROFILE_SCORE 在**另一个文件**，看不到这里的 local ⇒ 只能走全局函数。
 --   ★拿不到（kind 不在任何组）→ **如实返回 nil**：调用方按 0 分 / 不计覆盖，
---     而源码检查 COND WEIGHT CHECK 会保证「44 个类型一个不漏」——不让它静默变成 0 分。
+--     而源码检查 COND WEIGHT CHECK 会保证「**70** 个类型（7 组）一个不漏」——不让它静默变成 0 分。
 local SE_COND_W, SE_COND_COV = {}, {}
 for _, grp in ipairs(SE_TYPE_GROUPS) do
   for _, id in ipairs(grp.ids) do
@@ -5444,10 +5463,11 @@ local function seDefaultCond(ti)
     -- ★1.70.47 队友/团员光环型：写入扫描范围（cd.name）。
     --   「缺buff」默认取**无/缺**方向（名字就叫缺buff：任一队友缺它 → 该补）；
     --   「debuff」默认取**有**方向（「队友有魔法 → 解魔法」的正向语义）。
+    --   ★1.75.108 宠物光环型**逐字沿用**同一口径（petBuff 默认「缺」、petDebuff 默认「有」）。
     if td.name2 then
       cd0.k = ck
       cd0.name = td.name2
-      cd0.v = (ck ~= "teamBuff")
+      cd0.v = (ck ~= "teamBuff" and ck ~= "petBuff")
     end
     -- ★候选者光环型：缺buff 默认「缺」（v=false），debuff 默认「有」（与队友那套同一语义）
     if td.id == "candBuff" then cd0.v = false end
@@ -5499,6 +5519,7 @@ local SE_TIP_RULE_KINDS = {
   candHp = true, candPower = true, candBuff = true, candDebuff = true,
   hpPct = true, powerPct = true, power = true, tHpPct = true,
   teamHp = true, teamMana = true, teamRaidHp = true, teamRaidMana = true,
+  petHp = true, petMana = true, petRaidHp = true, petRaidMana = true, -- ★1.75.108 宠物血蓝同样是「挑谁」的驱动条件
 }
 local SE_TIP_SEM = {
   candHp = "SE_TIP_CAND_HP", candPower = "SE_TIP_CAND_POWER",
@@ -5514,6 +5535,9 @@ local SE_TODO_KINDS = {
   teamHp = true, teamMana = true, teamBuff = true, teamDebuff = true,
   teamRaidHp = true, teamRaidMana = true, teamRaidBuff = true, teamRaidDebuff = true,
   candHp = true, candPower = true, candBuff = true, candDebuff = true,
+  -- ★1.75.108 宠物族**新上线、尚未真机验收** ⇒ 一并标黄「待测试」（诚实标记，别让用户以为已验证）
+  petHp = true, petMana = true, petBuff = true, petDebuff = true,
+  petRaidHp = true, petRaidMana = true, petRaidBuff = true, petRaidDebuff = true,
 }
 -- 返回 tooltip 行表（逐行 AddLine）或 nil
 local function seTypeTip(id)
@@ -6721,10 +6745,12 @@ function EVAL_HELP_SE_REFRESH()
           if (cd.s == nil or cd.s == "") and cd.k ~= "casting" and cd.k ~= "tCasting" then disp = "未选择（点此选择）" end
         end
         -- ★1.70.47 队伍debuff 的名称是**可选**的（不填 = 只看「有没有任意该类型的负面效果」）
-        if (cd.k == "teamDebuff" or cd.k == "candDebuff") and table.getn(auraNames) == 0 then disp = L("DS_T_ANY") end
+        if (cd.k == "teamDebuff" or cd.k == "candDebuff" or cd.k == "petDebuff") and table.getn(auraNames) == 0 then disp = L("DS_T_ANY") end
         local auraChk = (cd.k == "hasBuff" or cd.k == "hasDebuff" or cd.k == "tBuff" or cd.k == "pDebuff") -- 1.54.0 光环检查型 是/否
         -- ★1.70.47 队伍/团队光环型也要 是/否（「队伍有魔法」「团队无buff」都得能切）
-        local teamAura = (cd.k == "teamBuff" or cd.k == "teamDebuff" or cd.k == "candBuff" or cd.k == "candDebuff") -- ★1.71.3 候选者光环型同样有 是/否
+        --   ★1.75.108 宠物光环型同一口径（petBuff/petDebuff 也有 是/否）
+        local teamAura = (cd.k == "teamBuff" or cd.k == "teamDebuff" or cd.k == "candBuff" or cd.k == "candDebuff"
+                          or cd.k == "petBuff" or cd.k == "petDebuff") -- ★1.71.3 候选者光环型同样有 是/否
         if cd.k == "immune" or cd.k == "inRange" or cd.k == "casting" or cd.k == "tCasting" or auraChk or teamAura then
           if cd.k == "inRange" or cd.k == "casting" or cd.k == "tCasting" or auraChk or teamAura then
             row.immBtn.text:SetText((cd.v == false) and L("SE_NO") or L("SE_YES"))
@@ -6806,7 +6832,7 @@ function EVAL_HELP_SE_REFRESH()
       --     同时这里也是断言能真正走到的位置：EVAL_TEST_SE_ROW_DT 问的就是这个控件。
       -- ★1.74.6 自身/目标 debuff 也要「负面类型」（用户：「查看自身/目标debuff 条件类型配置项，
       --   需要参考队伍debuff 配置支持 debuff 负面类型功能」）—— 与 teamDebuff/candDebuff **同一支控件**、同一份 EVAL_DISPEL_LIST 文案。
-      local isDebuffKind181 = ((td.base or td.id) == "teamDebuff") or td.id == "candDebuff"
+      local isDebuffKind181 = ((td.base or td.id) == "teamDebuff") or ((td.base or td.id) == "petDebuff") or td.id == "candDebuff"
                                 or td.id == "pDebuff" or td.id == "hasDebuff"
       if isDebuffKind181 then -- ★1.71.3 候选者debuff 也要类型下拉
         -- ★1.73.2 多选：显示串 = 0 项「任意负面」/ 1 项该类型名 / ≥2 项「A/B…」
@@ -6838,6 +6864,9 @@ function EVAL_HELP_SE_REFRESH()
       local mkid = td.base or td.id
       local isTeamKind = (mkid == "teamHp") or (mkid == "teamMana") or (mkid == "teamBuff") or (mkid == "teamDebuff")
                          or (mkid == "candHp") or (mkid == "candPower") or (mkid == "candBuff") or (mkid == "candDebuff")
+                         -- ★1.75.108 宠物族也带「职业/小队」过滤 —— 过滤对象是**宠物的主人**
+                         --   （宠物记录从主人那条成员记录继承 `cls`/`grp`）⇒ 「只治猎人的宠物」这类写法可用。
+                         or (mkid == "petHp") or (mkid == "petMana") or (mkid == "petBuff") or (mkid == "petDebuff")
       if isTeamKind then
         local ns = {}
         for _, c in ipairs(CLASS_LIST) do if cd.cs and cd.cs[c.id] then table.insert(ns, c.name) end end
@@ -9653,6 +9682,11 @@ if type(SlashCmdList) == "table" then
       -- ★★★1.75.101 重置面板（列表多选 + 确定提交）的**只读**状态口：看清单条数 / 面板显没显示 / 选中几条、
       --   以及「清单为空 ⇒ 不开面板」的如实说明。★别名 `go dfreset` 全项目唯一（GO ALIAS UNIQUE 纪律）。
       prRun("DFRST", msg)
+    elseif msg == "go 图层隐藏" or msg == "go lf" or string.find(msg or "", "^go 图层隐藏%s") == 1 then
+      -- ★★★1.75.109 图层隐藏（tools/LayerFix.lua）的**只读体检**：UIParent 规模 / 7 个具名对象各在哪一级命中 /
+      --   一趟扫了多少节点 / 撞没撞预算 —— 「动作条背景初次勾选卡死」的定案读数就在这里（全文落 layerFixProbe）。
+      --   ★别名 `go lf` 全项目唯一（GO ALIAS UNIQUE 纪律）。
+      prRun("LF", msg)
     elseif msg == "go 战斗探针" or msg == "go combatprobe" or string.find(msg or "", "^go 战斗探针%s") == 1 then
       -- ★★★1.75.36g 「进战斗把宠物动作栏顶上去」的取证口（只读）：默认武装 · `停` · `看` · `采样`。
       --   ★别名 `go combatprobe` 全项目唯一（`GO ALIAS UNIQUE CHECK` 纪律）。

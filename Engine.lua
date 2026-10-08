@@ -749,20 +749,43 @@ end
 -- 从规则里推导「比较键 + 方向 + N + 依据条件」；nil = 无方向（回退）
 -- ★只认**候选者可比**的数值条件：候选者血%/能量%（新）、自身血%/能量%、目标血%（在选取器行上
 --   这几类都按候选者读，见 condOne 的候选上下文）。
+-- ★★★1.75.108 宠物族判定（**唯一真值**）—— ★★必须走全局，不能建文件级 local：
+--   Engine.lua 顶层 local 已顶到 **200 上限**（本轮就撞了一次：luacheck 报
+--   `too many local variables (limit is 200) in main function`，报错行落在文件末尾，极难一眼看出是新加的两条）。
+--   ⇒ 本项目既有纪律在这里再次适用：**新增判定口一律挂全局**（`EVAL_*`），或挂 `EVAL_HELP_STATE`。
+EVAL_TEAM_PET_KINDS = { petHp = true, petMana = true, petBuff = true, petDebuff = true }
+function EVAL_IS_PET_KIND(k)
+  return (type(k) == "string" and EVAL_TEAM_PET_KINDS[k] == true) and true or false
+end
 local TEAM_ORDER_KEYS = { candHp = "hp", hpPct = "hp", tHpPct = "hp",
-                          candPower = "power", powerPct = "power", tPowerPct = "power" }
-function EVAL_TEAM_PICK_ORDER(rule)
+                          candPower = "power", powerPct = "power", tPowerPct = "power",
+                          -- ★★★1.75.108 只补**宠物族**四个键，**故意不补成员族**（teamHp/teamMana/…）：
+                          --   补上它们会**静默改变存量方案**的选人顺序（例如 `队伍蓝量%<20 & 队伍缺buff:X`
+                          --   会从「默认血最少」变成「蓝最少」）—— 那是另一件事，必须单独评估+告知，绝不夹带。
+                          --   ★宠物族是**新类型**，没有存量方案 ⇒ 现在就把方向接对，零回归风险。
+                          --   ★成员族与宠物族**同一把键**（hp / power）：两族记录的字段名本来就相同
+                          --   （hpPct / powerPct）⇒ 排序函数一行都不用改。
+                          petHp = "hp", petMana = "power",
+                          petRaidHp = "hp", petRaidMana = "power" }
+-- 宠物族 k（判定「这条队友条件找的是宠物还是人」的**唯一真值** = 上面的 `EVAL_IS_PET_KIND`）
+-- ★1.75.108 第二参 = 「只看宠物族」/「只看成员族」（nil = 老行为，两族都看）：
+--   联合判定按**家族**分开跑（成员族候选是人、宠物族候选是宠物），若两族共用一份排序依据就会
+--   拿「成员的血量条件」去排宠物（反之亦然）⇒ 家族过滤是必需的，不是优化。
+function EVAL_TEAM_PICK_ORDER(rule, petOnly)
   -- ★1.75.28 走 expr（旧 groups 存档由 EVAL_RULE_EXPR 现场推导；只迭代条件、结构无关）
   for _, it in ipairs(EVAL_RULE_EXPR(rule) or {}) do
     local cd = it.cd
     if type(cd) == "table" then
-      local key = TEAM_ORDER_KEYS[cd.k]
-      if key and type(cd.n) == "number" then
-        local mode = nil
-        if cd.op == "<" or cd.op == "<=" then mode = "min"
-        elseif cd.op == ">" or cd.op == ">=" then mode = "max"
-        elseif cd.op == "==" or cd.op == "=" then mode = "near" end
-        if mode then return { key = key, mode = mode, n = cd.n, cd = cd, label = EVAL_COND_STR(cd) } end
+      local isPet = EVAL_IS_PET_KIND(cd.k)
+      if petOnly == nil or isPet == petOnly then
+        local key = TEAM_ORDER_KEYS[cd.k]
+        if key and type(cd.n) == "number" then
+          local mode = nil
+          if cd.op == "<" or cd.op == "<=" then mode = "min"
+          elseif cd.op == ">" or cd.op == ">=" then mode = "max"
+          elseif cd.op == "==" or cd.op == "=" then mode = "near" end
+          if mode then return { key = key, mode = mode, n = cd.n, cd = cd, label = EVAL_COND_STR(cd) } end
+        end
       end
     end
   end
@@ -3066,24 +3089,37 @@ local function condOne(cd, skill, dry, rule)
       return hit, lbl2 .. (hit and (" 有:" .. rn) or " 无")
     end
   end
-  if k == "teamHp" or k == "teamMana" or k == "teamBuff" or k == "teamDebuff" then
+  if k == "teamHp" or k == "teamMana" or k == "teamBuff" or k == "teamDebuff"
+     or k == "petHp" or k == "petMana" or k == "petBuff" or k == "petDebuff" then
     local scope = (cd.name == "团队") and "raid" or "party"
+    -- ★★★1.75.108 宠物族**复用本分支的每一行逻辑**（成员 → 成员的宠物）：唯一差别是
+    --   ① 候选集取 `EVAL_HELP_TEAM_PET_ENSURE`（UnitID `partypetN`/`raidpetN`，见 Core.lua 的证据链）；
+    --   ② 文案里多一个「宠物」；③ 宠物记录与成员记录**同一形状**（hpPct/powerPct/buffs/debuffs/cls/grp）
+    --   ⇒ 比较、多选光环、过滤、选人、切目标（`TargetUnit("partypetN")`）全部原样可用。
+    local isPet = EVAL_IS_PET_KIND(k)
+    local tag = isPet and "宠物" or ""
+    local kHp = (k == "teamHp" or k == "petHp")
+    local kMana = (k == "teamMana" or k == "petMana")
+    local kBuff = (k == "teamBuff" or k == "petBuff")
     -- ★★★1.75.23 方案 A：**联合判定上下文**。同组里队友条件 ≥2 条时，由 teamJointGroup 逐候选设
     --   `st.teamJointRec` ⇒ 本分支改为「**只判这一个候选**」：不扫全员、不切目标（选人由联合驱动统一做一次）。
     --   ★单条队友条件时 teamJointGroup 不接管 ⇒ 永远不会进这里 ⇒ 旧语义零回归。
     local jrec = st.teamJointRec
+    -- ★1.75.108 家族必须对上：成员族的候选上下文**绝不能**喂给宠物条件（反之亦然）——
+    --   联合判定本来就按家族分开跑（见 teamJointGroup ②），这里再兜一道，防将来接线出错时静默判错人。
+    if jrec and ((st.teamJointPet == true) ~= isPet) then jrec = nil end
     if jrec then
-      local jscope = (cd.name == "团队") and "团队" or "队伍"
+      local jscope = ((cd.name == "团队") and "团队" or "队伍") .. tag
       local jlim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
       local jwho = tostring(jrec.name or jrec.unit)
-      if k == "teamHp" or k == "teamMana" then
-        local maxv = (k == "teamHp") and jrec.hpMax or jrec.powerMax
-        local pct = (k == "teamHp") and jrec.hpPct or jrec.powerPct
-        -- 没血条/没蓝条（无蓝职业）⇒ 这个候选不满足，不是「0%」
+      if kHp or kMana then
+        local maxv = kHp and jrec.hpMax or jrec.powerMax
+        local pct = kHp and jrec.hpPct or jrec.powerPct
+        -- 没血条/没蓝条（无蓝职业 / 无蓝宠物）⇒ 这个候选不满足，不是「0%」
         if not (maxv and maxv > 0) then return false, jscope .. "候选没有可测的条：" .. jwho end
         local pass = condCmp({ cd.op, cd.n }, pct)
-        return pass, ((k == "teamHp") and jscope .. "血%" or jscope .. "蓝%") .. ":" .. tostring(pct) .. "% " .. jwho
-      elseif k == "teamBuff" then
+        return pass, (kHp and jscope .. "血%" or jscope .. "蓝%") .. ":" .. tostring(pct) .. "% " .. jwho
+      elseif kBuff then
         -- ★1.75.39 多选：名字集合 × 该候选（正向 = 有任一 / 反向「缺」= 缺任一）
         local namesJ = EVAL_AURA_NAMES(cd)
         if table.getn(namesJ) == 0 then return false, "未知buff:未选择光环" end
@@ -3116,27 +3152,36 @@ local function condOne(cd, skill, dry, rule)
         return hit, lbl .. (hit and (" 有(层" .. tostring(hitCnt) .. ")") or " 无")
       end
     end
-    local scopeName = (scope == "raid") and "团队" or "队伍"
-    local list = EVAL_HELP_TEAM_ENSURE and EVAL_HELP_TEAM_ENSURE(scope) or nil
+    local scopeName = ((scope == "raid") and "团队" or "队伍") .. tag
+    local list
+    if isPet then
+      list = (type(EVAL_HELP_TEAM_PET_ENSURE) == "function") and EVAL_HELP_TEAM_PET_ENSURE(scope) or nil
+    else
+      list = EVAL_HELP_TEAM_ENSURE and EVAL_HELP_TEAM_ENSURE(scope) or nil
+    end
     if not list or table.getn(list) == 0 then
+      -- ★宠物族最常见的现场是「人在队里、但队友都没带宠物」⇒ 如实分开说，
+      --   别让用户以为是条件写坏了（「不在队伍中」与「队伍里没宠物」是两件事）。
+      if isPet then return false, scopeName .. "里没有可检测的宠物（队友都没带宠物 / 都不在范围内）" end
       return false, "不在" .. scopeName .. "中（无成员可检测）"
     end
-    -- ★1.71.3 按**这一条条件自己的**「职业/队伍」过滤收窄成员集合（空集 = 不过滤）
+    -- ★1.71.3 按**这一条条件自己的**「职业/队伍」过滤收窄候选集合（空集 = 不过滤）
+    --   ★宠物族过滤的是**主人**（宠物记录从主人那条成员记录继承 `cls`/`grp`）⇒「只治猎人的宠物」这类写法一样能用。
     list = teamFilterList(list, cd)
     if table.getn(list) == 0 then
-      return false, scopeName .. "中没有人符合「职业/队伍」过滤（换个职业/小队，或把过滤清空）"
+      return false, scopeName .. "里没有" .. (isPet and "宠物" or "人") .. "符合「职业/队伍」过滤（换个职业/小队，或把过滤清空）"
     end
     local lim = (type(cd.n) == "number" and cd.n > 1) and cd.n or 1
     local best, bestKey = nil, nil
 
-    if k == "teamHp" or k == "teamMana" then
+    if kHp or kMana then
       for _, r in ipairs(list) do
         local isMana = (r.powerType == nil or r.powerType == 0)
-        if k == "teamMana" and not isMana then
-          -- 没蓝的职业没有「蓝量%」可言，跳过（不报错，只不参与比较）
+        if kMana and not isMana then
+          -- 没蓝的职业/宠物没有「蓝量%」可言，跳过（不报错，只不参与比较）
         else
-          local maxv = (k == "teamHp") and r.hpMax or r.powerMax
-          local pct  = (k == "teamHp") and r.hpPct or r.powerPct
+          local maxv = kHp and r.hpMax or r.powerMax
+          local pct  = kHp and r.hpPct or r.powerPct
           -- ★★★1.71.3 统一到「按比较符选人」（用户定案）：< 取最小 / > 取最大 / = 取最接近 / 无→最小
           if maxv and maxv > 0 then
             local better = false
@@ -3149,14 +3194,14 @@ local function condOne(cd, skill, dry, rule)
           end
         end
       end
-      if not best then return false, scopeName .. "中无人可测蓝量" end
+      if not best then return false, scopeName .. "里没有可测的" .. (kHp and "血量" or "蓝量") end
       local pass = condCmp({ cd.op, cd.n }, bestKey)
-      local lbl = ((k == "teamHp") and scopeName .. "血%" or scopeName .. "蓝%")
+      local lbl = (kHp and scopeName .. "血%" or scopeName .. "蓝%")
         .. ":" .. tostring(bestKey) .. "% " .. tostring(best.name or best.unit)
-      -- ★命中即「记下这个人」并切过去：后续技能行的 UseAction 就落在他身上
+      -- ★命中即「记下这个候选」并切过去：后续技能行的 UseAction 就落在他（它）身上
       if pass and not dry then teamSelect(best) end
       return pass, lbl
-    elseif k == "teamBuff" then
+    elseif kBuff then
       -- 「有队伍buff:X」= **有任一**成员带 X（层数够）；「无队伍buff:X」= **有任一**成员缺 X。
       --   ★语义与自身/目标的 有buff/无buff 对齐：都是「存在性」判定，不要求全队一致。
       --   报出的成员：有 → 层数最高的那个；无 → 层数最少的那个（= 最该补的人）。
@@ -3256,6 +3301,8 @@ end
 --     ⑤ 运行时开关**不落存档**：`/eh go 联合 off`（或 /run EVAL_TEAM_JOINT_SET(false)）可临时回旧语义做对照。
 local TEAM_JOINT = { on = true, last = nil, kinds = {
   teamHp = true, teamMana = true, teamBuff = true, teamDebuff = true,
+  -- ★1.75.108 宠物族同一机制（候选集换成「成员的宠物」，家族分开跑 —— 见 teamJointGroup ②）
+  petHp = true, petMana = true, petBuff = true, petDebuff = true,
 } }
 function EVAL_TEAM_JOINT_SET(on)
   TEAM_JOINT.on = (on ~= false)
@@ -3268,75 +3315,119 @@ local function teamJointGroup(g, rule, dry)
   -- ★★「选取目标:队伍成员/团队成员」那一行的候选循环里**绝不接管**：那里 st.pickCand 已设、
   --   每个候选都在被真切着目标判条件；联合路径再来一次 = 两套选人互相抢目标。
   if st.pickCand then return nil end
-  local teamCds, otherCds = {}, {}
+  local memCds, petCds, otherCds = {}, {}, {}
   for _, cd in ipairs(g or {}) do
-    if TEAM_JOINT.kinds[cd.k] then table.insert(teamCds, cd) else table.insert(otherCds, cd) end
+    if EVAL_IS_PET_KIND(cd.k) then table.insert(petCds, cd)
+    elseif TEAM_JOINT.kinds[cd.k] then table.insert(memCds, cd)
+    else table.insert(otherCds, cd) end
   end
-  if table.getn(teamCds) < 2 then return nil end -- ★单条 = 不接管（旧路径）
+  -- ★两族都不到 2 条 ⇒ **完全走旧路径**（存量方案零回归；单条族由 condOne 自己扫、自己选）
+  if table.getn(memCds) < 2 and table.getn(petCds) < 2 then return nil end
   local skill = rule and rule.skill
+  local nAll = table.getn(memCds) + table.getn(petCds)
   -- ① 与候选无关的条件先判一次（不过就整组失败，不做无谓扫描）
   for _, cd in ipairs(otherCds) do
     local ok, why = condOne(cd, skill, dry, rule)
     if not ok then
-      TEAM_JOINT.last = { ok = false, why = tostring(why), n = table.getn(teamCds) }
+      TEAM_JOINT.last = { ok = false, why = tostring(why), n = nAll }
       return false, tostring(why)
     end
   end
-  -- ② 候选集：范围（队伍/团队）+ 这一行的「职业/队伍」过滤
-  local scope = "party"
-  for _, cd in ipairs(teamCds) do if cd.name == "团队" then scope = "raid" break end end
-  local scopeName = (scope == "raid") and "团队" or "队伍"
-  local list = EVAL_HELP_TEAM_ENSURE and EVAL_HELP_TEAM_ENSURE(scope) or nil
-  if not list or table.getn(list) == 0 then
-    local why = "不在" .. scopeName .. "中（无成员可检测）"
-    TEAM_JOINT.last = { ok = false, why = why, n = table.getn(teamCds) }
+  -- ② 一个「家族块」的联合判定：成员族 / 宠物族**各跑一次**。逻辑与旧版逐字相同，只换两样 ——
+  --   候选集（人 / 成员的宠物）与文案。★★为什么必须分家族：成员族的候选是「人」、宠物族是
+  --   「成员的宠物」，把两族凑在一起判「同一个候选同时满足」在语义上不成立（宠物的血量条件
+  --   不可能由人来满足）⇒ 分家族是语义要求，不是优化。
+  local function runJoint(cds, petFam)
+    local scope = "party"
+    for _, cd in ipairs(cds) do if cd.name == "团队" then scope = "raid" break end end
+    local scopeName = (scope == "raid") and "团队" or "队伍"
+    local what = petFam and "宠物" or "人"
+    local list
+    if petFam then
+      list = (type(EVAL_HELP_TEAM_PET_ENSURE) == "function") and EVAL_HELP_TEAM_PET_ENSURE(scope) or nil
+    else
+      list = EVAL_HELP_TEAM_ENSURE and EVAL_HELP_TEAM_ENSURE(scope) or nil
+    end
+    if not list or table.getn(list) == 0 then
+      -- ★如实区分「不在队/团」与「在队里但一个宠物都没有」（后者是最常见的现场：全队只有自己没带宠）
+      local why = petFam and (scopeName .. "里没有可检测的宠物（队友都没带宠物 / 都不在范围内）")
+        or ("不在" .. scopeName .. "中（无成员可检测）")
+      TEAM_JOINT.last = { ok = false, why = why, n = table.getn(cds) }
+      return false, why
+    end
+    list = teamFilterList(list, nil, rule)
+    if table.getn(list) == 0 then
+      local why = scopeName .. "里没有" .. what .. "符合「职业/队伍」过滤"
+      TEAM_JOINT.last = { ok = false, why = why, n = table.getn(cds) }
+      return false, why
+    end
+    -- ③ 排序：只取**本家族**的驱动条件（没有就由 teamSortBy 默认「血最少优先」）
+    local order = EVAL_TEAM_PICK_ORDER({ groups = { g } }, petFam)
+    local sorted = teamSortBy(list, order)
+    -- ④ 逐候选：把**这一家族**的队友条件全部按这一个候选判定；第一个全过的命中
+    local briefs = {}
+    for _, rec in ipairs(sorted) do
+      st.teamJointRec, st.teamJointPet = rec, petFam
+      local allOK, firstWhy, trace = true, nil, {}
+      for _, cd in ipairs(cds) do
+        -- ★dry 传 true：联合路径下 condOne 绝不自己切目标（选人由本函数最后切**一次**）
+        local ok, why = condOne(cd, skill, true, rule)
+        table.insert(trace, EVAL_COND_STR(cd) .. (ok and "√" or "×"))
+        if not ok then allOK = false firstWhy = why break end
+      end
+      st.teamJointRec, st.teamJointPet = nil, nil
+      if allOK then
+        local pickedUnit = rec.unit
+        if not dry then pickedUnit = teamSelect(rec) end
+        local txt = teamRecBrief(rec) .. " · 条件: " .. table.concat(trace, " ")
+          .. " · 依据: " .. teamOrderLabel(order) .. " ｜ 联合判定(" .. tostring(table.getn(cds)) .. " 条"
+          .. (petFam and "宠物" or "队友") .. "条件)"
+        TEAM_JOINT.last = { ok = true, text = txt, unit = pickedUnit, n = table.getn(cds) }
+        -- ★★★这里**故意不打日志**（原写法 `wlog(skill .. " 联合命中: " .. txt)` 已按用户指令删除）：
+        --   本函数是**求值函数**，`dry = true` 也会被调 —— 而战斗信息UI 的亮金预览每 0.15s
+        --   （`EvalHelp.lua` 的 `UI_TICK`）就 `groupsOK(r, true)` 一次 ⇒ 条件一成立就每秒 6~7 行
+        --   「联合命中」刷屏（用户真机报障），而那条路上**一次技能都没放**。
+        --   ★一眼分清「预览」与「真放」的判据：真执行时日志在别处 —— `EVAL_RULE_RUN` 的「触发: …」
+        --     与 `wuse` 的绿色 `→ 技能 (原因) | 法力N`；报障截图上这两行**一条都没有** ⇒ 全是预览。
+        --   ⇒ 现在：真执行由 `EVAL_RULE_RUN` 打**唯一**一行 `技能触发: 联合:…`（trace 经 groupsOK 原样回传，
+        --     同 1.75.23 起文档记的形态），预览路径一个字都不说。
+        --   ★**别再往回加**；将来真要在这里说点什么，必须带 `if not dry then` 门。
+        return true, nil, "联合:" .. txt
+      end
+      table.insert(briefs, tostring(rec.name or rec.unit) .. " "
+        .. tostring(math.floor((tonumber(rec.hpPct) or 0) + 0.5)) .. "%")
+    end
+    local why = scopeName .. "里**没有" .. what .. "同时满足**这 " .. tostring(table.getn(cds)) .. " 条"
+      .. (petFam and "宠物" or "队友") .. "条件（候选 " .. tostring(table.getn(sorted)) .. " 个："
+      .. table.concat(briefs, " / ") .. "）"
+    TEAM_JOINT.last = { ok = false, why = why, n = table.getn(cds) }
     return false, why
   end
-  list = teamFilterList(list, nil, rule)
-  if table.getn(list) == 0 then
-    local why = scopeName .. "中没有人符合「职业/队伍」过滤"
-    TEAM_JOINT.last = { ok = false, why = why, n = table.getn(teamCds) }
-    return false, why
-  end
-  -- ③ 排序：只取**本组**的驱动条件（没有就由 teamSortBy 默认「血最少优先」）
-  local order = EVAL_TEAM_PICK_ORDER({ groups = { g } })
-  local sorted = teamSortBy(list, order)
-  -- ④ 逐候选：把**这一组**的队友条件全部按这一个候选判定；第一个全过的人命中
-  local briefs = {}
-  for _, rec in ipairs(sorted) do
-    st.teamJointRec = rec
-    local allOK, firstWhy, trace = true, nil, {}
-    for _, cd in ipairs(teamCds) do
-      -- ★dry 传 true：联合路径下 condOne 绝不自己切目标（选人由本函数最后切**一次**）
-      local ok, why = condOne(cd, skill, true, rule)
-      table.insert(trace, EVAL_COND_STR(cd) .. (ok and "√" or "×"))
-      if not ok then allOK = false firstWhy = why break end
+  -- ⑤ 两个家族按次序跑：**成员族先、宠物族后** ⇒ 两族都选人时**后者覆盖前者**（终态目标 = 宠物）。
+  --   这与本项目既有口径一致：「规则按顺序执行，后写的条件/选取者决定最终目标」，确定性、不是随机。
+  --   ★★「落单」的那一族（本族只有 1 条、够不上联合）**照样要判**：漏判 = 条件被静默忽略 =
+  --     那行技能变无条件施法（本项目最怕的失败）⇒ 交给 condOne 自己扫、自己选，与旧路径逐字相同。
+  local traces = {}
+  local function runFamily(cds, petFam)
+    if table.getn(cds) >= 2 then
+      local ok, why, tr = runJoint(cds, petFam)
+      if not ok then return false, why end
+      if tr then table.insert(traces, tr) end
+      return true
     end
-    st.teamJointRec = nil
-    if allOK then
-      local pickedUnit = rec.unit
-      if not dry then pickedUnit = teamSelect(rec) end
-      local txt = teamRecBrief(rec) .. " · 条件: " .. table.concat(trace, " ")
-        .. " · 依据: " .. teamOrderLabel(order) .. " ｜ 联合判定(" .. tostring(table.getn(teamCds)) .. " 条队友条件)"
-      TEAM_JOINT.last = { ok = true, text = txt, unit = pickedUnit, n = table.getn(teamCds) }
-      -- ★★★这里**故意不打日志**（原写法 `wlog(skill .. " 联合命中: " .. txt)` 已按用户指令删除）：
-      --   本函数是**求值函数**，`dry = true` 也会被调 —— 而战斗信息UI 的亮金预览每 0.15s
-      --   （`EvalHelp.lua` 的 `UI_TICK`）就 `groupsOK(r, true)` 一次 ⇒ 条件一成立就每秒 6~7 行
-      --   「联合命中」刷屏（用户真机报障），而那条路上**一次技能都没放**。
-      --   ★一眼分清「预览」与「真放」的判据：真执行时日志在别处 —— `EVAL_RULE_RUN` 的「触发: …」
-      --     与 `wuse` 的绿色 `→ 技能 (原因) | 法力N`；报障截图上这两行**一条都没有** ⇒ 全是预览。
-      --   ⇒ 现在：真执行由 `EVAL_RULE_RUN` 打**唯一**一行 `技能触发: 联合:…`（trace 经 groupsOK 原样回传，
-      --     同 1.75.23 起文档记的形态），预览路径一个字都不说。
-      --   ★**别再往回加**；将来真要在这里说点什么，必须带 `if not dry then` 门。
-      return true, nil, "联合:" .. txt
-    end
-    table.insert(briefs, tostring(rec.name or rec.unit) .. " "
-      .. tostring(math.floor((tonumber(rec.hpPct) or 0) + 0.5)) .. "%")
+    -- 单条：清掉联合上下文（防串味到别族候选），按真实 dry 走常规路径
+    st.teamJointRec, st.teamJointPet = nil, nil
+    local ok, why = condOne(cds[1], skill, dry, rule)
+    if not ok then return false, tostring(why) end
+    return true
   end
-  local why = scopeName .. "里**没有人同时满足**这 " .. tostring(table.getn(teamCds)) .. " 条队友条件（候选 "
-    .. tostring(table.getn(sorted)) .. " 人：" .. table.concat(briefs, " / ") .. "）"
-  TEAM_JOINT.last = { ok = false, why = why, n = table.getn(teamCds) }
-  return false, why
+  for _, fam in ipairs({ { memCds, false }, { petCds, true } }) do
+    if table.getn(fam[1]) > 0 then
+      local ok, why = runFamily(fam[1], fam[2])
+      if not ok then return false, why end
+    end
+  end
+  return true, nil, (table.getn(traces) > 0) and table.concat(traces, " ｜ ") or nil
 end
 
 -- ★★★1.75.28 两级关系（用户选定方案 B）：条件连接符 4 个 ——
@@ -3415,7 +3506,7 @@ local function evalTermItems(items, rule, dry)
   return false, lastWhy, table.concat(traceAll, " ")
 end
 function groupsOK(rule, dry)
-  st.teamJointRec = nil -- ★1.75.23 防串味：每条规则的组求值开头清掉联合上下文
+  st.teamJointRec, st.teamJointPet = nil, nil -- ★1.75.23 防串味：每条规则的组求值开头清掉联合上下文（★1.75.108 加家族标记）
   local expr = EVAL_RULE_EXPR(rule)
   if not expr or table.getn(expr) == 0 then return true, nil, "无条件" end
   local lastWhy = "条件不满足"
@@ -4546,6 +4637,11 @@ local COND_NUM = {
   ["队伍蓝"] = "teamMana", ["队伍蓝量"] = "teamMana", ["teamMana"] = "teamMana",
   ["团队血"] = "teamHp", ["团队血量"] = "teamHp",
   ["团队蓝"] = "teamMana", ["团队蓝量"] = "teamMana",
+  -- ★1.75.108 队伍/团队**宠物**血量·蓝量（导出走「队伍宠物血/团队宠物蓝」；导入两种写法都认，英文 id 同）
+  ["队伍宠物血"] = "petHp", ["队伍宠物血量"] = "petHp", ["petHp"] = "petHp",
+  ["队伍宠物蓝"] = "petMana", ["队伍宠物蓝量"] = "petMana", ["petMana"] = "petMana",
+  ["团队宠物血"] = "petHp", ["团队宠物血量"] = "petHp",
+  ["团队宠物蓝"] = "petMana", ["团队宠物蓝量"] = "petMana",
   -- ★1.71.3 候选者条件（选取器行的候选过滤；只在选取器行有意义）
   ["候选者血"] = "candHp", ["候选血"] = "candHp", ["candHp"] = "candHp",
   ["候选者能量"] = "candPower", ["候选能量"] = "candPower", ["candPower"] = "candPower",
@@ -4631,7 +4727,8 @@ local function parseOneRaw(token)
   if name and COND_NUM[condTrim(name)] then
     local ck = COND_NUM[condTrim(name)]
     -- ★1.70.47 队伍/团队血蓝：「团队血<50」要带上扫描范围（cd.name），否则导出回来会退化成队伍
-    if ck == "teamHp" or ck == "teamMana" then
+    -- ★1.75.108 宠物族同理（`队伍宠物血<60` / `团队宠物蓝<20`）——前缀里「团队」优先判定。
+    if ck == "teamHp" or ck == "teamMana" or ck == "petHp" or ck == "petMana" then
       local sc = string.match(condTrim(name), "^团队") and "团队" or "队伍"
       return { k = ck, op = op, n = tonumber(num), name = sc }
     end
@@ -4730,6 +4827,39 @@ local function parseOneRaw(token)
   local tdb = string.match(token, "^teamDebuff[:=](.*)$")
   if tdb then local nm, dt = dispelSplit(tdb)
     return { k = "teamDebuff", ss = auraNamesFromText(nm), dt = dt, v = not neg, name = "队伍" } end
+  -- ★★★1.75.108 队伍/团队**宠物** buff/debuff（导入/文本编辑）——与成员族**逐字同一套写法**，
+  --   只在前缀里多一个「宠物」：有/无{队伍|团队}宠物buff:名 · 有/无{队伍|团队}宠物debuff:名(类型)
+  --   · 英文 id petBuff/petDebuff（默认队伍范围）。★`teamScope` 那两条模式**不会**吃掉这些串
+  --   （`^有(.+)buff[:：]` 抓到的 p1 = "队伍宠物"，而 teamScope 只认精确的 队伍/团队 ⇒ 返回 nil），
+  --   所以两条路互不干扰、顺序无所谓 —— 仍然按「具体在前」写，读起来更直白。
+  --   ★如实记一处**存量族同款**的边界（不是本轮引入、也**不擅自改** 存量行为）：buff 型的名字部分
+  --   用 `(.+)`，用户把光环勾选全取消后导出的 `有队伍宠物buff:`（空名）**解析不回来** ⇒ 导入时那条条件
+  --   会被丢弃（debuff 型用 `(.*)` 没这个问题；求值侧空集本来就如实失败「未选择光环」）。
+  local q1, q2
+  q1, q2 = string.match(token, "^有(.+)宠物buff[:：](.+)$")
+  if q1 and teamScope(q1) then local nm, n = auraStack(q2, "min")
+    return { k = "petBuff", ss = auraNamesFromText(nm), n = n, v = not neg, name = teamScope(q1) } end
+  q1, q2 = string.match(token, "^无(.+)宠物buff[:：](.+)$")
+  if q1 and teamScope(q1) then local nm, n = auraStack(q2, "max")
+    return { k = "petBuff", ss = auraNamesFromText(nm), n = n, v = false, name = teamScope(q1) } end
+  q1, q2 = string.match(token, "^(.+)宠物无buff[:：](.+)$")
+  if q1 and teamScope(q1) then local nm, n = auraStack(q2, "max")
+    return { k = "petBuff", ss = auraNamesFromText(nm), n = n, v = false, name = teamScope(q1) } end
+  q1, q2 = string.match(token, "^有(.+)宠物debuff[:：](.*)$")
+  if q1 and teamScope(q1) then local nm, dt = dispelSplit(q2)
+    return { k = "petDebuff", ss = auraNamesFromText(nm), dt = dt, v = not neg, name = teamScope(q1) } end
+  q1, q2 = string.match(token, "^无(.+)宠物debuff[:：](.*)$")
+  if q1 and teamScope(q1) then local nm, dt = dispelSplit(q2)
+    return { k = "petDebuff", ss = auraNamesFromText(nm), dt = dt, v = false, name = teamScope(q1) } end
+  q1, q2 = string.match(token, "^(.+)宠物无debuff[:：](.*)$")
+  if q1 and teamScope(q1) then local nm, dt = dispelSplit(q2)
+    return { k = "petDebuff", ss = auraNamesFromText(nm), dt = dt, v = false, name = teamScope(q1) } end
+  local pbf = string.match(token, "^petBuff[:=](.+)$")
+  if pbf then local nm, n = auraStack(pbf, "min")
+    return { k = "petBuff", ss = auraNamesFromText(nm), n = n, v = not neg, name = "队伍" } end
+  local pdb = string.match(token, "^petDebuff[:=](.*)$")
+  if pdb then local nm, dt = dispelSplit(pdb)
+    return { k = "petDebuff", ss = auraNamesFromText(nm), dt = dt, v = not neg, name = "队伍" } end
   -- ★1.71.3 候选者 buff/debuff（选取器行的候选过滤；只在选取器行有意义）
   local cbf = string.match(token, "^候选者缺buff[:：](.+)$") or string.match(token, "^候选者无buff[:：](.+)$")
     or string.match(token, "^candBuff[:=](.+)$")
@@ -4997,6 +5127,7 @@ function EVAL_PARSE_ONE(token)
     --   「只给法师补智力」这类模版全靠它）；别的类型写这个后缀 = 写法错误 → 如实丢弃。
     local kmem = cd.k
     if kmem ~= "teamHp" and kmem ~= "teamMana" and kmem ~= "teamBuff" and kmem ~= "teamDebuff"
+       and kmem ~= "petHp" and kmem ~= "petMana" and kmem ~= "petBuff" and kmem ~= "petDebuff"
        and kmem ~= "candHp" and kmem ~= "candPower" and kmem ~= "candBuff" and kmem ~= "candDebuff" then
       return nil
     end
@@ -5078,6 +5209,10 @@ function EVAL_COND_STR(cd, disp)
   local tscope = (cd.name == "团队") and "团队" or "队伍"
   if k == "teamHp" then return tscope .. "血" .. (cd.op or ">") .. tostring(cd.n) .. teamFilterSuffix(cd) end
   if k == "teamMana" then return tscope .. "蓝" .. (cd.op or ">") .. tostring(cd.n) .. teamFilterSuffix(cd) end
+  -- ★1.75.108 队伍/团队**宠物**血蓝（「宠物」二字写在前缀与「血/蓝」之间 ⇒ 与解析侧 COND_NUM 的
+  --   `队伍宠物血` / `团队宠物蓝` 逐字对应；范围同样由 cd.name 决定，往返不掉范围）
+  if k == "petHp" then return tscope .. "宠物血" .. (cd.op or ">") .. tostring(cd.n) .. teamFilterSuffix(cd) end
+  if k == "petMana" then return tscope .. "宠物蓝" .. (cd.op or ">") .. tostring(cd.n) .. teamFilterSuffix(cd) end
   -- ★1.71.3 候选者条件（选取器行专用）：独立拼写，与新类型一一对应
   if k == "candHp" then return "候选者血" .. (cd.op or ">") .. tostring(cd.n) .. teamFilterSuffix(cd) end
   if k == "candPower" then return "候选者能量" .. (cd.op or ">") .. tostring(cd.n) .. teamFilterSuffix(cd) end
@@ -5159,6 +5294,13 @@ function EVAL_COND_STR(cd, disp)
     -- ★1.73.2 多选：导出形态 (Magic) / (Magic/Poison)；单选与存量**逐字相同**
     -- ★1.73.12 disp=true 时走本地化名（**只影响界面显示**；导出/往返一律 false）
     return ((cd.v == false) and ("无" .. tscope .. "debuff:") or ("有" .. tscope .. "debuff:")) .. nm .. dtSuffix() .. teamFilterSuffix(cd)
+  end
+  -- ★1.75.108 队伍/团队**宠物** buff/debuff：与成员族**同一形态**，前缀里多一个「宠物」
+  --   （解析侧同一套模式；★必须放在成员族两条**之后**，两族串互不包含，顺序其实无所谓，但这样读着直白）
+  if k == "petBuff" then return ((cd.v == false) and ("无" .. tscope .. "宠物buff:") or ("有" .. tscope .. "宠物buff:")) .. auraNameStr(cd) .. stkSuffix() .. teamFilterSuffix(cd) end
+  if k == "petDebuff" then
+    local nmP = auraNameStr(cd)
+    return ((cd.v == false) and ("无" .. tscope .. "宠物debuff:") or ("有" .. tscope .. "宠物debuff:")) .. nmP .. dtSuffix() .. teamFilterSuffix(cd)
   end
   if k == "ready" then return cd.inv and "未就绪" or "就绪" end
   if k == "usable" then return cd.inv and "不可用" or "可用" end
@@ -5545,7 +5687,7 @@ function EVAL_GO(profSel)
   --   否则上一轮选的人会被这一轮当成「本次命中的人」，技能就打在旧目标身上了。
   --   它由 队友/团员条件 或 选取目标:队伍成员/团队成员 在**本轮**写入。
   st.allyUnit, st.teamCur = nil, nil
-  st.teamJointRec = nil -- ★1.75.23 同上：绝不让联合上下文漏到下一轮（出错也能自愈）
+  st.teamJointRec, st.teamJointPet = nil, nil -- ★1.75.23 同上：绝不让联合上下文漏到下一轮（出错也能自愈）
   local rage     = st.power
   local inCombat = st.inCombat
 

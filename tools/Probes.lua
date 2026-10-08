@@ -295,6 +295,45 @@ PR["DFRST"] = function(msg)
   end
 end
 
+-- ★★★1.75.109 图层隐藏（tools/LayerFix.lua）的**只读体检**（用户报障：「图层隐藏→动作条背景
+--   初次打开的时候会将游戏卡死」）：把「UIParent 到底多大 / 7 个具名对象各在哪一级命中 /
+--   一趟扫了多少节点 / 撞没撞预算」一次摊开 —— 卡死的真机读数只能这样拿，而聊天框读数（say）
+--   不落日志环 ⇒ 本命令**同时**把全文写进有界落盘环 `EVAL_HELP_CONFIG.layerFixProbe`（AI 读存档）。
+--   ★一个字节都不改界面（不 Hide / 不记状态 / 不写配置）；★命令本体在模块里（EVAL_LF_PROBE），
+--   这里只负责回显 + 兜底提示（同 DFRST/DFG 的分工）。
+PR["LF"] = function(msg)
+  -- ★子命令 `深挖 [名字]`（1.75.109）：**分帧有界深挖**，专门找「三级都没命中」的那几片
+  --   （真机日志实证 = `MainMenuBarAnimFrame`）。不给名字就自动挑第一条**还没有内置路径**的具名对象。
+  --   ★它**只读**（不改界面/不写配置），结果写进取证环 ⇒ AI 读存档就能烘成内置路径。
+  local sub = string.match(tostring(msg or ""), "^go 图层隐藏%s+(.*)$") or ""
+  sub = string.gsub(sub, "^%s+", "")
+  if string.find(sub, "^深挖") == 1 then
+    if type(EVAL_LF_DIG) ~= "function" then
+      say("图层隐藏深挖：模块未载入（tools/LayerFix.lua 没进 .toc？）")
+      return
+    end
+    local nm = string.match(sub, "^深挖%s*(.*)$")
+    local okc, a, b, c = pcall(EVAL_LF_DIG, nm)
+    if not okc then say("图层隐藏深挖：调用抛错 —— " .. tostring(a)) return end
+    if a ~= true then say("图层隐藏深挖：没起来 —— " .. tostring(b)) return end
+    say("图层隐藏深挖：已开始（目标 " .. tostring(b) .. "）—— **分帧跑**（每帧几百个节点，不会卡）；" ..
+      "几秒后结果写进取证环，再敲一次 `/eh go 图层隐藏` 看全文")
+    return
+  end
+  say("图层隐藏体检：命令已收到（只读，不改界面）")
+  if type(EVAL_LF_PROBE) ~= "function" then
+    say("图层隐藏体检：模块未载入（tools/LayerFix.lua 没进 .toc？）")
+    return
+  end
+  local ok, lines = pcall(EVAL_LF_PROBE)
+  if not ok or type(lines) ~= "table" then
+    say("图层隐藏体检：体检本身抛错了 —— " .. tostring(lines))
+    return
+  end
+  for i = 1, table.getn(lines) do say("  " .. tostring(lines[i])) end
+  say("  （全文已存进存档的 layerFixProbe 环；重载后仍可读）")
+end
+
 PR["DFG"] = function(msg)
   -- ★★★1.75.36f 属性设置守卫（0.3s）的取证 / 操作口。用户报障原话：「宠物栏位置.在设置之后.
   --   偶然性拾取物品之后会被还原位置.」⇒ 给「有自定义属性的目标」加了 0.3s 一拍的**只读**守卫

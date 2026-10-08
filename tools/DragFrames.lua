@@ -490,6 +490,31 @@ end
 -- }
 -- ★★「未就位就不写」纪律（子插件 1.74.29 那条教训）：EVAL_HELP_CONFIG 在文件执行期是空表、
 --   SavedVariables 的恢复晚于文件执行 —— 所以文件期**只读不写**，写一律发生在登录之后。
+-- ★★★1.75.109 **聊天窗两页 = 同一个窗口**（用户：「图层拖拽 聊天窗设置属性的时候也要将战斗记录做相同的参数设定.
+--   这两个属于同个窗口同个位置」）⇒ 让两页**共用一份记录**（写 `ChatFrame2` == 写 `ChatFrame1`），
+--   而**不是在十几处各写一遍「再镜像一次」的逻辑**（那种写法迟早漏一处 ⇒ 静默不同步）：
+--     · 位置（`ax/ay`）/ 宽 / 高 / 缩放 / 透明度 / 显隐 **天然同步**；
+--     · 守护（`dfGuardCandidates`/`dfApplyOne`）、载入应用（`dfApplyAll`）、[重置] 面板、清单、
+--       方块拖动（记录里 `ax/ay` 是同一份 ⇒ 另一页的方块下一拍 `dfBlockSync` 自己跟）**一行都不用改**。
+--   ★规范键 = **`ChatFrame1`**（老存档不用迁移 —— 它本来就是聊天框那份）；老存档里「只有战斗记录那份」
+--     的情况由 `dfMirrorMerge` 一次性并入（**绝不丢用户数据**）。
+--   ★唯一实现 `DF.storeKey(name)` + 存储代理 `DF.storeMT`；**别处不许再写第二份镜像逻辑**（结构钉守着）。
+--   ★`rawget/rawset` 绕不过代理 ⇒ 迁移与「体检」那两处必须显式用 `raw*`（那是有意的）。
+--   ★★★**全部挂 `DF` 表、绝不新增文件级 local**：本文件主 chunk **已到 200 个局部变量的上限**
+--     （本轮加 5 个 local 当场打成 `too many local variables (limit is 200) in main function` —— 本项目在案）。
+DF.mirror = { ChatFrame2 = "ChatFrame1" }        -- 镜像名 → 规范键
+DF.mirrorOf = { ChatFrame1 = "ChatFrame2" }      -- 规范键 → 另一页（弹窗保存时显式应用那一边）
+DF.storeKey = function(name)
+  if type(name) ~= "string" then return name end
+  local k = DF.mirror[name]
+  if k then return k end
+  return name
+end
+DF.storeMT = {
+  __index = function(t, k) return rawget(t, DF.storeKey(k)) end,
+  __newindex = function(t, k, v) rawset(t, DF.storeKey(k), v) end,
+}
+
 local function dfStore(create)
   local c = rawget(_G, "EVAL_HELP_CONFIG")
   if type(c) ~= "table" then return nil end
@@ -499,7 +524,7 @@ local function dfStore(create)
     s = {}
     c.dragFrames = s
   end
-  return s
+  return setmetatable(s, DF.storeMT)   -- ★镜像代理（见上面 DF.mirror 那段；幂等）
 end
 
 -- ============ 选中名单（1.74.33 用户要求）============
@@ -1641,6 +1666,40 @@ local function dfMigrate(quiet)
   return n
 end
 
+-- ★★★1.75.109 **聊天窗两页并档**（老存档一次性合并；同 `dfMigrate` 一样**只做一次**、**如实出声**）：
+--   规范键是 `ChatFrame1` ⇒ 老存档里「只有 `ChatFrame2` 那份」必须**搬过去**（不搬 = 用户的战斗记录设置
+--   静默作废 —— 本项目最恨的那种静默）。两份都有 ⇒ 以**聊天框**那份为准，并如实说清删了哪份。
+--   ★必须 `rawget/rawset`：`store[...]` 走的是镜像代理，会把 `ChatFrame2` 全路由到 `ChatFrame1`（读不到真身）。
+local function dfMirrorMerge(quiet)
+  local store = dfStore(true)
+  if not store then return 0 end
+  if rawget(store, "mir") == true then return 0 end
+  local a, b = rawget(store, "ChatFrame1"), rawget(store, "ChatFrame2")
+  local n = 0
+  if type(b) == "table" then
+    if type(a) ~= "table" then
+      rawset(store, "ChatFrame1", b)
+      n = 1
+    else
+      n = 2
+    end
+    rawset(store, "ChatFrame2", nil)
+  end
+  rawset(store, "mir", true)
+  if n == 1 then
+    say("框拖拽：聊天框与战斗记录是**同一窗口的两页** ⇒ 已把战斗记录那份设置并入聊天框" ..
+      "（以后两页共用一份：位置 / 宽高 / 缩放 / 透明度 / 显隐）")
+  elseif n == 2 then
+    say("框拖拽：聊天框与战斗记录是同一窗口的两页 ⇒ 两份记录已合并（以**聊天框**那份为准，" ..
+      "战斗记录自己那份已删除）")
+  elseif not quiet then
+    say("框拖拽：聊天框与战斗记录共用一份设置（本次无需合并）")
+  end
+  dfLog("镜像并档 n=" .. tostring(n))
+  return n
+end
+DF.mirrorMerge = dfMirrorMerge   -- ★对外口（安装/迁移两条路都走它；挂 DF 表 = 不新增文件级 local）
+
 -- ============ 启动期**有界**复查（1s × 最多 5 次，做完永久停）============
 -- ★★为什么不是「每 2 秒常驻」：用户明确「最大检测时间为屏幕载入完成 5s 内」——
 --   常驻 tick 既费帧又在拖拽/切图时反复抢锚点；有界窗口把「启动期自愈」与「之后再不管」切开。
@@ -2234,6 +2293,25 @@ local function dfPopBuild()
       else
         dfLog("属性未保存（没选任何一项） " .. name)
       end
+      -- ★★★1.75.109 **镜像：同一窗口的另一页也要落到帧上**（用户：「聊天窗设置属性的时候也要将战斗记录
+      --   做相同的参数设定.这两个属于同个窗口同个位置」）。
+      --   ★为什么记录共用了还要显式应用一次：**聊天框的守护只守坐标**（尺寸/属性一概不守 —— 1.75.36n
+      --     用户定案）⇒ 缩放/透明度/宽高/显隐**不会自己追到另一页**，必须在这里补一次。
+      --   ★复用**唯一应用公式 `dfApplyOne(tgt)`**（位置 + 属性一起），一行逻辑都不重写。
+      --   ★未勾选的另一边**不跟设**（那是用户显式的「不管理」）—— 但**如实说出来**，绝不静默。
+      local mirName = DF.mirrorOf[DF.storeKey(name)]
+      if type(mirName) == "string" and mirName ~= name and table.getn(done) > 0 then
+        local mt = dfTgtOfName(mirName)
+        if mt then
+          if dfPicked(mirName) then
+            local okm = dfApplyOne(mt)
+            table.insert(done, (okm and "同窗另一页（" or "同窗另一页（") .. tostring(mt.label or mirName) ..
+              (okm and "）已一并设好" or "）这次没设成（见日志）"))
+          else
+            table.insert(done, "同窗另一页（" .. tostring(mt.label or mirName) .. "）**未勾选** ⇒ 没跟设")
+          end
+        end
+      end
     end
     if table.getn(done) > 0 then
       say(string.format("已保存：%s → %s", tostring(p2.label or "?"), table.concat(done, " · ")))
@@ -2394,14 +2472,28 @@ end
 --      位置回基准 0 偏移（dfPlaceFrom）→ 清定位账（dx/dy/base/cur/ax/ay/axAuto）→ 缩放/透明度/显隐/宽高回原始值
 --      （dfRestoreAttrs 自己清字段）→ 记录空了由调用方整条删。**顺序即判据**（见下面两条在案教训）。
 --   ★★为什么要挂 `DF` 表而不是文件级 local：**主 chunk 局部量已到 200 上限**（本项目在案）—— 加一个 local 就整份载不进去。
+-- ★★★1.75.107 **方块坐标 `ax/ay` 也算自定义位置**（真机上「移动了聊天窗，重置弹窗里却没有它」的真因）：
+--   常驻层那 14 个（聊天框 ×2 / 头像 / 目标头像 / 小地图 / 底部条族 7 / 姿态条…）自 1.75.36l/n 起**位置一律走方块**
+--   —— `dfDragUpdate` 的方块分支（`st.isBlock == true`）只往记录里写 `ax/ay`，**根本不写 `dx/dy`**（那条路是
+--   `elseif` 的另一支，方块目标进不去）⇒ 旧判据只认 `dx/dy/scale/alpha/hidden/w/h` ⇒ **拖过聊天窗之后记录里
+--   一个被认的字段都没有** ⇒ `EVAL_DF_CUSTOM_LIST` 不列它 / `EVAL_DF_SUMMARY` 也不把它算成自定义记录。
+--   ★口径与**同一个仓库里的另外两处**完全同一把尺子（`dfGuardCandidates` 的聊天框那支、`dfGuardCustom` 尾行）：
+--     `axAuto == true`（编辑模式「零位移迁移」自动盖的系统基准）**不算**；`axAuto` 被清掉（用户真拖过 / 显式设过）才算。
+DF.blockPos = function(rec)
+  if type(rec) ~= "table" then return false end
+  return (rec.ax ~= nil or rec.ay ~= nil) and rec.axAuto ~= true
+end
 DF.isCustom = function(rec)
   if type(rec) ~= "table" then return false end
-  return (rec.dx ~= nil) or (rec.dy ~= nil) or (rec.scale ~= nil)
-    or (rec.alpha ~= nil) or (rec.hidden ~= nil) or (rec.w ~= nil) or (rec.h ~= nil)
+  if (rec.dx ~= nil) or (rec.dy ~= nil) or (rec.scale ~= nil)
+    or (rec.alpha ~= nil) or (rec.hidden ~= nil) or (rec.w ~= nil) or (rec.h ~= nil) then
+    return true
+  end
+  return DF.blockPos(rec)
 end
 DF.customKeys = function(rec)
   local out = {}
-  if (rec.dx ~= nil) or (rec.dy ~= nil) then table.insert(out, L("TB_LD_SUM_POS")) end
+  if (rec.dx ~= nil) or (rec.dy ~= nil) or DF.blockPos(rec) then table.insert(out, L("TB_LD_SUM_POS")) end
   if rec.scale ~= nil then table.insert(out, L("TB_LD_SUM_SCALE")) end
   if rec.alpha ~= nil then table.insert(out, L("TB_LD_SUM_ALPHA")) end
   if rec.hidden ~= nil then table.insert(out, L("TB_LD_RST_SHOWHIDE")) end
@@ -2427,6 +2519,15 @@ DF.resetBody = function(rec, fr, combat)
   rec.base, rec.cur = nil, nil
   -- ★★1.75.47 方块坐标**也要清**（只清 dx/dy ⇒ 方块目标的 ax/ay 留在记录里 = 「重置了没效果」）；
   --   清掉后下次编辑模式由「零位移迁移」以现状为基准重建（标 axAuto，不进守卫）—— 自洽。
+  -- ★★★1.75.107：方块目标（聊天窗 / 常驻层）的位置**就存在 `ax/ay` 上**（没有 `base`/`dx/dy`）⇒ 清它就是
+  --   「重置位置」，必须计入 `c.pos`/`did` —— 否则面板与图标左键都会读成「没有可还原的项」（又一次静默）。
+  --   ★只在上面那条 `dfPlaceFrom` 没记过位置时补记（`c.pos == 0`）⇒ 绝不会把同一个目标数成两次。
+  --   ★真正**回到客户端原生布局要 /reload**（接管时 `ClearAllPoints` 冲掉了原生锚点、原值没存 —— 1.75.47b
+  --     那个确认窗就是干这个的）；这里如实记「位置」这一项，但不假装当场就能看见变化。
+  if c.pos == 0 and (rec.ax ~= nil or rec.ay ~= nil) and rec.axAuto ~= true then
+    c.pos = 1
+    table.insert(did, L("TB_LD_SUM_POS"))
+  end
   rec.ax, rec.ay, rec.axAuto = nil, nil, nil
   -- ② 缩放 / 透明度 / 显隐 / 宽 / 高：一起还原，并清掉记录字段
   local got, res = dfRestoreAttrs(fr, rec, combat)
@@ -2521,8 +2622,16 @@ dfDragEnd = function(why)
     local axB = (type(recB) == "table") and dfNum(recB.ax, 0) or 0
     local ayB = (type(recB) == "table") and dfNum(recB.ay, 0) or 0
     dfLog("方块拖动结束 " .. tostring(b.dfName) .. "：ax=" .. string.format("%.1f", axB) .. " ay=" .. string.format("%.1f", ayB))
-    say(string.format("框拖拽：%s 的定位方块已移到 %.0f,%.0f（目标按绝对坐标跟随）",
-      tostring(b.dfLabel or b.dfName or "?"), axB, ayB))
+    -- ★1.75.109 镜像：聊天框两页是同一窗口 ⇒ 位置记录是**同一份**，另一页的方块下一拍自己跟过来
+    --   （`dfBlockSync` 读的是同一条 `ax/ay`）—— 这里只如实说一句，不做第二套搬运。
+    local mirB = DF.mirrorOf[DF.storeKey(b.dfName)]
+    local mirSay = ""
+    if type(mirB) == "string" and mirB ~= b.dfName then
+      local mtB = dfTgtOfName(mirB)
+      mirSay = "；同窗另一页（" .. tostring((mtB and mtB.label) or mirB) .. "）同步跟到同一位置"
+    end
+    say(string.format("框拖拽：%s 的定位方块已移到 %.0f,%.0f（目标按绝对坐标跟随%s）",
+      tostring(b.dfLabel or b.dfName or "?"), axB, ayB, mirSay))
   elseif fr and moved then
     local store = dfStore(true)
     local fin = dfCapture(fr)
@@ -4265,6 +4374,8 @@ function EVAL_DF_INSTALL()
   DF.installed = true
   DF.on = (store.on == true) and true or false
   dfMigrate(true)
+  -- ★1.75.109 聊天窗两页并档（必须在 `dfApplyAll` **之前**：合并后的记录才是要应用的那份）
+  pcall(dfMirrorMerge, true)
   -- ★1.74.33 被动窗口的宽高清理放在「应用存档之前」：先清掉+还原，再让 dfApplyAll 应用剩下的（缩放/透明/显隐）
   pcall(EVAL_DF_SIZE_CLEAN, true)
   dfTickEnsure()
@@ -4415,7 +4526,8 @@ function EVAL_DF_SIZE_CLEAN(quiet)
   return n, restored
 end
 
-function EVAL_DF_MIGRATE() return dfMigrate(false) end
+-- 老存档迁移（活口：`/eh go` 里那一条；同时**顺带把聊天窗两页并档** —— 两个都是「老存档一次性」的活）
+function EVAL_DF_MIGRATE() return dfMigrate(false) + dfMirrorMerge(false) end
 
 -- ★★★1.74.31 取证命令 `/edb bars`：「动作条1~4」在本客户端到底叫什么帧名？
 --   本客户端 UI 编译在 pak 里（磁盘上没有 FrameXML），别的插件也一次没引用过 MultiBar* ⇒ 只能现场探。

@@ -562,6 +562,109 @@ function EVAL_HELP_TEAM_ENSURE(scope)
   return list
 end
 
+-- ★★★1.75.108 队伍/团队**成员的宠物**扫描（用户调研需求落地：「队伍/团队,能否获取到猎人等宠物的信息?」）。
+--   【结论 = 能】而且**不是猜的**，三条证据链（本机可复算）：
+--     ① 官方 Unit IDs 约定页（emberveil.org/wiki/lua/conventions#unit-ids）明文：
+--        `partypet1 … partypet4` = Pets of those party members · `raidpetN` = Pet of that raid member；
+--        同一份 Unit 文档里 `UnitHealth/UnitHealthMax/UnitMana/UnitPowerType` 四条正文都点名
+--        「out-of-range … (**partypetN** uses pet health)」，`UnitIsDead` 点名「party members **and their pets**」。
+--     ② 客户端自带 FrameXML（本机 `tmp/mpq_out/Interface/FrameXML/`）：`PartyMemberFrame.lua:75` 用
+--        `UnitExists("partypet"..id)` 决定宠物框显隐；`:261` 走 `RefreshBuffs(petFrame,0,"partypet"..id)`
+--        （而 `BuffFrame.lua:282` 里 RefreshBuffs 调的是 `UnitDebuff(unit,i)`）⇒ 客户端自己就用
+--        `UnitDebuff("partypetN", i)` 画队友宠物的 debuff；`:183` 判 `UNIT_AURA` 的 arg1 == "partypet"..id；
+--        `PartyFrameTemplates.xml:169` 把宠物框交给 `UnitFrame_Initialize`（名字/头像/血/蓝）；
+--        `Bindings.xml:469-508` 直接 `TargetUnit("partypet1..4")`。
+--     ③ 客户端捆绑插件 `Turtle_GroupUI` 对 **`raidpetN`** 同样当完整单位用
+--        （UnitName / UnitClass / UnitIsUnit / UnitIsPlayer / UnitBuff / UnitDebuff / UnitPowerType /
+--         UnitIsConnected / UnitIsDeadOrGhost / 血量 / 蓝量），并注册 `UNIT_HEALTH` 判 `arg1 == 该 unit`。
+--   ★序号关系 = **同号**（`partypetN` 是 `partyN` 的宠物、`raidpetN` 是 `raidN` 的宠物）⇒ 这里**不新增**
+--     「宠物→主人」反查（客户端没有这个 API），直接把成员记录的 unit 派生成宠物 unit。
+--   ★★复用成员扫描（同一份缓存、同一套职业/小队数据）：宠物记录**继承主人**的 `cls/grp`/名字 ⇒
+--     条件编辑器里的「职业多选 / 小队多选」在宠物族上 = 「按主人过滤」（「只治猎人的宠物」这类写法可用）。
+--   ★★成本隔离：本函数**只被宠物族条件调用** ⇒ 纯成员方案（不写宠物条件）一个字节的额外开销都没有；
+--     成员缓存失效时宠物缓存一起失效（见 UPDATE_STATE 那一行），所以两者永远同拍。
+--   ★已知边界（如实写清，别当 bug 反复查）：宠物**技能/冷却/快乐度/忠诚**读不到（那些 API 只认自己的 `pet`）；
+--     `GetPlayerMapPosition` 对 `partypet*/raidpet*` **恒返回 0,0**（wiki 原文：pets are not shown on the map）
+--     ⇒ 无法定位队友宠物；超距时 `UnitExists` 的行为待真机验收（文档只保证血蓝/生死有 roster 口径）。
+function EVAL_HELP_TEAM_PET_ENSURE(scope)
+  local isRaid = (scope == "raid")
+  if isRaid then
+    if st.teamPetRaid then return st.teamPetRaid end
+  elseif st.teamPet then
+    return st.teamPet
+  end
+  -- 成员 unit → 宠物 unit（`player`→`pet`、`partyN`→`partypetN`、`raidN`→`raidpetN`）；
+  --   ★认不出（别的 unit）一律返回 nil ⇒ 跳过，绝不猜。
+  local function petOf(u)
+    if u == "player" then return "pet" end
+    if string.sub(u, 1, 5) == "party" then return "partypet" .. string.sub(u, 6) end
+    if string.sub(u, 1, 4) == "raid" then return "raidpet" .. string.sub(u, 5) end
+    return nil
+  end
+  local members = (type(EVAL_HELP_TEAM_ENSURE) == "function") and EVAL_HELP_TEAM_ENSURE(scope) or nil
+  local list = {}
+  for i = 1, table.getn(members or {}) do
+    local m = members[i]
+    local pu = petOf(m.unit)
+    -- ★存在性判定用 `UnitExists`（客户端自己的队伍宠物框就是这么判的）：没宠物 / 已解散 / 不在世界 都会是假。
+    if pu and (type(UnitExists) ~= "function" or UnitExists(pu)) then
+      local rec = {
+        unit = pu, pet = true,
+        owner = m.name or m.unit, ownerUnit = m.unit,
+        cls = m.cls, grp = m.grp, clsLoc = m.clsLoc, -- ★按**主人**过滤（宠物自己没有职业/小队）
+      }
+      local okn, nm = pcall(UnitName, pu)
+      rec.name = (okn and type(nm) == "string" and nm ~= "") and nm or (tostring(rec.owner) .. "的宠物")
+      local hp, hpmax = UnitHealth(pu), UnitHealthMax(pu)
+      rec.hp, rec.hpMax = tonumber(hp) or 0, tonumber(hpmax) or 0
+      rec.hpPct = (rec.hpMax > 0) and (rec.hp / rec.hpMax * 100) or 0
+      local mp, mpmax = UnitMana(pu), UnitManaMax(pu)
+      rec.power, rec.powerMax = tonumber(mp) or 0, tonumber(mpmax) or 0
+      rec.powerPct = (rec.powerMax > 0) and (rec.power / rec.powerMax * 100) or 0
+      if type(UnitPowerType) == "function" then
+        local okp, pt = pcall(UnitPowerType, pu)
+        if okp then rec.powerType = pt end
+      end
+      -- 只有宠物才有的两条（用于日志/图标归属；判不出就如实留 nil，绝不编）
+      if type(UnitCreatureFamily) == "function" then
+        local okf, fam = pcall(UnitCreatureFamily, pu)
+        if okf and type(fam) == "string" and fam ~= "" then rec.family = fam end
+      end
+      if type(UnitCreatureType) == "function" then
+        local okt, ct = pcall(UnitCreatureType, pu)
+        if okt and type(ct) == "string" and ct ~= "" then rec.ctype = ct end
+      end
+      if type(UnitIsDeadOrGhost) == "function" then
+        local okd, dd = pcall(UnitIsDeadOrGhost, pu)
+        if okd then rec.dead = dd and true or false end
+      end
+      -- 光环：与成员记录**同一形状**（buffs[tex]=层数 / debuffs[tex]={n=,t=}）⇒ 求值侧 memberAuraHit
+      --   一行都不用改就能同时吃成员与宠物。
+      rec.buffs, rec.debuffs = {}, {}
+      if type(UnitBuff) == "function" then
+        for bi = 1, 32 do
+          local okb, tex, apps = pcall(UnitBuff, pu, bi)
+          if not okb or not tex then break end
+          rec.buffs[tex] = (type(apps) == "number" and apps > 0) and apps or 1
+        end
+      end
+      if type(UnitDebuff) == "function" then
+        for di = 1, 16 do
+          local okdd, tex2, apps2, dtype2 = pcall(UnitDebuff, pu, di)
+          if not okdd or not tex2 then break end
+          rec.debuffs[tex2] = {
+            n = (type(apps2) == "number" and apps2 > 0) and apps2 or 1,
+            t = (type(dtype2) == "string" and dtype2 ~= "") and dtype2 or nil,
+          }
+        end
+      end
+      table.insert(list, rec)
+    end
+  end
+  if isRaid then st.teamPetRaid = list else st.teamPet = list end
+  return list
+end
+
 -- 按 unit 取已采集的成员记录（队伍/团队条件会设 st.teamCur，后续条件按它求值）
 -- ★1.70.47 两个范围的表都要找（选的是 raidN 还是 partyN 由 cd.name 决定）
 --   ★不要写成 ipairs({ st.team, st.teamRaid })——两个缓存里常有一个是 nil，
@@ -721,7 +824,9 @@ function EVAL_HELP_UPDATE_STATE()
   --   每秒上万次——严重违反频率防护总则。真正扫描放在 EVAL_HELP_TEAM_ENSURE()，
   --   由「团队条件求值 / 团队目标选取」在**按宏那一轮**触发一次。
   st.teamEpoch = (st.teamEpoch or 0) + 1 -- 仅供诊断/断言
+  -- ★1.75.108 宠物族的缓存与成员缓存**同拍失效**（两者都从同一份成员扫描派生 ⇒ 绝不允许一新一旧）
   st.team, st.teamRaid, st.teamCur = nil, nil, nil
+  st.teamPet, st.teamPetRaid = nil, nil
 
   -- ★1.70.45 自身光环「剩余秒数」表（用户要求：buff 类条件加剩余时间检查）。
   --   数据源**只有** GetPlayerBuff* 家族（wiki globals/Buff 明文）：
@@ -960,6 +1065,12 @@ local LOAD_RESIDUE_KEYS = {
   --   SetInventoryItem/SetBagItem 的 pcall 结果、逐行原文、冷却三参，都只能真机读，
   --   而聊天框读数（say）不落日志环 ⇒ 必须自带专属落盘（同 ecProbe/ipProbe 的教训）。
   "equipProbe",
+  -- ★1.75.109 图层隐藏（tools/LayerFix.lua）的**只读取证环**（环上限 60 行 = LF_SCAN_KEEP）：
+  --   用户报障「图层隐藏 → 主动作条背景，初次打开会把游戏卡死」——真机读数（UIParent 到底多大 ·
+  --   7 个具名对象各在「①全局名 / ②真实父级 / ③兜底容器」哪一级命中 · 一趟扫了多少节点 · 撞没撞预算）
+  --   只能真机回答，而聊天框读数（say）不落日志环 ⇒ 必须自带专属落盘（同 ecProbe/ipProbe 的教训）。
+  --   ★本环只在用户主动跑 `/eh go 图层隐藏` 时写（日常勾选一个字都不写，不给普通玩家留残渣）。
+  "layerFixProbe",
 }
 
 function EVAL_LOAD_RESIDUE_KEYS() return LOAD_RESIDUE_KEYS end
