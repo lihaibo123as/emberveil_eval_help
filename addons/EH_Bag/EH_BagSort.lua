@@ -18,6 +18,25 @@
 --
 -- ★3 条安全闸门（任一命中即停并如实说明）：
 --   战斗中 / 光标上有物品 / 连续 3 步推不动（物品被锁）
+--
+-- ★★★0.3.41 两条收口（真机报障：「在遇到箭袋,附魔,草药等专属袋子的时候背包整合会卡住死循环」）：
+--   ① **工作区只收「被正面证明是普通袋」的容器**（fail-closed；判定口 = `B.bagKind`，实现在 EH_Bag.lua）：
+--      特殊袋（箭袋/弹药袋/草药袋/附魔袋/灵魂袋）与**判不出类型**的袋子**整袋不进池子**
+--      —— 既不从中搬出、也不往里搬进。理由：特殊袋只收得下自己那一类物品 ⇒ 期望序里
+--      「排在前面那件」必须落进特殊袋时**永远落不进去**（= 期望序**不可达**，即使读回 100% 准确
+--      也收敛不了）；而本客户端 drop 被拒时**把物品放回原处、光标清空**（unrealUI 在同一客户端
+--      实测的形态）⇒ 旧写法只看光标 ⇒ 记成「搬成功」⇒ 下一步算出同一个期望序、搬同一对格子
+--      ⇒ **空转到 `SORT_MAX_MOVES`(400) / `SORT_TIMEOUT`(180s) 才收工**（0.2s 一步 ≈ 每秒 10 次
+--      服务器写动作，正压在项目铁律的红线上）。口径照参考插件 `unrealUI/core/itemsort.lua` 的
+--      分类边界（"Which bags may be sorted"）逐条对齐。
+--   ② **无进展闸门**（旧写法只有「物品被锁」那一条，而**静默被拒根本不走它** ⇒ 形同不存在）：
+--      每步算一次**工作区状态指纹**，判据 = **这个状态在本轮整理里出现过没有**
+--      （只比上一拍抓不到「A→B→A→B…」的来回互搬周期 —— 0.3.40d 银行主格那次正是那个形态）；
+--      从「上一次见到新状态」起算满 `SORT_NOPROG_SEC` 秒就记一次无进展，
+--      累计 `SORT_NOPROG_MAX` 次即停并如实出声。
+--      ★为什么按「秒」而不按「步」：本客户端**容器读回在整理中会滞后**（0.3.9 / 0.3.35 在案，
+--      新鲜戳记有效期 1.5s）⇒ 刚落位的那一拍读回可能还是旧的；按步数会**误报**，
+--      按秒给足读回时间才能区分「读回还没到」与「这一步真的没发生」。
 -- ============================================================
 
 local B = _G.EH_BAG
@@ -35,6 +54,10 @@ local CAT_RANK = {
 local SORT_MAX_MOVES = 400
 local SORT_TIMEOUT = 180
 local SORT_STALL_MAX = 3
+-- ★0.3.41 无进展闸门（见文件头 ②）：指纹从上次变化起连续 NOPROG_SEC 秒没动过 ⇒ 记一次无进展；
+--   累计 NOPROG_MAX 次即收工（3.0s 是给「容器读回滞后」留的余量 —— 新鲜戳记有效期 1.5s 的两倍）
+local SORT_NOPROG_SEC = 3.0
+local SORT_NOPROG_MAX = 2
 -- ★0.3.35：整理「新鲜戳记」有效期（秒）—— 刚动过的格子在这段时间内不拿滞后的读回盖掉直接画好的内容
 B.SORT_FRESH_SEC = 1.5
 
@@ -170,15 +193,47 @@ local function lessRec(a, b)
   return (a.id or 0) > (b.id or 0)             -- ★ id：降序
 end
 
+-- ★★★0.3.41：袋子分类（fail-closed）—— 只有**被正面证明是普通袋**的容器才进工作区。
+--   ★判定口**不在**（载入异常）⇒ 退回旧口径（全收）：那是**载入顺序**问题，不是「判不出袋子」；
+--     而 `B.bagKind` 返回 nil（**真的判不出类型**）⇒ **排除**（宁少整理几个包，
+--     也绝不在判不出类型的袋子里搬东西 —— 与参考插件同一句话）。
+local function generalOnly(bag)
+  if type(B.bagKind) ~= "function" then return true end
+  return B.bagKind(bag) == "general"
+end
+
+local function kindLabelOf(bag)
+  if type(B.bagKindLabel) == "function" then return B.bagKindLabel(bag) end
+  return L("KIND_UNKNOWN")
+end
+
+-- 被排除的容器 → 「背包 1(草药袋) · 银行包 6(判不出)」这种一行播报文本（有界：最多列 6 条，多的写「…」）
+local function skipText(skipped)
+  local parts = {}
+  local i
+  for i = 1, table.getn(skipped) do
+    if i > 6 then
+      parts[table.getn(parts) + 1] = "…"
+      break
+    end
+    local bag = skipped[i].bag
+    local nm = (type(B.bagLabel) == "function") and B.bagLabel(bag) or ("#" .. tostring(bag))
+    parts[table.getn(parts) + 1] = nm .. "(" .. kindLabelOf(bag) .. ")"
+  end
+  return table.concat(parts, " · ")
+end
+
 -- 位置序：**工作区 = 0~4 号袋的全部物理格子**，显示中的包排前面、收起的排后面。
 -- ★★★0.3.7 修（用户：「物品整理在有空格的情况下会提示空位不足」）：旧写法只收「显示中」的包
 --   ⇒ 你把某个背包**收起**（里面还有空位）时，容量行按**物理格数**报「空 26」（窗口下方那行），
 --   而整理引擎在可见区找不到空格做中转 ⇒ 直接误报「一格空位都没有」。
 --   ★口径：**收起只影响看不看得见，不影响这一格能不能用**；只有**物理上一格不空**才是真的没空位。
 --   排序仍然优先把东西摆在**看得见的地方**（第 1 趟 = 显示中的包），多出来的才落到收起的包里。
+--   ★★★0.3.41：返回**两个**值 —— `slots`（工作区格子）与 `skipped`（被排除的容器 = 特殊袋 +
+--     判不出类型的袋子；供上手播报与 `/ebag status` 体检用；**空表 = 一个都没跳过**）。
 local function slotOrder(scope)
   -- ★0.3.40 银行工作区（`scope == "bank"`；用户：「顺带也要整理银行背包内的物品」）：
-  --   主格 24（先）+ 银行包 5~10（后），全部物理格；★只在银行开着时才有（`B.bankOpen`）。
+  --   银行包 5~10，全部物理格；★只在银行开着时才有（`B.bankOpen`）。
   --   ★与背包工作区**分两段跑**（sortStep 在背包 done 后换段）—— 绝不跨容器搬（背包 ↔ 银行）。
   if scope == "bank" then
     -- ★★★0.3.40d 死循环收口（真机：「开着银行 整理 卡主死循环了」）——
@@ -186,25 +241,33 @@ local function slotOrder(scope)
     --   「名字→GetItemInfo」反查，id 时有时无（nil id 互相「相等」⇒ 反复互搬）+ 读回滞后
     --   ⇒ 期望序每步都变 ⇒ **永不收敛 = 死循环**（「未找到指定物品」= 反查失败时客户端喷的错）。
     --   ⇒ 银行段**只整银行包 5~10**（容器 API，与背包同稳定级）；主格 24 格如实跳过、出声说明。
-    local slots = {}
+    local slots, skipped = {}, {}
     if B.bankOpen == true then
       local k, s
       for k = 10, 5, -1 do
-        local n = B.bagSlotsRaw(k)
-        for s = n, 1, -1 do
-          table.insert(slots, { bag = k, slot = s })
+        if generalOnly(k) then
+          local n = B.bagSlotsRaw(k)
+          for s = n, 1, -1 do
+            table.insert(slots, { bag = k, slot = s })
+          end
+        else
+          -- ★0.3.41：银行包也可能是特殊袋（草药袋/附魔袋是最常见的银行包）⇒ 一起分类
+          table.insert(skipped, { bag = k })
         end
       end
     end
-    return slots
+    return slots, skipped
   end
-  local slots = {}
+  local slots, skipped = {}, {}
   local pass, k, s
   for pass = 1, 2 do
         for k = 5, 1, -1 do    --改动点
       local bag = k - 1
       local shown = B.bagShown(bag)
-      if (pass == 1 and shown) or (pass == 2 and not shown) then
+      -- ★0.3.41：特殊袋/判不出类型的袋子**整袋不进池子**（第 1 趟里记一次被跳过的容器，别重复列）
+      if not generalOnly(bag) then
+        if pass == 1 then table.insert(skipped, { bag = bag }) end
+      elseif (pass == 1 and shown) or (pass == 2 and not shown) then
         local n = B.bagSlotsRaw(bag)
         for s = n, 1, -1 do --改动点
           table.insert(slots, { bag = bag, slot = s })
@@ -212,7 +275,7 @@ local function slotOrder(scope)
       end
     end
   end
-  return slots
+  return slots, skipped
 end
 
 -- ★★★0.3.7 修（同一次报障的第二层）：`list` 是**逐位赋值**的 —— 末尾的空格子写的是 nil
@@ -229,6 +292,27 @@ local function snapshot(slots)
     list[i] = recAt(slots[i].bag, slots[i].slot)
   end
   return list, n
+end
+
+-- ★0.3.41 工作区状态指纹（无进展闸门用）：逐格 `bag:slot=id:count`，空格记 `-`。
+--   用途 = 判「这一步到底有没有真的改变背包」——**只看状态，绝不看调用的返回值**
+--   （本客户端 drop 被拒时不报错、且光标被清空 ⇒ 返回值那条路不可信）。
+--   有界：长度 = 工作区槽位数；每步只算一次。
+local function fpOf(slots, list, n)
+  local out = {}
+  local i
+  for i = 1, n do
+    local s = slots[i]
+    local r = list[i]
+    local part = "-"
+    if r ~= nil then
+      if r.id ~= nil then part = tostring(r.id)
+      elseif type(r.link) == "string" then part = r.link end
+      part = part .. ":" .. tostring(r.count or 1)
+    end
+    out[i] = tostring(s.bag) .. ":" .. tostring(s.slot) .. "=" .. part
+  end
+  return table.concat(out, "|")
 end
 
 local function cursorBusy()
@@ -315,10 +399,54 @@ local function findMerge(list, n)
   return nil
 end
 
--- 一步：返回 "moved" / "done" / "stall" / "nofree" / "cursor" / 其它错误串
+-- ★★★0.3.41 无进展闸门（文件头 ②；真机「特殊袋导致死循环」就是这里兜住的）：
+--   判据 = **这个工作区状态在本轮整理里出现过没有**（不是「与上一拍是否相同」）——
+--   只比上一拍的话，**来回互搬的周期**（A→B→A→B…）每拍都与上一拍不同 ⇒ 永远抓不到
+--   （0.3.40d 银行主格那次「id 时有时无 ⇒ 反复互搬」正是这个形态）。
+--   · 状态**没出现过** ⇒ 这是净进展（重置计时与计数）；
+--   · 状态**出现过** ⇒ 静止不动，或来回绕圈；从「上一次见到新状态」起算满 SORT_NOPROG_SEC 秒
+--     就记一次无进展，累计 SORT_NOPROG_MAX 次 ⇒ 收工。
+--   ★为什么按「秒」而不按「步」：本客户端**容器读回在整理中会滞后**（0.3.9/0.3.35 在案，
+--     新鲜戳记有效期 1.5s）⇒ 刚落位那一拍的读回可能还是旧的（= 状态「出现过」）；按步数会**误报**，
+--     按秒（3s = 戳记有效期的两倍）才分得清「读回还没到」与「这一步真的没发生」。
+--   ★`seen` 有界：超过 64 个状态就整表清空重来（只有在一路顺进、几十步没被卡过时才会发生）。
+local function noProgress(fp, now)
+  if type(B.sortFpSeen) ~= "table" then B.sortFpSeen = {} end
+  local seen = B.sortFpSeen
+  local n = 0
+  local _
+  for _ in pairs(seen) do n = n + 1 end
+  if n > 64 then
+    seen = {}
+    B.sortFpSeen = seen
+  end
+  if seen[fp] ~= true then
+    seen[fp] = true
+    B.sortFp = fp
+    B.sortFpAt = now
+    B.sortNoProg = 0
+    return false
+  end
+  if B.sortFpAt == nil then
+    B.sortFpAt = now
+    return false
+  end
+  if (now - B.sortFpAt) < SORT_NOPROG_SEC then return false end
+  B.sortNoProg = (B.sortNoProg or 0) + 1
+  B.sortFpAt = now                 -- ★重新计时：否则后面每一拍都会累加
+  return (B.sortNoProg >= SORT_NOPROG_MAX)
+end
+
+-- 一步：返回 "moved" / "done" / "stall" / "noprog" / "nofree" / "cursor" / 其它错误串
 local function oneStep()
   local slots = slotOrder(B.sortScope)
   local list, n = snapshot(slots)
+  local now = 0
+  if type(GetTime) == "function" then
+    local okT, t = pcall(GetTime)
+    if okT and type(t) == "number" then now = t end
+  end
+  if noProgress(fpOf(slots, list, n), now) then return "noprog" end
   local i
   -- ① 合并堆叠（整堆并入，装不下不动手）
   local src, dst = findMerge(list, n)
@@ -471,6 +599,10 @@ function B.sortStep(dt)
     if B.sortStall >= SORT_STALL_MAX then
       B.sortStopFn(L("SORT_STOP_LOCKED"))
     end
+  elseif r == "noprog" then
+    -- ★0.3.41：工作区状态连续多秒没有任何变化 ⇒ 这一步（或这一串）根本没发生 ——
+    --   立刻收工，绝不空转到 SORT_MAX_MOVES(400) / SORT_TIMEOUT(180s)（旧写法就是这样卡住的）
+    B.sortStopFn(L("SORT_STOP_NOPROG", B.sortNoProg or SORT_NOPROG_MAX))
   elseif r == "nofree" then
     -- 一格空的都没有：排序需要空格做中转 ⇒ 如实说，绝不动别人的东西
     B.sortStopFn(L("SORT_STOP_NOFREE"))
@@ -481,7 +613,7 @@ function B.sortStep(dt)
     -- ★0.3.40：背包段整完、银行开着 ⇒ 换**银行段**接着整（用户：「顺带也要整理银行背包内的物品」）——
     --   两段分跑，绝不跨容器搬；银行里不足 2 件就跳过这段直接收工。
     if B.sortScope ~= "bank" and B.bankOpen == true then
-      local bslots = slotOrder("bank")
+      local bslots, bskip = slotOrder("bank")
       local blist, bn = snapshot(bslots)
       local bc = 0
       local bi2
@@ -491,7 +623,9 @@ function B.sortStep(dt)
       if bc >= 2 then
         B.sortScope = "bank"
         B.sortAcc = 0
-        B.sayForce("背包整理完成，继续整理银行包（银行主格 24 格客户端读不到链接、暂不整理）…")
+        B.sayForce(L("SORT_BANK_SWITCH"))
+        -- ★0.3.41：银行包也可能是特殊袋 ⇒ 换段时同样如实报出被跳过的容器
+        if table.getn(bskip) > 0 then B.sayForce(L("SORT_SKIP", skipText(bskip))) end
         return
       end
     end
@@ -529,7 +663,7 @@ function B.sortStart(loud)
     B.sayForce(L("SORT_CURSOR"))
     return false
   end
-  local slots = slotOrder()
+  local slots, skipped = slotOrder()
   local list, nSlots = snapshot(slots)
   local n = 0
   local i
@@ -538,11 +672,15 @@ function B.sortStart(loud)
   for i = 1, nSlots do
     if list[i] ~= nil then n = n + 1 end
   end
+  -- 银行段：格子与「被跳过的容器」各算一次（银行开着时才有；分类结果有缓存，开销可忽略）
+  local bankSlots, bankSkip
+  if B.bankOpen == true then
+    bankSlots, bankSkip = slotOrder("bank")
+  end
   -- ★0.3.40：背包不足 2 件、但银行开着且银行里 ≥2 件 ⇒ 直接从**银行段**开整（换段逻辑与 done 分支同口径）
   local startScope = nil
-  if n < 2 and B.bankOpen == true then
-    local bslots = slotOrder("bank")
-    local blist, bn = snapshot(bslots)
+  if n < 2 and bankSlots ~= nil then
+    local blist, bn = snapshot(bankSlots)
     local bc = 0
     for i = 1, bn do
       if blist[i] ~= nil then bc = bc + 1 end
@@ -550,6 +688,21 @@ function B.sortStart(loud)
     if bc >= 2 then
       startScope = "bank"
       n = bc
+    end
+  end
+  -- ★★★0.3.41：起手先把「跳过了哪些容器」说清楚（不论这次能不能启动）——
+  --   特殊袋与**判不出类型**的袋子都不进工作区（fail-closed），绝不静默少整理；
+  --   ★判不出类型的原因另有一句话（客户端不回答子类词表 = 与「这袋真是特殊袋」是两回事）。
+  local allSkip = {}
+  for i = 1, table.getn(skipped) do table.insert(allSkip, skipped[i]) end
+  if bankSkip ~= nil then
+    for i = 1, table.getn(bankSkip) do table.insert(allSkip, bankSkip[i]) end
+  end
+  if table.getn(allSkip) > 0 then
+    if B.bagKindNA == true then
+      B.sayForce(L("SORT_SKIP_NA", skipText(allSkip)))
+    else
+      B.sayForce(L("SORT_SKIP", skipText(allSkip)))
     end
   end
   if n < 2 then
@@ -563,6 +716,11 @@ function B.sortStart(loud)
   B.sortStall = 0
   B.sortElapsed = 0
   B.sortT0 = GetTime()
+  -- ★0.3.41：无进展闸门的会话态开新一轮就归零（`seen` 空 ⇒ 第一步必是「新状态」，绝不误判）
+  B.sortFp = nil
+  B.sortFpAt = nil
+  B.sortFpSeen = {}
+  B.sortNoProg = 0
   -- ★0.3.35：每次整理开一张新的「新鲜戳记」表（旧戳记按时间自然过期，不在收尾处清 ——
   --   收尾那一刻最后几步的读回多半还没确认，清了就会被 refreshAll 画回空格）
   B.sortFresh = {}
@@ -579,4 +737,48 @@ function B.sortStart(loud)
   end
   B.pumpSync()
   return true
+end
+
+-- ===== 只读体检口（`/ebag status` 用；★工具模块的读值口留在模块自己文件里）=====
+-- 格式：「整理工作区：背包 0,3 ｜ 银行包 5,7 ｜ 整理跳过特殊袋：背包 1(草药袋) ｜ 无进展 0/2」
+--   ★零写入、零副作用（只读分类缓存 + 槽位表；分类结果本身有缓存）。
+function B.sortAreaLine()
+  local slots, skipped = slotOrder()
+  local order, seen = {}, {}
+  local i
+  for i = 1, table.getn(slots) do
+    local b = slots[i].bag
+    if seen[b] ~= true then
+      seen[b] = true
+      table.insert(order, b)
+    end
+  end
+  local function names(list)
+    local out = {}
+    local j
+    for j = 1, table.getn(list) do
+      out[j] = (type(B.bagLabel) == "function") and B.bagLabel(list[j]) or ("#" .. tostring(list[j]))
+    end
+    if table.getn(out) == 0 then return L("ST_NONE") end
+    return table.concat(out, ",")
+  end
+  local txt = names(order)
+  if B.bankOpen == true then
+    local bslots, bskip = slotOrder("bank")
+    local bo, bseen = {}, {}
+    for i = 1, table.getn(bslots) do
+      local b = bslots[i].bag
+      if bseen[b] ~= true then
+        bseen[b] = true
+        table.insert(bo, b)
+      end
+    end
+    txt = txt .. " ｜ " .. names(bo)
+    for i = 1, table.getn(bskip) do table.insert(skipped, bskip[i]) end
+  end
+  if table.getn(skipped) > 0 then
+    txt = txt .. " ｜ " .. L("SORT_SKIP", skipText(skipped))
+  end
+  txt = txt .. " ｜ " .. L("SORT_NOPROG_N", B.sortNoProg or 0, SORT_NOPROG_MAX)
+  return L("ST_SORT_AREA", txt)
 end

@@ -49,7 +49,7 @@ local B = {}
 _G.EH_BAG = B
 
 -- 构建标记（唯一来源）：改本文件顺手 +1，用于「客户端跑的是哪一份」取证
-local BAG_BUILD = "0.3.40d"
+local BAG_BUILD = "0.3.42"
 
 local function strVal(v)
   return tostring(v)
@@ -105,7 +105,7 @@ local BAG_T = {
     HINT = "左键拾取/放下, 右键使用, Shift+左键: 聊天发送链接, Ctrl+左键 试穿, Shift+拖动 拆分",
     HINT_TITLE = "操作提示",
     BAG_TIP_FMT = "%s（%d 格）",
-    BAG_TIP_USE = "左键：显示/隐藏这一包（并高亮它的格子） 拖物品到这里：放进这个包",
+    BAG_TIP_USE = "左键：显示/隐藏这一包（光标上有东西时 = 放进这格） · 拖动：拿起这个包（换包） · 拖物品到这里：放进这个包 · ★还装着东西的包客户端不允许拿走/替换（先把里面的东西腾空）",
     BANK_TITLE = "银行",
     BANK_PANE = "银行主格",
     BANK_BAG_FMT = "银行包 %d",
@@ -113,7 +113,7 @@ local BAG_T = {
     BANK_SLOTS_FMT = "银行包位 %d/%d · 下一格 %s",
     KEYRING = "钥匙链",
     KEYRING_TIP_FMT = "钥匙链（%d 格）",
-    KEYRING_TIP_USE = "左键：显示/隐藏钥匙格 · 拖钥匙到这里：放进钥匙链",
+    KEYRING_TIP_USE = "左键：显示/隐藏钥匙格 · 光标上有钥匙时左键（或拖钥匙到这里）：放进钥匙链 · ★钥匙链不是装备包，拖动这颗按钮不会拿起任何东西",
     EMPTY = "空",
     TIP_COUNT = "数量: %d",
     CONFLICT = "检测到已载入的整合背包插件：%s —— 两套整合窗同开会互相打架，本次 EH_Bag 已自动让位（不接管背包、不碰原生容器帧）。请到插件列表里禁用其中一个，然后 /reload；或敲 /ebag force 让 EH_Bag 强行接管。",
@@ -137,6 +137,24 @@ local BAG_T = {
     SORT_STOP_MOVES = "达到步数上限",
     SORT_STOP_TIMEOUT = "超时",
     SORT_STOP_GONE = "窗口被关闭",
+    -- ★0.3.41：特殊袋 fail-closed（整理工作区只收「被正面证明是普通袋」的容器）+ 无进展闸门
+    SORT_STOP_NOPROG = "连续 %d 次背包状态没有任何变化（目标容器拒绝放入 / 客户端没有执行这步搬运）",
+    SORT_SKIP = "整理跳过特殊袋：%s（不往里搬、也不从里搬出）",
+    SORT_SKIP_NA = "袋子类型判不出，已按最保险处理（整袋不整理）：%s",
+    SORT_BANK_SWITCH = "背包段完成，继续银行段（跳过：银行主格 24 格%s）…",
+    KIND_GENERAL = "普通袋",
+    KIND_UNKNOWN = "判不出",
+    ST_SORT_AREA = "整理工作区：%s",
+    -- ★0.3.42 背包条「拿包 / 放包」的如实反馈（三处 bar 共用；绝不静默失败）
+    BAR_TAKE_FAIL = "没能拿起「%s」：客户端没有把它放到光标上（多半是它还装着东西 —— 非空包客户端不允许换）",
+    BAR_PUT_SWAP = "换包成功：换下来的旧包在光标上，自己放回背包",
+    BAR_PUT_FAIL_OLD = "没能换包：这格原来的包还装着东西（客户端不允许替换）—— 东西还在光标上",
+    BAR_PUT_FAIL_EMPTY = "没能放进这格（客户端没有回报变化，也可能只是还没同步）—— 东西还在光标上",
+    BAR_KEYRING_FULL = "钥匙链没有空格了",
+    BAR_NO_INV = "判不出「%s」的槽位号，未做任何改动",
+    BAR_NO_API = "本客户端没有这个操作需要的接口，未做任何改动",
+    SORT_NOPROG_N = "无进展 %d/%d",
+    ST_NONE = "无",
     SPLIT_TITLE = "拆分数量",
     SPLIT_INFO = "%s（共 %d 个）",
     SPLIT_NOW = "移动数量",
@@ -265,7 +283,7 @@ MENU_CGAP = "格子间距",
     HINT = "Left: pick up/drop · Right: use · Shift+Left: link · Ctrl+Left: dress up · Shift+drag: split",
     HINT_TITLE = "Controls",
     BAG_TIP_FMT = "%s (%d slots)",
-    BAG_TIP_USE = "Left: show/hide this bag (and highlight its slots) · Drop an item here: put it into this bag",
+    BAG_TIP_USE = "Left: show/hide this bag (with something on the cursor: put it in this slot) · Drag: pick the bag up (bag swap) · Drop an item here: put it into this bag · NOTE: the client refuses to take out or replace a bag that still holds items",
     BANK_TITLE = "Bank",
     BANK_PANE = "Bank pane",
     BANK_BAG_FMT = "Bank bag %d",
@@ -273,7 +291,7 @@ MENU_CGAP = "格子间距",
     BANK_SLOTS_FMT = "Bank bags %d/%d · next slot %s",
     KEYRING = "Keyring",
     KEYRING_TIP_FMT = "Keyring (%d slots)",
-    KEYRING_TIP_USE = "Left: show/hide keys · Drop a key here: put it into the keyring",
+    KEYRING_TIP_USE = "Left: show/hide keys · With a key on the cursor (or by dropping one here): put it into the keyring · NOTE: the keyring is not an equipped bag, dragging this button picks up nothing",
     EMPTY = "Empty",
     TIP_COUNT = "Count: %d",
     CONFLICT = "Another merged-bag addon is loaded: %s -- two merged bag windows would fight each other, so EH_Bag yields this session (no bag takeover, native container frames untouched). Disable one of them and /reload, or type /ebag force to take over anyway.",
@@ -297,6 +315,24 @@ MENU_CGAP = "格子间距",
     SORT_STOP_MOVES = "step cap reached",
     SORT_STOP_TIMEOUT = "timed out",
     SORT_STOP_GONE = "window closed",
+    -- ★0.3.41: specialty bags are fail-closed out of the sort pool + no-progress guard
+    SORT_STOP_NOPROG = "bag contents unchanged for %d checks in a row (the destination refused the drop / the client did not perform the move)",
+    SORT_SKIP = "sort skipped specialty bags: %s (nothing is moved into or out of them)",
+    SORT_SKIP_NA = "bag type could not be identified; left untouched for safety: %s",
+    SORT_BANK_SWITCH = "Bags done, continuing with the bank bags (skipped: the main pane's 24 slots%s)...",
+    KIND_GENERAL = "ordinary bag",
+    KIND_UNKNOWN = "unknown",
+    ST_SORT_AREA = "Sort work area: %s",
+    -- ★0.3.42 bag-bar take/put feedback (shared by all three bars; never fails silently)
+    BAR_TAKE_FAIL = "Could not pick up \"%s\": the client did not move it to the cursor (most likely it still holds items -- the client refuses to swap a non-empty bag)",
+    BAR_PUT_SWAP = "Bag swapped: the old bag is on the cursor, put it back into your bags",
+    BAR_PUT_FAIL_OLD = "Swap failed: the bag in that slot still holds items (the client refuses the replacement) -- your item is still on the cursor",
+    BAR_PUT_FAIL_EMPTY = "Could not put it into that slot (the client reported no change; it may simply not have synced yet) -- your item is still on the cursor",
+    BAR_KEYRING_FULL = "No free slot left in the keyring",
+    BAR_NO_INV = "Cannot resolve the slot number of \"%s\"; nothing was changed",
+    BAR_NO_API = "This client has no API for that action; nothing was changed",
+    SORT_NOPROG_N = "no progress %d/%d",
+    ST_NONE = "none",
     SPLIT_TITLE = "Split stack",
     SPLIT_INFO = "%s (%d total)",
     SPLIT_NOW = "Amount",
@@ -425,7 +461,7 @@ MENU_CGAP = "Slot spacing",
     HINT = "ЛКМ: взять/положить · ПКМ: использовать · Shift+ЛКМ: ссылка · Ctrl+ЛКМ: примерка · Shift+перетаскивание: разделить",
     HINT_TITLE = "Управление",
     BAG_TIP_FMT = "%s (%d ячеек)",
-    BAG_TIP_USE = "ЛКМ: показать/скрыть сумку (и подсветить её ячейки) · Перетащите предмет сюда: положить в эту сумку",
+    BAG_TIP_USE = "ЛКМ: показать/скрыть сумку (с предметом на курсоре: положить его в эту ячейку) · Перетаскивание: взять сумку (смена сумки) · Перетащите предмет сюда: положить в эту сумку · ВНИМАНИЕ: клиент не позволяет забрать или заменить сумку, в которой ещё есть предметы",
     BANK_TITLE = "Банк",
     BANK_PANE = "Ячейки банка",
     BANK_BAG_FMT = "Сумка банка %d",
@@ -433,7 +469,7 @@ MENU_CGAP = "Slot spacing",
     BANK_SLOTS_FMT = "Сумки банка %d/%d · следующая ячейка %s",
     KEYRING = "Связка ключей",
     KEYRING_TIP_FMT = "Связка ключей (%d ячеек)",
-    KEYRING_TIP_USE = "ЛКМ: показать/скрыть ключи · Перетащите ключ сюда",
+    KEYRING_TIP_USE = "ЛКМ: показать/скрыть ключи · С ключом на курсоре (или перетащив ключ сюда): положить в связку · ВНИМАНИЕ: связка ключей не является сумкой, перетаскивание этой кнопки ничего не берёт",
     EMPTY = "Пусто",
     TIP_COUNT = "Количество: %d",
     CONFLICT = "Обнаружен другой аддон объединённых сумок: %s -- два таких окна мешают друг другу, поэтому EH_Bag уступает (не перехватывает сумки и не трогает родные фреймы). Отключите один из них и сделайте /reload, либо введите /ebag force.",
@@ -457,6 +493,24 @@ MENU_CGAP = "Slot spacing",
     SORT_STOP_MOVES = "достигнут лимит шагов",
     SORT_STOP_TIMEOUT = "таймаут",
     SORT_STOP_GONE = "окно закрыто",
+    -- ★0.3.41: особые сумки fail-closed + защита от «нет прогресса»
+    SORT_STOP_NOPROG = "содержимое сумок не менялось %d проверок подряд (контейнер отклонил перенос / клиент не выполнил шаг)",
+    SORT_SKIP = "сортировка пропустила особые сумки: %s (ничего не переносится ни туда, ни оттуда)",
+    SORT_SKIP_NA = "тип сумки не определён; оставлена без изменений: %s",
+    SORT_BANK_SWITCH = "Сумки готовы, продолжаем сумками банка (пропущено: 24 ячейки основной панели%s)...",
+    KIND_GENERAL = "обычная сумка",
+    KIND_UNKNOWN = "не определён",
+    ST_SORT_AREA = "Рабочая область сортировки: %s",
+    -- ★0.3.42 отклик панели сумок (общий для всех трёх панелей; без «тихих» отказов)
+    BAR_TAKE_FAIL = "Не удалось взять «%s»: клиент не перенёс её на курсор (скорее всего в ней ещё есть предметы — клиент не разрешает менять непустую сумку)",
+    BAR_PUT_SWAP = "Сумка заменена: старая сумка на курсоре, положите её обратно",
+    BAR_PUT_FAIL_OLD = "Замена не удалась: в сумке этой ячейки ещё есть предметы (клиент не разрешает замену) — предмет остался на курсоре",
+    BAR_PUT_FAIL_EMPTY = "Не удалось положить в эту ячейку (клиент не сообщил об изменении; возможно, просто нет синхронизации) — предмет остался на курсоре",
+    BAR_KEYRING_FULL = "В связке ключей нет свободных ячеек",
+    BAR_NO_INV = "Не удалось определить номер ячейки для «%s»; ничего не изменено",
+    BAR_NO_API = "В этом клиенте нет нужной для этого действия функции; ничего не изменено",
+    SORT_NOPROG_N = "нет прогресса %d/%d",
+    ST_NONE = "нет",
     SPLIT_TITLE = "Разделить стопку",
     SPLIT_INFO = "%s (всего %d)",
     SPLIT_NOW = "Количество",
@@ -2402,6 +2456,9 @@ local function cursorHas()
   return (ok and has) and true or false
 end
 
+-- ★0.3.42：跨文件/跨段共用（背包条那三个口要用同一个口径；单一实现，别处不许再写一份）
+B.cursorHas = cursorHas
+
 -- ★修饰键的唯一读口（读不到 / 报错一律 = false）。
 --   ★★★为什么要「起拖时记账」：拖拽是**跨好几拍**的动作，落格那一刻再去读 Shift 未必还读得到
 --   （本客户端的修饰键状态在鼠标操作期间的可读性没有保证）；起拖那一刻玩家一定还按着 Shift
@@ -3070,6 +3127,196 @@ function B.dropOnSlot(bag, slot)
   if type(PickupContainerItem) == "function" then pcall(PickupContainerItem, bag, slot) end
 end
 
+-- ===== 袋子分类（0.3.41）：只把「被正面证明是普通袋」的容器交给整理引擎 =====
+-- ★★★真机报障（用户）：「在遇到箭袋、附魔、草药等专属袋子的时候，背包整合会卡住死循环」。
+--   真因 = 整理工作区把**特殊袋的格子**当成了可互换的格子：
+--   特殊袋只收得下自己那一类物品 ⇒ 期望序里「排在前面的那件」必须落进特殊袋时**永远落不进去**；
+--   而本客户端 drop 被拒时**把物品放回原处、光标清空**（unrealUI 在同一个客户端实测到的形态，
+--   `unrealUI/core/compat.lua:902-906`：drop refused with "The item was not found."，the cursor
+--   emptied and the item went back where it came from）⇒ 我们只看光标就以为「搬成功了」
+--   ⇒ 期望序不变、下一步搬同一对格子 ⇒ 一路空转到 `SORT_MAX_MOVES`(400) / `SORT_TIMEOUT`(180s)
+--   才收工（0.2s 一步 ⇒ 每秒约 10 次服务器写动作，正压在本项目「写动作 > 1~2 次/s 必限频」的红线上）。
+-- ★★★口径照参考插件 `unrealUI/core/itemsort.lua` 的分类边界（fail-closed，逐条对齐）：
+--   只有**正面判定为普通袋**的容器才进池子；特殊袋（箭袋/弹药袋/草药袋/附魔袋/灵魂袋）
+--   **整袋不进**（既不从中搬出、也不往里搬进）；**判不出类型 ⇒ 也按特殊袋处理**
+--   （原文："A specialty container can accept some of the items already inside it, so waiting for a
+--   refused drop is too late" / "Sorting fewer bags is safer than moving items inside a container
+--   the sorter cannot prove is general-purpose"）。
+-- ★★★怎么判（同一份参考实现的做法，逐条照搬）：
+--   ① 已装备背包槽**拿不到物品链接**（本客户端实测；与我们 0.3.24 对银行主格的发现同源），
+--      `GetItemInfo(GetBagName(bag))` 也不答 ⇒ 只能读**气泡**；
+--   ② 槽位号：`ContainerIDToInventoryID(bag)`，判不出按文档算术兜底（1~4 → 19+bag · 5~10 → 59+bag）；
+--   ③ 用**自建隐形气泡**（`EH_BagReadTip`，0.3.24/0.3.39 那套已验证配方）`SetInventoryItem("player", inv)`
+--      读行，与 `GetAuctionItemSubClasses(3)`（容器类：第 1 项 = 本地化的「普通袋」，其后 = 灵魂袋/
+--      草药袋/附魔袋）与 `GetAuctionItemSubClasses(7)`（箭袋/弹药袋）的**子类词表按位置**比对
+--      ⇒ **语言无关**（英文名字黑名单那条路走不通：参考那边有法语「Carquois」的真机教训）；
+--   ④ 一行里匹配到的**最长**子类词胜出（"12 Slot Herb Bag" 同时含 "Bag" 与 "Herb Bag" ⇒ 取后者），
+--      **带数字的行优先**（`CONTAINER_SLOTS` 那一行；背包**名字**那一行可能碰巧含子类词）；
+--   ⑤ 任何一步读不到 ⇒ **判不出 ⇒ 排除**（fail-closed），并如实报出来（绝不静默少整理）。
+-- ★缓存：按「槽位贴图」记账 —— 换包 = 贴图变 = 自动失效；一局里每袋最多探一次
+--   （贴图读不出的情况退化成 5s TTL，绝不每拍读一次气泡）。
+-- ★背包 0 与银行主格（-1）：没有对应的装备物品、天然什么都能收，且不参与本判定 ⇒ 恒「普通袋」。
+B.BAGKIND_CACHE = {}
+B.BAGKIND_TTL = 5          -- 贴图读不出时的重新判定间隔（秒）
+B.bagKindNA = false        -- true = 客户端不回答子类词表（「判不出」的原因，供播报/体检区分）
+
+-- 容器 → 人物装备槽号（唯一来源；照参考 `IS.BagInventoryId` 同一口径与同一兜底算术）
+function B.bagInvId(bag)
+  if bag == nil then return nil end
+  if type(ContainerIDToInventoryID) == "function" then
+    local ok, v = pcall(ContainerIDToInventoryID, bag)
+    if ok and type(v) == "number" and v > 0 then return v end
+  end
+  if bag >= 1 and bag <= 4 then return 19 + bag end
+  if bag >= 5 and bag <= 10 then return 59 + bag end
+  return nil
+end
+
+-- 子类词表：{ { word = <本地化子类名>, ordinary = 是否「普通袋」 }, ... }
+--   ★空结果**绝不进缓存**（项目在案：空结果缓存 = 这一局永远判不出）—— 下次调用重试。
+B.bagSubWords = function()
+  local hit = B.bagSubWordsCache
+  if hit ~= nil then return hit end
+  local words = {}
+  local complete = true
+  if type(GetAuctionItemSubClasses) ~= "function" then
+    complete = false
+  else
+    -- 记录（类号, 是否「该类第 1 项 = 普通袋」）：容器类 3 的第 1 项 = 普通袋；箭袋类 7 全是特殊袋
+    local groups = { { 3, true }, { 7, false } }
+    local g
+    for g = 1, table.getn(groups) do
+      local cls = groups[g][1]
+      local firstIsOrdinary = groups[g][2]
+      local packed = { pcall(GetAuctionItemSubClasses, cls) }
+      if packed[1] ~= true then
+        complete = false
+      else
+        local i
+        for i = 2, table.getn(packed) do
+          local w = packed[i]
+          if type(w) == "string" and w ~= "" then
+            table.insert(words, { word = w, ordinary = (firstIsOrdinary == true and i == 2) })
+          end
+        end
+      end
+    end
+  end
+  if table.getn(words) == 0 then
+    B.bagKindNA = true
+    return words                      -- ★空结果不缓存（见上）
+  end
+  B.bagSubWordsCache = words
+  B.bagKindNA = (complete ~= true)
+  return words
+end
+
+-- 一组行文本里匹配到的**最长**子类词（带数字的行优先）；匹配不到返回 nil = 判不出
+B.bagLineWord = function(lines)
+  local words = B.bagSubWords()
+  if table.getn(words) == 0 then return nil end
+  local best, bestScore = nil, -1
+  local i, j
+  for i = 1, table.getn(lines) do
+    local line = lines[i]
+    if type(line) == "string" and line ~= "" then
+      local digit = (string.find(line, "%d") ~= nil) and 1 or 0
+      for j = 1, table.getn(words) do
+        local w = words[j].word
+        -- ★plain 查找（第 4 参 true）：子类名里可能带 `-`/`(` 这类模式字符，绝不按模式解
+        if string.find(line, w, 1, true) ~= nil then
+          local score = digit * 100 + string.len(w)
+          if score > bestScore then
+            bestScore = score
+            best = words[j]
+          end
+        end
+      end
+    end
+  end
+  return best
+end
+
+-- 探一个袋子的类型：返回 kind = "general" / "special"、label；判不出 ⇒ nil, nil
+B.bagKindProbe = function(bag)
+  local inv = B.bagInvId(bag)
+  if inv == nil then return nil, nil end
+  local tip = B.readTipGet()
+  if tip == nil or type(tip.SetInventoryItem) ~= "function" then return nil, nil end
+  if type(tip.ClearLines) == "function" then pcall(tip.ClearLines, tip) end
+  pcall(tip.SetOwner, tip, UIParent, "ANCHOR_NONE")
+  local okFill = pcall(tip.SetInventoryItem, tip, "player", inv)
+  local has, judged = false, false
+  if okFill == true and type(B.tipRead) == "function" then has, judged = B.tipRead(tip) end
+  -- ★先读行、再收气泡（`Hide` 之后行可能读不回；反过来读不到内容的坑本项目在案）
+  local lines = {}
+  if judged == true and has == true then
+    local nM = 12
+    local ln = (type(B.tipLines) == "function") and B.tipLines(tip) or nil
+    if type(ln) == "number" and ln > 0 and ln < nM then nM = ln end
+    local i
+    for i = 1, nM do
+      local s = B.readTipLeft(tip, i)
+      if type(s) == "string" and s ~= "" then
+        local t = string.gsub(s, "|c%x%x%x%x%x%x%x%x", "")
+        t = string.gsub(t, "|r", "")
+        table.insert(lines, t)
+      end
+    end
+  end
+  -- ★★★读完当场收（0.3.40c 真凶：Set* 调用会顺带把我们的隐形气泡 Show 出来 ⇒ 屏上多一只幽灵气泡）
+  pcall(tip.Hide, tip)
+  if table.getn(lines) == 0 then return nil, nil end
+  local best = B.bagLineWord(lines)
+  if best == nil then return nil, nil end
+  if best.ordinary == true then return "general", best.word end
+  return "special", best.word
+end
+
+-- ★唯一读口：返回 kind("general"/"special"/nil=判不出), label（本地化子类名，供播报用）
+--   ★绝不让调用方自己读 `B.BAGKIND_CACHE`（缓存键 = 槽位贴图，换包自动失效）
+function B.bagKind(bag)
+  if bag == nil then return nil end
+  if bag == 0 or bag == B.BANK then return "general" end
+  local inv = B.bagInvId(bag)
+  if inv == nil then return nil end
+  local tex = ""
+  if type(GetInventoryItemTexture) == "function" then
+    local ok, v = pcall(GetInventoryItemTexture, "player", inv)
+    if ok and type(v) == "string" then tex = v end
+  end
+  local now = 0
+  if type(GetTime) == "function" then
+    local okT, t = pcall(GetTime)
+    if okT and type(t) == "number" then now = t end
+  end
+  local cache = B.BAGKIND_CACHE
+  local hit = cache[bag]
+  if type(hit) == "table" then
+    -- 贴图相同 = 还是那一口包 ⇒ 直接用；贴图读不出（"" 两边）才退化成 TTL
+    if tex ~= "" and hit.tex == tex then return hit.kind, hit.label end
+    if tex == "" and hit.tex == "" and (now - (hit.at or 0)) < B.BAGKIND_TTL then return hit.kind, hit.label end
+  end
+  local kind, label = B.bagKindProbe(bag)
+  cache[bag] = { tex = tex, kind = kind, label = label, at = now }
+  return kind, label
+end
+
+-- 播报/体检用的类别名（普通袋 / 子类名 / 判不出）
+function B.bagKindLabel(bag)
+  local kind, label = B.bagKind(bag)
+  if kind == "general" then return L("KIND_GENERAL") end
+  if kind == "special" and type(label) == "string" and label ~= "" then return label end
+  return L("KIND_UNKNOWN")
+end
+
+-- 换包/进游戏后强制重判（`/ebag status` 与将来的「重判」入口共用；纯清缓存、零客户端写）
+function B.bagKindReset()
+  B.BAGKIND_CACHE = {}
+  B.bagSubWordsCache = nil
+  B.bagKindNA = false
+end
+
 -- ===== 拆分确认窗（0.3.7；用户：「拖拽完成之后需要弹窗进行物品数量的拆分确认」）=====
 -- ★★★触发口径（用户选定 = B+C 组合）：
 --   ① **落到同种物品上**（会合并 / 装不下）⇒ 弹窗问「移动几个」（默认 = 目标还装得下的量）；
@@ -3360,6 +3607,134 @@ function B.splitTry(tb, ts)
   B.splitAdd("ask", "def=" .. strVal(def) .. "/" .. strVal(total) .. " merge=" .. (merge and "1" or "0")
     .. " shift=" .. (shift and "1" or "0") .. " tb=" .. strVal(tb) .. ",ts=" .. strVal(ts))
   return true
+end
+
+-- ===== 背包条 / 银行包条：拿包与放包（0.3.42；唯一两个口，三处共用）=====
+-- ★★★真机报障（用户）：「参考插件,如何将背包条的功能正常化,正常支持拖拽,背包替换等.现在功能是异常的」。
+--   旧写法三处各写一份槽位号算术 ⇒ **两处写错**：
+--     ① **背包条 4 格**：`PutItemInBag(bag)` 传的是**容器号 1~4**，而官方文档里这个参数要的是
+--        **人物装备槽号** —— 背包格 = `ContainerIDToInventoryID(bag)` = **20~23**；银行包 = `59+bag`
+--        = **64~69**（unrealUI 在同一客户端实测过 64 这一档：`core/compat.lua` 的 bankbagicon 探针）
+--        ⇒ 拖包到条上**静默无事发生**（用户看到的「异常」）。
+--     ② **钥匙格**：`onDragStart` 调的是 `PickupInventoryItem(20)` —— 20 是**背包 1 的**装备槽号
+--        ⇒ 拖钥匙格会把**背包 1 拿起来**（拿错件）。
+--   ★参考插件 unrealUI 的口径（`core/itemslot.lua` 的 WORKING_SOURCE 段 + `modules/bagbar.lua`）：
+--     · **拿包 = `PickupBagFromSlot(装备槽号)`**（官方文档化；参数正是 `ContainerIDToInventoryID`
+--       返回的 20~23）。★它**自带一条客户端规则：还装着东西的包拒绝被拿走**（原文："PickupBagFromSlot
+--       itself declines an occupied bag, which is the client's rule"）⇒ 我们**不自己预判**，
+--       只读回光标、拿不起来就如实出声。
+--     · **放包 = `PutItemInBag(装备槽号)`**（参考那边放包方向「整个交给原生模板」；我们没有那个模板 ⇒ 自己调）。
+--     · **背包本体（容器 0）没有对应物品**：拿起 = 什么都不做；放下 = `PutItemInBackpack()`（参考的背包按钮同款）。
+--     · **钥匙链（容器 -2）不是装备包**：没有可拿起的物品（旧写法拿起 20 = 拿错件）⇒ 拿起不动手；
+--       放下走**容器口** `PickupContainerItem(-2, 空格)` —— `PutKeyInKeyRing` 在本客户端
+--       **API 索引 1370 条里查不到（未文档化）**，不再依赖它。
+--   ★★★两个口都**读回自证**（项目铁律：不信「调用没报错」）：
+--     · **拿起**：光标从空变有物 = 成功（本客户端「抬起必然成功、源格还会被锁上」）；
+--       文档化口与退路都没拿起来 ⇒ 才出声（最常见原因 = 这包还装着东西）。
+--     · **放下**：**没有可靠的即时信号** —— 0.3.41 已定案「drop 被拒时客户端把物品放回原处、
+--       光标清空」⇒「光标空了」不能当成功。⇒ 记下目标格的贴图，**隔一拍复核**（走唯一节拍帧的
+--       `B.barPend` 腿）：贴图变 = 落成（含「换下来的旧包留在光标上」这一原生形态）；没变 = 如实出声。
+--   ★**绝不 `ClearCursor`**（清光标 = 丢件，项目在案）；换下来的旧包一律留给玩家自己放。
+B.BAR_VERIFY_GAP = 0.35      -- 放下之后隔多久复核（拍长 0.05s ⇒ 约 7 拍，够服务器回报一轮）
+
+-- 一格装备包的当前贴图（拿不到 = nil = 判不出，绝不当成「空」）
+function B.bagSlotTex(inv)
+  if type(GetInventoryItemTexture) ~= "function" then return nil end
+  local ok, t = pcall(GetInventoryItemTexture, "player", inv)
+  if ok and type(t) == "string" and t ~= "" then return t end
+  return nil
+end
+
+-- 复核用的「这一格现在是什么」（装备槽走贴图；容器格走链接/贴图 —— 两种口径各自最稳的那一路）
+function B.barSlotKey(kind, a, b)
+  if kind == "inv" then return B.bagSlotTex(a) end
+  if kind == "bag" then
+    local rec = B.itemAt(a, b)
+    if type(rec) ~= "table" then return nil end
+    return rec.link or rec.texture
+  end
+  return nil
+end
+
+-- 拿起某格装备着的包。返回 true = 光标上已经拿着它
+--   ★容器 0（背包本体）与 KEYRING（钥匙链）**都没有可拿起的物品** ⇒ 一个 API 都不调
+function B.barBagPickUp(bag)
+  if bag == nil then return false end
+  if bag == 0 or bag == B.KEYRING then return false end
+  if B.cursorHas() == true then return false end     -- 光标上有东西：不动手（客户端自己的规则）
+  local inv = B.bagInvId(bag)
+  if inv == nil then
+    sayForce(L("BAR_NO_INV", B.bagLabel(bag)))
+    return false
+  end
+  local got = false
+  if type(PickupBagFromSlot) == "function" then
+    pcall(PickupBagFromSlot, inv)
+    got = B.cursorHas()
+  end
+  if got ~= true and type(PickupInventoryItem) == "function" then
+    -- 退路：文档化的另一条拿取口（银行主格 / 装备槽一直在用它；成不成还是看光标）
+    pcall(PickupInventoryItem, inv)
+    got = B.cursorHas()
+  end
+  if got == true then return true end
+  sayForce(L("BAR_TAKE_FAIL", B.bagLabel(bag)))
+  return false
+end
+
+-- 把光标上的东西放进某格。返回 true = 已经交给客户端（背包格会隔一拍复核并如实出声）
+function B.barBagPutDown(bag)
+  if bag == nil then return false end
+  if B.cursorHas() ~= true then return false end     -- 光标空着：不是「落物」，交给上层走显隐那条路
+  if bag == 0 then
+    if type(PutItemInBackpack) ~= "function" then sayForce(L("BAR_NO_API")) return false end
+    pcall(PutItemInBackpack)
+    return true                                      -- 普通落物，客户端自己管（不必复核）
+  end
+  if bag == B.KEYRING then
+    local n = keyringSize()
+    local slot = nil
+    local i
+    for i = 1, n do
+      if B.itemAt(B.KEYRING, i) == nil then slot = i break end
+    end
+    if slot == nil then sayForce(L("BAR_KEYRING_FULL")) return false end
+    if type(PickupContainerItem) ~= "function" then sayForce(L("BAR_NO_API")) return false end
+    local before = B.barSlotKey("bag", B.KEYRING, slot)
+    pcall(PickupContainerItem, B.KEYRING, slot)
+    B.barPend = { at = GetTime() + B.BAR_VERIFY_GAP, kind = "bag", bag = B.KEYRING, slot = slot,
+                  before = before, hadOld = false }
+    B.pumpSync()
+    return true
+  end
+  local inv = B.bagInvId(bag)
+  if inv == nil then sayForce(L("BAR_NO_INV", B.bagLabel(bag))) return false end
+  if type(PutItemInBag) ~= "function" then sayForce(L("BAR_NO_API")) return false end
+  local before = B.barSlotKey("inv", inv)
+  pcall(PutItemInBag, inv)
+  -- ★放下没有可靠即时信号 ⇒ 隔一拍复核（唯一节拍帧的 barPend 腿）
+  B.barPend = { at = GetTime() + B.BAR_VERIFY_GAP, kind = "inv", inv = inv, bag = bag,
+                before = before, hadOld = (before ~= nil) }
+  B.pumpSync()
+  return true
+end
+
+-- 到点复核（由唯一节拍帧调）：贴图变了 = 落成/换成了；没变 = 如实出声，绝不静默失败
+function B.barVerify()
+  local p = B.barPend
+  B.barPend = nil
+  if type(p) ~= "table" then return end
+  -- ★两条腿的记录字段名不同（装备槽那条写 `inv`、容器格那条写 `bag`+`slot`）——
+  --   这里必须取**有值的那一个**（写错就是 `format("%d", nil)` 当场报错，真机会刷红字）
+  local after = B.barSlotKey(p.kind, p.inv or p.bag, p.slot)
+  if after ~= p.before then
+    if p.hadOld == true and B.cursorHas() == true then
+      -- 换包成功：换下来的旧包留在光标上（原生形态）—— 如实说一句，让玩家自己放
+      sayForce(L("BAR_PUT_SWAP"))
+    end
+    return
+  end
+  sayForce(p.hadOld == true and L("BAR_PUT_FAIL_OLD") or L("BAR_PUT_FAIL_EMPTY"))
 end
 
 -- ===== 建窗 =====
@@ -4199,6 +4574,14 @@ function B.build()
       bag = bag,
       size = barCell,
       onClick = function()
+        -- ★★★0.3.42：**光标上有东西 ⇒ 这一下就是「放进这格」（换包）** —— 原生口径，也是 0.3.8 立下的
+        --   顺序纪律（光标上有东西时这一下先当落格，才轮到我们自己的显隐切换）。
+        --   ★例外：**背包本体（bag 0）左键恒为显隐切换** —— 照参考 `modules/bagbar.lua` 的背包按钮
+        --   （「光标拿着东西时也交给切换，免得误点把东西悄悄塞进背包」）；要塞回背包请**拖**到这颗按钮上。
+        if bag ~= 0 and B.cursorHas() == true then
+          B.barBagPutDown(bag)     -- 落物这一路自己会如实出声（成功/被拒都有交代）
+          return
+        end
         local c2 = B.cfg()
         c2.show[bag] = not bagShown(bag)
         B.ui.needLayout = true
@@ -4207,24 +4590,12 @@ function B.build()
         B.refreshBar()
       end,
       onReceiveDrag = function()
-        if type(CursorHasItem) ~= "function" then return end
-        local ok, has = pcall(CursorHasItem)
-        if not ok or not has then return end
-        if bag == 0 then
-          if type(PutItemInBackpack) == "function" then pcall(PutItemInBackpack) end
-        else
-          if type(PutItemInBag) == "function" then pcall(PutItemInBag, bag) end
-        end
+        B.barBagPutDown(bag)
       end,
       onDragStart = function()
-        if bag == 0 then return end
-        local inv
-        if type(ContainerIDToInventoryID) == "function" then
-          local ok, v = pcall(ContainerIDToInventoryID, bag)
-          if ok then inv = v end
-        end
-        if inv == nil then inv = 19 + bag end
-        if type(PickupInventoryItem) == "function" then pcall(PickupInventoryItem, inv) end
+        -- ★0.3.42：拿包**唯一口**（`PickupBagFromSlot(装备槽号)` → 退路 `PickupInventoryItem`，
+        --   两次都读回光标；bag 0 与钥匙链在里面直接返回 false = 一个 API 都不调）
+        B.barBagPickUp(bag)
       end,
       onEnter = function()
         B.hoverBag = bag
@@ -4256,6 +4627,11 @@ function B.build()
   local kb = barButton(bar, 99, {
     bag = B.KEYRING,
     onClick = function()
+      -- ★0.3.42：光标上有东西 ⇒ 放进钥匙链（钥匙链只收钥匙 ⇒ 误点也不会把值钱的东西塞进去）
+      if B.cursorHas() == true then
+        B.barBagPutDown(B.KEYRING)
+        return
+      end
       local c2 = B.cfg()
       c2.show[B.KEYRING] = not bagShown(B.KEYRING)
       B.ui.needLayout = true
@@ -4264,18 +4640,10 @@ function B.build()
       B.refreshBar()
     end,
     onReceiveDrag = function()
-      if type(CursorHasItem) ~= "function" then return end
-      local ok, has = pcall(CursorHasItem)
-      if not ok or not has then return end
-      if type(PutKeyInKeyRing) == "function" then
-        pcall(PutKeyInKeyRing)
-      elseif type(PutItemInBag) == "function" then
-        pcall(PutItemInBag, B.KEYRING)
-      end
+      B.barBagPutDown(B.KEYRING)
     end,
-    onDragStart = function()
-      if type(PickupInventoryItem) == "function" then pcall(PickupInventoryItem, 20) end
-    end,
+    -- ★0.3.42：**钥匙链没有「拿起的物品」** —— 旧写法在这里调 `PickupInventoryItem(20)`（= 背包 1 的
+    --   装备槽号）⇒ 拖钥匙格会把背包 1 拿起来（拿错件）。现在**不动手**（`barBagPickUp` 对 KEYRING 直接返回）。
     onEnter = function()
       B.hoverBag = B.KEYRING
       B.refreshAll()
@@ -4322,12 +4690,16 @@ function B.build()
 
   for i = 1, table.getn(B.BANKBAGS) do
     local bag = B.BANKBAGS[i]
-    local inv = 63 + i
     local b = barButton(bbar, i, {
       bag = bag,
       size = barCell,
       onClick = function()
         if B.bankOpen ~= true then return end
+        -- ★0.3.42：光标上有东西 ⇒ 放进这格（银行包的换包入口，与背包条同一套）
+        if B.cursorHas() == true then
+          B.barBagPutDown(bag)
+          return
+        end
         local c2 = B.cfg()
         c2.show[bag] = not bagShown(bag)
         B.ui.needLayout = true
@@ -4335,13 +4707,11 @@ function B.build()
         B.refreshAll()
       end,
       onReceiveDrag = function()
-        if type(CursorHasItem) ~= "function" then return end
-        local ok, has = pcall(CursorHasItem)
-        if not ok or not has then return end
-        if type(PutItemInBag) == "function" then pcall(PutItemInBag, inv) end
+        B.barBagPutDown(bag)
       end,
       onDragStart = function()
-        if type(PickupInventoryItem) == "function" then pcall(PickupInventoryItem, inv) end
+        -- ★0.3.42：拿包唯一口（槽位号算术收进 `B.bagInvId`；旧写法在这里写死 `63 + i`，两处口径易漂）
+        B.barBagPickUp(bag)
       end,
       onEnter = function()
         B.hoverBag = bag
@@ -7087,7 +7457,8 @@ function B.refreshBar()
     local bag = B.BANKBAGS[i]
     local b = B.ui.bankButtons[bag]
     if isObj(b) then
-      local inv = 63 + i
+      -- ★0.3.42：槽位号算术语义唯一口（旧写法在这里又写了一份 `63 + i` —— 与拿包/放包两处口径易漂）
+      local inv = B.bagInvId(bag)
       local tex
       if type(GetInventoryItemTexture) == "function" then
         local ok, v = pcall(GetInventoryItemTexture, "player", inv)
@@ -7455,6 +7826,7 @@ function B.pumpNeed()
   if B.snapDue ~= nil then return true end
   if B.sortOn == true then return true end
   if B.tipPend ~= nil then return true end    -- ★物品气泡的延后复核待办（到点那一下必须有人执行）
+  if B.barPend ~= nil then return true end    -- ★0.3.42 背包条「放包」的延后复核（同上：到点必须有人跑）
   if B.viewPend ~= nil then return true end   -- ★总览气泡的延后复核待办（同一个口径）
   if (B.cdN or 0) > 0 then return true end    -- ★0.3.18 冷却倒计时（有冷却才有拍子；空表即摘）
   return false
@@ -7516,6 +7888,8 @@ function B.pump()
   if B.sortOn == true and type(B.sortStep) == "function" then
     B.sortStep(dt)
   end
+  -- ★0.3.42 背包条放包的延后复核（到点才看贴图变没变 —— 放下那一刻读回不可信，0.3.41 定案）
+  if B.barPend ~= nil and GetTime() >= (B.barPend.at or 0) then B.barVerify() end
   -- ★物品气泡的延后复核：一拍之内做完（要么认客户端的内容、要么写自建文本兜底）
   if B.tipPend ~= nil then B.tipTick() end
   -- ★总览气泡同一个口径（两条流程各管各的待办，绝不互相顶掉）
@@ -7694,7 +8068,7 @@ end
 local function usage()
   sayForce("/ebag = 开/关背包窗")
   sayForce("/ebag on | off = 打开 / 关闭接管（off 还给原生背包）")
-  sayForce("/ebag sort = 一键整理（再敲一次 = 停止）")
+  sayForce("/ebag sort = 一键整理（再敲一次 = 停止；★特殊袋 —— 箭袋/弹药袋/草药袋/附魔袋/灵魂袋 —— 与判不出类型的袋子**整袋跳过**：不往里搬、也不从里搬出）")
   sayForce("/ebag cat <类型> = 类型筛选（all|quest|equip|consume|trade|reagent|container|projectile|other）")
   sayForce("/ebag dir fwd|rev = 背包顺序（正序 / 倒序）")
   sayForce("/ebag qual <档> = 品质筛选（all|0~6）")
@@ -7848,6 +8222,9 @@ function B.status()
   sayForce("容器=" .. table.concat(list, ",") .. " ｜ 格子=" .. strVal(used) .. "/" .. strVal(total)
     .. " ｜ 自建格子=" .. strVal(B.selfMade or 0)
     .. " ｜ 每行列数=" .. strVal(c.cols) .. " ｜ 整理步进=" .. strVal(c.moveGap) .. "s")
+  -- ★0.3.41 整理工作区体检（活口）：哪些容器在池子里、哪些被 fail-closed 跳过（特殊袋/判不出）、
+  --   以及无进展计数（读值口在整理引擎自己文件里 —— 工具模块的读值口一律留在模块侧）
+  if type(B.sortAreaLine) == "function" then sayForce(B.sortAreaLine()) end
   -- ★0.3.14 外观现场读数（活口）：**品质染色**（档位 + 该档对「精良(蓝)」算出来的实际颜色 = 设置到底生没生效）
   --   与**背景透明度**（百分比）。用户报「三个级别设置了但一点作用都没」⇒ 有这一行才能一眼判「设置写了没」
   --   与「画出来是什么色」（前者看档位、后者看那三个数；两组数不匹配 = 卡的中间那一段）。
@@ -8204,6 +8581,8 @@ function B.cmd(msg)
       f:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     end
     B.viewRehost()           -- ★0.3.12：总览窗也跟着回主窗右侧（不然它还停在旧锚点上）
+    -- ★0.3.41：袋子分类缓存一起清（换过包的玩家敲一下 reset 就能让分类重判；平时靠「槽位贴图变」自动失效）
+    B.bagKindReset()
     B.ui.needLayout = true
     B.layout()
     B.refreshAll()

@@ -581,13 +581,125 @@
   缓存 `B.bankQualCache` 键 = `inv|贴图`（换物品 = 贴图变 = 自动失效）。
 · 判据 = `node luacheck.js` SYNTAX OK: 55 · `probe_localorder.js`（两文件）· `mem_sep_probe.js` · 同步核对 不一致 0；★本轮只过语法闸门。
 
-## 本子插件专属闸门与只读探针（`tmp/`，**只在统一推送时跑**）
+★★★**0.3.41 收口（特殊袋导致整理卡死循环 → 工作区 fail-closed 分类 + 无进展闸门）**：
+· 用户原话：「在遇到箭袋,附魔,草药等专属袋子的时候背包整合会卡住死循环。这个有没优化方向,可以参考
+  E:\soft\game\eb\…\Interface\AddOns\unrealUI 那边的背包整理针对特种背包类型处理流程是怎么样的」。
+· ★★★**真因两条叠出来**（缺一条都解释不了真机现象）：
+  ⒜ **工作区把特殊袋的格子当成了可互换的格子** —— `slotOrder()`（背包段 0~4 袋 · 银行段 5~10 包）**从不判这口袋子装得下什么**；
+     而特殊袋只收得下自己那一类物品 ⇒ 期望序里「排在前面的那件」必须落进特殊袋时**永远落不进去**
+     = 期望序**不可达**（**即使读回 100% 准确也收敛不了**，这是机制级边界，不是补丁能救的 = 与 0.3.40d 同族）。
+  ⒝ **本客户端 drop 被拒时把物品放回原处、光标清空**（unrealUI 在同一客户端实测：`core/compat.lua:902-906`
+     "the drop was refused … **the cursor emptied and the item went back where it came from**"）⇒ 我们只看光标
+     ⇒ 记成「搬成功」⇒ 下一步算出**同一个期望序、搬同一对格子** ⇒ **空转到 `SORT_MAX_MOVES`(400) / `SORT_TIMEOUT`(180s)**
+     （0.2s 一步 ≈ 每秒 10 次服务器写动作，正压在项目「写动作 > 1~2 次/s 必限频」的红线上）。
+  ★顺带定案：旧闸门「连续 3 步推不动」（`SORT_STALL_MAX`）**形同不存在** —— `B.sortStall` 只在 `moveNow` 返回
+  `false,"locked"`/park 失败时累加，而**静默被拒走的是 `true`** ⇒ 永远累加不到 3。
+· ★★★**参考实现的口径（`unrealUI/core/itemsort.lua` 的 "Which bags may be sorted"）**：**只有被正面证明是普通袋的容器才进池子**；
+  特殊袋**整袋不进**；**判不出类型 ⇒ 也排除**（原文 "A specialty container can accept some of the items already inside it,
+  so waiting for a refused drop is too late" / "Sorting fewer bags is safer than moving items inside a container the
+  sorter cannot prove is general-purpose"）。它的判定链（我们照搬）：`ContainerIDToInventoryID`（兜底 `19+bag` / `59+bag`）
+  → **私有 tooltip `SetInventoryItem("player", inv)`** → 读 `CONTAINER_SLOTS` 那一行 → **子类词**与
+  `GetAuctionItemSubClasses(3)`（第 1 项 = 本地化「普通袋」，其后 灵魂袋/草药袋/附魔袋）+ `(7)`（箭袋/弹药袋）
+  **按位置比对 ⇒ 语言无关**（它那边有法语「Carquois」证明**英文名字黑名单走不通**）。
+  ★★它还有两条我们**没搬**的（如实记，将来要做另立开关）：`Swap` 三拍（抬起→放入→把被顶出来的放回）+ `run.pending`
+  读回确认 + `Replan(dropBag)` 把拒绝的容器中途摘出池子；以及 `modules/bagroute.lua` 的「新到物品自动归位特殊袋」。
+· ★★★**我们的实现 ①（分类）= 唯一判定口 `B.bagKind(bag)`**（EH_Bag.lua 的「袋子分类」段）：
+  返回 `"general"` / `"special"` / `nil`（判不出）；标签走 `B.bagKindLabel(bag)`；清缓存口 `B.bagKindReset()`
+  （`/ebag reset` 顺手清；平时靠**槽位贴图**变自动失效 —— 贴图读不出退化成 `B.BAGKIND_TTL`(5s)，绝不每拍读气泡）。
+  判定细节的判据三条：**最长子类词胜出**（"12 Slot Herb Bag" 同时含 `Bag` 与 `Herb Bag` ⇒ 取后者）·
+  **带数字的行优先**（背包**名字**那一行可能碰巧含子类词）· **空词表绝不进缓存**（项目在案：空结果缓存 = 这一局永远判不出）。
+  ★`B.TIP_READ` 那套用法照 0.3.40c 纪律：**读完当场 `Hide`**（Set* 会把隐形气泡 Show 出来）。
+  ★背包 0 与银行主格（-1）：没有对应装备物品、天然什么都能收 ⇒ 恒「general」（主格另有 0.3.40d 的读回理由不进工作区）。
+· ★★★**我们的实现 ②（工作区）= `slotOrder(scope)` 返回 `slots, skipped`**：背包段与**银行段都过滤**
+  （银行里的草药袋/附魔袋是常见配置）；`skipped` 供播报与体检用。`sortStart` 起手点名（`SORT_SKIP`；
+  判不出的原因另走 `SORT_SKIP_NA`）；银行段换段那句**写死的中文改成三语键 `SORT_BANK_SWITCH`**（银行侧跳过单独一行）。
+  ★**判据口不在**（载入异常）⇒ 退回旧口径（全收）——那是**载入顺序**问题，不是「判不出袋子」；
+  **`B.bagKind` 返回 nil（真判不出）⇒ 排除**（写动作一律 fail-closed）。
+· ★★★**我们的实现 ③（无进展闸门）= `noProgress(fp, now)` + `fpOf(slots, list, n)`**（EH_BagSort.lua）：
+  每步算工作区**状态指纹**（`bag:slot=id:count`，空格记 `-`）；判据 = **这个状态在本轮整理里出现过没有**。
+  ★★★**只比「与上一拍是否相同」抓不到 A→B→A→B 的来回互搬周期** —— 0.3.40d 银行主格那次「id 时有时无 ⇒ 反复互搬」
+  正是那个形态，所以判据必须是「出现过」而不是「没变」。状态**出现过**且从「上一次见到新状态」起满
+  `SORT_NOPROG_SEC`(3.0s) ⇒ 记一次，累计 `SORT_NOPROG_MAX`(2) 次 ⇒ `SORT_STOP_NOPROG` 收工。
+  ★**按秒不按步**：本客户端**容器读回在整理中会滞后**（0.3.9/0.3.35 在案，新鲜戳记 1.5s）⇒ 刚落位那一拍的读回
+  可能还是旧的（= 状态「出现过」）；按步数会**误报**，3.0s（= 戳记的两倍）才分得清「读回还没到」与「这步真的没发生」。
+  ★`seen` 有界（> 64 个状态整表清空重来）；`sortStart` 每轮归零（`B.sortFpSeen = {}` ⇒ 第一步必是「新状态」，绝不误判）。
+· ★**读值口**：`B.sortAreaLine()`（在整理引擎自己文件里 —— 工具模块的读值口留在模块侧）接进 `/ebag status`：
+  「整理工作区：背包 0,3 ｜ 背包5 ｜ 整理跳过特殊袋：背包 1(草药袋) ｜ 无进展 0/2」。三语 **8 键 × 3**。
+· 判据 = `node luacheck.js` **SYNTAX OK: 56** · **新 harness `tmp/ehbag_special_harness.js`（行为 32/32）**：
+  ★桩的保真点就是**「放下被拒 ⇒ 物品放回原处 + 光标清空」**（离线桩不模拟它 = 这条 bug 在离线完全不可见）；
+  六组 = 特殊袋（草药袋）整袋排除（袋内容**逐字节未动** + 一步都没搬进/搬出 + 干净收工）·
+  **反事实**（把草药袋当普通袋 = 旧口径）⇒ 闸门 **34 步 / 7.0 秒**收工（旧写法 400 步 / 80~180 秒）·
+  判不出 ⇒ 排除 + `SORT_SKIP_NA` · 客户端**全部静默拒绝** ⇒ 32 步 / 6.6 秒 · **状态来回震荡**（桩里每次放下后把前两件换位）
+  ⇒ 有界收工 · 银行包同样分类（`bag6` 一步都没碰）· `probe_localorder.js` 全绿 · `scan_dangling.js` 无守卫缺口 ·
+  `node sync_game.js` + `tmp/verify_sync.js` 子插件逐字节一致。★**本轮只过语法闸门 + 这一份新 harness**。
+· ★★★**代价如实报**：**行为变化** = 特殊袋里的东西**不再被整理、不再被搬出**（要「新到的草药自动进草药袋」那种
+  **归位**另立开关，本版没做，参考那边在 `modules/bagroute.lua`）；`/ebag sort` 起手与 `/ebag status` 都会**点名**跳过了哪个袋子。
+· ★★判据脚本自身的两条纪律（本轮各踩一次，别再犯）：⒜ **桩里 `tostring(数字)` 在 5.3 带小数位**（fengari 是 5.3，
+  客户端是 5.1）⇒ 快照判据一律 `string.format("%d", …)`，否则「逐字节未动」那类比对**永远假红**；
+  ⒝ **JS→Lua 推参必须单独判 `typeof a === 'boolean'`** —— 混进 `lua_pushstring` 会让 `v == true` 恒假，
+  夹具**静默失效**（本轮就是这样让「反事实」那一组先假绿的）。
+
+★★★**0.3.42 收口（背包条「拖拽 / 换包」正常化：拿包与放包各立唯一口 + 读回自证 + 如实出声）**：
+· 用户原话（附截图）：「参考插件,如何将背包条的功能正常化,正常支持拖拽,背包替换等.现在功能是异常的」。
+· ★★★**真因 = 旧写法三处各写一份「槽位号算术」，两处写错**：
+  ⒜ **背包条 4 格**：`PutItemInBag(bag)` 传的是**容器号 1~4**，而官方口径要的是**人物装备槽号** ——
+     背包格 = `ContainerIDToInventoryID(bag)` = **20~23**、银行包 = `59 + bag` = **64~69**
+     （unrealUI 在同一客户端实测过 64 这一档：`core/compat.lua` 的 bankbagicon 探针）
+     ⇒ **拖包到条上静默无事发生** = 用户看到的「异常」。
+  ⒝ **钥匙格**：`onDragStart` 调 `PickupInventoryItem(20)` —— 20 正是**背包 1** 的装备槽号
+     ⇒ 拖钥匙格会把**背包 1 拿起来**（拿错件）。
+  ★同族第三处：`B.refreshBar()` 画图标那一路又写了一份写死的 `63 + i`（界面与拿/放三处口径各漂各的）
+  ⇒ 三份收成一个 **`B.bagInvId`**（0.3.41 为袋子分类建的同一个口，语义完全一致）。
+· ★★★**修法 = 两个唯一口**（照参考 `unrealUI/core/itemslot.lua` 的 WORKING_SOURCE 段 + `modules/bagbar.lua`）：
+  **`B.barBagPickUp(bag)`**（拿包）：`PickupBagFromSlot(装备槽号)`（**官方文档化**，参数正是 20~23）
+  → 读回光标仍空才退 `PickupInventoryItem(inv)` → 两条都没拿起来 ⇒ **如实出声**；
+  `bag == 0`（背包本体）与 `bag == B.KEYRING` ⇒ **一个 API 都不调**（都没有可拿起的物品）。
+  **`B.barBagPutDown(bag)`**（放包）：背包格 `PutItemInBag(装备槽号)` · 背包本体 `PutItemInBackpack()` ·
+  钥匙链走**容器口** `PickupContainerItem(-2, 第一个空格)`（★`PutKeyInKeyRing` 在本客户端
+  **API 索引 1370 条里查不到 = 未文档化** ⇒ 不再依赖；旧写法的退路 `PutItemInBag(-2)` 也是错的）。
+  三处 bar（背包条 4 格 / 钥匙格 / 银行包条）**全部改走这两个口**。
+· ★★★**两条客户端事实（照参考实测，必须写进 tooltip 而不是自己猜）**：
+  ⒜ **还装着东西的包拒绝被拿走**（原文 "PickupBagFromSlot itself declines an occupied bag, which is
+     the client's rule"）⇒ 我们**不自己预判**，拿不起来就出声「多半是它还装着东西」；
+  ⒝ **背包本体（容器 0）没有对应物品** ⇒ 拿起不动手；**左键恒为显隐切换**（照参考的背包按钮：
+     「光标拿着东西时也交给切换，免得误点把东西悄悄塞进背包」）—— 只对 4 个背包格与钥匙格/银行包格
+     才把「光标有东西时左键」当落物。
+· ★★★**交互口径**：**光标上有东西 ⇒ 那一格左键 = 放进这格（换包）**（原生口径 + 0.3.8 的顺序纪律
+  「光标有东西先当落格」）；**拖动 = 拿起这个包**；**把包拖到某格上** = 放进/替换。
+· ★★★**读回自证（铁律：不信「调用没报错」）**：拿包**看光标**（本客户端「抬起必成功、源格被锁上」）；
+  放包**没有可靠的即时信号** —— 0.3.41 已定案「drop 被拒时客户端把物品放回原处、**光标清空**」，
+  所以「光标空了」不能当成功 ⇒ 记下目标格贴图 + **隔一拍复核**（`B.BAR_VERIFY_GAP`(0.35s) →
+  新待办腿 `B.barPend` → `B.barVerify`，登记处**紧跟 `B.pumpSync()`**、`pumpNeed` 加一条腿）；
+  贴图变 = 落成（含「换下来的旧包留在光标上」这一原生形态 ⇒ 出声 `BAR_PUT_SWAP` 让玩家自己放）；
+  没变 = 如实出声且**措辞不下定论**（`BAR_PUT_FAIL_EMPTY` 写着「也可能只是还没同步」）。
+  ★★**绝不 `ClearCursor`**（清光标 = 丢件）；换下来的旧包一律留给玩家。
+· 三语 **7 键 × 3**（`BAR_TAKE_FAIL` / `BAR_PUT_SWAP` / `BAR_PUT_FAIL_OLD` / `BAR_PUT_FAIL_EMPTY` /
+  `BAR_KEYRING_FULL` / `BAR_NO_INV` / `BAR_NO_API`）+ `BAG_TIP_USE` / `KEYRING_TIP_USE` 改写
+  （写清「拖动 = 换包」与「非空包客户端不允许换」「钥匙链不是装备包」）。
+· 判据 = `node luacheck.js` **SYNTAX OK: 56** · **`tmp/ehbag_bar_harness.js`（行为 43/43）** ·
+  **`tmp/ehbag_bar_wiring_check.js`（结构钉 32/32，先剥注释再比对）** · `probe_localorder.js` ·
+  `scan_dangling.js` · `node sync_game.js` + `tmp/verify_sync.js` 逐字节一致。★本轮只过语法闸门 + 这两份新判据。
+· ★★★**harness 自己的三条教训（本轮全踩了一遍，写下来别再犯）**：
+  ⒜ **`B.KEYRING` / `B.BANK` 这类常量桩里必须给** —— 不给的话 `bag == B.KEYRING` 恒假，
+     代码会掉进「判不出槽位号」那条路，而**判据看起来像是产品坏**（其实是夹具不保真）；
+  ⒝ **Lua 5.3 的 `tostring` 分 int/float**（`1` vs `1.0`）⇒ 桩里做**表键**必须一律
+     `string.format("%d", …)`：混用会让「查得到 / 查不到」随机化 = **夹具假绿**（本轮第一版就这么假绿过）；
+  ⒞ **「API 缺席」必须真的把全局拿掉**（`PickupBagFromSlot = nil`），只让桩函数早退的话
+     调用表里照样留下那一行 ⇒ 「只走了退路」这条断言**永远看不出差别**。
+  ★**harness 的价值当场兑现**：它抓出了我**自己代码里的一处真 bug** —— `barVerify` 对钥匙链那条
+  记录取了 `p.inv`（该条只写 `p.bag`）⇒ `format("%d", nil)` 真机会当场刷红字；已改成
+  `B.barSlotKey(p.kind, p.inv or p.bag, p.slot)` 并有结构钉守着。
+
+
 
 | 脚本 | 作用 |
 | :-- | :-- |
 | `tmp/ehbag_harness.js` | **离线真跑**（fengari 桩 + 真源码切片）：行为断言（窗口/格子/辉光/品质/菜单/拖拽/拆分/物品信息/整理/总览/资源/记忆体分离） |
 | `tmp/ehbag_wiring_check.js` | **接线结构钉**（唯一写口计数 · 顺序钉 · 反向钉；★比对前先剥注释） |
 | `tmp/ehbag_verify_fix.js` | **变异套件**（逐条把正确写法改回旧写法，必须条条转红；`EF_ONLY=<关键词>` 可单跑一条） |
+| `tmp/ehbag_special_harness.js` | **0.3.41 新增**：特殊袋 fail-closed + 无进展闸门（行为 32；桩的保真点 = **「放下被拒 ⇒ 物品放回原处 + 光标清空」**，含「反事实」组 = 假装没分类 ⇒ 闸门必须在 ~7 秒收工） |
+| `tmp/ehbag_bar_harness.js` | **0.3.42 新增**：背包条拿包/放包两个唯一口（行为 43；真源码切片 + 保真桩：装备槽号必须 20~23、**放包被拒时光标清空**、换包后旧包留光标；★桩里表键一律 `string.format("%d")`） |
+| `tmp/ehbag_bar_wiring_check.js` | **0.3.42 新增**：背包条接线结构钉（32 条；**先剥注释再比对**；反向钉守着 `PutItemInBag, bag` / `PickupInventoryItem, 20` / `63 + i` / `PutKeyInKeyRing` / `ClearCursor` 命中 0） |
 | `tmp/ehbag_layout_probe.js` | 拿**真机存档**离线打 ASCII 格位图 + 「末行下缘 ≤ 窗口可用高」（底距必须按 `z` 现算） |
 | `tmp/mem_sep_probe.js` | **记忆体分离常驻闸门**：子插件代码里命中 `EVAL_HELP_CONFIG` / `EVAL_HELP_CHAR` = 0 处，宿主里命中 `EH_BAG_CFG` = 0 处 |
 | `tmp/ehbag_tex_audit.js` · `tmp/ehbag_apidep_audit.js` | 资源独立性**只读**审计（剥注释后抓路径字面量 / 依赖客户端资源的调用点） |
