@@ -17,6 +17,8 @@
  *   node kook/kook_guide.js --check                      # 只读自检：token/机器人/两频道/现有公告/账本
  *   node kook/kook_guide.js --announce                   # 演练：打印将发/将改的公告正文与请求
  *   node kook/kook_guide.js --announce --send            # 真发（首次建，之后原地更新；--no-pin 可关置顶）
+ *   node kook/kook_guide.js --topic                      # 演练：给「建议反馈」写**友好的使用说明**（频道简介 topic）
+ *   node kook/kook_guide.js --topic --send               # 真改（幂等：与现有一致就跳过；--force 强写）
  *   node kook/kook_guide.js --welcome <user_id> --send   # 手工发一条欢迎（补发/测试用）
  *   node kook/kook_guide.js --listen                     # 常驻：收 joined_guild → 发欢迎词（Ctrl+C 停）
  *   node kook/kook_guide.js --listen --dry              # 常驻但不真发（只打印「本会发什么」）
@@ -36,13 +38,16 @@ const API = "https://www.kookapp.cn/api/v3";
 // ───────────────────────────── CLI ─────────────────────────────
 const args = { send: false, check: false, announce: false, listen: false, welcome: null,
                dry: false, noPin: false, scan: false, queue: false, plan: false, backfill: false,
-               done: null, version: null, note: "", thread: null, noScan: false, simulate: null, minInterval: 500 };
+               done: null, version: null, note: "", thread: null, noScan: false, simulate: null, minInterval: 500,
+               topic: false, channel: null };
 for (let i = 2; i < process.argv.length; i++) {
   const a = process.argv[i];
   switch (a) {
     case "--send":     args.send = true; break;
     case "--check":    args.check = true; break;
     case "--announce": args.announce = true; break;
+    case "--topic":    args.topic = true; break;
+    case "--channel":  args.channel = process.argv[++i]; break;
     case "--listen":   args.listen = true; break;
     case "--welcome":  args.welcome = process.argv[++i]; break;
     case "--scan":     args.scan = true; break;
@@ -77,6 +82,7 @@ function loadConfig() {
     feedback_channel_id: "8514014383612159",
     welcome_file: "kook/guide/welcome.md",
     announce_file: "kook/guide/announce.md",
+    feedback_file: "kook/guide/feedback.md",
     state_file: "kook/state/guide.json",
     queue_file: "kook/queue/feedback.json",
     inbox_file: "kook/queue/INBOX.md",
@@ -191,6 +197,41 @@ async function doAnnounce(cfg, token) {
       say("✔ 已置顶（需要「管理消息」权限）");
     } catch (e) { console.error("⚠ 置顶失败（不影响公告本身）：" + e.message); }
   }
+}
+
+// ───────────────── 频道说明（「建议反馈」怎么提 = 频道简介 topic） ─────────────────
+// 需求（用户 2026-10-09）：「kook 给建议反馈频道增加一个友好的使用说明频道说明」。
+// 官方事实（kook/01 §3.4）：`topic` 只能在 `channel/update` 里改（创建时设不了），**仅文字频道有效**；
+//   读 = `channel/view?target_id=`（也可从 `guild/view.channels[]` 一次拿全）。
+// 口径：① **文案单一来源** = `kook/guide/feedback.md`（改文案只改这个文件，不写死在脚本里；
+//   也**不随版本变** —— 它是「怎么提建议」的常青说明，版本流水请去「公告与通知」看）；
+//   ② 幂等：与现有一致 ⇒ 跳过（除非 `--force`）；③ 写完**回读自证**，不一致就如实报错退出（绝不假装成功）。
+const TOPIC_MAX = 200;   // 自定上限（官方未文档化长度限制，取一个保守值，超了就要求精简文案）
+function feedbackTopicBody(cfg) {
+  return readTemplate(cfg, "feedback", {});
+}
+async function doTopic(cfg, token, channelArg) {
+  const target = channelArg || cfg.guide.feedback_channel_id;
+  const body = feedbackTopicBody(cfg);
+  const ch = await api("GET", `${API}/channel/view?target_id=${target}`, undefined, token);
+  const old = String(ch.topic || "").replace(/\r\n/g, "\n").trim();
+  say(`频道 = ${target}「${ch.name}」type=${ch.type}${ch.type === 1 ? "" : "（★非文字频道 ⇒ topic 无效，别写）"}`);
+  say(`当前简介（${old.length} 字）：${old ? old.split("\n").map(l => "    " + l).join("\n") : "（空）"}`);
+  say(`拟写入（${body.length} 字）：`);
+  say(body.split("\n").map(l => "    " + l).join("\n"));
+  if (body.length > TOPIC_MAX) {
+    console.error(`✘ 文案 ${body.length} 字 > 自定上限 ${TOPIC_MAX} 字 ⇒ 请精简 ${path.relative(ROOT, path.resolve(ROOT, cfg.guide.feedback_file))}`);
+    process.exit(2);
+  }
+  if (ch.type !== 1) { console.error("✘ 只有文字频道（type=1）能写 topic ⇒ 已中止（一个字节都不写）"); process.exit(2); }
+  if (old === body && !args.force) { say("= 与现有一致 ⇒ 跳过写入（要强写加 --force）"); return; }
+  if (!args.send || args.dry) { say(`（dry-run：未写入。加 --send 真改；请求 = POST /channel/update {channel_id:${target}, topic:…}）`); return; }
+  await api("POST", `${API}/channel/update`, { channel_id: target, topic: body }, token);
+  say("✔ 已写入");
+  const back = await api("GET", `${API}/channel/view?target_id=${target}`, undefined, token);
+  const got = String(back.topic || "").replace(/\r\n/g, "\n").trim();
+  if (got === body) say(`✔ 回读一致（${got.length} 字）`);
+  else { console.error(`⚠ 回读不一致（服务端可能截断/改写）\n  期望 ${body.length} 字：${body}\n  实得 ${got.length} 字：${got}`); process.exit(3); }
 }
 
 // ───────────────────────────── 欢迎词 ─────────────────────────────
@@ -579,6 +620,15 @@ async function doCheck(cfg, token) {
   say(`  guide.welcome_channel_id  = ${gd.welcome_channel_id} ${w ? "「" + w.name + "」type=" + w.type : "★找不到"}`);
   say(`  guide.announce_channel_id = ${gd.announce_channel_id} ${an ? "「" + an.name + "」type=" + an.type : "★找不到"}`);
   say(`  guide.feedback_channel_id = ${gd.feedback_channel_id} ${fb ? "「" + fb.name + "」type=" + fb.type + "（建议实时入队 + --scan 回扫）" : "★找不到"}`);
+  // ★频道说明（「怎么提建议」）：现读现比 —— 与模板不一致就点名提醒（修好只要一条 `--topic --send`）
+  if (fb) {
+    let want = ""; try { want = feedbackTopicBody(cfg); } catch { want = ""; }
+    const cur = String(fb.topic || "").replace(/\r\n/g, "\n").trim();
+    say(`    频道说明：${cur ? `「${cur.split("\n")[0].slice(0, 40)}…」${cur.length} 字` : "（空）"}` +
+        (want ? (cur === want ? " · 与 kook/guide/feedback.md 一致 ✅"
+                              : (cur ? " · ★与模板不一致 ⇒ 跑 `--topic --send` 更新"
+                                     : " · 还没写 ⇒ 跑 `--topic --send` 写入使用说明")) : ""));
+  }
   const q = loadQueue(cfg);
   const qby = {}; for (const it of q.items) qby[it.status] = (qby[it.status] || 0) + 1;
   say(`  优化队列：${q.items.length} 条（` + (Object.entries(qby).map(([k, v]) => `${k} ${v}`).join(" · ") || "空") +
@@ -601,11 +651,12 @@ async function doCheck(cfg, token) {
     const cfg = loadConfig();
     const tk = readToken(cfg);
     if (args.check || args.announce || args.listen || args.welcome || args.scan
-        || args.plan || args.done || args.backfill || args.simulate || args.msgDelete) {
+        || args.plan || args.done || args.backfill || args.simulate || args.msgDelete || args.topic) {
       if (!tk) { console.error("✘ 找不到 KOOK token（token/kook.txt 或 KOOK_TOKEN）"); process.exit(2); }
       if (!args.listen) say(`token 来源：${tk.from}（值不打印）`);
     }
     if (args.check)    return doCheck(cfg, tk.token);
+    if (args.topic)    return doTopic(cfg, tk.token, args.channel);
     if (args.msgDelete) return doMsgDelete(cfg, tk.token, args.msgDelete);
     if (args.simulate) return doSimulate(cfg, tk.token, args.simulate);
     if (args.plan)     return doPlan(cfg, tk.token);
@@ -616,7 +667,7 @@ async function doCheck(cfg, token) {
     if (args.welcome)  return doWelcome(cfg, tk.token, args.welcome, loadState(cfg));
     if (args.announce) return doAnnounce(cfg, tk.token);
     if (args.listen)   return doListen(cfg, tk.token);
-    console.error("用法：--check | --plan | --scan | --queue | --done <msg_id> --version <版本> [--note …] [--thread …] | --backfill | --announce [--send] | --welcome <user_id> [--send] | --listen [--dry]");
+    console.error("用法：--check | --plan | --scan | --queue | --done <msg_id> --version <版本> [--note …] [--thread …] | --backfill | --announce [--send] | --topic [--channel <id>] [--send] [--force] | --welcome <user_id> [--send] | --listen [--dry]");
     process.exit(2);
   } catch (e) {
     console.error("✘ " + e.message);
