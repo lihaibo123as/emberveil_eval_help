@@ -1,0 +1,25 @@
+{
+  "updated": 1791512269065,
+  "items": [
+    {
+      "status": "planned",
+      "note": "★用户 2026-10-09 确认「做」⇒ 已实施并落地代码：1.75.111 给「消耗品助手」与「宠物喂食助手」两处图标加 Ctrl+滚轮调档（16~64 步进 4，角色级存档 cfg.chSize/cfg.hhSize，禁用 SetScale 走几何重建，悬停提示 + 三语 *_SIZE_HINT/NOW/LIMIT）；★回填动作（原帖加 ✅ + 回复带发布链接）**等 release 走完 KOOK 第 10 步后**再跑 --done，没发帖链接不算数",
+      "feasibility": {
+        "verdict": "可行",
+        "cost": "低（两处各加一套滚轮调档 + 存档一个尺寸值）",
+        "basis": "项目内已有同款配方：EH_DPS 的 Ctrl+滚轮 = 整窗缩放，走【几何重建】、全项目禁用 SetScale（点击框漂移）；工具箱两处目前是固定尺寸图标，不涉任何未文档化 API ⇒ 无需先做 API 探针",
+        "plan": "① tools/ConsumableHelper.lua 与 tools/HunterHelper.lua（喂食助手）各加 Ctrl+滚轮调档；② 尺寸落各自存档（或工具箱 cfg），带夹取与越界回归 uiOffscreen；③ 悬停提示写明「Ctrl+滚轮调大小」；④ 判据 = 两处各一个 harness 行为断言（滚轮改尺寸/夹取/越界回归/存档往返）+ 结构钉（禁用 SetScale 的反向钉）"
+      },
+      "tags": [
+        "功能请求",
+        "体验/界面"
+      ],
+      "msg_id": "e9579fd6-44dc-4397-b2ad-b5075c6c7e58",
+      "user_id": "809624226",
+      "user": "eval",
+      "at": 1791512222619,
+      "text": "需要工具箱->消耗品助手->支持类似 战斗UI 类似的ctrl+ 滚轮的缩放效果. 宠物喂食助手的小图标也需要这个功能",
+      "source": "live"
+    }
+  ]
+}

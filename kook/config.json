@@ -1,0 +1,108 @@
+{
+  "_说明": "KOOK 发布配置。guild_id/channel_id 经真机核实：服务器「emberveil 一键宏」里的「插件发布」是 type=4 帖子频道。",
+
+  "_频道说明": "目标 = 「插件发布」频道 id=5336773639081280（实测 type=4 帖子频道 ⇒ 脚本自动走 thread/create 发帖）。另一个「欢迎大厅」8320814423228312（type=1 文字）是用户最初给的链接，实测不是目标。",
+  "guild_id": "7071527711947717",
+  "channel_id": "5336773639081280",
+
+  "_posts说明": "一版发布拆成几条帖（用户 2026-10-09 定：「将插件自动发布包对应插件分类内」→ 再定「将子插件都发布」⇒ **每个插件一条帖**：主插件 1 + 每个子插件各 1）。每条帖进一个帖子分区，plugins 列出这条帖带哪些插件的包（主插件名固定 EvalHelp）。标题占位符：{ver}=主插件版本 · {sub}=本条帖第一个子插件的版本 · {names}=插件名列表。cover/images = 该插件 ./preview 里的文件名。",
+  "posts": [
+    {
+      "name": "主插件",
+      "category_id": "15785972",
+      "title": "EvalHelp v{ver} 发布（主插件 · 全职业工具）",
+      "plugins": ["EvalHelp"],
+      "cover": "main.png",
+      "images": ["main.png", "tools.png", "realmap.png"]
+    },
+    {
+      "name": "EH_Damage",
+      "category_id": "15785972",
+      "title": "EH_Damage v{sub} 发布（增强伤害显示）",
+      "plugins": ["EH_Damage"],
+      "cover": "info.png",
+      "images": ["info.png"]
+    },
+    {
+      "name": "EH_DPS",
+      "category_id": "15785972",
+      "title": "EH_DPS v{sub} 发布（队伍伤害统计）",
+      "plugins": ["EH_DPS"],
+      "cover": "tags.png",
+      "images": ["tags.png", "info.png"]
+    },
+    {
+      "name": "EH_DebugBox",
+      "category_id": "15785972",
+      "title": "EH_DebugBox v{sub} 发布（图层调试）",
+      "plugins": ["EH_DebugBox"],
+      "cover": "info.png",
+      "images": ["info.png"]
+    },
+    {
+      "name": "EH_Bag",
+      "category_id": "15785973",
+      "title": "EH_Bag v{sub} 发布（整合背包）",
+      "plugins": ["EH_Bag"],
+      "cover": "bank.png",
+      "images": ["bank.png", "info.png"]
+    }
+  ],
+
+  "_category_id说明": "仅在 config.posts 缺失（退化成一条帖）时用作分区。该帖子频道的分区：战斗=15785972 · 背包=15785973。",
+  "category_id": "15785972",
+
+  "_token_file说明": "bot token 放在仓库根的 token/ 目录下（.gitignore 已忽略 /token，不会被提交）。也可用环境变量 KOOK_TOKEN 覆盖。",
+  "token_file": "token/kook.txt",
+
+  "_attach_mode说明": "link = 帖子里只放「Gitee / GitHub release 包下载链接」，**不上传任何附件**（用户 2026-10-09 定：「kook 发布不需要真实上传文件.只要附带 gitee 的 release 包连接也可以」）。★实测 KOOK 单文件上限 ≈30 MiB（30 MiB 过 / 31 MiB 连 nginx 都过不去回 413；30.5 MB 起业务码 40014）⇒ 主插件包 63.8 MB 本来就传不上。file = 走 /asset/create 上传 + 卡片 file 模块（仅当所有包都小于上限时才可用）。",
+  "attach_mode": "link",
+
+  "_download_base说明": "下载链接模板（{ver}=主插件版本号，{name}=文件名）。Gitee 为主、GitHub 备用，两个都给玩家。",
+  "download_base": {
+    "gitee": "https://gitee.com/xeval/emberveil_eval_help/releases/download/v{ver}/{name}",
+    "github": "https://github.com/lihaibo123as/emberveil_eval_help/releases/download/v{ver}/{name}"
+  },
+
+  "_preview说明": "帖子**封面 + 正文配图**：从**该帖插件自己的 `./preview`** 里取（主插件 = `preview/`，子插件 = `addons/<名>/preview/`）。★图片必须先走 `asset/create` 上传（用户 2026-10-09 定：「将对应插件内的./preview内的图片上传」），并把 url 放进卡片的 image-group；封面同时进正文配图 —— KOOK 官方规则：资源只有作为**卡片图片元素**发出去才刷新可见状态。★卡片 image 只吃 jpeg/gif/png（本次 preview 全是 png）。",
+  "preview": {
+    "enabled": true,
+    "max_per_post": 3,
+    "prefer": ["main.png", "info.png", "bank.png", "tags.png"]
+  },
+
+  "_guide说明": "自动化引导（用户 2026-10-09 定：「完善下以上两个信息的自动化引导.欢迎词,公告之类的」）：欢迎词走 **事件驱动**（官方事件 joined_guild = 新成员加入服务器，经 WebSocket 收），公告走**幂等更新**（首次 message/create 存 msg_id，之后原地 message/update，不刷屏）。★欢迎大厅里那条「系统通知#0001 …」是 KOOK 原生欢迎频道发的，与机器人无关。",
+  "guide": {
+    "welcome_channel_id": "8320814423228312",
+    "announce_channel_id": "1294357982211130",
+    "welcome_file": "kook/guide/welcome.md",
+    "announce_file": "kook/guide/announce.md",
+    "state_file": "kook/state/guide.json",
+    "pin_announce": true,
+    "cooldown_sec": 8
+  },
+
+  "_pack_dir说明": "打包产物目录（与 tmp/pack_subaddons.ps1 的输出目录一致）。可用 --dir 覆盖。",
+  "pack_dir": "E:\\soft\\game\\eb\\Azeroth\\Binaries\\Win64\\Games\\Emberveil\\live\\Azeroth\\Interface\\AddOns",
+
+  "_assets说明": "versioned = 只发带完整版本号的包（用户 2026-10-09 定，固定名那份不发）；both = 连固定名包一起发。",
+  "assets": "versioned",
+
+  "card": {
+    "theme": "primary",
+    "size": "lg",
+    "header": "EvalHelp v{ver} 发布"
+  },
+
+  "_links说明": "发布页链接模板，{ver} 会被替换成主插件版本号。留空则不出现在卡片里。",
+  "links": {
+    "github": "https://github.com/lihaibo123as/emberveil_eval_help/releases/tag/v{ver}",
+    "gitee": "https://gitee.com/xeval/emberveil_eval_help/releases/tag/v{ver}"
+  },
+
+  "changelog_file": "CHANGELOG.md",
+  "notes_max_chars": 1200,
+
+  "_notes_fallback说明": "找不到 kook/notes/<版本>.md 时的行为：auto = 自动摘要（只抽 CHANGELOG 标题行，滤掉版本流水与内部口吻，只放进第一条帖）；none = 干脆不附更新说明。",
+  "notes_fallback": "auto"
+}
