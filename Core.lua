@@ -1077,6 +1077,12 @@ local LOAD_RESIDUE_KEYS = {
   --   客户端有没有真取消」三条**只能真机读**；而聊天框读数（say）不落日志环、共享 100 环又会被 [DS] 冲掉
   --   ⇒ 必须自带专属落盘（同 ecProbe/ipProbe 的教训）。★只在真执行或用户敲命令时写，日常一个字节都不写。
   "followProbe",
+  -- ★1.75.112 「远程事件锚点」的取证环（Engine.lua 的 EVAL_SHOT_EV_* / `/eh go 射击探针 事件报告`，环上限 60 行）：
+  --   改进项 3（远程锚点事件化 —— 语言无关）的**前置核实**：`ACTIONBAR_UPDATE_COOLDOWN` 这条通道
+  --   「到底按不按射击周期发」只能真机读（本插件自己的通道记录只有一次 12 次的计数，没有间隔分布），
+  --   而聊天框读数（say）不落日志环、共享 100 环又会被 [DS] 冲掉 ⇒ 必须自带专属落盘（同 followProbe/ipProbe 的教训）。
+  --   ★只在跑 `/eh go 射击探针`（测量开关）期间写，日常一个字节都不写。
+  "shotEvProbe",
 }
 
 function EVAL_LOAD_RESIDUE_KEYS() return LOAD_RESIDUE_KEYS end

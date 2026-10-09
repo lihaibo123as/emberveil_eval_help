@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.75.111"
+local VERSION = "1.75.112"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -1151,6 +1151,8 @@ function EVAL_HELP_UI_BUILD()
         u.scale = s
         EVAL_HELP_UI_BUILD()
         if ui.root then ui.root:Show() end
+        -- ★1.75.112 滚轮缩放会整帧重建 ⇒ 那条每帧腿跟着重新对账（同 TOGGLE：排在 Show() 之后）
+        if type(EVAL_HELP_SWING_BEAT_SYNC) == "function" then EVAL_HELP_SWING_BEAT_SYNC() end
       end
     end)
   end
@@ -1165,6 +1167,11 @@ function EVAL_HELP_UI_BUILD()
     uiLastTick = now
     EVAL_HELP_UI_TICK()
   end)
+
+  -- ★1.75.112 swing 每帧帧按新建出来的这一轮**重新对账**（战斗区被关掉 / 控件没建 ⇒ 当场把那条腿摘掉）。
+  --   ★`ui.swingBeat` / `ui.swingBeatOn` **故意不在上面那段清理里**（它们是**单例**：帧不做销毁、
+  --   滑到的只是挂/摘状态；清掉引用 = 丢掉句柄却留着在跑的 OnUpdate = 关不掉的节拍）。
+  if type(EVAL_HELP_SWING_BEAT_SYNC) == "function" then EVAL_HELP_SWING_BEAT_SYNC() end
 end
 
 -- 填充条刷新工具
@@ -1175,8 +1182,86 @@ local function uiSetBar(fill, text, maxW, frac, r, g, b, str)
   text:SetText(str)
 end
 
+-- ★★★1.75.112 swing 条**唯一绘制口**（改进项 6：它现在被两条腿共用 —— 0.15s 根帧心跳 + 「只在条子真在倒计时」
+--   时才挂的每帧帧；见下面 EVAL_HELP_SWING_BEAT_*）。
+--   `remIn` = 调用方已经算好的剩余秒数（每帧那条腿传进来 ⇒ **一帧只算一次**）；传 nil = 自己现算（心跳那条腿）。
+--   返回：**画的是倒计时** ⇒ 剩余秒数；画的是「就绪 / 空条」或这条控件不存在 ⇒ nil
+--   —— 每帧那条腿据此**当拍收工**（★这就是「不用就关」的判据，不靠外部记标志）。
+function EVAL_HELP_UI_SWING_PAINT(remIn)
+  if not ui.swingBar then return nil end
+  -- ★1.74.30 状态感知：自动射击中这条细条走**射击计时**（锚点/射速都与近战独立），否则仍是近战那套
+  local kind = (type(EVAL_SWING_KIND) == "function") and EVAL_SWING_KIND() or "melee"
+  local rem = remIn
+  if rem == nil then
+    rem = (type(EVAL_SWING_REMAIN_ACTIVE) == "function") and EVAL_SWING_REMAIN_ACTIVE()
+      or (EVAL_SWING_REMAIN and EVAL_SWING_REMAIN())
+  end
+  local spdBar = (type(EVAL_SWING_SPEED) == "function") and EVAL_SWING_SPEED() or st.atkSpd
+  if rem and spdBar and spdBar > 0 then
+    local frac = math.max(0, math.min(1, 1 - rem / spdBar))
+    uiSetBar(ui.swingFill, ui.swingText, ui.swingW, frac, 0.85, 0.70, 0.25,
+      rem > 0.05 and string.format((kind == "ranged") and "下次射击 %.1fs" or "下次攻击 %.1fs", rem)
+        or ((kind == "ranged") and "射击就绪" or "攻击就绪"))
+    -- ★「就绪」只是一次性收尾（画完就该停）：返回 nil ⇒ 每帧那条腿当拍摘掉自己
+    if rem > 0.05 then return rem end
+    return nil
+  end
+  uiSetBar(ui.swingFill, ui.swingText, ui.swingW, 0, 0.1, 0.1, 0.1, "")
+  return nil
+end
+
+-- ★★★1.75.112 swing 条**每帧帧**（改进项 6；口径照参考实现 unrealUI 的 modules/swingbar.lua：
+--   车道真在动时升到每帧、不动就回落/摘掉）。为什么：0.15s 心跳画这条细条 = 一帧一跳（观感是「格子跳」）。
+--   ★三条纪律（本项目「用的时候才启用、不用就关闭」+ 关断四件事在节拍这条上的落地）：
+--     ① **按需挂**：判据收在**唯一口 EVAL_HELP_SWING_BEAT_REQ()**（窗口可见 ∧ 战斗区开着 ∧ 控件在 ∧ 真在倒计时）；
+--     ② **挂/摘只有一个入口** EVAL_HELP_SWING_BEAT_SYNC（幂等：已在跑就不重挂；不满足就 SetScript(...,nil) **真摘**）；
+--     ③ **自愈**：每帧第一件事就是重新问 REQ —— 窗口被收（世界地图会藏住 UIParent，根帧 OnUpdate 照旧在跑）/
+--        条子到 ready / 模块关掉 ⇒ **当拍自己摘**，绝不靠外部记标志（漏清就是「关掉了还在跑」）。
+--   ★代价如实记：本帧**只画 swing 那一条**（不是整块战斗UI）⇒ 每帧 = 3 个 Set* + 1 次 SetText；
+--     **绝不**把根帧的 0.15s 心跳改成每帧（那会拖上血条/能量/技能行整块重画）。
+function EVAL_HELP_SWING_BEAT_REQ()
+  if not (ui.swingBar and ui.combatOn and ui.root) then return false, nil end
+  local okv, vis = pcall(ui.root.IsVisible, ui.root)
+  if not (okv and vis) then return false, nil end
+  local rem = (type(EVAL_SWING_REMAIN_ACTIVE) == "function") and EVAL_SWING_REMAIN_ACTIVE()
+    or (EVAL_SWING_REMAIN and EVAL_SWING_REMAIN())
+  if not (rem and rem > 0.05) then return false, rem end
+  return true, rem
+end
+
+-- OnUpdate 回调**零形参**（本项目铁律：回调一个参数都不传；这里连 dt 都不需要）
+function EVAL_HELP_SWING_BEAT_TICK()
+  local want, rem = EVAL_HELP_SWING_BEAT_REQ()
+  if not want then EVAL_HELP_SWING_BEAT_SYNC() return end -- 自愈：当拍真摘
+  EVAL_HELP_UI_SWING_PAINT(rem)                           -- 一帧只算一次 rem（算好的传进去）
+end
+
+-- ★唯一挂/摘入口（幂等 + 自愈）：返回「现在挂着吗」
+function EVAL_HELP_SWING_BEAT_SYNC()
+  local want = EVAL_HELP_SWING_BEAT_REQ()
+  if not want then
+    if ui.swingBeatOn and ui.swingBeat then
+      pcall(ui.swingBeat.SetScript, ui.swingBeat, "OnUpdate", nil) -- ★真摘（不是每帧早退）
+      ui.swingBeatOn = false
+    end
+    return false
+  end
+  if ui.swingBeatOn then return true end -- 幂等：已经在跑，别重挂
+  if not ui.swingBeat then
+    -- ★帧名与任何全局函数名**不同名**（组 54 老坑：具名帧会顶掉同名全局函数）
+    ui.swingBeat = CreateFrame("Frame", "EVAL_HELP_SWING_BEATFRAME", UIParent)
+  end
+  pcall(ui.swingBeat.SetScript, ui.swingBeat, "OnUpdate", EVAL_HELP_SWING_BEAT_TICK)
+  ui.swingBeatOn = true
+  return true
+end
+
 -- 每个心跳刷新（窗口隐藏时直接返回——Cat 同款）
 function EVAL_HELP_UI_TICK()
+  -- ★1.75.112 swing 每帧帧的对账点（0.15s 一拍）：**必须排在可见性早退之前** ——
+  --   世界地图会把 UIParent 藏住，而根帧的 OnUpdate 照旧在跑（本行下面的 IsVisible 早退就是这么来的）
+  --   ⇒ 不可见时这里要把那条每帧腿**当拍摘掉**，可见时再挂回来。
+  if type(EVAL_HELP_SWING_BEAT_SYNC) == "function" then EVAL_HELP_SWING_BEAT_SYNC() end
   if not ui.root or not ui.root:IsVisible() then return end
 
   -- ★★★1.74.17 技能带**行数自适应**的重建判据（用户：「超过2行的时候更多的就不显示了.需求是需要能自动换行.
@@ -1250,20 +1335,9 @@ function EVAL_HELP_UI_TICK()
     end
   end
   -- 1.55.0 挥击计时条：有攻速+锚点数据时显示（进度=已过/攻速，文本=距下次攻击秒数/就绪）
-  if ui.swingBar then
-    -- ★1.74.30 状态感知：自动射击中这条细条走**射击计时**（锚点/射速都与近战独立），否则仍是近战那套
-    local kind = (type(EVAL_SWING_KIND) == "function") and EVAL_SWING_KIND() or "melee"
-    local rem = (type(EVAL_SWING_REMAIN_ACTIVE) == "function") and EVAL_SWING_REMAIN_ACTIVE()
-      or (EVAL_SWING_REMAIN and EVAL_SWING_REMAIN())
-    local spdBar = (type(EVAL_SWING_SPEED) == "function") and EVAL_SWING_SPEED() or st.atkSpd
-    if rem and spdBar and spdBar > 0 then
-      local frac = math.max(0, math.min(1, 1 - rem / spdBar))
-      uiSetBar(ui.swingFill, ui.swingText, ui.swingW, frac, 0.85, 0.70, 0.25,
-        rem > 0.05 and string.format((kind == "ranged") and "下次射击 %.1fs" or "下次攻击 %.1fs", rem) or ((kind == "ranged") and "射击就绪" or "攻击就绪"))
-    else
-      uiSetBar(ui.swingFill, ui.swingText, ui.swingW, 0, 0.1, 0.1, 0.1, "")
-    end
-  end
+  -- ★1.75.112 绘制收进**唯一口 EVAL_HELP_UI_SWING_PAINT**（每帧那条腿画的是同一条 ⇒ 绝不在这里再写一份；
+  --   两条腿的条件与文案只要不一致，就会出现「心跳画一套、每帧画另一套」的闪烁）
+  EVAL_HELP_UI_SWING_PAINT()
   if st.hasTarget then
     local tfrac = st.tHpPct / 100
     uiSetBar(ui.tgFill, ui.tgText, ui.tgW, tfrac, 0.80, 0.20, 0.20,
@@ -1394,12 +1468,16 @@ function EVAL_HELP_UI_TOGGLE()
   local u = uiCfg()
   if ui.root and ui.root:IsVisible() then
     ui.root:Hide()
+    -- ★1.75.112 窗口收起来 ⇒ 那条每帧腿当拍真摘（它的自愈也认可见性，这里是同一判据的第二处触发点）
+    if type(EVAL_HELP_SWING_BEAT_SYNC) == "function" then EVAL_HELP_SWING_BEAT_SYNC() end
     u.enabled = false
     say("战斗信息UI: |cffff0000关|r")
   else
     EVAL_HELP_UI_BUILD()
     if ui.root then ui.root:Show() end
     u.enabled = true
+    -- ★1.75.112 必须排在 Show() **之后**：REQ 的判据带 `IsVisible`（BUILD 里那一次窗还没 Show）
+    if type(EVAL_HELP_SWING_BEAT_SYNC) == "function" then EVAL_HELP_SWING_BEAT_SYNC() end
     say("战斗信息UI: |cff00ff00开|r（按住标题栏拖动换位置，滚轮缩放）")
   end
 end
@@ -1412,6 +1490,8 @@ function EVAL_HELP_UI_REBUILD_IF_SHOWN()
   if not (ok and vis) then return false end
   EVAL_HELP_UI_BUILD()
   if ui.root then ui.root:Show() end
+  -- ★1.75.112 重建后重新对账那条每帧腿（同 TOGGLE：排在 Show() 之后）
+  if type(EVAL_HELP_SWING_BEAT_SYNC) == "function" then EVAL_HELP_SWING_BEAT_SYNC() end
   return true
 end
 
@@ -11514,6 +11594,8 @@ init:SetScript("OnEvent", function(a, b)
     if cfg.ui and cfg.ui.enabled then
       EVAL_HELP_UI_BUILD()
       if ui.root then ui.root:Show() end
+      -- ★1.75.112 载入恢复这条路也要对账那条每帧腿（同 TOGGLE：必须排在 Show() 之后）
+      if type(EVAL_HELP_SWING_BEAT_SYNC) == "function" then EVAL_HELP_SWING_BEAT_SYNC() end
     end
     -- 状态信息UI：上次开着的话恢复显示
     if cfg.st and cfg.st.enabled then

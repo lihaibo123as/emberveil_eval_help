@@ -3844,6 +3844,9 @@ end
 function EVAL_SHOT_EVENT(msg)
   if not EVAL_SHOT_IS(msg) then return false end
   local t = GetTime()
+  -- ★事件通道独占时**一个字节都不写**（连自校准样本也不攒：那时 dt 是「与事件锚的差」= 0.75/1.38 的离群值，
+  --   攒进去只会污染 `EVAL_SHOT_SPEED` 的自校准中位数；判据见上面 `EVAL_SHOT_EV_OWNS`）。
+  if EVAL_SHOT_EV_OWNS() then return true end
   local api = EVAL_SHOT_API_SPEED()
   if api and st.lastShot then
     local dt = t - st.lastShot
@@ -3906,6 +3909,7 @@ end
 -- ★为什么先探针：本客户端**没有挥击/射击计时 API**（近战那套也是「事件锚点 + UnitAttackSpeed」推出来的），
 --   远程的锚点事件名/速度取值一旦猜错 → 计时**静默不动或系统性偏**（本项目最恨的失败型）。
 -- 用法：`/eh go 射击探针`（开/关）· `/eh go 射击探针 报告`（打印）· `/eh go 射击探针 清空`
+--   ★1.75.112 补事件锚点族（改进项 3）：`事件报告`（结论行）· `事件锚点 on|off`（试验开关，默认关）· `事件清空`
 local SHP = { on = false, rows = {}, max = 32, frame = nil }
 local SHP_EV = "CHAT_MSG_COMBAT_SELF_MISSES" -- 未命中通道（只在探针开启期间临时挂，关掉即摘）
 -- ★播报出口：Engine.lua 段没有 EvalHelp 那个 local say —— 走项目统一出口 EVAL_SAY（静默纪律不变）。
@@ -3914,6 +3918,250 @@ local SHP_EV = "CHAT_MSG_COMBAT_SELF_MISSES" -- 未命中通道（只在探针�
 local function shpSay(s)
   if type(EVAL_LOGLINE) == "function" then pcall(EVAL_LOGLINE, "[射击探针] " .. tostring(s)) end
   if type(EVAL_SAY) == "function" then pcall(EVAL_SAY, s) else print(s) end
+end
+
+-- ===== 事件锚点（1.75.112；改进项 3「远程锚点事件化 —— 语言无关」）=====
+-- ★为什么要做：现在的远程锚点**解析战斗日志正文**（EVAL_SHOT_IS 只认「自动射击 / Auto Shot」两串），
+--   而自动射击**槽位**的识别也认死名字（EVAL_SHOT_ACTIVE 读 wslots 的键 = 客户端本地化动作名）
+--   ⇒ 在**非中/英客户端**（本插件带 Locales\ruRU.lua，属支持范围）两条都命中不了：射击计时**静默失效**、
+--   并退回近战计时。参考实现 unrealUI 的 modules/swingbar.lua 用 `ACTIONBAR_UPDATE_COOLDOWN` 当远程周期信号
+--   （锚点**不解析正文** ⇒ 语言无关）。
+-- ★两条在案证据（别再重查）：① 本插件自己的真机通道记录 `doc/通道信息记录.md` §2b：229.8s 战斗实测
+--   `ACTIONBAR_UPDATE_COOLDOWN` **12 次**（arg1..3 = nil）⇒ 本客户端**会发**这条事件；
+--   ② `START_AUTOREPEAT_SPELL` / `STOP_AUTOREPEAT_SPELL`（参考实现另一条腿）**没有任何在案读数**
+--   ⇒ 本实现不依赖它们（「在不在自动射击」照旧轮询 IsAutoRepeatAction —— 那条路已经在用）。
+--   ★★`tmp/shot_ev_scan.js`（只读 exe 字符串扫描）里三条都是 **0 命中**，但**不构成否证**：
+--     阳性对照 `PLAYER_ENTER_COMBAT`（本插件同轮实测 11 次）在 exe 里同样 0 命中 ⇒ exe 只装引擎侧事件名，
+--     FrameXML 发的事件不在里面（同 EH_Damage 记忆体写明的判据边界）。
+-- ★★★但「事件存在」≠「节奏 = 每次射击」⇒ 本实现**自校验**（与参考实现最大的不同）：
+--   只有「自动射击中」收到的事件才进样本窗；窗口（最近 ivlMax 个「事件到事件」间隔）的**中位数 ÷ API 射速**
+--   落在 [LO, HI] 才判「这条通道按射击周期来」= 可用；判不可用 ⇒ **一个字节都不碰**（条子继续走文本锚点），
+--   报告里如实写「不可用 + 比值」。理由：万一它其实是「任意技能冷却变化」都发（开试验后在自动射击中
+--   按一发奥术射击就能看出来），拿它当锚点会把射击条**系统性拨到别的技能那一刻** —— 本项目铁律是
+--   「拿不到证据就一个字节都不碰」。
+-- ★零足迹：**测量开关与试验开关都关着**时这条事件根本不注册（挂/摘只有一个入口 EVAL_SHOT_EV_SYNC）。
+-- ★为什么全程用**全局**：Engine.lua 顶层 local 已顶 200 上限（本项目在案：报错行在文件末尾）⇒ 新判定口一律走全局。
+EVAL_SHEV = {
+  on = false,        -- 测量（取证）：把每个事件写进专属环 cfg.shotEvProbe
+  anchor = false,    -- 试验：事件真的当锚点用（**默认关** = 行为零变化；**会话级**，/reload 后自动关）
+  frame = nil, mounted = false,
+  n = 0, nActive = 0, rejIdle = 0, rejNear = 0, acc = 0,
+  ivl = {}, ivlMax = 8, lastEv = nil,
+  RING_MAX = 60,     -- 专属环上限（行）
+  MIN_SAMPLES = 3,   -- 少于它 = 样本不足（判不出，绝不猜）
+  NEAR = 0.6,        -- 距上一锚 < NEAR×射速 ⇒ 判「别的技能 / 重复通知」，不当锚
+  LO = 0.75, HI = 1.25, -- 「事件间隔 ÷ API 射速」的可用判据（中位数要落带内）
+  CONSIST = 4,       -- ★可用判据的第二条：**带内样本数**至少这么多（半数是脏样本 ⇒ 判不可用，见 EVAL_SHOT_EV_USABLE）
+  IDLE_LOG_MAX = 6,  -- 「未在自动射击中」只前这么多条进环（实测占 37% ⇒ 不封顶会挤掉周期样本）
+}
+
+-- 样本窗中位数比（nil = 样本不足 ⇒ 判不出）
+function EVAL_SHOT_EV_RATIO()
+  local ev = EVAL_SHEV
+  local n = table.getn(ev.ivl)
+  if n < ev.MIN_SAMPLES then return nil end
+  local sorted = {}
+  local i
+  for i = 1, n do sorted[i] = ev.ivl[i] end
+  table.sort(sorted)
+  return sorted[math.floor((n + 1) / 2)]
+end
+
+-- 样本窗里**落在可用带内**的条数（★1.75.112 真机读数加的一条：见 EVAL_SHOT_EV_USABLE）
+function EVAL_SHOT_EV_INBAND()
+  local ev = EVAL_SHEV
+  local n, i = 0, nil
+  for i = 1, table.getn(ev.ivl) do
+    local v = ev.ivl[i]
+    if v >= ev.LO and v <= ev.HI then n = n + 1 end
+  end
+  return n
+end
+
+-- ★★★可用判据 = **中位数落带** ∧ **带内样本数 ≥ CONSIST**（1.75.112 真机读数换来的第二条）：
+--   实测那一轮 8 个样本里 6 个是 1.02（干净周期样本）、2 个是噪声（0.54 / 1.80）⇒ 中位数照样是 1.02；
+--   但**只钉中位数**时，「偶尔对齐」的通道也能蒙过去（噪声一多就会把中位拖进带内）⇒ 要求带内条数够多，
+--   半数是脏样本就判**不可用**（宁可退回文本锚点，也不拿一条时灵时不灵的通道当锚）。
+function EVAL_SHOT_EV_USABLE()
+  local r = EVAL_SHOT_EV_RATIO()
+  if not r then return false end
+  if r < EVAL_SHEV.LO or r > EVAL_SHEV.HI then return false end
+  return EVAL_SHOT_EV_INBAND() >= EVAL_SHEV.CONSIST
+end
+
+-- ★★★「二选一」判据（1.75.112 A/B 第二轮真机读数换来的）：事件通道**自校验通过**时，它才是**唯一**的锚。
+--   真机证据（环 48 行里 20~48 是本轮）：两通道**同周期 2.13s、相位差 ~0.75s** —— 采纳的事件 Δt锚 ≈1.38
+--   （= 上一次写者是**文本**）、紧随其后的「太近」行 Δt锚 ≈0.38/0.62（= 文本刚写完就来一发）。
+--   ⇒ 两个都写 `st.lastShot` 时，**一个射击周期里条子被重新落锚两次**（倒计时中途被拽回一次）。
+--   ⇒ 采纳 = 试验开关开着 ∧ 可用；**判不可用 / 样本不足 ⇒ 立刻退回文本通道**（自愈、不粘，武器一换速度就重判）。
+function EVAL_SHOT_EV_OWNS()
+  return EVAL_SHEV.anchor and EVAL_SHOT_EV_USABLE()
+end
+
+-- 专属有界落盘环的唯一写口/清口（形状照 cfg.atkProbe：out/n/t；只有测量开关开着才写）
+function EVAL_SHOT_EV_RING(line)
+  local cfg = EVAL_HELP_CONFIG
+  if type(cfg) ~= "table" then return end
+  if line == nil then cfg.shotEvProbe = nil return end -- 清空
+  local box = cfg.shotEvProbe
+  if type(box) ~= "table" then box = {} cfg.shotEvProbe = box end
+  if type(box.out) ~= "table" then box.out = {} end
+  table.insert(box.out, tostring(line))
+  while table.getn(box.out) > EVAL_SHEV.RING_MAX do table.remove(box.out, 1) end
+  box.n = (tonumber(box.n) or 0) + 1
+  box.t = (type(date) == "function") and date("%H:%M:%S") or nil
+end
+
+-- ★唯一处理口（OnEvent：读全局 event；本项目「回调零形参」的写法照旧）
+function EVAL_SHOT_EV_TICK()
+  local ev = EVAL_SHEV
+  local now = GetTime()
+  ev.n = ev.n + 1
+  local active = (type(EVAL_SHOT_ACTIVE) == "function") and EVAL_SHOT_ACTIVE() or false
+  local spd = EVAL_SHOT_API_SPEED()
+  local dtEv = ev.lastEv and (now - ev.lastEv) or nil
+  ev.lastEv = now
+
+  -- ① 不在自动射击中 ⇒ 这条事件只可能来自别的技能 / 别的动作条变化：不进样本窗、**绝不当锚**
+  --   ★1.75.112 真机读数：19 条事件里 **7 条** 落在这一支（37%）⇒ 逐条进环会把 60 行的环挤满、
+  --   把真正有用的周期样本冲掉 ⇒ 前 IDLE_LOG_MAX 条记明细，之后只计数（报告里的 rejIdle 照旧累计）。
+  if not active then
+    ev.rejIdle = ev.rejIdle + 1
+    if ev.on and ev.rejIdle <= ev.IDLE_LOG_MAX then
+      EVAL_SHOT_EV_RING(string.format("忽略（未在自动射击中）｜Δt事件=%s",
+        dtEv and string.format("%.2f", dtEv) or "—"))
+    end
+    return false
+  end
+  ev.nActive = ev.nActive + 1
+
+  local anchor = st.lastShot
+  local dt = anchor and (now - anchor) or nil
+  local ratio = (dt and spd and spd > 0) and (dt / spd) or nil
+  -- ② 距上一锚太近 ⇒「同一次射击的重复通知 / 别的技能」⇒ 不当锚（样本仍记，供人判读）
+  local near = (dt and spd and spd > 0 and dt < ev.NEAR * spd) and true or false
+  if near then ev.rejNear = ev.rejNear + 1 end
+  -- ③ 样本窗只收「自动射击中」的事件间隔（事件到事件），比值口径 = ÷ API 射速
+  if dtEv and spd and spd > 0 then
+    local rEv = dtEv / spd
+    if rEv > 0.2 and rEv < 3.0 then
+      table.insert(ev.ivl, rEv)
+      while table.getn(ev.ivl) > ev.ivlMax do table.remove(ev.ivl, 1) end
+    end
+  end
+  -- ④ 只有当锚点**自校验通过**且不太近、且**此刻真的拿得到射速**时才采纳
+  --    （射速读不到还去写锚点 = 写一个谁也读不出来的值，白留证据）
+  local accepted = false
+  if ev.anchor and spd and (not near) and EVAL_SHOT_EV_USABLE() then
+    st.lastShot = now
+    ev.acc = ev.acc + 1
+    accepted = true
+  end
+  if ev.on then
+    local verdict = accepted and "★当锚点" or (near and "忽略（太近）" or "只测量")
+    local med = EVAL_SHOT_EV_RATIO()
+    EVAL_SHOT_EV_RING(string.format("%s｜Δt事件=%s｜Δt锚=%s｜÷射速=%s｜样本=%d｜中位=%s",
+      verdict,
+      dtEv and string.format("%.2f", dtEv) or "—",
+      dt and string.format("%.2f", dt) or "—",
+      ratio and string.format("%.2f", ratio) or "—",
+      table.getn(ev.ivl),
+      med and string.format("%.2f", med) or "—"))
+  end
+  return accepted
+end
+
+-- ★唯一挂/摘入口（幂等；不用就**真摘** —— 不注册 = 一个事件都不会来）
+function EVAL_SHOT_EV_SYNC()
+  local ev = EVAL_SHEV
+  local want = (ev.on or ev.anchor)
+  if not want then
+    if ev.mounted and ev.frame then
+      pcall(ev.frame.UnregisterEvent, ev.frame, "ACTIONBAR_UPDATE_COOLDOWN")
+      ev.mounted = false
+    end
+    return false
+  end
+  if ev.mounted then return true end
+  if not ev.frame then
+    -- ★帧名与任何全局函数名**不同名**（组 54 老坑：具名帧会顶掉同名全局函数）
+    local f = CreateFrame("Frame", "EVAL_SHOT_EVFRAME", UIParent)
+    f:SetScript("OnEvent", function()
+      if (type(event) == "string") and event == "ACTIONBAR_UPDATE_COOLDOWN" then
+        EVAL_SHOT_EV_TICK()
+      end
+    end)
+    ev.frame = f
+  end
+  pcall(ev.frame.RegisterEvent, ev.frame, "ACTIONBAR_UPDATE_COOLDOWN")
+  ev.mounted = true
+  return true
+end
+
+-- 测量开关（跟 `/eh go 射击探针` 同开同关；开 = 每个事件写专属环）
+function EVAL_SHOT_EV_SET(on)
+  local ev = EVAL_SHEV
+  ev.on = on and true or false
+  if ev.on then
+    ev.n, ev.nActive, ev.rejIdle, ev.rejNear, ev.acc = 0, 0, 0, 0, 0
+    ev.ivl, ev.lastEv = {}, nil
+  end
+  EVAL_SHOT_EV_SYNC()
+  return ev.on
+end
+
+-- 试验锚点开关（**会话级、不落存档** —— /reload 后自动回到「关」= 行为零变化）
+function EVAL_SHOT_EV_ANCHOR(on)
+  local ev = EVAL_SHEV
+  ev.anchor = on and true or false
+  if ev.anchor then ev.ivl = {} end -- 重攒样本：绝不拿上一次的结论直接采纳
+  EVAL_SHOT_EV_SYNC()
+  return ev.anchor
+end
+
+-- 一条命令给结论（`/eh go 射击探针 事件报告`）
+function EVAL_SHOT_EV_REPORT()
+  local ev = EVAL_SHEV
+  local spd = EVAL_SHOT_API_SPEED()
+  local n = table.getn(ev.ivl)
+  local r = EVAL_SHOT_EV_RATIO()
+  shpSay("===== 事件锚点取证（ACTIONBAR_UPDATE_COOLDOWN）=====")
+  shpSay(string.format("① 注册=%s ｜ 测量=%s ｜ 试验锚点=%s ｜ API 射速=%s",
+    tostring(ev.mounted), tostring(ev.on), tostring(ev.anchor),
+    spd and string.format("%.2f", spd) or "—"))
+  shpSay(string.format("② 事件总数 %d ｜ 自动射击中 %d ｜ 未在射击忽略 %d ｜ 太近忽略 %d ｜ 已当锚点 %d",
+    ev.n, ev.nActive, ev.rejIdle, ev.rejNear, ev.acc))
+  shpSay(string.format("③ 样本 %d 个（事件间隔 ÷ API 射速）｜ 中位数 %s ｜ 带内样本 %d（要 ≥%d）｜ 可用带 [%.2f, %.2f]",
+    n, r and string.format("%.2f", r) or "—", EVAL_SHOT_EV_INBAND(), ev.CONSIST, ev.LO, ev.HI))
+  if not spd then
+    shpSay("④ 结论：|cffffd080判不出|r —— 没拿到 API 射速（先装备远程武器、开自动射击打几发再来）")
+  elseif n < ev.MIN_SAMPLES then
+    shpSay(string.format("④ 结论：|cffffd080样本不足|r（%d/%d）—— 开自动射击连打 ≥5 发后再 `报告`",
+      n, ev.MIN_SAMPLES))
+  elseif EVAL_SHOT_EV_USABLE() then
+    shpSay("④ 结论：|cff00ff00可用|r —— 这条通道按**射击周期**来 ⇒ 可开 `/eh go 射击探针 事件锚点 on` 做 A/B")
+  elseif (r and r >= ev.LO and r <= ev.HI) then
+    shpSay(string.format("④ 结论：|cffff0000不可用|r —— 中位数虽在带内，但**带内样本只有 %d 个**（要 ≥%d）"
+      .. "⇒ 多半是偶尔对齐，不许当锚点", EVAL_SHOT_EV_INBAND(), ev.CONSIST))
+  else
+    shpSay("④ 结论：|cffff0000不可用|r —— 比值偏离射击周期（多半是「任意技能冷却变化」都发）"
+      .. "⇒ **不许当锚点**（本实现已自动不采纳）")
+  end
+  shpSay("④b 锚点归属：" .. (EVAL_SHOT_EV_OWNS() and "|cff00ff00事件独占|r（文本锚点已让位 ⇒ 一个射击周期只落锚一次）"
+    or (EVAL_SHEV.anchor and "|cffff8080试验开着但通道不可用 ⇒ 仍走文本锚点|r" or "文本锚点（试验关着）")))
+  local cfg = EVAL_HELP_CONFIG
+  local box = (type(cfg) == "table") and cfg.shotEvProbe or nil
+  local out = (type(box) == "table" and type(box.out) == "table") and box.out or nil
+  local total = out and table.getn(out) or 0
+  shpSay(string.format("⑤ 专属环 cfg.shotEvProbe = %d/%d 行（累计写入 %s；/reload 后落盘）",
+    total, ev.RING_MAX, tostring(box and box.n or 0)))
+  if out then
+    local from = total - 4
+    if from < 1 then from = 1 end
+    local i
+    for i = from, total do shpSay("   " .. tostring(out[i])) end
+  end
+  return n
 end
 
 
@@ -4035,9 +4283,39 @@ end
 
 function EVAL_SHOT_PROBE(sub)
   sub = tostring(sub or "")
+  -- ★1.75.112 事件锚点族（改进项 3）：**必须排在下面那条「报告」之前** —— 子命令名里也含「报告」二字
+  if string.find(sub, "事件锚点") or string.find(sub, "evanchor") then
+    local v = nil
+    if string.find(sub, "on") or string.find(sub, "开") then v = true
+    elseif string.find(sub, "off") or string.find(sub, "关") then v = false end
+    if v == nil then v = not EVAL_SHEV.anchor end
+    EVAL_SHOT_EV_ANCHOR(v)
+    if v then
+      -- ★★★1.75.112 真机 A/B 踩到（**这条是「静默」的又一例**）：只开试验时事件**确实注册了**、
+      --   处理口也在跑，但**专属环只在测量开关（`ev.on`）下写** ⇒ 打完 `/reload` 一看存档：一个字节都没留下
+      --   ⇒ 用户与 AI **都无从判断「试验到底跑没跑」**（现场症状 = 环的 n/时刻与上一次完全一样）。
+      --   ⇒ 修法 = **开试验顺手把测量一起开**（一条命令就该自己留下证据，符合「一条命令、零步骤、自己落盘」）。
+      SHP.on = true
+      EVAL_SHOT_EV_SET(true)
+      shpSay("事件锚点试验：|cff00ff00开|r（**会话级**，/reload 自动关）—— 测量已一并开启，打完 `/reload` 即留证")
+      shpSay("  只有**自校验通过**才采纳：「事件间隔中位数 ÷ API 射速」落 [0.75, 1.25] 且**带内样本 ≥ 4**，"
+        .. "否则一个字节都不碰（条子继续走文本锚点）")
+    else
+      shpSay("事件锚点试验：|cffff0000关|r —— 远程锚点只走文本通道（行为与今天一字不差）")
+    end
+    return v
+  end
+  if string.find(sub, "事件报告") or string.find(sub, "evreport") then return EVAL_SHOT_EV_REPORT() end
+  if string.find(sub, "事件清空") or string.find(sub, "evclear") then
+    EVAL_SHOT_EV_RING(nil)
+    shpSay("射击探针：事件锚点专属环（cfg.shotEvProbe）已清空")
+    return 0
+  end
   if string.find(sub, "报告") or string.find(sub, "report") then return EVAL_SHOT_PROBE_REPORT() end
   if string.find(sub, "清空") or string.find(sub, "clear") then SHP.rows = {} shpSay("射击探针：记录已清空") return 0 end
   SHP.on = not SHP.on
+  -- ★1.75.112 测量开关与探针**同开同关**（这条通道的证据只能真机读 ⇒ 探针一开就开始记专属环 + 注册事件）
+  EVAL_SHOT_EV_SET(SHP.on)
   if SHP.on then
     SHP.rows = {}
     if not SHP.frame then
@@ -4050,9 +4328,15 @@ function EVAL_SHOT_PROBE(sub)
     end
     pcall(SHP.frame.RegisterEvent, SHP.frame, SHP_EV)
     shpSay("射击计时探针：|cff00ff00已开启|r —— 现在**开自动射击打几下**（≥5 次），再 /eh go 射击探针 报告")
+    shpSay("   ★1.75.112 同轮还注册了 `ACTIONBAR_UPDATE_COOLDOWN`（事件锚点候选通道）⇒ 打完看 `/eh go 射击探针 事件报告` 的**结论行**；"
+      .. "试验开关 = `/eh go 射击探针 事件锚点 on|off`（默认关，会话级）")
   else
     if SHP.frame then pcall(SHP.frame.UnregisterEvent, SHP.frame, SHP_EV) end
-    shpSay("射击计时探针：已关闭（记录保留，「报告」仍可查看）")
+    shpSay("射击计时探针：已关闭（记录保留，「报告」仍可查看；事件通道已摘）")
+    -- ★「试验开着但测量关着」= 事件照旧注册、却一个字节都不留证 ⇒ 必须**当场如实提醒**（同族静默，见上面事件锚点分支）
+    if EVAL_SHEV.anchor then
+      shpSay("  ★注意：事件锚点试验**还开着**（事件照旧注册），但测量已关 ⇒ **不再留证**；要留证就再跑一次 `事件锚点 on`")
+    end
   end
   return SHP.on
 end
