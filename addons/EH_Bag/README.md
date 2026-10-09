@@ -1,5 +1,7 @@
 # EH_Bag 整合背包子插件
 
+> 📢 **发布 / 下载地址**：[emberveil 一键宏 · 插件发布（KOOK）](https://www.kookapp.cn/app/channels/7071527711947717/5336773639081280) —— 本子插件每版都在那里单独发帖（更新概要 + 封面/截图 + 下载包链接）；发布页见 [GitHub](https://github.com/lihaibo123as/emberveil_eval_help/releases) ｜ [Gitee](https://gitee.com/xeval/emberveil_eval_help/releases)。
+
 EmberVeil 客户端的**整合背包**：把**背包 0~4 · 钥匙链(-2) · 银行主格(-1，24 格) · 银行包 5~10** 合成**一扇窗**，
 功能按 TurtleWoW **OneBag** 逐项对齐（品质染色 · 类型/品质筛选 · 搜索 · 一键整理 · 金钱 · 计数 · 悬停高亮 ·
 跨角色总览 · 右键设置菜单），并且**零依赖、绝对自包含**（贴图素材全部自带，绝不引用别的插件目录）。

@@ -1,5 +1,7 @@
 # EH_DPS · 队伍伤害统计（自娱自乐版）
 
+> 📢 **发布 / 下载地址**：[emberveil 一键宏 · 插件发布（KOOK）](https://www.kookapp.cn/app/channels/7071527711947717/5336773639081280) —— 本子插件每版都在那里单独发帖（更新概要 + 封面/截图 + 下载包链接）；发布页见 [GitHub](https://github.com/lihaibo123as/emberveil_eval_help/releases) ｜ [Gitee](https://gitee.com/xeval/emberveil_eval_help/releases)。
+
 EmberVeil 客户端的**队伍级伤害统计**独立子插件：解析战斗文本（SCT 模式），
 把队伍/团队里每个人的伤害 / DPS / 治疗 / HPS / 承受伤害 / 受到治疗 / 能量回复 / 击杀 / 施放次数
 按玩家出条目，点条目下钻到该玩家的技能分解。

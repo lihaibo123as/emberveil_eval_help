@@ -39,10 +39,9 @@ local CH = {
 -- ===== 常量（单一来源） =====
 -- ★1.74.5 用户（截图）：「两个助手的图标都太大了，需要和配置的图标相同」
 --   ⇒ 与小地图/配置入口按钮**同尺寸 26×26**（EvalHelp.lua `mb:SetWidth(26)`）；横排小图标同尺寸保持一致。
-local CH_SIZE = 26          -- 主图标边长（= 配置入口按钮）
-local CH_STRIP = 26         -- 横排小图标边长（同一口径）
-local CH_STRIP_GAP = 2
-local CH_STRIP_STEP = CH_STRIP + CH_STRIP_GAP
+local CH_SIZE = 26          -- 主图标**默认**边长（= 配置入口按钮）；★实际值走 chSize()（存档可调，Ctrl+滚轮改）
+local CH_MIN, CH_MAX, CH_STEP = 16, 64, 4  -- 可调范围与步进（★一律夹取；16 以下字画不下，64 以上挡屏）
+local CH_STRIP_GAP = 2      -- 横排小图标间距（固定 2px，不随尺寸变）
 local CH_STRIP_MAX = 10     -- 横排最多几枚（超出如实提示，不静默丢）
 local CH_RATE = 0.3         -- 限频：服务器写动作 ≥0.3s/笔（与工具箱 TB_RATE 同口径）
 local CH_BAGS = { 0, 1, 2, 3, 4 }
@@ -75,6 +74,21 @@ local function chCfg()
   if type(EVAL_TB_CHAR_STORE) ~= "function" then return nil end
   return EVAL_TB_CHAR_STORE()
 end
+
+-- ★★★1.75.111 用户：「工具箱 -> 消耗品助手 -> 支持类似 战斗UI 的 Ctrl+滚轮缩放」
+--   口径照**战斗UI**（EvalHelp.lua 的 `u.scale` ±0.1 / 夹取 / 改完**几何重建**）——
+--   本项目**禁用 SetScale**（点击框漂移）⇒ 尺寸变化一律走「改宽高 + 重摆锚点」。
+--   ★**唯一尺子 chSize()**：主图标与横排小图标**共用同一个值**（保持既有的「同尺寸保持一致」口径，
+--     也避免两处各存一个值以后漂移）；真值 = 角色级存档 `tb.chSize`，缺键/坏值 ⇒ 回落 26（老存档零迁移）。
+local function chSize()
+  local tb = chCfg()
+  local v = tb and tonumber(tb.chSize) or nil
+  if not v then return CH_SIZE end
+  if v < CH_MIN then return CH_MIN end
+  if v > CH_MAX then return CH_MAX end
+  return v
+end
+local function chStep() return chSize() + CH_STRIP_GAP end   -- 横排步距（尺寸 + 间距）
 
 -- ★贴图缓存（用完/卖掉后靠它把图标灰着留在原地）：必须声明在 chCfg **之后** ——
 --   Lua 的 local 从声明语句之后才可见，放前面会调用到全局 nil（本项目踩过，DECL ORDER CHECK 也会抓）。
@@ -321,8 +335,8 @@ local function chSavePos()
   local tb = chCfg()
   if not tb then return end
   local sw, sh = chScreen()
-  tb.chX = (l + CH_SIZE / 2 - sw / 2) / s
-  tb.chY = (t - CH_SIZE / 2 - sh / 2) / s
+  tb.chX = (l + chSize() / 2 - sw / 2) / s
+  tb.chY = (t - chSize() / 2 - sh / 2) / s
 end
 
 -- ===== CD 倒计时（1.74.11 用户要求：悬浮图标显示 CD 实时倒计时特效） =====
@@ -381,7 +395,7 @@ function EVAL_CH_CD_REFRESH()
     local cell = CH.strip[i]
     if cell and cell.btn then
       if cell.btn:IsShown() then
-        if chApplyCd(cell, cell.btn, CH_STRIP - 4, list[i], now) then any = true end
+        if chApplyCd(cell, cell.btn, chSize() - 4, list[i], now) then any = true end
       else
         -- 不显示的格子：把旧状态收起来（免得下次显示时残留旧的遮盖/文字）
         if cell.cdMask then pcall(cell.cdMask.Hide, cell.cdMask) end
@@ -434,7 +448,7 @@ function EVAL_CH_STRIP_REFRESH()
   if stripCount < 0 then stripCount = 0 end
   -- 横排方向：右侧放不下就整条翻到主图标左侧（夹取，绝不跑出屏幕）
   local sw = chScreen()
-  local needW = 4 + stripCount * CH_STRIP_STEP
+  local needW = 4 + stripCount * chStep()
   CH.side = "right"
   if CH.btn then
     local okr, r = pcall(CH.btn.GetRight, CH.btn)
@@ -467,10 +481,10 @@ function EVAL_CH_STRIP_REFRESH()
         local x
         if CH.side == "right" then
           pcall(s.btn.ClearAllPoints, s.btn)
-          pcall(s.btn.SetPoint, s.btn, "TOPLEFT", CH.btn, "TOPRIGHT", 4 + (i - 1) * CH_STRIP_STEP, 0)
+          pcall(s.btn.SetPoint, s.btn, "TOPLEFT", CH.btn, "TOPRIGHT", 4 + (i - 1) * chStep(), 0)
         else
           pcall(s.btn.ClearAllPoints, s.btn)
-          pcall(s.btn.SetPoint, s.btn, "TOPRIGHT", CH.btn, "TOPLEFT", -4 - (i - 1) * CH_STRIP_STEP, 0)
+          pcall(s.btn.SetPoint, s.btn, "TOPRIGHT", CH.btn, "TOPLEFT", -4 - (i - 1) * chStep(), 0)
         end
         s.btn:Show()
       else
@@ -495,15 +509,59 @@ function EVAL_CH_STRIP_REFRESH()
   pcall(CH.label.Hide, CH.label)
   return true
 end
+-- ★★★1.75.111 用户：「工具箱 -> 消耗品助手 -> 支持类似 战斗UI 的 Ctrl+滚轮缩放」
+--   口径照**战斗UI**（`EvalHelp.lua` 的 `u.scale`：`EVAL_WHEEL_DIR` 取方向 / 夹取 / 改完**几何重建**）；
+--   本项目**禁用 SetScale**（点击框漂移）⇒ 一律「改宽高 + 重摆锚点」。
+--   ★**唯一重建口**（摆几何只此一处，别在别处再写一遍）：
+local function chApplySize()
+  local S = chSize()
+  if CH.btn then
+    pcall(CH.btn.SetWidth, CH.btn, S)
+    pcall(CH.btn.SetHeight, CH.btn, S)
+    chApplyPos(CH.btn, S, (chCfg() or {}).chX, (chCfg() or {}).chY)   -- 保持中心不变
+  end
+  if CH.label then pcall(CH.label.SetWidth, CH.label, S) end
+  if CH.strip then
+    for i = 1, CH_STRIP_MAX do
+      local cell = CH.strip[i]
+      if cell and cell.btn then
+        pcall(cell.btn.SetWidth, cell.btn, S)
+        pcall(cell.btn.SetHeight, cell.btn, S)
+      end
+    end
+  end
+  if type(EVAL_CH_STRIP_REFRESH) == "function" then pcall(EVAL_CH_STRIP_REFRESH) end -- 步距变了要重摆横排
+  return S
+end
+
+-- 写口（Ctrl+滚轮与未来的面板/命令共用；坏输入一个字节都不动）
+function EVAL_CH_SIZE_STEP(d)
+  d = tonumber(d) or 0
+  if d == 0 then return false end
+  local cur = chSize()
+  local v = cur + (d > 0 and CH_STEP or -CH_STEP)
+  if v < CH_MIN then v = CH_MIN end
+  if v > CH_MAX then v = CH_MAX end
+  if v == cur then chSay(string.format(L("CH_SIZE_LIMIT"), tostring(v))) return false end
+  local tb = chCfg()
+  if not tb then return false end
+  tb.chSize = v                       -- 唯一真值（角色级存档）
+  chApplySize()
+  chSay(string.format(L("CH_SIZE_NOW"), tostring(v)))   -- ★行为改变必须出声
+  return true
+end
+function EVAL_CH_SIZE_GET() return chSize() end   -- 读值口（探针/离线判据用）
+
 -- ===== 建 UI（懒建：开关打开时才建主图标与横排池） =====
 function EVAL_CH_ENSURE()
   if CH.built and CH.btn then return CH.btn end
   local tb = chCfg() or {}
   -- 主图标（可拖动；左键 = 开/关面板）
   local b = CreateFrame("Button", nil, UIParent)
-  b:SetWidth(CH_SIZE)
-  b:SetHeight(CH_SIZE)
-  chApplyPos(b, CH_SIZE, tb.chX, tb.chY)
+  local S0 = chSize()
+  b:SetWidth(S0)
+  b:SetHeight(S0)
+  chApplyPos(b, S0, tb.chX, tb.chY)
   pcall(b.SetMovable, b, true)
   pcall(b.EnableMouse, b, true)
   pcall(b.RegisterForClicks, b, "LeftButtonUp", "RightButtonUp")
@@ -534,7 +592,7 @@ function EVAL_CH_ENSURE()
   tex:Hide()
   local label = chText(b, 12, 0.55, 1, 0.70) -- 26px 里 12pt 才不挤
   label:SetPoint("CENTER", b, "CENTER", 0, 0)
-  pcall(label.SetWidth, label, CH_SIZE)
+  pcall(label.SetWidth, label, chSize())
   label:SetText(CH_TEXT)
   CH.btn, CH.tex, CH.label = b, tex, label
   b:SetScript("OnClick", function(a, b2)
@@ -554,6 +612,18 @@ function EVAL_CH_ENSURE()
     pcall(b.StopMovingOrSizing, b)
     pcall(b.StartMoving, b) -- warm-up 两步（本客户端实测配方）
   end)
+  -- ★★★1.75.111 Ctrl+滚轮 = 调图标大小（用户：「工具箱->消耗品助手->支持类似战斗UI 的 ctrl+滚轮缩放」）
+  --   口径同战斗UI：方向走**唯一来源** `EVAL_WHEEL_DIR`（上滚=+1）；**裸滚与 Shift+滚不接管**（留给别的消费者）。
+  --   ★`EnableMouseWheel` 本客户端可能缺 ⇒ 全程 pcall（OneJudge 1.7.2 教训）。
+  if pcall(b.EnableMouseWheel, b, true) then
+    pcall(b.SetScript, b, "OnMouseWheel", function(a, b2)
+      if not (type(IsControlKeyDown) == "function" and IsControlKeyDown()) then return end
+      local d = 0
+      if type(EVAL_WHEEL_DIR) == "function" then d = tonumber(EVAL_WHEEL_DIR(a, b2)) or 0 end
+      if d == 0 then return end
+      EVAL_CH_SIZE_STEP(d)
+    end)
+  end
   b:SetScript("OnDragStop", function()
     pcall(b.StopMovingOrSizing, b)
     chSavePos()
@@ -593,6 +663,7 @@ function EVAL_CH_ENSURE()
     end
     pcall(GameTooltip.AddLine, GameTooltip, L("CH_MAIN_HINT"), 0.6, 0.85, 1)
     pcall(GameTooltip.AddLine, GameTooltip, L("CH_STRIP_HINT"), 0.6, 0.85, 1)
+    pcall(GameTooltip.AddLine, GameTooltip, string.format(L("CH_SIZE_HINT"), tostring(chSize())), 0.55, 0.90, 0.55)
     pcall(GameTooltip.AddLine, GameTooltip, string.format("已用 %d 次 / 失败 %d 次", CH.uses, CH.fail), 0.6, 0.6, 0.6)
     pcall(GameTooltip.Show, GameTooltip)
   end)
@@ -603,9 +674,9 @@ function EVAL_CH_ENSURE()
   CH.strip = {}
   for i = 1, CH_STRIP_MAX do
     local s = CreateFrame("Button", nil, UIParent)
-    s:SetWidth(CH_STRIP)
-    s:SetHeight(CH_STRIP)
-    s:SetPoint("TOPLEFT", b, "TOPRIGHT", 4 + (i - 1) * CH_STRIP_STEP, 0)
+    s:SetWidth(chSize())
+    s:SetHeight(chSize())
+    s:SetPoint("TOPLEFT", b, "TOPRIGHT", 4 + (i - 1) * chStep(), 0)
     pcall(s.EnableMouse, s, true)
     pcall(s.RegisterForClicks, s, "LeftButtonUp", "RightButtonUp")
     local sbg = s:CreateTexture(nil, "BACKGROUND")
@@ -634,7 +705,7 @@ function EVAL_CH_ENSURE()
     stex:Hide()
     local snum = chText(s, 9, 1, 0.96, 0.80)
     snum:SetPoint("BOTTOMRIGHT", s, "BOTTOMRIGHT", -1, 1)
-    pcall(snum.SetWidth, snum, CH_STRIP - 4)
+    pcall(snum.SetWidth, snum, chSize() - 4)
     pcall(snum.SetJustifyH, snum, "RIGHT")
     pcall(snum.SetNonSpaceWrap, snum, false)
     local cell = { btn = s, tex = stex, num = snum, name = nil, found = false }
@@ -728,7 +799,7 @@ function EVAL_CH_RESET_POS()
   local tb = chCfg()
   if not tb then return false end
   tb.chX, tb.chY = 0, 0
-  if CH.btn then chApplyPos(CH.btn, CH_SIZE, 0, 0) end
+  if CH.btn then chApplyPos(CH.btn, chSize(), 0, 0) end
   if type(EVAL_SAY) == "function" then
     pcall(EVAL_SAY, "消耗品助手图标位置已重设为屏幕正中（偏移 0,0）")
   end
@@ -765,7 +836,7 @@ function EVAL_CH_RESTORE()
   if not (CH.built and CH.btn) then
     EVAL_CH_ENSURE()
   else
-    chApplyPos(CH.btn, CH_SIZE, tb.chX, tb.chY)
+    chApplyPos(CH.btn, chSize(), tb.chX, tb.chY)
   end
   EVAL_CH_STRIP_REFRESH()
   if CH.btn then pcall(CH.btn.Show, CH.btn) end

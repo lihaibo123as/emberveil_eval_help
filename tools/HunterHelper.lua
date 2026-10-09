@@ -84,18 +84,24 @@ local HH_H = HH_SIZE
 local HH_BAR_H = 4                 -- 槽厚（上下两条共用；改这一处两条一起变）
 local HH_BAR_CORE = HH_BAR_H - 2   -- 芯厚 = 2px（槽内上下各留 1px 黑边）
 local HH_XP_INSET = 1              -- 芯左右各内缩 1px
-local HH_XP_X = 1 + HH_XP_INSET    -- 芯起点（相对按钮左边）= 槽 1 + 芯 1 = 2
-local HH_XP_W_RUN = HH_SIZE - 2 - HH_XP_INSET * 2    -- 芯最大行程 = 内宽 24 − 左右各 1 = 22（两条共用）
+local HH_XP_X = 1 + HH_XP_INSET      -- 芯起点（相对按钮左边）= 槽 1 + 芯 1 = 2
+
+-- ★★★1.75.111 运行时几何的**载入期默认值**（= 26 档位那一套，与改版前逐值相同）：
+--   为什么要有这一块：原来 HH_XP_W_RUN / HH_ICON / HH_ICON_X / HH_ICON_Y 是**声明即定死**的派生常量，
+--   Ctrl+滚轮要求它们随尺寸变 ⇒ 全部搬进 HH 运行时字段（唯一重算口 = hhGeo()，见下）。
+--   ★**这里绝不读存档**（载入期零副作用铁律）：默认值只按默认尺寸算一遍，真要缩放时 hhGeo() 再覆盖。
+HH.S, HH.H = HH_SIZE, HH_H
+HH.ICON = 18
+HH.ICON_X, HH.ICON_Y = (HH_SIZE - HH.ICON) / 2, (HH_H - HH.ICON) / 2
+HH.XP_W_RUN = HH_SIZE - 2 - HH_XP_INSET * 2
+local HH_MIN, HH_MAX, HH_STEP = 16, 64, 4   -- ★Ctrl+滚轮可调范围与步进（一律夹取）
 -- ★★★1.75.42 图标纹理的**正方形边长**（用户三次要求收口：「高度拉伸.但是图标别拉伸能处理吗?」→
 --   「内部的图标能缩小下不.居中」→「调整到20px 试下」）：
 --   图片**固定正方形**（宽 = 高 = HH_ICON），绝不跟边框对拉变形；落点由 X/Y 居中算式给出（改这一个数，居中自动重算）。
 --   ★取值 18px = 用户 1.75.42 指定（先在 16 与 20 之间试过）。参考值：两条槽之间的**净空**是
 --     HH_H − 2×(1 + HH_BAR_H) = 16px ⇒ 18 比净空高 2px ⇒ **上下各被槽压住 1px**；
 --     左右各距框边 (26−18)/2 = 4px（其中 1px 是边框线本身 ⇒ 看得见 3px 黑边）。
-local HH_ICON = 18
 -- 图片在框内**水平/垂直都居中**（落点 = 左上角内缩半个余量；不写死数字 ⇒ 改框高/槽厚/图边长都会自动跟随）
-local HH_ICON_X = (HH_SIZE - HH_ICON) / 2
-local HH_ICON_Y = (HH_H - HH_ICON) / 2
 -- ★★★1.75.42 快乐度**衰减速率**（用户 1.75.42 给的定案数据）：
 --   「快乐值会随着时间的度过缓慢降低，降低速度取决于宠物的忠诚度，忠诚度越高的快乐下降速度越慢。
 --    在忠诚度为最高即"忠诚的"情况下，减少速度约为 7.2/s」⇒ 满值 1000 ⇒ **0.72 %/秒**（1 点 = 0.1%）。
@@ -142,6 +148,26 @@ local function L(k, ...)
   return k
 end
 
+-- ★★★1.75.111 尺寸真值与**唯一重算口**（用户：「宠物喂食助手的小图标也需要这个功能」= Ctrl+滚轮缩放）
+--   真值 = **角色级存档** `cfg.hhSize`（与位置 hhX/hhY 同处 —— 喂食助手整块按角色，1.74.20 口径）；
+--   缺键/坏值 ⇒ 回落 26（老存档零迁移，观感一字不差）。
+--   ★★**所有尺寸派生量只许从 hhGeo() 出**（原先散在声明处 ⇒ 改尺寸就得逐处找，必漏）。
+local function hhSize()
+  local cfg = hhCfg()
+  local v = cfg and tonumber(cfg.hhSize) or nil
+  if not v then return HH_SIZE end
+  if v < HH_MIN then return HH_MIN end
+  if v > HH_MAX then return HH_MAX end
+  return v
+end
+local function hhGeo()
+  local S = hhSize()
+  HH.S, HH.H = S, S
+  HH.ICON = S - 8                 -- 26 档位 ⇒ 18（与原值一字不差）；余量 4px 保持不变
+  HH.ICON_X, HH.ICON_Y = 4, 4     -- = (S − (S−8)) / 2 ⇒ 恒为 4（外部尺寸变、内边距不变）
+  HH.XP_W_RUN = S - 4             -- 26 ⇒ 22（= S − 2 − HH_XP_INSET×2）
+  return S
+end
 local function hhSay(msg)
   if type(EVAL_SAY) == "function" then pcall(EVAL_SAY, msg) return end
   if type(DEFAULT_CHAT_FRAME) == "table" and DEFAULT_CHAT_FRAME.AddMessage then
@@ -407,7 +433,7 @@ local function hhHappyBarPaint()
   local r, g, b = hhHappyRGB()
   pcall(HH.hpBg.Show, HH.hpBg)
   pcall(HH.hpFill.Show, HH.hpFill)
-  pcall(HH.hpFill.SetWidth, HH.hpFill, math.max(1, HH_XP_W_RUN * (p / 100)))
+  pcall(HH.hpFill.SetWidth, HH.hpFill, math.max(1, HH.XP_W_RUN * (p / 100)))
   pcall(HH.hpFill.SetVertexColor, HH.hpFill, r, g, b, 1)
   return true
 end
@@ -895,9 +921,9 @@ function EVAL_HH_RESET_POS()
     --   这里用同一套换算（若 EVAL_IG_TOPLEFT 可用则走共用件）
     local x, y
     if type(EVAL_IG_TOPLEFT) == "function" then
-      x, y = EVAL_IG_TOPLEFT(w2, h2, HH_SIZE, 0, 0, HH_H)   -- ★高单独传 HH_H（当前 = 宽；改高只改常量）
+      x, y = EVAL_IG_TOPLEFT(w2, h2, HH.S, 0, 0, HH.H)   -- ★高单独传 HH.H（当前 = 宽；改高只改常量）
     else
-      x, y = w2 / 2 - HH_SIZE / 2, -(h2 / 2 - HH_H / 2)
+      x, y = w2 / 2 - HH.S / 2, -(h2 / 2 - HH.H / 2)
     end
     pcall(HH.btn.ClearAllPoints, HH.btn)
     pcall(HH.btn.SetPoint, HH.btn, "TOPLEFT", UIParent, "TOPLEFT", x, y)
@@ -943,7 +969,7 @@ local function hhSavePos()
   -- ★存「图标中心相对 UIParent 中心的偏移」（与项目其它记忆位置同一口径；含缩放 → 要除）
   local okw, w2 = pcall(UIParent.GetWidth, UIParent)
   local okh, h2 = pcall(UIParent.GetHeight, UIParent)
-  local bw, bh = HH_SIZE, HH_H   -- 兜底值（正常会读实测宽高；高由 HH_H 给，改高/改方都不用动这里）
+  local bw, bh = HH.S, HH.H   -- 兜底值（正常会读实测宽高；高由 HH.H 给，改高/改方都不用动这里）
   local okbw, v1 = pcall(b.GetWidth, b)
   if okbw and type(v1) == "number" then bw = v1 end
   local okbh, v2 = pcall(b.GetHeight, b)
@@ -1054,6 +1080,8 @@ function EVAL_HH_TIP_LINES()
   put(L("HH_TT_LEFT"), 0.6, 1, 0.6)
   put(L("HH_TT_RIGHT"), 0.6, 0.8, 1)
   put(L("HH_TT_DRAG"), 0.7, 0.7, 0.7)
+  -- ★★★1.75.111 Ctrl+滚轮尺寸提示行（与消耗品助手同一形态；**当前值现读** —— 绝不写死数字）
+  put(string.format(L("HH_SIZE_HINT"), tostring(hhSize())), 0.55, 0.90, 0.55)
   put(string.format(L("HH_TT_CNT"), tostring(HH.hits or 0)), 0.7, 0.7, 0.7)
   return out
 end
@@ -1089,7 +1117,7 @@ function EVAL_HH_CD_REFRESH()
   if not HH.cdText then
     local fs = hhText(HH.btn, 9, 1, 0.85, 0.3) -- 金色，9pt 小字
     fs:SetPoint("CENTER", HH.btn, "CENTER", 0, -1)
-    pcall(fs.SetWidth, fs, HH_SIZE)
+    pcall(fs.SetWidth, fs, HH.S)
     pcall(fs.SetJustifyH, fs, "CENTER")
     HH.cdText = fs
   end
@@ -1144,7 +1172,7 @@ function EVAL_HH_PETDECOR()
     if cur and max and max > 0 then
       local pct = cur / max
       if pct < 0 then pct = 0 elseif pct > 1 then pct = 1 end
-      local inner = HH_XP_W_RUN   -- ★1.75.40（用户选 A）：蓝芯左右各内缩 1px ⇒ 行程唯一来源；亮线/黑槽仍是全内宽
+      local inner = HH.XP_W_RUN   -- ★1.75.40（用户选 A）：蓝芯左右各内缩 1px ⇒ 行程唯一来源；亮线/黑槽仍是全内宽
       pcall(HH.xpBg.Show, HH.xpBg)
       pcall(HH.xpFill.Show, HH.xpFill)
       pcall(HH.xpFill.SetWidth, HH.xpFill, inner * pct)
@@ -1211,16 +1239,61 @@ end
 --     夹取与它的**目的相同**（绝不还原到屏幕外），语义更干净。
 -- ★1.74.5 换算本体抽到共用件 EVAL_IG_TOPLEFT（消耗品助手要用同一份 —— 免得两处各写、方向错一个就歪）
 local function hhTopLeft(sw, sh, cx, cy)
-  if type(EVAL_IG_TOPLEFT) == "function" then return EVAL_IG_TOPLEFT(sw, sh, HH_SIZE, cx, cy, HH_H) end
-  return sw / 2 + (tonumber(cx) or 0) - HH_SIZE / 2, -(sh / 2 - (tonumber(cy) or 0) - HH_H / 2)
+  if type(EVAL_IG_TOPLEFT) == "function" then return EVAL_IG_TOPLEFT(sw, sh, HH.S, cx, cy, HH.H) end
+  return sw / 2 + (tonumber(cx) or 0) - HH.S / 2, -(sh / 2 - (tonumber(cy) or 0) - HH.H / 2)
 end
 
+-- ★★★1.75.111 几何重建（**唯一一处摆尺寸**）：口径同战斗UI —— 本项目**禁用 SetScale**（点击框漂移），
+--   一律「改宽高 + 重摆锚点」；改完再叫一次两条进度条的绘制口（它们按 HH.XP_W_RUN 算长度）。
+local function hhApplySize()
+  hhGeo()
+  local cfg = hhCfg() or {}
+  if HH.btn then
+    pcall(HH.btn.SetWidth, HH.btn, HH.S)
+    pcall(HH.btn.SetHeight, HH.btn, HH.H)
+    local okw, w2 = pcall(UIParent.GetWidth, UIParent)
+    local okh, h2 = pcall(UIParent.GetHeight, UIParent)
+    if not (okw and type(w2) == "number" and w2 > 0) then w2 = HH_DEF_W end
+    if not (okh and type(h2) == "number" and h2 > 0) then h2 = HH_DEF_H end
+    local x, y = hhTopLeft(w2, h2, cfg.hhX, cfg.hhY)     -- 中心不变（位置存的是中心偏移）
+    pcall(HH.btn.ClearAllPoints, HH.btn)
+    pcall(HH.btn.SetPoint, HH.btn, "TOPLEFT", UIParent, "TOPLEFT", x, y)
+  end
+  if HH.tex and HH.btn then
+    pcall(HH.tex.SetWidth, HH.tex, HH.ICON)
+    pcall(HH.tex.SetHeight, HH.tex, HH.ICON)
+    pcall(HH.tex.ClearAllPoints, HH.tex)
+    pcall(HH.tex.SetPoint, HH.tex, "TOPLEFT", HH.btn, "TOPLEFT", HH.ICON_X, -HH.ICON_Y)
+  end
+  if HH.label then pcall(HH.label.SetWidth, HH.label, HH.S) end
+  -- 两条槽都按 HH.XP_W_RUN 算长度 ⇒ 尺寸变了要重画（唯一绘制口 EVAL_HH_PETDECOR）
+  if type(EVAL_HH_PETDECOR) == "function" then pcall(EVAL_HH_PETDECOR) end
+  return HH.S
+end
+-- 写口（Ctrl+滚轮与将来的面板/命令共用；坏输入一个字节都不动）
+function EVAL_HH_SIZE_STEP(d)
+  d = tonumber(d) or 0
+  if d == 0 then return false end
+  local cur = hhSize()
+  local v = cur + (d > 0 and HH_STEP or -HH_STEP)
+  if v < HH_MIN then v = HH_MIN end
+  if v > HH_MAX then v = HH_MAX end
+  if v == cur then hhSay(string.format(L("HH_SIZE_LIMIT"), tostring(v))) return false end
+  local cfg = hhCfg()
+  if not cfg then return false end
+  cfg.hhSize = v                      -- 唯一真值（角色级存档）
+  hhApplySize()
+  hhSay(string.format(L("HH_SIZE_NOW"), tostring(v)))   -- ★行为改变必须出声
+  return true
+end
+function EVAL_HH_SIZE_GET() return hhSize() end   -- 读值口（探针/离线判据用）
 -- 懒建（幂等）：开关打开 / 首次需要时才建帧
 function EVAL_HH_ENSURE()
   if HH.built and HH.btn then return HH.btn end
+  hhGeo()   -- ★1.75.111 建帧前先把尺寸派生量摆好（唯一重算口）
   local b = CreateFrame("Button", nil, UIParent)
-  b:SetWidth(HH_SIZE)
-  b:SetHeight(HH_H)   -- ★高走 HH_H（当前 = 宽 ⇒ 正方形 26×26；1.75.42 曾短暂 26×30，用户要求还原）
+  b:SetWidth(HH.S)
+  b:SetHeight(HH.H)   -- ★高走 HH.H（当前 = 宽 ⇒ 正方形 26×26；1.75.42 曾短暂 26×30，用户要求还原）
   local tb = hhCfg() or {}
   local okc, w2 = pcall(UIParent.GetWidth, UIParent)
   local okh, h2 = pcall(UIParent.GetHeight, UIParent)
@@ -1234,6 +1307,17 @@ function EVAL_HH_ENSURE()
   local okrc, errrc = pcall(b.RegisterForClicks, b, "LeftButtonUp", "RightButtonUp")
   HH.regClicks = tostring(okrc) .. (okrc and "" or (":" .. tostring(errrc)))
   pcall(b.RegisterForDrag, b, "LeftButton")
+  -- ★★★1.75.111 Ctrl+滚轮 = 调图标大小（用户：「宠物喂食助手的小图标也需要这个功能」）
+  --   口径同战斗UI：方向走**唯一来源** EVAL_WHEEL_DIR（上滚=+1）；**裸滚/Shift+滚不接管**。
+  if pcall(b.EnableMouseWheel, b, true) then
+    pcall(b.SetScript, b, "OnMouseWheel", function(a, b2)
+      if not (type(IsControlKeyDown) == "function" and IsControlKeyDown()) then return end
+      local d = 0
+      if type(EVAL_WHEEL_DIR) == "function" then d = tonumber(EVAL_WHEEL_DIR(a, b2)) or 0 end
+      if d == 0 then return end
+      EVAL_HH_SIZE_STEP(d)
+    end)
+  end
   local bg = b:CreateTexture(nil, "BACKGROUND")
   hhSolid(bg, 0.06, 0.05, 0.04, 0.85)
   bg:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
@@ -1270,9 +1354,9 @@ function EVAL_HH_ENSURE()
   -- ★★★1.75.42 尺寸与位置（三次用户要求收口：① 别被拉伸 ⇒ 正方形；② 居中；③ 再缩小一点）：
   --   落点 = 左上角内缩 HH_ICON_X / HH_ICON_Y（都是**算式**：半余量 ⇒ 居中），宽高都 = HH_ICON（正方形）。
   --   ★旧写法是 `TOPLEFT` + `BOTTOMRIGHT` 两锚点对拉 ⇒ 框一变高图片就被纵向拉长（用户截图里那根「变长的培根」）。
-  tex:SetPoint("TOPLEFT", b, "TOPLEFT", HH_ICON_X, -HH_ICON_Y)
-  tex:SetWidth(HH_ICON)
-  tex:SetHeight(HH_ICON)
+  tex:SetPoint("TOPLEFT", b, "TOPLEFT", HH.ICON_X, -HH.ICON_Y)
+  tex:SetWidth(HH.ICON)
+  tex:SetHeight(HH.ICON)
   tex:Hide()
   -- ★★1.74.29 用户要求：按钮**顶部一条小小的蓝色进度条**（宠物经验百分比）
   -- ★★★1.75.40 用户要求：给它**槽底加一根 1px 小线**（线**含在**槽内、不加高）、线用中性亮色。
@@ -1312,7 +1396,7 @@ function EVAL_HH_ENSURE()
   pcall(hpFill.Hide, hpFill)
   local label = hhText(b, 12, 0.95, 0.80, 0.30) -- 26px 里 12pt 才不挤（原 36px 用 14pt）
   label:SetPoint("CENTER", b, "CENTER", 0, 0)
-  pcall(label.SetWidth, label, HH_SIZE)
+  pcall(label.SetWidth, label, HH.S)
   label:SetText(HH_TEXT)
   HH.btn, HH.tex, HH.label, HH.built = b, tex, label, true
   -- ★★★1.74.5 实测修正（用户报「右键选食物无法触发」）：**本客户端 OnClick 的参数形态不固定**——

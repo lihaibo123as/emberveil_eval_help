@@ -1,5 +1,7 @@
 # EH_DebugBox 图层调试子插件
 
+> 📢 **发布 / 下载地址**：[emberveil 一键宏 · 插件发布（KOOK）](https://www.kookapp.cn/app/channels/7071527711947717/5336773639081280) —— 本子插件每版都在那里单独发帖（更新概要 + 封面/截图 + 下载包链接）；发布页见 [GitHub](https://github.com/lihaibo123as/emberveil_eval_help/releases) ｜ [Gitee](https://gitee.com/xeval/emberveil_eval_help/releases)。
+
 EmberVeil 客户端的**图层调试/取证**工具：枚举世界地图（及可选的 UIParent/WorldFrame/小地图簇等扫描源）的全部图层，以**可折叠树**展示，支持查看/修改各层的缩放、透明度、宽高、坐标，并把自定义落到账号级存档。
 
 > 本插件是 EvalHelp 的独立子插件（自带 `.toc`，单独载入）；修改记录见同目录 `CHANGELOG.md`。

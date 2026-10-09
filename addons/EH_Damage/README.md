@@ -1,5 +1,7 @@
 # EH_Damage · 增强伤害显示（浮动战斗信息）
 
+> 📢 **发布 / 下载地址**：[emberveil 一键宏 · 插件发布（KOOK）](https://www.kookapp.cn/app/channels/7071527711947717/5336773639081280) —— 本子插件每版都在那里单独发帖（更新概要 + 封面/截图 + 下载包链接）；发布页见 [GitHub](https://github.com/lihaibo123as/emberveil_eval_help/releases) ｜ [Gitee](https://gitee.com/xeval/emberveil_eval_help/releases)。
+
 EmberVeil 客户端的**增强浮动战斗文字**独立子插件：把你造成的伤害/治疗/效果/战斗状态等信息
 以可配置的动画形式飘在屏幕上。动画引擎参考 DamageEx（Nampower 版），事件解析走 SCT 模式
 （本客户端没有结构化战斗事件与 GUID API，也没有可附着的姓名板帧）。
