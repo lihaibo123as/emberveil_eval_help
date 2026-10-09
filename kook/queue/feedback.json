@@ -1,9 +1,9 @@
 {
-  "updated": 1791512269065,
+  "updated": 1791543361974,
   "items": [
     {
-      "status": "planned",
-      "note": "★用户 2026-10-09 确认「做」⇒ 已实施并落地代码：1.75.111 给「消耗品助手」与「宠物喂食助手」两处图标加 Ctrl+滚轮调档（16~64 步进 4，角色级存档 cfg.chSize/cfg.hhSize，禁用 SetScale 走几何重建，悬停提示 + 三语 *_SIZE_HINT/NOW/LIMIT）；★回填动作（原帖加 ✅ + 回复带发布链接）**等 release 走完 KOOK 第 10 步后**再跑 --done，没发帖链接不算数",
+      "status": "done",
+      "note": "v1.75.111",
       "feasibility": {
         "verdict": "可行",
         "cost": "低（两处各加一套滚轮调档 + 存档一个尺寸值）",
@@ -19,7 +19,10 @@
       "user": "eval",
       "at": 1791512222619,
       "text": "需要工具箱->消耗品助手->支持类似 战斗UI 类似的ctrl+ 滚轮的缩放效果. 宠物喂食助手的小图标也需要这个功能",
-      "source": "live"
+      "source": "live",
+      "notified": true,
+      "done_at": 1791543361973,
+      "link": "https://www.kookapp.cn/app/channels/7071527711947717/5336773639081280/146760554164257280"
     }
   ]
 }
