@@ -22,7 +22,14 @@
 --   · 字体链 FZLBJW→FRIZQT→ARIALN 全程 pcall；FontString 不吃鼠标 ⇒ 热区用透明 Button。
 -- ============================================================================
 
-local BUILD = "0.2.43"
+local BUILD = "0.2.45"
+
+-- ★★★插件目录名 = 本文件所在目录 + `EH_Damage.toc` 的文件名 —— **聊天播报的前缀就用它**
+--   （用户 2026-10-10：「插件载入信息换成插件目录名」：截图里旧的中文前缀与 `[EH_DPS]` 两种写法混着，
+--    统一成「一眼看出是哪个插件目录」的目录名；与子插件 EH_DPS 的 `[EH_DPS]` 同一口径）
+--   ★**单一来源**：`say` 是唯一拼前缀的地方（全文件不许再出现中文前缀那类字面量）；
+--    真要改目录名 ⇒ **三处一起改**（目录名 / `EH_Damage.toc` / 这个常量）。
+local ADDON_NAME = "EH_Damage"
 
 local D = {}                      -- 命名空间（跨函数共享件全挂这里，控 local 数）
 _G["EH_DMG"] = D                  -- 调试/桥接口（子插件独立，不依赖宿主）
@@ -248,7 +255,8 @@ local function itemOn(id) return C()["it_" .. id] == true end
 -- ----------------------------------------------------------------------------
 say = function(m)
   local f = rawget(_G, "DEFAULT_CHAT_FRAME")
-  if f and f.AddMessage then pcall(f.AddMessage, f, "|cffff6666[EH伤害]|r " .. tostring(m)) end
+  -- ★前缀 = 插件目录名（`ADDON_NAME`，见文件头）——全插件**唯一**拼聊天前缀的地方
+  if f and f.AddMessage then pcall(f.AddMessage, f, "|cffff6666[" .. ADDON_NAME .. "]|r " .. tostring(m)) end
 end
 
 local TEX_WHITE = "Interface\\Buttons\\WHITE8X8"
@@ -1220,13 +1228,58 @@ EVH["CHAT_MSG_COMBAT_PET_HITS"] = petHit
 EVH["CHAT_MSG_SPELL_PET_DAMAGE"] = petHit
 EVH["CHAT_MSG_COMBAT_PET_MISSES"] = function(m) EVH["CHAT_MSG_COMBAT_SELF_MISSES"](m) end
 
--- 能量类型 token → 中文（真机句式里是未翻译 token：RAGE_POINTS 等；查不到就原文显示）
-local POWER_ZH = { RAGE_POINTS = "怒气", MANA = "法力", ENERGY = "能量", FOCUS = "集中值", HAPPINESS = "快乐" }
+-- ----------------------------------------------------------------------------
+-- ★0.2.45 能量获取（怒气/法力/能量…）—— **解析与显示只写一份、两个事件都调**
+--   真机句式与**事件归属**（来源 = 用户 2026-10-10 截图 + 他自己存档的捕获环 · 账号 LIHAIBOAS2）：
+--     RAW CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS |1=你从血性狂暴获得了1点RAGE_POINTS。   ← 血性狂暴
+--     RAW CHAT_MSG_SPELL_SELF_BUFF          |1=你从怒不可遏获得了1点RAGE_POINTS。   ← 怒不可遏
+--     RAW CHAT_MSG_SPELL_SELF_BUFF          |1=你从冲锋获得了9点RAGE_POINTS。       ← 冲锋
+--   ★同一件事走**两个不同事件** ⇒ 谁都不能假设「只有周期性那一支」。
+--   ★★真 bug（用户报障原话「目前这个匹配到是一个绿色的战斗数值」）：`CHAT_MSG_SPELL_SELF_BUFF`
+--     的处理器是**治疗**，而它的兜底模式 `(%d+)%s*点` 会把「…获得了1点RAGE_POINTS。」吃成
+--     绿色的「+1」（治疗色 0.30,1.00,0.40）⇒ 修法 = 能量句在**治疗之前**先被认出来，
+--     且**整个治疗族（3 个事件）都不许再把能量句当治疗**（反向钉）。
+-- ----------------------------------------------------------------------------
+-- 能量 token → 中文（真机是**未翻译 token**：RAGE_POINTS；中文 token 一并认，便于其它客户端/其它句式）
+local POWER_ZH = { RAGE_POINTS = "怒气", RAGE = "怒气", MANA_POINTS = "法力", MANA = "法力",
+                   ENERGY_POINTS = "能量", ENERGY = "能量", FOCUS_POINTS = "集中值", FOCUS = "集中值",
+                   HAPPINESS_POINTS = "快乐", HAPPINESS = "快乐",
+                    ["怒气"] = "怒气", ["法力"] = "法力", ["能量"] = "能量",
+                    ["集中值"] = "集中值", ["快乐"] = "快乐" }
+
+-- 唯一解析口：整句 → 数字 + 能量中文名 + 来源名；**不是能量句一律 nil**（交给别的处理器）
+--   ★★★token 必须落在上面那张白名单里才算能量句 —— 绝不能只看「获得了 N 点 X」的形状：
+--     同形状的「你获得了40点生命值。」是**治疗**，只差一个词 ⇒ 认不出来就如实放行（拿不到证据不硬认）。
+local function energizeParse(m)
+  if type(m) ~= "string" then return nil end
+  -- ★Lua 模式的 `?` 按字节作用 ⇒ 「了?」会切掉半个汉字（项目老坑）⇒ 两条模式分别试
+  local n, pw = string.match(m, "^你从.-获得%s*(%d+)%s*点(.-)。")
+  if not n then n, pw = string.match(m, "^你从.-获得了%s*(%d+)%s*点(.-)。") end
+  if not n then n, pw = string.match(m, "^你获得(%d+)点(.+)") end
+  if not n then n, pw = string.match(m, "^你获得了(%d+)点(.+)") end
+  if not n then return nil end
+  pw = string.gsub(tostring(pw or ""), "^%s*(.-)%s*$", "%1")   -- 真机文本空格多 ⇒ 剥净再映射
+  local zh = POWER_ZH[pw] or POWER_ZH[string.upper(pw)]
+  if not zh then return nil end
+  return tonumber(n), zh, string.match(m, "^你从%s*(.-)%s*获得")   -- 来源名（天赋/光环名，配图用）
+end
+
+-- 唯一显示口：能量句 ⇒ 屏上「怒气+1」（0.2.45 起**名字在前**；旧写法是「+1 怒气」）
+--   ★返回 true/false = **这句是不是能量句**（与「显示项开着没有」无关）——
+--     治疗族拿它当闸门用（true ⇒ 本条已被能量通道接手，绝不许再当治疗画）。
+local function energizeShow(m)
+  local n, zh, src = energizeParse(m)
+  if not n then return false end
+  addText("energize", zh .. "+" .. n, 0, src)
+  return true
+end
 
 -- 治疗（友方治疗者姓名）：这族事件同时会报「施加 buff」类**无数字**文本（如「X 对你施放了 恢复。」）
 --   —— 真机实锤：无数字硬显示 ⇒ 屏上一个「+?」⇒ 没有数字一律不当治疗跳（buff 施加由效果显示管）
 --   ★本客户端真机句式（0.2.3 战斗日志截图）：「你因 losol 的 恢复 而获得了 40 点生命值。」
 EVH["CHAT_MSG_SPELL_HOSTILEPLAYER_BUFF"]  = function(m)
+  -- ★0.2.45 反向钉：能量句**绝不许**被治疗处理器吃成绿色数字（本族 3 个事件共用这一份处理器）
+  if energizeShow(m) then return end
   local n = string.match(m, "获得%s*(%d+)%s*点") or string.match(m, "治疗你%s*(%d+)%s*点")
          or string.match(m, "恢复%s*(%d+)%s*点") or string.match(m, "(%d+)%s*点")
   if not n then capture("HEAL-NONUM", m) return end
@@ -1245,6 +1298,10 @@ EVH["CHAT_MSG_SPELL_FRIENDLYPLAYER_BUFF"] = EVH["CHAT_MSG_SPELL_HOSTILEPLAYER_BU
 -- 自我治疗（0.2.5；真机句式「你的 次级治疗术 治疗了你 154 点生命值。」
 --   「你的 次级治疗术 对你造成极效治疗，恢复了 247 点生命值。」）
 EVH["CHAT_MSG_SPELL_SELF_BUFF"] = function(m)
+  -- ★★0.2.45 真机报障的**真凶**：「你从怒不可遏获得了1点RAGE_POINTS。」走的是**这个**事件
+  --   （不是周期性那一支）⇒ 旧写法落到下面的治疗兜底 `(%d+)%s*点` ⇒ 屏上一个**绿色**「+1」。
+  --   能量句先认（认出来就交给能量通道），其余照旧走自我治疗。
+  if energizeShow(m) then return end
   local sp = string.match(m, "^你的%s*(.-)%s*治疗") or string.match(m, "^你的%s*(.-)%s*对你造成")
   local n = string.match(m, "治疗了你%s*(%d+)%s*点") or string.match(m, "恢复了%s*(%d+)%s*点")
          or string.match(m, "(%d+)%s*点")
@@ -1253,19 +1310,9 @@ EVH["CHAT_MSG_SPELL_SELF_BUFF"] = function(m)
 end
 
 EVH["CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS"] = function(m)
-  -- ★本客户端真机句式（0.2.3 截图）：「你从 怒不可遏 获得了 1 点 RAGE_POINTS。」（能量获取）
-  --   ★Lua 模式的 `?` 按字节作用 ⇒ 「了?」会切掉半个汉字（项目老坑）⇒ 两条模式分别试
-  local n, pw = string.match(m, "^你从.-获得%s*(%d+)%s*点(.-)。")
-  if not n then n, pw = string.match(m, "^你从.-获得了%s*(%d+)%s*点(.-)。") end
-  if not n then n, pw = string.match(m, "^你获得(%d+)点(.+)") end
-  if not n then n, pw = string.match(m, "^你获得了(%d+)点(.+)") end
-  if n then
-    pw = string.gsub(tostring(pw or ""), "^%s*(.-)%s*$", "%1")   -- 真机文本空格多 ⇒ 剥净再映射
-    pw = POWER_ZH[pw] or pw
-    local src = string.match(m, "^你从%s*(.-)%s*获得")            -- 来源名（天赋/光环名，配图用）
-    addText("energize", "+" .. n .. " " .. pw, 0, src)
-    return
-  end
+  -- ★0.2.45：能量句的解析搬到**唯一口** `energizeParse`/`energizeShow`（见上文那段）——
+  --   真机「你从血性狂暴获得了1点RAGE_POINTS。」走**这个**事件（怒不可遏/冲锋走 SPELL_SELF_BUFF）。
+  if energizeShow(m) then return end
   -- ★模式次序（0.2.14 修）：先整句（「…获得了 X 。」两种主语），再「效果」形 ——
   --   `(.-)效果` 按首个「效果」截会得到「恢复的」（与整句形「恢复的效果」归一不到一起 = 去重失效）
   local a = string.match(m, "^你获得了(.+)。") or string.match(m, "^你从.-获得了(.+)。")
@@ -1491,7 +1538,7 @@ local SIM_SEQ = {
       return w[math.random(1, 3)]
     end, crit =0 },
   { kind = "mitigation",fn = function() return "-" .. math.random(10, 90) .. " 减免" end, crit = 0 },
-  { kind = "energize",  fn = function() return "+" .. math.random(5, 40) .. " 法力" end, crit = 0 },
+  { kind = "energize",  fn = function() return "法力+" .. math.random(5, 40) end, crit = 0 },
   { kind = "honor",     fn = function() return "+" .. math.random(10, 200) .. " 荣誉" end, crit = 0 },
   { kind = "combo",     fn = function() return "连击点 ×" .. math.random(1, 5) end, crit = 0 },
   { kind = "rep",       fn = function() return "+" .. math.random(5, 25) .. " 声望·暴风城" end, crit = 0 },

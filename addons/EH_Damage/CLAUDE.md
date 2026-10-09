@@ -37,6 +37,20 @@
   「你施放毒蛇钉刺失败：尚未恢复」「Cat的撕咬没有击中雌性草原狮。」）。结构钉守着这条。
 - ★★★**自我受击（incoming）有归属门**（真机例「雌性草原狮击中Cat造成8点伤害。」= 宠物挨打）：
   整句必须含「你」才显示 —— 否则宠物/别人的挨打会显示成红色「-X」当作我受到的伤害（`inHit`/`inMiss` 都加）。
+- ★★★**能量获取（怒气/法力…）走「唯一口 + 两个事件都调」（0.2.45 修；用户：「目前这个匹配到是一个绿色的战斗数值.
+  看下需要匹配显示的是怒气+1这种」）** —— ★★**真凶 = 同一件事落两个事件、而其中一支的处理器是治疗**：
+  真机事件归属（**判据来源 = 用户存档捕获环** `EH_DAMAGE_CFG.ring`：「`RAW CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS |1=你从血性狂暴获得了1点RAGE_POINTS。`」
+  · 「`RAW CHAT_MSG_SPELL_SELF_BUFF |1=你从怒不可遏获得了1点RAGE_POINTS。`」· 「`RAW CHAT_MSG_SPELL_SELF_BUFF |1=你从冲锋获得了9点RAGE_POINTS。`」）
+  ⇒ **血性狂暴走周期性那一支、怒不可遏/冲锋走 `SPELL_SELF_BUFF`**，而后者的兜底模式 `(%d+)%s*点` 会把整句吃成
+  **治疗** ⇒ 屏上一个**绿色**「+1」（治疗色 `0.30,1.00,0.40`）—— 这就是报障截图看到的东西。
+  ① **解析/显示只写一份**：`energizeParse`（整句 → 数字 + 能量名 + 来源）· `energizeShow`（唯一显示口，
+  **返回值 = 「这句是不是能量句」**，与显示项开关无关）；**三处都先调它** = `SPELL_SELF_BUFF` ·
+  `SPELL_HOSTILEPLAYER_BUFF`（+2 别名 = 治疗族 3 事件）· `SPELL_PERIODIC_SELF_BUFFS`。
+  ② ★★**token 必须进白名单才算能量句**（`POWER_ZH`）—— 同形状的「你获得了40点生命值。」是**治疗**、只差一个词
+  ⇒ 认不出就**如实放行**（反向钉：整个治疗族不许再把能量句吃成绿色数字）。
+  ③ **显示格式 = 名字在前**（`pw .. "+" .. n` ⇒ **`怒气+1`**；旧写法是「+1 怒气」）。
+  ④ ★**要看得见还得勾显示项**：`it_energize`（「能量获取显示」）**默认关**（0.2.36 作者实配）⇒ 修好只是「不再错画成绿字」，
+  想看到 `怒气+1` 必须在面板勾上它（默认档没动）。
 - ★★★**姓名板附着做不了（2026-10-08 定案，别再重做）**：用户需求 = 把伤害数字锚到**怪头顶那条浮动姓名板**。
   取证：本客户端姓名板是 **UE 引擎 widget**（exe 里 `AzerothNameplateWidget` / `AzerothNameplateWidgetComponent` /
   `HealthPlateComponent`），**Lua 侧只有 `ShowNameplates`/`HideNameplates`/`ShowFriendNameplates`/`HideFriendNameplates`
@@ -309,6 +323,11 @@
   判据 = `tmp/ehdmg_harness.js` ⑩ 组（关后 `addText` 被拒 / 节拍 nil / 事件摘除 / 再开全恢复）。
 - ★★★**记忆体分离**（宿主契约 ②）：本插件**只**读写 `EH_DAMAGE_CFG`；文件里**一个字都不许提**
   `EVAL_HELP_CONFIG` / `EVAL_HELP_CHAR`（`tmp/ehdmg_wiring_check.js` 有钉）。
+- ★★**聊天播报前缀 = 插件目录名（0.2.44；用户：「插件载入信息换成插件目录名」）**：`say()`（**全插件唯一**拼前缀的地方）
+  用文件头常量 **`local ADDON_NAME = "EH_Damage"`** ⇒ 说话就是 `|cffff6666[EH_Damage]|r …`，与子插件 EH_DPS 的 `[EH_DPS]`
+  **同一口径**（聊天里一眼看出是哪个插件目录；截图里旧的两条载入行前缀一个中文名、一个目录名，混着看很乱）。
+  ★**改目录名要三处一起改**：目录名 / `EH_Damage.toc` / `ADDON_NAME`。★**反向钉**：旧写法把中文前缀**硬写在 `say` 里**，
+  全文件已无该字面量 ⇒ 不许再写回来。★**中文名（面板标题 / `## Title` / README）是「给人看的名字」**，与聊天前缀是两件事，别一起改。
 - ★★★**资源独立性（0.2.x 全仓审计定案）**：本插件**零外部插件资源依赖** —— 引用的全部是**客户端内建资源**
   （`Interface\Buttons\WHITE8X8` · 客户端 Fonts 目录 · Fonts.xml 分档字体对象 · `GetSpellTexture` 图标库 ·
   `GameFontNormalSmall` 模板），**对宿主插件路径与 `EVAL_HELP_*` 全局零引用**。★判据：客户端内建资源**不复制**

@@ -35,10 +35,34 @@
 | EH_Bag | 背包 `15785973` | `EH_Bag` | `EH_Bag v{sub} 发布（整合背包）` | `bank.png` / bank·info |
 
 - 占位符：`{ver}` 主插件版本 · `{sub}` 本条帖第一个子插件版本 · `{names}` 插件名列表。
-- ★★**两条守卫（缺一个就会漏发/重发）**：**有插件没被任何帖认领**、或**被两条帖重复认领** ⇒ `main()` 里**直接 exit 2 拒发**（新增子插件时**必须同步 `posts[]`**，拒发就是提醒）。
+- ★★**两条守卫（缺一个就会漏发/重发）**：**有插件没被任何帖认领**、或**被两条帖重复认领** ⇒ `main()` 里**直接 exit 2 拒发**（新增子插件时**必须同步 `posts[]`**，拒发就是提醒）—— ★**已分级（2026-10-10）**：**要发的**插件没被认领才拒发；**本版没变化的**没被认领 ⇒ 只如实点一句「一旦有变化就无处可发」。
 - 单插件帖的卡片版本行走 `**插件**：<名> <版本>`（`buildCard` 里 `!main && plugins.length` 分支）；含主插件的帖才用 `**版本**：EvalHelp …` + `**子插件**：…`。
-- ★子插件**本版无改动**时也要发（用户定「将子插件都发布」）⇒ `notes/<版本>.md` 里该插件的段落写「**本版随 EvalHelp vX.Y.Z 一同发布，插件本身无改动**」+ 一句「这插件是干什么的」（照该插件自己的 `README.md` 首段写）。
+- ★★★**无版本变化的帖不发**（用户 2026-10-10 定：「**kook 子插件发布规范. 将无版本变化的子插件无需发布到 kook**」）—— 判据 = **某条帖的插件全部与「上一次发布」同版本 ⇒ 这条帖不发**（频道里不留「本版无改动」的水帖）：
+  · **基线取值**：`kook/state/releases.json` 里**版本号 ≠ 本版**的最新一条（按**版本号**比大小，不靠时间戳；老记录没有 `plugins` 映射 ⇒ 从 `threads[].files` 的 `<名>-v<版本>.zip` 现推）。唯一实现 = `planPosts()` · `publishBaseline()` · `recordPlugins()` · `verCmp()`。
+  · ★★★**判不出就发**（没有历史记录 / 基线里没有这个插件 ⇒ 视为有变化）—— 少发一次玩家就永远看不到；**这条 fail-open 的方向不许反**。
+  · ★★**同一版本重跑 = 只补没发成的帖**：本版记录已存在时按 `threads[].post`（已发过 ⇒ 不重复发，日志点名 thread id）与 `skipped[]`（上次判定无变化 ⇒ 继续跳过）分流，其余（**上次没发成**）一律补发；本版记录里某插件**又升了版** ⇒ 照旧发。**整版重发** = 先 `--thread-delete` 删掉那些帖 + `--all-posts`。
+  · **记账必须落全**：`rel[版本] = { at, channel_id, plugins{全部插件现读版本}, baseline, threads[], skipped[] }` —— `plugins` **含被跳过的**（下次比版本 + 重跑判定都靠它）。
+  · **强制全发** = `--all-posts`（别名 `--no-skip`）或 `config.json` 的 `skip_unchanged_posts: false`。
+  · **缺包守卫不变**：被跳过的子插件**仍要求包在打包目录里**（发布页那份 `2 + 2×N` 附件照旧要全）。
+  · ★★★**这条闸门只在「统一推送」时跑 —— release 期间不跑**（用户 2026-10-10 定：「**release 不跑 ./tmp 测试**」）：发布第 10 步的判据 = **产品自己的只读/演练命令**（`kook_publish.js --check` · 不带 `--send` 的 dry-run 看判定块 · 收尾 `--dup-audit`），`tmp/` 那批（本脚本与各模块 harness 等）**不列入发布步骤**。
+  · 判据 = **`node tmp/kook_skip_check.js`**（**真跑产品 dry-run 六个场景**：基线里两个变了 ⇒ 发 2/跳 3 · `--all-posts` ⇒ 发 5/跳 0 · `skip_unchanged_posts:false` ⇒ 发 5/跳 0 · 同版重跑 ⇒ 只补没发成的 · 同版已全部处理完 ⇒ 一条不发且 exit 0 · 未认领分级两条）⇒ 判据 = **`KOOK SKIP CHECK OK`**（★脚本自己先备份，`finally` 里**逐字节还原** `releases.json` / `config.json`）。
+  · ⏳**遗留写法**：`notes/<版本>.md` 里「本版随 EvalHelp vX.Y.Z 一同发布，插件本身无改动」这类段落**今后只写给被跳过的插件以外的内容**（被跳过的帖根本不发 ⇒ 那段没人看得到）；1.75.110/1.75.111 那两份是历史留档。
 - 删掉 `posts[]` ⇒ 退化成「一条帖装全部」（分区取顶层 `category_id`）。
+
+## 二·补、重复版本查重（`--thread-list` / `--dup-audit` / `--dup-prune`）
+
+用户 2026-10-10 定：「**排查 kook 内存在的重复版本的子插件，保留最新的**」⇒ 规则 = **同一插件 + 同一版本**的帖**只留最新创建的那一条**，其余删（**不同版本不算重复**；标题认不出我们模板的帖**一个字节都不动**，只如实列出）。
+
+- **命令**（唯一实现 `doThreadAudit()`；`--thread-list` 与 `--dup-audit` 是**同一条只读路径**，`--dup-prune` 才删且**必须 `--send`**）：
+  `cmd /c "node kook\kook_publish.js --dup-audit"`（只读：帖子列表 + 查重 + 打印「保留哪条 / 待删哪条」）→ 确认后 `--dup-prune --send`（**不可恢复**）。
+  ★**先跑不带 `--send` 的 `--dup-prune` 看清单**，两次清单必须逐条相同（dry-run 与真删共用同一份判定）。
+- ★**保留口径 = `create_time` 最大者**（同毫秒再用雪花 id 兜底）—— 不看 `status` / 回复数 / `latest_active_time`（回复活动会把「哪条更新」带偏）。
+- ★★**删完只给记账加标记、不删记录**：`releases.json` 对应 thread 补 `deleted: true` / `deleted_at`（`markThreadsDeleted()`）⇒ ① 保留「哪一版发过什么」；② `recordPlugins()` 仍能把该版本的插件版本当基线（**删记录会让下一次比版本失去基准**）。
+- ★**同插件不同版本不是重复**（例：EH_Damage `0.2.36` 与 `0.2.43`）⇒ 保持现状；脚本会在输出里**如实点出**这类旧帖（「一版只留一条」是另一条口径，要用户点头）。
+- **实测事实（2026-10-10 首次真机）**：`GET /api/v3/thread/list?channel_id=<id>&sort=2` ⇒ **HTTP 200**，桶 `thread/list`，返回 **`{items:[…]}`**；条目键 = `id,status,title,cover,post_id,medias,preview_content,user,category,tags,latest_active_time,create_time,is_updated,content_deleted,content_deleted_type,collect_num,post_count`；**一次拿全、本次无翻页**（10 条一条不少）；`sort=2` = 最新创建在前。★**首跑必须打印原始键**（脚本已内置 `thread/list 原始键 … ｜ 首条键 …`）—— 该端点是**文档抄录、此前从未实测**，字段名一变解析就静默拿到空数组（脚本对空数组**直接报错**，不假装「没有重复」）。
+- **判据** = `--dup-audit` 输出 **`✅ 没有发现「同一插件 + 同一版本」的重复帖`** 且 **退出码 0**（发现重复 ⇒ 逐组列出 + **exit 1**，可直接当收尾闸门用；★三个命令的退出码分工：`--thread-list` 纯列出**恒 0** · `--dup-audit` 有重复 **1** · `--dup-prune` 不带 `--send` **2**（写操作要显式授权））。**清理后必须再跑一次列表复核**（不许只看 `thread/delete` 返回 `{}` 就算完）。
+- ✅**首次清理（2026-10-10）**：频道原 **10 条**（v1.75.110 ×5 + v1.75.111 ×5）⇒ **4 组重复**（`EH_Damage 0.2.36` · `EH_DPS 0.2.5` · `EH_DebugBox 0.4.0` · `EH_Bag 0.3.42`，各 2 条）⇒ **删 v1.75.110 的 4 条子插件帖、保留 v1.75.111 那 4 条**；**主插件 1.75.110 与 1.75.111 版本不同 ⇒ 两条都留**。清理后现役 **6 条**（列表复核 = 5 条 v1.75.111 + 1 条 v1.75.110 主插件）。
+- ★**与 §二「无版本变化的帖不发」的分工**：那条**只防将来产生重复**（版本没变的子插件今后不再发帖）；本节负责**清历史重复**与**重跑造成的重复**（`--all-posts` 重跑同版本 = 明知故犯的重复，靠本节收）。
 
 ## 三、附件模式 = **link**（★用户 2026-10-09 定，别再改回上传）
 
@@ -95,10 +119,14 @@ cmd /c "node kook\kook_publish.js --print-card"      # 另看卡片 JSON
 cmd /c "node kook\kook_publish.js --send"
 # 5) 复核
 cmd /c "node kook\kook_publish.js --thread-view <帖子id>"
+# 6) 频道查重（只读）：同一插件 + 同一版本的重复帖 ⇒ 只留最新创建的那条（§二·补）
+cmd /c "node kook\kook_publish.js --dup-audit"                 # 帖子列表 + 查重结论（= --thread-list）
+cmd /c "node kook\kook_publish.js --dup-prune"                 # 只看「待删清单」（不发请求）
+cmd /c "node kook\kook_publish.js --dup-prune --send"          # 真删（不可恢复；清单须与上一条逐条相同）
 ```
 
 - ★本机沙箱怪癖：PowerShell 直接 `node kook\kook_publish.js` 会被拒（`node.exe … Access is denied`）⇒ **一律 `cmd /c "node …"`**；长任务/大输出**重定向到文件再读**（`cmd /c` 的输出直接接 `| Select-Object` 也会被拒）。
-- 路径/参数：`--dir <目录>`（包目录）· `--files a,b`（手工指定，跳过 toc 核对）· `--attach link|file` · `--mode card|file`（文字频道发法）· `--notes <文件>` / `--notes-auto` / `--no-notes` · `--json`。
+- 路径/参数：`--dir <目录>`（包目录）· `--files a,b`（手工指定，跳过 toc 核对）· `--attach link|file` · `--mode card|file`（文字频道发法）· `--notes <文件>` / `--notes-auto` / `--no-notes` · **`--all-posts`**（别名 `--no-skip`：**本版全部帖照发**，忽略「无版本变化不发」）· `--json`。
 - 外部前置脚本：`tmp/pack_main.ps1 -Out <目录>`（主插件，版本现读 toc，自检 48 模块全在包内 + media 计数互比）· `tmp/pack_subaddons.ps1 -Out <目录>`（子插件）· 只读探针 `tmp/kook_probe_limit.js`（体积上限）· `tmp/kook_fetch_release_assets.js`（从 GitHub Release 取**官方那份**资产并按 `digest` 校验 sha256）。
 
 ## 八、安全与配额（别把机器人玩坏）
@@ -178,7 +206,11 @@ cmd /c "node kook\kook_guide.js --plan"
 
   · 频道 https://www.kookapp.cn/app/channels/7071527711947717/5336773639081280 ；发布日志 = `tmp/s5.txt`。
   · ★**前两轮的两对帖都已 `thread/delete` 删除**（先是无封面版 `146705388144689920`/`146705396080313344`，再是「主插件+战斗类」汇总版 `146705650305466624`/`146705664968754176`）—— 用户每次改口径都**删旧发新**，频道里不留同版重复帖。
-  · 清理/复核 = `--thread-delete <id> --send` / `--thread-view <id>`。
+  · ★★**2026-10-10 更新：本版那 4 条子插件帖已删**（与 v1.75.111 的**同版本**重复，见 §二·补）—— **只有主插件帖 `146705925250482432` 保留**。上表 4 条子插件的 `thread_id` **已成历史**（`releases.json` 里对应记录标了 `deleted: true`）。
+  · 清理/复核 = `--thread-delete <id> --send` / `--thread-view <id>` / **`--dup-audit`（查重，只读）**。
+- ✅ **2026-10-09 v1.75.111 已发（5 条帖，含封面 + 配图）** —— 帖 id 与包名全在 `kook/state/releases.json` 的 `1.75.111.threads`（主插件 `146760554164257280` · EH_Damage `146760568223564800` · EH_DPS `146760580001169664` · EH_DebugBox `146760591963324672` · EH_Bag `146760604093252352`）。
+- ✅ **2026-10-10 重复版本清理完成（§二·补）** —— 频道原 10 条 ⇒ 删掉 v1.75.110 的 4 条**重复**子插件帖（EH_Damage / EH_DPS / EH_DebugBox / EH_Bag，与 v1.75.111 同版本）⇒ **现役 6 条**（v1.75.111 ×5 + v1.75.110 主插件帖）；`--dup-audit` 复核 = **`✅ 没有发现「同一插件 + 同一版本」的重复帖`**。工具 = `--thread-list` / `--dup-audit` / `--dup-prune --send`（`thread/list` 端点**首次真机实测**：200 · `{items:[…]}` · 一次拿全 10 条）。
+- ✅ **2026-10-10 发布规范升级：无版本变化的帖不发（§二）** —— 脚本 + `config.json` 开关 + `--all-posts` + 离线闸门 `tmp/kook_skip_check.js`（**六场景 22 条全绿**）+ 本节与 `README.md`/`04` 文档同步；**真实状态演练**（v1.75.112：EvalHelp `1.75.111→1.75.112`、EH_Damage `0.2.36→0.2.43` 有变化，EH_DPS/EH_DebugBox/EH_Bag 未变）⇒ 判定块打印 **发 2 条帖 / 跳过 3 条**。★`releases.json` 里 v1.75.110/111 两条**老记录没有 `plugins` 映射** ⇒ 由 `threads[].files` 现推（回归兼容**已实测**）。
 - ⏳ **未验证**：帖子主楼对**超长文案**的截断阈值（当前卡在 `notes_max_chars`，v1.75.110 实测 10 行无恙）· Gitee 直链是否需要验证码（网页下载弹「请输入验证码，防止盗链」**仅对浏览器**；`/releases/download/…` 直链是否受限未实测 —— ★发布后建议让用户点一次 Gitee 链接确认）· 帖子主楼的**下载链接是否可点**（卡片 `kmarkdown` 的 `[文字](url)` 在帖子主楼里的渲染未亲眼确认）· **封面在客户端列表里的裁切效果**（KOOK 客户端什么样未亲眼确认；`thread/view` 只能证明 `cover` 字段非空）。
 - 未决：`kook/02-待实测清单.md` 里的 T1（频道事件投递范围）与其后各项仍属「官方未文档化、未实测」。
 - ✅ **2026-10-09 自动化引导已上线（§九）**：公告已发并置顶（`msg_id=badb147b-4175-4d7f-acbd-9bcfaad4c9af`，频道「公告与通知」；**含第 ⑤ 段「建议会被自动汇总进优化队列」**，修辞版）· 优化队列已建（`kook/queue/`，当前 0 条 —— 该频道本来就空）· **WebSocket 事件管道实测通**（收到 `pinned_message`）· 常驻入口 `kook/start_guide.cmd`。

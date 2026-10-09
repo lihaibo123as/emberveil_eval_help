@@ -176,13 +176,21 @@ if (require.main === module) {
        //   `tools/LayerFix.lua`（本轮给它加「节拍唯一入口 + 分帧深挖」时踩了 R2 前向声明的坑）
        //   `tools/DragFrames.lua`（6000+ 行、前向声明最多的一族 —— 静默雷风险最高）
        'tools/LayerFix.lua', 'tools/DragFrames.lua',
+       // ★1.75.113 补：`tools/TargetHealth.lua`（本轮新建）—— 它自己是「前向声明 + 定义处赋值」的写法
+       //   （`thSync/thPaint/thTick/thEnsure/thApply` 五个在顶部声明），正是本闸门存在的理由
+       //   ⇒ 建模块当轮就加进清单，别重犯 LootCursor 那次「漏在清单外」的欠账。
+       'tools/TargetHealth.lua',
        // ★子插件也纳入：EH_Bag（1.75.x 新建）两个文件 —— 跨 chunk 共用口全挂 B 表，
        //   本文件的「先引用后声明」错在子插件里同样是**静默**的（pcall 一包就什么都不报）。
        'addons/EH_Bag/EH_Bag.lua', 'addons/EH_Bag/EH_BagSort.lua',
        // ★EH_Damage（增强伤害显示子插件）：同样全是 pcall 包裹的事件处理器 ⇒ 静默雷必须静态扫
        'addons/EH_Damage/EH_Damage.lua',
        // ★EH_DPS（个人伤害统计子插件）：同上，事件处理器全 pcall ⇒ 静默雷必须静态扫
-       'addons/EH_DPS/EH_DPS.lua'];
+       'addons/EH_DPS/EH_DPS.lua',
+       // ★EH_Mail（邮箱 API 体检子插件，1.75.112 建）：节拍三件套
+       //   （tickFrame/tickOn/reloadAt + onTick/tickSync）全是「前向声明 + 定义处赋值」写法，
+       //   声明顺序写错在真机上就是 `attempt to call global 'tickSync' (a nil value)`。
+       'addons/EH_Mail/EH_Mail.lua'];
   let total = 0;
   for (const f of files) {
     const bad = scan(fs.readFileSync(f, 'utf8'));

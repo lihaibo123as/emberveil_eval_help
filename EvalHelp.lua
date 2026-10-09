@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.75.112"
+local VERSION = "1.75.115"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -10737,6 +10737,10 @@ if type(SlashCmdList) == "table" then
     --   "go 拾取" = 3 + 6 = **9 字节**（string.sub 按字节；两个汉字各 3 字节 —— 1.75.5 在「go 喂食」上正是栽在这）。
     elseif string.sub(msg, 1, 9) == "go 拾取" then
       if type(EVAL_LC_CMD) == "function" then pcall(EVAL_LC_CMD, msg) else say("拾取贴手未载入：tools\\LootCursor.lua 不在 toc 里") end
+    -- ★1.75.113 目标生命值显示（tools/TargetHealth.lua）：/eh go 目标血量 [开|关|探针|存档|位置|清]
+    --   "go 目标血量" = 3 + **12** = 15 字节（string.sub 按字节；「目标血量」四个汉字各 3 字节）
+    elseif string.sub(msg, 1, 15) == "go 目标血量" then
+      if type(EVAL_TH_CMD) == "function" then pcall(EVAL_TH_CMD, msg) else say("目标生命值显示未载入：tools\\TargetHealth.lua 不在 toc 里") end
     elseif string.sub(msg, 1, 9) == "go 稀有" then
       if type(EVAL_RW_CMD) == "function" then
         EVAL_RW_CMD(msg)
@@ -11300,6 +11304,8 @@ if type(SlashCmdList) == "table" then
       fsay("　把拾取窗搬到光标底下：开窗贴一次，之后**每点一件立刻换到下一件**（不等拾取回话）；跟随/品质角标在工具箱 [设置] 里")
       fsay("装备比较: /eh go 装备比较（状态 + API 体检）｜ 装备比较 开 ｜ 装备比较 关 ｜ 装备比较 测")
       fsay("　悬停装备类物品时旁边并排显示已装备的同部位物品（双戒指/双饰品各一格）；工具箱「UI 工具」里勾选启用")
+      fsay("目标生命值显示: /eh go 目标血量（状态）｜ 目标血量 开 ｜ 目标血量 关 ｜ 目标血量 探针 ｜ 目标血量 存档 ｜ 目标血量 位置")
+      fsay("　客户端对敌对目标只给百分比 ⇒ 用插件自带的**本服生物生命值库**复算上限，目标框下方显示「名字 · 当前 / 上限 (百分比)」；查不到只显示百分比（灰条），绝不编数字")
     else
       EVAL_HELP()
     end
@@ -11628,6 +11634,9 @@ init:SetScript("OnEvent", function(a, b)
     -- ★1.75.26 拾取贴手（tools/LootCursor.lua）：开关真值 = `tbCfg().lootCursor` ⇒ **必须在这里**读
     --   （SavedVariables 要等 VARIABLES_LOADED）；关着一个事件都不注册、一个 OnUpdate 都不挂。
     if type(EVAL_LC_INSTALL) == "function" then pcall(EVAL_LC_INSTALL) end
+    -- ★1.75.113 目标生命值显示（tools/TargetHealth.lua）：开关真值 = `tbCfg().targetHealth` ⇒ **必须在这里**读
+    --   （SavedVariables 要等 VARIABLES_LOADED）；默认关 ⇒ 载入期不建帧、不注册事件、不挂节拍（零副作用）。
+    if type(EVAL_TH_INSTALL) == "function" then pcall(EVAL_TH_INSTALL) end
     -- ★1.75.40 顶部信息条（tools/InfoBar.lua，移植自 SimpleInfoBar/MIT）：开关真值 = `tbCfg().infoBar`
     --   ⇒ **必须在这里**读（SavedVariables 要等 VARIABLES_LOADED）；关着 = 不建帧、不注册事件、不挂节拍。
     if type(EVAL_IB_INSTALL) == "function" then pcall(EVAL_IB_INSTALL) end

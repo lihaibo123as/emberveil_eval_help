@@ -21,8 +21,14 @@
  *   node kook/kook_publish.js --send --mode file   # 备选通道：每个包一条文件消息
  *
  * 参数：--dir <打包产物目录> | --files a.zip,b.zip | --assets versioned|both | --version <v>
- *       --title <标题> | --notes <文案文件> | --notes-auto | --no-notes
+ *       --title <标题> | --notes <文案文件> | --notes-auto | --no-notes | --all-posts
  *       --guild <id> | --channel <id> | --token-file <路径> | --min-interval <ms> | --json | --print-card
+ *
+ * 只发「版本有变化」的帖（用户 2026-10-10 定：「kook 子插件发布规范. 将无版本变化的子插件无需发布到 kook」）：
+ *   基线 = kook/state/releases.json 里**版本号 ≠ 当前主版本**的最新一条 ⇒ 那次发布时各插件的版本；
+ *   某条帖的插件**全部与基线同版本** ⇒ 这条帖**不发**（频道里不留「本版无改动」的水帖）。
+ *   ★判不出就发（没有历史记录 / 基线里没这个插件）；★同一版本重跑 ⇒ **只补没发成的帖**；
+ *   ★强制全发 = `--all-posts`，或把 config.json 的 `skip_unchanged_posts` 设为 false。
  *
  * 更新文案（用户 2026-10-09 定：「需要总结，不要做版本流水账」）：
  *   ① kook/notes/<版本>.md  —— 首选：人/AI 写好的对外总结（只发这一份内容）
@@ -49,7 +55,8 @@ const API = "https://www.kookapp.cn/api/v3";
 // ───────────────────────────── CLI ─────────────────────────────
 function parseArgs(argv) {
   const o = { mode: "card", assets: "versioned", send: false, check: false, json: false,
-              notes: null, notesAuto: false, minInterval: 400, files: null, dir: null, version: null, title: null, printCard: false };
+              notes: null, notesAuto: false, minInterval: 400, files: null, dir: null, version: null, title: null,
+              printCard: false, allPosts: false, noSkip: false };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
@@ -59,8 +66,13 @@ function parseArgs(argv) {
       case "--dry-run":     o.send = false; break;
       case "--json":        o.json = true; break;
       case "--print-card":  o.printCard = true; break;
+      case "--all-posts":   o.allPosts = true; break;               // 忽略「版本没变就跳过」，全部帖照发
+      case "--no-skip":     o.allPosts = true; break;               // 同上（别名，说人话）
       case "--thread-view": o.threadView = next(); break;      // 回读帖子（验 status/分区/媒体）
       case "--thread-delete": o.threadDelete = next(); break;  // 删帖（必须同时给 --send）
+      case "--thread-list": o.threadList = true; break;        // 只读：列出频道里的帖子（thread/list 首次实测）
+      case "--dup-audit":   o.dupAudit = true; break;          // 只读：同一插件 + 同一版本重复的帖（保留最新）
+      case "--dup-prune":   o.dupPrune = true; break;          // 删重复（必须同时给 --send）
       case "--mode":        o.mode = next(); break;                 // card | file（文字频道的发法）
       case "--attach":      o.attach = next(); break;                // link（默认，只放链接）| file（上传附件）
       case "--assets":      o.assets = next(); break;               // versioned | both
@@ -106,6 +118,7 @@ function loadConfig() {
     links: {},
     changelog_file: "CHANGELOG.md",
     notes_max_chars: 900,
+    skip_unchanged_posts: true,      // 无版本变化的帖不发（--all-posts 可临时关掉）
   }, cfg);
   if (args.guild) merged.guild_id = args.guild;
   if (args.channel) merged.channel_id = args.channel;
@@ -239,6 +252,141 @@ function resolvePosts(cfg, ver, files) {
   const unassigned = all.filter(p => !count[p.name]).map(p => p.name);
   const dup = Object.keys(count).filter(n => count[n] > 1);
   return { posts, unassigned, dup, all };
+}
+
+// ───────── 只发「版本有变化」的帖（用户 2026-10-10 定：「将无版本变化的子插件无需发布到 kook」） ─────────
+// 判据 = 本版各插件的 `.toc` 现读版本 vs **上一次发布**时那份版本：
+//   · 基线 = `kook/state/releases.json` 里**版本号 ≠ 当前主版本**的最新一条（按版本号比大小，不靠时间戳）；
+//   · 老记录没有 `plugins` 映射 ⇒ 从 `threads[].files` 的 `<名>-v<版本>.zip` 现推（1.75.110/111 就是这么记的）。
+// ★★★ 两条 fail-open / 保命口径（方向不许反）：
+//   ① **判不出就发**（没有历史记录 / 基线里没有这个插件 ⇒ 视为有变化）—— 少发一次，玩家就永远看不到；
+//   ② **同一版本重跑** ⇒ 只补「上次没发成」的帖（已发过的按记录跳过、上次判定为「无变化」的继续跳过），
+//      既不会把漏发的帖吞掉，也不会重复发已经发过的帖；中途把某子插件升了版 ⇒ 它照旧发（对比本版记录）。
+function verCmp(a, b) {
+  const pa = String(a).split(".").map(n => parseInt(n, 10) || 0);
+  const pb = String(b).split(".").map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
+function releasesPath() { return path.join(__dirname, "state", "releases.json"); }
+
+function loadReleases() {
+  const p = releasesPath();
+  if (!fs.existsSync(p)) return {};
+  try { return JSON.parse(fs.readFileSync(p, "utf8")) || {}; } catch { return {}; }
+}
+
+// 一条发布记录里的「插件名 → 版本」：优先显式 plugins 映射，老记录从包名现推
+function recordPlugins(rec) {
+  const out = {};
+  if (rec && rec.plugins && typeof rec.plugins === "object") {
+    for (const k of Object.keys(rec.plugins)) out[k] = String(rec.plugins[k]);
+  }
+  for (const t of ((rec && rec.threads) || [])) {
+    for (const f of (t.files || [])) {
+      const m = String(f).match(/^(.+?)-v(.+)\.zip$/i);
+      if (m && !out[m[1]]) out[m[1]] = m[2];
+    }
+  }
+  return out;
+}
+
+// 基线 = releases.json 里版本号 ≠ 当前主版本的最新一条
+function publishBaseline(rel, currentVer) {
+  const keys = Object.keys(rel).filter(k => k !== currentVer);
+  if (!keys.length) return { ver: null, plugins: {} };
+  keys.sort((a, b) => verCmp(b, a));
+  const ver = keys[0];
+  return { ver, plugins: recordPlugins(rel[ver]) };
+}
+
+// 本版各插件的现读版本（含被跳过的 ⇒ 记账要落全，下一次比版本才有基准）
+function currentPlugins(ver) {
+  const out = { EvalHelp: ver.mainVer };
+  for (const s of ver.subs) out[s.name] = s.version;
+  return out;
+}
+
+// 就地改 postsInfo：只留要发的帖，并把判定过程挂上去（printPlan / doSend / --json / 记账都读它）
+function planPosts(cfg, ver, postsInfo) {
+  const rel = loadReleases();
+  const curRec = rel[ver.mainVer] || null;                 // 本版是否已经发过一部分（重跑）
+  const base = publishBaseline(rel, ver.mainVer);
+  const now = currentPlugins(ver);
+  const curPlugins = curRec ? recordPlugins(curRec) : {};
+
+  const enabled = !args.allPosts && cfg.skip_unchanged_posts !== false;
+  const sentNames = new Set(((curRec && curRec.threads) || []).map(t => t.post));
+  const sentIds = {};
+  for (const t of ((curRec && curRec.threads) || [])) sentIds[t.post] = t.id;
+  const skipNames = new Set((curRec && curRec.skipped) || []);
+
+  // 逐插件：相对基线变了没（显示用）· 相对本版记录变了没（重跑补发判据）
+  const rows = [], rowOf = {};
+  for (const name of Object.keys(now)) {
+    const role = name === "EvalHelp" ? "主插件" : "子插件";
+    const b = base.plugins[name], c = curPlugins[name];
+    const changed = (b === undefined) || verCmp(now[name], b) !== 0;
+    const changedNow = (c === undefined) || verCmp(now[name], c) !== 0;
+    let why;
+    if (b === undefined) why = base.ver ? `基线 v${base.ver} 里没有它（新增 / 首次记录）⇒ 有变化` : "没有历史发布记录 ⇒ 有变化（fail-open）";
+    else if (changed) why = `v${base.ver} 的 ${b} → ${now[name]} ⇒ 有变化`;
+    else why = `与 v${base.ver} 的 ${b} 相同 ⇒ 无变化`;
+    if (curRec) why += changedNow ? `（本版记录 ${c === undefined ? "无" : c} ⇒ 仍需发）` : `（本版记录 ${c} = 现版）`;
+    if (!enabled) why = "全部发（未启用「按版本变化过滤」）";
+    const row = { name, role, now: now[name], base: b || null, changed, changedNow, why };
+    rows.push(row); rowOf[name] = row;
+  }
+
+  const kept = [], keptWhy = [], skipped = [];
+  for (const p of postsInfo.posts) {
+    const names = p.plugins.map(x => x.name);
+    const anyChanged = names.some(n => rowOf[n] && rowOf[n].changed);
+    let skip = false, why;
+    if (!enabled) {
+      why = "全部发（--all-posts / skip_unchanged_posts=false）";
+    } else if (curRec) {
+      if (sentNames.has(p.name)) {
+        skip = true;
+        why = `v${ver.mainVer} 已发过这条帖（id=${sentIds[p.name] || "?"}）⇒ 不重复发；要重发就先在频道里删掉它再加 --all-posts`;
+      } else if (skipNames.has(p.name) && !names.some(n => rowOf[n] && rowOf[n].changedNow)) {
+        skip = true; why = `v${ver.mainVer} 上次判定「无变化」⇒ 继续跳过`;
+      } else {
+        why = `v${ver.mainVer} 上次没发成 ⇒ 本次补发`;
+      }
+    } else if (!anyChanged) {
+      skip = true;
+      why = "本条帖的插件版本与上次发布全部相同";
+    } else {
+      const ch = names.filter(n => rowOf[n] && rowOf[n].changed).map(n => `${n} ${rowOf[n].base}→${rowOf[n].now}`);
+      why = `有变化：${ch.join(" · ")}`;
+    }
+    if (!p.files.length) { skip = true; why = (why ? why + "；" : "") + "这条帖没有任何包（检查打包目录）"; }
+    if (skip) skipped.push({ name: p.name, title: p.title, plugins: p.plugins, why });
+    else { kept.push(p); keptWhy.push({ name: p.name, why }); }
+  }
+
+  // 未认领的插件：**变了**（或本次不过滤）⇒ 必须拒发；**没变** ⇒ 本版本来就不发，只算配置欠账
+  const rowChanged = (n) => !rowOf[n] || rowOf[n].changed;
+  const unassignedBlocking = enabled ? postsInfo.unassigned.filter(rowChanged) : postsInfo.unassigned.slice();
+  const unassignedIdle = enabled ? postsInfo.unassigned.filter(n => !rowChanged(n)) : [];
+
+  postsInfo.posts = kept;
+  postsInfo.skipped = skipped;
+  postsInfo.kept = keptWhy;
+  postsInfo.unassignedBlocking = unassignedBlocking;
+  postsInfo.unassignedIdle = unassignedIdle;
+  postsInfo.rows = rows;
+  postsInfo.skipEnabled = enabled;
+  postsInfo.baselineVer = base.ver;
+  postsInfo.rerun = !!curRec;
+  postsInfo.pluginsNow = now;
+  if (!enabled) say("ℹ 本次不按版本变化过滤（全部帖都发）。");
+  return postsInfo;
 }
 
 // ───────────────────────── 更新文案（总结制，不是流水账） ─────────────────────────
@@ -539,6 +687,23 @@ function pickPreview(cfg, post) {
 }
 
 // ───────────────────────────── 主流程 ─────────────────────────────
+// 版本变化判定那块（dry-run、真发、以及「本次没有要发的帖」三处共用一份输出）
+function printChangePlan(cfg, ver, postsInfo) {
+  if (!postsInfo.rows) return;
+  say("");
+  say(`── 版本变化判定（规则：无版本变化的帖不发 · skip_unchanged_posts=${cfg.skip_unchanged_posts === false ? "false" : "true"}`
+      + (args.allPosts ? " · 命令行 --all-posts ⇒ 本次全部发" : "") + "）──");
+  if (!postsInfo.skipEnabled) say("  本次不过滤（全部帖都发）。");
+  else if (postsInfo.rerun) say(`  v${ver.mainVer} 已经发过一部分 ⇒ 本次只**补齐没发成的帖**（已发过的不重复发；要整版重发先删帖 + --all-posts）`);
+  else if (postsInfo.baselineVer) say(`  基线 = 上一次发布 v${postsInfo.baselineVer}（kook/state/releases.json 里版本号 ≠ 本版的最新一条）`);
+  else say("  没有历史发布记录 ⇒ 本次全部发（判不出就发 = fail-open）");
+  for (const r of postsInfo.rows) say(`  · ${String(r.name).padEnd(11)} 现读 ${String(r.now).padEnd(8)} ${r.why}`);
+  say(`  ⇒ 发 ${postsInfo.posts.length} 条帖` +
+      (postsInfo.skipped.length ? ` ／ 跳过 ${postsInfo.skipped.length} 条：${postsInfo.skipped.map(s => s.name).join(" · ")}` : ""));
+  if (postsInfo.skipEnabled) for (const k of (postsInfo.kept || [])) say(`     发【${k.name}】：${k.why}`);
+  for (const s of postsInfo.skipped) say(`     跳过【${s.name}】：${s.why}`);
+}
+
 function printPlan(cfg, ver, assets, postsInfo, notesInfo) {
   const { posts } = postsInfo;
   say("── 发布计划（dry-run，未发送任何请求） ─────────────────────────");
@@ -546,6 +711,8 @@ function printPlan(cfg, ver, assets, postsInfo, notesInfo) {
   say(`频道链接: https://www.kookapp.cn/app/channels/${cfg.guild_id}/${cfg.channel_id}`);
   say(`产物目录: ${assets.dir}`);
   say(`版本    : EvalHelp ${ver.mainVer}` + (ver.subs.length ? " + " + ver.subs.map(s => `${s.name} ${s.version}`).join(", ") : ""));
+  printChangePlan(cfg, ver, postsInfo);
+  say("");
   say(`拆成 ${posts.length} 条帖（按插件分类进各自分区）：`);
   posts.forEach((p, i) => {
     say("");
@@ -561,7 +728,8 @@ function printPlan(cfg, ver, assets, postsInfo, notesInfo) {
   });
   if (postsInfo.unassigned.length) {
     say("");
-    say(`⚠ 这些插件没有被任何一条帖认领（它们的包不会发出去）：${postsInfo.unassigned.join(", ")}`);
+    if (postsInfo.unassignedBlocking.length) say(`⚠ 这些插件没有被任何一条帖认领（它们的包不会发出去）：${postsInfo.unassignedBlocking.join(", ")}`);
+    if (postsInfo.unassignedIdle.length) say(`ℹ 这些插件本版没有版本变化、也没被任何帖认领 ⇒ 本版不发；但它们一旦有变化就无处可发，请补 config.json 的 posts[]：${postsInfo.unassignedIdle.join(", ")}`);
   }
   if (postsInfo.dup.length) say(`⚠ 这些插件被多条帖重复认领：${postsInfo.dup.join(", ")}`);
   if (assets.stale.length) {
@@ -571,7 +739,7 @@ function printPlan(cfg, ver, assets, postsInfo, notesInfo) {
   }
   say("");
   say(`文案来源：${notesInfo.source}`);
-  const firstNotes = notesForPost(notesInfo, posts[0].plugins, true);
+  const firstNotes = posts.length ? notesForPost(notesInfo, posts[0].plugins, true) : null;
   if (firstNotes) { say("帖 1 的概要正文："); say(firstNotes.split("\n").map(l => "  " + l).join("\n")); }
   else say("  （帖 1 也没有概要正文）");
   say("");
@@ -690,6 +858,140 @@ async function doCheck(cfg, token) {
 }
 
 // 发完回读确认 status（实测：创建瞬间可能是 1 审核中，稍后变 2）
+// ───────── 帖子列表 / 版本查重（只读；只有 --dup-prune 会删） ─────────
+// 用户 2026-10-10 定：「排查 kook 内存在的重复版本的子插件，保留最新的」
+// 判据 = **同一插件 + 同一版本**的帖只留**最新创建**的那一条；标题认不出我们模板的帖一律不动（如实列出）。
+// 端点 `GET /thread/list`（文档抄录、此前**从未实测**）⇒ 返回结构做宽容解析，并把原始键打印出来留证。
+function parsePostTitle(title) {
+  const m = String(title || "").match(/^\s*([A-Za-z][\w.\-]*)\s+v(\d[\w.]*)\s*发布/);
+  return m ? { plugin: m[1], version: m[2] } : null;
+}
+
+function fmtTime(ms) {
+  const n = Number(ms);
+  return n ? new Date(n).toLocaleString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" }) : "-";
+}
+
+async function fetchThreads(cfg, token) {
+  const d = await apiFetch("GET", `${API}/thread/list?channel_id=${cfg.channel_id}&sort=2`, { token });
+  const items = Array.isArray(d) ? d : ((d && (d.items || d.list || d.threads)) || []);
+  say(`  thread/list 原始键：${d && typeof d === "object" ? Object.keys(d).join(",") : typeof d} ｜ 解析出 ${items.length} 条` +
+      (items[0] ? ` ｜ 首条键：${Object.keys(items[0]).join(",")}` : ""));
+  return items;
+}
+
+// 每个 id 属于哪个版本记录（便于人核对「待删的这条是哪一版发的」）
+function releaseOf(rel, id) {
+  for (const v of Object.keys(rel)) for (const t of (rel[v].threads || [])) if (String(t.id) === String(id)) return v;
+  return null;
+}
+
+function dupGroups(items, rel) {
+  const by = {};
+  let unknown = 0;
+  for (const it of items) {
+    const k = parsePostTitle(it.title);
+    if (!k) { unknown++; continue; }
+    const g = `${k.plugin}@${k.version}`;
+    (by[g] = by[g] || []).push({
+      id: String(it.id), title: it.title, plugin: k.plugin, version: k.version,
+      status: it.status, ct: Number(it.create_time) || 0,
+      cat: (it.category && it.category.name) || it.category_id || "",
+      rel: releaseOf(rel, it.id),
+    });
+  }
+  const dups = [];
+  for (const g of Object.keys(by)) {
+    // 最新在前：创建时间大的优先，同一毫秒再用雪花 id 兜底（id 单调递增）
+    const arr = by[g].sort((a, b) => b.ct - a.ct || (Number(b.id) - Number(a.id)));
+    if (arr.length > 1) dups.push({ key: g, plugin: arr[0].plugin, version: arr[0].version, keep: arr[0], drop: arr.slice(1) });
+  }
+  return { dups, unknown };
+}
+
+function printThreads(cfg, items) {
+  say(`── 频道里的帖子（共 ${items.length} 条，最新创建在前）──`);
+  items.forEach((it, i) => {
+    const k = parsePostTitle(it.title);
+    say(`  ${String(i + 1).padStart(2)}. [${(it.category && it.category.name) || it.category_id || "综合"}] status=${it.status}` +
+        `  ${fmtTime(it.create_time)}  id=${String(it.id)}  ${it.title}` +
+        (k ? `  〔${k.plugin} ${k.version}〕` : "  〔标题认不出模板 ⇒ 不参与查重〕"));
+  });
+  say(`  频道链接：https://www.kookapp.cn/app/channels/${cfg.guild_id}/${cfg.channel_id}`);
+}
+
+// 删完把记账标成 deleted（**保留记录**：历史与「哪版发过什么」都要留，只加标记）
+function markThreadsDeleted(ids) {
+  const p = releasesPath();
+  if (!fs.existsSync(p)) return 0;
+  let rel = {}, n = 0;
+  try { rel = JSON.parse(fs.readFileSync(p, "utf8")) || {}; } catch { return 0; }
+  for (const v of Object.keys(rel)) for (const t of (rel[v].threads || [])) {
+    if (ids.has(String(t.id)) && !t.deleted) { t.deleted = true; t.deleted_at = Date.now(); n++; }
+  }
+  if (n) fs.writeFileSync(p, JSON.stringify(rel, null, 2), "utf8");
+  return n;
+}
+
+async function doThreadAudit(cfg, token, prune) {
+  const rel = loadReleases();
+  const isAudit = !!args.dupAudit;              // --dup-audit = 闸门（有重复 ⇒ exit 1）；--thread-list = 纯列出（恒 0）
+  say("── 帖子列表 / 版本查重 ────────────────────────────────────");
+  say(`目标频道：${cfg.channel_id}（thread/list，sort=2 最新创建在前）`);
+  const items = await fetchThreads(cfg, token);
+  if (!items.length) throw new Error("thread/list 没返回任何帖子（端点或参数不对 ⇒ 别据此下结论，改用 --thread-view 逐条核）");
+  printThreads(cfg, items);
+
+  const { dups, unknown } = dupGroups(items, rel);
+  say("");
+  say("── 版本查重结果（同一插件 + 同一版本 ⇒ 只留最新创建的那条）──");
+  if (!dups.length) {
+    say("  ✅ 没有发现「同一插件 + 同一版本」的重复帖。");
+  } else {
+    let dropN = 0;
+    for (const g of dups) {
+      say(`  组【${g.plugin} ${g.version}】共 ${g.drop.length + 1} 条：`);
+      say(`     ✔ 保留 id=${g.keep.id}  ${fmtTime(g.keep.ct)}  ${g.keep.rel ? `v${g.keep.rel} 记录` : "无记账"}  status=${g.keep.status}`);
+      for (const d of g.drop) {
+        dropN++;
+        say(`     ✘ 待删 id=${d.id}  ${fmtTime(d.ct)}  ${d.rel ? `v${d.rel} 记录` : "无记账"}  status=${d.status}`);
+      }
+    }
+    say(`  ⇒ 重复组 ${dups.length} 个 / 待删 ${dropN} 条（保留每条的最新一条）。`);
+    // 同插件**不同版本**的旧帖：不是重复，如实列出来（要不要「一版一条」由用户定）
+    const byPlugin = {};
+    for (const it of items) {
+      const k = parsePostTitle(it.title);
+      if (k) (byPlugin[k.plugin] = byPlugin[k.plugin] || new Set()).add(k.version);
+    }
+    const multi = Object.keys(byPlugin).filter(p => byPlugin[p].size > 1);
+    if (multi.length) {
+      say("");
+      say(`  ℹ 另有「同一插件、不同版本」的旧帖（**不算重复**，按本次口径保持现状）：` +
+          multi.map(p => `${p} ${[...byPlugin[p]].sort().join("/")}`).join(" · "));
+    }
+    if (prune) {
+      if (!args.send) { console.error("✘ 删帖是写操作：请同时加 --send 明确表示要删"); process.exitCode = 2; return; }
+      say("");
+      say("── 开始删除（保留每条最新）──");
+      const deleted = new Set();
+      for (const g of dups) for (const d of g.drop) {
+        const r = await apiFetch("POST", `${API}/thread/delete`, { token, body: { channel_id: cfg.channel_id, thread_id: d.id } });
+        say(`  ✔ 已删除 id=${d.id}【${g.plugin} ${g.version}】（返回 ${JSON.stringify(r)}）`);
+        deleted.add(d.id);
+      }
+      const n = markThreadsDeleted(deleted);
+      say(`（已记账：kook/state/releases.json 里有 ${n} 条帖记录标记 deleted=true —— 记录保留，便于回查「哪一版发过什么」）`);
+    } else {
+      say("");
+      say("确认无误后加 `--dup-prune --send` 真删（**不可恢复**）。");
+    }
+  }
+  if (unknown) say(`  ℹ 另有 ${unknown} 条标题认不出我们模板的帖（一个字节都没动）。`);
+  // 闸门：--dup-audit 发现重复 ⇒ exit 1（只读命令也能进自动化流程；纯列出/真删都不改退出码）
+  if (!prune && isAudit && dups.length) process.exitCode = 1;
+}
+
 async function waitThreadApproved(cfg, token, threadId, tries = 4, gapMs = 2500) {
   let last = null;
   for (let i = 0; i < tries; i++) {
@@ -708,7 +1010,9 @@ async function doSend(cfg, token, ver, postsInfo, notesInfo) {
   const chInfo = await apiFetch("GET", `${API}/channel/view?target_id=${cfg.channel_id}`, { token });
   const isThreadChannel = chInfo.type === 4;
   say(`目标频道：${chInfo.name}  type=${chInfo.type}${isThreadChannel ? "（帖子频道 ⇒ 走 thread/create 发帖）" : "（普通频道 ⇒ 走 message/create）"}`);
-  say(`本次发布 = ${postsInfo.posts.length} 条帖`);
+  say(`本次发布 = ${postsInfo.posts.length} 条帖` +
+      ((postsInfo.skipped && postsInfo.skipped.length) ? `（另有 ${postsInfo.skipped.length} 条帖按版本变化判定跳过：${postsInfo.skipped.map(s => s.name).join(" · ")}）` : ""));
+  for (const s of (postsInfo.skipped || [])) say(`   ⊘ 跳过【${s.name}】：${s.why}`);
   // 附件模式（用户 2026-10-09 定：link = 只放 Gitee/GitHub 下载链接，不上传任何文件）
   //   ★实测 KOOK 单文件上限 ≈30 MiB ⇒ 主插件包 63.8 MB 本来就传不上去（nginx 413 / 业务码 40014）
   const attachMode = String(args.attach || cfg.attach_mode || "link").toLowerCase();
@@ -811,11 +1115,18 @@ async function doSend(cfg, token, ver, postsInfo, notesInfo) {
     rel[ver.mainVer] = {
       at: Date.now(),
       channel_id: cfg.channel_id,
+      // ★plugins = 本版各插件的 .toc 现读版本（**含被跳过的**）⇒ 下一次比版本、以及「同版本重跑」都靠它
+      plugins: postsInfo.pluginsNow || currentPlugins(ver),
+      baseline: postsInfo.baselineVer || null,
       threads: result.map(r => ({ post: r.post, id: r.thread_id || null, title: r.title || null, files: (r.files || []).map(f => f.name) })),
+      // ★skipped = 本版判定「无版本变化 ⇒ 没发」的帖（重跑时据此继续跳过，绝不把上次的判定当成「漏发」）
+      skipped: (postsInfo.skipped || []).map(s => s.name),
     };
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, JSON.stringify(rel, null, 2), "utf8");
-    say(`（已记账：kook/state/releases.json → v${ver.mainVer} 共 ${result.length} 条帖，供「完成回填」配发布链接）`);
+    say(`（已记账：kook/state/releases.json → v${ver.mainVer} 共 ${result.length} 条帖` +
+        ((postsInfo.skipped && postsInfo.skipped.length) ? ` + 跳过 ${postsInfo.skipped.length} 条` : "") +
+        `，供「完成回填」配发布链接 / 下次比版本）`);
   } catch (e) { console.error("⚠ 发布记账失败（不影响发布本身）：" + e.message); }
   return result;
 }
@@ -871,11 +1182,18 @@ async function doSend(cfg, token, ver, postsInfo, notesInfo) {
       say(`✔ 已删除帖子 ${args.threadDelete}（返回 ${JSON.stringify(d)}）`);
       return;
     }
+    // 列表 / 版本查重（只读）；--dup-prune 才删（且必须 --send）
+    if (args.threadList || args.dupAudit || args.dupPrune) {
+      if (!tokenInfo) throw new Error("这些命令要读 KOOK：缺 token（见 --help）");
+      await doThreadAudit(cfg, tokenInfo.token, !!args.dupPrune);
+      return;
+    }
 
     const assets = resolveAssets(cfg, ver, args.files);
     const notesInfo = resolveNotes(cfg, ver);
     const notes = notesInfo.text;
     const postsInfo = resolvePosts(cfg, ver, assets.files);
+    planPosts(cfg, ver, postsInfo);          // ★只发「版本有变化」的帖（无版本变化的子插件不发）
 
     if (assets.missing.length) {
       console.error("✘ 缺包（先跑打包脚本，别发旧包）：");
@@ -888,8 +1206,10 @@ async function doSend(cfg, token, ver, postsInfo, notesInfo) {
       process.exit(2);
     }
     if (!assets.files.length) throw new Error("没有可上传的文件（用 --files 或 --dir 指定）");
-    if (postsInfo.unassigned.length) {
-      console.error("✘ 这些插件没被 config.json 的 posts[] 认领（包发不出去）：" + postsInfo.unassigned.join(", "));
+
+    // 未认领守卫：**要发的**插件没被认领才是错误（本版不发它 ⇒ 只当配置欠账如实点出来）
+    if (postsInfo.unassignedBlocking.length) {
+      console.error("✘ 这些插件没被 config.json 的 posts[] 认领（包发不出去）：" + postsInfo.unassignedBlocking.join(", "));
       console.error("  请在 kook/config.json 的 posts[].plugins 里把它们归到某条帖。");
       process.exit(2);
     }
@@ -902,6 +1222,9 @@ async function doSend(cfg, token, ver, postsInfo, notesInfo) {
       const out = {
         guild_id: cfg.guild_id, channel_id: cfg.channel_id,
         version: ver.mainVer, sub_addons: ver.subs,
+        baseline: postsInfo.baselineVer, rerun: postsInfo.rerun, skip_enabled: postsInfo.skipEnabled,
+        plugin_changes: (postsInfo.rows || []).map(r => ({ name: r.name, role: r.role, now: r.now, base: r.base, changed: r.changed })),
+        skipped_posts: (postsInfo.skipped || []).map(s => ({ name: s.name, title: s.title, why: s.why })),
         posts: postsInfo.posts.map(p => ({ name: p.name, category_id: p.category_id, title: p.title,
           plugins: p.plugins.map(x => `${x.name} ${x.version}`),
           files: p.files.map(f => ({ name: f.name, role: f.role, bytes: fs.statSync(f.abs).size, sha256: sha256(f.abs) })) })),
@@ -912,6 +1235,14 @@ async function doSend(cfg, token, ver, postsInfo, notesInfo) {
         out.sent = true; out.results = await doSend(cfg, tokenInfo.token, ver, postsInfo, notesInfo);
       }
       console.log(JSON.stringify(out, null, 2));
+      return;
+    }
+
+    if (!postsInfo.posts.length) {
+      printChangePlan(cfg, ver, postsInfo);
+      say("");
+      say("⇒ 本次没有需要发布的帖（所有帖的插件版本都没变化，上次发布已经发过）。");
+      say("   要强制全发：加 --all-posts（或把 kook/config.json 的 skip_unchanged_posts 设为 false）。");
       return;
     }
 

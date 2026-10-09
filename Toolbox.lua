@@ -4260,6 +4260,14 @@ local SUBADDONS = {
   --     检测到就**自动让位**并强制可见地提示（详见 addons/EH_Bag/EH_Bag.lua 文件头）。
   { key = "bag", id = "EH_Bag", group = "bag", name = L("SUB_BAG"),
     tip = L("SUB_BAG_TIP"), slash = "EHBAG", slashArg = "ui", hasUI = true },
+  -- ★★用户 2026-10-10 定：新增子插件 **EH_Mail**（邮箱 API 支持度体检；见 addons/EH_Mail/）。
+  --   起因 = `tmp/TurtleMail/` 那个 TurtleWoW 血统的邮箱增强插件：它的 **C API 层已离线证明全支持**
+  --   （49 个函数全在 EmberVeil 官方 API 索引里），唯一判不了的是 **FrameXML / 具名帧那一层**
+  --   （索引不收 FrameXML；pak 内容是压缩的）⇒ 由这个子插件在真机逐名判定 112 项、
+  --   结果落**它自己的**有界环 EH_MAIL_CFG.probe 并延后自动 /reload 落盘（全程只读）。
+  --   调研与风险 R1~R10 = doc/TurtleMail-API支持度调研.md。
+  { key = "mail", id = "EH_Mail", group = "mail", name = L("SUB_MAIL"),
+    tip = L("SUB_MAIL_TIP"), slash = "EHMAIL", slashArg = "", hasUI = true },
   { key = "debugBox", id = "EH_DebugBox", group = "debug", name = L("SUB_LAYERDEBUG"),
     tip = L("SUB_LAYERDEBUG_TIP"), slash = "EHDEBUGBOX", slashArg = "ui", hasUI = true },
   -- ★1.75.x 新增子插件 **EH_Damage**（增强伤害显示/浮动战斗信息；动画引擎参考 DamageEx(Nampower)，
@@ -4579,6 +4587,17 @@ function EVAL_SUBADDONS_BUILD(root, page, refreshes)
     end
   end
   -- ★战斗组（EH_Damage）：日常工具，排在背包组之后、调试组之前；真有条目才画表头
+  local hasMail = false
+  for _, a in ipairs(SUBADDONS) do if a.group == "mail" then hasMail = true break end end
+  if hasMail then head(L("SUB_GROUP_MAIL"), y) y = y - ROWH end
+  for _, a in ipairs(SUBADDONS) do
+    if a.group == "mail" then
+      local row = subMakeRow(root, y, a, page)
+      for _, f in ipairs(row.widgets) do table.insert(page.widgets, f) end
+      table.insert(subUI.rows, row)
+      y = y - ROWH
+    end
+  end
   local hasCombat = false
   for _, a in ipairs(SUBADDONS) do if a.group == "combat" then hasCombat = true break end end
   if hasCombat then head(L("SUB_GROUP_COMBAT"), y) y = y - ROWH end
@@ -4694,6 +4713,12 @@ local function tbModel()
     --   ★★默认**开**（用户 1.75.45 定：「装备比较默认开启.」；键为 nil 时模块当场物化 true，
     --      用户显式关过（false）永远是关）；关着 = 不包装容器按钮、不挂 OnUpdate、不建对比框（一个动作都没有）。
     { t = "mod", mod = "equipCompare", key = "equipCompare", label = L("TB_EQCOMPARE"), tip = L("TB_EQCOMPARE_TIP") },
+    -- ★★★1.75.113 目标生命值显示（tools/TargetHealth.lua，用户：「能否将数据库复制到当前插件内.并将在工具箱内
+    --   添加个工具->目标生命值显示开关,显示方式和当前生命值方式类似.UI类似」）：
+    --   同 infoBar/lootCursor 一样只是**一行数据** —— 数据表、自建小条、tooltip、命令全在模块里
+    --   （`EVAL_TB_MOD_ROWS["targetHealth"]`）。★不写 `noChk` ⇒ 保留主开关勾选框（真值 = `tbCfg().targetHealth`，
+    --   读写走模块的 `EVAL_TH_ENABLED` / `EVAL_TH_SET`）。★**默认关**（nil ⇒ false，模块不物化 true）。
+    { t = "mod", mod = "targetHealth", key = "targetHealth", label = L("TB_TARGETHEALTH"), tip = L("TB_TARGETHEALTH_TIP") },
     { t = "h", label = L("TB_H_MERCHANT") },
     -- ★1.75.43 物品价（tools/ItemPrice.lua，A1 = 价格库 + 学价 + 悬停价格行 + 背包/银行估值）：
     --   同 infoBar/lootCursor 一样只是**一行数据** —— 控件、tooltip、两个按钮全在模块里

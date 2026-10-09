@@ -17,7 +17,9 @@
         "title": "EH_Damage v0.2.36 发布（增强伤害显示）",
         "files": [
           "EH_Damage-v0.2.36.zip"
-        ]
+        ],
+        "deleted": true,
+        "deleted_at": 1791549031486
       },
       {
         "post": "EH_DPS",
@@ -25,7 +27,9 @@
         "title": "EH_DPS v0.2.5 发布（队伍伤害统计）",
         "files": [
           "EH_DPS-v0.2.5.zip"
-        ]
+        ],
+        "deleted": true,
+        "deleted_at": 1791549031486
       },
       {
         "post": "EH_DebugBox",
@@ -33,7 +37,9 @@
         "title": "EH_DebugBox v0.4.0 发布（图层调试）",
         "files": [
           "EH_DebugBox-v0.4.0.zip"
-        ]
+        ],
+        "deleted": true,
+        "deleted_at": 1791549031486
       },
       {
         "post": "EH_Bag",
@@ -41,7 +47,9 @@
         "title": "EH_Bag v0.3.42 发布（整合背包）",
         "files": [
           "EH_Bag-v0.3.42.zip"
-        ]
+        ],
+        "deleted": true,
+        "deleted_at": 1791549031486
       }
     ]
   },

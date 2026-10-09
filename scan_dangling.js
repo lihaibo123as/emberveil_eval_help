@@ -24,7 +24,13 @@ const KNOWN_GLOBAL = new Set(['pcall', 'xpcall', 'type', 'tostring', 'tonumber',
   'time', 'date', 'difftime', 'mod', 'abs', 'min', 'max', 'random', 'sqrt', 'ceil', 'strtrim', 'strsplit',
   'strjoin', 'wipe', 'tinsert', 'tremove', 'foreach', 'foreachi', 'securecall', 'hooksecurefunc', 'bit',
   // 客户端 FrameXML 里定义的全局（api_*.html 没收录，但确实是客户端给的；Toolbox 用了它开聊天输入）
-  'ChatEdit_ActivateChat', 'ChatEdit_OnEnterPressed', 'ChatEdit_OnEscapePressed', 'ChatFrame_OnEvent']);
+  'ChatEdit_ActivateChat', 'ChatEdit_OnEnterPressed', 'ChatEdit_OnEscapePressed', 'ChatFrame_OnEvent',
+  // ★2026-10-10 补：EH_Mail 的 TurtleMail 移植版（第三方代码，直接裸调这些）带出来的 ——
+  //   前 4 个是**客户端 FrameXML 全局**，依据 = EH_Mail 探针的**真机读数**（`/email` 的 FUNC 组这几条全部 OK）；
+  //   `getfenv`/`setfenv` 是 **Lua 5.1 内建**（本客户端就是 5.1；5.2+ 才移除）。
+  //   ★加白名单的依据必须是「**有实证**」而不是「看着像」—— 探针的存在意义之一就是这个。
+  'UIDropDownMenu_Initialize', 'UIDropDownMenu_AddButton', 'ToggleDropDownMenu', 'CloseDropDownMenus',
+  'getfenv', 'setfenv']);
 // 常见「点在方法上」的调用名（来自 SetXxx 家族）——避免误报
 const METHODISH = /^(Set|Get|Is|Has|Enable|Disable|Register|Unregister|Show|Hide|Clear|Add|Remove|Play|Stop|Start)/;
 
