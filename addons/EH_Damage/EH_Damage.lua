@@ -22,7 +22,7 @@
 --   · 字体链 FZLBJW→FRIZQT→ARIALN 全程 pcall；FontString 不吃鼠标 ⇒ 热区用透明 Button。
 -- ============================================================================
 
-local BUILD = "0.2.36"
+local BUILD = "0.2.43"
 
 local D = {}                      -- 命名空间（跨函数共享件全挂这里，控 local 数）
 _G["EH_DMG"] = D                  -- 调试/桥接口（子插件独立，不依赖宿主）
@@ -133,6 +133,9 @@ local DEF = {
 }
 -- 受击下移的可调范围（面板步进与编辑模式拖拽**共用同一对常量**，绝不各写一份）
 D.INOFF_MIN, D.INOFF_MAX = -400, -20
+-- ★0.2.39 主锚点 X/Y 的面板步进范围（屏幕中心偏移的逻辑单位；±600 足够覆盖 1024×768 逻辑屏）
+--   ★与 inOffY 同一把尺子：**整数**字段，面板「伤害锚点 X/Y」两颗 ± 走这里夹取
+D.POS_MIN, D.POS_MAX = -600, 600
 -- 图集缩放范围（同上：面板步进与读值口共用）
 D.FAS_MIN, D.FAS_MAX = 60, 200
 -- ★0.2.34 初始缩放范围（%）：<100 由小涨大 · 100 不弹入 · >100 由大缩回
@@ -140,16 +143,34 @@ D.ANS_MIN, D.ANS_MAX = 30, 150
 -- ★0.2.35 尾声缩小范围（%）：0 = 不缩 · 100 = 缩到下限
 D.AEN_MIN, D.AEN_MAX = 0, 100
 -- ★0.2.31 缩放动画的常量（面板步进 / 读值口 / 档图挑选**共用同一批**，绝不各写一份）：
---   幅度范围 0~100%（默认 25；★0.2.33 用户要求上限 50 → 100）· 出生弹入 0.35s · 暴击鼓包 0.35s
-D.ANIM_MIN, D.ANIM_MAX = 0, 100
+--   幅度范围 0~**200**%（默认 25；★0.2.33 上限 50 → 100；★0.2.41 按用户要求 100 → **200**）
+--   · 出生弹入 0.35s · 暴击鼓包 0.35s；★面板步进仍是 ±5（0~200 = 41 档；低端精度比档数多更重要）
+D.ANIM_MIN, D.ANIM_MAX = 0, 200
 D.FA_POP_SEC, D.FA_CRIT_SEC = 0.35, 0.35
 -- ★0.2.33 缩放系数下限：幅度 100% 时出生弹入的起点算出来是 **0 倍**（0 宽/高的纹理没意义，
 --   「从 0 涨出来」视觉上也等于凭空出现）⇒ 夹到 10%。幅度 ≤ 90% 时这个下限**永远不会生效**。
 D.FA_K_MIN = 0.1
--- ★0.2.30 描边风格：**顺序 = 面板 ± 循环顺序**，中文名 = 界面显示（与生成器 STYLES 同序同 id）
-D.FAS_ORD = { "soft", "hard", "glow", "shadow", "plain" }
+-- ★0.2.30 描边风格 / ★0.2.37 追加 4 种「成品字形」风格：**顺序 = 面板 ± 循环顺序**，中文名 = 界面显示
+--   · soft/hard/glow/shadow/plain = **参数式**（TTF 现渲，生成器 tmp/gen_fontatlas.py）
+--   · out9c/shd9c/outwx/shdwx = 用户提供的**成品字形位图**（自带描边或阴影，离线切图，
+--     生成器 tmp/gen_fontatlas_custom.py --install ⇒ media/fontdigits_<id>_<档>.tga + FontDigitsExtra.lua）
+--   ★两族**并列可选、互不覆盖**：成品字形那边忽略「描边参数」（它自己没有参数）
+D.FAS_ORD = { "soft", "hard", "glow", "shadow", "plain", "out9c", "shd9c", "outwx", "shdwx" }
 D.FAS_ZH = {
   soft = "柔和暗晕", hard = "硬黑描边", glow = "同色光晕", shadow = "右下投影", plain = "无描边",
+  -- ★成品字形那 4 个的**显示名刻意收短**：面板「描边样式」单元格的值框只有 66px，
+  --   名字长了会折成两行压到下一行（现有「极速蹦出·斜右」就会折行）⇒ 全名留在 README / `/edmg 描边`
+  out9c = "9c·硬描边", shd9c = "9c·软阴影", outwx = "武侠·硬描边", shdwx = "武侠·软阴影",
+}
+-- ★0.2.38 **「字体图集」分组**（用户：「我怎么没看到配置字体贴图的地方」）—— 面板**专门一行**选字形素材：
+--   组内 `styles` = 这一套字形可选的样式（内置字体 = 5 种参数式描边；两套成品字形 = 硬描边/软阴影 两版）。
+--   ★**配置真值仍然只有 `faEdge` 一个**（= 完整图集 id）⇒ 这一行与「描边样式」都是它的**派生视图**：
+--     「字体图集」± 换组（组内取同一下标，越界夹到最后一个）、「描边样式」± 只在**当前组内**循环。
+--   ★别再加第二个配置键（两个键会各自漂移；`faStyleSet` 是唯一写口）。
+D.FAS_SETS = {
+  { id = "ttf", zh = "内置字体", styles = { "soft", "hard", "glow", "shadow", "plain" } },
+  { id = "f9c", zh = "9c原版",   styles = { "out9c", "shd9c" } },
+  { id = "fwx", zh = "古风武侠", styles = { "outwx", "shdwx" } },
 }
 
 local say                                   -- ★前向声明：cfgEnsure 的迁移播报用到它（否则绑全局 nil）
@@ -460,10 +481,30 @@ local function faStyleNorm(v)
   for _, id in ipairs(D.FAS_ORD) do if D.FAS_ZH[id] == v then return id end end
   return nil
 end
+-- ★0.2.38 「字体图集」派生视图（配置真值只有 faEdge 一个，见 D.FAS_SETS 那段注释）
+--   现在的风格属于哪一组（认不出 ⇒ 第一组 = 内置字体，绝不返回 nil）
+local function faSetOf(style)
+  for si = 1, table.getn(D.FAS_SETS) do
+    local s = D.FAS_SETS[si]
+    for k = 1, table.getn(s.styles) do if s.styles[k] == style then return s end end
+  end
+  return D.FAS_SETS[1]
+end
+local function faSetNow() return faSetOf(faStyleNow()) end
+-- 找到某组里「当前风格的同下标」（越界夹到最后一个）—— 换组/点名组时共用，行为可预测
+local function faSetPick(set)
+  local cur = faStyleNow()
+  local src = faSetNow().styles
+  local idx = 1
+  for k = 1, table.getn(src) do if src[k] == cur then idx = k break end end
+  local n = table.getn(set.styles)
+  if idx > n then idx = n end
+  if idx < 1 then idx = 1 end
+  return set.styles[idx]
+end
 -- 取某档、某风格的度量（★唯一取度量口）：返回 file, W, cw, cx
 --   没有这个风格的表项（旧表 / `--only` 只重生成了一部分）⇒ 退回顶层那套（= hard）
-local function faMetrics(t, style)
-  if type(t) ~= "table" then return nil end
+local function faMetrics(t, style)  if type(t) ~= "table" then return nil end
   local e = t.st and t.st[style]
   if type(e) == "table" and type(e.file) == "string" then
     return e.file, tonumber(e.W), (type(e.cw) == "table" and e.cw) or nil, (type(e.cx) == "table" and e.cx) or nil
@@ -721,9 +762,12 @@ local function slotAcquire()
   -- ★0.2.29 高度给足：图集模式的数字格是**本帧的子纹理**（最大档 84px），
   --   帧太小有被裁掉的风险（本客户端是 UE 封装，裁剪行为未知）⇒ 直接建大一点，零代价。
   -- ★0.2.33 再放大：缩放幅度上限提到 100% ⇒ 暴击峰值可达 **2 倍**（最大档 84px 的数字组按 6 位算约 420px
-  --   ⇒ 峰值 ~840px）⇒ 帧宽给到 1024 覆盖这个量级。★如实边界：8 位数字 + 最大档 + 100% 会略微超出，
+  --   ⇒ 峰值 ~840px）⇒ 帧宽给到 1024 覆盖这个量级。
+  -- ★0.2.41 三度放大：幅度上限再到 **200%**，且峰值算式是 `max(animStart,1) × (1 + 幅度)`
+  --   ⇒ 最坏组合（初始缩放 150% + 幅度 200%）= **3 倍**（6 位数字按最大档 ≈ 590px ⇒ 峰值 ~1770px、
+  --   高 84×3 = 252px）⇒ 帧给到 **2048×512**。★如实边界：**8 位数字 + 最大档 + 3 倍**仍可能略微超出，
   --   而且本客户端到底裁不裁子纹理**没验过**（真机若看到大数字边缘被切，就是它在裁 —— 反馈我继续放大）。
-  f:SetWidth(1024) f:SetHeight(384)
+  f:SetWidth(2048) f:SetHeight(512)
   -- ★带继承模板建 FontString（宿主 uiText 已验证配方），SetFontObject 再双保险
   local fs = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   pcall(fs.SetFontObject, fs, GameFontNormal)
@@ -777,13 +821,39 @@ function D.faStyleSet(v)
     (faEdgeOK() and "" or " ｜ ★FontDigits.lua 里没有这种风格的度量 ⇒ 退回硬描边"))
   return true
 end
--- 风格循环（面板 ± 用；方向 d=+1 正向、-1 反向）
+-- 风格循环（面板「描边样式」± 用；方向 d=+1 正向、-1 反向）
+--   ★0.2.38 起**只在当前「字体图集」组内循环**（分组见 D.FAS_SETS）：换字形用单独那一行（D.faGlyphStep），
+--     否则 9 个 id 混在一条循环里，用户根本分不清「换字体」与「换描边」。
 function D.faStyleStep(d)
+  local st = faSetNow().styles
   local cur = faStyleNow()
   local i = 1
-  for k, id in ipairs(D.FAS_ORD) do if id == cur then i = k break end end
-  local n = table.getn(D.FAS_ORD)
-  D.faStyleSet(D.FAS_ORD[((i - 1 + (d or 1)) % n) + 1])
+  for k = 1, table.getn(st) do if st[k] == cur then i = k break end end
+  local n = table.getn(st)
+  D.faStyleSet(st[((i - 1 + (d or 1)) % n) + 1])
+end
+-- ★0.2.38 「字体图集」行的 ±（面板新增那一行；/edmg 字体 共用写口 D.faStyleSet）
+function D.faGlyphStep(d)
+  local cur = faSetNow()
+  local n = table.getn(D.FAS_SETS)
+  local i = 1
+  for k = 1, n do if D.FAS_SETS[k] == cur then i = k break end end
+  D.faStyleSet(faSetPick(D.FAS_SETS[((i - 1 + (d or 1)) % n) + 1]))
+end
+-- `/edmg 字体 <内置|9c|武侠|组id>`：点名换一组（认组 id 也认中文名；不认 ⇒ false，一个字节都不写）
+function D.faGlyphSet(v)
+  if type(v) ~= "string" or v == "" then return false end
+  local low = string.lower(v)
+  for k = 1, table.getn(D.FAS_SETS) do
+    local s = D.FAS_SETS[k]
+    if s.id == low or s.zh == v then return D.faStyleSet(faSetPick(s)) end
+  end
+  return false
+end
+-- 读值口：字体图集（组 id / 中文名 / 组内可选样式串）
+function D.faGlyphNow()
+  local s = faSetNow()
+  return s.id, s.zh, table.concat(s.styles, ",")
 end
 
 -- 唯一入口：往屏幕上放一条字
@@ -1548,8 +1618,10 @@ function D.editTick(now)
         local v = math.floor((D.drag.by or DEF.inOffY) + (cy - D.drag.sy) + 0.5)
         c.inOffY = math.max(D.INOFF_MIN, math.min(D.INOFF_MAX, v))
       else
-        c.posX = D.drag.bx + (cx - D.drag.sx)
-        c.posY = D.drag.by + (cy - D.drag.sy)
+        -- ★0.2.39 主锚点也**取整**（0.2.39 起 posX/posY 进了面板 = 用户会读它 ⇒ 与 inOffY 同一把尺子：
+        --   「凡是把光标差写进存档的字段，都要问一句它该不该是小数」；小数位是亚逻辑单位，肉眼不可见）
+        c.posX = math.floor(D.drag.bx + (cx - D.drag.sx) + 0.5)
+        c.posY = math.floor(D.drag.by + (cy - D.drag.sy) + 0.5)
       end
       editPlace()
     end
@@ -1597,10 +1669,20 @@ local function uiRefresh()
   -- ★0.2.28（同版收口）受击下移**只显示整数**（用户：「受击位移只 int 类型处理下不需要保留小数位」）
   local inV = math.floor((tonumber(c.inOffY) or DEF.inOffY) + 0.5)
   pcall(ui.inText.SetText, ui.inText, tostring(inV))
+  -- ★0.2.39 主锚点 X/Y（面板旋钮）：与受击下移**同一口径 = 显示整数**（字段本身也已取整，见 editTick）
+  if ui.posXText then
+    pcall(ui.posXText.SetText, ui.posXText, tostring(math.floor((tonumber(c.posX) or DEF.posX) + 0.5)))
+    pcall(ui.posYText.SetText, ui.posYText, tostring(math.floor((tonumber(c.posY) or DEF.posY) + 0.5)))
+  end
   pcall(ui.faText.SetText, ui.faText, tostring(tonumber(c.faScale) or 100) .. "%")
   -- ★0.2.30 描边风格：显示中文名 + id（表里没有这种风格的度量时如实点出来，绝不假装换过）
   pcall(ui.faEdgeText.SetText, ui.faEdgeText,
     (D.FAS_ZH[D.faStyleNow()] or D.faStyleNow()) .. (D.faEdgeOK() and "" or "（表里没有）"))
+  -- ★0.2.38 字体图集（字形素材；派生自 faEdge —— 与「描边样式」一起看才是完整选择）
+  if ui.faSetText then
+    local _, gzh = D.faGlyphNow()
+    pcall(ui.faSetText.SetText, ui.faSetText, tostring(gzh or "?"))
+  end
   -- ★0.2.31 缩放动画：曲线名 + 幅度%（0 = 关，显示成「关」比显示 0% 直观）；★0.2.34 加初始缩放
   pcall(ui.acText.SetText, ui.acText, CURVE_ZH[c.animCurve or DEF.animCurve] or tostring(c.animCurve))
   local aa = tonumber(c.animAmp) or DEF.animAmp
@@ -1618,8 +1700,9 @@ end
 local function uiBuild()
   if ui.built then return true end
   if type(CreateFrame) ~= "function" then return false end
-  local W, H = 470, 520                  -- ★0.2.35 高度重算（参数 6 行 → 7 行，+24）：
-                                         --   表头+总开关 62 + 勾选 10 行 220 + 参数 7 行 182 + 按钮/备注 ~56
+  local W, H = 470, 594                  -- ★0.2.40 勾选区 2 列 → **3 列**（7 行）后高度重算：
+                                         --   表头+总开关 62 + 勾选 7 行 154 + 参数区 296（4×HDR 20 + 9×ROW 24）+ 按钮/备注 ~82
+                                         --   （变更史：424 → 448 → 472 → 496 → 520（0.2.35）→ 544（0.2.38）→ 660（0.2.39 分组）→ 594（0.2.40 勾选三列））
   local root = CreateFrame("Frame", "EH_DMG_UI", UIParent)
   root:SetWidth(W) root:SetHeight(H)
   root:SetPoint("CENTER", UIParent, "CENTER", ui.px, ui.py)
@@ -1628,7 +1711,10 @@ local function uiBuild()
   if type(root.EnableMouse) == "function" then pcall(root.EnableMouse, root, true) end
   local bg = root:CreateTexture(nil, "BACKGROUND")
   bg:SetPoint("TOPLEFT", root, "TOPLEFT", 0, 0) bg:SetPoint("BOTTOMRIGHT", root, "BOTTOMRIGHT", 0, 0)
-  solid(bg, 0.05, 0.04, 0.03, 0.96)
+  -- ★0.2.40 **完全不透明**（用户点头改的）：原 0.96 会留 4% 透光 ⇒ 面板背后飘过的战斗文字/世界/
+  --   动作条会透过面板显示成**淡黄横条**（实测 rgb(19,18,15) vs 底色 (13,11,7)）；改成 1 之后面板内干净。
+  --   ★反向钉：第 5 个参**不许再退回 0.96**（改了就等于把「黄条」请回来）。
+  solid(bg, 0.05, 0.04, 0.03, 1)
   for _, e in ipairs({ "TOP", "BOTTOM" }) do
     local t = root:CreateTexture(nil, "BORDER") solid(t, 0.85, 0.70, 0.20, 1)
     t:SetPoint(e .. "LEFT", root, e .. "LEFT", 0, 0) t:SetPoint(e .. "RIGHT", root, e .. "RIGHT", 0, 0) t:SetHeight(1)
@@ -1722,12 +1808,17 @@ local function uiBuild()
   -- ★0.2.29 网格最后一个空位（第 20 格）：战斗数字改用**插件自带字体图集**（R4；默认关）
   table.insert(TOGGLES, { zh = "自带字体图集",
     get = function() return C().fontAtlas == true end, set = function(v) D.fontAtlasSet(v) end })
-  local GRID_ROWS = 10
+  -- ★0.2.40 勾选区改 **3 列**（用户：「将以上的开关3列进行排列」）：
+  --   **列优先**填（与旧 2 列同一口径，只换行数/列数 ⇒ 顺序仍是老用户认得的那个顺序）：20 项 = 7 + 7 + 6 行。
+  --   ★列距 150 是**核过最长标签**定的（列起点 = 18 / 168 / 318；面板内宽 = 470−36 = 434）：
+  --     · 最长的「友方治疗者姓名显示」（9 个汉字 ≈ 108px）落在第 2 列 ⇒ 168 + 14(框) + 5(间隙) + 108 = 295 < 318 ✓
+  --     · 第 3 列只有短的（「受到的伤害（附加）」最长 ≈ 108）⇒ 318 + 19 + 108 = 445 < 470−18 = 452 ✓（7px 余量）
+  local GRID_ROWS, GRID_DX = 7, 150
   local y0 = -62
   for i, tg in ipairs(TOGGLES) do
-    local col = (i <= GRID_ROWS) and 0 or 1
-    local row = (i <= GRID_ROWS) and i or (i - GRID_ROWS)
-    mkItem(tg.zh, tg.get, tg.set, 18 + col * 232, y0 - (row - 1) * 22)
+    local col = math.floor((i - 1) / GRID_ROWS)     -- 列优先：前 7 项第 1 列、再 7 项第 2 列、余下第 3 列
+    local row = (i - 1) % GRID_ROWS + 1
+    mkItem(tg.zh, tg.get, tg.set, 18 + col * GRID_DX, y0 - (row - 1) * 22)
   end
 
   -- 数值/多选参数（0.2.6 重排：2×2 两列 —— 用户定）
@@ -1748,7 +1839,40 @@ local function uiBuild()
     return val
   end
   local PX1, PX2 = 18, 250
-  -- ★循环类参数（方向/档位）：`+` 正向、`-` 反向（0.2.12；旧写法两颗都正滚 = 用户眼里的「调节异常」）
+  -- ★0.2.39 参数区**按功能分组**（用户：「如何将这些参数进行功能分组方便配置」）—— 四组：
+  --   ① 运动（怎么飘 / 飘多远 / 活多久）② 位置（从哪里开始飘 = 锚点）
+  --   ③ 字形（字体素材 + 描边 + 字号粗调/细调）④ 缩放动画（出生 → 暴击 → 尾声）
+  --   ★**纯布局改动**：真值、唯一写口、命令、读值口一个字节都没改（只是把同一批参数重排 + 加分组标题）。
+  --   ★**行位只有一个来源** = 游标 `py`：`grp()` 吃掉 HDR、每排完一行调一次 `rowGap()`
+  --     ⇒ 以后增删参数**只动这一段相邻两行**，绝不手写 `py - 168` 这类魔数（改一处漏三处的老雷）。
+  local ROW, HDR = 24, 20            -- 参数行距 / 组标题行高（4×HDR + 9×ROW = 296 = 这一段的总占用）
+  local function grp(zh)
+    local g = mkFont(root)
+    pcall(g.SetPoint, g, "TOPLEFT", root, "TOPLEFT", PX1, py)
+    pcall(g.SetText, g, zh)
+    pcall(g.SetTextColor, g, 1.00, 0.90, 0.55)
+    -- ★★★0.2.42 修「一块一块黄色的背景区块」（用户真机截图原话：「这里有设置什么背景吗?怎么一块一块黄色的背景区块.」）
+    --   **真凶 = 下面两行 `pcall(ln.SetWidth, …)` / `pcall(ln.SetHeight, …)` 漏传 self**
+    --   （`pcall(X.方法, …)` 实参第一个必须是 X —— 与 0.2.11「参数行标签一行都不显示」同一条老雷）：
+    --   两个 Set 都被 pcall 静默吞掉 ⇒ 这条分隔线**从来没拿到过尺寸** ⇒ 客户端按**默认尺寸 ≈32×32**
+    --   画成金色方块。★真机截图取证：方块取色恰好 (104,83,39) = 0.42,0.34,0.16（= 分隔线颜色）；
+    --   方块左上角正好落在分隔线锚点 `(PX1, py-15)`；实测 31×32 逻辑像素 ⇒ 每组**前两行参数标签**
+    --   正好压在它上面 = 用户看到的一块块黄底（四组 = 四个方块；「时长」那一行不在方块里，所以它没有）。
+    --   ⇒ 修法 = 补上 `ln` 这两个实参；顺带把 `solid` 提到几何之前（与面板边框同一套次序：
+    --     先贴图/染色、后定尺寸 —— 面板边框就是这么写的，真机实测是一条正常 1px 亮线）。
+    --   ★反向钉：这两行的第一个实参不许再丢（丢了 = 金色方块立刻回来）。
+    local ln = root:CreateTexture(nil, "ARTWORK")     -- 组标题下的细分隔线（1px）
+    solid(ln, 0.42, 0.34, 0.16, 1)
+    pcall(ln.SetPoint, ln, "TOPLEFT", root, "TOPLEFT", PX1, py - 15)
+    pcall(ln.SetWidth, ln, W - 2 * PX1)
+    pcall(ln.SetHeight, ln, 1)
+    py = py - HDR
+  end
+  local function rowGap() py = py - ROW end
+
+  -- ① 运动（轨迹）：每条数字都吃这五个
+  grp("【运动】怎么飘 · 飘多远 · 活多久")
+  -- ★循环类参数（方向）：`+` 正向、`-` 反向（0.2.12；旧写法两颗都正滚 = 用户眼里的「调节异常」）
   ui.dirText = paramCell("滚动方向", PX1, py, function(d)
     local c = C()
     local i = 1
@@ -1756,67 +1880,99 @@ local function uiBuild()
     local n = table.getn(DIRS)
     c.direction = DIRS[((i - 1 + (d or 1)) % n) + 1]
   end)
-  ui.sizeText = paramCell("字号档位", PX2, py, function(d)
-    local c = C()
-    local n = table.getn(D.TIER)
-    c.fontTier = (((c.fontTier or 3) - 1 + (d or 1)) % n) + 1
-  end)
-  ui.speedText = paramCell("速度", PX1, py - 24, function(d) local c = C() c.speed = math.max(20, math.min(400, (c.speed or 90) + d * 10)) end)
-  ui.durText = paramCell("时长", PX2, py - 24, function(d) local c = C() c.duration = math.max(0.5, math.min(6, (c.duration or 2.0) + d * 0.25)) end)
+  ui.speedText = paramCell("速度", PX2, py, function(d) local c = C() c.speed = math.max(20, math.min(400, (c.speed or 90) + d * 10)) end)
+  rowGap()
   -- ★0.2.23 曲线函数（蹦出系方向用；循环类：`-` 反向）
-  ui.curveText = paramCell("曲线", PX1, py - 48, function(d)
+  ui.curveText = paramCell("曲线", PX1, py, function(d)
     local c = C()
     local i = 1
     for k, v in ipairs(CURVE_ORD) do if v == (c.curve or "cubic") then i = k break end end
     local n = table.getn(CURVE_ORD)
     c.curve = CURVE_ORD[((i - 1 + (d or 1)) % n) + 1]
   end)
-  -- ★0.2.25 移动上限（占屏 %，行程夹取 + 屏界保险丝，见 tick）：曲线右边的空槽
-  ui.clampText = paramCell("移动上限", PX2, py - 48, function(d)
+  -- ★0.2.25 移动上限（占屏 %，行程夹取 + 屏界保险丝，见 tick）
+  ui.clampText = paramCell("移动上限", PX2, py, function(d)
     local c = C() c.clampPct = math.max(5, math.min(60, (tonumber(c.clampPct) or 30) + d * 5))
   end)
+  rowGap()
+  ui.durText = paramCell("时长", PX1, py, function(d) local c = C() c.duration = math.max(0.5, math.min(6, (c.duration or 2.0) + d * 0.25)) end)
+  rowGap()
+
+  -- ② 位置（锚点）：只决定**起点在哪** —— 金色锚点 = 伤害行起点 · 红色锚点 = 受击行起点（编辑模式里都能拖）
+  grp("【位置】从哪里开始（编辑模式可拖锚点）")
+  -- ★0.2.39 主锚点 X/Y 面板旋钮（用户点名「补」）：此前 posX/posY **只能**在编辑模式拖金色锚点。
+  --   ★**整数**口径与受击下移同一把尺子（光标是浮点 ⇒ 步进先取整再加 ±10、写回整数、显示整数）
+  ui.posXText = paramCell("伤害锚点 X", PX1, py, function(d)
+    local c = C()
+    local cur = math.floor((tonumber(c.posX) or DEF.posX) + 0.5)
+    c.posX = math.max(D.POS_MIN, math.min(D.POS_MAX, cur + d * 10))
+  end)
+  ui.posYText = paramCell("伤害锚点 Y", PX2, py, function(d)
+    local c = C()
+    local cur = math.floor((tonumber(c.posY) or DEF.posY) + 0.5)
+    c.posY = math.max(D.POS_MIN, math.min(D.POS_MAX, cur + d * 10))
+  end)
+  rowGap()
   -- ★0.2.28 受击下移（受到伤害那一行相对主锚点往下多少；编辑模式的**红色锚点**写的就是这个字段）
   --   写入口**一律取整**（用户：「受击位移只 int 类型处理下不需要保留小数位」）
-  ui.inText = paramCell("受击下移", PX1, py - 72, function(d)
+  ui.inText = paramCell("受击下移", PX1, py, function(d)
     local c = C()
     local cur = math.floor((tonumber(c.inOffY) or DEF.inOffY) + 0.5)
     c.inOffY = math.max(D.INOFF_MIN, math.min(D.INOFF_MAX, cur + d * 10))
   end)
+  rowGap()
+
+  -- ③ 字形（字体素材 + 描边 + 字号粗调/细调）
+  grp("【字形】字体素材与描边")
+  -- ★0.2.38 「字体图集」（用户原话：「我怎么没看到配置字体贴图的地方」）：选的是**字形素材**
+  --   （内置字体 / 9c原版 / 古风武侠），右边的「描边样式」只在**当前这一组内**循环。
+  --   ★派生视图：真正的配置真值仍只有 `faEdge` 一个（见 D.FAS_SETS 那段注释）。
+  ui.faSetText = paramCell("字体图集", PX1, py, function(d) D.faGlyphStep(d) end)
+  -- ★0.2.30 图集描边风格（用户：「字体黑色边框能换个吗?美化一点吗?」）—— ± 循环（写口 = D.faStyleSet）
+  ui.faEdgeText = paramCell("描边样式", PX2, py, function(d) D.faStyleStep(d) end)
+  rowGap()
+  ui.sizeText = paramCell("字号档位", PX1, py, function(d)
+    local c = C()
+    local n = table.getn(D.TIER)
+    c.fontTier = (((c.fontTier or 3) - 1 + (d or 1)) % n) + 1
+  end)
   -- ★0.2.29 图集缩放（图集模式的**连续**字号微调；档位管粗调 = 换更粗的一档图）
-  ui.faText = paramCell("图集缩放", PX2, py - 72, function(d)
+  ui.faText = paramCell("图集缩放", PX2, py, function(d)
     local c = C()
     c.faScale = math.max(D.FAS_MIN, math.min(D.FAS_MAX, (tonumber(c.faScale) or 100) + d * 5))
   end)
-  -- ★0.2.30 图集描边风格（用户：「字体黑色边框能换个吗?美化一点吗?」）—— ± 循环（写口 = D.faStyleSet）
-  ui.faEdgeText = paramCell("描边样式", PX1, py - 96, function(d) D.faStyleStep(d) end)
-  -- ★0.2.34 初始缩放（出生弹入的起点；用户：「伤害文字初始出现缩放增加可缩放参数」）—— 占第 5 行**空着的右格**
-  --   （正好在「缩放幅度」正上方 ⇒ 两个缩放参数挨着，面板高度不用变）
-  ui.anStartText = paramCell("初始缩放", PX2, py - 96, function(d)
-    local c = C()
-    local cur = tonumber(c.animStart) or DEF.animStart
-    c.animStart = math.max(D.ANS_MIN, math.min(D.ANS_MAX, cur + d * 5))
-  end)
-  -- ★0.2.31 缩放动画（**只对图集行生效** —— 文字行的缩放通道已被真机证死，见文件头注释）：
-  --   左格 = 缓动曲线（与「滚动方向→曲线」共用 CURVES 表），右格 = 幅度%（**0 = 关掉缩放动画**）
-  ui.acText = paramCell("缩放曲线", PX1, py - 120, function(d)
+  rowGap()
+
+  -- ④ 缩放动画（**只对图集行生效** —— 文字行的缩放通道已被真机证死，见文件头注释）：出生 → 暴击 → 尾声
+  grp("【缩放动画】出生 · 暴击 · 尾声（只对图集行）")
+  -- ★0.2.31 缩放曲线（与「运动 → 曲线」共用 CURVES 表）
+  ui.acText = paramCell("缩放曲线", PX1, py, function(d)
     local c = C()
     local i = 1
     for k, v in ipairs(CURVE_ORD) do if v == (c.animCurve or DEF.animCurve) then i = k break end end
     local n = table.getn(CURVE_ORD)
     c.animCurve = CURVE_ORD[((i - 1 + (d or 1)) % n) + 1]
   end)
-  ui.aaText = paramCell("暴击幅度", PX2, py - 120, function(d)     -- ★0.2.34 改名：它现在只管暴击鼓包
+  -- ★0.2.34 初始缩放（出生弹入的起点；100 = 不弹入、>100 = 由大缩回）
+  ui.anStartText = paramCell("初始缩放", PX2, py, function(d)
+    local c = C()
+    local cur = tonumber(c.animStart) or DEF.animStart
+    c.animStart = math.max(D.ANS_MIN, math.min(D.ANS_MAX, cur + d * 5))
+  end)
+  rowGap()
+  -- ★0.2.34 暴击幅度（0 = **只关鼓包、不关弹入**）
+  ui.aaText = paramCell("暴击幅度", PX1, py, function(d)
     local c = C()
     local cur = tonumber(c.animAmp) or DEF.animAmp
     c.animAmp = math.max(D.ANIM_MIN, math.min(D.ANIM_MAX, cur + d * 5))
   end)
-  -- ★0.2.35 尾声缩小（淡出那一段同步缩小，到点随槽一起收掉 = 「缩小切隐藏」）—— 第 7 行左格
-  ui.anEndText = paramCell("尾声缩小", PX1, py - 144, function(d)
+  -- ★0.2.35 尾声缩小（淡出那一段同步缩小，到点随槽一起收掉 = 「缩小切隐藏」）
+  ui.anEndText = paramCell("尾声缩小", PX2, py, function(d)
     local c = C()
     local cur = tonumber(c.animEnd) or DEF.animEnd
     c.animEnd = math.max(D.AEN_MIN, math.min(D.AEN_MAX, cur + d * 5))
   end)
-  py = py - 168
+  rowGap()
 
   -- 底部按钮
   local by = py - 6
@@ -1976,8 +2132,10 @@ local function cmd(msg)
     local ok = faEnsure()
     local c = C()
     local st = faStyleNow()
+    local gid, gzh = D.faGlyphNow()
     local head = "自带字体图集：开关=" .. (c.fontAtlas == true and "开" or "关") ..
       " 缩放=" .. tostring(tonumber(c.faScale) or 100) .. "%" ..
+      " 字体=" .. tostring(gzh) .. "(" .. tostring(gid) .. ")" ..
       " 描边=" .. (D.FAS_ZH[st] or st) .. "(" .. st .. ")" ..
       " 表=" .. (ok and (tostring(FA.N) .. " 档 / " .. tostring(FA.nch) .. " 字符" ..
         (FA.tiers[1] and FA.tiers[1].st and " / 多风格" or " / 单风格(旧表)")) or "读不到 FontDigits.lua")
@@ -2017,27 +2175,57 @@ local function cmd(msg)
     D.fontAtlasSet(sub == "图集开")
     return
   end
+  -- ★0.2.38 **`/edmg 字体`**：列/切「字体图集」（字形素材组）——面板那一行的命令入口，同一个写口 D.faStyleSet
+  local fontArg = string.match(sub, "^字体%s+(.*)$") or string.match(sub, "^font%s+(.*)$")
+  if sub == "字体" or sub == "font" or fontArg then
+    local a = fontArg or ""
+    if a == "" then
+      local gid, gzh = D.faGlyphNow()
+      local line = "字体图集：" .. tostring(gzh) .. "（" .. tostring(gid) .. "）· 描边样式："
+        .. (D.FAS_ZH[D.faStyleNow()] or "?") .. "（" .. D.faStyleNow() .. "）"
+      say(line)
+      for k = 1, table.getn(D.FAS_SETS) do
+        local s = D.FAS_SETS[k]
+        local one = "  " .. s.zh .. "（" .. s.id .. "）= " .. table.concat(s.styles, " / ")
+        say(one)
+      end
+      say("/edmg 字体 内置|9c|武侠 切换；两种成品字形来自 fonts\\ 里的位图素材（离线切图，见 README）")
+      return
+    end
+    if not D.faGlyphSet(a) then
+      say("认不出这套字体图集：" .. a .. "（可选 内置字体 / 9c原版 / 古风武侠，或组 id ttf/f9c/fwx）")
+    end
+    return
+  end
   -- ★0.2.30 描边风格：`/edmg 描边` 列当前 + 全部可选；`/edmg 描边 soft` 直接设（id 或中文名都认）
   --   ★参数从**已小写归一**的整串里抠（多字节「描边」当字面量安全 —— 危险的是 `[...]` 字节集）
   local edgeArg = string.match(sub, "^描边%s+(.*)$") or string.match(sub, "^edge%s+(.*)$")
   if sub == "描边" or sub == "edge" or edgeArg then
     local a = edgeArg or ""
     if a == "" then
-      local line = "描边风格：" .. (D.FAS_ZH[D.faStyleNow()] or "?") .. "（" .. D.faStyleNow() .. "）"
-      for _, id in ipairs(D.FAS_ORD) do
-        line = line .. " · " .. id .. "=" .. (D.FAS_ZH[id] or id)
+      -- ★0.2.38 按「字体图集」分组列（9 个 id 平铺会让人分不清「换字形」与「换描边」）
+      local gid, gzh = D.faGlyphNow()
+      say("字体图集：" .. tostring(gzh) .. "（" .. tostring(gid) .. "）｜ 当前描边："
+        .. (D.FAS_ZH[D.faStyleNow()] or "?") .. "（" .. D.faStyleNow() .. "）")
+      for k = 1, table.getn(D.FAS_SETS) do
+        local s = D.FAS_SETS[k]
+        local line = "  " .. s.zh .. "：" 
+        for j = 1, table.getn(s.styles) do
+          local id = s.styles[j]
+          line = line .. " · " .. id .. "=" .. (D.FAS_ZH[id] or id)
+        end
+        say(line)
       end
-      say(line)
-      say(faEdgeOK() and "当前风格在表里有独立度量（FontDigits.lua 是新版）"
-        or "★FontDigits.lua 里没有多风格度量 ⇒ 实际用的是硬描边（重跑 python tmp/gen_fontatlas.py 并同步）")
+      say(faEdgeOK() and "当前风格在表里有独立度量（FontDigits.lua / FontDigitsExtra.lua 都在）"
+        or "★表里没有这种风格的度量 ⇒ 实际用的是硬描边（重跑生成器再同步：见 README「素材」那节）")
       return
     end
     if not D.faStyleSet(a) then
-      say("认不出这种风格：" .. a .. "（可选 soft/hard/glow/shadow/plain，或中文名）")
+      say("认不出这种风格：" .. a .. "（/edmg 字体 看当前图集可选的样式，或用 /edmg 描边 列全部）")
     end
     return
   end
-  say("命令：/edmg ui · 编辑 · 模拟 · 开|关 · 捕获 · 事件 · 状态 · 测试 · 图集 · 描边 [风格]")
+  say("命令：/edmg ui · 编辑 · 模拟 · 开|关 · 捕获 · 事件 · 状态 · 测试 · 图集 · 字体 [内置|9c|武侠] · 描边 [风格]")
 end
 D.cmd = cmd
 
@@ -2079,6 +2267,8 @@ function _G.EVAL_EDMG_STATE()
     faScaleMin = D.FAS_MIN, faScaleMax = D.FAS_MAX,
     -- ★0.2.30 描边风格：当前 id / 全部可选 / 表里有没有这种风格的独立度量
     faEdge = D.faStyleNow(), faEdgeList = table.concat(D.FAS_ORD, ","), faEdgeOK = D.faEdgeOK(),
+    -- ★0.2.38 字体图集（字形素材组）：当前组 id / 中文名 / 组内可选样式串（派生自 faEdge，不是第二个配置键）
+    faGlyph = select(1, D.faGlyphNow()), faGlyphZh = select(2, D.faGlyphNow()),
     -- ★0.2.31 缩放动画（图集行）：曲线 / 幅度% / 两段时长 / 幅度上下限（0 = 关）
     -- ★0.2.34 加**初始缩放**（出生弹入起点；100 = 不弹入）与峰值口径
     animCurve = (c.animCurve or DEF.animCurve), animAmp = tonumber(c.animAmp) or DEF.animAmp,
