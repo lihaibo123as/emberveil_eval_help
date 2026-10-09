@@ -35,7 +35,12 @@ function candidates() {
   const add = (root, why) => {
     if (!root) return;
     const bin = path.join(root, 'lib', 'bin.js');
-    const presets = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-web-app', 'presets');
+    // ★1.75.111 修：0.1.5-rc.2 起 presets 不再挂在 dsh-web-app 下，而由
+    //   `@deepseek-ai/dsh-agent-presets/presets` 提供（旧布局保留兜底，两种都认）。
+    //   不修的症状 = candidates() 返回空 ⇒ pickInstall() 返回 undefined ⇒ 脚本当场 TypeError。
+    const presetsNew = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-agent-presets', 'presets');
+    const presetsOld = path.join(root, 'node_modules', '@deepseek-ai', 'dsh-web-app', 'presets');
+    const presets = fs.existsSync(presetsNew) ? presetsNew : presetsOld;
     let version = '?';
     try { version = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version; } catch { }
     list.push({ root, bin, presets, version, ok: fs.existsSync(bin) && fs.existsSync(presets), why });
