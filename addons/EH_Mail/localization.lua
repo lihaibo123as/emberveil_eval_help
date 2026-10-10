@@ -28,6 +28,7 @@ L[ "Select all tip" ] = nil
 L[ "Filter menu unavailable" ] = nil
 L[ "Logging is enabled." ] = nil
 L[ "Logging is disabled." ] = nil
+L[ "Logging is now off by default. Use /tm log to enable it." ] = nil
 L[ "Sent log cleared." ] = nil
 L[ "Received log cleared." ] = nil
 L[ "AH" ] = "Auction House"

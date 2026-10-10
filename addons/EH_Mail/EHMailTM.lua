@@ -424,6 +424,10 @@ function EHMailTM.slash_command( args )
   end
 
   if args == "log" then
+    -- ★★★0.3.18：本命令是日志开关的**唯一写口** ⇒ 玩家一动它就打上 `user_set` 章。
+    --   默认档的判据只认这个章（见 ADDON_LOADED 里那段）：没盖章 = 玩家从没选过
+    --   ⇒ 载入期按新默认「关」处理；盖了章 ⇒ 玩家的选择**一个字节都不动**。
+    m.api.EHMailTM_Log[ "Settings" ][ "user_set" ] = true
     m.api.EHMailTM_Log[ "Settings" ][ "Enabled" ] = not m.api.EHMailTM_Log[ "Settings" ][ "Enabled" ]
     if m.api.EHMailTM_Log[ "Settings" ][ "Enabled" ] then
       m.info( L[ "Logging is enabled." ] )
@@ -714,13 +718,19 @@ function EHMailTM.ADDON_LOADED()
   local version = m.api.GetAddOnMetadata( "EH_Mail", "Version" )
   m.info( string.format( "Loaded (|cffeda55fv%s|r).", version ) )
 
-  -- 日志一次性迁移：老角色存档里存的是关，本版本起强制开一次；之后 /tm log 的手动开关照旧尊重
+  -- ★★★0.3.18：日志**默认档 = 关**（用户 2026-10-10：「默认关闭日志」）。判据只有一处 ——
+  --   `Settings.user_set == true`（= 玩家自己在 /tm log 里设过）⇒ **一个字节都不动**；
+  --   否则一律按新默认落成**显式 false**。
+  --   ★**必须有那个章才认**：旧版每次客户端版本变化都强制写 `Enabled = true`（那不是玩家的选择）
+  --   ⇒ 只看 `Enabled` 会把自己当年强制写的值当成玩家选过。
+  --   ★**行为改变如实出声一次**（只在真的从「非关」改成「关」时；落成之后条件不再成立，不刷屏）。
   local log_settings = m.api.EHMailTM_Log[ "Settings" ]
-  if log_settings.log_on_version ~= version then
-    log_settings.log_on_version = version
-    log_settings.Enabled = true
-    m.info( "日志已默认启用，可用 /tm log 关闭。" )
+  if log_settings.user_set ~= true and log_settings.Enabled ~= false then
+    log_settings.Enabled = false
+    m.info( L[ "Logging is now off by default. Use /tm log to enable it." ] )
   end
+  -- ★旧版那个「按客户端版本强制开」的记号已无用途 ⇒ 一次性清掉（不留「有键无代码」的迷惑项）
+  if log_settings.log_on_version ~= nil then log_settings.log_on_version = nil end
 
   if not m.api.EHMailTM_Log[ "Settings" ].first_run then
     m.api.EHMailTM_Log[ "Settings" ].first_run = version
