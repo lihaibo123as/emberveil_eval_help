@@ -940,6 +940,13 @@ tooltip 信息提示是这个邮件的**发件人.附件信息.金币**等等, �
 「已从「收发记录 · 已收到」删掉 1 条：<对方>（主题「<主题>」，这一页还剩 M 条）」；③ **开着筛选/日期区间**
 再右键删 / 再清空 ⇒ 删的与清的都是对的那一些（筛选不参与决策）；④ 悬停气泡末两行 = 左键那行（绿）+ 右键那行（红）。
 
+## 发布打包（★本子插件独有的一条硬约束）
+
+★★★**本目录的 toc 只列了 3 个文件**（`EH_Mail.lua` / `EHMailTM_Saved.lua` / **`EHMailTM.xml`**），而**增强版那 9 个文件全在 XML 与源码里按名引用**（`EHMailTM.lua` / `Calendar.lua` / `MailTo.lua` / `localization.lua` / `localization.cn.lua` + 三张素材 `EHMailTM-AH.blp` / `EHMailTM-RetArrow.blp` / `EHMailTM-DownArrow.tga`）⇒ **打包口径 = 「toc 列的文件（任一运行时扩展名）+ XML 里 `file="…"` 的传递闭包 + 源码里 `Interface\AddOns\EH_Mail\…` 引用的素材」三样全要拼**，一件都不能少。
+· ★★**历史事故（v1.75.117 / v1.75.118 两个 Release 的外发包都中招）**：当时的 `tmp/pack_subaddons.ps1` **只匹配 toc 里的 `^…\.lua$`** ⇒ 出出来的 `EH_Mail-v0.3.18.zip` **只有 5 个文件、连 `EHMailTM.xml` 都没进包** ⇒ 玩家单独装那份**只拿到 `/email` 体检那一半**，增强版一行都没载入，**而且不报错**（toc 不引用缺失文件 = 纯静默）。v1.75.119 起修好：`EH_Mail-v0.3.23.zip` = **14 个文件 / 156 KB**。
+· ★**自己核一遍的口径**（不用跑脚本也能判）：解压后数「toc 的 3 行 + XML 里所有 `file=` + 三条素材」是否都在；`bad=0`（无 `CLAUDE.md` / 无 `preview/`）+ 固定名那份与版本名那份 SHA256 相同。
+· 详见宿主参考卷「子插件独立打包」那节与宿主 `CLAUDE.md` §4.3 宿主契约 ④（三处口径必须一起改）。
+
 ## 已知欠账
 
 * ★**0.3.23（「清空」按钮 + 图标右键删一条）的行为判据还没进任何 harness** ——

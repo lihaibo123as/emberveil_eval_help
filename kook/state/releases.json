@@ -179,5 +179,42 @@
       "EH_Bag",
       "EH_Mail"
     ]
+  },
+  "1.75.119": {
+    "at": 1791631695184,
+    "channel_id": "5336773639081280",
+    "plugins": {
+      "EvalHelp": "1.75.119",
+      "EH_Bag": "0.3.48",
+      "EH_Damage": "0.2.46",
+      "EH_DebugBox": "0.4.0",
+      "EH_DPS": "0.2.5",
+      "EH_Mail": "0.3.23"
+    },
+    "baseline": "1.75.118",
+    "threads": [
+      {
+        "post": "主插件",
+        "id": "146908821132935424",
+        "title": "EvalHelp v1.75.119 发布（主插件 · 全职业工具）",
+        "files": [
+          "EvalHelp-v1.75.119.zip"
+        ]
+      },
+      {
+        "post": "EH_Mail",
+        "id": "146908837171954432",
+        "title": "EH_Mail v0.3.23 发布（邮箱增强）",
+        "files": [
+          "EH_Mail-v0.3.23.zip"
+        ]
+      }
+    ],
+    "skipped": [
+      "EH_Damage",
+      "EH_DPS",
+      "EH_DebugBox",
+      "EH_Bag"
+    ]
   }
 }

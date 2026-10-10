@@ -204,8 +204,12 @@ Remove-Item $staging -Recurse -Force
 
    | 附件名 | 内容 |
    | :-- | :-- |
-   | `<名>-v<子版本>.zip` | 顶层一个 `<名>\`：`<名>.toc` 里列的 `.lua` + `media\`（若有；剔除 `_v`/`Textures` 这类测试素材）+ `README.md` + `CHANGELOG.md` |
+   | `<名>-v<子版本>.zip` | 顶层一个 `<名>\`：**`<名>.toc` 里列的每一个运行时文件**（不止 `.lua` —— 还可能有 `.xml` / `.blp` / `.tga`）**＋ 那些 XML 里 `file="…"` 拉起的脚本 ＋ 打包脚本里按名引用的素材** ＋ `media\`（若有；剔除 `_v`/`Textures` 这类测试素材）＋ `README.md` ＋ `CHANGELOG.md` |
    | `<名>.zip` | 上一份的**固定名副本**（同一目录、**内容逐字节相同**、SHA256 必须相等） |
+
+   · ★★★**「toc 里只列 .lua」是 2026-10-10 之前的旧假设，已作废**（真机外发事故）：`EH_Mail.toc` 列的是 `EH_Mail.lua` / `EHMailTM_Saved.lua` / **`EHMailTM.xml`**，而 `EHMailTM.lua` / `Calendar.lua` / `MailTo.lua` / `localization*.lua` / 三张 `.blp`·`.tga` 素材**都在 XML 与源码里按名引用** ⇒ 旧脚本（只匹配 `^[A-Za-z0-9_\-]+\.lua$`）出出来的 `EH_Mail-v0.3.18.zip` **只有 5 个文件**、**连 XML 都没进包** ⇒ 玩家单独装那份**只拿到 `/email` 体检那一半**（增强版一行都没载入，且因为 toc 不引用缺失文件，**不报错、纯静默**）。v1.75.117 / v1.75.118 两个 Release 的 EH_Mail 子包都是这个形态；v1.75.119 起修好（`EH_Mail-v0.3.23.zip` **14 个文件 / 156 KB**）。
+   · ★★★**现行打包口径（`tmp/pack_subaddons.ps1`，唯一实现）三条来源全要拼**：① toc 里列的**任一运行时扩展名**（`lua|xml|tga|blp|txt|ttf`）；② 那些 `.xml` 里 `file="…"` 的传递闭包（脚本/素材）；③ 打进去的 `.lua`/`.xml` 文本里形如 `Interface\AddOns\<名>\<路径>` 的**素材引用**（EH_Mail 那三张图章就靠这条进包）—— ★**负对照名（`__no_such_*.tga` 这类故意的「不存在的探针文件」）一律跳过**（EH_Damage 有一处，进包/报警都是错的）。
+   · ★★★**核对必须加两条腿**（旧脚本只数条目 + 看 README）：**toc 里列的文件逐个必须在 zip 里**（`tocMissing=0`）+ **源目录真的存在那些引用文件**（`SOURCE MISSING` 才报红）⇒ 判据行 = `entries=… readme=True bad=0 same=True tocMissing=0`，`fail=0` 才算过。
 
    · ★**产物目录 = 主插件那两个 zip 同一个目录**（`$out = Split-Path $repo -Parent` ⇒ `Interface/AddOns/` 下，**不进仓库**）。
    · ★**子版本现读** `<名>.toc` 的 `## Version`（EH_Bag 另与源码常量 `BAG_BUILD` 相等）⇒ **脚本不许写死版本号**；本节出现的 `EH_Bag-v0.3.29.zip` 只是**当时的例子**。
