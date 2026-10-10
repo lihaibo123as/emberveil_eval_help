@@ -46,6 +46,14 @@
       "plugins": ["EH_Bag"],
       "cover": "bank.png",
       "images": ["bank.png", "info.png"]
+    },
+    {
+      "name": "EH_Mail",
+      "category_id": "15785973",
+      "title": "EH_Mail v{sub} 发布（邮箱增强）",
+      "plugins": ["EH_Mail"],
+      "cover": "send.png",
+      "images": ["send.png", "logs.png", "revice.png"]
     }
   ],
 

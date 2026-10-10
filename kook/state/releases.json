@@ -98,5 +98,56 @@
         ]
       }
     ]
+  },
+  "1.75.117": {
+    "at": 1791605476809,
+    "channel_id": "5336773639081280",
+    "plugins": {
+      "EvalHelp": "1.75.117",
+      "EH_Bag": "0.3.48",
+      "EH_Damage": "0.2.46",
+      "EH_DebugBox": "0.4.0",
+      "EH_DPS": "0.2.5",
+      "EH_Mail": "0.3.18"
+    },
+    "baseline": "1.75.111",
+    "threads": [
+      {
+        "post": "主插件",
+        "id": "146864807448937216",
+        "title": "EvalHelp v1.75.117 发布（主插件 · 全职业工具）",
+        "files": [
+          "EvalHelp-v1.75.117.zip"
+        ]
+      },
+      {
+        "post": "EH_Damage",
+        "id": "146864822665872384",
+        "title": "EH_Damage v0.2.46 发布（增强伤害显示）",
+        "files": [
+          "EH_Damage-v0.2.46.zip"
+        ]
+      },
+      {
+        "post": "EH_Bag",
+        "id": "146864834779022336",
+        "title": "EH_Bag v0.3.48 发布（整合背包）",
+        "files": [
+          "EH_Bag-v0.3.48.zip"
+        ]
+      },
+      {
+        "post": "EH_Mail",
+        "id": "146864849039655680",
+        "title": "EH_Mail v0.3.18 发布（邮箱增强）",
+        "files": [
+          "EH_Mail-v0.3.18.zip"
+        ]
+      }
+    ],
+    "skipped": [
+      "EH_DPS",
+      "EH_DebugBox"
+    ]
   }
 }
