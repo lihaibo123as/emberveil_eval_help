@@ -22,7 +22,7 @@
 --   · 字体链 FZLBJW→FRIZQT→ARIALN 全程 pcall；FontString 不吃鼠标 ⇒ 热区用透明 Button。
 -- ============================================================================
 
-local BUILD = "0.2.45"
+local BUILD = "0.2.46"
 
 -- ★★★插件目录名 = 本文件所在目录 + `EH_Damage.toc` 的文件名 —— **聊天播报的前缀就用它**
 --   （用户 2026-10-10：「插件载入信息换成插件目录名」：截图里旧的中文前缀与 `[EH_DPS]` 两种写法混着，
@@ -1313,6 +1313,16 @@ EVH["CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS"] = function(m)
   -- ★0.2.45：能量句的解析搬到**唯一口** `energizeParse`/`energizeShow`（见上文那段）——
   --   真机「你从血性狂暴获得了1点RAGE_POINTS。」走**这个**事件（怒不可遏/冲锋走 SPELL_SELF_BUFF）。
   if energizeShow(m) then return end
+  -- ★★0.2.46：别人给我的治疗 tick **也落在这个事件上**（用户 2026-10-10 真机捕获环：
+  --   `RAW CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS |1=你因Iosol的恢复而获得了40点生命值。` ⇒ 被记成
+  --   `PERIODIC_SELF_BUFFS?` = **一条都不显示**）—— 这条句子与「友方治疗者」那条事件上的**形状完全一样**
+  --   ⇒ **绝不另写一份治疗解析**，直接交给**同一个处理器**（它自带「提不出数字不硬显示」）。
+  --   ★只放行「你因…点生命值」与「你获得…点生命值」两种**治疗句**形状：本事件还有
+  --     「你获得了恢复的效果。」这类**效果句**，无脑转发会把它们全变成 `HEAL-NONUM` 而**丢掉效果显示**。
+  if string.find(m, "点生命值", 1, true) and (string.find(m, "^你因") or string.find(m, "^你获得")) then
+    EVH["CHAT_MSG_SPELL_HOSTILEPLAYER_BUFF"](m)
+    return
+  end
   -- ★模式次序（0.2.14 修）：先整句（「…获得了 X 。」两种主语），再「效果」形 ——
   --   `(.-)效果` 按首个「效果」截会得到「恢复的」（与整句形「恢复的效果」归一不到一起 = 去重失效）
   local a = string.match(m, "^你获得了(.+)。") or string.match(m, "^你从.-获得了(.+)。")

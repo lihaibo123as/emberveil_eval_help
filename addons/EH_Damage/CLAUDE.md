@@ -51,6 +51,16 @@
   ③ **显示格式 = 名字在前**（`pw .. "+" .. n` ⇒ **`怒气+1`**；旧写法是「+1 怒气」）。
   ④ ★**要看得见还得勾显示项**：`it_energize`（「能量获取显示」）**默认关**（0.2.36 作者实配）⇒ 修好只是「不再错画成绿字」，
   想看到 `怒气+1` 必须在面板勾上它（默认档没动）。
+- ★★★**「同一个事件上的第二类句子」必须显式放行，绝不整句转发（0.2.46；用户「可以」）** ——
+  `CHAT_MSG_SPELL_PERIODIC_SELF_BUFFS` 这条事件上至少**三类句子**：① 能量句（`你从X获得了N点RAGE_POINTS。`）
+  ② **别人给我的治疗 tick**（真机捕获环：`RAW …PERIODIC_SELF_BUFFS |1=你因Iosol的恢复而获得了40点生命值。`
+  ⇒ 旧写法只认 ① 与「效果」形 ⇒ 这类句子**落到兜底捕获 `PERIODIC_SELF_BUFFS?` = 屏上一条都不显示**）
+  ③ **效果句**（`你获得了恢复的效果。`）。
+  ⇒ 修法 = **治疗 tick 那一类转交给「友方治疗者」同一个处理器**（`EVH["CHAT_MSG_SPELL_HOSTILEPLAYER_BUFF"](m)`，
+  ★**绝不另写一份治疗解析** —— 两句形状完全一样，屏上都是绿色 `+N [谁]`），但**转发必须有形状门**：
+  只放行「含 `点生命值` ∧ 以 `你因` 或 `你获得` 开头」—— **无脑整句转发会把效果句全变成 `HEAL-NONUM` 失败捕获、
+  丢掉效果显示**（0.2.14 修过的功能）。★**不引入跨事件去重**的理由 = 捕获环证据（该句只在周期性事件上出现，
+  同批 `HOSTILEPLAYER_BUFF` 没有它）⇒ 真机若报「一次治疗显示两条」，再加「整句做键」的去重窗。
 - ★★★**姓名板附着做不了（2026-10-08 定案，别再重做）**：用户需求 = 把伤害数字锚到**怪头顶那条浮动姓名板**。
   取证：本客户端姓名板是 **UE 引擎 widget**（exe 里 `AzerothNameplateWidget` / `AzerothNameplateWidgetComponent` /
   `HealthPlateComponent`），**Lua 侧只有 `ShowNameplates`/`HideNameplates`/`ShowFriendNameplates`/`HideFriendNameplates`

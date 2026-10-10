@@ -683,8 +683,26 @@ function EVAL_TH_SET(on)
 end
 
 -- 载入期之后（存档已可读）按真值应用一次；幂等
+-- ★★★1.75.116 默认档改成**开**（用户：「默认开启血量显示」）：键为 **nil**（从没设过）⇒ 在这里落成
+--   **显式 true** 并**如实出声一次** —— 老存档里 nil 意味着旧版是关着的，悄悄变开 = 用户眼里的
+--   「功能自己冒出来」（本项目「行为改变必须出声」）。
+--   ★**读口一个字不改**（`EVAL_TH_ENABLED` 仍是「只有显式 true 才是开」）⇒ 用户**显式关过（false）永远是关**，
+--     载入期绝不用「默认开」顶回用户的选择（默认档两条写法见 CLAUDE.md §5.4）。
+--   ★默认开却显示不出来（数据表没进 toc）⇒ **回退成显式 false** + 如实出声（与 `EVAL_TH_SET` 同一口径：
+--     绝不把开关留在「勾着但什么都不显示」的静默态）。
 function EVAL_TH_INSTALL()
-  if EVAL_TH_ENABLED() then thApply(true) end
+  local tb = thTb()
+  local isNew = (type(tb) == "table" and tb.targetHealth == nil)
+  if isNew then tb.targetHealth = true end
+  if EVAL_TH_ENABLED() then
+    local ok = thApply(true)
+    if isNew and not ok and type(tb) == "table" then
+      tb.targetHealth = false
+      thSay(L("TH_ON_FAIL"))
+      return false
+    end
+  end
+  if isNew then thSay(L("TH_DEF_ON")) end
   return true
 end
 

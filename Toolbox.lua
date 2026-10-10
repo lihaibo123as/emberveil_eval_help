@@ -4717,7 +4717,8 @@ local function tbModel()
     --   添加个工具->目标生命值显示开关,显示方式和当前生命值方式类似.UI类似」）：
     --   同 infoBar/lootCursor 一样只是**一行数据** —— 数据表、自建小条、tooltip、命令全在模块里
     --   （`EVAL_TB_MOD_ROWS["targetHealth"]`）。★不写 `noChk` ⇒ 保留主开关勾选框（真值 = `tbCfg().targetHealth`，
-    --   读写走模块的 `EVAL_TH_ENABLED` / `EVAL_TH_SET`）。★**默认关**（nil ⇒ false，模块不物化 true）。
+    --   读写走模块的 `EVAL_TH_ENABLED` / `EVAL_TH_SET`）。★**默认开**（1.75.116 起；nil ⇒ 载入期在
+    --   `EVAL_TH_INSTALL` 落成**显式 true** + 如实出声一次；**读口一个字不改** ⇒ 用户显式关过永远是关）。
     { t = "mod", mod = "targetHealth", key = "targetHealth", label = L("TB_TARGETHEALTH"), tip = L("TB_TARGETHEALTH_TIP") },
     { t = "h", label = L("TB_H_MERCHANT") },
     -- ★1.75.43 物品价（tools/ItemPrice.lua，A1 = 价格库 + 学价 + 悬停价格行 + 背包/银行估值）：
