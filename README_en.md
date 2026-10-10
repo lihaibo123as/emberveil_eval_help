@@ -142,7 +142,7 @@ switches target, casts, and restores your original target — **you never click 
 **Option 1: download a release (recommended)** — grab the latest `EvalHelp-vX.Y.Z.zip` from the [Releases page](https://gitee.com/xeval/emberveil_eval_help/releases) and extract it into `Interface/AddOns/` (after extraction it should look like `AddOns/EvalHelp/EvalHelp.toc`):
 
 ```
-https://gitee.com/xeval/emberveil_eval_help/releases/download/v1.75.112/EvalHelp-v1.75.112.zip
+https://gitee.com/xeval/emberveil_eval_help/releases/download/v1.75.117/EvalHelp-v1.75.117.zip
 ```
 
 **Option 2: clone the source** — `git clone git@gitee.com:xeval/emberveil_eval_help.git`, put the whole directory into `Interface/AddOns/` and make sure the folder is named `EvalHelp`.
