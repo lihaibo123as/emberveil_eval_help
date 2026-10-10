@@ -11,7 +11,7 @@ L[ "Money received" ] = nil
 L[ "All mails" ] = nil
 L[ "This mail was returned to you." ] = nil
 L[ "This mail was sent by an auctionhouse." ] = nil
-L[ "Log" ] = nil
+L[ "Log" ] = "Mail Log"
 L[ "Received" ] = nil
 L[ "Sent" ] = nil
 L[ "Auction House" ] = nil
@@ -28,7 +28,8 @@ L[ "Select all tip" ] = nil
 L[ "Filter menu unavailable" ] = nil
 L[ "Logging is enabled." ] = nil
 L[ "Logging is disabled." ] = nil
-L[ "Logging is now off by default. Use /tm log to enable it." ] = nil
+L[ "Mail logging is back on by default. Use /tm log to turn it off." ] = nil
+L[ "Logging is off (not recording). Type /tm log to turn it on." ] = nil
 L[ "Sent log cleared." ] = nil
 L[ "Received log cleared." ] = nil
 L[ "AH" ] = "Auction House"
@@ -74,6 +75,20 @@ L[ "LOG_FILL_OK" ] = "Switched to the send page; recipient filled as \"%s\" (tha
 L[ "LOG_FILL_NONE" ] = "Switched to the send page - this mail has no counterpart to fill in"
 L[ "LOG_FILL_FAIL" ] = "Could not fill \"%s\" into the recipient box"
 L[ "LOG_TIP_HINT" ] = "Hover an icon for that mail's details"
+
+-- ★0.3.23 收发记录页头「清空」按钮 + 图标右键删一条（键名与 `localization.cn.lua` 一一对应，
+--   两边**都必须**有值 —— 缺一边就会把键名本身画到聊天框/气泡上，本文件在案的老坑）。
+--   ★★★带 `%` 的键：**两种语言的转换符顺序必须一致**（`string.format` 按出现次序取实参 ⇒
+--     中文里把 `%s` 写到 `%d` 前面 = 拿字符串去填 `%d`，真机当场红字 `bad argument #N to 'format'`）。
+L[ "Clear" ] = "Clear"
+L[ "LOG_TIP_RIGHT" ] = "|cffff7070Right-click|r = delete this log record"
+L[ "Click it again to clear all %d record(s) of %s (filters do not matter)." ] = "Click it again to clear all %d record(s) of %s (filters do not matter)."
+L[ "Cleared %d record(s) of %s." ] = "Cleared %d record(s) of %s."
+L[ "%s has no records to clear." ] = "%s has no records to clear."
+L[ "Open the log page first, then click Clear." ] = "Open the log page first, then click Clear."
+L[ "The log page is not open - nothing was deleted." ] = "The log page is not open - nothing was deleted."
+L[ "That record is no longer in the list - nothing was deleted." ] = "That record is no longer in the list - nothing was deleted."
+L[ "Deleted one record from %s: %s - %s (%d left)." ] = "Deleted one record from %s: %s - %s (%d left)."
 
 -- ★0.3.15 关邮箱 = 附件选择整体作废（用户定：「在邮箱关闭之后. 要做好背包内附件锁定清理的流程.」）
 L[ "REL_CLOSED" ] = "Mailbox closed: cleared %d selected attachment(s), nothing in your bags was touched"

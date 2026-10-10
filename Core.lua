@@ -136,7 +136,16 @@ function EVAL_LOG_DUMP(n)
 end
 function EVAL_LOG_CLEAR()
   local c = rawget(_G, "EVAL_HELP_CONFIG")
-  if type(c) == "table" then c.log = {} end
+  if type(c) ~= "table" then return true end
+  local buf = c.log
+  if type(buf) ~= "table" then return true end
+  -- ★★★1.75.119：**只清环形缓冲，绝不动同一张表上的开关字段**。
+  --   旧写法 `c.log = {}` 会把 `cfg.log.on`（总闸门真值）与 `cfg.log.userSet`（默认档的判据章）**一起抹掉**
+  --   ⇒ 后果两条：① 敲过一次 `/eh logclear` 之后，那一轮载入会把总闸门重新落成「关」并**再出声一次**；
+  --     ② 玩家把总闸门**开回来**过的话，`userSet` 一丢就再也拦不住默认档 ⇒ **下次载入被顶回关**
+  --     （= 顶改用户选择，本项目明令禁止）。
+  --   ★缓冲是连续数值序（`table.insert` 追加）⇒ 按 `table.getn` 逐格置 nil 即可，字符串字段原样留着。
+  for i = 1, table.getn(buf) do buf[i] = nil end
   return true
 end
 function EVAL_LOG_COUNT()

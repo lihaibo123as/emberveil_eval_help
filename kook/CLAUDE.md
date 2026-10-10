@@ -208,6 +208,20 @@ cmd /c "node kook\kook_guide.js --update-announce --send"     # 真发（同版�
 - ★★**欢迎词只在「新成员加入」时发**（事件 `joined_guild` ⇒ `doWelcome()`）⇒ **改完模板，频道里不会立刻出现新文案**（历史那些欢迎词是发给当时进服那个人的，**别去改历史消息**，`message/update` 只能改机器人自己发的、且没有「回填欢迎词」这种需求）。
 - ★**要立刻验/演示** = `--welcome <id> --send`（发完 `--msg-delete <msg_id> --send` 收掉；演示就发**机器人自己的 id**，别去 `(met)` 真人）。
 - ★**频道名与 id 是唯一真值，文案里逐字照抄现读结果**（现读命令见 §一·补）—— 判据 = 文案里每个 `(chn)<id>(chn)` 都能在 `guild/view` 里找到同名频道；找不到 = 写错，回炉。
+- ★★★**常驻监听可能在「另一台电脑」上跑 ⇒ 改完文案先查「监听在哪台机器读哪个工作区」**（2026-10-10 真机报障「kook 频道欢迎好像没生效」换来的）：现象 = 新成员进服 1 秒后确实收到欢迎词，**但是旧文案**，而本机**一个监听进程都没有**。三条判据（缺一条就会误判成「文案没改对」）：
+  ① **进程** = 本机有没有 `node … kook_guide.js --listen`（用 `Get-CimInstance Win32_Process` 全量看，别只 `Get-Process node`，也别只匹配 `kook_guide`）；
+  ② **账本 mtime** = `kook/state/guide.json` 的 mtime **有没有跟上这次入服时间**（`doWelcome` 发完就 `saveStatePatch({welcomed})` ⇒ 谁发谁写；本机没写 = 不是本机发的）；
+  ③ **份数** = 全盘 `kook_guide.js` / `welcome.md` 有几份（★本机 `…\Emberveil\emberveil_live_win64\Azeroth\…` 只是指向 `…\Emberveil\live` 的 **Junction**，别当成第二份）。
+  ⇒ 口径：**文案只对「发欢迎词那个工作区」生效**；那一台没取到新版之前，改本机/推送都不生效。
+- ★★**模板是「每次发欢迎词都现读文件」⇒ 只换文件、不用重启监听**（`readTemplate` = `fs.readFileSync`，`kook_guide.js:129`，`doWelcome` 每次都调它）；只有动 `kook_guide.js` 代码才需要重启。
+- ★★★**另一台机器取这份文案的最小命令**（★别直接 `git pull`）：`kook/state/guide.json` · `kook/state/releases.json` · `kook/queue/feedback.json` · `kook/queue/INBOX.md` **都是被 git 跟踪的运行态**，常驻监听/发布一直在写 ⇒ 整份 `git pull` 会被「Your local changes … would be overwritten」拒掉。只取这三份文案/记忆体即可（**不碰账本、零冲突**）：
+  ```powershell
+  cd <另一台的仓库>
+  git fetch origin
+  git checkout origin/master -- kook/guide/welcome.md kook/guide/announce.md kook/CLAUDE.md
+  node kook\kook_guide.js --welcome 870115382   # 零请求：把「将来会发出去的欢迎词」原样打出来核对
+  ```
+  要**整份拉齐**时：先把那四个运行态文件备份出来 → `git checkout --` 丢掉本机改动 → `git pull` → 再把备份还回（账本别丢：「已欢迎」记录与优化队列都在里面）。
 
 ### 九·补二、通知（「公告与通知」频道）—— 写法 / 链接口径 / 判据（★唯一正文）
 

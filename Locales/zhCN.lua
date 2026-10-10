@@ -779,6 +779,8 @@ TB_DISC_NO_TN = "输入框没载入 —— 请用「从背包选择」",
   DD_COL_FMT = "列 %d-%d/%d · 滚轮翻列",
   G_LOG_H = "日志",
   G_LOG_FILE = "调试日志（/eh logdump 查看）",
+  -- ★1.75.119 默认档改成「关」时的一次性出声（走常开出口，见 VARIABLES_LOADED 那段）
+  G_LOG_DEFOFF = "「调试日志」现在默认关闭 —— 插件不再自动往聊天框输出（你敲的命令回显照旧看得见）。要开回来：配置窗 → 全局 → 调试日志，或敲 /eh log",
   G_LOG_AUTO = "进出战斗自动输出",
   G_UI_H = "界面",
   G_UI_COMBAT = "战斗信息UI（/eh ui）",

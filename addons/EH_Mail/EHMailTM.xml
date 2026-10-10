@@ -410,6 +410,28 @@
 				</Layers>
 			</Button>
 
+			<!-- ★0.3.23「清空」= 清掉**当前这一页**（已收到 / 已发送）的全部记录（两次点击确认）。
+			     位置 = 「筛选」右缘（x=145）与「全部」下拉框本体（x=231）之间那段空档：宽 66、左缘 152。
+			     ★绝不右移到 x=231 之后 —— 那个串继承 UIDropDownMenuTemplate，它的可见装饰从**帧本体左缘**
+			     起算（左 25 + 中 115 + 右 25），压上去就是吃掉下拉的点击区。 -->
+			<Button name="EHMailTMLogClearButton" inherits="UIPanelButtonTemplate" text="清空">
+				<Size>
+					<AbsDimension x="66" y="22"/>
+				</Size>
+				<Anchors>
+					<Anchor point="TOPLEFT">
+						<Offset>
+							<AbsDimension x="152" y="-70"/>
+						</Offset>
+					</Anchor>
+				</Anchors>
+				<Scripts>
+					<OnClick>
+						EHMailTM.log.clear_current()
+					</OnClick>
+				</Scripts>
+			</Button>
+
 			<Button name="EHMailTMLogStartTime">
 				<Size>
 					<AbsDimension x="80" y="20"/>
@@ -723,7 +745,7 @@
 		</Frames>
 	</Frame>
 
-	<Button name="MailFrameTab3" inherits="FriendsFrameTabTemplate" id="3" parent="MailFrame" text="Log">
+	<Button name="MailFrameTab3" inherits="FriendsFrameTabTemplate" id="3" parent="MailFrame" text="收发记录">
 		<Anchors>
 			<Anchor point="LEFT" relativeTo="MailFrameTab2" relativePoint="RIGHT">
 				<Offset>

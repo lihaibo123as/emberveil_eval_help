@@ -35,6 +35,64 @@ m.get_realm_faction_key = get_realm_faction_key
 local getn = table.getn 
 local function pack( ... ) return arg end
 
+-- ============================================================
+-- ★★★0.3.19 取证环（**只读诊断**，落盘 `EH_MAIL_CFG.errProbe`，有界 40 条、最新在前）
+-- ============================================================
+-- 为什么要有它：真机报障「接收所有邮件时刷很多『内部邮件数据库错误』」——那行字是**引擎自己打的**
+-- （`ERR_MAIL_DATABASE_ERROR`，见 `inbox_open` 尾部那段注释），不经过我们的代码 ⇒ 光看聊天框
+-- 分不清「报在哪一步 / 哪一封 / 每封几条 / 是不是同一条」。⇒ 这里把 `UI_ERROR_MESSAGE` 的
+-- **错误原文 + 现场读数**（在不在批量、第几封、共几封、这一封有没有钱与附件）一起记下来，
+-- 配合 `/tm 错误` 一条命令摊开 ⇒ **一次真机运行就能自证「修好了没有」**。
+-- ★只读：一个业务状态都不改（连开关都不碰）；★进环的每一行都是字符串（nil 会截断后面的行，本项目在案）。
+m.err_ring_max = 40
+
+-- 记一行（tag = 分类、detail = 现场读数）。★`EH_MAIL_CFG` **每次现读全局** ——
+-- 文件执行期那是空表、客户端随后才换真表（孤儿表老雷，见 EHMailTM_Saved.lua 头注释）。
+function EHMailTM.err_note( tag, detail )
+  local cfg = rawget( _G, "EH_MAIL_CFG" )
+  if type( cfg ) ~= "table" then return end
+  local ring = cfg.errProbe
+  if type( ring ) ~= "table" then
+    ring = {}
+    cfg.errProbe = ring
+  end
+  tinsert( ring, 1, string.format( "%.1fs ｜ %s ｜ %s", GetTime(), tostring( tag ), tostring( detail or "" ) ) )
+  while getn( ring ) > m.err_ring_max do tremove( ring ) end
+end
+
+-- 会话计数（不落盘）：给「打开了 N 封 / UI 报错 M 条」这个比例 —— 一眼能判「修好没有」
+m.err_stat = { open = 0, uierr = 0, gone = 0, still = 0, dlydrop = 0 }
+
+-- 读邮件总数（取证专用）：**`pcall` 包住** —— 报错那一拍邮件数据库本来就可能异常，
+-- 诊断口自己绝不许变成故障源（读不到就如实记 "?"，不假装是 0）。
+function EHMailTM.err_num_items()
+  local ok, n = pcall( m.api.GetInboxNumItems )
+  if ok and type( n ) == "number" then return n end
+  return "?"
+end
+
+-- 摊开取证环（`/tm 错误 [条数]`，默认最新 12 条）
+function EHMailTM.err_dump( n )
+  local s = m.err_stat
+  m.info( string.format( "[错误取证] 打开邮件 %d 封 ｜ UI 错误 %d 条 ｜ 取完已消失 %d ｜ 取完仍在(已删) %d ｜ 右键越界丢弃 %d",
+    s.open, s.uierr, s.gone, s.still, s.dlydrop ) )
+  local cfg = rawget( _G, "EH_MAIL_CFG" )
+  local ring = ( type( cfg ) == "table" ) and cfg.errProbe or nil
+  if type( ring ) ~= "table" or getn( ring ) == 0 then
+    m.info( "环里暂时没有记录 —— 没报错就是好消息。" )
+    return
+  end
+  local cap = tonumber( n ) or 12
+  if cap < 1 then cap = 1 end
+  if cap > getn( ring ) then cap = getn( ring ) end
+  for i = 1, cap do
+    m.info( ring[ i ] )
+  end
+  if getn( ring ) > cap then
+    m.info( string.format( "……共 %d 条，上面显示最新 %d 条。", getn( ring ), cap ) )
+  end
+end
+
 local ATTACHMENTS_MAX = 21
 local ATTACHMENTS_PER_ROW_SEND = 7
 local ATTACHMENTS_MAX_ROWS_SEND = 3
@@ -232,6 +290,8 @@ function EHMailTM.slash_command( args )
     m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/tm paneloff <dx> [dy]|reset|r " .. L[ "Panel offset usage" ] )
     m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/tm panel|r " .. L[ "Panel layout diag" ] )
     m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/tm save|r " .. L[ "Panel offset saved" ] )
+    -- ★0.3.19：取证环的读口（只读）——真机排查「内部邮件数据库错误」时唯一要敲的一条
+    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/tm 错误 [条数]|r 摊开「内部邮件数据库错误」取证环（打开/报错/取完是否消失，只读）" )
     -- ★0.3.10 起的测试指令（0.3.11 改成「附件选择列表」语义；见文件末尾那一节）
     m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffffd100—— 附件选择列表 / 测试指令 ——|r" )
     m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/tm 发送背包 <N> [包]|r 背包第 1..N 格直接挂上并寄给当前收件人（不碰光标/客户端寄件栏）" )
@@ -427,20 +487,30 @@ function EHMailTM.slash_command( args )
     -- ★★★0.3.18：本命令是日志开关的**唯一写口** ⇒ 玩家一动它就打上 `user_set` 章。
     --   默认档的判据只认这个章（见 ADDON_LOADED 里那段）：没盖章 = 玩家从没选过
     --   ⇒ 载入期按新默认「关」处理；盖了章 ⇒ 玩家的选择**一个字节都不动**。
+    -- ★★★0.3.20：这里**不再动页签显隐** —— 日志页签常显（见 `MAIL_SHOW` 那段的长注释）。
+    --   开/关只影响「记不记录」与页签里那行状态提示，**入口永远在**。
     m.api.EHMailTM_Log[ "Settings" ][ "user_set" ] = true
     m.api.EHMailTM_Log[ "Settings" ][ "Enabled" ] = not m.api.EHMailTM_Log[ "Settings" ][ "Enabled" ]
     if m.api.EHMailTM_Log[ "Settings" ][ "Enabled" ] then
       m.info( L[ "Logging is enabled." ] )
-      if m.api.MailFrame:IsVisible() then
-        m.api.MailFrameTab3:Show()
-      end
     else
       m.info( L[ "Logging is disabled." ] )
-      if m.api.MailFrame:IsVisible() then
-        m.api.MailFrameTab3:Hide()
-      end
     end
     m.log_enabled = m.api.EHMailTM_Log[ "Settings" ][ "Enabled" ]
+    -- 开关一变立刻把日志页刷一遍（状态行那行提示要跟着变）。
+    -- ★必须守 `m.current_log_type`：`populate` 内部会做 `log_type .. "Filters"`，
+    --   喂 nil 就是「汉字拼 nil」当场红字（`current_log_type` 只由 `populate` 自己赋值 ⇒ 从没打开过日志页时它是 nil）。
+    if m.current_log_type and m.log and type( m.log.populate ) == "function" then
+      m.log.populate( m.current_log_type )
+    end
+  end
+
+  -- ★★★0.3.19：`/tm 错误 [条数]` = 只读摊开取证环（「内部邮件数据库错误」那件事的唯一判读口）。
+  --   它把「打开了多少封 / UI 报错多少条 / 取完已消失多少 / 取完仍在多少 / 右键越界丢弃多少」
+  --   与环里最新几条一起打出来 ⇒ **一次真机运行就能自证修好没有**，不用猜、也不用玩家转述。
+  if string.find( args, "^错误" ) or string.find( args, "^err" ) then
+    m.err_dump( string.match( args, "(%d+)" ) )
+    return
   end
 
   if string.find( args, "^clear" ) then
@@ -475,6 +545,15 @@ end
 function EHMailTM.on_update()
   if not m.api.MailFrame or not m.api.MailFrame:IsVisible() then return end
 
+  -- ★0.3.23「清空」按钮的过窗弹回：**只在武装中**才做一点事（没武装就是一串 nil 比较）。
+  --   ★为什么要这一腿：武装态是「按钮文字 = 再点确认」，不弹回去的话界面会**停在一个已经失效的状态**上
+  --     （项目在案：界面写的必须等于真值）；而这里**不新增任何计时器**（邮件窗开着时本来就有这一帧）。
+  if m.log ~= nil and m.log.clear_arm ~= nil and not m.log.clear_armed() then
+    m.log.clear_arm = nil
+    m.log.clear_arm_t = nil
+    m.log.clear_paint()
+  end
+
   -- 一次右键会连抛好几次 BAG_UPDATE/ITEM_LOCK_CHANGED，合并成每帧只重排一次附件区
   if m.sendmail_need_update then
     m.debug( "on_update: sendmail_frame_update" )
@@ -501,7 +580,20 @@ function EHMailTM.on_update()
   if m.delayed_opens and getn( m.delayed_opens ) > 0 then
     local item = m.delayed_opens[ 1 ]
     item.frames = item.frames - 1
-    if item.frames <= 0 then
+    -- ★★★0.3.19：**先判下标有效，再读任何东西**（顺序即判据）。
+    --   这封可能在等待期间已经被取走/删掉，或者服务器把列表缩短了 ⇒ **越界读**就是引擎那条
+    --   「内部邮件数据库错误。」（常量 `ERR_MAIL_DATABASE_ERROR`）。旧写法这里**一个守卫都没有**，
+    --   而发票没就绪时最多重试 150 帧 ⇒ 右键收取那条路会成串报错。
+    --   ★判不出/越界 ⇒ **一个字节都不碰**（不读表头、不读正文、不开信），只把这条丢掉并如实记一行。
+    --   ★比较前必须两道 `type`（`err_num_items` 读不到时返回 "?"：拿它去比数字 = 当场算术崩）。
+    local total_now = m.err_num_items()
+    if ( type( item.i ) ~= "number" ) or ( type( total_now ) ~= "number" )
+      or item.i < 1 or item.i > total_now then
+      tremove( m.delayed_opens, 1 )
+      m.err_stat.dlydrop = m.err_stat.dlydrop + 1
+      m.err_note( "DLYDROP", string.format( "等待中的邮件已不在列表里（i=%s ／ 共 %s）⇒ 丢弃这一条，什么都没碰",
+        tostring( item.i ), tostring( total_now ) ) )
+    elseif item.frames <= 0 then
       local _, _, _, subject = m.api.GetInboxHeaderInfo( item.i )
       local inv_ready = true
       if classify_ah_mail( subject ) == "Won" then
@@ -525,23 +617,65 @@ function EHMailTM.on_update()
     if m.batch_opening then
       m.batch_step()
     elseif not m.Mail_open_Selected then
-      local  _, _, _, _, _, COD, _, _, _, _, _, _, isGM = m.api.GetInboxHeaderInfo( m.inbox_index )
+      -- ★★★0.3.19：**先等上一封真的从列表消失，再动下一封**（与 `batch_step` / 「选择取件」走同一把尺子）。
+      --   这条路径原来**没有**这个同步，而 `m.inbox_index` 在取件后**不会 +1**（它靠列表左移推进）
+      --   ⇒ 服务器确认之前，每 0.5s 都会对**同一封已经取空的邮件**再发一遍取件/删除
+      --   ⇒ 一封邮件能刷出好几条报错。**这就是「很多」的来源 —— 不是频率太快**（把 0.5s 放慢到 5s，
+      --   报错条数几乎不变：触发条件是「对已经没有可操作对象的邮件发写动作」，与节奏无关）。
+      if m.take_all_wait then
+        if m.err_num_items() == m.take_all_wait and ( m.take_all_waits or 0 ) < 150 then
+          m.take_all_waits = ( m.take_all_waits or 0 ) + 1
+          m.inbox_update = true
+          return
+        end
+        if m.err_num_items() == m.take_all_wait then
+          -- ★等满 150 帧（与另两条路同一个上限）总数还没掉 ⇒ **再核一次身份**：
+          --   身份也对上（= 服务器真的没收走这一封）⇒ 如实记一行 + 跳过这一封，
+          --   绝不对它无限重发写动作（那正是报错刷屏的来源）。
+          --   ★身份对不上（列表已经左移、这个下标上换了别的邮件）⇒ **什么都不做**，
+          --   让下面的正常流程去处理它 —— **绝不因为一次超时就丢掉一封别人的邮件**。
+          local idx, tn = m.inbox_index, m.err_num_items()
+          if type( tn ) == "number" and idx >= 1 and idx <= tn then
+            local _, _, s2, j2 = m.api.GetInboxHeaderInfo( idx )
+            if s2 ~= nil and s2 == m.take_all_from and j2 == m.take_all_subj then
+              m.err_note( "TAKESTUCK", string.format( "等 150 帧仍未从列表消失（i=%s）⇒ 跳过这一封",
+                tostring( idx ) ) )
+              m.inbox_index = m.inbox_index + 1
+            end
+          end
+        end
+        m.take_all_wait = nil
+        m.take_all_waits = 0
+      end
+
+      -- ★★★0.3.19：**越界判断必须排在读表头之前**（顺序即判据）。
+      --   旧写法先 `GetInboxHeaderInfo( m.inbox_index )` 再判越界 ⇒ 每一批收尾那一拍仍会
+      --   **读一次越界下标**（= 又一条「内部邮件数据库错误。」）。`isGM`/`COD` 只在有效分支里读。
       if m.inbox_index > m.api.GetInboxNumItems() then
         if m.money_received > 0 then
           m.info( string.format( "%s%s.", m.format_money( m.money_received ), L[ "collected" ] ) )
         end
         m.inbox_abort()
-      elseif m.inbox_skip or isGM  or (m.api.EHMailTM_AutoCOD ~= 1 and COD > 0) then
-        m.inbox_skip = false
-        m.inbox_index = m.inbox_index + 1
-        m.inbox_update = true
       else
-        -- ★限频：接收所有邮件同样是逐封写动作（跳过/越界那些分支不算，不占闸）
-        if not m.batch_rate_ok() then
+        local _, _, sender0, subject0, _, COD, _, _, _, _, _, _, isGM = m.api.GetInboxHeaderInfo( m.inbox_index )
+        if m.inbox_skip or isGM or (m.api.EHMailTM_AutoCOD ~= 1 and COD > 0) then
+          m.inbox_skip = false
+          m.inbox_index = m.inbox_index + 1
           m.inbox_update = true
-          return
+        else
+          -- ★限频：接收所有邮件同样是逐封写动作（跳过/越界那些分支不算，不占闸）
+          if not m.batch_rate_ok() then
+            m.inbox_update = true
+            return
+          end
+          m.inbox_open( m.inbox_index )
+          -- ★刚取完这一封 ⇒ 记下此刻的邮件总数 + **这一封的身份**，下一拍要等它从列表消失才动下一封
+          --   （身份用于超时那一拍判「是不是同一封」，见本分支开头）
+          m.take_all_wait = m.api.GetInboxNumItems()
+          m.take_all_waits = 0
+          m.take_all_from = sender0
+          m.take_all_subj = subject0
         end
-        m.inbox_open( m.inbox_index )
       end
     else
       -- 选择取件（批量取件/接收选择邮件共用）：
@@ -668,11 +802,13 @@ function EHMailTM.MAIL_SHOW()
     m.api.SendMailPackageButton:SetScript( "OnDragStart", nil )
   end
 
-  if m.log_enabled then
-    m.api.MailFrameTab3:Show()
-  else
-    m.api.MailFrameTab3:Hide()
-  end
+  -- ★★★0.3.20：**日志页签一律常显**（不再由日志开关决定显隐）。
+  --   0.3.18 把邮件日志默认关掉时，这里顺手把 `MailFrameTab3` 也 `Hide()` 了 ⇒ 玩家看到的是
+  --   「第三个页签整个消失」= 功能像被删了（用户 2026-10-10 真机截图报障「日志怎么没了」），
+  --   而且**入口一没就再也找不回来**（只能靠记住 `/tm log`）—— 正是本项目在案的「静默死」形态。
+  --   ⇒ 现在的口径：**记录照旧默认关**（0.3.18 的判据一个字没改），**入口永远在**，
+  --     关着的时候页签里的状态行会写明「记录已停止 + 怎么开」（见 `populate` 的状态行）。
+  m.api.MailFrameTab3:Show()
 
   m.timer = 0
   m.money_received = 0
@@ -695,6 +831,18 @@ function EHMailTM.MAIL_CLOSED()
 end
 
 function EHMailTM.UI_ERROR_MESSAGE()
+  -- ★★★0.3.19 取证（**只读、不受任何开关管**）：把每一条 UI 错误的**原文**与**现场读数**记进有界环。
+  --   判读三件事：① 是不是引擎那条 `ERR_MAIL_DATABASE_ERROR`（= 「内部邮件数据库错误。」）；
+  --   ② 它出现在哪一步（批量 / 接收所有 / 选择取件 / 寄信）；③ 那一刻那一封有没有钱与附件。
+  --   ★读数一律走 `pcall` 助手（见 `m.err_num_items`）：**诊断口自己绝不许变成故障源**。
+  m.err_stat.uierr = m.err_stat.uierr + 1
+  local db_err = rawget( _G, "ERR_MAIL_DATABASE_ERROR" )
+  m.err_note( ( type( db_err ) == "string" and db_err == arg1 ) and "UIERR★DATABASE" or "UIERR",
+    string.format( "opening=%s batch=%s idx=%s total=%s money=%s item=%s ｜ %s",
+      tostring( m.inbox_opening ), tostring( m.batch_opening ), tostring( m.inbox_index ),
+      tostring( m.err_num_items() ), tostring( m.last_money ), tostring( m.last_has_item ),
+      tostring( arg1 ) ) )
+
   if m.inbox_opening then
     if arg1 == m.api.ERR_INV_FULL then
       m.inbox_abort()
@@ -718,16 +866,18 @@ function EHMailTM.ADDON_LOADED()
   local version = m.api.GetAddOnMetadata( "EH_Mail", "Version" )
   m.info( string.format( "Loaded (|cffeda55fv%s|r).", version ) )
 
-  -- ★★★0.3.18：日志**默认档 = 关**（用户 2026-10-10：「默认关闭日志」）。判据只有一处 ——
-  --   `Settings.user_set == true`（= 玩家自己在 /tm log 里设过）⇒ **一个字节都不动**；
-  --   否则一律按新默认落成**显式 false**。
-  --   ★**必须有那个章才认**：旧版每次客户端版本变化都强制写 `Enabled = true`（那不是玩家的选择）
-  --   ⇒ 只看 `Enabled` 会把自己当年强制写的值当成玩家选过。
-  --   ★**行为改变如实出声一次**（只在真的从「非关」改成「关」时；落成之后条件不再成立，不刷屏）。
+  -- ★★★0.3.21：邮件日志**恢复「默认记录」**（用户 2026-10-10 澄清：
+  --   「我说的日志不记录不是邮箱的收发日志，而是信息窗的日志不要发送记录」⇒ 0.3.18 关错了对象）。
+  --   判据仍只有一处 —— `Settings.user_set == true`（= 玩家自己在 `/tm log` 里设过）⇒ **一个字节都不动**；
+  --   没盖章 ∧ 现在被关着 ⇒ 恢复成 `true` 并**如实出声一次**（行为改变必须出声）。
+  --   ★为什么「没盖章 ∧ 关着」可以直接恢复：本子插件**首发的 1.75.117 就已经带着 0.3.18**
+  --     （0.3.18 从未单独发布过）⇒ 没盖章却被关着，只可能是**当年那次默认关落的值**，而不是玩家的选择。
+  --     ★而 0.3.18 起任何一次 `/tm log` 都会盖章 ⇒ 真选过的人（含 0.3.18 之后关过的人）一律不被顶回。
+  --   ★落成之后条件不再成立（`Enabled ~= false`）⇒ 不刷屏。
   local log_settings = m.api.EHMailTM_Log[ "Settings" ]
-  if log_settings.user_set ~= true and log_settings.Enabled ~= false then
-    log_settings.Enabled = false
-    m.info( L[ "Logging is now off by default. Use /tm log to enable it." ] )
+  if log_settings.user_set ~= true and log_settings.Enabled == false then
+    log_settings.Enabled = true
+    m.info( L[ "Mail logging is back on by default. Use /tm log to turn it off." ] )
   end
   -- ★旧版那个「按客户端版本强制开」的记号已无用途 ⇒ 一次性清掉（不留「有键无代码」的迷惑项）
   if log_settings.log_on_version ~= nil then log_settings.log_on_version = nil end
@@ -967,6 +1117,11 @@ function EHMailTM.inbox_open_all()
   m.inbox_index = 1
   m.inbox_update = true
   m.Mail_open_Selected = false
+  -- ★0.3.19：「等上一封从列表消失」的两格必须在开批处复位，否则上一批的尾巴会把这一批第一封挡住
+  m.take_all_wait = nil
+  m.take_all_waits = 0
+  m.take_all_from = nil
+  m.take_all_subj = nil
 end
 
 function EHMailTM_Inbox_SetSelected()
@@ -1017,6 +1172,11 @@ function EHMailTM.inbox_abort()
   m.inbox_opening = false
   m.inbox_update_lock()
   m.inbox_update = false
+  -- ★0.3.19：收工时把「等上一封消失」的两格一起清掉（批次结束/被中止都走这里 ⇒ 只此一处覆盖所有出口）
+  m.take_all_wait = nil
+  m.take_all_waits = 0
+  m.take_all_from = nil
+  m.take_all_subj = nil
 end
 
 -- 本页全选：把当前页 7 个勾选框一次性切到同一状态。
@@ -1900,6 +2060,7 @@ end
 ---@param manual boolean?
 function EHMailTM.inbox_open( i, manual )
   m.debug( "inbox_open" )
+  m.err_stat.open = m.err_stat.open + 1
   local package_icon, _, sender, subject, money, cod, _, has_item, read, returned, _, _, gm = m.api.GetInboxHeaderInfo( i )
 
   -- 竞得邮件的花费只在正文里，邮件头 money 恒为 0
@@ -1966,9 +2127,49 @@ function EHMailTM.inbox_open( i, manual )
     end
   end
 
-  m.TakeInboxMoney( i )
-  m.TakeInboxItem( i )
-  m.DeleteInboxItem( i )
+  -- ★★★0.3.19：**发写动作前先按客户端自己的口径分流** —— 真机报障「接收所有邮件时刷很多『内部邮件数据库错误』」。
+  --   证据（本客户端源码，`tmp/mpq_out/Interface/FrameXML/`）：
+  --     · `内部邮件数据库错误。` = 引擎常量 `ERR_MAIL_DATABASE_ERROR`（`GlobalStrings.lua:1791`），
+  --       而**客户端 Lua 一次都没引过它** ⇒ 那是引擎 C 层在「索引对不上 / 没有可操作对象」时抛的；
+  --     · 客户端自己的取件动作**全是条件化的**：`MailFrame.lua` 只在有钱时取钱（415~423）、
+  --       只在有附件时取件（389~400）、`DeleteInboxItem` 只在确实该删时调（427~431 / 459~471）；
+  --     · 全客户端 Lua 里 `TakeInboxMoney` **0 次**、`TakeInboxItem` **仅 1 次**（`StaticPopup.lua:230`）。
+  --   ⇒ 对「没钱可取 / 没附件 / 已经取空」的邮件发写动作 = 引擎找不到可操作对象 = **每封一条报错**，
+  --     而邮件照样能收到（所以现象是「能正常接收、但刷红字」）。
+  m.last_money = money
+  m.last_has_item = has_item
+  local acted = false
+  if money and money > 0 then
+    m.TakeInboxMoney( i )
+    acted = true
+  end
+  if has_item then
+    m.TakeInboxItem( i )
+    acted = true
+  end
+
+  -- ★★★**读回自证：取完之后这封还在不在** —— 在 1.12，钱与附件被取走后邮件通常即消失。
+  --   「还在」才动手删；「不在了」⇒ **一个字节都不碰**（再删就是那条报错本身）。
+  --   ★必须核对身份（发件人 + 主题）：索引会漂移（列表左移之后同一个 `i` 已经指向**下一封**），
+  --     只比下标就会删掉**别人的**邮件。★身份读不到（nil）= 判不出 ⇒ 不删（fail-safe）。
+  local still = false
+  local total_after = m.err_num_items()
+  if type( total_after ) == "number" and i >= 1 and i <= total_after then
+    local _, _, sender2, subject2 = m.api.GetInboxHeaderInfo( i )
+    still = ( sender2 ~= nil and sender2 == sender and subject2 == subject )
+  end
+  if still then
+    m.DeleteInboxItem( i )
+  end
+  if acted then
+    if still then
+      m.err_stat.still = m.err_stat.still + 1
+      m.err_note( "OPEN-STILL", string.format( "i=%s 共 %s ／ 钱=%s 附件=%s ⇒ 取了之后邮件仍在下标上 ⇒ 已删",
+        tostring( i ), tostring( total_after ), tostring( money ), tostring( has_item ) ) )
+    else
+      m.err_stat.gone = m.err_stat.gone + 1
+    end
+  end
 
 end
 
@@ -3944,6 +4145,11 @@ m.LOG_NOTE_ICON = "Interface\\Icons\\INV_Misc_Note_01"
 m.LOG_STAMP_AH = "Interface\\AddOns\\EH_Mail\\EHMailTM-AH.blp"
 m.LOG_STAMP_RET = "Interface\\AddOns\\EH_Mail\\EHMailTM-RetArrow.blp"
 
+-- ★0.3.23「清空」= **破坏性动作 ⇒ 两次点击确认**（照项目既有口径：第一下只武装 + 如实说要清几条，
+--   第二下才真清；★`populate` 每一趟都撤销武装 ⇒ 跨页签 / 滚动 / 改筛选之后绝不允许下一击直接清掉）。
+--   过窗自动弹回：`on_update` 里那条**只在武装中**才跑的检查（不新增任何计时器）。
+m.LOG_CLEAR_SEC = 3
+
 -- 池子（**建一次**）：`m.log.tiles[i]` 顺序 = 行优先，与锚点一一对应
 m.log.build_grid = function()
   if m.log.tiles then return end
@@ -3962,7 +4168,8 @@ m.log.build_grid = function()
     b:SetHeight( tile )
     b:SetPoint( "TOPLEFT", host, "TOPLEFT", m.LOG_PAD + col * cell, -( m.LOG_PAD + row * cell ) )
     pcall( b.EnableMouse, b, true )
-    pcall( b.RegisterForClicks, b, "LeftButtonUp" )
+    -- ★0.3.23：**右键也要接**（右键 = 删除这一条记录）—— 只注册左键的话右键永远到不了分派代码。
+    pcall( b.RegisterForClicks, b, "LeftButtonUp", "RightButtonUp" )
     local bg = b:CreateTexture( nil, "BACKGROUND" )
     pcall( bg.SetTexture, bg, "Interface\\Buttons\\WHITE8x8" )
     pcall( bg.SetVertexColor, bg, bgR, bgG, bgB, 1 )
@@ -3987,7 +4194,9 @@ m.log.build_grid = function()
     pcall( dot.Hide, dot )
     local c = { btn = b, bg = bg, tex = tex, stamp = stamp, dot = dot, entry = nil }
     -- ★脚本只在建池时设一次（数据靠 c.entry 现读）
-    b:SetScript( "OnClick", function() m.log.tile_click( c ) end )
+    -- ★0.3.23：鼠标键必须**透传**给处理体（左键 = 填收件人 · 右键 = 删除这一条）；
+    --   闭包写成 `function()` 会把参数整个丢掉 ⇒ 右键被当左键（下文 `mouse_button` 三处取键）。
+    b:SetScript( "OnClick", function( ka, kb ) m.log.tile_click( c, ka, kb ) end )
     b:SetScript( "OnEnter", function() m.log.tile_enter( c ) end )
     b:SetScript( "OnLeave", function() m.log.tile_leave( c ) end )
     tiles[ i ] = c
@@ -4082,13 +4291,134 @@ m.log.tile_tip = function( owner, e )
   else
     pcall( tip.AddLine, tip, L[ "LOG_TIP_CLICK_NONE" ], 0.55, 0.85, 0.45 )
   end
+  -- ★0.3.23：右键 = 删除这一条 —— **必须写在气泡里**（用户看不见的功能等于不存在），
+  --   颜色取删除那一族的暖红（暗金/绿/蓝/红四色表里的红），与左键那行绿区分开。
+  pcall( tip.AddLine, tip, L[ "LOG_TIP_RIGHT" ], 1.00, 0.45, 0.42 )
   pcall( tip.Show, tip )
 end
 
--- 点一格 = **切到写邮件页 + 把收件人填成对方**（对方为空 ⇒ 只切页 + 如实说一句）
-m.log.tile_click = function( c )
+-- 鼠标键 = **三处取**（处理体第 1 / 第 2 个实参 + 全局 `arg1`）。
+--   ★本项目在案：本客户端把处理体参数放在**全局 `arg1`** 里（`OnUpdate` 甚至一个参数都不传）
+--   —— 只看 a/b 会让右键被当成左键（1.75.59b 真机报障「右键目前是选中的状态」就是它）。
+--   ★判不出 / 认不出 ⇒ 按**左键**处理（左键是安全的那一支：只填收件人，绝不删数据）。
+m.log.mouse_button = function( ka, kb )
+  local k = ka
+  if k ~= "LeftButton" and k ~= "RightButton" then k = kb end
+  if k ~= "LeftButton" and k ~= "RightButton" then k = arg1 end
+  if k ~= "RightButton" then k = "LeftButton" end
+  return k
+end
+
+-- ★0.3.23 右键删一条（唯一实现）：按**对象身份**在**未过滤**的那张表里找回它的真下标。
+--   ★★★为什么不能拿格子号当下标：格子是按**过滤后**的列表铺的（`populate` 里的 `log[index*cols+i]`）
+--   ⇒ 有筛选 / 有日期区间 / 翻过页时，「第 N 格」根本不是原表里的第 N 条，按格子号删 = **删掉别人的记录**。
+--   ★`m.filter` 放进结果里的是**原表里的同一个对象**（没有传 `extract_field`）⇒ 身份比对成立。
+--   ★删完立刻 `populate` 重铺（池子是复用的，必须显式 Show/Hide）；鼠标还停在这一格上时气泡跟着刷新。
+m.log.tile_delete = function( c, e )
+  local lt = m.current_log_type
+  local arr = ( lt ~= nil ) and m.api.EHMailTM_Log[ lt ] or nil
+  if type( arr ) ~= "table" then
+    m.info( L[ "The log page is not open - nothing was deleted." ] )
+    return false
+  end
+  local idx = nil
+  for i = 1, getn( arr ) do
+    -- 身份比对：只删**就是这一条**的那一格；同一封邮件在表里出现两次也只会命中它自己那一条
+    if arr[ i ] == e then idx = i break end
+  end
+  if idx == nil then
+    -- ★判不出 / 找不到 ⇒ **一个字节都不动**（列表可能刚被清空或刷新过）—— 绝不按格子号猜一个删掉
+    m.info( L[ "That record is no longer in the list - nothing was deleted." ] )
+    return false
+  end
+  tremove( arr, idx )
+  m.log.populate( lt )
+  -- 鼠标这会儿还停在这一格上 ⇒ 按「悬停中」重来一遍：底色提亮 + 气泡换成新占位的那一封；
+  --   这一格空了（删的是本页最后一条）⇒ 收起气泡（格子已被 `tile_paint` 隐掉，不会再有 OnLeave）
+  local tip = m.api.GameTooltip
+  if c.entry ~= nil then
+    m.log.tile_enter( c )
+  elseif tip and type( tip.Hide ) == "function" then
+    pcall( tip.Hide, tip )
+  end
+  -- ★诚实出声：删了哪一条（对方 + 主题）+ 这一页还剩几条（绝不静默）
+  local who = e.participant
+  if who == nil or who == "" then who = L[ "LOG_TIP_NONE" ] end
+  local subj = e.subject
+  if subj == nil or subj == "" then subj = L[ "LOG_TIP_NONE" ] end
+  m.info( string.format( L[ "Deleted one record from %s: %s - %s (%d left)." ],
+    L[ lt ], who, subj, getn( arr ) ) )
+  return true
+end
+
+-- ============================================================================
+-- 0.3.23「清空」按钮（页头那一颗）：**两次点击确认** + 只清当前这一页 + 诚实出声
+--   ★语义 = 清掉**当前页签的整张表**（`EHMailTM_Log[ 已收到 / 已发送 ]`），与 `/tm clear sent|received`
+--     同一个动作；**筛选条件 / 日期区间 / 玩家下拉一律不动**（那是「看什么」，不是「记什么」）。
+--   ★为什么不按「当前看得见的那几条」清：格子铺的是**过滤后**的结果，而按钮摆在筛选旁边 ——
+--     让它在筛选生效时变成另一种语义（只清可见的），玩家是猜不出来的；⇒ 一律清整页，
+--     并在第一下（武装）时就把「会清掉几条 + 筛选条件不影响」**如实说清楚**。
+-- ============================================================================
+
+m.log.clear_armed = function()
+  if m.log.clear_arm == nil then return false end
+  if m.log.clear_arm ~= m.current_log_type then return false end
+  return ( GetTime() - ( m.log.clear_arm_t or 0 ) ) <= m.LOG_CLEAR_SEC
+end
+
+-- 按钮文字跟着「武装 / 没武装」走（唯一绘制口；`populate` 与 `on_update` 的过窗分支都调它）
+m.log.clear_paint = function()
+  local btn = m.api.EHMailTMLogClearButton
+  if btn == nil or type( btn.SetText ) ~= "function" then return false end
+  pcall( btn.SetText, btn, L[ m.log.clear_armed() and "Click again to confirm" or "Clear" ] )
+  return true
+end
+
+m.log.clear_current = function()
+  local lt = m.current_log_type
+  if lt == nil then
+    -- 能点到这颗按钮就说明页面已经开着，理论上到不了这里；真到了也**绝不静默什么都不做**
+    m.info( L[ "Open the log page first, then click Clear." ] )
+    return 0
+  end
+  local arr = m.api.EHMailTM_Log[ lt ]
+  local n = ( type( arr ) == "table" ) and getn( arr ) or 0
+  if n == 0 then
+    -- ★空页**不武装**（没有可清的东西就不该让界面停在「再点确认」上）—— 如实说一句就收工
+    m.log.clear_arm = nil
+    m.log.clear_arm_t = nil
+    m.log.clear_paint()
+    m.info( string.format( L[ "%s has no records to clear." ], L[ lt ] ) )
+    return 0
+  end
+  if not m.log.clear_armed() then
+    -- 第一下 = 只武装 + 如实交代（一条都不清）
+    m.log.clear_arm = lt
+    m.log.clear_arm_t = GetTime()
+    m.log.clear_paint()
+    m.info( string.format( L[ "Click it again to clear all %d record(s) of %s (filters do not matter)." ],
+      n, L[ lt ] ) )
+    return 0
+  end
+  -- 第二下 = 真动手（先撤武装再动手：清完那次 `populate` 会再撤一次，幂等）
+  m.log.clear_arm = nil
+  m.log.clear_arm_t = nil
+  m.log.clear_paint()
+  m.api.EHMailTM_Log[ lt ] = {}
+  m.log.populate( lt )
+  m.info( string.format( L[ "Cleared %d record(s) of %s." ], n, L[ lt ] ) )
+  return n
+end
+
+-- 点一格 = **切到写邮件页 + 把收件人填成对方**（对方为空 ⇒ 只切页 + 如实说一句）；
+--   ★0.3.23：**右键 = 删除这一条记录**（两件事共用一个分派口，鼠标键从三处取）。
+m.log.tile_click = function( c, ka, kb )
   local e = c.entry
   if e == nil then return end
+  if m.log.mouse_button( ka, kb ) == "RightButton" then
+    m.log.tile_delete( c, e )
+    return
+  end
   local name = e.participant
   -- ★先切页、再填名字：切页会触发一次 SendMailFrame_Update，顺序反了会被它擦掉
   m.sendmail_show_send_tab()
@@ -4134,6 +4464,13 @@ function EHMailTM.log.load()
 
   m.api.EHMailTMLogFiltersButton:SetText( L[ "Filters" ] )
   m.api.EHMailTMLogFiltersButton:GetFontString():SetPoint( "LEFT", m.api.EHMailTMLogFiltersButton, "LEFT", 10, 0 )
+
+  -- ★0.3.23「清空」按钮（XML 里那一颗；位置在「筛选」与「全部」之间）：文字走语言键，
+  --   点击体**只有 XML 那一处**（与旁边的「筛选」同款，绝不在这里再挂一遍 —— 两处口径必然漂移）。
+  --   ★`populate` 每一趟都会把它弹回未武装态（见那边），这里只管首次接线。
+  if m.api.EHMailTMLogClearButton ~= nil then
+    m.api.EHMailTMLogClearButton:SetText( L[ "Clear" ] )
+  end
 
   m.api.EHMailTMLogFiltersButton:SetScript( "OnMouseDown", function()
     m.api.EHMailTMLogFiltersButtonArrow:SetPoint( "RIGHT", m.pfui_skin_enabled and -4 or -8, -3 )
@@ -4367,6 +4704,14 @@ end
 ---@param index number?
 function EHMailTM.log.populate( log_type, index )
   m.current_log_type = log_type
+  -- ★0.3.23：**任何一次重铺都撤销「清空」的武装** —— 翻页 / 滚轮 / 改筛选 / 换页签之后
+  --   绝不允许「下一击就直接清掉整整一页」（武装的语义是「我刚刚确实想清这一页」）。
+  --   过窗那条腿见 `on_update`（只在武装中才跑，零常驻开销）。
+  if m.log.clear_arm ~= nil then
+    m.log.clear_arm = nil
+    m.log.clear_arm_t = nil
+  end
+  m.log.clear_paint()
   local filters = m.api.EHMailTM_Log[ "Settings" ][ log_type .. "Filters" ] or {}
   local start_time = m[ log_type .. "_start_time" ]
   local end_time = m[ log_type .. "_end_time" ]
@@ -4435,10 +4780,18 @@ function EHMailTM.log.populate( log_type, index )
   if index > max_row then index = max_row end
 
   -- 标题显示当前日志类型（已收到/已发送）
-  m.api.EHMailTMLogTitleText:SetText( string.format( "%s %s", L[ m.current_log_type ], L[ "Log" ] ) )
+  -- ★0.3.22：页签与页标题都改叫「收发记录」（用户：「将邮箱的日志tab 重命名为收发记录,不要造成语义误解」）
+  --   ⇒ 标题把**记录名放前面**（「收发记录 · 已收到」），比旧写法「已收到 日志」顺（旧格式顺序反着读）。
+  m.api.EHMailTMLogTitleText:SetText( string.format( "%s · %s", L[ "Log" ], L[ m.current_log_type ] ) )
   local first = ( log_count == 0 ) and 0 or ( index * cols + 1 )
   local last = math.min( log_count, ( index + rows ) * cols )
-  m.api.EHMailTMLogStatusText:SetText( string.format( L[ "LOG_STATUS" ], log_count, first, last ) )
+  -- ★★★0.3.20：日志**关着**时在同一行如实说明「记录已停止 + 怎么开」——
+  --   页签现在常显（见 `MAIL_SHOW` 那段），玩家点进来必须一眼看懂「为什么是空的」与「怎么开」。
+  local status = string.format( L[ "LOG_STATUS" ], log_count, first, last )
+  if not m.log_enabled then
+    status = status .. " ｜ " .. L[ "Logging is off (not recording). Type /tm log to turn it on." ]
+  end
+  m.api.EHMailTMLogStatusText:SetText( status )
 
   -- 铺格子：池子复用 ⇒ **每一趟都显式 Show/Hide**（`log[...]` 为 nil 就是这一格该收起）
   m.log.build_grid()

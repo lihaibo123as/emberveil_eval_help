@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.75.118"
+local VERSION = "1.75.119"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -1889,6 +1889,8 @@ local function cfgBuild()
     function(v)
       if type(c().log) ~= "table" then c().log = {} end
       c().log.on = v and true or false
+      -- ★★★1.75.119：勾选框也是总闸门的写口 ⇒ 同样盖章（默认档只认「玩家自己动过」，见 VARIABLES_LOADED 那段）
+      c().log.userSet = true
     end, G)
   table.insert(refreshes, lfRow)
   cfgWin.logRows = cfgWin.logRows or {}
@@ -9690,6 +9692,9 @@ if type(SlashCmdList) == "table" then
       local on = not (type(cfg.log) == "table" and cfg.log.on == false)
       cfg.log = type(cfg.log) == "table" and cfg.log or {}
       cfg.log.on = not on
+      -- ★★★1.75.119：本命令是总闸门的**写口之一**（另一个 = 配置窗那颗勾选框）⇒ 一动手就盖章
+      --   `userSet`。默认档的判据只认这个章：盖了章 = 玩家自己选过 ⇒ 载入期**一个字节都不动**。
+      cfg.log.userSet = true
       -- ★★★1.75.8（用户要求）：本开关 = **整个插件往聊天框说话的总闸门**（`say`/EVAL_SAY 跟它联动）
       --   ⇒ 关掉那一刻的确认行**必须走常开出口**，否则「怎么开回来」无从得知（静默族事故）。
       --   文案与配置项同名（「调试日志」）。
@@ -11492,6 +11497,31 @@ init:SetScript("OnEvent", function(a, b)
     if type(EVAL_TB_CHAR_MIGRATE) == "function" then pcall(EVAL_TB_CHAR_MIGRATE) end
     ehResolveLang() -- 1.34.0 语言解析：cfg.lang 优先 → 客户端语言自动检测
     if cfg.log  == nil then cfg.log  = {} end -- 1.70.12 日志缓冲（旧存档里的 true/false 会在首次写入时自动转成表）
+    -- ★★★1.75.119：**聊天输出总闸门「调试日志」默认档 = 关**（用户 2026-10-10：「信息窗的日志不要发送记录」）。
+    --   判据只认**玩家自己动过的那一个章** `cfg.log.userSet`：
+    --     盖了章（在配置窗勾过 / 敲过 `/eh log`）⇒ 他的选择**一个字节都不动**（升级绝不顶回）；
+    --     没盖章 ⇒ 按新默认落成**显式 `false`**（= `logEnabled()` 认得的那种值）+ 如实出声一次。
+    --   ★★★**为什么必须有这个章才认**：旧默认是「开」，老存档里的 `log.on == true` 分不清
+    --     「旧默认物化出来的」还是「玩家自己开的」—— 只看值就会把自己当年立的默认当成「玩家选过」，
+    --     那样默认关对谁都不生效（0.3.18 的邮件日志默认关是同一套道理）。
+    --   ★落成之后条件不再成立（`on == false`）⇒ **不刷屏**；玩家事后开回来时章已在 ⇒ 也不会被顶回。
+    --   ★出声走**常开出口** `EVAL_SAY_FORCE`：这一刻总闸门已经关了，走 `say` 等于把提示自己静音掉
+    --     ——「日志开关自身的确认行」正是 1.75.59f 点名的常开例外之一。
+    if type(cfg.log) == "table" and cfg.log.userSet ~= true and cfg.log.on ~= false then
+      cfg.log.on = false
+      if type(EVAL_SAY_FORCE) == "function" and type(L) == "function" then
+        pcall(EVAL_SAY_FORCE, L("G_LOG_DEFOFF"))
+      end
+    elseif type(cfg.log) ~= "table" then
+      -- 旧存档里 `cfg.log` 可能还是**裸布尔**（1.70.12 之前的老格式）⇒ 一并归一到新默认「关」。
+      --   ★`false`（当年玩家自己关的）与 `true`（旧默认物化出来的）**结果相同**（都是关）⇒ 不必区分；
+      --     只有「原来是开」才需要出声（那是真的行为改变）。
+      local was_off = (cfg.log == false)
+      cfg.log = { on = false }
+      if not was_off and type(EVAL_SAY_FORCE) == "function" and type(L) == "function" then
+        pcall(EVAL_SAY_FORCE, L("G_LOG_DEFOFF"))
+      end
+    end
     -- 1.70.16：数据检索的取证开关恢复。必须在 VARIABLES_LOADED 再确认一次——
     -- DataSearch.lua 的载入期 SavedVariables 通常已还原，但首装/边缘时序下可能还没有；
     -- 而 tab tick 在 OnUpdate 上独立运行，不能依赖「用户打开过 Tab4」（踩过：恢复写在 BUILD 里，
