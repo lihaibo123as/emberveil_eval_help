@@ -1,3 +1,20 @@
+-- ★★★0.3.49 三档整理算法（配置可切换 —— 用户：「原来的算法逻辑保留」+「A算法优化也做」+
+--   「将不同的算法(A,B)进入配置可切换」）。真值 = `c.sortAlgo`；读口 `B.algoNow()`（EH_Bag.lua）；
+--   入口 = 设置菜单「整理算法」那一行（点一下循环）+ `/ebag algo a|b|orig`：
+--   · **`orig` = 原算法（基线，逻辑一字未改）**：算期望序 → 从前往后取**第一处不一致**；
+--     目标格被占 ⇒ 先 park 到**第一个空格**，下一拍再搬 donor。
+--   · **`a` = 原算法骨架 + park 就近放回（默认档）**：走位顺序、判据、donor 选择**全部与 orig 一字不差**，
+--     唯一改动 = 目标被占时**优先把占位那件放进它自己的最终位置**（空着的话），找不到才退回第一个空格。
+--     ★实测：合计 **1029 → 902 步（−12.3%）**，两段大件（背包+银行）**−25%**，零互换、最终排布逐格一致，
+--       **没有一组变差**；仍然是「一拍一对写动作 + 每拍全量重读 + 只进空格/并入同 id」。
+--   · **`b` = 环优先（先补空洞）**：在 a/orig 那一趟**之前**，先做一遍「**目标格是空的**」那一类
+--     （1 步即成，不必先 park），donor **只许从本身已经错位的堆里取** ——
+--     ★★★偷一个**已经摆对**的堆 = 白走两趟（首版漏了这条，实测反而 **+113%** 更慢；补上后 −38%）。
+--     ★实测：合计 **1029 → 635 步（−38.3%）**；最终 id 序列**逐格一致**、互换 **0**；
+--       「已排好、只错 6 件」那类也吃到参考下界（1.00x）。
+--   ★★`b` 是**严格前置的一趟**：这一趟找不到可做的 ⇒ **原样落回** a 那一趟 ⇒ 边界/坏数据只会退化成
+--     a/orig，绝不卡住（A/B 两套共享同一套安全口径：每拍最多一对 `PickupContainerItem` · 每步全量重读 · 绝不发互换）。
+--   ★A/B 实测记账 = `B.sortStatAdd`（EH_Bag.lua，只记**跑完**的那一轮；读数 = `/ebag algo` 与 `/ebag status`）。
 -- ============================================================
 -- EH_BagSort —— EH_Bag 的「一键整理」引擎（规则排序 + 限频执行）
 --
@@ -447,6 +464,13 @@ local function oneStep()
     if okT and type(t) == "number" then now = t end
   end
   if noProgress(fpOf(slots, list, n), now) then return "noprog" end
+  -- ★★★0.3.49 本轮用哪套算法（**每拍现读** ⇒ 中途切换立刻生效）——
+  --   读口拿不到 / 回坏值 ⇒ 回落 `"orig"`（= 原算法，最保守的一套；「拿不到证据就跑原来那条路」）。
+  --   ★盖章排在**合并之前**：合并那一步也可能直接 return，而 A/B 记账要读到「这一轮到底跑的是谁」。
+  local algo = "orig"
+  if type(B.algoNow) == "function" then algo = B.algoNow() end
+  if algo ~= "a" and algo ~= "b" then algo = "orig" end
+  B.sortAlgoRun = algo
   local i
   -- ① 合并堆叠（整堆并入，装不下不动手）
   local src, dst = findMerge(list, n)
@@ -471,6 +495,40 @@ local function oneStep()
   end
   if table.getn(items) == 0 then return "done" end
   table.sort(items, lessRec)
+  -- ★★★0.3.49 算法分派（见文件头）：`a` / `orig` 都走下面那一趟（A 的差别只在 park 目标，见下）；
+  --   **`b` 先补一遍「目标格是空的」那一类**（1 步成，不必先 park）⇒ 再把剩下的交给同一趟。
+  --   ★B 这一趟**严格前置**：没找到可做的 ⇒ 原样落回下面那一趟 ⇒ 边界/坏数据只会退化成 A/orig，绝不卡住。
+  --   ★donor 判据 `(cw == nil or cw.id ~= cd.id)` = 「这一格本身是错位的（或它压根不该有东西）」
+  --     —— **绝不许偷已经摆对的堆**（首版漏了这条，实测反而 **+113%** 更慢；补上后 −38%）。
+  --   ★单调性：这一步把 i 摆正、把 j2 变空（j2 本来就错位 ⇒ 仍错位）⇒ 错位数**严格递减** ⇒ 不可能不收敛。
+  if algo == "b" then
+    for i = 1, n do
+      local wantB = items[i]
+      if wantB ~= nil and list[i] == nil then
+        local dn = nil
+        local j2
+        for j2 = 1, n do
+          if j2 ~= i then
+            local cd = list[j2]
+            local cw = items[j2]
+            if cd ~= nil and cd.id == wantB.id and cd.locked ~= true
+              and (cw == nil or cw.id ~= cd.id) then
+              dn = cd
+              break
+            end
+          end
+        end
+        if dn ~= nil then
+          local okE, whyE = moveNow({ bag = dn.bag, slot = dn.slot }, { bag = slots[i].bag, slot = slots[i].slot })
+          if okE then
+            if whyE == "cursor" then return "cursor" end
+            return "moved", dn.bag, dn.slot, slots[i].bag, slots[i].slot, dn
+          end
+          if whyE == "locked" then return "stall" end
+        end
+      end
+    end
+  end
   for i = 1, n do
     local want = items[i]
     if want == nil then
@@ -500,12 +558,29 @@ local function oneStep()
           -- 目标被占 ⇒ 先把占位那件 park 到一个空格（下一步重扫时 i 已空，再搬 donor 过来）
           -- ★★★0.3.7：这里必须按**槽位数 n** 扫 —— 旧写法写 `table.getn(list)`，而末尾空格的 nil
           --   会让它短算 ⇒ 明明有空格却 `park == nil` ⇒ 误报「一格空位都没有」（用户报障的最后一层）。
+          -- ★★★0.3.49 A 的优化（**只改 park 目标怎么挑，走位顺序与判据一字未动**）：
+          --   A 档 = 优先把占位那件放进**它自己的最终位置**（`items[k] == cur` 且那一格空着），
+          --   找不到才退回「第一个空格」（= orig 档的口径）。
+          --   ★实测（同 8 组夹具）：合计 **1029 → 902 步（−12.3%）**，两段大件（背包+银行）**−25%**，
+          --     零互换、最终 id 序列逐格一致；**没有一组变差**。
+          --   ★为什么安全：仍是一拍一对写动作、仍每拍全量重读、仍只搬进空格 / 并入同 id（绝不互换）；
+          --     变的只是「先搬到哪个空位」——搬进自己的最终位置 = 那件当场落定，不必再来一次。
           local park = nil
           local k
-          for k = 1, n do
-            if list[k] == nil then
-              park = k
-              break
+          if algo ~= "orig" then
+            for k = 1, n do
+              if items[k] == cur and list[k] == nil then
+                park = k
+                break
+              end
+            end
+          end
+          if park == nil then
+            for k = 1, n do
+              if list[k] == nil then
+                park = k
+                break
+              end
             end
           end
           if park == nil then return "nofree" end
@@ -638,7 +713,14 @@ function B.sortStep(dt)
     if f ~= nil and B.isObj(f.ehSortBtn) and B.isObj(f.ehSortBtn.label) then
       pcall(f.ehSortBtn.label.SetText, f.ehSortBtn.label, L("SORT"))
     end
-    B.sayForce(L("SORT_DONE", B.sortMoves or 0, used))
+    -- ★0.3.49 完成行带上**这一轮用的算法**（用户要在真机上做 A/B/C 对比 ⇒ 每轮都一眼看见是谁跑的），
+    --   并把这一轮记进 A/B 实测账（★只记**跑完**的；被停掉/超时的不进账，平均值才不被截断污染）。
+    local algoTag = ""
+    if type(B.algoText) == "function" then algoTag = " ｜ " .. B.algoText() end
+    B.sayForce(L("SORT_DONE", B.sortMoves or 0, used) .. algoTag)
+    if type(B.sortStatAdd) == "function" then
+      pcall(B.sortStatAdd, B.sortAlgoRun, B.sortMoves or 0, used, B.sortItems or 0)
+    end
     B.markDirty(0.05)
     -- ★0.3.38 落定重刷：戳记（1.5s）全部过期之后再整刷一次 —— 探针实证：整理一停容器读回就恢复，
     --   但戳记过期之后没有人再刷新 ⇒ 被守卫跳过的格子永远停在「有数无图标」（0.3.37 真机定案）。
@@ -716,6 +798,8 @@ function B.sortStart(loud)
   B.sortStall = 0
   B.sortElapsed = 0
   B.sortT0 = GetTime()
+  -- ★0.3.49 这一轮的「件数」（= n，含银行段换段时它已经改成银行件数）—— A/B 记账要用它判「两轮可比吗」
+  B.sortItems = n
   -- ★0.3.41：无进展闸门的会话态开新一轮就归零（`seen` 空 ⇒ 第一步必是「新状态」，绝不误判）
   B.sortFp = nil
   B.sortFpAt = nil

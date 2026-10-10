@@ -49,7 +49,7 @@ local B = {}
 _G.EH_BAG = B
 
 -- 构建标记（唯一来源）：改本文件顺手 +1，用于「客户端跑的是哪一份」取证
-local BAG_BUILD = "0.3.48"
+local BAG_BUILD = "0.3.49"
 
 local function strVal(v)
   return tostring(v)
@@ -191,6 +191,20 @@ local BAG_T = {
     MENU_SCALE = "界面缩放",
     MENU_SCALE_HINT = "%s%%（左键 +10%% · 右键 -10%%）",
     MENU_GAP = "整理步进",
+    -- ★0.3.49 整理算法 A/B/C（基线）可切换 —— 文案只写「是什么」，长解释留在悬停/CLAUDE.md
+    MENU_ALGO = "整理算法",
+    ALGO_ORIG = "原算法（基线）",
+    ALGO_A = "A 就近放回",
+    ALGO_B = "B 先补空洞",
+    ALGO_SET = "整理算法 = %s",
+    ALGO_TIP = "（三档的安全口径完全相同：每拍最多一对 PickupContainerItem · 每步全量重读 · 绝不发互换；切换后下一次整理生效）",
+    ALGO_NOW = "整理算法当前 = %s",
+    ALGO_USAGE = "（用法 /ebag algo a|b|orig，或设置菜单「整理算法」那一行点一下循环；/ebag algo clear = 清空 A/B 实测记账）",
+    ALGO_STAT_HEAD = "整理算法实测：",
+    ALGO_STAT_ONE = "%d 次 · 平均 %.1fs / %.0f 步 / %.0f 件",
+    ALGO_STAT_NONE = "还没跑过",
+    ALGO_CLEAR = "整理算法实测记账已清空（A/B/C 三档都归零）",
+    ST_SORT_ALGO = "整理算法：%s",
     GAP_SLOW = "逐项",
     GAP_MID = "标准",
     GAP_FAST = "快",
@@ -370,6 +384,19 @@ MENU_CGAP = "格子间距",
     MENU_SCALE = "UI scale",
     MENU_SCALE_HINT = "%s%% (left-click +10%%, right-click -10%%)",
     MENU_GAP = "Sort step",
+    MENU_ALGO = "Sort algorithm",
+    ALGO_ORIG = "original (baseline)",
+    ALGO_A = "A nearest-home park",
+    ALGO_B = "B hole-first",
+    ALGO_SET = "Sort algorithm = %s",
+    ALGO_TIP = " (all three share the same safety rules: at most one PickupContainerItem pair per beat, full re-read every step, never a swap; takes effect on the next sort)",
+    ALGO_NOW = "Sort algorithm now = %s",
+    ALGO_USAGE = " (usage: /ebag algo a|b|orig, or click the \"Sort algorithm\" row in the settings menu; /ebag algo clear = reset the A/B tallies)",
+    ALGO_STAT_HEAD = "Sort algorithm measurements: ",
+    ALGO_STAT_ONE = "%d runs - avg %.1fs / %.0f steps / %.0f items",
+    ALGO_STAT_NONE = "no completed run yet",
+    ALGO_CLEAR = "A/B/C sort tallies cleared",
+    ST_SORT_ALGO = "Sort algorithm: %s",
     GAP_SLOW = "one by one",
     GAP_MID = "normal",
     GAP_FAST = "fast",
@@ -549,6 +576,19 @@ MENU_CGAP = "Slot spacing",
     MENU_SCALE = "Масштаб интерфейса",
     MENU_SCALE_HINT = "%s%% (ЛКМ +10%%, ПКМ -10%%)",
     MENU_GAP = "Шаг сортировки",
+    MENU_ALGO = "Алгоритм сортировки",
+    ALGO_ORIG = "исходный (базовый)",
+    ALGO_A = "A ближе к своему месту",
+    ALGO_B = "B сначала пустые цели",
+    ALGO_SET = "Алгоритм сортировки = %s",
+    ALGO_TIP = " (у всех трёх одинаковые правила безопасности: не более одной пары PickupContainerItem за такт, полное перечитывание каждый шаг, без обмена; применится к следующей сортировке)",
+    ALGO_NOW = "Алгоритм сортировки сейчас = %s",
+    ALGO_USAGE = " (использование: /ebag algo a|b|orig, или строка «Алгоритм сортировки» в меню настроек; /ebag algo clear = сбросить замеры)",
+    ALGO_STAT_HEAD = "Замеры алгоритма: ",
+    ALGO_STAT_ONE = "%d раз - в среднем %.1fс / %.0f шагов / %.0f предм.",
+    ALGO_STAT_NONE = "ещё не было запусков",
+    ALGO_CLEAR = "Замеры алгоритмов сброшены",
+    ST_SORT_ALGO = "Алгоритм сортировки: %s",
     GAP_SLOW = "по одному",
     GAP_MID = "обычно",
     GAP_FAST = "быстро",
@@ -671,6 +711,11 @@ local DEF = {
   --   （第三张图那一行是「整理步进：0.2s（快）」）。★0.3.11 那条「0.20 ⇒ 升回 0.45」的迁移
   --   **整条撤掉**（留着它会把新默认档当场顶回 0.45），改成反向迁移，见 `B.cfg()`。
   moveGap = 0.20,
+  -- ★★★0.3.49 整理算法三档可切换（用户：「原来的算法逻辑保留」+「A算法优化也做」+「A,B 进入配置可切换」）：
+  --   `"orig"` = 原算法（逻辑一字未改，作为基线留着）· `"a"` = 原骨架 + park 就近放回（**默认档**）
+  --   · `"b"` = 环优先（先补空洞）。★默认取 `a` 的依据 = 实测**没有一组变差**（合计 −12.3%）且安全口径一字未动；
+  --   要对比基线随时 `/ebag algo orig`（或菜单那一行点一下循环）。
+  sortAlgo = "a",
   autoShow = true,
   -- ★★★0.3.14：界面缩放默认 **80%**（第三张图：「界面缩放：80%」）—— `B.z()` 的坏数据回落也读它。
   scale = 0.80,
@@ -724,6 +769,9 @@ function B.cfg()
   end
   -- ★下限夹取（不信存档）：坏数据/手改存档不许把我们拖成「一帧几十次写动作」
   if c.moveGap < B.MOVEGAP_MIN then c.moveGap = B.MOVEGAP_MIN end
+  -- ★0.3.49 整理算法三档（orig / a / b）：**只有非法值**才落默认档；玩家显式选过的档一个字节都不动
+  --   （三个值都合法 ⇒ 这一条永远不会顶掉用户的选择）。
+  if c.sortAlgo ~= "orig" and c.sortAlgo ~= "a" and c.sortAlgo ~= "b" then c.sortAlgo = DEF.sortAlgo end
   if c.autoShow == nil then c.autoShow = DEF.autoShow end
   -- ★0.3.33 右键直投窗口：**默认开**（nil ⇒ 物化 true，见 `DEF.dropWin`）——
   --   只有**显式 false** 才是关（与 `DEF.bar` 那条正好相反，别记混）。
@@ -1135,6 +1183,108 @@ function B.gapSet(v)
   sayForce("整理步进 = " .. B.gapText() .. "（约 " .. strVal(math.floor(1 / n * 10 + 0.5) / 10)
     .. " 步/秒；★想让整理**一件一件动给你看**就别低于 0.30 —— 越小越快、越看不出过程。"
     .. "一步最多一对 PickupContainerItem，太快要小心反滥用限流）")
+end
+
+-- ★★★0.3.49 整理算法三档（orig / a / b）—— **配置可切换**（用户：「原来的算法逻辑保留」+
+--   「A算法优化也做」+「将不同的算法(A,B)进入配置可切换」）。读值口在模块侧、算法本体在整理引擎侧。
+--   · **唯一读口 `B.algoNow()`**（整理引擎每拍读它；引擎侧再夹一次白名单 ⇒ 坏值落 `"orig"`）
+--   · **唯一写口 `B.algoSet(v)`**（认 a/b/orig + 中文名/序号；**坏输入一个字节都不动** + 如实说）
+--   · **循环口 `B.algoCycle()`**（设置菜单那一行点一下）+ **文案唯一来源 `B.algoText()`**
+--   · **A/B/C 实测记账** = `B.sortStatAdd` / `B.sortStatLine` / `B.sortStatClear`：只记**跑完**的那一轮
+--     （被停掉/超时的不进账），键 = 三档固定（**有界、永不增长**），均值现算。
+--   ★三档共用同一套安全口径（每拍一对写动作 · 每步全量重读 · 绝不互换）⇒ 切算法不动任何安全判据。
+B.ALGO_WORDS = {
+  ["a"] = "a", ["A"] = "a", ["1"] = "a", ["就近"] = "a", ["就近放回"] = "a", ["放回"] = "a",
+  ["b"] = "b", ["B"] = "b", ["2"] = "b", ["环"] = "b", ["环优先"] = "b", ["补空洞"] = "b", ["空洞"] = "b",
+  ["orig"] = "orig", ["origin"] = "orig", ["base"] = "orig", ["0"] = "orig", ["3"] = "orig",
+  ["原"] = "orig", ["原算法"] = "orig", ["原始"] = "orig", ["基线"] = "orig",
+}
+B.ALGO_CYCLE = { "a", "b", "orig" }
+
+function B.algoNow()
+  local a = B.cfg().sortAlgo
+  if a == "a" or a == "b" or a == "orig" then return a end
+  return DEF.sortAlgo
+end
+
+function B.algoText()
+  local a = B.algoNow()
+  if a == "b" then return L("ALGO_B") end
+  if a == "a" then return L("ALGO_A") end
+  return L("ALGO_ORIG")
+end
+
+-- 唯一写口：**坏输入一个字节都不动**（口径同 B.gapSet / B.vsizeSet / B.tintSet）
+function B.algoSet(v)
+  local id = nil
+  local nv = tonumber(v)
+  if nv ~= nil then
+    if nv == 1 then id = "a" elseif nv == 2 then id = "b" elseif nv == 3 or nv == 0 then id = "orig" end
+  end
+  if id == nil and type(v) == "string" then
+    id = B.ALGO_WORDS[string.gsub(strVal(v), "%s+", "")]
+  end
+  if id == nil then
+    sayForce(L("ALGO_NOW", B.algoText()) .. L("ALGO_USAGE"))
+    return
+  end
+  B.cfg().sortAlgo = id
+  B.traceAdd("algo", id)
+  sayForce(L("ALGO_SET", B.algoText()) .. L("ALGO_TIP"))
+end
+
+function B.algoCycle()
+  local cur = B.algoNow()
+  local n = table.getn(B.ALGO_CYCLE)
+  local i
+  for i = 1, n do
+    if B.ALGO_CYCLE[i] == cur then
+      B.algoSet(B.ALGO_CYCLE[(i % n) + 1])
+      return
+    end
+  end
+  B.algoSet(B.ALGO_CYCLE[1])
+end
+
+-- 完成一轮时记账（由整理引擎在 **done** 分支调用；跑一半被停的不记 ⇒ 平均值不被截断污染）
+function B.sortStatAdd(algo, moves, sec, items)
+  local c = B.cfg()
+  if type(c.sortStat) ~= "table" then c.sortStat = {} end
+  local k = "orig"
+  if algo == "a" or algo == "b" then k = algo end
+  local st = c.sortStat[k]
+  if type(st) ~= "table" then
+    st = { runs = 0, moves = 0, sec = 0, items = 0 }
+    c.sortStat[k] = st
+  end
+  st.runs = (tonumber(st.runs) or 0) + 1
+  st.moves = (tonumber(st.moves) or 0) + (tonumber(moves) or 0)
+  st.sec = (tonumber(st.sec) or 0) + (tonumber(sec) or 0)
+  st.items = (tonumber(st.items) or 0) + (tonumber(items) or 0)
+end
+
+function B.sortStatClear()
+  B.cfg().sortStat = {}
+  sayForce(L("ALGO_CLEAR"))
+end
+
+function B.sortStatLine()
+  local c = B.cfg()
+  local all = (type(c.sortStat) == "table") and c.sortStat or {}
+  local function one(k, name)
+    local s = all[k]
+    local runs = (type(s) == "table") and (tonumber(s.runs) or 0) or 0
+    if runs <= 0 then return name .. " " .. L("ALGO_STAT_NONE") end
+    return name .. " " .. L("ALGO_STAT_ONE", runs, (tonumber(s.sec) or 0) / runs,
+      (tonumber(s.moves) or 0) / runs, (tonumber(s.items) or 0) / runs)
+  end
+  return L("ALGO_STAT_HEAD") .. one("a", L("ALGO_A")) .. " ｜ " .. one("b", L("ALGO_B"))
+    .. " ｜ " .. one("orig", L("ALGO_ORIG"))
+end
+
+-- `/ebag status` 与 `/ebag algo` 共用的一行（当前档 + 三档实测）
+function B.algoLine()
+  return L("ST_SORT_ALGO", B.algoText()) .. " ｜ " .. B.sortStatLine()
 end
 
 -- ===== 物品读取（唯一入口：图标/数量/品质/类型/分类都从这里出）=====
@@ -5506,6 +5656,12 @@ function B.menuItems()
     text = L("MENU_GAP") .. "：" .. B.gapText(),
     fn = function() B.gapCycle() end,
   })
+  -- ★★★0.3.49 整理算法一行（**配置可切换**）：点一下 = A → B → 原算法 → A（写口仍是同一个
+  --   `B.algoSet` ⇒ 与 `/ebag algo a|b|orig` 不可能各写一半；当前档直接写在行上）。
+  table.insert(out, {
+    text = L("MENU_ALGO") .. "：" .. B.algoText(),
+    fn = function() B.algoCycle() end,
+  })
   table.insert(out, {
     text = L("MENU_SCALE") .. "：" .. L("MENU_SCALE_HINT", B.scalePct()),
     fn = function() B.scaleStepBy(1) end,
@@ -8202,6 +8358,8 @@ local function usage()
   sayForce("/ebag cols N = 每行列数（4~20，当前 " .. strVal(B.cfg().cols) .. "）")
   sayForce("/ebag gap [秒|档位] = 整理步进（当前 " .. B.gapText()
     .. "；档位 逐项=0.45 标准=0.30 快=0.20 极快=0.12，范围 0.10~2.00 —— ★越小越快、越看不出逐项过程）")
+  sayForce("/ebag algo [a|b|orig] = 整理算法（当前 " .. B.algoText()
+    .. "；a = 原骨架 + 就近放回 / b = 环优先先补空洞 / orig = 原算法基线；无参数 = 只读播报 + A/B 实测记账；algo clear = 清空记账）")
   sayForce("/ebag auto on|off = 银行/商贩/交易/拍卖时自动开窗（当前 " .. (B.cfg().autoShow and "开" or "关") .. "）")
   sayForce("/ebag reset = 窗口位置回正中 + 全部背包/钥匙/银行包显示")
   sayForce("/ebag center = 窗口回到屏幕中间（越界自愈的手动兜底；开窗/起拖/拖拽收尾会自动做）")
@@ -8352,6 +8510,8 @@ function B.status()
   -- ★0.3.41 整理工作区体检（活口）：哪些容器在池子里、哪些被 fail-closed 跳过（特殊袋/判不出）、
   --   以及无进展计数（读值口在整理引擎自己文件里 —— 工具模块的读值口一律留在模块侧）
   if type(B.sortAreaLine) == "function" then sayForce(B.sortAreaLine()) end
+  -- ★0.3.49 整理算法（活口）：**当前档 + 三档 A/B/C 实测记账**（平均秒/步/件 —— 用户真机对比就看这一行）
+  sayForce(B.algoLine())
   -- ★0.3.14 外观现场读数（活口）：**品质染色**（档位 + 该档对「精良(蓝)」算出来的实际颜色 = 设置到底生没生效）
   --   与**背景透明度**（百分比）。用户报「三个级别设置了但一点作用都没」⇒ 有这一行才能一眼判「设置写了没」
   --   与「画出来是什么色」（前者看档位、后者看那三个数；两组数不匹配 = 卡的中间那一段）。
@@ -8746,6 +8906,9 @@ function B.cmd(msg)
     -- ★0.3.31g：格子边距（`/ebag cgap 0~16`；无参数 = 只读播报）
     local kn = string.match(msg, "^cgap%s*(.*)$")
     if kn == nil then kn = string.match(msg, "^间距%s*(.*)$") end
+    -- ★0.3.49：整理算法（`/ebag algo a|b|orig`；无参数 = 只读播报 + A/B 实测记账；`algo clear` = 清空记账）
+    local agn = string.match(msg, "^algo%s*(.*)$")
+    if agn == nil then agn = string.match(msg, "^算法%s*(.*)$") end
     if an ~= nil then
       if an == "" then
         B.bgSet(nil)                                     -- 无参数 = 只读播报（活口）
@@ -8757,6 +8920,15 @@ function B.cmd(msg)
         B.cgapSet(nil)                                   -- 无参数 = 只读播报（活口）
       else
         B.cgapSet(kn)
+      end
+    elseif agn ~= nil then
+      local av = string.gsub(strVal(agn), "%s+", "")
+      if av == "" then
+        sayForce(B.algoLine())                           -- 无参数 = 只读播报（含 A/B/C 实测记账）
+      elseif av == "clear" or av == "清空" or av == "清零" or av == "重置" then
+        B.sortStatClear()
+      else
+        B.algoSet(agn)
       end
     elseif tn2 ~= nil then
       local tv = tonumber(tn2)
