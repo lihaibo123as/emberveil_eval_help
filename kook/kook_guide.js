@@ -21,6 +21,9 @@
  *   node kook/kook_guide.js --topic --send               # 真改（幂等：与现有一致就跳过；--force 强写）
  *   node kook/kook_guide.js --update-announce            # 演练：本版更新公告（「公告与通知」频道，按版本记账）
  *   node kook/kook_guide.js --update-announce --send     # 真发（release 第 10 步发完帖之后跑；同版本重跑 = 原地更新）
+ *   node kook/kook_guide.js --req-list                   # 只读：列「插件需求」帖子频道的帖 + 是否已回填完结
+ *   node kook/kook_guide.js --req-reply <thread_id>      # 演练：给某条需求帖回「完成度 + 版本指向 + 完结标记」
+ *   node kook/kook_guide.js --req-reply <thread_id> --send  # 真回（正文 = kook/requests/<thread_id>.md；幂等：已回填过就跳过）
  *   node kook/kook_guide.js --welcome <user_id> --send   # 手工发一条欢迎（补发/测试用）
  *   node kook/kook_guide.js --listen                     # 常驻：收 joined_guild → 发欢迎词（Ctrl+C 停）
  *   node kook/kook_guide.js --listen --dry              # 常驻但不真发（只打印「本会发什么」）
@@ -41,7 +44,7 @@ const API = "https://www.kookapp.cn/api/v3";
 const args = { send: false, check: false, announce: false, listen: false, welcome: null,
                dry: false, noPin: false, scan: false, queue: false, plan: false, backfill: false,
                done: null, version: null, note: "", thread: null, noScan: false, simulate: null, minInterval: 500,
-               topic: false, channel: null, updateAnnounce: false };
+               topic: false, channel: null, updateAnnounce: false, reqList: false, reqReply: null, reqFile: null };
 for (let i = 2; i < process.argv.length; i++) {
   const a = process.argv[i];
   switch (a) {
@@ -50,6 +53,9 @@ for (let i = 2; i < process.argv.length; i++) {
     case "--announce": args.announce = true; break;
     case "--update-announce": args.updateAnnounce = true; break;
     case "--topic":    args.topic = true; break;
+    case "--req-list":  args.reqList = true; break;
+    case "--req-reply": args.reqReply = process.argv[++i]; break;
+    case "--req-file":  args.reqFile = process.argv[++i]; break;
     case "--channel":  args.channel = process.argv[++i]; break;
     case "--listen":   args.listen = true; break;
     case "--welcome":  args.welcome = process.argv[++i]; break;
@@ -91,6 +97,9 @@ function loadConfig() {
     announce_file: "kook/guide/announce.md",
     update_file: "kook/guide/update.md",
     feedback_file: "kook/guide/feedback.md",
+    // 「插件需求」帖子频道（type=4）：玩家在里面开帖提需求 ⇒ 完结回填走 --req-reply（回复完成度 + 版本指向）
+    requests_channel_id: "8284982152168097",
+    requests_dir: "kook/requests",
     state_file: "kook/state/guide.json",
     queue_file: "kook/queue/feedback.json",
     inbox_file: "kook/queue/INBOX.md",
@@ -363,6 +372,100 @@ async function doUpdateAnnounce(cfg, token, verArg) {
     if (got === content.trim()) say(`✔ 回读一致（${got.length} 字 · 最后更新 ${stamp}）`);
     else console.error(`⚠ 回读不一致（服务端可能改写/截断，消息已发出、未回滚）\n  期望 ${content.trim().length} 字｜实得 ${got.length} 字`);
   } catch (e) { console.error("⚠ 回读失败（不影响已发出的公告）：" + e.message); }
+}
+
+// ─────────────── 「插件需求」帖子频道的完结回填（回复完成度 + 版本指向） ───────────────
+// 用户 2026-10-10 定：「kook 对插件需求内的帖子进行回复功能完成度和版本指向并且关闭完结帖子」。
+//
+// ★端点事实（官方文档 + 本机真机探针，全部可复算；全案 = kook/CLAUDE.md §九·补三）：
+//   · 回复 = `POST /thread/reply {channel_id, thread_id, content}`（**content = 卡片 JSON 字符串**，见 `reqCard()`；
+//     不传 reply_id = 评论主楼）
+//   · 回复列表 = `GET /thread/post?channel_id&thread_id&order=asc|desc&page=1`
+//     ★**`order` 必须是字符串 `asc`/`desc`**（写 `1` 回 `Order是无效的`），且 **`channel_id` 不能省**（缺了回 400）
+//   · ★★★**KOOK 没有「关闭 / 完结帖子」的开放接口**（本条要如实告知，别假装做到）：
+//     官方文档只列 7 个 thread 接口（category/list · create · reply · view · list · delete · post）；
+//     另探 5 个候选端点（`thread/close` / `archive` / `finish` / `status` / `lock`）**全部 404 `Invalid Route`**；
+//     唯一「路由解析得到」的 `thread/update` 用 **bot token 恒回 401**「系统检测到您的登录环境异常，请重新登录」
+//     （对照：同样缺参/坏参的 `thread/reply` 回 400「目标不存在或者你没有权限操作」、`thread/delete` 回 40000）
+//     ⇒ 该路由存在但**不是 bot 能调的**（属 KOOK 客户端动作，走用户态）⇒ **完结只能靠这条回复写明**，
+//     客户端里那个「关闭」动作要**人工点**（脚本会把这句一起打印出来）。
+const REQ_MARK = "✅ 本条需求已实现";
+function reqChannelId(cfg) { return String(cfg.guide.requests_channel_id || "8284982152168097"); }
+function reqDir(cfg) { return path.resolve(ROOT, cfg.guide.requests_dir || "kook/requests"); }
+function reqFileOf(cfg, threadId) { return path.join(reqDir(cfg), threadId + ".md"); }
+const reqFlat = s => String(s == null ? "" : s).replace(/\s+/g, " ").trim();
+// ★★★`thread/reply` 的 `content` **必须是卡片 JSON 字符串**（官方文档把类型写成「文本」是错的）——
+//   实测：① 直接发纯文本 ⇒ `code=40000 json格式不正确`（服务端会先 JSON.parse(content)，见 Kook.Net 的
+//   `MessageHelper.ParseCards(model.Content)`）；② 发 `theme:"primary"` 的卡片 ⇒ `code=40000 卡片消息中theme必须为:invisible`
+//   ⇒ **帖子（主楼与回复）只吃 `theme:"invisible"`**（实测主楼卡片就是这个值，见 `--req-list` 读回）。
+function reqCard(body) {
+  return JSON.stringify([{ type: "card", theme: "invisible", color: "", size: "lg", expand: false,
+    modules: [{ type: "section", text: { type: "kmarkdown", content: body } }] }]);
+}
+
+async function reqPosts(cfg, token, threadId) {
+  const d = await api("GET", `${API}/thread/post?channel_id=${reqChannelId(cfg)}&thread_id=${threadId}&order=asc&page=1&page_size=50`, undefined, token);
+  return (d && (d.items || d.list)) || [];
+}
+
+async function doReqList(cfg, token) {
+  const d = await api("GET", `${API}/thread/list?channel_id=${reqChannelId(cfg)}&sort=2`, undefined, token);
+  const items = (d && (d.items || d.list)) || [];
+  const st = loadState(cfg).req_reply || {};
+  say(`「插件需求」频道 ${reqChannelId(cfg)}：共 ${items.length} 条帖`);
+  if (!items.length) { say("（频道里还没有帖子）"); return; }
+  for (const it of items) {
+    let posts = [], err = "";
+    try { posts = await reqPosts(cfg, token, it.id); } catch (e) { err = e.message; }
+    const mine = posts.find(p => reqFlat(p.content).includes(REQ_MARK));
+    const who = (it.user && (it.user.nickname || it.user.username)) || "?";
+    const state = mine ? "✅ 已回填完结" : (err ? "⚠ 回复列表读不到" : (st[it.id] ? "⚠ 账本记过、帖里没读到" : "⏳ 未回填"));
+    say(`  · ${it.title}  (id=${it.id} · 作者=${who} · 回复 ${Math.max(0, (it.post_count || 1) - 1)} 条)  ⇒ ${state}${err ? `（${err.slice(0, 60)}）` : ""}`);
+  }
+  say("回填命令：node kook/kook_guide.js --req-reply <thread_id> --send（正文 = kook/requests/<thread_id>.md）");
+}
+
+async function doReqReply(cfg, token, threadId, fileArg) {
+  const view = await api("GET", `${API}/thread/view?channel_id=${reqChannelId(cfg)}&thread_id=${threadId}`, undefined, token);
+  const title = (view && view.title) || "";
+  const author = view && view.user && (view.user.nickname || view.user.username);
+  say(`帖子：${title}  (id=${threadId} · 作者=${author || "?"} · status=${view && view.status} · 主楼 post_id=${view && view.post_id})`);
+
+  const posts = await reqPosts(cfg, token, threadId);
+  const dup = posts.find(p => reqFlat(p.content).includes(REQ_MARK));
+  if (dup && !args.force) {
+    say(`✔ 这条帖子已经回填过（回复 id=${dup.id} 含「${REQ_MARK}」标记）⇒ 跳过，绝不重复回复（要再发一次加 --force）`);
+    return;
+  }
+
+  const file = fileArg ? path.resolve(ROOT, fileArg) : reqFileOf(cfg, threadId);
+  if (!fs.existsSync(file)) throw new Error(`缺少这条需求的对外正文：${path.relative(ROOT, file)}（先写一份；口径与模板见 kook/CLAUDE.md §九·补三）`);
+  const body0 = fs.readFileSync(file, "utf8").replace(/\r\n/g, "\n").trim();
+  const ver = args.version || tocVersion();
+  const link = versionLink(cfg, ver, args.thread);
+  const body = [
+    body0,
+    "",
+    "---",
+    `**版本指向**：EvalHelp **v${ver}** ｜ **下载 · 逐条说明** → [本版发布帖](${link})`,
+    `本版更新公告 → (chn)${cfg.guide.announce_channel_id}(chn)`,
+    "",
+    `${REQ_MARK} · 本条到此**完结**（后面若有新情况，回一条即可）`,
+  ].join("\n");
+
+  say(`\n──────── 将回复到帖子 ${threadId} 的正文（${body.length} 字 · 来源 ${path.relative(ROOT, file)}） ────────\n${body}\n──────────────────────────────`);
+  if (!args.send) { say("（dry-run：未发送。加 --send 真发）"); return; }
+
+  const r = await api("POST", `${API}/thread/reply`, { channel_id: reqChannelId(cfg), thread_id: threadId, content: reqCard(body) }, token);
+  say(`✔ 已回复（reply id=${r && r.id}）`);
+  const back = await reqPosts(cfg, token, threadId);
+  const mine = back.find(p => r && p.id === r.id) || back.find(p => reqFlat(p.content).includes(REQ_MARK));
+  if (!mine) { console.error("⚠ 回读没找到刚发的那条 ⇒ 请到频道里人工确认（不假装成功）"); return; }
+  say(`✔ 回读自证：回复 id=${mine.id} ｜ 含完结标记=${reqFlat(mine.content).includes(REQ_MARK)} ｜ 帖内回复数=${Math.max(0, back.length - 1)}`);
+  const prev = loadState(cfg).req_reply || {};
+  saveStatePatch(cfg, { req_reply: Object.assign({}, prev, { [threadId]: { at: Date.now(), post_id: mine.id, ver, file: path.relative(ROOT, file), title } }) });
+  say(`✔ 已记账 kook/state/guide.json → req_reply[${threadId}]`);
+  say("ℹ️ 「关闭帖子」：KOOK **没有 bot 可用的关闭/完结接口**（官方 7 个 thread 接口里没有；候选端点全 404；`thread/update` 用 bot token 恒 401）⇒ 完结以这条回复为准，**客户端里的关闭动作请人工点**。");
 }
 
 // ───────────────────────────── 欢迎词 ─────────────────────────────
@@ -814,13 +917,15 @@ async function doCheck(cfg, token) {
     const tk = readToken(cfg);
     if (args.check || args.announce || args.listen || args.welcome || args.scan
         || args.plan || args.done || args.backfill || args.simulate || args.msgDelete || args.topic
-        || args.updateAnnounce) {
+        || args.updateAnnounce || args.reqList || args.reqReply) {
       if (!tk) { console.error("✘ 找不到 KOOK token（token/kook.txt 或 KOOK_TOKEN）"); process.exit(2); }
       if (!args.listen) say(`token 来源：${tk.from}（值不打印）`);
     }
     if (args.check)    return doCheck(cfg, tk.token);
     if (args.topic)    return doTopic(cfg, tk.token, args.channel);
     if (args.updateAnnounce) return doUpdateAnnounce(cfg, tk.token, args.version);
+    if (args.reqList)  return doReqList(cfg, tk.token);
+    if (args.reqReply) return doReqReply(cfg, tk.token, args.reqReply, args.reqFile);
     if (args.msgDelete) return doMsgDelete(cfg, tk.token, args.msgDelete);
     if (args.simulate) return doSimulate(cfg, tk.token, args.simulate);
     if (args.plan)     return doPlan(cfg, tk.token);
@@ -831,7 +936,7 @@ async function doCheck(cfg, token) {
     if (args.welcome)  return doWelcome(cfg, tk.token, args.welcome, loadState(cfg));
     if (args.announce) return doAnnounce(cfg, tk.token);
     if (args.listen)   return doListen(cfg, tk.token);
-    console.error("用法：--check | --plan | --scan | --queue | --done <msg_id> --version <版本> [--note …] [--thread …] | --backfill | --announce [--send] | --update-announce [--version <版本>] [--send] | --topic [--channel <id>] [--send] [--force] | --welcome <user_id> [--send] | --listen [--dry]");
+    console.error("用法：--check | --plan | --scan | --queue | --done <msg_id> --version <版本> [--note …] [--thread …] | --backfill | --announce [--send] | --update-announce [--version <版本>] [--send] | --topic [--channel <id>] [--send] [--force] | --welcome <user_id> [--send] | --req-list | --req-reply <thread_id> [--version <版本>] [--req-file <路径>] [--send] [--force] | --listen [--dry]");
     process.exit(2);
   } catch (e) {
     console.error("✘ " + e.message);

@@ -17,7 +17,7 @@
 | `03-对接方案草案.md` | 期望状态（desired state）reconcile 设计、账本、防回环、三闸门、示例配置、时序 | 确定业务目标后 |
 | `04-发布频道自动上传.md` | **已落地的需求**：release 后自动把插件包发到 KOOK 插件发布频道（接口链路、前置条件、用法、文案口径、排错） | 每次发布前 |
 | `kook_publish.js` | 发布脚本本体（零依赖，默认 dry-run，`--send` 才真发）；另带**频道查重**：`--dup-audit`（只读列帖 + 找「同插件同版本」重复）/ `--dup-prune --send`（删旧的、每条只留最新） | 每次发布 |
-| `kook_guide.js` | **自动化引导 + 开发计划闭环**：新人欢迎词（事件驱动 `joined_guild`）· 公告幂等维护 · **`--update-announce` 发「本版更新公告」**（release 第 10 步收尾，每版一条）· **`--topic` 写「建议反馈」频道说明**（怎么提建议，一条命令）· 建议反馈→优化队列 · **`--plan` 收集开发计划**（用户问「有什么优化需求」时的第一动作）· **`--done` 完成回填**（原帖加 ✅ + 回复带版本发布链接）· `--backfill` | 常驻 / 按需 |
+| `kook_guide.js` | **自动化引导 + 开发计划闭环**：新人欢迎词（事件驱动 `joined_guild`）· 公告幂等维护 · **`--update-announce` 发「本版更新公告」**（release 第 10 步收尾，每版一条）· **`--topic` 写「建议反馈」频道说明**（怎么提建议，一条命令）· 建议反馈→优化队列 · **`--plan` 收集开发计划**（用户问「有什么优化需求」时的第一动作）· **`--done` 完成回填**（原帖加 ✅ + 回复带版本发布链接）· **`--req-list` / `--req-reply <thread_id>` 「插件需求」帖子频道的完结回填**（回复完成度 + 版本指向；正文 = `requests/<thread_id>.md`）· `--backfill` | 常驻 / 按需 |
 | `state/releases.json` | 发布记账：版本 → 各帖 `id`/标题/包名（`kook_publish.js --send` 自动写，供 `--done` 配发布链接） | 自动 |
 | `guide/welcome.md` · `guide/announce.md` · `guide/feedback.md` · `guide/update.md` | 欢迎词模板（`{user}`）· 公告正文（KMarkdown，含「建议会被汇总进优化队列」的说明）· **「建议反馈」频道说明**（`--topic` 写进频道简介，常青文案、不含版本号）· **本版更新公告模板**（`--update-announce`，占位 `{ver}`/`{changed}`/`{unchanged}`/`{notes}`/`{link}`/`{channel}`；**链接一律 `[文字](url)` + `(chn)id(chn)`，不裸放长 URL**） | 改文案时 |
 | `queue/INBOX.md` · `queue/feedback.json` | **优化队列**：AI 可读汇总 / 机器账本（自动生成，别手改 json） | 每次做优化前 |
@@ -26,6 +26,7 @@
 | **`CLAUDE.md`** | ★**KOOK 发布流程的独立记忆体**（用户 2026-10-09 定：「将 kook 发布流程独立记录在 **kook 文件目录独立记忆体**承载」）—— 铁律/判据/锚点/实测数/命令序列都在这里；★**通知（公告与通知）的写法与链接口径 = 其中 §九·补二（唯一正文）**；宿主 `CLAUDE.md` 只留一行指针 | 改流程前必读 |
 | `config.json` | 频道参数（guild/channel）、打包产物目录、卡片文案与发布页链接模板、文案退路策略、**`plugin_links`（插件名 → 平台详情页，**只在某插件从没发过 KOOK 帖时兜底**；主口径 = 公告里插件名内联链接到该插件的 KOOK 发布帖）**、`guide.owner_ids` | 换频道/改文案时 |
 | `notes/<版本>.md` | **对外更新文案（总结体）**：每次 release 写一份，脚本优先用它 | 每次发布前 |
+| `requests/<thread_id>.md` | **「插件需求」帖的完结回填正文**（`--req-reply` 读它；命令自动补「版本指向 + 完结标记」，见 `CLAUDE.md` §九·补三） | 回填每条需求前 |
 
 ## 10 条关键结论（先看这个）
 
