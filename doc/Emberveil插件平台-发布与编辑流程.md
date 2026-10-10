@@ -162,7 +162,7 @@
 
 | 条目 | 版本字段（实际落库） | 分类 | 下载链接 |
 | --- | --- | --- | --- |
-| 主插件 `addon` | `v1.75.117` | combat 战斗 | `…/releases/download/v1.75.117/EvalHelp.zip` |
+| 主插件 `addon` | `v1.75.118` | combat 战斗 | `…/releases/download/v1.75.118/EvalHelp.zip` |
 | `evalhelp-eh-bag` | `v1.75.117` | bags 背包与物品栏 | `…/v1.75.117/EH_Bag.zip` |
 | `evalhelp-eh-damage` | `v1.75.117` | combat 战斗 | `…/v1.75.117/EH_Damage.zip` |
 | `evalhelp-eh-dps` | `v1.75.117` | combat 战斗 | `…/v1.75.117/EH_DPS.zip` |
@@ -193,7 +193,7 @@
 
 | 条目 | slug | 版本 | 分类 | 包大小 | 真实下载直链（`/go/download` →） |
 | --- | --- | --- | --- | ---: | --- |
-| EvalHelp 全职业一键宏,全任务装备检索,工具箱,宠物资料 | `addon` | `v1.75.117` | 战斗 | 64.24 MB | `…/releases/download/v1.75.117/EvalHelp.zip` |
+| EvalHelp 全职业一键宏,全任务装备检索,工具箱,宠物资料 | `addon` | `v1.75.118` | 战斗 | 64.26 MB | `…/releases/download/v1.75.118/EvalHelp.zip` |
 | EvalHelp -> EH_Damage · 增强伤害显示（浮动战斗信息） | `evalhelp-eh-damage` | `v1.75.117` | 战斗 | 464.3 KB | `…/releases/download/v1.75.117/EH_Damage.zip` |
 | EvalHelp -> EH_Bag · 整合背包 | `evalhelp-eh-bag` | `v1.75.117` | 背包与物品栏 | 224.0 KB | `…/releases/download/v1.75.117/EH_Bag.zip` |
 | EvalHelp -> EH_DPS · 队伍伤害统计（自娱自乐版） | `evalhelp-eh-dps` | `v1.75.117` | 战斗 | 25.9 KB | `…/releases/download/v1.75.117/EH_DPS.zip` |
@@ -201,6 +201,7 @@
 | **EvalHelp -> EH_Mail · 邮箱增强** | `evalhelp-eh-mail` | `v1.75.117` | 背包与物品栏 | 1003 字描述 | `…/releases/download/v1.75.117/EH_Mail.zip` |
 
 ★★ 上表 = **2026-10-10 二轮回读复核后的实际值**（读法：`fetch('/wiki/addons/<slug>/edit')` → 取第 2 个 `wire:snapshot` → `data.version` / `data.downloadUrl`，**一次拉齐 6 条**，纯读）。
+★★★ **2026-10-10 三轮回读（v1.75.118）**：**只动主插件一条**（子插件本轮代码零改动 ⇒ 按 §八 铁律 8 **连草稿都没存**，其余五条原样）。写入口径 = 一条 `c.$wire.set(...)`（`version` / `downloadUrl` / `gitUrl`）+ **描述里「自动丢弃指定物品」那一格改写**（`（同上）` → 新增图标/背包选择/每秒主动检查/红色日志的说明，3381 → **3497 字**），**一次 `saveDraft`**；**回读 `c.$wire.get(...)` 确认** `version=v1.75.118` / `downloadUrl=…/v1.75.118/EvalHelp.zip` / 描述含新串且 `（同上）` 已消失。★读法注意：本轮 `Livewire.all()` 拿到的组件**要 15~20 秒后**才挂上方法，且**方法在 `c.$wire.get/set/call` 上**（`c.get` 是 undefined）—— 两种形态都试，别当成「页面坏了」。
 ★ 一轮的旧值（全部 `v1.75.110`，EH_DebugBox `v1.75.106`）= **假成功留下的半状态**，见 §八 铁律 4 的反面教材。
 
 仓库直链（`/go/git` →）：主插件 = `https://github.com/lihaibo123as/emberveil_eval_help.git`；

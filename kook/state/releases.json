@@ -149,5 +149,35 @@
       "EH_DPS",
       "EH_DebugBox"
     ]
+  },
+  "1.75.118": {
+    "at": 1791615812161,
+    "channel_id": "5336773639081280",
+    "plugins": {
+      "EvalHelp": "1.75.118",
+      "EH_Bag": "0.3.48",
+      "EH_Damage": "0.2.46",
+      "EH_DebugBox": "0.4.0",
+      "EH_DPS": "0.2.5",
+      "EH_Mail": "0.3.18"
+    },
+    "baseline": "1.75.117",
+    "threads": [
+      {
+        "post": "主插件",
+        "id": "146882187470307584",
+        "title": "EvalHelp v1.75.118 发布（主插件 · 全职业工具）",
+        "files": [
+          "EvalHelp-v1.75.118.zip"
+        ]
+      }
+    ],
+    "skipped": [
+      "EH_Damage",
+      "EH_DPS",
+      "EH_DebugBox",
+      "EH_Bag",
+      "EH_Mail"
+    ]
   }
 }
