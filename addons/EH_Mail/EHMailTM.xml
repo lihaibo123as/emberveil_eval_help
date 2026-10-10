@@ -340,135 +340,6 @@
 		</Layers>
 	</Frame>
 
-	<Frame name="EHMailTMLogItemTemplate" virtual="true" hidden="true">
-		<Size>
-			<AbsDimension x="100" y="30"/>
-		</Size>
-		<Anchors>
-			<Anchor point="TOPLEFT">
-				<Offset>
-					<AbsDimension x="0" y="0"/>
-				</Offset>
-			</Anchor>
-			<Anchor point="RIGHT">
-				<Offset>
-					<AbsDimension x="0" y="0"/>
-				</Offset>
-			</Anchor>
-		</Anchors>
-		<Layers>
-			<Layer level="ARTWORK">
-				<Texture name="$parentBackground" file="Interface/Buttons/WHITE8x8">
-					<Size>
-						<AbsDimension x="10" y="1"/>
-					</Size>
-					<Anchors>
-						<Anchor point="BOTTOMLEFT">
-							<Offset>
-								<AbsDimension x="0" y="-1"/>
-							</Offset>
-						</Anchor>
-						<Anchor point="RIGHT" />
-					</Anchors>
-				</Texture>
-				<Texture name="$parentStatus">
-					<Size>
-						<AbsDimension x="28" y="28"/>
-					</Size>
-					<Anchors>
-						<Anchor point="TOPRIGHT">
-							<Offset>
-								<AbsDimension x="4" y="-10"/>
-							</Offset>
-						</Anchor>
-					</Anchors>
-				</Texture>
-			</Layer>
-			<Layer level="ARTWORK">
-				<FontString name="$parentTimeStamp" inherits="GameFontNormal">
-					<Size>
-						<!-- 宽度从 80 放宽到 100，让日期+时间（29.08.2026 05:23）能完整显示 -->
-						<AbsDimension x="100" y="14"/>
-					</Size>
-					<Anchors>
-						<Anchor point="TOPLEFT">
-							<Offset>
-								<AbsDimension x="30" y="-15"/>
-							</Offset>
-						</Anchor>
-					</Anchors>
-				</FontString>
-				<FontString name="$parentMoney" inherits="GameFontNormal">
-					<Size>
-						<!-- 宽度从 70 放宽到 110，避免 COD 金额显示不全 -->
-						<AbsDimension x="110" y="14"/>
-					</Size>
-					<Anchors>
-						<Anchor point="TOPLEFT">
-							<Offset>
-								<AbsDimension x="130" y="-15"/>
-							</Offset>
-						</Anchor>
-					</Anchors>
-				</FontString>
-				<FontString name="$parentParticipant" inherits="GameFontNormal">
-					<Size>
-						<AbsDimension x="100" y="14"/>
-					</Size>
-					<Anchors>
-						<Anchor point="TOPRIGHT">
-							<Offset>
-								<AbsDimension x="-2" y="-15"/>
-							</Offset>
-						</Anchor>
-					</Anchors>
-				</FontString>
-				<FontString name="$parentSubject" inherits="GameFontNormal">
-					<Size>
-						<AbsDimension x="270" y="14"/>
-					</Size>
-					<Anchors>
-						<Anchor point="TOPLEFT">
-							<Offset>
-								<AbsDimension x="30" y="-1"/>
-							</Offset>
-						</Anchor>
-					</Anchors>
-				</FontString>
-			</Layer>
-		</Layers>
-		<Frames>
-			<Frame name="$parentIcon">
-				<Size>
-					<AbsDimension x="28" y="28"/>
-				</Size>
-				<Anchors>
-					<Anchor point="TOPLEFT">
-						<Offset>
-							<AbsDimension x="1" y="-1"/>
-						</Offset>
-					</Anchor>
-				</Anchors>
-				<Layers>
-					<Layer level="ARTWORK">
-						<Texture name="$parentTexture" file="Interface/Icons/INV_Scroll_01">
-							<Size>
-								<AbsDimension x="28" y="28"/>
-							</Size>
-							<Anchors>
-								<Anchor point="TOPLEFT">
-									<Offset>
-										<AbsDimension x="0" y="0"/>
-									</Offset>
-								</Anchor>
-							</Anchors>
-						</Texture>
-					</Layer>
-				</Layers>
-			</Frame>
-		</Frames>
-	</Frame>
-
 	<Frame name="EHMailTMLogFrame" parent="MailFrame" hidden="true">
 		<Size>
 			<AbsDimension x="384" y="512"/>
@@ -803,7 +674,9 @@
 			</ScrollFrame>
 			<Frame name="EHMailTMLogEntriesFrame" enableMouse="true">
 				<Size>
-					<AbsDimension x="301" y="255"/>
+					<!-- 0.3.14：这里改成**小图标方格**的宿主（9 列 × 10 行 = 90 格，格子 28 + 四周内边距 4）——
+					     尺寸按格子铺满算：宽 4+9*30-2=272、高 4+10*30-2=302 -->
+					<AbsDimension x="292" y="306"/>
 				</Size>
 				<Anchors>
 					<Anchor point="TOPLEFT">
@@ -812,18 +685,6 @@
 						</Offset>
 					</Anchor>
 				</Anchors>
-				<Frames>
-					<Frame name="EHMailTMLogItem1" parent="EHMailTMLogEntriesFrame" inherits="EHMailTMLogItemTemplate"/>
-					<Frame name="EHMailTMLogItem2" parent="EHMailTMLogEntriesFrame" inherits="EHMailTMLogItemTemplate"/>
-					<Frame name="EHMailTMLogItem3" parent="EHMailTMLogEntriesFrame" inherits="EHMailTMLogItemTemplate"/>
-					<Frame name="EHMailTMLogItem4" parent="EHMailTMLogEntriesFrame" inherits="EHMailTMLogItemTemplate"/>
-					<Frame name="EHMailTMLogItem5" parent="EHMailTMLogEntriesFrame" inherits="EHMailTMLogItemTemplate"/>
-					<Frame name="EHMailTMLogItem6" parent="EHMailTMLogEntriesFrame" inherits="EHMailTMLogItemTemplate"/>
-					<Frame name="EHMailTMLogItem7" parent="EHMailTMLogEntriesFrame" inherits="EHMailTMLogItemTemplate"/>
-					<Frame name="EHMailTMLogItem8" parent="EHMailTMLogEntriesFrame" inherits="EHMailTMLogItemTemplate"/>
-					<Frame name="EHMailTMLogItem9" parent="EHMailTMLogEntriesFrame" inherits="EHMailTMLogItemTemplate"/>
-					<Frame name="EHMailTMLogItem10" parent="EHMailTMLogEntriesFrame" inherits="EHMailTMLogItemTemplate"/>
-				</Frames>
 			</Frame>
 			<Button name="EHMailTMLogSentButton" inherits="UIPanelButtonTemplate" text="已发送">
 				<Size>

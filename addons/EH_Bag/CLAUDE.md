@@ -8,6 +8,14 @@
 > · 宿主 `CLAUDE.md` 的**通用铁律照旧适用**、本文件不重复：`node luacheck.js` 语法闸门 · 不许用子代理 · 答复一律中文 ·
 >   改完 `node sync_game.js` · **不自动提交**（等用户说「提交」）· `tmp/` 判据**只在「统一推送」时跑**（★**release 不跑那批判据** —— 用户 2026-10-10 定：「**release 不跑 ./tmp 测试**」；发布只用发布工具 + 各模块只读命令）· 发布 10 步。
 > · 正文里出现的 `§x.x`、`附录 R x`、`组 NNN`、`CHECK` 引用的是**宿主** `CLAUDE.md` / `CLAUDE_REFERENCE.md` 的章节与历史检查号。
+> ★★★**子插件之间的隔离性（开发规范 = 宿主 `CLAUDE.md` §4.3 宿主契约 ⑤）**：跨插件口一律
+> 「**运行期现读**（`rawget(_G,"名字")`）· **对象在 ∧ 方法在**（`type` 两道）· **调用 `pcall`** · **拿不到就 fail-open + 如实降级**」；
+> **对手方不存在 / 是空表 / 没那个口 / 口会抛错 ⇒ 一律不许报错**，也不许写别人的存档根。
+> 常驻闸门 = **`node tmp/subaddon_isolation_probe.js`**（★新增跨插件口要同步它的 `LIST`，否则清单腿报红）。
+> 本子插件的两个口 = ① 对 EH_Mail：`B.mailListOn`（`rawget(_G, B.MAIL_ADDON_G)` + `type` + `pcall`）；② 对宿主：`EVAL_SAY/EVAL_SAY_FORCE/EVAL_RELOAD_ASK/EVAL_HELP_STATE/EVAL_EC_HOVER/EVAL_EC_LEAVE`。
+> ★★★**命名与播报口径（开发规范 = 宿主 `CLAUDE.md` §4.3 宿主契约 ⑥）**：面向玩家的前缀一律 **`[EH_Bag]`**（= 目录名）
+> —— 载入信息 · 命令回显 · 错误/诊断行 · 帮助头一行全在内；**内部文件名（`EH_BagSort` 这类）只许出现在代码里**，
+> **绝不许当聊天前缀**。常驻闸门 = **`node tmp/subaddon_naming_probe.js`**。
 > · 正文 = 宿主 `CLAUDE.md` 的 EH_Bag 段**逐字抽取**（抽取时 = 第 147~619 行；抽取脚本属**一次性**，用完即删，
 >   正文落定后**只在本文件里维护**，别拿宿主那份回灌）；
 >   ★**抽取之后以本文件为准**，宿主那份只是快照（将来在宿主侧收成一行指针）。
@@ -537,7 +545,7 @@
 ★★★**0.3.34 收口（一键整理「实时显示物品移动」）**：**已被 0.3.35 取代**，只留结论 —— 等读回的路在本客户端不成立；`B.sortPaintMove` 现行签名 = `(sb, ss, db, ds, dstRec)`，金辉光拍已撤（物品图标当场出现本身就是移动反馈）。
 ★★★**0.3.33 收口（右键直投窗口：拍卖行「出售」页 / 写邮件页 / 交易窗）**：
 · **为什么不做成「包装全局 `UseContainerItem`」**（那三个 2015 年老插件的做法）：本项目有 **4 个 `UseContainerItem` 调用点**（`useSlot` · `Engine.lua` · `Toolbox.lua` 商人队列 · `tools/ConsumableHelper.lua`）⇒ 包全局会一起劫持；功能只做在**本插件自己的右键分派**（`bindItemButton` 的 `OnClick`，**排在 `useSlot` 之前**），一个全局都不碰。
-· **原生口径**：拍卖行**只认出售页（`selectedTab == 3`）** · 邮件**必须 `MailFrame` 与 `SendMailFrame` 都可见** · 交易**先找第一个空格**（上限 `MAX_TRADABLE_ITEMS` 读不出按 6）；顺序 = 拍卖行 → 邮件 → 交易。
+· **原生口径**：拍卖行**只认出售页（`selectedTab == 3`）** · 邮件**必须 `MailFrame` 与 `SendMailFrame` 都可见**（★**0.3.47 起：邮箱助手在场时这一支整条让位**，见上面那条） · 交易**先找第一个空格**（上限 `MAX_TRADABLE_ITEMS` 读不出按 6）；顺序 = 拍卖行 → 邮件 → 交易。
 · **安全口径**：**绝不 `ClearCursor()`**（投完读回 `cursorHas()`，还有东西就如实出声收工）· **先判「能不能投」再拿起** · **判不出就不动手、绝不回落「使用物品」**。
 · **三态返回（顺序即判据）**：`B.windowDrop(rec, shift, ctrl)` → `"done"` / `"skip"`（都已处理 ⇒ 调用方直接 return，绝不 `useSlot`）/ `"none"`（没开/开关关/光标有东西/按着 Shift·Ctrl ⇒ 才走 `useSlot`）。**入口安全顺序**：`B.dropOn()` 开关最先判（「窗口全关/开关关」一个客户端 API 都不读）。
 · **接线**：唯一入口 `B.windowDrop` · 投递体 `B.dropDo` · `B.dropFrame`（`rawget` + `isObj` 守卫）· `B.dropShown`（`IsShown`→`IsVisible`，读不出 = 判不出）· 页签 `B.dropNum` · 出声 `B.dropNote`（限频 1s · `sayForce`）· 取证环 `B.dropAdd` → `c.dropTrace`(12)。**开关**：真值 `c.dropWin`（**默认开**（`DEF.dropWin = true`）、只有显式 false 才是关），唯一写口 `B.dropSet`（坏输入不动），入口 = 菜单行 + `/ebag drop on|off`；只读探针 `/ebag drop`。菜单 24 行 ⇒ 池 26（**加行必须同时加池**）。三语 17 键（`MENU_DROP`/`DROP_*`/`DEF_SAY_333`；**聊天文案零 `**`**）。
@@ -639,6 +647,53 @@
   ⒝ **JS→Lua 推参必须单独判 `typeof a === 'boolean'`** —— 混进 `lua_pushstring` 会让 `v == true` 恒假，
   夹具**静默失效**（会让「反事实」那一组先假绿）。
 
+★★★**0.3.47 收口（邮箱助手 EH_Mail 在场 ⇒ 「写邮件页」那一支整条让位）**：
+· 用户定：「在和子插件:邮箱助手存在的情况下**针对性的禁用②写邮件页分支**…应为**已经由邮箱助手自身完成的功能**。」
+· **改动面只有一处**：`B.windowDrop` 的 ② 分支里、`SendMailFrame` 检查**与物理投递之前**：
+  `if B.mailAddonOn() == true then B.dropAdd("邮件附件栏：邮箱助手在场 ⇒ 整支让位（交给它自己的 UseContainerItem 处理）") return "none" end`
+  ⇒ 助手在场时**返回 `"none"`**，由调用方走**原样那条**（`useSlot` ⇒ 全局 `UseContainerItem` ⇒ **助手的 hook** ⇒ 加进它的附件选择列表）。
+· ★★★**判定口 `B.mailAddonOn()` 的判据 = 「它真的接管了 `UseContainerItem`」**（`B.MAIL_ADDON_G = "EHMailTM"`：
+  `rawget(_G,"EHMailTM")` 是 table ∧ `.hooks.UseContainerItem` 是 function ∧ **`rawget(_G,"UseContainerItem") == 那个 hook`**）。
+  ★**为什么不能只看表在不在**：让位之后那一拍**就靠那个全局**；助手没接管它时这一下会变成**把物品用掉**
+  （开着邮箱把药水喝了 —— 比投不进去更糟）⇒ 表不在 / hook 没挂上 ⇒ **照旧走本插件自己的物理投递**（fail-safe）。
+  ★**只读助手的全局表**，`EVAL_HELP_CONFIG`/`EVAL_HELP_CHAR` 命中仍 0 处（记忆子插件分离铁律）。
+· **只进取证环、不在聊天里出声**（助手自己会报「已加入选择列表…」，两处都报 = 刷屏）⇒ 反向钉守着。
+· ★**老路一字未改**（`ClickSendMailItemButton` 物理投递仍在）：「助手不在场时仍走老路」是**反向钉**，不是删功能。
+· 判据 = `tmp/ehbag_harness.js` 的 **0.3.47 块（13 条全过**；★该文件带 **13 条既有红** = 整理对齐与总览背板，
+  属还原前那轮的欠账，**改前改后都是 13**）+ **`tmp/ehbag_maildefer_wiring_check.js`（15 条全过**：唯一判定口 ·
+  判据含 hook 身份 + 反向钉「只看表在不在不算数」· 顺序钉「让位排在 SendMailFrame 检查与 `dropDo` 之前」·
+  让位不出声的反向钉 · 「助手不在场时老路仍在」的反向钉 · 不读宿主存档 · 版本现读互比）。
+· ★**已知闸门欠账**：`tmp/ehbag_wiring_check.js` 与部分 `tmp/*mutate*` 里留着**废弃线 0.3.44~0.3.46** 的期望
+  （源码已还原到 0.3.42、本轮 0.3.47）⇒ 那一批的红**不该算在本轮头上**；本条规则因此**单建**了上面那个小闸门。
+· ★**版本号**：0.3.43~0.3.46 = **已按用户指令整条还原、作废**（`git checkout 25cdb50 -- addons/EH_Mail addons/EH_Bag`；
+  备份 `tmp/backup_2026-10-10_ehmail_bag/`）⇒ 本轮从 0.3.42 基线继续、**取 0.3.47 避开那些号**。
+
+★★★**0.3.48 收口（邮箱助手在场时，背包格上盖一层「附件」遮盖 + 备注文字）**：
+· 用户定：「邮箱组件在插件有子插件背包整合存在的情况下. 邮件添加物品列表的时候将这个物品在背包内的图标上
+  添加个**半透明层备注文字, 附件遮盖**.」
+· **三个唯一**（改动面就这三处 + 一个桥）：
+  · **判定口 `B.mailListOn(bag, slot)`** —— 只读助手的**全局表**（`rawget(_G, B.MAIL_ADDON_G)` 是 table ∧
+    `t.multi_has` 是 function ⇒ `pcall` 问一句）；`EVAL_HELP_CONFIG`/`EVAL_HELP_CHAR` 命中仍 0 处（记忆体分离）。
+    ★★**与 0.3.47 那个让位口 `B.mailAddonOn` 故意分开**（问的是两件事）：让位要求「助手**真的接管了**
+    `UseContainerItem`」（那一拍就靠那个全局，判错会把物品用掉）；这里只是问「它的列表里有没有这一格」。
+  · **绘制口 `B.mailMarkPaint(btn, rec)`** —— **只 Show/Hide**（几何一律在 `B.layout` 一次算好）；
+    `rec == nil`（空格）⇒ **一律收起、连问都不问**。
+  · **几何** = 与格框/底色**同一把尺子**：层 **BORDER**（图标也在 BORDER ⇒ **盖住图标、让出 ARTWORK 的格框**）、
+    形状 = 自带圆角实心底 `B.SLOT_FILL`、边长 = `cell × B.SLOT_K`（拿正方形去盖就会像 0.3.16 那样从圆角外露方角）；
+    重设点 = `B.layout` 里与 `ehGlow` **同一段**（0.3.20 的教训：漏一个就会「换缩放后比格框大一圈」）。
+  · **桥** = 助手改完列表后调 `EH_BAG.mailMarkRefresh()`（`EH_Mail` 侧 `m.multi_tell_bag`）⇒ 我们**只重画这一层**
+    （逐格 `B.itemAt` + `mailMarkPaint`，**不整窗 refreshAll**）；窗口没开 / 拿不到活动格子 ⇒ `false`，下一次
+    `refreshAll` 自然画对。★只重画**本代**（`ehLive == liveGen`）的格子。
+· ★**只作用于主窗格子**（`newItemButton` 建的那批）：总览（跨角色快照）与背包条**有意不做** ——
+  助手的选择列表是**本角色会话态**，总览是别的角色的历史快照，两者不是一回事。
+· 三语 **1 键** `MAIL_MARK`（附件 / Mail / Почта）。
+· 判据 = **新增 `tmp/ehbag_mailmark_probe.js`（行为 15 + 源码钉 11 全过）**：助手不在场 ⇒ 永远收起 ·
+  在列表 ⇒ 遮盖 + 文字都显示 · 移出列表 ⇒ 收起 · **空格不问** · 口坏掉（没 multi_has / 不是函数 / 不是表 /
+  会抛错 / 参数不是数字）**一律 false** · 刷新口只碰本代有标记层的格子 · frame == nil ⇒ false 且一个字节不动 ·
+  ★**绘制口只 Show/Hide（源码里没有 SetWidth/SetHeight/SetPoint/SetVertexColor）** · 反向钉「这个口不许要求
+  hook 身份」· 三语键 · 版本两处互比。**`tmp/ehbag_harness.js` 仍 `PASS=844 FAIL=13`（13 条是既有欠账，改前改后一致）**。
+
+
 ★★★**0.3.42 收口（背包条「拖拽 / 换包」正常化：拿包与放包各立唯一口 + 读回自证 + 如实出声）**：
 · 用户原话（附截图）：「参考插件,如何将背包条的功能正常化,正常支持拖拽,背包替换等.现在功能是异常的」。
 · ★★★**真因 = 旧写法三处各写一份「槽位号算术」，两处写错**：
@@ -700,8 +755,12 @@
 | `tmp/ehbag_special_harness.js` | **0.3.41 新增**：特殊袋 fail-closed + 无进展闸门（行为 32；桩的保真点 = **「放下被拒 ⇒ 物品放回原处 + 光标清空」**，含「反事实」组 = 假装没分类 ⇒ 闸门必须在 ~7 秒收工） |
 | `tmp/ehbag_bar_harness.js` | **0.3.42 新增**：背包条拿包/放包两个唯一口（行为 43；真源码切片 + 保真桩：装备槽号必须 20~23、**放包被拒时光标清空**、换包后旧包留光标；★桩里表键一律 `string.format("%d")`） |
 | `tmp/ehbag_bar_wiring_check.js` | **0.3.42 新增**：背包条接线结构钉（32 条；**先剥注释再比对**；反向钉守着 `PutItemInBag, bag` / `PickupInventoryItem, 20` / `63 + i` / `PutKeyInKeyRing` / `ClearCursor` 命中 0） |
+| `tmp/ehbag_maildefer_wiring_check.js` | **0.3.47 新增**：邮箱助手在场时「写邮件页」支让位的结构钉（15 条；唯一判定口 · 判据必须含**hook 身份** + 反向钉「只看表在不在不算数」· 顺序钉「让位排在 SendMailFrame 检查与 `dropDo` 之前」· 让位不出声的反向钉 · 「助手不在场时老路仍在」的反向钉 · 不读宿主存档 · 版本现读互比） |
+| `tmp/ehbag_mailmark_probe.js` | **0.3.48 新增**：背包格「附件」遮盖层（行为 15 + 源码钉 11；判定口只读助手全局表 · 绘制口**只 Show/Hide**（源码里不许出现 SetWidth/SetHeight/SetPoint/SetVertexColor）· 反向钉「这个口不许要求 hook 身份」· 空格不问 · 口坏掉一律 false · 刷新口只碰本代有标记层的格子 · 三语键 · 版本两处互比） |
 | `tmp/ehbag_layout_probe.js` | 拿**真机存档**离线打 ASCII 格位图 + 「末行下缘 ≤ 窗口可用高」（底距必须按 `z` 现算） |
 | `tmp/mem_sep_probe.js` | **记忆体分离常驻闸门**：子插件代码里命中 `EVAL_HELP_CONFIG` / `EVAL_HELP_CHAR` = 0 处，宿主里命中 `EH_BAG_CFG` = 0 处 |
+| `tmp/subaddon_isolation_probe.js` | **子插件之间的隔离性常驻闸门**（宿主契约 ⑤）：边界引用清单逐条比对 · 每处守卫（`type` + `pcall` + `rawget`）· **对手方缺席/坏掉真跑不报错** · 不许写别人的存档根。★**新增跨插件口要同步它的 `LIST`** |
+| `tmp/subaddon_naming_probe.js` | **命名与播报口径常驻闸门**（宿主契约 ⑥，全项目共用）：目录名形态 = `EH_<名>` · 该目录里**所有** `[EH_xxx]` 前缀逐字等于目录名 · 名字 → 前缀的**单一来源**（字面量 `[目录名]` 或 `"[" .. <常量 = 目录名>`）· **反向钉**：内部名（`EH_BagSort` 这类）**当前缀** = 0 处 |
 | `tmp/ehbag_tex_audit.js` · `tmp/ehbag_apidep_audit.js` | 资源独立性**只读**审计（剥注释后抓路径字面量 / 依赖客户端资源的调用点） |
 | `tmp/slotglow_out_probe.js` | 辉光「向外泛光」只读量（画框带外 / 圆角外的可见像素数，必须 = 0） |
 | `tmp/mk_slotglow.js` · `tmp/mk_slotfill.js` | 素材生成 + **读回自证**（不合口径直接 `exit 1`） |

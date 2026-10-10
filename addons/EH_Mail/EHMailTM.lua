@@ -3,6 +3,16 @@ L = EHMailTM.L
 
 local m = EHMailTM
 
+-- ★★★0.3.17（用户定 = **子插件开发规范**）：「**子插件命名统一采用 EH_xxx 方式**」——
+--   面向玩家的**播报前缀一律 = 插件目录名**（这里 = `[EH_Mail]`）。
+--   ★本文件是从第三方插件（TurtleMail）整份搬来的 ⇒ `EHMailTM` 是**内部表名/文件名**，
+--   只许出现在代码里（函数名、帧名、存档键前缀），**绝不许当聊天前缀** ——
+--   用户截图里那行 `EHMailTM: Loaded (v0.3.16)` 就是反面例子。
+--   ★唯一来源 = 这一个常量：聊天出口（`m.info` / `m.debug` / 帮助头一行 / `MailTo.lua` 的错误行）
+--   全部读它 ⇒ 以后要改名只改这一处。
+--   ★同目录的**探针部分**（`EH_Mail.lua`）本来就播 `[EH_Mail]` ⇒ 两部分现在同名同前缀。
+m.ADDON_NAME = "EH_Mail"
+
 local function get_realm_faction_key()
   local realm = "UnknownRealm"
   if m.api and m.api.GetCVar then
@@ -188,10 +198,29 @@ local SIDE_PANEL_W = PAD * 2 + CELL_W * 2
 local SIDE_PANEL_H = PAD * 2 + 4 * ( ROW_H + ROW_GAP ) + 8 + ( CHECK_BOX + 6 )
   + FILTER_ROWS * ( CHECK_BOX + ROW_GAP )
 
+-- ★0.3.16（用户定）：「触发批量面板」那颗按钮要带**图标**。
+--   ★★**占地保持原来的 22×26**（0.3.16 第一版加宽到 34 ⇒ 真机报障「超过界限」：按钮顶到邮箱可见边框外面）。
+--   ★★**图标 = 自绘**（纯色纹理 `Interface\Buttons\WHITE8X8` + `SetVertexColor`）—— 本项目**唯一可靠**的贴图；
+--     **不依赖任何图标路径**（第一版用宏图标 454 的路径 ⇒ 真机「图标未显示」，还画出一块占满按钮的红，
+--     即「贴图加载失败」，本项目在案 = 「配好了却看不见 / 一次都没贴上过」那一族）。
+--   ★这几个常量一律挂 `m` 表（本文件主 chunk 局部量有上限 ⇒ 不新增文件级 local）。
+m.PANEL_TOGGLE_W = 22               -- 与加图标**之前**一模一样的占地（不许再加宽）
+m.PANEL_TOGGLE_H = 26
+m.PANEL_TOGGLE_ICON = 10            -- 自绘图标的外框边长（竖向居中）
+m.PANEL_TOGGLE_TEX = "Interface\\Buttons\\WHITE8X8"
+m.PANEL_TOGGLE_GOLD = { 1, 0.82, 0.25 }
+-- 图标 = 6 条纯色纹理：**外框四条**（上下左右各 1px）+ **里面两条短横线** ⇒ 一眼是「面板 / 列表」。
+-- 每条 = { 相对图标外框左上角的 dx, dy, 宽, 高 }；外框边长见 m.PANEL_TOGGLE_ICON。
+m.PANEL_TOGGLE_BARS = {
+  { 0, 0, 10, 1 }, { 0, 9, 10, 1 }, { 0, 0, 1, 10 }, { 9, 0, 1, 10 },
+  { 2, 3, 6, 1 }, { 2, 6, 6, 1 },
+}
+
 ---@param args string
 function EHMailTM.slash_command( args )
   if args == "" or args == "help" then
-    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473EHMailTM " .. L[ "Help" ] .. "|r" )
+    -- ★0.3.17：帮助头一行也用**统一前缀**（目录名），不再是内部表名
+    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cff66ccff[" .. m.ADDON_NAME .. "]|r " .. L[ "Help" ] )
     m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/tm log|r " .. L[ "Toggle logging on/off" ] )
     m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/tm clear sent|r " .. L[ "Clear sent log" ] )
     m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/tm clear received|r " .. L[ "Clear received log" ] )
@@ -203,6 +232,28 @@ function EHMailTM.slash_command( args )
     m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/tm paneloff <dx> [dy]|reset|r " .. L[ "Panel offset usage" ] )
     m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/tm panel|r " .. L[ "Panel layout diag" ] )
     m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/tm save|r " .. L[ "Panel offset saved" ] )
+    -- ★0.3.10 起的测试指令（0.3.11 改成「附件选择列表」语义；见文件末尾那一节）
+    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffffd100—— 附件选择列表 / 测试指令 ——|r" )
+    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/tm 发送背包 <N> [包]|r 背包第 1..N 格直接挂上并寄给当前收件人（不碰光标/客户端寄件栏）" )
+    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffabd473/tm 附件 …|r 附件选择列表（展示位置 = 发件页那排附件格）：状态|默认|加 <包> <格>|删 <包> <格>|设 …|清|显示|发|自动|偏移 <dx> <dy>" )
+    m.api.DEFAULT_CHAT_FRAME:AddMessage( "|cffa0a0a0　· 右键背包物品 = 只加进列表 ｜ 右键附件格 = 只从列表删掉（都不碰光标、不动物品）|r" )
+    return
+  end
+
+  -- 必须排在 ^panel 之前：这两条不吃 panel 前缀，但放前面读起来与帮助同序
+  if string.find( args, "^发送背包" ) then
+    m.cmd_sendbag( string.gsub( args, "^发送背包%s*", "" ) )
+    return
+  end
+
+  -- `/tm 附件 …` 与 `/tm 多选 …` 是同一个命令体（0.3.11 起主名改成「附件」——它的语义已经是附件选择列表）
+  if string.find( args, "^附件" ) then
+    m.cmd_multi( string.gsub( args, "^附件%s*", "" ) )
+    return
+  end
+
+  if string.find( args, "^多选" ) then
+    m.cmd_multi( string.gsub( args, "^多选%s*", "" ) )
     return
   end
 
@@ -622,12 +673,21 @@ function EHMailTM.MAIL_SHOW()
   m.timer = 0
   m.money_received = 0
   m.update_money( 0 )
+
+  -- ★0.3.16：邮箱窗显示之后重申一次开关按钮的自绘视觉（「隐藏态写属性不落地」——
+  --   建的时候窗还没显示，那时写的尺寸/锚点不生效；详见 `m.panel_toggle_apply_icon` 的说明）。
+  if m.panel_toggle_apply_icon then m.panel_toggle_apply_icon() end
 end
 
 function EHMailTM.MAIL_CLOSED()
   m.inbox_abort()
   m.sendmail_sending = false
   m.sendmail_clear()
+  -- ★★★0.3.15：**关邮箱 = 附件选择整体作废**（用户 2026-10-10 定：「在邮箱关闭之后.
+  --   要做好背包内附件锁定清理的流程.」）—— 唯一清理口，见文件末尾那一节。
+  --   ★必须在这里做：背包格上的「附件」遮盖（背包整合画的）与客户端自己那层「锁定/灰化」
+  --     **都由这份选择列表派生**，而它们**谁都不会自己复位** ⇒ 不清就是「关了邮箱背包还锁着」。
+  m.multi_release( "邮箱已关闭" )
 end
 
 function EHMailTM.UI_ERROR_MESSAGE()
@@ -795,12 +855,30 @@ function EHMailTM.inbox_load()
   btnSelected:SetHeight( 25 )
   btnSelected:SetScript( "OnClick", m.inbox_open_selected )
 
-  -- 小窗开关（方案A）：钉在"接收所有邮件"右侧，纯字体符号零贴图；
-  -- pfUI 下由皮肤回调 SkinButton 换装，原版走按钮原生底
+  -- 小窗开关（方案A）：钉在"接收所有邮件"右侧，**占地保持 22×26**（加宽会顶到邮箱可见边框外面）。
+  -- ★0.3.16（用户定）：按钮带**图标** —— 自绘（纯色纹理，见常量那一段的说明），不用任何图标路径。
+  -- ★★本客户端有「**隐藏态写属性不落地**」这条老雷（EH_Bag 0.3.21/0.3.25 在案）：这个按钮是在
+  --   `ADDON_LOADED` 里建的，那一刻邮箱窗还没显示 ⇒ 那时写的尺寸/锚点**不生效**
+  --   （真机症状 = 图标看不见 / 控件跑到框外）。⇒ 全部几何收在 `m.panel_toggle_apply_icon()` **一处**，
+  --   除建时调一次，另外**三条腿**各再重申一次：按钮自己的 `OnShow` · `MAIL_SHOW` ·
+  --   `hook.InboxFrame_Update`（自终止）。
   local btnToggle = m.api.CreateFrame( "Button", "EHMailTMPanelToggleButton", m.api.InboxFrame, "UIPanelButtonTemplate" )
   btnToggle:SetPoint( "LEFT", btnAll, "RIGHT", 0, 0 )
-  btnToggle:SetWidth( 22 )
-  btnToggle:SetHeight( 26 )
+  btnToggle:SetWidth( m.PANEL_TOGGLE_W )
+  btnToggle:SetHeight( m.PANEL_TOGGLE_H )
+  m.panel_toggle_btn = btnToggle
+  local bars = {}
+  for i = 1, getn( m.PANEL_TOGGLE_BARS ) do
+    bars[ i ] = btnToggle:CreateTexture( nil, "ARTWORK" )
+  end
+  m.panel_toggle_bars = bars
+  -- 开合指示（» / «）挂**我们自建**的那条 FontString：按钮模板自带的文字是**居中**的，会压住图标
+  local toggleArrow = btnToggle:CreateFontString( nil, "OVERLAY", "GameFontNormalSmall" )
+  m.panel_toggle_arrow = toggleArrow
+  if type( btnToggle.SetScript ) == "function" then
+    pcall( btnToggle.SetScript, btnToggle, "OnShow", function() m.panel_toggle_apply_icon() end )
+  end
+  m.panel_toggle_apply_icon()
   btnToggle:SetScript( "OnClick", function()
     if not m.batch_panel then return end
     if m.batch_panel:IsVisible() then
@@ -808,7 +886,8 @@ function EHMailTM.inbox_load()
       m.api.EHMailTM_PanelHidden = 1
     else
       m.batch_panel:Show()
-      m.api.EHMailTM_PanelHidden = nil
+      -- ★0.3.16：**显式 false = 「打开过」**（默认档 / 缺键 / 别的值一律按「关」处理 —— 见 batch_panel_want_open）
+      m.api.EHMailTM_PanelHidden = false
       if m.batch_reanchor then m.batch_reanchor() end
       m.batch_settle = 30
     end
@@ -817,7 +896,9 @@ function EHMailTM.inbox_load()
   btnToggle:SetScript( "OnEnter", function()
     m.api.GameTooltip:ClearLines()
     m.api.GameTooltip:SetOwner( this, "ANCHOR_LEFT" )
-    m.api.GameTooltip:AddLine( m.api.EHMailTM_PanelHidden and "展开批量面板" or "收起批量面板", "", 1, 1, 0 )
+    -- ★按**面板现在的显隐**说要做的那件事（旧写法读 `PanelHidden` 的真值性 ⇒ 默认档改成「关」以后会反着说）
+    local open = m.batch_panel and m.batch_panel:IsVisible()
+    m.api.GameTooltip:AddLine( open and "收起批量面板" or "展开批量面板", "", 1, 1, 0 )
     m.api.GameTooltip:Show()
   end )
   btnToggle:SetScript( "OnLeave", function() m.api.GameTooltip:Hide() end )
@@ -1082,14 +1163,88 @@ function EHMailTM.batch_filter_menu()
   end, { multi = true, selected = sel } )
 end
 
+-- ★0.3.16：开关按钮的**自绘视觉**唯一重设口（图标 6 条纯色纹理 + 开合箭头的锚点）。
+--   ★★为什么必须能**重复调用**：本客户端「**隐藏态写属性不落地**」（EH_Bag 0.3.21/0.3.25 在案）——
+--   这个按钮在 `ADDON_LOADED` 里建，那一刻邮箱窗还没显示 ⇒ 建的时候写的尺寸/锚点**不生效**
+--   （真机症状 = 图标看不见 / 控件跑到框外）。⇒ 建时一次 + 按钮 `OnShow` 一次 +
+--   `hook.InboxFrame_Update` 里每个 tick 重申一次，直到**按钮真的可见**（那时置 `m.toggle_visual_ok`
+--   ⇒ **自终止**，不会一直写）。
+--   ★图标 = 纯色纹理自绘（`m.PANEL_TOGGLE_TEX` + `SetVertexColor`）：本项目**唯一可靠**的贴图，
+--   不依赖任何图标路径 ⇒ 不会再出现「贴图加载失败画成一块红 / 空白」。
+--   ★对象守卫一律按 `type` 判 table/userdata（宽容桩对没设过的字段会返回函数，写 `~= nil` 会炸）。
+function EHMailTM.panel_toggle_apply_icon()
+  local btn = m.panel_toggle_btn
+  local bt = btn and type( btn )
+  if not btn or ( bt ~= "table" and bt ~= "userdata" ) then return false end
+
+  local defs = m.PANEL_TOGGLE_BARS
+  local bars = m.panel_toggle_bars
+  if type( defs ) ~= "table" or type( bars ) ~= "table" then return false end
+
+  local icon = tonumber( m.PANEL_TOGGLE_ICON ) or 10
+  local iy = math.floor( ( ( tonumber( m.PANEL_TOGGLE_H ) or 26 ) - icon ) / 2 )
+  local gold = m.PANEL_TOGGLE_GOLD
+  local n = 0
+  for i = 1, getn( defs ) do
+    local bar, d = bars[ i ], defs[ i ]
+    local t = bar and type( bar )
+    if bar and ( t == "table" or t == "userdata" )
+      and type( bar.SetTexture ) == "function" and type( bar.SetPoint ) == "function" then
+      pcall( bar.SetTexture, bar, m.PANEL_TOGGLE_TEX )
+      pcall( bar.SetWidth, bar, d[ 3 ] )
+      pcall( bar.SetHeight, bar, d[ 4 ] )
+      if type( bar.ClearAllPoints ) == "function" then pcall( bar.ClearAllPoints, bar ) end
+      pcall( bar.SetPoint, bar, "TOPLEFT", btn, "TOPLEFT", 1 + d[ 1 ], -( iy + d[ 2 ] ) )
+      pcall( bar.SetVertexColor, bar, gold[ 1 ], gold[ 2 ], gold[ 3 ] )
+      pcall( bar.Show, bar )
+      n = n + 1
+    end
+  end
+
+  -- 箭头：**锚点也在这一处重设**（它同样是「隐藏态写进去就不生效」的受害者 —— 没有锚点的 FontString
+  -- 什么都不画，这正是第一版真机「连 » 都看不见」的成因）。
+  local fs = m.panel_toggle_arrow
+  local ft = fs and type( fs )
+  if fs and ( ft == "table" or ft == "userdata" ) and type( fs.SetPoint ) == "function" then
+    if type( fs.ClearAllPoints ) == "function" then pcall( fs.ClearAllPoints, fs ) end
+    pcall( fs.SetPoint, fs, "RIGHT", btn, "RIGHT", -2, 0 )
+  end
+
+  -- 自终止门：**按钮真的可见**了才算这趟视觉落地（在那之前每个 tick 再来一遍）
+  if type( btn.IsVisible ) == "function" then
+    local okv, vis = pcall( btn.IsVisible, btn )
+    if okv and vis then m.toggle_visual_ok = true end
+  end
+  return n > 0
+end
+
+-- ★★★0.3.16（用户定）：**批量面板默认关**。
+--   判据只此一处：**显式 false = 「打开过」**；缺键 / nil / 任何别的值 ⇒ 收起。
+--   （旧版是 nil = 展开 ⇒ 老存档升级后第一次开邮箱即为收起状态，这正是用户要的默认档；
+--     用户手动点开过一次就会记住，写的是显式 false。）
+function EHMailTM.batch_panel_want_open()
+  return m.api.EHMailTM_PanelHidden == false
+end
+
 -- 小窗开关按钮的两态文案：» / « 恒为金色（捞哥要求不做变灰），靠符号方向区分开合
+-- ★0.3.16：箭头改画在**我们自建的那条 FontString** 上（按钮模板自带的居中文字会压住新增的图标）；
+--   拿不到它 ⇒ 退回按钮自己的文字（fail-open：宁可压一点图标，也不能丢掉开合指示）。
 function EHMailTM.update_panel_toggle_btn()
   local btn = m.api.EHMailTMPanelToggleButton
   if not btn then return end
-  if m.api.EHMailTM_PanelHidden then
-    btn:SetText( "|cffffd100«|r" )
+  local txt
+  if m.batch_panel_want_open() then
+    txt = "|cffffd100»|r"
   else
-    btn:SetText( "|cffffd100»|r" )
+    txt = "|cffffd100«|r"
+  end
+  local fs = m.panel_toggle_arrow
+  local ft = fs and type( fs )
+  if fs and ( ft == "table" or ft == "userdata" ) and type( fs.SetText ) == "function" then
+    pcall( btn.SetText, btn, "" )
+    pcall( fs.SetText, fs, txt )
+  else
+    pcall( btn.SetText, btn, txt )
   end
 end
 
@@ -1097,8 +1252,8 @@ function EHMailTM.batch_load()
   -- 只建一次。inbox_load 每次开邮箱都会调用这里，重复 CreateFrame 同名控件
   -- 会返回新 frame 而旧的仍留在屏幕上，叠成一堆错位的面板。
   if m.batch_panel then
-    -- 尊重小窗开关的收起状态：不能每次开邮箱都强制弹出来
-    if not m.api.EHMailTM_PanelHidden then
+    -- 尊重小窗开关的状态（★0.3.16 起**默认关**）：不能每次开邮箱都强制弹出来
+    if m.batch_panel_want_open() then
       m.batch_panel:Show()
     end
     if m.batch_reanchor then m.batch_reanchor() end
@@ -1353,8 +1508,9 @@ function EHMailTM.batch_load()
     m.batch_filter_buttons[ key ] = cb
   end
 
-  -- 存档里是收起状态：首次建好后保持隐藏
-  if m.api.EHMailTM_PanelHidden then
+  -- ★0.3.16：**默认关** —— 没设过 / 缺键 / 任何非 false 的值都保持隐藏；
+  --   只有显式打开过（写 false）才在首次建好后立刻展开。判据只在 `batch_panel_want_open()` 一处。
+  if not m.batch_panel_want_open() then
     panel:Hide()
   end
 end
@@ -1846,6 +2002,12 @@ function EHMailTM.hook.InboxFrame_Update()
   local text = totalPages > 0 and (currentPage .. "/" .. totalPages) or m.api.EMPTY
   m.api.InboxTitleText:SetText( m.api.INBOX .. " [" .. text .. "]" )
 
+  -- ★0.3.16：开关按钮的自绘视觉要等「窗真的显示出来」再重申（本客户端「隐藏态写属性不落地」）。
+  --   这一腿**自终止**：`panel_toggle_apply_icon` 在按钮可见时置 `m.toggle_visual_ok`。
+  if not m.toggle_visual_ok and m.panel_toggle_apply_icon then
+    m.panel_toggle_apply_icon()
+  end
+
   m.inbox_update_lock()
 end
 
@@ -1882,7 +2044,7 @@ function EHMailTM.hook.SendMailFrame_Update()
 
     local texture, count
     if btn.item then
-      texture, count = m.api.GetContainerItemInfo( unpack( btn.item ) )
+      texture, count = m.api.GetContainerItemInfo( btn.item[ 1 ], btn.item[ 2 ] )
     end
     if not texture then
       btn:SetNormalTexture( nil )
@@ -2025,7 +2187,10 @@ function EHMailTM.hook.SendMailRadioButton_OnClick( index )
 end
 
 function EHMailTM.hook.ClickSendMailItemButton()
-  m.sendmail_set_attachment( m.get_cursor_item() )
+  -- ★0.3.11：这条 hook **原样透传**（保留 hook 只是为了 PLAYER_LOGIN 仍然填好 `m.orig.ClickSendMailItemButton`，
+  --   发送那一步要用它）。本插件**不再从客户端寄件栏抓附件** —— 附件改由「选择列表」纯数据驱动；
+  --   玩家若自己往客户端寄件栏里塞了东西，那属于残留，开批前的硬停会如实拦下（不替他清）。
+  return m.orig.ClickSendMailItemButton()
 end
 
 function EHMailTM.hook.GetContainerItemInfo( bag, slot )
@@ -2035,59 +2200,68 @@ function EHMailTM.hook.GetContainerItemInfo( bag, slot )
 end
 
 function EHMailTM.hook.PickupContainerItem( bag, slot )
-  -- Alt+Left: add all same items Alt+左键一键添加相同物品到发送框
-  if arg1 == "LeftButton" and m.api.IsAltKeyDown() and m.api.MailFrame:IsVisible() then
-    local link = m.api.GetContainerItemLink(bag, slot)
-    if link then
-      local _, _, itemId = string.find(link, "item:(%d+)")
-      if itemId then
-        itemId = tonumber(itemId)
-        -- Iterate through all bags
-        for b = 0, 4 do
-          local slots = m.api.GetContainerNumSlots(b)
-          for s = 1, slots do
-            -- Check if attachment slots are full
-            if m.sendmail_num_attachments() >= ATTACHMENTS_MAX then
-              break
-            end
-            local l = m.api.GetContainerItemLink(b, s)
-            if l then
-              local _, _, id = string.find(l, "item:(%d+)")
-              if id and tonumber(id) == itemId then
-                if not m.sendmail_attached(b, s) then
-                  m.sendmail_set_attachment({b, s})
-                end
-              end
-            end
-          end
-          if m.sendmail_num_attachments() >= ATTACHMENTS_MAX then
-            break
+  -- ★★★0.3.11 起：**挂附件 = 纯数据**（用户 2026-10-10 定：「右键某个物品**只是**将该物品添加这个变量列表内」+
+  --   「绝不碰鼠标拿起放下的行为.容易卡住物品」）⇒ 这条分支**一个物品操作都不做**：
+  --   不 ClearCursor、不 PickupContainerItem、不碰客户端寄件栏。
+  --   ★旧写法（走到 `sendmail_pickup_mailable` 那套「ClearCursor → 塞进邮寄槽 → 读回 → 取出」）
+  --     正是「拿不起来 / 光标忙 / 发送 7 件只出去 3 件」那一族的源头 ⇒ 整条已删。
+  if not ( m.api.MailFrame and m.api.MailFrame:IsVisible() ) then
+    return m.orig.PickupContainerItem( bag, slot )
+  end
+
+  -- Alt+左键：一键把背包里所有**同 id** 的物品加进选择列表（同样是纯数据批量，一件都不拿）
+  if arg1 == "LeftButton" and m.api.IsAltKeyDown() then
+    local link = m.multi_link( bag, slot )
+    local _, _, itemId = string.find( link or "", "item:(%d+)" )
+    if not itemId then
+      m.info( "Alt+左键：这一格没有可识别的物品 ⇒ 什么都没做" )
+      return
+    end
+    itemId = tonumber( itemId )
+    local added, dup, full = 0, 0, 0
+    for b = 0, 4 do
+      local slots = m.api.GetContainerNumSlots( b )
+      for s = 1, slots do
+        local l = m.multi_link( b, s )
+        if l then
+          local _, _, id = string.find( l, "item:(%d+)" )
+          if id and tonumber( id ) == itemId then
+            local r = m.multi_add( b, s, true )
+            if r == "ok" then added = added + 1
+            elseif r == "dup" then dup = dup + 1
+            elseif r == "full" then full = full + 1 end
           end
         end
       end
     end
+    m.multi_project()
+    m.info( string.format( "Alt+左键：同种物品加进选择列表 %d 件（已有 %d ｜ 因满未加 %d）⇒ 列表共 %d 条",
+      added, dup, full, getn( m.multi_list ) ) )
     return
   end
 
-  if m.sendmail_attached( bag, slot ) then
-    if arg1 == "RightButton" and m.api.MailFrame:IsVisible() then
-      return m.sendmail_remove_attachment( { bag, slot } )
+  if m.multi_has( bag, slot ) then
+    if arg1 == "RightButton" then
+      -- ★右键 = **只从列表删掉这一条**（用户定：「附件内的右键也只是删除某个物品在这个列表内的数据」）
+      --   注意：**不**执行原始取件（否则物品会被真的拿起来 = 又回到「卡住物品」那条路）
+      m.multi_del( bag, slot )
+      m.multi_project()
+      return
     end
-    -- ★左键把已挂载的这件**真的拿起来** ⇒ 记账必须一起清：记账只记 {bag,slot}，物品一离开那格，
-    --   这条记账就指向「空位或别的东西」（= 用户说的「内部的数据没有更新」）。
-    --   ★代价如实：拿起后又放回原处 = 需要重新挂一次（宁可少挂，也不能拿旧记账去发错东西）。
-    if m.api.MailFrame:IsVisible() then m.sendmail_forget( bag, slot ) end
+    -- ★左键 = **完全交回客户端**（拿起/放下，用户定「保持客户端原样…不动」）：
+    --   列表这一条**留着** —— 物品若放回原处，链接对得上，这一条照样有效；
+    --   若挪走/换成别的东西，投影不会再显示它，发送那一步也会如实「跳过 + 点名」。
     return m.orig.PickupContainerItem( bag, slot )
   end
 
   if m.api.GetContainerItemInfo( bag, slot ) then
-    if arg1 == "RightButton" and m.api.MailFrame:IsVisible() then
+    if arg1 == "RightButton" then
+      -- ★右键 = **只把这一件加进选择列表**（不真拿、不真放；附件格随后从列表重排）
       m.sendmail_show_send_tab()
-      m.sendmail_set_attachment( { bag, slot } )
+      if m.multi_add( bag, slot ) == "ok" then m.multi_project() end
       return
-    else
-      m.set_cursor_item( { bag, slot } )
     end
+    m.set_cursor_item( { bag, slot } )
   end
   return m.orig.PickupContainerItem( bag, slot )
 end
@@ -2102,8 +2276,9 @@ function EHMailTM.hook.UseContainerItem( bag, slot, onself )
   if m.api.IsShiftKeyDown() or m.api.IsControlKeyDown() or m.api.IsAltKeyDown() then
     return m.orig.UseContainerItem( bag, slot, onself )
   elseif m.api.MailFrame:IsVisible() then
+    -- 邮箱开着时「使用」= 加进选择列表（上游就是这个交互；0.3.11 起同样是**纯数据**：不动物品）
     m.sendmail_show_send_tab()
-    m.sendmail_set_attachment( { bag, slot } )
+    if m.multi_add( bag, slot ) == "ok" then m.multi_project() end
   elseif m.api.TradeFrame:IsVisible() then
     for i = 1, 6 do
       if not m.api.GetTradePlayerItemLink( i ) then
@@ -2147,6 +2322,15 @@ function EHMailTM.hook.MailFrameTab_OnClick( tab )
   end
 
   m.orig.MailFrameTab_OnClick( tab )
+
+  -- ★0.3.10 测试档：切到发件页时把「多选列表」自动渲染进附件格（= 记账，等同已挂载）。
+  --   默认开（用户指定「现在测试默认显示背包格1-4 的物品」）；`/tm 多选 自动` 可关。
+  --   ★先出声再动手：这是**会改变寄出内容**的行为，绝不静默。
+  if tab == 2 and m.multi_auto and not m.multi_quiet and type( m.multi_project ) == "function" and getn( m.multi_list ) > 0 then
+    local shown = m.multi_project()
+    m.info( string.format( "附件选择列表 %d 条已投影到附件格（挂上 %d 格）—— 按【发送】就会把这些格上的物品寄出去；不想要就 /tm 附件 清 或 /tm 附件 自动",
+      getn( m.multi_list ), shown ) )
+  end
 end
 
 function EHMailTM.hook.OpenMailFrame_OnHide()
@@ -2174,6 +2358,27 @@ end
 
 function EHMailTM.send_mail_button_onclick()
   m.api.MailAutoCompleteBox:Hide()
+
+  -- ★★★0.3.12（用户需求②）：**发件前先把「光标上还拖着东西」处理掉** ——
+  --   有拖拽 ⇒ 认源格 ⇒ `PickupContainerItem` 放回原处（**绝不 ClearCursor**）⇒ 读回自证；
+  --   认不出源格 / 放不回去 ⇒ 如实说一句并**停下**（一件都不寄）—— 与下面那条「寄件栏有残留就硬停」
+  --   同一把尺子：拿不到证据就一个字节都不碰，让玩家自己处理。
+  --   ★为什么值得停下：光标上挂着东西时，我们那串 `ClearCursor` → `ClickSendMailItemButton` →
+  --     `PickupContainerItem` 的挂件序列正好会与「手里那件东西」抢同一个光标（历史上就是「光标忙 /
+  --     之后什么都拿不起来」那一族）⇒ 先把手清干净，再走那条已验证的序列。
+  if m.cursor_clear( "发件前清理光标上的拖拽" ) ~= true then
+    m.info( "  已停下、没有寄出：请把光标上那件东西放下（或放回背包）后再点【发送】" )
+    m.sendmail_sending = false
+    return
+  end
+
+  -- ★★★【发送】的**唯一入口**（0.3.11 起）：点客户端那个【发送】按钮 → 这里。
+  --   客户端 XML 的 OnClick 是按名字调全局 `SendMailMailButton_OnClick()`（本插件已把它指向本函数），
+  --   另外 `sendmail_load` 还把**真按钮的 OnClick 脚本**也直接指到本函数（双保险，见那里的注释）。
+  --
+  --   数据来源 = **选择列表**（`m.multi_list`）的投影：`m.multi_project()` 先按列表把附件格重排一次，
+  --   随后照旧读 `sendmail_attachments()`（= 投影）当队列 ⇒ 「列表 = 寄什么」这条链只有一处真值。
+  m.multi_project()
 
   -- ★★★开批前先看**客户端附件栏**：有东西（= 我们没放过的残留，玩家以前用拖放塞进去的）
   --   ⇒ **本批直接停下，一个字节都不碰**。
@@ -2209,6 +2414,8 @@ function EHMailTM.send_mail_button_onclick()
   m.sendmail_skipped = nil
   m.sendmail_failed = nil
   m.sendmail_retry = 0
+  -- 这一批真正寄出去的 {包,格}（批末据此把它们从选择列表里摘掉；见 sendmail_send 收尾）
+  m.multi_sent = {}
 
   m.sendmail_clear()
   m.sendmail_sending = true
@@ -2268,6 +2475,16 @@ function EHMailTM.sendmail_load()
   MailMailButton = m.api.SendMailMailButton
   m.api.SendMailMailButton = setmetatable( {}, { __index = function() return function() end end } )
   m.api.SendMailMailButton_OnClick = m.send_mail_button_onclick
+  -- ★★★【发送】按钮拦截（0.3.11 补的第二条腿，用户 2026-10-10 定「拦截」）：
+  --   客户端 `MailFrame.xml` 里那个按钮的 OnClick 就是一句 `SendMailMailButton_OnClick();`（按**名字**调全局）
+  --   ⇒ 覆盖那个全局已经等于拦截（上面一行）。这里再把**真按钮自己的 OnClick 脚本**直接指到本函数：
+  --   · 别的插件若把全局改回原版，按钮仍然走我们这条路（单次调用，不重复）；
+  --   · ★真按钮句柄 = 全局 `MailMailButton` —— `SendMailMailButton` 这个全局**已被上一行换成空壳**，
+  --     拿 `m.api.SendMailMailButton` 是拿不到真对象的（这是本移植版刻意的 hack）。
+  --   ★拿不到/设不上 ⇒ 一个字节都不动，全局那一条腿照旧生效（fail-open）。
+  if MailMailButton and type( MailMailButton.SetScript ) == "function" then
+    pcall( MailMailButton.SetScript, MailMailButton, "OnClick", function() m.send_mail_button_onclick() end )
+  end
   MailSubjectEditBox = m.api.SendMailSubjectEditBox
   m.api.SendMailSubjectEditBox = setmetatable( {}, {
     __index = function( _, key )
@@ -2353,23 +2570,25 @@ function EHMailTM.sendmail_load()
     end
   end
 
-  -- ★★★0.3.3 真机报障「多邮件发送异常 / 内部数据没更新 / 放到第二件就失败」的**主根因**：
-  --   上游写好了 attachment_button_on_click（点附件格 = 拿出 / 与光标上的物品交换），
-  --   却**从来没有把它挂到任何控件上**（全文件零引用）⇒ 附件格的点击与拖放**仍是客户端自己的行为**：
-  --   ① 拖着物品放到附件格 ⇒ 客户端**真的**把它放进附件栏，而我们的记账里没有这一条
-  --      ⇒ 界面/记账/背包三份状态各说各话；
-  --   ② 点附件格拿东西 ⇒ 走客户端逻辑，**我们的记账一个字都不动**
-  --      ⇒ 用户看到的就是「拿出来了、内部数据没更新、发出去的还是第一次那件」；
-  --   ③ 真进了附件栏的物品在客户端里是「已附加」状态 ⇒ 之后 PickupContainerItem 拿不起来
-  --      （真机诊断：连试 4 次都是空手而归）。
-  --   ⇒ 把附件格整条接管过来：点击走我们的处理体、**禁止接收拖放**、撤掉拖拽注册。
-  --   ★挂载方式仍是「右键点背包里的物品」（hook.PickupContainerItem ⇒ sendmail_set_attachment），与这里无关。
+  -- ★★★附件格的鼠标完全由我们接管（0.3.3 起；0.3.11 起处理体的语义改成「只删列表数据」）：
+  --   上游写好了 attachment_button_on_click 却**从来没有挂到任何控件上**（全文件零引用）⇒
+  --   附件格的点击与拖放仍是客户端自己的行为：拖着物品放到附件格 ⇒ 客户端**真的**把它放进客户端附件栏
+  --   （界面/记账/背包三份状态各说各话）⇒ 之后 `PickupContainerItem` 拿不起来（真机「连试 4 次」）。
+  --   ⇒ 现在：点击 = `m.attachment_button_on_click`（**只从选择列表删这一条**，不动物品、不碰光标）·
+  --     **拖放 = 由我们接管**（0.3.12）：拖着物品松手落在附件格上 ⇒ `m.attachment_receive_drag`
+  --     **只把那一件加进选择列表、再把这次拖拽取消掉**（认源格 ⇒ `PickupContainerItem` 放回原处 ⇒ 读回自证），
+  --     客户端寄件栏**一个字节都不会被塞进去**（这正是 0.3.3 那条「拖放会被客户端真塞进附件栏、
+  --     此后整条取件通道被堵死」的病根）⇒ 撤掉拖拽注册那条照旧保留。
+  --   ★加进列表的另一条入口 = 「右键背包里的物品」（`hook.PickupContainerItem` ⇒ `m.multi_add`，纯数据）。
   for i = 1, ATTACHMENTS_MAX do
     local btn = m.api[ "MailAttachment" .. i ]
     if btn then
       btn:SetScript( "OnClick", m.attachment_button_on_click )
       btn:RegisterForClicks( "LeftButtonUp", "RightButtonUp" )
-      btn:SetScript( "OnReceiveDrag", nil )
+      btn:SetScript( "OnReceiveDrag", m.attachment_receive_drag )
+      -- ★0.3.13：悬停改成**我们的信息引导**（占用格 = 客户端物品信息 + 追加两行；空格 = 只出引导）
+      btn:SetScript( "OnEnter", m.attachment_button_on_enter )
+      btn:SetScript( "OnLeave", m.attachment_button_on_leave )
       btn:SetScript( "OnDragStart", nil )
       pcall( btn.RegisterForDrag, btn )
     end
@@ -2402,96 +2621,28 @@ function EHMailTM.sendmail_show_send_tab()
   end
 end
 
+-- ★★★附件格的点击（0.3.11 起）= **只从选择列表里删掉这一条数据**（用户 2026-10-10 定：
+--   「附件内的右键也只是删除某个物品在这个列表内的数据」；左键同样只删、不再与光标换物品）：
+--   · 不 PickupContainerItem、不 ClearCursor、不动物品 —— 这一支以前会「拿起 → 放回 → 清光标」，
+--     正是「附件格里的东西被拿走 / 内部数据不更新 / 客户端此后拒绝取件」那一族的老路，整条去掉。
+--   · 删完由 `m.multi_project()` 从列表重排展示 ⇒ 列表 = 显示的**唯一真值**。
 function EHMailTM.attachment_button_on_click()
-  local attachedItem = this.item
-  local cursorItem = m.get_cursor_item()
-  if m.sendmail_set_attachment( cursorItem, this ) then
-    if attachedItem then
-      if arg1 == "LeftButton" then m.set_cursor_item( attachedItem ) end
-      m.orig.PickupContainerItem( unpack( attachedItem ) )
-      if arg1 ~= "LeftButton" then m.api.ClearCursor() end -- for the lock changed event
-    end
-  end
-end
-
--- ★把「记账里指向这一格」的条目全部清掉 —— **不动物品、不碰光标**。
---   用途（两处）：① 玩家左键把已挂载的物品拿走时同步记账（见 hook.PickupContainerItem）；
---   ② 附件格被点掉/物品被换走后的收尾。
-function EHMailTM.sendmail_forget( bag, slot )
-  local hit = false
-  for i = 1, ATTACHMENTS_MAX do
-    local btn = m.api[ "MailAttachment" .. i ]
-    if btn.item and btn.item[ 1 ] == bag and btn.item[ 2 ] == slot then
-      btn.item = nil
-      hit = true
-    end
-  end
-  if hit then m.sendmail_queue_update() end
-end
-
-function EHMailTM.sendmail_remove_attachment( item )
-  if not item then return end
-  if type( item ) == "table" and m.sendmail_attached( item[ 1 ], item[ 2 ] ) then
-    for i = 1, ATTACHMENTS_MAX do
-      local btn = m.api[ "MailAttachment" .. i ]
-      if btn.item and btn.item[ 1 ] == item[ 1 ] and btn.item[ 2 ] == item[ 2 ] then
-        m.api[ "MailAttachment" .. i ].item = nil
-        m.orig.PickupContainerItem( unpack( item ) )
-        m.api.ClearCursor()
-        m.sendmail_queue_update()
-        return
-      end
-    end
-  end
-end
-
--- requires an item lock changed event for a proper update
----@param item table
----@param slot number?
-function EHMailTM.sendmail_set_attachment( item, slot )
-  if item and not m.sendmail_pickup_mailable( item ) then
-    m.api.ClearCursor()
+  local it = this and this.item
+  if not ( it and it[ 1 ] and it[ 2 ] ) then
+    m.info( "这一格是空的（选择列表里没有这一条）" )
     return
-  elseif not slot then
-    for i = 1, ATTACHMENTS_MAX do
-      if not m.api[ "MailAttachment" .. i ].item then
-        slot = m.api[ "MailAttachment" .. i ]
-        break
-      end
-    end
   end
-  if slot then
-    if not (item or slot.item) then return true end
-    slot.item = item
-    m.api.ClearCursor()
-    m.sendmail_queue_update()
-    return true
-  end
+  m.multi_del( it[ 1 ], it[ 2 ] )
+  m.multi_project()
 end
 
----@param item table
-function EHMailTM.sendmail_pickup_mailable( item )
-  -- 命中缓存直接放行：跳过"拿起→塞进邮寄槽→读回→取出"这串锁操作。
-  -- 原写法每次右键都抛 4 次 ITEM_LOCK_CHANGED，pfUI/Guda 会跟着把全背包重扫 4 遍 = 卡顿来源
-  local _, _, itemId = string.find( m.api.GetContainerItemLink( item[ 1 ], item[ 2 ] ) or "", "item:(%d+)" )
-  if itemId and m.mailable[ itemId ] then return true end
-
-  m.api.ClearCursor()
-  -- 邮寄槽平时是空的，只有真有残留时才值得多花这一次锁操作
-  if m.api.GetSendMailItem() then
-    m.orig.ClickSendMailItemButton()
-    m.api.ClearCursor()
-  end
-  m.orig.PickupContainerItem( unpack( item ) )
-  m.orig.ClickSendMailItemButton()
-  local mailable = m.api.GetSendMailItem() and true or false
-  m.orig.ClickSendMailItemButton()
-  -- 只缓存能邮的：绑定是实例级的，同 itemID 可能有的绑有的没绑
-  if mailable and itemId then
-    m.mailable[ itemId ] = true
-  end
-  return mailable
-end
+-- ★★★下面这两个函数**已按用户指令整条删除**（0.3.11；别再往回加）：
+--   `sendmail_set_attachment` / `sendmail_pickup_mailable` —— 它们是「挂附件时真的去拿放物品」那条老路
+--   （ClearCursor → PickupContainerItem → ClickSendMailItemButton → 读回 → ClickSendMailItemButton），
+--   真机多轮报障（拿不起来 / 光标忙 / 发送 7 件只出去 3 件）全部源于它。
+--   用户 2026-10-10 定：「**绝不碰鼠标拿起放下的行为.容易卡住物品**」⇒ 选择改走纯数据：
+--   加 = `m.multi_add` · 删 = `m.multi_del` · 显示 = `m.multi_project` · 发送 = `send_mail_button_onclick`。
+--   `sendmail_forget` / `sendmail_remove_attachment` 同批删除（它们的活由列表与投影接管）。
 
 function EHMailTM.sendmail_num_attachments()
   local x = 0
@@ -2515,16 +2666,13 @@ function EHMailTM.sendmail_attachments()
 end
 
 function EHMailTM.sendmail_clear()
-  local anyItem
+  -- ★★★0.3.11：**不再**「把附件格里的东西拿出来再清光标」。
+  --   用户 2026-10-10 定：「绝不碰鼠标拿起放下的行为.容易卡住物品」；而且附件格现在只是
+  --   **选择列表的投影**（客户端寄件栏全程是空的）⇒ 清显示 = 把投影抹掉，**一个物品操作都不做**。
+  --   ★旧写法在这里 `PickupContainerItem(anyItem)` + `ClearCursor()`（上游那三步的翻版），
+  --     正是「光标忙 / 之后什么都拿不起来」的入口之一 ⇒ 一并去掉。
   for i = 1, ATTACHMENTS_MAX do
-    anyItem = anyItem or m.api[ "MailAttachment" .. i ].item
     m.api[ "MailAttachment" .. i ].item = nil
-  end
-  if anyItem then
-    m.api.ClearCursor()
-    -- 必须走原版：hook 版在 arg1 还是 "RightButton" 时会把物品重新挂回附件格
-    m.orig.PickupContainerItem( unpack( anyItem ) )
-    m.api.ClearCursor()
   end
   MailMailButton:Disable()
   m.api.SendMailNameEditBox:SetText ""
@@ -2568,12 +2716,16 @@ function EHMailTM.sendmail_send()
 
   local item = table.remove( m.sendmail_state.attachments, 1 )
   if item then
-    -- ★★★挂件前先校验「那一格现在还有没有东西」：用户可能在批量进行中把物品拿走/换掉
-    --   （记账只记 {bag,slot}、不记身份）⇒ 对着空位死重试毫无意义，还会把整批拖住
-    --   （真机诊断「连试 4 次」）。校验不过 ⇒ **如实跳过这一件**、继续发后面的。
-    if not m.api.GetContainerItemLink( item[ 1 ], item[ 2 ] ) then
+    -- ★★★挂件前先核对「那一格现在还是不是当初选的那一件」：
+    --   条目 = `{ 包号, 格号, 选择时的链接 }`（0.3.11 起带身份）⇒ 读到空、或读到**别的链接**，
+    --   都如实**跳过这一件并继续**（绝不拿「现在那一格里的东西」冒名寄出去）。
+    --   ★为什么不在这里做「能不能邮寄」预检：用户 2026-10-10 定「不预警，让邮件发送自身函数报错/提示，
+    --     **绝不碰鼠标拿起放下的行为，容易卡住物品**」⇒ 能不能寄只由真正的挂件序列回答。
+    local nowLink = m.api.GetContainerItemLink( item[ 1 ], item[ 2 ] )
+    if ( not nowLink ) or ( item[ 3 ] and nowLink ~= item[ 3 ] ) then
       m.sendmail_skipped = ( m.sendmail_skipped or 0 ) + 1
-      m.info( string.format( "  附件（包 %d / 格 %d）已不在原处 —— 跳过这一件", item[ 1 ], item[ 2 ] ) )
+      m.info( string.format( "  附件（包 %d / 格 %d）%s —— 跳过这一件",
+        item[ 1 ], item[ 2 ], nowLink and "那一格已经换成别的东西了" or "已不在原处" ) )
       m.sendmail_retry = 0
       m.sendmail_update = true
       return
@@ -2581,7 +2733,8 @@ function EHMailTM.sendmail_send()
     m.api.ClearCursor()
     m.orig.ClickSendMailItemButton()
     m.api.ClearCursor()
-    m.orig.PickupContainerItem( unpack( item ) )
+    -- ★条目现在是 `{ 包号, 格号, 链接 }` ⇒ 只把前两个交给客户端（多传一个链接没有意义）
+    m.orig.PickupContainerItem( item[ 1 ], item[ 2 ] )
     -- ★决定性取证：**拿起之后立刻**读一次光标 —— 用来区分两种根因（下一轮真机一眼可判）：
     --   「拿起后=空」= 客户端**拒绝了这次 PickupContainerItem**（物品从未离开背包，
     --                  与我们的放置序列无关；`寄件栏=空` 也是此时的状态）；
@@ -2668,6 +2821,11 @@ function EHMailTM.sendmail_send()
 
   m.debug( "SendMail" )
   m.api.SendMail( m.sendmail_state.to, subject, m.sendmail_state.body )
+  -- 记下这一件**真的寄出去了**（批末据此把它从选择列表里摘掉 ⇒ 列表 = 还没寄出去的那些）
+  if item then
+    m.multi_sent = m.multi_sent or {}
+    m.multi_sent[ item[ 1 ] .. ":" .. item[ 2 ] ] = true
+  end
 
   if getn( m.sendmail_state.attachments ) == 0 then
     m.sendmail_sending = false
@@ -2678,6 +2836,24 @@ function EHMailTM.sendmail_send()
       m.sendmail_skipped = nil
       m.sendmail_failed = nil
     end
+    -- ★批末收口：把**已经寄出去**的条目从选择列表里摘掉；跳过的那些留着（还在背包里，可再点发送重试）
+    local sentSet = m.multi_sent or {}
+    local kept, gone = {}, 0
+    for i = 1, getn( m.multi_list ) do
+      local it = m.multi_list[ i ]
+      if sentSet[ it[ 1 ] .. ":" .. it[ 2 ] ] then
+        gone = gone + 1
+      else
+        tinsert( kept, it )
+      end
+    end
+    if gone > 0 then
+      m.multi_list = kept
+      m.info( string.format( "  已寄出 %d 件已从选择列表移除（列表还剩 %d 条）", gone, getn( m.multi_list ) ) )
+      -- ★0.3.12：寄出去的条目离开列表 ⇒ 背包格上那层「附件」遮盖也要跟着收掉
+      m.multi_tell_bag()
+    end
+    m.multi_sent = nil
   end
 end
 
@@ -2781,6 +2957,915 @@ do
   end
 end
 
+-- ============================================================================
+-- 0.3.11 附件选择列表（**纯数据**）+ 发送指令（点【发送】走这一条）
+--   ★形态（用户 2026-10-10 定案）：**列表 = 唯一真值**，附件格 = 列表的投影。
+--     · 右键背包物品 ⇒ `m.multi_add`：**只是**把 {包号,格号,链接} 加进列表 —— 不碰光标、
+--       不碰客户端寄件栏、不拿放物品（用户原话：「绝不碰鼠标拿起放下的行为.容易卡住物品」）。
+--     · 右键/左键附件格 ⇒ `m.multi_del`：**只是**把这条数据删掉，同样一个物品操作都不做。
+--     · 点【发送】⇒ `send_mail_button_onclick`：先把列表投影一遍，再按**已验证过的那条路**
+--       （`sendmail_send`：ClearCursor → ClickSendMailItemButton → PickupContainerItem → 放置 → SendMail）
+--       逐件真切进客户端寄件栏并寄出；寄成功的条目批末从列表摘除。
+--     · 全程客户端寄件栏都是空的（只有发送那一刻短暂占用）⇒ 「拿不起来 / 光标忙 / 附件格锁住」
+--       那一整族现象从根上不存在。
+--   ★为什么要有旧的那条测试指令 `/tm 发送背包`：把**入口链**与**出口链**分开验（它不碰入口）。
+-- ============================================================================
+
+-- ★附件选择列表（**唯一真值**）：元素 = `{ 包号, 格号, 选择时的物品链接 }`，从 1 起连续。
+--   附件格（MailAttachment1..21）只是它的**投影**；旁边的小计数框也读同一张表。
+m.multi_list = {}
+-- UI 容量 = 附件格总数（7 列 × 3 行 = 21）；超出的**既不显示、也不寄出**（tooltip 如实说）
+m.multi_cap = ATTACHMENTS_PER_ROW_SEND * ATTACHMENTS_MAX_ROWS_SEND
+-- 自动档：切到发件页就把列表投影进附件格
+m.multi_auto = true
+-- 小计数框（只做悬停提示、不做点击）：尺寸与位置（位置可用 /tm 附件 偏移 现场调）
+m.MULTI_BOX_W = 150
+m.MULTI_BOX_H = 30
+m.multi_box_dx = 8
+m.multi_box_dy = -34
+
+-- 切词：1.12 只有 string.gmatch，而本文件既有写法是 string.find 手撸（paneloff 那段）⇒ 照抄
+m.multi_split = function( s )
+  local t, pos = {}, 1
+  while true do
+    local a, b = string.find( s, "%S+", pos )
+    if not a then break end
+    tinsert( t, string.sub( s, a, b ) )
+    pos = b + 1
+  end
+  return t
+end
+
+-- 测试默认档 = 背包 0 的第 1..4 格（带链接：发送时按链接核对「那格还是不是这件东西」）
+m.multi_default_list = function()
+  local t = {}
+  for i = 1, 4 do tinsert( t, { 0, i, m.multi_link( 0, i ) } ) end
+  return t
+end
+
+-- 字体：走本文件既有那条链（链尾 ARIALN 真机验证可用），拿不到再退两参数 SetFont
+m.multi_font = function( fs, size )
+  if not fs then return end
+  if type( m.log ) == "table" and type( m.log.fontSet ) == "function" then
+    if pcall( m.log.fontSet, fs, size ) then return end
+  end
+  pcall( fs.SetFont, fs, "Fonts\\ARIALN.TTF", size )
+end
+
+m.multi_link = function( bag, slot )
+  if type( m.api.GetContainerItemLink ) ~= "function" then return nil end
+  return m.api.GetContainerItemLink( bag, slot )
+end
+
+-- ★★★附件列表的核心（0.3.11 起 = **唯一真值**）：条目 = `{ 包号, 格号, 加进来时的链接 }`。
+--   **只动数据**：绝不碰光标、绝不碰客户端寄件栏、绝不拿放物品（用户 2026-10-10 定：「绝不碰鼠标拿起放下的行为.容易卡住物品」）。
+--   ★为什么这样改：真机多轮报障（「拿不起来 / 光标忙 / 发送 7 件只出去 3 件」）的源头全是
+--     「挂附件时真的去拿放物品」（上游 `sendmail_pickup_mailable` 那套 ClearCursor → 塞进邮寄槽 → 读回 → 取出）
+--     ⇒ 现在**选择 = 纯数据**，只有点【发送】那一刻才真切进客户端寄件栏，那条故障链整条不存在了。
+m.multi_index = function( bag, slot )
+  for i = 1, getn( m.multi_list ) do
+    local it = m.multi_list[ i ]
+    if it[ 1 ] == bag and it[ 2 ] == slot then return i end
+  end
+  return nil
+end
+
+m.multi_has = function( bag, slot )
+  return m.multi_index( bag, slot ) ~= nil
+end
+
+-- 这一条现在还算不算「那一格上就是它」：★读到空 ⇒ **保留**（可能只是这一刻读不到，绝不因为一次读不到就清列表），
+-- 只有「读到**别的**链接」才判失效 —— 那才是真的会寄错东西的危险情形。
+m.multi_alive = function( it )
+  local now = m.multi_link( it[ 1 ], it[ 2 ] )
+  if not now then return true end
+  if it[ 3 ] and now ~= it[ 3 ] then return false end
+  return true
+end
+
+-- 只摘「那一格已经换成别的东西」的条目（读到空的一律保留，交给发送时的「跳过 + 点名」如实处理）
+m.multi_prune = function( quiet )
+  local kept, dropped = {}, 0
+  for i = 1, getn( m.multi_list ) do
+    local it = m.multi_list[ i ]
+    if m.multi_alive( it ) then
+      tinsert( kept, it )
+    else
+      dropped = dropped + 1
+      if not quiet then
+        m.info( string.format( "  附件（包 %d / 格 %d）那一格已经换成别的东西 ⇒ 已从选择列表移除", it[ 1 ], it[ 2 ] ) )
+      end
+    end
+  end
+  if dropped > 0 then m.multi_list = kept end
+  return dropped
+end
+
+-- 加一条：返回 "ok" / "dup" / "empty" / "full"（quiet = 一声不出，给 Alt+左键的批量路径用）
+m.multi_add = function( bag, slot, quiet )
+  if m.multi_has( bag, slot ) then
+    if not quiet then m.info( string.format( "包 %d 格 %d 已经在选择列表里了（不重复记）", bag, slot ) ) end
+    return "dup"
+  end
+  local link = m.multi_link( bag, slot )
+  if not link then
+    if not quiet then m.info( string.format( "包 %d 格 %d 是空的 ⇒ 没有加进选择列表", bag, slot ) ) end
+    return "empty"
+  end
+  m.multi_prune( true )
+  if getn( m.multi_list ) >= m.multi_cap then
+    if not quiet then
+      m.info( string.format( "选择列表已满 %d 条 ⇒ 没加进去（点【发送】寄出后可再加，或右键附件格删掉某条）", m.multi_cap ) )
+    end
+    return "full"
+  end
+  tinsert( m.multi_list, { bag, slot, link } )
+  if not quiet then
+    m.info( string.format( "已加入选择列表：包 %d 格 %d ｜ %s（共 %d 条）", bag, slot, link, getn( m.multi_list ) ) )
+  end
+  return "ok"
+end
+
+-- 删一条（**只删数据**：不动物品、不碰光标）
+m.multi_del = function( bag, slot, quiet )
+  local i = m.multi_index( bag, slot )
+  if not i then
+    if not quiet then m.info( string.format( "包 %d 格 %d 不在选择列表里 ⇒ 没删任何东西", bag, slot ) ) end
+    return false
+  end
+  local it = table.remove( m.multi_list, i )
+  if not quiet then
+    m.info( string.format( "已从选择列表移除：包 %d 格 %d ｜ %s（还剩 %d 条）", bag, slot, it[ 3 ] or "?", getn( m.multi_list ) ) )
+  end
+  return true
+end
+
+-- 现场读数（只读）：每条命令开头都摊开 —— 免得「看着像没反应」时无从判读
+m.multi_diag = function()
+  local t = {}
+  local sendSlot = "?"
+  if type( m.api.GetSendMailItem ) == "function" then
+    local ok, v = pcall( m.api.GetSendMailItem )
+    sendSlot = ( ok and v ) and "|cffff6060有（残留 ⇒ 开批会硬停）|r" or "空"
+  end
+  local cursor = "?"
+  if type( m.api.CursorHasItem ) == "function" then
+    local ok2, v2 = pcall( m.api.CursorHasItem )
+    cursor = ( ok2 and v2 ) and "有" or "空"
+  end
+  tinsert( t, string.format( "客户端寄件栏=%s ｜ 光标=%s ｜ 附件格记账=%d", sendSlot, cursor, m.sendmail_num_attachments() ) )
+  -- ★0.3.12：光标那一行再摊开「锁着的格子」（取消拖拽的唯一判据 —— 认不出它的家就一个字节都不碰）
+  do
+    local homes, n = m.cursor_homes()
+    if n < 0 then
+      tinsert( t, "拖拽源格=|cffff6060判不出|r（缺 `CursorHasItem` 或原函数）" )
+    elseif ( cursor ~= "有" ) then
+      tinsert( t, "拖拽源格=—（光标上没有物品）" )
+    elseif n == 0 then
+      tinsert( t, "拖拽源格=|cffff6060没有锁着的格子|r（多半来自银行/装备栏/别的窗口）⇒ 认不出它的家" )
+    else
+      local parts = {}
+      local i
+      for i = 1, getn( homes ) do
+        parts[ i ] = string.format( "%d/%d", homes[ i ][ 1 ], homes[ i ][ 2 ] )
+      end
+      tinsert( t, string.format( "拖拽源格=%s%s", table.concat( parts, " " ),
+        ( n == 1 ) and "（唯一 ⇒ 可以放回）" or "|cffff6060（不止一个 ⇒ 分不清，不动手）|r" ) )
+    end
+  end
+  local to = ""
+  if m.api.SendMailNameEditBox and m.api.SendMailNameEditBox.GetText then
+    to = m.api.SendMailNameEditBox:GetText() or ""
+  end
+  tinsert( t, string.format( "收件人=%s ｜ 发件页=%s", ( to ~= "" ) and to or "|cffff6060★空|r",
+    ( m.api.SendMailFrame and m.api.SendMailFrame:IsVisible() ) and "已打开" or "未打开" ) )
+  -- ★0.3.15：关邮箱那一趟清理的读数（纯读；没跑过就不打这一行）——
+  --   真机上「背包还锁着」时，这一行直接给出「清了没 / 清了几条 / 重画了几个容器帧」。
+  if m.release_n ~= nil then
+    tinsert( t, string.format( "上次清理：清空 %d 条 ｜ 重画客户端背包帧 %d 个 ｜ 原因=%s",
+      m.release_n, m.release_frames or 0, m.release_why or "" ) )
+  end
+  return t
+end
+
+-- 列表里「这一刻真的还挂得住」的条数（读到空 / 那一格换了别的东西都不算）
+m.multi_live = function()
+  local live = 0
+  for i = 1, getn( m.multi_list ) do
+    local it = m.multi_list[ i ]
+    local now = m.multi_link( it[ 1 ], it[ 2 ] )
+    if now and ( not it[ 3 ] or now == it[ 3 ] ) then live = live + 1 end
+  end
+  return live
+end
+
+m.multi_lines = function()
+  local n = getn( m.multi_list )
+  local t = {}
+  local head = string.format( "选择列表 %d 条（当前真的还在那格 %d 条）｜ 附件格容量 %d 格", n, m.multi_live(), m.multi_cap )
+  if n > m.multi_cap then
+    head = head .. string.format( " ｜ |cffff6060超出 %d 条（只显示前 %d 条；超出的既不显示、也不寄出）|r", n - m.multi_cap, m.multi_cap )
+  end
+  tinsert( t, head )
+  for i = 1, n do
+    local it = m.multi_list[ i ]
+    local now = m.multi_link( it[ 1 ], it[ 2 ] )
+    local state
+    if not now then
+      state = "|cffff6060（那一格现在空的）|r"
+    elseif it[ 3 ] and now ~= it[ 3 ] then
+      state = "|cffff6060（那一格换成了别的东西）|r"
+    else
+      state = now
+    end
+    tinsert( t, string.format( "  [%d] 包 %d / 格 %d ｜ %s%s", i, it[ 1 ], it[ 2 ],
+      state, ( i > m.multi_cap ) and " |cffff6060超容量|r" or "" ) )
+  end
+  if n == 0 then tinsert( t, "  （空）右键背包里的物品即可加进来；右键附件格 = 移除这一条" ) end
+  return t
+end
+
+-- ★tooltip 全文：纯文本、不许出现 `**`（本客户端会把星号原样画在屏幕上）、不许有 nil 行
+-- ★超出容量那一行（**唯一来源**）：附件格自己的悬停与计数框悬停共用同一句；没超出 ⇒ nil（一个字节都不加）
+m.multi_overflow_line = function()
+  local n = getn( m.multi_list )
+  if n <= m.multi_cap then return nil end
+  return string.format( "|cffff6060选择物品列表超出 %d 条|r：附件格只放得下前 %d 条，超出的既不显示、也不会寄出",
+    n - m.multi_cap, m.multi_cap )
+end
+
+-- ★★★把附件格自己的悬停也接上同一条提示（用户 2026-10-10 点名：「展示选择物品列表就是**发件页那排附件格**这个位置」）
+--   · 只在**超出容量**时补一行；没超出时原样保留客户端的 SetBagItem 提示（一个字节都不改）
+--   · 包装纪律照项目既有做法：先把 XML 那份 OnEnter 取出来存成 upvalue，再挂我们的 —— 我们只**追加**一行
+--   · 幂等（`btn.multiTipWrapped` 门）：重复调用不会包两层
+m.multi_tip_wrap = function()
+  for i = 1, ATTACHMENTS_MAX do
+    local btn = m.api[ "MailAttachment" .. i ]
+    if btn and not btn.multiTipWrapped
+      and type( btn.GetScript ) == "function" and type( btn.SetScript ) == "function" then
+      local origEnter = btn:GetScript( "OnEnter" )
+      btn.multiTipWrapped = true
+      btn:SetScript( "OnEnter", function()
+        -- 原处理体用的是客户端的全局 this（不额外传参，保持与 XML 里 `GetScript('OnEnter')()` 同一姿势）
+        if type( origEnter ) == "function" then origEnter() end
+        local line = m.multi_overflow_line()
+        if line and m.api.GameTooltip and type( m.api.GameTooltip.AddLine ) == "function" then
+          m.api.GameTooltip:AddLine( line )
+        end
+      end )
+    end
+  end
+end
+
+m.multi_tip_lines = function()
+  local n = getn( m.multi_list )
+  local t = {}
+  tinsert( t, "|cffffd100选择物品列表|r（就是发件页那排附件格）" )
+  tinsert( t, string.format( "共 %d 条 ｜ 当前真有物品 %d 条 ｜ 附件格容量 %d 格", n, m.multi_live(), m.multi_cap ) )
+  if n > m.multi_cap then
+    tinsert( t, m.multi_overflow_line() )
+  elseif n == 0 then
+    tinsert( t, "|cffa0a0a0列表为空|r" )
+  else
+    local inTray = m.multi_in_tray()
+    if inTray >= n then
+      tinsert( t, string.format( "|cff20ff20%d 条都已在附件格里|r（等同已挂载）", n ) )
+    else
+      tinsert( t, string.format( "|cffffd100%d 条里已有 %d 条在附件格里|r（切到发件页会自动补齐）", n, inTray ) )
+    end
+  end
+  tinsert( t, " " )
+  tinsert( t, "|cff9fe0ff/tm 多选 默认|r 列表 = 背包 0 第 1-4 格（测试默认档）" )
+  tinsert( t, "|cff9fe0ff/tm 多选 加 <包> <格>|r 追加一条" )
+  tinsert( t, "|cff9fe0ff/tm 多选 清|r 清空列表与附件格" )
+  tinsert( t, "|cff9fe0ff/tm 多选 显示|r 把列表重新渲染进附件格" )
+  tinsert( t, "|cff9fe0ff/tm 多选 发|r 渲染后立刻寄给当前收件人" )
+  tinsert( t, "|cff9fe0ff/tm 发送背包 <N> [包]|r 背包第 1..N 格直接挂上并寄出" )
+  tinsert( t, "|cff9fe0ff拖到附件框上|r 松手 = 把那一件加进列表，并|cff20ff20取消这次拖拽|r（放回原处）" )
+  tinsert( t, "|cff9fe0ff点【发送】前|r 若光标上还拖着东西，先放回原处再寄（认不出它的家就如实说一句并停下）" )
+  tinsert( t, "|cff9fe0ff/tm 多选 光标|r 只读探针：光标上有没有东西 / 认不认得出它的家" )
+  tinsert( t, "|cff9fe0ff/tm 多选 帮助|r 摊开附件框的信息引导（与悬停提示同一份）" )
+  tinsert( t, "|cff9fe0ff快速删除|r 点某一格 = 删这一条；|cffffd100右键计数框|r = 一次清空整个列表" )
+  tinsert( t, "|cffa0a0a0小框位置：/tm 多选 偏移 <dx> <dy>|r" )
+  return t
+end
+
+-- 计数框刷新（唯一出口：显示与文案都只在这里改）
+m.multi_box_refresh = function()
+  local box = m.multi_box
+  if not box then return end
+  if not m.multi_auto then
+    box:Hide()
+    return
+  end
+  box:Show()
+  if box.count then
+    local n = getn( m.multi_list )
+    if n > m.multi_cap then
+      box.count:SetText( string.format( "|cffff6060%d / %d 超出 %d|r", n, m.multi_cap, n - m.multi_cap ) )
+    elseif n == 0 then
+      box.count:SetText( string.format( "|cffa0a0a0%d / %d（空）|r", n, m.multi_cap ) )
+    else
+      box.count:SetText( string.format( "|cff20ff20%d / %d|r", n, m.multi_cap ) )
+    end
+  end
+end
+
+-- 计数框：**父级 = SendMailFrame** ⇒ 只有发件页显示时才跟着显示（这里要的就是父子传播），
+-- 位置默认贴在发件页右缘外侧（批量面板挂在 InboxFrame 上、发件页看不见它 ⇒ 这块空间是空的）。
+m.multi_box_build = function()
+  if m.multi_box then
+    m.multi_box_refresh()
+    return m.multi_box
+  end
+  if not m.api.SendMailFrame then return nil end
+  local box = m.api.CreateFrame( "Frame", "EHMailTMMultiBox", m.api.SendMailFrame )
+  box:SetWidth( m.MULTI_BOX_W )
+  box:SetHeight( m.MULTI_BOX_H )
+  box:SetPoint( "TOPLEFT", m.api.SendMailFrame, "TOPRIGHT", m.multi_box_dx, m.multi_box_dy )
+  -- 子件要自己抬层级（抬高父帧不带动子件）；读不到层级也不许把建框整条打断
+  pcall( function()
+    box:SetFrameLevel( ( m.api.SendMailFrame:GetFrameLevel() or 1 ) + 6 )
+  end )
+  -- 只是悬停热区：本客户端透明帧照样吃鼠标 ⇒ 这里只开悬停、不接任何点击
+  box:EnableMouse( true )
+
+  local title = box:CreateFontString( "EHMailTMMultiBoxTitle", "ARTWORK" )
+  title:SetPoint( "TOPLEFT", box, "TOPLEFT", 2, -2 )
+  title:SetText( "|cffffd100选择物品列表|r" )
+  m.multi_font( title, 11 )
+
+  local count = box:CreateFontString( "EHMailTMMultiBoxCount", "ARTWORK" )
+  count:SetPoint( "TOPLEFT", title, "BOTTOMLEFT", 0, -2 )
+  m.multi_font( count, 11 )
+
+  box:SetScript( "OnEnter", function()
+    if not ( m.api.GameTooltip and m.api.GameTooltip.SetOwner ) then return end
+    m.api.GameTooltip:ClearLines()
+    m.api.GameTooltip:SetOwner( box, "ANCHOR_RIGHT" )
+    local lines = m.multi_tip_lines()
+    for i = 1, getn( lines ) do m.api.GameTooltip:AddLine( lines[ i ] ) end
+    -- ★0.3.13：列表内容之后**追加信息引导**（同一份引导行，与附件格悬停共用 —— 见 attach_tip_lines）
+    m.api.GameTooltip:AddLine( " " )
+    local guide = m.attach_tip_lines()
+    for i = 1, getn( guide ) do m.api.GameTooltip:AddLine( guide[ i ] ) end
+    m.api.GameTooltip:Show()
+  end )
+  box:SetScript( "OnLeave", function()
+    if m.api.GameTooltip and m.api.GameTooltip.Hide then m.api.GameTooltip:Hide() end
+  end )
+
+  -- ★0.3.12：这个计数框也算**附件框的一部分**（用户点名的「展示选择物品列表就是发件页那排附件格」）
+  --   ⇒ 拖着物品松手落在它上面，同样走「加进列表 + 取消拖拽」那一个处理体（与 MailAttachment 同一个口）。
+  --   ★它照旧只是**悬停热区**（不接任何点击）—— 这里只加「接收拖放」这一条路。
+  pcall( box.SetScript, box, "OnReceiveDrag", m.attachment_receive_drag )
+
+  -- ★0.3.13 快速删除（整批）：**右键这个计数框 = 一次清空整个列表**（只动列表数据，物品一件不动）。
+  --   ★鼠标键按本项目既有 idiom 取：先看处理体的第二个实参、再退回全局 `arg1`
+  --     （本客户端把键名放全局 `arg1`；现代式客户端才是 (self, button) 两参）。
+  box:SetScript( "OnMouseUp", function( a, b )
+    local button = b
+    if button == nil then button = arg1 end
+    if button ~= "RightButton" then return end
+    m.multi_box_clear()
+  end )
+
+  box.title = title
+  box.count = count
+  m.multi_box = box
+  -- 附件格的悬停提示也接上（用户点名：选择物品列表的展示位置就是这排附件格）
+  m.multi_tip_wrap()
+  m.multi_box_refresh()
+  return box
+end
+
+-- ★★★唯一投影口（列表 → 附件格）：**全量重建**。
+--   ★为什么现在敢全量重建（0.3.10 时还写着「只加不删」）：**已经没有第二个写入者了** ——
+--     右键背包不再物理附加、附件格点击只删数据、客户端寄件栏那条路也不再抓附件
+--     ⇒ 附件格的显示 = 列表的投影，两者必然一致，不存在「把别人挂的弄丢」的风险。
+--   ★只投影「这一刻真的还在那格」的条目（紧凑排列）；读到空 / 换了东西的条目**留在列表里**，
+--     由发送那一步的「跳过 + 点名」如实处理（绝不在这里静默删掉用户的选择）。
+m.multi_project = function()
+  -- ★0.3.12：列表一变就通知背包整合（EH_Bag）重画背包格上的「附件」遮盖层 ——
+  --   桥 = 它的全局表 `EH_BAG.mailMarkRefresh`；它不在场 / 没这个口 ⇒ 一个字节都不动（fail-open）。
+  m.multi_tell_bag()
+  if not m.api.MailAttachment1 then return 0 end
+  -- 附件格只在邮箱窗口里才有意义：关着时写进去随后会被 MAIL_CLOSED 的 sendmail_clear 清掉
+  -- ⇒ 与其「写了又没」，不如当场不写，由调用方如实说明「等打开邮箱会自动渲染」
+  if not ( m.api.MailFrame and m.api.MailFrame:IsVisible() ) then return 0 end
+  local n = 0
+  for i = 1, getn( m.multi_list ) do
+    local it = m.multi_list[ i ]
+    local now = m.multi_link( it[ 1 ], it[ 2 ] )
+    if now and ( not it[ 3 ] or now == it[ 3 ] ) then
+      n = n + 1
+      if n <= ATTACHMENTS_MAX then
+        local btn = m.api[ "MailAttachment" .. n ]
+        if btn then btn.item = { it[ 1 ], it[ 2 ], it[ 3 ] } end
+      end
+    end
+  end
+  for i = n + 1, ATTACHMENTS_MAX do
+    local btn = m.api[ "MailAttachment" .. i ]
+    if btn then btn.item = nil end
+  end
+  m.multi_shown = n
+  m.multi_tip_wrap()
+  m.multi_box_build()
+  m.multi_box_refresh()
+  m.sendmail_queue_update()
+  return n
+end
+
+-- 列表里「此刻真的在附件格里」的条数（诚实计数：格子被背包更新剔掉后会自己变少）
+m.multi_in_tray = function()
+  local c = 0
+  for k = 1, getn( m.multi_list ) do
+    local it = m.multi_list[ k ]
+    if m.sendmail_attached( it[ 1 ], it[ 2 ] ) then c = c + 1 end
+  end
+  return c
+end
+
+-- 清空：列表清空（keep_list = true 只重投影、保留列表内容）
+m.multi_clear = function( keep_list )
+  if not keep_list then m.multi_list = {} end
+  return m.multi_project()
+end
+
+-- 渲染 + 寄出（三条命令共用；收件人/邮箱/列表三道门都在这里，缺一道就如实说、一件都不寄）
+m.multi_send_now = function( tag )
+  if not ( m.api.MailFrame and m.api.MailFrame:IsVisible() ) then
+    m.info( "|cffff6060邮箱没开|r：先打开邮箱再敲这条命令" )
+    return false
+  end
+  local to = ""
+  if m.api.SendMailNameEditBox and m.api.SendMailNameEditBox.GetText then
+    to = m.api.SendMailNameEditBox:GetText() or ""
+  end
+  if to == "" then
+    m.info( "|cffff6060收件人为空|r ⇒ 一件都没挂、也没寄出（先在『收件人』里填名字，或点右边的下拉选一个）" )
+    return false
+  end
+  if getn( m.multi_list ) == 0 then
+    m.info( "多选列表是空的 ⇒ 用 /tm 多选 默认 或 /tm 多选 加 <包> <格>" )
+    return false
+  end
+  m.multi_quiet = true
+  m.sendmail_show_send_tab()
+  m.multi_quiet = nil
+  local shown = m.multi_project()
+  m.info( string.format( "%s：选择列表 %d 条 ⇒ 附件格挂上 %d 格（这一刻还在那格的；纯数据、没碰光标/客户端寄件栏）⇒ 交给发送 → %s",
+    tag or "发送", getn( m.multi_list ), shown, to ) )
+  m.send_mail_button_onclick()
+  return true
+end
+
+-- 附件格只在邮箱窗口里 ⇒ 没开邮箱时如实说「列表更新了、格子没渲染」，绝不假装渲染过
+m.multi_note_closed = function()
+  return "｜ |cffffd100邮箱没开|r：列表已更新，附件格等打开邮箱切到发件页时自动渲染"
+end
+
+-- ============================================================================
+-- 0.3.12 光标拖拽：**认得出源格就放回去**（绝不 ClearCursor）+ 附件框接收拖放 + 发件前清理
+--   ★用户 2026-10-10 两条需求：
+--     ①「子插件邮箱发件附件框检测. 如果有用户拖拽物品点击到这个窗则进行添加对应物品到列表的行为.
+--        并且取消掉物品的拖拽物品操作」
+--     ②「发件前检测用户是否有拖拽物品在鼠标上的行为. 也清理掉拖拽物品的行为. 查看API是否支持」
+--   ★★★API 事实（查的是本机 `api_cursor.html` 的客户端索引，**不许猜**）：
+--     · `CursorHasItem()` —— **有**：唯一的「光标上有没有物品」判定口
+--       （官方口径：只认背包物品/拆分堆/弹药，**不认**钱/法术/宏/商人物品）。
+--     · `ClearCursor()` —— **有**，但**这一族一律不用它**：它是「把光标上的东西丢下」，
+--       而本项目在案的事故里「清光标 = 丢件」（EH_Bag 整理引擎实测丢过两件）⇒ 绝不用它当兜底。
+--     · `GetCursorInfo()` —— **本客户端索引里没有**（`api_cursor.html` 全表无此名）⇒
+--       「光标上是哪一件」**读不出来**，只能靠**源格**反推。
+--     · 源格怎么认：客户端把被拖走的那一格**锁上** —— `GetContainerItemInfo` 的第 3 个返回 = `locked`
+--       （`api_container.html` 的官方口径）；被拖走的那件东西的家就是**锁着的那个格子**。
+--   ★★★三条口径（改动这一族必看）：
+--     ① **只认「恰好一个锁住的格子」**：0 个（判不出它从哪来）或 ≥2 个（分不清是哪一格）⇒
+--        **一个字节都不碰**，如实说一句就收工（绝不猜、绝不拿别的格子当它的家）。
+--     ② **放回 = `PickupContainerItem(源包, 源格)`** —— 与「玩家再点一次同一格」是同一条路：
+--        客户端认得的**普通移动**，永远不可能销毁物品；放完**读回自证** `CursorHasItem()`：
+--        空了 = 取消成功；**还拿着** ⇒ 如实说「请你手动放一下」，**绝不改走 ClearCursor**。
+--     ③ **一律走 `m.orig.*`（未经 hook 的原函数）**：本插件的 `hook.PickupContainerItem` 会拦右键，
+--        而这里是在我们自己的处理体里调它 —— 走 hook 就会被自己拦一次（物品一点没动）。
+--   ★这一族**只在这三个入口**动手：附件框接收拖放（①②）/ 点【发送】前（②）/ 只读探针（不动物品）。
+--     选择列表的加/删/投影照旧**纯数据**（0.3.11 的口径一个字节没改）。
+-- ============================================================================
+
+-- 光标上那件东西**可能**的源格（只读）：返回 列表, 计数。
+--   计数语义：0 = 光标上没有物品（或没在拖）· `-1` = 判不出（缺 API / 缺原函数）· ≥1 = 锁着的格子数。
+--
+-- ★唯一读口：这一版客户端到底有没有 `CursorHasItem`（拿不到 ⇒ nil；**判不出 ≠ 没有**）。
+--   全部调用点只走它 —— 少一处 `type(...) == "function"` 就多一个「同一条口径两处写」的漏改点。
+m.cursor_api = function()
+  local f = m.api.CursorHasItem
+  if type( f ) == "function" then return f end
+  return nil
+end
+
+m.cursor_homes = function()
+  local list = {}
+  local hasItem = m.cursor_api()
+  if hasItem == nil then return list, -1 end
+  local ok, has = pcall( hasItem )
+  if not ok then return list, -1 end
+  if not has then return list, 0 end
+  -- ★必须用**原函数**：hook 版会给「已在选择列表里的格子」伪报 locked（那是附件格子的选中反馈）
+  local getinfo = m.orig.GetContainerItemInfo
+  local numslots = m.api.GetContainerNumSlots
+  if type( getinfo ) ~= "function" or type( numslots ) ~= "function" then return list, -1 end
+  local bags = { 0, 1, 2, 3, 4 }
+  if type( m.api.KEYRING_CONTAINER ) == "number" then tinsert( bags, m.api.KEYRING_CONTAINER ) end
+  if type( m.api.BANK_CONTAINER ) == "number" then
+    tinsert( bags, m.api.BANK_CONTAINER )
+    local b
+    for b = 5, 10 do tinsert( bags, b ) end
+  end
+  local i
+  for i = 1, getn( bags ) do
+    local bag = bags[ i ]
+    local okN, n = pcall( numslots, bag )
+    n = ( okN and tonumber( n ) ) or 0
+    local s
+    for s = 1, n do
+      -- ★多返回值的调用**不许**直接 pcall 接（`pcall` 只交回 ok + 第一个返回值；
+      --   本项目在案：多返回值套 tostring/pcall 再当参数用会静默少值）⇒ 包一层闭包收成一个表
+      local okR, ret = pcall( function() return { getinfo( bag, s ) } end )
+      local locked = nil
+      if okR and type( ret ) == "table" then locked = ret[ 3 ] end
+      if locked then
+        tinsert( list, { bag, s, m.multi_link( bag, s ) } )
+      end
+    end
+  end
+  return list, getn( list )
+end
+
+-- 恰好一个源格才认；返回 home, 计数（nil + 计数 = 认不出）
+m.cursor_home = function()
+  local list, n = m.cursor_homes()
+  if n == 1 then return list[ 1 ], 1 end
+  return nil, n
+end
+
+-- 把光标上那件东西放回它的源格（**唯一的「取消拖拽」口**）；返回 成功?, 原因
+m.cursor_putback = function( home )
+  local hasItem = m.cursor_api()
+  if hasItem == nil then return false, "noapi" end
+  if not hasItem() then return true, "empty" end
+  if type( home ) ~= "table" then return false, "nohome" end
+  local raw = m.orig.PickupContainerItem
+  if type( raw ) ~= "function" then return false, "noapi" end
+  raw( home[ 1 ], home[ 2 ] )
+  if hasItem() then return false, "still" end
+  return true, "ok"
+end
+
+-- 「认不出源格」时统一那句话（三处共用一份措辞，避免同一现象三种说法）
+m.cursor_why = function( n )
+  if n == -1 then
+    return "|cffff6060判不出|r：这一版客户端没有 `CursorHasItem`（或原函数还没装上）⇒ 一个字节都没碰"
+  end
+  if n == 0 then
+    return "光标上拿着东西，但**没有任何一格是锁着的**（多半是从银行/装备栏/别的窗口拖出来的）⇒ 认不出它的家"
+  end
+  return string.format( "光标上那件东西对应 |cffff6060%d 个锁住的格子|r（分不清是哪一格）⇒ 认不出它的家", n )
+end
+
+-- 发件前清理（用户需求②）：返回 true = 光标干净（本来就没拿东西，或已经放回去了）
+m.cursor_clear = function( tag )
+  local hasItem = m.cursor_api()
+  if hasItem == nil then return true end
+  if not hasItem() then return true end
+  local home, n = m.cursor_home()
+  if home == nil then
+    m.info( "  " .. m.cursor_why( n ) .. "（绝不清光标 —— 清掉就等于把东西弄丢）" )
+    return false
+  end
+  local okP, why = m.cursor_putback( home )
+  if okP then
+    m.info( string.format( "  光标上原本拿着东西 ⇒ 已放回原处（包 %d 格 %d）%s",
+      home[ 1 ], home[ 2 ], ( tag and ( "｜" .. tag ) ) or "" ) )
+    return true
+  end
+  m.info( string.format( "  |cffff6060没能放回去|r（包 %d 格 %d）：%s ⇒ 请你手动放一下（本插件绝不清光标 —— 清掉就等于把东西弄丢）",
+    home[ 1 ], home[ 2 ], ( why == "noapi" ) and "取件口拿不到" or "放回之后光标上还有东西" ) )
+  return false
+end
+
+-- ★★附件框接收拖放（用户需求①）：拖着物品松手落在附件格 / 计数框上
+--   （挂在 `MailAttachment1..N` 的 `OnReceiveDrag` 与选择列表计数框上 —— 见 sendmail_load 与 multi_box_build）
+function EHMailTM.attachment_receive_drag()
+  local hasItem = m.cursor_api()
+  if hasItem == nil then
+    m.info( "附件框：这一版客户端没有 `CursorHasItem` ⇒ 判不出光标上有没有东西，一个字节都没碰" )
+    return
+  end
+  if not hasItem() then
+    m.info( "附件框：光标上没有物品（空手点一下 = 什么都不做）" )
+    return
+  end
+  local home, n = m.cursor_home()
+  if home == nil then
+    m.info( "附件框：" .. m.cursor_why( n ) .. " ⇒ 这一件没加进选择列表，光标也一个字节都没碰" )
+    return
+  end
+  -- 加进列表（纯数据）+ 投影（m.multi_add 自己会播报「已加入…/ 已在列表里 / 满了」）
+  m.sendmail_show_send_tab()
+  m.multi_add( home[ 1 ], home[ 2 ] )
+  m.multi_project()
+  -- 再取消这次拖拽
+  local okP, why = m.cursor_putback( home )
+  if okP then
+    m.info( string.format( "  已取消这次拖拽：把那件东西放回了原处（包 %d 格 %d）｜ 列表里没有的东西一件都不会被拿走",
+      home[ 1 ], home[ 2 ] ) )
+    return
+  end
+  m.info( string.format( "  |cffff6060这次拖拽没取消掉|r：包 %d 格 %d 那件东西还挂在光标上（%s）⇒ 请你手动放一下",
+    home[ 1 ], home[ 2 ], ( why == "noapi" ) and "取件口拿不到" or "放回后光标上还有东西" ) )
+end
+
+-- ★★通知背包整合（EH_Bag）重画「附件」标记（用户需求③的另一半：背包格上的遮盖层由它画）。
+--   桥 = 它的全局表 `EH_BAG` 上的 `mailMarkRefresh`（它不在场 / 没这个口 ⇒ 一个字节都不动）。
+--   ★纯通知：不传任何数据（背包侧只读本插件自己的 `multi_has`）⇒ 两边不会互相写对方的状态。
+m.multi_tell_bag = function()
+  local t = rawget( _G, "EH_BAG" )
+  if type( t ) ~= "table" then return false end
+  local f = t.mailMarkRefresh
+  if type( f ) ~= "function" then return false end
+  pcall( f )
+  return true
+end
+
+-- ============================================================================
+-- 0.3.13 附件框的**信息引导**（tooltip）+ **快速删除**
+--   用户 2026-10-10 定：「附件框内做好信息引导提示. 推荐直接在背包内完成邮件快速选择. 操作.
+--   邮件附件快速删除操作.」
+--   ★三条口径（改这一族必看）：
+--     ① **引导只有一份**：`m.attach_tip_lines()` 产出全部引导行，**附件格悬停与计数框悬停共用同一份**
+--        （两处各写一份 = 下一个漏改点：文案一改就只改了一边）。
+--     ② **占用格的气泡 = 客户端的物品信息 + 只追加**（`SetBagItem` 照旧先出那一件的完整信息，
+--        我们只在后面补一行「点这一格 = 从列表移除」+ 一行「推荐在背包里选」；
+--        **绝不 ClearLines** —— 那会把客户端的属性/商人价全抹掉，是 0.3.4~0.3.8 那一族的老雷）。
+--        空格则相反：**只出我们的引导**（客户端模板那句 `ATTACHMENT_TEXT` 是句没有信息量的大白话，
+--        既不告诉玩家怎么用、更不会说「推荐在背包里选」）。
+--     ③ **删除两档，都不碰物品**：单格 = **点附件格**（左键/右键都行，纯数据）；整批 = **右键计数框**
+--        （一次清空整个列表，唯一动作口 `m.multi_clear()`，退出时如实报清掉几条）。
+-- ============================================================================
+
+-- ★引导行（**唯一一份**）：标题 + 背包流推荐 + 拖放 + 单格删 + 整批清空 + 发送
+m.attach_tip_lines = function()
+  return {
+    "|cffffd100" .. L[ "ATT_TIP_TITLE" ] .. "|r",
+    L[ "ATT_TIP_BAG" ],
+    L[ "ATT_TIP_DRAG" ],
+    L[ "ATT_TIP_DEL" ],
+    L[ "ATT_CLEAR_TIP" ],
+    L[ "ATT_TIP_SEND" ],
+  }
+end
+
+-- 附件格悬停：占用 ⇒ 客户端物品信息 + 追加两行；空格 ⇒ 只出我们的引导
+function EHMailTM.attachment_button_on_enter()
+  local it = this and this.item
+  local tip = m.api.GameTooltip
+  if not ( tip and tip.SetOwner ) then return end
+  pcall( tip.SetOwner, tip, this, "ANCHOR_RIGHT" )
+  if it and it[ 1 ] and it[ 2 ] then
+    pcall( tip.SetBagItem, tip, it[ 1 ], it[ 2 ] )
+    -- ★每个方法都要把 `tip` 自己当第一个实参传（`pcall(f, …)` **不会**自动带 self ——
+    --   漏了就变成 `AddLine(self=" ")`，真机上是「该方法拿不到对象/什么都不显示」）
+    pcall( tip.AddLine, tip, " " )
+    pcall( tip.AddLine, tip, "|cffffd100" .. L[ "ATT_TIP_THIS" ] .. "|r" )
+    pcall( tip.AddLine, tip, L[ "ATT_TIP_BAG" ] )
+    pcall( tip.Show, tip )
+    return
+  end
+  pcall( tip.ClearLines, tip )
+  local lines = m.attach_tip_lines()
+  local i
+  for i = 1, getn( lines ) do pcall( tip.AddLine, tip, lines[ i ] ) end
+  pcall( tip.Show, tip )
+end
+
+function EHMailTM.attachment_button_on_leave()
+  local tip = m.api.GameTooltip
+  if tip and tip.Hide then pcall( tip.Hide, tip ) end
+end
+
+-- ★快速删除（整批）：**唯一动作口**是 `m.multi_clear()` —— 只抹列表数据 + 重投影，一个物品操作都不做。
+--   返回清掉的条数（0 = 本来就是空的 ⇒ 如实说一句，不假装做了什么）。
+function EHMailTM.multi_box_clear()
+  local n = getn( m.multi_list )
+  if n == 0 then
+    m.info( L[ "ATT_CLEAR_EMPTY" ] )
+    return 0
+  end
+  m.multi_clear()
+  m.info( string.format( L[ "ATT_CLEARED" ], n ) )
+  return n
+end
+
+-- 命令体：/tm 附件 …（`/tm 多选 …` 是等价别名；两个词都认）
+m.cmd_multi = function( rest )
+  local p = m.multi_split( rest or "" )
+  local sub = p[ 1 ] or ""
+
+  if sub == "" or sub == "状态" then
+    local lines = m.multi_lines()
+    for i = 1, getn( lines ) do m.info( lines[ i ] ) end
+    local diag = m.multi_diag()
+    for i = 1, getn( diag ) do m.info( "  " .. diag[ i ] ) end
+    m.info( "用法：/tm 附件 默认|加 <包> <格>|设 <包> <格>…|清|显示|发|自动|偏移 <dx> <dy>|光标|帮助（右键背包物品 = 加，右键附件格 = 删，拖到附件框 = 加并取消拖拽，右键计数框 = 一次清空）" )
+    return
+  end
+
+  if sub == "默认" or sub == "重设" then
+    m.multi_list = m.multi_default_list()
+    m.multi_auto = true
+    local shown = m.multi_project()
+    m.info( string.format( "选择列表已重设为背包 0 的第 1..4 格（列表 %d 条 ⇒ 附件格挂上 %d 格%s）",
+      getn( m.multi_list ), shown, ( shown == 0 ) and m.multi_note_closed() or "" ) )
+    return
+  end
+
+  if sub == "加" or sub == "add" then
+    local bag, slot = tonumber( p[ 2 ] ), tonumber( p[ 3 ] )
+    if not bag or not slot then
+      m.info( "用法：/tm 附件 加 <包号> <格号>（包号 0 = 主背包）" )
+      return
+    end
+    local r = m.multi_add( bag, slot )
+    if r == "ok" then
+      local shown = m.multi_project()
+      m.info( string.format( "  附件格挂上 %d 格%s", shown, ( shown == 0 ) and m.multi_note_closed() or "" ) )
+    end
+    return
+  end
+
+  if sub == "删" or sub == "del" then
+    local bag, slot = tonumber( p[ 2 ] ), tonumber( p[ 3 ] )
+    if not bag or not slot then
+      m.info( "用法：/tm 附件 删 <包号> <格号>" )
+      return
+    end
+    m.multi_del( bag, slot )
+    m.multi_project()
+    return
+  end
+
+  if sub == "设" then
+    local t, i, bad = {}, 2, 0
+    while p[ i ] and p[ i + 1 ] do
+      local bag, slot = tonumber( p[ i ] ), tonumber( p[ i + 1 ] )
+      if bag and slot then tinsert( t, { bag, slot, m.multi_link( bag, slot ) } ) else bad = bad + 1 end
+      i = i + 2
+    end
+    if getn( t ) == 0 then
+      m.info( "用法：/tm 附件 设 <包> <格> <包> <格> …（至少一对）" )
+      return
+    end
+    m.multi_list = t
+    local shown = m.multi_project()
+    m.info( string.format( "选择列表已设为 %d 条（解析失败 %d 对）⇒ 附件格挂上 %d 格%s",
+      getn( t ), bad, shown, ( shown == 0 ) and m.multi_note_closed() or "" ) )
+    return
+  end
+
+  if sub == "清" then
+    m.multi_list = {}
+    local shown = m.multi_project()
+    m.info( string.format( "选择列表已清空、附件格已收干净（现在 %d 格；没碰光标、没碰客户端寄件栏、也没动物品）", shown ) )
+    return
+  end
+
+  if sub == "显示" or sub == "刷" then
+    if not ( m.api.MailFrame and m.api.MailFrame:IsVisible() ) then
+      m.info( "|cffff6060邮箱没开|r：附件格只在邮箱窗口里，先打开邮箱（列表数据不受影响）" )
+      return
+    end
+    m.multi_quiet = true
+    m.sendmail_show_send_tab()
+    m.multi_quiet = nil
+    local shown = m.multi_project()
+    m.info( string.format( "选择列表 %d 条 ｜ 附件格挂上 %d 格 ｜ 列表里此刻真的还在那格 %d 条",
+      getn( m.multi_list ), shown, m.multi_live() ) )
+    return
+  end
+
+  if sub == "发" then
+    m.multi_send_now( "附件发送" )
+    return
+  end
+
+  if sub == "自动" then
+    m.multi_auto = not m.multi_auto
+    m.multi_box_refresh()
+    if m.multi_auto then
+      m.info( "附件自动档 = |cff20ff20开|r：切到发件页时自动把选择列表投影进附件格" )
+    else
+      m.info( "附件自动档 = |cffff6060关|r：不再自动投影（列表数据保留，/tm 附件 显示 可手动刷）" )
+    end
+    return
+  end
+
+  if sub == "偏移" then
+    local dx, dy = tonumber( p[ 2 ] ), tonumber( p[ 3 ] )
+    if not dx or not dy then
+      m.info( string.format( "用法：/tm 附件 偏移 <dx> <dy>（当前 dx=%d dy=%d）", m.multi_box_dx, m.multi_box_dy ) )
+      return
+    end
+    m.multi_box_dx, m.multi_box_dy = dx, dy
+    if m.multi_box then
+      m.multi_box:ClearAllPoints()
+      m.multi_box:SetPoint( "TOPLEFT", m.api.SendMailFrame, "TOPRIGHT", dx, dy )
+    end
+    m.info( string.format( "附件小框偏移 = %d, %d", dx, dy ) )
+    return
+  end
+
+  -- ★0.3.12 只读探针（用户需求②的「查看API是否支持」）：把「光标上有没有东西 / 认不认得出它的家」
+  --   一条命令摊开 —— **零副作用**（一个物品操作都不做、连 Show/Hide 都没有）。
+  if sub == "光标" or sub == "拖拽" then
+    local homes, n = m.cursor_homes()
+    if n < 0 then
+      m.info( "光标探针：|cffff6060判不出|r ｜ 这一版客户端没有 `CursorHasItem`（或原函数还没装上）" )
+      m.info( "  ⇒ 本插件**不会**去动光标（判不出就一个字节都不碰）" )
+      return
+    end
+    if n == 0 then
+      m.info( "光标探针：光标上**没有**物品（官方口径：只认背包物品/拆分堆/弹药，不认钱/法术/宏/商人物品）" )
+      return
+    end
+    m.info( string.format( "光标探针：光标上**有**物品 ｜ 锁着的格子 %d 个", n ) )
+    local i
+    for i = 1, getn( homes ) do
+      m.info( string.format( "  源格候选 包 %d 格 %d ｜ %s ｜ 已在选择列表=%s", homes[ i ][ 1 ], homes[ i ][ 2 ],
+        homes[ i ][ 3 ] or "（读不到链接）", m.multi_has( homes[ i ][ 1 ], homes[ i ][ 2 ] ) and "是" or "否" ) )
+    end
+    if n == 1 then
+      m.info( "  ⇒ |cff20ff20认得出它的家|r：点【发送】会先把它放回原处；拖到附件框上则「加进列表 + 取消这次拖拽」" )
+    else
+      m.info( "  ⇒ |cffff6060认不出它的家|r：两处都会如实说一句、一个字节都不碰（绝不清光标）" )
+    end
+    return
+  end
+
+  -- ★0.3.13 信息引导（与附件格/计数框悬停**同一份行**）：`/tm 附件 帮助`
+  if sub == "帮助" or sub == "提示" or sub == "guide" then
+    local lines = m.attach_tip_lines()
+    local i
+    for i = 1, getn( lines ) do m.info( lines[ i ] ) end
+    m.info( "用法：/tm 附件 默认|加 <包> <格>|删 <包> <格>|清|显示|发|自动|偏移 <dx> <dy>|光标|帮助" )
+    return
+  end
+
+  m.info( "未知子命令：" .. sub .. " ｜ 可用：状态 默认 加 <包> <格> 删 <包> <格> 设 … 清 显示 发 自动 偏移 光标 帮助" )
+end
+
+-- 命令体：/tm 发送背包 <N> [包号]
+m.cmd_sendbag = function( rest )
+  local p = m.multi_split( rest or "" )
+  if p[ 1 ] and not tonumber( p[ 1 ] ) then
+    m.info( "用法：/tm 发送背包 <N> [包号]（默认 N=4、包号 0 = 主背包）；例：/tm 发送背包 7" )
+    return
+  end
+  local n = tonumber( p[ 1 ] ) or 4
+  local bag = tonumber( p[ 2 ] ) or 0
+  if n < 1 then
+    m.info( "N 至少是 1" )
+    return
+  end
+  if n > m.multi_cap then
+    m.info( string.format( "|cffffd100N=%d 超过附件格容量 %d|r ⇒ 只处理前 %d 件（超出的不挂、也不寄）", n, m.multi_cap, m.multi_cap ) )
+    n = m.multi_cap
+  end
+
+  -- 先摊现场（只读），再动手 —— 「看着像没反应」时这几行就是唯一判读依据
+  local diag = m.multi_diag()
+  for i = 1, getn( diag ) do m.info( "  " .. diag[ i ] ) end
+
+  local list, empty = {}, {}
+  for i = 1, n do
+    local link = m.multi_link( bag, i )
+    if link then
+      tinsert( list, { bag, i, link } )
+    else
+      tinsert( empty, i )
+    end
+  end
+  m.info( string.format( "发送背包：包 %d ｜ 取第 1..%d 格 ⇒ 有物品 %d 件 ｜ 空格 %d 格%s", bag, n, getn( list ), getn( empty ),
+    ( getn( empty ) > 0 ) and ( "（空格：" .. table.concat( empty, "," ) .. "）" ) or "" ) )
+  if getn( list ) == 0 then
+    m.info( string.format( "|cffff6060包 %d 的第 1..%d 格全是空的|r ⇒ 中止，没挂也没寄", bag, n ) )
+    return
+  end
+
+  m.multi_list = list
+  m.multi_send_now( "发送背包" )
+end
+
 -- ★★★0.3.3 日志列表「一个字都没有」的两轮定案（真机 + 源码；别再走回头路）：
 --   一轮：原字体路径写成 `"FONTS\\ARIALN.TTF"`（**目录名全大写**，全仓唯一一处）⇒ 先按「路径大小写敏感」
 --        改掉了大小写，并改走项目字体链。
@@ -2819,47 +3904,222 @@ function EHMailTM.log.fontSet( fs, size )
   return true
 end
 
+-- ============================================================================
+-- 0.3.14 日志页 = **小图标方格聚合展示**（照宿主「图标库」那种网格）
+--   用户 2026-10-10 定：「已发送和已收到进行小图标方格聚合展示. 参考图标库的布局形式,
+--   tooltip 信息提示是这个邮件的发件人.附件信息.金币等等, 然后点击这个日志图标可以快速切换到发件箱.
+--   填充这个日志邮件的发件人操作.」
+--   ★四条口径：
+--     ① **一格 = 一封邮件**（同名不合并）：图标 = 那封邮件的物品贴图；没有物品时按「拍卖行 → 退回 → 通用便签」
+--        顺位兜底；右上角小图章 = 拍卖行 / 退回；右下角小色块 = 有钱（金）/ 到付（橙）。
+--     ② **池子建一次、脚本设一次**（照 `IconBrowser` 的写法）：数据走 `c.entry` 现读，
+--        **绝不每页重设 `SetScript`**（本客户端 `SetScript` 是单槽位，反复重设容易把别的处理漏掉）。
+--     ③ **tooltip = 这一封的全部信息**（对方 / 主题 / 附件 / 金币 / 到付 / 时间）+ **点一下会做什么**。
+--     ④ **点一下 = 切到写邮件页 + 把收件人填成「对方」**（`m.log.tile_click` → `m.sendmail_show_send_tab()`）：
+--        已发送那页的「对方」= 当年的收件人（再寄给他）；已收到那页 = 来信的发件人（回信给他）；
+--        拍卖行 / 系统寄来的没有对方 ⇒ **只切页面 + 如实说一句**（绝不编一个名字填进去）。
+-- ============================================================================
+
+-- 池子几何（**唯一来源**）：一格 30、图形 28、图标 26、内边距 4 ⇒ 9 列 × 10 行 = 90 格
+--   宽 = 4 + 9*30 - 2 = 272 ≤ 296（滚动框宽）· 高 = 4 + 10*30 - 2 = 302 ≤ 312（滚动框高）
+m.LOG_COLS = 9
+m.LOG_ROWS = 10
+m.LOG_CELL = 30
+m.LOG_TILE = 28
+m.LOG_ICON = 26
+m.LOG_PAD = 4
+m.LOG_BG_RGB = { 0.10, 0.09, 0.06 }
+m.LOG_BG_HOVER = { 0.38, 0.30, 0.10 }
+m.LOG_NOTE_ICON = "Interface\\Icons\\INV_Misc_Note_01"
+m.LOG_STAMP_AH = "Interface\\AddOns\\EH_Mail\\EHMailTM-AH.blp"
+m.LOG_STAMP_RET = "Interface\\AddOns\\EH_Mail\\EHMailTM-RetArrow.blp"
+
+-- 池子（**建一次**）：`m.log.tiles[i]` 顺序 = 行优先，与锚点一一对应
+m.log.build_grid = function()
+  if m.log.tiles then return end
+  local host = m.api.EHMailTMLogEntriesFrame
+  if host == nil then return end
+  local cols, rows = m.LOG_COLS, m.LOG_ROWS
+  local cell, tile, icon = m.LOG_CELL, m.LOG_TILE, m.LOG_ICON
+  local bgR, bgG, bgB = m.LOG_BG_RGB[ 1 ], m.LOG_BG_RGB[ 2 ], m.LOG_BG_RGB[ 3 ]
+  local tiles = {}
+  local i
+  for i = 1, cols * rows do
+    local col = math.mod( i - 1, cols )
+    local row = math.floor( ( i - 1 ) / cols )
+    local b = m.api.CreateFrame( "Button", nil, host )
+    b:SetWidth( tile )
+    b:SetHeight( tile )
+    b:SetPoint( "TOPLEFT", host, "TOPLEFT", m.LOG_PAD + col * cell, -( m.LOG_PAD + row * cell ) )
+    pcall( b.EnableMouse, b, true )
+    pcall( b.RegisterForClicks, b, "LeftButtonUp" )
+    local bg = b:CreateTexture( nil, "BACKGROUND" )
+    pcall( bg.SetTexture, bg, "Interface\\Buttons\\WHITE8x8" )
+    pcall( bg.SetVertexColor, bg, bgR, bgG, bgB, 1 )
+    bg:SetPoint( "TOPLEFT", b, "TOPLEFT", 0, 0 )
+    bg:SetPoint( "BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0 )
+    local tex = b:CreateTexture( nil, "ARTWORK" )
+    tex:SetWidth( icon )
+    tex:SetHeight( icon )
+    tex:SetPoint( "CENTER", b, "CENTER", 0, 0 )
+    -- 图标自带留白收掉一点（与宿主图标库同款做法）
+    pcall( tex.SetTexCoord, tex, 0.07, 0.93, 0.07, 0.93 )
+    local stamp = b:CreateTexture( nil, "OVERLAY" )
+    stamp:SetWidth( 12 )
+    stamp:SetHeight( 12 )
+    stamp:SetPoint( "TOPRIGHT", b, "TOPRIGHT", 1, -1 )
+    pcall( stamp.Hide, stamp )
+    local dot = b:CreateTexture( nil, "OVERLAY" )
+    pcall( dot.SetTexture, dot, "Interface\\Buttons\\WHITE8x8" )
+    dot:SetWidth( 7 )
+    dot:SetHeight( 7 )
+    dot:SetPoint( "BOTTOMRIGHT", b, "BOTTOMRIGHT", -1, 1 )
+    pcall( dot.Hide, dot )
+    local c = { btn = b, bg = bg, tex = tex, stamp = stamp, dot = dot, entry = nil }
+    -- ★脚本只在建池时设一次（数据靠 c.entry 现读）
+    b:SetScript( "OnClick", function() m.log.tile_click( c ) end )
+    b:SetScript( "OnEnter", function() m.log.tile_enter( c ) end )
+    b:SetScript( "OnLeave", function() m.log.tile_leave( c ) end )
+    tiles[ i ] = c
+  end
+  m.log.tiles = tiles
+end
+
+-- 画一格（`e == nil` = 这一格收起来；池子是复用的，**每一趟都要显式 Show/Hide**）
+m.log.tile_paint = function( c, e )
+  if e == nil then
+    c.entry = nil
+    pcall( c.btn.Hide, c.btn )
+    return
+  end
+  c.entry = e
+  local ic = e.icon
+  if ic == nil or ic == "" then
+    if e.ah then ic = m.LOG_STAMP_AH
+    elseif e.returned then ic = m.LOG_STAMP_RET
+    else ic = m.LOG_NOTE_ICON end
+  end
+  pcall( c.tex.SetTexture, c.tex, ic )
+  if e.ah then
+    pcall( c.stamp.SetTexture, c.stamp, m.LOG_STAMP_AH )
+    pcall( c.stamp.Show, c.stamp )
+  elseif e.returned then
+    pcall( c.stamp.SetTexture, c.stamp, m.LOG_STAMP_RET )
+    pcall( c.stamp.Show, c.stamp )
+  else
+    pcall( c.stamp.Hide, c.stamp )
+  end
+  -- 右下角色块：到付 = 橙 · 有钱 = 金 · 都没有 ⇒ 收起
+  if e.cod and e.cod > 0 then
+    pcall( c.dot.SetVertexColor, c.dot, 1.00, 0.55, 0.15, 1 )
+    pcall( c.dot.Show, c.dot )
+  elseif e.money and e.money > 0 then
+    pcall( c.dot.SetVertexColor, c.dot, 1.00, 0.82, 0.10, 1 )
+    pcall( c.dot.Show, c.dot )
+  else
+    pcall( c.dot.Hide, c.dot )
+  end
+  pcall( c.bg.SetVertexColor, c.bg, m.LOG_BG_RGB[ 1 ], m.LOG_BG_RGB[ 2 ], m.LOG_BG_RGB[ 3 ], 1 )
+  pcall( c.btn.Show, c.btn )
+end
+
+m.log.tile_enter = function( c )
+  pcall( c.bg.SetVertexColor, c.bg, m.LOG_BG_HOVER[ 1 ], m.LOG_BG_HOVER[ 2 ], m.LOG_BG_HOVER[ 3 ], 1 )
+  local e = c.entry
+  if e == nil then return end
+  m.log.tile_tip( c.btn, e )
+end
+
+m.log.tile_leave = function( c )
+  pcall( c.bg.SetVertexColor, c.bg, m.LOG_BG_RGB[ 1 ], m.LOG_BG_RGB[ 2 ], m.LOG_BG_RGB[ 3 ], 1 )
+  local tip = m.api.GameTooltip
+  if tip and tip.Hide then pcall( tip.Hide, tip ) end
+end
+
+-- tooltip = 这一封的全部信息 + 「点一下会做什么」（★每个方法都要把 tip 自己当第一个实参）
+m.log.tile_tip = function( owner, e )
+  local tip = m.api.GameTooltip
+  if not ( tip and tip.SetOwner ) then return end
+  pcall( tip.SetOwner, tip, owner, "ANCHOR_RIGHT" )
+  pcall( tip.ClearLines, tip )
+  local sent = ( m.current_log_type == "Sent" )
+  local who = e.participant
+  if who == nil or who == "" then who = L[ "LOG_TIP_NONE" ] end
+  pcall( tip.AddLine, tip, "|cffffd100" .. L[ sent and "LOG_TIP_SENT" or "LOG_TIP_RECEIVED" ] .. "：" .. who .. "|r" )
+  local tags = {}
+  if e.ah then tinsert( tags, L[ "LOG_TIP_LABEL_AH" ] ) end
+  if e.returned then tinsert( tags, L[ "LOG_TIP_LABEL_RETURNED" ] ) end
+  if e.gm then tinsert( tags, L[ "LOG_TIP_LABEL_GM" ] ) end
+  if getn( tags ) > 0 then
+    pcall( tip.AddLine, tip, table.concat( tags, " ｜ " ), 0.75, 0.75, 0.75 )
+  end
+  if e.subject and e.subject ~= "" then
+    pcall( tip.AddLine, tip, L[ "LOG_TIP_SUBJECT" ] .. "：" .. e.subject, 1, 1, 1 )
+  end
+  local item = e.item_name
+  if item == nil or item == "" then item = L[ "LOG_TIP_NONE" ] end
+  pcall( tip.AddLine, tip, L[ "LOG_TIP_ITEM" ] .. "：" .. item, 0.55, 0.85, 0.45 )
+  if e.money and e.money > 0 then
+    pcall( tip.AddLine, tip, L[ sent and "LOG_TIP_PAID" or "LOG_TIP_EARNED" ] .. "：" .. m.format_money( e.money ), 1, 0.82, 0.10 )
+  end
+  if e.cod and e.cod > 0 then
+    pcall( tip.AddLine, tip, L[ "LOG_TIP_COD" ] .. "：" .. m.format_money( e.cod ), 1, 0.55, 0.15 )
+  end
+  pcall( tip.AddLine, tip, L[ "LOG_TIP_TIME" ] .. "：" .. m.format_datetime( e.timestamp ), 0.7, 0.7, 0.7 )
+  pcall( tip.AddLine, tip, " " )
+  if who ~= L[ "LOG_TIP_NONE" ] then
+    pcall( tip.AddLine, tip, string.format( L[ "LOG_TIP_CLICK" ], who ), 0.55, 0.85, 0.45 )
+  else
+    pcall( tip.AddLine, tip, L[ "LOG_TIP_CLICK_NONE" ], 0.55, 0.85, 0.45 )
+  end
+  pcall( tip.Show, tip )
+end
+
+-- 点一格 = **切到写邮件页 + 把收件人填成对方**（对方为空 ⇒ 只切页 + 如实说一句）
+m.log.tile_click = function( c )
+  local e = c.entry
+  if e == nil then return end
+  local name = e.participant
+  -- ★先切页、再填名字：切页会触发一次 SendMailFrame_Update，顺序反了会被它擦掉
+  m.sendmail_show_send_tab()
+  if name == nil or name == "" then
+    m.info( L[ "LOG_FILL_NONE" ] )
+    return
+  end
+  local box = m.api.SendMailNameEditBox
+  if box == nil or type( box.SetText ) ~= "function" then
+    m.info( string.format( L[ "LOG_FILL_FAIL" ], name ) )
+    return
+  end
+  pcall( box.SetText, box, name )
+  if type( box.SetFocus ) == "function" then pcall( box.SetFocus, box ) end
+  m.info( string.format( L[ "LOG_FILL_OK" ], name, L[ m.current_log_type ] ) )
+end
+
 function EHMailTM.log.load()
   m.api.EHMailTMLogTitleText:SetText( L[ "Log" ] )
   m.api.MailFrameTab3:SetText( L[ "Log" ] )
 
-  local font_size = 11
-
-  for i = 1, 10 do
-    m.api[ "EHMailTMLogItem" .. i .. "Background" ]:SetVertexColor( .5, .5, .5, 0.6 )
-    m.api[ "EHMailTMLogItem" .. i .. "TimeStamp" ]:SetTextColor( 1, 1, 1, 1 )
-    m.api[ "EHMailTMLogItem" .. i .. "TimeStamp" ]:SetJustifyH( "LEFT" )
-    m.log.fontSet( m.api[ "EHMailTMLogItem" .. i .. "TimeStamp" ], font_size )
-    m.api[ "EHMailTMLogItem" .. i .. "Participant" ]:SetTextColor( 1, 1, 1, 1 )
-    m.api[ "EHMailTMLogItem" .. i .. "Participant" ]:SetJustifyH( "RIGHT" )
-    m.log.fontSet( m.api[ "EHMailTMLogItem" .. i .. "Participant" ], font_size )
-    m.api[ "EHMailTMLogItem" .. i .. "Subject" ]:SetJustifyH( "LEFT" )
-    m.log.fontSet( m.api[ "EHMailTMLogItem" .. i .. "Subject" ], font_size )
-    m.api[ "EHMailTMLogItem" .. i .. "Money" ]:SetTextColor( 1, 1, 1, 1 )
-    m.api[ "EHMailTMLogItem" .. i .. "Money" ]:SetJustifyH( "LEFT" )
-    m.log.fontSet( m.api[ "EHMailTMLogItem" .. i .. "Money" ], font_size )
-    m.api[ "EHMailTMLogItem" .. i .. "Status" ]:SetVertexColor( m.api.NORMAL_FONT_COLOR.r, m.api.NORMAL_FONT_COLOR.g, m.api.NORMAL_FONT_COLOR.b )
-    if i > 1 then
-      m.api[ "EHMailTMLogItem" .. i ]:SetPoint( "TOPLEFT", m.api[ "EHMailTMLogItem" .. i - 1 ], "BOTTOMLEFT", 0, -1 )
-    end
-  end
-  m.api.EHMailTMLogItem10Background:Hide()
+  -- ★0.3.14：日志页改成**小图标方格聚合展示**（池子建一次、脚本设一次；不再有 10 行文字行控件）
+  m.log.build_grid()
 
   m.api.EHMailTMLogStatusText:SetTextColor( 1, 1, 1, 1 )
-  m.api.EHMailTMLogStatusText:SetFont( "Fonts\\FRIZQT__.TTF", 10 )
+  -- ★0.3.14：日志页只剩这一行文字（格子里的都是贴图）⇒ 它继续走 0.3.3 定案的那条**字体链 + 读回自证**
+  --   （`m.log.fontSet` 因此仍是活的唯一写口；`SetFont(path, size)` 两参数可用那条证据照旧留在记忆体里）
+  m.log.fontSet( m.api.EHMailTMLogStatusText, 10 )
   m.api.EHMailTMLogScrollFrameScrollBar:SetValueStep( 1 )
   m.api.EHMailTMLogScrollFrameScrollBar:SetScript( "OnValueChanged", m.log.on_scroll_value_changed )
 
   m.api.EHMailTMLogScrollFrame:SetScript( "OnMouseWheel", function()
-    m.log.scroll( arg1 * 10 )
+    m.log.scroll( arg1 * 3 )
   end )
   m.api.EHMailTMLogScrollFrameScrollBarScrollUpButton:SetScript( "OnClick", function()
     m.api.PlaySound( "UChatScrollButton" );
-    m.log.scroll( 10 )
+    m.log.scroll( m.LOG_ROWS )
   end )
   m.api.EHMailTMLogScrollFrameScrollBarScrollDownButton:SetScript( "OnClick", function()
     m.api.PlaySound( "UChatScrollButton" );
-    m.log.scroll( -10 )
+    m.log.scroll( -m.LOG_ROWS )
   end )
 
   m.api.EHMailTMLogFiltersButton:SetText( L[ "Filters" ] )
@@ -3144,104 +4404,101 @@ function EHMailTM.log.populate( log_type, index )
   if not log then log = {} end
   local log_count = getn( log )
 
-  m.api.EHMailTMLogScrollFrameScrollBar:SetMinMaxValues( 0, math.max( 0, log_count - 10 ) )
+  -- ★0.3.14：**小图标方格**（聚合展示）—— 滚动/翻页单位从「10 行文字」改成「一格 = 一封、一页 = COLS*ROWS 封」
+  local cols, rows = m.LOG_COLS, m.LOG_ROWS
+  local row_count = math.ceil( log_count / cols )
+  local max_row = math.max( 0, row_count - rows )
+  local bar = m.api.EHMailTMLogScrollFrameScrollBar
+  bar:SetMinMaxValues( 0, max_row )
 
   if not index then
-    m.api.EHMailTMLogScrollFrameScrollBar:SetValue( log_count - 10 )
-    m.api.EHMailTMLogScrollFrameScrollBar:SetScript( "OnUpdate", function()
-      m.api.EHMailTMLogScrollFrameScrollBar:SetValue( log_count - 10 )
-      m.api.EHMailTMLogScrollFrameScrollBar:SetScript( "OnUpdate", nil )
+    index = max_row
+    bar:SetValue( index )
+    -- ★客户端会在我们之后自己再摆一次滚动条 ⇒ 下一拍补一次（老写法原样保留）
+    bar:SetScript( "OnUpdate", function()
+      bar:SetValue( index )
+      bar:SetScript( "OnUpdate", nil )
     end )
-
-    index = math.max( 0, log_count - 10 )
   end
+  index = math.floor( tonumber( index ) or 0 )
+  if index < 0 then index = 0 end
+  if index > max_row then index = max_row end
 
   -- 标题显示当前日志类型（已收到/已发送）
   m.api.EHMailTMLogTitleText:SetText( string.format( "%s %s", L[ m.current_log_type ], L[ "Log" ] ) )
-  m.api.EHMailTMLogStatusText:SetText( string.format( "显示%d-%d，总共%d", (index == 0 and log_count == 0) and index or index + 1,
-  math.min( log_count, index + 10 ), log_count ) )
+  local first = ( log_count == 0 ) and 0 or ( index * cols + 1 )
+  local last = math.min( log_count, ( index + rows ) * cols )
+  m.api.EHMailTMLogStatusText:SetText( string.format( L[ "LOG_STATUS" ], log_count, first, last ) )
 
-  for i = 1, 10 do
-    if log[ index + i ] then
-      local entry = log[ index + i ]
-
-      m.api[ "EHMailTMLogItem" .. i .. "IconTexture" ]:SetTexture( entry.icon or "Interface/Icons/INV_Misc_Note_01" )
-      m.api[ "EHMailTMLogItem" .. i .. "Icon" ].item = entry.item
-      m.api[ "EHMailTMLogItem" .. i .. "TimeStamp" ]:SetText( m.format_datetime( entry.timestamp ) )
-
-      local subj = entry.subject or ""
-      if entry.item_name and entry.item_name ~= "" and not string.find( subj, entry.item_name, 1, true ) then
-        subj = subj .. " - " .. entry.item_name
-      end
-      m.api[ "EHMailTMLogItem" .. i .. "Subject" ]:SetText( subj )
-
-      -- 正文全文（含竞得邮件的花费金额）挂到整行 tooltip 上
-      local row = m.api[ "EHMailTMLogItem" .. i ]
-      row.entry = entry
-      row:EnableMouse( true )
-      row:SetScript( "OnEnter", function( self )
-        local e = self.entry
-        m.api.GameTooltip:ClearLines()
-        m.api.GameTooltip:SetOwner( self, "ANCHOR_RIGHT" )
-        if e.item_name and e.item_name ~= "" then
-          m.api.GameTooltip:AddLine( e.item_name, "", 1, 1, 0 )
-        end
-        if e.subject and e.subject ~= "" then
-          m.api.GameTooltip:AddLine( e.subject, "", 0.7, 0.7, 0.7 )
-        end
-        if e.money and e.money > 0 then
-          m.api.GameTooltip:AddLine( L[ "Money received" ] .. ": " .. m.format_money( e.money ), "", 0, 1, 0 )
-        end
-        if e.cod and e.cod > 0 then
-          m.api.GameTooltip:AddLine( L[ "COD" ] .. ": " .. m.format_money( e.cod ), "", 0, 1, 0 )
-        end
-        -- 正文里的物品链接/颜色码要剥掉，否则 tooltip 会显示成方块
-        if e.body and e.body ~= "" then
-          local body = string.gsub( e.body, "|c%x%x%x%x%x%x%x%x", "" )
-          body = string.gsub( body, "|r", "" )
-          body = string.gsub( body, "|H[^|]*|h", "" )
-          body = string.gsub( body, "|h", "" )
-          body = string.gsub( body, "%s+$", "" )
-          if body ~= "" then
-            m.api.GameTooltip:AddLine( "" )
-            m.api.GameTooltip:AddLine( body, "", 1, 1, 1, true )
-          end
-        end
-        m.api.GameTooltip:Show()
-      end )
-      row:SetScript( "OnLeave", function() m.api.GameTooltip:Hide() end )
-
-      m.api[ "EHMailTMLogItem" .. i .. "Status" ]:SetTexture( "" )
-      if entry.ah then
-        m.api[ "EHMailTMLogItem" .. i .. "Participant" ]:SetText( "" )
-        m.api[ "EHMailTMLogItem" .. i .. "Status" ]:SetTexture( "Interface\\AddOns\\EH_Mail\\EHMailTM-AH.blp" )
-        m.api[ "EHMailTMLogItem" .. i .. "Status" ]:SetPoint( "TOPRIGHT", 4, -10 )
-      else
-        m.api[ "EHMailTMLogItem" .. i .. "Participant" ]:SetText( entry.participant )
-      end
-      if entry.returned then
-        m.api[ "EHMailTMLogItem" .. i .. "Status" ]:SetTexture( "Interface\\AddOns\\EH_Mail\\EHMailTM-RetArrow.blp" )
-        local w = m.api[ "EHMailTMLogItem" .. i .. "Participant" ]:GetStringWidth()
-        m.api[ "EHMailTMLogItem" .. i .. "Status" ]:SetPoint( "TOPRIGHT", -w + 4, -9 )
-      end
-
-      if entry.money and entry.money > 0 then
-        local cod = (entry.cod and entry.cod > 0) and "COD: " or " "
-        m.api[ "EHMailTMLogItem" .. i .. "Money" ]:SetText( cod .. m.format_money( entry.money ) )
-      elseif entry.cod then
-        m.api[ "EHMailTMLogItem" .. i .. "Money" ]:SetText( "COD" .. (entry.cod > 1 and (": " .. m.format_money( entry.cod )) or "") )
-      elseif entry.ah == "Won" then
-        -- 竞得邮件：旧存档没存金额也解析不了（正文当时没落档），只能挂 tooltip 看原文
-        m.api[ "EHMailTMLogItem" .. i .. "Money" ]:SetText( L[ "Pay" ] .. ": ?" )
-      else
-        m.api[ "EHMailTMLogItem" .. i .. "Money" ]:SetText( "" )
-      end
-
-      m.api[ "EHMailTMLogItem" .. i ]:Show();
-    else
-      m.api[ "EHMailTMLogItem" .. i ]:Hide();
+  -- 铺格子：池子复用 ⇒ **每一趟都显式 Show/Hide**（`log[...]` 为 nil 就是这一格该收起）
+  m.log.build_grid()
+  local tiles = m.log.tiles
+  if tiles then
+    local per = cols * rows
+    for i = 1, per do
+      local c = tiles[ i ]
+      if c then m.log.tile_paint( c, log[ index * cols + i ] ) end
     end
   end
+end
+
+-- ============================================================================
+-- 0.3.15 关邮箱 = **附件选择整体作废**（背包里的「附件锁定」必须一起清干净）
+--   用户 2026-10-10 定：「在邮箱关闭之后. 要做好背包内附件锁定清理的流程.」
+--   ★★为什么关邮箱必须清理 —— 两处外观都由这份选择列表派生，而它们**谁都不会自己复位**：
+--     ① **背包整合（EH_Bag）那层「附件」遮盖 + 备注文字**：它的判定口只问 `multi_has(包, 格)`
+--        ⇒ 列表不空 ⇒ 关掉邮箱之后遮盖照旧画在背包格上（它的刷新要人来喊）；
+--     ② **客户端自己的背包格**：`hook.GetContainerItemInfo` 给选中格伪报 `locked`（= 选中反馈），
+--        而客户端是**画的那一拍**读它 —— `ContainerFrame_Update` 里
+--        `SetItemButtonDesaturated( itemButton, locked, 0.5, 0.5, 0.5 )` 把图标压灰
+--        ⇒ 关邮箱之后没有任何事件让它重画，最后一次画上去的灰化就留在屏上。
+--   ⇒ 唯一清理口 `m.multi_release( why )`：**先清数据、再清外观**（★顺序即判据 ——
+--     反过来的话，重画那一刻列表还在，遮盖会被照旧算出来并画上）；全程**纯数据**
+--     （不碰光标 / 不碰客户端寄件栏 / 一件物品都不动 —— 0.3.11 的口径一个字节没改）。
+--   ★口径 = **整体作废**（用户选定）：关掉邮箱 = 这次选附件的事就算了，重开邮箱从零开始选。
+--     要「手动清但不关邮箱」照旧走 `/tm 附件 清` 与右键计数框（同一个 `m.multi_clear` 家族）。
+-- ============================================================================
+
+-- 让背包格子重画一次（清掉客户端最后一次画上去的「锁定 / 灰化」外观）。返回真调过的帧数。
+--   ★两条腿各自 fail-open：
+--     ① 背包整合在场 ⇒ 客户端那批原生容器帧被它藏了（它的 `ContainerFrame_Update` 包装只 Hide），
+--        外观长在它自己那批按钮上 ⇒ 由它自己的刷新口管（`m.multi_tell_bag` 已经喊过它）；
+--     ② 客户端自己的容器帧 ⇒ 调它的 FrameXML 更新口 `ContainerFrame_Update(帧)` 重读一遍
+--        （这一刻 `locked` 已经不再伪报 ⇒ 灰化当场消失）。
+--   ★拿不到那个口 / 某个帧不存在 ⇒ **一个字节都不碰**（绝不硬造全局、绝不写别人的帧）——
+--     真机上「重画不了」只是外观留到下一次背包刷新，绝不是丢东西。
+m.bag_repaint = function()
+  local upd = m.api.ContainerFrame_Update
+  if type( upd ) ~= "function" then return 0 end
+  local n = 0
+  for i = 1, 12 do
+    local fr = rawget( _G, "ContainerFrame" .. i )
+    if fr then
+      if pcall( upd, fr ) then n = n + 1 end
+    end
+  end
+  return n
+end
+
+-- ★唯一清理口（关邮箱走它；将来任何「整体作废」也必须走它，绝不另写一份）
+--   返回清掉的条数；`why` 只进诊断读数（给人看「这一次是谁清的」）。
+m.multi_release = function( why )
+  local n = getn( m.multi_list )
+  -- ① 数据：整体作废
+  m.multi_list = {}
+  -- ② 投影：抹掉附件格（邮箱已关时它只做开头那一步「通知背包侧」—— 那正是我们要的）
+  m.multi_project()
+  -- ③ 外观：让客户端自己的背包格重画一次
+  local frames = m.bag_repaint()
+  -- ④ 取证（`/tm 附件 状态` 打出来；纯读、不落存档）
+  m.release_n = n
+  m.release_why = why or ""
+  m.release_frames = frames
+  -- ⑤ 出声：只有真的清掉了东西才说（本来就是空的 ⇒ 一声不出，不刷屏）
+  if n > 0 then
+    m.info( string.format( L[ "REL_CLOSED" ], n ) )
+  end
+  return n
 end
 
 -- ★移植适配：pfUI 美化已整体剔除（原 pfui-skin.lua 文件已删），本版只保留原版 UI 分支
@@ -3261,7 +4518,8 @@ function EHMailTM.filter( t, f, extract_field )
 end
 
 function EHMailTM.info( message )
-  m.api.DEFAULT_CHAT_FRAME:AddMessage( string.format( "|cffabd473EHMailTM|r: %s", message ) )
+  -- ★0.3.17：前缀 = 插件目录名（见文件头的 `m.ADDON_NAME`），不再是内部表名 `EHMailTM`
+  m.api.DEFAULT_CHAT_FRAME:AddMessage( string.format( "|cff66ccff[%s]|r %s", m.ADDON_NAME, message ) )
 end
 
 function EHMailTM.dump( o )
@@ -3298,7 +4556,8 @@ function EHMailTM.debug( ... )
       end
     end
 
-    m.api.DEFAULT_CHAT_FRAME:AddMessage( string.format( "|cffabd473EHMailTM|r: %s", messages ) )
+    -- ★0.3.17：调试行同样走统一前缀（内部表名只许出现在代码里）
+    m.api.DEFAULT_CHAT_FRAME:AddMessage( string.format( "|cff66ccff[%s]|r %s", m.ADDON_NAME, messages ) )
   end
 end
 

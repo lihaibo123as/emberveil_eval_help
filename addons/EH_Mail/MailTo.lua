@@ -131,7 +131,10 @@ MailToDropDownMenu:SetScript("OnClick", function()
 	--   ★ 那 5 个位置字段已删：传了 anchorName 时它们一个都不生效，留着只会误导。
 	local menu = MailTo_MenuEnsure()
 	if not menu then
-		print("|cffff4040EHMailTM: 收件人下拉建不出来（UIDropDownMenuTemplate 拿不到）|r")
+		-- ★0.3.17：前缀 = 插件目录名（唯一来源 = `EHMailTM.ADDON_NAME`，见 EHMailTM.lua 文件头）；
+		--   内部表名 `EHMailTM` 只许出现在代码里、绝不当聊天前缀（子插件开发规范：命名统一 EH_xxx）。
+		local tag = ( type( EHMailTM ) == "table" and EHMailTM.ADDON_NAME ) or "EH_Mail"
+		print( "|cffff4040[" .. tag .. "] 收件人下拉建不出来（UIDropDownMenuTemplate 拿不到）|r" )
 		return
 	end
 	if SendMailNameEditBox then

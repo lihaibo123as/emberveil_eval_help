@@ -49,7 +49,7 @@ local B = {}
 _G.EH_BAG = B
 
 -- 构建标记（唯一来源）：改本文件顺手 +1，用于「客户端跑的是哪一份」取证
-local BAG_BUILD = "0.3.42"
+local BAG_BUILD = "0.3.48"
 
 local function strVal(v)
   return tostring(v)
@@ -206,6 +206,7 @@ local BAG_T = {
     MENU_BG = "背景透明度",
 MENU_CGAP = "格子间距",
     MENU_DROP = "右键直投窗口",
+    MAIL_MARK = "附件",
     DROP_ON = "右键直投窗口：开（拍卖行「出售」页 / 写邮件页 / 交易窗 开着时，右键背包物品即放入，不必拖）",
     DROP_OFF = "右键直投窗口：关（右键照旧只使用物品）",
     DROP_USAGE = "（开关：设置菜单这一行，或 /ebag drop on|off；只读探针 = /ebag drop）",
@@ -384,6 +385,7 @@ MENU_CGAP = "格子间距",
     MENU_BG = "Background opacity",
 MENU_CGAP = "Slot spacing",
     MENU_DROP = "Right-click into window",
+    MAIL_MARK = "Mail",
     DROP_ON = "Right-click into window: ON (with the auction 'Sell' tab / the write-mail page / the trade window open, right-clicking a bag item puts it there - no dragging)",
     DROP_OFF = "Right-click into window: OFF (right-click just uses the item again)",
     DROP_USAGE = " (toggle: this menu row, or /ebag drop on|off; read-only probe = /ebag drop)",
@@ -562,6 +564,7 @@ MENU_CGAP = "Slot spacing",
     MENU_BG = "Прозрачность фона",
 MENU_CGAP = "Интервал ячеек",
     MENU_DROP = "ПКМ в окно",
+    MAIL_MARK = "Почта",
     DROP_ON = "ПКМ в окно: ВКЛ (при открытой вкладке «Продажа» аукциона / странице письма / окне обмена правый клик по предмету кладёт его туда — без перетаскивания)",
     DROP_OFF = "ПКМ в окно: ВЫКЛ (правый клик снова только использует предмет)",
     DROP_USAGE = " (переключатель: эта строка меню или /ebag drop on|off; только чтение = /ebag drop)",
@@ -2251,6 +2254,68 @@ end
 
 -- 物品格子：优先继承客户端模板（那样悬停/冷却/品质色都是原生的），
 -- 模板不存在或不认（pcall 失败）就自建一套等价外观 —— 两条路最终都写进同一组句柄。
+-- ★★★0.3.48：邮箱助手（EH_Mail）「已选进附件列表」的**遮盖层 + 备注文字**
+--   用户 2026-10-10 定：「邮箱组件在插件有子插件背包整合存在的情况下. 邮件添加物品列表的时候
+--   将这个物品在背包内的图标上添加个半透明层备注文字, 附件遮盖」
+--   ★三个唯一：判定口 `B.mailListOn`（只读助手的全局表）· 绘制口 `B.mailMarkPaint`（**只 Show/Hide**，
+--     几何一律在 `B.layout` 里一次算好）· 刷新口 `B.mailMarkRefresh`（助手改完列表后由它调，见文末桥）。
+--   ★★判定口与 0.3.47 那个「右键直投让位」口 `B.mailAddonOn` **故意分开**（问的是两件事）：
+--     让位要求「助手**真的接管了** `UseContainerItem`」（那一拍就靠那个全局，判错会把物品用掉）；
+--     这里只是问一句「它的选择列表里有没有这一格」⇒ 只要表在、`multi_has` 是函数就够。
+--   ★只读它的全局表；`EVAL_HELP_CONFIG` / `EVAL_HELP_CHAR` 命中仍 0 处（记忆体分离铁律）。
+B.MAIL_MARK_A = 0.55          -- 遮盖层的半透明度（唯一来源）
+B.mailListOn = function(bag, slot)
+  if type(bag) ~= "number" or type(slot) ~= "number" then return false end
+  local t = rawget(_G, B.MAIL_ADDON_G)
+  if type(t) ~= "table" then return false end
+  local f = t.multi_has
+  if type(f) ~= "function" then return false end
+  -- 助手那边的 multi_has(bag, slot) 是**纯读**（只遍历它自己的列表）⇒ 这里不会产生任何副作用
+  local ok, v = pcall(f, bag, slot)
+  return (ok and v == true)
+end
+
+-- 唯一绘制口：这一格要不要盖「附件」说明层（拿不到 rec = 空格 ⇒ 一律收起）
+B.mailMarkPaint = function(btn, rec)
+  if isObj(btn) ~= true then return false end
+  local mk, tx = btn.ehMark, btn.ehMarkText
+  if isObj(mk) ~= true and isObj(tx) ~= true then return false end
+  local on = false
+  if rec ~= nil then
+    on = B.mailListOn(btn.ehBag, btn.ehSlot_)
+  end
+  if on then
+    if isObj(mk) then pcall(mk.Show, mk) end
+    if isObj(tx) then pcall(tx.Show, tx) end
+  else
+    if isObj(mk) then pcall(mk.Hide, mk) end
+    if isObj(tx) then pcall(tx.Hide, tx) end
+  end
+  return on
+end
+
+-- ★★刷新口（桥）：助手（EH_Mail）改完选择列表后调 `EH_BAG.mailMarkRefresh()`（见它那边 `m.multi_tell_bag`）。
+--   只重画**这一层**（逐格问一句 + Show/Hide）—— 不整窗重刷：列表变动是**高频**动作（右键一件就是一次）。
+--   ★窗口没开 / 拿不到活动格子 ⇒ 如实返回 false（一个字节都不动）；下一次 refreshAll 会自然画对。
+B.mailMarkRefresh = function()
+  if B.ui.frame == nil then return false end
+  local bl = B.ui.btnList
+  if type(bl) ~= "table" then return false end
+  local gen = B.ui.liveGen
+  local i
+  for i = 1, table.getn(bl) do
+    local bb = bl[i]
+    if isObj(bb) and bb.ehLive == gen and (isObj(bb.ehMark) or isObj(bb.ehMarkText)) then
+      local rec = nil
+      if type(bb.ehBag) == "number" and type(bb.ehSlot_) == "number" then
+        rec = B.itemAt(bb.ehBag, bb.ehSlot_)
+      end
+      B.mailMarkPaint(bb, rec)
+    end
+  end
+  return true
+end
+
 local function newItemButton(parent, bag, slot)
   local name = nil
   if bag >= 0 then
@@ -2359,6 +2424,31 @@ local function newItemButton(parent, bag, slot)
   -- ★0.3.31e：建仓就把乘数通道钉成 1（顶点 α 0 保持全透明；写 0 反而让「初始打开读回 1」与「稳态读回写值」对不上）
   pcall(glow.SetAlpha, glow, 1)
   btn.ehGlow = glow
+  -- ★★★0.3.48：邮箱助手的「附件」遮盖层 + 备注文字（用户点名要的「半透明层备注文字, 附件遮盖」）
+  --   · 层 = **BORDER**（图标就在 BORDER —— 模板图标与我们自建图标都建在它之前 ⇒ 同层里后建的画在上面；
+  --     格框在 ARTWORK ⇒ 遮盖层**盖住图标、让出格框**，屏上仍是「一圈品质框 + 被压暗的图标 + 两个字」）。
+  --   · 形状 = **与格框同一张轮廓**（`B.SLOT_FILL` 圆角实心，格子 × `B.SLOT_K`）——
+  --     拿正方形去盖就会像 0.3.16 那次一样从圆角外露出四个方角（判据同款：边长 = 格子 × B.SLOT_K）。
+  --   · 建出来就是**收起**的（真值每拍由 `B.mailMarkPaint` 写；助手不在场时永远收起 = 零观感变化）。
+  local mark = btn:CreateTexture(nil, "BORDER")
+  mark:SetWidth((B.cfg().cell or DEF.cell) * B.SLOT_K)
+  mark:SetHeight((B.cfg().cell or DEF.cell) * B.SLOT_K)
+  mark:SetPoint("CENTER", btn, "CENTER", 0, 0)
+  pcall(mark.SetTexture, mark, B.SLOT_FILL)
+  pcall(mark.SetVertexColor, mark, 0.02, 0.02, 0.02, B.MAIL_MARK_A)
+  -- ★半透明度走**顶点色第 4 参**，同时把 `SetAlpha` 那个乘数**显式钉成 1**（0.3.27/0.3.31e 的配方）：
+  --   本客户端两个通道相乘、且落地时机不同 ⇒ 只写一个的话，另一条路的默认值会把观感带偏。
+  pcall(mark.SetAlpha, mark, 1)
+  pcall(mark.Hide, mark)
+  btn.ehMark = mark
+  local markText = font(btn)
+  markText:SetPoint("CENTER", btn, "CENTER", 0, 0)
+  pcall(markText.SetJustifyH, markText, "CENTER")
+  pcall(markText.SetJustifyV, markText, "MIDDLE")
+  pcall(markText.SetText, markText, L("MAIL_MARK"))
+  pcall(markText.SetTextColor, markText, 1, 0.92, 0.55)
+  pcall(markText.Hide, markText)
+  btn.ehMarkText = markText
   -- 句柄分派（显式两分支，绝不 or 回读）
   if ownIcon ~= nil then
     btn.ehIcon = ownIcon
@@ -4977,6 +5067,26 @@ B.dropDo = function(rec, clickFn, arg, name)
   return "done"
 end
 
+-- ★★★0.3.47：**邮箱助手（EH_Mail）在场 ⇒ 「写邮件页」那一支整条让位**（用户 2026-10-10 定：
+--   「在和子插件:邮箱助手存在的情况下针对性的禁用②写邮件页分支…应为已经由邮箱助手自身完成的功能」）。
+--   · 助手自己已经把「邮箱开着时右键/使用背包物品」接管成**加进它的附件选择列表**
+--     （它的 `hook.PickupContainerItem` / `hook.UseContainerItem`）⇒ 本插件这一支**一个字节都不做**，
+--     返回 `"none"` 让调用方走**原样那条**（`useSlot` ⇒ 全局 `UseContainerItem` ⇒ 助手的 hook ⇒ 进它的列表）。
+--   · ★★★**判据不是「它的全局表在」，而是「它真的接管了 `UseContainerItem`」**：让位之后那一拍靠的就是那个全局；
+--     若助手并没有接管它，这一下会变成**把物品用掉**（开着邮箱把药水喝了）—— 比投不进去更糟。
+--     ⇒ 表不在 / hook 没挂上 ⇒ **照旧走本插件自己的物理投递**（老路一字不改，fail-safe）。
+--   · ★只读它的**全局表**；**绝不读宿主配置**（记忆子插件分离铁律：EH_Bag 不碰 `EVAL_HELP_CONFIG`）。
+B.MAIL_ADDON_G = "EHMailTM"
+B.mailAddonOn = function()
+  local t = rawget(_G, B.MAIL_ADDON_G)
+  if type(t) ~= "table" then return false end
+  local hooks = t.hooks
+  if type(hooks) ~= "table" then return false end
+  local fn = hooks.UseContainerItem
+  if type(fn) ~= "function" then return false end
+  return rawget(_G, "UseContainerItem") == fn
+end
+
 -- ★★★唯一入口：右键落在背包格上时问一句「这一下该不该投进开着的那扇窗」
 B.windowDrop = function(rec, shiftHeld, ctrlHeld)
   if rec == nil then return "none" end
@@ -5001,6 +5111,13 @@ B.windowDrop = function(rec, shiftHeld, ctrlHeld)
   -- ② 写邮件页（原生要求 MailFrame **与** SendMailFrame 都在；只看 MailFrame = 收件箱页也会投 ⇒ 那是老插件的错法）
   local mail = B.dropFrame("MailFrame")
   if B.dropShown(mail) == true then
+    -- ★★★0.3.47 让位：邮箱助手在场（且**真的接管了 `UseContainerItem`**）⇒ 这一支整条不做，
+    --   返回 "none" 交给调用方走原样那条 ⇒ `useSlot` ⇒ 助手的 hook ⇒ 加进它的附件选择列表。
+    --   ★只进取证环、**不在聊天里出声**（助手自己会报「已加入选择列表…」，两处都报就是刷屏）。
+    if B.mailAddonOn() == true then
+      B.dropAdd("邮件附件栏：邮箱助手在场 ⇒ 整支让位（交给它自己的 UseContainerItem 处理）")
+      return "none"
+    end
     if B.dropShown(B.dropFrame("SendMailFrame")) ~= true then
       B.dropNote(L("DROP_BLOCK_MAIL"))
       return "skip"
@@ -6494,6 +6611,12 @@ function B.layout()
             pcall(btn.ehGlow.SetWidth, btn.ehGlow, cell * B.SLOT_K)
             pcall(btn.ehGlow.SetHeight, btn.ehGlow, cell * B.SLOT_K)
           end
+          -- ★0.3.48：邮箱助手的「附件」遮盖层走**同一把尺子**（格子 × B.SLOT_K，与格框/底色同轮廓）——
+          --   漏了它就会像 0.3.20 的辉光那样「换缩放后比格框大一圈」（默认 80% 档下大 25%）。
+          if isObj(btn.ehMark) then
+            pcall(btn.ehMark.SetWidth, btn.ehMark, cell * B.SLOT_K)
+            pcall(btn.ehMark.SetHeight, btn.ehMark, cell * B.SLOT_K)
+          end
         end
         -- ★图标：居中 + cell × B.ICON_K（只在格子边长变了才重摆 —— 别每拍发 4 个 Set*）
         if isObj(btn.ehIcon) and btn.ehIconK ~= cell then
@@ -7153,6 +7276,8 @@ local function paintButton(btn, rec)
     end
     -- ★空格也要走冷却口：物品被吃掉/挪走之后，那一圈转圈必须**当场收掉**
     cdPaint(btn, rec)
+    -- ★0.3.48：空格一律收起「附件」遮盖层（用户把物品挪走后，标记不许留在空格上）
+    B.mailMarkPaint(btn, nil)
     return
   end
   if isObj(btn.ehIcon) then pcall(btn.ehIcon.SetTexture, btn.ehIcon, rec.texture) end
@@ -7211,6 +7336,8 @@ local function paintButton(btn, rec)
   end
   -- ★0.3.18：冷却**每格都走同一个口**（含空格 —— 见 cdPaint 上方长注释）
   cdPaint(btn, rec)
+  -- ★0.3.48：邮箱助手（EH_Mail）的「附件」遮盖层（这一格正躺在它的选择列表里才显示）
+  B.mailMarkPaint(btn, rec)
 end
 
 -- ★★★0.3.19：只重画**一格**（格子悬停高亮用）—— 走与 `refreshBag` **同一个绘制口** `paintButton`。
