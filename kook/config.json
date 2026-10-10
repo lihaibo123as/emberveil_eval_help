@@ -98,6 +98,15 @@
   "_pack_dir说明": "打包产物目录（与 tmp/pack_subaddons.ps1 的输出目录一致）。可用 --dir 覆盖。",
   "pack_dir": "E:\\soft\\game\\eb\\Azeroth\\Binaries\\Win64\\Games\\Emberveil\\live\\Azeroth\\Interface\\AddOns",
 
+  "_plugin_links说明": "插件名 → **插件详情页**（**二级兜底**用）。★主口径 = **KOOK 内部**：公告里插件名默认内联链接到**该插件在「插件发布」频道里的详情帖**（`releases.json` 里含这个插件的最近一条未删帖）—— 用户 2026-10-10 澄清：「**超链接是内联；链接跳转的是 KOOK 内部的插件发布详情**」。本表**只在某插件完全没发过帖**时才生效。★只写实测 200 的：Emberveil 平台 `https://emberveil.org/wiki/addons/<slug>`（2026-10-10 逐条 curl：`addon` / `evalhelp-eh-bag` / `evalhelp-eh-damage` / `evalhelp-eh-dps` / `evalhelp-eh-debugbox` = 200；`evalhelp-eh-mail` = 404，平台条目仍是草稿 ⇒ 故意不配）；都没有 ⇒ 纯文字，绝不编链接。",
+  "plugin_links": {
+    "EvalHelp": "https://emberveil.org/wiki/addons/addon",
+    "EH_Bag": "https://emberveil.org/wiki/addons/evalhelp-eh-bag",
+    "EH_Damage": "https://emberveil.org/wiki/addons/evalhelp-eh-damage",
+    "EH_DPS": "https://emberveil.org/wiki/addons/evalhelp-eh-dps",
+    "EH_DebugBox": "https://emberveil.org/wiki/addons/evalhelp-eh-debugbox"
+  },
+
   "_assets说明": "versioned = 只发带完整版本号的包（用户 2026-10-09 定，固定名那份不发）；both = 连固定名包一起发。",
   "assets": "versioned",
 

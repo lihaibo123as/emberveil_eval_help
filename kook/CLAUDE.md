@@ -140,6 +140,9 @@ cmd /c "node kook\kook_publish.js --thread-view <帖子id>"
 cmd /c "node kook\kook_publish.js --dup-audit"                 # 帖子列表 + 查重结论（= --thread-list）
 cmd /c "node kook\kook_publish.js --dup-prune"                 # 只看「待删清单」（不发请求）
 cmd /c "node kook\kook_publish.js --dup-prune --send"          # 真删（不可恢复；清单须与上一条逐条相同）
+# 7) ★本版更新公告（发到「公告与通知」；用户 2026-10-10 定 —— **发完帖接着发这一条**，顺序不许反）
+cmd /c "node kook\kook_guide.js --update-announce"            # 演练：只打印正文（零请求）
+cmd /c "node kook\kook_guide.js --update-announce --send"     # 真发（同版本重跑 = 原地更新，不重复发帖）
 ```
 
 - ★本机沙箱怪癖：PowerShell 直接 `node kook\kook_publish.js` 会被拒（`node.exe … Access is denied`）⇒ **一律 `cmd /c "node …"`**；长任务/大输出**重定向到文件再读**（`cmd /c` 的输出直接接 `| Select-Object` 也会被拒）。
@@ -161,11 +164,12 @@ cmd /c "node kook\kook_publish.js --dup-prune --send"          # 真删（不可
 | --- | --- | --- |
 | 新人欢迎词 | **事件驱动**：官方事件 `extra.type = "joined_guild"`（body `{user_id, joined_at}`）经 **WebSocket** 收 ⇒ 发到欢迎大厅（模板里 `{user}` 换成 `(met)id(met)`） | `doListen()` / `doWelcome()` |
 | 公告维护 | `--announce [--send]`：首次 `message/create` 存 msg_id，之后**原地 `message/update`** + `message/pin` 置顶（不刷屏、不重发） | `doAnnounce()` |
+| **本版更新公告** | `--update-announce [--version <版本>] [--send]`：**每版一条**更新通知发到「公告与通知」（正文 = `kook/guide/update.md` + `kook/notes/<版本>.md`；**release 第 10 步的收尾**） | `doUpdateAnnounce()` / `updateNoticeBody()` |
 | **频道说明（怎么提建议）** | `--topic [--channel <id>] [--send] [--force]`：把 `kook/guide/feedback.md` 写进频道**简介 `topic`**（`POST /channel/update`）—— 默认目标 = 「建议反馈」 | `doTopic()` / `feedbackTopicBody()` |
 | 建议 → 优化队列 | ① `--listen` 收到**建议反馈频道**的玩家消息**实时入队**；② `--scan` 回扫最近 50 条补齐（`message/list`） | `enqueue()` / `doScan()` |
 | AI 汇总 | 队列落两份：`kook/queue/feedback.json`（账本：msg_id 去重 + `status` + 自动标签）· `kook/queue/INBOX.md`（**AI 直接读**：状态分组 + 标签统计 + 四条处理指引） | `renderInbox()` / `tagOf()` |
 
-- 文案与状态：`kook/guide/welcome.md` · `kook/guide/announce.md` · `kook/state/guide.json`（公告 msg_id · 已欢迎成员 · WS 的 `max_sn`/`session_id`）。
+- 文案与状态：`kook/guide/welcome.md` · `kook/guide/announce.md` · `kook/guide/update.md`（本版更新公告模板）· `kook/state/guide.json`（公告 msg_id · **各版更新公告 msg_id** · 已欢迎成员 · WS 的 `max_sn`/`session_id`）。
 - ★★**公告文案的两条口径**（用户 2026-10-09 追加「**这个能力加入公告,修辞美化一下**」）：
   ① **第 ⑤ 段必须把「建议 → 自动汇总 → AI 归并同主题 → 排期 → 随版本落地 → 发版逐条对账」这条能力讲出来**（玩家视角的一句话链，末尾给「怎么写建议一次命中」的提示）；★**是修辞美化、不是罗列机制名**（别写成「机器人调用 message/list 入队」这种内部话）。
   ② **版本行靠模板占位符 `{version_line}`** 插在末尾说明块里（`announceBody()` 的替换；模板没写占位符就退回「追加在最后」的向后兼容路径）—— 版本号**现读** `EvalHelp.toc` + 各子插件 toc，**不许写死**。
@@ -175,6 +179,12 @@ cmd /c "node kook\kook_publish.js --dup-prune --send"          # 真删（不可
   ② **幂等**：与现有 `topic` 逐字一致（trim + CRLF 归一后比）⇒ **跳过写入**，要强写加 `--force`；判据 = 连跑两次，第二次只打印「与现有一致 ⇒ 跳过写入」。
   ③ **写完回读自证**：`channel/view` 读回不一致（服务端截断/改写）⇒ **报错 exit 3**，绝不假装成功。
 - ★**官方事实**（`01` §3.4）：`topic` 只能经 `channel/update` 改（**创建时设不了**），**仅文字频道（type=1）有效** ⇒ 脚本先 `channel/view` 判类型，非 type=1 **一个字节都不写**；读 = `channel/view?target_id=`（也可从 `guild/view.channels[]` 一次拿全）；★脚本自定上限 **`TOPIC_MAX = 200`**（官方**未文档化**长度限制）⇒ 超了要求先精简文案、不硬写。`--check` 会**现读现比**并点名「与模板一致 ✅ / ★不一致 / 还没写」，修好只要一条 `--topic --send`。
+- ★★★**本版更新公告（`--update-announce`）四条口径**（用户 2026-10-10 定：「**在每次 release 完成之后，对 kook 新插件发布之后，需要再在公告通知内发布对应插件更新信息**」）：
+  ① **它是 release 第 10 步的收尾**：`kook_publish.js --send` 发完帖 ⇒ **接着**发这条更新公告（发帖脚本结尾会打印这两条命令）；**顺序不许反** —— 正文里的「下载 · 逐条说明」链接指向**刚发出的帖子**。
+  ② **与常青引导公告是两条不同的消息**（`--announce` 只管常青那条：原地更新 + 置顶）：`--update-announce` **每版一条、不置顶**（置顶位留给常青公告）；记账也分两处 —— `state.announce_msg_id` vs **`state.update_announce[<版本>]`**。
+  ③ **正文单一来源** = `kook/guide/update.md` 模板 + **`kook/notes/<版本>.md` 原文**（与 KOOK 发布帖同一份对外概要 ⇒ 绝不另写一份，字数上限 `UPDATE_NOTES_MAX=1800` 超出截到段落边界并指路「插件发布」）；「本版有变化的插件 / 本版未变动」两行从 **`state/releases.json[<版本>]` 的 `threads[]`（真发过帖的）与 `skipped[]`（版本没变、按规范没发的）现读**，没有该版记录就如实写「见帖子」。
+  ④ **幂等 + 回读自证**：同一版本重跑 = `message/update` **原地更新**（**绝不重复发帖**）；发完 `message/view` 回读比对，不一致**如实报**、不假装成功。补发历史版本 = `--version <版本>`（正文按那版现读，链接取 `releases.json` 里该版的主插件帖）。
+  ⑤ ⑥ **通知类消息的正文结构 / 链接口径（内联超链接 · `#频道` · 插件名→KOOK 详情帖）/ 判据 ⇒ ★唯一正文 = §九·补二「通知（公告与通知）」**（本节不复述 —— 用户 2026-10-10 定「**以上流程加入 kook 通知记忆体**」，两处并存 = 必然漂移）。
 - **常驻** = `kook/start_guide.cmd`（双击即跑，日志追加 `kook/state/guide.log`；开机自启 = 快捷方式放 `shell:startup` 或任务计划程序）。
 - ★★★**state 文件必须「读-改-写」**（2026-10-09 真机踩到）：监听进程常驻、每个事件都写 `max_sn`，而公告/欢迎是**另一个进程**写同一文件 ⇒ 直接写内存快照会**覆盖对方的 `announce_msg_id`**（实测：公告发成功、账本里却没有 ⇒ 下次发布会**重复新建一条公告**）⇒ 唯一写口 = `saveStatePatch()`（load → merge → save），**绝不再 `saveState(内存快照)`**。判据 = 监听运行中发公告，事后 `--check` 仍能报出 `公告 msg_id`。
 - ★实测：gateway `?compress=0` → `HELLO ok`（session）→ 收到 `pinned_message`（sn=1）**证明事件管道通**；★**KOOK 不把机器人自己发的消息推回给它**（发完公告/欢迎词收不到自己的消息事件）⇒ 队列里「排除自己」只是兜底守卫。
@@ -185,7 +195,7 @@ cmd /c "node kook\kook_publish.js --dup-prune --send"          # 真删（不可
   · **本人发言仍要看得见**：`--scan` 把本人发言**单独列出**（`ℹ 本人/作者发言 N 条（不入队）…`）—— 否则「他已经回过结论了」在 `--plan` 里完全不可见，复核就会漏判。
   · **结论性答复 ⇒ 把对应那条判 `rejected`**（不是本人那条）：`note` 必须写明原因（例：「用户（eval）已给出结论性答复：与自动拾取功能关联，目前无法实现」）；这一判**在复核时人工做**（自动猜「哪条被答复了」不可靠，宁可保守）。判据 = `--plan` 的输出分组里那条落到 **【已否决】**。
   · `--check` 会打印 `guide.owner_ids`（改名单后跑一次就能确认生效）。
-- 命令：`--check`（只读：机器人/三个频道/队列/账本/频道说明）· `--announce [--send] [--no-pin]` · **`--topic [--channel <id>] [--send] [--force]`**（写「建议反馈」频道说明）· `--welcome <user_id> [--send]`（补发/测试）· `--scan`（回扫入队）· `--queue`（刷新 INBOX）· `--listen [--dry]`（常驻）。
+- 命令：`--check`（只读：机器人/三个频道/队列/账本/频道说明/**本版更新公告**）· `--announce [--send] [--no-pin]` · **`--update-announce [--version <版本>] [--send]`**（本版更新公告 = 第 10 步收尾）· **`--topic [--channel <id>] [--send] [--force]`**（写「建议反馈」频道说明）· `--welcome <user_id> [--send]`（补发/测试）· `--scan`（回扫入队）· `--queue`（刷新 INBOX）· `--listen [--dry]`（常驻）。
 
 ### 九·补〇、欢迎语（`kook/guide/welcome.md`）写法判据
 
@@ -198,6 +208,44 @@ cmd /c "node kook\kook_publish.js --dup-prune --send"          # 真删（不可
 - ★★**欢迎词只在「新成员加入」时发**（事件 `joined_guild` ⇒ `doWelcome()`）⇒ **改完模板，频道里不会立刻出现新文案**（历史那些欢迎词是发给当时进服那个人的，**别去改历史消息**，`message/update` 只能改机器人自己发的、且没有「回填欢迎词」这种需求）。
 - ★**要立刻验/演示** = `--welcome <id> --send`（发完 `--msg-delete <msg_id> --send` 收掉；演示就发**机器人自己的 id**，别去 `(met)` 真人）。
 - ★**频道名与 id 是唯一真值，文案里逐字照抄现读结果**（现读命令见 §一·补）—— 判据 = 文案里每个 `(chn)<id>(chn)` 都能在 `guild/view` 里找到同名频道；找不到 = 写错，回炉。
+
+### 九·补二、通知（「公告与通知」频道）—— 写法 / 链接口径 / 判据（★唯一正文）
+
+用户 2026-10-10 定：「**以上流程加入 kook 通知记忆体**」⇒ **本节 = 通知类消息的唯一正文**；§九 的 ①②③④ 只讲「什么时候发 / 发到哪 / 幂等」，**正文结构、链接口径、判据一律看这里**（两处并存 = 必然漂移）。
+
+**A. 两类消息：同一个频道，互不覆盖**（记账也分两处）
+
+| 消息 | 命令 | 频率 | 内容 | 记账键 | 置顶 |
+| --- | --- | --- | --- | --- | --- |
+| **常青引导公告** | `--announce [--send] [--no-pin]` | **一条**，长期有效 | 服务器指引（含「建议会被自动汇总进优化队列」那段） | `state.announce_msg_id` | **置顶** |
+| **每版更新公告** | `--update-announce [--version <版本>] [--send]` | **每版一条** | 本版更新信息（结构见 B） | `state.update_announce[<版本>]` | **不置顶**（置顶位留给常青那条） |
+
+**B. 更新公告的正文结构**（模板 = `kook/guide/update.md`；`{…}` 由 `updateNoticeBody()` 现填）
+
+1. `📢 **EvalHelp v{ver} 已发布**`
+2. `**本版有变化的插件**：{changed}` —— **每个插件名都是内联超链接**（见 C）
+3. `本版未变动：{unchanged}` —— 同上；两行都从 **`state/releases.json[<版本>]` 的 `threads[]`（真发过帖的）/ `skipped[]`（版本没变、按规范没发的）现读**
+4. **`kook/notes/<版本>.md` 原文**（与 KOOK 发布帖同一份对外概要；上限 `UPDATE_NOTES_MAX=1800`，超了截到段落边界并指路「插件发布」）
+5. `**下载 · 逐条说明** → [点此打开本版发布帖]({link})`
+6. `想看全部版本 / 直接下载 → {channel}`
+
+**C. 链接三条口径（★全项目统一；由用户三次看图反馈逐条定下）**
+
+1. ★**绝不裸放长 URL**：帖子深链一律写成 **`[文字](url)`**（如 `[点此打开本版发布帖](…)`）—— 裸链接又长、客户端里还不一定可点。
+2. ★**频道用 `(chn)<channel_id>(chn)`**（客户端渲染成**可点的 `#频道名`**，与欢迎语同款，**已实测**）—— ★**它只能指频道**，指不到具体帖子。
+3. ★★★**插件名 = 内联超链接 → KOOK 内部的插件发布详情**（用户澄清：「**超链接是内联；链接跳转的是 KOOK 内部的插件发布详情**」—— ★**不是**外站 Emberveil 平台页）。唯一实现 `nameLink()` / `pluginLink()`，优先级：
+   · ① **优先 KOOK 帖**：`releases.json` 按 `at` 倒序找**含这个插件的、未删的帖** ⇒ 帖子深链。**本版有变化的插件**命中**本版**那条帖；**本版未变动的插件**命中它**最近一次**发过的帖（那正是「这个插件的详情」）。实测命中：`EvalHelp`→v1.75.118 · `EH_Damage`/`EH_Bag`/`EH_Mail`→v1.75.117 · `EH_DPS`/`EH_DebugBox`→v1.75.111。
+   · ② 兜底 = `config.json` 的 **`plugin_links[<插件名>]`**（平台详情页；只写实测 200 的）—— **只在某插件完全没发过帖**时才用。
+   · ③ 都没有 ⇒ **纯文字**（**绝不编链接**：点进去 404 比不可点更糟）。
+   · ★★**别拿帖名当插件名**：`threads[].post` 是**帖名**（主插件帖写的是「主插件」），插件名是 `EvalHelp` ⇒ 一律过 **`pluginsOfPost(cfg, postName)`**（读 `config.json` 的 `posts[].plugins`）映射。
+
+**D. 发之前 / 发之后（判据）**
+
+- **演练（零请求）**：`cmd /c "node kook\kook_guide.js --update-announce"` ⇒ 正文里**不许出现裸 `https://`**；**每个插件名都必须带链接**，且 URL 形如 `https://www.kookapp.cn/app/channels/<guild>/<channel>/<帖id>`。
+- **真发**：加 `--send`；发完**必须回读自证**（`message/view` 比对，不一致如实报、不假装成功）。
+- **幂等**：同一版重跑 = `message/update` **原地更新（同一 msg_id、频道不新增消息）** ⇒ **改文案 / 改链接只要重跑一条命令**，不必删旧消息（本公告就是这么改的三轮）。
+- **位置 = release 第 10 步第 7 条**（§七）：**先发帖、再发这条更新公告**，顺序不许反（链接指向刚发出的帖）。
+- **现状**：v1.75.118 已发（`msg_id=195397b7-0bd3-48bc-bacd-36f7dae091a0`，不置顶；三轮原地改版 732 → 1092 → **1289 字**）；v1.75.117 及更早**不回补**。
 
 ## 九·补、开发计划收集 + 完成回填闭环（用户 2026-10-09 定：「收集kook 开发计划的触发点在每次我问『kook 有什么优化需求吗?』类似问题的时候.就去收集开发计划.如果某一项计划已经完成的.可以将反馈意见那个帖子标记成已完成.并且配备对应的插件优化版本发布链接」）
 
@@ -233,6 +281,7 @@ cmd /c "node kook\kook_guide.js --plan"
   · 新工具：`tmp/kook_channels.js`（**只读**频道表 + 欢迎大厅消息/置顶 + 各帖子频道 + `topic`）· `tmp/kook_state_clean.js`（摘测试欢迎记录，不点名就摘机器人自己的 id）。
 
 - ✅ **2026-10-10 v1.75.118 已发（1 条帖：主插件）** —— 判定块 = **发 1 / 跳 5**（EH_Bag `0.3.48` · EH_Damage `0.2.46` · EH_DebugBox `0.4.0` · EH_DPS `0.2.5` · EH_Mail `0.3.18` 全与 v1.75.117 相同）；帖 id **`146882187470307584`**（战斗分区 · 封面 `main.png` + 3 图 · link 模式 · 回读 `status=2`）· 文案 = **`kook/notes/1.75.118.md`**（新工具「自动丢弃助手」）；收尾 `--dup-audit` = **频道 11 条、无重复**。
+- ✅ **2026-10-10 新增「本版更新公告」能力（`--update-announce`，判据见 §七 第 7 条 / §九）**：用户定「**在每次 release 完成之后，对 kook 新插件发布之后，需要再在公告通知内发布对应插件更新信息**」⇒ 每版一条发到「公告与通知」，正文 = `kook/guide/update.md` + `kook/notes/<版本>.md` + 指向**该版主插件帖**的链接；同版本重跑 = 原地 `message/update`；记账 `state.update_announce[<版本>]`。★**已补发 v1.75.118**（用户确认「现在补发」）：`msg_id=`**`195397b7-0bd3-48bc-bacd-36f7dae091a0`**（**不置顶**）；紧接着再跑一次 = **原地 `message/update`（同一 msg_id、频道不新增消息）** ⇒ 幂等判据**实测通过**。★正文按用户三轮看图反馈**原地改了三次**（同 msg_id）：**① 链接一律 KMarkdown**（`[点此打开本版发布帖](url)` + `#插件发布` 频道卡，16:43，732 字）→ **② 插件名逐个可点**（第一版错误地指向**外站平台详情页**，16:44，1092 字）→ **③ 按用户澄清改回 KOOK 内部**（插件名内联链接到**该插件在「插件发布」里的详情帖**：EvalHelp→本版帖 · EH_Damage/EH_Bag/EH_Mail→v1.75.117 各自帖 · EH_DPS/EH_DebugBox→v1.75.111 各自帖，16:46，**1289 字**）。v1.75.117 及更早**不回补**（玩家看「插件发布」频道即可）。
 - ✅ **2026-10-10 玩家需求回填闭环（v1.75.118）**：`msg_id=463243d0-6db4-41cd-9777-fab7c60fbc00`（逍遥 · 丢弃装备双界面 = 已添加列表可点取消 + 索引背包点选添加）⇒ `--done --version 1.75.118 --note "…" --send` = 原帖 **✅ 反应** + **引用回复（带主插件帖链接）** + 队列 `status=done / notified=true`；随后 `--queue` 刷 INBOX（**现 4 条：done 2 · rejected 2 · 无待办**）。
 - ✅ 2026-10-09 全链路真机跑通：`--check` 全绿 · 测试帖（2 个附件）真发 → 回读 `status=2` → 用户确认附件可下载 → 删除；link 模式卡片（下载区 + 按插件分段概要）已离线验证。
 - ✅ **2026-10-09 v1.75.110 正式发布完成（现役 5 条帖，一个插件一条，含封面 + 配图）**：

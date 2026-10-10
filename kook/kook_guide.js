@@ -19,6 +19,8 @@
  *   node kook/kook_guide.js --announce --send            # 真发（首次建，之后原地更新；--no-pin 可关置顶）
  *   node kook/kook_guide.js --topic                      # 演练：给「建议反馈」写**友好的使用说明**（频道简介 topic）
  *   node kook/kook_guide.js --topic --send               # 真改（幂等：与现有一致就跳过；--force 强写）
+ *   node kook/kook_guide.js --update-announce            # 演练：本版更新公告（「公告与通知」频道，按版本记账）
+ *   node kook/kook_guide.js --update-announce --send     # 真发（release 第 10 步发完帖之后跑；同版本重跑 = 原地更新）
  *   node kook/kook_guide.js --welcome <user_id> --send   # 手工发一条欢迎（补发/测试用）
  *   node kook/kook_guide.js --listen                     # 常驻：收 joined_guild → 发欢迎词（Ctrl+C 停）
  *   node kook/kook_guide.js --listen --dry              # 常驻但不真发（只打印「本会发什么」）
@@ -39,13 +41,14 @@ const API = "https://www.kookapp.cn/api/v3";
 const args = { send: false, check: false, announce: false, listen: false, welcome: null,
                dry: false, noPin: false, scan: false, queue: false, plan: false, backfill: false,
                done: null, version: null, note: "", thread: null, noScan: false, simulate: null, minInterval: 500,
-               topic: false, channel: null };
+               topic: false, channel: null, updateAnnounce: false };
 for (let i = 2; i < process.argv.length; i++) {
   const a = process.argv[i];
   switch (a) {
     case "--send":     args.send = true; break;
     case "--check":    args.check = true; break;
     case "--announce": args.announce = true; break;
+    case "--update-announce": args.updateAnnounce = true; break;
     case "--topic":    args.topic = true; break;
     case "--channel":  args.channel = process.argv[++i]; break;
     case "--listen":   args.listen = true; break;
@@ -86,6 +89,7 @@ function loadConfig() {
     owner_ids: [],
     welcome_file: "kook/guide/welcome.md",
     announce_file: "kook/guide/announce.md",
+    update_file: "kook/guide/update.md",
     feedback_file: "kook/guide/feedback.md",
     state_file: "kook/state/guide.json",
     queue_file: "kook/queue/feedback.json",
@@ -236,6 +240,129 @@ async function doTopic(cfg, token, channelArg) {
   const got = String(back.topic || "").replace(/\r\n/g, "\n").trim();
   if (got === body) say(`✔ 回读一致（${got.length} 字）`);
   else { console.error(`⚠ 回读不一致（服务端可能截断/改写）\n  期望 ${body.length} 字：${body}\n  实得 ${got.length} 字：${got}`); process.exit(3); }
+}
+
+// ───────── 本版更新公告（release 第 10 步之后发到「公告与通知」） ─────────
+// 需求（用户 2026-10-10）：「在每次 release 完成之后，对 kook 新插件发布之后，需要再在公告通知内发布对应插件更新信息」。
+// 与常驻引导公告（`--announce`）**是两条不同的消息**，互不覆盖：
+//   · `--announce` = **常青**的服务器指引（一条，原地更新 + 置顶，msg_id 存 `state.announce_msg_id`）；
+//   · `--update-announce` = **每版一条**的更新通知（按版本记账 `state.update_announce[<版本>] = msg_id`，
+//     同一版本重跑 = **原地更新**，绝不重复发帖；**不置顶**（置顶位留给常青公告））。
+// 三条口径：① 正文来源 = `kook/guide/update.md` 模板 + **`kook/notes/<版本>.md` 原文**（与 KOOK 发布帖同一份
+//   对外概要 —— 单一来源，绝不另写一份）；② **只列本版真有变化的插件**：从 `state/releases.json[版本]` 的
+//   `threads[]`（真发了帖的）与 `skipped[]`（版本没变、按规范没发的）现读；没有记录 ⇒ 如实说「见帖子」；
+//   ③ **写完回读自证**（`message/view`），不一致如实报，不假装成功。
+const UPDATE_NOTES_MAX = 1800;   // 正文里 notes 段的自定上限（超了就截到段落边界 + 指路「插件发布」）
+function notesPath(cfg, ver) { return path.join(ROOT, "kook", "notes", ver + ".md"); }
+// 帖名 → 该帖带哪些插件（主插件帖的 post 名是「主插件」，插件名是 EvalHelp ⇒ 必须过这张表，别拿帖名当插件名）
+function pluginsOfPost(cfg, postName) {
+  const p = (cfg.posts || []).find(x => x.name === postName);
+  return p && p.plugins && p.plugins.length ? p.plugins : [postName];
+}
+function changedPluginsFor(cfg, ver) {
+  const rel = loadReleases(cfg)[ver];
+  const changed = [], skipped = [];
+  if (rel) {
+    for (const t of (rel.threads || [])) {
+      if (t.deleted) continue;
+      for (const n of pluginsOfPost(cfg, t.post)) if (changed.indexOf(n) < 0) changed.push(n);
+    }
+    for (const s of (rel.skipped || [])) if (skipped.indexOf(s) < 0) skipped.push(s);
+  }
+  return { changed, skipped, rel: rel || null };
+}
+// ★★★插件名 → **可点详情链接**（用户 2026-10-10 看图提：「子插件需要一超链接的形式可点击跳转对应插件详情」，
+//   随后澄清：「**超链接是内联；链接跳转的是 KOOK 内部的插件发布详情**」）⇒ 目标一律 = **该插件在「插件发布」频道里的详情帖**：
+//   ① **优先 KOOK 帖**：`releases.json` 按 `at` 倒序找**含这个插件的、未删的帖** ⇒ 帖子深链
+//      （本版有变化的插件就命中本版的那条帖；**本版未变动的插件** ⇒ 命中它**最近一次**发过的那条帖，
+//       这也正是「该插件的详情」——玩家点进去看到的就是这个插件的说明与下载）；
+//   ② 兜底 `config.json` 的 **`plugin_links[<插件名>]`**（Emberveil 平台详情页）—— **只在完全没发过帖时**才用
+//      （正常情况一个插件至少有历史帖；★平台页 2026-10-10 逐条实测：`addon` / 四个子插件 = 200，`evalhelp-eh-mail` = 404）；
+//   ③ 都没有 ⇒ **纯文字**（**绝不编链接** —— 点进去 404 比不可点更糟）。
+function pluginLink(cfg, name) {
+  const rel = loadReleases(cfg);
+  const vers = Object.keys(rel).sort((a, b) => (rel[b].at || 0) - (rel[a].at || 0));
+  for (const v of vers) {
+    for (const t of (rel[v].threads || [])) {
+      if (t.deleted || !t.id) continue;
+      const hitPost = pluginsOfPost(cfg, t.post).indexOf(name) >= 0;
+      const hitFile = (t.files || []).some(f => f.indexOf(name + "-v") === 0);
+      if (hitPost || hitFile) {
+        return `https://www.kookapp.cn/app/channels/${cfg.guild_id}/${cfg.channel_id}/${t.id}`;
+      }
+    }
+  }
+  const fallback = (cfg.plugin_links || {})[name];
+  return fallback || null;
+}
+function nameLink(cfg, name) {
+  const u = pluginLink(cfg, name);
+  return u ? `[${name}](${u})` : name;
+}
+function updateNoticeBody(cfg, ver) {
+  const { changed, skipped } = changedPluginsFor(cfg, ver);
+  let notes;
+  const np = notesPath(cfg, ver);
+  if (fs.existsSync(np)) {
+    notes = fs.readFileSync(np, "utf8").replace(/\r\n/g, "\n").trim();
+    if (notes.length > UPDATE_NOTES_MAX) {
+      notes = notes.slice(0, UPDATE_NOTES_MAX).replace(/\n[^\n]*$/, "") + "\n……（完整说明见「插件发布」频道本版帖子）";
+    }
+  } else {
+    notes = `（本版更新要点见「插件发布」频道 v${ver} 的帖子）`;
+  }
+  const link = versionLink(cfg, ver, null);
+  return readTemplate(cfg, "update", {
+    "{ver}": ver,
+    // ★插件名一律渲染成 `[名字](详情页)`（见 nameLink：平台详情页 → 退回该插件最近发布帖 → 纯文字）
+    "{changed}": changed.length ? changed.map(n => nameLink(cfg, n)).join(" · ") : "（见「插件发布」频道本版帖子）",
+    "{unchanged}": skipped.length ? `\n本版未变动：${skipped.map(n => nameLink(cfg, n)).join(" · ")}` : "",
+    "{notes}": notes,
+    // ★★链接一律走 KMarkdown，**长 URL 绝不裸放**（裸链接又长又不一定可点）：
+    //   {link} = 帖子深链（模板里套进 `[文字](url)`）；{channel} = `#频道` 卡片链接
+    //   （`(chn)id(chn)` 由客户端渲染成可点的频道名，本客户端已实测可用 —— 欢迎语里同款）。
+    "{link}": link || `https://www.kookapp.cn/app/channels/${cfg.guild_id}/${cfg.channel_id}`,
+    "{channel}": `(chn)${cfg.channel_id}(chn)`,
+  }).replace(/\n{3,}/g, "\n\n");
+}
+function tocVersion() {
+  return (fs.readFileSync(path.join(ROOT, "EvalHelp.toc"), "utf8").match(/^##\s*Version:\s*(\S+)/m) || [])[1] || "";
+}
+async function doUpdateAnnounce(cfg, token, verArg) {
+  const ver = verArg || tocVersion();
+  if (!ver) { console.error("✘ 读不到版本号（用 --version <版本> 显式指定，或检查 EvalHelp.toc 的 ## Version）"); process.exit(2); }
+  const target = cfg.guide.announce_channel_id;
+  const st = loadState(cfg);
+  const existing = (st.update_announce || {})[ver] || null;
+  const { changed, skipped, rel } = changedPluginsFor(cfg, ver);
+  const content = updateNoticeBody(cfg, ver);
+  say(`本版 = v${ver}（${verArg ? "显式指定" : "现读 EvalHelp.toc"}）；公告频道 = ${target}`);
+  say(`releases.json 里${rel ? "有" : "**没有**"}本版记录 ⇒ 本版有变化的插件（真发过帖的）：${changed.join(" · ") || "（无记录）"}`);
+  if (skipped.length) say(`本版无变化（按规范没发帖）：${skipped.join(" · ")}`);
+  say(existing ? `已有本版更新公告 msg_id=${existing} ⇒ 原地更新（不重复发帖）` : "首次发布本版更新公告 ⇒ 新建一条（不置顶）");
+  say("──────── 本版更新公告正文（KMarkdown） ────────");
+  say(content);
+  say("───────────────────────────────────────────");
+  if (!args.send || args.dry) { say("（dry-run：未发送。加 --send 真发）"); return; }
+  let msgId;
+  if (existing) {
+    await api("POST", `${API}/message/update`, { msg_id: existing, content }, token);
+    msgId = existing;
+    say(`✔ 已**原地更新**（msg_id=${msgId}）`);
+  } else {
+    const d = await api("POST", `${API}/message/create`, { type: 9, target_id: target, content }, token);
+    msgId = d.msg_id;
+    const cur = Object.assign({}, loadState(cfg).update_announce || {}, { [ver]: msgId });
+    saveStatePatch(cfg, { update_announce: cur });      // ★读-改-写（别覆盖监听进程写的 max_sn）
+    say(`✔ 已发布（msg_id=${msgId}）`);
+  }
+  try {
+    const m = await api("GET", `${API}/message/view?msg_id=${msgId}`, undefined, token);
+    const got = String(m.content || "").replace(/\r\n/g, "\n").trim();
+    const stamp = new Date(m.updated_at || m.create_at).toLocaleString("zh-CN", { hour12: false });
+    if (got === content.trim()) say(`✔ 回读一致（${got.length} 字 · 最后更新 ${stamp}）`);
+    else console.error(`⚠ 回读不一致（服务端可能改写/截断，消息已发出、未回滚）\n  期望 ${content.trim().length} 字｜实得 ${got.length} 字`);
+  } catch (e) { console.error("⚠ 回读失败（不影响已发出的公告）：" + e.message); }
 }
 
 // ───────────────────────────── 欢迎词 ─────────────────────────────
@@ -667,6 +794,16 @@ async function doCheck(cfg, token) {
   const m = await api("GET", `${API}/message/view?msg_id=${st.announce_msg_id || "0"}`, undefined, token).catch(() => null);
   if (st.announce_msg_id && m) say(`  公告仍在（最后更新 ${new Date(m.updated_at || m.create_at).toLocaleString("zh-CN", { hour12: false })}）`);
   else if (st.announce_msg_id) say("  ⚠ 账本里的公告 msg_id 已取不到（被删了？）⇒ 下次发布会新建一条");
+  // ★本版更新公告（每版一条；与常青公告分开记账）
+  const curVer = tocVersion();
+  const ua = (st.update_announce || {})[curVer];
+  say(`  更新公告（v${curVer}）= ${ua || `（还没有 ⇒ 发完 KOOK 发布帖后跑 \`--update-announce --send\`）`}` +
+      `　· 已发版本：${Object.keys(st.update_announce || {}).join(", ") || "无"}`);
+  if (ua) {
+    const um = await api("GET", `${API}/message/view?msg_id=${ua}`, undefined, token).catch(() => null);
+    if (um) say(`    仍在（最后更新 ${new Date(um.updated_at || um.create_at).toLocaleString("zh-CN", { hour12: false })}）`);
+    else say("    ⚠ 账本里的更新公告 msg_id 已取不到（被删了？）⇒ 重跑 --update-announce --send 会新建一条");
+  }
   say("提示：欢迎大厅里那条「系统通知#0001 …」是 KOOK 原生欢迎频道发的，与机器人无关；文案可在客户端「服务器设置 → 概览/欢迎」里改。");
 }
 
@@ -676,12 +813,14 @@ async function doCheck(cfg, token) {
     const cfg = loadConfig();
     const tk = readToken(cfg);
     if (args.check || args.announce || args.listen || args.welcome || args.scan
-        || args.plan || args.done || args.backfill || args.simulate || args.msgDelete || args.topic) {
+        || args.plan || args.done || args.backfill || args.simulate || args.msgDelete || args.topic
+        || args.updateAnnounce) {
       if (!tk) { console.error("✘ 找不到 KOOK token（token/kook.txt 或 KOOK_TOKEN）"); process.exit(2); }
       if (!args.listen) say(`token 来源：${tk.from}（值不打印）`);
     }
     if (args.check)    return doCheck(cfg, tk.token);
     if (args.topic)    return doTopic(cfg, tk.token, args.channel);
+    if (args.updateAnnounce) return doUpdateAnnounce(cfg, tk.token, args.version);
     if (args.msgDelete) return doMsgDelete(cfg, tk.token, args.msgDelete);
     if (args.simulate) return doSimulate(cfg, tk.token, args.simulate);
     if (args.plan)     return doPlan(cfg, tk.token);
@@ -692,7 +831,7 @@ async function doCheck(cfg, token) {
     if (args.welcome)  return doWelcome(cfg, tk.token, args.welcome, loadState(cfg));
     if (args.announce) return doAnnounce(cfg, tk.token);
     if (args.listen)   return doListen(cfg, tk.token);
-    console.error("用法：--check | --plan | --scan | --queue | --done <msg_id> --version <版本> [--note …] [--thread …] | --backfill | --announce [--send] | --topic [--channel <id>] [--send] [--force] | --welcome <user_id> [--send] | --listen [--dry]");
+    console.error("用法：--check | --plan | --scan | --queue | --done <msg_id> --version <版本> [--note …] [--thread …] | --backfill | --announce [--send] | --update-announce [--version <版本>] [--send] | --topic [--channel <id>] [--send] [--force] | --welcome <user_id> [--send] | --listen [--dry]");
     process.exit(2);
   } catch (e) {
     console.error("✘ " + e.message);

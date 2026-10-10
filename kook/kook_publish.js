@@ -1128,6 +1128,13 @@ async function doSend(cfg, token, ver, postsInfo, notesInfo) {
         ((postsInfo.skipped && postsInfo.skipped.length) ? ` + 跳过 ${postsInfo.skipped.length} 条` : "") +
         `，供「完成回填」配发布链接 / 下次比版本）`);
   } catch (e) { console.error("⚠ 发布记账失败（不影响发布本身）：" + e.message); }
+  // ★★★release 第 10 步的**收尾**（用户 2026-10-10 定：「在每次 release 完成之后，对 kook 新插件发布之后，
+  //   需要再在公告通知内发布对应插件更新信息」）⇒ 发完帖**接着**把本版更新信息发到「公告与通知」。
+  //   这里只**提示下一步**（不在本脚本里跨脚本调用）：按版本记账、同版本重跑 = 原地更新，不重复发帖。
+  say("");
+  say("下一步（第 10 步收尾）：把本版更新信息发到「公告与通知」频道 ——");
+  say(`    cmd /c "node kook\\kook_guide.js --update-announce"          （演练：只打印正文，不发请求）`);
+  say(`    cmd /c "node kook\\kook_guide.js --update-announce --send"   （真发；同一版本重跑 = 原地更新）`);
   return result;
 }
 
