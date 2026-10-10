@@ -14,6 +14,34 @@
 --   · 文件 = `Interface\FrameXML\TradeFrame.lua`（本机导出件 `tmp/mpq_out/Interface/FrameXML/TradeFrame.lua`）
 --   · 事件 = `TRADE_SHOW` / `TRADE_CLOSED` / `TRADE_UPDATE` / `TRADE_PLAYER_ITEM_CHANGED`(arg1=格号) /
 --     `TRADE_TARGET_ITEM_CHANGED`(arg1=格号) / `TRADE_ACCEPT_UPDATE`(arg1=我方状态, arg2=对方状态)
+--   · ★★★**金钱事件 = 两条，一人一条**（判据 = `MoneyFrame.lua` 的 `MoneyTypeInfo` 配对，逐字可核）：
+--     ① **`PLAYER_TRADE_MONEY`** = **我**的钱变了 —— `MoneyTypeInfo["PLAYER_TRADE"].UpdateFunc = GetPlayerTradeMoney()`
+--        （`MoneyFrame.lua:48-51`），且 `TradeFrame.xml:565/569` 里 `TradePlayerInputMoneyFrame` 自己注册它刷
+--        `GetPlayerTradeMoney()`；`PLAYER` 那档也吃它（`:17` 的 `GetMoney() - GetCursorMoney() - GetPlayerTradeMoney()`）。
+--     ② ★★★**`TRADE_MONEY_CHANGED`** = **对方**的钱变了 —— `MoneyTypeInfo["TARGET_TRADE"].UpdateFunc = GetTargetTradeMoney()`
+--        （`MoneyFrame.lua:64-67`）**只**挂在 `event == "TRADE_MONEY_CHANGED"` 那一支（`:155`）。
+--        ★**1.76.5 补**：我们原先只注册了① ⇒ 对方加钱（尤其在最后一次物品变化**之后**才加）时
+--        `c.gt` 永远是 0 = 用户报的「金币数量未正确显示」；②就是那个缺口。
+--     · **两条事件名 + 两个金钱 API 的存在性 = 引擎侧取证在案**（`tmp/trade_money_exe2.js`，
+--       ★**必须同时扫 ASCII 与 UTF-16LE** —— 本客户端把一部分名放宽字符表里，只扫 ASCII 会得到**假阴性**：
+--       初版扫描把 `PLAYER_TRADE_MONEY` 判成「不存在」，邻域摊开才发现它是 `P.L.A.Y.E.R._.T.R.A.D.E._.M.O.N.E.Y`）：
+--       `GetPlayerTradeMoney`/`GetTargetTradeMoney`/`SetTradeMoney`/`AddTradeMoney` 都在 Trading 注册表内（ASCII）；
+--       `PLAYER_TRADE_MONEY`/`TRADE_MONEY_CHANGED`/`PLAYER_MONEY`/`TRADE_UPDATE` 在 UTF-16 事件表内
+--       （`TRADE_MONEY_CHANGED` 紧邻 `YOU_LOOT_MONEY` = 金钱事件族）。阴性对照 = `…_ZZZ` 两个写法 0 命中。
+--   · ★★★**金钱的「第二条读取路」= 纯 Lua，不依赖引擎 API**（本文件 `tlMoneyLua*` 用它做**回退**）：
+--     ① 我方 = `MoneyInputFrame_GetCopper(TradePlayerInputMoneyFrame)`（`MoneyInputFrame.lua:14`，
+--        直接读客户端自己那三个 Gold/Silver/Copper 输入框的文本 ⇒ 读者**刚敲进去的数**都在）；
+--     ② 对方 = `TradeRecipientMoneyFrame.staticMoney`（`MoneyFrame.lua:238` 的 `frame.staticMoney = money or 0`，
+--        客户端自己的 Lua 侧缓存）。
+--     ★**顺序 = 引擎 API 优先、Lua 路兜底**（引擎那份是服务端确认值；Lua 那份是显示缓存 ⇒ 只当回退）。
+--     ★**时序坑**：`TradeFrame_OnHide` 会把输入框清零（`TradeFrame.lua:146`）⇒ 断言「关窗后再读 Lua 路」
+--       必然读到 0 ⇒ 必须在**交易进行中**抓（本模块在物品/金钱/确认事件上都快照就是为此）。
+--   · ★★★**「这一格有没有东西」= 客户端的尺子**（`TradeFrame.lua:55/76`）：
+--     `local name, texture, numItems = GetTrade*ItemInfo(id)` ⇒ `if ( texture ) then hasItem = 1 end`；
+--     **绝不拿 `GetTrade*ItemLink(i)` 判空** —— 本客户端对**空格**返回的是
+--     `|cff9d9d9d|Hitem:0:0:0:0|h[]|h|r`（id 0 / 空名 / 数量 0），不是 nil
+--     ⇒ 只看 link 会把空格记成「一件名叫 ? 的物品」（真机症状 = 记录里多出只有方向色框没有图标的
+--     空格子 + 「+N」计数虚高，用户 2026-10-10 截图里的「??」就是它）。
 --   · 对方名字 = **`UnitName("NPC")`**（客户端自己那一行就是 `TradeFrameRecipientNameText:SetText(UnitName("NPC"))`）
 --   · 读取口 = `GetTradePlayerItemLink(i)` / `GetTradeTargetItemLink(i)`（`TradeFrame.xml:95/129` 在用）、
 --     `GetTradePlayerItemInfo(i)` / `GetTradeTargetItemInfo(i)`（第 3 返回 = 数量）、
@@ -37,7 +65,12 @@
 --
 -- ── 记录内容（一条 = 一次交易）──────────────────────────────────────────────
 --   `{ t = 时刻字符串, who = 对方名字, gm = 我给出的铜, gt = 我得到的铜,
+--      gmOK = 读到没有(true/false), gtOK = 同, m0/m1/dm = 钱包差额那条腿,
 --      give = { {n=名字, c=数量, l=链接}, … }, get = { … }, ok = true/false/nil, why = 判定依据键 }`
+--   ★★★**`gmOK`/`gtOK` = 「读不到」与「读到 0」的分界**（1.76.5）：
+--     `tlReadMoneyEx` 三态（数字 / **nil = 函数不在或抛错**），**绝不拿 0 冒充「读不到」**；
+--     `tlRecord` 里 `gm = tonumber(c.gm) or 0` 仍给显示一个数，但**同时落 `gmOK`** ⇒
+--     `/eh go 交易记录 金钱` 一眼分清「这笔本来就没放钱」与「放了钱但两条路都没读到」。
 --   ★**空交易不记**（既没有物品也没有钱 ⇒ 什么都不写，免得历史里全是噪声）；
 --   ★**有界** `TL_MAX` = 40 条（最新在前，超了丢最老的）；每条最多 6+6 件（`MAX_TRADABLE_ITEMS`）。
 --
@@ -74,14 +107,27 @@ local TL = {
   beat = nil,      -- 唯一节拍帧（只在核对窗里挂）
   beatAt = 0,
   probe = {},      -- 有界取证环（最近 TL_PROBE_MAX 条；不落盘 —— 交易是低频动作）
+  evCnt = {},      -- ★1.76.5 逐事件计数（固定键集、有界）= 「这条事件到底发不发」的行为证据
 }
 
 -- ── 常量（单一来源）────────────────────────────────────────────────────────
 local TL_MAX = 40          -- 历史条数上限（有界，最新在前）
 local TL_ROWS = 9          -- 面板行池（单行条目 ⇒ 比两行那版多一行）
 local TL_ROW_H = 20        -- ★单行条目（时间/对方/金币/物品图标同一行 —— 图标已直观，名字不画 ⇒ 紧凑）
-local TL_W, TL_H = 316, 280
+-- ★面板高 = 38（标题+列头）+ TL_ROWS×TL_ROW_H（行池 180）+ 2 + 24（本次行，留两行）+ 2 + 30（提示行，
+--   三语里俄文最长 ⇒ 留三行）+ 26（底栏）+ 10（下边距）= 312
+--   ★★★1.76.4 修：旧值 280 时底栏顶 = -254，而两条灰字要占到 -276 ⇒ 必然叠字；
+--   同时 `tlBuild` 里 `liveY` 的**算式符号写错**（见那一处注释）⇒ 两条灰字被画在**行池里面**，
+--   这就是用户截图里的「列表内部信息和灰色字重叠」。两处一起改才成立。
+local TL_W, TL_H = 316, 312
 local TL_GAP = 0           -- ★0 = **紧贴**交易窗（用户 2026-10-10：面板紧贴交易窗）
+-- ★★真机微调（用户 2026-10-10 真机截图：「弹窗位置贴近交易框（估计往左移动 50px、下移 10px）」）：
+--   · **单位 = UI 逻辑像素**（`SetPoint` 的口径）；正数 = 右 / 上，负数 = 左 / 下（本客户端 y 正方向朝上）。
+--   · ★★**换算已实测**：真机截图里「方向色框」实测 **32×31 图像像素**而 `TL_ICON` = 16、
+--     相邻图标中心距 **36** 而 `TL_ICON + TL_ICON_GAP` = 18 ⇒ **1 逻辑像素 = 2 图像像素**（两处都恰好 2.0）
+--     ⇒ 用户说的 50 / 10 **屏幕**像素 = **25 / 5 逻辑像素**（取证 = `python tmp/tl_measure.py <png>`）。
+--   · ★四档挂靠**整体平移同一对偏移**（改一处四档全跟着走，绝不各写一份）。
+local TL_DX, TL_DY = -25, -5
 local TL_ITEM_MAX = 6      -- 可交易格数上限（= MAX_TRADABLE_ITEMS，读不到用这个）
 local TL_VERIFY = 0.8      -- 收尾核对窗（秒）：等完成信号 / 等钱到账
 local TL_BEAT = 0.25       -- 核对窗里的节拍间隔
@@ -200,6 +246,26 @@ local function tlMoney(c)
   return out .. "|cffeda55f" .. p .. "c|r"
 end
 
+-- ★★★1.76.6：金币的**正负符号** = 红 `-`（我给出）/ 绿 `+`（我得到），且**一律用 ASCII 符号**。
+--   · **真机取证**（用户截图 + 像素放大）：那一格本该是「我给出的 `−1s 1c`」，屏上只剩 `1s 1c`
+--     —— **符号整个不见了，不是没写**。本客户端字幕字体里 **U+2212「−」没有字形 ⇒ 什么都不画**
+--     （属静默失败族：不报错、不显方框，只是少一个字符），于是「我给出」与「我得到」在屏上分不清。
+--   · **判据 = 同一行的时间列**：那列写的是 `10-10 23..`（**ASCII 连字符**），它画得出来；
+--     `—`（U+2014，空值占位）与 `±`（U+00B1）在 GBK 码表里、也画得出来 ⇒ 只有 U+2212 是坏的。
+--   · ★**边界如实**：客户端字体打在 pak 里（磁盘上 `FZLBJW.TTF` 全盘 0 命中）⇒ 「哪些字符有字形」
+--     逐项只能靠真机截图；本处只收拾**已实证**的 U+2212 这一族，**不按 GBK 批量替换**别的符号。
+--   · ★★符号颜色**与图标方向色框同一份真值**（`TL_GIVE_RGB`/`TL_GET_RGB`）⇒ 改一处两处跟着走。
+local function tlHex(rgb)
+  return string.format("%02x%02x%02x",
+    math.floor(rgb[1] * 255 + 0.5), math.floor(rgb[2] * 255 + 0.5), math.floor(rgb[3] * 255 + 0.5))
+end
+
+-- `neg == true` ⇒ **我给出的**（红 `-`）· 否则 **我得到的**（绿 `+`）
+local function tlSign(neg)
+  if neg then return "|cff" .. tlHex(TL_GIVE_RGB) .. "-|r" end
+  return "|cff" .. tlHex(TL_GET_RGB) .. "+|r"
+end
+
 local function tlLinkName(link)
   if type(link) ~= "string" then return nil end
   local nm = string.match(link, "%[(.-)%]")
@@ -315,12 +381,70 @@ local function tlPartner()
   return nil
 end
 
-local function tlReadMoney(fname)
+-- ★★★1.76.5：金钱读法 = **三态 + 两条路**
+--   ① `tlReadMoneyEx(fname)`：**三态** —— 数字（读到了）/ **nil（函数不在 或 抛错 或 返回值不是数）**。
+--      ★**绝不拿 0 冒充「读不到」**（旧 `tlReadMoney` 两种情形都回 0 ⇒ 记录里永远分不清
+--      「这笔没放钱」与「放了钱没读到」，用户就是被这一点问住的）。
+--   ② **第二条路 = 纯 Lua**（不依赖任何引擎 API，见文件头）：我方 `MoneyInputFrame_GetCopper`
+--      读客户端自己的输入框、对方 `TradeRecipientMoneyFrame.staticMoney` 是客户端 Lua 侧缓存。
+--   ③ **顺序 = 引擎 API 优先、Lua 路兜底**（引擎那份是服务端确认值，Lua 那份只是显示缓存）。
+local function tlReadMoneyEx(fname)
   local f = G(fname)
-  if type(f) ~= "function" then return 0 end
+  if type(f) ~= "function" then return nil end
   local ok, v = pcall(f)
-  local n = ok and tonumber(v) or nil
-  return n or 0
+  if not ok then return nil end
+  return tonumber(v)
+end
+
+-- 我方：`MoneyInputFrame_GetCopper(TradePlayerInputMoneyFrame)`（`MoneyInputFrame.lua:14`）
+--   ★它把三个输入框的 `GetText()` 相加（Lua 5.1 的数字串自动转换）⇒ 读到的是**我刚敲进去的数**。
+--   ★★关窗时客户端会把它清零（`TradeFrame.lua:146` 的 `MoneyInputFrame_SetCopper(…, 0)`，
+--     排在 `CloseTrade()` 之后）⇒ **必须在交易进行中抓**才有效。
+local function tlMoneyLuaMine()
+  local mf = G("TradePlayerInputMoneyFrame")
+  if type(mf) ~= "table" and type(mf) ~= "userdata" then return nil end
+  local f = G("MoneyInputFrame_GetCopper")
+  if type(f) ~= "function" then return nil end
+  local ok, v = pcall(f, mf)
+  if not ok then return nil end
+  return tonumber(v)
+end
+
+-- 对方：`TradeRecipientMoneyFrame.staticMoney`（`MoneyFrame.lua:238` 写的那一格 Lua 缓存）
+--   ★取字段也套 pcall：帧在有些客户端是 userdata，索引可能抛错（绝不冒泡打断快照）。
+local function tlMoneyLuaTarget()
+  local mf = G("TradeRecipientMoneyFrame")
+  if type(mf) ~= "table" and type(mf) ~= "userdata" then return nil end
+  local ok, v = pcall(function() return mf.staticMoney end)
+  if not ok then return nil end
+  return tonumber(v)
+end
+
+-- 一侧的钱 + **这一读数是从哪条路来的**（探针要能说清「读了哪条路」，见 `金钱` 子命令）
+local function tlMoneySide(mine)
+  local api = tlReadMoneyEx(mine and "GetPlayerTradeMoney" or "GetTargetTradeMoney")
+  if api ~= nil then return api, "api" end
+  local lua = mine and tlMoneyLuaMine() or tlMoneyLuaTarget()
+  if lua ~= nil then return lua, "lua" end
+  return nil, nil
+end
+
+-- 兼容壳（仍回 0）：显示路径（`tlHasContent` / `tlNetStr` / `tlVerdict`）逐字零回归
+local function tlReadMoney(fname)
+  local v = tlReadMoneyEx(fname)
+  if v == nil then return 0 end
+  return v
+end
+
+-- ★★★1.76.4：**我的总钱**（唯一读口）—— 与交易窗格无关，任何时刻都能读。
+--   用途 = 钱包差额那条腿的两个端点（`money0` 开窗时 / `money1` 关窗时）；读不到就返回 nil，
+--   ★**绝不拿 0 冒充**（0 会让差额变成「凭空多了一笔支出」，那是更坏的一种谎）。
+TL.wallet = function()
+  local f = G("GetMoney")
+  if type(f) ~= "function" then return nil end
+  local ok, v = pcall(f)
+  if ok and tonumber(v) then return tonumber(v) end
+  return nil
 end
 
 -- 读一侧的物品（mine = true ⇒ 我给出的那一半；false ⇒ 对方给出的那一半）
@@ -338,17 +462,29 @@ local function tlItems(mine)
       if ok and type(v) == "string" and v ~= "" then link = v end
     end
     if link then
-      local cnt, tex = nil, nil
+      -- ★多返回值绝不套 pcall/tostring 再当参数用（那只留第一个返回）⇒ 分别接住
+      --   ★第 2 返回 = 物品贴图（客户端现给）⇒ **当场记下来**（画图标时不必再查 GetItemInfo）
+      local nm, tex, num = nil, nil, nil
       if type(finfo) == "function" then
-        -- ★多返回值绝不套 pcall/tostring 再当参数用（那只留第一个返回）⇒ 分别接住
-        --   ★第 2 返回 = 物品贴图（客户端现给）⇒ **当场记下来**（画图标时不必再查 GetItemInfo）
-        local ok, _nm, tx, num = pcall(finfo, i)
-        if ok then cnt = tonumber(num) tex = tx end
+        local ok, a, b, c2 = pcall(finfo, i)
+        if ok then nm, tex, num = a, b, c2 end
       end
-      out[table.getn(out) + 1] = {
-        l = link, n = tlLinkName(link) or "?", c = cnt or 1,
-        tx = (type(tex) == "string" and tex ~= "") and tex or nil,
-      }
+      -- ★★★「这一格有没有东西」= **客户端的尺子**（判据出处 = 客户端自带 `TradeFrame.lua:55/76`：
+      --   `local name, texture, numItems = GetTrade*ItemInfo(id)` 之后 `if ( texture ) then hasItem = 1 end`）
+      --   ★**绝不拿 link 判空**：本客户端对**空格**返回的不是 nil，而是一条假链接
+      --   `|cff9d9d9d|Hitem:0:0:0:0|h[]|h|r`（id 0 / 空名 / 数量 0）⇒ 只看 link 会把空格记成
+      --   「一件名叫 ? 的物品」（真机症状 = 记录里多出**只有方向色框、没有图标**的空格子，
+      --   并把「+N」计数与悬停里的件数一起带偏 —— 用户 2026-10-10 截图里那些「??」就是它）。
+      local named = (type(nm) == "string" and nm ~= "")
+      local texed = (type(tex) == "string" and tex ~= "")
+      if named or texed then
+        local cnt = tonumber(num)
+        if not (cnt and cnt >= 1) then cnt = 1 end   -- 真物品数量恒 ≥1（读到 0 = 空格）
+        out[table.getn(out) + 1] = {
+          l = link, n = tlLinkName(link) or (named and nm) or "?", c = cnt,
+          tx = texed and tex or nil,
+        }
+      end
     end
   end
   return out
@@ -358,11 +494,38 @@ tlSnap = function()
   local c = TL.cur
   if type(c) ~= "table" then return false end
   c.who = tlPartner() or c.who
-  c.gm = tlReadMoney("GetPlayerTradeMoney")   -- 我给出的钱
-  c.gt = tlReadMoney("GetTargetTradeMoney")   -- 我得到的钱
+  -- ★★★1.76.5：一侧的钱走 `tlMoneySide`（引擎 API 优先 → 纯 Lua 兜底），并把**来源**记下来。
+  --   ★`c.gm`/`c.gt` 允许为 **nil = 两条路都读不到**（`tlRecord` 会落 `gmOK/gtOK` 区分「0」与「读不到」）
+  --   ⇒ 显示路径仍用 `tonumber(x) or 0`，逐字零回归。
+  c.gm, c.gmSrc = tlMoneySide(true)    -- 我给出的钱
+  c.gt, c.gtSrc = tlMoneySide(false)   -- 我得到的钱
+  -- ★★★1.76.4：**钱包读数**每拍也记一份（`money1` = 最后一次快照那刻的总钱）——
+  --   它是钱包差额那条腿的端点，用途见 `tlRecord`；关窗那一刻由 `tlCloseSession` 再刷新一次。
+  local w = TL.wallet()
+  if w then c.money1 = w end
   c.give = tlItems(true)
   c.get = tlItems(false)
   return true
+end
+
+-- ★★★1.76.5：关窗那一刻的**兜底补读**（只补、绝不覆盖已有非 0 —— 见 `tlCloseSession` 调用点）
+--   为什么要有它：`tlSnap` 只在事件上跑；万一「加钱之后一个事件都没再来」就关窗了，
+--   `c.gm/c.gt` 会停在 0。这里在关窗那一瞬把**四条路**逐个试一遍，只在该侧**还是 nil 或 0** 时才填。
+local function tlMoneyTopUp(c)
+  if type(c) ~= "table" then return false end
+  local touched = false
+  local function one(side, key, srcKey)
+    local cur = tonumber(c[key])
+    if cur ~= nil and cur ~= 0 then return end          -- ★已有非 0 ⇒ 一个字节都不动
+    local v, src = tlMoneySide(side)
+    if v ~= nil and v ~= 0 then
+      c[key], c[srcKey] = v, src
+      touched = true
+    end
+  end
+  one(true, "gm", "gmSrc")
+  one(false, "gt", "gtSrc")
+  return touched
 end
 
 local function tlHasContent(c)
@@ -396,25 +559,44 @@ end
 -- 落账（唯一写口）：空交易不记；返回 true = 真写了一条
 local function tlRecord(c)
   if type(c) ~= "table" then return false end
-  if not tlHasContent(c) then
+  -- ★★★1.76.4：**钱包差额 = 交易金钱的第二条腿**（独立于交易窗读数）。
+  --   `money0` = 开窗那刻的总钱、`money1` = 关窗那刻（`tlCloseSession` 刷新；关窗后 ≤TL_VERIFY 秒内每拍再刷）⇒ `dm = m1 - m0`。
+  --   为什么要它：交易窗读数万一本客户端读回 0，**纯金钱交易连记录都不会产生**
+  --   （旧写法只按物品与 gm/gt 判「空交易 ⇒ 不记」）⇒ 这条腿只**多记**、绝不冒充精确读数（显示时带 `≈`）。
+  local m0 = tonumber(c.money0)
+  -- ★★★补出来的 0 绝不当钱包差额的基准（`tlCloseSession` 读不到开窗总钱时会补 0 给 `tlVerdict` 用）
+  --   —— 拿它算差额 = 把**玩家的全部家当**算成这一笔的收入（比「没有」更坏的谎）
+  if c.m0fake == true then m0 = nil end
+  local m1 = tonumber(c.money1)
+  local dm = nil
+  if m0 ~= nil and m1 ~= nil then dm = m1 - m0 end
+  if (not tlHasContent(c)) and not (dm and dm ~= 0) then
     tlNote("空交易 ⇒ 不记（关窗时没有任何物品与金钱）")
     return false
   end
   local ok, why = tlVerdict(c)
+  -- ★★★1.76.5：`gmOK`/`gtOK` = **「读不到」与「读到 0」的分界**（判读口径见文件头与 `金钱` 子命令）
+  local gmN, gtN = tonumber(c.gm), tonumber(c.gt)
   local rec = {
     t = (type(c.clock) == "string" and c.clock ~= "") and c.clock or tlClock(),
     who = (type(c.who) == "string" and c.who ~= "") and c.who or "?",
-    gm = tonumber(c.gm) or 0,
-    gt = tonumber(c.gt) or 0,
+    gm = gmN or 0,
+    gt = gtN or 0,
+    gmOK = (gmN ~= nil), gtOK = (gtN ~= nil),
+    gmSrc = c.gmSrc, gtSrc = c.gtSrc,   -- 「这一读数读了哪条路」= api / lua（两条都不行 ⇒ nil）
+    m0 = m0, m1 = m1, dm = dm,     -- ★原始钱数：判读 = 「交易窗读数 0 而 dm≠0 ⇒ 那条路没读到」
     give = c.give or {},
     get = c.get or {},
     ok = ok,
     why = why,
   }
   local n = tlPush(rec)
-  tlNote(string.format("落账：判定=%s ｜ 对方=%s ｜ 给=%d 铜 / 收=%d 铜 ｜ 给件=%d / 收件=%d ｜ 依据=%s ｜ 共 %d 条",
-    tostring(ok), tostring(rec.who), rec.gm, rec.gt,
-    table.getn(rec.give), table.getn(rec.get), L(why), n))
+  local dms = "?"                                  -- 读不到就如实写「?」（★绝不拿 0 冒充）
+  if dm ~= nil then dms = tostring(dm) end
+  -- ★读数来源也进落账行（`gmSrc/gtSrc` 空 ⇒ 那条路两条都不通，如实写「-」）
+  tlNote(string.format("落账：判定=%s ｜ 对方=%s ｜ 给=%d 铜(%s) / 收=%d 铜(%s) ｜ 给件=%d / 收件=%d ｜ 钱包差额=%s 铜 ｜ 依据=%s ｜ 共 %d 条",
+    tostring(ok), tostring(rec.who), rec.gm, tostring(rec.gmSrc or "-"), rec.gt, tostring(rec.gtSrc or "-"),
+    table.getn(rec.give), table.getn(rec.get), dms, L(why), n))
   return true
 end
 
@@ -444,7 +626,8 @@ tlOpenSession = function()
   TL.cur = c
   TL.pend = nil
   tlSnap()
-  tlNote("开窗：对方=" .. tostring(c.who) .. " ｜ 我的钱基准=" .. tostring(c.money0))
+  tlNote("开窗：对方=" .. tostring(c.who) .. " ｜ 我的钱基准=" .. tostring(c.money0) ..
+    " ｜ 交易窗金钱读数 我方=" .. tostring(c.gm) .. " 对方=" .. tostring(c.gt) .. " 铜")
   return c
 end
 
@@ -453,13 +636,26 @@ tlCloseSession = function()
   local c = TL.cur
   TL.cur = nil
   if type(c) ~= "table" then return false end
-  tlSnap()                                  -- ★关窗前再读一次（兜最后一次变化）
+  -- ★★★1.76.4 修一处**死代码**：旧写法这里写着「关窗前再读一次（兜最后一次变化）」并调 `tlSnap()`，
+  --   可上一行刚把 `TL.cur` 清成 nil ⇒ `tlSnap` 拿到 nil **直接 return false，一次都没生效**。
+  --   ★而把它「救活」（先快照再清 cur）反而危险：`TRADE_CLOSED` 那一刻客户端的交易格可能已经清空，
+  --   重读物品会把 `c.give/c.get` 抹掉 = 整条记录的内容跟着丢。⇒ 这里**只刷新钱包读数**（与交易格无关）。
+  local w = TL.wallet()
+  if w then c.money1 = w end
+  -- ★★★1.76.5：关窗这一瞬的**兜底补读**（四条路逐个试，只补「还是 nil 或 0」的那一侧）——
+  --   ★**只补不覆盖**：已有非 0 读数一个字节都不动（否则「先加钱、后撤钱」会被补成加过钱）。
+  --   ★它**只碰钱**，绝不重读物品（关窗那一刻交易格可能已清空 ⇒ 重读会把 give/get 抹掉，见上面那段注释）。
+  local topped = tlMoneyTopUp(c)
+  if topped then tlNote("关窗补读：交易窗读数我方=" .. tostring(c.gm) .. "(" .. tostring(c.gmSrc or "-") ..
+    ") 对方=" .. tostring(c.gt) .. "(" .. tostring(c.gtSrc or "-") .. ")") end
   local ok = tlVerdict(c)
   if ok == true then
     tlRecord(c)
     return true
   end
-  c.money0 = c.money0 or 0
+  -- ★读不到开窗总钱时补 0（只为让 `tlVerdict` 的期望值算式拿到一个数）——
+  --   ★同时盖章 `m0fake`：**补出来的 0 不许当钱包差额的基准**（见 `tlRecord`）
+  if c.money0 == nil then c.money0 = 0 c.m0fake = true end
   TL.pend = { c = c, at = tlNow() }
   tlNote("收尾还判不出 ⇒ 开核对窗（上限 " .. tostring(TL_VERIFY) .. " 秒：等完成信号 / 等钱到账；过窗按实际判定落账）")
   return false
@@ -470,6 +666,10 @@ local function tlPendTick(now)
   if type(p) ~= "table" then return false end
   local c = p.c
   if type(c) ~= "table" then TL.pend = nil return true end
+  -- ★1.76.4：关窗后 `TL_VERIFY` 秒内钱可能才到账 ⇒ 每一拍刷新钱包读数
+  --   （钱包差额那条腿只在交易窗读数读不到时才用，见 `tlRecord`）
+  local w = TL.wallet()
+  if w then c.money1 = w end
   local ok = tlVerdict(c)
   if ok == true then
     TL.pend = nil
@@ -503,14 +703,36 @@ local function tlResultMark(ok)
   return "?", 0.95, 0.82, 0.45
 end
 
--- 「金币」列：按**我的净变化**显示（+收 / −付 / ±0 / —）
+-- 「金币」列：按**我的净变化**显示（+收 / -付 / ±0 / — / ≈ 推算）
+--   ★★★1.76.6：符号走 `tlSign` —— **红 `-` = 我给出 · 绿 `+` = 我得到**，且是 **ASCII** 符号
+--   （旧写法用 U+2212，本客户端字体没那个字形 ⇒ 减号整段消失，见 `tlSign` 上面的取证）
 local function tlNetStr(rec)
   local gm, gt = tonumber(rec.gm) or 0, tonumber(rec.gt) or 0
-  if gm == 0 and gt == 0 then return "|cff9a9a9a—|r" end
+  if gm == 0 and gt == 0 then
+    -- ★★★1.76.4：两侧都读到 0 时**再看钱包差额**（第二条腿）—— 差额非 0 ⇒ 这笔**确实动了钱**，
+    --   只是交易窗读数没读到 ⇒ 用 `≈` 标出来（**绝不冒充精确读数**；悬停里写明推算依据）。
+    local dm = tonumber(rec.dm)
+    if dm and dm ~= 0 then
+      return "|cffe0c060≈|r " .. tlSign(dm < 0) .. tlMoney(dm)
+    end
+    return "|cff9a9a9a—|r"
+  end
   local net = gt - gm
-  if net > 0 then return "|cff8fe08f+" .. tlMoney(net) end
-  if net < 0 then return "|cfff0a0a0−" .. tlMoney(net) end
+  if net > 0 then return tlSign(false) .. tlMoney(net) end
+  if net < 0 then return tlSign(true) .. tlMoney(net) end
   return "|cffd8d8d8±0|r"
+end
+
+-- ★「这条物品记录是真物品吗」——**只用来滤老存档里的「空格假物品」**（0.1.0 起记录侧已不再产生）
+--   判据（三条同时成立才算假，**绝不误伤真物品**）= 数量 0 ∧ 没贴图 ∧ 名字恰好 "?"
+--   （老记录里它就是 `l=|cff9d9d9d|Hitem:0…h[]`, n="?", c=0, tx=nil —— 真机截图里那些空色块）
+local function tlItemReal(it)
+  if type(it) ~= "table" then return false end
+  local c = tonumber(it.c)
+  if c == nil or c >= 1 then return true end
+  if it.tx ~= nil then return true end
+  if type(it.n) == "string" and it.n ~= "?" then return true end
+  return false
 end
 
 -- 一条记录摊成**图标序列**：先「我给出」后「我得到」（框色不同 ⇒ 不用文字也分得清）
@@ -518,7 +740,9 @@ local function tlIconList(rec)
   local out = {}
   local function push(arr, dir)
     local n = table.getn(arr or {})
-    for i = 1, n do out[table.getn(out) + 1] = { it = arr[i], dir = dir } end
+    for i = 1, n do
+      if tlItemReal(arr[i]) then out[table.getn(out) + 1] = { it = arr[i], dir = dir } end
+    end
   end
   if type(rec) == "table" then
     push(rec.give, "g")
@@ -563,25 +787,43 @@ local function tlRowTip(btn, rec)
     if (tonumber(moneyC) or 0) > 0 then head = head .. "　" .. tlMoney(moneyC) end
     pcall(tip.AddLine, tip, head, 0.85, 0.82, 0.62)
     local n = table.getn(arr or {})
-    if n == 0 then
+    -- ★件数也要按「真物品」数（老存档里的空格假物品不许再算进「无物品」判定与列表）
+    local shown = 0
+    for i = 1, n do if tlItemReal(arr[i]) then shown = shown + 1 end end
+    if shown == 0 then
       pcall(tip.AddLine, tip, "　" .. L("TL_NO_ITEM"), 0.62, 0.62, 0.62)
       return
     end
     for i = 1, n do
       local it = arr[i]
-      local c = tonumber((type(it) == "table" and it.c) or 1) or 1
-      local txt
-      if type(it) == "table" and type(it.l) == "string" and it.l ~= "" then
-        txt = it.l                                   -- 链接自带品质色
-      else
-        txt = "|cffffffff" .. tostring((type(it) == "table" and it.n) or "?") .. "|r"
+      if tlItemReal(it) then
+        local c = tonumber(it.c) or 1
+        local txt
+        if type(it.l) == "string" and it.l ~= "" then
+          txt = it.l                                   -- 链接自带品质色
+        else
+          txt = "|cffffffff" .. tostring(it.n or "?") .. "|r"
+        end
+        if c > 1 then txt = txt .. " ×" .. c end
+        pcall(tip.AddLine, tip, "　" .. txt, 0.90, 0.90, 0.90)
       end
-      if c > 1 then txt = txt .. " ×" .. c end
-      pcall(tip.AddLine, tip, "　" .. txt, 0.90, 0.90, 0.90)
     end
   end
   side(L("TL_TIP_GIVE"), rec.give, tonumber(rec.gm) or 0)
   side(L("TL_TIP_GET"), rec.get, tonumber(rec.gt) or 0)
+  -- ★★★1.76.4：「金币」列画 `—` 时必须说清是**「这笔没有钱」**还是**「放了钱没读到」** ——
+  --   用户 2026-10-10 问「金币交易数据不能获取到吗?」：旧版面只画一个没有解释的短横，
+  --   而这两种情况（本来就没放钱 / 放了钱没读到）在屏上长得一模一样。
+  local gm0, gt0 = tonumber(rec.gm) or 0, tonumber(rec.gt) or 0
+  if gm0 == 0 and gt0 == 0 then
+    local dm = tonumber(rec.dm)
+    if dm and dm ~= 0 then
+      pcall(tip.AddLine, tip, string.format(L("TL_MONEY_DERIVED"),
+        tlSign(dm < 0) .. tlMoney(dm)), 0.88, 0.75, 0.38)
+    else
+      pcall(tip.AddLine, tip, L("TL_MONEY_NONE"), 0.62, 0.62, 0.62)
+    end
+  end
   pcall(tip.AddLine, tip, L("TL_TIP_ROW"), 0.60, 0.85, 1)
   pcall(tip.Show, tip)
 end
@@ -814,6 +1056,7 @@ end
 
 -- 挂靠：优先贴交易窗右侧 → 放不下翻左侧 → 再不行放下/上方 → 都不行就居中（**绝不把窗留在屏幕外**）
 --   ★`TL_GAP = 0` ⇒ **紧贴**（用户点名：面板紧贴交易窗）；上下也对齐交易窗顶（偏移 0）
+--   ★★`TL_DX/TL_DY` = 真机微调（用户 2026-10-10：再往左 25 逻辑px、往下 5 逻辑px）—— **四档整体平移**
 tlPlace = function()
   local f = TL.root
   if not f then return false end
@@ -822,10 +1065,10 @@ tlPlace = function()
   local order = {}
   if tlShown(tf) then
     order = {
-      { "TOPLEFT", tf, "TOPRIGHT", TL_GAP, 0 },          -- 右侧（用户点名的默认位，紧贴）
-      { "TOPRIGHT", tf, "TOPLEFT", -TL_GAP, 0 },         -- 左侧
-      { "TOPLEFT", tf, "BOTTOMLEFT", 0, -TL_GAP },       -- 下方
-      { "BOTTOMLEFT", tf, "TOPLEFT", 0, TL_GAP },        -- 上方
+      { "TOPLEFT", tf, "TOPRIGHT", TL_GAP + TL_DX, TL_DY },       -- 右侧（用户点名的默认位，紧贴）
+      { "TOPRIGHT", tf, "TOPLEFT", -TL_GAP + TL_DX, TL_DY },      -- 左侧
+      { "TOPLEFT", tf, "BOTTOMLEFT", TL_DX, -TL_GAP + TL_DY },    -- 下方
+      { "BOTTOMLEFT", tf, "TOPLEFT", TL_DX, TL_GAP + TL_DY },     -- 上方
     }
   end
   local sw, sh = 1024, 768
@@ -1009,13 +1252,19 @@ tlBuild = function()
   TL.empty:SetPoint("TOPLEFT", root, "TOPLEFT", 16, -46)
   pcall(TL.empty.SetWidth, TL.empty, W - 32)
   TL.empty:SetText(L("TL_EMPTY"))
-  local liveY = -(y0 + TL_ROWS * TL_ROW_H + 2)
+  -- ★★★1.76.4 修真实 bug：旧算式 `-(y0 + TL_ROWS * TL_ROW_H + 2)` —— `y0` **本身就是负数**(-38)
+  --   ⇒ 算出来 -144（= 行池第 6 行上）而不是 -220 ⇒ 两条灰字被画**在行池里**：
+  --   记录 ≤5 条时空行不画、看不出来；一过 5 条就叠字（用户截图「列表内部信息和灰色字重叠」）。
+  --   正确写法 = 顺着 y0 自己的符号往下减（与上面 `local y = y0 - (i-1) * TL_ROW_H` **同一把尺子**）。
+  local liveY = y0 - TL_ROWS * TL_ROW_H - 2
   TL.live = tlText(root, 9, 0.72, 0.90, 1.00)
   TL.live:SetPoint("TOPLEFT", root, "TOPLEFT", 10, liveY)
   pcall(TL.live.SetWidth, TL.live, W - 20)
   pcall(TL.live.SetJustifyH, TL.live, "LEFT")
   local hint = tlText(root, 9, 0.58, 0.60, 0.58)
-  hint:SetPoint("TOPLEFT", root, "TOPLEFT", 10, liveY - 13)
+  -- ★与本次行拉开 26px（= 给本次行留两行的余量）—— 对方名字一长本次行就会折行，
+  --   旧写法贴 13px（只够一行）⇒ 折行那一刻两条灰字自己先叠上。
+  hint:SetPoint("TOPLEFT", root, "TOPLEFT", 10, liveY - 26)
   pcall(hint.SetWidth, hint, W - 20)
   pcall(hint.SetJustifyH, hint, "LEFT")
   hint:SetText(L("TL_HINT"))
@@ -1163,6 +1412,13 @@ end
 tlOnEvent = function()
   -- ★事件名走全局 `event`（本客户端处理体的调用约定：零形参 + 全局 event/arg1/arg2）
   local e = rawget(_G, "event")
+  -- ★★★1.76.5：**逐事件计数**（固定键集、绝不增长 ⇒ 不是无界账）——
+  --   它是「这条事件在本客户端到底发不发」的**唯一可信证据**（`/eh go 交易记录 金钱` 摊开）。
+  --   ★为什么不用 `IsEventRegistered` 当唯一判据：它不在引擎名表里（`tmp/trade_money_exe2.js` 两种编码 0 命中），
+  --   真机可用与否只能靠行为取证 ⇒ 计数就是那条行为腿。
+  if type(e) == "string" and type(TL.evCnt) == "table" and TL.evCnt[e] ~= nil then
+    TL.evCnt[e] = TL.evCnt[e] + 1
+  end
   if e == "TRADE_SHOW" then
     tlOpenSession()
     tlMsgArm(true)
@@ -1176,14 +1432,42 @@ tlOnEvent = function()
       tlMsgArm(false)                          -- 已落账 ⇒ 宽事件当场摘掉
       tlBeatSync()
     end
-  elseif e == "TRADE_UPDATE" or e == "TRADE_PLAYER_ITEM_CHANGED" or e == "TRADE_TARGET_ITEM_CHANGED" then
+  elseif e == "TRADE_UPDATE" or e == "TRADE_PLAYER_ITEM_CHANGED" or e == "TRADE_TARGET_ITEM_CHANGED"
+      or e == "PLAYER_TRADE_MONEY" or e == "TRADE_MONEY_CHANGED" then
+    -- ★★★1.76.5 修用户报障「金币数量未正确显示」的**真缺口**：
+    --   `PLAYER_TRADE_MONEY` = **我**的钱变了、**`TRADE_MONEY_CHANGED` = 对方**的钱变了
+    --   （判据 = `MoneyFrame.lua` 的 `MoneyTypeInfo` 配对：`PLAYER_TRADE`↔`PLAYER_TRADE_MONEY`、
+    --   `TARGET_TRADE`↔`TRADE_MONEY_CHANGED`，而 `TARGET_TRADE` 的 UpdateFunc 正是 `GetTargetTradeMoney()`）。
+    --   ⇒ 旧写法只注册了前者 ⇒ **对方加钱时 `c.gt` 永远是 0**（尤其「最后一次物品变化之后才加钱」那种顺序）。
     if type(TL.cur) == "table" then
       tlSnap()
       tlRefresh()
+      tlNote(string.format("金钱/物品事件 %s ⇒ 快照：我方=%s(%s) 对方=%s(%s)",
+        tostring(e), tostring(TL.cur.gm), tostring(TL.cur.gmSrc or "-"),
+        tostring(TL.cur.gt), tostring(TL.cur.gtSrc or "-")))
+    end
+  elseif e == "PLAYER_MONEY" then
+    -- ★★★1.76.5：**我的钱包变了**（`MoneyFrame.lua:106/137` 两类钱框都注册它）——
+    --   用途 = 让「钱包差额」那条腿**即时化**：交易完成时钱到账往往发生在关窗**之后**
+    --   （旧写法只能靠核对窗里每 0.25s 去轮询 `GetMoney()`，窗口一旦错过就永远拿不到）。
+    --   ★只刷新**钱包读数**，不重读物品（物品与钱包无关；重读还会在关窗后把 give/get 抹掉）。
+    local w = TL.wallet()
+    if w then
+      if type(TL.cur) == "table" then
+        TL.cur.money1 = w
+      elseif type(TL.pend) == "table" and type(TL.pend.c) == "table" then
+        TL.pend.c.money1 = w
+      end
     end
   elseif e == "TRADE_ACCEPT_UPDATE" then
     local a1 = tonumber(rawget(_G, "arg1"))
     local a2 = tonumber(rawget(_G, "arg2"))
+    -- ★★★1.76.5：**先重读一次快照**（此时双方的钱都已最终确定、交易格还没清空 ⇒ 重读物品也安全）——
+    --   这一拍是「钱在最后一次物品变化之后才加」的最后一道保险（任何一方点确认都走这里）。
+    if type(TL.cur) == "table" then
+      tlSnap()
+      tlRefresh()
+    end
     if type(TL.cur) == "table" and a1 == 1 and a2 == 1 then
       TL.cur.both = true
       tlRefresh()
@@ -1216,7 +1500,24 @@ function EVAL_TL_SYNC()
   end
   local EVENTS = { "TRADE_SHOW", "TRADE_CLOSED", "TRADE_UPDATE",
                    "TRADE_PLAYER_ITEM_CHANGED", "TRADE_TARGET_ITEM_CHANGED",
-                   "TRADE_ACCEPT_UPDATE" }
+                   "TRADE_ACCEPT_UPDATE",
+                   -- ★★★真机补（用户 2026-10-10「交易记录的金币数量未正确显示」）：
+                   --   **我方**的钱变了 = `PLAYER_TRADE_MONEY`
+                   --   判据出处 = 客户端自带 `TradeFrame.xml:565`（`TradePlayerInputMoneyFrame` 自己注册它
+                   --   来刷 `GetPlayerTradeMoney()`）+ `MoneyFrame.lua:106/137/153`（两类钱框都吃它）。
+                   --   ⇒ 不注册它：「先放物品、后放钱」那种顺序**永远不会再快照**（钱只加到 0）。
+                   "PLAYER_TRADE_MONEY",
+                   -- ★★★1.76.5 补（**这才是「金币数量未正确显示」的真缺口**）：
+                   --   **对方**的钱变了 = `TRADE_MONEY_CHANGED`
+                   --   判据 = `MoneyFrame.lua:64-67/155`（`MoneyTypeInfo["TARGET_TRADE"]` 的 UpdateFunc
+                   --   是 `GetTargetTradeMoney()`，且**只**挂在 `TRADE_MONEY_CHANGED` 那一支）。
+                   "TRADE_MONEY_CHANGED",
+                   -- ★★★1.76.5 补：**我的钱包**变了 = `PLAYER_MONEY`（`MoneyFrame.lua:106/137`）——
+                   --   交易完成后钱到账常常发生在**关窗之后** ⇒ 这条让「钱包差额」腿即时拿到，不靠轮询。
+                   "PLAYER_MONEY" }
+  -- ★逐事件计数（固定键集 ⇒ 有界）：`金钱` 子命令摊开它 = 「这条事件到底发不发」的行为证据
+  TL.evCnt = TL.evCnt or {}
+  for i = 1, table.getn(EVENTS) do TL.evCnt[EVENTS[i]] = TL.evCnt[EVENTS[i]] or 0 end
   for i = 1, table.getn(EVENTS) do
     if on then
       pcall(TL.ev.RegisterEvent, TL.ev, EVENTS[i])
@@ -1283,6 +1584,23 @@ function EVAL_TL_TEST_STATE()
     apis[names[i]] = (type(G(names[i])) == "function")
   end
   local done = G("ERR_TRADE_COMPLETE")
+  -- ★★★1.76.5：**金钱读取四条路的当前读数**（`金钱` 子命令摊开它们 —— 一条命令回答「到底能不能拿到钱」）
+  local gmApi, gtApi = tlReadMoneyEx("GetPlayerTradeMoney"), tlReadMoneyEx("GetTargetTradeMoney")
+  local gmLua, gtLua = tlMoneyLuaMine(), tlMoneyLuaTarget()
+  local live = (type(TL.cur) == "table") and TL.cur or ((type(TL.pend) == "table") and TL.pend.c or nil)
+  -- ★事件注册自证：`IsEventRegistered` **不在引擎名表里**（`tmp/trade_money_exe2.js` 两种编码 0 命中）
+  --   ⇒ 只当**旁证**用（pcall 包住、读不到就如实回 nil），主证据是 `TL.evCnt` 的实测次数。
+  local reg = {}
+  local EVNAMES = { "TRADE_SHOW", "TRADE_CLOSED", "TRADE_UPDATE", "TRADE_ACCEPT_UPDATE",
+                    "PLAYER_TRADE_MONEY", "TRADE_MONEY_CHANGED", "PLAYER_MONEY" }
+  if type(TL.ev) == "table" and type(TL.ev.IsEventRegistered) == "function" then
+    for i = 1, table.getn(EVNAMES) do
+      local en = EVNAMES[i]
+      local okr, r = pcall(TL.ev.IsEventRegistered, TL.ev, en)
+      -- ★本客户端返 1 不是 true（Share.lua 的老坑）⇒ 两种都认；抛错/读不到 ⇒ nil（判不出）
+      if okr then reg[en] = (r == true or r == 1) else reg[en] = nil end
+    end
+  end
   return {
     on = EVAL_TL_ON(),
     count = n,
@@ -1303,9 +1621,53 @@ function EVAL_TL_TEST_STATE()
     bdEdge = (TL.bdEdge and tostring(TL.bdEdge)) or false,
     apis = apis,
     completeMsg = (type(done) == "string") and done or nil,
+    -- ★★金钱读数（0.1.0 真机排障用；`/eh go 交易记录 状态` 打一行）：
+    --   三个数放在一起就能分清「这笔交易本来就没放钱」与「放了钱但没读到」——
+    --   `money` 我方 / `moneyT` 对方 = **此刻**交易窗里的读数；`money0` = 开窗时我的总钱基准。
+    money = tlReadMoney("GetPlayerTradeMoney"),
+    moneyT = tlReadMoney("GetTargetTradeMoney"),
+    money0 = (type(TL.cur) == "table") and tonumber(TL.cur.money0) or nil,
+    -- ★★★1.76.5 四条路逐路读数（nil = 这条路读不到，**绝不与 0 混同**）
+    mApi = gmApi, mApiT = gtApi,
+    mLua = gmLua, mLuaT = gtLua,
+    gm = live and tonumber(live.gm) or nil, gt = live and tonumber(live.gt) or nil,
+    gmSrc = live and live.gmSrc or nil, gtSrc = live and live.gtSrc or nil,
+    evCnt = TL.evCnt,
+    evReg = reg,
     probe = TL.probe,
     first = (n > 0) and l[1] or nil,
   }
+end
+
+-- ★★★1.76.5：**「能不能拿到金币」的一条命令自证**（`/eh go 交易记录 金钱`）
+--   ★全只读：一次客户端写操作都不发（只是读 API / 读 Lua 缓存 / 读计数）。
+--   判读三句话：
+--     ① 「引擎 API」两格非 nil ⇒ 本客户端这两个 API 确实可用；
+--     ② 「客户端 Lua」两格 ⇒ 引擎 API 万一为 nil，还有这条纯 Lua 备胎；
+--     ③ 「事件实测次数」= 真机行为证据 —— 做一笔带钱的交易后再看，
+--        `TRADE_MONEY_CHANGED` 的次数涨了 ⇒ 对方的钱那条路是通的（**离线判不出，只能这样证**）。
+local function tlMoneyLines()
+  local st = EVAL_TL_TEST_STATE()
+  local function num(v) if v == nil then return L("TL_MONEY_NOLUCK") end return tostring(v) end
+  local function reg1(en)
+    local r = type(st.evReg) == "table" and st.evReg[en] or nil
+    if r == true then return L("SH_ON") end
+    if r == false then return L("SH_OFF") end
+    return "?"
+  end
+  local function cnt(en)
+    local c = type(st.evCnt) == "table" and st.evCnt[en] or nil
+    if c == nil then return "?" end
+    return tostring(c)
+  end
+  sayF(L("TL_MONEY_HEAD"))
+  sayF(string.format(L("TL_MONEY_L1"), num(st.mApi), num(st.mApiT)))
+  sayF(string.format(L("TL_MONEY_L2"), num(st.mLua), num(st.mLuaT)))
+  sayF(string.format(L("TL_MONEY_L3"),
+    reg1("PLAYER_TRADE_MONEY"), reg1("TRADE_MONEY_CHANGED"), reg1("PLAYER_MONEY")))
+  sayF(string.format(L("TL_MONEY_L4"),
+    cnt("PLAYER_TRADE_MONEY"), cnt("TRADE_MONEY_CHANGED"), cnt("PLAYER_MONEY"), cnt("TRADE_UPDATE")))
+  sayF(string.format(L("TL_MONEY_L5"), num(st.gm), tostring(st.gmSrc or "-"), num(st.gt), tostring(st.gtSrc or "-")))
 end
 
 local function tlStateLines()
@@ -1317,6 +1679,12 @@ local function tlStateLines()
     st.apis.GetTargetTradeMoney and "√" or "×",
     st.apis.ChatFrame_SendTell and "√" or "×",
     tostring(st.completeMsg or "—")))
+  -- ★★★金钱读数行（0.1.0 真机排障）：本客户端「交易金钱变化」的信号 = `PLAYER_TRADE_MONEY`
+  --   （判据 = 客户端自带 `TradeFrame.xml:565`）⇒ 这三个数一眼分清
+  --   「这笔本来就没放钱（— 是对的）」与「放了钱没读到（我方/对方都该非 0）」
+  sayF(string.format(L("TL_STATE_MONEY"),
+    tostring(st.money or 0), tostring(st.moneyT or 0),
+    (st.money0 ~= nil) and tostring(st.money0) or L("TL_NO_LIVE")))
   -- ★边框自证行（弹窗边框配方，见 CLAUDE.md §三.10；只读播报，不换档）
   sayF(string.format(L("TL_STATE_BD"), tostring(st.bdKind or "flat"),
     (st.bdEdge and tostring(st.bdEdge) or L("SH_OFF"))))
@@ -1352,6 +1720,10 @@ function EVAL_TL_CMD(msg)
     sayF(string.format(L("TL_PROBE_HEAD"), st.count, pn))
     if pn == 0 then sayF("   " .. L("TL_PROBE_EMPTY")) end
     for i = 1, pn do sayF("   " .. tostring(st.probe[i])) end
+  elseif rest == "金钱" or rest == "money" then
+    -- ★★★1.76.5：**一条命令回答「能不能拿到金币」**（只读；见 `tlMoneyLines` 的判读说明）
+    tlMoneyLines()
+    tlStateLines()          -- 顺带把「交易窗此刻读数」那几行也带上（用户就是从那行问起的）
   else
     sayF(L("TL_USAGE"))
   end

@@ -119,7 +119,7 @@ local MDQ = {}
 --       「命令没跑成」与「跑的是旧版（那条命令在旧版里根本不存在）」—— 那时只看这个键就能立刻定性。
 --   它落在两个地方：① 载入期写进存档 `worldFogCfg.buildTag`（**只要 /reload 过就一定有**）；
 --   ② `/ehm mapfit 自检` 的落盘环表头与 `[1] 环境` 行（跟着那一次的读数一起存）。
-MDQ.BUILD = "1.76.1"
+MDQ.BUILD = "1.76.6"
 
 -- ★★★1.75.60b：**编辑模式里的两个视图开关**（用户：「编辑模式右侧增加原始贴图层的显示和隐藏,迷雾贴图层的显示和隐藏」）
 --   用途 = 逐块对位时的「对照看」：把**客户端自己的探索层**放出来、把我们画的迷雾层收起来 ——
@@ -6132,7 +6132,7 @@ MDQ.nudgeLines = function()
   table.insert(out, "　入口 = **迷雾贴图列表底部那一排四个箭头**（↑ ↓ ← →）—— 点一下 = 1 屏幕像素；按住 Shift 点 = 10 屏像素")
   -- ★1.75.60o：尺寸那一排也摊在这里（同一族、同一把尺子）
   table.insert(out, MDQ.sizeLine())
-  table.insert(out, "　★**尺寸那一排（宽−/宽+/高−/高+）= 第二排**：只对**单选一块**生效；最终尺寸 = 基础表块尺寸 + 补偿（表口径），UV 不动 ⇒ 拉伸的是这一块本身")
+  table.insert(out, "　★**尺寸那一排（宽-/宽+/高-/高+）= 第二排**：只对**单选一块**生效；最终尺寸 = 基础表块尺寸 + 补偿（表口径），UV 不动 ⇒ 拉伸的是这一块本身")
   table.insert(out, "　★箭头是**灰的** ⇒ 一块都没选中（先在列表点一行，或按 [全选]）；连点会并入限频回显（每 0.6 秒一行）")
   table.insert(out, "　★上一版的**键盘方向键监听已整条撤掉**（本客户端 EnableKeyboard 的帧会吃掉按键 ⇒「焦点」那一层反复带来两种误判）；改成点按钮 = 没有焦点问题、不吃按键")
   return out
@@ -6313,7 +6313,7 @@ end
 MDQ.sizeLine = function()
   local file = tostring(select(1, smMapInfo()) or "")
   local info, why = MDQ.selSizeNow(file)
-  local head = string.format("尺寸补偿（面板第二排 宽−/宽+/高−/高+）：步长=%s 屏像素/点（Shift ×%s）",
+  local head = string.format("尺寸补偿（面板第二排 宽-/宽+/高-/高+）：步长=%s 屏像素/点（Shift ×%s）",
     tostring(MDQ.NUDGE_STEP), tostring(MDQ.NUDGE_FAST))
   if info == nil then
     local w = "一块都没选中（先在列表点一行）"

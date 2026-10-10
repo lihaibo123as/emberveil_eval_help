@@ -22,7 +22,7 @@
 | :-- | :-- |
 | `EH_Damage.lua` | 主实现（配置 / 动画槽池 / 事件解析 / 编辑模式模拟战斗 / 配置面板 / 命令） |
 | `FontDigits.lua` | **生成物**：自带字体图集的度量表（charset + 每档 `file/h/W/cw/cx` = 贴图路径/格高/总宽/逐字宽/逐字偏移），由 `python tmp/gen_fontatlas.py` 生成（TTF 路，5 种参数式描边） |
-| `FontDigitsExtra.lua` | **生成物**（0.2.37）：**只做合并** —— 把 4 种「成品字形」风格的逐档度量并进 `EVAL_EDMG_FONTDIGITS.st`，由 `python tmp/gen_fontatlas_custom.py --install` 生成；★toc 必须排在 `FontDigits.lua` **之后**、`EH_Damage.lua` **之前**；★与 TTF 路**互不覆盖**（两边重跑都不抹对方） |
+| `FontDigitsExtra.lua` | **生成物**（0.2.37 / 0.2.48 起带守卫）：**只做合并** —— 把 4 种「成品字形」风格的逐档度量并进 `EVAL_EDMG_FONTDIGITS.st`，由 `python tmp/gen_fontatlas_custom.py --install` 生成；★toc 必须排在 `FontDigits.lua` **之后**、`EH_Damage.lua` **之前**（⇒ **读条期**就在文件顶层跑）；★与 TTF 路**互不覆盖**（两边重跑都不抹对方）；★★★**全文不许出现 `D.tiers[<数字>]` 裸索引**（逐档写入一律走守卫过的 `put(档, id, rec)`，缺档记 `EVAL_EDMG_EXTRA_MISS`）—— 见判据正文那条 |
 | `EH_Damage.toc` | 载入清单（`FontDigits.lua` → `FontDigitsExtra.lua` → `EH_Damage.lua`）+ `## Version` + `## SavedVariables: EH_DAMAGE_CFG` |
 | `media\fontdigits_1..6.tga` | **生成物**：`hard` 风格 6 档战斗数字图集（type-10 RLE + alpha，cell 高 = `D.TIER_H`） |
 | `media\fontdigits_<风格>_1..6.tga` | **生成物**：另 4 种**参数式**描边风格（`soft`/`glow`/`shadow`/`plain`）× 6 档 + 4 种**成品字形**（`out9c`/`shd9c`/`outwx`/`shdwx`）× 6 档（同规格；共 **9 风格 54 张**） |
@@ -90,6 +90,43 @@
   技能名由 **`spellFromMsg(m)`** 按真机句式取（宠物技能「Cat的撕咬击中X造成8点伤害。」⇒ 撕咬 ·
   用 `UnitName("pet")` 锚定宠物名，不做任何「猜技能」；宠物普攻「Cat击中X…」与玩家平砍「你击中X…」**不给名**）。
   ★`PET_BAR_UPDATE` / `UNIT_PET` 时重扫（新学的技能不用 /reload）；**查不到就一个图标都不画**（绝不画 ? 图）。
+  ★★★**载入期原生调用面 = 全插件只有这一处，且上界必须「现读」、不许写死探针（0.2.47）**：
+  `D.iconScan` 在 `VARIABLES_LOADED` 那一拍（读条末尾）跑，是唯一「载入期拿越界下标批量打原生 API」的地方
+  ⇒ 扫描上界走新 helper **`spellbookTop()`**（`GetNumSpellTabs()` + 逐 tab `GetSpellTabInfo(i)` 取 `offset+numSpells`
+  的**最大值**；★**定义必须排在 `D.iconScan` 之前** —— 否则撞本项目「先引用后声明绑全局 nil」老雷）。
+  · **判据出处（照抄，别自创）**：客户端自带 `Interface\FrameXML\SpellBookFrame.lua:24/36`
+    （`local name, texture, offset, numSpells = GetSpellTabInfo(i)`）+ 宿主 `Engine.lua:2237~2240` 的真机在案写法
+    `for i = off + 1, off + num` ⇒ **合法全局下标 = `offset+1 .. offset+numSpells`**。
+  · **两条边界常量（0.2.47 定）**：`SPELL_TOP_MARGIN = 8` —— 容忍客户端 tab 报表差一两格
+    （**真实条数 ≤ 上界**才不丢图标；正常客户端越界返回 nil ⇒ 这 8 格**一次都不会跑**，零代价）·
+    **返回值恒夹在 `1..900`**（`if b > 900 then b = 900 end`：报天文数字/脏值就退回 900，**绝不放**调用面）。
+  · **两条不许动**：① **读不出 / 读不齐 ⇒ 一律退回 900**（fail-open = 旧行为，**绝不因判不出而少扫一格**）；
+    ② **保留「遇 nil 就 break」原语义，绝不加「空串也算停」**（空串现在是「跳过这一格、继续扫」，
+    改成停会丢掉它后面**所有**技能的图标 —— 这条是 0.2.47 亲手撤回的错建议）。
+  · **载入期总面已核完（别再翻一遍）**：除本处外只有 ①三个文件的**文件顶层**（表构造 + 1 次 `CreateFrame` +
+    1 次 `RegisterEvent` + `SlashCmdList` 注册）· ②`eventSync` 的 ~30 次 `RegisterEvent`（已逐个 `pcall`，
+    再收窄只能删事件 = 改功能，不做）· ③槽池那 40 个 2048×512 帧与图集贴图**都不在载入期**（按需建 / 首战才 `SetTexture`）。
+  · 全案（可能性分档 · 存储面三条机制 · 「进世界/读条」两种描述的判别 · 改动×功能影响对照表）=
+    **`doc/EH_Damage-载入崩溃可能性调研.md`**；判据 = `node luacheck.js` + `node sync_game.js` + `node tmp/verify_sync.js` 不一致 0。
+- ★★★**`FontDigitsExtra.lua` 载入期零裸索引（0.2.48；承上一条的同一份调研）** —— 本文件 = **生成物**
+  （`python tmp/gen_fontatlas_custom.py --install`），toc 排在 `FontDigits.lua` 之后、`EH_Damage.lua` **之前**
+  ⇒ **读条期就在文件顶层跑**，是全插件**唯一**在 `VARIABLES_LOADED` **之前**就执行的那一段（那一拍 `say()` 还不存在）。
+  · **旧写法 = 24 条裸索引**（`D.tiers[1..6].st["out9c"/"shd9c"/"outwx"/"shdwx"] = {…}`，6 档 × 4 风格）
+    ＋ 上一行 `for i = 1, table.getn(D.tiers) do D.tiers[i].st = … end`（对「数组有洞 / 元素不是表」不设防）
+    ⇒ 表与预期对不上（全局缺失 / 只有 3 档 / 有洞 / 某档是数字 / 某档 `st` 是垃圾值）= 读条期
+    `attempt to index a nil value`。
+  · **修法**：唯一逐档写入口 **`put(i, sid, rec)`**，**两层守卫**（档是表 ∧ `st` 是表 —— ★只判一层会在
+    `st` 是字符串时照样崩：**往字符串上赋值 = `attempt to index a string value`**）；缺档 / 垃圾值 ⇒ **跳过 + 只记一次**。
+    产物形态随之从 `D.tiers[N].st["id"] = {…}` 变成 `put(N, "id", {…})`。
+  · ★★★**生成物必须连生成器一起改**（改产品文件不改生成器 = 下次 `--install` 就把 bug 请回来）；
+    生成器顺手改成**直接写 CRLF**（本仓库口径，省掉一次 `normalize_eol`）。
+  · **如实出声**：结论落全局 **`EVAL_EDMG_EXTRA_MISS`**，由 `EH_Damage.lua` 在 `VARIABLES_LOADED` 报**一行**
+    「★字体度量表缺 N 档（第 …档）⇒ 缺的那几档回落内置字体（其余照旧，功能不受影响）」；`EVAL_EDMG_STATE` 补 `faMiss`（nil = 正常）。
+  · **零功能 / 零观感变化**：24 条度量**一字未改**（`verify_extra_metrics` 仍 24 条全部与真实 TGA 对齐）、
+    `media\` 24 张 TGA 重生成后**逐字节相同**。
+  · 判据 = **`node tmp/ehdmg_extramiss_check.js`**（整份产物原文 + 9 组坏表夹具 ⇒ 25 条行为断言 + 8 条结构钉/生成器钉）
+    ＋ **变异自检 `EHDMG_EXTRA_MUT=1`**（**只在内存里**把守卫换成恒真 ⇒ 9 行为 + 1 钉转红，报错原文就是老 bug 形态）
+    ＋ `node tmp/verify_extra_metrics.js`（正则已同步成 `put(…)` 形态，并补反向钉「产物里不许出现 `D.tiers[<数字>]`」）。
 - ★★★**动画 = 绝对时间驱动**（`t = now - t0`，与帧率无关）：smoothstep 淡入淡出 `t*t*(3-2*t)`（前 10% 入 / 后 50% 出）·
   暴击 = 0.35s 窗口内抬一档字号（0.2.0 起；旧「三段缩放」随字号机制一起作废）· 彩虹弧线 `y = y0 + 240t − 200t²`
   （0.2.1 加高：峰值 ~72px · 0.6s 到顶 · 落到锚点以下；旧 `140t − 240t²` 峰值仅 ~20px）+ 侧漂。
@@ -382,7 +419,7 @@
 | `tmp/subaddon_naming_probe.js` | **命名与播报口径常驻闸门**（宿主契约 ⑥，全项目共用）：目录名形态 = `EH_<名>` · 该目录里**所有** `[EH_xxx]` 前缀逐字等于目录名（本插件走 `"[" .. ADDON_NAME` 那一支）· **反向钉**：内部名（`FontDigits` / `FontDigitsExtra`）**当前缀** = 0 处 |
 | `tmp/ehdmg_rules_harness.js` | **伤害文本规则匹配修复专项**（离线真跑 · 保真桩 + 真源码切片）：宠物技能图标三态与 `spellFromMsg` 五条真机句式 · 三条无伤害文本一条都不画且句形入环 · 受到伤害归属门（宠物挨打不显示 / 真·我挨打照旧 −9）· 句形去重与有界 · 关断四件事与句形表清 · 读值口/状态行不含已删字段 · 剥注释后的反向钉（无已删定位实现 / 无 GUID·姓名板 API / 无 `numOf(m) or m`）= **行为 40 + 结构钉 9** |
 | `tmp/fa_edge_smoke.js` | **图集 + 缩放动画 + 模拟战斗专项冒烟**（fengari 真跑 · 真源码切片 + **真生成物**）：生成物 vs TGA 文件头（表 W/高/type-10/cw+cx==W）· 描边风格分派与写口（坏值拒绝/中文名/旧表兼容）· 每种风格真跑 `faLayout` 逐格核对 UV/格宽/居中 · **缩放动画 ④ 组**（起点恒等于初始缩放 · 100% 不弹入 · 130% 由大缩回 · 上下限 · **幅度 0 弹入照旧** · **暴击平滑包络三点精确值 + 末端 \|k-1\|<0.5%** · **尾声三种 fo 的确定读数** · 峰值口径 `faPeakFactor` · `faScaleApply` 只发几何且 `tex/uv == 0` · 图标跟着缩 · 逐拍闸门 · **四条 fo 相位结构钉**）· **模拟战斗 ⑤ 组**（真跑 `simFire` 40 次：伤害/持续/宠物行每条都带能解析出图标的技能名、其余行不带 · 池子按缓存对象身份重滤 · 池空退回无名字 · 开关唯一口的结构钉）= **404 条**（0.2.30~0.2.35；★桩里的 `ANIM_*/ANS_*/AEN_*/FA_K_MIN/TIER_H`、`smoothstep` 与 `DEF.animAmp/animStart/animEnd` 一律**从真源码现读**，防桩与产品漂移）· ★★★**0.2.37 起 `D.FAS_ORD` 是 9 条、0.2.38 起又分成 3 组（`D.FAS_SETS`）** ⇒ 下一轮统一推送**必须重指这一条冒烟**：凡按「5 种风格」写死的期望、以及 `panel._h = 520` 那条钉（现 **594**）都要改，并补三条新结构钉 =「`D.faStyleStep` 只在**当前组内**循环」·「`D.faGlyphStep` 换组时**组内下标不变**」·「认不出的 style ⇒ `faSetOf` 落第一组、**绝不返回 nil**」· ★0.2.39 还要补「参数区行位只有 `grp()`/`rowGap()` 两处写 `py`（**全段不许再出现 `py - 24` 这类硬写**）」+「`ui.posXText/posYText` 建了就必须在 `uiRefresh` 里刷」 |
-| `tmp/verify_extra_metrics.js` | **成品字形度量专项（0.2.37）· 只读**：`FontDigitsExtra.lua` 的 24 条度量 ↔ **真实 TGA 逐条对齐**（type-10/32bit · `sum(cw)==W` · **TGA 头宽 == 表里的 W** · `cx` 连续且不越界 · 每条 id 都在 `D.FAS_ORD` 里 · `FAS_ORD` = 5+4）⇒ 判据 = `EXTRA METRICS OK` |
+| `tmp/verify_extra_metrics.js` | **成品字形度量专项（0.2.37）· 只读**：`FontDigitsExtra.lua` 的 24 条度量 ↔ **真实 TGA 逐条对齐**（type-10/32bit · `sum(cw)==W` · **TGA 头宽 == 表里的 W** · `cx` 连续且不越界 · 每条 id 都在 `D.FAS_ORD` 里 · `FAS_ORD` = 5+4）⇒ 判据 = `EXTRA METRICS OK`。★**0.2.48 起解析形态 = `put(档, id, {…})`**（产物改成守卫形态后同步改的正则），并补 **4 条结构钉**：「产物里没有 `D.tiers[<数字>]` 裸索引」「`put()` 在场」「`EVAL_EDMG_EXTRA_MISS` 在场」「`EH_Damage.lua` 读同一个记号」 |
 | `tmp/ehdmg_panel_layout.js` | **面板布局闸门（0.2.39 建 · 0.2.40 扩到勾选区）· 只读**：★**勾选区**（0.2.40）列数必须 = 3 · 逐项「列起点 + 框 14 + 间隙 5 + 标签估宽」**不压下一列**（中文 1 字 / ASCII 0.55，与 `uiEstW` 同一把尺子）· ★列数/行数/列距/面板 W·H **全从源码现读**（防闸门过期）｜★**参数区**：分组 4 / 参数格 16 / 标签不重复 · **行位只有一个来源**（`paramCell` 一律传**裸 `py`**、全段不许出现 `py - 24` 这类硬写；旧收尾魔数 `py = py - 192` 不许回来）· 逐格模拟游标（`grp` 20 / `rowGap` 24）⇒ 全在面板高度内、同格位不撞、底部按钮不越界 · **建了就必刷** · ★**(0.2.40) 面板底色 `solid(bg, …, 1)` 的 alpha 必须 = 1**（反向钉：退回 0.96 就把「黄条」请回来；★只在 `uiBuild` 段里找 —— 编辑锚点那块也有 `solid(bg, …)` 是 0.85，按全文找会假红）⇒ 判据 = `PANEL LAYOUT OK` · ★**(0.2.42) 第 ⑦ 条：组标题分隔线**必须 `solid(ln, …)` 先、定尺寸后，且 `pcall(ln.Set*, ln, …)` 带 self
 （漏了 = 那条 1px 线**从来没拿到尺寸** ⇒ 客户端按默认 ≈32×32 画成**金色方块**，用户看到的就是「一块一块黄色的背景区块」；
 ★**写钉踩坑**：判「第一个实参是不是 owner」**别用** `,\s*(?!ln\b)` —— `\s*` 回溯到零宽会让否定前瞻成立 ⇒ **正确代码也假红**，
@@ -391,16 +428,27 @@
 | `tmp/edmg_panel_bgprofile.py` | **面板截图取色体检（0.2.40）· 只读**：逐行取**背景 p20 亮度**做剖面 + 列出明显更亮的带（附代表色）⇒ 一眼分清「按钮底色 `0.22,0.17,0.07`」/「分组分隔线 `0.42,0.34,0.16`」/「面板 96% 不透明漏出的背后内容」。配 `tmp/edmg_panel_crop.py`（3× 最近邻放大可疑区域，交视觉模型看） |
 | `tmp/edmg_colormask.py` | **色块定位（0.2.42）· 只读**：`python tmp/edmg_colormask.py <png> <r,g,b> <out.png>` 把**某个确切颜色**画成白/黑掩膜 ⇒ 一眼看出那是「实心色块」还是「文字」（0.2.42 就是这么把「黄色区块」点名叫到 `grp()` 那条分隔线上的）。配三件：`tmp/edmg_rects.py`（连通域 bbox/面积占比 + 局部 5× 放大）· `tmp/edmg_runscan.py`（**逐行最长同色 run**：文字只有笔画宽、实心块 40~120px）· `tmp/edmg_strip.py`（横向取色找面板缘/边框线，定标尺） |
 | `tmp/ehdmg_mut_selftest.js` | **判据自检（0.2.42）**：`node tmp/ehdmg_mut_selftest.js break` 把分隔线两行的 self 去掉（模拟真机那个 bug）· `restore` 从 `.bak` 还原 ⇒ 用来证明「漏 self」那条钉**真的抓得到**（break 时 `PANEL LAYOUT FAIL` + wiring `1 FAIL`，restore 后都绿；★只用 `.replace` 精确匹配，改不到就报错退出、不写盘） |
+| `tmp/ehdmg_spelltop_check.js` | **载入期扫描上界专项（0.2.47 建）· 只读**：抽 `spellbookTop()` 的**真源码切片** + 保真桩真跑 ⇒ **27 条行为断言**（正常三档 = `max(off+num)+8` · API 缺失/档数 0/负/字符串/抛错 ⇒ 900 · **任何一档读不出或 off/num 非数字 ⇒ 整体 900** · 全零 ⇒ 900 · **上限恒夹 `1..900`**（`5000→900` / `893+8→900` / `892+8→900` / `884+8=892`）· 旧 900 vs 新上界的**等价性**（nil 客户端两边同表同调用数）与**收窄量**（空串客户端 `1800 → 86` 次）· 真技能图标一个不少）+ **9 条结构钉**（含两条反向钉：「全文不许再出现写死的 `for i = 1, 900 do`」「主扫描不许加空串也停」）。★**变异自检 = `node tmp/ehdmg_spelltop_mk.js A\|B\|C`**（只写 `tmp` 副本、**绝不碰产品文件**；跑完删副本）⇒ A 退回 900 / B 去掉夹取 / C 加空串停止 **三个变异全被抓** |
+| `tmp/ehdmg_extramiss_check.js` | **`FontDigitsExtra.lua` 载入期零裸索引专项（0.2.48 建）· 只读**：抽**整份产物原文** + fengari 真跑 ⇒ **25 条行为断言**（正常 6 档 24 条全进 · `no D` / `D` 非表 / `tiers` 非表 / 空 `tiers` / 只有 3 档 / 数组有洞 / 档位非表 / 档位在但 `st` 是垃圾值 / 顶层 `D.st` 垃圾值 / 同一份跑两遍 ⇒ **一次都不许报错**；缺档必须**如实点名第几档**；正常时记号恒 nil；`styleList` 追加 4 个 id 且原有 5 个保留）+ **8 条结构钉**（反向钉「产物里不许出现 `D.tiers[<数字>]`」· 两层守卫在场 · `st` 归一循环在场 · **跨文件钉**「产物写的记号名 == `EH_Damage.lua` 读的那个字面量」· 三条**生成器钉**「不许再吐裸索引形态」「必须吐 `put(档, id, …)`」「必须直接写 CRLF」）。★**变异自检 = `EHDMG_EXTRA_MUT=1 node tmp/ehdmg_extramiss_check.js`**（**只在内存里**把守卫换成恒真、**绝不碰产品文件**）⇒ 9 条行为断言 + 1 条结构钉转红、报错原文 `attempt to index a nil value (local 'e')` = 老 bug 形态 ⇒ 判据不是装饰 |
 | `tmp/ehdmg_ver_check.js` | **版本一致性（只读）**：`EH_Damage.lua` 的 `local BUILD` == `EH_Damage.toc` 的 `## Version` ⇒ 判据 = `VERSION OK`（★别用 `node -e` 内联跑 —— PowerShell 会把引号/中文字符串拆坏，见宿主 §4.2） |
 | `tmp/edmg_fonts_probe.py` | **素材体检（0.2.37）· 只读**：`fonts\` 里那几套成品图的 PNG 尺寸/透明度 + 按 alpha 投影切出的行列网格 + 逐字墨区；BLP2 头逐字段（type/compression/alphaDepth/alphaEnc/hasMips/宽高）+ offsets/lengths + **数据头是否 `FF D8 FF`**（判 JPEG 分支＝会崩客户端的那支）；描边 vs 阴影两版差异；预览拼图 |
-| `tmp/gen_fontatlas_custom.py` | **生成器（0.2.37）**：不带参数 = 预览模式（只写 `tmp/font_probe/custommedia/`）· `--install` = 写 `media/fontdigits_<id>_<档>.tga` + 生成物 `FontDigitsExtra.lua`；★与 TTF 路 `gen_fontatlas.py` **互不覆盖** |
+| `tmp/gen_fontatlas_custom.py` | **生成器（0.2.37）**：不带参数 = 预览模式（只写 `tmp/font_probe/custommedia/`）· `--install` = 写 `media/fontdigits_<id>_<档>.tga` + 生成物 `FontDigitsExtra.lua`；★与 TTF 路 `gen_fontatlas.py` **互不覆盖**。★**0.2.48 起产物必须是守卫形态**（`put(档, id, {…})`，**绝不是 `D.tiers[N].st[…] =`**）并**直接写 CRLF**（`newline="\r\n"`）—— 判据在 `ehdmg_extramiss_check.js` 的三条**生成器钉**里 |
 | `tmp/dump_fontmetrics.js` | **度量导出（0.2.43）**：fengari 真跑 `FontDigits.lua` + `FontDigitsExtra.lua`（补 `table.getn` 兼容壳）⇒ 把**指定档位**的 9 种风格度量（`file/W/cw/cx`）导成 `tmp/font_metrics.json`；自检 `sum(cw)==W` + 条数 == 字符集 + `FAS_ORD` 全覆盖，任一条不过就 **exit 1**（绝不导出一份错的）。★**度量只有这一个来源** —— 正则抓 `cw` 数组抓错过、成品字形列投影会**粘连**（14≠15，实测） |
 | `tmp/gen_fontpreview.py` | **预览图生成器（0.2.43）**：按 `tmp/font_metrics.json` 的 `cx/cw` 逐字切 `media/fontdigits_*.tga`（type-10 RLE 自解码），按与运行期 `faLayout` 同一排版口径拼成 `addons/EH_Damage/preview/fontstyles.png`（9 风格 × `108` 白 + `-298` 暴击红 + `45.6%`，中文标签用 `C:\Windows\Fonts\msyh.ttc`）；自检「TGA 头宽 == 表里 W」，不过就中止 |
 
 ★**闸门「本机到底有什么、跑出来什么」= 现核 + 留档，别照抄旧笔记（2026-10-09 实测改写的这一段）**：
-· **本仓库（`G:\…\AddOns\EvalHelp`）`tmp/` 里 `ehdmg_*` 只有 5 个**：`ehdmg_harness.js` · `ehdmg_wiring_check.js` ·
-  `ehdmg_panel_layout.js` · `ehdmg_ver_check.js` · `ehdmg_mut_selftest.js` —— ★**表格里那个 `ehdmg_rules_harness.js` 本机没有**
-  （旧笔记写反了：先说「只有 rules 那一个」、我 0.2.42 又写成「全都在」—— **两次都是照抄、没现核**）⇒ 每次用 `Get-ChildItem tmp` 现核。
+· **本仓库（`G:\…\AddOns\EvalHelp`）`tmp/` 里名字带 `ehdmg` 的现为 9 个**（0.2.48 轮现核 `Get-ChildItem tmp`）：`ehdmg_harness.js` ·
+  `ehdmg_wiring_check.js` · `ehdmg_panel_layout.js` · `ehdmg_ver_check.js` · `ehdmg_mut_selftest.js` · **`ehdmg_spelltop_check.js` +
+  `ehdmg_spelltop_mk.js`（0.2.47 新增）** · **`ehdmg_extramiss_check.js`（0.2.48 新增，见表格）** · **`ehdmg_crash_ctx.js`（载入崩溃调研的一次性只读取证）** —— ★**表格里那个
+  `ehdmg_rules_harness.js` 本机没有**（旧笔记写反过两次：先说「只有 rules 那一个」、0.2.42 又写成「全都在」—— **两次都是照抄、没现核**）
+  ⇒ 每次用 `Get-ChildItem tmp` 现核；★**按 `ehdmg` 前缀筛会漏掉两个不带头缀的**（`tmp/fa_edge_smoke.js` · `tmp/verify_extra_metrics.js`）
+  ⇒ 现核时把 `ehdmg|edmg|fa_edge|verify_extra` 一起列。
+· **0.2.48 轮实跑读数**（只跑了这几道，未跑全套）：`luacheck` **SYNTAX OK: 71** · `ehdmg_extramiss_check` **EXTRAMISS OK**（断言 25 / 失败 0 / 结构钉 0）
+  ＋**变异自检**（`EHDMG_EXTRA_MUT=1` ⇒ 9 行为 + 1 钉转红）· `verify_extra_metrics` **EXTRA METRICS OK（24 条对齐）** · `ehdmg_spelltop_check` **SPELLTOP OK**
+  · `ehdmg_ver_check` **VERSION OK（0.2.48 ↔ toc）** · `sync_game` **改 5 / 同 77** · `verify_sync` **不一致 0**；★生成器重跑后 `media\` 24 张 TGA **逐字节相同**（`git status` 干净）。
+· **0.2.47 轮实跑读数**（只跑了这几道，未跑全套）：`luacheck` **SYNTAX OK: 71** · `ehdmg_spelltop_check` **SPELLTOP OK**（断言 27 / 失败 0 / 结构钉 0）
+  ＋**变异自检 A/B/C 三个全被抓**（`ehdmg_spelltop_mk.js`，只写 tmp 副本、跑完即删）· `ehdmg_ver_check` **VERSION OK**（0.2.47 ↔ toc）
+  · `sync_game` **改 3 / 同 79** · `verify_sync` **不一致 0**。
 · **实测结果（0.2.42~0.2.43 时点）**：绿 = `luacheck` SYNTAX OK:58 · `ehdmg_wiring_check` 32 OK/0 FAIL · `ehdmg_panel_layout` PANEL LAYOUT OK ·
   `ehdmg_ver_check` VERSION OK · `verify_extra_metrics` EXTRA METRICS OK · `sync_game` + `verify_sync` 不一致 0。
   ★**红/欠账两条**（都是**闸门自身过期**，不是产品 bug，全部在 0.2.37~0.2.41 改功能时只跑语法闸门留下的）：

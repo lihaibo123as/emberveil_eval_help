@@ -22,7 +22,7 @@
 --   · 字体链 FZLBJW→FRIZQT→ARIALN 全程 pcall；FontString 不吃鼠标 ⇒ 热区用透明 Button。
 -- ============================================================================
 
-local BUILD = "0.2.46"
+local BUILD = "0.2.48"
 
 -- ★★★插件目录名 = 本文件所在目录 + `EH_Damage.toc` 的文件名 —— **聊天播报的前缀就用它**
 --   （用户 2026-10-10：「插件载入信息换成插件目录名」：截图里旧的中文前缀与 `[EH_DPS]` 两种写法混着，
@@ -288,10 +288,42 @@ local function clamp01(v) if v < 0 then return 0 elseif v > 1 then return 1 end 
 --   ★只缓存法术书里有的：别人施的（如队友的「恢复」）只有你也会才查得到，查不到不画（绝不画 ? 图）
 -- ----------------------------------------------------------------------------
 D.iconCache = {}
+-- ★★★0.2.47 载入期原生调用收窄：法术书扫描的**上界改成「现读」**，不再拿写死的 900 当探针。
+--   ① **为什么改**：本函数在 `VARIABLES_LOADED` 那一拍（读条末尾）跑，是全插件唯一「载入期拿越界下标
+--      批量打原生 API」的地方 —— `pcall` 只兜 Lua 异常，**兜不住原生访问违规** ⇒ 别的客户端/版本若对
+--      越界下标不做检查，这里就是「一进游戏（读条）就崩」的现场。
+--   ② **判据出处（客户端自带 FrameXML = 权威）**：`Interface\FrameXML\SpellBookFrame.lua:24/36` 写的是
+--      `local name, texture, offset, numSpells = GetSpellTabInfo(i)` ⇒ **合法全局下标 = offset+1 .. offset+numSpells**；
+--      宿主 `Engine.lua:2237~2240` 就是 `for i = off + 1, off + num`（真机在案）⇒ 上界 = 各 tab 的 `offset+numSpells` 最大值。
+--   ③ ★★**读不出 / 读不齐 ⇒ 一律退回 900**（fail-open = 今天的行为）：**绝不因为判不出上界而少扫一格**
+--      ⇒ 「判不出」只会让原生调用面回到原样，绝不会丢掉任何图标。
+--   ④ ★★**返回值恒在 `1..900` 之间，绝不超过原上界 900**：客户端若报出天文数字/脏值，退回 900 而**不是**放大调用面。
+--   ⑤ `SPELL_TOP_MARGIN` = 容忍 `GetSpellTabInfo` 报表差一两格（真实条数 ≤ 上界才不丢图标）；
+--      正常客户端（越界返回 nil）这 8 格**一次都不会跑**（循环在真实末尾的下一格就 break），零代价。
+--   ⑥ ★**保留「遇 nil 就 break」原语义**，绝**不**加「空串也算停」—— 空串现在是「跳过这一格、继续扫」，
+--      改成停止会在遇到中间空串时丢掉它后面**所有**技能的图标（真机行为风险）。
+local SPELL_TOP_MARGIN = 8
+local function spellbookTop()
+  if type(GetNumSpellTabs) ~= "function" or type(GetSpellTabInfo) ~= "function" then return 900 end
+  local okN, nt = pcall(GetNumSpellTabs)
+  if not okN or type(nt) ~= "number" or nt <= 0 then return 900 end
+  local top = 0
+  for tab = 1, nt do
+    local okT, _nm, _tex, off, num = pcall(GetSpellTabInfo, tab)
+    if not (okT and type(off) == "number" and type(num) == "number" and off >= 0 and num >= 0) then
+      return 900                          -- 有一档判不出 ⇒ 整体退回原上界（绝不因判不出而少缓存图标）
+    end
+    if off + num > top then top = off + num end
+  end
+  if top <= 0 then return 900 end
+  local b = top + SPELL_TOP_MARGIN
+  if b > 900 then b = 900 end             -- ★上限绝不超过 900（脏值也不许放大调用面）
+  return b
+end
 function D.iconScan()
   local c = {}
   if type(GetSpellName) == "function" and type(GetSpellTexture) == "function" then
-    for i = 1, 900 do
+    for i = 1, spellbookTop() do
       local okN, name = pcall(GetSpellName, i, "spell")
       if not okN or not name then break end
       local okT, tex = pcall(GetSpellTexture, i, "spell")
@@ -2302,6 +2334,12 @@ boot:SetScript("OnEvent", function()
   D.iconScan()                       -- 技能名→图标缓存（配图；法术书变了由 SPELLS_CHANGED 重扫）
   if c.master then eventSync() end
   beatSync()
+  -- ★0.2.48 字体度量表缺档 / 读不到 ⇒ **如实报一行**（绝不让它静默；也绝不因此判「插件坏了」）
+  --   来源 = FontDigitsExtra.lua（它跑在本文件**之前**，那一刻 say() 还不存在 ⇒ 只能先落一个全局）
+  local fm = rawget(_G, "EVAL_EDMG_EXTRA_MISS")
+  if type(fm) == "string" and fm ~= "" then
+    say("★" .. fm .. " ⇒ 缺的那几档回落内置字体（其余照旧，功能不受影响）")
+  end
   say("增强伤害显示 v" .. BUILD .. " 已载入（/edmg 打开配置 · /edmg 编辑 编辑模式 · /edmg 测试）")
 end)
 
@@ -2335,6 +2373,8 @@ function _G.EVAL_EDMG_STATE()
     animEnd = tonumber(c.animEnd) or DEF.animEnd, animEndMin = D.AEN_MIN, animEndMax = D.AEN_MAX,
     animMin = D.ANIM_MIN, animMax = D.ANIM_MAX, popSec = D.FA_POP_SEC, critSec = D.FA_CRIT_SEC,
     faOK = faEnsure(), faN = FA.N, faChars = FA.nch,
+    -- ★0.2.48 字体度量表缺档 / 读不到的如实记号（nil = 一切正常；来源 = FontDigitsExtra.lua）
+    faMiss = (type(rawget(_G, "EVAL_EDMG_EXTRA_MISS")) == "string" and rawget(_G, "EVAL_EDMG_EXTRA_MISS")) or nil,
     pool = D.poolN, active = active,
     shapeN = shapeCount(),                        -- 句形环已记多少种（真机取证口）
     editOn = D.editOn, simOn = D.simOn, ring = table.getn(c.ring or {}),

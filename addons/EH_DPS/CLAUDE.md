@@ -22,7 +22,7 @@
 | :-- | :-- |
 | `EH_DPS.lua` | 主实现（配置 / 数据采集 / 双段数据模型 / 进度条窗口 / 报告 / 命令） |
 | `EH_DPS.toc` | 载入清单 + `## Version` + `## SavedVariables: EH_DPS_CFG` |
-| `README.md` / `CLAUDE.md` / `CHANGELOG.md` | 使用者说明 / 本文件 / 改动记录（`0.1.x` ↔ 宿主 `1.75.y`） |
+| `README.md` / `CLAUDE.md` / `CHANGELOG.md` | 使用者说明 / 本文件 / 改动记录（`0.1.x`/`0.2.x` ↔ 宿主 `1.75.y`/`1.76.y`） |
 
 ★本子插件**没有 `media\`**（纯 WHITE8X8 纯色纹理 + 分档字体对象）。★同步 = `node sync_game.js`（整目录拷到插件同级）+ `node tmp/verify_sync.js` 逐字节核对。
 
@@ -68,7 +68,25 @@
   关断时 `setMaster(false)` 连带收菜单。
 - ★★**数据模型 = 双段**（`D.data[0]`全程 / `[1]`当前战斗）：进战（`PLAYER_REGEN_DISABLED`）重置当前段，
   脱战记 `fightT` 并 `D.SaveData()` 持久化（跨 /reload 恢复全程段）；**活跃时间 EDPS = 5 秒规则**
-  （`touchActive`：距上次 >5s 按 +5s 计，否则按实际差——抄 ShaguDPS `_ctime` 算法）。
+  （`touchActiveP`：距上次 >5s 按 +5s 计，否则按实际差——抄 ShaguDPS `_ctime` 算法）。
+- ★★★**会话时钟戳 `actTick` 不许跨会话复用 + 活跃时间不许为负（0.2.6，真机报障「活跃 -47974s」定案）**：
+  · **症状与证据**：底行 `活跃 -47974s`、DPS 视图显示成**六万多**。真机存档直读
+    （`…\Account\<账号>\SavedVariables\EH_DPS.lua`）＝ `data0.p.<名>.actT = -48275` 而 `actTick = 3903430`
+    （= 上一次会话的 `GetTime()` 原值）⇒ 负值只能由 `actT = actT + (now - actTick)` 那一支（else）产生，
+    **根因 = 把「会话时钟戳」当持久数据用**（`SaveData` 写进 `data0`、`LoadData` 原样恢复）。
+  · **三条口径（改这块必守）**：① **时钟倒退门** —— `now < p.actTick`（或 `actTick` 类型坏掉）一律按
+    「**首次活跃**」处理（+1 秒），**绝不算负增量**；`actT` 一律夹在 0 以上（坏档自愈）；
+    ② **会话时钟戳归一（唯一入口 `clockFixSeg`）** —— `LoadData` 恢复全程段后把每条记录的 `actTick`
+    **清 0**（跨会话戳永不复用），负 `actT` 夹回 0；**修过就当场 `D.SaveData()` 写回存档表 + 如实出声一次**
+    （「活跃时间异常已修正：负值 N 条夹回 0（跨会话时钟戳，共清 M 条）」）；
+    ③ **分母可信门** —— 每秒视图（DPS/HPS）在 `actT < 1`（还没有可信读数 / 历史坏档）时**退回本段总量**
+    并加行尾 `*`（悬停 `rowTipShow` 第 5 参 `noTime` 出说明）—— ★**旧的 `if secs < 1 then secs = 1 end`
+    是拿假数字冒充**（负分母被夹成 1 秒 = 「总伤害 ÷ 1」= 用户截图那六万多），**不许写回来**。
+  · **只读取证环** `EH_DPS_CFG.clockLog`（有界 20，唯一写口 `clkNote`，只在倒退门触发时写）：
+    跨会话戳已在载入期清掉 ⇒ **这里再出现即证明本客户端同一会话内 `GetTime()` 也会倒退**
+    （离线判不出；读法 = 直接读存档，或 `/edps 状态` 打条数与末条）。
+  · **未定案（如实记）**：`GetTime()` 究竟何时倒退/重置**没有离线判据** —— 下一次真机若 `clockLog` 有数据，
+    看 `倒退 Xs（actTick=… → now=…）` 那一行即可定案；在那之前**不许**把它写成「已知的客户端 bug」。
 - ★★**击杀去重**：`CHAT_MSG_COMBAT_HOSTILE_DEATH` 对同一只怪发**两条**
   （「你杀死了X！」+「X死亡了。」，本项目在案事实）⇒ `killOnce` 同名 2s 窗去重。
 - ★★**裸名字负载守卫**：incoming 族事件的 arg1 可能是**裸名字**而非整句（EH_Damage 0.2.4 真机实锤）
@@ -117,6 +135,13 @@
 | `tmp/subaddon_naming_probe.js` | **命名与播报口径常驻闸门**（宿主契约 ⑥，全项目共用）：目录名形态 = `EH_<名>` · 该目录里**所有** `[EH_xxx]` 前缀逐字等于目录名 · 名字 → 前缀的**单一来源** · **反向钉**：内部名**当前缀** = 0 处（本插件内部表名恰好 = `EH_DPS`，两份合一） |
 
 ★功能修改过程中只跑 `node luacheck.js` + `node sync_game.js`；那一轮不得声称「过了全套闸门」。
+
+## 欠账（统一推送时补）
+
+| 项 | 内容 |
+| :-- | :-- |
+| `tmp/ehdps_harness.js` 组 ⑥ 扩组 | 0.2.6 的三条新行为**尚无断言**（现有三条「首次 +1 / 间隔 3s 按 3s / >5s 按 5s」语义**未被改动**，仍然有效）：① **时钟倒退门** —— 夹具把 `p.actTick` 设成未来值再触发一次活跃 ⇒ `actT` **只 +1、绝不为负**，且 `EH_DPS_CFG.clockLog` 多一条；② **载入归一** —— 夹具存档里放 `actT = -100` / `actTick = 999999` ⇒ `D.LoadData()` 后 `actT == 0`、`actTick == 0`、有声（`SAYS` 里含「活跃时间异常已修正」）、`EH_DPS_CFG.data0` 已被写回（`actT == 0`）；③ **分母可信门** —— `actT = 0` 的记录在 `view=2`（DPS）下 ⇒ 行文本是**总量 + `*`**（不是 `总量 / 1`），且 `rowTipShow` 第 5 参带上后多一行说明 |
+| `tmp/ehdps_wiring_check.js` | 补两条源码钉：`clockFixSeg` 的**调用点在 `LoadData` 内且排在恢复之后** · **反向钉**：全文件不许再出现 `if secs < 1 then secs = 1`（假 1 秒分母） |
 
 ## 发布打包
 

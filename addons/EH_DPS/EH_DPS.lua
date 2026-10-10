@@ -1,7 +1,8 @@
 -- ============================================================================
 -- EH_DPS · 个人伤害统计表（自娱自乐版）独立子插件
 -- ----------------------------------------------------------------------------
--- 定位：只统计「自己 + 宠物」的输出/承伤/治疗/能量/击杀，按技能分解。
+-- 定位（★0.2.0 起 = **全队伍级**）：名册内的每个玩家各出一行（伤害/承伤/治疗/能量/击杀/施放，
+--   各自按技能分解）；★击杀/能量/施放**只有自己**（战斗文本不署别人的名，如实告知）。
 --   ★准确度不保证：事件源 = CHAT_MSG_* 文本解析（SCT 模式），本客户端没有
 --     结构化战斗事件、没有 GUID API（1329 条 API 索引在案，三轮调研定案）。
 --   ★句式 = zhCN 尽力而为：模式表照 EH_Damage 真机校准成果起手，
@@ -17,7 +18,7 @@
 --     ⇒ 报告走 pcall(RunScript, ...)，且 0.6s 滴出限频（RunScript 也是队列）。
 -- ============================================================================
 
-local BUILD = "0.2.5"
+local BUILD = "0.2.6"
 
 local D = {}                      -- 命名空间（跨函数共享件全挂这里，控 local 数）
 _G["EH_DPS"] = D                  -- 调试/桥接口（子插件独立，不依赖宿主）
@@ -99,6 +100,17 @@ local function capture(ev, msg)
   if C().capture then ringPush(tostring(ev) .. " | " .. tostring(msg)) end
 end
 
+-- ★★★会话时钟取证环（有界 20 条，0.2.6）：只在这一族「时钟倒退门」被触发时写一条。
+--   修完之后跨会话戳已在载入期清掉 ⇒ **这里再出现**，就说明本客户端**同一会话内**
+--   `GetTime()` 也会倒退（离线判不出，下一个会话读存档即可定案 —— 命令 `/edps 状态` 打条数与末条）。
+local CLK_MAX = 20
+local function clkNote(back, stamp, now)
+  local c = C()
+  if type(c.clockLog) ~= "table" then c.clockLog = {} end
+  table.insert(c.clockLog, string.format("倒退 %.1fs（actTick=%.1f → now=%.1f）", back, stamp, now))
+  while table.getn(c.clockLog) > CLK_MAX do table.remove(c.clockLog, 1) end
+end
+
 local function numOf(msg) return tonumber(string.match(msg, "(%d+)")) end
 local function isCrit(msg) return string.find(msg, "致命") ~= nil end
 
@@ -135,16 +147,45 @@ local function dataEnsure()
 end
 
 -- 活跃时间（抄 ShaguDPS 的 5 秒规则）：距上次活跃 >5s 按 +5s 计，否则按实际差
+--   ★★★0.2.6 时钟倒退门（真机报障「活跃 -47974s」的根因收口，**改这块必看**）：
+--     `actTick` 是**会话时钟戳**（`GetTime()` 的原值），跨 /reload、客户端重启、
+--     系统校时都可能让它比当前 `now` **还大** ⇒ 旧写法 `p.actT = p.actT + (now - p.actTick)`
+--     会加一个**负增量**，把活跃时间减成负数（真机实证：`LIHAIBOAS2` 存档里
+--     `actT = -48275` 而 `actTick = 3903430`；负分母再被「`secs < 1 ⇒ 1`」夹成 1 秒
+--     ⇒ DPS 视图显示成本段总量 = 六万多）。
+--     ⇒ 判据两条：① `now < p.actTick`（时钟倒退）一律按「**首次活跃**」处理（+1 秒），
+--       **绝不加负增量**；② `actT` 一律夹在 0 以上（负数活跃时间没有意义，坏档自愈）。
 local function touchActiveP(p)
   local now = GetTime and GetTime() or 0
-  if p.actTick == 0 then
-    p.actT = 1
+  if type(p.actT) ~= "number" or p.actT < 0 then p.actT = 0 end
+  if p.actTick == 0 or type(p.actTick) ~= "number" then
+    p.actT = p.actT + 1
+  elseif now < p.actTick then
+    clkNote(p.actTick - now, p.actTick, now)     -- 时钟倒退：如实留证（下一个会话读存档即可定案）
+    p.actT = p.actT + 1                          -- 按「首次活跃」处理，**绝不算负增量**
   elseif p.actTick + 5 < now then
     p.actT = p.actT + 5
   else
     p.actT = p.actT + (now - p.actTick)
   end
   p.actTick = now
+end
+
+-- ★★★会话时钟戳归一（唯一入口，0.2.6）：存档里的 `actTick` 属于**上一次会话**，
+--   与新会话的 `GetTime()` 不同源 ⇒ 恢复时**一律清 0**（下次活跃自然走「首次」分支）。
+--   顺带把已经算坏的负 `actT` 夹回 0；返回「修了几条负值 / 清了几条陈旧戳」供载入期如实播报。
+--   （★改的是**存档表本身** ⇒ 下一次 /reload/退出 自然写盘；这里不谎称「立刻写盘」）
+local function clockFixSeg(seg)
+  if type(seg) ~= "table" or type(seg.p) ~= "table" then return 0, 0 end
+  local neg, stale = 0, 0
+  for _, p in pairs(seg.p) do
+    if type(p) == "table" then
+      if type(p.actT) ~= "number" or p.actT < 0 then p.actT = 0 neg = neg + 1 end
+      if type(p.actTick) ~= "number" or p.actTick ~= 0 then stale = stale + 1 end
+      p.actTick = 0
+    end
+  end
+  return neg, stale
 end
 
 -- 持久化：脱战/手动重置时把全程段存进存档（跨 /reload 恢复）
@@ -162,6 +203,13 @@ function D.LoadData()
   if type(c.data0) == "table" and type(c.data0.p) == "table" then
     dd[0] = c.data0
     dd[0].fightT = c.fightT0 or dd[0].fightT or 0
+    -- ★★0.2.6：跨会话时钟戳归一（负活跃时间就在这里被夹回 0）；修过就写回存档表 + 如实出声一次
+    --   （★`D.SaveData()` 只是把 `c.fightT0` 一起对齐；真正落盘仍在本客户端 /reload/退出 那一刻）
+    local neg, stale = clockFixSeg(dd[0])
+    if neg > 0 then
+      say("活跃时间异常已修正：负值 " .. neg .. " 条夹回 0（跨会话时钟戳，共清 " .. stale .. " 条）")
+      D.SaveData()
+    end
   elseif type(c.data0) == "table" then
     c.data0 = nil
     say("旧版统计数据结构不兼容，全程段已清空（当前战斗不受影响）")
@@ -552,10 +600,15 @@ local function viewRows()
   for name, p in pairs(seg.p) do
     local raw = pk and p[pk.sum] or 0
     if type(raw) == "number" and raw > 0 then
-      local secs = p.actT or 1
-      if secs < 1 then secs = 1 end
-      local val = v.perSec and (raw / secs) or raw
-      table.insert(rows, { name = name, raw = raw, value = val })
+      -- ★★★0.2.6 分母可信门：活跃时间 < 1 秒 = 还没有可信读数（或历史坏档）
+      --   旧写法 `if secs < 1 then secs = 1 end` 是**拿假数字冒充** ⇒ 每秒视图算成
+      --   「本段总量 ÷ 1」（真机：负 actT 被夹成 1 ⇒ DPS 显示 69650.0）。
+      --   ⇒ 现在退回**总量**并在行尾标 `*`（悬停解释），绝不假装每秒。
+      local secs = p.actT
+      if type(secs) ~= "number" or secs < 0 then secs = 0 end
+      local timed = (secs >= 1)
+      local val = (v.perSec and timed) and (raw / secs) or raw
+      table.insert(rows, { name = name, raw = raw, value = val, noTime = (v.perSec and not timed) or nil })
       total = total + (v.count and 0 or raw)      -- 计数类不算总量占比
       if val > best then best = val end
     end
@@ -636,13 +689,18 @@ local function rowTipSpellSource(name)
   return p[pk.det]
 end
 
-local function rowTipShow(anchor, name, raw, total)
+local function rowTipShow(anchor, name, raw, total, noTime)
   if type(GameTooltip) == "nil" or not GameTooltip.SetOwner then return end
   pcall(GameTooltip.SetOwner, GameTooltip, anchor, "ANCHOR_RIGHT")
   pcall(GameTooltip.SetText, GameTooltip, name)
   if total and total > 0 then
     pcall(GameTooltip.AddLine, GameTooltip,
       string.format("%s（%.1f%%）", fmtNum(raw), raw / total * 100), 1, 1, 1)
+  end
+  -- ★0.2.6：行尾 `*` 的说明（每秒视图里分母不可信时显示的是总量）
+  if noTime then
+    pcall(GameTooltip.AddLine, GameTooltip,
+      "* 活跃时间不足 1 秒：显示的是本段总量（不做每秒折算）", 1, 0.82, 0.25)
   end
   local det = rowTipSpellSource(name)
   if det then
@@ -691,7 +749,12 @@ function D.Refresh()
       -- 条目文字白色（0.2.4 用户定：黑字在条尾之外的黑底上看不清；0.2.2 的黑字方案退回）
       pcall(row.fs.SetTextColor, row.fs, 1, 1, 1)
       if v.perSec then
-        pcall(row.fs.SetText, row.fs, string.format("%s  %.1f", r.name, r.value))
+        if r.noTime then
+          -- ★0.2.6 分母不可信 ⇒ 如实显示**本段总量** + 行尾 `*`（悬停解释），绝不假装每秒
+          pcall(row.fs.SetText, row.fs, string.format("%s  %s*", r.name, fmtNum(r.raw)))
+        else
+          pcall(row.fs.SetText, row.fs, string.format("%s  %.1f", r.name, r.value))
+        end
       elseif v.count then
         pcall(row.fs.SetText, row.fs, string.format("%s  %d", r.name, r.raw))
       else
@@ -860,9 +923,9 @@ local function buildUI()
       local c = C()
       local v = VIEWS[c.view] or VIEWS[1]
       local rows, total = viewRows()
-      local raw = 0
-      for _, rr in ipairs(rows) do if rr.name == nm then raw = rr.raw break end end
-      rowTipShow(rf, nm, raw, total)
+      local raw, noTime = 0, nil
+      for _, rr in ipairs(rows) do if rr.name == nm then raw = rr.raw noTime = rr.noTime break end end
+      rowTipShow(rf, nm, raw, total, noTime)
       pcall(bar.SetAlpha, bar, 1)
     end)
     rf:SetScript("OnLeave", function()
@@ -1336,6 +1399,11 @@ local function cmd(msg)
     for _ in pairs(dd[1].p) do n = n + 1 end
     say("当前段人数 " .. n .. " ｜ 名册 " .. (function() local k = 0 for _ in pairs(D.partyNames) do k = k + 1 end return k end)()
       .. " ｜ 捕获环 " .. table.getn(c.ring) .. "/" .. RING_MAX)
+    -- ★0.2.6：会话时钟取证（正常恒 0 —— 载入期已清掉跨会话戳；非 0 = 同一会话内 GetTime 倒退过）
+    local cl = (type(c.clockLog) == "table") and c.clockLog or {}
+    if table.getn(cl) > 0 then
+      say("时钟倒退 " .. table.getn(cl) .. "/" .. CLK_MAX .. " 次（末条：" .. tostring(cl[table.getn(cl)]) .. "）")
+    end
   else
     say("用法：/edps [ui|开|关|视图 [序号或名]|当前|全程|重置|报告 [说|队伍|团队]|捕获|事件|状态]（视图：1伤害量 2DPS 3治疗量 4HPS 5承受伤害 6受到治疗 7能量回复 8击杀 9施放次数，或右键标题选）")
   end
@@ -1367,5 +1435,5 @@ boot:SetScript("OnEvent", function()
     end
   end
   D.beatSync()
-  say("v" .. BUILD .. " 已加载（/edps 打开统计窗；自娱自乐版，只统计自己，准确度不保证）")
+  say("v" .. BUILD .. " 已加载（/edps 打开统计窗；全队伍级统计，击杀/能量/施放只有自己，准确度不保证）")
 end)

@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.76.1"
+local VERSION = "1.76.6"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -10768,7 +10768,7 @@ if type(SlashCmdList) == "table" then
     --   "go 商人" = 3 + 6 = **9 字节**（两个汉字各 3 字节；string.sub 是字节下标 —— 少算一个空格就静默失效）
     elseif string.sub(msg, 1, 9) == "go 商人" then
       if type(EVAL_MB_CMD) == "function" then pcall(EVAL_MB_CMD, msg) else say("批量购买未载入：tools\\MerchantBulk.lua 不在 toc 里") end
-    -- ★1.76.1 交易记录（tools/TradeLog.lua）：/eh go 交易记录 [状态|开|关|列表|清空|探针]
+    -- ★1.76.1 交易记录（tools/TradeLog.lua）：/eh go 交易记录 [状态|金钱|开|关|列表|清空|探针]
     --   "go 交易记录" = 3 + **12** = 15 字节（四个汉字各 3 字节；string.sub 是字节下标 —— 少算就静默失效）
     elseif string.sub(msg, 1, 15) == "go 交易记录" then
       if type(EVAL_TL_CMD) == "function" then pcall(EVAL_TL_CMD, msg) else say("交易记录未载入：tools\\TradeLog.lua 不在 toc 里") end
@@ -11339,8 +11339,9 @@ if type(SlashCmdList) == "table" then
       fsay("　客户端对敌对目标只给百分比 ⇒ 用插件自带的**本服生物生命值库**复算上限，目标框下方显示「名字 · 当前 / 上限 (百分比)」；查不到只显示百分比（灰条），绝不编数字")
       fsay("批量购买: /eh go 商人（状态探针）｜ 商人 开 ｜ 商人 关 ｜ 商人 窗 <行> ｜ 商人 买 <行> <个数>")
       fsay("　商人界面里 **Shift+右键**点某一行 ⇒ 弹数量窗（默认 20、±5 步进）；本客户端没有批量购买 API（一次只买 1 笔）⇒ 限频队列 0.3 秒一笔，库存/银两/背包逐笔现查，停下必报账")
-      fsay("交易记录: /eh go 交易记录（状态）｜ 交易记录 开 ｜ 交易记录 关 ｜ 交易记录 列表 ｜ 交易记录 清空 ｜ 交易记录 探针")
+      fsay("交易记录: /eh go 交易记录（状态）｜ 交易记录 金钱 ｜ 交易记录 开 ｜ 交易记录 关 ｜ 交易记录 列表 ｜ 交易记录 清空 ｜ 交易记录 探针")
       fsay("　每次开交易窗口，在它右侧挂一个历史列表（时间/对方/金币/物品）；**点一条 = 密语对方**、**右键一条 = 删除这一条**、[清空] 两下确认；结果判定三条腿（完成信号 / 金钱对账 / 双方已确认），判不出就如实写「判不出」")
+      fsay("　金币读不出来时跑 **交易记录 金钱**：摊开四条读取路（引擎 API / 客户端 Lua）+ 两条金钱事件的实测次数，一眼分清「这笔本来就没放钱」与「放了钱没读到」")
     else
       EVAL_HELP()
     end

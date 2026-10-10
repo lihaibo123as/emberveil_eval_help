@@ -1,8 +1,8 @@
 ## Interface: 11200
 ## Title: EH_DPS |cffff6666伤害统计（自娱自乐版）|r
-## Notes: 个人伤害/治疗统计表：解析战斗文本，统计自己的输出、承受伤害、能量回复与击杀。
+## Notes: 队伍级伤害/治疗统计表：解析战斗文本，按玩家出条目（伤害量/DPS/治疗量/HPS/承受伤害/受到治疗/能量回复/击杀/施放次数）；击杀/能量/施放只有自己。
 ## Author: EvalHelp
-## Version: 0.2.5
+## Version: 0.2.6
 ## SavedVariables: EH_DPS_CFG
 
 EH_DPS.lua
