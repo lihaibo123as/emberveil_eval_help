@@ -162,8 +162,8 @@
 
 | 条目 | 版本字段（实际落库） | 分类 | 下载链接 |
 | --- | --- | --- | --- |
-| 主插件 `addon` | `v1.75.118` | combat 战斗 | `…/releases/download/v1.75.118/EvalHelp.zip` |
-| `evalhelp-eh-bag` | `v1.75.117` | bags 背包与物品栏 | `…/v1.75.117/EH_Bag.zip` |
+| 主插件 `addon` | `v1.76.0` | combat 战斗 | `…/releases/download/v1.76.0/EvalHelp.zip` |
+| `evalhelp-eh-bag` | `v1.76.0` | bags 背包与物品栏 | `…/releases/download/v1.76.0/EH_Bag.zip` |
 | `evalhelp-eh-damage` | `v1.75.117` | combat 战斗 | `…/v1.75.117/EH_Damage.zip` |
 | `evalhelp-eh-dps` | `v1.75.117` | combat 战斗 | `…/v1.75.117/EH_DPS.zip` |
 | `evalhelp-eh-debugbox` | `v1.75.117`（原停在 `v1.75.106`） | misc 其他 | `…/v1.75.117/EH_DebugBox.zip` |
@@ -193,9 +193,9 @@
 
 | 条目 | slug | 版本 | 分类 | 包大小 | 真实下载直链（`/go/download` →） |
 | --- | --- | --- | --- | ---: | --- |
-| EvalHelp 全职业一键宏,全任务装备检索,工具箱,宠物资料 | `addon` | `v1.75.118` | 战斗 | 64.26 MB | `…/releases/download/v1.75.118/EvalHelp.zip` |
+| EvalHelp 全职业一键宏,全任务装备检索,工具箱,宠物资料 | `addon` | `v1.76.0` | 战斗 | 64.26 MB | `…/releases/download/v1.76.0/EvalHelp.zip` |
 | EvalHelp -> EH_Damage · 增强伤害显示（浮动战斗信息） | `evalhelp-eh-damage` | `v1.75.117` | 战斗 | 464.3 KB | `…/releases/download/v1.75.117/EH_Damage.zip` |
-| EvalHelp -> EH_Bag · 整合背包 | `evalhelp-eh-bag` | `v1.75.117` | 背包与物品栏 | 224.0 KB | `…/releases/download/v1.75.117/EH_Bag.zip` |
+| EvalHelp -> EH_Bag · 整合背包 | `evalhelp-eh-bag` | `v1.76.0` | 背包与物品栏 | 235.6 KB | `…/releases/download/v1.76.0/EH_Bag.zip` |
 | EvalHelp -> EH_DPS · 队伍伤害统计（自娱自乐版） | `evalhelp-eh-dps` | `v1.75.117` | 战斗 | 25.9 KB | `…/releases/download/v1.75.117/EH_DPS.zip` |
 | EvalHelp -> EH_DebugBox · 图层调试 | `evalhelp-eh-debugbox` | `v1.75.117` | 其他 | 127.6 KB | `…/releases/download/v1.75.117/EH_DebugBox.zip` |
 | **EvalHelp -> EH_Mail · 邮箱增强** | `evalhelp-eh-mail` | `v1.75.117` | 背包与物品栏 | 1003 字描述 | `…/releases/download/v1.75.117/EH_Mail.zip` |
@@ -203,6 +203,12 @@
 ★★ 上表 = **2026-10-10 二轮回读复核后的实际值**（读法：`fetch('/wiki/addons/<slug>/edit')` → 取第 2 个 `wire:snapshot` → `data.version` / `data.downloadUrl`，**一次拉齐 6 条**，纯读）。
 ★★★ **2026-10-10 三轮回读（v1.75.118）**：**只动主插件一条**（子插件本轮代码零改动 ⇒ 按 §八 铁律 8 **连草稿都没存**，其余五条原样）。写入口径 = 一条 `c.$wire.set(...)`（`version` / `downloadUrl` / `gitUrl`）+ **描述里「自动丢弃指定物品」那一格改写**（`（同上）` → 新增图标/背包选择/每秒主动检查/红色日志的说明，3381 → **3497 字**），**一次 `saveDraft`**；**回读 `c.$wire.get(...)` 确认** `version=v1.75.118` / `downloadUrl=…/v1.75.118/EvalHelp.zip` / 描述含新串且 `（同上）` 已消失。★读法注意：本轮 `Livewire.all()` 拿到的组件**要 15~20 秒后**才挂上方法，且**方法在 `c.$wire.get/set/call` 上**（`c.get` 是 undefined）—— 两种形态都试，别当成「页面坏了」。
 ★ 一轮的旧值（全部 `v1.75.110`，EH_DebugBox `v1.75.106`）= **假成功留下的半状态**，见 §八 铁律 4 的反面教材。
+★★★ **2026-10-10 四轮回读（v1.76.0）**：只动**两条** —— 主插件 `addon` 与 `evalhelp-eh-bag`（本轮子插件里**只有 EH_Bag 代码变了**：`0.3.48 → 0.3.49`；EH_Damage/EH_DPS/EH_DebugBox/EH_Mail **一字节未动 ⇒ 连草稿都没存**，见 §八 铁律 8）。
+写入口径 = **每条一次** `c.$wire.set('version'/'downloadUrl'/'gitUrl', …, false)` → **逐字段 `c.$wire.get()` 复核** → **唯一一次 `c.call('saveDraft')`**；**两条之间拉开间隔**（一条存完会跳回 `/mine`，下一条重新进 `/edit`）。
+★**EH_Bag 本轮顺带改了描述**（★这是「描述 = 说明书、不是发布流水」的合法用法：补的是**新功能**，不是「本版改了什么」）—— 在「打开方式」段的 `/ebag help` 那一行后插两行：`一键整理算法：设置菜单「整理算法」一行在 A（默认 · 就近放回）/ B（更激进）/ 原算法 之间循环…` + `/ebag algo 查看当前档位与三档实测记账…`；写口 = 读出 `locales.zh_CN` **整对象** → 只改 `description` → `set('locales.zh_CN', obj, false)`（**title/faq/changelog 逐字段原样带过去**）⇒ 1570 → **1729 字**，回读确认命中且标题未变。
+★★**Livewire 组件取法两种形态都要试**（本机实测）：`Livewire.all()` 里 `name==='wiki.addons.submit'` 那个，方法在 **`c.$wire.get/set/call`** 上（`c.get` 是 undefined）；★且**打开 `/edit` 后要等 ~6~15 秒**方法才挂上（本机首测 5.5 秒时 `typeof c.set === 'undefined'`、`c.$wire` 已是对象但方法未挂）⇒ 判据 = 先探 `typeof c.$wire.get === 'function'`，**不 ready 就等**，别当成页面坏了。
+★★**保存后的复核读法**：重开 `/edit` 读 `c.$wire.get('version')`（DOM 不参与）；★**徽章会掉回 DRAFT**（本轮 主插件与 EH_Bag 都由 `PENDING REVIEW` → `DRAFT` + `PUBLIC` = 线上仍是旧版）⇒ **交付时必须点名「这两条等你点『申请发布』」**（EH_Mail 仍是 `PENDING REVIEW` 未动、EH_DPS/EH_Damage `APPROVED`、EH_DebugBox 原本就是 `DRAFT`）。
+★下载直链探针（`curl.exe -s -I -L -x http://127.0.0.1:10809`）：两条均 **200**，`Content-Length` = **67,383,355**（EvalHelp.zip）/ **241,234**（EH_Bag.zip），与本地包逐字节一致 ✅。
 
 仓库直链（`/go/git` →）：主插件 = `https://github.com/lihaibo123as/emberveil_eval_help.git`；
 子插件 = `…/tree/<审批时冻结的 commit>/addons/<名>`（EH_Bag `3b19ae01…` · EH_DPS `7ecf17a3…` · EH_DebugBox `1515fbe7…` · EH_Damage `d930b713…`）。

@@ -216,5 +216,42 @@
       "EH_DebugBox",
       "EH_Bag"
     ]
+  },
+  "1.76.0": {
+    "at": 1791633994503,
+    "channel_id": "5336773639081280",
+    "plugins": {
+      "EvalHelp": "1.76.0",
+      "EH_Bag": "0.3.49",
+      "EH_Damage": "0.2.46",
+      "EH_DebugBox": "0.4.0",
+      "EH_DPS": "0.2.5",
+      "EH_Mail": "0.3.23"
+    },
+    "baseline": "1.75.119",
+    "threads": [
+      {
+        "post": "主插件",
+        "id": "146912682140762368",
+        "title": "EvalHelp v1.76.0 发布（主插件 · 全职业工具）",
+        "files": [
+          "EvalHelp-v1.76.0.zip"
+        ]
+      },
+      {
+        "post": "EH_Bag",
+        "id": "146912695696752896",
+        "title": "EH_Bag v0.3.49 发布（整合背包）",
+        "files": [
+          "EH_Bag-v0.3.49.zip"
+        ]
+      }
+    ],
+    "skipped": [
+      "EH_Damage",
+      "EH_DPS",
+      "EH_DebugBox",
+      "EH_Mail"
+    ]
   }
 }
