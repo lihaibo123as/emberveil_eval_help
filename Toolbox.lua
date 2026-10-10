@@ -3687,6 +3687,13 @@ local function tbVerifyPending()
 end
 
 local tbBuyArm -- ★1.71.3 前置声明（pump 里调用，定义在后面；本文件有 DECL ORDER CHECK 守着）
+-- ★1.76.1 批量购买（Shift+右键数量窗的执行端；交互在 tools/MerchantBulk.lua）：
+--   `tbBuyOne` = 唯一「买一个」执行口（自动购买与手动批量**共用**一把尺子：单参 + 执行前二次校验）；
+--   `tbMBFinish` = 手动批量的收尾报账（唯一出口，任何中止路都要走它，否则用户看不到结果）；
+--   `tbMBWhy` / 两个常量 = 与 pump 同源（★必须**前置声明**：pump 定义在本文件更早处，
+--   后声明的 local 在它里面会绑成全局 nil —— 本项目「local 作用域」老雷，`probe_localorder` 照不到这种间接用法）。
+local tbBuyOne, tbMBFinish, tbMBWhy
+local TB_MB_MAX, TB_MB_MAX_FAILS
 local function tbQPump()
   tbVerifyPending()
   -- ★1.71.2 「按住修饰键临时停止自动交接」：keydown 那一刻把**还没滴出**的交接动作撤掉。
@@ -3718,8 +3725,13 @@ local function tbQPump()
     return
   end
   -- 商人相关动作必须开着商人窗口（关了直接丢弃，防止 UseContainerItem 变成「使用物品」）
-  if (q.kind == "sell" or q.kind == "buy") and not TB.merchantOpen then
+  if (q.kind == "sell" or q.kind == "buy" or q.kind == "mbuy") and not TB.merchantOpen then
     table.remove(tbQ, 1)
+    if q.kind == "mbuy" then
+      tbMBFinish("closed")            -- ★如实报账（关窗把这一批掐了 = 用户必须知道）
+    elseif q.kind == "buy" then
+      TB.buyInflight = nil            -- 自动购买：放行才能算下一批
+    end
     return
   end
   if q.kind == "sell" and tbPending then return end -- 上一笔未确认：有序等待，保证逐笔可验证
@@ -3736,9 +3748,56 @@ local function tbQPump()
       tbSellStat.fail = tbSellStat.fail + 1 -- 执行前校验失败（物品已被移动/品质变化）
     end
   elseif q.kind == "buy" then
-    pcall(BuyMerchantItem, q.idx, q.n)
-    -- ★一笔在飞：执行完立刻放行，下一拍 arm 会先核对背包再算下一批（逐笔可验证）
-    TB.buyInflight = nil
+    -- ★★★1.76.1 单参 + 逐笔滴出（旧写法是 `pcall(BuyMerchantItem, q.idx, q.n)` = **买错格子**）：
+    --   本客户端 `BuyMerchantItem(index, quantity)` 的第二参被当成**槽位号**、第一参被忽略
+    --   （官方文档原文：「the last argument is used as the vendor index and the first argument is
+    --   ignored … Not sent as a buy count」）⇒ 批量只能循环单次调用，且必须逐笔限频。
+    local left = tonumber(q.left) or tonumber(q.n) or 1
+    local okb, whyb = tbBuyOne(q.idx, q.name)
+    if not okb then
+      TB.buyInflight = nil
+      say(string.format(L("TB_MB_REFUSE"), tostring(q.name), tbMBWhy(whyb)))
+    elseif left > 1 then
+      q.left = left - 1
+      table.insert(tbQ, 1, q) -- 还没滴完：塞回队首，0.3s 后下一笔
+    else
+      -- ★一笔在飞：整批滴完才放行（下一拍 arm 会先核对背包再算下一批 ⇒ 逐笔可验证）
+      TB.buyInflight = nil
+    end
+  elseif q.kind == "mbuy" then
+    -- 手动批量购买（Shift+右键 数量窗）：同一个执行口，逐笔滴出 + 收尾如实报账
+    local left = tonumber(q.left) or 0
+    if left <= 0 then
+      tbMBFinish("done")
+    else
+      local moneyNow = (type(GetMoney) == "function") and (GetMoney() or 0) or 0
+      local okb, whyb = tbBuyOne(q.idx, q.name)
+      if not okb then
+        tbMBFinish(whyb)
+      else
+        local st = TB.mbStat
+        local stop = nil
+        if type(st) == "table" and (tonumber(st.price) or 0) > 0 then
+          -- ★★★「上一笔到底扣没扣钱」必须看**上一拍那一刻**的钱：本客户端的购买是**异步**的
+          --   （服务端回话要几十~几百毫秒）⇒ 「刚调完就立刻读」读到的是旧值，会把成功判成失败
+          --   （首笔没有基线 ⇒ 不判；免费物品 price = 0 ⇒ 不判）。连失败 TB_MB_MAX_FAILS 笔才中止。
+          if type(st.moneyPrev) == "number" and moneyNow >= st.moneyPrev then
+            st.fails = (st.fails or 0) + 1
+            if st.fails >= TB_MB_MAX_FAILS then stop = "nogain" end
+          else
+            st.fails = 0
+          end
+        end
+        if type(st) == "table" then st.moneyPrev = moneyNow end
+        if stop then
+          tbMBFinish(stop)
+        else
+          q.left = left - 1
+          if type(st) == "table" then st.left = q.left end -- ★收尾报账要「已完成/总笔数」⇒ 两处同步
+          if q.left > 0 then table.insert(tbQ, 1, q) else tbMBFinish("done") end
+        end
+      end
+    end
   elseif q.kind == "discard" then
     if tbItemName(q.bag, q.slot) == q.name then
       local ok, tex, cnt, locked, qual = pcall(GetContainerItemInfo, q.bag, q.slot)
@@ -3856,35 +3915,160 @@ function tbBuyArm()
   for _, w in ipairs(tb.buy) do
     local s = sess[w.name]
     if not s then s = { fails = 0 } sess[w.name] = s end -- 只记失败数/期望值；目标数按背包现有量算（绝对值）
-    -- 找商人序号 / 库存 / 一次上限
-    local idx, avail, cap = nil, nil, 1
+    -- 找商人序号 / 库存 / **每笔给几个**
+    --   ★★★1.76.1：`GetMerchantItemMaxStack` **不再参与夹取** —— 官方文档原文「Currently always 1」
+    --   ⇒ 1.71.3~1.76.0 拿它当 cap 的结果是「每次购买数量」恒被夹成 1（本客户端没有拆分框）。
+    --   真正的上界交给：`per`（用户设的每次数量）/ 库存 / 还差多少（三者由 EVAL_TB_BUY_DECIDE 现算）。
+    local idx, avail, per = nil, nil, 1
     for i = 1, mn do
-      local ok, nm, _tex, _price, _quant, av = pcall(GetMerchantItemInfo, i)
+      local ok, nm, _tex, _price, quant, av = pcall(GetMerchantItemInfo, i)
       if ok and nm == w.name then
         idx = i
         if type(av) == "number" then avail = av end
+        if type(quant) == "number" and quant >= 1 then per = quant end
         break
       end
     end
-    if idx and type(GetMerchantItemMaxStack) == "function" then
-      local okc, ms = pcall(GetMerchantItemMaxStack, idx)
-      if okc and type(ms) == "number" and ms >= 1 then cap = ms end
-    end
     local have = tbCountItem(w.name)
-    local n, why = EVAL_TB_BUY_DECIDE(w, s, { have = have, free = free, avail = avail, idx = idx, cap = cap })
+    local n, why = EVAL_TB_BUY_DECIDE(w, s, { have = have, free = free, avail = avail, idx = idx, cap = 999999 })
     if type(n) == "number" and n > 0 then
       if stat.bought + n > TB_BUY_MAX_SESSION then
         if not stat.capped then stat.capped = true say(string.format(L("TB_BUY_CAP"), TB_BUY_MAX_SESSION)) end
         return
       end
-      TB.buyInflight = { name = w.name, n = n }
-      tbQPush({ kind = "buy", idx = idx, n = n, name = w.name })
+      -- n = **个数**；真下单按「笔」走（每笔给 per 个）⇒ 逐笔滴出（单参调用，见「批量购买」段）
+      local left = math.ceil(n / per)
+      if left < 1 then left = 1 end
+      TB.buyInflight = { name = w.name, n = n, left = left }
+      tbQPush({ kind = "buy", idx = idx, n = n, left = left, name = w.name })
       return -- ★一拍只下一笔：队列按 0.3s 滴出 → 限频、不瞬间买光
     elseif why == "fails" then
       say(string.format(L("TB_BUY_FAILS"), tostring(w.name)))
       w.on = false -- 连续失败 → 自动停用该项（如实告知，避免反复重试）
     end
   end
+end
+
+-- ===== 1.76.1 批量购买（Shift+右键 数量窗的**执行端**；交互在 tools/MerchantBulk.lua）=====
+-- ★★★为什么必须「循环单次调用」（三条官方 API 硬事实，2026-10-10 现读
+--   https://emberveil.org/wiki/lua/globals/Merchant ；本地快照 tmp/merchant_page.html）：
+--   ① `BuyMerchantItem(index)`：官方原文「The stack count sent to the server is **always 1**.」
+--      ⇒ 一次调用只买**一笔**（一笔 = 该物品一次购买给的数量）。
+--   ② `BuyMerchantItem(index, quantity)`：原文「When a second argument is present, **the last argument
+--      is used as the vendor index** and the first argument is ignored … **Not sent as a buy count**.」
+--      ⇒ 第二个参数是**槽位号**，不是数量 —— 旧写法 `pcall(BuyMerchantItem, q.idx, q.n)`（1.71.3~1.76.0）
+--        实际买的是「第 n 格」（per 默认 1 时 = **恒买第 1 格**）⇒ 本版一并修掉。
+--   ③ `GetMerchantItemMaxStack(index)`：原文「**Currently always 1**」⇒ 它**不能再当「每批上限」**用
+--      （1.71.3 拿它做 cap ⇒ 在本客户端恒等于 1 ⇒「每次购买数量」永远只能买 1 个）。
+--   ⇒ 批量 = 逐笔循环，全部走既有限频队列（`TB_RATE = 0.3s/笔`）⇒ 天然防反滥用（一帧 24 次连发被踢的教训）。
+TB_MB_MAX = 200     -- 一次批量购买的**个数**上限（手滑保护；★上面已前置声明）
+TB_MB_MAX_FAILS = 3 -- 手动批量：连续「钱没动」上限 ⇒ 中止
+-- 原因 → 三语一句话（**动态键**：`TB_MB_R_<大写原因>`；缺键时 L 会退回键名 = 看得见，不静默）
+tbMBWhy = function(why)
+  return L("TB_MB_R_" .. string.upper(tostring(why or "?")))
+end
+
+-- 背包还装得下吗：有空格 = 装得下；一个空格都没有时，只有「同物品的未满堆」还能装（不然就是真满）。
+local function tbHasRoom(name)
+  if tbFreeSlots() > 0 then return true end
+  if type(name) ~= "string" or name == "" then return false end
+  local maxS = 1
+  if type(GetItemInfo) == "function" then
+    -- ★本客户端 `GetItemInfo` 的第 **7** 个返回 = maxStack（第 8 = 装备部位 INVTYPE、第 9 = 纹理；
+    --   见 §4.1 与装备比较那条判据）—— 取错位置会永远拿不到数字 ⇒ 一律退回「没空格就是满」。
+    local oki, _1, _2, _3, _4, _5, _6, ms = pcall(GetItemInfo, name)
+    if oki and type(ms) == "number" and ms >= 1 then maxS = ms end
+  end
+  if maxS <= 1 then return false end
+  local room = false
+  tbBagScan(function(b, s)
+    if room then return end
+    if tbItemName(b, s) == name then
+      local okc, tex, cnt = pcall(GetContainerItemInfo, b, s)
+      if okc and (tex or cnt) and type(cnt) == "number" and cnt < maxS then room = true end
+    end
+  end)
+  return room
+end
+
+-- **唯一「买一个」执行口**（自动购买 + 手动批量共用）：执行前**二次校验**（本项目对写动作的既定纪律）
+--   返回 true = 已发出；false, 原因 = 没发出（原因 = closed/noapi/gone/changed/stock/money/bagfull/callfail）
+tbBuyOne = function(idx, name)
+  if not TB.merchantOpen then return false, "closed" end
+  if type(GetMerchantItemInfo) ~= "function" or type(BuyMerchantItem) ~= "function" then return false, "noapi" end
+  local ok, nm, _tex, price, _quant, avail = pcall(GetMerchantItemInfo, idx)
+  if not ok or type(nm) ~= "string" or nm == "" then return false, "gone" end
+  if type(name) == "string" and name ~= "" and nm ~= name then return false, "changed" end
+  if type(avail) == "number" and avail == 0 then return false, "stock" end
+  local money = (type(GetMoney) == "function") and (GetMoney() or 0) or 0
+  if type(price) == "number" and price > 0 and money < price then return false, "money" end
+  if not tbHasRoom(nm) then return false, "bagfull" end
+  local okc = pcall(BuyMerchantItem, idx) -- ★单参：第二参会被当成槽位号（见上面 ②）
+  if not okc then return false, "callfail" end
+  return true
+end
+
+-- 手动批量购买的**唯一收尾口**（完成 / 中止 / 关窗三条路都走它）：如实报账
+--   ★「到手几个」由背包**现算**（不信我们自己的计数 —— 服务端给没给，只有背包说得清）
+tbMBFinish = function(why)
+  local st = TB.mbStat
+  TB.mbStat = nil
+  if type(st) ~= "table" then return end
+  local have = tbCountItem(st.name)
+  local money1 = (type(GetMoney) == "function") and (GetMoney() or 0) or (st.money0 or 0)
+  local got = have - (st.have0 or 0)
+  if got < 0 then got = 0 end
+  local spent = (st.money0 or 0) - money1
+  if spent < 0 then spent = 0 end
+  local done = (st.total or 0) - (st.left or 0)
+  if done < 0 then done = 0 end
+  if why == "done" then
+    sayHard(string.format(L("TB_MB_DONE"), tostring(st.name), got, done, fmtMoney(spent)))
+  else
+    sayHard(string.format(L("TB_MB_STOP"), tostring(st.name), tbMBWhy(why), got, done, fmtMoney(spent)))
+  end
+end
+
+-- **交互端下单的唯一入口**（tools/MerchantBulk.lua 调它；写动作与全部闸门都在这里）
+--   `n` = **个数**（用户眼里的数量）；换算成笔数 = ceil(n / 每笔给几个)。
+--   返回 (实际下单个数, "ok") 或 (nil, 一句现成的、可直说的话)。
+function EVAL_TB_MBULK_ENQUEUE(idx, n, name)
+  idx, n = tonumber(idx), tonumber(n)
+  if not idx or idx < 1 or not n or n < 1 then return nil, L("TB_MB_NOITEM") end
+  if n > TB_MB_MAX then n = TB_MB_MAX end
+  if not TB.merchantOpen then return nil, L("TB_MB_CLOSED") end
+  if type(GetMerchantItemInfo) ~= "function" or type(BuyMerchantItem) ~= "function" then return nil, L("TB_MB_API") end
+  local ok, nm, _tex, price, quant, avail = pcall(GetMerchantItemInfo, idx)
+  if not ok or type(nm) ~= "string" or nm == "" then return nil, L("TB_MB_NOITEM") end
+  if type(name) == "string" and name ~= "" and name ~= nm then return nil, L("TB_MB_NOITEM") end
+  local per = (type(quant) == "number" and quant >= 1) and quant or 1
+  if type(avail) == "number" and avail >= 0 then -- 库存（-1 = 无限）
+    local can = math.floor(avail) * per
+    if can < 1 then return nil, string.format(L("TB_MB_REFUSE"), tostring(nm), tbMBWhy("stock")) end
+    if n > can then n = can end
+  end
+  local money = (type(GetMoney) == "function") and (GetMoney() or 0) or 0
+  if type(price) == "number" and price > 0 then
+    local can = math.floor(money / price) * per
+    if can < 1 then return nil, string.format(L("TB_MB_REFUSE"), tostring(nm), tbMBWhy("money")) end
+    if n > can then n = can end
+  end
+  if not tbHasRoom(nm) then return nil, string.format(L("TB_MB_REFUSE"), tostring(nm), tbMBWhy("bagfull")) end
+  local left = math.ceil(n / per) -- 笔数（每笔给 per 个）
+  local link = nil
+  if type(GetMerchantItemLink) == "function" then
+    local okl, v = pcall(GetMerchantItemLink, idx)
+    if okl and type(v) == "string" then link = v end
+  end
+  local pr = (type(price) == "number" and price >= 0) and price or 0
+  TB.mbStat = {
+    name = nm, want = n, per = per, left = left, total = left, fails = 0,
+    have0 = tbCountItem(nm), money0 = money, price = pr,
+  }
+  tbQPush({ kind = "mbuy", idx = idx, name = nm, left = left })
+  -- ★用户主动点的/敲的 ⇒ 走出去不掉的那条出口（「调试日志」总闸门默认关着也不许把结果吞掉）
+  sayHard(string.format(L("TB_MB_START"), link or tostring(nm), n, left, fmtMoney(pr * left)))
+  return n, "ok"
 end
 
 -- 商人开启：修理 / 卖灰 / 购买
@@ -4242,11 +4426,19 @@ function EVAL_TB_ONEVENT(e)
     -- 关窗即清场：待售/待购全部丢弃（防 UseContainerItem 在无商人时变成使用物品），待验证出售作废
     TB.merchantOpen = false
     tbPending = nil
-    local kept = {}
+    local kept, mbDropped = {}, false
     for _, q in ipairs(tbQ) do
-      if q.kind ~= "sell" and q.kind ~= "buy" then table.insert(kept, q) end
+      if q.kind ~= "sell" and q.kind ~= "buy" and q.kind ~= "mbuy" then
+        table.insert(kept, q)
+      else
+        -- ★1.76.1：手动批量（mbuy）被关窗掐掉必须**如实报账**（否则用户只会觉得「点了没反应」）；
+        --   自动购买（buy）放行 `TB.buyInflight`，否则这一轮之后它再也不下单。
+        if q.kind == "mbuy" then mbDropped = true end
+        if q.kind == "buy" then TB.buyInflight = nil end
+      end
     end
     tbQ = kept
+    if mbDropped then tbMBFinish("closed") end
   -- ★1.75.118d `BAG_UPDATE` 那条**被动**触发已删除（用户定：丢弃要「主动 1 秒检查」，不要等背包收入才触发）
   --   ⇒ 现在主动那一条腿在 `EVAL_TB_TICK`（= qf 的 OnUpdate 本体）里，本事件帧也不再注册这个事件。
   elseif e == "READY_CHECK" then
@@ -4857,6 +5049,24 @@ local function tbModel()
     { t = "c", key = "repair", label = L("TB_REPAIR"), tip = L("TB_REPAIR_TIP") },
     { t = "c", key = "sell", label = L("TB_SELL"), tip = L("TB_SELL_TIP") },
     { t = "l", key = "buy", flag = "buyOn", label = L("TB_BUY"), tip = L("TB_BUY_TIP"), ask = L("TB_BUY_ASK") },
+    -- ★★★1.76.1 批量购买（tools/MerchantBulk.lua；用户 2026-10-10：「调研分析API 物品购买批量购买可能性.
+    --   或者一键一键购买达成批量购买也可行.在商人界面shift+右键弹出提示批量购买数量.默认20 递步5」）：
+    --   同 lootCursor/itemPrice 一样只是**一行数据** —— 钩子 / 数量窗 / 步进 / 提示全在模块里
+    --   （`EVAL_TB_MOD_ROWS["merchantBulk"]`，它自己的 `r.get/r.set` = 真值入口）。
+    --   ★调研结论（官方 API 文档现读）：本客户端**没有**批量购买 API —— `BuyMerchantItem(index)` 一次只买 1 笔、
+    --     传第二个参数会被当成**槽位号**、`GetMerchantItemMaxStack` **恒为 1**（所以原生连拆分框都没有）
+    --     ⇒ 批量只能「循环单次调用 + 限频队列（0.3s/笔）」。
+    --   ★默认**开**（模块读 `tbCfg().merchantBulk ~= false`；nil = 开、显式关过永远是关）。
+    { t = "mod", mod = "merchantBulk", key = "merchantBulk", label = L("TB_MERCHANTBULK"), tip = L("TB_MERCHANTBULK_TIP") },
+    -- ★1.76.1 交易记录（tools/TradeLog.lua；用户 2026-10-10：「工具箱->增加个交易记录信息列表.支持滚动.
+    --   显示信息为目标信息,金币,物品时间等信息,列表挂靠在每次开启交易的窗口右侧.,交易数据支持清空,
+    --   某一条邮件删除.点击条目可以直接开启和他对话」）：
+    --   同 merchantBulk/lootCursor 一样只是**一行数据** —— 事件 / 快照 / 面板 / 挂靠 / 命令全在模块里
+    --   （`EVAL_TB_MOD_ROWS["tradeLog"]`，它的 `r.get/r.set` = 真值入口）。
+    --   ★默认**开**（模块读 `tbCfg().tradeLog ~= false`；nil = 开、显式关过永远是关）；
+    --     关着 = 不注册事件、不挂节拍、不建帧（一个动作都没有）。
+    --   ★默认位与其它模块行一致（`r.add` = [列表]、`r.clr` = [状态]；**绝不用 `r.chv`**，见 TargetHealth 那条）。
+    { t = "mod", mod = "tradeLog", key = "tradeLog", label = L("TB_TRADELOG"), tip = L("TB_TRADELOG_TIP") },
     { t = "l", key = "discard", flag = "discardOn", label = L("TB_DISCARD"), tip = L("TB_DISCARD_TIP"), ask = L("TB_DISCARD_ASK") },
     { t = "h", label = L("TB_H_SOCIAL") },
     { t = "c", key = "ready", label = L("TB_READY"), tip = L("TB_READY_TIP") },

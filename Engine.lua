@@ -2871,6 +2871,35 @@ end
 --   选取目标: {k="target",s="nearEnemy"}（1.25.0 副作用条件，恒过；dry 预览不执行）
 --   目标职业: {k="tClass",cs={WARRIOR=true,...}}（1.26.0 多选或关系，比对 UnitClass 英文 token）
 
+-- ★★★1.76.1f「目标玩家:名」的**默认值 = 玩家自己名字**（用户 2026-10-10 真机截图 + 原话：
+--   「图片内需求:一键宏->技能编辑 以上条件在未设置完结名字的时候.默认值是玩家自己名字」）。
+--   【唯一来源两个口，四处同源】——**只此一处**取名字，别在别处再写一遍 `UnitName("player")`：
+--     · `EVAL_PNAME_SELF()` = 玩家自己名字（`UnitName("player")` + `pcall`；取不到回 nil —— 绝不编名）；
+--     · `EVAL_PNAME_NAME(cd)` = 该条件**生效的名字** = `cd.nm`（去过空白）**或** 自己名字（空 ⇒ 默认自己）。
+--   【四个消费点】① 新建条件（EvalHelp 的 `newCond`，**当场把名字物化进去**）；
+--     ② 编辑器名字格显示（空 ⇒ 显示自己名字**并顺手物化**，老存档打开一次就带上）；
+--     ③ 求值（condOne 的 tPlayer 分支：空名不再「如实失败」，而是按自己名字判）；
+--     ④ 导出（EVAL_COND_STR：导出的是**生效名字**，所以往返读得回来）。
+--   ★**仍然如实失败的只剩一种**：连自己名字都取不到（`UnitName` 缺席 / 回空）⇒ 空名照旧失败，绝不放过。
+--   ★**解析侧不动**：手写/粘贴的 `目标玩家:`（显式空名）照旧「整条丢弃」——那是「写法错误」，
+--     与「界面默认值」是两件事（导出侧现在一定带名字 ⇒ 往返不受影响）。
+function EVAL_PNAME_SELF()
+  if type(UnitName) ~= "function" then return nil end
+  local ok, nm = pcall(UnitName, "player")
+  if not ok or type(nm) ~= "string" then return nil end
+  nm = string.gsub(nm, "^%s*(.-)%s*$", "%1")
+  if nm == "" then return nil end
+  return nm
+end
+
+function EVAL_PNAME_NAME(cd)
+  local nm = (type(cd) == "table") and cd.nm or nil
+  nm = tostring(nm or "")
+  if type(EVAL_COND_TRIM) == "function" then nm = EVAL_COND_TRIM(nm) end
+  if nm ~= "" then return nm end
+  return EVAL_PNAME_SELF()
+end
+
 -- 单个条件求值；返回 true 或 false+原因。dry=true 为预览求值（UI 亮金），副作用条件（选取目标）只验函数存在不执行
 local function condOne(cd, skill, dry, rule)
   local k = cd.k
@@ -3168,8 +3197,9 @@ local function condOne(cd, skill, dry, rule)
     return pass, "目标类型:" .. tostring(raw or "?") .. (cd.v == false and "(否)" or "")
   elseif k == "tPlayer" then
     -- ★★★1.75.10 目标玩家（用户：「技能编辑->目标状态->添加个判断: 目标玩家:xxx名（名称支持自定义输入） 是/否」）。
-    --   语义：当前目标**是 / 不是**名为 X 的**玩家**。三条判据缺一不可，缺哪条都**如实失败**（绝不静默通过）：
-    --     ① 名字填了（没填 = 用户还没配好 → 不能当「不是 X」放行）；
+    --   语义：当前目标**是 / 不是**名为 X 的**玩家**。判据（缺哪条都**如实失败**，绝不静默通过）：
+    --     ① 名字：★1.76.1f 起 **空名 = 默认玩家自己名字**（唯一来源 `EVAL_PNAME_NAME`）——
+    --        连自己名字都取不到（UnitName 缺席/回空）才算「未填」⇒ 如实失败；
     --     ② 有目标（没目标时**两个方向都不算过** —— 本项目「查不到 ≠ 没有」纪律）；
     --     ③ 名字相符（**大小写不敏感**，与 tbUnitOf 的名字比对同一口径）+ 目标**确实是玩家**
     --        （UnitIsPlayer；NPC 恰好重名不算「目标玩家」）。
@@ -3177,9 +3207,8 @@ local function condOne(cd, skill, dry, rule)
     --     而 condOne 在 2173 行 ⇒ 按 Lua 词法作用域，这里绑到的是**全局 nil**（真机红字、闸门当场抓到：
     --     `DECL ORDER CHECK` + 运行时 `attempt to call a nil value (global 'condTrim')`）。
     --     走全局桥 `EVAL_COND_TRIM`（= 同一个函数，单一来源；调用发生在载入完成后，一定已赋值）。
-    local nmP = tostring(cd.nm or "")
-    if type(EVAL_COND_TRIM) == "function" then nmP = EVAL_COND_TRIM(nmP) end
-    if nmP == "" then return false, "目标玩家:未填名称" end
+    local nmP = tostring(EVAL_PNAME_NAME(cd) or "")
+    if nmP == "" then return false, "目标玩家:未填名称（也取不到你自己的名字）" end
     if not st.hasTarget then return false, "目标玩家:无目标" end
     if type(UnitIsPlayer) ~= "function" then return false, "目标玩家:本客户端没有 UnitIsPlayer" end
     local okIP, isP = pcall(UnitIsPlayer, "target")
@@ -3188,6 +3217,25 @@ local function condOne(cd, skill, dry, rule)
     local same = (type(st.targetName) == "string" and string.lower(st.targetName) == string.lower(nmP)) or false
     local hit = (isP and same)
     return (hit == (cd.v ~= false)), "目标玩家:" .. nmP .. ((hit and isP) and "(是玩家)" or "")
+  elseif k == "ttPlayer" then
+    -- ★★★1.76.1g 目标的目标（用户：「技能编辑->目标状态->增加个条件类型: 目标的目标:xxx 参考目标玩家UI 设置.
+    --   可自定义输入名称.默认玩家自己名」）。
+    --   语义：**当前目标的目标**是 / 不是名为 X 的**玩家**（X 默认 = 玩家自己 ⇒ 「我目标正盯着我 / 在打我」）。
+    --   ★API 依据（已核，见 CLAUDE.md §5.8）：`targettarget` 是合法 UnitID（= 当前目标的目标，大小写不敏感），
+    --     `UnitExists/UnitName/UnitIsPlayer` 都能拿它当入参；解析不到 ⇒ 回落到 nil/false（不报错、也不清目标）。
+    --   ★数据只从 **st** 读（Core 的 UPDATE_STATE 每拍采一次）—— 求值函数**不许**自己调 Unit* 家族：
+    --     condOne 会被战斗信息UI 的 0.15s 预览（dry）反复调，在这里直接调 API 就是白白每拍多打三次客户端调用。
+    --   ★如实失败**四条**（**否方向也要失败** —— 「查不到 ≠ 不是他」）：
+    --     ① 名字取不到（也没填）② 目标没有目标 ③ 那个单位不是玩家（NPC 恰好重名不算）
+    --     ④ ★★★**读了「存在」却读不到名字**（异常形态）—— 这条是本轮自查当场抓出来的：
+    --       少了它，「否」方向会把「名字读不到」当成「不是他」而**放行**，正是本项目「查不到 ≠ 没有」那条铁律禁止的。
+    local nmTT = tostring(EVAL_PNAME_NAME(cd) or "")
+    if nmTT == "" then return false, "目标的目标:未填名称（也取不到你自己的名字）" end
+    if not st.ttExists then return false, "目标的目标:目标没有目标" end
+    if not st.ttIsPlayer then return false, "目标的目标:那个单位不是玩家" end
+    if type(st.ttName) ~= "string" or st.ttName == "" then return false, "目标的目标:读不到那个单位的名字" end
+    local sameTT = (string.lower(st.ttName) == string.lower(nmTT))
+    return (sameTT == (cd.v ~= false)), "目标的目标:" .. nmTT
   elseif k == "target" then
     -- 副作用条件：切换当前目标（战斗信息UI 亮金预览 dry 时不执行，防止刷新误切目标）
     local gfn = TARGET_SEL_FN[cd.s]
@@ -5386,6 +5434,23 @@ local function parseOneRaw(token)
     if nmP2 == "" then return nil end
     return { k = "tPlayer", nm = nmP2, v = false }
   end
+  -- ★★★1.76.1g 目标的目标（导入/文本编辑）：目标的目标:X / ttPlayer=X ；目标的目标不是玩家:X / nottPlayer=X ；前置 ! 也认。
+  --   ★★与导出侧（EVAL_COND_STR）**成对**——导出读不回 = 导入即丢条件。
+  --   ★顺序：否定式写在肯定式**前面**读起来更直白，但两者不冲突
+  --     （肯定式要求「目标的目标」后紧跟冒号，而否定式中间还有「不是玩家」四个字）。
+  --   ★空名 = 写法错误 → 返回 nil **如实丢弃**（与 tPlayer 同口径：宁可整条不要，也不静默留半个条件）。
+  local ttln = string.match(token, "^目标的目标不是玩家[:：](.+)$") or string.match(token, "^nottPlayer[:=](.+)$")
+  if ttln then
+    local nmTT2 = condTrim(ttln)
+    if nmTT2 == "" then return nil end
+    return { k = "ttPlayer", nm = nmTT2, v = false }
+  end
+  local ttl = string.match(token, "^目标的目标[:：](.+)$") or string.match(token, "^ttPlayer[:=](.+)$")
+  if ttl then
+    local nmTT = condTrim(ttl)
+    if nmTT == "" then return nil end
+    return { k = "ttPlayer", nm = nmTT, v = not neg }
+  end
   -- ★★★1.75.92 自身物品数量（导入/文本编辑）：物品:名>=3 / 无物品:名<2；英文 bagItem= / nobagitem=；! 前缀也认。
   --   数量后缀与光环层数同一写法（末尾 比较符+数字；★(.-) 非贪婪 + 锚尾 ⇒ 取**最后一个**比较符，名字里带数字不受影响）；
   --   **没写数量 = 默认 >=1**（「有这个物品」）。★空名 = 写法错误 ⇒ 整条如实丢弃（与 tPlayer 同口径）。
@@ -5810,9 +5875,18 @@ if k == "immune" then return (cd.v == false and "未免疫:" or "免疫:") .. to
   if k == "tPlayer" then
     -- ★★★1.75.10 目标玩家（导出/回显）：是 = 目标玩家:X ；否 = 目标不是玩家:X。
     --   ★与解析侧**成对**（parseOneRaw 的 目标玩家/tPlayer 与 目标不是玩家/notplayer）——导出读不回 = 导入即丢条件。
-    local nmP = tostring(cd.nm or "")
-    if nmP == "" then nmP = "未填" end -- 空名在界面上/导出里如实写「未填」，不显示成空白
+    --   ★1.76.1f：导出的是**生效名字**（空名 ⇒ 玩家自己名字，`EVAL_PNAME_NAME`）⇒ 界面上看到什么就导出什么、往返一致。
+    local nmP = tostring(EVAL_PNAME_NAME(cd) or "")
+    if nmP == "" then nmP = "未填" end -- 连自己名字都取不到时如实写「未填」，不显示成空白
     return ((cd.v == false) and "目标不是玩家:" or "目标玩家:") .. nmP
+  end
+  if k == "ttPlayer" then
+    -- ★★★1.76.1g 目标的目标（导出/回显）：是 = 目标的目标:X ；否 = 目标的目标不是玩家:X。
+    --   ★与解析侧**成对**（parseOneRaw 的 目标的目标/ttPlayer 与 目标的目标不是玩家/nottPlayer）——导出读不回 = 导入即丢条件。
+    --   ★与 tPlayer 同一口径：导出的是**生效名字**（空名 ⇒ 玩家自己名字 `EVAL_PNAME_NAME`）⇒ 界面上看到什么就导出什么。
+    local nmTT = tostring(EVAL_PNAME_NAME(cd) or "")
+    if nmTT == "" then nmTT = "未填" end -- 连自己名字都取不到时如实写「未填」，不显示成空白
+    return ((cd.v == false) and "目标的目标不是玩家:" or "目标的目标:") .. nmTT
   end
   if k == "bagItem" then
     -- ★1.75.92 自身物品数量（导出/回显）：物品:名>=3 / 无物品:名<2（与 parseOneRaw **成对**——导出读不回 = 导入即丢条件）。

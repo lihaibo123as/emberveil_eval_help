@@ -33,7 +33,7 @@
 --   其他命令：/eh 输出状态日志 | /eh log 写日志开关 | /eh auto 进出战斗自动输出
 --   调试日志：/eh logdump 查看（SavedVariables 环形缓冲；/eh wdebug 后聊天框同步显示决策原因）
 
-local VERSION = "1.76.0"
+local VERSION = "1.76.1"
 local cfg = nil -- VARIABLES_LOADED 后指向 EVAL_HELP_CONFIG
 
 -- ===== 跨模块别名（Core.lua / Engine.lua 先于本文件加载，见 toc） =====
@@ -5340,6 +5340,14 @@ local SE_TYPES = {
   --   + 是/否（是 = 当前目标正是名为 X 的**玩家**；否 = 不是）。
   --   ★名字存在 **cd.nm**（与「选取目标:指定名称」同一个字段口径）；显示名列在 CT_TPLAYER 语言键里。
   { id = "tPlayer",    name = "目标玩家",    kind = "pname" },
+  -- ★★★1.76.1g 目标的目标（用户：「技能编辑->目标状态->增加个条件类型: 目标的目标:xxx 参考目标玩家UI 设置.
+  --   可自定义输入名称.默认玩家自己名」）：
+  --   kind **复用 "pname"** ⇒ 整套 UI（自由输入玩家名 + 是/否 + **默认自己名字**）一行都不用另写，
+  --   编辑器那三处按 **td.id** 分流文案（名字格前缀「目标的目标:」/ 输入框标题 SE_TN_TTPLAYER）；名字同样存 **cd.nm**。
+  --   ★API 依据（已核，见 CLAUDE.md §5.8）：UnitID `targettarget` = **当前目标的目标**（wiki conventions 明文，
+  --     大小写不敏感；解析不到 ⇒ 回落到 nil/false），`UnitName/UnitExists/UnitIsPlayer` 都能拿它当入参。
+  --   ★数据源 = Core 的 UPDATE_STATE（st.ttExists/st.ttName/st.ttIsPlayer），求值侧只读 st、不自己调 API。
+  { id = "ttPlayer",   name = "目标的目标",  kind = "pname" },
   { id = "immune",    name = "目标免疫技能", kind = "skill", s = "" }, -- 1.36.1 免疫学习表判定；1.70.0 去战士化：默认空（旧默认 撕裂）
   { id = "inRange",   name = "施法范围内",  kind = "skill", s = "" }, -- 1.37.0 IsActionInRange；1.70.0 去战士化：默认空（旧默认 冲锋）
   { id = "casting",   name = "施法中",      kind = "skill", s = "" }, -- 1.38.0 SPELLCAST_* 事件驱动 -- 1.41.0 默认空=任意施法
@@ -5472,7 +5480,7 @@ local SE_TYPE_GROUPS = {
   --   仍然在 SE_TYPES 里、**存量方案里还有**、求值也照跑 —— 它却不在任何分组里 ⇒
   --   新口径下会被按 **0 分**算、也不计覆盖（静默少算一截）。归到「目标状态」：它就是选目标那件事。
   --   ★hidden = true ⇒ 不会因此出现在条件下拉里（下拉那侧自己会跳过 hidden）。
-  { label = "CTG_2", w = 2, cov = "B", ids = { "tHpPct", "hasTarget", "canAttack", "canBleed", "tDead", "tFriendly", "tHostile", "tNeutral", "isElite", "isBoss", "tInCombat", "tClass", "tCreature", "tPlayer", "immune", "target" } }, -- ★1.71.2（第十五轮）目标施法族（目标施法中/目标施法时间/目标施法剩余时间）已统一移入 CTG_4；★1.75.10 新增 tPlayer（目标玩家）、tDead（目标死亡）
+  { label = "CTG_2", w = 2, cov = "B", ids = { "tHpPct", "hasTarget", "canAttack", "canBleed", "tDead", "tFriendly", "tHostile", "tNeutral", "isElite", "isBoss", "tInCombat", "tClass", "tCreature", "tPlayer", "ttPlayer", "immune", "target" } }, -- ★1.71.2（第十五轮）目标施法族（目标施法中/目标施法时间/目标施法剩余时间）已统一移入 CTG_4；★1.75.10 新增 tPlayer（目标玩家）、tDead（目标死亡）；★1.76.1g 新增 ttPlayer（目标的目标）
   { label = "CTG_3", w = 2, cov = "C", ids = { "hasBuff", "pDebuff", "hasDebuff", "tBuff" } }, -- 1.54.0 光环检查四型
   -- ★1.70.47 队伍/团队条件单列一组：**队伍与团队各列一份**（用户要求：
   --   「条件类型: 队伍debuff / 队伍buff / 团队debuff / 团队buff」——直接作为可选类型出现，不用范围下拉）
@@ -5560,8 +5568,9 @@ local function seDefaultCond(ti)
   elseif td.kind == "creature" then return { k = td.id, cs = {}, v = true } -- 1.70.28 目标类型：默认「是」+ 空选择（空=永不满足，需用户点选）
   -- ★1.75.6 追踪类型：值 = 候选表 id（默认 any = 任意追踪），是/否 = 正向/反向
   elseif td.kind == "track" then return { k = td.id, s = td.s or "any", v = true }
-  -- ★1.75.10 目标玩家：名字留空起步（**未填 = 求值如实失败**，绝不静默通过）＋ 默认「是」
-  elseif td.kind == "pname" then return { k = td.id, nm = "", v = true }
+  -- ★1.76.1f 目标玩家：**默认值 = 玩家自己名字**（用户 2026-10-10 点名；唯一来源 `EVAL_PNAME_SELF`）＋ 默认「是」
+  --   （取不到自己的名字才留空 —— 那时求值仍如实失败，见 Engine.lua 的 tPlayer 分支）
+  elseif td.kind == "pname" then return { k = td.id, nm = (type(EVAL_PNAME_SELF) == "function" and EVAL_PNAME_SELF()) or "", v = true }
   -- ★1.75.92 自身物品：名字留空起步（未选 = 求值如实失败，同 pname 口径）＋ 默认「数量 >= 1」「是」
   elseif td.kind == "item" then return { k = td.id, s = "", op = ">=", n = 1, v = true }
   -- ★1.75.92 自身装备：名字留空起步（未选 = 求值如实失败）＋ 默认「是」（可使用）
@@ -6764,8 +6773,13 @@ function EVAL_HELP_SE_REFRESH()
         -- ★1.75.10 目标玩家：名字格（点它弹输入框）+ 是/否。
         --   ★名字复用 skillText/sHit 那一格（x=140/142，与光环名同槽位），是/否复用 immBtn（x=246）
         --     —— 三个控件都在 row.all 里，进本分支前已被统一 Hide，这里逐个 Show（只 Hide 不 Show 是 1.73.1 那族事故）。
-        local nmDisp = (type(cd.nm) == "string" and cd.nm ~= "") and cd.nm or "未填写（点此输入）"
-        row.skillText:SetText("玩家:" .. nmDisp)
+        -- ★1.76.1f 空名 ⇒ 显示**玩家自己名字**、并当场把名字物化进 `cd.nm`
+        --   （老存档里那些「未填写」的行，打开技能编辑窗一次就带上；★物化只在空的时候写一次，幂等）
+        --   ★取不到自己的名字才退回原来的「未填写（点此输入）」（绝不编名）。
+        local nmShow = (type(EVAL_PNAME_NAME) == "function" and EVAL_PNAME_NAME(cd)) or nil
+        if nmShow and (type(cd.nm) ~= "string" or cd.nm == "") then cd.nm = nmShow end
+        -- ★1.76.1g 两种 pname 共用这套 UI ⇒ **前缀按 td.id 分流**（目标玩家 = 「玩家:」/ 目标的目标 = 「目标的目标:」）
+        row.skillText:SetText(((td.id == "ttPlayer") and "目标的目标:" or "玩家:") .. (nmShow or "未填写（点此输入）"))
         pcall(row.skillText.Show, row.skillText)
         pcall(row.sHit.Show, row.sHit)
         row.immBtn.text:SetText((cd.v == false) and L("SE_NO") or L("SE_YES"))
@@ -7732,7 +7746,11 @@ local function SE_BUILD()
         -- ★★★1.75.10 目标玩家：点名字格 = 弹输入框（用户明确要「名称支持自定义输入」）。
         --   走既有输入弹窗范式 EVAL_TN_OPEN（内部是「回声行」镜像，本客户端 EditBox 不渲染的老坑已有对策）；
         --   名字落在 **cd.nm**（与「选取目标:指定名称」同一字段）。
-        EVAL_TN_OPEN(L("SE_TN_PLAYER"), it.cd.nm or "", function(nm)
+        --   ★1.76.1f 输入框的**预填值也要是生效名字**（空 ⇒ 玩家自己名字，唯一来源 `EVAL_PNAME_NAME`）：
+        --     显示「默认是谁」与「不填就是谁」必须是同一个答案，否则用户看到空格子会以为没默认值。
+        local nameCur = (type(EVAL_PNAME_NAME) == "function" and EVAL_PNAME_NAME(it.cd)) or it.cd.nm or ""
+        -- ★1.76.1g 输入框标题也按 td.id 分流（目标玩家 / 目标的目标 共用这套 pname UI）
+        EVAL_TN_OPEN(((tdi.id == "ttPlayer") and L("SE_TN_TTPLAYER") or L("SE_TN_PLAYER")), nameCur, function(nm)
           it.cd.nm = nm
           EVAL_HELP_SE_REFRESH()
         end)
@@ -10746,6 +10764,14 @@ if type(SlashCmdList) == "table" then
     --   "go 目标血量" = 3 + **12** = 15 字节（string.sub 按字节；「目标血量」四个汉字各 3 字节）
     elseif string.sub(msg, 1, 15) == "go 目标血量" then
       if type(EVAL_TH_CMD) == "function" then pcall(EVAL_TH_CMD, msg) else say("目标生命值显示未载入：tools\\TargetHealth.lua 不在 toc 里") end
+    -- ★1.76.1 批量购买（tools/MerchantBulk.lua）：/eh go 商人 [开|关|窗 <行>|买 <行> <个数>]
+    --   "go 商人" = 3 + 6 = **9 字节**（两个汉字各 3 字节；string.sub 是字节下标 —— 少算一个空格就静默失效）
+    elseif string.sub(msg, 1, 9) == "go 商人" then
+      if type(EVAL_MB_CMD) == "function" then pcall(EVAL_MB_CMD, msg) else say("批量购买未载入：tools\\MerchantBulk.lua 不在 toc 里") end
+    -- ★1.76.1 交易记录（tools/TradeLog.lua）：/eh go 交易记录 [状态|开|关|列表|清空|探针]
+    --   "go 交易记录" = 3 + **12** = 15 字节（四个汉字各 3 字节；string.sub 是字节下标 —— 少算就静默失效）
+    elseif string.sub(msg, 1, 15) == "go 交易记录" then
+      if type(EVAL_TL_CMD) == "function" then pcall(EVAL_TL_CMD, msg) else say("交易记录未载入：tools\\TradeLog.lua 不在 toc 里") end
     elseif string.sub(msg, 1, 9) == "go 稀有" then
       if type(EVAL_RW_CMD) == "function" then
         EVAL_RW_CMD(msg)
@@ -11311,6 +11337,10 @@ if type(SlashCmdList) == "table" then
       fsay("　悬停装备类物品时旁边并排显示已装备的同部位物品（双戒指/双饰品各一格）；工具箱「UI 工具」里勾选启用")
       fsay("目标生命值显示: /eh go 目标血量（状态）｜ 目标血量 开 ｜ 目标血量 关 ｜ 目标血量 探针 ｜ 目标血量 存档 ｜ 目标血量 位置")
       fsay("　客户端对敌对目标只给百分比 ⇒ 用插件自带的**本服生物生命值库**复算上限，目标框下方显示「名字 · 当前 / 上限 (百分比)」；查不到只显示百分比（灰条），绝不编数字")
+      fsay("批量购买: /eh go 商人（状态探针）｜ 商人 开 ｜ 商人 关 ｜ 商人 窗 <行> ｜ 商人 买 <行> <个数>")
+      fsay("　商人界面里 **Shift+右键**点某一行 ⇒ 弹数量窗（默认 20、±5 步进）；本客户端没有批量购买 API（一次只买 1 笔）⇒ 限频队列 0.3 秒一笔，库存/银两/背包逐笔现查，停下必报账")
+      fsay("交易记录: /eh go 交易记录（状态）｜ 交易记录 开 ｜ 交易记录 关 ｜ 交易记录 列表 ｜ 交易记录 清空 ｜ 交易记录 探针")
+      fsay("　每次开交易窗口，在它右侧挂一个历史列表（时间/对方/金币/物品）；**点一条 = 密语对方**、**右键一条 = 删除这一条**、[清空] 两下确认；结果判定三条腿（完成信号 / 金钱对账 / 双方已确认），判不出就如实写「判不出」")
     else
       EVAL_HELP()
     end
@@ -11676,6 +11706,12 @@ init:SetScript("OnEvent", function(a, b)
     -- ★1.75.45 装备比较（tools/EquipCompare.lua）：开关真值 = `tbCfg().equipCompare`
     --   ⇒ **必须在这里**读（SavedVariables 要等 VARIABLES_LOADED）；关着 = 不包装按钮、不挂 OnUpdate。
     if type(EVAL_EC_INSTALL) == "function" then pcall(EVAL_EC_INSTALL) end
+    -- ★1.76.1 批量购买（tools/MerchantBulk.lua）：开关真值 = `tbCfg().merchantBulk`
+    --   ⇒ **必须在这里**读（SavedVariables 要等 VARIABLES_LOADED）；关着 = 不挂钩子、不注册事件、不挂节拍。
+    if type(EVAL_MB_INSTALL) == "function" then pcall(EVAL_MB_INSTALL) end
+    -- ★1.76.1 交易记录（tools/TradeLog.lua）：开关真值 = `tbCfg().tradeLog`
+    --   ⇒ **必须在这里**读（SavedVariables 要等 VARIABLES_LOADED）；关着 = 不注册事件、不挂节拍、不建帧。
+    if type(EVAL_TL_INSTALL) == "function" then pcall(EVAL_TL_INSTALL) end
     -- 注册进出战斗事件（pcall 防御：事件名若不存在不会崩）
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_ENTERING_WORLD") -- ★1.74.31 进世界（载入期时钟到这里才开始走 ⇒ world 打点）
     pcall(autoFrame.RegisterEvent, autoFrame, "PLAYER_REGEN_DISABLED")

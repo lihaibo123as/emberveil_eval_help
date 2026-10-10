@@ -185,6 +185,14 @@ if (require.main === module) {
        //   正是「先引用后声明 ⇒ 绑全局 nil」的高风险形态（luacheck 照不到、只有真机/本闸门抓得到）
        //   ⇒ 建模块当轮就加进清单，别重犯 LootCursor 那次「漏在清单外」的欠账。
        'tools/DiscardHelper.lua',
+       // ★1.76.1 补：`tools/MerchantBulk.lua`（本轮新建 —— 商人 Shift+右键数量窗）
+       //   —— 它自己就是「前向声明 + 定义处赋值」的写法（`mbOpenDlg` 被包装体引用、定义在下面），
+       //   正是本闸门存在的理由 ⇒ 建模块当轮就加进清单（别重犯 LootCursor 那次「漏在清单外」的欠账）。
+       'tools/MerchantBulk.lua',
+       // ★1.76.2 补：`tools/TradeLog.lua`（本轮新建 —— 交易记录面板）
+       //   —— 它同样是「前向声明 + 定义处赋值」的写法（`tlRefresh/tlShow/tlHide/tlTell/tlTick/tlOnEvent`
+       //   都被写在定义之前的闭包里引用）⇒ 建模块当轮就加进清单。
+       'tools/TradeLog.lua',
        // ★子插件也纳入：EH_Bag（1.75.x 新建）两个文件 —— 跨 chunk 共用口全挂 B 表，
        //   本文件的「先引用后声明」错在子插件里同样是**静默**的（pcall 一包就什么都不报）。
        'addons/EH_Bag/EH_Bag.lua', 'addons/EH_Bag/EH_BagSort.lua',

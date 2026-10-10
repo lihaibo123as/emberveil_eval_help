@@ -680,9 +680,19 @@ PR["TSEL"] = function(msg)
     local _, nmT = pcall(UnitName, "target")
     local okTT, hasTT = pcall(UnitExists, "targettarget")
     local _, nmTT = pcall(UnitName, "targettarget")
+    -- ★★★1.76.1g「目标的目标」条件要用的**另两个读口**（条件求值靠它们判「是玩家」与「就是你」）：
+    --   一条命令就能回答「本客户端的 targettarget 到底读不读得到」——离线判不出，只能真机跑这一次。
+    local okIP, isP = false, nil
+    if type(UnitIsPlayer) == "function" then okIP, isP = pcall(UnitIsPlayer, "targettarget") end
+    local okIU, isU = false, nil
+    if type(UnitIsUnit) == "function" then okIU, isU = pcall(UnitIsUnit, "targettarget", "player") end
     tsSay(string.format("[选取目标] 当前目标=%s（存在=%s）｜ 目标的目标=%s（存在=%s）｜ TargetUnit=%s",
       tostring(nmT), tostring(okT and hasT), tostring(nmTT), tostring(okTT and hasTT),
       (type(TargetUnit) == "function") and "有" or "**缺失**"))
+    tsSay(string.format("[目标的目标] 是玩家=%s（UnitIsPlayer=%s）｜ 就是你=%s（UnitIsUnit=%s）⇒ 条件「目标的目标:你」本拍判=%s",
+      tostring(okIP and isP), (type(UnitIsPlayer) == "function") and "有" or "**缺失**",
+      tostring(okIU and isU), (type(UnitIsUnit) == "function") and "有" or "**缺失**",
+      ((okTT and hasTT) and (okIP and isP) and (okIU and isU)) and "**成立**" or "不成立"))
     if not (okT and hasT) then
       tsSay("[选取目标] 现在**没有目标** ⇒ 不试切换（先选中一只怪/一个队友，再敲一次）")
     elseif not (okTT and hasTT) then

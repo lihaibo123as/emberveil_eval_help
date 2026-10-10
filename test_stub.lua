@@ -772,6 +772,9 @@ end
 UnitIsPlayer = function(u)
   if u == "player" then return true end
   if u == "target" then return TEST.targetIsPlayer and true or nil end
+  -- ★1.76.1g「目标的目标」条件：targettarget 也走同一个口（TEST.targetTargetIsPlayer；
+  --   默认 nil = 不是玩家，与真 API 的非玩家返回值同义）。
+  if u == "targettarget" then return TEST.targetTargetIsPlayer and true or nil end
   return nil
 end
 UnitIsDeadOrGhost = function(u)

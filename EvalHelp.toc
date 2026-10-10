@@ -3,7 +3,7 @@
 ## Notes: 全职业工具：通用一键宏（/run EVAL_GO() 条件规则引擎）、案例模版（12 组 40 条）、方案分享、工具箱（缩放大地图 · 关闭世界迷雾 · 图层拖拽/隐藏 · 拾取贴手 · 顶部信息条 · 物品价 · 装备比较 · 三个助手）、任务线 & 装备、图标库、抓宠帮手、战斗信息UI、配置面板。
 ## Notes-zhCN: 同 Notes：通用一键宏（/run EVAL_GO()）、案例模版、方案分享、工具箱（含世界迷雾 · 拾取贴手 · 物品价 · 装备比较）、任务线 & 装备、图标库、抓宠帮手、战斗信息UI、配置面板。
 ## Author: DSH
-## Version: 1.76.0
+## Version: 1.76.1
 ## X-Category: Class Tools
 ## SavedVariables: EVAL_HELP_CONFIG
 ## SavedVariablesPerCharacter: EVAL_HELP_CHAR
@@ -58,5 +58,7 @@ tools\LootCursor.lua
 tools\TargetHealth.lua
 tools\InfoBar.lua
 tools\ItemPrice.lua
+tools\MerchantBulk.lua
+tools\TradeLog.lua
 tools\EquipCompare.lua
 tools\Probes.lua

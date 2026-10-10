@@ -917,6 +917,22 @@ function EVAL_HELP_UPDATE_STATE()
     st.tClassName, st.tClass = nil, nil
     st.tCastName, st.tCastStart = nil, nil -- 1.40.0 无目标即清施法状态
   end
+  -- ★★★1.76.1g「目标的目标」条件的数据源（用户：「技能编辑->目标状态->增加个条件类型: 目标的目标:xxx」）：
+  --   UnitID **`targettarget`**（wiki conventions 明文 = **当前目标的目标**，大小写不敏感；解析不到 ⇒ 按约定回落到 nil/false，不报错）。
+  --   ★**只在有目标时才读**（没目标时它必然解析不到 ⇒ 省两次 API 调用）；
+  --   ★`UnitIsPlayer` 必须 type() 守卫 —— 本客户端若没有这个函数，每拍直接调就是**每拍红字**（与 tPlayer 分支同一套守卫）。
+  --   ★字段挂在 st 上 = 「一次刷新、各处只读」：condOne 会被战斗信息UI 的 0.15s 预览反复调，**求值函数里不许自己调 Unit* 家族**。
+  if st.hasTarget then
+    st.ttExists = UnitExists("targettarget") and true or false
+  else
+    st.ttExists = false
+  end
+  if st.ttExists then
+    st.ttName = UnitName("targettarget")
+    st.ttIsPlayer = (type(UnitIsPlayer) == "function") and (UnitIsPlayer("targettarget") and true or false) or false
+  else
+    st.ttName, st.ttIsPlayer = nil, false
+  end
   st.tRange = EVAL_T_RANGE() -- 1.37.0 目标距离分档（在 if/else 之后、return 之前；误插 else 分支内恒 nil 已修）
   -- 1.38.0 施法中跟踪过期清理（事件丢 STOP 时兜底；castUntil nil=无限期读条）
   -- 1.40.0 目标施法状态：超时兜底（事件丢结束时 12s 自清；无目标在 else 分支已清名）
