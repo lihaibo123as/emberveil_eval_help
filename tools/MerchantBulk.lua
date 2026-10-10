@@ -73,21 +73,41 @@ local MB_BEAT = 0.5    -- 补挂处理体的节拍间隔（只在商人窗开着
 --     现在 = **与「工具箱 → 姓名右键菜单」逐字同源的那套插件自身配方**（唯一实现 `mbChrome`）：
 --     ① 首选 `SetBackdrop`（客户端 tooltip 那圈圆角：bg `UI-Tooltip-Background` + edge `UI-Tooltip-Border`、
 --        `tile/tileSize/edgeSize = MB_EDGE_ART`(16)、insets 4）→ **读回 `GetBackdrop` 自证**；
---     ② 读回说「不是那张边贴图」或压根挂不上 ⇒ **四边 1px 纯色描边**（`mbEdge`，插件自建、绝不失手）。
+--     ② 读回说「不是那张边贴图」或压根挂不上 ⇒ **四边 1px 纯色描边**（`mbEdge`，插件自建、绝不失手）；
+--     ③ ★★★**圆角路径下必须把「铺满整帧的自建方底」藏掉**（1.76.1h 用户真机截图提问：「边框外面还有一层边
+--        是什么?」）—— 参考实现原话：「圆角时底由 backdrop 自己画（insets 4 → 落在圆角内侧）；再叠一层自己的
+--        方形半透明底会发黑」；圆角边框贴图是**内缩**的，而方底铺满整帧 ⇒ 它的四条边与四个角从圆角边框
+--        **外面**露出来，那就是用户看到的那一层。★**兜底路径（flat）必须留着它**（那条路没有 backdrop 底）。
 --   ★尺寸/内边距回到「小窗」那一档（边框不再吃 32px 角饰 ⇒ 不必再给角饰让位）：214×156 / PAD 8。
-local MB_W, MB_H = 214, 156
+--   ★★★1.76.1j 版式精简（用户：「批量购买内的文本可以删除只保留…总计金额计算值，然后宽度可进一步缩小，
+--     数量值往上一行文字水平居中·对齐右侧，按钮标题颜色对齐插件文本色黄色」）：
+--     ① 屏上只留「本单约 X」一行字（上限 / 操作提示全挪进悬停）② 删除「数量:」标签、数值搬到「每笔…」
+--     那一行 ③ 窗宽 214 → 164、窗高 156 → 124（行数少了 2 行）④ 按钮标题走插件文本色（黄）。
+--   ★★★1.76.1k 数量行改形（用户真机截图 + 原话：「**将每笔换成 x 数量(20) 文字紧凑点.对齐左边.**」；
+--     版式由用户在两个候选里选定 A）：**「每笔」两个字从屏上撤掉**，那一行 = **`x20 · 1个 1铜`** ——
+--     ① 行首一个「x」前缀（`MB_XPRE`），**数量值紧跟它右边**（左对齐）② 尾巴 = 每笔给几个 + 每笔价
+--     （`MB_EACH`，锚在数值块右边 ⇒ 数量几位都自动跟随）③ **整行左对齐**（旧版贴右内边距右对齐）。
+--     ★旧写法为什么必须改：整句「每笔 N 个 · 每笔 X」限宽到数值块左边只剩 ~102px ⇒ **真机上折行**
+--     （用户截图里第二行孤零零一个「铜」字压在下一行上），且「每笔」占掉两处 ~40px 冗余宽度。
+local MB_W, MB_H = 164, 124
 local MB_PAD = 8                       -- 左右/标题内边距（唯一来源，几何全按它算）
+local MB_XPRE = "x"                    -- 数量前缀（屏上写「x20」；★与 ▲/▼/± 这类纯符号同一处理：不走语言键）
+local MB_X_W = 10                      -- 「x」前缀占的宽度（数量值紧跟它右边 = 左对齐）
+local MB_VAL_W = 38                    -- 数值块宽（EditBox 与回声同一块：**同左缘、左对齐**）
+local MB_VAL_GAP = 6                   -- 数值块与尾巴「· N个 单价」之间的缝（尾巴限宽用）
+local MB_TXT_RGBA = { 1.00, 0.85, 0.35 } -- ★插件文本色（黄）= 标题与按钮标题**同一份值**（用户点名按钮标题对齐它）
 local MB_EDGE = 1                      -- 兜底四边描边粗细（拿不到圆角 backdrop 时才用）
 local MB_EDGE_ART = 16                 -- 客户端圆角边的 edgeSize：**必须整数**（参考插件实测：小数栅格化不可靠）
-local MB_BD_RGBA = { 1, 1, 1, 0.75 }   -- 边框色（白 75%；与姓名右键菜单的 borderRGBA 同值）
+local MB_BD_RGBA = { 1, 1, 1, 1 }      -- 边框色 = **纯白不透明**（★1.76.1h 用户真机点名「边框需要设定白色」；
+                                       --   ★参考实现（姓名右键菜单）是 `1,1,1,0.75`：**同一把配方、色值各自可调**，
+                                       --   本窗按用户要求提亮到纯白 —— 改这一个常量即可，别处不许再写死色值）
 -- 竖向排布（唯一来源；改窗高时只改这几行）
+--   ★1.76.1j：原 QTY / CAP / HINT 三行已合并 —— 数值并入 EACH 那一行、上限与操作提示挪进悬停 ⇒ 只剩 4 行。
 local MB_Y_TITLE = -8
-local MB_Y_EACH  = -28
-local MB_Y_QTY   = -48
-local MB_Y_STEP  = -70
-local MB_Y_CAP   = -92
-local MB_Y_HINT  = -110
-local MB_Y_BTN   = -(MB_H - MB_PAD - 20)  -- 底部按钮行（= -128；底距恒 = MB_PAD）
+local MB_Y_EACH  = -30                 -- 数量行（`x20 · 1个 1铜`：前缀 / 数值 / 尾巴都在这一行，左对齐）
+local MB_Y_STEP  = -50                 -- −5 / +5
+local MB_Y_TOTAL = -76                 -- 屏上唯一保留的文字：本单约 X
+local MB_Y_BTN   = -(MB_H - MB_PAD - 20)  -- 底部按钮行（= -96；底距恒 = MB_PAD）
 local MB_BG = { 0.00, 0.00, 0.00, 0.85 }  -- 底色：纯黑，透明度 85%
 
 -- ===== 桥（一律「调用时现读」；拿不到就如实降级，绝不硬造全局）=====
@@ -324,21 +344,30 @@ local function mbBtn(parent, w, h, txt, x, y)
   mbFont(fs, 11)
   fs:SetPoint("CENTER", b, "CENTER", 0, 0)
   fs:SetText(txt)
-  pcall(fs.SetTextColor, fs, 0.92, 0.88, 0.72)
+  -- ★按钮标题 = **插件文本色（黄）**（用户 1.76.1j：「按钮标题颜色对齐插件文本色黄色」）⇒ 与标题同一个常量，
+  --   要调色只改 `MB_TXT_RGBA`（绝不在别处再写一个黄色字面量）。
+  pcall(fs.SetTextColor, fs, MB_TXT_RGBA[1], MB_TXT_RGBA[2], MB_TXT_RGBA[3])
   return b, fs, bg
 end
 
 -- 悬停说明（唯一实现；照 tools/LootCursor.lua 的写法：`_G.GameTooltip` + 全程 pcall ——
 --   拿不到那个口就静默不弹，绝不硬造帧、也绝不报错）
+--   ★1.76.1j：`lines` 允许传**函数**（悬停那一刻现算）—— 上限/本单金额随数量与库存每拍变，
+--     建窗时就把字符串拍死会显示过期值（本项目「值要现读」的同一把尺子）。
 local function mbTip(btn, lines)
   if not btn or type(btn.SetScript) ~= "function" then return end
   btn:SetScript("OnEnter", function()
     local tip = _G.GameTooltip
     if not tip or type(tip.SetOwner) ~= "function" or type(tip.AddLine) ~= "function" then return end
+    local ls = lines
+    if type(ls) == "function" then
+      local ok, v = pcall(ls)
+      ls = ok and v or nil
+    end
     pcall(tip.SetOwner, tip, btn, "ANCHOR_RIGHT")
     if type(tip.ClearLines) == "function" then pcall(tip.ClearLines, tip) end
-    for i = 1, table.getn(lines or {}) do
-      local ln = lines[i]
+    for i = 1, table.getn(ls or {}) do
+      local ln = ls[i]
       if type(ln) == "string" and ln ~= "" then pcall(tip.AddLine, tip, ln, 0.90, 0.90, 0.90) end
     end
     pcall(tip.Show, tip)
@@ -367,18 +396,26 @@ local function mbShown(f)
   return (ok and v == true)
 end
 
+-- 本单总价 = **唯一算式**（笔数 = ceil(数量 / 每笔个数)）—— 屏上那一行「本单约 X」与 [购买] 的悬停都读它，
+--   绝不各算一份（本项目「一处真值」的同一把尺子）。
+local function mbCost()
+  local per = math.max(1, tonumber(MB.per) or 1)
+  local left = math.ceil((tonumber(MB.qty) or 1) / per)      -- 本单笔数（每笔给 per 个）
+  return (tonumber(MB.price) or 0) * left
+end
+
 local function mbDlgPaint()
   if not MB.dlg then return end
   local d = MB.dlg
   if d.title then pcall(d.title.SetText, d.title, tostring(MB.name or "?")) end
   local per = math.max(1, tonumber(MB.per) or 1)
-  local left = math.ceil((tonumber(MB.qty) or 1) / per)      -- 本单笔数（每笔给 per 个）
-  local cost = (tonumber(MB.price) or 0) * left
-  if d.each then
-    pcall(d.each.SetText, d.each, string.format(L("MB_EACH"), per, mbMoney(MB.price)))
+  -- 尾巴 = 「· N个 单价」（`x20` 里的数量由 EditBox + 回声两处自己写，见下面 d.edit / d.echo）
+  if d.tail then
+    pcall(d.tail.SetText, d.tail, string.format(L("MB_EACH"), per, mbMoney(MB.price)))
   end
-  if d.cap then
-    pcall(d.cap.SetText, d.cap, string.format(L("MB_CAP"), tonumber(MB.cap) or 0, mbMoney(cost)))
+  -- ★屏上**唯一**保留的文字行（1.76.1j 用户：「文本可以删除只保留…总计金额计算值」）
+  if d.total then
+    pcall(d.total.SetText, d.total, string.format(L("MB_TOTAL"), mbMoney(mbCost())))
   end
   local eb = mbDlgEdit()
   if eb then pcall(eb.SetText, eb, tostring(MB.qty or MB_DEF)) end
@@ -533,7 +570,14 @@ local function mbBuild()
   bg:SetTexture("Interface\\Buttons\\WHITE8X8")
   bg:SetVertexColor(MB_BG[1], MB_BG[2], MB_BG[3], MB_BG[4])
   -- 边框 = **唯一实现**（与姓名右键菜单同源：圆角 backdrop → 读回自证 → 四边描边兜底）
-  mbChrome(d)
+  local kind = mbChrome(d)
+  -- ★★★圆角路径：把上面这块**铺满整帧的方底藏掉**（与参考实现 `if chrome.kind == "rounded" then pcall(bg.Hide, bg) end`
+  --   逐字同源）—— 圆角边框贴图是**内缩**的，方底铺满整帧 ⇒ 四条边 / 四个角会从圆角边框**外面**露出一层方边
+  --   （真机症状 = 用户截图问的「边框外面还有一层边」）；圆角路径的黑色 85% 由 backdrop 的 bg 提供
+  --   （上一句 `SetBackdropColor(MB_BG…)`，与 MB_BG 同一份值 ⇒ 用户要的「黑色 85%」一个字没少）。
+  --   ★**兜底路径（flat）必须留着它** —— 那条路没有 backdrop 底，黑 85% 只此一份，藏了就是透明窗。
+  if kind == "rounded" then pcall(bg.Hide, bg) end
+  d.bg = bg
 
   -- 标题 = **物品名**，居中放在顶带上（限宽 = 窗宽 − 2×PAD，长名字自己截断）
   local t = d:CreateFontString(nil, "OVERLAY")
@@ -541,31 +585,32 @@ local function mbBuild()
   t:SetPoint("TOP", d, "TOP", 0, MB_Y_TITLE)
   t:SetWidth(MB_W - MB_PAD * 2)
   pcall(t.SetJustifyH, t, "CENTER")
-  pcall(t.SetTextColor, t, 1.00, 0.85, 0.35)
+  -- ★标题色 = 插件文本色（黄）；与按钮标题共用 `MB_TXT_RGBA`（要调色只改那一个常量）
+  pcall(t.SetTextColor, t, MB_TXT_RGBA[1], MB_TXT_RGBA[2], MB_TXT_RGBA[3])
   t:SetText(L("MB_TITLE"))
   d.title = t
 
-  local e = d:CreateFontString(nil, "OVERLAY")
-  mbFont(e, 10)
-  e:SetPoint("TOPLEFT", d, "TOPLEFT", MB_PAD, MB_Y_EACH)
-  pcall(e.SetTextColor, e, 0.85, 0.85, 0.85)
-  d.each = e
+  -- 左：数量前缀「x」—— 数量值**紧跟它右边**（用户 1.76.1k：「将每笔换成 x 数量(20)…对齐左边」）
+  local pre = d:CreateFontString(nil, "OVERLAY")
+  mbFont(pre, 10)
+  pre:SetPoint("TOPLEFT", d, "TOPLEFT", MB_PAD, MB_Y_EACH)
+  pre:SetWidth(MB_X_W)
+  pcall(pre.SetJustifyH, pre, "LEFT")
+  pcall(pre.SetTextColor, pre, 0.85, 0.85, 0.85)
+  pre:SetText(MB_XPRE)
+  d.pre = pre
 
-  local q = d:CreateFontString(nil, "OVERLAY")
-  mbFont(q, 11)
-  q:SetPoint("TOPLEFT", d, "TOPLEFT", MB_PAD, MB_Y_QTY)
-  pcall(q.SetTextColor, q, 0.92, 0.92, 0.92)
-  q:SetText(L("MB_QTY") .. ":")
-  d.qtyLab = q
-
-  -- EditBox：客户端在本项目里有过「pcall 全成功却看不见」的旧账 ⇒ 一律配一行**回声**兜底
+  -- ★★数值块（1.76.1k 版式）：**紧跟「x」右边 · 左对齐**（旧版贴右内边距右对齐 —— 用户要求「对齐左边」）
+  --   EditBox 在本项目里有过「pcall 全成功却看不见」的旧账 ⇒ 仍配一行**回声**兜底；
+  --   ★两句占**同一块位置 + 同一左缘**（都左对齐）⇒ 谁被渲染都只有一个数，绝不会「20 20」并排。
   local eb = CreateFrame("EditBox", "EVAL_MB_DLG_EDIT", d)
-  eb:SetWidth(54) eb:SetHeight(18)
-  eb:SetPoint("LEFT", q, "RIGHT", 5, 0)
+  eb:SetWidth(MB_VAL_W) eb:SetHeight(18)
+  eb:SetPoint("TOPLEFT", d, "TOPLEFT", MB_PAD + MB_X_W, MB_Y_EACH + 3)
   eb:SetAutoFocus(false)
   pcall(eb.SetMaxLetters, eb, 6)
   mbFont(eb, 11)
-  pcall(eb.SetTextInsets, eb, 4, 4, 0, 0)
+  pcall(eb.SetTextInsets, eb, 2, 2, 0, 0)
+  pcall(eb.SetJustifyH, eb, "LEFT")   -- 数字紧跟「x」（与回声同一左缘）
   eb:SetText(tostring(MB_DEF))
   eb:SetScript("OnEscapePressed", function() mbHideDlg() end)
   eb:SetScript("OnEnterPressed", function()
@@ -596,10 +641,24 @@ local function mbBuild()
 
   local echo = d:CreateFontString(nil, "OVERLAY")
   mbFont(echo, 10)
-  echo:SetPoint("LEFT", eb, "RIGHT", 5, 0)
-  pcall(echo.SetTextColor, echo, 0.62, 0.62, 0.62) -- 灰 = 「EditBox 万一不渲染」的兜底读数（渲染正常时是冗余的）
+  echo:SetPoint("TOPLEFT", d, "TOPLEFT", MB_PAD + MB_X_W, MB_Y_EACH)
+  echo:SetWidth(MB_VAL_W)
+  pcall(echo.SetJustifyH, echo, "LEFT")
+  -- ★它现在是**主显示**（数量值就摆在这一行）⇒ 亮白；旧写法是 0.62 灰的「兜底读数」
+  pcall(echo.SetTextColor, echo, 0.95, 0.95, 0.95)
   echo:SetText(tostring(MB_DEF))
   d.echo = echo
+
+  -- 尾段 = 「· N个 单价」（`MB_EACH`）：**锚在数值块右边** ⇒ 数量几位都自动跟随（不写死 x 坐标）；
+  --   限宽到右内边距（长价格自己截断，绝不折行压到下一行 —— 旧版那句整句限宽就是这么在真机上折行的）。
+  local tail = d:CreateFontString(nil, "OVERLAY")
+  mbFont(tail, 10)
+  tail:SetPoint("LEFT", echo, "RIGHT", MB_VAL_GAP, 0)
+  tail:SetWidth(MB_W - MB_PAD * 2 - MB_X_W - MB_VAL_W - MB_VAL_GAP)
+  pcall(tail.SetJustifyH, tail, "LEFT")
+  pcall(tail.SetTextColor, tail, 0.85, 0.85, 0.85)
+  tail:SetText(string.format(L("MB_EACH"), 1, mbMoney(0)))
+  d.tail = tail
 
   local minus = mbBtn(d, 28, 18, "-" .. tostring(MB_STEP), MB_PAD, MB_Y_STEP)
   local plus = mbBtn(d, 28, 18, "+" .. tostring(MB_STEP), MB_W - MB_PAD - 28, MB_Y_STEP)
@@ -611,22 +670,28 @@ local function mbBuild()
   mbTip(plus, { steptip })
   d.minus, d.plus = minus, plus
 
-  local cap = d:CreateFontString(nil, "OVERLAY")
-  mbFont(cap, 10)
-  cap:SetPoint("TOPLEFT", d, "TOPLEFT", MB_PAD, MB_Y_CAP)
-  pcall(cap.SetTextColor, cap, 0.72, 0.78, 0.95)
-  cap:SetText(string.format(L("MB_CAP"), 0, mbMoney(0)))
-  d.cap = cap
-
-  local hint = d:CreateFontString(nil, "OVERLAY")
-  mbFont(hint, 9)
-  hint:SetPoint("TOPLEFT", d, "TOPLEFT", MB_PAD, MB_Y_HINT)
-  pcall(hint.SetTextColor, hint, 0.62, 0.62, 0.62)
-  hint:SetText(L("MB_HINT"))
-  d.hint = hint
+  -- ★屏上**唯一**保留的文字行（1.76.1j 用户：「批量购买内的文本可以删除只保留…总计金额计算值」）：
+  --   「本单约 X」；原来那一行的「上限 N 个」与下面那一整行操作提示都已挪进按钮悬停（屏上一个字都不显示）。
+  local tot = d:CreateFontString(nil, "OVERLAY")
+  mbFont(tot, 10)
+  tot:SetPoint("TOPLEFT", d, "TOPLEFT", MB_PAD, MB_Y_TOTAL)
+  pcall(tot.SetTextColor, tot, 0.72, 0.78, 0.95)
+  tot:SetText(string.format(L("MB_TOTAL"), mbMoney(0)))
+  d.total = tot
 
   local cancel = mbBtn(d, 66, 20, L("MB_CANCEL"), MB_PAD, MB_Y_BTN)
   local buy = mbBtn(d, 66, 20, L("MB_BUY"), MB_W - MB_PAD - 66, MB_Y_BTN)
+  -- ★★被删掉的两行字去哪了（1.76.1j 用户选定「挪进悬停」）：鼠标停在按钮上才出 ——
+  --   [取消] = Enter 确认 · Esc 取消；[购买] = 上限 N 个 + 本单约 X + 同一句操作说明。
+  --   ★上限与金额**悬停那一刻现算**（传函数，见 mbTip）—— 建窗时把字符串拍死会显示过期值。
+  mbTip(cancel, { L("MB_HINT") })
+  mbTip(buy, function()
+    return {
+      string.format(L("MB_CAP"), tonumber(MB.cap) or 0),
+      string.format(L("MB_TOTAL"), mbMoney(mbCost())),
+      L("MB_HINT"),
+    }
+  end)
   cancel:SetScript("OnClick", function() mbHideDlg() end)
   buy:SetScript("OnClick", function()
     local f = G("EVAL_MB_CONFIRM")
@@ -826,6 +891,10 @@ function EVAL_MB_TEST_STATE()
     --   `setBackdrop` = 客户端有没有这个 API（只作记录）。
     bdKind = (MB.dlg ~= nil and MB.dlg.bdKind) or false,
     bdEdge = (MB.dlg ~= nil and MB.dlg.bdEdge) or false,
+    -- ★1.76.1h 自建方底的显隐（**"边框外面还有一层边" 的唯一判据**）：
+    --   rounded 路径**必须**为 false（方底已藏 ⇒ 没有那层露在圆角边框外面的方边）；
+    --   flat 路径必须为 true（那条路只有这块方底能当黑色底）。两者相反 = 一定写错了。
+    bdBg = (MB.dlg ~= nil and mbShown(MB.dlg.bg)),
     setBackdrop = (MB.dlg ~= nil and type(MB.dlg.SetBackdrop) == "function") or false,
     stepBase = MB_STEP, stepFast = MB_STEP_FAST,
     idx = MB.idx, name = MB.name, per = MB.per, price = MB.price, qty = MB.qty, cap = MB.cap,
@@ -861,6 +930,8 @@ local function mbStateLines()
   sayF(string.format(L("MB_STATE_BD2"),                     -- ★客户端有没有 SetBackdrop + 读回值（只作记录）
     (st.setBackdrop and L("SH_ON") or L("SH_OFF")),
     (st.bdEdge and tostring(st.bdEdge) or L("SH_OFF"))))
+  -- ★1.76.1h 自建方底显隐 —— 这一行就是「边框外面还有一层边」的判据（rounded ⇒ 必须为「关」= 已藏）
+  sayF(string.format(L("MB_STATE_BG"), (st.bdBg and L("SH_ON") or L("SH_OFF"))))
   sayF("　" .. string.format(L("MB_STEP_TIP"), st.stepBase, st.stepFast)) -- 探针也把步进口径摊开
   for i = 1, table.getn(st.rows or {}) do sayF("   " .. st.rows[i]) end
   if st.last and st.last ~= "" then sayF(L("MB_LAST") .. "：" .. st.last) end
@@ -884,6 +955,7 @@ function EVAL_MB_CMD(msg)
     sayF(string.format(L("MB_STATE_BD2"),
       (st.setBackdrop and L("SH_ON") or L("SH_OFF")),
       (st.bdEdge and tostring(st.bdEdge) or L("SH_OFF"))))
+    sayF(string.format(L("MB_STATE_BG"), (st.bdBg and L("SH_ON") or L("SH_OFF"))))
   elseif string.find(rest, "^窗") then
     -- /eh go 商人 窗 [行号]：强制开一次数量窗（真机验证钩子替代品，不用真的按 Shift+右键）
     local n = tonumber(string.match(rest, "(%d+)")) or 1

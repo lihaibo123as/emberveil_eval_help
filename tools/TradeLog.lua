@@ -864,9 +864,15 @@ tlBuild = function()
   pcall(root.SetFrameStrata, root, "DIALOG")
   pcall(root.SetFrameLevel, root, 190)     -- 与交易窗同一层区（低于工具箱弹窗 200）；★不做捕手（见文件头）
   pcall(root.EnableMouse, root, true)
-  -- ★★★系统经典边框圆角 + 黑色 85% 背景（照客户端自带 GameTooltipTemplate 的 Backdrop 配方）
-  --   ★拿不到 SetBackdrop ⇒ **退回四边纯色描边**（fail-open：宁可样式朴素，也绝不没边框）
-  local backdropOK = false
+  -- ★★★系统经典边框圆角 + 黑色 85% 背景 = **全项目弹窗边框配方**（CLAUDE.md §三.10 唯一标准）：
+  --   ① `SetBackdrop`（`UI-Tooltip-Background` + `UI-Tooltip-Border`、整数 `tileSize/edgeSize`、insets）
+  --      → ② **读回 `GetBackdrop` 自证**（**读不到 ⇒ 按「已挂上」处理**；读到却不是那张边贴图 ⇒ 判 flat）
+  --      → ③ 判 flat / 挂不上 ⇒ **四边纯色描边**（fail-open，绝不没边框）。
+  --   ★★★**自建方底 / 描边只在 flat 那一支建** —— 圆角路径**绝不**再叠一块铺满整帧的方底：
+  --      客户端圆角边框贴图是**内缩**的，方底铺满整帧 ⇒ 它的边与角会从圆角边框**外面**露出来
+  --      （真机症状 = 「纹理边框外面还有层边框」；参考实现 `Toolbox.tbMenuBuild` 原话「再叠一层自己的
+  --      方形半透明底会发黑」⇒ 它圆角时 `pcall(bg.Hide, bg)`；本窗是**建都不建**，同一把尺子）。
+  local backdropOK, bdKind, bdEdge = false, "flat", nil
   if type(root.SetBackdrop) == "function" then
     local ok = pcall(root.SetBackdrop, root, {
       bgFile = TL_BG_FILE, edgeFile = TL_EDGE_FILE,
@@ -874,7 +880,6 @@ tlBuild = function()
       insets = { left = 5, right = 5, top = 5, bottom = 5 },
     })
     if ok then
-      backdropOK = true
       pcall(root.SetBackdropColor, root, 0, 0, 0, TL_BG_ALPHA)
       -- 边框色 = 客户端自己那份（TOOLTIP_DEFAULT_COLOR）；读不到用中性灰（**不猜一个鲜艳色**）
       local tc = rawget(_G, "TOOLTIP_DEFAULT_COLOR")
@@ -883,9 +888,18 @@ tlBuild = function()
       else
         pcall(root.SetBackdropBorderColor, root, 0.62, 0.62, 0.62)
       end
+      -- ★读回自证（与姓名右键菜单 / 批量购买数量窗**逐字同源**的判据）：
+      --   本客户端 GetBackdrop 的返回形态 = `"WHITE8X8|<边贴图尾段>"`（没有边框时尾段是 `-`）。
+      if type(root.GetBackdrop) == "function" then
+        local oks, str = pcall(root.GetBackdrop, root)
+        if oks and type(str) == "string" then bdEdge = str end
+      end
+      if bdEdge == nil or string.find(bdEdge, "UI-Tooltip-Border", 1, true) ~= nil then
+        backdropOK, bdKind = true, "rounded"
+      end
     end
   end
-  TL.backdrop = backdropOK
+  TL.backdrop, TL.bdKind, TL.bdEdge = backdropOK, bdKind, bdEdge
   if not backdropOK then
     local bg = root:CreateTexture(nil, "BACKGROUND")
     tlSolid(bg, 0, 0, 0, TL_BG_ALPHA)
@@ -1281,6 +1295,12 @@ function EVAL_TL_TEST_STATE()
     live = (type(TL.cur) == "table"),
     pend = (type(TL.pend) == "table"),
     last = TL.last,
+    -- ★★★弹窗边框自证（CLAUDE.md §三.10 配方；与姓名右键菜单 / 批量购买数量窗同一把尺子）：
+    --   `bdKind` = 实际走的那条路（rounded = 客户端圆角贴图已挂上 / flat = 四边 1px 描边兜底）；
+    --   `bdEdge` = `GetBackdrop` 读回值（false = 读不到 ⇒ 按「已挂上」处理）。
+    --   ★`flat` 那条路才会自建方底与描边 —— 圆角路径**建都不建**（否则方底会露在圆角边框外面）。
+    bdKind = TL.bdKind or "flat",
+    bdEdge = (TL.bdEdge and tostring(TL.bdEdge)) or false,
     apis = apis,
     completeMsg = (type(done) == "string") and done or nil,
     probe = TL.probe,
@@ -1297,6 +1317,9 @@ local function tlStateLines()
     st.apis.GetTargetTradeMoney and "√" or "×",
     st.apis.ChatFrame_SendTell and "√" or "×",
     tostring(st.completeMsg or "—")))
+  -- ★边框自证行（弹窗边框配方，见 CLAUDE.md §三.10；只读播报，不换档）
+  sayF(string.format(L("TL_STATE_BD"), tostring(st.bdKind or "flat"),
+    (st.bdEdge and tostring(st.bdEdge) or L("SH_OFF"))))
   if type(st.first) == "table" then
     sayF(string.format(L("TL_STATE_LAST"), tostring(st.first.t or "?"), tostring(st.first.who or "?"),
       L(st.first.why or "TL_WHY_UNK")))
