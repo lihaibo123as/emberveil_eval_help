@@ -140,7 +140,7 @@
 **Способ 1: скачать релиз (рекомендуется)** — скачайте свежий `EvalHelp-vX.Y.Z.zip` со [страницы Releases](https://gitee.com/xeval/emberveil_eval_help/releases), распакуйте в `Interface/AddOns/` (после распаковки должно получиться `AddOns/EvalHelp/EvalHelp.toc`):
 
 ```
-https://gitee.com/xeval/emberveil_eval_help/releases/download/v1.75.117/EvalHelp-v1.75.117.zip
+https://gitee.com/xeval/emberveil_eval_help/releases/download/v1.75.118/EvalHelp-v1.75.118.zip
 ```
 
 **Способ 2: клонировать исходники** — `git clone git@gitee.com:xeval/emberveil_eval_help.git`, поместите весь каталог в `Interface/AddOns/` и убедитесь, что каталог называется `EvalHelp`.
