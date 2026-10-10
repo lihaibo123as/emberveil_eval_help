@@ -258,6 +258,17 @@ local function say(t)
   elseif DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage(tostring(t)) end
 end
 
+-- ★★★1.75.118b 硬性日志（**不受**「调试日志」总闸门管）—— 用户 2026-10-10 定：
+--   「触发丢弃物品增加个日志.不受全局日志开关限制.硬性显示日志.标红,配上对应物品的链接」
+--   为什么必须不受闸门管：丢弃是**破坏性动作**，关掉调试日志的玩家更需要「到底丢了什么」这条证据
+--   （`say` 走 EVAL_SAY、`logLine` 第一句就是 logEnabled 闸门 ⇒ 两者都会把它吞掉）。
+--   ⇒ 出口**只能是** EVAL_SAY_FORCE（Core.lua 的 chatOut，裸输出无门控）；它缺席才退回 say。
+local function sayHard(t)
+  if type(EVAL_SAY_FORCE) == "function" then pcall(EVAL_SAY_FORCE, t)
+  else say(t) end
+end
+local TB_RED = "|cffff0000" -- 硬日志统一标红（收在一处，不给别处散写色码）
+
 -- ★1.71.2 配置迁移：旧版只有一个 quest 开关（**同时**管「接取」和「交付」）→ 拆成两个独立开关
 --   （用户要求：工具箱·任务自动交接 分「自动接取」「交付任务」两个开关配置）。
 --   ★迁移条件写成「两个新键都还没有 且 旧键存在」→ **只搬一次**；搬完把旧键**置 nil**。
@@ -296,6 +307,9 @@ local TB_CHAR_KEYS = {
   hhAutoFeed = true, -- ★1.75.44 「自动喂养」开关（默认开；模块侧第一次把 nil 物化为 true）
   -- 骑乘助手 · 一键下马
   dismount = true, dismountAuto = true, dhX = true, dhY = true,
+  -- ★1.75.118 自动丢弃助手（tools/DiscardHelper.lua）：悬浮图标的位置与大小
+  --   （挂角色级 = 与其它助手同一口径；总开关 discardOn 仍是账号级，没动）
+  discardX = true, discardY = true, discardSize = true,
 }
 -- 读值口：这个键是不是角色级（断言与源码检查读它，不另抄一份名单）
 function EVAL_TB_IS_CHAR_KEY(k) return TB_CHAR_KEYS[k] == true end
@@ -3729,8 +3743,14 @@ local function tbQPump()
     if tbItemName(q.bag, q.slot) == q.name then
       local ok, tex, cnt, locked, qual = pcall(GetContainerItemInfo, q.bag, q.slot)
       if ok and (tex or cnt) and type(qual) == "number" and qual <= 1 then
+        -- ★1.75.118b 硬日志要的是**物品链接** ⇒ 必须**动手之前**抓：
+        --   拾取/删除之后这一格已经空了（GetContainerItemLink 返回 nil），事后抓不回来。
+        local link = nil
+        if type(GetContainerItemLink) == "function" then link = GetContainerItemLink(q.bag, q.slot) end
         pcall(PickupContainerItem, q.bag, q.slot)
         pcall(DeleteCursorItem)
+        -- 硬性可见 + 标红 + 带链接（链接自带品质色 ⇒ 色码收在两端，中间不插手）
+        sayHard(TB_RED .. string.format(L("TB_DISCARD_FIRED"), link or q.name) .. "|r")
       end
     end
   elseif q.kind == "quest" then -- 1.69.0 任务交接 API 限频（对话窗口 0.3s 内保持打开，滴出执行安全）
@@ -3909,17 +3929,121 @@ local function tbMerchant()
 end
 
 -- 背包变动：丢弃列表（仅灰/白品质，防误删）
--- 性能：BAG_UPDATE 高频（拾取/修理/移动物品都触发）→ 0.5s 节流，且开关/列表为空时零开销直接返回
+-- ★★★1.75.118b **丢弃真的执行**时打一条**硬日志**（标红 + 物品链接）—— 用户 2026-10-10 原话：
+--   「触发丢弃物品增加个日志.不受全局日志开关限制.硬性显示日志.标红,配上对应物品的链接」。
+--   · 出口 = 文件顶部的 `sayHard` → `EVAL_SAY_FORCE`（Core 的裸输出口，**不受**「调试日志」总闸门管）；
+--     ★★`say` / `logLine` 都会把它吞掉（logLine 第一句就是 logEnabled 闸门）⇒ 换回去就等于这条日志消失。
+--   · 只在**执行那一支**打（入队处那条 `TB_DISCARDED` 汇总行照旧受闸门管，别重复打）。
+--   · ★链接必须**动手之前**抓：拾取/删除之后这一格已经空了，`GetContainerItemLink` 返回 nil。
+--   · 判据 = tmp/discard_fired_harness.js（31 条）+ tmp/discard_fired_mutate.js（6 变异全抓）。
+-- ★1.75.118d 触发点 = **主动 1 秒一次的背包检查**（不再挂 BAG_UPDATE）—— 判据与闸门次序见下方 tbDiscardSweep 上方的判据块。
+-- ★★★1.75.118 丢弃列表改**记录式** `{ name = "物品名", on = true }`（用户 2026-10-10 定：
+--   「支持让用户自己选择要丢弃的物品.选择的物品列点击可以快速切换启用禁用状态」）。
+--   · **唯一规范化口 `tbDiscardList()`**：老存档里是**字符串数组** ⇒ 就地迁移成记录（现算，不额外写盘）；
+--   · **启用口径 = `on ~= false`**（nil / true 都算启用）—— 与 `tb.buy` 的 `on` 同一把尺子 ⇒ 老配置照旧生效；
+--   · 名称比对一律**逐字相等**（与扫包取名同源：`tbItemName` 与 IconGrid 都取 `string.match(link, "%[(.-)%]")`
+--     ⇒ 选出来的名字与自动丢弃认的名字不会两套）。
+local function tbDiscardList()
+  local tb = tbCfg()
+  if not tb then return nil end
+  if type(tb.discard) ~= "table" then tb.discard = {} end
+  local list = tb.discard
+  for i = 1, table.getn(list) do
+    local e = list[i]
+    if type(e) == "string" then list[i] = { name = e, on = true } end
+  end
+  return list
+end
+
+-- 查（返回 下标, 记录）；名字非法 / 不在列表 ⇒ nil
+local function tbDiscardFind(name)
+  if type(name) ~= "string" or name == "" then return nil end
+  local list = tbDiscardList()
+  if not list then return nil end
+  for i = 1, table.getn(list) do
+    local e = list[i]
+    if type(e) == "table" and e.name == name then return i, e end
+  end
+  return nil
+end
+
+local function tbDiscardHas(name) return (tbDiscardFind(name)) ~= nil end
+
+-- 加入（名字非法 ⇒ false；已在列表 ⇒ false，绝不追加第二条）
+local function tbDiscardAdd(name)
+  if type(name) ~= "string" or name == "" then return false end
+  if tbDiscardFind(name) then return false end
+  local list = tbDiscardList()
+  if not list then return false end
+  table.insert(list, { name = name, on = true })
+  return true
+end
+
+-- 移除（按名字；返回是否真删了一条）
+local function tbDiscardRemove(name)
+  if type(name) ~= "string" or name == "" then return false end
+  local i = tbDiscardFind(name)
+  if not i then return false end
+  local list = tbDiscardList()
+  if not list then return false end
+  table.remove(list, i)
+  return true
+end
+
+-- ★★★1.75.118 自动丢弃助手（tools/DiscardHelper.lua）要的**全局桥** ——
+--   数据与执行引擎都留在本文件（tbQ / tbBagScan / tbItemName 是文件级 local，搬出去得为它们造一堆桥）
+--   ⇒ 模块只读不存第二份，这一排口就是「数据只有一处实现」的唯一入口。坏输入一律 false。
+function EVAL_TB_DISCARD_LIST() return tbDiscardList() end
+function EVAL_TB_DISCARD_HAS(nm) return tbDiscardHas(nm) end
+function EVAL_TB_DISCARD_ADD(nm) return tbDiscardAdd(nm) end
+function EVAL_TB_DISCARD_REMOVE(nm) return tbDiscardRemove(nm) end
+function EVAL_TB_DISCARD_CLEAR()
+  local tb = tbCfg()
+  if not tb then return false end
+  tb.discard = {}
+  return true
+end
+function EVAL_TB_DISCARD_ON()
+  local tb = tbCfg()
+  return (tb and tb.discardOn == true) and true or false
+end
+function EVAL_TB_DISCARD_SET(v)
+  local tb = tbCfg()
+  if not tb then return false end
+  tb.discardOn = v and true or false
+  return true
+end
+
+-- ★★★1.75.118d 触发点 = **主动 1 秒一次的背包检查**（用户 2026-10-10：「丢弃触发点需要间隔1s 背包检查主动丢弃.
+--   不要被动收入背包的时候才触发.」）⇒ **不再挂 `BAG_UPDATE`** —— 那条路只有拾取/修理/移动物品（= 被动收入背包）时才走，
+--   背包里本来就躺着的白装/灰装永远不会被清。现在由队列帧（`EVAL_TB_TICK` = `qf` 的 OnUpdate 本体）每帧调一次，
+--   内部按 `TB_DISCARD_GAP` 节流 ⇒ **到点自己扫背包**，与客户端有没有发事件无关。
+--   闸门次序（性能第一 + 「关掉零动作」铁律，四条缺一不可）：
+--     ① **总开关 `tb.discardOn` 全场最先** ⇒ 关着一个字节都不读（连列表都不碰）；
+--     ② **节流盖章排在列表读取与扫包之前** ⇒ 每秒之外的每一帧只做一次 `tbCfg()` + 一次减法
+--        （旧写法把 `tbDiscardList()` 放在节流之前 ⇒ 开着开关时**空列表也每帧遍历一遍**）；
+--     ③ **列表为空 / 全停用** ⇒ 早退，**一次 `tbBagScan` 都不跑**（全停用的零开销判据照旧有效）；
+--     ④ 才真的扫包 + 入队（入队仍走 `tbQ` 限频队列 + 执行前二次校验，品质闸门 ≤1 不变）。
+--   ★判据 = `tmp/discard_list_harness.js` 组 8/9（行为：1 秒节流 · 关着/空列表连续两拍零开销）
+--     + 组 10（**接线结构钉** + **反向钉：整份代码里不许再出现 BAG_UPDATE**）；变异 = `tmp/discard_trigger_mutate.js`。
+local TB_DISCARD_GAP = 1.0
 local tbDiscardLast = 0
 local function tbDiscardSweep()
   local tb = tbCfg()
-  if not (tb and tb.discardOn and type(tb.discard) == "table" and table.getn(tb.discard) > 0) then return end
+  if not (tb and tb.discardOn) then return end
   local now = (type(GetTime) == "function") and GetTime() or 0
-  if now - tbDiscardLast < 0.5 then return end
+  if now - tbDiscardLast < TB_DISCARD_GAP then return end
   tbDiscardLast = now
+  local list = tbDiscardList()
+  if not (type(list) == "table" and table.getn(list) > 0) then return end
   if type(PickupContainerItem) ~= "function" or type(DeleteCursorItem) ~= "function" then return end
+  -- ★只把**启用**的条目收进匹配集；全部停用 ⇒ 直接早退（零开销，绝不白扫一遍背包）
   local set = {}
-  for _, nm in ipairs(tb.discard) do set[nm] = true end
+  for i = 1, table.getn(list) do
+    local e = list[i]
+    if type(e) == "table" and type(e.name) == "string" and e.name ~= "" and e.on ~= false then set[e.name] = true end
+  end
+  if not next(set) then return end
   local n = 0
   tbBagScan(function(b, s)
     local nm = tbItemName(b, s)
@@ -4101,7 +4225,10 @@ local function tbQuestTick()
   tbQScanLast = now
   tbQuestDiff()
 end
-function EVAL_TB_TICK() tbQuestTick() tbQPump() tbWhoTick() end -- 测试直调（= qf OnUpdate 本体）
+-- ★★★1.75.118d 这一行 = **每帧本体唯一入口**（`qf` 的 OnUpdate 只调它）：
+--   任务延迟扫描 + 队列滴出 + 名字查询滴出 + **自动丢弃的主动 1 秒背包检查**
+--   （`tbDiscardSweep` 自带总开关闸 + `TB_DISCARD_GAP` 节流 ⇒ 关着/未到点时每帧只花一次 `tbCfg()` + 一次减法）。
+function EVAL_TB_TICK() tbQuestTick() tbQPump() tbWhoTick() tbDiscardSweep() end -- 测试直调（= qf OnUpdate 本体）
 
 -- 事件统一入口（测试可直调）
 -- ★1.71.2 事件节流：QUEST_* 三类事件加上闸门后，**被拦下的不再入队、也不再播报**——
@@ -4120,8 +4247,8 @@ function EVAL_TB_ONEVENT(e)
       if q.kind ~= "sell" and q.kind ~= "buy" then table.insert(kept, q) end
     end
     tbQ = kept
-  elseif e == "BAG_UPDATE" then
-    tbDiscardSweep()
+  -- ★1.75.118d `BAG_UPDATE` 那条**被动**触发已删除（用户定：丢弃要「主动 1 秒检查」，不要等背包收入才触发）
+  --   ⇒ 现在主动那一条腿在 `EVAL_TB_TICK`（= qf 的 OnUpdate 本体）里，本事件帧也不再注册这个事件。
   elseif e == "READY_CHECK" then
     local tb = tbCfg()
     if tb and tb.ready and type(ConfirmReadyCheck) == "function" then pcall(ConfirmReadyCheck) end
@@ -4188,6 +4315,8 @@ function EVAL_TB_ONEVENT(e)
     if type(EVAL_HH_RESTORE) == "function" then pcall(EVAL_HH_RESTORE) end
     -- ★1.74.5 消耗品助手同样再恢复一次（进世界时 UIParent 尺寸才准）
     if type(EVAL_CH_RESTORE) == "function" then pcall(EVAL_CH_RESTORE) end
+    -- ★1.75.118 自动丢弃助手：同一把尺子（开关关着 ⇒ 一个帧都不建）
+    if type(EVAL_DISCARD_RESTORE) == "function" then pcall(EVAL_DISCARD_RESTORE) end
     -- ★子插件「不启用不载入」对账（图层调试仍为独立插件）
     if type(EVAL_PLUGIN_RECONCILE) == "function" then pcall(EVAL_PLUGIN_RECONCILE) end
   end
@@ -4197,7 +4326,7 @@ end
 local evf = CreateFrame("Frame", "EVAL_TOOLBOX_EVENTS", UIParent)
 evf:RegisterEvent("MERCHANT_SHOW")
 evf:RegisterEvent("MERCHANT_HIDE")
-evf:RegisterEvent("BAG_UPDATE")
+-- ★1.75.118d 不注册 BAG_UPDATE：自动丢弃改走「主动 1 秒背包检查」（见 tbDiscardSweep / EVAL_TB_TICK）
 evf:RegisterEvent("READY_CHECK")
 evf:RegisterEvent("QUEST_DETAIL")
 evf:RegisterEvent("QUEST_PROGRESS")
@@ -4230,8 +4359,7 @@ qf:SetScript("OnUpdate", function()
   tbChanRetry() -- ★1.71.3 频道屏蔽挂载的兜底重试（限频 1s；挂上后只做一次布尔判断，开销可忽略）
   if type(EVAL_TB_CHATEVENT_RETRY) == "function" then EVAL_TB_CHATEVENT_RETRY() end -- ★1.73.12 第二入口兜底重试
   tbPaintRetry() -- ★1.73.10 职业着色挂载的兜底重试（限频 1s；三个窗口都挂上后只做一次布尔判断）
-  tbQuestTick() tbQPump() -- 1.69.2 任务延迟扫描 + 队列滴出
-  tbWhoTick() -- ★1.73.12 名字主动查询的滴出（频率下限/单飞都在它里面；队列空时只有几次判断）
+  EVAL_TB_TICK() -- 1.69.2 每帧本体：任务延迟扫描 + 队列滴出 + 名字查询滴出 + ★1.75.118d 丢弃的主动 1s 背包检查
 end)
 
 -- ★★★1.74.29 用户决定：两个地图子插件**改为主插件的工具模块**（tools/LayerDebug.lua、tools/SimpleMap.lua），
@@ -4847,8 +4975,8 @@ local function tbAddItem(key, txt)
       table.insert(tb.buy, { name = txt, n = 1, per = 1, on = true })
     end
   else
-    tb.discard = tb.discard or {}
-    table.insert(tb.discard, txt)
+    -- ★1.75.118 记录式 + 去重（「手动输入」这条路继续可用 = 行为不倒退；重复就如实说一句）
+    if not tbDiscardAdd(txt) then say(string.format(L("TB_DISC_DUP"), tostring(txt))) end
   end
 end
 
@@ -4864,7 +4992,16 @@ local function tbListSummary(key)
       table.insert(parts, s)
     end
   elseif key == "discard" and type(tb.discard) == "table" then
-    for _, nm in ipairs(tb.discard) do table.insert(parts, tostring(nm)) end
+    -- ★1.75.118 记录式：名称 + 停用标记（摘要 40 字上限照旧）
+    local list = tbDiscardList() or {}
+    for i = 1, table.getn(list) do
+      local e = list[i]
+      if type(e) == "table" and e.name then
+        local s = tostring(e.name)
+        if e.on == false then s = s .. L("TB_DISC_OFF_MARK") end
+        table.insert(parts, s)
+      end
+    end
   end
   local s = table.concat(parts, "、")
   if string.len(s) > 40 then s = string.sub(s, 1, 40) .. "…" end
@@ -5087,9 +5224,16 @@ function EVAL_TB_REFRESH()
           r.extra:Show()
           r.add.btn:Show()
           r.clr.btn:Show()
+          -- ★1.75.118 这一行的按钮文案：自动丢弃点开的是**设置窗** ⇒ 写「配置」；其他列表行照旧「添加」
+          --   （★每拍都显式写一遍：行池里的行会被复用到别的行上，不写就会出现「买的那行还写着配置」）
+          if r.add.text then
+            pcall(r.add.text.SetText, r.add.text, (it.key == "discard") and L("TB_DISC_CFG") or L("TB_ADD"))
+          end
           r.add.btn:SetScript("OnClick", function()
             -- ★1.71.3：自动购买改开**专用设置窗**（启用/名称/总数/每次 四列可编辑）；其他列表行仍走原来的输入弹窗。
             if it.key == "buy" and type(EVAL_BUY_UI_OPEN) == "function" then EVAL_BUY_UI_OPEN() return end
+            -- ★1.75.118 自动丢弃也开**专用设置窗**（从背包点选物品 + 列表点一下切「开/停」）
+            if it.key == "discard" and type(EVAL_DISCARD_UI_OPEN) == "function" then EVAL_DISCARD_UI_OPEN() return end
             if type(EVAL_TN_OPEN) == "function" then
               EVAL_TN_OPEN(it.ask, "", function(txt) tbAddItem(it.key, txt) EVAL_TB_REFRESH() end)
             end
@@ -5098,6 +5242,7 @@ function EVAL_TB_REFRESH()
             local tb = tbCfg()
             if tb then tb[it.key] = {} end
             if type(EVAL_BUY_UI_REFRESH) == "function" then EVAL_BUY_UI_REFRESH() end
+            if it.key == "discard" and type(EVAL_DISCARD_UI_REFRESH) == "function" then EVAL_DISCARD_UI_REFRESH() end
             EVAL_TB_REFRESH()
           end)
         end
@@ -5272,6 +5417,9 @@ function EVAL_TB_BUILD(root, page, refreshes)
       if row.modelKey == "feedPet" then pcall(EVAL_HH_TOGGLE) end
       -- ★1.74.5 消耗品助手：同一条纪律 —— 勾上即时建并显示，取消即时收起
       if row.modelKey == "consumable" then pcall(EVAL_CH_TOGGLE) end
+      -- ★1.75.118 自动丢弃助手（独立图标 + 列表面板）：勾上 = 建并显示 [丢] 图标；
+      --   取消 = 图标与面板一起收起（关断四件事都在模块的 EVAL_DISCARD_SYNC 里）
+      if row.modelKey == "discard" then pcall(EVAL_DISCARD_SYNC) end
       -- ★1.74.7 骑乘助手「一键下马」：勾上 = 懒建并显示下马图标（并挂上自动下马事件帧）
       if row.modelKey == "dismount" then
         if type(EVAL_DH_TOGGLE) == "function" then pcall(EVAL_DH_TOGGLE) end
@@ -5740,7 +5888,6 @@ function EVAL_BUY_UI_OPEN()
 end
 function EVAL_BUY_UI_REFRESH() buyUIRefresh() end
 function EVAL_BUY_UI_CLOSE() if buyUI.root then buyUI.root:Hide() end end
-
 
 -- ===== 测试钩子（放在文件末尾） =====
 -- ★1.71.2 把队列的**模块级时间戳**还原成干净值。

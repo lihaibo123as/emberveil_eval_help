@@ -83,9 +83,11 @@
   },
 
   "_guide说明": "自动化引导（用户 2026-10-09 定：「完善下以上两个信息的自动化引导.欢迎词,公告之类的」）：欢迎词走 **事件驱动**（官方事件 joined_guild = 新成员加入服务器，经 WebSocket 收），公告走**幂等更新**（首次 message/create 存 msg_id，之后原地 message/update，不刷屏）。★「建议反馈」的**频道说明**（怎么提建议）走 `--topic`：文案单一来源 = kook/guide/feedback.md，写进频道 `topic`（channel/update，仅文字频道有效），幂等 + 回读自证。★欢迎大厅里那条「系统通知#0001 …」是 KOOK 原生欢迎频道发的，与机器人无关。★本块没写的键（feedback_channel_id / feedback_file / queue_file / inbox_file / releases_file / cooldown_sec 等）在 kook_guide.js 的 loadConfig 里有同一份默认值；**要改就改在这里**（会覆盖默认）。",
+  "_owner_ids说明": "★用户本人（作者）的 KOOK 用户 id 列表（2026-10-10 用户定：「eval 就是我…我的回复不需要理解为需求」）⇒ 这些人的发言**一律不入队**（不当需求），`--scan` 只把它们单独列出来供核对；他给出的**结论性答复**用于把对应需求判 `rejected`（复核时人工做，见 kook/queue/INBOX.md 处理指引第 0 条）。",
   "guide": {
     "welcome_channel_id": "8320814423228312",
     "announce_channel_id": "1294357982211130",
+    "owner_ids": ["809624226"],
     "welcome_file": "kook/guide/welcome.md",
     "announce_file": "kook/guide/announce.md",
     "state_file": "kook/state/guide.json",

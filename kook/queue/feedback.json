@@ -1,5 +1,5 @@
 {
-  "updated": 1791543361974,
+  "updated": 1791611599520,
   "items": [
     {
       "status": "done",
@@ -23,6 +23,57 @@
       "notified": true,
       "done_at": 1791543361973,
       "link": "https://www.kookapp.cn/app/channels/7071527711947717/5336773639081280/146760554164257280"
+    },
+    {
+      "status": "rejected",
+      "note": "用户（eval）已给出结论性答复：与自动拾取功能关联，目前无法实现 ⇒ 不处理（无需入队）",
+      "tags": [
+        "功能请求"
+      ],
+      "msg_id": "88c6359d-79ee-42cd-8023-cbf0e1f0fb37",
+      "user_id": "1964990997",
+      "user": "逍遥",
+      "at": 1791551103828,
+      "text": "[{\"theme\":\"invisible\",\"color\":\"\",\"size\":\"lg\",\"expand\":false,\"modules\":[{\"type\":\"section\",\"mode\":\"left\",\"accessory\":null,\"text\":{\"type\":\"kmarkdown\",\"content\":\"背包插件,希望添加,自动打开进入背包的贝壳的功能\",\"elements\":[]},\"elements\":[]},{\"type\":\"container\",\"elements\":[{\"type\":\"image\",\"src\":\"https:\\/\\/img.kookapp.cn\\/assets\\/2026-10\\/09\\/2xkMN4pn0a07w03r.png\",\"alt\":\"\",\"size\":\"lg\",\"circle\":false,\"title\":\"\",\"fallbackUrl\":\"\",\"width\":284,\"height\":135,\"fileSize\":57716,\"elements\":[]}]}],\"type\":\"card\"}]",
+      "source": "scan",
+      "rejected_at": 1791611562032,
+      "source_note": "同一条需求在 EH_Bag v0.3.42 发布帖下也有一条（msg_id=146773491109069056）"
+    },
+    {
+      "status": "rejected",
+      "note": "用户本人（eval = 作者）的回复，不是需求 ⇒ 不入队（今后本人的发言一律不入队）",
+      "tags": [
+        "未分类"
+      ],
+      "msg_id": "11ad2912-8d0f-4fed-acd4-82230352b1e8",
+      "user_id": "809624226",
+      "user": "eval",
+      "at": 1791551437069,
+      "text": "(met)1964990997(met) 这个和自动拾取功能关联,目前是无法实现的",
+      "source": "scan",
+      "rejected_at": 1791611562032,
+      "byOwner": true
+    },
+    {
+      "status": "planned",
+      "note": "",
+      "tags": [
+        "功能请求",
+        "体验/界面"
+      ],
+      "msg_id": "463243d0-6db4-41cd-9777-fab7c60fbc00",
+      "user_id": "1964990997",
+      "user": "逍遥",
+      "at": 1791588511657,
+      "text": "背包插件的丢弃装备功能。建议创建两个小界面。一个界面是已经添加的丢弃的物品界面，可以随时点击取消。另外一个界面是索引背包物品，点击就可以添加进去。不用输入名字。",
+      "source": "scan",
+      "planned_at": 1791611562032,
+      "feasibility": {
+        "verdict": "可行",
+        "cost": "中（Toolbox 里加一个专用设置窗 ≈200 行 + 丢弃列表数据结构改记录式；无新增文件外的接线）",
+        "basis": "① 现有先例同类：自动购买 `t=\"l\"` 行已开**专用设置窗** `EVAL_BUY_UI_OPEN`（列几何/滚动/行池/按身份删 都在），照它的骨架做滚动列表不用新造标准；② 逐项启用/停用天然有数据位 —— 抄 `tb.buy` 的 `{name,n,per,on}` 形态（`on ~= false` = 启用，老配置兼容）；③ 「从背包选」走项目共用件 `tools/IconGrid.lua` 的 `mode=\"multi\"` + `EVAL_IG_SCAN_BAGS`（消耗品助手同一条路），**名字来源与扫包完全同源**（IconGrid 与 `tbItemName` 都取 `string.match(link, \"%[(.-)%]\")`）⇒ 配对不会静默失配；④ 破坏性动作的安全闸门不变（只丢品质 ≤1 + 走 tbQ 0.3s 限频 + 执行前二次校验）。",
+        "plan": "① `tb.discard` 由字符串数组改 `{name=..., on=true}`，加唯一规范化口 `tbDiscardList()`（就地迁移老存档，只读不写盘）；② `tbDiscardSweep` 只把 `on ~= false` 的条目收进匹配集（全停用 ⇒ 零开销早退）；③ `tbListSummary` 摘要显示名称 + 停用标记；④ 新增 `EVAL_DISCARD_UI_OPEN` 设置窗（行池 8 + ▲▼/滚轮/计数器；每行：[开/停] 点击切换 + 名称（点击同样切换）+ [删]；底部 [从背包选择]（IconGrid multi）/ [手动输入]（保留老路，行为不倒退）/ [清空] / [关闭]）；⑤ 工具箱该行的 [加] 按钮改为开设置窗（不再是只能打名字）；⑥ 三语语言键补齐；⑦ 判据 = `node luacheck.js` + 真机实测（本轮功能轮按纪律只跑语法闸门 + `node sync_game.js`）。"
+      }
     }
   ]
 }

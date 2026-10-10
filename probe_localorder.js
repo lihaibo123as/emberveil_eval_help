@@ -180,6 +180,11 @@ if (require.main === module) {
        //   （`thSync/thPaint/thTick/thEnsure/thApply` 五个在顶部声明），正是本闸门存在的理由
        //   ⇒ 建模块当轮就加进清单，别重犯 LootCursor 那次「漏在清单外」的欠账。
        'tools/TargetHealth.lua',
+       // ★1.75.118 补：`tools/DiscardHelper.lua`（本轮新建 —— 悬浮图标 + 列表面板）
+       //   —— 它内部 dhBuild 会引用多个 `local function`（dhPick / dhRefresh / dhPlacePanel …），
+       //   正是「先引用后声明 ⇒ 绑全局 nil」的高风险形态（luacheck 照不到、只有真机/本闸门抓得到）
+       //   ⇒ 建模块当轮就加进清单，别重犯 LootCursor 那次「漏在清单外」的欠账。
+       'tools/DiscardHelper.lua',
        // ★子插件也纳入：EH_Bag（1.75.x 新建）两个文件 —— 跨 chunk 共用口全挂 B 表，
        //   本文件的「先引用后声明」错在子插件里同样是**静默**的（pcall 一包就什么都不报）。
        'addons/EH_Bag/EH_Bag.lua', 'addons/EH_Bag/EH_BagSort.lua',

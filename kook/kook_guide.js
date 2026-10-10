@@ -80,6 +80,10 @@ function loadConfig() {
     welcome_channel_id: "8320814423228312",
     announce_channel_id: "1294357982211130",
     feedback_channel_id: "8514014383612159",
+    // ★★★2026-10-10 用户定：「eval 就是我」⇒ 本人（作者）的 KOOK id 列表：这些人的发言**一律不入队**
+    //   （「我的回复不需要理解为需求」）；其中对某条需求的**结论性答复**用于把那条判 `rejected`
+    //   （那一判在复核时人工做，见 INBOX 处理指引第 0 条）。
+    owner_ids: [],
     welcome_file: "kook/guide/welcome.md",
     announce_file: "kook/guide/announce.md",
     feedback_file: "kook/guide/feedback.md",
@@ -289,9 +293,11 @@ async function doListen(cfg, token) {
       const d = m.d || {}, t = d.extra && d.extra.type;
       const body = (d.extra && d.extra.body) || {};
       say(`  ← 事件 extra.type=${t || "?"} (type=${d.type}, channel_type=${d.channel_type}, sn=${sn})`);
-      // 建议反馈频道：玩家的普通消息**实时入队**（机器人自己的 / 系统消息不入）
+      // 建议反馈频道：玩家的普通消息**实时入队**（机器人自己的 / 系统消息 / **本人（作者）的**不入）
+      const ownerMsg = isOwner(cfg, d.author_id);
+      if (ownerMsg) say("    （本人/作者发言 ⇒ 不入队；若是结论性答复 ⇒ 复核时把对应需求判 rejected）");
       if (d.channel_type === "GROUP" && String(d.target_id) === String(cfg.guide.feedback_channel_id)
-          && d.type !== 255 && String(d.author_id) !== String(me.id)) {
+          && d.type !== 255 && String(d.author_id) !== String(me.id) && !ownerMsg) {
         const q = loadQueue(cfg);
         const text = String(d.content || "").replace(/\s+/g, " ").trim();
         const au = (d.extra && d.extra.author) || {};
@@ -362,6 +368,13 @@ function saveQueue(cfg, q) {
   fs.writeFileSync(p, JSON.stringify(q, null, 2), "utf8");
   renderInbox(cfg, q);
 }
+// ★本人（作者）判定：`cfg.guide.owner_ids` 里列出的人 = 用户自己（如 eval）—— 他的发言**不是需求**。
+//   ★判不出（列表空 / 没有 id）⇒ 一律**按「不是本人」**处理（老行为一字不变，绝不因为配置缺失就把玩家需求吞掉）。
+function isOwner(cfg, uid) {
+  if (uid === undefined || uid === null || uid === "") return false;
+  const ids = (cfg.guide && cfg.guide.owner_ids) || [];
+  return ids.some(x => String(x) === String(uid));
+}
 // 入队（msg_id 去重；机器人自己的消息不入队）
 function enqueue(cfg, q, rec) {
   if (!rec.msg_id || !rec.text) return false;
@@ -384,6 +397,7 @@ function renderInbox(cfg, q) {
     Object.entries(byStatus).map(([k, v]) => `${k} ${v.length}`).join(" · "));
   lines.push("");
   lines.push("## AI 处理指引（每次读这个文件时按此办）");
+  lines.push("0. ★★**本人（作者）的发言不是需求**：`kook/config.json` 的 `guide.owner_ids` 里那些人（= eval / 作者本人）的消息**一律不入队**；他的发言若是对某条需求的**结论性答复**（「无法实现 / 不做 / 已做 / 重复」这类）⇒ 把**那条**判 `rejected` 并在 `note` 里写明原因（用户 2026-10-10 定：「我(eval)回复的并且是完整结论性答复的可以标记这个需求不需要加入队列,并且标记状态拒绝」）；`--scan` 会把本人发言单独列出来供核对。");
   lines.push("1. **先分析、后动手**：`new` 的条目按项目铁律做**可行性验证**（先核 API 存在性 → 写探针 → 判真伪/代价），结论写进该条 `feasibility`（`verdict`/`cost`/`basis`/`plan`），status 改 `triaged`；");
   lines.push("2. ★★**分析完停下来等用户确认** —— 【已分析 · 等你确认】那一组就是等点头的清单；**没确认不许进 `planned`、更不许改代码**（用户 2026-10-09 定：「在获取需求的时候先分析验证修复可能性.待我确认」）；");
   lines.push("3. 用户点头后才 `status=planned` 并实施；做完 `--done`（原帖 ✅ + 回复带版本发布链接）；");
@@ -418,11 +432,16 @@ async function doScan(cfg, token) {
   const me = await api("GET", `${API}/user/me`, undefined, token);
   const d = await api("GET", `${API}/message/list?target_id=${target}&page_size=50`, undefined, token);
   let added = 0;
+  const ownerSaid = [];
   for (const m of (d.items || [])) {
     if (m.type === 255) continue;                                    // 系统消息不入队
     if (m.author && m.author.id === me.id) continue;                 // 机器人自己的不入队
     const text = String(m.content || "").replace(/\s+/g, " ").trim();
     if (!text) continue;
+    if (m.author && isOwner(cfg, m.author.id)) {                     // ★本人（作者）的发言不是需求
+      ownerSaid.push({ user: (m.author.nickname || m.author.username || ""), text });
+      continue;
+    }
     if (enqueue(cfg, q, {
       msg_id: m.id, user_id: m.author ? m.author.id : "", user: m.author ? (m.author.nickname || m.author.username) : "",
       at: m.create_at, text, source: "scan",
@@ -430,6 +449,11 @@ async function doScan(cfg, token) {
   }
   saveQueue(cfg, q);
   say(`✔ 队列：${before} → ${q.items.length} 条（新增 ${added}）`);
+  // ★本人/作者发言**不入队**，但要让复核看得到（否则「他已经回过结论了」在 --plan 里完全不可见）
+  if (ownerSaid.length) {
+    say(`ℹ 本人/作者发言 ${ownerSaid.length} 条（**不入队**；若是对某条需求的结论性答复 ⇒ 把那条判 rejected 并写明原因）：`);
+    for (const s of ownerSaid.slice(-5)) say(`  · ${s.user}：${s.text.slice(0, 110)}`);
+  }
   say(`  ${path.relative(ROOT, queuePaths(cfg).json)} · ${path.relative(ROOT, queuePaths(cfg).md)}`);
 }
 function doQueue(cfg) {
@@ -620,6 +644,7 @@ async function doCheck(cfg, token) {
   say(`  guide.welcome_channel_id  = ${gd.welcome_channel_id} ${w ? "「" + w.name + "」type=" + w.type : "★找不到"}`);
   say(`  guide.announce_channel_id = ${gd.announce_channel_id} ${an ? "「" + an.name + "」type=" + an.type : "★找不到"}`);
   say(`  guide.feedback_channel_id = ${gd.feedback_channel_id} ${fb ? "「" + fb.name + "」type=" + fb.type + "（建议实时入队 + --scan 回扫）" : "★找不到"}`);
+  say(`  guide.owner_ids = ${(gd.owner_ids || []).join(",") || "（空 ⇒ 没有「本人」过滤）"}（本人/作者发言 ⇒ **不入队**）`);
   // ★频道说明（「怎么提建议」）：现读现比 —— 与模板不一致就点名提醒（修好只要一条 `--topic --send`）
   if (fb) {
     let want = ""; try { want = feedbackTopicBody(cfg); } catch { want = ""; }
