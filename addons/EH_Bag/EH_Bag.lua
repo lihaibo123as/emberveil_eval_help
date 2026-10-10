@@ -49,7 +49,7 @@ local B = {}
 _G.EH_BAG = B
 
 -- 构建标记（唯一来源）：改本文件顺手 +1，用于「客户端跑的是哪一份」取证
-local BAG_BUILD = "0.3.49"
+local BAG_BUILD = "0.3.50"
 
 local function strVal(v)
   return tostring(v)
@@ -139,6 +139,9 @@ local BAG_T = {
     SORT_STOP_GONE = "窗口被关闭",
     -- ★0.3.41：特殊袋 fail-closed（整理工作区只收「被正面证明是普通袋」的容器）+ 无进展闸门
     SORT_STOP_NOPROG = "连续 %d 次背包状态没有任何变化（目标容器拒绝放入 / 客户端没有执行这步搬运）",
+    -- ★0.3.50：两道护栏（落格自证 / 同一动作去重）的如实反馈
+    SORT_STOP_REPEAT = "同一个搬运步骤重复出现（客户端把物品放回了原处）—— 已停下，避免在同一个动作上绕圈",
+    SORT_STOP_UNVERIFIED = "等了 %.1fs 也没能从读回里确认上一次搬运（读回滞后或被拒收）—— 已停下，稍后再试",
     SORT_SKIP = "整理跳过特殊袋：%s（不往里搬、也不从里搬出）",
     SORT_SKIP_NA = "袋子类型判不出，已按最保险处理（整袋不整理）：%s",
     SORT_BANK_SWITCH = "背包段完成，继续银行段（跳过：银行主格 24 格%s）…",
@@ -154,6 +157,7 @@ local BAG_T = {
     BAR_NO_INV = "判不出「%s」的槽位号，未做任何改动",
     BAR_NO_API = "本客户端没有这个操作需要的接口，未做任何改动",
     SORT_NOPROG_N = "无进展 %d/%d",
+    SORT_GATE_N = "落格自证 上限 %.1fs ｜ 未确认 %d 次 ｜ 等待 %d 拍",
     ST_NONE = "无",
     SPLIT_TITLE = "拆分数量",
     SPLIT_INFO = "%s（共 %d 个）",
@@ -332,6 +336,8 @@ MENU_CGAP = "格子间距",
     SORT_STOP_GONE = "window closed",
     -- ★0.3.41: specialty bags are fail-closed out of the sort pool + no-progress guard
     SORT_STOP_NOPROG = "bag contents unchanged for %d checks in a row (the destination refused the drop / the client did not perform the move)",
+    SORT_STOP_REPEAT = "the same move came up again (the client put the item back) - stopped so it will not loop on one action",
+    SORT_STOP_UNVERIFIED = "the last move was not confirmed by the container read within %.1fs (lagging or refused) - stopped, please try again later",
     SORT_SKIP = "sort skipped specialty bags: %s (nothing is moved into or out of them)",
     SORT_SKIP_NA = "bag type could not be identified; left untouched for safety: %s",
     SORT_BANK_SWITCH = "Bags done, continuing with the bank bags (skipped: the main pane's 24 slots%s)...",
@@ -347,6 +353,7 @@ MENU_CGAP = "格子间距",
     BAR_NO_INV = "Cannot resolve the slot number of \"%s\"; nothing was changed",
     BAR_NO_API = "This client has no API for that action; nothing was changed",
     SORT_NOPROG_N = "no progress %d/%d",
+    SORT_GATE_N = "drop self-check up to %.1fs | unconfirmed %d | waiting %d ticks",
     ST_NONE = "none",
     SPLIT_TITLE = "Split stack",
     SPLIT_INFO = "%s (%d total)",
@@ -524,6 +531,8 @@ MENU_CGAP = "Slot spacing",
     SORT_STOP_GONE = "окно закрыто",
     -- ★0.3.41: особые сумки fail-closed + защита от «нет прогресса»
     SORT_STOP_NOPROG = "содержимое сумок не менялось %d проверок подряд (контейнер отклонил перенос / клиент не выполнил шаг)",
+    SORT_STOP_REPEAT = "то же перемещение повторилось (клиент вернул предмет на место) — остановлено, чтобы не зацикливаться",
+    SORT_STOP_UNVERIFIED = "последнее перемещение не подтвердилось чтением контейнера за %.1fs (задержка или отказ) — остановлено, попробуйте позже",
     SORT_SKIP = "сортировка пропустила особые сумки: %s (ничего не переносится ни туда, ни оттуда)",
     SORT_SKIP_NA = "тип сумки не определён; оставлена без изменений: %s",
     SORT_BANK_SWITCH = "Сумки готовы, продолжаем сумками банка (пропущено: 24 ячейки основной панели%s)...",
@@ -539,6 +548,7 @@ MENU_CGAP = "Slot spacing",
     BAR_NO_INV = "Не удалось определить номер ячейки для «%s»; ничего не изменено",
     BAR_NO_API = "В этом клиенте нет нужной для этого действия функции; ничего не изменено",
     SORT_NOPROG_N = "нет прогресса %d/%d",
+    SORT_GATE_N = "самопроверка переноса до %.1fs | не подтверждено %d | ожидание %d тактов",
     ST_NONE = "нет",
     SPLIT_TITLE = "Разделить стопку",
     SPLIT_INFO = "%s (всего %d)",

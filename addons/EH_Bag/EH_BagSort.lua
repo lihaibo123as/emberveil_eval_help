@@ -69,12 +69,41 @@ local CAT_RANK = {
 }
 
 local SORT_MAX_MOVES = 400
-local SORT_TIMEOUT = 180
+-- ★0.3.50：180 → 300 秒。稳定门（见下）会让每一步**多等一拍**（有效步进≈翻倍）⇒ 大背包在
+--   慢档（gap 0.45）下会撞 180s；放宽到 300s，步数上限（400）仍是硬顶。
+local SORT_TIMEOUT = 300
 local SORT_STALL_MAX = 3
 -- ★0.3.41 无进展闸门（见文件头 ②）：指纹从上次变化起连续 NOPROG_SEC 秒没动过 ⇒ 记一次无进展；
 --   累计 NOPROG_MAX 次即收工（3.0s 是给「容器读回滞后」留的余量 —— 新鲜戳记有效期 1.5s 的两倍）
 local SORT_NOPROG_SEC = 3.0
 local SORT_NOPROG_MAX = 2
+-- ★★★0.3.50 两道护栏（真机报障：「整理算法 B 有时候两个物品卡住互换格子，死循环导致无法整理下去」）：
+--   根因（离线复现 + 真机在案语义）= **决策建立在「读回还没追上我们自己的写入」的视图上**：
+--     本客户端「拾取即时、**落格要等服务器确认**（没确认前读回仍报旧内容，通常是空）」
+--     ⇒ 我们刚放下的那件**在自己的读视图里暂时不存在** ⇒ 那一格被读成「空洞」⇒ 再往它上面丢东西
+--     = 丢到**其实已经有东西**的格子上 ⇒ 客户端语义 = 互换（另一件被顶到光标上）/ 拒收（物品放回原处）。
+--     ★而 0.3.41 的「无进展闸门」在这个窗口里**失效**：拾取会即时把源格从视图里抹掉、服务器确认后
+--     又把它填回来 ⇒ 指纹每拍都在「变新」⇒ `sortNoProg` 被反复清零 ⇒ 一路空转到步数上限 / 超时
+--     （离线实测：拒收率 83.8% · 21424 拍里 20630 次空写 · 51/120 轮撞超时 · 干净跑完只 69/120）。
+--   ① **落格自证**：动手之前先确认「上一拍那次落格**已经能从读回里看到**」——判据 = 读回那一格、
+--      读出的**就是我们刚放进去的那件**（读不到 / 还是旧内容 ⇒ 这一拍只等、不动手）。超时
+--      （SORT_VERIFY_SEC）仍没确认 ⇒ 返回 "unverified" ⇒ 上层**如实收工**，绝不拿猜的状态继续搬。
+--      ★为什么必须**正向自证**（而不是「等指纹两拍不变」）：本客户端「拾取即时、落格要等服务器确认」
+--      ⇒ 刚放下的那件在自己的读视图里**暂时不存在**（那一格读成空）⇒ 此刻再往它上面丢东西 =
+--      丢到有东西的格子上 ⇒ 互换 / 拒收。正向自证直接把「上一次写入有没有被确认」问出来。
+--   ② **同一动作去重**：**同一个稳定状态下**重复同一个「源→目标」⇒ 说明上一拍那次写入**没生效**
+--      （客户端把物品放回了原处）⇒ 按 `SORT_STOP_REPEAT` 如实收工，绝不重试、绝不空转到上限。
+--   ③ **有界兜底**：读回一直不确认（超过 SORT_VERIFY_SEC）⇒ 按 `SORT_STOP_UNVERIFIED` 如实收工
+--      —— **绝不干等**（否则表现成「点了整理没反应」）。
+--   ★离线实测（tmp/ehbag_sort_fix_probe.js，120 组夹具 · 三档同一滞后模型）：
+--     理想客户端 ⇒ 写动作逐字同计划（917 对，不改变排序结果）；1 拍滞后 + 互换语义 ⇒
+--     互换 117/120 轮 → **0**、光标中断 117 → **0**、干净跑完 3 → **120**；2 拍滞后 + 拒收语义 ⇒
+--     拒收 20630 → **0**、超时 51 → **0**、干净跑完 69 → **120**。
+--   ★代价如实记：每一步要等上一次落格被确认（实测约 2~3 拍/动作；**理想客户端下零开销**）——
+--     这也把写动作频率压回项目「1~2 次/秒」的安全区；嫌慢把 `/ebag gap` 调小即可。
+--   ★等待上限取 1.5s = 与「新鲜戳记」同一个滞后界（在案：本客户端读回滞后 ≤1.5s）
+local SORT_VERIFY_SEC = 1.5
+
 -- ★0.3.35：整理「新鲜戳记」有效期（秒）—— 刚动过的格子在这段时间内不拿滞后的读回盖掉直接画好的内容
 B.SORT_FRESH_SEC = 1.5
 
@@ -373,6 +402,20 @@ end
 
 local function moveNow(src, dst, allowMerge)
   if type(PickupContainerItem) ~= "function" and type(PickupInventoryItem) ~= "function" then return false, "noapi" end
+  -- ★0.3.50 去重（护栏 ②）：**同一个稳定状态**下重复同一个「源→目标」= 上一拍那次写入没生效
+  --   （客户端把物品放回了原处）。★判据排在**检查之前**（命中就一个字节都不碰），但**记账排在
+  --   检查全过、真要动手之前** —— 否则「物品被锁定」这种检查不过的动作也会被记进去，下一拍就
+  --   会误报成「上一次没生效」（而它其实该走 SORT_STOP_LOCKED 那条路）。
+  local fpK = B.sortFpNow
+  local keyK = nil
+  if fpK ~= nil then
+    keyK = tostring(src.bag) .. ":" .. tostring(src.slot) .. ">" .. tostring(dst.bag) .. ":" .. tostring(dst.slot)
+    local t0 = B.sortTried
+    if type(t0) == "table" then
+      local b0 = t0[fpK]
+      if type(b0) == "table" and b0[keyK] == true then return false, "repeat" end
+    end
+  end
   local srcRec = recAt(src.bag, src.slot)
   local dstRec = recAt(dst.bag, dst.slot)
   if srcRec == nil then return false, "empty" end
@@ -382,6 +425,17 @@ local function moveNow(src, dst, allowMerge)
     if dstRec.locked then return false, "locked" end
     if dstRec.id ~= srcRec.id then return false, "occupied" end
     if (srcRec.count or 1) + (dstRec.count or 1) > (srcRec.maxStack or 1) then return false, "toobig" end
+  end
+  if keyK ~= nil then
+    local t1 = B.sortTried
+    if type(t1) ~= "table" then t1 = {} B.sortTried = t1 end
+    local b1 = t1[fpK]
+    if type(b1) ~= "table" then b1 = {} t1[fpK] = b1 end
+    b1[keyK] = true
+    -- 有界：稳定状态最多记 32 个（超了只留当前这个，绝不无界增长）
+    local cnt, _k = 0, nil
+    for _k in pairs(t1) do cnt = cnt + 1 end
+    if cnt > 32 then B.sortTried = { [fpK] = b1 } end
   end
   if not pickUp(src.bag, src.slot) then return false, "noapi" end
   pickUp(dst.bag, dst.slot)
@@ -454,6 +508,27 @@ local function noProgress(fp, now)
   return (B.sortNoProg >= SORT_NOPROG_MAX)
 end
 
+-- ★0.3.50 闸门组合（护栏 ① 落格自证 + 无进展）：返回 "settle" / "unverified" / nil（nil = 放行）
+--   · **落格自证**：上一拍那次落格必须能被读回证实（读到我们放进去的那件）才允许下一手；
+--     读回还没确认 ⇒ "settle"（这一拍只等、不动手）；超时 ⇒ "unverified"（上层如实收工）。
+--   · 自证**必须排在 noProgress 之前**：只有「已被确认的状态」才够格进无进展账
+--     （否则读回自己的抖动会把 sortNoProg 反复清零 —— 那正是 0.3.41 闸门失效的真因）。
+local function gateCheck(now)
+  local v = B.sortVerify
+  if type(v) ~= "table" then return nil end
+  local rec = recAt(v.bag, v.slot)
+  if rec ~= nil and rec.id == v.id then
+    B.sortVerify = nil
+    return nil
+  end
+  if now > 0 and (now - (v.at or now)) > SORT_VERIFY_SEC then
+    B.sortVerify = nil
+    B.sortUnverifiedN = (B.sortUnverifiedN or 0) + 1
+    return "unverified"
+  end
+  return "settle"
+end
+
 -- 一步：返回 "moved" / "done" / "stall" / "noprog" / "nofree" / "cursor" / 其它错误串
 local function oneStep()
   local slots = slotOrder(B.sortScope)
@@ -463,7 +538,11 @@ local function oneStep()
     local okT, t = pcall(GetTime)
     if okT and type(t) == "number" then now = t end
   end
-  if noProgress(fpOf(slots, list, n), now) then return "noprog" end
+  local g = gateCheck(now)
+  if g ~= nil then return g end
+  local fpNow = fpOf(slots, list, n)
+  B.sortFpNow = fpNow
+  if noProgress(fpNow, now) then return "noprog" end
   -- ★★★0.3.49 本轮用哪套算法（**每拍现读** ⇒ 中途切换立刻生效）——
   --   读口拿不到 / 回坏值 ⇒ 回落 `"orig"`（= 原算法，最保守的一套；「拿不到证据就跑原来那条路」）。
   --   ★盖章排在**合并之前**：合并那一步也可能直接 return，而 A/B 记账要读到「这一轮到底跑的是谁」。
@@ -476,6 +555,7 @@ local function oneStep()
   local src, dst = findMerge(list, n)
   if src ~= nil then
     local ok, why = moveNow({ bag = src.bag, slot = src.slot }, { bag = dst.bag, slot = dst.slot }, true)
+    if not ok and why == "repeat" then return "repeat" end
     if ok then
       if why == "cursor" then return "cursor" end
       -- ★0.3.35：落格要画的那条记录 = 源堆 + 目标堆的合并堆（数量合并、其余字段照源堆）
@@ -524,6 +604,7 @@ local function oneStep()
             if whyE == "cursor" then return "cursor" end
             return "moved", dn.bag, dn.slot, slots[i].bag, slots[i].slot, dn
           end
+          if whyE == "repeat" then return "repeat" end
           if whyE == "locked" then return "stall" end
         end
       end
@@ -553,6 +634,7 @@ local function oneStep()
             if why2 == "cursor" then return "cursor" end
             return "moved", donor.bag, donor.slot, slots[i].bag, slots[i].slot, donor
           end
+          if why2 == "repeat" then return "repeat" end
           if why2 == "locked" then return "stall" end
         else
           -- 目标被占 ⇒ 先把占位那件 park 到一个空格（下一步重扫时 i 已空，再搬 donor 过来）
@@ -589,6 +671,7 @@ local function oneStep()
             if why3 == "cursor" then return "cursor" end
             return "moved", cur.bag, cur.slot, slots[park].bag, slots[park].slot, cur
           end
+          if why3 == "repeat" then return "repeat" end
           if why3 == "locked" then return "stall" end
           return "stall"
         end
@@ -660,9 +743,33 @@ function B.sortStep(dt)
   if B.sortAcc < gap then return end
   B.sortAcc = 0
   local r, mvSb, mvSs, mvDb, mvDs, mvRec = oneStep()
+  if r == "settle" then
+    -- ★0.3.50 护栏 ①：上一拍那次落格还没被读回确认 ⇒ 这一拍只等、不动手（**不算无进展**）。
+    B.sortSettleN = (B.sortSettleN or 0) + 1
+    return
+  end
+  if r == "unverified" then
+    -- ★0.3.50 护栏 ③：等了 SORT_VERIFY_SEC 也没能从读回里确认那次落格 ⇒ 如实收工（绝不干等）
+    B.sortStopFn(L("SORT_STOP_UNVERIFIED", SORT_VERIFY_SEC))
+    return
+  end
+  if r == "repeat" then
+    -- ★0.3.50 护栏 ②：同一个稳定状态下重复同一个动作 ⇒ 上一拍那次写入**没生效**
+    --   （客户端把物品放回了原处）⇒ 如实收工，绝不重试、绝不空转到步数上限 / 超时。
+    B.sortStopFn(L("SORT_STOP_REPEAT"))
+    return
+  end
   if r == "moved" then
     B.sortMoves = (B.sortMoves or 0) + 1
     B.sortStall = 0
+    B.sortSettleN = 0
+    -- ★0.3.50 登记「待自证」：下一拍动手之前先确认这一格真的读出了这一件
+    --   （`mvRec.id` = 我们手里那条记录的 id；合并那一步它同样是目标格的 id）
+    if type(mvRec) == "table" and mvRec.id ~= nil and type(mvDb) == "number" and type(mvDs) == "number" then
+      B.sortVerify = { bag = mvDb, slot = mvDs, id = mvRec.id, at = GetTime() }
+    else
+      B.sortVerify = nil
+    end
     -- ★0.3.35 实时显示：当场用已知记录直接画动过的那两格 + 盖新鲜戳记（算法节奏不变，markDirty 照旧兜底）
     B.sortPaintMove(mvSb, mvSs, mvDb, mvDs, mvRec)
     B.markDirty(0.08)
@@ -805,6 +912,12 @@ function B.sortStart(loud)
   B.sortFpAt = nil
   B.sortFpSeen = {}
   B.sortNoProg = 0
+  -- ★0.3.50 两道护栏的会话态（落格自证 / 同一动作去重 / 未确认计数）—— 每轮都从零开始
+  B.sortVerify = nil
+  B.sortFpNow = nil
+  B.sortTried = {}
+  B.sortSettleN = 0
+  B.sortUnverifiedN = 0
   -- ★0.3.35：每次整理开一张新的「新鲜戳记」表（旧戳记按时间自然过期，不在收尾处清 ——
   --   收尾那一刻最后几步的读回多半还没确认，清了就会被 refreshAll 画回空格）
   B.sortFresh = {}
@@ -864,5 +977,7 @@ function B.sortAreaLine()
     txt = txt .. " ｜ " .. L("SORT_SKIP", skipText(skipped))
   end
   txt = txt .. " ｜ " .. L("SORT_NOPROG_N", B.sortNoProg or 0, SORT_NOPROG_MAX)
+  -- ★0.3.50：落格自证读数（活口）——「等读回确认上一次落格」是正常设计，不是卡住，得看得见
+  txt = txt .. " ｜ " .. L("SORT_GATE_N", SORT_VERIFY_SEC, B.sortUnverifiedN or 0, B.sortSettleN or 0)
   return L("ST_SORT_AREA", txt)
 end
